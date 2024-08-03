@@ -6,3 +6,7 @@ test/*
 auth.json
 *.cpython-312.pyc
 *.pyc
+test_list.md
+.screenrc
+.python-version
+.eslintrc.json
