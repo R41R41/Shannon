@@ -1,0 +1,8 @@
+shannon/minecraft_bot_agent/.env
+.env
+saves/*
+node_modules/*
+test/*
+auth.json
+*.cpython-312.pyc
+*.pyc

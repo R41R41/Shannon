@@ -1,0 +1,45 @@
+Generate the javascript code for the skill to be executed by the Mineflayer bot from the skill name (skill_name), skill description (skill_description), and skill parameters (skill_params).
+Output the skill code in the following format.
+
+```javascript
+const InstantSkill = require('./instantSkill.js');
+
+class SkillName extends InstantSkill {
+    /**
+     * @param {import('../types.js').CustomBot} bot
+     */
+    constructor(bot) {
+        super(bot);
+        // Please make sure the skill-name part is in kebab-case
+        this.skillName = "skill-name";
+        this.description = "Skill description";
+        this.params = [
+            {
+                "name": "param1",
+                "type": "type1",
+                "description": "Parameter description",
+                "default": default_value
+            },
+            ...
+        ]
+    }
+
+    async run(param1, param2, ...) {
+        try{
+            // Write the skill processing here. Refer to the comments below.
+            // When making the bot perform an action, use this.bot
+            // Example: this.bot.chat("Hello");
+            // When calling other skills, use this.bot.instantSkills
+            // Example: this.bot.instantSkills.attackEntity(1, "creeper");
+            // When calling utilities, use this.bot.utils
+            // Example: this.bot.utils.getNearestEntitiesByName(this.bot, "creeper");
+            // If the skill processing is successful, return { "success": true, "result": "Execution result" }
+            // If the skill processing fails, return { "success": false, "result": "Reason for failure" }
+        }catch(e){
+            return { "success": false, "result": `${e.message} in ${e.stack}` }
+        }
+    }
+}
+
+module.exports = SkillName;
+```

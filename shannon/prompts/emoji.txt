@@ -1,0 +1,22 @@
+Please use 4 emojis to describe the weather provided below.
+
+We provide the following weather information.
+weather: A concise description of the weather
+chanceOfRain: Probability of precipitation every 6 hours (0h-6h,6h-12h,12h-18h,18h-24h)
+
+Please respond only in the format described below.
+Response format:
+You should output 4 emoji just only.
+
+example1:
+    input:晴, 0%0%0%0%
+    output:☀☀☀☀
+example2:
+    input:晴のち曇, 10%20%20%20%
+    output:☀☀☁☁
+example3:
+    input:晴時々曇, 0%10%0%0%
+    output:☀🌤🌤☀
+example4:
+    input:雨のち時々晴, 70%60%50%30%
+    output:🌧🌧🌥🌤

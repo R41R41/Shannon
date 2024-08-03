@@ -1,0 +1,16 @@
+tqdm
+langchain
+discord
+javascript
+setuptools
+openai
+python-dotenv
+chardet
+cchardet
+chromadb==0.3.29
+tiktoken
+requests
+setuptools
+gymnasium
+psutil
+aiosubprocess

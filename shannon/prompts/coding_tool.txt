@@ -1,0 +1,41 @@
+Generate the code for a tool to be added to the LangChain Agent from the tool name (tool_name) and tool description (tool_description).
+Output the tool code in the following format.
+
+```python
+from langchain.pydantic_v1 import BaseModel, Field
+from langchain.tools import BaseTool
+from typing import Optional, Type
+from langchain.callbacks.manager import (
+    CallbackManagerForToolRun,
+    AsyncCallbackManagerForToolRun
+)
+import utils as U
+# Add imports as necessary
+
+class ExampleInput(BaseModel):
+    arg1: str = Field(description="Description of arg1 and example value")
+    arg2: str = Field(description="Description of arg2 and example value")
+
+
+class ExampleTool(BaseTool):
+    name = "example-tool"
+    description = "Create a new tool."
+    args_schema: Type[BaseModel] = ExampleInput
+
+    def _run(
+        self, arg1: str, arg2: str, run_manager: Optional[CallbackManagerForToolRun] = None
+    ) -> str:
+        """Use the tool synchronously."""
+        raise NotImplementedError("This tool requires asynchronous operation.")
+
+    async def _arun(
+        self, arg1: str, arg2: str, run_manager: Optional[AsyncCallbackManagerForToolRun] = None
+    ) -> str:
+        """Use the tool asynchronously."""
+        try:
+            # Write processing here
+            return "Result"
+        except Exception as e:
+            print(e)
+            return f"example-tool:{e}"
+```

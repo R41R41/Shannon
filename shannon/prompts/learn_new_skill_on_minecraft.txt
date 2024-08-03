@@ -1,0 +1,44 @@
+From the skill name (skill_name), description (skill_description), and parameters (skill_params), learn a new skill according to the following 5 steps.
+However, if you want the skill_name in snake_case, write it as skill_name, if you want it in kebab-case, write it as skill-name, and if you want it in camelCase, write it as skillName.
+1. Generate the skill (javascript) to be executed by the mineflayer bot
+    1-1. Use the coding-skill-on-minecraft tool to generate the mineflayer code.
+    1-2. Use skill_name, skill_description, and skill_params as arguments.
+    1-3. Save the created code to shannon/shannon/minecraft_bot_agent/instantSkills/{skillName}.js using the create-file tool.
+2. Create the tool (python) to register with the LLM
+    2-1. Use the coding-tool tool to generate the code to call the created skill.
+    2-2. Use skill-name (kebab-case) for tool_name, skill_description for tool_description, and skill_params for tool_params.
+    2-3. Specify the coding_plan as follows:
+        coding_plan: "
+            Generate the contents of the _arun function as follows.
+            """Use the tool asynchronously."""
+            try:
+                data = {
+                    // Store arguments in dictionary format
+                    // ex) "entity_name": entity_name,
+                }
+                // Execute the skill (use kebab-case for skill-name)
+                response = await U.send_request(
+                    endpoint='skill-name', data=data, destination="mineflayer", request_type="post")
+                if response['success']:
+                    return f"成功: {response['result']}"
+                else:
+                    return f"失敗: {response['result']}"
+            except Exception as e:
+                return f"skill-name:{e}"
+    2-4. Save the created code to /shannon/shannon/tools/minecraft/instant_skill/{skill_name}.py using the create-file tool.
+3. Load the skill
+    3-1. Once the two files are created, load the skill using the load-skills-on-minecraft tool.
+    3-2. If loading the skill fails
+        3-2-1. Delete the created files using the delete-file tool.
+        3-2-2. Refer to the error and regenerate the code from step 1.
+4. Test and fix the skill and tool
+    4-1. If loading the skill succeeds, test the tool using the test-tool tool.
+    4-2. If the test fails
+        4-2-1. Refer to the error and code to identify the problem and how to fix it. Use the read-file tool as needed to understand what was wrong with the tool's code.
+        4-2-2. Once you understand how to fix it, use the write-file tool to modify the file content.
+        4-2-3. Repeat this process until the test succeeds.
+5. Import the tool
+    5-1. Once the test succeeds, import the python tool file using the import-tool tool to finish.
+    5-2. If the skill cannot be learned after 3 attempts
+        5-2-1. Delete the created skill and tool files using the delete-file tool.
+        5-2-2. Reload the skills using the load-skills-on-minecraft tool and finish.

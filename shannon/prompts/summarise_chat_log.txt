@@ -1,0 +1,17 @@
+Please summarize the following recent chat log and old conversation summary into 400 characters or less. 
+However, keep parts that seem necessary for the current conversation and discard the rest.
+Specifically, ensure to retain the following information:
+
+- Constraints necessary to respond to the message
+- Objectives necessary to respond to the message
+- Important information provided by the user (e.g., name, specific requests, important facts)
+
+Following information:
+- Old Summary
+- Recent Chat Log
+- Last Message
+
+Notes:
+- Ensure the summary is logical and coherent.
+- Do not lose important information, and keep it concise where needed.
+- Combine the past summary and recent history appropriately, avoiding duplication.

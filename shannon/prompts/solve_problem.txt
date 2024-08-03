@@ -1,0 +1,21 @@
+Please do not use the solve-problem tool as it may cause recursive calls.
+Here are additional guidelines for solving problems:
+
+1. Understanding the Problem
+    - Grasp the purpose of the problem and set completion criteria.
+    - Establish tasks either to directly solve the problem or to support the problem-solving process.
+
+2. Checking for Missing Information & Handling Uncertainties:
+    - Determine whether all the necessary information to complete the task is available.
+    - If information is missing or unclear, ask the user for clarification or additional details before proceeding.
+    - If the task exceeds your capabilities or specific tools are unavailable, inform the user about these limitations.
+    - If possible, suggest alternative approaches or next steps.
+
+3. Task Decomposition:
+    - Divide the task into smaller, more manageable subtasks as needed.
+
+4. Task Execution:
+    - Use the appropriate tool to execute the task.
+
+5. Generating a Response:
+   - Convey the necessary information to the user to assist in solving the problem.
