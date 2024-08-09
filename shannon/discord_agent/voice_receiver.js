@@ -53,6 +53,8 @@ class VoiceReceiver {
         this.openai = new OpenAI(process.env.OPENAI_API_KEY);
         this.rpc = axios.create({ baseURL: "http://localhost:50021", proxy: false });
         this.connection = null;
+        this.fillerResources = {};
+        this.loadFillerResources();
 
         this.setupEventListeners();
         this.connectWebSocket();
@@ -62,6 +64,21 @@ class VoiceReceiver {
         });
 
         setInterval(this.processPlayQueue.bind(this), 1000); // 1秒ごとにチェック
+    }
+
+    loadFillerResources() {
+        const fillerDir = path.join(__dirname, '..', '..', 'saves', 'voice', 'fillers');
+        const files = fs.readdirSync(fillerDir);
+        
+        files.forEach(file => {
+            if (file.endsWith('.mp3')) {
+                const filePath = path.join(fillerDir, file);
+                const resource = createAudioResource(createReadStream(filePath));
+                this.fillerResources[file] = resource;
+            }
+        });
+        
+        console.log(`Loaded ${Object.keys(this.fillerResources).length} filler resources`);
     }
 
     setupEventListeners() {
@@ -185,14 +202,20 @@ class VoiceReceiver {
             this.playQueueCheckCount = 0;
             this.isPlaying = false;
         } else {
-            const { id, filePath, res, isMusic } = this.playQueue[0];
+            const { id, filePath, res, type } = this.playQueue[0];
             if (filePath) {
                 this.filePath = filePath;
-                this.isMusic = isMusic || false;
+                this.isMusic = type === "music" || false;
+                this.isFiller = type === "filler" || false;
 
                 if (this.filePath) {
-                    const resource = createAudioResource(fs.createReadStream(this.filePath));
-                    this.player.play(resource);
+                    if (this.isFiller) {
+                        const resource = this.fillerResources[this.filePath];
+                        this.player.play(resource);
+                    } else {
+                        const resource = createAudioResource(fs.createReadStream(this.filePath));
+                        this.player.play(resource);
+                    }
                 }
 
                 if (res && !res.headersSent) {
@@ -210,6 +233,7 @@ class VoiceReceiver {
         const app = express();
         app.use(bodyParser.json());
 
+        app.post('/discord_filler_send', this.handleFillerSend.bind(this));
         app.post('/discord_voice_chat_send', this.handleVoiceChatSend.bind(this));
         app.post('/discord_play_music', this.handlePlayMusic.bind(this));
         app.post('/discord_stop_music', this.handleStopMusic.bind(this));
@@ -314,11 +338,28 @@ class VoiceReceiver {
         });
     }
 
+    async handleFillerSend(req, res) {
+        console.log("discord_filler_send");
+        const { fillers } = req.body;
+        
+        for (const filler of fillers) {
+            const fillerKey = `${filler.type}_${filler.emotion}.mp3`;
+            if (this.fillerResources[fillerKey]) {
+                this.playQueue.push({ id: null, filePath: fillerKey, res: null, type: "filler" });
+            } else {
+                console.error(`Filler resource not found: ${fillerKey}`);
+            }
+        }
+
+        this.processPlayQueue();
+        res.status(200).send({ success: true, result: "Fillers queued" });
+    }
+
     async handleVoiceChatSend(req, res) {
         console.log("discord_voice_chat_send");
         const { emotion, message } = req.body;
         const id = Math.random().toString(36).substring(7);
-        this.playQueue.push({ id, filePath: null, res, isMusic: false });
+        this.playQueue.push({ id: id, filePath: null, res: res, type: "voice" });
         try {
             let speechData;
             const tempFilePath = path.join(__dirname, 'temp_audio.wav');
@@ -352,7 +393,7 @@ class VoiceReceiver {
         console.log("discord_play_music");
         const { music_name } = req.body;
         const id = Math.random().toString(36).substring(7);
-        this.playQueue.push({ id, filePath: null, res, isMusic: true });
+        this.playQueue.push({ id: id, filePath: null, res: res, type: "music" });
         try {
             const currentDir = process.cwd();
             const musicDir = path.join(currentDir, '../../', 'saves', 'music');
