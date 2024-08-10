@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 import glob
 from langgraph.checkpoint.memory import MemorySaver
 
+
 class LangGraphApp:
     def __init__(self):
         self.tools = []
@@ -30,11 +31,12 @@ class LangGraphApp:
     def _load_tools(self):
         tool_files = glob.glob("./test/tools/*.py")
         for tool_file in tool_files:
-            spec = importlib.util.spec_from_file_location(os.path.basename(tool_file)[:-3], tool_file)
+            spec = importlib.util.spec_from_file_location(
+                os.path.basename(tool_file)[:-3], tool_file)
             tool_module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(tool_module)
-            # Assume the tool class name is the same as the file name but in CamelCase
-            class_name = ''.join(word.capitalize() for word in os.path.basename(tool_file)[:-3].split('_')) + "Tool"
+            class_name = ''.join(word.capitalize() for word in os.path.basename(
+                tool_file)[:-3].split('_')) + "Tool"
             tool_class = getattr(tool_module, class_name)
             self.tools.append(tool_class())
 
@@ -66,8 +68,8 @@ class LangGraphApp:
         workflow.set_entry_point("agent")
         workflow.add_conditional_edges("agent", should_continue)
         workflow.add_edge("tools", 'agent')
-        
-        memory = MemorySaver()    
+
+        memory = MemorySaver()
 
         return workflow.compile(checkpointer=memory)
 
@@ -75,9 +77,10 @@ class LangGraphApp:
         async for output in self.workflow.astream(inputs, config, stream_mode="updates"):
             yield output
 
+
 if __name__ == "__main__":
     app = LangGraphApp()
-    
+
     async def main():
         config = {"configurable": {"thread_id": "1"}}
         while True:
@@ -87,14 +90,17 @@ if __name__ == "__main__":
                 print("Goodbye!")
                 break
             async for output in app.stream(inputs, config):
-                current_time = datetime.fromtimestamp(time.time(), ZoneInfo("Asia/Tokyo"))
-                print(f"\033[33m{current_time.strftime('%Y-%m-%d %H:%M:%S')}\033[0m")
+                current_time = datetime.fromtimestamp(
+                    time.time(), ZoneInfo("Asia/Tokyo"))
+                print(f"\033[33m{current_time.strftime(
+                    '%Y-%m-%d %H:%M:%S')}\033[0m")
                 for key, value in output.items():
                     if key == 'agent':
                         for message in value['messages']:
                             if 'tool_calls' in message.additional_kwargs:
                                 for tool_call in message.additional_kwargs['tool_calls']:
-                                    print(f"\033[34mtool_calls {tool_call['function']['name']} args: {tool_call['function']['arguments']}\033[0m")
+                                    print(f"\033[34mtool_calls {tool_call['function']['name']} args: {
+                                          tool_call['function']['arguments']}\033[0m")
                             else:
                                 print(f"\033[32m{message.content}\033[0m")
             print("\n")

@@ -19,7 +19,7 @@ class CreateNewToolInput(BaseModel):
 
 
 class CreateNewToolTool(BaseTool):
-    name = "create-new-tool"
+    name = "create_new_tool"
     description = "Tool to create a new tool. Creates a new tool if no existing tool is available."
     args_schema: Type[BaseModel] = CreateNewToolInput
 

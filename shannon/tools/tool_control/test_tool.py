@@ -21,7 +21,7 @@ class TestToolInput(BaseModel):
 
 class TestToolTool(BaseTool):
     # toolをテストするためのツール
-    name = "test-tool"
+    name = "test_tool"
     description = "Tool to test the tool."
     args_schema: Type[BaseModel] = TestToolInput
 

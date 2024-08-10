@@ -11,7 +11,7 @@ from shannon_agent.memory import Memory
 class SearchWeatherInput(BaseModel):
     # 天気を検索する日付を指定します。
     day: str = Field(
-        description="should be a time to search on bing search about weather, e.g. 2024年2月1日")
+        description="should get by get_current_time tool, e.g. 2024年2月1日")
     # 天気を検索する場所を指定します。
     location: str = Field(
         description="should be a location to search on bing search about weather, e.g. 東京")
@@ -19,7 +19,7 @@ class SearchWeatherInput(BaseModel):
 
 class SearchWeatherTool(BaseTool):
     # 天気を検索するためのツール
-    name = "search-weather"
+    name = "search_weather"
     description = "Tool to search weather forecast."
     args_schema: Type[BaseModel] = SearchWeatherInput
 

@@ -18,7 +18,7 @@ class GetCurrentTimeInput(BaseModel):
 
 class GetCurrentTimeTool(BaseTool):
     # 指定されたタイムゾーンの現在時刻を取得します。
-    name = "get-current-time"
+    name = "get_current_time"
     description = "Get the current time in the specified timezone."
     args_schema: Type[BaseModel] = GetCurrentTimeInput
 

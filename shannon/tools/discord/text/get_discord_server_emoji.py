@@ -18,7 +18,7 @@ class GetDiscordServerEmojiInput(BaseModel):
 
 class GetDiscordServerEmojiTool(BaseTool):
     # discordサーバー固有の絵文字を取得するためのツール
-    name = "get-discord-server-emoji"
+    name = "get_discord_server_emoji"
     description = "Tool to get server-specific emoji."
     args_schema: Type[BaseModel] = GetDiscordServerEmojiInput
 

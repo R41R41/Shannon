@@ -7,16 +7,16 @@ from langchain.callbacks.manager import (
 import utils as U
 
 
-class ChatOnMinecraftInput(BaseModel):
+class ChatInput(BaseModel):
     # Minecraftに送信するテキストを指定します。
     text: str = Field(description="Specify the text to send to Minecraft.")
 
 
-class ChatOnMinecraftTool(BaseTool):
+class ChatTool(BaseTool):
     # Minecraftにメッセージを送信するためのツール
     name = "chat-on-minecraft"
     description = "Tool to send a message to Minecraft."
-    args_schema: Type[BaseModel] = ChatOnMinecraftInput
+    args_schema: Type[BaseModel] = ChatInput
 
     def _run(
         self, text: str, run_manager: Optional[AsyncCallbackManagerForToolRun] = None

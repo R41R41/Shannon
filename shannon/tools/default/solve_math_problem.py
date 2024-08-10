@@ -1,3 +1,4 @@
+import nest_asyncio
 from langchain.pydantic_v1 import BaseModel, Field
 from langchain.tools import BaseTool
 from typing import Optional, Type
@@ -8,9 +9,10 @@ from langchain.callbacks.manager import (
 from langchain_community.utilities.wolfram_alpha import WolframAlphaAPIWrapper
 import os
 from dotenv import load_dotenv
-from shannon_agent.memory import Memory
 
 load_dotenv()
+nest_asyncio.apply()
+
 WOLFRAM_ALPHA_APPID = os.getenv('WOLFRAM_ALPHA_APPID')
 if WOLFRAM_ALPHA_APPID is not None:
     os.environ["WOLFRAM_ALPHA_APPID"] = WOLFRAM_ALPHA_APPID
@@ -24,7 +26,7 @@ class SolveMathProblemInput(BaseModel):
 
 
 class SolveMathProblemTool(BaseTool):
-    name = "solve-math-problem"
+    name = "solve_math_problem"
     description = "solve the given math problem like equation, inequality, etc."
     args_schema: Type[BaseModel] = SolveMathProblemInput
 
@@ -40,10 +42,7 @@ class SolveMathProblemTool(BaseTool):
         """Use the tool asynchronously."""
         try:
             answer = wolfram.run(math_problem)
-            memory = Memory()
-            memory.add_ai_action(
-                skill="solve-math-problem", action=f"solve math problem {math_problem}")
             return answer
         except Exception as e:
             print(e)
-            return f"An error occurred. {e}"
+            return f"Error: {e}"

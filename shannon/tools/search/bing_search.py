@@ -28,7 +28,7 @@ class BingSearchInput(BaseModel):
 
 class BingSearchTool(BaseTool):
     # 検索が必要な場合に使用するツール
-    name = "bing-search"
+    name = "bing_search"
     description = "Tool to search. Output in the specified format."
     args_schema: Type[BaseModel] = BingSearchInput
 

@@ -19,7 +19,7 @@ class DescribeImageInput(BaseModel):
 
 class DescribeImageTool(BaseTool):
     # 画像リンクから画像を読み込み、何が写っているか描写するためのツール
-    name = "describe-image"
+    name = "describe_image"
     description = "Tool to read an image from a link and describe what is written."
     args_schema: Type[BaseModel] = DescribeImageInput
 

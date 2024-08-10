@@ -19,7 +19,7 @@ class GetRecentDiscordChannelLogInput(BaseModel):
 
 class GetRecentDiscordChannelLogTool(BaseTool):
     # 指定されたDiscordチャンネルの最近のチャットログを取得するためのツール
-    name = "get-recent-discord-channel-chat-log"
+    name = "get_recent_discord_channel_chat_log"
     description = "Tool to get the recent chat log of a specified Discord channel."
     args_schema: Type[BaseModel] = GetRecentDiscordChannelLogInput
 

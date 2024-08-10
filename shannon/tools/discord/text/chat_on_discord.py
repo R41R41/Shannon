@@ -25,7 +25,7 @@ class ChatOnDiscordInput(BaseModel):
 
 class ChatOnDiscordTool(BaseTool):
     # Discordのチャンネルにメッセージを送信するツール
-    name = "chat-on-discord"
+    name = "chat_on_discord"
     description = "Send a message to a Discord channel."
     args_schema: Type[BaseModel] = ChatOnDiscordInput
 

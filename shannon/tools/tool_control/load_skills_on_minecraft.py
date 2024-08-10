@@ -13,7 +13,7 @@ class LoadSkillsOnMinecraftInput(BaseModel):
 
 class LoadSkillsOnMinecraftTool(BaseTool):
     # mineflayerのbotにスキルを読み込ませるためのツール
-    name = "load-skills-on-minecraft"
+    name = "load_skills_on_minecraft"
     description = "Tool to load skills for mineflayer bot."
     args_schema: Type[BaseModel] = LoadSkillsOnMinecraftInput
 

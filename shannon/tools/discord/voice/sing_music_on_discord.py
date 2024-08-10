@@ -12,9 +12,10 @@ class SingMusicOnDiscordInput(BaseModel):
     music_name: str = Field(
         description="The name of the music to sing.")
 
+
 class SingMusicOnDiscordTool(BaseTool):
     # ボイスチャットを行うためのツール
-    name = "sing-music-on-discord"
+    name = "sing_music_on_discord"
     description = "Tool to sing music on Discord. Please use when there is a song request."
     args_schema: Type[BaseModel] = SingMusicOnDiscordInput
 

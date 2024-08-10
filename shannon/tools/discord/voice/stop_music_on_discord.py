@@ -13,7 +13,7 @@ class StopMusicOnDiscordInput(BaseModel):
 
 class StopMusicOnDiscordTool(BaseTool):
     # ボイスチャットを行うためのツール
-    name = "stop-music-on-discord"
+    name = "stop_music_on_discord"
     description = "Tool to stop music on Discord."
     args_schema: Type[BaseModel] = StopMusicOnDiscordInput
 

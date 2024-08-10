@@ -20,7 +20,7 @@ class EditToolInput(BaseModel):
 
 class EditToolTool(BaseTool):
     # 既存ツールの内容を変更するためのツール
-    name = "edit-tool"
+    name = "edit_tool"
     description = "Tool to change the existing tool. Changes the existing tool when necessary."
     args_schema: Type[BaseModel] = EditToolInput
 

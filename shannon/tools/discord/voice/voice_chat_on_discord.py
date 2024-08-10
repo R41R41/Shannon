@@ -20,7 +20,7 @@ class VoiceChatOnDiscordInput(BaseModel):
 
 class VoiceChatOnDiscordTool(BaseTool):
     # ボイスチャットを行うためのツール
-    name = "voice-chat-on-discord"
+    name = "voice_chat_on_discord"
     description = "Tool to send a voice chat on Discord."
     args_schema: Type[BaseModel] = VoiceChatOnDiscordInput
 

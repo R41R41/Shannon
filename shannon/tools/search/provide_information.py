@@ -26,7 +26,7 @@ class ProvideInformationInput(BaseModel):
 
 class ProvideInformationTool(BaseTool):
     # 信頼性の高い情報を提供するためのツール
-    name = "provide-information"
+    name = "provide_information"
     description = "Tool to provide information of high reliability."
     args_schema: Type[BaseModel] = ProvideInformationInput
 

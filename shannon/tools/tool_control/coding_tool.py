@@ -23,7 +23,7 @@ class CodingToolInput(BaseModel):
 
 class CodingToolTool(BaseTool):
     # 新しいツールを作成するためのツール
-    name = "coding-tool"
+    name = "coding_tool"
     description = "Tool to create a new tool."
     args_schema: Type[BaseModel] = CodingToolInput
 

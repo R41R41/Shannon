@@ -22,7 +22,7 @@ class UpdateUserInfoInput(BaseModel):
 
 class UpdateUserInfoTool(BaseTool):
     # ユーザーの情報を更新するためのツール
-    name = "update-user-info"
+    name = "update_user_info"
     description = "Tool to update user information"
     args_schema: Type[BaseModel] = UpdateUserInfoInput
 

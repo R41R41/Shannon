@@ -23,7 +23,7 @@ class CodingSkillOnMinecraftInput(BaseModel):
 
 class CodingSkillOnMinecraftTool(BaseTool):
     # mineflayerのbotに実行させる新しいスキルのjavascriptコードを生成するためのツール
-    name = "coding-skill-on-minecraft"
+    name = "coding_skill_on_minecraft"
     description = "Tool to generate new skill code for mineflayer bot. Use the learn-new-skill-on-minecraft tool to learn the new skill."
     args_schema: Type[BaseModel] = CodingSkillOnMinecraftInput
 

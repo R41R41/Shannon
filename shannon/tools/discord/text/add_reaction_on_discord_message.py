@@ -22,7 +22,7 @@ class AddReactionOnDiscordMessageInput(BaseModel):
 
 
 class AddReactionOnDiscordMessageTool(BaseTool):
-    name = "add-reaction-on-discord-message"
+    name = "add_reaction_on_discord_message"
     description = "Add a reaction to a Discord message. You must select a server-specific emoji and add it to the reaction. Do not react to your own message. You must first retrieve server-specific emoji using the get-discord-server-emoji tool and include it in the reaction."
     args_schema: Type[BaseModel] = AddReactionOnDiscordMessageInput
 

@@ -6,12 +6,14 @@ from langchain.callbacks.manager import (
 )
 import os
 
+
 class GetSingableMusicListInput(BaseModel):
     pass
 
+
 class GetSingableMusicListTool(BaseTool):
     # ボイスチャットを行うためのツール
-    name = "get-singable-music-list"
+    name = "get_singable_music_list"
     description = "Tool to get a list of singable music on Discord. Please use when there is a song request."
     args_schema: Type[BaseModel] = GetSingableMusicListInput
 
@@ -39,7 +41,7 @@ class GetSingableMusicListTool(BaseTool):
             # _musicや_vocalを除去して曲名を取得
             song_name = name_without_ext.rsplit('_', 1)[0]
             music_set.add(song_name)
-        
+
         # セットをリストに変換
         unique_songs = list(music_set)
         response = {

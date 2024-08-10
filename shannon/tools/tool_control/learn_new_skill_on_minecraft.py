@@ -22,7 +22,7 @@ class LearnNewSkillOnMinecraftInput(BaseModel):
 
 class LearnNewSkillOnMinecraftTool(BaseTool):
     # mineflayerのbotに実行させるスキルを学習するためのツール
-    name = "learn-new-skill-on-minecraft"
+    name = "learn_new_skill_on_minecraft"
     description = "Tool to learn a skill for mineflayer bot. If the skill name, description, or parameters are not clear, please ask the user before running this tool."
     args_schema: Type[BaseModel] = LearnNewSkillOnMinecraftInput
 

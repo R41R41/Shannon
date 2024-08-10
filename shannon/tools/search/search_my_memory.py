@@ -36,7 +36,7 @@ class SearchMyMemoryInput(BaseModel):
 
 class SearchMyMemoryTool(BaseTool):
     # スキル使用履歴DBから検索するためのツール
-    name = "search-my-memory"
+    name = "search_my_memory"
     description = "Tool to search in the skill usage history database. Output in the specified format."
     args_schema: Type[BaseModel] = SearchMyMemoryInput
 

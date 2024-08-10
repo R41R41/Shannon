@@ -22,7 +22,7 @@ class GenerateImageInput(BaseModel):
 
 
 class GenerateImageTool(BaseTool):
-    name = "generate-image"
+    name = "generate_image"
     description = "generate an image for the given prompt"
     args_schema: Type[BaseModel] = GenerateImageInput
 

@@ -10,9 +10,10 @@ import utils as U
 class RestartSingingMusicOnDiscordInput(BaseModel):
     pass
 
+
 class RestartSingingMusicOnDiscordTool(BaseTool):
     # ボイスチャットを行うためのツール
-    name = "restart-singing-music-on-discord"
+    name = "restart_singing_music_on_discord"
     description = "Tool to restart singing music on Discord. Please use when there is a song request."
     args_schema: Type[BaseModel] = RestartSingingMusicOnDiscordInput
 

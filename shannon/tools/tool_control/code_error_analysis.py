@@ -18,7 +18,7 @@ class CodeErrorAnalysisInput(BaseModel):
 
 class CodeErrorAnalysisTool(BaseTool):
     # コードエラーを解析するためのツール
-    name = "code-error-analysis"
+    name = "code_error_analysis"
     description = "Tool to analyze code errors."
     args_schema: Type[BaseModel] = CodeErrorAnalysisInput
 

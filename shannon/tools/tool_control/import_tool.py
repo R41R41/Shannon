@@ -17,7 +17,7 @@ class ImportToolInput(BaseModel):
 
 class ImportToolTool(BaseTool):
     # pythonで書かれたopenai toolをimportするためのツール
-    name = "import-tool"
+    name = "import_tool"
     description = "Tool to import an openai tool written in python."
     args_schema: Type[BaseModel] = ImportToolInput
 
