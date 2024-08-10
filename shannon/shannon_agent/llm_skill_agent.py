@@ -1,35 +1,70 @@
 from langchain_openai import ChatOpenAI
-from langgraph.prebuilt import ToolNode
+from langchain.schema import SystemMessage
 from langchain_core.messages import HumanMessage
+from langgraph.prebuilt import ToolNode
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages, AnyMessage
+from langgraph.checkpoint.memory import MemorySaver
 from typing import Literal, TypedDict, Annotated
+from datetime import datetime
+import importlib
 import os
-from dotenv import load_dotenv
-from PIL import Image
-import importlib.util
-import asyncio
+import sys
 import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 import glob
-from langgraph.checkpoint.memory import MemorySaver
+from aiohttp import web
+import asyncio
+import websockets
+import utils as U
+
+sys.path.append(os.path.join(os.path.dirname(
+    os.path.abspath(__file__)), "..", "tools"))
 
 
-class LangGraphApp:
+class LLMSkillAgent:
     def __init__(self, model_name: str = "gpt-4o-mini", temperature: int = 0, init_tool_categories: list[str] = ["default", "discord", "search"]):
         self.model_name = model_name
         self.temperature = temperature
         self.init_tool_categories = init_tool_categories
         self.tools = []
-        self._load_env()
         self._init_load_tools()
         self.model = self._initialize_model()
         self.workflow = self._initialize_workflow()
+        self.config = {"configurable": {"thread_id": "1"}}
 
-    def _load_env(self):
-        load_dotenv()
-        os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY")
+    def render_system_message(self, content):
+        system_message = SystemMessage(content=content)
+        assert isinstance(system_message, SystemMessage)
+        return system_message
+
+    def render_human_message(self, *, content):
+        return HumanMessage(content=content)
+
+    async def start_server(self):
+        app = web.Application()
+        app.add_routes([
+            web.post('/response_to_message',
+                     self.handle_request_response_to_message),
+        ])
+        websocket_server = websockets.serve(
+            self.handle_websocket, 'localhost', int(U.destination_to_port("llm_skill_agent")))
+        await websocket_server
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, 'localhost', PORT)
+        await site.start()
+        print(f"shannon_server started on port {PORT}")
+        return site
+
+    async def handle_request_response_to_message(self, system_content, human_content, data=None, need_memorise=False):
+        messages = [
+            self.render_system_message(content=system_content),
+            self.render_human_message(content=human_content)
+        ]
+        await self.stream(messages, self.config)
+        return
 
     def _init_load_tools(self):
         for category in self.init_tool_categories:
@@ -134,27 +169,28 @@ class LangGraphApp:
                             print(f"\033[36m{message.content}\033[0m")
             print("\n")
 
+    async def user_input(self, system_content, human_content, data=None, need_memorise=False):
+        messages = [
+            self.render_system_message(content=system_content),
+            self.render_human_message(content=human_content)
+        ]
+
+        return
+
+
+IS_TEST = os.getenv('IS_TEST') == 'True'
+
+if IS_TEST:
+    PORT = 3001
+else:
+    PORT = 3000
+
+
+async def main():
+    agent = LLMSkillAgent()
+    server_task = agent.start_server()
+    await asyncio.gather(server_task)
+    await asyncio.Event().wait()
 
 if __name__ == "__main__":
-    app = LangGraphApp()
-
-    async def main():
-        config = {"configurable": {"thread_id": "1"}}
-        while True:
-            user_input = await asyncio.get_event_loop().run_in_executor(None, input, "質問を入力してください: ")
-            inputs = {"messages": [HumanMessage(content=user_input)]}
-            if user_input.lower() in ["quit", "exit", "q"]:
-                print("Goodbye!")
-                break
-            elif user_input.lower() in ["load", "l"]:
-                tool_name = await asyncio.get_event_loop().run_in_executor(None, input, "ツール名を入力してください: ")
-                app.load_tool(tool_name)
-                continue
-            elif user_input.lower() in ["unload", "u"]:
-                tool_name = await asyncio.get_event_loop().run_in_executor(None, input, "ツール名を入力してください: ")
-                app.unload_tool(tool_name)
-                continue
-            else:
-                await app.stream(inputs, config)
-
     asyncio.run(main())
