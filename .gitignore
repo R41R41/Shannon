@@ -2,7 +2,7 @@ shannon/minecraft_bot_agent/.env
 .env
 saves/*
 node_modules/*
-test/*
+hidden/*
 auth.json
 *.cpython-312.pyc
 *.pyc
