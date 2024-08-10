@@ -6,7 +6,7 @@ from langchain.callbacks.manager import (
     AsyncCallbackManagerForToolRun
 )
 from prompts import load_prompt
-from shannon_agent.llm import LLMSkillAgent
+from shannon.shannon_agent.llm_agent import LLMSkillAgent
 from shannon_agent.memory import Memory
 
 

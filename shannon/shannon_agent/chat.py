@@ -5,10 +5,10 @@ import re
 
 import pytz
 from prompts import load_prompt
-from .llm import LLMSkillAgent
-from .llm import LLMAgent
+from .llm_agent import LLMSkillAgent
+from .llm_agent import LLMAgent
 from openai import OpenAI
-from .llm import TranscriptionAgent
+from .transcription_agent import TranscriptionAgent
 import utils as U
 
 
@@ -22,8 +22,10 @@ class ChatAgent:
             self.transcription_agent = TranscriptionAgent()
             self.llm = LLMAgent()
             self.hot_llm = LLMAgent(temperature=0.4)
-            self.discord_skill_llm = LLMSkillAgent(model_name="gpt-4o-mini", tool_categories=["default", "discord"])
-            self.minecraft_skill_llm = LLMSkillAgent(model_name="gpt-4o-mini", tool_categories=["default", "minecraft"])
+            self.discord_skill_llm = LLMSkillAgent(
+                model_name="gpt-4o-mini", tool_categories=["default", "discord"])
+            self.minecraft_skill_llm = LLMSkillAgent(
+                model_name="gpt-4o-mini", tool_categories=["default", "minecraft"])
             self.initialization_status = self.discord_skill_llm.initialization_status
             self.client = OpenAI()
             self.speech_file_path = "saves/speech.mp3"

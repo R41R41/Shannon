@@ -3,7 +3,7 @@ import requests
 from datetime import datetime, timedelta
 import pytz
 from typing import List
-from .llm import LLMAgent
+from .llm_agent import LLMAgent
 
 jst = pytz.timezone('Asia/Tokyo')
 

@@ -6,7 +6,7 @@ from langchain.callbacks.manager import (
     AsyncCallbackManagerForToolRun
 )
 from prompts import load_prompt
-from shannon_agent.llm import LLMAgent
+from shannon.shannon_agent.llm_agent import LLMAgent
 from shannon_agent.memory import Memory
 
 
@@ -45,7 +45,8 @@ class UpdateUserInfoTool(BaseTool):
                 system_content=system_content, human_content=human_content)
             import os
             current_dir = os.path.dirname(os.path.abspath(__file__))
-            user_file_path = os.path.join(current_dir, "..", "..", "saves", "users", f"{user_name}.txt")
+            user_file_path = os.path.join(
+                current_dir, "..", "..", "saves", "users", f"{user_name}.txt")
             try:
                 with open(user_file_path, 'w') as file:
                     file.write(response)

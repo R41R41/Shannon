@@ -6,7 +6,7 @@ from langchain.callbacks.manager import (
     AsyncCallbackManagerForToolRun
 )
 from prompts import load_prompt
-from shannon_agent.llm import LLMAgent
+from shannon.shannon_agent.llm_agent import LLMAgent
 
 
 class ProvideInformationInput(BaseModel):

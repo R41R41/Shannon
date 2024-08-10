@@ -2,7 +2,7 @@ from datetime import datetime
 import requests
 from prompts import load_prompt
 import pytz
-from .llm import LLMSkillAgent
+from .llm_agent import LLMSkillAgent
 
 jst = pytz.timezone('Asia/Tokyo')
 

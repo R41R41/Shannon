@@ -1,6 +1,6 @@
 from prompts import load_prompt
 import random
-from .llm import LLMAgent
+from .llm_agent import LLMAgent
 
 
 class PostFortuneAgent:
