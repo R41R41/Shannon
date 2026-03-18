@@ -27,3 +27,7 @@ node_modules
 
 # Analysis
 /backend/saves/analysis/
+
+# Sensitive / runtime
+/backend/saves/twitter_login_cookies.json
+/backend/saves/auto_post_daily_schedule.json
