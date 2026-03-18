@@ -78,6 +78,14 @@ export interface FunctionCallingAgentState {
     needsPlanning?: boolean;
     /** CraftPreflight ノードからの決定論的クラフト計画 */
     craftPlan?: CraftPlan;
+    /** イテレーション毎に最新のインベントリサマリーを返すコールバック */
+    getInventorySummary?: () => string | null;
+    /** Blackboard から最新の journalSummary を取得するコールバック */
+    getJournalSummary?: () => string | null;
+    /** Blackboard から最新のアクティブサブタスク情報を取得するコールバック */
+    getActiveSubtaskInfo?: () => string | null;
+    /** MemoryAgent からの初期記憶コンテキストを取得するコールバック (初回のみ) */
+    getInitialMemory?: () => Promise<string | null>;
 }
 
 /**
@@ -117,9 +125,16 @@ export class FunctionCallingAgent {
     // ユーザーからのリアルタイムフィードバック
     private pendingFeedback: string[] = [];
 
+    // プラン更新通知（メタ認知からの注入用）
+    private _pendingPlanUpdate: string | null = null;
+
+    // ナッジメッセージ（エフェメラル注入用）
+    private _pendingNudge: string | null = null;
+
     // === 設定 ===
     static get MODEL_NAME() { return modelManager.get('functionCalling'); }
     static readonly MAX_ITERATIONS = 50;
+    static readonly MAX_ITERATIONS_EMERGENCY = 15;
     static readonly LLM_TIMEOUT_MS_DEFAULT = 30000;
     static readonly MAX_TOTAL_TIME_MS = 300000; // 全体: 5分
 
@@ -183,6 +198,18 @@ export class FunctionCallingAgent {
      */
     public setBlackboardAccessor(fn: Parameters<typeof this.taskTreePublisher.setBlackboardAccessor>[0]): void {
         this.taskTreePublisher.setBlackboardAccessor(fn);
+    }
+
+    /** 登録済みツール一覧を返す (ParallelExecutor が MemoryAgent 等を注入するために使用) */
+    getTools(): StructuredTool[] {
+        return this.tools;
+    }
+
+    /**
+     * メタ認知等からプラン更新を通知する。次のLLM呼び出し時にエフェメラルとして注入される。
+     */
+    public notifyPlanUpdated(planSummary: string): void {
+        this._pendingPlanUpdate = planSummary;
     }
 
     /**
@@ -427,7 +454,8 @@ export class FunctionCallingAgent {
         }, state.context?.platform ?? null, state.channelId, state.taskId, state.onTaskTreeUpdate);
 
         try {
-            while (iteration < FunctionCallingAgent.MAX_ITERATIONS) {
+            const maxIter = isEmergency ? FunctionCallingAgent.MAX_ITERATIONS_EMERGENCY : FunctionCallingAgent.MAX_ITERATIONS;
+            while (iteration < maxIter) {
                 // ── 中断チェック ──
                 if (signal?.aborted) throw new Error('Task aborted');
 
@@ -436,13 +464,13 @@ export class FunctionCallingAgent {
                     break;
                 }
 
-                // ── ユーザーフィードバックを会話に追加 ──
-                while (this.pendingFeedback.length > 0) {
-                    const fb = this.pendingFeedback.shift()!;
-                    messages.push(
-                        new HumanMessage(`ユーザーからのフィードバック: ${fb}`),
-                    );
-                    logger.warn(`📝 フィードバックを会話に追加: ${fb}`);
+                // ── ユーザーフィードバック（最新のみエフェメラル注入用に保持） ──
+                let latestFeedback: string | null = null;
+                if (this.pendingFeedback.length > 0) {
+                    // 最新のフィードバックのみ使用し、古いものは破棄
+                    latestFeedback = this.pendingFeedback[this.pendingFeedback.length - 1];
+                    this.pendingFeedback.length = 0;
+                    logger.warn(`📝 フィードバックをエフェメラル注入: ${latestFeedback}`);
                 }
 
                 // ── コンテキストウィンドウのトリミング ──
@@ -455,6 +483,15 @@ export class FunctionCallingAgent {
 
                 // ── 一時的な思考/感情コンテキストを注入（LLM呼び出し後に除去） ──
                 const ephemeralMessages: BaseMessage[] = [];
+                // ── 初期記憶コンテキスト (初回のみ) ──
+                if (iteration === 0 && state.getInitialMemory) {
+                    try {
+                        const initialMem = await state.getInitialMemory();
+                        if (initialMem) {
+                            ephemeralMessages.push(new SystemMessage(`【初期記憶コンテキスト】\n${initialMem}`));
+                        }
+                    } catch { /* optional */ }
+                }
                 if (iteration > 0 && this.thinkingManager.hasThoughts()) {
                     const thinkingContext = this.thinkingManager.buildThinkingContext();
                     if (thinkingContext) {
@@ -470,6 +507,41 @@ export class FunctionCallingAgent {
                         `anticipation=${state.emotionState.current.parameters.anticipation})`
                     );
                     ephemeralMessages.push(msg);
+                }
+                // ── インベントリサマリー注入（Minecraft: LLMに最新在庫を常に認識させる） ──
+                if (iteration > 0 && state.getInventorySummary) {
+                    const inventorySummary = state.getInventorySummary();
+                    if (inventorySummary) {
+                        ephemeralMessages.push(new SystemMessage(inventorySummary));
+                    }
+                }
+                // ── フィードバックをエフェメラル注入 ──
+                if (latestFeedback) {
+                    ephemeralMessages.push(new HumanMessage(`ユーザーからのフィードバック: ${latestFeedback}`));
+                }
+                // ── journalSummary 注入 ──
+                if (state.getJournalSummary) {
+                    const summary = state.getJournalSummary();
+                    if (summary) {
+                        ephemeralMessages.push(new SystemMessage(`【旅程サマリー】\n${summary}`));
+                    }
+                }
+                // ── 現在のサブタスク注入 ──
+                if (state.getActiveSubtaskInfo) {
+                    const info = state.getActiveSubtaskInfo();
+                    if (info) {
+                        ephemeralMessages.push(new SystemMessage(info));
+                    }
+                }
+                // ── プラン更新通知注入 ──
+                if (this._pendingPlanUpdate) {
+                    ephemeralMessages.push(new SystemMessage(`【プラン更新】\n${this._pendingPlanUpdate}`));
+                    this._pendingPlanUpdate = null;
+                }
+                // ── ナッジメッセージ注入（前回イテレーションからの繰越） ──
+                if (this._pendingNudge) {
+                    ephemeralMessages.push(new SystemMessage(this._pendingNudge));
+                    this._pendingNudge = null;
                 }
                 messages.push(...ephemeralMessages);
 
@@ -625,11 +697,10 @@ export class FunctionCallingAgent {
                         continue;
                     }
 
-                    // 次のアクションを促すプロンプト（エスカレーション付き）
-                    const nudgeMsg = consecutiveTextOnly >= 2
+                    // 次のアクションを促すプロンプト（エスカレーション付き） → エフェメラルとして次イテレーションで注入
+                    this._pendingNudge = consecutiveTextOnly >= 2
                         ? 'これが最後の警告です。次の応答では必ずツールを呼び出すか、task-complete を呼んでください。テキストだけの応答は無効です。'
                         : 'ツール呼び出しがありませんでした。タスクが完了したなら task-complete を呼んでください。まだ途中なら次のアクション（ツール呼び出し）を実行してください。';
-                    messages.push(new SystemMessage(nudgeMsg));
                     logger.info(`🔄 テキストのみ応答 (${consecutiveTextOnly}/${MAX_CONSECUTIVE_TEXT_ONLY}) → 次のアクションを促して継続`, 'cyan');
                     iteration++;
                     continue;
@@ -865,7 +936,7 @@ export class FunctionCallingAgent {
             }
 
             // 最大イテレーション到達
-            logger.warn(`⚠ FunctionCallingAgent: 最大イテレーション(${FunctionCallingAgent.MAX_ITERATIONS})に到達`);
+            logger.warn(`⚠ FunctionCallingAgent: 最大イテレーション(${maxIter})に到達`);
 
             this.taskTreePublisher.publishTaskTree({
                 status: 'error',

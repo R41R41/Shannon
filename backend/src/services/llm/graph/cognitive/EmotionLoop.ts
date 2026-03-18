@@ -36,6 +36,9 @@ export class EmotionLoop {
     async run(): Promise<void> {
         this.stopped = false;
 
+        // 初回 tick を即座に実行 (emotion ノード廃止に伴い、ここで初期感情を設定する)
+        await this.tick();
+
         // イベントリスナーを登録
         const onTaskUpdated = () => this.scheduleTick();
         const onMetaUpdated = () => this.scheduleTick();

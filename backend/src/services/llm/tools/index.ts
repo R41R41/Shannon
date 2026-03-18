@@ -39,6 +39,7 @@ export { default as UpdatePlanTool } from './utility/updatePlan.js';
 export { default as WaitTool } from './utility/wait.js';
 export { default as TaskCompleteTool } from './utility/taskComplete.js';
 export { default as ChatOnWebTool } from './utility/chatOnWeb.js';
+export { default as PlanCraftTool } from './utility/planCraft.js';
 
 // === YouTube tools ===
 export { default as GetYoutubeVideoContentFromURLTool } from './youtube/getYoutubeVideoContentFromURL.js';

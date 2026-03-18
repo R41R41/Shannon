@@ -95,6 +95,7 @@ class MineBlock extends InstantSkill {
 
     for (const pos of targets) {
       if (mined >= count) break;
+      if (this.shouldInterrupt()) break;
 
       const target = new Vec3(pos.x, pos.y, pos.z);
       const block = this.bot.blockAt(target);
@@ -138,14 +139,46 @@ class MineBlock extends InstantSkill {
 
     // 採掘後のインベントリ差分からドロップアイテムを検出
     const drops = this.detectDrops(beforeInventory);
-    const dropsText = drops.length > 0
-      ? `（ドロップ回収: ${drops.map(d => `${d.item} x${d.count}`).join(', ')}）`
-      : '';
+    const totalDropCount = drops.reduce((sum, d) => sum + d.count, 0);
 
+    // ドロップが0の場合、dig成功でもアイテム未回収 → 失敗として報告
+    if (totalDropCount === 0) {
+      return {
+        success: false,
+        result: `${blockName}を${mined}個掘削しましたが、アイテムを回収できませんでした。ドロップが消失した可能性があります（溶岩、高所落下等）${toolWarning}`,
+        failureType: 'drops_lost',
+        recoverable: true,
+      };
+    }
+
+    const dropsText = `（ドロップ回収: ${drops.map(d => `${d.item} x${d.count}`).join(', ')}）`;
+
+    // ドロップアイテムの現在所持数を付記（LLMが過剰採掘しないようにする）
+    const totalsText = this.formatDropTotals(drops);
+
+    const isPartial = mined < count;
     return {
-      success: true,
-      result: `${blockName}を${mined}個採掘しました${dropsText}${failures.length > 0 ? `（一部失敗: ${failures.join(', ')}）` : ''}${toolWarning}`,
+      success: !isPartial,
+      result: isPartial
+        ? `${blockName}を${count}個中${mined}個のみ採掘しました${dropsText}${totalsText}。残り${count - mined}個が不足しています。再度 mine-block を実行してください${failures.length > 0 ? `（失敗詳細: ${failures.join(', ')}）` : ''}${toolWarning}`
+        : `${blockName}を${mined}個採掘しました${dropsText}${totalsText}${failures.length > 0 ? `（一部失敗: ${failures.join(', ')}）` : ''}${toolWarning}`,
+      ...(isPartial && { failureType: 'partial_completion', recoverable: true }),
     };
+  }
+
+  /**
+   * ドロップアイテムの現在インベントリ所持数をフォーマットする。
+   */
+  private formatDropTotals(drops: Array<{ item: string; count: number }>): string {
+    if (drops.length === 0) return '';
+    const currentInventory = new Map<string, number>();
+    for (const item of this.bot.inventory.items()) {
+      currentInventory.set(item.name, (currentInventory.get(item.name) ?? 0) + item.count);
+    }
+    const totals = drops
+      .map(d => `${d.item}=${currentInventory.get(d.item) ?? 0}個`)
+      .join(', ');
+    return `（現在の所持数: ${totals}）`;
   }
 
   /**

@@ -34,6 +34,8 @@ const SAME_CALL_THRESHOLD = 3;
 const SAME_TOOL_THRESHOLD = 5;
 const FAILURE_RATE_WINDOW = 10;
 const FAILURE_RATE_THRESHOLD = 0.7;
+/** 同一 (tool, args) が連続成功しても進捗がないと判定する閾値 */
+const SAME_SUCCESS_LOOP_THRESHOLD = 5;
 
 export class LoopDetector {
     private history: ToolCallRecord[] = [];
@@ -163,6 +165,21 @@ export class LoopDetector {
             }
         }
 
+        // Rule 4: 同一 (tool, args) が N 回連続成功（進捗なしループ）
+        const successStreaks = this.getConsecutiveSuccessStreaks();
+        for (const [sig, streak] of successStreaks) {
+            if (streak.count >= SAME_SUCCESS_LOOP_THRESHOLD) {
+                if (this.blockedCallSignatures.has(sig)) continue;
+                newBlockedSigs.add(sig);
+                reasons.push(
+                    `${streak.toolName} が同一引数で ${streak.count} 回連続成功しているが進捗なし（無限ループの可能性）`,
+                );
+                logger.warn(
+                    `[LoopDetector] 🔴 ブロック: ${streak.toolName} (同一成功 ${streak.count}回 — 進捗なしループ)`,
+                );
+            }
+        }
+
         // Rule 3: 直近 N 回の全体失敗率チェック
         const recentWindow = this.history.slice(-FAILURE_RATE_WINDOW);
         if (recentWindow.length >= FAILURE_RATE_WINDOW) {
@@ -264,6 +281,37 @@ export class LoopDetector {
                     toolName: record.toolName,
                     lastError: record.errorMessage,
                 });
+            }
+        }
+
+        return streaks;
+    }
+
+    /**
+     * 同一 (toolName, argsHash) の連続成功ストリークを計算する。
+     * 成功ループ（activate-block を何度も呼ぶなど）を検出する。
+     */
+    private getConsecutiveSuccessStreaks(): Map<string, { count: number; toolName: string }> {
+        const streaks = new Map<string, { count: number; toolName: string }>();
+        const settled = new Set<string>();
+
+        for (let i = this.history.length - 1; i >= 0; i--) {
+            const record = this.history[i];
+            const sig = `${record.toolName}:${record.argsHash}`;
+
+            if (settled.has(sig)) continue;
+
+            // 失敗 or 別ツール → このシグネチャのストリーク確定
+            if (!record.success) {
+                settled.add(sig);
+                continue;
+            }
+
+            const existing = streaks.get(sig);
+            if (existing) {
+                existing.count++;
+            } else {
+                streaks.set(sig, { count: 1, toolName: record.toolName });
             }
         }
 

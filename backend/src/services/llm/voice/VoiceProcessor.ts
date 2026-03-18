@@ -448,9 +448,12 @@ export class VoiceProcessor {
       this.publishVoiceStatus(memoryZone, message.guildId, 'tts');
       try {
         const sentences = splitIntoSentences(responseText);
-        logger.info(`[Voice] Fallback: batch TTS for ${sentences.length} sentence(s)`, 'cyan');
-        for (const s of sentences) {
-          const wavBuf = await this.voicepeakClient.synthesize(s, { emotion: voiceEmotion });
+        const convertedSentences = await Promise.all(
+          sentences.map(s => this.voicepeakClient.convertEnglishToKatakana(s)),
+        );
+        logger.info(`[Voice] Fallback: batch TTS for ${sentences.length} sentence(s) (katakana pre-converted)`, 'cyan');
+        for (const cs of convertedSentences) {
+          const wavBuf = await this.voicepeakClient.synthesizePreprocessed(cs, { emotion: voiceEmotion });
           this.eventBus.publish({
             type: 'discord:voice_enqueue',
             memoryZone,
@@ -498,10 +501,10 @@ export class VoiceProcessor {
     this.publishVoiceStatus(memoryZone, guildId, 'tts', '🤖 Minebot TTS...');
 
     try {
-      const emotion = await this.voicepeakClient.analyzeEmotionForTTS(responseText);
       const sentences = splitIntoSentences(responseText);
-      for (const s of sentences) {
-        const wavBuf = await this.voicepeakClient.synthesize(s, { emotion });
+      const { emotion, convertedSentences } = await this.voicepeakClient.preprocessBatch(responseText, sentences);
+      for (const cs of convertedSentences) {
+        const wavBuf = await this.voicepeakClient.synthesizePreprocessed(cs, { emotion });
         this.eventBus.publish({
           type: 'discord:voice_enqueue',
           memoryZone,

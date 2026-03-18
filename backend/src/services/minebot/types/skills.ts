@@ -91,6 +91,8 @@ export abstract class InstantSkill extends Skill {
   canUseByCommand: boolean;
   /** スキルのタイムアウト（ミリ秒）。サブクラスでオーバーライド可能。0 = 無制限。 */
   maxDurationMs: number;
+  /** 中断時に runImpl 内のループを即座に停止するための AbortController */
+  private _abortController: AbortController | null = null;
 
   constructor(bot: CustomBot) {
     super(bot);
@@ -114,6 +116,7 @@ export abstract class InstantSkill extends Skill {
 
     this.bot.executingSkill = true;
     this.bot.interruptExecution = false;
+    this._abortController = new AbortController();
     this.status = true;
     const startTime = Date.now();
 
@@ -130,6 +133,7 @@ export abstract class InstantSkill extends Skill {
               interruptCheckInterval = null;
             }
             try {
+              this._abortController?.abort();
               this.bot.clearControlStates();
               const pathfinder = (this.bot as any).pathfinder;
               if (pathfinder && typeof pathfinder.stop === 'function') {
@@ -151,6 +155,7 @@ export abstract class InstantSkill extends Skill {
         ? new Promise<SkillResult>((resolve) => {
             timeoutId = setTimeout(() => {
               try {
+                this._abortController?.abort();
                 this.bot.clearControlStates();
                 const pathfinder = (this.bot as any).pathfinder;
                 if (pathfinder && typeof pathfinder.stop === 'function') {
@@ -215,10 +220,9 @@ export abstract class InstantSkill extends Skill {
       }
       releaseLock();
       this.bot.executingSkill = false;
-      // 注意: interruptExecution はここでリセットしない
-      // Promise.race で run() が先に返っても、バックグラウンドの runImpl() が
-      // shouldInterrupt() でフラグを検出してループを抜ける必要があるため。
-      // フラグは次の run() 開始時にリセットされる (行187)。
+      // 注意: interruptExecution はここでリセットしない（runImpl のバックグラウンド用）。
+      // _abortController も abort 済みのまま残す（runImpl 側が signal.aborted を参照するため）。
+      // 両方とも次の run() 開始時にリセットされる。
       this.status = false;
     }
   }
@@ -226,10 +230,16 @@ export abstract class InstantSkill extends Skill {
   /**
    * スキルを中断すべきか判定する。
    * 長時間ループを持つスキルは、各イテレーション間でこれを呼ぶことで
-   * 500msのポーリングより早く中断できる。
+   * 100msのポーリングより早く中断できる。
    */
   protected shouldInterrupt(): boolean {
-    return this.bot.interruptExecution === true;
+    return this.bot.interruptExecution === true
+      || (this._abortController?.signal.aborted ?? false);
+  }
+
+  /** runImpl 内で AbortSignal を参照するためのアクセサ */
+  protected get abortSignal(): AbortSignal | undefined {
+    return this._abortController?.signal;
   }
 
   abstract runImpl(

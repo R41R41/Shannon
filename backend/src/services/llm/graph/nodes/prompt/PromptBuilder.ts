@@ -58,6 +58,18 @@ async function loadDynamicRules(): Promise<string[]> {
 loadDynamicRules().catch(() => {});
 
 export class PromptBuilder {
+    /** 食べ物アイテム名セット（autoEat の FALLBACK_FOOD_POINTS と同期） */
+    private static readonly FOOD_ITEMS = new Set([
+        'baked_potato', 'bread', 'cooked_beef', 'steak', 'cooked_porkchop',
+        'cooked_mutton', 'cooked_chicken', 'cooked_rabbit', 'cooked_cod',
+        'cooked_salmon', 'golden_carrot', 'golden_apple', 'enchanted_golden_apple',
+        'carrot', 'potato', 'beetroot', 'beetroot_soup', 'mushroom_stew',
+        'rabbit_stew', 'suspicious_stew', 'dried_kelp', 'apple', 'melon_slice',
+        'sweet_berries', 'glow_berries', 'chorus_fruit', 'cookie', 'pumpkin_pie',
+        'honey_bottle', 'porkchop', 'beef', 'mutton', 'chicken', 'rabbit',
+        'rotten_flesh', 'cod', 'salmon',
+    ]);
+
     /**
      * 動的ルールのキャッシュをリフレッシュ（外部から呼ぶ）
      */
@@ -228,17 +240,24 @@ ${minecraftRules}
                 platformInfo += `\n- 状態: HP=${mc.health ?? '?'}/20, 満腹度=${mc.food ?? '?'}/20`;
             }
             if (Array.isArray(mc.inventory) && mc.inventory.length > 0) {
-                const inventorySummary = mc.inventory
+                const inventory = mc.inventory as Array<Record<string, unknown>>;
+                const inventorySummary = inventory
                     .slice(0, 16)
                     .map((item) => {
                         if (!item || typeof item !== 'object') return null;
-                        const entry = item as Record<string, unknown>;
-                        return `${entry.name ?? 'unknown'}x${entry.count ?? '?'}`;
+                        return `${item.name ?? 'unknown'}x${item.count ?? '?'}`;
                     })
                     .filter(Boolean)
                     .join(', ');
                 if (inventorySummary) {
                     platformInfo += `\n- 所持品: ${inventorySummary}`;
+                }
+                // 食料安全チェック: 食べ物がなければ警告を構造的に注入
+                const hasFoodItems = inventory.some(item =>
+                    typeof item.name === 'string' && PromptBuilder.FOOD_ITEMS.has(item.name),
+                );
+                if (!hasFoodItems) {
+                    platformInfo += `\n- ⚠️ 食料: なし（インベントリに食べ物がありません。空腹になると自然回復せずHPが減り続けます。タスク中に食料確保を検討してください）`;
                 }
             }
             if (Array.isArray(mc.nearbyEntities) && mc.nearbyEntities.length > 0) {

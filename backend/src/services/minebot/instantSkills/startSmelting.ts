@@ -76,16 +76,22 @@ class StartSmelting extends InstantSkill {
     ];
   }
 
-  /** 燃料の精錬能力を返す（未知の燃料は 1 として扱う） */
+  /** 燃料の精錬能力を返す。無効な燃料は 0 を返す */
   private getFuelSmelts(fuelName: string): number {
     // 完全一致
     if (StartSmelting.FUEL_SMELTS[fuelName] !== undefined) {
       return StartSmelting.FUEL_SMELTS[fuelName];
     }
-    // _planks / _log サフィックスで部分一致
+    // _planks / _log サフィックスで部分一致（木系燃料）
     if (fuelName.endsWith('_planks')) return 1.5;
     if (fuelName.endsWith('_log') || fuelName.endsWith('_wood') || fuelName.endsWith('_stem')) return 1.5;
-    return 1;
+    // 未知のアイテムは燃料として無効
+    return 0;
+  }
+
+  /** 有効な燃料かどうかを判定する */
+  private isValidFuel(fuelName: string): boolean {
+    return this.getFuelSmelts(fuelName) > 0;
   }
 
   async runImpl(
@@ -130,6 +136,17 @@ class StartSmelting extends InstantSkill {
           success: false,
           result: `かまどが遠すぎます（距離: ${distance.toFixed(1)}m）`,
           failureType: 'distance_too_far',
+          recoverable: true,
+        };
+      }
+
+      // 燃料バリデーション: 有効な燃料かチェック
+      if (!this.isValidFuel(fuelItem)) {
+        const validFuels = 'coal, charcoal, oak_planks, stick, oak_log, blaze_rod, lava_bucket';
+        return {
+          success: false,
+          result: `${fuelItem}は有効な燃料ではありません。使用可能な燃料: ${validFuels} 等`,
+          failureType: 'invalid_fuel',
           recoverable: true,
         };
       }
@@ -229,7 +246,7 @@ class StartSmelting extends InstantSkill {
           const availableSpace = maxStack - alreadyInFurnace;
           newInputCount = Math.min(newInputCount, availableSpace);
 
-          totalSmeltCount = alreadyInFurnace + newInputCount;
+          totalSmeltCount = Math.min(count, alreadyInFurnace + newInputCount);
 
           if (newInputCount > 0) {
             await furnace.putInput(inputItems[0].type, null, newInputCount);

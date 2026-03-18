@@ -29,6 +29,7 @@ export class MinebotTaskRuntime {
   private taskQueue: TaskQueueEntry[] = [];
   private emergencyTask: TaskQueueEntry | null = null;
   private isEmergencyMode = false;
+  private abortedForEmergency = false;
   private isExecuting = false;
   private abortController: AbortController | null = null;
   private onTaskListUpdate: ((tasks: TaskListState) => void) | null = null;
@@ -130,6 +131,27 @@ export class MinebotTaskRuntime {
 
       return this.currentState;
     } catch (error) {
+      // 緊急プリエンプションによる中断の場合はエラー扱いにしない（paused タスクを保全）
+      if (this.abortedForEmergency) {
+        log.info('♻️ タスクは緊急プリエンプションにより中断 — 緊急タスク完了後に再開予定');
+        this.abortedForEmergency = false;
+        this.currentState = {
+          taskId,
+          createdAt,
+          forceStop: true,
+          retryBudget: this.currentState?.retryBudget ?? 2,
+          recoveryStatus: 'idle',
+          taskTree: this.currentState?.taskTree ?? {
+            status: 'in_progress',
+            goal: partialState.userMessage ?? 'Task',
+            strategy: '',
+            subTasks: null,
+          },
+        };
+        this.notifyTaskListUpdate();
+        return this.currentState;
+      }
+
       log.error('Task execution error', error);
       this.currentState = {
         taskId,
@@ -264,6 +286,7 @@ export class MinebotTaskRuntime {
 
     this.isEmergencyMode = true;
     if (this.isExecuting) {
+      this.abortedForEmergency = true;
       this.forceStop();
 
       // forceStop() は AbortController.abort() するが、FCA の実行ループが
@@ -518,6 +541,9 @@ export class MinebotTaskRuntime {
       return;
     }
 
+    if (nextTask.status === 'paused') {
+      log.info(`♻️ 中断されたタスクを再開: ${nextTask.taskTree?.goal ?? nextTask.id}`);
+    }
     nextTask.status = 'executing';
     this.notifyTaskListUpdate();
 
@@ -655,6 +681,7 @@ export class MinebotTaskRuntime {
             : input.envelope.minecraft.inventory;
         }
         input.envelope.minecraft.nearbyInfrastructure = nearbyInfrastructure;
+        input.envelope.minecraft.nearbyResources = this.scanNearbyResources();
       }
       return input.envelope;
     }
@@ -673,6 +700,7 @@ export class MinebotTaskRuntime {
 
     // 近くのインフラブロックをスキャン（crafting_table, furnace 等）
     const nearbyInfrastructure = this.scanNearbyInfrastructure();
+    const nearbyResources = this.scanNearbyResources();
 
     return createEnvelope({
       channel: 'minecraft',
@@ -689,6 +717,7 @@ export class MinebotTaskRuntime {
         food: this.bot.food ?? undefined,
         inventory,
         nearbyInfrastructure,
+        nearbyResources,
       } as any,
       metadata: {
         environmentState: input.environmentState,
@@ -730,6 +759,37 @@ export class MinebotTaskRuntime {
       }
     } catch (err) {
       log.warn(`Failed to scan nearby infrastructure: ${err}`);
+    }
+
+    return results;
+  }
+
+  /**
+   * 半径 32 ブロック以内の資源ブロック（木材等）をスキャン。
+   * CraftPreflight が代替素材（oak_log の代わりに acacia_log 等）を選択するために使用。
+   */
+  private scanNearbyResources(): Array<{ name: string; count: number }> {
+    const RESOURCE_BLOCKS = [
+      'oak_log', 'spruce_log', 'birch_log', 'jungle_log',
+      'acacia_log', 'dark_oak_log', 'cherry_log', 'mangrove_log',
+    ];
+    const results: Array<{ name: string; count: number }> = [];
+
+    try {
+      const registry = (this.bot as any).registry;
+      if (!registry?.blocksByName) return results;
+
+      for (const blockName of RESOURCE_BLOCKS) {
+        const blockId = registry.blocksByName[blockName]?.id;
+        if (blockId == null) continue;
+
+        const found = this.bot.findBlocks({ matching: blockId, maxDistance: 32, count: 20 });
+        if (found.length > 0) {
+          results.push({ name: blockName, count: found.length });
+        }
+      }
+    } catch (err) {
+      log.warn(`Failed to scan nearby resources: ${err}`);
     }
 
     return results;

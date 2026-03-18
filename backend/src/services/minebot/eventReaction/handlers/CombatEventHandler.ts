@@ -76,7 +76,14 @@ export class CombatEventHandler {
         switch (eventData.eventType) {
             case 'damage': {
                 const dmg = eventData as DamageEventData;
-                return `ダメージを受けた（-${dmg.damage.toFixed(1)}HP、残り${dmg.currentHealth.toFixed(1)}/20）。安全を確保して`;
+                const hpInfo = `ダメージ（-${dmg.damage.toFixed(1)}HP、残り${dmg.currentHealth.toFixed(1)}/20）`;
+                const hasAttacker = dmg.possibleSource && dmg.possibleSource !== 'unknown';
+                if (hasAttacker) {
+                    // 敵による攻撃 → 逃走最優先、行動制限厳格
+                    return `緊急: ${hpInfo}。攻撃元: ${dmg.possibleSource}。【制約】即時生存行動のみ: (1)食料があれば食べる (2)敵から全力で逃走する (3)安全な場所で待機。クラフト・採掘・建築・農業は禁止。`;
+                }
+                // 落下・溺水・環境ダメージ → 制約を緩和し、食料確保を許可
+                return `緊急: ${hpInfo}。環境ダメージ（落下・溺水等）。【行動指針】(1)食料があれば食べる (2)食料がなければプレイヤーに「食料がないので助けてください」とチャットで伝える (3)周囲に動物がいれば狩って食料を確保する (4)安全な場所で待機する。大規模なクラフト・採掘・建築は禁止。`;
             }
             case 'suffocation': {
                 const suff = eventData as SuffocationEventData;

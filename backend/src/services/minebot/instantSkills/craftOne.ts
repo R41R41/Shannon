@@ -1,4 +1,5 @@
 import minecraftData from 'minecraft-data';
+import { Vec3 } from 'vec3';
 import { CustomBot, InstantSkill } from '../types.js';
 import { createLogger } from '../../../utils/logger.js';
 const log = createLogger('Minebot:Skill:craftOne');
@@ -210,17 +211,55 @@ class CraftOne extends InstantSkill {
         }
       }
 
-      // クラフトテーブルを探す
-      const craftingTable = this.bot.findBlock({
+      // クラフトテーブルを探す（範囲を広げて検索）
+      let craftingTable = this.bot.findBlock({
         matching: this.mcData.blocksByName.crafting_table?.id,
-        maxDistance: 4,
+        maxDistance: 32,
       });
 
       if (requiresCraftingTable && !craftingTable) {
-        return {
-          success: false,
-          result: `${itemName}のクラフトにはクラフトテーブルが必要です。activate-blockでクラフトテーブルを使用するか、place-block-atで設置してください`,
-        };
+        // インベントリにcrafting_tableがあれば自動設置を試みる
+        const tableInInventory = this.bot.inventory.items().find(i => i.name === 'crafting_table');
+        if (tableInInventory) {
+          craftingTable = await this.tryPlaceCraftingTable();
+          if (!craftingTable) {
+            return {
+              success: false,
+              result: `${itemName}のクラフトにはクラフトテーブルが必要です。crafting_tableをインベントリに持っていますが、設置に失敗しました。place-block-atで手動設置してください`,
+              failureType: 'crafting_table_placement_failed',
+              recoverable: true,
+            };
+          }
+          log.info(`🔧 crafting_tableを自動設置しました`);
+        } else {
+          return {
+            success: false,
+            result: `${itemName}のクラフトにはクラフトテーブルが必要です。crafting_tableをクラフトして設置してください`,
+            failureType: 'crafting_table_missing',
+            recoverable: true,
+          };
+        }
+      }
+
+      // crafting_table が遠い場合は近づく
+      if (craftingTable) {
+        const dist = this.bot.entity.position.distanceTo(craftingTable.position);
+        if (dist > 4) {
+          const moveTo = this.bot.instantSkills?.getSkill('move-to');
+          if (moveTo) {
+            const moveResult = await moveTo.run(
+              craftingTable.position.x, craftingTable.position.y, craftingTable.position.z, 2, 'near',
+            );
+            if (!moveResult.success) {
+              return {
+                success: false,
+                result: `crafting_tableが遠すぎます（${dist.toFixed(1)}m）。近づけませんでした: ${moveResult.result}`,
+                failureType: 'distance_too_far',
+                recoverable: true,
+              };
+            }
+          }
+        }
       }
 
       const craftCount = Math.max(1, Math.min(count, 64));
@@ -353,6 +392,43 @@ class CraftOne extends InstantSkill {
         success: false,
         result: `クラフトエラー: ${errorDetail}`,
       };
+    }
+  }
+  /**
+   * crafting_table をボットの足元付近に自動設置する。
+   * 成功したら設置されたブロックを返す。失敗したら null。
+   */
+  private async tryPlaceCraftingTable(): Promise<any> {
+    try {
+      const placeSkill = this.bot.instantSkills?.getSkill('place-block-at');
+      if (!placeSkill) return null;
+
+      const pos = this.bot.entity.position;
+      // ボットの前方に設置を試みる（複数候補）
+      const candidates = [
+        { x: Math.floor(pos.x) + 1, y: Math.floor(pos.y), z: Math.floor(pos.z) },
+        { x: Math.floor(pos.x) - 1, y: Math.floor(pos.y), z: Math.floor(pos.z) },
+        { x: Math.floor(pos.x), y: Math.floor(pos.y), z: Math.floor(pos.z) + 1 },
+        { x: Math.floor(pos.x), y: Math.floor(pos.y), z: Math.floor(pos.z) - 1 },
+      ];
+
+      for (const c of candidates) {
+        const block = this.bot.blockAt(new Vec3(c.x, c.y, c.z));
+        if (block && (block.name === 'air' || block.name === 'cave_air')) {
+          const result = await placeSkill.run('crafting_table', c.x, c.y, c.z);
+          if (result.success) {
+            await new Promise(r => setTimeout(r, 200));
+            return this.bot.findBlock({
+              matching: this.mcData.blocksByName.crafting_table?.id,
+              maxDistance: 4,
+            });
+          }
+        }
+      }
+      return null;
+    } catch (e: any) {
+      log.warn(`crafting_table自動設置エラー: ${e.message}`);
+      return null;
     }
   }
 }

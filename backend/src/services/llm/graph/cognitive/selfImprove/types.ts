@@ -222,11 +222,11 @@ export const SELF_IMPROVE_CONSTANTS = {
     /** 失敗バッファの最大サイズ */
     MAX_FAILURE_BUFFER: 50,
     /** JSON ルールファイルパス */
-    RULES_FILE_PATH: 'backend/saves/minecraft/self_improvement_rules.json',
+    RULES_FILE_PATH: 'saves/minecraft/self_improvement_rules.json',
     /** 改善履歴ファイルパス */
-    HISTORY_FILE_PATH: 'backend/saves/minecraft/self_improvement_history.json',
+    HISTORY_FILE_PATH: 'saves/minecraft/self_improvement_history.json',
     /** 生成スキルマニフェストパス */
-    MANIFEST_FILE_PATH: 'backend/saves/minecraft/generated_skills_manifest.json',
+    MANIFEST_FILE_PATH: 'saves/minecraft/generated_skills_manifest.json',
 
     // ── プロアクティブ・スキル生成 ──
     /** プロアクティブ発想のクールダウン (ms) */

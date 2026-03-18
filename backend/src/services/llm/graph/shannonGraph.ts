@@ -175,42 +175,28 @@ async function emergencyFastpathNode(state: ShannonStateType): Promise<Partial<S
 async function classifyNodeFn(state: ShannonStateType): Promise<Partial<ShannonStateType>> {
   const envelope = state.envelope;
 
-  // Phase 2-A: Minecraft チャンネルはヒューリスティック分類（LLM スキップ: -2〜5秒）
-  if (envelope.channel === 'minecraft') {
-    const text = envelope.text ?? '';
-    const isEmergency = /緊急|emergency|attack|死|help|助けて|hostile|ゾンビ|スケルトン|クリーパー/i.test(text);
-    const mode: ShannonMode = isEmergency ? 'minecraft_emergency' : 'minecraft_action';
-    // クラフト・精錬系は依存チェーンが深い（logs→planks→table→furnace→smelt→craft）ため planning 必要
-    const craftKeywords = /作って|craft|ツルハシ|pickaxe|剣|sword|鎧|armor|精錬|smelt|建て|build/i;
-    const needsPlanning = !isEmergency && (text.length > 50 || craftKeywords.test(text));
-    const selectedModel = ModelSelector.selectInitialModel(
-      isEmergency ? 'high' : 'mid',
-      needsPlanning,
-      mode,
-    );
-    return {
-      mode,
-      intent: text.slice(0, 100),
-      riskLevel: isEmergency ? 'high' : 'mid',
-      needsTools: true,
-      needsPlanning,
-      selectedModel,
-      trace: ['node:classify:heuristic'],
-    };
-  }
-
-  // 他のチャンネルは LLM 分類
+  // 全チャンネル統一: LLM 分類 (gpt-4.1-mini)
+  // Minecraft もハードコード正規表現ではなく LLM に判断させることで、
+  // 「木を切ってきて」「ダイヤモンド探して」等の多様な表現に対応する
   const result = await classifyNode.invoke(envelope);
+
+  // Minecraft チャンネルではデフォルトを上書き
+  const isMinecraft = envelope.channel === 'minecraft';
+  const mode = (isMinecraft && !result.mode?.startsWith('minecraft'))
+    ? (result.riskLevel === 'high' ? 'minecraft_emergency' : 'minecraft_action') as ShannonMode
+    : result.mode as ShannonMode;
+  const needsTools = isMinecraft ? true : result.needsTools;
+
   const selectedModel = ModelSelector.selectInitialModel(
     result.riskLevel as 'low' | 'mid' | 'high' | undefined,
     result.needsPlanning,
-    result.mode,
+    mode,
   );
   return {
-    mode: result.mode as ShannonMode,
+    mode,
     intent: result.intent,
     riskLevel: result.riskLevel,
-    needsTools: result.needsTools,
+    needsTools,
     needsPlanning: result.needsPlanning,
     selectedModel,
     trace: ['node:classify'],
@@ -228,6 +214,7 @@ async function craftPreflightNodeFn(state: ShannonStateType): Promise<Partial<Sh
     text: state.envelope.text,
     inventory: mc?.inventory,
     nearbyInfrastructure: mc?.nearbyInfrastructure,
+    nearbyResources: mc?.nearbyResources,
   });
   return {
     craftPlan: plan,

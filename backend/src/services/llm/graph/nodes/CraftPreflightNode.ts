@@ -71,6 +71,91 @@ const ITEM_TO_MINEABLE_BLOCK: Record<string, string> = {
     // 木系はそのまま（oak_log→oak_log）
 };
 
+// ── Material equivalents (同じレシピスロットに使える代替素材) ────
+
+/**
+ * 同一レシピグループ内の代替素材マップ。
+ * key のアイテムが周囲に見つからない場合、values 内の代替を探す。
+ */
+const MATERIAL_EQUIVALENTS: Record<string, string[]> = {
+    oak_log: ['acacia_log', 'birch_log', 'spruce_log', 'jungle_log', 'dark_oak_log', 'cherry_log', 'mangrove_log'],
+    oak_planks: ['acacia_planks', 'birch_planks', 'spruce_planks', 'jungle_planks', 'dark_oak_planks', 'cherry_planks', 'mangrove_planks'],
+    acacia_log: ['oak_log', 'birch_log', 'spruce_log', 'jungle_log', 'dark_oak_log', 'cherry_log', 'mangrove_log'],
+    birch_log: ['oak_log', 'acacia_log', 'spruce_log', 'jungle_log', 'dark_oak_log', 'cherry_log', 'mangrove_log'],
+    spruce_log: ['oak_log', 'acacia_log', 'birch_log', 'jungle_log', 'dark_oak_log', 'cherry_log', 'mangrove_log'],
+};
+
+/** _log → 対応する _planks 名 */
+function logToPlanks(logName: string): string {
+    return logName.replace('_log', '_planks');
+}
+
+/**
+ * 依存ツリー内の素材を、周囲に実在する代替素材に置換する。
+ * 例: oak_log が周囲にないが acacia_log が 15 個ある → ツリー内の oak_log → acacia_log に、
+ *     対応する oak_planks → acacia_planks に置換。
+ */
+function substituteNearbyMaterials(
+    tree: DependencyNode,
+    nearbyResources: Array<{ name: string; count: number }>,
+    inventoryMap: Map<string, number>,
+): { substituted: boolean; from: string; to: string } | null {
+    const nearbySet = new Map(nearbyResources.map(r => [r.name, r.count]));
+
+    // ツリーの末端（raw素材）からログ系を探す
+    const leaves: DependencyNode[] = [];
+    collectLeaves(tree, leaves);
+
+    const logLeaf = leaves.find(n => n.item.endsWith('_log'));
+    if (!logLeaf) return null;
+
+    const currentLog = logLeaf.item;
+    // インベントリに既にある場合は置換不要
+    if ((inventoryMap.get(currentLog) ?? 0) >= logLeaf.quantity) return null;
+    // 周囲に既にある場合も置換不要
+    if ((nearbySet.get(currentLog) ?? 0) > 0) return null;
+
+    // 代替を探す
+    const alternatives = MATERIAL_EQUIVALENTS[currentLog];
+    if (!alternatives) return null;
+
+    const bestAlt = alternatives
+        .filter(alt => (nearbySet.get(alt) ?? 0) > 0)
+        .sort((a, b) => (nearbySet.get(b) ?? 0) - (nearbySet.get(a) ?? 0))[0];
+
+    if (!bestAlt) return null;
+
+    // ツリー内のすべての currentLog → bestAlt、対応する planks も置換
+    const currentPlanks = logToPlanks(currentLog);
+    const bestPlanks = logToPlanks(bestAlt);
+
+    replaceItemInTree(tree, currentLog, bestAlt);
+    replaceItemInTree(tree, currentPlanks, bestPlanks);
+
+    log.info(`[CraftPreflight] 素材代替: ${currentLog} → ${bestAlt} (周囲に${nearbySet.get(bestAlt)}個)`);
+
+    return { substituted: true, from: currentLog, to: bestAlt };
+}
+
+function collectLeaves(node: DependencyNode, result: DependencyNode[]): void {
+    if (node.children.length === 0) {
+        result.push(node);
+        return;
+    }
+    for (const child of node.children) {
+        collectLeaves(child, result);
+    }
+}
+
+function replaceItemInTree(node: DependencyNode, from: string, to: string): void {
+    if (node.item === from) {
+        node.item = to;
+    }
+    for (const child of node.children) {
+        replaceItemInTree(child, from, to);
+    }
+}
+
 // ── Craft target extraction ──────────────────────────────────────
 
 export function extractCraftTargets(text: string): string[] {
@@ -92,14 +177,16 @@ export function extractCraftTargets(text: string): string[] {
 
 // ── Tree analysis helpers ────────────────────────────────────────
 
-/** ツリー全体で crafting_table が必要か */
+/** ツリー全体で crafting_table が必要か（consumed ノードの子孫はスキップ） */
 function treeNeedsCraftingTable(node: DependencyNode): boolean {
     if (node.requiresCraftingTable) return true;
+    if (node.consumed) return false; // インベントリ充足済み → 子ノードの要件は不要
     return node.children.some(treeNeedsCraftingTable);
 }
 
-/** ツリー全体で furnace が必要か */
+/** ツリー全体で furnace が必要か（consumed ノードはスキップ） */
 function treeNeedsFurnace(node: DependencyNode): boolean {
+    if (node.consumed) return false; // インベントリ充足済み → 精錬不要
     if (node.requiresFurnace) return true;
     return node.children.some(treeNeedsFurnace);
 }
@@ -137,8 +224,9 @@ function calculateActualNeeds(
         const have = available.get(node.item) ?? 0;
 
         if (have >= needed) {
-            // インベントリで充足 — 消費してリターン
+            // インベントリで充足 — 消費してリターン（子ノードの探索不要）
             available.set(node.item, have - needed);
+            node.consumed = true;
             materialSummary.push({ item: node.item, need: needed, have });
             log.info(`[calcNeeds] ${node.item}: have=${have} >= need=${needed} → consumed`);
             return;
@@ -196,6 +284,8 @@ function getMineableBlockName(itemName: string): string {
  * 例: iron_pickaxe → iron_ingot(smelt) → raw_iron
  */
 function collectSmeltItems(node: DependencyNode): Array<{ output: string; input: string; quantity: number }> {
+    // consumed ノードはインベントリから充足済み → 精錬不要
+    if (node.consumed) return [];
     const result: Array<{ output: string; input: string; quantity: number }> = [];
     if (node.method === 'smelt' && node.children.length > 0) {
         result.push({ output: node.item, input: node.children[0].item, quantity: node.quantity });
@@ -269,16 +359,7 @@ function buildActionSteps(
         }
     }
 
-    // 5. Activate crafting_table + craft the target
-    if (needsCT) {
-        if (ctBlock) {
-            steps.push(`activate-block(crafting_table, ${ctBlock.x}, ${ctBlock.y}, ${ctBlock.z})`);
-        } else {
-            steps.push('activate-block(crafting_table, [設置した座標])');
-        }
-    }
-
-    // 6. Final craft
+    // 5. Final craft (craft-one は近くの crafting_table を自動検出して使用する。activate-block は不要)
     steps.push(`craft-one(${tree.item})`);
 
     steps.push('task-complete');
@@ -316,7 +397,7 @@ function formatCraftPlan(plan: CraftPlan): string {
                 lines.push(`✔ 作業台: (${ct.pos.x},${ct.pos.y},${ct.pos.z}) 距離${ct.distance}m — 新しく作らないこと`);
             }
         } else {
-            lines.push('✘ 作業台なし → planks x4 で craft-one(crafting_table) → get-position → place-block-at(crafting_table, 隣接座標)');
+            lines.push('✘ 作業台なし → craft-one(crafting_table) で自動設置される。または planks x4 を確保してから craft-one で作成');
         }
     }
 
@@ -341,6 +422,8 @@ function formatCraftPlan(plan: CraftPlan): string {
         lines.push('※ 全て揃っているので採掘や作業台の作成は不要。上記手順だけを実行すること。');
     }
 
+    lines.push('重要: craft-one は近くの作業台を自動検出して使用します。activate-block(crafting_table) を呼ぶ必要はありません。');
+
     return lines.join('\n');
 }
 
@@ -351,6 +434,7 @@ export interface CraftPreflightInput {
     text?: string;
     inventory?: Array<{ name: string; count: number }>;
     nearbyInfrastructure?: Array<{ name: string; x: number; y: number; z: number; distance: number }>;
+    nearbyResources?: Array<{ name: string; count: number }>;
 }
 
 /**
@@ -387,6 +471,12 @@ export function runCraftPreflight(input: CraftPreflightInput): CraftPlan | undef
         if (tree.children.length === 0 && tree.method === 'raw') {
             // No recipe found — not a craftable item
             return undefined;
+        }
+
+        // 周囲の資源に基づいて素材を代替（oak_log → acacia_log 等）
+        const nearbyResources = input.nearbyResources ?? [];
+        if (nearbyResources.length > 0) {
+            substituteNearbyMaterials(tree, nearbyResources, inventoryMap);
         }
 
         // Debug: tree structure
@@ -479,6 +569,9 @@ export function craftPlanToPlanState(craftPlan: CraftPlan, goal: string): PlanSt
                 : `${m.item}を${shortage}個入手`,
             status: 'pending',
             iterationsSpent: 0,
+            children: [],
+            createdBy: 'craft_preflight',
+            createdAt: Date.now(),
         });
     }
 
@@ -489,6 +582,9 @@ export function craftPlanToPlanState(craftPlan: CraftPlan, goal: string): PlanSt
             goal: 'crafting_tableをクラフトして設置',
             status: 'pending',
             iterationsSpent: 0,
+            children: [],
+            createdBy: 'craft_preflight',
+            createdAt: Date.now(),
         });
     }
 
@@ -499,6 +595,9 @@ export function craftPlanToPlanState(craftPlan: CraftPlan, goal: string): PlanSt
             goal: 'furnaceをクラフトして設置',
             status: 'pending',
             iterationsSpent: 0,
+            children: [],
+            createdBy: 'craft_preflight',
+            createdAt: Date.now(),
         });
     }
 
@@ -512,6 +611,9 @@ export function craftPlanToPlanState(craftPlan: CraftPlan, goal: string): PlanSt
             goal: '素材を精錬する',
             status: 'pending',
             iterationsSpent: 0,
+            children: [],
+            createdBy: 'craft_preflight',
+            createdAt: Date.now(),
         });
     }
 
@@ -521,6 +623,9 @@ export function craftPlanToPlanState(craftPlan: CraftPlan, goal: string): PlanSt
         goal: `${craftPlan.target}をクラフト`,
         status: 'pending',
         iterationsSpent: 0,
+        children: [],
+        createdBy: 'craft_preflight',
+        createdAt: Date.now(),
     });
 
     const strategy = craftPlan.canCraftImmediately
@@ -532,6 +637,7 @@ export function craftPlanToPlanState(craftPlan: CraftPlan, goal: string): PlanSt
         strategy,
         subtasks,
         currentSubtaskId: subtasks[0]?.id ?? null,
+        journalSummary: `プラン作成: ${craftPlan.target}をクラフト。${subtasks.length}サブタスク。戦略: ${strategy}`,
         lastUpdatedBy: 'craft_preflight',
         createdAt: Date.now(),
         updatedAt: Date.now(),

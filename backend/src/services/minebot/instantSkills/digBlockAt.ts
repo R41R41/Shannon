@@ -1,7 +1,10 @@
 import { Vec3 } from 'vec3';
+import pathfinder from 'mineflayer-pathfinder';
 import { CustomBot, InstantSkill } from '../types.js';
 import { createLogger } from '../../../utils/logger.js';
 import { PROTECTED_UTILITY_BLOCKS } from '../constants.js';
+
+const { goals } = pathfinder;
 const log = createLogger('Minebot:Skill:digBlockAt');
 
 /**
@@ -188,9 +191,18 @@ class DigBlockAt extends InstantSkill {
         };
       }
 
+      // ドロップ未回収 → 近くのアイテムエンティティを探して拾いに行く
+      const retryResult = await this.tryPickupDroppedItem(pos, beforeItems);
+      if (retryResult) {
+        return {
+          success: true,
+          result: `${blockName}を掘りました。${retryResult}${slowWarning}`,
+        };
+      }
+
       return {
         success: true,
-        result: `${blockName}を掘りました（ドロップ未回収 — 足元にない可能性）${slowWarning}`,
+        result: `${blockName}を掘りました（ドロップ未回収 — 壁越しまたは消失の可能性）${slowWarning}`,
       };
     } catch (error: any) {
       // エラーメッセージを詳細化
@@ -307,6 +319,85 @@ class DigBlockAt extends InstantSkill {
     }
 
     return null;
+  }
+
+  /**
+   * 掘削後のドロップアイテムを拾いに行く。
+   * 近くのアイテムエンティティを探し、短いタイムアウトで移動→回収を試みる。
+   * 失敗しても pathfinder を確実に停止して返す。
+   */
+  private async tryPickupDroppedItem(
+    blockPos: Vec3,
+    beforeItems: Map<string, number>,
+  ): Promise<string | null> {
+    try {
+      // ブロック位置付近のアイテムエンティティを探す
+      const itemEntity = this.bot.nearestEntity((entity) => {
+        if (entity.name !== 'item') return false;
+        const dist = entity.position.distanceTo(blockPos);
+        return dist < 10;
+      });
+
+      if (!itemEntity) {
+        log.info('📦 ドロップアイテムのエンティティが見つかりません');
+        return null;
+      }
+
+      const itemPos = itemEntity.position;
+      const distToItem = this.bot.entity.position.distanceTo(itemPos);
+      log.info(`📦 ドロップ発見 → (${itemPos.x.toFixed(1)},${itemPos.y.toFixed(1)},${itemPos.z.toFixed(1)}) 距離${distToItem.toFixed(1)}m、移動して回収を試みます`);
+
+      // 既に十分近い場合は少し待つだけ
+      if (distToItem <= 2) {
+        await new Promise(r => setTimeout(r, 500));
+        const diff = this.inventoryDiff(beforeItems);
+        if (diff.length > 0) return `移動後に${diff.join(', ')}を回収`;
+      }
+
+      // 短いタイムアウトで移動（最大5秒）
+      const goal = new goals.GoalNear(itemPos.x, itemPos.y, itemPos.z, 1);
+      const moveTimeout = new Promise<void>((_, reject) =>
+        setTimeout(() => reject(new Error('timeout')), 5000),
+      );
+
+      try {
+        await Promise.race([this.bot.pathfinder.goto(goal), moveTimeout]);
+      } catch {
+        // タイムアウトやパスファインダーエラー — 必ず停止
+      } finally {
+        this.bot.pathfinder.stop();
+      }
+
+      // 移動後に少し待って回収チェック
+      await new Promise(r => setTimeout(r, 800));
+      const diff = this.inventoryDiff(beforeItems);
+      if (diff.length > 0) return `移動後に${diff.join(', ')}を回収`;
+
+      // まだ拾えてない → アイテムがまだ存在するなら直接歩く
+      const stillExists = this.bot.nearestEntity((e) => e === itemEntity);
+      if (stillExists) {
+        try {
+          await this.bot.lookAt(stillExists.position);
+          this.bot.setControlState('forward', true);
+          await new Promise(r => setTimeout(r, 500));
+          this.bot.setControlState('forward', false);
+          await new Promise(r => setTimeout(r, 500));
+        } catch {
+          // ignore
+        } finally {
+          this.bot.setControlState('forward', false);
+        }
+        const diff2 = this.inventoryDiff(beforeItems);
+        if (diff2.length > 0) return `移動後に${diff2.join(', ')}を回収`;
+      }
+
+      return null;
+    } catch (e: any) {
+      log.warn(`📦 ドロップ回収エラー: ${e.message}`);
+      try { this.bot.pathfinder.stop(); } catch { /* ignore */ }
+      try { this.bot.setControlState('forward', false); } catch { /* ignore */ }
+      return null;
+    }
   }
 }
 

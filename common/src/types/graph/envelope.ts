@@ -26,6 +26,8 @@ export interface MinecraftContext {
   nearbyEntities?: string[];
   inventory?: Array<{ name: string; count: number }>;
   nearbyInfrastructure?: Array<{ name: string; x: number; y: number; z: number; distance: number }>;
+  /** 半径 32 ブロック以内の資源ブロック（木材等）のサマリー。CraftPreflight が代替素材を選択するために使用。 */
+  nearbyResources?: Array<{ name: string; count: number }>;
   eventType?:
     | 'chat'
     | 'mentioned'

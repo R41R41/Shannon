@@ -6,12 +6,16 @@ import { EmotionNode, EmotionState } from '../nodes/EmotionNode.js';
 import { FunctionCallingAgent, FunctionCallingAgentState } from '../nodes/FunctionCallingAgent.js';
 import { CognitiveBlackboard } from './CognitiveBlackboard.js';
 import { EmotionLoop } from './EmotionLoop.js';
+import { MemoryAgent } from './MemoryAgent.js';
 import { MetaCognitionLoop } from './MetaCognitionLoop.js';
 import { ModelSelector } from './ModelSelector.js';
 import { TaskEpisodeMemory } from './TaskEpisodeMemory.js';
 import { SelfImprovementDaemon } from './selfImprove/index.js';
 import type { ExecutionResult } from '../types.js';
 import { craftPlanToPlanState } from '../nodes/CraftPreflightNode.js';
+import type RecallMemoryTool from '../../tools/memory/recallMemory.js';
+import type SaveMemoryTool from '../../tools/memory/saveMemory.js';
+import type PlanCraftTool from '../../tools/utility/planCraft.js';
 
 /**
  * ParallelExecutor — 認知プロセスのオーケストレーター。
@@ -63,10 +67,10 @@ export class ParallelExecutor {
         const isMinecraft = state.context?.platform === 'minecraft' || state.context?.platform === 'minebot';
 
         // Minecraft 単純タスクでは認知ループをスキップ（速度優先）
+        // 緊急タスクでは MetaCognition もスキップ（中断シグナル乱発防止 + 速度優先）
         const skipEmotionLoop = isMinecraft;
-        const skipMetaCognition = isMinecraft
-            && state.needsPlanning === false
-            && !state.isEmergency;
+        const skipMetaCognition = state.isEmergency
+            || (isMinecraft && state.needsPlanning === false);
 
         // ModelSelector を初期化
         const modelSelector = new ModelSelector(state.selectedModel || FunctionCallingAgent.MODEL_NAME);
@@ -78,21 +82,60 @@ export class ParallelExecutor {
             state.messages,
         );
 
-        // Minecraft の場合、初期インベントリを blackboard にセット
+        // Minecraft の場合、初期インベントリを blackboard にセット + 食料安全チェック
         if (isMinecraft) {
             const mcMeta = state.context?.metadata?.minecraft as Record<string, unknown> | undefined;
             if (Array.isArray(mcMeta?.inventory)) {
-                blackboard.updateInventory(mcMeta!.inventory as Array<{ name: string; count: number }>);
+                const inventory = mcMeta!.inventory as Array<{ name: string; count: number }>;
+                blackboard.updateSelf({ inventory });
+
+                // バイタル情報を blackboard に保存
+                const health = mcMeta?.health as number | undefined;
+                const food = mcMeta?.food as number | undefined;
+                if (health !== undefined && food !== undefined) {
+                    blackboard.updateSelf({ health, food });
+                }
+
+                // 食料安全チェック: インベントリに食べ物がなければ vital alert
+                const vitalAlerts = ParallelExecutor.checkVitalAlerts(
+                    inventory, health, food,
+                );
+                if (vitalAlerts.length > 0) {
+                    blackboard.updateSelf({ vitalAlerts });
+                    logger.warn(`[ParallelExecutor] ⚠️ Vital alerts: ${vitalAlerts.join('; ')}`);
+                }
             }
         }
 
-        // CraftPreflight の結果をプランとして blackboard に注入
+        // CraftPreflight の結果をプランとして blackboard に注入 (後方互換)
         if (state.craftPlan) {
             const planState = craftPlanToPlanState(state.craftPlan, goal);
             blackboard.updatePlan(planState);
             logger.info(
                 `[ParallelExecutor] 📋 初期プラン注入: ${planState.subtasks.length}サブタスク (${planState.strategy.substring(0, 60)})`,
             );
+        }
+
+        // MemoryAgent を初期化 (4番目の並列プロセス)
+        const memoryAgent = new MemoryAgent(blackboard, state.context?.metadata?.envelope as import('@shannon/common').RequestEnvelope ?? {
+            requestId: state.taskId,
+            channel: (state.context?.platform as string) ?? 'unknown',
+            sourceUserId: '',
+            conversationId: '',
+            threadId: '',
+            tags: [],
+            timestampIso: new Date().toISOString(),
+        } as import('@shannon/common').RequestEnvelope);
+        const initialMemoryPromise = memoryAgent.initialize(goal);
+
+        // MemoryAgent をツールに注入
+        for (const tool of this.fca.getTools()) {
+            if ('setMemoryAgent' in tool && typeof (tool as Record<string, unknown>).setMemoryAgent === 'function') {
+                (tool as unknown as { setMemoryAgent(agent: MemoryAgent): void }).setMemoryAgent(memoryAgent);
+            }
+            if ('setBlackboard' in tool && typeof (tool as Record<string, unknown>).setBlackboard === 'function') {
+                (tool as unknown as { setBlackboard(bb: CognitiveBlackboard): void }).setBlackboard(blackboard);
+            }
         }
 
         // 認知プロセスを条件付きで生成
@@ -123,9 +166,59 @@ export class ParallelExecutor {
 
         // FCA の onToolsExecuted を拡張して blackboard を更新
         const originalOnToolsExecuted = state.onToolsExecuted;
+
+        // Minecraft: イテレーション毎のインベントリ注入用コールバック
+        // blackboard の inventory を使い、ツール実行結果から更新する
+        const inventoryTracker = isMinecraft ? new Map<string, number>() : null;
+        if (inventoryTracker && blackboard.inventory) {
+            for (const entry of blackboard.inventory) {
+                inventoryTracker.set(entry.name, (inventoryTracker.get(entry.name) || 0) + entry.count);
+            }
+        }
+
+        // 初期記憶を取得 (FCA の最初のイテレーションでエフェメラル注入)
+        let initialMemoryConsumed = false;
+        const getInitialMemory = async (): Promise<string | null> => {
+            if (initialMemoryConsumed) return null;
+            initialMemoryConsumed = true;
+            const mem = await initialMemoryPromise;
+            return mem || null;
+        };
+
         const wrappedState: FunctionCallingAgentState = {
             ...state,
             selectedModel: modelSelector.modelName,
+            getInitialMemory,
+            getInventorySummary: inventoryTracker ? () => {
+                if (inventoryTracker.size === 0) return '【現在のインベントリ: 空】';
+                const items: string[] = [];
+                for (const [name, count] of inventoryTracker) {
+                    if (count > 0) items.push(`${name} x${count}`);
+                }
+                if (items.length === 0) return '【現在のインベントリ: 空】';
+                return `【現在のインベントリ（${items.length}種）: ${items.join(', ')}】`;
+            } : undefined,
+            getJournalSummary: () => {
+                return blackboard.plan?.journalSummary ?? null;
+            },
+            getActiveSubtaskInfo: () => {
+                const plan = blackboard.plan;
+                if (!plan?.currentSubtaskId) return null;
+                const st = blackboard.findSubtask(plan.currentSubtaskId);
+                if (!st) return null;
+                const childLines = st.children.map(c => {
+                    const icon = { pending: '⬜', in_progress: '🔄', completed: '✅', error: '❌', skipped: '⏭️' }[c.status];
+                    return `  ${icon} ${c.id}: ${c.goal}`;
+                }).join('\n');
+                // Find next subtask
+                const allTop = plan.subtasks;
+                const currentIdx = allTop.findIndex(s => s.id === plan.currentSubtaskId);
+                const next = currentIdx >= 0 && currentIdx < allTop.length - 1 ? allTop[currentIdx + 1] : null;
+                let result = `【現在のサブタスク: ${st.id} — ${st.goal}】`;
+                if (childLines) result += `\n${childLines}`;
+                if (next) result += `\n次: ${next.id} — ${next.goal}`;
+                return result;
+            },
             onToolsExecuted: (messages: BaseMessage[], results: ExecutionResult[]) => {
                 // Blackboard にタスク状態を書き込み
                 blackboard.updateTask({
@@ -141,6 +234,17 @@ export class ParallelExecutor {
                     this.checkAutoEscalation(blackboard, modelSelector);
                 }
 
+                // インベントリトラッカー更新: ツール結果から所持数変化を抽出
+                if (inventoryTracker) {
+                    for (const r of results) {
+                        // mine-block/dig-block-at の「現在の所持数: item=N個」パターン
+                        const matches = r.message.matchAll(/(\w+)=(\d+)個/g);
+                        for (const m of matches) {
+                            inventoryTracker.set(m[1], parseInt(m[2], 10));
+                        }
+                    }
+                }
+
                 // EmotionLoop が未起動の場合のフォールバック
                 if (!emotionLoop) {
                     originalOnToolsExecuted?.(messages, results);
@@ -148,7 +252,7 @@ export class ParallelExecutor {
             },
         };
 
-        const activeLoops: string[] = ['TaskExecution'];
+        const activeLoops: string[] = ['TaskExecution', 'Memory'];
         if (emotionLoop) activeLoops.push('Emotion');
         if (metaLoop) activeLoops.push('MetaCognition');
         logger.info(
@@ -161,10 +265,11 @@ export class ParallelExecutor {
             signal.addEventListener('abort', () => blackboard.complete(), { once: true });
         }
 
-        // プロセスを並列起動
+        // 4プロセスを並列起動
         const taskPromise = this.fca.run(wrappedState, blackboard.signal);
         const emotionPromise = emotionLoop?.run() ?? Promise.resolve();
         const metaPromise = metaLoop?.run() ?? Promise.resolve();
+        const memoryPromise = memoryAgent.run(blackboard.signal);
 
         // TaskLoop の完了を待つ
         let taskResult: Awaited<typeof taskPromise>;
@@ -177,9 +282,9 @@ export class ParallelExecutor {
             this.fca.setBlackboardAccessor(null);
         }
 
-        // Emotion/Meta の終了を待つ（タイムアウト付き）
+        // Emotion/Meta/Memory の終了を待つ（タイムアウト付き）
         await Promise.race([
-            Promise.allSettled([emotionPromise, metaPromise]),
+            Promise.allSettled([emotionPromise, metaPromise, memoryPromise]),
             new Promise(resolve => setTimeout(resolve, 3000)),
         ]);
 
@@ -212,6 +317,52 @@ export class ParallelExecutor {
             finalEmotion: blackboard.emotionState,
             modelStats: modelSelector.stats,
         };
+    }
+
+    /** 食べ物アイテム名セット（autoEat の FALLBACK_FOOD_POINTS と同期） */
+    private static readonly FOOD_ITEMS = new Set([
+        'baked_potato', 'bread', 'cooked_beef', 'steak', 'cooked_porkchop',
+        'cooked_mutton', 'cooked_chicken', 'cooked_rabbit', 'cooked_cod',
+        'cooked_salmon', 'golden_carrot', 'golden_apple', 'enchanted_golden_apple',
+        'carrot', 'potato', 'beetroot', 'beetroot_soup', 'mushroom_stew',
+        'rabbit_stew', 'suspicious_stew', 'dried_kelp', 'apple', 'melon_slice',
+        'sweet_berries', 'glow_berries', 'chorus_fruit', 'cookie', 'pumpkin_pie',
+        'honey_bottle', 'porkchop', 'beef', 'mutton', 'chicken', 'rabbit',
+        'rotten_flesh', 'cod', 'salmon',
+    ]);
+
+    /**
+     * インベントリとバイタルから vital alerts を生成する。
+     * 食べ物がインベントリに1つもなければ、食料確保が最優先。
+     */
+    static checkVitalAlerts(
+        inventory: Array<{ name: string; count: number }>,
+        health?: number,
+        food?: number,
+    ): string[] {
+        const alerts: string[] = [];
+        const hasFoodItems = inventory.some(item => ParallelExecutor.FOOD_ITEMS.has(item.name));
+
+        // HP 致命的レベルの検出
+        if (health !== undefined && health < 2.0) {
+            if (!hasFoodItems) {
+                alerts.push('🚨 致命的: HP < 2.0 かつ食料なし。次のダメージで死亡する。タスクを即座に中止し、安全な場所で待機すべき。');
+            } else {
+                alerts.push('🚨 HP危険: HP < 2.0。食料を即座に食べること。');
+            }
+        }
+
+        if (!hasFoodItems) {
+            const foodLevel = food ?? 20;
+            const healthLevel = health ?? 20;
+            if (foodLevel <= 6 || healthLevel <= 10) {
+                alerts.push('🚨 食料危機: 食べ物なし＋空腹/HP低下。食料確保を最優先で行うこと（近くの動物を狩る、作物を収穫する等）');
+            } else {
+                alerts.push('⚠️ 食料不足: インベントリに食べ物がありません。タスク中に空腹になる危険があるため、早めに食料を確保すること');
+            }
+        }
+
+        return alerts;
     }
 
     /**

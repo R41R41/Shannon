@@ -8,6 +8,8 @@ export interface DependencyNode {
     method: 'craft' | 'smelt' | 'raw';
     requiresCraftingTable?: boolean;
     requiresFurnace?: boolean;
+    /** calculateActualNeeds でインベントリから充足済みとマークされたノード */
+    consumed?: boolean;
 }
 
 /**
@@ -21,6 +23,17 @@ export class RecipeDependencyResolver {
     private version: string;
 
     private static instance: RecipeDependencyResolver | null = null;
+
+    /**
+     * 採掘・モブドロップなどで直接入手すべき原材料。
+     * これらはクラフトレシピ（ブロック展開: raw_iron_block→9 raw_iron 等）で
+     * 解決すべきではない。
+     */
+    private static readonly RAW_MATERIALS = new Set([
+        'raw_iron', 'raw_gold', 'raw_copper',
+        'diamond', 'emerald', 'coal', 'lapis_lazuli', 'redstone',
+        'quartz', 'amethyst_shard', 'flint',
+    ]);
 
     private constructor(version: string) {
         this.version = version;
@@ -62,6 +75,12 @@ export class RecipeDependencyResolver {
         if (smeltNode) {
             visited.delete(itemName);
             return smeltNode;
+        }
+
+        // 原材料はクラフトレシピで解決しない（raw_iron_block→9 raw_iron 等のブロック展開を防止）
+        if (RecipeDependencyResolver.RAW_MATERIALS.has(itemName)) {
+            visited.delete(itemName);
+            return { item: itemName, quantity, children: [], method: 'raw' };
         }
 
         const craftNode = this.tryResolveCraft(itemName, quantity, depth, visited);

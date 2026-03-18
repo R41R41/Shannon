@@ -21,7 +21,7 @@ class FindBlocks extends InstantSkill {
       {
         name: 'blockName',
         type: 'string',
-        description: '検索するブロック名（例: stone, diamond_ore, oak_log）',
+        description: '検索するブロック名（例: stone, diamond_ore, oak_log）。カンマ区切りで複数指定可（例: oak_log,acacia_log,birch_log）',
         required: true,
       },
       {
@@ -45,18 +45,33 @@ class FindBlocks extends InstantSkill {
     count: number = 10
   ) {
     try {
-      const blockType = this.mcData.blocksByName[blockName];
-      if (!blockType) {
+      // カンマ区切りで複数ブロック名をサポート
+      const blockNames = blockName.split(',').map(n => n.trim()).filter(Boolean);
+      const matchingIds: number[] = [];
+      const invalidNames: string[] = [];
+
+      for (const name of blockNames) {
+        const bt = this.mcData.blocksByName[name];
+        if (bt) {
+          matchingIds.push(bt.id);
+        } else {
+          invalidNames.push(name);
+        }
+      }
+
+      if (matchingIds.length === 0) {
         return {
           success: false,
           result: `ブロック${blockName}が見つかりません`,
         };
       }
 
+      const displayName = blockNames.filter(n => !invalidNames.includes(n)).join(', ');
+
       let blocks: any[] = [];
       for (let radius = INITIAL_RADIUS; radius <= maxDistance; radius += RADIUS_STEP) {
         blocks = this.bot.findBlocks({
-          matching: blockType.id,
+          matching: matchingIds.length === 1 ? matchingIds[0] : matchingIds,
           maxDistance: radius,
           count: count,
         });
@@ -64,24 +79,28 @@ class FindBlocks extends InstantSkill {
       }
 
       if (blocks.length === 0) {
+        const invalidNote = invalidNames.length > 0 ? `（不明なブロック: ${invalidNames.join(', ')}）` : '';
         return {
           success: true,
-          result: `${maxDistance}ブロック以内に${blockName}は見つかりませんでした`,
+          result: `${maxDistance}ブロック以内に${displayName}は見つかりませんでした${invalidNote}`,
         };
       }
 
       const botPos = this.bot.entity.position;
+      const isFarmland = blockNames.includes('farmland');
       const sortedBlocks = blocks
         .map((pos) => {
+          const block = this.bot.blockAt(pos);
           const blockData: any = {
             x: pos.x,
             y: pos.y,
             z: pos.z,
             distance:
               Math.floor(botPos.distanceTo(pos) * 10) / 10,
+            blockName: block?.name ?? 'unknown',
           };
 
-          if (blockName === 'farmland') {
+          if (isFarmland) {
             const aboveBlock = this.bot.blockAt(pos.offset(0, 1, 0));
             if (aboveBlock && aboveBlock.name !== 'air') {
               blockData.above = aboveBlock.name;
@@ -92,7 +111,7 @@ class FindBlocks extends InstantSkill {
         })
         .sort((a, b) => a.distance - b.distance);
 
-      if (blockName === 'farmland') {
+      if (isFarmland) {
         const emptyFarmland = sortedBlocks.filter((b) => !b.above);
         const occupiedFarmland = sortedBlocks.filter((b) => b.above);
 
@@ -117,14 +136,18 @@ class FindBlocks extends InstantSkill {
         return { success: true, result };
       }
 
+      // 複数ブロック名検索の場合、各ブロックの実名を表示
+      const showBlockName = blockNames.length > 1;
       const blockList = sortedBlocks
         .slice(0, 5)
-        .map((b) => `(${b.x}, ${b.y}, ${b.z}) 距離${b.distance}m`)
+        .map((b) => showBlockName
+          ? `${b.blockName}(${b.x}, ${b.y}, ${b.z}) 距離${b.distance}m`
+          : `(${b.x}, ${b.y}, ${b.z}) 距離${b.distance}m`)
         .join(', ');
 
       return {
         success: true,
-        result: `${blockName}を${blocks.length}個発見: ${blockList}${blocks.length > 5 ? '...' : ''}`,
+        result: `${displayName}を${blocks.length}個発見: ${blockList}${blocks.length > 5 ? '...' : ''}`,
       };
     } catch (error: any) {
       return {

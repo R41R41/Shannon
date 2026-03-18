@@ -7,15 +7,15 @@ import SaveKnowledgeTool from './saveKnowledge.js';
 import RecallExperienceTool from './recallExperience.js';
 import RecallKnowledgeTool from './recallKnowledge.js';
 import RecallPersonTool from './recallPerson.js';
+import RecallMemoryTool from './recallMemory.js';
+import SaveMemoryTool from './saveMemory.js';
 
 /**
  * 記憶ツールを作成するファクトリ関数
  *
- * 各ツールに service インスタンスと platform を注入する。
- * platform はタスク実行時のコンテキストに応じて変わるため、
- * ツール作成はタスク実行ごとではなく初期化時に一度だけ行い、
- * platform は discord をデフォルトとする。
- * (recall-person は platform が変わっても lookupByName 内で解決される)
+ * v2: recall-memory / save-memory (統合版、MemoryAgent 連携)
+ * 旧: save-experience, save-knowledge, recall-experience, recall-knowledge, recall-person
+ *     → 後方互換のため残しているが、将来廃止予定
  */
 export function createMemoryTools(
   platform: MemoryPlatform = 'discord',
@@ -25,6 +25,10 @@ export function createMemoryTools(
   const shannonService = ShannonMemoryService.getInstance();
 
   return [
+    // v2 統合ツール (MemoryAgent 連携)
+    new RecallMemoryTool(),
+    new SaveMemoryTool(),
+    // 旧ツール (後方互換、将来廃止予定)
     new SaveExperienceTool(shannonService, source),
     new SaveKnowledgeTool(shannonService, source),
     new RecallExperienceTool(shannonService),

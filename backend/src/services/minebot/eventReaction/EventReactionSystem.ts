@@ -344,6 +344,9 @@ export class EventReactionSystem {
             // 3. LLM ベースの緊急タスクを実行
             await this.taskRuntime.invoke(emergencyTaskInput);
 
+            // 4. 緊急タスク完了後、中断された元タスクを再開
+            await this.taskRuntime.resumePreviousTask();
+
             return { handled: true, reactionType: 'emergency', message };
         } catch (error) {
             log.error('緊急対応エラー', error);
