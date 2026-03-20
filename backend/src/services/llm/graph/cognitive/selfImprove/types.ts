@@ -296,7 +296,13 @@ export interface TestCase {
 export interface TestSuiteFile {
     testSuite: string;
     description?: string;
-    /** 全テスト共通の setup（各テストの前に毎回実行） */
+    /**
+     * "default" — globalSetup を各ケースの前に毎回実行し、スキル名でグルーピング。
+     * "chain"  — globalSetup を最初に1回だけ実行し、ケースを定義順に逐次実行。
+     *            ケース間でインベントリ等の状態が引き継がれる。
+     */
+    mode?: 'default' | 'chain';
+    /** 全テスト共通の setup */
     globalSetup?: string[];
     cases: Array<Omit<TestCase, 'id'>>;
 }

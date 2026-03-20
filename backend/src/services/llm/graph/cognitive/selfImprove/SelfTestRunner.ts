@@ -84,42 +84,52 @@ export class SelfTestRunner {
             );
         }
 
-        // TestCase に変換
+        const isChain = suite.mode === 'chain';
+
         const testCases: TestCase[] = suite.cases.map((c, i) => ({
             id: `${suiteName}-${i}`,
             ...c,
-            setup: [...(suite.globalSetup ?? []), ...(c.setup ?? [])],
+            setup: isChain
+                ? [...(c.setup ?? [])]
+                : [...(suite.globalSetup ?? []), ...(c.setup ?? [])],
         }));
 
-        // スキル名ごとにグルーピング
-        const bySkill = new Map<string, TestCase[]>();
-        for (const tc of testCases) {
-            const list = bySkill.get(tc.skillName) ?? [];
-            list.push(tc);
-            bySkill.set(tc.skillName, list);
-        }
+        let skillReports: SkillTestReport[];
 
-        const skillReports: SkillTestReport[] = [];
+        if (isChain) {
+            if (suite.globalSetup?.length) {
+                await this.executeSetup(bot, suite.globalSetup);
+            }
+            skillReports = await this.runChain(testCases, bot, autoFix);
+        } else {
+            const bySkill = new Map<string, TestCase[]>();
+            for (const tc of testCases) {
+                const list = bySkill.get(tc.skillName) ?? [];
+                list.push(tc);
+                bySkill.set(tc.skillName, list);
+            }
 
-        for (const [skillName, cases] of bySkill) {
-            try {
-                const report = await this.testSkillGroup(skillName, cases, bot, autoFix);
-                skillReports.push(report);
+            skillReports = [];
+            for (const [skillName, cases] of bySkill) {
+                try {
+                    const report = await this.testSkillGroup(skillName, cases, bot, autoFix);
+                    skillReports.push(report);
 
-                const icon = report.finalStatus === 'pass' ? '✅' :
-                    report.finalStatus === 'fixed' ? '🔧' :
-                        report.finalStatus === 'skipped' ? '⏭️' : '❌';
-                log.info(`${icon} ${skillName}: ${report.finalStatus}`);
-            } catch (err: any) {
-                log.error(`テストエラー (${skillName}): ${err.message}`);
-                skillReports.push({
-                    skillName,
-                    sourceFile: '',
-                    initialTestResults: [],
-                    fixAttempts: [],
-                    finalStatus: 'skipped',
-                    rolledBack: false,
-                });
+                    const icon = report.finalStatus === 'pass' ? '✅' :
+                        report.finalStatus === 'fixed' ? '🔧' :
+                            report.finalStatus === 'skipped' ? '⏭️' : '❌';
+                    log.info(`${icon} ${skillName}: ${report.finalStatus}`);
+                } catch (err: any) {
+                    log.error(`テストエラー (${skillName}): ${err.message}`);
+                    skillReports.push({
+                        skillName,
+                        sourceFile: '',
+                        initialTestResults: [],
+                        fixAttempts: [],
+                        finalStatus: 'skipped',
+                        rolledBack: false,
+                    });
+                }
             }
         }
 
@@ -255,6 +265,175 @@ export class SelfTestRunner {
     }
 
     // ── テスト実行 ──
+
+    /**
+     * chain モード: ケースを定義順に逐次実行。
+     * 失敗時は autoFix を試み、失敗したらチェーンを中断する。
+     */
+    private async runChain(
+        testCases: TestCase[],
+        bot: CustomBot,
+        autoFix: boolean,
+    ): Promise<SkillTestReport[]> {
+        const reportsBySkill = new Map<string, SkillTestReport>();
+
+        for (let i = 0; i < testCases.length; i++) {
+            const tc = testCases[i];
+            const skillName = tc.skillName;
+            const sourceFile = await this.resolveSourceFile(skillName) ?? '';
+
+            const instant = bot.instantSkills.getSkill(skillName);
+            const constant = bot.constantSkills.getSkill(skillName);
+            const skillKind: 'instant' | 'constant' | null =
+                instant ? 'instant' : constant ? 'constant' : null;
+
+            if (!skillKind) {
+                log.warn(`⏭️ chain[${i}] スキル未登録: ${skillName}`);
+                this.upsertChainReport(reportsBySkill, skillName, sourceFile, {
+                    testCase: tc, skillResult: null, passed: false,
+                    errorMessage: `スキル未登録: ${skillName}`, durationMs: 0,
+                }, 'skipped');
+                continue;
+            }
+
+            const result = await this.executeSingleTest(bot, skillName, skillKind, tc);
+
+            if (result.passed) {
+                const icon = '✅';
+                log.info(`${icon} chain[${i}] ${tc.description ?? skillName}: pass`);
+                this.upsertChainReport(reportsBySkill, skillName, sourceFile, result, 'pass');
+                continue;
+            }
+
+            log.warn(`❌ chain[${i}] ${tc.description ?? skillName}: ${result.errorMessage}`);
+
+            if (autoFix && sourceFile) {
+                const { fixAttempts, fixed, rolledBack } = await this.patcher.diagnoseAndFix(
+                    skillName, sourceFile, [result], bot, skillKind,
+                );
+                if (fixed) {
+                    const retry = await this.executeSingleTest(bot, skillName, skillKind, tc);
+                    if (fixAttempts.length > 0) {
+                        fixAttempts[fixAttempts.length - 1].testPassed = retry.passed;
+                    }
+                    if (retry.passed) {
+                        log.info(`🔧 chain[${i}] ${skillName}: fixed`);
+                        this.upsertChainReport(reportsBySkill, skillName, sourceFile, retry, 'fixed', fixAttempts);
+                        continue;
+                    }
+                }
+                log.error(`⛔ chain[${i}] ${skillName}: 修正失敗 → チェーン中断`);
+                this.upsertChainReport(reportsBySkill, skillName, sourceFile, result, 'unfixable', fixAttempts);
+            } else {
+                this.upsertChainReport(reportsBySkill, skillName, sourceFile, result, 'unfixable');
+            }
+
+            log.warn(`⛔ チェーン中断: step ${i} (${skillName}) で失敗`);
+            break;
+        }
+
+        const reports = [...reportsBySkill.values()];
+        for (const r of reports) {
+            const icon = r.finalStatus === 'pass' ? '✅' :
+                r.finalStatus === 'fixed' ? '🔧' :
+                    r.finalStatus === 'skipped' ? '⏭️' : '❌';
+            log.info(`${icon} ${r.skillName}: ${r.finalStatus}`);
+        }
+        return reports;
+    }
+
+    private upsertChainReport(
+        map: Map<string, SkillTestReport>,
+        skillName: string,
+        sourceFile: string,
+        result: TestResult,
+        status: SkillTestReport['finalStatus'],
+        fixAttempts: SkillTestReport['fixAttempts'] = [],
+    ): void {
+        const existing = map.get(skillName);
+        if (existing) {
+            existing.initialTestResults.push(result);
+            existing.fixAttempts.push(...fixAttempts);
+            const severity: Record<string, number> = { pass: 0, fixed: 1, skipped: 2, unfixable: 3 };
+            if ((severity[status] ?? 0) > (severity[existing.finalStatus] ?? 0)) {
+                existing.finalStatus = status;
+            }
+        } else {
+            map.set(skillName, {
+                skillName,
+                sourceFile,
+                initialTestResults: [result],
+                fixAttempts,
+                finalStatus: status,
+                rolledBack: false,
+            });
+        }
+    }
+
+    /**
+     * 単一テストケースを実行する（setup + prechecks + スキル実行）。
+     */
+    private async executeSingleTest(
+        bot: CustomBot,
+        skillName: string,
+        skillKind: 'instant' | 'constant',
+        tc: TestCase,
+    ): Promise<TestResult> {
+        if (tc.setup && tc.setup.length > 0) {
+            await this.executeSetup(bot, tc.setup);
+        }
+
+        if (tc.prechecks && tc.prechecks.length > 0) {
+            await new Promise(r => setTimeout(r, PRECHECK_DELAY_MS));
+            const precheckResult = this.evaluatePrechecks(bot, tc.prechecks);
+            if (!precheckResult.passed) {
+                return {
+                    testCase: tc,
+                    skillResult: null,
+                    passed: false,
+                    errorMessage: `precheck 失敗: ${precheckResult.reason}`,
+                    durationMs: 0,
+                };
+            }
+        }
+
+        const start = Date.now();
+        try {
+            const skillResult = await this.invokeSkillRun(bot, skillName, skillKind, tc.args);
+            const durationMs = Date.now() - start;
+
+            let passed: boolean;
+            if (tc.expectedOutcome === 'either') {
+                passed = true;
+            } else if (tc.expectedOutcome === 'success') {
+                passed = skillResult.success;
+            } else {
+                passed = !skillResult.success;
+            }
+
+            return {
+                testCase: tc,
+                skillResult: {
+                    success: skillResult.success,
+                    result: skillResult.result,
+                    failureType: skillResult.failureType,
+                    error: skillResult.error,
+                    duration: skillResult.duration,
+                },
+                passed,
+                errorMessage: passed ? null : skillResult.result,
+                durationMs,
+            };
+        } catch (err: any) {
+            return {
+                testCase: tc,
+                skillResult: null,
+                passed: false,
+                errorMessage: err.message,
+                durationMs: Date.now() - start,
+            };
+        }
+    }
 
     /**
      * 1つのスキルに対するテストグループを実行する。

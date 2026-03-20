@@ -1,0 +1,169 @@
+{
+  "testSuite": "iron-pickaxe-chain",
+  "description": "原木・鉄鉱石・石炭から鉄のツルハシを一から作る統合テスト",
+  "mode": "chain",
+  "globalSetup": [
+    "/tp @s 0 64 0",
+    "/clear @s",
+    "/give @s oak_log 8",
+    "/give @s raw_iron 3",
+    "/give @s coal 3"
+  ],
+  "cases": [
+    {
+      "skillName": "check-recipe",
+      "args": ["iron_pickaxe"],
+      "description": "Step 0: 鉄ツルハシのレシピを確認",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "craft-one",
+      "args": ["oak_planks", 4],
+      "description": "Step 1: 原木→木材（4個）",
+      "prechecks": [
+        { "type": "inventory_has", "item": "oak_log", "minCount": 1 }
+      ],
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "craft-one",
+      "args": ["oak_planks", 4],
+      "description": "Step 2: もう1セット原木→木材",
+      "prechecks": [
+        { "type": "inventory_has", "item": "oak_log", "minCount": 1 }
+      ],
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "craft-one",
+      "args": ["oak_planks", 4],
+      "description": "Step 3: さらに原木→木材（作業台+かまど用）",
+      "prechecks": [
+        { "type": "inventory_has", "item": "oak_log", "minCount": 1 }
+      ],
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "craft-one",
+      "args": ["stick", 1],
+      "description": "Step 4: 木材→棒",
+      "prechecks": [
+        { "type": "inventory_has", "item": "oak_planks", "minCount": 2 }
+      ],
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "craft-one",
+      "args": ["stick", 1],
+      "description": "Step 5: もう1セット木材→棒（ツルハシ用に2本必要）",
+      "prechecks": [
+        { "type": "inventory_has", "item": "oak_planks", "minCount": 2 }
+      ],
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "craft-one",
+      "args": ["crafting_table", 1],
+      "description": "Step 6: 木材→作業台",
+      "prechecks": [
+        { "type": "inventory_has", "item": "oak_planks", "minCount": 4 }
+      ],
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "place-block",
+      "args": [3, 64, 0],
+      "description": "Step 7: 作業台を設置",
+      "prechecks": [
+        { "type": "inventory_has", "item": "crafting_table", "minCount": 1 }
+      ],
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "craft-one",
+      "args": ["wooden_pickaxe", 1],
+      "description": "Step 8: 木のツルハシをクラフト（石を掘るため）",
+      "setup": [
+        "/give @s oak_planks 3",
+        "/give @s stick 2"
+      ],
+      "prechecks": [
+        { "type": "inventory_has", "item": "oak_planks", "minCount": 3 },
+        { "type": "inventory_has", "item": "stick", "minCount": 2 }
+      ],
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "mine-block",
+      "args": ["stone", 8],
+      "description": "Step 9: 石を8個採掘（かまど用）",
+      "prechecks": [
+        { "type": "inventory_has", "item": "wooden_pickaxe", "minCount": 1 }
+      ],
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "craft-one",
+      "args": ["furnace", 1],
+      "description": "Step 10: 丸石→かまど",
+      "prechecks": [
+        { "type": "inventory_has", "item": "cobblestone", "minCount": 8 }
+      ],
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "place-block",
+      "args": [2, 64, 0],
+      "description": "Step 11: かまどを設置",
+      "prechecks": [
+        { "type": "inventory_has", "item": "furnace", "minCount": 1 }
+      ],
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "start-smelting",
+      "args": [2, 64, 0, "raw_iron", "coal", 3],
+      "description": "Step 12: 鉄鉱石3個を石炭で精錬開始",
+      "prechecks": [
+        { "type": "inventory_has", "item": "raw_iron", "minCount": 3 },
+        { "type": "inventory_has", "item": "coal", "minCount": 3 },
+        { "type": "nearby_block", "block": "furnace", "maxDistance": 8 }
+      ],
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "wait",
+      "args": [35],
+      "description": "Step 13: 精錬完了を待つ（鉄1個=10秒 × 3個 + バッファ）",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "withdraw-from-furnace",
+      "args": [2, 64, 0, "output"],
+      "description": "Step 14: かまどから鉄インゴットを回収",
+      "prechecks": [
+        { "type": "nearby_block", "block": "furnace", "maxDistance": 8 }
+      ],
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "craft-one",
+      "args": ["iron_pickaxe", 1],
+      "description": "Step 15: 鉄インゴット3個 + 棒2本 → 鉄のツルハシ完成！",
+      "prechecks": [
+        { "type": "inventory_has", "item": "iron_ingot", "minCount": 3 },
+        { "type": "inventory_has", "item": "stick", "minCount": 2 }
+      ],
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "check-inventory-item",
+      "args": ["iron_pickaxe"],
+      "description": "Step 16: 鉄のツルハシがインベントリにあることを確認",
+      "prechecks": [
+        { "type": "inventory_has", "item": "iron_pickaxe", "minCount": 1 }
+      ],
+      "expectedOutcome": "success"
+    }
+  ]
+}
