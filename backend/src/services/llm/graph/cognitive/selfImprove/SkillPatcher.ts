@@ -32,14 +32,21 @@ import {
 const log = createLogger('SelfTest:Patcher');
 
 const FixSchema = z.object({
-    code: z.string().describe('修正後の完全な TypeScript ソースコード'),
-    explanation: z.string().describe('修正内容の説明（日本語、1-2文）'),
+    code: z.string().describe('修正後の完全な TypeScript ソースコード。skipFix が true の場合は空文字列'),
+    explanation: z.string().describe('修正内容の説明（日本語、1-2文）。skipFix の場合はスキップ理由'),
+    skipFix: z.boolean().optional().describe('true: このスキルのコードに問題はなく、失敗原因は外部要因（前段ステップの未完了、テスト環境の問題など）であるため修正をスキップすべき'),
 });
 
 const SYSTEM_PROMPT = `あなたは Minecraft bot のスキルコードを修正するエンジニアです。
 
 テスト結果で失敗したスキルのソースコードと、失敗時のエラー情報が与えられます。
 原因を診断し、修正した完全なソースコードを返してください。
+
+重要 — 根本原因の判断:
+- 「チェーンコンテキスト」が提示された場合、前段ステップのスキップや失敗が今回の失敗原因である可能性を検討すること
+- 例: 前段の place-block-at がスキップされてかまどが未設置 → start-smelting が「airはかまどではない」で失敗 → これはコードのバグではない
+- このスキルのコード自体に問題がない場合は skipFix: true を返し、explanation に外部要因を記述すること
+- コードに問題がある場合のみ、修正コードを返すこと
 
 ルール:
 - 修正は最小限にする（失敗の原因となる部分のみ修正）
@@ -139,6 +146,7 @@ export class SkillPatcher {
         failedTests: TestResult[],
         bot: import('../../../../minebot/types.js').CustomBot,
         skillKind: 'instant' | 'constant',
+        chainContext?: string,
     ): Promise<{ fixAttempts: FixAttempt[]; fixed: boolean; rolledBack: boolean }> {
         const fixAttempts: FixAttempt[] = [];
 
@@ -173,7 +181,7 @@ export class SkillPatcher {
 
                 // LLM に修正を依頼
                 const prompt = this.buildFixPrompt(
-                    skillName, currentCode, failedTests, lastCompileErrors, normPath, needsSkillHotReload,
+                    skillName, currentCode, failedTests, lastCompileErrors, normPath, needsSkillHotReload, chainContext,
                 );
 
                 const model = createTracedModel({ modelName, temperature: 0.2 });
@@ -185,6 +193,15 @@ export class SkillPatcher {
                     new SystemMessage(systemPrompt),
                     new HumanMessage(prompt),
                 ]);
+
+                if (response?.skipFix) {
+                    log.info(`  ⏭️ LLM がスキップ判定: ${response.explanation}`);
+                    fixAttempts.push({
+                        attempt, diff: '', compileSuccess: false,
+                        compileErrors: [`skipFix: ${response.explanation}`], testPassed: null, model: modelName,
+                    });
+                    return { fixAttempts, fixed: false, rolledBack: false };
+                }
 
                 if (!response?.code) {
                     log.warn(`  ❌ LLM がコードを返しませんでした`);
@@ -308,11 +325,18 @@ export class SkillPatcher {
         prevCompileErrors: string[],
         relativePath: string,
         isSkillFile: boolean,
+        chainContext?: string,
     ): string {
         const header = isSkillFile
             ? `## スキル: ${skillName}\n\n`
             : `## 対象ファイル（backend 相対）: ${relativePath}\n## 論理名 / スキル: ${skillName}\n\n`;
         let prompt = `${header}### ソースコード\n\`\`\`typescript\n${code}\n\`\`\`\n`;
+
+        if (chainContext) {
+            prompt += `\n### チェーンコンテキスト（前段ステップの実行結果）\n${chainContext}\n`;
+            prompt += `\n上記を踏まえて、この失敗がコードのバグなのか、前段ステップの未完了による外部要因なのかを判断してください。\n`;
+            prompt += `外部要因の場合は skipFix: true を返してください。\n`;
+        }
 
         prompt += '\n### 失敗したテスト結果\n';
         for (const t of failedTests) {
@@ -335,7 +359,7 @@ export class SkillPatcher {
             prompt += '\n\n上記エラーを解決してください。';
         }
 
-        prompt += '\n\n修正した完全なソースコードを返してください。';
+        prompt += '\n\n修正した完全なソースコードを返してください（外部要因の場合は skipFix: true）。';
         return prompt;
     }
 

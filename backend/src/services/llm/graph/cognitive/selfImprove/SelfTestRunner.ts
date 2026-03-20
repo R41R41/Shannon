@@ -276,6 +276,7 @@ export class SelfTestRunner {
         autoFix: boolean,
     ): Promise<SkillTestReport[]> {
         const reportsBySkill = new Map<string, SkillTestReport>();
+        const chainHistory: Array<{ step: number; skill: string; description?: string; status: string; error?: string }> = [];
 
         for (let i = 0; i < testCases.length; i++) {
             const tc = testCases[i];
@@ -293,6 +294,7 @@ export class SelfTestRunner {
                     testCase: tc, skillResult: null, passed: false,
                     errorMessage: `スキル未登録: ${skillName}`, durationMs: 0,
                 }, 'skipped');
+                chainHistory.push({ step: i, skill: skillName, description: tc.description, status: 'skipped', error: `スキル未登録` });
                 continue;
             }
 
@@ -302,14 +304,17 @@ export class SelfTestRunner {
                 const icon = '✅';
                 log.info(`${icon} chain[${i}] ${tc.description ?? skillName}: pass`);
                 this.upsertChainReport(reportsBySkill, skillName, sourceFile, result, 'pass');
+                chainHistory.push({ step: i, skill: skillName, description: tc.description, status: 'pass' });
                 continue;
             }
 
             log.warn(`❌ chain[${i}] ${tc.description ?? skillName}: ${result.errorMessage}`);
+            chainHistory.push({ step: i, skill: skillName, description: tc.description, status: 'fail', error: result.errorMessage ?? undefined });
 
             if (autoFix && sourceFile) {
+                const chainContext = this.buildChainContext(chainHistory);
                 const { fixAttempts, fixed, rolledBack } = await this.patcher.diagnoseAndFix(
-                    skillName, sourceFile, [result], bot, skillKind,
+                    skillName, sourceFile, [result], bot, skillKind, chainContext,
                 );
                 if (fixed) {
                     const retry = await this.executeSingleTest(bot, skillName, skillKind, tc);
@@ -319,6 +324,7 @@ export class SelfTestRunner {
                     if (retry.passed) {
                         log.info(`🔧 chain[${i}] ${skillName}: fixed`);
                         this.upsertChainReport(reportsBySkill, skillName, sourceFile, retry, 'fixed', fixAttempts);
+                        chainHistory[chainHistory.length - 1].status = 'fixed';
                         continue;
                     }
                 }
@@ -340,6 +346,21 @@ export class SelfTestRunner {
             log.info(`${icon} ${r.skillName}: ${r.finalStatus}`);
         }
         return reports;
+    }
+
+    private buildChainContext(
+        history: Array<{ step: number; skill: string; description?: string; status: string; error?: string }>,
+    ): string | undefined {
+        const hasIssue = history.some(h => h.status === 'skipped' || h.status === 'fail');
+        if (!hasIssue) return undefined;
+
+        const lines = history.map(h => {
+            const icon = h.status === 'pass' ? '✅' : h.status === 'skipped' ? '⏭️' : '❌';
+            let line = `${icon} step ${h.step}: ${h.description ?? h.skill} → ${h.status}`;
+            if (h.error) line += ` (${h.error})`;
+            return line;
+        });
+        return lines.join('\n');
     }
 
     private upsertChainReport(
