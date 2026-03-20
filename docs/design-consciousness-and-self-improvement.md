@@ -423,7 +423,7 @@ DGM のアーキテクチャ:
 ツール (コード操作):
   read-source(path)           — ファイルを読む
   grep-source(pattern, path)  — コードを検索
-  edit-source(path, old, new) — 差分で書き換え (MUTABLE_PATHS のみ)
+  edit-source(path, old, new) — 差分で書き換え (mutableCodePolicy で許可された backend 相対パスのみ)
   compile-check()             — tsc --noEmit
   run-test(path)              — 関連テスト実行
   hot-reload(path)            — ランタイム反映
@@ -438,7 +438,7 @@ DGM のアーキテクチャ:
   git-delete-branch(branch)   — 不要なブランチを削除
 
 安全機構:
-  - MUTABLE_PATHS 以外への書き込みは拒否
+  - mutableCodePolicy で拒否・スキップされたパスへの書き込みは拒否
   - compile-check 失敗3回 → git-switch main (安全なバージョンに戻る)
   - 変更行数の上限 (1ファイルあたり50行)
   - コード検証: eval, process.exit, child_process 等の危険パターン禁止
@@ -543,7 +543,7 @@ SelfImprove FCA のシステムプロンプトに渡す情報:
 - architecture-llm-minebot.md の要約 (ファイル構成、主要クラスの責務)
 - 対象ファイルのコード (read-source で動的読み込み)
 - 失敗ログ (どのツールが、どの引数で、どんなエラーを出したか)
-- MUTABLE_PATHS / IMMUTABLE_PATHS の一覧
+- mutableCodePolicy（許可・deny・skip プレフィックス）と TIER2_PRIORITY_PATHS の一覧
 - 4原則 (書き換えの判断基準として)
 
 ※ 全コードベースをプロンプトに入れるのではなく、

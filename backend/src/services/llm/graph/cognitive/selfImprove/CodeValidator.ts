@@ -1,14 +1,16 @@
 /**
  * CodeValidator — Tier 2 コード検証
  *
- * 生成された TypeScript コードの安全性を検証する。
- * - tsc --noEmit コンパイルチェック
- * - AST 安全スキャン（危険な API 呼び出しのブロック）
- * - 変更規模の制限
+ * 生成された TypeScript / JSON 等の安全性を検証する。
  */
 
 import { createLogger } from '../../../../../utils/logger.js';
 import { SELF_IMPROVE_CONSTANTS as C } from './types.js';
+import {
+    isLlmServiceMutablePath,
+    isSkillMutablePath,
+    sanitizeMutableRelativePath,
+} from './mutableCodePolicy.js';
 
 const log = createLogger('SelfImprove:Validator');
 
@@ -31,13 +33,24 @@ const BLOCKED_PATTERNS = [
     /\bPromise\.resolve\(\)\s*\.then\b/,  // Promise trick でのサンドボックス回避
 ];
 
-/** 許可されるインポートパターン */
-const ALLOWED_IMPORTS = [
-    /from\s+['"]\.\.?\//, // 相対パス
+/** 許可されるインポートパターン（minebot スキル向け・厳しめ） */
+const ALLOWED_IMPORTS_SKILL = [
+    /from\s+['"]\.\.?\//,
     /from\s+['"]minecraft-data['"]/,
     /from\s+['"]vec3['"]/,
     /from\s+['"]@shannon\/common['"]/,
 ];
+
+/** サービス層 TS: 危険なモジュール以外は許可 */
+const SERVICE_LAYER_BLOCKED_IMPORT = [
+    /['"]child_process['"]/,
+    /['"]node:child_process['"]/,
+    /['"]vm['"]/,
+    /['"]node:vm['"]/,
+];
+
+const MAX_MUTABLE_JSON_CHARS = 2_000_000;
+const MAX_MUTABLE_PLAIN_CHARS = 500_000;
 
 export interface ValidationResult {
     valid: boolean;
@@ -47,7 +60,138 @@ export interface ValidationResult {
 
 export class CodeValidator {
     /**
-     * 生成されたコードを検証する。
+     * 相対パスに応じた検証（スキル / llm / その他 TS / JSON 等）。
+     */
+    validateMutableFile(code: string, relativePath: string, originalCode?: string): ValidationResult {
+        const norm = sanitizeMutableRelativePath(relativePath) ?? relativePath.replace(/\\/g, '/');
+        const lower = norm.toLowerCase();
+
+        if (lower.endsWith('.json')) {
+            return this.validateMutableJson(code, originalCode);
+        }
+        if (isSkillMutablePath(norm)) {
+            return this.validate(code, originalCode);
+        }
+        if (/\.(tsx?|mts|cts)$/.test(lower)) {
+            const maxLines = isLlmServiceMutablePath(norm)
+                ? C.MAX_LLM_MUTABLE_LINES
+                : C.MAX_BACKEND_TS_LINES;
+            return this.validateServiceLayerTypeScript(code, originalCode, maxLines);
+        }
+        return this.validatePlainMutableFile(code, originalCode);
+    }
+
+    /**
+     * src/services/llm およびその他バックエンド TS 用。
+     */
+    private validateServiceLayerTypeScript(
+        code: string,
+        originalCode: string | undefined,
+        maxLines: number,
+    ): ValidationResult {
+        const errors: string[] = [];
+        const warnings: string[] = [];
+
+        const BLOCKED_SERVICE_EXTRA = [
+            /\bprocess\.exit\b/,
+            /\beval\s*\(/,
+            /\bnew\s+Function\b/,
+            /\brequire\s*\(\s*['"]child_process['"]\s*\)/,
+            /\bimport\s+.*['"]child_process['"]/,
+            /\bexecSync\b/,
+            /\bspawnSync\b/,
+            /\bexec\s*\(/,
+            /\bglobal\b/,
+            /\bglobalThis\b/,
+            /\bPromise\.resolve\(\)\s*\.then\b/,
+        ];
+        for (const pattern of BLOCKED_SERVICE_EXTRA) {
+            if (pattern.test(code)) {
+                errors.push(`セキュリティ違反: 禁止パターン "${pattern.source}" が検出されました`);
+            }
+        }
+
+        const importLines = code.match(/^import\s+.+$/gm) || [];
+        for (const line of importLines) {
+            if (SERVICE_LAYER_BLOCKED_IMPORT.some(p => p.test(line))) {
+                errors.push(`危険な import: ${line.trim()}`);
+            }
+        }
+
+        if (originalCode) {
+            const originalLines = originalCode.split('\n').length;
+            const newLines = code.split('\n').length;
+            const changeRatio = Math.abs(newLines - originalLines) / Math.max(originalLines, 1);
+            if (changeRatio > C.MAX_CODE_CHANGE_RATIO) {
+                errors.push(
+                    `変更規模が大きすぎます (${(changeRatio * 100).toFixed(0)}% > ${(C.MAX_CODE_CHANGE_RATIO * 100).toFixed(0)}%上限)`,
+                );
+            }
+        }
+
+        const lineCount = code.split('\n').length;
+        if (lineCount > maxLines) {
+            errors.push(`コードが ${lineCount} 行（上限: ${maxLines} 行）`);
+        }
+
+        const valid = errors.length === 0;
+        if (!valid) log.warn(`❌ サービス層 TS 検証失敗: ${errors.length}件`);
+        return { valid, errors, warnings };
+    }
+
+    /**
+     * src/services/llm 配下用（後方互換・validateMutableFile から利用）。
+     */
+    validateLlmServiceFile(code: string, originalCode?: string): ValidationResult {
+        return this.validateServiceLayerTypeScript(code, originalCode, C.MAX_LLM_MUTABLE_LINES);
+    }
+
+    private validateMutableJson(code: string, originalCode?: string): ValidationResult {
+        const errors: string[] = [];
+        const warnings: string[] = [];
+        if (code.length > MAX_MUTABLE_JSON_CHARS) {
+            errors.push(`JSON が大きすぎます（${code.length} 文字 > ${MAX_MUTABLE_JSON_CHARS}）`);
+        }
+        try {
+            JSON.parse(code);
+        } catch (e: any) {
+            errors.push(`JSON パース失敗: ${e?.message ?? e}`);
+        }
+        if (originalCode) {
+            const changeRatio = Math.abs(code.length - originalCode.length) / Math.max(originalCode.length, 1);
+            if (changeRatio > C.MAX_CODE_CHANGE_RATIO) {
+                errors.push(
+                    `変更規模が大きすぎます (${(changeRatio * 100).toFixed(0)}% > ${(C.MAX_CODE_CHANGE_RATIO * 100).toFixed(0)}%上限)`,
+                );
+            }
+        }
+        const valid = errors.length === 0;
+        if (!valid) log.warn(`❌ JSON 検証失敗: ${errors.length}件`);
+        return { valid, errors, warnings };
+    }
+
+    private validatePlainMutableFile(code: string, originalCode?: string): ValidationResult {
+        const errors: string[] = [];
+        const warnings: string[] = [];
+        if (code.includes('\0')) {
+            errors.push('バイナリ的な内容が含まれています');
+        }
+        if (code.length > MAX_MUTABLE_PLAIN_CHARS) {
+            errors.push(`ファイルが大きすぎます（${code.length} > ${MAX_MUTABLE_PLAIN_CHARS} 文字）`);
+        }
+        if (originalCode) {
+            const changeRatio = Math.abs(code.length - originalCode.length) / Math.max(originalCode.length, 1);
+            if (changeRatio > C.MAX_CODE_CHANGE_RATIO) {
+                errors.push(
+                    `変更規模が大きすぎます (${(changeRatio * 100).toFixed(0)}% > ${(C.MAX_CODE_CHANGE_RATIO * 100).toFixed(0)}%上限)`,
+                );
+            }
+        }
+        return { valid: errors.length === 0, errors, warnings };
+    }
+
+    /**
+     * 生成されたコードを検証する（minebot スキル想定・厳しめ import）。
      */
     validate(code: string, originalCode?: string): ValidationResult {
         const errors: string[] = [];
@@ -63,7 +207,7 @@ export class CodeValidator {
         // 2. インポートの検証
         const importLines = code.match(/^import\s+.+$/gm) || [];
         for (const line of importLines) {
-            const isAllowed = ALLOWED_IMPORTS.some(p => p.test(line));
+            const isAllowed = ALLOWED_IMPORTS_SKILL.some(p => p.test(line));
             if (!isAllowed) {
                 errors.push(`許可されていないインポート: ${line.trim()}`);
             }
@@ -96,6 +240,12 @@ export class CodeValidator {
             if (!code.includes('runImpl')) {
                 errors.push('InstantSkill/ConstantSkill を継承していますが runImpl メソッドがありません');
             }
+        }
+
+        // export default / named export のいずれか（TS モジュールとして成立）
+        const hasExport = /\bexport\s+default\b/.test(code) || /^\s*export\s+(abstract\s+)?(class|function|const|type|interface)\s+/m.test(code);
+        if (!hasExport && code.split('\n').length > 5) {
+            warnings.push('export が見当たりません（意図したモジュールか確認）');
         }
 
         // 6. 行数制限
@@ -176,8 +326,6 @@ export class CodeValidator {
      * SkillCompiler に委譲する。
      */
     async compileCheck(_filePath: string): Promise<ValidationResult> {
-        // SkillCompiler.compile() が実際のコンパイルを行うため、
-        // ここではスタブとして残す
         return {
             valid: true,
             errors: [],

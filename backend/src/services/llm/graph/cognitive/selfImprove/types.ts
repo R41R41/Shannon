@@ -59,7 +59,8 @@ export type ImprovementScope =
     | 'prompt_rule'      // PromptBuilder ルール追加
     | 'forward_model'    // ForwardModel ルール追加
     | 'recipe_override'  // レシピ補完
-    | 'skill_code'       // TypeScript スキルコード修正
+    | 'skill_code'       // minebot スキル TypeScript 修正
+    | 'llm_code'         // src/services/llm 配下の TypeScript 修正
     | 'new_skill';       // 新規スキル追加
 
 export interface ImprovementProposal {
@@ -70,8 +71,10 @@ export interface ImprovementProposal {
     description: string;
     /** 対象ファイルパス（Tier 2 のみ） */
     targetFile: string | null;
-    /** 適用するパッチ/ルール内容 */
+    /** 適用するパッチ/ルール内容（Tier 2 replace 時はファイル全文） */
     content: string;
+    /** Tier 2: replace=上書き, delete=ファイル削除（SELF_IMPROVE_ALLOW_DELETE=true のみ） */
+    tier2Action?: 'replace' | 'delete';
     /** 元になった失敗クラスタ */
     sourceCluster: FailureCluster;
     /** 生成タイムスタンプ */
@@ -239,8 +242,12 @@ export const SELF_IMPROVE_CONSTANTS = {
     MIN_SEQUENCE_OCCURRENCES: 3,
     /** ツール列の最小長 */
     MIN_SEQUENCE_LENGTH: 3,
-    /** 生成コードの最大行数 */
+    /** 生成コードの最大行数（スキル・一般） */
     MAX_GENERATED_CODE_LINES: 200,
+    /** llm 配下に許容する最大行数（全文置換用） */
+    MAX_LLM_MUTABLE_LINES: 3000,
+    /** その他 src 配下 TS の Tier2 全文置換上限（スキル厳格検証より広い） */
+    MAX_BACKEND_TS_LINES: 8000,
     /** ConstantSkill の最小 interval (ms) */
     MIN_CONSTANT_SKILL_INTERVAL: 1000,
 
@@ -253,10 +260,12 @@ export const SELF_IMPROVE_CONSTANTS = {
     MAX_FIX_ATTEMPTS: 3,
     /** 1回の修正で許容する最大変更行数 */
     MAX_PATCH_LINES: 50,
-    /** コード修正が許可されるパス */
-    MUTABLE_PATHS: [
-        'src/services/minebot/instantSkills/',
-        'src/services/minebot/constantSkills/',
+    /**
+     * Tier2 生成プロンプトで優先的に修正候補にするプレフィックス（実際の許可範囲は mutableCodePolicy）。
+     */
+    TIER2_PRIORITY_PATHS: [
+        'src/services/minebot/',
+        'src/services/llm/',
     ] as readonly string[],
 } as const;
 

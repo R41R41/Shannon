@@ -1,0 +1,30 @@
+{
+  "testSuite": "smoke-skills",
+  "description": "読み取り専用のみ・setup なし・数秒で終わるスモーク（接続確認用）",
+  "cases": [
+    {
+      "skillName": "get-position",
+      "args": [],
+      "description": "現在位置",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "get-health",
+      "args": [],
+      "description": "HP・満腹度",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "get-time-and-weather",
+      "args": [],
+      "description": "時刻・天気",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "get-bot-status",
+      "args": [],
+      "description": "ボット全体ステータス",
+      "expectedOutcome": "success"
+    }
+  ]
+}

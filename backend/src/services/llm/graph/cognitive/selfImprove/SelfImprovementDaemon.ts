@@ -10,6 +10,7 @@
 
 import { writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import { getBackendRoot } from '../../../../../utils/backendRoot.js';
 import { createLogger } from '../../../../../utils/logger.js';
 import type { TaskEpisode } from '../TaskEpisodeMemory.js';
 import type { MetaAssessment, BlackboardSnapshot } from '../CognitiveBlackboard.js';
@@ -271,6 +272,21 @@ export class SelfImprovementDaemon {
         });
     }
 
+    /**
+     * CodeAgentLoop を使った自律修正を実行する。
+     * テスト→修正→tsc→再テストを LLM が自分でループする。
+     */
+    async runCodeAgentFix(task: {
+        description: string;
+        context?: string;
+        targetFile?: string;
+        failedTestInfo?: string;
+        maxIterations?: number;
+    }): Promise<{ success: boolean; summary: string; filesChanged: string[] }> {
+        const { runCodeAgentLoop } = await import('./CodeAgentLoop.js');
+        return runCodeAgentLoop(task);
+    }
+
     // ── トリガー条件評価 ──
 
     private shouldTrigger(): boolean {
@@ -497,7 +513,7 @@ export class SelfImprovementDaemon {
 
             const subDir = generated.type === 'instant' ? 'instantSkills' : 'constantSkills';
             const fileName = `${ideation.name.replace(/-/g, '_')}.ts`;
-            const projectRoot = process.cwd();
+            const projectRoot = getBackendRoot();
             const tsPath = join(projectRoot, 'src/services/minebot', subDir, 'generated', fileName);
 
             await writeFile(tsPath, generated.code, 'utf-8');
@@ -518,9 +534,9 @@ export class SelfImprovementDaemon {
 
             // Step 5: ホットロード
             const { SkillHotLoader } = await import('../../../../minebot/skills/SkillHotLoader.js');
-            const { SkillRegistrar } = await import('../../../../minebot/skills/SkillRegistrar.js');
+            const { getSkillRegistrar } = await import('../../../../minebot/skills/SkillRegistrar.js');
             const { getEventBus } = await import('../../../../eventBus/index.js');
-            const hotLoader = new SkillHotLoader(new SkillRegistrar(getEventBus()));
+            const hotLoader = new SkillHotLoader(getSkillRegistrar(getEventBus()));
 
             // bot インスタンスを取得
             const bot = this.getMinebotInstance();

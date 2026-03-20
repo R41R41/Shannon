@@ -143,6 +143,10 @@ export const config = {
     appId: optional('WOLFRAM_ALPHA_APPID', ''),
   },
 
+  anthropic: {
+    apiKey: optional('ANTHROPIC_API_KEY', ''),
+  },
+
   groq: {
     apiKey: optional('GROQ_API_KEY', ''),
   },
@@ -156,6 +160,19 @@ export const config = {
   voicepeak: {
     serverUrl: optional('VOICEPEAK_SERVER_URL', 'http://localhost:8090'),
     narrator: optional('VOICEPEAK_NARRATOR', 'Japanese Female4'),
+  },
+
+  /** バックグラウンド自己改善（Tier 2 コード適用など） */
+  selfImprove: {
+    /**
+     * Tier 2 が検証に通ったら対象ファイルへ即書き込み。
+     * false のときは従来どおり履歴に pending_review のみ。
+     */
+    autoApplyTier2:
+      process.env.SELF_IMPROVE_AUTO_APPLY_TIER2 === 'true'
+      || (process.argv.includes('--dev') || process.env.IS_DEV === 'True'),
+    /** true のときのみ Tier 2 の delete を実行（危険・本番では使わない想定） */
+    allowTier2Delete: process.env.SELF_IMPROVE_ALLOW_DELETE === 'true',
   },
 
   ports: {

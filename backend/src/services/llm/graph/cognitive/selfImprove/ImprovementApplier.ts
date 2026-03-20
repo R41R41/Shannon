@@ -2,11 +2,15 @@
  * ImprovementApplier — 改善の適用
  *
  * Tier 1: self_improvement_rules.json にルールを追加（ホットリロード）
- * Tier 2: レビュー待ちとしてフラグ（将来的に git commit）
+ * Tier 2: mutableCodePolicy で許可されたパスのみ。検証後、
+ *   config.selfImprove.autoApplyTier2 が true なら書き込み、false なら pending_review。
+ *   delete は SELF_IMPROVE_ALLOW_DELETE=true のときのみ。
  */
 
-import { readFile, writeFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
+import { config } from '../../../../../config/env.js';
+import { getBackendRoot } from '../../../../../utils/backendRoot.js';
 import { createLogger } from '../../../../../utils/logger.js';
 import { randomUUID } from 'node:crypto';
 import { CodeValidator } from './CodeValidator.js';
@@ -17,13 +21,18 @@ import type {
     DynamicRule,
 } from './types.js';
 import { SELF_IMPROVE_CONSTANTS as C } from './types.js';
+import {
+    isDeniedMutablePath,
+    isMutableRelativePath,
+    sanitizeMutableRelativePath,
+} from './mutableCodePolicy.js';
 
 const log = createLogger('SelfImprove:Applier');
 
 /** プロジェクトルートからの相対パスを解決 */
 function resolveProjectPath(relativePath: string): string {
     // backend/saves/... → プロジェクトルートからの相対パス
-    return resolve(process.cwd(), relativePath);
+    return resolve(getBackendRoot(), relativePath);
 }
 
 export class ImprovementApplier {
@@ -38,6 +47,33 @@ export class ImprovementApplier {
         } else {
             return this.applyTier2(proposal);
         }
+    }
+
+    /**
+     * CodeAgentLoop を使って自律的に修正する Tier 2 上位互換。
+     * 全文置換ではなく差分適用 + 探索 + tsc 検証をエージェントが自律的に行う。
+     */
+    async applyWithAgent(proposal: ImprovementProposal): Promise<ImprovementRecord> {
+        if (proposal.tier === 1) return this.applyTier1(proposal);
+
+        const { runCodeAgentLoop } = await import('./CodeAgentLoop.js');
+        const result = await runCodeAgentLoop({
+            description: proposal.description,
+            targetFile: proposal.targetFile ?? undefined,
+            context: `失敗クラスタ: ${proposal.sourceCluster.summary}\nスコープ: ${proposal.scope}`,
+            maxIterations: 20,
+        });
+
+        await this.appendToHistory(proposal, result.success ? 'applied' : 'rejected');
+
+        return {
+            proposal,
+            status: result.success ? 'applied' : 'rejected',
+            appliedAt: result.success ? Date.now() : null,
+            validationErrors: result.success ? [] : [result.summary],
+            effectiveness: null,
+            gitBranch: null,
+        };
     }
 
     // ── Tier 1: JSON ルール追加 ──
@@ -101,12 +137,78 @@ export class ImprovementApplier {
         }
     }
 
-    // ── Tier 2: レビュー待ち（将来的に git commit） ──
+    // ── Tier 2: コード置換 / 削除（ポリシー + 環境フラグ） ──
 
     private async applyTier2(proposal: ImprovementProposal): Promise<ImprovementRecord> {
-        // Tier 2 はコード検証を行い、レビュー待ちとする
-        const validation = this.validator.validate(proposal.content);
+        const raw = proposal.targetFile;
+        if (!raw) {
+            return {
+                proposal,
+                status: 'rejected',
+                appliedAt: null,
+                validationErrors: ['targetFile が空です'],
+                effectiveness: null,
+                gitBranch: null,
+            };
+        }
 
+        const target = sanitizeMutableRelativePath(raw);
+        if (!target || !isMutableRelativePath(raw) || isDeniedMutablePath(target)) {
+            return {
+                proposal,
+                status: 'rejected',
+                appliedAt: null,
+                validationErrors: [`変更不可・不正なパス: ${raw}`],
+                effectiveness: null,
+                gitBranch: null,
+            };
+        }
+
+        const action = proposal.tier2Action ?? 'replace';
+
+        if (action === 'delete') {
+            if (!config.selfImprove.allowTier2Delete) {
+                return {
+                    proposal,
+                    status: 'rejected',
+                    appliedAt: null,
+                    validationErrors: ['削除は SELF_IMPROVE_ALLOW_DELETE=true のときのみ有効'],
+                    effectiveness: null,
+                    gitBranch: null,
+                };
+            }
+            try {
+                await unlink(resolveProjectPath(target));
+                log.warn(`🗑️ Tier 2 削除適用: ${target}`);
+                await this.appendToHistory(proposal, 'applied');
+                return {
+                    proposal,
+                    status: 'applied',
+                    appliedAt: Date.now(),
+                    validationErrors: [],
+                    effectiveness: null,
+                    gitBranch: null,
+                };
+            } catch (err: any) {
+                return {
+                    proposal,
+                    status: 'rejected',
+                    appliedAt: null,
+                    validationErrors: [`削除失敗: ${err.message}`],
+                    effectiveness: null,
+                    gitBranch: null,
+                };
+            }
+        }
+
+        let original = '';
+        try {
+            original = await readFile(resolveProjectPath(target), 'utf-8');
+        } catch {
+            /* 新規ファイル */
+        }
+
+        const validation = this.validator.validateMutableFile(proposal.content, target, original || undefined);
         if (!validation.valid) {
             return {
                 proposal,
@@ -118,20 +220,44 @@ export class ImprovementApplier {
             };
         }
 
-        // TODO: Phase 7 で git ブランチ作成 & コミット を実装
-        log.info(`👀 Tier 2 改善案をレビュー待ちとして記録: ${proposal.description}`);
+        if (!config.selfImprove.autoApplyTier2) {
+            log.info(`👀 Tier 2 レビュー待ち（SELF_IMPROVE_AUTO_APPLY_TIER2 オフ）: ${target}`);
+            await this.appendToHistory(proposal, 'pending_review');
+            return {
+                proposal,
+                status: 'pending_review',
+                appliedAt: null,
+                validationErrors: [],
+                effectiveness: null,
+                gitBranch: null,
+            };
+        }
 
-        // 履歴ファイルに記録
-        await this.appendToHistory(proposal, 'pending_review');
-
-        return {
-            proposal,
-            status: 'pending_review',
-            appliedAt: null,
-            validationErrors: [],
-            effectiveness: null,
-            gitBranch: null, // Phase 7 で設定
-        };
+        try {
+            const abs = resolveProjectPath(target);
+            await mkdir(dirname(abs), { recursive: true });
+            await writeFile(abs, proposal.content, 'utf-8');
+            log.info(`✅ Tier 2 適用: ${target} (${proposal.description.substring(0, 60)})`);
+            await this.appendToHistory(proposal, 'applied');
+            return {
+                proposal,
+                status: 'applied',
+                appliedAt: Date.now(),
+                validationErrors: [],
+                effectiveness: null,
+                gitBranch: null,
+            };
+        } catch (err: any) {
+            log.error('Tier 2 書き込みエラー', err);
+            return {
+                proposal,
+                status: 'rejected',
+                appliedAt: null,
+                validationErrors: [`書き込み失敗: ${(err as Error).message}`],
+                effectiveness: null,
+                gitBranch: null,
+            };
+        }
     }
 
     // ── ルールファイル I/O ──

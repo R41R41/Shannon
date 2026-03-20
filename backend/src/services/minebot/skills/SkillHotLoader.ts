@@ -179,8 +179,8 @@ export class SkillHotLoader {
         if (bot.instantSkills.hasSkill(skillName)) {
             bot.instantSkills.removeSkill(skillName);
         }
-        // ConstantSkill から削除
         if (bot.constantSkills.hasSkill(skillName)) {
+            this.registrar.detachConstantSkillInterval(bot, skillName);
             bot.constantSkills.removeSkill(skillName);
         }
 
@@ -194,6 +194,98 @@ export class SkillHotLoader {
             return true;
         }
         return false;
+    }
+
+    /**
+     * 既存の InstantSkill をランタイムで差し替える（SelfTest 用）。
+     */
+    async replaceInstantSkill(
+        jsPath: string,
+        bot: CustomBot,
+        skillName: string,
+        reason: string,
+    ): Promise<{ success: boolean; error?: string }> {
+        try {
+            // 1. 動的インポート（キャッシュ無効化）
+            const mod = await import(jsPath + '?v=' + Date.now());
+            const SkillClass = mod.default;
+            if (!SkillClass) {
+                return { success: false, error: 'default export が見つかりません' };
+            }
+
+            const newSkill = new SkillClass(bot) as InstantSkill;
+
+            // 2. スキル名一致チェック
+            if (newSkill.skillName !== skillName) {
+                return {
+                    success: false,
+                    error: `スキル名不一致: expected=${skillName}, got=${newSkill.skillName}`,
+                };
+            }
+
+            // 3. 旧スキルを削除して新スキルを登録
+            bot.instantSkills.removeSkill(skillName);
+            bot.instantSkills.addSkill(newSkill);
+
+            // 4. EventBus 再登録
+            this.registrar.registerSingleInstantSkill(newSkill);
+
+            // 5. LLM ツール再登録（非致命的）
+            try {
+                const { LLMService } = await import('../../llm/client.js');
+                const { config } = await import('../../../config/env.js');
+                const llmService = LLMService.getInstance(config.isDev);
+                await llmService.registerSingleMinebotTool(newSkill, bot);
+            } catch {
+                log.warn(`LLM ツール再登録スキップ: ${skillName}`);
+            }
+
+            log.info(`🔄 スキル差し替え完了: ${skillName} (${reason})`);
+            return { success: true };
+        } catch (err: any) {
+            return { success: false, error: err.message };
+        }
+    }
+
+    /**
+     * 既存の ConstantSkill をコンパイル済み JS で差し替え（SelfTest --fix 用）。
+     * SkillRegistrar が古い taskPer リスナを remove してから再登録する。
+     */
+    async replaceConstantSkill(
+        jsPath: string,
+        bot: CustomBot,
+        skillName: string,
+        reason: string,
+    ): Promise<{ success: boolean; error?: string }> {
+        try {
+            const mod = await import(jsPath + '?v=' + Date.now());
+            const SkillClass = mod.default;
+            if (!SkillClass) {
+                return { success: false, error: 'default export が見つかりません' };
+            }
+
+            const newSkill = new SkillClass(bot) as ConstantSkill;
+            if (newSkill.skillName !== skillName) {
+                return {
+                    success: false,
+                    error: `スキル名不一致: expected=${skillName}, got=${newSkill.skillName}`,
+                };
+            }
+
+            bot.constantSkills.removeSkill(skillName);
+            bot.constantSkills.addSkill(newSkill);
+            this.registrar.attachConstantSkillInterval(
+                bot,
+                bot.constantSkills,
+                newSkill.skillName,
+                newSkill.interval,
+            );
+
+            log.info(`🔄 ConstantSkill 差し替え完了: ${skillName} (${reason})`);
+            return { success: true };
+        } catch (err: any) {
+            return { success: false, error: err.message };
+        }
     }
 
     /**

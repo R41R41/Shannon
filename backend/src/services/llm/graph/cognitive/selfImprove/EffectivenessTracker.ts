@@ -7,6 +7,7 @@
 
 import { readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { getBackendRoot } from '../../../../../utils/backendRoot.js';
 import { createLogger } from '../../../../../utils/logger.js';
 import type { TaskEpisode } from '../TaskEpisodeMemory.js';
 import type {
@@ -121,9 +122,9 @@ export class EffectivenessTracker {
     async trackGeneratedSkillUsage(episode: TaskEpisode): Promise<void> {
         try {
             const { SkillHotLoader } = await import('../../../../minebot/skills/SkillHotLoader.js');
-            const { SkillRegistrar } = await import('../../../../minebot/skills/SkillRegistrar.js');
+            const { getSkillRegistrar } = await import('../../../../minebot/skills/SkillRegistrar.js');
             const { getEventBus } = await import('../../../../eventBus/index.js');
-            const hotLoader = new SkillHotLoader(new SkillRegistrar(getEventBus()));
+            const hotLoader = new SkillHotLoader(getSkillRegistrar(getEventBus()));
             const manifest = await hotLoader.loadManifest();
 
             const generatedNames = new Set(
@@ -188,7 +189,7 @@ export class EffectivenessTracker {
      */
     private async rollbackTier1(record: ImprovementRecord): Promise<void> {
         try {
-            const filePath = resolve(process.cwd(), C.RULES_FILE_PATH);
+            const filePath = resolve(getBackendRoot(), C.RULES_FILE_PATH);
             const content = await readFile(filePath, 'utf-8');
             const rulesFile: SelfImprovementRulesFile = JSON.parse(content);
 

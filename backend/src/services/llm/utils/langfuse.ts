@@ -71,6 +71,31 @@ export function createTracedModel(
 }
 
 /**
+ * Drop-in replacement for `new ChatAnthropic(...)`.
+ * Automatically attaches the Langfuse callback handler when credentials are set.
+ */
+export async function createTracedAnthropicModel(
+  opts?: Record<string, unknown>,
+) {
+  const { ChatAnthropic } = await import('@langchain/anthropic');
+  const { config: appConfig } = await import('../../../config/env.js');
+
+  const merged = {
+    anthropicApiKey: appConfig.anthropic.apiKey || undefined,
+    ...opts,
+  };
+
+  if (!_callbackHandler) {
+    return new ChatAnthropic(merged);
+  }
+  const existing = (merged as any).callbacks ?? [];
+  return new ChatAnthropic({
+    ...merged,
+    callbacks: [...existing, _callbackHandler],
+  });
+}
+
+/**
  * Wraps an OpenAI client instance with Langfuse observation (for direct API calls).
  */
 export function getTracedOpenAI(client: OpenAI): OpenAI {

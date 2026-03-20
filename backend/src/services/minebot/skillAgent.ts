@@ -13,13 +13,28 @@ import { BotEventHandler } from './events/BotEventHandler.js';
 import { MinebotHttpServer } from './http/MinebotHttpServer.js';
 import { MinebotTaskRuntime } from './runtime/MinebotTaskRuntime.js';
 import { SkillLoader } from './skills/SkillLoader.js';
-import { SkillRegistrar } from './skills/SkillRegistrar.js';
+import { SkillRegistrar, getSkillRegistrar } from './skills/SkillRegistrar.js';
 import { CustomBot } from './types.js';
 import { ConstantSkillInfo, LLMError, SkillExecutionError } from './types/index.js';
 import { WorldKnowledgeService } from './knowledge/WorldKnowledgeService.js';
 import { createLogger } from '../../utils/logger.js';
+import {
+  looksLikeSelfTestChatIntent,
+  parseSelfTestSuiteFromUserMessage,
+} from '../llm/graph/cognitive/selfImprove/selfTestIntent.js';
 
 const log = createLogger('Minebot:SkillAgent');
+
+/** chatMode OFF でも処理する SelfTest / AgentFix 用チャット */
+function isSelfTestSuiteChatMessage(message: string): boolean {
+  return (
+    message.startsWith('..agent-fix') ||
+    message.startsWith('..test-all') ||
+    message.startsWith('..test-smoke') ||
+    message.startsWith('..test') ||
+    looksLikeSelfTestChatIntent(message)
+  );
+}
 
 /**
  * SkillAgent
@@ -53,7 +68,7 @@ export class SkillAgent {
 
     // コンポーネント初期化
     this.skillLoader = new SkillLoader();
-    this.skillRegistrar = new SkillRegistrar(eventBus);
+    this.skillRegistrar = getSkillRegistrar(eventBus);
     this.taskRuntime = new MinebotTaskRuntime(this.bot);
     this.eventHandler = new BotEventHandler(this.bot, this.taskRuntime, this.recentMessages);
     this.eventReactionSystem = new EventReactionSystem(this.bot, this.taskRuntime);
@@ -178,17 +193,17 @@ export class SkillAgent {
    */
   private async botOnChat() {
     this.bot.on('chat', async (username, message) => {
-      if (!this.bot.chatMode) {
-        return;
-      }
-
-      // 自分の発言は記録のみ
+      // 自分の発言は記録のみ（chatMode に関わらず）
       if (username === 'I_am_Shannon') {
         const currentTime = new Date().toLocaleString('ja-JP', {
           timeZone: 'Asia/Tokyo',
         });
         const newMessage = `${currentTime} ${username}: ${message}`;
         this.recentMessages.push(new AIMessage(newMessage));
+        return;
+      }
+
+      if (!this.bot.chatMode && !isSelfTestSuiteChatMessage(message)) {
         return;
       }
 
@@ -264,13 +279,44 @@ export class SkillAgent {
       return true;
     }
 
+    // ..agent-fix <説明> — CodeAgentLoop で自律修正
+    if (message.startsWith('..agent-fix')) {
+      const desc = message.slice('..agent-fix'.length).trim();
+      if (!desc) {
+        this.bot.chat('使い方: ..agent-fix <修正内容の説明>');
+        return true;
+      }
+      this.bot.chat(`🤖 CodeAgentLoop 開始: ${desc.slice(0, 60)}...`);
+      (async () => {
+        try {
+          const { SelfImprovementDaemon } = await import('../llm/graph/cognitive/selfImprove/index.js');
+          const daemon = SelfImprovementDaemon.getInstance();
+          const result = await daemon.runCodeAgentFix({ description: desc });
+          this.bot.chat(
+            `🤖 AgentLoop 完了: ${result.success ? '✅' : '❌'} ` +
+            `${result.summary.slice(0, 80)} (files: ${result.filesChanged.length})`,
+          );
+        } catch (err: any) {
+          this.bot.chat(`❌ AgentLoop エラー: ${err.message?.substring(0, 80)}`);
+        }
+      })();
+      return true;
+    }
+
     // ..test-all [--fix] - 全テストスイートを順番に実行（オーバーナイト用）
     if (message.startsWith('..test-all')) {
       const autoFix = message.includes('--fix');
       const ALL_SUITES = [
-        'info-skills', 'movement-skills', 'craft-skills',
-        'furnace-skills', 'block-skills', 'inventory-skills',
-        'combat-skills', 'new-skills',
+        'basic-skills',
+        'info-skills',
+        'movement-skills',
+        'craft-skills',
+        'craft-and-furnace',
+        'furnace-skills',
+        'block-skills',
+        'inventory-skills',
+        'combat-skills',
+        'new-skills',
       ];
       this.bot.chat(`🌙 全テスト開始 (${ALL_SUITES.length}スイート)${autoFix ? ' [自動修正ON]' : ''}...`);
       (async () => {
@@ -297,15 +343,49 @@ export class SkillAgent {
       return true;
     }
 
-    // ..test スイート名 [--fix] - テストスイート JSON を実行
-    if (message.startsWith('..test')) {
-      const args = message.slice(6).trim();
-      const autoFix = args.includes('--fix');
-      const suiteName = args.replace('--fix', '').trim();
-      if (!suiteName) {
-        this.bot.chat('使い方: ..test <スイート名> [--fix]');
+    // ..test-smoke [--fix] - 超短いスモーク（smoke-skills.json のみ）
+    if (message.startsWith('..test-smoke')) {
+      const autoFix = message.includes('--fix');
+      this.bot.chat(`⚡ スモークテスト開始${autoFix ? ' (自動修正ON)' : ''}...`);
+      (async () => {
+        try {
+          const { SelfImprovementDaemon } = await import('../llm/graph/cognitive/selfImprove/index.js');
+          const daemon = SelfImprovementDaemon.getInstance();
+          const report = await daemon.runSelfTestFromFile('smoke-skills', {
+            autoFix,
+            trigger: 'manual',
+          });
+          if (report) {
+            const s = report.summary;
+            this.bot.chat(
+              `⚡ スモーク完了: ${s.totalTested}件 / ` +
+              `✅${s.passed} 🔧${s.fixed} ❌${s.unfixable} ⏭️${s.skipped}`,
+            );
+          } else {
+            this.bot.chat('⚠️ スモーク実行できませんでした');
+          }
+        } catch (err: any) {
+          this.bot.chat(`❌ スモークエラー: ${err.message?.substring(0, 80)}`);
+        }
+      })();
+      return true;
+    }
+
+    // ..test（-all/-smoke 除く）/ 自然言語 / フルパス — self_test_cases の JSON スイートを実行
+    const isSpecificTestCommand =
+      message.startsWith('..test')
+      && !message.startsWith('..test-all')
+      && !message.startsWith('..test-smoke');
+    if (isSpecificTestCommand || looksLikeSelfTestChatIntent(message)) {
+      const parsed = parseSelfTestSuiteFromUserMessage(message);
+      if (!parsed) {
+        this.bot.chat(
+          'テスト指定を解釈できませんでした。例: ..test basic-skills [--fix]、' +
+            '.../self_test_cases/foo.json を含む文、「foo.jsonをテスト」',
+        );
         return true;
       }
+      const { suiteName, autoFix } = parsed;
       this.bot.chat(`🧪 テスト開始: ${suiteName}${autoFix ? ' (自動修正ON)' : ''}...`);
       (async () => {
         try {

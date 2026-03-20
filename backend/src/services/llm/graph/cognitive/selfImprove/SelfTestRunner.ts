@@ -10,12 +10,16 @@
  * 2. 各テスト: setup コマンド実行 → prechecks 評価 → スキル実行 → 結果判定
  * 3. 失敗時（autoFix）: SkillPatcher で修正 → 再テスト
  * 4. レポート JSON を保存
+ *
+ * runTests: ディレクトリ内の全スイート、または skillNames に該当ケースを含むスイートのみ実行。
+ * ConstantSkill もテスト実行・--fix 対応（SkillRegistrar が taskPer リスナを差し替え）。
  */
 
 import { mkdir, writeFile, readdir, readFile } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createLogger } from '../../../../../utils/logger.js';
+import { getBackendRoot } from '../../../../../utils/backendRoot.js';
 import { SkillPatcher } from './SkillPatcher.js';
 import {
     SELF_IMPROVE_CONSTANTS as C,
@@ -26,7 +30,7 @@ import {
     type SkillTestReport,
     type SelfTestRunReport,
 } from './types.js';
-import type { CustomBot, InstantSkill } from '../../../../minebot/types.js';
+import type { CustomBot } from '../../../../minebot/types.js';
 
 const log = createLogger('SelfTest:Runner');
 
@@ -52,9 +56,13 @@ export class SelfTestRunner {
     async runFromFile(
         bot: CustomBot,
         suiteName: string,
-        options: { autoFix?: boolean; trigger?: 'manual' | 'auto' | 'api' } = {},
+        options: {
+            autoFix?: boolean;
+            trigger?: 'manual' | 'auto' | 'api';
+            persistReport?: boolean;
+        } = {},
     ): Promise<SelfTestRunReport> {
-        const { autoFix = false, trigger = 'manual' } = options;
+        const { autoFix = false, trigger = 'manual', persistReport = true } = options;
         const runId = randomUUID().slice(0, 8);
         const startedAt = Date.now();
 
@@ -65,6 +73,15 @@ export class SelfTestRunner {
         if (!suite) {
             log.error(`テストスイートが見つかりません: ${suiteName}`);
             return this.emptyReport(runId, startedAt, trigger);
+        }
+
+        const hasSetup =
+            (suite.globalSetup?.length ?? 0) > 0
+            || suite.cases.some(c => (c.setup?.length ?? 0) > 0);
+        if (hasSetup) {
+            log.info(
+                'ℹ️ setup で /tp 等を使用します。サーバーでボットにコマンドが通る権限があるか確認してください。',
+            );
         }
 
         // TestCase に変換
@@ -123,13 +140,19 @@ export class SelfTestRunner {
             summary,
         };
 
-        const savedPath = await this.saveReport(report);
-        log.info(
-            `🧪 SelfTest 完了 (${((Date.now() - startedAt) / 1000).toFixed(1)}s): ` +
-            `tested=${summary.totalTested} pass=${summary.passed} fixed=${summary.fixed} ` +
-            `unfixable=${summary.unfixable} skipped=${summary.skipped}`,
-        );
-        log.info(`📄 レポート: ${savedPath}`);
+        if (persistReport) {
+            const savedPath = await this.saveReport(report);
+            log.info(
+                `🧪 SelfTest 完了 (${((Date.now() - startedAt) / 1000).toFixed(1)}s): ` +
+                `tested=${summary.totalTested} pass=${summary.passed} fixed=${summary.fixed} ` +
+                `unfixable=${summary.unfixable} skipped=${summary.skipped}`,
+            );
+            log.info(`📄 レポート: ${savedPath}`);
+        } else {
+            log.info(
+                `🧪 スイート ${suiteName} 完了 (${((Date.now() - startedAt) / 1000).toFixed(1)}s) — 統合レポートへ集約`,
+            );
+        }
 
         return report;
     }
@@ -152,24 +175,28 @@ export class SelfTestRunner {
 
         for (const suiteName of suiteNames) {
             try {
-                const report = await this.runFromFile(bot, suiteName, options);
+                const report = await this.runFromFile(bot, suiteName, {
+                    ...options,
+                    persistReport: false,
+                });
                 allSkillReports.push(...report.skillReports);
             } catch (err: any) {
                 log.error(`スイート ${suiteName} でエラー: ${err.message}`);
             }
         }
 
+        const mergedReports = this.mergeSkillReportsByName(allSkillReports);
         const summary = {
-            totalTested: allSkillReports.length,
-            passed: allSkillReports.filter(r => r.finalStatus === 'pass').length,
-            fixed: allSkillReports.filter(r => r.finalStatus === 'fixed').length,
-            unfixable: allSkillReports.filter(r => r.finalStatus === 'unfixable').length,
-            skipped: allSkillReports.filter(r => r.finalStatus === 'skipped').length,
+            totalTested: mergedReports.length,
+            passed: mergedReports.filter(r => r.finalStatus === 'pass').length,
+            fixed: mergedReports.filter(r => r.finalStatus === 'fixed').length,
+            unfixable: mergedReports.filter(r => r.finalStatus === 'unfixable').length,
+            skipped: mergedReports.filter(r => r.finalStatus === 'skipped').length,
         };
 
         const report: SelfTestRunReport = {
             runId, startedAt, completedAt: Date.now(), trigger,
-            skillReports: allSkillReports,
+            skillReports: mergedReports,
             summary,
         };
 
@@ -185,7 +212,8 @@ export class SelfTestRunner {
     }
 
     /**
-     * (後方互換) スキル名指定でテスト実行。テストケースは LLM 生成。
+     * self_test_cases 内の JSON スイートを実行。
+     * skillNames 省略時は全スイート。指定時は、そのスキルを含むスイートのみ。
      */
     async runTests(
         bot: CustomBot,
@@ -195,12 +223,35 @@ export class SelfTestRunner {
             trigger?: 'manual' | 'auto' | 'api';
         } = {},
     ): Promise<SelfTestRunReport> {
-        // テストスイートディレクトリ内の全ファイルを探してマッチするものを実行
-        // skillNames が指定されていれば、それを含むスイートを探す
-        // 見つからなければ空レポート
-        const runId = randomUUID().slice(0, 8);
-        log.warn('runTests: テストスイート JSON を使用してください (runFromFile)');
-        return this.emptyReport(runId, Date.now(), options.trigger ?? 'api');
+        const { autoFix = true, trigger = 'api', skillNames } = options;
+
+        const allSuites = await this.listTestSuiteNames();
+        if (allSuites.length === 0) {
+            log.warn('runTests: self_test_cases に .json がありません');
+            return this.emptyReport(randomUUID().slice(0, 8), Date.now(), trigger);
+        }
+
+        let suiteNames = allSuites;
+        if (skillNames && skillNames.length > 0) {
+            const wanted = new Set(skillNames);
+            const filtered: string[] = [];
+            for (const name of allSuites) {
+                const suite = await this.loadTestSuite(name);
+                if (suite?.cases.some(c => wanted.has(c.skillName))) {
+                    filtered.push(name);
+                }
+            }
+            if (filtered.length === 0) {
+                log.warn(
+                    `runTests: 指定スキルにマッチするスイートがありません: ${skillNames.join(', ')}`,
+                );
+                return this.emptyReport(randomUUID().slice(0, 8), Date.now(), trigger);
+            }
+            suiteNames = filtered;
+        }
+
+        log.info(`runTests: ${suiteNames.length} スイートを実行 → ${suiteNames.join(', ')}`);
+        return this.runMultiple(bot, suiteNames, { autoFix, trigger });
     }
 
     // ── テスト実行 ──
@@ -215,9 +266,14 @@ export class SelfTestRunner {
         autoFix: boolean,
     ): Promise<SkillTestReport> {
         const sourceFile = await this.resolveSourceFile(skillName) ?? '';
-        const skill = bot.instantSkills.getSkill(skillName);
-
-        if (!skill) {
+        const instant = bot.instantSkills.getSkill(skillName);
+        const constant = bot.constantSkills.getSkill(skillName);
+        let skillKind: 'instant' | 'constant';
+        if (instant) {
+            skillKind = 'instant';
+        } else if (constant) {
+            skillKind = 'constant';
+        } else {
             log.warn(`スキル未登録: ${skillName}`);
             return {
                 skillName, sourceFile,
@@ -228,10 +284,8 @@ export class SelfTestRunner {
             };
         }
 
-        // テスト実行
-        const initialResults = await this.executeTests(skill, testCases, bot);
+        const initialResults = await this.executeTests(bot, skillName, skillKind, testCases);
 
-        // 全パス？
         const failedTests = initialResults.filter(r => !r.passed);
         if (failedTests.length === 0) {
             return {
@@ -243,7 +297,6 @@ export class SelfTestRunner {
             };
         }
 
-        // 自動修正しない or ソースファイル不明
         if (!autoFix || !sourceFile) {
             return {
                 skillName, sourceFile,
@@ -254,9 +307,8 @@ export class SelfTestRunner {
             };
         }
 
-        // PDCA: 修正 → 再テスト
         const { fixAttempts, fixed, rolledBack } = await this.patcher.diagnoseAndFix(
-            skillName, sourceFile, failedTests, bot,
+            skillName, sourceFile, failedTests, bot, skillKind,
         );
 
         if (!fixed) {
@@ -269,9 +321,11 @@ export class SelfTestRunner {
             };
         }
 
-        // 修正後の再テスト
-        const updatedSkill = bot.instantSkills.getSkill(skillName);
-        if (!updatedSkill) {
+        const stillOk =
+            skillKind === 'instant'
+                ? bot.instantSkills.getSkill(skillName)
+                : bot.constantSkills.getSkill(skillName);
+        if (!stillOk) {
             return {
                 skillName, sourceFile,
                 initialTestResults: initialResults,
@@ -281,7 +335,7 @@ export class SelfTestRunner {
             };
         }
 
-        const retestResults = await this.executeTests(updatedSkill, testCases, bot);
+        const retestResults = await this.executeTests(bot, skillName, skillKind, testCases);
         const retestFailed = retestResults.filter(r => !r.passed);
 
         if (fixAttempts.length > 0) {
@@ -301,19 +355,18 @@ export class SelfTestRunner {
      * テストケースを順次実行する。各テスト前に setup + prechecks。
      */
     private async executeTests(
-        skill: InstantSkill,
-        testCases: TestCase[],
         bot: CustomBot,
+        skillName: string,
+        skillKind: 'instant' | 'constant',
+        testCases: TestCase[],
     ): Promise<TestResult[]> {
         const results: TestResult[] = [];
 
         for (const tc of testCases) {
-            // setup コマンド実行
             if (tc.setup && tc.setup.length > 0) {
                 await this.executeSetup(bot, tc.setup);
             }
 
-            // prechecks 評価
             if (tc.prechecks && tc.prechecks.length > 0) {
                 await new Promise(r => setTimeout(r, PRECHECK_DELAY_MS));
                 const precheckResult = this.evaluatePrechecks(bot, tc.prechecks);
@@ -325,15 +378,13 @@ export class SelfTestRunner {
                         errorMessage: `precheck 失敗: ${precheckResult.reason}`,
                         durationMs: 0,
                     });
-                    // precheck 失敗は skip 扱い（passed=false だが skip 理由を明示）
                     continue;
                 }
             }
 
-            // スキル実行
             const start = Date.now();
             try {
-                const skillResult = await skill.run(...tc.args);
+                const skillResult = await this.invokeSkillRun(bot, skillName, skillKind, tc.args);
                 const durationMs = Date.now() - start;
 
                 let passed: boolean;
@@ -370,6 +421,52 @@ export class SelfTestRunner {
         }
 
         return results;
+    }
+
+    /**
+     * InstantSkill は SkillResult、ConstantSkill は void 完了を成功とみなす。
+     * ConstantSkill は isLocked / executingSkill により no-op になりうる点に注意。
+     */
+    private async invokeSkillRun(
+        bot: CustomBot,
+        skillName: string,
+        skillKind: 'instant' | 'constant',
+        args: unknown[],
+    ): Promise<{
+        success: boolean;
+        result: string;
+        failureType?: string;
+        error?: string;
+        duration?: number;
+    }> {
+        if (skillKind === 'instant') {
+            const skill = bot.instantSkills.getSkill(skillName);
+            if (!skill) {
+                return { success: false, result: `InstantSkill 未登録: ${skillName}` };
+            }
+            return skill.run(...args as any);
+        }
+
+        const c = bot.constantSkills.getSkill(skillName);
+        if (!c) {
+            return { success: false, result: `ConstantSkill 未登録: ${skillName}` };
+        }
+        const t0 = Date.now();
+        try {
+            await c.run(...args as any);
+            return {
+                success: true,
+                result: 'constant run ok',
+                duration: Date.now() - t0,
+            };
+        } catch (e: any) {
+            return {
+                success: false,
+                result: e?.message ?? String(e),
+                error: e?.message,
+                duration: Date.now() - t0,
+            };
+        }
     }
 
     // ── setup / prechecks ──
@@ -460,13 +557,65 @@ export class SelfTestRunner {
         return { passed: true, reason: '' };
     }
 
+    /**
+     * 複数スイートにまたがる同一 skillName のレポートを 1 件にまとめ、サマリの二重計上を防ぐ。
+     */
+    private mergeSkillReportsByName(reports: SkillTestReport[]): SkillTestReport[] {
+        const severity: Record<SkillTestReport['finalStatus'], number> = {
+            pass: 0,
+            fixed: 0,
+            skipped: 1,
+            unfixable: 2,
+        };
+        const by = new Map<string, SkillTestReport[]>();
+        for (const r of reports) {
+            const arr = by.get(r.skillName) ?? [];
+            arr.push(r);
+            by.set(r.skillName, arr);
+        }
+        const merged: SkillTestReport[] = [];
+        for (const [, list] of by) {
+            if (list.length === 1) {
+                merged.push(list[0]);
+                continue;
+            }
+            const worst = list.reduce((a, b) =>
+                severity[b.finalStatus] > severity[a.finalStatus] ? b : a,
+            );
+            merged.push({
+                skillName: list[0].skillName,
+                sourceFile: list.find(x => x.sourceFile)?.sourceFile ?? '',
+                initialTestResults: list.flatMap(x => x.initialTestResults),
+                fixAttempts: list.flatMap(x => x.fixAttempts),
+                finalStatus: worst.finalStatus,
+                rolledBack: list.some(x => x.rolledBack),
+            });
+        }
+        merged.sort((a, b) => a.skillName.localeCompare(b.skillName));
+        return merged;
+    }
+
     // ── ファイル I/O ──
 
     /**
      * テストスイート JSON を読み込む。
      */
+    private async listTestSuiteNames(): Promise<string[]> {
+        const dir = resolve(getBackendRoot(), C.SELF_TEST_CASES_DIR);
+        try {
+            const files = await readdir(dir);
+            return files
+                .filter(f => f.endsWith('.json'))
+                .map(f => f.slice(0, -'.json'.length))
+                .sort();
+        } catch {
+            log.error(`listTestSuiteNames: 読み取り失敗 ${dir}`);
+            return [];
+        }
+    }
+
     private async loadTestSuite(suiteName: string): Promise<TestSuiteFile | null> {
-        const dir = resolve(process.cwd(), C.SELF_TEST_CASES_DIR);
+        const dir = resolve(getBackendRoot(), C.SELF_TEST_CASES_DIR);
         const filePath = join(dir, `${suiteName}.json`);
         try {
             const content = await readFile(filePath, 'utf-8');
@@ -497,7 +646,7 @@ export class SelfTestRunner {
         ];
 
         for (const dir of dirs) {
-            const absDir = resolve(process.cwd(), dir);
+            const absDir = resolve(getBackendRoot(), dir);
             try {
                 const files = await readdir(absDir);
                 for (const file of files) {
@@ -506,7 +655,9 @@ export class SelfTestRunner {
                     const absPath = join(absDir, file);
                     try {
                         const content = await readFile(absPath, 'utf-8');
-                        const match = content.match(/this\.skillName\s*=\s*['"]([^'"]+)['"]/);
+                        const match = content.match(
+                            /(?:this\.)?skillName\s*=\s*['"]([^'"]+)['"]/,
+                        );
                         if (match) {
                             this.sourceFileCache!.set(match[1], filePath);
                         }
@@ -519,7 +670,7 @@ export class SelfTestRunner {
     }
 
     private async saveReport(report: SelfTestRunReport): Promise<string> {
-        const dir = resolve(process.cwd(), C.SELF_TEST_REPORT_DIR);
+        const dir = resolve(getBackendRoot(), C.SELF_TEST_REPORT_DIR);
         await mkdir(dir, { recursive: true });
 
         const ts = new Date(report.startedAt).toISOString().replace(/[:.]/g, '-');
