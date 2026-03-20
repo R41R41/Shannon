@@ -1,0 +1,56 @@
+{
+  "testSuite": "craft-and-furnace",
+  "description": "クラフト・かまど関連スキルのテスト（材料を /give で付与）",
+  "cases": [
+    {
+      "skillName": "check-recipe",
+      "args": ["stone_pickaxe"],
+      "description": "石のツルハシのレシピを確認",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "check-recipe",
+      "args": ["diamond_block"],
+      "description": "ダイヤモンドブロックのレシピを確認",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "craft-one",
+      "args": ["stick", 1],
+      "description": "棒を1本クラフト（材料: 木材2個）",
+      "setup": [
+        "/clear @s",
+        "/give @s oak_planks 2"
+      ],
+      "prechecks": [
+        { "type": "inventory_has", "item": "oak_planks", "minCount": 2 }
+      ],
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "craft-one",
+      "args": ["crafting_table", 1],
+      "description": "作業台をクラフト（材料: 木材4個）",
+      "setup": [
+        "/clear @s",
+        "/give @s oak_planks 4"
+      ],
+      "prechecks": [
+        { "type": "inventory_has", "item": "oak_planks", "minCount": 4 }
+      ],
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "check-inventory-item",
+      "args": ["crafting_table"],
+      "description": "作業台がインベントリにあるか確認（前テストで作成済み）",
+      "expectedOutcome": "either"
+    },
+    {
+      "skillName": "check-furnace",
+      "args": [0, 64, 0],
+      "description": "存在しない座標のかまど → 失敗期待",
+      "expectedOutcome": "failure"
+    }
+  ]
+}

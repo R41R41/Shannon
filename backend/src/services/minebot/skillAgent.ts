@@ -264,6 +264,73 @@ export class SkillAgent {
       return true;
     }
 
+    // ..test-all [--fix] - 全テストスイートを順番に実行（オーバーナイト用）
+    if (message.startsWith('..test-all')) {
+      const autoFix = message.includes('--fix');
+      const ALL_SUITES = [
+        'info-skills', 'movement-skills', 'craft-skills',
+        'furnace-skills', 'block-skills', 'inventory-skills',
+        'combat-skills', 'new-skills',
+      ];
+      this.bot.chat(`🌙 全テスト開始 (${ALL_SUITES.length}スイート)${autoFix ? ' [自動修正ON]' : ''}...`);
+      (async () => {
+        try {
+          const { SelfImprovementDaemon } = await import('../llm/graph/cognitive/selfImprove/index.js');
+          const daemon = SelfImprovementDaemon.getInstance();
+          const report = await daemon.runMultipleSuites(ALL_SUITES, {
+            autoFix,
+            trigger: 'manual',
+          });
+          if (report) {
+            const s = report.summary;
+            this.bot.chat(
+              `🌙 全テスト完了: ${s.totalTested}件 / ` +
+              `✅${s.passed} 🔧${s.fixed} ❌${s.unfixable} ⏭️${s.skipped}`,
+            );
+          } else {
+            this.bot.chat('⚠️ テスト実行できませんでした');
+          }
+        } catch (err: any) {
+          this.bot.chat(`❌ テストエラー: ${err.message?.substring(0, 80)}`);
+        }
+      })();
+      return true;
+    }
+
+    // ..test スイート名 [--fix] - テストスイート JSON を実行
+    if (message.startsWith('..test')) {
+      const args = message.slice(6).trim();
+      const autoFix = args.includes('--fix');
+      const suiteName = args.replace('--fix', '').trim();
+      if (!suiteName) {
+        this.bot.chat('使い方: ..test <スイート名> [--fix]');
+        return true;
+      }
+      this.bot.chat(`🧪 テスト開始: ${suiteName}${autoFix ? ' (自動修正ON)' : ''}...`);
+      (async () => {
+        try {
+          const { SelfImprovementDaemon } = await import('../llm/graph/cognitive/selfImprove/index.js');
+          const daemon = SelfImprovementDaemon.getInstance();
+          const report = await daemon.runSelfTestFromFile(suiteName, {
+            autoFix,
+            trigger: 'manual',
+          });
+          if (report) {
+            const s = report.summary;
+            this.bot.chat(
+              `🧪 テスト完了: ${s.totalTested}件 / ` +
+              `✅${s.passed} 🔧${s.fixed} ❌${s.unfixable} ⏭️${s.skipped}`,
+            );
+          } else {
+            this.bot.chat('⚠️ テスト実行できませんでした');
+          }
+        } catch (err: any) {
+          this.bot.chat(`❌ テストエラー: ${err.message?.substring(0, 80)}`);
+        }
+      })();
+      return true;
+    }
+
     // ./スキル名 - InstantSkill実行
     if (message.startsWith('./')) {
       const [skillName, ...args] = message.slice(2).split(' ');

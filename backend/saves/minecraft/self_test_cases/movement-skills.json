@@ -1,0 +1,90 @@
+{
+  "testSuite": "movement-skills",
+  "description": "移動・視線・姿勢系スキル",
+  "cases": [
+    {
+      "skillName": "move-to",
+      "args": [5, 64, 5, 2, "near"],
+      "description": "近くの座標に移動（5,64,5）",
+      "setup": ["/tp @s 0 64 0"],
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "move-to",
+      "args": [20, 64, 20, 2, "near"],
+      "description": "少し遠くに移動（20,64,20）",
+      "setup": ["/tp @s 0 64 0"],
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "move-to",
+      "args": [10, 64, 0, 1, "xz"],
+      "description": "XZ goalType で移動",
+      "setup": ["/tp @s 0 64 0"],
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "look-at",
+      "args": [10, 64, 10],
+      "description": "座標(10,64,10)の方向を向く",
+      "setup": ["/tp @s 0 64 0"],
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "jump",
+      "args": [],
+      "description": "その場でジャンプ",
+      "setup": ["/tp @s 0 64 0"],
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "jump",
+      "args": ["forward", 1],
+      "description": "前方にジャンプ移動",
+      "setup": ["/tp @s 0 64 0"],
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "set-sprint",
+      "args": [true],
+      "description": "スプリントON",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "set-sprint",
+      "args": [false],
+      "description": "スプリントOFF",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "set-sneak",
+      "args": [true],
+      "description": "スニークON",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "set-sneak",
+      "args": [false],
+      "description": "スニークOFF",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "stop-movement",
+      "args": [],
+      "description": "移動停止",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "swing-arm",
+      "args": [],
+      "description": "腕を振る",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "wait-time",
+      "args": [500],
+      "description": "500ms 待機",
+      "expectedOutcome": "success"
+    }
+  ]
+}

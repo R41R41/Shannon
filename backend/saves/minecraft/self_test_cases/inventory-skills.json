@@ -1,0 +1,113 @@
+{
+  "testSuite": "inventory-skills",
+  "description": "インベントリ操作・装備スキル",
+  "cases": [
+    {
+      "skillName": "equip-item",
+      "args": ["diamond_sword", "hand"],
+      "description": "ダイヤ剣をメインハンドに装備",
+      "setup": [
+        "/clear @s",
+        "/give @s diamond_sword 1"
+      ],
+      "prechecks": [
+        { "type": "inventory_has", "item": "diamond_sword", "minCount": 1 }
+      ],
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "equip-item",
+      "args": ["shield", "off-hand"],
+      "description": "盾をオフハンドに装備",
+      "setup": [
+        "/give @s shield 1"
+      ],
+      "prechecks": [
+        { "type": "inventory_has", "item": "shield", "minCount": 1 }
+      ],
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "equip-item",
+      "args": ["diamond_helmet", "head"],
+      "description": "ダイヤヘルメットを装備",
+      "setup": ["/give @s diamond_helmet 1"],
+      "prechecks": [
+        { "type": "inventory_has", "item": "diamond_helmet", "minCount": 1 }
+      ],
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "equip-item",
+      "args": ["diamond_chestplate", "torso"],
+      "description": "ダイヤチェストプレートを装備",
+      "setup": ["/give @s diamond_chestplate 1"],
+      "prechecks": [
+        { "type": "inventory_has", "item": "diamond_chestplate", "minCount": 1 }
+      ],
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "drop-item",
+      "args": ["cobblestone", 1],
+      "description": "丸石を1個ドロップ",
+      "setup": ["/give @s cobblestone 5"],
+      "prechecks": [
+        { "type": "inventory_has", "item": "cobblestone", "minCount": 1 }
+      ],
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "pickup-nearest-item",
+      "args": ["cobblestone", 8],
+      "description": "地面の丸石を拾う（前テストでドロップ済み）",
+      "expectedOutcome": "either"
+    },
+    {
+      "skillName": "deposit-to-container",
+      "args": [4, 64, 0, "cobblestone", 1],
+      "description": "チェストに丸石を格納",
+      "setup": [
+        "/tp @s 0 64 0",
+        "/setblock 4 64 0 chest",
+        "/give @s cobblestone 5"
+      ],
+      "prechecks": [
+        { "type": "inventory_has", "item": "cobblestone", "minCount": 1 },
+        { "type": "nearby_block", "block": "chest", "maxDistance": 8 }
+      ],
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "withdraw-from-container",
+      "args": [4, 64, 0, "cobblestone", 1],
+      "description": "チェストから丸石を取り出す（前テストで格納済み）",
+      "prechecks": [
+        { "type": "nearby_block", "block": "chest", "maxDistance": 8 }
+      ],
+      "expectedOutcome": "either"
+    },
+    {
+      "skillName": "check-container",
+      "args": [4, 64, 0, false],
+      "description": "チェストの中身を確認",
+      "prechecks": [
+        { "type": "nearby_block", "block": "chest", "maxDistance": 8 }
+      ],
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "set-shield",
+      "args": [true],
+      "description": "盾ガードON",
+      "setup": ["/give @s shield 1"],
+      "expectedOutcome": "either"
+    },
+    {
+      "skillName": "set-shield",
+      "args": [false],
+      "description": "盾ガードOFF",
+      "expectedOutcome": "either"
+    }
+  ]
+}

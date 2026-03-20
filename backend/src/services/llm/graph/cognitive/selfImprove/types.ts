@@ -243,4 +243,98 @@ export const SELF_IMPROVE_CONSTANTS = {
     MAX_GENERATED_CODE_LINES: 200,
     /** ConstantSkill の最小 interval (ms) */
     MIN_CONSTANT_SKILL_INTERVAL: 1000,
+
+    // ── SelfTest ──
+    /** テストケース JSON の格納ディレクトリ */
+    SELF_TEST_CASES_DIR: 'saves/minecraft/self_test_cases',
+    /** テストレポート保存先ディレクトリ */
+    SELF_TEST_REPORT_DIR: 'saves/minecraft/self_test_reports',
+    /** コード修正の最大試行回数 */
+    MAX_FIX_ATTEMPTS: 3,
+    /** 1回の修正で許容する最大変更行数 */
+    MAX_PATCH_LINES: 50,
+    /** コード修正が許可されるパス */
+    MUTABLE_PATHS: [
+        'src/services/minebot/instantSkills/',
+        'src/services/minebot/constantSkills/',
+    ] as readonly string[],
 } as const;
+
+// ── SelfTest 型定義 ──
+
+/** precheck: テスト実行前の前提条件チェック */
+export type Precheck =
+    | { type: 'inventory_has'; item: string; minCount: number }
+    | { type: 'nearby_block'; block: string; maxDistance: number }
+    | { type: 'health_above'; min: number }
+    | { type: 'dimension'; dimension: string };
+
+export interface TestCase {
+    id: string;
+    skillName: string;
+    args: unknown[];
+    /** テスト内容の説明 */
+    description: string;
+    /** テスト前に実行するコマンド（/tp, /give, /clear 等） */
+    setup?: string[];
+    /** テスト実行前の前提条件チェック */
+    prechecks?: Precheck[];
+    /** 期待される結果 */
+    expectedOutcome: 'success' | 'failure' | 'either';
+}
+
+/** テストスイート JSON ファイルの形式 */
+export interface TestSuiteFile {
+    testSuite: string;
+    description?: string;
+    /** 全テスト共通の setup（各テストの前に毎回実行） */
+    globalSetup?: string[];
+    cases: Array<Omit<TestCase, 'id'>>;
+}
+
+export interface TestResult {
+    testCase: TestCase;
+    skillResult: {
+        success: boolean;
+        result: string;
+        failureType?: string;
+        error?: string;
+        duration?: number;
+    } | null;
+    passed: boolean;
+    errorMessage: string | null;
+    durationMs: number;
+}
+
+export interface FixAttempt {
+    attempt: number;
+    diff: string;
+    compileSuccess: boolean;
+    compileErrors: string[];
+    testPassed: boolean | null;
+    model: string;
+}
+
+export interface SkillTestReport {
+    skillName: string;
+    sourceFile: string;
+    initialTestResults: TestResult[];
+    fixAttempts: FixAttempt[];
+    finalStatus: 'pass' | 'fixed' | 'unfixable' | 'skipped';
+    rolledBack: boolean;
+}
+
+export interface SelfTestRunReport {
+    runId: string;
+    startedAt: number;
+    completedAt: number;
+    trigger: 'manual' | 'auto' | 'api';
+    skillReports: SkillTestReport[];
+    summary: {
+        totalTested: number;
+        passed: number;
+        fixed: number;
+        unfixable: number;
+        skipped: number;
+    };
+}

@@ -29,6 +29,8 @@ import { EffectivenessTracker } from './EffectivenessTracker.js';
 import { SkillIdeator } from './SkillIdeator.js';
 import { SkillCodeGenerator } from './SkillCodeGenerator.js';
 import { CodeValidator } from './CodeValidator.js';
+import { SelfTestRunner } from './SelfTestRunner.js';
+import type { SelfTestRunReport } from './types.js';
 
 const log = createLogger('SelfImprove');
 
@@ -60,6 +62,9 @@ export class SelfImprovementDaemon {
     private ideator: SkillIdeator;
     private codeGenerator: SkillCodeGenerator;
     private codeValidator: CodeValidator;
+
+    // テストランナー
+    private testRunner = new SelfTestRunner();
 
     // プロアクティブ統計
     private generatedSkillCount = 0;
@@ -211,6 +216,59 @@ export class SelfImprovementDaemon {
             log.error('ユーザーリクエスト処理エラー', err);
             return null;
         }
+    }
+
+    /**
+     * 複数のテストスイートを順番に実行する（オーバーナイト用）。
+     */
+    async runMultipleSuites(
+        suiteNames: string[],
+        options?: { autoFix?: boolean; trigger?: 'manual' | 'auto' | 'api' },
+    ): Promise<SelfTestRunReport | null> {
+        if (!this.botRef) {
+            log.warn('runMultipleSuites: bot が未設定');
+            return null;
+        }
+        return this.testRunner.runMultiple(this.botRef, suiteNames, {
+            autoFix: options?.autoFix ?? false,
+            trigger: options?.trigger ?? 'api',
+        });
+    }
+
+    /**
+     * テストスイート JSON ファイルを指定してテストを実行する。
+     * @param suiteName saves/minecraft/self_test_cases/{suiteName}.json
+     */
+    async runSelfTestFromFile(
+        suiteName: string,
+        options?: { autoFix?: boolean; trigger?: 'manual' | 'auto' | 'api' },
+    ): Promise<SelfTestRunReport | null> {
+        if (!this.botRef) {
+            log.warn('runSelfTestFromFile: bot が未設定');
+            return null;
+        }
+        return this.testRunner.runFromFile(this.botRef, suiteName, {
+            autoFix: options?.autoFix ?? false,
+            trigger: options?.trigger ?? 'api',
+        });
+    }
+
+    /**
+     * スキルの自律テスト + 自己修正を実行する（後方互換）。
+     */
+    async runSelfTest(
+        skillNames?: string[],
+        options?: { autoFix?: boolean; trigger?: 'manual' | 'auto' | 'api' },
+    ): Promise<SelfTestRunReport | null> {
+        if (!this.botRef) {
+            log.warn('runSelfTest: bot が未設定');
+            return null;
+        }
+        return this.testRunner.runTests(this.botRef, {
+            skillNames,
+            autoFix: options?.autoFix ?? true,
+            trigger: options?.trigger ?? 'api',
+        });
     }
 
     // ── トリガー条件評価 ──
