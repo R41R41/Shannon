@@ -7,6 +7,9 @@ import { createLogger } from '../../../utils/logger.js';
 
 const log = createLogger('Minebot:SkillExecutor');
 
+/** ロック取得の最大待機時間 (ms) — スキル側タイムアウトの補助ガード */
+const ACQUIRE_TIMEOUT_MS = 30_000;
+
 export type SkillCategory = 'query' | 'movement' | 'mining' | 'combat' | 'interaction' | 'other';
 
 const CATEGORY_LOCKS: Record<SkillCategory, SkillCategory[]> = {
@@ -69,9 +72,30 @@ export class SkillExecutor {
       return () => {};
     }
 
+    const deadline = Date.now() + ACQUIRE_TIMEOUT_MS;
+
     while (!this.canExecute(skillName)) {
-      await new Promise<void>((resolve) => {
-        this.waitQueue.push({ category, resolve });
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        log.warn(`ロック取得タイムアウト (${ACQUIRE_TIMEOUT_MS}ms): ${category} (${skillName}) — activeLocks: [${[...this.activeLocks].join(', ')}]`);
+        throw new Error(`Skill lock acquisition timed out for ${skillName} (category: ${category})`);
+      }
+
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          // タイムアウト時に waitQueue から自身を除去して reject
+          const idx = this.waitQueue.findIndex((e) => e.resolve === resolve);
+          if (idx !== -1) this.waitQueue.splice(idx, 1);
+          reject(new Error(`Skill lock acquisition timed out for ${skillName} (category: ${category})`));
+        }, remaining);
+
+        this.waitQueue.push({
+          category,
+          resolve: () => {
+            clearTimeout(timer);
+            resolve();
+          },
+        });
       });
     }
 

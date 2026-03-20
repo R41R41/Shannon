@@ -74,14 +74,32 @@ export interface PlayerEventData extends BaseEventData {
 }
 
 /**
+ * 脅威レベル — 距離×数で段階的に判定。
+ *   critical : 8ブロック以内 or 複数体が接近中 → emergency（タスク中断）
+ *   warning  : 8-16ブロックに単体 → task（タスクキュー）
+ *   notice   : 16ブロック圏に存在するが脅威低 → info（ログのみ）
+ */
+export type ThreatLevel = 'critical' | 'warning' | 'notice';
+
+export interface HostileEntry {
+    mobType: string;
+    position: { x: number; y: number; z: number };
+    distance: number;
+}
+
+/**
  * 敵対Mob接近イベントデータ
  */
 export interface HostileEventData extends BaseEventData {
     eventType: 'hostile_approach';
+    threatLevel: ThreatLevel;
+    /** 最も近い敵 */
     mobType: string;
     mobPosition: { x: number; y: number; z: number };
     distance: number;
     mobCount: number;
+    /** 16ブロック以内の全敵リスト（距離昇順） */
+    allHostiles: HostileEntry[];
 }
 
 /**

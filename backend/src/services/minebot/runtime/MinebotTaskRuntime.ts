@@ -20,6 +20,8 @@ type UnifiedExecutor = (
     onToolStarting?: (toolName: string, args?: Record<string, unknown>) => void;
     onTaskTreeUpdate?: (taskTree: TaskTreeState) => void;
     onRequestSkillInterrupt?: () => void;
+    getLiveInventory?: () => Array<{ name: string; count: number }>;
+    getActiveEffects?: () => Array<{ name: string; amplifier: number }>;
     abortSignal?: AbortSignal;
   },
 ) => Promise<any>;
@@ -105,6 +107,16 @@ export class MinebotTaskRuntime {
         onRequestSkillInterrupt: () => {
           this.bot.interruptExecution = true;
           log.warn('⚡ MetaCognition からスキル中断要求 → bot.interruptExecution = true');
+        },
+        getLiveInventory: () => {
+          return this.bot.inventory?.items().map((item) => ({
+            name: item.name,
+            count: item.count,
+          })) ?? [];
+        },
+        getActiveEffects: () => {
+          const effects = (this.bot as any).activeEffects as Array<{ name: string; amplifier: number }> | undefined;
+          return effects ?? [];
         },
         abortSignal: this.abortController?.signal,
       });
@@ -682,6 +694,10 @@ export class MinebotTaskRuntime {
         }
         input.envelope.minecraft.nearbyInfrastructure = nearbyInfrastructure;
         input.envelope.minecraft.nearbyResources = this.scanNearbyResources();
+        // ディメンション情報を補完（未設定の場合）
+        if (!input.envelope.minecraft.dimension) {
+          input.envelope.minecraft.dimension = (this.bot as any).game?.dimension?.toString() || 'overworld';
+        }
       }
       return input.envelope;
     }
@@ -718,6 +734,7 @@ export class MinebotTaskRuntime {
         inventory,
         nearbyInfrastructure,
         nearbyResources,
+        dimension: (this.bot as any).game?.dimension?.toString() || 'overworld',
       } as any,
       metadata: {
         environmentState: input.environmentState,
@@ -734,7 +751,8 @@ export class MinebotTaskRuntime {
   private scanNearbyInfrastructure(): Array<{ name: string; x: number; y: number; z: number; distance: number }> {
     const SCAN_BLOCKS = [
       'crafting_table', 'furnace', 'blast_furnace', 'smoker',
-      'chest', 'enchanting_table', 'anvil',
+      'chest', 'enchanting_table', 'anvil', 'chipped_anvil', 'damaged_anvil',
+      'brewing_stand', 'stonecutter',
     ];
     const results: Array<{ name: string; x: number; y: number; z: number; distance: number }> = [];
 

@@ -51,6 +51,10 @@ export interface SelfState {
     inventory: InventoryEntry[] | null;
     health: number | null;
     food: number | null;
+    /** インベントリの空きスロット数（36枠中）。null = 不明 */
+    freeSlots: number | null;
+    /** アクティブなステータスエフェクト */
+    activeEffects: Array<{ name: string; amplifier: number }>;
     vitalAlerts: string[];
 }
 
@@ -183,6 +187,8 @@ export class CognitiveBlackboard extends EventEmitter {
         inventory: null,
         health: null,
         food: null,
+        freeSlots: null,
+        activeEffects: [],
         vitalAlerts: [],
     };
 
@@ -228,6 +234,8 @@ export class CognitiveBlackboard extends EventEmitter {
     get inventory(): InventoryEntry[] | null { return this._selfState.inventory; }
     get health(): number | null { return this._selfState.health; }
     get food(): number | null { return this._selfState.food; }
+    get freeSlots(): number | null { return this._selfState.freeSlots; }
+    get activeEffects(): Array<{ name: string; amplifier: number }> { return this._selfState.activeEffects; }
     get vitalAlerts(): string[] { return this._selfState.vitalAlerts; }
 
     snapshot(): BlackboardSnapshot {
@@ -240,6 +248,8 @@ export class CognitiveBlackboard extends EventEmitter {
                 inventory: this._selfState.inventory,
                 health: this._selfState.health,
                 food: this._selfState.food,
+                freeSlots: this._selfState.freeSlots,
+                activeEffects: [...this._selfState.activeEffects],
                 vitalAlerts: [...this._selfState.vitalAlerts],
             },
             plan: this._planState ? {
@@ -297,6 +307,8 @@ export class CognitiveBlackboard extends EventEmitter {
         if (patch.inventory !== undefined) this._selfState.inventory = patch.inventory;
         if (patch.health !== undefined) this._selfState.health = patch.health;
         if (patch.food !== undefined) this._selfState.food = patch.food;
+        if (patch.freeSlots !== undefined) this._selfState.freeSlots = patch.freeSlots;
+        if (patch.activeEffects !== undefined) this._selfState.activeEffects = patch.activeEffects;
         if (patch.vitalAlerts !== undefined) {
             this._selfState.vitalAlerts = patch.vitalAlerts;
             if (patch.vitalAlerts.length > 0) {

@@ -291,7 +291,30 @@ ${minecraftRules}
 - **精錬(start-smelting)のフロー**: (1) start-smeltingで精錬開始（完成品スロットのアイテムは自動回収される） (2) 精錬完了まで待つ（1個=10秒。7個なら約70秒） (3) **完了後は必ずcheck-furnaceで状態確認→withdraw-from-furnace(slot="output")で完成品を回収**。check-inventory-itemでは確認できない（精錬品はかまどの中にある）
 - **精錬待ち中の重要ルール**: 精錬を開始したら、完了を待ってからかまどから回収する。**精錬品はかまどの中にあるので、check-inventory-itemではなくcheck-furnace→withdraw-from-furnaceで取り出す**。精錬中にiron_ingotが足りないと判断して採掘に行かないこと
 - **鉄鉱石はiron_ore**(raw_ironはアイテム名)。find-blocksにはブロック名を使う
-- 1ターンで依存関係のある複数ツールを同時に呼ばない（例: place-block-atとstart-smeltingを同時に呼ぶと、設置前に精錬しようとして失敗する）${this.formatDynamicRules()}`;
+- 1ターンで依存関係のある複数ツールを同時に呼ばない（例: place-block-atとstart-smeltingを同時に呼ぶと、設置前に精錬しようとして失敗する）${this.formatDimensionRules(context)}${this.formatDynamicRules()}`;
+    }
+
+    /**
+     * ディメンション固有のルールを生成する
+     */
+    private formatDimensionRules(context: TaskContext | null): string {
+        const mc = context?.metadata?.minecraft as Record<string, unknown> | undefined;
+        const dimension = (mc?.dimension as string || '').toLowerCase();
+
+        if (dimension.includes('nether') || dimension === 'the_nether') {
+            return `
+- **【ネザー】ベッドを使うと爆発する**。絶対に sleep-in-bed を呼ばないこと
+- ネザーでは水バケツが使えない（水が即座に蒸発する）
+- コンパスと時計はネザーでは正常に動作しない
+- ネザーの座標はオーバーワールドの1/8。移動距離に注意`;
+        }
+        if (dimension.includes('end') || dimension === 'the_end') {
+            return `
+- **【エンド】ベッドを使うと爆発する**。絶対に sleep-in-bed を呼ばないこと
+- エンドの虚空（Y=0以下）に落ちると即死する。端に近づくときは注意
+- エンドストーンは固いがツルハシで採掘可能`;
+        }
+        return '';
     }
 
     /**

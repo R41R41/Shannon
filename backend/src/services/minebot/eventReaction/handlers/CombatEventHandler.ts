@@ -7,8 +7,10 @@ import { CustomBot } from '../../types.js';
 import {
     DamageEventData,
     EventData,
+    HostileEntry,
     HostileEventData,
     SuffocationEventData,
+    ThreatLevel,
 } from '../types.js';
 
 const HOSTILE_MOBS = [
@@ -26,6 +28,13 @@ export class CombatEventHandler {
         this.bot = bot;
     }
 
+    /** 近接危険距離 — この範囲内は critical */
+    static readonly CRITICAL_DISTANCE = 8;
+    /** 検知範囲 */
+    static readonly DETECTION_DISTANCE = 16;
+    /** 複数体で critical になる閾値 */
+    static readonly MULTI_MOB_CRITICAL_COUNT = 2;
+
     /** 敵対Mob接近をチェック */
     checkHostileApproach(): HostileEventData | null {
         const nearbyHostiles: { entity: any; distance: number }[] = [];
@@ -37,7 +46,7 @@ export class CombatEventHandler {
             if (!HOSTILE_MOBS.some(h => mobName.includes(h))) return;
 
             const distance = this.bot.entity.position.distanceTo(entity.position);
-            if (distance <= 16) {
+            if (distance <= CombatEventHandler.DETECTION_DISTANCE) {
                 nearbyHostiles.push({ entity, distance });
             }
         });
@@ -47,11 +56,26 @@ export class CombatEventHandler {
         let result: HostileEventData | null = null;
 
         if (newHostiles.length > 0) {
-            const nearest = newHostiles.reduce((a, b) => a.distance < b.distance ? a : b);
+            // 距離昇順ソート
+            nearbyHostiles.sort((a, b) => a.distance - b.distance);
+            const nearest = nearbyHostiles[0];
+
+            const allHostiles: HostileEntry[] = nearbyHostiles.map(h => ({
+                mobType: String((h.entity as any).name || 'unknown'),
+                position: {
+                    x: Math.floor(h.entity.position.x),
+                    y: Math.floor(h.entity.position.y),
+                    z: Math.floor(h.entity.position.z),
+                },
+                distance: Math.round(h.distance * 10) / 10,
+            }));
+
+            const threatLevel = this.assessThreatLevel(nearbyHostiles);
 
             result = {
                 timestamp: Date.now(),
                 eventType: 'hostile_approach',
+                threatLevel,
                 mobType: String((nearest.entity as any).name || 'unknown'),
                 mobPosition: {
                     x: nearest.entity.position.x,
@@ -60,6 +84,7 @@ export class CombatEventHandler {
                 },
                 distance: nearest.distance,
                 mobCount: nearbyHostiles.length,
+                allHostiles,
             };
         }
 
@@ -68,6 +93,50 @@ export class CombatEventHandler {
         nearbyHostiles.forEach(h => this.trackedHostiles.add(h.entity.id));
 
         return result;
+    }
+
+    /**
+     * 脅威レベルを算出する。
+     *   critical: 8ブロック以内に1体以上 or 16ブロック以内に2体以上
+     *   warning : 8-16ブロックに1体
+     *   notice  : それ以外（現状の検知範囲では到達しないがフォールバック用）
+     */
+    private assessThreatLevel(hostiles: { entity: any; distance: number }[]): ThreatLevel {
+        const closeCount = hostiles.filter(h => h.distance <= CombatEventHandler.CRITICAL_DISTANCE).length;
+
+        if (closeCount >= 1) return 'critical';
+        if (hostiles.length >= CombatEventHandler.MULTI_MOB_CRITICAL_COUNT) return 'critical';
+        if (hostiles.length >= 1) return 'warning';
+        return 'notice';
+    }
+
+    /**
+     * 現在の全敵対 Mob の位置を返す（逃走方向の再計算用）。
+     * EventReactionSystem の継続逃走から呼ばれる。
+     */
+    scanCurrentHostiles(): HostileEntry[] {
+        const result: HostileEntry[] = [];
+        if (!this.bot.entity) return result;
+
+        for (const entity of Object.values(this.bot.entities)) {
+            if (entity.id === this.bot.entity.id) continue;
+            const mobName = String((entity as any).name || '').toLowerCase();
+            if (!HOSTILE_MOBS.some(h => mobName.includes(h))) continue;
+
+            const distance = this.bot.entity.position.distanceTo(entity.position);
+            if (distance <= CombatEventHandler.DETECTION_DISTANCE) {
+                result.push({
+                    mobType: mobName,
+                    position: {
+                        x: Math.floor(entity.position.x),
+                        y: Math.floor(entity.position.y),
+                        z: Math.floor(entity.position.z),
+                    },
+                    distance: Math.round(distance * 10) / 10,
+                });
+            }
+        }
+        return result.sort((a, b) => a.distance - b.distance);
     }
 
     // ── メッセージ構築 ──
@@ -98,7 +167,10 @@ export class CombatEventHandler {
         switch (eventData.eventType) {
             case 'hostile_approach': {
                 const ha = eventData as HostileEventData;
-                return `${ha.mobType}が${ha.distance.toFixed(1)}ブロック先にいる。${ha.mobCount > 1 ? `（合計${ha.mobCount}体）` : ''}対処して`;
+                const mobSummary = ha.allHostiles.length > 1
+                    ? ha.allHostiles.map(h => `${h.mobType}(${h.distance}m)`).join(', ')
+                    : `${ha.mobType}(${ha.distance.toFixed(1)}m)`;
+                return `敵対Mob接近: ${mobSummary}。警戒して`;
             }
             case 'damage': {
                 const dmg = eventData as DamageEventData;

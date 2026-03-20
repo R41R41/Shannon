@@ -218,6 +218,7 @@ export class LLMService {
       onToolStarting?: (toolName: string, args?: Record<string, unknown>) => void;
       onTaskTreeUpdate?: (taskTree: import('@shannon/common').TaskTreeState) => void;
       onRequestSkillInterrupt?: () => void;
+      getLiveInventory?: () => Array<{ name: string; count: number }>;
       abortSignal?: AbortSignal;
     },
   ): Promise<ShannonGraphState> {

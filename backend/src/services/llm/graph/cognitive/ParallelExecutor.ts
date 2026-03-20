@@ -87,7 +87,8 @@ export class ParallelExecutor {
             const mcMeta = state.context?.metadata?.minecraft as Record<string, unknown> | undefined;
             if (Array.isArray(mcMeta?.inventory)) {
                 const inventory = mcMeta!.inventory as Array<{ name: string; count: number }>;
-                blackboard.updateSelf({ inventory });
+                const freeSlots = 36 - inventory.filter(e => e.count > 0).length;
+                blackboard.updateSelf({ inventory, freeSlots });
 
                 // バイタル情報を blackboard に保存
                 const health = mcMeta?.health as number | undefined;
@@ -162,17 +163,21 @@ export class ParallelExecutor {
         this.fca.setBlackboardAccessor(() => ({
             metaState: blackboard.metaState,
             emotionState: blackboard.emotionState,
+            freeSlots: blackboard.freeSlots,
+            activeEffects: blackboard.activeEffects,
         }));
 
         // FCA の onToolsExecuted を拡張して blackboard を更新
         const originalOnToolsExecuted = state.onToolsExecuted;
 
-        // Minecraft: イテレーション毎のインベントリ注入用コールバック
-        // blackboard の inventory を使い、ツール実行結果から更新する
-        const inventoryTracker = isMinecraft ? new Map<string, number>() : null;
-        if (inventoryTracker && blackboard.inventory) {
-            for (const entry of blackboard.inventory) {
-                inventoryTracker.set(entry.name, (inventoryTracker.get(entry.name) || 0) + entry.count);
+        // Minecraft: bot の実インベントリからリアルタイム取得
+        // - TaskFCA へは前回との差分を注入（何が変わったかを認識させる）
+        // - MetaCognition へは blackboard 経由でフルインベントリを渡す
+        const getLiveInventory = isMinecraft ? state.getLiveInventory : undefined;
+        let previousInventory = new Map<string, number>();
+        if (getLiveInventory) {
+            for (const entry of (blackboard.inventory ?? [])) {
+                previousInventory.set(entry.name, (previousInventory.get(entry.name) || 0) + entry.count);
             }
         }
 
@@ -189,14 +194,51 @@ export class ParallelExecutor {
             ...state,
             selectedModel: modelSelector.modelName,
             getInitialMemory,
-            getInventorySummary: inventoryTracker ? () => {
-                if (inventoryTracker.size === 0) return '【現在のインベントリ: 空】';
-                const items: string[] = [];
-                for (const [name, count] of inventoryTracker) {
-                    if (count > 0) items.push(`${name} x${count}`);
+            getInventoryDiff: getLiveInventory ? () => {
+                // ステータスエフェクトも一緒に blackboard へ反映
+                if (state.getActiveEffects) {
+                    const effects = state.getActiveEffects();
+                    blackboard.updateSelf({ activeEffects: effects });
                 }
-                if (items.length === 0) return '【現在のインベントリ: 空】';
-                return `【現在のインベントリ（${items.length}種）: ${items.join(', ')}】`;
+
+                const current = getLiveInventory();
+                const currentMap = new Map<string, number>();
+                for (const entry of current) {
+                    currentMap.set(entry.name, (currentMap.get(entry.name) || 0) + entry.count);
+                }
+
+                // 差分を計算
+                const added: string[] = [];
+                const removed: string[] = [];
+                const allKeys = new Set([...previousInventory.keys(), ...currentMap.keys()]);
+                for (const key of allKeys) {
+                    const prev = previousInventory.get(key) || 0;
+                    const curr = currentMap.get(key) || 0;
+                    if (curr > prev) added.push(`+${curr - prev} ${key}`);
+                    else if (curr < prev) removed.push(`-${prev - curr} ${key}`);
+                }
+
+                // 現在のインベントリを次回比較用に保存
+                previousInventory = currentMap;
+
+                // blackboard のインベントリも更新（MetaCognition 用）
+                const freeSlots = 36 - current.filter(e => e.count > 0).length;
+                blackboard.updateSelf({ inventory: current, freeSlots });
+
+                // 差分がなくても現在の所持数サマリーは常に付ける
+                const currentItems = current.filter(e => e.count > 0).map(e => `${e.name} x${e.count}`);
+                const summaryLine = currentItems.length > 0
+                    ? `【現在のインベントリ（${currentItems.length}種）: ${currentItems.join(', ')}】`
+                    : '【現在のインベントリ: 空】';
+
+                if (added.length === 0 && removed.length === 0) {
+                    return summaryLine;
+                }
+
+                const diffLines: string[] = [];
+                if (added.length > 0) diffLines.push(`増加: ${added.join(', ')}`);
+                if (removed.length > 0) diffLines.push(`減少: ${removed.join(', ')}`);
+                return `【インベントリ変化: ${diffLines.join(' / ')}】\n${summaryLine}`;
             } : undefined,
             getJournalSummary: () => {
                 return blackboard.plan?.journalSummary ?? null;
@@ -234,16 +276,9 @@ export class ParallelExecutor {
                     this.checkAutoEscalation(blackboard, modelSelector);
                 }
 
-                // インベントリトラッカー更新: ツール結果から所持数変化を抽出
-                if (inventoryTracker) {
-                    for (const r of results) {
-                        // mine-block/dig-block-at の「現在の所持数: item=N個」パターン
-                        const matches = r.message.matchAll(/(\w+)=(\d+)個/g);
-                        for (const m of matches) {
-                            inventoryTracker.set(m[1], parseInt(m[2], 10));
-                        }
-                    }
-                }
+                // NOTE: インベントリの blackboard 更新は getInventoryDiff() 側に一本化。
+                // ここで重複して updateSelf({ inventory }) すると、getInventoryDiff の
+                // previousInventory との差分計算が「変化なし」と誤判定される場合がある。
 
                 // EmotionLoop が未起動の場合のフォールバック
                 if (!emotionLoop) {
@@ -283,10 +318,24 @@ export class ParallelExecutor {
         }
 
         // Emotion/Meta/Memory の終了を待つ（タイムアウト付き）
-        await Promise.race([
+        const settledOrTimeout = await Promise.race([
             Promise.allSettled([emotionPromise, metaPromise, memoryPromise]),
-            new Promise(resolve => setTimeout(resolve, 3000)),
+            new Promise<null>(resolve => setTimeout(() => resolve(null), 3000)),
         ]);
+
+        if (settledOrTimeout === null) {
+            logger.warn('[ParallelExecutor] ⚠️ 補助プロセスが3秒以内に終了しなかったためタイムアウト');
+        } else {
+            const labels = ['EmotionLoop', 'MetaCognitionLoop', 'MemoryAgent'] as const;
+            for (let i = 0; i < settledOrTimeout.length; i++) {
+                const r = settledOrTimeout[i];
+                if (r.status === 'rejected') {
+                    logger.error(
+                        `[ParallelExecutor] ❌ ${labels[i]} がエラーで終了: ${r.reason instanceof Error ? r.reason.message : String(r.reason)}`,
+                    );
+                }
+            }
+        }
 
         logger.info(
             `[ParallelExecutor] ✅ 完了 (model: ${modelSelector.stats.currentModel}, ` +

@@ -118,6 +118,14 @@ const ShannonState = Annotation.Root({
     reducer: replace,
     default: () => undefined,
   }),
+  _getLiveInventory: Annotation<(() => Array<{ name: string; count: number }>) | undefined>({
+    reducer: replace,
+    default: () => undefined,
+  }),
+  _getActiveEffects: Annotation<(() => Array<{ name: string; amplifier: number }>) | undefined>({
+    reducer: replace,
+    default: () => undefined,
+  }),
   _abortSignal: Annotation<AbortSignal | undefined>({
     reducer: replace,
     default: () => undefined,
@@ -346,6 +354,8 @@ function createExecuteNode(fca: FunctionCallingAgent, emotionNode?: EmotionNode)
       onToolStarting: state._onToolStarting,
       onTaskTreeUpdate: state._onTaskTreeUpdate,
       onRequestSkillInterrupt: state._onRequestSkillInterrupt,
+      getLiveInventory: state._getLiveInventory,
+      getActiveEffects: state._getActiveEffects,
       selectedModel: state.selectedModel,
       classifyMode: state.mode,
       needsTools: state.needsTools,
@@ -482,6 +492,8 @@ export async function invokeShannonGraph(
     onToolStarting?: (toolName: string, args?: Record<string, unknown>) => void;
     onTaskTreeUpdate?: (taskTree: TaskTreeState) => void;
     onRequestSkillInterrupt?: () => void;
+    getLiveInventory?: () => Array<{ name: string; count: number }>;
+    getActiveEffects?: () => Array<{ name: string; amplifier: number }>;
     abortSignal?: AbortSignal;
   },
 ): Promise<ShannonGraphState> {
@@ -491,6 +503,8 @@ export async function invokeShannonGraph(
     _onToolStarting: options?.onToolStarting,
     _onTaskTreeUpdate: options?.onTaskTreeUpdate,
     _onRequestSkillInterrupt: options?.onRequestSkillInterrupt,
+    _getLiveInventory: options?.getLiveInventory,
+    _getActiveEffects: options?.getActiveEffects,
     _abortSignal: options?.abortSignal,
   });
   return result as unknown as ShannonGraphState;

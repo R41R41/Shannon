@@ -17,6 +17,7 @@ import {
     EventReactionConfig,
     EventReactionResult,
     EventType,
+    HostileEventData,
     ItemEventData,
     ReactionSettingsState,
     SuffocationEventData,
@@ -38,6 +39,11 @@ export class EventReactionSystem {
     // インターバルID
     private environmentCheckInterval: NodeJS.Timeout | null = null;
     private hostileCheckInterval: NodeJS.Timeout | null = null;
+
+    /** 継続逃走の制御 — LLM が制御を取るまで敵から逃げ続ける */
+    private fleeInterval: NodeJS.Timeout | null = null;
+    /** LLM タスクが最初の tool call を実行したら true → 逃走停止 */
+    private _llmHasControl = false;
 
     constructor(bot: CustomBot, taskRuntime: MinebotTaskRuntime) {
         this.bot = bot;
@@ -252,6 +258,15 @@ export class EventReactionSystem {
     // ── イベントディスパッチ ──
 
     /**
+     * LLM タスクが制御を取ったことを通知する。
+     * MinebotTaskRuntime の onToolStarting から呼ばれ、継続逃走を停止する。
+     */
+    public notifyLLMHasControl(): void {
+        this._llmHasControl = true;
+        this.stopContinuousFlee();
+    }
+
+    /**
      * イベントを処理
      */
     private async handleEvent(eventData: EventData): Promise<EventReactionResult> {
@@ -259,6 +274,11 @@ export class EventReactionSystem {
 
         if (!config || !config.enabled) {
             return { handled: false, reactionType: 'info' };
+        }
+
+        // hostile_approach は脅威レベルで反応を動的に決定
+        if (eventData.eventType === 'hostile_approach') {
+            return this.handleHostileApproach(eventData as HostileEventData);
         }
 
         // idle時のみの設定でbusy状態ならスキップ
@@ -307,6 +327,46 @@ export class EventReactionSystem {
     }
 
     /**
+     * hostile_approach を脅威レベルで段階的に処理する。
+     *
+     *   critical → emergency（タスク中断 + 反射的逃走 + LLM 緊急タスク）
+     *   warning  → task（タスクキューに追加、実行中タスクは中断しない）
+     *   notice   → info（ログのみ）
+     *
+     * emergency 中に新たな hostile_approach(critical) が来た場合:
+     *   → LLM タスクはそのまま（二重起動しない）だが、逃走方向を再計算する
+     */
+    private async handleHostileApproach(eventData: HostileEventData): Promise<EventReactionResult> {
+        const { threatLevel, allHostiles } = eventData;
+
+        if (threatLevel === 'notice') {
+            log.debug(`👀 敵対Mob検知 (notice): ${allHostiles.map(h => `${h.mobType}(${h.distance}m)`).join(', ')}`);
+            return { handled: true, reactionType: 'info' };
+        }
+
+        if (threatLevel === 'warning') {
+            const message = CombatEventHandler.buildTaskMessage(eventData) ?? '敵対Mobが接近中';
+            log.info(`⚠️ 敵対Mob警戒 (warning): ${message}`);
+
+            // idle ならタスク生成、busy ならログのみ
+            if (this.isIdle()) {
+                return this.handleTaskEvent(eventData);
+            }
+            return { handled: true, reactionType: 'info', message };
+        }
+
+        // critical — emergency 処理
+        if (this.taskRuntime.isInEmergencyMode()) {
+            // 既に emergency 中 → LLM タスクは二重起動しないが、逃走方向を即座に更新
+            log.warn(`🚨 Emergency中に新たな脅威: ${allHostiles.map(h => `${h.mobType}(${h.distance}m)`).join(', ')} → 逃走方向を更新`);
+            this.updateFleeDirection();
+            return { handled: true, reactionType: 'emergency' };
+        }
+
+        return this.handleEmergencyEvent(eventData);
+    }
+
+    /**
      * 緊急イベントを処理
      */
     private async handleEmergencyEvent(eventData: EventData): Promise<EventReactionResult> {
@@ -328,8 +388,9 @@ export class EventReactionSystem {
         log.error(`🚨 緊急対応: ${message}`);
 
         try {
-            // 1. 即座の反射的逃走（LLM を待たずに物理行動）
-            this.executeReflexiveFlee();
+            // 1. 継続型の反射的逃走を開始（LLM が制御を取るまで逃げ続ける）
+            this._llmHasControl = false;
+            this.startContinuousFlee();
 
             // 2. 実行中タスクを中断し、isExecuting 解除を待つ
             await this.taskRuntime.interruptForEmergency(message);
@@ -338,18 +399,23 @@ export class EventReactionSystem {
                 userMessage: message,
                 isEmergency: true,
                 emergencyType: eventData.eventType,
+                onToolStarting: () => this.notifyLLMHasControl(),
             };
             this.taskRuntime.setEmergencyTask(emergencyTaskInput);
 
             // 3. LLM ベースの緊急タスクを実行
             await this.taskRuntime.invoke(emergencyTaskInput);
 
-            // 4. 緊急タスク完了後、中断された元タスクを再開
+            // 4. 逃走停止（LLM が制御を取った場合は既に停止済みだがフォールバック）
+            this.stopContinuousFlee();
+
+            // 5. 緊急タスク完了後、中断された元タスクを再開
             await this.taskRuntime.resumePreviousTask();
 
             return { handled: true, reactionType: 'emergency', message };
         } catch (error) {
             log.error('緊急対応エラー', error);
+            this.stopContinuousFlee();
             return { handled: false, reactionType: 'emergency', message };
         }
     }
@@ -393,6 +459,12 @@ export class EventReactionSystem {
     // ── メッセージ構築（ハンドラーに委譲） ──
 
     private buildEmergencyMessage(eventData: EventData): string {
+        // hostile_approach は複数敵情報を含めてメッセージを構築
+        if (eventData.eventType === 'hostile_approach') {
+            const ha = eventData as HostileEventData;
+            const mobSummary = ha.allHostiles.map(h => `${h.mobType}(${h.distance}m)`).join(', ');
+            return `緊急: 敵対Mob ${ha.mobCount}体が接近中 [${mobSummary}]。【制約】即時生存行動のみ: (1)食料があれば食べる (2)全敵から逃走する (3)安全な場所で待機。クラフト・採掘・建築は禁止。`;
+        }
         return CombatEventHandler.buildEmergencyMessage(eventData)
             || '緊急事態が発生した';
     }
@@ -406,10 +478,19 @@ export class EventReactionSystem {
     }
 
     /**
-     * 反射的逃走 — LLM を待たず即座に敵から離れる物理行動。
-     * 脊髄反射に相当し、生存確率を大幅に上げる。
+     * 継続型の反射的逃走を開始する。
+     *
+     * 旧実装: 2秒の固定タイマーで逃走 → LLM 応答待ちの間に棒立ち
+     * 新実装: 300ms ごとに全敵の位置を再走査し、複合的な逃走方向を計算して逃げ続ける。
+     *         LLM が最初の tool call を実行した時点で notifyLLMHasControl() → 停止。
+     *         フォールバックとして MAX_FLEE_DURATION_MS 後にも停止する。
      */
-    private executeReflexiveFlee(): void {
+    private static readonly FLEE_TICK_MS = 300;
+    private static readonly MAX_FLEE_DURATION_MS = 15_000;
+
+    private startContinuousFlee(): void {
+        this.stopContinuousFlee(); // 既存の逃走があれば停止
+
         try {
             if (!this.bot.entity) return;
 
@@ -418,58 +499,83 @@ export class EventReactionSystem {
             const pathfinder = (this.bot as any).pathfinder;
             pathfinder?.setGoal?.(null);
             pathfinder?.stop?.();
+        } catch { /* ignore */ }
 
-            // 最も近い敵対 Mob を見つける
-            const botPos = this.bot.entity.position;
-            let nearestHostile: { position: { x: number; y: number; z: number }; distance: number } | null = null;
+        // 即座に1回逃走方向を計算して走り始める
+        this.updateFleeDirection();
 
-            for (const entity of Object.values(this.bot.entities)) {
-                if (entity.id === this.bot.entity.id) continue;
-                const mobName = String((entity as any).name || '').toLowerCase();
-                const isHostile = ['zombie', 'skeleton', 'creeper', 'spider', 'drowned', 'husk',
-                    'stray', 'witch', 'phantom', 'pillager', 'vindicator', 'warden'].some(h => mobName.includes(h));
-                if (!isHostile) continue;
+        const startTime = Date.now();
 
-                const dist = botPos.distanceTo(entity.position);
-                if (dist < 16 && (!nearestHostile || dist < nearestHostile.distance)) {
-                    nearestHostile = { position: entity.position, distance: dist };
-                }
+        this.fleeInterval = setInterval(() => {
+            // LLM が制御を取った or 上限時間に達した → 停止
+            if (this._llmHasControl || Date.now() - startTime > EventReactionSystem.MAX_FLEE_DURATION_MS) {
+                this.stopContinuousFlee();
+                return;
             }
 
-            if (nearestHostile) {
-                // 敵の反対方向を向いてスプリントジャンプで逃走
-                const dx = botPos.x - nearestHostile.position.x;
-                const dz = botPos.z - nearestHostile.position.z;
-                const len = Math.sqrt(dx * dx + dz * dz) || 1;
-                const fleeYaw = Math.atan2(-dx / len, -dz / len);
+            // 全敵の最新位置をもとに逃走方向を再計算
+            this.updateFleeDirection();
+        }, EventReactionSystem.FLEE_TICK_MS);
+    }
 
-                this.bot.look(fleeYaw, 0, true);
+    /**
+     * 継続逃走を停止し、制御状態をクリアする。
+     */
+    private stopContinuousFlee(): void {
+        if (this.fleeInterval) {
+            clearInterval(this.fleeInterval);
+            this.fleeInterval = null;
+        }
+        try {
+            this.bot.clearControlStates();
+        } catch { /* bot might be dead */ }
+    }
+
+    /**
+     * 全敵対 Mob の位置から逃走方向を計算し、スプリントジャンプで逃げる。
+     *
+     * 複数敵への対応: 各敵からの「斥力ベクトル」を距離の逆数で重み付け合成し、
+     * 全敵から最も離れる方向へ逃走する。1体だけの場合は単純にその反対方向。
+     */
+    private updateFleeDirection(): void {
+        try {
+            if (!this.bot.entity) return;
+
+            const botPos = this.bot.entity.position;
+            const hostiles = this.combat.scanCurrentHostiles();
+
+            if (hostiles.length === 0) {
+                // 敵がいなくなった → 前方にスプリントだけ維持
                 this.bot.setControlState('forward', true);
                 this.bot.setControlState('sprint', true);
-                this.bot.setControlState('jump', true);
+                return;
+            }
 
-                log.warn(`⚡ 反射的逃走: 敵(${nearestHostile.distance.toFixed(1)}m)から離脱中`);
+            // 各敵からの斥力ベクトルを合成（距離の逆数で重み付け）
+            let repelX = 0;
+            let repelZ = 0;
+            for (const hostile of hostiles) {
+                const dx = botPos.x - hostile.position.x;
+                const dz = botPos.z - hostile.position.z;
+                const dist = Math.max(hostile.distance, 0.5); // ゼロ除算防止
+                const weight = 1 / (dist * dist); // 近い敵ほど強い斥力
+                repelX += dx * weight;
+                repelZ += dz * weight;
+            }
 
-                // 2秒後に制御状態をクリア（LLM タスクに制御を渡す）
-                setTimeout(() => {
-                    try {
-                        this.bot.clearControlStates();
-                    } catch { /* bot might be dead */ }
-                }, 2000);
-            } else {
-                // 敵が見つからない場合もジャンプして離脱を試みる
-                this.bot.setControlState('jump', true);
-                this.bot.setControlState('forward', true);
-                this.bot.setControlState('sprint', true);
-                log.warn('⚡ 反射的逃走: 敵不明、前方にスプリント');
-                setTimeout(() => {
-                    try {
-                        this.bot.clearControlStates();
-                    } catch { /* ignore */ }
-                }, 1500);
+            const len = Math.sqrt(repelX * repelX + repelZ * repelZ) || 1;
+            const fleeYaw = Math.atan2(-repelX / len, -repelZ / len);
+
+            this.bot.look(fleeYaw, 0, true);
+            this.bot.setControlState('forward', true);
+            this.bot.setControlState('sprint', true);
+            this.bot.setControlState('jump', true);
+
+            if (hostiles.length > 1) {
+                log.debug(`⚡ 継続逃走: ${hostiles.length}体から離脱中 (最近=${hostiles[0].mobType} ${hostiles[0].distance}m)`);
             }
         } catch (error) {
-            log.error('反射的逃走エラー（無視して緊急タスクを続行）', error);
+            log.error('継続逃走 updateFleeDirection エラー（無視して続行）', error);
         }
     }
 
@@ -485,5 +591,6 @@ export class EventReactionSystem {
             clearInterval(this.hostileCheckInterval);
             this.hostileCheckInterval = null;
         }
+        this.stopContinuousFlee();
     }
 }

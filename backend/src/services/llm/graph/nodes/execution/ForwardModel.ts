@@ -119,7 +119,7 @@ export class ForwardModel {
     predict(
         toolName: string,
         args: Record<string, unknown>,
-        context: { recentResults: ExecutionResult[] },
+        context: { recentResults: ExecutionResult[]; freeSlots?: number | null },
     ): Prediction {
         // Check 1: 学習済みパターンに一致するか
         const patternPrediction = this.checkLearnedPatterns(toolName, args);
@@ -187,9 +187,22 @@ export class ForwardModel {
     private checkRules(
         toolName: string,
         args: Record<string, unknown>,
-        context: { recentResults: ExecutionResult[] },
+        context: { recentResults: ExecutionResult[]; freeSlots?: number | null },
     ): Prediction {
         const recent = context.recentResults;
+
+        // Rule: インベントリ満杯時の採掘/拾得系ツールをブロック
+        if (context.freeSlots != null && context.freeSlots <= 0) {
+            const pickupMineTools = ['mine-block', 'stair-mine', 'dig-block-at', 'pickup-nearest-item'];
+            if (pickupMineTools.includes(toolName)) {
+                return {
+                    shouldBlock: true,
+                    reason: 'インベントリが満杯です（空きスロット: 0）',
+                    suggestion: 'インベントリを整理してください。不要なアイテムを捨てる(drop-item)か、チェストに格納(deposit-to-container)してから作業を続けてください',
+                    consecutiveBlocks: 0,
+                };
+            }
+        }
 
         // Rule: activate-block が距離エラーで失敗した直後に同じブロックを activate しようとしている
         if (toolName === 'activate-block') {

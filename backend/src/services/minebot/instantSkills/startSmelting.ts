@@ -302,7 +302,7 @@ class StartSmelting extends InstantSkill {
             furnace.close();
             return {
               success: false,
-              result: `燃料${fuelItem}が不足しています（必要: ${neededFuelCount}個）`,
+              result: `燃料${fuelItem}が不足しています（必要: ${neededFuelCount}個、所持: 0個）。${fuelItem}を${neededFuelCount}個用意してください。代替燃料: coal, charcoal, 木材系`,
               failureType: 'material_missing',
               recoverable: true,
             };

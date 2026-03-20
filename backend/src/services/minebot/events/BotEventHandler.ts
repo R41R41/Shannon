@@ -48,6 +48,7 @@ export class BotEventHandler {
         this.registerDeathMessage();
         this.registerDeath();
         this.registerRespawn();
+        this.registerEntityEffects();
         log.success('✅ All bot event handlers registered');
     }
 
@@ -347,6 +348,79 @@ export class BotEventHandler {
             this.lastOxygen = 20;
             this.consecutiveDamageCount = 0;
             this.lastDeathMessage = '';
+        });
+    }
+
+    // ── ステータスエフェクト ──
+
+    /** エフェクトID→名前のマッピング */
+    private static readonly EFFECT_NAMES: Record<number, string> = {
+        1: 'speed', 2: 'slowness', 3: 'haste', 4: 'mining_fatigue',
+        5: 'strength', 6: 'instant_health', 7: 'instant_damage',
+        8: 'jump_boost', 9: 'nausea', 10: 'regeneration',
+        11: 'resistance', 12: 'fire_resistance', 13: 'water_breathing',
+        14: 'invisibility', 15: 'blindness', 16: 'night_vision',
+        17: 'hunger', 18: 'weakness', 19: 'poison', 20: 'wither',
+        21: 'health_boost', 22: 'absorption', 23: 'saturation',
+        24: 'glowing', 25: 'levitation', 26: 'luck', 27: 'unluck',
+        28: 'slow_falling', 29: 'conduit_power', 30: 'dolphins_grace',
+        31: 'bad_omen', 32: 'hero_of_the_village', 33: 'darkness',
+    };
+
+    private static getEffectName(id: number): string {
+        return BotEventHandler.EFFECT_NAMES[id] || `effect_${id}`;
+    }
+
+    /**
+     * entityEffect / entityEffectEnd イベント — ステータスエフェクト追跡
+     */
+    private registerEntityEffects(): void {
+        if (!(this.bot as any).activeEffects) {
+            (this.bot as any).activeEffects = [];
+        }
+
+        (this.bot as any).on('entityEffect', (entity: any, effect: any) => {
+            if (entity !== this.bot.entity) return;
+
+            const effectEntry = {
+                id: effect.id as number,
+                name: BotEventHandler.getEffectName(effect.id),
+                amplifier: (effect.amplifier ?? 0) as number,
+                duration: (effect.duration ?? 0) as number,
+            };
+
+            const effects: Array<typeof effectEntry> = (this.bot as any).activeEffects;
+            const existingIdx = effects.findIndex(e => e.id === effectEntry.id);
+            if (existingIdx >= 0) {
+                effects[existingIdx] = effectEntry;
+            } else {
+                effects.push(effectEntry);
+            }
+
+            log.info(`✨ 効果付与: ${effectEntry.name} (Lv${effectEntry.amplifier + 1})`);
+
+            // 危険エフェクト + 低HP → 緊急通知
+            const dangerousEffects = ['poison', 'wither', 'instant_damage'];
+            if (dangerousEffects.includes(effectEntry.name)) {
+                const currentHealth = this.bot.health ?? 20;
+                if (currentHealth <= 10 && this.eventReactionSystem) {
+                    log.error(`🚨 危険エフェクト: ${effectEntry.name} (HP=${currentHealth})`);
+                    this.eventReactionSystem.handleDamage({
+                        damage: 0,
+                        damagePercent: 0,
+                        currentHealth,
+                        consecutiveCount: 0,
+                    }).catch(() => {});
+                }
+            }
+        });
+
+        (this.bot as any).on('entityEffectEnd', (entity: any, effect: any) => {
+            if (entity !== this.bot.entity) return;
+            const effects: Array<{ id: number }> = (this.bot as any).activeEffects;
+            const idx = effects.findIndex(e => e.id === effect.id);
+            if (idx >= 0) effects.splice(idx, 1);
+            log.info(`✨ 効果消失: ${BotEventHandler.getEffectName(effect.id)}`);
         });
     }
 }

@@ -72,14 +72,18 @@ export interface FunctionCallingAgentState {
     selectedModel?: string;
     /** メタ認知等から現在実行中のスキルを中断するためのコールバック */
     onRequestSkillInterrupt?: () => void;
+    /** Minecraft: bot から実インベントリをリアルタイム取得するコールバック */
+    getLiveInventory?: () => Array<{ name: string; count: number }>;
+    /** Minecraft: bot のアクティブなステータスエフェクトを取得するコールバック */
+    getActiveEffects?: () => Array<{ name: string; amplifier: number }>;
     /** ClassifyNode からの分類結果 */
     classifyMode?: string;
     needsTools?: boolean;
     needsPlanning?: boolean;
     /** CraftPreflight ノードからの決定論的クラフト計画 */
     craftPlan?: CraftPlan;
-    /** イテレーション毎に最新のインベントリサマリーを返すコールバック */
-    getInventorySummary?: () => string | null;
+    /** イテレーション毎に最新のインベントリ差分を返すコールバック */
+    getInventoryDiff?: () => string | null;
     /** Blackboard から最新の journalSummary を取得するコールバック */
     getJournalSummary?: () => string | null;
     /** Blackboard から最新のアクティブサブタスク情報を取得するコールバック */
@@ -130,6 +134,9 @@ export class FunctionCallingAgent {
 
     // ナッジメッセージ（エフェメラル注入用）
     private _pendingNudge: string | null = null;
+
+    // Blackboard へのアクセサ（ForwardModel にコンテキストを渡すため）
+    private blackboardAccessor: (() => { freeSlots?: number | null; activeEffects?: Array<{ name: string; amplifier: number }> }) | null = null;
 
     // === 設定 ===
     static get MODEL_NAME() { return modelManager.get('functionCalling'); }
@@ -198,6 +205,7 @@ export class FunctionCallingAgent {
      */
     public setBlackboardAccessor(fn: Parameters<typeof this.taskTreePublisher.setBlackboardAccessor>[0]): void {
         this.taskTreePublisher.setBlackboardAccessor(fn);
+        this.blackboardAccessor = fn as typeof this.blackboardAccessor;
     }
 
     /** 登録済みツール一覧を返す (ParallelExecutor が MemoryAgent 等を注入するために使用) */
@@ -508,11 +516,19 @@ export class FunctionCallingAgent {
                     );
                     ephemeralMessages.push(msg);
                 }
-                // ── インベントリサマリー注入（Minecraft: LLMに最新在庫を常に認識させる） ──
-                if (iteration > 0 && state.getInventorySummary) {
-                    const inventorySummary = state.getInventorySummary();
-                    if (inventorySummary) {
-                        ephemeralMessages.push(new SystemMessage(inventorySummary));
+                // ── インベントリ差分注入（Minecraft: LLMに在庫の変化を認識させる） ──
+                if (iteration > 0 && state.getInventoryDiff) {
+                    const inventoryDiff = state.getInventoryDiff();
+                    if (inventoryDiff) {
+                        ephemeralMessages.push(new SystemMessage(inventoryDiff));
+                    }
+                }
+                // ── ステータスエフェクト注入 ──
+                if (this.blackboardAccessor) {
+                    const effects = this.blackboardAccessor()?.activeEffects;
+                    if (effects && effects.length > 0) {
+                        const effectText = effects.map(e => `${e.name}(Lv${e.amplifier + 1})`).join(', ');
+                        ephemeralMessages.push(new SystemMessage(`⚠️ 【アクティブ状態効果】${effectText}`));
                     }
                 }
                 // ── フィードバックをエフェメラル注入 ──
@@ -726,6 +742,7 @@ export class FunctionCallingAgent {
                     // ForwardModel で予測
                     const prediction = this.forwardModel.predict(tc.name, tc.args, {
                         recentResults: this.forwardModel['recentResults'],
+                        freeSlots: this.blackboardAccessor?.()?.freeSlots,
                     });
                     if (prediction.shouldBlock) {
                         forwardModelBlocked.push({ call: tc, prediction });
