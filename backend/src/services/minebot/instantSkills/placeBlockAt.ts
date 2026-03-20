@@ -102,8 +102,7 @@ class PlaceBlockAt extends InstantSkill {
         };
       }
 
-      // ボット自身がいる位置に設置しようとしていないかチェック
-      // ボットは2ブロックの高さを持つ（足元と頭）
+      // ボット自身がいる位置なら自動で退避してから設置
       const botPos = this.bot.entity.position;
       const botBlockX = Math.floor(botPos.x);
       const botBlockY = Math.floor(botPos.y);
@@ -114,12 +113,15 @@ class PlaceBlockAt extends InstantSkill {
         z === botBlockZ &&
         (y === botBlockY || y === botBlockY + 1)
       ) {
-        return {
-          success: false,
-          result: `座標(${x}, ${y}, ${z})はボット自身がいる位置です。別の場所に設置してください`,
-          failureType: 'invalid_target',
-          recoverable: true,
-        };
+        const moved = await this.stepAside(targetPos);
+        if (!moved) {
+          return {
+            success: false,
+            result: `座標(${x}, ${y}, ${z})はボット自身がいる位置で、退避先が見つかりません`,
+            failureType: 'invalid_target',
+            recoverable: true,
+          };
+        }
       }
 
       // 参照ブロックを探す（設置する場所の隣接ブロック）
@@ -189,6 +191,43 @@ class PlaceBlockAt extends InstantSkill {
           error.message.includes('equipped'),
       };
     }
+  }
+  /**
+   * 設置対象座標から1ブロック退避する。
+   * 隣接4方向で足場があり空気がある安全な場所に移動する。
+   */
+  private async stepAside(target: Vec3): Promise<boolean> {
+    const cardinals = [
+      new Vec3(1, 0, 0), new Vec3(-1, 0, 0),
+      new Vec3(0, 0, 1), new Vec3(0, 0, -1),
+    ];
+    for (const dir of cardinals) {
+      const dest = target.plus(dir);
+      const ground = this.bot.blockAt(dest.offset(0, -1, 0));
+      const feet = this.bot.blockAt(dest);
+      const head = this.bot.blockAt(dest.offset(0, 1, 0));
+      if (
+        ground && ground.name !== 'air' &&
+        feet && feet.name === 'air' &&
+        head && head.name === 'air'
+      ) {
+        try {
+          await this.bot.lookAt(dest.offset(0.5, 0, 0.5));
+          this.bot.setControlState('forward', true);
+          await new Promise(r => setTimeout(r, 600));
+          this.bot.setControlState('forward', false);
+          await new Promise(r => setTimeout(r, 200));
+
+          const newPos = this.bot.entity.position;
+          const dx = Math.floor(newPos.x) - Math.floor(target.x);
+          const dz = Math.floor(newPos.z) - Math.floor(target.z);
+          if (dx !== 0 || dz !== 0) return true;
+        } catch {
+          this.bot.setControlState('forward', false);
+        }
+      }
+    }
+    return false;
   }
 }
 

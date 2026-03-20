@@ -27,6 +27,7 @@ node_modules
 
 # Analysis
 /backend/saves/analysis/
+/backend/saves/minecraft/self_test_reports/
 
 # Sensitive / runtime
 /backend/saves/twitter_login_cookies.json

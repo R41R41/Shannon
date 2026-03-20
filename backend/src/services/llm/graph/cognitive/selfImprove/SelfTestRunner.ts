@@ -25,12 +25,14 @@ import {
     SELF_IMPROVE_CONSTANTS as C,
     type TestCase,
     type TestSuiteFile,
+    type GoalSuccessCriterion,
     type Precheck,
     type TestResult,
     type SkillTestReport,
     type SelfTestRunReport,
 } from './types.js';
 import type { CustomBot } from '../../../../minebot/types.js';
+import { MinecraftGoalExecutor } from './MinecraftGoalExecutor.js';
 
 const log = createLogger('SelfTest:Runner');
 
@@ -82,6 +84,11 @@ export class SelfTestRunner {
             log.info(
                 'ℹ️ setup で /tp 等を使用します。サーバーでボットにコマンドが通る権限があるか確認してください。',
             );
+        }
+
+        // ── goal モード: LLM 自律実行 ──
+        if (suite.mode === 'goal') {
+            return this.runGoalMode(suite, bot, runId, startedAt, trigger, persistReport);
         }
 
         const isChain = suite.mode === 'chain';
@@ -755,6 +762,90 @@ export class SelfTestRunner {
         }
 
         return { passed: true, reason: '' };
+    }
+
+    // ── goal モード実行 ──
+
+    private async runGoalMode(
+        suite: TestSuiteFile,
+        bot: CustomBot,
+        runId: string,
+        startedAt: number,
+        trigger: 'manual' | 'auto' | 'api',
+        persistReport: boolean,
+    ): Promise<SelfTestRunReport> {
+        if (!suite.goal) {
+            log.error('goal モードですが goal が未指定です');
+            return this.emptyReport(runId, startedAt, trigger);
+        }
+
+        const criteria: GoalSuccessCriterion[] = suite.successCriteria ?? [];
+        if (criteria.length === 0) {
+            log.warn('successCriteria が空です — 達成判定は LLM の自己申告のみになります');
+        }
+
+        // globalSetup 実行
+        if (suite.globalSetup?.length) {
+            await this.executeSetup(bot, suite.globalSetup);
+        }
+
+        const executor = new MinecraftGoalExecutor(bot);
+        const result = await executor.execute(suite.goal, criteria, suite.maxIterations);
+
+        // GoalExecutionResult → SelfTestRunReport に変換
+        const goalReport: SkillTestReport = {
+            skillName: `goal:${suite.testSuite}`,
+            sourceFile: '',
+            initialTestResults: [{
+                testCase: {
+                    id: 'goal-0',
+                    skillName: 'goal',
+                    args: [suite.goal],
+                    description: suite.goal,
+                    expectedOutcome: 'success',
+                },
+                skillResult: {
+                    success: result.success,
+                    result: result.success
+                        ? `ゴール達成 (${result.iterations}iter, ${result.skillCalls.length}スキル呼出)`
+                        : result.errorMessage ?? 'ゴール未達成',
+                },
+                passed: result.success,
+                errorMessage: result.success ? null : (result.errorMessage ?? null),
+                durationMs: result.durationMs,
+            }],
+            fixAttempts: [],
+            finalStatus: result.success ? 'pass' : 'unfixable',
+            rolledBack: false,
+        };
+
+        const report: SelfTestRunReport = {
+            runId,
+            startedAt,
+            completedAt: Date.now(),
+            trigger,
+            skillReports: [goalReport],
+            summary: {
+                totalTested: 1,
+                passed: result.success ? 1 : 0,
+                fixed: 0,
+                unfixable: result.success ? 0 : 1,
+                skipped: 0,
+            },
+        };
+
+        if (persistReport) {
+            await this.saveReport(report);
+        }
+
+        const icon = result.success ? '✅' : '❌';
+        log.info(
+            `${icon} ゴールテスト完了: ${suite.testSuite} — ` +
+            `${result.success ? '達成' : '未達成'} ` +
+            `(${result.iterations}iter, ${result.skillCalls.length}スキル, ${(result.durationMs / 1000).toFixed(1)}s)`,
+        );
+
+        return report;
     }
 
     /**

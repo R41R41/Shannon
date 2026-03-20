@@ -300,11 +300,28 @@ export interface TestSuiteFile {
      * "default" — globalSetup を各ケースの前に毎回実行し、スキル名でグルーピング。
      * "chain"  — globalSetup を最初に1回だけ実行し、ケースを定義順に逐次実行。
      *            ケース間でインベントリ等の状態が引き継がれる。
+     * "goal"   — LLM が自律的にスキルを選択・実行してゴールを達成する。
+     *            cases は不要。goal と successCriteria を指定する。
      */
-    mode?: 'default' | 'chain';
+    mode?: 'default' | 'chain' | 'goal';
     /** 全テスト共通の setup */
     globalSetup?: string[];
     cases: Array<Omit<TestCase, 'id'>>;
+    /** mode=goal のとき: 自然言語のゴール指示 */
+    goal?: string;
+    /** mode=goal のとき: 達成条件（Precheck と同じ形式） */
+    successCriteria?: GoalSuccessCriterion[];
+    /** mode=goal のとき: 最大イテレーション数（デフォルト60） */
+    maxIterations?: number;
+}
+
+export interface GoalSuccessCriterion {
+    type: 'inventory_has' | 'nearby_block' | 'health_above';
+    item?: string;
+    minCount?: number;
+    block?: string;
+    maxDistance?: number;
+    min?: number;
 }
 
 export interface TestResult {

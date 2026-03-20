@@ -1,0 +1,22 @@
+{
+  "testSuite": "iron-pickaxe-goal",
+  "description": "LLMが自律的に鉄のツルハシを作成するゴール駆動テスト",
+  "mode": "goal",
+  "globalSetup": [
+    "/clear @s",
+    "/tp @s 0 64 0",
+    "/gamemode survival @s",
+    "/time set day",
+    "/weather clear"
+  ],
+  "goal": "何も持っていない状態から鉄のツルハシを1つ作ってください。木の伐採から始めて、必要な中間素材をすべて自力で集めてクラフトしてください。",
+  "successCriteria": [
+    {
+      "type": "inventory_has",
+      "item": "iron_pickaxe",
+      "minCount": 1
+    }
+  ],
+  "maxIterations": 80,
+  "cases": []
+}
