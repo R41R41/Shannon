@@ -187,6 +187,7 @@ export class SkillPatcher {
                 ]);
 
                 if (!response?.code) {
+                    log.warn(`  ❌ LLM がコードを返しませんでした`);
                     fixAttempts.push({
                         attempt, diff: '', compileSuccess: false,
                         compileErrors: ['LLM がコードを返しませんでした'], testPassed: null, model: modelName,
@@ -194,12 +195,26 @@ export class SkillPatcher {
                     continue;
                 }
 
+                log.info(`  📋 LLM 診断: ${response.explanation}`);
+
                 const newCode = this.extractCode(response.code);
                 const diff = this.computeDiff(currentCode, newCode);
 
-                // 変更行数チェック
                 const changedLines = diff.split('\n').filter(l => l.startsWith('+') || l.startsWith('-')).length;
+                log.info(`  📝 差分: ${changedLines} 行変更`);
+                if (changedLines <= 30) {
+                    for (const line of diff.split('\n').slice(0, 40)) {
+                        log.info(`    ${line}`);
+                    }
+                } else {
+                    for (const line of diff.split('\n').slice(0, 15)) {
+                        log.info(`    ${line}`);
+                    }
+                    log.info(`    ... (残り ${changedLines - 15} 行省略)`);
+                }
+
                 if (changedLines > C.MAX_PATCH_LINES) {
+                    log.warn(`  ⛔ 変更行数超過: ${changedLines} > ${C.MAX_PATCH_LINES}`);
                     fixAttempts.push({
                         attempt, diff, compileSuccess: false,
                         compileErrors: [`変更行数超過: ${changedLines} > ${C.MAX_PATCH_LINES}`],
@@ -208,9 +223,9 @@ export class SkillPatcher {
                     continue;
                 }
 
-                // CodeValidator チェック
                 const validation = this.validator.validateMutableFile(newCode, sourceFile, currentCode);
                 if (!validation.valid) {
+                    log.warn(`  ⛔ バリデーション失敗: ${validation.errors.join(', ')}`);
                     fixAttempts.push({
                         attempt, diff, compileSuccess: false,
                         compileErrors: validation.errors, testPassed: null, model: modelName,
@@ -218,15 +233,15 @@ export class SkillPatcher {
                     lastCompileErrors = validation.errors;
                     continue;
                 }
+                log.info(`  ✅ バリデーション通過`);
 
-                // ファイル書き出し
                 await writeFile(absolutePath, newCode, 'utf-8');
                 currentCode = newCode;
 
-                // コンパイル
                 const compileResult = await this.compile(absolutePath);
 
                 if (!compileResult.success) {
+                    log.warn(`  ⛔ コンパイル失敗: ${compileResult.errors.join(', ')}`);
                     lastCompileErrors = compileResult.errors;
                     fixAttempts.push({
                         attempt, diff, compileSuccess: false,
@@ -234,8 +249,8 @@ export class SkillPatcher {
                     });
                     continue;
                 }
+                log.info(`  ✅ コンパイル成功`);
 
-                // コンパイル成功 → ホットリロード（instant/constant スキルのみ）
                 const reloadResult = needsSkillHotReload
                     ? await this.hotReload(
                         compileResult.jsPath!, skillName, bot, skillKind,
@@ -243,6 +258,7 @@ export class SkillPatcher {
                     : { success: true as const };
 
                 if (!reloadResult.success) {
+                    log.warn(`  ⛔ ホットリロード失敗: ${reloadResult.error ?? 'unknown'}`);
                     fixAttempts.push({
                         attempt, diff, compileSuccess: true,
                         compileErrors: [reloadResult.error ?? 'reload failed'],
@@ -253,13 +269,13 @@ export class SkillPatcher {
 
                 log.info(
                     needsSkillHotReload
-                        ? `✅ 修正 + コンパイル + リロード成功: ${skillName} (${response.explanation})`
-                        : `✅ 修正 + コンパイル成功（スキルホットリロードなし）: ${skillName} (${response.explanation})`,
+                        ? `  🎉 修正完了: ${skillName} — ${response.explanation}`
+                        : `  🎉 修正完了（ホットリロードなし）: ${skillName} — ${response.explanation}`,
                 );
 
                 fixAttempts.push({
                     attempt, diff, compileSuccess: true,
-                    compileErrors: [], testPassed: null, // 再テストは SelfTestRunner が行う
+                    compileErrors: [], testPassed: null,
                     model: modelName,
                 });
 

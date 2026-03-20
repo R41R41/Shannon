@@ -259,18 +259,24 @@ export async function runCodeAgentLoop(task: AgentLoopTask): Promise<AgentLoopRe
             const assistantContent = response.content;
             messages.push({ role: 'assistant', content: assistantContent });
 
+            const textBlocks = assistantContent.filter(
+                (b): b is Anthropic.TextBlock => b.type === 'text',
+            );
+            const thinkingText = textBlocks.map(b => b.text).join('\n').trim();
+            if (thinkingText) {
+                const lines = thinkingText.split('\n');
+                const preview = lines.slice(0, 6).join('\n');
+                const suffix = lines.length > 6 ? `\n    ... (${lines.length - 6}行省略)` : '';
+                log.info(`💭 [${iter + 1}/${maxIter}] エージェント思考:\n    ${preview.replace(/\n/g, '\n    ')}${suffix}`);
+            }
+
             const toolUseBlocks = assistantContent.filter(
                 (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use',
             );
 
             if (toolUseBlocks.length === 0) {
-                const textBlocks = assistantContent.filter(
-                    (b): b is Anthropic.TextBlock => b.type === 'text',
-                );
-                const text = textBlocks.map(b => b.text).join('\n');
-                if (text) log.info(`💬 エージェント応答: ${text.slice(0, 120)}`);
                 if (iter > 2) {
-                    result.summary = text || 'エージェントがツールを呼ばずに応答しました';
+                    result.summary = thinkingText || 'エージェントがツールを呼ばずに応答しました';
                     finished = true;
                 }
                 continue;
@@ -388,6 +394,12 @@ async function executeSingleToolUse(
 
     log.info(`🔧 [${iter + 1}/${maxIter}] ${name}(${summarizeArgs(args)})`);
 
+    if (name === 'edit_file' && args.old_string && args.new_string) {
+        const oldStr = String(args.old_string);
+        const newStr = String(args.new_string);
+        log.info(`    📝 edit: ${String(args.path ?? '').split('/').pop()} — ${oldStr.split('\n').length}行 → ${newStr.split('\n').length}行`);
+    }
+
     let output: string;
 
     if (name === 'spawn_agent') {
@@ -398,6 +410,11 @@ async function executeSingleToolUse(
         output = await executeBuildTool(name, args);
     } else {
         output = await executeToolCall(name, args);
+    }
+
+    if (name === 'run_tsc' || name === 'run_vitest') {
+        const preview = output.slice(0, 200);
+        log.info(`    📊 結果: ${preview}${output.length > 200 ? '...' : ''}`);
     }
 
     return { toolUseId: block.id, content: output, finished: false };

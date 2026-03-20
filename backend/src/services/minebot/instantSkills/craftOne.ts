@@ -211,11 +211,14 @@ class CraftOne extends InstantSkill {
         }
       }
 
-      // クラフトテーブルを探す（範囲を広げて検索）
-      let craftingTable = this.bot.findBlock({
-        matching: this.mcData.blocksByName.crafting_table?.id,
-        maxDistance: 32,
-      });
+      let craftingTable: ReturnType<typeof this.bot.findBlock> = null;
+
+      if (requiresCraftingTable) {
+        craftingTable = this.bot.findBlock({
+          matching: this.mcData.blocksByName.crafting_table?.id,
+          maxDistance: 32,
+        });
+      }
 
       if (requiresCraftingTable && !craftingTable) {
         // インベントリにcrafting_tableがあれば自動設置を試みる
