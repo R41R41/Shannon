@@ -71,8 +71,8 @@
       "expectedOutcome": "success"
     },
     {
-      "skillName": "place-block",
-      "args": [3, 64, 0],
+      "skillName": "place-block-at",
+      "args": ["crafting_table", 3, 64, 0],
       "description": "Step 7: 作業台を設置",
       "prechecks": [
         { "type": "inventory_has", "item": "crafting_table", "minCount": 1 }
@@ -112,8 +112,8 @@
       "expectedOutcome": "success"
     },
     {
-      "skillName": "place-block",
-      "args": [2, 64, 0],
+      "skillName": "place-block-at",
+      "args": ["furnace", 2, 64, 0],
       "description": "Step 11: かまどを設置",
       "prechecks": [
         { "type": "inventory_has", "item": "furnace", "minCount": 1 }
