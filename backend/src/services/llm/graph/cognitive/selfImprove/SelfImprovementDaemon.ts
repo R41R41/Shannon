@@ -8,8 +8,9 @@
  * Singleton — ParallelExecutor から fire-and-forget で呼ばれる。
  */
 
-import { writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import { config } from '../../../../../config/env.js';
 import { getBackendRoot } from '../../../../../utils/backendRoot.js';
 import { createLogger } from '../../../../../utils/logger.js';
 import type { TaskEpisode } from '../TaskEpisodeMemory.js';
@@ -34,6 +35,16 @@ import { SelfTestRunner } from './SelfTestRunner.js';
 import type { SelfTestRunReport } from './types.js';
 
 const log = createLogger('SelfImprove');
+
+/** 夜間メンテナンス1回分のレポート（朝の要約用） */
+export interface NightlyMaintenanceReport {
+    startedAt: number;
+    completedAt: number;
+    sections: Array<{ phase: string; ok: boolean; summary: string; detailMarkdown: string }>;
+    markdownReport: string;
+    jsonPath: string;
+    markdownPath: string;
+}
 
 export class SelfImprovementDaemon {
     private static instance: SelfImprovementDaemon;
@@ -285,6 +296,197 @@ export class SelfImprovementDaemon {
     }): Promise<{ success: boolean; summary: string; filesChanged: string[] }> {
         const { runCodeAgentLoop } = await import('./CodeAgentLoop.js');
         return runCodeAgentLoop(task);
+    }
+
+    /**
+     * 失敗エピソードバッファがあれば分析→改善パイプラインを1回走らせる（夜間バッチ用）。
+     * onEpisodeSaved の shouldTrigger とは独立。
+     */
+    async runFailureDrivenImprovementIfBuffered(): Promise<{ ran: boolean; message: string }> {
+        if (this.failureBuffer.length === 0) {
+            return { ran: false, message: '失敗バッファは空です' };
+        }
+        await this.executeImprovement();
+        return { ran: true, message: '失敗駆動の自己改善サイクルを実行しました' };
+    }
+
+    /**
+     * 夜間メンテナンス1回分: 失敗駆動改善・マイクラ自己テスト・CodeAgent（任意）を実行しレポートを保存。
+     */
+    async runNightlyMaintenance(opts?: {
+        minecraftSuites?: string[];
+        autoFix?: boolean;
+        runCodeAgent?: boolean;
+        codeAgentTask?: string;
+        codeAgentMaxIter?: number;
+        runReactiveImprovement?: boolean;
+    }): Promise<NightlyMaintenanceReport> {
+        const startedAt = Date.now();
+        const sections: NightlyMaintenanceReport['sections'] = [];
+
+        const n = config.selfImprove.nightly;
+        const suites = opts?.minecraftSuites ?? n.minecraftSuites;
+        const autoFix = opts?.autoFix ?? n.minecraftAutoFix;
+        const runCode = opts?.runCodeAgent ?? n.codeAgentEnabled;
+        const codeTask = opts?.codeAgentTask ?? n.codeAgentDescription;
+        const codeIter = opts?.codeAgentMaxIter ?? n.codeAgentMaxIter;
+        const runReactive = opts?.runReactiveImprovement ?? n.runReactiveImprovement;
+
+        // 1) 失敗駆動（タスク失敗エピソードの蓄積ベース）
+        if (runReactive) {
+            try {
+                const before = this.failureBuffer.length;
+                const { ran, message } = await this.runFailureDrivenImprovementIfBuffered();
+                sections.push({
+                    phase: 'failure_driven_improvement',
+                    ok: true,
+                    summary: ran ? `実行: ${message}` : message,
+                    detailMarkdown:
+                        `失敗バッファ件数（実行前）: ${before}\n` +
+                        `${message}\n` +
+                        `累計 improvements=${this.totalImprovements}, rollbacks=${this.totalRollbacks}`,
+                });
+            } catch (e: any) {
+                sections.push({
+                    phase: 'failure_driven_improvement',
+                    ok: false,
+                    summary: `エラー: ${e?.message ?? e}`,
+                    detailMarkdown: String(e?.stack ?? e),
+                });
+            }
+        } else {
+            sections.push({
+                phase: 'failure_driven_improvement',
+                ok: true,
+                summary: '設定によりスキップ（課金なし）',
+                detailMarkdown:
+                    '失敗駆動の分析は LLM を複数回呼ぶため既定オフ。有効化: SELF_IMPROVE_NIGHTLY_RUN_REACTIVE=true',
+            });
+        }
+
+        // 2) マイクラ自己テスト
+        if (suites.length > 0) {
+            if (!this.botRef) {
+                sections.push({
+                    phase: 'minecraft_self_test',
+                    ok: false,
+                    summary: 'Minebot 未接続のためスキップ',
+                    detailMarkdown: `対象スイート: ${suites.join(', ')}`,
+                });
+            } else {
+                for (const name of suites) {
+                    try {
+                        const report = await this.runSelfTestFromFile(name, {
+                            autoFix,
+                            trigger: 'auto',
+                        });
+                        const ok = report ? report.summary.unfixable === 0 : false;
+                        sections.push({
+                            phase: `minecraft_suite:${name}`,
+                            ok: !!ok,
+                            summary: report
+                                ? `pass=${report.summary.passed}, fixed=${report.summary.fixed}, unfixable=${report.summary.unfixable}`
+                                : 'レポートなし',
+                            detailMarkdown: report ? '```json\n' + JSON.stringify(report, null, 2).slice(0, 12000) + '\n```' : '',
+                        });
+                    } catch (e: any) {
+                        sections.push({
+                            phase: `minecraft_suite:${name}`,
+                            ok: false,
+                            summary: e?.message ?? String(e),
+                            detailMarkdown: '',
+                        });
+                    }
+                }
+            }
+        } else {
+            sections.push({
+                phase: 'minecraft_self_test',
+                ok: true,
+                summary: 'スイート未設定のためスキップ',
+                detailMarkdown: 'SELF_IMPROVE_NIGHTLY_MINECRAFT_SUITES が空',
+            });
+        }
+
+        // 3) CodeAgent（フルコードベース探索・修正）
+        if (runCode) {
+            if (!config.anthropic.apiKey) {
+                sections.push({
+                    phase: 'code_agent',
+                    ok: false,
+                    summary: 'ANTHROPIC_API_KEY 未設定',
+                    detailMarkdown: '',
+                });
+            } else {
+                try {
+                    const { runCodeAgentLoop } = await import('./CodeAgentLoop.js');
+                    const result = await runCodeAgentLoop({
+                        description: codeTask,
+                        maxIterations: codeIter,
+                    });
+                    sections.push({
+                        phase: 'code_agent',
+                        ok: result.success,
+                        summary: result.summary.slice(0, 500),
+                        detailMarkdown:
+                            `success=${result.success}, iterations=${result.iterations}, aborted=${result.aborted}\n` +
+                            `filesChanged: ${result.filesChanged.join(', ') || '(なし)'}\n\n` +
+                            result.summary,
+                    });
+                } catch (e: any) {
+                    sections.push({
+                        phase: 'code_agent',
+                        ok: false,
+                        summary: e?.message ?? String(e),
+                        detailMarkdown: '',
+                    });
+                }
+            }
+        } else {
+            sections.push({
+                phase: 'code_agent',
+                ok: true,
+                summary: 'SELF_IMPROVE_NIGHTLY_CODE_AGENT 無効のためスキップ',
+                detailMarkdown: '',
+            });
+        }
+
+        const completedAt = Date.now();
+        const stamp = new Date(startedAt).toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        const root = getBackendRoot();
+        const dir = join(root, 'saves/self_improve/morning_reports');
+        await mkdir(dir, { recursive: true });
+        const jsonPath = join(dir, `${stamp}_nightly.json`);
+        const markdownPath = join(dir, `${stamp}_nightly.md`);
+
+        const title = `# Shannon 夜間自己改善レポート\n\n` +
+            `- 開始: ${new Date(startedAt).toISOString()}\n` +
+            `- 終了: ${new Date(completedAt).toISOString()}\n` +
+            `- 所要: ${((completedAt - startedAt) / 1000).toFixed(1)}s\n\n`;
+
+        const body = sections.map(s => (
+            `## ${s.phase}\n` +
+            `**結果**: ${s.ok ? 'OK' : '要確認'}\n\n` +
+            `${s.summary}\n\n` +
+            (s.detailMarkdown ? `${s.detailMarkdown}\n\n` : '')
+        )).join('---\n\n');
+
+        const markdownReport = title + body;
+
+        const report: NightlyMaintenanceReport = {
+            startedAt,
+            completedAt,
+            sections,
+            markdownReport,
+            jsonPath,
+            markdownPath,
+        };
+
+        await writeFile(jsonPath, JSON.stringify(report, null, 2), 'utf-8');
+        await writeFile(markdownPath, markdownReport, 'utf-8');
+        log.info(`🌅 夜間レポート保存: ${markdownPath}`);
+
+        return report;
     }
 
     // ── トリガー条件評価 ──

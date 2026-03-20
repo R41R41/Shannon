@@ -19,6 +19,7 @@ import { registerTokenRoutes } from './routes/tokenRoutes.js';
 import { registerTestRoutes } from './routes/testRoutes.js';
 import { registerWebhookRoutes } from './routes/webhookRoutes.js';
 import { registerPublicRoutes } from './routes/publicRoutes.js';
+import { startNightlySelfImproveScheduler } from './services/llm/graph/cognitive/selfImprove/NightlySelfImproveScheduler.js';
 
 class Server {
   private llmService: LLMService;
@@ -153,6 +154,8 @@ class Server {
     ]);
 
     logger.success('[Server] 全サービスの起動処理が完了しました');
+
+    startNightlySelfImproveScheduler();
   }
 
   public async shutdown() {

@@ -12,4 +12,5 @@ export { SkillPatcher } from './SkillPatcher.js';
 export { looksLikeSelfTestChatIntent, parseSelfTestSuiteFromUserMessage } from './selfTestIntent.js';
 export { runCodeAgentLoop } from './CodeAgentLoop.js';
 export type { AgentLoopTask, AgentLoopResult } from './CodeAgentLoop.js';
+export { startNightlySelfImproveScheduler } from './NightlySelfImproveScheduler.js';
 export * from './types.js';
