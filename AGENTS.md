@@ -41,7 +41,7 @@ Shannon is an autonomous AI agent platform (Minecraft bot, Discord bot, Twitter 
 ### 本番 CD（GitHub Actions → Shannon-prod）
 
 - **トリガー:** **`main` への push / マージ**および手動 `workflow_dispatch`（[`.github/workflows/deploy-production.yml`](.github/workflows/deploy-production.yml)）。
-- **動作:** SSH で本番 VM に入り、本番クローンで `git fetch` → `checkout main` → **`reset --hard origin/main`** → **`npm ci --ignore-scripts`** → **`npx patch-package`** → **`./start.sh`**。続けて tmux セッション `shannon-backend-prod` / `shannon-frontend-prod` の存在を確認。
+- **動作:** SSH で本番 VM に入り、本番クローンで `git fetch` → `checkout main` → **`reset --hard origin/main`** → **`npm ci --ignore-scripts --legacy-peer-deps`**（`@langchain/anthropic@1.x` と `@langchain/core@0.3` の peer 衝突回避）→ **`npx patch-package`** → **`./start.sh`**。続けて tmux セッション `shannon-backend-prod` / `shannon-frontend-prod` の存在を確認。
 - **Secrets（Repository secrets）**
 
 | Secret | 内容 |
@@ -53,5 +53,5 @@ Shannon is an autonomous AI agent platform (Minecraft bot, Discord bot, Twitter 
 
 - **以前 `SHANNON_SSH_*` だけ登録していた場合:** 上記 `SHANNON_PROD_*` に合わせて Secrets を登録し直すか、同じ値を `SHANNON_PROD_*` 名で追加する。
 - **本番側の前提:** `origin` がこのリポジトリの `main` を向いていること。`git fetch` は VM 上の GitHub 用 SSH（`git@github.com:...`）が通ること。`tmux` が利用できること。
-- **ネイティブモジュール:** `npm ci --ignore-scripts` のため、**初回本番セットアップ**で `canvas` / `@discordjs/opus` 等を手動ビルド済みであること（AGENTS の Native modules 節）。ロック変更後に CI の `npm ci` が失敗したら本番で依存を直してから再デプロイ。
+- **ネイティブモジュール:** `npm ci` は `--ignore-scripts` のため、**初回本番セットアップ**で `canvas` / `@discordjs/opus` 等を手動ビルド済みであること（AGENTS の Native modules 節）。ロック変更後に CI の `npm ci` が失敗したら本番で依存を直してから再デプロイ。
 - **NSG / SSH:** GitHub ホステッドランナーから VM の 22 番へ届く必要あり（aiminelab CD と同様）。

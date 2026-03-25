@@ -61,7 +61,8 @@ jobs:
             fi
             command -v node
             command -v npm
-            npm ci --ignore-scripts
+            # @langchain/anthropic@1.x と backend の @langchain/core@0.3 系で peer が衝突するため
+            npm ci --ignore-scripts --legacy-peer-deps
             npx patch-package
             bash ./start.sh
             tmux has-session -t shannon-backend-prod 2>/dev/null || { echo "::error::tmux セッション shannon-backend-prod がありません"; exit 1; }
