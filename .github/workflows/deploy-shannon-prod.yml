@@ -1,0 +1,63 @@
+# main 更新時に本番 VM 上の Shannon-prod クローンを fast-forward し ./start.sh で tmux 再起動
+# リポジトリ Secrets（Shannon2）: SHANNON_PROD_SSH_HOST, SHANNON_PROD_SSH_USER, SHANNON_PROD_SSH_PRIVATE_KEY
+# 本番パスはデフォルト /home/azureuser/Shannon-prod（別パスなら SHANNON_PROD_REPO_PATH を設定）
+
+name: Deploy Shannon production
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-shannon-prod
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install SSH private key
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SHANNON_PROD_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/shannon_prod_deploy"
+          chmod 600 "$HOME/.ssh/shannon_prod_deploy"
+          if ! test -s "$HOME/.ssh/shannon_prod_deploy"; then
+            echo "::error::SHANNON_PROD_SSH_PRIVATE_KEY が空です。"
+            exit 1
+          fi
+          if ! head -1 "$HOME/.ssh/shannon_prod_deploy" | grep -q "BEGIN"; then
+            echo "::error::秘密鍵の形式が不正です（BEGIN 行から END 行まで全文）。"
+            exit 1
+          fi
+
+      - name: SSH deploy (pull + start.sh)
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SHANNON_PROD_SSH_HOST }}
+          username: ${{ secrets.SHANNON_PROD_SSH_USER }}
+          key_path: /home/runner/.ssh/shannon_prod_deploy
+          script_stop: true
+          command_timeout: 30m
+          script: |
+            set -euo pipefail
+            DEPLOY_ROOT="${{ secrets.SHANNON_PROD_REPO_PATH }}"
+            if [ -z "$DEPLOY_ROOT" ]; then
+              DEPLOY_ROOT="/home/azureuser/Shannon-prod"
+            fi
+            cd "$DEPLOY_ROOT"
+            if [ -s "$HOME/.nvm/nvm.sh" ]; then
+              . "$HOME/.nvm/nvm.sh"
+            fi
+            command -v git
+            command -v tmux
+            git fetch origin main
+            git checkout main
+            git merge --ff-only origin/main
+            chmod +x ./start.sh 2>/dev/null || true
+            ./start.sh
+            echo "OK: Shannon prod updated and start.sh completed."

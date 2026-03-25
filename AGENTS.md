@@ -37,3 +37,21 @@ Shannon is an autonomous AI agent platform (Minecraft bot, Discord bot, Twitter 
 - **Minecraft self-test chat (chatMode OFF でも可):** `..test-all` / `..test-smoke` / `..test <suite> [--fix]` に加え、`self_test_cases` や `saves/minecraft/self_test_cases` を含む文、または `basic-skills.json` + 「テスト」などの自然文で同じランナーが起動する（`selfTestIntent.ts`）。
 - **CodeAgentLoop:** `..agent-fix <説明>` でコーディングエージェント級の自律修正を起動。`read_file` / `search_code` / `list_directory` / `edit_file`（差分適用）/ `create_file` / `delete_file` / `run_tsc` / `run_vitest` の 8 ツールを gpt-4.1 が ReAct ループで使う。`SkillPatcher.diagnoseAndFixWithAgent` / `ImprovementApplier.applyWithAgent` でプログラムからも呼べる。
 - **夜間自己改善（課金抑止）:** `SELF_IMPROVE_NIGHTLY_ENABLED=true` で UTC 指定時刻に1日1回 `runNightlyMaintenance` → `saves/self_improve/morning_reports/` に Markdown/JSON。**既定は LLM なし**（レポートに「スキップ」が並ぶだけ）。課金ありにするには明示: `SELF_IMPROVE_NIGHTLY_RUN_REACTIVE=true`（失敗バッファ分析）, `SELF_IMPROVE_NIGHTLY_CODE_AGENT=true`（Anthropic）, `SELF_IMPROVE_NIGHTLY_MINECRAFT_SUITES=smoke-skills` 等。`SELF_IMPROVE_NIGHTLY_MINECRAFT_AUTOFIX=true` は SkillPatcher で追加 LLM。`SELF_IMPROVE_MORNING_WEBHOOK_URL` で Discord 等へ要約投稿可。
+
+### 本番 CD（Shannon-prod）
+
+- **意図:** 開発は `Shannon-dev` 相当のクローンで行い、GitHub `main` へ push（または PR マージ）したら、**本番 VM 上の別ディレクトリ `Shannon-prod`** で `git pull` し `./start.sh` で tmux 上のフロント／バックを再起動する。
+- **ワークフロー:** [`.github/workflows/deploy-shannon-prod.yml`](.github/workflows/deploy-shannon-prod.yml)（`push` to `main` と手動 `workflow_dispatch`）。
+- **GitHub リポジトリ（Shannon2）の Actions Secrets**
+
+| Secret | 内容 |
+|--------|------|
+| `SHANNON_PROD_SSH_HOST` | 本番 VM の IP または FQDN |
+| `SHANNON_PROD_SSH_USER` | 例: `azureuser` |
+| `SHANNON_PROD_SSH_PRIVATE_KEY` | VM ログイン用の秘密鍵（**BEGIN〜END 全文**。aiminelab.com CD と同一 VM なら同じ鍵を登録してよい） |
+| `SHANNON_PROD_REPO_PATH` | （任意）本番クローンの絶対パス。未設定時は `/home/azureuser/Shannon-prod` |
+
+- **本番側の前提:** そのディレクトリは `origin` が同じ `Shannon2` の `main` を追従していること。`git pull` は VM 上の **GitHub 用 SSH 鍵**（`git@github.com:...`）で行われるため、本番の `azureuser` がすでに `git fetch` できること。`tmux` が入っていること。
+- **`--ff-only`:** マージコミットを作らず fast-forward のみ。本番で `main` にローカルコミットや追い越しがあると失敗する（その場合は本番で整理してから再実行）。
+- **依存関係変更時:** ワークフローは `npm ci` を回さない（ネイティブモジュール都合）。`package-lock.json` を変えたら本番で一度 `npm install --ignore-scripts` / `patch-package` / 必要なネイティブビルドを手動で済ませてから次の CD に任せると安全。
+- **手動デプロイ:** Actions タブから「Deploy Shannon production」→ Run workflow。
