@@ -48,7 +48,7 @@ Shannon is an autonomous AI agent platform (Minecraft bot, Discord bot, Twitter 
 |--------|------|
 | `SHANNON_PROD_SSH_HOST` | 本番 VM の IP または FQDN |
 | `SHANNON_PROD_SSH_USER` | 例: `azureuser` |
-| `SHANNON_PROD_SSH_PRIVATE_KEY` | VM ログイン用の秘密鍵（**BEGIN〜END 全文**。aiminelab.com CD と同一 VM なら同じ鍵を登録してよい） |
+| `SHANNON_PROD_SSH_PRIVATE_KEY` | VM ログイン用の秘密鍵（**BEGIN〜END 全文**。**Shannon2 リポジトリ**の Secrets に登録すること。先頭に空行が付いても workflow 側で除去する） |
 | `SHANNON_PROD_REPO_PATH` | （任意）本番クローンの絶対パス。未設定時は `/home/azureuser/Shannon-prod` |
 
 - **本番側の前提:** そのディレクトリは `origin` が同じ `Shannon2` の `main` を追従していること。`git pull` は VM 上の **GitHub 用 SSH 鍵**（`git@github.com:...`）で行われるため、本番の `azureuser` がすでに `git fetch` できること。`tmux` が入っていること。

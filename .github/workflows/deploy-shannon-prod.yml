@@ -24,14 +24,18 @@ jobs:
           set -euo pipefail
           mkdir -p "$HOME/.ssh"
           chmod 700 "$HOME/.ssh"
-          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/shannon_prod_deploy"
-          chmod 600 "$HOME/.ssh/shannon_prod_deploy"
-          if ! test -s "$HOME/.ssh/shannon_prod_deploy"; then
-            echo "::error::SHANNON_PROD_SSH_PRIVATE_KEY が空です。"
+          KEYFILE="$HOME/.ssh/shannon_prod_deploy"
+          # 先頭の空行を捨てる（貼り付けで先頭改行が入ると head -1 検証が誤爆する）
+          printf '%s\n' "$SSH_PRIVATE_KEY" | sed '/[[:graph:]]/,$!d' > "$KEYFILE"
+          # UTF-8 BOM を除去
+          sed -i '1s/^\xEF\xBB\xBF//' "$KEYFILE"
+          chmod 600 "$KEYFILE"
+          if ! test -s "$KEYFILE"; then
+            echo "::error::SHANNON_PROD_SSH_PRIVATE_KEY が空です。Secret 名・環境（Shannon2 リポジトリ）を確認してください。"
             exit 1
           fi
-          if ! head -1 "$HOME/.ssh/shannon_prod_deploy" | grep -q "BEGIN"; then
-            echo "::error::秘密鍵の形式が不正です（BEGIN 行から END 行まで全文）。"
+          if ! grep -q 'BEGIN' "$KEYFILE" || ! grep -q 'PRIVATE KEY' "$KEYFILE" || ! grep -q 'END' "$KEYFILE"; then
+            echo "::error::秘密鍵に BEGIN / PRIVATE KEY / END が見つかりません。全文を再登録するか、先頭・末尾の余計な空行を削除してください。"
             exit 1
           fi
 
