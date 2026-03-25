@@ -1,0 +1,10 @@
+{
+  "accounts": [
+    {
+      "userName": "example_user",
+      "label": "表示用ラベル",
+      "category": "tech"
+    }
+  ],
+  "topicBias": ["AI", "ゲーム"]
+}

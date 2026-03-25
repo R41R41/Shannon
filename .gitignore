@@ -2,6 +2,7 @@
 /frontend/node_modules
 /backend/dist
 /frontend/dist
+/common/dist/
 /backend/package-lock.json
 /frontend/package-lock.json
 /backend/.env
@@ -34,5 +35,17 @@ node_modules
 # Sensitive / runtime
 /backend/saves/twitter_login_cookies.json
 /backend/saves/auto_post_daily_schedule.json
+
+# ローカル／本番で変わる状態（リポジトリに載せない）
+/backend/saves/recent_auto_posts.json
+/backend/saves/watchlist.json
+/backend/saves/voice_text_channels.json
+/backend/saves/test.json
+
+# Minebot ランタイムスナップショット・生成物
+/backend/saves/minecraft/*_data.json
+/backend/saves/minecraft/generated_skills_manifest.json
+/backend/saves/minecraft/self_improvement_history.json
+/backend/saves/minecraft/screenshots/
 
 /.next/
