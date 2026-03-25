@@ -1,5 +1,8 @@
 # Shannon v2 アーキテクチャ設計書
 
+> **現状の実装サマリ**（短く最新だけ知りたい場合）: [architecture-current.md](./architecture-current.md)  
+> 本書は v2 への再設計当時の**設計メモ・アーキテクチャ図**として参照用に残す。
+
 ## Context
 
 Shannon のコア実行エンジンを再設計する。現状の問題:

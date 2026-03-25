@@ -6,6 +6,8 @@
 
 Shannon is an autonomous AI agent platform (Minecraft bot, Discord bot, Twitter agent, YouTube integration, web dashboard). It is a monorepo with npm workspaces: `backend`, `frontend`, `common`.
 
+**設計ドキュメント索引**: [`docs/README.md`](docs/README.md)（現状サマリは [`docs/architecture-current.md`](docs/architecture-current.md)）。
+
 ### Key commands
 
 | Task | Command |

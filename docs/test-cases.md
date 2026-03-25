@@ -2,6 +2,15 @@
 
 Minecraft でのシャノンの動作を検証するための包括的なテストケース集です。
 
+## 自動テスト（JSON スイート）
+
+バックエンドの **SelfTestRunner** が `backend/saves/minecraft/self_test_cases/*.json` を実行します。
+
+- **default / chain / goal** モードの違い、夜間バッチとの関係 → [architecture-current.md §5–6](./architecture-current.md#5-json-自己テストselftestrunner)
+- マイクラ内チャットからの起動（`..test` 等）→ `selfTestIntent.ts`
+
+以下は **人手での確認観点**（チェックリスト）です。
+
 ---
 
 ## 🎯 テスト環境の準備

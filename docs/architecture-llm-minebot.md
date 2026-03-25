@@ -1,7 +1,8 @@
 # Shannon System Architecture — LLM & Minebot 設計書
 
-> 最終更新: 2026-03-16
-> 対象ブランチ: `claude/unified-shannon-graph-FC4pI`
+> 最終更新: 2026-03-25（§11 末尾に CodeAgent / 自己テスト JSON / 夜間バッチの追記）  
+> **短い現状サマリのみ必要な場合**: [architecture-current.md](architecture-current.md)  
+> 対象ブランチ（例）: `claude/unified-shannon-graph-FC4pI`  
 > v2 設計書: [architecture-shannon-v2.md](architecture-shannon-v2.md)
 
 ---
@@ -1261,6 +1262,16 @@ target='forward_model':
   → ForwardModel のルールベースチェックに追加
   → ツール呼び出しの予測ブロックに使用
 ```
+
+### CodeAgentLoop・JSON 自己テスト・夜間バッチ（2026-03 追記）
+
+**CodeAgentLoop**（`CodeAgentLoop.ts`）: Anthropic SDK 直接使用。ファイル読取・編集・semantic_search・web・shell・`run_tsc` 等をツールとしてループ。`ImprovementApplier.applyWithAgent`・`SkillPatcher.diagnoseAndFixWithAgent`・マイクラチャットの `..agent-fix` から起動。
+
+**SelfTestRunner**（`SelfTestRunner.ts`）: `saves/minecraft/self_test_cases/*.json`。`mode`: `default` | `chain` | `goal`。goal は **MinecraftGoalExecutor** が全 InstantSkill をツール化し自然言語ゴールを達成。**SkillPatcher**: チェーン失敗時に `chainContext` を渡し、原因がテスト側なら **`skipFix: true`** でコード変更を避ける。
+
+**夜間**: `NightlySelfImproveScheduler` + `SelfImprovementDaemon.runNightlyMaintenance` → `saves/self_improve/morning_reports/`。**既定は LLM なし**；`SELF_IMPROVE_NIGHTLY_RUN_REACTIVE` / `SELF_IMPROVE_NIGHTLY_CODE_AGENT` / `SELF_IMPROVE_NIGHTLY_MINECRAFT_*` で opt-in。環境変数一覧は [architecture-current.md §6](./architecture-current.md#6-夜間メンテナンス課金抑止設計) およびリポジトリ `AGENTS.md`。
+
+**Minebot 実装メモ**: `craft-one` は 3×3 必須時のみ作業台を探す。`place-block-at` は自身が設置マスにいるとき隣へ退避を試みる。
 
 ---
 

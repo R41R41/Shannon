@@ -1,7 +1,8 @@
 # Shannon 意識・自発性・自己改善 設計思索ノート
 
-> 作成日: 2026-03-16
-> ステータス: 思索段階 (未実装)
+> 作成日: 2026-03-16  
+> **ステータス**: 本文の「内なる声・Drive・感情持続」等は主に**思索・未実装案**。一方、**SelfImprovementDaemon / CodeAgentLoop / JSON 自己テスト / 夜間レポート**は実装済み（要約は [architecture-current.md](./architecture-current.md)）。  
+> ドキュメント索引: [docs/README.md](./README.md)
 
 ---
 
