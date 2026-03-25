@@ -8,15 +8,15 @@ Shannon is an autonomous AI agent platform (Minecraft bot, Discord bot, Twitter 
 
 ### Key commands
 
-| Task | Command |
-|---|---|
-| Install deps | `npm install --ignore-scripts && npx patch-package` (see native modules note below) |
-| Build common | `npm run build -w common` |
+| Task          | Command                                                                                    |
+| ------------- | ------------------------------------------------------------------------------------------ |
+| Install deps  | `npm install --ignore-scripts && npx patch-package` (see native modules note below)        |
+| Build common  | `npm run build -w common`                                                                  |
 | Build backend | `cd backend && NODE_OPTIONS="--max-old-space-size=12288" npx tsc --noCheck --skipLibCheck` |
-| Dev (both) | `npm run dev` (uses `concurrently`) |
-| Frontend dev | `npm run dev -w frontend` (Vite on port 3001) |
-| Frontend lint | `npm run lint -w frontend` |
-| Backend tests | `npx vitest run` (from `backend/`; requires `OPENAI_API_KEY` + `MONGODB_URI`) |
+| Dev (both)    | `npm run dev` (uses `concurrently`)                                                        |
+| Frontend dev  | `npm run dev -w frontend` (Vite on port 3001)                                              |
+| Frontend lint | `npm run lint -w frontend`                                                                 |
+| Backend tests | `npx vitest run` (from `backend/`; requires `OPENAI_API_KEY` + `MONGODB_URI`)              |
 
 ### Non-obvious caveats
 
@@ -31,3 +31,12 @@ Shannon is an autonomous AI agent platform (Minecraft bot, Discord bot, Twitter 
 - **All tests are integration tests** that require real API keys (OpenAI, Twitter, etc.). There are no pure unit tests.
 - **Frontend lint has 1 pre-existing error** (`unused variable` in `src/services/config/ports.ts`).
 - **API test endpoint:** `POST /api/test/scheduled-post?dry_run=true` with `x-api-key` header (matches `TWITTERAPI_IO_API_KEY` env var) and body `{"command":"fortune"}` generates a fortune post via OpenAI without posting to Twitter.
+
+### CD（GitHub Actions → 本番 VM）
+
+- **トリガー:** このリポジトリ（**Shannon-prod**）の **`main` への push / マージ**（[`.github/workflows/deploy-production.yml`](.github/workflows/deploy-production.yml)）。
+- **動作:** SSH で本番 VM に入り、`/home/azureuser/Shannon-prod` で `git fetch` → `reset --hard origin/main` → `npm ci --ignore-scripts` → `npx patch-package` → **`./start.sh`**（tmux で backend / frontend を再起動）。
+- **Secrets（Repository secrets）:** `SHANNON_SSH_HOST`, `SHANNON_SSH_USER`, `SHANNON_SSH_PRIVATE_KEY`（**秘密鍵は `-----BEGIN`〜`-----END` 全文**。aiminelab 用の鍵と共用可。ホストが同じなら `AIMINELAB_SSH_*` と同値でもよいが、名前はワークフローが `SHANNON_*` を参照する）。
+- **クローン先が違うとき:** workflow 内の `SHANNON_PROD_DIR` を実パスに変更する。
+- **開発リポジトリ（Shannon-dev）との関係:** 本番が pull するのは **Shannon-prod の main** だけ。開発は Shannon-dev で行い、本番に載せる変更は **Shannon-prod にマージ・push** してから CD が走る形を想定。Shannon-dev の push だけで本番を更新したい場合は、Shannon-dev 側に別 workflow を置き、同じ SSH 手順で `Shannon-prod` のディレクトリだけ pull するか、`repository_dispatch` 等で連携する必要がある。
+- **NSG / SSH:** GitHub ホステッドランナーから VM の 22 番へ届く必要あり（aiminelab CD と同様）。届かない場合はセルフホステッドランナー検討。
