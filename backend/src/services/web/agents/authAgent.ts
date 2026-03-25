@@ -21,7 +21,7 @@ export class AuthAgent extends WebSocketServiceBase {
 
   protected override initialize() {
     this.wss.on('connection', async (ws) => {
-      logger.info('Auth client connected', 'blue');
+      logger.debug('Auth client connected');
 
       this.handleNewConnection(ws);
 

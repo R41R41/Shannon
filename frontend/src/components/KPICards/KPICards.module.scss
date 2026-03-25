@@ -61,3 +61,20 @@
 .success .value { color: color(success); }
 .warning .value { color: color(warning); }
 .primary .value { color: color(primary); }
+
+@keyframes shimmer {
+  0% { background-position: -200px 0; }
+  100% { background-position: calc(200px + 100%) 0; }
+}
+
+.skeleton {
+  border-radius: radius(xs);
+  background: linear-gradient(
+    90deg,
+    color(surface, secondary) 25%,
+    color(surface, hover) 50%,
+    color(surface, secondary) 75%
+  );
+  background-size: 200px 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+}

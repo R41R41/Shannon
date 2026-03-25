@@ -4,6 +4,19 @@ import pathfinder from 'mineflayer-pathfinder';
 import { CustomBot } from '../types.js';
 const { Movements } = pathfinder;
 
+const HARD_BLOCKS_NEED_PICKAXE = [
+  'stone', 'cobblestone', 'deepslate', 'cobbled_deepslate',
+  'andesite', 'granite', 'diorite', 'tuff', 'calcite', 'dripstone_block',
+  'coal_ore', 'iron_ore', 'gold_ore', 'diamond_ore', 'emerald_ore',
+  'lapis_ore', 'redstone_ore', 'copper_ore',
+  'deepslate_coal_ore', 'deepslate_iron_ore', 'deepslate_gold_ore',
+  'deepslate_diamond_ore', 'deepslate_emerald_ore', 'deepslate_lapis_ore',
+  'deepslate_redstone_ore', 'deepslate_copper_ore',
+  'smooth_stone', 'stone_bricks', 'mossy_stone_bricks', 'cracked_stone_bricks',
+  'bricks', 'netherrack', 'basalt', 'blackstone', 'end_stone',
+  'obsidian', 'crying_obsidian',
+];
+
 export function setMovements(
   bot: CustomBot,
   allow1by1towers = false,
@@ -16,6 +29,7 @@ export function setMovements(
   allowFreeMotion = false,
   canSwim = true
 ) {
+  const mcData = minecraftData(bot.version);
   const defaultMove = new Movements(bot as Bot);
   defaultMove.allow1by1towers = allow1by1towers;
   defaultMove.allowSprinting = allowSprinting;
@@ -25,7 +39,26 @@ export function setMovements(
   defaultMove.dontMineUnderFallingBlock = dontMineUnderFallingBlock;
   defaultMove.digCost = digCost;
   defaultMove.allowFreeMotion = allowFreeMotion;
-  defaultMove.blocksCantBreak = new Set([minecraftData(bot.version).blocksByName['oak_door'].id, minecraftData(bot.version).blocksByName['birch_door'].id, minecraftData(bot.version).blocksByName['spruce_door'].id, minecraftData(bot.version).blocksByName['jungle_door'].id, minecraftData(bot.version).blocksByName['acacia_door'].id, minecraftData(bot.version).blocksByName['dark_oak_door'].id]);
+
+  const cantBreak = new Set<number>();
+  // ドアを壊さない
+  for (const doorName of ['oak_door', 'birch_door', 'spruce_door', 'jungle_door', 'acacia_door', 'dark_oak_door']) {
+    const block = mcData.blocksByName[doorName];
+    if (block) cantBreak.add(block.id);
+  }
+
+  // ピッカクスなしの場合、硬いブロックを掘らせない
+  if (canDig) {
+    const hasPickaxe = bot.inventory.items().some((item) => item.name.includes('pickaxe'));
+    if (!hasPickaxe) {
+      for (const name of HARD_BLOCKS_NEED_PICKAXE) {
+        const block = mcData.blocksByName[name];
+        if (block) cantBreak.add(block.id);
+      }
+    }
+  }
+
+  defaultMove.blocksCantBreak = cantBreak;
   (defaultMove as any).canSwim = canSwim;
 
   // ドアを openable に追加（pathfinderデフォルトではgateのみ）

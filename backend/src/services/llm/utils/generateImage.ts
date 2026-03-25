@@ -28,7 +28,7 @@ export async function generateImage(
       size,
       quality,
       output_format: 'jpeg',
-    } as any);
+    } as Parameters<typeof openai.images.generate>[0]);
 
     const b64 = response.data?.[0]?.b64_json;
     if (b64) {
@@ -55,8 +55,8 @@ export async function generateImage(
 
     logger.warn('[generateImage] レスポンスに画像データなし');
     return null;
-  } catch (error: any) {
-    logger.error(`[generateImage] エラー: ${error?.message || error}`);
+  } catch (error: unknown) {
+    logger.error(`[generateImage] エラー: ${error instanceof Error ? error.message : String(error)}`);
     return null;
   }
 }

@@ -14,8 +14,9 @@ import { logger } from '../../../utils/logger.js';
 
 type ChatOpenAIConstructorArgs = ConstructorParameters<typeof ChatOpenAI>[0];
 
-let _langfuse: any = null;
-let _callbackHandler: any = null;
+// Langfuse types are loaded dynamically; keep narrow interface for the methods we call
+let _langfuse: { observeOpenAI?(client: OpenAI): OpenAI; shutdownAsync(): Promise<void> } | null = null;
+let _callbackHandler: { flushAsync(): Promise<void> } | null = null;
 let _initAttempted = false;
 
 export const langfuseEnabled =
@@ -62,20 +63,45 @@ export function createTracedModel(
   if (!_callbackHandler) {
     return new ChatOpenAI(opts);
   }
-  const existing = (opts as any)?.callbacks ?? [];
+  const existing = (opts as ChatOpenAIConstructorArgs & { callbacks?: unknown[] })?.callbacks ?? [];
   return new ChatOpenAI({
     ...opts,
     callbacks: [...existing, _callbackHandler],
-  } as any);
+  } as ChatOpenAIConstructorArgs);
+}
+
+/**
+ * Drop-in replacement for `new ChatAnthropic(...)`.
+ * Automatically attaches the Langfuse callback handler when credentials are set.
+ */
+export async function createTracedAnthropicModel(
+  opts?: Record<string, unknown>,
+) {
+  const { ChatAnthropic } = await import('@langchain/anthropic');
+  const { config: appConfig } = await import('../../../config/env.js');
+
+  const merged = {
+    anthropicApiKey: appConfig.anthropic.apiKey || undefined,
+    ...opts,
+  };
+
+  if (!_callbackHandler) {
+    return new ChatAnthropic(merged);
+  }
+  const existing = (merged as any).callbacks ?? [];
+  return new ChatAnthropic({
+    ...merged,
+    callbacks: [...existing, _callbackHandler],
+  });
 }
 
 /**
  * Wraps an OpenAI client instance with Langfuse observation (for direct API calls).
  */
 export function getTracedOpenAI(client: OpenAI): OpenAI {
-  if (!_langfuse) return client;
+  if (!_langfuse?.observeOpenAI) return client;
   try {
-    return _langfuse.observeOpenAI(client) as OpenAI;
+    return _langfuse.observeOpenAI(client);
   } catch {
     return client;
   }

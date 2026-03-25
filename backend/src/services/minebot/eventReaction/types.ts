@@ -22,8 +22,8 @@ export type EventType =
  */
 export type ReactionType =
     | 'immediate'   // 即時実行（常時スキルで対応）
-    | 'task'        // TaskGraphに渡す
-    | 'emergency'   // 緊急対応（EmergencyResponder）
+    | 'task'        // MinebotTaskRuntime に渡す
+    | 'emergency'   // 緊急対応（MinebotTaskRuntime）
     | 'info';       // 情報更新のみ
 
 /**
@@ -43,7 +43,7 @@ export interface EventReactionConfig {
 export const DEFAULT_REACTION_CONFIGS: EventReactionConfig[] = [
     { eventType: 'player_facing', enabled: true, probability: 30, idleOnly: true, reactionType: 'task' },
     { eventType: 'player_speak', enabled: true, probability: 100, idleOnly: false, reactionType: 'task' },
-    { eventType: 'hostile_approach', enabled: true, probability: 100, idleOnly: true, reactionType: 'task' }, // 戦闘中は割り込まない
+    { eventType: 'hostile_approach', enabled: true, probability: 100, idleOnly: false, reactionType: 'emergency' }, // タスク中でも敵接近時は緊急対応
     { eventType: 'item_obtained', enabled: true, probability: 30, idleOnly: true, reactionType: 'info' }, // タスク生成しない（ログのみ）
     { eventType: 'time_change', enabled: true, probability: 30, idleOnly: true, reactionType: 'task' }, // idle時のみ
     { eventType: 'weather_change', enabled: true, probability: 30, idleOnly: true, reactionType: 'task' }, // idle時のみ
@@ -74,14 +74,32 @@ export interface PlayerEventData extends BaseEventData {
 }
 
 /**
+ * 脅威レベル — 距離×数で段階的に判定。
+ *   critical : 8ブロック以内 or 複数体が接近中 → emergency（タスク中断）
+ *   warning  : 8-16ブロックに単体 → task（タスクキュー）
+ *   notice   : 16ブロック圏に存在するが脅威低 → info（ログのみ）
+ */
+export type ThreatLevel = 'critical' | 'warning' | 'notice';
+
+export interface HostileEntry {
+    mobType: string;
+    position: { x: number; y: number; z: number };
+    distance: number;
+}
+
+/**
  * 敵対Mob接近イベントデータ
  */
 export interface HostileEventData extends BaseEventData {
     eventType: 'hostile_approach';
+    threatLevel: ThreatLevel;
+    /** 最も近い敵 */
     mobType: string;
     mobPosition: { x: number; y: number; z: number };
     distance: number;
     mobCount: number;
+    /** 16ブロック以内の全敵リスト（距離昇順） */
+    allHostiles: HostileEntry[];
 }
 
 /**

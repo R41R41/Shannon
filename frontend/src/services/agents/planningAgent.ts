@@ -15,26 +15,19 @@ export class PlanningAgent extends WebSocketClientBase {
     return PlanningAgent.instance;
   }
 
-  public updatePlanningCallback: UpdatePlanningCallback;
-
   private constructor(url: string) {
     super(url);
-    this.updatePlanningCallback = () => {};
   }
 
   protected handleMessage(message: string) {
     const data = parseMessage(message);
     if (!data || data.type === "pong") return;
     if (data.type === "web:planning") {
-      this.updatePlanningCallback(data.data as TaskTreeState);
+      this.emit("planning", data.data as TaskTreeState);
     }
   }
 
-  public setUpdatePlanningCallback(callback: UpdatePlanningCallback) {
-    this.updatePlanningCallback = callback;
-  }
-
-  public onUpdatePlanning(callback: UpdatePlanningCallback) {
-    this.updatePlanningCallback = callback;
+  public onUpdatePlanning(callback: UpdatePlanningCallback): () => void {
+    return this.on("planning", callback);
   }
 }

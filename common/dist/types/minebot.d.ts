@@ -1,6 +1,8 @@
 export interface MinebotOutput {
     success?: boolean | null;
     result?: string | null;
+    failureType?: string | null;
+    recoverable?: boolean | null;
     skillName?: string | null;
     senderName?: string | null;
     message?: string | null;
@@ -17,13 +19,20 @@ export type MinebotSkillInput = {
     text?: string | null;
 };
 export type MinebotInput = MinebotStartOrStopInput | MinebotSkillInput;
-export type MinebotEventType = `minebot:${string}`;
+/**
+ * Known static minebot event types.
+ * Dynamic skill events (e.g. 'minebot:move-to') still use the template literal fallback.
+ */
+export type MinebotStaticEventType = 'minebot:status' | 'minebot:bot:status' | 'minebot:spawned' | 'minebot:error' | 'minebot:stopped' | 'minebot:chat' | 'minebot:voice_chat' | 'minebot:voice_response' | 'minebot:loadSkills' | 'minebot:stopInstantSkill' | 'minebot:getInstantSkills';
+export type MinebotEventType = MinebotStaticEventType | `minebot:${string}`;
 export type SkillParameters = {
-    skillParameters: any;
+    skillParameters: unknown;
 };
 export type SkillResult = {
     success: boolean;
     result: string;
+    failureType?: string;
+    recoverable?: boolean;
 };
 export interface MinebotVoiceChatInput {
     userName: string;

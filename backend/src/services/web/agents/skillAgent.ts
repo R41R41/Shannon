@@ -40,7 +40,7 @@ export class SkillAgent extends WebSocketServiceBase {
   }
   protected override initialize() {
     this.wss.on('connection', async (ws) => {
-      logger.info('Skill client connected', 'blue');
+      logger.debug('Skill client connected');
 
       this.handleNewConnection(ws);
 

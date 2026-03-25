@@ -1,0 +1,86 @@
+{
+  "testSuite": "block-skills",
+  "description": "ブロック操作スキル（設置・掘削・検索）",
+  "cases": [
+    {
+      "skillName": "place-block-at",
+      "args": ["cobblestone", 5, 64, 5],
+      "description": "丸石を設置",
+      "setup": [
+        "/tp @s 0 64 0",
+        "/clear @s",
+        "/give @s cobblestone 16",
+        "/fill 4 64 4 6 65 6 air"
+      ],
+      "prechecks": [
+        { "type": "inventory_has", "item": "cobblestone", "minCount": 1 }
+      ],
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "dig-block-at",
+      "args": [5, 64, 5, true],
+      "description": "設置した丸石を掘削（前テストで設置済み）",
+      "setup": [
+        "/give @s iron_pickaxe 1"
+      ],
+      "expectedOutcome": "either"
+    },
+    {
+      "skillName": "place-block-at",
+      "args": ["oak_planks", 6, 64, 6],
+      "description": "木材を設置",
+      "setup": [
+        "/give @s oak_planks 4",
+        "/fill 5 64 5 7 65 7 air"
+      ],
+      "prechecks": [
+        { "type": "inventory_has", "item": "oak_planks", "minCount": 1 }
+      ],
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "dig-block-at",
+      "args": [6, 64, 6, true],
+      "description": "設置した木材を掘削",
+      "expectedOutcome": "either"
+    },
+    {
+      "skillName": "mine-block",
+      "args": ["dirt", 1, 16],
+      "description": "土ブロックを1個採掘",
+      "setup": [
+        "/tp @s 0 64 0",
+        "/setblock 3 63 0 dirt"
+      ],
+      "expectedOutcome": "either"
+    },
+    {
+      "skillName": "activate-block",
+      "args": ["crafting_table", 3, 64, 0],
+      "description": "作業台をアクティベート",
+      "setup": [
+        "/tp @s 0 64 0",
+        "/setblock 3 64 0 crafting_table"
+      ],
+      "prechecks": [
+        { "type": "nearby_block", "block": "crafting_table", "maxDistance": 8 }
+      ],
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "get-blocks-in-area",
+      "args": [-2, 62, -2, 2, 66, 2, "summary", false],
+      "description": "5x5x5 範囲のブロック情報を取得",
+      "setup": ["/tp @s 0 64 0"],
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "place-block-at",
+      "args": ["stone", 0, 64, 0],
+      "description": "自分がいる場所にブロック設置 → 失敗期待",
+      "setup": ["/tp @s 0 64 0"],
+      "expectedOutcome": "failure"
+    }
+  ]
+}

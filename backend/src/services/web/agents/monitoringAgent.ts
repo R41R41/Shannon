@@ -41,7 +41,7 @@ export class MonitoringAgent extends WebSocketServiceBase {
 
   protected override initialize() {
     this.wss.on('connection', async (ws) => {
-      logger.info('Monitoring client connected', 'blue');
+      logger.debug('Monitoring client connected');
 
       this.handleNewConnection(ws);
 

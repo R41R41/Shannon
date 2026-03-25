@@ -83,17 +83,19 @@ function getHeaders(): Record<string, string> {
   return { 'x-api-key': config.twitter.twitterApiIoKey };
 }
 
-function extractMediaUrls(t: any): string[] {
+function extractMediaUrls(t: Record<string, unknown>): string[] {
   const media: string[] = [];
+  const entities = t.entities as Record<string, unknown> | undefined;
+  const extEntities = t.extended_entities as Record<string, unknown> | undefined;
   const sources = [
-    t.entities?.media,
-    t.extended_entities?.media,
+    entities?.media,
+    extEntities?.media,
     t.media,
     t.photos,
   ];
   for (const src of sources) {
     if (Array.isArray(src)) {
-      for (const m of src) {
+      for (const m of src as Record<string, unknown>[]) {
         const url = m.media_url_https || m.url || m.media_url || m.fullUrl;
         if (url && typeof url === 'string') media.push(url);
       }
@@ -102,16 +104,17 @@ function extractMediaUrls(t: any): string[] {
   return [...new Set(media)];
 }
 
-function isQuoteRTWorthy(t: any): boolean {
-  const likes = t.likeCount ?? 0;
-  const rts = t.retweetCount ?? 0;
-  const views = t.viewCount ?? 0;
-  const verified = t.author?.isBlueVerified || t.author?.isVerified;
+function isQuoteRTWorthy(t: Record<string, unknown>): boolean {
+  const likes = (t.likeCount as number) ?? 0;
+  const rts = (t.retweetCount as number) ?? 0;
+  const views = (t.viewCount as number) ?? 0;
+  const author = t.author as Record<string, unknown> | undefined;
+  const verified = !!(author?.isBlueVerified || author?.isVerified);
   return verified || likes >= 20 || rts >= 5 || views >= 2000;
 }
 
-function formatTweet(t: any): string {
-  const a = t.author || {};
+function formatTweet(t: Record<string, unknown>): string {
+  const a = (t.author as Record<string, unknown>) || {};
   const mediaUrls = extractMediaUrls(t);
   const mediaInfo = mediaUrls.length > 0
     ? `  Images(${mediaUrls.length}): ${mediaUrls.join(', ')}`
@@ -119,9 +122,9 @@ function formatTweet(t: any): string {
   const engagementLabel = isQuoteRTWorthy(t) ? '' : '  [⚠️低エンゲージメント: 引用RT不可]';
   return [
     `@${a.userName || '?'} (${a.name || '?'})`,
-    `  "${t.text?.slice(0, 200) || ''}"`,
+    `  "${(t.text as string)?.slice(0, 200) || ''}"`,
     `  URL: ${t.url || ''}`,
-    `  Likes: ${t.likeCount ?? 0} | RT: ${t.retweetCount ?? 0} | Replies: ${t.replyCount ?? 0} | Views: ${t.viewCount ?? 0}`,
+    `  Likes: ${(t.likeCount as number) ?? 0} | RT: ${(t.retweetCount as number) ?? 0} | Replies: ${(t.replyCount as number) ?? 0} | Views: ${(t.viewCount as number) ?? 0}`,
     `  Date: ${t.createdAt || ''}`,
     engagementLabel,
     mediaInfo,
@@ -156,8 +159,8 @@ class SearchTweetsTool extends StructuredTool {
       const tweets = base.slice(0, data.count || 10);
       if (tweets.length === 0) return '検索結果なし';
       return tweets.map(formatTweet).join('\n---\n');
-    } catch (e: any) {
-      return `検索エラー: ${e.message}`;
+    } catch (e: unknown) {
+      return `検索エラー: ${e instanceof Error ? e.message : String(e)}`;
     }
   }
 }
@@ -178,8 +181,8 @@ class GetTweetRepliesTool extends StructuredTool {
       const replies = (res.data?.replies || res.data?.data?.replies || []).slice(0, data.count || 10);
       if (replies.length === 0) return '返信なし';
       return replies.map(formatTweet).join('\n---\n');
-    } catch (e: any) {
-      return `返信取得エラー: ${e.message}`;
+    } catch (e: unknown) {
+      return `返信取得エラー: ${e instanceof Error ? e.message : String(e)}`;
     }
   }
 }
@@ -197,8 +200,8 @@ class GetTweetDetailsTool extends StructuredTool {
       const tweets = res.data?.tweets || res.data?.data?.tweets || [];
       if (tweets.length === 0) return 'ツイートが見つかりません';
       return formatTweet(tweets[0]);
-    } catch (e: any) {
-      return `詳細取得エラー: ${e.message}`;
+    } catch (e: unknown) {
+      return `詳細取得エラー: ${e instanceof Error ? e.message : String(e)}`;
     }
   }
 }
@@ -219,8 +222,8 @@ class GetUserTweetsTool extends StructuredTool {
       const tweets = (res.data?.data?.tweets || res.data?.tweets || []).slice(0, data.count || 5);
       if (tweets.length === 0) return `@${data.userName} のツイートが見つかりません`;
       return tweets.map(formatTweet).join('\n---\n');
-    } catch (e: any) {
-      return `ユーザーツイート取得エラー: ${e.message}`;
+    } catch (e: unknown) {
+      return `ユーザーツイート取得エラー: ${e instanceof Error ? e.message : String(e)}`;
     }
   }
 }
@@ -249,8 +252,8 @@ class GetUserProfileTool extends StructuredTool {
         for (const t of recentTweets) { lines.push(formatTweet(t), '---'); }
       }
       return lines.join('\n');
-    } catch (e: any) {
-      return `プロフィール取得エラー: ${e.message}`;
+    } catch (e: unknown) {
+      return `プロフィール取得エラー: ${e instanceof Error ? e.message : String(e)}`;
     }
   }
 }
@@ -270,13 +273,13 @@ class GoogleSearchTool extends StructuredTool {
       const res = await axios.get('https://www.googleapis.com/customsearch/v1', {
         params: { key: apiKey, cx, q: data.query, num: Math.min(data.count || 5, 10) },
       });
-      const items: any[] = res.data?.items || [];
+      const items: Array<{ title?: string; link?: string; snippet?: string }> = res.data?.items || [];
       if (items.length === 0) return '検索結果なし';
       return items.map((item) =>
         [`タイトル: ${item.title}`, `URL: ${item.link}`, `概要: ${item.snippet}`].join('\n'),
       ).join('\n---\n');
-    } catch (e: any) {
-      return `Google検索エラー: ${e.message}`;
+    } catch (e: unknown) {
+      return `Google検索エラー: ${e instanceof Error ? e.message : String(e)}`;
     }
   }
 }
@@ -304,8 +307,8 @@ class ExploreTrendTweetsTool extends StructuredTool {
         : '';
       return `"${data.keyword}" の最新ツイート ${tweets.length}件${filteredNote}:\n` +
         tweets.map(formatTweet).join('\n---\n');
-    } catch (e: any) {
-      return `トレンド探索エラー: ${e.message}`;
+    } catch (e: unknown) {
+      return `トレンド探索エラー: ${e instanceof Error ? e.message : String(e)}`;
     }
   }
 }
@@ -334,8 +337,8 @@ class AnalyzeTweetImageTool extends StructuredTool {
         }),
       ]);
       return `画像解析結果 (${imageUrls.length}枚):\n${result.content}`;
-    } catch (e: any) {
-      return `画像解析エラー: ${e.message}`;
+    } catch (e: unknown) {
+      return `画像解析エラー: ${e instanceof Error ? e.message : String(e)}`;
     }
   }
 }
@@ -521,8 +524,8 @@ export class AutoTweetAgent {
       let response: AIMessage;
       try {
         response = (await modelWithTools.invoke(messages)) as AIMessage;
-      } catch (e: any) {
-        logger.error(`[AutoTweet] 探索LLMエラー: ${e.message}`);
+      } catch (e: unknown) {
+        logger.error(`[AutoTweet] 探索LLMエラー: ${e instanceof Error ? e.message : String(e)}`);
         return null;
       }
       messages.push(response);
@@ -567,9 +570,9 @@ export class AutoTweetAgent {
             tool_call_id: tc.id || `call_${Date.now()}`,
           }));
           toolCallCount++;
-        } catch (e: any) {
+        } catch (e: unknown) {
           messages.push(new ToolMessage({
-            content: `ツール実行エラー: ${e.message}`,
+            content: `ツール実行エラー: ${e instanceof Error ? e.message : String(e)}`,
             tool_call_id: tc.id || `call_${Date.now()}`,
           }));
         }
@@ -787,8 +790,8 @@ export class AutoTweetAgent {
         text,
         quoteUrl: exploration.quoteUrl,
       };
-    } catch (e: any) {
-      logger.error(`[AutoTweet] Gemini生成エラー: ${e.message}`);
+    } catch (e: unknown) {
+      logger.error(`[AutoTweet] Gemini生成エラー: ${e instanceof Error ? e.message : String(e)}`);
       return null;
     }
   }
@@ -829,8 +832,8 @@ export class AutoTweetAgent {
         viewer_perception: parsed.viewer_perception ?? '',
         suggestion: parsed.suggestion ?? '',
       };
-    } catch (e: any) {
-      logger.error(`[AutoTweet] レビューエラー: ${e.message}`);
+    } catch (e: unknown) {
+      logger.error(`[AutoTweet] レビューエラー: ${e instanceof Error ? e.message : String(e)}`);
       return { approved: true, issues: [], viewer_perception: '', suggestion: '' };
     }
   }

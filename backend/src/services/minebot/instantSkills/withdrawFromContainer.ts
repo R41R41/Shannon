@@ -73,6 +73,16 @@ class WithdrawFromContainer extends InstantSkill {
         };
       }
 
+      // かまど系ブロックの場合は専用ツールへ誘導
+      if (block.name.includes('furnace') || block.name === 'smoker' || block.name === 'blast_furnace') {
+        return {
+          success: false,
+          result: `${block.name}はコンテナではなくかまどです。withdraw-from-furnace ツールを使用してください（座標: x=${x}, y=${y}, z=${z}）`,
+          failureType: 'wrong_tool',
+          recoverable: true,
+        };
+      }
+
       // 距離チェック
       const distance = this.bot.entity.position.distanceTo(pos);
       if (distance > 4.5) {

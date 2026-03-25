@@ -1,0 +1,128 @@
+{
+  "testSuite": "craft-skills",
+  "description": "クラフト系スキル（材料を /give で付与）",
+  "cases": [
+    {
+      "skillName": "craft-one",
+      "args": ["stick", 1],
+      "description": "棒をクラフト（2x2レシピ）",
+      "setup": [
+        "/clear @s",
+        "/give @s oak_planks 4"
+      ],
+      "prechecks": [
+        { "type": "inventory_has", "item": "oak_planks", "minCount": 2 }
+      ],
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "craft-one",
+      "args": ["crafting_table", 1],
+      "description": "作業台をクラフト（2x2レシピ）",
+      "setup": [
+        "/clear @s",
+        "/give @s oak_planks 4"
+      ],
+      "prechecks": [
+        { "type": "inventory_has", "item": "oak_planks", "minCount": 4 }
+      ],
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "craft-one",
+      "args": ["oak_planks", 4],
+      "description": "木材をクラフト（2x2レシピ・4個生成）",
+      "setup": [
+        "/clear @s",
+        "/give @s oak_log 1"
+      ],
+      "prechecks": [
+        { "type": "inventory_has", "item": "oak_log", "minCount": 1 }
+      ],
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "craft-one",
+      "args": ["wooden_pickaxe", 1],
+      "description": "木のツルハシをクラフト（3x3レシピ→作業台必要）",
+      "setup": [
+        "/clear @s",
+        "/give @s oak_planks 8",
+        "/give @s stick 4",
+        "/setblock 3 64 0 crafting_table"
+      ],
+      "prechecks": [
+        { "type": "inventory_has", "item": "oak_planks", "minCount": 3 },
+        { "type": "inventory_has", "item": "stick", "minCount": 2 }
+      ],
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "craft-one",
+      "args": ["stone_pickaxe", 1],
+      "description": "石のツルハシをクラフト（3x3レシピ）",
+      "setup": [
+        "/clear @s",
+        "/give @s cobblestone 8",
+        "/give @s stick 4",
+        "/setblock 3 64 0 crafting_table"
+      ],
+      "prechecks": [
+        { "type": "inventory_has", "item": "cobblestone", "minCount": 3 },
+        { "type": "inventory_has", "item": "stick", "minCount": 2 }
+      ],
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "craft-one",
+      "args": ["furnace", 1],
+      "description": "かまどをクラフト",
+      "setup": [
+        "/clear @s",
+        "/give @s cobblestone 16",
+        "/setblock 3 64 0 crafting_table"
+      ],
+      "prechecks": [
+        { "type": "inventory_has", "item": "cobblestone", "minCount": 8 }
+      ],
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "craft-one",
+      "args": ["chest", 1],
+      "description": "チェストをクラフト",
+      "setup": [
+        "/clear @s",
+        "/give @s oak_planks 16",
+        "/setblock 3 64 0 crafting_table"
+      ],
+      "prechecks": [
+        { "type": "inventory_has", "item": "oak_planks", "minCount": 8 }
+      ],
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "craft-one",
+      "args": ["iron_pickaxe", 1],
+      "description": "鉄のツルハシ（材料あり）",
+      "setup": [
+        "/clear @s",
+        "/give @s iron_ingot 8",
+        "/give @s stick 4",
+        "/setblock 3 64 0 crafting_table"
+      ],
+      "prechecks": [
+        { "type": "inventory_has", "item": "iron_ingot", "minCount": 3 },
+        { "type": "inventory_has", "item": "stick", "minCount": 2 }
+      ],
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "craft-one",
+      "args": ["diamond_sword", 1],
+      "description": "材料なしでクラフト → 失敗期待",
+      "setup": ["/clear @s"],
+      "expectedOutcome": "failure"
+    }
+  ]
+}

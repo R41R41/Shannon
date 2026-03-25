@@ -1,4 +1,5 @@
 import minecraftData from 'minecraft-data';
+import { Vec3 } from 'vec3';
 import { CustomBot, InstantSkill } from '../types.js';
 import { createLogger } from '../../../utils/logger.js';
 const log = createLogger('Minebot:Skill:craftOne');
@@ -12,7 +13,7 @@ class CraftOne extends InstantSkill {
   constructor(bot: CustomBot) {
     super(bot);
     this.skillName = 'craft-one';
-    this.description = '指定アイテムを1個クラフトします。';
+    this.description = '指定アイテムをクラフトします。countで一度に複数個クラフトできます。';
     this.mcData = minecraftData(this.bot.version);
     this.params = [
       {
@@ -20,6 +21,12 @@ class CraftOne extends InstantSkill {
         type: 'string',
         description: 'クラフトするアイテム名',
         required: true,
+      },
+      {
+        name: 'count',
+        type: 'number',
+        description: 'クラフトする個数（デフォルト: 1）',
+        default: 1,
       },
     ];
   }
@@ -56,6 +63,94 @@ class CraftOne extends InstantSkill {
   /**
    * 木材系アイテムに注釈を追加
    */
+  /**
+   * 材料不足時に「製錬が必要」ヒントを生成する。
+   * 例: iron_ingot が必要だが raw_iron を持っている → 「炉で製錬してください」
+   */
+  private suggestSmeltingHint(requiredMaterials: string, inventoryItems: any[]): string | null {
+    const smeltMap: Record<string, string> = {
+      iron_ingot: 'raw_iron',
+      gold_ingot: 'raw_gold',
+      copper_ingot: 'raw_copper',
+    };
+    const hints: string[] = [];
+    for (const [ingot, raw] of Object.entries(smeltMap)) {
+      if (requiredMaterials.includes(ingot)) {
+        const rawItem = inventoryItems.find((i: any) => i.name === raw);
+        if (rawItem) {
+          hints.push(`${ingot}が必要ですが${raw}(x${rawItem.count})があります。start-smeltingで炉に入れてから製錬してください`);
+        }
+      }
+    }
+    return hints.length > 0 ? hints.join('; ') : null;
+  }
+
+  /**
+   * planks が必要だがログを持っている場合のヒント生成
+   */
+  private suggestPlanksHint(requiredMaterials: string, inventoryItems: any[]): string | null {
+    if (!requiredMaterials.includes('planks')) return null;
+
+    const logs = inventoryItems.filter((i: any) =>
+      i.name.endsWith('_log') || i.name.endsWith('_wood') || i.name.endsWith('_stem'),
+    );
+    if (logs.length === 0) return null;
+
+    const hints: string[] = [];
+    for (const log of logs) {
+      const woodType = log.name.replace(/_log$|_wood$|_stem$/, '');
+      const planksName = `${woodType}_planks`;
+      if (this.mcData.itemsByName[planksName]) {
+        hints.push(`${log.name}(x${log.count})からcraft-one(${planksName})で木材を作れる`);
+      }
+    }
+    return hints.length > 0 ? hints.slice(0, 2).join('; ') : null;
+  }
+
+  /**
+   * 材料不足時に、インベントリの素材で作れる代替アイテムを提案する
+   */
+  private suggestAlternatives(itemName: string, inventoryItems: any[]): string | null {
+    const woodTypes = ['oak', 'spruce', 'birch', 'jungle', 'acacia', 'dark_oak', 'mangrove', 'cherry', 'bamboo', 'crimson', 'warped', 'pale_oak'];
+    const woodSuffixes = ['_planks', '_slab', '_stairs', '_fence', '_door', '_button', '_pressure_plate', '_sign', '_boat'];
+
+    for (const suffix of woodSuffixes) {
+      if (!itemName.endsWith(suffix)) continue;
+
+      const availableLogs = inventoryItems
+        .filter((i: any) => i.name.endsWith('_log') || i.name.endsWith('_wood') || i.name.endsWith('_stem'))
+        .map((i: any) => {
+          const woodType = woodTypes.find(wt => i.name.startsWith(wt)) || i.name.replace(/_log$|_wood$|_stem$/, '');
+          return { logName: i.name, count: i.count, woodType };
+        });
+
+      const availablePlanks = inventoryItems
+        .filter((i: any) => i.name.endsWith('_planks'))
+        .map((i: any) => ({ name: i.name, count: i.count }));
+
+      const suggestions: string[] = [];
+
+      for (const plank of availablePlanks) {
+        const altName = plank.name.replace('_planks', '') + suffix;
+        if (this.mcData.itemsByName[altName] && altName !== itemName) {
+          suggestions.push(`${altName}（${plank.name} x${plank.count} あり）`);
+        }
+      }
+
+      for (const log of availableLogs) {
+        const plankName = `${log.woodType}_planks`;
+        const altName = log.woodType + suffix;
+        if (this.mcData.itemsByName[altName] && altName !== itemName) {
+          suggestions.push(`${altName}（${log.logName} x${log.count} から ${plankName} を作成可能）`);
+        }
+      }
+
+      if (suggestions.length > 0) return suggestions.slice(0, 3).join(', ');
+    }
+
+    return null;
+  }
+
   private addWoodNote(name: string): string {
     const woodTypes = ['oak', 'spruce', 'birch', 'jungle', 'acacia', 'dark_oak', 'mangrove', 'cherry', 'bamboo', 'crimson', 'warped', 'pale_oak'];
     const woodSuffixes = ['_planks', '_log', '_wood', '_slab', '_stairs'];
@@ -72,7 +167,9 @@ class CraftOne extends InstantSkill {
     return name;
   }
 
-  async runImpl(itemName: string) {
+  async runImpl(itemName: string, count: number = 1) {
+    // クラフト前のアイテム数（catch で部分成功を検出するため外側に定義）
+    let beforeCount = 0;
     try {
       // 開いているGUIを閉じる（activate-blockで開いたクラフトテーブルなど）
       if (this.bot.currentWindow) {
@@ -114,21 +211,64 @@ class CraftOne extends InstantSkill {
         }
       }
 
-      // クラフトテーブルを探す
-      const craftingTable = this.bot.findBlock({
-        matching: this.mcData.blocksByName.crafting_table?.id,
-        maxDistance: 4,
-      });
+      let craftingTable: ReturnType<typeof this.bot.findBlock> = null;
 
-      if (requiresCraftingTable && !craftingTable) {
-        return {
-          success: false,
-          result: `${itemName}のクラフトにはクラフトテーブルが必要です。activate-blockでクラフトテーブルを使用するか、place-block-atで設置してください`,
-        };
+      if (requiresCraftingTable) {
+        craftingTable = this.bot.findBlock({
+          matching: this.mcData.blocksByName.crafting_table?.id,
+          maxDistance: 32,
+        });
       }
 
+      if (requiresCraftingTable && !craftingTable) {
+        // インベントリにcrafting_tableがあれば自動設置を試みる
+        const tableInInventory = this.bot.inventory.items().find(i => i.name === 'crafting_table');
+        if (tableInInventory) {
+          craftingTable = await this.tryPlaceCraftingTable();
+          if (!craftingTable) {
+            return {
+              success: false,
+              result: `${itemName}のクラフトにはクラフトテーブルが必要です。crafting_tableをインベントリに持っていますが、設置に失敗しました。place-block-atで手動設置してください`,
+              failureType: 'crafting_table_placement_failed',
+              recoverable: true,
+            };
+          }
+          log.info(`🔧 crafting_tableを自動設置しました`);
+        } else {
+          return {
+            success: false,
+            result: `${itemName}のクラフトにはクラフトテーブルが必要です。crafting_tableをクラフトして設置してください`,
+            failureType: 'crafting_table_missing',
+            recoverable: true,
+          };
+        }
+      }
+
+      // crafting_table が遠い場合は近づく
+      if (craftingTable) {
+        const dist = this.bot.entity.position.distanceTo(craftingTable.position);
+        if (dist > 4) {
+          const moveTo = this.bot.instantSkills?.getSkill('move-to');
+          if (moveTo) {
+            const moveResult = await moveTo.run(
+              craftingTable.position.x, craftingTable.position.y, craftingTable.position.z, 2, 'near',
+            );
+            if (!moveResult.success) {
+              return {
+                success: false,
+                result: `crafting_tableが遠すぎます（${dist.toFixed(1)}m）。近づけませんでした: ${moveResult.result}`,
+                failureType: 'distance_too_far',
+                recoverable: true,
+              };
+            }
+          }
+        }
+      }
+
+      const craftCount = Math.max(1, Math.min(count, 64));
+
       // レシピを取得
-      let recipes = this.bot.recipesFor(item.id, null, 1, craftingTable);
+      let recipes = this.bot.recipesFor(item.id, null, craftCount, craftingTable);
 
       if (recipes.length === 0) {
         if (allRecipes && allRecipes.length > 0) {
@@ -173,11 +313,18 @@ class CraftOne extends InstantSkill {
             ? recipePatterns.join(' or ')
             : '不明';
 
+          const inventoryItemsList = this.bot.inventory.items();
+          const alternatives = this.suggestAlternatives(itemName, inventoryItemsList);
+          const smeltHint = this.suggestSmeltingHint(requiredMaterials, inventoryItemsList);
+          const planksHint = this.suggestPlanksHint(requiredMaterials, inventoryItemsList);
           return {
             success: false,
             result: `${itemName}のクラフトに必要な材料が不足。` +
               `必要: ${requiredMaterials}。` +
-              `現在のインベントリ: ${inventory}。`,
+              `現在のインベントリ: ${inventory}。` +
+              (smeltHint ? ` ⚠️ 製錬ヒント: ${smeltHint}。` : '') +
+              (planksHint ? ` 💡 木材ヒント: ${planksHint}。` : '') +
+              (alternatives ? ` 代替案: ${alternatives}` : ''),
           };
         }
         return {
@@ -188,13 +335,19 @@ class CraftOne extends InstantSkill {
 
       const recipe = recipes[0];
 
+      // レシピ1回あたりの出力数を考慮してクラフト回数を算出
+      // count=4, 1回で4個産出 → craftOps=1 (oak_planks等)
+      // count=4, 1回で2個産出 → craftOps=2 (stick等)
+      const resultPerCraft = recipe.result?.count ?? 1;
+      const craftOps = Math.ceil(craftCount / resultPerCraft);
+
       // クラフト前のアイテム数を記録
-      const beforeCount = this.bot.inventory.items()
+      beforeCount = this.bot.inventory.items()
         .filter((i: any) => i.name === itemName)
         .reduce((sum: number, i: any) => sum + i.count, 0);
 
       // クラフト実行
-      await this.bot.craft(recipe, 1, craftingTable || undefined);
+      await this.bot.craft(recipe, craftOps, craftingTable || undefined);
 
       // 少し待ってからインベントリを確認
       await new Promise(resolve => setTimeout(resolve, 100));
@@ -204,10 +357,11 @@ class CraftOne extends InstantSkill {
         .filter((i: any) => i.name === itemName)
         .reduce((sum: number, i: any) => sum + i.count, 0);
 
-      if (afterCount > beforeCount) {
+      const crafted = afterCount - beforeCount;
+      if (crafted > 0) {
         return {
           success: true,
-          result: `${itemName}を1個クラフトしました（${beforeCount}→${afterCount}個）`,
+          result: `${itemName}を${crafted}個クラフトしました（${beforeCount}→${afterCount}個）`,
         };
       } else {
         return {
@@ -216,6 +370,20 @@ class CraftOne extends InstantSkill {
         };
       }
     } catch (error: any) {
+      // エラーでも部分的にクラフト成功している場合がある
+      // （bot.craft が途中で例外を投げてもアイテムは増えている）
+      await new Promise(resolve => setTimeout(resolve, 100));
+      const afterCount = this.bot.inventory.items()
+        .filter((i: any) => i.name === itemName)
+        .reduce((sum: number, i: any) => sum + i.count, 0);
+      const crafted = afterCount - beforeCount;
+      if (crafted > 0) {
+        return {
+          success: true,
+          result: `${itemName}を${crafted}個クラフトしました（要求より少ない可能性あり）`,
+        };
+      }
+
       let errorDetail = error.message;
       if (error.message.includes('missing')) {
         errorDetail = '必要な材料が不足しています';
@@ -227,6 +395,43 @@ class CraftOne extends InstantSkill {
         success: false,
         result: `クラフトエラー: ${errorDetail}`,
       };
+    }
+  }
+  /**
+   * crafting_table をボットの足元付近に自動設置する。
+   * 成功したら設置されたブロックを返す。失敗したら null。
+   */
+  private async tryPlaceCraftingTable(): Promise<any> {
+    try {
+      const placeSkill = this.bot.instantSkills?.getSkill('place-block-at');
+      if (!placeSkill) return null;
+
+      const pos = this.bot.entity.position;
+      // ボットの前方に設置を試みる（複数候補）
+      const candidates = [
+        { x: Math.floor(pos.x) + 1, y: Math.floor(pos.y), z: Math.floor(pos.z) },
+        { x: Math.floor(pos.x) - 1, y: Math.floor(pos.y), z: Math.floor(pos.z) },
+        { x: Math.floor(pos.x), y: Math.floor(pos.y), z: Math.floor(pos.z) + 1 },
+        { x: Math.floor(pos.x), y: Math.floor(pos.y), z: Math.floor(pos.z) - 1 },
+      ];
+
+      for (const c of candidates) {
+        const block = this.bot.blockAt(new Vec3(c.x, c.y, c.z));
+        if (block && (block.name === 'air' || block.name === 'cave_air')) {
+          const result = await placeSkill.run('crafting_table', c.x, c.y, c.z);
+          if (result.success) {
+            await new Promise(r => setTimeout(r, 200));
+            return this.bot.findBlock({
+              matching: this.mcData.blocksByName.crafting_table?.id,
+              maxDistance: 4,
+            });
+          }
+        }
+      }
+      return null;
+    } catch (e: any) {
+      log.warn(`crafting_table自動設置エラー: ${e.message}`);
+      return null;
     }
   }
 }

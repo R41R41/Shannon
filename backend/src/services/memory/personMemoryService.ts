@@ -91,6 +91,18 @@ export class PersonMemoryService {
     return PersonMemory.findOne({ platform, platformUserId }).lean();
   }
 
+  resolveCanonicalPersonId(
+    platform: MemoryPlatform,
+    platformUserId: string,
+    displayName?: string,
+  ): string {
+    const member = resolveMemberByPlatformId(platform, platformUserId) ?? (displayName ? resolveAlias(displayName) : null);
+    if (member) {
+      return `member:${member.canonicalName.toLowerCase()}`;
+    }
+    return `${platform}:${platformUserId}`;
+  }
+
   /**
    * 表示名で検索 (recall-person ツール用)
    * 1. コアメンバーのエイリアス解決
@@ -123,6 +135,12 @@ export class PersonMemoryService {
     member: MemberAlias,
     preferredPlatform: MemoryPlatform,
   ): Promise<IPersonMemory | null> {
+    const canonicalPersonId = `member:${member.canonicalName.toLowerCase()}`;
+    const canonicalRecord = await PersonMemory.findOne({ canonicalPersonId })
+      .sort({ lastSeenAt: -1 })
+      .lean();
+    if (canonicalRecord) return canonicalRecord;
+
     // まず現在のプラットフォームで探す
     const preferredId = member.platformIds[preferredPlatform];
     if (preferredId) {
@@ -156,13 +174,17 @@ export class PersonMemoryService {
     platformUserId: string,
     displayName: string,
   ): Promise<IPersonMemory> {
+    const canonicalPersonId = this.resolveCanonicalPersonId(platform, platformUserId, displayName);
     const existing = await PersonMemory.findOne({ platform, platformUserId });
     if (existing) {
       // displayName が変わっていれば更新
       if (existing.displayName !== displayName) {
         existing.displayName = displayName;
-        await existing.save();
       }
+      if (existing.canonicalPersonId !== canonicalPersonId) {
+        existing.canonicalPersonId = canonicalPersonId;
+      }
+      await existing.save();
       return existing.toObject();
     }
 
@@ -174,6 +196,7 @@ export class PersonMemoryService {
 
     const record = await PersonMemory.create({
       privacyZone: zone,
+      canonicalPersonId,
       platform,
       platformUserId,
       displayName: member?.canonicalName ?? displayName,
@@ -182,6 +205,18 @@ export class PersonMemoryService {
       recentExchanges: [],
       conversationSummary: '',
       totalInteractions: 0,
+      familiarityLevel: 0,
+      trustLevel: 0,
+      interactionPreferences: {
+        directness: 'mid',
+        warmth: 'mid',
+        structure: 'mid',
+        verbosity: 'mid',
+      },
+      recurringTopics: [],
+      activeProjects: [],
+      cautionFlags: [],
+      inferredNeeds: [],
       firstSeenAt: new Date(),
       lastSeenAt: new Date(),
     });
@@ -218,6 +253,14 @@ export class PersonMemoryService {
       record.recentExchanges.push(...newExchanges);
       record.totalInteractions += Math.ceil(newExchanges.length / 2);
       record.lastSeenAt = new Date();
+      record.familiarityLevel = Math.min(
+        100,
+        Math.max(record.familiarityLevel ?? 0, Math.min(100, record.totalInteractions * 4)),
+      );
+      record.trustLevel = Math.min(
+        100,
+        Math.max(record.trustLevel ?? 0, Math.min(100, record.totalInteractions * 3)),
+      );
 
       // 20メッセージ (10往復) を超えたら要約
       if (record.recentExchanges.length > MAX_RECENT_EXCHANGES) {
@@ -378,6 +421,20 @@ ${conversationText}`;
     if (person.notes) {
       lines.push(`- メモ: ${person.notes}`);
     }
+    if (person.interactionPreferences) {
+      lines.push(
+        `- 対話傾向: 率直さ=${person.interactionPreferences.directness}, 温かさ=${person.interactionPreferences.warmth}, 構造化=${person.interactionPreferences.structure}, 長さ=${person.interactionPreferences.verbosity}`,
+      );
+    }
+    if (person.cautionFlags?.length) {
+      lines.push(`- 注意点: ${person.cautionFlags.join(', ')}`);
+    }
+    if (person.inferredNeeds?.length) {
+      lines.push(`- 推定ニーズ: ${person.inferredNeeds.join(', ')}`);
+    }
+    if (person.activeProjects?.length) {
+      lines.push(`- 進行中テーマ: ${person.activeProjects.join(', ')}`);
+    }
     if (person.conversationSummary) {
       lines.push(`- 過去の要約: ${person.conversationSummary}`);
     }
@@ -391,6 +448,8 @@ ${conversationText}`;
     }
     lines.push(`- 初回接触: ${person.firstSeenAt.toLocaleDateString('ja-JP')}`);
     lines.push(`- やりとり回数: ${person.totalInteractions}回`);
+    lines.push(`- 親密度: ${person.familiarityLevel ?? 0}/100`);
+    lines.push(`- 信頼度: ${person.trustLevel ?? 0}/100`);
 
     return lines.join('\n');
   }

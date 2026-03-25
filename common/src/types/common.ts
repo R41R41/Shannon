@@ -107,12 +107,12 @@ export interface TaskContext {
   conversationId?: string;
 
   /** 追加のメタデータ */
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
 }
 
 /**
  * MemoryZone から TaskContext への変換ヘルパー
- * @deprecated 将来的にはTaskContextを直接使用してください
+ * @deprecated Since v1.5. Use TaskContext directly. Will be removed in v2.0.
  */
 export function memoryZoneToContext(memoryZone: MemoryZone, channelId?: string): TaskContext {
   if (memoryZone === 'web') {
@@ -144,7 +144,7 @@ export function memoryZoneToContext(memoryZone: MemoryZone, channelId?: string):
 
 /**
  * TaskContext から MemoryZone への変換ヘルパー
- * @deprecated 将来的にはTaskContextを直接使用してください
+ * @deprecated Since v1.5. Use TaskContext directly. Will be removed in v2.0.
  */
 export function contextToMemoryZone(context: TaskContext): MemoryZone {
   if (context.platform === 'discord' && context.discord?.guildName) {

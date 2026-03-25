@@ -177,6 +177,38 @@
   opacity: 0.3;
 }
 
+.emptyLabel {
+  font-size: font-size(xs);
+  color: color(text, disabled);
+  letter-spacing: 0.05em;
+}
+
+.lastCompleted {
+  display: flex;
+  align-items: center;
+  gap: spacing(xs);
+  margin-top: spacing(sm);
+  padding: spacing(xs) spacing(md);
+  background: color(success-dim);
+  border-radius: radius(md);
+  font-size: font-size(xs);
+  color: color(success);
+  max-width: 100%;
+
+  span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.lastCompletedIcon {
+  width: 14px !important;
+  height: 14px !important;
+  flex-shrink: 0;
+  color: color(success);
+}
+
 @keyframes spin {
   from {
     transform: rotate(0deg);

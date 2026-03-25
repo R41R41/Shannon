@@ -17,27 +17,23 @@ export class MonitoringAgent extends WebSocketClientBase {
     return MonitoringAgent.instance;
   }
 
-  public logCallback: LogCallback;
-  private searchListeners: Set<SearchCallback> = new Set();
-
   private constructor(url: string) {
     super(url);
-    this.logCallback = () => {};
   }
 
   protected handleMessage(message: string) {
     const data = parseMessage(message);
     if (!data || data.type === "pong") return;
     if (data.type === "web:searchResults") {
-      this.searchListeners.forEach((listener) => listener(data.data as ILog[]));
+      this.emit("searchResults", data.data as ILog[]);
     }
     if (data.type === "web:log") {
-      this.logCallback?.(data.data as ILog);
+      this.emit("log", data.data as ILog);
     }
   }
 
-  public setLogCallback(callback: LogCallback) {
-    this.logCallback = callback;
+  public onLog(callback: LogCallback): () => void {
+    return this.on("log", callback);
   }
 
   public async searchLogs(query: SearchQuery) {
@@ -49,19 +45,16 @@ export class MonitoringAgent extends WebSocketClientBase {
     );
   }
 
-  public onSearchResults(callback: SearchCallback) {
-    this.searchListeners.add(callback);
-    return () => this.searchListeners.delete(callback);
+  public onSearchResults(callback: SearchCallback): () => void {
+    return this.on("searchResults", callback);
   }
 
   public async getAllMemoryZoneLogs(): Promise<ILog[]> {
     return new Promise((resolve) => {
-      const handleAllMemoryZoneLogs = (logs: ILog[]) => {
-        this.searchListeners.delete(handleAllMemoryZoneLogs);
+      const unsubscribe = this.on("searchResults", (logs: ILog[]) => {
+        unsubscribe();
         resolve(logs);
-      };
-
-      this.searchListeners.add(handleAllMemoryZoneLogs);
+      });
 
       this.send(
         JSON.stringify({

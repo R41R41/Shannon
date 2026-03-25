@@ -21,7 +21,7 @@ const Login: React.FC = () => {
     authAgent.connect();
 
     // 認証結果のコールバックを設定
-    authAgent.onAuthResponse((success, userData) => {
+    const unsubAuth = authAgent.onAuthResponse((success, userData) => {
       if (success && auth.currentUser && userData) {
         const userInfo: UserInfo = {
           name: userData.name,
@@ -51,6 +51,7 @@ const Login: React.FC = () => {
     });
 
     return () => {
+      unsubAuth();
       unsubscribe();
       authAgent.disconnect();
     };

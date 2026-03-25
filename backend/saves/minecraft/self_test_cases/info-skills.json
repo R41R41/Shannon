@@ -1,0 +1,123 @@
+{
+  "testSuite": "info-skills",
+  "description": "情報取得系スキル（副作用なし・常にテスト可能）",
+  "globalSetup": [
+    "/tp @s 0 64 0",
+    "/give @s diamond_sword 1",
+    "/give @s iron_pickaxe 1",
+    "/give @s cobblestone 32"
+  ],
+  "cases": [
+    {
+      "skillName": "get-position",
+      "args": [],
+      "description": "現在位置を取得",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "get-health",
+      "args": [],
+      "description": "HP と食料を取得",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "get-bot-status",
+      "args": [],
+      "description": "ボット全体ステータスを取得",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "get-time-and-weather",
+      "args": [],
+      "description": "時刻と天気を取得",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "get-equipment",
+      "args": [],
+      "description": "装備中のアイテムと防具を確認",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "list-inventory-items",
+      "args": [],
+      "description": "インベントリ一覧",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "list-nearby-entities",
+      "args": [32, 10],
+      "description": "周辺エンティティ一覧（半径32、最大10件）",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "check-inventory-item",
+      "args": ["cobblestone"],
+      "description": "丸石の所持数を確認（give 済み）",
+      "prechecks": [
+        { "type": "inventory_has", "item": "cobblestone", "minCount": 1 }
+      ],
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "check-recipe",
+      "args": ["stone_pickaxe"],
+      "description": "石のツルハシのレシピを確認",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "check-recipe",
+      "args": ["furnace"],
+      "description": "かまどのレシピを確認",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "check-recipe",
+      "args": ["diamond_block"],
+      "description": "ダイヤモンドブロックのレシピを確認",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "get-block-at",
+      "args": [0, 63, 0],
+      "description": "足元のブロック情報を取得",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "get-block-in-sight",
+      "args": [32],
+      "description": "視線方向のブロックを取得",
+      "expectedOutcome": "either"
+    },
+    {
+      "skillName": "is-block-loaded",
+      "args": [0, 64, 0],
+      "description": "現在地チャンクはロード済みか",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "can-dig-block",
+      "args": [0, 63, 0],
+      "description": "足元のブロックが掘削可能か",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "check-path-to",
+      "args": [5, 64, 5],
+      "description": "近くの座標へのパスが存在するか",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "find-blocks",
+      "args": ["stone", 32, 5],
+      "description": "石ブロックを半径32で5個検索",
+      "expectedOutcome": "either"
+    },
+    {
+      "skillName": "find-blocks",
+      "args": ["dirt", 16, 3],
+      "description": "土ブロックを半径16で3個検索",
+      "expectedOutcome": "either"
+    }
+  ]
+}

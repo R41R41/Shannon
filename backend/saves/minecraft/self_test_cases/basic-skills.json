@@ -1,0 +1,51 @@
+{
+  "testSuite": "basic-skills",
+  "description": "基本スキルの動作確認テスト",
+  "globalSetup": [
+    "/tp @s 0 64 0"
+  ],
+  "cases": [
+    {
+      "skillName": "get-position",
+      "args": [],
+      "description": "現在位置を取得",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "get-health",
+      "args": [],
+      "description": "HP と食料を取得",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "get-bot-status",
+      "args": [],
+      "description": "ボットの全体ステータスを取得",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "get-time-and-weather",
+      "args": [],
+      "description": "時刻と天気を取得",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "list-inventory-items",
+      "args": [],
+      "description": "インベントリ一覧を取得",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "find-blocks",
+      "args": ["stone", 32, 5],
+      "description": "石ブロックを半径32で5個検索",
+      "expectedOutcome": "either"
+    },
+    {
+      "skillName": "list-nearby-entities",
+      "args": [],
+      "description": "周辺エンティティ一覧を取得",
+      "expectedOutcome": "success"
+    }
+  ]
+}

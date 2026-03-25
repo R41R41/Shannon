@@ -115,7 +115,7 @@ export class VoicepeakClient {
    * 英語をカタカナ読みに変換（TTS の発音改善用）
    * ASCII 英字を含まないテキストはそのまま返す
    */
-  private async convertEnglishToKatakana(text: string): Promise<string> {
+  async convertEnglishToKatakana(text: string): Promise<string> {
     if (!/[a-zA-Z]/.test(text)) return text;
 
     try {
@@ -161,12 +161,42 @@ export class VoicepeakClient {
   }
 
   /**
+   * 感情分析 + 全文カタカナ変換を並列実行し、前処理済みデータを返す。
+   * Minebot voice 等のバッチ TTS で使用。
+   */
+  async preprocessBatch(
+    fullText: string,
+    sentences: string[],
+  ): Promise<{ emotion: VoicepeakEmotion; convertedSentences: string[] }> {
+    const t0 = Date.now();
+    const [emotion, ...convertedSentences] = await Promise.all([
+      this.analyzeEmotionForTTS(fullText),
+      ...sentences.map(s => this.convertEnglishToKatakana(s)),
+    ]);
+    logger.info(
+      `[VOICEPEAK] preprocessBatch: ${sentences.length} sentences parallelized in ${Date.now() - t0}ms`,
+      'cyan',
+    );
+    return { emotion, convertedSentences };
+  }
+
+  /**
+   * 前処理済みテキストから WAV 音声を生成（カタカナ変換スキップ）。
+   */
+  async synthesizePreprocessed(convertedText: string, options?: VoicepeakOptions): Promise<Buffer> {
+    return this._synthesizeCore(convertedText, options);
+  }
+
+  /**
    * テキストからWAV音声を生成
    * @returns WAVバイナリのBuffer
    */
   async synthesize(text: string, options?: VoicepeakOptions): Promise<Buffer> {
     const convertedText = await this.convertEnglishToKatakana(text);
+    return this._synthesizeCore(convertedText, options);
+  }
 
+  private async _synthesizeCore(convertedText: string, options?: VoicepeakOptions): Promise<Buffer> {
     const body = {
       text: convertedText,
       narrator: options?.narrator ?? this.defaultNarrator,

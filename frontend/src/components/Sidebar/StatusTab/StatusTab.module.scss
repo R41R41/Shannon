@@ -26,13 +26,40 @@
   gap: spacing(xs);
 }
 
+.categoryToggle {
+  display: flex;
+  align-items: center;
+  gap: spacing(xs);
+  background: none;
+  border: none;
+  padding: spacing(xxs) spacing(md);
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+  border-radius: radius(sm);
+
+  &:hover {
+    background: color(bg, hover);
+  }
+}
+
+.chevron {
+  font-size: font-size(xxs);
+  color: color(text, disabled);
+  transition: transform 0.2s ease;
+  display: inline-block;
+
+  &.collapsed {
+    transform: rotate(-90deg);
+  }
+}
+
 .categoryLabel {
   font-size: font-size(xxs);
   font-weight: font-weight(semibold);
   color: color(text, disabled);
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  padding-left: spacing(md);
 }
 
 .serviceList {

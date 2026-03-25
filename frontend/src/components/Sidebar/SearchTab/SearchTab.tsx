@@ -2,19 +2,18 @@ import React, { useState, useEffect } from "react";
 import styles from "./SearchTab.module.scss";
 import { ILog } from "@common/types/common";
 import { MemoryZone } from "@common/types/common";
-import { MonitoringAgent } from "@/services/agents/monitoringAgent";
+import { useMonitoring } from "@/contexts/AgentContext";
 
 interface SearchTabProps {
-  monitoring: MonitoringAgent | null;
   searchResults: ILog[];
   setSearchResults: (results: ILog[]) => void;
 }
 
 const SearchTab: React.FC<SearchTabProps> = ({
-  monitoring,
   searchResults,
   setSearchResults,
 }) => {
+  const monitoring = useMonitoring();
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [memoryZone, setMemoryZone] = useState<MemoryZone | "">("");

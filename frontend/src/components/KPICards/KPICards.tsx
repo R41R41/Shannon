@@ -9,13 +9,16 @@ interface KPIData {
   color: string;
 }
 
+const INITIAL_CARDS: KPIData[] = [
+  { label: '稼働サービス', value: '-', sub: '', icon: '🤖', color: 'info' },
+  { label: '本日の投稿', value: '-', sub: 'スケジュール', icon: '🐦', color: 'success' },
+  { label: 'トークン消費', value: '-', sub: '本日', icon: '🎯', color: 'warning' },
+  { label: '接続状態', value: '-', sub: '', icon: '🔗', color: 'primary' },
+];
+
 export const KPICards: React.FC = () => {
-  const [cards, setCards] = useState<KPIData[]>([
-    { label: '稼働サービス', value: '-', sub: '', icon: '🤖', color: 'info' },
-    { label: '本日の投稿', value: '-', sub: 'スケジュール', icon: '🐦', color: 'success' },
-    { label: 'トークン消費', value: '-', sub: '本日', icon: '🎯', color: 'warning' },
-    { label: '接続状態', value: '-', sub: '', icon: '🔗', color: 'primary' },
-  ]);
+  const [cards, setCards] = useState<KPIData[]>(INITIAL_CARDS);
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -47,6 +50,8 @@ export const KPICards: React.FC = () => {
         });
       } catch {
         // API unavailable
+      } finally {
+        setIsLoading(false);
       }
     };
 
@@ -61,9 +66,19 @@ export const KPICards: React.FC = () => {
         <div key={i} className={`${styles.card} ${styles[card.color]}`}>
           <div className={styles.icon}>{card.icon}</div>
           <div className={styles.content}>
-            <div className={styles.value}>{card.value}</div>
-            <div className={styles.label}>{card.label}</div>
-            {card.sub && <div className={styles.sub}>{card.sub}</div>}
+            {isLoading ? (
+              <>
+                <div className={styles.skeleton} style={{ width: '60px', height: '20px' }} />
+                <div className={styles.label}>{card.label}</div>
+                <div className={styles.skeleton} style={{ width: '80px', height: '12px', marginTop: '3px' }} />
+              </>
+            ) : (
+              <>
+                <div className={styles.value}>{card.value}</div>
+                <div className={styles.label}>{card.label}</div>
+                {card.sub && <div className={styles.sub}>{card.sub}</div>}
+              </>
+            )}
           </div>
         </div>
       ))}

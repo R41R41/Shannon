@@ -24,8 +24,8 @@ export class RealtimeAPIService {
   private isAudioResponseComplete: boolean = false;
   private isUserTranscriptResponseComplete: boolean = true;
   private isVadMode: boolean = false;
-  private noVadSessionConfig: any;
-  private vadSessionConfig: any;
+  private noVadSessionConfig: Record<string, unknown>;
+  private vadSessionConfig: Record<string, unknown>;
   private reconnectAttempts: number = 0;
   private maxReconnectAttempts: number = 5;
   private reconnectDelay: number = 5000; // 5秒
@@ -169,7 +169,7 @@ export class RealtimeAPIService {
 
   private async initialize() {
     if (this.initialized) return;
-    logger.info('RealtimeAPI initialized', 'cyan');
+    logger.debug('RealtimeAPI initialized');
 
     const url = `wss://api.openai.com/v1/realtime?model=${models.realtime}`;
 
@@ -315,7 +315,7 @@ export class RealtimeAPIService {
       });
 
       this.ws.on('close', () => {
-        logger.warn('WebSocket connection closed');
+        logger.debug('WebSocket connection closed');
         this.eventBus.log('web', 'red', 'WebSocket connection closed');
         this.initialized = false;
         if (!settled) {
@@ -331,7 +331,7 @@ export class RealtimeAPIService {
     if (this.initialized) return;
     this.reconnectAttempts++;
     const delay = Math.min(this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1), 60000);
-    logger.info(`[RealtimeAPI] ${delay / 1000}秒後に再接続します (試行 ${this.reconnectAttempts}/${this.maxReconnectAttempts})...`, 'cyan');
+    logger.debug(`[RealtimeAPI] ${delay / 1000}秒後に再接続します (試行 ${this.reconnectAttempts}/${this.maxReconnectAttempts})...`);
     if (this.reconnectAttempts > this.maxReconnectAttempts) {
       logger.error(`[RealtimeAPI] 最大再接続回数 (${this.maxReconnectAttempts}) を超えました。再接続を停止します。`);
       return;
@@ -350,7 +350,7 @@ export class RealtimeAPIService {
       clearTimeout(this.sessionRefreshTimer);
     }
     this.sessionRefreshTimer = setTimeout(() => {
-      logger.info('[RealtimeAPI] セッション更新: 55分経過のため再接続します', 'cyan');
+      logger.debug('[RealtimeAPI] セッション更新: 55分経過のため再接続します');
       this.initialized = false;
       if (this.ws) {
         try { this.ws.close(); } catch { /* ignore */ }

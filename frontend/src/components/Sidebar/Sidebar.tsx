@@ -7,35 +7,22 @@ import ScheduleOutlinedIcon from "@mui/icons-material/ScheduleOutlined";
 import TaskAltOutlinedIcon from "@mui/icons-material/TaskAltOutlined";
 import SearchTab from "./SearchTab/SearchTab";
 import { ILog } from "@common/types/common";
-import { MonitoringAgent } from "@/services/agents/monitoringAgent";
-import { SchedulerAgent } from "@/services/agents/schedulerAgent";
 import ScheduleTab from "./ScheduleTab/ScheduleTab";
-import { StatusAgent } from "@/services/agents/statusAgent";
 import StatusTab from "./StatusTab/StatusTab";
 import MonitorHeartOutlinedIcon from "@mui/icons-material/MonitorHeartOutlined";
-import { SkillAgent } from "@/services/agents/skillAgent";
 import SkillsTab from "./SkillsTab/SkillsTab";
-import { UserInfo } from "@common/types/web";
+import { useAgents } from "@/contexts/AgentContext";
 
 interface SidebarProps {
-  monitoring: MonitoringAgent | null;
-  scheduler: SchedulerAgent | null;
-  status: StatusAgent | null;
-  skill: SkillAgent | null;
   isMobile?: boolean;
-  userInfo?: UserInfo | null;
   isTest?: boolean;
 }
 
 const Sidebar: React.FC<SidebarProps> = ({
-  monitoring,
-  scheduler,
-  status,
-  skill,
   isMobile = false,
-  userInfo,
   isTest,
 }) => {
+  const { userInfo } = useAgents();
   const [activeTab, setActiveTab] = useState("status");
   const [searchResults, setSearchResults] = useState<ILog[]>([]);
 
@@ -102,15 +89,14 @@ const Sidebar: React.FC<SidebarProps> = ({
         <div className={styles.tabContent}>
           {activeTab === "search" && (
             <SearchTab
-              monitoring={monitoring}
               searchResults={searchResults}
               setSearchResults={setSearchResults}
             />
           )}
-          {activeTab === "skills" && <SkillsTab skill={skill} />}
-          {activeTab === "schedule" && <ScheduleTab scheduler={scheduler} />}
+          {activeTab === "skills" && <SkillsTab />}
+          {activeTab === "schedule" && <ScheduleTab />}
           {activeTab === "status" && (
-            <StatusTab status={status} userInfo={userInfo} isTest={isTest} />
+            <StatusTab isTest={isTest} />
           )}
         </div>
       )}

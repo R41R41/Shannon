@@ -42,6 +42,8 @@ export type SkillParamValue = string | number | boolean | Vec3Param | null | und
 export interface SkillResult {
     success: boolean;
     result: string;
+    failureType?: string;
+    recoverable?: boolean;
     error?: string;
     duration?: number;
 }

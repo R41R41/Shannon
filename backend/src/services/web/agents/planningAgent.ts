@@ -37,7 +37,7 @@ export class PlanningAgent extends WebSocketServiceBase {
 
   protected override initialize() {
     this.wss.on('connection', async (ws) => {
-      logger.info('Planning client connected', 'blue');
+      logger.debug('Planning client connected');
 
       this.handleNewConnection(ws);
 

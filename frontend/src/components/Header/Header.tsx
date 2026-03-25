@@ -3,19 +3,12 @@ import styles from "./Header.module.scss";
 import SettingsModal from "@components/Modal/SettingsModal";
 import logo from "@/assets/logo.png";
 import SettingsIcon from "@mui/icons-material/Settings";
-import { UserInfo } from "@common/types/web";
 import { ConnectionStatus } from "@/services/common/WebSocketClient";
-import { MonitoringAgent } from "@/services/agents/monitoringAgent";
-import { OpenAIAgent } from "@/services/agents/openaiAgent";
-import { StatusAgent } from "@/services/agents/statusAgent";
 import { useConnectionStatus } from "@/hooks/useConnectionStatus";
+import { useAgents } from "@/contexts/AgentContext";
 import classNames from "classnames";
 
 interface HeaderProps {
-  userInfo?: UserInfo | null;
-  monitoring?: MonitoringAgent | null;
-  openai?: OpenAIAgent | null;
-  status?: StatusAgent | null;
   settingsOpen?: boolean;
   onSettingsChange?: (open: boolean) => void;
 }
@@ -42,13 +35,10 @@ const ConnectionIndicator: React.FC<ConnectionIndicatorProps> = ({
 );
 
 const Header: React.FC<HeaderProps> = ({
-  userInfo,
-  monitoring,
-  openai,
-  status,
   settingsOpen: externalSettingsOpen,
   onSettingsChange,
 }) => {
+  const { monitoring, openai, status, userInfo } = useAgents();
   const [internalModalOpen, setInternalModalOpen] = useState(false);
   const isModalOpen = externalSettingsOpen ?? internalModalOpen;
   const setIsModalOpen = (open: boolean) => {

@@ -1,5 +1,6 @@
 import pathfinder from 'mineflayer-pathfinder';
 import { CustomBot, InstantSkill } from '../types.js';
+import type { SkillResult } from '../types/skillParams.js';
 import { createLogger } from '../../../utils/logger.js';
 import { setMovements } from '../utils/setMovements.js';
 const { goals } = pathfinder;
@@ -43,7 +44,7 @@ class FollowEntity extends InstantSkill {
     targetName: string,
     range: number = 2,
     duration: number = 30000
-  ) {
+  ): Promise<SkillResult> {
     try {
       if (!targetName) {
         return {
@@ -78,24 +79,71 @@ class FollowEntity extends InstantSkill {
       // GoalFollowを設定
       const goal = new goals.GoalFollow(entity, range);
 
+      const distanceToTarget = () => entity.position.distanceTo(this.bot.entity.position);
+      if (distanceToTarget() <= range) {
+        return {
+          success: true,
+          result: `${targetName}の近くにいます`,
+        };
+      }
+
       log.info(`👣 ${targetName}の追従を開始（範囲: ${range}ブロック、時間: ${duration}ms）`);
 
       // 追従開始
       this.bot.pathfinder.setGoal(goal, true); // dynamic=trueで対象が動いても追従
 
       if (duration > 0) {
-        // 指定時間後に停止
-        await new Promise<void>((resolve) => {
-          setTimeout(() => {
-            this.bot.pathfinder.stop();
-            resolve();
+        // 範囲内に入ったら即完了し、到達できない場合のみタイムアウトする
+        return await new Promise<SkillResult>((resolve) => {
+          let finished = false;
+          let intervalId: ReturnType<typeof setInterval> | null = null;
+          let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+          const finish = (result: { success: boolean; result: string }) => {
+            if (finished) return;
+            finished = true;
+            if (intervalId) clearInterval(intervalId);
+            if (timeoutId) clearTimeout(timeoutId);
+            try {
+              this.bot.pathfinder.stop();
+            } catch {
+              // ignore stop errors
+            }
+            resolve(result);
+          };
+
+          intervalId = setInterval(() => {
+            if (this.shouldInterrupt()) {
+              finish({
+                success: false,
+                result: `${targetName}への追従を中断しました`,
+              });
+              return;
+            }
+
+            if (!entity.position || !this.bot.entity?.position) {
+              finish({
+                success: false,
+                result: `${targetName}を見失いました`,
+              });
+              return;
+            }
+
+            if (distanceToTarget() <= range) {
+              finish({
+                success: true,
+                result: `${targetName}の近くまで移動しました`,
+              });
+            }
+          }, 200);
+
+          timeoutId = setTimeout(() => {
+            finish({
+              success: true,
+              result: `${targetName}を${duration / 1000}秒間追従しました`,
+            });
           }, duration);
         });
-
-        return {
-          success: true,
-          result: `${targetName}を${duration / 1000}秒間追従しました`,
-        };
       } else {
         // 無制限追従（即座に返す、stop-movementなどで停止）
         return {

@@ -1,0 +1,63 @@
+{
+  "testSuite": "combat-skills",
+  "description": "戦闘系スキル（/summon で敵を生成）",
+  "globalSetup": [
+    "/tp @s 0 64 0",
+    "/clear @s",
+    "/give @s diamond_sword 1",
+    "/give @s diamond_helmet 1",
+    "/give @s diamond_chestplate 1",
+    "/give @s diamond_leggings 1",
+    "/give @s diamond_boots 1",
+    "/give @s shield 1",
+    "/give @s cooked_beef 16",
+    "/effect give @s resistance 120 4",
+    "/time set day"
+  ],
+  "cases": [
+    {
+      "skillName": "find-nearest-entity",
+      "args": ["zombie", 32],
+      "description": "ゾンビを検索（まだいないので either）",
+      "expectedOutcome": "either"
+    },
+    {
+      "skillName": "attack-nearest",
+      "args": ["zombie", 8],
+      "description": "近くのゾンビに1回攻撃",
+      "setup": [
+        "/summon zombie 3 64 0 {NoAI:1b}"
+      ],
+      "expectedOutcome": "either"
+    },
+    {
+      "skillName": "combat",
+      "args": ["zombie", 15],
+      "description": "ゾンビと戦闘（防具自動装備テスト含む）",
+      "setup": [
+        "/tp @s 0 64 0",
+        "/summon zombie 5 64 0 {NoAI:1b}"
+      ],
+      "expectedOutcome": "either"
+    },
+    {
+      "skillName": "attack-continuously",
+      "args": ["zombie", 5, 8],
+      "description": "ゾンビに連続攻撃（最大5回）",
+      "setup": [
+        "/summon zombie 3 64 0 {NoAI:1b}",
+        "/summon zombie 4 64 0 {NoAI:1b}"
+      ],
+      "expectedOutcome": "either"
+    },
+    {
+      "skillName": "flee-from",
+      "args": ["zombie", 16, 5000],
+      "description": "ゾンビから16ブロック逃走",
+      "setup": [
+        "/summon zombie 3 64 0 {NoAI:1b}"
+      ],
+      "expectedOutcome": "either"
+    }
+  ]
+}

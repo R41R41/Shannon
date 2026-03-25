@@ -1,21 +1,11 @@
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import styles from "./ShannonUI.module.scss";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import Sidebar from "@components/Sidebar/Sidebar";
 import MainContent from "@components/MainContent/MainContent";
 import ChatView from "@components/ChatView/ChatView";
 import Header from "@components/Header/Header";
-import { MonitoringAgent } from "@/services/agents/monitoringAgent";
-import { OpenAIAgent } from "@/services/agents/openaiAgent";
-import { WebClient } from "@/services/client";
-import { SchedulerAgent } from "@/services/agents/schedulerAgent";
-import { StatusAgent } from "@/services/agents/statusAgent";
-import { PlanningAgent } from "@/services/agents/planningAgent";
-import { EmotionAgent } from "@/services/agents/emotionAgent";
-import { SkillAgent } from "@/services/agents/skillAgent";
-import { UserInfo } from "@common/types/web";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
-import { showToast } from "@/components/Toast/Toast";
 
 const ResizeHandle = ({ direction = "vertical" }: { direction?: "vertical" | "horizontal" }) => (
   <PanelResizeHandle
@@ -28,14 +18,6 @@ interface ShannonUIProps {
 }
 
 const ShannonUI: React.FC<ShannonUIProps> = ({ isTest }) => {
-  const [userInfo, setUserInfo] = useState<UserInfo | null>(null);
-  const [monitoring, setMonitoring] = useState<MonitoringAgent | null>(null);
-  const [openai, setOpenai] = useState<OpenAIAgent | null>(null);
-  const [scheduler, setScheduler] = useState<SchedulerAgent | null>(null);
-  const [status, setStatus] = useState<StatusAgent | null>(null);
-  const [planning, setPlanning] = useState<PlanningAgent | null>(null);
-  const [emotion, setEmotion] = useState<EmotionAgent | null>(null);
-  const [skill, setSkill] = useState<SkillAgent | null>(null);
   const [isMobile, setIsMobile] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
@@ -46,24 +28,6 @@ const ShannonUI: React.FC<ShannonUIProps> = ({ isTest }) => {
   useKeyboardShortcuts(shortcuts);
 
   useEffect(() => {
-    const storedUserInfo = localStorage.getItem("userInfo");
-    if (storedUserInfo) {
-      setUserInfo(JSON.parse(storedUserInfo));
-    }
-
-    const webClient = WebClient.getInstance();
-    setMonitoring(webClient.monitoringService);
-    setOpenai(webClient.openaiService);
-    setScheduler(webClient.schedulerService);
-    setStatus(webClient.statusService);
-    setPlanning(webClient.planningService);
-    setEmotion(webClient.emotionService);
-    setSkill(webClient.skillService);
-
-    if (!webClient.isConnected()) {
-      webClient.start();
-    }
-
     const handleResize = () => setIsMobile(window.innerWidth < 768);
     handleResize();
     window.addEventListener("resize", handleResize);
@@ -73,10 +37,6 @@ const ShannonUI: React.FC<ShannonUIProps> = ({ isTest }) => {
   return (
     <div className={styles.container}>
       <Header
-        userInfo={userInfo}
-        monitoring={monitoring}
-        openai={openai}
-        status={status}
         settingsOpen={settingsOpen}
         onSettingsChange={setSettingsOpen}
       />
@@ -84,55 +44,27 @@ const ShannonUI: React.FC<ShannonUIProps> = ({ isTest }) => {
         {isMobile ? (
           <div className={styles.mobileLayout}>
             <div className={styles.mobileContent}>
-              <MainContent
-                monitoring={monitoring}
-                openai={openai}
-                status={status}
-                planning={planning}
-                emotion={emotion}
-                isMobile={true}
-              />
+              <MainContent isMobile={true} />
             </div>
             <div className={styles.mobileChatView}>
-              <ChatView openai={openai} userInfo={userInfo} />
+              <ChatView />
             </div>
             <div className={styles.mobileNavbar}>
-              <Sidebar
-                monitoring={monitoring}
-                scheduler={scheduler}
-                status={status}
-                skill={skill}
-                isMobile={true}
-                userInfo={userInfo}
-                isTest={isTest}
-              />
+              <Sidebar isMobile={true} isTest={isTest} />
             </div>
           </div>
         ) : (
           <PanelGroup direction="horizontal">
             <Panel defaultSize={18} minSize={14}>
-              <Sidebar
-                monitoring={monitoring}
-                scheduler={scheduler}
-                status={status}
-                skill={skill}
-                userInfo={userInfo}
-                isTest={isTest}
-              />
+              <Sidebar isTest={isTest} />
             </Panel>
             <ResizeHandle direction="horizontal" />
             <Panel defaultSize={62} minSize={30}>
-              <MainContent
-                monitoring={monitoring}
-                openai={openai}
-                status={status}
-                planning={planning}
-                emotion={emotion}
-              />
+              <MainContent />
             </Panel>
             <ResizeHandle direction="horizontal" />
             <Panel defaultSize={20} minSize={15}>
-              <ChatView openai={openai} userInfo={userInfo} />
+              <ChatView />
             </Panel>
           </PanelGroup>
         )}

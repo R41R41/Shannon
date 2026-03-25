@@ -2,7 +2,8 @@ import fs from 'fs';
 import OpenAI from 'openai';
 import path from 'path';
 import { config } from '../../config/env.js';
-import { logger } from '../../utils/logger.js';
+import { createLogger } from '../../utils/logger.js';
+const logger = createLogger('Discord:Filler');
 import { getTracedOpenAI } from '../llm/utils/langfuse.js';
 import { VoicepeakClient, VoicepeakEmotion } from '../voicepeak/client.js';
 

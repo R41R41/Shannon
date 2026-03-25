@@ -1,0 +1,98 @@
+{
+  "testSuite": "new-skills",
+  "description": "今回追加した新規スキル4種のテスト",
+  "globalSetup": [
+    "/tp @s 0 64 0",
+    "/clear @s",
+    "/effect give @s resistance 120 4"
+  ],
+  "cases": [
+    {
+      "skillName": "enchant-item",
+      "args": [3, 64, 0, 0],
+      "description": "エンチャントテーブルでスロット0エンチャント",
+      "setup": [
+        "/setblock 3 64 0 enchanting_table",
+        "/give @s diamond_sword 1",
+        "/give @s lapis_lazuli 10",
+        "/experience add @s 100 levels"
+      ],
+      "prechecks": [
+        { "type": "nearby_block", "block": "enchanting_table", "maxDistance": 8 },
+        { "type": "inventory_has", "item": "lapis_lazuli", "minCount": 1 }
+      ],
+      "expectedOutcome": "either"
+    },
+    {
+      "skillName": "brew-potion",
+      "args": [4, 64, 0, "nether_wart"],
+      "description": "醸造台で奇妙なポーションを醸造",
+      "setup": [
+        "/setblock 4 64 0 brewing_stand",
+        "/give @s nether_wart 3",
+        "/give @s blaze_powder 3",
+        "/give @s potion 3"
+      ],
+      "prechecks": [
+        { "type": "nearby_block", "block": "brewing_stand", "maxDistance": 8 },
+        { "type": "inventory_has", "item": "nether_wart", "minCount": 1 },
+        { "type": "inventory_has", "item": "blaze_powder", "minCount": 1 }
+      ],
+      "expectedOutcome": "either"
+    },
+    {
+      "skillName": "repair-item",
+      "args": [5, 64, 0, "diamond_sword", "diamond"],
+      "description": "金床でダイヤ剣を修理",
+      "setup": [
+        "/setblock 5 64 0 anvil",
+        "/give @s diamond_sword{Damage:500} 1",
+        "/give @s diamond 3",
+        "/experience add @s 50 levels"
+      ],
+      "prechecks": [
+        { "type": "nearby_block", "block": "anvil", "maxDistance": 8 },
+        { "type": "inventory_has", "item": "diamond", "minCount": 1 }
+      ],
+      "expectedOutcome": "either"
+    },
+    {
+      "skillName": "use-stonecutter",
+      "args": [6, 64, 0, "stone", "stone_bricks", 1],
+      "description": "石切台で石→石レンガ",
+      "setup": [
+        "/setblock 6 64 0 stonecutter",
+        "/give @s stone 8"
+      ],
+      "prechecks": [
+        { "type": "nearby_block", "block": "stonecutter", "maxDistance": 8 },
+        { "type": "inventory_has", "item": "stone", "minCount": 1 }
+      ],
+      "expectedOutcome": "either"
+    },
+    {
+      "skillName": "enchant-item",
+      "args": [100, 64, 100, 0],
+      "description": "存在しないテーブルでエンチャント → 失敗期待",
+      "expectedOutcome": "failure"
+    },
+    {
+      "skillName": "brew-potion",
+      "args": [100, 64, 100, "nether_wart"],
+      "description": "存在しない醸造台 → 失敗期待",
+      "expectedOutcome": "failure"
+    },
+    {
+      "skillName": "repair-item",
+      "args": [100, 64, 100, "diamond_sword", "diamond"],
+      "description": "存在しない金床 → 失敗期待",
+      "expectedOutcome": "failure"
+    },
+    {
+      "skillName": "use-stonecutter",
+      "args": [100, 64, 100, "stone", "stone_bricks", 1],
+      "description": "存在しない石切台 → 失敗期待",
+      "expectedOutcome": "failure"
+    }
+  ]
+}

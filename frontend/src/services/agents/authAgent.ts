@@ -7,7 +7,6 @@ type AuthCallback = (success: boolean, userData?: UserInfo) => void;
 
 export class AuthAgent extends WebSocketClientBase {
   private static instance: AuthAgent;
-  private authCallback: AuthCallback = () => {};
 
   public static getInstance() {
     if (!AuthAgent.instance) {
@@ -23,7 +22,7 @@ export class AuthAgent extends WebSocketClientBase {
   protected handleMessage(message: string) {
     const data = parseMessage(message);
     if (data.type === "auth:response") {
-      this.authCallback(data.success, data.userData);
+      this.emit("auth", data.success, data.userData);
     }
   }
 
@@ -36,7 +35,7 @@ export class AuthAgent extends WebSocketClientBase {
     );
   }
 
-  public onAuthResponse(callback: AuthCallback) {
-    this.authCallback = callback;
+  public onAuthResponse(callback: AuthCallback): () => void {
+    return this.on("auth", callback);
   }
 }

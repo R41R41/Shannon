@@ -4,9 +4,7 @@ import { Schedule } from "@common/types/scheduler";
 import { WebScheduleInput } from "@common/types/web";
 import { URLS } from "../config/ports";
 
-type UpdateScheduleCallback = (schedule: Schedule[]) => void;
-
-type SearchCallback = (results: Schedule[]) => void;
+type ScheduleCallback = (schedules: Schedule[]) => void;
 
 export class SchedulerAgent extends WebSocketClientBase {
   private static instance: SchedulerAgent;
@@ -18,27 +16,16 @@ export class SchedulerAgent extends WebSocketClientBase {
     return SchedulerAgent.instance;
   }
 
-  private searchListeners: Set<SearchCallback> = new Set();
-
-  public updateScheduleCallback: UpdateScheduleCallback;
-
   private constructor(url: string) {
     super(url);
-    this.updateScheduleCallback = () => {};
   }
 
   protected handleMessage(message: string) {
     const data = parseMessage(message);
     if (!data || data.type === "pong") return;
     if (data.type === "post_schedule") {
-      this.searchListeners.forEach((listener) =>
-        listener(data.data as Schedule[])
-      );
+      this.emit("schedules", data.data as Schedule[]);
     }
-  }
-
-  public setUpdateScheduleCallback(callback: UpdateScheduleCallback) {
-    this.updateScheduleCallback = callback;
   }
 
   public async getSchedules(): Promise<void> {
@@ -51,19 +38,16 @@ export class SchedulerAgent extends WebSocketClientBase {
     );
   }
 
-  public onSearchResults(callback: SearchCallback) {
-    this.searchListeners.add(callback);
-    return () => this.searchListeners.delete(callback);
+  public onSchedules(callback: ScheduleCallback): () => void {
+    return this.on("schedules", callback);
   }
 
   public async getAllSchedules(): Promise<Schedule[]> {
     return new Promise((resolve) => {
-      const handleAllSchedules = (schedules: Schedule[]) => {
-        this.searchListeners.delete(handleAllSchedules);
+      const unsubscribe = this.on("schedules", (schedules: Schedule[]) => {
+        unsubscribe();
         resolve(schedules);
-      };
-
-      this.searchListeners.add(handleAllSchedules);
+      });
 
       this.send(JSON.stringify({ type: "get_schedule" }));
     });

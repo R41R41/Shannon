@@ -15,26 +15,19 @@ export class EmotionAgent extends WebSocketClientBase {
     return EmotionAgent.instance;
   }
 
-  public updateEmotionCallback: UpdateEmotionCallback;
-
   private constructor(url: string) {
     super(url);
-    this.updateEmotionCallback = () => {};
   }
 
   protected handleMessage(message: string) {
     const data = parseMessage(message);
     if (!data || data.type === "pong") return;
     if (data.type === "web:emotion") {
-      this.updateEmotionCallback(data.data as EmotionType);
+      this.emit("emotion", data.data as EmotionType);
     }
   }
 
-  public setUpdateEmotionCallback(callback: UpdateEmotionCallback) {
-    this.updateEmotionCallback = callback;
-  }
-
-  public onUpdateEmotion(callback: UpdateEmotionCallback) {
-    this.updateEmotionCallback = callback;
+  public onUpdateEmotion(callback: UpdateEmotionCallback): () => void {
+    return this.on("emotion", callback);
   }
 }

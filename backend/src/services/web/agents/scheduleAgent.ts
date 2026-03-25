@@ -43,7 +43,7 @@ export class ScheduleAgent extends WebSocketServiceBase {
 
   protected override initialize() {
     this.wss.on('connection', async (ws) => {
-      logger.info('Schedule client connected', 'blue');
+      logger.debug('Schedule client connected');
 
       this.handleNewConnection(ws);
 

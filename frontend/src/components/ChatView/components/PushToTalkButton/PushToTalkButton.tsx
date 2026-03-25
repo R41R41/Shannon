@@ -5,16 +5,11 @@ import {
   stopRecording,
   stopRecordingWithoutCommit,
 } from '@/utils/audioUtils';
-import { OpenAIAgent } from '@/services/agents/openaiAgent';
+import { useOpenAI } from '@/contexts/AgentContext';
 import KeyboardVoiceOutlinedIcon from '@mui/icons-material/KeyboardVoiceOutlined';
 
-interface PushToTalkButtonProps {
-  openai: OpenAIAgent | null;
-}
-
-export const PushToTalkButton: React.FC<PushToTalkButtonProps> = ({
-  openai,
-}) => {
+export const PushToTalkButton: React.FC = () => {
+  const openai = useOpenAI();
   const [isRecording, setIsRecording] = useState(false);
   const [isVadMode, setIsVadMode] = useState(false);
   const processorRef = useRef<ScriptProcessorNode | null>(null);

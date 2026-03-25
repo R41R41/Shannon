@@ -3,20 +3,38 @@ import { MinebotSkillInput, MinebotVoiceChatInput } from '@shannon/common';
 import fetch from 'node-fetch';
 import { Vec3 } from 'vec3';
 import { EventBus } from '../eventBus/eventBus.js';
+import { config } from '../../config/env.js';
+import { LLMService } from '../llm/client.js';
+import { minebotAdapter } from '../common/adapters/index.js';
 import { CONFIG } from './config/MinebotConfig.js';
 import AutoFaceSpeaker from './constantSkills/autoFaceSpeaker.js';
 import { EventReactionSystem } from './eventReaction/EventReactionSystem.js';
 import { BotEventHandler } from './events/BotEventHandler.js';
 import { MinebotHttpServer } from './http/MinebotHttpServer.js';
-import { CentralAgent } from './llm/graph/centralAgent.js';
+import { MinebotTaskRuntime } from './runtime/MinebotTaskRuntime.js';
 import { SkillLoader } from './skills/SkillLoader.js';
-import { SkillRegistrar } from './skills/SkillRegistrar.js';
+import { SkillRegistrar, getSkillRegistrar } from './skills/SkillRegistrar.js';
 import { CustomBot } from './types.js';
 import { ConstantSkillInfo, LLMError, SkillExecutionError } from './types/index.js';
 import { WorldKnowledgeService } from './knowledge/WorldKnowledgeService.js';
 import { createLogger } from '../../utils/logger.js';
+import {
+  looksLikeSelfTestChatIntent,
+  parseSelfTestSuiteFromUserMessage,
+} from '../llm/graph/cognitive/selfImprove/selfTestIntent.js';
 
 const log = createLogger('Minebot:SkillAgent');
+
+/** chatMode OFF でも処理する SelfTest / AgentFix 用チャット */
+function isSelfTestSuiteChatMessage(message: string): boolean {
+  return (
+    message.startsWith('..agent-fix') ||
+    message.startsWith('..test-all') ||
+    message.startsWith('..test-smoke') ||
+    message.startsWith('..test') ||
+    looksLikeSelfTestChatIntent(message)
+  );
+}
 
 /**
  * SkillAgent
@@ -25,7 +43,7 @@ const log = createLogger('Minebot:SkillAgent');
  * 責任:
  * - 各コンポーネントの初期化と調整
  * - チャットイベントの処理
- * - CentralAgentとの連携
+ * - unified graph 実行を包む Minebot runtime との連携（緊急対応・UI同期）
  */
 export class SkillAgent {
   private bot: CustomBot;
@@ -37,7 +55,7 @@ export class SkillAgent {
   private eventHandler: BotEventHandler;
   private eventReactionSystem: EventReactionSystem;
   private httpServer: MinebotHttpServer;
-  public centralAgent: CentralAgent;
+  private taskRuntime: MinebotTaskRuntime;
 
   // 状態
   private recentMessages: BaseMessage[] = [];
@@ -50,11 +68,12 @@ export class SkillAgent {
 
     // コンポーネント初期化
     this.skillLoader = new SkillLoader();
-    this.skillRegistrar = new SkillRegistrar(eventBus);
-    this.centralAgent = CentralAgent.getInstance(this.bot);
-    this.eventHandler = new BotEventHandler(this.bot, this.centralAgent, this.recentMessages);
-    this.eventReactionSystem = new EventReactionSystem(this.bot);
+    this.skillRegistrar = getSkillRegistrar(eventBus);
+    this.taskRuntime = new MinebotTaskRuntime(this.bot);
+    this.eventHandler = new BotEventHandler(this.bot, this.taskRuntime, this.recentMessages);
+    this.eventReactionSystem = new EventReactionSystem(this.bot, this.taskRuntime);
     this.httpServer = new MinebotHttpServer(this.bot, () => this.sendConstantSkills(), () => this.sendReactionSettings());
+    this.httpServer.setTaskRuntime(this.taskRuntime);
   }
 
   /**
@@ -85,19 +104,15 @@ export class SkillAgent {
       await this.registerEventBusSubscriptions();
       log.success('✅ registerEventBusSubscriptions done');
 
-      // CentralAgent初期化
-      await this.centralAgent.initialize();
-      log.success('✅ centralAgent initialized');
-
-      // TaskGraphをbotに設定（HTTPサーバーからアクセスできるように）
-      (this.bot as any).taskGraph = this.centralAgent.currentTaskGraph;
+      this.taskRuntime.setExecutor((envelope, messages, options) =>
+        LLMService.getInstance(config.isDev).invokeGraph(envelope, messages, options),
+      );
+      log.success('✅ minebot task runtime connected to unified graph');
 
       // タスクリスト更新コールバックを設定
-      if (this.centralAgent.currentTaskGraph) {
-        this.centralAgent.currentTaskGraph.setTaskListUpdateCallback((taskListState) => {
-          this.sendTaskListState(taskListState);
-        });
-      }
+      this.taskRuntime.setTaskListUpdateCallback((taskListState) => {
+        void this.sendTaskListState(taskListState);
+      });
 
       // EventReactionSystem初期化
       await this.eventReactionSystem.initialize();
@@ -160,6 +175,15 @@ export class SkillAgent {
     this.skillRegistrar.registerInstantSkills(this.bot.instantSkills);
     this.skillRegistrar.registerConstantSkills(this.bot, this.bot.constantSkills);
     this.skillRegistrar.registerSkillControlEvents(this.bot);
+    await LLMService.getInstance(config.isDev).registerMinebotTools(this.bot);
+
+    // SelfImprovementDaemon に bot 参照を注入（プロアクティブ・スキル生成用）
+    try {
+      const { SelfImprovementDaemon } = await import('../llm/graph/cognitive/selfImprove/index.js');
+      SelfImprovementDaemon.getInstance().setBot(this.bot);
+    } catch {
+      // non-critical: SelfImprovementDaemon がなくてもスキルは動作する
+    }
 
     return { success: true, result: 'skills initialized' };
   }
@@ -169,17 +193,17 @@ export class SkillAgent {
    */
   private async botOnChat() {
     this.bot.on('chat', async (username, message) => {
-      if (!this.bot.chatMode) {
-        return;
-      }
-
-      // 自分の発言は記録のみ
+      // 自分の発言は記録のみ（chatMode に関わらず）
       if (username === 'I_am_Shannon') {
         const currentTime = new Date().toLocaleString('ja-JP', {
           timeZone: 'Asia/Tokyo',
         });
         const newMessage = `${currentTime} ${username}: ${message}`;
         this.recentMessages.push(new AIMessage(newMessage));
+        return;
+      }
+
+      if (!this.bot.chatMode && !isSelfTestSuiteChatMessage(message)) {
         return;
       }
 
@@ -252,6 +276,138 @@ export class SkillAgent {
     if (message === '.../') {
       const skill = this.bot.instantSkills.getSkill('display-inventory');
       if (skill) await skill.run();
+      return true;
+    }
+
+    // ..agent-fix <説明> — CodeAgentLoop で自律修正
+    if (message.startsWith('..agent-fix')) {
+      const desc = message.slice('..agent-fix'.length).trim();
+      if (!desc) {
+        this.bot.chat('使い方: ..agent-fix <修正内容の説明>');
+        return true;
+      }
+      this.bot.chat(`🤖 CodeAgentLoop 開始: ${desc.slice(0, 60)}...`);
+      (async () => {
+        try {
+          const { SelfImprovementDaemon } = await import('../llm/graph/cognitive/selfImprove/index.js');
+          const daemon = SelfImprovementDaemon.getInstance();
+          const result = await daemon.runCodeAgentFix({ description: desc });
+          this.bot.chat(
+            `🤖 AgentLoop 完了: ${result.success ? '✅' : '❌'} ` +
+            `${result.summary.slice(0, 80)} (files: ${result.filesChanged.length})`,
+          );
+        } catch (err: any) {
+          this.bot.chat(`❌ AgentLoop エラー: ${err.message?.substring(0, 80)}`);
+        }
+      })();
+      return true;
+    }
+
+    // ..test-all [--fix] - 全テストスイートを順番に実行（オーバーナイト用）
+    if (message.startsWith('..test-all')) {
+      const autoFix = message.includes('--fix');
+      const ALL_SUITES = [
+        'basic-skills',
+        'info-skills',
+        'movement-skills',
+        'craft-skills',
+        'craft-and-furnace',
+        'furnace-skills',
+        'block-skills',
+        'inventory-skills',
+        'combat-skills',
+        'new-skills',
+      ];
+      this.bot.chat(`🌙 全テスト開始 (${ALL_SUITES.length}スイート)${autoFix ? ' [自動修正ON]' : ''}...`);
+      (async () => {
+        try {
+          const { SelfImprovementDaemon } = await import('../llm/graph/cognitive/selfImprove/index.js');
+          const daemon = SelfImprovementDaemon.getInstance();
+          const report = await daemon.runMultipleSuites(ALL_SUITES, {
+            autoFix,
+            trigger: 'manual',
+          });
+          if (report) {
+            const s = report.summary;
+            this.bot.chat(
+              `🌙 全テスト完了: ${s.totalTested}件 / ` +
+              `✅${s.passed} 🔧${s.fixed} ❌${s.unfixable} ⏭️${s.skipped}`,
+            );
+          } else {
+            this.bot.chat('⚠️ テスト実行できませんでした');
+          }
+        } catch (err: any) {
+          this.bot.chat(`❌ テストエラー: ${err.message?.substring(0, 80)}`);
+        }
+      })();
+      return true;
+    }
+
+    // ..test-smoke [--fix] - 超短いスモーク（smoke-skills.json のみ）
+    if (message.startsWith('..test-smoke')) {
+      const autoFix = message.includes('--fix');
+      this.bot.chat(`⚡ スモークテスト開始${autoFix ? ' (自動修正ON)' : ''}...`);
+      (async () => {
+        try {
+          const { SelfImprovementDaemon } = await import('../llm/graph/cognitive/selfImprove/index.js');
+          const daemon = SelfImprovementDaemon.getInstance();
+          const report = await daemon.runSelfTestFromFile('smoke-skills', {
+            autoFix,
+            trigger: 'manual',
+          });
+          if (report) {
+            const s = report.summary;
+            this.bot.chat(
+              `⚡ スモーク完了: ${s.totalTested}件 / ` +
+              `✅${s.passed} 🔧${s.fixed} ❌${s.unfixable} ⏭️${s.skipped}`,
+            );
+          } else {
+            this.bot.chat('⚠️ スモーク実行できませんでした');
+          }
+        } catch (err: any) {
+          this.bot.chat(`❌ スモークエラー: ${err.message?.substring(0, 80)}`);
+        }
+      })();
+      return true;
+    }
+
+    // ..test（-all/-smoke 除く）/ 自然言語 / フルパス — self_test_cases の JSON スイートを実行
+    const isSpecificTestCommand =
+      message.startsWith('..test')
+      && !message.startsWith('..test-all')
+      && !message.startsWith('..test-smoke');
+    if (isSpecificTestCommand || looksLikeSelfTestChatIntent(message)) {
+      const parsed = parseSelfTestSuiteFromUserMessage(message);
+      if (!parsed) {
+        this.bot.chat(
+          'テスト指定を解釈できませんでした。例: ..test basic-skills [--fix]、' +
+            '.../self_test_cases/foo.json を含む文、「foo.jsonをテスト」',
+        );
+        return true;
+      }
+      const { suiteName, autoFix } = parsed;
+      this.bot.chat(`🧪 テスト開始: ${suiteName}${autoFix ? ' (自動修正ON)' : ''}...`);
+      (async () => {
+        try {
+          const { SelfImprovementDaemon } = await import('../llm/graph/cognitive/selfImprove/index.js');
+          const daemon = SelfImprovementDaemon.getInstance();
+          const report = await daemon.runSelfTestFromFile(suiteName, {
+            autoFix,
+            trigger: 'manual',
+          });
+          if (report) {
+            const s = report.summary;
+            this.bot.chat(
+              `🧪 テスト完了: ${s.totalTested}件 / ` +
+              `✅${s.passed} 🔧${s.fixed} ❌${s.unfixable} ⏭️${s.skipped}`,
+            );
+          } else {
+            this.bot.chat('⚠️ テスト実行できませんでした');
+          }
+        } catch (err: any) {
+          this.bot.chat(`❌ テストエラー: ${err.message?.substring(0, 80)}`);
+        }
+      })();
       return true;
     }
 
@@ -372,16 +528,8 @@ export class SkillAgent {
    * FCA の音声応答コールバックをセットする
    */
   private setupVoiceResponse(guildId: string, channelId: string): void {
-    const taskGraph = this.centralAgent.currentTaskGraph;
-    if (taskGraph) {
-      taskGraph.setOnResponseText((responseText: string) => {
-        this.eventBus.publish({
-          type: 'minebot:voice_response',
-          memoryZone: 'minebot',
-          data: { guildId, channelId, responseText },
-        });
-      });
-    }
+    this.lastVoiceGuildId = guildId;
+    this.lastVoiceChannelId = channelId;
   }
 
   /**
@@ -391,7 +539,8 @@ export class SkillAgent {
     userName: string,
     message: string,
     environmentState?: string,
-    selfState?: string
+    selfState?: string,
+    voiceResponseTarget?: { guildId: string; channelId: string },
   ) {
     try {
       const currentTime = new Date().toLocaleString('ja-JP', {
@@ -405,17 +554,126 @@ export class SkillAgent {
         this.recentMessages.splice(0, this.recentMessages.length - 50);
       }
 
-      await this.centralAgent.handlePlayerMessage(
-        userName,
+      const envelope = minebotAdapter.toEnvelope({
+        senderName: userName,
+        senderId: userName,
         message,
-        environmentState,
-        selfState,
-        this.recentMessages
-      );
+        serverName: this.bot.connectedServerName || 'default',
+        senderPosition: this.bot.environmentState.senderPosition
+          ? {
+              x: this.bot.environmentState.senderPosition.x,
+              y: this.bot.environmentState.senderPosition.y,
+              z: this.bot.environmentState.senderPosition.z,
+            }
+          : undefined,
+        weather: this.bot.environmentState.weather,
+        time: this.bot.environmentState.time,
+        biome: this.bot.environmentState.biome,
+        dimension: this.bot.environmentState.dimension?.toString?.() ?? undefined,
+        bossbar: this.bot.environmentState.bossbar ?? undefined,
+        botPosition: this.bot.selfState.botPosition
+          ? {
+              x: this.bot.selfState.botPosition.x,
+              y: this.bot.selfState.botPosition.y,
+              z: this.bot.selfState.botPosition.z,
+            }
+          : undefined,
+        botHealth: Number(this.bot.health ?? 0),
+        botFoodLevel: Number(this.bot.food ?? 0),
+        botHeldItem: this.bot.selfState.botHeldItem,
+        lookingAt: this.bot.selfState.lookingAt?.name,
+        inventory: this.bot.selfState.inventory,
+        nearbyEntities: Object.values(this.bot.entities)
+          .filter((entity: any) => entity?.position && entity !== this.bot.entity)
+          .map((entity: any) => entity.username || entity.name || entity.type)
+          .filter(Boolean)
+          .slice(0, 12),
+        eventType: 'chat',
+      });
+
+      if (environmentState || selfState) {
+        envelope.metadata = {
+          ...(envelope.metadata ?? {}),
+          environmentState,
+          selfState,
+        };
+      }
+
+      let immediateAckSent = false;
+
+      const resumed = await this.taskRuntime.resumeAwaitingUserTask(message, {
+        envelope,
+        messages: [...this.recentMessages],
+        environmentState: environmentState ?? null,
+        selfState: selfState ?? null,
+        onToolStarting: (toolName, args) => {
+          if (immediateAckSent) return;
+          const ack = this.buildImmediateToolAck(toolName, args);
+          if (!ack) return;
+          immediateAckSent = true;
+          this.bot.chat(ack);
+        },
+      });
+      if (resumed) {
+        return;
+      }
+
+      const result = await this.taskRuntime.invoke({
+        envelope,
+        userMessage: message,
+        messages: [...this.recentMessages],
+        environmentState: environmentState ?? null,
+        selfState: selfState ?? null,
+        onToolStarting: (toolName, args) => {
+          if (immediateAckSent) return;
+          const ack = this.buildImmediateToolAck(toolName, args);
+          if (!ack) return;
+          immediateAckSent = true;
+          this.bot.chat(ack);
+        },
+      });
+
+      const graphResult = result?.graphResult;
+      const responseText = graphResult?.actionPlan?.message ?? graphResult?.finalAnswer;
+      if (voiceResponseTarget && responseText) {
+        this.eventBus.publish({
+          type: 'minebot:voice_response',
+          memoryZone: 'minebot',
+          data: {
+            guildId: voiceResponseTarget.guildId,
+            channelId: voiceResponseTarget.channelId,
+            responseText,
+          },
+        });
+      }
     } catch (error) {
       const llmError = new LLMError('message-processing', error as Error);
       log.error(`Message processing failed: ${llmError.message}`, error);
       this.bot.chat('エラーが発生しました。もう一度お試しください。');
+    }
+  }
+
+  private buildImmediateToolAck(
+    toolName: string,
+    args?: Record<string, unknown>,
+  ): string | null {
+    const targetName =
+      typeof args?.targetName === 'string' && args.targetName.trim()
+        ? args.targetName.trim()
+        : null;
+
+    switch (toolName) {
+      case 'follow-entity':
+        return targetName
+          ? `${targetName}のところに向かうね。`
+          : '今そっちに向かうね。';
+      // move-to は内部的に何度も呼ばれるためチャット不要
+      case 'enter-portal':
+        return '今そっちへ行ってみるね。';
+      case 'flee-from':
+        return 'いったん安全な場所に離れるね。';
+      default:
+        return null;
     }
   }
 
@@ -472,6 +730,7 @@ export class SkillAgent {
         message,
         JSON.stringify(this.bot.environmentState),
         JSON.stringify(this.bot.selfState),
+        { guildId, channelId },
       );
     });
 
@@ -554,6 +813,10 @@ export class SkillAgent {
    */
   getHttpServer(): MinebotHttpServer {
     return this.httpServer;
+  }
+
+  getTaskRuntime() {
+    return this.taskRuntime;
   }
 
   /**

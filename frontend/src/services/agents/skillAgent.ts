@@ -15,30 +15,23 @@ export class SkillAgent extends WebSocketClientBase {
     return SkillAgent.instance;
   }
 
-  public updateSkillsCallback: UpdateSkillsCallback;
-
   private constructor(url: string) {
     super(url);
-    this.updateSkillsCallback = () => {};
   }
 
   protected handleMessage(message: string) {
     const data = parseMessage(message);
     if (!data || data.type === "pong") return;
     if (data.type === "web:skill") {
-      this.updateSkillsCallback(data.data as SkillInfo[]);
+      this.emit("skills", data.data as SkillInfo[]);
     }
-  }
-
-  public setUpdateSkillsCallback(callback: UpdateSkillsCallback) {
-    this.updateSkillsCallback = callback;
   }
 
   public async getSkills(): Promise<void> {
     this.send(JSON.stringify({ type: "get_skills" }));
   }
 
-  public onUpdateSkills(callback: UpdateSkillsCallback) {
-    this.updateSkillsCallback = callback;
+  public onUpdateSkills(callback: UpdateSkillsCallback): () => void {
+    return this.on("skills", callback);
   }
 }

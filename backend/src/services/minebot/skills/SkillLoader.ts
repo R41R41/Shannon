@@ -47,6 +47,24 @@ export class SkillLoader {
                 }
             }
 
+            // generated/ サブディレクトリがあれば読み込む
+            const genInstantDir = join(this.instantSkillDir, 'generated');
+            if (fs.existsSync(genInstantDir)) {
+                const genFiles = fs.readdirSync(genInstantDir).filter(f => f.endsWith('.js'));
+                for (const file of genFiles) {
+                    try {
+                        const { default: skillClass } = await import(
+                            join(genInstantDir, file) + '?v=' + Date.now()
+                        );
+                        const skillInstance = new skillClass(bot) as InstantSkill;
+                        instantSkills.addSkill(skillInstance);
+                        log.info(`🔧 Generated instant skill loaded: ${skillInstance.skillName}`);
+                    } catch (error) {
+                        log.error(`⚠️ Generated スキル読み込みスキップ: ${file}`, error);
+                    }
+                }
+            }
+
             log.success(`✅ Loaded ${instantSkills.getSkills().length} instant skills`);
             return {
                 success: true,
@@ -88,6 +106,24 @@ export class SkillLoader {
                 }
             }
 
+            // generated/ サブディレクトリがあれば読み込む
+            const genConstantDir = join(this.constantSkillDir, 'generated');
+            if (fs.existsSync(genConstantDir)) {
+                const genFiles = fs.readdirSync(genConstantDir).filter(f => f.endsWith('.js'));
+                for (const file of genFiles) {
+                    try {
+                        const { default: skillClass } = await import(
+                            join(genConstantDir, file) + '?v=' + Date.now()
+                        );
+                        const skillInstance = new skillClass(bot) as ConstantSkill;
+                        constantSkills.addSkill(skillInstance);
+                        log.info(`🔧 Generated constant skill loaded: ${skillInstance.skillName}`);
+                    } catch (error) {
+                        log.error(`⚠️ Generated スキル読み込みスキップ: ${file}`, error);
+                    }
+                }
+            }
+
             log.success(`✅ Loaded ${constantSkills.getSkills().length} constant skills`);
             return {
                 success: true,
@@ -99,6 +135,14 @@ export class SkillLoader {
             log.error(skillError.message, skillError);
             return { success: false, result: skillError.message };
         }
+    }
+
+    /**
+     * 単一スキルファイルを読み込む（ホットリロード用）
+     */
+    async loadSingleSkill(filePath: string, bot: CustomBot): Promise<InstantSkill | ConstantSkill> {
+        const { default: skillClass } = await import(filePath + '?v=' + Date.now());
+        return new skillClass(bot);
     }
 
     /**

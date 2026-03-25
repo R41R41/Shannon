@@ -6,6 +6,8 @@
 
 Shannon is an autonomous AI agent platform (Minecraft bot, Discord bot, Twitter agent, YouTube integration, web dashboard). It is a monorepo with npm workspaces: `backend`, `frontend`, `common`.
 
+**設計ドキュメント索引**: [`docs/README.md`](docs/README.md)（現状サマリは [`docs/architecture-current.md`](docs/architecture-current.md)）。
+
 ### Key commands
 
 | Task          | Command                                                                                    |
@@ -16,7 +18,7 @@ Shannon is an autonomous AI agent platform (Minecraft bot, Discord bot, Twitter 
 | Dev (both)    | `npm run dev` (uses `concurrently`)                                                        |
 | Frontend dev  | `npm run dev -w frontend` (Vite on port 3001)                                              |
 | Frontend lint | `npm run lint -w frontend`                                                                 |
-| Backend tests | `npx vitest run` (from `backend/`; requires `OPENAI_API_KEY` + `MONGODB_URI`)              |
+| Backend tests | `npx vitest run` (from `backend/`; 統合テストは `OPENAI_API_KEY` + `MONGODB_URI` が必要)   |
 
 ### Non-obvious caveats
 
@@ -28,15 +30,28 @@ Shannon is an autonomous AI agent platform (Minecraft bot, Discord bot, Twitter 
 - **MongoDB must be running locally** (default port 27017). Start with: `mongod --dbpath /data/db --logpath /data/db/mongod.log --logappend --bind_ip 127.0.0.1 --port 27017 &`. Ensure `/data/db` is owned by the current user.
 - **Backend startup command (full):** `cd backend && TWITTER_API_KEY=dummy TWITTER_API_KEY_SECRET=dummy TWITTER_ACCESS_TOKEN=dummy TWITTER_ACCESS_TOKEN_SECRET=dummy NOTION_API_KEY=dummy GOOGLE_API_KEY=dummy SEARCH_ENGINE_ID=dummy PORT=5001 node --unhandled-rejections=warn --experimental-specifier-resolution=node --es-module-specifier-resolution=node dist/server.js`
 - **Frontend requires Firebase env vars:** Create `frontend/.env` with `VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_AUTH_DOMAIN`, `VITE_FIREBASE_PROJECT_ID`. See `frontend/.env.example` for a template.
-- **All tests are integration tests** that require real API keys (OpenAI, Twitter, etc.). There are no pure unit tests.
+- **多くのテストは統合テスト**（OpenAI 等が必要）。**例外:** `npx vitest run tests/selfImprove/nightlySchedule.test.ts` は純粋な時刻判定のみ（API 不要）。
 - **Frontend lint has 1 pre-existing error** (`unused variable` in `src/services/config/ports.ts`).
 - **API test endpoint:** `POST /api/test/scheduled-post?dry_run=true` with `x-api-key` header (matches `TWITTERAPI_IO_API_KEY` env var) and body `{"command":"fortune"}` generates a fortune post via OpenAI without posting to Twitter.
+- **Self-improve Tier 2:** `SELF_IMPROVE_AUTO_APPLY_TIER2=true` forces file writes after validation (otherwise proposals stay `pending_review`). Dev defaults: `--dev` or `IS_DEV=True` also enable auto-apply. `SELF_IMPROVE_ALLOW_DELETE=true` is required for Tier 2 `delete` actions. Mutable: almost all of `backend/` except `src/config/`, lockfiles, `package.json`, `tsconfig*`, `.env`, `node_modules/`, `dist/`, etc. (`mutableCodePolicy.ts`). Tier2 prompts prioritize `src/services/minebot/` and `src/services/llm/`.
+- **Minecraft self-test chat (chatMode OFF でも可):** `..test-all` / `..test-smoke` / `..test <suite> [--fix]` に加え、`self_test_cases` や `saves/minecraft/self_test_cases` を含む文、または `basic-skills.json` + 「テスト」などの自然文で同じランナーが起動する（`selfTestIntent.ts`）。
+- **CodeAgentLoop:** `..agent-fix <説明>` でコーディングエージェント級の自律修正を起動。`read_file` / `search_code` / `list_directory` / `edit_file`（差分適用）/ `create_file` / `delete_file` / `run_tsc` / `run_vitest` の 8 ツールを gpt-4.1 が ReAct ループで使う。`SkillPatcher.diagnoseAndFixWithAgent` / `ImprovementApplier.applyWithAgent` でプログラムからも呼べる。
+- **夜間自己改善（課金抑止）:** `SELF_IMPROVE_NIGHTLY_ENABLED=true` で UTC 指定時刻に1日1回 `runNightlyMaintenance` → `saves/self_improve/morning_reports/` に Markdown/JSON。**既定は LLM なし**（レポートに「スキップ」が並ぶだけ）。課金ありにするには明示: `SELF_IMPROVE_NIGHTLY_RUN_REACTIVE=true`（失敗バッファ分析）, `SELF_IMPROVE_NIGHTLY_CODE_AGENT=true`（Anthropic）, `SELF_IMPROVE_NIGHTLY_MINECRAFT_SUITES=smoke-skills` 等。`SELF_IMPROVE_NIGHTLY_MINECRAFT_AUTOFIX=true` は SkillPatcher で追加 LLM。`SELF_IMPROVE_MORNING_WEBHOOK_URL` で Discord 等へ要約投稿可。
 
-### CD（GitHub Actions → 本番 VM）
+### 本番 CD（GitHub Actions → Shannon-prod）
 
-- **トリガー:** このリポジトリ（**Shannon-prod**）の **`main` への push / マージ**（[`.github/workflows/deploy-production.yml`](.github/workflows/deploy-production.yml)）。
-- **動作:** SSH で本番 VM に入り、`/home/azureuser/Shannon-prod` で `git fetch` → `reset --hard origin/main` → `npm ci --ignore-scripts` → `npx patch-package` → **`./start.sh`**（tmux で backend / frontend を再起動）。
-- **Secrets（Repository secrets）:** `SHANNON_SSH_HOST`, `SHANNON_SSH_USER`, `SHANNON_SSH_PRIVATE_KEY`（**秘密鍵は `-----BEGIN`〜`-----END` 全文**。aiminelab 用の鍵と共用可。ホストが同じなら `AIMINELAB_SSH_*` と同値でもよいが、名前はワークフローが `SHANNON_*` を参照する）。
-- **クローン先が違うとき:** workflow 内の `SHANNON_PROD_DIR` を実パスに変更する。
-- **開発リポジトリ（Shannon-dev）との関係:** 本番が pull するのは **Shannon-prod の main** だけ。開発は Shannon-dev で行い、本番に載せる変更は **Shannon-prod にマージ・push** してから CD が走る形を想定。Shannon-dev の push だけで本番を更新したい場合は、Shannon-dev 側に別 workflow を置き、同じ SSH 手順で `Shannon-prod` のディレクトリだけ pull するか、`repository_dispatch` 等で連携する必要がある。
-- **NSG / SSH:** GitHub ホステッドランナーから VM の 22 番へ届く必要あり（aiminelab CD と同様）。届かない場合はセルフホステッドランナー検討。
+- **トリガー:** **`main` への push / マージ**および手動 `workflow_dispatch`（[`.github/workflows/deploy-production.yml`](.github/workflows/deploy-production.yml)）。
+- **動作:** SSH で本番 VM に入り、本番クローンで `git fetch` → `checkout main` → **`reset --hard origin/main`** → **`npm ci --ignore-scripts`** → **`npx patch-package`** → **`./start.sh`**。続けて tmux セッション `shannon-backend-prod` / `shannon-frontend-prod` の存在を確認。
+- **Secrets（Repository secrets）**
+
+| Secret | 内容 |
+|--------|------|
+| `SHANNON_PROD_SSH_HOST` | 本番 VM の IP または FQDN |
+| `SHANNON_PROD_SSH_USER` | 例: `azureuser` |
+| `SHANNON_PROD_SSH_PRIVATE_KEY` | VM ログイン用の秘密鍵（**BEGIN〜END 全文**。先頭空行は workflow 側で除去） |
+| `SHANNON_PROD_REPO_PATH` | （任意）本番クローンの絶対パス。未設定時は `/home/azureuser/Shannon-prod` |
+
+- **以前 `SHANNON_SSH_*` だけ登録していた場合:** 上記 `SHANNON_PROD_*` に合わせて Secrets を登録し直すか、同じ値を `SHANNON_PROD_*` 名で追加する。
+- **本番側の前提:** `origin` がこのリポジトリの `main` を向いていること。`git fetch` は VM 上の GitHub 用 SSH（`git@github.com:...`）が通ること。`tmux` が利用できること。
+- **ネイティブモジュール:** `npm ci --ignore-scripts` のため、**初回本番セットアップ**で `canvas` / `@discordjs/opus` 等を手動ビルド済みであること（AGENTS の Native modules 節）。ロック変更後に CI の `npm ci` が失敗したら本番で依存を直してから再デプロイ。
+- **NSG / SSH:** GitHub ホステッドランナーから VM の 22 番へ届く必要あり（aiminelab CD と同様）。

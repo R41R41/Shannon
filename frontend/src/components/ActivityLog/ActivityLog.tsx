@@ -1,12 +1,22 @@
 import React, { useEffect, useState, useRef } from "react";
 import styles from "./ActivityLog.module.scss";
 import { ILog, MemoryZone } from "@common/types/common";
-import { MonitoringAgent } from "@/services/agents/monitoringAgent";
+import { useMonitoring } from "@/contexts/AgentContext";
+import { showToast } from "@components/Toast/Toast";
 import classNames from "classnames";
 
-interface ActivityLogProps {
-  monitoring: MonitoringAgent | null;
-}
+const ZONE_COLORS: Record<string, string> = {
+  minecraft: 'zone-minecraft',
+  discord: 'zone-discord',
+  twitter: 'zone-twitter',
+  youtube: 'zone-youtube',
+  web: 'zone-web',
+};
+
+const getZoneColor = (zone: string): string => {
+  const key = Object.keys(ZONE_COLORS).find(k => zone.startsWith(k));
+  return key ? ZONE_COLORS[key] : 'zone-default';
+};
 
 interface FilterTab {
   label: string;
@@ -44,7 +54,8 @@ const DISCORD_SERVERS = [
   },
 ];
 
-const ActivityLog: React.FC<ActivityLogProps> = ({ monitoring }) => {
+const ActivityLog: React.FC = () => {
+  const monitoring = useMonitoring();
   const [logs, setLogs] = useState<ILog[]>([]);
   const [selectedMemoryZone, setSelectedMemoryZone] = useState<
     MemoryZone | ""
@@ -54,12 +65,24 @@ const ActivityLog: React.FC<ActivityLogProps> = ({ monitoring }) => {
   const [levelFilter, setLevelFilter] = useState<"all" | "error" | "warn">("all");
   const logListRef = useRef<HTMLDivElement>(null);
   const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
-  const MAX_LOGS = parseInt(localStorage.getItem('shannon_log_count') || '200');
+  const [maxLogs, setMaxLogs] = useState(() =>
+    parseInt(localStorage.getItem('shannon_log_count') || '200')
+  );
 
   useEffect(() => {
-    monitoring?.setLogCallback((log: ILog) => {
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === 'shannon_log_count' && e.newValue) {
+        setMaxLogs(parseInt(e.newValue));
+      }
+    };
+    window.addEventListener('storage', handleStorage);
+    return () => window.removeEventListener('storage', handleStorage);
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = monitoring?.onLog((log: ILog) => {
       setLogs((prevLogs) => {
-        const newLogs = [...prevLogs, log].slice(-MAX_LOGS);
+        const newLogs = [...prevLogs, log].slice(-maxLogs);
         if (shouldAutoScroll) {
           setTimeout(() => {
             logListRef.current?.scrollTo({
@@ -71,7 +94,11 @@ const ActivityLog: React.FC<ActivityLogProps> = ({ monitoring }) => {
         return newLogs;
       });
     });
-  }, [monitoring, shouldAutoScroll]);
+
+    return () => {
+      unsubscribe?.();
+    };
+  }, [monitoring, shouldAutoScroll, maxLogs]);
 
   useEffect(() => {
     if (monitoring?.status === "connected") {
@@ -220,12 +247,20 @@ const ActivityLog: React.FC<ActivityLogProps> = ({ monitoring }) => {
               [styles.errorEntry]: isErrorLog(log),
               [styles.warningEntry]: isWarningLog(log),
             })}
+            onClick={() => {
+              navigator.clipboard.writeText(log.content).then(() => {
+                showToast('コピーしました', 'success', 1500);
+              }).catch(() => {});
+            }}
+            title="クリックでコピー"
           >
             <span className={styles.timestamp}>
               {formatTimestamp(log.timestamp)}
             </span>
             {selectedMemoryZone === "" && (
-              <span className={styles.memoryZone}>{log.memoryZone}</span>
+              <span className={classNames(styles.zoneBadge, styles[getZoneColor(log.memoryZone)])}>
+                {log.memoryZone}
+              </span>
             )}
             <span className={classNames(styles.content, styles[log.color])}>
               {formatContent(log.content)}

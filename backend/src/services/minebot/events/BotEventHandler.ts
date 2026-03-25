@@ -1,6 +1,6 @@
 import { BaseMessage } from '@langchain/core/messages';
 import { EventReactionSystem } from '../eventReaction/EventReactionSystem.js';
-import { CentralAgent } from '../llm/graph/centralAgent.js';
+import { MinebotTaskRuntime } from '../runtime/MinebotTaskRuntime.js';
 import { CustomBot } from '../types.js';
 import { createLogger } from '../../../utils/logger.js';
 
@@ -12,7 +12,7 @@ const log = createLogger('Minebot:Event');
  */
 export class BotEventHandler {
     private bot: CustomBot;
-    private centralAgent: CentralAgent;
+    private taskRuntime: MinebotTaskRuntime;
     private recentMessages: BaseMessage[];
     private lastHealth: number = 20;
     private lastOxygen: number = 20;  // 酸素の最大値は20
@@ -21,9 +21,9 @@ export class BotEventHandler {
     private lastDeathMessage: string = '';  // Minecraftの死亡メッセージ
     private eventReactionSystem: EventReactionSystem | null = null;
 
-    constructor(bot: CustomBot, centralAgent: CentralAgent, recentMessages: BaseMessage[]) {
+    constructor(bot: CustomBot, taskRuntime: MinebotTaskRuntime, recentMessages: BaseMessage[]) {
         this.bot = bot;
-        this.centralAgent = centralAgent;
+        this.taskRuntime = taskRuntime;
         this.recentMessages = recentMessages;
         this.lastHealth = bot.health || 20;
     }
@@ -48,6 +48,7 @@ export class BotEventHandler {
         this.registerDeathMessage();
         this.registerDeath();
         this.registerRespawn();
+        this.registerEntityEffects();
         log.success('✅ All bot event handlers registered');
     }
 
@@ -295,29 +296,37 @@ export class BotEventHandler {
 
     /**
      * deathイベント - 死亡時の処理
+     * 即座にタスクを失敗させ、emergencyModeをリセットする
      */
     private registerDeath(): void {
         this.bot.on('death', async () => {
-            // 死亡メッセージがあればそれを使用、なければ推測
             if (!this.lastDeathMessage) {
-                // 推測（フォールバック）
-                const nearbyHostile = this.bot.nearestEntity((entity) => {
-                    if (!entity || !entity.position) return false;
-                    const distance = entity.position.distanceTo(this.bot.entity.position);
-                    if (distance > 10) return false;
-                    const hostileMobs = ['zombie', 'husk', 'skeleton', 'creeper', 'spider', 'drowned', 'stray'];
-                    const entityName = entity.name?.toLowerCase() || '';
-                    return hostileMobs.some(mob => entityName.includes(mob));
-                });
+                try {
+                    const nearbyHostile = this.bot.nearestEntity((entity) => {
+                        if (!entity || !entity.position) return false;
+                        const distance = entity.position.distanceTo(this.bot.entity.position);
+                        if (distance > 10) return false;
+                        const hostileMobs = ['zombie', 'husk', 'skeleton', 'creeper', 'spider', 'drowned', 'stray'];
+                        const entityName = entity.name?.toLowerCase() || '';
+                        return hostileMobs.some(mob => entityName.includes(mob));
+                    });
 
-                if (nearbyHostile) {
-                    this.lastDeathMessage = `${nearbyHostile.name}に倒された可能性`;
-                } else {
+                    if (nearbyHostile) {
+                        this.lastDeathMessage = `${nearbyHostile.name}に倒された可能性`;
+                    } else {
+                        this.lastDeathMessage = '不明な原因で死亡';
+                    }
+                } catch {
                     this.lastDeathMessage = '不明な原因で死亡';
                 }
             }
 
             log.error(`💀 ボット死亡: ${this.lastDeathMessage}`);
+
+            // 即座にタスクを失敗させてemergencyModeをリセット（pathfinder等も停止）
+            if (this.taskRuntime.isRunning()) {
+                this.taskRuntime.failCurrentTaskDueToDeath(this.lastDeathMessage);
+            }
         });
     }
 
@@ -328,11 +337,10 @@ export class BotEventHandler {
         this.bot.on('spawn', async () => {
             log.success('🔄 Bot has respawned');
 
-            // TaskGraphに死亡を通知してタスクを失敗としてマーク
-            const taskGraph = this.centralAgent.currentTaskGraph;
-            if (taskGraph && taskGraph.isRunning()) {
+            // deathイベントで処理済みだが、フォールバックとして残す
+            if (this.taskRuntime.isRunning()) {
                 const deathReason = this.lastDeathMessage || '死亡によりタスク失敗';
-                taskGraph.failCurrentTaskDueToDeath(deathReason);
+                this.taskRuntime.failCurrentTaskDueToDeath(deathReason);
             }
 
             // 状態をリセット
@@ -340,6 +348,79 @@ export class BotEventHandler {
             this.lastOxygen = 20;
             this.consecutiveDamageCount = 0;
             this.lastDeathMessage = '';
+        });
+    }
+
+    // ── ステータスエフェクト ──
+
+    /** エフェクトID→名前のマッピング */
+    private static readonly EFFECT_NAMES: Record<number, string> = {
+        1: 'speed', 2: 'slowness', 3: 'haste', 4: 'mining_fatigue',
+        5: 'strength', 6: 'instant_health', 7: 'instant_damage',
+        8: 'jump_boost', 9: 'nausea', 10: 'regeneration',
+        11: 'resistance', 12: 'fire_resistance', 13: 'water_breathing',
+        14: 'invisibility', 15: 'blindness', 16: 'night_vision',
+        17: 'hunger', 18: 'weakness', 19: 'poison', 20: 'wither',
+        21: 'health_boost', 22: 'absorption', 23: 'saturation',
+        24: 'glowing', 25: 'levitation', 26: 'luck', 27: 'unluck',
+        28: 'slow_falling', 29: 'conduit_power', 30: 'dolphins_grace',
+        31: 'bad_omen', 32: 'hero_of_the_village', 33: 'darkness',
+    };
+
+    private static getEffectName(id: number): string {
+        return BotEventHandler.EFFECT_NAMES[id] || `effect_${id}`;
+    }
+
+    /**
+     * entityEffect / entityEffectEnd イベント — ステータスエフェクト追跡
+     */
+    private registerEntityEffects(): void {
+        if (!(this.bot as any).activeEffects) {
+            (this.bot as any).activeEffects = [];
+        }
+
+        (this.bot as any).on('entityEffect', (entity: any, effect: any) => {
+            if (entity !== this.bot.entity) return;
+
+            const effectEntry = {
+                id: effect.id as number,
+                name: BotEventHandler.getEffectName(effect.id),
+                amplifier: (effect.amplifier ?? 0) as number,
+                duration: (effect.duration ?? 0) as number,
+            };
+
+            const effects: Array<typeof effectEntry> = (this.bot as any).activeEffects;
+            const existingIdx = effects.findIndex(e => e.id === effectEntry.id);
+            if (existingIdx >= 0) {
+                effects[existingIdx] = effectEntry;
+            } else {
+                effects.push(effectEntry);
+            }
+
+            log.info(`✨ 効果付与: ${effectEntry.name} (Lv${effectEntry.amplifier + 1})`);
+
+            // 危険エフェクト + 低HP → 緊急通知
+            const dangerousEffects = ['poison', 'wither', 'instant_damage'];
+            if (dangerousEffects.includes(effectEntry.name)) {
+                const currentHealth = this.bot.health ?? 20;
+                if (currentHealth <= 10 && this.eventReactionSystem) {
+                    log.error(`🚨 危険エフェクト: ${effectEntry.name} (HP=${currentHealth})`);
+                    this.eventReactionSystem.handleDamage({
+                        damage: 0,
+                        damagePercent: 0,
+                        currentHealth,
+                        consecutiveCount: 0,
+                    }).catch(() => {});
+                }
+            }
+        });
+
+        (this.bot as any).on('entityEffectEnd', (entity: any, effect: any) => {
+            if (entity !== this.bot.entity) return;
+            const effects: Array<{ id: number }> = (this.bot as any).activeEffects;
+            const idx = effects.findIndex(e => e.id === effect.id);
+            if (idx >= 0) effects.splice(idx, 1);
+            log.info(`✨ 効果消失: ${BotEventHandler.getEffectName(effect.id)}`);
         });
     }
 }

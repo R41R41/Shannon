@@ -1,4 +1,4 @@
-import { OpenAIService } from '@/services/agents/openaiAgent';
+import { OpenAIAgent } from '@/services/agents/openaiAgent';
 
 export const convertFloat32ToInt16 = (buffer: Float32Array): ArrayBuffer => {
   let l = buffer.length;
@@ -12,7 +12,7 @@ export const convertFloat32ToInt16 = (buffer: Float32Array): ArrayBuffer => {
 export const startRecording = async (
   setIsRecording: (isRecording: boolean) => void,
   processorRef: React.MutableRefObject<ScriptProcessorNode | null>,
-  openaiService: OpenAIService | null
+  openaiService: OpenAIAgent | null
 ) => {
   try {
     setIsRecording(true);
@@ -47,7 +47,7 @@ export const startRecording = async (
 
 export const stopRecording = (
   setIsRecording: (isRecording: boolean) => void,
-  openaiService: OpenAIService | null,
+  openaiService: OpenAIAgent | null,
   processorRef: React.MutableRefObject<ScriptProcessorNode | null>
 ) => {
   setIsRecording(false);

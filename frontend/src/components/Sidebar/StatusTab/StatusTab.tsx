@@ -1,15 +1,12 @@
-import { StatusAgent } from "@/services/agents/statusAgent";
 import { ConnectionStatus } from "@/services/common/WebSocketClient";
 import { ServiceStatus } from "@common/types/common";
-import { UserInfo } from "@common/types/web";
-import React, { useEffect, useState } from "react";
+import { useAgents } from "@/contexts/AgentContext";
+import React, { useCallback, useEffect, useState } from "react";
 import { MinebotBotItem } from "../MinebotBotItem/MinebotBotItem";
 import { ServiceItem } from "../ServiceItem/ServiceItem";
 import styles from "./StatusTab.module.scss";
 
 interface StatusTabProps {
-  status: StatusAgent | null;
-  userInfo?: UserInfo | null;
   isTest?: boolean;
 }
 
@@ -57,15 +54,34 @@ const INITIAL_STATUSES: ServiceStatuses = Object.fromEntries(
   ALL_SERVICE_IDS.map((id) => [id, "stopped" as ServiceStatus])
 );
 
+const STORAGE_KEY = "statusTab:collapsedCategories";
+
+function loadCollapsed(): Record<string, boolean> {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
 export const StatusTab: React.FC<StatusTabProps> = ({
-  status,
-  userInfo,
   isTest,
 }) => {
+  const { status, userInfo } = useAgents();
   const [serviceStatuses, setServiceStatuses] =
     useState<ServiceStatuses>(INITIAL_STATUSES);
   const [connectionStatus, setConnectionStatus] =
     useState<ConnectionStatus>("disconnected");
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>(loadCollapsed);
+
+  const toggleCategory = useCallback((label: string) => {
+    setCollapsed((prev) => {
+      const next = { ...prev, [label]: !prev[label] };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      return next;
+    });
+  }, []);
 
   // Track WebSocket connection for re-fetch on reconnect
   useEffect(() => {
@@ -118,30 +134,43 @@ export const StatusTab: React.FC<StatusTabProps> = ({
 
       {isAdmin && (
         <div className={styles.categoryList}>
-          {SERVICE_CATEGORIES.map((category) => (
-            <div key={category.label} className={styles.category}>
-              <span className={styles.categoryLabel}>{category.label}</span>
-              <div className={styles.serviceList}>
-                {category.services.map((service) => (
-                  <ServiceItem
-                    key={service.id}
-                    name={service.name}
-                    status={serviceStatuses[service.id]}
-                    serviceId={service.id}
-                    statusAgent={status}
-                    onToggle={handleToggle}
-                  />
-                ))}
-                {category.label === "Minebot" && (
-                  <MinebotBotItem
-                    status={serviceStatuses["minebot:bot"]}
-                    onToggle={handleToggle}
-                    onServerSelect={handleMinebotBotStart}
-                  />
+          {SERVICE_CATEGORIES.map((category) => {
+            const isCollapsed = !!collapsed[category.label];
+            return (
+              <div key={category.label} className={styles.category}>
+                <button
+                  type="button"
+                  className={styles.categoryToggle}
+                  onClick={() => toggleCategory(category.label)}
+                  aria-expanded={!isCollapsed}
+                >
+                  <span className={`${styles.chevron} ${isCollapsed ? styles.collapsed : ""}`}>&#9662;</span>
+                  <span className={styles.categoryLabel}>{category.label}</span>
+                </button>
+                {!isCollapsed && (
+                  <div className={styles.serviceList}>
+                    {category.services.map((service) => (
+                      <ServiceItem
+                        key={service.id}
+                        name={service.name}
+                        status={serviceStatuses[service.id]}
+                        serviceId={service.id}
+                        statusAgent={status}
+                        onToggle={handleToggle}
+                      />
+                    ))}
+                    {category.label === "Minebot" && (
+                      <MinebotBotItem
+                        status={serviceStatuses["minebot:bot"]}
+                        onToggle={handleToggle}
+                        onServerSelect={handleMinebotBotStart}
+                      />
+                    )}
+                  </div>
                 )}
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 

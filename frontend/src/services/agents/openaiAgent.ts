@@ -13,12 +13,6 @@ export class OpenAIAgent extends WebSocketClientBase {
     return OpenAIAgent.instance;
   }
 
-  public textCallback: ((text: string) => void) | null = null;
-  public textDoneCallback: (() => void) | null = null;
-  public audioCallback: ((data: string) => void) | null = null;
-  public audioDoneCallback: (() => void) | null = null;
-  public userTranscriptCallback: ((text: string) => void) | null = null;
-
   private constructor(url: string) {
     super(url);
   }
@@ -29,20 +23,40 @@ export class OpenAIAgent extends WebSocketClientBase {
       return;
     }
     if (data.type === "command" && data.command === "text_done") {
-      this.textDoneCallback?.();
+      this.emit("textDone");
     } else if (data.type === "command" && data.command === "audio_done") {
-      this.audioDoneCallback?.();
+      this.emit("audioDone");
     } else if (data.type === "text" && data.text) {
-      this.textCallback?.(data.text);
-      this.textDoneCallback?.();
+      this.emit("text", data.text);
+      this.emit("textDone");
     } else if (data.type === "realtime_text" && data.realtime_text) {
-      this.textCallback?.(data.realtime_text);
+      this.emit("text", data.realtime_text);
     } else if (data.type === "realtime_audio" && data.realtime_audio) {
       console.log(`Received audio data: ${data.realtime_audio.length} bytes`);
-      this.audioCallback?.(data.realtime_audio);
+      this.emit("audio", data.realtime_audio);
     } else if (data.type === "user_transcript" && data.realtime_text) {
-      this.userTranscriptCallback?.(data.realtime_text);
+      this.emit("userTranscript", data.realtime_text);
     }
+  }
+
+  public onText(callback: (text: string) => void): () => void {
+    return this.on("text", callback);
+  }
+
+  public onTextDone(callback: () => void): () => void {
+    return this.on("textDone", callback);
+  }
+
+  public onAudio(callback: (data: string) => void): () => void {
+    return this.on("audio", callback);
+  }
+
+  public onAudioDone(callback: () => void): () => void {
+    return this.on("audioDone", callback);
+  }
+
+  public onUserTranscript(callback: (text: string) => void): () => void {
+    return this.on("userTranscript", callback);
   }
 
   async sendMessage(

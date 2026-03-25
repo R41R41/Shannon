@@ -44,7 +44,7 @@ export class StatusAgent extends WebSocketServiceBase {
 
   protected override initialize() {
     this.wss.on('connection', (ws) => {
-      logger.info('Status client connected', 'blue');
+      logger.debug('Status client connected');
 
       this.handleNewConnection(ws);
 

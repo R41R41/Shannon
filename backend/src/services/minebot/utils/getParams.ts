@@ -5,8 +5,8 @@ import { getChatResponse } from './getChatResponse.js';
 export async function getParams(
   bot: CustomBot,
   params: Param[]
-): Promise<{ success: boolean; result: Record<string, any> | string }> {
-  const result: Record<string, any> = {};
+): Promise<{ success: boolean; result: Record<string, unknown> | string }> {
+  const result: Record<string, unknown> = {};
   for (const param of params) {
     let response: string;
     response = await getChatResponse(

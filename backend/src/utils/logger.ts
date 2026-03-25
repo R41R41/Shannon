@@ -17,6 +17,11 @@
  *   import { logger, initFileLogging } from '../../utils/logger.js';
  *   initFileLogging('/path/to/logs');  // call once at startup
  *
+ * Service-specific logs:
+ *   createLogger('Minebot:Client')  → also writes to minebot-YYYYMMDD.log
+ *   createLogger('Twitter:API')     → also writes to twitter-YYYYMMDD.log
+ *   createLogger('Discord:Voice')   → also writes to discord-YYYYMMDD.log
+ *
  * Usage:
  *   logger.info('Server started', 'blue');
  *   logger.error('Connection failed');
@@ -48,6 +53,66 @@ function colorize(text: string, color: Color): string {
 /** Strip all ANSI escape codes from a string */
 function stripAnsi(text: string): string {
   return text.replace(/\x1b\[[0-9;]*m/g, '');
+}
+
+// ---------------------------------------------------------------------------
+// Service categories for per-service log files
+// ---------------------------------------------------------------------------
+export type ServiceCategory = 'twitter' | 'minebot' | 'discord' | 'website';
+
+const SERVICE_STREAMS: Map<ServiceCategory, { stream: WriteStream | null; dateKey: string }> = new Map();
+
+function getServiceFileName(service: ServiceCategory): string {
+  const now = new Date();
+  const jst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+  const y = jst.getUTCFullYear();
+  const mo = String(jst.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(jst.getUTCDate()).padStart(2, '0');
+  return `${service}-${y}${mo}${d}.log`;
+}
+
+function ensureServiceStream(service: ServiceCategory): WriteStream | null {
+  if (!logDir) return null;
+
+  const fileName = getServiceFileName(service);
+  const entry = SERVICE_STREAMS.get(service);
+
+  if (entry && entry.dateKey === fileName) return entry.stream;
+
+  if (entry?.stream) entry.stream.end();
+
+  if (!existsSync(logDir)) mkdirSync(logDir, { recursive: true });
+
+  const stream = createWriteStream(join(logDir, fileName), { flags: 'a' });
+  SERVICE_STREAMS.set(service, { stream, dateKey: fileName });
+  return stream;
+}
+
+function writeToServiceFile(
+  service: ServiceCategory,
+  line: string,
+  jsonPayload?: { level: Level; message: string; service: ServiceCategory; error?: string },
+): void {
+  if (!logDir) return;
+  const stream = ensureServiceStream(service);
+  if (!stream) return;
+
+  if (LOG_FORMAT === 'json' && jsonPayload) {
+    const entry = { timestamp: new Date().toISOString(), ...jsonPayload };
+    stream.write(JSON.stringify(entry) + '\n');
+  } else {
+    stream.write(stripAnsi(line) + '\n');
+  }
+}
+
+/** Infer service category from a createLogger prefix */
+function inferService(prefix: string): ServiceCategory | undefined {
+  const lower = prefix.toLowerCase();
+  if (lower.startsWith('minebot:') || lower.startsWith('minecraft:')) return 'minebot';
+  if (lower.startsWith('discord:')) return 'discord';
+  if (lower.startsWith('twitter:')) return 'twitter';
+  if (lower.startsWith('website:') || lower.startsWith('web:') || lower.startsWith('publicchat:')) return 'website';
+  return undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -114,7 +179,11 @@ function ensureFileStream(): void {
   }
 }
 
-function writeToFile(line: string, jsonPayload?: { level: Level; message: string; error?: string }): void {
+function writeToFile(
+  line: string,
+  jsonPayload?: { level: Level; message: string; error?: string },
+  service?: ServiceCategory,
+): void {
   if (!logDir) return;
   ensureFileStream();
   if (LOG_FORMAT === 'json' && jsonPayload) {
@@ -126,11 +195,16 @@ function writeToFile(line: string, jsonPayload?: { level: Level; message: string
   } else {
     fileStream?.write(stripAnsi(line) + '\n');
   }
+
+  if (service) {
+    writeToServiceFile(service, line, jsonPayload ? { ...jsonPayload, service } : undefined);
+  }
 }
 
 /**
  * Enable file logging. Call once at startup.
  * Logs are written as plain text (no ANSI codes) to `<dir>/prod-YYYYMMDD.log`.
+ * Service-specific logs go to `<dir>/{service}-YYYYMMDD.log`.
  * Files rotate automatically at midnight (JST).
  */
 export function initFileLogging(dir: string): void {
@@ -190,53 +264,55 @@ function formatPrefix(level: Level): string {
 }
 
 // ---------------------------------------------------------------------------
+// Internal logging with optional service routing
+// ---------------------------------------------------------------------------
+function _info(message: string, color?: Color, service?: ServiceCategory): void {
+  const body = color ? colorize(message, color) : message;
+  const line = `${formatPrefix('INFO')} ${body}`;
+  console.log(line);
+  writeToFile(line, { level: 'INFO', message }, service);
+}
+
+function _error(message: string, error?: unknown, service?: ServiceCategory): void {
+  const errStr = error
+    ? String(error instanceof Error ? error.stack || error.message : error)
+    : undefined;
+  const fullMessage = errStr ? `${message} ${errStr}` : message;
+  const line = `${formatPrefix('ERROR')} ${colorize(fullMessage, 'red')}`;
+  console.error(line);
+  writeToFile(line, { level: 'ERROR', message: fullMessage, error: errStr }, service);
+  if (error && error instanceof Error && error.stack) {
+    console.error(error.stack);
+  }
+}
+
+function _warn(message: string, service?: ServiceCategory): void {
+  const line = `${formatPrefix('WARN')} ${colorize(message, 'yellow')}`;
+  console.log(line);
+  writeToFile(line, { level: 'WARN', message }, service);
+}
+
+function _success(message: string, service?: ServiceCategory): void {
+  const line = `${formatPrefix('SUCCESS')} ${colorize(message, 'green')}`;
+  console.log(line);
+  writeToFile(line, { level: 'SUCCESS', message }, service);
+}
+
+function _debug(message: string, service?: ServiceCategory): void {
+  const line = `${formatPrefix('DEBUG')} ${colorize(message, 'cyan')}`;
+  console.log(line);
+  if (shouldWriteToFile('DEBUG')) writeToFile(line, { level: 'DEBUG', message }, service);
+}
+
+// ---------------------------------------------------------------------------
 // Public API (same signatures as before)
 // ---------------------------------------------------------------------------
 export const logger = {
-  /** General log with optional color */
-  info(message: string, color?: Color): void {
-    const body = color ? colorize(message, color) : message;
-    const line = `${formatPrefix('INFO')} ${body}`;
-    console.log(line);
-    writeToFile(line, { level: 'INFO', message });
-  },
-
-  /** Error log (always red) */
-  error(message: string, error?: unknown): void {
-    const errStr = error
-      ? String(error instanceof Error ? error.stack || error.message : error)
-      : undefined;
-    const fullMessage = errStr ? `${message} ${errStr}` : message;
-    const line = `${formatPrefix('ERROR')} ${colorize(fullMessage, 'red')}`;
-    console.error(line);
-    writeToFile(line, { level: 'ERROR', message: fullMessage, error: errStr });
-    if (error && error instanceof Error && error.stack) {
-      console.error(error.stack);
-    }
-  },
-
-  /** Warning log (always yellow) */
-  warn(message: string): void {
-    const line = `${formatPrefix('WARN')} ${colorize(message, 'yellow')}`;
-    console.log(line);
-    writeToFile(line, { level: 'WARN', message });
-  },
-
-  /** Success log (always green) */
-  success(message: string): void {
-    const line = `${formatPrefix('SUCCESS')} ${colorize(message, 'green')}`;
-    console.log(line);
-    writeToFile(line, { level: 'SUCCESS', message });
-  },
-
-  /** Debug log (always cyan) */
-  debug(message: string): void {
-    const line = `${formatPrefix('DEBUG')} ${colorize(message, 'cyan')}`;
-    console.log(line);
-    if (shouldWriteToFile('DEBUG')) writeToFile(line, { level: 'DEBUG', message });
-  },
-
-  /** Colorize a string without logging (for embedding in other logs) */
+  info: (message: string, color?: Color) => _info(message, color),
+  error: (message: string, error?: unknown) => _error(message, error),
+  warn: (message: string) => _warn(message),
+  success: (message: string) => _success(message),
+  debug: (message: string) => _debug(message),
   colorize,
 };
 
@@ -250,19 +326,25 @@ export type NamedLogger = Omit<typeof logger, 'colorize'>;
 // ---------------------------------------------------------------------------
 /**
  * Creates a logger that prepends `[prefix]` to every message.
+ * Service category is auto-detected from the prefix (Minebot:*, Discord:*, Twitter:*)
+ * and logs are additionally written to `{service}-YYYYMMDD.log`.
+ *
+ * @param prefix - The prefix to prepend (e.g. 'Minebot:TaskRuntime')
+ * @param service - Optional explicit service override; auto-inferred if omitted
  *
  * @example
- *   const log = createLogger('Minebot:TaskGraph');
+ *   const log = createLogger('Minebot:TaskRuntime');
  *   log.info('タスク開始');
- *   // → 2026-02-16 19:30:45.123 [INFO   ] #0312 [Minebot:TaskGraph] タスク開始
+ *   // → prod-YYYYMMDD.log + minebot-YYYYMMDD.log
  */
-export function createLogger(prefix: string): NamedLogger {
+export function createLogger(prefix: string, service?: ServiceCategory): NamedLogger {
   const tag = `[${prefix}]`;
+  const svc = service ?? inferService(prefix);
   return {
-    info: (message: string, color?: Color) => logger.info(`${tag} ${message}`, color),
-    error: (message: string, error?: unknown) => logger.error(`${tag} ${message}`, error),
-    warn: (message: string) => logger.warn(`${tag} ${message}`),
-    success: (message: string) => logger.success(`${tag} ${message}`),
-    debug: (message: string) => logger.debug(`${tag} ${message}`),
+    info: (message: string, color?: Color) => _info(`${tag} ${message}`, color, svc),
+    error: (message: string, error?: unknown) => _error(`${tag} ${message}`, error, svc),
+    warn: (message: string) => _warn(`${tag} ${message}`, svc),
+    success: (message: string) => _success(`${tag} ${message}`, svc),
+    debug: (message: string) => _debug(`${tag} ${message}`, svc),
   };
 }

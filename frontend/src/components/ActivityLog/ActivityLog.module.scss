@@ -115,6 +115,8 @@
   border-left: 2px solid transparent;
   transition: background-color transition(fast);
 
+  cursor: pointer;
+
   &:hover {
     background-color: color(surface, secondary);
   }
@@ -150,6 +152,25 @@
   font-weight: font-weight(medium);
   font-size: font-size(xs);
   white-space: nowrap;
+}
+
+.zoneBadge {
+  display: inline-block;
+  padding: 1px spacing(xs);
+  border-radius: radius(xs);
+  font-size: font-size(xxs);
+  font-weight: font-weight(medium);
+  white-space: nowrap;
+  line-height: 1.6;
+  background: color(surface, tertiary);
+  color: color(text, secondary);
+
+  &.zone-minecraft { background: rgba(74, 222, 128, 0.15); color: #4ade80; }
+  &.zone-discord   { background: rgba(139, 92, 246, 0.15); color: #a78bfa; }
+  &.zone-twitter   { background: rgba(59, 130, 246, 0.15); color: #60a5fa; }
+  &.zone-youtube   { background: rgba(239, 68, 68, 0.15);  color: #f87171; }
+  &.zone-web       { background: rgba(156, 163, 175, 0.1); color: #9ca3af; }
+  &.zone-default   { background: color(surface, secondary); color: color(text, disabled); }
 }
 
 // Content color variants

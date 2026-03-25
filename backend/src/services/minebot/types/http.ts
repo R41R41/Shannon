@@ -18,7 +18,7 @@ export interface ApiResponse<T = any> {
 export interface SkillExecutionResult {
     success: boolean;
     result: string;
-    metadata?: Record<string, any>;
+    metadata?: Record<string, unknown>;
 }
 
 /**
@@ -26,6 +26,7 @@ export interface SkillExecutionResult {
  */
 export interface ThrowItemRequest {
     itemName: string;
+    count?: number;
 }
 
 /**

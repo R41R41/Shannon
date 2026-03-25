@@ -1,6 +1,10 @@
 import { Vec3 } from 'vec3';
+import pathfinder from 'mineflayer-pathfinder';
 import { CustomBot, InstantSkill } from '../types.js';
 import { createLogger } from '../../../utils/logger.js';
+import { PROTECTED_UTILITY_BLOCKS } from '../constants.js';
+
+const { goals } = pathfinder;
 const log = createLogger('Minebot:Skill:digBlockAt');
 
 /**
@@ -46,6 +50,8 @@ class DigBlockAt extends InstantSkill {
         return {
           success: false,
           result: '座標は有効な数値である必要があります',
+          failureType: 'invalid_input',
+          recoverable: false,
         };
       }
 
@@ -59,6 +65,8 @@ class DigBlockAt extends InstantSkill {
           result: `ブロックが遠すぎます（距離: ${distance.toFixed(
             1
           )}m、5m以内に近づいてください）`,
+          failureType: 'distance_too_far',
+          recoverable: true,
         };
       }
 
@@ -68,6 +76,17 @@ class DigBlockAt extends InstantSkill {
         return {
           success: false,
           result: `座標(${x}, ${y}, ${z})にブロックが見つかりません（チャンク未ロードの可能性）`,
+          failureType: 'target_not_found',
+          recoverable: true,
+        };
+      }
+
+      if (PROTECTED_UTILITY_BLOCKS.has(block.name)) {
+        return {
+          success: false,
+          result: `${block.name}は重要設備なのでdig-block-atでは破壊しません`,
+          failureType: 'protected_target',
+          recoverable: true,
         };
       }
 
@@ -76,6 +95,8 @@ class DigBlockAt extends InstantSkill {
         return {
           success: false,
           result: `${block.name}は掘れません（岩盤など）`,
+          failureType: 'undiggable_block',
+          recoverable: false,
         };
       }
 
@@ -90,6 +111,8 @@ class DigBlockAt extends InstantSkill {
           return {
             success: false,
             result: `${block.name}を掘るための適切なツールがありません`,
+            failureType: 'missing_tool',
+            recoverable: true,
           };
         }
 
@@ -115,6 +138,9 @@ class DigBlockAt extends InstantSkill {
 
       const blockName = block.name;
 
+      // 装備したツール名を記録（結果メッセージ用）
+      const equippedTool = this.bot.heldItem?.name ?? '素手';
+
       const beforeItems = new Map<string, number>();
       if (collect) {
         for (const item of this.bot.inventory.items()) {
@@ -122,7 +148,9 @@ class DigBlockAt extends InstantSkill {
         }
       }
 
+      const digStart = Date.now();
       await this.bot.dig(block);
+      const digDurationMs = Date.now() - digStart;
 
       // 掘削完了を確認
       await new Promise(resolve => setTimeout(resolve, 200));
@@ -132,13 +160,25 @@ class DigBlockAt extends InstantSkill {
         return {
           success: false,
           result: `${blockName}を掘れませんでした（まだ存在しています）。適切なツールが必要かもしれません`,
+          failureType: 'dig_failed',
+          recoverable: true,
         };
+      }
+
+      // 掘削が遅い場合の警告（適切なツールを使っていない可能性）
+      const SLOW_DIG_THRESHOLD_MS = 5000;
+      const slowWarning = digDurationMs > SLOW_DIG_THRESHOLD_MS
+        ? ` ⚠️ 掘削に${(digDurationMs / 1000).toFixed(1)}秒かかりました（使用: ${equippedTool}）。適切なツール（ツルハシ等）を装備すれば大幅に高速化できます`
+        : '';
+
+      if (digDurationMs > SLOW_DIG_THRESHOLD_MS) {
+        log.warn(`⚠️ 掘削が遅い: ${blockName} を ${equippedTool} で ${(digDurationMs / 1000).toFixed(1)}秒`);
       }
 
       if (!collect) {
         return {
           success: true,
-          result: `${blockName}を掘りました（回収スキップ）`,
+          result: `${blockName}を掘りました（回収スキップ）${slowWarning}`,
         };
       }
 
@@ -147,13 +187,22 @@ class DigBlockAt extends InstantSkill {
       if (collected.length > 0) {
         return {
           success: true,
-          result: `${blockName}を掘りました。${collected.join(', ')}を回収`,
+          result: `${blockName}を掘りました。${collected.join(', ')}を回収${slowWarning}`,
+        };
+      }
+
+      // ドロップ未回収 → 近くのアイテムエンティティを探して拾いに行く
+      const retryResult = await this.tryPickupDroppedItem(pos, beforeItems);
+      if (retryResult) {
+        return {
+          success: true,
+          result: `${blockName}を掘りました。${retryResult}${slowWarning}`,
         };
       }
 
       return {
         success: true,
-        result: `${blockName}を掘りました（ドロップ未回収 — 足元にない可能性）`,
+        result: `${blockName}を掘りました（ドロップ未回収 — 壁越しまたは消失の可能性）${slowWarning}`,
       };
     } catch (error: any) {
       // エラーメッセージを詳細化
@@ -169,6 +218,17 @@ class DigBlockAt extends InstantSkill {
       return {
         success: false,
         result: `掘削エラー: ${errorDetail}`,
+        failureType: error.message.includes('far away')
+          ? 'distance_too_far'
+          : error.message.includes("can't dig")
+            ? 'undiggable_block'
+            : error.message.includes('interrupted') || error.message.includes('aborted')
+              ? 'interrupted'
+              : 'dig_failed',
+        recoverable:
+          error.message.includes('far away') ||
+          error.message.includes('interrupted') ||
+          error.message.includes('aborted'),
       };
     }
   }
@@ -259,6 +319,85 @@ class DigBlockAt extends InstantSkill {
     }
 
     return null;
+  }
+
+  /**
+   * 掘削後のドロップアイテムを拾いに行く。
+   * 近くのアイテムエンティティを探し、短いタイムアウトで移動→回収を試みる。
+   * 失敗しても pathfinder を確実に停止して返す。
+   */
+  private async tryPickupDroppedItem(
+    blockPos: Vec3,
+    beforeItems: Map<string, number>,
+  ): Promise<string | null> {
+    try {
+      // ブロック位置付近のアイテムエンティティを探す
+      const itemEntity = this.bot.nearestEntity((entity) => {
+        if (entity.name !== 'item') return false;
+        const dist = entity.position.distanceTo(blockPos);
+        return dist < 10;
+      });
+
+      if (!itemEntity) {
+        log.info('📦 ドロップアイテムのエンティティが見つかりません');
+        return null;
+      }
+
+      const itemPos = itemEntity.position;
+      const distToItem = this.bot.entity.position.distanceTo(itemPos);
+      log.info(`📦 ドロップ発見 → (${itemPos.x.toFixed(1)},${itemPos.y.toFixed(1)},${itemPos.z.toFixed(1)}) 距離${distToItem.toFixed(1)}m、移動して回収を試みます`);
+
+      // 既に十分近い場合は少し待つだけ
+      if (distToItem <= 2) {
+        await new Promise(r => setTimeout(r, 500));
+        const diff = this.inventoryDiff(beforeItems);
+        if (diff.length > 0) return `移動後に${diff.join(', ')}を回収`;
+      }
+
+      // 短いタイムアウトで移動（最大5秒）
+      const goal = new goals.GoalNear(itemPos.x, itemPos.y, itemPos.z, 1);
+      const moveTimeout = new Promise<void>((_, reject) =>
+        setTimeout(() => reject(new Error('timeout')), 5000),
+      );
+
+      try {
+        await Promise.race([this.bot.pathfinder.goto(goal), moveTimeout]);
+      } catch {
+        // タイムアウトやパスファインダーエラー — 必ず停止
+      } finally {
+        this.bot.pathfinder.stop();
+      }
+
+      // 移動後に少し待って回収チェック
+      await new Promise(r => setTimeout(r, 800));
+      const diff = this.inventoryDiff(beforeItems);
+      if (diff.length > 0) return `移動後に${diff.join(', ')}を回収`;
+
+      // まだ拾えてない → アイテムがまだ存在するなら直接歩く
+      const stillExists = this.bot.nearestEntity((e) => e === itemEntity);
+      if (stillExists) {
+        try {
+          await this.bot.lookAt(stillExists.position);
+          this.bot.setControlState('forward', true);
+          await new Promise(r => setTimeout(r, 500));
+          this.bot.setControlState('forward', false);
+          await new Promise(r => setTimeout(r, 500));
+        } catch {
+          // ignore
+        } finally {
+          this.bot.setControlState('forward', false);
+        }
+        const diff2 = this.inventoryDiff(beforeItems);
+        if (diff2.length > 0) return `移動後に${diff2.join(', ')}を回収`;
+      }
+
+      return null;
+    } catch (e: any) {
+      log.warn(`📦 ドロップ回収エラー: ${e.message}`);
+      try { this.bot.pathfinder.stop(); } catch { /* ignore */ }
+      try { this.bot.setControlState('forward', false); } catch { /* ignore */ }
+      return null;
+    }
   }
 }
 

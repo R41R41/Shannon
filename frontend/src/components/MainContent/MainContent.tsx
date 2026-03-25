@@ -3,18 +3,8 @@ import styles from "./MainContent.module.scss";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import ActivityLog from "@/components/ActivityLog/ActivityLog";
 import StatusLog from "@/components/StatusLog/StatusLog";
-import { MonitoringAgent } from "@/services/agents/monitoringAgent";
-import { OpenAIAgent } from "@/services/agents/openaiAgent";
-import { StatusAgent } from "@/services/agents/statusAgent";
-import { PlanningAgent } from "@/services/agents/planningAgent";
-import { EmotionAgent } from "@/services/agents/emotionAgent";
 
 interface MainContentProps {
-  monitoring: MonitoringAgent | null;
-  openai: OpenAIAgent | null;
-  status: StatusAgent | null;
-  planning: PlanningAgent | null;
-  emotion: EmotionAgent | null;
   isMobile?: boolean;
 }
 
@@ -23,23 +13,20 @@ const ResizeHandle = () => (
 );
 
 const MainContent: React.FC<MainContentProps> = ({
-  monitoring,
-  planning,
-  emotion,
   isMobile = false,
 }) => {
   return (
     <div className={styles.container}>
       {isMobile ? (
-        <StatusLog planning={planning} emotion={emotion} isMobile={true} />
+        <StatusLog isMobile={true} />
       ) : (
         <PanelGroup direction="vertical">
           <Panel defaultSize={40} minSize={20}>
-            <StatusLog planning={planning} emotion={emotion} />
+            <StatusLog />
           </Panel>
           <ResizeHandle />
           <Panel defaultSize={60} minSize={30}>
-            <ActivityLog monitoring={monitoring} />
+            <ActivityLog />
           </Panel>
         </PanelGroup>
       )}

@@ -16,9 +16,6 @@ const __dirname = dirname(__filename);
 export class MinebotConfig {
   // ===== LLM設定 =====
 
-  /** CentralAgent用モデル（アクション判定） */
-  readonly CENTRAL_AGENT_MODEL = models.minebot.centralAgent;
-
   /** Execution用モデル */
   readonly EXECUTION_MODEL = models.minebot.execution;
 
@@ -27,9 +24,6 @@ export class MinebotConfig {
 
   /** Execution時の温度パラメータ（確実性重視） */
   readonly TEMPERATURE_EXECUTION = 0.1;
-
-  /** CentralAgent時の温度パラメータ */
-  readonly TEMPERATURE_CENTRAL = 0.3;
 
   /** スキル実行のデフォルトタイムアウト（ミリ秒）。0 = 無制限 */
   readonly SKILL_TIMEOUT_MS = 120_000;
@@ -274,7 +268,7 @@ export class MinebotConfig {
   logConfiguration(): void {
     log.info(
       `📋 Minebot Configuration: ` +
-      `LLM=[Central:${this.CENTRAL_AGENT_MODEL}, Exec:${this.EXECUTION_MODEL}] ` +
+      `LLM=[Exec:${this.EXECUTION_MODEL}] ` +
       `Ports=[API:${this.MINEBOT_API_PORT}, UI:${this.UI_MOD_PORT}] ` +
       `Task=[retry:${this.MAX_RETRY_COUNT}, timeout:${this.TASK_TIMEOUT}ms, queue:${this.MAX_QUEUE_SIZE}] ` +
       `Dev=${this.IS_DEV}`

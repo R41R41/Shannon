@@ -213,8 +213,8 @@ export class PostFortuneAgent {
 
     try {
       return await structuredLLM.invoke(messages);
-    } catch (error: any) {
-      const detail = error?.message || error?.toString?.() || 'unknown';
+    } catch (error: unknown) {
+      const detail = error instanceof Error ? error.message : String(error);
       logger.error(`[Fortune] 生成エラー: ${detail}`, error);
       return null;
     }
@@ -255,8 +255,8 @@ export class PostFortuneAgent {
         viewer_perception: parsed.viewer_perception ?? '',
         suggestion: parsed.suggestion ?? '',
       };
-    } catch (e: any) {
-      logger.error(`[Fortune] レビューエラー: ${e.message}`);
+    } catch (e: unknown) {
+      logger.error(`[Fortune] レビューエラー: ${e instanceof Error ? e.message : String(e)}`);
       return { approved: true, issues: [], viewer_perception: '', suggestion: '' };
     }
   }

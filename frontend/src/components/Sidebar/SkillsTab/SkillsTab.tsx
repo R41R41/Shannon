@@ -1,13 +1,9 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { SkillAgent } from '@/services/agents/skillAgent';
+import { useSkill } from '@/contexts/AgentContext';
 import { SkillInfo } from '@common/types/llm';
 import styles from './SkillsTab.module.scss';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
-
-interface SkillsTabProps {
-  skill: SkillAgent | null;
-}
 
 const CATEGORY_MAP: Record<string, string> = {
   get: '📊 クエリ',
@@ -59,7 +55,8 @@ function categorize(name: string): string {
   return '🎯 その他';
 }
 
-const SkillsTab: React.FC<SkillsTabProps> = ({ skill }) => {
+const SkillsTab: React.FC = () => {
+  const skill = useSkill();
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [expandedSkill, setExpandedSkill] = useState<string | null>(null);
   const [search, setSearch] = useState('');
@@ -67,8 +64,9 @@ const SkillsTab: React.FC<SkillsTabProps> = ({ skill }) => {
 
   useEffect(() => {
     if (skill) {
-      skill.onUpdateSkills((newSkills) => setSkills(newSkills));
+      const unsubscribe = skill.onUpdateSkills((newSkills) => setSkills(newSkills));
       skill.getSkills();
+      return () => { unsubscribe(); };
     }
   }, [skill]);
 

@@ -1,33 +1,20 @@
 import { format } from 'date-fns';
 import { toZonedTime } from 'date-fns-tz';
 import {
-  AIMessage,
   BaseMessage,
   HumanMessage,
   SystemMessage,
-  ToolMessage,
 } from '@langchain/core/messages';
 import { StructuredTool } from '@langchain/core/tools';
 import { z } from 'zod';
 import { models } from '../../../config/models.js';
-import { loadPrompt } from '../config/prompts.js';
 import { createTracedModel } from '../utils/langfuse.js';
-import GoogleSearchTool from '../tools/googleSearch.js';
-import SearchByWikipediaTool from '../tools/searchByWikipedia.js';
+import GoogleSearchTool from '../tools/search/googleSearch.js';
+import SearchByWikipediaTool from '../tools/search/searchByWikipedia.js';
 import { logger } from '../../../utils/logger.js';
+import { BaseAgent } from './BaseAgent.js';
 
 const jst = 'Asia/Tokyo';
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-interface ReviewResult {
-  approved: boolean;
-  issues: string[];
-  viewer_perception: string;
-  suggestion: string;
-}
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -69,32 +56,21 @@ class SubmitPostTool extends StructuredTool {
 // PostAboutTodayAgent
 // ---------------------------------------------------------------------------
 
-export class PostAboutTodayAgent {
-  private systemPrompt: string;
+export class PostAboutTodayAgent extends BaseAgent {
   private reviewPrompt: string;
-  private tools: StructuredTool[];
-  private toolMap: Map<string, StructuredTool>;
 
   private constructor(systemPrompt: string, reviewPrompt: string) {
-    this.systemPrompt = systemPrompt;
-    this.reviewPrompt = reviewPrompt;
-
-    this.tools = [
+    super(systemPrompt, [
       new GoogleSearchTool(),
       new SearchByWikipediaTool(),
       new SubmitPostTool(),
-    ];
-    this.toolMap = new Map(this.tools.map((t) => [t.name, t]));
+    ]);
+    this.reviewPrompt = reviewPrompt;
   }
 
   public static async create(): Promise<PostAboutTodayAgent> {
-    const systemPrompt = await loadPrompt('about_today');
-    if (!systemPrompt) throw new Error('Failed to load about_today prompt');
-
-    const reviewPrompt = await loadPrompt('about_today_review');
-    if (!reviewPrompt)
-      throw new Error('Failed to load about_today_review prompt');
-
+    const systemPrompt = await BaseAgent.loadPrompt('about_today');
+    const reviewPrompt = await BaseAgent.loadPrompt('about_today_review');
     return new PostAboutTodayAgent(systemPrompt, reviewPrompt);
   }
 
@@ -124,8 +100,13 @@ export class PostAboutTodayAgent {
         'cyan',
       );
 
-      const review = await this.review(draft.text);
-      if (review.approved) {
+      const reviewResult = await this.review(
+        draft.text,
+        this.reviewPrompt,
+        '以下の「今日は何の日」ツイート案を審査してください。JSON形式で結果を返してください。\n\nツイート:',
+        { logLabel: '[AboutToday]' },
+      );
+      if (reviewResult.approved) {
         logger.info('[AboutToday] レビュー合格', 'green');
         return {
           text: `【今日は何の日？】\n${draft.text}`,
@@ -134,12 +115,12 @@ export class PostAboutTodayAgent {
       }
 
       logger.warn(
-        `[AboutToday] レビュー不合格: ${review.issues.join(', ')}`,
+        `[AboutToday] レビュー不合格: ${reviewResult.issues.join(', ')}`,
       );
       feedback = [
         `前回の投稿「${draft.text.slice(0, 100)}...」は以下の理由で不合格:`,
-        ...review.issues.map((i) => `- ${i}`),
-        review.suggestion ? `提案: ${review.suggestion}` : '',
+        ...reviewResult.issues.map((i) => `- ${i}`),
+        reviewResult.suggestion ? `提案: ${reviewResult.suggestion}` : '',
         '別のアプローチでもう一度書いてください。',
       ].join('\n');
     }
@@ -164,7 +145,6 @@ export class PostAboutTodayAgent {
       modelName: models.autoTweet,
       temperature: 0.8,
     });
-    const modelWithTools = model.bindTools(this.tools);
 
     const [year, month, day] = today.split('-');
     const dateText = `${parseInt(month)}月${parseInt(day)}日`;
@@ -186,145 +166,24 @@ export class PostAboutTodayAgent {
       new HumanMessage(userContent),
     ];
 
-    let toolCallCount = 0;
-
-    for (let i = 0; i < MAX_EXPLORATION_ITERATIONS; i++) {
-      let response: AIMessage;
-      try {
-        response = (await modelWithTools.invoke(messages)) as AIMessage;
-      } catch (e: any) {
-        logger.error(`[AboutToday] LLM呼び出しエラー: ${e.message}`);
-        return null;
-      }
-      messages.push(response);
-
-      const toolCalls = response.tool_calls || [];
-
-      if (toolCalls.length === 0) {
-        const text =
-          typeof response.content === 'string'
-            ? response.content.trim()
-            : '';
-        if (text) return { text };
-        return null;
-      }
-
-      for (const tc of toolCalls) {
-        if (tc.name === 'submit_post') {
-          try {
-            const result = await this.toolMap.get(tc.name)!.invoke(tc.args);
-            const parsed = JSON.parse(result);
-            if (!parsed.text) return null;
-            return {
-              text: parsed.text,
-              imagePrompt: parsed.imagePrompt,
-            };
-          } catch {
-            return null;
-          }
-        }
-
-        if (toolCallCount >= MAX_TOOL_CALLS) {
-          messages.push(
-            new ToolMessage({
-              content:
-                'ツール呼び出し上限に達しました。submit_post で最終的なツイートを提出してください。',
-              tool_call_id: tc.id || `call_${Date.now()}`,
-            }),
-          );
-          continue;
-        }
-
-        const tool = this.toolMap.get(tc.name);
-        if (!tool) {
-          messages.push(
-            new ToolMessage({
-              content: `ツール "${tc.name}" は存在しません`,
-              tool_call_id: tc.id || `call_${Date.now()}`,
-            }),
-          );
-          continue;
-        }
-
-        try {
-          logger.debug(
-            `[AboutToday] Tool: ${tc.name}(${JSON.stringify(tc.args).slice(0, 120)})`,
-          );
-          const result = await tool.invoke(tc.args);
-          const resultStr =
-            typeof result === 'string' ? result : JSON.stringify(result);
-          messages.push(
-            new ToolMessage({
-              content: resultStr.slice(0, 6000),
-              tool_call_id: tc.id || `call_${Date.now()}`,
-            }),
-          );
-          toolCallCount++;
-        } catch (e: any) {
-          messages.push(
-            new ToolMessage({
-              content: `ツール実行エラー: ${e.message}`,
-              tool_call_id: tc.id || `call_${Date.now()}`,
-            }),
-          );
-        }
-      }
-    }
-
-    logger.warn('[AboutToday] 探索イテレーション上限到達');
-    return null;
-  }
-
-  // =========================================================================
-  // Phase 2: レビュー
-  // =========================================================================
-
-  private async review(draft: string): Promise<ReviewResult> {
-    const model = createTracedModel({
-      modelName: models.autoTweet,
-      temperature: 0,
+    const raw = await this.runToolLoop(messages, this.tools, model, {
+      maxIterations: MAX_EXPLORATION_ITERATIONS,
+      maxToolCalls: MAX_TOOL_CALLS,
+      submitToolNames: ['submit_post'],
+      logLabel: '[AboutToday]',
+      maxResultLength: 6000,
     });
 
-    const messages = [
-      new SystemMessage(this.reviewPrompt),
-      new HumanMessage(
-        `以下の「今日は何の日」ツイート案を審査してください。JSON形式で結果を返してください。\n\nツイート: "${draft}"`,
-      ),
-    ];
+    if (!raw) return null;
 
+    // If it came from submit_post it's JSON; otherwise plain text
     try {
-      const response = await model.invoke(messages);
-      const text =
-        typeof response.content === 'string' ? response.content.trim() : '';
-
-      const jsonMatch = text.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) {
-        logger.warn(
-          `[AboutToday] レビューJSON解析失敗: ${text.slice(0, 200)}`,
-        );
-        return {
-          approved: true,
-          issues: [],
-          viewer_perception: '',
-          suggestion: '',
-        };
-      }
-
-      const parsed = JSON.parse(jsonMatch[0]) as ReviewResult;
-      return {
-        approved: parsed.approved ?? true,
-        issues: parsed.issues ?? [],
-        viewer_perception: parsed.viewer_perception ?? '',
-        suggestion: parsed.suggestion ?? '',
-      };
-    } catch (e: any) {
-      logger.error(`[AboutToday] レビューエラー: ${e.message}`);
-      return {
-        approved: true,
-        issues: [],
-        viewer_perception: '',
-        suggestion: '',
-      };
+      const parsed = JSON.parse(raw);
+      if (!parsed.text) return null;
+      return { text: parsed.text, imagePrompt: parsed.imagePrompt };
+    } catch {
+      // Plain text response
+      return { text: raw };
     }
   }
 

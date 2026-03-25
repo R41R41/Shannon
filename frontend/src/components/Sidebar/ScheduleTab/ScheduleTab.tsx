@@ -1,14 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { Schedule } from '@common/types/scheduler';
-import { SchedulerAgent } from '@/services/agents/schedulerAgent';
+import { useScheduler } from '@/contexts/AgentContext';
 import styles from './ScheduleTab.module.scss';
 import cronstrue from 'cronstrue';
 import ja from 'cronstrue/locales/ja';
 import { showToast } from '../../Toast/Toast';
-
-interface ScheduleTabProps {
-  scheduler: SchedulerAgent | null;
-}
 
 const SCHEDULE_ICONS: Record<string, string> = {
   fortune: '🔮',
@@ -28,7 +24,8 @@ function getIcon(name: string): string {
   return SCHEDULE_ICONS.default;
 }
 
-const ScheduleTab: React.FC<ScheduleTabProps> = ({ scheduler }) => {
+const ScheduleTab: React.FC = () => {
+  const scheduler = useScheduler();
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [executing, setExecuting] = useState<string | null>(null);
 

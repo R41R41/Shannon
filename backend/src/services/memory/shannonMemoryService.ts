@@ -10,6 +10,7 @@ import { logger } from '../../utils/logger.js';
 /** 容量制限 */
 const MAX_EXPERIENCES = 500;
 const MAX_KNOWLEDGE = 300;
+const MAX_AUTONOMY_MEMORIES = 200;
 const PROTECTED_IMPORTANCE = 8;
 /** 保護記憶のカテゴリ毎上限 */
 const MAX_PROTECTED_PER_CATEGORY = 50;
@@ -31,6 +32,15 @@ const CONSOLIDATION_AGE_DAYS = 30;
 const CONSOLIDATION_MAX_IMPORTANCE = 6;
 /** Consolidation: embedding 類似度閾値 (クラスタ化) */
 const CONSOLIDATION_SIMILARITY_THRESHOLD = 0.7;
+
+const CATEGORY_LIMITS: Record<MemoryCategory, number> = {
+  experience: MAX_EXPERIENCES,
+  knowledge: MAX_KNOWLEDGE,
+  self_model: MAX_AUTONOMY_MEMORIES,
+  strategy_update: MAX_AUTONOMY_MEMORIES,
+  internal_state_snapshot: MAX_AUTONOMY_MEMORIES,
+  world_pattern: MAX_AUTONOMY_MEMORIES,
+};
 
 export interface ShannonMemoryInput {
   category: MemoryCategory;
@@ -76,7 +86,10 @@ export class ShannonMemoryService {
     if (data.category === 'experience') {
       return this.saveExperienceWithDedup(data);
     }
-    return this.saveKnowledgeWithDedup(data);
+    if (data.category === 'knowledge') {
+      return this.saveKnowledgeWithDedup(data);
+    }
+    return this.createWithEviction(data);
   }
 
   /**
@@ -281,7 +294,7 @@ export class ShannonMemoryService {
    * 保護記憶 (importance >= 8) が上限を超えた場合も最古を削除。
    */
   private async evictIfNeeded(category: MemoryCategory): Promise<void> {
-    const maxLimit = category === 'experience' ? MAX_EXPERIENCES : MAX_KNOWLEDGE;
+    const maxLimit = CATEGORY_LIMITS[category] ?? MAX_AUTONOMY_MEMORIES;
     const count = await ShannonMemory.countDocuments({ category });
     const triggerAt = Math.floor(maxLimit * EVICTION_TRIGGER_RATIO);
 

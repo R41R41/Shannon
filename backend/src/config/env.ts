@@ -143,6 +143,10 @@ export const config = {
     appId: optional('WOLFRAM_ALPHA_APPID', ''),
   },
 
+  anthropic: {
+    apiKey: optional('ANTHROPIC_API_KEY', ''),
+  },
+
   groq: {
     apiKey: optional('GROQ_API_KEY', ''),
   },
@@ -156,6 +160,47 @@ export const config = {
   voicepeak: {
     serverUrl: optional('VOICEPEAK_SERVER_URL', 'http://localhost:8090'),
     narrator: optional('VOICEPEAK_NARRATOR', 'Japanese Female4'),
+  },
+
+  /** バックグラウンド自己改善（Tier 2 コード適用など） */
+  selfImprove: {
+    /**
+     * Tier 2 が検証に通ったら対象ファイルへ即書き込み。
+     * false のときは従来どおり履歴に pending_review のみ。
+     */
+    autoApplyTier2:
+      process.env.SELF_IMPROVE_AUTO_APPLY_TIER2 === 'true'
+      || (process.argv.includes('--dev') || process.env.IS_DEV === 'True'),
+    /** true のときのみ Tier 2 の delete を実行（危険・本番では使わない想定） */
+    allowTier2Delete: process.env.SELF_IMPROVE_ALLOW_DELETE === 'true',
+
+    /**
+     * 夜間バッチ: 指定 UTC 時刻のウィンドウ内で1日1回レポート保存（既定は LLM 呼び出しなし＝課金ほぼゼロ）。
+     * 高コスト処理はいずれも明示 opt-in。
+     */
+    nightly: {
+      enabled: process.env.SELF_IMPROVE_NIGHTLY_ENABLED === 'true',
+      hourUtc: Math.min(23, Math.max(0, parseInt(optional('SELF_IMPROVE_NIGHTLY_HOUR_UTC', '3'), 10))),
+      minuteUtc: Math.min(59, Math.max(0, parseInt(optional('SELF_IMPROVE_NIGHTLY_MINUTE_UTC', '0'), 10))),
+      windowMinutes: Math.min(120, Math.max(1, parseInt(optional('SELF_IMPROVE_NIGHTLY_WINDOW_MINUTES', '15'), 10))),
+      minecraftSuites: optional('SELF_IMPROVE_NIGHTLY_MINECRAFT_SUITES', '')
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean),
+      /** SkillPatcher 等で LLM 消費。既定オフ */
+      minecraftAutoFix: process.env.SELF_IMPROVE_NIGHTLY_MINECRAFT_AUTOFIX === 'true',
+      /** true のときのみ。Analyzer/Generator で OpenAI 等を複数回消費 */
+      runReactiveImprovement: process.env.SELF_IMPROVE_NIGHTLY_RUN_REACTIVE === 'true',
+      /** Anthropic 必須・高コスト。既定オフ */
+      codeAgentEnabled: process.env.SELF_IMPROVE_NIGHTLY_CODE_AGENT === 'true',
+      codeAgentMaxIter: Math.min(25, Math.max(1, parseInt(optional('SELF_IMPROVE_NIGHTLY_CODE_AGENT_MAX_ITER', '8'), 10))),
+      codeAgentDescription: optional(
+        'SELF_IMPROVE_NIGHTLY_CODE_AGENT_TASK',
+        '夜間メンテナンス: backend の Shannon コード（cognitive/selfImprove, minebot を優先）を棚卸しする。mutableCodePolicy で許可されたパスのみ、明らかなバグ・型不整合を最小差分で修正し run_tsc で成功を確認する。不確実な大規模リファクタは禁止。finish で要約する。',
+      ),
+      /** Discord Incoming Webhook 等（任意） */
+      morningWebhookUrl: optional('SELF_IMPROVE_MORNING_WEBHOOK_URL', ''),
+    },
   },
 
   ports: {

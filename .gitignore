@@ -28,6 +28,11 @@ node_modules
 # Analysis
 /backend/saves/analysis/
 
+/backend/saves/minecraft/self_test_reports/
+/backend/saves/self_improve/nightly_state.json
+
 # Sensitive / runtime
 /backend/saves/twitter_login_cookies.json
 /backend/saves/auto_post_daily_schedule.json
+
+/.next/

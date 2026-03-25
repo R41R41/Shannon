@@ -85,7 +85,15 @@ export const skillMetrics = {
     lastError: string | null;
     timeoutCount: number;
   }> {
-    const result: Record<string, any> = {};
+    const result: Record<string, {
+      executionCount: number;
+      successRate: number;
+      avgDurationMs: number;
+      p95DurationMs: number;
+      maxDurationMs: number;
+      lastError: string | null;
+      timeoutCount: number;
+    }> = {};
     for (const [name, m] of inMemoryMetrics) {
       const sorted = [...m.durations].sort((a, b) => a - b);
       const p95Idx = Math.floor(sorted.length * 0.95);

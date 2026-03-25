@@ -46,7 +46,7 @@ export class OpenAIClientService extends WebSocketServiceBase {
 
   protected initialize() {
     this.wss.on('connection', (ws) => {
-      logger.info('New OpenAI client connected', 'blue');
+      logger.debug('New OpenAI client connected');
 
       // 新しい接続の管理
       this.handleNewConnection(ws);

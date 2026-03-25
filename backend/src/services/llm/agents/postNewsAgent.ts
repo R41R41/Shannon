@@ -12,8 +12,8 @@ import { z } from 'zod';
 import { models } from '../../../config/models.js';
 import { loadPrompt } from '../config/prompts.js';
 import { createTracedModel } from '../utils/langfuse.js';
-import GoogleSearchTool from '../tools/googleSearch.js';
-import SearchByWikipediaTool from '../tools/searchByWikipedia.js';
+import GoogleSearchTool from '../tools/search/googleSearch.js';
+import SearchByWikipediaTool from '../tools/search/searchByWikipedia.js';
 import { logger } from '../../../utils/logger.js';
 
 const jst = 'Asia/Tokyo';
@@ -184,8 +184,8 @@ export class PostNewsAgent {
       let response: AIMessage;
       try {
         response = (await modelWithTools.invoke(messages)) as AIMessage;
-      } catch (e: any) {
-        logger.error(`[News] LLM呼び出しエラー: ${e.message}`);
+      } catch (e: unknown) {
+        logger.error(`[News] LLM呼び出しエラー: ${e instanceof Error ? e.message : String(e)}`);
         return null;
       }
       messages.push(response);
@@ -252,10 +252,10 @@ export class PostNewsAgent {
             }),
           );
           toolCallCount++;
-        } catch (e: any) {
+        } catch (e: unknown) {
           messages.push(
             new ToolMessage({
-              content: `ツール実行エラー: ${e.message}`,
+              content: `ツール実行エラー: ${e instanceof Error ? e.message : String(e)}`,
               tool_call_id: tc.id || `call_${Date.now()}`,
             }),
           );
@@ -302,8 +302,8 @@ export class PostNewsAgent {
         viewer_perception: parsed.viewer_perception ?? '',
         suggestion: parsed.suggestion ?? '',
       };
-    } catch (e: any) {
-      logger.error(`[News] レビューエラー: ${e.message}`);
+    } catch (e: unknown) {
+      logger.error(`[News] レビューエラー: ${e instanceof Error ? e.message : String(e)}`);
       return { approved: true, issues: [], viewer_perception: '', suggestion: '' };
     }
   }

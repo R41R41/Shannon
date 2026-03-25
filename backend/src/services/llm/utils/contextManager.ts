@@ -52,7 +52,24 @@ export function trimContext(
   const systemTokens = system.reduce((sum, m) => sum + estimateTokens(getMessageText(m)), 0);
   let remaining = budget - systemTokens;
 
-  if (remaining <= 0) return [...system, ...nonSystem.slice(-1)];
+  if (remaining <= 0) {
+    // 最低限: 最後の完全なブロック（AIMessage+ToolMessages ペア）を保持
+    const emergencyBlocks: BaseMessage[][] = [];
+    let ei = nonSystem.length - 1;
+    // 末尾の ToolMessage 群を集める
+    while (ei >= 0 && nonSystem[ei] instanceof ToolMessage) ei--;
+    // その直前の AIMessage を含むブロック
+    if (ei >= 0) {
+      const block = [nonSystem[ei]];
+      for (let j = ei + 1; j < nonSystem.length; j++) {
+        if (nonSystem[j] instanceof ToolMessage) block.push(nonSystem[j]);
+        else break;
+      }
+      emergencyBlocks.push(block);
+    }
+    const emergencyMsgs = emergencyBlocks.flat();
+    return [...system, ...(emergencyMsgs.length > 0 ? emergencyMsgs : nonSystem.slice(-1))];
+  }
 
   // AIMessage(tool_calls) + 後続 ToolMessage(s) をアトミックブロックにまとめる
   const blocks: BaseMessage[][] = [];

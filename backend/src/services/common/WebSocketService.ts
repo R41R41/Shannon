@@ -46,15 +46,23 @@ export abstract class WebSocketServiceBase {
     }
   }
 
+  /** Type-safe accessor for the __isAlive flag on WebSocket instances */
+  private getIsAlive(ws: WebSocket): boolean {
+    return (ws as WebSocket & { __isAlive?: boolean }).__isAlive ?? false;
+  }
+  private setIsAlive(ws: WebSocket, value: boolean): void {
+    (ws as WebSocket & { __isAlive?: boolean }).__isAlive = value;
+  }
+
   private startPingLoop() {
     this.pingInterval = setInterval(() => {
       this.activeConnections.forEach((ws) => {
-        if ((ws as any).__isAlive === false) {
+        if (this.getIsAlive(ws) === false) {
           ws.terminate();
           this.activeConnections.delete(ws);
           return;
         }
-        (ws as any).__isAlive = false;
+        this.setIsAlive(ws, false);
         ws.ping();
       });
     }, WebSocketServiceBase.PING_INTERVAL_MS);
@@ -70,8 +78,8 @@ export abstract class WebSocketServiceBase {
     });
     this.activeConnections.clear();
 
-    (ws as any).__isAlive = true;
-    ws.on('pong', () => { (ws as any).__isAlive = true; });
+    this.setIsAlive(ws, true);
+    ws.on('pong', () => { this.setIsAlive(ws, true); });
 
     this.activeConnections.add(ws);
 

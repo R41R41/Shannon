@@ -43,16 +43,16 @@ export interface TaskContext {
     /** 会話追跡用 */
     conversationId?: string;
     /** 追加のメタデータ */
-    metadata?: Record<string, any>;
+    metadata?: Record<string, unknown>;
 }
 /**
  * MemoryZone から TaskContext への変換ヘルパー
- * @deprecated 将来的にはTaskContextを直接使用してください
+ * @deprecated Since v1.5. Use TaskContext directly. Will be removed in v2.0.
  */
 export declare function memoryZoneToContext(memoryZone: MemoryZone, channelId?: string): TaskContext;
 /**
  * TaskContext から MemoryZone への変換ヘルパー
- * @deprecated 将来的にはTaskContextを直接使用してください
+ * @deprecated Since v1.5. Use TaskContext directly. Will be removed in v2.0.
  */
 export declare function contextToMemoryZone(context: TaskContext): MemoryZone;
 export type ConversationType = 'text' | 'audio' | 'realtime_text' | 'realtime_audio' | 'command' | 'log' | 'user_transcript';

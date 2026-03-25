@@ -75,6 +75,52 @@ class Combat extends InstantSkill {
     }
 
     /**
+     * インベントリから最良の防具を装備する
+     */
+    private async equipBestArmor(): Promise<string[]> {
+        const equipped: string[] = [];
+        const ARMOR_TIERS = ['netherite', 'diamond', 'iron', 'chainmail', 'golden', 'leather'];
+
+        const ARMOR_SLOTS: Array<{ slot: 'head' | 'torso' | 'legs' | 'feet'; suffix: string }> = [
+            { slot: 'head', suffix: '_helmet' },
+            { slot: 'torso', suffix: '_chestplate' },
+            { slot: 'legs', suffix: '_leggings' },
+            { slot: 'feet', suffix: '_boots' },
+        ];
+
+        for (const { slot, suffix } of ARMOR_SLOTS) {
+            const currentSlotItem = this.bot.inventory.slots[this.bot.getEquipmentDestSlot(slot)];
+
+            for (const tier of ARMOR_TIERS) {
+                const armorName = tier + suffix;
+                // 既に同等以上の防具を装備中ならスキップ
+                if (currentSlotItem?.name === armorName) break;
+
+                const item = this.bot.inventory.items().find(i => i.name === armorName);
+                if (item) {
+                    try {
+                        await this.bot.equip(item, slot);
+                        equipped.push(armorName);
+                    } catch { /* skip */ }
+                    break;
+                }
+            }
+        }
+
+        // 盾を off-hand に装備
+        const shield = this.bot.inventory.items().find(i => i.name === 'shield');
+        const offHandSlot = this.bot.inventory.slots[this.bot.getEquipmentDestSlot('off-hand')];
+        if (shield && offHandSlot?.name !== 'shield') {
+            try {
+                await this.bot.equip(shield, 'off-hand');
+                equipped.push('shield');
+            } catch { /* skip */ }
+        }
+
+        return equipped;
+    }
+
+    /**
      * 敵対的なMobかチェック
      */
     private isHostile(entityName: string): boolean {
@@ -104,6 +150,12 @@ class Combat extends InstantSkill {
                 }
                 weaponName = equipResult.weaponName;
                 log.success(`🗡️ ${weaponName}を装備しました`);
+            }
+
+            // 防具を自動装備
+            const armorEquipped = await this.equipBestArmor();
+            if (armorEquipped.length > 0) {
+                log.success(`🛡️ 防具装備: ${armorEquipped.join(', ')}`);
             }
 
             // ターゲットを探す

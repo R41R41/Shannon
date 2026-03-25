@@ -1,21 +1,15 @@
 import React from "react";
 import styles from "./StatusLog.module.scss";
-import { PlanningAgent } from "@/services/agents/planningAgent";
 import TaskTree from "./TaskTree/TaskTree";
-import { EmotionAgent } from "@/services/agents/emotionAgent";
 import Emotion from "./Emotion/Emotion";
 import { KPICards } from "../KPICards/KPICards";
 import classNames from "classnames";
 
 interface StatusLogProps {
-  planning: PlanningAgent | null;
-  emotion: EmotionAgent | null;
   isMobile?: boolean;
 }
 
 const StatusLog: React.FC<StatusLogProps> = ({
-  planning,
-  emotion,
   isMobile = false,
 }) => {
   return (
@@ -26,8 +20,8 @@ const StatusLog: React.FC<StatusLogProps> = ({
     >
       <KPICards />
       <div className={styles.panelGrid}>
-        <TaskTree planning={planning} isMobile={isMobile} />
-        <Emotion emotion={emotion} isMobile={isMobile} />
+        <TaskTree isMobile={isMobile} />
+        <Emotion isMobile={isMobile} />
       </div>
     </div>
   );

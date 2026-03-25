@@ -37,7 +37,7 @@ export class EmotionAgent extends WebSocketServiceBase {
 
   protected override initialize() {
     this.wss.on('connection', async (ws) => {
-      logger.info('Emotion client connected', 'blue');
+      logger.debug('Emotion client connected');
 
       this.handleNewConnection(ws);
 

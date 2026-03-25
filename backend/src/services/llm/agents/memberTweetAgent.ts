@@ -8,13 +8,12 @@ import {
 import { StructuredTool } from '@langchain/core/tools';
 import { TaskContext } from '@shannon/common';
 import { z } from 'zod';
-import { config } from '../../../config/env.js';
 import { models } from '../../../config/models.js';
 import { createTracedModel } from '../utils/langfuse.js';
 import { IExchange } from '../../../models/PersonMemory.js';
 import { logger } from '../../../utils/logger.js';
-import { loadPrompt } from '../config/prompts.js';
 import { MemoryNode } from '../graph/nodes/MemoryNode.js';
+import { BaseAgent } from './BaseAgent.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -65,23 +64,13 @@ class SubmitQuoteRTTool extends StructuredTool {
 
 const MAX_ITERATIONS = 3;
 
-export class MemberTweetAgent {
-  private systemPrompt: string;
-  private tools: StructuredTool[];
-  private toolMap: Map<string, StructuredTool>;
-  private memoryNode: MemoryNode | null = null;
-
+export class MemberTweetAgent extends BaseAgent {
   private constructor(systemPrompt: string) {
-    this.systemPrompt = systemPrompt;
-    this.tools = [new SubmitReplyTool(), new SubmitQuoteRTTool()];
-    this.toolMap = new Map(this.tools.map((t) => [t.name, t]));
+    super(systemPrompt, [new SubmitReplyTool(), new SubmitQuoteRTTool()]);
   }
 
   public static async create(): Promise<MemberTweetAgent> {
-    const systemPrompt = await loadPrompt('respond_member_tweet');
-    if (!systemPrompt)
-      throw new Error('Failed to load respond_member_tweet prompt');
-
+    const systemPrompt = await BaseAgent.loadPrompt('respond_member_tweet');
     const agent = new MemberTweetAgent(systemPrompt);
     agent.memoryNode = new MemoryNode();
     await agent.memoryNode.initialize();
@@ -170,7 +159,6 @@ export class MemberTweetAgent {
           }
         : {}),
     });
-    const modelWithTools = model.bindTools(this.tools);
 
     const systemContent = this.systemPrompt + memoryContext;
 
@@ -208,55 +196,24 @@ export class MemberTweetAgent {
       new HumanMessage(lines.join('\n')),
     ];
 
+    const raw = await this.runToolLoop(messages, this.tools, model, {
+      maxIterations: MAX_ITERATIONS,
+      maxToolCalls: 0, // no non-submit tools
+      submitToolNames: ['submit_reply', 'submit_quote_rt'],
+      logLabel: '[MemberTweet]',
+      returnPlainText: true,
+    });
+
     let result: MemberTweetResult | null = null;
 
-    for (let i = 0; i < MAX_ITERATIONS; i++) {
-      let response: AIMessage;
+    if (raw) {
       try {
-        response = (await modelWithTools.invoke(messages)) as AIMessage;
-      } catch (e: any) {
-        logger.error(`[MemberTweet] LLM呼び出しエラー: ${e.message}`);
-        return null;
+        const parsed = JSON.parse(raw);
+        result = { type: parsed.type, text: parsed.text || '' };
+      } catch {
+        // Plain text fallback
+        result = { type: 'reply', text: raw };
       }
-      messages.push(response);
-
-      const toolCalls = response.tool_calls || [];
-
-      if (toolCalls.length === 0) {
-        const fallbackText =
-          typeof response.content === 'string'
-            ? response.content.trim()
-            : '';
-        if (fallbackText) {
-          result = { type: 'reply', text: fallbackText };
-        }
-        break;
-      }
-
-      for (const tc of toolCalls) {
-        if (tc.name === 'submit_reply' || tc.name === 'submit_quote_rt') {
-          try {
-            const toolResult = await this.toolMap.get(tc.name)!.invoke(tc.args);
-            const parsed = JSON.parse(toolResult);
-            result = {
-              type: parsed.type,
-              text: parsed.text || '',
-            };
-          } catch {
-            result = null;
-          }
-          break;
-        }
-
-        messages.push(
-          new ToolMessage({
-            content: `ツール "${tc.name}" は存在しません。submit_reply か submit_quote_rt を使ってください。`,
-            tool_call_id: tc.id || `call_${Date.now()}`,
-          }),
-        );
-      }
-
-      if (result) break;
     }
 
     // === 記憶 postProcess (fire-and-forget) ===

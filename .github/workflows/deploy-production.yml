@@ -1,15 +1,14 @@
-# Shannon-prod の main 更新時に本番 VM で git pull + 依存同期 + ./start.sh
+# Shannon 本番: main 更新時に VM で同期して ./start.sh
 #
-# 必要な Repository secrets（aiminelab の CD と別名にして共存しやすくしています）:
-#   SHANNON_SSH_HOST, SHANNON_SSH_USER, SHANNON_SSH_PRIVATE_KEY
-#
-# 本番のクローン先が /home/azureuser/Shannon-prod でない場合は、下の SHANNON_PROD_DIR を編集する。
+# Repository secrets: SHANNON_PROD_SSH_HOST, SHANNON_PROD_SSH_USER, SHANNON_PROD_SSH_PRIVATE_KEY
+# 任意: SHANNON_PROD_REPO_PATH（未設定時は /home/azureuser/Shannon-prod）
 
 name: Deploy production (Shannon)
 
 on:
   push:
     branches: [main]
+  workflow_dispatch:
 
 concurrency:
   group: deploy-shannon-prod
@@ -21,34 +20,39 @@ jobs:
     steps:
       - name: Install SSH private key
         env:
-          SSH_PRIVATE_KEY: ${{ secrets.SHANNON_SSH_PRIVATE_KEY }}
+          SSH_PRIVATE_KEY: ${{ secrets.SHANNON_PROD_SSH_PRIVATE_KEY }}
         run: |
           set -euo pipefail
           mkdir -p "$HOME/.ssh"
           chmod 700 "$HOME/.ssh"
-          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/shannon_deploy"
-          chmod 600 "$HOME/.ssh/shannon_deploy"
-          if ! test -s "$HOME/.ssh/shannon_deploy"; then
-            echo "::error::SHANNON_SSH_PRIVATE_KEY が空です。"
+          KEYFILE="$HOME/.ssh/shannon_deploy"
+          printf '%s\n' "$SSH_PRIVATE_KEY" | sed '/[[:graph:]]/,$!d' > "$KEYFILE"
+          sed -i '1s/^\xEF\xBB\xBF//' "$KEYFILE"
+          chmod 600 "$KEYFILE"
+          if ! test -s "$KEYFILE"; then
+            echo "::error::SHANNON_PROD_SSH_PRIVATE_KEY が空です。"
             exit 1
           fi
-          if ! head -1 "$HOME/.ssh/shannon_deploy" | grep -q "BEGIN"; then
-            echo "::error::秘密鍵の1行目に BEGIN がありません（BEGIN〜END 全文を登録してください）。"
+          if ! grep -q 'BEGIN' "$KEYFILE" || ! grep -q 'PRIVATE KEY' "$KEYFILE" || ! grep -q 'END' "$KEYFILE"; then
+            echo "::error::秘密鍵に BEGIN / PRIVATE KEY / END がありません。"
             exit 1
           fi
 
       - name: SSH deploy
         uses: appleboy/ssh-action@v1.2.0
         with:
-          host: ${{ secrets.SHANNON_SSH_HOST }}
-          username: ${{ secrets.SHANNON_SSH_USER }}
+          host: ${{ secrets.SHANNON_PROD_SSH_HOST }}
+          username: ${{ secrets.SHANNON_PROD_SSH_USER }}
           key_path: /home/runner/.ssh/shannon_deploy
           script_stop: true
           command_timeout: 45m
           script: |
             set -euo pipefail
-            SHANNON_PROD_DIR="/home/azureuser/Shannon-prod"
-            cd "$SHANNON_PROD_DIR"
+            DEPLOY_ROOT="${{ secrets.SHANNON_PROD_REPO_PATH }}"
+            if [ -z "$DEPLOY_ROOT" ]; then
+              DEPLOY_ROOT="/home/azureuser/Shannon-prod"
+            fi
+            cd "$DEPLOY_ROOT"
             git fetch origin main
             git checkout main
             git reset --hard origin/main
@@ -57,10 +61,8 @@ jobs:
             fi
             command -v node
             command -v npm
-            # AGENTS.md どおり postinstall を避けつつ patch-package のみ（ネイティブは初回セットアップ済み想定）
             npm ci --ignore-scripts
             npx patch-package
-            # tmux で backend / frontend を立ち上げ直す（root の start.sh）
             bash ./start.sh
             tmux has-session -t shannon-backend-prod 2>/dev/null || { echo "::error::tmux セッション shannon-backend-prod がありません"; exit 1; }
             tmux has-session -t shannon-frontend-prod 2>/dev/null || { echo "::error::tmux セッション shannon-frontend-prod がありません"; exit 1; }

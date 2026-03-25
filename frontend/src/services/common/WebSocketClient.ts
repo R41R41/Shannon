@@ -18,7 +18,33 @@ export abstract class WebSocketClientBase {
   private statusListeners: Array<(status: ConnectionStatus) => void> = [];
   private isConnecting = false;
 
+  /** EventEmitter-like listener store used by subclasses via on() / emit(). */
+  protected listeners: Map<string, Set<Function>> = new Map();
+
   constructor(private url: string) {}
+
+  /**
+   * Subscribe to an event. Returns an unsubscribe function.
+   */
+  public on(event: string, callback: Function): () => void {
+    if (!this.listeners.has(event)) {
+      this.listeners.set(event, new Set());
+    }
+    this.listeners.get(event)!.add(callback);
+    return () => {
+      this.listeners.get(event)?.delete(callback);
+    };
+  }
+
+  /**
+   * Emit an event to all registered listeners.
+   */
+  protected emit(event: string, ...args: any[]) {
+    const set = this.listeners.get(event);
+    if (set) {
+      set.forEach((cb) => cb(...args));
+    }
+  }
 
   public connect() {
     if (this.isConnecting) return;

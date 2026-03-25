@@ -1,85 +1,16 @@
 /**
  * EventReactionSystem
- * イベント反応を管理するシステム
+ * イベント反応を管理するシステム — ハンドラーの統括・タイマー管理
  */
 
-import { TaskGraph } from '../llm/graph/taskGraph.js';
 import { CustomBot } from '../types.js';
-import { EmergencyResponder } from './EmergencyResponder.js';
 import { createLogger } from '../../../utils/logger.js';
-import prismarineBiome from 'prismarine-biome';
-import * as prismarineRegistry from 'prismarine-registry';
-
-const log = createLogger('Minebot:EventReaction');
-
-const BIOME_NAMES_JA: Record<string, string> = {
-    'plains': '平原',
-    'sunflower_plains': 'ひまわり平原',
-    'snowy_plains': '雪の平原',
-    'ice_spikes': '樹氷',
-    'desert': '砂漠',
-    'swamp': '湿地',
-    'mangrove_swamp': 'マングローブの湿地',
-    'forest': '森林',
-    'flower_forest': '花の森',
-    'birch_forest': '白樺の森',
-    'dark_forest': '暗い森',
-    'old_growth_birch_forest': '巨大な白樺の森',
-    'old_growth_pine_taiga': '巨大な松のタイガ',
-    'old_growth_spruce_taiga': '巨大なトウヒのタイガ',
-    'taiga': 'タイガ',
-    'snowy_taiga': '雪のタイガ',
-    'savanna': 'サバンナ',
-    'savanna_plateau': 'サバンナの台地',
-    'windswept_hills': '風の丘陵',
-    'windswept_gravelly_hills': '風の砂利の丘陵',
-    'windswept_forest': '風の森',
-    'windswept_savanna': '風のサバンナ',
-    'jungle': 'ジャングル',
-    'sparse_jungle': 'まばらなジャングル',
-    'bamboo_jungle': '竹林',
-    'badlands': '荒野',
-    'eroded_badlands': '浸食された荒野',
-    'wooded_badlands': '森のある荒野',
-    'meadow': '牧草地',
-    'cherry_grove': '桜の林',
-    'grove': '林',
-    'snowy_slopes': '雪の斜面',
-    'frozen_peaks': '凍った山頂',
-    'jagged_peaks': 'ギザギザの山頂',
-    'stony_peaks': '石の山頂',
-    'river': '川',
-    'frozen_river': '凍った川',
-    'beach': '砂浜',
-    'snowy_beach': '雪の砂浜',
-    'stony_shore': '石の海岸',
-    'warm_ocean': '暖かい海',
-    'lukewarm_ocean': 'ぬるい海',
-    'deep_lukewarm_ocean': 'ぬるい深海',
-    'ocean': '海',
-    'deep_ocean': '深海',
-    'cold_ocean': '冷たい海',
-    'deep_cold_ocean': '冷たい深海',
-    'frozen_ocean': '凍った海',
-    'deep_frozen_ocean': '凍った深海',
-    'mushroom_fields': 'キノコ島',
-    'dripstone_caves': '鍾乳洞',
-    'lush_caves': '繁茂した洞窟',
-    'deep_dark': 'ディープダーク',
-    'nether_wastes': 'ネザーの荒地',
-    'warped_forest': '歪んだ森',
-    'crimson_forest': '真紅の森',
-    'soul_sand_valley': 'ソウルサンドの谷',
-    'basalt_deltas': '玄武岩デルタ',
-    'the_end': 'ジ・エンド',
-    'end_highlands': 'エンドの高台',
-    'end_midlands': 'エンドの中間地',
-    'small_end_islands': '小さなエンドの島',
-    'end_barrens': 'エンドの不毛地帯',
-    'pale_garden': 'ペイルガーデン',
-};
+import { MinebotTaskRuntime } from '../runtime/MinebotTaskRuntime.js';
+import { EnvironmentEventHandler } from './handlers/EnvironmentEventHandler.js';
+import { CombatEventHandler } from './handlers/CombatEventHandler.js';
+import { PlayerEventHandler } from './handlers/PlayerEventHandler.js';
+import { StatusEventHandler } from './handlers/StatusEventHandler.js';
 import {
-    BiomeEventData,
     DamageEventData,
     DEFAULT_REACTION_CONFIGS,
     EventData,
@@ -88,58 +19,58 @@ import {
     EventType,
     HostileEventData,
     ItemEventData,
-    PlayerEventData,
     ReactionSettingsState,
     SuffocationEventData,
-    TeleportEventData,
-    TimeEventData,
-    WeatherEventData,
 } from './types.js';
+
+const log = createLogger('Minebot:EventReaction');
 
 export class EventReactionSystem {
     private bot: CustomBot;
-    private taskGraph: TaskGraph | null = null;
-    private emergencyResponder: EmergencyResponder;
+    private taskRuntime: MinebotTaskRuntime;
     private configs: Map<EventType, EventReactionConfig>;
 
-    // 状態追跡
-    private lastTime: 'day' | 'noon' | 'evening' | 'night' = 'day';
-    private lastWeather: 'clear' | 'rain' | 'thunder' = 'clear';
-    private lastBiome: string = '';
-    private lastPosition: { x: number; y: number; z: number } | null = null;
-    private lastInventory: Map<string, number> = new Map();
-    private trackedHostiles: Set<number> = new Set(); // エンティティID
+    // ハンドラー
+    private environment: EnvironmentEventHandler;
+    private combat: CombatEventHandler;
+    private player: PlayerEventHandler;
+    private status: StatusEventHandler;
 
     // インターバルID
     private environmentCheckInterval: NodeJS.Timeout | null = null;
     private hostileCheckInterval: NodeJS.Timeout | null = null;
 
-    constructor(bot: CustomBot) {
+    /** 継続逃走の制御 — LLM が制御を取るまで敵から逃げ続ける */
+    private fleeInterval: NodeJS.Timeout | null = null;
+    /** LLM タスクが最初の tool call を実行したら true → 逃走停止 */
+    private _llmHasControl = false;
+
+    constructor(bot: CustomBot, taskRuntime: MinebotTaskRuntime) {
         this.bot = bot;
-        this.emergencyResponder = new EmergencyResponder(bot);
+        this.taskRuntime = taskRuntime;
         this.configs = new Map();
 
         // デフォルト設定を読み込み
         DEFAULT_REACTION_CONFIGS.forEach(config => {
             this.configs.set(config.eventType, { ...config });
         });
+
+        // ハンドラーを初期化
+        this.environment = new EnvironmentEventHandler(bot);
+        this.combat = new CombatEventHandler(bot);
+        this.player = new PlayerEventHandler(bot);
+        this.status = new StatusEventHandler(bot);
     }
 
     /**
      * 初期化
      */
     async initialize(): Promise<void> {
-        this.taskGraph = TaskGraph.getInstance();
-        await this.emergencyResponder.initialize();
-
-        // botがspawn済みの場合のみ初期状態を記録
         if (this.bot.entity) {
             this.updateInitialState();
-            // 定期チェックを開始
             this.startEnvironmentCheck();
             this.startHostileCheck();
         } else {
-            // spawnを待ってから初期化
             this.bot.once('spawn', () => {
                 this.updateInitialState();
                 this.startEnvironmentCheck();
@@ -160,64 +91,15 @@ export class EventReactionSystem {
             return;
         }
 
-        // 時間
-        this.lastTime = this.getCurrentTimeOfDay();
-
-        // 天気
-        this.lastWeather = this.getCurrentWeather();
-
-        try {
-            const rawBiome = (this.bot as any).world?.getBiome?.(this.bot.entity.position);
-            this.lastBiome = this.resolveBiomeName(rawBiome);
-        } catch {
-            this.lastBiome = '';
-        }
-
-        // 位置
-        const pos = this.bot.entity.position;
-        this.lastPosition = { x: pos.x, y: pos.y, z: pos.z };
-
-        // インベントリ
-        this.updateInventorySnapshot();
-    }
-
-    /**
-     * インベントリのスナップショットを更新
-     */
-    private updateInventorySnapshot(): void {
-        this.lastInventory.clear();
-        this.bot.inventory.items().forEach(item => {
-            const current = this.lastInventory.get(item.name) || 0;
-            this.lastInventory.set(item.name, current + item.count);
-        });
-    }
-
-    /**
-     * 現在の時間帯を取得
-     */
-    private getCurrentTimeOfDay(): 'day' | 'noon' | 'evening' | 'night' {
-        const time = this.bot.time.timeOfDay;
-        if (time >= 0 && time < 6000) return 'day';
-        if (time >= 6000 && time < 12000) return 'noon';
-        if (time >= 12000 && time < 13000) return 'evening';
-        return 'night';
-    }
-
-    /**
-     * 現在の天気を取得
-     */
-    private getCurrentWeather(): 'clear' | 'rain' | 'thunder' {
-        const bot = this.bot as any;
-        if (bot.thunderState > 0) return 'thunder';
-        if (bot.rainState > 0 || bot.isRaining) return 'rain';
-        return 'clear';
+        this.environment.updateInitialState();
+        this.status.updateInventorySnapshot();
     }
 
     /**
      * ボットがidle状態かどうか
      */
     private isIdle(): boolean {
-        return !this.taskGraph?.isRunning() && !this.bot.executingSkill;
+        return !this.taskRuntime.isRunning() && !this.bot.executingSkill;
     }
 
     /**
@@ -271,11 +153,8 @@ export class EventReactionSystem {
      */
     private startEnvironmentCheck(): void {
         this.environmentCheckInterval = setInterval(() => {
-            this.checkTimeChange();
-            this.checkWeatherChange();
-            this.checkBiomeChange();
-            this.checkTeleport();
-            this.checkInventoryChange();
+            this.pollEnvironment();
+            this.pollStatus();
         }, 1000); // 1秒ごと
     }
 
@@ -284,324 +163,62 @@ export class EventReactionSystem {
      */
     private startHostileCheck(): void {
         this.hostileCheckInterval = setInterval(() => {
-            this.checkHostileApproach();
+            this.pollHostile();
         }, 500); // 0.5秒ごと
     }
 
-    /**
-     * 時間変化をチェック
-     */
-    private async checkTimeChange(): Promise<void> {
-        const currentTime = this.getCurrentTimeOfDay();
-        if (currentTime !== this.lastTime) {
-            const eventData: TimeEventData = {
-                timestamp: Date.now(),
-                eventType: 'time_change',
-                previousTime: this.lastTime,
-                currentTime,
-                tickTime: this.bot.time.timeOfDay,
-            };
-            this.lastTime = currentTime;
-            await this.handleEvent(eventData);
+    // ── ポーリング（ハンドラーからイベントを取得し handleEvent へ渡す） ──
+
+    private async pollEnvironment(): Promise<void> {
+        const timeEvent = this.environment.checkTimeChange();
+        if (timeEvent) await this.handleEvent(timeEvent);
+
+        const weatherEvent = this.environment.checkWeatherChange();
+        if (weatherEvent) await this.handleEvent(weatherEvent);
+
+        const biomeEvent = this.environment.checkBiomeChange();
+        if (biomeEvent) await this.handleEvent(biomeEvent);
+
+        const teleportEvent = this.environment.checkTeleport();
+        if (teleportEvent) await this.handleEvent(teleportEvent);
+    }
+
+    private async pollStatus(): Promise<void> {
+        const itemEvents = this.status.checkInventoryChange();
+        for (const ev of itemEvents) {
+            await this.handleEvent(ev);
         }
     }
 
-    /**
-     * 天気変化をチェック
-     */
-    private async checkWeatherChange(): Promise<void> {
-        const currentWeather = this.getCurrentWeather();
-        if (currentWeather !== this.lastWeather) {
-            const eventData: WeatherEventData = {
-                timestamp: Date.now(),
-                eventType: 'weather_change',
-                previousWeather: this.lastWeather,
-                currentWeather,
-            };
-            this.lastWeather = currentWeather;
-            await this.handleEvent(eventData);
-        }
+    private async pollHostile(): Promise<void> {
+        const hostileEvent = this.combat.checkHostileApproach();
+        if (hostileEvent) await this.handleEvent(hostileEvent);
     }
 
-    // 珍しい/特別なバイオーム
-    private static readonly RARE_BIOMES = new Set([
-        'mushroom_fields', 'mushroom_field_shore',
-        'cherry_grove',
-        'deep_dark',
-        'lush_caves', 'dripstone_caves',
-        'ice_spikes', 'frozen_peaks', 'jagged_peaks', 'stony_peaks',
-        'bamboo_jungle', 'sparse_jungle',
-        'mangrove_swamp',
-        'badlands', 'wooded_badlands', 'eroded_badlands',
-        'warm_ocean', 'lukewarm_ocean', 'deep_lukewarm_ocean',
-        'flower_forest', 'old_growth_birch_forest', 'old_growth_pine_taiga', 'old_growth_spruce_taiga',
-        'meadow', 'grove', 'snowy_slopes',
-        'the_end', 'end_highlands', 'end_midlands', 'end_barrens', 'small_end_islands',
-        'nether_wastes', 'soul_sand_valley', 'crimson_forest', 'warped_forest', 'basalt_deltas',
-    ]);
-
-    // 一般的すぎるバイオーム（反応しない）
-    private static readonly COMMON_BIOMES = new Set([
-        'plains', 'river', 'ocean', 'deep_ocean', 'frozen_river', 'frozen_ocean',
-        'beach', 'stony_shore', 'snowy_beach',
-    ]);
-
-    /**
-     * バイオーム変化をチェック
-     */
-    private resolveBiomeName(rawBiome: any): string {
-        if (typeof rawBiome === 'object' && rawBiome?.name) {
-            return String(rawBiome.name);
-        }
-        const biomeId = Number(rawBiome);
-        if (!isNaN(biomeId)) {
-            try {
-                const registry = prismarineRegistry.default(this.bot.version);
-                const Biome = prismarineBiome(registry);
-                const biome = new Biome(biomeId);
-                if (biome.name) return biome.name;
-            } catch { /* fallback */ }
-        }
-        return String(rawBiome || '');
-    }
-
-    private getBiomeJaName(englishName: string): string {
-        const key = englishName.replace(/^minecraft:/, '').toLowerCase();
-        return BIOME_NAMES_JA[key] || key.replace(/_/g, ' ');
-    }
-
-    private async checkBiomeChange(): Promise<void> {
-        let rawBiome: any;
-        try {
-            rawBiome = (this.bot as any).world?.getBiome?.(this.bot.entity.position);
-        } catch {
-            return;
-        }
-        const biomeName = this.resolveBiomeName(rawBiome);
-        if (!biomeName) return;
-
-        if (biomeName !== this.lastBiome) {
-            const previousBiome = this.lastBiome;
-            this.lastBiome = biomeName;
-
-            if (EventReactionSystem.COMMON_BIOMES.has(biomeName.toLowerCase())) {
-                return;
-            }
-
-            const jaName = this.getBiomeJaName(biomeName);
-            const eventData: BiomeEventData = {
-                timestamp: Date.now(),
-                eventType: 'biome_change',
-                previousBiome: this.getBiomeJaName(previousBiome),
-                currentBiome: jaName,
-                isRare: EventReactionSystem.RARE_BIOMES.has(biomeName.toLowerCase()),
-            };
-            await this.handleEvent(eventData);
-        }
-    }
-
-    /**
-     * テレポートをチェック
-     */
-    private async checkTeleport(): Promise<void> {
-        const pos = this.bot.entity.position;
-        const current = { x: pos.x, y: pos.y, z: pos.z };
-
-        if (this.lastPosition) {
-            const dx = current.x - this.lastPosition.x;
-            const dy = current.y - this.lastPosition.y;
-            const dz = current.z - this.lastPosition.z;
-            const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
-
-            // 50ブロック以上の移動はテレポートとみなす
-            if (distance > 50) {
-                const eventData: TeleportEventData = {
-                    timestamp: Date.now(),
-                    eventType: 'teleported',
-                    previousPosition: this.lastPosition,
-                    currentPosition: current,
-                    distance,
-                };
-                await this.handleEvent(eventData);
-            }
-        }
-
-        this.lastPosition = current;
-    }
-
-    /**
-     * インベントリ変化をチェック
-     */
-    private async checkInventoryChange(): Promise<void> {
-        const newInventory = new Map<string, number>();
-        this.bot.inventory.items().forEach(item => {
-            const current = newInventory.get(item.name) || 0;
-            newInventory.set(item.name, current + item.count);
-        });
-
-        // 増加したアイテムを検出
-        for (const [itemName, newCount] of newInventory) {
-            const oldCount = this.lastInventory.get(itemName) || 0;
-            if (newCount > oldCount) {
-                const gained = newCount - oldCount;
-
-                // 近くのプレイヤー・エンティティを取得
-                const nearbyPlayers: string[] = [];
-                const nearbyEntities: string[] = [];
-
-                Object.values(this.bot.entities).forEach(entity => {
-                    const distance = this.bot.entity.position.distanceTo(entity.position);
-                    if (distance <= 10 && entity.id !== this.bot.entity.id) {
-                        if (entity.type === 'player') {
-                            nearbyPlayers.push(entity.username || 'unknown');
-                        } else {
-                            const entityName = (entity as any).name || entity.type || 'unknown';
-                            nearbyEntities.push(String(entityName));
-                        }
-                    }
-                });
-
-                const eventData: ItemEventData = {
-                    timestamp: Date.now(),
-                    eventType: 'item_obtained',
-                    itemName,
-                    count: gained,
-                    source: 'unknown', // 実際のソースは追跡が難しい
-                    nearbyPlayers,
-                    nearbyEntities,
-                };
-
-                await this.handleEvent(eventData);
-            }
-        }
-
-        this.lastInventory = newInventory;
-    }
-
-    /**
-     * 敵対Mob接近をチェック
-     */
-    private async checkHostileApproach(): Promise<void> {
-        const hostileMobs = [
-            'zombie', 'skeleton', 'creeper', 'spider', 'enderman', 'witch',
-            'phantom', 'drowned', 'husk', 'stray', 'blaze', 'ghast',
-            'magma_cube', 'slime', 'pillager', 'vindicator', 'evoker',
-            'warden', 'piglin_brute', 'hoglin', 'zoglin',
-        ];
-
-        const nearbyHostiles: { entity: any; distance: number }[] = [];
-
-        Object.values(this.bot.entities).forEach(entity => {
-            if (entity.id === this.bot.entity.id) return;
-
-            const mobName = String((entity as any).name || '').toLowerCase();
-            if (!hostileMobs.some(h => mobName.includes(h))) return;
-
-            const distance = this.bot.entity.position.distanceTo(entity.position);
-            if (distance <= 16) {
-                nearbyHostiles.push({ entity, distance });
-            }
-        });
-
-        // 新しく検出された敵対Mobがいるかチェック
-        const newHostiles = nearbyHostiles.filter(h => !this.trackedHostiles.has(h.entity.id));
-
-        if (newHostiles.length > 0) {
-            // 最も近い敵対Mob
-            const nearest = newHostiles.reduce((a, b) => a.distance < b.distance ? a : b);
-
-            const eventData: HostileEventData = {
-                timestamp: Date.now(),
-                eventType: 'hostile_approach',
-                mobType: String((nearest.entity as any).name || 'unknown'),
-                mobPosition: {
-                    x: nearest.entity.position.x,
-                    y: nearest.entity.position.y,
-                    z: nearest.entity.position.z,
-                },
-                distance: nearest.distance,
-                mobCount: nearbyHostiles.length,
-            };
-
-            await this.handleEvent(eventData);
-        }
-
-        // トラッキングを更新
-        this.trackedHostiles.clear();
-        nearbyHostiles.forEach(h => this.trackedHostiles.add(h.entity.id));
-    }
+    // ── 外部から呼び出される公開メソッド ──
 
     /**
      * プレイヤーがボットの方を向いているかチェック
      */
     checkPlayerFacing(playerEntity: any): boolean {
-        if (!playerEntity || !playerEntity.yaw) return false;
-
-        const botPos = this.bot.entity.position;
-        const playerPos = playerEntity.position;
-
-        // プレイヤーからボットへの方向を計算
-        const dx = botPos.x - playerPos.x;
-        const dz = botPos.z - playerPos.z;
-        const targetYaw = Math.atan2(-dx, dz);
-
-        // プレイヤーの向いている方向との差
-        const yawDiff = Math.abs(playerEntity.yaw - targetYaw);
-        const normalizedDiff = Math.min(yawDiff, 2 * Math.PI - yawDiff);
-
-        // 45度以内ならボットの方を向いている
-        return normalizedDiff < Math.PI / 4;
+        return this.player.checkPlayerFacing(playerEntity);
     }
 
     /**
      * プレイヤー接近イベントを処理（外部から呼び出し）
      */
     async handlePlayerFacing(playerEntity: any): Promise<void> {
-        if (!playerEntity) return;
-
-        const distance = this.bot.entity.position.distanceTo(playerEntity.position);
-        if (distance > 3) return; // 3ブロック以内のみ
-
-        if (!this.checkPlayerFacing(playerEntity)) return;
-
-        const eventData: PlayerEventData = {
-            timestamp: Date.now(),
-            eventType: 'player_facing',
-            playerName: playerEntity.username || 'unknown',
-            playerPosition: {
-                x: playerEntity.position.x,
-                y: playerEntity.position.y,
-                z: playerEntity.position.z,
-            },
-            distance,
-            isFacingBot: true,
-        };
-
-        await this.handleEvent(eventData);
+        const eventData = this.player.buildPlayerFacingEvent(playerEntity);
+        if (eventData) {
+            await this.handleEvent(eventData);
+        }
     }
 
     /**
      * プレイヤー発言イベントを処理（外部から呼び出し）
      */
     async handlePlayerSpeak(playerName: string, message: string, playerEntity?: any): Promise<void> {
-        const position = playerEntity?.position || this.bot.entity.position;
-        const distance = playerEntity
-            ? this.bot.entity.position.distanceTo(playerEntity.position)
-            : 0;
-
-        const eventData: PlayerEventData = {
-            timestamp: Date.now(),
-            eventType: 'player_speak',
-            playerName,
-            playerPosition: {
-                x: position.x,
-                y: position.y,
-                z: position.z,
-            },
-            distance,
-            message,
-        };
-
+        const eventData = this.player.buildPlayerSpeakEvent(playerName, message, playerEntity);
         await this.handleEvent(eventData);
     }
 
@@ -619,7 +236,6 @@ export class EventReactionSystem {
             eventType: 'damage',
             ...data,
         };
-
         await this.handleEvent(eventData);
     }
 
@@ -636,8 +252,18 @@ export class EventReactionSystem {
             eventType: 'suffocation',
             ...data,
         };
-
         await this.handleEvent(eventData);
+    }
+
+    // ── イベントディスパッチ ──
+
+    /**
+     * LLM タスクが制御を取ったことを通知する。
+     * MinebotTaskRuntime の onToolStarting から呼ばれ、継続逃走を停止する。
+     */
+    public notifyLLMHasControl(): void {
+        this._llmHasControl = true;
+        this.stopContinuousFlee();
     }
 
     /**
@@ -648,6 +274,11 @@ export class EventReactionSystem {
 
         if (!config || !config.enabled) {
             return { handled: false, reactionType: 'info' };
+        }
+
+        // hostile_approach は脅威レベルで反応を動的に決定
+        if (eventData.eventType === 'hostile_approach') {
+            return this.handleHostileApproach(eventData as HostileEventData);
         }
 
         // idle時のみの設定でbusy状態ならスキップ
@@ -696,22 +327,59 @@ export class EventReactionSystem {
     }
 
     /**
-     * 緊急イベントを処理（TaskGraph経由でUIに表示）
+     * hostile_approach を脅威レベルで段階的に処理する。
+     *
+     *   critical → emergency（タスク中断 + 反射的逃走 + LLM 緊急タスク）
+     *   warning  → task（タスクキューに追加、実行中タスクは中断しない）
+     *   notice   → info（ログのみ）
+     *
+     * emergency 中に新たな hostile_approach(critical) が来た場合:
+     *   → LLM タスクはそのまま（二重起動しない）だが、逃走方向を再計算する
+     */
+    private async handleHostileApproach(eventData: HostileEventData): Promise<EventReactionResult> {
+        const { threatLevel, allHostiles } = eventData;
+
+        if (threatLevel === 'notice') {
+            log.debug(`👀 敵対Mob検知 (notice): ${allHostiles.map(h => `${h.mobType}(${h.distance}m)`).join(', ')}`);
+            return { handled: true, reactionType: 'info' };
+        }
+
+        if (threatLevel === 'warning') {
+            const message = CombatEventHandler.buildTaskMessage(eventData) ?? '敵対Mobが接近中';
+            log.info(`⚠️ 敵対Mob警戒 (warning): ${message}`);
+
+            // idle ならタスク生成、busy ならログのみ
+            if (this.isIdle()) {
+                return this.handleTaskEvent(eventData);
+            }
+            return { handled: true, reactionType: 'info', message };
+        }
+
+        // critical — emergency 処理
+        if (this.taskRuntime.isInEmergencyMode()) {
+            // 既に emergency 中 → LLM タスクは二重起動しないが、逃走方向を即座に更新
+            log.warn(`🚨 Emergency中に新たな脅威: ${allHostiles.map(h => `${h.mobType}(${h.distance}m)`).join(', ')} → 逃走方向を更新`);
+            this.updateFleeDirection();
+            return { handled: true, reactionType: 'emergency' };
+        }
+
+        return this.handleEmergencyEvent(eventData);
+    }
+
+    /**
+     * 緊急イベントを処理
      */
     private async handleEmergencyEvent(eventData: EventData): Promise<EventReactionResult> {
-        if (!this.taskGraph) {
-            log.warn('⚠️ TaskGraphが初期化されていません');
+        if (!this.taskRuntime.isReady()) {
+            log.warn('⚠️ MinebotTaskRuntime が未接続です');
             return { handled: false, reactionType: 'emergency' };
         }
 
-        // InstantSkill実行中は緊急対応をスキップ（移動中に中断されるのを防ぐ）
         if (this.bot.executingSkill) {
-            log.warn('⚠️ InstantSkill実行中のため緊急対応をスキップ');
-            return { handled: false, reactionType: 'emergency' };
+            log.warn('⚠️ InstantSkill実行中だが、緊急対応を優先して割り込みます');
         }
 
-        // 既に緊急タスクを処理中の場合はスキップ（上書き防止）
-        if (this.taskGraph.isInEmergencyMode()) {
+        if (this.taskRuntime.isInEmergencyMode()) {
             log.warn('⚠️ 緊急タスク処理中のため新しい緊急イベントをスキップ');
             return { handled: false, reactionType: 'emergency' };
         }
@@ -720,23 +388,34 @@ export class EventReactionSystem {
         log.error(`🚨 緊急対応: ${message}`);
 
         try {
-            // 現在のタスクを中断（paused状態に）
-            this.taskGraph.interruptForEmergency(message);
+            // 1. 継続型の反射的逃走を開始（LLM が制御を取るまで逃げ続ける）
+            this._llmHasControl = false;
+            this.startContinuousFlee();
 
-            // 緊急タスクを設定（UIに表示される）
+            // 2. 実行中タスクを中断し、isExecuting 解除を待つ
+            await this.taskRuntime.interruptForEmergency(message);
+
             const emergencyTaskInput = {
                 userMessage: message,
                 isEmergency: true,
                 emergencyType: eventData.eventType,
+                onToolStarting: () => this.notifyLLMHasControl(),
             };
-            this.taskGraph.setEmergencyTask(emergencyTaskInput);
+            this.taskRuntime.setEmergencyTask(emergencyTaskInput);
 
-            // 緊急対応タスクを実行
-            await this.taskGraph.invoke(emergencyTaskInput);
+            // 3. LLM ベースの緊急タスクを実行
+            await this.taskRuntime.invoke(emergencyTaskInput);
+
+            // 4. 逃走停止（LLM が制御を取った場合は既に停止済みだがフォールバック）
+            this.stopContinuousFlee();
+
+            // 5. 緊急タスク完了後、中断された元タスクを再開
+            await this.taskRuntime.resumePreviousTask();
 
             return { handled: true, reactionType: 'emergency', message };
         } catch (error) {
             log.error('緊急対応エラー', error);
+            this.stopContinuousFlee();
             return { handled: false, reactionType: 'emergency', message };
         }
     }
@@ -745,7 +424,7 @@ export class EventReactionSystem {
      * タスクイベントを処理
      */
     private async handleTaskEvent(eventData: EventData): Promise<EventReactionResult> {
-        if (!this.taskGraph) {
+        if (!this.taskRuntime.isReady()) {
             return { handled: false, reactionType: 'task' };
         }
 
@@ -753,8 +432,7 @@ export class EventReactionSystem {
         log.info(`📋 タスク生成: ${message}`);
 
         try {
-            // タスクをキューに追加（直接invokeではなくキュー管理経由）
-            const result = this.taskGraph.addTaskToQueue({
+            const result = this.taskRuntime.addTaskToQueue({
                 userMessage: message,
                 isEmergency: false,
             });
@@ -774,70 +452,130 @@ export class EventReactionSystem {
     /**
      * 即時イベントを処理（常時スキルが担当）
      */
-    private async handleImmediateEvent(eventData: EventData): Promise<EventReactionResult> {
-        // 常時スキルで処理されるので、ここでは何もしない
+    private async handleImmediateEvent(_eventData: EventData): Promise<EventReactionResult> {
         return { handled: true, reactionType: 'immediate' };
     }
 
-    /**
-     * 緊急メッセージを構築
-     */
+    // ── メッセージ構築（ハンドラーに委譲） ──
+
     private buildEmergencyMessage(eventData: EventData): string {
-        switch (eventData.eventType) {
-            case 'damage':
-                const dmg = eventData as DamageEventData;
-                return `ダメージを受けた（-${dmg.damage.toFixed(1)}HP、残り${dmg.currentHealth.toFixed(1)}/20）。安全を確保して`;
-            case 'suffocation':
-                const suff = eventData as SuffocationEventData;
-                return `窒息中（酸素:${suff.oxygen}/300）。すぐに脱出して`;
-            default:
-                return '緊急事態が発生した';
+        // hostile_approach は複数敵情報を含めてメッセージを構築
+        if (eventData.eventType === 'hostile_approach') {
+            const ha = eventData as HostileEventData;
+            const mobSummary = ha.allHostiles.map(h => `${h.mobType}(${h.distance}m)`).join(', ');
+            return `緊急: 敵対Mob ${ha.mobCount}体が接近中 [${mobSummary}]。【制約】即時生存行動のみ: (1)食料があれば食べる (2)全敵から逃走する (3)安全な場所で待機。クラフト・採掘・建築は禁止。`;
         }
+        return CombatEventHandler.buildEmergencyMessage(eventData)
+            || '緊急事態が発生した';
+    }
+
+    private buildTaskMessage(eventData: EventData): string {
+        return PlayerEventHandler.buildTaskMessage(eventData)
+            || CombatEventHandler.buildTaskMessage(eventData)
+            || StatusEventHandler.buildTaskMessage(eventData)
+            || EnvironmentEventHandler.buildTaskMessage(eventData)
+            || 'イベントが発生した';
     }
 
     /**
-     * タスクメッセージを構築
+     * 継続型の反射的逃走を開始する。
+     *
+     * 旧実装: 2秒の固定タイマーで逃走 → LLM 応答待ちの間に棒立ち
+     * 新実装: 300ms ごとに全敵の位置を再走査し、複合的な逃走方向を計算して逃げ続ける。
+     *         LLM が最初の tool call を実行した時点で notifyLLMHasControl() → 停止。
+     *         フォールバックとして MAX_FLEE_DURATION_MS 後にも停止する。
      */
-    private buildTaskMessage(eventData: EventData): string {
-        switch (eventData.eventType) {
-            case 'player_facing':
-                const pf = eventData as PlayerEventData;
-                return `${pf.playerName}が近くに来た。挨拶して`;
-            case 'player_speak':
-                const ps = eventData as PlayerEventData;
-                return `${ps.playerName}「${ps.message}」`;
-            case 'hostile_approach':
-                const ha = eventData as HostileEventData;
-                return `${ha.mobType}が${ha.distance.toFixed(1)}ブロック先にいる。${ha.mobCount > 1 ? `（合計${ha.mobCount}体）` : ''}対処して`;
-            case 'item_obtained':
-                const io = eventData as ItemEventData;
-                if (io.nearbyPlayers && io.nearbyPlayers.length > 0) {
-                    const giver = io.nearbyPlayers[0];
-                    return `${giver}から${io.itemName}を${io.count}個もらった。お礼を言って、何に使えばいいか聞いて。ただし食べ物でお腹が空いていたら食べていい`;
-                }
-                return `${io.itemName}を${io.count}個入手した`;
-            case 'time_change':
-                const tc = eventData as TimeEventData;
-                const timeNames = { day: '朝', noon: '昼', evening: '夕方', night: '夜' };
-                return `${timeNames[tc.currentTime]}になった`;
-            case 'weather_change':
-                const wc = eventData as WeatherEventData;
-                const weatherNames = { clear: '晴れ', rain: '雨', thunder: '雷雨' };
-                return `天気が${weatherNames[wc.currentWeather]}に変わった`;
-            case 'biome_change':
-                const bc = eventData as BiomeEventData;
-                if (bc.isRare) {
-                    return `「${bc.currentBiome}」に入った！珍しい場所だ。周りを見回して、何か面白いものがあれば感想を言って`;
-                }
-                return `「${bc.currentBiome}」に入った。周りを見回して、何か印象的なものがあれば一言感想を言って`;
-            case 'teleported':
-                const tp = eventData as TeleportEventData;
-                return `テレポートされた（${tp.distance.toFixed(0)}ブロック移動）。周囲を確認して`;
-            case 'damage':
-                const dmg = eventData as DamageEventData;
-                return `ダメージを受けた（-${dmg.damage.toFixed(1)}HP）。状況を確認して`;
-            default:
-                return 'イベントが発生した';
+    private static readonly FLEE_TICK_MS = 300;
+    private static readonly MAX_FLEE_DURATION_MS = 15_000;
+
+    private startContinuousFlee(): void {
+        this.stopContinuousFlee(); // 既存の逃走があれば停止
+
+        try {
+            if (!this.bot.entity) return;
+
+            // 進行中のアクションを停止
+            this.bot.clearControlStates();
+            const pathfinder = (this.bot as any).pathfinder;
+            pathfinder?.setGoal?.(null);
+            pathfinder?.stop?.();
+        } catch { /* ignore */ }
+
+        // 即座に1回逃走方向を計算して走り始める
+        this.updateFleeDirection();
+
+        const startTime = Date.now();
+
+        this.fleeInterval = setInterval(() => {
+            // LLM が制御を取った or 上限時間に達した → 停止
+            if (this._llmHasControl || Date.now() - startTime > EventReactionSystem.MAX_FLEE_DURATION_MS) {
+                this.stopContinuousFlee();
+                return;
+            }
+
+            // 全敵の最新位置をもとに逃走方向を再計算
+            this.updateFleeDirection();
+        }, EventReactionSystem.FLEE_TICK_MS);
+    }
+
+    /**
+     * 継続逃走を停止し、制御状態をクリアする。
+     */
+    private stopContinuousFlee(): void {
+        if (this.fleeInterval) {
+            clearInterval(this.fleeInterval);
+            this.fleeInterval = null;
+        }
+        try {
+            this.bot.clearControlStates();
+        } catch { /* bot might be dead */ }
+    }
+
+    /**
+     * 全敵対 Mob の位置から逃走方向を計算し、スプリントジャンプで逃げる。
+     *
+     * 複数敵への対応: 各敵からの「斥力ベクトル」を距離の逆数で重み付け合成し、
+     * 全敵から最も離れる方向へ逃走する。1体だけの場合は単純にその反対方向。
+     */
+    private updateFleeDirection(): void {
+        try {
+            if (!this.bot.entity) return;
+
+            const botPos = this.bot.entity.position;
+            const hostiles = this.combat.scanCurrentHostiles();
+
+            if (hostiles.length === 0) {
+                // 敵がいなくなった → 前方にスプリントだけ維持
+                this.bot.setControlState('forward', true);
+                this.bot.setControlState('sprint', true);
+                return;
+            }
+
+            // 各敵からの斥力ベクトルを合成（距離の逆数で重み付け）
+            let repelX = 0;
+            let repelZ = 0;
+            for (const hostile of hostiles) {
+                const dx = botPos.x - hostile.position.x;
+                const dz = botPos.z - hostile.position.z;
+                const dist = Math.max(hostile.distance, 0.5); // ゼロ除算防止
+                const weight = 1 / (dist * dist); // 近い敵ほど強い斥力
+                repelX += dx * weight;
+                repelZ += dz * weight;
+            }
+
+            const len = Math.sqrt(repelX * repelX + repelZ * repelZ) || 1;
+            const fleeYaw = Math.atan2(-repelX / len, -repelZ / len);
+
+            this.bot.look(fleeYaw, 0, true);
+            this.bot.setControlState('forward', true);
+            this.bot.setControlState('sprint', true);
+            this.bot.setControlState('jump', true);
+
+            if (hostiles.length > 1) {
+                log.debug(`⚡ 継続逃走: ${hostiles.length}体から離脱中 (最近=${hostiles[0].mobType} ${hostiles[0].distance}m)`);
+            }
+        } catch (error) {
+            log.error('継続逃走 updateFleeDirection エラー（無視して続行）', error);
         }
     }
 
@@ -853,6 +591,6 @@ export class EventReactionSystem {
             clearInterval(this.hostileCheckInterval);
             this.hostileCheckInterval = null;
         }
+        this.stopContinuousFlee();
     }
 }
-

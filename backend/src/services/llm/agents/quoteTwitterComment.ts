@@ -3,6 +3,7 @@ import { ChatOpenAI } from '@langchain/openai';
 import { config } from '../../../config/env.js';
 import { models } from '../../../config/models.js';
 import { createTracedModel } from '../utils/langfuse.js';
+import { BaseAgent } from './BaseAgent.js';
 
 const OPENAI_API_KEY = config.openaiApiKey;
 if (!OPENAI_API_KEY) {
@@ -15,7 +16,7 @@ if (!OPENAI_API_KEY) {
  * ReplyTwitterCommentAgent と同様に LLM でテキストを生成するが、
  * 引用RTに適した短めのコメントを出力する。
  */
-export class QuoteTwitterCommentAgent {
+export class QuoteTwitterCommentAgent extends BaseAgent {
   private model: ChatOpenAI;
 
   private static readonly SYSTEM_PROMPT = `あなたはシャノンというAIアシスタントです。
@@ -31,6 +32,7 @@ export class QuoteTwitterCommentAgent {
 - 自然で人間らしい文章にする`;
 
   private constructor() {
+    super(QuoteTwitterCommentAgent.SYSTEM_PROMPT);
     const isGemini = models.contentGeneration.startsWith('gemini');
     const isReasoning = models.contentGeneration.startsWith('gpt-5') || models.contentGeneration.startsWith('o');
     this.model = createTracedModel({

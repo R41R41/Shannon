@@ -8,19 +8,14 @@ import {
   TypingIndicator,
   InputToolbox,
 } from "@chatscope/chat-ui-kit-react";
-import { OpenAIAgent } from "@/services/agents/openaiAgent";
 import "@chatscope/chat-ui-kit-styles/dist/default/styles.min.css";
 import "./ChatScope.scss";
 import { AIMessage, BaseMessage, HumanMessage } from "@langchain/core/messages";
-import { UserInfo } from "@common/types/web";
 import { useChatHistory } from "@/hooks/useChatHistory";
+import { useAgents } from "@/contexts/AgentContext";
 
-interface ChatScopeProps {
-  openai: OpenAIAgent | null;
-  userInfo?: UserInfo | null;
-}
-
-export const ChatScope: React.FC<ChatScopeProps> = ({ openai, userInfo }) => {
+export const ChatScope: React.FC = () => {
+  const { openai, userInfo } = useAgents();
   const [isTyping] = useState(false);
   const { messages: savedMessages, addMessage: saveToChatHistory } = useChatHistory();
   const [chatMessages, setChatMessages] = useState<BaseMessage[]>(() => {
@@ -69,11 +64,19 @@ export const ChatScope: React.FC<ChatScopeProps> = ({ openai, userInfo }) => {
     }
   };
 
-  if (openai) {
-    openai.textCallback = (text: string) => {
+  useEffect(() => {
+    if (!openai) return;
+
+    const unsubText = openai.onText((text: string) => {
       const modifiedText = text.replace(/\\n/g, "\n");
-      if (processingChatMessageIndex > chatMessages.length - 1) {
-        setChatMessages((prev) => {
+      setChatMessages((prev) => {
+        const lastMessage = prev[prev.length - 1];
+        if (lastMessage && lastMessage instanceof AIMessage) {
+          return [
+            ...prev.slice(0, -1),
+            new AIMessage(lastMessage.content + modifiedText),
+          ];
+        } else {
           const currentTime = new Date().toLocaleString("ja-JP", {
             timeZone: "Asia/Tokyo",
           });
@@ -81,28 +84,11 @@ export const ChatScope: React.FC<ChatScopeProps> = ({ openai, userInfo }) => {
             ...prev,
             new AIMessage(currentTime + " " + "AI:" + " " + modifiedText),
           ];
-        });
-      } else {
-        setChatMessages((prev) => {
-          const lastMessage = prev[prev.length - 1];
-          if (lastMessage && lastMessage instanceof AIMessage) {
-            return [
-              ...prev.slice(0, -1),
-              new AIMessage(lastMessage.content + modifiedText),
-            ];
-          } else {
-            const currentTime = new Date().toLocaleString("ja-JP", {
-              timeZone: "Asia/Tokyo",
-            });
-            return [
-              ...prev,
-              new AIMessage(currentTime + " " + "AI:" + " " + modifiedText),
-            ];
-          }
-        });
-      }
-    };
-    openai.textDoneCallback = () => {
+        }
+      });
+    });
+
+    const unsubTextDone = openai.onTextDone(() => {
       setChatMessages((prev) => {
         const last = prev[prev.length - 1];
         if (last instanceof AIMessage && typeof last.content === 'string') {
@@ -110,9 +96,10 @@ export const ChatScope: React.FC<ChatScopeProps> = ({ openai, userInfo }) => {
         }
         return prev;
       });
-      setProcessingChatMessageIndex(chatMessages.length + 1);
-    };
-    openai.userTranscriptCallback = (text: string) => {
+      setProcessingChatMessageIndex((prev) => prev + 1);
+    });
+
+    const unsubUserTranscript = openai.onUserTranscript((text: string) => {
       const currentTime = new Date().toLocaleString("ja-JP", {
         timeZone: "Asia/Tokyo",
       });
@@ -127,8 +114,14 @@ export const ChatScope: React.FC<ChatScopeProps> = ({ openai, userInfo }) => {
             text
         ),
       ]);
+    });
+
+    return () => {
+      unsubText();
+      unsubTextDone();
+      unsubUserTranscript();
     };
-  }
+  }, [openai, userInfo, saveToChatHistory]);
 
   return (
     <MainContainer>

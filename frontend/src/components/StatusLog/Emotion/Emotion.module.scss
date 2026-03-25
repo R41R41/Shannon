@@ -65,6 +65,24 @@
   flex-direction: column-reverse;
   gap: 1px;
   cursor: default;
+  position: relative;
+
+  &:hover::after {
+    content: attr(data-tip);
+    position: absolute;
+    bottom: calc(100% + 4px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(0, 0, 0, 0.85);
+    color: #fff;
+    font-size: 10px;
+    white-space: nowrap;
+    padding: 3px 6px;
+    border-radius: 4px;
+    pointer-events: none;
+    z-index: 100;
+    line-height: 1.4;
+  }
 }
 
 .barJoy {

@@ -70,9 +70,9 @@ export class NotionClient extends BaseClient {
                         content: markdown,
                     },
                 });
-            } catch (error: any) {
+            } catch (error: unknown) {
                 // ページとして見つからない場合、データベースとして取得を試みる
-                if (error?.code === 'object_not_found') {
+                if ((error as { code?: string })?.code === 'object_not_found') {
                     logger.info(`[Notion] ページとして見つからないため、データベースとして取得: ${pageId}`);
                     try {
                         const dbResult = await this.queryDatabase(pageId);
@@ -84,25 +84,25 @@ export class NotionClient extends BaseClient {
                                 content: dbResult.content,
                             },
                         });
-                    } catch (dbError: any) {
-                        logger.error(`[Notion] データベース取得エラー: ${dbError?.message || dbError}`);
+                    } catch (dbError: unknown) {
+                        logger.error(`[Notion] データベース取得エラー: ${dbError instanceof Error ? dbError.message : String(dbError)}`);
                         this.eventBus.publish({
                             type: 'tool:getPageMarkdown',
                             memoryZone: 'notion',
                             data: {
                                 title: 'エラー',
-                                content: [`Notionのページ/データベースを取得できませんでした。\nエラー: ${dbError?.message || dbError}\n\n対象のページまたはデータベースがNotion Integrationと共有されているか確認してください。\nNotion > ページ右上の「...」 > 接続 > シャノンのIntegrationを追加`],
+                                content: [`Notionのページ/データベースを取得できませんでした。\nエラー: ${dbError instanceof Error ? dbError.message : String(dbError)}\n\n対象のページまたはデータベースがNotion Integrationと共有されているか確認してください。\nNotion > ページ右上の「...」 > 接続 > シャノンのIntegrationを追加`],
                             },
                         });
                     }
                 } else {
-                    logger.error(`[Notion] ページ取得エラー: ${error?.message || error}`);
+                    logger.error(`[Notion] ページ取得エラー: ${error instanceof Error ? (error as Error).message : String(error)}`);
                     this.eventBus.publish({
                         type: 'tool:getPageMarkdown',
                         memoryZone: 'notion',
                         data: {
                             title: 'エラー',
-                            content: [`Notionのページ取得中にエラーが発生しました。\nエラー: ${error?.message || error}`],
+                            content: [`Notionのページ取得中にエラーが発生しました。\nエラー: ${error instanceof Error ? (error as Error).message : String(error)}`],
                         },
                     });
                 }
@@ -112,10 +112,9 @@ export class NotionClient extends BaseClient {
 
     async getPageTitle(pageId: string) {
         const response = await this.client.pages.properties.retrieve({ page_id: pageId, property_id: "title" });
-        // @ts-ignore
-        const title = response?.results?.[0]?.title?.plain_text
-            // @ts-ignore
-            || response?.property_item?.title?.plain_text
+        const resp = response as { results?: Array<{ title?: { plain_text?: string } }>; property_item?: { title?: { plain_text?: string } } };
+        const title = resp?.results?.[0]?.title?.plain_text
+            || resp?.property_item?.title?.plain_text
             || '';
         return title;
     }
@@ -131,8 +130,7 @@ export class NotionClient extends BaseClient {
         const dbMeta = await this.client.databases.retrieve({ database_id: uuid });
 
         // データベースタイトルを取得
-        // @ts-ignore
-        const dbTitle = dbMeta.title?.map((t: any) => t.plain_text).join('') || 'Untitled Database';
+        const dbTitle = (dbMeta as { title?: Array<{ plain_text: string }> }).title?.map((t) => t.plain_text).join('') || 'Untitled Database';
 
         // プロパティ名一覧を取得
         const properties = Object.entries(dbMeta.properties);
@@ -155,7 +153,7 @@ export class NotionClient extends BaseClient {
             const entry: string[] = [];
 
             for (const [propName, propValue] of Object.entries(page.properties)) {
-                const value = this.extractPropertyValue(propValue as any);
+                const value = this.extractPropertyValue(propValue as { type: string; [key: string]: unknown });
                 if (value) {
                     entry.push(`${propName}: ${value}`);
                 }
@@ -172,58 +170,66 @@ export class NotionClient extends BaseClient {
     /**
      * Notionプロパティ値を文字列に変換
      */
-    private extractPropertyValue(prop: any): string {
+    private extractPropertyValue(prop: { type: string; [key: string]: unknown }): string {
         if (!prop) return '';
+        // Use a flexible accessor since Notion property shapes are polymorphic
+        const p = prop as Record<string, unknown>;
         switch (prop.type) {
             case 'title':
-                return prop.title?.map((t: any) => t.plain_text).join('') || '';
+                return (p.title as Array<{ plain_text: string }> | undefined)?.map((t) => t.plain_text).join('') || '';
             case 'rich_text':
-                return prop.rich_text?.map((t: any) => t.plain_text).join('') || '';
+                return (p.rich_text as Array<{ plain_text: string }> | undefined)?.map((t) => t.plain_text).join('') || '';
             case 'number':
-                return prop.number != null ? String(prop.number) : '';
+                return p.number != null ? String(p.number) : '';
             case 'select':
-                return prop.select?.name || '';
+                return (p.select as { name?: string } | undefined)?.name || '';
             case 'multi_select':
-                return prop.multi_select?.map((s: any) => s.name).join(', ') || '';
-            case 'date':
-                if (!prop.date) return '';
-                const start = prop.date.start || '';
-                const end = prop.date.end ? ` → ${prop.date.end}` : '';
+                return (p.multi_select as Array<{ name: string }> | undefined)?.map((s) => s.name).join(', ') || '';
+            case 'date': {
+                const dateVal = p.date as { start?: string; end?: string } | undefined;
+                if (!dateVal) return '';
+                const start = dateVal.start || '';
+                const end = dateVal.end ? ` → ${dateVal.end}` : '';
                 return `${start}${end}`;
+            }
             case 'checkbox':
-                return prop.checkbox ? '✅' : '❌';
+                return p.checkbox ? '✅' : '❌';
             case 'url':
-                return prop.url || '';
+                return (p.url as string) || '';
             case 'email':
-                return prop.email || '';
+                return (p.email as string) || '';
             case 'phone_number':
-                return prop.phone_number || '';
+                return (p.phone_number as string) || '';
             case 'status':
-                return prop.status?.name || '';
+                return (p.status as { name?: string } | undefined)?.name || '';
             case 'people':
-                return prop.people?.map((p: any) => p.name || 'Unknown').join(', ') || '';
+                return (p.people as Array<{ name?: string }> | undefined)?.map((person) => person.name || 'Unknown').join(', ') || '';
             case 'relation':
-                return prop.relation?.length ? `(${prop.relation.length}件のリレーション)` : '';
-            case 'formula':
-                if (prop.formula?.type === 'string') return prop.formula.string || '';
-                if (prop.formula?.type === 'number') return String(prop.formula.number ?? '');
-                if (prop.formula?.type === 'boolean') return prop.formula.boolean ? 'true' : 'false';
-                if (prop.formula?.type === 'date') return prop.formula.date?.start || '';
+                return (p.relation as unknown[] | undefined)?.length ? `(${(p.relation as unknown[]).length}件のリレーション)` : '';
+            case 'formula': {
+                const formula = p.formula as { type?: string; string?: string; number?: number; boolean?: boolean; date?: { start?: string } } | undefined;
+                if (formula?.type === 'string') return formula.string || '';
+                if (formula?.type === 'number') return String(formula.number ?? '');
+                if (formula?.type === 'boolean') return formula.boolean ? 'true' : 'false';
+                if (formula?.type === 'date') return formula.date?.start || '';
                 return '';
-            case 'rollup':
-                if (prop.rollup?.type === 'number') return String(prop.rollup.number ?? '');
-                if (prop.rollup?.type === 'array') return `(${prop.rollup.array?.length || 0}件)`;
+            }
+            case 'rollup': {
+                const rollup = p.rollup as { type?: string; number?: number; array?: unknown[] } | undefined;
+                if (rollup?.type === 'number') return String(rollup.number ?? '');
+                if (rollup?.type === 'array') return `(${rollup.array?.length || 0}件)`;
                 return '';
+            }
             case 'created_time':
-                return prop.created_time || '';
+                return (p.created_time as string) || '';
             case 'last_edited_time':
-                return prop.last_edited_time || '';
+                return (p.last_edited_time as string) || '';
             case 'created_by':
-                return prop.created_by?.name || '';
+                return (p.created_by as { name?: string } | undefined)?.name || '';
             case 'last_edited_by':
-                return prop.last_edited_by?.name || '';
+                return (p.last_edited_by as { name?: string } | undefined)?.name || '';
             case 'files':
-                return prop.files?.map((f: any) => f.name || f.file?.url || f.external?.url || '').join(', ') || '';
+                return (p.files as Array<{ name?: string; file?: { url?: string }; external?: { url?: string } }> | undefined)?.map((f) => f.name || f.file?.url || f.external?.url || '').join(', ') || '';
             default:
                 return '';
         }
@@ -381,7 +387,7 @@ export class NotionClient extends BaseClient {
             this.setupEventHandlers();
         } catch (error) {
             if (error instanceof Error && error.message.includes('429')) {
-                const apiError = error as Error & { rateLimit?: { reset?: number } };
+                const apiError = error as unknown as { rateLimit?: { reset?: number } };
                 if (apiError.rateLimit?.reset) {
                     const resetTime = apiError.rateLimit.reset * 1000;
                     const now = Date.now();

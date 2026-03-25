@@ -306,8 +306,8 @@ export class MinebotClient extends BaseClient {
         await httpServer.stop();
       }
       this.bot.quit();
-      if (this.skillAgent?.centralAgent.currentTaskGraph) {
-        this.skillAgent.centralAgent.currentTaskGraph.forceStop();
+      if (this.skillAgent?.getTaskRuntime()) {
+        this.skillAgent.getTaskRuntime()?.forceStop();
         await new Promise((resolve) => setTimeout(resolve, 1000));
       }
       this.skillAgent = null;

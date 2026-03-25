@@ -27,7 +27,7 @@ export interface HierarchicalSubTask {
 }
 export interface ActionItem {
     toolName: string;
-    args: Record<string, any>;
+    args: Record<string, unknown>;
     expectedResult: string;
 }
 export interface TaskTreeState {
@@ -35,6 +35,11 @@ export interface TaskTreeState {
     strategy: string;
     status: TaskStatus;
     error?: string | null;
+    currentThinking?: string | null;
+    recoveryStatus?: 'idle' | 'retrying' | 'awaiting_user' | 'failed_terminal' | null;
+    lastFailureType?: string | null;
+    recoveryAttempts?: number | null;
+    retryBudget?: number | null;
     hierarchicalSubTasks?: HierarchicalSubTask[] | null;
     currentSubTaskId?: string | null;
     nextActionSequence?: ActionItem[] | null;
