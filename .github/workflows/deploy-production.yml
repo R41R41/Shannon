@@ -65,6 +65,8 @@ jobs:
             npm ci --ignore-scripts --legacy-peer-deps
             npx patch-package
             bash ./start.sh
+            echo "Waiting for sessions to stabilize..."
+            sleep 5
             tmux has-session -t shannon-backend-prod 2>/dev/null || { echo "::error::tmux セッション shannon-backend-prod がありません"; exit 1; }
             tmux has-session -t shannon-frontend-prod 2>/dev/null || { echo "::error::tmux セッション shannon-frontend-prod がありません"; exit 1; }
             echo "OK: shannon-backend-prod / shannon-frontend-prod が存在します"

@@ -49,19 +49,23 @@ sleep 2
 
 # バックエンドを起動
 if [ "$IS_DEV" = true ]; then
-    # 事前にビルド
+    # 事前にビルド（common → backend）
+    echo "Building common..."
+    cd "$SCRIPT_DIR/.." && npm run build -w common 2>&1 | tail -3
     echo "Building backend..."
-    cd "$SCRIPT_DIR" && npm run build > /dev/null 2>&1
+    cd "$SCRIPT_DIR" && NODE_OPTIONS="--max-old-space-size=12288" npx tsc --noCheck --skipLibCheck 2>&1 | tail -5
     
     # tmuxでセッションを作成（tsc-watchでコンパイル＋サーバー自動再起動）
-    tmux new-session -d -s $BACKEND_SESSION -n "server" "cd $SCRIPT_DIR && PORT=$PORT MINEBOT_API_PORT=$MINEBOT_PORT WS_OPENAI_PORT=${WS_PORTS[0]} WS_MONITORING_PORT=${WS_PORTS[1]} WS_STATUS_PORT=${WS_PORTS[2]} WS_SCHEDULE_PORT=${WS_PORTS[3]} WS_PLANNING_PORT=${WS_PORTS[4]} WS_EMOTION_PORT=${WS_PORTS[5]} WS_SKILL_PORT=${WS_PORTS[6]} WS_AUTH_PORT=${WS_PORTS[7]} exec npx tsc-watch --onSuccess 'node --experimental-specifier-resolution=node --es-module-specifier-resolution=node dist/server.js --dev'"
+    tmux new-session -d -s $BACKEND_SESSION -n "server" "cd $SCRIPT_DIR && PORT=$PORT MINEBOT_API_PORT=$MINEBOT_PORT WS_OPENAI_PORT=${WS_PORTS[0]} WS_MONITORING_PORT=${WS_PORTS[1]} WS_STATUS_PORT=${WS_PORTS[2]} WS_SCHEDULE_PORT=${WS_PORTS[3]} WS_PLANNING_PORT=${WS_PORTS[4]} WS_EMOTION_PORT=${WS_PORTS[5]} WS_SKILL_PORT=${WS_PORTS[6]} WS_AUTH_PORT=${WS_PORTS[7]} exec npx tsc-watch --onSuccess 'node --unhandled-rejections=warn --experimental-specifier-resolution=node --es-module-specifier-resolution=node dist/server.js --dev'"
 else
-    # 事前にビルド
+    # 事前にビルド（common → backend）
+    echo "Building common..."
+    cd "$SCRIPT_DIR/.." && npm run build -w common 2>&1 | tail -3
     echo "Building backend..."
-    cd "$SCRIPT_DIR" && npm run build > /dev/null 2>&1
+    cd "$SCRIPT_DIR" && NODE_OPTIONS="--max-old-space-size=12288" npx tsc --noCheck --skipLibCheck 2>&1 | tail -5
     
     # tmuxでセッションを作成（ビルド済みJSをnodeで直接起動）
-    tmux new-session -d -s $BACKEND_SESSION "cd $SCRIPT_DIR && PORT=$PORT MINEBOT_API_PORT=$MINEBOT_PORT WS_OPENAI_PORT=${WS_PORTS[0]} WS_MONITORING_PORT=${WS_PORTS[1]} WS_STATUS_PORT=${WS_PORTS[2]} WS_SCHEDULE_PORT=${WS_PORTS[3]} WS_PLANNING_PORT=${WS_PORTS[4]} WS_EMOTION_PORT=${WS_PORTS[5]} WS_SKILL_PORT=${WS_PORTS[6]} WS_AUTH_PORT=${WS_PORTS[7]} node --experimental-specifier-resolution=node --es-module-specifier-resolution=node dist/server.js"
+    tmux new-session -d -s $BACKEND_SESSION "cd $SCRIPT_DIR && PORT=$PORT MINEBOT_API_PORT=$MINEBOT_PORT WS_OPENAI_PORT=${WS_PORTS[0]} WS_MONITORING_PORT=${WS_PORTS[1]} WS_STATUS_PORT=${WS_PORTS[2]} WS_SCHEDULE_PORT=${WS_PORTS[3]} WS_PLANNING_PORT=${WS_PORTS[4]} WS_EMOTION_PORT=${WS_PORTS[5]} WS_SKILL_PORT=${WS_PORTS[6]} WS_AUTH_PORT=${WS_PORTS[7]} node --unhandled-rejections=warn --experimental-specifier-resolution=node --es-module-specifier-resolution=node dist/server.js"
 fi
 echo "Backend started in tmux session: $BACKEND_SESSION"
 echo "  dev mode: tsc-watch with auto-restart on changes"
