@@ -64,6 +64,25 @@ jobs:
             # @langchain/anthropic@1.x と backend の @langchain/core@0.3 系で peer が衝突するため
             npm ci --ignore-scripts --legacy-peer-deps
             npx patch-package
+
+            # ネイティブモジュールのリビルド（npm ci --ignore-scripts でスキップされるため）
+            echo "Building native modules..."
+            cd node_modules/@discordjs/opus && npx @mapbox/node-pre-gyp install --fallback-to-build 2>&1 | tail -3 && cd "$DEPLOY_ROOT"
+            # node-pre-gyp が glibc バージョンをテンプレートのまま残すバグの回避
+            OPUS_PREBUILD="node_modules/@discordjs/opus/prebuild"
+            if [ -d "$OPUS_PREBUILD" ]; then
+              for d in "$OPUS_PREBUILD"/node-*-glibc-\{libc_version\}; do
+                if [ -d "$d" ]; then
+                  LIBC_VER=$(ldd --version 2>&1 | head -1 | grep -oP '[0-9]+\.[0-9]+$' || echo "2.31")
+                  FIXED="${d/\{libc_version\}/$LIBC_VER}"
+                  mv "$d" "$FIXED"
+                  echo "Renamed opus prebuild dir → $(basename "$FIXED")"
+                fi
+              done
+            fi
+            cd node_modules/canvas && npm run install 2>&1 | tail -3 && cd "$DEPLOY_ROOT"
+            echo "Native modules built."
+
             bash ./start.sh
             echo "Waiting for sessions to stabilize..."
             sleep 5
