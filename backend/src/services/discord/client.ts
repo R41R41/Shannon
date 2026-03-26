@@ -9,11 +9,15 @@ import {
   DiscordSendServerEmojiOutput,
   DiscordSendTextMessageInput,
   DiscordSendTextMessageOutput,
+  HierarchicalSubTask,
   MinebotInput,
   MinecraftServerName,
   ServiceInput,
+  TaskTreeState,
   YoutubeSubscriberUpdateOutput,
 } from '@shannon/common';
+
+type LegacyPlanSubTask = NonNullable<TaskTreeState['subTasks']>[number];
 import {
   ActionRowBuilder,
   AttachmentBuilder,
@@ -1339,7 +1343,7 @@ export class DiscordBot extends BaseClient {
 
           // hierarchicalSubTasks（新フォーマット）がある場合は追加
           if (planning.hierarchicalSubTasks && planning.hierarchicalSubTasks.length > 0) {
-            planning.hierarchicalSubTasks.forEach((subTask) => {
+            planning.hierarchicalSubTasks.forEach((subTask: HierarchicalSubTask) => {
               const depth = subTask.depth ?? 0;
               const indent = '  '.repeat(depth + 1);
               formattedContent += `${indent}${getStatusEmoji(subTask.status)} ${subTask.goal}\n`;
@@ -1354,7 +1358,7 @@ export class DiscordBot extends BaseClient {
 
           // subTasks（旧フォーマット互換）がある場合は追加
           if (planning.subTasks && planning.subTasks.length > 0) {
-            planning.subTasks.forEach((subTask) => {
+            planning.subTasks.forEach((subTask: LegacyPlanSubTask) => {
               formattedContent += `  ${getStatusEmoji(subTask.subTaskStatus)} ${subTask.subTaskGoal
                 }\n`;
               formattedContent += `  ${subTask.subTaskStrategy}\n`;

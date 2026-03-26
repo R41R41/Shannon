@@ -243,15 +243,18 @@ export class TwitterApiClient {
    * twitterapi.io v2 経由で引用リツイート
    */
   public async postQuoteTweet(content: string, quoteTweetUrl: string) {
+    await this.auth.ensureLoginCookies();
+
     try {
       const endpoint = 'https://api.twitterapi.io/twitter/create_tweet_v2';
-      const tweetText = `${content} ${quoteTweetUrl}`;
-      const data = {
+      const data: Record<string, unknown> = {
         login_cookies: this.auth.login_cookies,
-        tweet_text: tweetText,
+        tweet_text: content,
+        quote_tweet_url: quoteTweetUrl,
         proxy: this.auth.getProxy1(),
       };
       const reqConfig = { headers: { 'X-API-Key': this.auth.getApiKey() } };
+      logger.info(`[postQuoteTweet] 投稿中 (v2)... quote=${quoteTweetUrl}`, 'cyan');
       const response = await axios.post(endpoint, data, reqConfig);
       const resData = response.data;
       logger.debug(`[postQuoteTweet] API response: ${JSON.stringify(resData).slice(0, 300)}`);
@@ -260,10 +263,11 @@ export class TwitterApiClient {
         logger.error(`引用RT投稿失敗: ${errMsg}`);
         throw new Error(`Twitter API error: ${errMsg}`);
       }
-      logger.success(`引用RT投稿成功: tweet_id=${resData?.tweet_id ?? 'OK'} text_len=${tweetText.length}`);
+      logger.success(`引用RT投稿成功: tweet_id=${resData?.tweet_id ?? 'OK'} text_len=${content.length}`);
       return response;
     } catch (error: unknown) {
-      logger.error(`引用RT投稿失敗: ${error instanceof Error ? error.message : String(error)}`);
+      const detail = isAxiosError(error) ? ` resp=${JSON.stringify(error.response?.data).slice(0, 300)}` : '';
+      logger.error(`引用RT投稿失敗: ${error instanceof Error ? error.message : String(error)}${detail}`);
       throw error;
     }
   }

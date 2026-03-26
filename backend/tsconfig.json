@@ -22,14 +22,13 @@
     "removeComments": true,
     "sourceMap": true,
     "moduleResolution": "node",
-    "baseUrl": "./src",
+    "baseUrl": ".",
     "paths": {
-      "@/*": ["./*"],
-      "@shannon/common/*": ["../../common/src/*"]
+      "@/*": ["./src/*"],
+      "@shannon/common": ["../common/dist/index.d.ts"]
     },
     "typeRoots": ["./node_modules/@types", "./src/types"]
   },
-  "references": [{ "path": "../common" }],
   "include": ["src/**/*"],
   "exclude": ["node_modules"]
 }

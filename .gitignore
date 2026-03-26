@@ -3,6 +3,8 @@
 /backend/dist
 /frontend/dist
 /common/dist/
+/common/src/**/*.js
+/common/src/**/*.js.map
 /backend/package-lock.json
 /frontend/package-lock.json
 /backend/.env
@@ -49,3 +51,7 @@ node_modules
 /backend/saves/minecraft/screenshots/
 
 /.next/
+
+# Editor / merge backup files (do not commit)
+*.bak
+*.orig

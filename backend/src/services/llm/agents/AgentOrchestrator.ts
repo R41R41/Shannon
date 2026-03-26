@@ -148,7 +148,8 @@ export class AgentOrchestrator {
         repliedTweetAuthorName: repliedTweetAuthorName ?? undefined,
       });
       const history = (conversationThread ?? []).map(
-        (entry) => new HumanMessage(`${entry.authorName}: ${entry.text}`),
+        (entry: { authorName: string; text: string }) =>
+          new HumanMessage(`${entry.authorName}: ${entry.text}`),
       );
       await this.invokeGraph(envelope, history);
     } catch (error) {
@@ -199,7 +200,8 @@ export class AgentOrchestrator {
         authorId: data.authorId ?? authorName,
       });
       const history = (data.conversationThread ?? []).map(
-        (entry) => new HumanMessage(`${entry.authorName}: ${entry.text}`),
+        (entry: { authorName: string; text: string }) =>
+          new HumanMessage(`${entry.authorName}: ${entry.text}`),
       );
       await this.invokeGraph(envelope, history);
     } catch (error) {

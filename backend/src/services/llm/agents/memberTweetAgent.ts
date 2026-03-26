@@ -8,6 +8,7 @@ import {
 import { StructuredTool } from '@langchain/core/tools';
 import { TaskContext } from '@shannon/common';
 import { z } from 'zod';
+import { config } from '../../../config/env.js';
 import { models } from '../../../config/models.js';
 import { createTracedModel } from '../utils/langfuse.js';
 import { IExchange } from '../../../models/PersonMemory.js';

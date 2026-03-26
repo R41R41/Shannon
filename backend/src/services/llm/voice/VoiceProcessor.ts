@@ -1,4 +1,4 @@
-import { HumanMessage } from '@langchain/core/messages';
+import { HumanMessage, type BaseMessage } from '@langchain/core/messages';
 import {
   DiscordVoiceEnqueueInput,
   DiscordVoiceMessageOutput,
@@ -215,7 +215,9 @@ export class VoiceProcessor {
       try {
         const recentContext = message.recentMessages
           ?.slice(-5)
-          .map(m => m.content?.toString().replace(/^\d{4}\/\d{1,2}\/\d{1,2} \d{1,2}:\d{1,2}:\d{1,2} /, '') ?? '')
+          .map((m: BaseMessage) =>
+            m.content?.toString().replace(/^\d{4}\/\d{1,2}\/\d{1,2} \d{1,2}:\d{1,2}:\d{1,2} /, '') ?? '',
+          )
           .filter(Boolean)
           .join('\n') || '';
         fillerResult = await selectFiller(transcribedText, message.userName, recentContext || undefined);

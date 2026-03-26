@@ -33,6 +33,10 @@ import { LoopDetector } from './execution/LoopDetector.js';
 import { ForwardModel } from './execution/ForwardModel.js';
 import { ModelSelector } from '../cognitive/ModelSelector.js';
 
+function stripAssistantContentPrefix(t: string): string {
+    return t.replace(/^content:\s*/i, '').trim();
+}
+
 /**
  * FunctionCallingAgent の run() に渡す状態
  */
@@ -635,11 +639,13 @@ export class FunctionCallingAgent {
                 if (toolCalls.length === 0) {
                     consecutiveTextOnly++;
 
-                    // ── 分類駆動の即完了: needsTools=false ならテキスト応答を正当な返答として受け入れる ──
+                    // ── 分類駆動の即完了: needsTools=false かつ初回テキスト応答を完了扱いにする ──
+                    // 安全条件: (1) ツールが一度も使われていない (2) 初回イテレーション (3) 応答が十分な長さ
+                    // ツール使用後の即完了は禁止 — LLM が途中で止まるのを防ぐ
                     const textContent = typeof thinkingContent === 'string' ? thinkingContent.trim() : '';
-                    if (state.needsTools === false && textContent.length > 0) {
-                        const stripContentPrefix = (t: string) => t.replace(/^content:\s*/i, '').trim();
-                        const cleanContent = stripContentPrefix(textContent);
+                    const MIN_SUBSTANTIVE_LENGTH = 30;
+                    if (state.needsTools === false && stepCounter === 0 && iteration === 0 && textContent.length >= MIN_SUBSTANTIVE_LENGTH) {
+                        const cleanContent = stripAssistantContentPrefix(textContent);
                         if (cleanContent.length > 0) {
                             logger.info(`⚡ 分類駆動即完了: needsTools=false → テキスト応答で完了 (${iteration + 1}イテレーション, ${((Date.now() - startTime) / 1000).toFixed(1)}s)`);
 
@@ -716,7 +722,9 @@ export class FunctionCallingAgent {
                     // 次のアクションを促すプロンプト（エスカレーション付き） → エフェメラルとして次イテレーションで注入
                     this._pendingNudge = consecutiveTextOnly >= 2
                         ? 'これが最後の警告です。次の応答では必ずツールを呼び出すか、task-complete を呼んでください。テキストだけの応答は無効です。'
-                        : 'ツール呼び出しがありませんでした。タスクが完了したなら task-complete を呼んでください。まだ途中なら次のアクション（ツール呼び出し）を実行してください。';
+                        : 'ツール呼び出しがありませんでした。content（テキスト）はユーザーに届きません。' +
+                          '回答が準備できているなら task-complete の summary に完全な回答（表・箇条書き等を含む）を書いてください。' +
+                          'まだ途中なら次のツールを呼び出してください。';
                     logger.info(`🔄 テキストのみ応答 (${consecutiveTextOnly}/${MAX_CONSECUTIVE_TEXT_ONLY}) → 次のアクションを促して継続`, 'cyan');
                     iteration++;
                     continue;
@@ -821,16 +829,38 @@ export class FunctionCallingAgent {
                 // ── task-complete 検出 → タスク完了 ──
                 const completeCall = toolCalls.find((tc) => tc.name === 'task-complete');
                 if (completeCall) {
-                    const summary = completeCall.args?.summary || 'タスク完了';
-                    // ユーザー向け応答は「最後の assistant 本文」を優先（挨拶で要約文が返る問題の対策）
-                    // "content:" プレフィックスはプロンプト指示由来のラベルなので除去
-                    const stripContentPrefix = (t: string) => t.replace(/^content:\s*/i, '').trim();
-                    const lastAssistantContent =
-                        (typeof thinkingContent === 'string' && thinkingContent.trim())
-                            ? stripContentPrefix(thinkingContent)
-                            : (typeof lastThinkingContent === 'string' && lastThinkingContent.trim())
-                                ? stripContentPrefix(lastThinkingContent)
+                    // Guard: needsTools=true なのに task-complete 以外のツールを一度も使わず完了しようとした場合、
+                    // 実際の作業をさせるためにリジェクトして継続する（最大1回）
+                    const onlyTaskComplete = toolCalls.length === 1 && toolCalls[0].name === 'task-complete';
+                    if (state.needsTools !== false && onlyTaskComplete && stepCounter === 0 && iteration < maxIter - 1) {
+                        logger.warn('⚠️ task-complete rejected: needsTools=true but no tools used yet. Continuing loop.');
+                        messages.push(new ToolMessage({
+                            tool_call_id: completeCall.id || 'task-complete',
+                            content: 'Rejected: you have not used any tools yet. This task requires tool use (e.g., search, fetch). ' +
+                                'Gather the needed information first, then call task-complete with the full answer in summary.',
+                        }));
+                        iteration++;
+                        continue;
+                    }
+
+                    const summaryArg = completeCall.args?.summary;
+                    const trimmedSummary =
+                        typeof summaryArg === 'string' && summaryArg.trim().length > 0
+                            ? summaryArg.trim()
+                            : '';
+                    const summary = trimmedSummary.length > 0 ? trimmedSummary : 'タスク完了';
+
+                    const fromThinking =
+                        typeof thinkingContent === 'string' && thinkingContent.trim()
+                            ? stripAssistantContentPrefix(thinkingContent)
+                            : typeof lastThinkingContent === 'string' && lastThinkingContent.trim()
+                                ? stripAssistantContentPrefix(lastThinkingContent)
                                 : undefined;
+
+                    // task-complete の summary をユーザー向け最終文の正とする（言語・ドメイン非依存）。
+                    // summary が空のときだけ思考本文へフォールバック。
+                    const lastAssistantContent =
+                        trimmedSummary.length > 0 ? trimmedSummary : fromThinking;
 
                     logger.success(`✅ FunctionCallingAgent: タスク完了 (${iteration + 1}イテレーション, ${((Date.now() - startTime) / 1000).toFixed(1)}s)`);
                     logger.info(`   応答: ${summary.substring(0, 200)}`);

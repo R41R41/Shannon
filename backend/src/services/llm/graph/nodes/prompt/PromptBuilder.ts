@@ -126,6 +126,8 @@ ${responseInstruction}
 - **毎ターン、ツールを呼ぶ前に content（テキスト）で現状認識と次の一手の理由を1-2文で述べること**。これはあなたの思考ログとして記録される
 - タスクが**完了したら task-complete ツールを呼んで宣言する**。テキストだけの応答では完了にならない
 - task-complete は**最終目標が達成されたときだけ**呼ぶ。中間工程（精錬開始、移動中など）では呼ばない
+- task-complete の **summary** はユーザーが読む**唯一の返答**。ユーザーへの直接の語りかけとして、具体的な内容（数値・比較・事実等）を含めて書く。メタ記述（「〇〇を伝えた」「〇〇を説明した」）は禁止——実際の情報を書く
+- **summary には Markdown が使える**。情報比較や詳細データは content（思考）ではなく **summary に直接** 整形して書くこと。content に書いた表やリストはユーザーに届かない
 
 ## 現在の状態
 - 時刻: ${currentTime}${platformInfo}${emotionInfo}${envInfo}
@@ -142,7 +144,7 @@ ${memoryInfo}
 ${minecraftRules}
 
 ## 回答フォーマット
-- 調査結果や情報をまとめる際は Discord Markdown で見やすく整形する（**太字**, 箇条書き等）
+${this.formatOutputRules(context)}
 - 調査結果には参照元のURLリンクも記載する
 - 画像を添付する場合は describe-image で内容を確認し、話題に関連する画像のみを添付する（サイトロゴやバナー等は添付しない）
 - 挨拶や短い雑談はシンプルなテキストでOK（過度な装飾不要）
@@ -172,7 +174,8 @@ ${minecraftRules}
         let base: string;
         switch (context?.platform) {
             case 'discord':
-                base = '最終返信は chat-on-discord を使わず、通常の文章として返してください。システムが action plan として Discord に配信します。';
+                base = '最終返信は chat-on-discord を使わず、通常の文章として返してください。システムが action plan として Discord に配信します。' +
+                    'ただし、ユーザーが「複数メッセージを送って」等と頼んだ場合は chat-on-discord で個別に送信してOK。';
                 break;
             case 'web':
                 base = '最終返信は chat-on-web を使わず、通常の文章として返してください。システムが action plan として Web UI に配信します。';
@@ -191,7 +194,9 @@ ${minecraftRules}
 
         // 分類駆動の指示追加: needsTools=false なら会話モードを明示
         if (needsTools === false) {
-            base += '\n\n**このリクエストは会話的な応答で十分です。** 検索やツールの使用は不要です。task-complete の summary に応答文を入れて完了してください。';
+            base +=
+                '\n\n**このリクエストは会話的な応答で十分です。** 検索やツールの使用は不要です。' +
+                '完了時は task-complete の **summary にユーザーへの返答を直接書いてください**（「〇〇を伝えた」ではなく、ユーザーが読む実際の文章）。';
         } else if (classifyMode === 'planning') {
             base += '\n\n複雑なマルチステップタスクです。まず update-plan で計画を立ててから実行してください。';
         }
@@ -205,7 +210,9 @@ ${minecraftRules}
     getDisabledOutputTools(context: TaskContext | null): string[] {
         switch (context?.platform) {
             case 'discord':
-                return ['chat-on-discord'];
+                // chat-on-discord は無効化しない — ユーザーが複数メッセージ送信を頼んだ場合に必要。
+                // 最終返信に使わないことはプロンプトで指示済み。
+                return [];
             case 'web':
                 return ['chat-on-web'];
             case 'twitter':
@@ -227,6 +234,7 @@ ${minecraftRules}
         if (context.discord) {
             const d = context.discord;
             platformInfo += `\n- Discord: ${d.guildName || ''}/${d.channelName || ''} (guildId: ${d.guildId || ''}, channelId: ${d.channelId || ''})`;
+            if (d.messageId) platformInfo += `\n- ユーザーのメッセージID: ${d.messageId}`;
             if (d.userName) platformInfo += `\n- ユーザー: ${d.userName}`;
         }
         if ((context.platform === 'minebot' || context.platform === 'minecraft') && context.metadata?.minecraft) {
@@ -324,6 +332,16 @@ ${minecraftRules}
         if (_cachedDynamicRules.length === 0) return '';
         const lines = _cachedDynamicRules.map(r => `\n- ${r}`);
         return lines.join('');
+    }
+
+    private formatOutputRules(context: TaskContext | null): string {
+        if (context?.platform === 'discord') {
+            return '- **Discord はテーブル（| col | col |）を表示できない**。代わりに箇条書き・太字・コードブロックで整形する\n' +
+                '- 比較データは箇条書きで「**項目**: 値」形式にするか、コードブロック内でスペース整列する\n' +
+                '- task-complete の summary にこれらのフォーマットを使って見やすく書く';
+        }
+        return '- task-complete の summary で Markdown を使って見やすく整形する（**太字**, 箇条書き, 表など）\n' +
+            '- 比較データや調査結果はテーブル（| 列1 | 列2 |）や箇条書きで構造化する';
     }
 
     private formatEmotionInfo(emotionState: EmotionState): string {

@@ -14,12 +14,17 @@ export default class TaskCompleteTool extends StructuredTool {
     'Declare the current task as complete. Call this ONLY when the final goal has been fully achieved ' +
     '(e.g., the requested item is in inventory, the information has been delivered, etc.). ' +
     'Do NOT call this after intermediate steps like starting smelting — wait until the end product is ready. ' +
-    'Provide a brief internal summary of what was accomplished (for logging/UI; the text shown to the user is taken from your normal reply content, not this summary).';
+    'CRITICAL: the summary field IS the message the user will see. Write it as a direct reply to the user with the actual content ' +
+    '(data, comparison, answer, etc.). Never write a meta-description like "I told the user X" or "I explained Y".';
 
   schema = z.object({
     summary: z
       .string()
-      .describe('Brief internal summary of what was accomplished (used for logging/status; user-facing message comes from your reply content)'),
+      .describe(
+        'The exact text the user will read — write it as a direct reply. ' +
+        'Include the actual content (numbers, facts, formatted data). ' +
+        'BAD: "Told the user the weather is cloudy." GOOD: "Tomorrow will be cloudy with 80% rain — bring an umbrella!"',
+      ),
   });
 
   async _call(data: z.infer<typeof this.schema>): Promise<string> {

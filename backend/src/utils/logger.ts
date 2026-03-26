@@ -17,10 +17,17 @@
  *   import { logger, initFileLogging } from '../../utils/logger.js';
  *   initFileLogging('/path/to/logs');  // call once at startup
  *
+ * Directory layout under `<dir>/`:
+ *   app/prod-YYYYMMDD.log           — combined (all levels routed through logger)
+ *   minebot/minebot-YYYYMMDD.log  — createLogger('Minebot:*') / Minecraft
+ *   twitter/twitter-YYYYMMDD.log
+ *   discord/discord-YYYYMMDD.log
+ *   website/website-YYYYMMDD.log  — Web / PublicChat
+ *
  * Service-specific logs:
- *   createLogger('Minebot:Client')  → also writes to minebot-YYYYMMDD.log
- *   createLogger('Twitter:API')     → also writes to twitter-YYYYMMDD.log
- *   createLogger('Discord:Voice')   → also writes to discord-YYYYMMDD.log
+ *   createLogger('Minebot:Client')  → also writes to minebot/minebot-YYYYMMDD.log
+ *   createLogger('Twitter:API')     → also writes to twitter/twitter-YYYYMMDD.log
+ *   createLogger('Discord:Voice')   → also writes to discord/discord-YYYYMMDD.log
  *
  * Usage:
  *   logger.info('Server started', 'blue');
@@ -62,6 +69,13 @@ export type ServiceCategory = 'twitter' | 'minebot' | 'discord' | 'website';
 
 const SERVICE_STREAMS: Map<ServiceCategory, { stream: WriteStream | null; dateKey: string }> = new Map();
 
+/** Combined log file directory under the root log dir */
+const LOG_SUBDIR_APP = 'app';
+
+function ensureSubdir(subPath: string): void {
+  if (!existsSync(subPath)) mkdirSync(subPath, { recursive: true });
+}
+
 function getServiceFileName(service: ServiceCategory): string {
   const now = new Date();
   const jst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
@@ -82,8 +96,10 @@ function ensureServiceStream(service: ServiceCategory): WriteStream | null {
   if (entry?.stream) entry.stream.end();
 
   if (!existsSync(logDir)) mkdirSync(logDir, { recursive: true });
+  const serviceDir = join(logDir, service);
+  ensureSubdir(serviceDir);
 
-  const stream = createWriteStream(join(logDir, fileName), { flags: 'a' });
+  const stream = createWriteStream(join(serviceDir, fileName), { flags: 'a' });
   SERVICE_STREAMS.set(service, { stream, dateKey: fileName });
   return stream;
 }
@@ -174,7 +190,9 @@ function ensureFileStream(): void {
     if (!existsSync(logDir)) {
       mkdirSync(logDir, { recursive: true });
     }
-    fileStream = createWriteStream(join(logDir, fileName), { flags: 'a' });
+    const appDir = join(logDir, LOG_SUBDIR_APP);
+    ensureSubdir(appDir);
+    fileStream = createWriteStream(join(appDir, fileName), { flags: 'a' });
     currentLogDate = dateKey;
   }
 }
@@ -203,8 +221,8 @@ function writeToFile(
 
 /**
  * Enable file logging. Call once at startup.
- * Logs are written as plain text (no ANSI codes) to `<dir>/prod-YYYYMMDD.log`.
- * Service-specific logs go to `<dir>/{service}-YYYYMMDD.log`.
+ * Combined logs: `<dir>/app/prod-YYYYMMDD.log` (plain text, no ANSI).
+ * Per-service logs: `<dir>/{twitter|discord|minebot|website}/{service}-YYYYMMDD.log`.
  * Files rotate automatically at midnight (JST).
  */
 export function initFileLogging(dir: string): void {
@@ -335,7 +353,7 @@ export type NamedLogger = Omit<typeof logger, 'colorize'>;
  * @example
  *   const log = createLogger('Minebot:TaskRuntime');
  *   log.info('タスク開始');
- *   // → prod-YYYYMMDD.log + minebot-YYYYMMDD.log
+ *   // → app/prod-YYYYMMDD.log + minebot/minebot-YYYYMMDD.log
  */
 export function createLogger(prefix: string, service?: ServiceCategory): NamedLogger {
   const tag = `[${prefix}]`;

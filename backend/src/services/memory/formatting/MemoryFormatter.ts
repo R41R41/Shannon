@@ -11,6 +11,7 @@ import { PersonMemoryService } from '../personMemoryService.js';
 import type {
   InternalState,
   RelationshipModel,
+  ShannonSelfImprovementGoal,
   ShannonSelfModel,
   StrategyUpdate,
   WorldModelPattern,
@@ -117,11 +118,13 @@ export class MemoryFormatter {
       lines.push(`- Weaknesses: ${selfModel.capabilities.weaknesses.join(', ')}`);
     }
     const activeGoals = selfModel.activeImprovementGoals
-      .filter((goal) => goal.status === 'active')
-      .sort((a, b) => b.priority - a.priority)
+      .filter((goal: ShannonSelfImprovementGoal) => goal.status === 'active')
+      .sort((a: ShannonSelfImprovementGoal, b: ShannonSelfImprovementGoal) => b.priority - a.priority)
       .slice(0, 3);
     if (activeGoals.length > 0) {
-      lines.push(`- Active improvement goals: ${activeGoals.map((goal) => goal.title).join(', ')}`);
+      lines.push(
+        `- Active improvement goals: ${activeGoals.map((goal: ShannonSelfImprovementGoal) => goal.title).join(', ')}`,
+      );
     }
     return lines.join('\n');
   }

@@ -2,7 +2,9 @@
   "name": "@shannon/backend",
   "type": "module",
   "scripts": {
-    "build": "tsc -b",
+    "prebuild": "npm run build --workspace=@shannon/common --prefix ..",
+    "predev": "npm run build --workspace=@shannon/common --prefix ..",
+    "build": "tsc",
     "build:fast": "swc src -d dist --source-maps --copy-files --strip-leading-paths",
     "build:check": "tsc --noEmit",
     "start": "node --experimental-specifier-resolution=node --es-module-specifier-resolution=node dist/server.js",

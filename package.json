@@ -7,7 +7,7 @@
     "common"
   ],
   "scripts": {
-    "postinstall": "patch-package",
+    "postinstall": "npm run build -w common && patch-package",
     "build": "npm run build -w common && npm run build -w backend",
     "dev": "concurrently \"npm run dev -w backend\" \"npm run dev -w frontend\"",
     "clean": "rm -rf */dist",

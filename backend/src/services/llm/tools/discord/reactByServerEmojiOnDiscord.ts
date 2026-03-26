@@ -11,7 +11,8 @@ import { logger } from '../../../../utils/logger.js';
 export default class ReactByServerEmojiOnDiscordTool extends StructuredTool {
   name = 'react-by-server-emoji-on-discord';
   description =
-    'Discordのメッセージに絵文字でリアクションするツール。emojiには Unicode絵文字（例: "😂", "👍", "🎉"）またはサーバーカスタム絵文字のID を指定できる。';
+    'Discordのメッセージに絵文字でリアクションするツール。messageIdはシステムプロンプトの「ユーザーのメッセージID」を使うこと（IDを推測・捏造しない）。' +
+    'emojiには Unicode絵文字（例: "😂", "👍", "🎉"）またはサーバーカスタム絵文字のID を指定できる。';
   schema = z.object({
     guildId: z
       .string()
