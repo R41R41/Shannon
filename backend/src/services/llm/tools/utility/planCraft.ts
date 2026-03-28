@@ -10,7 +10,7 @@ import type { MemoryAgent } from '../../graph/cognitive/MemoryAgent.js';
 import type { CognitiveBlackboard, PlanState, PlanSubtask } from '../../graph/cognitive/CognitiveBlackboard.js';
 
 /**
- * plan-craft ツール — CraftPreflight ノードの後継。
+ * plan-craft ツール — クラフト計画生成。
  *
  * FCA のツールとして実装。FCA が「クラフトが必要」と判断した時に呼ぶ。
  *
@@ -153,7 +153,7 @@ export default class PlanCraftTool extends StructuredTool {
                     status: i === 0 ? 'in_progress' as const : 'pending' as const,
                     iterationsSpent: 0,
                     children: [],
-                    createdBy: 'craft_preflight' as const,
+                    createdBy: 'plan_craft' as const,
                     createdAt: now,
                 }));
 
@@ -163,7 +163,7 @@ export default class PlanCraftTool extends StructuredTool {
                     subtasks,
                     currentSubtaskId: subtasks[0]?.id ?? null,
                     journalSummary: `プラン作成: ${target} x${count}。${subtasks.length}サブタスク。戦略: ${parsed.strategy}`,
-                    lastUpdatedBy: 'craft_preflight',
+                    lastUpdatedBy: 'plan_craft',
                     createdAt: now,
                     updatedAt: now,
                 };

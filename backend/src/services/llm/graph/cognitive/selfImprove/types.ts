@@ -14,7 +14,7 @@ export interface FailureRecord {
     episode: TaskEpisode;
     /** MetaCognition の評価（タスク完了時点） */
     metaAssessment: MetaAssessment | null;
-    /** ForwardModel で学習済みのパターン数 */
+    /** @deprecated ForwardModel は廃止済み */
     forwardModelPatternCount: number;
     /** 蓄積タイムスタンプ */
     recordedAt: number;

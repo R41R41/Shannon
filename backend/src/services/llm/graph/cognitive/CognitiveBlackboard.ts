@@ -68,7 +68,7 @@ export interface PlanSubtask {
     failureReason?: string;
     iterationsSpent: number;
     children: PlanSubtask[];   // 再帰: サブタスクのサブタスク
-    createdBy: 'craft_preflight' | 'meta_cognition';
+    createdBy: 'plan_craft' | 'meta_cognition';
     createdAt: number;
     completedAt?: number;
 }
@@ -80,7 +80,7 @@ export interface PlanState {
     currentSubtaskId: string | null;
     /** ローリングサマリー: LLM が生成する旅程の圧縮要約 (500字以内) */
     journalSummary: string;
-    lastUpdatedBy: 'craft_preflight' | 'meta_cognition' | 'fca';
+    lastUpdatedBy: 'plan_craft' | 'meta_cognition' | 'fca';
     createdAt: number;
     updatedAt: number;
 }

@@ -43,7 +43,6 @@ import { ModelSelector } from './cognitive/ModelSelector.js';
 import { ParallelExecutor } from './cognitive/ParallelExecutor.js';
 import { TaskEpisodeMemory } from './cognitive/TaskEpisodeMemory.js';
 import type { ExecutionResult } from './types.js';
-import { CraftPlan, runCraftPreflight } from './nodes/CraftPreflightNode.js';
 
 // ---------------------------------------------------------------------------
 // LangGraph Annotation (state schema)
@@ -82,9 +81,6 @@ const ShannonState = Annotation.Root({
 
   // -- model selection (RAS) --
   selectedModel: Annotation<string | undefined>({ reducer: replace, default: () => undefined }),
-
-  // -- craft preflight (deterministic pre-computation for Minecraft crafting) --
-  craftPlan: Annotation<CraftPlan | undefined>({ reducer: replace, default: () => undefined }),
 
   // -- planning --
   plan: Annotation<ShannonPlan | undefined>({ reducer: replace, default: () => undefined }),
@@ -212,34 +208,14 @@ async function classifyNodeFn(state: ShannonStateType): Promise<Partial<ShannonS
 }
 
 /**
- * CraftPreflight ノード: Minecraft クラフトタスクの決定論的前処理。
- * LLM を使わず、レシピ解決・インベントリ突合・インフラ検索をコードで事前計算する。
- */
-async function craftPreflightNodeFn(state: ShannonStateType): Promise<Partial<ShannonStateType>> {
-  const mc = state.envelope.minecraft;
-  const plan = runCraftPreflight({
-    channel: state.envelope.channel,
-    text: state.envelope.text,
-    inventory: mc?.inventory,
-    nearbyInfrastructure: mc?.nearbyInfrastructure,
-    nearbyResources: mc?.nearbyResources,
-  });
-  return {
-    craftPlan: plan,
-    trace: ['node:craft_preflight'],
-  };
-}
-
-/**
  * Phase 2-B: classify 後のルーティング
- * - Minecraft → recall + craft_preflight 並列（emotion はスキップ）
+ * - Minecraft → recall のみ（emotion はスキップ）
  * - その他 → emotion + recall 並列（従来通り）
  */
 function classifyRouter(state: ShannonStateType): string[] {
   const channel = state.envelope.channel;
   if (channel === 'minecraft') {
-    // emotion をスキップし recall + craft_preflight を並列実行
-    return ['recall', 'craft_preflight'];
+    return ['recall'];
   }
   return ['emotion_step', 'recall'];
 }
@@ -360,7 +336,6 @@ function createExecuteNode(fca: FunctionCallingAgent, emotionNode?: EmotionNode)
       classifyMode: state.mode,
       needsTools: state.needsTools,
       needsPlanning: state.needsPlanning,
-      craftPlan: state.craftPlan,
       onToolsExecuted: (messages: BaseMessage[], results: ExecutionResult[]) => {
         if (emotionNode) {
           emotionNode
@@ -449,7 +424,6 @@ export function buildShannonGraph(deps: ShannonGraphDeps) {
     .addNode('classify', classifyNodeFn)
     .addNode('emotion_step', createEmotionNode(deps.emotionNode))
     .addNode('recall', recallNode)
-    .addNode('craft_preflight', craftPreflightNodeFn)
     .addNode('execute', createExecuteNode(deps.fca, deps.emotionNode))
     .addNode('format', formatNode)
     .addNode('writeback', writebackNode)
@@ -466,11 +440,9 @@ export function buildShannonGraph(deps: ShannonGraphDeps) {
     .addConditionalEdges('classify', classifyRouter, {
       emotion_step: 'emotion_step',
       recall: 'recall',
-      craft_preflight: 'craft_preflight',
     })
     .addEdge('emotion_step', 'execute')
     .addEdge('recall', 'execute')
-    .addEdge('craft_preflight', 'execute')
     .addEdge('execute', 'format')
     .addEdge('format', 'writeback')
     .addEdge('writeback', END);

@@ -16,7 +16,6 @@ import { logger } from '../../../../utils/logger.js';
 import { getEventBus } from '../../../eventBus/index.js';
 import { WorldKnowledgeService } from '../../../minebot/knowledge/WorldKnowledgeService.js';
 import { RecipeDependencyResolver } from '../../../minebot/knowledge/RecipeDependencyResolver.js';
-import type { CraftPlan } from './CraftPreflightNode.js';
 import { TaskEpisodeMemory } from '../cognitive/TaskEpisodeMemory.js';
 import UpdatePlanTool from '../../tools/utility/updatePlan.js';
 import { trimContext } from '../../utils/contextManager.js';
@@ -30,7 +29,6 @@ import { TaskTreePublisher } from './execution/TaskTreePublisher.js';
 import { ThinkingManager } from './execution/ThinkingManager.js';
 import { ToolExecutor } from './execution/ToolExecutor.js';
 import { LoopDetector } from './execution/LoopDetector.js';
-import { ForwardModel } from './execution/ForwardModel.js';
 import { ModelSelector } from '../cognitive/ModelSelector.js';
 
 function stripAssistantContentPrefix(t: string): string {
@@ -84,8 +82,6 @@ export interface FunctionCallingAgentState {
     classifyMode?: string;
     needsTools?: boolean;
     needsPlanning?: boolean;
-    /** CraftPreflight ノードからの決定論的クラフト計画 */
-    craftPlan?: CraftPlan;
     /** イテレーション毎に最新のインベントリ差分を返すコールバック */
     getInventoryDiff?: () => string | null;
     /** Blackboard から最新の journalSummary を取得するコールバック */
@@ -128,7 +124,6 @@ export class FunctionCallingAgent {
     private thinkingManager: ThinkingManager;
     private toolExecutor: ToolExecutor;
     private loopDetector: LoopDetector;
-    private forwardModel: ForwardModel;
 
     // ユーザーからのリアルタイムフィードバック
     private pendingFeedback: string[] = [];
@@ -139,7 +134,6 @@ export class FunctionCallingAgent {
     // ナッジメッセージ（エフェメラル注入用）
     private _pendingNudge: string | null = null;
 
-    // Blackboard へのアクセサ（ForwardModel にコンテキストを渡すため）
     private blackboardAccessor: (() => { freeSlots?: number | null; activeEffects?: Array<{ name: string; amplifier: number }> }) | null = null;
 
     // === 設定 ===
@@ -176,7 +170,6 @@ export class FunctionCallingAgent {
         this.thinkingManager = new ThinkingManager();
         this.toolExecutor = new ToolExecutor(this.taskTreePublisher);
         this.loopDetector = new LoopDetector();
-        this.forwardModel = new ForwardModel();
 
         logger.info(`🤖 FunctionCallingAgent(Web/Discord): model=${FunctionCallingAgent.MODEL_NAME}, tools=${tools.length}`, 'cyan');
     }
@@ -267,7 +260,6 @@ export class FunctionCallingAgent {
 
         this.thinkingManager.resetThinkingState();
         this.loopDetector.reset();
-        this.forwardModel.reset();
 
         // 動的モデル選択 (RAS / ModelSelector)
         const modelSelector = new ModelSelector(state.selectedModel || FunctionCallingAgent.MODEL_NAME);
@@ -392,24 +384,17 @@ export class FunctionCallingAgent {
                 if (result) systemPrompt += `\n\n${result}`;
             }
 
-            // CraftPlan (決定論的前処理) or フォールバック: RecipeDependency
             if (isMinecraft) {
-                if (state.craftPlan?.promptInjection) {
-                    // CraftPreflight ノードからの短い注入テキストを使用
-                    systemPrompt += `\n\n${state.craftPlan.promptInjection}`;
-                } else {
-                    // フォールバック: 従来の冗長テキスト
-                    try {
-                        const mcMeta = state.context?.metadata?.minecraft as Record<string, unknown> | undefined;
-                        const inventory = Array.isArray(mcMeta?.inventory)
-                            ? (mcMeta!.inventory as Array<{ name: string; count: number }>)
-                            : null;
-                        const depPrompt = this.buildCraftDependencyPrompt(goal, inventory);
-                        if (depPrompt) {
-                            systemPrompt += depPrompt;
-                        }
-                    } catch { }
-                }
+                try {
+                    const mcMeta = state.context?.metadata?.minecraft as Record<string, unknown> | undefined;
+                    const inventory = Array.isArray(mcMeta?.inventory)
+                        ? (mcMeta!.inventory as Array<{ name: string; count: number }>)
+                        : null;
+                    const depPrompt = this.buildCraftDependencyPrompt(goal, inventory);
+                    if (depPrompt) {
+                        systemPrompt += depPrompt;
+                    }
+                } catch { }
             }
         }
 
@@ -733,60 +718,25 @@ export class FunctionCallingAgent {
                 // ツール呼び出しがあった → カウンタリセット
                 consecutiveTextOnly = 0;
 
-                // ── ForwardModel: 事前予測チェック（小脳） ──
-                const forwardModelBlocked: Array<{ call: typeof toolCalls[0]; prediction: ReturnType<ForwardModel['predict']> }> = [];
+                // ── LoopDetector: ブロック済みツールのフィルタリング ──
+                const blockedCalls: Array<{ call: typeof toolCalls[0]; reason: string }> = [];
                 const passedToolCalls = toolCalls.filter(tc => {
                     if (tc.name === 'task-complete' || tc.name === 'update-plan') return true;
 
-                    // LoopDetector でブロックされているか
                     if (this.loopDetector.isCallBlocked(tc.name, tc.args)) {
-                        forwardModelBlocked.push({
-                            call: tc,
-                            prediction: { shouldBlock: true, reason: 'LoopDetector によりブロック済み', suggestion: null, consecutiveBlocks: 0 },
-                        });
-                        return false;
-                    }
-
-                    // ForwardModel で予測
-                    const prediction = this.forwardModel.predict(tc.name, tc.args, {
-                        recentResults: this.forwardModel['recentResults'],
-                        freeSlots: this.blackboardAccessor?.()?.freeSlots,
-                    });
-                    if (prediction.shouldBlock) {
-                        forwardModelBlocked.push({ call: tc, prediction });
+                        blockedCalls.push({ call: tc, reason: 'LoopDetector によりブロック済み' });
                         return false;
                     }
                     return true;
                 });
 
-                // ブロックされたツール呼び出しの結果を LLM に伝える
-                if (forwardModelBlocked.length > 0) {
-                    let hasRepeatedBlock = false;
-                    for (const { call, prediction } of forwardModelBlocked) {
-                        const isRepeated = prediction.consecutiveBlocks >= 3;
-                        if (isRepeated) hasRepeatedBlock = true;
-
-                        const blockMsg = isRepeated
-                            ? `🚫 ${call.name} は${prediction.consecutiveBlocks}回連続でブロックされています。このアプローチは機能しません。` +
-                              (prediction.suggestion ? ` 必須: ${prediction.suggestion}` : ' 完全に別のアプローチに切り替えてください。')
-                            : [
-                                `⚠️ ${call.name} の実行がブロックされました。`,
-                                prediction.reason ? `理由: ${prediction.reason}` : '',
-                                prediction.suggestion ? `提案: ${prediction.suggestion}` : '',
-                            ].filter(Boolean).join(' ');
-
-                        logger.info(`[ForwardModel] 🧠 ブロック: ${call.name} — ${prediction.reason} (${prediction.consecutiveBlocks}回目)`, 'yellow');
+                if (blockedCalls.length > 0) {
+                    for (const { call, reason } of blockedCalls) {
+                        logger.info(`[LoopDetector] 🧠 ブロック: ${call.name} — ${reason}`, 'yellow');
                         messages.push(new ToolMessage({
-                            content: `結果: 失敗 詳細: ${blockMsg} [failure_type=predicted_failure recoverable=${!isRepeated}]`,
+                            content: `結果: 失敗 詳細: ⚠️ ${call.name} の実行がブロックされました。理由: ${reason} 別のアプローチを試してください。 [failure_type=loop_blocked recoverable=true]`,
                             tool_call_id: call.id || `call_${Date.now()}`,
                         }));
-                    }
-
-                    if (hasRepeatedBlock) {
-                        // ForwardModel 連続ブロックはルール側の問題であり、モデル能力不足ではない。
-                        // エスカレーションすると応答速度が低下するだけで問題は解決しないため、
-                        // 警告ログのみ出力しエスカレーションは行わない。
-                        logger.warn(`[ForwardModel] 🔺 連続ブロック上限到達 — エスカレーション不要（ルール側の問題）`);
                     }
 
                     if (passedToolCalls.length === 0) {
@@ -900,14 +850,6 @@ export class FunctionCallingAgent {
                         lastAssistantContent,
                     };
                 }
-
-                // ── ForwardModel: 成功ツールのブロックカウンタリセット + 学習 ──
-                for (const result of iterationResults) {
-                    if (result.success) {
-                        this.forwardModel.onToolExecuted(result.toolName, result.args ?? {});
-                    }
-                }
-                this.forwardModel.learn(iterationResults);
 
                 // ── LoopDetector: 繰り返し失敗の検出（前帯状皮質） ──
                 const loopDetection = this.loopDetector.recordAndCheck(passedToolCalls, iterationResults);

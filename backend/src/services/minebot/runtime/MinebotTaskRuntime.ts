@@ -746,7 +746,7 @@ export class MinebotTaskRuntime {
 
   /**
    * 半径 8 ブロック以内のインフラブロック（crafting_table, furnace 等）をスキャン。
-   * CraftPreflight ノードおよび PromptBuilder で使用する。
+   * PromptBuilder および plan-craft ツールで使用する。
    */
   private scanNearbyInfrastructure(): Array<{ name: string; x: number; y: number; z: number; distance: number }> {
     const SCAN_BLOCKS = [
@@ -784,7 +784,7 @@ export class MinebotTaskRuntime {
 
   /**
    * 半径 32 ブロック以内の資源ブロック（木材等）をスキャン。
-   * CraftPreflight が代替素材（oak_log の代わりに acacia_log 等）を選択するために使用。
+   * plan-craft ツールやレシピ依存解決で代替素材（oak_log の代わりに acacia_log 等）を選択するために使用。
    */
   private scanNearbyResources(): Array<{ name: string; count: number }> {
     const RESOURCE_BLOCKS = [

@@ -12,7 +12,6 @@ import { ModelSelector } from './ModelSelector.js';
 import { TaskEpisodeMemory } from './TaskEpisodeMemory.js';
 import { SelfImprovementDaemon } from './selfImprove/index.js';
 import type { ExecutionResult } from '../types.js';
-import { craftPlanToPlanState } from '../nodes/CraftPreflightNode.js';
 import type RecallMemoryTool from '../../tools/memory/recallMemory.js';
 import type SaveMemoryTool from '../../tools/memory/saveMemory.js';
 import type PlanCraftTool from '../../tools/utility/planCraft.js';
@@ -106,15 +105,6 @@ export class ParallelExecutor {
                     logger.warn(`[ParallelExecutor] ⚠️ Vital alerts: ${vitalAlerts.join('; ')}`);
                 }
             }
-        }
-
-        // CraftPreflight の結果をプランとして blackboard に注入 (後方互換)
-        if (state.craftPlan) {
-            const planState = craftPlanToPlanState(state.craftPlan, goal);
-            blackboard.updatePlan(planState);
-            logger.info(
-                `[ParallelExecutor] 📋 初期プラン注入: ${planState.subtasks.length}サブタスク (${planState.strategy.substring(0, 60)})`,
-            );
         }
 
         // MemoryAgent を初期化 (4番目の並列プロセス)

@@ -329,22 +329,30 @@ export class EventReactionSystem {
     /**
      * hostile_approach を脅威レベルで段階的に処理する。
      *
-     *   critical → emergency（タスク中断 + 反射的逃走 + LLM 緊急タスク）
-     *   warning  → task（タスクキューに追加、実行中タスクは中断しない）
-     *   notice   → info（ログのみ）
+     *   critical → emergency（タスク中断 + 反射的逃走 + LLM 緊急タスク）— 確率チェック適用
+     *   warning  → task（タスクキューに追加、実行中タスクは中断しない）— 確率チェック適用
+     *   notice   → info（ログのみ）— 確率チェック適用
      *
      * emergency 中に新たな hostile_approach(critical) が来た場合:
      *   → LLM タスクはそのまま（二重起動しない）だが、逃走方向を再計算する
      */
     private async handleHostileApproach(eventData: HostileEventData): Promise<EventReactionResult> {
         const { threatLevel, allHostiles } = eventData;
+        const config = this.configs.get('hostile_approach');
+        const probability = config?.probability ?? 100;
 
         if (threatLevel === 'notice') {
+            if (!this.checkProbability(probability)) {
+                return { handled: false, reactionType: 'info' };
+            }
             log.debug(`👀 敵対Mob検知 (notice): ${allHostiles.map(h => `${h.mobType}(${h.distance}m)`).join(', ')}`);
             return { handled: true, reactionType: 'info' };
         }
 
         if (threatLevel === 'warning') {
+            if (!this.checkProbability(probability)) {
+                return { handled: false, reactionType: 'info' };
+            }
             const message = CombatEventHandler.buildTaskMessage(eventData) ?? '敵対Mobが接近中';
             log.info(`⚠️ 敵対Mob警戒 (warning): ${message}`);
 
@@ -356,6 +364,9 @@ export class EventReactionSystem {
         }
 
         // critical — emergency 処理
+        if (!this.checkProbability(probability)) {
+            return { handled: false, reactionType: 'info' };
+        }
         if (this.taskRuntime.isInEmergencyMode()) {
             // 既に emergency 中 → LLM タスクは二重起動しないが、逃走方向を即座に更新
             log.warn(`🚨 Emergency中に新たな脅威: ${allHostiles.map(h => `${h.mobType}(${h.distance}m)`).join(', ')} → 逃走方向を更新`);

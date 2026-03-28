@@ -16,7 +16,7 @@ export interface DependencyNode {
  * Minecraft のクラフト／精錬レシピを再帰的に解決し、
  * ツリー形式の依存チェーンを構築する。
  *
- * ForwardModel や FCA のプロンプト注入で利用される。
+ * FCA のプロンプト注入や plan-craft ツールで利用される。
  */
 export class RecipeDependencyResolver {
     private mcData: ReturnType<typeof minecraftData>;

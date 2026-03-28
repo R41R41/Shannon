@@ -1,4 +1,7 @@
+import { createLogger } from '../../../utils/logger.js';
 import { CustomBot, InstantSkill } from '../types.js';
+
+const log = createLogger('Minebot:EquipItem');
 
 type EquipDestination = 'hand' | 'off-hand' | 'head' | 'torso' | 'legs' | 'feet';
 
@@ -37,6 +40,17 @@ class EquipItem extends InstantSkill {
     ];
   }
 
+  private getEquippedItems(): { slot: string; item: any }[] {
+    const equipped: { slot: string; item: any }[] = [];
+    const slotNames: EquipDestination[] = ['hand', 'off-hand', 'head', 'torso', 'legs', 'feet'];
+    for (const slot of slotNames) {
+      const slotIndex = this.bot.getEquipmentDestSlot(slot as any);
+      const item = (this.bot.inventory as any).slots[slotIndex];
+      if (item) equipped.push({ slot, item });
+    }
+    return equipped;
+  }
+
   async runImpl(itemName: string, destination: string = 'main') {
     try {
       if (!itemName) {
@@ -51,22 +65,52 @@ class EquipItem extends InstantSkill {
         };
       }
 
-      const item = this.bot.inventory
-        .items()
-        .find((i) => i.name === itemName);
+      const inventoryItems = this.bot.inventory.items();
+      const equippedItems = this.getEquippedItems();
 
-      if (!item) {
+      const item = inventoryItems.find((i) => i.name === itemName)
+        ?? inventoryItems.find((i) => i.name.includes(itemName) || itemName.includes(i.name));
+
+      if (item) {
+        await this.bot.equip(item, mapping.dest as any);
         return {
-          success: false,
-          result: `インベントリに${itemName}がありません`,
+          success: true,
+          result: `${itemName}を${mapping.label}に装備しました`,
         };
       }
 
-      await this.bot.equip(item, mapping.dest as any);
+      const equippedMatch = equippedItems.find((e) => e.item.name === itemName);
+      if (equippedMatch) {
+        if (equippedMatch.slot === mapping.dest) {
+          return {
+            success: true,
+            result: `${itemName}は既に${mapping.label}に装備されています`,
+          };
+        }
+        await this.bot.unequip(equippedMatch.slot as any);
+        await new Promise((r) => setTimeout(r, 100));
 
+        const movedItem = this.bot.inventory.items().find((i) => i.name === itemName);
+        if (movedItem) {
+          await this.bot.equip(movedItem, mapping.dest as any);
+          return {
+            success: true,
+            result: `${itemName}を${equippedMatch.slot}から${mapping.label}に移動しました`,
+          };
+        }
+
+        return {
+          success: false,
+          result: `${itemName}を${equippedMatch.slot}から外しましたが、再装備に失敗しました`,
+        };
+      }
+
+      const invNames = inventoryItems.map((i) => `${i.name}(x${i.count})`).join(', ');
+      const equipNames = equippedItems.map((e) => `${e.item.name}[${e.slot}]`).join(', ');
+      log.warn(`equip-item失敗: "${itemName}"が見つからない。インベントリ: [${invNames}], 装備中: [${equipNames}]`);
       return {
-        success: true,
-        result: `${itemName}を${mapping.label}に装備しました`,
+        success: false,
+        result: `インベントリに${itemName}がありません (所持: ${invNames || 'なし'}, 装備中: ${equipNames || 'なし'})`,
       };
     } catch (error: any) {
       return {

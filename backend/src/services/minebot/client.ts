@@ -85,23 +85,37 @@ export class MinebotClient extends BaseClient {
     }
 
     this.bot.on('login', async () => {
+      log.info('✅ Bot has logged in.');
       this.eventBus.log('minecraft', 'green', 'Bot has logged in.');
     });
 
-    // タイムアウト・切断のログ
     this.bot.on('kicked', (reason: string) => {
-      log.error(`🚫 Bot was kicked: ${reason}`);
-      this.eventBus.log('minecraft', 'red', `Bot was kicked: ${reason}`);
+      let readableReason = reason;
+      try {
+        const parsed = JSON.parse(reason);
+        readableReason = parsed.text ?? parsed.translate ?? JSON.stringify(parsed);
+      } catch { /* plain string */ }
+      log.error(`🚫🚫🚫 BOT KICKED 🚫🚫🚫 reason: ${readableReason}`);
+      this.eventBus.log('minecraft', 'red', `Bot was kicked: ${readableReason}`);
     });
 
     this.bot.on('end', (reason: string) => {
-      log.error(`🔌 Bot disconnected: ${reason}`);
-      this.eventBus.log('minecraft', 'red', `Bot disconnected: ${reason}`);
+      const trace = new Error('disconnect trace').stack;
+      log.error(`🔌🔌🔌 BOT DISCONNECTED 🔌🔌🔌 reason: "${reason ?? 'unknown'}" | trace: ${trace}`);
+      this.eventBus.log('minecraft', 'red', `Bot disconnected: ${reason ?? 'unknown'}`);
     });
 
     this.bot.on('error', (err: Error) => {
-      log.error(`❌ Bot error: ${err.message}`, err);
+      log.error(`❌❌❌ BOT ERROR ❌❌❌ ${err.message}`, err);
       this.eventBus.log('minecraft', 'red', `Bot error: ${err.message}`);
+    });
+
+    (this.bot as any)._client?.on('end', (reason: string) => {
+      log.error(`🔌 [protocol-level] _client end: "${reason ?? 'unknown'}"`);
+    });
+
+    (this.bot as any)._client?.on('error', (err: Error) => {
+      log.error(`❌ [protocol-level] _client error: ${err.message}`, err);
     });
 
     this.bot.isTest = CONFIG.IS_DEV;
@@ -305,6 +319,7 @@ export class MinebotClient extends BaseClient {
         const httpServer = this.skillAgent.getHttpServer();
         await httpServer.stop();
       }
+      log.info('🛑 Bot.quit() を明示的に呼び出します（ユーザー操作による停止）');
       this.bot.quit();
       if (this.skillAgent?.getTaskRuntime()) {
         this.skillAgent.getTaskRuntime()?.forceStop();
