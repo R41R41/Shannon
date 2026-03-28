@@ -7,7 +7,7 @@ import {
 import OpenAI from 'openai';
 import { readdirSync } from 'fs';
 import { dirname, join } from 'path';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import { z } from 'zod';
 import { config } from '../../config/env.js';
 import { classifyError, formatErrorForLog } from '../../errors/index.js';
@@ -164,7 +164,7 @@ export class LLMService {
       if (file === 'index.ts' || file === 'index.js') continue;
       try {
         const toolPath = join(toolsDir, file);
-        const toolModule = await import(toolPath);
+        const toolModule = await import(pathToFileURL(toolPath).href);
         const ToolClass = toolModule.default;
         // ツールが既に読み込まれているかチェック
         if (this.tools.find((tool) => tool.name === ToolClass.name)) continue;

@@ -14,6 +14,7 @@
  */
 import { readdirSync, statSync } from 'fs';
 import { join, basename } from 'path';
+import { pathToFileURL } from 'node:url';
 import { StructuredTool } from '@langchain/core/tools';
 import { logger } from './logger.js';
 
@@ -79,7 +80,7 @@ export async function loadToolsFromDirectory(
 
   for (const filePath of toolFiles) {
     try {
-      const toolModule = await import(filePath);
+      const toolModule = await import(pathToFileURL(filePath).href);
       const ToolClass = toolModule.default;
       if (ToolClass?.prototype?.constructor) {
         tools.push(new ToolClass());

@@ -7,8 +7,9 @@ const AuthGuard: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const isAuthenticated = localStorage.getItem("isAuthenticated") === "true";
 
   if (DEV_AUTH_ENABLED && !isAuthenticated) {
-    console.warn("[AuthGuard] DEV_AUTH_BYPASS enabled — auto-authenticating");
+    console.warn("[AuthGuard] DEV_AUTH_BYPASS enabled — auto-authenticating as admin");
     localStorage.setItem("isAuthenticated", "true");
+    localStorage.setItem("userInfo", JSON.stringify({ name: "Dev", uid: "dev", isAdmin: true }));
     return <>{children}</>;
   }
 

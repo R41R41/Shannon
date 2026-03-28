@@ -3,15 +3,16 @@ import path from 'path';
 import { defineConfig } from 'vite';
 
 // Shannon-prod用: ポートを3001に変更
-export default defineConfig(({ mode }) => ({
+export default defineConfig(({ mode }) => {
+  const backendPort = mode === 'dev' ? 15000 : 5001;
+  return {
   plugins: [react()],
   server: {
-    host: true, // 全てのIPアドレスでリッスン
-    port: mode === 'test' ? 13001 : 3001,
-    strictPort: true, // 指定したポートが使用中の場合はエラーを出す
-    // 許可するホストを追加
+    host: true,
+    port: mode === 'test' ? 13001 : mode === 'dev' ? 13000 : 3001,
+    strictPort: true,
     proxy: {
-      '/api': 'http://localhost:5001',
+      '/api': `http://localhost:${backendPort}`,
     },
     allowedHosts: ['sh4nnon.com', 'www.sh4nnon.com', 'localhost'],
     headers: {
@@ -38,4 +39,5 @@ export default defineConfig(({ mode }) => ({
       'cronstrue/locales/ja': 'cronstrue/locales/ja.js',
     },
   },
-}));
+};
+});

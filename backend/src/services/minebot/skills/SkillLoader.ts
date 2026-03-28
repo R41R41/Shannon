@@ -1,5 +1,6 @@
 import fs from 'fs';
 import { join } from 'path';
+import { pathToFileURL } from 'node:url';
 import { createLogger } from '../../../utils/logger.js';
 import { CONFIG } from '../config/MinebotConfig.js';
 import { ConstantSkill, ConstantSkills, CustomBot, InstantSkill, InstantSkills } from '../types.js';
@@ -33,7 +34,7 @@ export class SkillLoader {
                 try {
                     if (file.endsWith('.js')) {
                         const { default: skillClass } = await import(
-                            join(this.instantSkillDir, file)
+                            pathToFileURL(join(this.instantSkillDir, file)).href
                         );
                         const skillInstance = new skillClass(bot) as InstantSkill;
                         instantSkills.addSkill(skillInstance);
@@ -54,7 +55,7 @@ export class SkillLoader {
                 for (const file of genFiles) {
                     try {
                         const { default: skillClass } = await import(
-                            join(genInstantDir, file) + '?v=' + Date.now()
+                            pathToFileURL(join(genInstantDir, file)).href + '?v=' + Date.now()
                         );
                         const skillInstance = new skillClass(bot) as InstantSkill;
                         instantSkills.addSkill(skillInstance);
@@ -91,7 +92,7 @@ export class SkillLoader {
                 try {
                     if (file.endsWith('.js')) {
                         const { default: skillClass } = await import(
-                            join(this.constantSkillDir, file)
+                            pathToFileURL(join(this.constantSkillDir, file)).href
                         );
                         const skillInstance = new skillClass(bot) as ConstantSkill;
                         constantSkills.addSkill(skillInstance);
@@ -113,7 +114,7 @@ export class SkillLoader {
                 for (const file of genFiles) {
                     try {
                         const { default: skillClass } = await import(
-                            join(genConstantDir, file) + '?v=' + Date.now()
+                            pathToFileURL(join(genConstantDir, file)).href + '?v=' + Date.now()
                         );
                         const skillInstance = new skillClass(bot) as ConstantSkill;
                         constantSkills.addSkill(skillInstance);
@@ -141,7 +142,7 @@ export class SkillLoader {
      * 単一スキルファイルを読み込む（ホットリロード用）
      */
     async loadSingleSkill(filePath: string, bot: CustomBot): Promise<InstantSkill | ConstantSkill> {
-        const { default: skillClass } = await import(filePath + '?v=' + Date.now());
+        const { default: skillClass } = await import(pathToFileURL(filePath).href + '?v=' + Date.now());
         return new skillClass(bot);
     }
 

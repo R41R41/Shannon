@@ -7,6 +7,7 @@
 
 import { readFile, writeFile } from 'node:fs/promises';
 import { resolve, basename } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { createLogger } from '../../../utils/logger.js';
 import { SkillRegistrar } from './SkillRegistrar.js';
 import type { CustomBot, InstantSkill, ConstantSkill } from '../types.js';
@@ -61,7 +62,7 @@ export class SkillHotLoader {
             }
 
             // 動的インポート（キャッシュバスティング）
-            const { default: SkillClass } = await import(jsPath + '?v=' + Date.now());
+            const { default: SkillClass } = await import(pathToFileURL(jsPath).href + '?v=' + Date.now());
             const skill = new SkillClass(bot) as InstantSkill;
 
             // 重複チェック
@@ -133,7 +134,7 @@ export class SkillHotLoader {
                 };
             }
 
-            const { default: SkillClass } = await import(jsPath + '?v=' + Date.now());
+            const { default: SkillClass } = await import(pathToFileURL(jsPath).href + '?v=' + Date.now());
             const skill = new SkillClass(bot) as ConstantSkill;
 
             if (bot.constantSkills.hasSkill(skill.skillName)) {
@@ -207,7 +208,7 @@ export class SkillHotLoader {
     ): Promise<{ success: boolean; error?: string }> {
         try {
             // 1. 動的インポート（キャッシュ無効化）
-            const mod = await import(jsPath + '?v=' + Date.now());
+            const mod = await import(pathToFileURL(jsPath).href + '?v=' + Date.now());
             const SkillClass = mod.default;
             if (!SkillClass) {
                 return { success: false, error: 'default export が見つかりません' };
@@ -258,7 +259,7 @@ export class SkillHotLoader {
         reason: string,
     ): Promise<{ success: boolean; error?: string }> {
         try {
-            const mod = await import(jsPath + '?v=' + Date.now());
+            const mod = await import(pathToFileURL(jsPath).href + '?v=' + Date.now());
             const SkillClass = mod.default;
             if (!SkillClass) {
                 return { success: false, error: 'default export が見つかりません' };

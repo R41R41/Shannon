@@ -1,9 +1,15 @@
 #!/bin/bash
 
-# スクリプトのディレクトリを動的に取得（どの環境でも正しく動作する）
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# テストモードフラグをチェック
+# --- OS detection ---
+IS_WINDOWS=false
+if [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "mingw"* ]] || [[ "$OSTYPE" == "cygwin" ]]; then
+    IS_WINDOWS=true
+fi
+
+# --- Configuration ---
 IS_DEV=false
 PORT=3001
 FRONTEND_SESSION="shannon-frontend-prod"
@@ -17,37 +23,89 @@ else
     echo "Starting frontend on port $PORT..."
 fi
 
-# 既存のセッションを確認・終了
-tmux kill-session -t $FRONTEND_SESSION 2>/dev/null
+# --- Session / PID management ---
+PID_DIR="$ROOT_DIR/.pids"
+mkdir -p "$PID_DIR"
+PID_FILE="$PID_DIR/${FRONTEND_SESSION}.pid"
 
-# 使用中のポートをチェックして解放
+if [ "$IS_WINDOWS" = true ]; then
+    if [ -f "$PID_FILE" ]; then
+        old_pid=$(cat "$PID_FILE")
+        taskkill //F //PID "$old_pid" //T 2>/dev/null
+        rm -f "$PID_FILE"
+    fi
+else
+    tmux kill-session -t "$FRONTEND_SESSION" 2>/dev/null
+fi
+
+# --- Port cleanup (cross-platform) ---
 kill_port() {
     local port=$1
-    local pid=$(lsof -t -i:${port})
-    if [ ! -z "$pid" ]; then
-        echo "Killing process using port ${port} (PID: ${pid})"
-        kill -9 $pid
+    if [ "$IS_WINDOWS" = true ]; then
+        local pids
+        pids=$(netstat -ano 2>/dev/null | grep ":${port} " | grep "LISTENING" | awk '{print $5}' | sort -u)
+        for pid in $pids; do
+            if [ -n "$pid" ] && [ "$pid" != "0" ]; then
+                echo "Killing process using port ${port} (PID: ${pid})"
+                taskkill //F //PID "$pid" 2>/dev/null
+            fi
+        done
+    else
+        local pid
+        pid=$(lsof -t -i:"${port}")
+        if [ -n "$pid" ]; then
+            echo "Killing process using port ${port} (PID: ${pid})"
+            kill -9 "$pid"
+        fi
     fi
 }
 
-# ポートを解放
 echo "Cleaning up port ${PORT}..."
-kill_port $PORT
+kill_port "$PORT"
 
-# 少し待機
 sleep 2
 
-# フロントエンドを起動
-if [ "$IS_DEV" = true ]; then
-    tmux new-session -d -s $FRONTEND_SESSION "cd $SCRIPT_DIR && PORT=$PORT npm run dev:dev"
+# --- Launch frontend process ---
+if [ "$IS_WINDOWS" = true ]; then
+    LAUNCH_SCRIPT="$PID_DIR/${FRONTEND_SESSION}-launch.sh"
+    if [ "$IS_DEV" = true ]; then
+        cat > "$LAUNCH_SCRIPT" << LAUNCH_EOF
+#!/bin/bash
+cd "$SCRIPT_DIR"
+export PORT=$PORT
+export npm_config_script_shell=/bin/bash
+exec npm run dev:dev
+LAUNCH_EOF
+    else
+        cat > "$LAUNCH_SCRIPT" << LAUNCH_EOF
+#!/bin/bash
+cd "$SCRIPT_DIR"
+export PORT=$PORT
+export npm_config_script_shell=/bin/bash
+exec npm run dev
+LAUNCH_EOF
+    fi
+    chmod +x "$LAUNCH_SCRIPT"
+    mintty --hold error --title "$FRONTEND_SESSION" /bin/bash -l "$LAUNCH_SCRIPT" &
+    echo $! > "$PID_FILE"
 else
-    tmux new-session -d -s $FRONTEND_SESSION "cd $SCRIPT_DIR && PORT=$PORT npm run dev"
+    if [ "$IS_DEV" = true ]; then
+        tmux new-session -d -s "$FRONTEND_SESSION" "cd $SCRIPT_DIR && PORT=$PORT npm run dev:dev"
+    else
+        tmux new-session -d -s "$FRONTEND_SESSION" "cd $SCRIPT_DIR && PORT=$PORT npm run dev"
+    fi
 fi
-echo "Frontend started in tmux session: $FRONTEND_SESSION"
 
-# セッション情報を表示
-echo -e "\nActive tmux sessions:"
-tmux list-sessions
+echo "Frontend started in session: $FRONTEND_SESSION"
 
-echo -e "\nTo attach to the session:"
-echo "  tmux attach -t $FRONTEND_SESSION"
+echo ""
+if [ "$IS_WINDOWS" = true ]; then
+    echo "Frontend running in terminal window: $FRONTEND_SESSION"
+    [ -f "$PID_FILE" ] && echo "  PID: $(cat "$PID_FILE")"
+else
+    echo "Active tmux sessions:"
+    tmux list-sessions
+    echo ""
+    echo "To attach to the session:"
+    echo "  tmux attach -t $FRONTEND_SESSION"
+fi

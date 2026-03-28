@@ -1,46 +1,39 @@
 export const isTest = import.meta.env.MODE === "test";
-export const isDev = import.meta.env.MODE === "development";
+export const isDev = import.meta.env.MODE === "dev";
 
-// プロトコルを動的に決定
 const protocol = window.location.protocol === "https:" ? "https:" : "http:";
 const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
 
-// 実際のホスト名を使用
-const hostname = window.location.hostname; // 'sh4nnon.com' など
-
-// 常にブラウザのURLホストを使用（Nginxでプロキシされるため）
+const hostname = window.location.hostname;
 const host = window.location.host;
 
-// WebSocketポート設定 (Shannon-prod用)
-const wsBasePorts = isDev
-  ? {
-    openai: '15021',
-    monitoring: '15022',
-    scheduler: '15024',
-    status: '15023',
-    planning: '15025',
-    emotion: '15026',
-    skill: '15027',
-    auth: '15028',
-  }
-  : isTest
-    ? {
-      openai: '16010',
-      monitoring: '16011',
-      scheduler: '16012',
-      status: '16013',
-      planning: '16014',
-      emotion: '16015',
-      skill: '16016',
-      auth: '16017',
-    }
-    : null; // 本番はパスベース
+// dev: 直接ポート接続（nginx なし）
+// prod: パスベース（nginx プロキシ経由）
+const devWsPorts = {
+  openai: 15010,
+  monitoring: 15011,
+  status: 15013,
+  skill: 15016,
+  auth: 15017,
+  schedule: 15018,
+  planning: 15019,
+  emotion: 15020,
+} as const;
 
-// Shannon-prod: 常にパスベースのWebSocketを使用（Nginxでプロキシ）
-export const URLS = {
-  HTTP_SERVER: `${protocol}//${host}`,
-  FRONTEND: `${protocol}//${host}`,
-  WEBSOCKET: {
+function buildWebSocketUrls() {
+  if (isDev) {
+    return {
+      OPENAI: `${wsProtocol}//${hostname}:${devWsPorts.openai}`,
+      MONITORING: `${wsProtocol}//${hostname}:${devWsPorts.monitoring}`,
+      SCHEDULER: `${wsProtocol}//${hostname}:${devWsPorts.schedule}`,
+      STATUS: `${wsProtocol}//${hostname}:${devWsPorts.status}`,
+      PLANNING: `${wsProtocol}//${hostname}:${devWsPorts.planning}`,
+      EMOTION: `${wsProtocol}//${hostname}:${devWsPorts.emotion}`,
+      SKILL: `${wsProtocol}//${hostname}:${devWsPorts.skill}`,
+      AUTH: `${wsProtocol}//${hostname}:${devWsPorts.auth}`,
+    };
+  }
+  return {
     OPENAI: `${wsProtocol}//${host}/ws/openai`,
     MONITORING: `${wsProtocol}//${host}/ws/monitoring`,
     SCHEDULER: `${wsProtocol}//${host}/ws/scheduler`,
@@ -49,12 +42,15 @@ export const URLS = {
     EMOTION: `${wsProtocol}//${host}/ws/emotion`,
     SKILL: `${wsProtocol}//${host}/ws/skill`,
     AUTH: `${wsProtocol}//${host}/ws/auth`,
-  },
+  };
+}
+
+export const URLS = {
+  HTTP_SERVER: `${protocol}//${host}`,
+  FRONTEND: `${protocol}//${host}`,
+  WEBSOCKET: buildWebSocketUrls(),
 } as const;
 
-// デバッグ用ログ
 console.log("Environment:", import.meta.env.MODE);
 console.log("isDev:", isDev);
-console.log("isTest:", isTest);
-console.log("Hostname:", hostname);
 console.log("WebSocket URLs:", URLS.WEBSOCKET);

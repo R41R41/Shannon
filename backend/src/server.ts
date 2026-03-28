@@ -12,6 +12,8 @@ import { TwitterClient } from './services/twitter/client.js';
 import { WebClient } from './services/web/client.js';
 import { YoutubeClient } from './services/youtube/client.js';
 import { logger, initFileLogging } from './utils/logger.js';
+import { getBackendRoot } from './utils/backendRoot.js';
+import { join } from 'path';
 import { shutdownLangfuse } from './services/llm/utils/langfuse.js';
 import { registerHealthRoutes } from './routes/healthRoutes.js';
 import { registerModelRoutes } from './routes/modelRoutes.js';
@@ -119,7 +121,7 @@ class Server {
 
   public async start() {
     // ファイルログを有効化（ANSI除去済みのプレーンテキストで保存）
-    const logsDir = new URL('../logs', import.meta.url).pathname;
+    const logsDir = join(getBackendRoot(), 'logs');
     initFileLogging(logsDir);
 
     // HTTPサーバーを最初に起動

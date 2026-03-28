@@ -1,6 +1,7 @@
 import fs from 'fs';
 import OpenAI from 'openai';
 import path from 'path';
+import { fileURLToPath } from 'node:url';
 import { config } from '../../config/env.js';
 import { createLogger } from '../../utils/logger.js';
 const logger = createLogger('Discord:Filler');
@@ -228,7 +229,7 @@ export const ALL_FILLER_ENTRIES: FillerEntry[] = [...FILLER_DEFINITIONS, ...PRE_
 // ─── Cache & State ───────────────────────────────────────────────────────────
 
 const FILLER_DIR = path.join(
-  path.dirname(new URL(import.meta.url).pathname),
+  path.dirname(fileURLToPath(import.meta.url)),
   '../../../saves/voice_fillers'
 );
 

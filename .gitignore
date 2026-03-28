@@ -51,6 +51,9 @@ node_modules
 
 /.next/
 
+# Windows start.sh session PID files
+/.pids/
+
 # Editor / merge backup files (do not commit)
 *.bak
 *.orig

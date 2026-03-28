@@ -33,11 +33,17 @@ import {
   getVoiceConnection,
   joinVoiceChannel,
 } from '@discordjs/voice';
-import OpusPackage from '@discordjs/opus';
-const { OpusEncoder } = OpusPackage;
+let OpusEncoder: any;
+try {
+  const OpusPackage = (await import('@discordjs/opus')).default;
+  OpusEncoder = OpusPackage.OpusEncoder;
+} catch {
+  console.warn('[VoiceManager] @discordjs/opus not available – voice encoding disabled');
+}
 import { Readable } from 'stream';
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'node:url';
 import { createLogger } from '../../../utils/logger.js';
 const logger = createLogger('Discord:Voice');
 import { getDiscordMemoryZone } from '../../../utils/discord.js';
@@ -77,7 +83,7 @@ export class VoiceManager {
   private voiceModeMap: Map<string, 'chat' | 'minebot'> = new Map(); // guildId -> voice mode
 
   private static readonly VOICE_TEXT_CHANNELS_PATH = path.resolve(
-    new URL(import.meta.url).pathname,
+    fileURLToPath(import.meta.url),
     '../../../../saves/voice_text_channels.json'
   );
 
