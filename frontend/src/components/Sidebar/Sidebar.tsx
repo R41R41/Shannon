@@ -1,10 +1,11 @@
-import React, { useState } from "react";
+import React, { useCallback, useState } from "react";
 import styles from "./Sidebar.module.scss";
 import classNames from "classnames";
 import SearchOutlinedIcon from "@mui/icons-material/SearchOutlined";
 import HandymanOutlinedIcon from "@mui/icons-material/HandymanOutlined";
 import ScheduleOutlinedIcon from "@mui/icons-material/ScheduleOutlined";
 import TaskAltOutlinedIcon from "@mui/icons-material/TaskAltOutlined";
+import LogoutOutlinedIcon from "@mui/icons-material/LogoutOutlined";
 import SearchTab from "./SearchTab/SearchTab";
 import { ILog } from "@common/types/common";
 import ScheduleTab from "./ScheduleTab/ScheduleTab";
@@ -12,6 +13,7 @@ import StatusTab from "./StatusTab/StatusTab";
 import MonitorHeartOutlinedIcon from "@mui/icons-material/MonitorHeartOutlined";
 import SkillsTab from "./SkillsTab/SkillsTab";
 import { useAgents } from "@/contexts/AgentContext";
+import { auth } from "@/firebase";
 
 interface SidebarProps {
   isMobile?: boolean;
@@ -25,6 +27,15 @@ const Sidebar: React.FC<SidebarProps> = ({
   const { userInfo } = useAgents();
   const [activeTab, setActiveTab] = useState("status");
   const [searchResults, setSearchResults] = useState<ILog[]>([]);
+
+  const handleLogout = useCallback(async () => {
+    try {
+      await auth.signOut();
+    } catch { /* ignore */ }
+    localStorage.removeItem("userInfo");
+    localStorage.removeItem("isAuthenticated");
+    window.location.href = "/login";
+  }, []);
 
   return (
     <div
@@ -83,6 +94,13 @@ const Sidebar: React.FC<SidebarProps> = ({
           title="ステータス"
         >
           <MonitorHeartOutlinedIcon />
+        </div>
+        <div
+          className={classNames(styles.tab, styles.logoutTab)}
+          onClick={handleLogout}
+          title="ログアウト"
+        >
+          <LogoutOutlinedIcon />
         </div>
       </div>
       {!isMobile && (

@@ -54,6 +54,16 @@
     width: 18px;
     height: 18px;
   }
+
+  &.logoutTab {
+    margin-left: auto;
+    color: color(text, disabled);
+
+    &:hover {
+      color: #e57373;
+      background-color: rgba(229, 115, 115, 0.08);
+    }
+  }
 }
 
 .tabContent {
