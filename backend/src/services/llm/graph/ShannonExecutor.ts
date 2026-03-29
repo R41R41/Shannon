@@ -84,7 +84,7 @@ export class ShannonExecutor {
         const thinkingLog: string[] = [];
         const stepHistory: Array<{ id: string; goal: string; status: string; result: string | null }> = [];
 
-        log.info(`▶ ShannonExecutor: "${state.goal.slice(0, 60)}..." (model=${MODEL})`, 'cyan');
+        log.info(`▶ ShannonExecutor: "${state.goal.slice(0, 60)}..." (model=${MODEL}, taskTreeCb=${!!state.onTaskTreeUpdate})`, 'cyan');
 
         for (let iter = 0; iter < MAX_ITERATIONS && !taskCompleted; iter++) {
             if (state.abortSignal?.aborted) {
