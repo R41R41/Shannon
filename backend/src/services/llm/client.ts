@@ -293,7 +293,11 @@ export class LLMService {
       const { ManageRoutineTool } = await import('./tools/utility/manageRoutine.js');
 
       // saves/ はプロジェクトルート基準（dist/ からの相対ではない）
-      const routinesDir = join(process.cwd(), 'backend/saves/minecraft/routines');
+      // cwd がルート or backend/ のどちらでも動くように
+      const cwd = process.cwd();
+      const routinesDir = cwd.endsWith('backend')
+        ? join(cwd, 'saves/minecraft/routines')
+        : join(cwd, 'backend/saves/minecraft/routines');
       const manager = new RoutineManager(routinesDir);
       await manager.loadAll();
       this.routineManager = manager;
