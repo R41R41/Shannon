@@ -108,7 +108,8 @@ export WS_SKILL_PORT=${WS_PORTS[6]}
 export WS_AUTH_PORT=${WS_PORTS[7]}
 LAUNCH_EOF
     if [ "$IS_DEV" = true ]; then
-        echo "exec npx tsc-watch --onSuccess 'node $NODE_OPTS dist/server.js --dev'" >> "$LAUNCH_SCRIPT"
+        echo "export NODE_OPTIONS=\"--max-old-space-size=12288\"" >> "$LAUNCH_SCRIPT"
+        echo "exec npx tsc-watch --skipLibCheck --onSuccess 'node $NODE_OPTS dist/server.js --dev'" >> "$LAUNCH_SCRIPT"
     else
         echo "exec node $NODE_OPTS dist/server.js" >> "$LAUNCH_SCRIPT"
     fi
