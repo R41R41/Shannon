@@ -95,7 +95,8 @@ export class ShannonExecutor {
 
             let response: Anthropic.Message;
             try {
-                response = await this.client.messages.create({
+                // Opus + 多数ツールは10分超の可能性があるため streaming 必須
+                const stream = this.client.messages.stream({
                     model: MODEL,
                     max_tokens: MAX_TOKENS,
                     system: state.systemPrompt,
@@ -103,6 +104,7 @@ export class ShannonExecutor {
                     messages,
                     temperature: 1,
                 });
+                response = await stream.finalMessage();
             } catch (e) {
                 const msg = e instanceof Error ? e.message : String(e);
                 log.error(`❌ API error: ${msg}`, e);
