@@ -25,8 +25,9 @@
   "dependencies": {
     "@discordjs/opus": "^0.10.0",
     "@discordjs/voice": "^0.19.0",
+    "@langchain/anthropic": "^0.3.34",
     "@langchain/community": "^0.3.44",
-    "@langchain/core": "^0.3.33",
+    "@langchain/core": "^0.3.58",
     "@langchain/langgraph": "^0.2.71",
     "@langchain/openai": "^0.5.10",
     "@shannon/common": "*",
