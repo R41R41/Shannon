@@ -54,7 +54,7 @@ export interface ShannonExecutorResult {
 
 // ─── 定数 ───
 
-const MODEL = 'claude-opus-4-20250514';
+const MODEL = process.env.SHANNON_MODEL || 'claude-sonnet-4-20250514';
 const MAX_TOKENS = 16384;
 const MAX_ITERATIONS = 25;
 const MAX_CONSECUTIVE_TEXT = 3;
