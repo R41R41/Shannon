@@ -35,6 +35,27 @@ PID_FILE="$PID_DIR/${BACKEND_SESSION}.pid"
 
 if [ "$IS_WINDOWS" = true ]; then
     taskkill //F //FI "WINDOWTITLE eq $BACKEND_SESSION" 2>/dev/null
+
+    # PID ファイルから前回のプロセスツリーを確実に殺す
+    if [ -f "$PID_FILE" ]; then
+        OLD_PID=$(cat "$PID_FILE")
+        if [ -n "$OLD_PID" ] && [ "$OLD_PID" != "0" ]; then
+            echo "Killing previous backend process tree (PID: $OLD_PID)..."
+            # プロセスツリーごと殺す（子プロセス = tsc --watch, nodemon 等）
+            taskkill //F //PID "$OLD_PID" //T 2>/dev/null
+        fi
+        rm -f "$PID_FILE"
+    fi
+
+    # 念のため Shannon 関連の残留 node プロセスを PID ファイル群から掃除
+    for pid_file in "$PID_DIR"/*.pid; do
+        [ -f "$pid_file" ] || continue
+        OLD_PID=$(cat "$pid_file")
+        if [ -n "$OLD_PID" ] && [ "$OLD_PID" != "0" ]; then
+            taskkill //F //PID "$OLD_PID" //T 2>/dev/null
+        fi
+        rm -f "$pid_file"
+    done
 else
     tmux kill-session -t "$BACKEND_SESSION" 2>/dev/null
 fi
@@ -112,16 +133,24 @@ LAUNCH_EOF
         # tsc --watch: ソース変更 → dist/ 自動更新
         # nodemon: dist/ 変更 → サーバー自動再起動
         echo "export NODE_OPTIONS=\"--max-old-space-size=12288\"" >> "$LAUNCH_SCRIPT"
+        echo "# PID 記録 + 終了時に全子プロセスを確実に殺す" >> "$LAUNCH_SCRIPT"
+        echo "echo \$\$ > \"$PID_DIR/${BACKEND_SESSION}-shell.pid\"" >> "$LAUNCH_SCRIPT"
+        echo "cleanup() { kill \$TSC_PID 2>/dev/null; kill \$NODEMON_PID 2>/dev/null; rm -f \"$PID_DIR/${BACKEND_SESSION}-shell.pid\"; }" >> "$LAUNCH_SCRIPT"
+        echo "trap cleanup EXIT INT TERM" >> "$LAUNCH_SCRIPT"
         echo "npx tsc --watch --skipLibCheck --preserveWatchOutput &" >> "$LAUNCH_SCRIPT"
         echo "TSC_PID=\$!" >> "$LAUNCH_SCRIPT"
-        echo "trap 'kill \$TSC_PID 2>/dev/null' EXIT" >> "$LAUNCH_SCRIPT"
         echo "sleep 3" >> "$LAUNCH_SCRIPT"
-        echo "exec npx nodemon --watch dist --ext js --delay 2 --exec 'node $NODE_OPTS dist/server.js --dev'" >> "$LAUNCH_SCRIPT"
+        echo "npx nodemon --watch dist --ext js --delay 2 --exec 'node $NODE_OPTS dist/server.js --dev' &" >> "$LAUNCH_SCRIPT"
+        echo "NODEMON_PID=\$!" >> "$LAUNCH_SCRIPT"
+        echo "wait" >> "$LAUNCH_SCRIPT"
     else
         echo "exec node $NODE_OPTS dist/server.js" >> "$LAUNCH_SCRIPT"
     fi
     chmod +x "$LAUNCH_SCRIPT"
     mintty --hold error --title "$BACKEND_SESSION" /bin/bash -l "$LAUNCH_SCRIPT" &
+    MINTTY_PID=$!
+    echo "$MINTTY_PID" > "$PID_FILE"
+    echo "Backend PID: $MINTTY_PID (saved to $PID_FILE)"
 else
     if [ "$IS_DEV" = true ]; then
         tmux new-session -d -s "$BACKEND_SESSION" -n "server" \
