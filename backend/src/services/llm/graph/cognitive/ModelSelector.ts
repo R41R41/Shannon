@@ -24,6 +24,7 @@ export interface ModelConfig {
     verbosity?: 'low' | 'medium' | 'high';
     timeoutMs: number;
     provider: 'anthropic' | 'openai';
+    streaming?: boolean;
 }
 
 interface ModelSlot {
@@ -33,16 +34,6 @@ interface ModelSlot {
 
 const ANTHROPIC_CHAIN: ModelSlot[] = [
     {
-        name: 'claude-sonnet-4',
-        config: {
-            modelName: 'claude-sonnet-4-20250514',
-            temperature: 1,
-            maxTokens: 16384,
-            timeoutMs: 60_000,
-            provider: 'anthropic',
-        },
-    },
-    {
         name: 'claude-opus-4',
         config: {
             modelName: 'claude-opus-4-20250514',
@@ -50,6 +41,7 @@ const ANTHROPIC_CHAIN: ModelSlot[] = [
             maxTokens: 16384,
             timeoutMs: 120_000,
             provider: 'anthropic',
+            streaming: true,
         },
     },
 ];
@@ -134,9 +126,7 @@ export class ModelSelector {
     ): string {
         const chain = getChain();
         if (chain[0].config.provider === 'anthropic') {
-            // Claude: Sonnet がデフォルト、high risk のみ Opus
-            if (riskLevel === 'high') return 'claude-opus-4';
-            return 'claude-sonnet-4';
+            return 'claude-opus-4';
         }
         // OpenAI: 従来ロジック
         if (mode === 'minecraft_emergency' || mode === 'minecraft_action') return 'gpt-4.1-mini';
@@ -220,6 +210,7 @@ export class ModelSelector {
                 anthropicApiKey: config.anthropic.apiKey,
                 temperature: cfg.temperature,
                 maxTokens: cfg.maxTokens,
+                streaming: cfg.streaming ?? true,
             });
         }
 

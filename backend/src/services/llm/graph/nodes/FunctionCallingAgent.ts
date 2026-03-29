@@ -163,13 +163,13 @@ export class FunctionCallingAgent {
         // Claude Anthropic を優先、フォールバックで OpenAI
         if (config.anthropic?.apiKey) {
             this.model = new ChatAnthropic({
-                model: 'claude-sonnet-4-20250514',
+                model: 'claude-opus-4-20250514',
                 anthropicApiKey: config.anthropic.apiKey,
                 temperature: 1,
                 maxTokens: 16384,
-                // Extended thinking は呼出時に指定
+                streaming: true,
             });
-            logger.info('🧠 FCA: Using Claude Sonnet 4.6 (Anthropic)', 'magenta');
+            logger.info('🧠 FCA: Using Claude Opus 4.6 (Anthropic)', 'magenta');
         } else {
             this.model = createTracedModel({
                 modelName: FunctionCallingAgent.MODEL_NAME,
