@@ -1,0 +1,30 @@
+{
+  "name": "store-items",
+  "description": "指定したチェストにアイテムを収納する。チェスト座標とアイテム名を指定。",
+  "params": [
+    { "name": "chestX", "type": "number", "description": "チェストの X 座標", "required": true },
+    { "name": "chestY", "type": "number", "description": "チェストの Y 座標", "required": true },
+    { "name": "chestZ", "type": "number", "description": "チェストの Z 座標", "required": true },
+    { "name": "itemName", "type": "string", "description": "収納するアイテム名", "required": true },
+    { "name": "count", "type": "number", "description": "収納個数 (0 = 全部)", "required": false, "default": 0 }
+  ],
+  "steps": [
+    {
+      "skill": "move-to",
+      "args": { "x": "${chestX}", "y": "${chestY}", "z": "${chestZ}", "range": 3 },
+      "onFailure": "abort"
+    },
+    {
+      "skill": "deposit-to-container",
+      "args": {
+        "x": "${chestX}", "y": "${chestY}", "z": "${chestZ}",
+        "itemName": "${itemName}",
+        "count": "${count}"
+      },
+      "onFailure": "abort"
+    }
+  ],
+  "failureEscalation": "system2",
+  "source": "manual",
+  "stats": { "runs": 0, "successes": 0, "failures": 0, "avgDurationMs": 0 }
+}

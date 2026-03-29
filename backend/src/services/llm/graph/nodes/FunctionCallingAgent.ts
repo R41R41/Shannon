@@ -90,6 +90,8 @@ export interface FunctionCallingAgentState {
     getActiveSubtaskInfo?: () => string | null;
     /** MemoryAgent からの初期記憶コンテキストを取得するコールバック (初回のみ) */
     getInitialMemory?: () => Promise<string | null>;
+    /** SubTaskExecutor: FCA の最大イテレーション数をオーバーライド */
+    maxIterations?: number;
 }
 
 /**
@@ -135,6 +137,9 @@ export class FunctionCallingAgent {
     private _pendingNudge: string | null = null;
 
     private blackboardAccessor: (() => { freeSlots?: number | null; activeEffects?: Array<{ name: string; amplifier: number }> }) | null = null;
+
+    /** RoutineManager 参照（循環参照回避: LLMService.registerRoutineTools 経由で設定） */
+    private _routineManager: { get(name: string): any; getAll(): any[] } | null = null;
 
     // === 設定 ===
     static get MODEL_NAME() { return modelManager.get('functionCalling'); }
@@ -208,6 +213,44 @@ export class FunctionCallingAgent {
     /** 登録済みツール一覧を返す (ParallelExecutor が MemoryAgent 等を注入するために使用) */
     getTools(): StructuredTool[] {
         return this.tools;
+    }
+
+    // ─── Routine 関連 ───
+
+    public setRoutineManager(manager: typeof this._routineManager): void {
+        this._routineManager = manager;
+        this.promptBuilder.setRoutineManager(manager as any);
+    }
+
+    /** ルーチンがカバーするスキルのマップを構築 (skill名 → カバーするルーチン名[]) */
+    private buildRoutineCoverageMap(tools: StructuredTool[]): Map<string, string[]> {
+        const coverage = new Map<string, string[]>();
+        if (!this._routineManager) return coverage;
+
+        for (const tool of tools) {
+            if (!tool.name.startsWith('routine:')) continue;
+            const def = this._routineManager.get(tool.name.replace('routine:', ''));
+            if (!def) continue;
+            for (const step of def.steps) {
+                if ('skill' in step && typeof step.skill === 'string') {
+                    const existing = coverage.get(step.skill) || [];
+                    existing.push(`routine:${(def as any).name}`);
+                    coverage.set(step.skill, existing);
+                }
+            }
+        }
+        return coverage;
+    }
+
+    /** スキルツールの description を短縮し、対応ルーチンを案内する */
+    private wrapWithShortenedDescription(tool: StructuredTool, routineNames: string[]): StructuredTool {
+        const routineHint = routineNames.slice(0, 2).join(' or ');
+        const shortened = Object.create(tool) as StructuredTool;
+        Object.defineProperty(shortened, 'description', {
+            get: () => `${tool.description.slice(0, 60).trim()}… Prefer ${routineHint} for common patterns.`,
+            configurable: true,
+        });
+        return shortened;
     }
 
     /**
@@ -299,6 +342,21 @@ export class FunctionCallingAgent {
             effectiveToolMap = new Map(effectiveTools.map(t => [t.name, t]));
             if (effectiveTools.length < beforeCount) {
                 logger.info(`🎮 Minecraft ツールフィルタ: ${beforeCount} → ${effectiveTools.length} ツール`, 'cyan');
+            }
+        }
+
+        // Phase: ルーチンカバレッジによるスキル description 短縮（トークン削減）
+        if (platform === 'minecraft' || platform === 'minebot') {
+            const routineCoveredSkills = this.buildRoutineCoverageMap(effectiveTools);
+            if (routineCoveredSkills.size > 0) {
+                effectiveTools = effectiveTools.map(tool => {
+                    const coveringRoutines = routineCoveredSkills.get(tool.name);
+                    if (coveringRoutines && coveringRoutines.length > 0) {
+                        return this.wrapWithShortenedDescription(tool, coveringRoutines);
+                    }
+                    return tool;
+                });
+                effectiveToolMap = new Map(effectiveTools.map(t => [t.name, t]));
             }
         }
 
@@ -451,7 +509,8 @@ export class FunctionCallingAgent {
         }, state.context?.platform ?? null, state.channelId, state.taskId, state.onTaskTreeUpdate);
 
         try {
-            const maxIter = isEmergency ? FunctionCallingAgent.MAX_ITERATIONS_EMERGENCY : FunctionCallingAgent.MAX_ITERATIONS;
+            const maxIter = state.maxIterations
+                ?? (isEmergency ? FunctionCallingAgent.MAX_ITERATIONS_EMERGENCY : FunctionCallingAgent.MAX_ITERATIONS);
             while (iteration < maxIter) {
                 // ── 中断チェック ──
                 if (signal?.aborted) throw new Error('Task aborted');

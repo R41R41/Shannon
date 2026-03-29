@@ -40,6 +40,7 @@ export { default as WaitTool } from './utility/wait.js';
 export { default as TaskCompleteTool } from './utility/taskComplete.js';
 export { default as ChatOnWebTool } from './utility/chatOnWeb.js';
 export { default as PlanCraftTool } from './utility/planCraft.js';
+export { default as ManageRoutineTool } from './utility/manageRoutine.js';
 
 // === YouTube tools ===
 export { default as GetYoutubeVideoContentFromURLTool } from './youtube/getYoutubeVideoContentFromURL.js';

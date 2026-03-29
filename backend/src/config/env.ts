@@ -203,6 +203,17 @@ export const config = {
     },
   },
 
+  /** Routine (System 1) 自動生成 */
+  routines: {
+    autoGenerateEnabled:
+      process.env.ROUTINE_AUTO_GENERATE_ENABLED === 'true' ||
+      (process.env.IS_DEV === 'true' && process.env.ROUTINE_AUTO_GENERATE_ENABLED !== 'false'),
+    /** パターンがルーチン候補になるための最小出現回数 */
+    minOccurrences: Math.max(2, parseInt(optional('ROUTINE_MIN_OCCURRENCES', '3'), 10)),
+    /** 自動生成のクールダウン (ms) */
+    cooldownMs: parseInt(optional('ROUTINE_COOLDOWN_MS', String(30 * 60 * 1000)), 10),
+  },
+
   ports: {
     http: optional('HTTP_PORT', '5000'),
     frontend: optional('FRONTEND_PORT', '5000'),

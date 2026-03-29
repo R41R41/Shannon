@@ -1,0 +1,45 @@
+{
+  "name": "smelt-ore",
+  "description": "指定した鉱石をかまどで精錬する。かまどの場所、鉱石名、燃料を指定。",
+  "params": [
+    { "name": "furnaceX", "type": "number", "description": "かまどの X 座標", "required": true },
+    { "name": "furnaceY", "type": "number", "description": "かまどの Y 座標", "required": true },
+    { "name": "furnaceZ", "type": "number", "description": "かまどの Z 座標", "required": true },
+    { "name": "ore", "type": "string", "description": "精錬する鉱石名 (例: raw_iron, raw_gold, raw_copper)", "required": true },
+    { "name": "fuel", "type": "string", "description": "燃料 (例: coal, charcoal, oak_planks)", "required": false, "default": "coal" },
+    { "name": "count", "type": "number", "description": "精錬個数", "required": false, "default": 1 }
+  ],
+  "steps": [
+    {
+      "skill": "move-to",
+      "args": { "x": "${furnaceX}", "y": "${furnaceY}", "z": "${furnaceZ}", "range": 3 },
+      "onFailure": "abort"
+    },
+    {
+      "skill": "start-smelting",
+      "args": {
+        "x": "${furnaceX}", "y": "${furnaceY}", "z": "${furnaceZ}",
+        "inputItem": "${ore}",
+        "fuelItem": "${fuel}",
+        "count": "${count}"
+      },
+      "onFailure": "abort"
+    },
+    {
+      "skill": "wait-time",
+      "args": { "milliseconds": 12000 },
+      "onFailure": "skip"
+    },
+    {
+      "skill": "withdraw-from-furnace",
+      "args": {
+        "x": "${furnaceX}", "y": "${furnaceY}", "z": "${furnaceZ}",
+        "slot": "output"
+      },
+      "onFailure": "continue"
+    }
+  ],
+  "failureEscalation": "system2",
+  "source": "manual",
+  "stats": { "runs": 0, "successes": 0, "failures": 0, "avgDurationMs": 0 }
+}

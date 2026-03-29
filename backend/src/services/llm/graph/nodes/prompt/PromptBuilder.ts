@@ -57,7 +57,19 @@ async function loadDynamicRules(): Promise<string[]> {
 // 初回ロードを非同期で開始（結果はキャッシュされる）
 loadDynamicRules().catch(() => {});
 
+/** RoutineManager の型（循環参照回避のため動的 import 不使用） */
+interface RoutineManagerLike {
+    getAll(): Array<{ name: string; description: string; steps: unknown[]; stats: { runs: number; successes: number } }>;
+}
+
 export class PromptBuilder {
+    /** RoutineManager 参照（LLMService.registerRoutineTools 経由で設定） */
+    private routineManager: RoutineManagerLike | null = null;
+
+    setRoutineManager(manager: RoutineManagerLike): void {
+        this.routineManager = manager;
+    }
+
     /** 食べ物アイテム名セット（autoEat の FALLBACK_FOOD_POINTS と同期） */
     private static readonly FOOD_ITEMS = new Set([
         'baked_potato', 'bread', 'cooked_beef', 'steak', 'cooked_porkchop',
@@ -299,7 +311,31 @@ ${this.formatOutputRules(context)}
 - **精錬(start-smelting)のフロー**: (1) start-smeltingで精錬開始（完成品スロットのアイテムは自動回収される） (2) 精錬完了まで待つ（1個=10秒。7個なら約70秒） (3) **完了後は必ずcheck-furnaceで状態確認→withdraw-from-furnace(slot="output")で完成品を回収**。check-inventory-itemでは確認できない（精錬品はかまどの中にある）
 - **精錬待ち中の重要ルール**: 精錬を開始したら、完了を待ってからかまどから回収する。**精錬品はかまどの中にあるので、check-inventory-itemではなくcheck-furnace→withdraw-from-furnaceで取り出す**。精錬中にiron_ingotが足りないと判断して採掘に行かないこと
 - **鉄鉱石はiron_ore**(raw_ironはアイテム名)。find-blocksにはブロック名を使う
-- 1ターンで依存関係のある複数ツールを同時に呼ばない（例: place-block-atとstart-smeltingを同時に呼ぶと、設置前に精錬しようとして失敗する）${this.formatDimensionRules(context)}${this.formatDynamicRules()}`;
+- 1ターンで依存関係のある複数ツールを同時に呼ばない（例: place-block-atとstart-smeltingを同時に呼ぶと、設置前に精錬しようとして失敗する）${this.formatRoutineGuidance()}${this.formatDimensionRules(context)}${this.formatDynamicRules()}`;
+    }
+
+    /**
+     * ルーチン（System 1）の優先利用ガイダンスを生成する
+     * LLMService.getRoutineManager() から動的に取得
+     */
+    private formatRoutineGuidance(): string {
+        if (!this.routineManager) return '';
+
+        const routines = this.routineManager.getAll();
+        if (routines.length === 0) return '';
+
+        const lines = routines.map(r => {
+            const rate = r.stats.runs > 0
+                ? ` [${Math.round((r.stats.successes / r.stats.runs) * 100)}% success]`
+                : '';
+            return `  - routine:${r.name} — ${r.description} (${r.steps.length} steps${rate})`;
+        });
+
+        return `
+- **【ルーチン優先】以下の定型作業はルーチンを使う**（LLM呼出なしで高速実行、個別スキルの3-10倍速い）:
+${lines.join('\n')}
+- ルーチンが失敗した場合のみ個別スキルにフォールバックする
+- 繰り返し使うスキルパターンを見つけたら **manage-routine で create** して新しいルーチンを登録する`;
     }
 
     /**

@@ -1,0 +1,24 @@
+{
+  "name": "gather-wood",
+  "description": "近くの原木を指定個数採掘して拾う。木の種類を指定可能。",
+  "params": [
+    { "name": "count", "type": "number", "description": "採掘する原木の個数", "required": false, "default": 4 },
+    { "name": "woodType", "type": "string", "description": "原木の種類 (oak_log, birch_log, spruce_log 等)", "required": false, "default": "oak_log" }
+  ],
+  "steps": [
+    {
+      "skill": "mine-block",
+      "args": { "blockName": "${woodType}", "count": "${count}", "searchRadius": 64 },
+      "outputVar": "mineResult",
+      "onFailure": "abort"
+    },
+    {
+      "skill": "pickup-nearest-item",
+      "args": { "itemName": "${woodType}", "maxDistance": 8 },
+      "onFailure": "skip"
+    }
+  ],
+  "failureEscalation": "system2",
+  "source": "manual",
+  "stats": { "runs": 0, "successes": 0, "failures": 0, "avgDurationMs": 0 }
+}

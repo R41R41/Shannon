@@ -176,6 +176,7 @@ export class SkillAgent {
     this.skillRegistrar.registerConstantSkills(this.bot, this.bot.constantSkills);
     this.skillRegistrar.registerSkillControlEvents(this.bot);
     await LLMService.getInstance(config.isDev).registerMinebotTools(this.bot);
+    await LLMService.getInstance(config.isDev).registerRoutineTools(this.bot);
 
     // SelfImprovementDaemon に bot 参照を注入（プロアクティブ・スキル生成用）
     try {

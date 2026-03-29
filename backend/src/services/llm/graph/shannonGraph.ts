@@ -13,6 +13,9 @@
  */
 
 import { Annotation, END, START, StateGraph } from '@langchain/langgraph';
+import { createLogger } from '../../../utils/logger.js';
+
+const logger = createLogger('LLM:ShannonGraph');
 import { BaseMessage } from '@langchain/core/messages';
 import type {
   InternalState,
@@ -85,6 +88,11 @@ const ShannonState = Annotation.Root({
   // -- planning --
   plan: Annotation<ShannonPlan | undefined>({ reducer: replace, default: () => undefined }),
   taskTree: Annotation<TaskTreeState | undefined>({ reducer: replace, default: () => undefined }),
+  /** SubTaskPlannerNode が生成したサブタスクプラン */
+  subtaskPlan: Annotation<import('./nodes/SubTaskPlannerNode.js').SubTaskPlanEntry[] | undefined>({
+    reducer: replace,
+    default: () => undefined,
+  }),
 
   // -- tool execution --
   allowedTools: Annotation<string[] | undefined>({ reducer: replace, default: () => undefined }),
@@ -298,10 +306,76 @@ async function recallNode(state: ShannonStateType): Promise<Partial<ShannonState
 }
 
 /**
- * execute: Delegates to ParallelExecutor (3 async loops: Emotion + MetaCognition + TaskExecution).
- * Falls back to FCA-only mode if emotionNode is not provided.
+ * recall → execute ルーター: Minecraft + needsPlanning なら subtask_plan 経由
  */
-function createExecuteNode(fca: FunctionCallingAgent, emotionNode?: EmotionNode) {
+function recallToExecuteRouter(state: ShannonStateType): string {
+  const channel = state.envelope.channel;
+  if (
+    state.needsPlanning &&
+    (channel === 'minecraft') &&
+    !state.envelope.tags.includes('emergency')
+  ) {
+    return 'subtask_plan';
+  }
+  return 'execute';
+}
+
+/**
+ * subtask_plan: SubTaskPlannerNode で Minecraft タスクをサブタスク分解
+ */
+function createSubTaskPlanNode(
+  routineManager?: import('../../minebot/routines/RoutineManager.js').RoutineManager,
+) {
+  let planner: import('./nodes/SubTaskPlannerNode.js').SubTaskPlannerNode | null = null;
+
+  return async function subtaskPlanFn(state: ShannonStateType): Promise<Partial<ShannonStateType>> {
+    if (!routineManager) {
+      return { trace: ['node:subtask_plan:skip:no_manager'] };
+    }
+
+    try {
+      if (!planner) {
+        const { SubTaskPlannerNode } = await import('./nodes/SubTaskPlannerNode.js');
+        planner = new SubTaskPlannerNode();
+      }
+
+      const mc = state.envelope.minecraft;
+      const result = await planner.plan(
+        state.envelope.text ?? '',
+        routineManager,
+        {
+          inventory: mc?.inventory ? JSON.stringify(mc.inventory) : undefined,
+          position: mc?.position ? JSON.stringify(mc.position) : undefined,
+          strategyPrompt: state.strategyPrompt ?? undefined,
+          worldModelPrompt: state.worldModelPrompt ?? undefined,
+        },
+      );
+
+      if (!result) {
+        return { trace: ['node:subtask_plan:fallback'] };
+      }
+
+      return {
+        subtaskPlan: result.subtasks,
+        trace: ['node:subtask_plan:ok'],
+      };
+    } catch (e) {
+      logger.warn(`⚠ SubTaskPlanNode failed: ${e}`);
+      return { trace: ['node:subtask_plan:error'] };
+    }
+  };
+}
+
+/**
+ * execute: Delegates to SubTaskExecutor (if subtaskPlan exists),
+ * ParallelExecutor (3 async loops), or FCA-only mode.
+ */
+function createExecuteNode(
+  fca: FunctionCallingAgent,
+  emotionNode?: EmotionNode,
+  routineManager?: import('../../minebot/routines/RoutineManager.js').RoutineManager,
+  routineExecutor?: import('../../minebot/routines/RoutineExecutor.js').RoutineExecutor,
+) {
   const parallelExecutor = emotionNode
     ? new ParallelExecutor({ fca, emotionNode })
     : null;
@@ -345,6 +419,26 @@ function createExecuteNode(fca: FunctionCallingAgent, emotionNode?: EmotionNode)
         }
       },
     };
+
+    // SubTaskExecutor パス: subtaskPlan がある場合はサブタスク分割実行
+    if (state.subtaskPlan && state.subtaskPlan.length > 0 && routineManager && routineExecutor) {
+      try {
+        const { SubTaskExecutor } = await import('./cognitive/SubTaskExecutor.js');
+        const subExecutor = new SubTaskExecutor({ fca, routineExecutor, routineManager });
+        const subResult = await subExecutor.execute(fcaState, state.subtaskPlan, state._abortSignal);
+
+        // 2つ以上のサブタスクが失敗 → フォールバックしない（SubTaskExecutor 内で処理済み）
+        return {
+          finalAnswer: subResult.lastAssistantContent ?? subResult.taskTree?.strategy ?? undefined,
+          taskTree: subResult.taskTree ?? undefined,
+          emotion: emotionState.current ?? undefined,
+          trace: [`node:execute:subtask:${subResult.subtasksCompleted}/${subResult.subtasksTotal}`],
+        };
+      } catch (e) {
+        logger.warn(`⚠ SubTaskExecutor failed, falling back to ParallelExecutor: ${e}`);
+        // フォールバック: 従来の ParallelExecutor パスへ
+      }
+    }
 
     if (parallelExecutor) {
       // 3並列プロセス: EmotionLoop + MetaCognitionLoop + TaskExecutionLoop
@@ -415,16 +509,22 @@ async function writebackNode(state: ShannonStateType): Promise<Partial<ShannonSt
 export interface ShannonGraphDeps {
   emotionNode: EmotionNode;
   fca: FunctionCallingAgent;
+  /** SubTaskPlannerNode + SubTaskExecutor 用（任意、なければ従来パス） */
+  routineManager?: import('../../minebot/routines/RoutineManager.js').RoutineManager;
+  routineExecutor?: import('../../minebot/routines/RoutineExecutor.js').RoutineExecutor;
 }
 
 export function buildShannonGraph(deps: ShannonGraphDeps) {
+  const executeNode = createExecuteNode(deps.fca, deps.emotionNode, deps.routineManager, deps.routineExecutor);
+
   const workflow = new StateGraph(ShannonState)
     .addNode('ingest', ingestNode)
     .addNode('emergency_fastpath', emergencyFastpathNode)
     .addNode('classify', classifyNodeFn)
     .addNode('emotion_step', createEmotionNode(deps.emotionNode))
     .addNode('recall', recallNode)
-    .addNode('execute', createExecuteNode(deps.fca, deps.emotionNode))
+    .addNode('subtask_plan', createSubTaskPlanNode(deps.routineManager))
+    .addNode('execute', executeNode)
     .addNode('format', formatNode)
     .addNode('writeback', writebackNode)
 
@@ -442,7 +542,12 @@ export function buildShannonGraph(deps: ShannonGraphDeps) {
       recall: 'recall',
     })
     .addEdge('emotion_step', 'execute')
-    .addEdge('recall', 'execute')
+    // recall → Minecraft + needsPlanning なら subtask_plan、それ以外は execute
+    .addConditionalEdges('recall', recallToExecuteRouter, {
+      subtask_plan: 'subtask_plan',
+      execute: 'execute',
+    })
+    .addEdge('subtask_plan', 'execute')
     .addEdge('execute', 'format')
     .addEdge('format', 'writeback')
     .addEdge('writeback', END);

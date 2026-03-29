@@ -1,0 +1,52 @@
+{
+  "name": "make-wooden-tools",
+  "description": "原木から木の板・棒・作業台を作り、木のツルハシ・斧・剣をクラフトする。原木が手元にない場合は先に採掘する。craft-oneが作業台の自動設置を行う。",
+  "params": [],
+  "steps": [
+    {
+      "skill": "mine-block",
+      "args": { "blockName": "oak_log", "count": 8, "searchRadius": 64 },
+      "onFailure": "abort"
+    },
+    {
+      "skill": "craft-one",
+      "args": { "itemName": "oak_planks" },
+      "repeat": 8,
+      "onFailure": "continue"
+    },
+    {
+      "skill": "craft-one",
+      "args": { "itemName": "stick" },
+      "repeat": 4,
+      "onFailure": "continue"
+    },
+    {
+      "skill": "craft-one",
+      "args": { "itemName": "crafting_table" },
+      "onFailure": "abort"
+    },
+    {
+      "skill": "craft-one",
+      "args": { "itemName": "wooden_pickaxe" },
+      "onFailure": "abort"
+    },
+    {
+      "skill": "craft-one",
+      "args": { "itemName": "wooden_axe" },
+      "onFailure": "continue"
+    },
+    {
+      "skill": "craft-one",
+      "args": { "itemName": "wooden_sword" },
+      "onFailure": "continue"
+    },
+    {
+      "skill": "craft-one",
+      "args": { "itemName": "wooden_shovel" },
+      "onFailure": "continue"
+    }
+  ],
+  "failureEscalation": "system2",
+  "source": "manual",
+  "stats": { "runs": 0, "successes": 0, "failures": 0, "avgDurationMs": 0 }
+}

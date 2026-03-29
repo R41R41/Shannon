@@ -1,0 +1,32 @@
+{
+  "name": "equip-full-armor",
+  "description": "指定した素材のフル防具を装備する。インベントリに防具が必要。",
+  "params": [
+    { "name": "material", "type": "string", "description": "防具素材 (iron, diamond, leather, chainmail, gold, netherite)", "required": false, "default": "iron" }
+  ],
+  "steps": [
+    {
+      "skill": "equip-item",
+      "args": { "itemName": "${material}_helmet", "destination": "head" },
+      "onFailure": "continue"
+    },
+    {
+      "skill": "equip-item",
+      "args": { "itemName": "${material}_chestplate", "destination": "torso" },
+      "onFailure": "continue"
+    },
+    {
+      "skill": "equip-item",
+      "args": { "itemName": "${material}_leggings", "destination": "legs" },
+      "onFailure": "continue"
+    },
+    {
+      "skill": "equip-item",
+      "args": { "itemName": "${material}_boots", "destination": "feet" },
+      "onFailure": "continue"
+    }
+  ],
+  "failureEscalation": "system2",
+  "source": "manual",
+  "stats": { "runs": 0, "successes": 0, "failures": 0, "avgDurationMs": 0 }
+}

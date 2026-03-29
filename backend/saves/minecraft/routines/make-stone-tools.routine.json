@@ -1,0 +1,35 @@
+{
+  "name": "make-stone-tools",
+  "description": "丸石を採掘し、石のツルハシ・斧・剣をクラフトする。木のツルハシが必要。",
+  "params": [],
+  "steps": [
+    {
+      "skill": "mine-block",
+      "args": { "blockName": "cobblestone", "count": 8, "searchRadius": 32 },
+      "onFailure": "abort"
+    },
+    {
+      "skill": "craft-one",
+      "args": { "itemName": "stone_pickaxe" },
+      "onFailure": "abort"
+    },
+    {
+      "skill": "craft-one",
+      "args": { "itemName": "stone_axe" },
+      "onFailure": "continue"
+    },
+    {
+      "skill": "craft-one",
+      "args": { "itemName": "stone_sword" },
+      "onFailure": "continue"
+    },
+    {
+      "skill": "craft-one",
+      "args": { "itemName": "stone_shovel" },
+      "onFailure": "continue"
+    }
+  ],
+  "failureEscalation": "system2",
+  "source": "manual",
+  "stats": { "runs": 0, "successes": 0, "failures": 0, "avgDurationMs": 0 }
+}

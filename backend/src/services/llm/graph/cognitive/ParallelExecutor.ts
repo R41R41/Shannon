@@ -349,6 +349,14 @@ export class ParallelExecutor {
             SelfImprovementDaemon.getInstance()
                 .onEpisodeSaved(episode, blackboard.snapshot())
                 .catch(() => {});
+
+            // RoutineRecorder: パターン記録→自動ルーチン生成（fire-and-forget）
+            try {
+                const { RoutineRecorder } = await import('../../../minebot/routines/RoutineRecorder.js');
+                RoutineRecorder.getInstance()
+                    ?.onEpisodeCompleted(episode)
+                    .catch(() => {});
+            } catch { /* RoutineRecorder 未初期化の場合は無視 */ }
         } catch { }
 
         return {

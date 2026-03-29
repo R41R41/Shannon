@@ -49,6 +49,7 @@ export class LLMService {
   private voiceProcessor!: VoiceProcessor;
   private agentOrchestrator!: AgentOrchestrator;
   private eventRouter!: EventRouter;
+  private routineManager: import('../minebot/routines/RoutineManager.js').RoutineManager | null = null;
 
   constructor(isDevMode: boolean) {
     this.isDevMode = isDevMode;
@@ -117,6 +118,7 @@ export class LLMService {
       // Initialize nodes and build unified Shannon graph
       const { emotionNode, fca } = await initializeNodes();
       this.unifiedFca = fca;
+      (this as any)._emotionNode = emotionNode;
       this.shannonGraph = buildShannonGraph({ emotionNode, fca });
 
       // Initialize all agents via orchestrator
@@ -273,5 +275,73 @@ export class LLMService {
     const { InstantSkillTool } = await import('../minebot/skills/InstantSkillTool.js');
     const tool = new InstantSkillTool(skill, bot);
     this.unifiedFca.addTools([tool]);
+  }
+
+  /**
+   * Routine (System 1) ツールを FCA に登録
+   * ルーチン JSON を読み込み、ラッパーツール + manage-routine ツールを追加する。
+   */
+  public async registerRoutineTools(bot: import('../minebot/types.js').CustomBot): Promise<void> {
+    await this.initialize();
+    if (!this.unifiedFca) return;
+
+    try {
+      const { join } = await import('path');
+      const { RoutineManager } = await import('../minebot/routines/RoutineManager.js');
+      const { RoutineExecutor } = await import('../minebot/routines/RoutineExecutor.js');
+      const { RoutineWrapperTool } = await import('../minebot/routines/RoutineWrapperTool.js');
+      const { ManageRoutineTool } = await import('./tools/utility/manageRoutine.js');
+
+      // saves/ はプロジェクトルート基準（dist/ からの相対ではない）
+      const routinesDir = join(process.cwd(), 'backend/saves/minecraft/routines');
+      const manager = new RoutineManager(routinesDir);
+      await manager.loadAll();
+      this.routineManager = manager;
+
+      const executor = new RoutineExecutor(bot.instantSkills, bot);
+
+      // 各ルーチンをラッパーツールとして登録
+      const wrapperTools: StructuredTool[] = manager.getAll().map(
+        (def) => new RoutineWrapperTool(def.name, manager, executor),
+      );
+
+      // manage-routine ツール（シャノンがルーチンを CRUD する）
+      const manageTool = new ManageRoutineTool(manager, executor);
+      manageTool.setOnToolRegistered((tool) => {
+        if (this.unifiedFca) this.unifiedFca.addTools([tool]);
+      });
+
+      this.unifiedFca.addTools([...wrapperTools, manageTool]);
+
+      // FCA と PromptBuilder にルーチン参照を注入（循環参照回避）
+      this.unifiedFca.setRoutineManager(manager);
+
+      // Shannon Graph を再構築（SubTaskPlanner + SubTaskExecutor をルーチン依存付きで組込み）
+      const { initializeNodes } = await import('./graph/nodeFactory.js');
+      // emotionNode は再初期化不要 — 既存 FCA の PromptBuilder から取得不可なので
+      // buildShannonGraph に routineManager/routineExecutor を渡して再構築
+      this.shannonGraph = buildShannonGraph({
+        emotionNode: (this as any)._emotionNode,
+        fca: this.unifiedFca,
+        routineManager: manager,
+        routineExecutor: executor,
+      });
+
+      // RoutineRecorder: パターン検知→自動ルーチン生成
+      const { RoutineRecorder } = await import('../minebot/routines/RoutineRecorder.js');
+      const recorder = RoutineRecorder.init(manager, executor);
+      recorder.setOnRoutineCreated((tool) => {
+        if (this.unifiedFca) this.unifiedFca.addTools([tool]);
+      });
+
+      logger.info(`🔄 Routine tools registered: ${wrapperTools.length} routines + manage-routine + recorder`);
+    } catch (e) {
+      logger.warn(`⚠ Failed to register routine tools: ${e}`);
+    }
+  }
+
+  /** RoutineManager への参照（PromptBuilder・FCA から利用） */
+  public getRoutineManager(): import('../minebot/routines/RoutineManager.js').RoutineManager | null {
+    return this.routineManager;
   }
 }
