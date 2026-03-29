@@ -31,7 +31,7 @@ const AUTO_ESCALATE_CONSECUTIVE_FAILURES = 5;
 
 export interface ParallelExecutorDeps {
     fca: FunctionCallingAgent;
-    emotionNode: EmotionNode;
+    emotionNode?: EmotionNode;
 }
 
 export interface ParallelExecutorResult {
@@ -50,7 +50,7 @@ export interface ParallelExecutorResult {
 
 export class ParallelExecutor {
     private fca: FunctionCallingAgent;
-    private emotionNode: EmotionNode;
+    private emotionNode?: EmotionNode;
 
     constructor(deps: ParallelExecutorDeps) {
         this.fca = deps.fca;
@@ -65,11 +65,13 @@ export class ParallelExecutor {
         const startTime = Date.now();
         const isMinecraft = state.context?.platform === 'minecraft' || state.context?.platform === 'minebot';
 
-        // Minecraft 単純タスクでは認知ループをスキップ（速度優先）
-        // 緊急タスクでは MetaCognition もスキップ（中断シグナル乱発防止 + 速度優先）
-        const skipEmotionLoop = isMinecraft;
-        const skipMetaCognition = state.isEmergency
-            || (isMinecraft && state.needsPlanning === false);
+        // Phase 2: Claude Sonnet の拡張思考が感情・メタ認知を内包するため、
+        // 認知ループを無条件スキップ。フォールバック: SHANNON_COGNITIVE_LOOPS=true で復活。
+        const cognitiveLoopsEnabled = process.env.SHANNON_COGNITIVE_LOOPS === 'true';
+        const skipEmotionLoop = cognitiveLoopsEnabled ? isMinecraft : true;
+        const skipMetaCognition = cognitiveLoopsEnabled
+            ? (state.isEmergency || (isMinecraft && state.needsPlanning === false))
+            : true;
 
         // ModelSelector を初期化
         const modelSelector = new ModelSelector(state.selectedModel || FunctionCallingAgent.MODEL_NAME);

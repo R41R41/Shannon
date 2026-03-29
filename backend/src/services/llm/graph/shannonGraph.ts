@@ -151,7 +151,9 @@ const scopedMemory = ScopedMemoryService.getInstance();
 
 async function ingestNode(state: ShannonStateType): Promise<Partial<ShannonStateType>> {
   const mode = inferInitialMode(state.envelope);
-  return { mode, trace: ['node:ingest'] };
+  // Phase 4: ClassifyNode 削除により、ingest でモデル選択を設定
+  const selectedModel = ModelSelector.selectInitialModel('mid', false, mode);
+  return { mode, selectedModel, trace: ['node:ingest'] };
 }
 
 /**
@@ -506,6 +508,31 @@ async function writebackNode(state: ShannonStateType): Promise<Partial<ShannonSt
 // Graph construction
 // ---------------------------------------------------------------------------
 
+/**
+ * simplifiedWriteback: format + writeback を統合 (Phase 4)
+ */
+async function simplifiedWritebackNode(state: ShannonStateType): Promise<Partial<ShannonStateType>> {
+  // format
+  const formatResult = await actionFormatterNode(state as unknown as ShannonGraphState);
+
+  // writeback (fire-and-forget)
+  const userText = state.envelope.text ?? '';
+  const answer = state.finalAnswer ?? '';
+  scopedMemory.writeback({
+    envelope: state.envelope,
+    conversationText: `User: ${userText}\nShannon: ${answer}`,
+    exchanges: [
+      { role: 'user', content: userText, timestamp: new Date() },
+      { role: 'assistant', content: answer, timestamp: new Date() },
+    ],
+  }).catch(() => {});
+
+  return {
+    actionPlan: formatResult.actionPlan,
+    trace: ['node:writeback:simplified'],
+  };
+}
+
 export interface ShannonGraphDeps {
   emotionNode: EmotionNode;
   fca: FunctionCallingAgent;
@@ -515,6 +542,40 @@ export interface ShannonGraphDeps {
 }
 
 export function buildShannonGraph(deps: ShannonGraphDeps) {
+  // Phase 4: フォールバック — SHANNON_GRAPH_VERSION=full で旧グラフに戻す
+  if (process.env.SHANNON_GRAPH_VERSION === 'full') {
+    return buildFullGraph(deps);
+  }
+
+  // Phase 4: 簡素化グラフ — 3ノード (ingest → execute → writeback)
+  // classify, emotion_step, recall, subtask_plan, format を削除。
+  // Claude Sonnet が分類・感情・メタ認知を内包。メモリは recall-* ツールでオンデマンド。
+  const executeNode = createExecuteNode(deps.fca, deps.emotionNode, deps.routineManager, deps.routineExecutor);
+
+  const workflow = new StateGraph(ShannonState)
+    .addNode('ingest', ingestNode)
+    .addNode('emergency_fastpath', emergencyFastpathNode)
+    .addNode('execute', executeNode)
+    .addNode('writeback', simplifiedWritebackNode)
+
+    .addEdge(START, 'ingest')
+    .addConditionalEdges('ingest', (state: ShannonStateType) => {
+      if (state.envelope.tags.includes('emergency')) return 'emergency_fastpath';
+      return 'execute';
+    }, {
+      emergency_fastpath: 'emergency_fastpath',
+      execute: 'execute',
+    })
+    .addEdge('emergency_fastpath', 'execute')
+    .addEdge('execute', 'writeback')
+    .addEdge('writeback', END);
+
+  logger.info('📊 Shannon Graph: simplified (3 nodes: ingest → execute → writeback)', 'cyan');
+  return workflow.compile();
+}
+
+/** フォールバック: 旧8ノードグラフ (SHANNON_GRAPH_VERSION=full) */
+function buildFullGraph(deps: ShannonGraphDeps) {
   const executeNode = createExecuteNode(deps.fca, deps.emotionNode, deps.routineManager, deps.routineExecutor);
 
   const workflow = new StateGraph(ShannonState)
@@ -528,21 +589,17 @@ export function buildShannonGraph(deps: ShannonGraphDeps) {
     .addNode('format', formatNode)
     .addNode('writeback', writebackNode)
 
-    // Phase 1-A: ingest → 緊急なら fastpath、通常なら classify
     .addEdge(START, 'ingest')
     .addConditionalEdges('ingest', ingestRouter, {
       emergency_fastpath: 'emergency_fastpath',
       classify: 'classify',
     })
-    // emergency_fastpath → 直接 execute（classify/emotion/recall スキップ）
     .addEdge('emergency_fastpath', 'execute')
-    // Phase 2-B: classify → Minecraft は recall のみ、他は emotion+recall 並列
     .addConditionalEdges('classify', classifyRouter, {
       emotion_step: 'emotion_step',
       recall: 'recall',
     })
     .addEdge('emotion_step', 'execute')
-    // recall → Minecraft + needsPlanning なら subtask_plan、それ以外は execute
     .addConditionalEdges('recall', recallToExecuteRouter, {
       subtask_plan: 'subtask_plan',
       execute: 'execute',
@@ -552,6 +609,7 @@ export function buildShannonGraph(deps: ShannonGraphDeps) {
     .addEdge('format', 'writeback')
     .addEdge('writeback', END);
 
+  logger.info('📊 Shannon Graph: full (8 nodes, legacy mode)', 'yellow');
   return workflow.compile();
 }
 

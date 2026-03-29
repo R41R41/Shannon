@@ -20,7 +20,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 export interface ShannonNodes {
-  emotionNode: EmotionNode;
+  emotionNode?: EmotionNode;
   fca: FunctionCallingAgent;
   tools: StructuredTool[];
 }
@@ -47,8 +47,10 @@ export async function initializeNodes(): Promise<ShannonNodes> {
   const memoryTools = createMemoryTools();
   tools.push(...memoryTools);
 
-  // 3. EmotionNode
-  const emotionNode = new EmotionNode();
+  // 3. EmotionNode (Phase 4: simplified graph では不要だが、full graph フォールバック用に保持)
+  const emotionNode = process.env.SHANNON_GRAPH_VERSION === 'full'
+    ? new EmotionNode()
+    : undefined;
 
   // 4. MemoryNode — initialize for background maintenance (backfill, consolidation)
   const memoryNode = new MemoryNode();
@@ -60,7 +62,8 @@ export async function initializeNodes(): Promise<ShannonNodes> {
   // 6. FunctionCallingAgent
   const fca = new FunctionCallingAgent(tools);
 
-  logger.info('Nodes initialized (EmotionNode + FCA + tools)');
+  const graphMode = process.env.SHANNON_GRAPH_VERSION === 'full' ? 'full' : 'simplified';
+  logger.info(`Nodes initialized (FCA + tools, graph: ${graphMode})`);
 
   return { emotionNode, fca, tools };
 }
