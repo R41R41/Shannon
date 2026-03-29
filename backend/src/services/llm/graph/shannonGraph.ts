@@ -13,6 +13,7 @@
  */
 
 import { Annotation, END, START, StateGraph } from '@langchain/langgraph';
+import { config } from '../../../config/env.js';
 import { createLogger } from '../../../utils/logger.js';
 
 const logger = createLogger('LLM:ShannonGraph');
@@ -387,6 +388,115 @@ function createExecuteNode(
     const context = envelopeToTaskContext(envelope);
     const emotionState: EmotionState = state._emotionState ?? { current: state.emotion ?? null };
 
+    // ═══ ShannonExecutor パス (Anthropic API 直接呼出) ═══
+    // FCA/LangChain を経由せず、Anthropic SDK で直接実行。
+    // フォールバック: SHANNON_USE_FCA=true で従来の FCA/ParallelExecutor に戻す。
+    if (config.anthropic?.apiKey && process.env.SHANNON_USE_FCA !== 'true') {
+      try {
+        const { ShannonExecutor, skillToAnthropicTool, routineToAnthropicTool } = await import('./ShannonExecutor.js');
+        const { PromptBuilder } = await import('./nodes/prompt/PromptBuilder.js');
+
+        // ツール定義を構築 (Anthropic ネイティブ形式)
+        const tools: import('@anthropic-ai/sdk').Tool[] = [];
+
+        // task-complete ツール
+        tools.push({
+          name: 'task-complete',
+          description: 'タスクが完了したら呼ぶ。summary にユーザーへの返答を書く。',
+          input_schema: {
+            type: 'object' as const,
+            properties: { summary: { type: 'string', description: 'ユーザーへの返答' } },
+            required: ['summary'],
+          },
+        });
+
+        // InstantSkills
+        const bot = (envelope.metadata as any)?.bot;
+        const instantSkills = bot?.instantSkills ?? fca.getTools()
+          .filter((t: any) => !t.name.startsWith('routine:') && !['task-complete', 'update-plan', 'manage-routine'].includes(t.name))
+          .map((t: any) => null); // fallback: FCA のツールは使えない
+
+        if (routineManager) {
+          for (const def of routineManager.getAll()) {
+            tools.push(routineToAnthropicTool(def.name, def));
+          }
+          tools.push({
+            name: 'manage-routine',
+            description: 'ルーチンの管理 (list/get/create/edit/delete)',
+            input_schema: {
+              type: 'object' as const,
+              properties: {
+                action: { type: 'string', description: 'list, get, create, edit, delete' },
+                name: { type: 'string', description: 'ルーチン名' },
+                definition: { type: 'string', description: 'JSON定義' },
+              },
+              required: ['action'],
+            },
+          });
+        }
+
+        // FCA 登録済みツールを Anthropic 形式に変換
+        for (const tool of fca.getTools()) {
+          if (tools.some(t => t.name === tool.name)) continue; // 重複スキップ
+          tools.push({
+            name: tool.name,
+            description: tool.description,
+            input_schema: (tool as any).schema
+              ? JSON.parse(JSON.stringify((tool as any).schema))
+              : { type: 'object' as const, properties: {} },
+          });
+        }
+
+        // システムプロンプト構築
+        const promptBuilder = new PromptBuilder();
+        if (routineManager) promptBuilder.setRoutineManager(routineManager as any);
+        const systemPrompt = promptBuilder.buildSystemPrompt(
+          emotionState,
+          context,
+          (envelope.metadata?.environmentState as string) ?? null,
+        );
+
+        // LLM ツール用マップ (FCA のツールを直接呼出)
+        const llmToolMap = new Map<string, (input: Record<string, unknown>) => Promise<string>>();
+        for (const tool of fca.getTools()) {
+          if (['task-complete'].includes(tool.name)) continue;
+          llmToolMap.set(tool.name, async (input) => {
+            try {
+              return await (tool as any)._call(input);
+            } catch (e) {
+              return `エラー: ${e instanceof Error ? e.message : String(e)}`;
+            }
+          });
+        }
+
+        const executor = new ShannonExecutor({
+          instantSkills: bot?.instantSkills,
+          routineManager,
+          routineExecutor,
+          llmTools: llmToolMap,
+        });
+
+        const result = await executor.run({
+          goal: envelope.text ?? '',
+          context,
+          systemPrompt,
+          tools,
+          onToolStarting: state._onToolStarting,
+          onTaskTreeUpdate: state._onTaskTreeUpdate,
+          abortSignal: state._abortSignal,
+        });
+
+        return {
+          finalAnswer: result.lastContent ?? undefined,
+          taskTree: result.taskTree ?? undefined,
+          trace: [`node:execute:shannon:${result.toolCallCount}tools/${result.durationMs}ms`],
+        };
+      } catch (e) {
+        logger.warn(`⚠ ShannonExecutor failed, falling back to FCA: ${e}`);
+      }
+    }
+
+    // ═══ FCA/ParallelExecutor フォールバック ═══
     const fcaState = {
       taskId: envelope.requestId,
       userMessage: envelope.text ?? null,
@@ -421,26 +531,6 @@ function createExecuteNode(
         }
       },
     };
-
-    // SubTaskExecutor パス: subtaskPlan がある場合はサブタスク分割実行
-    if (state.subtaskPlan && state.subtaskPlan.length > 0 && routineManager && routineExecutor) {
-      try {
-        const { SubTaskExecutor } = await import('./cognitive/SubTaskExecutor.js');
-        const subExecutor = new SubTaskExecutor({ fca, routineExecutor, routineManager });
-        const subResult = await subExecutor.execute(fcaState, state.subtaskPlan, state._abortSignal);
-
-        // 2つ以上のサブタスクが失敗 → フォールバックしない（SubTaskExecutor 内で処理済み）
-        return {
-          finalAnswer: subResult.lastAssistantContent ?? subResult.taskTree?.strategy ?? undefined,
-          taskTree: subResult.taskTree ?? undefined,
-          emotion: emotionState.current ?? undefined,
-          trace: [`node:execute:subtask:${subResult.subtasksCompleted}/${subResult.subtasksTotal}`],
-        };
-      } catch (e) {
-        logger.warn(`⚠ SubTaskExecutor failed, falling back to ParallelExecutor: ${e}`);
-        // フォールバック: 従来の ParallelExecutor パスへ
-      }
-    }
 
     if (parallelExecutor) {
       // 3並列プロセス: EmotionLoop + MetaCognitionLoop + TaskExecutionLoop
