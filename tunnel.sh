@@ -12,13 +12,13 @@ VM_HOST="20.243.208.67"
 
 echo "🔗 Shannon SSH Tunnel starting..."
 echo "   -R 18092 (VM→Local: Mod→Backend)"
-echo "   -L 8085  (Local→VM: Backend→Mod)"
+echo "   -L 28085 → VM:8085 (Local→VM: Backend→Mod, with UI_MOD_PORT_OFFSET=20000)"
 echo "   Press Ctrl+C to disconnect"
 echo ""
 
 exec ssh -i "$SSH_KEY" \
     -R 18092:localhost:18092 \
-    -L 8085:localhost:8085 \
+    -L 28085:localhost:8085 \
     -o ServerAliveInterval=60 \
     -o ServerAliveCountMax=3 \
     "$VM_USER@$VM_HOST"

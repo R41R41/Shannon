@@ -144,7 +144,7 @@ export class FunctionCallingAgent {
 
     // === 設定 ===
     static get MODEL_NAME() { return modelManager.get('functionCalling'); }
-    static readonly MAX_ITERATIONS = 15;
+    static readonly MAX_ITERATIONS = 25;
     static readonly MAX_ITERATIONS_EMERGENCY = 15;
     static readonly LLM_TIMEOUT_MS_DEFAULT = 30000;
     static readonly MAX_TOTAL_TIME_MS = 300000; // 全体: 5分
