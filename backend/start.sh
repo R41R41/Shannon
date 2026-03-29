@@ -108,8 +108,13 @@ export WS_SKILL_PORT=${WS_PORTS[6]}
 export WS_AUTH_PORT=${WS_PORTS[7]}
 LAUNCH_EOF
     if [ "$IS_DEV" = true ]; then
+        # tsc-watch は OOM で落ちるため、tsc --watch (バックグラウンド) + node 起動 に分離
         echo "export NODE_OPTIONS=\"--max-old-space-size=12288\"" >> "$LAUNCH_SCRIPT"
-        echo "exec npx tsc-watch --skipLibCheck --onSuccess 'node $NODE_OPTS dist/server.js --dev'" >> "$LAUNCH_SCRIPT"
+        echo "npx tsc --watch --skipLibCheck --preserveWatchOutput &" >> "$LAUNCH_SCRIPT"
+        echo "TSC_PID=\$!" >> "$LAUNCH_SCRIPT"
+        echo "trap 'kill \$TSC_PID 2>/dev/null' EXIT" >> "$LAUNCH_SCRIPT"
+        echo "sleep 2" >> "$LAUNCH_SCRIPT"
+        echo "exec node $NODE_OPTS dist/server.js --dev" >> "$LAUNCH_SCRIPT"
     else
         echo "exec node $NODE_OPTS dist/server.js" >> "$LAUNCH_SCRIPT"
     fi
