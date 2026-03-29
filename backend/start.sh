@@ -108,13 +108,15 @@ export WS_SKILL_PORT=${WS_PORTS[6]}
 export WS_AUTH_PORT=${WS_PORTS[7]}
 LAUNCH_EOF
     if [ "$IS_DEV" = true ]; then
-        # tsc-watch は OOM で落ちるため、tsc --watch (バックグラウンド) + node 起動 に分離
+        # tsc-watch は OOM で落ちるため、tsc --watch + nodemon に分離
+        # tsc --watch: ソース変更 → dist/ 自動更新
+        # nodemon: dist/ 変更 → サーバー自動再起動
         echo "export NODE_OPTIONS=\"--max-old-space-size=12288\"" >> "$LAUNCH_SCRIPT"
         echo "npx tsc --watch --skipLibCheck --preserveWatchOutput &" >> "$LAUNCH_SCRIPT"
         echo "TSC_PID=\$!" >> "$LAUNCH_SCRIPT"
         echo "trap 'kill \$TSC_PID 2>/dev/null' EXIT" >> "$LAUNCH_SCRIPT"
-        echo "sleep 2" >> "$LAUNCH_SCRIPT"
-        echo "exec node $NODE_OPTS dist/server.js --dev" >> "$LAUNCH_SCRIPT"
+        echo "sleep 3" >> "$LAUNCH_SCRIPT"
+        echo "exec npx nodemon --watch dist --ext js --delay 2 --exec 'node $NODE_OPTS dist/server.js --dev'" >> "$LAUNCH_SCRIPT"
     else
         echo "exec node $NODE_OPTS dist/server.js" >> "$LAUNCH_SCRIPT"
     fi
