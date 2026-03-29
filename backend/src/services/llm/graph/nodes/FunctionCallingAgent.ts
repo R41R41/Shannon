@@ -229,6 +229,30 @@ export class FunctionCallingAgent {
         return this.tools;
     }
 
+    // ─── メッセージ互換性 ───
+
+    /**
+     * Anthropic API は SystemMessage を最初の1つしか受け付けない。
+     * 2つ目以降の SystemMessage を HumanMessage に変換する。
+     * OpenAI の場合はそのまま返す。
+     */
+    private sanitizeMessagesForProvider(messages: BaseMessage[]): BaseMessage[] {
+        if (!(this.model instanceof ChatAnthropic)) return messages;
+
+        let firstSystemSeen = false;
+        return messages.map(msg => {
+            if (msg instanceof SystemMessage) {
+                if (!firstSystemSeen) {
+                    firstSystemSeen = true;
+                    return msg; // 最初の SystemMessage はそのまま
+                }
+                // 2つ目以降は HumanMessage に変換
+                return new HumanMessage({ content: `[System Context] ${msg.content}` });
+            }
+            return msg;
+        });
+    }
+
     // ─── Routine 関連 ───
 
     public setRoutineManager(manager: typeof this._routineManager): void {
@@ -635,13 +659,18 @@ export class FunctionCallingAgent {
 
                 const llmStart = Date.now();
                 let response: AIMessage;
+
+                // Anthropic API: SystemMessage は最初の1つのみ許可。
+                // 2つ目以降の SystemMessage を HumanMessage に変換する。
+                const sanitizedMessages = this.sanitizeMessagesForProvider(messages);
+
                 try {
                     if (state.onStreamSentence) {
                         response = await this.streamLlmResponse(
-                            effectiveModelWithTools as any, messages, callAbort.signal, state.onStreamSentence,
+                            effectiveModelWithTools as any, sanitizedMessages, callAbort.signal, state.onStreamSentence,
                         );
                     } else {
-                        response = (await (effectiveModelWithTools as any).invoke(messages, {
+                        response = (await (effectiveModelWithTools as any).invoke(sanitizedMessages, {
                             signal: callAbort.signal,
                         })) as AIMessage;
                     }
