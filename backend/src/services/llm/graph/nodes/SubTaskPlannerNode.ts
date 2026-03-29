@@ -11,6 +11,7 @@
 import { z } from 'zod';
 import { createLogger } from '../../../../utils/logger.js';
 import { createTracedModel } from '../../utils/langfuse.js';
+import { config } from '../../../../config/env.js';
 import type { ToolCategory } from '../cognitive/ToolCategoryMap.js';
 
 const log = createLogger('LLM:SubTaskPlanner');
@@ -61,10 +62,21 @@ export class SubTaskPlannerNode {
     private model: ReturnType<typeof createTracedModel>;
 
     constructor() {
-        this.model = createTracedModel({
-            modelName: 'gpt-4.1-mini',
-            temperature: 0.2,
-        });
+        if (config.anthropic?.apiKey) {
+            // Claude Haiku: 高速・低コストで計画生成
+            const { ChatAnthropic } = require('@langchain/anthropic');
+            this.model = new ChatAnthropic({
+                model: 'claude-haiku-4-5-20251001',
+                anthropicApiKey: config.anthropic.apiKey,
+                temperature: 0.2,
+                maxTokens: 4096,
+            });
+        } else {
+            this.model = createTracedModel({
+                modelName: 'gpt-4.1-mini',
+                temperature: 0.2,
+            });
+        }
     }
 
     /**

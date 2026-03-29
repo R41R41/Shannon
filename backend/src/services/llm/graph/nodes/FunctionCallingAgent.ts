@@ -8,6 +8,7 @@ import {
 } from '@langchain/core/messages';
 import { StructuredTool } from '@langchain/core/tools';
 import { ChatOpenAI } from '@langchain/openai';
+import { ChatAnthropic } from '@langchain/anthropic';
 import { HierarchicalSubTask, TaskContext, TaskTreeState } from '@shannon/common';
 import { setMaxListeners } from 'node:events';
 import { config } from '../../../../config/env.js';
@@ -114,8 +115,8 @@ export interface FunctionCallingAgentState {
  * 5. 2-4 を繰り返す
  */
 export class FunctionCallingAgent {
-    private model: ChatOpenAI;
-    private modelWithTools: ReturnType<ChatOpenAI['bindTools']>;
+    private model: ChatOpenAI | ChatAnthropic;
+    private modelWithTools: ReturnType<ChatOpenAI['bindTools']> | ReturnType<ChatAnthropic['bindTools']>;
     private tools: StructuredTool[];
     private toolMap: Map<string, StructuredTool>;
     private updatePlanTool: UpdatePlanTool | null = null;
@@ -143,7 +144,7 @@ export class FunctionCallingAgent {
 
     // === 設定 ===
     static get MODEL_NAME() { return modelManager.get('functionCalling'); }
-    static readonly MAX_ITERATIONS = 50;
+    static readonly MAX_ITERATIONS = 15;
     static readonly MAX_ITERATIONS_EMERGENCY = 15;
     static readonly LLM_TIMEOUT_MS_DEFAULT = 30000;
     static readonly MAX_TOTAL_TIME_MS = 300000; // 全体: 5分
@@ -159,14 +160,27 @@ export class FunctionCallingAgent {
             this.updatePlanTool = planTool;
         }
 
-        this.model = createTracedModel({
-            modelName: FunctionCallingAgent.MODEL_NAME,
-            apiKey: config.openaiApiKey,
-            temperature: 1,
-            maxTokens: 1024,
-        });
+        // Claude Anthropic を優先、フォールバックで OpenAI
+        if (config.anthropic?.apiKey) {
+            this.model = new ChatAnthropic({
+                model: 'claude-sonnet-4-20250514',
+                anthropicApiKey: config.anthropic.apiKey,
+                temperature: 1,
+                maxTokens: 16384,
+                // Extended thinking は呼出時に指定
+            });
+            logger.info('🧠 FCA: Using Claude Sonnet 4.6 (Anthropic)', 'magenta');
+        } else {
+            this.model = createTracedModel({
+                modelName: FunctionCallingAgent.MODEL_NAME,
+                apiKey: config.openaiApiKey,
+                temperature: 1,
+                maxTokens: 1024,
+            });
+            logger.info('🤖 FCA: Using OpenAI (Anthropic key not configured)', 'yellow');
+        }
 
-        // ツールをモデルに bind（OpenAI API の tools パラメータに変換）
+        // ツールをモデルに bind
         this.modelWithTools = this.model.bindTools(this.tools);
 
         // Sub-components
@@ -624,10 +638,10 @@ export class FunctionCallingAgent {
                 try {
                     if (state.onStreamSentence) {
                         response = await this.streamLlmResponse(
-                            effectiveModelWithTools, messages, callAbort.signal, state.onStreamSentence,
+                            effectiveModelWithTools as any, messages, callAbort.signal, state.onStreamSentence,
                         );
                     } else {
-                        response = (await effectiveModelWithTools.invoke(messages, {
+                        response = (await (effectiveModelWithTools as any).invoke(messages, {
                             signal: callAbort.signal,
                         })) as AIMessage;
                     }
