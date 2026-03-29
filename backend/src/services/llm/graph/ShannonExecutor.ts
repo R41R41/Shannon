@@ -82,6 +82,7 @@ export class ShannonExecutor {
         let consecutiveTextOnly = 0;
         let totalToolCalls = 0;
         const thinkingLog: string[] = [];
+        const stepHistory: Array<{ id: string; goal: string; status: string; result: string | null }> = [];
 
         log.info(`▶ ShannonExecutor: "${state.goal.slice(0, 60)}..." (model=${MODEL})`, 'cyan');
 
@@ -232,6 +233,14 @@ export class ShannonExecutor {
                     : resultText;
                 log.info(`  ✓ ${toolName}: ${truncated}`, resultText.includes('失敗') ? 'yellow' : 'green');
 
+                // ステップ履歴に追加
+                stepHistory.push({
+                    id: `step_${stepHistory.length + 1}`,
+                    goal: `${toolName}(${JSON.stringify(toolInput).slice(0, 50)})`,
+                    status: resultText.includes('失敗') || resultText.includes('エラー') ? 'error' : 'completed',
+                    result: resultText.slice(0, 200),
+                });
+
                 toolResults.push({
                     type: 'tool_result',
                     tool_use_id: toolUse.id,
@@ -242,13 +251,25 @@ export class ShannonExecutor {
             // ツール結果をバッチで追加
             messages.push({ role: 'user', content: toolResults });
 
-            // タスクツリー更新
+            // タスクツリー更新 (毎イテレーション UI Mod に送信)
             if (!taskCompleted) {
+                const thinking = textContent ? textContent.slice(0, 100) : undefined;
                 taskTree = {
                     goal: state.goal,
-                    strategy: `実行中... (${iter + 1}/${MAX_ITERATIONS}, ${totalToolCalls} tools)`,
+                    strategy: thinking || `実行中... (${iter + 1}/${MAX_ITERATIONS})`,
                     status: 'in_progress',
-                    hierarchicalSubTasks: [],
+                    currentThinking: thinking,
+                    hierarchicalSubTasks: stepHistory.map(s => ({
+                        id: s.id,
+                        goal: s.goal,
+                        status: s.status as any,
+                        iterationsSpent: 1,
+                        result: s.result,
+                        failureReason: s.status === 'error' ? s.result : null,
+                        children: [],
+                        createdBy: 'shannon-executor',
+                        createdAt: Date.now(),
+                    })),
                 } as TaskTreeState;
                 state.onTaskTreeUpdate?.(taskTree);
             }

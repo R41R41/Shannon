@@ -303,12 +303,12 @@ ${this.formatOutputRules(context)}
         return `
 ## Minecraft ルール
 - **確認を求めずに即座に行動する**。自律的に最後まで実行する
-- **動物の狩猟は routine:hunt-animal か combat を使う**（attack-nearest は近距離限定で失敗しやすい）
+- **動物の狩猟**: 最も**近い**動物を狙え。遠くの動物を追いかけるな。list-nearby-entities で距離を確認し、最寄りを combat で攻撃する。combat の timeout は 30 以上にする
+- **肉の調理**: 生肉(beef, porkchop, mutton, chicken)は**かまどで焼いてから食べる**方が回復量が大きい。raw肉を持っていたら start-smelting で調理する
 - **石系ブロックの採掘にはツルハシが必須**。なければ先にクラフトする
 - **raw素材(raw_iron等)があるなら採掘せずに製錬から始める**
 - **精錬フロー**: start-smelting → wait-time(10秒×個数) → check-furnace → withdraw-from-furnace。精錬品はかまど内にあるので check-inventory-item では見えない
-- **かまどがなければ**: cobblestone x8 → craft-one(furnace) → place-block-at で設置。座標は推測しない
-- 複雑なタスク（3ステップ以上）は最初のターンで update-plan を使って計画を立てよ。ルーチンを優先的に計画に組み込め
+- **place-block-at の前に get-position で現在座標を確認**してから近くの座標を指定せよ。古い座標を使い回すな
 - ツールのエラーメッセージをよく読み、同じ失敗を繰り返さず別のアプローチに切り替える
 ${this.formatRoutineGuidance()}${this.formatDimensionRules(context)}${this.formatDynamicRules()}`;
     }
