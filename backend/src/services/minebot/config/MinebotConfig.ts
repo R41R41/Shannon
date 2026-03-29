@@ -42,14 +42,17 @@ export class MinebotConfig {
   /** UI Modのサーバーホスト */
   readonly UI_MOD_HOST = config.minecraft.uiModHost;
 
+  /** UI Modポートのオフセット（SSHトンネル等で一括シフトする場合に使用） */
+  private readonly UI_MOD_PORT_OFFSET = parseInt(process.env.UI_MOD_PORT_OFFSET || '0', 10);
+
   /** サーバー名ごとのUI Mod HTTPサーバーポートマッピング */
   readonly MINECRAFT_UI_MOD_PORTS: Record<string, number> = {
-    '1.21.4-test': 8081,
-    '1.19.0-youtube': 8081,
-    '1.21.1-play': 8081,
-    '1.21.4-fabric-youtube': 8081,
-    '1.21.11-fabric-youtube': 8081,
-    '1.21.11-fabric-test': 8085,
+    '1.21.4-test': 8081 + this.UI_MOD_PORT_OFFSET,
+    '1.19.0-youtube': 8081 + this.UI_MOD_PORT_OFFSET,
+    '1.21.1-play': 8081 + this.UI_MOD_PORT_OFFSET,
+    '1.21.4-fabric-youtube': 8081 + this.UI_MOD_PORT_OFFSET,
+    '1.21.11-fabric-youtube': 8081 + this.UI_MOD_PORT_OFFSET,
+    '1.21.11-fabric-test': 8085 + this.UI_MOD_PORT_OFFSET,
   };
 
   /** 指定サーバーのUI Mod HTTPポートを取得 */
@@ -126,6 +129,9 @@ export class MinebotConfig {
   readonly MAX_ERROR_MESSAGES = 5;
 
   // ===== Minecraft接続設定 =====
+
+  /** Minecraftサーバーの接続先ホスト（デフォルト: 127.0.0.1） */
+  readonly MINECRAFT_HOST = process.env.MINECRAFT_HOST || '127.0.0.1';
 
   /** Minecraftサーバーのベースディレクトリ */
   readonly MINECRAFT_BASE_DIR = config.minecraft.baseDir;

@@ -58,10 +58,10 @@ export class MinebotClient extends BaseClient {
       throw new Error(`Unknown server: ${serverName}`);
     }
 
-    log.info(`🔌 ${serverName} (port:${port}, v${version}) に接続します`, 'cyan');
+    log.info(`🔌 ${serverName} (host:${CONFIG.MINECRAFT_HOST}, port:${port}, v${version}) に接続します`, 'cyan');
 
     this.bot = mineflayer.createBot({
-      host: '127.0.0.1',
+      host: CONFIG.MINECRAFT_HOST,
       port,
       username,
       auth: 'microsoft',

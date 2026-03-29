@@ -184,12 +184,12 @@ async function classifyNodeFn(state: ShannonStateType): Promise<Partial<ShannonS
   // 「木を切ってきて」「ダイヤモンド探して」等の多様な表現に対応する
   const result = await classifyNode.invoke(envelope);
 
-  // Minecraft チャンネルではデフォルトを上書き
+  // Minecraft チャンネルでは mode を必要に応じて補正（needsTools は分類器の判断を尊重）
   const isMinecraft = envelope.channel === 'minecraft';
-  const mode = (isMinecraft && !result.mode?.startsWith('minecraft'))
+  const mode = (isMinecraft && !result.mode?.startsWith('minecraft') && result.needsTools)
     ? (result.riskLevel === 'high' ? 'minecraft_emergency' : 'minecraft_action') as ShannonMode
     : result.mode as ShannonMode;
-  const needsTools = isMinecraft ? true : result.needsTools;
+  const needsTools = result.needsTools;
 
   const selectedModel = ModelSelector.selectInitialModel(
     result.riskLevel as 'low' | 'mid' | 'high' | undefined,

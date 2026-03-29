@@ -74,9 +74,9 @@ function formatMinecraftPlan(
     ?? state.taskTree?.actionSequence
     ?? [];
 
-  // NOTE: Don't create 'say' actions from finalAnswer for Minecraft.
-  // The FCA already sends chat messages directly via the 'chat' tool during execution.
-  // Adding a 'say' here would cause duplicate messages.
+  // FCA がツール実行中に chat を呼んだ場合は finalAnswer と重複する可能性があるが、
+  // ツール未使用（needsTools=false）の会話応答では message 経由でディスパッチする必要がある。
+  // minebotDispatcher 側で actions がある場合は message を無視するため、重複は起きない。
 
   for (const action of actionSequence) {
     const mapped = mapToolToMinecraftAction(action.toolName, action.args);
@@ -87,7 +87,7 @@ function formatMinecraftPlan(
 
   return {
     channel: 'minecraft',
-    message: '',
+    message: actions.length > 0 ? '' : message,
     minecraftActions: actions.length > 0 ? actions : undefined,
   };
 }

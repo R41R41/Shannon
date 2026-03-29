@@ -62,7 +62,9 @@ const CLASSIFY_SYSTEM_PROMPT = `あなたはAI VTuber「シャノン」(Sh4nnon)
 
 # 分類ガイドライン
 - チャンネルのコンテキストを考慮すること
-- Minecraftチャンネルからのリクエストは通常ツールと計画が必要（minecraft_action）
+- Minecraftチャンネルでも、質問・雑談・感想にはconversational（ツール不要）を使う
+  - 例: 「何持ってる？」「今どこにいる？」「元気？」→ conversational, needsTools=false
+- Minecraftで物理的な行動が必要な場合のみminecraft_action（採掘、移動、建築、クラフト等）
 - Minecraftで「助けて」「攻撃されている」「死にそう」などはminecraft_emergency
 - X（Twitter）向けのコンテンツ作成はbroadcast
 - 情報検索、画像生成などの具体的タスクはtask_execution（ツール必要）
@@ -105,14 +107,24 @@ function heuristicClassify(envelope: RequestEnvelope): ClassifyResult {
     };
   }
 
-  // Minecraft actions
+  // Minecraft: action keywords → minecraft_action, otherwise conversational
   if (channel === 'minecraft') {
+    const actionPattern = /作って|掘って|行って|集めて|倒して|建て|採掘|移動|探して|持ってきて|クラフト|精錬|食べて|装備|置いて|壊して|戦って|逃げて|釣り|plant|build|mine|go|craft|smelt|kill|fight|find|get|bring/i;
+    if (actionPattern.test(text)) {
+      return {
+        mode: 'minecraft_action',
+        intent: text.slice(0, 100),
+        riskLevel: 'mid',
+        needsTools: true,
+        needsPlanning: text.length > 50,
+      };
+    }
     return {
-      mode: 'minecraft_action',
+      mode: 'conversational',
       intent: text.slice(0, 100),
-      riskLevel: 'mid',
-      needsTools: true,
-      needsPlanning: text.length > 50,
+      riskLevel: 'low',
+      needsTools: false,
+      needsPlanning: false,
     };
   }
 

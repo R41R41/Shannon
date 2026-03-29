@@ -22,15 +22,8 @@ fi
 
 # --- Kill existing sessions ---
 if [ "$IS_WINDOWS" = true ]; then
-    PID_DIR="$SCRIPT_DIR/.pids"
-    for session in "$BACKEND_SESSION" "$FRONTEND_SESSION"; do
-        pid_file="$PID_DIR/${session}.pid"
-        if [ -f "$pid_file" ]; then
-            old_pid=$(cat "$pid_file")
-            taskkill //F //PID "$old_pid" //T 2>/dev/null
-            rm -f "$pid_file"
-        fi
-    done
+    taskkill //F //FI "WINDOWTITLE eq $BACKEND_SESSION" 2>/dev/null
+    taskkill //F //FI "WINDOWTITLE eq $FRONTEND_SESSION" 2>/dev/null
 else
     tmux kill-session -t "$FRONTEND_SESSION" 2>/dev/null
     tmux kill-session -t "$BACKEND_SESSION" 2>/dev/null

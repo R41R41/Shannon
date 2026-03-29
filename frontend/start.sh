@@ -29,11 +29,7 @@ mkdir -p "$PID_DIR"
 PID_FILE="$PID_DIR/${FRONTEND_SESSION}.pid"
 
 if [ "$IS_WINDOWS" = true ]; then
-    if [ -f "$PID_FILE" ]; then
-        old_pid=$(cat "$PID_FILE")
-        taskkill //F //PID "$old_pid" //T 2>/dev/null
-        rm -f "$PID_FILE"
-    fi
+    taskkill //F //FI "WINDOWTITLE eq $FRONTEND_SESSION" 2>/dev/null
 else
     tmux kill-session -t "$FRONTEND_SESSION" 2>/dev/null
 fi
@@ -87,7 +83,6 @@ LAUNCH_EOF
     fi
     chmod +x "$LAUNCH_SCRIPT"
     mintty --hold error --title "$FRONTEND_SESSION" /bin/bash -l "$LAUNCH_SCRIPT" &
-    echo $! > "$PID_FILE"
 else
     if [ "$IS_DEV" = true ]; then
         tmux new-session -d -s "$FRONTEND_SESSION" "cd $SCRIPT_DIR && PORT=$PORT npm run dev:dev"
