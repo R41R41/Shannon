@@ -1,0 +1,30 @@
+{
+  "name": "hunt-animal",
+  "description": "指定した動物を探して追跡しながら倒し、ドロップを拾う。combatスキルで追いかけながら攻撃する。",
+  "params": [
+    { "name": "animalType", "type": "string", "description": "狩る動物の種類 (cow, pig, sheep, chicken, rabbit 等)", "required": false, "default": "cow" },
+    { "name": "searchRadius", "type": "number", "description": "探索半径", "required": false, "default": 64 }
+  ],
+  "steps": [
+    {
+      "skill": "find-nearest-entity",
+      "args": { "entityType": "${animalType}", "maxDistance": "${searchRadius}" },
+      "outputVar": "findResult",
+      "onFailure": "abort"
+    },
+    {
+      "skill": "combat",
+      "args": { "target": "${animalType}", "timeout": 30 },
+      "outputVar": "combatResult",
+      "onFailure": "abort"
+    },
+    {
+      "skill": "pickup-nearest-item",
+      "args": { "maxDistance": 16 },
+      "onFailure": "skip"
+    }
+  ],
+  "failureEscalation": "system2",
+  "source": "manual",
+  "stats": { "runs": 0, "successes": 0, "failures": 0, "avgDurationMs": 0 }
+}

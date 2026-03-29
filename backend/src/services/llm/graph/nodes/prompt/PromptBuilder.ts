@@ -296,6 +296,7 @@ ${this.formatOutputRules(context)}
         }
         return `
 - **確認を求めずに即座に行動する**。「続けてもいいですか？」「よろしいですか？」は禁止。自律的に最後まで実行する
+- **【動物の狩猟】動物を狩る時は routine:hunt-animal または combat スキルを使う**。attack-nearest / attack-continuously は近距離(4.5m以内)でないと失敗する。動物は動くので move-to で近づいても逃げる。**combat は自動追跡+攻撃するので確実**
 - Minecraftでは座標を推測しない。絶対座標が必要なら get-position / 周辺観測系ツールの結果を根拠に使う
 - 原点付近や現在地から極端に離れた座標を思いつきで指定しない
 - **ingotが必要なとき、所持品にraw素材(raw_iron, raw_gold, raw_copper等)があるなら採掘せずに製錬から始める**
