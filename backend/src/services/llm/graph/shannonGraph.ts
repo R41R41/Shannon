@@ -438,12 +438,24 @@ function createExecuteNode(
         // FCA 登録済みツールを Anthropic 形式に変換
         for (const tool of fca.getTools()) {
           if (tools.some(t => t.name === tool.name)) continue; // 重複スキップ
+          // Zod スキーマ → JSON Schema 変換 (zodToJsonSchema があればそれを使う)
+          let inputSchema: Record<string, unknown> = { type: 'object', properties: {} };
+          try {
+            if ((tool as any).schema) {
+              const { zodToJsonSchema } = await import('zod-to-json-schema');
+              const jsonSchema = zodToJsonSchema((tool as any).schema, { target: 'openApi3' });
+              inputSchema = { type: 'object', ...jsonSchema } as Record<string, unknown>;
+              // $schema フィールドを除去 (Anthropic API が拒否する)
+              delete inputSchema['$schema'];
+              delete inputSchema['additionalProperties'];
+            }
+          } catch {
+            // zodToJsonSchema が使えない場合はデフォルト
+          }
           tools.push({
             name: tool.name,
             description: tool.description,
-            input_schema: (tool as any).schema
-              ? JSON.parse(JSON.stringify((tool as any).schema))
-              : { type: 'object' as const, properties: {} },
+            input_schema: inputSchema as any,
           });
         }
 
