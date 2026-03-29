@@ -437,7 +437,10 @@ function createExecuteNode(
 
         // FCA 登録済みツールを Anthropic 形式に変換
         for (const tool of fca.getTools()) {
-          if (tools.some(t => t.name === tool.name)) continue; // 重複スキップ
+          // routine:xxx は既に routine-xxx として追加済み、manage-routine / task-complete も追加済み
+          if (tool.name.includes(':')) continue; // Anthropic は ':' を許可しない
+          const sanitizedName = tool.name.replace(/[^a-zA-Z0-9_-]/g, '_');
+          if (tools.some(t => t.name === sanitizedName || t.name === tool.name)) continue;
           // Zod スキーマ → JSON Schema 変換 (zodToJsonSchema があればそれを使う)
           let inputSchema: Record<string, unknown> = { type: 'object', properties: {} };
           try {
@@ -453,7 +456,7 @@ function createExecuteNode(
             // zodToJsonSchema が使えない場合はデフォルト
           }
           tools.push({
-            name: tool.name,
+            name: sanitizedName,
             description: tool.description,
             input_schema: inputSchema as any,
           });
@@ -469,16 +472,21 @@ function createExecuteNode(
         );
 
         // LLM ツール用マップ (FCA のツールを直接呼出)
+        // sanitize 後の名前でもマッチするように両方登録
         const llmToolMap = new Map<string, (input: Record<string, unknown>) => Promise<string>>();
         for (const tool of fca.getTools()) {
           if (['task-complete'].includes(tool.name)) continue;
-          llmToolMap.set(tool.name, async (input) => {
+          if (tool.name.includes(':')) continue; // routine:xxx は ShannonExecutor が直接処理
+          const sanitized = tool.name.replace(/[^a-zA-Z0-9_-]/g, '_');
+          const handler = async (input: Record<string, unknown>) => {
             try {
               return await (tool as any)._call(input);
             } catch (e) {
               return `エラー: ${e instanceof Error ? e.message : String(e)}`;
             }
-          });
+          };
+          llmToolMap.set(tool.name, handler);
+          if (sanitized !== tool.name) llmToolMap.set(sanitized, handler);
         }
 
         const executor = new ShannonExecutor({

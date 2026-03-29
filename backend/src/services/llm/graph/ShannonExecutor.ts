@@ -184,9 +184,9 @@ export class ShannonExecutor {
                         } as TaskTreeState;
                         state.onTaskTreeUpdate?.(taskTree);
                     }
-                    // ルーチン
-                    else if (toolName.startsWith('routine:') && this.deps.routineManager && this.deps.routineExecutor) {
-                        const routineName = toolName.replace('routine:', '');
+                    // ルーチン (API名: routine-xxx, 内部名: routine:xxx)
+                    else if (toolName.startsWith('routine-') && this.deps.routineManager && this.deps.routineExecutor) {
+                        const routineName = toolName.replace('routine-', '');
                         const def = this.deps.routineManager.get(routineName);
                         if (def) {
                             const result = await this.deps.routineExecutor.execute(def, toolInput, {
@@ -330,6 +330,11 @@ export function skillToAnthropicTool(skill: { skillName: string; description: st
     };
 }
 
+/** routine:name の ':' を Anthropic 互換の '-' に変換 */
+export function sanitizeToolName(name: string): string {
+    return name.replace(/:/g, '-');
+}
+
 export function routineToAnthropicTool(name: string, def: { description: string; params: Array<{ name: string; type: string; description: string; required?: boolean; default?: unknown }> }): Tool {
     const properties: Record<string, { type: string; description: string }> = {};
     const required: string[] = [];
@@ -343,7 +348,7 @@ export function routineToAnthropicTool(name: string, def: { description: string;
     }
 
     return {
-        name: `routine:${name}`,
+        name: `routine-${name}`,
         description: `[Routine] ${def.description}. LLM呼出なしで高速実行。`,
         input_schema: {
             type: 'object' as const,
