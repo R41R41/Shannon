@@ -11,6 +11,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { config } from '../../../config/env.js';
 import { createLogger } from '../../../utils/logger.js';
+import { CONFIG as MINEBOT_CONFIG } from '../../minebot/config/MinebotConfig.js';
 import type { TaskContext, TaskTreeState } from '@shannon/common';
 import type { InstantSkills } from '../../minebot/types/collections.js';
 import type { RoutineManager } from '../../minebot/routines/RoutineManager.js';
@@ -183,6 +184,7 @@ export class ShannonExecutor {
                             hierarchicalSubTasks: [],
                         } as TaskTreeState;
                         state.onTaskTreeUpdate?.(taskTree);
+                        this.postTaskTreeToUiMod(taskTree);
                     }
                     // ルーチン (API名: routine-xxx, 内部名: routine:xxx)
                     else if (toolName.startsWith('routine-') && this.deps.routineManager && this.deps.routineExecutor) {
@@ -272,6 +274,7 @@ export class ShannonExecutor {
                     })),
                 } as TaskTreeState;
                 state.onTaskTreeUpdate?.(taskTree);
+                this.postTaskTreeToUiMod(taskTree);
             }
         }
 
@@ -302,6 +305,17 @@ export class ShannonExecutor {
             durationMs,
             thinkingLog,
         };
+    }
+
+    /** UI Mod の /task エンドポイントにタスクツリーを直接送信 */
+    private postTaskTreeToUiMod(taskTree: TaskTreeState): void {
+        try {
+            fetch(`${MINEBOT_CONFIG.UI_MOD_BASE_URL}/task`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json; charset=UTF-8' },
+                body: JSON.stringify(taskTree),
+            }).catch(() => {});
+        } catch {}
     }
 }
 
