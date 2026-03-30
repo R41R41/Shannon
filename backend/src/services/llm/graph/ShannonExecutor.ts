@@ -42,6 +42,8 @@ export interface ShannonExecutorState {
     onToolStarting?: (toolName: string, args?: Record<string, unknown>) => void;
     onTaskTreeUpdate?: (taskTree: TaskTreeState) => void;
     abortSignal?: AbortSignal;
+    /** タスク実行中のユーザーフィードバックを取得するコールバック */
+    getHumanFeedback?: () => string | null;
 }
 
 export interface ShannonExecutorResult {
@@ -65,6 +67,10 @@ const MAX_CONSECUTIVE_TEXT = 3;
 export class ShannonExecutor {
     private client: Anthropic;
 
+    /** 直前のタスクの結果サマリ（次のタスクにコンテキストとして引き継ぐ） */
+    private static lastTaskSummary: string | null = null;
+    private static lastTaskGoal: string | null = null;
+
     constructor(private deps: ShannonExecutorDeps) {
         this.client = new Anthropic({
             apiKey: config.anthropic.apiKey || undefined,
@@ -73,9 +79,18 @@ export class ShannonExecutor {
 
     async run(state: ShannonExecutorState): Promise<ShannonExecutorResult> {
         const startTime = Date.now();
-        const messages: MessageParam[] = [
-            { role: 'user', content: state.goal },
-        ];
+        const messages: MessageParam[] = [];
+
+        // 前タスクのコンテキストを引き継ぐ
+        if (ShannonExecutor.lastTaskSummary && ShannonExecutor.lastTaskGoal) {
+            messages.push({
+                role: 'user',
+                content: `【前のタスクの結果】\nゴール: ${ShannonExecutor.lastTaskGoal}\n結果: ${ShannonExecutor.lastTaskSummary}\n\n---\n以下が新しいタスクです:`,
+            });
+            messages.push({ role: 'assistant', content: 'はい、前のタスクの結果を踏まえて新しいタスクに取り組みます。' });
+        }
+
+        messages.push({ role: 'user', content: state.goal });
 
         let lastContent: string | null = null;
         let taskCompleted = false;
@@ -91,6 +106,16 @@ export class ShannonExecutor {
             if (state.abortSignal?.aborted) {
                 log.warn('⚠ ShannonExecutor aborted');
                 break;
+            }
+
+            // ユーザーからのリアルタイムフィードバックをチェック
+            const feedback = state.getHumanFeedback?.();
+            if (feedback) {
+                log.info(`💬 ユーザーフィードバック受信: "${feedback.slice(0, 60)}"`, 'cyan');
+                messages.push({
+                    role: 'user',
+                    content: `【ユーザーからのリアルタイムフィードバック】${feedback}\nこのフィードバックを考慮して、現在のタスクを続行してください。`,
+                });
             }
 
             const llmStart = Date.now();
@@ -177,6 +202,9 @@ export class ShannonExecutor {
                         resultText = `タスク完了: ${summary}`;
                         lastContent = summary;
                         taskCompleted = true;
+                        // 次タスクへのコンテキスト引継ぎ用に保存
+                        ShannonExecutor.lastTaskGoal = state.goal;
+                        ShannonExecutor.lastTaskSummary = summary.slice(0, 500);
                         taskTree = {
                             goal: state.goal,
                             strategy: summary,

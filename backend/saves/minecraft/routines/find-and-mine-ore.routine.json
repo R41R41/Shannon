@@ -1,24 +1,53 @@
 {
   "name": "find-and-mine-ore",
-  "description": "指定した鉱石を探して採掘し拾う。鉱石名と個数を指定。",
+  "description": "指定した鉱石を探して採掘し拾う。【前提: 石のツルハシ以上が必要。なければ先に routine-make-stone-tools を実行。鉄鉱石は木のツルハシでは掘れない】",
   "params": [
-    { "name": "oreName", "type": "string", "description": "鉱石名 (例: iron_ore, coal_ore, diamond_ore)", "required": true },
-    { "name": "count", "type": "number", "description": "採掘個数", "required": false, "default": 3 },
-    { "name": "searchRadius", "type": "number", "description": "探索半径", "required": false, "default": 48 }
+    {
+      "name": "oreName",
+      "type": "string",
+      "description": "鉱石名 (例: iron_ore, coal_ore, diamond_ore)",
+      "required": true
+    },
+    {
+      "name": "count",
+      "type": "number",
+      "description": "採掘個数",
+      "required": false,
+      "default": 3
+    },
+    {
+      "name": "searchRadius",
+      "type": "number",
+      "description": "探索半径",
+      "required": false,
+      "default": 48
+    }
   ],
   "steps": [
     {
       "skill": "mine-block",
-      "args": { "blockName": "${oreName}", "count": "${count}", "searchRadius": "${searchRadius}" },
+      "args": {
+        "blockName": "${oreName}",
+        "count": "${count}",
+        "searchRadius": "${searchRadius}"
+      },
       "onFailure": "abort"
     },
     {
       "skill": "pickup-nearest-item",
-      "args": { "itemName": "${oreName}", "maxDistance": 8 },
+      "args": {
+        "itemName": "${oreName}",
+        "maxDistance": 8
+      },
       "onFailure": "skip"
     }
   ],
   "failureEscalation": "system2",
   "source": "manual",
-  "stats": { "runs": 0, "successes": 0, "failures": 0, "avgDurationMs": 0 }
+  "stats": {
+    "runs": 2,
+    "successes": 0,
+    "failures": 2,
+    "avgDurationMs": 53909
+  }
 }

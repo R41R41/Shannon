@@ -63,7 +63,11 @@ export class MinebotTaskRuntime {
 
   public async invoke(partialState: TaskStateInput) {
     if (this.isExecuting) {
-      log.warn(`Task already executing, skipping: ${partialState.userMessage?.substring(0, 50)}`);
+      // タスク実行中にユーザーからメッセージが来たら、フィードバックとして注入
+      if (partialState.userMessage) {
+        log.info(`💬 タスク実行中にフィードバック受付: "${partialState.userMessage.substring(0, 50)}"`);
+        this.updateHumanFeedback(partialState.userMessage);
+      }
       return null;
     }
 
@@ -96,6 +100,20 @@ export class MinebotTaskRuntime {
 
     try {
       const envelope = this.taskInputToEnvelope(partialState);
+      // ShannonExecutor がタスク実行中にユーザーフィードバックを取得できるようにする
+      (envelope as any).metadata = {
+        ...(envelope as any).metadata,
+        getHumanFeedback: () => {
+          if (this.currentState?.humanFeedbackPending && this.currentState?.humanFeedback) {
+            const fb = this.currentState.humanFeedback;
+            this.currentState.humanFeedback = undefined;
+            this.currentState.humanFeedbackPending = false;
+            this.bot.interruptExecution = false;
+            return fb;
+          }
+          return null;
+        },
+      };
       const messages = [...(partialState.messages ?? [])];
       if (partialState.userMessage && messages.length === 0) {
         messages.push(new HumanMessage(partialState.userMessage));

@@ -1,11 +1,15 @@
 {
   "name": "make-stone-tools",
-  "description": "丸石を採掘し、石のツルハシ・斧・剣をクラフトする。木のツルハシが必要。",
+  "description": "石(stone)を採掘して丸石を入手し、石のツルハシ・斧・剣をクラフトする。【前提: 木のツルハシが必要。なければ先に routine-make-wooden-tools を実行】",
   "params": [],
   "steps": [
     {
       "skill": "mine-block",
-      "args": { "blockName": "cobblestone", "count": 8, "searchRadius": 32 },
+      "args": {
+        "blockName": "stone",
+        "count": 8,
+        "searchRadius": 32
+      },
       "onFailure": "abort"
     },
     {

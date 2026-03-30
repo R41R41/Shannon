@@ -1,6 +1,6 @@
 {
   "name": "smelt-ore",
-  "description": "指定した鉱石をかまどで精錬する。かまどの場所、鉱石名、燃料を指定。",
+  "description": "指定した鉱石をかまどで精錬する。かまどの座標と鉱石名を指定。【前提: かまどが設置済みで座標が分かっていること。なければ先に craft-one(furnace) → place-block-at で設置】",
   "params": [
     { "name": "furnaceX", "type": "number", "description": "かまどの X 座標", "required": true },
     { "name": "furnaceY", "type": "number", "description": "かまどの Y 座標", "required": true },

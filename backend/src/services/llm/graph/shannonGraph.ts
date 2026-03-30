@@ -504,6 +504,7 @@ function createExecuteNode(
           onToolStarting: state._onToolStarting,
           onTaskTreeUpdate: state._onTaskTreeUpdate,
           abortSignal: state._abortSignal,
+          getHumanFeedback: (envelope.metadata as any)?.getHumanFeedback,
         });
 
         return {
