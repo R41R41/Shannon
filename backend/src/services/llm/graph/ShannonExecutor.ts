@@ -334,6 +334,24 @@ export class ShannonExecutor {
                 state.onTaskTreeUpdate?.(taskTree);
                 this.postTaskTreeToUiMod(taskTree);
             }
+
+            // ── MetaObserver: 軽量メタ認知 (Haiku) ──
+            // 失敗パターン検知 + 知識検索 + 内部フィードバック注入
+            const recentFailures = stepHistory.filter(s => s.status === 'error').slice(-3);
+            if (recentFailures.length > 0 && iter >= 1) {
+                const metaFeedback = await this.runMetaObserver(
+                    state.goal,
+                    recentFailures,
+                    stepHistory.slice(-5),
+                );
+                if (metaFeedback) {
+                    log.info(`🧠 MetaObserver: ${metaFeedback.slice(0, 80)}...`, 'magenta');
+                    messages.push({
+                        role: 'user',
+                        content: `【内部メタ認知フィードバック】${metaFeedback}`,
+                    });
+                }
+            }
         }
 
         const durationMs = Date.now() - startTime;
@@ -371,6 +389,78 @@ export class ShannonExecutor {
             durationMs,
             thinkingLog,
         };
+    }
+
+    /**
+     * MetaObserver: Haiku による軽量メタ認知プロセス
+     *
+     * 毎イテレーション（失敗がある場合）に非同期で実行:
+     * - 失敗パターンの分析と対処法の提案
+     * - 関連知識の想起
+     * - 戦略の修正提案
+     *
+     * コスト: Haiku = Sonnet の 1/12。毎回呼んでも追加コスト微小。
+     */
+    private async runMetaObserver(
+        goal: string,
+        recentFailures: Array<{ goal: string; result: string | null }>,
+        recentSteps: Array<{ goal: string; status: string; result: string | null }>,
+    ): Promise<string | null> {
+        try {
+            const failureText = recentFailures
+                .map(f => `- ${f.goal}: ${f.result?.slice(0, 100) ?? 'unknown'}`)
+                .join('\n');
+            const stepsText = recentSteps
+                .map(s => `- [${s.status}] ${s.goal}`)
+                .join('\n');
+
+            const stream = this.client.messages.stream({
+                model: MODEL_HAIKU,
+                max_tokens: 300,
+                system: `あなたはMinecraft自律エージェント「シャノン」のメタ認知プロセスです。
+メインプロセスのツール実行結果を観察し、短い内部フィードバックを生成してください。
+
+役割:
+1. 失敗パターンの原因分析と具体的な対処法の提案
+2. Minecraft のゲーム知識に基づく修正提案
+3. 戦略の方向転換が必要かの判断
+
+重要なゲーム知識:
+- attack-continuously は 4.5m 以内でないと動かない。遠い動物には先に move-to で近づく
+- 小麦(wheat)は食べられない。craft-one(bread) でパン(小麦x3)にする
+- 生肉はかまどで焼く。石系ブロックにはツルハシ必須
+- combat スキルは追跡が遅く非効率。find → move-to → attack-continuously が正しい
+
+2-3文で簡潔に。`,
+                messages: [{
+                    role: 'user',
+                    content: `ゴール: ${goal}\n\n最近のステップ:\n${stepsText}\n\n失敗:\n${failureText}\n\n何が問題で、次にどうすべきか？`,
+                }],
+                temperature: 0.3,
+            });
+
+            const response = await stream.finalMessage();
+            const text = response.content
+                .filter(b => b.type === 'text')
+                .map(b => (b as Anthropic.TextBlock).text)
+                .join('');
+
+            // 有用な知識があれば save-knowledge で保存 (fire-and-forget)
+            if (text && this.deps.llmTools?.has('save-knowledge')) {
+                const shouldSave = recentFailures.length >= 2;
+                if (shouldSave) {
+                    this.deps.llmTools.get('save-knowledge')!({
+                        content: `Minecraft知識: ${text.slice(0, 200)}`,
+                        category: 'minecraft_gameplay',
+                    }).catch(() => {});
+                }
+            }
+
+            return text || null;
+        } catch (e) {
+            log.warn(`⚠ MetaObserver error: ${e instanceof Error ? e.message : e}`);
+            return null;
+        }
     }
 
     /** UI Mod の /task エンドポイントにタスクツリーを直接送信 */
