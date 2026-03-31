@@ -57,10 +57,20 @@ export interface ShannonExecutorResult {
 
 // ─── 定数 ───
 
-const MODEL = process.env.SHANNON_MODEL || 'claude-sonnet-4-20250514';
+const MODEL_SONNET = process.env.SHANNON_MODEL || 'claude-sonnet-4-20250514';
+const MODEL_HAIKU = 'claude-haiku-4-5-20251001';
 const MAX_TOKENS = 16384;
 const MAX_ITERATIONS = 25;
 const MAX_CONSECUTIVE_TEXT = 3;
+
+/** 軽量タスク判定: Haiku で十分なタスクか */
+function isLightweightTask(goal: string): boolean {
+    const g = goal.toLowerCase();
+    // 挨拶・雑談・質問系
+    if (g.length < 30 && /こんにち|おはよ|こんばん|やあ|ねえ|hello|hi\b/.test(g)) return true;
+    if (/何してる|元気|調子|天気|時間/.test(g)) return true;
+    return false;
+}
 
 // ─── メイン ───
 
@@ -100,7 +110,9 @@ export class ShannonExecutor {
         const thinkingLog: string[] = [];
         const stepHistory: Array<{ id: string; goal: string; status: string; result: string | null }> = [];
 
-        log.info(`▶ ShannonExecutor: "${state.goal.slice(0, 60)}..." (model=${MODEL}, taskTreeCb=${!!state.onTaskTreeUpdate})`, 'cyan');
+        // 軽量タスクは Haiku、それ以外は Sonnet
+        const model = isLightweightTask(state.goal) ? MODEL_HAIKU : MODEL_SONNET;
+        log.info(`▶ ShannonExecutor: "${state.goal.slice(0, 60)}..." (model=${model}, taskTreeCb=${!!state.onTaskTreeUpdate})`, 'cyan');
 
         for (let iter = 0; iter < MAX_ITERATIONS && !taskCompleted; iter++) {
             if (state.abortSignal?.aborted) {
@@ -122,12 +134,21 @@ export class ShannonExecutor {
 
             let response: Anthropic.Message;
             try {
-                // Opus + 多数ツールは10分超の可能性があるため streaming 必須
+                // Prompt caching: system prompt + tools を cache_control でキャッシュ
+                // 2回目以降のイテレーションで入力コスト90%削減
+                const cachedTools = state.tools.map((t, i) =>
+                    i === state.tools.length - 1
+                        ? { ...t, cache_control: { type: 'ephemeral' as const } }
+                        : t,
+                );
+
                 const stream = this.client.messages.stream({
-                    model: MODEL,
+                    model,
                     max_tokens: MAX_TOKENS,
-                    system: state.systemPrompt,
-                    tools: state.tools,
+                    system: [
+                        { type: 'text' as const, text: state.systemPrompt, cache_control: { type: 'ephemeral' as const } },
+                    ],
+                    tools: cachedTools as any,
                     messages,
                     temperature: 1,
                 });
@@ -139,6 +160,15 @@ export class ShannonExecutor {
             }
 
             const llmMs = Date.now() - llmStart;
+
+            // usage ログ（キャッシュ効果を確認）
+            const usage = response.usage as any;
+            if (usage) {
+                const cached = usage.cache_read_input_tokens ?? 0;
+                const total = usage.input_tokens ?? 0;
+                const cacheRate = total > 0 ? Math.round((cached / total) * 100) : 0;
+                log.info(`  📊 tokens: in=${total} (cached=${cached}, ${cacheRate}%), out=${usage.output_tokens ?? 0}`, 'cyan');
+            }
 
             // アシスタント応答を記録
             const assistantContent = response.content;
