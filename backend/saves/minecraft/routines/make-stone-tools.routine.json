@@ -7,33 +7,46 @@
       "skill": "mine-block",
       "args": {
         "blockName": "stone",
-        "count": 8,
+        "count": 4,
         "searchRadius": 32
+      },
+      "onFailure": "continue"
+    },
+    {
+      "skill": "craft-one",
+      "args": {
+        "itemName": "stone_pickaxe"
       },
       "onFailure": "abort"
     },
     {
       "skill": "craft-one",
-      "args": { "itemName": "stone_pickaxe" },
-      "onFailure": "abort"
-    },
-    {
-      "skill": "craft-one",
-      "args": { "itemName": "stone_axe" },
+      "args": {
+        "itemName": "stone_axe"
+      },
       "onFailure": "continue"
     },
     {
       "skill": "craft-one",
-      "args": { "itemName": "stone_sword" },
+      "args": {
+        "itemName": "stone_sword"
+      },
       "onFailure": "continue"
     },
     {
       "skill": "craft-one",
-      "args": { "itemName": "stone_shovel" },
+      "args": {
+        "itemName": "stone_shovel"
+      },
       "onFailure": "continue"
     }
   ],
   "failureEscalation": "system2",
   "source": "manual",
-  "stats": { "runs": 0, "successes": 0, "failures": 0, "avgDurationMs": 0 }
+  "stats": {
+    "runs": 1,
+    "successes": 0,
+    "failures": 1,
+    "avgDurationMs": 4954
+  }
 }

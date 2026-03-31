@@ -5,48 +5,71 @@
   "steps": [
     {
       "skill": "mine-block",
-      "args": { "blockName": "oak_log", "count": 8, "searchRadius": 64 },
-      "onFailure": "abort"
+      "args": {
+        "blockName": "oak_log",
+        "count": 4,
+        "searchRadius": 64
+      },
+      "onFailure": "continue"
     },
     {
       "skill": "craft-one",
-      "args": { "itemName": "oak_planks" },
+      "args": {
+        "itemName": "oak_planks"
+      },
       "repeat": 8,
       "onFailure": "continue"
     },
     {
       "skill": "craft-one",
-      "args": { "itemName": "stick" },
+      "args": {
+        "itemName": "stick"
+      },
       "repeat": 4,
       "onFailure": "continue"
     },
     {
       "skill": "craft-one",
-      "args": { "itemName": "crafting_table" },
+      "args": {
+        "itemName": "crafting_table"
+      },
       "onFailure": "abort"
     },
     {
       "skill": "craft-one",
-      "args": { "itemName": "wooden_pickaxe" },
+      "args": {
+        "itemName": "wooden_pickaxe"
+      },
       "onFailure": "abort"
     },
     {
       "skill": "craft-one",
-      "args": { "itemName": "wooden_axe" },
+      "args": {
+        "itemName": "wooden_axe"
+      },
       "onFailure": "continue"
     },
     {
       "skill": "craft-one",
-      "args": { "itemName": "wooden_sword" },
+      "args": {
+        "itemName": "wooden_sword"
+      },
       "onFailure": "continue"
     },
     {
       "skill": "craft-one",
-      "args": { "itemName": "wooden_shovel" },
+      "args": {
+        "itemName": "wooden_shovel"
+      },
       "onFailure": "continue"
     }
   ],
   "failureEscalation": "system2",
   "source": "manual",
-  "stats": { "runs": 0, "successes": 0, "failures": 0, "avgDurationMs": 0 }
+  "stats": {
+    "runs": 2,
+    "successes": 0,
+    "failures": 2,
+    "avgDurationMs": 62436
+  }
 }
