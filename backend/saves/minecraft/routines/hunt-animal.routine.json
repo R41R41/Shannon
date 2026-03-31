@@ -1,11 +1,11 @@
 {
   "name": "hunt-animal",
-  "description": "指定した動物を探して追跡しながら倒し、ドロップを拾う。combatスキルで追いかけながら攻撃する。",
+  "description": "指定した動物を探して近づき、連続攻撃で倒してドロップを拾う。cow/pig/sheep を推奨。【combat は追跡が遅く非効率。このルーチンは find → move-to → attack-continuously で確実に倒す】",
   "params": [
     {
       "name": "animalType",
       "type": "string",
-      "description": "狩る動物の種類 (cow, pig, sheep, chicken, rabbit 等)",
+      "description": "狩る動物の種類 (cow, pig, sheep 推奨。chicken は小さくて当たりにくい)",
       "required": false,
       "default": "cow"
     },
@@ -28,17 +28,16 @@
       "onFailure": "abort"
     },
     {
-      "skill": "combat",
+      "skill": "attack-continuously",
       "args": {
-        "target": "${animalType}",
-        "timeout": 45
+        "entityName": "${animalType}",
+        "maxAttacks": 20
       },
-      "outputVar": "combatResult",
       "onFailure": "continue"
     },
     {
       "skill": "wait-time",
-      "args": { "milliseconds": 1000 },
+      "args": { "milliseconds": 1500 },
       "onFailure": "skip"
     },
     {
@@ -54,10 +53,5 @@
   ],
   "failureEscalation": "system2",
   "source": "manual",
-  "stats": {
-    "runs": 0,
-    "successes": 0,
-    "failures": 0,
-    "avgDurationMs": 0
-  }
+  "stats": { "runs": 0, "successes": 0, "failures": 0, "avgDurationMs": 0 }
 }

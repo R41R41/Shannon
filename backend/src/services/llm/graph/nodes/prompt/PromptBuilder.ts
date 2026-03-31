@@ -304,7 +304,7 @@ ${this.formatOutputRules(context)}
         return `
 ## Minecraft ルール
 - **確認を求めずに即座に行動する**。自律的に最後まで実行する
-- **動物の狩猟**: cow/pig/sheep を優先（大きく当てやすい）。chicken は小さく当たりにくいので避ける。最も近い動物を狙い、遠くの動物を追いかけるな
+- **動物の狩猟**: routine-hunt-animal を使え。**combat スキルは使うな**（追跡が遅く、攻撃がほぼ当たらない）。cow/pig/sheep を優先。chicken は避ける。手動で狩る場合は find-nearest-entity → move-to(range:2) → attack-continuously の順
 - **肉の調理（重要）**: 生肉は**必ずかまどで焼いてから食べる**。狩猟後は pickup → かまど設置 → start-smelting → withdraw の順
 - **石系ブロックの採掘にはツルハシが必須**。なければ先にクラフトする
 - **raw素材(raw_iron等)があるなら採掘せずに製錬から始める**
