@@ -304,8 +304,8 @@ ${this.formatOutputRules(context)}
         return `
 ## Minecraft ルール
 - **確認を求めずに即座に行動する**。自律的に最後まで実行する
-- **動物の狩猟**: routine-hunt-animal を使え。**combat スキルは使うな**（追跡が遅く、攻撃がほぼ当たらない）。cow/pig/sheep を優先。chicken は避ける。手動で狩る場合は find-nearest-entity → move-to(range:2) → attack-continuously の順
-- **肉の調理（重要）**: 生肉は**必ずかまどで焼いてから食べる**。狩猟後は pickup → かまど設置 → start-smelting → withdraw の順
+- **動物の狩猟（重要）**: **combat スキルは使うな**。正しい手順: (1) find-nearest-entity で動物の座標を取得 (2) move-to(x,y,z, range:2) で**動物の座標に近づく** (3) attack-continuously で攻撃 (4) pickup-nearest-item でドロップ回収。cow/pig/sheep を優先。chicken は避ける。**attack-continuously は 4.5m 以内でないと動かない。必ず先に move-to で近づけ**
+- **食料**: 生肉は**かまどで焼いてから食べる**。小麦(wheat)はそのまま食べられない→**craft-one(bread) でパンにしてから食べる**（小麦3個→パン1個）。卵も食べられない
 - **石系ブロックの採掘にはツルハシが必須**。なければ先にクラフトする
 - **raw素材(raw_iron等)があるなら採掘せずに製錬から始める**
 - **精錬フロー**: start-smelting → wait-time(10秒×個数) → check-furnace → withdraw-from-furnace

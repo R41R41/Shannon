@@ -1,11 +1,11 @@
 {
   "name": "hunt-animal",
-  "description": "指定した動物を探して近づき、連続攻撃で倒してドロップを拾う。cow/pig/sheep を推奨。【combat は追跡が遅く非効率。このルーチンは find → move-to → attack-continuously で確実に倒す】",
+  "description": "指定した動物を探して倒し、ドロップを拾う。【注意: このルーチンは find + attack-continuously のみ。動物が遠い場合は先に move-to で近づいてからこのルーチンを使え】",
   "params": [
     {
       "name": "animalType",
       "type": "string",
-      "description": "狩る動物の種類 (cow, pig, sheep 推奨。chicken は小さくて当たりにくい)",
+      "description": "狩る動物の種類 (cow, pig, sheep 推奨)",
       "required": false,
       "default": "cow"
     },
@@ -14,7 +14,7 @@
       "type": "number",
       "description": "探索半径",
       "required": false,
-      "default": 64
+      "default": 32
     }
   ],
   "steps": [
