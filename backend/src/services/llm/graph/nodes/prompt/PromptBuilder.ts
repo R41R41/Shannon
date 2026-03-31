@@ -304,12 +304,13 @@ ${this.formatOutputRules(context)}
         return `
 ## Minecraft ルール
 - **確認を求めずに即座に行動する**。自律的に最後まで実行する
-- **動物の狩猟**: 最も**近い**動物を狙え。遠くの動物を追いかけるな。list-nearby-entities で距離を確認し、最寄りを combat で攻撃する。combat の timeout は 30 以上にする
-- **肉の調理（重要）**: 生肉(beef, porkchop, mutton, chicken)は**必ずかまどで焼いてから食べる**。生肉の回復量は非常に少ない。狩猟後は (1) pickup-nearest-item で肉を拾う (2) かまどを探すか設置 (3) start-smelting で焼く (4) withdraw-from-furnace で回収。**この手順を必ず踏め**
+- **動物の狩猟**: cow/pig/sheep を優先（大きく当てやすい）。chicken は小さく当たりにくいので避ける。最も近い動物を狙い、遠くの動物を追いかけるな
+- **肉の調理（重要）**: 生肉は**必ずかまどで焼いてから食べる**。狩猟後は pickup → かまど設置 → start-smelting → withdraw の順
 - **石系ブロックの採掘にはツルハシが必須**。なければ先にクラフトする
 - **raw素材(raw_iron等)があるなら採掘せずに製錬から始める**
-- **精錬フロー**: start-smelting → wait-time(10秒×個数) → check-furnace → withdraw-from-furnace。精錬品はかまど内にあるので check-inventory-item では見えない
-- **place-block-at の前に get-position で現在座標を確認**してから近くの座標を指定せよ。古い座標を使い回すな
+- **精錬フロー**: start-smelting → wait-time(10秒×個数) → check-furnace → withdraw-from-furnace
+- **ブロック設置**: place-block-at が target_occupied で失敗したら、**同じ高さで座標をずらすのではなく dig-block-at で1ブロック掘って空間を作ってから Y+1 に設置**する。2回連続失敗したら地上（Y=64以上）に移動してから設置する
+- **地下での精錬禁止**: Y<60 の地下にいるときは、かまど設置や精錬をするな。先に stair-mine で地上に戻ってから精錬する
 - ツールのエラーメッセージをよく読み、同じ失敗を繰り返さず別のアプローチに切り替える
 ${this.formatRoutineGuidance()}${this.formatDimensionRules(context)}${this.formatDynamicRules()}`;
     }

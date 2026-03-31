@@ -308,11 +308,19 @@ export class ShannonExecutor {
 
         const durationMs = Date.now() - startTime;
 
-        if (!taskCompleted && !state.abortSignal?.aborted) {
-            log.warn(`⚠ MAX_ITERATIONS (${MAX_ITERATIONS}) に到達`);
+        if (!taskCompleted) {
+            if (state.abortSignal?.aborted) {
+                // 緊急割込みで中断 — 次タスクで復帰できるようにコンテキスト保存
+                const progress = stepHistory.slice(-3).map(s => `${s.goal}: ${s.status}`).join(', ');
+                ShannonExecutor.lastTaskGoal = state.goal;
+                ShannonExecutor.lastTaskSummary = `【中断】緊急割込みにより中断。進捗: ${progress}。このタスクの続きを実行する必要がある`;
+                log.info(`💾 中断タスク保存: "${state.goal.slice(0, 40)}..." → 次タスクで復帰可能`);
+            } else {
+                log.warn(`⚠ MAX_ITERATIONS (${MAX_ITERATIONS}) に到達`);
+            }
             taskTree = {
                 goal: state.goal,
-                strategy: '最大イテレーション数に到達',
+                strategy: state.abortSignal?.aborted ? '緊急割込みにより中断' : '最大イテレーション数に到達',
                 status: 'error',
                 hierarchicalSubTasks: [],
             } as TaskTreeState;
