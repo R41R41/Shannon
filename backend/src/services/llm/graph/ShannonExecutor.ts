@@ -336,19 +336,20 @@ export class ShannonExecutor {
             }
 
             // ── MetaObserver: 軽量メタ認知 (Haiku) ──
-            // 失敗パターン検知 + 知識検索 + 内部フィードバック注入
-            const recentFailures = stepHistory.filter(s => s.status === 'error').slice(-3);
-            if (recentFailures.length > 0 && iter >= 1) {
+            // 直前のステップが失敗した場合のみ起動。順調な時は黙る。
+            // 記憶エージェント (recall-knowledge) と連携して知識を補完。
+            {
+                const recentFailures = stepHistory.filter(s => s.status === 'error').slice(-3);
                 const metaFeedback = await this.runMetaObserver(
                     state.goal,
                     recentFailures,
                     stepHistory.slice(-5),
                 );
                 if (metaFeedback) {
-                    log.info(`🧠 MetaObserver: ${metaFeedback.slice(0, 80)}...`, 'magenta');
+                    log.info(`🧠 MetaObserver: ${metaFeedback.slice(0, 100)}`, 'magenta');
                     messages.push({
                         role: 'user',
-                        content: `【内部メタ認知フィードバック】${metaFeedback}`,
+                        content: `【メタ認知フィードバック】${metaFeedback}`,
                     });
                 }
             }
@@ -407,31 +408,45 @@ export class ShannonExecutor {
         recentSteps: Array<{ goal: string; status: string; result: string | null }>,
     ): Promise<string | null> {
         try {
+            // 順調なら黙る — 直近の失敗が連続していない場合はスキップ
+            const lastStep = recentSteps[recentSteps.length - 1];
+            if (lastStep?.status !== 'error') return null;
+
             const failureText = recentFailures
-                .map(f => `- ${f.goal}: ${f.result?.slice(0, 100) ?? 'unknown'}`)
+                .map(f => `- ${f.goal}: ${f.result?.slice(0, 150) ?? 'unknown'}`)
                 .join('\n');
             const stepsText = recentSteps
                 .map(s => `- [${s.status}] ${s.goal}`)
                 .join('\n');
 
+            // 記憶エージェントから関連知識を検索
+            let recalledKnowledge = '';
+            if (this.deps.llmTools?.has('recall-knowledge')) {
+                try {
+                    const failureKeywords = recentFailures.map(f => {
+                        const match = f.goal.match(/^([a-z-]+)\(/);
+                        return match ? match[1] : '';
+                    }).filter(Boolean).join(' ');
+                    const result = await this.deps.llmTools.get('recall-knowledge')!({
+                        query: `minecraft ${goal} ${failureKeywords}`,
+                    });
+                    if (result && result.length > 20 && !result.includes('見つかりません')) {
+                        recalledKnowledge = `\n記憶から検索された関連知識: ${result.slice(0, 300)}`;
+                    }
+                } catch { /* ignore */ }
+            }
+
             const stream = this.client.messages.stream({
                 model: MODEL_HAIKU,
-                max_tokens: 300,
-                system: `あなたはMinecraft自律エージェント「シャノン」のメタ認知プロセスです。
-メインプロセスのツール実行結果を観察し、短い内部フィードバックを生成してください。
+                max_tokens: 250,
+                system: `あなたはMinecraft自律エージェントのメタ認知プロセスです。
+メインプロセスが失敗しています。失敗の原因を分析し、具体的な修正指示を出してください。
 
-役割:
-1. 失敗パターンの原因分析と具体的な対処法の提案
-2. Minecraft のゲーム知識に基づく修正提案
-3. 戦略の方向転換が必要かの判断
-
-重要なゲーム知識:
-- attack-continuously は 4.5m 以内でないと動かない。遠い動物には先に move-to で近づく
-- 小麦(wheat)は食べられない。craft-one(bread) でパン(小麦x3)にする
-- 生肉はかまどで焼く。石系ブロックにはツルハシ必須
-- combat スキルは追跡が遅く非効率。find → move-to → attack-continuously が正しい
-
-2-3文で簡潔に。`,
+## 重要な原則
+- **確信がない時は「不明」と答えよ。間違ったアドバイスは最悪の結果を招く**
+- 失敗メッセージを注意深く読み、そこから原因を推測せよ
+- 具体的なスキル名と引数を含む指示を出せ
+- 1-2文で簡潔に${recalledKnowledge}`,
                 messages: [{
                     role: 'user',
                     content: `ゴール: ${goal}\n\n最近のステップ:\n${stepsText}\n\n失敗:\n${failureText}\n\n何が問題で、次にどうすべきか？`,
