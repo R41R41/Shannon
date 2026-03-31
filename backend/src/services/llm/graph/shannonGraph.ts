@@ -410,6 +410,17 @@ function createExecuteNode(
           },
         });
 
+        // search-skills ツール: スキル/ルーチンの説明・引数を検索
+        tools.push({
+          name: 'search-skills',
+          description: 'スキルやルーチンの使い方・引数を検索する。やり方が分からない時、失敗した時に使え。例: search-skills({query:"attack"}) → attack 系スキルの一覧と使い方',
+          input_schema: {
+            type: 'object' as const,
+            properties: { query: { type: 'string', description: '検索キーワード（スキル名の一部や動作の説明）' } },
+            required: ['query'],
+          },
+        });
+
         // InstantSkills
         const bot = (envelope.metadata as any)?.bot;
         const instantSkills = bot?.instantSkills ?? fca.getTools()

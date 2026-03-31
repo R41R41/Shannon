@@ -304,8 +304,9 @@ ${this.formatOutputRules(context)}
         return `
 ## Minecraft ルール
 - **確認を求めずに即座に行動する**。自律的に最後まで実行する
-- **ツールの失敗メッセージをよく読め**。同じ失敗を繰り返すな。別のアプローチに切り替える
-- **メタ認知フィードバック (🧠 MetaObserver) が届いたら必ず従え**。ゲーム知識と失敗分析に基づく的確なアドバイスである
+- **やり方が分からない時、スキルが失敗した時は search-skills で使い方を調べよ**。スキルの正しい引数や前提条件が分かる
+- **Minecraft の知識が必要な時は recall-knowledge で思い出せ**。食料の作り方、採掘に必要なツール等
+- **失敗したら同じことを繰り返すな**。失敗メッセージを読み、search-skills や recall-knowledge で正しい方法を調べてから再試行
 - raw素材(raw_iron等)があるなら採掘せずに製錬から始める
 ${this.formatRoutineGuidance()}${this.formatDimensionRules(context)}${this.formatDynamicRules()}`;
     }

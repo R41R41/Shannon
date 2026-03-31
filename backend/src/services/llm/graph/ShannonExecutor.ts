@@ -279,6 +279,31 @@ export class ShannonExecutor {
                     else if (this.deps.llmTools?.has(toolName)) {
                         resultText = await this.deps.llmTools.get(toolName)!(toolInput);
                     }
+                    // search-skills: スキルの説明・引数を検索
+                    else if (toolName === 'search-skills') {
+                        const query = ((toolInput.query as string) || '').toLowerCase();
+                        const results: string[] = [];
+                        if (this.deps.instantSkills) {
+                            for (const skill of this.deps.instantSkills.getSkills()) {
+                                if (skill.skillName.includes(query) || skill.description.toLowerCase().includes(query)) {
+                                    const params = skill.params.map((p: any) =>
+                                        `${p.name}: ${p.type}${p.required ? ' (必須)' : ` (デフォルト: ${p.default ?? 'なし'})`} — ${p.description}`
+                                    ).join('\n    ');
+                                    results.push(`**${skill.skillName}**: ${skill.description}\n    ${params || '(引数なし)'}`);
+                                }
+                            }
+                        }
+                        if (this.deps.routineManager) {
+                            for (const r of this.deps.routineManager.getAll()) {
+                                if (r.name.includes(query) || r.description.toLowerCase().includes(query)) {
+                                    results.push(`**routine-${r.name}**: ${r.description}`);
+                                }
+                            }
+                        }
+                        resultText = results.length > 0
+                            ? `検索結果 (${results.length}件):\n${results.slice(0, 10).join('\n\n')}`
+                            : `"${query}" に一致するスキル/ルーチンが見つかりません`;
+                    }
                     // 不明なツール
                     else {
                         resultText = `不明なツール: ${toolName}`;
@@ -335,24 +360,7 @@ export class ShannonExecutor {
                 this.postTaskTreeToUiMod(taskTree);
             }
 
-            // ── MetaObserver: 軽量メタ認知 (Haiku) ──
-            // 直前のステップが失敗した場合のみ起動。順調な時は黙る。
-            // 記憶エージェント (recall-knowledge) と連携して知識を補完。
-            {
-                const recentFailures = stepHistory.filter(s => s.status === 'error').slice(-3);
-                const metaFeedback = await this.runMetaObserver(
-                    state.goal,
-                    recentFailures,
-                    stepHistory.slice(-5),
-                );
-                if (metaFeedback) {
-                    log.info(`🧠 MetaObserver: ${metaFeedback.slice(0, 100)}`, 'magenta');
-                    messages.push({
-                        role: 'user',
-                        content: `【メタ認知フィードバック】${metaFeedback}`,
-                    });
-                }
-            }
+            // MetaObserver 削除 — メインループが自分で recall-knowledge / search-skills を呼ぶ
         }
 
         const durationMs = Date.now() - startTime;
@@ -390,92 +398,6 @@ export class ShannonExecutor {
             durationMs,
             thinkingLog,
         };
-    }
-
-    /**
-     * MetaObserver: Haiku による軽量メタ認知プロセス
-     *
-     * 毎イテレーション（失敗がある場合）に非同期で実行:
-     * - 失敗パターンの分析と対処法の提案
-     * - 関連知識の想起
-     * - 戦略の修正提案
-     *
-     * コスト: Haiku = Sonnet の 1/12。毎回呼んでも追加コスト微小。
-     */
-    private async runMetaObserver(
-        goal: string,
-        recentFailures: Array<{ goal: string; result: string | null }>,
-        recentSteps: Array<{ goal: string; status: string; result: string | null }>,
-    ): Promise<string | null> {
-        try {
-            // 順調なら黙る — 直近の失敗が連続していない場合はスキップ
-            const lastStep = recentSteps[recentSteps.length - 1];
-            if (lastStep?.status !== 'error') return null;
-
-            const failureText = recentFailures
-                .map(f => `- ${f.goal}: ${f.result?.slice(0, 150) ?? 'unknown'}`)
-                .join('\n');
-            const stepsText = recentSteps
-                .map(s => `- [${s.status}] ${s.goal}`)
-                .join('\n');
-
-            // 記憶エージェントから関連知識を検索
-            let recalledKnowledge = '';
-            if (this.deps.llmTools?.has('recall-knowledge')) {
-                try {
-                    const failureKeywords = recentFailures.map(f => {
-                        const match = f.goal.match(/^([a-z-]+)\(/);
-                        return match ? match[1] : '';
-                    }).filter(Boolean).join(' ');
-                    const result = await this.deps.llmTools.get('recall-knowledge')!({
-                        query: `minecraft ${goal} ${failureKeywords}`,
-                    });
-                    if (result && result.length > 20 && !result.includes('見つかりません')) {
-                        recalledKnowledge = `\n記憶から検索された関連知識: ${result.slice(0, 300)}`;
-                    }
-                } catch { /* ignore */ }
-            }
-
-            const stream = this.client.messages.stream({
-                model: MODEL_HAIKU,
-                max_tokens: 250,
-                system: `あなたはMinecraft自律エージェントのメタ認知プロセスです。
-メインプロセスが失敗しています。失敗の原因を分析し、具体的な修正指示を出してください。
-
-## 重要な原則
-- **確信がない時は「不明」と答えよ。間違ったアドバイスは最悪の結果を招く**
-- 失敗メッセージを注意深く読み、そこから原因を推測せよ
-- 具体的なスキル名と引数を含む指示を出せ
-- 1-2文で簡潔に${recalledKnowledge}`,
-                messages: [{
-                    role: 'user',
-                    content: `ゴール: ${goal}\n\n最近のステップ:\n${stepsText}\n\n失敗:\n${failureText}\n\n何が問題で、次にどうすべきか？`,
-                }],
-                temperature: 0.3,
-            });
-
-            const response = await stream.finalMessage();
-            const text = response.content
-                .filter(b => b.type === 'text')
-                .map(b => (b as Anthropic.TextBlock).text)
-                .join('');
-
-            // 有用な知識があれば save-knowledge で保存 (fire-and-forget)
-            if (text && this.deps.llmTools?.has('save-knowledge')) {
-                const shouldSave = recentFailures.length >= 2;
-                if (shouldSave) {
-                    this.deps.llmTools.get('save-knowledge')!({
-                        content: `Minecraft知識: ${text.slice(0, 200)}`,
-                        category: 'minecraft_gameplay',
-                    }).catch(() => {});
-                }
-            }
-
-            return text || null;
-        } catch (e) {
-            log.warn(`⚠ MetaObserver error: ${e instanceof Error ? e.message : e}`);
-            return null;
-        }
     }
 
     /** UI Mod の /task エンドポイントにタスクツリーを直接送信 */
