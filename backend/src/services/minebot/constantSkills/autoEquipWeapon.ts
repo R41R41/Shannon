@@ -36,6 +36,8 @@ class AutoEquipWeapon extends ConstantSkill {
     }
 
     async runImpl() {
+        // #13 fix: CombatController が自分で装備するので干渉しない
+        if (this.bot.executingSkill) return;
         // 近くの敵を検知
         const nearbyHostiles = Object.values(this.bot.entities).filter(entity => {
             if (!entity || !entity.position || !entity.isValid) return false;

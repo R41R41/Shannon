@@ -18,6 +18,9 @@ class AutoRunFromHostiles extends ConstantSkill {
   }
 
   async runImpl() {
+    // #12 fix: CombatController 実行中は干渉しない
+    if (this.bot.executingSkill) return;
+
     const hostiles = Object.values(this.bot.entities).filter(
       (entity) =>
         entity.type === 'hostile' &&

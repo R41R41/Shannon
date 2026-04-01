@@ -68,7 +68,7 @@ export class CombatController {
                 log.info(`💀 ${entity.name ?? 'unknown'} を倒した (累計: ${this.kills})`);
             }
         };
-        this.bot.on('entityDead' as any, onEntityDead);
+        (this.bot as any).on('entityDead', onEntityDead);
 
         log.warn(`⚔️ 戦闘開始${targetName ? ` (target: ${targetName})` : ''}`);
         await this.equipBestWeapon();
@@ -96,8 +96,20 @@ export class CombatController {
                 const actions = this.scorer.score(situation);
                 const best = actions[0];
 
-                // 3. 実行
-                const { attacked } = await this.executor.execute(best);
+                // 3. 実行 (#3 fix: アクションタイムアウト 2秒)
+                let attacked = false;
+                try {
+                    const result = await Promise.race([
+                        this.executor.execute(best),
+                        new Promise<{ attacked: boolean }>((_, reject) =>
+                            setTimeout(() => reject(new Error('action timeout')), 2000)
+                        ),
+                    ]);
+                    attacked = result.attacked;
+                } catch {
+                    log.warn(`⚠ アクション "${best.type}" がタイムアウト`);
+                    this.executor.cleanup();
+                }
                 this.actionsExecuted++;
 
                 if (attacked) this.lastAttackTime = Date.now();
@@ -130,7 +142,7 @@ export class CombatController {
 
         } finally {
             this.running = false;
-            this.bot.removeListener('entityDead' as any, onEntityDead);
+            (this.bot as any).removeListener('entityDead', onEntityDead);
             this.executor.cleanup();
         }
     }

@@ -289,7 +289,11 @@ export class ShannonExecutor {
                     else if (toolName === 'search-skills') {
                         const query = ((toolInput.query as string) || '').toLowerCase();
                         const results: string[] = [];
-                        if (this.deps.instantSkills) {
+                        // #2 fix: non-MC チャネルでもルーチンは検索可能
+                        if (!this.deps.instantSkills && !this.deps.routineManager) {
+                            resultText = 'search-skills: このチャネルではスキル検索は利用できません';
+                            // ステップ履歴更新等は下に続く
+                        } else if (this.deps.instantSkills) {
                             for (const skill of this.deps.instantSkills.getSkills()) {
                                 if (skill.skillName.includes(query) || skill.description.toLowerCase().includes(query)) {
                                     const params = skill.params.map((p: any) =>

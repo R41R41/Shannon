@@ -2,6 +2,7 @@
  * ActionExecutor — スコアリング結果の行動を実行
  */
 
+import { Vec3 } from 'vec3';
 import { createLogger } from '../../../utils/logger.js';
 import type { CustomBot } from '../types/CustomBot.js';
 import type { ScoredAction, CombatConfig } from './types.js';
@@ -181,7 +182,7 @@ export class ActionExecutor {
                 const len = Math.sqrt(dx * dx + dz * dz) || 1;
 
                 // 敵の反対方向を向く
-                await this.bot.lookAt(botPos.offset(dx / len * 10, 0, dz / len * 10));
+                await this.bot.lookAt(botPos.offset(dx / len * 10, 0, dz / len * 10), true);
                 this.bot.setControlState('forward', true);
                 this.bot.setControlState('sprint', true);
                 await new Promise(r => setTimeout(r, 800));
@@ -227,8 +228,6 @@ export class ActionExecutor {
             const below = this.bot.blockAt(pos.offset(0, -1, 0));
             if (below) {
                 try {
-                    // placeBlock(referenceBlock, faceVector)
-                    const { Vec3 } = await import('vec3');
                     await this.bot.placeBlock(below, new Vec3(0, 1, 0));
                 } catch {
                     // 設置失敗は無視 (既にブロックがある等)
@@ -265,7 +264,15 @@ export class ActionExecutor {
             if (food) {
                 await this.bot.equip(food, 'hand');
                 this.bot.activateItem(false);
-                await new Promise(r => setTimeout(r, 1650)); // #9: Minecraft eat = 1610ms + buffer
+                // #6 fix: 中断可能な食事ループ
+                const eatStart = Date.now();
+                while (Date.now() - eatStart < 1650) {
+                    if (this.bot.interruptExecution) {
+                        this.bot.deactivateItem();
+                        return;
+                    }
+                    await new Promise(r => setTimeout(r, 50));
+                }
                 this.bot.deactivateItem();
             }
         } catch (e) {

@@ -252,75 +252,17 @@ function createExecuteNode(
           trace: [`node:execute:shannon:${result.toolCallCount}tools/${result.durationMs}ms`],
         };
       } catch (e) {
-        logger.warn(`⚠ ShannonExecutor failed, falling back to FCA: ${e}`);
+        logger.error(`❌ ShannonExecutor failed: ${e}`);
+        return {
+          finalAnswer: `エラーが発生しました: ${e instanceof Error ? e.message : String(e)}`,
+          trace: ["node:execute:error"],
+        };
       }
     }
 
-    // ═══ FCA/ParallelExecutor フォールバック ═══
-    const fcaState = {
-      taskId: envelope.requestId,
-      userMessage: envelope.text ?? null,
-      messages: state._legacyMessages,
-      emotionState,
-      memoryState: undefined as undefined,
-      context,
-      channelId: envelope.discord?.channelId ?? envelope.conversationId,
-      environmentState: (envelope.metadata?.environmentState as string) ?? null,
-      isEmergency: envelope.tags.includes('emergency'),
-      memoryPrompt: state.memoryPrompt || undefined,
-      relationshipPrompt: state.relationshipPrompt,
-      selfModelPrompt: state.selfModelPrompt,
-      strategyPrompt: state.strategyPrompt,
-      internalStatePrompt: state.internalStatePrompt,
-      worldModelPrompt: state.worldModelPrompt,
-      onToolStarting: state._onToolStarting,
-      onTaskTreeUpdate: state._onTaskTreeUpdate,
-      onRequestSkillInterrupt: state._onRequestSkillInterrupt,
-      getLiveInventory: state._getLiveInventory,
-      getActiveEffects: state._getActiveEffects,
-      selectedModel: state.selectedModel,
-      classifyMode: state.mode,
-      needsTools: state.needsTools,
-      needsPlanning: state.needsPlanning,
-      onToolsExecuted: (messages: BaseMessage[], results: ExecutionResult[]) => {
-        if (emotionNode) {
-          emotionNode
-            .evaluateAsync(messages, results, emotionState.current)
-            .then((e) => { emotionState.current = e; })
-            .catch(() => {});
-        }
-      },
-    };
-
-    if (parallelExecutor) {
-      // 3並列プロセス: EmotionLoop + MetaCognitionLoop + TaskExecutionLoop
-      const result = await parallelExecutor.run(fcaState, state._abortSignal);
-      return {
-        finalAnswer: result.lastAssistantContent ?? result.taskTree?.strategy ?? undefined,
-        taskTree: result.taskTree ?? undefined,
-        emotion: result.finalEmotion ?? emotionState.current ?? undefined,
-        trace: ['node:execute:parallel'],
-      };
-    }
-
-    // フォールバック: FCA 単体実行
-    const startTime = Date.now();
-    const agentResult = await fca.run(fcaState);
-
-    // エピソード記憶の保存（fire-and-forget）
-    try {
-      const platform = context?.platform ?? 'unknown';
-      const goal = envelope.text ?? '';
-      const episode = TaskEpisodeMemory.buildEpisodeFromResult(
-        goal, platform, agentResult.taskTree, startTime, 0,
-      );
-      TaskEpisodeMemory.getInstance().saveEpisode(episode).catch(() => {});
-    } catch { }
-
     return {
-      finalAnswer: agentResult.lastAssistantContent ?? agentResult.taskTree?.strategy ?? undefined,
-      taskTree: agentResult.taskTree ?? undefined,
-      trace: ['node:execute'],
+      finalAnswer: "Anthropic API key が設定されていません",
+      trace: ["node:execute:no_api_key"],
     };
   };
 }

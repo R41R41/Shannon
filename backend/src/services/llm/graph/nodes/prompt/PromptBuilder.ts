@@ -325,7 +325,7 @@ ${this.formatRoutineGuidance()}${this.formatDimensionRules(context)}${this.forma
             const rate = r.stats.runs > 0
                 ? ` [${Math.round((r.stats.successes / r.stats.runs) * 100)}% success]`
                 : '';
-            return `  - routine:${r.name} — ${r.description} (${r.steps.length} steps${rate})`;
+            return `  - routine-${r.name} — ${r.description} (${r.steps.length} steps${rate})`;
         });
 
         return `
