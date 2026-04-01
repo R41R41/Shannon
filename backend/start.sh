@@ -34,44 +34,26 @@ mkdir -p "$PID_DIR"
 PID_FILE="$PID_DIR/${BACKEND_SESSION}.pid"
 
 if [ "$IS_WINDOWS" = true ]; then
-    echo "Cleaning up previous sessions..."
-    taskkill //F //FI "WINDOWTITLE eq $BACKEND_SESSION" 2>/dev/null
-    # dev session 名でも試す
-    taskkill //F //FI "WINDOWTITLE eq shannon-backend-prod-dev" 2>/dev/null
-    taskkill //F //FI "WINDOWTITLE eq shannon-backend-dev" 2>/dev/null
-
-    # PID ファイルから前回のプロセスツリーを確実に殺す
+    echo "Cleaning up previous backend..."
+    # 1. PID ファイルの Windows PID でプロセスツリーを殺す
     if [ -f "$PID_FILE" ]; then
         OLD_PID=$(cat "$PID_FILE")
         if [ -n "$OLD_PID" ] && [ "$OLD_PID" != "0" ]; then
-            echo "Killing previous backend process tree (PID: $OLD_PID)..."
-            # プロセスツリーごと殺す（子プロセス = tsc --watch, nodemon 等）
+            echo "Killing previous backend mintty (Windows PID: $OLD_PID)..."
             taskkill //F //PID "$OLD_PID" //T 2>/dev/null
         fi
         rm -f "$PID_FILE"
     fi
-
-    # Shannon が使うポートを占有している node プロセスを全て殺す
-    for check_port in "$PORT" "$MINEBOT_PORT" "${WS_PORTS[@]}"; do
-        port_pids=$(netstat -ano 2>/dev/null | grep ":${check_port} " | grep "LISTENING" | awk '{print $5}' | sort -u)
-        for pid in $port_pids; do
-            if [ -n "$pid" ] && [ "$pid" != "0" ]; then
-                echo "Killing process on port ${check_port} (PID: ${pid})"
-                taskkill //F //PID "$pid" //T 2>/dev/null
-            fi
-        done
-    done
-    sleep 2
-
-    # 念のため Shannon 関連の残留 node プロセスを PID ファイル群から掃除
-    for pid_file in "$PID_DIR"/*.pid; do
-        [ -f "$pid_file" ] || continue
-        OLD_PID=$(cat "$pid_file")
+    # shell pid も殺す
+    SHELL_PID_FILE="$PID_DIR/${BACKEND_SESSION}-shell.pid"
+    if [ -f "$SHELL_PID_FILE" ]; then
+        OLD_PID=$(cat "$SHELL_PID_FILE")
         if [ -n "$OLD_PID" ] && [ "$OLD_PID" != "0" ]; then
             taskkill //F //PID "$OLD_PID" //T 2>/dev/null
         fi
-        rm -f "$pid_file"
-    done
+        rm -f "$SHELL_PID_FILE"
+    fi
+    sleep 2
 else
     tmux kill-session -t "$BACKEND_SESSION" 2>/dev/null
 fi
