@@ -165,9 +165,10 @@ export class ShannonExecutor {
             const usage = response.usage as any;
             if (usage) {
                 const cached = usage.cache_read_input_tokens ?? 0;
-                const total = usage.input_tokens ?? 0;
-                const cacheRate = total > 0 ? Math.round((cached / total) * 100) : 0;
-                log.info(`  📊 tokens: in=${total} (cached=${cached}, ${cacheRate}%), out=${usage.output_tokens ?? 0}`, 'cyan');
+                const newInput = usage.input_tokens ?? 0;
+                const totalInput = cached + newInput;
+                const cacheRate = totalInput > 0 ? Math.round((cached / totalInput) * 100) : 0;
+                log.info(`  📊 tokens: in=${newInput}+cached=${cached} (${cacheRate}%), out=${usage.output_tokens ?? 0}`, 'cyan');
             }
 
             // アシスタント応答を記録

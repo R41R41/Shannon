@@ -758,6 +758,7 @@ export class MinebotTaskRuntime {
         environmentState: input.environmentState,
         selfState: input.selfState,
         taskOrigin: 'minebot-runtime',
+        bot: this.bot,
       },
     });
   }
