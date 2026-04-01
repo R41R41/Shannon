@@ -145,16 +145,22 @@ LAUNCH_EOF
         echo "exec node $NODE_OPTS dist/server.js" >> "$LAUNCH_SCRIPT"
     fi
     chmod +x "$LAUNCH_SCRIPT"
-    # mintty 起動前の PID リストを取得
-    BEFORE_PIDS=$(tasklist //FI "IMAGENAME eq mintty.exe" //FO CSV //NH 2>/dev/null | cut -d',' -f2 | tr -d '"' | sort)
+    # mintty 起動前の PID を記録
+    BEFORE_PIDS=$(tasklist //FI "IMAGENAME eq mintty.exe" //FO CSV //NH 2>/dev/null | cut -d',' -f2 | tr -d '"' | tr -d ' ')
     mintty --hold error --title "$BACKEND_SESSION" /bin/bash -l "$LAUNCH_SCRIPT" &
-    sleep 1
-    # 起動後の PID リストと比較して新しい mintty の Windows PID を特定
-    AFTER_PIDS=$(tasklist //FI "IMAGENAME eq mintty.exe" //FO CSV //NH 2>/dev/null | cut -d',' -f2 | tr -d '"' | sort)
-    MINTTY_WIN_PID=$(comm -13 <(echo "$BEFORE_PIDS") <(echo "$AFTER_PIDS") | head -1)
+    sleep 2
+    # 起動後の PID と比較して新しい mintty を特定
+    AFTER_PIDS=$(tasklist //FI "IMAGENAME eq mintty.exe" //FO CSV //NH 2>/dev/null | cut -d',' -f2 | tr -d '"' | tr -d ' ')
+    MINTTY_WIN_PID=""
+    for pid in $AFTER_PIDS; do
+        if ! echo "$BEFORE_PIDS" | grep -q "^${pid}$"; then
+            MINTTY_WIN_PID="$pid"
+            break
+        fi
+    done
     if [ -n "$MINTTY_WIN_PID" ]; then
         echo "$MINTTY_WIN_PID" > "$PID_FILE"
-        echo "Backend mintty Windows PID: $MINTTY_WIN_PID (saved to $PID_FILE)"
+        echo "Backend mintty Windows PID: $MINTTY_WIN_PID"
     else
         echo "Warning: Could not detect backend mintty PID"
     fi

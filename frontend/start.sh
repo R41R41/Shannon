@@ -91,14 +91,20 @@ exec npm run dev
 LAUNCH_EOF
     fi
     chmod +x "$LAUNCH_SCRIPT"
-    BEFORE_PIDS=$(tasklist //FI "IMAGENAME eq mintty.exe" //FO CSV //NH 2>/dev/null | cut -d',' -f2 | tr -d '"' | sort)
+    BEFORE_PIDS=$(tasklist //FI "IMAGENAME eq mintty.exe" //FO CSV //NH 2>/dev/null | cut -d',' -f2 | tr -d '"' | tr -d ' ')
     mintty --hold error --title "$FRONTEND_SESSION" /bin/bash -l "$LAUNCH_SCRIPT" &
-    sleep 1
-    AFTER_PIDS=$(tasklist //FI "IMAGENAME eq mintty.exe" //FO CSV //NH 2>/dev/null | cut -d',' -f2 | tr -d '"' | sort)
-    MINTTY_WIN_PID=$(comm -13 <(echo "$BEFORE_PIDS") <(echo "$AFTER_PIDS") | head -1)
+    sleep 2
+    AFTER_PIDS=$(tasklist //FI "IMAGENAME eq mintty.exe" //FO CSV //NH 2>/dev/null | cut -d',' -f2 | tr -d '"' | tr -d ' ')
+    MINTTY_WIN_PID=""
+    for pid in $AFTER_PIDS; do
+        if ! echo "$BEFORE_PIDS" | grep -q "^${pid}$"; then
+            MINTTY_WIN_PID="$pid"
+            break
+        fi
+    done
     if [ -n "$MINTTY_WIN_PID" ]; then
         echo "$MINTTY_WIN_PID" > "$PID_FILE"
-        echo "Frontend mintty Windows PID: $MINTTY_WIN_PID (saved to $PID_FILE)"
+        echo "Frontend mintty Windows PID: $MINTTY_WIN_PID"
     fi
 else
     if [ "$IS_DEV" = true ]; then
