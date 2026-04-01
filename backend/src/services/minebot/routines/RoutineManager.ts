@@ -152,8 +152,11 @@ export class RoutineManager {
         if (!def.description || typeof def.description !== 'string') {
             throw new Error('Routine description is required');
         }
-        if (!Array.isArray(def.steps) || def.steps.length === 0) {
-            throw new Error('Routine must have at least one step');
+        // instruction (サブエージェント) か steps (コードベース) のいずれかが必要
+        const hasInstruction = def.instruction && typeof def.instruction === 'string' && def.instruction.length > 0;
+        const hasSteps = Array.isArray(def.steps) && def.steps.length > 0;
+        if (!hasInstruction && !hasSteps) {
+            throw new Error('Routine must have instruction or at least one step');
         }
         if (!Array.isArray(def.params)) {
             throw new Error('Routine params must be an array');
