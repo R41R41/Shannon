@@ -143,11 +143,14 @@ export class ShannonExecutor {
             try {
                 // Prompt caching: system prompt + tools を cache_control でキャッシュ
                 // 2回目以降のイテレーションで入力コスト90%削減
-                const cachedTools = state.tools.map((t, i) =>
-                    i === state.tools.length - 1
-                        ? { ...t, cache_control: { type: 'ephemeral' as const } }
-                        : t,
-                );
+                const toolsArray = state.tools ?? [];
+                const cachedTools = toolsArray.length > 0
+                    ? toolsArray.map((t, i) =>
+                        i === toolsArray.length - 1
+                            ? { ...t, cache_control: { type: 'ephemeral' as const } }
+                            : t,
+                      )
+                    : [];
 
                 const stream = this.client.messages.stream({
                     model,

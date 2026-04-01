@@ -253,7 +253,7 @@ function createExecuteNode(
           trace: [`node:execute:shannon:${result.toolCallCount}tools/${result.durationMs}ms`],
         };
       } catch (e) {
-        logger.error(`❌ ShannonExecutor failed: ${e}`);
+        logger.error(`❌ ShannonExecutor failed: ${e}`, e);
         return {
           finalAnswer: `エラーが発生しました: ${e instanceof Error ? e.message : String(e)}`,
           trace: ["node:execute:error"],
