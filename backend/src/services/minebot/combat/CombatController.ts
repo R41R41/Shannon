@@ -3,9 +3,6 @@
  *
  * 200ms 周期で状況をスキャンし、最善の行動をスコアリングして実行する。
  * LLM を使わず、ルールベースで瞬時に判断。
- *
- * 将来的に Haiku による戦略アドバイス (1秒周期) で
- * スコアリング重みを動的に調整する拡張が可能。
  */
 
 import { createLogger } from '../../../utils/logger.js';
@@ -50,10 +47,6 @@ export class CombatController {
         this.executor = new ActionExecutor(bot, this.config);
     }
 
-    /**
-     * 戦闘開始。敵がいなくなるか、HP 危険で逃走成功するか、
-     * タイムアウトまで自律制御する。
-     */
     async engage(targetName?: string): Promise<CombatResult> {
         if (this.running) {
             return { success: false, reason: '既に戦闘中', kills: 0, damageTaken: 0, durationMs: 0, actionsExecuted: 0 };
@@ -67,16 +60,23 @@ export class CombatController {
         this.isBlocking = false;
 
         const startTime = Date.now();
-        const knownEntities = new Set<number>();
+
+        // #2 fix: entityDead イベントで正確に kill 数を追跡
+        const onEntityDead = (entity: any) => {
+            if (entity && entity.type === 'hostile') {
+                this.kills++;
+                log.info(`💀 ${entity.name ?? 'unknown'} を倒した (累計: ${this.kills})`);
+            }
+        };
+        this.bot.on('entityDead' as any, onEntityDead);
 
         log.warn(`⚔️ 戦闘開始${targetName ? ` (target: ${targetName})` : ''}`);
-
-        // 最強武器を自動装備
         await this.equipBestWeapon();
 
         try {
             while (this.running && (Date.now() - startTime) < this.config.maxDurationMs) {
-                // 中断チェック
+                const tickStart = Date.now();
+
                 if (this.bot.interruptExecution) {
                     log.info('⚡ 戦闘中断: interruptExecution');
                     break;
@@ -84,17 +84,6 @@ export class CombatController {
 
                 // 1. 状況スキャン
                 const situation = this.scanner.scan(this.lastAttackTime, this.isBlocking);
-
-                // 敵トラッキング (死亡検知)
-                for (const h of situation.hostiles) {
-                    knownEntities.add(h.entity.id);
-                }
-                for (const id of knownEntities) {
-                    if (!this.bot.entities[id] || !this.bot.entities[id].isValid) {
-                        this.kills++;
-                        knownEntities.delete(id);
-                    }
-                }
 
                 // 敵がいない → 戦闘終了
                 if (situation.hostiles.length === 0) {
@@ -111,9 +100,7 @@ export class CombatController {
                 const { attacked } = await this.executor.execute(best);
                 this.actionsExecuted++;
 
-                if (attacked) {
-                    this.lastAttackTime = Date.now();
-                }
+                if (attacked) this.lastAttackTime = Date.now();
 
                 // ブロッキング状態追跡
                 if (best.type === 'shield-block') this.isBlocking = true;
@@ -124,29 +111,36 @@ export class CombatController {
                 // 逃走成功判定
                 if (best.type === 'flee' && situation.nearestHostile &&
                     situation.nearestHostile.distance > 16) {
-                    log.info(`🏃 逃走成功 (最寄り敵: ${situation.nearestHostile.distance.toFixed(1)}m)`);
+                    log.info(`🏃 逃走成功 (${situation.nearestHostile.distance.toFixed(1)}m)`);
                     this.executor.cleanup();
                     return this.buildResult(true, '逃走成功', startTime);
                 }
 
-                // tick 間隔
-                await new Promise(r => setTimeout(r, this.config.tickIntervalMs));
+                // #1 fix: tick タイミング補正 — 実行時間を差し引く
+                const elapsed = Date.now() - tickStart;
+                const sleepMs = Math.max(0, this.config.tickIntervalMs - elapsed);
+                if (sleepMs > 0) {
+                    await new Promise(r => setTimeout(r, sleepMs));
+                }
             }
 
-            // タイムアウト
             log.warn(`⏰ 戦闘タイムアウト (${this.config.maxDurationMs / 1000}秒)`);
             this.executor.cleanup();
             return this.buildResult(false, 'タイムアウト', startTime);
 
         } finally {
             this.running = false;
+            this.bot.removeListener('entityDead' as any, onEntityDead);
             this.executor.cleanup();
         }
     }
 
-    /** 戦闘を外部から停止 */
     disengage(): void {
         this.running = false;
+    }
+
+    get isRunning(): boolean {
+        return this.running;
     }
 
     private async equipBestWeapon(): Promise<void> {

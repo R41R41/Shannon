@@ -10,14 +10,39 @@ import { getMobProfile, isHostileMob } from './MobProfiles.js';
 import type { SituationVector, HostileInfo, CombatConfig } from './types.js';
 import { DEFAULT_COMBAT_CONFIG } from './types.js';
 
-// 武器のダメージテーブル
-const WEAPON_DAMAGE: Record<string, number> = {
-    netherite_sword: 8, diamond_sword: 7, iron_sword: 6, stone_sword: 5, golden_sword: 4, wooden_sword: 4,
-    netherite_axe: 10, diamond_axe: 9, iron_axe: 9, stone_axe: 9, golden_axe: 7, wooden_axe: 7,
-    trident: 9,
+// 武器のダメージ + クールダウンテーブル
+const WEAPON_STATS: Record<string, { damage: number; cooldownMs: number }> = {
+    netherite_sword: { damage: 8, cooldownMs: 625 },
+    diamond_sword:   { damage: 7, cooldownMs: 625 },
+    iron_sword:      { damage: 6, cooldownMs: 625 },
+    stone_sword:     { damage: 5, cooldownMs: 625 },
+    golden_sword:    { damage: 4, cooldownMs: 625 },
+    wooden_sword:    { damage: 4, cooldownMs: 625 },
+    // #23 fix: 斧は攻撃力が高いがクールダウンが長い
+    netherite_axe:   { damage: 10, cooldownMs: 1000 },
+    diamond_axe:     { damage: 9,  cooldownMs: 1000 },
+    iron_axe:        { damage: 9,  cooldownMs: 1100 },
+    stone_axe:       { damage: 9,  cooldownMs: 1250 },
+    golden_axe:      { damage: 7,  cooldownMs: 1000 },
+    wooden_axe:      { damage: 7,  cooldownMs: 1250 },
+    trident:         { damage: 9,  cooldownMs: 1100 },
+    // ツルハシ等 (緊急時に使うかもしれない)
+    netherite_pickaxe: { damage: 6, cooldownMs: 1200 },
+    diamond_pickaxe:   { damage: 5, cooldownMs: 1200 },
+    iron_pickaxe:      { damage: 4, cooldownMs: 1200 },
+    stone_pickaxe:     { damage: 3, cooldownMs: 1200 },
 };
 
-const WEAPON_NAMES = new Set(Object.keys(WEAPON_DAMAGE));
+const WEAPON_NAMES = new Set(Object.keys(WEAPON_STATS));
+
+// #17 fix: 実際に足元に積めるブロック名
+const PLACEABLE_BLOCKS = new Set([
+    'cobblestone', 'dirt', 'stone', 'deepslate', 'netherrack',
+    'sandstone', 'andesite', 'diorite', 'granite', 'tuff',
+    'oak_planks', 'spruce_planks', 'birch_planks', 'jungle_planks',
+    'acacia_planks', 'dark_oak_planks', 'cherry_planks', 'mangrove_planks',
+    'cobbled_deepslate', 'end_stone', 'sand', 'gravel',
+]);
 
 export class SituationScanner {
     constructor(
@@ -33,7 +58,8 @@ export class SituationScanner {
         // 自分の装備
         const heldItem = this.bot.heldItem;
         const hasWeapon = heldItem ? WEAPON_NAMES.has(heldItem.name) : false;
-        const weaponDamage = heldItem ? (WEAPON_DAMAGE[heldItem.name] ?? 1) : 1;
+        const weaponStats = heldItem ? WEAPON_STATS[heldItem.name] : null;
+        const weaponDamage = weaponStats?.damage ?? 1;
 
         // 盾
         const offHand = this.bot.inventory.slots[this.bot.getEquipmentDestSlot('off-hand')];
@@ -48,7 +74,7 @@ export class SituationScanner {
 
         // ブロック数 (足元に積める)
         const blockCount = this.bot.inventory.items()
-            .filter(i => i.name.includes('cobblestone') || i.name.includes('dirt') || i.name.includes('planks') || i.name.includes('stone'))
+            .filter(i => PLACEABLE_BLOCKS.has(i.name))
             .reduce((sum, i) => sum + i.count, 0);
 
         // 防御力 (簡易計算)
@@ -62,9 +88,10 @@ export class SituationScanner {
         );
         const inWater = this.bot.entity.isInWater;
 
-        // 攻撃クールダウン
+        // #23 fix: 武器種別でクールダウンを変える
         const now = Date.now();
-        const attackCooldownReady = (now - lastAttackTime) >= this.config.attackCooldownMs;
+        const cooldownMs = weaponStats?.cooldownMs ?? this.config.attackCooldownMs;
+        const attackCooldownReady = (now - lastAttackTime) >= cooldownMs;
 
         return {
             hp: this.bot.health,

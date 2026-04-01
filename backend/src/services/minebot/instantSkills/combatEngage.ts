@@ -41,6 +41,15 @@ class CombatEngage extends InstantSkill {
     }
 
     async runImpl(target?: string, maxDuration: number = 60): Promise<{ success: boolean; result: string }> {
+        // #20 fix: 敵がいるか事前チェック
+        const hasHostiles = Object.values(this.bot.entities).some(e =>
+            e && e.position && e.type === 'hostile' &&
+            this.bot.entity.position.distanceTo(e.position) <= 16
+        );
+        if (!hasHostiles) {
+            return { success: false, result: '16ブロック以内に敵モブがいません' };
+        }
+
         const controller = new CombatController(this.bot, {
             maxDurationMs: maxDuration * 1000,
         });

@@ -45,6 +45,8 @@ class AutoCombatAssess extends ConstantSkill {
     }
 
     async runImpl() {
+        // #19 fix: CombatController (combat-engage) が実行中なら干渉しない
+        if (this.bot.executingSkill) return;
         // クールダウン中はスキップ
         if (Date.now() - this.lastFleeTime < this.FLEE_COOLDOWN_MS) return;
 
