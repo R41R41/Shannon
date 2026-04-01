@@ -34,6 +34,9 @@ mkdir -p "$PID_DIR"
 PID_FILE="$PID_DIR/${BACKEND_SESSION}.pid"
 
 if [ "$IS_WINDOWS" = true ]; then
+    echo "Cleaning up previous sessions..."
+    # Shannon 関連の mintty ウィンドウを全て殺す (backend + frontend)
+    taskkill //F //FI "WINDOWTITLE eq shannon-*" 2>/dev/null
     taskkill //F //FI "WINDOWTITLE eq $BACKEND_SESSION" 2>/dev/null
 
     # PID ファイルから前回のプロセスツリーを確実に殺す
