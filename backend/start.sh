@@ -152,7 +152,7 @@ LAUNCH_EOF
         echo "npx tsc --watch --skipLibCheck --preserveWatchOutput &" >> "$LAUNCH_SCRIPT"
         echo "TSC_PID=\$!" >> "$LAUNCH_SCRIPT"
         echo "sleep 3" >> "$LAUNCH_SCRIPT"
-        echo "npx nodemon --watch dist --ext js --delay 2 --exec 'node $NODE_OPTS dist/server.js --dev' &" >> "$LAUNCH_SCRIPT"
+        echo "npx nodemon --watch dist --ext js --delay 3 --signal SIGKILL --exec 'node $NODE_OPTS dist/server.js --dev' &" >> "$LAUNCH_SCRIPT"
         echo "NODEMON_PID=\$!" >> "$LAUNCH_SCRIPT"
         echo "wait" >> "$LAUNCH_SCRIPT"
     else
