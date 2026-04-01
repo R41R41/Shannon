@@ -21,7 +21,7 @@ if [ "$1" = "--dev" ]; then
     PORT=15000
     WS_PORTS=(15010 15011 15013 15018 15019 15020 15016 15017)
     MINEBOT_PORT=18092
-    BACKEND_SESSION="shannon-backend-dev"
+    BACKEND_SESSION="shannon-backend-prod-dev"
     echo "Starting in dev mode..."
     echo "Starting backend in dev mode on port $PORT (WS: ${WS_PORTS[*]}, Minebot: $MINEBOT_PORT)..."
 else
@@ -35,9 +35,10 @@ PID_FILE="$PID_DIR/${BACKEND_SESSION}.pid"
 
 if [ "$IS_WINDOWS" = true ]; then
     echo "Cleaning up previous sessions..."
-    # Shannon 関連の mintty ウィンドウを全て殺す (backend + frontend)
-    taskkill //F //FI "WINDOWTITLE eq shannon-*" 2>/dev/null
     taskkill //F //FI "WINDOWTITLE eq $BACKEND_SESSION" 2>/dev/null
+    # dev session 名でも試す
+    taskkill //F //FI "WINDOWTITLE eq shannon-backend-prod-dev" 2>/dev/null
+    taskkill //F //FI "WINDOWTITLE eq shannon-backend-dev" 2>/dev/null
 
     # PID ファイルから前回のプロセスツリーを確実に殺す
     if [ -f "$PID_FILE" ]; then
