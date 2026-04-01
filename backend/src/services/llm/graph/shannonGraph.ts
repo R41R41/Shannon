@@ -239,6 +239,7 @@ function createExecuteNode(
           context,
           systemPrompt,
           tools,
+          tags: envelope.tags,
           onToolStarting: state._onToolStarting,
           onTaskTreeUpdate: state._onTaskTreeUpdate,
           abortSignal: state._abortSignal,

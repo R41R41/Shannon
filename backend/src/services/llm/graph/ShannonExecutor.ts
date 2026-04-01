@@ -42,6 +42,8 @@ export interface ShannonExecutorState {
     onToolStarting?: (toolName: string, args?: Record<string, unknown>) => void;
     onTaskTreeUpdate?: (taskTree: TaskTreeState) => void;
     abortSignal?: AbortSignal;
+    /** envelope のタグ (emergency 等) */
+    tags?: string[];
     /** タスク実行中のユーザーフィードバックを取得するコールバック */
     getHumanFeedback?: () => string | null;
 }
@@ -64,7 +66,10 @@ const MAX_ITERATIONS = 25;
 const MAX_CONSECUTIVE_TEXT = 3;
 
 /** 軽量タスク判定: Haiku で十分なタスクか */
-function isLightweightTask(goal: string): boolean {
+function isLightweightTask(goal: string, tags?: string[]): boolean {
+    // 緊急タスク → Haiku (「逃げろ」「食べろ」程度、Sonnet の精度は不要)
+    if (tags?.includes('emergency')) return true;
+
     const g = goal.toLowerCase();
     // 挨拶・雑談・質問系
     if (g.length < 30 && /こんにち|おはよ|こんばん|やあ|ねえ|hello|hi\b/.test(g)) return true;
@@ -111,7 +116,7 @@ export class ShannonExecutor {
         const stepHistory: Array<{ id: string; goal: string; status: string; result: string | null }> = [];
 
         // 軽量タスクは Haiku、それ以外は Sonnet
-        const model = isLightweightTask(state.goal) ? MODEL_HAIKU : MODEL_SONNET;
+        const model = isLightweightTask(state.goal, state.tags) ? MODEL_HAIKU : MODEL_SONNET;
         log.info(`▶ ShannonExecutor: "${state.goal.slice(0, 60)}..." (model=${model}, taskTreeCb=${!!state.onTaskTreeUpdate})`, 'cyan');
 
         for (let iter = 0; iter < MAX_ITERATIONS && !taskCompleted; iter++) {
