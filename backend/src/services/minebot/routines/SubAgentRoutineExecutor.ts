@@ -1,0 +1,218 @@
+/**
+ * SubAgentRoutineExecutor — ルーチンを Haiku サブエージェントで実行
+ *
+ * RoutineDefinition の instruction (手順書) を独立した Haiku セッションで実行する。
+ * メインループ (Sonnet) のコンテキストを汚さず、サブエージェントが自律的に
+ * スキルを呼んでタスクを完了する。
+ *
+ * Claude Code のサブエージェント (Agent tool) と同じパターン。
+ */
+
+import Anthropic from '@anthropic-ai/sdk';
+import { config } from '../../../config/env.js';
+import { createLogger } from '../../../utils/logger.js';
+import type { CustomBot } from '../types/CustomBot.js';
+import type { RoutineDefinition, RoutineExecutionResult } from './types.js';
+import { skillToAnthropicTool } from '../../llm/graph/ShannonExecutor.js';
+
+const log = createLogger('Minebot:SubAgent');
+
+const MODEL_HAIKU = 'claude-haiku-4-5-20251001';
+const MODEL_SONNET = process.env.SHANNON_MODEL || 'claude-sonnet-4-20250514';
+
+type MessageParam = Anthropic.MessageParam;
+type Tool = Anthropic.Tool;
+type ToolResultBlockParam = Anthropic.ToolResultBlockParam;
+
+export class SubAgentRoutineExecutor {
+    private client: Anthropic;
+
+    constructor() {
+        this.client = new Anthropic({
+            apiKey: config.anthropic.apiKey || undefined,
+        });
+    }
+
+    async execute(
+        routine: RoutineDefinition,
+        params: Record<string, unknown>,
+        options: { abortSignal?: AbortSignal; bot: CustomBot },
+    ): Promise<RoutineExecutionResult> {
+        const startTime = Date.now();
+        const model = routine.model === 'sonnet' ? MODEL_SONNET : MODEL_HAIKU;
+        const maxIter = routine.maxIterations ?? 15;
+
+        // 手順書のテンプレート変数を解決
+        let instruction = routine.instruction ?? routine.description;
+        for (const [key, value] of Object.entries(params)) {
+            instruction = instruction.replace(new RegExp(`\\$\\{${key}\\}`, 'g'), String(value));
+        }
+
+        // ツール定義を構築
+        const tools = this.buildTools(routine, options.bot);
+
+        const systemPrompt = `あなたは Minecraft ボット「シャノン」のサブエージェントです。
+以下の手順に従ってタスクを実行し、完了したら task-complete を呼んでください。
+
+## 手順
+${instruction}
+
+## ルール
+- ツールの結果をよく見て、状況に応じて柔軟に判断する
+- 同じ失敗を2回繰り返さない。別のアプローチに切り替える
+- 完了したら task-complete の summary に**具体的な成果**を書く（入手アイテム数等）
+- 失敗して続行不可能な場合も task-complete を呼び、失敗理由を summary に書く`;
+
+        const messages: MessageParam[] = [
+            { role: 'user', content: instruction },
+        ];
+
+        let lastContent: string | null = null;
+        let taskCompleted = false;
+        let toolCallCount = 0;
+
+        log.info(`▶ SubAgent "${routine.name}" start (model=${model}, maxIter=${maxIter})`, 'cyan');
+
+        for (let iter = 0; iter < maxIter && !taskCompleted; iter++) {
+            if (options.abortSignal?.aborted || options.bot.interruptExecution) {
+                log.warn(`⚠ SubAgent "${routine.name}" aborted`);
+                break;
+            }
+
+            let response: Anthropic.Message;
+            try {
+                const stream = this.client.messages.stream({
+                    model,
+                    max_tokens: 4096,
+                    system: [{ type: 'text' as const, text: systemPrompt, cache_control: { type: 'ephemeral' as const } }],
+                    tools: tools.length > 0 ? tools.map((t, i) =>
+                        i === tools.length - 1
+                            ? { ...t, cache_control: { type: 'ephemeral' as const } }
+                            : t
+                    ) as any : undefined,
+                    messages,
+                    temperature: 0.5,
+                });
+                response = await stream.finalMessage();
+            } catch (e) {
+                log.error(`❌ SubAgent API error: ${e instanceof Error ? e.message : e}`);
+                break;
+            }
+
+            const assistantContent = response.content;
+            messages.push({ role: 'assistant', content: assistantContent });
+
+            // テキスト
+            const textBlocks = assistantContent.filter(b => b.type === 'text');
+            if (textBlocks.length > 0) {
+                const text = textBlocks.map(b => (b as Anthropic.TextBlock).text).join('');
+                log.info(`  [SubAgent:${routine.name}] 💭 ${text.slice(0, 80)}`, 'cyan');
+            }
+
+            // ツール呼出
+            const toolUseBlocks = assistantContent.filter(
+                (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use',
+            );
+
+            if (toolUseBlocks.length === 0) continue;
+
+            toolCallCount += toolUseBlocks.length;
+            const toolResults: ToolResultBlockParam[] = [];
+
+            for (const toolUse of toolUseBlocks) {
+                const toolName = toolUse.name;
+                const toolInput = toolUse.input as Record<string, unknown>;
+
+                log.info(`  [SubAgent:${routine.name}] ▶ ${toolName}(${JSON.stringify(toolInput).slice(0, 60)})`, 'cyan');
+
+                let resultText: string;
+
+                try {
+                    if (toolName === 'task-complete') {
+                        const summary = (toolInput.summary as string) || '';
+                        resultText = `タスク完了: ${summary}`;
+                        lastContent = summary;
+                        taskCompleted = true;
+                    } else {
+                        // InstantSkill を直接呼出
+                        const skill = options.bot.instantSkills?.getSkill(toolName);
+                        if (skill) {
+                            const args = skill.params.map((p: any) => {
+                                const val = toolInput[p.name];
+                                if (val === undefined) return p.default;
+                                if (p.type === 'number') return Number(val);
+                                if (p.type === 'boolean') return val === true || val === 'true';
+                                return val;
+                            });
+                            const skillResult = await skill.run(...args);
+                            resultText = `結果: ${skillResult.success ? '成功' : '失敗'} 詳細: ${skillResult.result}`;
+                            if (skillResult.failureType) {
+                                resultText += ` [failure_type=${skillResult.failureType}]`;
+                            }
+                        } else {
+                            resultText = `不明なスキル: ${toolName}`;
+                        }
+                    }
+                } catch (e) {
+                    resultText = `エラー: ${e instanceof Error ? e.message : String(e)}`;
+                }
+
+                const truncated = resultText.length > 120 ? resultText.slice(0, 120) + '...' : resultText;
+                log.info(`  [SubAgent:${routine.name}] ✓ ${toolName}: ${truncated}`,
+                    resultText.includes('失敗') ? 'yellow' : 'green');
+
+                toolResults.push({
+                    type: 'tool_result',
+                    tool_use_id: toolUse.id,
+                    content: resultText,
+                });
+            }
+
+            messages.push({ role: 'user', content: toolResults });
+        }
+
+        const durationMs = Date.now() - startTime;
+
+        log.info(
+            `${taskCompleted ? '✔' : '⚠'} SubAgent "${routine.name}": ` +
+            `${taskCompleted ? '完了' : '未完了'} (${durationMs}ms, ${toolCallCount} tools)`,
+            taskCompleted ? 'green' : 'yellow',
+        );
+
+        return {
+            success: taskCompleted,
+            summary: lastContent ?? `SubAgent "${routine.name}" ${taskCompleted ? '完了' : '未完了 (max iterations)'}`,
+            stepsCompleted: toolCallCount,
+            stepsTotal: toolCallCount,
+            durationMs,
+            stepResults: [],
+        };
+    }
+
+    private buildTools(routine: RoutineDefinition, bot: CustomBot): Tool[] {
+        const tools: Tool[] = [];
+
+        // task-complete は必ず含む
+        tools.push({
+            name: 'task-complete',
+            description: 'タスク完了。summary に具体的な成果を書く。',
+            input_schema: {
+                type: 'object' as const,
+                properties: { summary: { type: 'string', description: '成果の要約' } },
+                required: ['summary'],
+            },
+        });
+
+        // routine.tools で指定されたスキルのみ
+        const allowedTools = routine.tools ? new Set(routine.tools) : null;
+
+        if (bot.instantSkills) {
+            for (const skill of bot.instantSkills.getSkills()) {
+                if (allowedTools && !allowedTools.has(skill.skillName)) continue;
+                tools.push(skillToAnthropicTool(skill));
+            }
+        }
+
+        return tools;
+    }
+}

@@ -1,53 +1,15 @@
 {
   "name": "find-and-mine-ore",
-  "description": "指定した鉱石を探して採掘し拾う。【前提: 石のツルハシ以上が必要。なければ先に routine-make-stone-tools を実行。鉄鉱石は木のツルハシでは掘れない】",
+  "description": "指定した鉱石を探して採掘する。【前提: 石のツルハシ以上が必要】",
   "params": [
-    {
-      "name": "oreName",
-      "type": "string",
-      "description": "鉱石名 (例: iron_ore, coal_ore, diamond_ore)",
-      "required": true
-    },
-    {
-      "name": "count",
-      "type": "number",
-      "description": "採掘個数",
-      "required": false,
-      "default": 3
-    },
-    {
-      "name": "searchRadius",
-      "type": "number",
-      "description": "探索半径",
-      "required": false,
-      "default": 48
-    }
+    { "name": "oreName", "type": "string", "description": "鉱石名 (iron_ore, coal_ore, diamond_ore 等)", "required": true },
+    { "name": "count", "type": "number", "description": "採掘個数", "required": false, "default": 3 }
   ],
-  "steps": [
-    {
-      "skill": "mine-block",
-      "args": {
-        "blockName": "${oreName}",
-        "count": "${count}",
-        "searchRadius": "${searchRadius}"
-      },
-      "onFailure": "abort"
-    },
-    {
-      "skill": "pickup-nearest-item",
-      "args": {
-        "itemName": "${oreName}",
-        "maxDistance": 8
-      },
-      "onFailure": "skip"
-    }
-  ],
+  "instruction": "1. check-inventory-item でツルハシを確認。stone_pickaxe 以上がなければ失敗を報告。2. find-blocks(${oreName}, maxDistance:48) で鉱石を検索。3. 見つかったら move-to で近づき dig-block-at で採掘。4. pickup-nearest-item でドロップを拾う。5. ${count} 個採掘するまで繰り返す。見つからなければ stair-mine で地下に降りてから再検索。",
+  "tools": ["check-inventory-item", "find-blocks", "move-to", "dig-block-at", "mine-block", "pickup-nearest-item", "stair-mine", "get-position"],
+  "maxIterations": 20,
+  "model": "haiku",
   "failureEscalation": "system2",
   "source": "manual",
-  "stats": {
-    "runs": 2,
-    "successes": 0,
-    "failures": 2,
-    "avgDurationMs": 53909
-  }
+  "stats": { "runs": 0, "successes": 0, "failures": 0, "avgDurationMs": 0 }
 }

@@ -1,29 +1,17 @@
 {
   "name": "store-items",
-  "description": "指定したチェストにアイテムを収納する。チェスト座標とアイテム名を指定。",
+  "description": "チェストにアイテムを収納する",
   "params": [
-    { "name": "chestX", "type": "number", "description": "チェストの X 座標", "required": true },
-    { "name": "chestY", "type": "number", "description": "チェストの Y 座標", "required": true },
-    { "name": "chestZ", "type": "number", "description": "チェストの Z 座標", "required": true },
-    { "name": "itemName", "type": "string", "description": "収納するアイテム名", "required": true },
-    { "name": "count", "type": "number", "description": "収納個数 (0 = 全部)", "required": false, "default": 0 }
+    { "name": "chestX", "type": "number", "description": "チェスト X", "required": true },
+    { "name": "chestY", "type": "number", "description": "チェスト Y", "required": true },
+    { "name": "chestZ", "type": "number", "description": "チェスト Z", "required": true },
+    { "name": "itemName", "type": "string", "description": "収納アイテム", "required": true },
+    { "name": "count", "type": "number", "description": "個数 (0=全部)", "required": false, "default": 0 }
   ],
-  "steps": [
-    {
-      "skill": "move-to",
-      "args": { "x": "${chestX}", "y": "${chestY}", "z": "${chestZ}", "range": 3 },
-      "onFailure": "abort"
-    },
-    {
-      "skill": "deposit-to-container",
-      "args": {
-        "x": "${chestX}", "y": "${chestY}", "z": "${chestZ}",
-        "itemName": "${itemName}",
-        "count": "${count}"
-      },
-      "onFailure": "abort"
-    }
-  ],
+  "instruction": "move-to(${chestX}, ${chestY}, ${chestZ}, range:3) でチェストに近づき、deposit-to-container(${chestX}, ${chestY}, ${chestZ}, ${itemName}, ${count}) で収納する。",
+  "tools": ["move-to", "deposit-to-container", "check-inventory-item", "get-position"],
+  "maxIterations": 5,
+  "model": "haiku",
   "failureEscalation": "system2",
   "source": "manual",
   "stats": { "runs": 0, "successes": 0, "failures": 0, "avgDurationMs": 0 }

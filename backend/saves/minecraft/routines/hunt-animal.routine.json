@@ -1,56 +1,14 @@
 {
   "name": "hunt-animal",
-  "description": "指定した動物を探して倒し、ドロップを拾う。【注意: このルーチンは find + attack-continuously のみ。動物が遠い場合は先に move-to で近づいてからこのルーチンを使え】",
+  "description": "動物を狩って食料を確保する",
   "params": [
-    {
-      "name": "animalType",
-      "type": "string",
-      "description": "狩る動物の種類 (cow, pig, sheep 推奨)",
-      "required": false,
-      "default": "cow"
-    },
-    {
-      "name": "searchRadius",
-      "type": "number",
-      "description": "探索半径",
-      "required": false,
-      "default": 32
-    }
+    { "name": "animalType", "type": "string", "description": "狩る動物の種類", "required": false, "default": "cow" },
+    { "name": "count", "type": "number", "description": "狩る数", "required": false, "default": 1 }
   ],
-  "steps": [
-    {
-      "skill": "find-nearest-entity",
-      "args": {
-        "entityType": "${animalType}",
-        "maxDistance": "${searchRadius}"
-      },
-      "outputVar": "findResult",
-      "onFailure": "abort"
-    },
-    {
-      "skill": "attack-continuously",
-      "args": {
-        "entityName": "${animalType}",
-        "maxAttacks": 20
-      },
-      "onFailure": "continue"
-    },
-    {
-      "skill": "wait-time",
-      "args": { "milliseconds": 1500 },
-      "onFailure": "skip"
-    },
-    {
-      "skill": "pickup-nearest-item",
-      "args": { "maxDistance": 16 },
-      "onFailure": "skip"
-    },
-    {
-      "skill": "pickup-nearest-item",
-      "args": { "maxDistance": 16 },
-      "onFailure": "skip"
-    }
-  ],
+  "instruction": "周囲の ${animalType} を list-nearby-entities で検索する。見つかったら最も近い ${animalType} に follow-entity で追跡し、十分近づいたら (3m以内) attack-continuously で攻撃する。倒れたら pickup-nearest-item でドロップを拾う。${count} 体倒すか、周囲に ${animalType} がいなくなるまで繰り返す。cow/pig/sheep を優先。見つからなければ他の動物 (pig, sheep, chicken) も狩る。",
+  "tools": ["list-nearby-entities", "find-nearest-entity", "follow-entity", "attack-continuously", "attack-nearest", "pickup-nearest-item", "move-to", "get-position", "check-inventory-item"],
+  "maxIterations": 15,
+  "model": "haiku",
   "failureEscalation": "system2",
   "source": "manual",
   "stats": { "runs": 0, "successes": 0, "failures": 0, "avgDurationMs": 0 }

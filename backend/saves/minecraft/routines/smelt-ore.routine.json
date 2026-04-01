@@ -1,44 +1,15 @@
 {
   "name": "smelt-ore",
-  "description": "指定した鉱石をかまどで精錬する。かまどの座標と鉱石名を指定。【前提: かまどが設置済みで座標が分かっていること。なければ先に craft-one(furnace) → place-block-at で設置】",
+  "description": "鉱石をかまどで精錬する。【前提: かまど座標が分かっているか、設置可能な状態】",
   "params": [
-    { "name": "furnaceX", "type": "number", "description": "かまどの X 座標", "required": true },
-    { "name": "furnaceY", "type": "number", "description": "かまどの Y 座標", "required": true },
-    { "name": "furnaceZ", "type": "number", "description": "かまどの Z 座標", "required": true },
-    { "name": "ore", "type": "string", "description": "精錬する鉱石名 (例: raw_iron, raw_gold, raw_copper)", "required": true },
-    { "name": "fuel", "type": "string", "description": "燃料 (例: coal, charcoal, oak_planks)", "required": false, "default": "coal" },
+    { "name": "ore", "type": "string", "description": "精錬する素材 (raw_iron, raw_gold, porkchop 等)", "required": true },
+    { "name": "fuel", "type": "string", "description": "燃料", "required": false, "default": "coal" },
     { "name": "count", "type": "number", "description": "精錬個数", "required": false, "default": 1 }
   ],
-  "steps": [
-    {
-      "skill": "move-to",
-      "args": { "x": "${furnaceX}", "y": "${furnaceY}", "z": "${furnaceZ}", "range": 3 },
-      "onFailure": "abort"
-    },
-    {
-      "skill": "start-smelting",
-      "args": {
-        "x": "${furnaceX}", "y": "${furnaceY}", "z": "${furnaceZ}",
-        "inputItem": "${ore}",
-        "fuelItem": "${fuel}",
-        "count": "${count}"
-      },
-      "onFailure": "abort"
-    },
-    {
-      "skill": "wait-time",
-      "args": { "milliseconds": 12000 },
-      "onFailure": "skip"
-    },
-    {
-      "skill": "withdraw-from-furnace",
-      "args": {
-        "x": "${furnaceX}", "y": "${furnaceY}", "z": "${furnaceZ}",
-        "slot": "output"
-      },
-      "onFailure": "continue"
-    }
-  ],
+  "instruction": "1. find-blocks(furnace, maxDistance:32) でかまどを探す。なければ check-inventory-item(cobblestone) → 8個以上あれば craft-one(furnace) → get-position → place-block-at で設置。2. move-to でかまどに近づく (3m以内)。3. start-smelting(x,y,z, inputItem:${ore}, fuelItem:${fuel}, count:${count}) で精錬開始。4. wait-time(${count}×10000 ms) で待機。5. check-furnace で完了確認。6. withdraw-from-furnace(slot:output) で回収。",
+  "tools": ["find-blocks", "check-inventory-item", "craft-one", "get-position", "place-block-at", "move-to", "start-smelting", "wait-time", "check-furnace", "withdraw-from-furnace"],
+  "maxIterations": 15,
+  "model": "haiku",
   "failureEscalation": "system2",
   "source": "manual",
   "stats": { "runs": 0, "successes": 0, "failures": 0, "avgDurationMs": 0 }

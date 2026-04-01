@@ -1,52 +1,12 @@
 {
   "name": "make-stone-tools",
-  "description": "石(stone)を採掘して丸石を入手し、石のツルハシ・斧・剣をクラフトする。【前提: 木のツルハシが必要。なければ先に routine-make-wooden-tools を実行】",
+  "description": "石のツール一式をクラフトする。【前提: 木のツルハシが必要】",
   "params": [],
-  "steps": [
-    {
-      "skill": "mine-block",
-      "args": {
-        "blockName": "stone",
-        "count": 4,
-        "searchRadius": 32
-      },
-      "onFailure": "continue"
-    },
-    {
-      "skill": "craft-one",
-      "args": {
-        "itemName": "stone_pickaxe"
-      },
-      "onFailure": "abort"
-    },
-    {
-      "skill": "craft-one",
-      "args": {
-        "itemName": "stone_axe"
-      },
-      "onFailure": "continue"
-    },
-    {
-      "skill": "craft-one",
-      "args": {
-        "itemName": "stone_sword"
-      },
-      "onFailure": "continue"
-    },
-    {
-      "skill": "craft-one",
-      "args": {
-        "itemName": "stone_shovel"
-      },
-      "onFailure": "continue"
-    }
-  ],
+  "instruction": "1. check-inventory-item で wooden_pickaxe を確認。なければまず原木から木のツルハシを作る (oak_log 採掘 → planks → stick → crafting_table → wooden_pickaxe)。2. mine-block(stone, count:4) で石を掘る (cobblestone がドロップ)。3. craft-one(stone_pickaxe) で石のツルハシ。4. craft-one(stone_axe) で石の斧。5. craft-one(stone_sword) で石の剣。材料不足なら追加で石を掘る。",
+  "tools": ["check-inventory-item", "mine-block", "craft-one", "get-position", "place-block-at", "pickup-nearest-item"],
+  "maxIterations": 20,
+  "model": "haiku",
   "failureEscalation": "system2",
   "source": "manual",
-  "stats": {
-    "runs": 1,
-    "successes": 0,
-    "failures": 1,
-    "avgDurationMs": 4954
-  }
+  "stats": { "runs": 0, "successes": 0, "failures": 0, "avgDurationMs": 0 }
 }

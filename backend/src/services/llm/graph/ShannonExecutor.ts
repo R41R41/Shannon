@@ -29,6 +29,8 @@ export interface ShannonExecutorDeps {
     instantSkills?: InstantSkills;
     routineManager?: RoutineManager;
     routineExecutor?: RoutineExecutor;
+    /** Minecraft bot 参照 (SubAgentRoutineExecutor に渡す) */
+    bot?: import('../../minebot/types/CustomBot.js').CustomBot;
     /** LLM ツール (recall-*, save-*, task-complete, etc.) */
     llmTools?: Map<string, (input: Record<string, unknown>) => Promise<string>>;
 }
@@ -250,16 +252,31 @@ export class ShannonExecutor {
                         state.onTaskTreeUpdate?.(taskTree);
                         this.postTaskTreeToUiMod(taskTree);
                     }
-                    // ルーチン (API名: routine-xxx, 内部名: routine:xxx)
-                    else if (toolName.startsWith('routine-') && this.deps.routineManager && this.deps.routineExecutor) {
+                    // ルーチン (API名: routine-xxx)
+                    else if (toolName.startsWith('routine-') && this.deps.routineManager) {
                         const routineName = toolName.replace('routine-', '');
                         const def = this.deps.routineManager.get(routineName);
                         if (def) {
-                            const result = await this.deps.routineExecutor.execute(def, toolInput, {
-                                abortSignal: state.abortSignal,
-                            });
-                            resultText = result.summary;
-                            this.deps.routineManager.updateStats(routineName, result.success, result.durationMs).catch(() => {});
+                            if (def.instruction && this.deps.bot) {
+                                // 新方式: Haiku サブエージェント
+                                const { SubAgentRoutineExecutor } = await import('../../minebot/routines/SubAgentRoutineExecutor.js');
+                                const subAgent = new SubAgentRoutineExecutor();
+                                const result = await subAgent.execute(def, toolInput, {
+                                    abortSignal: state.abortSignal,
+                                    bot: this.deps.bot,
+                                });
+                                resultText = result.summary;
+                                this.deps.routineManager.updateStats(routineName, result.success, result.durationMs).catch(() => {});
+                            } else if (def.steps && this.deps.routineExecutor) {
+                                // 旧方式: コードベース実行 (後方互換)
+                                const result = await this.deps.routineExecutor.execute(def, toolInput, {
+                                    abortSignal: state.abortSignal,
+                                });
+                                resultText = result.summary;
+                                this.deps.routineManager.updateStats(routineName, result.success, result.durationMs).catch(() => {});
+                            } else {
+                                resultText = `ルーチン "${routineName}" の実行方法が不明です`;
+                            }
                         } else {
                             resultText = `ルーチン "${routineName}" が見つかりません`;
                         }

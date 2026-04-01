@@ -229,6 +229,7 @@ function createExecuteNode(
 
         const executor = new ShannonExecutor({
           instantSkills: bot?.instantSkills,
+          bot,
           routineManager,
           routineExecutor,
           llmTools: llmToolMap,

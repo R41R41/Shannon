@@ -50,8 +50,20 @@ export interface RoutineDefinition {
     name: string;
     description: string;
     params: RoutineParam[];
-    steps: RoutineStepDef[];
-    /** 失敗時の挙動: system2 = FCA に返す (default) */
+
+    /** 旧方式: コードベース順次実行 (instruction が無い場合に使用) */
+    steps?: RoutineStepDef[];
+
+    /** 新方式: サブエージェントへの手順書 (LLM が柔軟に判断して実行) */
+    instruction?: string;
+    /** サブエージェントが使えるツール名リスト (instruction 使用時) */
+    tools?: string[];
+    /** サブエージェントのモデル (default: 'haiku') */
+    model?: 'haiku' | 'sonnet';
+    /** サブエージェントの最大イテレーション数 (default: 15) */
+    maxIterations?: number;
+
+    /** 失敗時の挙動: system2 = メインループに返す (default) */
     failureEscalation: 'system2' | 'retry';
     /** 作成元 */
     source: 'manual' | 'self-improve' | 'recorded' | 'shannon';
