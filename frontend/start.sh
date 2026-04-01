@@ -30,6 +30,15 @@ PID_FILE="$PID_DIR/${FRONTEND_SESSION}.pid"
 
 if [ "$IS_WINDOWS" = true ]; then
     taskkill //F //FI "WINDOWTITLE eq $FRONTEND_SESSION" 2>/dev/null
+    # PID ファイルから前回のプロセスツリーを殺す
+    if [ -f "$PID_FILE" ]; then
+        OLD_PID=$(cat "$PID_FILE")
+        if [ -n "$OLD_PID" ] && [ "$OLD_PID" != "0" ]; then
+            echo "Killing previous frontend (PID: $OLD_PID)..."
+            taskkill //F //PID "$OLD_PID" //T 2>/dev/null
+        fi
+        rm -f "$PID_FILE"
+    fi
 else
     tmux kill-session -t "$FRONTEND_SESSION" 2>/dev/null
 fi
@@ -83,6 +92,9 @@ LAUNCH_EOF
     fi
     chmod +x "$LAUNCH_SCRIPT"
     mintty --hold error --title "$FRONTEND_SESSION" /bin/bash -l "$LAUNCH_SCRIPT" &
+    MINTTY_PID=$!
+    echo "$MINTTY_PID" > "$PID_FILE"
+    echo "Frontend PID: $MINTTY_PID (saved to $PID_FILE)"
 else
     if [ "$IS_DEV" = true ]; then
         tmux new-session -d -s "$FRONTEND_SESSION" "cd $SCRIPT_DIR && PORT=$PORT npm run dev:dev"

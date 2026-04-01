@@ -22,8 +22,20 @@ fi
 
 # --- Kill existing sessions ---
 if [ "$IS_WINDOWS" = true ]; then
-    taskkill //F //FI "WINDOWTITLE eq $BACKEND_SESSION" 2>/dev/null
-    taskkill //F //FI "WINDOWTITLE eq $FRONTEND_SESSION" 2>/dev/null
+    # 前回の全 Shannon プロセスを PID ファイルから確実に殺す
+    PID_DIR="$SCRIPT_DIR/.pids"
+    if [ -d "$PID_DIR" ]; then
+        for pid_file in "$PID_DIR"/*.pid; do
+            [ -f "$pid_file" ] || continue
+            OLD_PID=$(cat "$pid_file")
+            if [ -n "$OLD_PID" ] && [ "$OLD_PID" != "0" ]; then
+                echo "Killing previous process (PID: $OLD_PID, file: $(basename $pid_file))"
+                taskkill //F //PID "$OLD_PID" //T 2>/dev/null
+            fi
+            rm -f "$pid_file"
+        done
+    fi
+    sleep 1
 else
     tmux kill-session -t "$FRONTEND_SESSION" 2>/dev/null
     tmux kill-session -t "$BACKEND_SESSION" 2>/dev/null
