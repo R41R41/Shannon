@@ -49,14 +49,15 @@ if [ "$IS_WINDOWS" = true ]; then
 
     # Shannon が使うポートを占有している node プロセスを全て殺す
     for check_port in "$PORT" "$MINEBOT_PORT" "${WS_PORTS[@]}"; do
-        local pids
-        pids=$(netstat -ano 2>/dev/null | grep ":${check_port} " | grep "LISTENING" | awk '{print $5}' | sort -u)
-        for pid in $pids; do
+        port_pids=$(netstat -ano 2>/dev/null | grep ":${check_port} " | grep "LISTENING" | awk '{print $5}' | sort -u)
+        for pid in $port_pids; do
             if [ -n "$pid" ] && [ "$pid" != "0" ]; then
+                echo "Killing process on port ${check_port} (PID: ${pid})"
                 taskkill //F //PID "$pid" //T 2>/dev/null
             fi
         done
     done
+    sleep 2
 
     # 念のため Shannon 関連の残留 node プロセスを PID ファイル群から掃除
     for pid_file in "$PID_DIR"/*.pid; do
