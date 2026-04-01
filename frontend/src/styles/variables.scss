@@ -1,4 +1,5 @@
 @use 'sass:map';
+@use 'sass:list';
 
 // ============================================================
 // Design Tokens - Shannon UI v3.0
@@ -265,7 +266,7 @@ $breakpoint-lg: 992px;
 
 @function shadow($key) {
   $themed: ('xs', 'sm', 'md', 'lg');
-  @if index($themed, $key) { @return var(--shadow-#{$key}); }
+  @if list.index($themed, $key) { @return var(--shadow-#{$key}); }
   @return map.get($shadows, $key);
 }
 
