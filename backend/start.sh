@@ -163,10 +163,19 @@ LAUNCH_EOF
         echo "exec node $NODE_OPTS dist/server.js" >> "$LAUNCH_SCRIPT"
     fi
     chmod +x "$LAUNCH_SCRIPT"
+    # mintty 起動前の PID リストを取得
+    BEFORE_PIDS=$(tasklist //FI "IMAGENAME eq mintty.exe" //FO CSV //NH 2>/dev/null | cut -d',' -f2 | tr -d '"' | sort)
     mintty --hold error --title "$BACKEND_SESSION" /bin/bash -l "$LAUNCH_SCRIPT" &
-    MINTTY_PID=$!
-    echo "$MINTTY_PID" > "$PID_FILE"
-    echo "Backend PID: $MINTTY_PID (saved to $PID_FILE)"
+    sleep 1
+    # 起動後の PID リストと比較して新しい mintty の Windows PID を特定
+    AFTER_PIDS=$(tasklist //FI "IMAGENAME eq mintty.exe" //FO CSV //NH 2>/dev/null | cut -d',' -f2 | tr -d '"' | sort)
+    MINTTY_WIN_PID=$(comm -13 <(echo "$BEFORE_PIDS") <(echo "$AFTER_PIDS") | head -1)
+    if [ -n "$MINTTY_WIN_PID" ]; then
+        echo "$MINTTY_WIN_PID" > "$PID_FILE"
+        echo "Backend mintty Windows PID: $MINTTY_WIN_PID (saved to $PID_FILE)"
+    else
+        echo "Warning: Could not detect backend mintty PID"
+    fi
 else
     if [ "$IS_DEV" = true ]; then
         tmux new-session -d -s "$BACKEND_SESSION" -n "server" \

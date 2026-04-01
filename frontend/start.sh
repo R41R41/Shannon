@@ -91,10 +91,15 @@ exec npm run dev
 LAUNCH_EOF
     fi
     chmod +x "$LAUNCH_SCRIPT"
+    BEFORE_PIDS=$(tasklist //FI "IMAGENAME eq mintty.exe" //FO CSV //NH 2>/dev/null | cut -d',' -f2 | tr -d '"' | sort)
     mintty --hold error --title "$FRONTEND_SESSION" /bin/bash -l "$LAUNCH_SCRIPT" &
-    MINTTY_PID=$!
-    echo "$MINTTY_PID" > "$PID_FILE"
-    echo "Frontend PID: $MINTTY_PID (saved to $PID_FILE)"
+    sleep 1
+    AFTER_PIDS=$(tasklist //FI "IMAGENAME eq mintty.exe" //FO CSV //NH 2>/dev/null | cut -d',' -f2 | tr -d '"' | sort)
+    MINTTY_WIN_PID=$(comm -13 <(echo "$BEFORE_PIDS") <(echo "$AFTER_PIDS") | head -1)
+    if [ -n "$MINTTY_WIN_PID" ]; then
+        echo "$MINTTY_WIN_PID" > "$PID_FILE"
+        echo "Frontend mintty Windows PID: $MINTTY_WIN_PID (saved to $PID_FILE)"
+    fi
 else
     if [ "$IS_DEV" = true ]; then
         tmux new-session -d -s "$FRONTEND_SESSION" "cd $SCRIPT_DIR && PORT=$PORT npm run dev:dev"
