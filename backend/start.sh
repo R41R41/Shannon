@@ -9,6 +9,27 @@ if [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "mingw"* ]] || [[ "$OSTYPE" == "
     IS_WINDOWS=true
 fi
 
+# Windows: 既定は mintty 別ウィンドウ。VS Code / Cursor 統合ターミナルなどでは親ターミナルにログを出す。
+should_use_mintty_windows() {
+    [ "$IS_WINDOWS" != true ] && return 1
+    [ -n "${SHANNON_USE_MINTTY:-}" ] && [ "$SHANNON_USE_MINTTY" != "0" ] && return 0
+    [ -n "${SHANNON_NO_MINTTY:-}" ] && [ "$SHANNON_NO_MINTTY" != "0" ] && return 1
+    local tp
+    tp=$(echo "${TERM_PROGRAM:-}" | tr '[:upper:]' '[:lower:]')
+    case "$tp" in
+        vscode|visual\ studio\ code|cursor) return 1 ;;
+    esac
+    return 0
+}
+
+# Windows 統合ターミナル: Linux と同様に tmux セッションに載せる（ログを別タブで attach して閲覧）
+windows_use_tmux_for_integrated() {
+    [ "$IS_WINDOWS" = true ] || return 1
+    should_use_mintty_windows && return 1
+    [ -n "${SHANNON_NO_TMUX:-}" ] && [ "$SHANNON_NO_TMUX" != "0" ] && return 1
+    command -v tmux >/dev/null 2>&1
+}
+
 # --- Configuration ---
 IS_DEV=false
 PORT=5001
@@ -35,11 +56,12 @@ PID_FILE="$PID_DIR/${BACKEND_SESSION}.pid"
 
 if [ "$IS_WINDOWS" = true ]; then
     echo "Cleaning up previous backend..."
+    tmux kill-session -t "$BACKEND_SESSION" 2>/dev/null
     # 1. PID ファイルの Windows PID でプロセスツリーを殺す
     if [ -f "$PID_FILE" ]; then
         OLD_PID=$(cat "$PID_FILE")
         if [ -n "$OLD_PID" ] && [ "$OLD_PID" != "0" ]; then
-            echo "Killing previous backend mintty (Windows PID: $OLD_PID)..."
+            echo "Killing previous backend process (Windows PID: $OLD_PID)..."
             taskkill //F //PID "$OLD_PID" //T 2>/dev/null
         fi
         rm -f "$PID_FILE"
@@ -135,39 +157,78 @@ LAUNCH_EOF
         echo "echo \$\$ > \"$PID_DIR/${BACKEND_SESSION}-shell.pid\"" >> "$LAUNCH_SCRIPT"
         echo "cleanup() { kill \$TSC_PID 2>/dev/null; kill \$NODEMON_PID 2>/dev/null; rm -f \"$PID_DIR/${BACKEND_SESSION}-shell.pid\"; }" >> "$LAUNCH_SCRIPT"
         echo "trap cleanup EXIT INT TERM" >> "$LAUNCH_SCRIPT"
-        echo "npx tsc --watch --skipLibCheck --preserveWatchOutput &" >> "$LAUNCH_SCRIPT"
+        # preserveWatchOutput はコンパイルのたびに画面が積み上がり「ログが止まらない」ように見えやすいので付けない
+        echo "npx tsc $TSC_NOCHECK --watch --skipLibCheck --pretty false &" >> "$LAUNCH_SCRIPT"
         echo "TSC_PID=\$!" >> "$LAUNCH_SCRIPT"
         echo "sleep 3" >> "$LAUNCH_SCRIPT"
-        echo "npx nodemon --watch dist --ext js --delay 3 --signal SIGKILL --exec 'node $NODE_OPTS dist/server.js --dev' &" >> "$LAUNCH_SCRIPT"
+        echo "npx nodemon -q --watch dist --ext js --delay 3 --signal SIGKILL --exec 'node $NODE_OPTS dist/server.js --dev' &" >> "$LAUNCH_SCRIPT"
         echo "NODEMON_PID=\$!" >> "$LAUNCH_SCRIPT"
         echo "wait" >> "$LAUNCH_SCRIPT"
     else
         echo "exec node $NODE_OPTS dist/server.js" >> "$LAUNCH_SCRIPT"
     fi
     chmod +x "$LAUNCH_SCRIPT"
-    # mintty 起動前の PID を記録
-    BEFORE_PIDS=$(tasklist //FI "IMAGENAME eq mintty.exe" //FO CSV //NH 2>/dev/null | cut -d',' -f2 | tr -d '"' | tr -d ' ')
-    mintty --hold error --title "$BACKEND_SESSION" /bin/bash -l "$LAUNCH_SCRIPT" &
-    sleep 2
-    # 起動後の PID と比較して新しい mintty を特定
-    AFTER_PIDS=$(tasklist //FI "IMAGENAME eq mintty.exe" //FO CSV //NH 2>/dev/null | cut -d',' -f2 | tr -d '"' | tr -d ' ')
-    MINTTY_WIN_PID=""
-    for pid in $AFTER_PIDS; do
-        if ! echo "$BEFORE_PIDS" | grep -q "^${pid}$"; then
-            MINTTY_WIN_PID="$pid"
-            break
+    if should_use_mintty_windows; then
+        BEFORE_PIDS=$(tasklist //FI "IMAGENAME eq mintty.exe" //FO CSV //NH 2>/dev/null | cut -d',' -f2 | tr -d '"' | tr -d ' ')
+        mintty --hold error --title "$BACKEND_SESSION" /bin/bash -l "$LAUNCH_SCRIPT" &
+        sleep 2
+        AFTER_PIDS=$(tasklist //FI "IMAGENAME eq mintty.exe" //FO CSV //NH 2>/dev/null | cut -d',' -f2 | tr -d '"' | tr -d ' ')
+        MINTTY_WIN_PID=""
+        for pid in $AFTER_PIDS; do
+            if ! echo "$BEFORE_PIDS" | grep -q "^${pid}$"; then
+                MINTTY_WIN_PID="$pid"
+                break
+            fi
+        done
+        if [ -n "$MINTTY_WIN_PID" ]; then
+            echo "$MINTTY_WIN_PID" > "$PID_FILE"
+            echo "Backend mintty Windows PID: $MINTTY_WIN_PID"
+        else
+            echo "Warning: Could not detect backend mintty PID"
         fi
-    done
-    if [ -n "$MINTTY_WIN_PID" ]; then
-        echo "$MINTTY_WIN_PID" > "$PID_FILE"
-        echo "Backend mintty Windows PID: $MINTTY_WIN_PID"
+    elif windows_use_tmux_for_integrated; then
+        if tmux new-session -d -s "$BACKEND_SESSION" -n "server" "bash -l \"$LAUNCH_SCRIPT\"" 2>/dev/null; then
+            rm -f "$PID_FILE"
+            echo "Backend tmux session: $BACKEND_SESSION"
+            echo "  Attach (別ターミナルタブ推奨): tmux attach -t $BACKEND_SESSION"
+        else
+            echo "tmux での起動に失敗したため、このターミナルでバックグラウンド実行にフォールバックします。"
+            /bin/bash -l "$LAUNCH_SCRIPT" &
+            echo $! > "$PID_FILE"
+            echo "Backend shell PID: $(cat "$PID_FILE")"
+        fi
     else
-        echo "Warning: Could not detect backend mintty PID"
+        echo "Backend: running in this terminal (no mintty). tmux があればセッション分離されます (pacman -S tmux)。SHANNON_USE_MINTTY=1 で別ウィンドウ。"
+        /bin/bash -l "$LAUNCH_SCRIPT" &
+        echo $! > "$PID_FILE"
+        echo "Backend shell PID: $(cat "$PID_FILE")"
     fi
 else
     if [ "$IS_DEV" = true ]; then
-        tmux new-session -d -s "$BACKEND_SESSION" -n "server" \
-            "cd $SCRIPT_DIR && PORT=$PORT MINEBOT_API_PORT=$MINEBOT_PORT WS_OPENAI_PORT=${WS_PORTS[0]} WS_MONITORING_PORT=${WS_PORTS[1]} WS_STATUS_PORT=${WS_PORTS[2]} WS_SCHEDULE_PORT=${WS_PORTS[3]} WS_PLANNING_PORT=${WS_PORTS[4]} WS_EMOTION_PORT=${WS_PORTS[5]} WS_SKILL_PORT=${WS_PORTS[6]} WS_AUTH_PORT=${WS_PORTS[7]} exec npx tsc-watch --onSuccess 'node $NODE_OPTS dist/server.js --dev'"
+        # Windows と同様 tsc --watch + nodemon（tsc-watch は onSuccess が連発しやすくログ・再起動がうるさい）
+        LAUNCH_SCRIPT="$PID_DIR/${BACKEND_SESSION}-launch.sh"
+        cat > "$LAUNCH_SCRIPT" << LAUNCH_EOF
+#!/bin/bash
+cd "$SCRIPT_DIR"
+export PORT=$PORT
+export MINEBOT_API_PORT=$MINEBOT_PORT
+export WS_OPENAI_PORT=${WS_PORTS[0]}
+export WS_MONITORING_PORT=${WS_PORTS[1]}
+export WS_STATUS_PORT=${WS_PORTS[2]}
+export WS_SCHEDULE_PORT=${WS_PORTS[3]}
+export WS_PLANNING_PORT=${WS_PORTS[4]}
+export WS_EMOTION_PORT=${WS_PORTS[5]}
+export WS_SKILL_PORT=${WS_PORTS[6]}
+export WS_AUTH_PORT=${WS_PORTS[7]}
+export NODE_OPTIONS="--max-old-space-size=12288"
+npx tsc $TSC_NOCHECK --watch --skipLibCheck --pretty false &
+TSC_PID=\$!
+sleep 3
+npx nodemon -q --watch dist --ext js --delay 3 --signal SIGKILL --exec "node $NODE_OPTS dist/server.js --dev" &
+wait
+LAUNCH_EOF
+        chmod +x "$LAUNCH_SCRIPT"
+        tmux new-session -d -s "$BACKEND_SESSION" -n "server" "exec bash -l \"$LAUNCH_SCRIPT\""
     else
         tmux new-session -d -s "$BACKEND_SESSION" \
             "cd $SCRIPT_DIR && PORT=$PORT MINEBOT_API_PORT=$MINEBOT_PORT WS_OPENAI_PORT=${WS_PORTS[0]} WS_MONITORING_PORT=${WS_PORTS[1]} WS_STATUS_PORT=${WS_PORTS[2]} WS_SCHEDULE_PORT=${WS_PORTS[3]} WS_PLANNING_PORT=${WS_PORTS[4]} WS_EMOTION_PORT=${WS_PORTS[5]} WS_SKILL_PORT=${WS_PORTS[6]} WS_AUTH_PORT=${WS_PORTS[7]} node $NODE_OPTS dist/server.js"
@@ -175,12 +236,19 @@ else
 fi
 
 echo "Backend started in session: $BACKEND_SESSION"
-echo "  dev mode: tsc-watch with auto-restart on changes"
+echo "  dev mode: tsc --watch + nodemon (dist 変更でサーバー再起動)"
 echo "  prod mode: Node.js server only"
 
 echo ""
 if [ "$IS_WINDOWS" = true ]; then
-    echo "Backend running in terminal window: $BACKEND_SESSION"
+    if should_use_mintty_windows; then
+        echo "Backend running in terminal window: $BACKEND_SESSION"
+    elif command -v tmux >/dev/null 2>&1 && tmux has-session -t "$BACKEND_SESSION" 2>/dev/null; then
+        echo "Backend running in tmux session: $BACKEND_SESSION"
+        tmux list-sessions 2>/dev/null | grep -F "$BACKEND_SESSION" || true
+    else
+        echo "Backend running in current terminal (background): $BACKEND_SESSION"
+    fi
     [ -f "$PID_FILE" ] && echo "  PID: $(cat "$PID_FILE")"
 else
     echo "Active tmux sessions:"

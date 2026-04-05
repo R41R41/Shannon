@@ -349,7 +349,7 @@ class StartSmelting extends InstantSkill {
         if (withdrawnOutput) {
           resultMsg += `。※完成品スロットから${withdrawnOutput.name} x${withdrawnOutput.count}を自動回収しインベントリに入れました`;
         }
-        resultMsg += `。完了後はcheck-furnaceで確認し、withdraw-from-furnace slot="output"で取り出してください`;
+        resultMsg += `。【重要】wait-time や check-furnace は不要。withdraw-from-furnace(slot="output") を呼べば精錬完了まで自動で待って取り出す`;
 
         return {
           success: true,

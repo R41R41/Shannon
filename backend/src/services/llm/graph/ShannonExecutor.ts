@@ -267,6 +267,7 @@ export class ShannonExecutor {
                                 const result = await subAgent.execute(def, toolInput, {
                                     abortSignal: state.abortSignal,
                                     bot: this.deps.bot,
+                                    onTaskTreeUpdate: state.onTaskTreeUpdate,
                                 });
                                 resultText = result.summary;
                                 this.deps.routineManager.updateStats(routineName, result.success, result.durationMs).catch(() => {});
@@ -307,7 +308,15 @@ export class ShannonExecutor {
                     }
                     // search-skills: スキルの説明・引数を検索
                     else if (toolName === 'search-skills') {
-                        const query = ((toolInput.query as string) || '').toLowerCase();
+                        const rawQuery = ((toolInput.query as string) || '').toLowerCase();
+                        // routine- プレフィックスを除去してから検索
+                        const query = rawQuery.replace(/^routine-/, '');
+                        // クエリを単語分割し、いずれかの単語がマッチすれば結果に含める
+                        const queryWords = query.split(/[\s,\-]+/).filter(w => w.length > 0);
+                        const matchesQuery = (text: string) => {
+                            const t = text.toLowerCase();
+                            return queryWords.some(w => t.includes(w));
+                        };
                         const results: string[] = [];
                         // #2 fix: non-MC チャネルでもルーチンは検索可能
                         if (!this.deps.instantSkills && !this.deps.routineManager) {
@@ -315,7 +324,7 @@ export class ShannonExecutor {
                             // ステップ履歴更新等は下に続く
                         } else if (this.deps.instantSkills) {
                             for (const skill of this.deps.instantSkills.getSkills()) {
-                                if (skill.skillName.includes(query) || skill.description.toLowerCase().includes(query)) {
+                                if (matchesQuery(skill.skillName) || matchesQuery(skill.description)) {
                                     const params = skill.params.map((p: any) =>
                                         `${p.name}: ${p.type}${p.required ? ' (必須)' : ` (デフォルト: ${p.default ?? 'なし'})`} — ${p.description}`
                                     ).join('\n    ');
@@ -325,13 +334,16 @@ export class ShannonExecutor {
                         }
                         if (this.deps.routineManager) {
                             for (const r of this.deps.routineManager.getAll()) {
-                                if (r.name.includes(query) || r.description.toLowerCase().includes(query)) {
-                                    results.push(`**routine-${r.name}**: ${r.description}`);
+                                if (matchesQuery(r.name) || matchesQuery(r.description) || matchesQuery(r.instruction ?? '')) {
+                                    const params = r.params.map((p: any) =>
+                                        `${p.name}: ${p.type}${p.required ? ' (必須)' : ` (デフォルト: ${p.default ?? 'なし'})`} — ${p.description}`
+                                    ).join('\n    ');
+                                    results.push(`**routine-${r.name}**: ${r.description}\n    ${params || '(引数なし)'}`);
                                 }
                             }
                         }
                         resultText = results.length > 0
-                            ? `検索結果 (${results.length}件):\n${results.slice(0, 10).join('\n\n')}`
+                            ? `検索結果 (${results.length}件):\n${results.slice(0, 15).join('\n\n')}`
                             : `"${query}" に一致するスキル/ルーチンが見つかりません`;
                     }
                     // 不明なツール
@@ -432,13 +444,20 @@ export class ShannonExecutor {
 
     /** UI Mod の /task エンドポイントにタスクツリーを直接送信 */
     private postTaskTreeToUiMod(taskTree: TaskTreeState): void {
+        const url = `${MINEBOT_CONFIG.UI_MOD_BASE_URL}/task`;
         try {
-            fetch(`${MINEBOT_CONFIG.UI_MOD_BASE_URL}/task`, {
+            fetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json; charset=UTF-8' },
                 body: JSON.stringify(taskTree),
-            }).catch(() => {});
-        } catch {}
+            }).then(res => {
+                if (!res.ok) log.warn(`⚠ UI Mod POST /task failed: ${res.status}`);
+            }).catch(e => {
+                log.warn(`⚠ UI Mod POST /task error: ${e instanceof Error ? e.message : e}`);
+            });
+        } catch (e) {
+            log.warn(`⚠ UI Mod POST /task exception: ${e}`);
+        }
     }
 }
 

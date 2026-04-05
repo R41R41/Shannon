@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "reactions": [
+    {
+      "eventType": "player_facing",
+      "enabled": true,
+      "probability": 100,
+      "idleOnly": true,
+      "reactionType": "task"
+    },
+    {
+      "eventType": "player_speak",
+      "enabled": true,
+      "probability": 100,
+      "idleOnly": false,
+      "reactionType": "task"
+    },
+    {
+      "eventType": "hostile_approach",
+      "enabled": true,
+      "probability": 100,
+      "idleOnly": false,
+      "reactionType": "emergency"
+    },
+    {
+      "eventType": "item_obtained",
+      "enabled": true,
+      "probability": 30,
+      "idleOnly": true,
+      "reactionType": "info"
+    },
+    {
+      "eventType": "time_change",
+      "enabled": true,
+      "probability": 30,
+      "idleOnly": true,
+      "reactionType": "task"
+    },
+    {
+      "eventType": "weather_change",
+      "enabled": true,
+      "probability": 30,
+      "idleOnly": true,
+      "reactionType": "task"
+    },
+    {
+      "eventType": "biome_change",
+      "enabled": true,
+      "probability": 50,
+      "idleOnly": true,
+      "reactionType": "task"
+    },
+    {
+      "eventType": "teleported",
+      "enabled": true,
+      "probability": 0,
+      "idleOnly": true,
+      "reactionType": "task"
+    },
+    {
+      "eventType": "damage",
+      "enabled": true,
+      "probability": 100,
+      "idleOnly": false,
+      "reactionType": "emergency"
+    },
+    {
+      "eventType": "suffocation",
+      "enabled": true,
+      "probability": 100,
+      "idleOnly": false,
+      "reactionType": "emergency"
+    }
+  ],
+  "hostileDetection": {
+    "criticalDistance": 8,
+    "detectionDistance": 16,
+    "multiMobCriticalCount": 2
+  }
+}

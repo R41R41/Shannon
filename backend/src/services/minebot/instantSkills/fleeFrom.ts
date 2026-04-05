@@ -89,13 +89,14 @@ class FleeFrom extends InstantSkill {
         this.bot,
         true, // allow1by1towers: 高い場所に逃げられる
         true, // allowSprinting: 逃げるときはダッシュ
-        true, // allowParkour
+        false, // allowParkour: 崖飛び越えを避ける
         true, // canOpenDoors
         false, // canDig: 逃げるときは掘らない（遅い）
         true, // dontMineUnderFallingBlock
         100, // digCost: 掘るコストを高く（避ける）
         false, // allowFreeMotion: 水中移動は遅いので避ける
-        false // canSwim: 水を避けて逃げる（水中は危険）
+        false, // canSwim: 水を避けて逃げる（水中は危険）
+        2 // maxDropDown
       );
 
       log.info(`🏃 ${name}から逃走開始（目標距離: ${minDistance}ブロック以上）`);

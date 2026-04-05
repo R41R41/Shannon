@@ -28,13 +28,14 @@ export async function runFromEntities(
     bot,
     false,  // allow1by1towers: 逃走中はタワーしない
     true,   // allowSprinting
-    true,   // allowParkour
+    false,  // allowParkour: 谷を飛び越えない
     true,   // canOpenDoors
     false,  // canDig: 逃走中は掘らない
     true,   // dontMineUnderFallingBlock
     100,    // digCost: 掘るコストを高く
     false,  // allowFreeMotion
-    false   // canSwim: 水を避ける
+    false,  // canSwim: 水を避ける
+    2       // maxDropDown: 崖落ちしにくくする
   );
 
   const fleeGoal = new goals.GoalInvert(

@@ -71,6 +71,13 @@ export class CombatController {
         (this.bot as any).on('entityDead', onEntityDead);
 
         log.warn(`⚔️ 戦闘開始${targetName ? ` (target: ${targetName})` : ''}`);
+
+        // 既存の移動を停止（flee-from や move-to との競合防止）
+        try {
+            this.bot.pathfinder?.stop();
+            this.bot.clearControlStates();
+        } catch { /* ignore */ }
+
         await this.equipBestWeapon();
 
         try {
@@ -96,13 +103,13 @@ export class CombatController {
                 const actions = this.scorer.score(situation);
                 const best = actions[0];
 
-                // 3. 実行 (#3 fix: アクションタイムアウト 2秒)
+                // 3. 実行 (tower 等の長いアクションを考慮して 4秒)
                 let attacked = false;
                 try {
                     const result = await Promise.race([
                         this.executor.execute(best),
                         new Promise<{ attacked: boolean }>((_, reject) =>
-                            setTimeout(() => reject(new Error('action timeout')), 2000)
+                            setTimeout(() => reject(new Error('action timeout')), 4000)
                         ),
                     ]);
                     attacked = result.attacked;
@@ -122,7 +129,7 @@ export class CombatController {
 
                 // 逃走成功判定
                 if (best.type === 'flee' && situation.nearestHostile &&
-                    situation.nearestHostile.distance > 16) {
+                    situation.nearestHostile.distance > 32) {
                     log.info(`🏃 逃走成功 (${situation.nearestHostile.distance.toFixed(1)}m)`);
                     this.executor.cleanup();
                     return this.buildResult(true, '逃走成功', startTime);

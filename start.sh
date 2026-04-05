@@ -60,9 +60,15 @@ fi
 # --- Status ---
 echo ""
 if [ "$IS_WINDOWS" = true ]; then
-    echo "Active sessions (mintty windows):"
-    echo "  backend:  $BACKEND_SESSION"
-    echo "  frontend: $FRONTEND_SESSION"
+    echo "Active (Windows): backend=$BACKEND_SESSION / frontend=$FRONTEND_SESSION"
+    echo "  mintty 別ウィンドウ、または tmux / バックグラウンド bash（起動方法は上のログ参照）"
+    if command -v tmux >/dev/null 2>&1; then
+        echo ""
+        echo "tmux 利用時は Cursor でターミナルを2つ開き、ログを分けて閲覧できます（Linux と同様）:"
+        echo "  tmux attach -t $BACKEND_SESSION"
+        echo "  tmux attach -t $FRONTEND_SESSION"
+        tmux list-sessions 2>/dev/null || true
+    fi
     PID_DIR="$SCRIPT_DIR/.pids"
     for session in "$BACKEND_SESSION" "$FRONTEND_SESSION"; do
         pid_file="$PID_DIR/${session}.pid"

@@ -13,7 +13,9 @@ import { config } from '../../../config/env.js';
 import { createLogger } from '../../../utils/logger.js';
 import type { CustomBot } from '../types/CustomBot.js';
 import type { RoutineDefinition, RoutineExecutionResult } from './types.js';
+import type { TaskTreeState } from '@shannon/common';
 import { skillToAnthropicTool } from '../../llm/graph/ShannonExecutor.js';
+import { CONFIG as MINEBOT_CONFIG } from '../config/MinebotConfig.js';
 
 const log = createLogger('Minebot:SubAgent');
 
@@ -36,7 +38,7 @@ export class SubAgentRoutineExecutor {
     async execute(
         routine: RoutineDefinition,
         params: Record<string, unknown>,
-        options: { abortSignal?: AbortSignal; bot: CustomBot },
+        options: { abortSignal?: AbortSignal; bot: CustomBot; onTaskTreeUpdate?: (taskTree: TaskTreeState) => void },
     ): Promise<RoutineExecutionResult> {
         const startTime = Date.now();
         const model = routine.model === 'sonnet' ? MODEL_SONNET : MODEL_HAIKU;
@@ -169,6 +171,18 @@ ${instruction}
             }
 
             messages.push({ role: 'user', content: toolResults });
+
+            // タスクツリーをUIに送信
+            if (!taskCompleted && options.onTaskTreeUpdate) {
+                const subTaskTree: TaskTreeState = {
+                    goal: `[SubAgent] ${routine.name}: ${instruction.slice(0, 60)}`,
+                    strategy: `サブエージェント実行中 (${iter + 1}/${maxIter}, ${toolCallCount} tools)`,
+                    status: 'in_progress',
+                    hierarchicalSubTasks: [],
+                } as TaskTreeState;
+                options.onTaskTreeUpdate(subTaskTree);
+                this.postTaskTreeToUiMod(subTaskTree);
+            }
         }
 
         const durationMs = Date.now() - startTime;
@@ -187,6 +201,17 @@ ${instruction}
             durationMs,
             stepResults: [],
         };
+    }
+
+    private postTaskTreeToUiMod(taskTree: TaskTreeState): void {
+        const url = `${MINEBOT_CONFIG.UI_MOD_BASE_URL}/task`;
+        try {
+            fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json; charset=UTF-8' },
+                body: JSON.stringify(taskTree),
+            }).catch(() => {});
+        } catch { /* ignore */ }
     }
 
     private buildTools(routine: RoutineDefinition, bot: CustomBot): Tool[] {

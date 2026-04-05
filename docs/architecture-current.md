@@ -1,6 +1,6 @@
 # Shannon 現状アーキテクチャ
 
-> **最終更新: 2026-04-01**
+> **最終更新: 2026-04-04**
 > ブランチ: `feature/claude-architecture`
 
 ---
@@ -24,7 +24,7 @@ Shannon Graph (3 nodes)
     ├─ execute: ShannonExecutor (Claude API 直接)
     │   ├─ ツール呼出ループ (max 25 iter)
     │   │   ├─ InstantSkills (70個) → skill.run() 直接
-    │   │   ├─ Routines (8個) → RoutineExecutor (LLM 0回)
+     │   │   ├─ Routines → RoutineExecutor（手順のみ）または SubAgentRoutineExecutor（instruction あり＝サブエージェントが LLM 呼出）
     │   │   ├─ search-skills → スキル検索
     │   │   ├─ recall-*/save-* → 記憶エージェント
     │   │   └─ task-complete → 完了宣言
@@ -110,20 +110,25 @@ iter 2+: cache_read = ~50K tokens (90% 割引)
 
 ### RoutineExecutor (`minebot/routines/RoutineExecutor.ts`)
 
-JSON 定義のルーチンを LLM 呼出なしで実行。AbortSignal + bot.executingSkill 制御で緊急割込み対応。
+JSON の **手順ステップのみ**のルーチンを LLM 呼出なしで実行。AbortSignal + bot.executingSkill 制御で緊急割込み対応。
 
-### 登録ルーチン (8個)
+### SubAgentRoutineExecutor (`minebot/routines/SubAgentRoutineExecutor.ts`)
 
-| ルーチン | ステップ数 | 前提条件 |
-|---------|-----------|---------|
-| `gather-wood` | 2 | なし |
-| `make-wooden-tools` | 8 | なし（素手から開始可能） |
-| `make-stone-tools` | 5 | 木のツルハシ |
-| `find-and-mine-ore` | 2 | 石のツルハシ以上 |
-| `smelt-ore` | 4 | かまど設置済み |
-| `hunt-animal` | 5 | なし |
-| `store-items` | 2 | チェスト座標 |
-| `equip-full-armor` | 4 | 防具インベントリ |
+JSON に **`instruction` フィールド**があるルーチンは、Haiku（または Sonnet）の別セッションで手順書に従いツールを呼び出す（メイン ShannonExecutor とは独立した LLM 呼出）。
+
+### 登録ルーチン（例: `backend/saves/minecraft/routines/*.routine.json`）
+
+| ルーチン | 備考 |
+|---------|------|
+| `gather-wood` | instruction 型（サブエージェント） |
+| `make-wooden-tools` | 同上 |
+| `make-stone-tools` | 同上 |
+| `find-and-mine-ore` | 同上 |
+| `smelt-ore` | 同上 |
+| `hunt-animal` | 同上 |
+| `store-items` | 同上 |
+| `equip-full-armor` | 同上 |
+| `retreat-and-stabilize` | 距離取り・低 HP 時の食事（攻撃なし・生存安定用） |
 
 ### manage-routine ツール
 
@@ -169,16 +174,20 @@ Shannon 自身がルーチンを CRUD:
 | autoFollow | 1000ms | — |
 | ... | | |
 
-### 緊急割込み
+### 緊急割込みとタスク優先
 
 ```
-ダメージ検知 (EventReactionSystem)
-  → bot.interruptExecution = true
-  → ShannonExecutor の AbortSignal 発火
-  → 中断タスクのゴール+進捗を保存
-  → 緊急タスク実行
-  → 次タスクで「中断されたタスクの続き」として自動復帰
+ダメージ / 敵 critical (EventReactionSystem)
+  → minebotControlState = emergency_reflect（継続逃走）
+  → interruptForEmergency（メイン Executor を Abort。解除待ちは EMERGENCY_INTERRUPT_WAIT_MS まで）
+  → 緊急タスク invoke（emergency タグ・ツールから攻撃系・chat を機械的に除外可）
+  → minebotControlState = emergency_llm → 完了後 idle
+  → resumePreviousTask でキュー再開
 ```
+
+**ツールポリシー**（`minebot/utils/minebotToolPolicy.ts`）: `hostile_approach` の **warning** タスクには `minebotToolPolicy: hostile_warning` が付き、攻撃系 Instant ツールと `routine-hunt-animal` を LLM 定義から外す。HP が低く敵が近い通常タスクは `defensive_low_hp` で同様。緊急タグ付きは `emergency_survival`（ゲーム内 `chat` も除外し、`chat` スキルは UI Mod のみ通知）。
+
+関連 env: `MINECRAFT_COMBAT_DEFENSIVE_MAX_HP`, `MINECRAFT_COMBAT_DEFENSIVE_HOSTILE_DISTANCE`, `MINEBOT_EMERGENCY_INTERRUPT_WAIT_MS`。
 
 ### タスク実行中のフィードバック
 
@@ -240,6 +249,7 @@ Shannon 自身がルーチンを CRUD:
 
 | 日付 | 内容 |
 |------|------|
+| 2026-04-04 | Minebot: 戦闘ツールの状況別フィルタ（warning/低HP+敵接近/緊急）、緊急時ゲーム内 chat 抑止、ダメージ時の敵接近推定、minebotControlState、interrupt 待機の設定化、`retreat-and-stabilize` ルーチン。 |
 | 2026-04-01 | アーキテクチャクリーンアップ: デッドコード削除 (750→416行)、State整理 (30→8フィールド)、bot直接渡し、キャッシュ率修正。MetaObserver削除→search-skills+recall-knowledgeでメインループ自律学習。初期知識seed (10件)。 |
 | 2026-03-31 | ShannonExecutor (Anthropic API直接) で FCA 置換。prompt caching + Haiku軽量タスク分岐。hunt-animal改善、肉調理ルール、タスク中フィードバック、文脈引継ぎ、ルーチン前提条件。 |
 | 2026-03-30 | Tailscale 直接通信に移行 (SSH トンネル廃止)。UI Mod タスク表示修正。 |

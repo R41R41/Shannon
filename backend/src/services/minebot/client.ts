@@ -25,12 +25,19 @@ const log = createLogger('Minebot:Client');
 // 環境変数の検証
 CONFIG.validateEnvironment();
 
+/** chat_validation_failed で kick された場合に自動再接続するまでのディレイ（ms） */
+const AUTO_RECONNECT_DELAY_MS = 8_000;
+const CHAT_VALIDATION_FAILED = 'chat_validation_failed';
+
 export class MinebotClient extends BaseClient {
   private bot: CustomBot | null = null;
   public isDev: boolean = false;
   private static instance: MinebotClient;
   private skillAgent: SkillAgent | null = null;
   private unsubscribeFunctions: (() => void)[] = [];
+  /** 直前の接続パラメータ（自動再接続用） */
+  private lastBotData: MinebotInput | null = null;
+  private autoReconnecting = false;
 
   constructor(serviceName: 'minebot', isDev: boolean) {
     const eventBus = getEventBus();
@@ -89,14 +96,25 @@ export class MinebotClient extends BaseClient {
       this.eventBus.log('minecraft', 'green', 'Bot has logged in.');
     });
 
-    this.bot.on('kicked', (reason: string) => {
-      let readableReason = reason;
-      try {
-        const parsed = JSON.parse(reason);
-        readableReason = parsed.text ?? parsed.translate ?? JSON.stringify(parsed);
-      } catch { /* plain string */ }
+    this.bot.on('kicked', (reason: any) => {
+      let readableReason: string;
+      if (typeof reason === 'string') {
+        try {
+          const parsed = JSON.parse(reason);
+          readableReason = parsed.text ?? parsed.translate ?? JSON.stringify(parsed);
+        } catch { readableReason = reason; }
+      } else if (reason && typeof reason === 'object') {
+        readableReason = reason.text ?? reason.translate ?? JSON.stringify(reason);
+      } else {
+        readableReason = String(reason);
+      }
       log.error(`🚫🚫🚫 BOT KICKED 🚫🚫🚫 reason: ${readableReason}`);
       this.eventBus.log('minecraft', 'red', `Bot was kicked: ${readableReason}`);
+
+      if (readableReason.includes(CHAT_VALIDATION_FAILED)) {
+        log.warn(`🔄 chat_validation_failed による kick → ${AUTO_RECONNECT_DELAY_MS / 1000}秒後に自動再接続します`);
+        this.scheduleAutoReconnect();
+      }
     });
 
     this.bot.on('end', (reason: string) => {
@@ -288,8 +306,37 @@ export class MinebotClient extends BaseClient {
     this.unsubscribeFunctions.push(unsubscribe2);
   }
 
+  /**
+   * chat_validation_failed で kick された後、自動でボットを再接続する。
+   * mineflayer #3838: 累積21通でチャット署名チェーンが壊れるバグの回避策。
+   */
+  private scheduleAutoReconnect(): void {
+    if (this.autoReconnecting || !this.lastBotData) return;
+    this.autoReconnecting = true;
+    setTimeout(async () => {
+      try {
+        log.info('🔄 自動再接続を開始します…');
+        // 既存ボットをクリーンアップ
+        try { await this.stopBot(this.lastBotData!); } catch { /* ignore */ }
+        await new Promise(r => setTimeout(r, 2_000));
+        const ok = await this.startBot(this.lastBotData!);
+        if (ok) {
+          log.info('✅ 自動再接続に成功しました');
+          this.eventBus.log('minecraft', 'green', 'Auto-reconnected after chat_validation_failed');
+        } else {
+          log.error('❌ 自動再接続に失敗しました');
+        }
+      } catch (e) {
+        log.error('❌ 自動再接続エラー', e);
+      } finally {
+        this.autoReconnecting = false;
+      }
+    }, AUTO_RECONNECT_DELAY_MS);
+  }
+
   private async startBot(data: MinebotInput) {
     try {
+      this.lastBotData = data;
       await this.setUpBot(data);
       this.eventBus.log('minecraft', 'green', 'Minecraft bot started');
       return true;

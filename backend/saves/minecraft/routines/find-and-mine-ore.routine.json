@@ -2,14 +2,39 @@
   "name": "find-and-mine-ore",
   "description": "指定した鉱石を探して採掘する。【前提: 石のツルハシ以上が必要】",
   "params": [
-    { "name": "oreName", "type": "string", "description": "鉱石名 (iron_ore, coal_ore, diamond_ore 等)", "required": true },
-    { "name": "count", "type": "number", "description": "採掘個数", "required": false, "default": 3 }
+    {
+      "name": "oreName",
+      "type": "string",
+      "description": "鉱石名 (iron_ore, coal_ore, diamond_ore 等)",
+      "required": true
+    },
+    {
+      "name": "count",
+      "type": "number",
+      "description": "採掘個数",
+      "required": false,
+      "default": 3
+    }
   ],
-  "instruction": "1. check-inventory-item でツルハシを確認。stone_pickaxe 以上がなければ失敗を報告。2. find-blocks(${oreName}, maxDistance:48) で鉱石を検索。3. 見つかったら move-to で近づき dig-block-at で採掘。4. pickup-nearest-item でドロップを拾う。5. ${count} 個採掘するまで繰り返す。見つからなければ stair-mine で地下に降りてから再検索。",
-  "tools": ["check-inventory-item", "find-blocks", "move-to", "dig-block-at", "mine-block", "pickup-nearest-item", "stair-mine", "get-position"],
+  "instruction": "1. check-inventory-item でツルハシを確認。stone_pickaxe 以上がなければ即失敗を報告。2. find-blocks(${oreName}, maxDistance:48) で鉱石を検索。3. 見つかったら move-to で直接近づき dig-block-at で採掘。距離チェックの繰り返しはしない。4. pickup-nearest-item でドロップ回収。5. ${count} 個になるまで 2-4 を繰り返す。見つからなければ stair-mine で地下に降りてから再検索。",
+  "tools": [
+    "check-inventory-item",
+    "find-blocks",
+    "move-to",
+    "dig-block-at",
+    "mine-block",
+    "pickup-nearest-item",
+    "stair-mine",
+    "get-position"
+  ],
   "maxIterations": 20,
-  "model": "haiku",
+  "model": "sonnet",
   "failureEscalation": "system2",
   "source": "manual",
-  "stats": { "runs": 0, "successes": 0, "failures": 0, "avgDurationMs": 0 }
+  "stats": {
+    "runs": 1,
+    "successes": 1,
+    "failures": 0,
+    "avgDurationMs": 6694
+  }
 }

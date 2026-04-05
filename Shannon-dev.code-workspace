@@ -1,21 +1,24 @@
 {
-  "folders": [
-	{
-		"path": "."
-	},
-	{
-		"path": "../NotionProjectAssistant"
-	},
-	{
-		"path": "../Shannon-prod"
-	},
-	{
-		"path": "../minecraft"
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../NotionProjectAssistant"
+		},
+		{
+			"path": "../Shannon-prod"
+		},
+		{
+			"path": "../minecraft"
+		},
+		{
+			"path": "../ShannonUIMod"
+		}
+	],
+	"settings": {
+		"typescript.format.enable": true,
+		"javascript.format.enable": true,
+		"typescript.surveys.enabled": false
 	}
-],
-  "settings": {
-    "typescript.format.enable": true,
-    "javascript.format.enable": true,
-    "typescript.surveys.enabled": false
-  }
 }

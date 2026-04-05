@@ -11,12 +11,19 @@ import { CombatEventHandler } from './handlers/CombatEventHandler.js';
 import { PlayerEventHandler } from './handlers/PlayerEventHandler.js';
 import { StatusEventHandler } from './handlers/StatusEventHandler.js';
 import {
+    loadEventReactionSettingsFile,
+    saveEventReactionSettingsFile,
+} from './eventReactionSettingsStore.js';
+import { isForwardGroundSafe, pickSaferFleeYaw } from '../utils/fleeGroundSafety.js';
+import type { TaskStateInput } from '../../llm/graph/types.js';
+import {
     DamageEventData,
     DEFAULT_REACTION_CONFIGS,
     EventData,
     EventReactionConfig,
     EventReactionResult,
     EventType,
+    HostileDetectionConfig,
     HostileEventData,
     ItemEventData,
     ReactionSettingsState,
@@ -50,16 +57,17 @@ export class EventReactionSystem {
         this.taskRuntime = taskRuntime;
         this.configs = new Map();
 
-        // デフォルト設定を読み込み
-        DEFAULT_REACTION_CONFIGS.forEach(config => {
-            this.configs.set(config.eventType, { ...config });
-        });
-
-        // ハンドラーを初期化
+        // ハンドラーを先に初期化（combat に検知距離を載せる）
         this.environment = new EnvironmentEventHandler(bot);
         this.combat = new CombatEventHandler(bot);
         this.player = new PlayerEventHandler(bot);
         this.status = new StatusEventHandler(bot);
+
+        const persisted = loadEventReactionSettingsFile();
+        this.combat.applyHostileDetection(persisted.hostileDetection);
+        persisted.reactions.forEach(config => {
+            this.configs.set(config.eventType, { ...config });
+        });
     }
 
     /**
@@ -123,6 +131,7 @@ export class EventReactionSystem {
         const config = this.configs.get(eventType);
         if (config) {
             Object.assign(config, updates);
+            this.persistSettingsToDisk();
         }
     }
 
@@ -133,6 +142,19 @@ export class EventReactionSystem {
         DEFAULT_REACTION_CONFIGS.forEach(config => {
             this.configs.set(config.eventType, { ...config });
         });
+        this.combat.applyHostileDetection(undefined);
+        this.persistSettingsToDisk();
+    }
+
+    private persistSettingsToDisk(): void {
+        const reactions = Array.from(this.configs.values());
+        saveEventReactionSettingsFile(reactions, this.combat.getHostileDetection());
+    }
+
+    /** 敵接近検知の距離・閾値を更新してディスクへ保存（HTTP / 手動設定用） */
+    updateHostileDetection(partial: Partial<HostileDetectionConfig>): void {
+        this.combat.applyHostileDetection(partial);
+        this.persistSettingsToDisk();
     }
 
     /**
@@ -145,7 +167,11 @@ export class EventReactionSystem {
             enabled: skill.status,
             description: skill.description,
         }));
-        return { reactions, constantSkills };
+        return {
+            reactions,
+            hostileDetection: this.combat.getHostileDetection(),
+            constantSkills,
+        };
     }
 
     /**
@@ -231,10 +257,18 @@ export class EventReactionSystem {
         currentHealth: number;
         consecutiveCount: number;
     }): Promise<void> {
+        const hostiles = this.combat.scanCurrentHostiles();
+        const det = this.combat.getHostileDetection();
+        const nearThreshold = Math.max(det.criticalDistance, 12);
+        let possibleSource: string | undefined;
+        if (hostiles.length > 0 && hostiles[0].distance <= nearThreshold) {
+            possibleSource = `${hostiles[0].mobType}（約${hostiles[0].distance}m）`;
+        }
         const eventData: DamageEventData = {
             timestamp: Date.now(),
             eventType: 'damage',
             ...data,
+            ...(possibleSource ? { possibleSource } : {}),
         };
         await this.handleEvent(eventData);
     }
@@ -356,9 +390,9 @@ export class EventReactionSystem {
             const message = CombatEventHandler.buildTaskMessage(eventData) ?? '敵対Mobが接近中';
             log.info(`⚠️ 敵対Mob警戒 (warning): ${message}`);
 
-            // idle ならタスク生成、busy ならログのみ
+            // idle ならタスク生成、busy ならログのみ（warning は攻撃ツールを機械的に外す）
             if (this.isIdle()) {
-                return this.handleTaskEvent(eventData);
+                return this.handleTaskEvent(eventData, { minebotToolPolicy: 'hostile_warning' });
             }
             return { handled: true, reactionType: 'info', message };
         }
@@ -391,7 +425,14 @@ export class EventReactionSystem {
         }
 
         if (this.taskRuntime.isInEmergencyMode()) {
-            log.warn('⚠️ 緊急タスク処理中のため新しい緊急イベントをスキップ');
+            // HP が危険域の場合は LLM を待たず即座に逃走を再開
+            if (this.bot.health <= 8) {
+                log.warn(`⚠️ 緊急タスク処理中だが HP=${this.bot.health} で危険域 → 逃走を再開`);
+                this.bot.interruptExecution = true;
+                this.startContinuousFlee();
+            } else {
+                log.warn('⚠️ 緊急タスク処理中のため新しい緊急イベントをスキップ');
+            }
             return { handled: false, reactionType: 'emergency' };
         }
 
@@ -399,6 +440,7 @@ export class EventReactionSystem {
         log.error(`🚨 緊急対応: ${message}`);
 
         try {
+            this.bot.minebotControlState = 'emergency_reflect';
             // 1. 継続型の反射的逃走を開始（LLM が制御を取るまで逃げ続ける）
             this._llmHasControl = false;
             this.startContinuousFlee();
@@ -427,6 +469,7 @@ export class EventReactionSystem {
         } catch (error) {
             log.error('緊急対応エラー', error);
             this.stopContinuousFlee();
+            this.bot.minebotControlState = 'idle';
             return { handled: false, reactionType: 'emergency', message };
         }
     }
@@ -434,7 +477,10 @@ export class EventReactionSystem {
     /**
      * タスクイベントを処理
      */
-    private async handleTaskEvent(eventData: EventData): Promise<EventReactionResult> {
+    private async handleTaskEvent(
+        eventData: EventData,
+        taskOverrides: Partial<TaskStateInput> = {},
+    ): Promise<EventReactionResult> {
         if (!this.taskRuntime.isReady()) {
             return { handled: false, reactionType: 'task' };
         }
@@ -446,6 +492,7 @@ export class EventReactionSystem {
             const result = this.taskRuntime.addTaskToQueue({
                 userMessage: message,
                 isEmergency: false,
+                ...taskOverrides,
             });
 
             if (!result.success) {
@@ -556,9 +603,16 @@ export class EventReactionSystem {
             const hostiles = this.combat.scanCurrentHostiles();
 
             if (hostiles.length === 0) {
-                // 敵がいなくなった → 前方にスプリントだけ維持
-                this.bot.setControlState('forward', true);
-                this.bot.setControlState('sprint', true);
+                // 敵がいなくなった → 前方が崖でなければスプリント維持（崖方向のまま走り続けない）
+                const yaw = this.bot.entity.yaw;
+                if (isForwardGroundSafe(this.bot, yaw)) {
+                    this.bot.setControlState('forward', true);
+                    this.bot.setControlState('sprint', true);
+                } else {
+                    this.bot.setControlState('forward', false);
+                    this.bot.setControlState('sprint', false);
+                }
+                this.bot.setControlState('jump', false);
                 return;
             }
 
@@ -575,12 +629,14 @@ export class EventReactionSystem {
             }
 
             const len = Math.sqrt(repelX * repelX + repelZ * repelZ) || 1;
-            const fleeYaw = Math.atan2(-repelX / len, -repelZ / len);
+            const idealFleeYaw = Math.atan2(-repelX / len, -repelZ / len);
+            const fleeYaw = pickSaferFleeYaw(this.bot, idealFleeYaw);
 
             this.bot.look(fleeYaw, 0, true);
             this.bot.setControlState('forward', true);
             this.bot.setControlState('sprint', true);
-            this.bot.setControlState('jump', true);
+            // ジャンプは崖から飛び出しやすいので使わない（段差は斥力方向の横ずれで迂回）
+            this.bot.setControlState('jump', false);
 
             if (hostiles.length > 1) {
                 log.debug(`⚡ 継続逃走: ${hostiles.length}体から離脱中 (最近=${hostiles[0].mobType} ${hostiles[0].distance}m)`);

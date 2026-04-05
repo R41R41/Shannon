@@ -1,12 +1,24 @@
 {
   "name": "make-stone-tools",
-  "description": "石のツール一式をクラフトする。【前提: 木のツルハシが必要】",
+  "description": "石のツール一式をクラフトする。丸石・棒が既に十分なら石の採掘はしない。【前提: 木のツルハシが必要】",
   "params": [],
-  "instruction": "1. check-inventory-item で wooden_pickaxe を確認。なければまず原木から木のツルハシを作る (oak_log 採掘 → planks → stick → crafting_table → wooden_pickaxe)。2. mine-block(stone, count:4) で石を掘る (cobblestone がドロップ)。3. craft-one(stone_pickaxe) で石のツルハシ。4. craft-one(stone_axe) で石の斧。5. craft-one(stone_sword) で石の剣。材料不足なら追加で石を掘る。",
-  "tools": ["check-inventory-item", "mine-block", "craft-one", "get-position", "place-block-at", "pickup-nearest-item"],
-  "maxIterations": 20,
-  "model": "haiku",
+  "instruction": "1. check-inventory-item で wooden_pickaxe を確認。なければ task-complete で失敗し、make-wooden-tools を先に実行すべきと明示する。2. 必要量を把握する: stone_pickaxe は cobblestone×3+stick×2、stone_axe は ×3+×2、stone_sword は ×1+×1。合計 **cobblestone 7個以上・stick 5本以上** で足りる。check-inventory-item で cobblestone と stick を確認する。3. cobblestone が 7 未満のときだけ、不足分（必要なら数個の余裕を見て）mine-block(stone) で掘り、pickup-nearest-item で回収する。**既に 7 以上あれば mine-block(stone) は呼ばない。** 4. stick が 5 未満のときは、手持ちの板材・原木を check-inventory-item で確認し、craft-one で planks や stick を補う。原木・板材が足りなければ task-complete で失敗または gather 系ルーチンが必要と報告。5. craft-one で stone_pickaxe → stone_axe → stone_sword の順にクラフト。途中で材料不足なら 2〜4 に戻り、**不足分だけ** 採掘・クラフトで補充する。",
+  "tools": [
+    "check-inventory-item",
+    "mine-block",
+    "craft-one",
+    "get-position",
+    "place-block-at",
+    "pickup-nearest-item"
+  ],
+  "maxIterations": 15,
+  "model": "sonnet",
   "failureEscalation": "system2",
   "source": "manual",
-  "stats": { "runs": 0, "successes": 0, "failures": 0, "avgDurationMs": 0 }
+  "stats": {
+    "runs": 2,
+    "successes": 2,
+    "failures": 0,
+    "avgDurationMs": 75229
+  }
 }

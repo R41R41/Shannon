@@ -93,7 +93,7 @@ export interface CombatConfig {
 }
 
 export const DEFAULT_COMBAT_CONFIG: CombatConfig = {
-    tickIntervalMs: 200,
+    tickIntervalMs: 500,
     meleeRange: 3.5,
     attackCooldownMs: 625,   // 剣のクールダウン
     fleeHealthThreshold: 6,

@@ -15,6 +15,7 @@ import { MinebotTaskRuntime } from './runtime/MinebotTaskRuntime.js';
 import { SkillLoader } from './skills/SkillLoader.js';
 import { SkillRegistrar, getSkillRegistrar } from './skills/SkillRegistrar.js';
 import { CustomBot } from './types.js';
+import { sendGameChatLimited } from './utils/sendGameChatLimited.js';
 import { ConstantSkillInfo, LLMError, SkillExecutionError } from './types/index.js';
 import { WorldKnowledgeService } from './knowledge/WorldKnowledgeService.js';
 import { createLogger } from '../../utils/logger.js';
@@ -250,7 +251,7 @@ export class SkillAgent {
     this.eventBus.subscribe('minebot:chat', async (event) => {
       const { text } = event.data as MinebotSkillInput;
       if (text) {
-        this.bot.chat(text);
+        sendGameChatLimited(this.bot, text);
       }
     });
   }

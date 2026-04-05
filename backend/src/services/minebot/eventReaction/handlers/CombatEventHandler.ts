@@ -4,36 +4,38 @@
  */
 
 import { CustomBot } from '../../types.js';
+import { normalizeHostileDetection } from '../eventReactionSettingsStore.js';
 import {
     DamageEventData,
     EventData,
+    HostileDetectionConfig,
     HostileEntry,
     HostileEventData,
     SuffocationEventData,
     ThreatLevel,
 } from '../types.js';
-
-const HOSTILE_MOBS = [
-    'zombie', 'skeleton', 'creeper', 'spider', 'enderman', 'witch',
-    'phantom', 'drowned', 'husk', 'stray', 'blaze', 'ghast',
-    'magma_cube', 'slime', 'pillager', 'vindicator', 'evoker',
-    'warden', 'piglin_brute', 'hoglin', 'zoglin',
-];
+import { isLikelyHostileMobName } from '../../utils/hostileMobHints.js';
 
 export class CombatEventHandler {
     private bot: CustomBot;
     trackedHostiles: Set<number> = new Set();
 
+    /** 近接危険距離・検知範囲など（eventReactionSettings.json で永続化） */
+    private detection: HostileDetectionConfig = normalizeHostileDetection(undefined);
+
     constructor(bot: CustomBot) {
         this.bot = bot;
     }
 
-    /** 近接危険距離 — この範囲内は critical */
-    static readonly CRITICAL_DISTANCE = 8;
-    /** 検知範囲 */
-    static readonly DETECTION_DISTANCE = 16;
-    /** 複数体で critical になる閾値 */
-    static readonly MULTI_MOB_CRITICAL_COUNT = 2;
+    getHostileDetection(): HostileDetectionConfig {
+        return { ...this.detection };
+    }
+
+    applyHostileDetection(partial?: Partial<HostileDetectionConfig>): void {
+        this.detection = normalizeHostileDetection(
+            partial ? { ...this.detection, ...partial } : undefined
+        );
+    }
 
     /** 敵対Mob接近をチェック */
     checkHostileApproach(): HostileEventData | null {
@@ -43,10 +45,10 @@ export class CombatEventHandler {
             if (entity.id === this.bot.entity.id) return;
 
             const mobName = String((entity as any).name || '').toLowerCase();
-            if (!HOSTILE_MOBS.some(h => mobName.includes(h))) return;
+            if (!isLikelyHostileMobName(mobName)) return;
 
             const distance = this.bot.entity.position.distanceTo(entity.position);
-            if (distance <= CombatEventHandler.DETECTION_DISTANCE) {
+            if (distance <= this.detection.detectionDistance) {
                 nearbyHostiles.push({ entity, distance });
             }
         });
@@ -102,10 +104,10 @@ export class CombatEventHandler {
      *   notice  : それ以外（現状の検知範囲では到達しないがフォールバック用）
      */
     private assessThreatLevel(hostiles: { entity: any; distance: number }[]): ThreatLevel {
-        const closeCount = hostiles.filter(h => h.distance <= CombatEventHandler.CRITICAL_DISTANCE).length;
+        const closeCount = hostiles.filter(h => h.distance <= this.detection.criticalDistance).length;
 
         if (closeCount >= 1) return 'critical';
-        if (hostiles.length >= CombatEventHandler.MULTI_MOB_CRITICAL_COUNT) return 'critical';
+        if (hostiles.length >= this.detection.multiMobCriticalCount) return 'critical';
         if (hostiles.length >= 1) return 'warning';
         return 'notice';
     }
@@ -121,10 +123,10 @@ export class CombatEventHandler {
         for (const entity of Object.values(this.bot.entities)) {
             if (entity.id === this.bot.entity.id) continue;
             const mobName = String((entity as any).name || '').toLowerCase();
-            if (!HOSTILE_MOBS.some(h => mobName.includes(h))) continue;
+            if (!isLikelyHostileMobName(mobName)) continue;
 
             const distance = this.bot.entity.position.distanceTo(entity.position);
-            if (distance <= CombatEventHandler.DETECTION_DISTANCE) {
+            if (distance <= this.detection.detectionDistance) {
                 result.push({
                     mobType: mobName,
                     position: {
@@ -170,7 +172,7 @@ export class CombatEventHandler {
                 const mobSummary = ha.allHostiles.length > 1
                     ? ha.allHostiles.map(h => `${h.mobType}(${h.distance}m)`).join(', ')
                     : `${ha.mobType}(${ha.distance.toFixed(1)}m)`;
-                return `敵対Mob接近: ${mobSummary}。警戒して`;
+                return `敵対Mob接近: ${mobSummary}。距離を取って警戒（攻撃・迎撃は不要。flee-from や移動で様子見）`;
             }
             case 'damage': {
                 const dmg = eventData as DamageEventData;

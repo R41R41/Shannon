@@ -27,7 +27,9 @@ export function setMovements(
   dontMineUnderFallingBlock = true,
   digCost = 1,
   allowFreeMotion = false,
-  canSwim = true
+  canSwim = true,
+  /** pathfinder の落下許容（大きいと崖を「降りる」経路を取りやすい）。逃走系は 1〜2 推奨 */
+  maxDropDown = 4
 ) {
   const mcData = minecraftData(bot.version);
   const defaultMove = new Movements(bot as Bot);
@@ -60,6 +62,7 @@ export function setMovements(
 
   defaultMove.blocksCantBreak = cantBreak;
   (defaultMove as any).canSwim = canSwim;
+  defaultMove.maxDropDown = maxDropDown;
 
   // ドアを openable に追加（pathfinderデフォルトではgateのみ）
   // 注意: pathfinderにバグがあり、blockAt()がnullを返すとエラーになる

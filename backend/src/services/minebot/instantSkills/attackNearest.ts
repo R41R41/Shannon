@@ -1,4 +1,5 @@
 import { CustomBot, InstantSkill } from '../types.js';
+import { shouldRefuseAggressiveCombat } from '../utils/minebotToolPolicy.js';
 
 /**
  * 原子的スキル: 最も近いエンティティに1回攻撃
@@ -26,6 +27,10 @@ class AttackNearest extends InstantSkill {
 
   async runImpl(entityName: string = '', maxDistance: number = 4.5) {
     try {
+      const refuse = shouldRefuseAggressiveCombat(this.bot);
+      if (refuse) {
+        return { success: false, result: refuse };
+      }
       // 敵対的なMobのリスト
       const hostileMobs = [
         'zombie',

@@ -78,6 +78,10 @@ export interface CustomBot extends Omit<Bot, 'on' | 'once' | 'emit'> {
   cmd: CommandManager;
   executingSkill: boolean;
   interruptExecution: boolean;  // フィードバック到着時にスキル実行を中断するフラグ
+  /** Minebot タスク優先（単一ルールの可視化）。未設定時は通常運用 */
+  minebotControlState?: 'idle' | 'main_task' | 'emergency_reflect' | 'emergency_llm';
+  /** true の間はゲーム内 chat を送らない（UI Mod 通知は可）。緊急タスク用 */
+  suppressMinebotGameChat?: boolean;
   environmentState: {
     senderName: string;
     senderPosition: Vec3 | null;

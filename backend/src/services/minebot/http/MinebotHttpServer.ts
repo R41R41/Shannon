@@ -2,6 +2,7 @@ import express, { Application } from 'express';
 import { Server } from 'http';
 import { createLogger } from '../../../utils/logger.js';
 import { CONFIG } from '../config/MinebotConfig.js';
+import { DEFAULT_HOSTILE_DETECTION } from '../eventReaction/types.js';
 
 const log = createLogger('Minebot:HTTP');
 import { EventReactionSystem } from '../eventReaction/EventReactionSystem.js';
@@ -17,9 +18,14 @@ import {
 
 // 反応設定の更新リクエスト型
 interface ReactionSettingUpdateRequest {
-    eventType: string;
+    eventType?: string;
     enabled?: boolean;
     probability?: number;
+    hostileDetection?: {
+        criticalDistance?: number;
+        detectionDistance?: number;
+        multiMobCriticalCount?: number;
+    };
 }
 
 // チャットメッセージリクエスト型
@@ -198,21 +204,29 @@ export class MinebotHttpServer {
         // 反応設定更新エンドポイント
         this.app.post('/reaction_setting_update', async (req: any, res: any) => {
             try {
-                const { eventType, enabled, probability } = req.body as ReactionSettingUpdateRequest;
+                const { eventType, enabled, probability, hostileDetection } =
+                    req.body as ReactionSettingUpdateRequest;
 
-                // EventReactionSystemで設定を更新
                 if (this.eventReactionSystem) {
-                    this.eventReactionSystem.updateConfig(eventType as any, {
-                        enabled,
-                        probability,
-                    });
-                    log.info(`📝 反応設定更新: ${eventType} → enabled=${enabled}, probability=${probability}`);
+                    if (typeof eventType === 'string' && eventType.length > 0) {
+                        this.eventReactionSystem.updateConfig(eventType as any, {
+                            enabled,
+                            probability,
+                        });
+                        log.info(
+                            `📝 反応設定更新: ${eventType} → enabled=${enabled}, probability=${probability}`
+                        );
+                    }
+                    if (hostileDetection && typeof hostileDetection === 'object') {
+                        this.eventReactionSystem.updateHostileDetection(hostileDetection);
+                        log.info(`📝 敵接近検知パラメータ更新: ${JSON.stringify(hostileDetection)}`);
+                    }
                 }
 
                 const response: ApiResponse = {
                     success: true,
-                    result: `reaction setting for ${eventType} updated`,
-                    data: { eventType, enabled, probability }
+                    result: `reaction setting updated`,
+                    data: { eventType, enabled, probability, hostileDetection }
                 };
                 res.status(200).json(response);
             } catch (error) {
@@ -265,6 +279,7 @@ export class MinebotHttpServer {
                     const settings = this.eventReactionSystem.getSettingsState();
                     res.status(200).json({
                         reactions: settings.reactions,
+                        hostileDetection: settings.hostileDetection,
                         constantSkills: [], // 常時スキルは常時スキルタブで管理
                     });
                 } else {
@@ -283,6 +298,7 @@ export class MinebotHttpServer {
                     ];
                     res.status(200).json({
                         reactions,
+                        hostileDetection: { ...DEFAULT_HOSTILE_DETECTION },
                         constantSkills: [],
                     });
                 }

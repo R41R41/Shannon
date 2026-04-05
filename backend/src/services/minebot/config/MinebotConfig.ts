@@ -33,6 +33,15 @@ export class MinebotConfig {
   /** MinebotのAPIサーバーポート（環境変数で上書き可能） */
   readonly MINEBOT_API_PORT = parseInt(process.env.MINEBOT_API_PORT || '8092', 10);
 
+  /**
+   * ゲーム内 chat ツールで送る最大文字数（超過分は省略。複数通に分けない）。
+   * 長文・連投はチャット検証キックの原因になりやすいため既定は短め。
+   */
+  readonly MINECRAFT_CHAT_MAX_CHARS = Math.min(
+    256,
+    Math.max(16, parseInt(process.env.MINECRAFT_CHAT_MAX_CHARS || '72', 10)),
+  );
+
   /** UI Modのサーバーポート */
   readonly UI_MOD_PORT = 8091;
 
@@ -100,6 +109,12 @@ export class MinebotConfig {
     '../../../../saves/minecraft/constantSkills.json'
   );
 
+  /** イベント反応・敵接近検知など Minebot 反応系の永続化JSON */
+  readonly EVENT_REACTION_SETTINGS_JSON = join(
+    __dirname,
+    '../../../../saves/minecraft/eventReactionSettings.json'
+  );
+
   // ===== タスク設定 =====
 
   /** Function Calling モードを使用するか（true: 新方式, false: 旧LangGraph方式） */
@@ -146,8 +161,46 @@ export class MinebotConfig {
     '1.21.11-fabric-test': 25567,
   };
 
-  /** チェックタイムアウト間隔（ミリ秒） - サーバーのKeep-Alive応答用 */
-  readonly CHECK_TIMEOUT_INTERVAL = 30 * 1000; // 30秒（サーバーのデフォルトタイムアウトに合わせる）
+  /**
+   * minecraft-protocol の keep-alive 用タイムアウト（ms）。
+   * 「前回 keep_alive を処理してから次を受け取るまで」の許容時間。既定30秒だと、
+   * pathfinder・同期処理・一時的なメインスレッド占有でパケット処理が遅れ、誤って
+   * `client timed out after 30000 milliseconds` / `keepAliveError` 切断しやすい。
+   */
+  readonly CHECK_TIMEOUT_INTERVAL = Math.max(
+    30_000,
+    parseInt(process.env.MINECRAFT_CHECK_TIMEOUT_MS || '120000', 10),
+  );
+
+  /**
+   * HP がこの値以下で敵が近いとき、攻撃系ツールを LLM から除外（InstantSkill でも拒否）。
+   * `MINECRAFT_COMBAT_DEFENSIVE_MAX_HP` で上書き（1〜20）。
+   */
+  readonly COMBAT_DEFENSIVE_MAX_HP = Math.min(
+    20,
+    Math.max(1, parseFloat(process.env.MINECRAFT_COMBAT_DEFENSIVE_MAX_HP || '10')),
+  );
+
+  /** 防御モードとみなす敵との最大距離（ブロック）。`MINECRAFT_COMBAT_DEFENSIVE_HOSTILE_DISTANCE` */
+  readonly COMBAT_DEFENSIVE_HOSTILE_DISTANCE = Math.max(
+    2,
+    parseFloat(process.env.MINECRAFT_COMBAT_DEFENSIVE_HOSTILE_DISTANCE || '10'),
+  );
+
+  /** 敵探索の上限距離（ブロック）。内側の COMBAT_DEFENSIVE_HOSTILE_DISTANCE より大きくてよい */
+  readonly COMBAT_DEFENSIVE_HOSTILE_SCAN_RANGE = Math.max(
+    this.COMBAT_DEFENSIVE_HOSTILE_DISTANCE,
+    parseFloat(process.env.MINECRAFT_COMBAT_DEFENSIVE_HOSTILE_SCAN_RANGE || '16'),
+  );
+
+  /**
+   * interruptForEmergency が isExecuting 解除を待つ最大時間（ms）。
+   * pathfinder 等でグラフループが長引く場合でも緊急 invoke をデッドロックさせないための上限。
+   */
+  readonly EMERGENCY_INTERRUPT_WAIT_MS = Math.max(
+    500,
+    parseInt(process.env.MINEBOT_EMERGENCY_INTERRUPT_WAIT_MS || '3000', 10),
+  );
 
   // ===== Discord → Minecraft ユーザー名マッピング =====
   // key: Discord の getUserNickname() で返される名前（小文字）

@@ -2,11 +2,23 @@
   "name": "make-wooden-tools",
   "description": "素手から木のツール一式をクラフトする。【前提: なし。素手から開始可能】",
   "params": [],
-  "instruction": "1. check-inventory-item で oak_log の所持数を確認。4個未満なら mine-block(oak_log, count:4) で採掘。2. craft-one(oak_planks) を数回呼んで板を8個以上作る。3. craft-one(stick) を数回呼んで棒を4個以上作る。4. craft-one(crafting_table) で作業台を作る。5. craft-one(wooden_pickaxe) でツルハシを作る。6. craft-one(wooden_axe) で斧を作る。7. craft-one(wooden_sword) で剣を作る。各ステップで失敗したら材料を確認して不足分を補う。",
-  "tools": ["check-inventory-item", "mine-block", "craft-one", "get-position", "place-block-at", "pickup-nearest-item"],
-  "maxIterations": 20,
-  "model": "haiku",
+  "instruction": "1. check-inventory-item で oak_log を確認。4個未満なら mine-block(oak_log, count:4) で一括採掘し pickup-nearest-item で回収。2. craft-one(oak_planks) を繰り返して板材8個以上確保。3. craft-one(stick) を繰り返して棒4個以上確保。4. craft-one(crafting_table) → craft-one(wooden_pickaxe) → craft-one(wooden_axe) → craft-one(wooden_sword) を順にクラフト。各ステップで材料不足なら不足分だけ補う。毎回のインベントリ全確認は不要。",
+  "tools": [
+    "check-inventory-item",
+    "mine-block",
+    "craft-one",
+    "get-position",
+    "place-block-at",
+    "pickup-nearest-item"
+  ],
+  "maxIterations": 18,
+  "model": "sonnet",
   "failureEscalation": "system2",
   "source": "manual",
-  "stats": { "runs": 0, "successes": 0, "failures": 0, "avgDurationMs": 0 }
+  "stats": {
+    "runs": 1,
+    "successes": 1,
+    "failures": 0,
+    "avgDurationMs": 26387
+  }
 }

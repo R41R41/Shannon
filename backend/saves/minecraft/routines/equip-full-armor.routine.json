@@ -4,10 +4,10 @@
   "params": [
     { "name": "material", "type": "string", "description": "防具素材", "required": false, "default": "iron" }
   ],
-  "instruction": "check-inventory-item で ${material}_helmet, ${material}_chestplate, ${material}_leggings, ${material}_boots を確認。あるものを equip-item で装備する。head, torso, legs, feet の順。",
+  "instruction": "check-inventory-item で ${material}_helmet, ${material}_chestplate, ${material}_leggings, ${material}_boots を一度に確認。所持しているものを equip-item で head, torso, legs, feet の順に装備する。存在しないアイテムはスキップ。",
   "tools": ["check-inventory-item", "equip-item"],
   "maxIterations": 8,
-  "model": "haiku",
+  "model": "sonnet",
   "failureEscalation": "system2",
   "source": "manual",
   "stats": { "runs": 0, "successes": 0, "failures": 0, "avgDurationMs": 0 }

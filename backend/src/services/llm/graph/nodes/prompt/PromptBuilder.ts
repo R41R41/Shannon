@@ -5,6 +5,7 @@ import { TaskContext } from '@shannon/common';
 import { EmotionState } from '../EmotionNode.js';
 import { MemoryState } from '../MemoryNode.js';
 import type { SelfImprovementRulesFile } from '../../cognitive/selfImprove/types.js';
+import { CONFIG as MINEBOT_CONFIG } from '../../../../minebot/config/MinebotConfig.js';
 
 /**
  * FunctionCallingAgent 用のシステムプロンプト構築ユーティリティ
@@ -204,7 +205,9 @@ ${this.formatOutputRules(context)}
                 break;
             case 'minebot':
             case 'minecraft':
-                base = '今は Minecraft 上で行動できます。最終返信は chat-on-web や chat-on-discord を使わず通常の文章として返してください。必要な物理行動は Minecraft 用ツールを使って実行し、システムが action plan に変換します。';
+                base =
+                    '今は Minecraft 上で行動できます。最終返信は chat-on-web や chat-on-discord を使わず通常の文章として返してください。必要な物理行動は Minecraft 用ツールを使って実行し、システムが action plan に変換します。' +
+                    ` **ゲーム内の chat ツールは原則使わず**、使う場合も **${MINEBOT_CONFIG.MINECRAFT_CHAT_MAX_CHARS}文字以内の一言のみ**。長文は task-complete の summary へ。`;
                 break;
             default:
                 base = '最終的な回答は通常の文章として返してください。';
@@ -308,6 +311,15 @@ ${this.formatOutputRules(context)}
 - **Minecraft の知識が必要な時は recall-knowledge で思い出せ**。食料の作り方、採掘に必要なツール等
 - **失敗したら同じことを繰り返すな**。失敗メッセージを読み、search-skills や recall-knowledge で正しい方法を調べてから再試行
 - raw素材(raw_iron等)があるなら採掘せずに製錬から始める
+- **戦闘**: attack-continuously は武器自動装備+追跡攻撃。combat-engage は高度な戦闘AI。敵に近づいて攻撃→逃げられたら再接近の繰り返しは非効率。attack-continuously 1回で追跡+攻撃が完結する
+- **逃走後は無理に再突撃しない**: 緊急逃走が発動したら、まず態勢を立て直す（武器クラフト、食事、ブロック積み等）。同じ敵に5回以上接近→逃走を繰り返すのは禁止
+- **収納（チェスト・樽）**: ラージチェストはブロックが2マスある。find-blocks で chest を探したら **返ってきた全座標**（または「○個発見」の件数）に対し、近くまで move-to して **それぞれ check-container** する。数件だけ見て「木材がない」と決めつけない。ユーザーが「チェストの中だけ」と言ったときは **原木採取ルーチンに逃げず**、未確認の収納が残っていれば先にそこを開ける
+- **ゲーム内 chat（最重要・違反厳禁）**
+  - \`chat\` の \`message\` は **合計 ${MINEBOT_CONFIG.MINECRAFT_CHAT_MAX_CHARS} 文字以内の日本語1行**を自分で収めること（超過はサーバー側で切り捨てられるが、**最初から短く書け**）
+  - **禁止**: 長文、複数文、箇条書き、番号リスト、Markdown（\`**\`・\`#\`・改行だらけ）、英語の説明の羅列、状況報告の全文
+  - **許可例**: 「了解」「鉄インゴット取れた」「ちょっと待って」程度の一言
+  - **詳細・表・手順・失敗理由**はすべて **task-complete の summary**（および毎ターンの思考テキスト）に書く。**chat に載せない**
+  - **原則**: ユーザーが「チャットで話して」と言わない限り **chat を呼ばない**。黙ってツールを実行し、終わりに task-complete だけでよい
 ${this.formatRoutineGuidance()}${this.formatDimensionRules(context)}${this.formatDynamicRules()}`;
     }
 
@@ -325,13 +337,18 @@ ${this.formatRoutineGuidance()}${this.formatDimensionRules(context)}${this.forma
             const rate = r.stats.runs > 0
                 ? ` [${Math.round((r.stats.successes / r.stats.runs) * 100)}% success]`
                 : '';
-            return `  - routine-${r.name} — ${r.description} (${r.steps.length} steps${rate})`;
+            const mode = r.instruction ? 'sub-agent' : `${r.steps?.length ?? 0} steps`;
+            return `  - routine-${r.name} — ${r.description} (${mode}${rate})`;
         });
 
         return `
-- **【ルーチン優先】以下の定型作業はルーチンを使う**（LLM呼出なしで高速実行、個別スキルの3-10倍速い）:
+## ルーチン（最重要）
+**タスクにマッチするルーチンがあれば、必ずルーチンを最初に使え。個別スキルで自分でやるな。**
+ルーチンはサブエージェントが自律的に状況判断して実行するので精度が高い。
+利用可能なルーチン:
 ${lines.join('\n')}
 - ルーチンが失敗した場合のみ個別スキルにフォールバックする
+- 例: 「食料集めて」→ routine-hunt-animal を使う。find-nearest-entity → move-to → attack を自分で組み合わせるな
 - 繰り返し使うスキルパターンを見つけたら **manage-routine で create** して新しいルーチンを登録する`;
     }
 
@@ -372,6 +389,12 @@ ${lines.join('\n')}
             return '- **Discord はテーブル（| col | col |）を表示できない**。代わりに箇条書き・太字・コードブロックで整形する\n' +
                 '- 比較データは箇条書きで「**項目**: 値」形式にするか、コードブロック内でスペース整列する\n' +
                 '- task-complete の summary にこれらのフォーマットを使って見やすく書く';
+        }
+        if (context?.platform === 'minecraft' || context?.platform === 'minebot') {
+            return '- **詳細・表・箇条書き・長い説明はすべて task-complete の summary に書く**（Markdown OK）。そこがユーザーへの本命の返答\n' +
+                '- **`chat` ツールは長文に使わない**。必要なときだけ **短い一言**（目安: ' +
+                `${MINEBOT_CONFIG.MINECRAFT_CHAT_MAX_CHARS}文字以内）。説明や進捗の羅列は思考テキスト（content）か summary に回す\n` +
+                '- ゲーム内チャットに **Markdown・改行・複数文** を載せない（キックの原因になる）';
         }
         return '- task-complete の summary で Markdown を使って見やすく整形する（**太字**, 箇条書き, 表など）\n' +
             '- 比較データや調査結果はテーブル（| 列1 | 列2 |）や箇条書きで構造化する';

@@ -1,5 +1,6 @@
 import { CustomBot, InstantSkill } from '../types.js';
 import { CombatController } from '../combat/CombatController.js';
+import { shouldRefuseAggressiveCombat } from '../utils/minebotToolPolicy.js';
 import { createLogger } from '../../../utils/logger.js';
 
 const log = createLogger('Minebot:Skill:combatEngage');
@@ -7,22 +8,14 @@ const log = createLogger('Minebot:Skill:combatEngage');
 /**
  * combat-engage: CombatController による汎用戦闘
  *
- * LLM から呼ばれると、CombatController が 200ms 周期で
- * 状況をスキャンし、最善の行動をスコアリングして自律実行する。
+ * 500ms 周期で状況をスキャンし、最善の行動をスコアリングして自律実行する。
  * 敵全滅 or HP 危険逃走 or タイムアウトで終了。
- *
- * 旧 combat スキルとの違い:
- * - 複数体の敵に対処可能
- * - 遠距離攻撃 (スケルトン, ブレイズ) に盾・横移動で対処
- * - クリーパーは殴って後退
- * - 不利な状況では自動逃走
- * - 武器・防具を自動装備
  */
 class CombatEngage extends InstantSkill {
     constructor(bot: CustomBot) {
         super(bot);
         this.skillName = 'combat-engage';
-        this.description = '汎用戦闘AI。敵モブと戦闘する。200ms周期で状況を評価し最善の行動を自律選択。複数体の敵、遠距離攻撃、クリーパー爆発にも対処可能。不利なら自動逃走する。';
+        this.description = '汎用戦闘AI。敵モブと戦闘する。状況を評価し最善の行動を自律選択。複数体の敵、遠距離攻撃にも対処。不利なら自動逃走。';
         this.params = [
             {
                 name: 'target',
@@ -41,7 +34,11 @@ class CombatEngage extends InstantSkill {
     }
 
     async runImpl(target?: string, maxDuration: number = 60): Promise<{ success: boolean; result: string }> {
-        // #20 fix: 敵がいるか事前チェック
+        const refuse = shouldRefuseAggressiveCombat(this.bot);
+        if (refuse) {
+            return { success: false, result: refuse };
+        }
+        // 敵がいるか事前チェック
         const hasHostiles = Object.values(this.bot.entities).some(e =>
             e && e.position && e.type === 'hostile' &&
             this.bot.entity.position.distanceTo(e.position) <= 16

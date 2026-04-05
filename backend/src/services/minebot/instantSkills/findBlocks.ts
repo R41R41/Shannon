@@ -4,6 +4,14 @@ import { CustomBot, InstantSkill } from '../types.js';
 const INITIAL_RADIUS = 16;
 const RADIUS_STEP = 16;
 
+/** ラージチェストは2ブロック分あるため、count が小さいと取りこぼす */
+const CHEST_LIKE = new Set(['chest', 'trapped_chest', 'ender_chest', 'barrel']);
+const MIN_COUNT_STORAGE_SEARCH = 48;
+
+function isStorageBlockSearch(blockNames: string[]): boolean {
+  return blockNames.length > 0 && blockNames.every((n) => CHEST_LIKE.has(n));
+}
+
 /**
  * 原子的スキル: 周囲のブロックを検索
  * 近距離から段階的に範囲を広げて検索する。
@@ -15,7 +23,7 @@ class FindBlocks extends InstantSkill {
     super(bot);
     this.skillName = 'find-blocks';
     this.description =
-      '指定したブロックを周囲から検索して座標リストを返します。';
+      '指定したブロックを周囲から検索して座標リストを返します。チェスト・樽はラージチェストが2ブロック分あるため、すべて列挙したいときは count を 48 以上にする（省略時は内部で底上げされる）。';
     this.mcData = minecraftData(this.bot.version);
     this.params = [
       {
@@ -33,7 +41,8 @@ class FindBlocks extends InstantSkill {
       {
         name: 'count',
         type: 'number',
-        description: '検索する最大数（デフォルト: 10個）',
+        description:
+          '検索する最大数（デフォルト: 10個）。chest / barrel 等の収納ブロックはラージ対で2座標になるため、基地内の全チェストを洗うときは 48 以上を推奨（未指定でも収納単体検索時は最低48まで引き上げ）',
         default: 10,
       },
     ];
@@ -68,14 +77,17 @@ class FindBlocks extends InstantSkill {
 
       const displayName = blockNames.filter(n => !invalidNames.includes(n)).join(', ');
 
+      const storageSearch = isStorageBlockSearch(blockNames.filter((n) => !invalidNames.includes(n)));
+      const effectiveCount = storageSearch ? Math.max(count, MIN_COUNT_STORAGE_SEARCH) : count;
+
       let blocks: any[] = [];
+      // maxDistance まで必ず広げる（count が小さいとき近距離だけで打ち切られチェスト取りこぼしが起きるのを防ぐ）
       for (let radius = INITIAL_RADIUS; radius <= maxDistance; radius += RADIUS_STEP) {
         blocks = this.bot.findBlocks({
           matching: matchingIds.length === 1 ? matchingIds[0] : matchingIds,
           maxDistance: radius,
-          count: count,
+          count: effectiveCount,
         });
-        if (blocks.length >= count) break;
       }
 
       if (blocks.length === 0) {
@@ -138,16 +150,18 @@ class FindBlocks extends InstantSkill {
 
       // 複数ブロック名検索の場合、各ブロックの実名を表示
       const showBlockName = blockNames.length > 1;
+      const listCap = storageSearch ? 32 : 5;
       const blockList = sortedBlocks
-        .slice(0, 5)
+        .slice(0, listCap)
         .map((b) => showBlockName
           ? `${b.blockName}(${b.x}, ${b.y}, ${b.z}) 距離${b.distance}m`
           : `(${b.x}, ${b.y}, ${b.z}) 距離${b.distance}m`)
         .join(', ');
 
+      const truncated = sortedBlocks.length > listCap;
       return {
         success: true,
-        result: `${displayName}を${blocks.length}個発見: ${blockList}${blocks.length > 5 ? '...' : ''}`,
+        result: `${displayName}を${sortedBlocks.length}個発見: ${blockList}${truncated ? '...' : ''}`,
       };
     } catch (error: any) {
       return {

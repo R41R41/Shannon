@@ -2,14 +2,37 @@
   "name": "gather-wood",
   "description": "原木を採掘して拾う",
   "params": [
-    { "name": "count", "type": "number", "description": "採掘個数", "required": false, "default": 4 },
-    { "name": "woodType", "type": "string", "description": "原木の種類", "required": false, "default": "oak_log" }
+    {
+      "name": "count",
+      "type": "number",
+      "description": "採掘個数",
+      "required": false,
+      "default": 4
+    },
+    {
+      "name": "woodType",
+      "type": "string",
+      "description": "原木の種類",
+      "required": false,
+      "default": "oak_log"
+    }
   ],
-  "instruction": "mine-block(${woodType}, count:${count}) で原木を ${count} 個採掘する。採掘後 pickup-nearest-item でドロップを拾う。",
-  "tools": ["mine-block", "pickup-nearest-item", "find-blocks", "move-to", "get-position"],
+  "instruction": "mine-block(${woodType}, count:${count}) で原木を一括採掘する。完了後 pickup-nearest-item でドロップを回収。mine-block が内部で移動・採掘を処理するので、find-blocks や move-to を別途呼ぶ必要はない。",
+  "tools": [
+    "mine-block",
+    "pickup-nearest-item",
+    "find-blocks",
+    "move-to",
+    "get-position"
+  ],
   "maxIterations": 10,
-  "model": "haiku",
+  "model": "sonnet",
   "failureEscalation": "system2",
   "source": "manual",
-  "stats": { "runs": 0, "successes": 0, "failures": 0, "avgDurationMs": 0 }
+  "stats": {
+    "runs": 1,
+    "successes": 1,
+    "failures": 0,
+    "avgDurationMs": 40871
+  }
 }

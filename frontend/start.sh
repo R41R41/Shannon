@@ -9,6 +9,25 @@ if [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "mingw"* ]] || [[ "$OSTYPE" == "
     IS_WINDOWS=true
 fi
 
+should_use_mintty_windows() {
+    [ "$IS_WINDOWS" != true ] && return 1
+    [ -n "${SHANNON_USE_MINTTY:-}" ] && [ "$SHANNON_USE_MINTTY" != "0" ] && return 0
+    [ -n "${SHANNON_NO_MINTTY:-}" ] && [ "$SHANNON_NO_MINTTY" != "0" ] && return 1
+    local tp
+    tp=$(echo "${TERM_PROGRAM:-}" | tr '[:upper:]' '[:lower:]')
+    case "$tp" in
+        vscode|visual\ studio\ code|cursor) return 1 ;;
+    esac
+    return 0
+}
+
+windows_use_tmux_for_integrated() {
+    [ "$IS_WINDOWS" = true ] || return 1
+    should_use_mintty_windows && return 1
+    [ -n "${SHANNON_NO_TMUX:-}" ] && [ "$SHANNON_NO_TMUX" != "0" ] && return 1
+    command -v tmux >/dev/null 2>&1
+}
+
 # --- Configuration ---
 IS_DEV=false
 PORT=3001
@@ -29,6 +48,7 @@ mkdir -p "$PID_DIR"
 PID_FILE="$PID_DIR/${FRONTEND_SESSION}.pid"
 
 if [ "$IS_WINDOWS" = true ]; then
+    tmux kill-session -t "$FRONTEND_SESSION" 2>/dev/null
     taskkill //F //FI "WINDOWTITLE eq $FRONTEND_SESSION" 2>/dev/null
     # PID ファイルから前回のプロセスツリーを殺す
     if [ -f "$PID_FILE" ]; then
@@ -91,20 +111,38 @@ exec npm run dev
 LAUNCH_EOF
     fi
     chmod +x "$LAUNCH_SCRIPT"
-    BEFORE_PIDS=$(tasklist //FI "IMAGENAME eq mintty.exe" //FO CSV //NH 2>/dev/null | cut -d',' -f2 | tr -d '"' | tr -d ' ')
-    mintty --hold error --title "$FRONTEND_SESSION" /bin/bash -l "$LAUNCH_SCRIPT" &
-    sleep 2
-    AFTER_PIDS=$(tasklist //FI "IMAGENAME eq mintty.exe" //FO CSV //NH 2>/dev/null | cut -d',' -f2 | tr -d '"' | tr -d ' ')
-    MINTTY_WIN_PID=""
-    for pid in $AFTER_PIDS; do
-        if ! echo "$BEFORE_PIDS" | grep -q "^${pid}$"; then
-            MINTTY_WIN_PID="$pid"
-            break
+    if should_use_mintty_windows; then
+        BEFORE_PIDS=$(tasklist //FI "IMAGENAME eq mintty.exe" //FO CSV //NH 2>/dev/null | cut -d',' -f2 | tr -d '"' | tr -d ' ')
+        mintty --hold error --title "$FRONTEND_SESSION" /bin/bash -l "$LAUNCH_SCRIPT" &
+        sleep 2
+        AFTER_PIDS=$(tasklist //FI "IMAGENAME eq mintty.exe" //FO CSV //NH 2>/dev/null | cut -d',' -f2 | tr -d '"' | tr -d ' ')
+        MINTTY_WIN_PID=""
+        for pid in $AFTER_PIDS; do
+            if ! echo "$BEFORE_PIDS" | grep -q "^${pid}$"; then
+                MINTTY_WIN_PID="$pid"
+                break
+            fi
+        done
+        if [ -n "$MINTTY_WIN_PID" ]; then
+            echo "$MINTTY_WIN_PID" > "$PID_FILE"
+            echo "Frontend mintty Windows PID: $MINTTY_WIN_PID"
         fi
-    done
-    if [ -n "$MINTTY_WIN_PID" ]; then
-        echo "$MINTTY_WIN_PID" > "$PID_FILE"
-        echo "Frontend mintty Windows PID: $MINTTY_WIN_PID"
+    elif windows_use_tmux_for_integrated; then
+        if tmux new-session -d -s "$FRONTEND_SESSION" -n "vite" "bash -l \"$LAUNCH_SCRIPT\"" 2>/dev/null; then
+            rm -f "$PID_FILE"
+            echo "Frontend tmux session: $FRONTEND_SESSION"
+            echo "  Attach (別ターミナルタブ推奨): tmux attach -t $FRONTEND_SESSION"
+        else
+            echo "tmux での起動に失敗したため、このターミナルでバックグラウンド実行にフォールバックします。"
+            /bin/bash -l "$LAUNCH_SCRIPT" &
+            echo $! > "$PID_FILE"
+            echo "Frontend shell PID: $(cat "$PID_FILE")"
+        fi
+    else
+        echo "Frontend: running in this terminal (no mintty). tmux があればセッション分離されます (pacman -S tmux)。SHANNON_USE_MINTTY=1 で別ウィンドウ。"
+        /bin/bash -l "$LAUNCH_SCRIPT" &
+        echo $! > "$PID_FILE"
+        echo "Frontend shell PID: $(cat "$PID_FILE")"
     fi
 else
     if [ "$IS_DEV" = true ]; then
@@ -118,7 +156,14 @@ echo "Frontend started in session: $FRONTEND_SESSION"
 
 echo ""
 if [ "$IS_WINDOWS" = true ]; then
-    echo "Frontend running in terminal window: $FRONTEND_SESSION"
+    if should_use_mintty_windows; then
+        echo "Frontend running in terminal window: $FRONTEND_SESSION"
+    elif command -v tmux >/dev/null 2>&1 && tmux has-session -t "$FRONTEND_SESSION" 2>/dev/null; then
+        echo "Frontend running in tmux session: $FRONTEND_SESSION"
+        tmux list-sessions 2>/dev/null | grep -F "$FRONTEND_SESSION" || true
+    else
+        echo "Frontend running in current terminal (background): $FRONTEND_SESSION"
+    fi
     [ -f "$PID_FILE" ] && echo "  PID: $(cat "$PID_FILE")"
 else
     echo "Active tmux sessions:"

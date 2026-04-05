@@ -8,6 +8,7 @@ import type { CustomBot } from '../types/CustomBot.js';
 import type { ScoredAction, CombatConfig } from './types.js';
 import { DEFAULT_COMBAT_CONFIG } from './types.js';
 import type { Entity } from 'prismarine-entity';
+import { pickSaferFleeYaw } from '../utils/fleeGroundSafety.js';
 
 const log = createLogger('Minebot:Combat:Executor');
 
@@ -180,12 +181,13 @@ export class ActionExecutor {
                 const dx = botPos.x - avgX;
                 const dz = botPos.z - avgZ;
                 const len = Math.sqrt(dx * dx + dz * dz) || 1;
-
-                // 敵の反対方向を向く
-                await this.bot.lookAt(botPos.offset(dx / len * 10, 0, dz / len * 10), true);
+                const idealYaw = Math.atan2(-dx / len, -dz / len);
+                const fleeYaw = pickSaferFleeYaw(this.bot, idealYaw);
+                await this.bot.look(fleeYaw, 0, true);
                 this.bot.setControlState('forward', true);
                 this.bot.setControlState('sprint', true);
-                await new Promise(r => setTimeout(r, 800));
+                // 2秒間全力で逃走（足元安全な向きに矯正済み）
+                await new Promise(r => setTimeout(r, 2000));
                 this.bot.setControlState('forward', false);
                 this.bot.setControlState('sprint', false);
             }
@@ -209,9 +211,7 @@ export class ActionExecutor {
 
     private async tower(): Promise<void> {
         try {
-            // #6 fix: 正しい tower 実装
             const blocks = this.bot.inventory.items().find(i =>
-                // #17 fix: 実際に積めるブロックのみ
                 ['cobblestone', 'dirt', 'oak_planks', 'spruce_planks', 'birch_planks',
                  'stone', 'deepslate', 'netherrack', 'sandstone', 'andesite',
                  'diorite', 'granite', 'tuff'].includes(i.name)
@@ -219,18 +219,34 @@ export class ActionExecutor {
             if (!blocks) return;
 
             await this.bot.equip(blocks, 'hand');
+
+            // 足元のブロックを先に取得（ジャンプ前）
+            const below = this.bot.blockAt(this.bot.entity.position.offset(0, -1, 0));
+            if (!below) return;
+
+            // ジャンプ開始
             this.bot.setControlState('jump', true);
-            await new Promise(r => setTimeout(r, 350)); // ジャンプの頂点付近
+
+            // 上昇中にブロック設置を試みる（50msごとにリトライ）
+            let placed = false;
+            for (let i = 0; i < 8 && !placed; i++) {
+                await new Promise(r => setTimeout(r, 50));
+                // velocity.y > 0 の間（上昇中）に設置
+                if (this.bot.entity.velocity.y > 0.1) {
+                    try {
+                        await this.bot.placeBlock(below, new Vec3(0, 1, 0));
+                        placed = true;
+                    } catch { /* retry */ }
+                }
+            }
             this.bot.setControlState('jump', false);
 
-            // 足元のブロックの上面に設置
-            const pos = this.bot.entity.position;
-            const below = this.bot.blockAt(pos.offset(0, -1, 0));
-            if (below) {
-                try {
-                    await this.bot.placeBlock(below, new Vec3(0, 1, 0));
-                } catch {
-                    // 設置失敗は無視 (既にブロックがある等)
+            if (!placed) {
+                // フォールバック: 着地後に再試行
+                await new Promise(r => setTimeout(r, 200));
+                const belowNow = this.bot.blockAt(this.bot.entity.position.offset(0, -1, 0));
+                if (belowNow) {
+                    try { await this.bot.placeBlock(belowNow, new Vec3(0, 1, 0)); } catch { /* ignore */ }
                 }
             }
         } catch (e) {

@@ -227,6 +227,17 @@ function createExecuteNode(
           if (sanitized !== tool.name) llmToolMap.set(sanitized, handler);
         }
 
+        const { resolveMinebotToolPolicy, filterToolsByMinebotPolicy } = await import(
+          '../../minebot/utils/minebotToolPolicy.js'
+        );
+        const toolPolicy = resolveMinebotToolPolicy(bot, envelope);
+        const toolsForRun = filterToolsByMinebotPolicy(tools, toolPolicy);
+        if (toolsForRun.length !== tools.length) {
+          logger.info(
+            `Minebot tool policy "${toolPolicy}": tools ${tools.length} → ${toolsForRun.length}`,
+          );
+        }
+
         const executor = new ShannonExecutor({
           instantSkills: bot?.instantSkills,
           bot,
@@ -239,7 +250,7 @@ function createExecuteNode(
           goal: envelope.text ?? '',
           context,
           systemPrompt,
-          tools,
+          tools: toolsForRun,
           tags: envelope.tags,
           onToolStarting: state._onToolStarting,
           onTaskTreeUpdate: state._onTaskTreeUpdate,

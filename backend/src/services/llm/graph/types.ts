@@ -42,6 +42,8 @@ export interface TaskStateInput {
   // === 制御フラグ ===
   retryCount?: number;
   isEmergency?: boolean;
+  /** ShannonExecutor: 攻撃系ツールの機械的除外（hostile_warning / 緊急生存など） */
+  minebotToolPolicy?: 'normal' | 'hostile_warning' | 'defensive_low_hp' | 'emergency_survival';
 
   // === 実行結果 ===
   executionResults?: ExecutionResult[] | null;

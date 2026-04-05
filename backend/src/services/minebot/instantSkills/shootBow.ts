@@ -1,5 +1,6 @@
 import { createLogger } from '../../../utils/logger.js';
 import { CustomBot, InstantSkill } from '../types.js';
+import { shouldRefuseAggressiveCombat } from '../utils/minebotToolPolicy.js';
 
 const log = createLogger('Minebot:Skill:shootBow');
 
@@ -51,6 +52,10 @@ class ShootBow extends InstantSkill {
     maxDistance: number = 48
   ) {
     try {
+      const refuse = shouldRefuseAggressiveCombat(this.bot);
+      if (refuse) {
+        return { success: false, result: refuse };
+      }
       if (!targetName) {
         return { success: false, result: '射撃対象を指定してください' };
       }

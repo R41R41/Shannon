@@ -10,6 +10,7 @@ import type {
 import { GRAPH_CONFIG } from '../../llm/graph/types.js';
 import type { TaskTreeState } from '@shannon/common';
 import type { CustomBot } from '../types.js';
+import { CONFIG } from '../config/MinebotConfig.js';
 
 const log = createLogger('Minebot:TaskRuntime');
 
@@ -78,6 +79,14 @@ export class MinebotTaskRuntime {
 
     this.isExecuting = true;
     this.abortController = new AbortController();
+
+    if (partialState.isEmergency) {
+      this.bot.suppressMinebotGameChat = true;
+      this.bot.minebotControlState = 'emergency_llm';
+    } else {
+      this.bot.suppressMinebotGameChat = false;
+      this.bot.minebotControlState = 'main_task';
+    }
 
     const taskId = partialState.taskId ?? crypto.randomUUID();
     const createdAt = Date.now();
@@ -202,6 +211,8 @@ export class MinebotTaskRuntime {
     } finally {
       this.isExecuting = false;
       this.abortController = null;
+      this.bot.suppressMinebotGameChat = false;
+      this.bot.minebotControlState = 'idle';
 
       if (partialState.isEmergency || this.isEmergencyMode) {
         this.isEmergencyMode = false;
@@ -322,12 +333,16 @@ export class MinebotTaskRuntime {
       // forceStop() は AbortController.abort() するが、FCA の実行ループが
       // 実際に終了して isExecuting = false になるまでラグがある。
       // 緊急タスクの invoke() が拒否されないよう、解除を待つ。
-      const deadline = Date.now() + 2000;
+      // AbortSignal は非同期ループの各イテレーション境界でしか効かないため、
+      // pathfinder 等の同期ブロック中はこの待ちでも終わらないことがある。その場合のみ最後の手段で強制クリアする。
+      const deadline = Date.now() + CONFIG.EMERGENCY_INTERRUPT_WAIT_MS;
       while (this.isExecuting && Date.now() < deadline) {
         await new Promise(resolve => setTimeout(resolve, 50));
       }
       if (this.isExecuting) {
-        log.warn('⚡ タスクが2秒以内に停止しなかったため isExecuting を強制クリア');
+        log.warn(
+          `⚡ タスクが ${CONFIG.EMERGENCY_INTERRUPT_WAIT_MS}ms 以内に停止しなかったため isExecuting を強制クリア（緊急デッドロック回避）`,
+        );
         this.isExecuting = false;
         this.abortController = null;
       }
@@ -717,6 +732,12 @@ export class MinebotTaskRuntime {
           input.envelope.minecraft.dimension = (this.bot as any).game?.dimension?.toString() || 'overworld';
         }
       }
+      // bot 参照を常に metadata に注入 (ShannonExecutor → SubAgentRoutineExecutor で必要)
+      const prevMeta = ((input.envelope as any).metadata ?? {}) as Record<string, unknown>;
+      const merged: Record<string, unknown> = { ...prevMeta, bot: this.bot };
+      if (input.minebotToolPolicy) merged.minebotToolPolicy = input.minebotToolPolicy;
+      else delete merged.minebotToolPolicy;
+      (input.envelope as any).metadata = merged;
       return input.envelope;
     }
 
@@ -759,6 +780,9 @@ export class MinebotTaskRuntime {
         selfState: input.selfState,
         taskOrigin: 'minebot-runtime',
         bot: this.bot,
+        ...(input.minebotToolPolicy
+          ? { minebotToolPolicy: input.minebotToolPolicy }
+          : {}),
       },
     });
   }

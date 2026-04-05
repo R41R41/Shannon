@@ -120,7 +120,21 @@ class WithdrawFromFurnace extends InstantSkill {
 
                 // 出力スロットから取り出し
                 if (normalizedSlot === 'output' || normalizedSlot === 'all') {
-                    const outputItem = furnace.outputItem();
+                    let outputItem = furnace.outputItem();
+                    // 精錬中で output が空 → 完了まで待つ (最大120秒)
+                    if (!outputItem && furnace.inputItem()) {
+                        const inputCount = furnace.inputItem()!.count;
+                        const maxWaitMs = Math.min(inputCount * 11000, 120000);
+                        const startWait = Date.now();
+                        while (Date.now() - startWait < maxWaitMs) {
+                            if (this.shouldInterrupt()) break;
+                            await new Promise(r => setTimeout(r, 2000));
+                            outputItem = furnace.outputItem();
+                            if (outputItem && outputItem.count >= inputCount) break;
+                        }
+                        // 最終確認
+                        outputItem = furnace.outputItem();
+                    }
                     if (outputItem) {
                         await furnace.takeOutput();
                         withdrawnItems.push(`${outputItem.name} x${outputItem.count}（完成品）`);

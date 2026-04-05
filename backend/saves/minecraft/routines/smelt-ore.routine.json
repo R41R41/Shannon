@@ -1,16 +1,48 @@
 {
   "name": "smelt-ore",
-  "description": "鉱石をかまどで精錬する。【前提: かまど座標が分かっているか、設置可能な状態】",
+  "description": "アイテムをかまどで精錬する（鉱石、生肉、砂など何でも対応）",
   "params": [
-    { "name": "ore", "type": "string", "description": "精錬する素材 (raw_iron, raw_gold, porkchop 等)", "required": true },
-    { "name": "fuel", "type": "string", "description": "燃料", "required": false, "default": "coal" },
-    { "name": "count", "type": "number", "description": "精錬個数", "required": false, "default": 1 }
+    {
+      "name": "ore",
+      "type": "string",
+      "description": "精錬する素材 (raw_iron, beef, porkchop 等)",
+      "required": true
+    },
+    {
+      "name": "fuel",
+      "type": "string",
+      "description": "燃料",
+      "required": false,
+      "default": "coal"
+    },
+    {
+      "name": "count",
+      "type": "number",
+      "description": "精錬個数",
+      "required": false,
+      "default": 1
+    }
   ],
-  "instruction": "1. find-blocks(furnace, maxDistance:32) でかまどを探す。なければ check-inventory-item(cobblestone) → 8個以上あれば craft-one(furnace) → get-position → place-block-at で設置。2. move-to でかまどに近づく (3m以内)。3. start-smelting(x,y,z, inputItem:${ore}, fuelItem:${fuel}, count:${count}) で精錬開始。4. wait-time(${count}×10000 ms) で待機。5. check-furnace で完了確認。6. withdraw-from-furnace(slot:output) で回収。",
-  "tools": ["find-blocks", "check-inventory-item", "craft-one", "get-position", "place-block-at", "move-to", "start-smelting", "wait-time", "check-furnace", "withdraw-from-furnace"],
+  "instruction": "手順:\n1. find-blocks(furnace, maxDistance:32) でかまどを探す。なければ check-inventory-item(cobblestone) → craft-one(furnace) → get-position → dig-block-at で草を除去 → place-block-at で設置。\n2. move-to でかまドに移動 (range:3)。\n3. start-smelting(x,y,z, inputItem:${ore}, fuelItem:${fuel}, count:${count}) で精錬開始。燃料不足なら oak_planks や stick を代替で使え。\n4. withdraw-from-furnace(slot:output) で取り出す。これは精錬完了まで自動で待つので wait-time は絶対使うな。\n5. task-complete で精錬結果を報告。\n\n重要: wait-time, check-furnace は使うな。withdraw-from-furnace が自動で待つ。",
+  "tools": [
+    "find-blocks",
+    "check-inventory-item",
+    "craft-one",
+    "get-position",
+    "place-block-at",
+    "dig-block-at",
+    "move-to",
+    "start-smelting",
+    "withdraw-from-furnace"
+  ],
   "maxIterations": 15,
-  "model": "haiku",
+  "model": "sonnet",
   "failureEscalation": "system2",
   "source": "manual",
-  "stats": { "runs": 0, "successes": 0, "failures": 0, "avgDurationMs": 0 }
+  "stats": {
+    "runs": 4,
+    "successes": 4,
+    "failures": 0,
+    "avgDurationMs": 37374
+  }
 }

@@ -199,11 +199,35 @@ export interface EventReactionResult {
     action?: string;
 }
 
+/** 敵対Mob接近検知の距離・閾値（永続化可能） */
+export interface HostileDetectionConfig {
+    /** この距離以内は critical 扱い */
+    criticalDistance: number;
+    /** この距離までをポーリング対象に含める */
+    detectionDistance: number;
+    /** この数以上で critical（複数体ルール） */
+    multiMobCriticalCount: number;
+}
+
+export const DEFAULT_HOSTILE_DETECTION: HostileDetectionConfig = {
+    criticalDistance: 8,
+    detectionDistance: 16,
+    multiMobCriticalCount: 2,
+};
+
+/** saves/minecraft/eventReactionSettings.json の形状 */
+export interface EventReactionSettingsFile {
+    version?: number;
+    reactions: EventReactionConfig[];
+    hostileDetection?: Partial<HostileDetectionConfig>;
+}
+
 /**
  * 設定状態（UI用）
  */
 export interface ReactionSettingsState {
     reactions: EventReactionConfig[];
+    hostileDetection: HostileDetectionConfig;
     constantSkills: {
         skillName: string;
         enabled: boolean;

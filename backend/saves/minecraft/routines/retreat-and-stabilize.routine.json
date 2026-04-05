@@ -1,0 +1,20 @@
+{
+  "name": "retreat-and-stabilize",
+  "description": "敵が近いときは距離を取り、HPが低ければ食料を使ってから状況を報告する（攻撃しない）",
+  "params": [],
+  "instruction": "攻撃・迎撃は禁止。1) get-health で HP を確認。2) HP が 12 以下なら list-inventory-items で食料（cooked_beef, bread, apple 等）を探し、あれば use-item で食べる。3) list-nearby-entities または get-bot-status で敵対 mob が近いか確認。近ければ flee-from の target に mob 種別（例 zombie）を指定し minDistance 24 以上で離れる。複数いる場合は最も近い種別を優先。4) 十分離れたら stop-movement。5) task-complete の summary に HP・敵の有無・取った行動を簡潔に書く。",
+  "tools": [
+    "get-health",
+    "list-inventory-items",
+    "use-item",
+    "list-nearby-entities",
+    "flee-from",
+    "stop-movement",
+    "get-position",
+    "get-bot-status"
+  ],
+  "maxIterations": 14,
+  "model": "haiku",
+  "failureEscalation": "system2",
+  "source": "manual"
+}
