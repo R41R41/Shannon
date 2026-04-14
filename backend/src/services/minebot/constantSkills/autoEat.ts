@@ -65,13 +65,17 @@ class AutoEat extends ConstantSkill {
   }
 
   async runImpl() {
-    // 体力または満腹度が低い場合に食べる
     const health = this.bot.health ?? 20;
     const food = this.bot.food ?? 20;
 
-    // 満腹度が18未満、または体力が18未満（ダメージ後の回復促進）で食べ物がある場合
     // Minecraftでは満腹度が18以上で自然回復するため、HPが減っていたら積極的に食べる
     if (food < 18 || (health < 18 && food < 20)) {
+      // pathfinder 移動中は食事をスキップ（食事アニメーションが移動・ジャンプを阻害するため）
+      // ただし HP 危険域 or 満腹度枯渇時は緊急で食べる
+      const isMoving = this.bot.pathfinder?.isMoving?.() ?? false;
+      if (isMoving && health > 8 && food > 6) {
+        return;
+      }
       // 食べられるアイテムを探す。mineflayer-auto-eat plugin が無い環境でも動くように
       // 名前ベースのフォールバック食料表を使う。
       const foodItems = this.bot.inventory

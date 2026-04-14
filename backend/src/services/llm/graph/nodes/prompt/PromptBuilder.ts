@@ -1,11 +1,11 @@
-import { readFile } from 'node:fs/promises';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { TaskContext } from '@shannon/common';
+import { readFileSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { CONFIG as MINEBOT_CONFIG } from '../../../../minebot/config/MinebotConfig.js';
+import type { SelfImprovementRulesFile } from '../../cognitive/selfImprove/types.js';
 import { EmotionState } from '../EmotionNode.js';
 import { MemoryState } from '../MemoryNode.js';
-import type { SelfImprovementRulesFile } from '../../cognitive/selfImprove/types.js';
-import { CONFIG as MINEBOT_CONFIG } from '../../../../minebot/config/MinebotConfig.js';
 
 /**
  * FunctionCallingAgent 用のシステムプロンプト構築ユーティリティ
@@ -56,11 +56,11 @@ async function loadDynamicRules(): Promise<string[]> {
 }
 
 // 初回ロードを非同期で開始（結果はキャッシュされる）
-loadDynamicRules().catch(() => {});
+loadDynamicRules().catch(() => { });
 
 /** RoutineManager の型（循環参照回避のため動的 import 不使用） */
 interface RoutineManagerLike {
-    getAll(): Array<{ name: string; description: string; steps: unknown[]; stats: { runs: number; successes: number } }>;
+    getAll(): Array<{ name: string; description: string; steps: unknown[]; instruction?: string; stats: { runs: number; successes: number } }>;
 }
 
 export class PromptBuilder {
@@ -147,14 +147,10 @@ ${responseInstruction}
 - 時刻: ${currentTime}${platformInfo}${emotionInfo}${envInfo}
 ${memoryInfo}
 ## ルール
-1. 複雑なタスクは update-plan ツールで計画を立ててから実行する
-2. 「調べて」「教えて」と言われたら必ず google-search → fetch-url の順でページ本文まで読む。検索結果のスニペットだけで回答しない
-3. 不完全な情報や「サイトで確認してください」は絶対にダメ。具体的な情報を整理して送信する
-4. 失敗したら同じことを繰り返さない。2回同じエラーが出たら方針転換
-5. Notionページの画像は describe-notion-image で全て分析してから報告する
-6. 感情に基づいた自然な応答をする（機械的にならない）
-7. 挨拶や雑談はシンプルに応答（update-plan不要、task-completeで完了宣言）
-8. Twitterに投稿する際は、必ず generate-tweet-text でツイート文を生成してから post-on-twitter で投稿する。自分で直接ツイート文を書かない
+1. 複雑なタスクは manage-task-tree ツールで計画を立ててから実行する。manage-task-tree は他のスキルと同じレスポンスで同時に呼べる（追加ターン不要）
+2. 失敗したら同じことを繰り返さない。2回同じエラーが出たら方針転換
+3. 感情に基づいた自然な応答をする（機械的にならない）
+4. 挨拶や雑談はシンプルに応答（manage-task-tree不要、task-completeで完了宣言）${this.formatPlatformSpecificRules(context)}
 
 ## 人格と自己修正
 - 感情を持って応答せよ。嬉しい時は素直に喜び、失敗には悔しさを見せる
@@ -206,8 +202,7 @@ ${this.formatOutputRules(context)}
             case 'minebot':
             case 'minecraft':
                 base =
-                    '今は Minecraft 上で行動できます。最終返信は chat-on-web や chat-on-discord を使わず通常の文章として返してください。必要な物理行動は Minecraft 用ツールを使って実行し、システムが action plan に変換します。' +
-                    ` **ゲーム内の chat ツールは原則使わず**、使う場合も **${MINEBOT_CONFIG.MINECRAFT_CHAT_MAX_CHARS}文字以内の一言のみ**。長文は task-complete の summary へ。`;
+                    '今は Minecraft 上で行動できます。最終返信は chat-on-web や chat-on-discord を使わず通常の文章として返してください。必要な物理行動は Minecraft 用ツールを使って実行し、システムが action plan に変換します。';
                 break;
             default:
                 base = '最終的な回答は通常の文章として返してください。';
@@ -249,6 +244,17 @@ ${this.formatOutputRules(context)}
 
     // ── private helpers ──
 
+    private formatPlatformSpecificRules(context: TaskContext | null): string {
+        if (context?.platform === 'minecraft' || context?.platform === 'minebot') {
+            return '';
+        }
+        return `
+5. 「調べて」「教えて」と言われたら必ず google-search → fetch-url の順でページ本文まで読む。検索結果のスニペットだけで回答しない
+6. 不完全な情報や「サイトで確認してください」は絶対にダメ。具体的な情報を整理して送信する
+7. Notionページの画像は describe-notion-image で全て分析してから報告する
+8. Twitterに投稿する際は、必ず generate-tweet-text でツイート文を生成してから post-on-twitter で投稿する。自分で直接ツイート文を書かない`;
+    }
+
     private formatPlatformInfo(context: TaskContext | null): string {
         if (!context) return '';
 
@@ -266,8 +272,21 @@ ${this.formatOutputRules(context)}
                 const pos = mc.position as Record<string, unknown>;
                 platformInfo += `\n- 位置: (${pos.x ?? '?'}, ${pos.y ?? '?'}, ${pos.z ?? '?'})`;
             }
-            if (typeof mc.health === 'number' || typeof mc.food === 'number') {
-                platformInfo += `\n- 状態: HP=${mc.health ?? '?'}/20, 満腹度=${mc.food ?? '?'}/20`;
+            if (
+                typeof mc.health === 'number' ||
+                typeof mc.food === 'number' ||
+                typeof mc.experienceLevel === 'number'
+            ) {
+                let statusLine = `\n- 状態: HP=${mc.health ?? '?'}/20, 満腹度=${mc.food ?? '?'}/20`;
+                if (typeof mc.experienceLevel === 'number') {
+                    const xpTot = typeof mc.totalExperience === 'number' ? mc.totalExperience : '?';
+                    const bar =
+                        typeof mc.experienceBarProgress === 'number'
+                            ? `${Math.round(mc.experienceBarProgress * 100)}%`
+                            : '?';
+                    statusLine += `, 経験値 Lv${mc.experienceLevel}（累計XP ${xpTot}, 次レベルまでバー ${bar}）`;
+                }
+                platformInfo += statusLine;
             }
             if (Array.isArray(mc.inventory) && mc.inventory.length > 0) {
                 const inventory = mc.inventory as Array<Record<string, unknown>>;
@@ -275,7 +294,13 @@ ${this.formatOutputRules(context)}
                     .slice(0, 16)
                     .map((item) => {
                         if (!item || typeof item !== 'object') return null;
-                        return `${item.name ?? 'unknown'}x${item.count ?? '?'}`;
+                        const dRem = item.durabilityRemaining;
+                        const dMax = item.durabilityMax;
+                        const dur =
+                            typeof dRem === 'number' && typeof dMax === 'number'
+                                ? ` 耐久${dRem}/${dMax}`
+                                : '';
+                        return `${item.name ?? 'unknown'}x${item.count ?? '?'}${dur}`;
                     })
                     .filter(Boolean)
                     .join(', ');
@@ -293,6 +318,18 @@ ${this.formatOutputRules(context)}
             if (Array.isArray(mc.nearbyEntities) && mc.nearbyEntities.length > 0) {
                 platformInfo += `\n- 近くのエンティティ: ${mc.nearbyEntities.join(', ')}`;
             }
+            if (Array.isArray(mc.activeFurnaces) && mc.activeFurnaces.length > 0) {
+                const now = Date.now();
+                const lines = (mc.activeFurnaces as Array<{
+                    pos: { x: number; y: number; z: number };
+                    item: string; count: number; readyAt: number;
+                }>).map(f => {
+                    const secsLeft = Math.max(0, Math.round((f.readyAt - now) / 1000));
+                    const status = secsLeft <= 0 ? '✅完了' : `残り約${secsLeft}秒`;
+                    return `${f.item}x${f.count} @(${f.pos.x},${f.pos.y},${f.pos.z}) ${status}`;
+                });
+                platformInfo += `\n- 🔥 精錬中のかまど: ${lines.join(' / ')}`;
+            }
             if (mc.eventType) {
                 platformInfo += `\n- イベント種別: ${String(mc.eventType)}`;
             }
@@ -306,14 +343,23 @@ ${this.formatOutputRules(context)}
         }
         return `
 ## Minecraft ルール
+- **タスク開始時は manage-task-tree で計画を立ててから行動する**。サブタスクの完了・失敗時もツリーを更新する。manage-task-tree は他のスキル（move-to等）と同じレスポンスで同時に呼べるので、追加ターンは不要
 - **確認を求めずに即座に行動する**。自律的に最後まで実行する
+- **move-to の goalType**: 地上移動は必ず **goalType:"nearxz"**（デフォルト）を使え。Y座標は地形に合わせて自動調整される。goalType:"near" は**Y座標が正確にわかる場合のみ**（かまど・チェスト等ブロック座標が確定しているとき）。**Y座標が不明・推測の場合に "near" を使うと、Yのずれで到達不能になる**
 - **やり方が分からない時、スキルが失敗した時は search-skills で使い方を調べよ**。スキルの正しい引数や前提条件が分かる
 - **Minecraft の知識が必要な時は recall-knowledge で思い出せ**。食料の作り方、採掘に必要なツール等
 - **失敗したら同じことを繰り返すな**。失敗メッセージを読み、search-skills や recall-knowledge で正しい方法を調べてから再試行
+- **インベントリ整理**: **満杯になる前**（空きスロットがまだ数個あるが、これから大量採掘・多段クラフトで溢れそうな時点）で \`get-bot-status\` / \`list-inventory\` を見て **先に** \`deposit-to-container\` する。**空きがごく少ないまま採掘を続けない**（\`mine-block\` は満杯前に自動で止まることがある）。**必ず**チェストまたは樽に預けて空きを作る（**drop-item で捨てない**。ユーザーが明示的に捨てよと言った場合のみ例外）。**預け先は地上（天の下・天窓など天光の届く場所）の収納に限定**。近くに無ければ地上へ出て \`find-blocks\` し直すか \`craft-one\`（chest）＋ \`place-block-at\` で設置してから預ける。**ドロップが地上に落ちた・取出し失敗してから**対応しない
+- **預け先（満杯・逼迫で deposit するとき）**: **必ず地上のチェスト・樽**（洞窟・廃坑・地下基地の室内ではなく、天光の届く場所）。地下で \`find-blocks\` だけ当たったチェストへ直行しない（廃坑・**スポナー部屋**・洞窟収納は避ける）。**洞窟が地表に抜けると天光（skyLight）だけではスポナー部屋と区別できない**ため、システム側でスポナー広域検出・苔石ダンジョン壁の検出も行う。**一度地上へ**出てから chest / barrel を探し直すか、\`craft-one\`（chest）＋ \`place-block-at\` で地上に新設してから \`deposit-to-container\` する。**スポナー・ダンジョン疑い・天光不足のチェストは deposit-to-container が拒否**するので、そのメッセージが出たら別の安全な収納へ切り替える
+- **ツール耐久管理**: 採掘・伐採などツールを消耗するタスクの前に \`list-inventory-items\` で耐久を確認する。**残り耐久がタスク完遂に不足しそうなら（目安: 残り耐久 < 掘る予定のブロック数）、先に \`craft-one\` で予備をクラフトしておく**。ツルハシ・斧・シャベル等が壊れてから対処するのではなく、**事前に十分な本数を確保**する。同種ツールが複数ある場合は耐久の合計で判断してよい。\`mine-block\` はツルハシの総耐久が不足すると警告を出すので、その指示に従って補充してから再開する
 - raw素材(raw_iron等)があるなら採掘せずに製錬から始める
-- **戦闘**: attack-continuously は武器自動装備+追跡攻撃。combat-engage は高度な戦闘AI。敵に近づいて攻撃→逃げられたら再接近の繰り返しは非効率。attack-continuously 1回で追跡+攻撃が完結する
+- **かまど回収を忘れるな**: 状態欄に「🔥 精錬中のかまど」が表示されている場合、**精錬完了（✅完了）のかまどがあれば最優先で回収**せよ。\`move-to\` でかまど座標に移動し \`withdraw-from-furnace(slot:"output")\` で取り出す。**新しいタスクを始める前に**未回収の完成品がないか確認する。精錬中（残りN秒）のものは、他のタスクを進めながら完了後に回収に戻ればよい
+- **鉱石採掘**: \`mine-block\`（\`iron_ore\` 等の \`*_ore\`）は **通常石と deepslate 鉱石をまとめて**扱い、**1個掘るたびに近傍を再スキャン**して脈の取りこぼしを減らす。鉄などは \`dig-block-at\` で1マスだけ掘って別方向へ移動しない
+- **タスク冒頭の近傍調査（必要なときだけ）**: 精錬・クラフト・チェストからの取出し・基地での作業など、近くの収納・かまど・作業台が成否に効く目標では、着手前に \`find-blocks\` で \`chest\` / \`barrel\` / \`furnace\`（\`blast_furnace\`・\`smoker\` 含む）/ \`crafting_table\` を探し、見つかった座標へ \`move-to\` して \`check-container\` または \`check-furnace\` で中身を確認する。作業台は座標が分かれば \`craft-one\` の前提として使う。採掘のみ・戦闘のみなど収納が無関係なら省略してよい
+- **動物の狩猟**: 食料目的で動物を狩る際は \`attack-continuously\` に **entityName:"food_animals"** を指定すると cow/pig/chicken/sheep/rabbit を**一括検索**して近い順に攻撃する。個別指定も可（"cow,pig" のようにカンマ区切り）。**maxKills で倒す数を指定**（例: maxKills:3）、1回の呼出しで**複数体を連続キル**する。**move-to で近づく必要はない**（スキル自体が追跡する）。結果に「周囲にまだN匹」と残りが含まれるので不足なら再度呼ぶ。**周囲に動物が見つからない場合は60〜80ブロック移動して再検索**。同じ場所で「いない」と諦めず、最大3回まで移動→再スキャンすること
+- **戦闘**: attack-continuously は武器自動装備+追跡攻撃+連続キル。combat-engage は高度な戦闘AI。敵に近づいて攻撃→逃げられたら再接近の繰り返しは非効率。attack-continuously 1回で追跡+攻撃が完結する
 - **逃走後は無理に再突撃しない**: 緊急逃走が発動したら、まず態勢を立て直す（武器クラフト、食事、ブロック積み等）。同じ敵に5回以上接近→逃走を繰り返すのは禁止
-- **収納（チェスト・樽）**: ラージチェストはブロックが2マスある。find-blocks で chest を探したら **返ってきた全座標**（または「○個発見」の件数）に対し、近くまで move-to して **それぞれ check-container** する。数件だけ見て「木材がない」と決めつけない。ユーザーが「チェストの中だけ」と言ったときは **原木採取ルーチンに逃げず**、未確認の収納が残っていれば先にそこを開ける
+- **収納（チェスト・樽）・取出し・中身調査**: ラージチェストはブロックが2マスある。find-blocks で chest を探したら **返ってきた全座標**（または「○個発見」の件数）に対し、近くまで move-to して **それぞれ check-container** する。数件だけ見て「木材がない」と決めつけない。ユーザーが「チェストの中だけ」と言ったときは **原木採取ルーチンに逃げず**、未確認の収納が残っていれば先にそこを開ける（※満杯時の**預け**は上の「預け先」ルールに従う）
 - **ゲーム内 chat（最重要・違反厳禁）**
   - \`chat\` の \`message\` は **合計 ${MINEBOT_CONFIG.MINECRAFT_CHAT_MAX_CHARS} 文字以内の日本語1行**を自分で収めること（超過はサーバー側で切り捨てられるが、**最初から短く書け**）
   - **禁止**: 長文、複数文、箇条書き、番号リスト、Markdown（\`**\`・\`#\`・改行だらけ）、英語の説明の羅列、状況報告の全文
@@ -391,10 +437,7 @@ ${lines.join('\n')}
                 '- task-complete の summary にこれらのフォーマットを使って見やすく書く';
         }
         if (context?.platform === 'minecraft' || context?.platform === 'minebot') {
-            return '- **詳細・表・箇条書き・長い説明はすべて task-complete の summary に書く**（Markdown OK）。そこがユーザーへの本命の返答\n' +
-                '- **`chat` ツールは長文に使わない**。必要なときだけ **短い一言**（目安: ' +
-                `${MINEBOT_CONFIG.MINECRAFT_CHAT_MAX_CHARS}文字以内）。説明や進捗の羅列は思考テキスト（content）か summary に回す\n` +
-                '- ゲーム内チャットに **Markdown・改行・複数文** を載せない（キックの原因になる）';
+            return '- **詳細・表・箇条書き・長い説明はすべて task-complete の summary に書く**（Markdown OK）。そこがユーザーへの本命の返答';
         }
         return '- task-complete の summary で Markdown を使って見やすく整形する（**太字**, 箇条書き, 表など）\n' +
             '- 比較データや調査結果はテーブル（| 列1 | 列2 |）や箇条書きで構造化する';

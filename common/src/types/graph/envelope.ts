@@ -13,6 +13,16 @@ export interface RequestAttachment {
   filename?: string;
 }
 
+/** インベントリ1スロット相当（LLM / エンベロープ用） */
+export interface MinecraftInventoryEntry {
+  name: string;
+  count: number;
+  /** 残り耐久（使用回数ベース）。ダメージ可能アイテムのみ */
+  durabilityRemaining?: number;
+  /** 最大耐久（使用回数ベース） */
+  durabilityMax?: number;
+}
+
 /** Minecraft-specific context snapshot at request time. */
 export interface MinecraftContext {
   serverId?: string;
@@ -23,11 +33,25 @@ export interface MinecraftContext {
   position?: { x: number; y: number; z: number };
   health?: number;
   food?: number;
+  /** 経験値レベル（表示用） */
+  experienceLevel?: number;
+  /** 累計経験値ポイント（サーバ・プロトコルに準拠） */
+  totalExperience?: number;
+  /** 次レベルまでの経験値バー 0.0〜1.0 */
+  experienceBarProgress?: number;
   nearbyEntities?: string[];
-  inventory?: Array<{ name: string; count: number }>;
+  inventory?: MinecraftInventoryEntry[];
   nearbyInfrastructure?: Array<{ name: string; x: number; y: number; z: number; distance: number }>;
   /** 半径 32 ブロック以内の資源ブロック（木材等）のサマリー。CraftPreflight が代替素材を選択するために使用。 */
   nearbyResources?: Array<{ name: string; count: number }>;
+  /** 精錬中のかまど追跡情報 */
+  activeFurnaces?: Array<{
+    pos: { x: number; y: number; z: number };
+    item: string;
+    count: number;
+    readyAt: number;
+    startedAt: number;
+  }>;
   eventType?:
     | 'chat'
     | 'mentioned'

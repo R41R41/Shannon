@@ -160,6 +160,7 @@ ${routineCatalog || '（なし）'}
 4. 各サブタスクは独立して実行可能な単位にする
 5. ルーチンのパラメータは定義に合わせて正確に指定する
 6. toolCategory は以下から選択: mining, crafting, smelting, navigation, combat, farming, building, inventory, observation, utility
+7. クラフト・精錬・倉庫の利用が絡む目標では、先頭付近に observation（近傍のチェスト・かまど・作業台の位置と中身の把握: find-blocks → check-container / check-furnace）を置くことを検討する。純粋な移動・採掘・戦闘のみなら不要
 
 ## 現在の状態
 ${context.inventory ? `インベントリ: ${context.inventory}` : ''}

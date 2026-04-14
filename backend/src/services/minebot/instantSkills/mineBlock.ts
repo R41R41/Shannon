@@ -1,14 +1,52 @@
 import minecraftData from 'minecraft-data';
+import pathfinder from 'mineflayer-pathfinder';
 import { Vec3 } from 'vec3';
+import { createLogger } from '../../../utils/logger.js';
 import { CustomBot, InstantSkill } from '../types.js';
+import {
+  DEPOSIT_BEFORE_EMPTY_SLOTS_FALLS_TO,
+  emptySlotCountSafe,
+  INVENTORY_FULL_RECOVERY_HINT_JA,
+  shouldPauseMiningForDeposit,
+} from '../utils/inventorySpillDetection.js';
+import { gotoSafe } from '../utils/gotoSafe.js';
+
+const { goals } = pathfinder;
+const log = createLogger('Minebot:Skill:mineBlock');
 
 class MineBlock extends InstantSkill {
   private mcData: any;
 
+  /**
+   * 通常鉱石と deepslate 対をまとめて探す（iron_ore と deepslate_iron_ore など）。
+   */
+  private static oreMiningFamily(mcData: any, blockName: string): string[] {
+    const out = new Set<string>([blockName]);
+    if (blockName.startsWith('deepslate_') && blockName.includes('ore')) {
+      const rest = blockName.slice('deepslate_'.length);
+      if (mcData.blocksByName[rest]) out.add(rest);
+    } else if (!blockName.startsWith('deepslate_') && blockName.endsWith('_ore')) {
+      const deep = `deepslate_${blockName}`;
+      if (mcData.blocksByName[deep]) out.add(deep);
+    }
+    return [...out];
+  }
+
+  private static distSqToBlockCenter(
+    botPos: { x: number; y: number; z: number },
+    pos: { x: number; y: number; z: number },
+  ): number {
+    const cx = pos.x + 0.5;
+    const cy = pos.y + 0.5;
+    const cz = pos.z + 0.5;
+    return (botPos.x - cx) ** 2 + (botPos.y - cy) ** 2 + (botPos.z - cz) ** 2;
+  }
+
   constructor(bot: CustomBot) {
     super(bot);
     this.skillName = 'mine-block';
-    this.description = '指定した種類のブロックを近くから探し、必要数だけ採掘します。ブロック名はMinecraftの正式ID（例: coal_ore, iron_ore, diamond_ore, oak_log）を使用してください。';
+    this.description =
+      '指定した種類のブロックを近くから探し、**都度いまの位置から最も近い候補**を選んで採掘します。手の届く範囲に複数あればまとめて掘って一括回収（バッチ採掘）するため効率的です。`*_ore` は通常石と深層（deepslate_*）をまとめて扱います。ブロック名は正式ID（例: iron_ore, coal_ore, hay_block, oak_log 等）を使用してください。';
     this.mcData = minecraftData(this.bot.version);
     this.params = [
       {
@@ -58,13 +96,36 @@ class MineBlock extends InstantSkill {
       };
     }
 
-    const targets = this.bot.findBlocks({
-      matching: blockType.id,
-      maxDistance: searchRadius,
-      count: Math.max(1, count),
-    });
+    const want = Math.max(1, count);
+    // findBlocks の返却順は不定なので候補を多めに取り、ループ毎に「いまの位置」から近い順に選ぶ
+    const scanCount = Math.min(384, Math.max(want * 12, want + 48));
+    const familyNames = MineBlock.oreMiningFamily(this.mcData, blockName);
+    const candidateKeySet = new Set<string>();
+    const candidates: Array<{ x: number; y: number; z: number }> = [];
 
-    if (targets.length === 0) {
+    const mergeTargetsFromWorld = (): void => {
+      for (const name of familyNames) {
+        const id = this.mcData.blocksByName[name]?.id;
+        if (id === undefined) continue;
+        const found = this.bot.findBlocks({
+          matching: id,
+          maxDistance: searchRadius,
+          count: scanCount,
+        });
+        for (const p of found) {
+          const k = `${p.x},${p.y},${p.z}`;
+          if (candidateKeySet.has(k)) continue;
+          const blk = this.bot.blockAt(new Vec3(p.x, p.y, p.z));
+          if (!blk || !familyNames.includes(blk.name)) continue;
+          candidateKeySet.add(k);
+          candidates.push(p);
+        }
+      }
+    };
+
+    mergeTargetsFromWorld();
+
+    if (candidates.length === 0) {
       return {
         success: false,
         result: `${searchRadius}ブロック以内に${blockName}が見つかりません`,
@@ -73,13 +134,60 @@ class MineBlock extends InstantSkill {
       };
     }
 
-    // ツルハシの有無を事前チェック（石系ブロック掘削の効率警告）
+    // ツルハシの有無・耐久を事前チェック
     const needsPickaxe = ['stone', 'ore', 'cobble', 'deepslate', 'brick', 'obsidian', 'concrete', 'terracotta', 'basalt', 'netherrack']
       .some(keyword => blockName.includes(keyword));
-    const hasPickaxe = this.bot.inventory.items().some(item => item.name.includes('pickaxe'));
+    const pickaxes = this.bot.inventory.items().filter(item => item.name.includes('pickaxe'));
+    const hasPickaxe = pickaxes.length > 0;
     let toolWarning = '';
+
     if (needsPickaxe && !hasPickaxe) {
-      toolWarning = ' ⚠️ ツルハシを所持していません。石系ブロックの採掘は非常に遅くなります。先にツルハシをクラフトすることを強く推奨します';
+      return {
+        success: false,
+        failureType: 'missing_tool',
+        recoverable: true,
+        result:
+          `ツルハシを所持していません。${blockName}の採掘にはツルハシが必要です。` +
+          '先に craft-one で wooden_pickaxe / stone_pickaxe / iron_pickaxe 等をクラフトしてから再度 mine-block を実行してください。' +
+          '（素材例: wooden_pickaxe = planks×3 + stick×2、stone_pickaxe = cobblestone×3 + stick×2）',
+      };
+    } else if (needsPickaxe && hasPickaxe) {
+      // 全ツルハシの総残り耐久を算出
+      let totalDurability = 0;
+      let hasDurabilityInfo = false;
+      for (const pick of pickaxes) {
+        const max = (pick as any).maxDurability;
+        const used = (pick as any).durabilityUsed;
+        if (max != null && max > 0 && used != null && used >= 0) {
+          totalDurability += Math.max(0, max - used);
+          hasDurabilityInfo = true;
+        } else {
+          totalDurability += 100;
+        }
+      }
+
+      if (hasDurabilityInfo && totalDurability < want) {
+        return {
+          success: false,
+          failureType: 'tool_durability_low',
+          recoverable: true,
+          result:
+            `ツルハシの総残り耐久（${totalDurability}）が採掘予定数（${want}個）に対して不足しています。` +
+            `途中でツルハシが壊れる可能性が高いです。先に craft-one で予備のツルハシをクラフトしてから再度 mine-block を実行してください。` +
+            `（所持ツルハシ: ${pickaxes.map(p => {
+              const mx = (p as any).maxDurability;
+              const us = (p as any).durabilityUsed;
+              return mx != null && us != null ? `${p.name} 耐久${Math.max(0, mx - us)}/${mx}` : p.name;
+            }).join(', ')}）`,
+        };
+      }
+
+      const LOW_DURABILITY_THRESHOLD = 10;
+      if (hasDurabilityInfo && totalDurability < want + LOW_DURABILITY_THRESHOLD) {
+        toolWarning =
+          ` ⚠️ ツルハシの総残り耐久（${totalDurability}）が残り少なめです（採掘予定: ${want}個）。` +
+          `タスク完了後に予備のツルハシをクラフトすることを推奨します`;
+      }
     }
 
     // 採掘前のインベントリをスナップショット（ドロップアイテム検出用）
@@ -92,14 +200,38 @@ class MineBlock extends InstantSkill {
     const failures: string[] = [];
     let lastFailureType: string | undefined;
     let lastRecoverable = false;
+    let stoppedForInventoryFull = false;
+    let stoppedForInventoryTight = false;
+    let consecutiveFailures = 0;
+    const MAX_CONSECUTIVE_FAILURES = 3;
 
-    for (const pos of targets) {
-      if (mined >= count) break;
+    while (mined < count && candidates.length > 0) {
       if (this.shouldInterrupt()) break;
 
+      const remainingToMine = want - mined;
+      if (shouldPauseMiningForDeposit(this.bot, remainingToMine)) {
+        if (mined > 0) {
+          stoppedForInventoryTight = true;
+          break;
+        }
+        return {
+          success: false,
+          failureType: 'inventory_full',
+          recoverable: true,
+          result:
+            `インベントリの空きが${emptySlotCountSafe(this.bot)}スロットしかありません。満杯になる前に deposit-to-container で地上のチェストまたは樽に預けてから採掘してください（目安: 空きが約${DEPOSIT_BEFORE_EMPTY_SLOTS_FALLS_TO}以下で、これから掘る個数が空きを超えるときは先に預ける）。${INVENTORY_FULL_RECOVERY_HINT_JA}${toolWarning}`,
+        };
+      }
+
+      const here = this.bot.entity.position;
+      candidates.sort(
+        (a, b) => MineBlock.distSqToBlockCenter(here, a) - MineBlock.distSqToBlockCenter(here, b),
+      );
+
+      const pos = candidates.shift()!;
       const target = new Vec3(pos.x, pos.y, pos.z);
       const block = this.bot.blockAt(target);
-      if (!block || block.name !== blockName) {
+      if (!block || !familyNames.includes(block.name)) {
         continue;
       }
 
@@ -112,21 +244,155 @@ class MineBlock extends InstantSkill {
           failures.push(
             `移動失敗(${target.x},${target.y},${target.z}): ${moveResult.failureType ?? moveResult.result}`,
           );
+          consecutiveFailures++;
+          if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+            failures.push(`${MAX_CONSECUTIVE_FAILURES}回連続で到達失敗 — これ以上の候補を試行しません`);
+            break;
+          }
           continue;
         }
       }
 
-      const digResult = await digBlockAt.run(target.x, target.y, target.z, true);
-      if (digResult.success) {
-        mined += 1;
+      // ── バッチ採掘: 手の届く範囲の同種ブロックをまとめて掘る ──
+      const REACH = 4.5;
+      const batchTargets: Vec3[] = [target];
+      // candidates から手の届く範囲のブロックも集める
+      const maxBatch = Math.min(remainingToMine, 16);
+      const kept: Array<{ x: number; y: number; z: number }> = [];
+      for (const c of candidates) {
+        if (batchTargets.length >= maxBatch) { kept.push(c); continue; }
+        const cv = new Vec3(c.x, c.y, c.z);
+        const dFromBot = this.bot.entity.position.distanceTo(cv);
+        if (dFromBot <= REACH) {
+          const blk = this.bot.blockAt(cv);
+          if (blk && familyNames.includes(blk.name)) {
+            batchTargets.push(cv);
+            continue;
+          }
+        }
+        kept.push(c);
+      }
+      candidates.length = 0;
+      candidates.push(...kept);
+
+      if (batchTargets.length >= 2) {
+        // ── 複数ブロックをまとめて掘り、後から一括回収 ──
+        log.info(`⛏️ バッチ採掘: ${batchTargets.length}個の${blockName}を一括で掘削`);
+        let batchDug = 0;
+        let batchAbortReason: { type: string; result: string } | null = null;
+
+        for (const bt of batchTargets) {
+          if (this.shouldInterrupt()) break;
+          const blk = this.bot.blockAt(bt);
+          if (!blk || !familyNames.includes(blk.name)) continue;
+
+          let digResult = await digBlockAt.run(bt.x, bt.y, bt.z, false);
+          // 遮蔽物を除去した場合は同じブロックをリトライ
+          if (digResult.failureType === 'obstruction_cleared') {
+            digResult = await digBlockAt.run(bt.x, bt.y, bt.z, false);
+          }
+          if (digResult.failureType === 'missing_tool') {
+            batchAbortReason = { type: 'missing_tool', result: digResult.result };
+            break;
+          }
+          if (digResult.failureType === 'lava_danger') {
+            batchAbortReason = { type: 'lava_danger', result: digResult.result };
+            break;
+          }
+          if (digResult.success) {
+            batchDug++;
+            consecutiveFailures = 0;
+          } else {
+            consecutiveFailures++;
+            failures.push(`採掘失敗(${bt.x},${bt.y},${bt.z}): ${digResult.failureType ?? digResult.result}`);
+            if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) break;
+          }
+        }
+
+        // 一括ドロップ回収
+        if (batchDug > 0) {
+          const collected = await this.collectAllNearbyDrops();
+          if (collected.length > 0) {
+            log.info(`📦 一括回収: ${collected.join(', ')}`, 'green');
+          }
+        }
+
+        mined += batchDug;
+
+        if (batchAbortReason) {
+          lastFailureType = batchAbortReason.type;
+          lastRecoverable = true;
+          failures.push(`ツール不足: ${batchAbortReason.result}`);
+          break;
+        }
+
+        // ツルハシ生存チェック
+        if (needsPickaxe) {
+          const toolCheck = this.checkToolSurvival(want, mined);
+          if (toolCheck) return toolCheck;
+        }
+
+        // 掘削後に近傍を再スキャン
+        mergeTargetsFromWorld();
+
       } else {
-        lastFailureType = digResult.failureType ?? 'dig_failed';
-        lastRecoverable = digResult.recoverable ?? true;
-        failures.push(
-          `採掘失敗(${target.x},${target.y},${target.z}): ${digResult.failureType ?? digResult.result}`,
-        );
+        // ── 単体採掘: 従来通り collect=true で1個ずつ ──
+        let digResult = await digBlockAt.run(target.x, target.y, target.z, true);
+        if (digResult.failureType === 'obstruction_cleared') {
+          digResult = await digBlockAt.run(target.x, target.y, target.z, true);
+        }
+        if (digResult.failureType === 'missing_tool') {
+          lastFailureType = 'missing_tool';
+          lastRecoverable = true;
+          failures.push(`ツール不足: ${digResult.result}`);
+          break;
+        }
+        if (digResult.failureType === 'lava_danger') {
+          lastFailureType = 'lava_danger';
+          lastRecoverable = true;
+          failures.push(`マグマ危険: ${digResult.result}`);
+          break;
+        }
+        if (digResult.success) {
+          mined += 1;
+          consecutiveFailures = 0;
+
+          if (needsPickaxe) {
+            const toolCheck = this.checkToolSurvival(want, mined);
+            if (toolCheck) return toolCheck;
+          }
+
+          mergeTargetsFromWorld();
+        } else {
+          lastFailureType = digResult.failureType ?? 'dig_failed';
+          lastRecoverable = digResult.recoverable ?? true;
+          failures.push(
+            `採掘失敗(${target.x},${target.y},${target.z}): ${digResult.failureType ?? digResult.result}`,
+          );
+          consecutiveFailures++;
+          if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+            failures.push(`${MAX_CONSECUTIVE_FAILURES}回連続で採掘失敗 — 別のアプローチを検討してください`);
+            break;
+          }
+        }
       }
     }
+
+    if (stoppedForInventoryFull) {
+      return {
+        success: mined > 0,
+        failureType: 'inventory_full',
+        recoverable: true,
+        result:
+          `${mined > 0 ? `${mined}個のブロックは掘削済みですが、` : ''}インベントリが満杯のため採掘を中断しました。` +
+          'ドロップが地上に残っている可能性があります。deposit-to-container で預けて空きを作ってください。' +
+          `${failures.length > 0 ? ` 詳細: ${failures.join(', ')}` : ''}${toolWarning}`,
+      };
+    }
+
+    const tightNote = stoppedForInventoryTight
+      ? ` 【満杯前整理】空きが少ないためここで中断しました。先に deposit-to-container で預けてから続行してください。${INVENTORY_FULL_RECOVERY_HINT_JA}`
+      : '';
 
     if (mined === 0) {
       return {
@@ -141,11 +407,10 @@ class MineBlock extends InstantSkill {
     const drops = this.detectDrops(beforeInventory);
     const totalDropCount = drops.reduce((sum, d) => sum + d.count, 0);
 
-    // ドロップが0の場合、dig成功でもアイテム未回収 → 失敗として報告
     if (totalDropCount === 0) {
       return {
-        success: false,
-        result: `${blockName}を${mined}個掘削しましたが、アイテムを回収できませんでした。ドロップが消失した可能性があります（溶岩、高所落下等）${toolWarning}`,
+        success: true,
+        result: `${blockName}を${mined}個掘削しましたが、ドロップアイテムを回収できませんでした（消失・溶岩・落下等の可能性）。ブロック自体は破壊済みです。${toolWarning}`,
         failureType: 'drops_lost',
         recoverable: true,
       };
@@ -156,14 +421,114 @@ class MineBlock extends InstantSkill {
     // ドロップアイテムの現在所持数を付記（LLMが過剰採掘しないようにする）
     const totalsText = this.formatDropTotals(drops);
 
-    const isPartial = mined < count;
+    const isPartial = mined < count || stoppedForInventoryTight;
     return {
       success: !isPartial,
       result: isPartial
-        ? `${blockName}を${count}個中${mined}個のみ採掘しました${dropsText}${totalsText}。残り${count - mined}個が不足しています。再度 mine-block を実行してください${failures.length > 0 ? `（失敗詳細: ${failures.join(', ')}）` : ''}${toolWarning}`
+        ? `${blockName}を${count}個中${mined}個のみ採掘しました${dropsText}${totalsText}。残り${count - mined}個が不足しています。再度 mine-block を実行してください${tightNote}${failures.length > 0 ? `（失敗詳細: ${failures.join(', ')}）` : ''}${toolWarning}`
         : `${blockName}を${mined}個採掘しました${dropsText}${totalsText}${failures.length > 0 ? `（一部失敗: ${failures.join(', ')}）` : ''}${toolWarning}`,
-      ...(isPartial && { failureType: 'partial_completion', recoverable: true }),
+      ...(isPartial && { failureType: stoppedForInventoryTight ? 'inventory_full' : 'partial_completion', recoverable: true }),
     };
+  }
+
+  /**
+   * バッチ掘削後に周辺のドロップアイテムを一括回収する。
+   * inventory 差分で確認しながら、近くの item エンティティに歩いて拾う。
+   */
+  private async collectAllNearbyDrops(): Promise<string[]> {
+    const before = new Map<string, number>();
+    for (const item of this.bot.inventory.items()) {
+      before.set(item.name, (before.get(item.name) ?? 0) + item.count);
+    }
+
+    // ドロップスポーン待ち
+    await new Promise(r => setTimeout(r, 500));
+
+    // 自動ピックアップ待ち（近くにいれば勝手に拾う）
+    const autoDeadline = Date.now() + 1200;
+    while (Date.now() < autoDeadline) {
+      await new Promise(r => setTimeout(r, 150));
+      const nearby = this.bot.nearestEntity(
+        e => e.name === 'item' && e.position.distanceTo(this.bot.entity.position) < 2,
+      );
+      if (!nearby) break;
+    }
+
+    // まだ残ってるアイテムエンティティを拾いに行く（最大8パス）
+    for (let pass = 0; pass < 8; pass++) {
+      if (this.shouldInterrupt()) break;
+      const item = this.bot.nearestEntity(
+        e => e.name === 'item' && e.position.distanceTo(this.bot.entity.position) < 16,
+      );
+      if (!item) break;
+
+      const d = item.position.distanceTo(this.bot.entity.position);
+      if (d > 1.5) {
+        const ip = item.position;
+        try {
+          await gotoSafe(this.bot, new goals.GoalNear(ip.x, ip.y, ip.z, 1), {
+            timeoutMs: 4000,
+            stuckAbortCount: 3,
+            logStuck: false,
+          });
+        } catch { /* ignore */ }
+      }
+      await new Promise(r => setTimeout(r, 400));
+    }
+
+    // 差分を返す
+    const result: string[] = [];
+    const seen = new Set<string>();
+    for (const item of this.bot.inventory.items()) {
+      if (seen.has(item.name)) continue;
+      seen.add(item.name);
+      const beforeCount = before.get(item.name) ?? 0;
+      const currentCount = this.bot.inventory.items()
+        .filter(i => i.name === item.name)
+        .reduce((sum, i) => sum + i.count, 0);
+      if (currentCount > beforeCount) {
+        result.push(`${item.name}x${currentCount - beforeCount}`);
+      }
+    }
+    return result;
+  }
+
+  /**
+   * ツルハシの生存・耐久チェック。問題があれば返却オブジェクトを返す。
+   */
+  private checkToolSurvival(want: number, mined: number): any {
+    const pickaxesNow = this.bot.inventory.items().filter(item => item.name.includes('pickaxe'));
+    if (pickaxesNow.length === 0) {
+      const remaining = want - mined;
+      return {
+        success: mined > 0,
+        failureType: 'missing_tool',
+        recoverable: true,
+        result:
+          `採掘中にツルハシが壊れました（${mined}個掘削済み、残り${remaining}個未採掘）。` +
+          'craft-one で新しいツルハシをクラフトしてから mine-block を再実行してください。',
+      };
+    }
+    let minRemaining = Infinity;
+    for (const p of pickaxesNow) {
+      const mx = (p as any).maxDurability;
+      const us = (p as any).durabilityUsed;
+      if (mx != null && mx > 0 && us != null && us >= 0) {
+        minRemaining = Math.min(minRemaining, mx - us);
+      }
+    }
+    const remaining = want - mined;
+    if (minRemaining !== Infinity && minRemaining <= 3 && remaining > 0) {
+      return {
+        success: mined > 0,
+        failureType: 'tool_durability_low',
+        recoverable: true,
+        result:
+          `${mined}個採掘しましたが、ツルハシの残り耐久が${minRemaining}しかありません（残り${remaining}個未採掘）。` +
+          'craft-one で新しいツルハシをクラフトしてから mine-block を再実行してください。',
+      };
+    }
+    return null;
   }
 
   /**

@@ -26,6 +26,9 @@ export class EnvironmentEventHandler {
     lastWeather: Weather = 'clear';
     lastBiome: string = '';
     lastPosition: { x: number; y: number; z: number } | null = null;
+    /** スポーン直後はバイオーム変更・テレポートを誤検知するため猶予を設ける */
+    private spawnGraceUntil: number = 0;
+    private static readonly SPAWN_GRACE_MS = 5000;
 
     constructor(bot: CustomBot) {
         this.bot = bot;
@@ -34,6 +37,8 @@ export class EnvironmentEventHandler {
     /** 初期状態を記録 */
     updateInitialState(): void {
         if (!this.bot.entity) return;
+
+        this.spawnGraceUntil = Date.now() + EnvironmentEventHandler.SPAWN_GRACE_MS;
 
         this.lastTime = this.getCurrentTimeOfDay();
         this.lastWeather = this.getCurrentWeather();
@@ -136,6 +141,11 @@ export class EnvironmentEventHandler {
             const previousBiome = this.lastBiome;
             this.lastBiome = biomeName;
 
+            // スポーン直後の猶予期間 or 初回バイオーム未取得
+            if (!previousBiome || Date.now() < this.spawnGraceUntil) {
+                return null;
+            }
+
             if (COMMON_BIOMES.has(biomeName.toLowerCase())) {
                 return null;
             }
@@ -163,6 +173,11 @@ export class EnvironmentEventHandler {
             const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
 
             if (distance > 50) {
+                this.lastPosition = current;
+                // スポーン直後のテレポートは無視（スポーン→プレイヤー位置への移動）
+                if (Date.now() < this.spawnGraceUntil) {
+                    return null;
+                }
                 const eventData: TeleportEventData = {
                     timestamp: Date.now(),
                     eventType: 'teleported',
@@ -170,7 +185,6 @@ export class EnvironmentEventHandler {
                     currentPosition: current,
                     distance,
                 };
-                this.lastPosition = current;
                 return eventData;
             }
         }
@@ -196,13 +210,13 @@ export class EnvironmentEventHandler {
             case 'biome_change': {
                 const bc = eventData as BiomeEventData;
                 if (bc.isRare) {
-                    return `「${bc.currentBiome}」に入った！珍しい場所だ。周りを見回して、何か面白いものがあれば感想を言って`;
+                    return `珍しいバイオーム「${bc.currentBiome}」に入った`;
                 }
-                return `「${bc.currentBiome}」に入った。周りを見回して、何か印象的なものがあれば一言感想を言って`;
+                return `バイオーム「${bc.currentBiome}」に入った`;
             }
             case 'teleported': {
                 const tp = eventData as TeleportEventData;
-                return `テレポートされた（${tp.distance.toFixed(0)}ブロック移動）。周囲を確認して`;
+                return `テレポートされた（${tp.distance.toFixed(0)}ブロック移動）`;
             }
             default:
                 return null;

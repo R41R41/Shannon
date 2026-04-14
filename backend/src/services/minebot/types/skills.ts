@@ -242,6 +242,19 @@ export abstract class InstantSkill extends Skill {
     return this._abortController?.signal;
   }
 
+  /**
+   * 別の InstantSkill を内部呼び出しする。
+   * run() のロック・タイムアウト・キャッシュを全てバイパスし runImpl を直接呼ぶ。
+   * 親スキルの runImpl 内からのみ使用すること。
+   */
+  protected async callSkill(name: string, ...args: any[]): Promise<SkillResult> {
+    const skill = this.bot.instantSkills.getSkill(name);
+    if (!skill) {
+      return { success: false, result: `スキル「${name}」が見つかりません` };
+    }
+    return skill.runImpl(...args);
+  }
+
   abstract runImpl(
     ...args: any[]
   ): Promise<SkillResult>;

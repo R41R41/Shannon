@@ -153,6 +153,19 @@ export class VoiceManager {
       }
     });
 
+    // --- Overlay sound effect playback ---
+    this.eventBus.subscribe('overlay:play_sound' as any, async (event: any) => {
+      const { buffer } = event.data as { buffer: Buffer; sound: string };
+      // Play in all connected voice channels
+      for (const guildId of this.voiceConnections.keys()) {
+        try {
+          await this.playAudioInVoiceChannel(guildId, buffer);
+        } catch (err) {
+          logger.warn(`[OverlaySound] Playback failed in guild ${guildId}: ${err}`);
+        }
+      }
+    });
+
     this.eventBus.subscribe('discord:voice_stream_text', async (event) => {
       const { guildId, channelId, sentence } = event.data as DiscordVoiceStreamTextInput;
       try {
@@ -285,6 +298,78 @@ export class VoiceManager {
       logger.error('[Discord Voice] Failed to join:', error);
       await interaction.editReply('ボイスチャンネルへの参加に失敗しました。');
     }
+  }
+
+  /**
+   * プログラム的にボイスチャンネルに参加（HTTP API用）
+   * interactionなしで直接チャンネルIDを指定して参加する
+   */
+  async joinChannel(channelId: string): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const channel = this.client.channels.cache.get(channelId);
+      if (!channel || !channel.isVoiceBased()) {
+        return { ok: false, error: 'ボイスチャンネルが見つかりません' };
+      }
+
+      const voiceChannel = channel as import('discord.js').VoiceBasedChannel;
+      const guildId = voiceChannel.guildId;
+
+      if (this.voiceConnections.has(guildId)) {
+        return { ok: true }; // already connected
+      }
+
+      const connection = joinVoiceChannel({
+        channelId: voiceChannel.id,
+        guildId,
+        adapterCreator: voiceChannel.guild.voiceAdapterCreator,
+        selfDeaf: false,
+      });
+
+      const player = createAudioPlayer();
+      connection.subscribe(player);
+
+      this.voiceConnections.set(guildId, connection);
+      this.audioPlayers.set(guildId, player);
+      this.activeVoiceUsers.set(guildId, null);
+
+      connection.on(VoiceConnectionStatus.Ready, () => {
+        logger.success(`[Discord Voice] Connected to ${voiceChannel.name} (via API)`);
+      });
+
+      connection.on(VoiceConnectionStatus.Disconnected, () => {
+        this.cleanupVoiceConnection(guildId);
+      });
+
+      connection.on(VoiceConnectionStatus.Destroyed, () => {
+        this.cleanupVoiceConnection(guildId);
+      });
+
+      return { ok: true };
+    } catch (error) {
+      logger.error('[Discord Voice] joinChannel failed:', error);
+      return { ok: false, error: String(error) };
+    }
+  }
+
+  /**
+   * プログラム的にボイスチャンネルから退出（HTTP API用）
+   */
+  leaveAllChannels(): void {
+    for (const [guildId, connection] of this.voiceConnections) {
+      connection.destroy();
+      this.cleanupVoiceConnection(guildId);
+    }
+  }
+
+  /** 現在接続中のVC情報を返す */
+  getConnectedChannels(): { guildId: string; channelId: string }[] {
+    const result: { guildId: string; channelId: string }[] = [];
+    for (const [guildId, conn] of this.voiceConnections) {
+      if (conn.state.status === VoiceConnectionStatus.Ready) {
+        result.push({ guildId, channelId: conn.joinConfig.channelId! });
+      }
+    }
+    return result;
   }
 
   async handleVoiceLeave(interaction: ChatInputCommandInteraction): Promise<void> {

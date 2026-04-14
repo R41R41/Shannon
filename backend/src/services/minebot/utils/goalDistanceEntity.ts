@@ -2,6 +2,7 @@ import pkg from 'mineflayer-pathfinder';
 import { Vec3 } from 'vec3';
 import { createLogger } from '../../../utils/logger.js';
 import { CustomBot, ResponseType } from '../types.js';
+import { gotoSafe } from './gotoSafe.js';
 const { goals } = pkg;
 
 const log = createLogger('Minebot:Goal');
@@ -44,14 +45,10 @@ export class GoalDistanceEntity {
           result: 'ゴールに到達できませんでした',
         };
       }
-      const timeoutPromise = new Promise((_, reject) => {
-        setTimeout(() => reject(new Error('移動タイムアウト')), this.timeout);
-      });
-      const movePromise = this.bot.pathfinder.goto(
-        new goals.GoalXZ(adjustedTarget.x, adjustedTarget.z)
-      );
-      await Promise.race([movePromise, timeoutPromise]);
-      return { success: true, result: 'ゴールに到達しました' };
+      const result = await gotoSafe(this.bot, new goals.GoalXZ(adjustedTarget.x, adjustedTarget.z), { timeoutMs: this.timeout });
+      return result.success
+        ? { success: true, result: 'ゴールに到達しました' }
+        : { success: false, result: `ゴールに到達できませんでした（${result.error}）` };
     } catch (error) {
       log.error('Error in run', error);
       return { success: false, result: 'ゴールに到達できませんでした' };

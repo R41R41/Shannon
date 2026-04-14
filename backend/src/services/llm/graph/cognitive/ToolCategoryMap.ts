@@ -49,7 +49,7 @@ const CATEGORY_SKILLS: Record<ToolCategory, string[]> = {
     building: [
         'place-block-at', 'fill-area', 'dig-block-at', 'get-blocks-in-area',
         'get-block-at', 'move-to', 'get-position', 'find-blocks',
-        'investigate-terrain', 'check-inventory-item',
+        'check-inventory-item',
     ],
     inventory: [
         'check-inventory-item', 'list-inventory-items', 'equip-item',
@@ -58,7 +58,7 @@ const CATEGORY_SKILLS: Record<ToolCategory, string[]> = {
     ],
     observation: [
         'get-position', 'get-block-at', 'get-block-in-sight', 'get-blocks-in-area',
-        'investigate-terrain', 'find-nearest-entity', 'list-nearby-entities',
+        'find-nearest-entity', 'list-nearby-entities',
         'get-bot-status', 'get-health', 'get-time-and-weather', 'get-equipment',
         'get-advancements', 'find-blocks', 'find-structure', 'is-block-loaded',
     ],

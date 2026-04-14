@@ -76,7 +76,7 @@ export interface FunctionCallingAgentState {
     /** メタ認知等から現在実行中のスキルを中断するためのコールバック */
     onRequestSkillInterrupt?: () => void;
     /** Minecraft: bot から実インベントリをリアルタイム取得するコールバック */
-    getLiveInventory?: () => Array<{ name: string; count: number }>;
+    getLiveInventory?: () => import('@shannon/common').MinecraftInventoryEntry[];
     /** Minecraft: bot のアクティブなステータスエフェクトを取得するコールバック */
     getActiveEffects?: () => Array<{ name: string; amplifier: number }>;
     /** ClassifyNode からの分類結果 */

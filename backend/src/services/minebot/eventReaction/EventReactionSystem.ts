@@ -14,7 +14,10 @@ import {
     loadEventReactionSettingsFile,
     saveEventReactionSettingsFile,
 } from './eventReactionSettingsStore.js';
-import { isForwardGroundSafe, pickSaferFleeYaw } from '../utils/fleeGroundSafety.js';
+import pathfinder from 'mineflayer-pathfinder';
+import { setMovements } from '../utils/setMovements.js';
+
+const { goals: pfGoals } = pathfinder;
 import type { TaskStateInput } from '../../llm/graph/types.js';
 import {
     DamageEventData,
@@ -585,15 +588,16 @@ export class EventReactionSystem {
             this.fleeInterval = null;
         }
         try {
+            this.bot.pathfinder.stop();
+        } catch { /* ignore */ }
+        try {
             this.bot.clearControlStates();
         } catch { /* bot might be dead */ }
     }
 
     /**
-     * 全敵対 Mob の位置から逃走方向を計算し、スプリントジャンプで逃げる。
-     *
-     * 複数敵への対応: 各敵からの「斥力ベクトル」を距離の逆数で重み付け合成し、
-     * 全敵から最も離れる方向へ逃走する。1体だけの場合は単純にその反対方向。
+     * 全敵対 Mob の位置から逃走先を計算し、pathfinder のゴールを更新する。
+     * setGoal() はノンブロッキングなので 300ms ティックで繰り返し呼べる。
      */
     private updateFleeDirection(): void {
         try {
@@ -603,40 +607,34 @@ export class EventReactionSystem {
             const hostiles = this.combat.scanCurrentHostiles();
 
             if (hostiles.length === 0) {
-                // 敵がいなくなった → 前方が崖でなければスプリント維持（崖方向のまま走り続けない）
-                const yaw = this.bot.entity.yaw;
-                if (isForwardGroundSafe(this.bot, yaw)) {
-                    this.bot.setControlState('forward', true);
-                    this.bot.setControlState('sprint', true);
-                } else {
-                    this.bot.setControlState('forward', false);
-                    this.bot.setControlState('sprint', false);
-                }
-                this.bot.setControlState('jump', false);
+                try { this.bot.pathfinder.stop(); } catch { /* ignore */ }
+                this.bot.clearControlStates();
                 return;
             }
 
-            // 各敵からの斥力ベクトルを合成（距離の逆数で重み付け）
+            // 各敵からの斥力ベクトルを合成
             let repelX = 0;
             let repelZ = 0;
             for (const hostile of hostiles) {
                 const dx = botPos.x - hostile.position.x;
                 const dz = botPos.z - hostile.position.z;
-                const dist = Math.max(hostile.distance, 0.5); // ゼロ除算防止
-                const weight = 1 / (dist * dist); // 近い敵ほど強い斥力
+                const dist = Math.max(hostile.distance, 0.5);
+                const weight = 1 / (dist * dist);
                 repelX += dx * weight;
                 repelZ += dz * weight;
             }
 
             const len = Math.sqrt(repelX * repelX + repelZ * repelZ) || 1;
-            const idealFleeYaw = Math.atan2(-repelX / len, -repelZ / len);
-            const fleeYaw = pickSaferFleeYaw(this.bot, idealFleeYaw);
+            const FLEE_DIST = 12;
+            const fleeX = botPos.x + (repelX / len) * FLEE_DIST;
+            const fleeZ = botPos.z + (repelZ / len) * FLEE_DIST;
 
-            this.bot.look(fleeYaw, 0, true);
-            this.bot.setControlState('forward', true);
-            this.bot.setControlState('sprint', true);
-            // ジャンプは崖から飛び出しやすいので使わない（段差は斥力方向の横ずれで迂回）
-            this.bot.setControlState('jump', false);
+            try {
+                setMovements(this.bot);
+            } catch { /* ignore */ }
+
+            // pathfinder に逃走先ゴールを設定（ノンブロッキング）
+            this.bot.pathfinder.setGoal(new pfGoals.GoalNearXZ(fleeX, fleeZ, 2));
 
             if (hostiles.length > 1) {
                 log.debug(`⚡ 継続逃走: ${hostiles.length}体から離脱中 (最近=${hostiles[0].mobType} ${hostiles[0].distance}m)`);

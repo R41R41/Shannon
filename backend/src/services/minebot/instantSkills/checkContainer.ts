@@ -1,5 +1,6 @@
 import { Vec3 } from 'vec3';
 import { CustomBot, InstantSkill } from '../types.js';
+import { ensureLineOfSight } from '../utils/blockLineOfSight.js';
 
 /**
  * 原子的スキル: コンテナの中身を確認
@@ -88,8 +89,17 @@ class CheckContainer extends InstantSkill {
                 };
             }
 
-            // コンテナを開く
-            const container = await this.bot.openContainer(block);
+            let container;
+            try {
+                container = await this.bot.openContainer(block);
+            } catch (actionError: any) {
+                const los = await ensureLineOfSight(this.bot, pos);
+                if (!los.clear) {
+                    const failType = los.dugBlocks?.length ? 'obstruction_cleared' : 'line_of_sight_blocked';
+                    return { success: false, result: los.message!, failureType: failType, recoverable: true };
+                }
+                throw actionError;
+            }
 
             if (!container) {
                 return {

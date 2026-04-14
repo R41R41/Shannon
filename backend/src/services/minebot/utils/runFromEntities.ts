@@ -4,6 +4,7 @@ import { Vec3 } from 'vec3';
 import { createLogger } from '../../../utils/logger.js';
 import { CustomBot } from '../types.js';
 import { setMovements } from './setMovements.js';
+import { gotoSafe } from './gotoSafe.js';
 
 const { goals } = pathfinder;
 const log = createLogger('Minebot:RunFromEntities');
@@ -48,16 +49,9 @@ export async function runFromEntities(
   );
 
   try {
-    const timeoutMs = 5000;
-    const fleePromise = bot.pathfinder.goto(fleeGoal);
-    const timeoutPromise = new Promise<void>((_, reject) =>
-      setTimeout(() => reject(new Error('flee timeout')), timeoutMs)
-    );
-    await Promise.race([fleePromise, timeoutPromise]);
+    await gotoSafe(bot, fleeGoal, { timeoutMs: 5000, stuckAbortCount: 4, logStuck: false });
   } catch (error: any) {
-    if (error.message !== 'flee timeout') {
-      log.warn(`逃走エラー: ${error.message}`);
-    }
+    log.warn(`逃走エラー: ${error.message}`);
     try { bot.pathfinder.stop(); } catch { /* ignore */ }
   }
 }

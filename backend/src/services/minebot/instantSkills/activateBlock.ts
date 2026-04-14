@@ -2,6 +2,8 @@ import minecraftData from 'minecraft-data';
 import pathfinder from 'mineflayer-pathfinder';
 import { Vec3 } from 'vec3';
 import { CustomBot, InstantSkill } from '../types.js';
+import { gotoSafe } from '../utils/gotoSafe.js';
+import { ensureLineOfSight } from '../utils/blockLineOfSight.js';
 const { goals } = pathfinder;
 
 class ActivateBlock extends InstantSkill {
@@ -46,8 +48,8 @@ class ActivateBlock extends InstantSkill {
   async runImpl(blockName: string, x: number | null = null, y: number | null = null, z: number | null = null) {
     // 座標が指定されている場合はVec3に変換
     const blockPosition = (x !== null && y !== null && z !== null) ? new Vec3(x, y, z) : null;
+    let targetBlock: ReturnType<CustomBot['blockAt']> | null = null;
     try {
-      let targetBlock;
       if (blockPosition) {
         targetBlock = this.bot.blockAt(blockPosition);
         if (!targetBlock || targetBlock.name !== blockName) {
@@ -77,18 +79,23 @@ class ActivateBlock extends InstantSkill {
         }
       }
       // 近づく
-      await this.bot.pathfinder.goto(
-        new goals.GoalNear(
-          targetBlock.position.x,
-          targetBlock.position.y,
-          targetBlock.position.z,
-          1
-        )
-      );
-      // activateBlock
+      await gotoSafe(this.bot, new goals.GoalNear(
+        targetBlock.position.x,
+        targetBlock.position.y,
+        targetBlock.position.z,
+        1,
+      ), { timeoutMs: 15_000 });
+
       await this.bot.activateBlock(targetBlock);
       return { success: true, result: `${blockName}を右クリックしました。` };
     } catch (error: any) {
+      if (targetBlock) {
+        const los = await ensureLineOfSight(this.bot, targetBlock.position);
+        if (!los.clear) {
+          const failType = los.dugBlocks?.length ? 'obstruction_cleared' : 'line_of_sight_blocked';
+          return { success: false, result: los.message!, failureType: failType, recoverable: true };
+        }
+      }
       return {
         success: false,
         result: `activateBlock中にエラー: ${error.message}`,

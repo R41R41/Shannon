@@ -1,5 +1,6 @@
 import { Vec3 } from 'vec3';
 import { CustomBot, InstantSkill } from '../types.js';
+import { gotoSafe } from '../utils/gotoSafe.js';
 
 /**
  * 原子的スキル: ポータルに入って次元移動
@@ -73,7 +74,10 @@ class EnterPortal extends InstantSkill {
       const { goals } = pathfinder;
       const goal = new goals.GoalBlock(x, y, z);
 
-      await this.bot.pathfinder.goto(goal);
+      const moveResult = await gotoSafe(this.bot, goal, { timeoutMs: 20_000 });
+      if (!moveResult.success) {
+        return { success: false, result: `ポータルに到達できません（${moveResult.error}）` };
+      }
 
       // 次元移動を待つ（最大30秒）
       return new Promise<{ success: boolean; result: string }>((resolve) => {

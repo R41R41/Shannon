@@ -16,6 +16,7 @@ import { SkillLoader } from './skills/SkillLoader.js';
 import { SkillRegistrar, getSkillRegistrar } from './skills/SkillRegistrar.js';
 import { CustomBot } from './types.js';
 import { sendGameChatLimited } from './utils/sendGameChatLimited.js';
+import { mapBotInventoryItems } from './utils/inventorySnapshot.js';
 import { ConstantSkillInfo, LLMError, SkillExecutionError } from './types/index.js';
 import { WorldKnowledgeService } from './knowledge/WorldKnowledgeService.js';
 import { createLogger } from '../../utils/logger.js';
@@ -582,6 +583,9 @@ export class SkillAgent {
           : undefined,
         botHealth: Number(this.bot.health ?? 0),
         botFoodLevel: Number(this.bot.food ?? 0),
+        botExperienceLevel: this.bot.selfState.botExperienceLevel,
+        botTotalExperience: this.bot.selfState.botTotalExperience,
+        botExperienceBarProgress: this.bot.selfState.botExperienceBarProgress,
         botHeldItem: this.bot.selfState.botHeldItem,
         lookingAt: this.bot.selfState.lookingAt?.name,
         inventory: this.bot.selfState.inventory,
@@ -590,6 +594,9 @@ export class SkillAgent {
           .map((entity: any) => entity.username || entity.name || entity.type)
           .filter(Boolean)
           .slice(0, 12),
+        activeFurnaces: this.bot.activeFurnaces?.filter(
+          f => Date.now() - f.startedAt < 600_000, // 10分以上前のエントリは除外
+        ),
         eventType: 'chat',
       });
 
@@ -706,7 +713,7 @@ export class SkillAgent {
         food: this.bot.food ?? 0,
         dimension: (this.bot as any).game?.dimension || 'overworld',
         biome: '',
-        inventory: (this.bot.inventory?.items() || []).map((item: any) => ({ name: item.name, count: item.count })),
+        inventory: mapBotInventoryItems(this.bot.inventory?.items() || []),
       }).catch(() => {});
     }, 60000);
   }

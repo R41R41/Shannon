@@ -2,6 +2,8 @@ import { Vec3 } from 'vec3';
 import pathfinder from 'mineflayer-pathfinder';
 import { CustomBot, InstantSkill } from '../types.js';
 import { createLogger } from '../../../utils/logger.js';
+import { gotoSafe } from '../utils/gotoSafe.js';
+import { ensureLineOfSight } from '../utils/blockLineOfSight.js';
 
 const { goals } = pathfinder;
 const log = createLogger('Minebot:Skill:repairItem');
@@ -41,13 +43,12 @@ class RepairItem extends InstantSkill {
       // 距離チェック & 移動
       const distance = this.bot.entity.position.distanceTo(pos);
       if (distance > 4.5) {
-        try {
-          await this.bot.pathfinder.goto(new goals.GoalNear(x, y, z, 2));
-        } catch {
+        const r = await gotoSafe(this.bot, new goals.GoalNear(x, y, z, 2), { timeoutMs: 15_000 });
+        if (!r.success) {
           return {
             success: false,
-            result: `金床に近づけません（距離: ${distance.toFixed(1)}）`,
-            failureType: 'distance_too_far',
+            result: `金床に近づけません（距離: ${distance.toFixed(1)}、${r.error}）`,
+            failureType: r.error === 'stuck' ? 'stuck' : 'distance_too_far',
             recoverable: true,
           };
         }
@@ -74,9 +75,18 @@ class RepairItem extends InstantSkill {
         };
       }
 
-      // 金床を開く
       log.info(`🔨 金床を開きます: (${x}, ${y}, ${z})`);
-      const anvilWindow = await this.openAnvil(block);
+      let anvilWindow: any;
+      try {
+        anvilWindow = await this.openAnvil(block);
+      } catch (actionError: any) {
+        const los = await ensureLineOfSight(this.bot, pos);
+        if (!los.clear) {
+          const failType = los.dugBlocks?.length ? 'obstruction_cleared' : 'line_of_sight_blocked';
+          return { success: false, result: los.message!, failureType: failType, recoverable: true };
+        }
+        throw actionError;
+      }
       if (!anvilWindow) {
         return {
           success: false,

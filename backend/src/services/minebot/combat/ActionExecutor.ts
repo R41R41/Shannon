@@ -2,6 +2,7 @@
  * ActionExecutor — スコアリング結果の行動を実行
  */
 
+import pathfinder from 'mineflayer-pathfinder';
 import { Vec3 } from 'vec3';
 import { createLogger } from '../../../utils/logger.js';
 import type { CustomBot } from '../types/CustomBot.js';
@@ -9,6 +10,9 @@ import type { ScoredAction, CombatConfig } from './types.js';
 import { DEFAULT_COMBAT_CONFIG } from './types.js';
 import type { Entity } from 'prismarine-entity';
 import { pickSaferFleeYaw } from '../utils/fleeGroundSafety.js';
+import { gotoSafe } from '../utils/gotoSafe.js';
+
+const { goals } = pathfinder;
 
 const log = createLogger('Minebot:Combat:Executor');
 
@@ -174,26 +178,37 @@ export class ActionExecutor {
                 .filter(e => e && e.position && e.type === 'hostile');
 
             if (hostiles.length > 0) {
-                // #11 fix: まず簡易ベクトル逃走 (即座に動く)
                 const avgX = hostiles.reduce((s, e) => s + e.position.x, 0) / hostiles.length;
                 const avgZ = hostiles.reduce((s, e) => s + e.position.z, 0) / hostiles.length;
                 const botPos = this.bot.entity.position;
                 const dx = botPos.x - avgX;
                 const dz = botPos.z - avgZ;
                 const len = Math.sqrt(dx * dx + dz * dz) || 1;
-                const idealYaw = Math.atan2(-dx / len, -dz / len);
-                const fleeYaw = pickSaferFleeYaw(this.bot, idealYaw);
-                await this.bot.look(fleeYaw, 0, true);
-                this.bot.setControlState('forward', true);
-                this.bot.setControlState('sprint', true);
-                // 2秒間全力で逃走（足元安全な向きに矯正済み）
-                await new Promise(r => setTimeout(r, 2000));
-                this.bot.setControlState('forward', false);
-                this.bot.setControlState('sprint', false);
+                // 敵の反対方向に10ブロック先の地点を逃走先として算出
+                const FLEE_DIST = 10;
+                const fleeX = botPos.x + (dx / len) * FLEE_DIST;
+                const fleeZ = botPos.z + (dz / len) * FLEE_DIST;
+
+                try {
+                    await gotoSafe(this.bot, new goals.GoalNearXZ(fleeX, fleeZ, 2), {
+                        timeoutMs: 3000,
+                        stuckAbortCount: 2,
+                        logStuck: false,
+                    });
+                } catch { /* ignore */ }
+                this.stopControls();
             }
         } catch (e) {
             log.warn(`⚠ flee: ${e instanceof Error ? e.message : e}`);
         }
+    }
+
+    private stopControls(): void {
+        try {
+            this.bot.setControlState('forward', false);
+            this.bot.setControlState('sprint', false);
+            this.bot.setControlState('jump', false);
+        } catch { /* ignore */ }
     }
 
     private async strafe(): Promise<void> {
@@ -224,30 +239,47 @@ export class ActionExecutor {
             const below = this.bot.blockAt(this.bot.entity.position.offset(0, -1, 0));
             if (!below) return;
 
-            // ジャンプ開始
+            const minFeetY = below.position.y + 1 + 0.26;
+
+            // ジャンプ開始（pathfinder と同様、十分な高さに達してから頂点〜落下初めで複数回試す）
             this.bot.setControlState('jump', true);
 
-            // 上昇中にブロック設置を試みる（50msごとにリトライ）
             let placed = false;
-            for (let i = 0; i < 8 && !placed; i++) {
-                await new Promise(r => setTimeout(r, 50));
-                // velocity.y > 0 の間（上昇中）に設置
-                if (this.bot.entity.velocity.y > 0.1) {
-                    try {
-                        await this.bot.placeBlock(below, new Vec3(0, 1, 0));
-                        placed = true;
-                    } catch { /* retry */ }
+            for (let i = 0; i < 22 && !placed; i++) {
+                await new Promise(r => setTimeout(r, 40));
+                const y = this.bot.entity.position.y;
+                const vy = this.bot.entity.velocity.y;
+                const highEnough = y >= minFeetY;
+                // 上昇初動(vy>>0)ではサーバーが拒否しやすい。頂点付近〜遅い落下で試す
+                const timingOk = vy <= 0.14 && vy >= -0.45;
+                if (!highEnough || !timingOk) continue;
+                try {
+                    await this.bot.placeBlock(below, new Vec3(0, 1, 0));
+                    placed = true;
+                } catch {
+                    /* retry */
                 }
             }
             this.bot.setControlState('jump', false);
 
             if (!placed) {
-                // フォールバック: 着地後に再試行
-                await new Promise(r => setTimeout(r, 200));
-                const belowNow = this.bot.blockAt(this.bot.entity.position.offset(0, -1, 0));
-                if (belowNow) {
-                    try { await this.bot.placeBlock(belowNow, new Vec3(0, 1, 0)); } catch { /* ignore */ }
+                // フォールバック: 着地を待って2回目のジャンプサイクルを試行
+                await new Promise(r => setTimeout(r, 300));
+                const belowRetry = this.bot.blockAt(this.bot.entity.position.offset(0, -1, 0));
+                if (!belowRetry) return;
+                const minFeetYRetry = belowRetry.position.y + 1 + 0.26;
+                this.bot.setControlState('jump', true);
+                for (let j = 0; j < 22 && !placed; j++) {
+                    await new Promise(r => setTimeout(r, 40));
+                    const y2 = this.bot.entity.position.y;
+                    const vy2 = this.bot.entity.velocity.y;
+                    if (y2 < minFeetYRetry || vy2 > 0.14 || vy2 < -0.45) continue;
+                    try {
+                        await this.bot.placeBlock(belowRetry, new Vec3(0, 1, 0));
+                        placed = true;
+                    } catch { /* retry */ }
                 }
+                this.bot.setControlState('jump', false);
             }
         } catch (e) {
             log.warn(`⚠ tower: ${e instanceof Error ? e.message : e}`);
@@ -256,12 +288,13 @@ export class ActionExecutor {
 
     private async approach(target: Entity): Promise<void> {
         try {
-            await this.bot.lookAt(target.position.offset(0, target.height * 0.8, 0), true);
-            this.bot.setControlState('forward', true);
-            this.bot.setControlState('sprint', true);
-            await new Promise(r => setTimeout(r, 400));
-            this.bot.setControlState('forward', false);
-            this.bot.setControlState('sprint', false);
+            const tp = target.position;
+            await gotoSafe(this.bot, new goals.GoalNear(tp.x, tp.y, tp.z, 2), {
+                timeoutMs: 2500,
+                stuckAbortCount: 2,
+                logStuck: false,
+            });
+            this.stopControls();
         } catch (e) {
             log.warn(`⚠ approach: ${e instanceof Error ? e.message : e}`);
         }

@@ -4,6 +4,7 @@ import * as prismarineRegistry from 'prismarine-registry';
 import { Vec3 } from 'vec3';
 import { createLogger } from '../../../utils/logger.js';
 import { ConstantSkill, CustomBot } from '../types.js';
+import { mapBotInventoryItems, prismarineItemToInventoryEntry } from '../utils/inventorySnapshot.js';
 
 const log = createLogger('Minebot:Skill:autoUpdateState');
 
@@ -29,13 +30,15 @@ class AutoUpdateState extends ConstantSkill {
       );
       this.bot.selfState.botHealth = `${this.bot.health}/20`;
       this.bot.selfState.botFoodLevel = `${this.bot.food}/20`;
-      this.bot.selfState.botHeldItem = this.bot.heldItem
-        ? this.bot.heldItem.name
-        : 'なし';
-      this.bot.selfState.inventory = this.bot.inventory.items().map((item) => ({
-        name: item.name,
-        count: item.count,
-      }));
+      const exp = (this.bot as any).experience as
+        | { level: number; points: number; progress: number }
+        | undefined;
+      this.bot.selfState.botExperienceLevel = exp?.level ?? 0;
+      this.bot.selfState.botTotalExperience = exp?.points ?? 0;
+      this.bot.selfState.botExperienceBarProgress =
+        typeof exp?.progress === 'number' ? exp.progress : 0;
+      this.bot.selfState.botHeldItem = this.formatHeldItemSummary(this.bot.heldItem);
+      this.bot.selfState.inventory = mapBotInventoryItems(this.bot.inventory.items());
       const isRaining = this.bot.isRaining;
       const rainState = isRaining ? '雨' : '晴れ';
       const worldTime = this.bot.time.timeOfDay;
@@ -57,6 +60,16 @@ class AutoUpdateState extends ConstantSkill {
     } catch (e) {
       log.error('状態更新に失敗', e);
     }
+  }
+
+  private formatHeldItemSummary(held: CustomBot['heldItem']): string {
+    if (!held) return 'なし';
+    const base = prismarineItemToInventoryEntry(held as any);
+    let s = `${base.name} x${base.count}`;
+    if (base.durabilityRemaining != null && base.durabilityMax != null) {
+      s += ` 耐久${base.durabilityRemaining}/${base.durabilityMax}`;
+    }
+    return s;
   }
 
   private getBiomeName(biomeId: number): string {

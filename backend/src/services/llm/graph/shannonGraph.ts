@@ -15,6 +15,7 @@ import { createLogger } from '../../../utils/logger.js';
 const logger = createLogger('LLM:ShannonGraph');
 import { BaseMessage } from '@langchain/core/messages';
 import type {
+  MinecraftInventoryEntry,
   RequestEnvelope,
   ShannonGraphState,
   ShannonMode,
@@ -66,6 +67,11 @@ const ShannonState = Annotation.Root({
   _abortSignal: Annotation<AbortSignal | undefined>({
     reducer: replace, default: () => undefined,
   }),
+
+  // -- MAX_ITERATIONS continuation --
+  recoveryStatus: Annotation<string | undefined>({ reducer: replace, default: () => undefined }),
+  savedMessages: Annotation<unknown[] | undefined>({ reducer: replace, default: () => undefined }),
+  savedTaskNodes: Annotation<unknown[] | undefined>({ reducer: replace, default: () => undefined }),
 });
 
 type ShannonStateType = typeof ShannonState.State;
@@ -246,6 +252,11 @@ function createExecuteNode(
           llmTools: llmToolMap,
         });
 
+        const previousMessages = (envelope.metadata as any)?.previousMessages as
+          import('./ShannonExecutor.js').ShannonExecutorState['previousMessages'];
+        const previousTaskNodes = (envelope.metadata as any)?.previousTaskNodes as
+          import('@shannon/common').TaskNode[] | undefined;
+
         const result = await executor.run({
           goal: envelope.text ?? '',
           context,
@@ -256,12 +267,17 @@ function createExecuteNode(
           onTaskTreeUpdate: state._onTaskTreeUpdate,
           abortSignal: state._abortSignal,
           getHumanFeedback: (envelope.metadata as any)?.getHumanFeedback,
+          previousMessages,
+          previousTaskNodes,
         });
 
         return {
           finalAnswer: result.lastContent ?? undefined,
           taskTree: result.taskTree ?? undefined,
           trace: [`node:execute:shannon:${result.toolCallCount}tools/${result.durationMs}ms`],
+          recoveryStatus: result.recoveryStatus,
+          savedMessages: result.messages,
+          savedTaskNodes: result.taskNodes,
         };
       } catch (e) {
         logger.error(`❌ ShannonExecutor failed: ${e}`, e);
@@ -355,7 +371,7 @@ export async function invokeShannonGraph(
     onToolStarting?: (toolName: string, args?: Record<string, unknown>) => void;
     onTaskTreeUpdate?: (taskTree: TaskTreeState) => void;
     onRequestSkillInterrupt?: () => void;
-    getLiveInventory?: () => Array<{ name: string; count: number }>;
+    getLiveInventory?: () => MinecraftInventoryEntry[];
     getActiveEffects?: () => Array<{ name: string; amplifier: number }>;
     abortSignal?: AbortSignal;
   },

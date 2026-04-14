@@ -2,6 +2,7 @@ import pkg from 'mineflayer-pathfinder';
 import { Vec3 } from 'vec3';
 import { createLogger } from '../../../utils/logger.js';
 import { CustomBot, ResponseType } from '../types.js';
+import { gotoSafe } from './gotoSafe.js';
 const { goals } = pkg;
 
 const log = createLogger('Minebot:Goal');
@@ -13,10 +14,10 @@ export class GoalBlock {
   }
   async run(position: Vec3): Promise<ResponseType> {
     try {
-      await this.bot.pathfinder.goto(
-        new goals.GoalBlock(position.x, position.y, position.z)
-      );
-      return { success: true, result: 'ゴールに到達しました' };
+      const r = await gotoSafe(this.bot, new goals.GoalBlock(position.x, position.y, position.z), { timeoutMs: 30_000 });
+      return r.success
+        ? { success: true, result: 'ゴールに到達しました' }
+        : { success: false, result: `ゴールに到達できませんでした（${r.error}）` };
     } catch (error) {
       log.error('Error in run', error);
       return { success: false, result: 'ゴールに到達できませんでした' };
@@ -24,10 +25,10 @@ export class GoalBlock {
   }
   async goToNear(position: Vec3, distance: number): Promise<ResponseType> {
     try {
-      await this.bot.pathfinder.goto(
-        new goals.GoalNear(position.x, position.y, position.z, distance)
-      );
-      return { success: true, result: 'ゴールに到達しました' };
+      const r = await gotoSafe(this.bot, new goals.GoalNear(position.x, position.y, position.z, distance), { timeoutMs: 30_000 });
+      return r.success
+        ? { success: true, result: 'ゴールに到達しました' }
+        : { success: false, result: `ゴールに到達できませんでした（${r.error}）` };
     } catch (error) {
       log.error('Error in goToNear', error);
       return { success: false, result: 'ゴールに到達できませんでした' };

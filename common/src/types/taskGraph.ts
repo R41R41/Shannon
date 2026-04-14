@@ -65,6 +65,19 @@ export interface TaskTreeState {
   }[] | null;
 }
 
+/**
+ * LLM管理型タスクツリーのノード。
+ * LLMが manage-task-tree ツールで CRUD 操作する最小限のスキーマ。
+ */
+export interface TaskNode {
+  id: string;
+  goal: string;
+  status: TaskStatus;
+  progress?: string | null;
+  blockedBy?: string | null;
+  children?: TaskNode[] | null;
+}
+
 export interface EmotionType {
   emotion: string;
   parameters: {

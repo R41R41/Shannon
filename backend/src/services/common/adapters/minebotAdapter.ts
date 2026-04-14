@@ -8,6 +8,7 @@ import {
   RequestEnvelope,
   ChannelAdapter,
   MinecraftContext,
+  type MinecraftInventoryEntry,
 } from '@shannon/common';
 import { createEnvelope } from './envelopeFactory.js';
 
@@ -34,9 +35,12 @@ export interface MinebotNativeEvent {
   botPosition?: { x: number; y: number; z: number };
   botHealth?: number;
   botFoodLevel?: number;
+  botExperienceLevel?: number;
+  botTotalExperience?: number;
+  botExperienceBarProgress?: number;
   botHeldItem?: string;
   lookingAt?: string;
-  inventory?: Array<{ name: string; count: number }>;
+  inventory?: MinecraftInventoryEntry[];
 
   // Nearby entities
   nearbyEntities?: string[];
@@ -46,6 +50,9 @@ export interface MinebotNativeEvent {
 
   // Emergency flag
   isEmergency?: boolean;
+
+  // Active furnaces tracking
+  activeFurnaces?: MinecraftContext['activeFurnaces'];
 }
 
 export const minebotAdapter: ChannelAdapter<MinebotNativeEvent> = {
@@ -66,8 +73,12 @@ export const minebotAdapter: ChannelAdapter<MinebotNativeEvent> = {
       position: event.botPosition,
       health: event.botHealth,
       food: event.botFoodLevel,
+      experienceLevel: event.botExperienceLevel,
+      totalExperience: event.botTotalExperience,
+      experienceBarProgress: event.botExperienceBarProgress,
       nearbyEntities: event.nearbyEntities,
       inventory: event.inventory,
+      activeFurnaces: event.activeFurnaces,
       eventType: event.eventType ?? 'chat',
     };
 
@@ -94,6 +105,9 @@ export const minebotAdapter: ChannelAdapter<MinebotNativeEvent> = {
           botPosition: event.botPosition,
           botHealth: event.botHealth,
           botFoodLevel: event.botFoodLevel,
+          botExperienceLevel: event.botExperienceLevel,
+          botTotalExperience: event.botTotalExperience,
+          botExperienceBarProgress: event.botExperienceBarProgress,
           botHeldItem: event.botHeldItem,
           lookingAt: event.lookingAt,
           inventory: event.inventory,

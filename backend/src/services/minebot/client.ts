@@ -152,6 +152,9 @@ export class MinebotClient extends BaseClient {
       botPosition: null,
       botHealth: '20/20',
       botFoodLevel: '20/20',
+      botExperienceLevel: 0,
+      botTotalExperience: 0,
+      botExperienceBarProgress: 0,
       botHeldItem: '',
       lookingAt: null,
       inventory: [],
@@ -165,6 +168,7 @@ export class MinebotClient extends BaseClient {
       dimension: null,
       bossbar: null,
     };
+    this.bot.activeFurnaces = [];
     await new Promise((resolve) => setTimeout(resolve, 1000));
     this.bot.utils.setMovements(
       this.bot,

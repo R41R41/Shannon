@@ -78,5 +78,9 @@
   {
     "skillName": "auto-face-speaker",
     "status": false
+  },
+  {
+    "skillName": "auto-combat-assess",
+    "status": false
   }
 ]

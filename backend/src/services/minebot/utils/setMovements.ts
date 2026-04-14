@@ -2,6 +2,7 @@ import minecraftData from 'minecraft-data';
 import { Bot } from 'mineflayer';
 import pathfinder from 'mineflayer-pathfinder';
 import { CustomBot } from '../types.js';
+import { PROTECTED_UTILITY_BLOCKS } from '../constants.js';
 const { Movements } = pathfinder;
 
 const HARD_BLOCKS_NEED_PICKAXE = [
@@ -29,7 +30,9 @@ export function setMovements(
   allowFreeMotion = false,
   canSwim = true,
   /** pathfinder の落下許容（大きいと崖を「降りる」経路を取りやすい）。逃走系は 1〜2 推奨 */
-  maxDropDown = 4
+  maxDropDown = 4,
+  /** 液体ブロックを通る経路のコスト。高いほど水を避ける。デフォルト10で陸上を強く優先 */
+  liquidCost = 10
 ) {
   const mcData = minecraftData(bot.version);
   const defaultMove = new Movements(bot as Bot);
@@ -41,8 +44,14 @@ export function setMovements(
   defaultMove.dontMineUnderFallingBlock = dontMineUnderFallingBlock;
   defaultMove.digCost = digCost;
   defaultMove.allowFreeMotion = allowFreeMotion;
+  (defaultMove as any).liquidCost = liquidCost;
 
   const cantBreak = new Set<number>();
+  // 保護対象ブロック（チェスト・かまど・作業台・ベッド等）を壊さない
+  for (const name of PROTECTED_UTILITY_BLOCKS) {
+    const block = mcData.blocksByName[name];
+    if (block) cantBreak.add(block.id);
+  }
   // ドアを壊さない
   for (const doorName of ['oak_door', 'birch_door', 'spruce_door', 'jungle_door', 'acacia_door', 'dark_oak_door']) {
     const block = mcData.blocksByName[doorName];

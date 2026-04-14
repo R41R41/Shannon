@@ -79,7 +79,7 @@ export class DiscordBot extends BaseClient {
   private colabChannelId: string | null = null;
   private static instance: DiscordBot;
   public isDev: boolean = false;
-  private voiceManager: VoiceManager;
+  public voiceManager: VoiceManager;
   public static getInstance(isDev?: boolean) {
     if (!DiscordBot.instance) {
       DiscordBot.instance = new DiscordBot('discord', isDev ?? false);

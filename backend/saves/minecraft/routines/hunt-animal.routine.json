@@ -5,9 +5,9 @@
     {
       "name": "animalType",
       "type": "string",
-      "description": "狩る動物の種類",
+      "description": "狩る動物の種類。food_animals で牛/豚/鶏/羊を一括検索",
       "required": false,
-      "default": "cow"
+      "default": "food_animals"
     },
     {
       "name": "count",
@@ -17,17 +17,16 @@
       "default": 3
     }
   ],
-  "instruction": "以下の手順で動物を狩れ:\n1. find-nearest-entity で ${animalType} を探す (maxDistance:64)。見つからなければ cow, pig, sheep, chicken の順に探す。\n2. 見つかったら move-to でその座標に近づく (range:8)。大まかに近づけばOK。\n3. attack-continuously で攻撃 (maxAttacks:10, maxDistance:16)。このスキルは武器を自動装備し、対象を追跡しながら攻撃する。follow-entity は不要。\n4. 倒したら pickup-nearest-item でドロップを拾う。失敗してもOK(auto-pickupが拾う)。\n5. ${count} 体倒すか動物がいなくなるまで 1-4 を繰り返す。\n6. 完了したら task-complete で倒した数と入手した食料を報告。",
+  "instruction": "以下の手順で動物を狩れ:\n1. list-nearby-entities で周囲の動物を確認 (maxDistance:32)。\n2. 動物が見つかったら attack-continuously で攻撃 (entityName:\"${animalType}\", maxAttacks:50, maxDistance:24, maxKills:${count})。\"food_animals\" なら cow/pig/chicken/sheep/rabbit を一括検索。move-to は不要。\n3. 結果の「周囲にまだN匹」情報を確認。目標数に達していなければ再度 attack-continuously。\n4. **動物が見つからない場合（target_not_found）**: get-position で現在座標を取得し、x または z 方向にランダムに +60〜+80 ずらした座標へ move-to で移動。到着後 list-nearby-entities で再スキャン。これを最大3回まで繰り返す。3回移動しても見つからなければ task-complete で「周囲に動物なし」と報告。\n5. pickup-nearest-item でドロップを拾う（auto-pickupが拾っていれば失敗してもOK）。\n6. 完了したら task-complete で倒した数と入手した食料を報告。",
   "tools": [
     "list-nearby-entities",
-    "find-nearest-entity",
     "attack-continuously",
     "pickup-nearest-item",
-    "move-to",
     "get-position",
+    "move-to",
     "check-inventory-item"
   ],
-  "maxIterations": 25,
+  "maxIterations": 20,
   "model": "sonnet",
   "failureEscalation": "system2",
   "source": "manual",

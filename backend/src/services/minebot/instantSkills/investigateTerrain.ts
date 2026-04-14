@@ -18,7 +18,8 @@ const log = createLogger('Minebot:Skill:investigateTerrain');
 class InvestigateTerrain extends InstantSkill {
   skillName = 'investigate-terrain';
   description =
-    '周囲の地形を調査します。調べたい内容（コンテクスト）を指定すると、LLMが適切にブロック情報を取得して分析します。';
+    '周囲の地形をLLMで総合的に調査します。建築・地形分析向け。' +
+    '⚠️ 特定ブロックの位置を探すだけなら find-blocks を使うこと（water, chest, furnace 等）。';
   params: SkillParam[] = [
     {
       name: 'context',
@@ -34,7 +35,7 @@ class InvestigateTerrain extends InstantSkill {
       default: 10,
     },
   ];
-  isToolForLLM = true;
+  isToolForLLM = false;
 
   private llm: ChatOpenAI;
 

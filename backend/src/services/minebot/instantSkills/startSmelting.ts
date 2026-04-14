@@ -1,6 +1,7 @@
 import minecraftData from 'minecraft-data';
 import { Vec3 } from 'vec3';
 import { CustomBot, InstantSkill } from '../types.js';
+import { ensureLineOfSight } from '../utils/blockLineOfSight.js';
 
 /**
  * 原子的スキル: かまどで精錬を開始
@@ -64,7 +65,8 @@ class StartSmelting extends InstantSkill {
       {
         name: 'fuelItem',
         type: 'string',
-        description: '燃料（例: coal, planks, stick）',
+        description:
+          '燃料。推奨: coal または charcoal（いずれも1個8回分）。インベントリに石炭系がある場合は板材・棒より自動で優先する。石炭・木炭も高効率燃料も無いときは失敗し、採掘を促す（板材だけで代用しない）',
         required: true,
       },
       {
@@ -92,6 +94,61 @@ class StartSmelting extends InstantSkill {
   /** 有効な燃料かどうかを判定する */
   private isValidFuel(fuelName: string): boolean {
     return this.getFuelSmelts(fuelName) > 0;
+  }
+
+  /** 1個あたり最低これ以上の「精錬回数」がある燃料を優先（石炭・木炭と同等以上） */
+  private static readonly PREFERRED_MIN_SMELTS = 8;
+
+  private static readonly PREFERRED_FUEL_ORDER = [
+    'coal',
+    'charcoal',
+    'coal_block',
+    'lava_bucket',
+    'blaze_rod',
+    'dried_kelp_block',
+  ] as const;
+
+  private inventoryCount(itemName: string): number {
+    return this.bot.inventory
+      .items()
+      .filter((i) => i.name === itemName)
+      .reduce((s, i) => s + i.count, 0);
+  }
+
+  private isPreferredFuel(fuelName: string): boolean {
+    return this.getFuelSmelts(fuelName) >= StartSmelting.PREFERRED_MIN_SMELTS;
+  }
+
+  /**
+   * 石炭・木炭・高効率燃料を優先。板材・棒・原木のみのときは代用せず失敗させる。
+   */
+  private resolveFuelItem(requested: string): { fuelItem: string; note?: string } | { error: string } {
+    const reqSmelts = this.getFuelSmelts(requested);
+    if (reqSmelts <= 0) {
+      return { error: `${requested}は有効な燃料ではありません` };
+    }
+
+    if (this.inventoryCount(requested) > 0 && this.isPreferredFuel(requested)) {
+      return { fuelItem: requested };
+    }
+
+    for (const name of StartSmelting.PREFERRED_FUEL_ORDER) {
+      if (this.inventoryCount(name) > 0) {
+        if (name !== requested) {
+          return {
+            fuelItem: name,
+            note: `燃料は${requested}の指定でしたが、効率のため${name}を使用しました`,
+          };
+        }
+        return { fuelItem: name };
+      }
+    }
+
+    return {
+      error:
+        '石炭・木炭（または coal_block / lava_bucket / blaze_rod / dried_kelp_block）を持っていません。' +
+        '板材・棒・原木だけで代用しません。coal_ore を mine-block や find-and-mine-ore で掘るか、原木を木炭に精錬してから再実行してください。',
+    };
   }
 
   async runImpl(
@@ -140,18 +197,24 @@ class StartSmelting extends InstantSkill {
         };
       }
 
-      // 燃料バリデーション: 有効な燃料かチェック
-      if (!this.isValidFuel(fuelItem)) {
-        const validFuels = 'coal, charcoal, oak_planks, stick, oak_log, blaze_rod, lava_bucket';
+      const resolved = this.resolveFuelItem(fuelItem);
+      if ('error' in resolved) {
+        const validFuels =
+          'coal, charcoal, coal_block, lava_bucket, blaze_rod, dried_kelp_block（板材・原木・棒は不可：先に石炭を掘る）';
+        const base = resolved.error.includes('有効な燃料ではありません')
+          ? `${fuelItem}は有効な燃料ではありません。${validFuels}`
+          : resolved.error;
         return {
           success: false,
-          result: `${fuelItem}は有効な燃料ではありません。使用可能な燃料: ${validFuels} 等`,
-          failureType: 'invalid_fuel',
+          result: base,
+          failureType: resolved.error.includes('有効な燃料ではありません') ? 'invalid_fuel' : 'material_missing',
           recoverable: true,
         };
       }
 
-      // 燃料を持っているかチェック（材料チェックはかまど状態確認後に行う）
+      fuelItem = resolved.fuelItem;
+      const fuelSwitchNote = resolved.note;
+
       const fuelItems = this.bot.inventory
         .items()
         .filter((item) => item.name === fuelItem);
@@ -159,14 +222,23 @@ class StartSmelting extends InstantSkill {
       if (fuelItems.length === 0) {
         return {
           success: false,
-          result: `燃料${fuelItem}を持っていません。石炭か木炭を入れてください。`,
+          result: `燃料${fuelItem}を持っていません`,
           failureType: 'material_missing',
           recoverable: true,
         };
       }
 
-      // かまどを開く
-      const furnace = await this.bot.openFurnace(block);
+      let furnace;
+      try {
+        furnace = await this.bot.openFurnace(block);
+      } catch (actionError: any) {
+        const los = await ensureLineOfSight(this.bot, pos);
+        if (!los.clear) {
+          const failType = los.dugBlocks?.length ? 'obstruction_cleared' : 'line_of_sight_blocked';
+          return { success: false, result: los.message!, failureType: failType, recoverable: true };
+        }
+        throw actionError;
+      }
       if (!furnace) {
         return {
           success: false,
@@ -302,7 +374,9 @@ class StartSmelting extends InstantSkill {
             furnace.close();
             return {
               success: false,
-              result: `燃料${fuelItem}が不足しています（必要: ${neededFuelCount}個、所持: 0個）。${fuelItem}を${neededFuelCount}個用意してください。代替燃料: coal, charcoal, 木材系`,
+              result:
+                `燃料${fuelItem}が不足しています（必要: ${neededFuelCount}個、所持: 0個）。` +
+                '石炭・木炭を追加するか、coal_ore を採掘してください（板材・棒への切り替えはしません）。',
               failureType: 'material_missing',
               recoverable: true,
             };
@@ -322,6 +396,9 @@ class StartSmelting extends InstantSkill {
             if (withdrawnOutput) {
               resultMsg += `。※完成品スロットから${withdrawnOutput.name} x${withdrawnOutput.count}を自動回収しました`;
             }
+            if (fuelSwitchNote) {
+              resultMsg = `${fuelSwitchNote}。${resultMsg}`;
+            }
             return {
               success: true,
               result: resultMsg,
@@ -338,6 +415,9 @@ class StartSmelting extends InstantSkill {
         const secPerItem = isBlastOrSmoker ? 5 : 10;
         const estimatedSec = totalSmeltCount * secPerItem;
 
+        // かまど追跡に登録
+        this.registerActiveFurnace(x, y, z, inputItem, totalSmeltCount, estimatedSec);
+
         let resultMsg: string;
         if (isResumeMode) {
           resultMsg = `精錬を再開しました。かまど内${inputItem} x${alreadyInFurnace}`;
@@ -345,6 +425,9 @@ class StartSmelting extends InstantSkill {
           resultMsg += `（計${totalSmeltCount}個、燃料: ${fuelItem}）。約${estimatedSec}秒で完了予定`;
         } else {
           resultMsg = `${inputItem} x${totalSmeltCount}の精錬を開始しました（燃料: ${fuelItem} x${neededFuelCount}）。約${estimatedSec}秒で完了予定`;
+        }
+        if (fuelSwitchNote) {
+          resultMsg = `${fuelSwitchNote}。${resultMsg}`;
         }
         if (withdrawnOutput) {
           resultMsg += `。※完成品スロットから${withdrawnOutput.name} x${withdrawnOutput.count}を自動回収しインベントリに入れました`;
@@ -367,6 +450,23 @@ class StartSmelting extends InstantSkill {
         recoverable: true,
       };
     }
+  }
+  private registerActiveFurnace(
+    x: number, y: number, z: number,
+    item: string, count: number, estimatedSec: number,
+  ): void {
+    if (!this.bot.activeFurnaces) this.bot.activeFurnaces = [];
+    // 同一座標の古いエントリを置換
+    this.bot.activeFurnaces = this.bot.activeFurnaces.filter(
+      f => !(f.pos.x === x && f.pos.y === y && f.pos.z === z),
+    );
+    this.bot.activeFurnaces.push({
+      pos: { x, y, z },
+      item,
+      count,
+      readyAt: Date.now() + estimatedSec * 1000,
+      startedAt: Date.now(),
+    });
   }
 }
 

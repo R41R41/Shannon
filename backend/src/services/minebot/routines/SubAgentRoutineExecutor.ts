@@ -9,13 +9,13 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
+import type { TaskTreeState } from '@shannon/common';
 import { config } from '../../../config/env.js';
 import { createLogger } from '../../../utils/logger.js';
-import type { CustomBot } from '../types/CustomBot.js';
-import type { RoutineDefinition, RoutineExecutionResult } from './types.js';
-import type { TaskTreeState } from '@shannon/common';
 import { skillToAnthropicTool } from '../../llm/graph/ShannonExecutor.js';
 import { CONFIG as MINEBOT_CONFIG } from '../config/MinebotConfig.js';
+import type { CustomBot } from '../types/CustomBot.js';
+import type { RoutineDefinition, RoutineExecutionResult } from './types.js';
 
 const log = createLogger('Minebot:SubAgent');
 
@@ -44,23 +44,44 @@ export class SubAgentRoutineExecutor {
         const model = routine.model === 'sonnet' ? MODEL_SONNET : MODEL_HAIKU;
         const maxIter = routine.maxIterations ?? 15;
 
-        // 手順書のテンプレート変数を解決
+        // 手順書のテンプレート変数を解決（省略された optional パラメータは JSON の default を補完）
+        const mergedParams: Record<string, unknown> = { ...params };
+        for (const p of routine.params) {
+            if (mergedParams[p.name] === undefined && p.default !== undefined) {
+                mergedParams[p.name] = p.default;
+            }
+        }
         let instruction = routine.instruction ?? routine.description;
-        for (const [key, value] of Object.entries(params)) {
+        for (const [key, value] of Object.entries(mergedParams)) {
             instruction = instruction.replace(new RegExp(`\\$\\{${key}\\}`, 'g'), String(value));
         }
 
         // ツール定義を構築
         const tools = this.buildTools(routine, options.bot);
 
+        // ボットの現在状態を注入
+        const botPos = options.bot.selfState.botPosition;
+        const posLine = botPos ? `現在位置: (${Math.floor(botPos.x)}, ${Math.floor(botPos.y)}, ${Math.floor(botPos.z)})` : '';
+        const furnaces = options.bot.activeFurnaces?.filter(f => Date.now() - f.startedAt < 600_000) ?? [];
+        const furnaceLine = furnaces.length > 0
+            ? `精錬中のかまど: ${furnaces.map(f => {
+                const secsLeft = Math.max(0, Math.round((f.readyAt - Date.now()) / 1000));
+                const st = secsLeft <= 0 ? '完了' : `残り${secsLeft}秒`;
+                return `${f.item}x${f.count} @(${f.pos.x},${f.pos.y},${f.pos.z}) ${st}`;
+            }).join(', ')}`
+            : '';
+
         const systemPrompt = `あなたは Minecraft ボット「シャノン」のサブエージェントです。
 以下の手順に従ってタスクを実行し、完了したら task-complete を呼んでください。
+${posLine ? `\n${posLine}` : ''}${furnaceLine ? `\n${furnaceLine}` : ''}
 
 ## 手順
 ${instruction}
 
 ## ルール
 - ツールの結果をよく見て、状況に応じて柔軟に判断する
+- 手順が精錬・クラフト・チェスト取出しに関するときは、着手前に近傍を調べる: find-blocks（chest / barrel / furnace / crafting_table 等）→ 必要な座標へ move-to → check-container または check-furnace。採掘・移動・戦闘のみなら省略してよい
+- 精錬を開始したら（start-smelting）、**必ずその場で withdraw-from-furnace で完成品を取り出すまで離れない**
 - 同じ失敗を2回繰り返さない。別のアプローチに切り替える
 - 完了したら task-complete の summary に**具体的な成果**を書く（入手アイテム数等）
 - 失敗して続行不可能な場合も task-complete を呼び、失敗理由を summary に書く`;
@@ -99,6 +120,17 @@ ${instruction}
             } catch (e) {
                 log.error(`❌ SubAgent API error: ${e instanceof Error ? e.message : e}`);
                 break;
+            }
+
+            const usage = response.usage as any;
+            if (usage) {
+                const cached = usage.cache_read_input_tokens ?? 0;
+                const cacheWrite = usage.cache_creation_input_tokens ?? 0;
+                const newInput = usage.input_tokens ?? 0;
+                const totalInput = cached + cacheWrite + newInput;
+                const cacheRate = totalInput > 0 ? Math.round((cached / totalInput) * 100) : 0;
+                const cwPart = cacheWrite > 0 ? `+cw=${cacheWrite}` : '';
+                log.info(`  [SubAgent:${routine.name}] 📊 tokens: in=${newInput}${cwPart}+cached=${cached} (${cacheRate}%), out=${usage.output_tokens ?? 0}`, 'cyan');
             }
 
             const assistantContent = response.content;
@@ -163,10 +195,15 @@ ${instruction}
                 log.info(`  [SubAgent:${routine.name}] ✓ ${toolName}: ${truncated}`,
                     resultText.includes('失敗') ? 'yellow' : 'green');
 
+                const MAX_TOOL_RESULT_CHARS = 2000;
+                const trimmedResult = resultText.length > MAX_TOOL_RESULT_CHARS
+                    ? resultText.slice(0, MAX_TOOL_RESULT_CHARS) + `\n...(${resultText.length - MAX_TOOL_RESULT_CHARS}文字省略)`
+                    : resultText;
+
                 toolResults.push({
                     type: 'tool_result',
                     tool_use_id: toolUse.id,
-                    content: resultText,
+                    content: trimmedResult,
                 });
             }
 
@@ -210,7 +247,7 @@ ${instruction}
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json; charset=UTF-8' },
                 body: JSON.stringify(taskTree),
-            }).catch(() => {});
+            }).catch(() => { });
         } catch { /* ignore */ }
     }
 

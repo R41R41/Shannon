@@ -18,7 +18,7 @@
     {
       "eventType": "hostile_approach",
       "enabled": true,
-      "probability": 100,
+      "probability": 0,
       "idleOnly": false,
       "reactionType": "emergency"
     },
@@ -32,21 +32,21 @@
     {
       "eventType": "time_change",
       "enabled": true,
-      "probability": 30,
+      "probability": 0,
       "idleOnly": true,
       "reactionType": "task"
     },
     {
       "eventType": "weather_change",
       "enabled": true,
-      "probability": 30,
+      "probability": 0,
       "idleOnly": true,
       "reactionType": "task"
     },
     {
       "eventType": "biome_change",
       "enabled": true,
-      "probability": 50,
+      "probability": 0,
       "idleOnly": true,
       "reactionType": "task"
     },

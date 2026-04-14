@@ -1,6 +1,7 @@
 import pathfinder from 'mineflayer-pathfinder';
 import { CustomBot, InstantSkill } from '../types.js';
 import { createLogger } from '../../../utils/logger.js';
+import { gotoSafe } from '../utils/gotoSafe.js';
 
 const { goals } = pathfinder;
 const log = createLogger('Minebot:Skill:tradeWithVillager');
@@ -248,17 +249,13 @@ class TradeWithVillager extends InstantSkill {
           // 近づく
           const distance = myPos.distanceTo(villager.position);
           if (distance > 3) {
-            const timeoutPromise = new Promise((_, reject) =>
-              setTimeout(() => reject(new Error('移動タイムアウト')), 10000)
-            );
             const goal = new goals.GoalNear(
               villager.position.x,
               villager.position.y,
               villager.position.z,
               2
             );
-            const movePromise = this.bot.pathfinder.goto(goal);
-            await Promise.race([movePromise, timeoutPromise]);
+            await gotoSafe(this.bot, goal, { timeoutMs: 10_000 });
           }
 
           // 取引UIを開く

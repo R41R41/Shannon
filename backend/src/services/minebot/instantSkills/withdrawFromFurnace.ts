@@ -1,6 +1,13 @@
 import minecraftData from 'minecraft-data';
 import { Vec3 } from 'vec3';
 import { CustomBot, InstantSkill } from '../types.js';
+import { ensureLineOfSight } from '../utils/blockLineOfSight.js';
+import {
+  countItemInInventory,
+  hasNearbyDroppedItemNamed,
+  inventoryNoEmptySlots,
+  INVENTORY_FULL_RECOVERY_HINT_JA,
+} from '../utils/inventorySpillDetection.js';
 
 /**
  * 原子的スキル: かまどからアイテムを取り出す
@@ -88,8 +95,17 @@ class WithdrawFromFurnace extends InstantSkill {
                 };
             }
 
-            // かまどを開く
-            const furnace = await this.bot.openFurnace(block);
+            let furnace: Awaited<ReturnType<CustomBot['openFurnace']>>;
+            try {
+                furnace = await this.bot.openFurnace(block);
+            } catch (actionError: any) {
+                const los = await ensureLineOfSight(this.bot, pos);
+                if (!los.clear) {
+                    const failType = los.dugBlocks?.length ? 'obstruction_cleared' : 'line_of_sight_blocked';
+                    return { success: false, result: los.message!, failureType: failType, recoverable: true };
+                }
+                throw actionError;
+            }
             if (!furnace) {
                 return {
                     success: false,
@@ -99,13 +115,20 @@ class WithdrawFromFurnace extends InstantSkill {
 
             try {
                 const withdrawnItems: string[] = [];
+                let sawInventoryFull = false;
 
                 // 入力スロットから取り出し
                 if (normalizedSlot === 'input' || normalizedSlot === 'all') {
                     const inputItem = furnace.inputItem();
                     if (inputItem) {
-                        await furnace.takeInput();
-                        withdrawnItems.push(`${inputItem.name} x${inputItem.count}（材料）`);
+                        const r = await this.withdrawStackWithSpillCheck(
+                            inputItem.name,
+                            inputItem.count,
+                            () => furnace.takeInput(),
+                            '材料',
+                        );
+                        withdrawnItems.push(r.line);
+                        if (r.inventoryFull) sawInventoryFull = true;
                     }
                 }
 
@@ -113,8 +136,14 @@ class WithdrawFromFurnace extends InstantSkill {
                 if (normalizedSlot === 'fuel' || normalizedSlot === 'all') {
                     const fuelItem = furnace.fuelItem();
                     if (fuelItem) {
-                        await furnace.takeFuel();
-                        withdrawnItems.push(`${fuelItem.name} x${fuelItem.count}（燃料）`);
+                        const r = await this.withdrawStackWithSpillCheck(
+                            fuelItem.name,
+                            fuelItem.count,
+                            () => furnace.takeFuel(),
+                            '燃料',
+                        );
+                        withdrawnItems.push(r.line);
+                        if (r.inventoryFull) sawInventoryFull = true;
                     }
                 }
 
@@ -136,12 +165,23 @@ class WithdrawFromFurnace extends InstantSkill {
                         outputItem = furnace.outputItem();
                     }
                     if (outputItem) {
-                        await furnace.takeOutput();
-                        withdrawnItems.push(`${outputItem.name} x${outputItem.count}（完成品）`);
+                        const r = await this.withdrawStackWithSpillCheck(
+                            outputItem.name,
+                            outputItem.count,
+                            () => furnace.takeOutput(),
+                            '完成品',
+                        );
+                        withdrawnItems.push(r.line);
+                        if (r.inventoryFull) sawInventoryFull = true;
                     }
                 }
 
                 furnace.close();
+
+                // output を取り出した場合はかまど追跡から削除
+                if (normalizedSlot === 'output' || normalizedSlot === 'all') {
+                    this.unregisterActiveFurnace(x, y, z);
+                }
 
                 if (withdrawnItems.length === 0) {
                     return {
@@ -149,6 +189,16 @@ class WithdrawFromFurnace extends InstantSkill {
                         result: normalizedSlot === 'all'
                             ? 'かまどは空でした'
                             : `${slot}スロットは空でした`,
+                    };
+                }
+
+                if (sawInventoryFull) {
+                    return {
+                        success: true,
+                        failureType: 'inventory_full',
+                        recoverable: true,
+                        result:
+                            `取り出し結果: ${withdrawnItems.join(', ')}。${INVENTORY_FULL_RECOVERY_HINT_JA}`,
                     };
                 }
 
@@ -166,6 +216,58 @@ class WithdrawFromFurnace extends InstantSkill {
                 result: `取り出しエラー: ${error.message}`,
             };
         }
+    }
+
+    /**
+     * かまどから1スタック相当を取り出したあと、インベントリ増分と地上ドロップで満杯溢れを検出する。
+     */
+    private async withdrawStackWithSpillCheck(
+        itemName: string,
+        expectedQty: number,
+        takeFn: () => Promise<unknown>,
+        roleJp: string,
+    ): Promise<{ line: string; inventoryFull: boolean }> {
+        const before = countItemInInventory(this.bot, itemName);
+        await takeFn();
+        await new Promise(r => setTimeout(r, 450));
+        let gained = countItemInInventory(this.bot, itemName) - before;
+        if (gained < expectedQty) {
+            await new Promise(r => setTimeout(r, 350));
+            gained = countItemInInventory(this.bot, itemName) - before;
+        }
+        const onGround = hasNearbyDroppedItemNamed(this.bot, this.mcData, itemName, 10);
+        const noSlots = inventoryNoEmptySlots(this.bot);
+
+        if (gained >= expectedQty) {
+            return {
+                line: `${itemName} x${expectedQty}（${roleJp}）`,
+                inventoryFull: false,
+            };
+        }
+        if (onGround && noSlots) {
+            const g = Math.max(0, gained);
+            return {
+                line:
+                    `${itemName}: 満杯のため${expectedQty}個のうち約${expectedQty - g}個が地上に落ちた可能性（インベントリに${g}個、${roleJp}）`,
+                inventoryFull: true,
+            };
+        }
+        if (gained > 0) {
+            return {
+                line: `${itemName} x${gained}（${roleJp}、期待${expectedQty}個。pickup-nearest-itemを試す）`,
+                inventoryFull: false,
+            };
+        }
+        return {
+            line: `${itemName}（${roleJp}）を取り出したがインベントリが増えていない。pickup-nearest-itemを試す`,
+            inventoryFull: false,
+        };
+    }
+    private unregisterActiveFurnace(x: number, y: number, z: number): void {
+        if (!this.bot.activeFurnaces) return;
+        this.bot.activeFurnaces = this.bot.activeFurnaces.filter(
+            f => !(f.pos.x === x && f.pos.y === y && f.pos.z === z),
+        );
     }
 }
 

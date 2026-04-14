@@ -149,7 +149,14 @@ export class WorldKnowledgeService {
 
   // ─── Bot Snapshots ───
 
-  async recordSnapshot(data: { position: Position; health: number; food: number; dimension: string; biome: string; inventory: Array<{ name: string; count: number }> }): Promise<void> {
+  async recordSnapshot(data: {
+    position: Position;
+    health: number;
+    food: number;
+    dimension: string;
+    biome: string;
+    inventory: Array<{ name: string; count: number; durabilityRemaining?: number; durabilityMax?: number }>;
+  }): Promise<void> {
     try {
       await BotSnapshot.create({ serverName: this.serverName, ...data });
     } catch {}

@@ -399,6 +399,31 @@ export class MinebotHttpServer {
             }
         });
 
+        // タスク続行エンドポイント（ShannonUI Mod の「続行」ボタンから）
+        this.app.post('/task_continue', async (req: any, res: any) => {
+            try {
+                const { taskId } = req.body;
+                log.info(`▶ /task_continue: taskId=${taskId ?? '(current)'}`);
+
+                if (!this.taskRuntime) {
+                    return res.status(400).json({ success: false, result: 'Task runtime not initialized' });
+                }
+
+                if (this.onChatMessageCallback) {
+                    await this.onChatMessageCallback('system', '続けて');
+                } else {
+                    return res.status(400).json({ success: false, result: 'Chat callback not set' });
+                }
+
+                const response: ApiResponse = { success: true, result: 'Task continuation triggered' };
+                res.status(200).json(response);
+            } catch (error) {
+                const httpError = new HttpServerError('/task_continue', 500, error as Error);
+                log.error('/task_continue エラー', httpError);
+                res.status(500).json({ success: false, result: httpError.message });
+            }
+        });
+
         // voice_mode 切り替え（Minecraft側から）
         this.app.post('/voice_mode', async (_req: any, res: any) => {
             try {

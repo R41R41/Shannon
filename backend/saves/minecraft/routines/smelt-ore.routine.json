@@ -11,7 +11,7 @@
     {
       "name": "fuel",
       "type": "string",
-      "description": "燃料",
+      "description": "燃料（既定 coal。石炭・木炭を最優先。無ければ採掘してから精錬）",
       "required": false,
       "default": "coal"
     },
@@ -23,7 +23,7 @@
       "default": 1
     }
   ],
-  "instruction": "手順:\n1. find-blocks(furnace, maxDistance:32) でかまどを探す。なければ check-inventory-item(cobblestone) → craft-one(furnace) → get-position → dig-block-at で草を除去 → place-block-at で設置。\n2. move-to でかまドに移動 (range:3)。\n3. start-smelting(x,y,z, inputItem:${ore}, fuelItem:${fuel}, count:${count}) で精錬開始。燃料不足なら oak_planks や stick を代替で使え。\n4. withdraw-from-furnace(slot:output) で取り出す。これは精錬完了まで自動で待つので wait-time は絶対使うな。\n5. task-complete で精錬結果を報告。\n\n重要: wait-time, check-furnace は使うな。withdraw-from-furnace が自動で待つ。",
+  "instruction": "手順:\n1. find-blocks(furnace, maxDistance:32) でかまどを探す。なければ check-inventory-item(cobblestone) → craft-one(furnace) → get-position → dig-block-at で草を除去 → place-block-at で設置。\n2. move-to でかまどに移動 (range:3)。\n3. start-smelting(x,y,z, inputItem:${ore}, fuelItem:${fuel}, count:${count}) で精錬開始。燃料は石炭(coal)・木炭(charcoal)を最優先。スキルがインベントリ内の高効率燃料を自動選択する。石炭も木炭も無い場合は板材・棒で代用せず、先に coal_ore を mine-block で掘る（または原木から木炭を作る手順を別途実行）。\n4. **start-smelting の直後に必ず** withdraw-from-furnace(slot:output) で取り出す。これは精錬完了まで自動で待つので wait-time は絶対使うな。**精錬を開始したら取り出すまでこのルーチンを終えない**。\n5. task-complete で精錬結果を報告。\n\n重要: wait-time, check-furnace は使うな。withdraw-from-furnace が自動で待つ。**精錬開始→取り出しの間に別タスクへ移動しない**。",
   "tools": [
     "find-blocks",
     "check-inventory-item",
@@ -32,6 +32,8 @@
     "place-block-at",
     "dig-block-at",
     "move-to",
+    "mine-block",
+    "pickup-nearest-item",
     "start-smelting",
     "withdraw-from-furnace"
   ],

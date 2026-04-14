@@ -20,6 +20,10 @@ class Chat extends InstantSkill {
     ];
     isToolForLLM = true;
 
+    private static lastSentNormalized: string = '';
+    private static lastSentTime: number = 0;
+    private static readonly DEDUP_WINDOW_MS = 5000;
+
     constructor(bot: CustomBot) {
         super(bot);
     }
@@ -46,7 +50,19 @@ class Chat extends InstantSkill {
             .replace(/\n/g, ' ')
             .replace(/\s+/g, ' ')
             .trim();
+
+        const now = Date.now();
+        if (
+            singleLine === Chat.lastSentNormalized &&
+            now - Chat.lastSentTime < Chat.DEDUP_WINDOW_MS
+        ) {
+            log.info(`💬 重複チャットスキップ (${now - Chat.lastSentTime}ms前に同一送信済): ${singleLine.slice(0, 60)}`, 'yellow');
+            return { success: true, result: '(同一メッセージが直前に送信済のためスキップ)' };
+        }
+
         const sent = sendGameChatLimited(this.bot, message, max);
+        Chat.lastSentNormalized = singleLine;
+        Chat.lastSentTime = now;
         const truncated = singleLine.length > max;
 
         if (truncated) {

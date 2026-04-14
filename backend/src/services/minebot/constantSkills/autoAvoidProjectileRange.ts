@@ -1,6 +1,7 @@
 import pathfinder from 'mineflayer-pathfinder';
 import { Vec3 } from 'vec3';
 import { ConstantSkill, CustomBot } from '../types.js';
+import { gotoSafe } from '../utils/gotoSafe.js';
 const { goals } = pathfinder;
 
 class AutoAvoidProjectileRange extends ConstantSkill {
@@ -49,9 +50,7 @@ class AutoAvoidProjectileRange extends ConstantSkill {
 
     // 交点に移動
     const escapePosition = intersection;
-    await this.bot.pathfinder.goto(
-      new goals.GoalBlock(escapePosition.x, escapePosition.y, escapePosition.z)
-    );
+    await gotoSafe(this.bot, new goals.GoalBlock(escapePosition.x, escapePosition.y, escapePosition.z), { timeoutMs: 5_000, stuckAbortCount: 4, logStuck: false });
   }
 
   rotateVector(vector: Vec3, angle: number) {

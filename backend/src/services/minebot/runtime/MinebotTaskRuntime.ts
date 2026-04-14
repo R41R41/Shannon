@@ -1,5 +1,5 @@
 import { BaseMessage, HumanMessage } from '@langchain/core/messages';
-import type { RequestEnvelope } from '@shannon/common';
+import type { MinecraftInventoryEntry, RequestEnvelope } from '@shannon/common';
 import { createEnvelope } from '../../common/adapters/envelopeFactory.js';
 import { createLogger } from '../../../utils/logger.js';
 import type {
@@ -11,6 +11,7 @@ import { GRAPH_CONFIG } from '../../llm/graph/types.js';
 import type { TaskTreeState } from '@shannon/common';
 import type { CustomBot } from '../types.js';
 import { CONFIG } from '../config/MinebotConfig.js';
+import { mapBotInventoryItems } from '../utils/inventorySnapshot.js';
 
 const log = createLogger('Minebot:TaskRuntime');
 
@@ -21,7 +22,7 @@ type UnifiedExecutor = (
     onToolStarting?: (toolName: string, args?: Record<string, unknown>) => void;
     onTaskTreeUpdate?: (taskTree: TaskTreeState) => void;
     onRequestSkillInterrupt?: () => void;
-    getLiveInventory?: () => Array<{ name: string; count: number }>;
+    getLiveInventory?: () => MinecraftInventoryEntry[];
     getActiveEffects?: () => Array<{ name: string; amplifier: number }>;
     abortSignal?: AbortSignal;
   },
@@ -48,6 +49,10 @@ export class MinebotTaskRuntime {
     humanFeedbackPending?: boolean;
     taskTree?: TaskTreeState;
     graphResult?: any;
+    /** MAX_ITERATIONS 到達時の Anthropic 会話履歴（再開に使用） */
+    savedMessages?: unknown[];
+    /** LLM管理型タスクツリーのノード（再開に使用） */
+    savedTaskNodes?: unknown[];
   } | null = null;
 
   constructor(bot: CustomBot) {
@@ -135,12 +140,7 @@ export class MinebotTaskRuntime {
           this.bot.interruptExecution = true;
           log.warn('⚡ MetaCognition からスキル中断要求 → bot.interruptExecution = true');
         },
-        getLiveInventory: () => {
-          return this.bot.inventory?.items().map((item) => ({
-            name: item.name,
-            count: item.count,
-          })) ?? [];
-        },
+        getLiveInventory: () => mapBotInventoryItems(this.bot.inventory?.items() ?? []),
         getActiveEffects: () => {
           const effects = (this.bot as any).activeEffects as Array<{ name: string; amplifier: number }> | undefined;
           return effects ?? [];
@@ -165,6 +165,8 @@ export class MinebotTaskRuntime {
         recoveryStatus: this.deriveRecoveryStatus(graphResult),
         taskTree,
         graphResult,
+        savedMessages: graphResult?.savedMessages,
+        savedTaskNodes: graphResult?.savedTaskNodes,
       };
       this.notifyTaskListUpdate();
 
@@ -294,12 +296,29 @@ export class MinebotTaskRuntime {
     }
 
     const goal = this.currentState.taskTree?.goal || 'Task';
+    const savedMessages = this.currentState.savedMessages;
+    const savedTaskNodes = this.currentState.savedTaskNodes;
+
+    const envelopeForResume: RequestEnvelope = {
+      ...overrides.envelope,
+      text: this.buildContinuationPrompt(goal, feedback),
+    };
+    const resumeMetadata: Record<string, unknown> = {
+      ...((envelopeForResume as any).metadata ?? {}),
+    };
+    if (savedMessages && savedMessages.length > 0) {
+      resumeMetadata.previousMessages = savedMessages;
+      log.info(`♻️ MAX_ITERATIONS 再開: ${savedMessages.length} messages を引き継ぎ`);
+    }
+    if (savedTaskNodes && savedTaskNodes.length > 0) {
+      resumeMetadata.previousTaskNodes = savedTaskNodes;
+      log.info(`🌳 MAX_ITERATIONS 再開: ${savedTaskNodes.length} タスクノードを引き継ぎ`);
+    }
+    (envelopeForResume as any).metadata = resumeMetadata;
+
     return this.invoke({
       taskId: this.currentState.taskId,
-      envelope: {
-        ...overrides.envelope,
-        text: this.buildContinuationPrompt(goal, feedback),
-      },
+      envelope: envelopeForResume,
       userMessage: this.buildContinuationPrompt(goal, feedback),
       messages: overrides.messages,
       environmentState: overrides.environmentState ?? null,
@@ -713,10 +732,7 @@ export class MinebotTaskRuntime {
       // 既存の envelope がある場合でも、Minecraft チャネルなら
       // リアルタイムのインベントリと nearbyInfrastructure で補強する
       if (input.envelope.channel === 'minecraft' && input.envelope.minecraft) {
-        const freshInventory = this.bot.inventory?.items().map((item) => ({
-          name: item.name,
-          count: item.count,
-        })) ?? [];
+        const freshInventory = mapBotInventoryItems(this.bot.inventory?.items() ?? []);
         const nearbyInfrastructure = this.scanNearbyInfrastructure();
 
         // インベントリが空でない場合のみ上書き（フォールバック保護）
@@ -727,6 +743,14 @@ export class MinebotTaskRuntime {
         }
         input.envelope.minecraft.nearbyInfrastructure = nearbyInfrastructure;
         input.envelope.minecraft.nearbyResources = this.scanNearbyResources();
+        const expRefresh = (this.bot as any).experience as
+          | { level: number; points: number; progress: number }
+          | undefined;
+        input.envelope.minecraft.health = this.bot.health ?? input.envelope.minecraft.health;
+        input.envelope.minecraft.food = this.bot.food ?? input.envelope.minecraft.food;
+        input.envelope.minecraft.experienceLevel = expRefresh?.level;
+        input.envelope.minecraft.totalExperience = expRefresh?.points;
+        input.envelope.minecraft.experienceBarProgress = expRefresh?.progress;
         // ディメンション情報を補完（未設定の場合）
         if (!input.envelope.minecraft.dimension) {
           input.envelope.minecraft.dimension = (this.bot as any).game?.dimension?.toString() || 'overworld';
@@ -748,10 +772,10 @@ export class MinebotTaskRuntime {
 
     // bot の現在状態をスナップショットして envelope に含める
     const pos = this.bot.entity?.position;
-    const inventory = this.bot.inventory?.items().map((item) => ({
-      name: item.name,
-      count: item.count,
-    })) ?? [];
+    const inventory = mapBotInventoryItems(this.bot.inventory?.items() ?? []);
+    const exp = (this.bot as any).experience as
+      | { level: number; points: number; progress: number }
+      | undefined;
 
     // 近くのインフラブロックをスキャン（crafting_table, furnace 等）
     const nearbyInfrastructure = this.scanNearbyInfrastructure();
@@ -770,6 +794,9 @@ export class MinebotTaskRuntime {
         position: pos ? { x: Math.floor(pos.x), y: Math.floor(pos.y), z: Math.floor(pos.z) } : undefined,
         health: this.bot.health ?? undefined,
         food: this.bot.food ?? undefined,
+        experienceLevel: exp?.level,
+        totalExperience: exp?.points,
+        experienceBarProgress: exp?.progress,
         inventory,
         nearbyInfrastructure,
         nearbyResources,

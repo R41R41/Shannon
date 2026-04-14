@@ -2,6 +2,7 @@ import minecraftData from 'minecraft-data';
 import pathfinder from 'mineflayer-pathfinder';
 import { CustomBot, InstantSkill } from '../types.js';
 import { setMovements } from '../utils/setMovements.js';
+import { gotoSafe } from '../utils/gotoSafe.js';
 
 const { goals } = pathfinder;
 /**
@@ -132,22 +133,12 @@ class PickupNearestItem extends InstantSkill {
           0.5  // より近くに移動（ピックアップ範囲内）
         );
 
-        // タイムアウト付きで移動
-        const timeout = 10000;
-        const timeoutPromise = new Promise((_, reject) => {
-          setTimeout(() => reject(new Error('移動タイムアウト')), timeout);
-        });
-
-        try {
-          await Promise.race([this.bot.pathfinder.goto(goal), timeoutPromise]);
-        } catch (error: any) {
-          if (error.message.includes('timeout')) {
-            return {
-              success: false,
-              result: 'アイテムに近づけませんでした（タイムアウト）',
-            };
-          }
-          // パスファインダーエラーは無視してアイテムが拾えたかチェック
+        const moveResult = await gotoSafe(this.bot, goal, { timeoutMs: 10_000, stuckAbortCount: 5 });
+        if (!moveResult.success && (moveResult.error === 'timeout' || moveResult.error === 'stuck')) {
+          return {
+            success: false,
+            result: 'アイテムに近づけませんでした（' + (moveResult.error === 'stuck' ? 'スタック' : 'タイムアウト') + '）',
+          };
         }
       }
 
@@ -158,11 +149,12 @@ class PickupNearestItem extends InstantSkill {
       const stillExists = this.bot.nearestEntity((e) => e === itemEntity);
       if (stillExists) {
         try {
-          // アイテムの位置に向かって直接歩く
-          await this.bot.lookAt(stillExists.position);
-          this.bot.setControlState('forward', true);
-          await new Promise((resolve) => setTimeout(resolve, 300));
-          this.bot.setControlState('forward', false);
+          const sp = stillExists.position;
+          await gotoSafe(this.bot, new goals.GoalNear(sp.x, sp.y, sp.z, 0.5), {
+            timeoutMs: 3000,
+            stuckAbortCount: 2,
+            logStuck: false,
+          });
           await new Promise((resolve) => setTimeout(resolve, 500));
         } catch {
           // エラーは無視
@@ -190,8 +182,20 @@ class PickupNearestItem extends InstantSkill {
           result: `${pickedItems.join(', ')}を拾いました（距離: ${distance.toFixed(1)}m）`,
         };
       } else {
-        // アイテムが拾えなかった（消えた、他のプレイヤーが拾った等）
         const targetItem = foundItemName || itemName || 'アイテム';
+        const stillThere = this.bot.nearestEntity((e) => e === itemEntity);
+        const noEmptySlots = typeof this.bot.inventory.emptySlotCount === 'function'
+          && this.bot.inventory.emptySlotCount() === 0;
+        if (stillThere && noEmptySlots) {
+          return {
+            success: false,
+            failureType: 'inventory_full',
+            recoverable: true,
+            result:
+              `${targetItem}に近づきましたが、インベントリに空きがなく拾えません。` +
+              '捨てずに必ず deposit-to-container で**地上（天光の届く場所）の**チェストまたは樽に預けて空きを作ってから再試行してください（無ければ地上へ出て find-blocks か chest をクラフトして屋外等に設置）。',
+          };
+        }
         return {
           success: false,
           result: `${targetItem}に近づきましたが、拾えませんでした（既に消えた可能性）`,

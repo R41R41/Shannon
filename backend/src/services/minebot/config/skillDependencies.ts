@@ -39,11 +39,17 @@ export const SKILL_DEPENDENCIES: Record<string, SkillDependency> = {
   'get-block-in-sight': { category: 'query', estimatedDurationSec: 1 },
   'get-blocks-in-area': { category: 'query', estimatedDurationSec: 2 },
   'find-blocks': { category: 'query', estimatedDurationSec: 2 },
+  'find-placeable-spot': {
+    category: 'query',
+    estimatedDurationSec: 2,
+    provides: ['placeable-coordinates'],
+  },
   'find-nearest-entity': { category: 'query', estimatedDurationSec: 1 },
   'check-recipe': { category: 'query', estimatedDurationSec: 1 },
   'check-path-to': { category: 'query', estimatedDurationSec: 2 },
   'is-block-loaded': { category: 'query', estimatedDurationSec: 1 },
-  'investigate-terrain': { category: 'query', estimatedDurationSec: 3 },
+  // 'investigate-terrain': disabled — find-blocks + get-blocks-in-area で代替
+
   'can-dig-block': { category: 'query', estimatedDurationSec: 1 },
   'get-entity-look-direction': { category: 'query', estimatedDurationSec: 1 },
   'get-advancements': { category: 'query', estimatedDurationSec: 1 },
@@ -53,6 +59,12 @@ export const SKILL_DEPENDENCIES: Record<string, SkillDependency> = {
   'follow-entity': { category: 'movement', estimatedDurationSec: 60 },
   'flee-from': { category: 'movement', estimatedDurationSec: 10 },
   'jump': { category: 'movement', estimatedDurationSec: 1 },
+  'tower-up': {
+    category: 'movement',
+    estimatedDurationSec: 10,
+    requires: ['list-inventory-items'],
+    provides: ['elevated-position'],
+  },
   'stop-movement': { category: 'movement', estimatedDurationSec: 1 },
   'look-at': { category: 'movement', estimatedDurationSec: 1 },
   'set-sneak': { category: 'movement', estimatedDurationSec: 1 },
@@ -63,6 +75,11 @@ export const SKILL_DEPENDENCIES: Record<string, SkillDependency> = {
   'dig-block-at': {
     category: 'mining',
     estimatedDurationSec: 5,
+    provides: ['block-mined'],
+  },
+  'mine-block': {
+    category: 'mining',
+    estimatedDurationSec: 30,
     provides: ['block-mined'],
   },
   'stair-mine': {
@@ -89,7 +106,7 @@ export const SKILL_DEPENDENCIES: Record<string, SkillDependency> = {
 
   // === 戦闘系 ===
   'attack-nearest': { category: 'combat', estimatedDurationSec: 15 },
-  'attack-continuously': { category: 'combat', estimatedDurationSec: 30 },
+  'attack-continuously': { category: 'combat', estimatedDurationSec: 45, provides: ['kills'] },
   'combat': { category: 'combat', estimatedDurationSec: 30 },
   'set-shield': { category: 'combat', estimatedDurationSec: 1 },
   'swing-arm': { category: 'combat', estimatedDurationSec: 1 },
@@ -105,7 +122,7 @@ export const SKILL_DEPENDENCIES: Record<string, SkillDependency> = {
   'deposit-to-container': { category: 'inventory', estimatedDurationSec: 3 },
   'withdraw-from-container': { category: 'inventory', estimatedDurationSec: 3 },
   'withdraw-from-furnace': { category: 'inventory', estimatedDurationSec: 3 },
-  'drop-item': { category: 'inventory', estimatedDurationSec: 2 },
+  'drop-item': { category: 'inventory', estimatedDurationSec: 12 },
   'pickup-nearest-item': { category: 'inventory', estimatedDurationSec: 5 },
 
   // === インタラクション系 ===

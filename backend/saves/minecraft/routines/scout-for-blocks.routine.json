@@ -1,0 +1,60 @@
+{
+  "name": "scout-for-blocks",
+  "description": "指定ブロックを軸方向に一直線で歩きながら長距離探索する（地上・ネザー・エンド想定）。例: 村=hay_block、ネザー要塞=nether_bricks,nether_brick_fence、エンドシティ=end_stone_bricks,purpur_block。サブエージェントが状況に応じて find-blocks と move-to を繰り返す。",
+  "params": [
+    {
+      "name": "blockName",
+      "type": "string",
+      "description": "検索するブロック名。カンマ区切りで複数可（例: nether_bricks,nether_brick_fence）",
+      "required": true
+    },
+    {
+      "name": "axis",
+      "type": "string",
+      "description": "進行軸: x+ | x- | z+ | z- のいずれか。別名: east=x+, west=x-, south=z+, north=z-（Minecraft Java: +X=東, -X=西, +Z=南, -Z=北）",
+      "required": true
+    },
+    {
+      "name": "stepBlocks",
+      "type": "number",
+      "description": "1レッグあたりその軸方向に進む目標ブロック数（チャンクに合わせるなら16の倍数推奨）",
+      "required": false,
+      "default": 48
+    },
+    {
+      "name": "maxLegs",
+      "type": "number",
+      "description": "「検索→前進」の最大繰り返し回数（この回数に達するかブロック発見で終了）",
+      "required": false,
+      "default": 16
+    },
+    {
+      "name": "searchRadius",
+      "type": "number",
+      "description": "各停止地点での find-blocks の maxDistance（大きいほど広く見るが重い）",
+      "required": false,
+      "default": 128
+    }
+  ],
+  "instruction": "あなたの任務: ブロック「${blockName}」を見つけるまで、軸「${axis}」に沿って安全に直線探索する。\n\n## 固定パラメータ（この数値をすべての計算・find-blocks に使う）\n- stepBlocks = ${stepBlocks}\n- maxLegs = ${maxLegs}\n- searchRadius = ${searchRadius}\n\n## 軸の解釈（必ずこの対応で座標を計算）\n- x+ または east: 目標 X = 現在X + ${stepBlocks}\n- x- または west: 目標 X = 現在X - ${stepBlocks}\n- z+ または south: 目標 Z = 現在Z + ${stepBlocks}\n- z- または north: 目標 Z = 現在Z - ${stepBlocks}\n- move-to の Y は get-position の足元付近の整数Y。goalType は **nearxz**。\n\n## メインループ（最大 ${maxLegs} 回）\n各サイクル:\n1. **find-blocks**(blockName=\"${blockName}\", maxDistance=${searchRadius}, count=24)。\n2. 具体座標があり「見つかりませんでした」でない → **move-to** で最寄りへ（range 2〜3, nearxz）→ **task-complete**（座標・用途を summary に）。\n3. 未発見なら **get-position** で (cx,cy,cz) を取り、軸に従い次目標を計算して **move-to(tx,ty,tz, range:3, goalType:\"nearxz\")**（ty=cy）。\n4. スタック時は stop-movement や短い横ずらしを検討。\n\n## 安全\n- ネザー・エンド: 無謀な掘削・溶岩落下を避ける。HP・敵は get-health / get-bot-status を優先、必要なら flee-from 後 task-complete。\n- ${maxLegs} 回到達で未発見なら task-complete（最終位置・別軸再探索の提案）。\n\n## 備考\n- 未ロードチャンクは検索不可。補助として **find-structure**（fortress 等）を使ってよいが、主目的は ${blockName}。",
+  "tools": [
+    "find-blocks",
+    "move-to",
+    "get-position",
+    "get-bot-status",
+    "get-health",
+    "flee-from",
+    "stop-movement",
+    "find-structure"
+  ],
+  "maxIterations": 48,
+  "model": "haiku",
+  "failureEscalation": "system2",
+  "source": "manual",
+  "stats": {
+    "runs": 0,
+    "successes": 0,
+    "failures": 0,
+    "avgDurationMs": 0
+  }
+}

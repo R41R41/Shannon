@@ -1,6 +1,11 @@
 import minecraftData from 'minecraft-data';
+import pathfinder from 'mineflayer-pathfinder';
 import { Vec3 } from 'vec3';
 import { CustomBot, InstantSkill } from '../types.js';
+import { gotoSafe } from '../utils/gotoSafe.js';
+import { ensureLineOfSight } from '../utils/blockLineOfSight.js';
+
+const { goals } = pathfinder;
 
 /**
  * 原子的スキル: 指定座標にブロックを設置
@@ -151,14 +156,25 @@ class PlaceBlockAt extends InstantSkill {
         return {
           success: false,
           result:
-            '設置場所の周囲に参照ブロックがありません（空中には設置できません）',
+            `設置場所の周囲に参照ブロックがありません（空中には設置できません）。` +
+            `座標(${x},${y},${z})の上下左右前後にソリッドブロックが必要です。` +
+            `対処法: 下のブロック(${x},${y - 1},${z})から順に積み上げて設置するか、隣接する位置に先にブロックを置いてください。`,
           failureType: 'unsupported_target',
           recoverable: true,
         };
       }
 
       await this.bot.equip(item, 'hand');
-      await this.bot.placeBlock(referenceBlock, faceVector);
+      try {
+        await this.bot.placeBlock(referenceBlock, faceVector);
+      } catch (actionError: any) {
+        const los = await ensureLineOfSight(this.bot, referenceBlock.position);
+        if (!los.clear) {
+          const failType = los.dugBlocks?.length ? 'obstruction_cleared' : 'line_of_sight_blocked';
+          return { success: false, result: los.message!, failureType: failType, recoverable: true };
+        }
+        throw actionError;
+      }
 
       return {
         success: true,
@@ -212,19 +228,18 @@ class PlaceBlockAt extends InstantSkill {
         head && head.name === 'air'
       ) {
         try {
-          await this.bot.lookAt(dest.offset(0.5, 0, 0.5));
-          this.bot.setControlState('forward', true);
-          await new Promise(r => setTimeout(r, 600));
-          this.bot.setControlState('forward', false);
+          await gotoSafe(this.bot, new goals.GoalNear(dest.x + 0.5, dest.y, dest.z + 0.5, 0.5), {
+            timeoutMs: 2000,
+            stuckAbortCount: 2,
+            logStuck: false,
+          });
           await new Promise(r => setTimeout(r, 200));
 
           const newPos = this.bot.entity.position;
           const dx = Math.floor(newPos.x) - Math.floor(target.x);
           const dz = Math.floor(newPos.z) - Math.floor(target.z);
           if (dx !== 0 || dz !== 0) return true;
-        } catch {
-          this.bot.setControlState('forward', false);
-        }
+        } catch { /* ignore */ }
       }
     }
     return false;

@@ -1,5 +1,6 @@
 import { Vec3 } from 'vec3';
 import { CustomBot, InstantSkill } from '../types.js';
+import { ensureLineOfSight } from '../utils/blockLineOfSight.js';
 
 /**
  * 原子的スキル: 骨粉を使う
@@ -104,11 +105,17 @@ class UseBoneMeal extends InstantSkill {
         };
       }
 
-      // 骨粉を手に持つ
       await this.bot.equip(boneMeal, 'hand');
-
-      // ブロックに対して骨粉を使用
-      await this.bot.activateBlock(block);
+      try {
+        await this.bot.activateBlock(block);
+      } catch (actionError: any) {
+        const los = await ensureLineOfSight(this.bot, pos);
+        if (!los.clear) {
+          const failType = los.dugBlocks?.length ? 'obstruction_cleared' : 'line_of_sight_blocked';
+          return { success: false, result: los.message!, failureType: failType, recoverable: true };
+        }
+        throw actionError;
+      }
 
       return {
         success: true,

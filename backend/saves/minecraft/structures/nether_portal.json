@@ -1,0 +1,22 @@
+{
+  "name": "nether_portal",
+  "description": "ネザーゲート（4×5 黒曜石フレーム + 着火）。コーナー無し最小構成10ブロック。",
+  "materials": {
+    "O": "obsidian"
+  },
+  "layers": [
+    [".OO."],
+    ["O..O"],
+    ["O..O"],
+    ["O..O"],
+    [".OO."]
+  ],
+  "afterBuild": [
+    {
+      "type": "use_item",
+      "item": "flint_and_steel",
+      "offset": [1, 1, 0],
+      "comment": "ポータル内部の下端に着火 (col=1, layer=1, row=0)"
+    }
+  ]
+}

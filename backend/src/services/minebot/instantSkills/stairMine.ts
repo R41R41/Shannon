@@ -2,6 +2,7 @@ import minecraftData from 'minecraft-data';
 import { Vec3 } from 'vec3';
 import { CustomBot, InstantSkill } from '../types.js';
 import { createLogger } from '../../../utils/logger.js';
+import { PROTECTED_UTILITY_BLOCKS } from '../constants.js';
 const log = createLogger('Minebot:Skill:stairMine');
 
 /**
@@ -110,6 +111,17 @@ class StairMine extends InstantSkill {
                     };
                 }
 
+                // ツルハシチェック（石系ブロックを掘るために必要）
+                const toolCheck = this.checkPickaxeAvailable();
+                if (toolCheck) {
+                    return {
+                        success: successSteps > 0,
+                        failureType: toolCheck.failureType,
+                        recoverable: true,
+                        result: `${successSteps}段${isDescending ? '下降' : '上昇'}しました（Y=${Math.floor(this.bot.entity.position.y)}）。${toolCheck.message}`,
+                    };
+                }
+
                 const currentPos = this.bot.entity.position.floored();
 
                 if (isDescending) {
@@ -163,38 +175,25 @@ class StairMine extends InstantSkill {
             // 次の位置（前方1ブロック、下1ブロック）
             const nextPos = currentPos.offset(dir.x, -1, dir.z);
 
-            // 頭の高さ（前方、現在の高さ）のブロックを確認・掘削
-            const headBlock = this.bot.blockAt(currentPos.offset(dir.x, 1, dir.z));
-            if (headBlock && headBlock.name !== 'air' && headBlock.name !== 'cave_air') {
-                if (!headBlock.diggable) {
-                    log.warn(`⚠ ${headBlock.name}は掘れません`);
-                    return false;
+            // 通過経路上のブロックをすべて掘削 — 1つでも掘れなければ中断
+            const clearTargets: [Vec3, string][] = [
+                [currentPos.offset(dir.x, 1, dir.z), '頭の高さ'],
+                [currentPos.offset(dir.x, 0, dir.z), '足の高さ'],
+                [nextPos, '足元'],
+            ];
+            for (const [pos, label] of clearTargets) {
+                const block = this.bot.blockAt(pos);
+                if (block && block.boundingBox !== 'empty') {
+                    if (!block.diggable) {
+                        log.warn(`⚠ ${label}の${block.name}は掘れません`);
+                        return false;
+                    }
+                    const dug = await this.digBlockSafe(block);
+                    if (!dug) return false;
                 }
-                await this.digBlockSafe(headBlock);
-            }
-
-            // 足の高さ（前方、現在の高さ）のブロックを確認・掘削
-            const bodyBlock = this.bot.blockAt(currentPos.offset(dir.x, 0, dir.z));
-            if (bodyBlock && bodyBlock.name !== 'air' && bodyBlock.name !== 'cave_air') {
-                if (!bodyBlock.diggable) {
-                    log.warn(`⚠ ${bodyBlock.name}は掘れません`);
-                    return false;
-                }
-                await this.digBlockSafe(bodyBlock);
-            }
-
-            // 足元（前方、下1ブロック）のブロックを確認・掘削
-            const floorBlock = this.bot.blockAt(nextPos);
-            if (floorBlock && floorBlock.name !== 'air' && floorBlock.name !== 'cave_air') {
-                if (!floorBlock.diggable) {
-                    log.warn(`⚠ ${floorBlock.name}は掘れません`);
-                    return false;
-                }
-                await this.digBlockSafe(floorBlock);
             }
 
             // 移動（前方に1ブロック進む → 自然に落ちる）
-            const moveTarget = currentPos.offset(dir.x, 0, dir.z);
             this.bot.setControlState('forward', true);
             await this.sleep(300);
             this.bot.setControlState('forward', false);
@@ -234,34 +233,28 @@ class StairMine extends InstantSkill {
                 }
             }
 
-            // 頭上のブロック（頭上+1）を確認・掘削
-            const aboveHead = this.bot.blockAt(currentPos.offset(0, 2, 0));
-            if (aboveHead && aboveHead.name !== 'air' && aboveHead.name !== 'cave_air') {
-                if (aboveHead.diggable) {
-                    await this.digBlockSafe(aboveHead);
-                }
-            }
-
-            // 前方の上のブロック（頭上+1）を確認・掘削
-            const aboveNextHead = this.bot.blockAt(currentPos.offset(dir.x, 2, dir.z));
-            if (aboveNextHead && aboveNextHead.name !== 'air' && aboveNextHead.name !== 'cave_air') {
-                if (aboveNextHead.diggable) {
-                    await this.digBlockSafe(aboveNextHead);
-                }
-            }
-
-            // 前方の頭の高さのブロックを確認・掘削
-            const nextHead = this.bot.blockAt(currentPos.offset(dir.x, 1, dir.z));
-            if (nextHead && nextHead.name !== 'air' && nextHead.name !== 'cave_air') {
-                if (nextHead.diggable) {
-                    await this.digBlockSafe(nextHead);
+            // 通過経路上のブロックをすべて掘削 — 1つでも掘れなければ中断
+            const clearTargets: [number, number, number][] = [
+                [0, 2, 0],          // 頭上+1
+                [dir.x, 2, dir.z],  // 前方の頭上+1
+                [dir.x, 1, dir.z],  // 前方の頭の高さ
+            ];
+            for (const [ox, oy, oz] of clearTargets) {
+                const block = this.bot.blockAt(currentPos.offset(ox, oy, oz));
+                if (block && block.boundingBox !== 'empty') {
+                    if (!block.diggable) {
+                        log.warn(`⚠ ${block.name}は掘削不可のため上昇中断`);
+                        return false;
+                    }
+                    const dug = await this.digBlockSafe(block);
+                    if (!dug) return false;
                 }
             }
 
             // 前方の足元のブロックを確認
             const nextFoot = this.bot.blockAt(currentPos.offset(dir.x, 0, dir.z));
 
-            if (!nextFoot || nextFoot.name === 'air' || nextFoot.name === 'cave_air') {
+            if (!nextFoot || nextFoot.boundingBox === 'empty') {
                 // 空気なら階段ブロックを置く
                 const placePos = currentPos.offset(dir.x, 0, dir.z);
                 const placed = await this.placeBlockSafe(blockName, placePos);
@@ -289,16 +282,68 @@ class StairMine extends InstantSkill {
     }
 
     /**
-     * ブロックを安全に掘る
+     * ツルハシの所持・耐久をチェック。問題があればエラー情報を返す。
+     */
+    private checkPickaxeAvailable(): { failureType: string; message: string } | null {
+        const pickaxes = this.bot.inventory.items().filter(i => i.name.includes('pickaxe'));
+        if (pickaxes.length === 0) {
+            return {
+                failureType: 'missing_tool',
+                message: 'ツルハシがありません。craft-one で stone_pickaxe 以上をクラフトしてから再実行してください。',
+            };
+        }
+
+        let minDurability = Infinity;
+        let hasDurabilityInfo = false;
+        for (const p of pickaxes) {
+            const max = (p as any).maxDurability;
+            const used = (p as any).durabilityUsed;
+            if (max != null && max > 0 && used != null && used >= 0) {
+                hasDurabilityInfo = true;
+                minDurability = Math.min(minDurability, max - used);
+            }
+        }
+
+        if (hasDurabilityInfo && minDurability <= 3) {
+            return {
+                failureType: 'tool_durability_low',
+                message: `ツルハシの残り耐久が${minDurability}しかありません。craft-one で新しいツルハシをクラフトしてから再実行してください。`,
+            };
+        }
+
+        return null;
+    }
+
+    /**
+     * ブロックを安全に掘る。ツールが必要なブロックでツルハシがない場合は false を返す。
      */
     private async digBlockSafe(block: any): Promise<boolean> {
         try {
             if (!block || !block.diggable) return false;
 
+            if (PROTECTED_UTILITY_BLOCKS.has(block.name)) {
+                log.warn(`⚠ ${block.name}は保護対象のためスキップ`);
+                return false;
+            }
+
+            // マグマ隣接チェック — 掘ると溶岩が流入する場合は中止
+            if (this.hasAdjacentLava(block.position)) {
+                log.warn(`⚠ ${block.name}(${block.position.x},${block.position.y},${block.position.z})の隣にマグマがあるため掘削中止`);
+                return false;
+            }
+
+            const blockName = block.name.toLowerCase();
+            const needsPickaxe = ['stone', 'ore', 'cobble', 'deepslate', 'brick', 'obsidian',
+                'concrete', 'terracotta', 'basalt', 'netherrack', 'granite', 'diorite', 'andesite', 'tuff']
+                .some(kw => blockName.includes(kw));
+
             // 最適なツールを装備
             const tool = this.findBestTool(block);
             if (tool) {
                 await this.bot.equip(tool, 'hand');
+            } else if (needsPickaxe) {
+                log.warn(`⚠ ${block.name}を掘るためのツルハシがありません`);
+                return false;
             }
 
             await this.bot.dig(block);
@@ -306,6 +351,19 @@ class StairMine extends InstantSkill {
         } catch (error) {
             return false;
         }
+    }
+
+    private hasAdjacentLava(pos: Vec3): boolean {
+        const offsets = [
+            new Vec3(1, 0, 0), new Vec3(-1, 0, 0),
+            new Vec3(0, 1, 0), new Vec3(0, -1, 0),
+            new Vec3(0, 0, 1), new Vec3(0, 0, -1),
+        ];
+        for (const off of offsets) {
+            const neighbor = this.bot.blockAt(pos.plus(off));
+            if (neighbor && neighbor.name === 'lava') return true;
+        }
+        return false;
     }
 
     /**
@@ -331,7 +389,7 @@ class StairMine extends InstantSkill {
 
             for (const [ox, oy, oz, face] of offsets) {
                 const candidate = this.bot.blockAt(pos.offset(ox, oy, oz));
-                if (candidate && candidate.name !== 'air' && candidate.name !== 'cave_air') {
+                if (candidate && candidate.boundingBox !== 'empty') {
                     referenceBlock = candidate;
                     faceVector = face;
                     break;

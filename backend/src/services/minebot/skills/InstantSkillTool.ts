@@ -120,6 +120,15 @@ export class InstantSkillTool extends StructuredTool {
                 message += ' リカバリ: 石のツルハシを作る材料(cobblestone x3以上, stick x2以上)がインベントリにあれば、先に craft-one(stone_pickaxe) を実行してください。丸石(cobblestone)の採掘にもツルハシが必要なため、素手で丸石を採掘することはできません。';
             }
 
+            if (
+                !effectiveSuccess &&
+                effectiveFailureType === 'inventory_full' &&
+                !String(result.result).includes('deposit-to-container')
+            ) {
+                message +=
+                    ' リカバリ: 満杯のまま捨てない。必ず deposit-to-container で**地上（天光の届く）**チェストまたは樽に預ける。洞窟の収納は拒否される。地上へ出て find-blocks か craft-one(chest)+place-block-at（屋外・天窓付近）。';
+            }
+
             return message;
         } catch (error) {
             log.error(`${this.name}スキル実行エラー`, error);
@@ -167,6 +176,9 @@ export class InstantSkillTool extends StructuredTool {
         }
         if (normalized.includes('必要です') || normalized.includes('ありません')) {
             return 'material_missing';
+        }
+        if (normalized.includes('満杯') || normalized.includes('満タン') || normalized.includes('空きスロットがなく')) {
+            return 'inventory_full';
         }
         if (normalized.includes('遠すぎ')) {
             return 'distance_too_far';

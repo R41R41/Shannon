@@ -1,5 +1,5 @@
 diff --git a/node_modules/mineflayer-pathfinder/index.js b/node_modules/mineflayer-pathfinder/index.js
-index b38bd30..6fc4d20 100644
+index b38bd30..560c985 100644
 --- a/node_modules/mineflayer-pathfinder/index.js
 +++ b/node_modules/mineflayer-pathfinder/index.js
 @@ -521,7 +521,14 @@ function inject (bot) {
@@ -18,3 +18,88 @@ index b38bd30..6fc4d20 100644
            lockUseBlock.release()
            placingBlock = nextPoint.toPlace.shift()
          }, err => {
+@@ -538,11 +545,81 @@ function inject (bot) {
+       if (bot.pathfinder.LOSWhenPlacingBlocks && placingBlock.y === bot.entity.position.floored().y - 1 && placingBlock.dy === 0) {
+         if (!moveToEdge(new Vec3(placingBlock.x, placingBlock.y, placingBlock.z), new Vec3(placingBlock.dx, 0, placingBlock.dz))) return
+       }
+-      let canPlace = true
++      // 直上1マス登り: equip を先に完了させ、ジャンプの全ウィンドウを設置試行に使う
+       if (placingBlock.jump) {
+-        bot.setControlState('jump', true)
+-        canPlace = placingBlock.y + 1 < bot.entity.position.y
++        placing = true
++        if (!lockEquipItem.tryAcquire()) {
++          placing = false
++          return
++        }
++        bot.equip(block, 'hand')
++          .then(function () {
++            lockEquipItem.release()
++            bot.setControlState('jump', true)
++            const refPos = new Vec3(placingBlock.x, placingBlock.y, placingBlock.z)
++            const faceVec = new Vec3(placingBlock.dx, placingBlock.dy, placingBlock.dz)
++            const minFeetY = placingBlock.y + 1 + 0.26
++            let attempts = 0
++            const maxAttempts = 28
++            const retryMs = 35
++            const finishFail = function () {
++              bot.setControlState('jump', false)
++              bot.setControlState('sneak', false)
++              placing = false
++              resetPath('place_error')
++            }
++            const tryTowerPlace = function () {
++              attempts++
++              if (bot.entity.position.y < minFeetY) {
++                if (attempts < maxAttempts) setTimeout(tryTowerPlace, retryMs)
++                else finishFail()
++                return
++              }
++              var vy = bot.entity.velocity.y
++              if (vy > 0.14 || vy < -0.45) {
++                if (attempts < maxAttempts) setTimeout(tryTowerPlace, retryMs)
++                else finishFail()
++                return
++              }
++              const refBlock = bot.blockAt(refPos, false)
++              if (!refBlock) {
++                if (attempts < maxAttempts) setTimeout(tryTowerPlace, retryMs)
++                else finishFail()
++                return
++              }
++              if (!lockPlaceBlock.tryAcquire()) {
++                if (attempts < maxAttempts) setTimeout(tryTowerPlace, retryMs)
++                else finishFail()
++                return
++              }
++              if (interactableBlocks.includes(refBlock.name)) {
++                bot.setControlState('sneak', true)
++              }
++              bot.placeBlock(refBlock, faceVec)
++                .then(function () {
++                  bot.setControlState('sneak', false)
++                  if (bot.pathfinder.LOSWhenPlacingBlocks && placingBlock.returnPos) returningPos = placingBlock.returnPos.clone()
++                  lockPlaceBlock.release()
++                  bot.setControlState('jump', false)
++                  placing = false
++                  lastNodeTime = performance.now()
++                })
++                .catch(function () {
++                  bot.setControlState('sneak', false)
++                  lockPlaceBlock.release()
++                  if (attempts < maxAttempts) setTimeout(tryTowerPlace, retryMs)
++                  else finishFail()
++                })
++            }
++            setTimeout(tryTowerPlace, 0)
++          })
++          .catch(function () {
++            lockEquipItem.release()
++            placing = false
++          })
++        return
+       }
++      let canPlace = true
+       if (canPlace) {
+         if (!lockEquipItem.tryAcquire()) return
+         bot.equip(block, 'hand')

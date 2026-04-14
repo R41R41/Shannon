@@ -1,6 +1,7 @@
 import minecraftData from 'minecraft-data';
 import { Vec3 } from 'vec3';
 import { CustomBot, InstantSkill } from '../types.js';
+import { ensureLineOfSight } from '../utils/blockLineOfSight.js';
 
 /**
  * 原子的スキル: かまどの精錬状態を確認
@@ -87,8 +88,17 @@ class CheckFurnace extends InstantSkill {
         };
       }
 
-      // かまどを開く
-      const furnace = await this.bot.openFurnace(block);
+      let furnace;
+      try {
+        furnace = await this.bot.openFurnace(block);
+      } catch (actionError: any) {
+        const los = await ensureLineOfSight(this.bot, pos);
+        if (!los.clear) {
+          const failType = los.dugBlocks?.length ? 'obstruction_cleared' : 'line_of_sight_blocked';
+          return { success: false, result: los.message!, failureType: failType, recoverable: true };
+        }
+        throw actionError;
+      }
       if (!furnace) {
         return {
           success: false,

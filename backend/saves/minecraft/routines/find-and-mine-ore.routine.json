@@ -16,16 +16,20 @@
       "default": 3
     }
   ],
-  "instruction": "1. check-inventory-item でツルハシを確認。stone_pickaxe 以上がなければ即失敗を報告。2. find-blocks(${oreName}, maxDistance:48) で鉱石を検索。3. 見つかったら move-to で直接近づき dig-block-at で採掘。距離チェックの繰り返しはしない。4. pickup-nearest-item でドロップ回収。5. ${count} 個になるまで 2-4 を繰り返す。見つからなければ stair-mine で地下に降りてから再検索。",
+  "instruction": "1. check-inventory-item でツルハシを確認。stone_pickaxe 以上がなければ即失敗を報告。2. 推奨: mine-block(${oreName}, count:${count}, searchRadius:48) を優先する。内部では**移動のたびにいまの位置から最も近い候補**を選び直すので、遠くへ移動したあとも足元付近の鉱石を先に掘る。鉄は iron_ore と deepslate_iron_ore は別ブロックのため、片方が見つからなければもう一方の oreName で再試行する。3. mine-block が使えない・失敗したときの代替: find-blocks(${oreName}, maxDistance:48, count:24) で検索。返却される座標は距離の近い順に並ぶので、必ずリスト先頭（最も近い1件）へ move-to して dig-block-at、続けて pickup-nearest-item。遠い座標から選ばない。1ブロック掘ったら再度 find-blocks から繰り返す。4. ${count} 個に達するまで 2〜3 を繰り返す。見つからなければ stair-mine で地下に降りてから再検索。5. インベントリが逼迫しているときは、採掘を続ける前に deposit-to-container または drop-item で空きを作る。",
   "tools": [
     "check-inventory-item",
+    "get-bot-status",
     "find-blocks",
     "move-to",
     "dig-block-at",
     "mine-block",
     "pickup-nearest-item",
     "stair-mine",
-    "get-position"
+    "get-position",
+    "deposit-to-container",
+    "drop-item",
+    "list-inventory-items"
   ],
   "maxIterations": 20,
   "model": "sonnet",

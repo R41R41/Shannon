@@ -2,6 +2,7 @@ import pathfinder from 'mineflayer-pathfinder';
 import { Vec3 } from 'vec3';
 import { CustomBot, InstantSkill } from '../types.js';
 import { createLogger } from '../../../utils/logger.js';
+import { gotoSafe } from '../utils/gotoSafe.js';
 
 const { goals } = pathfinder;
 const log = createLogger('Minebot:Skill:sleepInBed');
@@ -142,11 +143,8 @@ class SleepInBed extends InstantSkill {
         try {
           const distance = this.bot.entity.position.distanceTo(bed.position);
           if (distance > 3) {
-            // 既存のゴールをクリア（他のスキルとの競合を防ぐ）
             this.bot.pathfinder.stop();
-            await this.bot.pathfinder.goto(
-              new goals.GoalNear(bed.position.x, bed.position.y, bed.position.z, 2)
-            );
+            await gotoSafe(this.bot, new goals.GoalNear(bed.position.x, bed.position.y, bed.position.z, 2), { timeoutMs: 15_000 });
           }
 
           // ベッドで寝ている村人を探す
@@ -248,11 +246,8 @@ class SleepInBed extends InstantSkill {
       // 設置場所に移動
       const distToPlace = this.bot.entity.position.distanceTo(placePos);
       if (distToPlace > 3) {
-        // 既存のゴールをクリア（他のスキルとの競合を防ぐ）
         this.bot.pathfinder.stop();
-        await this.bot.pathfinder.goto(
-          new goals.GoalNear(placePos.x, placePos.y, placePos.z, 2)
-        );
+        await gotoSafe(this.bot, new goals.GoalNear(placePos.x, placePos.y, placePos.z, 2), { timeoutMs: 15_000 });
       }
 
       // ベッドを手に持つ

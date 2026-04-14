@@ -1,4 +1,5 @@
 import { ConstantSkill, CustomBot } from '../types.js';
+import { gotoSafe } from '../utils/gotoSafe.js';
 
 /**
  * 自動アイテム拾得スキル
@@ -93,15 +94,14 @@ class AutoPickUpItem extends ConstantSkill {
         if (this.bot.utils?.goalFollow) {
           await this.bot.utils.goalFollow.run(entity, 1.5);
         } else {
-          // 簡易的に近づく
-          await this.bot.pathfinder.goto(
-            new (await import('mineflayer-pathfinder')).default.goals.GoalNear(
-              entity.position.x,
-              entity.position.y,
-              entity.position.z,
-              1
-            )
+          const pfModule = await import('mineflayer-pathfinder');
+          const goal = new pfModule.default.goals.GoalNear(
+            entity.position.x,
+            entity.position.y,
+            entity.position.z,
+            1,
           );
+          await gotoSafe(this.bot, goal, { timeoutMs: 8_000, stuckAbortCount: 4, logStuck: false });
         }
       }
 

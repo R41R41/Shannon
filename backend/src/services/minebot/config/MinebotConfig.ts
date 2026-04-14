@@ -60,7 +60,7 @@ export class MinebotConfig {
     '1.19.0-youtube': 8081 + this.UI_MOD_PORT_OFFSET,
     '1.21.1-play': 8081 + this.UI_MOD_PORT_OFFSET,
     '1.21.4-fabric-youtube': 8081 + this.UI_MOD_PORT_OFFSET,
-    '1.21.11-fabric-youtube': 8081 + this.UI_MOD_PORT_OFFSET,
+    '1.21.11-fabric-youtube': 8085 + this.UI_MOD_PORT_OFFSET,
     '1.21.11-fabric-test': 8085 + this.UI_MOD_PORT_OFFSET,
   };
 
@@ -113,6 +113,12 @@ export class MinebotConfig {
   readonly EVENT_REACTION_SETTINGS_JSON = join(
     __dirname,
     '../../../../saves/minecraft/eventReactionSettings.json'
+  );
+
+  /** 構造物ブループリントディレクトリ */
+  readonly STRUCTURES_DIR = join(
+    __dirname,
+    '../../../../saves/minecraft/structures'
   );
 
   // ===== タスク設定 =====

@@ -136,6 +136,43 @@ class Combat extends InstantSkill {
         return hostileMobs.some(mob => entityName.toLowerCase().includes(mob));
     }
 
+    private scanRemainingEntities(targetFilter: string | undefined, maxDistance: number): string | null {
+        try {
+            const remaining: Array<{ name: string; dist: number; x: number; y: number; z: number }> = [];
+            for (const entity of Object.values(this.bot.entities)) {
+                if (!entity || !entity.position || !entity.isValid) continue;
+                if (entity === this.bot.entity) continue;
+                const name = entity.name?.toLowerCase() || '';
+                if (!name) continue;
+                const d = entity.position.distanceTo(this.bot.entity.position);
+                if (d > maxDistance) continue;
+
+                const match = targetFilter
+                    ? name.includes(targetFilter.toLowerCase())
+                    : this.isHostile(name);
+                if (!match) continue;
+
+                remaining.push({
+                    name: entity.name || name,
+                    dist: Math.round(d * 10) / 10,
+                    x: Math.floor(entity.position.x),
+                    y: Math.floor(entity.position.y),
+                    z: Math.floor(entity.position.z),
+                });
+            }
+
+            if (remaining.length === 0) return null;
+
+            remaining.sort((a, b) => a.dist - b.dist);
+            const shown = remaining.slice(0, 5);
+            const list = shown.map(e => `${e.name}(${e.x},${e.y},${e.z}) ${e.dist}m`).join(', ');
+            const more = remaining.length > 5 ? `ほか${remaining.length - 5}体` : '';
+            return `周囲にまだ${remaining.length}体: ${list}${more ? ', ' + more : ''}`;
+        } catch {
+            return null;
+        }
+    }
+
     async runImpl(target?: string, timeout: number = 30) {
         try {
             const refuse = shouldRefuseAggressiveCombat(this.bot);
@@ -218,9 +255,11 @@ class Combat extends InstantSkill {
                 if (!enemy || !enemy.isValid) {
                     log.success(`✅ ${enemyName}を倒しました！`);
                     this.bot.pathfinder.stop();
+                    const remaining = this.scanRemainingEntities(target, 16);
+                    const baseMsg = `${enemyName}を${weaponName}で${attackCount}回攻撃して倒しました`;
                     return {
                         success: true,
-                        result: `${enemyName}を${weaponName}で${attackCount}回攻撃して倒しました`,
+                        result: remaining ? `${baseMsg}。${remaining}` : baseMsg,
                     };
                 }
 
@@ -271,9 +310,11 @@ class Combat extends InstantSkill {
 
             // タイムアウト
             this.bot.pathfinder.stop();
+            const remaining = this.scanRemainingEntities(target, 16);
+            const baseMsg = `タイムアウト。${enemyName}を${attackCount}回攻撃しましたが、まだ生きています。`;
             return {
                 success: true,
-                result: `タイムアウト。${enemyName}を${attackCount}回攻撃しましたが、まだ生きています。`,
+                result: remaining ? `${baseMsg} ${remaining}` : baseMsg,
             };
 
         } catch (error: any) {

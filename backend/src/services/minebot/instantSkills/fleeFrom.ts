@@ -3,6 +3,7 @@ import { Vec3 } from 'vec3';
 import { CustomBot, InstantSkill } from '../types.js';
 import { createLogger } from '../../../utils/logger.js';
 import { setMovements } from '../utils/setMovements.js';
+import { gotoSafe } from '../utils/gotoSafe.js';
 const { goals } = pathfinder;
 const log = createLogger('Minebot:Skill:fleeFrom');
 
@@ -107,13 +108,7 @@ class FleeFrom extends InstantSkill {
         new goals.GoalNear(position.x, position.y, position.z, minDistance)
       );
 
-      const timeoutPromise = new Promise<void>((_, reject) => {
-        setTimeout(() => reject(new Error('逃走タイムアウト')), timeout);
-      });
-
-      const fleePromise = this.bot.pathfinder.goto(fleeGoal);
-
-      await Promise.race([fleePromise, timeoutPromise]);
+      const fleeResult = await gotoSafe(this.bot, fleeGoal, { timeoutMs: timeout, stuckAbortCount: 4 });
 
       // 最終距離を確認
       const finalDistance = this.bot.entity.position.distanceTo(position);

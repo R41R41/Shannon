@@ -1,6 +1,7 @@
 import minecraftData from 'minecraft-data';
 import { Vec3 } from 'vec3';
 import { CustomBot, InstantSkill } from '../types.js';
+import { ensureLineOfSight } from '../utils/blockLineOfSight.js';
 
 /**
  * 原子的スキル: 作物を植える
@@ -105,8 +106,16 @@ class PlantCrop extends InstantSkill {
         };
       }
 
-      // 耕地を右クリックして種を植える
-      await this.bot.activateBlock(block);
+      try {
+        await this.bot.activateBlock(block);
+      } catch (actionError: any) {
+        const los = await ensureLineOfSight(this.bot, pos);
+        if (!los.clear) {
+          const failType = los.dugBlocks?.length ? 'obstruction_cleared' : 'line_of_sight_blocked';
+          return { success: false, result: los.message!, failureType: failType, recoverable: true };
+        }
+        throw actionError;
+      }
 
       return {
         success: true,

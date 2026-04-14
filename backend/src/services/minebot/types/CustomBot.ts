@@ -51,6 +51,16 @@ export type DroppedItem = {
   metadata: any;
 };
 
+export interface ActiveFurnace {
+  pos: { x: number; y: number; z: number };
+  item: string;
+  count: number;
+  /** 精錬完了の予想タイムスタンプ (Date.now() + 所要ms) */
+  readyAt: number;
+  /** 精錬開始時刻 */
+  startedAt: number;
+}
+
 // CustomBotの定義を更新
 export interface CustomBot extends Omit<Bot, 'on' | 'once' | 'emit'> {
   on<K extends keyof CustomBotEvents>(
@@ -82,6 +92,8 @@ export interface CustomBot extends Omit<Bot, 'on' | 'once' | 'emit'> {
   minebotControlState?: 'idle' | 'main_task' | 'emergency_reflect' | 'emergency_llm';
   /** true の間はゲーム内 chat を送らない（UI Mod 通知は可）。緊急タスク用 */
   suppressMinebotGameChat?: boolean;
+  /** 精錬中のかまど追跡。start-smelting で登録し withdraw-from-furnace で削除 */
+  activeFurnaces: ActiveFurnace[];
   environmentState: {
     senderName: string;
     senderPosition: Vec3 | null;
@@ -95,9 +107,17 @@ export interface CustomBot extends Omit<Bot, 'on' | 'once' | 'emit'> {
     botPosition: Vec3 | null;
     botHealth: string;
     botFoodLevel: string;
+    botExperienceLevel: number;
+    botTotalExperience: number;
+    botExperienceBarProgress: number;
     botHeldItem: string;
     lookingAt: Block | Entity | DroppedItem | null;
-    inventory: { name: string; count: number }[];
+    inventory: Array<{
+      name: string;
+      count: number;
+      durabilityRemaining?: number;
+      durabilityMax?: number;
+    }>;
   };
 }
 

@@ -19,7 +19,6 @@ const CACHEABLE_SKILLS: Record<string, number> = {
   'list-nearby-entities': 5000,
   'check-recipe': 60000,
   'get-time-and-weather': 10000,
-  'investigate-terrain': 30000,
   'is-block-loaded': 15000,
 };
 

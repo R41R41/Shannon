@@ -2,6 +2,7 @@ import { Vec3 } from 'vec3';
 import pathfinder from 'mineflayer-pathfinder';
 import { CustomBot, InstantSkill } from '../types.js';
 import { createLogger } from '../../../utils/logger.js';
+import { gotoSafe } from '../utils/gotoSafe.js';
 
 const { goals } = pathfinder;
 const log = createLogger('Minebot:Skill:enchantItem');
@@ -50,13 +51,12 @@ class EnchantItem extends InstantSkill {
       // 距離チェック & 移動
       const distance = this.bot.entity.position.distanceTo(pos);
       if (distance > 4.5) {
-        try {
-          await this.bot.pathfinder.goto(new goals.GoalNear(x, y, z, 2));
-        } catch {
+        const r = await gotoSafe(this.bot, new goals.GoalNear(x, y, z, 2), { timeoutMs: 15_000 });
+        if (!r.success) {
           return {
             success: false,
-            result: `エンチャントテーブルに近づけません（距離: ${distance.toFixed(1)}）`,
-            failureType: 'distance_too_far',
+            result: `エンチャントテーブルに近づけません（距離: ${distance.toFixed(1)}、${r.error}）`,
+            failureType: r.error === 'stuck' ? 'stuck' : 'distance_too_far',
             recoverable: true,
           };
         }

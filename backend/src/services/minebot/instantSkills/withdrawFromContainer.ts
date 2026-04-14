@@ -1,6 +1,13 @@
 import minecraftData from 'minecraft-data';
 import { Vec3 } from 'vec3';
 import { CustomBot, InstantSkill } from '../types.js';
+import { ensureLineOfSight } from '../utils/blockLineOfSight.js';
+import {
+  countItemInInventory,
+  hasNearbyDroppedItemNamed,
+  inventoryNoEmptySlots,
+  INVENTORY_FULL_RECOVERY_HINT_JA,
+} from '../utils/inventorySpillDetection.js';
 
 /**
  * 原子的スキル: コンテナからアイテムを取り出す
@@ -94,8 +101,17 @@ class WithdrawFromContainer extends InstantSkill {
         };
       }
 
-      // コンテナを開く
-      const container = await this.bot.openContainer(block);
+      let container;
+      try {
+        container = await this.bot.openContainer(block);
+      } catch (actionError: any) {
+        const los = await ensureLineOfSight(this.bot, pos);
+        if (!los.clear) {
+          const failType = los.dugBlocks?.length ? 'obstruction_cleared' : 'line_of_sight_blocked';
+          return { success: false, result: los.message!, failureType: failType, recoverable: true };
+        }
+        throw actionError;
+      }
       if (!container) {
         return {
           success: false,
@@ -125,6 +141,8 @@ class WithdrawFromContainer extends InstantSkill {
         const withdrawCount =
           count !== null ? Math.min(count, totalCount) : totalCount;
 
+        const beforeInv = countItemInInventory(this.bot, itemName);
+
         // アイテムを取り出す
         let remaining = withdrawCount;
         for (const item of targetItems) {
@@ -136,9 +154,38 @@ class WithdrawFromContainer extends InstantSkill {
 
         container.close();
 
+        await new Promise(r => setTimeout(r, 450));
+        let gained = countItemInInventory(this.bot, itemName) - beforeInv;
+        if (gained < withdrawCount) {
+          await new Promise(r => setTimeout(r, 350));
+          gained = countItemInInventory(this.bot, itemName) - beforeInv;
+        }
+
+        if (gained >= withdrawCount) {
+          return {
+            success: true,
+            result: `${itemName}を${withdrawCount}個${block.name}から取り出しました`,
+          };
+        }
+
+        if (
+          hasNearbyDroppedItemNamed(this.bot, this.mcData, itemName, 10) &&
+          inventoryNoEmptySlots(this.bot)
+        ) {
+          return {
+            success: true,
+            failureType: 'inventory_full',
+            recoverable: true,
+            result:
+              `${itemName}をインベントリに${gained}個しか収められませんでした（要求${withdrawCount}個）。満杯で残りが地上に落ちた可能性があります。${INVENTORY_FULL_RECOVERY_HINT_JA}`,
+          };
+        }
+
         return {
-          success: true,
-          result: `${itemName}を${withdrawCount}個${block.name}から取り出しました`,
+          success: false,
+          recoverable: true,
+          result:
+            `${itemName}を${gained}個のみ取り出せました（要求${withdrawCount}個）。pickup-nearest-itemを試すか、インベントリを整理してください。`,
         };
       } catch (error: any) {
         container.close();
@@ -156,6 +203,9 @@ class WithdrawFromContainer extends InstantSkill {
       return {
         success: false,
         result: `取り出しエラー: ${errorDetail}`,
+        ...(error.message.includes('full') || errorDetail.includes('満杯')
+          ? { failureType: 'inventory_full' as const, recoverable: true }
+          : {}),
       };
     }
   }

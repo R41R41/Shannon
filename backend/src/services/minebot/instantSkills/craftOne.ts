@@ -2,6 +2,13 @@ import minecraftData from 'minecraft-data';
 import { Vec3 } from 'vec3';
 import { CustomBot, InstantSkill } from '../types.js';
 import { createLogger } from '../../../utils/logger.js';
+import { ensureLineOfSight } from '../utils/blockLineOfSight.js';
+import {
+  countItemInInventory,
+  hasNearbyDroppedItemNamed,
+  inventoryNoEmptySlots,
+  INVENTORY_FULL_RECOVERY_HINT_JA,
+} from '../utils/inventorySpillDetection.js';
 const log = createLogger('Minebot:Skill:craftOne');
 
 /**
@@ -168,8 +175,8 @@ class CraftOne extends InstantSkill {
   }
 
   async runImpl(itemName: string, count: number = 1) {
-    // クラフト前のアイテム数（catch で部分成功を検出するため外側に定義）
     let beforeCount = 0;
+    let craftCount = Math.max(1, Math.min(count, 64));
     try {
       // 開いているGUIを閉じる（activate-blockで開いたクラフトテーブルなど）
       if (this.bot.currentWindow) {
@@ -265,9 +272,8 @@ class CraftOne extends InstantSkill {
         }
       }
 
-      const craftCount = Math.max(1, Math.min(count, 64));
+      craftCount = Math.max(1, Math.min(count, 64));
 
-      // レシピを取得
       let recipes = this.bot.recipesFor(item.id, null, craftCount, craftingTable);
 
       if (recipes.length === 0) {
@@ -347,41 +353,27 @@ class CraftOne extends InstantSkill {
         .reduce((sum: number, i: any) => sum + i.count, 0);
 
       // クラフト実行
-      await this.bot.craft(recipe, craftOps, craftingTable || undefined);
-
-      // 少し待ってからインベントリを確認
-      await new Promise(resolve => setTimeout(resolve, 100));
-
-      // クラフト後のアイテム数を確認
-      const afterCount = this.bot.inventory.items()
-        .filter((i: any) => i.name === itemName)
-        .reduce((sum: number, i: any) => sum + i.count, 0);
-
-      const crafted = afterCount - beforeCount;
-      if (crafted > 0) {
-        return {
-          success: true,
-          result: `${itemName}を${crafted}個クラフトしました（${beforeCount}→${afterCount}個）`,
-        };
-      } else {
-        return {
-          success: false,
-          result: `${itemName}のクラフトに失敗しました（インベントリに追加されていません）`,
-        };
+      try {
+        await this.bot.craft(recipe, craftOps, craftingTable || undefined);
+      } catch (actionError: any) {
+        if (craftingTable) {
+          const los = await ensureLineOfSight(this.bot, craftingTable.position);
+          if (!los.clear) {
+            const failType = los.dugBlocks?.length ? 'obstruction_cleared' : 'line_of_sight_blocked';
+            return { success: false, result: los.message!, failureType: failType, recoverable: true };
+          }
+        }
+        throw actionError;
       }
+
+      return await this.finalizeCraftOutcome(itemName, beforeCount, craftCount);
     } catch (error: any) {
       // エラーでも部分的にクラフト成功している場合がある
       // （bot.craft が途中で例外を投げてもアイテムは増えている）
-      await new Promise(resolve => setTimeout(resolve, 100));
-      const afterCount = this.bot.inventory.items()
-        .filter((i: any) => i.name === itemName)
-        .reduce((sum: number, i: any) => sum + i.count, 0);
-      const crafted = afterCount - beforeCount;
-      if (crafted > 0) {
-        return {
-          success: true,
-          result: `${itemName}を${crafted}個クラフトしました（要求より少ない可能性あり）`,
-        };
+      await new Promise(resolve => setTimeout(resolve, 200));
+      const afterQuick = countItemInInventory(this.bot, itemName);
+      if (afterQuick > beforeCount) {
+        return await this.finalizeCraftOutcome(itemName, beforeCount, craftCount);
       }
 
       let errorDetail = error.message;
@@ -397,6 +389,81 @@ class CraftOne extends InstantSkill {
       };
     }
   }
+
+  /**
+   * クラフト後のインベントリ・地上ドロップを踏まえて結果を組み立てる。
+   * 満杯で出力が地上に落ちた場合は inventory_full を付与する。
+   */
+  private async finalizeCraftOutcome(
+    itemName: string,
+    beforeCount: number,
+    craftCount: number,
+  ): Promise<{ success: boolean; result: string; failureType?: string; recoverable?: boolean }> {
+    await new Promise(r => setTimeout(r, 400));
+    let afterCount = countItemInInventory(this.bot, itemName);
+    let crafted = afterCount - beforeCount;
+    let onGround = hasNearbyDroppedItemNamed(this.bot, this.mcData, itemName, 10);
+
+    if (crafted === 0 && !onGround) {
+      await new Promise(r => setTimeout(r, 450));
+      afterCount = countItemInInventory(this.bot, itemName);
+      crafted = afterCount - beforeCount;
+      onGround = hasNearbyDroppedItemNamed(this.bot, this.mcData, itemName, 10);
+    }
+
+    const noSlots = inventoryNoEmptySlots(this.bot);
+
+    const invFullHint = INVENTORY_FULL_RECOVERY_HINT_JA;
+
+    if (crafted >= craftCount) {
+      return {
+        success: true,
+        result: `${itemName}を${crafted}個クラフトしました（${beforeCount}→${afterCount}個）`,
+      };
+    }
+
+    if (onGround && noSlots && crafted < craftCount) {
+      if (crafted > 0) {
+        return {
+          success: true,
+          failureType: 'inventory_full',
+          recoverable: true,
+          result:
+            `${itemName}を${crafted}個だけインベントリに収められました（要求${craftCount}個）。満杯のため残りは地上に落ちている可能性が高いです。${invFullHint}`,
+        };
+      }
+      return {
+        success: true,
+        failureType: 'inventory_full',
+        recoverable: true,
+        result:
+          `${itemName}のクラフト結果がインベントリに入らず地上に落ちています（満杯）。材料は消費された可能性があります。${invFullHint}`,
+      };
+    }
+
+    if (crafted > 0) {
+      return {
+        success: true,
+        result:
+          `${itemName}を${crafted}個クラフトしました（要求${craftCount}個より少ない可能性：材料不足など）（${beforeCount}→${afterCount}個）`,
+      };
+    }
+
+    if (onGround && !noSlots) {
+      return {
+        success: false,
+        recoverable: true,
+        result:
+          `${itemName}が地上に落ちていますがインベントリに入っていません（空きスロットはあるため同期遅延の可能性）。pickup-nearest-itemで回収してください。`,
+      };
+    }
+
+    return {
+      success: false,
+      result: `${itemName}のクラフトに失敗しました（インベントリに追加されていません）`,
+    };
+  }
+
   /**
    * crafting_table をボットの足元付近に自動設置する。
    * 成功したら設置されたブロックを返す。失敗したら null。
