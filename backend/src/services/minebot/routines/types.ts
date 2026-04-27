@@ -59,7 +59,7 @@ export interface RoutineDefinition {
     /** サブエージェントが使えるツール名リスト (instruction 使用時) */
     tools?: string[];
     /** サブエージェントのモデル (default: 'haiku') */
-    model?: 'haiku' | 'sonnet';
+    model?: 'haiku' | 'sonnet' | 'opus';
     /** サブエージェントの最大イテレーション数 (default: 15) */
     maxIterations?: number;
 

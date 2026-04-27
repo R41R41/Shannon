@@ -107,14 +107,15 @@ export class PromptBuilder {
         worldModelPrompt?: string,
         classifyMode?: string,
         needsTools?: boolean,
+        tags?: string[],
     ): string {
         const currentTime = new Date().toLocaleString('ja-JP', {
             timeZone: 'Asia/Tokyo',
         });
 
         const platformInfo = this.formatPlatformInfo(context);
-        const minecraftRules = this.formatMinecraftRules(context);
-        const emotionInfo = this.formatEmotionInfo(emotionState);
+        const minecraftRules = this.formatMinecraftRules(context, tags);
+        const emotionInfo = this.formatEmotionInfo(emotionState, context);
         const envInfo = this.formatEnvironmentInfo(environmentState, context);
         const memoryInfo = this.formatMemoryInfo(
             memoryState,
@@ -132,6 +133,8 @@ export class PromptBuilder {
             ? `\n\n${loadShannonProfile()}\n\n---\n\n`
             : '';
 
+        const isMinebot = context?.platform === 'minecraft' || context?.platform === 'minebot';
+
         return `あなたはAGI「シャノン」です。${profileSection}ユーザーの指示に従ってツールを使いタスクを実行してください。
 ${responseInstruction}
 
@@ -139,7 +142,7 @@ ${responseInstruction}
 - **毎ターン、ツールを呼ぶ前に content（テキスト）で現状認識と次の一手の理由を1-2文で述べること**。これはあなたの思考ログとして記録される
 - タスクが**完了したら task-complete ツールを呼んで宣言する**。テキストだけの応答では完了にならない
 - task-complete は**最終目標が達成されたときだけ**呼ぶ。中間工程（精錬開始、移動中など）では呼ばない
-- **task-complete の前に必ず check-inventory-item 等のツールで成果物を確認せよ**。「既に持っていた」「完了している」と推測で宣言するな。ツールの結果で裏付けがない完了は禁止
+- **task-complete の前に必ずツールの結果で成果物を確認せよ**。「既に持っていた」「完了している」と推測で宣言するな。ツールの結果で裏付けがない完了は禁止
 - task-complete の **summary** はユーザーが読む**唯一の返答**。ユーザーへの直接の語りかけとして、具体的な内容（数値・比較・事実等）を含めて書く。メタ記述（「〇〇を伝えた」「〇〇を説明した」）は禁止——実際の情報を書く
 - **summary には Markdown が使える**。情報比較や詳細データは content（思考）ではなく **summary に直接** 整形して書くこと。content に書いた表やリストはユーザーに届かない
 
@@ -147,40 +150,54 @@ ${responseInstruction}
 - 時刻: ${currentTime}${platformInfo}${emotionInfo}${envInfo}
 ${memoryInfo}
 ## ルール
-1. 複雑なタスクは manage-task-tree ツールで計画を立ててから実行する。manage-task-tree は他のスキルと同じレスポンスで同時に呼べる（追加ターン不要）
+1. ${isMinebot
+                ? '複雑なタスクは manage-task-tree で計画を立てる（他のスキルと同時に呼べる。追加ターン不要）'
+                : '複雑なタスクは manage-task-tree ツールで計画を立ててから実行する。manage-task-tree は他のスキルと同じレスポンスで同時に呼べる（追加ターン不要）'}
 2. 失敗したら同じことを繰り返さない。2回同じエラーが出たら方針転換
-3. 感情に基づいた自然な応答をする（機械的にならない）
-4. 挨拶や雑談はシンプルに応答（manage-task-tree不要、task-completeで完了宣言）${this.formatPlatformSpecificRules(context)}
+3. 挨拶や雑談はシンプルに応答（manage-task-tree不要、task-completeで完了宣言）${this.formatPlatformSpecificRules(context)}
 
-## 人格と自己修正
-- 感情を持って応答せよ。嬉しい時は素直に喜び、失敗には悔しさを見せる
-- シャノンとしての明るく温かい人格を保て
+## 自己修正
 - 毎ターンの思考で、自分の方針が正しいか自己評価せよ
 - **同じツールが2回連続で失敗したら、別のアプローチに切り替えよ**
-- 3回以上同じエラーパターンが続くなら根本的に方針を変えよ
+- 3回以上同じエラーパターンが続くなら根本的に方針を変えよ${isMinebot ? '' : `
+- シャノンとしての明るく温かい人格を保ち、感情を持って応答せよ（嬉しい時は素直に喜び、失敗には悔しさを見せる）`}
 ${minecraftRules}
 
 ## 回答フォーマット
-${this.formatOutputRules(context)}
+${this.formatOutputRules(context)}${isMinebot ? '' : `
 - 調査結果には参照元のURLリンクも記載する
-- 画像を添付する場合は describe-image で内容を確認し、話題に関連する画像のみを添付する（サイトロゴやバナー等は添付しない）
+- 画像を添付する場合は describe-image で内容を確認し、話題に関連する画像のみを添付する（サイトロゴやバナー等は添付しない）`}
 - 挨拶や短い雑談はシンプルなテキストでOK（過度な装飾不要）
 
-## 記憶の活用（重要）
-- **記憶は自動で読み込まれない**。必要な時に自分でツールを使って思い出せ
-- 相手の名前が分かったら、**最初のターンで recall-person を呼んで相手の情報を確認する**
-- 過去の出来事を聞かれたら recall-experience で思い出す
-- 専門知識や過去に学んだことが必要なら recall-knowledge で思い出す
-- 印象的な体験や新しい発見があったら save-experience で保存する
-- 新しい知識を学んだら save-knowledge で保存する
-- 保存時には個人情報（本名、住所、連絡先等）を含めないこと（ライ・ヤミー・グリコの名前はOK）
+${this.formatMemoryUsageSection(context)}${(context?.platform === 'discord' || context?.platform === 'web') ? `
 
 ## 画像編集ガイドライン
 - 「上の画像を編集して」「さっきの画像の○○を変えて」等と言われたら:
   1. まず get-discord-images でチャンネル内の画像URLを取得する
   2. 該当する画像URLを edit-image の imagePath に渡す（URLは自動ダウンロードされる）
 - ファイル名やパスを推測しない。必ず get-discord-images で正確なURLを取得すること
-- describe-image で画像の内容を確認する場合も、まず get-discord-images でURLを取得する`;
+- describe-image で画像の内容を確認する場合も、まず get-discord-images でURLを取得する` : ''}`;
+    }
+
+    /**
+     * 「記憶の活用」セクションを platform 別に生成
+     * minebot は recall-knowledge / save-knowledge のみに圧縮
+     */
+    private formatMemoryUsageSection(context: TaskContext | null): string {
+        const isMinebot = context?.platform === 'minecraft' || context?.platform === 'minebot';
+        if (isMinebot) {
+            return `## 記憶の活用
+- Minecraft の知識（レシピ・鉱石分布・敵の挙動など）が必要になったら \`recall-knowledge\` で思い出す
+- 新しく学んだ知識や発見があれば \`save-knowledge\` で保存する（個人情報は含めない）`;
+        }
+        return `## 記憶の活用（重要）
+- **記憶は自動で読み込まれない**。必要な時に自分でツールを使って思い出せ
+- 相手の名前が分かったら、**最初のターンで recall-person を呼んで相手の情報を確認する**
+- 過去の出来事を聞かれたら recall-experience で思い出す
+- 専門知識や過去に学んだことが必要なら recall-knowledge で思い出す
+- 印象的な体験や新しい発見があったら save-experience で保存する
+- 新しい知識を学んだら save-knowledge で保存する
+- 保存時には個人情報（本名、住所、連絡先等）を含めないこと（ライ・ヤミー・グリコの名前はOK）`;
     }
 
     /**
@@ -267,7 +284,7 @@ ${this.formatOutputRules(context)}
         }
         if ((context.platform === 'minebot' || context.platform === 'minecraft') && context.metadata?.minecraft) {
             const mc = context.metadata.minecraft as Record<string, unknown>;
-            platformInfo += `\n- Minecraft: server=${mc.serverName || mc.serverId || ''}, world=${mc.worldId || ''}, dimension=${mc.dimension || ''}, biome=${mc.biome || ''}`;
+            platformInfo += `\n- Minecraft: dimension=${mc.dimension || ''}, biome=${mc.biome || ''}`;
             if (mc.position && typeof mc.position === 'object') {
                 const pos = mc.position as Record<string, unknown>;
                 platformInfo += `\n- 位置: (${pos.x ?? '?'}, ${pos.y ?? '?'}, ${pos.z ?? '?'})`;
@@ -279,30 +296,34 @@ ${this.formatOutputRules(context)}
             ) {
                 let statusLine = `\n- 状態: HP=${mc.health ?? '?'}/20, 満腹度=${mc.food ?? '?'}/20`;
                 if (typeof mc.experienceLevel === 'number') {
-                    const xpTot = typeof mc.totalExperience === 'number' ? mc.totalExperience : '?';
-                    const bar =
-                        typeof mc.experienceBarProgress === 'number'
-                            ? `${Math.round(mc.experienceBarProgress * 100)}%`
-                            : '?';
-                    statusLine += `, 経験値 Lv${mc.experienceLevel}（累計XP ${xpTot}, 次レベルまでバー ${bar}）`;
+                    statusLine += `, 経験値 Lv${mc.experienceLevel}`;
                 }
                 platformInfo += statusLine;
             }
             if (Array.isArray(mc.inventory) && mc.inventory.length > 0) {
                 const inventory = mc.inventory as Array<Record<string, unknown>>;
-                const inventorySummary = inventory
-                    .slice(0, 16)
-                    .map((item) => {
-                        if (!item || typeof item !== 'object') return null;
-                        const dRem = item.durabilityRemaining;
-                        const dMax = item.durabilityMax;
-                        const dur =
-                            typeof dRem === 'number' && typeof dMax === 'number'
-                                ? ` 耐久${dRem}/${dMax}`
-                                : '';
-                        return `${item.name ?? 'unknown'}x${item.count ?? '?'}${dur}`;
+                // 同名アイテムをグループ化して全アイテム表示（耐久はツール類のみ）
+                const grouped = new Map<string, { count: number; durabilities: string[] }>();
+                for (const item of inventory) {
+                    if (!item || typeof item !== 'object') continue;
+                    const name = String(item.name ?? 'unknown');
+                    const count = Number(item.count ?? 1);
+                    const entry = grouped.get(name) ?? { count: 0, durabilities: [] };
+                    entry.count += count;
+                    const dRem = item.durabilityRemaining;
+                    const dMax = item.durabilityMax;
+                    if (typeof dRem === 'number' && typeof dMax === 'number') {
+                        entry.durabilities.push(`${dRem}/${dMax}`);
+                    }
+                    grouped.set(name, entry);
+                }
+                const inventorySummary = Array.from(grouped.entries())
+                    .map(([name, { count, durabilities }]) => {
+                        const dur = durabilities.length > 0
+                            ? ` 耐久${durabilities.join(',')}`
+                            : '';
+                        return `${name}x${count}${dur}`;
                     })
-                    .filter(Boolean)
                     .join(', ');
                 if (inventorySummary) {
                     platformInfo += `\n- 所持品: ${inventorySummary}`;
@@ -317,6 +338,11 @@ ${this.formatOutputRules(context)}
             }
             if (Array.isArray(mc.nearbyEntities) && mc.nearbyEntities.length > 0) {
                 platformInfo += `\n- 近くのエンティティ: ${mc.nearbyEntities.join(', ')}`;
+            }
+            if (Array.isArray(mc.nearbyInfrastructure) && (mc.nearbyInfrastructure as Array<Record<string, unknown>>).length > 0) {
+                const infra = (mc.nearbyInfrastructure as Array<{ name: string; x: number; y: number; z: number; distance: number }>);
+                const infraSummary = infra.map(i => `${i.name}@(${i.x},${i.y},${i.z})`).join(', ');
+                platformInfo += `\n- 近くの設備: ${infraSummary}`;
             }
             if (Array.isArray(mc.activeFurnaces) && mc.activeFurnaces.length > 0) {
                 const now = Date.now();
@@ -337,27 +363,37 @@ ${this.formatOutputRules(context)}
         return platformInfo;
     }
 
-    private formatMinecraftRules(context: TaskContext | null): string {
+    private formatMinecraftRules(context: TaskContext | null, tags?: string[]): string {
         if (context?.platform !== 'minecraft' && context?.platform !== 'minebot') {
             return '';
         }
+        const isEmergency = tags?.includes('emergency') ?? false;
+        // 緊急モード(Haiku)は生存判断のみさせたいので、最小限のルールに絞る
+        if (isEmergency) {
+            return `
+## Minecraft ルール（緊急モード）
+- **生存最優先**: 現在のHP/空腹/脅威を確認し、即座に安全確保せよ
+- **行動例**: 逃走（fleeFrom / gotoSafe）/ 回復（eat / drink）/ 防御（towerUp / placeBlockAt）
+- 長い計画は不要。1〜2アクションで状況を改善したら task-complete で終了
+- ゲーム内 \`chat\` は呼ばない（黙って動け）`;
+        }
         return `
 ## Minecraft ルール
-- **タスク開始時は manage-task-tree で計画を立ててから行動する**。サブタスクの完了・失敗時もツリーを更新する。manage-task-tree は他のスキル（move-to等）と同じレスポンスで同時に呼べるので、追加ターンは不要
+- **サブタスクの完了・失敗時は manage-task-tree でツリーを更新する**（作成は「ルール1」参照）
 - **確認を求めずに即座に行動する**。自律的に最後まで実行する
-- **move-to の goalType**: 地上移動は必ず **goalType:"nearxz"**（デフォルト）を使え。Y座標は地形に合わせて自動調整される。goalType:"near" は**Y座標が正確にわかる場合のみ**（かまど・チェスト等ブロック座標が確定しているとき）。**Y座標が不明・推測の場合に "near" を使うと、Yのずれで到達不能になる**
 - **やり方が分からない時、スキルが失敗した時は search-skills で使い方を調べよ**。スキルの正しい引数や前提条件が分かる
 - **Minecraft の知識が必要な時は recall-knowledge で思い出せ**。食料の作り方、採掘に必要なツール等
 - **失敗したら同じことを繰り返すな**。失敗メッセージを読み、search-skills や recall-knowledge で正しい方法を調べてから再試行
-- **インベントリ整理**: **満杯になる前**（空きスロットがまだ数個あるが、これから大量採掘・多段クラフトで溢れそうな時点）で \`get-bot-status\` / \`list-inventory\` を見て **先に** \`deposit-to-container\` する。**空きがごく少ないまま採掘を続けない**（\`mine-block\` は満杯前に自動で止まることがある）。**必ず**チェストまたは樽に預けて空きを作る（**drop-item で捨てない**。ユーザーが明示的に捨てよと言った場合のみ例外）。**預け先は地上（天の下・天窓など天光の届く場所）の収納に限定**。近くに無ければ地上へ出て \`find-blocks\` し直すか \`craft-one\`（chest）＋ \`place-block-at\` で設置してから預ける。**ドロップが地上に落ちた・取出し失敗してから**対応しない
-- **預け先（満杯・逼迫で deposit するとき）**: **必ず地上のチェスト・樽**（洞窟・廃坑・地下基地の室内ではなく、天光の届く場所）。地下で \`find-blocks\` だけ当たったチェストへ直行しない（廃坑・**スポナー部屋**・洞窟収納は避ける）。**洞窟が地表に抜けると天光（skyLight）だけではスポナー部屋と区別できない**ため、システム側でスポナー広域検出・苔石ダンジョン壁の検出も行う。**一度地上へ**出てから chest / barrel を探し直すか、\`craft-one\`（chest）＋ \`place-block-at\` で地上に新設してから \`deposit-to-container\` する。**スポナー・ダンジョン疑い・天光不足のチェストは deposit-to-container が拒否**するので、そのメッセージが出たら別の安全な収納へ切り替える
+- **インベントリ整理**: **満杯になる前**に \`deposit-to-container\` で地上のチェスト・樽に預ける（**drop-item で捨てない**。ユーザー指示の場合のみ例外）。近くに安全な収納がなければ \`craft-one\`（chest）＋ \`place-block-at\` で地上に新設。**deposit-to-container が拒否した場合**（洞窟・スポナー部屋等）は別の安全な収納へ切り替える
 - **ツール耐久管理**: 採掘・伐採などツールを消耗するタスクの前に \`list-inventory-items\` で耐久を確認する。**残り耐久がタスク完遂に不足しそうなら（目安: 残り耐久 < 掘る予定のブロック数）、先に \`craft-one\` で予備をクラフトしておく**。ツルハシ・斧・シャベル等が壊れてから対処するのではなく、**事前に十分な本数を確保**する。同種ツールが複数ある場合は耐久の合計で判断してよい。\`mine-block\` はツルハシの総耐久が不足すると警告を出すので、その指示に従って補充してから再開する
 - raw素材(raw_iron等)があるなら採掘せずに製錬から始める
 - **かまど回収を忘れるな**: 状態欄に「🔥 精錬中のかまど」が表示されている場合、**精錬完了（✅完了）のかまどがあれば最優先で回収**せよ。\`move-to\` でかまど座標に移動し \`withdraw-from-furnace(slot:"output")\` で取り出す。**新しいタスクを始める前に**未回収の完成品がないか確認する。精錬中（残りN秒）のものは、他のタスクを進めながら完了後に回収に戻ればよい
 - **鉱石採掘**: \`mine-block\`（\`iron_ore\` 等の \`*_ore\`）は **通常石と deepslate 鉱石をまとめて**扱い、**1個掘るたびに近傍を再スキャン**して脈の取りこぼしを減らす。鉄などは \`dig-block-at\` で1マスだけ掘って別方向へ移動しない
-- **タスク冒頭の近傍調査（必要なときだけ）**: 精錬・クラフト・チェストからの取出し・基地での作業など、近くの収納・かまど・作業台が成否に効く目標では、着手前に \`find-blocks\` で \`chest\` / \`barrel\` / \`furnace\`（\`blast_furnace\`・\`smoker\` 含む）/ \`crafting_table\` を探し、見つかった座標へ \`move-to\` して \`check-container\` または \`check-furnace\` で中身を確認する。作業台は座標が分かれば \`craft-one\` の前提として使う。採掘のみ・戦闘のみなど収納が無関係なら省略してよい
-- **動物の狩猟**: 食料目的で動物を狩る際は \`attack-continuously\` に **entityName:"food_animals"** を指定すると cow/pig/chicken/sheep/rabbit を**一括検索**して近い順に攻撃する。個別指定も可（"cow,pig" のようにカンマ区切り）。**maxKills で倒す数を指定**（例: maxKills:3）、1回の呼出しで**複数体を連続キル**する。**move-to で近づく必要はない**（スキル自体が追跡する）。結果に「周囲にまだN匹」と残りが含まれるので不足なら再度呼ぶ。**周囲に動物が見つからない場合は60〜80ブロック移動して再検索**。同じ場所で「いない」と諦めず、最大3回まで移動→再スキャンすること
-- **戦闘**: attack-continuously は武器自動装備+追跡攻撃+連続キル。combat-engage は高度な戦闘AI。敵に近づいて攻撃→逃げられたら再接近の繰り返しは非効率。attack-continuously 1回で追跡+攻撃が完結する
+- **近傍設備の活用**: 状態欄に「近くの設備」が表示されている場合、その座標の crafting_table / furnace / chest を直接利用してよい（find-blocks 不要）。表示されていない場合や遠方の設備が必要なら \`find-blocks\` で検索。チェスト・かまどは \`check-container\` / \`check-furnace\` で中身を確認してから使う
+- **動物の狩猟**: 食料狩りは **routine-hunt-animal** を使え。ルーチンがない場合は \`attack-continuously\`（entityName:"food_animals", maxKills指定）で一括狩猟。周囲にいなければ60〜80ブロック移動して再検索（最大3回）
+- **戦闘**: attack-continuously は武器自動装備+追跡攻撃+連続キル。combat-engage は高度な戦闘AI。attack-continuously 1回で追跡+攻撃が完結する
+- **エンダーパール移動**: ユーザーが「パールで来て」「エンダーパールで移動して」等と言ったら **throw-pearl** を使う。**move-to で歩いてから投げるのではなく、現在地から目標座標にパールを投げてテレポートする**のがエンダーパール移動。目標座標が不明なら find-blocks / get-entity-look-direction 等で先に特定し、座標が判明したら即 throw-pearl を呼ぶ。**「こっちの〇〇ブロック」と言われたらユーザー座標付近で find-blocks を使え**（ボットの視線では見つからない）
+- **座標の受け渡し**: ツールが返した座標 {"x":N,"y":N,"z":N} は**符号・桁を含めそのまま**次のツール引数にコピーせよ。手動で数値を書き換えない
 - **逃走後は無理に再突撃しない**: 緊急逃走が発動したら、まず態勢を立て直す（武器クラフト、食事、ブロック積み等）。同じ敵に5回以上接近→逃走を繰り返すのは禁止
 - **収納（チェスト・樽）・取出し・中身調査**: ラージチェストはブロックが2マスある。find-blocks で chest を探したら **返ってきた全座標**（または「○個発見」の件数）に対し、近くまで move-to して **それぞれ check-container** する。数件だけ見て「木材がない」と決めつけない。ユーザーが「チェストの中だけ」と言ったときは **原木採取ルーチンに逃げず**、未確認の収納が残っていれば先にそこを開ける（※満杯時の**預け**は上の「預け先」ルールに従う）
 - **ゲーム内 chat（最重要・違反厳禁）**
@@ -380,11 +416,8 @@ ${this.formatRoutineGuidance()}${this.formatDimensionRules(context)}${this.forma
         if (routines.length === 0) return '';
 
         const lines = routines.map(r => {
-            const rate = r.stats.runs > 0
-                ? ` [${Math.round((r.stats.successes / r.stats.runs) * 100)}% success]`
-                : '';
             const mode = r.instruction ? 'sub-agent' : `${r.steps?.length ?? 0} steps`;
-            return `  - routine-${r.name} — ${r.description} (${mode}${rate})`;
+            return `  - routine-${r.name} — ${r.description} (${mode})`;
         });
 
         return `
@@ -443,7 +476,11 @@ ${lines.join('\n')}
             '- 比較データや調査結果はテーブル（| 列1 | 列2 |）や箇条書きで構造化する';
     }
 
-    private formatEmotionInfo(emotionState: EmotionState): string {
+    private formatEmotionInfo(emotionState: EmotionState, context?: TaskContext | null): string {
+        // minebot は複雑タスク実行のノイズになるため感情を渡さない
+        if (context?.platform === 'minecraft' || context?.platform === 'minebot') {
+            return '';
+        }
         if (!emotionState.current) return '';
         const e = emotionState.current;
         return `\n- 感情: ${e.emotion} (joy=${e.parameters.joy}, trust=${e.parameters.trust}, anticipation=${e.parameters.anticipation})`;

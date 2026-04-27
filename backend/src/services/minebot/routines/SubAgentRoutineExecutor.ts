@@ -20,7 +20,8 @@ import type { RoutineDefinition, RoutineExecutionResult } from './types.js';
 const log = createLogger('Minebot:SubAgent');
 
 const MODEL_HAIKU = 'claude-haiku-4-5-20251001';
-const MODEL_SONNET = process.env.SHANNON_MODEL || 'claude-sonnet-4-20250514';
+const MODEL_SONNET = process.env.SHANNON_MODEL || 'claude-sonnet-4-6';
+const MODEL_OPUS = process.env.SHANNON_MODEL_OPUS || 'claude-opus-4-6';
 
 type MessageParam = Anthropic.MessageParam;
 type Tool = Anthropic.Tool;
@@ -41,7 +42,11 @@ export class SubAgentRoutineExecutor {
         options: { abortSignal?: AbortSignal; bot: CustomBot; onTaskTreeUpdate?: (taskTree: TaskTreeState) => void },
     ): Promise<RoutineExecutionResult> {
         const startTime = Date.now();
-        const model = routine.model === 'sonnet' ? MODEL_SONNET : MODEL_HAIKU;
+        const model = config.useOpus
+            ? MODEL_SONNET
+            : routine.model === 'opus' ? MODEL_OPUS
+            : routine.model === 'sonnet' ? MODEL_SONNET
+            : MODEL_HAIKU;
         const maxIter = routine.maxIterations ?? 15;
 
         // 手順書のテンプレート変数を解決（省略された optional パラメータは JSON の default を補完）
@@ -70,10 +75,19 @@ export class SubAgentRoutineExecutor {
                 return `${f.item}x${f.count} @(${f.pos.x},${f.pos.y},${f.pos.z}) ${st}`;
             }).join(', ')}`
             : '';
+        // インベントリ概要を注入（ツールコール1回節約）
+        const invItems = options.bot.inventory?.items() ?? [];
+        const invGrouped = new Map<string, number>();
+        for (const item of invItems) {
+            invGrouped.set(item.name, (invGrouped.get(item.name) ?? 0) + item.count);
+        }
+        const inventoryLine = invGrouped.size > 0
+            ? `所持品: ${Array.from(invGrouped.entries()).map(([n, c]) => `${n}x${c}`).join(', ')}`
+            : '';
 
         const systemPrompt = `あなたは Minecraft ボット「シャノン」のサブエージェントです。
 以下の手順に従ってタスクを実行し、完了したら task-complete を呼んでください。
-${posLine ? `\n${posLine}` : ''}${furnaceLine ? `\n${furnaceLine}` : ''}
+${posLine ? `\n${posLine}` : ''}${inventoryLine ? `\n${inventoryLine}` : ''}${furnaceLine ? `\n${furnaceLine}` : ''}
 
 ## 手順
 ${instruction}
@@ -86,8 +100,16 @@ ${instruction}
 - 完了したら task-complete の summary に**具体的な成果**を書く（入手アイテム数等）
 - 失敗して続行不可能な場合も task-complete を呼び、失敗理由を summary に書く`;
 
+        // 手順は system prompt に入っているので、user message は短いトリガで十分
+        // パラメータの明示化だけ user 側で添える（なければ汎用トリガのみ）
+        const paramSummary = Object.entries(mergedParams)
+            .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
+            .join(', ');
+        const userContent = paramSummary
+            ? `ルーチン「${routine.name}」を実行してください（${paramSummary}）。完了したら task-complete を呼ぶこと。`
+            : `ルーチン「${routine.name}」を実行してください。完了したら task-complete を呼ぶこと。`;
         const messages: MessageParam[] = [
-            { role: 'user', content: instruction },
+            { role: 'user', content: userContent },
         ];
 
         let lastContent: string | null = null;

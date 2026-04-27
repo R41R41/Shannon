@@ -56,6 +56,7 @@ export abstract class ConstantSkill extends Skill {
 
   async run(...args: any[]): Promise<void> {
     if (this.isLocked) return;
+    if ((this.bot as any)._minebotStopping) return;
 
     // containMovementがtrueの場合、優先度チェックとInstantSkill実行チェックを行う
     if (this.containMovement) {
@@ -104,6 +105,9 @@ export abstract class InstantSkill extends Skill {
   }
 
   async run(...args: any[]): Promise<SkillResult> {
+    if ((this.bot as any)._minebotStopping) {
+      return { success: false, result: 'Bot is stopping' };
+    }
     // キャッシュチェック（クエリ系スキルのみ）
     if (skillCache.isCacheable(this.skillName) && this.bot.entity) {
       const pos = this.bot.entity.position;

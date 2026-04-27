@@ -47,7 +47,7 @@ export class RoutineWrapperTool extends StructuredTool {
     // ─── スキーマ構築 ───
 
     private buildDescription(def: RoutineDefinition): string {
-        const stats = def.stats;
+        const stats = def.stats ?? { runs: 0, successes: 0, failures: 0, avgDurationMs: 0 };
         const reliability =
             stats.runs > 0
                 ? ` (${stats.runs} runs, ${Math.round((stats.successes / stats.runs) * 100)}% success)`

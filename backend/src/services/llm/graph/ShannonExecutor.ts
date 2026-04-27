@@ -72,7 +72,8 @@ export interface ShannonExecutorResult {
 
 // ─── 定数 ───
 
-const MODEL_SONNET = process.env.SHANNON_MODEL || 'claude-sonnet-4-20250514';
+const MODEL_OPUS = process.env.SHANNON_MODEL_OPUS || 'claude-opus-4-6';
+const MODEL_SONNET = process.env.SHANNON_MODEL || 'claude-sonnet-4-6';
 const MODEL_HAIKU = 'claude-haiku-4-5-20251001';
 const MAX_TOKENS = 16384;
 const MAX_ITERATIONS = 30;
@@ -88,6 +89,14 @@ function isLightweightTask(goal: string, tags?: string[]): boolean {
     if (g.length < 30 && /こんにち|おはよ|こんばん|やあ|ねえ|hello|hi\b/.test(g)) return true;
     if (/何してる|元気|調子|天気|時間/.test(g)) return true;
     return false;
+}
+
+function selectModel(goal: string, tags?: string[]): string {
+    if (config.useOpus) {
+        if (isLightweightTask(goal, tags)) return MODEL_SONNET;
+        return MODEL_OPUS;
+    }
+    return isLightweightTask(goal, tags) ? MODEL_HAIKU : MODEL_SONNET;
 }
 
 // ─── メイン ───
@@ -319,13 +328,12 @@ export class ShannonExecutor {
         const thinkingLog: string[] = [];
         let treeReminderSent = false;
 
-        // 軽量タスクは Haiku、それ以外は Sonnet
-        const model = isLightweightTask(state.goal, state.tags) ? MODEL_HAIKU : MODEL_SONNET;
+        const model = selectModel(state.goal, state.tags);
         log.info(`▶ ShannonExecutor: "${state.goal.slice(0, 60)}..." (model=${model}, taskTreeCb=${!!state.onTaskTreeUpdate})`, 'cyan');
 
         for (let iter = 0; iter < MAX_ITERATIONS && !taskCompleted; iter++) {
-            if (state.abortSignal?.aborted) {
-                log.warn('⚠ ShannonExecutor aborted');
+            if (state.abortSignal?.aborted || (this.deps.bot as any)?._minebotStopping) {
+                log.warn(`⚠ ShannonExecutor aborted (signal=${state.abortSignal?.aborted}, botFlag=${(this.deps.bot as any)?._minebotStopping})`);
                 break;
             }
 
@@ -532,7 +540,7 @@ export class ShannonExecutor {
                     else if (this.deps.llmTools?.has(toolName)) {
                         resultText = await this.deps.llmTools.get(toolName)!(toolInput);
                     }
-                    // search-skills: スキルの説明・引数を検索
+                    // search-skills: スキル・ルーチン・LLMツール（記憶/計画系）を横断検索
                     else if (toolName === 'search-skills') {
                         const rawQuery = ((toolInput.query as string) || '').toLowerCase();
                         // routine- プレフィックスを除去してから検索
@@ -544,11 +552,9 @@ export class ShannonExecutor {
                             return queryWords.some(w => t.includes(w));
                         };
                         const results: string[] = [];
-                        // #2 fix: non-MC チャネルでもルーチンは検索可能
-                        if (!this.deps.instantSkills && !this.deps.routineManager) {
-                            resultText = 'search-skills: このチャネルではスキル検索は利用できません';
-                            // ステップ履歴更新等は下に続く
-                        } else if (this.deps.instantSkills) {
+
+                        // 1. InstantSkills (Minecraft 物理スキル)
+                        if (this.deps.instantSkills) {
                             for (const skill of this.deps.instantSkills.getSkills()) {
                                 if (matchesQuery(skill.skillName) || matchesQuery(skill.description)) {
                                     const params = skill.params.map((p: any) =>
@@ -558,6 +564,8 @@ export class ShannonExecutor {
                                 }
                             }
                         }
+
+                        // 2. Routines (sub-agent 手順書)
                         if (this.deps.routineManager) {
                             for (const r of this.deps.routineManager.getAll()) {
                                 if (matchesQuery(r.name) || matchesQuery(r.description) || matchesQuery(r.instruction ?? '')) {
@@ -568,9 +576,48 @@ export class ShannonExecutor {
                                 }
                             }
                         }
-                        resultText = results.length > 0
-                            ? `検索結果 (${results.length}件):\n${results.slice(0, 15).join('\n\n')}`
-                            : `"${query}" に一致するスキル/ルーチンが見つかりません`;
+
+                        // 3. LLM ツール (記憶・計画・ユーティリティなど)
+                        //    toolsForRun（このセッションで渡されている Anthropic Tool 定義）から引く。
+                        //    ShannonExecutor.run が state.tools として保持しているものを検索する。
+                        for (const t of (state.tools ?? [])) {
+                            if (matchesQuery(t.name) || matchesQuery(t.description ?? '')) {
+                                const schema = (t.input_schema ?? {}) as Record<string, any>;
+                                const props = (schema.properties ?? {}) as Record<string, any>;
+                                const required = new Set<string>(Array.isArray(schema.required) ? schema.required : []);
+                                const paramLines = Object.entries(props).map(([name, def]) => {
+                                    const d = def as Record<string, any>;
+                                    const req = required.has(name) ? ' (必須)' : '';
+                                    return `${name}: ${d.type ?? 'any'}${req} — ${d.description ?? ''}`;
+                                });
+                                const paramBlock = paramLines.length > 0 ? paramLines.join('\n    ') : '(引数なし)';
+                                // routine-xxx は routineManager 側で既に出ているので重複除去
+                                if (t.name.startsWith('routine-')) continue;
+                                // InstantSkill も instantSkills 側で既に出ているので重複除去
+                                if (this.deps.instantSkills?.getSkill(t.name)) continue;
+                                results.push(`**${t.name}**: ${t.description ?? ''}\n    ${paramBlock}`);
+                            }
+                        }
+
+                        // 4. ハードコードされた内部ツール（state.tools に含まれない manage-task-tree 等）
+                        const internalHardcoded: Array<{ name: string; description: string }> = [
+                            { name: 'manage-task-tree', description: 'タスクの計画・進捗を管理する。create/update/delete を operations 配列で。他のスキルと同じレスポンスで同時に呼べる' },
+                            { name: 'search-skills', description: 'スキル・ルーチン・LLMツールの説明と引数を検索する（このツール自身）' },
+                            { name: 'task-complete', description: 'タスク完了を宣言する。summary にユーザーへの返答を書く' },
+                        ];
+                        for (const t of internalHardcoded) {
+                            if (matchesQuery(t.name) || matchesQuery(t.description)) {
+                                results.push(`**${t.name}**: ${t.description}`);
+                            }
+                        }
+
+                        if (!this.deps.instantSkills && !this.deps.routineManager && (state.tools ?? []).length === 0) {
+                            resultText = 'search-skills: このチャネルではスキル検索は利用できません';
+                        } else {
+                            resultText = results.length > 0
+                                ? `検索結果 (${results.length}件):\n${results.slice(0, 15).join('\n\n')}`
+                                : `"${query}" に一致するスキル/ルーチン/ツールが見つかりません`;
+                        }
                     }
                     // 不明なツール
                     else {
@@ -596,6 +643,13 @@ export class ShannonExecutor {
                     tool_use_id: toolUse.id,
                     content: trimmedResult,
                 });
+            }
+
+            // ツール実行後の即時 abort チェック
+            if (state.abortSignal?.aborted || (this.deps.bot as any)?._minebotStopping) {
+                log.warn(`⚠ ShannonExecutor aborted after tool execution (signal=${state.abortSignal?.aborted}, botFlag=${(this.deps.bot as any)?._minebotStopping})`);
+                messages.push({ role: 'user', content: toolResults });
+                break;
             }
 
             // ツール結果をバッチで追加
@@ -627,7 +681,7 @@ export class ShannonExecutor {
         let resultMessages: MessageParam[] | undefined;
 
         if (!taskCompleted) {
-            if (state.abortSignal?.aborted) {
+            if (state.abortSignal?.aborted || (this.deps.bot as any)?._minebotStopping) {
                 // 緊急割込みで中断 — 次タスクで復帰できるようにコンテキスト保存
                 const treeProgress = taskNodes.length > 0 ? taskNodesToText(taskNodes).slice(0, 200) : 'なし';
                 ShannonExecutor.lastTaskGoal = state.goal;
@@ -636,7 +690,7 @@ export class ShannonExecutor {
                 taskTree = {
                     goal: displayGoal,
                     strategy: '緊急割込みにより中断',
-                    status: 'error',
+                    status: 'interrupted',
                     hierarchicalSubTasks: taskNodes.length > 0 ? taskNodesToHierarchicalSubTasks(taskNodes) : [],
                 } as TaskTreeState;
             } else {

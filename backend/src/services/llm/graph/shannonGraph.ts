@@ -83,6 +83,95 @@ type ShannonStateType = typeof ShannonState.State;
 const scopedMemory = ScopedMemoryService.getInstance();
 
 // ---------------------------------------------------------------------------
+// Platform 別ツールフィルタ
+// ---------------------------------------------------------------------------
+
+/**
+ * minebot に渡してはいけないツール（プラットフォーム外の出力/検索/画像系）。
+ * LLM の判断ノイズと無駄なトークン消費を避けるため除外する。
+ */
+const MINEBOT_EXCLUDED_TOOL_NAMES = new Set<string>([
+  // Discord
+  'chat-on-discord',
+  'get-discord-images',
+  'get-discord-recent-messages',
+  'get-server-emoji-on-discord',
+  'react-by-server-emoji-on-discord',
+  // Web / Twitter
+  'chat-on-web',
+  'post-on-twitter',
+  'like-tweet',
+  'quote-retweet',
+  'retweet-tweet',
+  'generate-tweet-text',
+  'get-x-or-twitter-post-content-from-url',
+  // Search / fetch (外部情報取得、Minecraft タスクでは不要)
+  'google-search',
+  'fetch-url',
+  'search-by-wikipedia',
+  'search-weather',
+  'wolfram-alpha-tool',
+  // Notion
+  'get-notion-page-content-from-url',
+  'describe-notion-image',
+  // YouTube
+  'get-youtube-video-content-from-url',
+  // Image (minebot では画像生成/編集/解析を使わない)
+  'create-image',
+  'describe-image',
+  'edit-image',
+  // 旧計画ツール（manage-task-tree と機能重複）
+  'update-plan',
+]);
+
+function isMinebotPlatform(platform: string | undefined): boolean {
+  return platform === 'minebot' || platform === 'minecraft';
+}
+
+function filterToolsByPlatform(
+  tools: import('@anthropic-ai/sdk').Tool[],
+  platform: string | undefined,
+): import('@anthropic-ai/sdk').Tool[] {
+  if (!isMinebotPlatform(platform)) return tools;
+  return tools.filter(t => !MINEBOT_EXCLUDED_TOOL_NAMES.has(t.name));
+}
+
+/**
+ * 会話モード（挨拶・雑談・短い質問）の判定。
+ * ShannonExecutor.isLightweightTask とロジックを揃える。
+ */
+function isConversationMode(goal: string, tags?: string[]): boolean {
+  if (tags?.includes('emergency')) return false;
+  const g = (goal ?? '').toLowerCase();
+  if (g.length < 30 && /こんにち|おはよ|こんばん|やあ|ねえ|hello|hi\b/.test(g)) return true;
+  if (/何してる|元気|調子|天気|時間/.test(g)) return true;
+  return false;
+}
+
+/**
+ * 会話モードで許可する最小ツール集合。
+ * 雑談時に 100 個のツールを送る必要はない。
+ */
+const CONVERSATION_MODE_ALLOWED_TOOLS = new Set<string>([
+  'task-complete',
+  'manage-task-tree',
+  'chat-on-discord',
+  'chat-on-web',
+  'recall-person',
+  'recall-knowledge',
+  'recall-experience',
+]);
+
+function filterToolsByConversationMode(
+  tools: import('@anthropic-ai/sdk').Tool[],
+  goal: string,
+  tags?: string[],
+): import('@anthropic-ai/sdk').Tool[] {
+  if (!isConversationMode(goal, tags)) return tools;
+  return tools.filter(t => CONVERSATION_MODE_ALLOWED_TOOLS.has(t.name));
+}
+
+// ---------------------------------------------------------------------------
 // Node implementations
 // ---------------------------------------------------------------------------
 
@@ -213,6 +302,16 @@ function createExecuteNode(
           emotionState,
           context,
           (envelope.metadata?.environmentState as string) ?? null,
+          undefined, // memoryState
+          undefined, // memoryPrompt
+          undefined, // relationshipPrompt
+          undefined, // selfModelPrompt
+          undefined, // strategyPrompt
+          undefined, // internalStatePrompt
+          undefined, // worldModelPrompt
+          undefined, // classifyMode
+          undefined, // needsTools
+          envelope.tags, // tags (emergency 等)
         );
 
         // LLM ツール用マップ (FCA のツールを直接呼出)
@@ -233,14 +332,34 @@ function createExecuteNode(
           if (sanitized !== tool.name) llmToolMap.set(sanitized, handler);
         }
 
+        // Platform フィルタ: minebot では chat-on-*/google-search/image/notion/youtube 等を除外
+        const platformFilteredTools = filterToolsByPlatform(tools, context?.platform);
+        if (platformFilteredTools.length !== tools.length) {
+          logger.info(
+            `Platform filter (${context?.platform}): tools ${tools.length} → ${platformFilteredTools.length}`,
+          );
+        }
+
         const { resolveMinebotToolPolicy, filterToolsByMinebotPolicy } = await import(
           '../../minebot/utils/minebotToolPolicy.js'
         );
         const toolPolicy = resolveMinebotToolPolicy(bot, envelope);
-        const toolsForRun = filterToolsByMinebotPolicy(tools, toolPolicy);
-        if (toolsForRun.length !== tools.length) {
+        const policyFilteredTools = filterToolsByMinebotPolicy(platformFilteredTools, toolPolicy);
+        if (policyFilteredTools.length !== platformFilteredTools.length) {
           logger.info(
-            `Minebot tool policy "${toolPolicy}": tools ${tools.length} → ${toolsForRun.length}`,
+            `Minebot tool policy "${toolPolicy}": tools ${platformFilteredTools.length} → ${policyFilteredTools.length}`,
+          );
+        }
+
+        // 会話モード（挨拶・雑談・短い質問）では大量ツールを送らない
+        const toolsForRun = filterToolsByConversationMode(
+          policyFilteredTools,
+          envelope.text ?? '',
+          envelope.tags,
+        );
+        if (toolsForRun.length !== policyFilteredTools.length) {
+          logger.info(
+            `Conversation mode filter: tools ${policyFilteredTools.length} → ${toolsForRun.length}`,
           );
         }
 

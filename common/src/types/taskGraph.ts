@@ -3,7 +3,7 @@ export interface TaskInput {
   date?: Date | null;
 }
 
-export type TaskStatus = "pending" | "in_progress" | "completed" | "error";
+export type TaskStatus = "pending" | "in_progress" | "completed" | "error" | "interrupted";
 
 /**
  * 階層的サブタスク構造（タスクの全体像・表示用）
