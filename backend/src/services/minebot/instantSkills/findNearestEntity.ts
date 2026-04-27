@@ -10,7 +10,10 @@ class FindNearestEntity extends InstantSkill {
   constructor(bot: CustomBot) {
     super(bot);
     this.skillName = 'find-nearest-entity';
-    this.description = '指定したタイプの最も近いエンティティを検索します。';
+    this.description =
+      '指定したタイプの最も近いエンティティを検索します（座標と距離を返す）。' +
+      'end_crystal、mob、プレイヤーなどの位置を正確に知りたいときに使用。' +
+      'ブロックの検索にはfind-blocksを使ってください。';
     this.params = [
       {
         name: 'entityType',

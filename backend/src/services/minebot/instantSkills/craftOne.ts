@@ -20,7 +20,9 @@ class CraftOne extends InstantSkill {
   constructor(bot: CustomBot) {
     super(bot);
     this.skillName = 'craft-one';
-    this.description = '指定アイテムをクラフトします。countで一度に複数個クラフトできます。';
+    this.description =
+      '指定アイテムをクラフトします。countで一度に複数個クラフトできます。' +
+      'クラフト前にequip-itemで装備を試み、既に所持していないか確認することを推奨。';
     this.mcData = minecraftData(this.bot.version);
     this.params = [
       {

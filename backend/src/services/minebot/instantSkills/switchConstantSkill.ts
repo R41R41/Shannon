@@ -16,6 +16,7 @@ const PARAM_TO_SKILL_NAME: Record<string, string> = {
     switchAutoFaceNearestEntity: 'auto-face-nearest-entity',
     switchAutoAvoidDragonBreath: 'auto-avoid-dragon-breath',
     switchAutoFollow: 'auto-follow',
+    switchAutoPearlSave: 'auto-pearl-save',
 };
 
 export class SwitchConstantSkill extends InstantSkill {
@@ -69,6 +70,11 @@ export class SwitchConstantSkill extends InstantSkill {
                 name: 'switchAutoFollow',
                 type: 'boolean',
                 description: 'プレイヤーを自動で追従する機能を有効にするかどうか',
+            },
+            {
+                name: 'switchAutoPearlSave',
+                type: 'boolean',
+                description: '落下時にエンダーパールで自動着地する機能を有効にするかどうか（エンド専用）',
             },
         ];
     }

@@ -36,24 +36,26 @@ class ListNearbyEntities extends InstantSkill {
   constructor(bot: CustomBot) {
     super(bot);
     this.skillName = 'list-nearby-entities';
-    this.description = '周囲のエンティティをリスト表示します。カスタム名付きエンティティ（Mysterious Traderなど）も表示されます。';
+    this.description =
+      '周囲のエンティティ（mob・プレイヤー・end_crystal・ドロップアイテム等）をリスト表示します。' +
+      'カスタム名付きエンティティ（Mysterious Traderなど）も表示されます。';
     this.params = [
       {
         name: 'maxDistance',
         type: 'number',
-        description: '検索範囲（デフォルト: 32ブロック）',
-        default: 32,
+        description: '検索範囲（デフォルト: 64ブロック）。エンドクリスタル等の遠方エンティティには大きめの値を推奨',
+        default: 64,
       },
       {
         name: 'maxCount',
         type: 'number',
-        description: '最大表示数（デフォルト: 10個）',
-        default: 10,
+        description: '最大表示数（デフォルト: 15個）',
+        default: 15,
       },
     ];
   }
 
-  async runImpl(maxDistance: number = 32, maxCount: number = 10) {
+  async runImpl(maxDistance: number = 64, maxCount: number = 15) {
     try {
       // プレイヤーエンティティを取得
       const players = Object.values(this.bot.players)

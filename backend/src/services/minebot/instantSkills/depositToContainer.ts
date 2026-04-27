@@ -91,7 +91,7 @@ class DepositToContainer extends InstantSkill {
     super(bot);
     this.skillName = 'deposit-to-container';
     this.description =
-      'コンテナにアイテムを入れます。オーバーワールドでは天光の弱い洞窟を避けるほか、**スポナー・トライアルスポナー広範囲＋苔石ダンジョン壁**も拒否する（洞窟が地表に繋がって明るくてもスポナー部屋を弾く）。満杯時は地上の安全な収納か chest を新設。ネザー・エンドでは天光・ダンジョン殻判定をスキップしスポナー系のみ有効。';
+      'コンテナにアイテムを入れます。安全でない場所（洞窟・スポナー部屋・ダンジョン等）のチェストは自動拒否されます。拒否された場合は別の安全な収納へ切り替えてください。';
     this.mcData = minecraftData(this.bot.version);
     this.params = [
       {

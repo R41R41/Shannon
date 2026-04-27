@@ -31,9 +31,9 @@
   "failureEscalation": "system2",
   "source": "manual",
   "stats": {
-    "runs": 7,
+    "runs": 8,
     "successes": 3,
-    "failures": 4,
-    "avgDurationMs": 70537
+    "failures": 5,
+    "avgDurationMs": 59382
   }
 }

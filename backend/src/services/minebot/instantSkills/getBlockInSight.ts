@@ -32,14 +32,13 @@ class GetBlockInSight extends InstantSkill {
                 };
             }
 
-            // ブロックの上面座標（登る場合はここに移動する）
-            const topX = block.position.x;
-            const topY = block.position.y + 1; // ブロックの上
-            const topZ = block.position.z;
+            const bx = block.position.x;
+            const by = block.position.y;
+            const bz = block.position.z;
 
             return {
                 success: true,
-                result: `見ているブロック: ${block.name} at (${block.position.x}, ${block.position.y}, ${block.position.z})\n\n【このブロックの上に移動するには】\nmove-to: {"x":${topX},"y":${topY},"z":${topZ}}\n\n※屋根など高い場所の場合は、まず近くまで移動してから登る経路を探す必要があるかもしれません。`,
+                result: `見ているブロック: ${block.name}\nブロック座標: {"x":${bx},"y":${by},"z":${bz}}\nブロック上面: {"x":${bx},"y":${by + 1},"z":${bz}}`,
             };
         } catch (error: any) {
             return {

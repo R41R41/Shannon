@@ -135,7 +135,7 @@ class DropItem extends InstantSkill {
     super(bot);
     this.skillName = 'drop-item';
     this.description =
-      'インベントリから指定アイテムを指定数ドロップします。足元に落とすと自動で拾い直すため、近くの穴の縁へ移動して下へ捨てるか、捨てた直後に離れます。**満杯や空き確保のためには使わない**（必ず deposit-to-container で**地上の**チェスト等に預ける）。ユーザーが明示的に捨てる・ドロップすると指示したときのみ使う。';
+      'インベントリから指定アイテムをドロップします。足元に落とすと自動で拾い直すため、穴の縁へ移動して捨てるか捨てた直後に離れます。';
     this.params = [
       {
         name: 'itemName',

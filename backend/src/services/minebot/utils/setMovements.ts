@@ -5,6 +5,16 @@ import { CustomBot } from '../types.js';
 import { PROTECTED_UTILITY_BLOCKS } from '../constants.js';
 const { Movements } = pathfinder;
 
+const HAZARD_BLOCKS_AVOID = [
+  'lava', 'flowing_lava', 'magma_block', 'fire', 'soul_fire',
+];
+
+const BREATH_EXCLUSION_RADIUS = 5;
+const BREATH_EXCLUSION_RADIUS_SQ = BREATH_EXCLUSION_RADIUS * BREATH_EXCLUSION_RADIUS;
+const BREATH_STEP_COST = 50;
+const DRAGON_HEAD_PF_OFFSET = 4;
+const DRAGON_HEAD_PF_CONE = 8;
+
 const HARD_BLOCKS_NEED_PICKAXE = [
   'stone', 'cobblestone', 'deepslate', 'cobbled_deepslate',
   'andesite', 'granite', 'diorite', 'tuff', 'calcite', 'dripstone_block',
@@ -27,12 +37,12 @@ export function setMovements(
   canDig = true,
   dontMineUnderFallingBlock = true,
   digCost = 1,
-  allowFreeMotion = false,
+  allowFreeMotion = true,
   canSwim = true,
   /** pathfinder の落下許容（大きいと崖を「降りる」経路を取りやすい）。逃走系は 1〜2 推奨 */
   maxDropDown = 4,
-  /** 液体ブロックを通る経路のコスト。高いほど水を避ける。デフォルト10で陸上を強く優先 */
-  liquidCost = 10
+  /** 液体ブロックを通る経路のコスト。高いほど水を避ける。4で泳ぎと陸路のバランス */
+  liquidCost = 4
 ) {
   const mcData = minecraftData(bot.version);
   const defaultMove = new Movements(bot as Bot);
@@ -70,6 +80,14 @@ export function setMovements(
   }
 
   defaultMove.blocksCantBreak = cantBreak;
+
+  const avoid = new Set<number>();
+  for (const name of HAZARD_BLOCKS_AVOID) {
+    const b = mcData.blocksByName[name];
+    if (b) avoid.add(b.id);
+  }
+  defaultMove.blocksToAvoid = avoid;
+
   (defaultMove as any).canSwim = canSwim;
   defaultMove.maxDropDown = maxDropDown;
 
@@ -88,6 +106,39 @@ export function setMovements(
           openable.add(block.id);
         }
       }
+    });
+  }
+
+  if (bot.game?.dimension === 'the_end') {
+    (defaultMove as any).exclusionAreasStep.push((block: any) => {
+      if (!block?.position) return 0;
+      const bx = block.position.x;
+      const bz = block.position.z;
+
+      for (const entity of Object.values(bot.entities)) {
+        if (entity.name !== 'area_effect_cloud') continue;
+        const dx = bx - entity.position.x;
+        const dz = bz - entity.position.z;
+        if (dx * dx + dz * dz < BREATH_EXCLUSION_RADIUS_SQ) return BREATH_STEP_COST;
+      }
+
+      const dragon = bot.nearestEntity((e: any) => e.name === 'ender_dragon');
+      if (dragon) {
+        const yaw = dragon.yaw ?? 0;
+        const headX = dragon.position.x - Math.sin(yaw) * DRAGON_HEAD_PF_OFFSET;
+        const headZ = dragon.position.z + Math.cos(yaw) * DRAGON_HEAD_PF_OFFSET;
+        const faceDirX = -Math.sin(yaw);
+        const faceDirZ = Math.cos(yaw);
+        for (let step = 0; step <= 3; step++) {
+          const cx = headX + faceDirX * step * (DRAGON_HEAD_PF_CONE / 3);
+          const cz = headZ + faceDirZ * step * (DRAGON_HEAD_PF_CONE / 3);
+          const dx = bx - cx;
+          const dz = bz - cz;
+          if (dx * dx + dz * dz < BREATH_EXCLUSION_RADIUS_SQ) return BREATH_STEP_COST;
+        }
+      }
+
+      return 0;
     });
   }
 

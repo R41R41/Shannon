@@ -61,12 +61,7 @@ class TowerUp extends InstantSkill {
     }
 
     if (item.count < targetHeight) {
-      return {
-        success: false,
-        result: `${item.name} が ${item.count}個しかなく、高さ${targetHeight}には足りません`,
-        failureType: 'missing_item',
-        recoverable: true,
-      };
+      log.warn(`⚠ ${item.name} が ${item.count}個しかなく高さ${targetHeight}には不足 → ${item.count}ブロック分だけ登ります`);
     }
 
     try {

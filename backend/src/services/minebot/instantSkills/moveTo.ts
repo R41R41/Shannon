@@ -149,28 +149,7 @@ class MoveTo extends InstantSkill {
         };
       }
 
-      // pathfinderの移動設定を最適化
-      // 水中にいる場合はallowFreeMotionとcanSwimを有効化
-      const isInWater = (this.bot.entity as any)?.isInWater || false;
-
-      setMovements(
-        this.bot,
-        false, // allow1by1towers
-        true,  // allowSprinting
-        true,  // allowParkour
-        true,  // canOpenDoors
-        true,  // canDig
-        true,  // dontMineUnderFallingBlock
-        isInWater ? 2 : 1, // digCost
-        isInWater, // allowFreeMotion
-        true,  // canSwim
-        4,     // maxDropDown
-        isInWater ? 2 : 10, // liquidCost: 水中では低め、陸上では水を強く回避
-      );
-
-      if (isInWater) {
-        log.info('🏊 水中移動モード', 'cyan');
-      }
+      setMovements(this.bot);
 
       // ピッカクスがあれば自動装備（pathfinder がブロックを掘る際に使われる）
       const pickaxe = this.bot.inventory.items()

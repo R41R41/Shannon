@@ -2,13 +2,27 @@
   "name": "equip-full-armor",
   "description": "フル防具を装備する",
   "params": [
-    { "name": "material", "type": "string", "description": "防具素材", "required": false, "default": "iron" }
+    {
+      "name": "material",
+      "type": "string",
+      "description": "防具素材",
+      "required": false,
+      "default": "iron"
+    }
   ],
   "instruction": "check-inventory-item で ${material}_helmet, ${material}_chestplate, ${material}_leggings, ${material}_boots を一度に確認。所持しているものを equip-item で head, torso, legs, feet の順に装備する。存在しないアイテムはスキップ。",
-  "tools": ["check-inventory-item", "equip-item"],
+  "tools": [
+    "check-inventory-item",
+    "equip-item"
+  ],
   "maxIterations": 8,
   "model": "sonnet",
   "failureEscalation": "system2",
   "source": "manual",
-  "stats": { "runs": 0, "successes": 0, "failures": 0, "avgDurationMs": 0 }
+  "stats": {
+    "runs": 1,
+    "successes": 1,
+    "failures": 0,
+    "avgDurationMs": 15397
+  }
 }

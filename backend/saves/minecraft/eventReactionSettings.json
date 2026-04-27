@@ -25,7 +25,7 @@
     {
       "eventType": "item_obtained",
       "enabled": true,
-      "probability": 30,
+      "probability": 0,
       "idleOnly": true,
       "reactionType": "info"
     },

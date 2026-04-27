@@ -108,10 +108,21 @@ class FleeFrom extends InstantSkill {
         new goals.GoalNear(position.x, position.y, position.z, minDistance)
       );
 
-      const fleeResult = await gotoSafe(this.bot, fleeGoal, { timeoutMs: timeout, stuckAbortCount: 4 });
+      const fleeResult = await gotoSafe(this.bot, fleeGoal, {
+        timeoutMs: timeout,
+        stuckAbortCount: 4,
+        checkDestinationSafety: false,
+      });
 
-      // 最終距離を確認
       const finalDistance = this.bot.entity.position.distanceTo(position);
+      const fled = finalDistance >= minDistance;
+
+      if (!fleeResult.success && !fled) {
+        return {
+          success: false,
+          result: `${name}からの逃走に失敗（距離: ${currentDistance.toFixed(1)}m → ${finalDistance.toFixed(1)}m, 原因: ${fleeResult.error ?? '不明'}）`,
+        };
+      }
 
       return {
         success: true,

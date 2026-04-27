@@ -38,6 +38,7 @@ export class MinebotTaskRuntime {
   private abortController: AbortController | null = null;
   private onTaskListUpdate: ((tasks: TaskListState) => void) | null = null;
   private executor: UnifiedExecutor | null = null;
+  private interruptedTaskInput: TaskStateInput | null = null;
 
   public currentState: {
     taskId: string;
@@ -84,6 +85,10 @@ export class MinebotTaskRuntime {
 
     this.isExecuting = true;
     this.abortController = new AbortController();
+    (this.bot as any)._minebotStopping = false;
+    if (!partialState.isEmergency) {
+      this.interruptedTaskInput = partialState;
+    }
 
     if (partialState.isEmergency) {
       this.bot.suppressMinebotGameChat = true;
@@ -221,6 +226,12 @@ export class MinebotTaskRuntime {
         this.emergencyTask = null;
       }
 
+      // Clear saved task input after normal (non-emergency-interrupted) completion
+      if (!this.abortedForEmergency && !partialState.isEmergency) {
+        this.interruptedTaskInput = null;
+      }
+      this.abortedForEmergency = false;
+
       const hasPendingTasks = this.taskQueue.some(
         (task) => task.status === 'pending' || task.status === 'paused',
       );
@@ -234,12 +245,15 @@ export class MinebotTaskRuntime {
   }
 
   public forceStop(): void {
+    log.warn(`🛑 forceStop() called — currentState=${!!this.currentState}, abortController=${!!this.abortController}`);
     if (this.currentState) {
       this.currentState.forceStop = true;
     }
+    (this.bot as any)._minebotStopping = true;
     this.stopBotActions();
     if (this.abortController) {
       this.abortController.abort();
+      log.warn(`🛑 AbortController.abort() done — signal.aborted=${this.abortController?.signal?.aborted}`);
       this.abortController = null;
     }
   }
@@ -342,6 +356,17 @@ export class MinebotTaskRuntime {
     if (executingTask) {
       executingTask.status = 'paused';
       executingTask.taskTree = (this.currentState?.taskTree as any) ?? executingTask.taskTree;
+    } else if (this.isExecuting && this.interruptedTaskInput) {
+      // Direct invoke (not from queue) — add a paused entry so resumePreviousTask can find it
+      const goal = this.interruptedTaskInput.userMessage ?? 'Interrupted task';
+      this.taskQueue.push({
+        id: this.currentState?.taskId ?? crypto.randomUUID(),
+        taskTree: (this.currentState?.taskTree as any) ?? { goal, status: 'in_progress', strategy: '', subTasks: null },
+        state: this.interruptedTaskInput,
+        createdAt: this.currentState?.createdAt ?? Date.now(),
+        status: 'paused',
+      } as TaskQueueEntry);
+      log.info(`♻️ 直接invoke中のタスクをキューにpaused保存: "${goal.slice(0, 50)}"`);
     }
 
     this.isEmergencyMode = true;
@@ -685,6 +710,9 @@ export class MinebotTaskRuntime {
     }
     if (graphResult?.taskTree?.status === 'error') {
       return 'failed_terminal';
+    }
+    if (graphResult?.taskTree?.status === 'interrupted') {
+      return 'idle';
     }
     return 'idle';
   }

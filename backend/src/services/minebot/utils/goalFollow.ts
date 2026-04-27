@@ -2,6 +2,7 @@ import pkg from 'mineflayer-pathfinder';
 import { Entity } from 'prismarine-entity';
 import { createLogger } from '../../../utils/logger.js';
 import { CustomBot, ResponseType } from '../types.js';
+import { setMovements } from './setMovements.js';
 const { goals } = pkg;
 
 const log = createLogger('Minebot:Goal');
@@ -20,6 +21,7 @@ export class GoalFollow {
           result: 'エンティティの位置情報が取得できません',
         };
       }
+      setMovements(this.bot);
       const goal = new goals.GoalFollow(entity, distance);
       await this.bot.pathfinder.setGoal(goal, true);
       return { success: true, result: 'ゴールに到達しました' };

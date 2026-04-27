@@ -42,15 +42,73 @@ export interface GotoSafeOptions {
   logStuck?: boolean;
   /** 後方互換: 旧 stuckAbortCount → macroStuckAbort にマップ */
   stuckAbortCount?: number;
+  /** 移動先の安全性チェック（lava/magma/ドラゴンブレス）。デフォルト true */
+  checkDestinationSafety?: boolean;
 }
 
 export interface GotoSafeResult {
   success: boolean;
   error?: string;
   stuckBlock?: { x: number; y: number; z: number; name: string };
+  unsafeReason?: string;
 }
 
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+
+const DANGER_BLOCKS = new Set([
+  'lava', 'flowing_lava', 'magma_block', 'fire', 'soul_fire',
+]);
+
+function extractGoalPosition(goal: Goal): { x: number; y?: number; z: number } | null {
+  const g = goal as any;
+  if (g.goal) return extractGoalPosition(g.goal);
+  if (typeof g.x === 'number' && typeof g.z === 'number') {
+    return { x: g.x, y: typeof g.y === 'number' ? g.y : undefined, z: g.z };
+  }
+  if (g.entity?.position) {
+    const p = g.entity.position;
+    return { x: p.x, y: p.y, z: p.z };
+  }
+  return null;
+}
+
+function isGoalInverted(goal: Goal): boolean {
+  return !!(goal as any).goal;
+}
+
+function checkDestinationBlocks(
+  bot: CustomBot,
+  x: number, y: number, z: number,
+): string | null {
+  const bx = Math.floor(x);
+  const bz = Math.floor(z);
+  const by = Math.floor(y);
+  for (let dy = -1; dy <= 2; dy++) {
+    try {
+      const block = bot.blockAt(new Vec3(bx, by + dy, bz));
+      if (block && DANGER_BLOCKS.has(block.name)) {
+        return `${block.name} at (${bx}, ${by + dy}, ${bz})`;
+      }
+    } catch { /* chunk not loaded */ }
+  }
+  return null;
+}
+
+function checkDestinationDragonBreath(
+  bot: CustomBot,
+  x: number, y: number, z: number,
+): string | null {
+  const checkPos = new Vec3(x, y, z);
+  for (const entity of Object.values(bot.entities)) {
+    if (
+      entity.name === 'area_effect_cloud' &&
+      entity.position.distanceTo(checkPos) <= 4
+    ) {
+      return `dragon breath at (${entity.position.x.toFixed(1)}, ${entity.position.y.toFixed(1)}, ${entity.position.z.toFixed(1)})`;
+    }
+  }
+  return null;
+}
 
 export async function gotoSafe(
   bot: CustomBot,
@@ -66,7 +124,27 @@ export async function gotoSafe(
     stuckThreshold = 0.25,
     tryRecover = true,
     logStuck = true,
+    checkDestinationSafety = true,
   } = opts;
+
+  if (checkDestinationSafety && !isGoalInverted(goal)) {
+    const pos = extractGoalPosition(goal);
+    if (pos) {
+      const y = pos.y ?? bot.entity.position.y;
+      const blockDanger = checkDestinationBlocks(bot, pos.x, y, pos.z);
+      if (blockDanger) {
+        log.warn(`⚠️ 移動先が危険: ${blockDanger}`);
+        return { success: false, error: 'unsafe_destination', unsafeReason: blockDanger };
+      }
+      if (bot.game.dimension !== 'the_end') {
+        const breathDanger = checkDestinationDragonBreath(bot, pos.x, y, pos.z);
+        if (breathDanger) {
+          log.warn(`⚠️ 移動先が危険: ${breathDanger}`);
+          return { success: false, error: 'unsafe_destination', unsafeReason: breathDanger };
+        }
+      }
+    }
+  }
 
   const macroAbort = opts.macroStuckAbort ?? opts.stuckAbortCount ?? 2;
   const maxRecovery = macroAbort * 3;

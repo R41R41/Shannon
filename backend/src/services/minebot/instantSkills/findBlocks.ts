@@ -35,11 +35,9 @@ class FindBlocks extends InstantSkill {
     super(bot);
     this.skillName = 'find-blocks';
     this.description =
-      '指定したブロックを周囲からプログラムで検索して座標リストを返します。' +
-      '特定ブロックの位置を知りたいときは必ずこのスキルを使うこと。' +
-      'water/lava検索時は水源・溶岩源（level=0, バケツで汲める）を自動判別し優先表示する。' +
-      '粉雪（powder_snow）もバケツで回収可能。' +
-      'チェスト・樽はラージチェストが2ブロック分あるため count を 48 以上に。';
+      '指定したブロックを周囲から検索して座標リストを返します。' +
+      '※エンティティ（mob・プレイヤー・end_crystal等）はブロックではないため検索不可。エンティティにはlist-nearby-entitiesかfind-nearest-entityを使え。' +
+      'water/lava検索時は水源・溶岩源（バケツで汲める）を自動判別。';
     this.mcData = minecraftData(this.bot.version);
     this.params = [
       {

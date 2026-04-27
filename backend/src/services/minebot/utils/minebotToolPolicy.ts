@@ -55,16 +55,19 @@ export function filterToolsByMinebotPolicy(tools: Tool[], mode: MinebotToolPolic
   return tools.filter((t) => {
     const n = t.name;
     if (stripChat && (n === 'chat' || hyphenName(n) === 'chat')) return false;
+
+    const isRoutine = n.startsWith('routine-') || n.startsWith('routine_');
+
+    if (mode === 'emergency_survival' && isRoutine) return false;
+
     if (
-      (mode === 'hostile_warning' ||
-        mode === 'defensive_low_hp' ||
-        mode === 'emergency_survival') &&
+      (mode === 'hostile_warning' || mode === 'defensive_low_hp') &&
       isBlockedRoutineName(n)
     ) {
       return false;
     }
     if (!stripAggressive) return true;
-    if (n.startsWith('routine-') || n.startsWith('routine_')) return true;
+    if (isRoutine) return true;
     return !isAggressiveToolName(n);
   });
 }

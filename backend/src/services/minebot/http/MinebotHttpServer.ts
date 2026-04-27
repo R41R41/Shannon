@@ -92,22 +92,25 @@ export class MinebotHttpServer {
      * エンドポイントの登録
      */
     private registerEndpoints(): void {
-        // アイテム投げ捨てエンドポイント
+        // アイテム投げ捨てエンドポイント (UI直接操作用: 移動なしで即座にドロップ)
         this.app.post('/throw_item', async (req: any, res: any) => {
             try {
                 const { itemName, count = 1 } = req.body as ThrowItemRequest;
-                const dropItem = this.bot.instantSkills.getSkill('drop-item');
-                if (!dropItem) {
-                    const response: ApiResponse = { success: false, result: 'drop-item skill not found' };
-                    return res.status(404).json(response);
+                const cleanItemName = itemName.includes(':') ? itemName.split(':')[1] : itemName;
+
+                const item = this.bot.inventory.items().find(
+                    (i: any) => i.name === cleanItemName,
+                );
+                if (!item) {
+                    const response: ApiResponse = { success: false, result: `${cleanItemName} がインベントリにありません` };
+                    return res.status(200).json(response);
                 }
 
-                // minecraft:oak_log -> oak_log の形式変換
-                const cleanItemName = itemName.includes(':') ? itemName.split(':')[1] : itemName;
-                const result = await dropItem.run(cleanItemName, count);
+                const dropCount = Math.min(count, item.count);
+                await this.bot.toss(item.type, null, dropCount);
 
-                log.info(`📦 アイテムドロップ: ${cleanItemName} → ${result.result}`);
-                const response: ApiResponse = { success: result.success, result: result.result };
+                log.info(`📦 アイテムドロップ: ${cleanItemName} x${dropCount}`);
+                const response: ApiResponse = { success: true, result: `${cleanItemName} を ${dropCount} 個ドロップしました` };
                 res.status(200).json(response);
             } catch (error) {
                 const httpError = new HttpServerError('/throw_item', 500, error as Error);

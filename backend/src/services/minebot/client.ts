@@ -121,6 +121,7 @@ export class MinebotClient extends BaseClient {
       const trace = new Error('disconnect trace').stack;
       log.error(`🔌🔌🔌 BOT DISCONNECTED 🔌🔌🔌 reason: "${reason ?? 'unknown'}" | trace: ${trace}`);
       this.eventBus.log('minecraft', 'red', `Bot disconnected: ${reason ?? 'unknown'}`);
+      try { this.skillAgent?.getTaskRuntime()?.forceStop(); } catch { /* ignore */ }
     });
 
     this.bot.on('error', (err: Error) => {
@@ -365,17 +366,24 @@ export class MinebotClient extends BaseClient {
       if (!this.bot) {
         throw new Error('Botが初期化されていません');
       }
+      // LLMタスクを最優先で強制停止（signal chain とフラグ両方）
+      if (this.skillAgent) {
+        log.info('🛑 LLMタスクを強制停止します');
+        this.skillAgent.getTaskRuntime()?.forceStop();
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
       // port 8082を開放
       if (this.skillAgent) {
-        const httpServer = this.skillAgent.getHttpServer();
-        await httpServer.stop();
+        try {
+          const httpServer = this.skillAgent.getHttpServer();
+          await httpServer.stop();
+        } catch (e) {
+          log.warn(`⚠ HTTPサーバー停止エラー（無視）: ${e}`);
+        }
       }
       log.info('🛑 Bot.quit() を明示的に呼び出します（ユーザー操作による停止）');
       this.bot.quit();
-      if (this.skillAgent?.getTaskRuntime()) {
-        this.skillAgent.getTaskRuntime()?.forceStop();
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-      }
+      await new Promise((resolve) => setTimeout(resolve, 500));
       this.skillAgent = null;
       this.bot = null;
       this.eventBus.log('minecraft', 'green', 'Minecraft bot stopped');

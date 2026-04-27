@@ -100,16 +100,13 @@ class GetEntityLookDirection extends InstantSkill {
             const moveToY = Math.round(pos.y * 10) / 10;
             const moveToZ = Math.round(sideZ * 10) / 10;
 
-            // 次のアクションを明確に指示
-            const nextActions = [
-                `1. move-to: {"x":${moveToX},"y":${moveToY},"z":${moveToZ}} で${entityName}の横に移動`,
-                `2. look-at: {"yaw":${resultYaw},"pitch":${resultPitch}} で${entityName}と同じ方向を向く`,
-                `3. get-block-in-sight で${entityName}が見ている先のブロックを確認`,
-            ];
+            const lookXR = Math.round(lookX * 10) / 10;
+            const lookYR = Math.round(lookY * 10) / 10;
+            const lookZR = Math.round(lookZ * 10) / 10;
 
             return {
                 success: true,
-                result: `${entityName}は${direction}方向を向いています。\n\n【次のアクション】\n${nextActions.join('\n')}\n\n【詳細】\n- ${entityName}の位置: (${Math.round(pos.x)}, ${Math.round(pos.y)}, ${Math.round(pos.z)})\n- 向き: yaw=${resultYaw}°, pitch=${resultPitch}°\n- 移動先座標: (${moveToX}, ${moveToY}, ${moveToZ})`,
+                result: `${entityName}は${direction}方向を向いています。\n\n【${entityName}の情報】\n- 位置: {"x":${Math.round(pos.x)},"y":${Math.round(pos.y)},"z":${Math.round(pos.z)}}\n- 向き: {"yaw":${resultYaw},"pitch":${resultPitch}}\n- 視線の先(約10m): {"x":${lookXR},"y":${lookYR},"z":${lookZR}}\n\n【視線方向のブロックを調べるには】\nlook-at で {"yaw":${resultYaw},"pitch":${resultPitch}} を向いてから get-block-in-sight を使うか、find-blocks で ${entityName} の周辺ブロックを検索`,
             };
         } catch (error: any) {
             return {
