@@ -13,11 +13,22 @@ FRONTEND_SESSION="shannon-frontend-prod"
 BACKEND_SESSION="shannon-backend-prod"
 
 IS_DEV=false
-if [ "$1" = "--dev" ]; then
-    IS_DEV=true
+USE_OPUS=false
+EXTRA_ARGS=""
+for arg in "$@"; do
+    case "$arg" in
+        --dev) IS_DEV=true ;;
+        --opus) USE_OPUS=true; EXTRA_ARGS="$EXTRA_ARGS --opus" ;;
+    esac
+done
+
+if [ "$IS_DEV" = true ]; then
     BACKEND_SESSION="$BACKEND_SESSION-dev"
     FRONTEND_SESSION="$FRONTEND_SESSION-dev"
     echo "Starting in dev mode..."
+fi
+if [ "$USE_OPUS" = true ]; then
+    echo "Opus mode enabled (main=Opus, sub-agents=Sonnet)"
 fi
 
 # --- Kill existing sessions ---
@@ -44,9 +55,9 @@ fi
 # --- Start backend ---
 cd "$SCRIPT_DIR/backend"
 if [ "$IS_DEV" = true ]; then
-    ./start.sh --dev
+    ./start.sh --dev $EXTRA_ARGS
 else
-    ./start.sh
+    ./start.sh $EXTRA_ARGS
 fi
 
 # --- Start frontend ---

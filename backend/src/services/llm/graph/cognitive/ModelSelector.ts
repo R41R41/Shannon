@@ -36,7 +36,7 @@ const ANTHROPIC_CHAIN: ModelSlot[] = [
     {
         name: 'claude-opus-4',
         config: {
-            modelName: 'claude-opus-4-20250514',
+            modelName: 'claude-opus-4-6',
             temperature: 1,
             maxTokens: 16384,
             timeoutMs: 120_000,

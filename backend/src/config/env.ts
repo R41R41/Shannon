@@ -30,6 +30,9 @@ export const config = {
   /** Whether the app is running in dev mode */
   isDev: process.argv.includes('--dev') || process.env.IS_DEV === 'True',
 
+  /** Opus モード: メイン=Opus, サブエージェント=Sonnet に格上げ */
+  useOpus: process.argv.includes('--opus') || process.env.SHANNON_USE_OPUS === 'true',
+
   /** OpenAI API key (required, used by all LLM-related services) */
   openaiApiKey: required('OPENAI_API_KEY'),
 

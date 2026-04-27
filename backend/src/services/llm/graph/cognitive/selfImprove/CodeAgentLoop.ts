@@ -23,7 +23,7 @@ import { BUILD_TOOL_DEFS, executeBuildTool } from './BuildVerifier.js';
 const log = createLogger('SelfImprove:AgentLoop');
 
 const OPUS_MODEL = 'claude-4-opus-20250514';
-const SONNET_MODEL = 'claude-sonnet-4-20250514';
+const SONNET_MODEL = 'claude-sonnet-4-6';
 
 const DEFAULT_MAX_ITERATIONS = 25;
 const HARD_ITERATION_LIMIT = 40;

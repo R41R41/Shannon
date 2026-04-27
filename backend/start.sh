@@ -32,21 +32,36 @@ windows_use_tmux_for_integrated() {
 
 # --- Configuration ---
 IS_DEV=false
+USE_OPUS=false
 PORT=5001
 WS_PORTS=(5021 5022 5023 5024 5025 5026 5027 5028)  # OpenAI, Monitoring, Status, Schedule, Planning, Emotion, Skill, Auth
 BACKEND_SESSION="shannon-backend-prod"
 MINEBOT_PORT=8092
+NODE_EXTRA_ARGS=""
 
-if [ "$1" = "--dev" ]; then
-    IS_DEV=true
-    PORT=15000
-    WS_PORTS=(15010 15011 15013 15018 15019 15020 15016 15017)
-    MINEBOT_PORT=18092
-    BACKEND_SESSION="shannon-backend-prod-dev"
-    echo "Starting in dev mode..."
+for arg in "$@"; do
+    case "$arg" in
+        --dev)
+            IS_DEV=true
+            PORT=15000
+            WS_PORTS=(15010 15011 15013 15018 15019 15020 15016 15017)
+            MINEBOT_PORT=18092
+            BACKEND_SESSION="shannon-backend-prod-dev"
+            ;;
+        --opus)
+            USE_OPUS=true
+            NODE_EXTRA_ARGS="$NODE_EXTRA_ARGS --opus"
+            ;;
+    esac
+done
+
+if [ "$IS_DEV" = true ]; then
     echo "Starting backend in dev mode on port $PORT (WS: ${WS_PORTS[*]}, Minebot: $MINEBOT_PORT)..."
 else
     echo "Starting backend on port $PORT (WS: ${WS_PORTS[*]}, Minebot: $MINEBOT_PORT)..."
+fi
+if [ "$USE_OPUS" = true ]; then
+    echo "  Opus mode: main=Opus, sub-agents=Sonnet"
 fi
 
 # --- Session / PID management ---
@@ -161,11 +176,11 @@ LAUNCH_EOF
         echo "npx tsc $TSC_NOCHECK --watch --skipLibCheck --pretty false &" >> "$LAUNCH_SCRIPT"
         echo "TSC_PID=\$!" >> "$LAUNCH_SCRIPT"
         echo "sleep 3" >> "$LAUNCH_SCRIPT"
-        echo "npx nodemon -q --watch dist --ext js --delay 3 --signal SIGKILL --exec 'node $NODE_OPTS dist/server.js --dev' &" >> "$LAUNCH_SCRIPT"
+        echo "npx nodemon -q --watch dist --ext js --delay 3 --signal SIGKILL --exec 'node $NODE_OPTS dist/server.js --dev $NODE_EXTRA_ARGS' &" >> "$LAUNCH_SCRIPT"
         echo "NODEMON_PID=\$!" >> "$LAUNCH_SCRIPT"
         echo "wait" >> "$LAUNCH_SCRIPT"
     else
-        echo "exec node $NODE_OPTS dist/server.js" >> "$LAUNCH_SCRIPT"
+        echo "exec node $NODE_OPTS dist/server.js $NODE_EXTRA_ARGS" >> "$LAUNCH_SCRIPT"
     fi
     chmod +x "$LAUNCH_SCRIPT"
     if should_use_mintty_windows; then
@@ -224,14 +239,14 @@ export NODE_OPTIONS="--max-old-space-size=12288"
 npx tsc $TSC_NOCHECK --watch --skipLibCheck --pretty false &
 TSC_PID=\$!
 sleep 3
-npx nodemon -q --watch dist --ext js --delay 3 --signal SIGKILL --exec "node $NODE_OPTS dist/server.js --dev" &
+npx nodemon -q --watch dist --ext js --delay 3 --signal SIGKILL --exec "node $NODE_OPTS dist/server.js --dev $NODE_EXTRA_ARGS" &
 wait
 LAUNCH_EOF
         chmod +x "$LAUNCH_SCRIPT"
         tmux new-session -d -s "$BACKEND_SESSION" -n "server" "exec bash -l \"$LAUNCH_SCRIPT\""
     else
         tmux new-session -d -s "$BACKEND_SESSION" \
-            "cd $SCRIPT_DIR && PORT=$PORT MINEBOT_API_PORT=$MINEBOT_PORT WS_OPENAI_PORT=${WS_PORTS[0]} WS_MONITORING_PORT=${WS_PORTS[1]} WS_STATUS_PORT=${WS_PORTS[2]} WS_SCHEDULE_PORT=${WS_PORTS[3]} WS_PLANNING_PORT=${WS_PORTS[4]} WS_EMOTION_PORT=${WS_PORTS[5]} WS_SKILL_PORT=${WS_PORTS[6]} WS_AUTH_PORT=${WS_PORTS[7]} node $NODE_OPTS dist/server.js"
+            "cd $SCRIPT_DIR && PORT=$PORT MINEBOT_API_PORT=$MINEBOT_PORT WS_OPENAI_PORT=${WS_PORTS[0]} WS_MONITORING_PORT=${WS_PORTS[1]} WS_STATUS_PORT=${WS_PORTS[2]} WS_SCHEDULE_PORT=${WS_PORTS[3]} WS_PLANNING_PORT=${WS_PORTS[4]} WS_EMOTION_PORT=${WS_PORTS[5]} WS_SKILL_PORT=${WS_PORTS[6]} WS_AUTH_PORT=${WS_PORTS[7]} node $NODE_OPTS dist/server.js $NODE_EXTRA_ARGS"
     fi
 fi
 

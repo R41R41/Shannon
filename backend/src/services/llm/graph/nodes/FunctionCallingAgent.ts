@@ -163,7 +163,7 @@ export class FunctionCallingAgent {
         // Claude Anthropic を優先、フォールバックで OpenAI
         if (config.anthropic?.apiKey) {
             this.model = new ChatAnthropic({
-                model: 'claude-opus-4-20250514',
+                model: 'claude-opus-4-6',
                 anthropicApiKey: config.anthropic.apiKey,
                 temperature: 1,
                 maxTokens: 16384,
