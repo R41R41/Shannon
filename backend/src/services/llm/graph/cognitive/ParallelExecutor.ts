@@ -12,8 +12,6 @@ import { ModelSelector } from './ModelSelector.js';
 import { TaskEpisodeMemory } from './TaskEpisodeMemory.js';
 import { SelfImprovementDaemon } from './selfImprove/index.js';
 import type { ExecutionResult } from '../types.js';
-import type RecallMemoryTool from '../../tools/memory/recallMemory.js';
-import type SaveMemoryTool from '../../tools/memory/saveMemory.js';
 import type PlanCraftTool from '../../tools/utility/planCraft.js';
 
 /**
