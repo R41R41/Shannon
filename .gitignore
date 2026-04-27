@@ -37,6 +37,9 @@ node_modules
 /backend/saves/twitter_login_cookies.json
 /backend/saves/auto_post_daily_schedule.json
 
+# Prompt audit dumps（ローカル分析用、Git に載せない）
+/backend/saves/prompt_audit/
+
 # ローカル／本番で変わる状態（リポジトリに載せない）
 /backend/saves/recent_auto_posts.json
 /backend/saves/watchlist.json
