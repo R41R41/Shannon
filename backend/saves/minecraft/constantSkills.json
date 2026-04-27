@@ -82,5 +82,13 @@
   {
     "skillName": "auto-combat-assess",
     "status": false
+  },
+  {
+    "skillName": "auto-seek-land",
+    "status": false
+  },
+  {
+    "skillName": "auto-pearl-save",
+    "status": false
   }
 ]

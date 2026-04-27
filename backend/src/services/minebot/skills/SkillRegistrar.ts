@@ -58,7 +58,11 @@ export class SkillRegistrar {
                 const skill = constantSkills.getSkill(skillName);
                 if (!skill || !skill.status || skill.isLocked) return;
                 try {
-                    await constantSkills.requestExecution(skill, []);
+                    if (skill.isCritical) {
+                        await skill.run();
+                    } else {
+                        await constantSkills.requestExecution(skill, []);
+                    }
                 } catch (error: unknown) {
                     const msg = error instanceof Error ? error.message : String(error);
                     this.eventBus.log('minecraft', 'red', `${skillName} error: ${msg}`);

@@ -1,0 +1,38 @@
+diff --git a/node_modules/mineflayer/lib/plugins/inventory.js b/node_modules/mineflayer/lib/plugins/inventory.js
+index 70db312..95bfebe 100644
+--- a/node_modules/mineflayer/lib/plugins/inventory.js
++++ b/node_modules/mineflayer/lib/plugins/inventory.js
+@@ -125,10 +125,13 @@ function inject (bot, { hideErrors }) {
+         cursorZ: -1
+       })
+     } else if (bot.supportFeature('useItemWithOwnPacket')) {
++      const PI = Math.PI
++      const notchYaw = (180 / PI) * (PI - bot.entity.yaw)
++      const notchPitch = (180 / PI) * (-bot.entity.pitch)
+       bot._client.write('use_item', {
+         hand: offHand ? 1 : 0,
+         sequence,
+-        rotation: { x: 0, y: 0 }
++        rotation: { x: notchYaw, y: notchPitch }
+       })
+     }
+   }
+diff --git a/node_modules/mineflayer/lib/plugins/place_entity.js b/node_modules/mineflayer/lib/plugins/place_entity.js
+index c7b750a..b49cc5d 100644
+--- a/node_modules/mineflayer/lib/plugins/place_entity.js
++++ b/node_modules/mineflayer/lib/plugins/place_entity.js
+@@ -36,8 +36,13 @@ function inject (bot) {
+ 
+     if (type === 'boat') {
+       if (bot.supportFeature('useItemWithOwnPacket')) {
++        const PI = Math.PI
++        const notchYaw = (180 / PI) * (PI - bot.entity.yaw)
++        const notchPitch = (180 / PI) * (-bot.entity.pitch)
+         bot._client.write('use_item', {
+-          hand: options.offhand ? 1 : 0
++          hand: options.offhand ? 1 : 0,
++          sequence: 0,
++          rotation: { x: notchYaw, y: notchPitch }
+         })
+       } else {
+         bot._client.write('block_place', {

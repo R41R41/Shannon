@@ -1,0 +1,45 @@
+{
+  "name": "long-distance-travel",
+  "description": "指定座標への長距離移動。徒歩・泳ぎを使い分けて目的地へ向かう。ネザーは安全な陸路で移動",
+  "params": [
+    {
+      "name": "x",
+      "type": "number",
+      "description": "目的地X座標",
+      "required": true
+    },
+    {
+      "name": "z",
+      "type": "number",
+      "description": "目的地Z座標",
+      "required": true
+    },
+    {
+      "name": "arrivalRadius",
+      "type": "number",
+      "description": "到着判定半径（デフォルト: 10）",
+      "default": 10
+    }
+  ],
+  "instruction": "指定されたXZ座標へ長距離移動する。徒歩と泳ぎを使い分けて目的地まで向かう。\n\n## 判断フロー\n\n### ステップ1: 現状確認\n1. get-position で現在位置とディメンションを確認\n2. 目的地までの直線距離を計算\n3. 距離が200ブロック以下なら move-to で直接移動して完了\n\n### ステップ2: 移動方法の選択\n\n#### オーバーワールドの場合\n- move-to は徒歩も泳ぎもパスファインダーが自動判断する（canSwim=true）\n- 水上を泳いだ方が直線的で速い場合、パスファインダーが水路を選ぶ\n- もしボートに乗っている場合は ride-vehicle(action=\"dismount\") で降りてから移動\n- ステップ3へ\n\n#### ネザーの場合\n- 徒歩のみ。溶岩を絶対に避ける。ステップ3へ\n\n### ステップ3: 段階移動（徒歩＋泳ぎ）\n目的地まで200ブロック以下になるまで、中間地点を設定して段階的に移動する。\n1. 目的地方向に**150ブロック先**の中間地点を計算\n2. move-to(中間x, 64, 中間z, goalType=\"nearxz\") で移動（水中も自動で泳ぐ）\n3. 移動失敗したら距離を100→50と縮めて再試行\n4. get-position で確認。目的地まで200以下になったら最終移動\n5. move-to(x, 64, z, goalType=\"nearxz\") で目的地へ\n\n### ステップ4: 完了\ntask-complete で現在位置と移動結果を報告\n\n## 注意事項\n- **move-to は30秒でタイムアウトする**。150ブロック以上は失敗しやすいので段階移動必須\n- **泳ぎは有効な移動手段**。海を渡る場合、auto-swim が自動で浮上・呼吸を管理する\n- ネザーでは溶岩の上を移動しない。陸地経路のみ\n- 移動中にHPが減ったら retreat-and-stabilize を検討\n- **合計10回以上移動失敗したら、その時点の位置を報告して終了**\n- ※ボート操縦は現在未対応（mineflayer未サポート）。将来的に対応予定",
+  "tools": [
+    "get-position",
+    "move-to",
+    "ride-vehicle",
+    "check-inventory-item",
+    "craft-one",
+    "find-blocks",
+    "get-blocks-in-area",
+    "task-complete"
+  ],
+  "maxIterations": 30,
+  "model": "sonnet",
+  "failureEscalation": "system2",
+  "source": "manual",
+  "stats": {
+    "runs": 8,
+    "successes": 3,
+    "failures": 5,
+    "avgDurationMs": 79587
+  }
+}

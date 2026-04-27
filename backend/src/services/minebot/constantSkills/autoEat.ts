@@ -70,6 +70,11 @@ class AutoEat extends ConstantSkill {
 
     // Minecraftでは満腹度が18以上で自然回復するため、HPが減っていたら積極的に食べる
     if (food < 18 || (health < 18 && food < 20)) {
+      // スキル実行中は食事をスキップ（弓チャージ中に持ち替えると照準が崩れる等）
+      // HP危険域のみ例外
+      if (this.bot.executingSkill && health > 6) {
+        return;
+      }
       // pathfinder 移動中は食事をスキップ（食事アニメーションが移動・ジャンプを阻害するため）
       // ただし HP 危険域 or 満腹度枯渇時は緊急で食べる
       const isMoving = this.bot.pathfinder?.isMoving?.() ?? false;

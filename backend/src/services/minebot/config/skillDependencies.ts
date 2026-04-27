@@ -65,11 +65,22 @@ export const SKILL_DEPENDENCIES: Record<string, SkillDependency> = {
     requires: ['list-inventory-items'],
     provides: ['elevated-position'],
   },
+  'ride-vehicle': {
+    category: 'movement',
+    estimatedDurationSec: 5,
+    provides: ['mounted-vehicle'],
+  },
   'stop-movement': { category: 'movement', estimatedDurationSec: 1 },
   'look-at': { category: 'movement', estimatedDurationSec: 1 },
   'set-sneak': { category: 'movement', estimatedDurationSec: 1 },
   'set-sprint': { category: 'movement', estimatedDurationSec: 1 },
   'enter-portal': { category: 'movement', estimatedDurationSec: 10, provides: ['in-nether'] },
+  'throw-pearl': {
+    category: 'movement',
+    estimatedDurationSec: 3,
+    requires: ['list-inventory-items'],
+    provides: ['at-target'],
+  },
 
   // === 採掘系 ===
   'dig-block-at': {
@@ -108,6 +119,20 @@ export const SKILL_DEPENDENCIES: Record<string, SkillDependency> = {
   'attack-nearest': { category: 'combat', estimatedDurationSec: 15 },
   'attack-continuously': { category: 'combat', estimatedDurationSec: 45, provides: ['kills'] },
   'combat': { category: 'combat', estimatedDurationSec: 30 },
+  'bed-bomb-cycle': {
+    category: 'combat',
+    estimatedDurationSec: 120,
+    requires: ['setup-fountain-shield', 'clear-fire-around'],
+    provides: ['dragon-killed'],
+  },
+  'dragon-melee': {
+    category: 'combat',
+    estimatedDurationSec: 45,
+    provides: ['dragon-damage'],
+  },
+  'dragon-status': { category: 'query', estimatedDurationSec: 1 },
+  'clear-fire-around': { category: 'utility', estimatedDurationSec: 10 },
+  'setup-fountain-shield': { category: 'interaction', estimatedDurationSec: 15 },
   'set-shield': { category: 'combat', estimatedDurationSec: 1 },
   'swing-arm': { category: 'combat', estimatedDurationSec: 1 },
 

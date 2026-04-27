@@ -1,0 +1,38 @@
+{
+  "name": "bed-bomb-ender-dragon",
+  "description": "ベッド爆弾でエンダードラゴンを倒す",
+  "params": [
+    {
+      "name": "maxBeds",
+      "type": "number",
+      "description": "使用ベッド上限",
+      "required": false,
+      "default": 20
+    }
+  ],
+  "instruction": "エンドの出口ポータル噴水(0,0)付近でベッド爆弾を使ってエンダードラゴンを倒す。\n\n## 手順\n\n### 1. 状況確認\n- dragon-status でドラゴンの有無・フェーズ・ベッド残数を確認\n- ドラゴンがいなければ → task-complete\n\n### 2. 準備（ドラゴンが飛んでいる間に済ませる）\n- 噴水(0,0)から遠い場合は move-to で移動（5m以内）\n- 高い場所（Y=70以上）にいる場合は dig-block-at で足元を掘って降りてから移動\n- clear-fire-around で噴水周辺の炎を除去 (x:0, z:0, radius:10)\n- setup-fountain-shield で噴水にオブシディアン足場を設置\n\n### 3. 戦闘開始\n- bed-bomb-cycle を実行 (maxBeds: ${maxBeds})\n- **このスキルが全フェーズの戦闘を自動処理する:**\n  - 飛行中 → 噴水付近で待機\n  - 降下中 → ベッド設置→頭部追跡→移動予測で起爆\n  - 着地中 → 自動で尻側に回り込み近接攻撃。飛び立てば待機に自動復帰\n  - ベッドが尽きた → 全て近接攻撃に切り替え\n\n### 4. 結果処理\n- **setup_broken**: 足場が壊れた → 手順2をやり直して再度 bed-bomb-cycle\n- **hp_critical**: HP危険 → 食料で回復してから再開。なければ task-complete\n- **成功/撃破** → task-complete\n- bed-bomb-cycle はドラゴンのフェーズ遷移を内部で処理するため、LLM側でフェーズ判断する必要はない\n\n## 注意事項\n- ドラゴンが飛んでいるフェーズが最も長いので、この間に準備を済ませること\n- dragon-status は最初と結果処理時のみ呼ぶ。戦闘中は bed-bomb-cycle に任せる\n- 不測の事態では dragon-status で状況再確認してから判断",
+  "tools": [
+    "dragon-status",
+    "clear-fire-around",
+    "setup-fountain-shield",
+    "bed-bomb-cycle",
+    "move-to",
+    "get-position",
+    "find-blocks",
+    "list-inventory-items",
+    "equip-item",
+    "dig-block-at",
+    "tower-up",
+    "check-inventory-item"
+  ],
+  "maxIterations": 30,
+  "model": "sonnet",
+  "failureEscalation": "system2",
+  "source": "manual",
+  "stats": {
+    "runs": 17,
+    "successes": 1,
+    "failures": 16,
+    "avgDurationMs": 29459
+  }
+}

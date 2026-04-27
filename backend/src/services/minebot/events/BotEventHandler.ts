@@ -19,7 +19,10 @@ export class BotEventHandler {
     private consecutiveDamageCount: number = 0;
     private lastDamageTime: number = 0;
     private lastDeathMessage: string = '';  // Minecraftの死亡メッセージ
+    private pendingDeathCleanup: boolean = false;
     private eventReactionSystem: EventReactionSystem | null = null;
+    private lastKnownDimension: string = '';
+    private dimensionPollTimer: ReturnType<typeof setInterval> | null = null;
 
     constructor(bot: CustomBot, taskRuntime: MinebotTaskRuntime, recentMessages: BaseMessage[]) {
         this.bot = bot;
@@ -39,6 +42,7 @@ export class BotEventHandler {
      * 全てのイベントハンドラを登録
      */
     registerAll(): void {
+        this.registerVehicleDetection();
         this.registerEntitySpawn();
         this.registerEntityHurt();
         this.registerHealth();
@@ -49,6 +53,7 @@ export class BotEventHandler {
         this.registerDeath();
         this.registerRespawn();
         this.registerEntityEffects();
+        this.startDimensionPoll();
         log.success('✅ All bot event handlers registered');
     }
 
@@ -112,7 +117,8 @@ export class BotEventHandler {
                 //   3. 一撃で大ダメージ（40%以上 = 8HP以上）
                 // それ以外（HP 15/20で落下ダメージ等）は autoEat に任せる
                 const isCriticalHP = currentHealth <= 10;
-                const isUnderAttack = this.consecutiveDamageCount >= 3;
+                const isBedBombActive = !!(this.bot as any)._bedBombActive;
+                const isUnderAttack = this.consecutiveDamageCount >= (isBedBombActive ? 8 : 3);
                 const isMassiveDamage = damagePercent >= 40;
 
                 if (this.eventReactionSystem && (isCriticalHP || isUnderAttack || isMassiveDamage)) {
@@ -136,19 +142,37 @@ export class BotEventHandler {
                 this.consecutiveDamageCount = 0;
             }
 
-            // 窒息検知（水中または埋まっている状態でHPが減っている）
+            // 窒息検知: ブロック窒息（頭が固体ブロック内）+ 水中酸素枯渇
             const entity = this.bot.entity as any;
-            if (entity?.isInWater || entity?.isCollidedVertically) {
-                const oxygen = this.bot.oxygenLevel || 20;
-                // 酸素が大きく減った（3以上）または、酸素が半分以下でHPが減っている
-                if (oxygen < this.lastOxygen - 3 || (oxygen < 10 && currentHealth < this.lastHealth)) {
-                    log.error(`⚠️ 窒息検知 (酸素: ${oxygen}/20, HP: ${currentHealth}/20)`);
+            const isInWater = entity?.isInWater || false;
 
+            // A. ブロック窒息: 頭の位置のブロックが固体かチェック
+            if (currentHealth < this.lastHealth && !isInWater) {
+                try {
+                    const headBlock = this.bot.blockAt(this.bot.entity.position.offset(0, 1.62, 0));
+                    if (headBlock && headBlock.boundingBox === 'block') {
+                        log.error(`⚠️ ブロック窒息検知 (頭部ブロック: ${headBlock.name}, HP: ${currentHealth.toFixed(1)}/20)`);
+                        if (this.eventReactionSystem) {
+                            await this.eventReactionSystem.handleSuffocation({
+                                oxygen: 20,
+                                health: currentHealth,
+                                isInWater: false,
+                            });
+                        }
+                    }
+                } catch { /* blockAt が使えない場合は無視 */ }
+            }
+
+            // B. 水中酸素枯渇
+            if (isInWater || entity?.isCollidedVertically) {
+                const oxygen = this.bot.oxygenLevel ?? 20;
+                if (oxygen < this.lastOxygen - 3 || (oxygen < 10 && currentHealth < this.lastHealth)) {
+                    log.error(`⚠️ 水中窒息検知 (酸素: ${oxygen}/20, HP: ${currentHealth.toFixed(1)}/20)`);
                     if (this.eventReactionSystem) {
                         await this.eventReactionSystem.handleSuffocation({
                             oxygen,
                             health: currentHealth,
-                            isInWater: entity?.isInWater || false,
+                            isInWater,
                         });
                     }
                 }
@@ -322,6 +346,7 @@ export class BotEventHandler {
             }
 
             log.error(`💀 ボット死亡: ${this.lastDeathMessage}`);
+            this.pendingDeathCleanup = true;
 
             // 即座にタスクを失敗させてemergencyModeをリセット（pathfinder等も停止）
             if (this.taskRuntime.isRunning()) {
@@ -337,10 +362,14 @@ export class BotEventHandler {
         this.bot.on('spawn', async () => {
             log.success('🔄 Bot has respawned');
 
-            // deathイベントで処理済みだが、フォールバックとして残す
-            if (this.taskRuntime.isRunning()) {
-                const deathReason = this.lastDeathMessage || '死亡によりタスク失敗';
-                this.taskRuntime.failCurrentTaskDueToDeath(deathReason);
+            // Only kill the current task on the first spawn after an actual death.
+            // Subsequent spawn events (dimension changes, etc.) must NOT interrupt tasks.
+            if (this.pendingDeathCleanup) {
+                this.pendingDeathCleanup = false;
+                if (this.taskRuntime.isRunning()) {
+                    const deathReason = this.lastDeathMessage || '死亡によりタスク失敗';
+                    this.taskRuntime.failCurrentTaskDueToDeath(deathReason);
+                }
             }
 
             // 状態をリセット
@@ -348,7 +377,121 @@ export class BotEventHandler {
             this.lastOxygen = 20;
             this.consecutiveDamageCount = 0;
             this.lastDeathMessage = '';
+
+            this.updateDimensionAwareSkills();
         });
+    }
+
+    /**
+     * ログイン時にすでに乗り物に乗っている状態を検出する。
+     * registerAll() の最初に呼ばれ、spawn よりも前に到着するパケットも捕捉する。
+     *
+     * 戦略:
+     *  (0) spawn_entity / set_passengers パケットを全てログ（10秒間）
+     *  (1) set_passengers でボット自身がpassengerならvehicle設定
+     *  (2) spawn 後 7秒でフォールバック: entity scan + proximity scan
+     */
+    private registerVehicleDetection(): void {
+        const bot = this.bot as any;
+        let vehicleResolved = false;
+
+        // --- (A) vehicle_move (S→C) パケットで位置更新 ---
+        bot._client.on('vehicle_move', (packet: { x: number; y: number; z: number; yaw: number; pitch: number }) => {
+            if (!bot.vehicle) return;
+            bot.entity.position.set(packet.x, packet.y, packet.z);
+            if (bot.vehicle._synthetic) {
+                bot.vehicle._yaw = (-packet.yaw * Math.PI) / 180;
+            } else {
+                bot.vehicle.yaw = (-packet.yaw * Math.PI) / 180;
+            }
+        });
+
+        // --- (B) set_passengers でリアルタイム検出 ---
+        const onSetPassengersDetect = ({ entityId, passengers }: { entityId: number; passengers: number[] }) => {
+            if (vehicleResolved) return;
+            const botId = bot.entity?.id;
+            if (botId != null && passengers.includes(botId)) {
+                vehicleResolved = true;
+                bot._client.removeListener('set_passengers', onSetPassengersDetect);
+                if (!bot.vehicle) {
+                    let vehicle = bot.entities[entityId];
+                    if (!vehicle) {
+                        log.info(`🚗 vehicleId=${entityId} の spawn_entity 未受信 → 合成エンティティを作成`);
+                        vehicle = {
+                            id: entityId,
+                            name: 'boat',
+                            displayName: 'Boat',
+                            type: 'mob',
+                            position: bot.entity.position.clone(),
+                            _yaw: bot.entity.yaw,
+                            get yaw() { return this._yaw; },
+                            set yaw(v: number) { this._yaw = v; },
+                            pitch: 0,
+                            velocity: bot.entity.velocity,
+                            passengers: [bot.entity],
+                            metadata: [],
+                            isValid: true,
+                            _synthetic: true,
+                        };
+                        bot.entities[entityId] = vehicle;
+                    }
+                    bot.vehicle = vehicle;
+                    bot.entity.vehicle = vehicle;
+                    log.info(
+                        `🚗 乗り物検出(set_passengers): ${vehicle.name ?? 'NO_NAME'} (ID:${vehicle.id})` +
+                        `${vehicle._synthetic ? ' [synthetic]' : ''}`,
+                    );
+                    bot.emit('mount');
+                }
+            }
+        };
+        bot._client.on('set_passengers', onSetPassengersDetect);
+
+        setTimeout(() => {
+            bot._client.removeListener('set_passengers', onSetPassengersDetect);
+        }, 30_000);
+    }
+
+    /**
+     * 3秒ごとにディメンションを監視し、変化時にスキルを切り替える
+     * spawn イベントが発火しないケース（/tp 等）をカバーする
+     */
+    private startDimensionPoll(): void {
+        this.dimensionPollTimer = setInterval(() => {
+            try {
+                this.updateDimensionAwareSkills();
+            } catch { /* ignore */ }
+        }, 3000);
+    }
+
+    /**
+     * ディメンションに応じて常時スキルを自動ON/OFFする
+     */
+    private updateDimensionAwareSkills(): void {
+        const dim = String(this.bot.game?.dimension ?? '');
+        if (!dim) return;
+
+        const changed = dim !== this.lastKnownDimension;
+        if (changed) {
+            if (this.lastKnownDimension) {
+                log.info(`🌍 ディメンション変更検知: ${this.lastKnownDimension} → ${dim}`);
+            }
+            this.lastKnownDimension = dim;
+        }
+
+        const inTheEnd = dim.includes('the_end');
+
+        const endSkills = ['auto-pearl-save', 'auto-avoid-dragon-breath'] as const;
+        for (const name of endSkills) {
+            const skill = this.bot.constantSkills.getSkill(name);
+            if (skill) {
+                const prev = skill.status;
+                skill.status = inTheEnd;
+                if (prev !== inTheEnd) {
+                    log.info(`🟣 ${name}: ${inTheEnd ? 'ON（エンド検知）' : 'OFF（エンド以外）'}`);
+                }
+            }
+        }
     }
 
     // ── ステータスエフェクト ──

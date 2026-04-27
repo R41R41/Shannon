@@ -1,0 +1,22 @@
+{
+  "name": "locate-stronghold",
+  "description": "エンダーアイの三角測量で要塞（ストロングホールド）の座標を特定する",
+  "params": [],
+  "instruction": "エンダーアイを2箇所から投げてその飛行方向から要塞の座標を三角測量で特定する。\n\n## 前提\n- triangulate-stronghold スキルが投擲・方角記録・三角測量計算・エンダーアイ回収をすべて行う\n- **50〜100ブロック離れた2地点から投げれば十分**\n- スキルの結果に推奨座標と方角が含まれるのでそれに従う\n\n## 手順\n\n### フェーズ1: 準備\n1. check-inventory-item で ender_eye を確認。2個未満なら失敗報告\n2. triangulate-stronghold(action=\"reset\")\n\n### フェーズ2: 1回目の投擲\n3. triangulate-stronghold(action=\"throw\") — 投擲・方角記録・回収が自動で行われる\n4. 結果に推奨移動先（2候補、方角付き）が返る\n\n### フェーズ3: 移動\n**重要: 移動は短く。50ブロック離れれば十分。**\n5. 推奨座標の1つに向けて move-to(goalType:\"nearxz\") で移動。距離は50〜80ブロックでOK\n6. **失敗した場合**: もう1つの推奨方向を試す。**それでも失敗したら距離を30ブロックに縮める**\n7. **2回失敗したら方向を完全に変える**: 現在地から北/南/東/西など単純な方向に50ブロック移動\n8. get-position で確認。1回目の投擲位置から30ブロック以上離れていれば2回目を投げてよい\n\n### フェーズ4: 2回目の投擲\n9. triangulate-stronghold(action=\"throw\") — 自動で三角測量結果が返る\n\n### フェーズ5: 結果確認\n10. 信頼度と誤差を確認。誤差±250ブロック以内なら十分実用的（現地でもう1回投げれば正確な方向がわかる）\n11. 信頼度「低」で誤差が大きい場合のみ3回目を検討（ただし移動1回失敗したらその場で報告して終了）\n12. task-complete で要塞座標・距離・誤差を報告\n\n## 注意事項\n- **move-toは30秒でタイムアウトする。100ブロック以上の移動は失敗しやすい**\n- **移動失敗で合計60秒以上使ったら、それ以上の移動は諦めて現状の結果を報告する**\n- 50ブロックでも十分な三角測量ができる。精度を上げるために長距離移動する必要はない\n- 到着地がどこであれ50ブロック以上離れていれば2回目を投げてよい",
+  "tools": [
+    "triangulate-stronghold",
+    "check-inventory-item",
+    "get-position",
+    "move-to"
+  ],
+  "maxIterations": 15,
+  "model": "sonnet",
+  "failureEscalation": "system2",
+  "source": "manual",
+  "stats": {
+    "runs": 8,
+    "successes": 7,
+    "failures": 1,
+    "avgDurationMs": 44651
+  }
+}

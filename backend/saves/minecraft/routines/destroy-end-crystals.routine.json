@@ -1,0 +1,30 @@
+{
+  "name": "destroy-end-crystals",
+  "description": "エンド（The End）の黒曜石柱上のエンドクリスタルを全て破壊する",
+  "params": [],
+  "instruction": "エンドクリスタルは黒曜石の柱（obsidian pillar）の頂上に設置されている。クリスタルには2種類ある:\n- **露出型**: 柱の頂上にむき出しで置かれている → 下から弓で射抜ける\n- **鉄格子型**: 鉄の柵（iron_bars）の檻で囲まれている → エンダーパールで柱頂上に飛んで柵を壊してから破壊\n\n## 前提知識\n- クリスタルはダメージ1で即破壊（殴っても弓でも一撃）\n- 破壊時に爆発ダメージ（6m以内で最大12HP）があるため至近距離注意\n- shoot-bow は弾道計算＋障害物回避付き。低弧がブロックされたら自動的に高弧を試す。結果に「破壊確認」「破壊未確認」「blocked」のいずれかが返る。**着弾まで待ってから結果を返すので、結果をそのまま信用してよい**\n- attack-continuously は近接攻撃（射程4.5m）。**9ブロック以上離れていたら絶対に使わない**\n- throw-pearl はエンダーパールを指定座標に投げてテレポート移動する。軌道計算・障害物回避は自動\n\n## ★★★ 絶対禁止事項 ★★★\n- **露出型クリスタルにtower-upやthrow-pearlを使わないこと**。露出型は地面から弓で射抜く。登るのは鉄格子型だけ\n- **move-toが失敗したらtower-upで代替しないこと**。別の地上の座標を再指定すること\n- **tower-up後にmove-toを使わないこと**。1ブロック幅の柱上でパスファインダーが動くと柱から落ちる\n- **高所でブロックを横に伸ばして移動しないこと**。エンダードラゴンに吹き飛ばされて落下死する。1つの鉄格子型クリスタルを破壊したら、必ず一旦地面に降りてから次のクリスタルへ向かう\n- **高所から別のクリスタルを弓で撃たないこと**。落下死リスクが高すぎる。必ず地面に降りてから射撃位置へ移動すること\n- **不要なブロック設置をしない**。tower-upは必要最小限の高さだけ行う\n\n## 手順\n\n### フェーズ1: 偵察・分類\n1. list-nearby-entities で end_crystal を全てリストアップ（maxDistance:128）。各IDと座標を記録\n2. **各クリスタルの座標付近に iron_bars があるか find-blocks で調べる**（blockName:\"iron_bars\", maxDistance:128）。iron_bars がある座標に近い(水平5m以内の)クリスタル＝鉄格子型、それ以外＝露出型。この分類結果を記憶して以降使う\n3. 弓と矢があるか check-inventory-item で確認。なければ剣で近接する\n4. **check-inventory-item で ender_pearl の個数を確認**。鉄格子型の数だけパールがあるのが理想（1柱につき1個）\n5. エンダーパールが不足している場合のみ、cobblestone/dirt/stone の個数を確認。tower-up用に64個以上必要。不足ならend_stoneを掘って確保\n\n### フェーズ2: 露出型クリスタルの破壊（地面から弓で射撃）\n露出型を全て先に処理する。鉄格子型は後回し。\n6. find-nearest-entity で最も近い**露出型**クリスタルの座標を取得\n7. **地面レベルで**射線が通る位置まで move-to で移動（柱のXZから15〜30m離れた地点、goalType:\"near\", range:20）。**柱の真下ではなく斜めから**\n8. shoot-bow で射撃（targetName:\"end_crystal\", count:1, chargeSeconds:1）\n9. **結果を確認**:\n   - 「X体破壊確認」→ 成功。次の露出型クリスタルへ\n   - 「破壊未確認」→ 同じ位置から再射撃（最大2回）\n   - 「blocked」→ 90度違う方角の地上に歩いて移動して再試行\n10. 3回失敗 → そのクリスタルは鉄格子型として再分類。次へ\n11. 全露出型を処理したら list-nearby-entities で残数確認\n\n### フェーズ3: 鉄格子型クリスタルの破壊（★エンダーパール優先★）\n12. find-nearest-entity で残りのクリスタル座標(CX, CY, CZ)を取得\n13. **エンダーパールが1個以上あるなら → パールで登る（推奨）**:\n    a. 地面レベルでクリスタルの柱から10〜20m離れた見通しの良い位置へ move-to で移動\n    b. **throw-pearl で柱頂上に飛ぶ**。目標座標は (CX, CY, CZ)（クリスタルの座標＝柱頂上の鉄格子の上）。パールが鉄格子の上に着弾してテレポートできる\n    c. テレポート後、get-position で高さを確認。クリスタルのY±3以内にいれば成功\n    d. dig-block-at で鉄格子（iron_bars）を1〜2個破壊してクリスタルへの経路を作る\n    e. attack-continuously でクリスタルを近接攻撃（maxAttacks:3, maxDistance:8）\n14. **エンダーパールがない場合 → tower-upで登る（フォールバック）**:\n    a. クリスタルのXZ座標の1ブロック隣（柱の壁のすぐ外側）へ地面レベルで move-to する\n    b. tower-up で柱に添わせて登る。高さは「クリスタルのY座標 - 2」まで\n    c. get-position で現在のY座標を確認。クリスタルのY-3〜Y+1の範囲にいなければ追加でtower-up\n    d. **tower-up後はmove-toを絶対に使わない**。その場でdig-block-atとattack-continuouslyだけ使う\n    e. dig-block-at で鉄格子を1〜2個破壊してクリスタルへの経路を作る\n    f. attack-continuously でクリスタルを近接攻撃（maxAttacks:3, maxDistance:8）\n15. list-nearby-entities で破壊を確認。次の鉄格子型クリスタルへ\n\n### フェーズ4: 完了確認\n16. list-nearby-entities で end_crystal が0個になったことを確認\n17. task-complete で破壊数を報告\n\n## 注意事項\n- **エンダーパールがあるなら鉄格子型は必ずパールで登ること**。tower-upよりはるかに速く、ブロック消費もなく、落下リスクも低い\n- **パールが失敗した場合**（着弾位置がずれた等）、get-positionで位置を確認し、地面にいるなら再試行。高所なら作業続行\n- **無駄な移動をしない**。射撃は1箇所から複数のクリスタルを狙えることが多い。移動は必要な時だけ\n- shoot-bow の結果を毎回確認。確認なしに次に進まない\n- **同じ位置から3回以上 blocked/miss を繰り返さない。位置を変えるか戦略を切り替える**\n- エンダードラゴンの突進に注意。攻撃を受けたら一旦退避\n- tower-up用のブロック不足時は dig-block-at でend_stoneを採掘して確保",
+  "tools": [
+    "list-nearby-entities",
+    "find-nearest-entity",
+    "find-blocks",
+    "move-to",
+    "tower-up",
+    "throw-pearl",
+    "dig-block-at",
+    "attack-continuously",
+    "shoot-bow",
+    "equip-item",
+    "get-position",
+    "check-inventory-item"
+  ],
+  "maxIterations": 30,
+  "model": "sonnet",
+  "failureEscalation": "system2",
+  "source": "manual",
+  "stats": {
+    "runs": 20,
+    "successes": 2,
+    "failures": 18,
+    "avgDurationMs": 98665
+  }
+}
