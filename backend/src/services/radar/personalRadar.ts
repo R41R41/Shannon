@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { requireCapability, type RequestContext } from '../../modules/access/index.js';
 import { audienceKey, eligibleContent, rankCandidates, timestamp, validId, type RadarAudience } from '../../modules/radar/content.js';
 import { createQuietCard } from '../../modules/radar/drafts.js';
@@ -9,6 +9,9 @@ import { snapshotSubscription, validFeedSubscription,
   type FeedRecord, type FeedRegistryPort, type FeedSubscription } from '../../modules/radar/sourceRegistry.js';
 import { articleUrl, feedUrl, type FeedConnectorPort } from './feedConnector.js';
 import { FeedCollector } from './collectFeed.js';
+
+import { AcquisitionError, acquisitionTime, assertAcquisitionLease, reserveAcquisition, releaseAcquisition, validAcquisitionState,
+  type AcquisitionPolicy, type AcquisitionState } from '../../modules/radar/acquisition.js';
 
 export class PersonalRadarError extends Error {
   constructor(readonly code: 'INVALID_INPUT' | 'CONFLICT' | 'NOT_FOUND' | 'LIMIT' | 'UNAVAILABLE' | 'CANCELLED') { super(code); }
@@ -55,7 +58,10 @@ export function checkedRecord(record: FeedRecord, source: FeedSubscription, now:
 
 /** No default repository/connector, app boot, automatic fetch, timer, publisher or Discord identity linking. */
 export class PersonalRadarService {
-  constructor(private readonly repository: PersonalCatalogPort, private readonly clock: () => number = Date.now) {}
+  private readonly collectionPolicy?: AcquisitionPolicy;
+  constructor(private readonly repository: PersonalCatalogPort, private readonly clock: () => number = Date.now, policy?: AcquisitionPolicy) {
+    this.collectionPolicy = policy ? Object.freeze({ ...policy }) : undefined;
+  }
   private async read(owner: string): Promise<PersonalCatalog> {
     const row = await this.repository.read(owner);
     if (!row) return { owner, revision: 0, sources: [], audit: [] };
@@ -66,18 +72,24 @@ export class PersonalRadarService {
       || row.sources.some(s => !validId(s.id) || !Array.isArray(s.records) || s.records.length > MAX_CATALOG_RECORDS
         || (s.source === null ? s.records.length !== 0 : s.source.id !== s.id || audienceKey(s.source.audience) !== audienceKey(personalAudience(owner)))))
       throw new PersonalRadarError('UNAVAILABLE');
+    if (row.acquisition !== undefined && !validAcquisitionState(row.acquisition)) throw new PersonalRadarError('UNAVAILABLE');
     return structuredClone(row);
   }
-  private async commit(context: RequestContext, current: PersonalCatalog, sources: PersonalCatalog['sources'], event: Omit<CatalogAudit, 'revision' | 'at'>, reauthorize: ReauthorizeRadar, signal?: AbortSignal) {
+  private async commit(context: RequestContext, current: PersonalCatalog, sources: PersonalCatalog['sources'], event: Omit<CatalogAudit, 'revision' | 'at'>, reauthorize: ReauthorizeRadar, signal?: AbortSignal, acquisition = current.acquisition, leaseId?: string) {
     if (personalRadarOwner(context, this.clock()) !== current.owner) throw new PersonalRadarError('UNAVAILABLE');
     if (typeof reauthorize !== 'function' || personalRadarOwner(await reauthorize(), this.clock()) !== current.owner)
       throw new PersonalRadarError('CONFLICT');
     personalRadarOwner(context, this.clock());
     if (signal?.aborted) throw new PersonalRadarError('CANCELLED');
+    const now = this.clock();
+    if (current.acquisition) acquisitionTime(current.acquisition, now);
+    if (leaseId) assertAcquisitionLease(current.acquisition, leaseId, now);
+    if (event.action === 'reserve') assertAcquisitionLease(acquisition, event.attemptId!, now);
     const affected = sources.find(s => s.id === event.sourceId)?.source;
-    if (event.action !== 'revoke' && (!affected || !validFeedSubscription({ ...affected, enabled: true }, personalAudience(current.owner), this.clock())))
+    if (!['revoke', 'maintain'].includes(event.action) && (!affected || !validFeedSubscription({ ...affected, enabled: true }, personalAudience(current.owner), this.clock())))
       throw new PersonalRadarError('CONFLICT');
     const next: PersonalCatalog = { owner: current.owner, revision: current.revision + 1, sources,
+      ...(acquisition ? { acquisition: { ...acquisition, observedAt: now } } : {}),
       audit: [...current.audit, { ...event, revision: current.revision + 1, at: this.clock() }].slice(-MAX_AUDIT_EVENTS) };
     if (!await this.repository.compareAndSwap(current.owner, current.revision, next)) throw new PersonalRadarError('CONFLICT');
     return { revision: next.revision };
@@ -124,32 +136,95 @@ export class PersonalRadarService {
     return this.commit(context, row, row.sources.map(s => s.id === id ? { id, source: null, records: [] } : s),
       { sourceId: id, action: 'revoke', added: 0, updated: 0, unchanged: 0 }, reauthorize);
   }
-  /** Internal explicit invocation only. HTTP has NO collect/refresh route. Rate reservation/lease is a later prerequisite. */
+  /** Internal only. A server-owned policy and a durable reservation are mandatory before connector I/O. */
   async collect(context: RequestContext, id: string, connector: FeedConnectorPort, signal: AbortSignal, reauthorize: ReauthorizeRadar) {
     const owner = personalRadarOwner(context, this.clock());
     if (typeof reauthorize !== 'function' || personalRadarOwner(await reauthorize(), this.clock()) !== owner)
       throw new PersonalRadarError('CONFLICT');
-    const row = await this.read(owner); const entry = row.sources.find(s => s.id === id);
-    if (!entry?.source || !validFeedSubscription(entry.source, personalAudience(owner), this.clock())) throw new PersonalRadarError('NOT_FOUND');
-    const source = snapshotSubscription(entry.source);
-    const registry: FeedRegistryPort = { get: async (sourceId, audience) => {
-      if (audienceKey(audience) !== audienceKey(personalAudience(owner))) return null;
-      const current = await this.read(owner);
-      return current.sources.find(s => s.id === sourceId)?.source ?? null;
-    } };
-    const result = await new FeedCollector(registry, connector, this.clock).collect(id, source.audience, signal);
-    if (signal.aborted || result.status === 'cancelled') throw new PersonalRadarError('CANCELLED');
-    if (result.status !== 'collected') throw new PersonalRadarError(result.status === 'denied' ? 'CONFLICT' : 'UNAVAILABLE');
-    const now = this.clock();
-    if (!validFeedSubscription(source, source.audience, now)) throw new PersonalRadarError('CONFLICT');
-    const incoming = result.records.map(r => checkedRecord(r, source, now));
-    if (new Set(incoming.map(r => r.provenance.entityKey)).size !== incoming.length) throw new PersonalRadarError('UNAVAILABLE');
-    const previous = entry.records.filter(r => r.content.expiresAt > now).map(r => checkedRecord(r, source, now));
-    const merged = mergeCatalog(previous, incoming, now);
     if (signal.aborted) throw new PersonalRadarError('CANCELLED');
-    // The initial aggregate revision fences concurrent collectors/configuration/revocation; no blind retry.
-    return this.commit(context, row, row.sources.map(s => s.id === id ? { id, source, records: merged.records } : s),
-      { sourceId: id, action: 'collect', added: merged.added, updated: merged.updated, unchanged: merged.unchanged }, reauthorize, signal);
+    if (!this.collectionPolicy) throw new PersonalRadarError('UNAVAILABLE');
+    const before = await this.read(owner); const entry = before.sources.find(s => s.id === id);
+    if (!entry?.source || !validFeedSubscription(entry.source, personalAudience(owner), this.clock())) throw new PersonalRadarError('NOT_FOUND');
+    const source = snapshotSubscription(entry.source); const startedAt = this.clock();
+    const lease = { id: randomUUID(), sourceId: id, sourceRevision: source.revision, startedAt,
+      expiresAt: Math.min(startedAt + this.collectionPolicy.leaseMs, source.consentExpiresAt, context.expiresAtMs) };
+    const acquisition = reserveAcquisition(before.acquisition, this.collectionPolicy, lease);
+    // An uncertain reservation write must never be followed by HTTP; leave it for explicit recovery.
+    const reservation = await this.commit(context, before, before.sources,
+      { sourceId: id, action: 'reserve', attemptId: lease.id, added: 0, updated: 0, unchanged: 0 }, reauthorize, signal, acquisition);
+    // Read the committed audit as well: completion cannot overwrite the reservation evidence.
+    let reserved: PersonalCatalog;
+    try {
+      reserved = await this.read(owner);
+      if (reserved.revision !== reservation.revision) throw new PersonalRadarError('CONFLICT');
+      assertAcquisitionLease(reserved.acquisition, lease.id, this.clock());
+      if (signal.aborted) throw new PersonalRadarError('CANCELLED');
+      const registry: FeedRegistryPort = { get: async (sourceId, audience) => {
+        if (audienceKey(audience) !== audienceKey(personalAudience(owner))) return null;
+        const current = await this.read(owner);
+        assertAcquisitionLease(current.acquisition, lease.id, this.clock());
+        if (current.revision !== reserved.revision) return null;
+        return current.sources.find(s => s.id === sourceId)?.source ?? null;
+      } };
+      const result = await withAcquisitionDeadline(
+        child => new FeedCollector(registry, connector, this.clock).collect(id, source.audience, child),
+        signal, lease.expiresAt - this.clock());
+      if (signal.aborted) throw new PersonalRadarError('CANCELLED');
+      personalRadarOwner(context, this.clock());
+      assertAcquisitionLease(reserved.acquisition, lease.id, this.clock());
+      if (result.status !== 'collected') throw new PersonalRadarError(result.status === 'denied' ? 'CONFLICT' : 'UNAVAILABLE');
+      const now = this.clock();
+      if (!validFeedSubscription(source, source.audience, now)) throw new PersonalRadarError('CONFLICT');
+      const incoming = result.records.map(r => checkedRecord(r, source, now));
+      if (new Set(incoming.map(r => r.provenance.entityKey)).size !== incoming.length) throw new PersonalRadarError('UNAVAILABLE');
+      const previous = entry.records.filter(r => r.content.expiresAt > now).map(r => checkedRecord(r, source, now));
+      const merged = mergeCatalog(previous, incoming, now);
+      return await this.commit(context, reserved, reserved.sources.map(s => s.id === id ? { id, source, records: merged.records } : s),
+        { sourceId: id, action: 'collect', attemptId: lease.id, added: merged.added, updated: merged.updated, unchanged: merged.unchanged },
+        reauthorize, signal, releaseAcquisition(reserved.acquisition!, now), lease.id);
+    } catch (error) {
+      // Best effort metadata-only settlement. No new authority, source content, refund, or automatic fetch retry.
+      // If settlement is unavailable/conflicted, the durable lease remains recoverable after expiry.
+      await this.settleFailed(owner, lease.id, signal.aborted ? 'cancelled' : error instanceof AcquisitionError && error.code === 'LEASE_EXPIRED'
+        ? 'expired' : error instanceof PersonalRadarError && error.code === 'CONFLICT' ? 'conflict' : 'failed').catch(() => undefined);
+      throw error;
+    }
+  }
+  private async settleFailed(owner: string, attemptId: string, outcome: NonNullable<CatalogAudit['outcome']>) {
+    const row = await this.read(owner); const state = row.acquisition;
+    if (!state?.lease || state.lease.id !== attemptId) return;
+    const now = this.clock(); const acquisition = releaseAcquisition(state, now);
+    const event: CatalogAudit = { sourceId: state.lease.sourceId, revision: row.revision + 1, at: now,
+      action: 'collect_failed', attemptId, outcome, added: 0, updated: 0, unchanged: 0 };
+    await this.repository.compareAndSwap(owner, row.revision, { ...row, revision: row.revision + 1,
+      acquisition, audit: [...row.audit, event].slice(-MAX_AUDIT_EVENTS) });
+  }
+  /** Explicit owner-scoped maintenance; no scan, timer, network, account enumeration or automatic retry.
+   * Keeps configuration/ID tombstones and budget history; never TTL-deletes the owner document.
+   */
+  async maintain(context: RequestContext, expected: number, reauthorize: ReauthorizeRadar) {
+    const owner = personalRadarOwner(context, this.clock());
+    if (!revision(expected)) throw new PersonalRadarError('INVALID_INPUT');
+    const row = await this.read(owner); const now = this.clock();
+    if (row.revision !== expected) throw new PersonalRadarError('CONFLICT');
+    if (row.acquisition) acquisitionTime(row.acquisition, now);
+    let removed = 0;
+    const sources = row.sources.map(entry => {
+      const records = entry.records.filter(r => entry.source && validFeedSubscription(entry.source, personalAudience(owner), now) && r.content.expiresAt > now);
+      removed += entry.records.length - records.length;
+      return { ...entry, records };
+    });
+    const recovered = !!row.acquisition?.lease && row.acquisition.lease.expiresAt <= now;
+    const acquisition = recovered ? releaseAcquisition(row.acquisition!, now) : row.acquisition;
+    if (!removed && !recovered) {
+      if (typeof reauthorize !== 'function' || personalRadarOwner(await reauthorize(), this.clock()) !== owner) throw new PersonalRadarError('CONFLICT');
+      await this.assertCurrent(context, expected);
+      return { revision: expected, removed: 0, recovered: false };
+    }
+    const result = await this.commit(context, row, sources, { sourceId: row.acquisition?.lease?.sourceId ?? 'catalog', action: 'maintain',
+      ...(recovered ? { attemptId: row.acquisition!.lease!.id, outcome: 'recovered' as const } : {}), removed, added: 0, updated: 0, unchanged: 0 },
+      reauthorize, undefined, acquisition);
+    return { ...result, removed, recovered };
   }
   async preview(context: RequestContext) {
     const owner = personalRadarOwner(context, this.clock()); const row = await this.read(owner);
@@ -174,4 +249,20 @@ export class PersonalRadarService {
     return { revision: row.revision, items, notify: false as const,
       validUntil: Math.min(context.expiresAtMs, ...entries.map(s => s.source!.consentExpiresAt), ...records.map(r => r.content.expiresAt)) };
   }
+}
+
+/** Bound even a connector that ignores cancellation. Late values have no persistence continuation. */
+async function withAcquisitionDeadline<T>(work: (signal: AbortSignal) => Promise<T>, outer: AbortSignal, remaining: number): Promise<T> {
+  if (outer.aborted) throw new PersonalRadarError('CANCELLED');
+  if (remaining <= 0) throw new AcquisitionError('LEASE_EXPIRED');
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let cancel: () => void = () => undefined;
+  const stopped = new Promise<never>((_, reject) => {
+    cancel = () => { controller.abort(); reject(new PersonalRadarError('CANCELLED')); };
+    outer.addEventListener('abort', cancel, { once: true });
+    timer = setTimeout(() => { controller.abort(); reject(new AcquisitionError('LEASE_EXPIRED')); }, remaining);
+  });
+  try { return await Promise.race([stopped, work(controller.signal)]); }
+  finally { clearTimeout(timer); outer.removeEventListener('abort', cancel); controller.abort(); }
 }

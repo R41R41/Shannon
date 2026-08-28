@@ -261,3 +261,49 @@ frontendの既存authテストを拡張し、DTO・URL・固定API・本人切�
 次は取得回数の原子的予約・lease/recovery、物理expiry purge/監査拡充を優先する。その後weather/calendar adapter、認証条件を満たしたdev統合、個人previewの実ソース評価、承認付きDiscordへ進む。全backendの通常型検査、実認証・通常DB migration、通知予算/outbox/全面撤回は未完。API未登録時は「準備中」と表示し、有効化のための迂回をしない。
 
 参考：[React useSyncExternalStore](https://react.dev/reference/react/useSyncExternalStore)、[Vite envDir](https://vite.dev/config/shared-options#envdir)。依存追加・更新なし。ローカル記録`SHANNON_RADAR_UI_2026-08-28.md`。
+
+## 13. RAD-1D — 取得回数予約・lease回復・本人限定expiry purge
+
+2026-08-29。devの内部部品として実装。HTTP/server/schedulerへの登録・通常DBへの適用・実ソース取得・本体起動・投稿は行わない。通知予算と取得回数の予算を混同しない。
+
+### 境界と初期の選択
+
+`modules/radar/acquisition.ts`はSDK非依存のpolicy/state/leaseと純粋な遷移を定義する。`PersonalRadarService`が認証・取得・catalog保存を調停し、`MongoPersonalCatalog`がowner文書単位のCASを行う。既存catalogにoptionalなversion:1のacquisition stateを追加し、設定/metadata/予算/直近監査を一緒に確定する。別collection間の原子性や新規transaction基盤を要求しない。
+
+これは無制限なqueue/outboxをowner文書へ足す設計ではない。保持するのは直近24時間の開始時刻（最大256件）、owner全体で1つのlease、固定policy、最後に確認した時刻だけ。source10件/墓標込み32ID/各20metadata、監査64件、文書1MiBの既存上限を維持する。reservationsも全体revisionを進めるため、画面の読み戻しと競合した場合は409になる。
+
+### 回数の予約と失敗時の扱い
+
+1. `collect`は現在の本人確認に加え、明示的なserver policyを必要とする。既定値なしは取得不可。policyはmaxPer24Hours（1〜256）、minimumIntervalMs（0〜24時間）、leaseMs（100ms〜60秒）。これは技術上限で、実際の運用頻度/同意/費用を決めたものではない。試験の間隔0を本番推奨値と扱わない。
+2. 同じownerの全sourceで回数を共有する。開始時刻からの直近24時間窓と最小間隔で判定し、日付が変わっても一斉リセットしない。設定変更・全source削除・別ID作成でも予算を保持する。他人のownerとは分離する。
+3. 最新catalog版を期待値に、予約時刻と一意のattempt ID/source版/期限をCAS保存する。同意・認証期限より長いleaseを作らない。失敗/キャンセル/HTTP前のクラッシュでも1回分として数え、返金しない。保存応答が不明ならconnectorへ進まず、残ったleaseを回復対象とする。
+4. Mongoはprimaryから読み、writeConcern majority＋j:trueでジャーナルへの書込み完了も要求する。write concern errorは成功扱いしない。これは実際の停電/ディスク喪失/replica failoverを検証した保証ではない。今回の実Mongo試験は単体4.4・journal有効の隔離fixtureのみ。
+5. policyを予約文書へ固定し、異なる設定のworker、壊れたstate、時計の巻き戻りは拒否する。実運用でのpolicy変更・全体の費用上限・provider横断予算・公平なsource別スケジューリングは後続。自動的なpolicy migrationやstate初期化を行わない。
+
+### 実行期限と回復
+
+予約後も版とlease ID/期限を読み直し、取得前後・保存前に照合する。connectorへAbortSignalを伝え、期限または取消で待機を終了する。取消を無視するconnectorの遅延応答にも、保存へ進む継続処理を残さない。元sourceの設定・同意、保存直前の再認証を引き続き必須とする。
+
+成功時はmetadataと成功監査、lease解放を同じCASで確定する。失敗時はそのattempt IDがまだ所有するleaseだけを、別の最新CASで解放し固定outcomeを記録する。後から戻った旧処理が新しいleaseや設定を消してはならない。失敗後の解放が競合/DBエラーになった場合はleaseを残し、期限後の明示回復に任せる。rawエラー・本文・URLを監査へ追加しない。
+
+`maintain(context, expectedRevision, reauthorize)`は現在の本人のownerだけを対象に、期限切れleaseを回復する。回復は取得を開始せず、使用済み回数を戻さない。その後の新しい取得は再度認証/同意/回数を確認して予約する。既存のsource設定/削除済みID/新しいleaseを古いsnapshotで上書きしない。
+
+保証するのは論理的な予約と保存の排他。停止したVM上の古いsocketや、取消を無視する外部処理の物理的な同時実行を全世界で止める保証ではない。DB write/認証の進行中I/Oを取り消す保証や、チェック直後の時刻変化をDB commitと完全同時にする保証もない。新しい予約/回復で版が進めば、旧版での保存は失敗する。自動job queue、worker supervisor、再認証情報の安全な受渡し、全owner回復は未実装。
+
+### 期限切れ候補の物理消去
+
+同じ`maintain`で、保持期限が切れたmetadataと、停止/同意期限切れsourceのmetadataをowner文書から除去する。設定と墓標、使用済み回数は残す。owner文書自体のTTL削除は行わない。内容を消した件数と、leaseを回復した場合のattempt IDだけを直近監査に記録する。変更なしは再認証と版の確認だけを行い、書き込みを増やさない。
+
+このpurgeは明示的な本人単位の部品。全ownerの走査、定期実行、DBバックアップ/全派生記憶/投稿済みカード/外部画面の消去ではない。失効を読取から隠すだけだったRAD-1Bに、明示呼出での物理消去を追加した段階である。実データに適用する前には対象・保持方針・運用主体の確認が必要。
+
+### 検証・導入・未完
+
+既存`radarPersonal.test.ts`を拡張し、policy境界、24時間窓、clock rollback、再設定/削除をまたぐ上限、8並行→connector1回、予約応答不明、取消/期限、旧処理の遅延、失敗解放の競合、再読後回復、本人限定purge、最終再認証直後の失効を検証する。従来の改ざん/撤回/本人分離試験は維持し、予約とoutcomeが加わったrevisionを反映する。
+
+既存Mongo probeは新しい予約契約に更新。loopback37029の新しい空DBで、8並行設定・取得・回復・purge、repository再生成後の予算保持、回復後も回数上限で拒否、他人の文書不変、metadata消去・墓標保持を検証する。正常停止までを証跡へ含める。通常27017へ書き込まず、過去のfixture/証跡を再利用しない。今回の保全先は`radar-acquisition-20260829`、ローカル記録は`SHANNON_RADAR_ACQUISITION_2026-08-29.md`。
+
+導入にはjournal利用可否、同じpolicy/コードのworkerだけが接続すること、既存stateを保持する移行・rollbackを確認する。旧RAD-1C以前の実行コードは未知のacquisition fieldを落とし得るため、新旧の混在運用をしない。依存更新・DB index/TTL追加なし。全backendの通常型検査は引き続き未完で、対象通常型検査とnoCheck変換を区別する。
+
+次は監査の保持/失敗試行記録とworker運用の設計、weather/calendarのread-only adapter、実認証条件を満たしたdev統合。本人画面/APIは未稼働、実ソース/費用/地域/Calendar scope/専用Bot/Discord承認先の未決事項を飛ばして接続しない。
+
+参考：[MongoDBの単一文書atomicity](https://www.mongodb.com/docs/manual/core/write-operations-atomicity/)、[write concernとjournal ACK](https://www.mongodb.com/docs/manual/reference/write-concern/)。

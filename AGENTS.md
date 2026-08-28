@@ -1,5 +1,9 @@
 # AGENTS.md
 
+## Radar RAD-1D（2026-08-29）の注意
+
+`docs/shannon-radar.md`13節。取得前にowner文書CASで回数とleaseを予約する。`PersonalRadarService.collect`は明示のserver policyなしでは拒否する。失敗/取消/応答不明も回数を返さず、設定変更/削除で予算を消さない。journal ACK前にconnectorへ進まない。期限切れleaseは本人を再確認した`maintain`で明示回復し、自動再取得しない。設定/版/leaseの最終確認を省略しない。`maintain`は期限切れmetadataだけを消し、設定/墓標/予算を保持。HTTP/server/scheduler未登録、通常DBへ適用しない。試験は別37029・新しい空DB・journal有効の架空fixtureだけで、終わったら正常停止。全owner走査・worker supervisor・外部provider全体の予算・課金予算・全監査/全面撤回は未完。通常の起動ロック・prod read-onlyを維持する。古い実行コードは追加したacquisition stateを落とす可能性があるため混在運用/無検証rollbackをしない。
+
 ## Radar RAD-1C（2026-08-28）の注意
 
 `docs/shannon-radar.md`12節。`/radar`の本人用source設定/非通知preview画面を追加。AgentProviderから分離し、session世代・User object・期限とcatalog版で表示を制限する。更新/ログアウト/タブ離脱/期限で表示とdraftを消去し、遅延応答で復活させない。保存後は版を照合して読み戻し、結果不明時に再試行しない。APIはserver未登録のまま。ブラウザ検証は明示的な`serve-radar-ui-fixture.cjs --isolated-fixture`のloopback専用・架空データ・in-memory repositoryだけで、Firebase/通常DB/実ソース/本体へ接続しない。利用後はfixtureとSSH tunnelを停止する。実認証のE2E・lease/予算予約・purge・weather/calendar・投稿は未完。prod read-only、ロック維持。以下は過去の段階。

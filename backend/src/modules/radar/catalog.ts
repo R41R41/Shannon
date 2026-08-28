@@ -1,4 +1,5 @@
 import type { FeedRecord, FeedSubscription } from './sourceRegistry.js';
+import type { AcquisitionState } from './acquisition.js';
 
 /** One bounded owner aggregate: configuration, latest metadata and audit commit together. */
 export interface CatalogSource {
@@ -11,7 +12,10 @@ export interface CatalogAudit {
   readonly revision: number;
   readonly at: number;
   readonly sourceId: string;
-  readonly action: 'configure' | 'revoke' | 'collect';
+  readonly action: 'configure' | 'revoke' | 'collect' | 'reserve' | 'collect_failed' | 'maintain';
+  readonly attemptId?: string;
+  readonly outcome?: 'failed' | 'cancelled' | 'expired' | 'conflict' | 'recovered';
+  readonly removed?: number;
   readonly added: number;
   readonly updated: number;
   readonly unchanged: number;
@@ -22,6 +26,8 @@ export interface PersonalCatalog {
   readonly sources: readonly CatalogSource[];
   /** Bounded recent history, not a complete/immutable compliance log. No titles, URLs or raw payload. */
   readonly audit: readonly CatalogAudit[];
+  /** Absent only for legacy, never-reserved owners. Not part of browser DTOs. */
+  readonly acquisition?: AcquisitionState;
 }
 export interface PersonalCatalogPort {
   read(owner: string): Promise<PersonalCatalog | null>;

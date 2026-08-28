@@ -28,7 +28,7 @@ async function main() {
     if (!['fixture-alice', 'fixture-bob'].includes(token)) throw new AccessError('UNAUTHENTICATED');
     return { projectId: 'isolated-ui-fixture', uid: token, email: 'synthetic@example.test', emailVerified: true, expiresAtMs: Date.now() + 3600000 };
   } }, { findByIdentity: async (projectId, uid) => ({ projectId, uid, name: 'Synthetic', email: 'synthetic@example.test', isAuthorized: true, isAdmin: false }) }, () => 'fixture-request');
-  const radar = new PersonalRadarService(store);
+  const radar = new PersonalRadarService(store, Date.now, { maxPer24Hours: 32, minimumIntervalMs: 0, leaseMs: 30000 });
   const alice = await access.authenticate('fixture-alice');
   const seeds = [
     ['game-news', '任天堂の新作情報をチェック', 'games'],
