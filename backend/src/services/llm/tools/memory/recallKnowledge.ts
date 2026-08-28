@@ -1,6 +1,6 @@
 import { StructuredTool } from '@langchain/core/tools';
 import { z } from 'zod';
-import { ShannonMemoryService } from '../../../memory/shannonMemoryService.js';
+import type { MemoryPort } from '../../../../modules/memory/index.js';
 
 export default class RecallKnowledgeTool extends StructuredTool {
   name = 'recall-knowledge';
@@ -17,19 +17,13 @@ export default class RecallKnowledgeTool extends StructuredTool {
       .describe('取得件数 (デフォルト5)'),
   });
 
-  private service: ShannonMemoryService;
-
-  constructor(service: ShannonMemoryService) {
-    super();
-    this.service = service;
-  }
+  private memoryPort?: MemoryPort;
+  createForRun(): RecallKnowledgeTool { return new RecallKnowledgeTool(); }
+  setMemoryPort(port: MemoryPort): void { this.memoryPort = port; }
 
   async _call(data: z.infer<typeof this.schema>): Promise<string> {
     try {
-      const results = await this.service.searchKnowledge(
-        data.query,
-        data.limit ?? 5,
-      );
+      const results = await this.memoryPort?.search('knowledge', data.query, data.limit ?? 5) ?? [];
 
       if (results.length === 0) {
         return 'その知識は持ってない…まだ学んでないかも。';

@@ -6,6 +6,7 @@
  * privacy filtering, and ranking/scoring.
  */
 
+import { deriveMemoryScope, memoryScopeFilter, canReadMemory } from '../../../modules/memory/index.js';
 import { ShannonMemory, IShannonMemory } from '../../../models/ShannonMemory.js';
 import { EmbeddingService } from '../embeddingService.js';
 import { PersonMemoryService } from '../personMemoryService.js';
@@ -65,28 +66,17 @@ export class RecallEngine {
   // ========== Person recall ==========
 
   async recallPerson(envelope: RequestEnvelope): Promise<IPersonMemory | null> {
-    const platform = this.scopeDeriver.channelToPlatform(envelope.channel);
-    const userId = envelope.sourceUserId;
-    if (!platform || !userId || userId === 'unknown') return null;
-
-    try {
-      return await this.personService.getOrCreate(
-        platform,
-        userId,
-        envelope.sourceDisplayName ?? 'Unknown',
-      );
-    } catch (err) {
-      logger.warn(`⚠ ScopedMemory: person recall failed: ${err}`);
-      return null;
-    }
+    // Legacy PersonMemory combines DM/public/other-channel exchanges. Quarantine until scoped migration.
+    return null;
   }
 
   // ========== Semantic search ==========
 
-  async semanticSearch(text: string): Promise<IShannonMemory[]> {
-    if (this.embeddingService.cacheSize <= 0) return [];
+  async semanticSearch(text: string, envelope?: RequestEnvelope): Promise<IShannonMemory[]> {
+    const scope = deriveMemoryScope(envelope);
+    if (!scope) return [];
     try {
-      const results = await this.embeddingService.search(text, SEMANTIC_TOP_K, SEMANTIC_RANDOM_N);
+      const results = await this.embeddingService.search(text, SEMANTIC_TOP_K, SEMANTIC_RANDOM_N, undefined, scope);
       return results.filter(
         (mem) => mem.category === 'experience' || mem.category === 'knowledge',
       );
@@ -99,11 +89,13 @@ export class RecallEngine {
   // ========== Tag-based search ==========
 
   async searchByTags(envelope: RequestEnvelope, text: string): Promise<IShannonMemory[]> {
+    const scope = deriveMemoryScope(envelope);
+    if (!scope) return [];
     const scopeTags = this.scopeDeriver.deriveScopeTags(envelope);
-    if (scopeTags.length === 0) return [];
 
     try {
       return await ShannonMemory.find({
+        ...memoryScopeFilter(scope),
         category: { $in: ['experience', 'knowledge'] },
         $or: [
           { channelTags: { $in: scopeTags } },
@@ -123,10 +115,12 @@ export class RecallEngine {
 
   // ========== Self-model recall ==========
 
-  async recallSelfModel(): Promise<ShannonSelfModel | null> {
+  async recallSelfModel(envelope?: RequestEnvelope): Promise<ShannonSelfModel | null> {
+    const scope = deriveMemoryScope(envelope);
+    if (!scope) return null;
     const doc = await ShannonMemory.findOne({
       category: 'self_model',
-      visibilityScope: 'self_model',
+      ...memoryScopeFilter(scope),
     })
       .sort({ createdAt: -1 })
       .lean();
@@ -160,7 +154,10 @@ export class RecallEngine {
     canonicalUserId: string,
     scopeTags: string[],
   ): Promise<StrategyUpdate[]> {
+    const scope = deriveMemoryScope(envelope);
+    if (!scope) return [];
     const docs = await ShannonMemory.find({
+      ...memoryScopeFilter(scope),
       category: 'strategy_update',
       $or: [
         { ownerUserId: canonicalUserId },
@@ -191,10 +188,12 @@ export class RecallEngine {
 
   // ========== Internal state recall ==========
 
-  async recallInternalState(): Promise<InternalState | null> {
+  async recallInternalState(envelope?: RequestEnvelope): Promise<InternalState | null> {
+    const scope = deriveMemoryScope(envelope);
+    if (!scope) return null;
     const doc = await ShannonMemory.findOne({
       category: 'internal_state_snapshot',
-      visibilityScope: 'self_model',
+      ...memoryScopeFilter(scope),
     })
       .sort({ createdAt: -1 })
       .lean();
@@ -228,7 +227,10 @@ export class RecallEngine {
     envelope: RequestEnvelope,
     scopeTags: string[],
   ): Promise<WorldModelPattern[]> {
+    const scope = deriveMemoryScope(envelope);
+    if (!scope) return [];
     const docs = await ShannonMemory.find({
+      ...memoryScopeFilter(scope),
       category: 'world_pattern',
       $or: [
         { generalized: true },
@@ -264,32 +266,8 @@ export class RecallEngine {
     _channel: ShannonChannel,
     envelope: RequestEnvelope,
   ): IShannonMemory[] {
-    const scopeTags = new Set(this.scopeDeriver.deriveScopeTags(envelope));
-
-    return memories.filter((mem) => {
-      const scope = mem.visibilityScope ?? 'shared_channel';
-
-      switch (scope) {
-        case 'private_user':
-          return mem.ownerUserId === currentUserId;
-
-        case 'shared_world':
-          return !mem.worldTags?.length || mem.worldTags.some((t) => scopeTags.has(t));
-
-        case 'shared_project':
-          return !mem.projectTags?.length || mem.projectTags.some((t) => scopeTags.has(t));
-
-        case 'shared_channel':
-          return !mem.channelTags?.length || mem.channelTags.some((t) => scopeTags.has(t));
-
-        case 'global_generalized':
-        case 'self_model':
-          return true;
-
-        default:
-          return true;
-      }
-    });
+    const scope = deriveMemoryScope(envelope);
+    return memories.filter(memory => canReadMemory(scope, memory));
   }
 
   // ========== Ranking ==========
@@ -337,14 +315,7 @@ export class RecallEngine {
   // ========== Helpers ==========
 
   resolveCanonicalUserId(envelope: RequestEnvelope): string {
-    const platform = this.scopeDeriver.channelToPlatform(envelope.channel);
-    const userId = envelope.sourceUserId;
-    if (!platform || !userId || userId === 'unknown') return 'unknown';
-    return this.personService.resolveCanonicalPersonId(
-      platform,
-      userId,
-      envelope.sourceDisplayName ?? undefined,
-    );
+    return deriveMemoryScope(envelope)?.ownerUserId ?? 'unknown';
   }
 
   toUserProfile(person: IPersonMemory | null): UserProfileSnapshot | null {

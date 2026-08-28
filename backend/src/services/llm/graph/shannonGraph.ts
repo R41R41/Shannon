@@ -1,3 +1,4 @@
+import { bindRequestMemory, snapshotMemoryEnvelope } from '../../memory/requestMemory.js';
 /**
  * Shannon Unified Graph — 3ノード簡素化版
  *
@@ -122,12 +123,13 @@ function createExecuteNode(
   return async function executeFn(state: ShannonStateType): Promise<Partial<ShannonStateType>> {
     state._abortSignal?.throwIfAborted();
     const envelope = state.envelope;
+    const memoryEnvelope = snapshotMemoryEnvelope(envelope);
     const context = envelopeToTaskContext(envelope);
     const emotionState: EmotionState = state._emotionState ?? { current: state.emotion ?? null };
 
     const fcaState = {
       taskId: envelope.requestId,
-      requestEnvelope: envelope,
+      requestEnvelope: memoryEnvelope,
       userMessage: envelope.text ?? null,
       messages: state._legacyMessages,
       emotionState,
@@ -180,7 +182,7 @@ function createExecuteNode(
         const episode = TaskEpisodeMemory.buildEpisodeFromResult(
           goal, platform, agentResult.taskTree, startTime, 0,
         );
-        TaskEpisodeMemory.getInstance().saveEpisode(episode).catch(() => {});
+        TaskEpisodeMemory.getInstance().saveEpisode(episode, memoryEnvelope).catch(() => {});
       } catch { /* ignore */ }
 
       return {
@@ -252,6 +254,7 @@ function createExecuteNode(
 
         // A fresh context-bearing tool set for this executor invocation.
         const runTools = fca.createToolsForRun();
+        bindRequestMemory(runTools, memoryEnvelope);
         // FCA 登録済みツールを Anthropic 形式に変換
         for (const tool of runTools) {
           // routine:xxx は既に routine-xxx として追加済み、manage-routine / task-complete も追加済み

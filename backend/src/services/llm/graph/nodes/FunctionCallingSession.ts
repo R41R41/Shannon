@@ -1,3 +1,4 @@
+import { bindRequestMemory, snapshotMemoryEnvelope } from '../../../memory/requestMemory.js';
 import { selectAllowedTools } from '../../../../modules/access/toolSelection.js';
 import {
     AIMessage,
@@ -335,6 +336,8 @@ export class FunctionCallingSession {
         lastAssistantContent?: string;
     }> {
         signal?.throwIfAborted();
+        state = { ...state, requestEnvelope: state.requestEnvelope ? snapshotMemoryEnvelope(state.requestEnvelope) : undefined };
+        bindRequestMemory(this.tools, state.requestEnvelope);
         const startTime = Date.now();
         const goal = state.userMessage || 'Unknown task';
         const isEmergency = state.isEmergency || false;
@@ -465,6 +468,7 @@ export class FunctionCallingSession {
                         const episodes = await episodeMemory.recallRelevantEpisodes(
                             goal,
                             state.context?.platform ?? 'unknown',
+                            state.requestEnvelope,
                         );
                         return episodeMemory.formatForPrompt(episodes) || null;
                     } catch { }

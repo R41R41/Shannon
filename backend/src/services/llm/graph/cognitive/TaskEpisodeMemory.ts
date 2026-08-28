@@ -1,3 +1,4 @@
+import { deriveMemoryScope, memoryScopeFilter } from '../../../../modules/memory/index.js';
 /**
  * TaskEpisodeMemory — 海馬（Hippocampus）
  *
@@ -13,7 +14,7 @@
 import { ShannonMemoryService } from '../../../memory/shannonMemoryService.js';
 import { ShannonMemory, IShannonMemory } from '../../../../models/ShannonMemory.js';
 import { logger } from '../../../../utils/logger.js';
-import type { TaskTreeState } from '@shannon/common';
+import type { TaskTreeState, RequestEnvelope } from '@shannon/common';
 
 export interface TaskEpisode {
     goal: string;
@@ -48,7 +49,9 @@ export class TaskEpisodeMemory {
     /**
      * タスク完了後にエピソードを保存する。
      */
-    async saveEpisode(episode: TaskEpisode): Promise<void> {
+    async saveEpisode(episode: TaskEpisode, envelope?: RequestEnvelope): Promise<void> {
+        const scope = deriveMemoryScope(envelope);
+        if (!scope) return;
         try {
             const tags = [
                 EPISODE_TAG,
@@ -65,7 +68,7 @@ export class TaskEpisodeMemory {
                 source: 'task_episode_memory',
                 importance: episode.success ? 5 : 7, // failures are more important to remember
                 tags,
-            });
+            }, scope);
 
             logger.info(
                 `🧠 TaskEpisodeMemory: エピソード保存 [${episode.success ? '成功' : '失敗'}] "${episode.goal.substring(0, 50)}"`,
@@ -82,12 +85,16 @@ export class TaskEpisodeMemory {
     async recallRelevantEpisodes(
         goal: string,
         platform: string,
+        envelope?: RequestEnvelope,
     ): Promise<TaskEpisode[]> {
+        const scope = deriveMemoryScope(envelope);
+        if (!scope) return [];
         try {
             const keywords = this.extractGoalKeywords(goal);
             if (keywords.length === 0) return [];
 
             const query: Record<string, unknown> = {
+                ...memoryScopeFilter(scope),
                 category: 'knowledge',
                 tags: { $all: [EPISODE_TAG], $in: keywords },
             };

@@ -78,6 +78,9 @@ export interface IShannonMemory {
   relatedPersonId?: Types.ObjectId;
   createdAt: Date;
 
+  scopeVersion?: number;
+  scopeKey?: string;
+
   // Scoped memory fields (Phase 1 migration)
   visibilityScope?: 'private_user' | 'shared_project' | 'shared_channel' | 'shared_world' | 'global_generalized' | 'self_model';
   ownerUserId?: string;
@@ -116,11 +119,13 @@ const ShannonMemorySchema = new Schema<IShannonMemory>({
   relatedPersonId: { type: Schema.Types.ObjectId, ref: 'PersonMemory' },
   createdAt: { type: Date, default: Date.now },
 
+  // No defaults: pre-migration documents remain quarantined.
+  scopeVersion: { type: Number },
+  scopeKey: { type: String },
   // Scoped memory fields (Phase 1 migration)
   visibilityScope: {
     type: String,
     enum: ['private_user', 'shared_project', 'shared_channel', 'shared_world', 'global_generalized', 'self_model'],
-    default: 'shared_channel',
   },
   ownerUserId: { type: String },
   worldTags: { type: [String], default: [] },
@@ -196,6 +201,8 @@ const ShannonMemorySchema = new Schema<IShannonMemory>({
 
 // カテゴリ + 重要度 + 日時 で検索・eviction
 ShannonMemorySchema.index({ category: 1, importance: -1, createdAt: -1 });
+
+ShannonMemorySchema.index({ scopeVersion: 1, scopeKey: 1, category: 1, createdAt: -1 });
 
 // tags での検索用
 ShannonMemorySchema.index({ tags: 1 });

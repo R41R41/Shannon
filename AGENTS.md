@@ -66,3 +66,7 @@ Node22.21.1を `bash scripts/with-dev-node.sh` で使用。native probe、158 ba
 最新のdev実装は `docs/refactor-execution-sessions.md` とNotion 08の15節。第1段階の実行順序・中断管理に続き、共有FCAを登録用catalogと1回限りのsessionへ分離した。状態付きツールは `createForRun()` で生成し、共有agentへMemoryAgent/blackboardを注入しない。ParallelExecutorにはgraphからcanonical requestEnvelopeを明示する。
 
 VM devでbackend207＋frontend18＝225テスト、対象型検査・common/frontend build・native probe合格。backend全体はnoCheck変換のみ。本番ファイル/設定/プロセス不変、env/DB変更・live起動・push・deployなし。DB記憶検索のscope、旧memoryツール、Webの一斉配信、全チャネル宛先認可は未完。public chat停止と起動ロックを維持する。Halcyonは音楽Botで対象外、新しいテストBotは未作成。
+
+### RF-03の記憶scope（第3段階）
+
+`docs/refactor-memory-scope.md` とNotion 08の16節を参照。scopeVersion/keyのある新規記憶だけを同じ範囲で検索・保存する。旧人物記憶・旧pending queue・範囲不明データを勝手に再分類しない。現行Minebot入力には固定server/world IDがなく長期記憶は拒否、Web等もaudience未配線のため拒否。MemoryNodeは互換空実装。`check:memory-integration` は記憶サービスの通常型検査。全グラフ完全型検査・実DB移行・実API検証は未完。prod読み取りのみ、起動ロック維持。

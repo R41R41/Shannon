@@ -1,20 +1,12 @@
+import { hasMemoryScope, memoryScopeFilter, type MemoryScope } from '../../modules/memory/index.js';
 import OpenAI from 'openai';
 import { Types } from 'mongoose';
 import { ShannonMemory, IShannonMemory, MemoryCategory } from '../../models/ShannonMemory.js';
 import { config } from '../../config/env.js';
-import { logger } from '../../utils/logger.js';
 
 const EMBEDDING_MODEL = 'text-embedding-3-small';
 const EMBEDDING_DIMENSIONS = 1536;
 const MIN_SIMILARITY_THRESHOLD = 0.3;
-
-interface CachedMemory {
-  id: string;
-  embedding: number[];
-  category: MemoryCategory;
-  content: string;
-  importance: number;
-}
 
 export interface SemanticSearchResult {
   memory: IShannonMemory;
@@ -24,14 +16,13 @@ export interface SemanticSearchResult {
 /**
  * EmbeddingService
  *
- * OpenAI embedding の生成、インメモリキャッシュ、cosine similarity 検索を提供。
- * ShannonMemory (max 800件) の embedding をメモリ上にキャッシュし、
- * クエリ文の embedding との cosine similarity で高速検索する。
+ * Embedding generation and scope-first semantic search.
+ * Candidate vectors come from a scoped Mongo query before ranking/random sampling.
+ * Old cache lifecycle methods remain as no-ops for existing bootstrap callers.
  */
 export class EmbeddingService {
   private static instance: EmbeddingService;
   private openai: OpenAI;
-  private cache: Map<string, CachedMemory> = new Map();
   private initialized = false;
 
   private constructor() {
@@ -55,23 +46,7 @@ export class EmbeddingService {
    * 起動時に全 ShannonMemory の embedding をロード
    */
   async loadCache(): Promise<void> {
-    const memories = await ShannonMemory.find({ embedding: { $exists: true, $ne: [] } })
-      .select('+embedding')
-      .lean();
-
-    this.cache.clear();
-    for (const mem of memories) {
-      if (mem.embedding && mem.embedding.length === EMBEDDING_DIMENSIONS) {
-        this.cache.set(mem._id.toString(), {
-          id: mem._id.toString(),
-          embedding: mem.embedding,
-          category: mem.category,
-          content: mem.content,
-          importance: mem.importance,
-        });
-      }
-    }
-    logger.info(`🧠 EmbeddingService: キャッシュロード完了 (${this.cache.size}件)`);
+    // Compatibility no-op: searches read authorized candidates directly.
   }
 
   /**
@@ -105,20 +80,14 @@ export class EmbeddingService {
    * キャッシュにエントリを追加/更新
    */
   updateCache(memoryId: Types.ObjectId, embedding: number[], category: MemoryCategory, content: string, importance: number): void {
-    this.cache.set(memoryId.toString(), {
-      id: memoryId.toString(),
-      embedding,
-      category,
-      content,
-      importance,
-    });
+    // Search always reads scoped candidates from Mongo; do not retain a global content cache.
   }
 
   /**
    * キャッシュからエントリを削除
    */
   removeFromCache(memoryId: string): void {
-    this.cache.delete(memoryId);
+    // No shared cache.
   }
 
   /**
@@ -134,17 +103,26 @@ export class EmbeddingService {
     topK: number = 5,
     randomN: number = 2,
     category?: MemoryCategory,
+    scope?: MemoryScope | null,
   ): Promise<IShannonMemory[]> {
-    if (this.cache.size === 0) return [];
+    if (!hasMemoryScope(scope)) return [];
+    const candidates = await ShannonMemory.find({ ...memoryScopeFilter(scope),
+      ...(category ? { category } : { category: { $in: ['experience', 'knowledge'] } }),
+      embedding: { $exists: true, $ne: [] },
+    }).select('+embedding').lean();
+    if (candidates.length === 0) return [];
+    topK = Number.isFinite(topK) ? Math.max(0, Math.min(20, Math.floor(topK))) : 5;
+    randomN = Number.isFinite(randomN) ? Math.max(0, Math.min(5, Math.floor(randomN))) : 0;
 
     const queryEmbedding = await this.generateEmbedding(query);
 
     const scored: { id: string; similarity: number }[] = [];
-    for (const [, entry] of this.cache) {
+    for (const entry of candidates) {
+      if (!entry.embedding || entry.embedding.length !== queryEmbedding.length) continue;
       if (category && entry.category !== category) continue;
       const sim = cosineSimilarity(queryEmbedding, entry.embedding);
       if (sim >= MIN_SIMILARITY_THRESHOLD) {
-        scored.push({ id: entry.id, similarity: sim });
+        scored.push({ id: entry._id.toString(), similarity: sim });
       }
     }
 
@@ -166,7 +144,7 @@ export class EmbeddingService {
     if (allIds.length === 0) return [];
 
     const objectIds = allIds.map((id) => new Types.ObjectId(id));
-    const memories = await ShannonMemory.find({ _id: { $in: objectIds } }).lean();
+    const memories = await ShannonMemory.find({ ...memoryScopeFilter(scope), _id: { $in: objectIds } }).lean();
 
     const idOrder = new Map(allIds.map((id, i) => [id, i]));
     memories.sort((a, b) => (idOrder.get(a._id.toString()) ?? 0) - (idOrder.get(b._id.toString()) ?? 0));
@@ -175,7 +153,7 @@ export class EmbeddingService {
   }
 
   get cacheSize(): number {
-    return this.cache.size;
+    return 0;
   }
 }
 

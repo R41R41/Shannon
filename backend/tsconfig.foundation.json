@@ -14,6 +14,7 @@
   "include": [
     "src/modules/access/**/*.ts",
     "src/modules/modelSettings/**/*.ts",
-    "src/modules/execution/**/*.ts"
+    "src/modules/execution/**/*.ts",
+    "src/modules/memory/**/*.ts"
   ]
 }

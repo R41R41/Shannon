@@ -1,3 +1,5 @@
+import { snapshotMemoryEnvelope } from '../requestMemory.js';
+import { deriveMemoryScope, memoryScopeFilter } from '../../../modules/memory/index.js';
 /**
  * AutonomyUpdater
  *
@@ -81,14 +83,14 @@ export class AutonomyUpdater {
     envelope: RequestEnvelope,
     conversationText: string,
   ): Promise<void> {
-    if (!conversationText.trim()) return;
+    envelope = snapshotMemoryEnvelope(envelope);
+    if (!conversationText.trim() || !deriveMemoryScope(envelope)) return;
 
     const analysis = await this.analyzeAutonomyUpdates(envelope, conversationText);
     if (!analysis) return;
 
     await Promise.allSettled([
-      this.applyRelationshipUpdates(envelope, analysis.relationship),
-      this.applySelfModelUpdates(analysis),
+      this.applySelfModelUpdates(envelope, analysis),
       this.applyStrategyUpdates(envelope, analysis.strategyUpdates ?? []),
       this.applyInternalStateUpdate(envelope, analysis.internalState),
       this.applyWorldPatternUpdates(envelope, analysis.worldPatterns ?? []),
@@ -174,10 +176,12 @@ ${conversationText}`;
     await record.save();
   }
 
-  private async applySelfModelUpdates(analysis: AutonomyUpdateAnalysis): Promise<void> {
+  private async applySelfModelUpdates(envelope: RequestEnvelope, analysis: AutonomyUpdateAnalysis): Promise<void> {
+    const scope = deriveMemoryScope(envelope);
+    if (!scope) return;
     const existing = await ShannonMemory.findOne({
       category: 'self_model',
-      visibilityScope: 'self_model',
+      ...memoryScopeFilter(scope),
     }).sort({ createdAt: -1 });
 
     const baseSelfModel = existing?.selfModelData ?? {
@@ -233,8 +237,8 @@ ${conversationText}`;
       source: 'autonomy_updater',
       importance: 8,
       tags: ['self_model', 'autonomy'],
-      visibilityScope: 'self_model' as const,
-      generalized: true,
+      ...scope,
+      generalized: false,
       selfModelData: {
         stableIdentity: baseSelfModel.stableIdentity,
         capabilities: {
@@ -262,7 +266,9 @@ ${conversationText}`;
     envelope: RequestEnvelope,
     strategyUpdates: NonNullable<AutonomyUpdateAnalysis['strategyUpdates']>,
   ): Promise<void> {
-    const ownerUserId = this.resolveCanonicalUserId(envelope);
+    const scope = deriveMemoryScope(envelope);
+    if (!scope) return;
+    const ownerUserId = scope.ownerUserId;
     const channelTags = this.scopeDeriver.deriveChannelTags(envelope);
     const worldTags = this.scopeDeriver.deriveWorldTags(envelope);
     const projectTags = this.scopeDeriver.deriveProjectTags(envelope);
@@ -270,6 +276,7 @@ ${conversationText}`;
     for (const strategy of strategyUpdates) {
       const content = `${strategy.basedOnFailure}: ${strategy.newStrategy}`;
       const existing = await ShannonMemory.findOne({
+        ...memoryScopeFilter(scope),
         category: 'strategy_update',
         content,
       });
@@ -280,12 +287,12 @@ ${conversationText}`;
         source: 'autonomy_updater',
         importance: 7,
         tags: ['strategy_update', strategy.basedOnFailure, ...strategy.appliesToModes],
-        visibilityScope: 'self_model' as const,
+        ...scope,
         ownerUserId: ownerUserId !== 'unknown' ? ownerUserId : undefined,
         channelTags,
         worldTags,
         projectTags,
-        generalized: strategy.confidence >= 0.8,
+        generalized: false,
         strategyUpdateData: {
           id: crypto.randomUUID(),
           basedOnFailure: strategy.basedOnFailure,
@@ -312,6 +319,8 @@ ${conversationText}`;
     envelope: RequestEnvelope,
     internalState?: AutonomyUpdateAnalysis['internalState'],
   ): Promise<void> {
+    const scope = deriveMemoryScope(envelope);
+    if (!scope) return;
     if (!internalState) return;
     await ShannonMemory.create({
       category: 'internal_state_snapshot',
@@ -319,7 +328,7 @@ ${conversationText}`;
       source: 'autonomy_updater',
       importance: 6,
       tags: ['internal_state', envelope.channel],
-      visibilityScope: 'self_model',
+      ...scope,
       generalized: false,
       internalStateSnapshot: {
         curiosity: internalState.curiosity,
@@ -339,12 +348,15 @@ ${conversationText}`;
     envelope: RequestEnvelope,
     worldPatterns: NonNullable<AutonomyUpdateAnalysis['worldPatterns']>,
   ): Promise<void> {
+    const scope = deriveMemoryScope(envelope);
+    if (!scope) return;
     const channelTags = this.scopeDeriver.deriveChannelTags(envelope);
     const worldTags = this.scopeDeriver.deriveWorldTags(envelope);
     const projectTags = this.scopeDeriver.deriveProjectTags(envelope);
 
     for (const pattern of worldPatterns) {
       const existing = await ShannonMemory.findOne({
+        ...memoryScopeFilter(scope),
         category: 'world_pattern',
         content: pattern.pattern,
       });
@@ -355,11 +367,11 @@ ${conversationText}`;
         source: 'autonomy_updater',
         importance: 6,
         tags: ['world_pattern', pattern.domain, ...(pattern.applicability ?? [])],
-        visibilityScope: envelope.channel === 'minecraft' ? 'shared_world' as const : 'shared_channel' as const,
+        ...scope,
         channelTags,
         worldTags,
         projectTags,
-        generalized: pattern.confidence >= 0.85,
+        generalized: false,
         worldPatternData: {
           id: crypto.randomUUID(),
           domain: pattern.domain,

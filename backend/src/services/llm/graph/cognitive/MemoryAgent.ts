@@ -2,12 +2,11 @@ import { ChatOpenAI } from '@langchain/openai';
 import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import { config } from '../../../../config/env.js';
 import { logger } from '../../../../utils/logger.js';
-import { ShannonMemoryService } from '../../../memory/shannonMemoryService.js';
-import { PersonMemoryService } from '../../../memory/personMemoryService.js';
+import { createRequestMemory } from '../../../memory/requestMemory.js';
+import type { MemoryPort, MemorySaveResult } from '../../../../modules/memory/index.js';
 import { createTracedModel } from '../../utils/langfuse.js';
 import { CognitiveBlackboard } from './CognitiveBlackboard.js';
 import type { RequestEnvelope } from '@shannon/common';
-import type { ExecutionResult } from '../types.js';
 
 /**
  * MemoryAgent — 海馬 (Hippocampus) に相当する記憶プロセス。
@@ -57,8 +56,7 @@ export interface QueryContext {
 export class MemoryAgent {
     private blackboard: CognitiveBlackboard;
     private envelope: RequestEnvelope;
-    private shannonMemory: ShannonMemoryService;
-    private personMemory: PersonMemoryService;
+    private memory: MemoryPort;
     private model: ChatOpenAI;
     private stopped = false;
     private lastCheckedIteration = 0;
@@ -66,8 +64,7 @@ export class MemoryAgent {
     constructor(blackboard: CognitiveBlackboard, envelope: RequestEnvelope) {
         this.blackboard = blackboard;
         this.envelope = envelope;
-        this.shannonMemory = ShannonMemoryService.getInstance();
-        this.personMemory = PersonMemoryService.getInstance();
+        this.memory = createRequestMemory(envelope);
         this.model = createTracedModel({
             modelName: 'gpt-4.1-mini',
             apiKey: config.openaiApiKey,
@@ -84,25 +81,11 @@ export class MemoryAgent {
         try {
             const parts: string[] = [];
 
-            // 人物情報
-            if (this.envelope.sourceUserId) {
-                try {
-                    const memPlatform: import('../../../../models/PersonMemory.js').MemoryPlatform =
-                        this.envelope.channel === 'minecraft' ? 'minebot' : 'discord';
-                    const person = await this.personMemory.lookupByName(
-                        memPlatform,
-                        this.envelope.sourceDisplayName || this.envelope.sourceUserId,
-                    );
-                    if (person) {
-                        parts.push(`【ユーザー情報】${person.displayName}: ${person.notes || ''}`);
-                    }
-                } catch { /* person memory optional */ }
-            }
-
+            // Unscoped person histories are quarantined.
             // 目標に関連する記憶を検索
             const [experiences, knowledge] = await Promise.all([
-                this.shannonMemory.searchExperiences(goal, 3).catch(() => []),
-                this.shannonMemory.searchKnowledge(goal, 3).catch(() => []),
+                this.memory.search('experience', goal, 3).catch(() => []),
+                this.memory.search('knowledge', goal, 3).catch(() => []),
             ]);
 
             if (experiences.length > 0) {
@@ -133,8 +116,8 @@ export class MemoryAgent {
         try {
             // DB 検索
             const [experiences, knowledge] = await Promise.all([
-                this.shannonMemory.searchExperiences(question, 5).catch(() => []),
-                this.shannonMemory.searchKnowledge(question, 5).catch(() => []),
+                this.memory.search('experience', question, 5).catch(() => []),
+                this.memory.search('knowledge', question, 5).catch(() => []),
             ]);
 
             const allResults = [
@@ -165,19 +148,17 @@ export class MemoryAgent {
 
     // ── C. 強制保存 (save-memory ツール経由) ──
 
-    async save(content: string, importance?: number): Promise<void> {
+    async save(content: string, importance?: number): Promise<MemorySaveResult> {
         try {
-            const source = this.envelope.channel === 'minecraft' ? 'minebot' : this.envelope.channel;
-            await this.shannonMemory.saveWithDedup({
+            return await this.memory.save({
                 content,
                 category: 'knowledge',
-                source,
                 importance: importance ?? 5,
                 tags: this.buildTags(content),
             });
-            logger.info(`[MemoryAgent] 💾 強制保存: ${content.substring(0, 80)}`);
         } catch (error) {
             logger.error('[MemoryAgent] save error:', error);
+            return { saved: false, message: '記憶の保存に失敗しました。' };
         }
     }
 
@@ -239,15 +220,13 @@ export class MemoryAgent {
             if (!match) return;
 
             const items = JSON.parse(match[0]) as Array<{ content: string; tags?: string[]; importance?: number }>;
-            const source = this.envelope.channel === 'minecraft' ? 'minebot' : this.envelope.channel;
 
             for (const item of items) {
                 if (!item.content) continue;
-                await this.shannonMemory.saveWithDedup({
+                await this.memory.save({
                     content: item.content,
                     category: 'knowledge',
-                    source,
-                    importance: item.importance ?? 5,
+                        importance: item.importance ?? 5,
                     tags: item.tags ?? this.buildTags(item.content),
                 });
                 logger.info(`[MemoryAgent] 💾 自律保存: ${item.content.substring(0, 80)}`);
@@ -263,11 +242,7 @@ export class MemoryAgent {
         // 最終チェック
         await this.checkAndSave();
 
-        // 圧縮 (将来: 記憶の整理・統合をここで実行)
-        // 現時点では既存の consolidateOldMemories を呼ぶ
-        try {
-            await this.shannonMemory.consolidateMemories?.();
-        } catch { /* optional */ }
+        // Consolidation is a separately scoped maintenance operation.
     }
 
     // ── ヘルパー ──

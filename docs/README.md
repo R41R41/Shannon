@@ -52,3 +52,5 @@
 - [Notionの現行設計](https://www.notion.so/3ca1e84762888170816ee73f25c40ce3)：段階的な責務分離。
 
 - [R0リリース準備・追加検証（2026-08-28）](r0-release-readiness.md)
+
+- [RF-03：記憶scope・検索前制限](./refactor-memory-scope.md)（2026-08-28）：新旧ツールの共通port、旧データ隔離、意図的制限と残課題。

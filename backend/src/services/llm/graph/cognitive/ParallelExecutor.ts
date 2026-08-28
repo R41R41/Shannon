@@ -1,3 +1,4 @@
+import { snapshotMemoryEnvelope } from '../../../memory/requestMemory.js';
 import { StructuredTool } from '@langchain/core/tools';
 import { TaskTreeState } from '@shannon/common';
 import { BaseMessage } from '@langchain/core/messages';
@@ -116,7 +117,7 @@ export class ParallelExecutor {
 
         // MemoryAgent を初期化 (4番目の並列プロセス)
         // Snapshot identity fields; later caller mutations must not retarget this memory agent.
-        const memoryEnvelope = Object.freeze({ ...state.requestEnvelope, tags: [...state.requestEnvelope.tags] });
+        const memoryEnvelope = snapshotMemoryEnvelope(state.requestEnvelope);
         const memoryAgent = new MemoryAgent(blackboard, memoryEnvelope);
         const initialMemoryPromise = memoryAgent.initialize(goal);
 
@@ -183,6 +184,7 @@ export class ParallelExecutor {
 
         const wrappedState: FunctionCallingAgentState = {
             ...state,
+            requestEnvelope: memoryEnvelope,
             selectedModel: modelSelector.modelName,
             getInitialMemory,
             getInventoryDiff: getLiveInventory ? () => {
@@ -343,7 +345,7 @@ export class ParallelExecutor {
                 startTime,
                 blackboard.taskState.iteration,
             );
-            TaskEpisodeMemory.getInstance().saveEpisode(episode).catch(() => {});
+            TaskEpisodeMemory.getInstance().saveEpisode(episode, memoryEnvelope).catch(() => {});
 
             // 自己改善デーモンに通知（fire-and-forget）
             SelfImprovementDaemon.getInstance()

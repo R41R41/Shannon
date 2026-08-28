@@ -12,7 +12,6 @@ import { loadToolsFromDirectory } from '../../../utils/toolLoader.js';
 import { EmotionNode } from './nodes/EmotionNode.js';
 import { FunctionCallingAgent } from './nodes/FunctionCallingAgent.js';
 import { createMemoryTools } from '../tools/memory/memoryToolFactory.js';
-import { MemoryNode } from './nodes/MemoryNode.js';
 import { ScopedMemoryService } from '../../memory/scopedMemoryService.js';
 import { logger } from '../../../utils/logger.js';
 
@@ -31,7 +30,7 @@ export interface ShannonNodes {
  * - Loads tools from the tools directory
  * - Creates memory tools
  * - Initializes EmotionNode
- * - Initializes MemoryNode (for maintenance scheduling only)
+ * - Legacy unscoped memory maintenance is disabled until migration.
  * - Creates FunctionCallingAgent with all tools
  * - Warms up ScopedMemoryService
  */
@@ -52,9 +51,7 @@ export async function initializeNodes(): Promise<ShannonNodes> {
     ? new EmotionNode()
     : undefined;
 
-  // 4. MemoryNode — initialize for background maintenance (backfill, consolidation)
-  const memoryNode = new MemoryNode();
-  await memoryNode.initialize();
+  // 4. No unscoped backfill/consolidation at startup.
 
   // 5. ScopedMemoryService singleton warm-up
   ScopedMemoryService.getInstance();

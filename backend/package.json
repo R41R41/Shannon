@@ -23,7 +23,8 @@
     "minebot:test": "ts-node --esm scripts/minebot-test.ts --skill",
     "check:foundation": "node ../scripts/check-foundation-boundaries.cjs && tsc -p tsconfig.foundation.json",
     "check:access-integration": "tsc -p tsconfig.access-integration.json",
-    "test:offline": "vitest run tests/unit tests/selfImprove/nightlySchedule.test.ts --maxWorkers=1 --minWorkers=1"
+    "test:offline": "vitest run tests/unit tests/selfImprove/nightlySchedule.test.ts --maxWorkers=1 --minWorkers=1",
+    "check:memory-integration": "tsc -p tsconfig.memory-integration.json"
   },
   "dependencies": {
     "@discordjs/opus": "^0.10.0",

@@ -96,7 +96,7 @@ export class PersonMemoryService {
     platformUserId: string,
     displayName?: string,
   ): string {
-    const member = resolveMemberByPlatformId(platform, platformUserId) ?? (displayName ? resolveAlias(displayName) : null);
+    const member = resolveMemberByPlatformId(platform, platformUserId);
     if (member) {
       return `member:${member.canonicalName.toLowerCase()}`;
     }

@@ -88,7 +88,8 @@ describe('real graph with mocked external services', () => {
   it('builds native executor tools from a fresh per-run catalog and uses invoke with its signal', async () => {
     fakes.nativeEnabled = true;
     const controller = new AbortController(); const invoke = vi.fn(async () => 'native-tool-result');
-    const createToolsForRun = vi.fn(() => [{ name: 'test-tool', description: 'test', invoke }]);
+    const setMemoryPort = vi.fn();
+    const createToolsForRun = vi.fn(() => [{ name: 'test-tool', description: 'test', invoke, setMemoryPort }]);
     fakes.native.mockImplementation(async () => {
       expect(await fakes.nativeDeps.llmTools.get('test-tool')({ value: 1 })).toBe('native-tool-result');
       return { lastContent: 'native answer', taskTree: result.taskTree, toolCallCount: 1, durationMs: 0 };
@@ -96,6 +97,8 @@ describe('real graph with mocked external services', () => {
     const compiled = buildShannonGraph({ fca: { createToolsForRun, run: fakes.run } as any });
     await invokeShannonGraph(compiled, { ...envelope, channel: 'minecraft' }, [], { abortSignal: controller.signal });
     expect(createToolsForRun).toHaveBeenCalledOnce();
+    expect(setMemoryPort).toHaveBeenCalledOnce();
+    expect((await setMemoryPort.mock.calls[0][0].save({ content: 'no world identity' })).saved).toBe(false);
     expect(invoke).toHaveBeenCalledWith({ value: 1 }, { signal: controller.signal });
     expect(fakes.run).not.toHaveBeenCalled();
   });

@@ -1,6 +1,6 @@
 import { StructuredTool } from '@langchain/core/tools';
 import { z } from 'zod';
-import { ShannonMemoryService } from '../../../memory/shannonMemoryService.js';
+import type { MemoryPort } from '../../../../modules/memory/index.js';
 
 export default class RecallExperienceTool extends StructuredTool {
   name = 'recall-experience';
@@ -18,19 +18,13 @@ export default class RecallExperienceTool extends StructuredTool {
       .describe('取得件数 (デフォルト5)'),
   });
 
-  private service: ShannonMemoryService;
-
-  constructor(service: ShannonMemoryService) {
-    super();
-    this.service = service;
-  }
+  private memoryPort?: MemoryPort;
+  createForRun(): RecallExperienceTool { return new RecallExperienceTool(); }
+  setMemoryPort(port: MemoryPort): void { this.memoryPort = port; }
 
   async _call(data: z.infer<typeof this.schema>): Promise<string> {
     try {
-      const results = await this.service.searchExperiences(
-        data.query,
-        data.limit ?? 5,
-      );
+      const results = await this.memoryPort?.search('experience', data.query, data.limit ?? 5) ?? [];
 
       if (results.length === 0) {
         return 'その体験は思い出せない…まだ経験してないかも。';

@@ -1,6 +1,6 @@
 import { StructuredTool } from '@langchain/core/tools';
 import { z } from 'zod';
-import { ShannonMemoryService } from '../../../memory/shannonMemoryService.js';
+import { MEMORY_SCOPE_REQUIRED, type MemoryPort } from '../../../../modules/memory/index.js';
 
 export default class SaveKnowledgeTool extends StructuredTool {
   name = 'save-knowledge';
@@ -27,21 +27,16 @@ export default class SaveKnowledgeTool extends StructuredTool {
       ),
   });
 
-  private service: ShannonMemoryService;
-  private source: string;
-
-  constructor(service: ShannonMemoryService, source: string) {
-    super();
-    this.service = service;
-    this.source = source;
-  }
+  private memoryPort?: MemoryPort;
+  createForRun(): SaveKnowledgeTool { return new SaveKnowledgeTool(); }
+  setMemoryPort(port: MemoryPort): void { this.memoryPort = port; }
 
   async _call(data: z.infer<typeof this.schema>): Promise<string> {
     try {
-      const result = await this.service.saveWithDedup({
+      if (!this.memoryPort) return MEMORY_SCOPE_REQUIRED;
+      const result = await this.memoryPort.save({
         category: 'knowledge',
         content: data.content,
-        source: this.source,
         importance: data.importance,
         tags: data.tags,
       });

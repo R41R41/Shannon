@@ -1,3 +1,4 @@
+import { snapshotMemoryEnvelope } from './requestMemory.js';
 /**
  * ScopedMemoryService
  *
@@ -122,7 +123,8 @@ export class ScopedMemoryService {
    * filtered by visibility scope and privacy rules.
    */
   async recall(query: ScopedRecallQuery): Promise<ScopedRecallResult> {
-    const { envelope, text, lightweightMode } = query;
+    const { text, lightweightMode } = query;
+    const envelope = snapshotMemoryEnvelope(query.envelope);
     const userId = this.recallEngine.resolveCanonicalUserId(envelope);
     const channel = envelope.channel;
     const scopeTags = this.scopeDeriver.deriveScopeTags(envelope);
@@ -166,9 +168,9 @@ export class ScopedMemoryService {
       internalState,
       worldModelPatterns,
     ] = await Promise.all([
-      this.recallEngine.recallSelfModel(),
+      this.recallEngine.recallSelfModel(envelope),
       this.recallEngine.recallStrategyUpdates(envelope, userId, scopeTags),
-      this.recallEngine.recallInternalState(),
+      this.recallEngine.recallInternalState(envelope),
       this.recallEngine.recallWorldPatterns(envelope, scopeTags),
     ]);
 
@@ -205,7 +207,7 @@ export class ScopedMemoryService {
     }
 
     // 2. Semantic search
-    const semanticResults = await this.recallEngine.semanticSearch(text);
+    const semanticResults = await this.recallEngine.semanticSearch(text, envelope);
 
     // 3. Tag-based search
     const tagResults = await this.recallEngine.searchByTags(envelope, text);

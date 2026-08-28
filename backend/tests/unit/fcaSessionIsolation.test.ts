@@ -37,7 +37,7 @@ vi.mock('../../src/services/llm/graph/cognitive/MemoryAgent.js', () => ({
       if (signal.aborted) resolve(); else signal.addEventListener('abort', () => resolve(), { once: true });
     }); }
     async query(question: string) { fakes.memoryReads.push({ owner: this.envelope.sourceUserId, question }); return `answer-${this.envelope.sourceUserId}`; }
-    async save(content: string) { fakes.memoryWrites.push({ owner: this.envelope.sourceUserId, content }); }
+    async save(content: string) { fakes.memoryWrites.push({ owner: this.envelope.sourceUserId, content }); return { saved: true, message: "saved" }; }
   },
 }));
 vi.mock('../../src/services/llm/graph/cognitive/selfImprove/index.js', () => ({ SelfImprovementDaemon: { getInstance: () => ({ onEpisodeSaved: async () => {} }) } }));
@@ -49,6 +49,9 @@ import UpdatePlanTool from '../../src/services/llm/tools/utility/updatePlan.js';
 import RecallMemoryTool from '../../src/services/llm/tools/memory/recallMemory.js';
 import SaveMemoryTool from '../../src/services/llm/tools/memory/saveMemory.js';
 import PlanCraftTool from '../../src/services/llm/tools/utility/planCraft.js';
+import RecallKnowledgeTool from '../../src/services/llm/tools/memory/recallKnowledge.js';
+import { ShannonMemoryService } from '../../src/services/memory/shannonMemoryService.js';
+import { deriveMemoryScope } from '../../src/modules/memory/index.js';
 import { RequestExecutionCoordinator } from '../../src/services/llm/graph/requestExecutionCoordinator.js';
 
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; }
@@ -148,7 +151,7 @@ describe('actual FCA and tools with external services mocked', () => {
   it('keeps save-memory and plan-craft dependencies local to each tool set', async () => {
     const agent = new FunctionCallingAgent([new SaveMemoryTool(), new PlanCraftTool()]);
     const a = agent.createToolsForRun(); const b = agent.createToolsForRun();
-    const saveA = vi.fn(); const saveB = vi.fn(); const planA = vi.fn(); const planB = vi.fn();
+    const saveA = vi.fn(async () => ({ saved: true, message: "saved A" })); const saveB = vi.fn(async () => ({ saved: true, message: "saved B" })); const planA = vi.fn(); const planB = vi.fn();
     (a[0] as SaveMemoryTool).setMemoryAgent({ save: saveA } as any);
     (b[0] as SaveMemoryTool).setMemoryAgent({ save: saveB } as any);
     await a[0].invoke({ content: 'only-A' }); await b[0].invoke({ content: 'only-B' });
@@ -224,4 +227,17 @@ describe('actual FCA and tools with external services mocked', () => {
     await entered.promise; controller.abort(); release.resolve(); await rejected;
     expect(fakes.invoke).not.toHaveBeenCalled();
   });
+});
+
+it('binds the canonical memory port in standalone FCA, without a MemoryAgent', async () => {
+  const request = { ...state('A').requestEnvelope, sourceUserId: '100', discord: { guildId: '200', channelId: '300', isDM: false } };
+  const search = vi.spyOn(ShannonMemoryService.getInstance(), 'searchKnowledge').mockResolvedValue([]);
+  try {
+    fakes.invoke.mockResolvedValueOnce(new AIMessage({ content: '', tool_calls: [{ id: 'r', name: 'recall-knowledge', args: { query: 'fixture' } }] }))
+      .mockResolvedValueOnce(new AIMessage({ content: '', tool_calls: [{ id: 'done', name: 'task-complete', args: { summary: 'done' } }] }));
+    const agent = new FunctionCallingAgent([new RecallKnowledgeTool(), { name: 'task-complete', invoke: async () => 'done' } as any]);
+    await agent.run({ ...state('A'), requestEnvelope: request });
+    expect(search).toHaveBeenCalledOnce();
+    expect(search.mock.calls[0][2]?.scopeKey).toBe(deriveMemoryScope(request)!.scopeKey);
+  } finally { search.mockRestore(); }
 });
