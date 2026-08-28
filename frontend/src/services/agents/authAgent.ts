@@ -21,6 +21,7 @@ export class AuthAgent extends WebSocketClientBase {
 
   protected handleMessage(message: string) {
     const data = parseMessage(message);
+    if (!data) return;
     if (data.type === "auth:response") {
       this.emit("auth", data.success, data.userData);
     }

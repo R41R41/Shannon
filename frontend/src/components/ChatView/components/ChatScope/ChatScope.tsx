@@ -23,8 +23,6 @@ export const ChatScope: React.FC = () => {
       m.sender === 'user' ? new HumanMessage(m.text) : new AIMessage(m.text)
     );
   });
-  const [processingChatMessageIndex, setProcessingChatMessageIndex] =
-    useState<number>(0);
   const [isRealTimeChat, setIsRealTimeChat] = useState(false);
 
   const handleSendMessage = async (message: string) => {
@@ -96,7 +94,6 @@ export const ChatScope: React.FC = () => {
         }
         return prev;
       });
-      setProcessingChatMessageIndex((prev) => prev + 1);
     });
 
     const unsubUserTranscript = openai.onUserTranscript((text: string) => {

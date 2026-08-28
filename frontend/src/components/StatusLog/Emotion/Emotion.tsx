@@ -180,7 +180,7 @@ const Emotion: React.FC<EmotionProps> = ({ isMobile }) => {
         },
         pointLabels: {
           color: labelColor,
-          font: { size: 10, weight: "500" as const },
+          font: { size: 10, weight: 500 },
           padding: 14,
         },
       },

@@ -3,7 +3,7 @@ import { useEffect } from 'react';
 import { OpenAIAgent } from '@/services/agents/openaiAgent';
 
 export const useAudioProcessing = (
-  openaiService: OpenAIAgent,
+  openaiService: OpenAIAgent | null,
   audioQueueManager: AudioQueueManager
 ) => {
   useEffect(() => {
