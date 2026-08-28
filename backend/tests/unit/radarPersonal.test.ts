@@ -13,6 +13,10 @@ import { reserveAcquisition, releaseAcquisition, validAcquisitionState, type Acq
 import { RadarSessionRunner, RADAR_SESSION_MAX_MS } from '../../src/services/radar/sessionRunner.js';
 import { RADAR_AUDIT_RETENTION_MS, catalogAuditView } from '../../src/modules/radar/audit.js';
 import { registerRadarRoutes } from '../../src/routes/radarRoutes.js';
+import { radarRuntimeConfig } from '../../src/services/radar/runtimeConfig.js';
+import { createRadarApplication } from '../../src/services/radar/runtimeApplication.js';
+import { listenRadarHost } from '../../src/services/radar/runtimeHost.js';
+import { RadarMongoUsers, radarDatabaseReady, openRadarFirebase } from '../../src/services/radar/runtimeAdapters.js';
 
 const initialNow = Date.now();
 const context = (uid = 'alice', projectId = 'fixture'): RequestContext => ({ requestId: 'r',
@@ -948,5 +952,127 @@ describe('integrated personal Radar workspace HTTP and mixed collection',()=>{
   it('rejects changed connection choices during configure reauthorization',async()=>{
     const f=await workspaceApi();f.list.mockResolvedValueOnce([]);
     expect((await f.put('calendar',0,f.calendarInput)).status).toBe(409);expect(f.store.rows.size).toBe(0);
+  });
+});
+
+const runtimeConfig = () => radarRuntimeConfig({ version: 1, environment: 'dev', origin: 'http://127.0.0.1:15030', port: 15030,
+  permitUntil: Date.now() + 3600000, firebase: { projectId: 'radar-fixture', apiKey: 'a'.repeat(39), appId: '1:123:web:abc' },
+  allowedUids: ['alice','bob'], acquisition: { maxPer24Hours: 24, minimumIntervalMs: 0, leaseMs: 30000 },
+  feedUrls: ['https://example.org/feed.xml'], weather: true });
+async function runtimeHttp(url: string, init: { method?: string; headers: Record<string,string>; body?: string }): Promise<Response> {
+  const { request } = await import('node:http');
+  return new Promise((resolve,reject) => {
+    const req = request(url, { method: init.method, headers: init.headers }, res => {
+      const chunks: Buffer[] = []; res.on('data', c => chunks.push(c)); res.on('error', reject);
+      res.on('end', () => resolve(new Response(Buffer.concat(chunks), {status:res.statusCode,headers:res.headers as Record<string,string>})));
+    }); req.on('error',reject); req.end(init.body);
+  });
+}
+const runtimeStops: (() => Promise<void>)[] = [];
+afterEach(async () => { for (const stop of runtimeStops.splice(0)) await stop(); vi.doUnmock('firebase-admin/app'); vi.doUnmock('firebase-admin/auth'); });
+async function runtimeFixture() {
+  const store = new FixtureStore(); const config = runtimeConfig();
+  const feedHttp = { get: vi.fn(async () => xml()) };
+  const weatherHttp = { get: vi.fn(async () => '{}') };
+  const ready = vi.fn(async () => undefined); const close = vi.fn(async () => undefined);
+  const verify = vi.fn(async (token: string) => ({ projectId: token === 'wrong-project' ? 'other-project' : config.firebase.projectId,
+    uid: token, email: 'synthetic@example.test', emailVerified: true, expiresAtMs: Date.now() + 3600000 }));
+  const users = { findByIdentity: vi.fn(async (projectId: string, uid: string) => ({ projectId, uid, name: 'Fixture', email: 'synthetic@example.test', isAuthorized: true, isAdmin: false })) };
+  const runtime = createRadarApplication(config, { identity: { verify }, users, catalog: store, feedHttp, weatherHttp, ready });
+  const host = await listenRadarHost(runtime, 0, close, config.permitUntil); runtimeStops.push(host.stop);
+  const url = `http://127.0.0.1:${(host.server.address() as {port:number}).port}`;
+  const request = (p: string, method = 'GET', body?: unknown, token = 'alice', headers: Record<string,string> = {}) => runtimeHttp(url + p, {
+    method, headers: { host: '127.0.0.1:15030', origin: config.origin, ...(token ? { authorization: `Bearer ${token}` } : {}), 'content-type':'application/json', ...headers },
+    ...(body === undefined ? {} : {body: JSON.stringify(body)}) });
+  return { store, config, feedHttp, weatherHttp, ready, close, verify, users, runtime, host, url, request };
+}
+describe('standalone Radar runtime and release boundary', () => {
+  it.each(['shared-project','production','expired','long-permit','origin-path','http-remote','extra-key','duplicate-uid','big-quota','unsafe-feed','wrong-port'])(
+    'rejects unsafe runtime config %s', kind => {
+      const c: any = runtimeConfig();
+      if (kind === 'shared-project') c.firebase.projectId = 'shannonui'; if (kind === 'production') c.environment = 'prod';
+      if (kind === 'expired') c.permitUntil = Date.now()-1; if (kind === 'long-permit') c.permitUntil = Date.now()+90000000;
+      if (kind === 'origin-path') c.origin = 'https://example.org/path'; if (kind === 'http-remote') c.origin = 'http://example.org';
+      if (kind === 'extra-key') c.mongoUri = 'production'; if (kind === 'duplicate-uid') c.allowedUids = ['alice','alice'];
+      if (kind === 'big-quota') c.acquisition.maxPer24Hours = 256; if (kind === 'unsafe-feed') c.feedUrls = ['https://127.0.0.1/'];
+      if (kind === 'wrong-port') c.port = 5001;
+      expect(() => radarRuntimeConfig(c)).toThrow('RADAR_RUNTIME_CONFIG');
+    });
+  it('starts without provider calls and serves only public bootstrap plus authenticated personal APIs', async () => {
+    const f = await runtimeFixture();
+    const bootstrap = await (await f.request('/api/radar/runtime','GET',undefined,'')).json();
+    expect(Object.keys(bootstrap).sort()).toEqual(['firebase','version']); expect(JSON.stringify(bootstrap)).not.toMatch(/allowedUids|feedUrls|permitUntil/);
+    expect((await f.request('/api/radar/sources','GET',undefined,'')).status).toBe(401);
+    expect((await f.request('/api/radar/session')).status).toBe(200);
+    expect((await f.request('/api/radar/session','GET',undefined,'other')).status).toBe(403);
+    expect((await f.request('/api/radar/session?owner=bob')).status).toBe(400);
+    expect((await f.request('/api/models')).status).toBe(404);
+    expect((await f.request('/api/radar/ready')).status).toBe(200); expect(f.ready).toHaveBeenCalledTimes(1);
+    expect(f.feedHttp.get).not.toHaveBeenCalled(); expect(f.weatherHttp.get).not.toHaveBeenCalled(); expect(f.store.rows.size).toBe(0);
+  });
+  it('enforces Host, Origin and browser fetch-site before identity/provider work', async () => {
+    const f = await runtimeFixture();
+    for (const headers of [{host:'evil.example'}, {origin:'https://evil.example'}, {'sec-fetch-site':'cross-site'}]) {
+      expect((await f.request('/api/radar/session','GET',undefined,'alice',headers)).status).toBe(403);
+    }
+    expect(f.verify).not.toHaveBeenCalled(); expect(f.store.read).not.toHaveBeenCalled();
+  });
+  it('connects HTTP setting, approved read, durable-port save, preview, audit and owner separation', async () => {
+    const f = await runtimeFixture();
+    expect((await f.request('/api/radar/sources/feed','PUT',{expectedRevision:0,source:configuration()})).status).toBe(200);
+    expect(f.feedHttp.get).not.toHaveBeenCalled();
+    const collected = await f.request('/api/radar/collect','POST',{expectedRevision:1,sourceIds:['feed']});
+    expect(collected.status).toBe(200); expect((await collected.json()).revision).toBe(3); expect(f.feedHttp.get).toHaveBeenCalledTimes(1);
+    const preview = await (await f.request('/api/radar/preview')).json(); expect(preview.items).toHaveLength(1);
+    expect((await (await f.request('/api/radar/audit')).json()).events).toHaveLength(3);
+    expect((await (await f.request('/api/radar/preview','GET',undefined,'bob')).json()).items).toHaveLength(0);
+    expect((await (await f.request('/api/radar/sources')).json()).temporal.calendarAvailable).toBe(false);
+  });
+  it('refuses unapproved feeds without contacting providers and retains consumed attempts', async () => {
+    const f = await runtimeFixture();
+    await f.request('/api/radar/sources/feed','PUT',{expectedRevision:0,source:{...configuration(),locator:'https://example.org/other'}});
+    expect((await f.request('/api/radar/collect','POST',{expectedRevision:1,sourceIds:['feed']})).status).toBe(503);
+    expect(f.feedHttp.get).not.toHaveBeenCalled(); expect([...f.store.rows.values()][0].acquisition?.starts).toHaveLength(1);
+  });
+  it('redacts parser errors and reports unavailable DB readiness without starting providers', async () => {
+    const f = await runtimeFixture(); f.ready.mockRejectedValue(Error('secret database'));
+    expect(await (await f.request('/api/radar/ready')).json()).toEqual({ready:false});
+    const r = await runtimeHttp(f.url+'/api/radar/sources/feed',{method:'PUT',headers:{host:'127.0.0.1:15030','content-type':'application/json'},body:'{secret'});
+    expect(r.status).toBe(400); expect(await r.text()).not.toContain('secret');
+  });
+  it('stops only the owned listener and closes resources exactly once', async () => {
+    const f = await runtimeFixture(); await Promise.all([f.host.stop(),f.host.stop()]);
+    expect(f.close).toHaveBeenCalledTimes(1); expect(f.host.server.listening).toBe(false);
+    await expect(f.request('/api/radar/health')).rejects.toThrow();
+  });
+  it('cleans up failed listener resources without stopping the occupied listener', async () => {
+    const f = await runtimeFixture(); const close = vi.fn(async()=>undefined);
+    await expect(listenRadarHost({app:express(),stopAccepting:vi.fn()},(f.host.server.address() as {port:number}).port,close,Date.now()+1000)).rejects.toThrow('RADAR_LISTEN_FAILED');
+    expect(close).toHaveBeenCalledTimes(1); expect((await f.request('/api/radar/health')).status).toBe(200);
+  });
+  it('requires the reviewed DB fence and does not create collections', async () => {
+    const options = {validationLevel:'strict',validationAction:'error',validator:CATALOG_VALIDATOR};
+    const db: any = {command:vi.fn(async()=>({ok:1})),listCollections:vi.fn(()=>({toArray:async()=>[{options}]}))};
+    await radarDatabaseReady(db); options.validationAction='warn'; await expect(radarDatabaseReady(db)).rejects.toThrow('RADAR_CATALOG_FENCE_REQUIRED');
+    expect(db.command.mock.calls.every((args:any[])=>args[0].ping===1)).toBe(true);
+  });
+  it('reads exact UID/project, rejects duplicates, and never imports legacy admin powers', async () => {
+    const row = {firebaseProjectId:'fixture',firebaseUid:'alice',name:'Fixture',email:'fixture@example.test',isAuthorized:true,isAdmin:true};
+    let rows = [row]; const find = vi.fn(()=>({limit:(n:number)=>{expect(n).toBe(2);return {toArray:async()=>rows};}}));
+    const repo = new RadarMongoUsers({collection:()=>({find})} as any);
+    expect(await repo.findByIdentity('fixture','alice')).toMatchObject({uid:'alice',isAdmin:false});
+    expect(find.mock.calls[0][0]).toEqual({firebaseProjectId:'fixture',firebaseUid:'alice'});
+    rows=[row,row];expect(await repo.findByIdentity('fixture','alice')).toBeNull();
+  });
+  it('uses explicit Firebase credentials, audience/issuer/revocation checks and owned cleanup', async () => {
+    const app = {name:'owned'}; const initializeApp = vi.fn(()=>app); const cert = vi.fn((c:unknown)=>c); const deleteApp = vi.fn(async()=>undefined);
+    const verifyIdToken = vi.fn(async()=>({uid:'alice',aud:'radar-fixture',iss:'https://securetoken.google.com/radar-fixture',email:'fixture@example.test',email_verified:true,exp:Math.floor(Date.now()/1000)+3600}));
+    vi.doMock('firebase-admin/app',()=>({initializeApp,cert,deleteApp}));vi.doMock('firebase-admin/auth',()=>({getAuth:()=>({verifyIdToken})}));
+    const f = await openRadarFirebase('radar-fixture',{type:'service_account',project_id:'radar-fixture',client_email:'fixture@radar-fixture.iam.gserviceaccount.com',private_key:'-----BEGIN PRIVATE KEY-----fixture'});
+    expect((await f.identity.verify('fixture-token')).uid).toBe('alice');expect(verifyIdToken).toHaveBeenCalledWith('fixture-token',true);
+    expect(initializeApp.mock.calls[0][0]).toMatchObject({projectId:'radar-fixture'});
+    verifyIdToken.mockResolvedValue({...await verifyIdToken(),aud:'other-project'});await expect(f.identity.verify('fixture-token')).rejects.toMatchObject({code:'UNAUTHENTICATED'});
+    await f.close();expect(deleteApp).toHaveBeenCalledWith(app);
+    await expect(openRadarFirebase('radar-fixture',{type:'service_account',project_id:'shannonui'})).rejects.toThrow('RADAR_FIREBASE_CREDENTIAL');
   });
 });

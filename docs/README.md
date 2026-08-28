@@ -4,7 +4,7 @@
 
 ## すぐ読む
 
-- [Shannon Radar統合設計](./shannon-radar.md)（2026-08-29）：RAD-1Hの版付きcatalog・天気/Calendar本人限定保存と共通取得予算。最新は17節、明示取得/監査UIは16節。天気/予定のUI・実brokerは未接続。API/server/scheduler未登録、実認証・実ソース取得・定期収集・配信は未稼働。
+- [Shannon Radar統合設計](./shannon-radar.md)（2026-08-29）：最新19節は専用ログイン/独立HTTP runtime・個人Radar先行リリース。型/service/UIは接続、実Firebase・通常dev DB移行・実ソース取得・本番手順は未検証。Calendar OAuth/Discord投稿/定期実行は未接続。
 - [開発・検証・本番反映の手順](./development-workflow.md)（2026-08-28）：VMのdevを作業先とし、prodは検証後に反映。
 - [Shannon｜設計・資料ハブ](https://www.notion.so/3ca1e847628881c9b4bbfd5556a55347)：現行設計・計画・判断・変更履歴。
 

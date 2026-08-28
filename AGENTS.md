@@ -1,3 +1,7 @@
+## RAD-1J（2026-08-29）の注意
+
+`docs/shannon-radar.md`19節。個人Radar専用login/runtimeを独立させる。旧本体/Bot/socketを起動せず、明示Firebase/project/UID/取得枠とexact Mongo validatorが必要。CLIはVM dev限定・起動ロック優先・共有.env/ADCなし。実認証/通常DB移行/実取得は未実施。別Mongo37029・15030 loopback fixtureのみ。Calendar brokerは未接続表示。初回本番は個人feed/天気を先行する計画で、dev実接続/復旧と本番用サービス/HTTPS/停止手順を別工程で確認する。CLIをprodへそのまま使用しない。prod read-only・ロック維持。以下は過去の段階。
+
 ## RAD-1I（2026-08-29）の注意
 
 `docs/shannon-radar.md`18節。個人Radarの天気/Calendar設定・混合取得・表示・監査をHTTP/session/UIまで接続。RadarWorkspaceとrunnerには同じtemporal service、同じrepository/policyを明示注入する。Calendar選択肢は本人binding列挙portのみ、実OAuth brokerは未接続。公開feed/非公開snapshotの型と配信権限を混ぜない。最大3件/30秒・共通予算/CAS/再認証と表示期限を維持する。実画面試験はloopback13002の架空fixture、終了後停止。main server未登録・通常DB validator未適用・実認証/実取得/投稿/push/prod反映なし。機能単位でまとめて改修し、prod read-onlyとdev起動ロックは維持する。以下は過去の段階。

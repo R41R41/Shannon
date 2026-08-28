@@ -451,3 +451,32 @@ Calendar選択肢は、既に接続された本人のbindingを列挙する明�
 既存backend/frontendテストへ混合取得HTTP、本人分離、設定/権限/期待版、private DTO最小化、接続期限、画面表示、保存/削除後の再読を追加。loopback13002のfixtureで実画面から混合取得・設定編集・監査・owner切替を確認し、終了後fixture/tunnelを停止する。試験証跡は`radar-workspace-20260829`。全backend通常型検査は未完で、対象の通常型検査と全体noCheck変換を区別する。repository/validatorの変更や通常DBへの適用は今回ない。
 
 次は実接続をひとつの機能単位として進める：独立したdev認証/許可UID、Calendar OAuth brokerとtoken保管/撤回、明示ソース/地域と取得・費用上限、devのvalidator移行を揃えて限定稼働を検証する。承認付きDiscordカードは別の配信権限・outbox・送信先制限・専用Botを備えた次の機能単位とする。全owner purge/委譲worker、人物の本人管理/全面撤回、残る旧音声/Web/EventBus境界もロードマップに残る。prodは別の承認済みリリース工程だけで反映し、今回は変更しない。
+
+
+## 19. RAD-1J：Radar専用ログイン・独立ランタイム（2026-08-29、dev限定）
+
+### 個人Radarを先にリリースする境界
+
+既存Bot本体の置換を待たず、個人Radarを独立HTTPプロセスと専用Webビルドとして追加する。`runtimeApplication`が認証・owner repository・取得service・HTTPを組み立て、`runtimeHost`がloopback listenerと終了を所有する。旧server/AgentProvider/運用WebSocket/会話graph/Discord/Minecraft/schedulerを起動しない。`runtimeAdapters`は独立Firebase appとraw Mongo users読取りを提供し、global model登録・index作成・auto enrollment・admin昇格をしない。
+
+`frontend/radar/index.html`と`radar-main.tsx`は専用entry。Firebase clientは明示設定とinMemoryPersistenceのみで、メール/パスワードの許可済みアカウントを使用する。アカウント作成・OAuth・localStorage・既存認証socketを使わない。ログイン後GET `/api/radar/session`でproject/UID/期限を検査してから既存Dashboardを起動する。session世代・User object・期限・abortを照合し、ログアウト/交替/停止で表示を消す。認証確認は15秒で失敗へ移り、SDKが遅延しても復活しない。
+
+### 明示設定と稼働条件
+
+`start-radar-dev.cjs --serve`はVMの正規devパス、Node22、development marker、起動ロック解除のレビュー完了を要求する。現時点ではロックを解除せず、共有.env/ADCを読み込まない。保護領域`~/.config/shannon-radar-dev/`のruntime.jsonとfirebase.jsonだけを読み、owner/permission/no-follow/サイズを検査する。設定・資格情報は今回作成していない。`--check`はruntime設定だけを検査し、認証/DB/実接続が成功したとは扱わない。
+
+runtime設定はdev・loopback15030固定、厳密なorigin、24時間以内のpermitUntil、独立projectの公開client設定、明示UID（最大8）、許可する公開feed URL（最大32）、天気ON/OFF、共通取得policy。既知の共有project shannonuiは拒否するが、その他projectも運用者が独立性を確認する。Admin SDKは同一projectの明示cert・専用appを使い、token失効も確認する。emulator/別issuer/audience/tenantを拒否する。usersの同一project/UIDが一意でisAuthorized=trueである必要があり、メール一致での自動紐付けはしない。
+
+Mongo接続先は通常dev DB shannon_dev固定だが、今回接続・変更しない。startup/readyはpingと正確なstrict/error catalog validatorを読むだけで、自動移行しない。validator/UID登録は次工程でレビュー・バックアップ・明示適用する。未知schema/旧writer混在を許可しない。許可外feedはproviderへ到達する前に拒否し、既に予約した回数は戻さない。最大24回/24h/ownerは取得開始回数で、Firebase認証APIやprovider全体の費用上限ではない。
+
+APIはHost/Origin/Sec-Fetch-Site、CSP/no-store、同時8要求と45秒上限を適用する。readyはDB/validatorの確認で、Firebaseや外部providerの疎通保証ではない。permit期限またはSIGTERMで自身のlistener/socket/DB/Firebaseだけを終了する。確定済み取得は取り消さず、応答不明の予約を返さない。自動再試行や旧DBへのrollbackはしない。保護設定の変更には再起動が必要。
+
+### 検証範囲とリリース計画
+
+既存テストへ独立composition・auth/Origin/許可ソース・raw UID repository・Firebase SDK fake・listener所有/停止・専用sessionを追加する。実ブラウザでnative fetchのreceiver不一致による認証失敗を再現して修正し、退行テストを追加した。架空Firebase/connectorと新しい別Mongo37029・journal有効の実HTTP fixtureで、validatorなし拒否、混合取得、8並行要求の1勝者、listener/DBclientの正常停止・再接続後の予算/内容保持、別owner分離を検証する。これは停電・replica failover・旧版rollbackの試験ではない。証跡はradar-runtime-20260829へ保全する。
+
+最初の本番公開対象は個人のYouTube/選択Web/天気ダイジェストを優先する。Calendarの型/service/UIは維持するが、この独立runtimeには実OAuth brokerをまだ接続せず、未接続表示とする。Calendar実連携、承認付きDiscord（専用Botとoutbox）は後続。一般公開・自動配信・人物学習は含めない。
+
+順序は、独立dev Firebase/許可UID/実ソースと取得枠の確認 → devのレビュー済みvalidator導入と限定実接続 → 同じ成果物で起動/停止・復旧確認 → 本番用設定/サービス/HTTPS経路・停止手順のレビュー → ユーザー確認を経て個人Radarだけ本番追加。今回のCLIはdev限定なので、そのままprodで実行しない。本番日時は認証/実接続と本番手順が未検証のため未確定。全リファクタリング完了や専用Discord Botの作成を、個人Radarの初回リリース条件にはしない。
+
+参考：Firebase公式の[ID token検証](https://firebase.google.com/docs/auth/admin/verify-id-tokens)、[失効確認](https://firebase.google.com/docs/auth/admin/manage-sessions)、[認証状態の保存](https://firebase.google.com/docs/auth/web/auth-state-persistence)。実認証の成功はこれらの設計参照だけでは証明しない。

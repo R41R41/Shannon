@@ -6,6 +6,8 @@ import { createRadarClient, decodeSources, decodePreview, decodeAudit, safeRadar
 import { RadarController } from '../src/features/radar/radarController';
 import { RadarDashboard } from '../src/features/radar/RadarDashboard';
 import { SourceEditor } from '../src/features/radar/SourceEditor';
+import { StandaloneRadarSession, type RadarIdentityUser } from '../src/features/radar/standaloneSession';
+import { StandaloneRadarApp } from '../src/features/radar/StandaloneRadarApp';
 
 const now = 1800000000000;
 const input = { enabled: true, consentExpiresAt: now + 86400000, kind: 'web' as const, locator: 'https://example.org/feed',
@@ -334,5 +336,71 @@ describe('integrated personal weather/calendar experience',()=>{
     await client.saveTemporal!('weather',4,weatherSource,signal);const [path,init]=fetcher.mock.calls[0] as any;
     expect(path).toBe('/api/radar/temporal/sources/weather');expect(JSON.parse(init.body)).toEqual({expectedRevision:4,source:weatherSource});
     expect(init.credentials).toBe('omit');await client.revokeTemporal!('weather',4,signal);expect((fetcher.mock.calls[1] as any)[1].method).toBe('DELETE');
+  });
+});
+
+function standaloneFixture() {
+  vi.useFakeTimers(); vi.setSystemTime(now);
+  let user: RadarIdentityUser | null = {uid:'alice',getIdToken:vi.fn(async()=> 'fake-token')};
+  let callback: (user: RadarIdentityUser | null)=>void = ()=>undefined;
+  const identity = {projectId:'radar-fixture',currentUser:()=>user,observe:(cb:typeof callback)=>{callback=cb;cb(user);return ()=>{callback=()=>undefined;};},
+    signIn:vi.fn(async()=>undefined),signOut:vi.fn(async()=>{user=null;callback(null);})};
+  const fetcher = vi.fn(async (path:string) => new Response(JSON.stringify(path.endsWith('/session')
+    ? {projectId:'radar-fixture',uid:'alice',expiresAt:now+3600000} : path.endsWith('/sources') ? rawSources() : path.endsWith('/preview') ? rawPreview() : rawAudit())));
+  const session = new StandaloneRadarSession(identity,fetcher as unknown as typeof fetch);
+  return {session,identity,fetcher,change:(next:RadarIdentityUser|null)=>{user=next;callback(next);},getUser:()=>user};
+}
+const settleSession = async () => { for(let i=0;i<12;i++)await Promise.resolve(); };
+describe('standalone Radar HTTP login and session ownership',()=>{
+  it('calls the default browser fetch with its global receiver',async()=>{
+    const f=standaloneFixture();vi.spyOn(globalThis,'fetch').mockImplementation(function(this:unknown,...args:Parameters<typeof fetch>){
+      expect(this).toBe(globalThis);return f.fetcher(String(args[0]));
+    });
+    const session=new StandaloneRadarSession(f.identity);session.start();await vi.advanceTimersByTimeAsync(0);
+    expect(session.getSnapshot().kind).toBe('ready');session.stop();
+  });
+  it('ends verification on deadline even if the SDK token promise never settles, and discards late success',async()=>{
+    const f=standaloneFixture();let finish!:(token:string)=>void;
+    f.getUser()!.getIdToken=()=>new Promise(resolve=>{finish=resolve;});
+    f.session.start();await vi.advanceTimersByTimeAsync(15000);
+    expect(f.session.getSnapshot()).toMatchObject({kind:'error',error:'認証確認がタイムアウトしました。'});
+    finish('fake-token');await settleSession();expect(f.fetcher).not.toHaveBeenCalled();expect(f.session.getSnapshot().kind).toBe('error');f.session.stop();
+  });
+  it('renders a dedicated login with no operational console or socket provider',()=>{
+    const f=standaloneFixture();const html=renderToString(<StandaloneRadarApp identity={f.identity}/>);
+    expect(html).toContain('Radar にログイン');expect(html).toContain('メールアドレス');expect(html).not.toContain('今回のダイジェスト');
+  });
+  it('verifies profile via HTTP before showing Radar, carries bearer only to own API, then clears on logout',async()=>{
+    const f=standaloneFixture();f.session.start();await settleSession();const state=f.session.getSnapshot();expect(state.kind).toBe('ready');
+    if(state.kind!=='ready')throw Error();state.controller.activate();await state.controller.load();expect(state.controller.getSnapshot().status).toBe('ready');
+    for(const [path,init] of f.fetcher.mock.calls as unknown as [string,RequestInit][]){expect(path.startsWith('/api/radar/')).toBe(true);expect(init.credentials).toBe('omit');expect(init.redirect).toBe('error');}
+    await f.session.logout();expect(f.session.getSnapshot().kind).toBe('login');expect(state.controller.getSnapshot().data).toBeNull();f.session.stop();
+  });
+  it.each(['uid','project','expired','overlong','missing-expiry','unauthorized'])('rejects %s session response',async kind=>{
+    const f=standaloneFixture();const value:any={projectId:'radar-fixture',uid:'alice',expiresAt:now+3600000};
+    if(kind==='uid')value.uid='bob';if(kind==='project')value.projectId='shannonui';if(kind==='expired')value.expiresAt=now;
+    if(kind==='overlong')value.expiresAt=now+3600001;if(kind==='missing-expiry')delete value.expiresAt;
+    f.fetcher.mockResolvedValue(new Response(JSON.stringify(value),{status:kind==='unauthorized'?403:200}));
+    f.session.start();await settleSession();expect(f.session.getSnapshot().kind).toBe('error');f.session.stop();
+  });
+  it('discards profile completion after owner change',async()=>{
+    const f=standaloneFixture();let finish!:(r:Response)=>void;f.fetcher.mockImplementation(()=>new Promise(resolve=>{finish=resolve;}));
+    f.session.start();await settleSession();f.change(null);finish(new Response(JSON.stringify({projectId:'radar-fixture',uid:'alice',expiresAt:now+3600000})));
+    await settleSession();expect(f.session.getSnapshot().kind).toBe('login');f.session.stop();
+  });
+  it('expires the authenticated session and its loaded data',async()=>{
+    const f=standaloneFixture();f.fetcher.mockImplementation(async()=>new Response(JSON.stringify({projectId:'radar-fixture',uid:'alice',expiresAt:now+1000})));
+    f.session.start();await settleSession();expect(f.session.getSnapshot().kind).toBe('ready');await vi.advanceTimersByTimeAsync(1000);
+    expect(f.session.getSnapshot().kind).toBe('error');f.session.stop();
+  });
+  it('keeps data closed when signout fails and token refresh arrives afterwards',async()=>{
+    const f=standaloneFixture();f.session.start();await settleSession();const user=f.getUser();f.identity.signOut.mockRejectedValue(Error('private provider error'));
+    await f.session.logout();expect(JSON.stringify(f.session.getSnapshot())).not.toContain('private provider');
+    f.change(user);await settleSession();expect(f.session.getSnapshot().kind).toBe('login');f.session.stop();
+  });
+  it('redacts login errors and erases state on unmount',async()=>{
+    const f=standaloneFixture();f.change(null);f.session.start();f.identity.signIn.mockRejectedValue(Error('private account'));
+    await f.session.login('fixture@example.test','fake-password');expect(f.session.getSnapshot().kind).toBe('error');expect(JSON.stringify(f.session.getSnapshot())).not.toContain('private account');
+    f.session.stop();expect(f.session.getSnapshot().kind).toBe('login');
   });
 });
