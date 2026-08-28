@@ -1,6 +1,9 @@
 #!/bin/bash
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Check before touching tmux sessions or occupied ports.
+bash "$SCRIPT_DIR/../scripts/start-mode-guard.sh" "$SCRIPT_DIR/.." "$@" || exit $?
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # --- OS detection ---

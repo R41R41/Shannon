@@ -57,3 +57,7 @@ node_modules
 # Editor / merge backup files (do not commit)
 *.bak
 *.orig
+
+# Local environment identity / live-runtime safety lock
+/.shannon-development
+/.dev-runtime-lock
