@@ -16,6 +16,7 @@
     "src/modules/modelSettings/**/*.ts",
     "src/modules/execution/**/*.ts",
     "src/modules/memory/**/*.ts",
-    "src/modules/conversation/**/*.ts"
+    "src/modules/conversation/**/*.ts",
+    "src/modules/radar/**/*.ts"
   ]
 }

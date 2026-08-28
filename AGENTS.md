@@ -1,5 +1,9 @@
 # AGENTS.md
 
+## Shannon Radar（2026-08-28）の注意
+
+主用途は静かな個人/コミュニティ情報Bot。`docs/shannon-radar.md`を参照。新しい`modules/radar`はSDK/I/O/会話graph非依存のRAD-0基盤のみ。rankと配信判断は別、未設定は沈黙、個人digestは非通知preview、Discordはカード承認待ちで送信機能なし。approval照合を認証の代わりにしない。本人/同意/scope付きの観測から始め、profileを主記憶にしない。無反応を嫌悪と扱わずセンシティブ属性を推測しない。既存request返信portやscheduler/EventBusから自発投稿を迂回実行しない。connector/queue/本人管理UI/全面撤回は未完、実投稿・設定・本体起動は行わずdevロックとprod読み取りのみを維持する。
+
 ## RF-03第6段階（2026-08-28）の注意
 
 VM devでbackend411＋frontend18＝429テスト、対象通常型検査/build/native probe合格。実Discordはfake clientで検証、実接続なし。巨大なclient/FCA等を含む全backendはnoCheck変換のみ。

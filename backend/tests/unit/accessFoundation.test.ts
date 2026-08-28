@@ -113,6 +113,7 @@ describe('foundation dependency gate', () => {
       fs.mkdirSync(path.join(root, 'access')); fs.mkdirSync(path.join(root, 'modelSettings'));
       fs.mkdirSync(path.join(root, 'execution')); fs.mkdirSync(path.join(root, 'memory'));
       fs.mkdirSync(path.join(root, 'conversation'));
+      fs.mkdirSync(path.join(root, 'radar'));
       fs.writeFileSync(path.join(root, 'memory/index.ts'), 'export {};');
       fs.writeFileSync(path.join(root, 'execution/index.ts'), 'export {};');
       fs.writeFileSync(path.join(root, 'access/index.ts'), 'export {};');
@@ -128,7 +129,7 @@ describe('foundation dependency gate', () => {
 describe('self-improvement protection for access boundaries', () => {
   it('cannot edit security modules, registration, composition or its own deny policy', async () => {
     const { isMutableRelativePath } = await import('../../src/services/llm/graph/cognitive/selfImprove/mutableCodePolicy.js');
-    for (const path of ['src/modules/access/index.ts', 'src/modules/modelSettings/index.ts',
+    for (const path of ['src/modules/access/index.ts', 'src/modules/modelSettings/index.ts', 'src/modules/radar/deliveryPolicy.ts',
       'src/modules/execution/index.ts', 'src/modules/memory/index.ts', 'src/services/memory/requestMemory.ts', 'src/services/llm/graph/requestExecutionCoordinator.ts',
       'src/services/llm/graph/coordinatedGraphInvocation.ts', 'src/services/llm/graph/shannonGraph.ts',
       'src/services/llm/graph/cognitive/ParallelExecutor.ts', 'src/services/llm/client.ts',

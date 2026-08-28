@@ -4,7 +4,7 @@ const path = require('node:path');
 const ts = require('typescript');
 const root = path.resolve(__dirname, '..');
 const moduleRoot = process.argv[2] ? path.resolve(process.argv[2]) : path.join(root, 'backend/src/modules');
-const allowed = { access: ['access'], modelSettings: ['access', 'modelSettings'], execution: ['execution'], memory: ['memory'], conversation: ['conversation'] };
+const allowed = { access: ['access'], modelSettings: ['access', 'modelSettings'], execution: ['execution'], memory: ['memory'], conversation: ['conversation'], radar: ['radar'] };
 const errors = [];
 function walk(dir) { return fs.readdirSync(dir, { withFileTypes: true }).flatMap(e => e.isDirectory() ? walk(path.join(dir, e.name)) : e.name.endsWith('.ts') ? [path.join(dir, e.name)] : []); }
 for (const [owner, dependencies] of Object.entries(allowed)) {
@@ -29,4 +29,4 @@ for (const [owner, dependencies] of Object.entries(allowed)) {
   }
 }
 if (errors.length) { console.error(errors.join('\n')); process.exitCode = 1; }
-else console.log('Foundation boundaries passed (access, modelSettings, execution, memory, conversation)');
+else console.log('Foundation boundaries passed (access, modelSettings, execution, memory, conversation, radar)');

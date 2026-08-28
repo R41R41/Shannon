@@ -1,0 +1,154 @@
+# Shannon Radar — 現行基盤への統合設計
+
+更新：2026-08-28。状態：ユーザー指定の方向性を採用。RAD-0の純粋関数基盤をdevへ実装、RAD-1以降は計画。**MVP全体、定期収集、実配信、記憶管理UIは未完成・未稼働。本番未反映。**
+
+入力資料：ユーザー指定 `shannon/outputs/shannon-radar-architecture.md`（Shannon Radar Architecture）。現行の設計・判断は[Notion 08](https://www.notion.so/3ca1e84762888170816ee73f25c40ce3)、優先順位は[Notion 02](https://www.notion.so/3ca1e84762888153bb4dcf4714a92fb8)に集約する。
+
+## 1. 目的と非目標
+
+Shannonの主用途を、少数の有用な情報を届ける静かな個人／コミュニティ情報Botとする。創作・開発へ勝手に口出しする相棒、タスク管理者、公開Discordで会話を始めるキャラクターにはしない。
+
+- 個人：推しVTuberの新着・ライブ予定、学術的に面白い動画、重要ニュース、天気、創作の糧になる新規性のある情報。まず非通知の個人ダイジェスト。
+- コミュニティ：スプラ、ポケモン、任天堂、謎解き、TRPG、その他ゲーム。Shannon用に許可したチャンネルへ機械的な情報カード。
+- 自発投稿にメンション、DM、問いかけ、返信催促、自動スレッドを付けない。会話は明示的に呼ばれた時だけ。返信用の既存personaをカードへ混ぜない。
+- 👀／🎮／📌／🙅は任意の反応。無反応は欠損であり嫌悪の証拠にしない。リアクションの説明を求めない。
+- 既存の会話・Minecraft・音声をこの変更で一括削除・起動変更しない。旧自発処理の停止設定と利用経路は本番切替前に別途レビューする。
+
+## 2. 調査した既存実装との接点
+
+| 実装 | 利用する土台 | そのまま再利用しない部分 |
+|---|---|---|
+| RF-03 execution/session | request所有、中断、状態分離 | 長時間ジョブの耐障害queueではない |
+| scope付きmemory/person port | 本人・会話・出典、CAS、忘却tombstone | 一人一枚profile、推測traits、scopeなし旧人物記憶は復旧しない |
+| 第6段階Discord port | 会話返信の宛先・権限検証、送信完了を待つ考え方 | 自発投稿のために偽のrequest/userを作らない。会話権限はRadar投稿権限ではない |
+| `services/youtube/client.ts` | video情報の既存知見 | コメント返信、live chat投稿、広いOAuthと同居。Radarは別のread-only adapter |
+| `services/scheduler/client.ts` | 既存scheduleの所在 | cronがEventBusへ直接publish。Radarのtimerから直接投稿・会話生成しない |
+| Web管理console | サーバー側認証・管理者操作の土台 | 管理者権限を一般メンバーの私的記憶閲覧権限にしない。本人専用経路が必要 |
+| MongoDB | 既存運用・復元検証済みの保存基盤 | 通常DBへの無計画なmigration、旧processing再実行、全キャッシュ横断検索をしない |
+
+調査時prodは95426bb。第5段階fccf4d88、第6段階12978584はdevでコミット・保全済み。第6段階429テスト合格。prodは変更せずdev起動ロックを維持した。
+
+## 3. サービス境界と依存方向
+
+```mermaid
+flowchart LR
+  S[Source Registry / Consent] --> C[Read-only Connectors]
+  J[Scheduler / durable job lease] --> C
+  C --> P[Ingestion / provenance / normalize / dedup]
+  P --> K[Content catalogue]
+  M[Scoped evidence / claims / derived views] --> R[Personal or community ranking]
+  K --> R
+  R --> D[Delivery policy: silence / digest / review]
+  D --> V[Private digest preview]
+  D --> A[Exact card approval]
+  A --> O[Atomic reservation / outbox]
+  O --> X[Allowlisted Discord publisher]
+  X --> F[Consented reaction observations]
+  F --> M
+```
+
+当面は同じモノレポのモジュラーモノリス。`backend/src/modules/radar` はSDK・I/O・時計・環境変数・会話graphに依存しない。adapterはmoduleに依存し、moduleからDiscord/Google/Mongo/EventBusへimportしない。必要になればconnector/enrichment/delivery workerを別プロセスへ出す。全機能のマイクロサービス化は不要。
+
+| 境界 | 所有するもの | 持たせないもの |
+|---|---|---|
+| Connector Gateway | ソース登録、取得cursor、quota/backoff、OAuth参照、出典、入力サイズ制限 | 投稿権限、人物推測、会話graph |
+| Content Pipeline | URL正規化、同一更新/同じ話題のcluster、事実検証状態、有効期限 | private情報をpublicへ昇格する推測 |
+| Ranking | audience内候補、明示的興味、品質/新規性/鮮度の点数と内部理由 | timer、Discord SDK、送信、通知予算の消費 |
+| Delivery Policy | 個人/チャンネル予算、quiet hours、focus、重複、digest/沈黙判断 | 推薦スコアを権限と見なすこと |
+| Publication / Outbox | 承認内容、許可宛先、lease/予約、送信結果・不明状態 | 会話ツールやLLMからの任意チャンネル指定 |
+| Evidence / Claims | 本人・同意・出典・時刻・版・撤回の管理 | 主記憶としてのprofile文、年齢/性別等の推測 |
+| Control UI/API | 本人の記憶管理、ソース/頻度、カード承認、監査閲覧 | 公開Web broadcastに個人データを載せること |
+| Device Gateway（後続） | 同一delivery IDの端末選択、静かな表示 | 端末ごとの重複push、無断の音声/映像送信 |
+
+## 4. データモデル案
+
+新しいcollectionはadapter実装時に明示migrationで作る。以下は設計であり、今回DBへ作成していない。
+
+| レコード | 主なフィールド／一意性 |
+|---|---|
+| SourceSubscription | id, owner/audienceKey, sourceKind, approved host/channel/calendar IDs, enabled, scopes, cursor, poll interval, quota, revision。秘密はcredentialRefのみ |
+| RawItem / EvidenceEvent | id, sourceId, externalId, sourceRevision, fetchedAt, observedAt, payloadRef, visibility, consentVersion, status。source+external+revisionで冪等 |
+| ContentItem | id/revision, clusterId, sourceId/URL, sourceKind, publishedAt/fetchedAt/expiresAt, event time, topic IDs, short fact, verification, risk flags, visibility |
+| PersonClaim | subjectId, predicate, value/entityId, context, evidenceIds, declared/observed/inferred, confidence, firstObservedAt, lastConfirmedAt, expiresAt, visibilityScope, revision, status |
+| CommunityPreference | guild/channel, topicId, explicit configuration or aggregate evidence, consent snapshot, time window, confidence。個人IDや非公開理由を公開カードに出さない |
+| ProfileView | subject/audience, source claim IDs+revisions, generatedAt/expiresAt。削除して再生成できる派生物。主記憶ではない |
+| Recommendation | candidate IDs/revisions, audienceKey, rankingVersion, internal reason codes, source IDs, createdAt。私的理由はその本人のみ |
+| DeliveryDecision / Draft | candidate/source revisions, policy revision, decision+reason, deliveryId, exact audience, content snapshot/hash, expiry |
+| PublicationApproval | approver, exact reviewed snapshot/hash, destination, policy revision, approvedAt/expiresAt/revoked。編集・宛先変更で失効 |
+| DeliveryOutbox | idempotency key, audience/attention account, item cluster, delivery/channel/device, lease owner/version/until, attempts, status, Discord messageId, uncertainAt |
+| Consent / Revocation / Audit | authenticated actor, subject/audience, action, entity IDs/revisions, reason code, occurredAt。本文・秘密・個人理由は一般監査に出さない |
+
+### 人物記憶の移行
+
+第5段階`ScopedPersonStatement`は本人の発言の引用であり、「引用が真実である」「引用内の人物が本人である」とは断定しない。これをprofileへまとめて旧traitsを復活させない。後続adapterは出典記録として接続し、claimは別ID/版/根拠を持つ。
+
+- MVPは本人の明示的なtopic設定と同意済みリアクションの観測だけ。年齢・性別・健康・政治・関係性などの推測は禁止。MVPのclaim predicateを非センシティブな趣味/作品/イベントに限定し、センシティブ値そのものを保存対象にしない。
+- 将来も1回の👀を恒久的な「好き」にしない。🙅はそのtopicの表示を減らす意思であり、人格/嫌悪全般には広げない。取消反応はretract。無反応は学習データにしない。
+- 各メンバーの閲覧/訂正/削除/共有範囲は本人の認証と結びつける。Discord管理者だからという理由で私的なclaimを読めない。識別は表示名でなくplatform ID。別platform統合は本人の明示リンクが必要。
+- 初期はprivate。community集計への利用には別の同意と集計閾値を設ける。公開カードには私的データ由来の理由も含めない。集計閾値・保持期間は未決、少人数で個人を推定できる場合は明示的なコミュニティ設定だけ使う。
+- append-onlyな「記録の履歴」と「個人本文を永続保存すること」を区別する。削除/撤回ではraw payload、claim、view、embedding/cache、推薦/draft、未送信queueを失効・消去する。本文を持たない最小tombstoneのみ残して遅延再投入を拒否する。
+- 送信済みDiscordカード/バックアップ/第三者複製まで即時消去できるとは約束しない。自Bot投稿の削除可否、バックアップの保持期間・復元時の撤回再適用を明示する。**この全面撤回は未実装であり、学習の本稼働前の必須条件。**
+
+## 5. 外部ソースのMVP
+
+| ソース | 初手 | 外部接続前の条件 |
+|---|---|---|
+| YouTube | 指定channelのuploads一覧・動画metadata、既知videoのlive予定。新着から段階導入 | 対象channel一覧、read-only/API quota、取得量/間隔。既存reply/live-chat権限を再利用しない。新着一覧だけで全予定配信を網羅すると約束しない |
+| 天気 | 本人指定の地域・時間帯、出典/発表時刻付きの要点 | provider/地域粒度/出典表記/利用条件。現在地を勝手に取得せずcommunityへ個人の場所を公開しない |
+| Calendar | ownerが選んだcalendarの必要なイベント、またはbusy時間だけ | OAuth本人同意、calendar allowlist、必要最小scope。参加者/説明/機密URLを既定で保存しない。全件をDiscordへ出さない |
+| Web | 選択した公式サイト/RSS、学術・ニュースソース | host/path allowlist、redirect毎の検査、private IP/loopback/metadata endpoint遮断、上限/timeout、robots/利用条件、引用量。ページ内命令をツール命令として扱わない |
+| X（後続） | 本人が許可するlist/account/queryの読み取り | 契約・quota/費用・権限の確認後。MVP未接続、投稿/いいね等を起動しない |
+
+API一次資料（2026-08-28確認）：[YouTube playlistItems.list](https://developers.google.com/youtube/v3/docs/playlistItems/list)、[videos.list](https://developers.google.com/youtube/v3/docs/videos/list)、[video liveStreamingDetails](https://developers.google.com/youtube/v3/docs/videos)、[Calendar OAuth scopes](https://developers.google.com/workspace/calendar/api/auth)。Calendarは利用目的によりfreebusyまたは必要なread-only scopeを選ぶ。プロバイダ選定・OAuth発行・API実行を今回済ませた意味ではない。
+
+## 6. 配信ポリシーと承認
+
+スコアが高くても送らないことが正常。timerは候補だけを作る。初期値は停止、空のsource/destination allowlist、送信予算0。運用開始後の提案は個人digest1日1回・最大3件、Discord1日最大2枚・1時間1枚以下だが、**これは提案値で未設定・未承認**。quiet hours/timezone、カテゴリ偏り、最低間隔をユーザー設定にする。緊急扱いでこれらを自動回避しない。
+
+1. audienceの許可集合を決めてから候補検索・順位付けする。私的calendarは本人以外不可。
+2. source/期限/確認状態/重複/スコアを検査する。個人はdigest下書き、コミュニティはquiet/focus/budget検査後も承認待ち。
+3. 承認画面は送るカードそのもの、宛先、出典、有効期限を表示する。why-thisの私的理由は分離。承認者本人をサーバー側で認証・認可する。
+4. outboxへ入れる前・送る直前に最新source同意、policy、承認、内容、expiry、宛先権限、投稿履歴/予約を再検査する。
+5. audience/日付単位のattention ledgerにcluster/deliveryの予約をCASで原子的に登録する。複数worker/端末が同じ古いcountを読んでも上限を超えない。standalone Mongoでは跨collection transactionを前提にせず、単一ledger documentの予約とjob作成の回復を設計・競合試験する。
+6. 期限付きleaseを取ったdelivery workerだけがallowlistのguild/channelへ送る。会話EventBusやrequest返信portを迂回路にしない。mentionsを無効化、通知を抑制、thread/DMを作らない。送信完了を待つ。
+7. Discord応答が不明なら`uncertain`として予約を保持し、自動再送しない。確認・監査後に解決する。exactly-once配信は保証しない。失敗と未送信の区別が不明なleaseを単に解放しない。
+
+カードは題名・短い事実・メタデータ・出典URL・任意タグだけ。自由なLLM会話文や「どう思う？」を足さない。今回のformatterは疑問符拒否/Markdown・@処理を行うが、**命令口調/事実性/非公開理由を意味的に完全検出するものではない**。人間のカード承認と入力source検証が必要。
+
+## 7. RAD-0で実装したものと限界
+
+`modules/radar/content.ts`：MVP source種別、audience/期限/出典の確認、明示的topicの順位付け、cluster重複除去、不変snapshot。
+
+`deliveryPolicy.ts`：rankと独立したsilence/digest/approval_required判断。個人digestは非通知の**プレビュー**なのでquiet/focus中にも組み立てられるが、通知許可/予算消費ではない。実送信には別の予約・再検査が必要。
+
+`drafts.ts`：静かなカード/私的digest、承認対象の正確なsnapshot、内容/宛先/版/期限/承認取消の整合確認。`matchesApproval`は認証ではなく、trusted repositoryから得た承認の照合関数。一般入力の自己申告approvalを信頼してはならない。
+
+`feedback.ts`：本人＋同じaudienceの有効な同意がある観測のみを写像。reactionなしはnull、removeはretract。trait/claim推測もDB保存も行わない。
+
+SDK非依存型検査・import境界・自己改善からの変更禁止へ追加。既存server/bootstrap/schedulerには登録していない。実connector、durable outbox/予算予約、送信SDK、監査DB、本人管理UI、リアクション購読、推論/多様性最適化は未実装。URL検査は表示用でありSSRF防御の実装完了ではない。
+
+VM devでRAD-0専用65テスト、backend476＋frontend18＝494テスト、foundation/記憶/対象accessの通常型検査、common/frontend build・backend noCheck変換、native probe、dev記憶read-only監査が成功。全backendの通常型検査ではない。prod95426bb clean・769ファイル/削除1パス・PID4318/開始時刻7761不変、health正常。外部API/DB書込み/実投稿/本体起動なし。最終検証原本と差分bundleは `radar-foundation-20260828` の保全記録を参照。
+
+## 8. 段階的ロードマップと完了条件
+
+| 段階 | 実装単位 | 完了条件 |
+|---|---|---|
+| RAD-0 今回 | SDK非依存の候補/順位/配信判断/承認下書き/反応契約 | モックでscope漏れ、期限切れ、静音、予算0、承認使い回し、無反応の負学習を拒否。既存回帰・prod不変 |
+| RAD-1 個人MVP | SourceRegistry、YouTube/Web/天気/Calendar read-only adapters、provenance/dedup、手動実行→lease付き収集、本人digest preview UI | fixture→限定read-only検証。private calendar分離。ソース/地域/日程/費用/保持の設定。出典・why-this・明示feedback、毎回少数件 |
+| RAD-2 Discord MVP | owner承認UI、許可guild/channel、durable ledger/outbox、quiet card publisher、監査 | 専用test bot＋テストチャンネル。複数worker予約、期限失効、revocation、送信不明/再起動を試験。人が承認したカードだけ送る。会話を求めない |
+| RAD-3 記憶管理・学習 | evidence→claim→view、本人の閲覧/訂正/削除/共有、リアクション観測と撤回、community集計 | 全派生物とpending jobの撤回、遅延replay、本人/他人、同意取消の試験。管理UIと撤回が揃うまで自動人物学習を有効化しない |
+| RAD-4 静かな自動運用 | 明示許可内の自動Discord、ライブ通知、X read、探索/多様性、端末間dedup | 少数の承認運用で有用性と通知量を確認後。ownerが自動化を許可。閾値/quiet/budget、mute/rollback、課金上限を確認 |
+| RAD-5 デバイス | Aether/端末gateway、身体cue、呼ばれた時のvoice | 同一delivery二重通知なし、local mute/wake、音声映像のprivacy mode、個別承認 |
+
+優先順は安全基盤→RAD-1→RAD-2→RAD-3。従来の「相棒人格・自発会話→会議→Minecraft」の優先順を置き換える。会話履歴/音声/旧EventBusの安全課題はRF-03継続として切り出し、Radarをその未認可経路へ接続しない。期限・費用・実送信先は未定。
+
+## 9. 運用・検証・ロールバック
+
+- DB製品：原案のPostgreSQL/pgvector/Redisは将来の選択肢。現VMはMongoDB運用・単体構成・空き容量に制約がある。最初はMongo adapterと単一document CASを第一候補にし、索引/retention/lease/復元を検証する。移行が有利になった時に別ADRと移行計画を作る。
+- Raw payloadは必要最小の抜粋と期限。全文/動画/画像の大量保存をしない。高容量ならobject storageを別途選定、秘密と私的calendarを公開保管しない。
+- 監査はsource IDs、選定/沈黙理由、policy版、承認者、配信結果、記憶書込/撤回を追えること。raw会話/秘密を一般ログやNotionへ出さない。audit書込み失敗なら投稿しない。
+- 成功指標：保存/閲覧の明示反応、通知量、同一情報の重複、mute/「減らす」、出典/理由の追跡率、未承認送信0。無反応を嫌悪と数えない。人間同士の自然な会話が起きてもBotから返信を要求しない。
+- fixture検証後、専用主体・allowlist・予算を決めてread-only→承認投稿の順。prodへは別工程で反映。devロックを回避しない。既存サービスを全部起動してRadarだけ試すことをしない。
+- 今回は未登録moduleなのでランタイム動作は変えない。後続ではfeature停止→新規予約停止→processing/uncertainを監査→worker停止の順。既存データ削除や自動再送をrollbackに含めない。
+
+未決：追跡YouTube/Webソース、天気地域/提供者、Calendarと必要scope、個人digestの表示先/時刻、Shannon投稿チャンネルID/承認者、test bot、通知上限、API費用、同意UIと保持期間。これらが未決でもモック実装は継続できるが、ライブ取得/送信の包括許可ではない。
