@@ -127,6 +127,7 @@ function createExecuteNode(
 
     const fcaState = {
       taskId: envelope.requestId,
+      requestEnvelope: envelope,
       userMessage: envelope.text ?? null,
       messages: state._legacyMessages,
       emotionState,
@@ -249,8 +250,10 @@ function createExecuteNode(
           });
         }
 
+        // A fresh context-bearing tool set for this executor invocation.
+        const runTools = fca.createToolsForRun();
         // FCA 登録済みツールを Anthropic 形式に変換
-        for (const tool of fca.getTools()) {
+        for (const tool of runTools) {
           // routine:xxx は既に routine-xxx として追加済み、manage-routine / task-complete も追加済み
           if (tool.name.includes(':')) continue; // Anthropic は ':' を許可しない
           const sanitizedName = tool.name.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -288,14 +291,16 @@ function createExecuteNode(
         // LLM ツール用マップ (FCA のツールを直接呼出)
         // sanitize 後の名前でもマッチするように両方登録
         const llmToolMap = new Map<string, (input: Record<string, unknown>) => Promise<string>>();
-        for (const tool of fca.getTools()) {
+        for (const tool of runTools) {
           if (['task-complete'].includes(tool.name)) continue;
           if (tool.name.includes(':')) continue; // routine:xxx は ShannonExecutor が直接処理
           const sanitized = tool.name.replace(/[^a-zA-Z0-9_-]/g, '_');
           const handler = async (input: Record<string, unknown>) => {
             try {
-              return await (tool as any)._call(input);
+              state._abortSignal?.throwIfAborted();
+              return await tool.invoke(input, { signal: state._abortSignal });
             } catch (e) {
+              state._abortSignal?.throwIfAborted();
               return `エラー: ${e instanceof Error ? e.message : String(e)}`;
             }
           };

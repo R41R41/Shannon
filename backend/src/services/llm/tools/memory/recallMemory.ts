@@ -9,6 +9,9 @@ import type { MemoryAgent } from '../../graph/cognitive/MemoryAgent.js';
  * 旧 recall-experience / recall-knowledge / recall-person を統合。
  */
 export default class RecallMemoryTool extends StructuredTool {
+    /** Request context is never copied from the catalog instance. */
+    createForRun(): RecallMemoryTool { return new RecallMemoryTool(); }
+
     name = 'recall-memory';
     description = '記憶を検索する。「〜について知ってる？」「〜はどこにある？」「〜さんについて教えて」など、過去の体験・知識・人物情報を思い出す。';
     schema = z.object({

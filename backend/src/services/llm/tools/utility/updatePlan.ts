@@ -15,6 +15,9 @@ import { logger } from '../../../../utils/logger.js';
  * LLMが「まず計画を立てよう」と判断した時に呼び出す。
  */
 export default class UpdatePlanTool extends StructuredTool {
+    /** Request context is never copied from the catalog instance. */
+    createForRun(): UpdatePlanTool { return new UpdatePlanTool(); }
+
     name = 'update-plan';
     description =
         'Update the current task plan. Call this to set or update the goal, strategy, and subtasks. ' +
@@ -51,6 +54,7 @@ export default class UpdatePlanTool extends StructuredTool {
     // 外部から設定されるコンテキスト（channelId等）
     private channelId: string | null = null;
     private taskId: string | null = null;
+    private platform: string | null = null;
 
     constructor() {
         super();
@@ -60,9 +64,10 @@ export default class UpdatePlanTool extends StructuredTool {
     /**
      * コンテキストを設定（FunctionCallingAgentから呼ばれる）
      */
-    public setContext(channelId: string | null, taskId: string | null): void {
+    public setContext(channelId: string | null, taskId: string | null, platform: string | null = null): void {
         this.channelId = channelId;
         this.taskId = taskId;
+        this.platform = platform;
     }
 
     /**
@@ -94,7 +99,7 @@ export default class UpdatePlanTool extends StructuredTool {
             });
 
             // Discord に通知（channelIdがある場合）
-            if (this.channelId) {
+            if (this.platform === 'discord' && this.channelId) {
                 this.eventBus.publish({
                     type: 'discord:planning',
                     memoryZone: 'web',

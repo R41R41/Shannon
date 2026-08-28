@@ -40,6 +40,9 @@ const PLAN_SYSTEM_PROMPT = `あなたはマインクラフトのクラフト計�
 - 精錬が必要な場合は明示する`;
 
 export default class PlanCraftTool extends StructuredTool {
+    /** Request context is never copied from the catalog instance. */
+    createForRun(): PlanCraftTool { return new PlanCraftTool(); }
+
     name = 'plan-craft';
     description = 'アイテムのクラフト・精錬計画を立てる。レシピ依存、インベントリ、周辺インフラ、記憶を考慮して最適な手順を出力する。';
     schema = z.object({

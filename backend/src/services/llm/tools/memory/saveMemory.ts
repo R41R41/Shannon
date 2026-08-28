@@ -9,6 +9,9 @@ import type { MemoryAgent } from '../../graph/cognitive/MemoryAgent.js';
  * 旧 save-experience / save-knowledge を統合。
  */
 export default class SaveMemoryTool extends StructuredTool {
+    /** Request context is never copied from the catalog instance. */
+    createForRun(): SaveMemoryTool { return new SaveMemoryTool(); }
+
     name = 'save-memory';
     description = '覚えておきたいことを記憶に保存する。チェストの中身、場所の情報、学んだことなど。';
     schema = z.object({

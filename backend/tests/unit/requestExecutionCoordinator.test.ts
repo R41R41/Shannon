@@ -4,6 +4,26 @@ vi.mock('../../src/utils/logger.js', () => ({ logger: { warn: vi.fn() } }));
 import { RequestExecutionCoordinator } from '../../src/services/llm/graph/requestExecutionCoordinator.js';
 import { ExecutionLanes, executionLaneKey } from '../../src/modules/execution/index.js';
 import { runCoordinatedGraph } from '../../src/services/llm/graph/coordinatedGraphInvocation.js';
+import { RunToolRegistry } from '../../src/modules/execution/runToolRegistry.js';
+
+describe('run tool registry', () => {
+  it('rejects context setters without a factory, without partially registering the batch', () => {
+    const registry = new RunToolRegistry<any>([{ name: 'read' }]);
+    expect(() => registry.add([{ name: 'new' }, { name: 'stateful', setContext() {} }])).toThrow('createForRun');
+    expect(registry.names()).toEqual(['read']);
+  });
+  it.each(['alias', 'rename'])('rejects an invalid factory result (%s)', kind => {
+    const tool: any = { name: 'stateful', createForRun: () => kind === 'alias' ? tool : { name: 'other' } };
+    expect(() => new RunToolRegistry([tool]).createTools()).toThrow('Invalid run-scoped');
+  });
+  it('creates distinct stateful instances and reuses explicitly stateless services', () => {
+    const shared = { name: 'read' };
+    const registry = new RunToolRegistry<any>([shared, { name: 'write', createForRun: () => ({ name: 'write', value: [] }) }]);
+    const first = registry.createTools(); const second = registry.createTools();
+    first[1].value.push('private');
+    expect(first[0]).toBe(shared); expect(second[0]).toBe(shared); expect(second[1].value).toEqual([]);
+  });
+});
 
 function deferred() {
   let resolve!: () => void;

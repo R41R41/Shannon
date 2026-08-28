@@ -46,6 +46,8 @@
 
 ## 2026-08-28の責務分離
 
+- [FCAの実行状態・ツール参照の分離](refactor-execution-sessions.md)：RF-03第2段階。会話混線の再現・修正と、記憶検索/配信先に残る課題。
+- [実行順序・中断管理の分離](refactor-execution-coordination.md)：RF-03第1段階。緊急割込み・所有者・終了処理。
 - [Web認証・モデル設定の責務分離](refactor-access-foundation.md)：RF-01/RF-02の初期実装、テストと移行前提。
 - [Notionの現行設計](https://www.notion.so/3ca1e84762888170816ee73f25c40ce3)：段階的な責務分離。
 

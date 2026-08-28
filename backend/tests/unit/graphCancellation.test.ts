@@ -3,9 +3,9 @@ import type { RequestEnvelope } from '@shannon/common';
 
 const fakes = vi.hoisted(() => ({
   run: vi.fn(), parallel: vi.fn(), format: vi.fn(), writeback: vi.fn(),
-  saveEpisode: vi.fn(),
+  saveEpisode: vi.fn(), native: vi.fn(), nativeDeps: undefined as any, nativeEnabled: false,
 }));
-vi.mock('../../src/config/env.js', () => ({ config: { anthropic: { apiKey: '' } } }));
+vi.mock('../../src/config/env.js', () => ({ config: { anthropic: { get apiKey() { return fakes.nativeEnabled ? 'mock' : ''; } } } }));
 vi.mock('../../src/utils/logger.js', () => ({ createLogger: () => ({ info: vi.fn(), error: vi.fn() }) }));
 vi.mock('../../src/services/llm/graph/nodes/EmotionNode.js', () => ({ EmotionNode: class {} }));
 vi.mock('../../src/services/llm/graph/nodes/FunctionCallingAgent.js', () => ({ FunctionCallingAgent: class {} }));
@@ -22,6 +22,12 @@ vi.mock('../../src/services/llm/graph/cognitive/TaskEpisodeMemory.js', () => ({
   TaskEpisodeMemory: { buildEpisodeFromResult: () => ({}), getInstance: () => ({ saveEpisode: fakes.saveEpisode }) },
 }));
 vi.mock('../../src/services/common/adapters/actionFormatter.js', () => ({ actionFormatterNode: fakes.format }));
+vi.mock('../../src/services/llm/graph/ShannonExecutor.js', () => ({
+  ShannonExecutor: class { constructor(deps: any) { fakes.nativeDeps = deps; } run = fakes.native; },
+  skillToAnthropicTool: vi.fn(), routineToAnthropicTool: vi.fn(),
+}));
+vi.mock('../../src/services/llm/graph/nodes/prompt/PromptBuilder.js', () => ({ PromptBuilder: class { buildSystemPrompt() { return 'mock prompt'; } } }));
+vi.mock('../../src/services/minebot/utils/minebotToolPolicy.js', () => ({ resolveMinebotToolPolicy: () => 'all', filterToolsByMinebotPolicy: (tools: any[]) => tools }));
 
 import { buildShannonGraph, invokeShannonGraph } from '../../src/services/llm/graph/shannonGraph.js';
 
@@ -39,6 +45,7 @@ function deferred() {
 }
 beforeEach(() => {
   vi.resetAllMocks();
+  fakes.nativeEnabled = false; fakes.nativeDeps = undefined;
   fakes.run.mockResolvedValue(result); fakes.parallel.mockResolvedValue(result);
   fakes.writeback.mockResolvedValue(undefined); fakes.saveEpisode.mockResolvedValue(undefined);
   fakes.format.mockResolvedValue({ actionPlan: { actions: [] } });
@@ -49,6 +56,7 @@ describe('real graph with mocked external services', () => {
     const controller = new AbortController();
     const response = await invokeShannonGraph(graph(parallel), envelope, [], { abortSignal: controller.signal });
     expect((parallel ? fakes.parallel : fakes.run).mock.calls[0][1]).toBe(controller.signal);
+    expect((parallel ? fakes.parallel : fakes.run).mock.calls[0][0].requestEnvelope).toMatchObject(envelope);
     expect(response.finalAnswer).toBe('answer');
     expect(fakes.writeback).toHaveBeenCalledOnce();
   });
@@ -75,5 +83,29 @@ describe('real graph with mocked external services', () => {
     fakes.format.mockImplementation(async () => { controller.abort(); return { actionPlan: { actions: [] } }; });
     await expect(invokeShannonGraph(graph(), envelope, [], { abortSignal: controller.signal })).rejects.toThrow();
     expect(fakes.writeback).not.toHaveBeenCalled();
+  });
+
+  it('builds native executor tools from a fresh per-run catalog and uses invoke with its signal', async () => {
+    fakes.nativeEnabled = true;
+    const controller = new AbortController(); const invoke = vi.fn(async () => 'native-tool-result');
+    const createToolsForRun = vi.fn(() => [{ name: 'test-tool', description: 'test', invoke }]);
+    fakes.native.mockImplementation(async () => {
+      expect(await fakes.nativeDeps.llmTools.get('test-tool')({ value: 1 })).toBe('native-tool-result');
+      return { lastContent: 'native answer', taskTree: result.taskTree, toolCallCount: 1, durationMs: 0 };
+    });
+    const compiled = buildShannonGraph({ fca: { createToolsForRun, run: fakes.run } as any });
+    await invokeShannonGraph(compiled, { ...envelope, channel: 'minecraft' }, [], { abortSignal: controller.signal });
+    expect(createToolsForRun).toHaveBeenCalledOnce();
+    expect(invoke).toHaveBeenCalledWith({ value: 1 }, { signal: controller.signal });
+    expect(fakes.run).not.toHaveBeenCalled();
+  });
+
+  it('does not start fallback FCA when the native engine throws after cancellation', async () => {
+    fakes.nativeEnabled = true;
+    const controller = new AbortController();
+    fakes.native.mockImplementation(async () => { controller.abort(); throw new Error('native cancelled'); });
+    const compiled = buildShannonGraph({ fca: { createToolsForRun: () => [], run: fakes.run } as any });
+    await expect(invokeShannonGraph(compiled, { ...envelope, channel: 'minecraft' }, [], { abortSignal: controller.signal })).rejects.toThrow();
+    expect(fakes.run).not.toHaveBeenCalled(); expect(fakes.writeback).not.toHaveBeenCalled();
   });
 });

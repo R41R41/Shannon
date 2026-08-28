@@ -29,12 +29,13 @@ import { ParallelExecutor } from '../../src/services/llm/graph/cognitive/Paralle
 
 const state = {
   taskId: 'test', userMessage: 'test', messages: [], selectedModel: 'mock-model',
+  requestEnvelope: { requestId: 'test', channel: 'discord', sourceUserId: 'test-user', conversationId: 'test-channel', threadId: 'test-thread', tags: [] },
   context: { platform: 'discord' }, emotionState: { current: null },
 } as any;
 const result = { taskTree: { status: 'completed' }, messages: [], forceStop: false };
 function fixture(run: (...args: any[]) => any) {
   const fca = { getTools: () => [], setBlackboardAccessor: vi.fn(), run: vi.fn(run) };
-  return { fca, executor: new ParallelExecutor({ fca: fca as any }) };
+  return { fca, executor: new ParallelExecutor({ fca: { createSession: () => fca } as any }) };
 }
 
 beforeEach(() => {

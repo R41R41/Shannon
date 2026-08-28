@@ -60,3 +60,9 @@ devの `.dev-runtime-lock` は共有認証情報等の整理が済むまで起�
 ユーザーの問題解消依頼に基づきprodのGit記録のみ `95426bb` へ整合、未コミット0件。実ファイル769件と削除済み1パス、環境設定・backend PIDは不変。dev新コードは未反映。今後も開発中のprodファイル/設定/プロセス変更はしない。
 
 Node22.21.1を `bash scripts/with-dev-node.sh` で使用。native probe、158 backend +18 frontendテスト、隔離MongoDB復元に合格。共有外部資格情報とUID対応付けは未解決なので起動ロックを迂回しない。管理consoleのみ許可、public chat停止、Mod専用認証必須という現行制限を勝手に緩めない。詳細と残条件はR0資料。
+
+### RF-03の実行管理とセッション分離
+
+最新のdev実装は `docs/refactor-execution-sessions.md` とNotion 08の15節。第1段階の実行順序・中断管理に続き、共有FCAを登録用catalogと1回限りのsessionへ分離した。状態付きツールは `createForRun()` で生成し、共有agentへMemoryAgent/blackboardを注入しない。ParallelExecutorにはgraphからcanonical requestEnvelopeを明示する。
+
+VM devでbackend207＋frontend18＝225テスト、対象型検査・common/frontend build・native probe合格。backend全体はnoCheck変換のみ。本番ファイル/設定/プロセス不変、env/DB変更・live起動・push・deployなし。DB記憶検索のscope、旧memoryツール、Webの一斉配信、全チャネル宛先認可は未完。public chat停止と起動ロックを維持する。Halcyonは音楽Botで対象外、新しいテストBotは未作成。

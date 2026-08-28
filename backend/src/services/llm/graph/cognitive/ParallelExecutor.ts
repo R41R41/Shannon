@@ -62,6 +62,10 @@ export class ParallelExecutor {
         signal?: AbortSignal,
     ): Promise<ParallelExecutorResult> {
         signal?.throwIfAborted();
+        if (!state.requestEnvelope || state.requestEnvelope.requestId !== state.taskId) {
+            throw new Error('Parallel execution requires its canonical request envelope');
+        }
+        const fca = this.fca.createSession();
         const goal = state.userMessage || 'Unknown task';
         const startTime = Date.now();
         const isMinecraft = state.context?.platform === 'minecraft' || state.context?.platform === 'minebot';
@@ -111,19 +115,13 @@ export class ParallelExecutor {
         }
 
         // MemoryAgent を初期化 (4番目の並列プロセス)
-        const memoryAgent = new MemoryAgent(blackboard, state.context?.metadata?.envelope as import('@shannon/common').RequestEnvelope ?? {
-            requestId: state.taskId,
-            channel: (state.context?.platform as string) ?? 'unknown',
-            sourceUserId: '',
-            conversationId: '',
-            threadId: '',
-            tags: [],
-            timestampIso: new Date().toISOString(),
-        } as import('@shannon/common').RequestEnvelope);
+        // Snapshot identity fields; later caller mutations must not retarget this memory agent.
+        const memoryEnvelope = Object.freeze({ ...state.requestEnvelope, tags: [...state.requestEnvelope.tags] });
+        const memoryAgent = new MemoryAgent(blackboard, memoryEnvelope);
         const initialMemoryPromise = memoryAgent.initialize(goal);
 
         // MemoryAgent をツールに注入
-        for (const tool of this.fca.getTools()) {
+        for (const tool of fca.getTools()) {
             if ('setMemoryAgent' in tool && typeof (tool as Record<string, unknown>).setMemoryAgent === 'function') {
                 (tool as unknown as { setMemoryAgent(agent: MemoryAgent): void }).setMemoryAgent(memoryAgent);
             }
@@ -143,7 +141,7 @@ export class ParallelExecutor {
         // MetaCognitionLoop のフィードバックを FCA に注入
         if (metaLoop) {
             metaLoop.setFeedbackCallback((feedback) => {
-                this.fca.addFeedback(feedback);
+                fca.addFeedback(feedback);
             });
 
             // MetaCognition が wrong_approach/stuck を判定した場合、実行中スキルを中断
@@ -153,7 +151,7 @@ export class ParallelExecutor {
         }
 
         // FCA の TaskTreePublisher に blackboard アクセサを設定（Minebot UI に metaState/emotion を付加）
-        this.fca.setBlackboardAccessor(() => ({
+        fca.setBlackboardAccessor(() => ({
             metaState: blackboard.metaState,
             emotionState: blackboard.emotionState,
             freeSlots: blackboard.freeSlots,
@@ -293,7 +291,7 @@ export class ParallelExecutor {
         signal?.addEventListener('abort', onAbort, { once: true });
 
         // 4プロセスを並列起動
-        const taskPromise = this.fca.run(wrappedState, blackboard.signal);
+        const taskPromise = fca.run(wrappedState, blackboard.signal);
         const emotionPromise = emotionLoop?.run() ?? Promise.resolve();
         const metaPromise = metaLoop?.run() ?? Promise.resolve();
         const memoryPromise = memoryAgent.run(blackboard.signal);
@@ -306,7 +304,7 @@ export class ParallelExecutor {
         } finally {
             signal?.removeEventListener('abort', onAbort);
             blackboard.complete();
-            this.fca.setBlackboardAccessor(null);
+            fca.setBlackboardAccessor(null);
             let timeout: ReturnType<typeof setTimeout> | undefined;
             try {
                 const settled = await Promise.race([
