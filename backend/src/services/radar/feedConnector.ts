@@ -1,14 +1,10 @@
 import { createHash } from 'node:crypto';
 import { load } from 'cheerio';
 import { audienceKey, eligibleContent, type ContentItem } from '../../modules/radar/content.js';
-import { validFeedSubscription, type FeedSubscription } from '../../modules/radar/sourceRegistry.js';
+import { validFeedSubscription, type FeedSubscription, type FeedRecord } from '../../modules/radar/sourceRegistry.js';
 import { FeedReadError, MAX_FEED_BYTES, publicFeedUrl, type FeedHttpPort } from './safeFeedHttp.js';
 
-export interface FeedRecord {
-  readonly content: ContentItem;
-  readonly provenance: Readonly<{ entityKey: string; versionHash: string; externalId: string; sourceRevision: number;
-    fetchedUrl: string; fetchedAt: number; publishedAt: number; updatedAt: number }>;
-}
+export type { FeedRecord } from '../../modules/radar/sourceRegistry.js';
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const text = (value: string, max: number) => value.replace(/[\x00-\x1f\x7f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
 export function feedUrl(source: FeedSubscription): string {
@@ -18,7 +14,7 @@ export function feedUrl(source: FeedSubscription): string {
   if (source.kind === 'web' && url.search) throw new FeedReadError('target');
   return url.href;
 }
-function articleUrl(raw: string, source: FeedSubscription): string {
+export function articleUrl(raw: string, source: FeedSubscription): string {
   const url = publicFeedUrl(raw);
   if (!source.articleHosts.includes(url.hostname)) throw new FeedReadError('target');
   for (const name of [...url.searchParams.keys()]) {

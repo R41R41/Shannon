@@ -1,5 +1,9 @@
 # AGENTS.md
 
+## Radar RAD-1B（2026-08-28）の注意
+
+`docs/shannon-radar.md`11節。本人限定catalog/変更履歴の単一owner Mongo CAS、設定・撤回・private preview HTTP登録関数を追加。Firebase projectId＋UIDからownerを固定し、他人/admin代理/Discord自動リンクを拒否。再認証callbackを省かず、保存前・返却前に同意/権限/版を確認する。source変更でcatalogを失効、削除は設定/内容を消しID墓標で再投入を拒否。APIはserver未登録、collect/publish endpointなし。別Mongo37029の架空fixtureだけで検証し、通常DB/実ソースに書かない。監査64件・source10件/墓標込み32ID・各20metadataは初期の上限で、永久dedup/全監査/全派生消去/物理expiry purge/lease/queue/本人画面は未完。prod read-only、起動ロック維持。以下は過去の段階。
+
 ## Radar RAD-1A（2026-08-28）の注意
 
 `docs/shannon-radar.md`10節。source registry契約/private JSON read adapter、Radar専用のpublic IPv4をpinするHTTPS GET、YouTube/選択Web RSS/Atom、出典正規化→private digest previewを実装。112新規モック試験とRAD-0 65件、対象通常型検査を通過。実ソース設定/定期起動/DB保存/外部通信/投稿はしていない。weather/calendarは未対応で拒否、認証UI・durable catalog/queue・回数予約・全撤回は後続。JSON fixtureだけを作り通常DBに書かない。既存URL取得やschedulerに自動接続しない。取得後と保存/公開前の最新同意・権限確認を省略せず、registryを本人認証の代わりにしない。prod read-only、起動ロックを維持。

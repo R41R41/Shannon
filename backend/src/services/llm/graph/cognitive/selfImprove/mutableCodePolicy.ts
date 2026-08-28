@@ -61,6 +61,7 @@ export const MUTABLE_PATH_DENY_SUBSTRINGS = [
     'src/services/llm/graph/cognitive/ParallelExecutor.ts',
     'scripts/',
     'src/routes/modelRoutes.ts',
+    'src/routes/radarRoutes.ts',
     'src/services/web/agents/auth',
     'src/services/common/WebSocketService.ts',
     'mutableCodePolicy.ts',

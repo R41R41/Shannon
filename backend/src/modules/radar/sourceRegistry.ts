@@ -1,4 +1,10 @@
-import { audienceKey, timestamp, validId, validSourceUrl, type RadarAudience } from './content.js';
+import { audienceKey, timestamp, validId, validSourceUrl, type RadarAudience, type ContentItem } from './content.js';
+
+export interface FeedRecord {
+  readonly content: ContentItem;
+  readonly provenance: Readonly<{ entityKey: string; versionHash: string; externalId: string; sourceRevision: number;
+    fetchedUrl: string; fetchedAt: number; publishedAt: number; updatedAt: number }>;
+}
 
 export interface FeedSubscription {
   readonly id: string;

@@ -1,6 +1,6 @@
 # Shannon Radar — 現行基盤への統合設計
 
-更新：2026-08-28。状態：RAD-0に続き、RAD-1AのYouTube/選択Webフィード取得・出典正規化・個人digest preview接続をdevへ実装。最新は10節。**MVP全体、定期収集、実配信、記憶管理UIは未完成・未稼働。本番未反映。**
+更新：2026-08-28。状態：RAD-1Aに続き、RAD-1Bの本人限定catalog・Mongo CAS・設定/撤回/preview HTTP部品をdevへ実装。最新は11節。**APIはserver未登録。MVP全体、本人画面、定期収集、実配信、記憶管理UIは未完成・未稼働。本番未反映。**
 
 入力資料：ユーザー指定 `shannon/outputs/shannon-radar-architecture.md`（Shannon Radar Architecture）。現行の設計・判断は[Notion 08](https://www.notion.so/3ca1e84762888170816ee73f25c40ce3)、優先順位は[Notion 02](https://www.notion.so/3ca1e84762888153bb4dcf4714a92fb8)に集約する。
 
@@ -185,3 +185,48 @@ VM devで新規112テスト＋RAD-0の65テストが合格。通常のfoundation
 5. YouTubeの全ライブ予定をfeedだけで網羅すると約束しない。必要なら許可されたData API read-only取得を後続追加する。一般的なニュース要約・事実検証・多様性/負の明示設定も未実装。
 
 今回確認した一次資料：[YouTube公式のAtom feed形式とchannel/video ID](https://developers.google.com/youtube/v3/guides/push_notifications)、[Cheerio XML parsing](https://cheerio.js.org/docs/advanced/configuring-cheerio/)、[Node HTTPS options](https://nodejs.org/api/https.html)。実装はVMのNode22.21.1・Cheerio1.0.0・既存型定義で検証し、依存更新は行っていない。
+
+## 11. RAD-1B — 本人限定catalog・更新/撤回・HTTPプレビュー
+
+状態：devの独立した部品として実装。通常DBやserver/bootstrapへ登録しない。取得は内部の明示呼出だけで、HTTPにcollect/refresh/publish操作を用意しない。実ソース設定、Firebase/外部HTTP、定期ジョブ、Discord投稿、本体起動は今回の範囲外。UIは後続。
+
+### 責務とデータ境界
+
+- `modules/radar/catalog.ts`：SDK非依存のowner aggregate、source entry、短い変更履歴、repository port、最新metadataのmerge。FeedRecord契約をsourceRegistryへ移し、HTTP/parserやMongoの実装型へ依存しない。
+- `services/radar/personalRadar.ts`：本人の設定/撤回、collector→catalog保存、private previewのuse case。AccessServiceが検証したcontextだけを受け、profile:readと有効期限を確認する。ownerはFirebase projectId＋UIDから決定的hashを作る。表示名/email/adminフラグで他人を選ばず、Discord subjectや旧JSON sourceを自動リンクしない。このhashは仮名化であり匿名化ではない。
+- `mongoPersonalCatalog.ts`：明示的に渡したDBの新collection `radarpersonalcatalogs`。connectionを自作せず、constructorでI/O・index・migrationを実行しない。既存Mongooseのnative driver型を使い、依存追加なし。
+- `routes/radarRoutes.ts`：GET sources/preview、PUT source、DELETE sourceの登録関数。Bearer認証・利用許可・本人scope、no-store、Vary Authorization、厳密な入力key、body上限を設定。URL queryでのowner指定や未知fieldを拒否。通常ユーザーも自分だけ管理でき、管理者が他人を見る特権はない。serverへは未登録。
+
+### 単一文書CASを採った理由
+
+ownerごとに設定・catalog・直近監査を1文書へまとめる。_idとownerで検索し、全体revisionを期待値にしたreplaceOneで変更する。初回はinsertOneのみで、既存ownerへのupsertはしない。source自身のrevisionは設定変更時、全体revisionは設定/収集/撤回時に進む。異なるソースの同時変更も競合する保守的な設計で、409後に無条件で上書き再試行しない。
+
+これにより単体Mongoで跨collection transactionを要求せず、内容と変更履歴が片方だけ保存される状態を避ける。[MongoDBの単一文書atomicityと期待値filter](https://www.mongodb.com/docs/manual/core/write-operations-atomicity/)を参照。queue/outbox/予算ledgerまで同じ文書へ無制限に詰め込む方針ではない。性能/運用規模/クラッシュ復旧は別途検証する。
+
+初期の安全上限はownerあたり設定10件、削除済みを含むsource ID32件、sourceあたり最新20件、直近監査64件、文書1MiB。設定APIの同意期限は最大30日。これはライブ運用の通知頻度や保存同意を決定した意味ではない。墓標上限に達した後の整理、全体のユーザー数/容量上限は未実装。
+
+### 取得・更新・撤回
+
+1. 再認証callbackで現在の本人/利用許可を確認し、catalog版をsnapshotする。JSONを経由せず、そのowner文書をregistry portとして既存FeedCollectorへ渡す。
+2. source設定・同意を取得前後に確認。戻り値の出典hash、source/版、公開URL・host、時刻、期限を保存境界でも再検査。既知metadataだけを再構築し、自由なfact・raw payload・未知fieldを保存しない。記事の真偽/公式性/新規性を検証した意味ではない。
+3. 保存直前に同じ本人を再認証し、期限・キャンセルを再確認して最初のcatalog版でCAS。取得中の設定変更/撤回や別collectorの保存があれば拒否。並行取得回数自体を制限するlease/予算予約はまだない。
+4. entity keyごとに最新versionへ置換。同じversionは重複保存せず保持期限を延長しない。古いupstream updatedAtによる巻き戻しを拒否。feedから項目が消えただけでは削除と推定しない。日をまたぐ再読でも保持範囲内の同じ版は1件だが、20件/期限を超えた履歴の永久dedupや送信済み判定ではない。
+5. 設定変更はenabledの切替を含め既存catalogを空にする。DELETEはlocator/host/topic等の設定と全metadataを消し、source IDの墓標だけ残す。同じIDの再作成・遅延取得による復活を拒否。新IDでの本人の再登録は別操作として許される。
+
+### 本人用previewと権限再確認
+
+現在有効なsourceに属するmetadataだけでrank→delivery policy→静かなカードを組み、最大3件の非通知previewを返す。理由は本人がsourceに指定したtopicとの一致・score・source版として本人だけに返す。topicを人物の推定traitへ保存しない。個別の重み設定/学習/高度な推薦品質は未実装。
+
+use caseの最終catalog再読、HTTP返却直前の再認証・catalog再照合と期限を確認する。変更が挟まれば古いカードを返さず409。返却にはvalidUntilを付ける。最終チェック直後の撤回や既に返したブラウザ内容を瞬時に消せる保証ではない。画面側の再取得/ログアウト時消去/期限表示は後続で必須。
+
+再認証callbackは必須のサーバー部品で、自己申告actorを返す実装を本番へ接続しない。APIは同じBearer tokenをAccessServiceで再検証する。開始済みDB write・ネットワーク応答を取消できるわけではなく、応答不明時の自動再試行や削除済みIDの再利用はしない。
+
+### 検証方法と未完部分
+
+VM devのunit/隔離Express fixtureでは、本人/別project/他人/admin分離、未知入力、再認証と失効、CAS競合、取得中/保存直前の撤回、取消・同意期限切れ、出典改ざん、保持/更新/上限/previewを検証する。DNS/HTTP/Firebaseはfake。実HTTPの認証成功やUI完了の証明ではない。
+
+`scripts/probe-radar-catalog-mongo.cjs --isolated-fixture`はVM devとロック、専用loopback37029の新しい空DB `shannon_radar_fixture`を要求する。実Mongoの8並行初回保存・8並行取得、CAS勝者、repo再生成後の読取、本人分離、設定/撤回競合、本文消去・再投入拒否を確認する。起動/停止は別のfixture管理スクリプトで行い、通常27017へ接続しない。TTL/index/旧collection移行なし。
+
+監査は直近64件の設定/収集/撤回と件数だけであり、全選定理由・失敗試行・全期間の監査ログではない。期限切れは読取から除外するが、物理消去は次の収集/設定変更/削除まで遅れる。全派生物/人物記憶/バックアップ/投稿先への全面撤回、purge worker、取得回数予約・lease/recovery・outbox、本人画面、weather/calendarは未完。これらとFirebase/UID・専用Bot等の条件を満たすまでライブ有効化しない。
+
+検証・コミット原本：VM保全先 `radar-catalog-20260828`。ローカル記録 `SHANNON_RADAR_CATALOG_2026-08-28.md`。全backendはnoCheck変換と対象部品の通常型検査を区別する。prod read-only・起動ロック維持。通常DBの新collection作成、実データ移行、env変更・push・本番反映なし。

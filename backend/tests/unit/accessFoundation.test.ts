@@ -138,7 +138,7 @@ describe('self-improvement protection for access boundaries', () => {
       'src/services/llm/tools/utility/updatePlan.ts', 'src/services/llm/tools/utility/planCraft.ts',
       'src/adapters/access/FirebaseIdentityVerifier.ts', 'src/bootstrap/webAccess.ts', 'src/models/User.ts',
       'src/server.ts', 'src/services/web/client.ts',
-      'src/routes/modelRoutes.ts', 'src/routes/accessHttp.ts', 'src/services/web/agents/authAgent.ts',
+      'src/routes/modelRoutes.ts', 'src/routes/radarRoutes.ts', 'src/routes/accessHttp.ts', 'src/services/web/agents/authAgent.ts',
       'src/services/web/agents/authProtocol.ts', 'src/services/common/WebSocketService.ts',
       'src/services/llm/graph/cognitive/selfImprove/mutableCodePolicy.ts']) {
       expect(isMutableRelativePath(path), path).toBe(false);
