@@ -1,4 +1,5 @@
 import express from 'express';
+import { createWebAccess } from './bootstrap/webAccess.js';
 import http from 'http';
 import mongoose from 'mongoose';
 import { config } from './config/env.js';
@@ -24,6 +25,7 @@ import { registerPublicRoutes } from './routes/publicRoutes.js';
 import { startNightlySelfImproveScheduler } from './services/llm/graph/cognitive/selfImprove/NightlySelfImproveScheduler.js';
 
 class Server {
+  private readonly webAccess = createWebAccess(config.webAuth.firebaseProjectId);
   private llmService: LLMService;
   private discordBot: DiscordBot | null = null;
   private webClient: WebClient;
@@ -57,7 +59,7 @@ class Server {
 
     // --- 必須サービス (失敗時はサーバー起動を中断) ---
     this.llmService = LLMService.getInstance(isDevMode);
-    this.webClient = WebClient.getInstance(false);
+    this.webClient = WebClient.getInstance(false, this.webAccess.access);
     this.scheduler = Scheduler.getInstance(isDevMode);
     this.youtubeClient = YoutubeClient.getInstance(isDevMode);
     this.minecraftClient = MinecraftClient.getInstance(isDevMode);
@@ -80,7 +82,7 @@ class Server {
 
     // Register route modules
     registerHealthRoutes(app);
-    registerModelRoutes(app);
+    registerModelRoutes(app, this.webAccess.access, this.webAccess.modelSettings);
     registerTokenRoutes(app);
     registerTestRoutes(app);
     registerWebhookRoutes(app, this.twitterClient);
@@ -174,6 +176,7 @@ class Server {
     // ルールは常時有効のままにしておく。
 
     // 各サービスのクリーンアップ処理
+    await this.webClient.stop();
     await shutdownLangfuse();
     await mongoose.disconnect();
     logger.error('MongoDB disconnected');

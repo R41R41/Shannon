@@ -1,85 +1,25 @@
-import React, { useEffect } from "react";
-import { useNavigate } from "react-router-dom";
-import styles from "./Login.module.scss";
-import { auth } from "../firebase";
-import {
-  signInWithPopup,
-  GoogleAuthProvider,
-  onAuthStateChanged,
-  browserPopupRedirectResolver
-} from "firebase/auth";
-import { AuthAgent } from "@/services/agents/authAgent";
-import { UserInfo } from "@common/types/web";
+import { useState } from 'react';
+import { Navigate } from 'react-router-dom';
+import { signInWithPopup, GoogleAuthProvider, browserPopupRedirectResolver } from 'firebase/auth';
+import styles from './Login.module.scss';
+import { auth } from '../firebase';
+import { useAuthSession } from '../features/auth/AuthSession';
 
-const Login: React.FC = () => {
-  const navigate = useNavigate();
-  const provider = new GoogleAuthProvider();
-  const authAgent = AuthAgent.getInstance();
-
-  useEffect(() => {
-    // WebSocket接続を確立
-    authAgent.connect();
-
-    // 認証結果のコールバックを設定
-    const unsubAuth = authAgent.onAuthResponse((success, userData) => {
-      if (success && auth.currentUser && userData) {
-        const userInfo: UserInfo = {
-          name: userData.name,
-          email: userData.email,
-          isAdmin: userData.isAdmin,
-        };
-        localStorage.setItem("userInfo", JSON.stringify(userInfo));
-        localStorage.setItem("isAuthenticated", "true");
-        navigate("/shannonUI");
-      } else {
-        auth.signOut();
-        alert("アクセス権限がありません");
-      }
-    });
-
-    // Google認証の状態監視
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      if (user?.email) {
-        try {
-          authAgent.checkAuth(user.email);
-        } catch (error) {
-          console.error("Auth check error:", error);
-          auth.signOut();
-          alert("認証エラーが発生しました");
-        }
-      }
-    });
-
-    return () => {
-      unsubAuth();
-      unsubscribe();
-      authAgent.disconnect();
-    };
-  }, [navigate, authAgent]);
-
-  const handleGoogleLogin = async () => {
-    try {
-      await signInWithPopup(auth, provider, browserPopupRedirectResolver);
-    } catch (error) {
-      console.error("Google login error:", error);
-      alert("ログインに失敗しました");
-    }
+export default function Login() {
+  const { user, loading, error } = useAuthSession();
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [signingIn, setSigningIn] = useState(false);
+  if (user) return <Navigate to="/shannonUI" replace />;
+  const login = async () => {
+    setSigningIn(true); setLoginError(null);
+    try { await signInWithPopup(auth, new GoogleAuthProvider(), browserPopupRedirectResolver); }
+    catch { setLoginError('ログインに失敗しました'); }
+    finally { setSigningIn(false); }
   };
-
-  return (
-    <div className={styles.container}>
-      <div className={styles.form}>
-        <h1>ShannonUI</h1>
-        <button
-          type="button"
-          onClick={handleGoogleLogin}
-          className={styles.googleButton}
-        >
-          Googleでログイン
-        </button>
-      </div>
-    </div>
-  );
-};
-
-export default Login;
+  return <div className={styles.container}><div className={styles.form}>
+    <h1>ShannonUI</h1>
+    {loading && <p role="status">認証を確認しています…</p>}
+    {(error || loginError) && <p role="alert">{loginError || error}</p>}
+    <button type="button" onClick={login} disabled={loading || signingIn} className={styles.googleButton}>Googleでログイン</button>
+  </div></div>;
+}

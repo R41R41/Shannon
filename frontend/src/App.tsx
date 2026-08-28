@@ -6,6 +6,8 @@ import AuthGuard from "./components/AuthGuard/AuthGuard";
 import { ToastContainer } from "./components/Toast/Toast";
 import { AgentProvider } from "./contexts/AgentContext";
 
+import { AuthSessionProvider } from './features/auth/AuthSession';
+
 interface AppProps {
   isTest?: boolean;
 }
@@ -14,6 +16,7 @@ const App: React.FC<AppProps> = ({ isTest }) => {
   return (
     <BrowserRouter>
       <ToastContainer />
+      <AuthSessionProvider>
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route
@@ -28,6 +31,7 @@ const App: React.FC<AppProps> = ({ isTest }) => {
         />
         <Route path="*" element={<Navigate to="/login" replace />} />
       </Routes>
+      </AuthSessionProvider>
     </BrowserRouter>
   );
 };

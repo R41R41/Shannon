@@ -17,6 +17,7 @@ export abstract class WebSocketClientBase {
   public status: ConnectionStatus = "disconnected";
   private statusListeners: Array<(status: ConnectionStatus) => void> = [];
   private isConnecting = false;
+  private shouldReconnect = false;
 
   /** EventEmitter-like listener store used by subclasses via on() / emit(). */
   protected listeners: Map<string, Set<Function>> = new Map();
@@ -47,33 +48,41 @@ export abstract class WebSocketClientBase {
   }
 
   public connect() {
+    this.shouldReconnect = true;
     if (this.isConnecting) return;
     if (this.ws && this.ws.readyState !== WebSocket.CLOSED && this.ws.readyState !== WebSocket.CLOSING) return;
     this.isConnecting = true;
 
     try {
-      this.ws = new WebSocket(this.url);
+      const socket = new WebSocket(this.url);
+      this.ws = socket;
       this.setStatus("connecting");
 
-      this.ws.onopen = () => {
+      socket.onopen = () => {
+        if (this.ws !== socket || !this.shouldReconnect) return;
         this.reconnectAttempts = 0;
         this.isConnecting = false;
         this.setStatus("connected");
         this.startPing();
       };
 
-      this.ws.onmessage = (event) => {
+      socket.onmessage = (event) => {
+        if (this.ws !== socket || !this.shouldReconnect) return;
         this.receivePong(event.data);
         this.handleMessage(event.data);
       };
 
-      this.ws.onclose = () => {
+      socket.onclose = () => {
+        if (this.ws !== socket) return;
+        this.ws = null;
+        this.stopPing();
         this.isConnecting = false;
         this.setStatus("disconnected");
-        this.reconnect();
+        if (this.shouldReconnect) this.reconnect();
       };
 
-      this.ws.onerror = (error) => {
+      socket.onerror = (error) => {
+        if (this.ws !== socket || !this.shouldReconnect) return;
         console.error("WebSocket error:", error);
       };
     } catch (error) {
@@ -110,6 +119,10 @@ export abstract class WebSocketClientBase {
   }
 
   private stopPing() {
+    if (this.pingTimeoutId !== null) {
+      clearTimeout(this.pingTimeoutId);
+      this.pingTimeoutId = null;
+    }
     if (this.pingInterval) {
       clearInterval(this.pingInterval);
       this.pingInterval = null;
@@ -121,6 +134,7 @@ export abstract class WebSocketClientBase {
    * 1s → 2s → 4s → 8s → ... 最大 30s、最大 20 回まで。
    */
   private reconnect() {
+    if (!this.shouldReconnect) return;
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
       console.warn(`[WS] Max reconnect attempts (${this.maxReconnectAttempts}) reached for ${this.url}`);
       this.setStatus("disconnected");
@@ -135,7 +149,7 @@ export abstract class WebSocketClientBase {
 
     this.reconnectTimerId = window.setTimeout(() => {
       this.reconnectTimerId = null;
-      this.connect();
+      if (this.shouldReconnect) this.connect();
     }, delay);
   }
 
@@ -187,6 +201,7 @@ export abstract class WebSocketClientBase {
   }
 
   public disconnect() {
+    this.shouldReconnect = false;
     this.isConnecting = false;
     this.stopPing();
     if (this.reconnectTimerId !== null) {
@@ -194,8 +209,10 @@ export abstract class WebSocketClientBase {
       this.reconnectTimerId = null;
     }
     if (this.ws) {
-      this.ws.close();
+      const socket = this.ws;
       this.ws = null;
+      socket.close();
     }
+    this.setStatus("disconnected");
   }
 }

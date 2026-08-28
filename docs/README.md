@@ -43,3 +43,8 @@
 
 - サイト: [アイマイラボ「シャノンの仕組み」](https://aiminelab.com/architecture)
 
+
+## 2026-08-28の責務分離
+
+- [Web認証・モデル設定の責務分離](refactor-access-foundation.md)：RF-01/RF-02の初期実装、テストと移行前提。
+- [Notionの現行設計](https://www.notion.so/3ca1e84762888170816ee73f25c40ce3)：段階的な責務分離。

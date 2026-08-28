@@ -1,100 +1,81 @@
-import { exec } from 'child_process';
-import http from 'http';
-import { promisify } from 'util';
+import type http from 'http';
 import WebSocket, { WebSocketServer } from 'ws';
 import { logger } from '../../utils/logger.js';
 
-const execAsync = promisify(exec);
-
 export interface WebSocketServiceConfig {
   port?: number;
+  host?: string;
   server?: http.Server;
   serviceName: string;
+  maxPayload?: number;
+  /** Legacy services remain single-client until request-scoped routing is implemented. */
+  singleConnection?: boolean;
 }
-
 export abstract class WebSocketServiceBase {
   protected wss!: WebSocketServer;
   protected serviceName: string;
   private isInitialized = false;
   protected activeConnections = new Set<WebSocket>();
+  private readonly alive = new WeakSet<WebSocket>();
   private pingInterval: ReturnType<typeof setInterval> | null = null;
-  private static PING_INTERVAL_MS = 30_000; // 30秒ごとにping
+  private stopping: Promise<void> | null = null;
 
-  constructor(config: WebSocketServiceConfig) {
+  constructor(private readonly config: WebSocketServiceConfig) {
     this.serviceName = config.serviceName;
-    if (config.server) {
-      this.wss = new WebSocketServer({ server: config.server });
-      logger.info(`WebSocketServer created with existing server for service ${this.serviceName}`);
-    } else if (config.port) {
-      this.wss = new WebSocketServer({ port: config.port });
-      logger.debug(`WebSocketServer created on port ${config.port} for service ${this.serviceName}`);
-    } else {
-      throw new Error('Invalid configuration');
+    if (!config.server && (config.port === undefined || !Number.isInteger(config.port) || config.port < 0 || config.port > 65535)) {
+      throw new Error('Invalid WebSocket configuration');
     }
-
-    this.wss.on('error', (error) => {
-      logger.error(`WebSocket server error for ${this.serviceName}:`, error);
-    });
-
-    this.startPingLoop();
   }
-
-  public start() {
-    if (!this.isInitialized) {
+  /** Constructing a service does not open a port or start a timer. */
+  public start(): void {
+    if (this.stopping) throw new Error('WebSocket service is stopping');
+    if (this.isInitialized) return;
+    const options = this.config.server ? { server: this.config.server } : { port: this.config.port!, host: this.config.host };
+    this.wss = new WebSocketServer({ ...options, ...(this.config.maxPayload === undefined ? {} : { maxPayload: this.config.maxPayload }) });
+    this.wss.on('error', () => { logger.error(`WebSocket service error: ${this.serviceName}`); });
+    this.isInitialized = true;
+    try {
       this.initialize();
-      this.isInitialized = true;
+      this.pingInterval = setInterval(() => {
+        for (const ws of this.activeConnections) {
+          if (!this.alive.has(ws)) { ws.terminate(); this.activeConnections.delete(ws); continue; }
+          this.alive.delete(ws);
+          if (ws.readyState === WebSocket.OPEN) ws.ping();
+        }
+      }, 30_000);
+      this.pingInterval.unref();
+    } catch (error) {
+      void this.stop();
+      throw error;
     }
   }
-
-  /** Type-safe accessor for the __isAlive flag on WebSocket instances */
-  private getIsAlive(ws: WebSocket): boolean {
-    return (ws as WebSocket & { __isAlive?: boolean }).__isAlive ?? false;
-  }
-  private setIsAlive(ws: WebSocket, value: boolean): void {
-    (ws as WebSocket & { __isAlive?: boolean }).__isAlive = value;
-  }
-
-  private startPingLoop() {
-    this.pingInterval = setInterval(() => {
-      this.activeConnections.forEach((ws) => {
-        if (this.getIsAlive(ws) === false) {
-          ws.terminate();
-          this.activeConnections.delete(ws);
-          return;
-        }
-        this.setIsAlive(ws, false);
-        ws.ping();
-      });
-    }, WebSocketServiceBase.PING_INTERVAL_MS);
-  }
-
-  protected handleNewConnection(ws: WebSocket) {
-    this.activeConnections.forEach((connection) => {
-      try {
-        connection.close();
-      } catch (error) {
-        logger.error(`Error closing connection: ${error}`);
-      }
-    });
+  public stop(): Promise<void> {
+    if (this.stopping) return this.stopping;
+    if (!this.isInitialized) return Promise.resolve();
+    this.isInitialized = false;
+    if (this.pingInterval) clearInterval(this.pingInterval);
+    this.pingInterval = null;
+    for (const ws of this.wss.clients) ws.terminate();
     this.activeConnections.clear();
-
-    this.setIsAlive(ws, true);
-    ws.on('pong', () => { this.setIsAlive(ws, true); });
-
+    const server = this.wss;
+    this.stopping = new Promise<void>(resolve => { server.close(() => resolve()); })
+      .finally(() => { this.stopping = null; });
+    return this.stopping;
+  }
+  protected handleNewConnection(ws: WebSocket): void {
+    if (this.config.singleConnection !== false) {
+      for (const previous of this.activeConnections) previous.close();
+      this.activeConnections.clear();
+    }
+    this.alive.add(ws);
+    ws.on('pong', () => { this.alive.add(ws); });
     this.activeConnections.add(ws);
-
-    ws.on('close', () => {
-      this.activeConnections.delete(ws);
-    });
+    ws.on('close', () => { this.activeConnections.delete(ws); });
   }
-
-  public broadcast(data: unknown) {
-    this.activeConnections.forEach((client) => {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(JSON.stringify(data));
-      }
-    });
+  public broadcast(data: unknown): void {
+    for (const ws of this.activeConnections) {
+      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(data));
+    }
   }
-
   protected abstract initialize(): void;
 }

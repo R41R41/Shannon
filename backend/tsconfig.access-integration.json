@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": [
+    "src/bootstrap/webAccess.ts",
+    "src/routes/modelRoutes.ts",
+    "src/services/web/agents/authAgent.ts",
+    "src/services/web/client.ts"
+  ]
+}

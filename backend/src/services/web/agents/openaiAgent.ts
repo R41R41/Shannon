@@ -185,7 +185,7 @@ export class OpenAIClientService extends WebSocketServiceBase {
   }
 
   public start() {
-    this.initialize();
+    super.start();
   }
 
   public disconnect() {

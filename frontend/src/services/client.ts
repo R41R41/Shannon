@@ -5,7 +5,6 @@ import { StatusAgent } from "./agents/statusAgent";
 import { PlanningAgent } from "./agents/planningAgent";
 import { EmotionAgent } from "./agents/emotionAgent";
 import { SkillAgent } from "./agents/skillAgent";
-import { AuthAgent } from "./agents/authAgent";
 
 export class WebClient {
   private static instance: WebClient;
@@ -17,7 +16,6 @@ export class WebClient {
   public planningService: PlanningAgent;
   public emotionService: EmotionAgent;
   public skillService: SkillAgent;
-  public authService: AuthAgent;
 
   public static getInstance() {
     if (!WebClient.instance) {
@@ -34,7 +32,6 @@ export class WebClient {
     this.planningService = PlanningAgent.getInstance();
     this.emotionService = EmotionAgent.getInstance();
     this.skillService = SkillAgent.getInstance();
-    this.authService = AuthAgent.getInstance();
   }
 
   public isConnected(): boolean {
@@ -53,7 +50,6 @@ export class WebClient {
     this.planningService.connect();
     this.emotionService.connect();
     this.skillService.connect();
-    this.authService.connect();
 
     this.connected = true;
   }
@@ -68,7 +64,6 @@ export class WebClient {
     this.planningService.disconnect();
     this.emotionService.disconnect();
     this.skillService.disconnect();
-    this.authService.disconnect();
 
     this.connected = false;
   }

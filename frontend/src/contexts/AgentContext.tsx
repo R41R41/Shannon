@@ -6,7 +6,7 @@ import { StatusAgent } from "@/services/agents/statusAgent";
 import { PlanningAgent } from "@/services/agents/planningAgent";
 import { EmotionAgent } from "@/services/agents/emotionAgent";
 import { SkillAgent } from "@/services/agents/skillAgent";
-import { AuthAgent } from "@/services/agents/authAgent";
+import { useAuthSession } from '../features/auth/AuthSession';
 import { WebClient } from "@/services/client";
 import { UserInfo } from "@common/types/web";
 
@@ -18,14 +18,13 @@ export interface AgentContextType {
   emotion: EmotionAgent | null;
   scheduler: SchedulerAgent | null;
   skill: SkillAgent | null;
-  auth: AuthAgent | null;
   userInfo: UserInfo | null;
 }
 
 const AgentContext = createContext<AgentContextType | null>(null);
 
 export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [userInfo, setUserInfo] = useState<UserInfo | null>(null);
+  const { user: userInfo } = useAuthSession();
   const [monitoring, setMonitoring] = useState<MonitoringAgent | null>(null);
   const [openai, setOpenai] = useState<OpenAIAgent | null>(null);
   const [scheduler, setScheduler] = useState<SchedulerAgent | null>(null);
@@ -33,14 +32,8 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [planning, setPlanning] = useState<PlanningAgent | null>(null);
   const [emotion, setEmotion] = useState<EmotionAgent | null>(null);
   const [skill, setSkill] = useState<SkillAgent | null>(null);
-  const [auth, setAuth] = useState<AuthAgent | null>(null);
 
   useEffect(() => {
-    const storedUserInfo = localStorage.getItem("userInfo");
-    if (storedUserInfo) {
-      setUserInfo(JSON.parse(storedUserInfo));
-    }
-
     const webClient = WebClient.getInstance();
     setMonitoring(webClient.monitoringService);
     setOpenai(webClient.openaiService);
@@ -49,7 +42,6 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setPlanning(webClient.planningService);
     setEmotion(webClient.emotionService);
     setSkill(webClient.skillService);
-    setAuth(webClient.authService);
 
     if (!webClient.isConnected()) {
       webClient.start();
@@ -69,10 +61,9 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       emotion,
       scheduler,
       skill,
-      auth,
       userInfo,
     }),
-    [monitoring, openai, status, planning, emotion, scheduler, skill, auth, userInfo],
+    [monitoring, openai, status, planning, emotion, scheduler, skill, userInfo],
   );
 
   return <AgentContext.Provider value={value}>{children}</AgentContext.Provider>;

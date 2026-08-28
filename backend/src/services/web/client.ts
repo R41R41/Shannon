@@ -1,9 +1,9 @@
+import type { AccessService } from '../../modules/access/index.js';
 import { PORTS } from '../../config/ports.js';
 import { MonitoringAgent } from './agents/monitoringAgent.js';
 import { OpenAIClientService } from './agents/openaiAgent.js';
 import { ScheduleAgent } from './agents/scheduleAgent.js';
 import { StatusAgent } from './agents/statusAgent.js';
-import { getEventBus } from '../eventBus/index.js';
 import { PlanningAgent } from './agents/planningAgent.js';
 import { EmotionAgent } from './agents/emotionAgent.js';
 import { SkillAgent } from './agents/skillAgent.js';
@@ -19,7 +19,7 @@ export class WebClient {
   private skillService: SkillAgent;
   private authService: AuthAgent;
 
-  constructor(isTest: boolean) {
+  constructor(isTest: boolean, access: AccessService) {
     this.openaiService = OpenAIClientService.getInstance({
       port: isTest
         ? Number(PORTS.WEBSOCKET.OPENAI) + 10000
@@ -74,14 +74,21 @@ export class WebClient {
         ? Number(PORTS.WEBSOCKET.AUTH) + 10000
         : Number(PORTS.WEBSOCKET.AUTH),
       serviceName: 'auth',
-    });
+    }, access);
   }
 
-  public static getInstance(isTest: boolean): WebClient {
+  public static getInstance(isTest: boolean, access: AccessService): WebClient {
     if (!WebClient.instance) {
-      WebClient.instance = new WebClient(isTest);
+      WebClient.instance = new WebClient(isTest, access);
     }
     return WebClient.instance;
+  }
+
+  public async stop(): Promise<void> {
+    const services = [this.openaiService, this.monitoringService, this.statusService,
+      this.scheduleService, this.planningService, this.emotionService, this.skillService];
+    for (const service of services) service.disconnect();
+    await Promise.all([...services, this.authService].map(service => service.stop()));
   }
 
   public start() {

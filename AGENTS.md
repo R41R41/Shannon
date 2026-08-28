@@ -64,3 +64,7 @@ Shannon is an autonomous AI agent platform (Minecraft bot, Discord bot, Twitter 
 [開発手順](docs/development-workflow.md)と[Notion資料ハブ](https://www.notion.so/3ca1e847628881c9b4bbfd5556a55347)を読んでから作業する。設計・実装・検証の変更はNotionの関連資料と変更履歴へ反映し、再取得で確認する。
 
 devの `.dev-runtime-lock` は共有認証情報等の整理が済むまで起動スクリプトを止める。直接node起動で迂回しない。まず外部をモックする単体テストとビルドを行う。DB接続先はdev専用であり、prodのDBや秘密設定を上書きしない。
+
+### RF-01/RF-02の初期実装
+
+`docs/refactor-access-foundation.md`を参照。新しいaccess/modelSettingsモジュールはSDK・DB・環境変数に依存させない。`npm run check:foundation -w backend`と`check:access-integration`で検査する。公開API全体の認証は未完了なので起動ロックを解除しない。旧email-only認証、公開管理者登録、frontendの認証bypassを復活させない。Firebase UIDの利用者対応付けはレビュー後の別工程。

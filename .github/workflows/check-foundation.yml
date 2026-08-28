@@ -1,0 +1,26 @@
+name: Check foundation boundaries
+on:
+  pull_request:
+  push:
+    branches: ['codex/**']
+permissions:
+  contents: read
+jobs:
+  offline-checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      NODE_OPTIONS: --max-old-space-size=3072
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --ignore-scripts --legacy-peer-deps --no-audit --no-fund
+      - run: npm run build -w common
+      - run: npm run check:foundation -w backend
+      - run: npm run check:access-integration -w backend
+      - run: npm run test:offline -w backend
+      - run: npm run test:auth -w frontend
+      - run: npm run build:dev -w frontend

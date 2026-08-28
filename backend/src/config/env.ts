@@ -39,6 +39,8 @@ export const config = {
   /** Main HTTP server port */
   port: optional('PORT', '5000'),
 
+  webAuth: { firebaseProjectId: optional('FIREBASE_PROJECT_ID', '') },
+
   discord: {
     token: optional('DISCORD_TOKEN', ''),
     guilds: {
