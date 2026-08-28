@@ -81,6 +81,21 @@ describe('authenticated HTTP client', () => {
     const request = authorizedFetch('/api/models'); const rejected = expect(request).rejects.toThrow('Session changed');
     mocks.auth.currentUser = null; done('stale'); await rejected; expect(fetcher).not.toHaveBeenCalled();
   });
+  it.each(['before-fetch', 'after-fetch'] as const)('rejects a different login object with the same UID: %s', async when => {
+    let finish!: (value: string) => void; let respond!: (value: Response) => void;
+    const token = new Promise<string>(r => { finish = r; }); const response = new Promise<Response>(r => { respond = r; });
+    mocks.auth.currentUser = { uid: 'same', getIdToken: () => token };
+    const fetcher = vi.fn(() => response); vi.stubGlobal('fetch', fetcher);
+    const request = authorizedFetch('/api/radar/preview'); const rejected = expect(request).rejects.toThrow('Session changed');
+    if (when === 'before-fetch') { mocks.auth.currentUser = { uid: 'same', getIdToken: async () => 'new' }; finish('old'); }
+    else { finish('old'); await Promise.resolve(); mocks.auth.currentUser = { uid: 'same', getIdToken: async () => 'new' }; respond(new Response('{}')); }
+    await rejected; if (when === 'before-fetch') expect(fetcher).not.toHaveBeenCalled();
+  });
+  it('honors an already aborted request before retrieving any token', async () => {
+    const getIdToken = vi.fn(async () => 'token'); mocks.auth.currentUser = { uid: 'same', getIdToken };
+    const abort = new AbortController(); abort.abort();
+    await expect(authorizedFetch('/api/radar/preview', { signal: abort.signal })).rejects.toThrow('cancelled'); expect(getIdToken).not.toHaveBeenCalled();
+  });
 });
 
 describe('UI route guard', () => {

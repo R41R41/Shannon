@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Navigate } from 'react-router-dom';
+import { Navigate, useLocation } from 'react-router-dom';
 import { signInWithPopup, GoogleAuthProvider, browserPopupRedirectResolver } from 'firebase/auth';
 import styles from './Login.module.scss';
 import { auth } from '../firebase';
@@ -7,9 +7,10 @@ import { useAuthSession } from '../features/auth/AuthSession';
 
 export default function Login() {
   const { user, loading, error } = useAuthSession();
+  const location = useLocation();
   const [loginError, setLoginError] = useState<string | null>(null);
   const [signingIn, setSigningIn] = useState(false);
-  if (user) return <Navigate to="/shannonUI" replace />;
+  if (user) return <Navigate to={location.state?.from?.pathname === '/radar' || !user.isAdmin ? '/radar' : '/shannonUI'} replace />;
   const login = async () => {
     setSigningIn(true); setLoginError(null);
     try { await signInWithPopup(auth, new GoogleAuthProvider(), browserPopupRedirectResolver); }

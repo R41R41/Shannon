@@ -4,7 +4,7 @@
 
 ## すぐ読む
 
-- [Shannon Radar統合設計](./shannon-radar.md)（2026-08-28）：RAD-1Bの本人限定catalog・Mongo CAS・設定/撤回/preview HTTP部品。最新は11節。APIはserver未登録、本人画面・実ソース設定・ネットワーク取得・定期収集・配信は未稼働。
+- [Shannon Radar統合設計](./shannon-radar.md)（2026-08-28）：RAD-1Cの本人用設定/非通知プレビュー画面。最新は12節。ブラウザ確認は隔離fixtureのみ。APIはserver未登録、実認証・実ソース取得・定期収集・配信は未稼働。
 - [開発・検証・本番反映の手順](./development-workflow.md)（2026-08-28）：VMのdevを作業先とし、prodは検証後に反映。
 - [Shannon｜設計・資料ハブ](https://www.notion.so/3ca1e847628881c9b4bbfd5556a55347)：現行設計・計画・判断・変更履歴。
 

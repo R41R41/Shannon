@@ -249,7 +249,8 @@ describe('personal Radar HTTP boundary (isolated Express fixture only)', () => {
   it('allows authorized non-admin owner only, returning metadata and private preview; admin cannot browse another owner', async () => {
     const f = await api(); expect((await f.request('/api/radar/sources/feed', 'alice', 'PUT', { expectedRevision: 0, source: configuration() })).status).toBe(200);
     await f.collect(); const result = await f.request('/api/radar/preview'); expect(result.status).toBe(200);
-    expect((await result.json() as any).items).toHaveLength(1);
+    const preview = await result.json() as any;
+    expect(preview.items).toHaveLength(1); expect(preview.servedAt).toBeGreaterThan(0); expect(preview.servedAt).toBeLessThan(preview.validUntil);
     const admin = await f.request('/api/radar/preview', 'admin'); expect((await admin.json() as any).items).toEqual([]);
     expect((await f.request('/api/radar/preview?owner=alice', 'admin')).status).toBe(400);
     expect((await f.request('/api/radar/sources/feed', 'alice', 'DELETE', { expectedRevision: 2 })).status).toBe(200);

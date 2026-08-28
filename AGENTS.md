@@ -1,5 +1,9 @@
 # AGENTS.md
 
+## Radar RAD-1C（2026-08-28）の注意
+
+`docs/shannon-radar.md`12節。`/radar`の本人用source設定/非通知preview画面を追加。AgentProviderから分離し、session世代・User object・期限とcatalog版で表示を制限する。更新/ログアウト/タブ離脱/期限で表示とdraftを消去し、遅延応答で復活させない。保存後は版を照合して読み戻し、結果不明時に再試行しない。APIはserver未登録のまま。ブラウザ検証は明示的な`serve-radar-ui-fixture.cjs --isolated-fixture`のloopback専用・架空データ・in-memory repositoryだけで、Firebase/通常DB/実ソース/本体へ接続しない。利用後はfixtureとSSH tunnelを停止する。実認証のE2E・lease/予算予約・purge・weather/calendar・投稿は未完。prod read-only、ロック維持。以下は過去の段階。
+
 ## Radar RAD-1B（2026-08-28）の注意
 
 `docs/shannon-radar.md`11節。本人限定catalog/変更履歴の単一owner Mongo CAS、設定・撤回・private preview HTTP登録関数を追加。Firebase projectId＋UIDからownerを固定し、他人/admin代理/Discord自動リンクを拒否。再認証callbackを省かず、保存前・返却前に同意/権限/版を確認する。source変更でcatalogを失効、削除は設定/内容を消しID墓標で再投入を拒否。APIはserver未登録、collect/publish endpointなし。別Mongo37029の架空fixtureだけで検証し、通常DB/実ソースに書かない。監査64件・source10件/墓標込み32ID・各20metadataは初期の上限で、永久dedup/全監査/全派生消去/物理expiry purge/lease/queue/本人画面は未完。prod read-only、起動ロック維持。以下は過去の段階。

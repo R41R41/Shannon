@@ -230,3 +230,34 @@ VM devのunit/隔離Express fixtureでは、本人/別project/他人/admin分離
 監査は直近64件の設定/収集/撤回と件数だけであり、全選定理由・失敗試行・全期間の監査ログではない。期限切れは読取から除外するが、物理消去は次の収集/設定変更/削除まで遅れる。全派生物/人物記憶/バックアップ/投稿先への全面撤回、purge worker、取得回数予約・lease/recovery・outbox、本人画面、weather/calendarは未完。これらとFirebase/UID・専用Bot等の条件を満たすまでライブ有効化しない。
 
 検証・コミット原本：VM保全先 `radar-catalog-20260828`。ローカル記録 `SHANNON_RADAR_CATALOG_2026-08-28.md`。全backendはnoCheck変換と対象部品の通常型検査を区別する。prod read-only・起動ロック維持。通常DBの新collection作成、実データ移行、env変更・push・本番反映なし。
+
+## 12. RAD-1C — 本人用設定画面・期限付きdigest preview
+
+状態：VM devで実装・隔離fixture検証。`/radar`に画面を追加したが、RAD-1B APIのserver/bootstrap登録は行っていない。通常アプリ/認証/DBのライブ疎通成功ではない。実ソース設定・取得、scheduler、Discord投稿、env変更、本体起動、prod反映は行わない。
+
+### 画面と状態管理の責務
+
+- `features/radar/radarClient.ts`は既存の認証付きfetchへ依存を注入する境界。固定のsources/preview/PUT/DELETEだけを使う。owner/監査等をDTOへ持ち込まず、URL・既知field・上限・非通知カードを検証する。応答サイズは宣言長と読取後の文字数で制限するもので、streamingによるメモリ上限制御ではない。
+- `radarController.ts`は画面sessionごとに生成する。読取/保存/表示中/失効/終了を管理し、世代番号とAbortSignalで古い結果を無視する。設定とpreviewのcatalog版、各source版・同意・記事hostを照合する。更新時は先に旧データと入力draftを消去し、CAS成功後も返された版以上で読み戻す。409は競合、応答不明は結果不明として表示し、自動で更新を再試行しない。
+- `RadarDashboard`と`SourceEditor`は表示と入力だけ。最大3カードと選定理由、出典リンク、source一覧、追加/変更/削除確認を用意。新規同意は未選択、同意期限は最大30日、weather/calendarは選択不可。削除は同じIDの再利用不可と説明する。通知・収集・会話を始める操作や自動ポーリングはない。
+- `RadarPage`はAuthGuardの内側、AgentProviderの外側。閲覧だけで操作用WebSocketを起動しない。非管理者のログイン後の既定画面はRadar、管理者は従来のコンソールを維持し、明示したRadarへの戻り先だけを許す。
+
+### ブラウザ上の本人境界と失効
+
+AuthSessionはFirebase project/UID/token callback世代をsession keyへ含め、検証済みtokenの期限を持つ。authorizedFetchとRadarPageはUIDだけでなく現在のUser objectが同じか確認する。同じUIDでログアウト/再ログインしても古い画面を使い回さない。fetch開始前/応答後とJSON読取後のcontrollerで現在sessionを確認する。
+
+preview HTTP返却に`servedAt`を追加し、`validUntil - servedAt`から読取全体の単調時計経過時間を引く。表示時間は最大60秒。端末時計のずれで表示を延長しない。タイマーだけでなく操作時にも期限を確認する。タブ非表示・window blur・pagehide・BFCache復帰・ログアウト・session変更は画面データとdraftを消し、復帰時は手動再読を要求する。Radar内容をlocal/session storageへ保存しない。
+
+これはサーバーの撤回を全ブラウザへ即時通知する仕組みではない。ブラウザ停止中の描画消去時刻の絶対保証や、スクリーンショット/既に開いた外部ページの消去はできない。60秒で未保存の入力も失う保守的な仕様であり、長い編集の使い勝手は今後改善する。Firebaseの実token更新/期限/再ログインE2Eは未検証。共有資格情報のまま検証を強行しない。
+
+### 検証と運用制限
+
+frontendの既存authテストを拡張し、DTO・URL・固定API・本人切替・中断・期限・版競合・二重保存・結果不明・読み戻し・描画を検証する。backendの既存HTTPテストにservedAt契約を追加。全体の結果はVM保全先`radar-ui-20260828/result.json`を正本とする。
+
+`scripts/serve-radar-ui-fixture.cjs --isolated-fixture`はVM devのパスとロックを確認し、envDir:falseで専用静的画面をbuild、loopback127.0.0.1:13002だけで配信する。実RAD-1B route/serviceと架空認証・in-memory CAS repositoryを接続し、3つの架空Web sourceをseedする。通常Mongo、Firebase、connector、Shannon本体には接続しない。試験後はfixtureと転送用SSHを停止する。fixture entryはtests配下に置き、実アプリに架空データfallbackを入れない。
+
+ブラウザでカード表示、設定保存後の旧カード失効、別ownerの空画面、遅延中のログアウト、短縮期限、409、API未登録時の安全な空表示、390px幅での横はみ出しなし、追加フォームの同意未選択、削除確認/キャンセルを確認する。削除確定は既存unit/HTTP試験が担当し、ブラウザでは未実行。架空認証での画面確認を実Firebase認証検証と呼ばない。
+
+次は取得回数の原子的予約・lease/recovery、物理expiry purge/監査拡充を優先する。その後weather/calendar adapter、認証条件を満たしたdev統合、個人previewの実ソース評価、承認付きDiscordへ進む。全backendの通常型検査、実認証・通常DB migration、通知予算/outbox/全面撤回は未完。API未登録時は「準備中」と表示し、有効化のための迂回をしない。
+
+参考：[React useSyncExternalStore](https://react.dev/reference/react/useSyncExternalStore)、[Vite envDir](https://vite.dev/config/shared-options#envdir)。依存追加・更新なし。ローカル記録`SHANNON_RADAR_UI_2026-08-28.md`。

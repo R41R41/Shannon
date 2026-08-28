@@ -64,6 +64,7 @@ const Header: React.FC<HeaderProps> = ({
         </div>
 
         <div className={styles.rightSection}>
+          <a href="/radar">Radar</a>
           {userInfo?.name && (
             <span className={styles.userName}>{userInfo.name}</span>
           )}

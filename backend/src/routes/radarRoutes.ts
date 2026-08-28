@@ -20,7 +20,7 @@ export function registerRadarRoutes(app: Express, access: AccessService, radar: 
       if (personalRadarOwner(latest) !== personalRadarOwner(context)) throw new PersonalRadarError('CONFLICT');
       await radar.assertCurrent(latest, result.revision);
       if ('validUntil' in result && (typeof result.validUntil !== 'number' || result.validUntil <= Date.now())) throw new PersonalRadarError('CONFLICT');
-      res.json(result);
+      res.json('validUntil' in result ? { ...result, servedAt: Date.now() } : result);
     } catch (error) {
       if (error instanceof PersonalRadarError) {
         const status = { INVALID_INPUT: 400, CONFLICT: 409, NOT_FOUND: 404, LIMIT: 409, UNAVAILABLE: 503, CANCELLED: 409 }[error.code];
