@@ -1,5 +1,11 @@
 # AGENTS.md
 
+## RF-03第6段階（2026-08-28）の注意
+
+VM devでbackend411＋frontend18＝429テスト、対象通常型検査/build/native probe合格。実Discordはfake clientで検証、実接続なし。巨大なclient/FCA等を含む全backendはnoCheck変換のみ。
+
+`docs/refactor-discord-conversation.md`を参照。Discordテキスト返信/履歴ツールは現在の本人・会話のport経由だけとし、未binding・別channel/guild・非対応媒体/添付を拒否する。SDK側もID/権限/private thread membershipを確認し、送信Promise完了後に結果を返す。text dispatcherを旧音声EventBusへ戻さない。音声・旧イベント発行元・Web broadcast等の全宛先認可は未完。起動ロック・prod読み取りのみを維持し、制限を迂回しない。
+
 ## RF-03第5段階（2026-08-28）の注意
 
 `docs/refactor-person-memory.md`を参照。新しい人物記憶はDiscordテキストの現在の本人＋会話scope＋原文出典のみ。旧PersonMemory・名前統合・関係性推測は復活させない。新collectionはscopedpersonstatements、1 message 1引用、既存_id一意性で重複を防ぐ。編集/忘却は内部portのみで自動実行しない。忘却はこの記録の本文/source削除と同じ出典の再登録防止に限り、全履歴/派生/旧queueの撤回ではない。VM dev371テストと一時mongodでの架空fixture検証を実施。一時mongod停止済み、通常dev/prod DB・env/Botは未変更。ライブロック維持、本番未反映。

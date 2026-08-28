@@ -224,7 +224,7 @@ export class EventRouter {
 
         // Build envelope via ChannelAdapter
         const envelope = discordAdapter.toEnvelope({
-          text: `${currentTime} ${textMsg.userName}: ${textMsg.text}`,
+          text: textMsg.text,
           type: textMsg.type,
           guildName: textMsg.guildName,
           channelId: textMsg.channelId,
@@ -234,6 +234,7 @@ export class EventRouter {
           messageId: textMsg.messageId,
           userId: textMsg.userId,
           recentMessages: textMsg.recentMessages as unknown[],
+          isDM: textMsg.isDM === true,
         } as DiscordNativeEvent);
 
         const msgs = textMsg.recentMessages

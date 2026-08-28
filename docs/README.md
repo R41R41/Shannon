@@ -46,6 +46,8 @@
 
 ## 2026-08-28の責務分離
 
+- [Discordテキストの会話限定返信・履歴取得](refactor-discord-conversation.md)：RF-03第6段階。返信/履歴のport、SDK側の宛先・権限確認、実行ごとのツール所有、送信結果/中断。
+
 - [本人・会話・出典に限定した人物記憶](refactor-person-memory.md)：RF-03第5段階。新しいperson port/repository、原文引用、重複/版/忘却、旧データを移行しない復旧基盤。
 
 - [Minecraft固定ID・旧記憶の読み取り監査](refactor-minecraft-memory-identity.md)：RF-03第4段階。接続所有・履歴/キュー境界、非ゲーム入力の記憶停止と人物復旧の前提。

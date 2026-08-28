@@ -1,4 +1,5 @@
 import { bindRequestMemory, snapshotMemoryEnvelope } from '../../memory/requestMemory.js';
+import { bindRequestDiscordConversation } from '../../common/discordConversationPort.js';
 /**
  * Shannon Unified Graph — 3ノード簡素化版
  *
@@ -255,6 +256,7 @@ function createExecuteNode(
         // A fresh context-bearing tool set for this executor invocation.
         const runTools = fca.createToolsForRun();
         bindRequestMemory(runTools, memoryEnvelope);
+        bindRequestDiscordConversation(runTools, memoryEnvelope, state._abortSignal);
         // FCA 登録済みツールを Anthropic 形式に変換
         for (const tool of runTools) {
           // routine:xxx は既に routine-xxx として追加済み、manage-routine / task-complete も追加済み

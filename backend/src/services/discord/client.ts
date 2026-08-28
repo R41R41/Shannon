@@ -24,6 +24,7 @@ import {
   ButtonBuilder,
   ButtonStyle,
   ChatInputCommandInteraction,
+  ChannelType,
   Client,
   ComponentType,
   EmbedBuilder,
@@ -49,6 +50,8 @@ import { BaseClient } from '../common/BaseClient.js';
 import { getEventBus } from '../eventBus/index.js';
 import { splitDiscordMessage, sendLongMessage } from './utils.js';
 import { VoiceManager } from './voice/VoiceManager.js';
+import { createDiscordConversationTransport } from './conversationTransport.js';
+import { registerDiscordConversationTransport } from '../common/discordConversationPort.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -111,6 +114,8 @@ export class DiscordBot extends BaseClient {
       ],
     });
     this.eventBus = eventBus;
+
+    registerDiscordConversationTransport(createDiscordConversationTransport(this.client, () => this.status === 'running'));
 
     this.voiceManager = new VoiceManager(this.client, eventBus, {
       getUserNickname: (user, guildId) => this.getUserNickname(user, guildId),
@@ -1079,6 +1084,7 @@ export class DiscordBot extends BaseClient {
           messageId: messageId,
           userId: userId,
           recentMessages: recentMessages,
+          isDM: message.channel.type === ChannelType.DM,
         } as DiscordSendTextMessageOutput,
       });
       } catch (err) {

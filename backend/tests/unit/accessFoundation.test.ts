@@ -112,6 +112,7 @@ describe('foundation dependency gate', () => {
     try {
       fs.mkdirSync(path.join(root, 'access')); fs.mkdirSync(path.join(root, 'modelSettings'));
       fs.mkdirSync(path.join(root, 'execution')); fs.mkdirSync(path.join(root, 'memory'));
+      fs.mkdirSync(path.join(root, 'conversation'));
       fs.writeFileSync(path.join(root, 'memory/index.ts'), 'export {};');
       fs.writeFileSync(path.join(root, 'execution/index.ts'), 'export {};');
       fs.writeFileSync(path.join(root, 'access/index.ts'), 'export {};');

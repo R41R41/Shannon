@@ -1,4 +1,5 @@
 import { bindRequestMemory, snapshotMemoryEnvelope } from '../../../memory/requestMemory.js';
+import { bindRequestDiscordConversation } from '../../../common/discordConversationPort.js';
 import { selectAllowedTools } from '../../../../modules/access/toolSelection.js';
 import {
     AIMessage,
@@ -338,6 +339,7 @@ export class FunctionCallingSession {
         signal?.throwIfAborted();
         state = { ...state, requestEnvelope: state.requestEnvelope ? snapshotMemoryEnvelope(state.requestEnvelope) : undefined };
         bindRequestMemory(this.tools, state.requestEnvelope);
+        bindRequestDiscordConversation(this.tools, state.requestEnvelope, signal);
         const startTime = Date.now();
         const goal = state.userMessage || 'Unknown task';
         const isEmergency = state.isEmergency || false;

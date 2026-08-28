@@ -221,7 +221,7 @@ it('does not dispatch an obsolete graph result after preemption', async () => {
   const rejected = expect(old).rejects.toMatchObject({ name: 'AbortError' });
   await runCoordinatedGraph(coordinator, request(['emergency']), async () => 'current-result', dispatch);
   gate.resolve(); await rejected;
-  expect(dispatch.mock.calls).toEqual([['current-result']]);
+  expect(dispatch.mock.calls.map(args => args[0])).toEqual(['current-result']);
 });
 
 it('keeps dispatch in the normal lane and preserves the caller envelope', async () => {
@@ -235,4 +235,16 @@ it('keeps dispatch in the normal lane and preserves the caller envelope', async 
   try { expect(next).not.toHaveBeenCalled(); }
   finally { gate.resolve(); await Promise.all([first, second]); }
   expect(envelope).toEqual(original);
+});
+
+it('passes the owned cancellation signal into in-flight dispatch', async () => {
+  const coordinator = new RequestExecutionCoordinator(), entered = deferred(), finish = deferred();
+  let dispatchSignal!: AbortSignal;
+  const old = runCoordinatedGraph(coordinator, request(), async () => 'old', async (_result, signal) => {
+    dispatchSignal = signal; entered.resolve(); await finish.promise; signal.throwIfAborted();
+  });
+  const rejected = expect(old).rejects.toMatchObject({ name: 'AbortError' });
+  await entered.promise;
+  await runCoordinatedGraph(coordinator, request(['emergency']), async () => 'new', async () => {});
+  expect(dispatchSignal.aborted).toBe(true); finish.resolve(); await rejected;
 });

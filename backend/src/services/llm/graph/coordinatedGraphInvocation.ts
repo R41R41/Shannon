@@ -6,14 +6,14 @@ export function runCoordinatedGraph<T>(
   coordinator: RequestExecutionCoordinator,
   envelope: RequestEnvelope,
   invoke: (signal: AbortSignal) => Promise<T>,
-  dispatch: (result: T) => Promise<void>,
+  dispatch: (result: T, signal: AbortSignal) => Promise<void>,
   callerSignal?: AbortSignal,
 ): Promise<T> {
   return coordinator.run(envelope, async signal => {
     signal.throwIfAborted();
     const result = await invoke(signal);
     signal.throwIfAborted();
-    await dispatch(result);
+    await dispatch(result, signal);
     return result;
   }, callerSignal);
 }

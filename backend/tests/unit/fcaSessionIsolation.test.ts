@@ -53,6 +53,10 @@ import RecallKnowledgeTool from '../../src/services/llm/tools/memory/recallKnowl
 import { ShannonMemoryService } from '../../src/services/memory/shannonMemoryService.js';
 import { deriveMemoryScope } from '../../src/modules/memory/index.js';
 import { RequestExecutionCoordinator } from '../../src/services/llm/graph/requestExecutionCoordinator.js';
+import ChatOnDiscordTool from '../../src/services/llm/tools/discord/chatOnDiscord.js';
+import { registerDiscordConversationTransport } from '../../src/services/common/discordConversationPort.js';
+const discordReplies = vi.fn(async () => undefined);
+registerDiscordConversationTransport({ reply: discordReplies, recent: async () => [] });
 
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; }
 function state(owner: string) {
@@ -81,6 +85,27 @@ async function overlap(tool: 'update-plan' | 'recall-memory') {
 }
 
 describe('actual FCA and tools with external services mocked', () => {
+  it('binds the actual Discord tool to its own request during overlapping FCA runs', async () => {
+    const entered = { A: deferred(), B: deferred() }, release = { A: deferred(), B: deferred() }, turns = { A: 0, B: 0 };
+    fakes.invoke.mockImplementation(async (messages: any[]) => {
+      const owner = messages.find(m => m instanceof HumanMessage && ['A', 'B'].includes(m.content))!.content as 'A' | 'B';
+      if (turns[owner]++ === 0) {
+        entered[owner].resolve(); await release[owner].promise;
+        return new AIMessage({ content: '', tool_calls: [{ name: 'chat-on-discord', id: owner, args: { message: `reply-${owner}` } }] });
+      }
+      return new AIMessage({ content: '', tool_calls: [{ name: 'task-complete', id: `done-${owner}`, args: { summary: `done-${owner}` } }] });
+    });
+    const fca = new FunctionCallingAgent([new ChatOnDiscordTool(), { name: 'task-complete', invoke: async () => 'done' } as any]);
+    const a = state('A'), b = state('B');
+    a.requestEnvelope.sourceUserId = '100'; b.requestEnvelope.sourceUserId = '101';
+    a.requestEnvelope.discord = { guildId: '111', channelId: '222', messageId: '900' };
+    b.requestEnvelope.discord = { guildId: '111', channelId: '223', messageId: '901' };
+    const pa = fca.run(a); await entered.A.promise; const pb = fca.run(b); await entered.B.promise;
+    release.A.resolve(); await pa; release.B.resolve(); await pb;
+    expect(discordReplies.mock.calls.map(([binding, message]: any) => [binding.channelId, binding.subjectId, message])).toEqual([
+      ['222', '100', 'reply-A'], ['223', '101', 'reply-B'],
+    ]);
+  });
   it('keeps update-plan delivery bound to its own request during overlapping calls', async () => {
     await overlap('update-plan');
     const plans = fakes.publish.mock.calls.map(([event]) => event).filter(e => e.type === 'discord:planning' && e.data.planning.goal.startsWith('plan-'));

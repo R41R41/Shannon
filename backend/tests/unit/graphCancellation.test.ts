@@ -89,7 +89,8 @@ describe('real graph with mocked external services', () => {
     fakes.nativeEnabled = true;
     const controller = new AbortController(); const invoke = vi.fn(async () => 'native-tool-result');
     const setMemoryPort = vi.fn();
-    const createToolsForRun = vi.fn(() => [{ name: 'test-tool', description: 'test', invoke, setMemoryPort }]);
+    const setDiscordConversationPort = vi.fn();
+    const createToolsForRun = vi.fn(() => [{ name: 'test-tool', description: 'test', invoke, setMemoryPort, setDiscordConversationPort }]);
     fakes.native.mockImplementation(async () => {
       expect(await fakes.nativeDeps.llmTools.get('test-tool')({ value: 1 })).toBe('native-tool-result');
       return { lastContent: 'native answer', taskTree: result.taskTree, toolCallCount: 1, durationMs: 0 };
@@ -98,6 +99,8 @@ describe('real graph with mocked external services', () => {
     await invokeShannonGraph(compiled, { ...envelope, channel: 'minecraft' }, [], { abortSignal: controller.signal });
     expect(createToolsForRun).toHaveBeenCalledOnce();
     expect(setMemoryPort).toHaveBeenCalledOnce();
+    expect(setDiscordConversationPort).toHaveBeenCalledOnce();
+    expect((await setDiscordConversationPort.mock.calls[0][0].reply({ message: 'minecraft must not post to Discord' })).status).toBe('denied');
     expect((await setMemoryPort.mock.calls[0][0].save({ content: 'no world identity' })).saved).toBe(false);
     expect(invoke).toHaveBeenCalledWith({ value: 1 }, { signal: controller.signal });
     expect(fakes.run).not.toHaveBeenCalled();

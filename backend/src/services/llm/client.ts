@@ -28,6 +28,7 @@ import { logger } from '../../utils/logger.js';
 import { VoiceProcessor } from './voice/VoiceProcessor.js';
 import { AgentOrchestrator } from './agents/AgentOrchestrator.js';
 import { EventRouter } from './routing/EventRouter.js';
+import { snapshotMemoryEnvelope } from '../memory/requestMemory.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -225,6 +226,7 @@ export class LLMService {
       abortSignal?: AbortSignal;
     },
   ): Promise<ShannonGraphState> {
+    const dispatchEnvelope = envelope.channel === 'discord' ? snapshotMemoryEnvelope(envelope) : envelope;
     await this.initialize();
     if (!this.shannonGraph) {
       throw new Error('Shannon graph not initialized');
@@ -234,7 +236,7 @@ export class LLMService {
       return await runCoordinatedGraph(
         this.executionCoordinator, envelope,
         signal => invokeShannonGraph(this.shannonGraph!, envelope, legacyMessages, { ...options, abortSignal: signal }),
-        result => this.dispatchActionPlan(envelope, result),
+        (result, signal) => this.dispatchActionPlan(dispatchEnvelope, result, signal),
         options?.abortSignal,
       );
     } catch (error) {
@@ -249,11 +251,12 @@ export class LLMService {
   private async dispatchActionPlan(
     envelope: RequestEnvelope,
     result: ShannonGraphState,
+    signal?: AbortSignal,
   ): Promise<void> {
     if (!result.actionPlan) return;
     const dispatcher = getActionDispatcher(envelope.channel);
     if (!dispatcher) return;
-    await dispatcher.dispatch(envelope, result.actionPlan);
+    await dispatcher.dispatch(envelope, result.actionPlan, { signal });
   }
 
   public async registerMinebotTools(bot: import('../minebot/types.js').CustomBot): Promise<void> {

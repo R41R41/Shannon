@@ -57,6 +57,7 @@ export interface DiscordSendServerEmojiOutput extends ServiceOutput {
 
 export interface DiscordSendTextMessageOutput extends ServiceOutput {
   type: "text";
+  isDM?: boolean;
   guildName: string;
   channelName: string;
   guildId: string;

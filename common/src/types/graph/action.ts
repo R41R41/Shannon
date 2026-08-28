@@ -82,5 +82,5 @@ export interface ActionDispatcher {
   readonly channel: ShannonChannel;
 
   /** Send the action plan back to the channel. */
-  dispatch(envelope: RequestEnvelope, plan: ShannonActionPlan): Promise<void>;
+  dispatch(envelope: RequestEnvelope, plan: ShannonActionPlan, options?: { signal?: AbortSignal }): Promise<void>;
 }
