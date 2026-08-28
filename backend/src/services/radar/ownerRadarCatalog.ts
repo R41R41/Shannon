@@ -1,4 +1,4 @@
-import type { RequestContext } from '../../modules/access/index.js';
+import type { RadarContext } from './radarAccess.js';
 import { audienceKey, validId } from '../../modules/radar/content.js';
 import { MAX_SOURCE_IDS, MAX_ACTIVE_SOURCES, MAX_CATALOG_RECORDS, type PersonalCatalog, type PersonalCatalogPort, type CatalogAudit } from '../../modules/radar/catalog.js';
 import { catalogShape, type VersionedCatalog } from '../../modules/radar/catalogVersion.js';
@@ -30,7 +30,7 @@ export class OwnerRadarCatalog {
     if (row.acquisition !== undefined && !validAcquisitionState(row.acquisition)) throw new PersonalRadarError('UNAVAILABLE');
     return structuredClone(row);
   }
-  async commit(context: RequestContext, current: VersionedCatalog, sources: PersonalCatalog['sources'], event: Omit<CatalogAudit, 'revision' | 'at'>, reauthorize: ReauthorizeRadar, signal?: AbortSignal, acquisition = current.acquisition, leaseId?: string, temporalSources = current.temporalSources) {
+  async commit(context: RadarContext, current: VersionedCatalog, sources: PersonalCatalog['sources'], event: Omit<CatalogAudit, 'revision' | 'at'>, reauthorize: ReauthorizeRadar, signal?: AbortSignal, acquisition = current.acquisition, leaseId?: string, temporalSources = current.temporalSources) {
     if (personalRadarOwner(context, this.clock()) !== current.owner) throw new PersonalRadarError('UNAVAILABLE');
     if (typeof reauthorize !== 'function' || personalRadarOwner(await reauthorize(), this.clock()) !== current.owner)
       throw new PersonalRadarError('CONFLICT');

@@ -28,7 +28,7 @@ export const validTimeZone = (zone: unknown): zone is string => {
 };
 export function validTemporalSource(s: TemporalSource, now: number): boolean {
   if (!s || !validId(s.id) || !Number.isSafeInteger(s.revision) || s.revision < 1
-    || typeof s.owner !== 'string' || !/^firebase:[a-f0-9]{64}$/.test(s.owner) || s.enabled !== true || !timestamp(now)
+    || typeof s.owner !== 'string' || !/^(?:firebase|line):[a-f0-9]{64}$/.test(s.owner) || s.enabled !== true || !timestamp(now)
     || !timestamp(s.consentExpiresAt) || s.consentExpiresAt <= now || !validTimeZone(s.timeZone)) return false;
   const shared = ['id', 'revision', 'owner', 'enabled', 'consentExpiresAt', 'timeZone', 'kind'];
   const keys = s.kind === 'weather' ? [...shared, 'latitudeTenth', 'longitudeTenth'] : [...shared, 'bindingId', 'days'];

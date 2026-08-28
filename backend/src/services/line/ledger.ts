@@ -4,8 +4,10 @@ import { lineQuiet } from '../../modules/conversation/lineConversation.js';
 export const lineKey = (value: string) => createHash('sha256').update(value).digest('hex');
 const DAY = 86400000;
 export interface LineEntry {
-  id: string; kind: 'chat' | 'control' | 'push'; at: number; status: 'reserved' | 'pending' | 'sending' | 'accepted' | 'unknown' | 'failed' | 'cancelled';
+  id: string; kind: 'chat' | 'control' | 'push' | 'radar'; at: number; status: 'reserved' | 'pending' | 'sending' | 'accepted' | 'unknown' | 'failed' | 'cancelled';
   scope: string; expiresAt: number; text?: string; messageId?: string; retryKey?: string; consentVersion?: number;
+  radarGrant?: { owner: string; policyHash: string; catalogRevision: number; clusters: string[] };
+  quoteExpiresAt?: number;
 }
 export interface LineState {
   schemaVersion: 1; revision: number; botUserId: string; personalUserId: string;
@@ -30,8 +32,8 @@ export class LineLedger {
     for (let attempt = 0; attempt < 16; attempt++) {
       const state = await this.read(); const expected = state.revision; const now = this.now();
       // Keep push reservations across month boundaries. Content is shorter-lived than accounting.
-      state.entries = state.entries.filter(e => e.at > now - (e.kind === 'push' ? 62 * DAY : DAY));
-      for (const e of state.entries) if (e.expiresAt <= now) { delete e.text; delete e.messageId; }
+      state.entries = state.entries.filter(e => e.at > now - (['push','radar'].includes(e.kind) ? 62 * DAY : DAY));
+      for (const e of state.entries) if ((e.status === 'accepted' ? e.quoteExpiresAt ?? e.expiresAt : e.expiresAt) <= now) { delete e.text; delete e.messageId; }
       const result = change(state, now);
       if (!result.write) return result.value;
       state.revision++;
@@ -39,13 +41,13 @@ export class LineLedger {
     }
     throw new Error('LINE_LEDGER_BUSY');
   }
-  async reserveChat(eventId: string, scope: string): Promise<boolean> {
+  async reserveChat(eventId: string, scope: string, control = false): Promise<boolean> {
     const id = lineKey(`event:${eventId}`);
     return this.update((s, now) => {
       if (s.entries.some(e => e.id === id) || s.entries.length >= 2000
-        || s.entries.filter(e => e.kind === 'chat' && e.at > now - DAY).length >= this.policy.chatMaxPer24Hours)
+        || s.entries.filter(e => e.kind === (control ? 'control' : 'chat') && e.at > now - DAY).length >= (control ? 100 : this.policy.chatMaxPer24Hours))
         return { value: false, write: false };
-      s.entries.push({ id, kind: 'chat', at: now, expiresAt: now + DAY, scope: lineKey(scope), status: 'reserved' });
+      s.entries.push({ id, kind: control ? 'control' : 'chat', at: now, expiresAt: now + DAY, scope: lineKey(scope), status: 'reserved' });
       return { value: true, write: true };
     });
   }
@@ -71,19 +73,45 @@ export class LineLedger {
       return { value: undefined, write: true };
     });
   }
-  async enqueue(digest: { id: string; ownerUserId: string; text: string; expiresAt: number }): Promise<string | undefined> {
+  /** One durable scheduled attempt per JST date, across processes/restarts/config changes. No automatic retry. */
+  async reserveRadarSlot(date: string, consentVersion: number): Promise<string | undefined> {
+    const id = lineKey(`radar:${date}`);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
+    return this.update((s, now) => {
+      if (!s.optedIn || s.consentVersion !== consentVersion || !this.policy.enabled || lineQuiet(this.policy, now)
+        || s.entries.length >= 2000 || s.entries.some(e => e.id === id)
+        || date !== new Date(now + 9 * 3600000).toISOString().slice(0, 10)) return { value: undefined, write: false };
+      s.entries.push({ id, kind: 'radar', at: now, expiresAt: now + DAY, scope: lineKey(`personal:${s.personalUserId}`), status: 'reserved', consentVersion });
+      return { value: id, write: true };
+    });
+  }
+  async purgeExpired(): Promise<void> { await this.update(() => ({ value: undefined, write: true })); }
+  /** Advisory only; enqueue repeats this check atomically. Wait without consuming a daily acquisition slot. */
+  async canReservePush(): Promise<boolean> {
+    const s = await this.read(), now = this.now(), p = this.policy;
+    const month = new Date(now + 9 * 3600000).toISOString().slice(0,7);
+    const push = s.entries.filter(e => e.kind === 'push');
+    return p.enabled && s.optedIn && !lineQuiet(p, now) && s.entries.length < 2000
+      && push.filter(e => new Date(e.at + 9 * 3600000).toISOString().slice(0,7) === month).length < p.pushMaxPerMonth
+      && push.filter(e => e.at > now - DAY).length < p.pushMaxPer24Hours;
+  }
+  async enqueue(digest: { id: string; ownerUserId: string; text: string; expiresAt: number; radarGrant?: LineEntry['radarGrant']; consentVersion?: number; quoteExpiresAt?: number }): Promise<string | undefined> {
     const id = lineKey(`digest:${digest.id}`); const p = this.policy;
     if (digest.ownerUserId !== p.personalUserId || !p.personalUserId || !/^[A-Za-z0-9:_-]{1,128}$/.test(digest.id)
       || !digest.text.trim() || digest.text.length > 4500 || !Number.isSafeInteger(digest.expiresAt)) return;
     return this.update((s, now) => {
       const month = new Date(now + 9 * 3600000).toISOString().slice(0, 7);
       const push = s.entries.filter(e => e.kind === 'push');
-      if (!p.enabled || !s.optedIn || lineQuiet(p, now) || digest.expiresAt <= now || digest.expiresAt > now + DAY
+      if (!p.enabled || !s.optedIn || (digest.consentVersion !== undefined && digest.consentVersion !== s.consentVersion)
+        || lineQuiet(p, now) || digest.expiresAt <= now || digest.expiresAt > now + DAY
+        || (digest.quoteExpiresAt !== undefined && (!Number.isSafeInteger(digest.quoteExpiresAt) || digest.quoteExpiresAt < digest.expiresAt || digest.quoteExpiresAt > now + DAY))
         || s.entries.length >= 2000 || s.entries.some(e => e.id === id)
         || push.filter(e => new Date(e.at + 9 * 3600000).toISOString().slice(0, 7) === month).length >= p.pushMaxPerMonth
         || push.filter(e => e.at > now - DAY).length >= p.pushMaxPer24Hours) return { value: undefined, write: false };
       s.entries.push({ id, kind: 'push', at: now, expiresAt: digest.expiresAt, scope: lineKey(`personal:${p.personalUserId}`),
-        status: 'pending', text: digest.text, retryKey: randomUUID(), consentVersion: s.consentVersion });
+        status: 'pending', text: digest.text, retryKey: randomUUID(), consentVersion: s.consentVersion,
+        ...(digest.radarGrant ? { radarGrant: structuredClone(digest.radarGrant) } : {}),
+        ...(digest.quoteExpiresAt !== undefined ? { quoteExpiresAt: digest.quoteExpiresAt } : {}) });
       return { value: id, write: true };
     });
   }
@@ -98,9 +126,12 @@ export class LineLedger {
       e.status = 'sending'; return { value: structuredClone(e), write: true };
     });
   }
-  async quote(messageId: string): Promise<string | undefined> {
+  async quote(messageId: string, authorize?: (id: string) => Promise<boolean>): Promise<string | undefined> {
     const s = await this.read();
-    return s.optedIn ? s.entries.find(e => e.kind === 'push' && e.status === 'accepted'
-      && e.messageId === messageId && e.expiresAt > this.now() && e.consentVersion === s.consentVersion)?.text : undefined;
+    const entry = s.optedIn ? s.entries.find(e => e.kind === 'push' && e.status === 'accepted'
+      && e.messageId === messageId && (e.quoteExpiresAt ?? e.expiresAt) > this.now() && e.consentVersion === s.consentVersion) : undefined;
+    if (!entry || (entry.radarGrant && (!authorize || !await authorize(entry.id)))) return;
+    const latest = await this.read();
+    return latest.optedIn && latest.consentVersion === s.consentVersion && (entry.quoteExpiresAt ?? entry.expiresAt) > this.now() ? entry.text : undefined;
   }
 }

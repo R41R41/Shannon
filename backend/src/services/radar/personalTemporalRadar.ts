@@ -1,4 +1,4 @@
-import type { RequestContext } from '../../modules/access/index.js';
+import type { RadarContext } from './radarAccess.js';
 import { MAX_ACTIVE_SOURCES, MAX_SOURCE_IDS, type PersonalCatalogPort } from '../../modules/radar/catalog.js';
 import type { TemporalSource } from '../../modules/radar/temporalSources.js';
 import type { TemporalCatalogEntry, TemporalGrant, TemporalSnapshot } from '../../modules/radar/catalogVersion.js';
@@ -29,14 +29,14 @@ export class PersonalTemporalRadar {
     if (!temporalActive(source, source.owner, this.clock())) throw new PersonalRadarError('CONFLICT');
     return checkedGrant(await temporalRead(signal, child => this.reader.authorize(structuredClone(source), child)), this.clock());
   }
-  private async renew(context: RequestContext, owner: string, reauthorize: ReauthorizeRadar) {
+  private async renew(context: RadarContext, owner: string, reauthorize: ReauthorizeRadar) {
     personalRadarOwner(context, this.clock());
     if (typeof reauthorize !== 'function') throw new PersonalRadarError('CONFLICT');
     const current = await reauthorize();
     if (personalRadarOwner(current, this.clock()) !== owner) throw new PersonalRadarError('CONFLICT');
     personalRadarOwner(context, this.clock()); return current;
   }
-  async configure(context: RequestContext, id: string, body: unknown, reauthorize: ReauthorizeRadar, signal: AbortSignal) {
+  async configure(context: RadarContext, id: string, body: unknown, reauthorize: ReauthorizeRadar, signal: AbortSignal) {
     const owner = personalRadarOwner(context, this.clock());
     if (!validId(id) || !object(body) || Object.keys(body).length !== 2 || !revision(body.expectedRevision) || !object(body.source)) throw new PersonalRadarError('INVALID_INPUT');
     const input = structuredClone(body.source); const expected = body.expectedRevision;
@@ -61,7 +61,7 @@ export class PersonalTemporalRadar {
     return this.catalog.commit(context, row, row.sources, { sourceId: id, action: 'configure', added: 0, updated: 0, unchanged: 0 },
       refresh, signal, row.acquisition, undefined, [...row.temporalSources.filter(s => s.id !== id),entry]);
   }
-  async revoke(context: RequestContext, id: string, expected: number, reauthorize: ReauthorizeRadar, signal: AbortSignal) {
+  async revoke(context: RadarContext, id: string, expected: number, reauthorize: ReauthorizeRadar, signal: AbortSignal) {
     const owner = personalRadarOwner(context, this.clock());
     if (!validId(id) || !revision(expected)) throw new PersonalRadarError('INVALID_INPUT');
     const row = await this.catalog.read(owner);
@@ -70,14 +70,14 @@ export class PersonalTemporalRadar {
     return this.catalog.commit(context, row, row.sources, { sourceId: id, action: 'revoke', added: 0, updated: 0, unchanged: 0 },
       reauthorize, signal, row.acquisition, undefined, row.temporalSources.map(e => e.id === id ? { id, source: null, snapshot: null } : e));
   }
-  async sources(context: RequestContext, reauthorize: ReauthorizeRadar) {
+  async sources(context: RadarContext, reauthorize: ReauthorizeRadar) {
     const owner = personalRadarOwner(context, this.clock()); const row = await this.catalog.read(owner);
     await this.renew(context, owner, reauthorize); const current = await this.catalog.read(owner);
     if (current.revision !== row.revision) throw new PersonalRadarError('CONFLICT');
     personalRadarOwner(context, this.clock());
     return { revision: row.revision, sources: row.temporalSources.map(e => ({ id: e.id, source: e.source ? (({ owner: ignored, ...s }) => s)(e.source) : null })) };
   }
-  async collect(context: RequestContext, id: string, expected: number, reauthorize: ReauthorizeRadar, signal: AbortSignal) {
+  async collect(context: RadarContext, id: string, expected: number, reauthorize: ReauthorizeRadar, signal: AbortSignal) {
     if (!revision(expected) || !validId(id)) throw new PersonalRadarError('INVALID_INPUT');
     let source: TemporalSource | undefined; let grant: TemporalGrant | undefined;
     const refresh = async () => {
@@ -103,7 +103,7 @@ export class PersonalTemporalRadar {
         added: entry!.snapshot ? 0 : content.items.length, updated: entry!.snapshot ? content.items.length : 0, unchanged: 0 };
     });
   }
-  async preview(context: RequestContext, reauthorize: ReauthorizeRadar, signal: AbortSignal) {
+  async preview(context: RadarContext, reauthorize: ReauthorizeRadar, signal: AbortSignal) {
     const owner = personalRadarOwner(context, this.clock()); const row = await this.catalog.read(owner);
     await this.renew(context, owner, reauthorize);
     const entries = row.temporalSources.filter(e => temporalVisible(e, owner, this.clock())).slice(0,3);

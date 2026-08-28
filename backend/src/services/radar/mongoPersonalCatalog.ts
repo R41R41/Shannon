@@ -9,7 +9,7 @@ export class MongoPersonalCatalog implements PersonalCatalogPort {
   private readonly collection: mongo.Collection<Document>;
   constructor(private readonly db: mongo.Db) { this.collection = db.collection<Document>('radarpersonalcatalogs'); }
   async read(owner: string): Promise<PersonalCatalog | null> {
-    if (!/^firebase:[a-f0-9]{64}$/.test(owner)) throw new Error('RADAR_CATALOG_UNAVAILABLE');
+    if (!/^(?:firebase|line):[a-f0-9]{64}$/.test(owner)) throw new Error('RADAR_CATALOG_UNAVAILABLE');
     const row = await this.collection.findOne({ _id: owner, owner }, { maxTimeMS: 5000, readPreference: 'primary' });
     if (!row) return null;
     const { _id: ignored, ...value } = row;
@@ -17,7 +17,7 @@ export class MongoPersonalCatalog implements PersonalCatalogPort {
     return value;
   }
   async compareAndSwap(owner: string, expected: number, next: PersonalCatalog): Promise<boolean> {
-    if (!/^firebase:[a-f0-9]{64}$/.test(owner) || next.owner !== owner || !Number.isSafeInteger(expected)
+    if (!/^(?:firebase|line):[a-f0-9]{64}$/.test(owner) || next.owner !== owner || !Number.isSafeInteger(expected)
       || expected < 0 || next.revision !== expected + 1 || Buffer.byteLength(JSON.stringify(next)) > 1024 * 1024)
       throw new Error('RADAR_CATALOG_UNAVAILABLE');
     if (next.schemaVersion !== 2 || !Array.isArray(next.temporalSources)) throw new Error('RADAR_CATALOG_SCHEMA');

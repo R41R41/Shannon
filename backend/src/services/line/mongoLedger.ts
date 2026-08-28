@@ -21,9 +21,14 @@ export class MongoLineLedger implements LineStatePort {
       || !Array.isArray(s.entries) || s.entries.length > 2000 || Buffer.byteLength(JSON.stringify(s)) > 2 * 1024 * 1024
       || new Set(s.entries.map(e => e.id)).size !== s.entries.length
       || s.entries.some(e => !/^[a-f0-9]{64}$/.test(e.id) || !/^[a-f0-9]{64}$/.test(e.scope)
-        || !['chat','control','push'].includes(e.kind) || !['reserved','pending','sending','accepted','unknown','failed','cancelled'].includes(e.status)
+        || !['chat','control','push','radar'].includes(e.kind) || !['reserved','pending','sending','accepted','unknown','failed','cancelled'].includes(e.status)
         || !Number.isSafeInteger(e.at) || !Number.isSafeInteger(e.expiresAt)
-        || (e.text !== undefined && (e.kind !== 'push' || typeof e.text !== 'string' || e.text.length > 4500)))) throw new Error('LINE_LEDGER_INVALID');
+        || (e.quoteExpiresAt !== undefined && (e.kind !== 'push' || !Number.isSafeInteger(e.quoteExpiresAt) || e.quoteExpiresAt < e.expiresAt || e.quoteExpiresAt > e.at + 86400000))
+        || (e.text !== undefined && (e.kind !== 'push' || typeof e.text !== 'string' || e.text.length > 4500))
+        || (e.radarGrant !== undefined && (e.kind !== 'push' || !/^line:[a-f0-9]{64}$/.test(e.radarGrant.owner)
+          || !/^[a-f0-9]{64}$/.test(e.radarGrant.policyHash) || !Number.isSafeInteger(e.radarGrant.catalogRevision)
+          || e.radarGrant.catalogRevision < 1 || !Array.isArray(e.radarGrant.clusters) || e.radarGrant.clusters.length > 3
+          || e.radarGrant.clusters.some(c => !/^[a-f0-9]{64}$/.test(c)))))) throw new Error('LINE_LEDGER_INVALID');
   }
   async compareAndSwap(botUserId: string, expected: number, next: LineState): Promise<boolean> {
     this.validate(next);

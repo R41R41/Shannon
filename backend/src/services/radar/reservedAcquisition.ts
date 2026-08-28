@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { RequestContext } from '../../modules/access/index.js';
+import type { RadarContext } from './radarAccess.js';
 import type { PersonalCatalogPort, CatalogAudit } from '../../modules/radar/catalog.js';
 import type { VersionedCatalog } from '../../modules/radar/catalogVersion.js';
 import { validFeedSubscription } from '../../modules/radar/sourceRegistry.js';
@@ -19,7 +19,7 @@ export class ReservedRadarAcquisition {
   constructor(private readonly repository: PersonalCatalogPort, private readonly clock: () => number, policy?: AcquisitionPolicy) {
     this.catalog = new OwnerRadarCatalog(repository, clock); this.policy = policy && Object.freeze({ ...policy });
   }
-  async run(context: RequestContext, id: string, signal: AbortSignal, reauthorize: ReauthorizeRadar, expected: number | undefined, kind: 'feed' | 'temporal',
+  async run(context: RadarContext, id: string, signal: AbortSignal, reauthorize: ReauthorizeRadar, expected: number | undefined, kind: 'feed' | 'temporal',
     work: (reserved: VersionedCatalog, leaseId: string, child: AbortSignal) => Promise<AcquisitionResult>) {
     const owner = personalRadarOwner(context, this.clock());
     if (typeof reauthorize !== 'function' || personalRadarOwner(await reauthorize(), this.clock()) !== owner) throw new PersonalRadarError('CONFLICT');

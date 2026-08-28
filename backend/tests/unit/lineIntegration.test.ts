@@ -8,6 +8,13 @@ import { LineHttpTransport } from '../../src/services/line/transport.js';
 import { parseLineTurn, lineQuiet } from '../../src/modules/conversation/lineConversation.js';
 import type { LineChatPort, LineTransport } from '../../src/services/line/ports.js';
 import { createLineChatModel } from '../../src/services/line/chatModel.js';
+import { LineRadarWorker } from '../../src/services/line/radarWorker.js';
+import { parseLineRadarPolicy, type LineRadarPolicy } from '../../src/services/line/radarPolicy.js';
+import { issueLineRadarContext, personalRadarOwner } from '../../src/services/radar/radarAccess.js';
+import { parseFeed } from '../../src/services/radar/feedConnector.js';
+import type { PersonalCatalog, PersonalCatalogPort } from '../../src/modules/radar/catalog.js';
+import { PersonalTemporalReaders } from '../../src/services/radar/personalTemporalReaders.js';
+import { WeatherReadAdapter } from '../../src/services/radar/weatherReadAdapter.js';
 const modelFake = vi.hoisted(() => ({ invoke: vi.fn(), configurations: [] as any[] }));
 vi.mock('@langchain/openai', () => ({ ChatOpenAI: class { constructor(input: any) { modelFake.configurations.push(input); } invoke = modelFake.invoke; } }));
 const bot = 'U' + 'a'.repeat(32), owner = 'U' + 'b'.repeat(32), stranger = 'U' + 'c'.repeat(32);
@@ -17,6 +24,14 @@ const env = { LINE_ENABLED: 'true', LINE_BOT_USER_ID: bot, LINE_PERSONAL_USER_ID
   LINE_ALLOWED_GROUP_IDS: group, LINE_CHANNEL_SECRET: 'test-channel-secret'.replace(/-/g, ''), LINE_CHANNEL_ACCESS_TOKEN: 'test-token'.replace(/-/g, '').repeat(4),
   LINE_CHAT_MAX_PER_24H: '100', LINE_PUSH_MAX_PER_24H: '3', LINE_PUSH_MAX_PER_MONTH: '200' };
 const config = lineConfig(env);
+class Catalog implements PersonalCatalogPort {
+  rows = new Map<string, PersonalCatalog>();
+  async read(id: string) { return structuredClone(this.rows.get(id) ?? null); }
+  async compareAndSwap(id: string, revision: number, next: PersonalCatalog) {
+    if ((this.rows.get(id)?.revision ?? 0) !== revision) return false;
+    this.rows.set(id, structuredClone(next)); return true;
+  }
+}
 class State implements LineStatePort {
   rows = new Map<string, LineState>();
   async read(id: string) { return structuredClone(this.rows.get(id) ?? null); }
@@ -33,13 +48,14 @@ function event(text = 'こんにちは', source: any = { type: 'user', userId: o
 }
 const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const close of cleanup.splice(0)) await close(); });
-async function fixture(overrides: Partial<LineChatPort> = {}, customConfig = config, store: LineStatePort = new State()) {
+async function fixture(overrides: Partial<LineChatPort> = {}, customConfig = config, store: LineStatePort = new State(),
+  hooks: Partial<Pick<Parameters<typeof createLineApplication>[1], 'radar' | 'authorizeRuntime'>> = {}) {
   let clock = BASE;
   const chat: LineChatPort = { reply: vi.fn(async () => '返答です'), ...overrides };
   let sent = 1000;
   const transport: LineTransport = { reply: vi.fn(async () => ({ status: 'accepted' as const, messageId: String(++sent) })),
     push: vi.fn(async () => ({ status: 'accepted' as const, messageId: String(++sent) })) };
-  const runtime = createLineApplication(customConfig, { state: store, chat, transport }, () => clock);
+  const runtime = createLineApplication(customConfig, { state: store, chat, transport, ...hooks }, () => clock);
   const server = await new Promise<Server>(resolve => { const s = runtime.app.listen(0, '127.0.0.1', () => resolve(s)); });
   cleanup.push(async () => { runtime.stop(); await runtime.drain(); await new Promise<void>((resolve, reject) => server.close(e => e ? reject(e) : resolve())); });
   const port = (server.address() as any).port;
@@ -278,5 +294,143 @@ describe('LINE stateless chat adapter', () => {
     const count = modelFake.invoke.mock.calls.length; const c = new AbortController(); c.abort();
     await expect(model.reply({ kind: 'personal', messages: [], signal: c.signal })).rejects.toThrow();
     expect(modelFake.invoke.mock.calls.length).toBe(count);
+  });
+});
+
+describe('LINE native Radar and scheduled delivery', () => {
+  const makePolicy = (): LineRadarPolicy => ({ version: 1, enabled: true, hourJst: 12, minuteJst: 0,
+    consentExpiresAt: BASE + 7 * 86400000, weather: null,
+    feeds: [{ id: 'news', kind: 'web', locator: 'https://example.com/feed.xml', articleHosts: ['example.com'],
+      topicIds: ['science'], maxItems: 10, retentionMs: 7 * 86400000 }] });
+  async function radarFixture(policyConfig = config) {
+    let clock = BASE; let policy = makePolicy(); const store = new State(), catalog = new Catalog();
+    const transport: LineTransport = { reply: vi.fn(async () => ({ status: 'accepted' })),
+      push: vi.fn(async () => ({ status: 'accepted', messageId: '9001' })) };
+    const runtime = createLineApplication(policyConfig, { state: store, chat: { reply: async () => 'unused' }, transport }, () => clock);
+    const read = vi.fn(async (source: any, signal: AbortSignal) => {
+      signal.throwIfAborted();
+      return parseFeed(`<rss><channel><item><title>架空の研究ニュース</title><link>https://example.com/article</link><guid>one</guid><pubDate>${new Date(BASE - 3600000).toUTCString()}</pubDate></item></channel></rss>`, source, clock);
+    });
+    const ports = { ledger: runtime.ledger, catalog, feed: { read }, temporal: new PersonalTemporalReaders(),
+      readPolicy: async () => structuredClone(policy), deliver: runtime.deliver };
+    const worker = new LineRadarWorker(policyConfig, ports, () => clock);
+    return { worker, runtime, transport, read, catalog, store, ports,
+      on: () => runtime.ledger.consent('enable', clock, true),
+      setClock: (n: number) => { clock = n; }, setPolicy: (p: LineRadarPolicy) => { policy = p; },
+      rebuild: () => new LineRadarWorker(policyConfig, ports, () => clock) };
+  }
+  it('waits out a rolling daily push limit without consuming the next day slot', async () => {
+    const f=await radarFixture(lineConfig({...env,LINE_PUSH_MAX_PER_24H:'1'})); await f.on();f.setClock(BASE+120000);
+    expect(await f.worker.tick()).toBe('accepted');f.setClock(BASE+86400000);
+    expect(await f.rebuild().tick()).toBe('budget-wait');expect(f.read).toHaveBeenCalledTimes(1);
+    f.setClock(BASE+86400000+120000);
+    f.read.mockImplementation(async source=>parseFeed(`<rss><channel><item><title>Second day</title><link>https://example.com/second</link><guid>two</guid><pubDate>${new Date(BASE+86400000).toUTCString()}</pubDate></item></channel></rss>`,source,BASE+86400000+120000));
+    expect(await f.rebuild().tick()).toBe('accepted');expect(f.transport.push).toHaveBeenCalledTimes(2);
+  });
+  it('keeps native LINE owners distinct and rejects serialized or expired grants', () => {
+    const grant = issueLineRadarContext(bot, owner, BASE + 60000);
+    expect(personalRadarOwner(grant, BASE)).toMatch(/^line:[a-f0-9]{64}$/);
+    expect(personalRadarOwner(grant, BASE)).not.toBe(personalRadarOwner(issueLineRadarContext(bot, stranger, BASE+60000), BASE));
+    expect(() => personalRadarOwner(structuredClone(grant), BASE)).toThrow();
+    expect(() => personalRadarOwner(grant, BASE+60000)).toThrow();
+    expect(() => issueLineRadarContext(bot, bot, BASE+60000)).toThrow();
+  });
+  it.each([{ feeds: [] }, { weather: false }, { hourJst: 24 }, { minuteJst: -1 }, { consentExpiresAt: BASE+31*86400000 },
+    { weather: { kind: 'weather', latitude: 35 } }, { unexpected: 'field' }, { feeds: [{ kind: 'web', locator: 'https://127.0.0.1' }] }])('rejects invalid worker policy %j', value => {
+    expect(() => parseLineRadarPolicy({ ...makePolicy(), ...value }, BASE)).toThrow('LINE_RADAR_CONFIG_INVALID');
+  });
+  it('does not collect or send until personal consent and the scheduled window', async () => {
+    const f = await radarFixture(); expect(await f.worker.tick()).toBe('disabled'); expect(f.read).not.toHaveBeenCalled();
+    await f.on(); f.setClock(BASE - 60000); expect(await f.worker.tick()).toBe('not-due');
+    expect(f.transport.push).not.toHaveBeenCalled();
+  });
+  it('collects through the real catalog service, queues once, sends and remains deduplicated after restart', async () => {
+    const f = await radarFixture(); await f.on();
+    expect(await f.worker.tick()).toBe('accepted'); expect(f.read).toHaveBeenCalledTimes(1);
+    expect(f.transport.push).toHaveBeenCalledTimes(1); expect(vi.mocked(f.transport.push).mock.calls[0][0]).toBe(owner);
+    expect(vi.mocked(f.transport.push).mock.calls[0][1]).toContain('https://example.com/article');
+    expect(await f.rebuild().tick()).toBe('already-attempted');
+    f.setClock(BASE + 86400000); expect(await f.rebuild().tick()).toBe('silent'); expect(f.transport.push).toHaveBeenCalledTimes(1);
+    expect([...f.catalog.rows.keys()]).toHaveLength(1); expect([...f.catalog.rows.keys()][0]).toMatch(/^line:/);
+  });
+  it('allows one collection and send across eight independent workers', async () => {
+    const f = await radarFixture(); await f.on();
+    const results = await Promise.all(Array.from({ length: 8 }, () => f.rebuild().tick()));
+    expect(results.filter(r => r === 'accepted')).toHaveLength(1);
+    expect(f.read).toHaveBeenCalledTimes(1); expect(f.transport.push).toHaveBeenCalledTimes(1);
+  });
+  it('stopping consent during HTTP prevents saving and sending', async () => {
+    const f = await radarFixture(); await f.on(); const original = f.read.getMockImplementation()!;
+    f.read.mockImplementation(async (...args) => { await f.runtime.ledger.consent('stop', BASE+1, false); return original(...args); });
+    expect(await f.worker.tick()).toBe('unavailable'); expect(f.transport.push).not.toHaveBeenCalled();
+    expect([...f.catalog.rows.values()].flatMap(r => r.sources.flatMap(s => s.records))).toHaveLength(0);
+  });
+  it('a source policy change during HTTP prevents the old content from being sent', async () => {
+    const f = await radarFixture(); await f.on(); const original = f.read.getMockImplementation()!;
+    f.read.mockImplementation(async (...args) => { f.setPolicy({ ...makePolicy(), enabled: false }); return original(...args); });
+    expect(await f.worker.tick()).toBe('unavailable'); expect(f.transport.push).not.toHaveBeenCalled();
+  });
+  it('does not retry failed collection within the daily slot', async () => {
+    const f = await radarFixture(); await f.on(); f.read.mockRejectedValue(new Error('provider unavailable'));
+    expect(await f.worker.tick()).toBe('silent'); expect(await f.rebuild().tick()).toBe('already-attempted');
+    expect(f.read).toHaveBeenCalledTimes(1); expect(f.transport.push).not.toHaveBeenCalled();
+  });
+  it('keeps accepted digest quote context beyond its send deadline and revokes it with policy or consent', async () => {
+    const f = await radarFixture(); await f.on(); expect(await f.worker.tick()).toBe('accepted');
+    f.setClock(BASE+3600000);
+    expect(await f.runtime.ledger.quote('9001', f.worker.authorizeQuote)).toContain('架空の研究');
+    expect(await f.runtime.ledger.quote('9001')).toBeUndefined();
+    f.setPolicy({ ...makePolicy(), enabled: false });
+    expect(await f.runtime.ledger.quote('9001', f.worker.authorizeQuote)).toBeUndefined();
+    await f.runtime.ledger.consent('off', BASE+3600000, false);
+    expect(JSON.stringify(await f.runtime.ledger.read())).not.toContain('架空の研究');
+  });
+  it('never retries an uncertain push, including after restart', async () => {
+    const f = await radarFixture(); await f.on(); vi.mocked(f.transport.push).mockResolvedValue({ status: 'unknown' });
+    expect(await f.worker.tick()).toBe('unknown'); expect(await f.rebuild().tick()).toBe('already-attempted');
+    expect(f.transport.push).toHaveBeenCalledTimes(1); expect(await f.runtime.ledger.quote('9001', f.worker.authorizeQuote)).toBeUndefined();
+  });
+  it('stops before starting any external work and supports status without LLM', async () => {
+    const f = await radarFixture(); await f.on(); expect(await f.worker.status()).toContain('12:00');
+    await f.worker.stop(); expect(await f.worker.tick()).toBe('stopped'); expect(f.read).not.toHaveBeenCalled();
+  });
+  it('delivers explicitly configured weather even when the news source fails, without presenting stale news', async () => {
+    const f=await radarFixture();await f.on();f.read.mockRejectedValue(new Error('offline'));
+    f.setPolicy({...makePolicy(),weather:{id:'weather',kind:'weather',timeZone:'Asia/Tokyo',latitudeTenth:357,longitudeTenth:1397}});
+    const get=vi.fn(async()=>JSON.stringify({latitude:35.7,longitude:139.7,timezone:'Asia/Tokyo',
+      daily_units:{time:'iso8601',weather_code:'wmo code',temperature_2m_min:'°C',temperature_2m_max:'°C',precipitation_probability_max:'%'},
+      daily:{time:['2026-08-29','2026-08-30','2026-08-31'],weather_code:[0,1,2],temperature_2m_min:[20,21,22],temperature_2m_max:[30,31,32],precipitation_probability_max:[10,20,30]}}));
+    const worker=new LineRadarWorker(config,{...f.ports,temporal:new PersonalTemporalReaders(new WeatherReadAdapter({get},()=>BASE))},()=>BASE);
+    expect(await worker.tick()).toBe('accepted');expect(get).toHaveBeenCalledTimes(1);
+    const text=vi.mocked(f.transport.push).mock.calls[0][1];expect(text).toContain('最低 20°C');expect(text).toContain('Open-Meteo');expect(text).not.toContain('架空の研究');
+  });
+});
+
+describe('LINE operational guards and derivative context', () => {
+  it('answers personal status without a model call even with zero LLM budget', async () => {
+    const f=await fixture({},lineConfig({...env,LINE_CHAT_MAX_PER_24H:'0'}),new State(),{
+      radar:{status:async()=> '配信状況: 停止中',authorizeQuote:async()=>false}});
+    expect((await f.post([event('配信状況')])).status).toBe(200); await f.runtime.drain();
+    expect(f.chat.reply).not.toHaveBeenCalled();expect(f.transport.reply).toHaveBeenCalledTimes(1);
+    expect((await f.runtime.ledger.read()).entries[0].kind).toBe('control');
+  });
+  it('cancels an in-flight generated reply when its runtime permit is revoked', async () => {
+    let valid=true;
+    const f=await fixture({reply:async()=>{valid=false;return 'must not be sent';}},config,new State(),{
+      authorizeRuntime:async()=>{if(!valid)throw Error();}});
+    await f.post([event()]);await f.runtime.drain();expect(f.transport.reply).not.toHaveBeenCalled();
+    expect((await f.post([event()])).status).toBe(503);
+  });
+  it('removes earlier personal conversation derivatives when the source/consent version changes', async () => {
+    let version='v1';const f=await fixture({},config,new State(),{
+      radar:{status:async()=> 'status',authorizeQuote:async()=>false,conversationVersion:async()=>version}});
+    await f.post([event('first private topic')]);await f.runtime.drain();version='v2';
+    await f.post([event('second topic')]);await f.runtime.drain();
+    expect(vi.mocked(f.chat.reply).mock.calls[1][0].messages).toEqual([{role:'user',content:'second topic'}]);
+  });
+  it('does not send a derivative generated across a source/consent version change', async () => {
+    let version='v1';const f=await fixture({reply:async()=>{version='v2';return 'old derivative';}},config,new State(),{
+      radar:{status:async()=> 'status',authorizeQuote:async()=>false,conversationVersion:async()=>version}});
+    await f.post([event()]);await f.runtime.drain();expect(f.transport.reply).not.toHaveBeenCalled();
   });
 });

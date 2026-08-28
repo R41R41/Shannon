@@ -1,4 +1,4 @@
-import type { RequestContext } from '../../modules/access/index.js';
+import type { RadarContext } from './radarAccess.js';
 import { validId, timestamp } from '../../modules/radar/content.js';
 import { validTimeZone } from '../../modules/radar/temporalSources.js';
 import { PersonalRadarService, PersonalRadarError, personalRadarOwner, type ReauthorizeRadar } from './personalRadar.js';
@@ -15,7 +15,7 @@ export interface RadarWorkspaceOptions {
 export class RadarWorkspace {
   constructor(private readonly feed: PersonalRadarService, readonly temporal: PersonalTemporalRadar,
     private readonly options: RadarWorkspaceOptions, private readonly clock: () => number = Date.now) {}
-  private async choices(context: RequestContext, signal: AbortSignal) {
+  private async choices(context: RadarContext, signal: AbortSignal) {
     const owner = personalRadarOwner(context, this.clock());
     const rows = this.options.calendars ? await temporalRead(signal, child => this.options.calendars!.list(owner, child)) : [];
     if (!Array.isArray(rows) || rows.length > 32 || new Set(rows.map(r => r.id)).size !== rows.length
@@ -24,13 +24,13 @@ export class RadarWorkspace {
         || !timestamp(r.expiresAt))) throw new PersonalRadarError('UNAVAILABLE');
     return rows.filter(r => r.expiresAt > this.clock()).map(({ id, label, timeZone, expiresAt }) => ({ id, label, timeZone, expiresAt }));
   }
-  private async current(context: RequestContext, revision: number, reauthorize: ReauthorizeRadar, signal: AbortSignal) {
+  private async current(context: RadarContext, revision: number, reauthorize: ReauthorizeRadar, signal: AbortSignal) {
     const latest = await reauthorize();
     if (signal.aborted) throw new PersonalRadarError('CANCELLED');
     if (personalRadarOwner(latest, this.clock()) !== personalRadarOwner(context, this.clock())) throw new PersonalRadarError('CONFLICT');
     await this.feed.assertCurrent(latest, revision); return latest;
   }
-  async sources(context: RequestContext, reauthorize: ReauthorizeRadar, signal: AbortSignal) {
+  async sources(context: RadarContext, reauthorize: ReauthorizeRadar, signal: AbortSignal) {
     const publicSources = await this.feed.sources(context);
     const privateSources = await this.temporal.sources(context, reauthorize);
     const calendars = await this.choices(context, signal);
@@ -42,7 +42,7 @@ export class RadarWorkspace {
     return { ...publicSources, temporal: { sources: privateSources.sources, weatherAvailable: this.options.weatherAvailable,
       calendars, calendarAvailable: !!this.options.calendars, servedAt, validUntil } };
   }
-  async preview(context: RequestContext, reauthorize: ReauthorizeRadar, signal: AbortSignal) {
+  async preview(context: RadarContext, reauthorize: ReauthorizeRadar, signal: AbortSignal) {
     const publicView = await this.feed.preview(context);
     const latest = await this.current(context, publicView.revision, reauthorize, signal);
     // This is last: Calendar grants are checked after the outer request's final reauthentication.
@@ -53,7 +53,7 @@ export class RadarWorkspace {
     if (signal.aborted || validUntil <= servedAt) throw new PersonalRadarError('CONFLICT');
     return { ...publicView, temporal: privateView.entries, servedAt, validUntil };
   }
-  async configure(context: RequestContext, id: string, body: unknown, reauthorize: ReauthorizeRadar, signal: AbortSignal) {
+  async configure(context: RadarContext, id: string, body: unknown, reauthorize: ReauthorizeRadar, signal: AbortSignal) {
     // Service owns exact body validation; these checks only restrict exposed provider capabilities.
     const input = (body as { source?: { kind?: unknown; enabled?: unknown; bindingId?: unknown; timeZone?: unknown } } | null)?.source;
     const refresh = async () => {

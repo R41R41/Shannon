@@ -2,7 +2,7 @@ import { ReservedRadarAcquisition } from './reservedAcquisition.js';
 import { OwnerRadarCatalog } from './ownerRadarCatalog.js';
 import { temporalVisible } from './temporalCatalogData.js';
 import { createHash } from 'node:crypto';
-import { type RequestContext } from '../../modules/access/index.js';
+import type { RadarContext } from './radarAccess.js';
 import { audienceKey, eligibleContent, rankCandidates, timestamp, validId, type RadarAudience } from '../../modules/radar/content.js';
 import { createQuietCard } from '../../modules/radar/drafts.js';
 import { decideDelivery } from '../../modules/radar/deliveryPolicy.js';
@@ -60,19 +60,19 @@ export class PersonalRadarService {
     this.catalog = new OwnerRadarCatalog(repository, clock);
     this.acquisition = new ReservedRadarAcquisition(repository, clock, policy);
   }
-  async assertCurrent(context: RequestContext, expected: number): Promise<void> {
+  async assertCurrent(context: RadarContext, expected: number): Promise<void> {
     const row = await this.catalog.read(personalRadarOwner(context, this.clock()));
     personalRadarOwner(context, this.clock());
     if (row.revision !== expected) throw new PersonalRadarError('CONFLICT');
   }
-  async sources(context: RequestContext) {
+  async sources(context: RadarContext) {
     const row = await this.catalog.read(personalRadarOwner(context, this.clock()));
     personalRadarOwner(context, this.clock());
     return { revision: row.revision, sources: row.sources.map(s => ({ id: s.id,
       source: s.source ? snapshotSubscription(s.source) : null })), audit: retainedAudit(row.audit, this.clock()).map(e => ({
       revision: e.revision, at: e.at, sourceId: e.sourceId, action: e.action, added: e.added, updated: e.updated, unchanged: e.unchanged })) };
   }
-  async configure(context: RequestContext, id: string, body: unknown, reauthorize: ReauthorizeRadar) {
+  async configure(context: RadarContext, id: string, body: unknown, reauthorize: ReauthorizeRadar) {
     const owner = personalRadarOwner(context, this.clock());
     if (!validId(id) || !object(body) || !exactKeys(body, ['expectedRevision', 'source']) || !revision(body.expectedRevision)
       || !object(body.source) || !exactKeys(body.source, ['enabled', 'consentExpiresAt', 'kind', 'locator', 'articleHosts', 'topicIds', 'maxItems', 'retentionMs']))
@@ -94,7 +94,7 @@ export class PersonalRadarService {
     return this.catalog.commit(context, row, [...row.sources.filter(s => s.id !== id), entry],
       { sourceId: id, action: 'configure', added: 0, updated: 0, unchanged: 0 }, reauthorize);
   }
-  async revoke(context: RequestContext, id: string, expected: unknown, reauthorize: ReauthorizeRadar) {
+  async revoke(context: RadarContext, id: string, expected: unknown, reauthorize: ReauthorizeRadar) {
     const row = await this.catalog.read(personalRadarOwner(context, this.clock()));
     if (!validId(id) || !revision(expected)) throw new PersonalRadarError('INVALID_INPUT');
     if (row.revision !== expected) throw new PersonalRadarError('CONFLICT');
@@ -104,7 +104,7 @@ export class PersonalRadarService {
       { sourceId: id, action: 'revoke', added: 0, updated: 0, unchanged: 0 }, reauthorize);
   }
   /** Internal only. A server-owned policy and a durable reservation are mandatory before connector I/O. */
-  async collect(context: RequestContext, id: string, connector: FeedConnectorPort, signal: AbortSignal, reauthorize: ReauthorizeRadar, expectedRevision?: number) {
+  async collect(context: RadarContext, id: string, connector: FeedConnectorPort, signal: AbortSignal, reauthorize: ReauthorizeRadar, expectedRevision?: number) {
     return this.acquisition.run(context, id, signal, reauthorize, expectedRevision, 'feed', async (reserved, leaseId, child) => {
       const owner = reserved.owner; const entry = reserved.sources.find(s => s.id === id);
       if (!entry?.source) throw new PersonalRadarError('NOT_FOUND');
@@ -131,7 +131,7 @@ export class PersonalRadarService {
   /** Explicit owner-scoped maintenance; no scan, timer, network, account enumeration or automatic retry.
    * Keeps configuration/ID tombstones and budget history; never TTL-deletes the owner document.
    */
-  async maintain(context: RequestContext, expected: number, reauthorize: ReauthorizeRadar) {
+  async maintain(context: RadarContext, expected: number, reauthorize: ReauthorizeRadar) {
     const owner = personalRadarOwner(context, this.clock());
     if (!revision(expected)) throw new PersonalRadarError('INVALID_INPUT');
     const row = await this.catalog.read(owner); const now = this.clock();
@@ -160,7 +160,7 @@ export class PersonalRadarService {
     return { ...result, removed, recovered };
   }
   /** Owner-only recent history with explicit coverage gaps; no durable/global audit claim. */
-  async audit(context: RequestContext, reauthorize: ReauthorizeRadar) {
+  async audit(context: RadarContext, reauthorize: ReauthorizeRadar) {
     const owner = personalRadarOwner(context, this.clock());
     const row = await this.catalog.read(owner);
     if (typeof reauthorize !== 'function') throw new PersonalRadarError('CONFLICT');
@@ -172,7 +172,7 @@ export class PersonalRadarService {
     return { ...view, validUntil: Math.min(context.expiresAtMs, latest.expiresAtMs, now + 60000,
       ...view.events.map(e => e.at + view.retentionMs)) };
   }
-  async preview(context: RequestContext) {
+  async preview(context: RadarContext, excludedClusters: ReadonlySet<string> = new Set()) {
     const owner = personalRadarOwner(context, this.clock()); const row = await this.catalog.read(owner);
     const now = this.clock(); const audience = personalAudience(owner);
     const entries = row.sources.filter(s => s.source && validFeedSubscription(s.source, audience, now));
@@ -181,7 +181,7 @@ export class PersonalRadarService {
     const policy = { audience, revision: Math.max(1, row.revision), enabled: true, allowedSourceIds: entries.map(s => s.id),
       minimumScore: 0, maxPerHour: 0, maxPerDay: 0, minimumGapMs: 0, maxDigestItems: 3 };
     const delivery = { now, focusMode: true, quietUntil: now, usedThisHour: 0, usedToday: 0, lastDeliveryAt: null, deliveredOrReservedClusterIds: [] };
-    const items = rankCandidates(records.map(r => r.content), { audience, now, preferences }).flatMap(candidate => {
+    const items = rankCandidates(records.map(r => r.content).filter(c => !excludedClusters.has(c.clusterId)), { audience, now, preferences }).flatMap(candidate => {
       const card = createQuietCard(candidate, now);
       if (!card || decideDelivery(candidate, policy, delivery).kind !== 'digest') return [];
       return [{ card, contentId: candidate.item.id, sourceId: candidate.item.sourceId,

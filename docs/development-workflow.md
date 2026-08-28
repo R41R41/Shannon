@@ -66,3 +66,7 @@ backendの上記ビルドは**型チェックを省いた変換**。完全な型
 3. 反映対象のコミットと移行・復旧手順をレビューし、短い切替枠で反映する。
 4. dev用マーカー・ロック・環境設定・接続先をprodへコピーしない。
 5. 本番CDはmainへのpushでresetを伴う。検証と反映判断前にmainへpush／mergeしない。
+
+## LINE専用サービス（2026-08-29 LINE-2）
+
+ユーザーがLINE初回MVPの本番追加までを明示承認。実機検証を経て既存Shannon-prodとは別のrelease/service/DBで配備する。詳細は [LINE配備手順](line-deployment.md)。本体の`.dev-runtime-lock`は維持する。新しい`start-line-service.cjs`はLINEのenv・source設定・bundleのhashを固定した別の保護permitなしでは起動しない。dev許可は最大24hで、資格情報の発行/転送や費用枠の合意の代用にはしない。旧Bot・Firebase等の起動許可へ転用しない。

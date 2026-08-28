@@ -62,3 +62,4 @@ node_modules
 # Local environment identity / live-runtime safety lock
 /.shannon-development
 /.dev-runtime-lock
+/backend/dist-line/
