@@ -6,7 +6,7 @@ import { PersonalRadarError, PersonalRadarService, personalRadarOwner } from '..
 /** Opt-in route factory, intentionally NOT registered by server/bootstrap yet. No collection or post endpoint. */
 export function registerRadarRoutes(app: Express, access: AccessService, radar: PersonalRadarService): void {
   app.use('/api/radar', (_req, res, next) => { res.setHeader('Cache-Control', 'no-store'); res.setHeader('Vary', 'Authorization'); next(); });
-  const handler = (operation: 'sources' | 'preview' | 'configure' | 'revoke') => async (req: Request, res: Response) => {
+  const handler = (operation: 'sources' | 'preview' | 'audit' | 'configure' | 'revoke') => async (req: Request, res: Response) => {
     try {
       const context = await authenticateRequest(req, access);
       if (Object.keys(req.query).length) throw new PersonalRadarError('INVALID_INPUT');
@@ -15,7 +15,7 @@ export function registerRadarRoutes(app: Express, access: AccessService, radar: 
       const reauthorize = () => authenticateRequest(req, access);
       const result = operation === 'configure' ? await radar.configure(context, req.params.id, req.body, reauthorize)
         : operation === 'revoke' ? await radar.revoke(context, req.params.id, req.body.expectedRevision, reauthorize)
-          : await radar[operation](context);
+          : operation === 'audit' ? await radar.audit(context, reauthorize) : await radar[operation](context);
       const latest = await authenticateRequest(req, access);
       if (personalRadarOwner(latest) !== personalRadarOwner(context)) throw new PersonalRadarError('CONFLICT');
       await radar.assertCurrent(latest, result.revision);
@@ -29,6 +29,7 @@ export function registerRadarRoutes(app: Express, access: AccessService, radar: 
     }
   };
   app.get('/api/radar/sources', handler('sources'));
+  app.get('/api/radar/audit', handler('audit'));
   app.get('/api/radar/preview', handler('preview'));
   app.put('/api/radar/sources/:id', express.json({ limit: '8kb' }), handler('configure'));
   app.delete('/api/radar/sources/:id', express.json({ limit: '1kb' }), handler('revoke'));

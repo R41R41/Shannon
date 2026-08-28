@@ -3,12 +3,14 @@ import { requireCapability, type RequestContext } from '../../modules/access/ind
 import { audienceKey, eligibleContent, rankCandidates, timestamp, validId, type RadarAudience } from '../../modules/radar/content.js';
 import { createQuietCard } from '../../modules/radar/drafts.js';
 import { decideDelivery } from '../../modules/radar/deliveryPolicy.js';
-import { MAX_ACTIVE_SOURCES, MAX_AUDIT_EVENTS, MAX_SOURCE_IDS, MAX_CATALOG_RECORDS, mergeCatalog,
+import { MAX_ACTIVE_SOURCES, MAX_SOURCE_IDS, MAX_CATALOG_RECORDS, mergeCatalog,
   type PersonalCatalog, type PersonalCatalogPort, type CatalogAudit } from '../../modules/radar/catalog.js';
 import { snapshotSubscription, validFeedSubscription,
   type FeedRecord, type FeedRegistryPort, type FeedSubscription } from '../../modules/radar/sourceRegistry.js';
 import { articleUrl, feedUrl, type FeedConnectorPort } from './feedConnector.js';
 import { FeedCollector } from './collectFeed.js';
+
+import { appendCatalogAudit, catalogAuditView, retainedAudit, validCatalogAudit } from '../../modules/radar/audit.js';
 
 import { AcquisitionError, acquisitionTime, assertAcquisitionLease, reserveAcquisition, releaseAcquisition, validAcquisitionState,
   type AcquisitionPolicy, type AcquisitionState } from '../../modules/radar/acquisition.js';
@@ -66,7 +68,7 @@ export class PersonalRadarService {
     const row = await this.repository.read(owner);
     if (!row) return { owner, revision: 0, sources: [], audit: [] };
     if (row.owner !== owner || !revision(row.revision) || row.revision === 0 || !Array.isArray(row.sources)
-      || row.sources.length > MAX_SOURCE_IDS || !Array.isArray(row.audit) || row.audit.length > MAX_AUDIT_EVENTS
+      || row.sources.length > MAX_SOURCE_IDS || !Array.isArray(row.audit) || !validCatalogAudit(row.audit, row.revision)
       || row.sources.filter(s => s.source !== null).length > MAX_ACTIVE_SOURCES
       || new Set(row.sources.map(s => s.id)).size !== row.sources.length
       || row.sources.some(s => !validId(s.id) || !Array.isArray(s.records) || s.records.length > MAX_CATALOG_RECORDS
@@ -90,7 +92,7 @@ export class PersonalRadarService {
       throw new PersonalRadarError('CONFLICT');
     const next: PersonalCatalog = { owner: current.owner, revision: current.revision + 1, sources,
       ...(acquisition ? { acquisition: { ...acquisition, observedAt: now } } : {}),
-      audit: [...current.audit, { ...event, revision: current.revision + 1, at: this.clock() }].slice(-MAX_AUDIT_EVENTS) };
+      audit: appendCatalogAudit(current.audit, { ...event, revision: current.revision + 1, at: now }) };
     if (!await this.repository.compareAndSwap(current.owner, current.revision, next)) throw new PersonalRadarError('CONFLICT');
     return { revision: next.revision };
   }
@@ -103,7 +105,7 @@ export class PersonalRadarService {
     const row = await this.read(personalRadarOwner(context, this.clock()));
     personalRadarOwner(context, this.clock());
     return { revision: row.revision, sources: row.sources.map(s => ({ id: s.id,
-      source: s.source ? snapshotSubscription(s.source) : null })), audit: row.audit.map(e => ({
+      source: s.source ? snapshotSubscription(s.source) : null })), audit: retainedAudit(row.audit, this.clock()).map(e => ({
       revision: e.revision, at: e.at, sourceId: e.sourceId, action: e.action, added: e.added, updated: e.updated, unchanged: e.unchanged })) };
   }
   async configure(context: RequestContext, id: string, body: unknown, reauthorize: ReauthorizeRadar) {
@@ -137,13 +139,16 @@ export class PersonalRadarService {
       { sourceId: id, action: 'revoke', added: 0, updated: 0, unchanged: 0 }, reauthorize);
   }
   /** Internal only. A server-owned policy and a durable reservation are mandatory before connector I/O. */
-  async collect(context: RequestContext, id: string, connector: FeedConnectorPort, signal: AbortSignal, reauthorize: ReauthorizeRadar) {
+  async collect(context: RequestContext, id: string, connector: FeedConnectorPort, signal: AbortSignal, reauthorize: ReauthorizeRadar, expectedRevision?: number) {
     const owner = personalRadarOwner(context, this.clock());
     if (typeof reauthorize !== 'function' || personalRadarOwner(await reauthorize(), this.clock()) !== owner)
       throw new PersonalRadarError('CONFLICT');
     if (signal.aborted) throw new PersonalRadarError('CANCELLED');
     if (!this.collectionPolicy) throw new PersonalRadarError('UNAVAILABLE');
-    const before = await this.read(owner); const entry = before.sources.find(s => s.id === id);
+    if (expectedRevision !== undefined && !revision(expectedRevision)) throw new PersonalRadarError('INVALID_INPUT');
+    const before = await this.read(owner);
+    if (expectedRevision !== undefined && before.revision !== expectedRevision) throw new PersonalRadarError('CONFLICT');
+    const entry = before.sources.find(s => s.id === id);
     if (!entry?.source || !validFeedSubscription(entry.source, personalAudience(owner), this.clock())) throw new PersonalRadarError('NOT_FOUND');
     const source = snapshotSubscription(entry.source); const startedAt = this.clock();
     const lease = { id: randomUUID(), sourceId: id, sourceRevision: source.revision, startedAt,
@@ -197,7 +202,7 @@ export class PersonalRadarService {
     const event: CatalogAudit = { sourceId: state.lease.sourceId, revision: row.revision + 1, at: now,
       action: 'collect_failed', attemptId, outcome, added: 0, updated: 0, unchanged: 0 };
     await this.repository.compareAndSwap(owner, row.revision, { ...row, revision: row.revision + 1,
-      acquisition, audit: [...row.audit, event].slice(-MAX_AUDIT_EVENTS) });
+      acquisition, audit: appendCatalogAudit(row.audit, event) });
   }
   /** Explicit owner-scoped maintenance; no scan, timer, network, account enumeration or automatic retry.
    * Keeps configuration/ID tombstones and budget history; never TTL-deletes the owner document.
@@ -216,7 +221,8 @@ export class PersonalRadarService {
     });
     const recovered = !!row.acquisition?.lease && row.acquisition.lease.expiresAt <= now;
     const acquisition = recovered ? releaseAcquisition(row.acquisition!, now) : row.acquisition;
-    if (!removed && !recovered) {
+    const expiredAudit = retainedAudit(row.audit, now).length !== row.audit.length;
+    if (!removed && !recovered && !expiredAudit) {
       if (typeof reauthorize !== 'function' || personalRadarOwner(await reauthorize(), this.clock()) !== owner) throw new PersonalRadarError('CONFLICT');
       await this.assertCurrent(context, expected);
       return { revision: expected, removed: 0, recovered: false };
@@ -225,6 +231,19 @@ export class PersonalRadarService {
       ...(recovered ? { attemptId: row.acquisition!.lease!.id, outcome: 'recovered' as const } : {}), removed, added: 0, updated: 0, unchanged: 0 },
       reauthorize, undefined, acquisition);
     return { ...result, removed, recovered };
+  }
+  /** Owner-only recent history with explicit coverage gaps; no durable/global audit claim. */
+  async audit(context: RequestContext, reauthorize: ReauthorizeRadar) {
+    const owner = personalRadarOwner(context, this.clock());
+    const row = await this.read(owner);
+    if (typeof reauthorize !== 'function') throw new PersonalRadarError('CONFLICT');
+    const latest = await reauthorize();
+    if (personalRadarOwner(latest, this.clock()) !== owner) throw new PersonalRadarError('CONFLICT');
+    await this.assertCurrent(latest, row.revision);
+    personalRadarOwner(context, this.clock());
+    const now = this.clock(); const view = catalogAuditView(row.audit, row.revision, now);
+    return { ...view, validUntil: Math.min(context.expiresAtMs, latest.expiresAtMs, now + 60000,
+      ...view.events.map(e => e.at + view.retentionMs)) };
   }
   async preview(context: RequestContext) {
     const owner = personalRadarOwner(context, this.clock()); const row = await this.read(owner);

@@ -61,3 +61,5 @@
 - [R0リリース準備・追加検証（2026-08-28）](r0-release-readiness.md)
 
 - [RF-03：記憶scope・検索前制限](./refactor-memory-scope.md)（2026-08-28）：新旧ツールの共通port、旧データ隔離、意図的制限と残課題。
+
+- RAD-1E：本人限定の単発取得・期限付き監査、無人workerの委譲境界は[Shannon Radar 14節](shannon-radar.md#14-rad-1e--本人限定の単発実行監査保持)。dev部品のみ、実接続・server登録なし。

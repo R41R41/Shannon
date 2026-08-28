@@ -9,6 +9,8 @@ import { PublicFeedConnector, parseFeed } from '../../src/services/radar/feedCon
 import type { FeedConnectorPort } from '../../src/services/radar/feedConnector.js';
 import type { ReauthorizeRadar } from '../../src/services/radar/personalRadar.js';
 import { reserveAcquisition, releaseAcquisition, validAcquisitionState, type AcquisitionPolicy } from '../../src/modules/radar/acquisition.js';
+import { RadarSessionRunner, RADAR_SESSION_MAX_MS } from '../../src/services/radar/sessionRunner.js';
+import { RADAR_AUDIT_RETENTION_MS, catalogAuditView } from '../../src/modules/radar/audit.js';
 import { registerRadarRoutes } from '../../src/routes/radarRoutes.js';
 
 const initialNow = Date.now();
@@ -33,11 +35,11 @@ function setup(policy: AcquisitionPolicy = fixturePolicy) {
   class FixtureRadar extends PersonalRadarService {
     configure(c: RequestContext, id: string, body: unknown, auth: ReauthorizeRadar = () => refresh(c)) { return super.configure(c, id, body, auth); }
     revoke(c: RequestContext, id: string, expected: unknown, auth: ReauthorizeRadar = () => refresh(c)) { return super.revoke(c, id, expected, auth); }
-    collect(c: RequestContext, id: string, connector: FeedConnectorPort, signal: AbortSignal, auth: ReauthorizeRadar = () => refresh(c)) { return super.collect(c, id, connector, signal, auth); }
+    collect(c: RequestContext, id: string, connector: FeedConnectorPort, signal: AbortSignal, auth: ReauthorizeRadar = () => refresh(c), expected?: number) { return super.collect(c, id, connector, signal, auth, expected); }
   }
   const store = new FixtureStore(); const service = new FixtureRadar(store, () => now, policy);
   const http = { get: vi.fn(async () => xml()) }; const connector = new PublicFeedConnector(http, () => now);
-  return { store, service, http, connector, refresh, advance: (ms: number) => { now += ms; },
+  return { store, service, http, connector, refresh, now: () => now, advance: (ms: number) => { now += ms; },
     configure: (uid = 'alice', expectedRevision = 0, source = configuration()) => service.configure(context(uid), 'feed', { expectedRevision, source }),
     collect: (uid = 'alice', signal = new AbortController().signal) => service.collect(context(uid), 'feed', connector, signal) };
 }
@@ -232,7 +234,7 @@ describe('personal Radar aggregate and metadata lifecycle', () => {
 });
 
 let server: Server | undefined;
-afterEach(async () => { if (server) { server.closeAllConnections(); await new Promise<void>(resolve => server!.close(() => resolve())); server = undefined; } });
+afterEach(async () => { vi.useRealTimers(); if (server) { server.closeAllConnections(); await new Promise<void>(resolve => server!.close(() => resolve())); server = undefined; } });
 async function api() {
   const f = setup(); const verify = vi.fn(async (token: string) => {
     if (token === 'revoked') throw new AccessError('UNAUTHENTICATED');
@@ -248,7 +250,7 @@ async function api() {
   return { ...f, request, users, verify };
 }
 describe('personal Radar HTTP boundary (isolated Express fixture only)', () => {
-  it.each([['GET', '/api/radar/sources'], ['GET', '/api/radar/preview'], ['PUT', '/api/radar/sources/feed'], ['DELETE', '/api/radar/sources/feed']])
+  it.each([['GET', '/api/radar/audit'], ['GET', '/api/radar/sources'], ['GET', '/api/radar/preview'], ['PUT', '/api/radar/sources/feed'], ['DELETE', '/api/radar/sources/feed']])
    ('rejects missing credentials: %s %s', async (method, path) => {
       const f = await api(); const res = await f.request(path, '', method); expect(res.status).toBe(401);
       expect(res.headers.get('cache-control')).toBe('no-store'); expect(f.store.read).not.toHaveBeenCalled();
@@ -463,5 +465,206 @@ describe('owner-scoped expiry maintenance', () => {
     const f = setup(); await f.configure(); await f.collect(); await f.service.revoke(context(), 'feed', 3);
     await f.service.maintain(context(), 4, async () => context());
     await errorCode(f.configure('alice', 4), 'CONFLICT');
+  });
+});
+
+async function sessionFixture(count = 1) {
+  const f = setup();
+  const ids = ['feed', 'second', 'third'].slice(0, count);
+  for (let i = 0; i < ids.length; i++) await f.service.configure(context(), ids[i], { expectedRevision: i, source: configuration() });
+  const verify = vi.fn(async (_token: string) => ({ projectId: 'fixture', uid: 'alice', email: 'same@example.test',
+    emailVerified: true, expiresAtMs: f.now() + 3600000 }));
+  const users = vi.fn(async (projectId: string, uid: string) => ({ projectId, uid, name: 'fixture', email: 'same@example.test', isAuthorized: true, isAdmin: false }));
+  const access = new AccessService({ verify }, { findByIdentity: users }, () => 'fixture', f.now);
+  const runner = new RadarSessionRunner(access, f.service, f.connector, f.now);
+  const request = { expectedRevision: count, sourceIds: ids };
+  const run = (body: unknown = request, signal = new AbortController().signal, token: unknown = 'fixture-token') => runner.run(token, body, signal);
+  f.store.read.mockClear(); f.store.compareAndSwap.mockClear();
+  return { ...f, ids, verify, users, runner, request, run };
+}
+
+describe('foreground Radar session runner with real AccessService and synthetic identity verifier', () => {
+  it('executes only the selected sources sequentially and reauthenticates through the access boundary', async () => {
+    const f = await sessionFixture(3); let active = 0; let max = 0;
+    f.http.get.mockImplementation(async () => { active++; max = Math.max(max, active); await Promise.resolve(); active--; return xml(); });
+    expect(await f.run()).toEqual({ revision: 9, completedSourceIds: f.ids });
+    expect(max).toBe(1); expect(f.http.get).toHaveBeenCalledTimes(3);
+    expect(f.verify.mock.calls.length).toBeGreaterThanOrEqual(11); expect(f.users).toHaveBeenCalledTimes(f.verify.mock.calls.length);
+    const row = f.store.rows.get(personalRadarOwner(context()))!;
+    expect(row.acquisition?.starts).toHaveLength(3); expect(JSON.stringify(row)).not.toContain('fixture-token');
+  });
+  it.each([null, {}, { expectedRevision: 1, sourceIds: [] }, { expectedRevision: 1, sourceIds: ['feed', 'feed'] },
+    { expectedRevision: 1, sourceIds: ['a', 'b', 'c', 'd'] }, { expectedRevision: -1, sourceIds: ['feed'] },
+    { expectedRevision: 1, sourceIds: ['feed'], owner: 'bob' }, { expectedRevision: 1, sourceIds: ['../feed'] }])
+    ('rejects malformed or self-selected authority input before auth/catalog: %j', async body => {
+      const f = await sessionFixture(); await errorCode(f.run(body), 'INVALID_INPUT');
+      expect(f.verify).not.toHaveBeenCalled(); expect(f.store.read).not.toHaveBeenCalled(); expect(f.http.get).not.toHaveBeenCalled();
+    });
+  it.each(['missing-token', 'blocked', 'unverified'] as const)('rejects %s before reading the catalog', async kind => {
+    const f = await sessionFixture();
+    if (kind === 'blocked') f.users.mockImplementation(async (projectId, uid) => ({ projectId, uid, name: '', email: '', isAuthorized: false, isAdmin: false }));
+    if (kind === 'unverified') f.verify.mockImplementation(async () => ({ projectId: 'fixture', uid: 'alice', email: 'x@example.test', emailVerified: false, expiresAtMs: f.now() + 1000 }));
+    await errorCode(f.run(f.request, new AbortController().signal, kind === 'missing-token' ? null : 'fixture-token'), kind === 'blocked' ? 'FORBIDDEN' : 'UNAUTHENTICATED');
+    expect(f.store.read).not.toHaveBeenCalled(); expect(f.http.get).not.toHaveBeenCalled();
+  });
+  it.each(['stale', 'missing', 'disabled'] as const)('preflights the entire selection without collection: %s', async kind => {
+    const f = await sessionFixture(2);
+    if (kind === 'disabled') { await f.service.configure(context(), 'second', { expectedRevision: 2, source: { ...configuration(), enabled: false } }); f.request.expectedRevision = 3; }
+    await errorCode(f.run(kind === 'stale' ? { ...f.request, expectedRevision: 0 } : kind === 'missing' ? { ...f.request, sourceIds: ['feed', 'missing'] } : f.request), kind === 'stale' ? 'CONFLICT' : 'NOT_FOUND');
+    expect(f.http.get).not.toHaveBeenCalled();
+  });
+  it('clones selection before any asynchronous boundary', async () => {
+    const f = await sessionFixture(); const original = f.verify.getMockImplementation()!;
+    f.verify.mockImplementationOnce(async t => { f.request.sourceIds[0] = 'injected'; return original(t); });
+    expect(await f.run()).toEqual({ revision: 3, completedSourceIds: ['feed'] });
+  });
+  it('fences catalog edits between preflight and reservation, without collecting replacement configuration', async () => {
+    const f = await sessionFixture(); const original = f.verify.getMockImplementation()!;
+    let n = 0; f.verify.mockImplementation(async t => {
+      if (++n === 2) await f.service.configure(context(), 'feed', { expectedRevision: 1, source: { ...configuration(), locator: 'https://example.org/new' } });
+      return original(t);
+    });
+    await errorCode(f.run(), 'CONFLICT'); expect(f.http.get).not.toHaveBeenCalled();
+  });
+  it.each(['revoked', 'owner', 'project'] as const)('halts after acquisition on changed authorization: %s', async kind => {
+    const f = await sessionFixture(2);
+    f.http.get.mockImplementation(async () => {
+      if (kind === 'revoked') f.verify.mockRejectedValue(new AccessError('FORBIDDEN'));
+      else f.verify.mockResolvedValue({ projectId: kind === 'project' ? 'other' : 'fixture', uid: kind === 'owner' ? 'bob' : 'alice', email: 'same@example.test', emailVerified: true, expiresAtMs: f.now() + 10000 });
+      return xml();
+    });
+    await errorCode(f.run(), kind === 'revoked' ? 'FORBIDDEN' : 'CONFLICT'); expect(f.http.get).toHaveBeenCalledTimes(1);
+    expect(f.store.rows.get(personalRadarOwner(context()))!.sources.every(s => !s.records.length)).toBe(true);
+  });
+  it('never retries an unknown reservation ACK and strips raw repository errors', async () => {
+    const f = await sessionFixture(2); const original = f.store.compareAndSwap.getMockImplementation()!;
+    f.store.compareAndSwap.mockImplementationOnce(async (...args) => { await original(...args); throw new Error('fixture-token secret'); });
+    await errorCode(f.run(), 'UNAVAILABLE'); expect(f.http.get).not.toHaveBeenCalled(); expect(f.store.compareAndSwap).toHaveBeenCalledTimes(1);
+    expect(f.store.rows.get(personalRadarOwner(context()))!.acquisition?.lease).not.toBeNull();
+  });
+  it('keeps earlier committed success when later source fails, without retrying or claiming batch success', async () => {
+    const f = await sessionFixture(3); f.http.get.mockResolvedValueOnce(xml()).mockRejectedValueOnce(new Error('failed'));
+    await errorCode(f.run(), 'UNAVAILABLE'); expect(f.http.get).toHaveBeenCalledTimes(2);
+    const row = f.store.rows.get(personalRadarOwner(context()))!;
+    expect(row.sources.map(s => s.records.length)).toEqual([1, 0, 0]); expect(row.acquisition?.starts).toHaveLength(2);
+  });
+  it('rereads the catalog after final auth instead of returning stale success', async () => {
+    const f = await sessionFixture(); const original = f.verify.getMockImplementation()!;
+    f.verify.mockImplementation(async t => {
+      const row = f.store.rows.get(personalRadarOwner(context()))!;
+      if (row.revision === 3) await f.service.revoke(context(), 'feed', 3);
+      return original(t);
+    });
+    await errorCode(f.run(), 'CONFLICT'); expect(f.http.get).toHaveBeenCalledTimes(1);
+  });
+  it('cancels before initial auth without catalog reads', async () => {
+    const f = await sessionFixture(); const abort = new AbortController(); abort.abort();
+    await errorCode(f.run(f.request, abort.signal), 'CANCELLED'); expect(f.verify).not.toHaveBeenCalled();
+  });
+  it('bounds hung authentication and blocks its late continuation', async () => {
+    vi.useFakeTimers(); const f = await sessionFixture(); let finish!: (value: any) => void;
+    const identity = await f.verify('fixture-token');
+    f.verify.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    const pending = errorCode(f.run(), 'CANCELLED'); await vi.advanceTimersByTimeAsync(RADAR_SESSION_MAX_MS); await pending;
+    finish(identity); await vi.advanceTimersByTimeAsync(1);
+    expect(f.store.read).not.toHaveBeenCalled(); expect(f.http.get).not.toHaveBeenCalled(); expect(vi.getTimerCount()).toBe(0);
+  });
+  it('cancels hung connector and suppresses late metadata after returning', async () => {
+    vi.useFakeTimers(); const f = await sessionFixture(); let finish!: (v: string) => void; let enter!: () => void;
+    const entered = new Promise<void>(resolve => { enter = resolve; });
+    f.http.get.mockImplementation(() => { enter(); return new Promise(resolve => { finish = resolve; }); });
+    const abort = new AbortController(); const pending = errorCode(f.run(f.request, abort.signal), 'CANCELLED');
+    await entered; abort.abort(); await pending; await vi.advanceTimersByTimeAsync(1);
+    finish(xml()); await vi.advanceTimersByTimeAsync(1);
+    const row = f.store.rows.get(personalRadarOwner(context()))!;
+    expect(row.sources[0].records).toEqual([]); expect(row.acquisition?.starts).toHaveLength(1); expect(vi.getTimerCount()).toBe(0);
+  });
+  it.each(['deadline', 'rollback'] as const)('rejects wall clock %s even before the real timer fires', async kind => {
+    const f = await sessionFixture(); const original = f.verify.getMockImplementation()!;
+    f.verify.mockImplementationOnce(async t => { const identity = await original(t); f.advance(kind === 'deadline' ? RADAR_SESSION_MAX_MS : -1); return identity; });
+    await errorCode(f.run(), 'CANCELLED'); expect(f.store.read).not.toHaveBeenCalled();
+  });
+  it('allows only one concurrent claim for the same selected catalog revision', async () => {
+    const f = await sessionFixture(); const results = await Promise.allSettled(Array.from({ length: 8 }, () => f.run()));
+    expect(results.filter(r => r.status === 'fulfilled')).toHaveLength(1); expect(f.http.get).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('owner audit coverage and bounded retention', () => {
+  it('reports capacity truncation explicitly and exposes fixed attempt outcomes without content or identity', async () => {
+    const f = setup(); await f.configure();
+    for (let n = 1; n < 70; n++) await f.configure('alice', n);
+    const view = await f.service.audit(context(), async () => context());
+    expect(view).toMatchObject({ revision: 70, omittedThroughRevision: 6, completeFromRevisionOne: false, capacity: 64 });
+    expect(view.events).toHaveLength(64);
+    await f.collect(); const collected = await f.service.audit(context(), async () => context());
+    expect(collected.events.at(-1)?.attemptId).toBe(collected.events.at(-2)?.attemptId);
+    expect(JSON.stringify(collected)).not.toMatch(/https|Fixture game|example.org|firebase:|alice|email|token/);
+    expect((await f.service.audit(context('bob'), async () => context('bob'))).events).toEqual([]);
+  });
+  it('filters at the retention boundary and physically purges only on explicit owner maintenance', async () => {
+    const f = setup(); await f.configure(); await f.configure('bob'); f.advance(RADAR_AUDIT_RETENTION_MS);
+    const c = { ...context(), expiresAtMs: f.now() + 10000 };
+    const view = await f.service.audit(c, async () => c);
+    expect(view).toMatchObject({ revision: 1, events: [], omittedThroughRevision: 1, completeFromRevisionOne: false });
+    expect((await f.service.sources(c)).audit).toEqual([]);
+    expect(f.store.rows.get(personalRadarOwner(context()))!.audit).toHaveLength(1);
+    const bob = structuredClone(f.store.rows.get(personalRadarOwner(context('bob')))!), owner = personalRadarOwner(c, f.now());
+    expect(await f.service.maintain(c, 1, async () => c)).toEqual({ revision: 2, removed: 0, recovered: false });
+    expect(f.store.rows.get(owner)!.audit.map(e => e.action)).toEqual(['maintain']);
+    expect(f.store.rows.get(personalRadarOwner(context('bob')))).toEqual(bob);
+    expect((await f.service.audit(c, async () => c)).omittedThroughRevision).toBe(1);
+  });
+  it('retains an event until just before its boundary, and distinguishes empty legacy history from completeness', () => {
+    const event = { revision: 1, at: initialNow, sourceId: 'feed', action: 'configure' as const, added: 0, updated: 0, unchanged: 0 };
+    expect(catalogAuditView([event], 1, initialNow + RADAR_AUDIT_RETENTION_MS - 1).events).toHaveLength(1);
+    expect(catalogAuditView([], 12, initialNow)).toMatchObject({ omittedThroughRevision: 12, completeFromRevisionOne: false });
+    expect(catalogAuditView([], 0, initialNow)).toMatchObject({ omittedThroughRevision: 0, completeFromRevisionOne: true });
+  });
+  it.each(['reauth', 'identity', 'concurrent'] as const)('withholds audit after %s changes', async kind => {
+    const f = setup(); await f.configure();
+    await errorCode(f.service.audit(context(), async () => {
+      if (kind === 'reauth') throw new AccessError('FORBIDDEN');
+      if (kind === 'concurrent') await f.configure('alice', 1);
+      return kind === 'identity' ? context('bob') : context();
+    }), kind === 'reauth' ? 'FORBIDDEN' : 'CONFLICT');
+  });
+  it.each([{ action: 'arbitrary' }, { extra: 'secret' }, { at: -1 }, { revision: 2 }, { removed: -1 }, { outcome: 'secret' }])
+    ('fails closed on malformed audit without writes: %j', change => {
+      // Checked asynchronously below; no connector is involved.
+      return (async () => {
+        const f = setup(); await f.configure(); const row = f.store.rows.get(personalRadarOwner(context()))!;
+        (row.audit as any)[0] = { ...row.audit[0], ...change }; f.store.compareAndSwap.mockClear();
+        await errorCode(f.service.audit(context(), async () => context()), 'UNAVAILABLE'); expect(f.store.compareAndSwap).not.toHaveBeenCalled();
+      })();
+    });
+  it('serves audit only after HTTP reauthorization, no-store, and never honors owner query', async () => {
+    const f = await api(); await f.configure(); await f.collect();
+    const res = await f.request('/api/radar/audit'); expect(res.status).toBe(200); expect(res.headers.get('cache-control')).toBe('no-store');
+    expect((await res.json() as any).events.at(-1)).toMatchObject({ action: 'collect', added: 1 });
+    expect((await f.request('/api/radar/audit?owner=alice', 'admin')).status).toBe(400);
+    expect((await (await f.request('/api/radar/audit', 'admin')).json() as any).events).toEqual([]);
+    f.verify.mockResolvedValueOnce({ projectId: 'fixture', uid: 'alice', email: 'x@example.test', emailVerified: true, expiresAtMs: initialNow + 86400000 });
+    f.verify.mockRejectedValueOnce(new AccessError('FORBIDDEN'));
+    const denied = await f.request('/api/radar/audit'); expect(denied.status).toBe(403); expect(await denied.text()).not.toContain('attemptId');
+  });
+});
+
+describe('audit response expiry fences', () => {
+  it('caps response lifetime by the earliest audit retention deadline', async () => {
+    const f = setup(); await f.configure(); f.advance(RADAR_AUDIT_RETENTION_MS - 50);
+    const c = { ...context(), expiresAtMs: f.now() + 100000 };
+    expect((await f.service.audit(c, async () => c)).validUntil).toBe(initialNow + RADAR_AUDIT_RETENTION_MS);
+  });
+  it('rejects expiry of the refreshed identity during final catalog read', async () => {
+    const f = setup(); await f.configure(); const read = f.store.read.getMockImplementation()!; let count = 0;
+    f.store.read.mockImplementation(async owner => { const row = await read(owner); if (++count === 2) f.advance(51); return row; });
+    await errorCode(f.service.audit(context(), async () => ({ ...context(), expiresAtMs: initialNow + 50 })), 'UNAUTHENTICATED');
+  });
+  it('does not prune or return audit when the clock regresses', async () => {
+    const f = setup(); await f.configure(); f.advance(-1); f.store.compareAndSwap.mockClear();
+    await expect(f.service.audit(context(), async () => context())).rejects.toThrow('RADAR_AUDIT_CLOCK');
+    await expect(f.service.maintain(context(), 1, async () => context())).rejects.toThrow('RADAR_AUDIT_CLOCK');
+    expect(f.store.compareAndSwap).not.toHaveBeenCalled();
   });
 });

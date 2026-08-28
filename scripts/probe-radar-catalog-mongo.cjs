@@ -66,7 +66,9 @@ async function main() {
     const beforeCrash = await repository.read(ownerId);
     const lease = { id: 'crashed-fixture', sourceId: 'second', sourceRevision: 1, startedAt: clock, expiresAt: clock + 30000 };
     const acquisition = reserveAcquisition(beforeCrash.acquisition, fixturePolicy, lease);
-    assert(await repository.compareAndSwap(ownerId, beforeCrash.revision, { ...beforeCrash, revision: beforeCrash.revision + 1, acquisition }));
+    assert(await repository.compareAndSwap(ownerId, beforeCrash.revision, { ...beforeCrash, revision: beforeCrash.revision + 1, acquisition,
+      audit: [...beforeCrash.audit, { revision: beforeCrash.revision + 1, at: clock, sourceId: 'second', action: 'reserve',
+        attemptId: lease.id, added: 0, updated: 0, unchanged: 0 }].slice(-64) }));
     const restart = new PersonalRadarService(new MongoPersonalCatalog(db), () => clock, fixturePolicy);
     clock += 30001;
     const recoveries = await Promise.allSettled(Array.from({ length: 8 }, () => restart.maintain(alice, beforeCrash.revision + 1, async () => alice)));
@@ -87,9 +89,39 @@ async function main() {
     assert.equal(bobAfter.sources[0].records.length, 0); assert(bobAfter.sources[0].source);
     assert.equal(bobAfter.acquisition.starts.length, 1); assert(!JSON.stringify(bobAfter).includes('Fixture only'));
     assert.equal(JSON.stringify(await repository.read(ownerId)), aliceBefore);
+    // Foreground runner uses AccessService with synthetic verifier/repository, never Firebase.
+    const { AccessService } = await load('modules/access/index.js');
+    const { RadarSessionRunner } = await load('services/radar/sessionRunner.js');
+    const { RADAR_AUDIT_RETENTION_MS } = await load('modules/radar/audit.js');
+    const carol = context('carol');
+    await service.configure(carol, 'feed', { expectedRevision: 0, source: config });
+    let verified = 0;
+    const access = new AccessService({ verify: async () => { verified++; return {
+      projectId: 'fixture', uid: 'carol', email: 'fixture@example.test', emailVerified: true, expiresAtMs: clock + 60000 }; } },
+      { findByIdentity: async (projectId, uid) => ({ projectId, uid, name: 'fixture', email: 'fixture@example.test', isAuthorized: true, isAdmin: false }) }, () => 'fixture', () => clock);
+    const runner = new RadarSessionRunner(access, restart, connector, () => clock);
+    const arrivalsBefore = arrived;
+    const runs = await Promise.allSettled(Array.from({ length: 8 }, () => runner.run('synthetic-token', { expectedRevision: 1, sourceIds: ['feed'] }, new AbortController().signal)));
+    assert.equal(runs.filter(r => r.status === 'fulfilled').length, 1); assert.equal(arrived - arrivalsBefore, 1); assert(verified > 8);
+    const carolId = personalRadarOwner(carol); const carolRow = await repository.read(carolId);
+    assert.equal(carolRow.revision, 3); assert(!JSON.stringify(carolRow).includes('synthetic-token'));
+    const aliceFrozen = JSON.stringify(await repository.read(ownerId)); const bobFrozen = JSON.stringify(await repository.read(bobId));
+    clock += RADAR_AUDIT_RETENTION_MS;
+    const freshCarol = { ...carol, expiresAtMs: clock + 60000 };
+    const audit = await restart.audit(freshCarol, async () => freshCarol);
+    assert.deepEqual(audit.events, []); assert.equal(audit.omittedThroughRevision, 3);
+    const auditPurges = await Promise.allSettled(Array.from({ length: 8 }, () => restart.maintain(freshCarol, 3, async () => freshCarol)));
+    assert.equal(auditPurges.filter(r => r.status === 'fulfilled').length, 1);
+    const afterAuditPurge = await new MongoPersonalCatalog(db).read(carolId);
+    assert.equal(afterAuditPurge.audit.length, 1); assert.equal(afterAuditPurge.audit[0].action, 'maintain');
+    assert.equal(afterAuditPurge.sources[0].records.length, 0); assert.equal(afterAuditPurge.acquisition.starts.length, 1);
+    assert.equal((await restart.audit(freshCarol, async () => freshCarol)).omittedThroughRevision, 3);
+    assert.equal(JSON.stringify(await repository.read(ownerId)), aliceFrozen); assert.equal(JSON.stringify(await repository.read(bobId)), bobFrozen);
     const indexes = await db.collection('radarpersonalcatalogs').indexes(); assert.deepEqual(indexes.map(i => i.name), ['_id_']);
     assert.deepEqual((await db.listCollections({}, { nameOnly: true }).toArray()).map(c => c.name), ['radarpersonalcatalogs']);
     console.log(JSON.stringify({ fixtureOnly: true, isolatedPort: 37029, concurrentCreates: 8, concurrentCollections: 8, concurrentRecoveries: 8, concurrentPurges: 8,
+      concurrentSessionRuns: 8, sessionSingleConnector: true, syntheticAccessReauthentication: true,
+      concurrentAuditPurges: 8, auditRetentionAndCoverage: true, otherOwnerAuditUnchanged: true,
       singleConnectorCallForEightClaims: true, reservationSurvivesReload: true, recoveryDoesNotRefund: true, ownerScopedPhysicalPurge: true,
       singleCASWinner: true, ownerIsolation: true, repositoryReloadRead: true, contentAndAuditAtomic: true,
       revocationErasesMetadata: true, tombstoneReplayDenied: true, onlyFixtureCollection: true, noSecondaryIndex: true }));

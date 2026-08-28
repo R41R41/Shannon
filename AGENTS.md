@@ -1,3 +1,7 @@
+## RAD-1E（2026-08-29）の注意
+
+`docs/shannon-radar.md`14節を参照。本人が明示した最大3sourceを30秒以内で順次取得するRadarSessionRunnerを追加。AccessServiceへ毎回再検証し、tokenをjob/DB/logへ保存しない。期待catalog版を予約CASで照合し、失敗時は停止・自動再試行/回復なし。無人worker/委譲grantは未実装、tokenの永続化や本人contextの捏造で代用しない。監査は直近64件かつ7日上限、欠落版を表示。期限切れの物理消去は明示maintain/次の書込み時だけで、全owner purgeや完全な監査ではない。audit APIもserver未登録。実認証/実ソース・通常DB変更/本体起動/投稿・prod反映はしない。prod read-only・devロック維持。
+
 # AGENTS.md
 
 ## Radar RAD-1D（2026-08-29）の注意

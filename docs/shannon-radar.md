@@ -307,3 +307,39 @@ frontendの既存authテストを拡張し、DTO・URL・固定API・本人切�
 次は監査の保持/失敗試行記録とworker運用の設計、weather/calendarのread-only adapter、実認証条件を満たしたdev統合。本人画面/APIは未稼働、実ソース/費用/地域/Calendar scope/専用Bot/Discord承認先の未決事項を飛ばして接続しない。
 
 参考：[MongoDBの単一文書atomicity](https://www.mongodb.com/docs/manual/core/write-operations-atomicity/)、[write concernとjournal ACK](https://www.mongodb.com/docs/manual/reference/write-concern/)。
+
+## 14. RAD-1E — 本人限定の単発実行・監査保持
+
+2026-08-29。`RadarSessionRunner`と期限付き監査の内部部品をdevへ実装。既存API factoryに本人用の読み取り専用`GET /api/radar/audit`を追加したが、server/bootstrapへの登録はしない。取得/maintenanceのHTTP、scheduler、全owner走査、実Firebase/実ソース接続は未実装・未有効化。MVPへ向けた、ログイン中の明示取得の土台である。
+
+### 実行主体と取得の責務
+
+- runnerはAccessService・PersonalRadarService・connectorをcompositionで受け取り、アプリ起動/環境変数/DB接続/投稿に依存しない。入力は`expectedRevision`と最大3つの異なる`sourceIds`だけ。ownerやRequestContext、権限・取得policyを外部入力から作らない。全選択sourceを事前確認し、現在の本人だけを対象に順番に処理する。
+- サーバーが受け取ったtokenをその呼出のメモリ内でだけAccessServiceへ渡す。初回・取得前・予約/保存前・結果返却前に再検証し、同じprojectId＋UIDと利用許可を確認する。token/UID/emailをjob・catalog・監査・結果へ保存しない。検証済みcontextをprofile:readのみに狭め、実行開始から30秒を超えて延長しない。
+- これはtokenの再検証であり、ユーザーへパスワード再入力を要求するstep-up認証でも、Firebase SDK自体の実接続検証でもない。失効確認の実効性は注入するIdentityVerifier/AccessUserRepositoryに依存する。実compositionでは既存AccessServiceを使用し、contextを捏造する独自auth callbackへ差し替えない。
+- catalogを読む時だけでなく、各取得の予約CASにも期待版を渡す。確認後にsourceが編集された場合は、新しい設定を勝手に取得せず中止する。途中のエラー/競合/権限変更/中断/予算不足は残りのsourceを実行せず、再試行も回復も行わない。既に成功したsourceは取り消さない。失敗応答は全体のロールバックを意味せず、本人による読み戻しが必要。
+- 実行全体の30秒期限とAbortSignalを使う。遅い認証の応答から後続処理を始めない。connectorへ取消を伝え、遅延した内容は保存しない。進行中DB書込みを物理取消する保証はないため、応答不明時は予約/結果の読み戻しを要する。期限後も最小限のlease失敗精算が完了する場合があり、永久に止まらないDB自体をこのrunnerが終了させる保証はない。
+
+### 監査は「直近・期限付き」であることを明示する
+
+`modules/radar/audit.ts`が形式検証・保持・返却projectionを担当する。owner文書内の連続するrevisionの末尾だけを扱い、capacityは従来通り64件。7日を技術上の保持上限とし、件数上限でそれより早く削除され得る。運用で7日間すべて保持する約束や、改ざん不可能な長期監査ではない。ライブの同意/保持期間の確定は別途必要。
+
+監査には固定action/outcome、attempt ID、source ID、時刻、版、件数だけを許し、本文・出典URL・token・raw errorを含めない。形式・連続版・時刻順に異常があれば拒否する。古い64件上限で消えた範囲は復元しない。応答の`omittedThroughRevision`で欠落の末尾版を示し、`completeFromRevisionOne`を併記する。空の旧履歴を完全な履歴と呼ばない。
+
+期限を過ぎたイベントは読取から除外する。次のowner文書更新または明示的`maintain`で物理消去する。監査だけが期限切れでもmaintainはCASで一度だけ処理し、自身の実行記録を追加する。設定/墓標/取得回数は消さず、他ownerを操作しない。無人purge/DB backup/外部出力先/全派生データの消去は未完であり、7日で必ずDBから消える保証ではない。
+
+本人用audit APIは再認証・owner固定・返却直前の版/認証期限確認・no-storeを要求する。`validUntil`は認証期限・保持期限・最大60秒の最小値。sources/previewと同じserver未登録の部品で、監査UIはまだない。audit応答を画面へ接続するときは既存session/期限消去の仕組みを適用する。raw監査や全owner閲覧を管理者へ公開しない。
+
+### 無人workerは別の権限で設計する
+
+本実装のtokenをキューへ保存したり、失効したユーザーcontextを再生成して定期ジョブを動かしてはならない。将来のworkerは、本人が明示した委譲grant（owner、source ID/版、許可operation、期限、撤回epoch）を専用repositoryへ保存し、認証済みworkload identityと現在のgrant/利用許可を照合する。grant IDは認証情報の代わりではない。毎回の取得前と保存前に権限を確認し、grant撤回と予約/保存の競合を同じowner CASまたは相応の原子性で解決する。
+
+全owner purgeは取得権限と分け、内容読取/新規取得/設定変更を許さないmaintenance専用主体・件数上限・監査・cursor・停止回復を設計する。jobにtokenや内容を入れず、識別子と期待版のみを持たせる。outbox/配送承認と通知予算も取得回数とは分離する。これらは設計案であり、worker登録や委譲grantは未実装。
+
+### 検証・後続
+
+既存`radarPersonal.test.ts`を拡張。AccessService本体＋架空verifier/usersで再認証・owner/project切替・失効・取消/タイムアウト・入力snapshot・設定競合・応答不明・途中成功・8並行実行を検証する。監査容量/期限/欠落範囲・本人分離・不正データ・返却期限・HTTPを検証する。
+
+新しいjournal有効の隔離Mongo37029 fixtureで既存CAS/回復/purgeに加え、runnerの8並行→1取得、再読後の監査期限消去と欠落表示、他人のデータ不変を確認する。実Firebase/実HTTP/通常DB/本体を使わない。結果原本は保全先`radar-session-20260829`、ローカル記録は`SHANNON_RADAR_SESSION_2026-08-29.md`。
+
+次はweather/calendar専用のread-only契約・adapterとモック試験、本人画面への明示取得/監査表示の接続。認証・source/地域/Calendar scope/費用枠を確定した後に限定dev統合し、無人workerは委譲grantの実装と検証後、Discordは承認/送信先/専用Botの条件を満たした別段階へ進む。旧版との混在では保持方針が逆戻りするため、同じ実装/policyのみを使用しrollbackを検証する。全backend通常型検査は未完、prod未反映・ロック維持。
