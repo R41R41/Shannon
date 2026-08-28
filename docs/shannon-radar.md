@@ -343,3 +343,41 @@ frontendの既存authテストを拡張し、DTO・URL・固定API・本人切�
 新しいjournal有効の隔離Mongo37029 fixtureで既存CAS/回復/purgeに加え、runnerの8並行→1取得、再読後の監査期限消去と欠落表示、他人のデータ不変を確認する。実Firebase/実HTTP/通常DB/本体を使わない。結果原本は保全先`radar-session-20260829`、ローカル記録は`SHANNON_RADAR_SESSION_2026-08-29.md`。
 
 次はweather/calendar専用のread-only契約・adapterとモック試験、本人画面への明示取得/監査表示の接続。認証・source/地域/Calendar scope/費用枠を確定した後に限定dev統合し、無人workerは委譲grantの実装と検証後、Discordは承認/送信先/専用Botの条件を満たした別段階へ進む。旧版との混在では保持方針が逆戻りするため、同じ実装/policyのみを使用しrollbackを検証する。全backend通常型検査は未完、prod未反映・ロック維持。
+
+## 15. RAD-1F — 天気・Calendarの専用read adapter
+
+2026-08-29。devで専用契約・取得アダプター・モック試験を実装。**低水準connectorの段階であり、画面/API/catalog/session runnerへの接続、実OAuth、実予報/予定取得は行っていない。** 既存の公開feed設定は引き続きweather/calendarを拒否する。既存の本人認証・取得予約・監査・CASを飛ばしてこれらを呼び出すHTTPやjobを作らない。
+
+### 公開feedと個人コンテキストを分ける
+
+`modules/radar/temporalSources.ts`にWeatherSource/CalendarSourceと型付きの結果を置く。sourceはFirebase由来owner・source ID/版・同意期限・timezoneを持ち、owner-onlyの短命snapshotを返す。public FeedRecord、ContentItem、Discord draftとは別の型であり、自動的にrank/配信へ流さない。天気も地域の選択が個人情報になるため初期は本人専用とする。プロフィール/推測属性へ書き込まない。
+
+`WeatherReadAdapter`と`CalendarReadAdapter`はI/O・正規化だけ、source/current actor/budgetの保存責務は持たない。registryの更新/撤回は接続するapplication serviceが取得前後と保存/表示前に照合する。入力はsnapshot化し呼出中の書換えを反映しないが、これは永続設定の撤回照合の代替ではない。constructorでI/Oせず、既定の外部transport・認証・環境変数を持たない。
+
+### 天気
+
+Open-Meteoの固定forecast endpointを対象とするrequest builderを実装。ユーザーが明示する0.1度刻みの座標とtimezoneから、今日を含む3日分の天気コード・最低/最高気温・降水確率だけを要求する。端末位置・住所・行動履歴から地域を推測しない。既存のDNS pin/public IPv4/HTTPS GET transportをJSON専用に拡張し、XML経路のmedia type制限は維持する。認証header・cookie・redirect・retry・圧縮は使わず、256KiB・8秒の上限を維持する。
+
+`parseWeather`は日付/単位/配列長/既知コード/値域/気温の大小を検査する。要求地点と返却gridが0.5度を超えて離れた場合やtimezone不一致、日跨ぎで古くなった応答を拒否する。nullは未知のまま、降水確率0とは区別する。日別予報は観測事実・警報・モデル発行時刻の証明ではない。3日分の必要項目だけを返し、最長15分または同意期限で無効にする。attribution/provider link/license linkと抜粋の説明を結果へ含め、UI接続時にも表示する。
+
+公式：[Forecast API](https://open-meteo.com/en/docs)、[Licence](https://open-meteo.com/en/licence)、[Terms & Privacy](https://open-meteo.com/en/terms)。無料APIには非商用等の利用条件があり、実利用前に用途/頻度を確認する。provider側に座標を含むログが残り得るため、粗い座標だから匿名であると説明しない。今回の実装は候補providerのモック対応であり、規約への同意・課金・実地域の設定を行ったものではない。
+
+### Google Calendar
+
+`CalendarReadAuthority`は、現在のownerとGoogleアカウント・選択calendarの対応、本人同意・撤回・scopeを確認する境界。実brokerは未実装で、テストは架空binding/readerのみ。Firebaseの共有admin鍵/ADCをユーザーのCalendar OAuth権限の代用にしない。sourceに持つのはbinding IDのみで、token・email・Calendar URL・任意scopeを受け取らない。
+
+adapterはbrokerが返したowner/source ID・版/binding版/期限/calendar timezone/読み取りscopeを確認してから、固定のevents.listパラメータを渡す。初期scopeはcalendar.events.readonlyのみとし、広い書込みscopeを受け入れない。対象は明示された1calendar、現在から1〜7日、singleEventsの1ページ・最大20件・default eventのみ。要求fieldを絞り、説明・参加者・場所・会議URL・reminder等を要求しない。余分に返されたfieldも正規化時に除去する。実transportにはGETのみ・byte上限・timeout・取消・redirect/retryなしを要求するが、そのOAuth transport自体はまだ接続していない。
+
+取得後に再度brokerを呼び、同じbinding/版/owner/期限/scopeが続いている場合だけ結果を返す。各待機は8秒で打ち切り、取消後の遅延値から次の処理へ進まない。broker自体の真正性や実アカウントとの対応はモックでは証明できないため、実認証E2Eは未検証とする。
+
+時刻付き予定は明示offsetを検証しUTCへ正規化する。offsetのないdateTimeは、timezone指定があっても初期実装では拒否して曖昧な時刻を推測しない。終日はcalendar timezoneと開始日/終了日（終了日は含まない）を保持し、UTC午前0時へ変換しない。calendar sourceとbinding/response timezoneの一致が必要で、別の表示timezoneへの変換は後続。confirmed/tentativeを区別し、cancelledを除外する。
+
+nextPageTokenがあればpartial=trueを返し、ページを自動追跡しない。未掲載を削除や「予定なし」の証拠にせず、incremental syncには使わない。event IDはowner/sourceごとにhash化し、同じinstanceの同一内容はdedup、矛盾する重複は拒否する。本文・calendar ID・生event ID・OAuth情報はsnapshotに含めない。タイトルは文字列として制限し、命令としてLLMへ渡さない。最大60秒または同意/権限期限で失効、通知なし。
+
+公式：[Events list](https://developers.google.com/workspace/calendar/api/v3/reference/events/list)、[Event fields](https://developers.google.com/workspace/calendar/api/v3/reference/events)、[OAuth scopes](https://developers.google.com/workspace/calendar/api/auth)。本実装はGoogle仕様の全機能対応ではなく、制限した初期subsetである。
+
+### 試験・接続前の条件
+
+既存radarIngestion.test.tsを拡張。public JSONのDNS/HTTP/型/サイズ境界、地域/単位/日跨ぎ/null、Calendar権限の前後検査・本人/版/広過ぎるscope拒否、終日/時差/夏時間終了時刻/重複/ページ残り・不必要な情報除去、タイムアウト/取消を架空データで検証する。DB schema/repository/通常DBに変更はなく、今回のためのMongoプロセスも起動しない。全backendの通常型検査は未完で、対象通常型検査とnoCheck変換を区別する。証跡保全先は `radar-temporal-20260829`。
+
+次の接続では、既存owner aggregateを明示的なschema versionとdiscriminated source/recordで拡張し、公開feed metadataと非公開予定を分けながら、取得回数/lease・期待版・監査を同じowner CASで保持する案を検証する。新しいDB/別の無制限予算へ逃がさない。旧版の読み書き・撤回・purge・rollbackを含む互換試験が必要。本人画面の地域/同意/Calendar連携UI、brokerとtoken保管/撤回、表示期限/監査、明示取得APIはこの後に実装する。実source/地域/Calendar scope/費用/認証の条件を満たすまで、server/schedulerへ登録せず起動ロックを維持する。

@@ -63,3 +63,5 @@
 - [RF-03：記憶scope・検索前制限](./refactor-memory-scope.md)（2026-08-28）：新旧ツールの共通port、旧データ隔離、意図的制限と残課題。
 
 - RAD-1E：本人限定の単発取得・期限付き監査、無人workerの委譲境界は[Shannon Radar 14節](shannon-radar.md#14-rad-1e--本人限定の単発実行監査保持)。dev部品のみ、実接続・server登録なし。
+
+- RAD-1F：天気/Calendarの専用read adapterと公開feedからの分離は[Shannon Radar 15節](shannon-radar.md#15-rad-1f--天気calendarの専用read-adapter)。broker/予算/catalog/UIは未接続、架空fixtureのみで検証する。

@@ -5,11 +5,15 @@ import { mkdtemp, writeFile, chmod, symlink, rm, rename } from 'node:fs/promises
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ClientRequest, IncomingMessage } from 'node:http';
-import { SafeFeedHttp, MAX_FEED_BYTES, publicFeedUrl, publicIPv4 } from '../../src/services/radar/safeFeedHttp.js';
+import { SafeFeedHttp, SafePublicJsonHttp, MAX_FEED_BYTES, publicFeedUrl, publicIPv4 } from '../../src/services/radar/safeFeedHttp.js';
 import { feedUrl, parseFeed, PublicFeedConnector } from '../../src/services/radar/feedConnector.js';
 import { FeedCollector, previewCollectedFeed } from '../../src/services/radar/collectFeed.js';
 import { JsonFeedRegistry } from '../../src/services/radar/jsonFeedRegistry.js';
 import { snapshotSubscription, subscriptionVersion, validFeedSubscription, type FeedSubscription } from '../../src/modules/radar/sourceRegistry.js';
+import { validTemporalSource, type WeatherSource, type CalendarSource } from '../../src/modules/radar/temporalSources.js';
+import { WeatherReadAdapter, parseWeather, weatherRequestUrl } from '../../src/services/radar/weatherReadAdapter.js';
+import { CalendarReadAdapter, parseCalendar, calendarListRequest, CALENDAR_READ_SCOPE, type CalendarBinding } from '../../src/services/radar/calendarReadAdapter.js';
+import { dateAt, nextDate } from '../../src/services/radar/temporalParsing.js';
 import type { RadarAudience } from '../../src/modules/radar/content.js';
 
 const now = Date.parse('2026-08-28T10:00:00Z');
@@ -70,7 +74,7 @@ describe('feed target and DNS boundaries', () => {
 });
 
 function httpFixture(options: { addresses?: readonly string[]; status?: number; type?: string; encoding?: string;
-  body?: Buffer | string; length?: string; complete?: boolean; hang?: boolean } = {}) {
+  body?: Buffer | string; length?: string; complete?: boolean; hang?: boolean; json?: boolean } = {}) {
   const resolve = vi.fn(async () => options.addresses ?? ['8.8.8.8']);
   const response = Object.assign(new PassThrough(), { statusCode: options.status ?? 200, complete: options.complete ?? true,
     headers: { 'content-type': options.type ?? 'application/rss+xml; charset=utf-8', 'content-encoding': options.encoding, 'content-length': options.length } });
@@ -82,7 +86,7 @@ function httpFixture(options: { addresses?: readonly string[]; status?: number; 
     }));
     return req as unknown as ClientRequest;
   });
-  return { http: new SafeFeedHttp(resolve, makeRequest), resolve, makeRequest, req, response };
+  return { http: options.json ? new SafePublicJsonHttp(resolve, makeRequest) : new SafeFeedHttp(resolve, makeRequest), resolve, makeRequest, req, response };
 }
 describe('bounded public HTTPS adapter', () => {
   it('pins vetted DNS, validates TLS, issues GET only, and sends no cookies/authorization', async () => {
@@ -247,5 +251,241 @@ describe('private JSON source registry adapter', () => {
       await chmod(path, 0o600); await symlink(path, path + '.link');
       await expect(new JsonFeedRegistry(path + '.link', () => now).get('source-1', personal)).rejects.toThrow();
     });
+  });
+});
+
+const owner = 'firebase:' + 'a'.repeat(64);
+const weatherSource = (patch: Partial<WeatherSource> = {}): WeatherSource => ({ id: 'weather', revision: 1, owner, enabled: true,
+  consentExpiresAt: now + 86400000, timeZone: 'Asia/Tokyo', kind: 'weather', latitudeTenth: 357, longitudeTenth: 1397, ...patch });
+const calendarSource = (patch: Partial<CalendarSource> = {}): CalendarSource => ({ id: 'calendar', revision: 1, owner, enabled: true,
+  consentExpiresAt: now + 86400000, timeZone: 'Asia/Tokyo', kind: 'calendar', bindingId: 'fixture-binding', days: 3, ...patch });
+const weatherBody = (s = weatherSource(), fetchedAt = now) => ({ latitude: s.latitudeTenth / 10, longitude: s.longitudeTenth / 10,
+  timezone: s.timeZone, daily_units: { time: 'iso8601', weather_code: 'wmo code', temperature_2m_min: '°C', temperature_2m_max: '°C', precipitation_probability_max: '%' },
+  daily: { time: [0, 1, 2].map(n => nextDate(dateAt(fetchedAt, s.timeZone), n)), weather_code: [0, 3, 61],
+    temperature_2m_min: [20, 21, 22], temperature_2m_max: [30, 31, 29], precipitation_probability_max: [0, 10, 90] } });
+const binding = (s = calendarSource()): CalendarBinding => ({ id: s.bindingId, owner: s.owner, sourceId: s.id, sourceRevision: s.revision,
+  version: 1, calendarId: 'fixture@example.test', timeZone: s.timeZone, expiresAt: now + 100000, scopes: [CALENDAR_READ_SCOPE] });
+const event = (patch: Record<string, unknown> = {}) => ({ id: 'fixture-event', status: 'confirmed', eventType: 'default', summary: 'Fixture event',
+  start: { dateTime: '2026-08-28T20:00:00+09:00' }, end: { dateTime: '2026-08-28T21:00:00+09:00' }, updated: '2026-08-28T09:00:00Z', ...patch });
+const calendarBody = (items: unknown[] = [event()], patch: Record<string, unknown> = {}) => ({ kind: 'calendar#events', timeZone: 'Asia/Tokyo', accessRole: 'reader', items, ...patch });
+function calendarFixture(s = calendarSource()) {
+  let time = now;
+  const read = vi.fn(async () => JSON.stringify(calendarBody()));
+  const authorize = vi.fn(async () => ({ binding: binding(s), read }));
+  return { adapter: new CalendarReadAdapter({ authorize }, () => time), read, authorize, advance: (ms: number) => { time += ms; } };
+}
+
+describe('personal temporal source separation', () => {
+  it('keeps weather/calendar out of public feed registry and rejects community identity', () => {
+    expect(validTemporalSource(weatherSource(), now)).toBe(true); expect(validTemporalSource(calendarSource(), now)).toBe(true);
+    expect(validFeedSubscription(weatherSource() as any, personal, now)).toBe(false);
+    expect(validTemporalSource(weatherSource({ owner: 'discord:123' }), now)).toBe(false);
+  });
+  it.each([{ latitudeTenth: 35.7 }, { latitudeTenth: 901 }, { longitudeTenth: 1801 }, { timeZone: 'Mars/Unknown' },
+    { enabled: false }, { consentExpiresAt: now }, { endpoint: 'https://evil.example.org' }, { token: 'secret' }])
+    ('rejects unsafe weather source before network %j', async patch => {
+      const http = { get: vi.fn() }; const adapter = new WeatherReadAdapter(http, () => now);
+      await expect(adapter.read(weatherSource(patch), signal())).rejects.toThrow('INVALID_SOURCE'); expect(http.get).not.toHaveBeenCalled();
+    });
+  it.each([{ days: 0 }, { days: 8 }, { bindingId: 'https://calendar.google.com/' }, { calendarId: 'self-selected' }, { scopes: [CALENDAR_READ_SCOPE] }])
+    ('rejects unsafe calendar source before broker %j', async patch => {
+      const f = calendarFixture(); await expect(f.adapter.read(calendarSource(patch), signal())).rejects.toThrow('INVALID_SOURCE'); expect(f.authorize).not.toHaveBeenCalled();
+    });
+  it('rejects the wrong connector kind before any broker or HTTP call', async () => {
+    const http = { get: vi.fn() }; const f = calendarFixture();
+    await expect(new WeatherReadAdapter(http, () => now).read(calendarSource() as any, signal())).rejects.toThrow('INVALID_SOURCE');
+    await expect(f.adapter.read(weatherSource() as any, signal())).rejects.toThrow('INVALID_SOURCE');
+    expect(http.get).not.toHaveBeenCalled(); expect(f.authorize).not.toHaveBeenCalled();
+  });
+});
+
+describe('public JSON transport and weather normalization', () => {
+  it('uses JSON-only GET with the same public DNS pinning, no auth and no redirect', async () => {
+    const f = httpFixture({ json: true, type: 'application/json', body: '{}' });
+    expect(await f.http.get(weatherRequestUrl(weatherSource(), now), signal())).toBe('{}');
+    const options = f.makeRequest.mock.calls[0][1]; expect(options.headers.accept).toBe('application/json');
+    expect(options.headers).not.toHaveProperty('authorization'); expect(options.method).toBe('GET');
+    const done = vi.fn(); options.lookup('api.open-meteo.com', {}, done); expect(done).toHaveBeenCalledWith(null, '8.8.8.8', 4);
+  });
+  it.each([{ type: 'text/html' }, { type: 'application/rss+xml' }, { encoding: 'gzip' }, { status: 302 },
+    { body: Buffer.alloc(MAX_FEED_BYTES + 1) }, { addresses: ['8.8.8.8', '127.0.0.1'] }])
+    ('does not weaken transport constraints for JSON %j', async options => {
+      const f = httpFixture({ json: true, type: 'application/json', body: '{}', ...options });
+      await expect(f.http.get(weatherRequestUrl(weatherSource(), now), signal())).rejects.toThrow();
+      expect(f.makeRequest.mock.calls.length).toBeLessThanOrEqual(1);
+    });
+  it('requests only three days of selected daily fields and explicit coarse location/timezone without keys or identity', () => {
+    const url = new URL(weatherRequestUrl(weatherSource(), now)); expect(url.origin + url.pathname).toBe('https://api.open-meteo.com/v1/forecast');
+    expect(url.searchParams.get('forecast_days')).toBe('3'); expect(url.searchParams.get('latitude')).toBe('35.7');
+    expect(url.searchParams.get('longitude')).toBe('139.7'); expect(url.searchParams.get('timezone')).toBe('Asia/Tokyo');
+    expect(url.search).not.toMatch(/owner|firebase|key|token/);
+  });
+  it('preserves zero and explicit unknown values, and strips unneeded provider payload', async () => {
+    const body = weatherBody(); (body.daily.temperature_2m_min as any)[1] = null;
+    const http = { get: vi.fn(async () => JSON.stringify({ ...body, secret: 'DO NOT RETAIN' })) };
+    const result = await new WeatherReadAdapter(http, () => now).read(weatherSource(), signal());
+    expect(result).toMatchObject({ kind: 'weather', visibility: 'owner-only', owner, notify: false, partial: true, validUntil: now + 900000 });
+    expect(result.items[0].precipitationPercent).toBe(0); expect(result.items[1].minimumC).toBeNull();
+    expect(JSON.stringify(result)).not.toMatch(/DO NOT RETAIN|latitude|longitude|daily_units/);
+    expect(result.licenseUrl).toBe('https://creativecommons.org/licenses/by/4.0/'); expect(result.attribution).toContain('Open-Meteo'); expect(Object.isFrozen(result.items[0])).toBe(true);
+  });
+  it.each(['units', 'date', 'length', 'code', 'temperature', 'rain', 'coordinates', 'zone', 'error'] as const)
+    ('rejects invalid weather %s instead of inventing facts', kind => {
+      const body = weatherBody();
+      if (kind === 'units') body.daily_units.temperature_2m_min = '°F';
+      if (kind === 'date') body.daily.time[0] = '2026-02-30';
+      if (kind === 'length') body.daily.weather_code.pop();
+      if (kind === 'code') body.daily.weather_code[0] = 999;
+      if (kind === 'temperature') body.daily.temperature_2m_min[0] = 50;
+      if (kind === 'rain') body.daily.precipitation_probability_max[0] = -1;
+      if (kind === 'coordinates') body.latitude = 0;
+      if (kind === 'zone') body.timezone = 'UTC';
+      if (kind === 'error') (body as any).error = true;
+      expect(() => parseWeather(JSON.stringify(body), weatherSource(), now)).toThrow('UNAVAILABLE');
+    });
+  it('uses local forecast dates at the Japan day boundary and rejects yesterday on late arrival', () => {
+    const later = Date.parse('2026-08-28T15:00:00Z');
+    const parsed = parseWeather(JSON.stringify(weatherBody(weatherSource(), later)), weatherSource(), later);
+    expect(parsed[0].date).toBe('2026-08-29');
+    expect(() => parseWeather(JSON.stringify(weatherBody()), weatherSource(), later)).toThrow('UNAVAILABLE');
+  });
+  it.each(['abort', 'expiry', 'clock'] as const)('rejects %s after weather I/O', async kind => {
+    let clock = now; const c = new AbortController();
+    const http = { get: vi.fn(async () => { if (kind === 'abort') c.abort(); else clock += kind === 'expiry' ? 86400000 : -1; return JSON.stringify(weatherBody()); }) };
+    await expect(new WeatherReadAdapter(http, () => clock).read(weatherSource(), c.signal)).rejects.toThrow(kind === 'abort' ? 'CANCELLED' : 'DENIED');
+  });
+  it('bounds an uncooperative weather HTTP port without returning late data', async () => {
+    vi.useFakeTimers(); let done!: (v: string) => void;
+    const get = vi.fn(() => new Promise<string>(resolve => { done = resolve; }));
+    const pending = expect(new WeatherReadAdapter({ get }, () => now).read(weatherSource(), signal())).rejects.toThrow('CANCELLED');
+    await vi.advanceTimersByTimeAsync(8001); await pending; done(JSON.stringify(weatherBody())); await vi.advanceTimersByTimeAsync(1);
+    expect(vi.getTimerCount()).toBe(0); expect(get).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Google Calendar read-only contract and personal projection', () => {
+  it('requests one expanded page in a bounded window with only needed fields', async () => {
+    const f = calendarFixture(); const result = await f.adapter.read(calendarSource(), signal());
+    expect(f.authorize).toHaveBeenCalledTimes(2); expect(f.read).toHaveBeenCalledTimes(1);
+    const request = f.read.mock.calls[0][0] as any;
+    expect(request).toMatchObject({ calendarId: 'fixture@example.test', singleEvents: true, showDeleted: false, maxResults: 20, orderBy: 'startTime', eventTypes: ['default'] });
+    expect(request.fields).not.toMatch(/description|attendees|location|conference|htmlLink/);
+    expect(request).not.toHaveProperty('pageToken'); expect(request).not.toHaveProperty('syncToken');
+    expect(Date.parse(request.timeMax) - Date.parse(request.timeMin)).toBe(3 * 86400000);
+    expect(result).toMatchObject({ kind: 'calendar', owner, visibility: 'owner-only', notify: false, validUntil: now + 60000 });
+  });
+  it('removes private extra fields, raw event IDs and calendar identity while retaining a safe title/time', async () => {
+    const f = calendarFixture(); f.read.mockResolvedValue(JSON.stringify(calendarBody([event({ summary: '<b>Meeting</b>\nname',
+      description: 'PRIVATE BODY', attendees: [{ email: 'private@example.test' }], location: 'PRIVATE LOCATION',
+      conferenceData: { link: 'https://meet.google.com/private' }, htmlLink: 'https://evil.example.org/' })])));
+    const snapshot = await f.adapter.read(calendarSource(), signal());
+    expect(snapshot.items[0]).toMatchObject({ title: 'Meeting name', when: { kind: 'timed', start: '2026-08-28T11:00:00.000Z', end: '2026-08-28T12:00:00.000Z' } });
+    expect(snapshot.items[0].id).toMatch(/^[a-f0-9]{64}$/);
+    expect(JSON.stringify(snapshot)).not.toMatch(/PRIVATE|private@|fixture-event|fixture@example|evil|meet.google/);
+  });
+  it('preserves exclusive all-day end dates without guessing UTC midnight', () => {
+    const s = calendarSource(); const q = calendarListRequest(s, binding(), now);
+    const result = parseCalendar(JSON.stringify(calendarBody([event({ start: { date: '2026-08-28' }, end: { date: '2026-08-30' } })])), s, q, now);
+    expect(result.items[0].when).toEqual({ kind: 'all-day', startDate: '2026-08-28', endDateExclusive: '2026-08-30', timeZone: 'Asia/Tokyo' });
+  });
+  it('handles explicit DST offsets and includes an event that began before the window but has not ended', () => {
+    const s = calendarSource({ timeZone: 'America/New_York' }); const q = calendarListRequest(s, binding(s), now);
+    const page = calendarBody([event({ start: { dateTime: '2026-08-28T05:00:00-04:00' }, end: { dateTime: '2026-08-28T07:00:00-04:00' } })], { timeZone: s.timeZone });
+    expect(parseCalendar(JSON.stringify(page), s, q, now).items[0].when).toMatchObject({ start: '2026-08-28T09:00:00.000Z', end: '2026-08-28T11:00:00.000Z' });
+  });
+  it('does not follow pagination or treat absent/cancelled entries as a deletion stream', async () => {
+    const f = calendarFixture(); f.read.mockResolvedValue(JSON.stringify(calendarBody([event({ status: 'cancelled' }), event({ id: 'other', eventType: 'birthday' })], { nextPageToken: 'PRIVATE CURSOR' })));
+    const snapshot = await f.adapter.read(calendarSource(), signal()); expect(snapshot.items).toEqual([]); expect(snapshot.partial).toBe(true);
+    expect(JSON.stringify(snapshot)).not.toContain('PRIVATE CURSOR'); expect(f.read).toHaveBeenCalledTimes(1);
+  });
+  it.each([{ owner: 'firebase:' + 'b'.repeat(64) }, { sourceId: 'other' }, { sourceRevision: 2 }, { id: 'other-binding' },
+    { scopes: ['https://www.googleapis.com/auth/calendar'] }, { scopes: [CALENDAR_READ_SCOPE, 'extra'] },
+    { expiresAt: now }, { timeZone: 'UTC' }, { calendarId: 'https://evil.example.org/' }])
+    ('rejects wrong/expired/broad binding before provider read %j', async patch => {
+      const f = calendarFixture(); f.authorize.mockResolvedValue({ binding: { ...binding(), ...patch }, read: f.read });
+      await expect(f.adapter.read(calendarSource(), signal())).rejects.toThrow('DENIED'); expect(f.read).not.toHaveBeenCalled();
+    });
+  it.each(['version', 'revoke', 'scope', 'expiry', 'calendar'] as const)('rechecks %s after provider I/O and withholds the page', async kind => {
+    const f = calendarFixture();
+    f.authorize.mockResolvedValueOnce({ binding: binding(), read: f.read });
+    if (kind === 'revoke') f.authorize.mockRejectedValueOnce(new Error('private credential failure'));
+    else f.authorize.mockResolvedValueOnce({ binding: { ...binding(), ...(kind === 'version' ? { version: 2 } : kind === 'scope' ? { scopes: [] } : kind === 'expiry' ? { expiresAt: now } : { calendarId: 'other@example.test' }) }, read: f.read });
+    await expect(f.adapter.read(calendarSource(), signal())).rejects.toThrow(kind === 'revoke' ? 'UNAVAILABLE' : 'DENIED'); expect(f.read).toHaveBeenCalledTimes(1);
+  });
+  it.each(['mixed-date', 'invalid-day', 'no-offset', 'reverse', 'future-update', 'too-many', 'free-busy', 'wrong-zone', 'duplicate'] as const)
+    ('rejects unsupported/malformed response %s', kind => {
+      const page = calendarBody(); const e = page.items[0] as any;
+      if (kind === 'mixed-date') e.start.date = '2026-08-28';
+      if (kind === 'invalid-day') e.start = { dateTime: '2026-02-30T10:00:00Z' };
+      if (kind === 'no-offset') e.start = { dateTime: '2026-08-28T20:00:00', timeZone: 'Asia/Tokyo' };
+      if (kind === 'reverse') e.end = e.start;
+      if (kind === 'future-update') e.updated = '2026-08-30T10:00:00Z';
+      if (kind === 'too-many') page.items = Array.from({ length: 21 }, () => event());
+      if (kind === 'free-busy') page.accessRole = 'freeBusyReader';
+      if (kind === 'wrong-zone') page.timeZone = 'UTC';
+      if (kind === 'duplicate') page.items.push(event({ summary: 'Conflicting title' }));
+      expect(() => parseCalendar(JSON.stringify(page), calendarSource(), calendarListRequest(calendarSource(), binding(), now), now)).toThrow('UNAVAILABLE');
+    });
+  it('deduplicates identical instances but keeps distinct occurrences and hashes by owner', () => {
+    const s = calendarSource(); const q = calendarListRequest(s, binding(), now);
+    const page = JSON.stringify(calendarBody([event(), event(), event({ id: 'fixture-event-2' })]));
+    const items = parseCalendar(page, s, q, now).items; expect(items).toHaveLength(2);
+    const other = calendarSource({ owner: 'firebase:' + 'b'.repeat(64) });
+    expect(parseCalendar(page, other, calendarListRequest(other, binding(other), now), now).items[0].id).not.toBe(items[0].id);
+  });
+  it('filters exclusive time bounds and uses a placeholder for missing title', () => {
+    const s = calendarSource(); const q = calendarListRequest(s, binding(), now);
+    const page = calendarBody([event({ id: 'ended', end: { dateTime: q.timeMin }, start: { dateTime: '2026-08-28T08:00:00Z' } }),
+      event({ id: 'future', start: { dateTime: q.timeMax }, end: { dateTime: '2026-09-01T10:00:00Z' } }), event({ summary: undefined })]);
+    const items = parseCalendar(JSON.stringify(page), s, q, now).items; expect(items).toHaveLength(1); expect(items[0].title).toBe('（無題の予定）');
+  });
+  it('does not parse a late response after cancellation or consent expiry', async () => {
+    const f = calendarFixture(); f.read.mockImplementation(async () => { f.advance(86400000); return JSON.stringify(calendarBody()); });
+    await expect(f.adapter.read(calendarSource(), signal())).rejects.toThrow('DENIED'); expect(f.authorize).toHaveBeenCalledTimes(1);
+  });
+  it('bounds a hanging authority call and never reads after its late result', async () => {
+    vi.useFakeTimers(); const f = calendarFixture(); let finish!: (v: any) => void;
+    f.authorize.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const pending = expect(f.adapter.read(calendarSource(), signal())).rejects.toThrow('CANCELLED');
+    await vi.advanceTimersByTimeAsync(8001); await pending; finish({ binding: binding(), read: f.read }); await vi.advanceTimersByTimeAsync(1);
+    expect(f.read).not.toHaveBeenCalled(); expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe('temporal edge cases and cancellation', () => {
+  it.each(['not-json', '[]', '{"error":"private"}', JSON.stringify({ oversized: 'x'.repeat(256 * 1024) })])
+    ('rejects invalid/oversized provider text %# without returning private details', text => {
+      expect(() => parseWeather(text, weatherSource(), now)).toThrow('UNAVAILABLE');
+      expect(() => parseCalendar(text, calendarSource(), calendarListRequest(calendarSource(), binding(), now), now)).toThrow('UNAVAILABLE');
+    });
+  it('keeps tentative status rather than presenting it as confirmed', async () => {
+    const f = calendarFixture(); f.read.mockResolvedValue(JSON.stringify(calendarBody([event({ status: 'tentative' })])));
+    expect((await f.adapter.read(calendarSource(), signal())).items[0].status).toBe('tentative');
+  });
+  it('preserves an hour across the autumn DST repeated hour', () => {
+    const autumn = Date.parse('2026-11-01T04:00:00Z');
+    const s = calendarSource({ timeZone: 'America/New_York', consentExpiresAt: autumn + 86400000 });
+    const b = { ...binding(s), expiresAt: autumn + 100000 };
+    const q = calendarListRequest(s, b, autumn);
+    const page = calendarBody([event({ updated: '2026-11-01T03:00:00Z', start: { dateTime: '2026-11-01T01:30:00-04:00' }, end: { dateTime: '2026-11-01T01:30:00-05:00' } })], { timeZone: s.timeZone });
+    const when = parseCalendar(JSON.stringify(page), s, q, autumn).items[0].when;
+    expect(when).toEqual({ kind: 'timed', start: '2026-11-01T05:30:00.000Z', end: '2026-11-01T06:30:00.000Z' });
+  });
+  it('excludes an all-day event starting exactly at the upper local-midnight boundary', () => {
+    const midnight = Date.parse('2026-08-28T15:00:00Z'); const s = calendarSource({ days: 1 });
+    const q = calendarListRequest(s, { ...binding(s), expiresAt: midnight + 100000 }, midnight);
+    const page = calendarBody([event({ start: { date: '2026-08-30' }, end: { date: '2026-08-31' } })]);
+    expect(parseCalendar(JSON.stringify(page), s, q, midnight).items).toEqual([]);
+  });
+  it('does not contact weather or calendar services for a pre-cancelled operation', async () => {
+    const c = new AbortController(); c.abort(); const f = calendarFixture(); const get = vi.fn();
+    await expect(f.adapter.read(calendarSource(), c.signal)).rejects.toThrow('CANCELLED');
+    await expect(new WeatherReadAdapter({ get }, () => now).read(weatherSource(), c.signal)).rejects.toThrow('CANCELLED');
+    expect(f.authorize).not.toHaveBeenCalled(); expect(get).not.toHaveBeenCalled();
+  });
+  it('cannot return a calendar page after cancellation during provider I/O', async () => {
+    const f = calendarFixture(); const c = new AbortController();
+    f.read.mockImplementation(async () => { c.abort(); return JSON.stringify(calendarBody()); });
+    await expect(f.adapter.read(calendarSource(), c.signal)).rejects.toThrow('CANCELLED'); expect(f.authorize).toHaveBeenCalledTimes(1);
   });
 });

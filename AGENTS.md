@@ -1,3 +1,7 @@
+## RAD-1F（2026-08-29）の注意
+
+`docs/shannon-radar.md`15節を参照。WeatherSource/CalendarSourceは公開FeedRecordと別のowner-only型。天気3日・粗い明示座標、Calendarは本人binding・read-only scope・1ページ20件・最大7日で最小情報を扱う。Calendar broker/OAuth transportとcatalog/UI/取得予算への接続は未実装で、低水準adapterをHTTP/jobから直接呼んで本人認証・予約・CAS・監査を迂回しない。共有Firebase admin鍵をCalendar権限に転用しない。公開feed設定はweather/calendarを引き続き拒否。実地域/実アカウント接続・取得・通常DB変更・本体起動/投稿・prod反映はしない。devロック・prod読み取りのみを維持。
+
 ## RAD-1E（2026-08-29）の注意
 
 `docs/shannon-radar.md`14節を参照。本人が明示した最大3sourceを30秒以内で順次取得するRadarSessionRunnerを追加。AccessServiceへ毎回再検証し、tokenをjob/DB/logへ保存しない。期待catalog版を予約CASで照合し、失敗時は停止・自動再試行/回復なし。無人worker/委譲grantは未実装、tokenの永続化や本人contextの捏造で代用しない。監査は直近64件かつ7日上限、欠落版を表示。期限切れの物理消去は明示maintain/次の書込み時だけで、全owner purgeや完全な監査ではない。audit APIもserver未登録。実認証/実ソース・通常DB変更/本体起動/投稿・prod反映はしない。prod read-only・devロック維持。

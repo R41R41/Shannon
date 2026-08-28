@@ -44,9 +44,13 @@ export class SafeFeedHttp implements FeedHttpPort {
   constructor(
     private readonly resolveIPv4: (host: string) => Promise<readonly string[]> = async host => (await lookup(host, { family: 4, all: true })).map(a => a.address),
     private readonly makeRequest: RequestFactory = request,
+    private readonly representation: 'xml' | 'json' = 'xml',
   ) {}
   async get(input: string, caller: AbortSignal): Promise<string> {
     const url = publicFeedUrl(input);
+    if (!['xml', 'json'].includes(this.representation)) throw new FeedReadError('format');
+    const types = this.representation === 'json' ? ['application/json']
+      : ['application/atom+xml', 'application/rss+xml', 'application/xml', 'text/xml'];
     if (caller.aborted) throw new FeedReadError('aborted');
     const control = new AbortController();
     const cancel = () => control.abort(new FeedReadError('aborted'));
@@ -70,12 +74,12 @@ export class SafeFeedHttp implements FeedHttpPort {
         req = this.makeRequest(url, { method: 'GET', agent: false, family: 4, servername: url.hostname,
           rejectUnauthorized: true, maxHeaderSize: 8192,
           lookup: (_host, _options, done) => done(null, addresses[0], 4),
-          headers: { accept: 'application/atom+xml, application/rss+xml, application/xml, text/xml',
+          headers: { accept: types.join(', '),
             'accept-encoding': 'identity', 'user-agent': 'ShannonRadar/0.1 (read-only)' } }, response => {
           if (response.statusCode !== 200) { response.destroy(); finish(new FeedReadError('http')); return; }
           const type = response.headers['content-type']?.split(';')[0].trim().toLowerCase();
           const encoding = response.headers['content-encoding'];
-          if (!['application/atom+xml', 'application/rss+xml', 'application/xml', 'text/xml'].includes(type ?? '')
+          if (!types.includes(type ?? '')
             || (encoding && encoding !== 'identity')) { response.destroy(); finish(new FeedReadError('format')); return; }
           const length = Number(response.headers['content-length']);
           if (Number.isFinite(length) && length > MAX_FEED_BYTES) { response.destroy(); finish(new FeedReadError('size')); return; }
@@ -100,5 +104,12 @@ export class SafeFeedHttp implements FeedHttpPort {
     } catch (error) {
       throw error instanceof FeedReadError ? error : new FeedReadError('network');
     } finally { clearTimeout(timer); caller.removeEventListener('abort', cancel); }
+  }
+}
+
+/** Same public DNS-pinned GET limits as feeds, but JSON only; never accepts auth headers. */
+export class SafePublicJsonHttp extends SafeFeedHttp {
+  constructor(resolveIPv4?: (host: string) => Promise<readonly string[]>, makeRequest?: RequestFactory) {
+    super(resolveIPv4, makeRequest, 'json');
   }
 }
