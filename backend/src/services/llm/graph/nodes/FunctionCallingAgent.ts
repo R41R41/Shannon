@@ -333,6 +333,7 @@ export class FunctionCallingAgent {
         /** ユーザー向け応答文（task-complete 時の最後の assistant content） */
         lastAssistantContent?: string;
     }> {
+        signal?.throwIfAborted();
         const startTime = Date.now();
         const goal = state.userMessage || 'Unknown task';
         const isEmergency = state.isEmergency || false;

@@ -61,6 +61,7 @@ export class ParallelExecutor {
         state: FunctionCallingAgentState,
         signal?: AbortSignal,
     ): Promise<ParallelExecutorResult> {
+        signal?.throwIfAborted();
         const goal = state.userMessage || 'Unknown task';
         const startTime = Date.now();
         const isMinecraft = state.context?.platform === 'minecraft' || state.context?.platform === 'minebot';
@@ -288,9 +289,8 @@ export class ParallelExecutor {
         );
 
         // 外部 signal と blackboard を連携
-        if (signal) {
-            signal.addEventListener('abort', () => blackboard.complete(), { once: true });
-        }
+        const onAbort = () => blackboard.complete();
+        signal?.addEventListener('abort', onAbort, { once: true });
 
         // 4プロセスを並列起動
         const taskPromise = this.fca.run(wrappedState, blackboard.signal);
@@ -298,36 +298,36 @@ export class ParallelExecutor {
         const metaPromise = metaLoop?.run() ?? Promise.resolve();
         const memoryPromise = memoryAgent.run(blackboard.signal);
 
-        // TaskLoop の完了を待つ
+        // Observe auxiliary failures immediately, including when the task is cancelled.
+        const auxiliarySettlement = Promise.allSettled([emotionPromise, metaPromise, memoryPromise]);
         let taskResult: Awaited<typeof taskPromise>;
         try {
             taskResult = await taskPromise;
         } finally {
-            // TaskLoop 完了後、他のプロセスに停止シグナルを送る
+            signal?.removeEventListener('abort', onAbort);
             blackboard.complete();
-            // blackboard アクセサをクリア
             this.fca.setBlackboardAccessor(null);
-        }
-
-        // Emotion/Meta/Memory の終了を待つ（タイムアウト付き）
-        const settledOrTimeout = await Promise.race([
-            Promise.allSettled([emotionPromise, metaPromise, memoryPromise]),
-            new Promise<null>(resolve => setTimeout(() => resolve(null), 3000)),
-        ]);
-
-        if (settledOrTimeout === null) {
-            logger.warn('[ParallelExecutor] ⚠️ 補助プロセスが3秒以内に終了しなかったためタイムアウト');
-        } else {
-            const labels = ['EmotionLoop', 'MetaCognitionLoop', 'MemoryAgent'] as const;
-            for (let i = 0; i < settledOrTimeout.length; i++) {
-                const r = settledOrTimeout[i];
-                if (r.status === 'rejected') {
-                    logger.error(
-                        `[ParallelExecutor] ❌ ${labels[i]} がエラーで終了: ${r.reason instanceof Error ? r.reason.message : String(r.reason)}`,
-                    );
+            let timeout: ReturnType<typeof setTimeout> | undefined;
+            try {
+                const settled = await Promise.race([
+                    auxiliarySettlement,
+                    new Promise<null>(resolve => { timeout = setTimeout(() => resolve(null), 3000); }),
+                ]);
+                if (settled === null) {
+                    logger.warn('[ParallelExecutor] 補助プロセスの停止待機がタイムアウト');
+                } else {
+                    const labels = ['EmotionLoop', 'MetaCognitionLoop', 'MemoryAgent'] as const;
+                    settled.forEach((result, index) => {
+                        if (result.status === 'rejected') {
+                            logger.error(`[ParallelExecutor] ${labels[index]} failed: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`);
+                        }
+                    });
                 }
+            } finally {
+                if (timeout !== undefined) clearTimeout(timeout);
             }
         }
+        signal?.throwIfAborted();
 
         logger.info(
             `[ParallelExecutor] ✅ 完了 (model: ${modelSelector.stats.currentModel}, ` +

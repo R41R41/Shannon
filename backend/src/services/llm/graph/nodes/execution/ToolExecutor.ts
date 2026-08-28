@@ -94,7 +94,8 @@ export class ToolExecutor {
                     );
                 }
 
-                const result = await tool.invoke(toolCall.args);
+                const result = await tool.invoke(toolCall.args, { signal });
+                signal?.throwIfAborted();
                 const duration = Date.now() - execStart;
 
                 const resultStr =
@@ -141,6 +142,7 @@ export class ToolExecutor {
                     }),
                 );
             } catch (error) {
+                signal?.throwIfAborted();
                 const errorMsg = `${toolCall.name} 実行エラー: ${error instanceof Error ? error.message : 'Unknown'}`;
                 logger.error(`  ✗ ${errorMsg}`);
 

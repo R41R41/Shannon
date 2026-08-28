@@ -111,8 +111,12 @@ describe('foundation dependency gate', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shannon-boundary-'));
     try {
       fs.mkdirSync(path.join(root, 'access')); fs.mkdirSync(path.join(root, 'modelSettings'));
-      fs.writeFileSync(path.join(root, 'access/index.ts'), "import fs from 'node:fs';\nconst value = process.env.SECRET;\n");
+      fs.mkdirSync(path.join(root, 'execution'));
+      fs.writeFileSync(path.join(root, 'execution/index.ts'), 'export {};');
+      fs.writeFileSync(path.join(root, 'access/index.ts'), 'export {};');
       fs.writeFileSync(path.join(root, 'modelSettings/index.ts'), 'export {};');
+      expect(execFileSync(process.execPath, [script, root], { encoding: 'utf8' })).toContain('passed');
+      fs.writeFileSync(path.join(root, 'access/index.ts'), "import fs from 'node:fs';\nconst value = process.env.SECRET;\n");
       expect(() => execFileSync(process.execPath, [script, root], { stdio: 'pipe' })).toThrow();
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
@@ -123,6 +127,9 @@ describe('self-improvement protection for access boundaries', () => {
   it('cannot edit security modules, registration, composition or its own deny policy', async () => {
     const { isMutableRelativePath } = await import('../../src/services/llm/graph/cognitive/selfImprove/mutableCodePolicy.js');
     for (const path of ['src/modules/access/index.ts', 'src/modules/modelSettings/index.ts',
+      'src/modules/execution/index.ts', 'src/services/llm/graph/requestExecutionCoordinator.ts',
+      'src/services/llm/graph/coordinatedGraphInvocation.ts', 'src/services/llm/graph/shannonGraph.ts',
+      'src/services/llm/graph/cognitive/ParallelExecutor.ts', 'src/services/llm/client.ts',
       'src/adapters/access/FirebaseIdentityVerifier.ts', 'src/bootstrap/webAccess.ts', 'src/models/User.ts',
       'src/server.ts', 'src/services/web/client.ts',
       'src/routes/modelRoutes.ts', 'src/routes/accessHttp.ts', 'src/services/web/agents/authAgent.ts',

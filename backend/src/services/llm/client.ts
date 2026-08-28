@@ -20,6 +20,7 @@ import { buildShannonGraph, invokeShannonGraph, CompiledShannonGraph } from './g
 import { initializeNodes } from './graph/nodeFactory.js';
 import { FunctionCallingAgent } from './graph/nodes/FunctionCallingAgent.js';
 import { RequestExecutionCoordinator } from './graph/requestExecutionCoordinator.js';
+import { runCoordinatedGraph } from './graph/coordinatedGraphInvocation.js';
 import type { RequestEnvelope, ShannonGraphState } from '@shannon/common';
 import { getActionDispatcher } from '../common/adapters/index.js';
 import { getTracedOpenAI } from './utils/langfuse.js';
@@ -230,11 +231,12 @@ export class LLMService {
     }
 
     try {
-      return await this.executionCoordinator.run(envelope, async () => {
-        const result = await invokeShannonGraph(this.shannonGraph!, envelope, legacyMessages, options);
-        await this.dispatchActionPlan(envelope, result);
-        return result;
-      });
+      return await runCoordinatedGraph(
+        this.executionCoordinator, envelope,
+        signal => invokeShannonGraph(this.shannonGraph!, envelope, legacyMessages, { ...options, abortSignal: signal }),
+        result => this.dispatchActionPlan(envelope, result),
+        options?.abortSignal,
+      );
     } catch (error) {
       const zone = envelope.metadata?.legacyMemoryZone ?? envelope.channel;
       const sErr = classifyError(error, 'llm');

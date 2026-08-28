@@ -11,6 +11,8 @@
     "src/routes/httpSurface.ts",
     "src/routes/healthRoutes.ts",
     "src/services/twitter/api/TwitterApiClient.ts",
-    "src/services/twitter/api/TwitterAuthManager.ts"
+    "src/services/twitter/api/TwitterAuthManager.ts",
+    "src/services/llm/graph/requestExecutionCoordinator.ts",
+    "src/services/llm/graph/coordinatedGraphInvocation.ts"
   ]
 }

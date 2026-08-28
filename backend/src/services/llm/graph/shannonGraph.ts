@@ -120,6 +120,7 @@ function createExecuteNode(
     : null;
 
   return async function executeFn(state: ShannonStateType): Promise<Partial<ShannonStateType>> {
+    state._abortSignal?.throwIfAborted();
     const envelope = state.envelope;
     const context = envelopeToTaskContext(envelope);
     const emotionState: EmotionState = state._emotionState ?? { current: state.emotion ?? null };
@@ -169,7 +170,8 @@ function createExecuteNode(
       }
 
       const startTime = Date.now();
-      const agentResult = await fca.run(fcaState);
+      const agentResult = await fca.run(fcaState, state._abortSignal);
+      state._abortSignal?.throwIfAborted();
 
       try {
         const platform = context?.platform ?? envelope.channel ?? 'unknown';
@@ -348,6 +350,8 @@ function createExecuteNode(
           savedTaskNodes: result.taskNodes,
         };
       } catch (e) {
+        // Cancellation must not start a fallback engine.
+        state._abortSignal?.throwIfAborted();
         logger.error(`❌ ShannonExecutor failed, falling back to FCA: ${e}`, e);
       }
     }
@@ -364,8 +368,10 @@ function createExecuteNode(
  * simplifiedWriteback: format + writeback を統合 (Phase 4)
  */
 async function simplifiedWritebackNode(state: ShannonStateType): Promise<Partial<ShannonStateType>> {
+  state._abortSignal?.throwIfAborted();
   // format
   const formatResult = await actionFormatterNode(state as unknown as ShannonGraphState);
+  state._abortSignal?.throwIfAborted();
 
   // writeback (fire-and-forget)
   const userText = state.envelope.text ?? '';
@@ -437,12 +443,14 @@ export async function invokeShannonGraph(
     abortSignal?: AbortSignal;
   },
 ): Promise<ShannonGraphState> {
+  options?.abortSignal?.throwIfAborted();
   const result = await graph.invoke({
     envelope,
     _legacyMessages: legacyMessages ?? [],
     _onToolStarting: options?.onToolStarting,
     _onTaskTreeUpdate: options?.onTaskTreeUpdate,
     _abortSignal: options?.abortSignal,
-  });
+  }, { signal: options?.abortSignal });
+  options?.abortSignal?.throwIfAborted();
   return result as unknown as ShannonGraphState;
 }
