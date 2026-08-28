@@ -39,7 +39,7 @@ export class SkillAgent extends WebSocketServiceBase {
     return SkillAgent.instance;
   }
   protected override initialize() {
-    this.wss.on('connection', async (ws) => {
+    this.onAuthenticatedConnection( async (ws) => {
       logger.debug('Skill client connected');
 
       this.handleNewConnection(ws);
@@ -48,7 +48,7 @@ export class SkillAgent extends WebSocketServiceBase {
         logger.debug('Skill client disconnected');
       });
 
-      ws.on('message', async (message) => {
+      this.onMessage(ws, async (message) => {
         const data = JSON.parse(message.toString());
 
         if (data.type === 'ping') {

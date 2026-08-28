@@ -5,6 +5,14 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # Check before touching tmux sessions or occupied ports.
 bash "$SCRIPT_DIR/../scripts/start-mode-guard.sh" "$SCRIPT_DIR/.." "$@" || exit $?
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+# VM dev pins its own runtime; the global Node and production processes are untouched.
+DEV_NODE_BIN=""
+if [ "$(basename "$ROOT_DIR")" = "Shannon-dev" ]; then
+    DEV_NODE_BIN="$HOME/.nvm/versions/node/v$(cat "$ROOT_DIR/.nvmrc")/bin"
+    [ -x "$DEV_NODE_BIN/node" ] || { echo "Pinned development Node is missing" >&2; exit 4; }
+    export PATH="$DEV_NODE_BIN:$PATH"
+fi
+
 
 # --- OS detection ---
 IS_WINDOWS=false
@@ -126,9 +134,10 @@ fi
 
 # --- Build common + backend ---
 echo "Building common..."
-cd "$ROOT_DIR" && npm run build -w common 2>&1 | tail -3
+set -o pipefail
+cd "$ROOT_DIR" && npm run build -w common 2>&1 | tail -3 || exit 1
 echo "Building backend..."
-cd "$SCRIPT_DIR" && NODE_OPTIONS="--max-old-space-size=12288" npx tsc $TSC_NOCHECK --skipLibCheck 2>&1 | tail -5
+cd "$SCRIPT_DIR" && NODE_OPTIONS="--max-old-space-size=12288" npx tsc $TSC_NOCHECK --skipLibCheck 2>&1 | tail -5 || exit 1
 
 # --- Node flags ---
 NODE_OPTS="--unhandled-rejections=warn --experimental-specifier-resolution=node --es-module-specifier-resolution=node"
@@ -214,6 +223,7 @@ else
         cat > "$LAUNCH_SCRIPT" << LAUNCH_EOF
 #!/bin/bash
 cd "$SCRIPT_DIR"
+export PATH="$DEV_NODE_BIN:\$PATH"
 export PORT=$PORT
 export MINEBOT_API_PORT=$MINEBOT_PORT
 export TWITTER_DISABLED=\${TWITTER_DISABLED:-true}

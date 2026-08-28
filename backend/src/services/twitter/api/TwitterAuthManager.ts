@@ -1,3 +1,4 @@
+import { assertTwitterEnabled } from '../twitterPolicy.js';
 import axios, { isAxiosError } from 'axios';
 import fs from 'fs';
 import path from 'path';
@@ -88,6 +89,7 @@ export class TwitterAuthManager {
 
   /** twitterapi.io V1 Step-1 ログイン */
   public async login1Step() {
+    assertTwitterEnabled();
     const endpoint =
       'https://api.twitterapi.io/twitter/login_by_email_or_username';
     const data = { username_or_email: this.email, password: this.password };
@@ -106,6 +108,7 @@ export class TwitterAuthManager {
 
   /** twitterapi.io V1 Step-2 ログイン (2FA) */
   public async login2Step() {
+    assertTwitterEnabled();
     const endpoint = 'https://api.twitterapi.io/twitter/login_by_2fa';
     const data = { login_data: this.login_data, '2fa_code': this.two_fa_code };
     const reqConfig = { headers: { 'X-API-Key': this.apiKey } };
@@ -124,6 +127,7 @@ export class TwitterAuthManager {
    * totp_secret を使って login_cookies を取得する（推奨フロー）
    */
   public async loginV2(): Promise<void> {
+    assertTwitterEnabled();
     const endpoint = 'https://api.twitterapi.io/twitter/user_login_v2';
     const data = {
       user_name: this.userName,
@@ -171,6 +175,7 @@ export class TwitterAuthManager {
    * login_cookies が取得済みかチェックし、未取得なら自動ログインを試行する。
    */
   public async ensureLoginCookies(): Promise<void> {
+    assertTwitterEnabled();
     if (!this.login_cookies) {
       logger.warn('[ensureLoginCookies] login_cookies が未取得。loginV2 を実行します...');
       await this.loginV2();

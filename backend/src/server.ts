@@ -1,4 +1,5 @@
 import express from 'express';
+import { protectHttpSurface } from './routes/httpSurface.js';
 import { createWebAccess } from './bootstrap/webAccess.js';
 import http from 'http';
 import mongoose from 'mongoose';
@@ -36,6 +37,7 @@ class Server {
   private minebotClient: MinebotClient;
   private notionClient: NotionClient | null = null;
   private httpServer: http.Server | null = null;
+  private coreReady = false;
 
   /**
    * サービスを安全に初期化するヘルパー。
@@ -78,10 +80,12 @@ class Server {
 
   private startHTTPServer() {
     const app = express();
-    app.use(express.json());
+    app.use(protectHttpSurface(this.webAccess.access));
+    app.use(express.json({ limit: '128kb' }));
 
     // Register route modules
-    registerHealthRoutes(app);
+    registerHealthRoutes(app, () => this.coreReady && mongoose.connection.readyState === 1 &&
+      !!config.webAuth.firebaseProjectId && config.webAuth.allowedOrigins.length > 0);
     registerModelRoutes(app, this.webAccess.access, this.webAccess.modelSettings);
     registerTokenRoutes(app);
     registerTestRoutes(app);
@@ -97,11 +101,12 @@ class Server {
   private async connectDatabase() {
     try {
       const uri = config.mongodbUri;
-      logger.info(`Connecting to MongoDB: ${uri}`);
-      await mongoose.connect(uri);
+      logger.info('Connecting to configured MongoDB');
+      await mongoose.connect(uri, { autoIndex: false, serverSelectionTimeoutMS: 5000 });
       logger.info(`MongoDB connected to: ${mongoose.connection.db.databaseName}`, 'blue');
     } catch (error) {
-      logger.error(`MongoDB connection error: ${error}`);
+      logger.error('MongoDB connection failed');
+      throw new Error('DATABASE_UNAVAILABLE');
     }
   }
 
@@ -141,6 +146,7 @@ class Server {
     // LLM と Web は失敗時にサーバーを停止する
     try {
       await this.llmService.initialize();
+      this.coreReady = true;
       logger.info('LLM Service started', 'blue');
     } catch (error) {
       logger.error(`LLM Service の起動に失敗: ${error}`);
@@ -168,6 +174,7 @@ class Server {
   }
 
   public async shutdown() {
+    this.coreReady = false;
     logger.warn('[Shutdown] グレースフルシャットダウン開始...');
 
     // 注意: Webhook ルールはシャットダウン時に無効化しない。
@@ -180,13 +187,13 @@ class Server {
     await shutdownLangfuse();
     await mongoose.disconnect();
     logger.error('MongoDB disconnected');
-    process.exit(0);
+    process.exit(process.exitCode ?? 0);
   }
 }
 
 // サーバーのインスタンス化と起動
 const server = new Server();
-server.start();
+void server.start().catch(() => { logger.error('Server startup failed'); process.exitCode = 1; void server.shutdown(); });
 
 // グレースフルシャットダウンの処理
 process.on('SIGTERM', () => server.shutdown());

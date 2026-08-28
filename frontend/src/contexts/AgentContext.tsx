@@ -43,14 +43,14 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setEmotion(webClient.emotionService);
     setSkill(webClient.skillService);
 
-    if (!webClient.isConnected()) {
+    if (userInfo?.isAdmin && !webClient.isConnected()) {
       webClient.start();
     }
 
     return () => {
       webClient.disconnect();
     };
-  }, []);
+  }, [userInfo]);
 
   const value = useMemo<AgentContextType>(
     () => ({

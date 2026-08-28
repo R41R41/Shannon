@@ -18,7 +18,7 @@ const userSchema = new mongoose.Schema<IUser>({
   createdAt: { type: Date, default: Date.now },
   isAuthorized: { type: Boolean, default: false },
   isAdmin: { type: Boolean, default: false },
-});
+}, { autoIndex: false });
 
 // インデックスを確実に作成
 userSchema.index({ email: 1 }, { unique: true });

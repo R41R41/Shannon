@@ -1,4 +1,5 @@
 import express, { Application } from 'express';
+import { requireMachineToken } from '../../../routes/httpSurface.js';
 import { Server } from 'http';
 import { createLogger } from '../../../utils/logger.js';
 import { CONFIG } from '../config/MinebotConfig.js';
@@ -85,7 +86,8 @@ export class MinebotHttpServer {
      * ミドルウェアの設定
      */
     private setupMiddleware(): void {
-        this.app.use(express.json());
+        this.app.use(requireMachineToken(() => process.env.MINEBOT_API_TOKEN ?? ''));
+        this.app.use(express.json({ limit: '64kb' }));
     }
 
     /**
@@ -496,7 +498,7 @@ export class MinebotHttpServer {
             return;
         }
 
-        this.server = this.app.listen(CONFIG.MINEBOT_API_PORT, () => {
+        this.server = this.app.listen(CONFIG.MINEBOT_API_PORT, '127.0.0.1', () => {
             log.success(`✅ Express server listening on port ${CONFIG.MINEBOT_API_PORT}`);
         });
     }

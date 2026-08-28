@@ -1,5 +1,7 @@
 # RF-01/RF-02：Web認証・モデル設定の責務分離
 
+最新の追加実装・prod Git整理・Node22/native・DB復元結果は [R0リリース準備](r0-release-readiness.md) を参照。以下は初期整備時点の記録を含む。
+
 状態：2026-08-28、VM devに実装。prod未反映。これは最初の一経路であり、F01/F02全体の完了ではない。
 
 設計：[Notion 08](https://www.notion.so/3ca1e84762888170816ee73f25c40ce3)。進捗：[Notion 02](https://www.notion.so/3ca1e84762888153bb4dcf4714a92fb8)。

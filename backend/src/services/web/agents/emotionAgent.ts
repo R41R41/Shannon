@@ -36,7 +36,7 @@ export class EmotionAgent extends WebSocketServiceBase {
   }
 
   protected override initialize() {
-    this.wss.on('connection', async (ws) => {
+    this.onAuthenticatedConnection( async (ws) => {
       logger.debug('Emotion client connected');
 
       this.handleNewConnection(ws);
@@ -45,7 +45,7 @@ export class EmotionAgent extends WebSocketServiceBase {
         logger.debug('Emotion client disconnected');
       });
 
-      ws.on('message', async (message) => {
+      this.onMessage(ws, async (message) => {
         const data = JSON.parse(message.toString());
 
         if (data.type === 'ping') {

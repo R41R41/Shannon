@@ -1,3 +1,4 @@
+import { auth } from '../firebase';
 import { MonitoringAgent } from "./agents/monitoringAgent";
 import { OpenAIAgent } from "./agents/openaiAgent";
 import { SchedulerAgent } from "./agents/schedulerAgent";
@@ -32,6 +33,16 @@ export class WebClient {
     this.planningService = PlanningAgent.getInstance();
     this.emotionService = EmotionAgent.getInstance();
     this.skillService = SkillAgent.getInstance();
+    const getToken = async () => {
+      const user = auth.currentUser;
+      if (!user) throw new Error('Login required');
+      const token = await user.getIdToken();
+      if (auth.currentUser?.uid !== user.uid) throw new Error('Session changed');
+      return token;
+    };
+    for (const service of [this.openaiService, this.monitoringService, this.schedulerService,
+      this.statusService, this.planningService, this.emotionService, this.skillService]) service.setTokenProvider(getToken);
+
   }
 
   public isConnected(): boolean {

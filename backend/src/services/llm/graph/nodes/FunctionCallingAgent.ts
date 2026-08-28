@@ -1,3 +1,4 @@
+import { selectAllowedTools } from '../../../../modules/access/toolSelection.js';
 import {
     AIMessage,
     AIMessageChunk,
@@ -356,8 +357,8 @@ export class FunctionCallingAgent {
         // allowedTools が指定されている場合、フィルタリングした modelWithTools を使う
         let effectiveTools = [...this.tools];
         let effectiveToolMap = new Map(this.toolMap);
-        if (state.allowedTools && state.allowedTools.length > 0) {
-            effectiveTools = this.tools.filter(t => state.allowedTools!.includes(t.name));
+        if (state.allowedTools !== undefined) {
+            effectiveTools = selectAllowedTools(this.tools, state.allowedTools);
             effectiveToolMap = new Map(effectiveTools.map(t => [t.name, t]));
             logger.info(`🔒 allowedTools: ${state.allowedTools.join(', ')} (${effectiveTools.length}/${this.tools.length})`, 'cyan');
         }

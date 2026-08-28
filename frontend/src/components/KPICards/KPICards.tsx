@@ -1,3 +1,4 @@
+import { authorizedFetch } from '../../features/auth/authorizedFetch';
 import { useEffect, useState } from 'react';
 import styles from './KPICards.module.scss';
 
@@ -25,8 +26,8 @@ export const KPICards: React.FC = () => {
       try {
         const [healthRes, tokenRes, scheduleRes] = await Promise.allSettled([
           fetch('/api/health').then(r => r.json()),
-          fetch('/api/tokens/today').then(r => r.json()),
-          fetch('/api/twitter/schedule').then(r => r.json()),
+          authorizedFetch('/api/tokens/today').then(r => r.json()),
+          authorizedFetch('/api/twitter/schedule').then(r => r.json()),
         ]);
 
         setCards(prev => {

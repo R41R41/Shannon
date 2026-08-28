@@ -1,3 +1,4 @@
+import { assertTwitterEnabled } from '../../../twitter/twitterPolicy.js';
 import { StructuredTool } from '@langchain/core/tools';
 import { z } from 'zod';
 import { getEventBus } from '../../../eventBus/index.js';
@@ -30,6 +31,7 @@ export default class GetXorTwitterPostContentFromURLTool extends StructuredTool 
   }
 
   async _call(data: z.infer<typeof this.schema>): Promise<string> {
+    assertTwitterEnabled();
     try {
       const tweetId = this.extractTweetId(data.url);
       if (!tweetId) {

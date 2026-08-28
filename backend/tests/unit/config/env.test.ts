@@ -41,3 +41,8 @@ describe('self-improvement requires explicit opt-in', () => {
     expect(config.selfImprove.autoApplyTier2).toBe(false);
   });
 });
+
+it.each([['true','true'],['false','false'],['true','false']])('honors either X stop flag disabled=%s enabled=%s',async(disabled,enabled)=>{
+  vi.stubEnv('TWITTER_DISABLED',disabled); vi.stubEnv('TWITTER_ENABLED',enabled);
+  const {config}=await import('../../../src/config/env.js'); expect(config.twitter.disabled).toBe(true);
+});

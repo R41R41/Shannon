@@ -15,7 +15,7 @@ export function registerWebhookRoutes(app: Express, twitterClient: TwitterClient
   // POST: 実際の Webhook ペイロード受信
   app.post('/api/webhook/twitter', (req, res) => {
     try {
-      if (!twitterClient) {
+      if (!twitterClient || config.twitter.disabled) {
         res.status(503).json({ error: 'Twitter service not available' });
         return;
       }

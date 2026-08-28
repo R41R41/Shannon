@@ -36,7 +36,7 @@ export class PlanningAgent extends WebSocketServiceBase {
   }
 
   protected override initialize() {
-    this.wss.on('connection', async (ws) => {
+    this.onAuthenticatedConnection( async (ws) => {
       logger.debug('Planning client connected');
 
       this.handleNewConnection(ws);
@@ -45,7 +45,7 @@ export class PlanningAgent extends WebSocketServiceBase {
         logger.debug('Planning client disconnected');
       });
 
-      ws.on('message', async (message) => {
+      this.onMessage(ws, async (message) => {
         const data = JSON.parse(message.toString());
 
         if (data.type === 'ping') {

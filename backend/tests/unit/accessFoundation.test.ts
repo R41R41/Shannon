@@ -133,3 +133,12 @@ describe('self-improvement protection for access boundaries', () => {
     expect(isMutableRelativePath('src/services/minebot/instantSkills/example.ts')).toBe(true);
   });
 });
+
+import { selectAllowedTools } from '../../src/modules/access/toolSelection.js';
+describe('explicit tool allowlists',()=>{
+ const tools=[{name:'read'},{name:'send'}];
+ it('empty means no tools, even when internal caller has write tools',()=>expect(selectAllowedTools(tools,[])).toEqual([]));
+ it('selects only listed known tools',()=>expect(selectAllowedTools(tools,['read','unknown'])).toEqual([{name:'read'}]));
+ it('keeps the internal tool list when policy is omitted, without sharing the array',()=>{expect(selectAllowedTools(tools,undefined)).toEqual(tools);expect(selectAllowedTools(tools,undefined)).not.toBe(tools)});
+ it('rejects malformed runtime policies rather than granting all',()=>expect(()=>selectAllowedTools(tools,null as any)).toThrow('INVALID'));
+});

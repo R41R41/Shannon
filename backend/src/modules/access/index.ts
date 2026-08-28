@@ -1,5 +1,5 @@
 /** Pure application boundary: no SDK, database, environment, timer or transport. */
-export type Capability = 'profile:read' | 'models:read' | 'models:write';
+export type Capability = 'profile:read' | 'models:read' | 'models:write' | 'console:access';
 export interface VerifiedIdentity {
   readonly projectId: string;
   readonly uid: string;
@@ -69,7 +69,7 @@ export class AccessService {
       throw new AccessError('FORBIDDEN');
     }
     const capabilities: Capability[] = ['profile:read'];
-    if (user.isAdmin === true) capabilities.push('models:read', 'models:write');
+    if (user.isAdmin === true) capabilities.push('models:read', 'models:write', 'console:access');
     const context: RequestContext = Object.freeze({
       requestId: this.newRequestId(),
       principal: Object.freeze({ uid: identity.uid, projectId: identity.projectId, name: user.name, email: identity.email }),

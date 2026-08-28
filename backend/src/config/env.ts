@@ -39,7 +39,10 @@ export const config = {
   /** Main HTTP server port */
   port: optional('PORT', '5000'),
 
-  webAuth: { firebaseProjectId: optional('FIREBASE_PROJECT_ID', '') },
+  webAuth: {
+    firebaseProjectId: optional('FIREBASE_PROJECT_ID', ''),
+    allowedOrigins: optional('WEB_ALLOWED_ORIGINS', '').split(',').map(s => s.trim()).filter(Boolean),
+  },
 
   discord: {
     token: optional('DISCORD_TOKEN', ''),
@@ -87,7 +90,7 @@ export const config = {
   },
 
   twitter: {
-    disabled: optional('TWITTER_DISABLED', 'false').toLowerCase() === 'true',
+    disabled: optional('TWITTER_DISABLED', 'false').toLowerCase() === 'true' || optional('TWITTER_ENABLED', 'true').toLowerCase() === 'false',
     userId: optional('TWITTER_USER_ID', ''),
     email: optional('TWITTER_EMAIL', ''),
     password: optional('TWITTER_PASSWORD', ''),

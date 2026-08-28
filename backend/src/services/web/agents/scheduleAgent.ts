@@ -42,7 +42,7 @@ export class ScheduleAgent extends WebSocketServiceBase {
   }
 
   protected override initialize() {
-    this.wss.on('connection', async (ws) => {
+    this.onAuthenticatedConnection( async (ws) => {
       logger.debug('Schedule client connected');
 
       this.handleNewConnection(ws);
@@ -51,7 +51,7 @@ export class ScheduleAgent extends WebSocketServiceBase {
         logger.debug('Schedule client disconnected');
       });
 
-      ws.on('message', async (message) => {
+      this.onMessage(ws, async (message) => {
         const data = JSON.parse(message.toString());
 
         if (data.type === 'ping') {

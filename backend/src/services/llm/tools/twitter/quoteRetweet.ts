@@ -1,3 +1,4 @@
+import { assertTwitterEnabled } from '../../../twitter/twitterPolicy.js';
 import { StructuredTool } from '@langchain/core/tools';
 import { TwitterActionResult, TwitterClientInput } from '@shannon/common';
 import { z } from 'zod';
@@ -25,6 +26,7 @@ export default class QuoteRetweetTool extends StructuredTool {
   }
 
   async _call(data: z.infer<typeof this.schema>): Promise<string> {
+    assertTwitterEnabled();
     try {
       const result = new Promise<TwitterActionResult>((resolve) => {
         const unsubscribe = this.eventBus.subscribe(

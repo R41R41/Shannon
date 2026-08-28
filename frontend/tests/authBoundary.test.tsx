@@ -117,3 +117,25 @@ describe('operational socket teardown', () => {
     await vi.advanceTimersByTimeAsync(2100); expect(FakeSocket.instances).toHaveLength(2); client.disconnect();
   });
 });
+
+describe('operational socket authentication', () => {
+  class Client extends WebSocketClientBase { seen: string[]=[]; constructor(url='wss://example.test/ws'){super(url)} protected handleMessage(data:string){this.seen.push(data)} }
+  function prepare(){vi.useFakeTimers();vi.stubGlobal('window',{setTimeout,setInterval,location:{protocol:'https:',hostname:'example.test'}});}
+  it('does not send operations or expose data before server acknowledgement',async()=>{
+    prepare();const client=new Client();client.setTokenProvider(async()=> 'signed-token');client.connect();const socket=FakeSocket.instances[0];socket.readyState=FakeSocket.OPEN;
+    await socket.onopen?.();client.send('{"type":"operation"}');expect(socket.sent.map(x=>JSON.parse(x).type)).toEqual(['auth:check']);expect(client.status).toBe('connecting');
+    socket.message({type:'private'});expect(client.seen).toEqual([]);
+    socket.message({type:'auth:ready'});expect(client.status).toBe('connected');client.send('{"type":"operation"}');expect(socket.sent).toHaveLength(2);client.disconnect();
+  });
+  it('does not transmit a token obtained after disconnect',async()=>{
+    prepare();let resolve!:(x:string)=>void;const token=new Promise<string>(r=>resolve=r);const client=new Client();client.setTokenProvider(()=>token);client.connect();const socket=FakeSocket.instances[0];socket.readyState=FakeSocket.OPEN;
+    const opened=socket.onopen?.();client.disconnect();resolve('old-token');await opened;expect(socket.sent).toEqual([]);expect(vi.getTimerCount()).toBe(0);
+  });
+  it('obtains a new token on reconnect rather than retaining the previous credential',async()=>{
+    prepare();const getToken=vi.fn(async()=> 'current');const client=new Client();client.setTokenProvider(getToken);client.connect();const a=FakeSocket.instances[0];a.readyState=FakeSocket.OPEN;await a.onopen?.();a.message({type:'auth:ready'});a.close();
+    await vi.advanceTimersByTimeAsync(2100);const b=FakeSocket.instances[1];b.readyState=FakeSocket.OPEN;await b.onopen?.();expect(getToken).toHaveBeenCalledTimes(2);expect(client.status).toBe('connecting');client.disconnect();
+  });
+  it('rejects plaintext endpoints before retrieving credentials',()=>{
+    prepare();vi.spyOn(console,'error').mockImplementation(()=>{});const getToken=vi.fn(async()=> 'token');const client=new Client('ws://remote.test/ws');client.setTokenProvider(getToken);client.connect();expect(FakeSocket.instances).toEqual([]);expect(getToken).not.toHaveBeenCalled();client.disconnect();
+  });
+});

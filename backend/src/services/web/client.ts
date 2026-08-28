@@ -1,3 +1,4 @@
+import { config } from '../../config/env.js';
 import type { AccessService } from '../../modules/access/index.js';
 import { PORTS } from '../../config/ports.js';
 import { MonitoringAgent } from './agents/monitoringAgent.js';
@@ -24,6 +25,7 @@ export class WebClient {
       port: isTest
         ? Number(PORTS.WEBSOCKET.OPENAI) + 10000
         : Number(PORTS.WEBSOCKET.OPENAI),
+      access, allowedOrigins: config.webAuth.allowedOrigins,
       serviceName: 'openai',
     });
 
@@ -31,6 +33,7 @@ export class WebClient {
       port: isTest
         ? Number(PORTS.WEBSOCKET.MONITORING) + 10000
         : Number(PORTS.WEBSOCKET.MONITORING),
+      access, allowedOrigins: config.webAuth.allowedOrigins,
       serviceName: 'monitoring',
     });
 
@@ -38,6 +41,7 @@ export class WebClient {
       port: isTest
         ? Number(PORTS.WEBSOCKET.STATUS) + 10000
         : Number(PORTS.WEBSOCKET.STATUS),
+      access, allowedOrigins: config.webAuth.allowedOrigins,
       serviceName: 'status',
     });
 
@@ -45,6 +49,7 @@ export class WebClient {
       port: isTest
         ? Number(PORTS.WEBSOCKET.SCHEDULE) + 10000
         : Number(PORTS.WEBSOCKET.SCHEDULE),
+      access, allowedOrigins: config.webAuth.allowedOrigins,
       serviceName: 'schedule',
     });
 
@@ -52,6 +57,7 @@ export class WebClient {
       port: isTest
         ? Number(PORTS.WEBSOCKET.PLANNING) + 10000
         : Number(PORTS.WEBSOCKET.PLANNING),
+      access, allowedOrigins: config.webAuth.allowedOrigins,
       serviceName: 'planning',
     });
 
@@ -59,6 +65,7 @@ export class WebClient {
       port: isTest
         ? Number(PORTS.WEBSOCKET.EMOTION) + 10000
         : Number(PORTS.WEBSOCKET.EMOTION),
+      access, allowedOrigins: config.webAuth.allowedOrigins,
       serviceName: 'emotion',
     });
 
@@ -66,6 +73,7 @@ export class WebClient {
       port: isTest
         ? Number(PORTS.WEBSOCKET.SKILL) + 10000
         : Number(PORTS.WEBSOCKET.SKILL),
+      access, allowedOrigins: config.webAuth.allowedOrigins,
       serviceName: 'skill',
     });
 
@@ -73,6 +81,7 @@ export class WebClient {
       port: isTest
         ? Number(PORTS.WEBSOCKET.AUTH) + 10000
         : Number(PORTS.WEBSOCKET.AUTH),
+      access, allowedOrigins: config.webAuth.allowedOrigins,
       serviceName: 'auth',
     }, access);
   }

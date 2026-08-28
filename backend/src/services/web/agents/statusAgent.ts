@@ -43,7 +43,7 @@ export class StatusAgent extends WebSocketServiceBase {
   }
 
   protected override initialize() {
-    this.wss.on('connection', (ws) => {
+    this.onAuthenticatedConnection( (ws) => {
       logger.debug('Status client connected');
 
       this.handleNewConnection(ws);
@@ -52,7 +52,7 @@ export class StatusAgent extends WebSocketServiceBase {
         logger.debug('Status client disconnected');
       });
 
-      ws.on('message', async (message) => {
+      this.onMessage(ws, async (message) => {
         const data = JSON.parse(message.toString());
         if (data.type === 'service:command') {
           const service = data.service;

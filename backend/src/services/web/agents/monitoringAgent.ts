@@ -40,7 +40,7 @@ export class MonitoringAgent extends WebSocketServiceBase {
   }
 
   protected override initialize() {
-    this.wss.on('connection', async (ws) => {
+    this.onAuthenticatedConnection( async (ws) => {
       logger.debug('Monitoring client connected');
 
       this.handleNewConnection(ws);
@@ -55,11 +55,11 @@ export class MonitoringAgent extends WebSocketServiceBase {
       );
 
       sortedLogs.forEach((log) => {
-        this.broadcast({ type: 'web:log', data: log } as WebMonitoringOutput);
+        this.sendTo(ws, { type: 'web:log', data: log } as WebMonitoringOutput);
       });
 
       // 検索リクエストのハンドリング
-      ws.on('message', async (message) => {
+      this.onMessage(ws, async (message) => {
         const data = JSON.parse(message.toString());
 
         if (data.type === 'ping') {
@@ -77,7 +77,7 @@ export class MonitoringAgent extends WebSocketServiceBase {
         if (data.type === 'search') {
           const query = data.query as SearchQuery;
           const searchResults = await this.searchLogs(query);
-          this.broadcast({
+          this.sendTo(ws, {
             type: 'web:searchResults',
             data: searchResults as ILog[],
           } as WebMonitoringOutput);

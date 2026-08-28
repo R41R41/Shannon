@@ -45,7 +45,7 @@ export class OpenAIClientService extends WebSocketServiceBase {
   }
 
   protected initialize() {
-    this.wss.on('connection', (ws) => {
+    this.onAuthenticatedConnection( (ws) => {
       logger.debug('New OpenAI client connected');
 
       // 新しい接続の管理
@@ -55,7 +55,7 @@ export class OpenAIClientService extends WebSocketServiceBase {
         logger.debug('OpenAI client disconnected');
       });
 
-      ws.on('message', (message) => {
+      this.onMessage(ws, (message) => {
         try {
           const data = JSON.parse(message.toString());
 
@@ -95,7 +95,7 @@ export class OpenAIClientService extends WebSocketServiceBase {
             const message: OpenAITextInput = {
               type: 'text',
               text: data.text,
-              senderName: data.senderName,
+              senderName: this.getContext(ws).principal.name,
               recentChatLog: data.recentChatLog,
             };
             this.eventBus.publish({

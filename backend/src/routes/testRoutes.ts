@@ -6,6 +6,10 @@ import { getEventBus } from '../services/eventBus/index.js';
 import { logger } from '../utils/logger.js';
 
 export function registerTestRoutes(app: Express): void {
+  app.use('/api/test', (_req, res, next) => {
+    if (config.twitter.disabled) { res.status(503).json({ error: 'TWITTER_DISABLED' }); return; }
+    next();
+  });
   // POST: 定期投稿テスト (生成 -> Twitter実投稿)
   // body: { command: 'fortune' | 'forecast' | 'about_today' | 'news_today' }
   // query: ?dry_run=true で投稿せずに生成結果のみ返す

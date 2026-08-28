@@ -1,3 +1,4 @@
+import { config } from '../../../config/env.js';
 import {
   DiscordScheduledPostInput,
   MemberTweetInput,
@@ -125,6 +126,7 @@ export class AgentOrchestrator {
   }
 
   async processTwitterReply(data: TwitterReplyOutput) {
+    if (config.twitter.disabled) return;
     const text = data.text;
     const replyId = data.replyId;
     const authorName = data.authorName;
@@ -158,6 +160,7 @@ export class AgentOrchestrator {
   }
 
   async processTwitterQuoteRT(data: TwitterQuoteRTOutput) {
+    if (config.twitter.disabled) return;
     const { tweetId, tweetUrl, text, authorName, authorUserName } = data;
 
     if (!tweetId || !tweetUrl || !text || !authorName) {
@@ -181,6 +184,7 @@ export class AgentOrchestrator {
   }
 
   async processMemberTweet(data: MemberTweetInput) {
+    if (config.twitter.disabled) return;
     const { tweetId, text, authorName } = data;
 
     if (!tweetId || !text || !authorName) {
@@ -219,6 +223,7 @@ export class AgentOrchestrator {
   }
 
   async processAutoTweet(data: TwitterAutoTweetInput) {
+    if (config.twitter.disabled) return;
     const MAX_DUPLICATE_RETRIES = 2;
     try {
       const { trends, todayInfo, recentPosts, recentQuoteUrls: originalQuoteUrls, mode, recentTopics } = data;
@@ -309,7 +314,7 @@ export class AgentOrchestrator {
     if (imagePrompt) {
       try {
         imageBuffer = await generateImage(imagePrompt, '1024x1024', 'low');
-        if (imageBuffer && !this.isDevMode) {
+        if (imageBuffer && !this.isDevMode && !config.twitter.disabled) {
           const { TwitterClient } = await import('../../twitter/client.js');
           const twitterClient = TwitterClient.getInstance();
           mediaId = await twitterClient.uploadMedia(imageBuffer, `${message.command}.jpg`) ?? null;
@@ -344,7 +349,7 @@ export class AgentOrchestrator {
     } else {
       this.eventBus.log('twitter:schedule_post', 'green', post, true);
       this.eventBus.log('discord:toyama_server', 'green', postForToyama, true);
-      this.eventBus.publish({
+      if (!config.twitter.disabled) this.eventBus.publish({
         type: 'twitter:post_scheduled_message',
         memoryZone: 'twitter:schedule_post',
         data: {

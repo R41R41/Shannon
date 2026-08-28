@@ -39,23 +39,9 @@ Shannon is an autonomous AI agent platform (Minecraft bot, Discord bot, Twitter 
 - **CodeAgentLoop:** `..agent-fix <説明>` でコーディングエージェント級の自律修正を起動。`read_file` / `search_code` / `list_directory` / `edit_file`（差分適用）/ `create_file` / `delete_file` / `run_tsc` / `run_vitest` の 8 ツールを gpt-4.1 が ReAct ループで使う。`SkillPatcher.diagnoseAndFixWithAgent` / `ImprovementApplier.applyWithAgent` でプログラムからも呼べる。
 - **夜間自己改善（課金抑止）:** `SELF_IMPROVE_NIGHTLY_ENABLED=true` で UTC 指定時刻に1日1回 `runNightlyMaintenance` → `saves/self_improve/morning_reports/` に Markdown/JSON。**既定は LLM なし**（レポートに「スキップ」が並ぶだけ）。課金ありにするには明示: `SELF_IMPROVE_NIGHTLY_RUN_REACTIVE=true`（失敗バッファ分析）, `SELF_IMPROVE_NIGHTLY_CODE_AGENT=true`（Anthropic）, `SELF_IMPROVE_NIGHTLY_MINECRAFT_SUITES=smoke-skills` 等。`SELF_IMPROVE_NIGHTLY_MINECRAFT_AUTOFIX=true` は SkillPatcher で追加 LLM。`SELF_IMPROVE_MORNING_WEBHOOK_URL` で Discord 等へ要約投稿可。
 
-### 本番 CD（GitHub Actions → Shannon-prod）
+### 本番CD・リリースの現状
 
-- **トリガー:** **`main` への push / マージ**および手動 `workflow_dispatch`（[`.github/workflows/deploy-production.yml`](.github/workflows/deploy-production.yml)）。
-- **動作:** SSH で本番 VM に入り、本番クローンで `git fetch` → `checkout main` → **`reset --hard origin/main`** → **`npm ci --ignore-scripts --legacy-peer-deps`**（`@langchain/anthropic@1.x` と `@langchain/core@0.3` の peer 衝突回避）→ **`npx patch-package`** → **`./start.sh`**。続けて tmux セッション `shannon-backend-prod` / `shannon-frontend-prod` の存在を確認。
-- **Secrets（Repository secrets）**
-
-| Secret | 内容 |
-|--------|------|
-| `SHANNON_PROD_SSH_HOST` | 本番 VM の IP または FQDN |
-| `SHANNON_PROD_SSH_USER` | 例: `azureuser` |
-| `SHANNON_PROD_SSH_PRIVATE_KEY` | VM ログイン用の秘密鍵（**BEGIN〜END 全文**。先頭空行は workflow 側で除去） |
-| `SHANNON_PROD_REPO_PATH` | （任意）本番クローンの絶対パス。未設定時は `/home/azureuser/Shannon-prod` |
-
-- **以前 `SHANNON_SSH_*` だけ登録していた場合:** 上記 `SHANNON_PROD_*` に合わせて Secrets を登録し直すか、同じ値を `SHANNON_PROD_*` 名で追加する。
-- **本番側の前提:** `origin` がこのリポジトリの `main` を向いていること。`git fetch` は VM 上の GitHub 用 SSH（`git@github.com:...`）が通ること。`tmux` が利用できること。
-- **ネイティブモジュール:** `npm ci` は `--ignore-scripts` のため、**初回本番セットアップ**で `canvas` / `@discordjs/opus` 等を手動ビルド済みであること（AGENTS の Native modules 節）。ロック変更後に CI の `npm ci` が失敗したら本番で依存を直してから再デプロイ。
-- **NSG / SSH:** GitHub ホステッドランナーから VM の 22 番へ届く必要あり（aiminelab CD と同様）。
+最新状態は `docs/r0-release-readiness.md`。devのworkflow定義はmain自動反映から手動candidate検証へ変更済みだが、未pushのためGitHubは旧定義のまま。本番へpush/mergeしない。実切替はUID/資格情報・限定実機・復旧・機能制限を確認した別工程。
 
 ## Shannon開発方針（2026-08-28）
 
@@ -68,3 +54,9 @@ devの `.dev-runtime-lock` は共有認証情報等の整理が済むまで起�
 ### RF-01/RF-02の初期実装
 
 `docs/refactor-access-foundation.md`を参照。新しいaccess/modelSettingsモジュールはSDK・DB・環境変数に依存させない。`npm run check:foundation -w backend`と`check:access-integration`で検査する。公開API全体の認証は未完了なので起動ロックを解除しない。旧email-only認証、公開管理者登録、frontendの認証bypassを復活させない。Firebase UIDの利用者対応付けはレビュー後の別工程。
+
+### R0追加検証とGit整理
+
+ユーザーの問題解消依頼に基づきprodのGit記録のみ `95426bb` へ整合、未コミット0件。実ファイル769件と削除済み1パス、環境設定・backend PIDは不変。dev新コードは未反映。今後も開発中のprodファイル/設定/プロセス変更はしない。
+
+Node22.21.1を `bash scripts/with-dev-node.sh` で使用。native probe、158 backend +18 frontendテスト、隔離MongoDB復元に合格。共有外部資格情報とUID対応付けは未解決なので起動ロックを迂回しない。管理consoleのみ許可、public chat停止、Mod専用認証必須という現行制限を勝手に緩めない。詳細と残条件はR0資料。

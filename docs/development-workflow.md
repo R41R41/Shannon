@@ -1,5 +1,7 @@
 # 開発環境と本番反映の手順
 
+最新の追加実装・prod Git整理・Node22/native・DB復元結果は [R0リリース準備](r0-release-readiness.md) を参照。以下は初期整備時点の記録を含む。
+
 ## 作業先
 
 - 実装・テスト：Azure VMの `/home/azureuser/Shannon-dev`。

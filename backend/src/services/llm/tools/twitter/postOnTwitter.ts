@@ -1,3 +1,4 @@
+import { assertTwitterEnabled } from '../../../twitter/twitterPolicy.js';
 import { StructuredTool } from '@langchain/core/tools';
 import { TwitterClientInput } from '@shannon/common';
 import { z } from 'zod';
@@ -32,6 +33,7 @@ export default class PostOnTwitterTool extends StructuredTool {
   }
 
   async _call(data: z.infer<typeof this.schema>): Promise<string> {
+    assertTwitterEnabled();
     try {
       // 結果を待つ Promise を作成
       const resultPromise = new Promise<{ isSuccess: boolean; errorMessage: string }>((resolve) => {
