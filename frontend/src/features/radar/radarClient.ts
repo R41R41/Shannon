@@ -4,17 +4,28 @@ export interface SourceInput {
   articleHosts: string[]; topicIds: string[]; maxItems: number; retentionMs: number;
 }
 export interface SourceEntry { id: string; source: (SourceInput & { revision: number }) | null }
-export interface SourcesSnapshot { revision: number; sources: SourceEntry[] }
+export interface SourcesSnapshot { revision: number; sources: SourceEntry[]; collectionAvailable?: boolean }
 export interface PreviewItem {
   contentId: string; sourceId: string; sourceRevision: number; score: number; matchedTopicIds: string[];
   card: { title: string; fact: string; sourceUrl: string; metadata: string[]; tags: string[]; mentions: 'none'; notify: false; thread: 'none' };
 }
 export interface PreviewSnapshot { revision: number; items: PreviewItem[]; notify: false; validUntil: number; servedAt: number }
+export interface AuditEvent {
+  revision: number; at: number; sourceId: string; action: 'configure' | 'revoke' | 'reserve' | 'collect' | 'collect_failed' | 'maintain';
+  added: number; updated: number; unchanged: number; attemptId?: string;
+  outcome?: 'failed' | 'cancelled' | 'expired' | 'conflict' | 'recovered'; removed?: number;
+}
+export interface AuditSnapshot {
+  revision: number; omittedThroughRevision: number; completeFromRevisionOne: boolean;
+  retentionMs: number; capacity: number; validUntil: number; servedAt: number; events: AuditEvent[];
+}
 export type RadarErrorCode = 'authorization' | 'conflict' | 'invalid' | 'unavailable' | 'network' | 'uncertain';
 export class RadarClientError extends Error { constructor(readonly code: RadarErrorCode) { super(code); } }
 export interface RadarClient {
   sources(signal: AbortSignal): Promise<SourcesSnapshot>;
   preview(signal: AbortSignal): Promise<PreviewSnapshot>;
+  audit(signal: AbortSignal): Promise<AuditSnapshot>;
+  collect(sourceIds: string[], expectedRevision: number, signal: AbortSignal): Promise<{ revision: number }>;
   save(id: string, expectedRevision: number, source: SourceInput, signal: AbortSignal): Promise<{ revision: number }>;
   revoke(id: string, expectedRevision: number, signal: AbortSignal): Promise<{ revision: number }>;
 }
@@ -54,7 +65,8 @@ export function decodeSources(value: unknown): SourcesSnapshot {
     return { id: s.id, source: { ...sourceInput(s.source), revision: s.source.revision } };
   });
   if (new Set(sources.map(s => s.id)).size !== sources.length || sources.filter(s => s.source).length > 10) return invalid();
-  return { revision: value.revision, sources };
+  if (value.collectionAvailable !== undefined && typeof value.collectionAvailable !== 'boolean') return invalid();
+  return { revision: value.revision, sources, collectionAvailable: value.collectionAvailable === true };
 }
 export function decodePreview(value: unknown): PreviewSnapshot {
   if (!record(value) || !integer(value.revision) || value.notify !== false || !integer(value.validUntil)
@@ -72,6 +84,33 @@ export function decodePreview(value: unknown): PreviewSnapshot {
   });
   if (new Set(items.map(i => i.contentId)).size !== items.length) return invalid();
   return { revision: value.revision, items, notify: false, validUntil: value.validUntil, servedAt: value.servedAt };
+}
+export function decodeAudit(value: unknown): AuditSnapshot {
+  if (!record(value) || !integer(value.revision) || !integer(value.omittedThroughRevision) || value.omittedThroughRevision > value.revision
+    || value.completeFromRevisionOne !== (value.omittedThroughRevision === 0)
+    || !integer(value.retentionMs) || value.retentionMs < 1 || value.retentionMs > 7 * 86400000
+    || !integer(value.capacity) || value.capacity < 1 || value.capacity > 64
+    || !integer(value.servedAt) || !integer(value.validUntil) || value.validUntil <= value.servedAt
+    || !Array.isArray(value.events) || value.events.length > value.capacity) return invalid();
+  const revision = value.revision, servedAt = value.servedAt, retention = value.retentionMs;
+  const raw: unknown[] = value.events;
+  const events: AuditEvent[] = raw.map((e, i) => {
+    if (!record(e) || e.revision !== revision - raw.length + i + 1 || !integer(e.at) || e.at > servedAt || e.at <= servedAt - retention
+      || (i > 0 && e.at < (raw[i - 1] as Record<string, number>).at)
+      || !sourceIdValid(e.sourceId) || !['configure', 'revoke', 'reserve', 'collect', 'collect_failed', 'maintain'].includes(String(e.action))
+      || !integer(e.added) || !integer(e.updated) || !integer(e.unchanged)
+      || (e.removed !== undefined && !integer(e.removed)) || (e.attemptId !== undefined && !sourceIdValid(e.attemptId))
+      || (e.outcome !== undefined && !['failed', 'cancelled', 'expired', 'conflict', 'recovered'].includes(String(e.outcome)))) return invalid();
+    return { revision: e.revision as number, at: e.at, sourceId: e.sourceId, action: e.action as AuditEvent['action'],
+      added: e.added, updated: e.updated, unchanged: e.unchanged,
+      ...(e.removed === undefined ? {} : { removed: e.removed as number }),
+      ...(e.attemptId === undefined ? {} : { attemptId: e.attemptId as string }),
+      ...(e.outcome === undefined ? {} : { outcome: e.outcome as AuditEvent['outcome'] }) };
+  });
+  if (value.omittedThroughRevision !== (events.length ? events[0].revision - 1 : revision)
+    || value.validUntil > Math.min(servedAt + 60000, ...events.map(e => e.at + retention))) return invalid();
+  return { revision, omittedThroughRevision: value.omittedThroughRevision, completeFromRevisionOne: value.completeFromRevisionOne,
+    retentionMs: retention, capacity: value.capacity, validUntil: value.validUntil, servedAt, events };
 }
 /** Transport must be bound to the current authenticated session; response bodies never supply an owner. */
 export function createRadarClient(fetcher: (path: string, init: RequestInit) => Promise<Response>): RadarClient {
@@ -98,5 +137,15 @@ export function createRadarClient(fetcher: (path: string, init: RequestInit) => 
     return { revision: result.revision };
   };
   return { sources: async s => decodeSources(await request('/api/radar/sources', s)), preview: async s => decodePreview(await request('/api/radar/preview', s)),
+    audit: async s => decodeAudit(await request('/api/radar/audit', s)),
+    collect: async (ids, rev, s) => {
+      if (!integer(rev) || !Array.isArray(ids) || !ids.length || ids.length > 3 || !ids.every(sourceIdValid) || new Set(ids).size !== ids.length
+        || !Number.isSafeInteger(rev + 2 * ids.length)) return invalid();
+      const selected = [...ids];
+      const result = await request('/api/radar/collect', s, 'POST', { expectedRevision: rev, sourceIds: selected });
+      if (!record(result) || result.revision !== rev + 2 * selected.length || !Array.isArray(result.completedSourceIds)
+        || result.completedSourceIds.length !== selected.length || result.completedSourceIds.some((id, i) => id !== selected[i])) return invalid();
+      return { revision: result.revision as number };
+    },
     save: (id, rev, source, s) => mutate(id, rev, s, source), revoke: (id, rev, s) => mutate(id, rev, s) };
 }

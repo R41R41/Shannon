@@ -235,20 +235,66 @@ describe('personal Radar aggregate and metadata lifecycle', () => {
 
 let server: Server | undefined;
 afterEach(async () => { vi.useRealTimers(); if (server) { server.closeAllConnections(); await new Promise<void>(resolve => server!.close(() => resolve())); server = undefined; } });
-async function api() {
+async function api(withCollection = false) {
   const f = setup(); const verify = vi.fn(async (token: string) => {
     if (token === 'revoked') throw new AccessError('UNAUTHENTICATED');
     return { projectId: 'fixture', uid: token, email: 'same@example.test', emailVerified: true, expiresAtMs: initialNow + 86400000 };
   });
   const users = vi.fn(async (projectId: string, uid: string) => ({ projectId, uid, name: 'Same', email: 'same@example.test', isAuthorized: uid !== 'blocked', isAdmin: uid === 'admin' }));
   const access = new AccessService({ verify }, { findByIdentity: users }, () => 'request');
-  const app = express(); registerRadarRoutes(app, access, f.service);
+  const app = express(); registerRadarRoutes(app, access, f.service, withCollection ? new RadarSessionRunner(access, f.service, f.connector, f.now) : undefined);
   await new Promise<void>(resolve => { server = app.listen(0, '127.0.0.1', resolve); });
   const url = `http://127.0.0.1:${(server!.address() as { port: number }).port}`;
   const request = (path: string, token = 'alice', method = 'GET', body?: unknown) => fetch(url + path, {
     method, headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), 'Content-Type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
-  return { ...f, request, users, verify };
+  return { ...f, request, users, verify, url };
 }
+describe('explicit foreground collection HTTP (injected runner only)', () => {
+  it('advertises opt-in, collects one selected source and returns an exact receipt with private audit', async () => {
+    const f = await api(true); await f.configure();
+    expect((await (await f.request('/api/radar/sources')).json() as any).collectionAvailable).toBe(true);
+    const res = await f.request('/api/radar/collect', 'alice', 'POST', { expectedRevision: 1, sourceIds: ['feed'] });
+    expect(res.status).toBe(200); expect(res.headers.get('cache-control')).toBe('no-store');
+    expect(await res.json()).toEqual({ revision: 3, completedSourceIds: ['feed'] }); expect(f.http.get).toHaveBeenCalledTimes(1);
+    const audit = await (await f.request('/api/radar/audit')).json() as any;
+    expect(audit.events.map((e: any) => e.action)).toEqual(['configure', 'reserve', 'collect']);
+    expect((await (await f.request('/api/radar/audit', 'bob')).json() as any).events).toEqual([]);
+  });
+  it.each([['', 401], ['blocked', 403], ['revoked', 401]])('rejects credential %s before storage or fetching', async (token, status) => {
+    const f = await api(true);
+    expect((await f.request('/api/radar/collect', String(token), 'POST', { expectedRevision: 0, sourceIds: ['feed'] })).status).toBe(status);
+    expect(f.store.read).not.toHaveBeenCalled(); expect(f.http.get).not.toHaveBeenCalled();
+  });
+  it.each(['query', 'owner', 'duplicate', 'stale', 'other-owner', 'oversize'] as const)('rejects %s without acquisition', async kind => {
+    const f = await api(true); await f.configure();
+    const body: any = { expectedRevision: kind === 'stale' || kind === 'other-owner' ? 0 : 1, sourceIds: kind === 'duplicate' ? ['feed', 'feed'] : ['feed'] };
+    if (kind === 'owner') body.owner = 'alice'; if (kind === 'oversize') body.extra = 'x'.repeat(1100);
+    const res = await f.request('/api/radar/collect' + (kind === 'query' ? '?owner=alice' : ''), kind === 'other-owner' ? 'bob' : 'alice', 'POST', body);
+    expect(res.status).toBe(kind === 'stale' ? 409 : kind === 'other-owner' ? 404 : kind === 'oversize' ? 413 : 400);
+    expect(f.http.get).not.toHaveBeenCalled(); expect(f.store.rows.get(personalRadarOwner(context()))!.revision).toBe(1);
+  });
+  it('reauthenticates after I/O and does not expose or persist metadata after revocation', async () => {
+    const f = await api(true); await f.configure();
+    f.http.get.mockImplementation(async () => { f.verify.mockRejectedValue(new AccessError('UNAUTHENTICATED')); return xml(); });
+    const res = await f.request('/api/radar/collect', 'alice', 'POST', { expectedRevision: 1, sourceIds: ['feed'] });
+    expect(res.status).toBe(401); expect(await res.text()).not.toContain('Fixture game');
+    expect(f.store.rows.get(personalRadarOwner(context()))!.sources[0].records).toEqual([]);
+    expect(f.store.rows.get(personalRadarOwner(context()))!.acquisition!.starts).toHaveLength(1);
+  });
+  it('propagates a closed HTTP client to acquisition, retaining the charged attempt but not late content', async () => {
+    const f = await api(true); await f.configure(); const abort = new AbortController();
+    let entered!: () => void; let release!: (s: string) => void;
+    const started = new Promise<void>(r => { entered = r; });
+    f.http.get.mockImplementation(() => new Promise<string>(r => { release = r; entered(); }));
+    const request = fetch(f.url + '/api/radar/collect', { method: 'POST', signal: abort.signal,
+      headers: { Authorization: 'Bearer alice', 'Content-Type': 'application/json' }, body: JSON.stringify({ expectedRevision: 1, sourceIds: ['feed'] }) });
+    const rejected = expect(request).rejects.toThrow(); await started; abort.abort(); await rejected;
+    await vi.waitFor(() => expect(f.store.rows.get(personalRadarOwner(context()))!.audit.at(-1)?.action).toBe('collect_failed'));
+    release(xml()); await new Promise(resolve => setImmediate(resolve));
+    const row = f.store.rows.get(personalRadarOwner(context()))!;
+    expect(row.sources[0].records).toEqual([]); expect(row.acquisition!.starts).toHaveLength(1); expect(f.http.get).toHaveBeenCalledTimes(1);
+  });
+});
 describe('personal Radar HTTP boundary (isolated Express fixture only)', () => {
   it.each([['GET', '/api/radar/audit'], ['GET', '/api/radar/sources'], ['GET', '/api/radar/preview'], ['PUT', '/api/radar/sources/feed'], ['DELETE', '/api/radar/sources/feed']])
    ('rejects missing credentials: %s %s', async (method, path) => {

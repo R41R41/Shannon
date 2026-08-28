@@ -8,7 +8,7 @@ async function main() {
   const root = fs.realpathSync(path.join(__dirname, '..'));
   assert.equal(root, '/home/azureuser/Shannon-dev'); assert.deepEqual(process.argv.slice(2), ['--isolated-fixture']);
   assert(fs.existsSync(path.join(root, '.dev-runtime-lock')));
-  const out = '/home/azureuser/.codex-shannon-preservation/radar-ui-20260828'; fs.mkdirSync(out, { recursive: true, mode: 0o700 });
+  const out = '/home/azureuser/.codex-shannon-preservation/radar-controls-20260829'; fs.mkdirSync(out, { recursive: true, mode: 0o700 });
   const { build } = await import('vite');
   await build({ configFile: false, envDir: false, root: path.join(root, 'frontend/tests/fixtures/radar'),
     resolve: { alias: { '@styles': path.join(root, 'frontend/src/styles') } },
@@ -19,6 +19,7 @@ async function main() {
   const { registerRadarRoutes } = await load('routes/radarRoutes.js');
   const { PersonalRadarService } = await load('services/radar/personalRadar.js');
   const { parseFeed } = await load('services/radar/feedConnector.js');
+  const { RadarSessionRunner } = await load('services/radar/sessionRunner.js');
   const express = require('express'); const app = express();
   const rows = new Map();
   const store = { read: async owner => structuredClone(rows.get(owner) ?? null), compareAndSwap: async (owner, expected, next) => {
@@ -48,7 +49,14 @@ async function main() {
     res.setHeader('Content-Security-Policy', "default-src 'self'; connect-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; object-src 'none'; frame-ancestors 'none'"); next();
   });
   let requestCount = 0; app.use('/api/radar', (_req, _res, next) => { requestCount++; next(); });
-  registerRadarRoutes(app, access, radar);
+  let collectionCount = 0;
+  const connector = { read: async source => {
+    collectionCount++;
+    const title = seeds.find(seed => seed[0] === source.id)?.[1] ?? '明示的な架空取得';
+    const xml = `<feed><entry><id>${source.id}-explicit</id><title>${title}（手動取得fixture）</title><link href="https://example.org/${source.id}/manual"/><published>${new Date().toISOString()}</published></entry></feed>`;
+    return parseFeed(xml, source, Date.now());
+  } };
+  registerRadarRoutes(app, access, radar, new RadarSessionRunner(access, radar, connector));
   app.use(express.static(path.join(out, 'site'), { etag: false, lastModified: false, cacheControl: false }));
   const server = app.listen(13002, '127.0.0.1', () => {
     const info = { fixtureOnly: true, pid: process.pid, port: 13002, host: '127.0.0.1', firebase: false, applicationStarted: false,
@@ -57,7 +65,7 @@ async function main() {
   });
   server.on('error', () => { console.error('RADAR_UI_FIXTURE_LISTENER_FAILED'); process.exitCode = 1; });
   const stop = () => { server.closeAllConnections(); server.close(() => {
-    fs.writeFileSync(path.join(out, 'ui-fixture-stop.json'), JSON.stringify({ fixtureOnly: true, stopped: true, requestCount, normalDbWritten: false }));
+    fs.writeFileSync(path.join(out, 'ui-fixture-stop.json'), JSON.stringify({ fixtureOnly: true, stopped: true, requestCount, collectionCount, finalRevisions: [...rows.values()].map(row => row.revision), normalDbWritten: false }));
     console.log('RADAR_UI_FIXTURE_STOPPED'); process.exit(0);
   }); };
   process.once('SIGTERM', stop); process.once('SIGINT', stop);

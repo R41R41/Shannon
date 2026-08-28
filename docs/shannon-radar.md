@@ -381,3 +381,17 @@ nextPageTokenがあればpartial=trueを返し、ページを自動追跡しな�
 既存radarIngestion.test.tsを拡張。public JSONのDNS/HTTP/型/サイズ境界、地域/単位/日跨ぎ/null、Calendar権限の前後検査・本人/版/広過ぎるscope拒否、終日/時差/夏時間終了時刻/重複/ページ残り・不必要な情報除去、タイムアウト/取消を架空データで検証する。DB schema/repository/通常DBに変更はなく、今回のためのMongoプロセスも起動しない。全backendの通常型検査は未完で、対象通常型検査とnoCheck変換を区別する。証跡保全先は `radar-temporal-20260829`。
 
 次の接続では、既存owner aggregateを明示的なschema versionとdiscriminated source/recordで拡張し、公開feed metadataと非公開予定を分けながら、取得回数/lease・期待版・監査を同じowner CASで保持する案を検証する。新しいDB/別の無制限予算へ逃がさない。旧版の読み書き・撤回・purge・rollbackを含む互換試験が必要。本人画面の地域/同意/Calendar連携UI、brokerとtoken保管/撤回、表示期限/監査、明示取得APIはこの後に実装する。実source/地域/Calendar scope/費用/認証の条件を満たすまで、server/schedulerへ登録せず起動ロックを維持する。
+
+## 16. RAD-1G：本人の明示取得と操作履歴（2026-08-29、dev限定）
+
+既存YouTube/Web feedについて、本人画面から最大3ソースを選び、取得回数の消費・中断/失敗時の非返却・部分保存を確認して実行する操作を追加。保存内容の再読み込みと外部取得を分離する。選択は初期空、確認を取り消しても取得しない。無人worker、polling、通知、投稿、weather/calendar取得は開始しない。
+
+`registerRadarRoutes`は明示的な`RadarSessionRunner`注入時だけPOST `/api/radar/collect`を登録し、sources応答のcollectionAvailableで有無を伝える。runnerなしは従来通り404、値なしの旧sources応答ではUIを無効にする。main server/bootstrapへの登録は引き続き行っていない。profile権限の本人をHTTP境界とrunner内部で再認証し、owner指定query/未知body/古い期待版を拒否する。各取得は既存CAS予約/lease/回数制限/監査を通し、最後に再認証・catalog版を照合する。HTTP切断をAbortSignalへ伝播し、切断済みresponseに書き込まない。取り消しは遅延結果の保存を抑止するが、取消前の確定分を巻き戻さず、予約済み回数を返さない。
+
+UIは取得前に設定・候補・監査・未保存draftを消し、二重操作を抑止する。成功応答では選択順のcompletedSourceIdsと期待版+2×ソース数を検査してから、sources→preview→auditを読み戻す。3ビューの版が不一致なら表示しない。取得失敗や応答不明時には自動再試行しない。中断後は結果不明と表示し、手動の読み戻しを案内する。ログアウト・タブ離脱・session交替で中断し、古い応答を復活させない。全ownerの即時撤回や確定済み結果の取消ではない。
+
+操作履歴は本人の直近64件・7日以内の連続する末尾を表示し、省略版と不完全性を明示する。取得予約/完了/停止、設定/削除/期限切れ整理、件数だけを表示し、token/owner hash/生provider応答を表示しない。監査DTOの版・時刻・保持期限・件数・actionを検査し、previewとaudit双方の有効期限から最大60秒をさらに制限する。表示の期限切れは物理削除を起動しない。
+
+既存radarPersonal/radarテストを拡張し、HTTP認証・本人分離・CAS/過大body・切断、DTO/receipt・二重操作・取消・遅延応答・監査失効をモックで検証。UI fixtureはloopback13002・架空AccessServiceとin-memory catalog・parseFeed fixtureだけを使い、停止証跡を`radar-controls-20260829`へ保存する。実Firebase・通常DB・実connector/認証・本体・scheduler・Discordには接続しない。通常型検査は対象境界のみで、全backendはnoCheck変換として区別する。
+
+次はweather/calendarをowner aggregateへ組み込むschema/version移行・期限/予算/CAS/監査の互換試験と本人設定/Calendar broker。さらに承認付きDiscord outbox/配信直前認可、全ownerのexpiry purge/監査拡充が残る。実統合は認証/専用Bot/実ソース/費用条件を確認して別工程で行う。prodは読み取りのみ、dev起動ロックを維持する。

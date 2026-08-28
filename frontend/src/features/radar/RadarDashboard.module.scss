@@ -57,3 +57,6 @@
 .confirm p { margin-bottom: 12px; }.confirm button + button { margin-left: 10px; }
 .footer { color: var(--muted); font-size: 11px; margin-top: 40px; padding-top: 18px; border-top: 1px solid var(--line); }
 @media (max-width: 800px) { .page { padding: 24px 18px; }.cards { grid-template-columns: 1fr; }.header h1 { font-size: 38px; }.header nav { align-items: flex-end; flex-direction: column; gap: 8px; }.intro { align-items: flex-start; flex-direction: column; gap: 14px; }.fields { grid-template-columns: 1fr; }.sourceList li { align-items: flex-start; flex-direction: column; }.sectionHeading { align-items: flex-start; }.sectionHeading > button { flex-shrink: 0; }.editor { padding: 18px; } }
+
+.pickSource { display: inline-flex; align-items: center; gap: .5rem; margin: .6rem 1rem .6rem 0; overflow-wrap: anywhere; }
+.auditList { padding-left: 1.25rem; li { margin: .8rem 0; overflow-wrap: anywhere; } span { font-size: .85rem; opacity: .8; } }

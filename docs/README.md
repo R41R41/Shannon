@@ -65,3 +65,5 @@
 - RAD-1E：本人限定の単発取得・期限付き監査、無人workerの委譲境界は[Shannon Radar 14節](shannon-radar.md#14-rad-1e--本人限定の単発実行監査保持)。dev部品のみ、実接続・server登録なし。
 
 - RAD-1F：天気/Calendarの専用read adapterと公開feedからの分離は[Shannon Radar 15節](shannon-radar.md#15-rad-1f--天気calendarの専用read-adapter)。broker/予算/catalog/UIは未接続、架空fixtureのみで検証する。
+
+- Radar本人取得/監査表示（RAD-1G、dev限定・main未登録）：[設計16節](shannon-radar.md#16-rad-1g本人の明示取得と操作履歴2026-08-29dev限定)。

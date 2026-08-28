@@ -1,8 +1,8 @@
 import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { renderToString } from 'react-dom/server';
-import { createRadarClient, decodeSources, decodePreview, safeRadarLink, sourceInput, RadarClientError,
-  type SourcesSnapshot, type PreviewSnapshot } from '../src/features/radar/radarClient';
+import { createRadarClient, decodeSources, decodePreview, decodeAudit, safeRadarLink, sourceInput, RadarClientError,
+  type SourcesSnapshot, type PreviewSnapshot, type AuditSnapshot } from '../src/features/radar/radarClient';
 import { RadarController } from '../src/features/radar/radarController';
 import { RadarDashboard } from '../src/features/radar/RadarDashboard';
 import { SourceEditor } from '../src/features/radar/SourceEditor';
@@ -10,15 +10,17 @@ import { SourceEditor } from '../src/features/radar/SourceEditor';
 const now = 1800000000000;
 const input = { enabled: true, consentExpiresAt: now + 86400000, kind: 'web' as const, locator: 'https://example.org/feed',
   articleHosts: ['example.org'], topicIds: ['science'], maxItems: 10, retentionMs: 86400000 };
-const rawSources = () => ({ revision: 4, sources: [{ id: 'science', source: { ...input, id: 'science', revision: 2,
+const rawSources = () => ({ revision: 4, collectionAvailable: true, sources: [{ id: 'science', source: { ...input, id: 'science', revision: 2,
   audience: { kind: 'personal', subjectId: 'private-owner' }, irrelevant: 'secret' } }], audit: [{ private: 'secret' }] });
 const rawPreview = () => ({ revision: 4, notify: false as const, servedAt: now, validUntil: now + 120000,
   items: [{ contentId: 'c1', sourceId: 'science', sourceRevision: 2, score: 0.6, matchedTopicIds: ['science'], card: {
     title: 'Fixture science <script>alert(1)</script>', fact: '登録ソースの掲載情報です。', sourceUrl: 'https://example.org/article', metadata: ['2026-08-28'], tags: ['science'],
     mentions: 'none' as const, notify: false as const, thread: 'none' as const } }] });
+const rawAudit = (revision = 4) => ({ revision, omittedThroughRevision: revision, completeFromRevisionOne: revision === 0, retentionMs: 604800000, capacity: 64, servedAt: now, validUntil: now + 60000, events: [] });
 function fixture() {
   vi.useFakeTimers(); let time = 0; let current = true;
   const api = { sources: vi.fn(async () => decodeSources(rawSources())), preview: vi.fn(async () => decodePreview(rawPreview())),
+    audit: vi.fn(async () => decodeAudit(rawAudit())), collect: vi.fn(async () => ({ revision: 6 })),
     save: vi.fn(async () => ({ revision: 5 })), revoke: vi.fn(async () => ({ revision: 5 })) };
   const controller = new RadarController(api, () => current, () => time); controller.activate();
   return { api, controller, moveClock: (ms: number) => { time += ms; }, invalidate: () => { current = false; } };
@@ -58,7 +60,7 @@ describe('Radar DTO and transport boundary', () => {
     if (kind === 'score') raw.items[0].score = NaN;
     expect(() => decodePreview(raw)).toThrow(RadarClientError);
   });
-  it('uses only fixed same-origin endpoints and exact CAS input, with no fetch/post endpoint', async () => {
+  it('uses only fixed same-origin endpoints and exact CAS input, without a publication endpoint', async () => {
     const fetcher = vi.fn(async () => new Response(JSON.stringify({ revision: 5 })));
     const client = createRadarClient(fetcher); const signal = new AbortController().signal;
     await client.save('science', 4, input, signal);
@@ -79,7 +81,7 @@ describe('Radar DTO and transport boundary', () => {
 });
 
 describe('session-owned Radar controller', () => {
-  it('performs two explicit reads, exposes consistent snapshots and does not poll', async () => {
+  it('performs three explicit reads, exposes consistent snapshots and does not poll', async () => {
     const f = fixture(); await f.controller.load(); expect(f.controller.getSnapshot().status).toBe('ready');
     expect(f.controller.isReadable()).toBe(true); const state = f.controller.getSnapshot(); expect(f.controller.getSnapshot()).toBe(state);
     await vi.advanceTimersByTimeAsync(60001); expect(f.controller.getSnapshot().data).toBeNull();
@@ -135,6 +137,7 @@ describe('session-owned Radar controller', () => {
     await f.controller.save('science', input); await f.controller.load(); expect(f.api.save).toHaveBeenCalledTimes(1);
     f.api.sources.mockResolvedValue({ ...decodeSources(rawSources()), revision: 5 });
     f.api.preview.mockResolvedValue({ ...decodePreview(rawPreview()), revision: 5, items: [] });
+    f.api.audit.mockResolvedValue(decodeAudit(rawAudit(5)));
     saved({ revision: 5 }); await pending; expect(f.api.sources).toHaveBeenCalledTimes(2); expect(f.api.save.mock.calls[0][1]).toBe(4);
     expect(f.controller.getSnapshot().data?.preview.items).toEqual([]);
   });
@@ -168,5 +171,96 @@ describe('Radar presentation', () => {
   it('starts a new source without consent selected and explains non-activation', () => {
     const html = renderToString(<SourceEditor onSave={() => {}} onClose={() => {}} />);
     expect(html).not.toContain('checked=""'); expect(html).toContain('この操作で情報取得や通知は始まりません'); expect(html).toContain('type="datetime-local"');
+  });
+});
+
+describe('explicit collection and private audit boundary', () => {
+  const withEvent = () => ({ ...rawAudit(), omittedThroughRevision: 3, events: [{ revision: 4, at: now - 1000, sourceId: 'science', action: 'collect', added: 1, updated: 0, unchanged: 0 }] });
+  it('decodes a bounded contiguous audit tail, dropping unknown/private fields', () => {
+    const raw = { ...withEvent(), owner: 'secret', events: [{ ...withEvent().events[0], raw: 'secret' }] };
+    expect(JSON.stringify(decodeAudit(raw))).not.toContain('secret'); expect(decodeAudit(raw).events).toHaveLength(1);
+  });
+  it.each(['gap', 'future', 'expired', 'coverage', 'capacity', 'long-deadline', 'expiry-deadline', 'negative', 'action', 'order'] as const)('rejects unsafe audit %s', kind => {
+    const raw: any = withEvent();
+    if (kind === 'gap') raw.events[0].revision = 2;
+    if (kind === 'future') raw.events[0].at = now + 1;
+    if (kind === 'expired') raw.events[0].at = now - raw.retentionMs;
+    if (kind === 'coverage') raw.completeFromRevisionOne = true;
+    if (kind === 'capacity') raw.capacity = 65;
+    if (kind === 'long-deadline') raw.validUntil = now + 60001;
+    if (kind === 'expiry-deadline') raw.events[0].at = now - raw.retentionMs + 500;
+    if (kind === 'negative') raw.events[0].added = -1;
+    if (kind === 'action') raw.events[0].action = 'publish';
+    if (kind === 'order') { raw.omittedThroughRevision = 2; raw.events.unshift({ ...raw.events[0], revision: 3, at: now }); }
+    expect(() => decodeAudit(raw)).toThrow(RadarClientError);
+  });
+  it('treats absent collection capability as disabled and rejects non-boolean capability', () => {
+    const raw: any = rawSources(); delete raw.collectionAvailable; expect(decodeSources(raw).collectionAvailable).toBe(false);
+    raw.collectionAvailable = 'true'; expect(() => decodeSources(raw)).toThrow();
+  });
+  it('posts an exact copied selection once and validates the receipt before readback', async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({ revision: 8, completedSourceIds: ['science', 'games'] })));
+    const client = createRadarClient(fetcher); const signal = new AbortController().signal;
+    expect(await client.collect(['science', 'games'], 4, signal)).toEqual({ revision: 8 });
+    const [path, options] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
+    expect(path).toBe('/api/radar/collect'); expect(options).toMatchObject({ method: 'POST', cache: 'no-store', credentials: 'omit', signal });
+    expect(JSON.parse(String(options.body))).toEqual({ expectedRevision: 4, sourceIds: ['science', 'games'] });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+  it.each([[], ['science', 'science'], ['../private'], ['a', 'b', 'c', 'd']].map(ids => [ids]))('refuses invalid selection %j before network', async ids => {
+    const fetcher = vi.fn(); await expect(createRadarClient(fetcher).collect(ids, 4, new AbortController().signal)).rejects.toThrow(); expect(fetcher).not.toHaveBeenCalled();
+  });
+  it.each([{ revision: 5, completedSourceIds: ['science'] }, { revision: 6, completedSourceIds: ['other'] }, { revision: 6 }, { revision: 6, completedSourceIds: ['science', 'other'] }])('rejects a mismatched receipt %j without retry', async receipt => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify(receipt)));
+    await expect(createRadarClient(fetcher).collect(['science'], 4, new AbortController().signal)).rejects.toThrow(); expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+  it('erases before collection, suppresses duplicate operations, then rereads all three views', async () => {
+    const f = fixture(); await f.controller.load(); let release!: (v: { revision: number }) => void;
+    f.api.collect.mockImplementationOnce(() => new Promise(r => { release = r; }));
+    const ids = ['science']; const pending = f.controller.collect(ids); ids.push('other');
+    expect(f.controller.getSnapshot()).toMatchObject({ status: 'collecting', data: null });
+    await f.controller.collect(['science']); await f.controller.save('science', input); await f.controller.load();
+    expect(f.api.collect).toHaveBeenCalledTimes(1); expect(f.api.save).not.toHaveBeenCalled();
+    expect(f.api.collect.mock.calls[0]).toEqual([['science'], 4, expect.any(AbortSignal)]);
+    f.api.sources.mockResolvedValue({ ...decodeSources(rawSources()), revision: 6 });
+    f.api.preview.mockResolvedValue({ ...decodePreview(rawPreview()), revision: 6 }); f.api.audit.mockResolvedValue(decodeAudit(rawAudit(6)));
+    release({ revision: 6 }); await pending; expect(f.controller.getSnapshot().status).toBe('ready');
+    for (const read of [f.api.sources, f.api.preview, f.api.audit]) expect(read).toHaveBeenCalledTimes(2);
+  });
+  it.each(['unavailable', 'disabled', 'expired', 'missing', 'duplicate'] as const)('does not collect %s selection', async kind => {
+    const f = fixture(); const sources = decodeSources(rawSources());
+    if (kind === 'unavailable') sources.collectionAvailable = false;
+    if (kind === 'disabled') sources.sources[0].source!.enabled = false;
+    if (kind === 'expired') sources.sources[0].source!.consentExpiresAt = now;
+    f.api.sources.mockResolvedValue(sources); f.api.preview.mockResolvedValue({ ...decodePreview(rawPreview()), items: [] });
+    await f.controller.load(); await f.controller.collect(kind === 'missing' ? ['other'] : kind === 'duplicate' ? ['science', 'science'] : ['science']);
+    expect(f.api.collect).not.toHaveBeenCalled();
+  });
+  it.each(['cancel', 'logout', 'hidden', 'new-session'] as const)('discards late collection receipt after %s', async kind => {
+    const f = fixture(); await f.controller.load(); let release!: (v: { revision: number }) => void;
+    f.api.collect.mockImplementationOnce(() => new Promise(r => { release = r; })); const pending = f.controller.collect(['science']);
+    if (kind === 'cancel') f.controller.cancelCollection(); else if (kind === 'logout') f.controller.stop(); else if (kind === 'hidden') f.controller.visibility(false); else f.invalidate();
+    release({ revision: 6 }); await pending; expect(f.controller.getSnapshot().data).toBeNull(); expect(f.api.sources).toHaveBeenCalledTimes(1);
+    if (kind === 'cancel') expect(f.controller.getSnapshot().error).toBe('uncertain');
+    if (kind !== 'new-session') expect((f.api.collect.mock.calls[0] as any)[2].aborted).toBe(true);
+  });
+  it('leaves partial/unknown failure empty without automatic repetition or readback', async () => {
+    const f = fixture(); await f.controller.load(); f.api.collect.mockRejectedValueOnce(new RadarClientError('unavailable'));
+    await f.controller.collect(['science']); await vi.advanceTimersByTimeAsync(120000);
+    expect(f.controller.getSnapshot()).toMatchObject({ status: 'error', error: 'uncertain', data: null });
+    expect(f.api.collect).toHaveBeenCalledTimes(1); expect(f.api.sources).toHaveBeenCalledTimes(1);
+  });
+  it('rejects mismatched audit revision and uses the shorter audit expiry', async () => {
+    const f = fixture(); f.api.audit.mockResolvedValue(decodeAudit(rawAudit(3))); await f.controller.load();
+    expect(f.controller.getSnapshot().error).toBe('conflict');
+    f.api.audit.mockResolvedValue(decodeAudit({ ...rawAudit(), validUntil: now + 400 })); await f.controller.load();
+    await vi.advanceTimersByTimeAsync(400); expect(f.controller.getSnapshot().data).toBeNull();
+  });
+  it('renders finite audit history and unavailable collection without exposing owner or attempt IDs', async () => {
+    const f = fixture(); f.api.sources.mockResolvedValue({ ...decodeSources(rawSources()), collectionAvailable: false });
+    f.api.audit.mockResolvedValue(decodeAudit({ ...withEvent(), events: [{ ...withEvent().events[0], attemptId: 'hidden-attempt' }] }));
+    await f.controller.load(); const html = renderToString(<RadarDashboard controller={f.controller} onLogout={() => {}} />);
+    expect(html).toContain('取得機能はまだ接続されていません'); expect(html.replace(/<!-- -->/g, '')).toContain('最近の操作履歴（1件）');
+    expect(html).toContain('完全な監査ではありません'); expect(html).not.toContain('hidden-attempt');
   });
 });
