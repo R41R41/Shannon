@@ -7,6 +7,8 @@
  */
 
 import { deriveMemoryScope, memoryScopeFilter, canReadMemory } from '../../../modules/memory/index.js';
+import { createRequestPersonMemory } from '../requestPersonMemory.js';
+import type { PersonStatement } from '../../../modules/memory/personMemory.js';
 import { ShannonMemory, IShannonMemory } from '../../../models/ShannonMemory.js';
 import { EmbeddingService } from '../embeddingService.js';
 import { PersonMemoryService } from '../personMemoryService.js';
@@ -68,6 +70,10 @@ export class RecallEngine {
   async recallPerson(envelope: RequestEnvelope): Promise<IPersonMemory | null> {
     // Legacy PersonMemory combines DM/public/other-channel exchanges. Quarantine until scoped migration.
     return null;
+  }
+
+  async recallPersonStatements(envelope: RequestEnvelope): Promise<PersonStatement[]> {
+    return createRequestPersonMemory(envelope).recall(5);
   }
 
   // ========== Semantic search ==========

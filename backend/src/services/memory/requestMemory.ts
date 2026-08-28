@@ -1,6 +1,8 @@
 import type { RequestEnvelope } from '@shannon/common';
 import { deriveMemoryScope, hasMemoryScope, MEMORY_SCOPE_REQUIRED, type MemoryPort, type MemoryDraft, type RecallCategory } from '../../modules/memory/index.js';
 import { ShannonMemoryService } from './shannonMemoryService.js';
+import { createRequestPersonMemory } from './requestPersonMemory.js';
+import type { PersonMemoryPort } from '../../modules/memory/personMemory.js';
 
 /** Snapshot scope at construction; never accept owner/audience from an LLM tool argument. No I/O in construction. */
 export function createRequestMemory(envelope?: RequestEnvelope): MemoryPort {
@@ -21,9 +23,12 @@ export function createRequestMemory(envelope?: RequestEnvelope): MemoryPort {
 
 export function bindRequestMemory(tools: readonly unknown[], envelope?: RequestEnvelope): void {
   const port = createRequestMemory(envelope);
+  const personPort = createRequestPersonMemory(envelope);
   for (const tool of tools) {
     const candidate = tool as { setMemoryPort?: (port: MemoryPort) => void };
     if (typeof candidate.setMemoryPort === 'function') candidate.setMemoryPort(port);
+    const personCandidate = tool as { setPersonMemoryPort?: (port: PersonMemoryPort) => void };
+    if (typeof personCandidate.setPersonMemoryPort === 'function') personCandidate.setPersonMemoryPort(personPort);
   }
 }
 

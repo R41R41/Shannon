@@ -1,5 +1,9 @@
 # AGENTS.md
 
+## RF-03第5段階（2026-08-28）の注意
+
+`docs/refactor-person-memory.md`を参照。新しい人物記憶はDiscordテキストの現在の本人＋会話scope＋原文出典のみ。旧PersonMemory・名前統合・関係性推測は復活させない。新collectionはscopedpersonstatements、1 message 1引用、既存_id一意性で重複を防ぐ。編集/忘却は内部portのみで自動実行しない。忘却はこの記録の本文/source削除と同じ出典の再登録防止に限り、全履歴/派生/旧queueの撤回ではない。VM dev371テストと一時mongodでの架空fixture検証を実施。一時mongod停止済み、通常dev/prod DB・env/Botは未変更。ライブロック維持、本番未反映。
+
 ## RF-03第4段階（2026-08-28）の注意
 
 `docs/refactor-minecraft-memory-identity.md`を参照。固定server/world IDの設定・接続所有・runtime/adapter配線を実装したが、実対応付けは未設定。world再生成時はworldIdを変える。表示名/endpointをIDの代用にせず、未設定の長期記憶停止を維持する。Mod/Discord音声は記憶停止・game-chat履歴への混入禁止。旧人物記憶の復旧・全宛先/履歴/WorldKnowledge分離は未完。dev限定のメタデータ監査は各0件で、旧本番データの分類成功とは扱わない。env/DB/Bot変更・ライブ起動・push・prod反映は行っていない。

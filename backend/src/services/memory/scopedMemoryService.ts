@@ -1,4 +1,5 @@
 import { snapshotMemoryEnvelope } from './requestMemory.js';
+import { formatPersonStatements, type PersonStatement } from '../../modules/memory/personMemory.js';
 /**
  * ScopedMemoryService
  *
@@ -57,6 +58,7 @@ export interface ScopedRecallQuery {
 }
 
 export interface ScopedRecallResult {
+  personStatements: PersonStatement[];
   person: IPersonMemory | null;
   memories: IShannonMemory[];
   userProfile: UserProfileSnapshot | null;
@@ -142,6 +144,7 @@ export class ScopedMemoryService {
       const formattedPrompt = [strategyPrompt, worldModelPrompt].filter(Boolean).join('\n\n');
       return {
         person: null,
+        personStatements: [],
         memories: [],
         userProfile: null,
         relationshipModel: null,
@@ -160,6 +163,8 @@ export class ScopedMemoryService {
 
     // 1. Recall person
     const person = await this.recallEngine.recallPerson(envelope);
+    const personStatements = await this.recallEngine.recallPersonStatements(envelope).catch(() => []);
+    const personPrompt = formatPersonStatements(personStatements);
     const userProfile = this.recallEngine.toUserProfile(person);
     const relationshipModel = this.recallEngine.toRelationshipModel(person, userId);
     const [
@@ -182,6 +187,7 @@ export class ScopedMemoryService {
 
     if (!text) {
       const formattedPrompt = [
+        personPrompt,
         relationshipPrompt,
         selfModelPrompt,
         strategyPrompt,
@@ -190,6 +196,7 @@ export class ScopedMemoryService {
       ].filter(Boolean).join('\n\n');
       return {
         person,
+        personStatements,
         memories: [],
         userProfile,
         relationshipModel,
@@ -230,10 +237,11 @@ export class ScopedMemoryService {
     const ranked = this.recallEngine.rank(filtered, userId, channel, envelope);
 
     // 7. Format
-    const formattedPrompt = this.formatter.formatForPrompt(ranked);
+    const formattedPrompt = [personPrompt, this.formatter.formatForPrompt(ranked)].filter(Boolean).join('\n\n');
 
     return {
       person,
+      personStatements,
       memories: ranked,
       userProfile,
       relationshipModel,

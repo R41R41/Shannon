@@ -24,6 +24,7 @@ export const MUTABLE_PATH_DENY_SUBSTRINGS = [
     'src/models/ShannonMemory.ts',
     'src/models/MemoryWriteEvent.ts',
     'src/models/PersonMemory.ts',
+    'src/models/ScopedPersonStatement.ts',
     'src/services/llm/graph/cognitive/MemoryAgent.ts',
     'src/services/llm/graph/cognitive/TaskEpisodeMemory.ts',
     'src/services/llm/graph/nodes/MemoryNode.ts',

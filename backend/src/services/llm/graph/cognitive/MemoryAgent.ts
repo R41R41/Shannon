@@ -3,6 +3,8 @@ import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import { config } from '../../../../config/env.js';
 import { logger } from '../../../../utils/logger.js';
 import { createRequestMemory } from '../../../memory/requestMemory.js';
+import { createRequestPersonMemory } from '../../../memory/requestPersonMemory.js';
+import { formatPersonStatements, type PersonMemoryPort } from '../../../../modules/memory/personMemory.js';
 import type { MemoryPort, MemorySaveResult } from '../../../../modules/memory/index.js';
 import { createTracedModel } from '../../utils/langfuse.js';
 import { CognitiveBlackboard } from './CognitiveBlackboard.js';
@@ -57,6 +59,7 @@ export class MemoryAgent {
     private blackboard: CognitiveBlackboard;
     private envelope: RequestEnvelope;
     private memory: MemoryPort;
+    private personMemory: PersonMemoryPort;
     private model: ChatOpenAI;
     private stopped = false;
     private lastCheckedIteration = 0;
@@ -65,6 +68,7 @@ export class MemoryAgent {
         this.blackboard = blackboard;
         this.envelope = envelope;
         this.memory = createRequestMemory(envelope);
+        this.personMemory = createRequestPersonMemory(envelope);
         this.model = createTracedModel({
             modelName: 'gpt-4.1-mini',
             apiKey: config.openaiApiKey,
@@ -81,12 +85,15 @@ export class MemoryAgent {
         try {
             const parts: string[] = [];
 
-            // Unscoped person histories are quarantined.
+            // Only source-attributed statements in this author's current audience. Legacy histories stay quarantined.
             // 目標に関連する記憶を検索
-            const [experiences, knowledge] = await Promise.all([
+            const [experiences, knowledge, personStatements] = await Promise.all([
                 this.memory.search('experience', goal, 3).catch(() => []),
                 this.memory.search('knowledge', goal, 3).catch(() => []),
+                this.personMemory.recall(3).catch(() => []),
             ]);
+            const personPrompt = formatPersonStatements(personStatements);
+            if (personPrompt) parts.push(personPrompt);
 
             if (experiences.length > 0) {
                 parts.push('【関連する体験】\n' + experiences.map(e => `- ${e.content}`).join('\n'));
@@ -115,14 +122,16 @@ export class MemoryAgent {
     async query(question: string, context?: QueryContext): Promise<string> {
         try {
             // DB 検索
-            const [experiences, knowledge] = await Promise.all([
+            const [experiences, knowledge, personStatements] = await Promise.all([
                 this.memory.search('experience', question, 5).catch(() => []),
                 this.memory.search('knowledge', question, 5).catch(() => []),
+                this.personMemory.recall(5).catch(() => []),
             ]);
 
             const allResults = [
                 ...experiences.map(e => `[体験] ${e.content}`),
                 ...knowledge.map(k => `[知識] ${k.content}`),
+                ...(personStatements.length ? [formatPersonStatements(personStatements)] : []),
             ];
 
             if (allResults.length === 0) {

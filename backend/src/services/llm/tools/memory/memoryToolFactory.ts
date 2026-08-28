@@ -7,6 +7,7 @@ import RecallKnowledgeTool from './recallKnowledge.js';
 import RecallPersonTool from './recallPerson.js';
 import RecallMemoryTool from './recallMemory.js';
 import SaveMemoryTool from './saveMemory.js';
+import SavePersonMemoryTool from './savePersonMemory.js';
 
 /**
  * 記憶ツールを作成するファクトリ関数
@@ -24,6 +25,7 @@ export function createMemoryTools(
     // v2 統合ツール (MemoryAgent 連携)
     new RecallMemoryTool(),
     new SaveMemoryTool(),
+    new SavePersonMemoryTool(),
     // 旧ツール (後方互換、将来廃止予定)
     new SaveExperienceTool(),
     new SaveKnowledgeTool(),

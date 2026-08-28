@@ -46,6 +46,8 @@
 
 ## 2026-08-28の責務分離
 
+- [本人・会話・出典に限定した人物記憶](refactor-person-memory.md)：RF-03第5段階。新しいperson port/repository、原文引用、重複/版/忘却、旧データを移行しない復旧基盤。
+
 - [Minecraft固定ID・旧記憶の読み取り監査](refactor-minecraft-memory-identity.md)：RF-03第4段階。接続所有・履歴/キュー境界、非ゲーム入力の記憶停止と人物復旧の前提。
 
 - [FCAの実行状態・ツール参照の分離](refactor-execution-sessions.md)：RF-03第2段階。会話混線の再現・修正と、記憶検索/配信先に残る課題。

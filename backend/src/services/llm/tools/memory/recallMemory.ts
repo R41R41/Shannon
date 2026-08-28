@@ -2,6 +2,7 @@ import { StructuredTool } from '@langchain/core/tools';
 import { z } from 'zod';
 import { MEMORY_SCOPE_REQUIRED, type MemoryPort } from '../../../../modules/memory/index.js';
 import type { MemoryAgent } from '../../graph/cognitive/MemoryAgent.js';
+import { formatPersonStatements, type PersonMemoryPort } from '../../../../modules/memory/personMemory.js';
 
 /**
  * recall-memory ツール
@@ -21,6 +22,8 @@ export default class RecallMemoryTool extends StructuredTool {
 
     private memoryAgent: MemoryAgent | null = null;
     private memoryPort?: MemoryPort;
+    private personMemoryPort?: PersonMemoryPort;
+    setPersonMemoryPort(port: PersonMemoryPort): void { this.personMemoryPort = port; }
     setMemoryPort(port: MemoryPort): void { this.memoryPort = port; }
 
     /** ParallelExecutor から MemoryAgent を注入する */
@@ -33,7 +36,9 @@ export default class RecallMemoryTool extends StructuredTool {
             if (!this.memoryPort) return '記憶システムが初期化されていません。';
             const rows = (await Promise.all(['experience', 'knowledge'].map(category =>
                 this.memoryPort!.search(category as 'experience' | 'knowledge', data.question, 5)))).flat();
-            return rows.length ? rows.map(row => row.content).join('\n') : 'この会話で参照できる記憶はありません。';
+            const personRows = await this.personMemoryPort?.recall(5).catch(() => []) ?? [];
+            const result = [formatPersonStatements(personRows), ...rows.map(row => row.content)].filter(Boolean).join('\n');
+            return result || 'この会話で参照できる記憶はありません。';
         }
         return this.memoryAgent.query(data.question);
     }

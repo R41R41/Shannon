@@ -38,6 +38,7 @@ vi.mock('../../src/models/ShannonMemory.js', async () => {
   } };
 });
 vi.mock('../../src/models/MemoryWriteEvent.js', () => ({ MemoryWriteEvent: { create: db.eventCreate, findOneAndUpdate: db.eventClaim, updateOne: db.eventUpdate } }));
+vi.mock('../../src/models/ScopedPersonStatement.js', () => ({ ScopedPersonStatement: { find: () => ({ sort: () => ({ limit: () => ({ lean: async () => [] }) }) }) } }));
 vi.mock('openai', () => ({ default: class { embeddings = { create: db.embedding }; } }));
 vi.mock('@langchain/openai', () => ({ ChatOpenAI: class { invoke = db.model; } }));
 vi.mock('../../src/services/llm/utils/langfuse.js', () => ({ createTracedModel: () => ({ invoke: db.model }) }));
@@ -246,7 +247,7 @@ describe('request tool and episode integration', () => {
     expect(await tool(a, 'recall-experience').invoke({ query: 'iron_ingot' })).toContain('mine');
     expect(await tool(b, 'recall-experience').invoke({ query: 'iron_ingot' })).not.toContain('mine');
     expect(await tool(catalog.createTools(), 'save-memory').invoke({ content: 'no scope' })).toContain('初期化');
-    expect(await tool(a, 'recall-person').invoke({ name: 'same-name' })).toContain('停止');
+    expect(await tool(a, 'recall-person').invoke({ name: 'same-name' })).toContain('人物名では検索できません');
   });
   it('initial MemoryAgent recall uses the same scope and does not look up a same-named person', async () => {
     db.rows = [row(envelope('999', '999'), 'foreign'), row(envelope(), 'iron_ingot')];

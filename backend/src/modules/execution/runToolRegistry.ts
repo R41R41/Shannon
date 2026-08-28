@@ -1,6 +1,6 @@
 export interface NamedTool { readonly name: string }
 type RunScopedTool<T> = T & { createForRun?: () => T };
-const CONTEXT_SETTERS = ['setContext', 'setMemoryAgent', 'setMemoryPort', 'setBlackboard', 'setBot'] as const;
+const CONTEXT_SETTERS = ['setContext', 'setMemoryAgent', 'setMemoryPort', 'setPersonMemoryPort', 'setBlackboard', 'setBot'] as const;
 
 /** Catalog of reusable definitions. Context-bearing tools must explicitly create fresh instances. */
 export class RunToolRegistry<T extends NamedTool> {
