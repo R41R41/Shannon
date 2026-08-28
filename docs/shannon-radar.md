@@ -395,3 +395,33 @@ UIは取得前に設定・候補・監査・未保存draftを消し、二重操�
 既存radarPersonal/radarテストを拡張し、HTTP認証・本人分離・CAS/過大body・切断、DTO/receipt・二重操作・取消・遅延応答・監査失効をモックで検証。UI fixtureはloopback13002・架空AccessServiceとin-memory catalog・parseFeed fixtureだけを使い、停止証跡を`radar-controls-20260829`へ保存する。実Firebase・通常DB・実connector/認証・本体・scheduler・Discordには接続しない。通常型検査は対象境界のみで、全backendはnoCheck変換として区別する。
 
 次はweather/calendarをowner aggregateへ組み込むschema/version移行・期限/予算/CAS/監査の互換試験と本人設定/Calendar broker。さらに承認付きDiscord outbox/配信直前認可、全ownerのexpiry purge/監査拡充が残る。実統合は認証/専用Bot/実ソース/費用条件を確認して別工程で行う。prodは読み取りのみ、dev起動ロックを維持する。
+
+## 17. RAD-1H：版付きcatalogと天気・予定の本人限定保存（2026-08-29、dev限定）
+
+### 責務とデータの境界
+
+`OwnerRadarCatalog`へ本人文書の読取り・再認証・期待版CAS・直近監査を、`ReservedRadarAcquisition`へ取得前の回数予約・lease・中断/失敗処理を集約した。既存`PersonalRadarService`は公開feed設定/metadata/digestを担当し、新しい`PersonalTemporalRadar`が天気/予定の設定・取得・期限付きpreviewを担当する。同一owner文書・同一policy/starts/leaseを使い、種類を増やして取得回数の上限を迂回できない。設定IDと上限（設定10、墓標込み32）も共通。通知予算・provider全体の費用予算とは別である。
+
+保存形式v2は既存sourcesを維持し、別のtemporalSources配列を追加する。後者はsourceと最新のowner-only snapshot、短命のgrant照合値だけ。公開FeedRecord・推薦候補・会話記憶・Discordカードへ変換しない。snapshotのowner/source/版・日時/期限・項目数/種類・不要field・出典を保存/読取り時に検証する。天気3日、Calendar最大20件・1〜7日という取得範囲は既存adapterが検査する。Calendarの元ID・アカウント・tokenは保存しない。grant stampはbinding/account/source/scopeのhashで、identityや権限そのものではない。
+
+`PersonalTemporalReaders`は明示注入されたWeather/Calendar adapterだけを呼ぶ。constructorでI/Oせず、既定の環境・認証・OAuth/ADCを用意しない。Calendarは本人bindingの現在版・scope/期限を設定時、取得前後、保存直前、表示前に再確認する。owner再認証中にbindingが変わった場合も古いsnapshotを返さない。権限喪失で表示を拒否しても保存内容の即時物理削除を保証するわけではない。本人による停止/削除にはCalendar権限を要求せず、内容を消して墓標・取得履歴を残す。
+
+取得は本人の期待版とserver policyを必須とし、予約のjournal ACK後だけadapterへ進む。取消/失敗/応答不明でも回数は戻さず、古い結果で後続の取得や撤回を上書きしない。保持期限は天気15分、Calendar60秒、同意/権限の期限の最短。天気は地域の日付が変わったら表示しない。previewは最大3設定、本人認証期限と最大60秒でさらに制限し、notify=false。空/partialは「予定なし」や削除の証拠にしない。既存の本人限定maintainで期限切れsnapshotを消し、設定・墓標・予算を保持する。全owner自動purgeは未実装である。
+
+### 保存形式の移行と旧writerの排除
+
+版なしの旧文書は読取り時だけv2へ正規化し、読取りではDBを書き換えない。最初の本人による明示的なCAS更新でschemaVersion=2とtemporalSourcesを保存し、既存のfeed・墓標・監査・取得回数を保持する。未知の版や未知のroot fieldを捨てて書き直さず拒否する。
+
+旧コードは追加項目を落としたreplacementを書き得るため、アプリ内の型や版判定だけでは不十分。Mongo repositoryはCASのたびにcollectionのvalidatorが`CATALOG_VALIDATOR`と一致し、validationLevel=strict / validationAction=errorであることを確認する。不在/不一致なら書込みを拒否する。validatorはv2の必須field・root型と上限を要求する。詳細な本人/内容/予算検査はapplication側が担う。アプリはcollection/validatorを自動作成・変更せず、通常DBには今回適用しない。fixture以外での新repository書込みは、移行条件を満たすまで使えない。
+
+移行手順案は、全writerを停止→整合バックアップ→隔離復元で検証→対象collectionにreview済みstrict/error validatorを設定→対応版だけを起動、の順。起動中の旧writerとの混在を認めない。strict validationでも既存の旧文書を直ちに書き換えるわけではないが、旧形式の新規/置換書込みは拒否する。権限管理者によるbypassDocumentValidation/validator変更・DB削除を防ぐ保証ではなく、その権限を通常writerへ付けない設計が必要。
+
+rollbackはv2互換版へ戻す。旧コードへ戻すためvalidatorを外したり、予算/墓標を消したりしない。過去バックアップへの復元は予約回数を巻き戻し得るため、取得停止のまま整合性を確認する別工程とする。本番へのvalidator導入/移行・復旧先の選択は未実施・未承認。
+
+一次資料：[MongoDB validation level](https://www.mongodb.com/docs/manual/core/schema-validation/specify-validation-level/)、[invalid documents](https://www.mongodb.com/docs/manual/core/schema-validation/handle-invalid-documents/)。実環境のMongo4.4互換性は隔離試験で確認し、現行manualだけから推定しない。
+
+### 検証と未接続範囲
+
+既存radarPersonalテストを拡張し、旧文書の読取り/初回更新・未知版拒否、共通上限/予算・8並行取得、本人分離・再認証/権限版変更・取消・応答不明、snapshotの最小化/期限/purgeを検証する。既存feedの認証期限/lease失効エラーも維持する。隔離Mongo37029の新しい架空DBで、validator未設定時の拒否、移行前後の旧replacement拒否、旧予算/墓標保持、feed/天気の8並行CASと予算共用、期限切れsnapshotの物理消去・別owner不変を確認する。通常DBでは実行しない。試験後に一時mongodを正常停止し、証跡はradar-temporal-catalog-20260829へ保全する。
+
+これは内部application serviceまでの段階。天気/CalendarのHTTP登録・本人設定UI・既存session runnerへの配線、実Calendar broker/OAuth・権限の保存/撤回、実Firebase E2E、全owner worker/完全監査、承認付きDiscord outboxは未実装。既存feed HTTP/UIは引き続き天気/Calendarを拒否し、内部serviceの認証/予算を迂回してadapterを直接呼ばない。次は明示注入されたtyped serviceを本人のHTTP/session/UIへ接続し、地域の明示選択とCalendar連携状態・期限表示を架空fixtureで検証する。実連携の条件を満たすまでmain server/scheduler未登録・本体停止・dev起動ロックを維持する。prod読み取りのみ、通常DB/env/Bot/実取得/投稿/push/本番反映なし。

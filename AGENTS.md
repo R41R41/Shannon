@@ -1,3 +1,7 @@
+## RAD-1H（2026-08-29）の注意
+
+`docs/shannon-radar.md`17節。schemaVersion=2とtemporalSourcesを既存owner文書に追加し、公開feedと非公開天気/予定は分けながら取得予算・lease・CAS・監査・ID上限を共用する。Mongo書込みには完全一致のstrict/error validatorが必須。自動導入せず、通常DBへ無断適用しない。旧writerのreplacementは新fieldを落とすため混在/旧版rollbackは禁止。旧文書は読取りで書換えず、最初の明示更新で予算/墓標を保ったままv2へ移す。Calendar権限stampは認証の代替ではなく保存/表示前にbroker再照合する。token/元calendar ID/予定の不要fieldは保存しない。内部serviceまででHTTP/UI/runner・実broker未接続、低水準adapterの直接起動は禁止。テストは外部fakeと別Mongo37029のみ、終了後正常停止。通常DB/env/Bot・main server/scheduler・本体起動/実取得/投稿/push/prod反映なし、prod read-onlyと起動ロック維持。以下は過去の段階。
+
 ## RAD-1G（2026-08-29）の注意
 
 `docs/shannon-radar.md`16節。本人の明示選択/確認付き取得と監査表示を追加。collect HTTPはrunnerを明示注入したfactoryだけに存在しmain serverは未登録。再認証・期待版・回数予約・leaseを迂回しない。取消/失敗は回数を返さず、部分保存を自動再試行しない。UIは3ビューの版/期限・sessionで表示を制限、ログアウト/離脱で中断する。架空UI fixtureのみをloopback13002で試し終了後停止。実Firebase/通常DB/実ソース/本体/投稿なし、prod read-only・devロック維持。weather/calendarのcatalog統合とbrokerは未完。

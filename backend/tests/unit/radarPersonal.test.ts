@@ -3,6 +3,7 @@ import express from 'express';
 import type { Server } from 'node:http';
 import { AccessError, AccessService, type RequestContext } from '../../src/modules/access/index.js';
 import type { PersonalCatalog, PersonalCatalogPort } from '../../src/modules/radar/catalog.js';
+import { CATALOG_VALIDATOR, catalogShape } from '../../src/modules/radar/catalogVersion.js';
 import { MongoPersonalCatalog } from '../../src/services/radar/mongoPersonalCatalog.js';
 import { PersonalRadarService, personalRadarOwner, checkedRecord } from '../../src/services/radar/personalRadar.js';
 import { PublicFeedConnector, parseFeed } from '../../src/services/radar/feedConnector.js';
@@ -347,18 +348,18 @@ describe('Mongo catalog adapter scoped CAS contract', () => {
   it('injects one explicit collection with no constructor I/O and filters every operation by owner', async () => {
     const owner = personalRadarOwner(context()); const row = { owner, revision: 1, sources: [], audit: [] };
     const c = { findOne: vi.fn(async () => ({ ...row, _id: owner })), insertOne: vi.fn(), replaceOne: vi.fn(async () => ({ matchedCount: 1 })) };
-    const db = { collection: vi.fn(() => c) }; const repo = new MongoPersonalCatalog(db as any);
+    const db = { collection: vi.fn(() => c), listCollections: () => ({ toArray: async () => [{ options: { validator: CATALOG_VALIDATOR, validationLevel: 'strict', validationAction: 'error' } }] }) }; const repo = new MongoPersonalCatalog(db as any);
     expect(db.collection).toHaveBeenCalledWith('radarpersonalcatalogs'); expect(c.findOne).not.toHaveBeenCalled();
     expect(await repo.read(owner)).toEqual(row); expect(c.findOne.mock.calls[0][0]).toEqual({ _id: owner, owner });
-    expect(await repo.compareAndSwap(owner, 1, { ...row, revision: 2 })).toBe(true);
-    expect(c.replaceOne.mock.calls[0][0]).toEqual({ _id: owner, owner, revision: 1 });
+    expect(await repo.compareAndSwap(owner, 1, { ...row, revision: 2, schemaVersion: 2, temporalSources: [] })).toBe(true);
+    expect(c.replaceOne.mock.calls[0][0]).toEqual({ _id: owner, owner, revision: 1, $or: [{ schemaVersion: 2 }, { schemaVersion: { $exists: false } }] });
     expect(c.replaceOne.mock.calls[0][2]).toEqual({ upsert: false, writeConcern: { w: 'majority', j: true, wtimeoutMS: 5000 } });
   });
   it('treats insert duplicate as a conflict, propagates database failure, never retries', async () => {
     const owner = personalRadarOwner(context()); const row = { owner, revision: 1, sources: [], audit: [] };
     const c = { insertOne: vi.fn().mockRejectedValueOnce({ code: 11000 }).mockRejectedValueOnce(new Error('fixture failure')) };
-    const repo = new MongoPersonalCatalog({ collection: () => c } as any);
-    expect(await repo.compareAndSwap(owner, 0, row)).toBe(false); await expect(repo.compareAndSwap(owner, 0, row)).rejects.toThrow('fixture failure');
+    const repo = new MongoPersonalCatalog({ collection: () => c, listCollections: () => ({ toArray: async () => [{ options: { validator: CATALOG_VALIDATOR, validationLevel: 'strict', validationAction: 'error' } }] }) } as any);
+    expect(await repo.compareAndSwap(owner, 0, catalogShape(row))).toBe(false); await expect(repo.compareAndSwap(owner, 0, catalogShape(row))).rejects.toThrow('fixture failure');
     expect(c.insertOne).toHaveBeenCalledTimes(2);
   });
 });
@@ -712,5 +713,169 @@ describe('audit response expiry fences', () => {
     await expect(f.service.audit(context(), async () => context())).rejects.toThrow('RADAR_AUDIT_CLOCK');
     await expect(f.service.maintain(context(), 1, async () => context())).rejects.toThrow('RADAR_AUDIT_CLOCK');
     expect(f.store.compareAndSwap).not.toHaveBeenCalled();
+  });
+});
+
+// Temporal integration uses the real parsers/adapters with synthetic responses, never provider HTTP.
+import { PersonalTemporalRadar } from '../../src/services/radar/personalTemporalRadar.js';
+import { PersonalTemporalReaders } from '../../src/services/radar/personalTemporalReaders.js';
+import { WeatherReadAdapter } from '../../src/services/radar/weatherReadAdapter.js';
+import { CalendarReadAdapter, CALENDAR_READ_SCOPE } from '../../src/services/radar/calendarReadAdapter.js';
+import { dateAt, nextDate } from '../../src/services/radar/temporalParsing.js';
+import type { TemporalSnapshot } from '../../src/modules/radar/catalogVersion.js';
+const weatherInput = () => ({ kind: 'weather', enabled: true, consentExpiresAt: initialNow + 86400000, timeZone: 'Asia/Tokyo', latitudeTenth: 350, longitudeTenth: 1390 });
+function temporalFixture(policy: AcquisitionPolicy = fixturePolicy) {
+  const f = setup(policy); let bindingVersion = 1; let denied = false;
+  const weatherHttp = { get: vi.fn(async () => JSON.stringify({ latitude: 35, longitude: 139, timezone: 'Asia/Tokyo',
+    daily_units: { time: 'iso8601', weather_code: 'wmo code', temperature_2m_min: '°C', temperature_2m_max: '°C', precipitation_probability_max: '%' },
+    daily: { time: [0,1,2].map(i => nextDate(dateAt(f.now(),'Asia/Tokyo'),i)), weather_code: [0,1,2], temperature_2m_min: [15,16,17], temperature_2m_max: [20,21,22], precipitation_probability_max: [10,20,30] } })) };
+  const calendarRead = vi.fn(async () => JSON.stringify({ kind: 'calendar#events', timeZone: 'Asia/Tokyo', accessRole: 'reader',
+    items: [{ id: 'fixtureevent', status: 'confirmed', summary: '架空の予定', updated: new Date(f.now()-1000).toISOString(),
+      start: { dateTime: new Date(f.now()+60000).toISOString() }, end: { dateTime: new Date(f.now()+120000).toISOString() },
+      description: 'private-extra', location: 'private-place', attendees: [{ email: 'private@example.test' }] }] }));
+  const calendar = new CalendarReadAdapter({ authorize: async s => {
+    if (denied) throw new Error('private-broker-error');
+    return { binding: { id: s.bindingId, owner: s.owner, sourceId: s.id, sourceRevision: s.revision, version: bindingVersion,
+      calendarId: 'fixture-calendar', timeZone: s.timeZone, expiresAt: initialNow + 86400000, scopes: [CALENDAR_READ_SCOPE] }, read: calendarRead };
+  } }, f.now);
+  const adapters = new PersonalTemporalReaders(new WeatherReadAdapter(weatherHttp, f.now), calendar);
+  const reader = { authorize: vi.fn(adapters.authorize.bind(adapters)), read: vi.fn(adapters.read.bind(adapters)) };
+  const service = new PersonalTemporalRadar(f.store, reader, f.now, policy);
+  const auth = vi.fn(async () => context()); const signal = new AbortController().signal;
+  return { ...f, temporal: service, weatherHttp, calendarRead, reader, auth, signal,
+    version: () => { bindingVersion++; }, deny: () => { denied = true; },
+    weather: (expectedRevision = 0, patch = {}) => service.configure(context(), 'weather', { expectedRevision, source: { ...weatherInput(), ...patch } }, auth, signal),
+    calendar: (expectedRevision = 0) => service.configure(context(), 'calendar', { expectedRevision, source: { kind: 'calendar', enabled: true, consentExpiresAt: initialNow + 86400000,
+      timeZone: 'Asia/Tokyo', bindingId: 'fixture-binding', days: 3 } }, auth, signal),
+    acquire: (id = 'weather', expected = 1, sig = signal) => service.collect(context(), id, expected, auth, sig),
+    previewTemporal: () => service.preview(context(), auth, signal),
+    row: () => f.store.rows.get(personalRadarOwner(context()))!,
+  };
+}
+describe('versioned temporal catalog, shared budget and privacy', () => {
+  it('reads an empty owner without mutation and upgrades a legacy owner only on an explicit write', async () => {
+    const f = temporalFixture(); expect((await f.previewTemporal()).entries).toEqual([]); expect(f.store.compareAndSwap).not.toHaveBeenCalled();
+    await f.configure(); await f.collect(); const legacy: any = f.row(); delete legacy.schemaVersion; delete legacy.temporalSources;
+    const previous = structuredClone(legacy); await f.service.sources(context()); expect(f.row()).toEqual(previous);
+    await f.weather(3); expect(f.row()).toMatchObject({ schemaVersion: 2, revision: 4, sources: previous.sources, acquisition: previous.acquisition });
+    expect(f.row().temporalSources).toHaveLength(1); expect(f.weatherHttp.get).not.toHaveBeenCalled();
+  });
+  it.each([{ schemaVersion: 3 }, { schemaVersion: null }, { schemaVersion: 2, temporalSources: null }, { schemaVersion: undefined, temporalSources: [] }, { unknown: true }])('rejects unsupported persisted schema %j without writes', async patch => {
+    const f = temporalFixture(); await f.weather(); Object.assign(f.row(), patch); f.store.compareAndSwap.mockClear();
+    await errorCode(f.service.sources(context()), 'UNAVAILABLE'); expect(f.store.compareAndSwap).not.toHaveBeenCalled();
+  });
+  it('reserves and persists weather atomically without adding it to feed ranking or exposing owner/grant', async () => {
+    const f = temporalFixture(); await f.weather(); expect(f.reader.read).not.toHaveBeenCalled();
+    expect(await f.acquire()).toEqual({ revision: 3 }); expect(f.weatherHttp.get).toHaveBeenCalledTimes(1);
+    expect(f.row().acquisition!.starts).toHaveLength(1); expect(f.row().audit.map(e => e.action)).toEqual(['configure','reserve','collect']);
+    expect((await f.service.preview(context())).items).toEqual([]);
+    const preview = await f.previewTemporal(); expect(preview.entries[0].content.kind).toBe('weather'); expect(preview.validUntil).toBe(initialNow+60000);
+    expect(JSON.stringify(preview)).not.toMatch(/firebase:|stamp|grant/);
+    expect(JSON.stringify(await f.temporal.sources(context(),f.auth))).not.toContain('firebase:');
+  });
+  it('persists minimal calendar data and rechecks the binding epoch on private display', async () => {
+    const f = temporalFixture(); await f.calendar(); await f.acquire('calendar');
+    expect((await f.previewTemporal()).entries[0].content.items).toHaveLength(1);
+    expect(JSON.stringify(f.row())).not.toMatch(/private-extra|private-place|private@example|fixture-calendar|scopes/);
+    f.version(); await errorCode(f.previewTemporal(), 'CONFLICT'); expect(f.calendarRead).toHaveBeenCalledTimes(1);
+  });
+  it('rejects a binding revoked during final owner reauthentication', async () => {
+    const f = temporalFixture(); await f.calendar(); await f.acquire('calendar'); let calls = 0;
+    f.auth.mockImplementation(async () => { if (++calls === 2) f.version(); return context(); });
+    await errorCode(f.previewTemporal(), 'CONFLICT');
+  });
+  it('shares the same daily allowance across feed, weather and calendar without refund after revoke', async () => {
+    const f = temporalFixture({ ...fixturePolicy, maxPer24Hours: 2 }); await f.configure(); await f.weather(1); await f.calendar(2);
+    await f.collect(); await f.acquire('weather',5); await f.temporal.revoke(context(),'weather',7,f.auth,f.signal);
+    await errorCode(f.acquire('calendar',8), 'RATE_LIMITED'); expect(f.calendarRead).not.toHaveBeenCalled(); expect(f.row().acquisition!.starts).toHaveLength(2);
+    expect(f.row().sources[0].records).toHaveLength(1);
+  });
+  it('has one winner for eight mixed feed/temporal acquisitions with one expected owner revision', async () => {
+    const f = temporalFixture(); await f.configure(); await f.weather(1);
+    const attempts = await Promise.allSettled(Array.from({length:8},(_,i) => i%2 ? f.acquire('weather',2) : f.service.collect(context(),'feed',f.connector,f.signal,f.auth,2)));
+    expect(attempts.filter(r=>r.status==='fulfilled')).toHaveLength(1); expect(f.reader.read.mock.calls.length+f.http.get.mock.calls.length).toBe(1);
+    expect(f.row().revision).toBe(4); expect(f.row().acquisition!.starts).toHaveLength(1);
+  });
+  it('preserves private snapshots when a feed configuration changes and keeps IDs globally unique', async () => {
+    const f = temporalFixture(); await f.weather(); await f.acquire(); const snapshot = structuredClone(f.row().temporalSources);
+    await f.configure('alice',3); expect(f.row().temporalSources).toEqual(snapshot);
+    await errorCode(f.service.configure(context(),'weather',{expectedRevision:4,source:configuration()},f.auth),'CONFLICT');
+    await errorCode(f.temporal.configure(context(),'feed',{expectedRevision:4,source:weatherInput()},f.auth,f.signal),'CONFLICT');
+  });
+  it('applies the combined source cap rather than granting ten sources per kind', async () => {
+    const f = temporalFixture();
+    for(let i=0;i<10;i++) await f.service.configure(context(),'feed'+i,{expectedRevision:i,source:configuration()},f.auth);
+    await errorCode(f.weather(10),'LIMIT'); expect(f.reader.authorize).not.toHaveBeenCalled();
+  });
+  it('erases snapshots on edit/disable/revoke, preserves tombstone and refuses ID resurrection', async () => {
+    const f = temporalFixture(); await f.weather(); await f.acquire(); await f.weather(3,{enabled:false});
+    expect(f.row().temporalSources![0].snapshot).toBeNull(); await errorCode(f.acquire('weather',4),'NOT_FOUND');
+    await f.temporal.revoke(context(),'weather',4,f.auth,f.signal); expect(f.row().temporalSources).toEqual([{id:'weather',source:null,snapshot:null}]);
+    await errorCode(f.weather(5),'CONFLICT'); expect(f.row().acquisition!.starts).toHaveLength(1);
+  });
+  it('allows owner disable/revoke even after Calendar permission is withdrawn', async () => {
+    const f = temporalFixture(); await f.calendar(); await f.acquire('calendar'); f.deny();
+    const source = f.row().temporalSources![0].source!; const { owner, id, revision, ...input } = source;
+    await f.temporal.configure(context(),'calendar',{expectedRevision:3,source:{...input,enabled:false}},f.auth,f.signal);
+    await f.temporal.revoke(context(),'calendar',4,f.auth,f.signal); expect(f.row().temporalSources![0].source).toBeNull();
+  });
+  it('isolates sources, content and revocation between owners including same IDs', async () => {
+    const f = temporalFixture(); await f.weather(); await f.acquire();
+    expect((await f.temporal.preview(context('bob'),async()=>context('bob'),f.signal)).entries).toEqual([]);
+    await errorCode(f.temporal.revoke(context('bob'),'weather',0,async()=>context('bob'),f.signal),'NOT_FOUND');
+    expect(f.row().temporalSources![0].snapshot).not.toBeNull();
+  });
+  it('purges expired private snapshots with existing owner maintenance and never fetches again', async () => {
+    const f = temporalFixture(); await f.calendar(); await f.acquire('calendar'); f.advance(60001);
+    expect((await f.previewTemporal()).entries).toEqual([]);
+    const result=await f.service.maintain(context(),3,f.auth); expect(result.removed).toBe(1);
+    expect(f.row().temporalSources![0].snapshot).toBeNull(); expect(f.row().temporalSources![0].source).not.toBeNull();
+    expect(f.row().acquisition!.starts).toHaveLength(1); expect(f.calendarRead).toHaveBeenCalledTimes(1);
+  });
+  it.each(['owner','kind','scope','extra','revision','future','stale','long-expiry','provider','item-extra','item-count'] as const)('rejects invalid temporal metadata %s and retains the charged attempt', async kind => {
+    const f=temporalFixture(); await f.weather(); const read=f.reader.read.getMockImplementation()!;
+    f.reader.read.mockImplementation(async(...args)=>{ const v:any=structuredClone(await read(...args));
+      if(kind==='owner')v.owner=personalRadarOwner(context('bob')); if(kind==='kind')v.kind='calendar'; if(kind==='scope')v.visibility='public';
+      if(kind==='extra')v.token='private'; if(kind==='revision')v.sourceRevision++; if(kind==='future')v.fetchedAt+=1000;
+      if(kind==='stale')v.fetchedAt-=1; if(kind==='long-expiry')v.validUntil+=1; if(kind==='provider')v.providerUrl='https://other.example/';
+      if(kind==='item-extra')v.items[0].location='secret'; if(kind==='item-count')v.items.push(v.items[0]); return v; });
+    await expect(f.acquire()).rejects.toThrow(); expect(f.row().temporalSources![0].snapshot).toBeNull();
+    expect(f.row().acquisition!.starts).toHaveLength(1); expect(f.row().audit.at(-1)?.action).toBe('collect_failed');
+  });
+  it('fences grant changes between read and commit and rejects persistence', async () => {
+    const f=temporalFixture(); await f.calendar(); const read=f.reader.read.getMockImplementation()!;
+    f.reader.read.mockImplementation(async(...args)=>{const value=await read(...args);f.version();return value;});
+    await errorCode(f.acquire('calendar'),'CONFLICT'); expect(f.row().temporalSources![0].snapshot).toBeNull();
+  });
+  it('rejects source revocation while temporal acquisition is pending', async () => {
+    const f=temporalFixture(); await f.weather(); const read=f.reader.read.getMockImplementation()!;
+    f.reader.read.mockImplementation(async(...args)=>{const value=await read(...args);await f.temporal.revoke(context(),'weather',2,f.auth,f.signal);return value;});
+    await errorCode(f.acquire(),'CONFLICT'); expect(f.row().temporalSources![0]).toEqual({id:'weather',source:null,snapshot:null});
+  });
+  it('does not fetch after an uncertain reservation acknowledgement', async () => {
+    const f=temporalFixture(); await f.weather(); const cas=f.store.compareAndSwap.getMockImplementation()!;
+    f.store.compareAndSwap.mockImplementationOnce(async(...args)=>{await cas(...args);throw new Error('unknown commit');});
+    await expect(f.acquire()).rejects.toThrow(); expect(f.reader.read).not.toHaveBeenCalled(); expect(f.row().acquisition!.lease).not.toBeNull();
+  });
+  it('bounds an ignored cancellation and rejects late temporal content', async () => {
+    const f=temporalFixture(); await f.weather(); const abort=new AbortController(); let release!:(v:TemporalSnapshot)=>void; let entered!:()=>void;
+    const started=new Promise<void>(r=>{entered=r;}); const original=f.reader.read.getMockImplementation()!;
+    const valid=await original(f.row().temporalSources![0].source!,f.signal);
+    f.reader.read.mockImplementationOnce(()=>new Promise(r=>{release=r;entered();}));
+    const pending=f.acquire('weather',1,abort.signal); const rejected=expect(pending).rejects.toThrow(); await started; abort.abort(); await rejected;
+    release(valid); await new Promise(r=>setImmediate(r)); expect(f.row().temporalSources![0].snapshot).toBeNull(); expect(f.row().acquisition!.starts).toHaveLength(1);
+  });
+  it('rejects missing/foreign reauthentication and stale expected revision before reading a provider', async () => {
+    const f=temporalFixture();await f.weather();f.auth.mockResolvedValue(context('bob'));
+    await errorCode(f.acquire(),'CONFLICT'); expect(f.reader.read).not.toHaveBeenCalled();
+    f.auth.mockResolvedValue(context());await errorCode(f.acquire('weather',0),'CONFLICT');expect(f.reader.read).not.toHaveBeenCalled();
+  });
+  it.each(['missing','warn','moderate','wrong-schema'] as const)('refuses Mongo writes without the exact strict/error fence: %s', async kind => {
+    const owner=personalRadarOwner(context()); const c={insertOne:vi.fn(),replaceOne:vi.fn()};
+    const options:any={validator:CATALOG_VALIDATOR,validationLevel:'strict',validationAction:'error'};
+    if(kind==='warn')options.validationAction='warn';if(kind==='moderate')options.validationLevel='moderate';if(kind==='wrong-schema')options.validator={};
+    const db={collection:()=>c,listCollections:()=>({toArray:async()=>kind==='missing'?[]:[{options}]})};
+    await expect(new MongoPersonalCatalog(db as any).compareAndSwap(owner,0,catalogShape({owner,revision:1,sources:[],audit:[]}))).rejects.toThrow('RADAR_CATALOG_FENCE_REQUIRED');
+    expect(c.insertOne).not.toHaveBeenCalled();expect(c.replaceOne).not.toHaveBeenCalled();
   });
 });

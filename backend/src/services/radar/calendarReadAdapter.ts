@@ -98,6 +98,14 @@ export function parseCalendar(text: string, source: CalendarSource, request: Cal
 /** Low-level, owner-bound read adapter; not an authenticated HTTP endpoint or autonomous worker. */
 export class CalendarReadAdapter {
   constructor(private readonly authority: CalendarReadAuthority, private readonly clock: () => number = Date.now) {}
+  async authorize(source: CalendarSource, signal: AbortSignal) {
+    const startedAt = this.clock(); const s = sourceSnapshot(source, startedAt); active(s, startedAt, startedAt, signal);
+    const reader = await temporalRead(signal, child => this.authority.authorize(s, child));
+    active(s, startedAt, this.clock(), signal); const b = bindingSnapshot(reader.binding, s, this.clock());
+    // Expiry may shorten; epoch/account/source changes must invalidate persisted snapshots.
+    const { expiresAt, ...identity } = b;
+    return Object.freeze({ stamp: hash(identity), expiresAt });
+  }
   async read(source: CalendarSource, signal: AbortSignal): Promise<PersonalTemporalSnapshot<CalendarOccurrence>> {
     const startedAt = this.clock(); const s = sourceSnapshot(source, startedAt); if (s.kind !== 'calendar') throw new TemporalReadError('INVALID_SOURCE'); active(s, startedAt, startedAt, signal);
     const reader = await temporalRead(signal, child => this.authority.authorize(s, child));

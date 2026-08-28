@@ -1,4 +1,5 @@
 import type { FeedRecord, FeedSubscription } from './sourceRegistry.js';
+import type { TemporalCatalogEntry } from './catalogVersion.js';
 import type { AcquisitionState } from './acquisition.js';
 
 /** One bounded owner aggregate: configuration, latest metadata and audit commit together. */
@@ -21,6 +22,8 @@ export interface CatalogAudit {
   readonly unchanged: number;
 }
 export interface PersonalCatalog {
+  readonly schemaVersion?: 2;
+  readonly temporalSources?: readonly TemporalCatalogEntry[];
   readonly owner: string;
   readonly revision: number;
   readonly sources: readonly CatalogSource[];
