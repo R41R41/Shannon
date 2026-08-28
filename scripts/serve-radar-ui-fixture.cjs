@@ -8,7 +8,7 @@ async function main() {
   const root = fs.realpathSync(path.join(__dirname, '..'));
   assert.equal(root, '/home/azureuser/Shannon-dev'); assert.deepEqual(process.argv.slice(2), ['--isolated-fixture']);
   assert(fs.existsSync(path.join(root, '.dev-runtime-lock')));
-  const out = '/home/azureuser/.codex-shannon-preservation/radar-controls-20260829'; fs.mkdirSync(out, { recursive: true, mode: 0o700 });
+  const out = '/home/azureuser/.codex-shannon-preservation/radar-workspace-20260829'; fs.mkdirSync(out, { recursive: true, mode: 0o700 });
   const { build } = await import('vite');
   await build({ configFile: false, envDir: false, root: path.join(root, 'frontend/tests/fixtures/radar'),
     resolve: { alias: { '@styles': path.join(root, 'frontend/src/styles') } },
@@ -20,6 +20,12 @@ async function main() {
   const { PersonalRadarService } = await load('services/radar/personalRadar.js');
   const { parseFeed } = await load('services/radar/feedConnector.js');
   const { RadarSessionRunner } = await load('services/radar/sessionRunner.js');
+  const { PersonalTemporalRadar } = await load('services/radar/personalTemporalRadar.js');
+  const { PersonalTemporalReaders } = await load('services/radar/personalTemporalReaders.js');
+  const { WeatherReadAdapter } = await load('services/radar/weatherReadAdapter.js');
+  const { CalendarReadAdapter, CALENDAR_READ_SCOPE } = await load('services/radar/calendarReadAdapter.js');
+  const { RadarWorkspace } = await load('services/radar/radarWorkspace.js');
+  const { dateAt, nextDate } = await load('services/radar/temporalParsing.js');
   const express = require('express'); const app = express();
   const rows = new Map();
   const store = { read: async owner => structuredClone(rows.get(owner) ?? null), compareAndSwap: async (owner, expected, next) => {
@@ -56,16 +62,36 @@ async function main() {
     const xml = `<feed><entry><id>${source.id}-explicit</id><title>${title}（手動取得fixture）</title><link href="https://example.org/${source.id}/manual"/><published>${new Date().toISOString()}</published></entry></feed>`;
     return parseFeed(xml, source, Date.now());
   } };
-  registerRadarRoutes(app, access, radar, new RadarSessionRunner(access, radar, connector));
+  let weatherCount=0,calendarCount=0; const grantExpiresAt=Date.now()+86400000;
+  const weather=new WeatherReadAdapter({get:async url=>{
+    weatherCount++; const u=new URL(url);const zone=u.searchParams.get('timezone');
+    return JSON.stringify({latitude:Number(u.searchParams.get('latitude')),longitude:Number(u.searchParams.get('longitude')),timezone:zone,
+      daily_units:{time:'iso8601',weather_code:'wmo code',temperature_2m_min:'°C',temperature_2m_max:'°C',precipitation_probability_max:'%'},
+      daily:{time:[0,1,2].map(i=>nextDate(dateAt(Date.now(),zone),i)),weather_code:[0,3,61],temperature_2m_min:[23,22,21],temperature_2m_max:[31,29,27],precipitation_probability_max:[10,20,70]}});
+  }});
+  const calendar=new CalendarReadAdapter({authorize:async source=>({binding:{id:source.bindingId,owner:source.owner,sourceId:source.id,sourceRevision:source.revision,
+    version:1,calendarId:'fixture-only-calendar',timeZone:source.timeZone,expiresAt:grantExpiresAt,scopes:[CALENDAR_READ_SCOPE]},read:async()=>{
+      calendarCount++;const now=Date.now();const today=dateAt(now,source.timeZone);
+      return JSON.stringify({kind:'calendar#events',timeZone:source.timeZone,accessRole:'reader',items:[
+        {id:'fictional-meeting',status:'tentative',summary:'架空の予定・作業時間',updated:new Date(now-1000).toISOString(),start:{dateTime:new Date(now+3600000).toISOString()},end:{dateTime:new Date(now+7200000).toISOString()}},
+        {id:'fictional-allday',status:'confirmed',summary:'架空の終日イベント',updated:new Date(now-1000).toISOString(),start:{date:today},end:{date:nextDate(today,1)}}]});
+    }})});
+  const temporal=new PersonalTemporalRadar(store,new PersonalTemporalReaders(weather,calendar),Date.now,{maxPer24Hours:32,minimumIntervalMs:0,leaseMs:30000});
+  const calendarChoices={list:async owner=>owner===aliceOwner?[{id:'fixture-binding',label:'テスト用カレンダー（架空）',timeZone:'Asia/Tokyo',expiresAt:grantExpiresAt}]:[]};
+  const { personalRadarOwner }=await load('services/radar/personalRadar.js');const aliceOwner=personalRadarOwner(alice);
+  const workspace=new RadarWorkspace(radar,temporal,{weatherAvailable:true,calendars:calendarChoices});
+  await workspace.configure(alice,'local-weather',{expectedRevision:9,source:{kind:'weather',enabled:true,consentExpiresAt:grantExpiresAt,timeZone:'Asia/Tokyo',latitudeTenth:350,longitudeTenth:1390}},()=>access.authenticate('fixture-alice'),new AbortController().signal);
+  await workspace.configure(alice,'personal-calendar',{expectedRevision:10,source:{kind:'calendar',enabled:true,consentExpiresAt:grantExpiresAt,timeZone:'Asia/Tokyo',bindingId:'fixture-binding',days:3}},()=>access.authenticate('fixture-alice'),new AbortController().signal);
+  registerRadarRoutes(app, access, radar, new RadarSessionRunner(access, radar, connector,Date.now,temporal),workspace);
   app.use(express.static(path.join(out, 'site'), { etag: false, lastModified: false, cacheControl: false }));
   const server = app.listen(13002, '127.0.0.1', () => {
     const info = { fixtureOnly: true, pid: process.pid, port: 13002, host: '127.0.0.1', firebase: false, applicationStarted: false,
-      normalDbWritten: false, realSourcesFetched: false, fixtureOwners: 1, seededSources: 3 };
+      normalDbWritten: false, realSourcesFetched: false, fixtureOwners: 1, seededSources: 5, temporalFetchedAtStartup: false };
     fs.writeFileSync(path.join(out, 'ui-fixture-start.json'), JSON.stringify(info, null, 2)); console.log(JSON.stringify(info));
   });
   server.on('error', () => { console.error('RADAR_UI_FIXTURE_LISTENER_FAILED'); process.exitCode = 1; });
   const stop = () => { server.closeAllConnections(); server.close(() => {
-    fs.writeFileSync(path.join(out, 'ui-fixture-stop.json'), JSON.stringify({ fixtureOnly: true, stopped: true, requestCount, collectionCount, finalRevisions: [...rows.values()].map(row => row.revision), normalDbWritten: false }));
+    fs.writeFileSync(path.join(out, 'ui-fixture-stop.json'), JSON.stringify({ fixtureOnly: true, stopped: true, requestCount, collectionCount, weatherCount, calendarCount, finalRevisions: [...rows.values()].map(row => row.revision), normalDbWritten: false }));
     console.log('RADAR_UI_FIXTURE_STOPPED'); process.exit(0);
   }); };
   process.once('SIGTERM', stop); process.once('SIGINT', stop);

@@ -879,3 +879,74 @@ describe('versioned temporal catalog, shared budget and privacy', () => {
     expect(c.insertOne).not.toHaveBeenCalled();expect(c.replaceOne).not.toHaveBeenCalled();
   });
 });
+
+
+import { RadarWorkspace } from '../../src/services/radar/radarWorkspace.js';
+async function workspaceApi() {
+  const f=temporalFixture();
+  const verify=vi.fn(async(token:string)=>{if(!['alice','bob'].includes(token))throw new AccessError('UNAUTHENTICATED');return {projectId:'fixture',uid:token,email:'fixture@example.test',emailVerified:true,expiresAtMs:initialNow+86400000};});
+  const access=new AccessService({verify},{findByIdentity:async(projectId,uid)=>({projectId,uid,name:'fixture',email:'fixture@example.test',isAuthorized:true,isAdmin:false})},()=> 'fixture');
+  const list=vi.fn(async(owner:string)=>owner===personalRadarOwner(context())?[{id:'fixture-binding',label:'Fixture calendar',timeZone:'Asia/Tokyo',expiresAt:initialNow+86400000}]:[]);
+  const workspace=new RadarWorkspace(f.service,f.temporal,{weatherAvailable:true,calendars:{list}},f.now);
+  const runner=new RadarSessionRunner(access,f.service,f.connector,f.now,f.temporal);
+  const app=express();registerRadarRoutes(app,access,f.service,runner,workspace);
+  await new Promise<void>(resolve=>{server=app.listen(0,'127.0.0.1',resolve);});
+  const url=`http://127.0.0.1:${(server!.address() as {port:number}).port}`;
+  const request=(path:string,method='GET',body?:unknown,token='alice')=>fetch(url+path,{method,headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},...(body===undefined?{}:{body:JSON.stringify(body)})});
+  const put=(id:string,expectedRevision:number,source:unknown,token='alice')=>request('/api/radar/temporal/sources/'+id,'PUT',{expectedRevision,source},token);
+  const calendarInput={kind:'calendar',enabled:true,consentExpiresAt:initialNow+86400000,timeZone:'Asia/Tokyo',bindingId:'fixture-binding',days:3};
+  return {...f,request,put,calendarInput,list,verify,workspace,runner};
+}
+describe('integrated personal Radar workspace HTTP and mixed collection',()=>{
+  it('runs configure -> mixed three-source collection -> private views -> audit -> revoke through real routes',async()=>{
+    const f=await workspaceApi();await f.configure();
+    expect((await f.put('weather',1,weatherInput())).status).toBe(200);
+    expect((await f.put('calendar',2,f.calendarInput)).status).toBe(200);
+    expect(f.weatherHttp.get).not.toHaveBeenCalled();expect(f.calendarRead).not.toHaveBeenCalled();
+    const result=await f.request('/api/radar/collect','POST',{expectedRevision:3,sourceIds:['feed','weather','calendar']});
+    expect(result.status).toBe(200);expect(await result.json()).toEqual({revision:9,completedSourceIds:['feed','weather','calendar']});
+    const sources=await (await f.request('/api/radar/sources')).json() as any;
+    const response=await f.request('/api/radar/preview');const preview=await response.json() as any;
+    expect(response.headers.get('cache-control')).toBe('no-store');expect(sources.temporal.sources).toHaveLength(2);
+    expect(preview.revision).toBe(9);expect(preview.items).toHaveLength(1);expect(preview.temporal).toHaveLength(2);
+    expect(preview.temporal.map((e:any)=>e.content.kind)).toEqual(['weather','calendar']);
+    expect(JSON.stringify(preview)).not.toMatch(/private-extra|private-place|firebase:|fixture-calendar|stamp|grant/);
+    expect((await (await f.request('/api/radar/audit')).json() as any).events).toHaveLength(9);
+    const before=f.row().acquisition!.starts;
+    expect((await f.request('/api/radar/temporal/sources/calendar','DELETE',{expectedRevision:9})).status).toBe(200);
+    expect((await (await f.request('/api/radar/preview')).json() as any).temporal).toHaveLength(1);
+    expect(f.row().acquisition!.starts).toEqual(before);
+  });
+  it('returns connection absence and isolates private configuration/content/choices between owners',async()=>{
+    const f=await workspaceApi();await f.weather();await f.acquire();
+    const sources=await (await f.request('/api/radar/sources','GET',undefined,'bob')).json() as any;
+    expect(sources.temporal.sources).toEqual([]);expect(sources.temporal.calendars).toEqual([]);
+    expect((await (await f.request('/api/radar/preview','GET',undefined,'bob')).json() as any).temporal).toEqual([]);
+    expect((await f.put('calendar',0,f.calendarInput,'bob')).status).toBe(409);
+  });
+  it.each(['owner','binding','zone','query','stale','unauthenticated'] as const)('rejects %s without provider reads',async kind=>{
+    const f=await workspaceApi();const source:any={...f.calendarInput};
+    if(kind==='owner')source.owner='other';if(kind==='binding')source.bindingId='other';if(kind==='zone')source.timeZone='UTC';
+    const r=await f.request('/api/radar/temporal/sources/calendar'+(kind==='query'?'?owner=other':''),'PUT',{expectedRevision:kind==='stale'?8:0,source},kind==='unauthenticated'?'bad':'alice');
+    expect(r.status).toBe(kind==='unauthenticated'?401:kind==='owner'||kind==='query'?400:409);
+    expect(f.reader.read).not.toHaveBeenCalled();expect(f.store.rows.size).toBe(0);
+  });
+  it('validates the entire mixed selection before charging any acquisition',async()=>{
+    const f=await workspaceApi();await f.configure();await f.weather(1);
+    const r=await f.request('/api/radar/collect','POST',{expectedRevision:2,sourceIds:['feed','weather','missing']});
+    expect(r.status).toBe(404);expect(f.row().acquisition).toBeUndefined();expect(f.http.get).not.toHaveBeenCalled();expect(f.weatherHttp.get).not.toHaveBeenCalled();
+  });
+  it('rejects Calendar grant changes on HTTP preview without removing owner control',async()=>{
+    const f=await workspaceApi();await f.calendar();await f.acquire('calendar');f.version();
+    expect((await f.request('/api/radar/preview')).status).toBe(409);
+    expect((await f.request('/api/radar/sources')).status).toBe(200);
+    expect((await f.request('/api/radar/temporal/sources/calendar','DELETE',{expectedRevision:3})).status).toBe(200);
+  });
+  it('never exposes temporal mutation routes unless the workspace is injected',async()=>{
+    const f=await api(true);expect((await f.request('/api/radar/temporal/sources/weather','alice','PUT',{expectedRevision:0,source:weatherInput()})).status).toBe(404);
+  });
+  it('rejects changed connection choices during configure reauthorization',async()=>{
+    const f=await workspaceApi();f.list.mockResolvedValueOnce([]);
+    expect((await f.put('calendar',0,f.calendarInput)).status).toBe(409);expect(f.store.rows.size).toBe(0);
+  });
+});

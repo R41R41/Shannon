@@ -67,3 +67,5 @@
 - RAD-1F：天気/Calendarの専用read adapterと公開feedからの分離は[Shannon Radar 15節](shannon-radar.md#15-rad-1f--天気calendarの専用read-adapter)。broker/予算/catalog/UIは未接続、架空fixtureのみで検証する。
 
 - Radar本人取得/監査表示（RAD-1G、dev限定・main未登録）：[設計16節](shannon-radar.md#16-rad-1g本人の明示取得と操作履歴2026-08-29dev限定)。
+
+- RAD-1I：本人Radarの天気/Calendar設定・混合取得・表示を統合。[設計18節](shannon-radar.md#18-rad-1i個人radarの画面から取得までを統合2026-08-29dev限定)。実画面は架空connectorで検証し、実認証/本体は未接続。

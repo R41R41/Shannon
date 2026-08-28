@@ -264,3 +264,75 @@ describe('explicit collection and private audit boundary', () => {
     expect(html).toContain('完全な監査ではありません'); expect(html).not.toContain('hidden-attempt');
   });
 });
+
+
+const weatherSource = {kind:'weather' as const,enabled:true,consentExpiresAt:now+86400000,timeZone:'Asia/Tokyo',latitudeTenth:350,longitudeTenth:1390};
+const rawTemporalSources = () => ({weatherAvailable:true,calendarAvailable:false,calendars:[],servedAt:now,validUntil:now+60000,
+  sources:[{id:'weather',source:{...weatherSource,id:'weather',revision:1}}]});
+const rawTemporalPreview = () => [{sourceId:'weather',sourceRevision:1,timeZone:'Asia/Tokyo',content:{kind:'weather',sourceId:'weather',sourceRevision:1,
+  fetchedAt:now,validUntil:now+900000,visibility:'owner-only',notify:false,partial:false,attribution:'Weather data by Open-Meteo.com',providerUrl:'https://open-meteo.com/',licenseUrl:'https://creativecommons.org/licenses/by/4.0/',
+  items:['2027-01-15','2027-01-16','2027-01-17'].map(date=>({date,weatherCode:1,minimumC:10,maximumC:20,precipitationPercent:30}))}}];
+function workspaceFixture(){
+  const f=fixture();const api=Object.assign(f.api,{saveTemporal:vi.fn(async()=>({revision:5})),revokeTemporal:vi.fn(async()=>({revision:5}))});
+  const views=(revision=4)=>{
+    api.sources.mockResolvedValue(decodeSources({...rawSources(),revision,temporal:rawTemporalSources()}));
+    api.preview.mockResolvedValue(decodePreview({...rawPreview(),revision,validUntil:now+60000,temporal:rawTemporalPreview()}));
+    api.audit.mockResolvedValue(decodeAudit(rawAudit(revision)));
+  };views();return {...f,api,views};
+}
+describe('integrated personal weather/calendar experience',()=>{
+  it('decodes separate private content without retaining owner, grant or unknown fields',()=>{
+    const v:any=rawTemporalPreview();v[0].content.owner='secret-owner';v[0].content.grant='secret-grant';
+    const decoded=decodePreview({...rawPreview(),validUntil:now+60000,temporal:v});
+    expect(decoded.temporal).toHaveLength(1);expect(JSON.stringify(decoded)).not.toMatch(/secret-owner|secret-grant/);
+  });
+  it.each(['duplicate-id','expired-choice','invalid-zone','unknown-kind','too-many'] as const)('rejects invalid temporal sources %s',kind=>{
+    const temporal:any=rawTemporalSources();
+    if(kind==='duplicate-id')temporal.sources[0].id=temporal.sources[0].source.id='science';
+    if(kind==='expired-choice'){temporal.calendarAvailable=true;temporal.calendars=[{id:'bound',label:'Test',timeZone:'UTC',expiresAt:now}];}
+    if(kind==='invalid-zone')temporal.sources[0].source.timeZone='bad-zone';if(kind==='unknown-kind')temporal.sources[0].source.kind='people';
+    if(kind==='too-many')temporal.sources=Array(33).fill(temporal.sources[0]);
+    expect(()=>decodeSources({...rawSources(),temporal})).toThrow();
+  });
+  it.each(['owner-scope','source-revision','future','expired','provider','bad-day','duplicate','item-count'] as const)('rejects invalid private content %s',kind=>{
+    const temporal:any=rawTemporalPreview();const c=temporal[0].content;
+    if(kind==='owner-scope')c.visibility='public';if(kind==='source-revision')c.sourceRevision=9;if(kind==='future')c.fetchedAt=now+1;
+    if(kind==='expired')c.validUntil=now;if(kind==='provider')c.providerUrl='javascript:bad';if(kind==='bad-day')c.items[0].date='2026-02-30';
+    if(kind==='duplicate')temporal.push(temporal[0]);if(kind==='item-count')c.items.push(c.items[0]);
+    expect(()=>decodePreview({...rawPreview(),validUntil:now+60000,temporal})).toThrow();
+  });
+  it('renders weather alongside feed cards, preserves attribution and explains Calendar absence',async()=>{
+    const f=workspaceFixture();await f.controller.load();expect(f.controller.getSnapshot().status).toBe('ready');
+    const html=renderToString(<RadarDashboard controller={f.controller} onLogout={()=>{}}/>);
+    expect(html).toContain('3日間の天気');expect(html).toContain('CC BY 4.0');expect(html).toContain('Calendar連携は未接続');
+    expect(html).toContain('Fixture science');expect(html).not.toContain('secret-owner');
+    f.controller.stop();expect(renderToString(<RadarDashboard controller={f.controller} onLogout={()=>{}}/>)).not.toContain('3日間の天気');
+  });
+  it('uses one mixed selection and rechecks a single revision across feed/private/audit views',async()=>{
+    const f=workspaceFixture();await f.controller.load();f.views(8);f.api.collect.mockResolvedValue({revision:8});
+    await f.controller.collect(['science','weather']);expect(f.api.collect).toHaveBeenCalledWith(['science','weather'],4,expect.any(AbortSignal));
+    expect(f.controller.getSnapshot().status).toBe('ready');expect(f.controller.getSnapshot().data?.sources.revision).toBe(8);
+  });
+  it('saves and deletes private source settings with exact owner revision and rereads, without acquisition',async()=>{
+    const f=workspaceFixture();await f.controller.load();f.views(5);await f.controller.saveTemporal('weather',weatherSource);
+    expect(f.api.saveTemporal).toHaveBeenCalledWith('weather',4,weatherSource,expect.any(AbortSignal));expect(f.api.collect).not.toHaveBeenCalled();
+    f.views(6);f.api.revokeTemporal.mockResolvedValue({revision:6});await f.controller.revokeTemporal('weather');
+    expect(f.api.revokeTemporal).toHaveBeenCalledWith('weather',5,expect.any(AbortSignal));
+  });
+  it.each(['missing-source','wrong-kind','wrong-version','short-consent'] as const)('rejects private/source mismatch %s',async kind=>{
+    const f=workspaceFixture();const s=decodeSources({...rawSources(),temporal:rawTemporalSources()});
+    if(kind==='missing-source')s.temporal!.sources=[];if(kind==='wrong-kind')s.temporal!.sources[0].source={kind:'calendar',enabled:true,timeZone:'Asia/Tokyo',consentExpiresAt:now+86400000,bindingId:'test',days:3,revision:1};
+    if(kind==='wrong-version')s.temporal!.sources[0].source!.revision=2;if(kind==='short-consent')s.temporal!.sources[0].source!.consentExpiresAt=now+1;
+    f.api.sources.mockResolvedValue(s);await f.controller.load();expect(f.controller.getSnapshot().error).toBe('invalid');expect(f.controller.getSnapshot().data).toBeNull();
+  });
+  it('expires all views at the shorter connection deadline',async()=>{
+    const f=workspaceFixture();f.api.sources.mockResolvedValue(decodeSources({...rawSources(),temporal:{...rawTemporalSources(),validUntil:now+300}}));
+    await f.controller.load();await vi.advanceTimersByTimeAsync(300);expect(f.controller.getSnapshot().data).toBeNull();
+  });
+  it('posts private settings only to the explicit route and never sends owner or a credential',async()=>{
+    const fetcher=vi.fn(async()=>new Response(JSON.stringify({revision:5})));const client=createRadarClient(fetcher);const signal=new AbortController().signal;
+    await client.saveTemporal!('weather',4,weatherSource,signal);const [path,init]=fetcher.mock.calls[0] as any;
+    expect(path).toBe('/api/radar/temporal/sources/weather');expect(JSON.parse(init.body)).toEqual({expectedRevision:4,source:weatherSource});
+    expect(init.credentials).toBe('omit');await client.revokeTemporal!('weather',4,signal);expect((fetcher.mock.calls[1] as any)[1].method).toBe('DELETE');
+  });
+});

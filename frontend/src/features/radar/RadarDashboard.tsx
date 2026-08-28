@@ -1,3 +1,4 @@
+import { TemporalRadarPanel } from './TemporalRadarPanel';
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import type { RadarController } from './radarController';
 import type { RadarErrorCode, SourceEntry, AuditEvent } from './radarClient';
@@ -54,6 +55,9 @@ function ReadyRadar({ controller, data }: { controller: RadarController; data: N
   const [collecting, setCollecting] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
   const active = data.sources.sources.filter(s => s.source);
+  const allSources = [...data.sources.sources,...(data.sources.temporal?.sources ?? [])];
+  const canAdd = allSources.length < 32 && allSources.filter(e=>e.source).length < 10;
+  const collectable = allSources.filter(e=>e.source);
   const canCollect = data.sources.collectionAvailable === true;
   const actionLabels: Record<AuditEvent['action'], string> = { configure: '設定更新', revoke: '削除', reserve: '取得予約', collect: '取得完了', collect_failed: '取得停止', maintain: '期限切れの整理' };
   return <>
@@ -61,7 +65,7 @@ function ReadyRadar({ controller, data }: { controller: RadarController; data: N
       <div className={styles.sectionHeading}><h2 id="collect-title">ソースを明示的に取得</h2><span>最大3ソース・30秒</span></div>
       <p>再読み込みとは別の操作です。選択したソースだけを取得し、取得回数を消費します。自動再試行・投稿は行いません。</p>
       {!canCollect && <p className={styles.note}>取得機能はまだ接続されていません。</p>}
-      <fieldset disabled={!canCollect || collecting}><legend>取得するソース</legend>{active.map(entry => <label key={entry.id} className={styles.pickSource}>
+      <fieldset disabled={!canCollect || collecting}><legend>取得するソース</legend>{collectable.map(entry => <label key={entry.id} className={styles.pickSource}>
         <input type="checkbox" checked={selected.includes(entry.id)} disabled={!entry.source!.enabled || entry.source!.consentExpiresAt <= data.preview.servedAt || (!selected.includes(entry.id) && selected.length >= 3)}
           onChange={event => { setSelected(ids => event.target.checked ? [...ids, entry.id] : ids.filter(id => id !== entry.id)); }} />{entry.id}
       </label>)}</fieldset>
@@ -80,9 +84,10 @@ function ReadyRadar({ controller, data }: { controller: RadarController; data: N
         <p className={styles.reason}>選定理由：{item.matchedTopicIds.length ? `設定したトピック ${item.matchedTopicIds.join('・')}` : '登録ソースの掲載情報'}。記事の真偽・新規性を保証するものではありません。</p>
       </article>)}</div>
     </section>
+    {data.sources.temporal && <TemporalRadarPanel controller={controller} sources={data.sources.temporal} preview={data.preview.temporal ?? []} canAdd={canAdd} />}
     <section aria-labelledby="sources-title" className={styles.sources}>
-      <div className={styles.sectionHeading}><div><h2 id="sources-title">自分のソース</h2><p>公開YouTube / Webフィード。天気・Calendarは準備中。</p></div>
-        <button type="button" disabled={active.length >= 10 || data.sources.sources.length >= 32} onClick={() => { setEditor('new'); setDeleting(null); setCollecting(false); }}>ソースを追加</button></div>
+      <div className={styles.sectionHeading}><div><h2 id="sources-title">自分のソース</h2><p>公開YouTube / Webフィード。天気・予定とは別に管理します。</p></div>
+        <button type="button" disabled={!canAdd} onClick={() => { setEditor('new'); setDeleting(null); setCollecting(false); }}>ソースを追加</button></div>
       {active.length === 0 && <p className={styles.empty}>ソースはまだ登録されていません。</p>}
       <ul className={styles.sourceList}>{active.map(entry => <li key={entry.id}>
         <div><strong>{entry.id}</strong><span className={styles.sourceState}>{!entry.source!.enabled ? '停止中' : entry.source!.consentExpiresAt <= data.preview.servedAt ? '同意期限切れ' : '同意あり'}</span>

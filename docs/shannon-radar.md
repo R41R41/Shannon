@@ -396,7 +396,7 @@ UIは取得前に設定・候補・監査・未保存draftを消し、二重操�
 
 次はweather/calendarをowner aggregateへ組み込むschema/version移行・期限/予算/CAS/監査の互換試験と本人設定/Calendar broker。さらに承認付きDiscord outbox/配信直前認可、全ownerのexpiry purge/監査拡充が残る。実統合は認証/専用Bot/実ソース/費用条件を確認して別工程で行う。prodは読み取りのみ、dev起動ロックを維持する。
 
-## 17. RAD-1H：版付きcatalogと天気・予定の本人限定保存（2026-08-29、dev限定）
+## 17. RAD-1H：版付きcatalogと天気・予定の本人限定保存（2026-08-29、dev限定・以下は当時の記録）
 
 ### 責務とデータの境界
 
@@ -425,3 +425,29 @@ rollbackはv2互換版へ戻す。旧コードへ戻すためvalidatorを外し�
 既存radarPersonalテストを拡張し、旧文書の読取り/初回更新・未知版拒否、共通上限/予算・8並行取得、本人分離・再認証/権限版変更・取消・応答不明、snapshotの最小化/期限/purgeを検証する。既存feedの認証期限/lease失効エラーも維持する。隔離Mongo37029の新しい架空DBで、validator未設定時の拒否、移行前後の旧replacement拒否、旧予算/墓標保持、feed/天気の8並行CASと予算共用、期限切れsnapshotの物理消去・別owner不変を確認する。通常DBでは実行しない。試験後に一時mongodを正常停止し、証跡はradar-temporal-catalog-20260829へ保全する。
 
 これは内部application serviceまでの段階。天気/CalendarのHTTP登録・本人設定UI・既存session runnerへの配線、実Calendar broker/OAuth・権限の保存/撤回、実Firebase E2E、全owner worker/完全監査、承認付きDiscord outboxは未実装。既存feed HTTP/UIは引き続き天気/Calendarを拒否し、内部serviceの認証/予算を迂回してadapterを直接呼ばない。次は明示注入されたtyped serviceを本人のHTTP/session/UIへ接続し、地域の明示選択とCalendar連携状態・期限表示を架空fixtureで検証する。実連携の条件を満たすまでmain server/scheduler未登録・本体停止・dev起動ロックを維持する。prod読み取りのみ、通常DB/env/Bot/実取得/投稿/push/本番反映なし。
+
+## 18. RAD-1I：個人Radarの画面から取得までを統合（2026-08-29、dev限定）
+
+部品ごとに区切る進め方から、本人が使う一連の機能をまとめて実装・検証・記録する進め方へ変更する。今回は公開feed・天気・Calendarの設定→選択→明示取得→保存→表示→操作履歴→設定削除をひとつの本人画面へ接続した。実provider/認証が揃っていないため、動作確認はVM devの実HTTP/application serviceと架空connector/認証/in-memory catalogを使う。main serverや通常DBの稼働を意味しない。
+
+### 接続構造
+
+`RadarWorkspace`は本人用の合成ビューと設定受付のapplication façade。公開feedは`PersonalRadarService`、非公開天気/予定は`PersonalTemporalRadar`へ委譲し、同じowner・catalog版・返却期限を照合する。private snapshotを公開推薦やDiscordカードへ変換しない。Calendarの表示直前grant検査を外側の再認証より後に置き、認証待機中の権限変更を見逃さない。
+
+`registerRadarRoutes`の第5引数へworkspaceを明示注入した場合だけ、PUT/DELETE `/api/radar/temporal/sources/:id`を登録する。GET sources/previewは同一版のprivate要素を追加し、既存feed-only呼出元は互換を維持する。`RadarSessionRunner`にも同じtemporal serviceを第5引数で注入する。feed/temporalは同じrepository・同じserver取得policyを使う構成が必須。最大3件の混合選択を予約前に検査し、取得ごとの再認証・共通予算/lease/CAS/監査・30秒上限・取消/失敗の非返却を維持する。途中まで確定した結果を巻き戻さない。
+
+Calendar選択肢は、既に接続された本人のbindingを列挙する明示的なportからだけ得る。id/表示名/timezone/期限を検査・最小化し、設定時に選択肢と実grantを再確認する。UIの選択肢は権限の証拠ではない。任意account ID、scope、tokenをHTTPから受け取らない。portがなければ未接続と表示し、Google認証が使えるように見せない。これは実OAuth brokerではなく、実接続の次工程で実装・注入する契約である。
+
+### 本人画面
+
+天気は0.1度刻みの地域座標・timezoneを本人が入力する。位置情報を自動取得せず、住所を入力させない。Calendarは接続済み選択肢と取得日数を選ぶ。両方に明示同意・期限・停止/削除を設け、設定保存だけでは取得しない。選択して確認する取得操作でfeed/天気/予定を一緒に取得できる。
+
+天気は3日の日付・日本語の天気・最低/最高気温・降水確率、出典/ライセンスを表示する。天気表示は[Open-MeteoのWMO対応表](https://open-meteo.com/en/docs)に基づき、未知を晴れや降水0としない。予定はタイトル・時刻/終日・timezone・仮予定・一部取得の注意だけ。元アカウント/場所/参加者/説明は表示しない。終日の終了日は含まないことを明示する。
+
+`temporalClient`は型別に応答を検査・最小化し、controllerで現在設定のkind/版/timezone/同意と照合する。公開/非公開のID上限と重複も共通。sources/preview/auditが同じ版でない場合は表示せず、最大60秒と接続/内容/認証期限の最短で消す。保存/削除/取得の前に表示を消し、成功後に再読する。ログアウト・owner交替・離脱・遅延応答は既存のsession世代管理で遮断する。全端末への即時撤回は保証しない。
+
+### 検証と次の機能単位
+
+既存backend/frontendテストへ混合取得HTTP、本人分離、設定/権限/期待版、private DTO最小化、接続期限、画面表示、保存/削除後の再読を追加。loopback13002のfixtureで実画面から混合取得・設定編集・監査・owner切替を確認し、終了後fixture/tunnelを停止する。試験証跡は`radar-workspace-20260829`。全backend通常型検査は未完で、対象の通常型検査と全体noCheck変換を区別する。repository/validatorの変更や通常DBへの適用は今回ない。
+
+次は実接続をひとつの機能単位として進める：独立したdev認証/許可UID、Calendar OAuth brokerとtoken保管/撤回、明示ソース/地域と取得・費用上限、devのvalidator移行を揃えて限定稼働を検証する。承認付きDiscordカードは別の配信権限・outbox・送信先制限・専用Botを備えた次の機能単位とする。全owner purge/委譲worker、人物の本人管理/全面撤回、残る旧音声/Web/EventBus境界もロードマップに残る。prodは別の承認済みリリース工程だけで反映し、今回は変更しない。

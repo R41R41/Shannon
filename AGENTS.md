@@ -1,3 +1,7 @@
+## RAD-1I（2026-08-29）の注意
+
+`docs/shannon-radar.md`18節。個人Radarの天気/Calendar設定・混合取得・表示・監査をHTTP/session/UIまで接続。RadarWorkspaceとrunnerには同じtemporal service、同じrepository/policyを明示注入する。Calendar選択肢は本人binding列挙portのみ、実OAuth brokerは未接続。公開feed/非公開snapshotの型と配信権限を混ぜない。最大3件/30秒・共通予算/CAS/再認証と表示期限を維持する。実画面試験はloopback13002の架空fixture、終了後停止。main server未登録・通常DB validator未適用・実認証/実取得/投稿/push/prod反映なし。機能単位でまとめて改修し、prod read-onlyとdev起動ロックは維持する。以下は過去の段階。
+
 ## RAD-1H（2026-08-29）の注意
 
 `docs/shannon-radar.md`17節。schemaVersion=2とtemporalSourcesを既存owner文書に追加し、公開feedと非公開天気/予定は分けながら取得予算・lease・CAS・監査・ID上限を共用する。Mongo書込みには完全一致のstrict/error validatorが必須。自動導入せず、通常DBへ無断適用しない。旧writerのreplacementは新fieldを落とすため混在/旧版rollbackは禁止。旧文書は読取りで書換えず、最初の明示更新で予算/墓標を保ったままv2へ移す。Calendar権限stampは認証の代替ではなく保存/表示前にbroker再照合する。token/元calendar ID/予定の不要fieldは保存しない。内部serviceまででHTTP/UI/runner・実broker未接続、低水準adapterの直接起動は禁止。テストは外部fakeと別Mongo37029のみ、終了後正常停止。通常DB/env/Bot・main server/scheduler・本体起動/実取得/投稿/push/prod反映なし、prod read-onlyと起動ロック維持。以下は過去の段階。

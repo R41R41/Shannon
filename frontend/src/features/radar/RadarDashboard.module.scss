@@ -59,4 +59,10 @@
 @media (max-width: 800px) { .page { padding: 24px 18px; }.cards { grid-template-columns: 1fr; }.header h1 { font-size: 38px; }.header nav { align-items: flex-end; flex-direction: column; gap: 8px; }.intro { align-items: flex-start; flex-direction: column; gap: 14px; }.fields { grid-template-columns: 1fr; }.sourceList li { align-items: flex-start; flex-direction: column; }.sectionHeading { align-items: flex-start; }.sectionHeading > button { flex-shrink: 0; }.editor { padding: 18px; } }
 
 .pickSource { display: inline-flex; align-items: center; gap: .5rem; margin: .6rem 1rem .6rem 0; overflow-wrap: anywhere; }
+.temporalGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 16px; }
+.temporalActions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 18px; }
+.weatherDays { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; font-size: 12px; }
+.weatherDays > div { display: grid; gap: 5px; background: #f3f6f2; padding: 10px 6px; border-radius: 6px; }
+.calendarEvents { margin: 0; padding-left: 20px; font-size: 13px; }
+.calendarEvents li + li { margin-top: 14px; }.calendarEvents span, .calendarEvents small { display: block; color: var(--muted); font-size: 11px; }
 .auditList { padding-left: 1.25rem; li { margin: .8rem 0; overflow-wrap: anywhere; } span { font-size: .85rem; opacity: .8; } }

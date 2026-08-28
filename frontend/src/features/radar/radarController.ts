@@ -1,3 +1,4 @@
+import type { TemporalInput } from './temporalClient';
 import { RadarClientError, type RadarClient, type RadarErrorCode, type SourceInput, type SourcesSnapshot, type PreviewSnapshot, type AuditSnapshot, sourceIdValid } from './radarClient';
 
 export interface RadarSnapshot {
@@ -48,8 +49,14 @@ export class RadarController {
           || entry.consentExpiresAt <= preview.servedAt || !entry.articleHosts.includes(new URL(item.card.sourceUrl).hostname))
           throw new RadarClientError('invalid');
       }
+      if (!!sources.temporal !== !!preview.temporal) throw new RadarClientError('invalid');
+      for (const item of preview.temporal ?? []) {
+        const entry = sources.temporal?.sources.find(e=>e.id===item.sourceId)?.source;
+        if(!entry||!entry.enabled||entry.kind!==item.content.kind||entry.revision!==item.sourceRevision||entry.timeZone!==item.timeZone
+          ||entry.consentExpiresAt<item.content.validUntil)throw new RadarClientError('invalid');
+      }
       // Server-relative TTL minus the entire round trip avoids extending a deadline because of client wall-clock skew.
-      const remaining = Math.min(60000, preview.validUntil - preview.servedAt, audit.validUntil - audit.servedAt) - (this.monotonicNow() - started);
+      const remaining = Math.min(60000, preview.validUntil - preview.servedAt, audit.validUntil - audit.servedAt, sources.temporal ? sources.temporal.validUntil - sources.temporal.servedAt : 60000) - (this.monotonicNow() - started);
       if (!Number.isFinite(remaining) || remaining <= 0) { this.clear('expired'); return; }
       this.deadline = this.monotonicNow() + remaining;
       this.set({ status: 'ready', data: { sources, preview, audit } });
@@ -66,10 +73,20 @@ export class RadarController {
     const data = this.state.data;
     if (data.sources.collectionAvailable !== true) return;
     if (!Array.isArray(sourceIds) || !sourceIds.length || sourceIds.length > 3 || new Set(sourceIds).size !== sourceIds.length
-      || !sourceIds.every(id => sourceIdValid(id) && data.sources.sources.some(entry => entry.id === id && entry.source?.enabled
+      || !sourceIds.every(id => sourceIdValid(id) && [...data.sources.sources,...(data.sources.temporal?.sources ?? [])].some(entry => entry.id === id && entry.source?.enabled
         && entry.source.consentExpiresAt > data.preview.servedAt))) return;
     const selected = [...sourceIds]; const expected = data.sources.revision;
     return this.perform('collecting', signal => this.client.collect(selected, expected, signal));
+  }
+  async saveTemporal(id:string,source:TemporalInput) {
+    if(!this.isReadable()||!this.state.data?.sources.temporal||!this.client.saveTemporal)return;
+    const revision=this.state.data.sources.revision,input=structuredClone(source);
+    return this.perform('saving',signal=>this.client.saveTemporal!(id,revision,input,signal));
+  }
+  async revokeTemporal(id:string) {
+    if(!this.isReadable()||!this.state.data?.sources.temporal||!this.client.revokeTemporal)return;
+    const revision=this.state.data.sources.revision;
+    return this.perform('saving',signal=>this.client.revokeTemporal!(id,revision,signal));
   }
   cancelCollection() {
     if (this.state.status !== 'collecting') return;

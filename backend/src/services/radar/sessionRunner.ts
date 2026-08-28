@@ -1,3 +1,5 @@
+import type { PersonalTemporalRadar } from './personalTemporalRadar.js';
+import { validTemporalSource } from '../../modules/radar/temporalSources.js';
 import { AccessError, type AccessService, type RequestContext } from '../../modules/access/index.js';
 import { validId } from '../../modules/radar/content.js';
 import { validFeedSubscription } from '../../modules/radar/sourceRegistry.js';
@@ -14,7 +16,7 @@ export const RADAR_SESSION_MAX_MS = 30000;
 export class RadarSessionRunner {
   constructor(private readonly access: Pick<AccessService, 'authenticate'>,
     private readonly radar: PersonalRadarService, private readonly connector: FeedConnectorPort,
-    private readonly clock: () => number = Date.now) {}
+    private readonly clock: () => number = Date.now, private readonly temporal?: PersonalTemporalRadar) {}
 
   async run(idToken: unknown, body: unknown, outer: AbortSignal) {
     if (!body || typeof body !== 'object' || Array.isArray(body)) throw new PersonalRadarError('INVALID_INPUT');
@@ -61,17 +63,23 @@ export class RadarSessionRunner {
       const context = await refresh(); guard();
       const snapshot = await this.radar.sources(context); guard();
       if (snapshot.revision !== expected) throw new PersonalRadarError('CONFLICT');
-      // Validate the entire selection before spending any request budget. Never substitute a new source.
+      const privateSources = this.temporal ? await this.temporal.sources(context, refresh) : undefined; guard();
+      if (privateSources && privateSources.revision !== expected) throw new PersonalRadarError('CONFLICT');
+      const temporalIds = new Set<string>();
+      // Validate the entire mixed selection before spending any request budget.
       for (const id of selected) {
         const source = snapshot.sources.find(s => s.id === id)?.source;
-        if (!source || !validFeedSubscription(source, { kind: 'personal', subjectId: owner! }, this.clock()))
-          throw new PersonalRadarError('NOT_FOUND');
+        const temporalSource = privateSources?.sources.find(s => s.id === id)?.source;
+        if (source && validFeedSubscription(source, { kind: 'personal', subjectId: owner! }, this.clock())) continue;
+        if (temporalSource && validTemporalSource({ ...temporalSource, owner: owner! }, this.clock())) { temporalIds.add(id); continue; }
+        throw new PersonalRadarError('NOT_FOUND');
       }
       const completedSourceIds: string[] = [];
       for (const id of selected) {
         guard();
         const current = await refresh(); guard();
-        const result = await this.radar.collect(current, id, this.connector, controller.signal, refresh, expected);
+        const result = temporalIds.has(id) ? await this.temporal!.collect(current, id, expected, refresh, controller.signal)
+          : await this.radar.collect(current, id, this.connector, controller.signal, refresh, expected);
         guard(); expected = result.revision; completedSourceIds.push(id);
       }
       const latest = await refresh(); guard();

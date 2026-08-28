@@ -1,15 +1,16 @@
+import { decodeTemporalSources, decodeTemporalPreview, temporalInput, type TemporalSources, type TemporalPreview, type TemporalInput } from './temporalClient';
 /** Browser DTOs are explicitly decoded; backend/domain objects are never shared as unchecked casts. */
 export interface SourceInput {
   enabled: boolean; consentExpiresAt: number; kind: 'youtube' | 'web'; locator: string;
   articleHosts: string[]; topicIds: string[]; maxItems: number; retentionMs: number;
 }
 export interface SourceEntry { id: string; source: (SourceInput & { revision: number }) | null }
-export interface SourcesSnapshot { revision: number; sources: SourceEntry[]; collectionAvailable?: boolean }
+export interface SourcesSnapshot { revision: number; sources: SourceEntry[]; collectionAvailable?: boolean; temporal?: TemporalSources }
 export interface PreviewItem {
   contentId: string; sourceId: string; sourceRevision: number; score: number; matchedTopicIds: string[];
   card: { title: string; fact: string; sourceUrl: string; metadata: string[]; tags: string[]; mentions: 'none'; notify: false; thread: 'none' };
 }
-export interface PreviewSnapshot { revision: number; items: PreviewItem[]; notify: false; validUntil: number; servedAt: number }
+export interface PreviewSnapshot { revision: number; items: PreviewItem[]; temporal?: TemporalPreview[]; notify: false; validUntil: number; servedAt: number }
 export interface AuditEvent {
   revision: number; at: number; sourceId: string; action: 'configure' | 'revoke' | 'reserve' | 'collect' | 'collect_failed' | 'maintain';
   added: number; updated: number; unchanged: number; attemptId?: string;
@@ -22,6 +23,8 @@ export interface AuditSnapshot {
 export type RadarErrorCode = 'authorization' | 'conflict' | 'invalid' | 'unavailable' | 'network' | 'uncertain';
 export class RadarClientError extends Error { constructor(readonly code: RadarErrorCode) { super(code); } }
 export interface RadarClient {
+  saveTemporal?(id: string, expectedRevision: number, source: TemporalInput, signal: AbortSignal): Promise<{ revision: number }>;
+  revokeTemporal?(id: string, expectedRevision: number, signal: AbortSignal): Promise<{ revision: number }>;
   sources(signal: AbortSignal): Promise<SourcesSnapshot>;
   preview(signal: AbortSignal): Promise<PreviewSnapshot>;
   audit(signal: AbortSignal): Promise<AuditSnapshot>;
@@ -66,7 +69,10 @@ export function decodeSources(value: unknown): SourcesSnapshot {
   });
   if (new Set(sources.map(s => s.id)).size !== sources.length || sources.filter(s => s.source).length > 10) return invalid();
   if (value.collectionAvailable !== undefined && typeof value.collectionAvailable !== 'boolean') return invalid();
-  return { revision: value.revision, sources, collectionAvailable: value.collectionAvailable === true };
+  const temporal = value.temporal === undefined ? undefined : decodeTemporalSources(value.temporal);
+  const all = [...sources,...(temporal?.sources ?? [])];
+  if(all.length>32||all.filter(e=>e.source).length>10||new Set(all.map(e=>e.id)).size!==all.length)return invalid();
+  return { revision: value.revision, sources, collectionAvailable: value.collectionAvailable === true, ...(temporal ? {temporal} : {}) };
 }
 export function decodePreview(value: unknown): PreviewSnapshot {
   if (!record(value) || !integer(value.revision) || value.notify !== false || !integer(value.validUntil)
@@ -83,7 +89,8 @@ export function decodePreview(value: unknown): PreviewSnapshot {
         metadata: [...c.metadata], tags: [...c.tags], mentions: 'none' as const, notify: false as const, thread: 'none' as const } };
   });
   if (new Set(items.map(i => i.contentId)).size !== items.length) return invalid();
-  return { revision: value.revision, items, notify: false, validUntil: value.validUntil, servedAt: value.servedAt };
+  return { revision: value.revision, items, notify: false, validUntil: value.validUntil, servedAt: value.servedAt,
+    ...(value.temporal === undefined ? {} : {temporal: decodeTemporalPreview(value.temporal,value.servedAt,value.validUntil)}) };
 }
 export function decodeAudit(value: unknown): AuditSnapshot {
   if (!record(value) || !integer(value.revision) || !integer(value.omittedThroughRevision) || value.omittedThroughRevision > value.revision
@@ -136,7 +143,13 @@ export function createRadarClient(fetcher: (path: string, init: RequestInit) => 
     if (!record(result) || !integer(result.revision) || result.revision !== expectedRevision + 1) return invalid();
     return { revision: result.revision };
   };
-  return { sources: async s => decodeSources(await request('/api/radar/sources', s)), preview: async s => decodePreview(await request('/api/radar/preview', s)),
+  const mutateTemporal = async(id:string, expectedRevision:number, signal:AbortSignal, source?:TemporalInput) => {
+    if(!sourceIdValid(id)||!integer(expectedRevision))return invalid();
+    const result=await request(`/api/radar/temporal/sources/${encodeURIComponent(id)}`,signal,source?'PUT':'DELETE',
+      {expectedRevision,...(source?{source:temporalInput(source)}:{})});
+    if(!record(result)||result.revision!==expectedRevision+1)return invalid();return {revision:result.revision as number};
+  };
+  return { saveTemporal:(id,rev,source,s)=>mutateTemporal(id,rev,s,source), revokeTemporal:(id,rev,s)=>mutateTemporal(id,rev,s), sources: async s => decodeSources(await request('/api/radar/sources', s)), preview: async s => decodePreview(await request('/api/radar/preview', s)),
     audit: async s => decodeAudit(await request('/api/radar/audit', s)),
     collect: async (ids, rev, s) => {
       if (!integer(rev) || !Array.isArray(ids) || !ids.length || ids.length > 3 || !ids.every(sourceIdValid) || new Set(ids).size !== ids.length
