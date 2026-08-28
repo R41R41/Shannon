@@ -25,8 +25,6 @@ describe('PostWeatherAgent Integration', () => {
     const agent = await PostWeatherAgent.create();
     const result = await agent.createPost();
     console.log(result);
-    const resultForToyama = await agent.createPostForToyama();
-    console.log(resultForToyama);
   }, 30000);
 
   afterAll(() => {

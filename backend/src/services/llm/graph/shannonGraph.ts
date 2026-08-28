@@ -124,10 +124,78 @@ function createExecuteNode(
     const context = envelopeToTaskContext(envelope);
     const emotionState: EmotionState = state._emotionState ?? { current: state.emotion ?? null };
 
-    // ═══ ShannonExecutor パス (Anthropic API 直接呼出) ═══
-    // FCA/LangChain を経由せず、Anthropic SDK で直接実行。
-    // フォールバック: SHANNON_USE_FCA=true で従来の FCA/ParallelExecutor に戻す。
-    if (config.anthropic?.apiKey && process.env.SHANNON_USE_FCA !== 'true') {
+    const fcaState = {
+      taskId: envelope.requestId,
+      userMessage: envelope.text ?? null,
+      messages: state._legacyMessages,
+      emotionState,
+      memoryState: undefined as undefined,
+      context,
+      channelId: envelope.discord?.channelId ?? envelope.conversationId,
+      environmentState: (envelope.metadata?.environmentState as string) ?? null,
+      isEmergency: envelope.tags.includes('emergency'),
+      memoryPrompt: state.memoryPrompt || undefined,
+      relationshipPrompt: state.relationshipPrompt,
+      selfModelPrompt: state.selfModelPrompt,
+      strategyPrompt: state.strategyPrompt,
+      internalStatePrompt: state.internalStatePrompt,
+      worldModelPrompt: state.worldModelPrompt,
+      onToolStarting: state._onToolStarting,
+      onTaskTreeUpdate: state._onTaskTreeUpdate,
+      abortSignal: state._abortSignal,
+      selectedModel: state.selectedModel,
+      classifyMode: state.mode,
+      needsTools: state.needsTools,
+      needsPlanning: state.needsPlanning,
+      onToolsExecuted: (messages: BaseMessage[], results: ExecutionResult[]) => {
+        if (emotionNode) {
+          emotionNode
+            .evaluateAsync(messages, results, emotionState.current)
+            .then((e) => { emotionState.current = e; })
+            .catch(() => {});
+        }
+      },
+    };
+
+    const runFcaPath = async (): Promise<Partial<ShannonStateType>> => {
+      if (parallelExecutor) {
+        const result = await parallelExecutor.run(fcaState, state._abortSignal);
+        return {
+          finalAnswer: result.lastAssistantContent ?? result.taskTree?.strategy ?? undefined,
+          taskTree: result.taskTree ?? undefined,
+          emotion: result.finalEmotion ?? emotionState.current ?? undefined,
+          trace: ['node:execute:parallel'],
+        };
+      }
+
+      const startTime = Date.now();
+      const agentResult = await fca.run(fcaState);
+
+      try {
+        const platform = context?.platform ?? envelope.channel ?? 'unknown';
+        const goal = envelope.text ?? '';
+        const episode = TaskEpisodeMemory.buildEpisodeFromResult(
+          goal, platform, agentResult.taskTree, startTime, 0,
+        );
+        TaskEpisodeMemory.getInstance().saveEpisode(episode).catch(() => {});
+      } catch { /* ignore */ }
+
+      return {
+        finalAnswer: agentResult.lastAssistantContent ?? agentResult.taskTree?.strategy ?? undefined,
+        taskTree: agentResult.taskTree ?? undefined,
+        emotion: emotionState.current ?? undefined,
+        trace: ['node:execute:fca'],
+      };
+    };
+
+    // Discord/Web 等は FCA (OpenAI / LangChain Anthropic)。Minebot のみ ShannonExecutor。
+    const useShannonExecutor =
+      envelope.channel === 'minecraft'
+      && Boolean(config.anthropic?.apiKey)
+      && process.env.SHANNON_USE_FCA !== 'true';
+
+    // ═══ ShannonExecutor パス (Anthropic API 直接呼出・Minecraft のみ) ═══
+    if (useShannonExecutor) {
       try {
         const { ShannonExecutor, skillToAnthropicTool, routineToAnthropicTool } = await import('./ShannonExecutor.js');
         const { PromptBuilder } = await import('./nodes/prompt/PromptBuilder.js');
@@ -280,18 +348,11 @@ function createExecuteNode(
           savedTaskNodes: result.taskNodes,
         };
       } catch (e) {
-        logger.error(`❌ ShannonExecutor failed: ${e}`, e);
-        return {
-          finalAnswer: `エラーが発生しました: ${e instanceof Error ? e.message : String(e)}`,
-          trace: ["node:execute:error"],
-        };
+        logger.error(`❌ ShannonExecutor failed, falling back to FCA: ${e}`, e);
       }
     }
 
-    return {
-      finalAnswer: "Anthropic API key が設定されていません",
-      trace: ["node:execute:no_api_key"],
-    };
+    return runFcaPath();
   };
 }
 

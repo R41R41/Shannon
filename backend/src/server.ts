@@ -65,7 +65,12 @@ class Server {
 
     // --- オプショナルサービス (認証情報不足時はスキップ) ---
     this.discordBot = Server.tryCreate('Discord', () => DiscordBot.getInstance(isDevMode));
-    this.twitterClient = Server.tryCreate('Twitter', () => TwitterClient.getInstance(isDevMode));
+    if (config.twitter.disabled) {
+      logger.warn('[Server] Twitter は TWITTER_DISABLED=true のため起動しません');
+      this.twitterClient = null;
+    } else {
+      this.twitterClient = Server.tryCreate('Twitter', () => TwitterClient.getInstance(isDevMode));
+    }
     this.notionClient = Server.tryCreate('Notion', () => NotionClient.getInstance(isDevMode));
   }
 

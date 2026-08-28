@@ -85,6 +85,7 @@ export const config = {
   },
 
   twitter: {
+    disabled: optional('TWITTER_DISABLED', 'false').toLowerCase() === 'true',
     userId: optional('TWITTER_USER_ID', ''),
     email: optional('TWITTER_EMAIL', ''),
     password: optional('TWITTER_PASSWORD', ''),

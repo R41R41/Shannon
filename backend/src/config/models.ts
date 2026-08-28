@@ -20,7 +20,7 @@ export const models = {
   planning: 'o4-mini',
 
   /** Content generation: reply to comments, fortune, etc. */
-  contentGeneration: 'gemini-3-pro-preview',
+  contentGeneration: 'gpt-5.5',
 
   /** Scheduled posting agents (weather, news, about-today) */
   scheduledPost: 'gpt-5-mini',
@@ -28,8 +28,8 @@ export const models = {
   /** Auto-tweet: exploration phase (tool-calling agent) */
   autoTweetExplore: 'gpt-4.1-mini',
 
-  /** Auto-tweet: creative generation phase (Gemini) */
-  autoTweetGenerate: 'gemini-3-pro-preview',
+  /** Auto-tweet: creative generation phase */
+  autoTweetGenerate: 'gpt-5.5',
 
   /** Auto-tweet: review phase */
   autoTweetReview: 'gpt-4.1-mini',

@@ -285,7 +285,7 @@ export class AgentOrchestrator {
       const result = await this.weatherAgent.createPost();
       post = result.text;
       imagePrompt = result.imagePrompt;
-      postForToyama = await this.weatherAgent.createPostForToyama();
+      postForToyama = post;
     } else if (message.command === 'fortune') {
       const result = await this.fortuneAgent.createPost();
       post = result.text;

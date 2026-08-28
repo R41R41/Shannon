@@ -30,6 +30,8 @@ export class RealtimeAPIService {
   private maxReconnectAttempts: number = 5;
   private reconnectDelay: number = 5000; // 5秒
   private sessionRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private fatalError: boolean = false;
   private static SESSION_REFRESH_MS = 55 * 60 * 1000; // 55分（60分上限の前に更新）
 
   constructor() {
@@ -45,32 +47,44 @@ export class RealtimeAPIService {
     this.noVadSessionConfig = {
       type: 'session.update',
       session: {
-        turn_detection: null,
-        modalities: ['text', 'audio'],
-        input_audio_format: 'pcm16',
-        output_audio_format: 'pcm16',
-        input_audio_transcription: { model: models.whisper },
+        type: 'realtime',
+        audio: {
+          input: {
+            format: { type: 'audio/pcm', rate: 24000 },
+            transcription: { model: models.whisper },
+            turn_detection: null,
+          },
+          output: {
+            format: { type: 'audio/pcm', rate: 24000 },
+            voice: 'sage',
+          },
+        },
+        output_modalities: ['audio'],
         instructions:
           'あなたは優秀なアシスタントAI「シャノン」です。敬語を使って日本語で丁寧に簡潔に答えてください。',
         tool_choice: 'none', // オプション：function callingを使用する場合に必要
-        voice: 'sage', // 利用可能なオプション: alloy, ash, ballad, coral, echo, sage, shimmer, verse
-        temperature: 0.8, // 0.6 から 1.2 の間
         tools: [],
       },
     };
     this.vadSessionConfig = {
       type: 'session.update',
       session: {
-        turn_detection: { type: 'server_vad' },
-        modalities: ['text', 'audio'],
-        input_audio_format: 'pcm16',
-        output_audio_format: 'pcm16',
-        input_audio_transcription: { model: models.whisper },
+        type: 'realtime',
+        audio: {
+          input: {
+            format: { type: 'audio/pcm', rate: 24000 },
+            transcription: { model: models.whisper },
+            turn_detection: { type: 'server_vad' },
+          },
+          output: {
+            format: { type: 'audio/pcm', rate: 24000 },
+            voice: 'sage',
+          },
+        },
+        output_modalities: ['audio'],
         instructions:
           'あなたは優秀なアシスタントAI「シャノン」です。敬語を使って日本語で丁寧に簡潔に答えてください。',
         tool_choice: 'none', // オプション：function callingを使用する場合に必要
-        voice: 'sage', // 利用可能なオプション: alloy, ash, ballad, coral, echo, sage, shimmer, verse
-        temperature: 0.8, // 0.6 から 1.2 の間
         tools: [],
       },
     };
@@ -168,7 +182,7 @@ export class RealtimeAPIService {
   }
 
   private async initialize() {
-    if (this.initialized) return;
+    if (this.initialized || this.fatalError) return;
     logger.debug('RealtimeAPI initialized');
 
     const url = `wss://api.openai.com/v1/realtime?model=${models.realtime}`;
@@ -177,7 +191,6 @@ export class RealtimeAPIService {
       this.ws = new WebSocket(url, {
         headers: {
           Authorization: `Bearer ${config.openaiApiKey}`,
-          'OpenAI-Beta': 'realtime=v1',
         },
       });
 
@@ -187,7 +200,6 @@ export class RealtimeAPIService {
           this.ws.send(JSON.stringify(this.noVadSessionConfig));
         }
         this.initialized = true;
-        this.reconnectAttempts = 0;
         this.scheduleSessionRefresh();
         resolve(true);
       });
@@ -198,10 +210,12 @@ export class RealtimeAPIService {
         switch (data.type) {
           case 'session.created':
             logger.debug('Session created');
+            this.reconnectAttempts = 0;
             break;
 
           case 'session.updated':
             logger.debug('Session updated');
+            this.reconnectAttempts = 0;
             break;
 
           case 'response.created':
@@ -210,12 +224,14 @@ export class RealtimeAPIService {
             break;
 
           case 'response.text.delta':
+          case 'response.output_text.delta':
             if (this.onTextResponse) {
               this.onTextResponse(data.delta);
             }
             break;
 
           case 'response.text.done':
+          case 'response.output_text.done':
             logger.success('Text done');
             this.eventBus.log('web', 'green', 'Text done');
             this.isTextResponseComplete = true;
@@ -243,12 +259,14 @@ export class RealtimeAPIService {
             break;
 
           case 'response.audio.delta':
+          case 'response.output_audio.delta':
             if (this.onAudioResponse) {
               this.onAudioResponse(data.delta);
             }
             break;
 
           case 'response.audio.done':
+          case 'response.output_audio.done':
             logger.success(`Response Audio completed: ${this.responseAudioBuffer.length} bytes`);
             this.eventBus.log('web', 'green', 'Response Audio completed');
             this.isAudioResponseComplete = true;
@@ -259,12 +277,14 @@ export class RealtimeAPIService {
             break;
 
           case 'response.audio_transcript.delta':
+          case 'response.output_audio_transcript.delta':
             if (this.onTextResponse) {
               this.onTextResponse(data.delta);
             }
             break;
 
           case 'response.audio_transcript.done':
+          case 'response.output_audio_transcript.done':
             logger.success('Transcript done');
             this.eventBus.log('web', 'green', 'Transcript done');
             this.isTextResponseComplete = true;
@@ -286,6 +306,12 @@ export class RealtimeAPIService {
           case 'error':
             logger.error(`Server error: ${JSON.stringify(data)}`);
             this.eventBus.log('web', 'red', 'Server error', true);
+            if (data.error?.code === 'beta_api_shape_disabled') {
+              logger.error('[RealtimeAPI] GA移行が必要な致命的エラーのため再接続を停止します。');
+              this.fatalError = true;
+              this.cleanup();
+              break;
+            }
             if (data.error?.code === 'session_expired') {
               logger.info('[RealtimeAPI] セッション期限切れ。自動再接続します...', 'cyan');
               if (this.sessionRefreshTimer) {
@@ -328,7 +354,7 @@ export class RealtimeAPIService {
   }
 
   private scheduleReconnect() {
-    if (this.initialized) return;
+    if (this.initialized || this.fatalError || this.reconnectTimer) return;
     this.reconnectAttempts++;
     const delay = Math.min(this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1), 60000);
     logger.debug(`[RealtimeAPI] ${delay / 1000}秒後に再接続します (試行 ${this.reconnectAttempts}/${this.maxReconnectAttempts})...`);
@@ -336,7 +362,8 @@ export class RealtimeAPIService {
       logger.error(`[RealtimeAPI] 最大再接続回数 (${this.maxReconnectAttempts}) を超えました。再接続を停止します。`);
       return;
     }
-    setTimeout(() => {
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
       if (!this.initialized) {
         this.initialize().catch((e) =>
           logger.error(`[RealtimeAPI] 再接続失敗: ${e}`)
@@ -385,7 +412,7 @@ export class RealtimeAPIService {
 
       const responseRequest = {
         type: 'response.create',
-        response: { modalities: ['text'] },
+        response: { output_modalities: ['text'] },
       };
       this.ws?.send(JSON.stringify(responseRequest));
     } catch (error) {
@@ -420,7 +447,7 @@ export class RealtimeAPIService {
       const responseRequest = {
         type: 'response.create',
         response: {
-          modalities: ['audio', 'text'],
+          output_modalities: ['audio'],
         },
       };
       this.ws.send(JSON.stringify(responseRequest));
@@ -447,6 +474,10 @@ export class RealtimeAPIService {
       clearTimeout(this.sessionRefreshTimer);
       this.sessionRefreshTimer = null;
     }
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     if (this.ws) {
       this.ws.close();
       this.ws = null;
@@ -460,7 +491,6 @@ export class RealtimeAPIService {
       this.ws = new WebSocket(url, {
         headers: {
           Authorization: `Bearer ${config.openaiApiKey}`,
-          'OpenAI-Beta': 'realtime=v1',
         },
       });
 
@@ -502,15 +532,21 @@ export class RealtimeAPIService {
     const sessionConfig = {
       type: 'session.update',
       session: {
-        turn_detection: null,
-        modalities: ['text', 'audio'],
-        input_audio_format: 'pcm16',
-        output_audio_format: 'pcm16',
-        input_audio_transcription: { model: models.whisper },
+        type: 'realtime',
+        audio: {
+          input: {
+            format: { type: 'audio/pcm', rate: 24000 },
+            transcription: { model: models.whisper },
+            turn_detection: null,
+          },
+          output: {
+            format: { type: 'audio/pcm', rate: 24000 },
+            voice: 'sage',
+          },
+        },
+        output_modalities: ['audio'],
         instructions:
           'あなたは優秀なアシスタントAI「シャノン」です。敬語を使って日本語で丁寧に簡潔に答えてください。',
-        voice: 'sage',
-        temperature: 0.8,
       },
     };
 

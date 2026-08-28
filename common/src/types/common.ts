@@ -174,7 +174,6 @@ export const promptTypes: PromptType[] = [
   'fortune',
   'discord',
   'forecast',
-  'forecast_for_toyama_server',
   'reply_twitter_comment',
   'emotion',
   'use_tool',
@@ -187,7 +186,6 @@ export type PromptType =
   | 'discord'
   | 'minecraft'
   | 'weather_to_emoji'
-  | 'forecast_for_toyama_server'
   | 'reply_youtube_comment'
   | 'planning'
   | 'reply_twitter_comment'

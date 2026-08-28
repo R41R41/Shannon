@@ -30,6 +30,22 @@ export interface FortuneOutput {
 
 const MAX_REVIEW_RETRIES = 3;
 
+/** 日本語の星座名 → Unicode 星座記号（♈〜♓） */
+const ZODIAC_SYMBOLS: Readonly<Record<string, string>> = {
+  牡羊座: '♈',
+  牡牛座: '♉',
+  双子座: '♊',
+  蟹座: '♋',
+  獅子座: '♌',
+  乙女座: '♍',
+  天秤座: '♎',
+  蠍座: '♏',
+  射手座: '♐',
+  山羊座: '♑',
+  水瓶座: '♒',
+  魚座: '♓',
+};
+
 // ---------------------------------------------------------------------------
 // Schema – top3(詳細) + middle8(簡易) + last1(丁寧)
 // ---------------------------------------------------------------------------
@@ -84,6 +100,7 @@ export class PostFortuneAgent {
   private model: ChatOpenAI;
   private systemPrompt: string;
   private reviewPrompt: string;
+  private lastGenerationRateLimited = false;
 
   constructor(systemPrompt: string, reviewPrompt: string) {
     this.systemPrompt = systemPrompt;
@@ -154,6 +171,14 @@ export class PostFortuneAgent {
 
       const result = await this.generate(feedback);
       if (!result) {
+        if (this.lastGenerationRateLimited) {
+          logger.warn('[Fortune] レート制限のためローカルフォールバックへ切り替え');
+          const localFallback = this.createLocalFallbackFortune();
+          return {
+            text: this.formatFortuneResult(localFallback),
+            imagePrompt: localFallback.imagePrompt,
+          };
+        }
         logger.warn('[Fortune] 生成失敗、リトライ');
         feedback = '前回は生成に失敗した。もう一度やり直して。';
         if (attempt < MAX_REVIEW_RETRIES) {
@@ -191,7 +216,12 @@ export class PostFortuneAgent {
         imagePrompt: fallback.imagePrompt,
       };
     }
-    return { text: '【今日の運勢】\n占いの生成に失敗してしまいました…申し訳ありません。' };
+    logger.warn('[Fortune] LLM生成に失敗したためローカルフォールバックを使用');
+    const localFallback = this.createLocalFallbackFortune();
+    return {
+      text: this.formatFortuneResult(localFallback),
+      imagePrompt: localFallback.imagePrompt,
+    };
   }
 
   // =========================================================================
@@ -199,6 +229,7 @@ export class PostFortuneAgent {
   // =========================================================================
 
   private async generate(feedback?: string): Promise<FortuneResult | null> {
+    this.lastGenerationRateLimited = false;
     const humanContent = this.getFortuneInfo();
     const structuredLLM = this.model.withStructuredOutput(FortuneSchema);
 
@@ -215,6 +246,7 @@ export class PostFortuneAgent {
       return await structuredLLM.invoke(messages);
     } catch (error: unknown) {
       const detail = error instanceof Error ? error.message : String(error);
+      this.lastGenerationRateLimited = this.isRateLimitError(error);
       logger.error(`[Fortune] 生成エラー: ${detail}`, error);
       return null;
     }
@@ -265,6 +297,71 @@ export class PostFortuneAgent {
   // Helpers
   // =========================================================================
 
+  private createLocalFallbackFortune(): FortuneResult {
+    const shuffledSigns = [...this.zodiacSigns].sort(() => Math.random() - 0.5);
+    const shuffledKeywords = [...this.keywords].sort(() => Math.random() - 0.5);
+    const topTopics = ['仕事', '恋愛', '金運'];
+    const middleTemplates = [
+      '小さな確認が流れを整えてくれます。',
+      '無理に急がず、手元のことから進めると良さそうです。',
+      '周りの一言にヒントがありそうです。',
+      '予定を少しだけ見直すと余裕が生まれます。',
+      '気になっていたことを片づけるのに向いた日です。',
+      '新しい情報を取り入れると視界が広がります。',
+      'いつも通りを丁寧にすると運気が安定します。',
+      '人に頼ることで思ったより早く進みそうです。',
+    ];
+
+    return {
+      greeting: 'おはようございます。今日の12星座占いをお届けします。',
+      topFortunes: shuffledSigns.slice(0, 3).map((sign, index) => {
+        const keyword = shuffledKeywords[index] ?? '直感';
+        return {
+          rank: index + 1,
+          sign,
+          description: `${keyword}が味方になって、朝から前向きに動ける日です。迷ったら少しだけ明るい方を選ぶと、良い流れをつかめます。`,
+          topics: topTopics.map((topic, topicIndex) => ({
+            topic,
+            description: [
+              '段取りを先に決めると成果につながります。',
+              '素直な言葉が相手に届きやすいです。',
+              '小さな節約や見直しが後で効いてきます。',
+            ][topicIndex],
+          })),
+          luckyItem: ['青いペン', '温かいお茶', '小さなメモ帳'][index],
+        };
+      }),
+      middleFortunes: shuffledSigns.slice(3, 11).map((sign, index) => ({
+        rank: index + 4,
+        sign,
+        oneLiner: middleTemplates[index],
+      })),
+      lastFortune: {
+        rank: 12,
+        sign: shuffledSigns[11],
+        apology: `ごめんなさい！今日の最下位は${shuffledSigns[11]}のあなたです。`,
+        description: '少し空回りしやすい日ですが、焦らず休憩を挟めば大丈夫です。予定を詰め込みすぎず、できたことを一つずつ数えていきましょう。',
+        luckyItem: '白いハンカチ',
+      },
+      closing: '今日もあなたの一日が、少しでも楽しく穏やかなものになりますように。',
+      imagePrompt:
+        'photorealistic, high quality photograph, beautiful zodiac constellations over a calm sunrise sky, soft morning light, no people, no characters, no anime, no illustration, no text, no letters, no words, no watermarks',
+    };
+  }
+
+  private isRateLimitError(error: unknown): boolean {
+    if (typeof error === 'object' && error !== null) {
+      const maybeStatus = (error as { status?: unknown; code?: unknown }).status;
+      const maybeCode = (error as { status?: unknown; code?: unknown }).code;
+      if (maybeStatus === 429 || maybeCode === 429 || maybeCode === 'rate_limit_exceeded') {
+        return true;
+      }
+    }
+
+    const message = error instanceof Error ? error.message : String(error);
+    return message.includes('429') || message.includes('rate limit');
+  }
+
   private getFortuneInfo(): string {
     const shuffledSigns = [...this.zodiacSigns]
       .sort(() => Math.random() - 0.5);
@@ -284,7 +381,7 @@ export class PostFortuneAgent {
     // --- Top 3 (詳細) ---
     for (const f of result.topFortunes) {
       const medal = f.rank === 1 ? '🥇' : f.rank === 2 ? '🥈' : '🥉';
-      out += `${f.rank}位 ${medal} ${f.sign}\n`;
+      out += `${f.rank}位 ${medal} ${this.formatSignLabel(f.sign)}\n`;
       out += `${f.description}\n`;
       for (const t of f.topics) {
         const emoji = this.getTopicEmoji(t.topic);
@@ -295,17 +392,34 @@ export class PostFortuneAgent {
 
     // --- Middle 4〜11 (簡易一行) ---
     for (const f of result.middleFortunes) {
-      out += `${f.rank}位 ${f.sign}：${f.oneLiner}\n`;
+      out += `${f.rank}位 ${this.formatSignLabel(f.sign)}：${f.oneLiner}\n`;
     }
     out += '\n';
 
     // --- Last (最下位・丁寧) ---
     const last = result.lastFortune;
-    out += `${last.apology}\n`;
-    out += `${last.description}\n`;
+    out += `${this.decorateSignNames(last.apology)}\n`;
+    out += `${this.decorateSignNames(last.description)}\n`;
     out += `ラッキーアイテム：${last.luckyItem} ✨\n\n`;
 
     out += result.closing;
+    return out;
+  }
+
+  /** 星座名の直前にシンボルを付ける（例: ♈ 牡羊座） */
+  private formatSignLabel(sign: string): string {
+    const symbol = ZODIAC_SYMBOLS[sign];
+    return symbol ? `${symbol} ${sign}` : sign;
+  }
+
+  /** 文中の星座名にもシンボルを付ける（最下位の導入文など） */
+  private decorateSignNames(text: string): string {
+    let out = text;
+    for (const [sign, symbol] of Object.entries(ZODIAC_SYMBOLS)) {
+      const labeled = `${symbol} ${sign}`;
+      if (out.includes(labeled)) continue;
+      out = out.replaceAll(sign, labeled);
+    }
     return out;
   }
 
