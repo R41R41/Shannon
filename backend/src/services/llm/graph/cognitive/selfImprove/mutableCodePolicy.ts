@@ -9,6 +9,19 @@ import { getBackendRoot } from '../../../../../utils/backendRoot.js';
 /** 変更禁止（秘密・ビルド定義・ロックファイル等） */
 export const MUTABLE_PATH_DENY_SUBSTRINGS = [
     'src/config/',
+    // Human-reviewed authentication/authorization and lifecycle boundaries.
+    'src/modules/access/',
+    'src/modules/modelSettings/',
+    'src/adapters/access/',
+    'src/bootstrap/',
+    'src/server.ts',
+    'src/services/web/client.ts',
+    'src/models/User.ts',
+    'src/routes/accessHttp.ts',
+    'src/routes/modelRoutes.ts',
+    'src/services/web/agents/auth',
+    'src/services/common/WebSocketService.ts',
+    'mutableCodePolicy.ts',
     'package.json',
     'package-lock.json',
     'pnpm-lock.yaml',

@@ -117,3 +117,19 @@ describe('foundation dependency gate', () => {
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
 });
+
+
+describe('self-improvement protection for access boundaries', () => {
+  it('cannot edit security modules, registration, composition or its own deny policy', async () => {
+    const { isMutableRelativePath } = await import('../../src/services/llm/graph/cognitive/selfImprove/mutableCodePolicy.js');
+    for (const path of ['src/modules/access/index.ts', 'src/modules/modelSettings/index.ts',
+      'src/adapters/access/FirebaseIdentityVerifier.ts', 'src/bootstrap/webAccess.ts', 'src/models/User.ts',
+      'src/server.ts', 'src/services/web/client.ts',
+      'src/routes/modelRoutes.ts', 'src/routes/accessHttp.ts', 'src/services/web/agents/authAgent.ts',
+      'src/services/web/agents/authProtocol.ts', 'src/services/common/WebSocketService.ts',
+      'src/services/llm/graph/cognitive/selfImprove/mutableCodePolicy.ts']) {
+      expect(isMutableRelativePath(path), path).toBe(false);
+    }
+    expect(isMutableRelativePath('src/services/minebot/instantSkills/example.ts')).toBe(true);
+  });
+});

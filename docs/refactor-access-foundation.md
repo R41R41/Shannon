@@ -13,6 +13,7 @@
 - `authProtocol` / `AuthAgent`：メールだけの照会と公開ユーザー作成を廃止し、ID tokenによる自分のプロフィール照会へ変更。返答は要求したsocketだけへ送る。
 - frontend `features/auth`：Firebaseの状態とサーバーで検証したセッションを管理。localStorageの認証フラグ・dev管理者bypassを信用しない。認証接続を操作用client群から切り離した。
 - WebSocketの基底クラス：生成時にlistenやtimerを開始しない。明示したstart/stopで管理。Authのみ複数接続を許可し、他の旧経路の単一接続挙動は維持。
+- 新しい認証・認可・モデル操作の経路と、その変更禁止policy自体を自己改善の編集対象から除外。これは既存のpath policyによる保護であり、OSレベルのsandboxではない。自己改善の隔離実行は別途必要。
 - frontendの明示disconnect後の再接続と、古いsocketのcloseが新接続へ影響する問題を修正。
 
 ## この変更でまだ保護していないもの
@@ -50,7 +51,7 @@ npm run build:dev -w frontend
 
 `check:foundation` は新しい2モジュールの依存制約と完全な型検査。`check:access-integration` はFirebase/Mongo adapter、WebClient、AuthAgent、モデルHTTP経路を含む型検査。backend全体の型検査は別の残課題で、全体の `--noCheck` 変換成功を代わりにしない。
 
-2026-08-28：backend 91件、frontend 14件が合格。追加の境界検査、型検査、frontend buildが合格。Firebaseの署名・期限・失効検証そのものはSDKを利用し、今回の試験ではSDK結果をモックして呼び出し・拒否の契約を確認した。実Firebase/実DB/ブラウザE2E/実bot/性能測定は未実施。
+2026-08-28：backend 92件、frontend 14件が合格。追加の境界検査、型検査、frontend buildが合格。Firebaseの署名・期限・失効検証そのものはSDKを利用し、今回の試験ではSDK結果をモックして呼び出し・拒否の契約を確認した。実Firebase/実DB/ブラウザE2E/実bot/性能測定は未実施。
 
 `check-foundation.yml` はPRとcodexブランチpush向けの外部秘密情報なしのCI。定義を追加しただけで、GitHub上ではまだ実行していない。既存の本番CDは変更していない。
 
