@@ -1,6 +1,6 @@
 # Shannon Radar — 現行基盤への統合設計
 
-更新：2026-08-28。状態：ユーザー指定の方向性を採用。RAD-0の純粋関数基盤をdevへ実装、RAD-1以降は計画。**MVP全体、定期収集、実配信、記憶管理UIは未完成・未稼働。本番未反映。**
+更新：2026-08-28。状態：RAD-0に続き、RAD-1AのYouTube/選択Webフィード取得・出典正規化・個人digest preview接続をdevへ実装。最新は10節。**MVP全体、定期収集、実配信、記憶管理UIは未完成・未稼働。本番未反映。**
 
 入力資料：ユーザー指定 `shannon/outputs/shannon-radar-architecture.md`（Shannon Radar Architecture）。現行の設計・判断は[Notion 08](https://www.notion.so/3ca1e84762888170816ee73f25c40ce3)、優先順位は[Notion 02](https://www.notion.so/3ca1e84762888153bb4dcf4714a92fb8)に集約する。
 
@@ -152,3 +152,36 @@ VM devでRAD-0専用65テスト、backend476＋frontend18＝494テスト、found
 - 今回は未登録moduleなのでランタイム動作は変えない。後続ではfeature停止→新規予約停止→processing/uncertainを監査→worker停止の順。既存データ削除や自動再送をrollbackに含めない。
 
 未決：追跡YouTube/Webソース、天気地域/提供者、Calendarと必要scope、個人digestの表示先/時刻、Shannon投稿チャンネルID/承認者、test bot、通知上限、API費用、同意UIと保持期間。これらが未決でもモック実装は継続できるが、ライブ取得/送信の包括許可ではない。
+
+## 10. RAD-1A — 公開フィードの読み取りと出典付きプレビュー
+
+状態：VM devで実装・モック検証。新しいAPI・scheduler・serverへ登録しておらず、実ソース設定/ネットワーク取得/定期稼働/投稿なし。RAD-1全体の完成ではない。
+
+### 実装した経路
+
+`FeedRegistryPort` → `FeedCollector` → `PublicFeedConnector` → `SafeFeedHttp` → RSS 2.0/Atom metadata → `FeedRecord` → RAD-0 rank/policy → 本人用digest preview。
+
+- `modules/radar/sourceRegistry.ts`：source ID/版、owner audience、enabled、同意期限、明示したchannel/feed URL・記事host・topic、最大件数、保持時間の契約。sourceなし/停止/期限切れ/別audience/未知のsource kindは拒否。設定を必要フィールドだけsnapshotする。
+- `services/radar/jsonFeedRegistry.ts`：移行期のread-only設定adapter。明示pathのprivate regular JSONファイル（他者の権限bitなし、上限64KiB/100件）だけ読む。symlink/重複ID＋audience/壊れた設定は拒否し、エラーへ本文を出さない。既定path・自動登録・書込APIなし。毎回読み直し、取得中のatomic replaceによる無効化も検出。**実際のソース設定ファイルは作成していない。** Mongoの正本collection/管理UIへ移行する際は同じportを使う。このJSON adapterを永続queue/監査DBの代わりにしない。
+- `safeFeedHttp.ts`：GETのみ、HTTPS既定port、credential/cookieなし、redirect・retry・圧縮展開なし。DNSの全IPv4応答を検査し、RFC1918/loopback/link-local/予約域/metadata・Azure platform VIPを拒否。検査済みIPを実socket lookupに固定してDNS再解決を防ぎ、元hostnameのTLS検証/SNIを維持する。agentを共有しない。
+- DNSを含む全体8秒、header8KiB、body256KiB、XML content-type/UTF-8、abort/不完全bodyを検査する。IPv6-onlyサイト・redirect必須サイトは初期段階では非対応。これは既存の汎用URL取得ツールを保護した変更ではなく、Radar専用経路。
+- `feedConnector.ts`：YouTubeは指定channelの公式Atom feed URLからvideo/channel IDを照合し、動画リンクをIDから構築。Webは指定したqueryなしの公開feed URLだけ、記事linkも明示hostの絶対HTTPSに限定。utm queryを除き、認証/署名を示すqueryやfragment・別hostを拒否。RSS 2.0/Atomのみ、DTD/entity declarationを拒否、最大100entryを走査し最大20候補。HTMLページ/相対link/RDFは未対応。
+- 保存候補はtitle/link/published/updated/fetchedAtと出典（entity key、正規化metadataのversion hash、source版・取得URL）。fetchedAtは取得完了時に採取。本文・description・画像・生XMLは結果へ保持しない。IDは同じsource/audience/entity/versionで決定的、同じURLはcluster重複除去。**これはDB永続化や日をまたぐ履歴dedupではない。** 更新版は別の不変snapshot IDで、各ContentItemのrevisionは1。
+- source_checkedは「登録feedにそのmetadataが掲載された」意味に限定。linked articleの事実検証、ライブ予定、公式性・新規性の保証ではない。factはその掲載を述べる定型文。noveltyは0、qualityは中立の0.5で置き、過去履歴やsource reviewなしに高評価しない。実データを見てrank閾値を決めるまで配信を有効化しない。
+- `collectFeed.ts`：取得前後にregistryを照合し、disabled/期限切れ/宛先・内容変更は版番号が同じでも結果を破棄。中断後の遅延結果や別sourceのconnector出力を拒否する。出典/版/audience/outcome/countの監査DTOを返し、rawエラーや記事本文を含めない。現在のprivate audienceと一致する結果だけをdigest previewへ渡す。
+
+### 検証と保護
+
+VM devで新規112テスト＋RAD-0の65テストが合格。通常のfoundation/access-integration型検査にも今回の全Radar serviceを追加。JSON registryはVMの一時ファイルで読取、権限・symlink・atomic置換・失効を検証し、fixtureを削除して終了。HTTP/DNSはfakeで、外部通信なし。自己改善からの`services/radar/`編集も禁止した。
+
+全回帰・build・prod不変と最終SHAの検証原本はVM保全先 `radar-ingestion-20260828/result.json`、コミット・増分bundleは同保全先に保存する。全backendの通常型検査と実HTTP/TLS接続が成功したという意味ではない。
+
+### 次の工程・限界
+
+1. sourceの本人管理/認証UI/API、永続catalogと日をまたぐ重複/更新/撤回、監査保存、ポーリング間隔・費用/回数予約・lease/recoveryを実装する。現状は単発読取の部品で、並行workerの取得回数上限を保証しない。
+2. 天気provider/地域とCalendar provider/必要scopeが未確定のため、今回のsource validatorはweather/calendarを受け付けない。これらをWeb feedと偽って登録しない。Calendarは本人だけの別adapter、天気は個人の位置情報を公開しないadapterを追加する。
+3. 推しchannel/公式Web sourcesを選び、本人の非通知preview UIへつなぐ。設定の有効化/変更権限は入口の認証で保証し、registryやsnapshot照合だけで認証済みと扱わない。
+4. collector終了後に同意が撤回される可能性は残る。保存/画面返却/投稿の直前にも最新設定と権限を再検査する。実publisherは未接続なので今回の結果が外部投稿へ進むことはない。
+5. YouTubeの全ライブ予定をfeedだけで網羅すると約束しない。必要なら許可されたData API read-only取得を後続追加する。一般的なニュース要約・事実検証・多様性/負の明示設定も未実装。
+
+今回確認した一次資料：[YouTube公式のAtom feed形式とchannel/video ID](https://developers.google.com/youtube/v3/guides/push_notifications)、[Cheerio XML parsing](https://cheerio.js.org/docs/advanced/configuring-cheerio/)、[Node HTTPS options](https://nodejs.org/api/https.html)。実装はVMのNode22.21.1・Cheerio1.0.0・既存型定義で検証し、依存更新は行っていない。

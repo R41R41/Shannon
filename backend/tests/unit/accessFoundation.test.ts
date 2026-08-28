@@ -129,7 +129,7 @@ describe('foundation dependency gate', () => {
 describe('self-improvement protection for access boundaries', () => {
   it('cannot edit security modules, registration, composition or its own deny policy', async () => {
     const { isMutableRelativePath } = await import('../../src/services/llm/graph/cognitive/selfImprove/mutableCodePolicy.js');
-    for (const path of ['src/modules/access/index.ts', 'src/modules/modelSettings/index.ts', 'src/modules/radar/deliveryPolicy.ts',
+    for (const path of ['src/modules/access/index.ts', 'src/modules/modelSettings/index.ts', 'src/modules/radar/deliveryPolicy.ts', 'src/services/radar/safeFeedHttp.ts',
       'src/modules/execution/index.ts', 'src/modules/memory/index.ts', 'src/services/memory/requestMemory.ts', 'src/services/llm/graph/requestExecutionCoordinator.ts',
       'src/services/llm/graph/coordinatedGraphInvocation.ts', 'src/services/llm/graph/shannonGraph.ts',
       'src/services/llm/graph/cognitive/ParallelExecutor.ts', 'src/services/llm/client.ts',

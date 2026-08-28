@@ -4,6 +4,7 @@
     "noEmit": true
   },
   "include": [
+    "src/services/radar/**/*.ts",
     "src/services/common/discordConversationPort.ts",
     "src/services/discord/conversationTransport.ts",
     "src/services/common/adapters/discordDispatcher.ts",

@@ -16,6 +16,7 @@ export const MUTABLE_PATH_DENY_SUBSTRINGS = [
     'src/modules/memory/',
     'src/modules/conversation/',
     'src/modules/radar/',
+    'src/services/radar/',
     'src/services/common/discordConversationPort.ts',
     'src/services/common/adapters/discordDispatcher.ts',
     'src/services/discord/conversationTransport.ts',
