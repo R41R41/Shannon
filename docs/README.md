@@ -46,6 +46,8 @@
 
 ## 2026-08-28の責務分離
 
+- [Minecraft固定ID・旧記憶の読み取り監査](refactor-minecraft-memory-identity.md)：RF-03第4段階。接続所有・履歴/キュー境界、非ゲーム入力の記憶停止と人物復旧の前提。
+
 - [FCAの実行状態・ツール参照の分離](refactor-execution-sessions.md)：RF-03第2段階。会話混線の再現・修正と、記憶検索/配信先に残る課題。
 - [実行順序・中断管理の分離](refactor-execution-coordination.md)：RF-03第1段階。緊急割込み・所有者・終了処理。
 - [Web認証・モデル設定の責務分離](refactor-access-foundation.md)：RF-01/RF-02の初期実装、テストと移行前提。

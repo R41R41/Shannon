@@ -1,5 +1,9 @@
 # AGENTS.md
 
+## RF-03第4段階（2026-08-28）の注意
+
+`docs/refactor-minecraft-memory-identity.md`を参照。固定server/world IDの設定・接続所有・runtime/adapter配線を実装したが、実対応付けは未設定。world再生成時はworldIdを変える。表示名/endpointをIDの代用にせず、未設定の長期記憶停止を維持する。Mod/Discord音声は記憶停止・game-chat履歴への混入禁止。旧人物記憶の復旧・全宛先/履歴/WorldKnowledge分離は未完。dev限定のメタデータ監査は各0件で、旧本番データの分類成功とは扱わない。env/DB/Bot変更・ライブ起動・push・prod反映は行っていない。
+
 ## Cursor Cloud specific instructions
 
 ### Project overview

@@ -1,3 +1,4 @@
+import { parseMinecraftWorldRegistry, type MinecraftWorldIdentity } from '../../../modules/memory/minecraftIdentity.js';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { config } from '../../../config/env.js';
@@ -166,6 +167,12 @@ export class MinebotConfig {
     '1.21.11-fabric-youtube': 25566,
     '1.21.11-fabric-test': 25567,
   };
+
+  /** No default IDs: operators must assign a new worldId whenever the world is reset/replaced. */
+  getMemoryIdentity(serverName: string): MinecraftWorldIdentity | null {
+    const registry = parseMinecraftWorldRegistry(process.env.MINECRAFT_MEMORY_IDENTITIES, this.IS_DEV ? 'dev' : 'prod');
+    return registry.resolve({ name: serverName, host: this.MINECRAFT_HOST, port: this.MINECRAFT_SERVERS[serverName] });
+  }
 
   /**
    * minecraft-protocol の keep-alive 用タイムアウト（ms）。

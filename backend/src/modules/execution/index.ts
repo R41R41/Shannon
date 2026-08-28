@@ -68,6 +68,9 @@ export interface ExecutionRequest {
 export function executionLaneKey(request: ExecutionRequest): string {
   if (request.tags.includes('self_mod_apply')) return 'self-mod:apply';
   if (request.channel === 'minecraft') {
+    if (request.minecraft?.serverId?.trim() && request.minecraft.worldId?.trim()) {
+      return `minecraft-world:${JSON.stringify([request.minecraft.serverId, request.minecraft.worldId])}`;
+    }
     const world = [request.minecraft?.worldId, request.minecraft?.serverId,
       request.minecraft?.serverName, request.threadId].find(value => value?.trim());
     if (!world) throw new Error('Minecraft execution requires a world or thread');

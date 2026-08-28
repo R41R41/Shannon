@@ -205,6 +205,13 @@ it('rejects missing identity instead of putting unrelated requests into a defaul
   expect(run).not.toHaveBeenCalled();
 });
 
+it('includes both server and world in Minecraft lanes while serializing dimensions of one bot', () => {
+  const a = { ...request(), channel: 'minecraft' as const, minecraft: { serverId: 'dev:a', worldId: 'generation', dimension: 'minecraft:overworld' } };
+  expect(executionLaneKey(a)).not.toBe(executionLaneKey({ ...a, minecraft: { ...a.minecraft, serverId: 'dev:b' } }));
+  expect(executionLaneKey(a)).not.toBe(executionLaneKey({ ...a, minecraft: { ...a.minecraft, worldId: 'generation-2' } }));
+  expect(executionLaneKey(a)).toBe(executionLaneKey({ ...a, minecraft: { ...a.minecraft, dimension: 'minecraft:the_end' } }));
+});
+
 it('does not dispatch an obsolete graph result after preemption', async () => {
   const coordinator = new RequestExecutionCoordinator(); const gate = deferred();
   const dispatch = vi.fn(async (_value: string) => undefined);

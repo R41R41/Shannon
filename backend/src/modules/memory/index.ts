@@ -26,7 +26,7 @@ const discordId = (s: unknown): s is string => id(s) && /^\d+$/.test(s);
 
 /** Only canonical adapter fields count. Tags, names, inferred generalization and projects cannot grant access. */
 export function deriveMemoryScope(request?: MemoryRequest | null): MemoryScope | null {
-  if (!request || !id(request.conversationId) || !id(request.threadId)) return null;
+  if (!request || request.metadata?.memoryDisabled === true || !id(request.conversationId) || !id(request.threadId)) return null;
   let parts: string[];
   let visibilityScope: MemoryScope['visibilityScope'];
   let ownerUserId: string;

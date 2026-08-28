@@ -107,6 +107,7 @@ describe('SDK-independent scope and immutable port', () => {
   it.each([undefined, { ...envelope(), channel: 'web' }, { ...envelope(), channel: 'x' }, { ...envelope(), sourceUserId: 'unknown' },
     { ...envelope(), discord: undefined }, { ...envelope(), discord: { isDM: true, channelId: '300', guildId: '200' } },
     { ...envelope(), metadata: { isDM: true } }, { ...world(), minecraft: { serverName: 'same-name' } },
+    { ...world(), metadata: { memoryDisabled: true } },
   ])('rejects incomplete or unsupported context before I/O %#', async input => {
     expect(deriveMemoryScope(input)).toBeNull();
     const port = createRequestMemory(input);
@@ -268,6 +269,12 @@ describe('request tool and episode integration', () => {
 });
 
 describe('writeback queue scope provenance', () => {
+  it('preserves a denied source across the writeback snapshot and does not enqueue or invoke a model', async () => {
+    const request = world(); request.metadata = { memoryDisabled: true, bot: { runtime: true } };
+    const processor = new WritebackProcessor(ShannonMemoryService.getInstance(), {} as any, () => 'unused');
+    await processor.writeback({ envelope: request, conversationText: 'unreviewed voice fixture', exchanges: [] });
+    expect(db.eventCreate).not.toHaveBeenCalled(); expect(db.model).not.toHaveBeenCalled(); expect(db.created).toEqual([]);
+  });
   it('claims only versioned jobs and rejects a mismatched scope before any model call', async () => {
     const request = envelope();
     const processor = new WritebackProcessor(ShannonMemoryService.getInstance(), {} as any, () => 'unused');

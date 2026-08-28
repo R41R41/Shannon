@@ -1,3 +1,4 @@
+import { bindMinecraftMemory, revokeMinecraftMemory } from './runtime/memoryContext.js';
 import {
   MinebotInput,
   MinebotStartOrStopInput,
@@ -65,6 +66,7 @@ export class MinebotClient extends BaseClient {
       throw new Error(`Unknown server: ${serverName}`);
     }
 
+    const memoryIdentity = CONFIG.getMemoryIdentity(serverName as string);
     log.info(`🔌 ${serverName} (host:${CONFIG.MINECRAFT_HOST}, port:${port}, v${version}) に接続します`, 'cyan');
 
     this.bot = mineflayer.createBot({
@@ -76,6 +78,10 @@ export class MinebotClient extends BaseClient {
       checkTimeoutInterval: CONFIG.CHECK_TIMEOUT_INTERVAL,
       skipValidation: true,
     }) as CustomBot;
+    const connectedBot = this.bot;
+    bindMinecraftMemory(connectedBot, memoryIdentity);
+    connectedBot.once('end', () => revokeMinecraftMemory(connectedBot));
+    connectedBot.once('kicked', () => revokeMinecraftMemory(connectedBot));
 
     this.bot.loadPlugin(pathfinder);
     this.bot.loadPlugin(collectBlock);
@@ -365,6 +371,7 @@ export class MinebotClient extends BaseClient {
       if (!this.bot) {
         throw new Error('Botが初期化されていません');
       }
+      revokeMinecraftMemory(this.bot);
       // port 8082を開放
       if (this.skillAgent) {
         const httpServer = this.skillAgent.getHttpServer();

@@ -1,3 +1,4 @@
+import { minecraftMemoryContext, MinecraftRecentHistory } from './runtime/memoryContext.js';
 import { AIMessage, BaseMessage, HumanMessage } from '@langchain/core/messages';
 import { MinebotSkillInput, MinebotVoiceChatInput } from '@shannon/common';
 import fetch from 'node-fetch';
@@ -60,19 +61,20 @@ export class SkillAgent {
   private taskRuntime: MinebotTaskRuntime;
 
   // 状態
-  private recentMessages: BaseMessage[] = [];
+  private recentHistory: MinecraftRecentHistory<BaseMessage>;
   private lastVoiceGuildId: string | null = null;
   private lastVoiceChannelId: string | null = null;
 
   constructor(bot: CustomBot, eventBus: EventBus) {
     this.bot = bot;
     this.eventBus = eventBus;
+    this.recentHistory = new MinecraftRecentHistory(this.bot);
 
     // コンポーネント初期化
     this.skillLoader = new SkillLoader();
     this.skillRegistrar = getSkillRegistrar(eventBus);
     this.taskRuntime = new MinebotTaskRuntime(this.bot);
-    this.eventHandler = new BotEventHandler(this.bot, this.taskRuntime, this.recentMessages);
+    this.eventHandler = new BotEventHandler(this.bot, this.taskRuntime, this.recentHistory.messages);
     this.eventReactionSystem = new EventReactionSystem(this.bot, this.taskRuntime);
     this.httpServer = new MinebotHttpServer(this.bot, () => this.sendConstantSkills(), () => this.sendReactionSettings());
     this.httpServer.setTaskRuntime(this.taskRuntime);
@@ -202,7 +204,7 @@ export class SkillAgent {
           timeZone: 'Asia/Tokyo',
         });
         const newMessage = `${currentTime} ${username}: ${message}`;
-        this.recentMessages.push(new AIMessage(newMessage));
+        this.recentHistory.add(new AIMessage(newMessage), true);
         return;
       }
 
@@ -244,7 +246,9 @@ export class SkillAgent {
         username,
         message,
         JSON.stringify(this.bot.environmentState),
-        JSON.stringify(this.bot.selfState)
+        JSON.stringify(this.bot.selfState),
+        undefined,
+        true,
       );
     });
 
@@ -544,20 +548,19 @@ export class SkillAgent {
     environmentState?: string,
     selfState?: string,
     voiceResponseTarget?: { guildId: string; channelId: string },
+    gameChat = false,
   ) {
     try {
       const currentTime = new Date().toLocaleString('ja-JP', {
         timeZone: 'Asia/Tokyo',
       });
       const newMessage = `${currentTime} ${userName}: ${message}`;
-      this.recentMessages.push(new HumanMessage(newMessage));
+      const requestMessages = this.recentHistory.add(new HumanMessage(newMessage), gameChat);
 
-      // メモリリーク防止: 直近50件を超えたら古いメッセージを削除
-      if (this.recentMessages.length > 50) {
-        this.recentMessages.splice(0, this.recentMessages.length - 50);
-      }
-
+      const memoryContext = minecraftMemoryContext(this.bot);
       const envelope = minebotAdapter.toEnvelope({
+        serverId: memoryContext?.serverId,
+        worldId: memoryContext?.worldId,
         senderName: userName,
         senderId: userName,
         message,
@@ -572,7 +575,7 @@ export class SkillAgent {
         weather: this.bot.environmentState.weather,
         time: this.bot.environmentState.time,
         biome: this.bot.environmentState.biome,
-        dimension: this.bot.environmentState.dimension?.toString?.() ?? undefined,
+        dimension: memoryContext?.dimension ?? undefined,
         bossbar: this.bot.environmentState.bossbar ?? undefined,
         botPosition: this.bot.selfState.botPosition
           ? {
@@ -607,12 +610,14 @@ export class SkillAgent {
           selfState,
         };
       }
+      // Physical bot identity does not authorize persisting Mod/Discord voice content to world memory.
+      if (!gameChat) envelope.metadata = { ...envelope.metadata, memoryDisabled: true };
 
       let immediateAckSent = false;
 
-      const resumed = await this.taskRuntime.resumeAwaitingUserTask(message, {
+      const resumed = gameChat ? await this.taskRuntime.resumeAwaitingUserTask(message, {
         envelope,
-        messages: [...this.recentMessages],
+        messages: requestMessages,
         environmentState: environmentState ?? null,
         selfState: selfState ?? null,
         onToolStarting: (toolName, args) => {
@@ -622,7 +627,7 @@ export class SkillAgent {
           immediateAckSent = true;
           this.bot.chat(ack);
         },
-      });
+      }) : null;
       if (resumed) {
         return;
       }
@@ -630,7 +635,7 @@ export class SkillAgent {
       const result = await this.taskRuntime.invoke({
         envelope,
         userMessage: message,
-        messages: [...this.recentMessages],
+        messages: requestMessages,
         environmentState: environmentState ?? null,
         selfState: selfState ?? null,
         onToolStarting: (toolName, args) => {
