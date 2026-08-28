@@ -1,6 +1,6 @@
 # Shannon Radar — 現行基盤への統合設計
 
-更新：2026-08-28。状態：RAD-1Aに続き、RAD-1Bの本人限定catalog・Mongo CAS・設定/撤回/preview HTTP部品をdevへ実装。最新は11節。**APIはserver未登録。MVP全体、本人画面、定期収集、実配信、記憶管理UIは未完成・未稼働。本番未反映。**
+更新：2026-08-29。現行基盤はRAD-1J（19節）の個人取得/保存/管理画面。D-008によりWeb単独公開案を撤回し、D-010で初回の個人配信先をLINEの1対1トークへ変更。許可LINEグループ会話も追加する。今回のLINE-1実装/境界/残工程は[LINE連携設計](line-integration.md)。**定期worker/本人binding/実スマホ受信は未完成・未稼働。本番未反映。** 以下の段階記録の「非通知」「Web先行」は当時の実装範囲で、現在の初回MVP要件ではない。
 
 入力資料：ユーザー指定 `shannon/outputs/shannon-radar-architecture.md`（Shannon Radar Architecture）。現行の設計・判断は[Notion 08](https://www.notion.so/3ca1e84762888170816ee73f25c40ce3)、優先順位は[Notion 02](https://www.notion.so/3ca1e84762888153bb4dcf4714a92fb8)に集約する。
 

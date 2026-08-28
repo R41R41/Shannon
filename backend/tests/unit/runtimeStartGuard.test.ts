@@ -31,6 +31,12 @@ function fixture() {
 }
 
 describe('development startup protection', () => {
+  it('standalone LINE refuses startup outside the approved dev path before reading secrets', () => {
+    const root = fixture();
+    copyFileSync(join(sourceRoot, 'scripts/start-line-dev.cjs'), join(root, 'scripts/start-line-dev.cjs'));
+    const result = spawnSync(process.execPath, [join(root, 'scripts/start-line-dev.cjs'), '--serve'], { encoding: 'utf8', timeout: 2000 });
+    expect(result.status).toBe(1); expect(result.stdout).toBe(''); expect(result.stderr.trim()).toBe('LINE_DEV_START_REFUSED');
+  });
   for (const entry of ['start.sh', 'backend/start.sh', 'frontend/start.sh']) {
     it(entry + ' refuses production mode before session/port cleanup', () => {
       const root = fixture();

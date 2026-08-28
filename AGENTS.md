@@ -1,3 +1,7 @@
+## LINE-1 / D-010（2026-08-29）の注意
+
+個人Radarの届け先はLINEの1対1トークに変更し、envで許可したLINEグループ会話を追加する。`docs/line-integration.md`参照。独立Webhook→署名/allowlist→永続予約→テキスト会話→Replyと、個人同意/停止・Push outbox経路をdevへ追加。主本体/旧EventBus/人物記憶は接続しない。グループは既定で呼びかけ時のみ。個人内容・旧profileの人物関係をグループへ流さない。LINE設定は専用Git外env、既定無効/予算0。実キー/実LINE/LLM・通常DB変更・本体/本番は未実施。dev起動ロックを維持し、`start-line-dev.cjs --serve`もロック優先。モックと別Mongo37030の架空fixtureだけで検証し停止する。定期worker/既存catalog本人binding・実スマホ受信は未完、基盤成功を配信MVP完成と扱わない。以下は過去の段階。
+
 ## RAD-1J（2026-08-29）の注意
 
 `docs/shannon-radar.md`19節。個人Radar専用login/runtimeを独立させる。旧本体/Bot/socketを起動せず、明示Firebase/project/UID/取得枠とexact Mongo validatorが必要。CLIはVM dev限定・起動ロック優先・共有.env/ADCなし。実認証/通常DB移行/実取得は未実施。別Mongo37029・15030 loopback fixtureのみ。Calendar brokerは未接続表示。初回本番は個人feed/天気を先行する計画で、dev実接続/復旧と本番用サービス/HTTPS/停止手順を別工程で確認する。CLIをprodへそのまま使用しない。prod read-only・ロック維持。以下は過去の段階。
