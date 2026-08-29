@@ -126,7 +126,6 @@ function createExecuteNode(
       requestEnvelope: memoryEnvelope,
       userMessage: envelope.text ?? null,
       messages: state._legacyMessages,
-      memoryState: undefined as undefined,
       context,
       channelId: envelope.discord?.channelId ?? envelope.conversationId,
       environmentState: (envelope.metadata?.environmentState as string) ?? null,

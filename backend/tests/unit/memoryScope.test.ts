@@ -51,7 +51,6 @@ import { EmbeddingService } from '../../src/services/memory/embeddingService.js'
 import { createRequestMemory, bindRequestMemory } from '../../src/services/memory/requestMemory.js';
 import { createMemoryTools } from '../../src/services/llm/tools/memory/memoryToolFactory.js';
 import { TaskEpisodeMemory } from '../../src/services/llm/graph/cognitive/TaskEpisodeMemory.js';
-import { MemoryAgent } from '../../src/services/llm/graph/cognitive/MemoryAgent.js';
 import { WritebackProcessor } from '../../src/services/memory/writeback/WritebackProcessor.js';
 import { AutonomyUpdater } from '../../src/services/memory/writeback/AutonomyUpdater.js';
 import { ScopeDeriver } from '../../src/services/memory/recall/ScopeDeriver.js';
@@ -234,8 +233,9 @@ describe('real Mongo adapters with a deterministic fake database', () => {
   });
   it('does not report a successful save when persistence fails', async () => {
     vi.mocked(ShannonMemory.create).mockRejectedValueOnce(new Error('fixture failure'));
-    const agent = new MemoryAgent({} as any, envelope());
-    expect((await agent.save('iron', 5)).saved).toBe(false);
+    await expect(createRequestMemory(envelope()).save({
+      category: 'knowledge', content: 'iron', importance: 5, tags: [],
+    })).rejects.toThrow('fixture failure');
   });
 });
 
@@ -256,13 +256,13 @@ describe('request tool and episode integration', () => {
     expect(await tool(catalog.createTools(), 'save-memory').invoke({ content: 'no scope' })).toContain('初期化');
     expect(await tool(a, 'recall-person').invoke({ name: 'same-name' })).toContain('人物名では検索できません');
   });
-  it('initial MemoryAgent recall uses the same scope and does not look up a same-named person', async () => {
+  it('initial recall uses the same scope and does not look up a same-named person', async () => {
     db.rows = [row(envelope('999', '999'), 'foreign'), row(envelope(), 'iron_ingot')];
-    const blackboard = { setInitialMemoryContext: vi.fn() };
     const lookup = vi.spyOn(PersonMemoryService.getInstance(), 'lookupByName');
-    const agent = new MemoryAgent(blackboard as any, envelope());
-    expect(await agent.initialize('iron_ingot')).toContain('iron_ingot');
-    expect(blackboard.setInitialMemoryContext.mock.calls[0][0]).not.toContain('foreign');
+    const tool = (createMemoryTools() as any[]).find(t => t.name === 'recall-memory');
+    bindRequestMemory([tool], envelope());
+    expect(await tool.invoke({ question: 'iron_ingot' })).toContain('iron_ingot');
+    expect(await tool.invoke({ question: 'iron_ingot' })).not.toContain('foreign');
     expect(lookup).not.toHaveBeenCalled(); lookup.mockRestore();
   });
   it('episode saves and queries require an envelope, not just a platform tag', async () => {
@@ -321,15 +321,4 @@ it('Mongoose retains the scope stamp and never defaults a legacy document into a
   const scope = deriveMemoryScope(envelope())!;
   const fresh = new actual.ShannonMemory({ ...draft, source: 'fixture', ...scope }).toObject();
   expect(fresh).toMatchObject(scope);
-});
-it('legacy MemoryNode construction/initialization/read/write starts no timers or models', async () => {
-  const { MemoryNode } = await import('../../src/services/llm/graph/nodes/MemoryNode.js');
-  const timer = vi.spyOn(globalThis, 'setInterval'); const timeout = vi.spyOn(globalThis, 'setTimeout');
-  try {
-    const node = new MemoryNode(); await node.initialize();
-    expect(await node.preProcess({ userMessage: 'fixture', context: null })).toEqual({ person: null, experiences: [], knowledge: [] });
-    await node.postProcess({ context: null, conversationText: 'fixture', exchanges: [] });
-    expect(timer).not.toHaveBeenCalled(); expect(timeout).not.toHaveBeenCalled();
-    expect(db.model).not.toHaveBeenCalled(); expect(db.queries).toEqual([]);
-  } finally { timer.mockRestore(); timeout.mockRestore(); }
 });

@@ -5,12 +5,10 @@ import { resolve } from 'node:path';
 import { TWITTER_WRITE_TOOLS } from '../../../../../modules/access/toolCatalog.js';
 import { CONFIG as MINEBOT_CONFIG } from '../../../../minebot/config/MinebotConfig.js';
 import type { SelfImprovementRulesFile } from '../../cognitive/selfImprove/types.js';
-import { MemoryState } from '../MemoryNode.js';
-
 /**
  * FunctionCallingAgent 用のシステムプロンプト構築ユーティリティ
  *
- * 感情・記憶・環境・プラットフォーム情報をもとにシステムプロンプトを組み立てる。
+ * 記憶・環境・プラットフォーム情報をもとにシステムプロンプトを組み立てる。
  * ツール情報は API の tools パラメータで渡すため、ここではルールとコンテキストのみ。
  */
 /** シャノンプロフィールのキャッシュ */
@@ -97,7 +95,6 @@ export class PromptBuilder {
     buildSystemPrompt(
         context: TaskContext | null,
         environmentState: string | null,
-        memoryState?: MemoryState,
         memoryPrompt?: string,
         relationshipPrompt?: string,
         selfModelPrompt?: string,
@@ -115,7 +112,6 @@ export class PromptBuilder {
         const minecraftRules = this.formatMinecraftRules(context);
         const envInfo = this.formatEnvironmentInfo(environmentState, context);
         const memoryInfo = this.formatMemoryInfo(
-            memoryState,
             memoryPrompt,
             relationshipPrompt,
             selfModelPrompt,
@@ -451,7 +447,6 @@ ${lines.join('\n')}
     }
 
     private formatMemoryInfo(
-        memoryState?: MemoryState,
         memoryPrompt?: string,
         relationshipPrompt?: string,
         selfModelPrompt?: string,
@@ -479,58 +474,6 @@ ${lines.join('\n')}
             return `\n\n${memoryPrompt}`;
         }
 
-        if (memoryState) {
-            return this.formatLegacyMemoryState(memoryState);
-        }
-
-        return '';
-    }
-
-    private formatLegacyMemoryState(memoryState: MemoryState): string {
-        const sections: string[] = [];
-
-        // 人物情報
-        if (memoryState.person) {
-            const p = memoryState.person;
-            const lines: string[] = [`## この人について (${p.displayName})`];
-            if (p.traits.length > 0) lines.push(`- 特徴: ${p.traits.join(', ')}`);
-            if (p.notes) lines.push(`- メモ: ${p.notes}`);
-            if (p.conversationSummary) lines.push(`- 過去の要約: ${p.conversationSummary}`);
-            if (p.recentExchanges && p.recentExchanges.length > 0) {
-                lines.push(`- 直近の会話:`);
-                const recent = p.recentExchanges.slice(-6);
-                for (const ex of recent) {
-                    const role = ex.role === 'user' ? p.displayName : 'シャノン';
-                    lines.push(`  ${role}: ${ex.content.substring(0, 100)}`);
-                }
-            }
-            lines.push(`- やりとり回数: ${p.totalInteractions}回`);
-            sections.push(lines.join('\n'));
-        }
-
-        // シャノンの記憶
-        const memLines: string[] = [];
-        if (memoryState.experiences.length > 0) {
-            memLines.push('【体験】');
-            for (const exp of memoryState.experiences) {
-                const date = new Date(exp.createdAt).toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' });
-                const feeling = exp.feeling ? ` → ${exp.feeling}` : '';
-                memLines.push(`- [${date}] ${exp.content}${feeling}`);
-            }
-        }
-        if (memoryState.knowledge.length > 0) {
-            memLines.push('【知識】');
-            for (const k of memoryState.knowledge) {
-                memLines.push(`- ${k.content}`);
-            }
-        }
-        if (memLines.length > 0) {
-            sections.push(`## ボクの関連する記憶\n${memLines.join('\n')}`);
-        }
-
-        if (sections.length > 0) {
-            return `\n\n${sections.join('\n\n')}`;
-        }
         return '';
     }
 }

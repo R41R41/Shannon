@@ -14,7 +14,6 @@ import { config } from '../../../../../config/env.js';
 import { getBackendRoot } from '../../../../../utils/backendRoot.js';
 import { createLogger } from '../../../../../utils/logger.js';
 import type { TaskEpisode } from '../TaskEpisodeMemory.js';
-import type { MetaAssessment, BlackboardSnapshot } from '../CognitiveBlackboard.js';
 import {
     DaemonStatus,
     FailureRecord,
@@ -23,6 +22,7 @@ import {
     SELF_IMPROVE_CONSTANTS as C,
     SkillIdeation,
     SkillCreationRecord,
+    type MetaAssessment,
 } from './types.js';
 import { FailureAnalyzer } from './FailureAnalyzer.js';
 import { ImprovementGenerator } from './ImprovementGenerator.js';
@@ -108,7 +108,7 @@ export class SelfImprovementDaemon {
      */
     async onEpisodeSaved(
         episode: TaskEpisode,
-        snapshot?: BlackboardSnapshot,
+        metaAssessment: MetaAssessment | null = null,
     ): Promise<void> {
         try {
             // 効果測定の更新（成功・失敗問わず）
@@ -132,7 +132,7 @@ export class SelfImprovementDaemon {
 
             const record: FailureRecord = {
                 episode,
-                metaAssessment: snapshot?.metaState?.assessment ?? null,
+                metaAssessment,
                 forwardModelPatternCount: 0, // ForwardModel は per-task で生存しないため 0
                 recordedAt: Date.now(),
             };
@@ -149,9 +149,8 @@ export class SelfImprovementDaemon {
                 `(buffer: ${this.failureBuffer.length}/${C.MIN_FAILURE_BUFFER})`,
             );
 
-            // MetaCognition シグナルを記録
-            if (snapshot?.metaState?.assessment) {
-                this.metaCognitionSignals.push(snapshot.metaState.assessment);
+            if (metaAssessment) {
+                this.metaCognitionSignals.push(metaAssessment);
                 if (this.metaCognitionSignals.length > 20) {
                     this.metaCognitionSignals = this.metaCognitionSignals.slice(-20);
                 }

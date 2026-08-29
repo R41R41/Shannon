@@ -2,11 +2,13 @@
 
 ## なぜ入れたか
 
-Shannon には、新しい層を建てたあと古い層を消さずに残す癖がある。`config/constants.ts` と
-`config/limits.ts` と `services/eventBus/eventTypes.ts` の3ファイルは、どれも冒頭に
-「NOTE: Consumers have NOT been updated to import from here yet」と書いたまま残っている。
-`ClassifyNode` と `SubTaskPlannerNode` はグラフから外れたあとも残った。`ModelSelector` には
-一度も参照されない `ANTHROPIC_CHAIN` が居座っていた。
+Shannon には、新しい層を建てたあと古い層を消さずに残す癖がある。
+`config/constants.ts` と `config/limits.ts` と `services/eventBus/eventTypes.ts` は
+「NOTE: Consumers have NOT been updated to import from here yet」と書いたまま残り、
+Phase 1 で未参照として削除した。`ClassifyNode` と `SubTaskPlannerNode` はグラフから
+外れたあとも残った。`ModelSelector` には一度も参照されない `ANTHROPIC_CHAIN` が
+居座っていた。`MemoryAgent` と `CognitiveBlackboard` は注入元の `ParallelExecutor` を
+消したあとも型として残った。
 
 原因は、作業の完了条件が「新しい経路が動くこと」だけで、「古い経路を消すこと」が
 誰にも要求されていなかったこと。人の気づきに頼るのをやめて、機械が要求する形にする。
@@ -58,8 +60,8 @@ Shannon には、新しい層を建てたあと古い層を消さずに残す癖
 ## 検査できないこと
 
 これは**参照されているか**しか見ない。**到達するか**は見ない。
-削除した `ParallelExecutor` がまさにそれで、import はされているのに
-`SHANNON_GRAPH_VERSION=full` でしか構築されず、既定では一度も動いていなかった。
+削除した `ParallelExecutor` と `MemoryAgent` がまさにそれで、import はされているのに
+構築されず、既定では一度も動いていなかった。
 設定次第で死んでいるコードは、引き続き人が読んで判断する必要がある。
 
 動的読み込みも見えない。`llm/tools/` と `minebot/instantSkills/` と

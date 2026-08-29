@@ -6,7 +6,6 @@
   "include": [
     "src/services/memory/**/*.ts",
     "src/services/llm/graph/cognitive/TaskEpisodeMemory.ts",
-    "src/services/llm/graph/nodes/MemoryNode.ts",
     "src/services/minebot/runtime/memoryContext.ts",
     "src/services/common/adapters/minebotAdapter.ts",
     "src/services/minebot/config/MinebotConfig.ts"

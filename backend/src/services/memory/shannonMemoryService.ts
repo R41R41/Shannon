@@ -293,7 +293,7 @@ export class ShannonMemoryService {
   }
 
   /**
-   * 直近 + 重要な記憶を取得 (MemoryNode preProcess 用)
+   * 直近 + 重要な記憶を取得
    */
   async getRecentImportant(
     category: MemoryCategory,

@@ -42,7 +42,6 @@ import { personStatementRepository } from '../../src/services/memory/personState
 import { createMemoryTools } from '../../src/services/llm/tools/memory/memoryToolFactory.js';
 import { bindRequestMemory } from '../../src/services/memory/requestMemory.js';
 import { RunToolRegistry } from '../../src/modules/execution/runToolRegistry.js';
-import { MemoryAgent } from '../../src/services/llm/graph/cognitive/MemoryAgent.js';
 import { RecallEngine } from '../../src/services/memory/recall/RecallEngine.js';
 import { ScopedMemoryService } from '../../src/services/memory/scopedMemoryService.js';
 
@@ -197,13 +196,17 @@ describe('actual tool/initial recall integration with mocked storage and models'
   it('requires a new factory for a context-bearing person tool', () => {
     expect(() => new RunToolRegistry([{ name: 'unsafe-person', setPersonMemoryPort: () => {} }])).toThrow('createForRun');
   });
-  it('initial MemoryAgent recall captures its author before caller mutation and never retrieves legacy person profiles', async () => {
+  it('initial recall captures its author before caller mutation and never retrieves legacy person profiles', async () => {
     await createRequestPersonMemory(request()).remember(quote);
-    const input = request(); const blackboard = { setInitialMemoryContext: vi.fn() };
-    const agent = new MemoryAgent(blackboard as any, input); input.sourceUserId = '101'; input.discord.guildId = '999';
-    expect(await agent.initialize('本人の発言')).toContain(quote);
-    expect(blackboard.setInitialMemoryContext.mock.calls[0][0]).toContain('未検証');
-    expect(await new MemoryAgent({ setInitialMemoryContext: vi.fn() } as any, request('101')).initialize('本人の発言')).not.toContain(quote);
+    const input = request();
+    const tool = (createMemoryTools() as any[]).find((row: any) => row.name === 'recall-memory');
+    bindRequestMemory([tool], input);
+    input.sourceUserId = '101'; input.discord.guildId = '999';
+    expect(await tool.invoke({ question: '本人の発言' })).toContain(quote);
+    expect(await tool.invoke({ question: '本人の発言' })).toContain('未検証');
+    const other = (createMemoryTools() as any[]).find((row: any) => row.name === 'recall-memory');
+    bindRequestMemory([other], request('101'));
+    expect(await other.invoke({ question: '本人の発言' })).not.toContain(quote);
     expect(mongo.model).not.toHaveBeenCalled();
   });
   it.each(['', 'remember'])('includes scoped statements in the unified recall prompt with text=%s', async text => {

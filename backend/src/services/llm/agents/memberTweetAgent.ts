@@ -6,14 +6,10 @@ import {
   ToolMessage,
 } from '@langchain/core/messages';
 import { StructuredTool } from '@langchain/core/tools';
-import { TaskContext } from '@shannon/common';
 import { z } from 'zod';
 import { config } from '../../../config/env.js';
 import { models } from '../../../config/models.js';
 import { createTracedModel } from '../utils/langfuse.js';
-import { IExchange } from '../../../models/PersonMemory.js';
-import { logger } from '../../../utils/logger.js';
-import { MemoryNode } from '../graph/nodes/MemoryNode.js';
 import { BaseAgent } from './BaseAgent.js';
 
 // ---------------------------------------------------------------------------
@@ -72,10 +68,7 @@ export class MemberTweetAgent extends BaseAgent {
 
   public static async create(): Promise<MemberTweetAgent> {
     const systemPrompt = await BaseAgent.loadPrompt('respond_member_tweet');
-    const agent = new MemberTweetAgent(systemPrompt);
-    agent.memoryNode = new MemoryNode();
-    await agent.memoryNode.initialize();
-    return agent;
+    return new MemberTweetAgent(systemPrompt);
   }
 
   // =========================================================================
@@ -95,49 +88,10 @@ export class MemberTweetAgent extends BaseAgent {
       text,
       authorName,
       authorUserName,
-      authorId,
       repliedTweet,
       repliedTweetAuthorName,
       conversationThread,
     } = params;
-
-    // === 記憶 preProcess ===
-    let memoryContext = '';
-    const taskContext: TaskContext = {
-      platform: 'twitter',
-      twitter: {
-        authorId: authorId ?? authorName,
-        authorName,
-      },
-    };
-
-    if (this.memoryNode) {
-      try {
-        const memState = await this.memoryNode.preProcess({
-          userMessage: text,
-          context: taskContext,
-        });
-        const sections: string[] = [];
-        if (memState.person) {
-          const p = memState.person;
-          if (p.traits.length > 0)
-            sections.push(`この人の特徴: ${p.traits.join(', ')}`);
-          if (p.conversationSummary)
-            sections.push(`過去のやりとり: ${p.conversationSummary}`);
-        }
-        if (memState.experiences.length > 0) {
-          sections.push(
-            '関連する体験: ' +
-              memState.experiences.map((e) => e.content).join('; '),
-          );
-        }
-        if (sections.length > 0) {
-          memoryContext = `\n\n【ボクの記憶】\n${sections.join('\n')}`;
-        }
-      } catch (error) {
-        logger.error('❌ MemberTweet: 記憶取得エラー:', error);
-      }
-    }
 
     // === LLM呼び出し (FCA) ===
     const isGemini = models.contentGeneration.startsWith('gemini');
@@ -161,7 +115,7 @@ export class MemberTweetAgent extends BaseAgent {
         : {}),
     });
 
-    const systemContent = this.systemPrompt + memoryContext;
+    const systemContent = this.systemPrompt;
 
     const lines: string[] = [];
     if (conversationThread && conversationThread.length > 0) {
@@ -215,23 +169,6 @@ export class MemberTweetAgent extends BaseAgent {
         // Plain text fallback
         result = { type: 'reply', text: raw };
       }
-    }
-
-    // === 記憶 postProcess (fire-and-forget) ===
-    if (result && this.memoryNode) {
-      const exchanges: IExchange[] = [
-        { role: 'user', content: text, timestamp: new Date() },
-        { role: 'assistant', content: result.text, timestamp: new Date() },
-      ];
-      this.memoryNode
-        .postProcess({
-          context: taskContext,
-          conversationText: `${authorName}: ${text}\nシャノン: ${result.text}`,
-          exchanges,
-        })
-        .catch((err) => {
-          logger.error('❌ MemberTweet: 記憶保存エラー:', err);
-        });
     }
 
     return result;

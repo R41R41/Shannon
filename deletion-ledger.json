@@ -1,7 +1,7 @@
 {
   "$comment": "Every file knip reports as unreferenced must be listed here with a reason and a deadline, or the build fails. Past its sunset a file must be deleted or the entry renewed with a new reason. See docs/deletion-gate.md.",
   "unusedLocals": {
-    "baseline": 131,
+    "baseline": 129,
     "$comment": "eslint no-unused-vars over backend/src. Files and exports are knip's job; this catches the declaration that was written and never wired up. The number may only go down."
   },
   "files": []

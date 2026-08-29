@@ -1,13 +1,12 @@
 import { StructuredTool } from '@langchain/core/tools';
 import { z } from 'zod';
-import { MEMORY_SCOPE_REQUIRED, type MemoryPort } from '../../../../modules/memory/index.js';
-import type { MemoryAgent } from '../../graph/cognitive/MemoryAgent.js';
+import { type MemoryPort } from '../../../../modules/memory/index.js';
 import { formatPersonStatements, type PersonMemoryPort } from '../../../../modules/memory/personMemory.js';
 
 /**
  * recall-memory ツール
  *
- * MemoryAgent に問い合わせ、関連する記憶を整理して返す。
+ * 実行ごとに注入された MemoryPort で検索し、関連する記憶を返す。
  * 旧 recall-experience / recall-knowledge / recall-person を統合。
  */
 export default class RecallMemoryTool extends StructuredTool {
@@ -20,26 +19,17 @@ export default class RecallMemoryTool extends StructuredTool {
         question: z.string().describe('思い出したい内容の質問 (例: "鉄鉱石はどこで見つけた？", "(10,64,20)のチェストに何が入ってた？")'),
     });
 
-    private memoryAgent: MemoryAgent | null = null;
     private memoryPort?: MemoryPort;
     private personMemoryPort?: PersonMemoryPort;
     setPersonMemoryPort(port: PersonMemoryPort): void { this.personMemoryPort = port; }
     setMemoryPort(port: MemoryPort): void { this.memoryPort = port; }
 
-    /** 実行ごとに MemoryAgent を注入する */
-    setMemoryAgent(agent: MemoryAgent): void {
-        this.memoryAgent = agent;
-    }
-
     async _call(data: z.infer<typeof this.schema>): Promise<string> {
-        if (!this.memoryAgent) {
-            if (!this.memoryPort) return '記憶システムが初期化されていません。';
-            const rows = (await Promise.all(['experience', 'knowledge'].map(category =>
-                this.memoryPort!.search(category as 'experience' | 'knowledge', data.question, 5)))).flat();
-            const personRows = await this.personMemoryPort?.recall(5).catch(() => []) ?? [];
-            const result = [formatPersonStatements(personRows), ...rows.map(row => row.content)].filter(Boolean).join('\n');
-            return result || 'この会話で参照できる記憶はありません。';
-        }
-        return this.memoryAgent.query(data.question);
+        if (!this.memoryPort) return '記憶システムが初期化されていません。';
+        const rows = (await Promise.all(['experience', 'knowledge'].map(category =>
+            this.memoryPort!.search(category as 'experience' | 'knowledge', data.question, 5)))).flat();
+        const personRows = await this.personMemoryPort?.recall(5).catch(() => []) ?? [];
+        const result = [formatPersonStatements(personRows), ...rows.map(row => row.content)].filter(Boolean).join('\n');
+        return result || 'この会話で参照できる記憶はありません。';
     }
 }

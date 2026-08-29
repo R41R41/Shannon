@@ -5,14 +5,16 @@
  */
 
 import type { TaskEpisode } from '../TaskEpisodeMemory.js';
-import type { MetaAssessment } from '../CognitiveBlackboard.js';
+
+/** 削除した MetaCognitionLoop の評価ラベル。デーモンの失敗記録に欄だけ残している。 */
+export type MetaAssessment = 'on_track' | 'struggling' | 'stuck' | 'wrong_approach';
 
 // ── 失敗記録 ──
 
 export interface FailureRecord {
     /** TaskEpisode から抽出 */
     episode: TaskEpisode;
-    /** MetaCognition の評価（タスク完了時点） */
+    /** 削除した MetaCognition の評価欄。現行経路では常に null */
     metaAssessment: MetaAssessment | null;
     /** @deprecated ForwardModel は廃止済み */
     forwardModelPatternCount: number;

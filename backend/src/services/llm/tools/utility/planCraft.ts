@@ -6,8 +6,6 @@ import { config } from '../../../../config/env.js';
 import { logger } from '../../../../utils/logger.js';
 import { RecipeDependencyResolver } from '../../../minebot/knowledge/RecipeDependencyResolver.js';
 import { createTracedModel } from '../../utils/langfuse.js';
-import type { MemoryAgent } from '../../graph/cognitive/MemoryAgent.js';
-import type { CognitiveBlackboard, PlanState, PlanSubtask } from '../../graph/cognitive/CognitiveBlackboard.js';
 
 /**
  * plan-craft ツール — クラフト計画生成。
@@ -15,9 +13,11 @@ import type { CognitiveBlackboard, PlanState, PlanSubtask } from '../../graph/co
  * FCA のツールとして実装。FCA が「クラフトが必要」と判断した時に呼ぶ。
  *
  * 処理フロー:
- * 1. 情報収集 (決定論的): レシピ解決 + インベントリ + 近傍インフラ
- * 2. 記憶問い合わせ (MemoryAgent): チェスト/かまどの中身
- * 3. LLM 計画生成: PlanState を構造化出力で生成
+ * 1. 情報収集 (決定論的): レシピ解決
+ * 2. LLM 計画生成
+ *
+ * インベントリと記憶は、消した CognitiveBlackboard / MemoryAgent 経由では渡さない。
+ * 実行経路から bot / MemoryPort を渡す配線は別工程。
  */
 
 const PLAN_SYSTEM_PROMPT = `あなたはマインクラフトのクラフト計画を立てるアシスタントです。
@@ -50,8 +50,6 @@ export default class PlanCraftTool extends StructuredTool {
         count: z.number().optional().describe('個数 (デフォルト1)'),
     });
 
-    private memoryAgent: MemoryAgent | null = null;
-    private blackboard: CognitiveBlackboard | null = null;
     private bot: unknown = null;
     private model: ChatOpenAI;
 
@@ -63,23 +61,15 @@ export default class PlanCraftTool extends StructuredTool {
         });
     }
 
-    setMemoryAgent(agent: MemoryAgent): void {
-        this.memoryAgent = agent;
-    }
-
-    setBlackboard(blackboard: CognitiveBlackboard): void {
-        this.blackboard = blackboard;
-    }
-
     setBot(bot: unknown): void {
         this.bot = bot;
     }
 
     async _call(data: z.infer<typeof this.schema>): Promise<string> {
         const { target, count = 1 } = data;
+        void this.bot;
 
         try {
-            // ① 情報収集 (決定論的)
             let recipeInfo = '';
             try {
                 const resolver = RecipeDependencyResolver.getInstance('1.20');
@@ -89,45 +79,12 @@ export default class PlanCraftTool extends StructuredTool {
                 recipeInfo = `レシピ解決エラー: ${target}`;
             }
 
-            // インベントリ
-            const inventory = this.blackboard?.selfState?.inventory;
-            const inventoryInfo = inventory && inventory.length > 0
-                ? inventory.map(e => `${e.name} x${e.count}`).join(', ')
-                : '空';
-
-            // 近傍インフラ (bot から取得)
-            let infraInfo = '不明';
-            try {
-                const mcMeta = this.getMinecraftMetadata();
-                if (mcMeta?.nearbyInfrastructure) {
-                    const infra = mcMeta.nearbyInfrastructure as Array<{ name: string; x: number; y: number; z: number; distance: number }>;
-                    infraInfo = infra.length > 0
-                        ? infra.map(i => `${i.name}(${i.x},${i.y},${i.z}) 距離${i.distance.toFixed(1)}m`).join(', ')
-                        : 'なし';
-                }
-            } catch { /* optional */ }
-
-            // ② 記憶問い合わせ (MemoryAgent)
-            let memoryInfo = '';
-            if (this.memoryAgent) {
-                try {
-                    const memories = await this.memoryAgent.query(
-                        `${target}のクラフトに関連する情報、近くのチェストやかまどの中身`,
-                    );
-                    if (memories && !memories.includes('記憶にありません')) {
-                        memoryInfo = memories;
-                    }
-                } catch { /* optional */ }
-            }
-
-            // ③ LLM 計画生成
             const prompt = [
                 `目標: ${target} x${count}`,
                 `レシピ依存ツリー:\n${recipeInfo}`,
-                `インベントリ: ${inventoryInfo}`,
-                `近傍インフラ: ${infraInfo}`,
-                memoryInfo ? `記憶:\n${memoryInfo}` : '',
-            ].filter(Boolean).join('\n\n');
+                'インベントリ: 不明',
+                '近傍インフラ: 不明',
+            ].join('\n\n');
 
             const response = await this.model.invoke([
                 new SystemMessage(PLAN_SYSTEM_PROMPT),
@@ -136,7 +93,6 @@ export default class PlanCraftTool extends StructuredTool {
 
             const content = typeof response.content === 'string' ? response.content : '';
 
-            // JSON パース
             const jsonMatch = content.match(/\{[\s\S]*\}/);
             if (!jsonMatch) {
                 return `計画生成に失敗しました。手動でクラフトを進めてください。\n参考:\n${recipeInfo}`;
@@ -147,35 +103,7 @@ export default class PlanCraftTool extends StructuredTool {
                 subtasks: Array<{ goal: string; id: string }>;
             };
 
-            // PlanState を構築して blackboard に注入
-            if (this.blackboard) {
-                const now = Date.now();
-                const subtasks: PlanSubtask[] = parsed.subtasks.map((st, i) => ({
-                    id: st.id || `st_${i + 1}`,
-                    goal: st.goal,
-                    status: i === 0 ? 'in_progress' as const : 'pending' as const,
-                    iterationsSpent: 0,
-                    children: [],
-                    createdBy: 'plan_craft' as const,
-                    createdAt: now,
-                }));
-
-                const planState: PlanState = {
-                    goal: `${target} x${count}`,
-                    strategy: parsed.strategy,
-                    subtasks,
-                    currentSubtaskId: subtasks[0]?.id ?? null,
-                    journalSummary: `プラン作成: ${target} x${count}。${subtasks.length}サブタスク。戦略: ${parsed.strategy}`,
-                    lastUpdatedBy: 'plan_craft',
-                    createdAt: now,
-                    updatedAt: now,
-                };
-                this.blackboard.updatePlan(planState);
-
-                logger.info(`[plan-craft] 📋 プラン生成: ${subtasks.length}サブタスク — ${parsed.strategy}`);
-            }
-
-            // FCA に返す概要
+            logger.info(`[plan-craft] 📋 プラン生成: ${parsed.subtasks.length}サブタスク — ${parsed.strategy}`);
             const summary = parsed.subtasks.map((st, i) => `${i + 1}. ${st.goal}`).join('\n');
             return `【クラフト計画】${target} x${count}\n戦略: ${parsed.strategy}\n手順:\n${summary}`;
 
@@ -197,12 +125,5 @@ export default class PlanCraftTool extends StructuredTool {
             }
         }
         return line;
-    }
-
-    private getMinecraftMetadata(): Record<string, unknown> | null {
-        // blackboard の envelope から取得するのが理想だが、
-        // 現時点では bot 経由でアクセスする方法がないため null を返す
-        // TODO: 実行経路から minecraft metadata を渡す
-        return null;
     }
 }

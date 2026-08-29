@@ -26,17 +26,6 @@ vi.mock('../../src/services/llm/graph/cognitive/TaskEpisodeMemory.js', () => ({
     recallRelevantEpisodes: async () => [], formatForPrompt: () => '', saveEpisode: async () => {},
   }) },
 }));
-vi.mock('../../src/services/llm/graph/cognitive/MemoryAgent.js', () => ({
-  MemoryAgent: class {
-    constructor(_blackboard: unknown, private envelope: any) {}
-    async initialize() { return `memory-${this.envelope.sourceUserId}`; }
-    async run(signal: AbortSignal) { await new Promise<void>(resolve => {
-      if (signal.aborted) resolve(); else signal.addEventListener('abort', () => resolve(), { once: true });
-    }); }
-    async query(question: string) { fakes.memoryReads.push({ owner: this.envelope.sourceUserId, question }); return `answer-${this.envelope.sourceUserId}`; }
-    async save(content: string) { fakes.memoryWrites.push({ owner: this.envelope.sourceUserId, content }); return { saved: true, message: "saved" }; }
-  },
-}));
 vi.mock('../../src/services/llm/graph/cognitive/selfImprove/index.js', () => ({ SelfImprovementDaemon: { getInstance: () => ({ onEpisodeSaved: async () => {} }) } }));
 vi.mock('../../src/services/minebot/routines/RoutineRecorder.js', () => ({ RoutineRecorder: { getInstance: () => undefined } }));
 
@@ -142,7 +131,7 @@ describe('actual FCA and tools with external services mocked', () => {
   });
 
   it('snapshots the tool catalog and never inherits catalog memory or plan context', async () => {
-    const original = new RecallMemoryTool(); original.setMemoryAgent({ query: async () => 'catalog-secret' } as any);
+    const original = new RecallMemoryTool(); original.setMemoryPort({ search: async () => [{ content: 'catalog-secret' }] } as any);
     const input = [original] as any[]; const agent = new FunctionCallingAgent(input); const session = agent.createSession();
     agent.addTools([new SaveMemoryTool()]); input.push(new UpdatePlanTool());
     expect(session.getTools().map(t => t.name)).toEqual(['recall-memory']);
@@ -168,20 +157,16 @@ describe('actual FCA and tools with external services mocked', () => {
     await agent.run({ ...state('B'), needsTools: false });
   });
 
-  it('keeps save-memory and plan-craft dependencies local to each tool set', async () => {
+  it('keeps save-memory ports local to each tool set', async () => {
     const agent = new FunctionCallingAgent([new SaveMemoryTool(), new PlanCraftTool()]);
     const a = agent.createToolsForRun(); const b = agent.createToolsForRun();
-    const saveA = vi.fn(async () => ({ saved: true, message: "saved A" })); const saveB = vi.fn(async () => ({ saved: true, message: "saved B" })); const planA = vi.fn(); const planB = vi.fn();
-    (a[0] as SaveMemoryTool).setMemoryAgent({ save: saveA } as any);
-    (b[0] as SaveMemoryTool).setMemoryAgent({ save: saveB } as any);
+    const saveA = vi.fn(async () => ({ saved: true, message: 'saved A' })); const saveB = vi.fn(async () => ({ saved: true, message: 'saved B' }));
+    (a[0] as SaveMemoryTool).setMemoryPort({ save: saveA } as any);
+    (b[0] as SaveMemoryTool).setMemoryPort({ save: saveB } as any);
     await a[0].invoke({ content: 'only-A' }); await b[0].invoke({ content: 'only-B' });
-    expect(saveA.mock.calls).toEqual([['only-A', undefined]]); expect(saveB.mock.calls).toEqual([['only-B', undefined]]);
-    (a[1] as PlanCraftTool).setBlackboard({ selfState: { inventory: [{ name: 'inventory-A', count: 1 }] }, updatePlan: planA } as any);
-    (b[1] as PlanCraftTool).setBlackboard({ selfState: { inventory: [{ name: 'inventory-B', count: 2 }] }, updatePlan: planB } as any);
-    fakes.utilityInvoke.mockImplementation(async messages => ({ content: JSON.stringify({ strategy: messages[1].content, subtasks: [] }) }));
-    await a[1].invoke({ target: 'target-A' }); await b[1].invoke({ target: 'target-B' });
-    expect(planA.mock.calls[0][0].strategy).toContain('inventory-A'); expect(planA.mock.calls[0][0].strategy).not.toContain('inventory-B');
-    expect(planB.mock.calls[0][0].strategy).toContain('inventory-B'); expect(planB.mock.calls[0][0].strategy).not.toContain('inventory-A');
+    expect(saveA.mock.calls[0][0]).toMatchObject({ content: 'only-A' });
+    expect(saveB.mock.calls[0][0]).toMatchObject({ content: 'only-B' });
+    expect(saveA).toHaveBeenCalledOnce(); expect(saveB).toHaveBeenCalledOnce();
   });
 
   it('does not treat a Web conversation ID as a Discord delivery channel', async () => {
@@ -226,7 +211,7 @@ describe('actual FCA and tools with external services mocked', () => {
   });
 });
 
-it('binds the canonical memory port in standalone FCA, without a MemoryAgent', async () => {
+it('binds the canonical memory port in standalone FCA', async () => {
   const request = { ...state('A').requestEnvelope, sourceUserId: '100', discord: { guildId: '200', channelId: '300', isDM: false } };
   const search = vi.spyOn(ShannonMemoryService.getInstance(), 'searchKnowledge').mockResolvedValue([]);
   try {

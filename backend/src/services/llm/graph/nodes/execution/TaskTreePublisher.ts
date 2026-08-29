@@ -2,28 +2,15 @@ import { DiscordPlanningInput, TaskTreeState } from '@shannon/common';
 import { logger } from '../../../../../utils/logger.js';
 import { EventBus } from '../../../../eventBus/eventBus.js';
 import { CONFIG as MINEBOT_CONFIG } from '../../../../minebot/config/MinebotConfig.js';
-import { MetaState } from '../../cognitive/CognitiveBlackboard.js';
-
-export interface BlackboardExtras {
-    metaState: MetaState | null;
-}
 
 /**
  * タスクツリーの状態をEventBus経由でUI（Web / Discord / MinebotUI）に配信する
  */
 export class TaskTreePublisher {
     private eventBus: EventBus;
-    private blackboardAccessor: (() => BlackboardExtras) | null = null;
 
     constructor(eventBus: EventBus) {
         this.eventBus = eventBus;
-    }
-
-    /**
-     * メタ状態のスナップショットアクセサを設定する。MinebotUIペイロードに含める。
-     */
-    setBlackboardAccessor(fn: (() => BlackboardExtras) | null): void {
-        this.blackboardAccessor = fn;
     }
 
     /**
@@ -47,7 +34,6 @@ export class TaskTreePublisher {
             }
         }
 
-        // WebUI に通知
         this.eventBus.publish({
             type: 'web:planning',
             memoryZone: 'web',
@@ -55,7 +41,6 @@ export class TaskTreePublisher {
             targetMemoryZones: ['web'],
         });
 
-        // Discord に通知（channelIdがある場合）
         if (platform === 'discord' && channelId) {
             this.eventBus.publish({
                 type: 'discord:planning',
@@ -69,19 +54,12 @@ export class TaskTreePublisher {
         }
     }
 
-    /**
-     * Minebot UI にタスクツリーを送信（metaState を付加）
-     */
     async postTaskTreeToMinebotUi(taskTree: TaskTreeState): Promise<void> {
         try {
-            const extras = this.blackboardAccessor ? this.blackboardAccessor() : null;
-            const payload = extras
-                ? { ...taskTree, metaState: extras.metaState }
-                : taskTree;
             const response = await fetch(`${MINEBOT_CONFIG.UI_MOD_BASE_URL}/task`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json; charset=UTF-8' },
-                body: JSON.stringify(payload),
+                body: JSON.stringify(taskTree),
             });
             if (!response.ok) {
                 logger.warn(`Minebot UI task post failed: ${response.status}`);

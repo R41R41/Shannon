@@ -25,7 +25,6 @@ import { trimContext } from '../../utils/contextManager.js';
 import { createTracedModel } from '../../utils/langfuse.js';
 import { tokenTracker } from '../../utils/tokenTracker.js';
 import { ExecutionResult } from '../types.js';
-import { MemoryState } from './MemoryNode.js';
 import { PromptBuilder } from './prompt/PromptBuilder.js';
 import { TaskTreePublisher } from './execution/TaskTreePublisher.js';
 import { ThinkingManager } from './execution/ThinkingManager.js';
@@ -50,12 +49,11 @@ export interface FunctionCallingAgentState {
     requestEnvelope?: import("@shannon/common").RequestEnvelope;
     userMessage: string | null;
     messages: BaseMessage[];
-    memoryState?: MemoryState;
     context: TaskContext | null;
     channelId: string | null;
     environmentState: string | null;
     isEmergency: boolean;
-    /** Pre-formatted memory prompt from ScopedMemoryService (replaces memoryState when set) */
+    /** Pre-formatted memory prompt from ScopedMemoryService */
     memoryPrompt?: string;
     relationshipPrompt?: string;
     selfModelPrompt?: string;
@@ -63,8 +61,8 @@ export interface FunctionCallingAgentState {
     internalStatePrompt?: string;
     worldModelPrompt?: string;
 
-    /** ツール実行後に呼ばれるコールバック（非同期感情再評価のトリガー） */
-    onToolsExecuted: (
+    /** ツール実行後に呼ばれるコールバック */
+    onToolsExecuted?: (
         messages: BaseMessage[],
         results: ExecutionResult[]
     ) => void;
@@ -91,10 +89,6 @@ export interface FunctionCallingAgentState {
     needsPlanning?: boolean;
     /** イテレーション毎に最新のインベントリ差分を返すコールバック */
     getInventoryDiff?: () => string | null;
-    /** Blackboard から最新の journalSummary を取得するコールバック */
-    getJournalSummary?: () => string | null;
-    /** Blackboard から最新のアクティブサブタスク情報を取得するコールバック */
-    getActiveSubtaskInfo?: () => string | null;
     /** 初期記憶コンテキストを取得するコールバック (初回のみ) */
     getInitialMemory?: () => Promise<string | null>;
     /** SubTaskExecutor: FCA の最大イテレーション数をオーバーライド */
@@ -109,14 +103,13 @@ export interface FunctionCallingAgentState {
  *
  * 特徴:
  * - ツール定義は API の `tools` パラメータで渡す（プロンプトに埋め込まない）
- * - 各イテレーションで最新の感情状態を読み込み（擬似並列）
  * - update-plan ツールでLLMが自発的に計画を立てる + 自動ステップ記録
  * - EventBus 経由でUI通知
  *
  * フロー:
- * 1. システムプロンプト（感情 + コンテキスト + ルール）+ ユーザーメッセージを構築
+ * 1. システムプロンプト（コンテキスト + ルール）+ ユーザーメッセージを構築
  * 2. LLM に tools を bind して呼び出し
- * 3. tool_calls があれば実行し、ToolMessage で結果を返す → 非同期感情再評価をトリガー
+ * 3. tool_calls があれば実行し、ToolMessage で結果を返す
  * 4. tool_calls がなければタスク完了
  * 5. 2-4 を繰り返す
  */
@@ -190,12 +183,11 @@ export class FunctionCallingSession {
     }
 
     /**
-     * メタ状態のアクセサを TaskTreePublisher に転送する。
+     * Session-local live effects for ephemeral prompt injection. Not a shared blackboard.
      */
-    public setBlackboardAccessor(fn: Parameters<typeof this.taskTreePublisher.setBlackboardAccessor>[0]): void {
+    public setBlackboardAccessor(fn: (() => { freeSlots?: number | null; activeEffects?: Array<{ name: string; amplifier: number }> }) | null): void {
         if (this.phase === "closed" && fn !== null) return;
-        this.taskTreePublisher.setBlackboardAccessor(fn);
-        this.blackboardAccessor = fn as typeof this.blackboardAccessor;
+        this.blackboardAccessor = fn;
     }
 
     /** 登録済みツール一覧を返す */
@@ -403,7 +395,6 @@ export class FunctionCallingSession {
         let systemPrompt = this.promptBuilder.buildSystemPrompt(
             state.context,
             state.environmentState,
-            state.memoryState,
             state.memoryPrompt,
             state.relationshipPrompt,
             state.selfModelPrompt,
@@ -615,7 +606,7 @@ export class FunctionCallingSession {
                     return !this.loopDetector.isCallBlocked(call.name, args);
                 }),
                 onTools: (results) => {
-                    try { state.onToolsExecuted(messages, results); } catch { /* fire-and-forget */ }
+                    try { state.onToolsExecuted?.(messages, results); } catch { /* fire-and-forget */ }
                     this.loopDetector.recordAndCheck(results.map(result => ({ name: result.toolName, args: result.args })), results);
                 },
                 ephemeral: async (turn) => {

@@ -50,7 +50,7 @@ execute:
     → FunctionCallingAgent
 ```
 
-感情・メタ認知の3並列（`EmotionNode` / `EmotionLoop` / `MetaCognitionLoop` / `ParallelExecutor`）と `ClassifyNode` / `SubTaskPlannerNode` / `SubTaskExecutor` は削除済み。`EmotionType` も画面・音声・共有型から消えた。Discord 音声の感情は Voicepeak 自身の `analyzeEmotionForTTS` で、Plutchik とは別系統。`CognitiveBlackboard` と `MemoryAgent` は記憶ツールの型として残るが、注入元がないため実行時には現れない。`MemoryNode` は互換の空実装。未参照のコードは [削除ゲート](./deletion-gate.md) が止める。
+感情・メタ認知の3並列（`EmotionNode` / `EmotionLoop` / `MetaCognitionLoop` / `ParallelExecutor`）と `ClassifyNode` / `SubTaskPlannerNode` / `SubTaskExecutor` は削除済み。`EmotionType` も画面・音声・共有型から消えた。Discord 音声の感情は Voicepeak 自身の `analyzeEmotionForTTS` で、Plutchik とは別系統。`CognitiveBlackboard` / `MemoryAgent` / 空の `MemoryNode` も削除した。記憶の実行経路は `MemoryPort`（`bindRequestMemory`）と `ScopedMemoryService`。X/YouTube 投稿エージェントは不完全な TaskContext では記憶しない。未参照のコードは [削除ゲート](./deletion-gate.md) が止める。
 
 LINE と Radar はこのグラフに入らない。独立 HTTP runtime。
 

@@ -12,7 +12,7 @@ import SavePersonMemoryTool from './savePersonMemory.js';
 /**
  * 記憶ツールを作成するファクトリ関数
  *
- * v2: recall-memory / save-memory (統合版、MemoryAgent 連携)
+ * 統合: recall-memory / save-memory / save-person-memory（実行ごとに MemoryPort を注入）
  * 旧: save-experience, save-knowledge, recall-experience, recall-knowledge, recall-person
  *     → 後方互換のため残しているが、将来廃止予定
  */
@@ -22,7 +22,6 @@ export function createMemoryTools(
 ): StructuredTool[] {
 
   return [
-    // v2 統合ツール (MemoryAgent 連携)
     new RecallMemoryTool(),
     new SaveMemoryTool(),
     new SavePersonMemoryTool(),
