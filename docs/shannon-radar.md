@@ -480,3 +480,15 @@ APIはHost/Origin/Sec-Fetch-Site、CSP/no-store、同時8要求と45秒上限を
 順序は、独立dev Firebase/許可UID/実ソースと取得枠の確認 → devのレビュー済みvalidator導入と限定実接続 → 同じ成果物で起動/停止・復旧確認 → 本番用設定/サービス/HTTPS経路・停止手順のレビュー → ユーザー確認を経て個人Radarだけ本番追加。今回のCLIはdev限定なので、そのままprodで実行しない。本番日時は認証/実接続と本番手順が未検証のため未確定。全リファクタリング完了や専用Discord Botの作成を、個人Radarの初回リリース条件にはしない。
 
 参考：Firebase公式の[ID token検証](https://firebase.google.com/docs/auth/admin/verify-id-tokens)、[失効確認](https://firebase.google.com/docs/auth/admin/manage-sessions)、[認証状態の保存](https://firebase.google.com/docs/auth/web/auth-state-persistence)。実認証の成功はこれらの設計参照だけでは証明しない。
+
+## 20. RAD-YT-1：登録チャンネル新着・視聴状態・配信receipt（2026-08-29、dev基盤）
+
+個人LINEの最初の情報体験を、本人がYouTubeで登録しているチャンネルの新着動画へ変更する。初回同期より前の動画はbackfillせず、同期後に公開された動画だけを候補にする。同一video IDはtitleやURLの表記でなくowner＋video IDのinsert-only receiptで予約し、失敗・結果不明でも予約を返さない。これにより無損失より二重配信防止を優先する。現在のLINE 62日URL hashだけでは永久の重複防止にならないため、実runtime接続前に専用永続receipt adapterとDB validatorを追加する。
+
+登録一覧はYouTube Data API `subscriptions.list(mine=true)`を、本人の `youtube.readonly` OAuth bindingから最大50件ずつ、最大500件/10ページで読む。token・Google account IDをapplicationへ渡さずbroker内に隔離し、各pageの前後でowner/binding revision/scope/期限を再確認する。新着取得は登録channelを50件ずつ`channels.list`でuploads playlistへ解決し、各playlistを小さく`playlistItems.list`する。`search.list`、書込みscope、コメント/評価/登録変更は使わない。最大件数、fields、取消を固定し、quota policyは実登録数を見て確定する。
+
+YouTube公式Data APIはwatch historyを取得できない。`playlistItems.list`は`watchHistoryNotAccessible`を返し、watchHistory/watchLater IDも2016年以降利用できない。したがって「未視聴」をAPIだけで断定しない。`YouTubeViewStatePort`は `viewed / unviewed / unknown` を明示し、厳密modeはunknownを送らず、近似modeは本人が明示選択した場合だけunknownを未視聴候補として扱う。ブラウザ拡張はmobile/TV視聴を捕捉できず完全ではなく、Google画面のscrapingを本番依存にしない。今後の新規開拓推薦は登録新着と別laneにし、未視聴判定と推薦rankを混ぜない。
+
+dev追加は`youtubeSubscriptionInbox.ts`と`youtubeDataApi.ts`、対象10テスト。OAuth broker、実Google project/client、token保護保存、実登録同期、永続receipt、LINE worker/policyへの接続、本人によるunknown扱いの決定は未完。本体/LINE runtimeは起動せず、実Google/LINE送信・通常DB・prodは変更していない。
+
+公式根拠：[subscriptions.list](https://developers.google.com/youtube/v3/docs/subscriptions/list)、[playlistItems.list errors](https://developers.google.com/youtube/v3/docs/playlistItems/list)、[OAuth web server/offline access](https://developers.google.com/youtube/v3/guides/auth/server-side-web-apps)、[watch history廃止記録](https://developers.google.com/youtube/v3/revision_history)。

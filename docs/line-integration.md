@@ -43,6 +43,8 @@ LINE専用の `line:sha256([botUserId, userId])` ownerを導入。既存Firebase
 
 日跨ぎ重複は過去62日分の配信予約のURLクラスタhashで抑止する。送信前に設定hash・同意版・owner/catalog版・期限を再検査。pendingのみ再開でき、sending/unknownは再送しない。停止や設定変更は進行中の結果と派生会話を無効化する。送信期限と引用の保持期限を分け、引用は最大24hまたは出典/天気/同意の期限まで。引用のたびに権限とcatalog版を確認し、別グループへは持ち込まない。
 
+2026-08-29の要件更新：個人Radarの初回情報は、本人のYouTube登録チャンネルの同期後新着を優先し、同じvideo IDを二度送らない。現行62日URL hashだけでは要件を満たさないため、owner＋video IDのinsert-only永続receiptをLINE worker接続前の必須条件にする。YouTube公式APIは登録一覧をread-only OAuthで取得できる一方、watch historyは取得できない。視聴状態は `viewed / unviewed / unknown` の別portとし、unknownを未視聴とみなすかは本人の明示選択なしに決めない。登録新着と将来の未登録チャンネル推薦は別lane・別予算にする。devでは契約/Data API adapter/10テストまで追加し、OAuth/DB/worker/実送信は未接続。
+
 `配信状況` / `/radar status`はLLMなしで配信状態と設定時刻・ソース数・期限を返す。会話予算0でも利用でき、別の制御回数上限を持つ。LINE ledgerの期限切れ本文は稼働中1時間ごとのmaintenanceでも消去する。
 
 **残る範囲**：実アカウント資格情報・本人/許可グループID・具体的ソース/天気地域・時刻/費用枠、HTTPSと実スマホ受信。既存Firebaseデータとの明示リンク、LINEからのソース編集、Calendar OAuth、全owner/停止中catalogの物理purge、LINE側で受信済みの内容の撤回、送信不明の運用画面は未実装。停止は配信と新規取得を止めるもので、LINE端末上の過去メッセージを削除しない。
