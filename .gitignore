@@ -12,6 +12,9 @@
 /frontend/.env
 node_modules
 .env
+/backend/scripts/dev-uid-rehearsal-users.json
+/backend/scripts/user-binding-manifest.json
+/tmp/uid-plan.json
 
 # Runtime data (persisted state, finetune data)
 /backend/saves/processed_tweet_ids.json

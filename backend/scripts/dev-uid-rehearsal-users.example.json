@@ -1,0 +1,26 @@
+{
+  "reviewedBy": "dev-rehearsal-operator",
+  "users": [
+    {
+      "name": "Dev Rehearsal Admin",
+      "email": "shannon-dev-rehearsal-admin@fixture.test",
+      "isAuthorized": true,
+      "isAdmin": true,
+      "password": "REPLACE_WITH_STRONG_PASSWORD"
+    },
+    {
+      "name": "Dev Rehearsal User A",
+      "email": "shannon-dev-rehearsal-user-a@fixture.test",
+      "isAuthorized": true,
+      "isAdmin": false,
+      "password": "REPLACE_WITH_STRONG_PASSWORD"
+    },
+    {
+      "name": "Dev Rehearsal User B",
+      "email": "shannon-dev-rehearsal-user-b@fixture.test",
+      "isAuthorized": true,
+      "isAdmin": false,
+      "password": "REPLACE_WITH_STRONG_PASSWORD"
+    }
+  ]
+}
