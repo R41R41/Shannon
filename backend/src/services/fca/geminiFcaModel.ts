@@ -1,4 +1,5 @@
 import type { FcaMessage, FcaModel, FcaToolCall, FcaToolDefinition } from '../../modules/fca/index.js';
+import { toAbortSignal } from './abortSignal.js';
 
 const SKIP_THOUGHT_SIGNATURE = 'skip_thought_signature_validator';
 
@@ -218,7 +219,6 @@ export function createGeminiFcaModel(input: {
         temperature: input.temperature,
         modelPartsByCalls,
       });
-      const abort = signal as AbortSignal;
       const response = await fetch(url, {
         method: 'POST',
         headers: {
@@ -226,7 +226,7 @@ export function createGeminiFcaModel(input: {
           'x-goog-api-key': input.apiKey,
         },
         body: JSON.stringify(body),
-        signal: abort && typeof abort.aborted === 'boolean' ? abort : undefined,
+        signal: toAbortSignal(signal),
       });
       const raw = await response.text();
       signal.throwIfAborted();

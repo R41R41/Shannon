@@ -1,4 +1,5 @@
 import type { FcaBoundTool } from '../../modules/fca/index.js';
+import { toAbortSignal } from '../fca/abortSignal.js';
 import type { YouTubeSearchHit } from '../radar/youtubeSearch.js';
 import type { CustomSearchHit } from '../search/customSearch.js';
 
@@ -28,7 +29,7 @@ export function lineChatTools(ports: {
     parameters: QUERY,
     async execute(args, signal) {
       if (++webCalls > 2) throw new Error('LINE_CHAT_TOOL_BUDGET');
-      const items = await ports.web!(q(args), limit(args, 3, 5), signal);
+      const items = await ports.web!(q(args), limit(args, 3, 5), toAbortSignal(signal));
       return { content: JSON.stringify({ untrustedResults: items }) };
     },
   });
@@ -37,7 +38,7 @@ export function lineChatTools(ports: {
     parameters: QUERY,
     async execute(args, signal) {
       if (++youtubeCalls > 2) throw new Error('LINE_CHAT_TOOL_BUDGET');
-      const items = await ports.youtube!(q(args), limit(args, 5, 8), signal);
+      const items = await ports.youtube!(q(args), limit(args, 5, 8), toAbortSignal(signal));
       return { content: JSON.stringify({ untrustedResults: items.map(item => ({
         title: item.title, channelTitle: item.channelTitle, url: `https://www.youtube.com/watch?v=${item.videoId}`, fact: item.fact,
       })) }) };

@@ -1,4 +1,5 @@
 import { FcaError, runFcaLoop, type FcaBoundTool, type FcaModel } from '../../modules/fca/index.js';
+import { toAbortSignal } from '../fca/abortSignal.js';
 import { type RadarDigestSelection, type RadarDiscoverySkills } from './radarDiscovery.js';
 
 export type RadarFcaModel = FcaModel;
@@ -15,7 +16,7 @@ function bound(skills: RadarDiscoverySkills): FcaBoundTool[] {
   return skills.tools().map(tool => ({
     name: tool.name, description: tool.description, parameters: tool.parameters,
     async execute(args, signal) {
-      const result = await skills.execute(tool.name, args, signal);
+      const result = await skills.execute(tool.name, args, toAbortSignal(signal));
       return { content: result.content, ...(result.selection ? { done: true, value: result.selection } : {}) };
     },
   }));

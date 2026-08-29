@@ -1,6 +1,7 @@
 import { ChatOpenAI } from '@langchain/openai';
 import { AIMessage, HumanMessage, SystemMessage, ToolMessage, type BaseMessage } from '@langchain/core/messages';
 import type { FcaMessage, FcaModel } from '../../modules/fca/index.js';
+import { toAbortSignal } from './abortSignal.js';
 
 export function fcaHistoryToLangChain(system: string, history: readonly FcaMessage[]): BaseMessage[] {
   const extraSystems: string[] = [];
@@ -46,10 +47,11 @@ export function createOpenAiFcaModel(input: { apiKey: string; model: string; max
   return { async next(request, signal) {
     signal.throwIfAborted();
     const messages = fcaHistoryToLangChain(request.system, request.messages);
+    const abort = toAbortSignal(signal);
     const result = request.tools.length
       ? await model.bindTools(request.tools.map(tool => ({ type: 'function' as const, function: { name: tool.name, description: tool.description, parameters: tool.parameters } })),
-        { parallel_tool_calls: false }).invoke(messages, { signal })
-      : await model.invoke(messages, { signal });
+        { parallel_tool_calls: false }).invoke(messages, { signal: abort })
+      : await model.invoke(messages, { signal: abort });
     signal.throwIfAborted();
     const content = typeof result.content === 'string' ? result.content : '';
     const toolCalls = (result.tool_calls ?? []).map(call => ({ id: call.id ?? '', name: call.name, arguments: call.args }));
