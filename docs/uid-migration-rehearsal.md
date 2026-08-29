@@ -10,9 +10,12 @@
 | Settings manifest dry-run | `POST /api/identity/validate-manifest` 実装済み |
 | 隔離 fixture リハーサル | ✅ `scripts/probe-user-binding-migration.cjs --isolated-fixture` 成功（2026-08-30） |
 | prod `shannon.users` | 3件・UID 未绑定（読取確認のみ、書込みしない） |
-| dev `shannon_dev.users` | ✅ 3件 seed 済（2026-08-30、`@fixture.test` リハーサル用） |
+| dev `shannon_dev.users` | ✅ 3件 seed + **UID 绑定 apply 済**（2026-08-30） |
 | dev `.env` の `FIREBASE_PROJECT_ID` | ✅ frontend から同期済 |
-| dev `.env` の `GOOGLE_APPLICATION_CREDENTIALS` | **未設定** → Firebase 利用者作成 / live apply は未実施 |
+| dev `.env` の `GOOGLE_APPLICATION_CREDENTIALS` | ✅ 配置済 |
+| Firebase Auth 利用者 | ✅ 3件（provision 済、`emailVerified: true`） |
+| dry-run / apply | ✅ plan sha256 一致・`firebase_identity_unique` index 作成済 |
+| ブラウザ `/login` 試験 | ✅ Email/Password 有効化後、3利用者とも sign-in → token 検証 → Mongo 照合成功（2026-08-30） |
 | 本体起動 | `.dev-runtime-lock` 維持 |
 
 ## 1. 隔離 fixture（いま実行可能）
@@ -100,8 +103,11 @@ node scripts/user-binding-migration.mjs /path/to/manifest.json /tmp/uid-plan.jso
 apply 後:
 
 1. dev frontend `.env` の Firebase project が一致していること
-2. テスト利用者で `/login` → `auth:check` 成功
-3. 管理 console（admin）/ Radar（非 admin）の経路確認
+2. Firebase Console → Authentication → Sign-in method → Email/Password が有効であること
+3. テスト利用者で `/login` → `auth:check` 成功
+4. 管理 console（admin）/ Radar（非 admin）の経路確認
+
+apply 時に plan 出力先が既存だと `EEXIST` で終了コード 1 になるが、DB 更新は完了している場合がある。绑定確認は `db.users` の `firebaseUid` / `firebaseProjectId` を見る。
 
 ## 5. 本番移行（別工程・未実施）
 

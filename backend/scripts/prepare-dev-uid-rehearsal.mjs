@@ -137,7 +137,10 @@ async function writeManifest(env, config, db, manifestOut) {
     reviewedBy: config.reviewedBy,
     bindings,
   };
-  writeFileSync(manifestOut, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
+  writeFileSync(manifestOut, `${JSON.stringify(manifest, null, 2)}\n`, {
+    mode: 0o600,
+    flag: existsSync(manifestOut) ? 'w' : 'wx',
+  });
   return { manifestOut, bindingCount: bindings.length };
 }
 
