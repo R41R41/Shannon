@@ -17,6 +17,7 @@ import type { RequestEnvelope } from '@shannon/common';
 import { logger } from '../../../utils/logger.js';
 import { ScopeDeriver, channelToSource } from '../recall/ScopeDeriver.js';
 import { AutonomyUpdater } from './AutonomyUpdater.js';
+import { parseLlmJsonObject } from './parseLlmJson.js';
 
 export interface ScopedWritebackInput {
   envelope: RequestEnvelope;
@@ -140,12 +141,9 @@ export class WritebackProcessor {
     ]);
 
     const content = response.content.toString().trim();
-    const jsonMatch = content.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) return;
-
     try {
-      const parsed = JSON.parse(jsonMatch[0]);
-      if (!parsed.memories || !Array.isArray(parsed.memories)) return;
+      const parsed = parseLlmJsonObject(content) as { memories?: Array<Record<string, unknown> & { importance?: number }> } | null;
+      if (!parsed?.memories || !Array.isArray(parsed.memories)) return;
 
       for (const memory of parsed.memories) {
         if (!memory.category || !memory.content || !memory.tags) continue;

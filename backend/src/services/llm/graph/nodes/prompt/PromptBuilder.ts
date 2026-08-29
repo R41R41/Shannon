@@ -432,7 +432,9 @@ ${lines.join('\n')}
 
     private formatOutputRules(context: TaskContext | null): string {
         if (context?.platform === 'discord') {
-            return '- **Discord はテーブル（| col | col |）を表示できない**。代わりに箇条書き・太字・コードブロックで整形する\n' +
+            return '- 一覧・比較・手順・天気は箇条書きと太字（**項目**: 値）。挨拶と一言は地の文のまま（見出しやリストにしない）\n' +
+                '- 数式は Discord が LaTeX を描画しないので \\( \\) や $ は使わず、`y <= 4 - x^2` のように書く\n' +
+                '- **Discord はテーブル（| col | col |）を表示できない**。代わりに箇条書き・太字・コードブロックで整形する\n' +
                 '- 比較データは箇条書きで「**項目**: 値」形式にするか、コードブロック内でスペース整列する\n' +
                 '- task-complete の summary にこれらのフォーマットを使って見やすく書く';
         }

@@ -11,6 +11,7 @@ import { ShannonMemory } from '../../../models/ShannonMemory.js';
 import type { RequestEnvelope } from '@shannon/common';
 import { logger } from '../../../utils/logger.js';
 import { ScopeDeriver } from '../recall/ScopeDeriver.js';
+import { parseLlmJsonObject } from './parseLlmJson.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -115,9 +116,9 @@ ${conversationText}`;
         new HumanMessage(humanPrompt),
       ]);
       const content = response.content.toString().trim();
-      const jsonMatch = content.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) return null;
-      return JSON.parse(jsonMatch[0]) as AutonomyUpdateAnalysis;
+      const parsed = parseLlmJsonObject(content);
+      if (!parsed || typeof parsed !== 'object') return null;
+      return parsed as AutonomyUpdateAnalysis;
     } catch (error) {
       logger.warn(`⚠ ScopedMemory: autonomy update analysis failed: ${error}`);
       return null;
