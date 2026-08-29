@@ -62,13 +62,17 @@ const completeTool: FcaBoundTool = {
   async execute(args) { return { content: 'done', done: true, value: asArgs(args) }; },
 };
 
-export function langchainToolsForFca(tools: StructuredTool[]): FcaBoundTool[] {
+export function langchainToolsForFca(
+  tools: StructuredTool[],
+  hooks?: { onToolStarting?: (toolName: string, args?: Record<string, unknown>) => void },
+): FcaBoundTool[] {
   return tools.filter(tool => tool.name !== 'task-complete').map(tool => ({
     name: tool.name,
     description: (tool.description || tool.name).slice(0, 2000),
     parameters: { type: 'object', additionalProperties: true },
     async execute(args, signal) {
       try {
+        hooks?.onToolStarting?.(tool.name, asArgs(args));
         const content = await tool.invoke(asArgs(args), { signal });
         const text = typeof content === 'string' ? content : JSON.stringify(content);
         return { content: text };
@@ -83,15 +87,17 @@ export function langchainToolsForFca(tools: StructuredTool[]): FcaBoundTool[] {
 export async function runConversationFca(input: {
   system: string; goal: string; tools: StructuredTool[]; model: FcaModel; signal: AbortSignal;
   maxTurns: number; maxElapsedMs: number; needsTools?: boolean; deferToolLoad?: boolean;
+  onToolStarting?: (toolName: string, args?: Record<string, unknown>) => void;
   filterCalls?: (calls: readonly { id: string; name: string; arguments: unknown }[]) => readonly { id: string; name: string; arguments: unknown }[];
   onTools?: (results: ExecutionResult[]) => void;
   ephemeral?: (turn: number) => readonly { role: 'system' | 'user'; content: string }[] | Promise<readonly { role: 'system' | 'user'; content: string }[]>;
 }): Promise<FcaRunResult> {
+  const toolHooks = input.onToolStarting ? { onToolStarting: input.onToolStarting } : undefined;
   const inputTools = input.deferToolLoad && !input.tools.some(tool => tool.name === REQUEST_TOOLS_NAME)
     ? [new RequestToolsTool(), ...input.tools]
     : input.tools;
   const registered = inputTools.find(tool => tool.name === 'task-complete');
-  const catalog = [...langchainToolsForFca(inputTools), registered ? {
+  const catalog = [...langchainToolsForFca(inputTools, toolHooks), registered ? {
     ...completeTool,
     async execute(args, signal) {
       try {

@@ -146,7 +146,6 @@ export class TaskEpisodeMemory {
     /**
      * FCA の実行結果から TaskEpisode を構築するヘルパー。
      */
-    /** Load episode recall text for an FCA run. Call from the graph, not inside the loop. */
     static async loadPromptForRun(
         goal: string,
         platform: string,
@@ -159,6 +158,15 @@ export class TaskEpisodeMemory {
         } catch {
             return undefined;
         }
+    }
+
+    /** Persist a completed run episode. Call from the graph, not inside the FCA loop. */
+    static saveEpisodeForRun(
+        episode: TaskEpisode,
+        envelope?: RequestEnvelope,
+        memory: TaskEpisodeMemory = TaskEpisodeMemory.getInstance(),
+    ): void {
+        memory.saveEpisode(episode, envelope).catch(() => {});
     }
 
     static buildEpisodeFromResult(

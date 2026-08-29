@@ -31,7 +31,9 @@ import { inferInitialMode, envelopeToTaskContext } from './stateBridge.js';
 import { actionFormatterNode } from '../../common/adapters/actionFormatter.js';
 import { FunctionCallingAgent } from './nodes/FunctionCallingAgent.js';
 import { buildFcaState } from './nodes/fcaState.js';
-import { ScopedMemoryService } from '../../memory/scopedMemoryService.js';
+import { loadFcaCompositionExtras } from './nodes/fcaCompositionLoader.js';
+import type { ScopedMemoryService } from '../../memory/scopedMemoryService.js';
+import { ScopedMemoryService as ScopedMemoryServiceImpl } from '../../memory/scopedMemoryService.js';
 import { ModelSelector } from './cognitive/ModelSelector.js';
 import { TaskEpisodeMemory } from './cognitive/TaskEpisodeMemory.js';
 import type { ExecutionResult } from './types.js';
@@ -68,6 +70,24 @@ const ShannonState = Annotation.Root({
   _onTaskTreeUpdate: Annotation<((taskTree: TaskTreeState) => void) | undefined>({
     reducer: replace, default: () => undefined,
   }),
+  _onStreamSentence: Annotation<((sentence: string) => Promise<void>) | undefined>({
+    reducer: replace, default: () => undefined,
+  }),
+  _onRequestSkillInterrupt: Annotation<(() => void) | undefined>({
+    reducer: replace, default: () => undefined,
+  }),
+  _getLiveInventory: Annotation<(() => MinecraftInventoryEntry[]) | undefined>({
+    reducer: replace, default: () => undefined,
+  }),
+  _getActiveEffects: Annotation<(() => Array<{ name: string; amplifier: number }>) | undefined>({
+    reducer: replace, default: () => undefined,
+  }),
+  _getInventoryDiff: Annotation<(() => string | null) | undefined>({
+    reducer: replace, default: () => undefined,
+  }),
+  _getInitialMemory: Annotation<(() => Promise<string | null>) | undefined>({
+    reducer: replace, default: () => undefined,
+  }),
   _abortSignal: Annotation<AbortSignal | undefined>({
     reducer: replace, default: () => undefined,
   }),
@@ -81,10 +101,12 @@ const ShannonState = Annotation.Root({
 type ShannonStateType = typeof ShannonState.State;
 
 // ---------------------------------------------------------------------------
-// Shared singletons (initialized once at graph build time)
+// Shared services (initialized once at graph build time)
 // ---------------------------------------------------------------------------
 
-const scopedMemory = ScopedMemoryService.getInstance();
+function resolveScopedMemory(deps?: ShannonGraphDeps): ScopedMemoryService {
+  return deps?.scopedMemory ?? ScopedMemoryServiceImpl.getInstance();
+}
 
 // ---------------------------------------------------------------------------
 // Node implementations
@@ -114,6 +136,7 @@ async function emergencyFastpathNode(state: ShannonStateType): Promise<Partial<S
  */
 function createExecuteNode(
   fca: FunctionCallingAgent,
+  scopedMemory: ScopedMemoryService,
   routineManager?: import('../../minebot/routines/RoutineManager.js').RoutineManager,
   routineExecutor?: import('../../minebot/routines/RoutineExecutor.js').RoutineExecutor,
 ) {
@@ -125,7 +148,21 @@ function createExecuteNode(
 
     const platform = context?.platform ?? envelope.channel ?? 'unknown';
     const goal = envelope.text ?? '';
-    const episodePrompt = await TaskEpisodeMemory.loadPromptForRun(goal, platform, memoryEnvelope);
+    const lightweightMemory = platform === 'minecraft' || platform === 'minebot';
+    const memoryRecall = await scopedMemory.recall({
+      envelope: memoryEnvelope,
+      text: goal,
+      lightweightMode: lightweightMemory,
+    });
+    const compositionExtras = await loadFcaCompositionExtras({
+      goal,
+      platform,
+      memoryEnvelope,
+      environmentState: (envelope.metadata?.environmentState as string) ?? null,
+      serverId: memoryEnvelope.minecraft?.serverId,
+      lightweightMemory,
+      recall: memoryRecall,
+    });
 
     const fcaState = buildFcaState({
       taskId: envelope.requestId,
@@ -136,15 +173,15 @@ function createExecuteNode(
       channelId: envelope.discord?.channelId ?? envelope.conversationId,
       environmentState: (envelope.metadata?.environmentState as string) ?? null,
       isEmergency: envelope.tags.includes('emergency'),
-      memoryPrompt: state.memoryPrompt || undefined,
-      relationshipPrompt: state.relationshipPrompt,
-      selfModelPrompt: state.selfModelPrompt,
-      strategyPrompt: state.strategyPrompt,
-      internalStatePrompt: state.internalStatePrompt,
-      worldModelPrompt: state.worldModelPrompt,
-      episodePrompt,
+      ...compositionExtras,
       onToolStarting: state._onToolStarting,
       onTaskTreeUpdate: state._onTaskTreeUpdate,
+      onStreamSentence: state._onStreamSentence,
+      onRequestSkillInterrupt: state._onRequestSkillInterrupt,
+      getLiveInventory: state._getLiveInventory,
+      getActiveEffects: state._getActiveEffects,
+      getInventoryDiff: state._getInventoryDiff,
+      getInitialMemory: state._getInitialMemory,
       selectedModel: state.selectedModel,
       classifyMode: state.mode,
       needsTools: state.needsTools,
@@ -157,10 +194,12 @@ function createExecuteNode(
       state._abortSignal?.throwIfAborted();
 
       try {
-        const episode = TaskEpisodeMemory.buildEpisodeFromResult(
-          goal, platform, agentResult.taskTree, startTime, 0,
+        TaskEpisodeMemory.saveEpisodeForRun(
+          TaskEpisodeMemory.buildEpisodeFromResult(
+            goal, platform, agentResult.taskTree, startTime, 0,
+          ),
+          memoryEnvelope,
         );
-        TaskEpisodeMemory.getInstance().saveEpisode(episode, memoryEnvelope).catch(() => {});
       } catch { /* ignore */ }
 
       return {
@@ -361,7 +400,10 @@ function createExecuteNode(
 /**
  * simplifiedWriteback: format + writeback を統合 (Phase 4)
  */
-async function simplifiedWritebackNode(state: ShannonStateType): Promise<Partial<ShannonStateType>> {
+async function simplifiedWritebackNode(
+  state: ShannonStateType,
+  scopedMemory: ScopedMemoryService,
+): Promise<Partial<ShannonStateType>> {
   state._abortSignal?.throwIfAborted();
   // format
   const formatResult = await actionFormatterNode(state as unknown as ShannonGraphState);
@@ -387,19 +429,22 @@ async function simplifiedWritebackNode(state: ShannonStateType): Promise<Partial
 
 export interface ShannonGraphDeps {
   fca: FunctionCallingAgent;
+  scopedMemory?: ScopedMemoryService;
   /** Minecraft ルーチン実行用（任意、なければ従来パス） */
   routineManager?: import('../../minebot/routines/RoutineManager.js').RoutineManager;
   routineExecutor?: import('../../minebot/routines/RoutineExecutor.js').RoutineExecutor;
 }
 
 export function buildShannonGraph(deps: ShannonGraphDeps) {
-  const executeNode = createExecuteNode(deps.fca, deps.routineManager, deps.routineExecutor);
+  const scopedMemory = resolveScopedMemory(deps);
+  const executeNode = createExecuteNode(deps.fca, scopedMemory, deps.routineManager, deps.routineExecutor);
+  const writebackNode = (state: ShannonStateType) => simplifiedWritebackNode(state, scopedMemory);
 
   const workflow = new StateGraph(ShannonState)
     .addNode('ingest', ingestNode)
     .addNode('emergency_fastpath', emergencyFastpathNode)
     .addNode('execute', executeNode)
-    .addNode('writeback', simplifiedWritebackNode)
+    .addNode('writeback', writebackNode)
 
     .addEdge(START, 'ingest')
     .addConditionalEdges('ingest', (state: ShannonStateType) => {
@@ -430,9 +475,12 @@ export async function invokeShannonGraph(
   options?: {
     onToolStarting?: (toolName: string, args?: Record<string, unknown>) => void;
     onTaskTreeUpdate?: (taskTree: TaskTreeState) => void;
+    onStreamSentence?: (sentence: string) => Promise<void>;
     onRequestSkillInterrupt?: () => void;
     getLiveInventory?: () => MinecraftInventoryEntry[];
     getActiveEffects?: () => Array<{ name: string; amplifier: number }>;
+    getInventoryDiff?: () => string | null;
+    getInitialMemory?: () => Promise<string | null>;
     abortSignal?: AbortSignal;
   },
 ): Promise<ShannonGraphState> {
@@ -442,6 +490,12 @@ export async function invokeShannonGraph(
     _legacyMessages: legacyMessages ?? [],
     _onToolStarting: options?.onToolStarting,
     _onTaskTreeUpdate: options?.onTaskTreeUpdate,
+    _onStreamSentence: options?.onStreamSentence,
+    _onRequestSkillInterrupt: options?.onRequestSkillInterrupt,
+    _getLiveInventory: options?.getLiveInventory,
+    _getActiveEffects: options?.getActiveEffects,
+    _getInventoryDiff: options?.getInventoryDiff,
+    _getInitialMemory: options?.getInitialMemory,
     _abortSignal: options?.abortSignal,
   }, { signal: options?.abortSignal });
   options?.abortSignal?.throwIfAborted();

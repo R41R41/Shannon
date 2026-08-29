@@ -17,7 +17,6 @@ import { setMaxListeners } from 'node:events';
 import { config } from '../../../../config/env.js';
 import { modelManager } from '../../../../config/modelManager.js';
 import { logger } from '../../../../utils/logger.js';
-import { WorldKnowledgeService } from '../../../minebot/knowledge/WorldKnowledgeService.js';
 import { RecipeDependencyResolver } from '../../../minebot/knowledge/RecipeDependencyResolver.js';
 import UpdatePlanTool from '../../tools/utility/updatePlan.js';
 import { trimContext } from '../../utils/contextManager.js';
@@ -370,30 +369,17 @@ export class FunctionCallingSession {
         }
         if (composition.worldKnowledgePrompt) {
             systemPrompt += `\n\n${composition.worldKnowledgePrompt}`;
-        } else if (platform === 'minecraft' || platform === 'minebot') {
-            try {
-                const envObj = composition.environmentState ? JSON.parse(composition.environmentState) : null;
-                if (envObj?.botPosition) {
-                    const serverId = composition.requestEnvelope?.minecraft?.serverId;
-                    const wk = WorldKnowledgeService.forServer(serverId);
-                    if (wk) {
-                        const pos = envObj.botPosition;
-                        const worldPrompt = await wk.buildContextForPosition(
-                            { x: Math.floor(pos.x), y: Math.floor(pos.y), z: Math.floor(pos.z) },
-                            64,
-                        );
-                        if (worldPrompt) systemPrompt += `\n\n${worldPrompt}`;
-                    }
-                }
-            } catch { /* ignore */ }
         }
 
         if (platform === 'minecraft' || platform === 'minebot') {
             try {
                 const mcMeta = composition.context?.metadata?.minecraft as Record<string, unknown> | undefined;
-                const inventory = Array.isArray(mcMeta?.inventory)
-                    ? (mcMeta!.inventory as Array<{ name: string; count: number }>)
-                    : null;
+                const liveInventory = channelAdapter.getLiveInventory?.();
+                const inventory = liveInventory?.length
+                    ? liveInventory.map(item => ({ name: item.name, count: item.count }))
+                    : Array.isArray(mcMeta?.inventory)
+                        ? (mcMeta!.inventory as Array<{ name: string; count: number }>)
+                        : null;
                 const depPrompt = this.buildCraftDependencyPrompt(goal, inventory);
                 if (depPrompt) {
                     systemPrompt += depPrompt;
@@ -527,6 +513,7 @@ export class FunctionCallingSession {
                 maxTurns: maxIter, maxElapsedMs: FunctionCallingSession.MAX_TOTAL_TIME_MS,
                 needsTools: deferToolLoad ? false : composition.needsTools,
                 deferToolLoad,
+                onToolStarting: channelAdapter.onToolStarting,
                 filterCalls: (calls) => calls.filter(call => {
                     if (call.name === 'task-complete' || call.name === 'update-plan') return true;
                     const args = call.arguments && typeof call.arguments === 'object' && !Array.isArray(call.arguments)
@@ -552,8 +539,10 @@ export class FunctionCallingSession {
                         extra.push({ role: 'system', content: `【プラン更新】\n${this._pendingPlanUpdate}` });
                         this._pendingPlanUpdate = null;
                     }
+                    const inventoryDiff = channelAdapter.getInventoryDiff?.();
+                    if (inventoryDiff) extra.push({ role: 'system', content: inventoryDiff });
                     try {
-                      const effects = this.blackboardAccessor()?.activeEffects;
+                      const effects = channelAdapter.getActiveEffects?.() ?? this.blackboardAccessor()?.activeEffects;
                       if (effects?.length) extra.push({ role: 'system', content: `⚠️ 【アクティブ状態効果】${effects.map(e => `${e.name}(Lv${e.amplifier + 1})`).join(', ')}` });
                     } catch { /* optional */ }
                     try {

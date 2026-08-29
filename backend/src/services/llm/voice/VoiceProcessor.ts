@@ -382,6 +382,11 @@ export class VoiceProcessor {
       message.recentMessages
         ? [...message.recentMessages, new HumanMessage(userMessageForLlm)]
         : [],
+      {
+        onToolStarting: voiceOnToolStarting,
+        onStreamSentence,
+        abortSignal: undefined,
+      },
     );
     const responseText = await responsePromise;
     const llmMs = Date.now() - llmStartTime;

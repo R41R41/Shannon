@@ -181,16 +181,16 @@ Web UI で触ってよいのは非秘密のポリシー（配信時刻、source 
 
 ## 9. `FunctionCallingAgentState` の分け方
 
-巨大な1袋を3つに割る。
+2026-08-30 更新: `fcaState.ts` で3層に分割済み。
 
 1. **KernelInput**（`modules/fca` がすでに持つ）  
    system、messages、tools、limits、finish policy、signal。
-2. **Composition**  
-   envelope、memory port、person port、Discord conversation port、audience。ループが勝手に `getInstance()` しない。
-3. **ChannelAdapter**  
-   `onTaskTreeUpdate`、音声ストリーム、Minecraft inventory callback、LINE Reply はループの外。
+2. **Composition**（`FcaComposition`）  
+   envelope、scoped memory prompts、episode/world knowledge、classification。`fcaCompositionLoader.ts` が graph の execute 前に注入する。FCA ループ内で `getInstance()` しない。
+3. **ChannelAdapter**（`FcaChannelAdapter`）  
+   `onTaskTreeUpdate`、音声ストリーム、live inventory/effects、LINE Reply 等。`shannonGraph` → `buildFcaState` → session へ渡す。
 
-Discord の `FunctionCallingAgentState` は 2 と 3 がまだ混線している。核へ渡す直前に 1 だけを組み立てるのが美しい。Minecraft Executor の state は 1 相当を Anthropic 形式で持つ別型でよい（袋を無理に共通化しない）。
+Discord の旧 `FunctionCallingAgentState` 1袋は解消。Minecraft Executor の state は別型のまま（無理に共通化しない）。
 
 ---
 
@@ -204,10 +204,10 @@ Discord の `FunctionCallingAgentState` は 2 と 3 がまだ混線している�
 
 残してはいけない（本人・会話に紐づくもの）:
 
+- FCA ループ内の `TaskEpisodeMemory.getInstance()` / `WorldKnowledgeService.forServer()`（graph 側 `fcaCompositionLoader` + `saveEpisodeForRun` に移行済み）
 - `TaskEpisodeMemory.getInstance()` に envelope なしで書く（現行は envelope 必須で拒否）
-- `WorldKnowledgeService.forServer(表示名)` や旧 `getInstance('default')`（`forServer` は assigned id 以外 null。`getInstance` は削除済み）
 - `ShannonExecutor` のプロセス全体 lastTask（world 付き continuation に置換済み）
-- `PersonMemoryService` を会話の正本にする（recall/書き戻しは stub。canonical ID だけ残す）
+- 旧 `PersonMemoryService`（削除済み。scope 付き人物引用のみ）
 - ツールインスタンスの `setContext` を次の run へ使い回す（`createForRun` がその対策）
 
 直し方: 会話・記憶・ツールは `createForRun` / constructor 注入。`getInstance()` は接続の取得に限り、その戻り値を「この run の owner」に紐づけてから使う。

@@ -9,7 +9,26 @@ vi.mock('../../src/config/env.js', () => ({ config: { anthropic: { get apiKey() 
 vi.mock('../../src/utils/logger.js', () => ({ createLogger: () => ({ info: vi.fn(), error: vi.fn() }) }));
 vi.mock('../../src/services/llm/graph/nodes/FunctionCallingAgent.js', () => ({ FunctionCallingAgent: class {} }));
 vi.mock('../../src/services/memory/scopedMemoryService.js', () => ({
-  ScopedMemoryService: { getInstance: () => ({ writeback: fakes.writeback }) },
+  ScopedMemoryService: { getInstance: () => ({
+    writeback: fakes.writeback,
+    recall: async () => ({
+      person: null,
+      personStatements: [],
+      memories: [],
+      userProfile: null,
+      relationshipModel: null,
+      selfModel: null,
+      strategyUpdates: [],
+      internalState: null,
+      worldModelPatterns: [],
+      relationshipPrompt: '',
+      selfModelPrompt: '',
+      strategyPrompt: '',
+      internalStatePrompt: '',
+      worldModelPrompt: '',
+      formattedPrompt: '',
+    }),
+  }) },
 }));
 vi.mock('../../src/services/llm/graph/cognitive/ModelSelector.js', () => ({
   ModelSelector: { selectInitialModel: () => 'mock-model' },
@@ -18,7 +37,7 @@ vi.mock('../../src/services/llm/graph/cognitive/TaskEpisodeMemory.js', () => ({
   TaskEpisodeMemory: {
     buildEpisodeFromResult: () => ({}),
     loadPromptForRun: async () => undefined,
-    getInstance: () => ({ saveEpisode: fakes.saveEpisode }),
+    saveEpisodeForRun: fakes.saveEpisode,
   },
 }));
 vi.mock('../../src/services/common/adapters/actionFormatter.js', () => ({ actionFormatterNode: fakes.format }));

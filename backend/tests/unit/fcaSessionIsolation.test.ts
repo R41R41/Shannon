@@ -212,6 +212,17 @@ describe('actual FCA and tools with external services mocked', () => {
     await entered.promise; controller.abort(); release.resolve(); await rejected;
     expect(fakes.invoke).not.toHaveBeenCalled();
   });
+
+  it('calls onToolStarting from the channel adapter before executing a loaded tool', async () => {
+    const started: string[] = [];
+    fakes.invoke
+      .mockResolvedValueOnce(new AIMessage({ content: '', tool_calls: [{ id: 'load', name: 'request-tools', args: { names: ['chat-on-discord'] } }] }))
+      .mockResolvedValueOnce(new AIMessage({ content: '', tool_calls: [{ id: 'call', name: 'chat-on-discord', args: { message: 'hi' } }] }))
+      .mockResolvedValueOnce(new AIMessage({ content: '', tool_calls: [{ id: 'done', name: 'task-complete', args: { summary: 'done' } }] }));
+    const agent = new FunctionCallingAgent([new ChatOnDiscordTool(), { name: 'task-complete', invoke: async () => 'done' } as any]);
+    await agent.run({ ...state('A'), onToolStarting: (name) => { started.push(name); } });
+    expect(started).toEqual(['chat-on-discord']);
+  });
 });
 
 it('binds the canonical memory port in standalone FCA', async () => {
