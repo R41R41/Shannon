@@ -1,7 +1,7 @@
 import { StructuredTool } from '@langchain/core/tools';
 import { z } from 'zod';
 import { runFcaLoop, type FcaBoundTool, type FcaModel, type FcaRunResult } from '../../../../modules/fca/index.js';
-import type { ExecutionResult } from '../../types.js';
+import type { ExecutionResult } from '../types.js';
 
 export const REQUEST_TOOLS_NAME = 'request-tools';
 

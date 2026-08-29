@@ -35,10 +35,20 @@ for (const entry of ledger.files) {
   listed.set(entry.path, entry);
 }
 
-const unused = new Set(
-  JSON.parse(run(bin('knip'), ['--include', 'files', '--reporter', 'json', '--no-progress'], root))
-    .issues.map(issue => issue.file),
+const knip = JSON.parse(
+  run(bin('knip'), ['--include', 'files,unresolved', '--reporter', 'json', '--no-progress', '--no-exit-code'], root),
 );
+
+// An import of a module that no longer exists is the other half of a half-finished deletion:
+// the old file went away and its callers were left behind. Type-only imports survive both
+// `tsc --noCheck` and the tests, so nothing else in CI notices them.
+for (const issue of knip.issues) {
+  for (const ref of issue.unresolved ?? []) {
+    errors.push(`存在しないモジュールを import している: ${issue.file}:${ref.line} → ${ref.name}`);
+  }
+}
+
+const unused = new Set(knip.issues.filter(issue => issue.files?.length).map(issue => issue.file));
 
 for (const file of [...unused].sort()) {
   if (listed.has(file)) continue;

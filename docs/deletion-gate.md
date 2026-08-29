@@ -13,13 +13,17 @@ Shannon には、新しい層を建てたあと古い層を消さずに残す癖
 
 ## 何を検査するか
 
-`npm run check:dead-code`（CI の Check foundation boundaries に登録済み）が2つを見る。
+`npm run check:dead-code`（CI の Check foundation boundaries に登録済み）が3つを見る。
 
 **1. 未参照ファイル（knip）** — `knip.json` の entry から辿れないファイルを列挙する。
 1件でも `deletion-ledger.json` に無ければ失敗する。逆に、台帳にあるのに実際は参照されている
 （＝削除済み、または使われ始めた）項目も失敗させる。台帳が現実とずれたまま太るのを防ぐため。
 
-**2. 未使用の宣言（eslint）** — `backend/eslint.dead-code.mjs` は `no-unused-vars` だけを
+**2. 存在しないモジュールの import（knip）** — 消した側ではなく、消し忘れた呼び出し側を拾う。
+`import type` は `tsc --noCheck` でもテストでも消えてしまうので、CI の他のどこにも引っかからない。
+実際 `conversationKernel.ts` は、3年前に消えた `llm/types.ts` を型だけ import したまま動いていた。
+
+**3. 未使用の宣言（eslint）** — `backend/eslint.dead-code.mjs` は `no-unused-vars` だけを
 見る。knip はファイルと export の単位でしか見えないので、`ANTHROPIC_CHAIN` のような
 モジュール内の宣言はこちらが拾う。既存分が多いので件数の上限（baseline）方式にしてある。
 増えたら失敗、減っても「baseline を下げろ」と言って失敗する。数が実態から離れないようにするため。
@@ -45,6 +49,7 @@ Shannon には、新しい層を建てたあと古い層を消さずに残す癖
 | メッセージ | やること |
 | --- | --- |
 | 未参照のファイルが台帳にない | そのファイルを消す。残すなら台帳に理由と期限を書く |
+| 存在しないモジュールを import している | import 元が消えている。呼び出し側を直すか、一緒に消す |
 | 台帳の項目がもう未参照ではない | 台帳から項目を消す |
 | 期限切れ | 消すか、理由を書き直して期限を延ばす |
 | 未使用の宣言が増えた | 増えた宣言を消す。意図があるなら `_` 始まりの名前にする |
@@ -53,8 +58,9 @@ Shannon には、新しい層を建てたあと古い層を消さずに残す癖
 ## 検査できないこと
 
 これは**参照されているか**しか見ない。**到達するか**は見ない。
-`ParallelExecutor` のように、条件分岐で実際には呼ばれないが import はされているコードは
-すり抜ける。設定次第で死んでいるコードは、引き続き人が読んで判断する必要がある。
+削除した `ParallelExecutor` がまさにそれで、import はされているのに
+`SHANNON_GRAPH_VERSION=full` でしか構築されず、既定では一度も動いていなかった。
+設定次第で死んでいるコードは、引き続き人が読んで判断する必要がある。
 
 動的読み込みも見えない。`llm/tools/` と `minebot/instantSkills/` と
 `minebot/constantSkills/` はディレクトリ走査で読まれるので `knip.json` で entry に
