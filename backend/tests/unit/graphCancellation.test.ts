@@ -15,7 +15,11 @@ vi.mock('../../src/services/llm/graph/cognitive/ModelSelector.js', () => ({
   ModelSelector: { selectInitialModel: () => 'mock-model' },
 }));
 vi.mock('../../src/services/llm/graph/cognitive/TaskEpisodeMemory.js', () => ({
-  TaskEpisodeMemory: { buildEpisodeFromResult: () => ({}), getInstance: () => ({ saveEpisode: fakes.saveEpisode }) },
+  TaskEpisodeMemory: {
+    buildEpisodeFromResult: () => ({}),
+    loadPromptForRun: async () => undefined,
+    getInstance: () => ({ saveEpisode: fakes.saveEpisode }),
+  },
 }));
 vi.mock('../../src/services/common/adapters/actionFormatter.js', () => ({ actionFormatterNode: fakes.format }));
 vi.mock('../../src/services/llm/graph/ShannonExecutor.js', () => ({
@@ -52,7 +56,7 @@ describe('real graph with mocked external services', () => {
     const controller = new AbortController();
     const response = await invokeShannonGraph(graph(), envelope, [], { abortSignal: controller.signal });
     expect(fakes.run.mock.calls[0][1]).toBe(controller.signal);
-    expect(fakes.run.mock.calls[0][0].requestEnvelope).toMatchObject(envelope);
+    expect(fakes.run.mock.calls[0][0].composition.requestEnvelope).toMatchObject(envelope);
     expect(response.finalAnswer).toBe('answer');
     expect(fakes.writeback).toHaveBeenCalledOnce();
   });

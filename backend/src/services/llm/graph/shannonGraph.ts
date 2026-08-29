@@ -30,6 +30,7 @@ import type {
 import { inferInitialMode, envelopeToTaskContext } from './stateBridge.js';
 import { actionFormatterNode } from '../../common/adapters/actionFormatter.js';
 import { FunctionCallingAgent } from './nodes/FunctionCallingAgent.js';
+import { buildFcaState } from './nodes/fcaState.js';
 import { ScopedMemoryService } from '../../memory/scopedMemoryService.js';
 import { ModelSelector } from './cognitive/ModelSelector.js';
 import { TaskEpisodeMemory } from './cognitive/TaskEpisodeMemory.js';
@@ -122,10 +123,14 @@ function createExecuteNode(
     const memoryEnvelope = snapshotMemoryEnvelope(envelope);
     const context = envelopeToTaskContext(envelope);
 
-    const fcaState = {
+    const platform = context?.platform ?? envelope.channel ?? 'unknown';
+    const goal = envelope.text ?? '';
+    const episodePrompt = await TaskEpisodeMemory.loadPromptForRun(goal, platform, memoryEnvelope);
+
+    const fcaState = buildFcaState({
       taskId: envelope.requestId,
       requestEnvelope: memoryEnvelope,
-      userMessage: envelope.text ?? null,
+      userMessage: goal || null,
       messages: state._legacyMessages,
       context,
       channelId: envelope.discord?.channelId ?? envelope.conversationId,
@@ -137,14 +142,14 @@ function createExecuteNode(
       strategyPrompt: state.strategyPrompt,
       internalStatePrompt: state.internalStatePrompt,
       worldModelPrompt: state.worldModelPrompt,
+      episodePrompt,
       onToolStarting: state._onToolStarting,
       onTaskTreeUpdate: state._onTaskTreeUpdate,
-      abortSignal: state._abortSignal,
       selectedModel: state.selectedModel,
       classifyMode: state.mode,
       needsTools: state.needsTools,
       needsPlanning: state.needsPlanning,
-    };
+    });
 
     const runFcaPath = async (): Promise<Partial<ShannonStateType>> => {
       const startTime = Date.now();
@@ -152,8 +157,6 @@ function createExecuteNode(
       state._abortSignal?.throwIfAborted();
 
       try {
-        const platform = context?.platform ?? envelope.channel ?? 'unknown';
-        const goal = envelope.text ?? '';
         const episode = TaskEpisodeMemory.buildEpisodeFromResult(
           goal, platform, agentResult.taskTree, startTime, 0,
         );

@@ -19,7 +19,6 @@ import { modelManager } from '../../../../config/modelManager.js';
 import { logger } from '../../../../utils/logger.js';
 import { WorldKnowledgeService } from '../../../minebot/knowledge/WorldKnowledgeService.js';
 import { RecipeDependencyResolver } from '../../../minebot/knowledge/RecipeDependencyResolver.js';
-import { TaskEpisodeMemory } from '../cognitive/TaskEpisodeMemory.js';
 import UpdatePlanTool from '../../tools/utility/updatePlan.js';
 import { trimContext } from '../../utils/contextManager.js';
 import { createTracedModel } from '../../utils/langfuse.js';
@@ -35,64 +34,11 @@ import { fcaHistoryToLangChain } from '../../../fca/openAiFcaModel.js';
 import { createGeminiFcaModel } from '../../../fca/geminiFcaModel.js';
 import { conversationLoadPrompt, catalogLinesForPrompt, RequestToolsTool, REQUEST_TOOLS_NAME, runConversationFca } from './conversationKernel.js';
 import type { FcaModel } from '../../../../modules/fca/index.js';
+import type { FunctionCallingAgentState, FlatFcaStateInput } from './fcaState.js';
+import { normalizeFcaState } from './fcaState.js';
 
 function stripAssistantContentPrefix(t: string): string {
     return t.replace(/^content:\s*/i, '').trim();
-}
-
-/**
- * FunctionCallingAgent の run() に渡す状態
- */
-export interface FunctionCallingAgentState {
-    taskId: string;
-    /** Canonical request supplied by the graph, not reconstructed from metadata. */
-    requestEnvelope?: import("@shannon/common").RequestEnvelope;
-    userMessage: string | null;
-    messages: BaseMessage[];
-    context: TaskContext | null;
-    channelId: string | null;
-    environmentState: string | null;
-    isEmergency: boolean;
-    /** Pre-formatted memory prompt from ScopedMemoryService */
-    memoryPrompt?: string;
-    relationshipPrompt?: string;
-    selfModelPrompt?: string;
-    strategyPrompt?: string;
-    internalStatePrompt?: string;
-    worldModelPrompt?: string;
-
-    /** ツール実行後に呼ばれるコールバック */
-    onToolsExecuted?: (
-        messages: BaseMessage[],
-        results: ExecutionResult[]
-    ) => void;
-
-    /** 音声向け: 使用を許可するツール名リスト。指定時はこれ以外のツールは bind しない */
-    allowedTools?: string[];
-    /** 音声向け: 各ツール実行直前に呼ばれるコールバック */
-    onToolStarting?: (toolName: string, args?: Record<string, unknown>) => void;
-    /** Minebot UI 同期向け: taskTree 更新のたびに呼ばれるコールバック */
-    onTaskTreeUpdate?: (taskTree: TaskTreeState) => void;
-    /** 音声向け: LLMストリーミング中に1文完成するたびに呼ばれるコールバック */
-    onStreamSentence?: (sentence: string) => Promise<void>;
-    /** 動的モデル選択: ClassifyNode の結果に基づくモデル名 */
-    selectedModel?: string;
-    /** メタ認知等から現在実行中のスキルを中断するためのコールバック */
-    onRequestSkillInterrupt?: () => void;
-    /** Minecraft: bot から実インベントリをリアルタイム取得するコールバック */
-    getLiveInventory?: () => import('@shannon/common').MinecraftInventoryEntry[];
-    /** Minecraft: bot のアクティブなステータスエフェクトを取得するコールバック */
-    getActiveEffects?: () => Array<{ name: string; amplifier: number }>;
-    /** ClassifyNode からの分類結果 */
-    classifyMode?: string;
-    needsTools?: boolean;
-    needsPlanning?: boolean;
-    /** イテレーション毎に最新のインベントリ差分を返すコールバック */
-    getInventoryDiff?: () => string | null;
-    /** 初期記憶コンテキストを取得するコールバック (初回のみ) */
-    getInitialMemory?: () => Promise<string | null>;
-    /** SubTaskExecutor: FCA の最大イテレーション数をオーバーライド */
-    maxIterations?: number;
 }
 
 /**
@@ -292,12 +238,12 @@ export class FunctionCallingSession {
     /**
      * メインの実行ループ
      */
-    async run(state: FunctionCallingAgentState, signal?: AbortSignal) {
+    async run(state: FunctionCallingAgentState | FlatFcaStateInput, signal?: AbortSignal) {
         if (this.phase !== "created") throw new Error('FCA sessions are single-use');
         this.phase = "running";
         try {
             signal?.throwIfAborted();
-            return await this.execute(state, signal);
+            return await this.execute(normalizeFcaState(state), signal);
         } finally {
             this.phase = "closed";
             this.pendingFeedback.length = 0;
@@ -324,11 +270,17 @@ export class FunctionCallingSession {
         lastAssistantContent?: string;
     }> {
         signal?.throwIfAborted();
-        state = { ...state, requestEnvelope: state.requestEnvelope ? snapshotMemoryEnvelope(state.requestEnvelope) : undefined };
-        bindRequestMemory(this.tools, state.requestEnvelope);
-        bindRequestDiscordConversation(this.tools, state.requestEnvelope, signal);
-        bindRequestWebConversation(this.tools, state.requestEnvelope, signal);
-        const startTime = Date.now();
+        const composition = {
+            ...state.composition,
+            requestEnvelope: state.composition.requestEnvelope
+                ? snapshotMemoryEnvelope(state.composition.requestEnvelope)
+                : undefined,
+        };
+        const channelAdapter = state.channel;
+        state = { ...state, composition };
+        bindRequestMemory(this.tools, composition.requestEnvelope);
+        bindRequestDiscordConversation(this.tools, composition.requestEnvelope, signal);
+        bindRequestWebConversation(this.tools, composition.requestEnvelope, signal);
         const goal = state.userMessage || 'Unknown task';
         const isEmergency = state.isEmergency || false;
         let activeCallAbort: AbortController | null = null;
@@ -339,9 +291,9 @@ export class FunctionCallingSession {
         this.loopDetector.reset();
 
         // 動的モデル選択 (RAS / ModelSelector)
-        const modelSelector = new ModelSelector(state.selectedModel || FunctionCallingSession.MODEL_NAME);
-        const channel = state.requestEnvelope?.channel ?? state.context?.platform ?? null;
-        const platform = state.context?.platform ?? null;
+        const modelSelector = new ModelSelector(composition.selectedModel || FunctionCallingSession.MODEL_NAME);
+        const channel = composition.requestEnvelope?.channel ?? composition.context?.platform ?? null;
+        const platform = composition.context?.platform ?? null;
         if (platform === 'minecraft' || platform === 'minebot') {
             modelSelector.setMaxEscalationLevel('gpt-5-mini-fast');
         } else {
@@ -349,7 +301,7 @@ export class FunctionCallingSession {
         }
         logger.info(`🤖 FunctionCallingAgent: タスク実行開始 "${goal}"${isEmergency ? ' [緊急]' : ''} (model=${modelSelector.modelName})`, 'cyan');
 
-        let effectiveTools = selectToolsForChannel(channel ?? undefined, this.tools, state.allowedTools);
+        let effectiveTools = selectToolsForChannel(channel ?? undefined, this.tools, composition.allowedTools);
         let effectiveToolMap = new Map(effectiveTools.map(t => [t.name, t]));
         if (effectiveTools.length !== this.tools.length) {
             logger.info(`🔒 tools for ${channel ?? 'unknown'}: ${effectiveTools.length}/${this.tools.length}`, 'cyan');
@@ -370,7 +322,7 @@ export class FunctionCallingSession {
             }
         }
 
-        const channelOutputTools = this.promptBuilder.getDisabledOutputTools(state.context);
+        const channelOutputTools = this.promptBuilder.getDisabledOutputTools(composition.context);
         if (channelOutputTools.length > 0) {
             effectiveTools = effectiveTools.filter(
                 (tool) => !channelOutputTools.includes(tool.name),
@@ -383,26 +335,26 @@ export class FunctionCallingSession {
 
         // update-plan ツールにコンテキストを設定
         if (this.updatePlanTool) {
-            this.updatePlanTool.setContext(state.channelId, state.taskId, state.context?.platform ?? null);
+            this.updatePlanTool.setContext(composition.channelId, state.taskId, composition.context?.platform ?? null);
         }
 
         const deferToolLoad = platform !== 'minecraft' && platform !== 'minebot';
-        const promptClassifyMode = deferToolLoad && state.classifyMode === 'planning'
+        const promptClassifyMode = deferToolLoad && composition.classifyMode === 'planning'
             ? 'task_execution'
-            : state.classifyMode;
+            : composition.classifyMode;
 
         // メッセージ構築
         let systemPrompt = this.promptBuilder.buildSystemPrompt(
-            state.context,
-            state.environmentState,
-            state.memoryPrompt,
-            state.relationshipPrompt,
-            state.selfModelPrompt,
-            state.strategyPrompt,
-            state.internalStatePrompt,
-            state.worldModelPrompt,
+            composition.context,
+            composition.environmentState,
+            composition.memoryPrompt,
+            composition.relationshipPrompt,
+            composition.selfModelPrompt,
+            composition.strategyPrompt,
+            composition.internalStatePrompt,
+            composition.worldModelPrompt,
             promptClassifyMode,
-            state.needsTools,
+            composition.needsTools,
         );
 
         if (deferToolLoad) {
@@ -413,71 +365,40 @@ export class FunctionCallingSession {
             systemPrompt += conversationLoadPrompt(catalogLinesForPrompt(effectiveTools));
         }
 
-        // Phase 3-A: Minecraft 事前準備を並列化（WorldKnowledge + TaskEpisodeMemory: -0.5〜1.5秒）
-        {
-            const isMinecraft = platform === 'minecraft' || platform === 'minebot';
-
-            // 並列タスク群を構築
-            const parallelTasks: Promise<string | null>[] = [];
-
-            // 1. WorldKnowledge (Minecraft のみ)
-            if (isMinecraft) {
-                parallelTasks.push(
-                    (async () => {
-                        try {
-                            const envObj = state.environmentState ? JSON.parse(state.environmentState) : null;
-                            if (envObj?.botPosition) {
-                                const serverId = state.requestEnvelope?.minecraft?.serverId;
-                                const wk = WorldKnowledgeService.forServer(serverId);
-                                if (!wk) return null;
-                                const pos = envObj.botPosition;
-                                return await wk.buildContextForPosition(
-                                    { x: Math.floor(pos.x), y: Math.floor(pos.y), z: Math.floor(pos.z) },
-                                    64,
-                                );
-                            }
-                        } catch { }
-                        return null;
-                    })(),
-                );
-            }
-
-            // 2. TaskEpisodeMemory (全プラットフォーム)
-            parallelTasks.push(
-                (async () => {
-                    try {
-                        const episodeMemory = TaskEpisodeMemory.getInstance();
-                        const episodes = await episodeMemory.recallRelevantEpisodes(
-                            goal,
-                            state.context?.platform ?? 'unknown',
-                            state.requestEnvelope,
+        if (composition.episodePrompt) {
+            systemPrompt += `\n\n${composition.episodePrompt}`;
+        }
+        if (composition.worldKnowledgePrompt) {
+            systemPrompt += `\n\n${composition.worldKnowledgePrompt}`;
+        } else if (platform === 'minecraft' || platform === 'minebot') {
+            try {
+                const envObj = composition.environmentState ? JSON.parse(composition.environmentState) : null;
+                if (envObj?.botPosition) {
+                    const serverId = composition.requestEnvelope?.minecraft?.serverId;
+                    const wk = WorldKnowledgeService.forServer(serverId);
+                    if (wk) {
+                        const pos = envObj.botPosition;
+                        const worldPrompt = await wk.buildContextForPosition(
+                            { x: Math.floor(pos.x), y: Math.floor(pos.y), z: Math.floor(pos.z) },
+                            64,
                         );
-                        return episodeMemory.formatForPrompt(episodes) || null;
-                    } catch { }
-                    return null;
-                })(),
-            );
-
-            // 並列実行
-            const results = await Promise.all(parallelTasks);
-
-            // 結果をシステムプロンプトに注入
-            for (const result of results) {
-                if (result) systemPrompt += `\n\n${result}`;
-            }
-
-            if (isMinecraft) {
-                try {
-                    const mcMeta = state.context?.metadata?.minecraft as Record<string, unknown> | undefined;
-                    const inventory = Array.isArray(mcMeta?.inventory)
-                        ? (mcMeta!.inventory as Array<{ name: string; count: number }>)
-                        : null;
-                    const depPrompt = this.buildCraftDependencyPrompt(goal, inventory);
-                    if (depPrompt) {
-                        systemPrompt += depPrompt;
+                        if (worldPrompt) systemPrompt += `\n\n${worldPrompt}`;
                     }
-                } catch { }
-            }
+                }
+            } catch { /* ignore */ }
+        }
+
+        if (platform === 'minecraft' || platform === 'minebot') {
+            try {
+                const mcMeta = composition.context?.metadata?.minecraft as Record<string, unknown> | undefined;
+                const inventory = Array.isArray(mcMeta?.inventory)
+                    ? (mcMeta!.inventory as Array<{ name: string; count: number }>)
+                    : null;
+                const depPrompt = this.buildCraftDependencyPrompt(goal, inventory);
+                if (depPrompt) {
+                    systemPrompt += depPrompt;
+                }
+            } catch { }
         }
 
         const messages: BaseMessage[] = [
@@ -532,12 +453,12 @@ export class FunctionCallingSession {
             hierarchicalSubTasks: [],
             currentSubTaskId: null,
         }, {
-            platform: state.context?.platform ?? null,
-            channelId: state.channelId,
+            platform: composition.context?.platform ?? null,
+            channelId: composition.channelId,
             taskId: state.taskId,
-            envelope: state.requestEnvelope,
+            envelope: composition.requestEnvelope,
             signal,
-            onTaskTreeUpdate: state.onTaskTreeUpdate,
+            onTaskTreeUpdate: channelAdapter.onTaskTreeUpdate,
         });
 
         signal?.throwIfAborted();
@@ -576,8 +497,8 @@ export class FunctionCallingSession {
                         const boundTools = effectiveTools.filter(tool => names.has(tool.name));
                         const bound = modelSelector.bindTools(boundTools);
                         const lc = this.sanitizeMessagesForProvider(fcaHistoryToLangChain(request.system, request.messages));
-                        const response = state.onStreamSentence
-                            ? await this.streamLlmResponse(bound as any, lc, callAbort.signal, state.onStreamSentence)
+                        const response = channelAdapter.onStreamSentence
+                            ? await this.streamLlmResponse(bound as any, lc, callAbort.signal, channelAdapter.onStreamSentence)
                             : await (bound as any).invoke(lc, { signal: callAbort.signal }) as AIMessage;
                         child.throwIfAborted();
                         const usage = (response as AIMessage & { usage_metadata?: { input_tokens?: number; output_tokens?: number } })?.usage_metadata;
@@ -604,7 +525,7 @@ export class FunctionCallingSession {
                 system: systemPrompt, goal, tools: effectiveTools, model: kernelModel,
                 signal: signal ?? new AbortController().signal,
                 maxTurns: maxIter, maxElapsedMs: FunctionCallingSession.MAX_TOTAL_TIME_MS,
-                needsTools: deferToolLoad ? false : state.needsTools,
+                needsTools: deferToolLoad ? false : composition.needsTools,
                 deferToolLoad,
                 filterCalls: (calls) => calls.filter(call => {
                     if (call.name === 'task-complete' || call.name === 'update-plan') return true;
@@ -613,13 +534,13 @@ export class FunctionCallingSession {
                     return !this.loopDetector.isCallBlocked(call.name, args);
                 }),
                 onTools: (results) => {
-                    try { state.onToolsExecuted?.(messages, results); } catch { /* fire-and-forget */ }
+                    try { channelAdapter.onToolsExecuted?.(messages, results); } catch { /* fire-and-forget */ }
                     this.loopDetector.recordAndCheck(results.map(result => ({ name: result.toolName, args: result.args })), results);
                 },
                 ephemeral: async (turn) => {
                     const extra: { role: 'system' | 'user'; content: string }[] = [];
-                    if (turn === 1 && state.getInitialMemory) {
-                        const initial = await state.getInitialMemory();
+                    if (turn === 1 && channelAdapter.getInitialMemory) {
+                        const initial = await channelAdapter.getInitialMemory();
                         if (initial) extra.push({ role: 'system', content: `【初期記憶コンテキスト】\n${initial}` });
                     }
                     if (this.pendingFeedback.length) {
@@ -656,12 +577,12 @@ export class FunctionCallingSession {
                 goal, strategy: complete ? (summary || goal) : '最大イテレーション数に到達',
                 hierarchicalSubTasks: steps, currentSubTaskId: null,
             }, {
-                platform: state.context?.platform ?? null,
-                channelId: state.channelId,
+                platform: composition.context?.platform ?? null,
+                channelId: composition.channelId,
                 taskId: state.taskId,
-                envelope: state.requestEnvelope,
+                envelope: composition.requestEnvelope,
                 signal,
-                onTaskTreeUpdate: state.onTaskTreeUpdate,
+                onTaskTreeUpdate: channelAdapter.onTaskTreeUpdate,
             });
             return {
                 taskTree: {
@@ -690,12 +611,12 @@ export class FunctionCallingSession {
                 hierarchicalSubTasks: steps,
                 currentSubTaskId: null,
             }, {
-                platform: state.context?.platform ?? null,
-                channelId: state.channelId,
+                platform: composition.context?.platform ?? null,
+                channelId: composition.channelId,
                 taskId: state.taskId,
-                envelope: state.requestEnvelope,
+                envelope: composition.requestEnvelope,
                 signal,
-                onTaskTreeUpdate: state.onTaskTreeUpdate,
+                onTaskTreeUpdate: channelAdapter.onTaskTreeUpdate,
             });
 
             return {

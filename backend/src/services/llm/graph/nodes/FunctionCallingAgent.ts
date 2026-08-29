@@ -1,8 +1,10 @@
 import type { StructuredTool } from '@langchain/core/tools';
 import { RunToolRegistry } from '../../../../modules/execution/runToolRegistry.js';
 import { FunctionCallingSession } from './FunctionCallingSession.js';
-import type { FunctionCallingAgentState } from './FunctionCallingSession.js';
-export type { FunctionCallingAgentState } from './FunctionCallingSession.js';
+import type { FunctionCallingAgentState, FlatFcaStateInput } from './fcaState.js';
+import { normalizeFcaState } from './fcaState.js';
+export type { FcaChannelAdapter, FcaComposition, FcaRunIdentity, FunctionCallingAgentState, FlatFcaStateInput } from './fcaState.js';
+export { buildFcaState, normalizeFcaState } from './fcaState.js';
 
 /** Reusable tool catalog/configuration. All per-invocation mutable state belongs to a session. */
 export class FunctionCallingAgent {
@@ -27,8 +29,8 @@ export class FunctionCallingAgent {
         return session;
     }
 
-    async run(state: FunctionCallingAgentState, signal?: AbortSignal) {
+    async run(state: FunctionCallingAgentState | FlatFcaStateInput, signal?: AbortSignal) {
         signal?.throwIfAborted();
-        return this.createSession().run(state, signal);
+        return this.createSession().run(normalizeFcaState(state), signal);
     }
 }

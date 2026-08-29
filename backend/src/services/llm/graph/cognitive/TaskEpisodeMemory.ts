@@ -146,6 +146,21 @@ export class TaskEpisodeMemory {
     /**
      * FCA の実行結果から TaskEpisode を構築するヘルパー。
      */
+    /** Load episode recall text for an FCA run. Call from the graph, not inside the loop. */
+    static async loadPromptForRun(
+        goal: string,
+        platform: string,
+        envelope?: RequestEnvelope,
+        memory: TaskEpisodeMemory = TaskEpisodeMemory.getInstance(),
+    ): Promise<string | undefined> {
+        try {
+            const episodes = await memory.recallRelevantEpisodes(goal, platform, envelope);
+            return memory.formatForPrompt(episodes) ?? undefined;
+        } catch {
+            return undefined;
+        }
+    }
+
     static buildEpisodeFromResult(
         goal: string,
         platform: string,
