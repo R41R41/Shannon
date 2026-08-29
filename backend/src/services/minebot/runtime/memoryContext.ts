@@ -1,7 +1,7 @@
 import type { RequestEnvelope } from '@shannon/common';
 import { minecraftContextKey, minecraftConversationKeys, normalizeMinecraftDimension, type MinecraftWorldIdentity, type MinecraftMemoryContext } from '../../../modules/memory/minecraftIdentity.js';
 
-interface MemoryBot { game?: { dimension?: unknown }; }
+export type MemoryBot = { game?: { dimension?: unknown } };
 const bindings = new WeakMap<object, MinecraftWorldIdentity | null>();
 const revoked = new WeakSet<object>();
 /** Called once for the exact bot instance returned by createBot. Reconnection must create a new owner. */

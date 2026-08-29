@@ -57,11 +57,13 @@ backend全体のビルドは`tsc --noCheck --skipLibCheck`であり、完全型�
 
 ## 今回の対象外と次の単位
 
-**DBの記憶検索・保存の権限分離と、全チャネルの宛先認可は未完。** MemoryAgent・旧memoryツール・TaskEpisodeMemoryに、利用者/公開範囲を十分に絞らない経路が残る。今回のmemory参照隔離だけで、別利用者の記憶がDB検索に入らないとは言えない。
+**2026-08-30 更新:** Web planning/post_message/realtime は session 必須。Discord outbound gateway の `postMessage` は voice session 限定。Minebot UI POST は envelope / bot memory context 必須。
 
-次は共通の記憶portへ本人・会話・guild/world・公開範囲を結びつけ、旧ツール/初期記憶/エピソード検索の迂回を閉じる。scope不明は既定拒否し、2利用者・DM→公開・同名利用者・別guild/worldのfixtureで検索前の制限を検証する。
+**DBの記憶検索・保存の権限分離は MemoryPort / TaskEpisodeMemory で scope 必須化済み。** 旧 MemoryAgent は削除済み。MemoryWriteEvent の古い pending ジョブは残る。全チャネルの宛先認可は会話イベント主要経路で完了。Discord outbound gateway の legacy emoji 経路は configured guild + voice session で fail-closed。
 
-Webのplanning/emotion等には管理console全体への既存配信が残る。Discordの直接投稿ツールの引数認可や、ゲームbot/routineの共有サービスも別課題。public chat/SSEの停止とconsole管理者限定を維持する。
+次は Identity–Binding–Audience UI、Firebase UID 対応付け、旧 pending ジョブの運用方針。scope不明は既定拒否し、2利用者・DM→公開・同名利用者・別guild/worldのfixtureで検索前の制限を検証する。
+
+Web の planning/openai/monitoring 会話通知は session ルーティング済み。status/skill/schedule は運用 telemetry として global broadcast を維持。Discordの直接投稿ツールの引数認可や、ゲームbot/routineの共有サービスも別課題。public chat/SSEの停止とconsole管理者限定を維持する。
 
 簡素化FCAの記憶ツールは、専用MemoryAgentの初期化契約が未完成なため未初期化のままの場合がある。以前の別sessionの参照を流用して有効化しない。
 

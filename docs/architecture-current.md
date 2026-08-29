@@ -103,7 +103,7 @@ Radar の discovery スキルは general 袋の読み取り専用サブセット
 
 | ストア | 使ってよい経路 | 使ってはいけない経路 |
 |---|---|---|
-| 新 `ShannonMemory`（scopeVersion=1） | Discord テキストで scope が発行できたとき。Minecraft は server/world ID が揃ったときだけ | LINE、Radar、Web、X、YouTube、scheduler、scope なし |
+| 新 `ShannonMemory`（scopeVersion=1） | Discord テキストで scope が発行できたとき。Minecraft は server/world ID が揃ったとき。**Web は Firebase UID + bound session の private scope** | LINE、Radar、X、YouTube、scheduler、scope なし |
 | 新人物引用 `scopedpersonstatements` | Discord テキストの現在の本人＋会話のみ | 表示名検索、別会話、LINE、Radar、Minecraft |
 | 旧 `PersonMemory` | **読み書きしない**（recall は常に null、会話書き戻しは拒否） | すべての会話経路 |
 | `WorldKnowledge` | Minecraft かつ **operator の `dev:`/`prod:` serverId**（表示名・host・`default` 不可） | Discord/LINE/Radar/Web、未binding、表示名 |
@@ -112,13 +112,13 @@ Radar の discovery スキルは general 袋の読み取り専用サブセット
 | Radar owner 文書 | 本人 Radar 専用 DB | Discord/Minecraft 記憶、グループ LINE |
 | Minecraft タスク引継ぎ | 同じ serverId+worldId の continuation だけ | プロセス全体の static lastTask |
 
-宣言は `backend/src/modules/memory/stores.ts`。`deriveMemoryScope` は discord / minecraft 以外で null。null なら検索も保存もしない。WorldKnowledge は `forServer`（assigned id のみ）、HTTP は同じ `serverId` 必須。InstantSkill の知識抽出・スナップショットは bound `serverId` だけを渡す。
+宣言は `backend/src/modules/memory/stores.ts`。`deriveMemoryScope` は discord / minecraft / web（UID + session）で scope を発行し、それ以外は null。null なら検索も保存もしない。Web 人物引用（Person quote）は Discord テキストのみ。WorldKnowledge は `forServer`（assigned id のみ）、HTTP は同じ `serverId` 必須。InstantSkill の知識抽出・スナップショットは bound `serverId` だけを渡す。
 
 残っているもの（完成扱いにしない）:
 
 - 旧 PersonMemory **文書**の分類は `scripts/lib/memory-scope-audit.cjs` の read-only dry-run だけ。自動移行しない。
 - LangGraph checkpointer は現行コードに無い。
-- Web の durable ShannonMemory は Identity–Binding–Audience が無いので **拒否が完成**。実装しない。
+- Web の durable ShannonMemory は Firebase UID + bound session の private scope まで実装。**Identity–Binding–Audience UI は未実装**。
 - Minecraft 長期記憶は `MINECRAFT_MEMORY_IDENTITIES` が空ならオフ。コード経路はある。表示名では開かない。
 
 旧データを一括移行しない。

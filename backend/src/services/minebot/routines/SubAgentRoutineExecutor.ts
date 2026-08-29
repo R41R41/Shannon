@@ -14,6 +14,7 @@ import { config } from '../../../config/env.js';
 import { createLogger } from '../../../utils/logger.js';
 import { skillToAnthropicTool } from '../../llm/graph/ShannonExecutor.js';
 import { CONFIG as MINEBOT_CONFIG } from '../config/MinebotConfig.js';
+import { canPostMinebotUiFromBot } from '../runtime/minebotUiPost.js';
 import type { CustomBot } from '../types/CustomBot.js';
 import type { RoutineDefinition, RoutineExecutionResult } from './types.js';
 
@@ -218,7 +219,7 @@ ${instruction}
                     hierarchicalSubTasks: [],
                 } as TaskTreeState;
                 options.onTaskTreeUpdate(subTaskTree);
-                this.postTaskTreeToUiMod(subTaskTree);
+                this.postTaskTreeToUiMod(subTaskTree, options.bot);
             }
         }
 
@@ -240,7 +241,8 @@ ${instruction}
         };
     }
 
-    private postTaskTreeToUiMod(taskTree: TaskTreeState): void {
+    private postTaskTreeToUiMod(taskTree: TaskTreeState, bot: CustomBot): void {
+        if (!canPostMinebotUiFromBot(bot)) return;
         const url = `${MINEBOT_CONFIG.UI_MOD_BASE_URL}/task`;
         try {
             fetch(url, {

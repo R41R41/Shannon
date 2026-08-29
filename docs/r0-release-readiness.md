@@ -23,7 +23,7 @@
 - 認証されていない接続へbroadcastしない。他の認証済み接続を追い出さない。ログ検索結果は要求した接続だけへ返す。
 - frontendはログアウト時に切断し、token取得中の古い結果を破棄。KPIの内部APIにもBearerを付与。
 - HTTPはヘルス・readiness・独立認証のX webhook以外を共通入口で保護。内部APIはレビュー済み管理者だけ許可し、将来追加のAPIも既定で保護。
-- **管理コンソールは管理者専用**。既存管理コンソールの共有ログ・会話状態を、ユーザー別の私的会話へ分離したわけではない。一般利用者向け会話と応答先・記憶スコープの分離はRF-03に残る。
+- **管理コンソールは管理者専用**。Web 会話通知・ログ・planning は `web:bind-session` 必須の session ルーティング済み。一般利用者向け Identity–Binding–Audience UI と Firebase UID 対応付けは別工程。
 - **旧public chat/SSEは503で停止扱い**。共有の私的記憶・グローバルイベントへ到達する旧graphを、adminTokenや設定フラグで再公開しない。公開用の制限された会話経路を別途実装・評価するまで、機能復旧済みとは扱わない。
 - Minebot HTTPはloopbackで待受し、32文字以上の専用 `MINEBOT_API_TOKEN` が必要。未設定503、認証なし401、browser Origin付きは拒否。Mod側の対応とSSH転送などの保護された接続が必要。既存Modを無変更で接続できるわけではない。
 

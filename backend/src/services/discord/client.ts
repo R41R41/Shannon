@@ -38,6 +38,7 @@ import { classifyError, formatErrorForLog } from '../../errors/index.js';
 import { getDiscordMemoryZone } from '../../utils/discord.js';
 import { createLogger } from '../../utils/logger.js';
 const logger = createLogger('Discord:Client');
+import { authorizeDiscordOutboundGuildAction, authorizeDiscordOutboundGuildRead, authorizeDiscordOutboundPostMessage } from './discordOutboundAuth.js';
 import { authorizeDiscordVoiceOutbound, getDiscordVoiceSession } from './discordVoiceSession.js';
 import { loadServerChoices } from './serverChoices.js';
 import { BaseClient } from '../common/BaseClient.js';
@@ -861,6 +862,10 @@ export class DiscordBot extends BaseClient {
 
   private async handlePostMessage(input: DiscordSendTextMessageInput): Promise<void> {
     if (this.status !== 'running') return;
+    if (!authorizeDiscordOutboundPostMessage(input)) {
+      logger.warn('[Discord] Outbound postMessage rejected: no authorized voice session');
+      return;
+    }
     const { text, channelId, guildId, imageUrl } = input;
 
     const activeVoice = authorizeDiscordVoiceOutbound({ guildId, channelId });
@@ -982,6 +987,9 @@ export class DiscordBot extends BaseClient {
   }
 
   private async handleGetServerEmoji(input: DiscordGetServerEmojiInput): Promise<DiscordGetServerEmojiOutput> {
+    if (!authorizeDiscordOutboundGuildRead(input.guildId)) {
+      return { emojis: [] };
+    }
     const guild = this.client.guilds.cache.get(input.guildId);
     if (!guild) return { emojis: [] };
     return { emojis: guild.emojis.cache.map((emoji) => emoji.toString()) };
@@ -990,6 +998,9 @@ export class DiscordBot extends BaseClient {
   private async handleSendServerEmoji(input: DiscordSendServerEmojiInput): Promise<DiscordSendServerEmojiOutput> {
     if (this.status !== 'running') {
       return { isSuccess: false, errorMessage: 'Discord bot is not running' };
+    }
+    if (!authorizeDiscordOutboundGuildAction(input)) {
+      return { isSuccess: false, errorMessage: 'Outbound guild action denied' };
     }
     try {
       const { guildId, channelId, messageId, emojiId } = input;

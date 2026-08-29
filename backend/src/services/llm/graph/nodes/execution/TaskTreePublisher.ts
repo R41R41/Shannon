@@ -1,6 +1,7 @@
 import type { RequestEnvelope, TaskTreeState } from '@shannon/common';
 import { logger } from '../../../../../utils/logger.js';
 import { CONFIG as MINEBOT_CONFIG } from '../../../../minebot/config/MinebotConfig.js';
+import { canPostMinebotUiFromEnvelope } from '../../../../minebot/runtime/minebotUiPost.js';
 import { createRequestDiscordConversation } from '../../../../common/discordConversationPort.js';
 import { createRequestWebConversation } from '../../../../common/webConversationPort.js';
 
@@ -19,7 +20,7 @@ export class TaskTreePublisher {
     ): void {
         const { platform, taskId, envelope, signal, onTaskTreeUpdate } = delivery;
         if (platform === 'minecraft' || platform === 'minebot') {
-            if (envelope?.minecraft?.serverId && envelope?.minecraft?.worldId) {
+            if (canPostMinebotUiFromEnvelope(envelope)) {
                 void this.postTaskTreeToMinebotUi(taskTree);
             }
         }
@@ -64,7 +65,7 @@ export class TaskTreePublisher {
         metadata?: Record<string, unknown>,
         envelope?: RequestEnvelope,
     ): Promise<void> {
-        if (!envelope?.minecraft?.serverId || !envelope?.minecraft?.worldId) return;
+        if (!canPostMinebotUiFromEnvelope(envelope)) return;
         try {
             const logEntry: Record<string, unknown> = {
                 timestamp: new Date().toISOString(),

@@ -38,7 +38,7 @@ coreは通常のfoundation型検査・SDK依存禁止検査の対象。port/tran
 
 ## 今回で完了しないこと
 
-planning・emotion等の**運用 telemetry**（status/skill/schedule）は管理 console 全体向け `broadcast()` として**会話イベントと分離**。monitoring ログは sessionId 付き会話ログと system ログを `shouldDeliverWebLog` で分岐。OpenAI Realtime API の物理接続共有は残るが入力 owner は 1 session に排他。全checkpointer/WorldKnowledge、別宛先への承認、記憶の訂正/忘却UI・派生データ撤回、queue回復、Discord outbound gateway の任意 channelId（テキスト以外）は残る。
+planning・emotion等の**運用 telemetry**（status/skill/schedule）は管理 console 全体向け `broadcast()` として**会話イベントと分離**。monitoring ログは sessionId 付き会話ログと system ログを `shouldDeliverWebLog` で分岐。OpenAI Realtime API の物理接続共有は残るが入力 owner は 1 session に排他。全checkpointer/WorldKnowledge、別宛先への承認、記憶の訂正/忘却UI・派生データ撤回、queue回復は残る。**Discord outbound gateway** の `postMessage` / legacy emoji は voice session + configured guild で fail-closed（2026-08-30）。
 
 **2026-08-30 追記（RF-03 宛先認可オフライン完了）:** Web planning/post_message/realtime は sessionId 必須（未 bind / 未 scoped は破棄）。Discord voice session registry、Voice 履歴ガード、Minebot envelope/UI scope を unit で固定。global singleton `webRealtimeSession` と legacy 全接続 fallback、`matchesWebSession` 重複は削除。
 
