@@ -54,6 +54,7 @@
 - dev DB `shannon_dev` のping成功。本番DBをテストの書き込み先にしていない。
 - prod DBのlive dumpは約6.45MB、13コレクション・70,407件。別mongodの127.0.0.1:37027へrestoreし、失敗0件。TTL monitorは無効にして復元後の自動削除を防止。
 - 隔離DBでUID部分一意indexを作成し、既存利用者3件を変更しないこと、重複UIDを拒否すること、空の移行指定で自動付与しないことを確認。
+- **2026-08-30:** `scripts/probe-user-binding-migration.cjs --isolated-fixture` で plan → Firebase verify（mock）→ index → apply → 重複/rebind 拒否まで隔離リハーサル成功。prod/shannon_dev 不変。live apply は dev Firebase/ADC 未設定のため未実施（手順は `docs/uid-migration-rehearsal.md`）。
 - prodはstandalone MongoDBのためlive dumpの同一時点整合性は保証しない。**切替時は書き込み元を止めて最終dumpを取得する必要がある**。本番のTTL変更・履歴削除・実利用者更新は未実施。
 - バックアップ・実行ログ・native成果物は保護された保全先へ。DB全文・UID・秘密情報はGit/Notionへ掲載しない。
 
