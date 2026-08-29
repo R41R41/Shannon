@@ -8,8 +8,10 @@ import { LineHttpTransport } from '../../src/services/line/transport.js';
 import { parseLineTurn, lineQuiet } from '../../src/modules/conversation/lineConversation.js';
 import type { LineChatPort, LineTransport } from '../../src/services/line/ports.js';
 import { createLineChatModel } from '../../src/services/line/chatModel.js';
-import { LineRadarWorker } from '../../src/services/line/radarWorker.js';
+import { LineRadarWorker, LINE_RADAR_RUN_MS } from '../../src/services/line/radarWorker.js';
 import { parseLineRadarPolicy, type LineRadarPolicy } from '../../src/services/line/radarPolicy.js';
+import { CalendarReadAdapter, CALENDAR_READ_SCOPE } from '../../src/services/radar/calendarReadAdapter.js';
+import { MongoLineLedger } from '../../src/services/line/mongoLedger.js';
 import { issueLineRadarContext, personalRadarOwner } from '../../src/services/radar/radarAccess.js';
 import { parseFeed } from '../../src/services/radar/feedConnector.js';
 import type { PersonalCatalog, PersonalCatalogPort } from '../../src/modules/radar/catalog.js';
@@ -403,6 +405,47 @@ describe('LINE native Radar and scheduled delivery', () => {
     const worker=new LineRadarWorker(config,{...f.ports,temporal:new PersonalTemporalReaders(new WeatherReadAdapter({get},()=>BASE))},()=>BASE);
     expect(await worker.tick()).toBe('accepted');expect(get).toHaveBeenCalledTimes(1);
     const text=vi.mocked(f.transport.push).mock.calls[0][1];expect(text).toContain('最低 20°C');expect(text).toContain('Open-Meteo');expect(text).not.toContain('架空の研究');
+  });
+  it('collects calendar through the temporal adapter instead of the public feed connector', async () => {
+    const f=await radarFixture();await f.on();
+    const authorize=vi.fn(async(source:any)=>({
+      binding:{id:source.bindingId,owner:source.owner,sourceId:source.id,sourceRevision:source.revision,version:1,
+        calendarId:'primary',timeZone:source.timeZone,expiresAt:BASE+3600000,scopes:[CALENDAR_READ_SCOPE]},
+      read:async()=>JSON.stringify({kind:'calendar#events',timeZone:'Asia/Tokyo',accessRole:'reader',items:[]})
+    }));
+    f.setPolicy({version:1,enabled:true,hourJst:12,minuteJst:0,consentExpiresAt:BASE+7*86400000,feeds:[],weather:null,
+      topics:['science'],youtubeSubscriptions:null,calendar:{id:'calendar',kind:'calendar',timeZone:'Asia/Tokyo',bindingId:'fixture-binding',days:7}});
+    const worker=new LineRadarWorker(config,{...f.ports,temporal:new PersonalTemporalReaders(undefined,new CalendarReadAdapter({authorize},()=>BASE))},()=>BASE);
+    expect(await worker.tick()).toBe('silent');expect(authorize).toHaveBeenCalled();expect(f.read).not.toHaveBeenCalled();
+    expect(f.transport.push).not.toHaveBeenCalled();
+  });
+  it('keeps a run budget longer than a 45 second YouTube scan', () => {
+    expect(LINE_RADAR_RUN_MS).toBeGreaterThan(45000);expect(LINE_RADAR_RUN_MS).toBeLessThanOrEqual(180000);
+  });
+});
+
+describe('LINE Mongo ledger Radar grant limits', () => {
+  const hex=(ch:string)=>ch.repeat(64);
+  const baseState=()=>({schemaVersion:1 as const,revision:1,botUserId:bot,personalUserId:owner,optedIn:true,consentVersion:1,controlAt:BASE,entries:[] as LineState['entries']});
+  function fakeDb() {
+    const docs=new Map<string,any>();
+    return { collection: () => ({
+      findOne: async (q: any) => docs.get(q._id) ?? null,
+      insertOne: async (doc: any) => { docs.set(doc._id, structuredClone(doc)); },
+      replaceOne: async (filter: any, doc: any) => {
+        const cur=docs.get(filter._id);
+        if (!cur || cur.revision !== filter.revision) return { matchedCount: 0 };
+        docs.set(filter._id, structuredClone(doc)); return { matchedCount: 1 };
+      }
+    }) } as any;
+  }
+  const grant=(n:number)=>({owner:'line:'+hex('a'),policyHash:hex('b'),catalogRevision:1,clusters:Array.from({length:n},(_,i)=>hex(String(i)))});
+  it('accepts five digest clusters and rejects six', async () => {
+    const db=fakeDb(); const port=new MongoLineLedger(db);
+    const five={...baseState(),entries:[{id:hex('c'),kind:'push' as const,at:BASE,status:'pending' as const,scope:hex('d'),expiresAt:BASE+60000,radarGrant:grant(5)}]};
+    expect(await port.compareAndSwap(bot,0,five)).toBe(true);
+    const six={...five,revision:2,entries:[{...five.entries[0],radarGrant:grant(6)}]};
+    await expect(port.compareAndSwap(bot,1,six)).rejects.toThrow('LINE_LEDGER_INVALID');
   });
 });
 

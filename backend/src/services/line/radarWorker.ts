@@ -17,8 +17,11 @@ export interface LineRadarPorts {
   radarFca?: LineRadarFcaPorts;
 }
 const acquisition = { maxPer24Hours: 6, minimumIntervalMs: 0, leaseMs: 30000 };
+/** Background budget for one scheduled attempt. Independent of webhook reply deadlines. */
+export const LINE_RADAR_RUN_MS = 180000;
 const sourceBody = (s: object) => Object.fromEntries(Object.entries(s).filter(([k]) => !['id','revision','audience','owner'].includes(k)));
 const same = (a: unknown, b: unknown) => JSON.stringify(a, Object.keys(a as object).sort()) === JSON.stringify(b, Object.keys(b as object).sort());
+const temporalKind = (kind: string) => kind === 'weather' || kind === 'calendar';
 /** One owner's delegated worker. Shares the catalog's reservation/CAS boundary, never Firebase tokens or legacy memory. */
 export class LineRadarWorker {
   private readonly feed: PersonalRadarService;
@@ -35,7 +38,7 @@ export class LineRadarWorker {
       || lineRadarPolicyHash(await this.policy()) !== lineRadarPolicyHash(policy)) throw new Error('LINE_RADAR_STOPPED');
     const s = await this.ports.ledger.read();
     if (!s.optedIn || s.consentVersion !== version || s.personalUserId !== this.config.personalUserId) throw new Error('LINE_RADAR_STOPPED');
-    return issueLineRadarContext(this.config.botUserId, this.config.personalUserId, Math.min(this.now() + 60000, policy.consentExpiresAt));
+    return issueLineRadarContext(this.config.botUserId, this.config.personalUserId, Math.min(this.now() + LINE_RADAR_RUN_MS, policy.consentExpiresAt));
   }
   async status(): Promise<string> {
     const p = await this.policy(), s = await this.ports.ledger.read();
@@ -110,7 +113,7 @@ export class LineRadarWorker {
   }
   private async run(): Promise<string> {
     if (this.stopped.signal.aborted) return 'stopped';
-    const signal = AbortSignal.any([this.stopped.signal, AbortSignal.timeout(45000)]);
+    const signal = AbortSignal.any([this.stopped.signal, AbortSignal.timeout(LINE_RADAR_RUN_MS)]);
     let slot: string | undefined;
     try {
       const p = await this.policy(); const initial = await this.ports.ledger.read();
@@ -136,7 +139,7 @@ export class LineRadarWorker {
       for (const setting of [...p.feeds, ...(p.weather ? [p.weather] : []), ...(p.calendar ? [p.calendar] : [])]) {
         signal.throwIfAborted(); const context = await renew(); const current = await this.feed.sources(context);
         try {
-          if (setting.kind === 'weather') await this.temporal.collect(context, setting.id, current.revision, renew, signal);
+          if (temporalKind(setting.kind)) await this.temporal.collect(context, setting.id, current.revision, renew, signal);
           else await this.feed.collect(context, setting.id, this.ports.feed, signal, renew, current.revision);
           collected.push(setting.id);
         } catch { signal.throwIfAborted(); await renew(); /* Failed source is omitted, never represented as fresh. */ }

@@ -65,7 +65,8 @@ export async function openLineRuntime(input: { env: Record<string,string>; db: m
     try {
       if (Date.now() - lastPurge >= 3600000) { await runtime.ledger.purgeExpired(); lastPurge = Date.now(); }
       const result = await worker.tick();
-      if (!['not-due','already-attempted','disabled','budget-wait'].includes(result)) console.log(JSON.stringify({ service: 'line', event: 'radar_tick', result }));
+      if (!['not-due','already-attempted','disabled','budget-wait'].includes(result))
+        console.log(JSON.stringify({ service: 'line', event: 'radar_tick', result, aborted: false }));
     } catch { console.error('LINE_MAINTENANCE_UNAVAILABLE'); }
   };
   const interval = setInterval(() => { void tick(); }, 30000);

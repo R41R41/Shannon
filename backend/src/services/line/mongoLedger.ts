@@ -27,7 +27,7 @@ export class MongoLineLedger implements LineStatePort {
         || (e.text !== undefined && (e.kind !== 'push' || typeof e.text !== 'string' || e.text.length > 4500))
         || (e.radarGrant !== undefined && (e.kind !== 'push' || !/^line:[a-f0-9]{64}$/.test(e.radarGrant.owner)
           || !/^[a-f0-9]{64}$/.test(e.radarGrant.policyHash) || !Number.isSafeInteger(e.radarGrant.catalogRevision)
-          || e.radarGrant.catalogRevision < 1 || !Array.isArray(e.radarGrant.clusters) || e.radarGrant.clusters.length > 3
+          || e.radarGrant.catalogRevision < 1 || !Array.isArray(e.radarGrant.clusters) || e.radarGrant.clusters.length > 5
           || e.radarGrant.clusters.some(c => !/^[a-f0-9]{64}$/.test(c)))))) throw new Error('LINE_LEDGER_INVALID');
   }
   async compareAndSwap(botUserId: string, expected: number, next: LineState): Promise<boolean> {

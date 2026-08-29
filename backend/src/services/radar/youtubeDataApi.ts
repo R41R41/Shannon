@@ -60,22 +60,36 @@ export class YouTubeDataApiUploadReader {
       }
     }
     const result=new Map<string,YouTubeUpload>();
-    // Sequential calls keep provider pressure and cancellation behavior predictable. Runtime may shard this later under a reviewed quota policy.
-    for(const [id,channel] of channels){
+    // Bounded concurrency keeps one owner's quota and abort behavior predictable without a 45s all-channel timeout.
+    const playlistConcurrency=4;
+    const channelList=[...channels];
+    for(let offset=0;offset<channelList.length;offset+=playlistConcurrency){
       signal.throwIfAborted();
-      const query=new URLSearchParams({part:'snippet,contentDetails',playlistId:channel.uploads,maxResults:String(policy.maxPerChannel),
-        fields:'items(contentDetails(videoId,videoPublishedAt),snippet(title,channelId,channelTitle,publishedAt))'});
-      const raw=await this.broker.get(grant,`/youtube/v3/playlistItems?${query}`,signal);
-      const items=(raw as {items?:unknown})?.items;
-      if(!Array.isArray(items)||items.length>policy.maxPerChannel)throw new YouTubeSubscriptionError('INVALID_RESPONSE');
-      for(const value of items){
-        const item=value as {contentDetails?:{videoId?:unknown;videoPublishedAt?:unknown};snippet?:{title?:unknown;channelId?:unknown;channelTitle?:unknown;publishedAt?:unknown}};
-        const vid=item.contentDetails?.videoId, source=item.snippet?.channelId, title=item.snippet?.title;
-        const date=item.contentDetails?.videoPublishedAt??item.snippet?.publishedAt, publishedAt=typeof date==='string'?Date.parse(date):NaN;
-        if(!videoId(vid)||source!==id||!text(title,300)||!Number.isSafeInteger(publishedAt)||publishedAt<=policy.publishedAfter)continue;
-        const normalized={videoId:vid,channelId:id,channelTitle:channel.title,title:title.trim(),publishedAt};
-        const previous=result.get(vid);if(previous&&JSON.stringify(previous)!==JSON.stringify(normalized))throw new YouTubeSubscriptionError('CONFLICT');
-        result.set(vid,normalized);
+      const batch=channelList.slice(offset,offset+playlistConcurrency);
+      const pages=await Promise.all(batch.map(async([id,channel])=>{
+        try {
+          const query=new URLSearchParams({part:'snippet,contentDetails',playlistId:channel.uploads,maxResults:String(policy.maxPerChannel),
+            fields:'items(contentDetails(videoId,videoPublishedAt),snippet(title,channelId,channelTitle,publishedAt))'});
+          const raw=await this.broker.get(grant,`/youtube/v3/playlistItems?${query}`,signal);
+          const items=(raw as {items?:unknown})?.items;
+          if(!Array.isArray(items)||items.length>policy.maxPerChannel)return {id,channel,items:undefined};
+          return {id,channel,items};
+        } catch (error) {
+          if (signal.aborted) throw error;
+          return {id,channel,items:undefined};
+        }
+      }));
+      for(const page of pages){
+        if(!page.items)continue;
+        for(const value of page.items){
+          const item=value as {contentDetails?:{videoId?:unknown;videoPublishedAt?:unknown};snippet?:{title?:unknown;channelId?:unknown;channelTitle?:unknown;publishedAt?:unknown}};
+          const vid=item.contentDetails?.videoId, source=item.snippet?.channelId, title=item.snippet?.title;
+          const date=item.contentDetails?.videoPublishedAt??item.snippet?.publishedAt, publishedAt=typeof date==='string'?Date.parse(date):NaN;
+          if(!videoId(vid)||source!==page.id||!text(title,300)||!Number.isSafeInteger(publishedAt)||publishedAt<=policy.publishedAfter)continue;
+          const normalized={videoId:vid,channelId:page.id,channelTitle:page.channel.title,title:title.trim(),publishedAt};
+          const previous=result.get(vid);if(previous&&JSON.stringify(previous)!==JSON.stringify(normalized))throw new YouTubeSubscriptionError('CONFLICT');
+          result.set(vid,normalized);
+        }
       }
     }
     return Object.freeze([...result.values()].sort((a,b)=>b.publishedAt-a.publishedAt||a.videoId.localeCompare(b.videoId)).slice(0,policy.maxTotal));
