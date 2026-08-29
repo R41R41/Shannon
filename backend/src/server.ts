@@ -103,7 +103,13 @@ class Server {
     registerHealthRoutes(app, () => this.coreReady && mongoose.connection.readyState === 1 &&
       !!config.webAuth.firebaseProjectId && config.webAuth.allowedOrigins.length > 0);
     registerModelRoutes(app, this.webAccess.access, this.webAccess.modelSettings);
-    registerIdentityRoutes(app, this.webAccess.access, this.webAccess.identityStatus, this.webAccess.identityManifestReview);
+    registerIdentityRoutes(
+      app,
+      this.webAccess.access,
+      this.webAccess.identityStatus,
+      this.webAccess.identityBindingWrite,
+      this.webAccess.identityManifestReview,
+    );
     registerTokenRoutes(app);
     registerTestRoutes(app);
     registerWebhookRoutes(app, this.twitterClient);

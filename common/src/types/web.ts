@@ -149,3 +149,10 @@ export interface BindingManifestPlanResponse {
     after: { firebaseProjectId: string; firebaseUid: string; isAuthorized: boolean; isAdmin: boolean };
   }>;
 }
+
+export interface AudienceUpdateRequest {
+  confirm: true;
+  memoryChannels: string[];
+  lineDeliveryEnabled: boolean;
+  radarPersonalFeed: boolean;
+}

@@ -17,16 +17,16 @@ const context: RequestContext = Object.freeze({
 });
 
 describe('identity foundation', () => {
-  it('returns read-only binding status without secrets', () => {
-    const snapshot = new IdentityStatusService(new StaticIdentityStatusRepository()).read(context);
+  it('returns read-only binding status without secrets', async () => {
+    const snapshot = await new IdentityStatusService(new StaticIdentityStatusRepository()).read(context);
     expect(snapshot.identity.uid).toBe('firebase-user');
     expect(snapshot.bindings.find(b => b.channel === 'web')?.status).toBe('linked');
     expect(snapshot.bindings.find(b => b.channel === 'discord')?.status).toBe('unlinked');
     expect(JSON.stringify(snapshot)).not.toMatch(/token|secret|refresh/i);
   });
 
-  it('rejects unauthenticated status reads', () => {
-    expect(() => new IdentityStatusService(new StaticIdentityStatusRepository()).read(null)).toThrow(AccessError);
+  it('rejects unauthenticated status reads', async () => {
+    await expect(new IdentityStatusService(new StaticIdentityStatusRepository()).read(null)).rejects.toThrow(AccessError);
   });
 
   it('validates manifest shape without touching users', () => {

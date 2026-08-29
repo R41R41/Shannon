@@ -209,3 +209,25 @@
 .identityError {
   color: color(error, primary);
 }
+
+.identityConfirmRow {
+  display: flex;
+  align-items: center;
+  gap: spacing(sm);
+  margin-bottom: spacing(sm);
+  font-size: font-size(xxs);
+  color: color(text, secondary);
+}
+
+.identityFormBlock {
+  display: flex;
+  flex-direction: column;
+  gap: spacing(xs);
+  margin-bottom: spacing(md);
+}
+
+.identityActions {
+  display: flex;
+  gap: spacing(sm);
+  flex-wrap: wrap;
+}

@@ -161,7 +161,7 @@ Radar の discovery スキルは general 袋の読み取り専用サブセット
 
 設定 UI に載せるもの: Binding、Radar source 最大3、LINE 配信 ON/OFF、許可グループ、ツール経路の許可名、記憶の有効チャネル。載せないもの: トークン本体、refresh token、署名シークレット。UI は「ある/ない/期限」だけ。
 
-**2026-08-30:** read-only の Identity パネル（`GET /api/identity/status`）と admin 向け manifest dry-run（`POST /api/identity/validate-manifest`）を Settings に追加。Binding 書き込み・Discord/LINE/Minecraft 連携 UI は未実装。本体ロック中に本番 Firebase へ繋がない。
+**2026-08-30:** Identity パネルに Binding 書き込み（`PUT /api/identity/bindings/:channel`、`POST .../unlink`、`PUT /api/identity/audience`）を追加。Mongo `identityprofiles` に本人明示連携を保存。OAuth・live 検証・Radar/LINE 実配線は未接続。本体ロック中に本番 Firebase へ繋がない。
 
 ---
 

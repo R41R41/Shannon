@@ -1,12 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { AccessService } from '../modules/access/index.js';
 import { ModelSettingsService } from '../modules/modelSettings/index.js';
-import { IdentityManifestReviewService, IdentityStatusService } from '../modules/identity/index.js';
+import { IdentityBindingWriteService, IdentityManifestReviewService, IdentityStatusService } from '../modules/identity/index.js';
 import { FirebaseIdentityVerifier } from '../adapters/access/FirebaseIdentityVerifier.js';
 import { MongoAccessUserRepository } from '../adapters/access/MongoAccessUserRepository.js';
 import { modelManager } from '../config/modelManager.js';
-import { StaticIdentityStatusRepository } from '../adapters/identity/StaticIdentityStatusRepository.js';
 import { MongoIdentityMigrationUserRepository } from '../adapters/identity/MongoIdentityMigrationUserRepository.js';
+import { MongoIdentityProfileRepository, ProfileIdentityStatusRepository } from '../adapters/identity/MongoIdentityProfileRepository.js';
 import { reviewedBindingManifestPlanner } from '../adapters/identity/reviewedBindingManifestPlanner.js';
 
 /** Composition only. No connections, timers, model calls, or role migrations here. */
@@ -23,10 +23,12 @@ export function createWebAccess(projectId: string) {
     },
     reset: () => modelManager.resetAll(),
   });
-  const identityStatus = new IdentityStatusService(new StaticIdentityStatusRepository());
+  const profileRepository = new MongoIdentityProfileRepository();
+  const identityStatus = new IdentityStatusService(new ProfileIdentityStatusRepository(profileRepository));
+  const identityBindingWrite = new IdentityBindingWriteService(profileRepository);
   const identityManifestReview = new IdentityManifestReviewService(
     new MongoIdentityMigrationUserRepository(),
     reviewedBindingManifestPlanner,
   );
-  return { access, modelSettings, identityStatus, identityManifestReview };
+  return { access, modelSettings, identityStatus, identityBindingWrite, identityManifestReview };
 }

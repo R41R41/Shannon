@@ -1,73 +1,65 @@
 import { requireCapability, type RequestContext } from '../access/index.js';
+import {
+  buildIdentityStatus,
+  emptyProfile,
+  mergeProfileAfterAudience,
+  mergeProfileAfterLink,
+  mergeProfileAfterUnlink,
+  parseAudienceUpdateInput,
+  parseLinkBindingInput,
+  parseWritableChannel,
+  requireExplicitConfirm,
+  storedBindingForLink,
+  type IdentityProfileRecord,
+  type IdentityProfileRepository,
+  IdentityInputError,
+  type WritableChannelKind,
+} from './bindingWrite.js';
+import type {
+  BindingManifestPlanSummary,
+  BindingManifestV1,
+  IdentityStatusSnapshot,
+  MigrationUserRecord,
+  BindingManifestPlanner,
+} from './types.js';
 
-export type IdentityChannelKind = 'web' | 'discord' | 'line' | 'minecraft' | 'radar';
-export type BindingStatus = 'linked' | 'unlinked' | 'expired';
-
-export interface ChannelBindingView {
-  readonly channel: IdentityChannelKind;
-  readonly status: BindingStatus;
-  readonly label: string;
-  readonly expiresAtIso?: string;
-}
-
-export interface AudiencePolicyView {
-  readonly memoryChannels: readonly string[];
-  readonly radarPersonalFeed: boolean;
-  readonly lineDeliveryEnabled: boolean;
-}
-
-export interface IdentityStatusSnapshot {
-  readonly identity: Readonly<{ projectId: string; uid: string; email: string; name: string }>;
-  readonly bindings: readonly ChannelBindingView[];
-  readonly audience: AudiencePolicyView;
-}
-
-export interface BindingManifestV1 {
-  readonly version: 1;
-  readonly projectId: string;
-  readonly reviewedBy: string;
-  readonly bindings: readonly Readonly<{
-    readonly userId: string;
-    readonly uid: string;
-    readonly isAuthorized: boolean;
-    readonly isAdmin: boolean;
-  }>[];
-}
-
-export interface BindingManifestPlanSummary {
-  readonly projectId: string;
-  readonly reviewedBy: string;
-  readonly operationCount: number;
-  readonly unboundAfter: number;
-  readonly sha256: string;
-  readonly operations: readonly Readonly<{
-    readonly userId: string;
-    readonly email: string;
-    readonly after: Readonly<{ firebaseProjectId: string; firebaseUid: string; isAuthorized: boolean; isAdmin: boolean }>;
-  }>[];
-}
+export type {
+  IdentityChannelKind,
+  BindingStatus,
+  ChannelBindingView,
+  AudiencePolicyView,
+  IdentityStatusSnapshot,
+  BindingManifestV1,
+  BindingManifestPlanSummary,
+  MigrationUserRecord,
+  BindingManifestPlanner,
+} from './types.js';
+export type {
+  WritableChannelKind,
+  StoredChannelBinding,
+  IdentityProfileRecord,
+  LinkBindingInput,
+  UnlinkBindingInput,
+  AudienceUpdateInput,
+  AllowedMemoryChannel,
+} from './bindingWrite.js';
+export {
+  ALLOWED_MEMORY_CHANNELS,
+  defaultAudience,
+  buildIdentityStatus,
+  parseLinkBindingInput,
+  parseAudienceUpdateInput,
+  parseWritableChannel,
+} from './bindingWrite.js';
+export { IdentityInputError };
 
 export interface IdentityStatusRepository {
-  snapshotFor(context: RequestContext): IdentityStatusSnapshot;
-}
-
-export interface MigrationUserRecord {
-  readonly _id: string;
-  readonly email: string;
-  readonly firebaseUid?: string | null;
-  readonly firebaseProjectId?: string | null;
-  readonly isAuthorized?: boolean;
-  readonly isAdmin?: boolean;
+  snapshotFor(context: RequestContext): Promise<IdentityStatusSnapshot> | IdentityStatusSnapshot;
 }
 
 export interface IdentityMigrationUserRepository {
   listUsers(): Promise<readonly MigrationUserRecord[]>;
 }
-
-export type BindingManifestPlanner = (
-  users: readonly MigrationUserRecord[],
-  manifest: BindingManifestV1,
-) => BindingManifestPlanSummary;
 
 const id = (value: unknown): value is string =>
   typeof value === 'string' && value.length > 0 && value.length <= 128 && !/\s/.test(value);
@@ -100,27 +92,57 @@ export function parseBindingManifest(raw: unknown): BindingManifestV1 {
   });
 }
 
-export class IdentityInputError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'IdentityInputError';
-  }
-}
-
-/** Read-only Identity–Binding–Audience view. No secrets, no writes. */
 export class IdentityStatusService {
   constructor(
     private readonly repository: IdentityStatusRepository,
     private readonly now: () => number = Date.now,
   ) {}
 
-  read(context: RequestContext | null): IdentityStatusSnapshot {
+  async read(context: RequestContext | null): Promise<IdentityStatusSnapshot> {
     requireCapability(context, 'profile:read', this.now());
-    return this.repository.snapshotFor(context);
+    const snapshot = this.repository.snapshotFor(context);
+    return snapshot instanceof Promise ? await snapshot : snapshot;
   }
 }
 
-/** Admin-only dry-run manifest review; does not mutate users or Firebase. */
+export class IdentityBindingWriteService {
+  constructor(
+    private readonly profiles: IdentityProfileRepository,
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  private async load(context: RequestContext): Promise<IdentityProfileRecord> {
+    return (await this.profiles.find(context)) ?? emptyProfile(context);
+  }
+
+  async link(context: RequestContext | null, channelRaw: unknown, body: unknown): Promise<IdentityStatusSnapshot> {
+    requireCapability(context, 'profile:read', this.now());
+    const channel = parseWritableChannel(channelRaw);
+    const input = parseLinkBindingInput(channel, body);
+    const profile = await this.load(context);
+    const binding = storedBindingForLink(channel, input, context, new Date(this.now()).toISOString());
+    const saved = await this.profiles.save(context, mergeProfileAfterLink(profile, channel, binding));
+    return buildIdentityStatus(context, saved, this.now());
+  }
+
+  async unlink(context: RequestContext | null, channelRaw: unknown, body: unknown): Promise<IdentityStatusSnapshot> {
+    requireCapability(context, 'profile:read', this.now());
+    const channel = parseWritableChannel(channelRaw);
+    requireExplicitConfirm(body);
+    const profile = await this.load(context);
+    const saved = await this.profiles.save(context, mergeProfileAfterUnlink(profile, channel));
+    return buildIdentityStatus(context, saved, this.now());
+  }
+
+  async updateAudience(context: RequestContext | null, body: unknown): Promise<IdentityStatusSnapshot> {
+    requireCapability(context, 'profile:read', this.now());
+    const audience = parseAudienceUpdateInput(body);
+    const profile = await this.load(context);
+    const saved = await this.profiles.save(context, mergeProfileAfterAudience(profile, audience));
+    return buildIdentityStatus(context, saved, this.now());
+  }
+}
+
 export class IdentityManifestReviewService {
   constructor(
     private readonly users: IdentityMigrationUserRepository,
@@ -136,26 +158,7 @@ export class IdentityManifestReviewService {
   }
 }
 
+/** @deprecated use buildIdentityStatus via repository */
 export function buildDefaultIdentityStatus(context: RequestContext): IdentityStatusSnapshot {
-  const { principal } = context;
-  return Object.freeze({
-    identity: Object.freeze({
-      projectId: principal.projectId,
-      uid: principal.uid,
-      email: principal.email,
-      name: principal.name,
-    }),
-    bindings: Object.freeze([
-      Object.freeze({ channel: 'web', status: 'linked', label: 'Firebase ログイン' }),
-      Object.freeze({ channel: 'discord', status: 'unlinked', label: '未連携（明示連携 UI は未実装）' }),
-      Object.freeze({ channel: 'line', status: 'unlinked', label: '未連携' }),
-      Object.freeze({ channel: 'minecraft', status: 'unlinked', label: 'server/world ID 未配線' }),
-      Object.freeze({ channel: 'radar', status: 'unlinked', label: 'Radar owner 文書未接続' }),
-    ] satisfies ChannelBindingView[]),
-    audience: Object.freeze({
-      memoryChannels: Object.freeze(['discord_text', 'web']),
-      radarPersonalFeed: false,
-      lineDeliveryEnabled: false,
-    }),
-  });
+  return buildIdentityStatus(context, null, Date.now());
 }
