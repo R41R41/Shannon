@@ -19,10 +19,11 @@ export class PlanningAgent extends WebSocketServiceBase {
     this.messageSubscription = this.eventBus.subscribe(
       'web:planning',
       (event) => {
-        const data = event.data as TaskTreeState;
+        const data = event.data as TaskTreeState & { sessionId?: string };
+        if (data.sessionId) return;
         this.broadcast({
           type: 'web:planning',
-          data: data,
+          data,
         });
       }
     );

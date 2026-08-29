@@ -148,7 +148,8 @@ export function registerPublicRoutes(app: Express, llmService: LLMService): void
 
     // Planning / Task tree events
     const unsubPlanning = eventBus.subscribe('web:planning', (event) => {
-      const taskTree = event.data as TaskTreeState;
+      const taskTree = event.data as TaskTreeState & { sessionId?: string };
+      if (taskTree.sessionId && taskTree.sessionId !== sid) return;
       sendSSE(res, 'task_update', taskTree);
     });
     unsubscribers.push(unsubPlanning);

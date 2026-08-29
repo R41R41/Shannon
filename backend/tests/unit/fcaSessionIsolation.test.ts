@@ -40,11 +40,17 @@ import { RequestExecutionCoordinator } from '../../src/services/llm/graph/reques
 import ChatOnDiscordTool from '../../src/services/llm/tools/discord/chatOnDiscord.js';
 import { registerDiscordConversationTransport } from '../../src/services/common/discordConversationPort.js';
 const discordReplies = vi.fn(async () => undefined);
-registerDiscordConversationTransport({ reply: discordReplies, recent: async () => [] });
+const discordPlanning = vi.fn(async () => undefined);
+registerDiscordConversationTransport({ reply: discordReplies, recent: async () => [], publishPlanning: discordPlanning });
 
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; }
 function state(owner: string) {
-  const requestEnvelope = { requestId: `request-${owner}`, sourceUserId: owner, channel: 'discord', conversationId: `channel-${owner}`, threadId: `thread-${owner}`, tags: [], timestampIso: '2026-08-28T00:00:00Z' };
+  const channelId = owner === 'A' ? '222' : owner === 'B' ? '223' : `channel-${owner}`;
+  const requestEnvelope = {
+    requestId: `request-${owner}`, sourceUserId: owner === 'A' ? '100' : owner === 'B' ? '101' : owner,
+    channel: 'discord', conversationId: `channel-${owner}`, threadId: `thread-${owner}`, tags: [], timestampIso: '2026-08-28T00:00:00Z',
+    discord: { guildId: '111', channelId, messageId: owner === 'A' ? '900' : owner === 'B' ? '901' : '900', isDM: false },
+  };
   return { taskId: requestEnvelope.requestId, userMessage: owner, messages: [], context: { platform: 'discord', metadata: { envelope: requestEnvelope } }, channelId: `channel-${owner}`, environmentState: null, isEmergency: false, onToolsExecuted: () => {}, requestEnvelope } as any;
 }
 beforeEach(() => { vi.clearAllMocks(); fakes.memoryReads.length = 0; fakes.memoryWrites.length = 0; vi.stubEnv('SHANNON_COGNITIVE_LOOPS', 'false'); });
@@ -86,9 +92,6 @@ describe('actual FCA and tools with external services mocked', () => {
     });
     const fca = new FunctionCallingAgent([new ChatOnDiscordTool(), { name: 'task-complete', invoke: async () => 'done' } as any]);
     const a = state('A'), b = state('B');
-    a.requestEnvelope.sourceUserId = '100'; b.requestEnvelope.sourceUserId = '101';
-    a.requestEnvelope.discord = { guildId: '111', channelId: '222', messageId: '900' };
-    b.requestEnvelope.discord = { guildId: '111', channelId: '223', messageId: '901' };
     const pa = fca.run(a); await entered.A.promise; const pb = fca.run(b); await entered.B.promise;
     release.A.resolve(); await pa; release.B.resolve(); await pb;
     expect(discordReplies.mock.calls.map(([binding, message]: any) => [binding.channelId, binding.subjectId, message])).toEqual([
@@ -97,9 +100,11 @@ describe('actual FCA and tools with external services mocked', () => {
   });
   it('keeps update-plan delivery bound to its own request during overlapping calls', async () => {
     await overlap('update-plan');
-    const plans = fakes.publish.mock.calls.map(([event]) => event).filter(e => e.type === 'discord:planning' && e.data.planning.goal.startsWith('plan-'));
-    expect(plans.map(e => [e.data.planning.goal, e.data.channelId, e.data.taskId])).toEqual([
-      ['plan-A', 'channel-A', 'request-A'], ['plan-B', 'channel-B', 'request-B'],
+    const plans = discordPlanning.mock.calls
+      .filter(([, plan]: any[]) => typeof plan?.goal === 'string' && plan.goal.startsWith('plan-'))
+      .map(([binding, plan, taskId]: any) => [plan.goal, binding.channelId, taskId]);
+    expect(plans).toEqual([
+      ['plan-A', '222', 'request-A'], ['plan-B', '223', 'request-B'],
     ]);
   });
 

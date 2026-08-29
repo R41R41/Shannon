@@ -1,5 +1,6 @@
 import { bindRequestMemory, snapshotMemoryEnvelope } from '../../../memory/requestMemory.js';
 import { bindRequestDiscordConversation } from '../../../common/discordConversationPort.js';
+import { bindRequestWebConversation } from '../../../common/webConversationPort.js';
 import { selectToolsForChannel } from '../../../../modules/access/toolCatalog.js';
 import {
     AIMessage,
@@ -16,7 +17,6 @@ import { setMaxListeners } from 'node:events';
 import { config } from '../../../../config/env.js';
 import { modelManager } from '../../../../config/modelManager.js';
 import { logger } from '../../../../utils/logger.js';
-import { getEventBus } from '../../../eventBus/index.js';
 import { WorldKnowledgeService } from '../../../minebot/knowledge/WorldKnowledgeService.js';
 import { RecipeDependencyResolver } from '../../../minebot/knowledge/RecipeDependencyResolver.js';
 import { TaskEpisodeMemory } from '../cognitive/TaskEpisodeMemory.js';
@@ -150,7 +150,6 @@ export class FunctionCallingSession {
     static readonly MAX_TOTAL_TIME_MS = 300000; // 全体: 5分
 
     constructor(tools: StructuredTool[]) {
-        const eventBus = getEventBus();
         this.tools = [...tools];
         this.toolMap = new Map(tools.map((t) => [t.name, t]));
 
@@ -174,7 +173,7 @@ export class FunctionCallingSession {
 
         // Sub-components
         this.promptBuilder = new PromptBuilder();
-        this.taskTreePublisher = new TaskTreePublisher(eventBus);
+        this.taskTreePublisher = new TaskTreePublisher();
         this.thinkingManager = new ThinkingManager();
         this.toolExecutor = new ToolExecutor(this.taskTreePublisher);
         this.loopDetector = new LoopDetector();
@@ -328,6 +327,7 @@ export class FunctionCallingSession {
         state = { ...state, requestEnvelope: state.requestEnvelope ? snapshotMemoryEnvelope(state.requestEnvelope) : undefined };
         bindRequestMemory(this.tools, state.requestEnvelope);
         bindRequestDiscordConversation(this.tools, state.requestEnvelope, signal);
+        bindRequestWebConversation(this.tools, state.requestEnvelope, signal);
         const startTime = Date.now();
         const goal = state.userMessage || 'Unknown task';
         const isEmergency = state.isEmergency || false;
@@ -531,7 +531,14 @@ export class FunctionCallingSession {
             strategy: 'Function Calling Agent で実行中',
             hierarchicalSubTasks: [],
             currentSubTaskId: null,
-        }, state.context?.platform ?? null, state.channelId, state.taskId, state.onTaskTreeUpdate);
+        }, {
+            platform: state.context?.platform ?? null,
+            channelId: state.channelId,
+            taskId: state.taskId,
+            envelope: state.requestEnvelope,
+            signal,
+            onTaskTreeUpdate: state.onTaskTreeUpdate,
+        });
 
         signal?.throwIfAborted();
         signal?.addEventListener('abort', onParentAbort, { once: true });
@@ -648,7 +655,14 @@ export class FunctionCallingSession {
                 status: complete ? 'completed' : 'error',
                 goal, strategy: complete ? (summary || goal) : '最大イテレーション数に到達',
                 hierarchicalSubTasks: steps, currentSubTaskId: null,
-            }, state.context?.platform ?? null, state.channelId, state.taskId, state.onTaskTreeUpdate);
+            }, {
+                platform: state.context?.platform ?? null,
+                channelId: state.channelId,
+                taskId: state.taskId,
+                envelope: state.requestEnvelope,
+                signal,
+                onTaskTreeUpdate: state.onTaskTreeUpdate,
+            });
             return {
                 taskTree: {
                     status: complete ? 'completed' : 'error',
@@ -675,7 +689,14 @@ export class FunctionCallingSession {
                 recoveryAttempts: forcedRecoveryAttempts,
                 hierarchicalSubTasks: steps,
                 currentSubTaskId: null,
-            }, state.context?.platform ?? null, state.channelId, state.taskId, state.onTaskTreeUpdate);
+            }, {
+                platform: state.context?.platform ?? null,
+                channelId: state.channelId,
+                taskId: state.taskId,
+                envelope: state.requestEnvelope,
+                signal,
+                onTaskTreeUpdate: state.onTaskTreeUpdate,
+            });
 
             return {
                 taskTree: {

@@ -1,55 +1,39 @@
-import { DiscordPlanningInput, TaskTreeState } from '@shannon/common';
+import type { RequestEnvelope, TaskTreeState } from '@shannon/common';
 import { logger } from '../../../../../utils/logger.js';
-import { EventBus } from '../../../../eventBus/eventBus.js';
 import { CONFIG as MINEBOT_CONFIG } from '../../../../minebot/config/MinebotConfig.js';
+import { createRequestDiscordConversation } from '../../../../common/discordConversationPort.js';
+import { createRequestWebConversation } from '../../../../common/webConversationPort.js';
 
-/**
- * タスクツリーの状態をEventBus経由でUI（Web / Discord / MinebotUI）に配信する
- */
+/** タスクツリーを request-bound port 経由で UI（Web / Discord / MinebotUI）に配信する */
 export class TaskTreePublisher {
-    private eventBus: EventBus;
-
-    constructor(eventBus: EventBus) {
-        this.eventBus = eventBus;
-    }
-
-    /**
-     * タスクツリーをEventBus経由でUI通知
-     */
     publishTaskTree(
         taskTree: TaskTreeState,
-        platform: string | null,
-        channelId: string | null,
-        taskId: string | null,
-        onTaskTreeUpdate?: (taskTree: TaskTreeState) => void,
+        delivery: {
+            platform: string | null;
+            channelId: string | null;
+            taskId: string | null;
+            envelope?: RequestEnvelope;
+            signal?: AbortSignal;
+            onTaskTreeUpdate?: (taskTree: TaskTreeState) => void;
+        },
     ): void {
+        const { platform, taskId, envelope, signal, onTaskTreeUpdate } = delivery;
         if (platform === 'minecraft' || platform === 'minebot') {
             void this.postTaskTreeToMinebotUi(taskTree);
         }
         if (onTaskTreeUpdate) {
-            try {
-                onTaskTreeUpdate(taskTree as TaskTreeState);
-            } catch {
-                // fire-and-forget
-            }
+            try { onTaskTreeUpdate(taskTree); } catch { /* fire-and-forget */ }
         }
-
-        this.eventBus.publish({
-            type: 'web:planning',
-            memoryZone: 'web',
-            data: taskTree,
-            targetMemoryZones: ['web'],
-        });
-
-        if (platform === 'discord' && channelId) {
-            this.eventBus.publish({
-                type: 'discord:planning',
-                memoryZone: 'web',
-                data: {
-                    planning: taskTree,
-                    channelId,
-                    taskId: taskId || '',
-                } as DiscordPlanningInput,
+        if (envelope?.channel === 'web') {
+            void createRequestWebConversation(envelope, signal).publishPlanning({
+                planning: taskTree,
+                taskId: taskId || envelope.requestId,
+            });
+        }
+        if (envelope?.channel === 'discord') {
+            void createRequestDiscordConversation(envelope, signal).publishPlanning({
+                planning: taskTree,
+                taskId: taskId || envelope.requestId,
             });
         }
     }
@@ -69,9 +53,6 @@ export class TaskTreePublisher {
         }
     }
 
-    /**
-     * Minebot UI に詳細ログを送信
-     */
     async postDetailedLogToMinebotUi(
         goal: string,
         phase: string,

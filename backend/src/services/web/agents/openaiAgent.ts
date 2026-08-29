@@ -26,7 +26,8 @@ export class OpenAIClientService extends WebSocketServiceBase {
     this.messageSubscription = this.eventBus.subscribe(
       'web:post_message',
       (event) => {
-        const data = event.data as OpenAITextInput;
+        const data = event.data as OpenAITextInput & { sessionId?: string };
+        if (data.sessionId) return;
         this.eventBus.log('web', 'white', data.text, true);
         if (event.memoryZone === 'web') {
           this.broadcast(event.data);

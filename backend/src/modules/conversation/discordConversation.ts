@@ -35,7 +35,12 @@ export function targetsBoundConversation(binding: DiscordConversationBinding, ta
 export interface DiscordHistoryEntry { readonly messageId: string; readonly authorId: string; readonly text: string; readonly timestamp: number }
 export interface ConversationReplyInput { message: string; channelId?: string; guildId?: string; imageUrl?: string }
 export interface ConversationReplyResult { status: 'sent' | 'denied' | 'unknown'; message: string }
+export interface DiscordReactInput { messageId?: string; emojiId: string; channelId?: string; guildId?: string }
+export interface DiscordEmojiListResult { status: 'ok'; emojis: string[] }
 export interface DiscordConversationPort {
   reply(input: ConversationReplyInput): Promise<ConversationReplyResult>;
   recent(input?: { channelId?: string; limit?: number }): Promise<readonly DiscordHistoryEntry[]>;
+  react(input: DiscordReactInput): Promise<ConversationReplyResult>;
+  listEmojis(input?: { guildId?: string }): Promise<DiscordEmojiListResult | ConversationReplyResult>;
+  publishPlanning(input: { planning: unknown; taskId: string }): Promise<ConversationReplyResult>;
 }

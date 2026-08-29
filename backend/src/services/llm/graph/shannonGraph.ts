@@ -1,5 +1,6 @@
 import { bindRequestMemory, snapshotMemoryEnvelope } from '../../memory/requestMemory.js';
 import { bindRequestDiscordConversation } from '../../common/discordConversationPort.js';
+import { bindRequestWebConversation } from '../../common/webConversationPort.js';
 import { selectToolsForChannel } from '../../../modules/access/toolCatalog.js';
 import { minecraftTaskContinuation } from '../../minebot/runtime/minecraftTaskContinuation.js';
 /**
@@ -235,6 +236,7 @@ function createExecuteNode(
         const created = fca.createToolsForRun();
         bindRequestMemory(created, memoryEnvelope);
         bindRequestDiscordConversation(created, memoryEnvelope, state._abortSignal);
+        bindRequestWebConversation(created, memoryEnvelope, state._abortSignal);
         const runTools = selectToolsForChannel('minecraft', created);
         // FCA 登録済みツールを Anthropic 形式に変換
         for (const tool of runTools) {

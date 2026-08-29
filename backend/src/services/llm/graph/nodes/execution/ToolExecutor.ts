@@ -3,7 +3,7 @@ import {
     ToolMessage,
 } from '@langchain/core/messages';
 import { StructuredTool } from '@langchain/core/tools';
-import { TaskContext, HierarchicalSubTask, TaskTreeState } from '@shannon/common';
+import type { RequestEnvelope, TaskContext, HierarchicalSubTask, TaskTreeState } from '@shannon/common';
 import { logger } from '../../../../../utils/logger.js';
 import { ExecutionResult } from '../../types.js';
 import { TaskTreePublisher } from './TaskTreePublisher.js';
@@ -14,6 +14,8 @@ export interface ToolExecutionContext {
     channelId: string | null;
     taskId: string;
     context: TaskContext | null;
+    envelope?: RequestEnvelope;
+    signal?: AbortSignal;
     steps: HierarchicalSubTask[];
     stepCounter: number;
     lastThinkingContent: string | null;
@@ -67,7 +69,14 @@ export class ToolExecutor {
                     currentThinking: execCtx.lastThinkingContent,
                     hierarchicalSubTasks: execCtx.steps,
                     currentSubTaskId: stepId,
-                }, execCtx.platform, execCtx.channelId, execCtx.taskId, execCtx.onTaskTreeUpdate);
+                }, {
+                    platform: execCtx.platform,
+                    channelId: execCtx.channelId,
+                    taskId: execCtx.taskId,
+                    envelope: execCtx.envelope,
+                    signal: execCtx.signal,
+                    onTaskTreeUpdate: execCtx.onTaskTreeUpdate,
+                });
             }
 
             if (execCtx.onToolStarting) {

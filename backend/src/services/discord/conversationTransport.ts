@@ -1,6 +1,8 @@
 import { ChannelType, PermissionFlagsBits, type Client } from 'discord.js';
 import { ConversationDeniedError, hasDiscordConversation, discordId, type DiscordConversationBinding, type DiscordHistoryEntry } from '../../modules/conversation/discordConversation.js';
 import type { DiscordConversationTransport } from '../common/discordConversationPort.js';
+import { deliverDiscordPlanning, listGuildEmojis, reactToMessage } from './planningDelivery.js';
+import type { TaskTreeState } from '@shannon/common';
 
 /** SDK boundary: recheck destination and current permissions before every I/O. */
 export function createDiscordConversationTransport(client: Client, isRunning: () => boolean): DiscordConversationTransport {
@@ -49,6 +51,22 @@ export function createDiscordConversationTransport(client: Client, isRunning: ()
         rows.push(Object.freeze({ messageId: msg.id, authorId: msg.author.id, text: msg.content.slice(0, 4000), timestamp: msg.createdTimestamp }));
       }
       return Object.freeze(rows.sort((a, b) => a.timestamp - b.timestamp).slice(-limit));
+    },
+    async react(binding, messageId, emojiId, signal) {
+      check(binding, false, signal);
+      const result = await reactToMessage(client, binding, messageId, emojiId);
+      if (!result.isSuccess) throw new ConversationDeniedError();
+      signal?.throwIfAborted();
+    },
+    async listEmojis(binding, signal) {
+      check(binding, false, signal);
+      if (!binding.guildId) throw new ConversationDeniedError();
+      return listGuildEmojis(client, binding.guildId);
+    },
+    async publishPlanning(binding, planning, taskId, signal) {
+      check(binding, false, signal);
+      await deliverDiscordPlanning(client, binding, planning as TaskTreeState, taskId, isRunning);
+      signal?.throwIfAborted();
     },
   } satisfies DiscordConversationTransport);
 }

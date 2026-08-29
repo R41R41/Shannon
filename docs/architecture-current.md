@@ -138,7 +138,7 @@ Radar の discovery スキルは general 袋の読み取り専用サブセット
 | 3. 同一 VM の別プロセス + HTTP | Express / Unix socket | クラッシュ分離、別の秘密、別のデプロイ | **LINE はすでにこれ**（15041）。本体と秘密・DB を分けた |
 | 4. 別ホスト / 別リポジトリ | サービスメッシュ、キュー | チーム分割、スケール | 不要。VM 1台で足りる間はコストだけ増える |
 
-EventBus は「何か起きた」通知（UI、ログ）には使える。**宛先認可・記憶検索・ツール実行の同期経路にしてはいけない。** ツールが `getEventBus().emit(send)` すると、port の拒否を迂回する。
+EventBus は「何か起きた」通知（UI、ログ）には使える。**宛先認可・記憶検索・ツール実行の同期経路にしてはいけない。** ツールが `getEventBus().publish(send)` すると、port の拒否を迂回する。Discord テキスト返信・履歴は `discordConversationPort`、Web 返信・計画通知は `webConversationPort` へ移行済み（`chat-on-web` / `update-plan` / `webDispatcher` / `TaskTreePublisher`）。EventBus 購読側は `sessionId` 付きイベントを全接続へ broadcast しない。
 
 フロントとバックエンドはすでに HTTP で分かれている。バックエンド同士を今すぐ Express で割ると、認証・envelope・中断を二重に実装することになる。**契約は port、実装は今は in-process、本当に秘密が違うものだけ別プロセス（LINE の前例）。** リポジトリ分割は port が安定してから。
 

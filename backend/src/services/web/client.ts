@@ -8,6 +8,8 @@ import { StatusAgent } from './agents/statusAgent.js';
 import { PlanningAgent } from './agents/planningAgent.js';
 import { SkillAgent } from './agents/skillAgent.js';
 import { AuthAgent } from './agents/authAgent.js';
+import { getEventBus } from '../eventBus/index.js';
+import { registerDefaultWebConversationTransport } from './webConversationTransport.js';
 export class WebClient {
   private static instance: WebClient;
   private openaiService: OpenAIClientService;
@@ -19,6 +21,7 @@ export class WebClient {
   private authService: AuthAgent;
 
   constructor(isTest: boolean, access: AccessService) {
+    registerDefaultWebConversationTransport(getEventBus());
     this.openaiService = OpenAIClientService.getInstance({
       port: isTest
         ? Number(PORTS.WEBSOCKET.OPENAI) + 10000
