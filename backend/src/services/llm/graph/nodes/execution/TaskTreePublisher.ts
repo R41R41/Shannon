@@ -19,7 +19,9 @@ export class TaskTreePublisher {
     ): void {
         const { platform, taskId, envelope, signal, onTaskTreeUpdate } = delivery;
         if (platform === 'minecraft' || platform === 'minebot') {
-            void this.postTaskTreeToMinebotUi(taskTree);
+            if (envelope?.minecraft?.serverId && envelope?.minecraft?.worldId) {
+                void this.postTaskTreeToMinebotUi(taskTree);
+            }
         }
         if (onTaskTreeUpdate) {
             try { onTaskTreeUpdate(taskTree); } catch { /* fire-and-forget */ }
@@ -60,7 +62,9 @@ export class TaskTreePublisher {
         source: string,
         content: string,
         metadata?: Record<string, unknown>,
+        envelope?: RequestEnvelope,
     ): Promise<void> {
+        if (!envelope?.minecraft?.serverId || !envelope?.minecraft?.worldId) return;
         try {
             const logEntry: Record<string, unknown> = {
                 timestamp: new Date().toISOString(),

@@ -6,6 +6,7 @@ export async function logToWeb(
   color: Color,
   content: string,
   isSave = false,
+  sessionId?: string,
 ): Promise<void> {
-  await getWebNotificationHub().log(memoryZone, color, content, isSave);
+  await getWebNotificationHub().log(memoryZone, color, content, isSave, sessionId);
 }

@@ -22,9 +22,28 @@ describe('memory store isolation', () => {
     }
   });
 
-  it('does not issue a Shannon scope for web or unknown channels', () => {
+  it('issues a private web scope for bound console sessions', () => {
+    const scope = deriveMemoryScope({
+      channel: 'web',
+      sourceUserId: 'firebase-uid-1',
+      conversationId: 'web:session-a',
+      threadId: 'web:session-a',
+      metadata: { sessionId: 'session-a' },
+    });
+    expect(scope?.visibilityScope).toBe('private_user');
+    expect(scope?.ownerUserId).toBe('web:firebase-uid-1');
+    expect(storesForPath('web')).toEqual(['scoped_shannon']);
+    expect(pathMayUseStore('web', 'scoped_shannon')).toBe(true);
+    expect(pathMayUseStore('web', 'scoped_person_quote')).toBe(false);
+  });
+
+  it('does not issue a Shannon scope for web without session binding or synthetic fallbacks', () => {
     expect(deriveMemoryScope({
       channel: 'web', sourceUserId: 'uid', conversationId: 'c', threadId: 't',
+    })).toBeNull();
+    expect(deriveMemoryScope({
+      channel: 'web', sourceUserId: 'web-user:session-a', conversationId: 'web:session-a', threadId: 'web:session-a',
+      metadata: { sessionId: 'session-a' },
     })).toBeNull();
     expect(deriveMemoryScope({
       channel: 'line', sourceUserId: 'U123', conversationId: 'c', threadId: 't',

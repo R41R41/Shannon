@@ -13,8 +13,7 @@ export class PlanningAgent extends WebSocketServiceBase {
   private constructor(config: WebSocketServiceConfig) {
     super(config);
     this.unsubscribePlanning = getWebNotificationHub().onPlanning((data) => {
-      if (data.sessionId) return;
-      this.broadcast({ type: 'web:planning', data: data as TaskTreeState });
+      this.broadcastWebPayload(data, { type: 'web:planning', data: data as TaskTreeState });
     });
   }
 
@@ -32,6 +31,10 @@ export class PlanningAgent extends WebSocketServiceBase {
       ws.on('close', () => { logger.debug('Planning client disconnected'); });
       this.onMessage(ws, async (message) => {
         const data = JSON.parse(message.toString());
+        if (data.type === 'web:bind-session' && typeof data.sessionId === 'string') {
+          this.bindWebSession(ws, data.sessionId);
+          return;
+        }
         if (data.type === 'ping') this.broadcast({ type: 'pong' });
       });
     });

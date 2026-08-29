@@ -12,6 +12,7 @@ const DISCORD: readonly MemoryStore[] = Object.freeze(['scoped_shannon', 'scoped
 const MINECRAFT: readonly MemoryStore[] = Object.freeze(['world_knowledge']);
 const LINE: readonly MemoryStore[] = Object.freeze(['line_ephemeral']);
 const RADAR: readonly MemoryStore[] = Object.freeze(['radar_owner']);
+const WEB: readonly MemoryStore[] = Object.freeze(['scoped_shannon']);
 
 const ALLOWED: Readonly<Record<MemoryPath, readonly MemoryStore[]>> = Object.freeze({
   discord_text: DISCORD,
@@ -19,7 +20,7 @@ const ALLOWED: Readonly<Record<MemoryPath, readonly MemoryStore[]>> = Object.fre
   line_chat: LINE,
   line_group: LINE,
   radar_personal: RADAR,
-  web: NONE,
+  web: WEB,
   x: NONE,
   youtube: NONE,
   scheduler: NONE,

@@ -6,6 +6,7 @@ const LogSchema = new mongoose.Schema<ILog>({
   memoryZone: { type: String, required: true },
   color: { type: String, required: true },
   content: { type: String, required: true },
+  sessionId: { type: String, required: false },
 });
 
 export default mongoose.model<ILog>('Log', LogSchema);

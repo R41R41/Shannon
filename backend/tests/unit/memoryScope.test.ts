@@ -310,3 +310,27 @@ it('Mongoose retains the scope stamp and never defaults a legacy document into a
   const fresh = new actual.ShannonMemory({ ...draft, source: 'fixture', ...scope }).toObject();
   expect(fresh).toMatchObject(scope);
 });
+
+const webEnvelope = (uid = 'firebase-1', session = 'session-a'): any => ({
+  requestId: 'request', channel: 'web', sourceUserId: uid, conversationId: `web:${session}`,
+  threadId: `web:${session}`, tags: ['web'], timestampIso: '2026-08-28T00:00:00Z',
+  metadata: { sessionId: session },
+});
+
+describe('web memory scope', () => {
+  it('does not authorize across web sessions even for the same uid', () => {
+    const a = webEnvelope('firebase-1', 'session-a');
+    const b = webEnvelope('firebase-1', 'session-b');
+    expect(canReadMemory(deriveMemoryScope(b), row(a))).toBe(false);
+    expect(canReadMemory(deriveMemoryScope(a), row(a))).toBe(true);
+  });
+
+  it('saves and searches only within the bound web session port', async () => {
+    const port = createRequestMemory(webEnvelope());
+    const denied = createRequestMemory({ channel: 'web', sourceUserId: 'firebase-1', conversationId: 'web:session-a', threadId: 'web:session-a' });
+    expect(await denied.save(draft)).toMatchObject({ saved: false });
+    expect(await port.save(draft)).toMatchObject({ saved: true });
+    expect(await port.search('knowledge', 'iron', 5)).toHaveLength(1);
+    expect(await createRequestMemory(webEnvelope('firebase-1', 'session-b')).search('knowledge', 'iron', 5)).toHaveLength(0);
+  });
+});

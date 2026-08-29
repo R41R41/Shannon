@@ -109,12 +109,14 @@ export class WebNotificationHub {
     color: Color,
     content: string,
     isSave: boolean = false,
+    sessionId?: string,
   ): Promise<void> {
     const logEntry: ILog = {
       timestamp: new Date(),
       memoryZone,
       color,
       content,
+      ...(sessionId ? { sessionId } : {}),
     };
     logger.info(content.length > 150 ? `${content.slice(0, 150)}...` : content, color);
     if (isSave) {

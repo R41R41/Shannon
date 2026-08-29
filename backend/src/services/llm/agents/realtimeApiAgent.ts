@@ -3,6 +3,8 @@ import { config } from '../../../config/env.js';
 import { models } from '../../../config/models.js';
 import { logger } from '../../../utils/logger.js';
 import { getWebNotificationHub } from '../../web/webNotificationHub.js';
+import type { Color } from '@shannon/common';
+import { assertWebRealtimeInputOwner } from '../../web/webRealtimeInputLock.js';
 
 export class RealtimeAPIService {
   private static instance: RealtimeAPIService;
@@ -30,6 +32,7 @@ export class RealtimeAPIService {
   private sessionRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private fatalError: boolean = false;
+  private responseSessionId: string | undefined;
   private static SESSION_REFRESH_MS = 55 * 60 * 1000; // 55分（60分上限の前に更新）
 
   constructor() {
@@ -95,6 +98,27 @@ export class RealtimeAPIService {
       RealtimeAPIService.instance = new RealtimeAPIService();
     }
     return RealtimeAPIService.instance;
+  }
+
+  setResponseSessionId(sessionId?: string): void {
+    const trimmed = sessionId?.trim();
+    this.responseSessionId = trimmed || undefined;
+  }
+
+  getResponseSessionId(): string | undefined {
+    return this.responseSessionId;
+  }
+
+  static clearResponseSessionIdForTests(): void {
+    RealtimeAPIService.getInstance().responseSessionId = undefined;
+  }
+
+  private logWeb(color: Color, content: string, isSave = false): void {
+    void getWebNotificationHub().log('web', color, content, isSave, this.responseSessionId);
+  }
+
+  private ensureInputOwner(): boolean {
+    return assertWebRealtimeInputOwner(this.responseSessionId);
   }
 
   setTextCallback(callback: (text: string) => void) {
@@ -216,7 +240,7 @@ export class RealtimeAPIService {
 
           case 'response.created':
             logger.info('Response creation started', 'blue');
-            void getWebNotificationHub().log('web', 'blue', 'Response creation started');
+            this.logWeb('blue', 'Response creation started');
             break;
 
           case 'response.text.delta':
@@ -229,7 +253,7 @@ export class RealtimeAPIService {
           case 'response.text.done':
           case 'response.output_text.done':
             logger.success('Text done');
-            void getWebNotificationHub().log('web', 'green', 'Text done');
+            this.logWeb('green', 'Text done');
             this.isTextResponseComplete = true;
             if (!this.isProcessingTextQueue && this.onTextDoneResponse) {
               this.onTextDoneResponse();
@@ -239,7 +263,7 @@ export class RealtimeAPIService {
 
           case 'input_audio_buffer.committed':
             logger.success('Speech committed');
-            void getWebNotificationHub().log('web', 'green', 'Speech committed');
+            this.logWeb('green', 'Speech committed');
             this.isUserTranscriptResponseComplete = false;
             break;
 
@@ -264,7 +288,7 @@ export class RealtimeAPIService {
           case 'response.audio.done':
           case 'response.output_audio.done':
             logger.success(`Response Audio completed: ${this.responseAudioBuffer.length} bytes`);
-            void getWebNotificationHub().log('web', 'green', 'Response Audio completed');
+            this.logWeb('green', 'Response Audio completed');
             this.isAudioResponseComplete = true;
             if (!this.isProcessingAudioQueue && this.onAudioDoneResponse) {
               this.onAudioDoneResponse();
@@ -282,7 +306,7 @@ export class RealtimeAPIService {
           case 'response.audio_transcript.done':
           case 'response.output_audio_transcript.done':
             logger.success('Transcript done');
-            void getWebNotificationHub().log('web', 'green', 'Transcript done');
+            this.logWeb('green', 'Transcript done');
             this.isTextResponseComplete = true;
             if (!this.isProcessingTextQueue && this.onTextDoneResponse) {
               this.onTextDoneResponse();
@@ -292,7 +316,7 @@ export class RealtimeAPIService {
 
           case 'conversation.item.input_audio_transcription.completed':
             logger.success('Transcript completed');
-            void getWebNotificationHub().log('web', 'green', 'Transcript completed');
+            this.logWeb('green', 'Transcript completed');
             this.isUserTranscriptResponseComplete = true;
             if (this.onUserTranscriptResponse && data.transcript) {
               this.onUserTranscriptResponse(data.transcript);
@@ -301,7 +325,7 @@ export class RealtimeAPIService {
 
           case 'error':
             logger.error(`Server error: ${JSON.stringify(data)}`);
-            void getWebNotificationHub().log('web', 'red', 'Server error', true);
+            this.logWeb('red', 'Server error', true);
             if (data.error?.code === 'beta_api_shape_disabled') {
               logger.error('[RealtimeAPI] GA移行が必要な致命的エラーのため再接続を停止します。');
               this.fatalError = true;
@@ -329,7 +353,7 @@ export class RealtimeAPIService {
 
       this.ws.on('error', (error) => {
         logger.error(`WebSocket error: ${error}`);
-        void getWebNotificationHub().log('web', 'red', 'WebSocket error');
+        this.logWeb('red', 'WebSocket error');
         if (!settled) {
           settled = true;
           reject(error);
@@ -338,7 +362,7 @@ export class RealtimeAPIService {
 
       this.ws.on('close', () => {
         logger.debug('WebSocket connection closed');
-        void getWebNotificationHub().log('web', 'red', 'WebSocket connection closed');
+        this.logWeb('red', 'WebSocket connection closed');
         this.initialized = false;
         if (!settled) {
           settled = true;
@@ -394,6 +418,7 @@ export class RealtimeAPIService {
 
   async inputText(text: string) {
     try {
+      if (!this.ensureInputOwner()) return;
       await this.ensureConnection();
 
       const textMessage = {
@@ -419,6 +444,7 @@ export class RealtimeAPIService {
 
   async inputAudioBufferAppend(data: string) {
     try {
+      if (!this.ensureInputOwner()) return;
       await this.ensureConnection();
 
       const audioMessage = {
@@ -433,6 +459,7 @@ export class RealtimeAPIService {
   }
 
   async inputAudioBufferCommit() {
+    if (!this.ensureInputOwner()) return;
     if (this.ws) {
       const commitMessage = {
         type: 'input_audio_buffer.commit',
@@ -451,15 +478,16 @@ export class RealtimeAPIService {
   }
 
   async vadModeChange(data: boolean) {
+    if (!this.ensureInputOwner()) return;
     if (this.ws) {
       this.isVadMode = data;
       if (this.isVadMode) {
         logger.info('VAD mode change: true', 'cyan');
-        void getWebNotificationHub().log('web', 'cyan', 'VAD mode change: true');
+        this.logWeb('cyan', 'VAD mode change: true');
         this.ws.send(JSON.stringify(this.vadSessionConfig));
       } else {
         logger.info('VAD mode change: false', 'cyan');
-        void getWebNotificationHub().log('web', 'cyan', 'VAD mode change: false');
+        this.logWeb('cyan', 'VAD mode change: false');
         this.ws.send(JSON.stringify(this.noVadSessionConfig));
       }
     }
@@ -497,9 +525,9 @@ export class RealtimeAPIService {
       await this.initializeSession();
 
       this.reconnectAttempts = 0; // 接続成功したらリセット
-      void getWebNotificationHub().log('web', 'white', 'Connected to OpenAI Realtime API');
+      this.logWeb('white', 'Connected to OpenAI Realtime API');
     } catch (error) {
-      void getWebNotificationHub().log('web', 'red', JSON.stringify(error), true);
+      this.logWeb('red', JSON.stringify(error), true);
       this.handleDisconnect();
     }
   }
@@ -507,17 +535,13 @@ export class RealtimeAPIService {
   private handleDisconnect() {
     if (this.reconnectAttempts < this.maxReconnectAttempts) {
       this.reconnectAttempts++;
-      void getWebNotificationHub().log(
-        'web',
-        'white',
-        `Attempting reconnect ${this.reconnectAttempts}/${this.maxReconnectAttempts}`
-      );
+      this.logWeb('white', `Attempting reconnect ${this.reconnectAttempts}/${this.maxReconnectAttempts}`);
 
       setTimeout(() => {
         this.connect();
       }, this.reconnectDelay);
     } else {
-      void getWebNotificationHub().log('web', 'red', 'Max reconnection attempts reached');
+      this.logWeb('red', 'Max reconnection attempts reached');
     }
   }
 

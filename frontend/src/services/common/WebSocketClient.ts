@@ -1,3 +1,5 @@
+import { createWebBindSessionMessage } from './webSessionBinding.js';
+
 export type ConnectionStatus = "connecting" | "connected" | "disconnected";
 
 export interface ConnectionInfo {
@@ -21,6 +23,7 @@ export abstract class WebSocketClientBase {
   private authenticated = false;
   private tokenProvider?: () => Promise<string>;
   private authTimeout: ReturnType<typeof setTimeout> | null = null;
+  private webSessionId?: string;
 
   /** EventEmitter-like listener store used by subclasses via on() / emit(). */
   protected listeners: Map<string, Set<Function>> = new Map();
@@ -28,6 +31,16 @@ export abstract class WebSocketClientBase {
   constructor(private url: string) {}
 
   public setTokenProvider(provider: () => Promise<string>) { this.tokenProvider = provider; }
+
+  public setWebSessionId(sessionId?: string) {
+    const trimmed = sessionId?.trim();
+    this.webSessionId = trimmed || undefined;
+  }
+
+  public bindWebSessionNow() {
+    if (!this.webSessionId || !this.authenticated || this.ws?.readyState !== WebSocket.OPEN) return;
+    this.ws.send(createWebBindSessionMessage(this.webSessionId));
+  }
 
   /**
    * Subscribe to an event. Returns an unsubscribe function.
@@ -131,6 +144,7 @@ export abstract class WebSocketClientBase {
     this.isConnecting = false;
     this.setStatus('connected');
     this.startPing();
+    this.bindWebSessionNow();
   }
 
   private startPing() {

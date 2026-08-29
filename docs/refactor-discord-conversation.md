@@ -38,7 +38,11 @@ coreは通常のfoundation型検査・SDK依存禁止検査の対象。port/tran
 
 ## 今回で完了しないこと
 
-旧Discord EventBusの他の発行元、音声のchannel単位の購読/抑止、planning・emotion等の配信、Web一斉配信、リアルタイム音声、ネイティブ入力時の旧getRecentMessages、全checkpointer/WorldKnowledge、別宛先への承認、記憶の訂正/忘却UI・派生データ撤回、queue回復は残る。
+planning・emotion等の**運用 telemetry**（status/skill/schedule）は管理 console 全体向け `broadcast()` として**会話イベントと分離**。monitoring ログは sessionId 付き会話ログと system ログを `shouldDeliverWebLog` で分岐。OpenAI Realtime API の物理接続共有は残るが入力 owner は 1 session に排他。全checkpointer/WorldKnowledge、別宛先への承認、記憶の訂正/忘却UI・派生データ撤回、queue回復、Discord outbound gateway の任意 channelId（テキスト以外）は残る。
+
+**2026-08-30 追記（RF-03 宛先認可オフライン完了）:** Web planning/post_message/realtime は sessionId 必須（未 bind / 未 scoped は破棄）。Discord voice session registry、Voice 履歴ガード、Minebot envelope/UI scope を unit で固定。global singleton `webRealtimeSession` と legacy 全接続 fallback、`matchesWebSession` 重複は削除。
+
+旧Discord EventBusの他の発行元は削除済み。リアルタイム音声の実機検証は未実施。
 
 DMのport/SDK adapter契約はfake clientで検証するが、BotのDM intentsや実接続を有効化したものではない。添付・音声ツールの制限は本番反映前に利用影響をレビューする。旧無制限ツールへ戻して制限を回避しない。
 
@@ -47,5 +51,9 @@ DMのport/SDK adapter契約はfake clientで検証するが、BotのDM intents�
 ## 検証実績 — 2026-08-28
 
 VM devでbackend411＋frontend18＝429テスト合格。第5段階から58件増加（専用56件＋実FCAの同時会話1件＋coordinatorの中断伝播1件）。core/memory/access integrationの通常型検査、common/frontend build、全backend noCheck変換、Node22 native probe成功。実adapterはfake Discord Clientで検証し、実Botへの送信や履歴取得は行っていない。
+
+## 検証実績 — 2026-08-30（RF-03 宛先認可オフライン）
+
+VM devで backend unit 1082 件合格（`discordVoiceSession` / `webNotificationRouting` / `minebotDispatcher` / `taskTreePublisher` / `webRealtimeSession` 追加）。Discord voice session registry と dispatcher guard、Web `web:bind-session` ルーティング、Minebot envelope scope、voice 履歴ガードを fake/loopback のみで検証。実Discord/ライブ起動・通常DB変更なし。起動ロック維持。
 
 prod95426bb clean、769ファイル/削除1パス不変、再起動後PID4318/開始時刻7761不変、health正常。起動ロック維持、通常DB書込み・env/Bot変更・本体起動・push・本番反映なし。第5段階の一時Mongo再検証も正常停止済み。

@@ -302,6 +302,8 @@ export interface ILog {
   memoryZone: MemoryZone;
   color: Color;
   content: string;
+  /** Web console session scope. Absent logs are system telemetry visible to all admins. */
+  sessionId?: string;
 }
 
 export type Color =
@@ -318,4 +320,5 @@ export interface LogEntry {
   memoryZone: string;
   color: Color;
   content: string;
+  sessionId?: string;
 }

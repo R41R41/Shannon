@@ -10,11 +10,15 @@ import {
   MinebotVoiceResponseOutput,
 } from '@shannon/common';
 import OpenAI from 'openai';
+import { randomUUID } from 'node:crypto';
 import type { RequestEnvelope, ShannonGraphState } from '@shannon/common';
 import { classifyError, formatErrorForLog } from '../../../errors/index.js';
 import { getDiscordMemoryZone } from '../../../utils/discord.js';
 import { getVoiceGateway } from '../../runtime/voiceGateway.js';
-import { voiceResponseChannelIds } from '../../discord/voiceState.js';
+import {
+  clearDiscordVoiceSession,
+  registerDiscordVoiceSession,
+} from '../../discord/discordVoiceSession.js';
 import {
   areFillersReady,
   selectFiller,
@@ -226,7 +230,14 @@ export class VoiceProcessor {
       }
     }
 
-    voiceResponseChannelIds.add(message.channelId);
+    const voiceRequestId = randomUUID();
+    registerDiscordVoiceSession({
+      guildId: message.guildId,
+      textChannelId: message.channelId,
+      userId: message.userId,
+      requestId: voiceRequestId,
+      expiresAt: Date.now() + 180_000,
+    });
 
     // 2b. Filler-only: queue fillers and return
     if (fillerResult.fillerOnly && fillerSequence && fillerSequence.audioBuffers.length > 0) {
@@ -247,7 +258,7 @@ export class VoiceProcessor {
       } as DiscordVoiceQueueEndInput);
       const totalMs = Date.now() - voiceStartTime;
       logger.info(`[Voice] Filler-only response (${Math.round(fillerSequence.totalDurationMs)}ms audio). STT: ${sttMs}ms | Total: ${totalMs}ms`, 'cyan');
-      voiceResponseChannelIds.delete(message.channelId);
+      clearDiscordVoiceSession(message.channelId, voiceRequestId);
       return;
     }
 
@@ -390,7 +401,7 @@ export class VoiceProcessor {
     );
     const responseText = await responsePromise;
     const llmMs = Date.now() - llmStartTime;
-    voiceResponseChannelIds.delete(message.channelId);
+    clearDiscordVoiceSession(message.channelId, voiceRequestId);
 
     if (!responseText) {
       logger.warn('[LLM] No response text for voice message');
@@ -475,7 +486,8 @@ export class VoiceProcessor {
       text: responseText,
     } as DiscordVoiceQueueEndInput);
 
-    voiceResponseChannelIds.delete(channelId);
+    clearDiscordVoiceSession(channelId);
+
     logger.info(`[Minebot Voice] Response complete`, 'magenta');
   }
 }

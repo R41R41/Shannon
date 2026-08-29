@@ -48,6 +48,13 @@ export function deriveMemoryScope(request?: MemoryRequest | null): MemoryScope |
     visibilityScope = 'shared_world';
     ownerUserId = `minecraft:${request.sourceUserId}`;
     parts = ['minecraft', 'world', m.serverId, m.worldId, m.dimension];
+  } else if (request.channel === 'web') {
+    const sessionId = request.metadata?.sessionId;
+    if (!id(sessionId) || !id(request.sourceUserId) || request.sourceUserId.startsWith('web-user:')
+      || request.metadata?.isDM === true) return null;
+    visibilityScope = 'private_user';
+    ownerUserId = `web:${request.sourceUserId}`;
+    parts = ['web', 'session', request.sourceUserId, sessionId, request.conversationId, request.threadId];
   } else {
     // LINE/Radar/Web/X/YouTube/scheduler are not Discord/Minecraft scopes. stores.ts forbids sharing.
     return null;

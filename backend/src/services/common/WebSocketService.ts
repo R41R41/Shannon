@@ -2,6 +2,7 @@ import type http from 'http';
 import WebSocket, { WebSocketServer } from 'ws';
 import { logger } from '../../utils/logger.js';
 import { requireCapability, type AccessService, type RequestContext } from '../../modules/access/index.js';
+import { shouldDeliverWebNotification } from '../web/webNotificationBridge.js';
 
 export interface WebSocketServiceConfig {
   port?: number;
@@ -26,6 +27,7 @@ export abstract class WebSocketServiceBase {
   private stopping: Promise<void> | null = null;
   private readonly contexts = new WeakMap<WebSocket, RequestContext>();
   private readonly pendingOutput = new WeakMap<WebSocket, unknown[]>();
+  private readonly webSessions = new WeakMap<WebSocket, string>();
 
   constructor(private readonly config: WebSocketServiceConfig) {
     this.serviceName = config.serviceName;
@@ -93,7 +95,7 @@ export abstract class WebSocketServiceBase {
       const deadline = setTimeout(() => ws.close(1008, 'Authentication required'), 10_000);
       deadline.unref();
       ws.on('error', () => {}); // Never log input or credentials.
-      ws.on('close', () => { clearTimeout(deadline); clearTimeout(lease); this.contexts.delete(ws); });
+      ws.on('close', () => { clearTimeout(deadline); clearTimeout(lease); this.contexts.delete(ws); this.webSessions.delete(ws); });
       const handshake = async (raw: WebSocket.RawData) => {
         if (busy) { ws.close(1008, 'Authentication pending'); return; }
         busy = true;
@@ -152,6 +154,19 @@ export abstract class WebSocketServiceBase {
     const pending = this.pendingOutput.get(ws);
     if (pending) { if (pending.length < 256) pending.push(data); return; }
     if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(data));
+  }
+  protected bindWebSession(ws: WebSocket, sessionId: string): void {
+    const trimmed = sessionId.trim();
+    if (!trimmed) throw new Error('Invalid web session');
+    this.webSessions.set(ws, trimmed);
+  }
+  protected getWebSessionId(ws: WebSocket): string | undefined {
+    return this.webSessions.get(ws);
+  }
+  protected broadcastWebPayload(payload: { sessionId?: string }, message: unknown): void {
+    for (const ws of this.activeConnections) {
+      if (shouldDeliverWebNotification(payload, this.getWebSessionId(ws))) this.sendTo(ws, message);
+    }
   }
   public broadcast(data: unknown): void {
     for (const ws of this.activeConnections) {

@@ -1,15 +1,31 @@
-import type { OpenAIMessageOutput } from '@shannon/common';
-import { deliverWebMessageToLlm as dispatchWebMessageToLlm } from '../runtime/llmInboundDispatch.js';
+/** Session-scoped Web console notification delivery helpers. */
 
-export function deliverWebMessageToLlm(
-  message: OpenAIMessageOutput & { recentChatLog?: string[]; sessionId?: string },
-): void {
-  dispatchWebMessageToLlm(message);
+export function shouldDeliverWebNotification(
+  payload: { sessionId?: string },
+  connectionSessionId?: string,
+): boolean {
+  if (!payload.sessionId) return false;
+  if (!connectionSessionId) return false;
+  return payload.sessionId === connectionSessionId;
 }
 
-export function matchesWebSession(
-  payload: { sessionId?: string },
-  sessionId: string,
+/** System logs omit sessionId; conversation logs must match the bound console session. */
+export function shouldDeliverWebLog(
+  entry: { sessionId?: string },
+  connectionSessionId?: string,
 ): boolean {
-  return !payload.sessionId || payload.sessionId === sessionId;
+  if (!entry.sessionId) return true;
+  if (!connectionSessionId) return false;
+  return entry.sessionId === connectionSessionId;
+}
+
+export function webLogHistoryFilter(sessionId: string): Record<string, unknown> {
+  return {
+    $or: [
+      { sessionId: { $exists: false } },
+      { sessionId: null },
+      { sessionId: '' },
+      { sessionId },
+    ],
+  };
 }

@@ -14,6 +14,7 @@ import {
 } from '@shannon/common';
 import type { RequestEnvelope, ShannonGraphState } from '@shannon/common';
 import { getWebNotificationHub } from '../../web/webNotificationHub.js';
+import { acquireWebRealtimeInput } from '../../web/webRealtimeInputLock.js';
 import { RealtimeAPIService } from '../agents/realtimeApiAgent.js';
 import {
   discordAdapter,
@@ -54,40 +55,44 @@ export class EventRouter {
 
   setupRealtimeAPICallback() {
     const hub = getWebNotificationHub();
+    const withSession = <T extends OpenAIMessageOutput>(payload: T): T & { sessionId?: string } => {
+      const sessionId = this.realtimeApi.getResponseSessionId();
+      return sessionId ? { ...payload, sessionId } : payload;
+    };
     this.realtimeApi.setTextCallback((text) => {
-      hub.emitPostMessage({
+      hub.emitPostMessage(withSession({
         type: 'realtime_text',
         realtime_text: text,
-      } as OpenAIMessageOutput);
+      } as OpenAIMessageOutput));
     });
 
     this.realtimeApi.setTextDoneCallback(() => {
-      hub.emitPostMessage({
+      hub.emitPostMessage(withSession({
         type: 'realtime_text',
         command: 'text_done',
-      } as OpenAIMessageOutput);
+      } as OpenAIMessageOutput));
     });
 
     this.realtimeApi.setAudioCallback((audio) => {
-      hub.emitPostMessage({
+      hub.emitPostMessage(withSession({
         realtime_audio: audio.toString(),
         type: 'realtime_audio',
         command: 'realtime_audio_append',
-      } as OpenAIMessageOutput);
+      } as OpenAIMessageOutput));
     });
 
     this.realtimeApi.setAudioDoneCallback(() => {
-      hub.emitPostMessage({
+      hub.emitPostMessage(withSession({
         type: 'realtime_audio',
         command: 'realtime_audio_commit',
-      } as OpenAIMessageOutput);
+      } as OpenAIMessageOutput));
     });
 
     this.realtimeApi.setUserTranscriptCallback((text) => {
-      hub.emitPostMessage({
+      hub.emitPostMessage(withSession({
         realtime_text: text,
         type: 'user_transcript',
-      } as OpenAIMessageOutput);
+      } as OpenAIMessageOutput));
     });
   }
 
@@ -144,11 +149,23 @@ export class EventRouter {
     });
   }
 
+  private isRealtimeWebMessage(message: OpenAIMessageOutput & { command?: string }): boolean {
+    if (message.type === 'realtime_text' || message.type === 'realtime_audio') return true;
+    if (message.command === 'realtime_vad_on' || message.command === 'realtime_vad_off') return true;
+    if (message.command === 'realtime_audio_commit') return true;
+    return false;
+  }
+
   private async processWebMessage(message: OpenAIMessageOutput & {
     recentChatLog?: string[];
     sessionId?: string;
+    sourceUserId?: string;
   }) {
     try {
+      if (this.isRealtimeWebMessage(message)) {
+        if (!message.sessionId || !acquireWebRealtimeInput(message.sessionId)) return;
+        this.realtimeApi.setResponseSessionId(message.sessionId);
+      }
       if (message.type === 'realtime_text' && message.realtime_text) {
         await this.realtimeApi.inputText(message.realtime_text);
         return;
@@ -178,6 +195,7 @@ export class EventRouter {
           senderName: message.senderName ?? undefined,
           recentChatLog: message.recentChatLog?.join('\n'),
           sessionId: message.sessionId,
+          sourceUserId: message.sourceUserId,
         });
         await this.invokeGraph(envelope);
       }

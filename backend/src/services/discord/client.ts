@@ -38,7 +38,7 @@ import { classifyError, formatErrorForLog } from '../../errors/index.js';
 import { getDiscordMemoryZone } from '../../utils/discord.js';
 import { createLogger } from '../../utils/logger.js';
 const logger = createLogger('Discord:Client');
-import { voiceResponseChannelIds } from './voiceState.js';
+import { authorizeDiscordVoiceOutbound, getDiscordVoiceSession } from './discordVoiceSession.js';
 import { loadServerChoices } from './serverChoices.js';
 import { BaseClient } from '../common/BaseClient.js';
 import { registerDiscordOutboundPort } from '../runtime/discordOutboundGateway.js';
@@ -124,7 +124,10 @@ export class DiscordBot extends BaseClient {
     this.voiceManager = new VoiceManager(this.client, {
       getUserNickname: (user, guildId) => this.getUserNickname(user, guildId),
       shouldSkipGuild: (guildId) => this.shouldSkipGuild(guildId),
-      getRecentMessages: (channelId, limit) => this.getRecentMessages(channelId, limit),
+      getRecentMessages: (channelId, limit) => {
+        if (!getDiscordVoiceSession(channelId)) return Promise.resolve([]);
+        return this.getRecentMessages(channelId, limit);
+      },
     });
 
     registerDiscordOutboundPort({
@@ -860,9 +863,10 @@ export class DiscordBot extends BaseClient {
     if (this.status !== 'running') return;
     const { text, channelId, guildId, imageUrl } = input;
 
-    if (voiceResponseChannelIds.has(channelId) && !text?.startsWith('🎤')) {
+    const activeVoice = authorizeDiscordVoiceOutbound({ guildId, channelId });
+    if (activeVoice && !text?.startsWith('🎤')) {
       this.voiceManager.notifyTextReply(channelId, text ?? '');
-      logger.info(`[Discord] Voice processing active, skipping normal text post for channel ${channelId}`, 'yellow');
+      logger.info(`[Discord] Voice session ${activeVoice.requestId} captured outbound text for channel ${channelId}`, 'yellow');
       return;
     }
 

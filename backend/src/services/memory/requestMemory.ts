@@ -43,6 +43,7 @@ export function snapshotMemoryEnvelope(envelope: RequestEnvelope): RequestEnvelo
     discord: d ? Object.freeze({ guildId: d.guildId, guildName: d.guildName, channelId: d.channelId,
       channelName: d.channelName, isDM: d.isDM, isVoiceChannel: d.isVoiceChannel, messageId: d.messageId }) : undefined,
     minecraft: m ? Object.freeze({ serverId: m.serverId, worldId: m.worldId, dimension: m.dimension }) : undefined,
-    metadata: Object.freeze({ isDM: envelope.metadata?.isDM, memoryDisabled: envelope.metadata?.memoryDisabled }),
+    metadata: Object.freeze({ isDM: envelope.metadata?.isDM, memoryDisabled: envelope.metadata?.memoryDisabled,
+      sessionId: typeof envelope.metadata?.sessionId === 'string' ? envelope.metadata.sessionId : undefined }),
   });
 }

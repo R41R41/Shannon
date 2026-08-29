@@ -136,6 +136,22 @@ describe('operational socket teardown', () => {
 describe('operational socket authentication', () => {
   class Client extends WebSocketClientBase { seen: string[]=[]; constructor(url='wss://example.test/ws'){super(url)} protected handleMessage(data:string){this.seen.push(data)} }
   function prepare(){vi.useFakeTimers();vi.stubGlobal('window',{setTimeout,setInterval,location:{protocol:'https:',hostname:'example.test'}});}
+  it('binds the console session after server authentication', async () => {
+    prepare();
+    const client = new Client();
+    client.setWebSessionId('session-a');
+    client.setTokenProvider(async () => 'signed-token');
+    client.connect();
+    const socket = FakeSocket.instances[0];
+    socket.readyState = FakeSocket.OPEN;
+    await socket.onopen?.();
+    socket.message({ type: 'auth:ready' });
+    expect(socket.sent.map((raw) => JSON.parse(raw))).toEqual([
+      { type: 'auth:check', idToken: 'signed-token' },
+      { type: 'web:bind-session', sessionId: 'session-a' },
+    ]);
+    client.disconnect();
+  });
   it('does not send operations or expose data before server acknowledgement',async()=>{
     prepare();const client=new Client();client.setTokenProvider(async()=> 'signed-token');client.connect();const socket=FakeSocket.instances[0];socket.readyState=FakeSocket.OPEN;
     await socket.onopen?.();client.send('{"type":"operation"}');expect(socket.sent.map(x=>JSON.parse(x).type)).toEqual(['auth:check']);expect(client.status).toBe('connecting');

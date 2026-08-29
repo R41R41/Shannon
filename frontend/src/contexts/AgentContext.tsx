@@ -22,7 +22,7 @@ export interface AgentContextType {
 const AgentContext = createContext<AgentContextType | null>(null);
 
 export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { user: userInfo } = useAuthSession();
+  const { user: userInfo, sessionKey } = useAuthSession();
   const [monitoring, setMonitoring] = useState<MonitoringAgent | null>(null);
   const [openai, setOpenai] = useState<OpenAIAgent | null>(null);
   const [scheduler, setScheduler] = useState<SchedulerAgent | null>(null);
@@ -39,14 +39,20 @@ export const AgentProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setPlanning(webClient.planningService);
     setSkill(webClient.skillService);
 
-    if (userInfo?.isAdmin && !webClient.isConnected()) {
-      webClient.start();
+    webClient.setWebSessionId(sessionKey ?? undefined);
+
+    if (userInfo?.isAdmin && sessionKey) {
+      if (!webClient.isConnected()) {
+        webClient.start(sessionKey);
+      } else {
+        webClient.bindWebSession();
+      }
     }
 
     return () => {
       webClient.disconnect();
     };
-  }, [userInfo]);
+  }, [userInfo, sessionKey]);
 
   const value = useMemo<AgentContextType>(
     () => ({

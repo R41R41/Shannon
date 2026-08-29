@@ -100,6 +100,7 @@ export class ToolExecutor {
                         execCtx.goal, 'tool_call', 'info', toolCall.name,
                         `${toolCall.name} を実行中...`,
                         { toolName: toolCall.name, parameters: toolCall.args },
+                        execCtx.envelope,
                     );
                 }
 
@@ -121,6 +122,7 @@ export class ToolExecutor {
                         toolCall.name,
                         resultStr.substring(0, 300),
                         { toolName: toolCall.name, parameters: toolCall.args, duration, result: resultStr.substring(0, 200) },
+                        execCtx.envelope,
                     );
                 }
 

@@ -20,6 +20,7 @@ export interface WebNativeEvent {
   senderName?: string;
   recentChatLog?: string;
   sessionId?: string;
+  sourceUserId?: string;
 }
 
 export const webAdapter: ChannelAdapter<WebNativeEvent> = {
@@ -29,10 +30,11 @@ export const webAdapter: ChannelAdapter<WebNativeEvent> = {
     const text = event.text ?? event.realtimeText ?? '';
     const tags: string[] = [event.type];
     const sessionId = event.sessionId ?? 'web-default';
+    const sourceUserId = event.sourceUserId ?? `web-user:${sessionId}`;
 
     return createEnvelope({
       channel: 'web',
-      sourceUserId: event.senderName ?? `web-user:${sessionId}`,
+      sourceUserId,
       sourceDisplayName: event.senderName,
       conversationId: `web:${sessionId}`,
       threadId: `web:${sessionId}`,

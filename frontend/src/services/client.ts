@@ -39,16 +39,28 @@ export class WebClient {
     };
     for (const service of [this.openaiService, this.monitoringService, this.schedulerService,
       this.statusService, this.planningService, this.skillService]) service.setTokenProvider(getToken);
+  }
 
+  private sessionScopedServices() {
+    return [this.openaiService, this.monitoringService, this.planningService] as const;
+  }
+
+  public setWebSessionId(sessionId?: string) {
+    for (const service of this.sessionScopedServices()) service.setWebSessionId(sessionId);
+  }
+
+  public bindWebSession() {
+    for (const service of this.sessionScopedServices()) service.bindWebSessionNow();
   }
 
   public isConnected(): boolean {
     return this.connected;
   }
 
-  public start() {
+  public start(sessionId?: string) {
     if (this.connected) return;
 
+    this.setWebSessionId(sessionId);
     this.disconnect();
 
     this.openaiService.connect();

@@ -14,6 +14,7 @@ import type {
 } from '@shannon/common';
 import { getDiscordOutboundPort } from '../../runtime/discordOutboundGateway.js';
 import { createRequestDiscordConversation } from '../discordConversationPort.js';
+import { authorizeDiscordVoiceOutbound } from '../../discord/discordVoiceSession.js';
 import { createLogger } from '../../../utils/logger.js';
 const logger = createLogger('DiscordDispatcher', 'discord');
 
@@ -42,6 +43,10 @@ export const discordDispatcher: ActionDispatcher = {
 
     if (!channelId || !guildId) {
       logger.warn('[DiscordDispatcher] Missing channelId/guildId in envelope, cannot dispatch');
+      return;
+    }
+    if (!authorizeDiscordVoiceOutbound({ guildId, channelId })) {
+      logger.warn('[DiscordDispatcher] No active voice session for outbound voice dispatch');
       return;
     }
 

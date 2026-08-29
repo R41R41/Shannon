@@ -129,6 +129,8 @@ Radar の discovery スキルは general 袋の読み取り専用サブセット
 
 ライの問い「疎結合・将来リポジトリ分割・いまは VM 1台」に対する答え。
 
+**2026-08-30 更新:** Web 会話ログは `ILog.sessionId` で monitoring 配信を session 限定（system ログは sessionId なしで全 admin 向け）。Web 長期記憶は Firebase UID + bound session の private scope。OpenAI Realtime 入力は `webRealtimeInputLock` で単一 session 排他。
+
 **2026-08-29 更新:** 旧 `EventBus`（共有グローバル pub/sub）は削除済み。UI 通知は `WebNotificationHub`、LLM 入口は `llmInboundDispatch`、サービス start/stop は `serviceCommandRegistry`、外部ツール RPC は `platformToolGateway`、Discord 送信は conversation/outbound port、Voice は `voiceGateway`、Minebot スキルは `minebotSkillGateway`。
 
 | 段階 | 何か | 向いていること | Shannon での位置 |
@@ -138,7 +140,7 @@ Radar の discovery スキルは general 袋の読み取り専用サブセット
 | 3. 同一 VM の別プロセス + HTTP | Express / Unix socket | クラッシュ分離、別の秘密、別のデプロイ | **LINE はすでにこれ**（15041） |
 | 4. 別ホスト / 別リポジトリ | サービスメッシュ、キュー | チーム分割、スケール | 不要。VM 1台で足りる間はコストだけ増える |
 
-**宛先認可・記憶検索・ツール実行の同期経路に pub/sub を使わない。** Discord テキスト返信・履歴は `discordConversationPort`、Web 返信・計画通知は `webConversationPort` / `WebNotificationHub`（sessionId でフィルタ）。
+**宛先認可・記憶検索・ツール実行の同期経路に pub/sub を使わない。** Discord テキスト返信・履歴は `discordConversationPort`、Web 返信・計画通知は `webConversationPort` / `WebNotificationHub`（`web:bind-session` 必須、sessionId 不一致は破棄）。Discord 音声 outbound は `discordVoiceSession`。Minebot skill dispatch / UI Mod POST は envelope の minecraft scope 必須。**会話イベント**と**運用 telemetry**（status/skill/schedule/log）は配信経路を分ける。
 
 フロントとバックエンドはすでに HTTP で分かれている。**契約は port/gateway、実装は in-process、本当に秘密が違うものだけ別プロセス（LINE の前例）。**
 
@@ -236,7 +238,7 @@ Discord の旧 `FunctionCallingAgentState` 1袋は解消。Minecraft Executor �
 |---|---|
 | Web public chat | 停止（503 相当の方針） |
 | Web 管理 console | Firebase UID + 認可フラグ。公開管理者登録は復活させない |
-| Discord | Bot トークン。会話 port で返信先を制限 |
+| Discord | Bot トークン。テキストは会話 port、音声は voice session registry |
 | LINE 1:1 | Messaging API。本体ログインと未結合 |
 | LINE グループ | allowlist。個人 Radar / 旧人物記憶を流さない |
 
@@ -257,6 +259,8 @@ Discord の旧 `FunctionCallingAgentState` 1袋は解消。Minecraft Executor �
 | LINE runtime | `backend/src/services/line/runtime.ts` |
 | Radar FCA | `backend/src/services/radar/radarFca.ts` |
 | Runtime gateways | `backend/src/services/runtime/`（Hub, tool/voice/minebot/scheduler registry） |
+| Web session routing | `backend/src/services/web/webNotificationBridge.ts`, `WebSocketService.ts`, `RealtimeAPIService.responseSessionId`, `webRealtimeInputLock.ts` |
+| Discord voice session | `backend/src/services/discord/discordVoiceSession.ts` |
 
 ---
 
@@ -264,6 +268,9 @@ Discord の旧 `FunctionCallingAgentState` 1袋は解消。Minecraft Executor �
 
 | 日付 | 内容 |
 |---|---|
+| 2026-08-30 | ログ session タグ・Web 記憶 scope・Realtime 入力排他。`ILog.sessionId`、monitoring の session フィルタ、Web `deriveMemoryScope`（Firebase UID + session）、`webRealtimeInputLock`。unit 1092 件。 |
+| 2026-08-30 | フロント `web:bind-session` 配線。`AuthSession.sessionKey` を openai/planning/monitoring WS に post-auth で送信。 |
+| 2026-08-30 | RF-03 宛先認可（オフライン）完了。Web session ルーティング、Discord voice session、Minebot envelope/UI scope、voice 履歴ガード、realtime hub の sessionId 付与。unit 1082 件。実 Discord/ライブ起動は dev ロック下の別工程。 |
 | 2026-08-30 | C（LINE/Radar オフライン）完了。`lineRadarFcaSelection` / `LineRadarWorker` FCA 経路、`invokeShannonGraph` adapter 配線、`MinebotTaskRuntime`→graph executor の channel hook 透過を unit で固定。実 LINE/Webhook/OAuth/通常 DB は dev ロック下の別工程。 |
 | 2026-08-29 | 現行に合わせて全面更新。Executor は Minecraft 主パスで FCA 置換ではない。共有核・LINE 分離・記憶混在禁止・ツール2袋・port 契約を記載。投稿エージェントを核へ統合。Discord から Twitter 投稿ツールを除外。WorldKnowledge とタスク引継ぎを server/world 単位に。 |
 | 2026-04-04 | （旧）Minebot 戦闘ツールフィルタ等。当時の「FCA 削除済み」は実装と不一致。 |

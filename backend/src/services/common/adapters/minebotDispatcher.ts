@@ -19,7 +19,11 @@ let minebotDispatchQueue: Promise<void> = Promise.resolve();
 export const minebotDispatcher: ActionDispatcher = {
   channel: 'minecraft',
 
-  async dispatch(_envelope: RequestEnvelope, plan: ShannonActionPlan): Promise<void> {
+  async dispatch(envelope: RequestEnvelope, plan: ShannonActionPlan): Promise<void> {
+    if (!envelope.minecraft?.serverId || !envelope.minecraft?.worldId) {
+      logger.warn('[MinebotDispatcher] Missing minecraft server/world scope in envelope');
+      return;
+    }
     const actions = plan.minecraftActions ?? [];
     const invocations = actions.length > 0
       ? actions.flatMap(mapActionToInvocations)

@@ -10,8 +10,9 @@ import {
   WebSocketServiceConfig,
 } from '../../common/WebSocketService.js';
 import { logger } from '../../../utils/logger.js';
-import { deliverWebMessageToLlm } from '../webNotificationBridge.js';
+import { deliverWebMessageToLlm } from '../../runtime/llmInboundDispatch.js';
 import { getWebNotificationHub } from '../webNotificationHub.js';
+import { releaseWebRealtimeInput } from '../webRealtimeInputLock.js';
 
 export class OpenAIClientService extends WebSocketServiceBase {
   private static instance: OpenAIClientService | null = null;
@@ -21,9 +22,7 @@ export class OpenAIClientService extends WebSocketServiceBase {
     super(config);
 
     this.hubUnsubscribe = getWebNotificationHub().onPostMessage((data) => {
-      if (data.sessionId) return;
-      if (data.type === 'text' && data.text) void getWebNotificationHub().log('web', 'white', data.text, true);
-      this.broadcast(data);
+      this.broadcastWebPayload(data, data);
     });
   }
 
@@ -43,15 +42,25 @@ export class OpenAIClientService extends WebSocketServiceBase {
       this.handleNewConnection(ws);
 
       ws.on('close', () => {
+        releaseWebRealtimeInput(this.getWebSessionId(ws));
         logger.debug('OpenAI client disconnected');
       });
 
       this.onMessage(ws, (message) => {
         try {
           const data = JSON.parse(message.toString());
+          const sessionId = this.getWebSessionId(ws);
 
           if (data.type === 'ping') {
             this.broadcast({ type: 'pong' } as OpenAIMessageOutput);
+            return;
+          }
+          if (data.type === 'web:bind-session' && typeof data.sessionId === 'string') {
+            this.bindWebSession(ws, data.sessionId);
+            return;
+          }
+          if (!sessionId) {
+            logger.warn('[OpenAIClientService] Dropping web message without bound session');
             return;
           }
           logger.info(
@@ -65,30 +74,34 @@ export class OpenAIClientService extends WebSocketServiceBase {
             'blue',
           );
           if (data.type === 'realtime_text' && data.realtime_text) {
-            void getWebNotificationHub().log('web', 'white', data.realtime_text);
+            void getWebNotificationHub().log('web', 'white', data.realtime_text, false, sessionId);
             deliverWebMessageToLlm({
               type: 'realtime_text',
               realtime_text: data.realtime_text,
-            } as OpenAIRealTimeTextInput);
+              sessionId,
+            } as OpenAIRealTimeTextInput & { sessionId: string });
           } else if (
             data.type === 'text' &&
             data.text &&
             data.recentChatLog &&
             data.senderName
           ) {
-            void getWebNotificationHub().log('web', 'white', data.text, true);
+            void getWebNotificationHub().log('web', 'white', data.text, true, sessionId);
             deliverWebMessageToLlm({
               type: 'text',
               text: data.text,
               senderName: this.getContext(ws).principal.name,
               recentChatLog: data.recentChatLog,
-            } as OpenAITextInput);
+              sessionId,
+              sourceUserId: this.getContext(ws).principal.uid,
+            } as OpenAITextInput & { sessionId: string; sourceUserId: string });
           } else if (data.type === 'realtime_audio' && data.realtime_audio) {
             deliverWebMessageToLlm({
               type: 'realtime_audio',
               realtime_audio: data.realtime_audio,
               command: 'realtime_audio_append',
-            } as OpenAIRealTimeAudioInput);
+              sessionId,
+            } as OpenAIRealTimeAudioInput & { sessionId: string });
           } else if (
             data.type === 'realtime_audio' &&
             data.command === 'realtime_audio_commit'
@@ -96,28 +109,33 @@ export class OpenAIClientService extends WebSocketServiceBase {
             deliverWebMessageToLlm({
               type: 'command',
               command: 'realtime_audio_commit',
-            } as OpenAICommandInput);
+              sessionId,
+            } as OpenAICommandInput & { sessionId: string });
           } else if (data.type === 'command' && data.command) {
-            void getWebNotificationHub().log('web', 'white', 'received realtime voice commit', true);
+            void getWebNotificationHub().log('web', 'white', 'received realtime voice commit', true, sessionId);
             deliverWebMessageToLlm({
               type: 'command',
               command: data.command,
-            } as OpenAICommandInput);
+              sessionId,
+            } as OpenAICommandInput & { sessionId: string });
           } else if (data.command === 'realtime_vad_on') {
-            void getWebNotificationHub().log('web', 'white', 'received realtime vad on');
+            void getWebNotificationHub().log('web', 'white', 'received realtime vad on', false, sessionId);
             deliverWebMessageToLlm({
               type: 'command',
               command: data.command,
-            } as OpenAICommandInput);
+              sessionId,
+            } as OpenAICommandInput & { sessionId: string });
           } else if (data.command === 'realtime_vad_off') {
-            void getWebNotificationHub().log('web', 'white', 'received realtime vad off');
+            void getWebNotificationHub().log('web', 'white', 'received realtime vad off', false, sessionId);
             deliverWebMessageToLlm({
               type: 'command',
               command: data.command,
-            } as OpenAICommandInput);
+              sessionId,
+            } as OpenAICommandInput & { sessionId: string });
           }
         } catch (error) {
-          void getWebNotificationHub().log('web', 'red', 'Error processing message:' + error, true);
+          const sessionId = this.getWebSessionId(ws);
+          void getWebNotificationHub().log('web', 'red', 'Error processing message:' + error, true, sessionId);
           logger.error('Error processing message:', error);
         }
       });

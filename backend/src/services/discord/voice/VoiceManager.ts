@@ -47,7 +47,6 @@ import { fileURLToPath } from 'node:url';
 import { createLogger } from '../../../utils/logger.js';
 const logger = createLogger('Discord:Voice');
 import { getDiscordMemoryZone } from '../../../utils/discord.js';
-import { voiceResponseChannelIds } from '../voiceState.js';
 import { loadFillers, generateAllFillers } from '../voiceFiller.js';
 import { sendLongMessage } from '../utils.js';
 import { deliverDiscordMessageToLlm } from '../../runtime/llmInboundDispatch.js';
