@@ -4,7 +4,7 @@ export const YOUTUBE_READONLY_SCOPE = 'https://www.googleapis.com/auth/youtube.r
 const channelId = (value: unknown): value is string => typeof value === 'string' && /^UC[A-Za-z0-9_-]{22}$/.test(value);
 const videoId = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9_-]{11}$/.test(value);
 const clean = (value: unknown, max: number) => typeof value === 'string' && value.trim() && value.length <= max ? value.trim() : undefined;
-const key = (owner: string, id: string) => createHash('sha256').update(JSON.stringify([owner, id])).digest('hex');
+export const youtubeDeliveryKey = (owner: string, id: string) => createHash('sha256').update(JSON.stringify([owner, id])).digest('hex');
 
 export type YouTubeViewState = 'viewed' | 'unviewed' | 'unknown';
 export interface YouTubeReadGrant {
@@ -94,7 +94,7 @@ export async function reserveUnseenYouTubeUploads(owner: string, uploads: readon
     if (!['viewed','unviewed','unknown'].includes(state)) throw new YouTubeSubscriptionError('INVALID_VIEW_STATE');
     if (state === 'viewed' || (state === 'unknown' && policy.unknownViewState === 'defer')) continue;
     // The receipt key is intentionally derived inside the persistence adapter contract; callers never treat title/URL as identity.
-    if (await receipts.reserve(owner, key(owner, upload.videoId), now)) selected.push(upload);
+    if (await receipts.reserve(owner, youtubeDeliveryKey(owner, upload.videoId), now)) selected.push(upload);
     if (selected.length >= policy.maxCandidates) break;
   }
   return Object.freeze(selected);

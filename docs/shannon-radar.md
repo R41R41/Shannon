@@ -492,3 +492,38 @@ YouTube公式Data APIはwatch historyを取得できない。`playlistItems.list
 dev追加は`youtubeSubscriptionInbox.ts`と`youtubeDataApi.ts`、対象10テスト。OAuth broker、実Google project/client、token保護保存、実登録同期、永続receipt、LINE worker/policyへの接続、本人によるunknown扱いの決定は未完。本体/LINE runtimeは起動せず、実Google/LINE送信・通常DB・prodは変更していない。
 
 公式根拠：[subscriptions.list](https://developers.google.com/youtube/v3/docs/subscriptions/list)、[playlistItems.list errors](https://developers.google.com/youtube/v3/docs/playlistItems/list)、[OAuth web server/offline access](https://developers.google.com/youtube/v3/guides/auth/server-side-web-apps)、[watch history廃止記録](https://developers.google.com/youtube/v3/revision_history)。
+
+## 21. RAD-FCA-1：情報取得スキルとRadar専用FCA（2026-08-29、dev基盤）
+
+### 方針変更
+
+YouTube候補だけを一度のLLM呼出で順位付けする専用ranker案は採用しない。ShannonのFunction Calling方式をRadar向けに分離し、取得元ごとの読み取りスキルをRadar専用FCAが必要に応じて呼び、最大5件の配信案を提出する。登録YouTubeだけでなく、X、Web、天気、Calendar、選択Notion、重要未読Gmail、許可Discordを同じ拡張形式で追加できるようにする。
+
+会話用FCAは感情・会話記憶・TaskEpisode・EventBus・多数の投稿ツールを持つため、定期Radarへそのまま流用しない。Radar専用FCAは一回限りのsessionで、会話記憶、人物記憶、旧EventBus、Discord/LINE transport、投稿・いいね・返信・既読化・削除の権限を持たない。利用可能なtool catalogはそのrunで注入された読み取りスキルと`submit_personal_digest`だけ。FCAの提出はdraftであり、送信ではない。
+
+### laneと情報境界
+
+| lane | 配信先 | 利用可能にする情報源 | 禁止 |
+| --- | --- | --- | --- |
+| personal | 本人LINE 1対1 | 登録YouTube、X、選択Web、天気、本人Calendar、本人が選択したNotion、明示許可した重要未読Gmail | 個人情報をDiscord/LINEグループへ渡す、メール送信/返信/既読化、Calendar/Notion編集 |
+| community | Shannon所有の許可Discordチャンネル | 公開YouTube/X/Web、許可Discordチャンネル | Gmail、個人Calendar、個人Notion、DM/未許可Discord、メンション/返信催促 |
+
+source数を実装上の上限理由にしない。毎回すべてを読むのではなく、実行目的ごとのcatalog、1スキルあたりの候補上限、呼出回数、取得予算、同意期限をサーバーが強制する。初回personal MVPはYouTube・Calendar・天気・選択Web。Xはread adapterと費用を確認後、Notionはページ/DB選択UI後、Gmailは最小scope・重要未読の定義・本文範囲・保持説明後に有効化する。communityは別worker/予算/outboxで導入する。
+
+### dev実装
+
+- `get_unshared_youtube_videos`：本人のread-only OAuth bindingから登録チャンネル新着を取得し、同期開始後かつ直近72時間、最大20件を返す。watch historyは使わず「YouTube上で未視聴」と断定しない。
+- `search_shareable_tweets`：最大20件、1run最大2検索のread-only port。既存の投稿/いいね等のTwitter clientを直接渡さない。
+- `search_web_for_sharing`：最大10件、1run最大2検索のread-only port。実portは既存のpublic HTTPS/DNS pin/size/timeout境界を満たす必要がある。
+- 任意登録口：Calendar最大20、天気最大3、選択Notion最大10、重要未読Gmail最大10、許可Discord最大20。personal/community laneに合わないtoolはmodelへbindせず、名前を直接指定されても拒否する。
+- `submit_personal_digest`：そのrunで取得済みのopaque candidate IDだけを0〜5件提出する。0件なら沈黙理由必須。候補文字列中の命令を無視し、未知ID、重複、余分なfield、6件以上を拒否する。このtoolは送信しない。
+- `RadarFca`：最大6turn/8 tool call、1応答最大3 tool call。固定system prompt、tool resultをuntrusted dataとして扱い、submitなしの文章終了、未許可tool、異常応答ではfail closedする。
+- `radardeliveryreceipts`：owner＋source＋外部IDのSHA-256だけを永久insert-onlyで保持。title、URL、検索query、OAuth情報を保存しない。FCA提出後・outbox前に選択分だけを予約し、重複key競合分を除く。失敗/結果不明でも予約を返さない。
+
+Data API、FCA model、Mongoはいずれも明示port/credentialsで、constructorやmodule import時に接続しない。Mongo collectionはアプリ起動時に自動作成せず、review済みstrict/error validatorをread-only fenceで確認してから使う。今回はvalidatorの通常DB適用、OAuth broker、X/Web実port、Calendar/天気catalog bridge、LINE worker/outbox接続、実LLM/実取得/実送信をしていない。
+
+### 配信policyとの分離
+
+FCAは「何を候補にして最大5件のdraftを出すか」だけを判断する。今送るか、時刻、静音、LINE月間/24h予算、Discord承認、同意/停止、outbox予約、最終権限、再送しない扱いは既存delivery policyが決める。FCAが5件選んでもpolicyは沈黙・延期・削減できる。反応なしを負のfeedbackにせず、将来のfeedback値は小さな明示signalとして別portから渡す。
+
+初回接続順は、Google OAuth brokerとreceipt validatorを隔離devへ導入 → YouTube skillを実同期 → 既存Calendar/天気adapterをpersonal skillへ接続 → Radar FCA draftをLINE outboxへ接続 → 実スマホ受信/停止/重複/再起動検証。X/Notion/Gmail/Discordをこのdev実接続の完了条件にしない。
