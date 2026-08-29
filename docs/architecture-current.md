@@ -47,10 +47,10 @@ execute:
     → ShannonExecutor（InstantSkills / Routines / prompt cache）
     → 例外時のみ FunctionCallingAgent（= 共有核 + LangChain ツール袋）
   それ以外（Discord / Web 等）
-    → FunctionCallingAgent / 任意で ParallelExecutor
+    → FunctionCallingAgent
 ```
 
-`ClassifyNode` と `SubTaskPlannerNode` / `SubTaskExecutor` は削除済み。`EmotionNode` / `MetaCognitionLoop` / `MemoryAgent` は残っているが、既定グラフは使わず `SHANNON_GRAPH_VERSION=full` や `SHANNON_COGNITIVE_LOOPS=true` でしか動かない。`MemoryNode` は互換の空実装。未参照のコードは [削除ゲート](./deletion-gate.md) が止める。
+感情・メタ認知の3並列（`EmotionNode` / `EmotionLoop` / `MetaCognitionLoop` / `ParallelExecutor`）と `ClassifyNode` / `SubTaskPlannerNode` / `SubTaskExecutor` は削除済み。`EmotionType` も画面・音声・共有型から消えた。Discord 音声の感情は Voicepeak 自身の `analyzeEmotionForTTS` で、Plutchik とは別系統。`CognitiveBlackboard` と `MemoryAgent` は記憶ツールの型として残るが、注入元がないため実行時には現れない。`MemoryNode` は互換の空実装。未参照のコードは [削除ゲート](./deletion-gate.md) が止める。
 
 LINE と Radar はこのグラフに入らない。独立 HTTP runtime。
 

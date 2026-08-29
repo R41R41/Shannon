@@ -9,7 +9,7 @@ import { minecraftTaskContinuation } from '../../minebot/runtime/minecraftTaskCo
  * Emergency: ingest → emergency_fastpath → execute → writeback
  *
  * Execute: ShannonExecutor (Anthropic API 直接) が主パス。
- * FCA/ParallelExecutor はフォールバック。
+ * FCA はフォールバック。
  */
 
 import { Annotation, END, START, StateGraph } from '@langchain/langgraph';
@@ -28,11 +28,9 @@ import type {
 } from '@shannon/common';
 import { inferInitialMode, envelopeToTaskContext } from './stateBridge.js';
 import { actionFormatterNode } from '../../common/adapters/actionFormatter.js';
-import { EmotionNode, EmotionState } from './nodes/EmotionNode.js';
 import { FunctionCallingAgent } from './nodes/FunctionCallingAgent.js';
 import { ScopedMemoryService } from '../../memory/scopedMemoryService.js';
 import { ModelSelector } from './cognitive/ModelSelector.js';
-import { ParallelExecutor } from './cognitive/ParallelExecutor.js';
 import { TaskEpisodeMemory } from './cognitive/TaskEpisodeMemory.js';
 import type { ExecutionResult } from './types.js';
 
@@ -110,32 +108,24 @@ async function emergencyFastpathNode(state: ShannonStateType): Promise<Partial<S
 }
 
 /**
- * execute: Delegates to SubTaskExecutor (if subtaskPlan exists),
- * ParallelExecutor (3 async loops), or FCA-only mode.
+ * execute: Delegates to ShannonExecutor (Minecraft) or the FCA.
  */
 function createExecuteNode(
   fca: FunctionCallingAgent,
-  emotionNode?: EmotionNode,
   routineManager?: import('../../minebot/routines/RoutineManager.js').RoutineManager,
   routineExecutor?: import('../../minebot/routines/RoutineExecutor.js').RoutineExecutor,
 ) {
-  const parallelExecutor = emotionNode
-    ? new ParallelExecutor({ fca, emotionNode })
-    : null;
-
   return async function executeFn(state: ShannonStateType): Promise<Partial<ShannonStateType>> {
     state._abortSignal?.throwIfAborted();
     const envelope = state.envelope;
     const memoryEnvelope = snapshotMemoryEnvelope(envelope);
     const context = envelopeToTaskContext(envelope);
-    const emotionState: EmotionState = state._emotionState ?? { current: state.emotion ?? null };
 
     const fcaState = {
       taskId: envelope.requestId,
       requestEnvelope: memoryEnvelope,
       userMessage: envelope.text ?? null,
       messages: state._legacyMessages,
-      emotionState,
       memoryState: undefined as undefined,
       context,
       channelId: envelope.discord?.channelId ?? envelope.conversationId,
@@ -154,27 +144,9 @@ function createExecuteNode(
       classifyMode: state.mode,
       needsTools: state.needsTools,
       needsPlanning: state.needsPlanning,
-      onToolsExecuted: (messages: BaseMessage[], results: ExecutionResult[]) => {
-        if (emotionNode) {
-          emotionNode
-            .evaluateAsync(messages, results, emotionState.current)
-            .then((e) => { emotionState.current = e; })
-            .catch(() => {});
-        }
-      },
     };
 
     const runFcaPath = async (): Promise<Partial<ShannonStateType>> => {
-      if (parallelExecutor) {
-        const result = await parallelExecutor.run(fcaState, state._abortSignal);
-        return {
-          finalAnswer: result.lastAssistantContent ?? result.taskTree?.strategy ?? undefined,
-          taskTree: result.taskTree ?? undefined,
-          emotion: result.finalEmotion ?? emotionState.current ?? undefined,
-          trace: ['node:execute:parallel'],
-        };
-      }
-
       const startTime = Date.now();
       const agentResult = await fca.run(fcaState, state._abortSignal);
       state._abortSignal?.throwIfAborted();
@@ -191,7 +163,6 @@ function createExecuteNode(
       return {
         finalAnswer: agentResult.lastAssistantContent ?? agentResult.taskTree?.strategy ?? undefined,
         taskTree: agentResult.taskTree ?? undefined,
-        emotion: emotionState.current ?? undefined,
         trace: ['node:execute:fca'],
       };
     };
@@ -297,7 +268,6 @@ function createExecuteNode(
         const promptBuilder = new PromptBuilder();
         if (routineManager) promptBuilder.setRoutineManager(routineManager as any);
         const systemPrompt = promptBuilder.buildSystemPrompt(
-          emotionState,
           context,
           (envelope.metadata?.environmentState as string) ?? null,
         );
@@ -412,15 +382,14 @@ async function simplifiedWritebackNode(state: ShannonStateType): Promise<Partial
 }
 
 export interface ShannonGraphDeps {
-  emotionNode: EmotionNode;
   fca: FunctionCallingAgent;
-  /** SubTaskPlannerNode + SubTaskExecutor 用（任意、なければ従来パス） */
+  /** Minecraft ルーチン実行用（任意、なければ従来パス） */
   routineManager?: import('../../minebot/routines/RoutineManager.js').RoutineManager;
   routineExecutor?: import('../../minebot/routines/RoutineExecutor.js').RoutineExecutor;
 }
 
 export function buildShannonGraph(deps: ShannonGraphDeps) {
-  const executeNode = createExecuteNode(deps.fca, deps.emotionNode, deps.routineManager, deps.routineExecutor);
+  const executeNode = createExecuteNode(deps.fca, deps.routineManager, deps.routineExecutor);
 
   const workflow = new StateGraph(ShannonState)
     .addNode('ingest', ingestNode)

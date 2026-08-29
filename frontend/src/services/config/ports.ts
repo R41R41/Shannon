@@ -17,7 +17,6 @@ const devWsPorts = {
   auth: 15017,
   schedule: 15018,
   planning: 15019,
-  emotion: 15020,
 } as const;
 
 function buildWebSocketUrls() {
@@ -28,7 +27,6 @@ function buildWebSocketUrls() {
       SCHEDULER: `${wsProtocol}//${hostname}:${devWsPorts.schedule}`,
       STATUS: `${wsProtocol}//${hostname}:${devWsPorts.status}`,
       PLANNING: `${wsProtocol}//${hostname}:${devWsPorts.planning}`,
-      EMOTION: `${wsProtocol}//${hostname}:${devWsPorts.emotion}`,
       SKILL: `${wsProtocol}//${hostname}:${devWsPorts.skill}`,
       AUTH: `${wsProtocol}//${hostname}:${devWsPorts.auth}`,
     };
@@ -39,7 +37,6 @@ function buildWebSocketUrls() {
     SCHEDULER: `${wsProtocol}//${host}/ws/scheduler`,
     STATUS: `${wsProtocol}//${host}/ws/status`,
     PLANNING: `${wsProtocol}//${host}/ws/planning`,
-    EMOTION: `${wsProtocol}//${host}/ws/emotion`,
     SKILL: `${wsProtocol}//${host}/ws/skill`,
     AUTH: `${wsProtocol}//${host}/ws/auth`,
   };

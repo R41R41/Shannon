@@ -233,7 +233,6 @@ export const config = {
       schedule: optional('WS_SCHEDULE_PORT', '5018'),
       status: optional('WS_STATUS_PORT', '5013'),
       planning: optional('WS_PLANNING_PORT', '5019'),
-      emotion: optional('WS_EMOTION_PORT', '5020'),
       skill: optional('WS_SKILL_PORT', '5016'),
       auth: optional('WS_AUTH_PORT', '5017'),
     },

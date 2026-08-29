@@ -6,7 +6,6 @@ import { OpenAIClientService } from './agents/openaiAgent.js';
 import { ScheduleAgent } from './agents/scheduleAgent.js';
 import { StatusAgent } from './agents/statusAgent.js';
 import { PlanningAgent } from './agents/planningAgent.js';
-import { EmotionAgent } from './agents/emotionAgent.js';
 import { SkillAgent } from './agents/skillAgent.js';
 import { AuthAgent } from './agents/authAgent.js';
 export class WebClient {
@@ -16,7 +15,6 @@ export class WebClient {
   private scheduleService: ScheduleAgent;
   private statusService: StatusAgent;
   private planningService: PlanningAgent;
-  private emotionService: EmotionAgent;
   private skillService: SkillAgent;
   private authService: AuthAgent;
 
@@ -61,14 +59,6 @@ export class WebClient {
       serviceName: 'planning',
     });
 
-    this.emotionService = EmotionAgent.getInstance({
-      port: isTest
-        ? Number(PORTS.WEBSOCKET.EMOTION) + 10000
-        : Number(PORTS.WEBSOCKET.EMOTION),
-      access, allowedOrigins: config.webAuth.allowedOrigins,
-      serviceName: 'emotion',
-    });
-
     this.skillService = SkillAgent.getInstance({
       port: isTest
         ? Number(PORTS.WEBSOCKET.SKILL) + 10000
@@ -95,7 +85,7 @@ export class WebClient {
 
   public async stop(): Promise<void> {
     const services = [this.openaiService, this.monitoringService, this.statusService,
-      this.scheduleService, this.planningService, this.emotionService, this.skillService];
+      this.scheduleService, this.planningService, this.skillService];
     for (const service of services) service.disconnect();
     await Promise.all([...services, this.authService].map(service => service.stop()));
   }
@@ -106,7 +96,6 @@ export class WebClient {
     this.statusService.start();
     this.scheduleService.start();
     this.planningService.start();
-    this.emotionService.start();
     this.skillService.start();
     this.authService.start();
   }

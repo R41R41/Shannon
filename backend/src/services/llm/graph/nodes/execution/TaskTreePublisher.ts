@@ -1,4 +1,4 @@
-import { DiscordPlanningInput, EmotionType, TaskTreeState } from '@shannon/common';
+import { DiscordPlanningInput, TaskTreeState } from '@shannon/common';
 import { logger } from '../../../../../utils/logger.js';
 import { EventBus } from '../../../../eventBus/eventBus.js';
 import { CONFIG as MINEBOT_CONFIG } from '../../../../minebot/config/MinebotConfig.js';
@@ -6,7 +6,6 @@ import { MetaState } from '../../cognitive/CognitiveBlackboard.js';
 
 export interface BlackboardExtras {
     metaState: MetaState | null;
-    emotionState: EmotionType | null;
 }
 
 /**
@@ -21,8 +20,7 @@ export class TaskTreePublisher {
     }
 
     /**
-     * CognitiveBlackboard のスナップショットアクセサを設定する。
-     * ParallelExecutor が呼び出し、メタ状態・感情をMinebotUIペイロードに含める。
+     * メタ状態のスナップショットアクセサを設定する。MinebotUIペイロードに含める。
      */
     setBlackboardAccessor(fn: (() => BlackboardExtras) | null): void {
         this.blackboardAccessor = fn;
@@ -72,13 +70,13 @@ export class TaskTreePublisher {
     }
 
     /**
-     * Minebot UI にタスクツリーを送信（metaState / emotionState を付加）
+     * Minebot UI にタスクツリーを送信（metaState を付加）
      */
     async postTaskTreeToMinebotUi(taskTree: TaskTreeState): Promise<void> {
         try {
             const extras = this.blackboardAccessor ? this.blackboardAccessor() : null;
             const payload = extras
-                ? { ...taskTree, metaState: extras.metaState, emotionState: extras.emotionState }
+                ? { ...taskTree, metaState: extras.metaState }
                 : taskTree;
             const response = await fetch(`${MINEBOT_CONFIG.UI_MOD_BASE_URL}/task`, {
                 method: 'POST',

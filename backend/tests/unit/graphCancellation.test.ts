@@ -2,21 +2,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RequestEnvelope } from '@shannon/common';
 
 const fakes = vi.hoisted(() => ({
-  run: vi.fn(), parallel: vi.fn(), format: vi.fn(), writeback: vi.fn(),
+  run: vi.fn(), format: vi.fn(), writeback: vi.fn(),
   saveEpisode: vi.fn(), native: vi.fn(), nativeDeps: undefined as any, nativeEnabled: false,
 }));
 vi.mock('../../src/config/env.js', () => ({ config: { anthropic: { get apiKey() { return fakes.nativeEnabled ? 'mock' : ''; } } } }));
 vi.mock('../../src/utils/logger.js', () => ({ createLogger: () => ({ info: vi.fn(), error: vi.fn() }) }));
-vi.mock('../../src/services/llm/graph/nodes/EmotionNode.js', () => ({ EmotionNode: class {} }));
 vi.mock('../../src/services/llm/graph/nodes/FunctionCallingAgent.js', () => ({ FunctionCallingAgent: class {} }));
 vi.mock('../../src/services/memory/scopedMemoryService.js', () => ({
   ScopedMemoryService: { getInstance: () => ({ writeback: fakes.writeback }) },
 }));
 vi.mock('../../src/services/llm/graph/cognitive/ModelSelector.js', () => ({
   ModelSelector: { selectInitialModel: () => 'mock-model' },
-}));
-vi.mock('../../src/services/llm/graph/cognitive/ParallelExecutor.js', () => ({
-  ParallelExecutor: class { run = fakes.parallel },
 }));
 vi.mock('../../src/services/llm/graph/cognitive/TaskEpisodeMemory.js', () => ({
   TaskEpisodeMemory: { buildEpisodeFromResult: () => ({}), getInstance: () => ({ saveEpisode: fakes.saveEpisode }) },
@@ -36,8 +32,8 @@ const envelope: RequestEnvelope = {
   conversationId: 'conversation', threadId: 'thread', tags: [], timestampIso: '2026-08-28T00:00:00Z',
 };
 const result = { taskTree: { status: 'completed', strategy: 'done' }, lastAssistantContent: 'answer' };
-function graph(parallel = false) {
-  return buildShannonGraph({ fca: { run: fakes.run } as any, emotionNode: parallel ? {} as any : undefined as any });
+function graph() {
+  return buildShannonGraph({ fca: { run: fakes.run } as any });
 }
 function deferred() {
   let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; });
@@ -46,17 +42,17 @@ function deferred() {
 beforeEach(() => {
   vi.resetAllMocks();
   fakes.nativeEnabled = false; fakes.nativeDeps = undefined;
-  fakes.run.mockResolvedValue(result); fakes.parallel.mockResolvedValue(result);
+  fakes.run.mockResolvedValue(result);
   fakes.writeback.mockResolvedValue(undefined); fakes.saveEpisode.mockResolvedValue(undefined);
   fakes.format.mockResolvedValue({ actionPlan: { actions: [] } });
 });
 
 describe('real graph with mocked external services', () => {
-  it.each([false, true])('passes the caller signal through the graph (parallel=%s)', async parallel => {
+  it('passes the caller signal through the graph', async () => {
     const controller = new AbortController();
-    const response = await invokeShannonGraph(graph(parallel), envelope, [], { abortSignal: controller.signal });
-    expect((parallel ? fakes.parallel : fakes.run).mock.calls[0][1]).toBe(controller.signal);
-    expect((parallel ? fakes.parallel : fakes.run).mock.calls[0][0].requestEnvelope).toMatchObject(envelope);
+    const response = await invokeShannonGraph(graph(), envelope, [], { abortSignal: controller.signal });
+    expect(fakes.run.mock.calls[0][1]).toBe(controller.signal);
+    expect(fakes.run.mock.calls[0][0].requestEnvelope).toMatchObject(envelope);
     expect(response.finalAnswer).toBe('answer');
     expect(fakes.writeback).toHaveBeenCalledOnce();
   });
@@ -67,12 +63,12 @@ describe('real graph with mocked external services', () => {
     expect(fakes.run).not.toHaveBeenCalled(); expect(fakes.writeback).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])('does not write back an engine result produced after cancellation (parallel=%s)', async parallel => {
+  it('does not write back an engine result produced after cancellation', async () => {
     const controller = new AbortController(); const started = deferred(); const gate = deferred();
-    (parallel ? fakes.parallel : fakes.run).mockImplementation(async () => {
+    fakes.run.mockImplementation(async () => {
       started.resolve(); await gate.promise; return result;
     });
-    const invocation = invokeShannonGraph(graph(parallel), envelope, [], { abortSignal: controller.signal });
+    const invocation = invokeShannonGraph(graph(), envelope, [], { abortSignal: controller.signal });
     const rejected = expect(invocation).rejects.toThrow();
     await started.promise; controller.abort(); gate.resolve(); await rejected;
     expect(fakes.format).not.toHaveBeenCalled(); expect(fakes.writeback).not.toHaveBeenCalled();

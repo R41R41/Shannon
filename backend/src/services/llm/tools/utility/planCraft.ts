@@ -202,7 +202,7 @@ export default class PlanCraftTool extends StructuredTool {
     private getMinecraftMetadata(): Record<string, unknown> | null {
         // blackboard の envelope から取得するのが理想だが、
         // 現時点では bot 経由でアクセスする方法がないため null を返す
-        // TODO: ParallelExecutor から minecraft metadata を渡す
+        // TODO: 実行経路から minecraft metadata を渡す
         return null;
     }
 }

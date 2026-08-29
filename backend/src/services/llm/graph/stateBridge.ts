@@ -4,7 +4,7 @@
  * Minimal conversion layer for nodes that still need legacy types.
  *
  * Remaining functions:
- * - envelopeToTaskContext: for EmotionNode, FCA (accept TaskContext)
+ * - envelopeToTaskContext: for the FCA (accepts TaskContext)
  * - envelopeToMemoryZone: for EventBus log zone derivation
  * - inferInitialMode: for ingest node
  *
@@ -40,7 +40,7 @@ const channelToPlatform: Record<ShannonChannel, Platform> = {
 
 /**
  * Extract a legacy TaskContext from a RequestEnvelope.
- * Used by EmotionNode and FCA which still accept TaskContext.
+ * Used by the FCA which still accepts TaskContext.
  */
 export function envelopeToTaskContext(envelope: RequestEnvelope): TaskContext {
   const platform = channelToPlatform[envelope.channel] ?? 'web';

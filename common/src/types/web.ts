@@ -104,7 +104,6 @@ export type WebEventType =
   | "web:post_schedule"
   | "web:log"
   | "web:planning"
-  | "web:emotion"
   | "web:status"
   | "web:skill";
 

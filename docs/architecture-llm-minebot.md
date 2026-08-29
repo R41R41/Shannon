@@ -1460,7 +1460,6 @@ SSE イベント:
 | `backend/src/services/common/adapters/actionFormatter.ts` | アクションフォーマット |
 | `backend/src/server.ts` | サーバー起動・サービス初期化 |
 | `backend/src/routes/publicRoutes.ts` | Public Chat SSE エンドポイント |
-| `backend/src/data/public_knowledge.json` | 公開知識ベース |
 | `backend/src/utils/logger.ts` | 構造化ロギング |
 | `frontend/src/components/StatusLog/Emotion/Emotion.tsx` | 感情レーダーチャート |
 | `frontend/src/components/StatusLog/TaskTree/TaskTree.tsx` | タスクツリー表示 |

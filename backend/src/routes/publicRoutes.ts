@@ -7,7 +7,6 @@
  *
  * SSE events:
  *   thinking  — { phase }
- *   emotion   — { emotion, parameters }
  *   task_update — { goal, strategy, status, hierarchicalSubTasks, currentSubTaskId }
  *   meta      — { assessment, suggestion, modelAction, consecutiveSuccesses, consecutiveFailures }
  *   reply     — { text }
@@ -17,7 +16,7 @@
 
 import type { Express, Request, Response } from 'express';
 import type { LLMService } from '../services/llm/client.js';
-import type { EmotionType, TaskTreeState } from '@shannon/common';
+import type { TaskTreeState } from '@shannon/common';
 import { HumanMessage, AIMessage } from '@langchain/core/messages';
 import { webAdapter } from '../services/common/adapters/index.js';
 import { getEventBus } from '../services/eventBus/index.js';
@@ -147,13 +146,6 @@ export function registerPublicRoutes(app: Express, llmService: LLMService): void
     const sid = sessionId ?? 'public-default';
     const unsubscribers: (() => void)[] = [];
 
-    // Emotion events
-    const unsubEmotion = eventBus.subscribe('web:emotion', (event) => {
-      const emotion = event.data as EmotionType;
-      sendSSE(res, 'emotion', emotion);
-    });
-    unsubscribers.push(unsubEmotion);
-
     // Planning / Task tree events
     const unsubPlanning = eventBus.subscribe('web:planning', (event) => {
       const taskTree = event.data as TaskTreeState;
@@ -208,11 +200,6 @@ export function registerPublicRoutes(app: Express, llmService: LLMService): void
           sendSSE(res, 'task_update', taskTree);
         },
       });
-
-      // Send emotion from final state if available
-      if (result.emotion) {
-        sendSSE(res, 'emotion', result.emotion);
-      }
 
       // Send final task tree if available
       if (result.taskTree) {

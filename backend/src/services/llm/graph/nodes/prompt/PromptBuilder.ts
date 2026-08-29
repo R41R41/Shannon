@@ -5,7 +5,6 @@ import { resolve } from 'node:path';
 import { TWITTER_WRITE_TOOLS } from '../../../../../modules/access/toolCatalog.js';
 import { CONFIG as MINEBOT_CONFIG } from '../../../../minebot/config/MinebotConfig.js';
 import type { SelfImprovementRulesFile } from '../../cognitive/selfImprove/types.js';
-import { EmotionState } from '../EmotionNode.js';
 import { MemoryState } from '../MemoryNode.js';
 
 /**
@@ -96,7 +95,6 @@ export class PromptBuilder {
      * 完全なシステムプロンプトを構築
      */
     buildSystemPrompt(
-        emotionState: EmotionState,
         context: TaskContext | null,
         environmentState: string | null,
         memoryState?: MemoryState,
@@ -115,7 +113,6 @@ export class PromptBuilder {
 
         const platformInfo = this.formatPlatformInfo(context);
         const minecraftRules = this.formatMinecraftRules(context);
-        const emotionInfo = this.formatEmotionInfo(emotionState);
         const envInfo = this.formatEnvironmentInfo(environmentState, context);
         const memoryInfo = this.formatMemoryInfo(
             memoryState,
@@ -145,7 +142,7 @@ ${responseInstruction}
 - **summary には Markdown が使える**。情報比較や詳細データは content（思考）ではなく **summary に直接** 整形して書くこと。content に書いた表やリストはユーザーに届かない
 
 ## 現在の状態
-- 時刻: ${currentTime}${platformInfo}${emotionInfo}${envInfo}
+- 時刻: ${currentTime}${platformInfo}${envInfo}
 ${memoryInfo}
 ## ルール
 1. 複雑なタスクは manage-task-tree ツールで計画を立ててから実行する。manage-task-tree は他のスキルと同じレスポンスで同時に呼べる（追加ターン不要）
@@ -443,12 +440,6 @@ ${lines.join('\n')}
         }
         return '- task-complete の summary で Markdown を使って見やすく整形する（**太字**, 箇条書き, 表など）\n' +
             '- 比較データや調査結果はテーブル（| 列1 | 列2 |）や箇条書きで構造化する';
-    }
-
-    private formatEmotionInfo(emotionState: EmotionState): string {
-        if (!emotionState.current) return '';
-        const e = emotionState.current;
-        return `\n- 感情: ${e.emotion} (joy=${e.parameters.joy}, trust=${e.parameters.trust}, anticipation=${e.parameters.anticipation})`;
     }
 
     private formatEnvironmentInfo(environmentState: string | null, context: TaskContext | null): string {

@@ -25,7 +25,6 @@ import { trimContext } from '../../utils/contextManager.js';
 import { createTracedModel } from '../../utils/langfuse.js';
 import { tokenTracker } from '../../utils/tokenTracker.js';
 import { ExecutionResult } from '../types.js';
-import { EmotionState } from './EmotionNode.js';
 import { MemoryState } from './MemoryNode.js';
 import { PromptBuilder } from './prompt/PromptBuilder.js';
 import { TaskTreePublisher } from './execution/TaskTreePublisher.js';
@@ -51,7 +50,6 @@ export interface FunctionCallingAgentState {
     requestEnvelope?: import("@shannon/common").RequestEnvelope;
     userMessage: string | null;
     messages: BaseMessage[];
-    emotionState: EmotionState;
     memoryState?: MemoryState;
     context: TaskContext | null;
     channelId: string | null;
@@ -97,7 +95,7 @@ export interface FunctionCallingAgentState {
     getJournalSummary?: () => string | null;
     /** Blackboard から最新のアクティブサブタスク情報を取得するコールバック */
     getActiveSubtaskInfo?: () => string | null;
-    /** MemoryAgent からの初期記憶コンテキストを取得するコールバック (初回のみ) */
+    /** 初期記憶コンテキストを取得するコールバック (初回のみ) */
     getInitialMemory?: () => Promise<string | null>;
     /** SubTaskExecutor: FCA の最大イテレーション数をオーバーライド */
     maxIterations?: number;
@@ -192,8 +190,7 @@ export class FunctionCallingSession {
     }
 
     /**
-     * CognitiveBlackboard のアクセサを TaskTreePublisher に転送する。
-     * ParallelExecutor から呼び出される。
+     * メタ状態のアクセサを TaskTreePublisher に転送する。
      */
     public setBlackboardAccessor(fn: Parameters<typeof this.taskTreePublisher.setBlackboardAccessor>[0]): void {
         if (this.phase === "closed" && fn !== null) return;
@@ -201,7 +198,7 @@ export class FunctionCallingSession {
         this.blackboardAccessor = fn as typeof this.blackboardAccessor;
     }
 
-    /** 登録済みツール一覧を返す (ParallelExecutor が MemoryAgent 等を注入するために使用) */
+    /** 登録済みツール一覧を返す */
     getTools(): StructuredTool[] {
         return [...this.tools];
     }
@@ -404,7 +401,6 @@ export class FunctionCallingSession {
 
         // メッセージ構築
         let systemPrompt = this.promptBuilder.buildSystemPrompt(
-            state.emotionState,
             state.context,
             state.environmentState,
             state.memoryState,

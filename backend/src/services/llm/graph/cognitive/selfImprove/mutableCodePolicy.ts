@@ -58,7 +58,6 @@ export const MUTABLE_PATH_DENY_SUBSTRINGS = [
     'src/services/llm/graph/requestExecutionCoordinator.ts',
     'src/services/llm/graph/coordinatedGraphInvocation.ts',
     'src/services/llm/graph/shannonGraph.ts',
-    'src/services/llm/graph/cognitive/ParallelExecutor.ts',
     'scripts/',
     'src/routes/modelRoutes.ts',
     'src/routes/radarRoutes.ts',

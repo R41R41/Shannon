@@ -6,7 +6,6 @@ import {
   DiscordVoiceQueueStartInput,
   DiscordVoiceStatusInput,
   DiscordVoiceStreamTextInput,
-  EmotionType,
   MemoryZone,
   MinebotVoiceResponseOutput,
 } from '@shannon/common';
@@ -367,16 +366,8 @@ export class VoiceProcessor {
     };
 
     // 5. Streaming TTS: synthesize each sentence as soon as LLM emits it
-    let voiceEmotion: VoicepeakEmotion | undefined;
     let streamedSentenceCount = 0;
     const ttsStartTime = Date.now();
-
-    const onEmotionResolved = (emotion: EmotionType | null) => {
-      if (emotion?.parameters) {
-        voiceEmotion = this.voicepeakClient.mapPlutchikToVoicepeak(emotion.parameters as unknown as Record<string, number>);
-        logger.info(`[Voice] Emotion resolved for streaming TTS: ${emotion.emotion} -> happy=${voiceEmotion.happy} fun=${voiceEmotion.fun} angry=${voiceEmotion.angry} sad=${voiceEmotion.sad}`, 'cyan');
-      }
-    };
 
     const onStreamSentence = async (sentence: string) => {
       if (streamedSentenceCount === 0) {
@@ -388,7 +379,7 @@ export class VoiceProcessor {
           memoryZone,
           data: { guildId: message.guildId, channelId: message.channelId, sentence } as DiscordVoiceStreamTextInput,
         });
-        const wavBuf = await this.voicepeakClient.synthesize(sentence, { emotion: voiceEmotion });
+        const wavBuf = await this.voicepeakClient.synthesize(sentence);
         this.eventBus.publish({
           type: 'discord:voice_enqueue',
           memoryZone,
@@ -427,7 +418,6 @@ export class VoiceProcessor {
         ? [...message.recentMessages, new HumanMessage(userMessageForLlm)]
         : [],
     );
-    const emotion = graphResult.emotion ?? null;
     const responseText = await responsePromise;
     const llmMs = Date.now() - llmStartTime;
     voiceResponseChannelIds.delete(message.channelId);
@@ -444,9 +434,6 @@ export class VoiceProcessor {
 
     // 6. Fallback: if streaming didn't emit any sentences, use batch TTS
     if (streamedSentenceCount === 0) {
-      if (!voiceEmotion && emotion?.parameters) {
-        voiceEmotion = this.voicepeakClient.mapPlutchikToVoicepeak(emotion.parameters as unknown as Record<string, number>);
-      }
       this.publishVoiceStatus(memoryZone, message.guildId, 'tts');
       try {
         const sentences = splitIntoSentences(responseText);
@@ -455,7 +442,7 @@ export class VoiceProcessor {
         );
         logger.info(`[Voice] Fallback: batch TTS for ${sentences.length} sentence(s) (katakana pre-converted)`, 'cyan');
         for (const cs of convertedSentences) {
-          const wavBuf = await this.voicepeakClient.synthesizePreprocessed(cs, { emotion: voiceEmotion });
+          const wavBuf = await this.voicepeakClient.synthesizePreprocessed(cs);
           this.eventBus.publish({
             type: 'discord:voice_enqueue',
             memoryZone,

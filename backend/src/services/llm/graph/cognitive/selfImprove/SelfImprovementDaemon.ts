@@ -5,7 +5,7 @@
  * LLM を使って失敗パターンを分類し、プロンプトルール追加（Tier 1）や
  * スキルコード修正（Tier 2）を自動生成・適用する。
  *
- * Singleton — ParallelExecutor から fire-and-forget で呼ばれる。
+ * Singleton — 実行経路から fire-and-forget で呼ばれる。
  */
 
 import { mkdir, writeFile } from 'node:fs/promises';
@@ -103,7 +103,7 @@ export class SelfImprovementDaemon {
     }
 
     /**
-     * エピソード保存後に ParallelExecutor から呼ばれる（fire-and-forget）。
+     * エピソード保存後に呼ばれる（fire-and-forget）。
      * 失敗エピソードをバッファに追加し、トリガー条件を評価する。
      */
     async onEpisodeSaved(

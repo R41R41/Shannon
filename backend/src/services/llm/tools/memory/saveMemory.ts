@@ -24,7 +24,7 @@ export default class SaveMemoryTool extends StructuredTool {
     private memoryPort?: MemoryPort;
     setMemoryPort(port: MemoryPort): void { this.memoryPort = port; }
 
-    /** ParallelExecutor から MemoryAgent を注入する */
+    /** 実行ごとに MemoryAgent を注入する */
     setMemoryAgent(agent: MemoryAgent): void {
         this.memoryAgent = agent;
     }

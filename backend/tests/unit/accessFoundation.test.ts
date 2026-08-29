@@ -134,7 +134,7 @@ describe('self-improvement protection for access boundaries', () => {
     for (const path of ['src/modules/access/index.ts', 'src/modules/modelSettings/index.ts', 'src/modules/radar/deliveryPolicy.ts', 'src/services/radar/safeFeedHttp.ts',
       'src/modules/execution/index.ts', 'src/modules/memory/index.ts', 'src/services/memory/requestMemory.ts', 'src/services/llm/graph/requestExecutionCoordinator.ts',
       'src/services/llm/graph/coordinatedGraphInvocation.ts', 'src/services/llm/graph/shannonGraph.ts',
-      'src/services/llm/graph/cognitive/ParallelExecutor.ts', 'src/services/llm/client.ts',
+      'src/services/llm/client.ts',
       'src/services/llm/graph/nodes/FunctionCallingSession.ts',
       'src/services/llm/tools/memory/recallMemory.ts', 'src/services/llm/tools/memory/saveMemory.ts',
       'src/services/llm/tools/utility/updatePlan.ts', 'src/services/llm/tools/utility/planCraft.ts',

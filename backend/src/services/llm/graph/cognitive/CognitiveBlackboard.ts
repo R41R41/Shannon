@@ -1,21 +1,17 @@
 import { EventEmitter } from 'node:events';
 import { BaseMessage } from '@langchain/core/messages';
-import { EmotionType } from '@shannon/common';
 import { ExecutionResult } from '../types.js';
 
 /**
- * CognitiveBlackboard — 3並列プロセス間の共有状態。
+ * CognitiveBlackboard — 並列プロセス間の共有状態。
  *
- * 脳の「ワーキングメモリ」に相当し、感情・メタ認知・タスク実行の
- * 各プロセスがイベント駆動で読み書きする。
+ * 脳の「ワーキングメモリ」に相当し、各プロセスがイベント駆動で読み書きする。
  *
  * Events:
- *   'emotion:updated'  — EmotionLoop が感情を更新した
- *   'meta:updated'     — MetaCognitionLoop がメタ状態を更新した
+ *   'meta:updated'     — メタ状態が更新された
  *   'task:updated'     — TaskExecutionLoop がタスク状態を更新した
  *   'plan:updated'     — PlanState が更新された
  *   'loop:detected'    — LoopDetector がループを検出した
- *   'emotion:shifted'  — 感情が大きく変化した（急変検出）
  *   'completed'        — タスクが完了した（全プロセスに停止シグナル）
  */
 
@@ -94,7 +90,6 @@ const MAX_SUBTASK_DEPTH = 3;
 
 export interface BlackboardSnapshot {
     goal: string;
-    emotionState: EmotionType | null;
     metaState: MetaState | null;
     taskState: TaskState;
     selfState: SelfState;
@@ -102,8 +97,6 @@ export interface BlackboardSnapshot {
     isComplete: boolean;
     elapsedMs: number;
 }
-
-const EMOTION_SHIFT_THRESHOLD = 30;
 
 // ── Helpers ──
 
@@ -165,10 +158,6 @@ function findParentChildren(subtasks: PlanSubtask[], childId: string): PlanSubta
 // ── Main Class ──
 
 export class CognitiveBlackboard extends EventEmitter {
-    // Emotion (Amygdala)
-    private _emotionState: EmotionType | null = null;
-    private _previousEmotion: EmotionType | null = null;
-
     // Meta-cognition (DLPFC)
     private _metaState: MetaState | null = null;
 
@@ -207,11 +196,10 @@ export class CognitiveBlackboard extends EventEmitter {
     // Messages (shared reference for all processes)
     private _messages: BaseMessage[];
 
-    constructor(goal: string, initialEmotion: EmotionType | null, messages: BaseMessage[]) {
+    constructor(goal: string, messages: BaseMessage[]) {
         super();
         this.setMaxListeners(20);
         this.goal = goal;
-        this._emotionState = initialEmotion;
         this._messages = messages;
         this._startTime = Date.now();
         this._abortController = new AbortController();
@@ -219,7 +207,6 @@ export class CognitiveBlackboard extends EventEmitter {
 
     // ── Getters ──
 
-    get emotionState(): EmotionType | null { return this._emotionState; }
     get metaState(): MetaState | null { return this._metaState; }
     get taskState(): TaskState { return this._taskState; }
     get selfState(): SelfState { return this._selfState; }
@@ -241,7 +228,6 @@ export class CognitiveBlackboard extends EventEmitter {
     snapshot(): BlackboardSnapshot {
         return {
             goal: this.goal,
-            emotionState: this._emotionState,
             metaState: this._metaState,
             taskState: { ...this._taskState },
             selfState: {
@@ -259,18 +245,6 @@ export class CognitiveBlackboard extends EventEmitter {
             isComplete: this._isComplete,
             elapsedMs: this.elapsedMs,
         };
-    }
-
-    // ── Emotion ──
-
-    updateEmotion(emotion: EmotionType): void {
-        this._previousEmotion = this._emotionState;
-        this._emotionState = emotion;
-        this.emit('emotion:updated', emotion);
-
-        if (this._previousEmotion && this.detectEmotionShift(this._previousEmotion, emotion)) {
-            this.emit('emotion:shifted', emotion, this._previousEmotion);
-        }
     }
 
     // ── Meta-cognition ──
@@ -520,15 +494,4 @@ export class CognitiveBlackboard extends EventEmitter {
 
     // ── Private helpers ──
 
-    private detectEmotionShift(prev: EmotionType, next: EmotionType): boolean {
-        const keys = ['joy', 'trust', 'fear', 'surprise', 'sadness', 'disgust', 'anger', 'anticipation'] as const;
-        let maxDelta = 0;
-        for (const key of keys) {
-            const delta = Math.abs(
-                (next.parameters[key] ?? 0) - (prev.parameters[key] ?? 0),
-            );
-            if (delta > maxDelta) maxDelta = delta;
-        }
-        return maxDelta >= EMOTION_SHIFT_THRESHOLD;
-    }
 }

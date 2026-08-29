@@ -37,7 +37,6 @@ import {
   SchedulerOutput,
 } from './scheduler.js';
 import {
-  EmotionType,
   TaskEventType,
   TaskInput,
   TaskTreeState,
@@ -175,7 +174,6 @@ export const promptTypes: PromptType[] = [
   'discord',
   'forecast',
   'reply_twitter_comment',
-  'emotion',
   'use_tool',
 ];
 
@@ -190,7 +188,6 @@ export type PromptType =
   | 'planning'
   | 'reply_twitter_comment'
   | 'quote_twitter_comment'
-  | 'emotion'
   | 'use_tool'
   | 'reply_youtube_live_comment'
   | 'emergency'
@@ -281,7 +278,6 @@ export interface Event {
   | ServiceOutput
   | TaskInput
   | TaskTreeState
-  | EmotionType
   | SkillInfo[]
   | WebSkillInput
   | SkillParameters

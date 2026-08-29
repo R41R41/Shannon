@@ -39,25 +39,6 @@ export class VoicepeakClient {
   }
 
   /**
-   * PlutchikベースのEmotionStateをVOICEPEAKの4感情にマッピング
-   */
-  public mapPlutchikToVoicepeak(emotions: Record<string, number>): VoicepeakEmotion {
-    const happy = Math.min(100, Math.round(
-      (emotions.joy ?? 0) * 1.0 + (emotions.trust ?? 0) * 0.3
-    ));
-    const fun = Math.min(100, Math.round(
-      (emotions.anticipation ?? 0) * 0.8 + (emotions.surprise ?? 0) * 0.5
-    ));
-    const angry = Math.min(100, Math.round(
-      (emotions.anger ?? 0) * 1.0 + (emotions.disgust ?? 0) * 0.4
-    ));
-    const sad = Math.min(100, Math.round(
-      (emotions.sadness ?? 0) * 1.0 + (emotions.fear ?? 0) * 0.4
-    ));
-    return { happy, fun, angry, sad };
-  }
-
-  /**
    * テキストから VoicePeak 感情パラメータを推定する（0〜100）
    * 全文を一度だけ分析し、全センテンスに共通適用する想定
    */

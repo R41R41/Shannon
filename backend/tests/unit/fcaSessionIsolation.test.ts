@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { AIMessage, AIMessageChunk, HumanMessage, ToolMessage } from '@langchain/core/messages';
+import { AIMessage, AIMessageChunk, HumanMessage } from '@langchain/core/messages';
 
 const fakes = vi.hoisted(() => ({ invoke: vi.fn(), stream: vi.fn(), utilityInvoke: vi.fn(), publish: vi.fn(), memoryReads: [] as any[], memoryWrites: [] as any[] }));
 vi.mock('../../src/config/env.js', () => ({ config: { anthropic: { apiKey: '' }, openaiApiKey: 'mock' } }));
@@ -15,7 +15,6 @@ vi.mock('../../src/services/llm/utils/contextManager.js', () => ({ trimContext: 
 vi.mock('../../src/services/llm/graph/nodes/prompt/PromptBuilder.js', () => ({
   PromptBuilder: class { buildSystemPrompt() { return 'mock system'; } getDisabledOutputTools() { return []; } setRoutineManager() {} },
 }));
-vi.mock('../../src/services/llm/graph/nodes/EmotionNode.js', () => ({ EmotionNode: class {} }));
 vi.mock('../../src/services/llm/graph/cognitive/ModelSelector.js', () => ({
   ModelSelector: class {
     modelName = 'mock-model'; timeoutMs = 5000; stats = { currentModel: 'mock-model', escalations: 0, deescalations: 0 };
@@ -27,8 +26,6 @@ vi.mock('../../src/services/llm/graph/cognitive/TaskEpisodeMemory.js', () => ({
     recallRelevantEpisodes: async () => [], formatForPrompt: () => '', saveEpisode: async () => {},
   }) },
 }));
-vi.mock('../../src/services/llm/graph/cognitive/EmotionLoop.js', () => ({ EmotionLoop: class {} }));
-vi.mock('../../src/services/llm/graph/cognitive/MetaCognitionLoop.js', () => ({ MetaCognitionLoop: class {} }));
 vi.mock('../../src/services/llm/graph/cognitive/MemoryAgent.js', () => ({
   MemoryAgent: class {
     constructor(_blackboard: unknown, private envelope: any) {}
@@ -44,7 +41,6 @@ vi.mock('../../src/services/llm/graph/cognitive/selfImprove/index.js', () => ({ 
 vi.mock('../../src/services/minebot/routines/RoutineRecorder.js', () => ({ RoutineRecorder: { getInstance: () => undefined } }));
 
 import { FunctionCallingAgent } from '../../src/services/llm/graph/nodes/FunctionCallingAgent.js';
-import { ParallelExecutor } from '../../src/services/llm/graph/cognitive/ParallelExecutor.js';
 import UpdatePlanTool from '../../src/services/llm/tools/utility/updatePlan.js';
 import RecallMemoryTool from '../../src/services/llm/tools/memory/recallMemory.js';
 import SaveMemoryTool from '../../src/services/llm/tools/memory/saveMemory.js';
@@ -61,12 +57,12 @@ registerDiscordConversationTransport({ reply: discordReplies, recent: async () =
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; }
 function state(owner: string) {
   const requestEnvelope = { requestId: `request-${owner}`, sourceUserId: owner, channel: 'discord', conversationId: `channel-${owner}`, threadId: `thread-${owner}`, tags: [], timestampIso: '2026-08-28T00:00:00Z' };
-  return { taskId: requestEnvelope.requestId, userMessage: owner, messages: [], emotionState: { current: null }, context: { platform: 'discord', metadata: { envelope: requestEnvelope } }, channelId: `channel-${owner}`, environmentState: null, isEmergency: false, onToolsExecuted: () => {}, requestEnvelope } as any;
+  return { taskId: requestEnvelope.requestId, userMessage: owner, messages: [], context: { platform: 'discord', metadata: { envelope: requestEnvelope } }, channelId: `channel-${owner}`, environmentState: null, isEmergency: false, onToolsExecuted: () => {}, requestEnvelope } as any;
 }
 beforeEach(() => { vi.clearAllMocks(); fakes.memoryReads.length = 0; fakes.memoryWrites.length = 0; vi.stubEnv('SHANNON_COGNITIVE_LOOPS', 'false'); });
 afterEach(() => vi.unstubAllEnvs());
 
-async function overlap(tool: 'update-plan' | 'recall-memory') {
+async function overlap(tool: 'update-plan') {
   const entered = { A: deferred(), B: deferred() }; const release = { A: deferred(), B: deferred() }; const turns = { A: 0, B: 0 };
   fakes.invoke.mockImplementation(async (messages: any[]) => {
     const owner = messages.find(m => m instanceof HumanMessage && ['A', 'B'].includes(m.content))!.content as 'A' | 'B';
@@ -80,9 +76,8 @@ async function overlap(tool: 'update-plan' | 'recall-memory') {
     return new AIMessage({ content: '', tool_calls: [{ id: `done-${owner}`, name: 'task-complete', args: { summary: `done-${owner}` } }] });
   });
   const fca = new FunctionCallingAgent([new UpdatePlanTool(), new RecallMemoryTool(), new SaveMemoryTool(), { name: 'task-complete', invoke: async () => 'done' } as any]);
-  const runner = tool === 'recall-memory' ? new ParallelExecutor({ fca }) : fca;
-  const a = runner.run(state('A')); await entered.A.promise;
-  const b = runner.run(state('B')); await entered.B.promise;
+  const a = fca.run(state('A')); await entered.A.promise;
+  const b = fca.run(state('B')); await entered.B.promise;
   release.A.resolve(); const resultA = await a; release.B.resolve(); const resultB = await b;
   return { resultA, resultB };
 }
@@ -118,13 +113,6 @@ describe('actual FCA and tools with external services mocked', () => {
     expect(plans.map(e => [e.data.planning.goal, e.data.channelId, e.data.taskId])).toEqual([
       ['plan-A', 'channel-A', 'request-A'], ['plan-B', 'channel-B', 'request-B'],
     ]);
-  });
-
-  it('does not replace the first conversation memory reference with the second one', async () => {
-    const { resultA, resultB } = await overlap('recall-memory');
-    expect(fakes.memoryReads).toEqual([{ owner: 'A', question: 'query-A' }, { owner: 'B', question: 'query-B' }]);
-    expect(resultA.messages.filter(m => m instanceof ToolMessage).map(m => m.content)).toContain('answer-A');
-    expect(resultB.messages.filter(m => m instanceof ToolMessage).map(m => m.content)).toContain('answer-B');
   });
 
   it('keeps thoughts, feedback, plan notices and blackboard state local across interleaved tools', async () => {
@@ -202,13 +190,6 @@ describe('actual FCA and tools with external services mocked', () => {
     expect(fakes.publish.mock.calls.some(([event]) => event.type === 'discord:planning')).toBe(false);
   });
 
-  it('rejects missing or mismatched canonical envelopes before starting parallel work', async () => {
-    const runner = new ParallelExecutor({ fca: new FunctionCallingAgent([]) });
-    await expect(runner.run({ ...state('A'), requestEnvelope: undefined })).rejects.toThrow('canonical request');
-    await expect(runner.run({ ...state('A'), requestEnvelope: state('B').requestEnvelope })).rejects.toThrow('canonical request');
-    expect(fakes.invoke).not.toHaveBeenCalled();
-  });
-
   it('preempts an actual FCA without publishing its late result or aborting the emergency session', async () => {
     const entered = { A: deferred(), B: deferred() }; const release = { A: deferred(), B: deferred() }; const signals: AbortSignal[] = [];
     fakes.invoke.mockImplementation(async (messages, options) => {
@@ -233,25 +214,6 @@ describe('actual FCA and tools with external services mocked', () => {
     const agent = new FunctionCallingAgent([]);
     await expect(agent.run({ ...state('A'), onStreamSentence: async (sentence: string) => { sentences.push(sentence); controller.abort(); } }, controller.signal)).rejects.toThrow();
     expect(sentences).toEqual(['first。']);
-  });
-
-  it('does not retarget memory when the caller later mutates its envelope', async () => {
-    const entered = deferred(); const release = deferred(); let turn = 0;
-    fakes.invoke.mockImplementation(async () => {
-      if (turn++ === 0) {
-        return new AIMessage({ content: '', tool_calls: [{ name: 'request-tools', id: 'load', args: { names: ['recall-memory'] } }] });
-      }
-      if (turn === 2) {
-        entered.resolve(); await release.promise;
-        return new AIMessage({ content: '', tool_calls: [{ name: 'recall-memory', id: 'recall', args: { question: 'query-A' } }] });
-      }
-      return new AIMessage({ content: '', tool_calls: [{ name: 'task-complete', id: 'done', args: { summary: 'done' } }] });
-    });
-    const input = state('A');
-    const runner = new ParallelExecutor({ fca: new FunctionCallingAgent([new RecallMemoryTool()]) });
-    const running = runner.run(input); await entered.promise;
-    input.requestEnvelope.sourceUserId = 'B'; release.resolve(); await running;
-    expect(fakes.memoryReads).toEqual([{ owner: 'A', question: 'query-A' }]);
   });
 
   it('does not start a model after cancellation while initial memory is pending', async () => {

@@ -26,7 +26,7 @@ export default class RecallMemoryTool extends StructuredTool {
     setPersonMemoryPort(port: PersonMemoryPort): void { this.personMemoryPort = port; }
     setMemoryPort(port: MemoryPort): void { this.memoryPort = port; }
 
-    /** ParallelExecutor から MemoryAgent を注入する */
+    /** 実行ごとに MemoryAgent を注入する */
     setMemoryAgent(agent: MemoryAgent): void {
         this.memoryAgent = agent;
     }

@@ -1,7 +1,7 @@
 /**
  * Node Factory
  *
- * Standalone initialization of EmotionNode, FunctionCallingAgent, and tools.
+ * Standalone initialization of the FunctionCallingAgent and its tools.
  * Unified graph 専用のノード初期化。
  */
 
@@ -10,7 +10,6 @@ import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { isTwitterWriteTool } from '../../../modules/access/toolCatalog.js';
 import { loadToolsFromDirectory } from '../../../utils/toolLoader.js';
-import { EmotionNode } from './nodes/EmotionNode.js';
 import { FunctionCallingAgent } from './nodes/FunctionCallingAgent.js';
 import { createMemoryTools } from '../tools/memory/memoryToolFactory.js';
 import { ScopedMemoryService } from '../../memory/scopedMemoryService.js';
@@ -20,7 +19,6 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 export interface ShannonNodes {
-  emotionNode?: EmotionNode;
   fca: FunctionCallingAgent;
   tools: StructuredTool[];
 }
@@ -30,7 +28,6 @@ export interface ShannonNodes {
  *
  * - Loads tools from the tools directory
  * - Creates memory tools
- * - Initializes EmotionNode
  * - Legacy unscoped memory maintenance is disabled until migration.
  * - Creates FunctionCallingAgent with all tools
  * - Warms up ScopedMemoryService
@@ -47,21 +44,15 @@ export async function initializeNodes(): Promise<ShannonNodes> {
   const memoryTools = createMemoryTools();
   tools.push(...memoryTools);
 
-  // 3. EmotionNode (Phase 4: simplified graph では不要だが、full graph フォールバック用に保持)
-  const emotionNode = process.env.SHANNON_GRAPH_VERSION === 'full'
-    ? new EmotionNode()
-    : undefined;
+  // 3. No unscoped backfill/consolidation at startup.
 
-  // 4. No unscoped backfill/consolidation at startup.
-
-  // 5. ScopedMemoryService singleton warm-up
+  // 4. ScopedMemoryService singleton warm-up
   ScopedMemoryService.getInstance();
 
-  // 6. FunctionCallingAgent
+  // 5. FunctionCallingAgent
   const fca = new FunctionCallingAgent(tools);
 
-  const graphMode = process.env.SHANNON_GRAPH_VERSION === 'full' ? 'full' : 'simplified';
-  logger.info(`Nodes initialized (FCA + tools, graph: ${graphMode})`);
+  logger.info('Nodes initialized (FCA + tools)');
 
-  return { emotionNode, fca, tools };
+  return { fca, tools };
 }
