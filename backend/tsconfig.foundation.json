@@ -18,6 +18,7 @@
     "src/modules/memory/**/*.ts",
     "src/modules/conversation/**/*.ts",
     "src/modules/radar/**/*.ts",
-    "src/modules/fca/**/*.ts"
+    "src/modules/fca/**/*.ts",
+    "src/modules/identity/**/*.ts"
   ]
 }

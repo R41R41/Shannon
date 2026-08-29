@@ -4,6 +4,7 @@ import { authorizedFetch } from '../../features/auth/authorizedFetch';
 import { useAuthSession } from '../../features/auth/AuthSession';
 import { showToast } from '../Toast/Toast';
 import { useTheme, type Theme } from '../../hooks/useTheme';
+import IdentityPanel from '../../features/identity/IdentityPanel';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -84,6 +85,9 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
         </div>
 
         <div className={styles.modalBody}>
+          <IdentityPanel isAdmin={!!user?.isAdmin} isOpen={isOpen} />
+
+          {user?.isAdmin && (
           <div className={styles.settingItem}>
             <div className={styles.sectionHeader}>
               <h3>LLM モデル</h3>
@@ -138,6 +142,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
               </>
             )}
           </div>
+          )}
 
           <div className={styles.settingItem}>
             <h3>表示設定</h3>

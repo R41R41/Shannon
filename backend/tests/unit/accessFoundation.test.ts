@@ -94,7 +94,7 @@ describe('auth wire protocol', () => {
   });
   it('uses signed identity and stored grants despite spoofed email or role fields', async () => {
     const f = fixture(); const response = await handleAuthMessage(JSON.stringify({ type: 'auth:check', idToken: 'token', email: 'spoof', isAdmin: true }), f.access);
-    expect(response).toEqual({ type: 'auth:response', success: true, userData: { name: 'Reviewed', email: 'signed@example.test', isAdmin: false } });
+    expect(response).toEqual({ type: 'auth:response', success: true, userData: { name: 'Reviewed', email: 'signed@example.test', isAdmin: false, uid: 'uid-a', projectId: 'test-project' } });
   });
   it.each(['{', 'null', '[]', '"text"'])('invalid JSON or envelope is handled safely', async raw => {
     const f = fixture(); expect(await handleAuthMessage(raw, f.access)).toMatchObject({ success: false, error: 'INVALID_MESSAGE' }); expect(f.verify).not.toHaveBeenCalled();
@@ -115,11 +115,13 @@ describe('foundation dependency gate', () => {
       fs.mkdirSync(path.join(root, 'conversation'));
       fs.mkdirSync(path.join(root, 'radar'));
       fs.mkdirSync(path.join(root, 'fca'));
+      fs.mkdirSync(path.join(root, 'identity'));
       fs.writeFileSync(path.join(root, 'memory/index.ts'), 'export {};');
       fs.writeFileSync(path.join(root, 'execution/index.ts'), 'export {};');
       fs.writeFileSync(path.join(root, 'access/index.ts'), 'export {};');
       fs.writeFileSync(path.join(root, 'modelSettings/index.ts'), 'export {};');
       fs.writeFileSync(path.join(root, 'fca/index.ts'), 'export {};');
+      fs.writeFileSync(path.join(root, 'identity/index.ts'), 'export {};');
       expect(execFileSync(process.execPath, [script, root], { encoding: 'utf8' })).toContain('passed');
       fs.writeFileSync(path.join(root, 'access/index.ts'), "import fs from 'node:fs';\nconst value = process.env.SECRET;\n");
       expect(() => execFileSync(process.execPath, [script, root], { stdio: 'pipe' })).toThrow();

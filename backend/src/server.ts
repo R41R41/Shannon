@@ -19,6 +19,7 @@ import { join } from 'path';
 import { shutdownLangfuse } from './services/llm/utils/langfuse.js';
 import { registerHealthRoutes } from './routes/healthRoutes.js';
 import { registerModelRoutes } from './routes/modelRoutes.js';
+import { registerIdentityRoutes } from './routes/identityRoutes.js';
 import { registerTokenRoutes } from './routes/tokenRoutes.js';
 import { registerTestRoutes } from './routes/testRoutes.js';
 import { registerWebhookRoutes } from './routes/webhookRoutes.js';
@@ -102,6 +103,7 @@ class Server {
     registerHealthRoutes(app, () => this.coreReady && mongoose.connection.readyState === 1 &&
       !!config.webAuth.firebaseProjectId && config.webAuth.allowedOrigins.length > 0);
     registerModelRoutes(app, this.webAccess.access, this.webAccess.modelSettings);
+    registerIdentityRoutes(app, this.webAccess.access, this.webAccess.identityStatus, this.webAccess.identityManifestReview);
     registerTokenRoutes(app);
     registerTestRoutes(app);
     registerWebhookRoutes(app, this.twitterClient);

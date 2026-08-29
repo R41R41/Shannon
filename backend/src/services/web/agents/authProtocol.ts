@@ -16,6 +16,8 @@ export async function handleAuthMessage(raw: string, access: AccessService): Pro
     return { type: 'auth:response', success: true, userData: {
       name: context.principal.name, email: context.principal.email,
       isAdmin: context.capabilities.includes('models:write'),
+      uid: context.principal.uid,
+      projectId: context.principal.projectId,
     } };
   } catch (error) {
     return { type: 'auth:response', success: false, error: error instanceof AccessError ? error.code : 'AUTH_UNAVAILABLE' };
