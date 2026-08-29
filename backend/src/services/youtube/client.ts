@@ -12,6 +12,7 @@ import { google, youtube_v3 } from 'googleapis';
 import { BaseClient } from '../common/BaseClient.js';
 import { config } from '../../config/env.js';
 import { getEventBus } from '../eventBus/index.js';
+import { emitWebServiceStatus } from '../web/webNotificationHub.js';
 import { logger } from '../../utils/logger.js';
 
 export class YoutubeClient extends BaseClient {
@@ -60,13 +61,9 @@ export class YoutubeClient extends BaseClient {
       } else if (serviceCommand === 'stop') {
         await this.stop();
       } else if (serviceCommand === 'status') {
-        this.eventBus.publish({
-          type: 'web:status',
-          memoryZone: 'web',
-          data: {
-            service: 'youtube',
-            status: this.status,
-          },
+        emitWebServiceStatus({
+          service: 'youtube',
+          status: this.status,
         });
       }
     });
@@ -145,13 +142,9 @@ export class YoutubeClient extends BaseClient {
         await this.stopLiveChatPolling();
         this.liveChatStatus = 'stopped';
       } else if (serviceCommand === 'status') {
-        this.eventBus.publish({
-          type: 'web:status',
-          memoryZone: 'web',
-          data: {
-            service: 'youtube:live_chat',
-            status: this.liveChatStatus,
-          },
+        emitWebServiceStatus({
+          service: 'youtube:live_chat',
+          status: this.liveChatStatus,
         });
       }
     });

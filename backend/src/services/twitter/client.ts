@@ -10,6 +10,7 @@ import { createLogger } from '../../utils/logger.js';
 const logger = createLogger('Twitter:Client');
 import { BaseClient } from '../common/BaseClient.js';
 import { getEventBus } from '../eventBus/index.js';
+import { emitWebServiceStatus } from '../web/webNotificationHub.js';
 import { TwitterAuthManager } from './api/TwitterAuthManager.js';
 import { TwitterApiClient } from './api/TwitterApiClient.js';
 import { AutoPostManager } from './scheduling/AutoPostManager.js';
@@ -163,13 +164,9 @@ export class TwitterClient extends BaseClient {
       } else if (serviceCommand === 'stop') {
         await this.stop();
       } else if (serviceCommand === 'status') {
-        this.eventBus.publish({
-          type: 'web:status',
-          memoryZone: 'web',
-          data: {
-            service: 'twitter',
-            status: this.status,
-          },
+        emitWebServiceStatus({
+          service: 'twitter',
+          status: this.status,
         });
       }
     });

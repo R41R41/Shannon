@@ -2,13 +2,11 @@ import WebSocket from 'ws';
 import { config } from '../../../config/env.js';
 import { models } from '../../../config/models.js';
 import { logger } from '../../../utils/logger.js';
-import { EventBus } from '../../eventBus/eventBus.js';
-import { getEventBus } from '../../eventBus/index.js';
+import { getWebNotificationHub } from '../../web/webNotificationHub.js';
 
 export class RealtimeAPIService {
   private static instance: RealtimeAPIService;
   private ws: WebSocket | null = null;
-  private eventBus: EventBus;
   private initialized: boolean = false;
   public onTextResponse: ((text: string) => void) | null;
   public onTextDoneResponse: (() => void) | null;
@@ -35,8 +33,6 @@ export class RealtimeAPIService {
   private static SESSION_REFRESH_MS = 55 * 60 * 1000; // 55分（60分上限の前に更新）
 
   constructor() {
-    const eventBus = getEventBus();
-    this.eventBus = eventBus;
     this.initialized = false; // 初期化状態を追跡
     this.onTextResponse = null; // テキストレスポンス用コールバック
     this.onTextDoneResponse = null; // テキスト完了用コールバック
@@ -220,7 +216,7 @@ export class RealtimeAPIService {
 
           case 'response.created':
             logger.info('Response creation started', 'blue');
-            this.eventBus.log('web', 'blue', 'Response creation started');
+            void getWebNotificationHub().log('web', 'blue', 'Response creation started');
             break;
 
           case 'response.text.delta':
@@ -233,7 +229,7 @@ export class RealtimeAPIService {
           case 'response.text.done':
           case 'response.output_text.done':
             logger.success('Text done');
-            this.eventBus.log('web', 'green', 'Text done');
+            void getWebNotificationHub().log('web', 'green', 'Text done');
             this.isTextResponseComplete = true;
             if (!this.isProcessingTextQueue && this.onTextDoneResponse) {
               this.onTextDoneResponse();
@@ -243,7 +239,7 @@ export class RealtimeAPIService {
 
           case 'input_audio_buffer.committed':
             logger.success('Speech committed');
-            this.eventBus.log('web', 'green', 'Speech committed');
+            void getWebNotificationHub().log('web', 'green', 'Speech committed');
             this.isUserTranscriptResponseComplete = false;
             break;
 
@@ -268,7 +264,7 @@ export class RealtimeAPIService {
           case 'response.audio.done':
           case 'response.output_audio.done':
             logger.success(`Response Audio completed: ${this.responseAudioBuffer.length} bytes`);
-            this.eventBus.log('web', 'green', 'Response Audio completed');
+            void getWebNotificationHub().log('web', 'green', 'Response Audio completed');
             this.isAudioResponseComplete = true;
             if (!this.isProcessingAudioQueue && this.onAudioDoneResponse) {
               this.onAudioDoneResponse();
@@ -286,7 +282,7 @@ export class RealtimeAPIService {
           case 'response.audio_transcript.done':
           case 'response.output_audio_transcript.done':
             logger.success('Transcript done');
-            this.eventBus.log('web', 'green', 'Transcript done');
+            void getWebNotificationHub().log('web', 'green', 'Transcript done');
             this.isTextResponseComplete = true;
             if (!this.isProcessingTextQueue && this.onTextDoneResponse) {
               this.onTextDoneResponse();
@@ -296,7 +292,7 @@ export class RealtimeAPIService {
 
           case 'conversation.item.input_audio_transcription.completed':
             logger.success('Transcript completed');
-            this.eventBus.log('web', 'green', 'Transcript completed');
+            void getWebNotificationHub().log('web', 'green', 'Transcript completed');
             this.isUserTranscriptResponseComplete = true;
             if (this.onUserTranscriptResponse && data.transcript) {
               this.onUserTranscriptResponse(data.transcript);
@@ -305,7 +301,7 @@ export class RealtimeAPIService {
 
           case 'error':
             logger.error(`Server error: ${JSON.stringify(data)}`);
-            this.eventBus.log('web', 'red', 'Server error', true);
+            void getWebNotificationHub().log('web', 'red', 'Server error', true);
             if (data.error?.code === 'beta_api_shape_disabled') {
               logger.error('[RealtimeAPI] GA移行が必要な致命的エラーのため再接続を停止します。');
               this.fatalError = true;
@@ -333,7 +329,7 @@ export class RealtimeAPIService {
 
       this.ws.on('error', (error) => {
         logger.error(`WebSocket error: ${error}`);
-        this.eventBus.log('web', 'red', 'WebSocket error');
+        void getWebNotificationHub().log('web', 'red', 'WebSocket error');
         if (!settled) {
           settled = true;
           reject(error);
@@ -342,7 +338,7 @@ export class RealtimeAPIService {
 
       this.ws.on('close', () => {
         logger.debug('WebSocket connection closed');
-        this.eventBus.log('web', 'red', 'WebSocket connection closed');
+        void getWebNotificationHub().log('web', 'red', 'WebSocket connection closed');
         this.initialized = false;
         if (!settled) {
           settled = true;
@@ -459,11 +455,11 @@ export class RealtimeAPIService {
       this.isVadMode = data;
       if (this.isVadMode) {
         logger.info('VAD mode change: true', 'cyan');
-        this.eventBus.log('web', 'cyan', 'VAD mode change: true');
+        void getWebNotificationHub().log('web', 'cyan', 'VAD mode change: true');
         this.ws.send(JSON.stringify(this.vadSessionConfig));
       } else {
         logger.info('VAD mode change: false', 'cyan');
-        this.eventBus.log('web', 'cyan', 'VAD mode change: false');
+        void getWebNotificationHub().log('web', 'cyan', 'VAD mode change: false');
         this.ws.send(JSON.stringify(this.noVadSessionConfig));
       }
     }
@@ -501,9 +497,9 @@ export class RealtimeAPIService {
       await this.initializeSession();
 
       this.reconnectAttempts = 0; // 接続成功したらリセット
-      this.eventBus.log('web', 'white', 'Connected to OpenAI Realtime API');
+      void getWebNotificationHub().log('web', 'white', 'Connected to OpenAI Realtime API');
     } catch (error) {
-      this.eventBus.log('web', 'red', JSON.stringify(error), true);
+      void getWebNotificationHub().log('web', 'red', JSON.stringify(error), true);
       this.handleDisconnect();
     }
   }
@@ -511,7 +507,7 @@ export class RealtimeAPIService {
   private handleDisconnect() {
     if (this.reconnectAttempts < this.maxReconnectAttempts) {
       this.reconnectAttempts++;
-      this.eventBus.log(
+      void getWebNotificationHub().log(
         'web',
         'white',
         `Attempting reconnect ${this.reconnectAttempts}/${this.maxReconnectAttempts}`
@@ -521,7 +517,7 @@ export class RealtimeAPIService {
         this.connect();
       }, this.reconnectDelay);
     } else {
-      this.eventBus.log('web', 'red', 'Max reconnection attempts reached');
+      void getWebNotificationHub().log('web', 'red', 'Max reconnection attempts reached');
     }
   }
 

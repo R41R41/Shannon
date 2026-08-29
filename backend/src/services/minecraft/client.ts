@@ -10,6 +10,7 @@ import { promisify } from 'util';
 import { BaseClient } from '../common/BaseClient.js';
 import { config } from '../../config/env.js';
 import { getEventBus } from '../eventBus/index.js';
+import { emitWebServiceStatus } from '../web/webNotificationHub.js';
 import { logger } from '../../utils/logger.js';
 
 const execAsync = promisify(exec);
@@ -174,13 +175,9 @@ export class MinecraftClient extends BaseClient {
       } else if (serviceCommand === 'stop') {
         await this.stop();
       } else if (serviceCommand === 'status') {
-        this.eventBus.publish({
-          type: 'web:status',
-          memoryZone: 'web',
-          data: {
-            service: 'minecraft',
-            status: this.status,
-          },
+        emitWebServiceStatus({
+          service: 'minecraft',
+          status: this.status,
         });
       }
     });
@@ -193,35 +190,23 @@ export class MinecraftClient extends BaseClient {
           const result = await this.startServer(server);
           logger.info(`MinecraftClient: Start server result: ${JSON.stringify(result)}`);
           const status = await this.getServerStatus(server);
-          this.eventBus.publish({
-            type: `web:status`,
-            memoryZone: 'web',
-            data: {
-              service: `minecraft:${server}`,
-              status: status,
-            } as ServiceOutput,
+          emitWebServiceStatus({
+            service: `minecraft:${server}`,
+            status,
           });
         } else if (serviceCommand === 'stop') {
           const result = await this.stopServer(server);
           logger.info(`MinecraftClient: Stop server result: ${JSON.stringify(result)}`);
           const status = await this.getServerStatus(server);
-          this.eventBus.publish({
-            type: `web:status`,
-            memoryZone: 'web',
-            data: {
-              service: `minecraft:${server}`,
-              status: status,
-            } as ServiceOutput,
+          emitWebServiceStatus({
+            service: `minecraft:${server}`,
+            status,
           });
         } else if (serviceCommand === 'status') {
           const status = await this.getServerStatus(server);
-          this.eventBus.publish({
-            type: `web:status`,
-            memoryZone: 'web',
-            data: {
-              service: `minecraft:${server}`,
-              status: status,
-            } as ServiceOutput,
+          emitWebServiceStatus({
+            service: `minecraft:${server}`,
+            status,
           });
         }
       });

@@ -9,6 +9,7 @@ import fs from 'fs';
 import cron from 'node-cron';
 import { BaseClient } from '../common/BaseClient.js';
 import { getEventBus } from '../eventBus/index.js';
+import { getWebNotificationHub } from '../web/webNotificationHub.js';
 import { logger } from '../../utils/logger.js';
 
 export class Scheduler extends BaseClient {
@@ -53,15 +54,10 @@ export class Scheduler extends BaseClient {
   }
 
   private async post_schedule(data: SchedulerInput) {
-    this.eventBus.publish({
-      type: 'web:post_schedule',
-      memoryZone: 'web',
-      data: {
-        type: 'post_schedule',
-        data: this.schedules,
-      } as SchedulerOutput,
-      targetMemoryZones: ['web'],
-    });
+    getWebNotificationHub().emitPostSchedule({
+      type: 'post_schedule',
+      data: this.schedules,
+    } as SchedulerOutput);
   }
 
   private async call_schedule(data: SchedulerInput) {

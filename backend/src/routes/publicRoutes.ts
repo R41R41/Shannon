@@ -19,7 +19,7 @@ import type { LLMService } from '../services/llm/client.js';
 import type { TaskTreeState } from '@shannon/common';
 import { HumanMessage, AIMessage } from '@langchain/core/messages';
 import { webAdapter } from '../services/common/adapters/index.js';
-import { getEventBus } from '../services/eventBus/index.js';
+import { getWebNotificationHub } from '../services/web/webNotificationHub.js';
 import { createLogger } from '../utils/logger.js';
 
 // ---------------------------------------------------------------------------
@@ -141,14 +141,10 @@ export function registerPublicRoutes(app: Express, llmService: LLMService): void
       isAdmin,
     });
 
-    // --- Subscribe to EventBus events ---
-    const eventBus = getEventBus();
     const sid = sessionId ?? 'public-default';
     const unsubscribers: (() => void)[] = [];
 
-    // Planning / Task tree events
-    const unsubPlanning = eventBus.subscribe('web:planning', (event) => {
-      const taskTree = event.data as TaskTreeState & { sessionId?: string };
+    const unsubPlanning = getWebNotificationHub().onPlanning((taskTree) => {
       if (taskTree.sessionId && taskTree.sessionId !== sid) return;
       sendSSE(res, 'task_update', taskTree);
     });

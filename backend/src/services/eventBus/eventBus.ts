@@ -1,12 +1,10 @@
 import {
   Color,
-  Event,
   EventType,
-  ILog,
   MemoryZone,
   TypedEvent,
 } from '@shannon/common';
-import Log from '../../models/Log.js';
+import { getWebNotificationHub } from '../web/webNotificationHub.js';
 import { logger } from '../../utils/logger.js';
 
 export class EventBus {
@@ -83,41 +81,6 @@ export class EventBus {
     content: string,
     isSave: boolean = false
   ) {
-    const logEntry: ILog = {
-      timestamp: new Date(),
-      memoryZone,
-      color,
-      content,
-    };
-    logger.info(content.length > 150 ? `${content.slice(0, 150)}...` : content, color);
-
-    if (isSave) {
-      try {
-        await Log.create(logEntry);
-        const logCount = await Log.countDocuments();
-        if (logCount > 10000) {
-          const logsToDelete = logCount - 5000;
-          const oldestLogs = await Log.find()
-            .sort({ timestamp: 1 })
-            .limit(logsToDelete);
-
-          if (oldestLogs.length > 0) {
-            await Log.deleteMany({
-              _id: { $in: oldestLogs.map((log) => log._id) },
-            });
-            logger.info(`${logsToDelete}件の古いログを削除しました`);
-          }
-        }
-      } catch (error) {
-        logger.error('Error saving log', error);
-      }
-    }
-
-    this.publish({
-      type: 'web:log',
-      memoryZone: 'web',
-      data: logEntry,
-      targetMemoryZones: ['web'],
-    });
+    await getWebNotificationHub().log(memoryZone, color, content, isSave);
   }
 }

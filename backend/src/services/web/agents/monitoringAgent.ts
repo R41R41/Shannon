@@ -4,9 +4,8 @@ import {
   WebSocketServiceBase,
   WebSocketServiceConfig,
 } from '../../common/WebSocketService.js';
-import { EventBus } from '../../eventBus/eventBus.js';
-import { getEventBus } from '../../eventBus/index.js';
 import { logger } from '../../../utils/logger.js';
+import { getWebNotificationHub } from '../webNotificationHub.js';
 
 interface SearchQuery {
   startDate?: string;
@@ -17,18 +16,12 @@ interface SearchQuery {
 
 export class MonitoringAgent extends WebSocketServiceBase {
   private static instance: MonitoringAgent;
-  private eventBus: EventBus;
-  private messageSubscription: (() => void) | null = null;
+  private unsubscribeLog: (() => void) | null = null;
 
   private constructor(config: WebSocketServiceConfig) {
     super(config);
-    this.eventBus = getEventBus();
-
-    this.messageSubscription = this.eventBus.subscribe('web:log', (event) => {
-      this.broadcast({
-        type: 'web:log',
-        data: event.data as ILog,
-      } as WebMonitoringOutput);
+    this.unsubscribeLog = getWebNotificationHub().onLog((entry) => {
+      this.broadcast({ type: 'web:log', data: entry } as WebMonitoringOutput);
     });
   }
 
@@ -42,87 +35,42 @@ export class MonitoringAgent extends WebSocketServiceBase {
   protected override initialize() {
     this.onAuthenticatedConnection( async (ws) => {
       logger.debug('Monitoring client connected');
-
       this.handleNewConnection(ws);
-
-      ws.on('close', () => {
-        logger.debug('Monitoring client disconnected');
-      });
+      ws.on('close', () => { logger.debug('Monitoring client disconnected'); });
 
       const logs = await Log.find().sort({ timestamp: -1 }).limit(200);
-      const sortedLogs = logs.sort(
-        (a, b) => a.timestamp.getTime() - b.timestamp.getTime()
-      );
-
+      const sortedLogs = logs.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
       sortedLogs.forEach((log) => {
         this.sendTo(ws, { type: 'web:log', data: log } as WebMonitoringOutput);
       });
 
-      // 検索リクエストのハンドリング
       this.onMessage(ws, async (message) => {
         const data = JSON.parse(message.toString());
-
         if (data.type === 'ping') {
           this.broadcast({ type: 'pong' } as WebMonitoringOutput);
           return;
         }
-        logger.info(
-          `valid web message received in monitoring agent: ${
-            data.type === 'search'
-              ? JSON.stringify(data.query)
-              : JSON.stringify(data)
-          }`,
-          'blue',
-        );
         if (data.type === 'search') {
           const query = data.query as SearchQuery;
           const searchResults = await this.searchLogs(query);
-          this.sendTo(ws, {
-            type: 'web:searchResults',
-            data: searchResults as ILog[],
-          } as WebMonitoringOutput);
+          this.sendTo(ws, { type: 'web:searchResults', data: searchResults as ILog[] } as WebMonitoringOutput);
         }
-      });
-
-      ws.on('close', () => {
-        logger.debug('Monitoring Client disconnected');
-      });
-
-      ws.on('error', (error) => {
-        logger.error('WebSocket error:', error);
       });
     });
   }
 
   private async searchLogs(query: SearchQuery) {
-    const filter: any = {};
-
+    const filter: Record<string, unknown> = {};
     if (query.startDate && query.endDate) {
-      filter.timestamp = {
-        $gte: new Date(query.startDate),
-        $lte: new Date(query.endDate),
-      };
+      filter.timestamp = { $gte: new Date(query.startDate), $lte: new Date(query.endDate) };
     }
-
-    if (query.memoryZone) {
-      filter.memoryZone = query.memoryZone as MemoryZone;
-    }
-
-    if (query.content) {
-      filter.content = { $regex: query.content, $options: 'i' };
-    }
-
+    if (query.memoryZone) filter.memoryZone = query.memoryZone;
+    if (query.content) filter.content = { $regex: query.content, $options: 'i' };
     return await Log.find(filter).sort({ timestamp: -1 }).limit(200).lean();
   }
 
-  public start() {
-    super.start();
-  }
-
   public disconnect() {
-    if (this.messageSubscription) {
-      this.messageSubscription();
-      this.messageSubscription = null;
-    }
+    this.unsubscribeLog?.();
+    this.unsubscribeLog = null;
   }
 }

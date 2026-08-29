@@ -14,6 +14,7 @@ import {
 } from '@shannon/common';
 import type { RequestEnvelope, ShannonGraphState } from '@shannon/common';
 import { EventBus } from '../../eventBus/eventBus.js';
+import { getWebNotificationHub } from '../../web/webNotificationHub.js';
 import { RealtimeAPIService } from '../agents/realtimeApiAgent.js';
 import {
   discordAdapter,
@@ -110,65 +111,41 @@ export class EventRouter {
   }
 
   setupRealtimeAPICallback() {
+    const hub = getWebNotificationHub();
     this.realtimeApi.setTextCallback((text) => {
-      this.eventBus.publish({
-        type: 'web:post_message',
-        memoryZone: 'web',
-        data: {
-          type: 'realtime_text',
-          realtime_text: text,
-        } as OpenAIMessageOutput,
-        targetMemoryZones: ['web'],
-      });
+      hub.emitPostMessage({
+        type: 'realtime_text',
+        realtime_text: text,
+      } as OpenAIMessageOutput);
     });
 
     this.realtimeApi.setTextDoneCallback(() => {
-      this.eventBus.publish({
-        type: 'web:post_message',
-        memoryZone: 'web',
-        data: {
-          type: 'realtime_text',
-          command: 'text_done',
-        } as OpenAIMessageOutput,
-        targetMemoryZones: ['web'],
-      });
+      hub.emitPostMessage({
+        type: 'realtime_text',
+        command: 'text_done',
+      } as OpenAIMessageOutput);
     });
 
     this.realtimeApi.setAudioCallback((audio) => {
-      this.eventBus.publish({
-        type: 'web:post_message',
-        memoryZone: 'web',
-        data: {
-          realtime_audio: audio.toString(),
-          type: 'realtime_audio',
-          command: 'realtime_audio_append',
-        } as OpenAIMessageOutput,
-        targetMemoryZones: ['web'],
-      });
+      hub.emitPostMessage({
+        realtime_audio: audio.toString(),
+        type: 'realtime_audio',
+        command: 'realtime_audio_append',
+      } as OpenAIMessageOutput);
     });
 
     this.realtimeApi.setAudioDoneCallback(() => {
-      this.eventBus.publish({
-        type: 'web:post_message',
-        memoryZone: 'web',
-        data: {
-          type: 'realtime_audio',
-          command: 'realtime_audio_commit',
-        } as OpenAIMessageOutput,
-        targetMemoryZones: ['web'],
-      });
+      hub.emitPostMessage({
+        type: 'realtime_audio',
+        command: 'realtime_audio_commit',
+      } as OpenAIMessageOutput);
     });
 
     this.realtimeApi.setUserTranscriptCallback((text) => {
-      this.eventBus.publish({
-        type: 'web:post_message',
-        memoryZone: 'web',
-        data: {
-          realtime_text: text,
-          type: 'user_transcript',
-        } as OpenAIMessageOutput,
-        targetMemoryZones: ['web'],
-      });
+      hub.emitPostMessage({
+        realtime_text: text,
+        type: 'user_transcript',
+      } as OpenAIMessageOutput);
     });
   }
 

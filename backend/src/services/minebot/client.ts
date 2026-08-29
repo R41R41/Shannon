@@ -15,6 +15,7 @@ import { plugin as pvp } from 'mineflayer-pvp';
 import { plugin as toolPlugin } from 'mineflayer-tool';
 import { BaseClient } from '../common/BaseClient.js';
 import { getEventBus } from '../eventBus/index.js';
+import { emitWebServiceStatus } from '../web/webNotificationHub.js';
 import { CONFIG } from './config/MinebotConfig.js';
 import { SkillAgent } from './skillAgent.js';
 import { ConstantSkills, CustomBot, InstantSkills } from './types.js';
@@ -262,13 +263,9 @@ export class MinebotClient extends BaseClient {
       } else if (serviceCommand === 'stop') {
         await this.stop();
       } else if (serviceCommand === 'status') {
-        this.eventBus.publish({
-          type: 'web:status',
-          memoryZone: 'web',
-          data: {
-            service: 'minebot',
-            status: this.status,
-          },
+        emitWebServiceStatus({
+          service: 'minebot',
+          status: this.status,
         });
       }
     });
@@ -281,35 +278,23 @@ export class MinebotClient extends BaseClient {
         const result = await this.startBot(event.data as MinebotInput);
         if (!result) return;
         const status = this.getStatus();
-        this.eventBus.publish({
-          type: `web:status`,
-          memoryZone: 'web',
-          data: {
-            service: `minebot:bot`,
-            status: status,
-          } as ServiceOutput,
+        emitWebServiceStatus({
+          service: 'minebot:bot',
+          status,
         });
       } else if (serviceCommand === 'stop') {
         const result = await this.stopBot(event.data as MinebotInput);
         if (!result) return;
         const status = this.getStatus();
-        this.eventBus.publish({
-          type: `web:status`,
-          memoryZone: 'web',
-          data: {
-            service: `minebot:bot`,
-            status: status,
-          } as ServiceOutput,
+        emitWebServiceStatus({
+          service: 'minebot:bot',
+          status,
         });
       } else if (serviceCommand === 'status') {
         const status = this.getStatus();
-        this.eventBus.publish({
-          type: 'web:status',
-          memoryZone: 'web',
-          data: {
-            service: 'minebot:bot',
-            status: status,
-          } as ServiceOutput,
+        emitWebServiceStatus({
+          service: 'minebot:bot',
+          status,
         });
       }
     });

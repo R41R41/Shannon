@@ -3,6 +3,7 @@ import type { BlockObjectResponse, RichTextItemResponse } from "@notionhq/client
 import { NotionClientInput } from '@shannon/common';
 import { BaseClient } from '../common/BaseClient.js';
 import { getEventBus } from '../eventBus/index.js';
+import { emitWebServiceStatus } from '../web/webNotificationHub.js';
 import { config } from '../../config/env.js';
 import { logger } from '../../utils/logger.js';
 
@@ -46,13 +47,9 @@ export class NotionClient extends BaseClient {
             } else if (serviceCommand === 'stop') {
                 await this.stop();
             } else if (serviceCommand === 'status') {
-                this.eventBus.publish({
-                    type: 'web:status',
-                    memoryZone: 'web',
-                    data: {
-                        service: 'notion',
-                        status: this.status,
-                    },
+                emitWebServiceStatus({
+                    service: 'notion',
+                    status: this.status,
                 });
             }
         });

@@ -11,8 +11,8 @@ import { fileURLToPath, pathToFileURL } from 'url';
 import { z } from 'zod';
 import { config } from '../../config/env.js';
 import { classifyError, formatErrorForLog } from '../../errors/index.js';
-import { EventBus } from '../eventBus/eventBus.js';
 import { getEventBus } from '../eventBus/index.js';
+import { getWebNotificationHub } from '../web/webNotificationHub.js';
 import { VoicepeakClient } from '../voicepeak/client.js';
 import { loadPrompt } from './config/prompts.js';
 import { RealtimeAPIService } from './agents/realtimeApiAgent.js';
@@ -202,11 +202,7 @@ export class LLMService {
       (skill, index, self) =>
         index === self.findIndex((t) => t.name === skill.name)
     );
-    this.eventBus.publish({
-      type: 'web:skill',
-      memoryZone: 'web',
-      data: uniqueSkills as SkillInfo[],
-    });
+    getWebNotificationHub().emitSkill(uniqueSkills as SkillInfo[]);
   }
 
   /**

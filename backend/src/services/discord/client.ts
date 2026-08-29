@@ -48,6 +48,7 @@ import { voiceResponseChannelIds } from './voiceState.js';
 import { loadServerChoices } from './serverChoices.js';
 import { BaseClient } from '../common/BaseClient.js';
 import { getEventBus } from '../eventBus/index.js';
+import { emitWebServiceStatus } from '../web/webNotificationHub.js';
 import { splitDiscordMessage, sendLongMessage } from './utils.js';
 import { VoiceManager } from './voice/VoiceManager.js';
 import { createDiscordConversationTransport } from './conversationTransport.js';
@@ -887,13 +888,9 @@ export class DiscordBot extends BaseClient {
       } else if (serviceCommand === 'stop') {
         await this.stop();
       } else if (serviceCommand === 'status') {
-        this.eventBus.publish({
-          type: 'web:status',
-          memoryZone: 'web',
-          data: {
-            service: 'discord',
-            status: this.status,
-          },
+        emitWebServiceStatus({
+          service: 'discord',
+          status: this.status,
         });
       }
     });

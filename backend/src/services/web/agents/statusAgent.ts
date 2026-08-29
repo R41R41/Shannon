@@ -9,30 +9,24 @@ import {
   WebSocketServiceBase,
   WebSocketServiceConfig,
 } from '../../common/WebSocketService.js';
-import { EventBus } from '../../eventBus/eventBus.js';
 import { getEventBus } from '../../eventBus/index.js';
 import { logger } from '../../../utils/logger.js';
+import { getWebNotificationHub } from '../webNotificationHub.js';
 
 export class StatusAgent extends WebSocketServiceBase {
   private static instance: StatusAgent;
-  private eventBus: EventBus;
-  private messageSubscription: (() => void) | null = null;
+  private hubUnsubscribe: (() => void) | null = null;
 
   private constructor(config: WebSocketServiceConfig) {
     super(config);
-    this.eventBus = getEventBus();
 
-    this.messageSubscription = this.eventBus.subscribe(
-      'web:status',
-      (event) => {
-        const data = event.data as StatusAgentInput;
-        this.broadcast({
-          type: 'service:status',
-          service: data.service,
-          data: data.status,
-        } as StatusAgentOutput);
-      }
-    );
+    this.hubUnsubscribe = getWebNotificationHub().onStatus((data) => {
+      this.broadcast({
+        type: 'service:status',
+        service: data.service,
+        data: data.status,
+      } as StatusAgentOutput);
+    });
   }
 
   public static getInstance(config: WebSocketServiceConfig): StatusAgent {
@@ -43,7 +37,8 @@ export class StatusAgent extends WebSocketServiceBase {
   }
 
   protected override initialize() {
-    this.onAuthenticatedConnection( (ws) => {
+    const eventBus = getEventBus();
+    this.onAuthenticatedConnection((ws) => {
       logger.debug('Status client connected');
 
       this.handleNewConnection(ws);
@@ -59,7 +54,7 @@ export class StatusAgent extends WebSocketServiceBase {
           const command = data.command;
           if (data.service === 'minebot:bot') {
             const serverName = data.serverName ? data.serverName : null;
-            this.eventBus.publish({
+            eventBus.publish({
               type: `${service}:status` as EventType,
               memoryZone: 'web',
               data: {
@@ -69,7 +64,7 @@ export class StatusAgent extends WebSocketServiceBase {
             });
           } else {
             const serverName = data.service ? data.service : null;
-            this.eventBus.publish({
+            eventBus.publish({
               type: `${service}:status` as EventType,
               memoryZone: 'web',
               data: {
@@ -84,9 +79,7 @@ export class StatusAgent extends WebSocketServiceBase {
   }
 
   public disconnect() {
-    if (this.messageSubscription) {
-      this.messageSubscription();
-      this.messageSubscription = null;
-    }
+    this.hubUnsubscribe?.();
+    this.hubUnsubscribe = null;
   }
 }
