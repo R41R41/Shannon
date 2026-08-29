@@ -264,6 +264,7 @@ Discord の旧 `FunctionCallingAgentState` 1袋は解消。Minecraft Executor �
 
 | 日付 | 内容 |
 |---|---|
+| 2026-08-30 | C（LINE/Radar オフライン）完了。`lineRadarFcaSelection` / `LineRadarWorker` FCA 経路、`invokeShannonGraph` adapter 配線、`MinebotTaskRuntime`→graph executor の channel hook 透過を unit で固定。実 LINE/Webhook/OAuth/通常 DB は dev ロック下の別工程。 |
 | 2026-08-29 | 現行に合わせて全面更新。Executor は Minecraft 主パスで FCA 置換ではない。共有核・LINE 分離・記憶混在禁止・ツール2袋・port 契約を記載。投稿エージェントを核へ統合。Discord から Twitter 投稿ツールを除外。WorldKnowledge とタスク引継ぎを server/world 単位に。 |
 | 2026-04-04 | （旧）Minebot 戦闘ツールフィルタ等。当時の「FCA 削除済み」は実装と不一致。 |
 | 2026-03-31 | （旧）ShannonExecutor 導入。FCA は残存。 |

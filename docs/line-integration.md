@@ -63,7 +63,15 @@ LINE公式アカウントのMessaging API設定、グループ参加許可、Bot
 
 ## 検証と本番
 
-`npm run test:offline -w backend`（全外部mock）と既存型検査/build。`scripts/test-line-mongo.cjs --isolated-fixture`はdev限定・新しい空データ/架空IDのMongo37030を使用し、並行予約・enqueue/claimの1勝者・DBclient再接続後の保持・停止/本人変更拒否を検証して正常停止する。実停電/replica failover試験ではない。
+`npm run test:offline -w backend`（全外部mock）と既存型検査/build。2026-08-30 時点のオフライン固定範囲:
+
+- `lineRadarFcaSelection.test.ts` — Web/天気/YouTube 混在、沈黙、バイト予算
+- `lineIntegration.test.ts` — worker の FCA 経路（YouTube 専用、Web+天気混在、沈黙）
+- `graphAdapterWiring.test.ts` — `invokeShannonGraph` → `fca.run` adapter 透過
+- `adapters/minebotMemoryIdentity.test.ts` — `MinebotTaskRuntime` → graph executor の live inventory / interrupt hook
+- 既存 Radar OAuth/Data API 契約 — `radarProductionIntegration.test.ts`
+
+`scripts/test-line-mongo.cjs --isolated-fixture`はdev限定・新しい空データ/架空IDのMongo37030を使用し、並行予約・enqueue/claimの1勝者・DBclient再接続後の保持・停止/本人変更拒否を検証して正常停止する。実停電/replica failover試験ではない。
 
 初回本番は、devで実Webhook→許可グループ返信、本人の定期ダイジェスト→引用会話→停止、再起動/重複/結果不明対応まで検証した後の別工程。既存prodファイルやプロセスを変更しない。独立LINE serviceのみ追加し、旧本体の全面切替を待たせない計画。日時は実設定と検証後に決める。
 

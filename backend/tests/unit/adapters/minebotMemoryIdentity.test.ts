@@ -195,6 +195,40 @@ describe('actual MinebotTaskRuntime with mock bot and executor', () => {
     await expect(runtime.resumeAwaitingUserTask('continue', { envelope: envelopeFor(bot), messages: [] })).rejects.toThrow('CONTINUATION_MISMATCH');
     expect(executor).not.toHaveBeenCalled();
   });
+  it('forwards minecraft channel adapters to the configured graph executor', async () => {
+    const { bot, runtime } = fixture();
+    bot.inventory = { items: () => [{ name: 'iron_ingot', count: 2 }] };
+    (bot as any).activeEffects = [{ name: 'speed', amplifier: 1 }];
+    const onToolStarting = vi.fn();
+    let captured: any;
+    runtime.setExecutor(async (_envelope, _messages, options) => {
+      captured = options;
+      options?.onTaskTreeUpdate?.({
+        status: 'in_progress',
+        goal: 'fixture',
+        strategy: '',
+        hierarchicalSubTasks: [],
+        currentSubTaskId: null,
+        subTasks: null,
+      });
+      return { taskTree: { status: 'completed' } };
+    });
+    await runtime.invoke({ userMessage: 'go', onToolStarting });
+    expect(captured.onToolStarting).toBe(onToolStarting);
+    expect(captured.getLiveInventory?.()).toEqual([{ name: 'iron_ingot', count: 2 }]);
+    expect(captured.getActiveEffects?.()).toEqual([{ name: 'speed', amplifier: 1 }]);
+    expect(captured.abortSignal).toBeDefined();
+    expect(runtime.currentState?.taskTree?.status).toBe('completed');
+  });
+  it('sets interruptExecution when the graph requests a skill interrupt', async () => {
+    const { bot, runtime } = fixture();
+    runtime.setExecutor(async (_envelope, _messages, options) => {
+      options?.onRequestSkillInterrupt?.();
+      return { taskTree: { status: 'completed' } };
+    });
+    await runtime.invoke({ userMessage: 'go' });
+    expect(bot.interruptExecution).toBe(true);
+  });
   it.each(['end', 'kicked', 'respawn'])('cancels in-flight execution on %s and cleans up listeners', async event => {
     const { bot, runtime } = fixture(); let release!: () => void; let signal!: AbortSignal;
     runtime.setExecutor(async (_envelope, _messages, options) => { signal = options!.abortSignal!;

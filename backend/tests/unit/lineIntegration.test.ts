@@ -477,6 +477,106 @@ describe('LINE native Radar and scheduled delivery', () => {
     expect(vi.mocked(f.transport.push).mock.calls[0][1]).toContain('選定理由: fixture pick');
     expect(vi.mocked(f.transport.push).mock.calls[0][1]).toContain('Worker FCA 動画');
   });
+  it('stays silent on the FCA path when the planner selects nothing', async () => {
+    const receipts = {
+      existing: async () => new Set<string>(),
+      reserve: async () => true,
+    };
+    const fca = new RadarFca({
+      next: async () => ({
+        content: '',
+        toolCalls: [{ id: 'call_s', name: 'submit_personal_digest', arguments: { items: [], silenceReason: 'nothing new' } }],
+      }),
+    });
+    const f = await radarFixture(config, { radarFca: { fca, receipts, youtube: async () => [] } });
+    await f.on();
+    f.setPolicy({
+      version: 1,
+      enabled: true,
+      hourJst: 12,
+      minuteJst: 0,
+      consentExpiresAt: BASE + 7 * 86400000,
+      feeds: [],
+      weather: null,
+      topics: ['science'],
+      youtubeSubscriptions: { baselineAt: BASE - 1000, maxSubscriptions: 500, maxCandidates: 20 },
+      calendar: null,
+    });
+    expect(await f.worker.tick()).toBe('silent');
+    expect(f.transport.push).not.toHaveBeenCalled();
+  });
+  it('collects configured weather while delivering FCA-selected web cards', async () => {
+    const stored = new Set<string>();
+    const receipts = {
+      existing: async (_owner: string, keys: readonly string[]) => new Set(keys.filter(key => stored.has(key))),
+      reserve: async (_owner: string, key: string) => {
+        if (stored.has(key)) return false;
+        stored.add(key);
+        return true;
+      },
+    };
+    let turn = 0;
+    const fca = new RadarFca({
+      next: async input => {
+        turn += 1;
+        if (turn === 1) {
+          return { content: '', toolCalls: [{ id: 'call_w', name: 'search_web_for_sharing', arguments: { query: 'science', limit: 3 } }] };
+        }
+        const payload = JSON.parse(input.messages.at(-1)!.content);
+        const id = payload.untrustedCandidates[0].candidateId;
+        return {
+          content: '',
+          toolCalls: [{ id: 'call_s', name: 'submit_personal_digest', arguments: { items: [{ candidateId: id, reason: 'fresh science' }] } }],
+        };
+      },
+    });
+    const f = await radarFixture(config, { radarFca: { fca, receipts, youtube: async () => [] } });
+    await f.on();
+    f.setPolicy({
+      version: 1,
+      enabled: true,
+      hourJst: 12,
+      minuteJst: 0,
+      consentExpiresAt: BASE + 7 * 86400000,
+      feeds: [{
+        id: 'news',
+        kind: 'web',
+        locator: 'https://example.com/feed.xml',
+        articleHosts: ['example.com'],
+        topicIds: ['science'],
+        maxItems: 10,
+        retentionMs: 7 * 86400000,
+      }],
+      weather: { id: 'weather', kind: 'weather', timeZone: 'Asia/Tokyo', latitudeTenth: 357, longitudeTenth: 1397 },
+      topics: ['science'],
+      youtubeSubscriptions: null,
+      calendar: null,
+    });
+    const get = vi.fn(async () => JSON.stringify({
+      latitude: 35.7,
+      longitude: 139.7,
+      timezone: 'Asia/Tokyo',
+      daily_units: { time: 'iso8601', weather_code: 'wmo code', temperature_2m_min: '°C', temperature_2m_max: '°C', precipitation_probability_max: '%' },
+      daily: {
+        time: ['2026-08-29', '2026-08-30', '2026-08-31'],
+        weather_code: [0, 1, 2],
+        temperature_2m_min: [20, 21, 22],
+        temperature_2m_max: [30, 31, 32],
+        precipitation_probability_max: [10, 20, 30],
+      },
+    }));
+    const worker = new LineRadarWorker(config, {
+      ...f.ports,
+      radarFca: { fca, receipts, youtube: async () => [] },
+      temporal: new PersonalTemporalReaders(new WeatherReadAdapter({ get }, () => BASE)),
+    }, () => BASE);
+    expect(await worker.tick()).toBe('accepted');
+    expect(f.read).toHaveBeenCalledTimes(1);
+    expect(get).toHaveBeenCalledTimes(1);
+    const text = vi.mocked(f.transport.push).mock.calls[0][1];
+    expect(text).toContain('選定理由: fresh science');
+    expect(text).toContain('架空の研究');
+  });
 });
 
 describe('LINE Mongo ledger Radar grant limits', () => {
