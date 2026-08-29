@@ -618,7 +618,7 @@ export class ShannonExecutor {
                 this.postTaskTreeToUiMod(taskTree);
             }
 
-            // MetaObserver 削除 — メインループが自分で recall-knowledge / search-skills を呼ぶ
+            // MetaObserver 削除 — メインループが自分で recall-memory / search-skills を呼ぶ
         }
 
         const durationMs = Date.now() - startTime;

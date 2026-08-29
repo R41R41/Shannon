@@ -32,10 +32,6 @@ const MINECRAFT_LLM_TOOLS = Object.freeze([
   'wait',
   'recall-memory',
   'save-memory',
-  'recall-experience',
-  'save-experience',
-  'recall-knowledge',
-  'save-knowledge',
 ]);
 
 const DISCORD_CONVERSATION_TOOLS = Object.freeze([
@@ -59,11 +55,6 @@ const DISCORD_CONVERSATION_TOOLS = Object.freeze([
   'recall-memory',
   'save-memory',
   'save-person-memory',
-  'recall-person',
-  'recall-experience',
-  'save-experience',
-  'recall-knowledge',
-  'save-knowledge',
 ]);
 
 const WEB_CONVERSATION_TOOLS = Object.freeze([

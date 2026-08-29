@@ -34,7 +34,6 @@ import UpdatePlanTool from '../../src/services/llm/tools/utility/updatePlan.js';
 import RecallMemoryTool from '../../src/services/llm/tools/memory/recallMemory.js';
 import SaveMemoryTool from '../../src/services/llm/tools/memory/saveMemory.js';
 import PlanCraftTool from '../../src/services/llm/tools/utility/planCraft.js';
-import RecallKnowledgeTool from '../../src/services/llm/tools/memory/recallKnowledge.js';
 import { ShannonMemoryService } from '../../src/services/memory/shannonMemoryService.js';
 import { deriveMemoryScope } from '../../src/modules/memory/index.js';
 import { RequestExecutionCoordinator } from '../../src/services/llm/graph/requestExecutionCoordinator.js';
@@ -215,10 +214,10 @@ it('binds the canonical memory port in standalone FCA', async () => {
   const request = { ...state('A').requestEnvelope, sourceUserId: '100', discord: { guildId: '200', channelId: '300', isDM: false } };
   const search = vi.spyOn(ShannonMemoryService.getInstance(), 'searchKnowledge').mockResolvedValue([]);
   try {
-    fakes.invoke.mockResolvedValueOnce(new AIMessage({ content: '', tool_calls: [{ id: 'load', name: 'request-tools', args: { names: ['recall-knowledge'] } }] }))
-      .mockResolvedValueOnce(new AIMessage({ content: '', tool_calls: [{ id: 'r', name: 'recall-knowledge', args: { query: 'fixture' } }] }))
+    fakes.invoke.mockResolvedValueOnce(new AIMessage({ content: '', tool_calls: [{ id: 'load', name: 'request-tools', args: { names: ['recall-memory'] } }] }))
+      .mockResolvedValueOnce(new AIMessage({ content: '', tool_calls: [{ id: 'r', name: 'recall-memory', args: { question: 'fixture' } }] }))
       .mockResolvedValueOnce(new AIMessage({ content: '', tool_calls: [{ id: 'done', name: 'task-complete', args: { summary: 'done' } }] }));
-    const agent = new FunctionCallingAgent([new RecallKnowledgeTool(), { name: 'task-complete', invoke: async () => 'done' } as any]);
+    const agent = new FunctionCallingAgent([new RecallMemoryTool(), { name: 'task-complete', invoke: async () => 'done' } as any]);
     await agent.run({ ...state('A'), requestEnvelope: request });
     expect(search).toHaveBeenCalledOnce();
     expect(search.mock.calls[0][2]?.scopeKey).toBe(deriveMemoryScope(request)!.scopeKey);

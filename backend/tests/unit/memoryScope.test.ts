@@ -240,21 +240,20 @@ describe('real Mongo adapters with a deterministic fake database', () => {
 });
 
 describe('request tool and episode integration', () => {
-  it('binds old and new tool names per run and cannot inherit another run memory port', async () => {
+  it('binds unified memory tools per run and cannot inherit another run memory port', async () => {
     const catalog = new RunToolRegistry<any>(createMemoryTools());
     const a = catalog.createTools(); const b = catalog.createTools();
     bindRequestMemory(a, envelope('100', '', '300', true)); bindRequestMemory(b, envelope('101', '', '301', true));
     const tool = (set: any[], name: string) => set.find(t => t.name === name);
-    await tool(a, 'save-knowledge').invoke(draft);
-    expect(await tool(a, 'recall-knowledge').invoke({ query: 'iron_ingot' })).toContain('iron_ingot');
-    expect(await tool(b, 'recall-knowledge').invoke({ query: 'iron_ingot' })).not.toContain('iron_ingot');
+    await tool(a, 'save-memory').invoke({ content: 'iron_ingot chest', importance: 5 });
     expect(await tool(a, 'recall-memory').invoke({ question: 'iron_ingot' })).toContain('iron_ingot');
     expect(await tool(b, 'recall-memory').invoke({ question: 'iron_ingot' })).not.toContain('iron_ingot');
-    await tool(a, 'save-experience').invoke({ ...draft, feeling: 'mine' });
-    expect(await tool(a, 'recall-experience').invoke({ query: 'iron_ingot' })).toContain('mine');
-    expect(await tool(b, 'recall-experience').invoke({ query: 'iron_ingot' })).not.toContain('mine');
+    await createRequestMemory(envelope('100', '', '300', true)).save({
+      category: 'experience', content: 'iron_ingot mine', feeling: 'mine', importance: 5, tags: [],
+    });
+    expect(await tool(a, 'recall-memory').invoke({ question: 'iron_ingot' })).toContain('mine');
+    expect(await tool(b, 'recall-memory').invoke({ question: 'iron_ingot' })).not.toContain('mine');
     expect(await tool(catalog.createTools(), 'save-memory').invoke({ content: 'no scope' })).toContain('初期化');
-    expect(await tool(a, 'recall-person').invoke({ name: 'same-name' })).toContain('人物名では検索できません');
   });
   it('initial recall uses the same scope and does not look up a same-named person', async () => {
     db.rows = [row(envelope('999', '999'), 'foreign'), row(envelope(), 'iron_ingot')];

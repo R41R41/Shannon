@@ -180,18 +180,14 @@ describe('atomic primary identity, revision and tombstones', () => {
 });
 
 describe('actual tool/initial recall integration with mocked storage and models', () => {
-  it('owns person ports per run and cannot search a display name or inherit a port from the catalog', async () => {
+  it('owns person ports per run and cannot inherit a port from the catalog', async () => {
     const registry = new RunToolRegistry<any>(createMemoryTools()); const a = registry.createTools(); const b = registry.createTools();
     bindRequestMemory(a, request()); bindRequestMemory(b, request('101'));
     const tool = (set: any[], name: string) => set.find(row => row.name === name);
     expect(await tool(a, 'save-person-memory').invoke({ quote })).toContain('保存しました');
-    expect(await tool(a, 'recall-person').invoke({})).toContain(quote);
-    expect(await tool(b, 'recall-person').invoke({ name: 'self' })).not.toContain(quote);
-    const count = mongo.reads.length;
-    expect(await tool(a, 'recall-person').invoke({ name: '同じ表示名' })).toContain('人物名では検索できません');
-    expect(mongo.reads).toHaveLength(count);
-    expect(await tool(registry.createTools(), 'recall-person').invoke({})).toContain('確認できない');
     expect(await tool(a, 'recall-memory').invoke({ question: '本人の発言' })).toContain(quote);
+    expect(await tool(b, 'recall-memory').invoke({ question: '本人の発言' })).not.toContain(quote);
+    expect(await tool(registry.createTools(), 'recall-memory').invoke({ question: '本人の発言' })).toContain('初期化');
   });
   it('requires a new factory for a context-bearing person tool', () => {
     expect(() => new RunToolRegistry([{ name: 'unsafe-person', setPersonMemoryPort: () => {} }])).toThrow('createForRun');

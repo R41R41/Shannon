@@ -19,7 +19,7 @@ describe('tool path catalog', () => {
 
   it('does not put Discord send or memory tools on LINE chat', () => {
     expect(isToolAllowedOnPath('line_chat', 'chat-on-discord')).toBe(false);
-    expect(isToolAllowedOnPath('line_chat', 'recall-person')).toBe(false);
+    expect(isToolAllowedOnPath('line_chat', 'recall-memory')).toBe(false);
     expect(isToolAllowedOnPath('line_chat', 'search_web')).toBe(true);
     expect(isToolAllowedOnPath('line_chat', 'search_youtube')).toBe(true);
   });

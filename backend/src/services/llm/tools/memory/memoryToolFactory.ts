@@ -1,35 +1,17 @@
 import { StructuredTool } from '@langchain/core/tools';
 import { MemoryPlatform } from '../../../../models/PersonMemory.js';
-import SaveExperienceTool from './saveExperience.js';
-import SaveKnowledgeTool from './saveKnowledge.js';
-import RecallExperienceTool from './recallExperience.js';
-import RecallKnowledgeTool from './recallKnowledge.js';
-import RecallPersonTool from './recallPerson.js';
 import RecallMemoryTool from './recallMemory.js';
 import SaveMemoryTool from './saveMemory.js';
 import SavePersonMemoryTool from './savePersonMemory.js';
 
-/**
- * 記憶ツールを作成するファクトリ関数
- *
- * 統合: recall-memory / save-memory / save-person-memory（実行ごとに MemoryPort を注入）
- * 旧: save-experience, save-knowledge, recall-experience, recall-knowledge, recall-person
- *     → 後方互換のため残しているが、将来廃止予定
- */
+/** 記憶ツール: recall-memory / save-memory / save-person-memory（実行ごとに MemoryPort を注入） */
 export function createMemoryTools(
-  platform: MemoryPlatform = 'discord',
-  source: string = 'discord',
+  _platform: MemoryPlatform = 'discord',
+  _source: string = 'discord',
 ): StructuredTool[] {
-
   return [
     new RecallMemoryTool(),
     new SaveMemoryTool(),
     new SavePersonMemoryTool(),
-    // 旧ツール (後方互換、将来廃止予定)
-    new SaveExperienceTool(),
-    new SaveKnowledgeTool(),
-    new RecallExperienceTool(),
-    new RecallKnowledgeTool(),
-    new RecallPersonTool(),
   ];
 }
