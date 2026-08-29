@@ -67,7 +67,7 @@
 
 ## 残る入力・本番切替条件
 
-1. dev専用Firebase project/ADC、テスト利用者のUID・管理者権限を確認する。**dev リハーサルは 2026-08-30 完了**（`docs/uid-migration-rehearsal.md`）。prod 利用者3件は UID 未対応付けのまま。対応付けなしで本番を切り替えない。
+1. dev専用Firebase project/ADC、テスト利用者のUID・管理者権限を確認する。**dev リハーサルは 2026-08-30 完了**（`docs/uid-migration-rehearsal.md`）。**prod manifest（3件 UID 解決済）は Git 外で確定**（apply は未実施）。対応付けなしで本番を切り替えない。
 2. Discord等のテストbotと送信先、LLM費用上限を決める。共有資格情報を使ってdevを起動しない。
 3. 管理コンソール限定・公開チャット停止・Mod認証必須という機能制限をレビューする。必要な利用経路の復旧を実装してからリリースする。
 4. dev限定実機試験、**dev UID 移行リハーサル（完了）**、**prod manifest 雛形生成（`prepare-prod-uid-manifest.mjs`）**、本番 apply 前の復旧確認、対象commit・native成果物・停止枠を確認する。

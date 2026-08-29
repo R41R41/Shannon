@@ -9,7 +9,7 @@
 | 移行スクリプト | `backend/scripts/user-binding-migration.mjs` 実装済み |
 | Settings manifest dry-run | `POST /api/identity/validate-manifest` 実装済み |
 | 隔離 fixture リハーサル | ✅ `scripts/probe-user-binding-migration.cjs --isolated-fixture` 成功（2026-08-30） |
-| prod `shannon.users` | 3件・UID 未绑定（読取確認のみ、書込みしない） |
+| prod manifest | ✅ `prod-user-binding-manifest.json` 確定・validate 済（2026-08-30、Git 外） |
 | dev `shannon_dev.users` | ✅ 3件 seed + **UID 绑定 apply 済**（2026-08-30） |
 | dev `.env` の `FIREBASE_PROJECT_ID` | ✅ frontend から同期済 |
 | dev `.env` の `GOOGLE_APPLICATION_CREDENTIALS` | ✅ 配置済 |
@@ -126,8 +126,19 @@ node scripts/prepare-prod-uid-manifest.mjs --read-only \
 ```
 
 - 既定 source: `mongodb://127.0.0.1:27017/shannon`（**書込みしない**）
-- 出力は mode 0600。`_reviewNotes` に email / 既存 binding 状態を含む → **apply 前に除去**
-- 各 `uid` を Firebase Console で確認した値に置換
+- 出力は mode 0600。`_reviewNotes` に email / 既存 binding 状態を含む
+
+### 5a2. Firebase UID 解決と manifest 確定
+
+```bash
+cd /home/azureuser/Shannon-dev/backend
+node scripts/fill-prod-uid-manifest.mjs --create-missing   # 未登録 email は Firebase Auth に作成
+node scripts/validate-prod-uid-manifest.mjs                 # plan + Firebase 照合（読取のみ）
+```
+
+- 出力: `scripts/prod-user-binding-manifest.json`（Git 外、mode 0600）
+- `--create-missing` は Firebase Auth に未登録の prod email 向け。初回 Google ログイン前の利用者など
+- **2026-08-30:** 3件確定・validate 成功。plan sha256 は apply レビュー用に控える（manifest ファイルと同梱しない）
 
 ### 5b. 切替手順
 

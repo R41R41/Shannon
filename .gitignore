@@ -15,6 +15,7 @@ node_modules
 /backend/scripts/dev-uid-rehearsal-users.json
 /backend/scripts/user-binding-manifest.json
 /backend/scripts/prod-user-binding-manifest.template.json
+/backend/scripts/prod-user-binding-manifest.json
 /tmp/uid-plan.json
 
 # Runtime data (persisted state, finetune data)
