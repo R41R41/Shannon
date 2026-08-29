@@ -5,9 +5,9 @@ import {
   DiscordVoiceFillerInput,
   DiscordVoiceQueueEndInput,
   DiscordVoiceQueueStartInput,
-  DiscordVoiceResponseInput,
   DiscordVoiceStatusInput,
   DiscordVoiceStreamTextInput,
+  MinebotVoiceChatInput,
 } from '@shannon/common';
 import {
   ActionRowBuilder,
@@ -51,7 +51,8 @@ import { voiceResponseChannelIds } from '../voiceState.js';
 import { loadFillers, generateAllFillers } from '../voiceFiller.js';
 import { sendLongMessage } from '../utils.js';
 import { deliverDiscordMessageToLlm } from '../../runtime/llmInboundDispatch.js';
-import { EventBus } from '../../eventBus/eventBus.js';
+import { dispatchMinebotVoiceChat } from '../../runtime/minebotInboundRegistry.js';
+import { registerVoiceGateway, type VoiceGateway } from '../../runtime/voiceGateway.js';
 
 export interface VoiceManagerHelpers {
   getUserNickname: (user: User, guildId?: string) => string;
@@ -59,10 +60,16 @@ export interface VoiceManagerHelpers {
   getRecentMessages: (channelId: string, limit?: number) => Promise<BaseMessage[]>;
 }
 
-export class VoiceManager {
+type TextReplyWaiter = {
+  resolve: (text: string) => void;
+  excludeMicPrefix: boolean;
+  timer: NodeJS.Timeout;
+};
+
+export class VoiceManager implements VoiceGateway {
   private client: Client;
-  private eventBus: EventBus;
   private helpers: VoiceManagerHelpers;
+  private textReplyWaiters = new Map<string, TextReplyWaiter[]>();
 
   // ── Voice state ───────────────────────────────────────────────────────
   private voiceConnections: Map<string, VoiceConnection> = new Map();
@@ -98,10 +105,10 @@ export class VoiceManager {
     idle: '',
   };
 
-  constructor(client: Client, eventBus: EventBus, helpers: VoiceManagerHelpers) {
+  constructor(client: Client, helpers: VoiceManagerHelpers) {
     this.client = client;
-    this.eventBus = eventBus;
     this.helpers = helpers;
+    registerVoiceGateway(this);
   }
 
   // ── Lifecycle / init ──────────────────────────────────────────────────
@@ -114,116 +121,136 @@ export class VoiceManager {
     );
   }
 
-  /** Register all EventBus voice subscriptions */
-  setupEventSubscriptions(): void {
-    // --- Voice queue events (streaming pipeline) ---
-    this.eventBus.subscribe('discord:voice_queue_start', async (event) => {
-      const { guildId, channelId } = event.data as DiscordVoiceQueueStartInput;
-      this.voiceStreamMessages.delete(guildId);
-      this.voiceQueues.set(guildId, {
-        buffers: [],
-        done: false,
-        notify: null,
-        channelId,
-        text: '',
-      });
-      this.consumeVoiceQueue(guildId);
-    });
+  publishStatus(input: DiscordVoiceStatusInput): void {
+    void this.updateVoiceStatusDisplay(input.guildId, input.status, input.detail);
+  }
 
-    this.eventBus.subscribe('discord:voice_enqueue', async (event) => {
-      const { guildId, audioBuffer } = event.data as DiscordVoiceEnqueueInput;
-      const queue = this.voiceQueues.get(guildId);
-      if (!queue) return;
-      queue.buffers.push(audioBuffer);
-      if (queue.notify) {
-        queue.notify();
-        queue.notify = null;
+  postTranscript(channelId: string, _guildId: string, text: string): void {
+    void this.postTranscriptMessage(channelId, text);
+  }
+
+  startQueue(input: DiscordVoiceQueueStartInput): void {
+    const { guildId, channelId } = input;
+    this.voiceStreamMessages.delete(guildId);
+    this.voiceQueues.set(guildId, {
+      buffers: [],
+      done: false,
+      notify: null,
+      channelId,
+      text: '',
+    });
+    void this.consumeVoiceQueue(guildId);
+  }
+
+  enqueueAudio(input: DiscordVoiceEnqueueInput): void {
+    const { guildId, audioBuffer } = input;
+    const queue = this.voiceQueues.get(guildId);
+    if (!queue) return;
+    queue.buffers.push(audioBuffer);
+    if (queue.notify) {
+      queue.notify();
+      queue.notify = null;
+    }
+  }
+
+  endQueue(input: DiscordVoiceQueueEndInput): void {
+    const { guildId, channelId, text } = input;
+    const queue = this.voiceQueues.get(guildId);
+    if (!queue) return;
+    queue.done = true;
+    queue.text = text;
+    queue.channelId = channelId;
+    if (queue.notify) {
+      queue.notify();
+      queue.notify = null;
+    }
+  }
+
+  streamSentence(input: DiscordVoiceStreamTextInput): void {
+    void this.updateStreamText(input);
+  }
+
+  playFiller(input: DiscordVoiceFillerInput): void {
+    void this.playFillerAudio(input);
+  }
+
+  routeToMinebotVoice(input: MinebotVoiceChatInput): void {
+    dispatchMinebotVoiceChat(input);
+  }
+
+  waitForTextReply(channelId: string, excludeMicPrefix = true): Promise<string> {
+    return new Promise((resolve) => {
+      let entry: TextReplyWaiter;
+      const timer = setTimeout(() => {
+        this.removeTextReplyWaiter(channelId, entry);
+        resolve('');
+      }, 60000);
+      entry = { resolve, excludeMicPrefix, timer };
+      const waiters = this.textReplyWaiters.get(channelId) ?? [];
+      waiters.push(entry);
+      this.textReplyWaiters.set(channelId, waiters);
+    });
+  }
+
+  notifyTextReply(channelId: string, text: string): void {
+    const waiters = this.textReplyWaiters.get(channelId);
+    if (!waiters?.length) return;
+    for (const entry of [...waiters]) {
+      if (entry.excludeMicPrefix && text.startsWith('🎤')) continue;
+      clearTimeout(entry.timer);
+      entry.resolve(text);
+      this.removeTextReplyWaiter(channelId, entry);
+      return;
+    }
+  }
+
+  private removeTextReplyWaiter(channelId: string, entry: TextReplyWaiter): void {
+    const waiters = this.textReplyWaiters.get(channelId);
+    if (!waiters) return;
+    const next = waiters.filter((w) => w !== entry);
+    if (next.length) this.textReplyWaiters.set(channelId, next);
+    else this.textReplyWaiters.delete(channelId);
+  }
+
+  private async postTranscriptMessage(channelId: string, text: string): Promise<void> {
+    try {
+      const textChannel = this.client.channels.cache.get(channelId);
+      if (textChannel?.isTextBased() && 'send' in textChannel) {
+        await sendLongMessage(textChannel as TextChannel, text);
       }
-    });
+    } catch (err) {
+      logger.warn(`[Discord Voice] Transcript post failed: ${err}`);
+    }
+  }
 
-    this.eventBus.subscribe('discord:voice_queue_end', async (event) => {
-      const { guildId, channelId, text } = event.data as DiscordVoiceQueueEndInput;
-      const queue = this.voiceQueues.get(guildId);
-      if (!queue) return;
-      queue.done = true;
-      queue.text = text;
-      queue.channelId = channelId;
-      if (queue.notify) {
-        queue.notify();
-        queue.notify = null;
+  private async updateStreamText(input: DiscordVoiceStreamTextInput): Promise<void> {
+    const { guildId, channelId, sentence } = input;
+    try {
+      const textChannel = this.client.channels.cache.get(channelId);
+      if (!textChannel?.isTextBased() || !('send' in textChannel)) return;
+
+      const existing = this.voiceStreamMessages.get(guildId);
+      if (existing) {
+        existing.accumulatedText += sentence;
+        await existing.message.edit(`🔊 シャノン: ${existing.accumulatedText}`);
+      } else {
+        const msg = await (textChannel as TextChannel).send(`🔊 シャノン: ${sentence}`);
+        this.voiceStreamMessages.set(guildId, { message: msg, accumulatedText: sentence });
       }
-    });
+    } catch (err) {
+      logger.warn(`[Discord Voice] Stream text update failed: ${err}`);
+    }
+  }
 
-    // --- Overlay sound effect playback ---
-    this.eventBus.subscribe('overlay:play_sound' as any, async (event: any) => {
-      const { buffer } = event.data as { buffer: Buffer; sound: string };
-      // Play in all connected voice channels
-      for (const guildId of this.voiceConnections.keys()) {
-        try {
-          await this.playAudioInVoiceChannel(guildId, buffer);
-        } catch (err) {
-          logger.warn(`[OverlaySound] Playback failed in guild ${guildId}: ${err}`);
-        }
+  private async playFillerAudio(input: DiscordVoiceFillerInput): Promise<void> {
+    const { guildId, audioBuffers } = input;
+    try {
+      for (const buf of audioBuffers) {
+        await this.playAudioInVoiceChannel(guildId, buf);
       }
-    });
-
-    this.eventBus.subscribe('discord:voice_stream_text', async (event) => {
-      const { guildId, channelId, sentence } = event.data as DiscordVoiceStreamTextInput;
-      try {
-        const textChannel = this.client.channels.cache.get(channelId);
-        if (!textChannel?.isTextBased() || !('send' in textChannel)) return;
-
-        const existing = this.voiceStreamMessages.get(guildId);
-        if (existing) {
-          existing.accumulatedText += sentence;
-          await existing.message.edit(`🔊 シャノン: ${existing.accumulatedText}`);
-        } else {
-          const msg = await (textChannel as TextChannel).send(`🔊 シャノン: ${sentence}`);
-          this.voiceStreamMessages.set(guildId, { message: msg, accumulatedText: sentence });
-        }
-      } catch (err) {
-        logger.warn(`[Discord Voice] Stream text update failed: ${err}`);
-      }
-    });
-
-    this.eventBus.subscribe('discord:voice_status', async (event) => {
-      const { guildId, status, detail } = event.data as DiscordVoiceStatusInput;
-      await this.updateVoiceStatusDisplay(guildId, status, detail);
-    });
-
-    // --- Legacy voice events (fallback) ---
-    this.eventBus.subscribe('discord:play_voice_filler', async (event) => {
-      const { guildId, audioBuffers } = event.data as DiscordVoiceFillerInput;
-      try {
-        for (const buf of audioBuffers) {
-          await this.playAudioInVoiceChannel(guildId, buf);
-        }
-      } catch (error) {
-        logger.error('[Discord Voice] Filler playback error:', error);
-      }
-    });
-
-    this.eventBus.subscribe('discord:post_voice_response', async (event) => {
-      const { channelId, voiceChannelId, guildId, text, audioBuffer, audioBuffers } =
-        event.data as DiscordVoiceResponseInput;
-
-      try {
-        const textChannel = this.client.channels.cache.get(channelId);
-        if (textChannel?.isTextBased() && 'send' in textChannel) {
-          await sendLongMessage(textChannel as TextChannel, `🔊 シャノン: ${text}`);
-        }
-
-        if (audioBuffers && audioBuffers.length > 0) {
-          for (const buf of audioBuffers) {
-            await this.playAudioInVoiceChannel(guildId, buf);
-          }
-        } else {
-          await this.playAudioInVoiceChannel(guildId, audioBuffer);
-        }
-      } catch (error) {
-        logger.error('[Discord Voice] Error playing voice response:', error);
-      }
-    });
+    } catch (error) {
+      logger.error('[Discord Voice] Filler playback error:', error);
+    }
   }
 
   /** Handle voice button interactions (call from interactionCreate handler) */

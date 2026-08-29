@@ -406,8 +406,7 @@ export class SkillPatcher {
     ): Promise<{ success: boolean; error?: string }> {
         const { SkillHotLoader } = await import('../../../../minebot/skills/SkillHotLoader.js');
         const { getSkillRegistrar } = await import('../../../../minebot/skills/SkillRegistrar.js');
-        const { getEventBus } = await import('../../../../eventBus/index.js');
-        const hotLoader = new SkillHotLoader(getSkillRegistrar(getEventBus()));
+        const hotLoader = new SkillHotLoader(getSkillRegistrar());
         if (skillKind === 'constant') {
             return hotLoader.replaceConstantSkill(jsPath, bot, skillName, 'SelfTest auto-fix');
         }

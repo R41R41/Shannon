@@ -1,13 +1,12 @@
 import {
   SchedulerInput,
-  SchedulerOutput,
   WebScheduleOutput,
 } from '@shannon/common';
 import {
   WebSocketServiceBase,
   WebSocketServiceConfig,
 } from '../../common/WebSocketService.js';
-import { getEventBus } from '../../eventBus/index.js';
+import { getSchedulerPort } from '../../runtime/schedulerGateway.js';
 import { logger } from '../../../utils/logger.js';
 import { getWebNotificationHub } from '../webNotificationHub.js';
 
@@ -36,7 +35,6 @@ export class ScheduleAgent extends WebSocketServiceBase {
   }
 
   protected override initialize() {
-    const eventBus = getEventBus();
     this.onAuthenticatedConnection(async (ws) => {
       logger.debug('Schedule client connected');
 
@@ -61,21 +59,13 @@ export class ScheduleAgent extends WebSocketServiceBase {
         );
         if (data.type === 'get_schedule') {
           const name = data.name as string;
-          eventBus.publish({
-            type: 'scheduler:get_schedule',
-            memoryZone: 'web',
-            data: { type: 'get_schedule', name } as SchedulerInput,
-          });
+          await getSchedulerPort().getSchedule({ type: 'get_schedule', name } as SchedulerInput);
         }
 
         if (data.type === 'call_schedule') {
           logger.info(`calling schedule ${data.name}`);
           const name = data.name as string;
-          eventBus.publish({
-            type: 'scheduler:call_schedule',
-            memoryZone: 'web',
-            data: { type: 'call_schedule', name } as SchedulerInput,
-          });
+          await getSchedulerPort().callSchedule({ type: 'call_schedule', name } as SchedulerInput);
         }
       });
 

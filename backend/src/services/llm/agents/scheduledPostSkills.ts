@@ -32,7 +32,7 @@ export interface ScheduledPostSearchPorts {
   wikipedia: (query: string, signal: AbortSignal) => Promise<string>;
 }
 
-/** Search + submit only. No Twitter send, memory, or EventBus. */
+/** Search + submit only. No Twitter send, memory, or global pub/sub. */
 export function scheduledPostTools(ports: ScheduledPostSearchPorts): FcaBoundTool[] {
   const allowed = new Set(toolsForPath('scheduled_post'));
   let webCalls = 0;

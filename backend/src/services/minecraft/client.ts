@@ -1,7 +1,5 @@
 import {
   MinecraftServerName,
-  ServiceInput,
-  ServiceOutput,
   ServiceStatus
 } from '@shannon/common';
 import { exec } from 'child_process';
@@ -9,7 +7,7 @@ import dotenv from 'dotenv';
 import { promisify } from 'util';
 import { BaseClient } from '../common/BaseClient.js';
 import { config } from '../../config/env.js';
-import { getEventBus } from '../eventBus/index.js';
+import { registerServiceCommandHandler } from '../runtime/serviceCommandRegistry.js';
 import { emitWebServiceStatus } from '../web/webNotificationHub.js';
 import { logger } from '../../utils/logger.js';
 
@@ -33,6 +31,7 @@ export class MinecraftClient extends BaseClient {
   private static instance: MinecraftClient;
   private minecraftClients: MinecraftClient[];
   private serverStatuses: Map<string, boolean> = new Map();
+  private serviceCommandsRegistered = false;
   private readonly VALID_SERVERS: MinecraftServerName[] = [
     '1.21.4-fabric-youtube',
     '1.21.4-test',
@@ -44,7 +43,6 @@ export class MinecraftClient extends BaseClient {
   public isDev: boolean = false;
 
   public static getInstance(isDev: boolean = false) {
-    const eventBus = getEventBus();
     if (!MinecraftClient.instance) {
       MinecraftClient.instance = new MinecraftClient('minecraft', isDev);
     }
@@ -53,13 +51,13 @@ export class MinecraftClient extends BaseClient {
   }
 
   constructor(serviceName: 'minecraft', isDev: boolean) {
-    const eventBus = getEventBus();
-    super(serviceName, eventBus);
+    super(serviceName);
+    this.isDev = isDev;
     this.minecraftClients = [];
   }
 
   public async initialize() {
-    await this.setupEventBus();
+    this.setupServiceCommands();
   }
 
   public async startServer(
@@ -167,9 +165,11 @@ export class MinecraftClient extends BaseClient {
     return statuses;
   }
 
-  private async setupEventBus() {
-    this.eventBus.subscribe('minecraft:status', async (event) => {
-      const { serviceCommand } = event.data as ServiceInput;
+  private setupServiceCommands() {
+    if (this.serviceCommandsRegistered) return;
+    this.serviceCommandsRegistered = true;
+
+    registerServiceCommandHandler('minecraft', async (serviceCommand) => {
       if (serviceCommand === 'start') {
         await this.start();
       } else if (serviceCommand === 'stop') {
@@ -181,11 +181,10 @@ export class MinecraftClient extends BaseClient {
         });
       }
     });
-    // サーバー管理用のイベントハンドラを設定
+
     for (const server of this.VALID_SERVERS) {
-      this.eventBus.subscribe(`minecraft:${server}:status`, async (event) => {
+      registerServiceCommandHandler(`minecraft:${server}`, async (serviceCommand) => {
         if (this.status !== 'running') return;
-        const { serviceCommand } = event.data as ServiceInput;
         if (serviceCommand === 'start') {
           const result = await this.startServer(server);
           logger.info(`MinecraftClient: Start server result: ${JSON.stringify(result)}`);

@@ -13,7 +13,7 @@ import { createEnvelope } from './envelopeFactory.js';
 
 /**
  * Shape of the data currently published by Discord client
- * via eventBus as 'llm:get_discord_message'.
+ * via EventRouter / llmInboundDispatch.
  */
 export interface DiscordNativeEvent {
   text: string;

@@ -11,7 +11,7 @@ export function validLineSignature(body: Buffer, signature: string | undefined, 
   const actual = Buffer.from(signature, 'base64');
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
-/** Independent LINE ingress/use-case composition; never imports the legacy main server or EventBus. */
+/** Independent LINE ingress/use-case composition; never imports the legacy main server or global pub/sub. */
 export function createLineApplication(config: LineConfig, ports: { state: LineStatePort; chat: LineChatPort; transport: LineTransport;
   authorizeRuntime?(): Promise<void>;
   radar?: { status(): Promise<string>; authorizeQuote(id: string): Promise<boolean>; conversationVersion?(): Promise<string> } }, now = Date.now) {

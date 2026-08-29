@@ -1,7 +1,7 @@
 import type { Express } from 'express';
-import { TwitterClientInput, TwitterReplyOutput } from '@shannon/common';
+import { TwitterReplyOutput } from '@shannon/common';
 import { config } from '../config/env.js';
-import { getEventBus } from '../services/eventBus/index.js';
+import { getTwitterToolPort } from '../services/runtime/platformToolGateway.js';
 import { deliverTwitterReplyToLlm } from '../services/runtime/llmInboundDispatch.js';
 import { TwitterClient } from '../services/twitter/client.js';
 import { logger } from '../utils/logger.js';
@@ -58,7 +58,6 @@ export function registerWebhookRoutes(app: Express, twitterClient: TwitterClient
         `[Webhook] Twitter webhook 受信: ${tweets.length}件 (rule: ${rule_tag})${tweets.length > 0 ? ` from:@${tweets[0].author?.userName ?? '?'} "${(tweets[0].text ?? '').slice(0, 60)}"` : ''}`
       );
 
-      const eventBus = getEventBus();
       const myUserId = config.twitter.userId;
       const isQuoteRTWebhook = rule_tag?.includes('quote-rt') ?? false;
       let processed = 0;
@@ -97,11 +96,7 @@ export function registerWebhookRoutes(app: Express, twitterClient: TwitterClient
           );
 
           // いいね
-          eventBus.publish({
-            type: 'twitter:like_tweet',
-            memoryZone: 'twitter:post',
-            data: { tweetId, text: '' } as TwitterClientInput,
-          });
+          void getTwitterToolPort().likeTweet(tweetId);
 
           // 日次返信上限チェック
           if (twitterClient.isReplyLimitReached()) {

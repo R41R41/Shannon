@@ -1,10 +1,8 @@
 import { assertTwitterEnabled } from '../../../twitter/twitterPolicy.js';
 import { StructuredTool } from '@langchain/core/tools';
-import { TwitterClientInput } from '@shannon/common';
 import { z } from 'zod';
 import { config } from '../../../../config/env.js';
-import { EventBus } from '../../../eventBus/eventBus.js';
-import { getEventBus } from '../../../eventBus/index.js';
+import { getTwitterToolPort } from '../../../runtime/platformToolGateway.js';
 
 const isPremium = !config.isDev;
 
@@ -25,41 +23,13 @@ export default class PostOnTwitterTool extends StructuredTool {
       ),
   });
 
-  private eventBus: EventBus;
-
-  constructor() {
-    super();
-    this.eventBus = getEventBus();
-  }
-
   async _call(data: z.infer<typeof this.schema>): Promise<string> {
     assertTwitterEnabled();
     try {
-      // 結果を待つ Promise を作成
-      const resultPromise = new Promise<{ isSuccess: boolean; errorMessage: string }>((resolve) => {
-        const timeout = setTimeout(() => {
-          resolve({ isSuccess: false, errorMessage: 'ツイート投稿がタイムアウトしました（15秒）' });
-        }, 15000);
-
-        this.eventBus.subscribe('tool:post_tweet_result', (event) => {
-          clearTimeout(timeout);
-          const { isSuccess, errorMessage } = event.data as { isSuccess: boolean; errorMessage: string };
-          resolve({ isSuccess, errorMessage });
-        });
+      const result = await getTwitterToolPort().postMessage({
+        text: data.text,
+        replyId: data.replyToTweetId ?? null,
       });
-
-      // 投稿リクエストを送信
-      this.eventBus.publish({
-        type: 'twitter:post_message',
-        memoryZone: 'twitter:post',
-        data: {
-          text: data.text,
-          replyId: data.replyToTweetId ?? null,
-        } as TwitterClientInput,
-      });
-
-      // 結果を待機
-      const result = await resultPromise;
 
       const currentTime = new Date().toLocaleString('ja-JP', {
         timeZone: 'Asia/Tokyo',

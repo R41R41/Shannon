@@ -2,7 +2,7 @@ import { runFcaLoop, type FcaBoundTool } from '../../modules/fca/index.js';
 import { createOpenAiFcaModel } from '../fca/openAiFcaModel.js';
 import type { LineChatPort } from './ports.js';
 
-/** Shared FCA kernel with an injected public-skill catalog. No memory, EventBus, or LINE transport. */
+/** Shared FCA kernel with an injected public-skill catalog. No memory, global pub/sub, or LINE transport. */
 export function createLineChatModel(input: { apiKey: string; model: string; profile: string; tools?: readonly FcaBoundTool[] }): LineChatPort {
   if (!input.apiKey || !/^[A-Za-z0-9._:-]{1,100}$/.test(input.model) || !input.profile.trim() || input.profile.length > 20000)
     throw new Error('LINE_CHAT_CONFIG_INVALID');

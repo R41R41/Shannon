@@ -33,7 +33,7 @@ function remap(error: unknown): never {
   throw error;
 }
 
-/** Digest composition on the shared FCA kernel. No conversation memory, EventBus, or transport. */
+/** Digest composition on the shared FCA kernel. No conversation memory, global pub/sub, or transport. */
 export class RadarFca {
   constructor(private readonly model: RadarFcaModel, private readonly maxTurns = 6) {
     if (!Number.isSafeInteger(maxTurns) || maxTurns < 1 || maxTurns > 8) throw new Error('RADAR_FCA_CONFIG_INVALID');

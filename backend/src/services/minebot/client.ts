@@ -2,8 +2,6 @@ import { bindMinecraftMemory, revokeMinecraftMemory } from './runtime/memoryCont
 import {
   MinebotInput,
   MinebotStartOrStopInput,
-  ServiceInput,
-  ServiceOutput,
 } from '@shannon/common';
 import pkg from 'minecrafthawkeye';
 import mineflayer from 'mineflayer';
@@ -14,7 +12,13 @@ import { plugin as projectile } from 'mineflayer-projectile';
 import { plugin as pvp } from 'mineflayer-pvp';
 import { plugin as toolPlugin } from 'mineflayer-tool';
 import { BaseClient } from '../common/BaseClient.js';
-import { getEventBus } from '../eventBus/index.js';
+import {
+  emitMinebotError,
+  emitMinebotSpawned,
+  emitMinebotStopped,
+} from '../runtime/minebotLifecycleRegistry.js';
+import { logToWeb } from '../runtime/logging.js';
+import { registerServiceCommandHandler } from '../runtime/serviceCommandRegistry.js';
 import { emitWebServiceStatus } from '../web/webNotificationHub.js';
 import { CONFIG } from './config/MinebotConfig.js';
 import { SkillAgent } from './skillAgent.js';
@@ -36,18 +40,17 @@ export class MinebotClient extends BaseClient {
   public isDev: boolean = false;
   private static instance: MinebotClient;
   private skillAgent: SkillAgent | null = null;
-  private unsubscribeFunctions: (() => void)[] = [];
+  private serviceCommandsRegistered = false;
   /** 直前の接続パラメータ（自動再接続用） */
   private lastBotData: MinebotInput | null = null;
   private autoReconnecting = false;
 
   constructor(serviceName: 'minebot', isDev: boolean) {
-    const eventBus = getEventBus();
-    super(serviceName, eventBus);
+    super(serviceName);
+    this.isDev = isDev;
   }
 
   public static getInstance(isDev: boolean = false) {
-    const eventBus = getEventBus();
     if (!MinebotClient.instance) {
       MinebotClient.instance = new MinebotClient('minebot', isDev);
     }
@@ -100,7 +103,7 @@ export class MinebotClient extends BaseClient {
 
     this.bot.on('login', async () => {
       log.info('✅ Bot has logged in.');
-      this.eventBus.log('minecraft', 'green', 'Bot has logged in.');
+      void logToWeb('minecraft', 'green', 'Bot has logged in.');
     });
 
     this.bot.on('kicked', (reason: any) => {
@@ -116,7 +119,7 @@ export class MinebotClient extends BaseClient {
         readableReason = String(reason);
       }
       log.error(`🚫🚫🚫 BOT KICKED 🚫🚫🚫 reason: ${readableReason}`);
-      this.eventBus.log('minecraft', 'red', `Bot was kicked: ${readableReason}`);
+      void logToWeb('minecraft', 'red', `Bot was kicked: ${readableReason}`);
 
       if (readableReason.includes(CHAT_VALIDATION_FAILED)) {
         log.warn(`🔄 chat_validation_failed による kick → ${AUTO_RECONNECT_DELAY_MS / 1000}秒後に自動再接続します`);
@@ -127,12 +130,12 @@ export class MinebotClient extends BaseClient {
     this.bot.on('end', (reason: string) => {
       const trace = new Error('disconnect trace').stack;
       log.error(`🔌🔌🔌 BOT DISCONNECTED 🔌🔌🔌 reason: "${reason ?? 'unknown'}" | trace: ${trace}`);
-      this.eventBus.log('minecraft', 'red', `Bot disconnected: ${reason ?? 'unknown'}`);
+      void logToWeb('minecraft', 'red', `Bot disconnected: ${reason ?? 'unknown'}`);
     });
 
     this.bot.on('error', (err: Error) => {
       log.error(`❌❌❌ BOT ERROR ❌❌❌ ${err.message}`, err);
-      this.eventBus.log('minecraft', 'red', `Bot error: ${err.message}`);
+      void logToWeb('minecraft', 'red', `Bot error: ${err.message}`);
     });
 
     (this.bot as any)._client?.on('end', (reason: string) => {
@@ -196,13 +199,13 @@ export class MinebotClient extends BaseClient {
       this.bot.attackEntity = null;
       this.bot.runFromEntity = null;
       this.bot.goal = null;
-      this.eventBus.log('minecraft', 'green', 'Bot has respawned.');
+      void logToWeb('minecraft', 'green', 'Bot has respawned.');
     });
 
-    this.skillAgent = new SkillAgent(this.bot, this.eventBus);
+    this.skillAgent = new SkillAgent(this.bot);
     const result = await this.skillAgent.startAgent();
     if (!result.success) {
-      this.eventBus.log(
+      void logToWeb(
         'minecraft',
         'red',
         `Skill agent failed to start: ${result.result}`
@@ -211,17 +214,17 @@ export class MinebotClient extends BaseClient {
     }
 
     process.on('uncaughtException', (error) => {
-      this.eventBus.log(
+      void logToWeb(
         'minecraft',
         'red',
         `未処理の例外が発生しました: ${error.message}`
       );
     });
 
-    process.on('unhandledRejection', (reason: unknown, promise) => {
+    process.on('unhandledRejection', (reason: unknown, _promise) => {
       const error =
         reason instanceof Error ? reason : new Error(String(reason));
-      this.eventBus.log(
+      void logToWeb(
         'minecraft',
         'red',
         `未処理のPromise拒否が発生しました: ${error.message}`
@@ -229,13 +232,8 @@ export class MinebotClient extends BaseClient {
     });
 
     this.bot.on('spawn', () => {
-      this.eventBus.log('minecraft', 'green', 'Minecraft bot spawned');
-      // Discord等にspawn完了を通知
-      this.eventBus.publish({
-        type: 'minebot:spawned',
-        memoryZone: 'minebot',
-        data: { success: true },
-      });
+      void logToWeb('minecraft', 'green', 'Minecraft bot spawned');
+      emitMinebotSpawned();
     });
   }
 
@@ -247,17 +245,14 @@ export class MinebotClient extends BaseClient {
   }
 
   public async initialize() {
-    await this.setupEventBus();
+    this.setupServiceCommands();
   }
 
-  private async setupEventBus() {
-    // 既存のsubscribeを解除
-    this.unsubscribeFunctions.forEach(unsubscribe => unsubscribe());
-    this.unsubscribeFunctions = [];
+  private setupServiceCommands() {
+    if (this.serviceCommandsRegistered) return;
+    this.serviceCommandsRegistered = true;
 
-    // 新しいsubscribeを追加
-    const unsubscribe1 = this.eventBus.subscribe('minebot:status', async (event) => {
-      const { serviceCommand } = event.data as ServiceInput;
+    registerServiceCommandHandler('minebot', async (serviceCommand) => {
       if (serviceCommand === 'start') {
         await this.start();
       } else if (serviceCommand === 'stop') {
@@ -269,36 +264,35 @@ export class MinebotClient extends BaseClient {
         });
       }
     });
-    this.unsubscribeFunctions.push(unsubscribe1);
 
-    const unsubscribe2 = this.eventBus.subscribe('minebot:bot:status', async (event) => {
+    registerServiceCommandHandler('minebot:bot', async (serviceCommand, input) => {
       if (this.status !== 'running') return;
-      const { serviceCommand } = event.data as ServiceInput;
+      const data = {
+        serviceCommand,
+        serverName: input?.serverName,
+      } as MinebotInput;
+
       if (serviceCommand === 'start') {
-        const result = await this.startBot(event.data as MinebotInput);
+        const result = await this.startBot(data);
         if (!result) return;
-        const status = this.getStatus();
         emitWebServiceStatus({
           service: 'minebot:bot',
-          status,
+          status: this.getStatus(),
         });
       } else if (serviceCommand === 'stop') {
-        const result = await this.stopBot(event.data as MinebotInput);
+        const result = await this.stopBot(data);
         if (!result) return;
-        const status = this.getStatus();
         emitWebServiceStatus({
           service: 'minebot:bot',
-          status,
+          status: this.getStatus(),
         });
       } else if (serviceCommand === 'status') {
-        const status = this.getStatus();
         emitWebServiceStatus({
           service: 'minebot:bot',
-          status,
+          status: this.getStatus(),
         });
       }
     });
-    this.unsubscribeFunctions.push(unsubscribe2);
   }
 
   /**
@@ -311,13 +305,12 @@ export class MinebotClient extends BaseClient {
     setTimeout(async () => {
       try {
         log.info('🔄 自動再接続を開始します…');
-        // 既存ボットをクリーンアップ
         try { await this.stopBot(this.lastBotData!); } catch { /* ignore */ }
         await new Promise(r => setTimeout(r, 2_000));
         const ok = await this.startBot(this.lastBotData!);
         if (ok) {
           log.info('✅ 自動再接続に成功しました');
-          this.eventBus.log('minecraft', 'green', 'Auto-reconnected after chat_validation_failed');
+          void logToWeb('minecraft', 'green', 'Auto-reconnected after chat_validation_failed');
         } else {
           log.error('❌ 自動再接続に失敗しました');
         }
@@ -333,20 +326,15 @@ export class MinebotClient extends BaseClient {
     try {
       this.lastBotData = data;
       await this.setUpBot(data);
-      this.eventBus.log('minecraft', 'green', 'Minecraft bot started');
+      void logToWeb('minecraft', 'green', 'Minecraft bot started');
       return true;
     } catch (error) {
-      this.eventBus.log(
+      void logToWeb(
         'minecraft',
         'red',
         `Botの起動に失敗しました: ${error}`
       );
-      // Discord等にエラーを通知
-      this.eventBus.publish({
-        type: 'minebot:error',
-        memoryZone: 'minebot',
-        data: { message: `${error}` },
-      });
+      emitMinebotError(`${error}`);
       return false;
     }
   }
@@ -357,7 +345,6 @@ export class MinebotClient extends BaseClient {
         throw new Error('Botが初期化されていません');
       }
       revokeMinecraftMemory(this.bot);
-      // port 8082を開放
       if (this.skillAgent) {
         const httpServer = this.skillAgent.getHttpServer();
         await httpServer.stop();
@@ -370,16 +357,11 @@ export class MinebotClient extends BaseClient {
       }
       this.skillAgent = null;
       this.bot = null;
-      this.eventBus.log('minecraft', 'green', 'Minecraft bot stopped');
-      // Discord等にstop完了を通知
-      this.eventBus.publish({
-        type: 'minebot:stopped',
-        memoryZone: 'minebot',
-        data: { success: true },
-      });
+      void logToWeb('minecraft', 'green', 'Minecraft bot stopped');
+      emitMinebotStopped();
       return true;
     } catch (error) {
-      this.eventBus.log(
+      void logToWeb(
         'minecraft',
         'red',
         `Botの停止に失敗しました: ${error}`

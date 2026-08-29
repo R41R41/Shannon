@@ -736,8 +736,7 @@ export class SelfImprovementDaemon {
             // Step 5: ホットロード
             const { SkillHotLoader } = await import('../../../../minebot/skills/SkillHotLoader.js');
             const { getSkillRegistrar } = await import('../../../../minebot/skills/SkillRegistrar.js');
-            const { getEventBus } = await import('../../../../eventBus/index.js');
-            const hotLoader = new SkillHotLoader(getSkillRegistrar(getEventBus()));
+            const hotLoader = new SkillHotLoader(getSkillRegistrar());
 
             // bot インスタンスを取得
             const bot = this.getMinebotInstance();

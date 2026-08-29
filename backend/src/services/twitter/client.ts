@@ -2,15 +2,18 @@ import {
   TwitterActionResult,
   TwitterClientInput,
   TwitterClientOutput,
-  TwitterReplyOutput,
 } from '@shannon/common';
 import { config } from '../../config/env.js';
 import { classifyError, formatErrorForLog } from '../../errors/index.js';
 import { createLogger } from '../../utils/logger.js';
 const logger = createLogger('Twitter:Client');
 import { BaseClient } from '../common/BaseClient.js';
-import { getEventBus } from '../eventBus/index.js';
 import { emitWebServiceStatus } from '../web/webNotificationHub.js';
+import {
+  registerTwitterToolPort,
+  type PostTweetResult,
+} from '../runtime/platformToolGateway.js';
+import { registerServiceCommandHandler } from '../runtime/serviceCommandRegistry.js';
 import { TwitterAuthManager } from './api/TwitterAuthManager.js';
 import { TwitterApiClient } from './api/TwitterApiClient.js';
 import { AutoPostManager } from './scheduling/AutoPostManager.js';
@@ -36,19 +39,20 @@ export class TwitterClient extends BaseClient {
   /** ポーリング間隔 (ミリ秒) */
   private monitorIntervalMs: number;
 
+  private runtimeRegistered = false;
+
   public static getInstance(isTest: boolean = false) {
-    const eventBus = getEventBus();
     if (!TwitterClient.instance) {
-      TwitterClient.instance = new TwitterClient('twitter', isTest);
+      TwitterClient.instance = new TwitterClient(isTest);
     }
     TwitterClient.instance.isTest = isTest;
     return TwitterClient.instance;
   }
 
-  private constructor(serviceName: 'twitter', isTest: boolean) {
-    const eventBus = getEventBus();
-    super(serviceName, eventBus);
+  private constructor(isTest: boolean) {
+    super('twitter');
 
+    this.isTest = isTest;
     this.monitorIntervalMs = config.twitter.monitorIntervalMs;
 
     // --- Auth ---
@@ -152,160 +156,130 @@ export class TwitterClient extends BaseClient {
   }
 
   // =========================================================================
-  // Event Handlers
+  // TwitterToolPort
   // =========================================================================
 
-  private setupEventHandlers() {
-    this.eventBus.subscribe('twitter:status', async (event) => {
-      const { serviceCommand } = event.data as TwitterClientInput;
-      if (serviceCommand === 'start') {
+  public async postMessage(
+    input: Pick<TwitterClientInput, 'text' | 'replyId' | 'quoteTweetUrl' | 'imageUrl'>,
+  ): Promise<PostTweetResult> {
+    if (this.status !== 'running') {
+      logger.warn(`[postMessage] status="${this.status}" のためスキップ`);
+      return { isSuccess: false, errorMessage: 'Twitter service is not running' };
+    }
+    const { replyId, text, imageUrl, quoteTweetUrl } = input;
+    logger.info(`[postMessage] 受信: text="${text?.slice(0, 50)}" replyId=${replyId}`, 'cyan');
+    try {
+      if (quoteTweetUrl) {
+        await this.apiClient.postQuoteTweet(text, quoteTweetUrl);
+      } else {
+        await this.apiClient.postTweet(text, imageUrl ?? null, replyId ?? null, this.isTest);
+      }
+      return { isSuccess: true, errorMessage: '' };
+    } catch (error) {
+      const sErr = classifyError(error, 'twitter');
+      logger.debug(`Twitter post error (tool): ${formatErrorForLog(sErr)}`);
+      return { isSuccess: false, errorMessage: sErr.message };
+    }
+  }
+
+  public async likeTweet(tweetId: string): Promise<TwitterActionResult> {
+    if (this.status !== 'running') {
+      return { success: false, message: 'Twitter service is not running' };
+    }
+    try {
+      await this.apiClient.likeTweet(tweetId);
+      return { success: true, message: `ツイート ${tweetId} にいいねしました` };
+    } catch (error) {
+      return {
+        success: false,
+        message: `いいね失敗: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+  }
+
+  public async retweetTweet(tweetId: string): Promise<TwitterActionResult> {
+    if (this.status !== 'running') {
+      return { success: false, message: 'Twitter service is not running' };
+    }
+    try {
+      await this.apiClient.retweetTweet(tweetId);
+      return { success: true, message: `ツイート ${tweetId} をリツイートしました` };
+    } catch (error) {
+      return {
+        success: false,
+        message: `リツイート失敗: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+  }
+
+  public async quoteRetweet(text: string, quoteTweetUrl: string): Promise<TwitterActionResult> {
+    if (this.status !== 'running') {
+      return { success: false, message: 'Twitter service is not running' };
+    }
+    try {
+      await this.apiClient.postQuoteTweet(text, quoteTweetUrl);
+      return { success: true, message: '引用リツイートしました' };
+    } catch (error) {
+      return {
+        success: false,
+        message: `引用リツイート失敗: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+  }
+
+  public async getTweetContent(tweetId: string): Promise<TwitterClientOutput | null> {
+    if (this.status !== 'running') return null;
+    try {
+      return await this.apiClient.fetchTweetContent(tweetId);
+    } catch (error) {
+      logger.error('Twitter get tweet content error:', error);
+      return null;
+    }
+  }
+
+  public async postScheduledMessage(
+    input: Pick<TwitterClientInput, 'text' | 'quoteTweetUrl' | 'imageUrl' | 'topic'>,
+  ): Promise<void> {
+    if (this.status !== 'running') return;
+    const { text, quoteTweetUrl, imageUrl, topic } = input;
+    try {
+      if (text && quoteTweetUrl) {
+        if (this.hasRecentlyQuoted(quoteTweetUrl)) {
+          logger.warn(`🐦 引用RT重複ブロック: ${quoteTweetUrl} は既に引用済み`);
+          return;
+        }
+        await this.apiClient.postQuoteTweet(text, quoteTweetUrl);
+        this.autoPostManager.saveRecentPost(text, quoteTweetUrl, topic ?? undefined);
+      } else if (text) {
+        await this.apiClient.postTweet(text, imageUrl ?? null, null, this.isTest);
+        this.autoPostManager.saveRecentPost(text, undefined, topic ?? undefined);
+      }
+    } catch (error) {
+      const sErr = classifyError(error, 'twitter');
+      logger.debug(`Twitter post error (auto): ${formatErrorForLog(sErr)}`);
+    }
+  }
+
+  public async checkReplies(): Promise<void> {
+    await this.monitor.checkRepliesAndRespond();
+  }
+
+  private registerRuntime(): void {
+    if (this.runtimeRegistered) return;
+    registerTwitterToolPort(this);
+    registerServiceCommandHandler('twitter', async (command) => {
+      if (command === 'start') {
         await this.start();
-      } else if (serviceCommand === 'stop') {
+      } else if (command === 'stop') {
         await this.stop();
-      } else if (serviceCommand === 'status') {
+      } else if (command === 'status') {
         emitWebServiceStatus({
           service: 'twitter',
           status: this.status,
         });
       }
     });
-
-    this.eventBus.subscribe('twitter:post_scheduled_message', async (event) => {
-      if (this.status !== 'running') return;
-      const { text, quoteTweetUrl, imageUrl, topic } = event.data as TwitterClientInput;
-      try {
-        if (text && quoteTweetUrl) {
-          if (this.hasRecentlyQuoted(quoteTweetUrl)) {
-            logger.warn(`🐦 引用RT重複ブロック: ${quoteTweetUrl} は既に引用済み`);
-            return;
-          }
-          await this.apiClient.postQuoteTweet(text, quoteTweetUrl);
-          this.autoPostManager.saveRecentPost(text, quoteTweetUrl, topic ?? undefined);
-        } else if (text) {
-          await this.apiClient.postTweet(text, imageUrl ?? null, null, this.isTest);
-          this.autoPostManager.saveRecentPost(text, undefined, topic ?? undefined);
-        }
-      } catch (error) {
-        const sErr = classifyError(error, 'twitter');
-        logger.debug(`Twitter post error (auto): ${formatErrorForLog(sErr)}`);
-      }
-    });
-
-    this.eventBus.subscribe('twitter:post_message', async (event) => {
-      if (this.status !== 'running') {
-        logger.warn(`[twitter:post_message] status="${this.status}" のためスキップ`);
-        this.eventBus.publish({
-          type: 'tool:post_tweet_result',
-          memoryZone: 'twitter:post',
-          data: { isSuccess: false, errorMessage: 'Twitter service is not running' },
-        });
-        return;
-      }
-      const { replyId, text, imageUrl, quoteTweetUrl } = event.data as TwitterClientInput;
-      logger.info(`[twitter:post_message] 受信: text="${text?.slice(0, 50)}" replyId=${replyId}`, 'cyan');
-      try {
-        if (quoteTweetUrl) {
-          await this.apiClient.postQuoteTweet(text, quoteTweetUrl);
-        } else {
-          await this.apiClient.postTweet(text, null, replyId ?? null, this.isTest);
-        }
-        this.eventBus.publish({
-          type: 'tool:post_tweet_result',
-          memoryZone: 'twitter:post',
-          data: { isSuccess: true, errorMessage: '' },
-        });
-      } catch (error) {
-        const sErr = classifyError(error, 'twitter');
-        logger.debug(`Twitter post error (tool): ${formatErrorForLog(sErr)}`);
-        this.eventBus.publish({
-          type: 'tool:post_tweet_result',
-          memoryZone: 'twitter:post',
-          data: { isSuccess: false, errorMessage: sErr.message },
-        });
-      }
-    });
-
-    this.eventBus.subscribe('twitter:get_tweet_content', async (event) => {
-      if (this.status !== 'running') return;
-      const { tweetId } = event.data as TwitterClientInput;
-      try {
-        if (tweetId) {
-          const tweetContent = await this.apiClient.fetchTweetContent(tweetId);
-          this.eventBus.publish({
-            type: 'tool:get_tweet_content',
-            memoryZone: 'twitter:get',
-            data: tweetContent as TwitterClientOutput,
-          });
-        }
-      } catch (error) {
-        logger.error('Twitter get tweet content error:', error);
-      }
-    });
-
-    // --- LLM ツール用エンドポイント ---
-
-    this.eventBus.subscribe('twitter:like_tweet', async (event) => {
-      if (this.status !== 'running') return;
-      const { tweetId } = event.data as TwitterClientInput;
-      try {
-        if (tweetId) {
-          await this.apiClient.likeTweet(tweetId);
-          this.eventBus.publish({
-            type: 'tool:like_tweet',
-            memoryZone: 'twitter:post',
-            data: { success: true, message: `ツイート ${tweetId} にいいねしました` } as TwitterActionResult,
-          });
-        }
-      } catch (error) {
-        this.eventBus.publish({
-          type: 'tool:like_tweet',
-          memoryZone: 'twitter:post',
-          data: { success: false, message: `いいね失敗: ${error instanceof Error ? error.message : String(error)}` } as TwitterActionResult,
-        });
-      }
-    });
-
-    this.eventBus.subscribe('twitter:retweet_tweet', async (event) => {
-      if (this.status !== 'running') return;
-      const { tweetId } = event.data as TwitterClientInput;
-      try {
-        if (tweetId) {
-          await this.apiClient.retweetTweet(tweetId);
-          this.eventBus.publish({
-            type: 'tool:retweet_tweet',
-            memoryZone: 'twitter:post',
-            data: { success: true, message: `ツイート ${tweetId} をリツイートしました` } as TwitterActionResult,
-          });
-        }
-      } catch (error) {
-        this.eventBus.publish({
-          type: 'tool:retweet_tweet',
-          memoryZone: 'twitter:post',
-          data: { success: false, message: `リツイート失敗: ${error instanceof Error ? error.message : String(error)}` } as TwitterActionResult,
-        });
-      }
-    });
-
-    this.eventBus.subscribe('twitter:quote_retweet', async (event) => {
-      if (this.status !== 'running') return;
-      const { text, quoteTweetUrl } = event.data as TwitterClientInput;
-      try {
-        if (text && quoteTweetUrl) {
-          await this.apiClient.postQuoteTweet(text, quoteTweetUrl);
-          this.eventBus.publish({
-            type: 'tool:quote_retweet',
-            memoryZone: 'twitter:post',
-            data: { success: true, message: `引用リツイートしました` } as TwitterActionResult,
-          });
-        }
-      } catch (error) {
-        this.eventBus.publish({
-          type: 'tool:quote_retweet',
-          memoryZone: 'twitter:post',
-          data: { success: false, message: `引用リツイート失敗: ${error instanceof Error ? error.message : String(error)}` } as TwitterActionResult,
-        });
-      }
-    });
+    this.runtimeRegistered = true;
   }
 
   // =========================================================================
@@ -314,6 +288,8 @@ export class TwitterClient extends BaseClient {
 
   public async initialize() {
     try {
+      this.registerRuntime();
+
       // V2 ログイン: まずファイルから login_cookies を復元、なければ新規ログイン
       const cookiesRestored = this.authManager.restoreCookiesFromFile();
       if (!cookiesRestored) {
@@ -354,7 +330,6 @@ export class TwitterClient extends BaseClient {
 
       // スケジュール済み時刻から次回タイマーをセット
       this.autoPostManager.scheduleFromDailyPlan();
-      this.setupEventHandlers();
     } catch (error) {
       const sErr = classifyError(error, 'twitter');
       logger.error(`Twitter initialization error: ${formatErrorForLog(sErr)}`);

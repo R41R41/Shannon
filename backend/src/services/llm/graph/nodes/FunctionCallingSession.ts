@@ -104,7 +104,7 @@ export interface FunctionCallingAgentState {
  * 特徴:
  * - ツール定義は API の `tools` パラメータで渡す（プロンプトに埋め込まない）
  * - update-plan ツールでLLMが自発的に計画を立てる + 自動ステップ記録
- * - EventBus 経由でUI通知
+ * - WebNotificationHub 経由でUI通知
  *
  * フロー:
  * 1. システムプロンプト（コンテキスト + ルール）+ ユーザーメッセージを構築

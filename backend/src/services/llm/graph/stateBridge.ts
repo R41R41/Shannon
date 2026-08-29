@@ -5,7 +5,7 @@
  *
  * Remaining functions:
  * - envelopeToTaskContext: for the FCA (accepts TaskContext)
- * - envelopeToMemoryZone: for EventBus log zone derivation
+ * - envelopeToMemoryZone: for web log zone derivation
  * - inferInitialMode: for ingest node
  *
  * Channel adapters now create RequestEnvelopes directly —

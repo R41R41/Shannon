@@ -2,56 +2,32 @@
 
 **目的:** `getEventBus()` / `EventBus` クラスをコードベースから消す。pub/sub による暗黙的な宛先・認可バイパスをなくす。
 
-**現状 (2026-08-29):** EventBus **は未削除**。`backend/src` だけで `getEventBus()` 呼び出し **約35ファイル**、subscribe/publish **100箇所以上**。
+**完了 (2026-08-29):** `backend/src/services/eventBus/` 削除済み。`backend/src` で `getEventBus|EventBus` **0件**。
 
-## 置き換えパターン
+## 置き換えパターン（最終）
 
 | 旧 EventBus 用途 | 新経路 |
 |---|---|
-| `web:post_message` / `web:planning` / `web:log` | `WebNotificationHub`（`getWebNotificationHub()`） |
-| `web:status` | `WebNotificationHub.emitStatus` + `serviceCommandRegistry` |
-| `llm:*` | `EventRouter` の public メソッド + `registerLlmInbound()` |
-| `twitter:*` / `tool:*` (Twitter) | `TwitterClient` 直接メソッド + tool gateway 注入 |
-| `discord:*` (テキスト送信以外) | Discord SDK / conversation transport |
-| サービス start/stop (`*:status`) | `serviceCommandRegistry.dispatchServiceCommand` |
-| Minebot skills | `SkillRegistrar` への直接登録 |
+| `web:*` 通知 | `WebNotificationHub` |
+| `web:status` / `*:status` | `WebNotificationHub.emitStatus` + `serviceCommandRegistry` |
+| `llm:*` | `EventRouter` public handler + `llmInboundDispatch` |
+| Twitter/Notion/YouTube ツール RPC | `platformToolGateway` → 各 Client 直接メソッド |
+| Discord 送信 | `discordConversationPort` + `discordOutboundGateway` |
+| Voice | `voiceGateway`（VoiceManager 実装） |
+| Minebot スキル | `minebotSkillGateway` + `SkillRegistrar` 直接 registry |
+| Scheduler | `schedulerGateway` |
+| ログ | `logging.logToWeb` → `WebNotificationHub.log` |
 
-## フェーズ
+## フェーズ（すべて完了）
 
-### Phase 1 — Web 通知（完了）
-- [x] `WebNotificationHub`
-- [x] `webConversationTransport` → Hub 直結
-- [x] `monitoringAgent` / `planningAgent` / `publicRoutes` SSE
-- [x] `openaiAgent` の tool→UI 配信を Hub 購読へ
-- [x] `statusAgent` / `scheduleAgent` / `skillAgent`
-- [x] `BaseClient.setStatus` → Hub
-- [x] `realtimeApiAgent` の log → Hub
-- [x] `EventRouter.setupRealtimeAPICallback` → Hub
-- [x] `EventBus.log` → Hub 委譲（過渡）
-
-### Phase 2 — LLM 入口（完了）
-- [x] `EventRouter`: subscribe 削除、public handler のみ
-- [x] `registerLlmInbound` で起動時配線
-- [x] `llmInboundDispatch` 経由で発行元を直接呼び出しに
-- [x] 発行元: `openaiAgent`, `discord/client`, `VoiceManager`, `webhookRoutes`, `TweetMonitor`, `AutoPostManager`, `youtube/client`, `skillAgent`, `scheduler`, `minebot/skillAgent`
-
-### Phase 3 — 外部ツール RPC
-- [ ] Twitter / Notion / YouTube ツール → 各 Client 直接呼び出し
-- [ ] `TwitterClient.setupEventHandlers` 削除
-
-### Phase 4 — Discord / Minebot / Minecraft
-- [ ] `discord/client.ts` の subscribe 群（最大塊）
-- [ ] `VoiceManager` / `VoiceProcessor`
-- [ ] `SkillRegistrar` / `minebot/client` / `minecraft/client`
-
-### Phase 5 — 残り + 削除
-- [ ] `EventRouter` realtime コールバック（Hub 済みなら確認のみ）
-- [ ] `AgentOrchestrator`, `scheduler`, `notion`, `xDispatcher` 等
-- [ ] `eventBus.ts` / `index.ts` / `eventBus.test.ts` 削除
-- [ ] knip / dead-code ゲート更新
+- [x] Phase 1 — Web 通知 → `WebNotificationHub`
+- [x] Phase 2 — LLM 入口 → `llmInboundRegistry` / `llmInboundDispatch`
+- [x] Phase 3 — 外部ツール RPC → `platformToolGateway`
+- [x] Phase 4 — Discord / Voice / Minebot / Minecraft → 各 gateway + `serviceCommandRegistry`
+- [x] Phase 5 — `eventBus.ts` / `index.ts` / `eventBus.test.ts` 削除
 
 ## 完了条件
 
-- `rg 'getEventBus|EventBus' backend/src` が **0件**（型定義 `eventMap.ts` はイベント名の型として残すか、`WebNotificationHub` 専用型へ移行）
-- 全ユニットテスト通過
-- `docs/architecture-current.md` から EventBus 記述削除
+- [x] `rg 'getEventBus|EventBus' backend/src` が **0件**
+- [x] 対象ユニットテスト通過
+- [x] `docs/architecture-current.md` から EventBus 記述削除

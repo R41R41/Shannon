@@ -1,15 +1,12 @@
 import {
-  EventType,
   ServiceCommand,
-  ServiceInput,
-  StatusAgentInput,
   StatusAgentOutput,
 } from '@shannon/common';
 import {
   WebSocketServiceBase,
   WebSocketServiceConfig,
 } from '../../common/WebSocketService.js';
-import { getEventBus } from '../../eventBus/index.js';
+import { dispatchServiceCommand } from '../../runtime/serviceCommandRegistry.js';
 import { logger } from '../../../utils/logger.js';
 import { getWebNotificationHub } from '../webNotificationHub.js';
 
@@ -37,7 +34,6 @@ export class StatusAgent extends WebSocketServiceBase {
   }
 
   protected override initialize() {
-    const eventBus = getEventBus();
     this.onAuthenticatedConnection((ws) => {
       logger.debug('Status client connected');
 
@@ -51,27 +47,13 @@ export class StatusAgent extends WebSocketServiceBase {
         const data = JSON.parse(message.toString());
         if (data.type === 'service:command') {
           const service = data.service;
-          const command = data.command;
+          const command = data.command as ServiceCommand;
           if (data.service === 'minebot:bot') {
             const serverName = data.serverName ? data.serverName : null;
-            eventBus.publish({
-              type: `${service}:status` as EventType,
-              memoryZone: 'web',
-              data: {
-                serviceCommand: command as ServiceCommand,
-                serverName,
-              } as ServiceInput,
-            });
+            await dispatchServiceCommand(service, command, serverName);
           } else {
             const serverName = data.service ? data.service : null;
-            eventBus.publish({
-              type: `${service}:status` as EventType,
-              memoryZone: 'web',
-              data: {
-                serviceCommand: command as ServiceCommand,
-                serverName,
-              } as ServiceInput,
-            });
+            await dispatchServiceCommand(service, command, serverName);
           }
         }
       });

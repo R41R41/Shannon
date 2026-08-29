@@ -1,6 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-const legacy = vi.hoisted(() => ({ publish: vi.fn() }));
-vi.mock('../../src/services/eventBus/index.js', () => ({ getEventBus: () => ({ publish: legacy.publish }) }));
 vi.mock('../../src/utils/logger.js', () => ({ logger: { info: vi.fn(), error: vi.fn() } }));
 import ChatOnWebTool from '../../src/services/llm/tools/utility/chatOnWeb.js';
 import UpdatePlanTool from '../../src/services/llm/tools/utility/updatePlan.js';
@@ -28,7 +26,6 @@ describe('Web tools require a request-bound session', () => {
   it('does not post to Web UI without a bound request', async () => {
     await new ChatOnWebTool()._call({ message: 'not authorized' });
     expect(transport.postMessage).not.toHaveBeenCalled();
-    expect(legacy.publish).not.toHaveBeenCalled();
   });
 
   it('binds web ports per run and cannot inherit another session', async () => {

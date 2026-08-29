@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-const legacy = vi.hoisted(() => ({ publish: vi.fn(), getRecentMessages: vi.fn(async () => [{ content: 'other channel private text' }]) }));
-vi.mock('../../src/services/eventBus/index.js', () => ({ getEventBus: () => ({ publish: legacy.publish }) }));
+const legacy = vi.hoisted(() => ({ getRecentMessages: vi.fn(async () => [{ content: 'other channel private text' }]) }));
 vi.mock('../../src/services/discord/client.js', () => ({ DiscordBot: { getInstance: () => ({ getRecentMessages: legacy.getRecentMessages }) } }));
 vi.mock('../../src/utils/logger.js', () => ({ logger: { error: vi.fn(), warn: vi.fn() }, createLogger: () => ({ warn: vi.fn() }) }));
 import ChatOnDiscordTool from '../../src/services/llm/tools/discord/chatOnDiscord.js';
@@ -37,7 +36,7 @@ beforeEach(() => { vi.clearAllMocks(); registered.reply.mockResolvedValue(undefi
 describe('Discord tools require a request-bound destination', () => {
   it('does not send to a model-selected channel without a bound request', async () => {
     await new ChatOnDiscordTool()._call({ guildId: '111', channelId: '222', message: 'not authorized' });
-    expect(legacy.publish).not.toHaveBeenCalled();
+    expect(registered.reply).not.toHaveBeenCalled();
   });
   it('does not read model-selected history without a bound request', async () => {
     await new GetDiscordRecentMessagesTool()._call({ channelId: '222', limit: 10 });
@@ -52,7 +51,7 @@ describe('Discord request scope and tool ownership', () => {
   });
   it('keeps display names and generated timestamps out of canonical user text', async () => {
     const invokeGraph = vi.fn(async () => ({}));
-    const router = new EventRouter({ invokeGraph, eventBus: {}, realtimeApi: {}, agentOrchestrator: {}, voiceProcessor: {}, isDevMode: true } as any);
+    const router = new EventRouter({ invokeGraph, realtimeApi: {}, agentOrchestrator: {}, voiceProcessor: {}, isDevMode: true } as any);
     await (router as any).processDiscordMessage({ type: 'text', text: 'my actual words', userName: 'not user text', userId: '333', guildId: '', guildName: '', channelId: '222', channelName: 'DM', messageId: '900', isDM: true, recentMessages: [] });
     expect(invokeGraph.mock.calls[0][0]).toMatchObject({ text: 'my actual words', discord: { isDM: true, channelId: '222' } });
   });
@@ -126,7 +125,6 @@ describe('Discord request scope and tool ownership', () => {
     bindRequestDiscordConversation(a, request()); bindRequestDiscordConversation(b, rb);
     await a[0]._call({ message: 'A', memoryZone: 'forged' }); await b[0]._call({ message: 'B' });
     expect(registered.reply.mock.calls.map(x => x[0].channelId)).toEqual(['222', '444']);
-    expect(legacy.publish).not.toHaveBeenCalled();
     await registry.createTools()[0]._call({ message: 'unbound' }); expect(registered.reply).toHaveBeenCalledTimes(2);
     expect(() => new RunToolRegistry([{ name: 'bad', setDiscordConversationPort() {} }])).toThrow('createForRun');
   });
@@ -141,7 +139,7 @@ describe('Discord request scope and tool ownership', () => {
   });
   it('routes structured text replies through the same port, never the legacy voice bus', async () => {
     await discordDispatcher.dispatch(request() as any, { message: 'answer' } as any);
-    expect(registered.reply.mock.calls[0][0]).toMatchObject({ channelId: '222' }); expect(legacy.publish).not.toHaveBeenCalled();
+    expect(registered.reply.mock.calls[0][0]).toMatchObject({ channelId: '222' }); expect(registered.reply.mock.calls).toHaveLength(1);
     registered.reply.mockRejectedValueOnce(new Error('network unknown'));
     await expect(discordDispatcher.dispatch(request() as any, { message: 'answer' } as any)).rejects.toThrow('配信結果');
   });
@@ -153,7 +151,7 @@ describe('Discord request scope and tool ownership', () => {
     await expect(discordDispatcher.dispatch(request() as any, { channel: 'web', message: 'wrong route' })).rejects.toThrow();
     const r = request(); (r.discord as any).isVoiceChannel = 'true';
     await expect(discordDispatcher.dispatch(r as any, { channel: 'discord', message: 'wrong route' })).rejects.toThrow();
-    expect(legacy.publish).not.toHaveBeenCalled(); expect(registered.reply).not.toHaveBeenCalled();
+    expect(registered.reply).not.toHaveBeenCalled(); expect(registered.reply).not.toHaveBeenCalled();
   });
 });
 

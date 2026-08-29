@@ -1,18 +1,16 @@
 import {
-  YoutubeClientInput,
-  YoutubeClientOutput,
   YoutubeCommentOutput,
-  YoutubeLiveChatMessageInput,
   YoutubeLiveChatMessageOutput,
   YoutubeSubscriberUpdateOutput,
-  YoutubeVideoInput,
 } from '@shannon/common';
 import { OAuth2Client } from 'google-auth-library';
 import { google, youtube_v3 } from 'googleapis';
 import { BaseClient } from '../common/BaseClient.js';
 import { config } from '../../config/env.js';
-import { getEventBus } from '../eventBus/index.js';
+import { getDiscordOutboundPort } from '../runtime/discordOutboundGateway.js';
 import { deliverYoutubeMessageToLlm, deliverYoutubeReplyToLlm } from '../runtime/llmInboundDispatch.js';
+import { registerYoutubeToolPort } from '../runtime/platformToolGateway.js';
+import { registerServiceCommandHandler } from '../runtime/serviceCommandRegistry.js';
 import { emitWebServiceStatus } from '../web/webNotificationHub.js';
 import { logger } from '../../utils/logger.js';
 
@@ -35,10 +33,10 @@ export class YoutubeClient extends BaseClient {
   private chatHistory: { minutes: number; author: string; message: string }[] =
     [];
   private liveChatWatchStartTime: Date | null = null;
+  private gatewaysRegistered = false;
 
   private constructor(serviceName: 'youtube', isTest: boolean) {
-    const eventBus = getEventBus();
-    super(serviceName, eventBus);
+    super(serviceName);
     this.client = null;
     this.oauth2Client = null;
     this.channelId = config.youtube.channelId || null;
@@ -54,14 +52,20 @@ export class YoutubeClient extends BaseClient {
     return YoutubeClient.instance;
   }
 
-  private setupEventHandlers() {
-    this.eventBus.subscribe('youtube:status', async (event) => {
-      const { serviceCommand } = event.data as YoutubeClientInput;
-      if (serviceCommand === 'start') {
+  private registerGateways() {
+    if (this.gatewaysRegistered) return;
+    this.gatewaysRegistered = true;
+
+    registerYoutubeToolPort({
+      getVideoInfo: (videoId) => this.getVideoInfo(videoId),
+    });
+
+    registerServiceCommandHandler('youtube', async (command) => {
+      if (command === 'start') {
         await this.start();
-      } else if (serviceCommand === 'stop') {
+      } else if (command === 'stop') {
         await this.stop();
-      } else if (serviceCommand === 'status') {
+      } else if (command === 'status') {
         emitWebServiceStatus({
           service: 'youtube',
           status: this.status,
@@ -69,87 +73,55 @@ export class YoutubeClient extends BaseClient {
       }
     });
 
-    this.eventBus.subscribe('youtube:check_comments', async () => {
-      if (this.status !== 'running') return;
-      try {
-        const unrepliedComments = await this.getUnrepliedComments();
-        for (const comment of unrepliedComments) {
-          deliverYoutubeReplyToLlm(comment as YoutubeCommentOutput);
-        }
-      } catch (error) {
-        logger.error(`Check comments error: ${error}`);
-      }
-    });
-
-    this.eventBus.subscribe('youtube:check_subscribers', async () => {
-      if (this.status !== 'running') return;
-      try {
-        const subscriberCount = await this.getSubscriberCount();
-        if (subscriberCount > this.lastSubscriberCount) {
-          this.lastSubscriberCount = subscriberCount;
-          this.eventBus.publish({
-            type: 'youtube:subscriber_update',
-            memoryZone: 'discord:aiminelab_server',
-            data: {
-              subscriberCount,
-            } as YoutubeSubscriberUpdateOutput,
-          });
-        }
-      } catch (error) {
-        logger.error(`Check subscribers error: ${error}`);
-      }
-    });
-
-    this.eventBus.subscribe('youtube:reply_comment', async (event) => {
-      const { videoId, commentId, reply } = event.data as YoutubeVideoInput;
-      if (!videoId || !commentId || !reply) {
-        logger.error(
-          `Invalid input for replyComment: ${JSON.stringify(event.data)}`
-        );
-        return;
-      }
-
-      await this.replyComment(videoId, commentId, reply);
-    });
-    this.eventBus.subscribe('youtube:get_video_info', async (event) => {
-      const { videoId } = event.data as YoutubeClientInput;
-      if (!videoId) {
-        logger.error(
-          `Invalid input for getVideoInfo: ${JSON.stringify(event.data)}`
-        );
-        return;
-      }
-      const videoInfo = await this.getVideoInfo(videoId);
-      this.eventBus.publish({
-        type: 'tool:get_video_info',
-        memoryZone: 'youtube',
-        data: videoInfo as YoutubeClientOutput,
-      });
-    });
-
-    // ライブチャット監視開始/終了
-    this.eventBus.subscribe('youtube:live_chat:status', async (event) => {
-      const { serviceCommand } = event.data as YoutubeClientInput;
-      if (serviceCommand === 'start') {
-        const result = await this.startLiveChatPolling();
+    registerServiceCommandHandler('youtube:live_chat', async (command) => {
+      if (command === 'start') {
+        const result = await this.startLiveChat();
         if (result.success) {
           this.liveChatStatus = 'running';
         }
-      } else if (serviceCommand === 'stop') {
-        await this.stopLiveChatPolling();
+      } else if (command === 'stop') {
+        await this.stopLiveChat();
         this.liveChatStatus = 'stopped';
-      } else if (serviceCommand === 'status') {
+      } else if (command === 'status') {
         emitWebServiceStatus({
           service: 'youtube:live_chat',
           status: this.liveChatStatus,
         });
       }
     });
+  }
 
-    this.eventBus.subscribe('youtube:live_chat:post_message', async (event) => {
-      const { response } = event.data as YoutubeLiveChatMessageInput;
-      await this.sendLiveChatMessage(response);
-    });
+  public async checkComments(): Promise<void> {
+    if (this.status !== 'running') return;
+    try {
+      const unrepliedComments = await this.getUnrepliedComments();
+      for (const comment of unrepliedComments) {
+        deliverYoutubeReplyToLlm(comment as YoutubeCommentOutput);
+      }
+    } catch (error) {
+      logger.error(`Check comments error: ${error}`);
+    }
+  }
+
+  public async checkSubscribers(): Promise<void> {
+    if (this.status !== 'running') return;
+    try {
+      const subscriberCount = await this.getSubscriberCount();
+      if (subscriberCount > this.lastSubscriberCount) {
+        this.lastSubscriberCount = subscriberCount;
+        await this.announceSubscriberUpdate({ subscriberCount });
+      }
+    } catch (error) {
+      logger.error(`Check subscribers error: ${error}`);
+    }
+  }
+
+  public async announceSubscriberUpdate(data: YoutubeSubscriberUpdateOutput): Promise<void> {
+    try {
+      await getDiscordOutboundPort().announceSubscriberUpdate(data);
+    } catch {
+      // Discord outbound port not registered yet
+    }
   }
 
   private async getAuthUrl() {
@@ -179,7 +151,6 @@ export class YoutubeClient extends BaseClient {
         config.youtube.clientSecret,
         'http://localhost'
       );
-      // await this.getAuthUrl(oauth2Client);
 
       if (!this.authCode) {
         throw new Error('認証コードが設定されていません');
@@ -195,14 +166,10 @@ export class YoutubeClient extends BaseClient {
     }
   }
 
-  /**
-   * 自分のチャンネルの最新動画のコメントを取得し、未返信のものを返す
-   */
   public async getUnrepliedComments() {
     if (this.status !== 'running' || !this.channelId) return [];
 
     try {
-      // 自分の最新動画を取得（例：最新3件）
       if (!this.client) {
         throw new Error('YouTube client is not initialized');
       }
@@ -214,29 +181,26 @@ export class YoutubeClient extends BaseClient {
         maxResults: 3,
       });
       const unrepliedComments = [];
-      // 各動画のコメントをチェック
       for (const video of videos.data.items || []) {
         const videoId = video.id?.videoId;
         const title = video.snippet?.title;
         const description = video.snippet?.description;
         if (!videoId) continue;
         logger.debug(`Checking comments for video: ${videoId} ${title}`);
-        // コメントスレッドを取得
         const comments = await this.client.commentThreads.list({
           part: ['snippet', 'replies'],
           videoId: videoId,
           maxResults: 100,
         });
-        // 各コメントスレッドをチェック
         for (const thread of comments.data.items || []) {
           const topComment = thread.snippet?.topLevelComment?.snippet;
           const hasReplies = thread.replies?.comments || [];
           if (
             topComment &&
-            topComment.authorChannelId?.value !== this.channelId && // 自分以外のコメント
+            topComment.authorChannelId?.value !== this.channelId &&
             !hasReplies.some(
               (reply) =>
-                reply.snippet?.authorChannelId?.value === this.channelId // 自分の返信がない
+                reply.snippet?.authorChannelId?.value === this.channelId
             )
           ) {
             unrepliedComments.push({
@@ -278,12 +242,6 @@ export class YoutubeClient extends BaseClient {
     }
   }
 
-  /**
-   * 指定されたコメントに返信する
-   * @param videoId 動画ID
-   * @param commentId コメントID
-   * @param reply 返信内容
-   */
   public async replyComment(videoId: string, commentId: string, reply: string) {
     if (this.status !== 'running') return;
     if (!this.client) {
@@ -309,23 +267,19 @@ export class YoutubeClient extends BaseClient {
 
   public async initialize() {
     try {
-      // await this.getAuthUrl();
-      // await this.getRefreshToken();
       try {
         await this.setUpConnection();
-        this.setupEventHandlers();
+        this.registerGateways();
         this.lastSubscriberCount = await this.getSubscriberCount();
         logger.debug(`lastSubscriberCount: ${this.lastSubscriberCount}`);
       } catch (error) {
         logger.error(`YouTube initialization error: ${error}`);
         logger.warn('YouTube initialization failed, but continuing without YouTube functionality!');
-        // エラーをスローせずに処理を続行
         this.status = 'stopped';
       }
     } catch (error) {
       logger.error(`YouTube initialization outer error: ${error}`);
       logger.warn('YouTube initialization failed, but continuing without YouTube functionality');
-      // エラーをスローせずに処理を続行
       this.status = 'stopped';
     }
   }
@@ -340,13 +294,13 @@ export class YoutubeClient extends BaseClient {
       if (!clientId || !clientSecret || !this.refreshToken) {
         logger.warn('YouTube OAuth2認証情報が設定されていません。YouTube機能は無効化されます。');
         this.status = 'stopped';
-        return; // 認証情報がない場合は早期リターン
+        return;
       }
 
       this.oauth2Client = new google.auth.OAuth2(
         clientId,
         clientSecret,
-        'http://localhost' // リダイレクトURIは実際の設定に合わせてください
+        'http://localhost'
       );
 
       this.oauth2Client.setCredentials({
@@ -361,13 +315,9 @@ export class YoutubeClient extends BaseClient {
       logger.error(`YouTube setUpConnection error: ${error}`);
       logger.warn('YouTube connection failed, but continuing without YouTube functionality');
       this.status = 'stopped';
-      // エラーをスローせずに処理を続行
     }
   }
 
-  /**
-   * 動画IDからタイトル・投稿者名・サムネイルURL・説明・公開日・視聴回数・いいね数・コメント数を取得
-   */
   public async getVideoInfo(videoId: string) {
     if (!this.client) {
       throw new Error('YouTube client is not initialized');
@@ -410,7 +360,7 @@ export class YoutubeClient extends BaseClient {
     }
   }
 
-  private async startLiveChatPolling() {
+  public async startLiveChat() {
     if (!this.client) {
       logger.error('YouTube client is not initialized');
       return { success: false, message: 'YouTube client is not initialized' };
@@ -422,12 +372,10 @@ export class YoutubeClient extends BaseClient {
       logger.error('ライブ配信中の動画が見つかりません');
       return { success: false, message: 'ライブ配信中の動画が見つかりません' };
     }
-    // 既に監視中なら一度止める
     if (this.liveChatPolling) {
       clearInterval(this.liveChatPolling);
       this.liveChatPolling = null;
     }
-    // liveChatId取得 & タイトル・概要欄・開始時刻取得
     let liveChatId: string | null = null;
     try {
       const videoResponse = await this.client.videos.list({
@@ -440,7 +388,7 @@ export class YoutubeClient extends BaseClient {
         liveBroadcastContent: video?.snippet?.liveBroadcastContent,
         liveStreamingDetails: video?.liveStreamingDetails,
       }, null, 2)}`);
-      liveChatId = (video?.liveStreamingDetails as any)?.activeLiveChatId;
+      liveChatId = (video?.liveStreamingDetails as { activeLiveChatId?: string })?.activeLiveChatId ?? null;
       if (!liveChatId) {
         logger.error('liveChatIdが取得できませんでした');
         return { success: false, message: 'liveChatIdが取得できませんでした' };
@@ -452,12 +400,10 @@ export class YoutubeClient extends BaseClient {
         ? new Date(video.liveStreamingDetails.actualStartTime)
         : null;
       this.chatHistory = [];
-      this.liveChatWatchStartTime = new Date(); // 監視開始時刻を記録
-      // 1分ごとにコメント取得
+      this.liveChatWatchStartTime = new Date();
       this.liveChatPolling = setInterval(() => {
         this.fetchLiveChatMessages();
       }, 60 * 1000);
-      // 初回即時実行
       this.fetchLiveChatMessages();
       logger.info('ライブチャット監視を開始しました');
       return { success: true, message: 'ライブチャット監視を開始しました' };
@@ -467,7 +413,7 @@ export class YoutubeClient extends BaseClient {
     }
   }
 
-  private stopLiveChatPolling() {
+  public async stopLiveChat() {
     if (this.liveChatPolling) {
       clearInterval(this.liveChatPolling);
       this.liveChatPolling = null;
@@ -485,7 +431,6 @@ export class YoutubeClient extends BaseClient {
         maxResults: 200,
       });
       const messages = chatResponse.data.items || [];
-      // 未返信かつ自分以外、かつ監視開始時刻以降、かつ「シャノン、」で始まるコメントのみ抽出
       const unrepliedMessages = messages.filter(
         (msg) =>
           msg.id &&
@@ -498,24 +443,20 @@ export class YoutubeClient extends BaseClient {
           (msg.snippet?.displayMessage?.startsWith('シャノン、') ?? false)
       );
       if (unrepliedMessages.length > 0) {
-        // ランダムに1件選ぶ
         const randomIndex = Math.floor(Math.random() * unrepliedMessages.length);
         const msg = unrepliedMessages[randomIndex];
         this.lastRepliedMessageIds.add(msg.id ?? '');
         const author = msg.authorDetails?.displayName ?? '';
         const message = msg.snippet?.displayMessage ?? '';
         if (author !== '' && message !== '') {
-          // 履歴に追加
           this.chatHistory.push({
-            minutes: 0, // ライブチャットの場合は0分
+            minutes: 0,
             author,
             message,
           });
-          // 履歴を「分数：名前「内容」」形式で
           const formattedHistory = this.chatHistory.map(
             (h) => `${h.minutes}：${h.author}「${h.message}」`
           );
-          // publish
           deliverYoutubeMessageToLlm({
             message,
             author,
@@ -532,7 +473,6 @@ export class YoutubeClient extends BaseClient {
     }
   }
 
-  // 任意の文字列をライブチャットに投稿する
   public async sendLiveChatMessage(message: string) {
     if (!this.client || !this.liveChatId) return;
     try {
@@ -555,16 +495,13 @@ export class YoutubeClient extends BaseClient {
   }
 
   async getCurrentLiveVideoId(): Promise<string | null> {
-    // .envからURL取得/
     const liveUrl = config.youtube.liveUrl;
     if (liveUrl) {
-      // 正規表現で動画ID抽出（v=, /video/, /watch/, youtu.be/ など対応）
       const match = liveUrl.match(/(?:v=|\/(?:video|live)\/|youtu\.be\/|watch\?v=)([a-zA-Z0-9_-]{11})/);
       if (match && match[1]) {
         return match[1];
       }
     }
-    // なければ従来通り
     if (!this.client || !this.channelId) return null;
     const res = await this.client.search.list({
       part: ['id'],

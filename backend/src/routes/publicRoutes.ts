@@ -229,7 +229,7 @@ export function registerPublicRoutes(app: Express, llmService: LLMService): void
         message: 'シャノンの処理中にエラーが発生しました。もう一度試してみてね！',
       });
     } finally {
-      // Cleanup EventBus subscriptions
+      // Cleanup runtime gateway registrations on shutdown
       unsubscribers.forEach((unsub) => unsub());
 
       // Send done and end stream

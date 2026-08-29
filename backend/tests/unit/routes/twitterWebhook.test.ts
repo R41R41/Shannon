@@ -31,12 +31,27 @@ const twitterCfg = vi.hoisted(() => ({
   twitterApiIoKey: 'webhook-test-key',
 }));
 
+const twitterPort = vi.hoisted(() => ({
+  likeTweet: vi.fn(),
+}));
+
+const llmDispatch = vi.hoisted(() => ({
+  deliverTwitterReplyToLlm: vi.fn(),
+}));
+
 vi.mock('../../../src/config/env.js', () => ({
   config: { twitter: twitterCfg },
 }));
 
+vi.mock('../../../src/services/runtime/platformToolGateway.js', () => ({
+  getTwitterToolPort: () => twitterPort,
+}));
+
+vi.mock('../../../src/services/runtime/llmInboundDispatch.js', () => ({
+  deliverTwitterReplyToLlm: llmDispatch.deliverTwitterReplyToLlm,
+}));
+
 import { registerWebhookRoutes } from '../../../src/routes/webhookRoutes.js';
-import { clearEventBus, getEventBus } from '../../../src/services/eventBus/index.js';
 
 function createMockTwitterClient(
   overrides: Partial<{
@@ -81,7 +96,8 @@ async function withServer(
 
 describe('registerWebhookRoutes /api/webhook/twitter', () => {
   beforeEach(() => {
-    clearEventBus();
+    twitterPort.likeTweet.mockReset();
+    llmDispatch.deliverTwitterReplyToLlm.mockReset();
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -153,11 +169,6 @@ describe('registerWebhookRoutes /api/webhook/twitter', () => {
 
   it('自分自身のツイートは無視する', async () => {
     const client = createMockTwitterClient();
-    const published: { type: string }[] = [];
-    getEventBus().subscribe('llm:post_twitter_reply' as never, (e: { type: string }) => {
-      published.push(e);
-    });
-
     const app = mountApp(client);
     await withServer(app, async (base) => {
       const res = await fetch(`${base}/api/webhook/twitter`, {
@@ -178,19 +189,11 @@ describe('registerWebhookRoutes /api/webhook/twitter', () => {
       });
       expect(res.status).toBe(200);
     });
-    expect(published).toHaveLength(0);
+    expect(llmDispatch.deliverTwitterReplyToLlm).not.toHaveBeenCalled();
   });
 
-  it('引用RT rule では like と llm:post_twitter_reply を publish する', async () => {
+  it('引用RT rule では like と deliverTwitterReplyToLlm を呼ぶ', async () => {
     const client = createMockTwitterClient();
-    const types: string[] = [];
-    getEventBus().subscribe('twitter:like_tweet' as never, (e: { type: string }) => {
-      types.push(e.type);
-    });
-    getEventBus().subscribe('llm:post_twitter_reply' as never, (e: { type: string }) => {
-      types.push(e.type);
-    });
-
     const app = mountApp(client);
     await withServer(app, async (base) => {
       const res = await fetch(`${base}/api/webhook/twitter`, {
@@ -216,21 +219,13 @@ describe('registerWebhookRoutes /api/webhook/twitter', () => {
       expect(body.processed).toBe(1);
     });
 
-    expect(types).toContain('twitter:like_tweet');
-    expect(types).toContain('llm:post_twitter_reply');
+    expect(twitterPort.likeTweet).toHaveBeenCalledWith('q1');
+    expect(llmDispatch.deliverTwitterReplyToLlm).toHaveBeenCalledOnce();
     expect(client.processedTweetIds.has('q1')).toBe(true);
   });
 
   it('日次上限時は引用RT で返信イベントを出さない（いいねは送る）', async () => {
     const client = createMockTwitterClient({ isReplyLimitReached: () => true });
-    const types: string[] = [];
-    getEventBus().subscribe('twitter:like_tweet' as never, (e: { type: string }) => {
-      types.push(e.type);
-    });
-    getEventBus().subscribe('llm:post_twitter_reply' as never, (e: { type: string }) => {
-      types.push(e.type);
-    });
-
     const app = mountApp(client);
     await withServer(app, async (base) => {
       await fetch(`${base}/api/webhook/twitter`, {
@@ -253,17 +248,12 @@ describe('registerWebhookRoutes /api/webhook/twitter', () => {
       });
     });
 
-    expect(types).toContain('twitter:like_tweet');
-    expect(types).not.toContain('llm:post_twitter_reply');
+    expect(twitterPort.likeTweet).toHaveBeenCalledWith('q2');
+    expect(llmDispatch.deliverTwitterReplyToLlm).not.toHaveBeenCalled();
   });
 
-  it('通常リプライはスレッド取得後に llm:post_twitter_reply を送る', async () => {
+  it('通常リプライはスレッド取得後に deliverTwitterReplyToLlm を送る', async () => {
     const client = createMockTwitterClient();
-    const payloads: unknown[] = [];
-    getEventBus().subscribe('llm:post_twitter_reply' as never, (e: { data: unknown }) => {
-      payloads.push(e.data);
-    });
-
     const fetchMock = vi.mocked(globalThis.fetch);
     fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       if (requestUrl(input).includes('twitterapi.io')) {
@@ -305,10 +295,10 @@ describe('registerWebhookRoutes /api/webhook/twitter', () => {
     });
 
     await vi.waitFor(() => {
-      expect(payloads.length).toBeGreaterThan(0);
+      expect(llmDispatch.deliverTwitterReplyToLlm).toHaveBeenCalled();
     });
 
-    const data = payloads[0] as {
+    const data = llmDispatch.deliverTwitterReplyToLlm.mock.calls[0][0] as {
       replyId?: string;
       conversationThread?: { authorName: string; text: string }[];
     };
@@ -322,11 +312,6 @@ describe('registerWebhookRoutes /api/webhook/twitter', () => {
   it('同一 tweetId は二重処理しない', async () => {
     const client = createMockTwitterClient();
     client.processedTweetIds.add('dup1');
-    const count = { n: 0 };
-    getEventBus().subscribe('llm:post_twitter_reply' as never, () => {
-      count.n += 1;
-    });
-
     const app = mountApp(client);
     await withServer(app, async (base) => {
       const res = await fetch(`${base}/api/webhook/twitter`, {
@@ -351,6 +336,6 @@ describe('registerWebhookRoutes /api/webhook/twitter', () => {
       const body = (await res.json()) as { processed?: number };
       expect(body.processed).toBe(0);
     });
-    expect(count.n).toBe(0);
+    expect(llmDispatch.deliverTwitterReplyToLlm).not.toHaveBeenCalled();
   });
 });

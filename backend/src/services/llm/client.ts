@@ -11,8 +11,7 @@ import { fileURLToPath, pathToFileURL } from 'url';
 import { z } from 'zod';
 import { config } from '../../config/env.js';
 import { classifyError, formatErrorForLog } from '../../errors/index.js';
-import { getEventBus } from '../eventBus/index.js';
-import type { EventBus } from '../eventBus/eventBus.js';
+import { logToWeb } from '../runtime/logging.js';
 import { registerLlmInbound } from '../runtime/llmInboundRegistry.js';
 import { registerSkillListHandler } from '../runtime/skillListRegistry.js';
 import { getWebNotificationHub } from '../web/webNotificationHub.js';
@@ -38,7 +37,6 @@ const __dirname = dirname(__filename);
 
 export class LLMService {
   private static instance: LLMService;
-  private eventBus: EventBus;
   private realtimeApi: RealtimeAPIService;
   private tools: StructuredTool[] = [];
   private isDevMode: boolean;
@@ -58,7 +56,6 @@ export class LLMService {
 
   constructor(isDevMode: boolean) {
     this.isDevMode = isDevMode;
-    this.eventBus = getEventBus();
     this.realtimeApi = RealtimeAPIService.getInstance();
     this.voicepeakClient = VoicepeakClient.getInstance();
     this.openaiClient = getTracedOpenAI(new OpenAI({ apiKey: config.openaiApiKey }));
@@ -71,7 +68,6 @@ export class LLMService {
     const boundInvokeGraph = this.invokeGraph.bind(this);
 
     this.voiceProcessor = new VoiceProcessor({
-      eventBus: this.eventBus,
       openaiClient: this.openaiClient,
       groqClient: this.groqClient,
       voicepeakClient: this.voicepeakClient,
@@ -81,7 +77,6 @@ export class LLMService {
     });
 
     this.agentOrchestrator = new AgentOrchestrator({
-      eventBus: this.eventBus,
       isDevMode: this.isDevMode,
       invokeGraph: boundInvokeGraph,
     });
@@ -233,7 +228,7 @@ export class LLMService {
       const zone = envelope.metadata?.legacyMemoryZone ?? envelope.channel;
       const sErr = classifyError(error, 'llm');
       logger.error(`Graph invocation error [${zone}]: ${formatErrorForLog(sErr)}`);
-      this.eventBus.log(zone as MemoryZone, 'red', `Error: ${sErr.message}`, true);
+      void logToWeb(zone as MemoryZone, 'red', `Error: ${sErr.message}`, true);
       throw sErr;
     }
   }

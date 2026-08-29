@@ -1,11 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AIMessage, AIMessageChunk, HumanMessage } from '@langchain/core/messages';
 
-const fakes = vi.hoisted(() => ({ invoke: vi.fn(), stream: vi.fn(), utilityInvoke: vi.fn(), publish: vi.fn(), memoryReads: [] as any[], memoryWrites: [] as any[] }));
+const fakes = vi.hoisted(() => ({ invoke: vi.fn(), stream: vi.fn(), utilityInvoke: vi.fn(), memoryReads: [] as any[], memoryWrites: [] as any[] }));
 vi.mock('../../src/config/env.js', () => ({ config: { anthropic: { apiKey: '' }, openaiApiKey: 'mock' } }));
 vi.mock('../../src/config/modelManager.js', () => ({ modelManager: { get: () => 'mock-model' } }));
 vi.mock('../../src/utils/logger.js', () => ({ logger: Object.fromEntries(['info','warn','error','success','debug'].map(k => [k, vi.fn()])) }));
-vi.mock('../../src/services/eventBus/index.js', () => ({ getEventBus: () => ({ publish: fakes.publish }) }));
 vi.mock('../../src/services/minebot/config/MinebotConfig.js', () => ({ CONFIG: { UI_MOD_BASE_URL: 'http://unused.invalid' } }));
 vi.mock('../../src/services/minebot/knowledge/WorldKnowledgeService.js', () => ({ WorldKnowledgeService: { forServer: () => null } }));
 vi.mock('../../src/services/minebot/knowledge/RecipeDependencyResolver.js', () => ({ RecipeDependencyResolver: {} }));
@@ -176,7 +175,7 @@ describe('actual FCA and tools with external services mocked', () => {
   it('does not treat a Web conversation ID as a Discord delivery channel', async () => {
     const tool = new UpdatePlanTool(); tool.setContext('web-conversation', 'web-task', 'web');
     await tool.invoke({ goal: 'web-plan', strategy: 'test' });
-    expect(fakes.publish.mock.calls.some(([event]) => event.type === 'discord:planning')).toBe(false);
+    expect(discordPlanning.mock.calls.some(([payload]) => payload?.taskId === 'web-task')).toBe(false);
   });
 
   it('preempts an actual FCA without publishing its late result or aborting the emergency session', async () => {
@@ -193,7 +192,7 @@ describe('actual FCA and tools with external services mocked', () => {
     const b = coordinator.run({ ...envelope, requestId: 'emergency', tags: ['emergency'] }, signal => agent.run({ ...state('B'), needsTools: false }, signal));
     await entered.B.promise; expect(signals[0].aborted).toBe(true); expect(signals[1].aborted).toBe(false);
     release.A.resolve(); await rejected;
-    expect(fakes.publish.mock.calls.some(([e]) => e.type === 'discord:planning' && e.data.taskId === 'request-A' && e.data.planning.status === 'completed')).toBe(false);
+    expect(discordPlanning.mock.calls.some(([payload]) => payload?.taskId === 'request-A' && payload?.planning?.status === 'completed')).toBe(false);
     release.B.resolve(); await expect(b).resolves.toMatchObject({ lastAssistantContent: expect.stringContaining('for B') });
   });
 

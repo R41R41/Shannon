@@ -4,9 +4,8 @@ import type {
   MinebotOutput,
   RequestEnvelope,
   ShannonActionPlan,
-  SkillParameters,
 } from '@shannon/common';
-import { getEventBus } from '../../eventBus/index.js';
+import { invokeMinebotSkillFromParameters } from '../../runtime/minebotSkillGateway.js';
 import { createLogger } from '../../../utils/logger.js';
 const logger = createLogger('MinebotDispatcher', 'minebot');
 
@@ -30,7 +29,7 @@ export const minebotDispatcher: ActionDispatcher = {
 
     const run = minebotDispatchQueue.catch(() => undefined).then(async () => {
       for (const invocation of invocations) {
-        await invokeMinebotSkill(invocation);
+        await dispatchMinebotSkill(invocation);
       }
     });
     minebotDispatchQueue = run;
@@ -83,48 +82,24 @@ function mapActionToInvocations(action: MinecraftAction): SkillInvocation[] {
   return [];
 }
 
-async function invokeMinebotSkill(invocation: SkillInvocation): Promise<void> {
-  const eventBus = getEventBus();
-  const resultType = `minebot:${invocation.skillName}Result` as `minebot:${string}`;
+async function dispatchMinebotSkill(invocation: SkillInvocation): Promise<void> {
+  const result = await Promise.race([
+    invokeMinebotSkillFromParameters(invocation.skillName, invocation.args),
+    new Promise<MinebotOutput>((_, reject) => {
+      setTimeout(() => {
+        logger.warn(`[MinebotDispatcher] ${invocation.skillName} timed out`);
+        reject(new Error(`${invocation.skillName} timed out [failure_type=timeout]`));
+      }, 30000);
+    }),
+  ]);
 
-  await new Promise<void>((resolve, reject) => {
-    let settled = false;
-    const finish = (error?: Error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      unsubscribe();
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve();
-    };
-
-    const unsubscribe = eventBus.subscribe(resultType, (event) => {
-      const result = event.data as MinebotOutput;
-      if (result?.success === false) {
-        const resultMsg = typeof result.result === 'string' ? result.result : String(result.result ?? '');
-        const failureType = (result as MinebotOutput & { failureType?: string | null }).failureType
-          ?? classifyFailureType(resultMsg);
-        logger.warn(`[MinebotDispatcher] ${invocation.skillName} failed: ${resultMsg || 'unknown error'} (${failureType})`);
-        finish(new Error(`${invocation.skillName} failed [failure_type=${failureType}]: ${resultMsg || 'unknown error'}`));
-        return;
-      }
-      finish(undefined);
-    });
-
-    const timeout = setTimeout(() => {
-      logger.warn(`[MinebotDispatcher] ${invocation.skillName} timed out`);
-      finish(new Error(`${invocation.skillName} timed out [failure_type=timeout]`));
-    }, 30000);
-
-    eventBus.publish({
-      type: `minebot:${invocation.skillName}`,
-      memoryZone: 'minecraft',
-      data: { skillParameters: invocation.args } as SkillParameters,
-    });
-  });
+  if (result?.success === false) {
+    const resultMsg = typeof result.result === 'string' ? result.result : String(result.result ?? '');
+    const failureType = (result as MinebotOutput & { failureType?: string | null }).failureType
+      ?? classifyFailureType(resultMsg);
+    logger.warn(`[MinebotDispatcher] ${invocation.skillName} failed: ${resultMsg || 'unknown error'} (${failureType})`);
+    throw new Error(`${invocation.skillName} failed [failure_type=${failureType}]: ${resultMsg || 'unknown error'}`);
+  }
 }
 
 function classifyFailureType(message: string): string {

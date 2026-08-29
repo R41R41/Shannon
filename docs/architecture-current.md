@@ -31,7 +31,7 @@ Shannon は **複数の実行核と複数のプロセス** を持つエージェ
    CodeAgentLoop（ステイ）/ 一部 scheduler の配信（X投稿・画像生成）
 ```
 
-LangChain は消えていない。Discord FCA は StructuredTool を核へ包む。定期投稿の検索も既存ツールを port として核へ渡す。共有核 `modules/fca` は SDK / EventBus / Mongo 非依存。
+LangChain は消えていない。Discord FCA は StructuredTool を核へ包む。定期投稿の検索も既存ツールを port として核へ渡す。共有核 `modules/fca` は SDK / グローバル pub/sub / Mongo 非依存。
 
 ---
 
@@ -74,7 +74,7 @@ LINE と Radar はこのグラフに入らない。独立 HTTP runtime。
 | 弱み | プロセス静的な前回タスク要約、Minecraft 専用 | Minecraft の 70 スキル袋・生存ポリシー・prompt cache を持たない |
 | 失敗時 | FCA へフォールバック（Discord 用ツール袋が載る） | 呼び出し側が扱う |
 
-Minecraft を核へ無理に吸収すると、Anthropic cache と InstantSkill 直実行を失う。会話側を Executor に寄せると、LINE/Radar が本体グラフと EventBus に縛られる。**核は1つ（fca）、Minecraft 実行器は別実装として残す**のが妥当。共通化するのは「ツール名の許可リスト」と「記憶/送信をループ内に書かない」契約だけ。
+Minecraft を核へ無理に吸収すると、Anthropic cache と InstantSkill 直実行を失う。会話側を Executor に寄せると、LINE/Radar が本体グラフの旧グローバル bus に縛られる。**核は1つ（fca）、Minecraft 実行器は別実装として残す**のが妥当。共通化するのは「ツール名の許可リスト」と「記憶/送信をループ内に書かない」契約だけ。
 
 `SHANNON_USE_FCA=true` は Minecraft でも FCA を使う実験スイッチ。本番相当の既定ではない。
 
@@ -125,22 +125,22 @@ Radar の discovery スキルは general 袋の読み取り専用サブセット
 
 ---
 
-## 6. プロセス内結合：EventBus か Express か
+## 6. プロセス内結合：port と gateway
 
 ライの問い「疎結合・将来リポジトリ分割・いまは VM 1台」に対する答え。
 
-一般的な段階は4つある。**いま選ぶべきは 2。EventBus を認可の代わりにしない。リポジトリ分割はまだしない。**
+**2026-08-29 更新:** 旧 `EventBus`（共有グローバル pub/sub）は削除済み。UI 通知は `WebNotificationHub`、LLM 入口は `llmInboundDispatch`、サービス start/stop は `serviceCommandRegistry`、外部ツール RPC は `platformToolGateway`、Discord 送信は conversation/outbound port、Voice は `voiceGateway`、Minebot スキルは `minebotSkillGateway`。
 
 | 段階 | 何か | 向いていること | Shannon での位置 |
 |---|---|---|---|
-| 1. 共有グローバル | `getEventBus()`、`getInstance()` | 原型 | 本体に残っている。送信・記憶の権限検査を Bypass しやすい |
-| 2. プロセス内 port | 関数の引数で「誰が何をしてよいか」を渡す | 同一 VM・同一 Node プロセス。テストが差し替え可能 | RF-03 / RF-04 の方向。LINE runtime の constructor 注入もこれ |
-| 3. 同一 VM の別プロセス + HTTP | Express / Unix socket | クラッシュ分離、別の秘密、別のデプロイ | **LINE はすでにこれ**（15041）。本体と秘密・DB を分けた |
+| 1. 共有グローバル | 旧 EventBus、`getInstance()` | 原型 | **EventBus は削除済み**。singleton はまだ残る |
+| 2. プロセス内 port | 関数の引数で「誰が何をしてよいか」を渡す | 同一 VM・同一 Node プロセス。テストが差し替え可能 | RF-03 / RF-04 の方向。gateway/registry もこれ |
+| 3. 同一 VM の別プロセス + HTTP | Express / Unix socket | クラッシュ分離、別の秘密、別のデプロイ | **LINE はすでにこれ**（15041） |
 | 4. 別ホスト / 別リポジトリ | サービスメッシュ、キュー | チーム分割、スケール | 不要。VM 1台で足りる間はコストだけ増える |
 
-EventBus は「何か起きた」通知（UI、ログ）には使える。**宛先認可・記憶検索・ツール実行の同期経路にしてはいけない。** ツールが `getEventBus().publish(send)` すると、port の拒否を迂回する。Discord テキスト返信・履歴は `discordConversationPort`、Web 返信・計画通知は `webConversationPort` へ移行済み（`chat-on-web` / `update-plan` / `webDispatcher` / `TaskTreePublisher`）。EventBus 購読側は `sessionId` 付きイベントを全接続へ broadcast しない。
+**宛先認可・記憶検索・ツール実行の同期経路に pub/sub を使わない。** Discord テキスト返信・履歴は `discordConversationPort`、Web 返信・計画通知は `webConversationPort` / `WebNotificationHub`（sessionId でフィルタ）。
 
-フロントとバックエンドはすでに HTTP で分かれている。バックエンド同士を今すぐ Express で割ると、認証・envelope・中断を二重に実装することになる。**契約は port、実装は今は in-process、本当に秘密が違うものだけ別プロセス（LINE の前例）。** リポジトリ分割は port が安定してから。
+フロントとバックエンドはすでに HTTP で分かれている。**契約は port/gateway、実装は in-process、本当に秘密が違うものだけ別プロセス（LINE の前例）。**
 
 ---
 
@@ -256,7 +256,7 @@ Discord の `FunctionCallingAgentState` は 2 と 3 がまだ混線している�
 | Discord FCA session | `backend/src/services/llm/graph/nodes/FunctionCallingSession.ts` |
 | LINE runtime | `backend/src/services/line/runtime.ts` |
 | Radar FCA | `backend/src/services/radar/radarFca.ts` |
-| EventBus | `backend/src/services/eventBus/index.ts` |
+| Runtime gateways | `backend/src/services/runtime/`（Hub, tool/voice/minebot/scheduler registry） |
 
 ---
 
