@@ -17,6 +17,8 @@ import { parseFeed } from '../../src/services/radar/feedConnector.js';
 import type { PersonalCatalog, PersonalCatalogPort } from '../../src/modules/radar/catalog.js';
 import { PersonalTemporalReaders } from '../../src/services/radar/personalTemporalReaders.js';
 import { WeatherReadAdapter } from '../../src/services/radar/weatherReadAdapter.js';
+import { RadarFca } from '../../src/services/radar/radarFca.js';
+import type { LineRadarFcaPorts } from '../../src/services/line/lineRadarFcaSelection.js';
 const modelFake = vi.hoisted(() => ({ invoke: vi.fn(), configurations: [] as any[] }));
 vi.mock('@langchain/openai', () => ({ ChatOpenAI: class { constructor(input: any) { modelFake.configurations.push(input); } invoke = modelFake.invoke; } }));
 const bot = 'U' + 'a'.repeat(32), owner = 'U' + 'b'.repeat(32), stranger = 'U' + 'c'.repeat(32);
@@ -304,7 +306,7 @@ describe('LINE native Radar and scheduled delivery', () => {
     consentExpiresAt: BASE + 7 * 86400000, weather: null,
     feeds: [{ id: 'news', kind: 'web', locator: 'https://example.com/feed.xml', articleHosts: ['example.com'],
       topicIds: ['science'], maxItems: 10, retentionMs: 7 * 86400000 }] });
-  async function radarFixture(policyConfig = config) {
+  async function radarFixture(policyConfig = config, extras?: { radarFca?: LineRadarFcaPorts }) {
     let clock = BASE; let policy = makePolicy(); const store = new State(), catalog = new Catalog();
     const transport: LineTransport = { reply: vi.fn(async () => ({ status: 'accepted' })),
       push: vi.fn(async () => ({ status: 'accepted', messageId: '9001' })) };
@@ -314,7 +316,7 @@ describe('LINE native Radar and scheduled delivery', () => {
       return parseFeed(`<rss><channel><item><title>架空の研究ニュース</title><link>https://example.com/article</link><guid>one</guid><pubDate>${new Date(BASE - 3600000).toUTCString()}</pubDate></item></channel></rss>`, source, clock);
     });
     const ports = { ledger: runtime.ledger, catalog, feed: { read }, temporal: new PersonalTemporalReaders(),
-      readPolicy: async () => structuredClone(policy), deliver: runtime.deliver };
+      readPolicy: async () => structuredClone(policy), deliver: runtime.deliver, ...extras };
     const worker = new LineRadarWorker(policyConfig, ports, () => clock);
     return { worker, runtime, transport, read, catalog, store, ports,
       on: () => runtime.ledger.consent('enable', clock, true),
@@ -421,6 +423,59 @@ describe('LINE native Radar and scheduled delivery', () => {
   });
   it('keeps a run budget longer than a 45 second YouTube scan', () => {
     expect(LINE_RADAR_RUN_MS).toBeGreaterThan(45000);expect(LINE_RADAR_RUN_MS).toBeLessThanOrEqual(180000);
+  });
+  it('uses the FCA selection path when radarFca ports are wired', async () => {
+    const stored = new Set<string>();
+    const receipts = {
+      existing: async (_owner: string, keys: readonly string[]) => new Set(keys.filter(key => stored.has(key))),
+      reserve: async (_owner: string, key: string) => {
+        if (stored.has(key)) return false;
+        stored.add(key);
+        return true;
+      },
+    };
+    let turn = 0;
+    const fca = new RadarFca({
+      next: async input => {
+        turn += 1;
+        if (turn === 1) {
+          return { content: '', toolCalls: [{ id: 'call_y', name: 'get_unshared_youtube_videos', arguments: { limit: 5 } }] };
+        }
+        const payload = JSON.parse(input.messages.at(-1)!.content);
+        const id = payload.untrustedCandidates[0].candidateId;
+        return {
+          content: '',
+          toolCalls: [{ id: 'call_s', name: 'submit_personal_digest', arguments: { items: [{ candidateId: id, reason: 'fixture pick' }] } }],
+        };
+      },
+    });
+    const youtube = vi.fn(async () => [{
+      source: 'youtube' as const,
+      externalId: 'abcdefghijk',
+      title: 'Worker FCA 動画',
+      fact: '架空 · 2026-08-29',
+      url: 'https://www.youtube.com/watch?v=abcdefghijk',
+      publishedAt: BASE,
+    }]);
+    const f = await radarFixture(config, { radarFca: { fca, receipts, youtube } });
+    await f.on();
+    f.setPolicy({
+      version: 1,
+      enabled: true,
+      hourJst: 12,
+      minuteJst: 0,
+      consentExpiresAt: BASE + 7 * 86400000,
+      feeds: [],
+      weather: null,
+      topics: ['science'],
+      youtubeSubscriptions: { baselineAt: BASE - 1000, maxSubscriptions: 500, maxCandidates: 20 },
+      calendar: null,
+    });
+    expect(await f.worker.tick()).toBe('accepted');
+    expect(f.read).not.toHaveBeenCalled();
+    expect(youtube).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(f.transport.push).mock.calls[0][1]).toContain('選定理由: fixture pick');
+    expect(vi.mocked(f.transport.push).mock.calls[0][1]).toContain('Worker FCA 動画');
   });
 });
 
