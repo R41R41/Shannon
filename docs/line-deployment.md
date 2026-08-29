@@ -1,6 +1,6 @@
 # LINE独立サービスの配備手順（LINE-2）
 
-状態：dev実装・隔離検証中。ユーザーはdev検証後の本番追加を承認済み。**実LINE・LLMの接続、秘密設定、Web公開、本番起動は未実施**。
+状態：dev統合・Google/LLM実接続まで検証済み。ユーザーはdev実機合格後の本番追加を承認済み。**LINE webhook公開・端末受信・本番起動は未実施**。
 
 ## 配置と責務
 
@@ -26,8 +26,8 @@
 設定ディレクトリは所有者700、全ファイル600/nlink1、symlink禁止。
 
 - `runtime.env`：`backend/line.env.example`のLINE専用項目。共通backend/.envを読み込ませない。
-- `radar.json`：`version:1, enabled, hourJst, minuteJst, consentExpiresAt, feeds, weather`。全フィールド必須。稼働時刻に静音がかぶらないことを確認。許可期限は最大30日。
-- feedsは最大3source（weatherを含む）。各sourceは`id, kind(youtube/web), locator, articleHosts, topicIds, maxItems(1..20), retentionMs(60秒..7日)`。YouTube locatorはチャンネルID、Webは公開HTTPS RSS/AtomのクエリなしURL。ソースを削除後に再登録する際は新しいidを使う。
+- `radar.json`：`version:1, enabled, hourJst, minuteJst, consentExpiresAt, feeds, weather, topics, youtubeSubscriptions, calendar`。全フィールド必須。稼働時刻に静音がかぶらないことを確認。許可期限は最大30日。
+- feedsは最大3sourceで、YouTube/Calendar/weatherを合わせた総sourceは最大6。各sourceは`id, kind(youtube/web), locator, articleHosts, topicIds, maxItems(1..20), retentionMs(60秒..7日)`。YouTube locatorはチャンネルID、Webは公開HTTPS RSS/AtomのクエリなしURL。ソースを削除後に再登録する際は新しいidを使う。
 - weatherはnull、または`id,kind:weather,timeZone,latitudeTenth,longitudeTenth`。勝手に端末の位置を取得しない。
 - `launch-permit.json`：`version:1, environment:dev/prod, envSha256, policySha256, bundleSha256`。devだけ`expiresAt`が必須、最大24h。**検証と設定レビュー後に運用者が作成する許可**であり、スクリプトは自動発行しない。
 
@@ -35,9 +35,16 @@ permitとenv/policy/bundleのhashが一致しなければ起動拒否。設定�
 
 ## ビルド・依存の固定
 
-Node22.21.1を明示し、devで`node scripts/build-line-service.cjs`を実行。`backend/dist-line/runtime.mjs`はLINE/Radarに必要な34入力のbundleで、既存サーバーを起動する副作用はない。外部依存はexpress、mongoose、dotenv、cheerio、LangChain core/OpenAIのみ。直接依存はdevで検証した版へ固定する。
+Node22.21.1を明示し、devで`node scripts/build-line-service.cjs`を実行。`backend/dist-line/runtime.mjs`はLINE/Radarに必要な45入力のbundleで、既存サーバーを起動する副作用はない。外部依存はexpress、mongoose、dotenv、cheerio、LangChain core/OpenAIのみ。直接依存はdevで検証した版へ固定する。
 
 `backend/dist-line`でlockfileを生成し、`npm ci --ignore-scripts --omit=dev --workspaces=false`。リリースにはbundle、固定package/lock、専用node_modules、起動スクリプト、LINE専用人格文だけを含める。秘密設定・dev全体のnode_modules・通常保存データは含めない。生成物はGit対象外、bundleとmanifest/lockを検証証跡として保全する。
+
+
+### Google読み取り権限とreceipt
+
+`runtime.env`のGoogle資格情報は、LINE専用に発行した更新トークンを使う。scopeは`youtube.readonly`と`calendar.events.readonly`の完全一致で、YouTube/Calendarの書込み、Gmail、Drive、プロフィール権限を含めない。Google projectでYouTube Data APIとCalendar APIを有効にする。更新トークンは保護envだけに置き、release/Notion/Gitへ入れない。
+
+YouTube初回baseline以前を本番でbackfillしない。同じ動画をdev実機と本番の両方で送らないよう、本番切替時に送信済みreceiptのhash文書だけを専用prod DBへ移す。receiptは永久insert-onlyで、題名、URL、検索query、OAuth情報を持たない。Calendarは現時点から7日間のprimary予定だけを最大20件読み、説明/場所/参加者を取得しない。
 
 ## dev合格条件
 

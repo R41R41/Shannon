@@ -8,13 +8,15 @@ import type { PersonalCatalogPort } from '../../modules/radar/catalog.js';
 import { catalogShape } from '../../modules/radar/catalogVersion.js';
 import type { FeedConnectorPort } from '../radar/feedConnector.js';
 import { lineRadarPolicyHash, parseLineRadarPolicy, type LineRadarPolicy } from './radarPolicy.js';
+import { selectLineRadarDigest,type LineRadarFcaPorts } from './lineRadarFcaSelection.js';
 
 export interface LineRadarPorts {
   ledger: LineLedger; catalog: PersonalCatalogPort; feed: FeedConnectorPort; temporal: TemporalCatalogReader;
   readPolicy(): Promise<unknown>;
   deliver(id: string, authorize: (id: string) => Promise<boolean>): Promise<string>;
+  radarFca?: LineRadarFcaPorts;
 }
-const acquisition = { maxPer24Hours: 3, minimumIntervalMs: 0, leaseMs: 30000 };
+const acquisition = { maxPer24Hours: 6, minimumIntervalMs: 0, leaseMs: 30000 };
 const sourceBody = (s: object) => Object.fromEntries(Object.entries(s).filter(([k]) => !['id','revision','audience','owner'].includes(k)));
 const same = (a: unknown, b: unknown) => JSON.stringify(a, Object.keys(a as object).sort()) === JSON.stringify(b, Object.keys(b as object).sort());
 /** One owner's delegated worker. Shares the catalog's reservation/CAS boundary, never Firebase tokens or legacy memory. */
@@ -38,9 +40,10 @@ export class LineRadarWorker {
   async status(): Promise<string> {
     const p = await this.policy(), s = await this.ports.ledger.read();
     const time = `${String(p.hourJst).padStart(2,'0')}:${String(p.minuteJst).padStart(2,'0')}（日本時間）`;
+    const sources=p.feeds.length+(p.youtubeSubscriptions?1:0)+(p.weather?1:0)+(p.calendar?1:0);
     return `個人Radar: ${s.optedIn && p.enabled && p.consentExpiresAt > this.now() ? '配信許可あり' : '停止中'}\n`
-      + `予定: 毎日${time}、最大3項目。新着がなければ送信しません。\n`
-      + `登録ソース: ${p.feeds.length}件${p.weather ? '＋天気' : ''}\n`
+      + `予定: 毎日${time}、最大5項目。新着がなければ送信しません。\n`
+      + `登録ソース: ${sources}件\n`
       + `取得許可期限: ${new Date(p.consentExpiresAt).toISOString()}\n`
       + '配信開始 / 配信停止 で切り替えできます。情報への返信から会話できます。';
   }
@@ -76,13 +79,17 @@ export class LineRadarWorker {
       if (!current || !same(sourceBody(current), desired)) await this.feed.configure(context, setting.id, { expectedRevision: feeds.revision, source: desired }, renew);
     }
     let temporal = await this.temporal.sources(await renew(), renew);
-    for (const e of temporal.sources.filter(e => e.source && e.id !== p.weather?.id)) {
+    const desiredTemporal = [...(p.weather ? [p.weather] : []), ...(p.calendar ? [p.calendar] : [])];
+    for (const e of temporal.sources.filter(e => e.source && !desiredTemporal.some(setting => setting.id === e.id))) {
       await this.temporal.revoke(await renew(), e.id, temporal.revision, renew, signal); temporal = await this.temporal.sources(await renew(), renew);
     }
-    if (p.weather) {
-      const desired = { ...sourceBody(p.weather), enabled: true, consentExpiresAt: p.consentExpiresAt };
-      const current = temporal.sources.find(e => e.id === p.weather!.id)?.source;
-      if (!current || !same(sourceBody(current), desired)) await this.temporal.configure(await renew(), p.weather.id, { expectedRevision: temporal.revision, source: desired }, renew, signal);
+    for (const setting of desiredTemporal) {
+      temporal = await this.temporal.sources(await renew(), renew);
+      const desired = { ...sourceBody(setting), enabled: true, consentExpiresAt: p.consentExpiresAt };
+      const current = temporal.sources.find(e => e.id === setting.id)?.source;
+      if (!current || !same(sourceBody(current), desired)) {
+        await this.temporal.configure(await renew(), setting.id, { expectedRevision: temporal.revision, source: desired }, renew, signal);
+      }
     }
     // Explicit bounded recovery/expiry maintenance retains budgets and tombstones and never retries old I/O.
     context = await renew(); feeds = await this.feed.sources(context);
@@ -121,12 +128,12 @@ export class LineRadarWorker {
       if (!await this.ports.ledger.canReservePush()) return 'budget-wait';
       const before = await this.ports.catalog.read(personalRadarOwner(await renew(), this.now()));
       const starts = before?.acquisition?.starts.filter(t => t > this.now() - 86400000) ?? [];
-      if (starts.length + p.feeds.length + (p.weather ? 1 : 0) > acquisition.maxPer24Hours) return 'budget-wait';
+      if (starts.length + p.feeds.length + (p.weather ? 1 : 0) + (p.calendar ? 1 : 0) + (p.youtubeSubscriptions ? 1 : 0) > acquisition.maxPer24Hours) return 'budget-wait';
       slot = await this.ports.ledger.reserveRadarSlot(jst.toISOString().slice(0,10), version);
       if (!slot) return 'already-attempted';
       await this.synchronize(p, version, signal);
       const collected: string[] = [];
-      for (const setting of [...p.feeds, ...(p.weather ? [p.weather] : [])]) {
+      for (const setting of [...p.feeds, ...(p.weather ? [p.weather] : []), ...(p.calendar ? [p.calendar] : [])]) {
         signal.throwIfAborted(); const context = await renew(); const current = await this.feed.sources(context);
         try {
           if (setting.kind === 'weather') await this.temporal.collect(context, setting.id, current.revision, renew, signal);
@@ -139,6 +146,26 @@ export class LineRadarWorker {
       const context = await renew(); const news = await this.feed.preview(context, seen);
       const temporal = await this.temporal.preview(context, renew, signal);
       if (news.revision !== temporal.revision) throw new Error('LINE_RADAR_CONFLICT');
+      if (this.ports.radarFca) {
+        const selected = await selectLineRadarDigest({ owner: personalRadarOwner(context, this.now()), policy: p, news, temporal,
+          ports: this.ports.radarFca, signal, now: this.now() });
+        if (!selected.selection.items.length || !selected.blocks.length) {
+          await this.ports.ledger.finish(slot, { status: 'cancelled' }); return 'silent';
+        }
+        const grant: NonNullable<LineEntry['radarGrant']> = { owner: personalRadarOwner(context, this.now()), policyHash: lineRadarPolicyHash(p),
+          catalogRevision: news.revision, clusters: selected.selection.items.map(item => item.candidate.candidateId) };
+        const catalog = await this.ports.catalog.read(grant.owner);
+        if ((catalog?.revision ?? 0) !== news.revision) throw new Error('LINE_RADAR_CONFLICT');
+        const text = `Shannon Radar · ${jst.toISOString().slice(0,10)}\n\n${selected.blocks.join('\n\n')}\n\n配信停止:「配信停止」`;
+        const expiresAt = Math.min(this.now() + 60000, p.consentExpiresAt, news.validUntil, temporal.validUntil);
+        const quoteExpiresAt = Math.min(this.now() + 86400000, p.consentExpiresAt);
+        signal.throwIfAborted(); await renew();
+        const id = await this.ports.ledger.enqueue({ id: slot, ownerUserId: this.config.personalUserId, text, expiresAt,
+          quoteExpiresAt, consentVersion: version, radarGrant: grant });
+        const result = id ? await this.ports.deliver(id, id => this.authorizeEntry(id)) : 'suppressed';
+        await this.ports.ledger.finish(slot, { status: result === 'accepted' ? 'accepted' : 'cancelled' });
+        return result;
+      }
       const weather = temporal.entries.find(e => e.content.kind === 'weather' && collected.includes(e.sourceId));
       const cards = news.items.filter(e => collected.includes(e.sourceId)).slice(0, weather ? 2 : 3);
       const lines = cards.map(e => `${e.card.title}\n${e.card.fact}\n${e.card.metadata.join(' ')}\n${e.card.sourceUrl}`);

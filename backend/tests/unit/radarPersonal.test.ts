@@ -17,6 +17,7 @@ import { radarRuntimeConfig } from '../../src/services/radar/runtimeConfig.js';
 import { createRadarApplication } from '../../src/services/radar/runtimeApplication.js';
 import { listenRadarHost } from '../../src/services/radar/runtimeHost.js';
 import { RadarMongoUsers, radarDatabaseReady, openRadarFirebase } from '../../src/services/radar/runtimeAdapters.js';
+import { RADAR_DELIVERY_RECEIPT_VALIDATOR } from '../../src/services/radar/mongoRadarDeliveryReceipts.js';
 
 const initialNow = Date.now();
 const context = (uid = 'alice', projectId = 'fixture'): RequestContext => ({ requestId: 'r',
@@ -1051,9 +1052,11 @@ describe('standalone Radar runtime and release boundary', () => {
     expect(close).toHaveBeenCalledTimes(1); expect((await f.request('/api/radar/health')).status).toBe(200);
   });
   it('requires the reviewed DB fence and does not create collections', async () => {
-    const options = {validationLevel:'strict',validationAction:'error',validator:CATALOG_VALIDATOR};
-    const db: any = {command:vi.fn(async()=>({ok:1})),listCollections:vi.fn(()=>({toArray:async()=>[{options}]}))};
-    await radarDatabaseReady(db); options.validationAction='warn'; await expect(radarDatabaseReady(db)).rejects.toThrow('RADAR_CATALOG_FENCE_REQUIRED');
+    const catalog = {validationLevel:'strict',validationAction:'error',validator:CATALOG_VALIDATOR};
+    const receipt = {validationLevel:'strict',validationAction:'error',validator:RADAR_DELIVERY_RECEIPT_VALIDATOR};
+    const db: any = {command:vi.fn(async()=>({ok:1})),listCollections:vi.fn((query:any)=>({toArray:async()=>[{options:query.name==='radardeliveryreceipts'?receipt:catalog}]}))};
+    await radarDatabaseReady(db); catalog.validationAction='warn'; await expect(radarDatabaseReady(db)).rejects.toThrow('RADAR_CATALOG_FENCE_REQUIRED');
+    catalog.validationAction='error'; receipt.validationAction='warn'; await expect(radarDatabaseReady(db)).rejects.toThrow('RADAR_RECEIPT_FENCE_REQUIRED');
     expect(db.command.mock.calls.every((args:any[])=>args[0].ping===1)).toBe(true);
   });
   it('reads exact UID/project, rejects duplicates, and never imports legacy admin powers', async () => {

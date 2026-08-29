@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { mongo } from 'mongoose';
 import { AccessError, type AccessUserRepository, type IdentityVerifier } from '../../modules/access/index.js';
 import { CATALOG_VALIDATOR } from '../../modules/radar/catalogVersion.js';
+import { radarDeliveryReceiptDatabaseReady } from './mongoRadarDeliveryReceipts.js';
 
 /** No global Mongoose model, index creation, auto-enrolment or role escalation. */
 export class RadarMongoUsers implements AccessUserRepository {
@@ -18,6 +19,7 @@ export class RadarMongoUsers implements AccessUserRepository {
 }
 export async function radarDatabaseReady(db: mongo.Db) {
   await db.command({ ping: 1 }, { maxTimeMS: 5000 });
+  await radarDeliveryReceiptDatabaseReady(db);
   const rows = await db.listCollections({ name: 'radarpersonalcatalogs' }, { nameOnly: false }).toArray();
   const options = rows[0]?.options;
   const canonical = (value: unknown): string => JSON.stringify(value, (_key, v) => v && typeof v === 'object' && !Array.isArray(v)

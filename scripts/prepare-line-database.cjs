@@ -9,8 +9,9 @@ async function main() {
   try {
     await client.connect(); const db=client.db(name);
     if((await db.listCollections().toArray()).length)throw Error();
-    const {CATALOG_VALIDATOR}=await import(pathToFileURL(path.join(root,'backend/dist/modules/radar/catalogVersion.js')).href);
+    const {CATALOG_VALIDATOR,RADAR_DELIVERY_RECEIPT_VALIDATOR}=await import(pathToFileURL(path.join(root,'backend/dist-line/database-schema.mjs')).href);
     await db.createCollection('radarpersonalcatalogs',{validator:CATALOG_VALIDATOR,validationLevel:'strict',validationAction:'error',writeConcern:{w:'majority',j:true}});
+    await db.createCollection('radardeliveryreceipts',{validator:RADAR_DELIVERY_RECEIPT_VALIDATOR,validationLevel:'strict',validationAction:'error',writeConcern:{w:'majority',j:true}});
     await db.createCollection('linechannelledgers',{writeConcern:{w:'majority',j:true}});
     console.log(JSON.stringify({created:true,database:name,existingDataChanged:false}));
   } finally {await client.close();}

@@ -12,6 +12,15 @@ import { PublicFeedConnector } from '../radar/feedConnector.js';
 import { SafeFeedHttp, SafePublicJsonHttp } from '../radar/safeFeedHttp.js';
 import { WeatherReadAdapter } from '../radar/weatherReadAdapter.js';
 import { PersonalTemporalReaders } from '../radar/personalTemporalReaders.js';
+import { CalendarReadAdapter } from '../radar/calendarReadAdapter.js';
+import { GoogleRadarOAuthBroker } from '../radar/googleRadarOAuth.js';
+import { RadarFca } from '../radar/radarFca.js';
+import { createRadarFcaModel } from '../radar/radarFcaModel.js';
+import { MongoRadarDeliveryReceipts } from '../radar/mongoRadarDeliveryReceipts.js';
+import { YouTubeDataApiSubscriptionTransport, YouTubeDataApiUploadReader } from '../radar/youtubeDataApi.js';
+import { YouTubeSubscriptionDiscovery } from '../radar/youtubeSubscriptionDiscovery.js';
+import { YouTubeSubscriptionReader } from '../radar/youtubeSubscriptionInbox.js';
+import { issueLineRadarContext, personalRadarOwner } from '../radar/radarAccess.js';
 
 /** Independent composition root. Never imports the main server, Discord, shared env or global Mongo connection. */
 export async function openLineRuntime(input: { env: Record<string,string>; db: mongo.Db; readPolicy(): Promise<unknown>;
@@ -26,9 +35,21 @@ export async function openLineRuntime(input: { env: Record<string,string>; db: m
     transport: new LineHttpTransport(config.channelAccessToken),
     authorizeRuntime: async () => { await input.readPolicy(); },
     radar: { status: () => worker.status(), authorizeQuote: id => worker.authorizeQuote(id), conversationVersion: () => worker.conversationVersion() } });
+  const owner = personalRadarOwner(issueLineRadarContext(config.botUserId, config.personalUserId, Date.now()+60000), Date.now());
+  const google = new GoogleRadarOAuthBroker({ clientId: input.env.LINE_GOOGLE_CLIENT_ID ?? '', clientSecret: input.env.LINE_GOOGLE_CLIENT_SECRET ?? '',
+    refreshToken: input.env.LINE_GOOGLE_REFRESH_TOKEN ?? '' }, owner);
+  const receipts = new MongoRadarDeliveryReceipts(input.db);
+  const subscriptions = new YouTubeSubscriptionReader(new YouTubeDataApiSubscriptionTransport(google));
+  const uploads = new YouTubeDataApiUploadReader(google);
   worker = new LineRadarWorker(config, { ledger: runtime.ledger, catalog: new MongoPersonalCatalog(input.db),
-    feed: new PublicFeedConnector(new SafeFeedHttp()), temporal: new PersonalTemporalReaders(new WeatherReadAdapter(new SafePublicJsonHttp())),
-    readPolicy: input.readPolicy, deliver: runtime.deliver });
+    feed: new PublicFeedConnector(new SafeFeedHttp()), temporal: new PersonalTemporalReaders(new WeatherReadAdapter(new SafePublicJsonHttp()), new CalendarReadAdapter(google)),
+    readPolicy: input.readPolicy, deliver: runtime.deliver,
+    radarFca: { fca: new RadarFca(createRadarFcaModel({ apiKey: input.env.LINE_LLM_API_KEY ?? '', model: input.env.LINE_LLM_MODEL ?? '' })), receipts,
+      youtube: async (expectedOwner, setting, limit, signal) => {
+        if (expectedOwner !== owner) throw new Error('LINE_RADAR_OWNER');
+        return new YouTubeSubscriptionDiscovery(subscriptions, uploads, owner, () => google.authorizeYouTube(signal),
+          setting.baselineAt, setting.maxSubscriptions).find(Math.min(limit, setting.maxCandidates), signal);
+      } } });
   // Validate all configuration and binding before opening a listener or running a scheduled tick.
   await worker.status(); await runtime.ledger.read();
   const sockets = new Set<Socket>();

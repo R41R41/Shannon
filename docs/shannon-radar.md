@@ -527,3 +527,14 @@ Data API、FCA model、Mongoはいずれも明示port/credentialsで、construct
 FCAは「何を候補にして最大5件のdraftを出すか」だけを判断する。今送るか、時刻、静音、LINE月間/24h予算、Discord承認、同意/停止、outbox予約、最終権限、再送しない扱いは既存delivery policyが決める。FCAが5件選んでもpolicyは沈黙・延期・削減できる。反応なしを負のfeedbackにせず、将来のfeedback値は小さな明示signalとして別portから渡す。
 
 初回接続順は、Google OAuth brokerとreceipt validatorを隔離devへ導入 → YouTube skillを実同期 → 既存Calendar/天気adapterをpersonal skillへ接続 → Radar FCA draftをLINE outboxへ接続 → 実スマホ受信/停止/重複/再起動検証。X/Notion/Gmail/Discordをこのdev実接続の完了条件にしない。
+
+
+## 22. RAD-FCA-2：LINE実行系・Google実接続・永久重複防止（2026-08-29）
+
+Radar専用FCAをLINEの定期workerへ接続した。`GoogleRadarOAuthBroker`は専用の更新トークンをメモリ内で短命access tokenへ交換し、権限を`youtube.readonly`と`calendar.events.readonly`の完全一致で検査する。YouTubeはsubscriptions/channels/playlistItems、Calendarはprimaryの7日間・最大20件・タイトル/開始/終了だけを読む。token・account ID・参加者・説明・場所をtool、Mongo、LINE ledger、ログへ渡さない。既存の広い`youtube.force-ssl` grantは転用しない。
+
+LINE policyは登録YouTube、Calendar、天気、最大3件の選択feedと話題を明示設定できる。workerは同意・時刻・静音・24時間/月間Push予算・当日slotを確認し、取得後に最大6turn/8callのRadar FCAへ同一run候補だけを渡す。FCAは0〜5件のdraftを提出し、送信権限を持たない。提出後、表示可能な候補だけを`radardeliveryreceipts`へowner/source/external IDのhashとしてinsert-only予約し、catalog/policy/同意を再確認して既存LINE outboxへ渡す。accepted以外、応答不明、重複keyは自動再送しない。旧feed中心の経路はテスト互換のみに残し、本番compositionは必ずFCA/receipt経路を注入する。
+
+新しい専用DBでは起動前スクリプトが空DBだけに`radarpersonalcatalogs`と`radardeliveryreceipts`のstrict/error validator、および`linechannelledgers`を作成する。既存collection、通常DB、既存ShannonのDBを自動変更しない。起動時は両validatorの完全一致をread-only確認する。独立bundleは45入力で、DB schema bundleも同時生成する。
+
+検証はbackend offline 1,006件、foundation境界、対象通常型検査、全backend noCheck変換、独立bundle build、架空Mongo validator、実OpenAI FCA（架空候補）、専用Google OAuthの実APIで実施した。Google Cloud projectではCalendar APIを有効化し、YouTube登録件数とCalendar件数だけを確認し、題名/IDをログへ出していない。全backend通常`tsc`は既存巨大コードで約4GiB上限に達したため合格実績に含めない。実LINE webhook/端末受信、配信停止、再起動時重複防止、本番独立service/nginxはこの節の作成時点では次の工程である。
