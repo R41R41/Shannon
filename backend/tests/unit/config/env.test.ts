@@ -46,3 +46,22 @@ it.each([['true','true'],['false','false'],['true','false']])('honors either X s
   vi.stubEnv('TWITTER_DISABLED',disabled); vi.stubEnv('TWITTER_ENABLED',enabled);
   const {config}=await import('../../../src/config/env.js'); expect(config.twitter.disabled).toBe(true);
 });
+
+describe('discord token in dev', () => {
+  it('uses DISCORD_TOKEN_TEST and ignores the production token', async () => {
+    process.argv.push('--dev');
+    vi.stubEnv('DISCORD_TOKEN', 'prod-token-must-not-be-used');
+    vi.stubEnv('DISCORD_TOKEN_TEST', 'test-bot-token');
+    vi.stubEnv('TEST_GUILD_ID', '123456789012345678');
+    const { config } = await import('../../../src/config/env.js');
+    expect(config.discord.token).toBe('test-bot-token');
+    expect(config.discord.guilds.test.guildId).toBe('123456789012345678');
+  });
+  it('does not use the production token when the test token is missing', async () => {
+    process.argv.push('--dev');
+    vi.stubEnv('DISCORD_TOKEN', 'prod-token-must-not-be-used');
+    vi.stubEnv('DISCORD_TOKEN_TEST', '');
+    const { config } = await import('../../../src/config/env.js');
+    expect(config.discord.token).toBe('');
+  });
+});

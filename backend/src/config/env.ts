@@ -20,6 +20,8 @@ function optional(name: string, fallback: string): string {
   return process.env[name] || fallback;
 }
 
+const isDev = process.argv.includes('--dev') || process.env.IS_DEV === 'True';
+
 /**
  * Centralized application configuration.
  *
@@ -28,7 +30,7 @@ function optional(name: string, fallback: string): string {
  */
 export const config = {
   /** Whether the app is running in dev mode */
-  isDev: process.argv.includes('--dev') || process.env.IS_DEV === 'True',
+  isDev,
 
   /** OpenAI API key (required, used by all LLM-related services) */
   openaiApiKey: required('OPENAI_API_KEY'),
@@ -45,7 +47,8 @@ export const config = {
   },
 
   discord: {
-    token: optional('DISCORD_TOKEN', ''),
+    // --dev never falls back to the production bot token, even if both are in the same .env.
+    token: isDev ? optional('DISCORD_TOKEN_TEST', '') : optional('DISCORD_TOKEN', ''),
     guilds: {
       toyama: {
         guildId: optional('TOYAMA_GUILD_ID', ''),

@@ -29,13 +29,14 @@ class Server {
   private readonly webAccess = createWebAccess(config.webAuth.firebaseProjectId);
   private llmService: LLMService;
   private discordBot: DiscordBot | null = null;
-  private webClient: WebClient;
+  private webClient: WebClient | null = null;
   private twitterClient: TwitterClient | null = null;
-  private scheduler: Scheduler;
-  private youtubeClient: YoutubeClient;
-  private minecraftClient: MinecraftClient;
-  private minebotClient: MinebotClient;
+  private scheduler: Scheduler | null = null;
+  private youtubeClient: YoutubeClient | null = null;
+  private minecraftClient: MinecraftClient | null = null;
+  private minebotClient: MinebotClient | null = null;
   private notionClient: NotionClient | null = null;
+  private onlyServices: Set<string> | null = null;
   private httpServer: http.Server | null = null;
   private coreReady = false;
 
@@ -58,24 +59,38 @@ class Server {
 
   constructor() {
     const isDevMode = process.argv.includes('--dev');
+    const raw = process.env.SHANNON_ONLY_SERVICES?.trim();
+    this.onlyServices = raw
+      ? new Set(raw.split(',').map((name) => name.trim()).filter(Boolean))
+      : null;
+    const want = (name: string) => this.onlyServices === null || this.onlyServices.has(name);
+    if (this.onlyServices) {
+      logger.warn(`[Server] 起動するサービスを制限しています: ${[...this.onlyServices].join(', ')}`);
+    }
 
     // --- 必須サービス (失敗時はサーバー起動を中断) ---
     this.llmService = LLMService.getInstance(isDevMode);
-    this.webClient = WebClient.getInstance(false, this.webAccess.access);
-    this.scheduler = Scheduler.getInstance(isDevMode);
-    this.youtubeClient = YoutubeClient.getInstance(isDevMode);
-    this.minecraftClient = MinecraftClient.getInstance(isDevMode);
-    this.minebotClient = MinebotClient.getInstance(isDevMode);
+    this.webClient = want('web') ? WebClient.getInstance(false, this.webAccess.access) : null;
+    this.scheduler = want('scheduler') ? Scheduler.getInstance(isDevMode) : null;
+    this.youtubeClient = want('youtube') ? YoutubeClient.getInstance(isDevMode) : null;
+    this.minecraftClient = want('minecraft') ? MinecraftClient.getInstance(isDevMode) : null;
+    this.minebotClient = want('minebot') ? MinebotClient.getInstance(isDevMode) : null;
 
     // --- オプショナルサービス (認証情報不足時はスキップ) ---
-    this.discordBot = Server.tryCreate('Discord', () => DiscordBot.getInstance(isDevMode));
-    if (config.twitter.disabled) {
-      logger.warn('[Server] Twitter は TWITTER_DISABLED=true のため起動しません');
+    this.discordBot = want('discord')
+      ? Server.tryCreate('Discord', () => DiscordBot.getInstance(isDevMode))
+      : null;
+    if (!want('twitter') || config.twitter.disabled) {
+      if (config.twitter.disabled) {
+        logger.warn('[Server] Twitter は TWITTER_DISABLED=true のため起動しません');
+      }
       this.twitterClient = null;
     } else {
       this.twitterClient = Server.tryCreate('Twitter', () => TwitterClient.getInstance(isDevMode));
     }
-    this.notionClient = Server.tryCreate('Notion', () => NotionClient.getInstance(isDevMode));
+    this.notionClient = want('notion')
+      ? Server.tryCreate('Notion', () => NotionClient.getInstance(isDevMode))
+      : null;
   }
 
   private startHTTPServer() {
@@ -153,8 +168,12 @@ class Server {
       logger.warn('LLM 機能なしで続行します');
     }
 
-    await this.webClient.start();
-    logger.info('Web Client started', 'blue');
+    if (this.webClient) {
+      await this.webClient.start();
+      logger.info('Web Client started', 'blue');
+    } else {
+      logger.info('[Server] Web: 制限によりスキップ', 'cyan');
+    }
 
     // --- オプショナルサービスの並列起動 ---
     // 個別の失敗がサーバー全体を停止させない
@@ -170,7 +189,9 @@ class Server {
 
     logger.success('[Server] 全サービスの起動処理が完了しました');
 
-    startNightlySelfImproveScheduler();
+    if (this.onlyServices === null) {
+      startNightlySelfImproveScheduler();
+    }
   }
 
   public async shutdown() {
@@ -183,7 +204,7 @@ class Server {
     // ルールは常時有効のままにしておく。
 
     // 各サービスのクリーンアップ処理
-    await this.webClient.stop();
+    await this.webClient?.stop();
     await shutdownLangfuse();
     await mongoose.disconnect();
     logger.error('MongoDB disconnected');
