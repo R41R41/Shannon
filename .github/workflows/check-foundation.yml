@@ -21,6 +21,8 @@ jobs:
       - run: npm run build -w common
       - run: npm run check:foundation -w backend
       - run: npm run check:access-integration -w backend
+      - run: npm run check:memory-integration -w backend
+      - run: npm run check:dead-code
       - run: npm run test:offline -w backend
       - run: npm run test:auth -w frontend
       - run: npm run build:dev -w frontend

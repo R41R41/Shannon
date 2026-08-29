@@ -1,0 +1,42 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "workspaces": {
+    ".": {
+      "entry": ["scripts/**/*.cjs", "tools/**/*.js"],
+      "project": ["scripts/**/*.cjs", "tools/**/*.js"]
+    },
+    "backend": {
+      "entry": [
+        "src/server.ts",
+        "src/services/llm/tools/**/*.ts",
+        "src/services/minebot/instantSkills/**/*.ts",
+        "src/services/minebot/constantSkills/**/*.ts",
+        "src/services/line/runtime.ts",
+        "src/services/line/databaseSchema.ts",
+        "src/services/line/config.ts",
+        "src/services/line/application.ts",
+        "src/services/line/transport.ts",
+        "src/services/line/mongoLedger.ts",
+        "src/services/line/chatModel.ts",
+        "src/services/radar/runtimeConfig.ts",
+        "src/services/radar/runtimeApplication.ts",
+        "src/services/radar/runtimeHost.ts",
+        "src/services/radar/runtimeAdapters.ts",
+        "src/services/radar/mongoPersonalCatalog.ts",
+        "src/services/radar/safeFeedHttp.ts",
+        "tests/**/*.test.ts"
+      ],
+      "project": ["src/**/*.ts"]
+    },
+    "frontend": {
+      "entry": ["src/radar-main.tsx"],
+      "project": ["src/**/*.{ts,tsx}"]
+    },
+    "common": {
+      "entry": ["src/types/**/*.ts"],
+      "project": ["src/**/*.ts"]
+    }
+  },
+  "ignore": [],
+  "ignoreDependencies": []
+}
