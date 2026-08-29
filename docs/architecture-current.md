@@ -50,7 +50,7 @@ execute:
     → FunctionCallingAgent / 任意で ParallelExecutor
 ```
 
-`EmotionNode` / `ClassifyNode` / `MetaCognitionLoop` / `MemoryAgent` は **削除されていない**。既定グラフは使わないが、`SHANNON_GRAPH_VERSION=full` や `SHANNON_COGNITIVE_LOOPS=true` で残る。`MemoryNode` は互換の空実装。
+`ClassifyNode` と `SubTaskPlannerNode` / `SubTaskExecutor` は削除済み。`EmotionNode` / `MetaCognitionLoop` / `MemoryAgent` は残っているが、既定グラフは使わず `SHANNON_GRAPH_VERSION=full` や `SHANNON_COGNITIVE_LOOPS=true` でしか動かない。`MemoryNode` は互換の空実装。未参照のコードは [削除ゲート](./deletion-gate.md) が止める。
 
 LINE と Radar はこのグラフに入らない。独立 HTTP runtime。
 

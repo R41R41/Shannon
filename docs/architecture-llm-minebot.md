@@ -1411,7 +1411,6 @@ SSE イベント:
 | `backend/src/services/llm/client.ts` | LLMService シングルトン、グラフ初期化・実行 |
 | `backend/src/services/llm/graph/shannonGraph.ts` | 統一グラフ定義 (ノード接続・ルーター) |
 | `backend/src/services/llm/graph/requestExecutionCoordinator.ts` | レーン別直列化・緊急プリエンプション |
-| `backend/src/services/llm/graph/publicKnowledge.ts` | Web チャネル用 RAG (キーワードベース) |
 | `backend/src/services/llm/graph/cognitive/CognitiveBlackboard.ts` | 共有ワーキングメモリ (emotion, meta, task, selfState, plan, initialMemoryContext) |
 | `backend/src/services/llm/graph/cognitive/EmotionLoop.ts` | 感情評価ループ (扁桃体) — 初回 tick 即座実行 |
 | `backend/src/services/llm/graph/cognitive/MemoryAgent.ts` | **v2 新規**: 記憶エージェント (海馬) — 取得・保存・圧縮 |
