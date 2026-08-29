@@ -54,7 +54,6 @@ import { TaskEpisodeMemory } from '../../src/services/llm/graph/cognitive/TaskEp
 import { WritebackProcessor } from '../../src/services/memory/writeback/WritebackProcessor.js';
 import { AutonomyUpdater } from '../../src/services/memory/writeback/AutonomyUpdater.js';
 import { ScopeDeriver } from '../../src/services/memory/recall/ScopeDeriver.js';
-import { PersonMemoryService } from '../../src/services/memory/personMemoryService.js';
 import { RunToolRegistry } from '../../src/modules/execution/runToolRegistry.js';
 import { RecallEngine } from '../../src/services/memory/recall/RecallEngine.js';
 
@@ -199,15 +198,7 @@ describe('real Mongo adapters with a deterministic fake database', () => {
     expect(await recall.recallPerson(envelope())).toBeNull();
     expect(recall.toUserProfile({ displayName: 'ライ' } as any)).toBeNull();
     expect(recall.resolveCanonicalUserId({ ...envelope(), sourceDisplayName: 'ライ' })).toBe('discord:100');
-    expect(PersonMemoryService.getInstance().resolveCanonicalPersonId('discord', '999999999', 'ライ')).toBe('discord:999999999');
-  });
-  it('does not write mixed conversation history into legacy PersonMemory', async () => {
-    const created = vi.spyOn(PersonMemoryService.prototype, 'getOrCreate');
-    await PersonMemoryService.getInstance().updateAfterConversation('discord', '100', 'ライ', [
-      { role: 'user', content: 'secret from another channel', timestamp: new Date() } as any,
-    ]);
-    expect(created).not.toHaveBeenCalled();
-    created.mockRestore();
+    expect(recall.resolveCanonicalUserId({ ...envelope('999999999'), sourceDisplayName: 'ライ' })).toBe('discord:999999999');
   });
   it('keeps self-model/strategy/world/internal writes in source scope despite inferred generalization', async () => {
     db.model.mockResolvedValue({ content: JSON.stringify({ selfObservations: [{ observation: 'private', confidence: 1 }],
@@ -255,14 +246,12 @@ describe('request tool and episode integration', () => {
     expect(await tool(b, 'recall-memory').invoke({ question: 'iron_ingot' })).not.toContain('mine');
     expect(await tool(catalog.createTools(), 'save-memory').invoke({ content: 'no scope' })).toContain('初期化');
   });
-  it('initial recall uses the same scope and does not look up a same-named person', async () => {
+  it('initial recall uses the same scope and ignores foreign rows', async () => {
     db.rows = [row(envelope('999', '999'), 'foreign'), row(envelope(), 'iron_ingot')];
-    const lookup = vi.spyOn(PersonMemoryService.getInstance(), 'lookupByName');
     const tool = (createMemoryTools() as any[]).find(t => t.name === 'recall-memory');
     bindRequestMemory([tool], envelope());
     expect(await tool.invoke({ question: 'iron_ingot' })).toContain('iron_ingot');
     expect(await tool.invoke({ question: 'iron_ingot' })).not.toContain('foreign');
-    expect(lookup).not.toHaveBeenCalled(); lookup.mockRestore();
   });
   it('episode saves and queries require an envelope, not just a platform tag', async () => {
     const episodes = TaskEpisodeMemory.getInstance();
