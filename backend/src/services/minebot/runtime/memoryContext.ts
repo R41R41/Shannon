@@ -18,6 +18,10 @@ export function minecraftMemoryContext(bot: MemoryBot): MinecraftMemoryContext |
   if (!identity || !dimension || revoked.has(bot)) return null;
   return Object.freeze({ ...identity, dimension });
 }
+/** Display names such as connectedServerName are not a knowledge identity. */
+export function boundMinecraftServerId(bot: MemoryBot): string | undefined {
+  return minecraftMemoryContext(bot)?.serverId;
+}
 /** Validate queued/supplied envelopes without silently changing the audience of existing text/history. */
 export function validateMinecraftEnvelope(envelope: RequestEnvelope, bot: MemoryBot): RequestEnvelope {
   assertMinecraftConnected(bot);

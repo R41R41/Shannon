@@ -826,8 +826,8 @@ export class MinebotTaskRuntime {
       channel: 'minecraft',
       sourceUserId: 'minebot-system',
       sourceDisplayName: 'Minebot System',
-      conversationId: memoryKeys?.conversationId ?? `minecraft:${this.bot.connectedServerName || 'default'}`,
-      threadId: memoryKeys?.threadId ?? `minecraft:${this.bot.connectedServerName || 'default'}`,
+      conversationId: memoryKeys?.conversationId ?? 'minecraft:unbound',
+      threadId: memoryKeys?.threadId ?? 'minecraft:unbound',
       text: input.userMessage ?? undefined,
       tags,
       minecraft: {

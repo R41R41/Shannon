@@ -2,6 +2,7 @@ import { TaskContext } from '@shannon/common';
 import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { TWITTER_WRITE_TOOLS } from '../../../../../modules/access/toolCatalog.js';
 import { CONFIG as MINEBOT_CONFIG } from '../../../../minebot/config/MinebotConfig.js';
 import type { SelfImprovementRulesFile } from '../../cognitive/selfImprove/types.js';
 import { EmotionState } from '../EmotionNode.js';
@@ -229,14 +230,14 @@ ${this.formatOutputRules(context)}
             case 'discord':
                 // chat-on-discord は無効化しない — ユーザーが複数メッセージ送信を頼んだ場合に必要。
                 // 最終返信に使わないことはプロンプトで指示済み。
-                return [];
+                return [...TWITTER_WRITE_TOOLS];
             case 'web':
-                return ['chat-on-web'];
+                return ['chat-on-web', ...TWITTER_WRITE_TOOLS];
             case 'twitter':
-                return ['post-on-twitter'];
+                return [...TWITTER_WRITE_TOOLS];
             case 'minebot':
             case 'minecraft':
-                return ['chat-on-discord', 'chat-on-web', 'post-on-twitter'];
+                return ['chat-on-discord', 'chat-on-web', ...TWITTER_WRITE_TOOLS];
             default:
                 return [];
         }
@@ -251,8 +252,7 @@ ${this.formatOutputRules(context)}
         return `
 5. 「調べて」「教えて」と言われたら必ず google-search → fetch-url の順でページ本文まで読む。検索結果のスニペットだけで回答しない
 6. 不完全な情報や「サイトで確認してください」は絶対にダメ。具体的な情報を整理して送信する
-7. Notionページの画像は describe-notion-image で全て分析してから報告する
-8. Twitterに投稿する際は、必ず generate-tweet-text でツイート文を生成してから post-on-twitter で投稿する。自分で直接ツイート文を書かない`;
+7. Notionページの画像は describe-notion-image で全て分析してから報告する`;
     }
 
     private formatPlatformInfo(context: TaskContext | null): string {

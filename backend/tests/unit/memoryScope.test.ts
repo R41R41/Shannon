@@ -66,7 +66,7 @@ const envelope = (user = '100', guild = '200', channel = '300', dm = false): any
 });
 
 describe('memory privacy regression', () => {
-  const recall = new RecallEngine({} as any, {} as any);
+  const recall = new RecallEngine({} as any);
   it('does not treat legacy missing scope as public', () => {
     expect(recall.privacyFilter([{ content: 'legacy' } as any], 'discord:100', 'discord', envelope())).toEqual([]);
   });
@@ -192,16 +192,23 @@ describe('real Mongo adapters with a deterministic fake database', () => {
     expect(db.embedding).not.toHaveBeenCalled();
   });
   it('applies the same scope to every autonomy recall projection and hides legacy person memory', async () => {
-    const person = { getOrCreate: vi.fn(), resolveCanonicalPersonId: vi.fn() };
-    const recall = new RecallEngine(EmbeddingService.getInstance(), person as any);
+    const recall = new RecallEngine(EmbeddingService.getInstance());
     await recall.searchByTags(envelope(), 'iron'); await recall.recallSelfModel(envelope());
     await recall.recallInternalState(envelope()); await recall.recallStrategyUpdates(envelope(), 'discord:100', ['discord']);
     await recall.recallWorldPatterns(envelope(), ['discord']);
     expect(db.queries).toHaveLength(5); expect(db.queries.every(q => q.scopeKey === deriveMemoryScope(envelope())!.scopeKey)).toBe(true);
-    expect(await recall.recallPerson(envelope())).toBeNull(); expect(person.getOrCreate).not.toHaveBeenCalled();
+    expect(await recall.recallPerson(envelope())).toBeNull();
+    expect(recall.toUserProfile({ displayName: 'ライ' } as any)).toBeNull();
     expect(recall.resolveCanonicalUserId({ ...envelope(), sourceDisplayName: 'ライ' })).toBe('discord:100');
-    expect(person.resolveCanonicalPersonId).not.toHaveBeenCalled();
     expect(PersonMemoryService.getInstance().resolveCanonicalPersonId('discord', '999999999', 'ライ')).toBe('discord:999999999');
+  });
+  it('does not write mixed conversation history into legacy PersonMemory', async () => {
+    const created = vi.spyOn(PersonMemoryService.prototype, 'getOrCreate');
+    await PersonMemoryService.getInstance().updateAfterConversation('discord', '100', 'ライ', [
+      { role: 'user', content: 'secret from another channel', timestamp: new Date() } as any,
+    ]);
+    expect(created).not.toHaveBeenCalled();
+    created.mockRestore();
   });
   it('keeps self-model/strategy/world/internal writes in source scope despite inferred generalization', async () => {
     db.model.mockResolvedValue({ content: JSON.stringify({ selfObservations: [{ observation: 'private', confidence: 1 }],
@@ -210,7 +217,7 @@ describe('real Mongo adapters with a deterministic fake database', () => {
       worldPatterns: [{ domain: 'social', pattern: 'private', confidence: 1, applicability: [] }],
     }) });
     const request = envelope('100', '', '300', true);
-    const updater = new AutonomyUpdater({} as any, new ScopeDeriver(), () => 'discord:100');
+    const updater = new AutonomyUpdater(new ScopeDeriver(), () => 'discord:100');
     await updater.runAutonomyUpdaters(request, 'fixture conversation');
     expect(db.created).toHaveLength(4);
     expect(db.created.every(doc => canReadMemory(deriveMemoryScope(request), doc) && doc.generalized === false)).toBe(true);
@@ -218,7 +225,7 @@ describe('real Mongo adapters with a deterministic fake database', () => {
   });
   it('writeback extraction uses a single scoped insert, never a content/time follow-up update', async () => {
     db.model.mockResolvedValue({ content: JSON.stringify({ memories: [{ ...draft, generalized: true, sensitivityLevel: 'low' }] }) });
-    const processor = new WritebackProcessor(service, {} as any, () => 'discord:100');
+    const processor = new WritebackProcessor(service, () => 'discord:100');
     await (processor as any).extractAndSaveWithScope('fixture', 'discord', envelope('100', '', '300', true));
     expect(db.created[0]).toMatchObject({ scopeVersion: 1, visibilityScope: 'private_user', generalized: false });
     expect(ShannonMemory.updateOne).not.toHaveBeenCalled();
@@ -272,13 +279,13 @@ describe('request tool and episode integration', () => {
 describe('writeback queue scope provenance', () => {
   it('preserves a denied source across the writeback snapshot and does not enqueue or invoke a model', async () => {
     const request = world(); request.metadata = { memoryDisabled: true, bot: { runtime: true } };
-    const processor = new WritebackProcessor(ShannonMemoryService.getInstance(), {} as any, () => 'unused');
+    const processor = new WritebackProcessor(ShannonMemoryService.getInstance(), () => 'unused');
     await processor.writeback({ envelope: request, conversationText: 'unreviewed voice fixture', exchanges: [] });
     expect(db.eventCreate).not.toHaveBeenCalled(); expect(db.model).not.toHaveBeenCalled(); expect(db.created).toEqual([]);
   });
   it('claims only versioned jobs and rejects a mismatched scope before any model call', async () => {
     const request = envelope();
-    const processor = new WritebackProcessor(ShannonMemoryService.getInstance(), {} as any, () => 'unused');
+    const processor = new WritebackProcessor(ShannonMemoryService.getInstance(), () => 'unused');
     db.eventClaim.mockReturnValueOnce({ lean: async () => ({ _id: 'event', sourceUserId: 'discord:100', scopeKey: 'foreign', payload: { envelope: request, conversationText: 'fixture' } }) });
     await processor.processPendingWritebacks(1);
     expect(db.eventClaim.mock.calls[0][0]).toEqual({ status: 'pending', scopeVersion: 1 });
@@ -287,7 +294,7 @@ describe('writeback queue scope provenance', () => {
   });
   it('captures queue authority and strips runtime metadata before an async create', async () => {
     const request = envelope(); request.metadata = { bot: { runtime: true } };
-    const processor = new WritebackProcessor(ShannonMemoryService.getInstance(), {} as any, () => 'spoofed alias');
+    const processor = new WritebackProcessor(ShannonMemoryService.getInstance(), () => 'spoofed alias');
     await processor.writeback({ envelope: request, conversationText: 'fixture', exchanges: [] });
     const queued = db.eventCreate.mock.calls[0][0]; request.discord.guildId = '999';
     expect(queued).toMatchObject({ scopeVersion: 1, sourceUserId: 'discord:100' });
@@ -297,7 +304,7 @@ describe('writeback queue scope provenance', () => {
   it('retains the source audience while an autonomy model response is pending', async () => {
     let release!: (x: any) => void; db.model.mockReturnValueOnce(new Promise(resolve => { release = resolve; }));
     const request = envelope('100', '', '300', true); const expected = deriveMemoryScope(request)!;
-    const updater = new AutonomyUpdater({} as any, new ScopeDeriver(), () => 'spoof');
+    const updater = new AutonomyUpdater(new ScopeDeriver(), () => 'spoof');
     const running = updater.runAutonomyUpdaters(request, 'private fixture');
     while (!release) await Promise.resolve();
     request.discord.channelId = '999'; request.sourceUserId = '999';

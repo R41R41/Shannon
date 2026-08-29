@@ -114,10 +114,12 @@ describe('foundation dependency gate', () => {
       fs.mkdirSync(path.join(root, 'execution')); fs.mkdirSync(path.join(root, 'memory'));
       fs.mkdirSync(path.join(root, 'conversation'));
       fs.mkdirSync(path.join(root, 'radar'));
+      fs.mkdirSync(path.join(root, 'fca'));
       fs.writeFileSync(path.join(root, 'memory/index.ts'), 'export {};');
       fs.writeFileSync(path.join(root, 'execution/index.ts'), 'export {};');
       fs.writeFileSync(path.join(root, 'access/index.ts'), 'export {};');
       fs.writeFileSync(path.join(root, 'modelSettings/index.ts'), 'export {};');
+      fs.writeFileSync(path.join(root, 'fca/index.ts'), 'export {};');
       expect(execFileSync(process.execPath, [script, root], { encoding: 'utf8' })).toContain('passed');
       fs.writeFileSync(path.join(root, 'access/index.ts'), "import fs from 'node:fs';\nconst value = process.env.SECRET;\n");
       expect(() => execFileSync(process.execPath, [script, root], { stdio: 'pipe' })).toThrow();

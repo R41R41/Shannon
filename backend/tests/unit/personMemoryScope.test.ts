@@ -208,7 +208,7 @@ describe('actual tool/initial recall integration with mocked storage and models'
   });
   it.each(['', 'remember'])('includes scoped statements in the unified recall prompt with text=%s', async text => {
     await createRequestPersonMemory(request()).remember(quote);
-    const engine = new RecallEngine({} as any, {} as any);
+    const engine = new RecallEngine({} as any);
     for (const name of ['recallSelfModel', 'recallInternalState']) vi.spyOn(engine as any, name).mockResolvedValue(null);
     for (const name of ['recallStrategyUpdates', 'recallWorldPatterns', 'semanticSearch', 'searchByTags']) vi.spyOn(engine as any, name).mockResolvedValue([]);
     const service: any = Object.create(ScopedMemoryService.prototype);

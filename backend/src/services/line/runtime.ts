@@ -5,6 +5,9 @@ import { lineConfig } from './config.js';
 import { MongoLineLedger } from './mongoLedger.js';
 import { LineHttpTransport } from './transport.js';
 import { createLineChatModel } from './chatModel.js';
+import { lineChatTools } from './chatSkills.js';
+import { customSearch } from '../search/customSearch.js';
+import { YouTubeDataApiVideoSearch } from '../radar/youtubeSearch.js';
 import { LineRadarWorker } from './radarWorker.js';
 import { MongoPersonalCatalog } from '../radar/mongoPersonalCatalog.js';
 import { radarDatabaseReady } from '../radar/runtimeAdapters.js';
@@ -28,16 +31,22 @@ export async function openLineRuntime(input: { env: Record<string,string>; db: m
   const config = lineConfig(input.env);
   if (!config.enabled || ![15040,15041].includes(input.port)) throw new Error('LINE_RUNTIME_INVALID');
   await radarDatabaseReady(input.db);
+  const owner = personalRadarOwner(issueLineRadarContext(config.botUserId, config.personalUserId, Date.now()+60000), Date.now());
+  const google = new GoogleRadarOAuthBroker({ clientId: input.env.LINE_GOOGLE_CLIENT_ID ?? '', clientSecret: input.env.LINE_GOOGLE_CLIENT_SECRET ?? '',
+    refreshToken: input.env.LINE_GOOGLE_REFRESH_TOKEN ?? '' }, owner);
+  const youtubeSearch = new YouTubeDataApiVideoSearch(google);
+  const webKey = input.env.LINE_WEB_SEARCH_API_KEY ?? '', webEngine = input.env.LINE_WEB_SEARCH_ENGINE_ID ?? '';
   let worker: LineRadarWorker;
   const runtime = createLineApplication(config, { state: new MongoLineLedger(input.db),
-    chat: config.chatMaxPer24Hours > 0 ? createLineChatModel({ apiKey: input.env.LINE_LLM_API_KEY, model: input.env.LINE_LLM_MODEL, profile: input.profile })
+    chat: config.chatMaxPer24Hours > 0 ? createLineChatModel({ apiKey: input.env.LINE_LLM_API_KEY, model: input.env.LINE_LLM_MODEL, profile: input.profile,
+      tools: lineChatTools({
+        ...(webKey && webEngine ? { web: (query, limit, signal) => customSearch({ apiKey: webKey, engineId: webEngine }, query, limit, signal) } : {}),
+        youtube: async (query, limit, signal) => youtubeSearch.list(await google.authorizeYouTube(signal), query, limit, signal),
+      }) })
       : { reply: async () => { throw new Error('LINE_CHAT_DISABLED'); } },
     transport: new LineHttpTransport(config.channelAccessToken),
     authorizeRuntime: async () => { await input.readPolicy(); },
     radar: { status: () => worker.status(), authorizeQuote: id => worker.authorizeQuote(id), conversationVersion: () => worker.conversationVersion() } });
-  const owner = personalRadarOwner(issueLineRadarContext(config.botUserId, config.personalUserId, Date.now()+60000), Date.now());
-  const google = new GoogleRadarOAuthBroker({ clientId: input.env.LINE_GOOGLE_CLIENT_ID ?? '', clientSecret: input.env.LINE_GOOGLE_CLIENT_SECRET ?? '',
-    refreshToken: input.env.LINE_GOOGLE_REFRESH_TOKEN ?? '' }, owner);
   const receipts = new MongoRadarDeliveryReceipts(input.db);
   const subscriptions = new YouTubeSubscriptionReader(new YouTubeDataApiSubscriptionTransport(google));
   const uploads = new YouTubeDataApiUploadReader(google);

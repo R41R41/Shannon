@@ -7,7 +7,7 @@ vi.mock('../../src/config/modelManager.js', () => ({ modelManager: { get: () => 
 vi.mock('../../src/utils/logger.js', () => ({ logger: Object.fromEntries(['info','warn','error','success','debug'].map(k => [k, vi.fn()])) }));
 vi.mock('../../src/services/eventBus/index.js', () => ({ getEventBus: () => ({ publish: fakes.publish }) }));
 vi.mock('../../src/services/minebot/config/MinebotConfig.js', () => ({ CONFIG: { UI_MOD_BASE_URL: 'http://unused.invalid' } }));
-vi.mock('../../src/services/minebot/knowledge/WorldKnowledgeService.js', () => ({ WorldKnowledgeService: {} }));
+vi.mock('../../src/services/minebot/knowledge/WorldKnowledgeService.js', () => ({ WorldKnowledgeService: { forServer: () => null } }));
 vi.mock('../../src/services/minebot/knowledge/RecipeDependencyResolver.js', () => ({ RecipeDependencyResolver: {} }));
 vi.mock('../../src/services/llm/utils/langfuse.js', () => ({ createTracedModel: () => ({ bindTools: () => ({}), invoke: fakes.utilityInvoke }) }));
 vi.mock('../../src/services/llm/utils/tokenTracker.js', () => ({ tokenTracker: { record: async () => {} } }));

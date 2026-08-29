@@ -50,3 +50,7 @@ export function minecraftConversationKeys(context: Partial<MinecraftMemoryContex
   const key = minecraftContextKey(context);
   return key ? { threadId: `minecraft:${key}`, conversationId: `minecraft:${JSON.stringify([key, userId])}` } : null;
 }
+/** Operator-assigned ids only (`dev:` / `prod:`). Hostnames and MOTD names are not identities. */
+export function isAssignedMinecraftServerId(value: unknown): value is string {
+  return identifier(value) && (value.startsWith('dev:') || value.startsWith('prod:'));
+}

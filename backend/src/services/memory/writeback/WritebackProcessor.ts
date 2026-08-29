@@ -12,7 +12,6 @@ import {
   ShannonMemoryService,
   ShannonMemoryInput,
 } from '../shannonMemoryService.js';
-import { PersonMemoryService } from '../personMemoryService.js';
 import { IExchange } from '../../../models/PersonMemory.js';
 import type { RequestEnvelope } from '@shannon/common';
 import { logger } from '../../../utils/logger.js';
@@ -27,24 +26,17 @@ export interface ScopedWritebackInput {
 
 export class WritebackProcessor {
   private shannonService: ShannonMemoryService;
-  private personService: PersonMemoryService;
   private scopeDeriver: ScopeDeriver;
   private autonomyUpdater: AutonomyUpdater;
   private isProcessingEvents = false;
 
   constructor(
     shannonService: ShannonMemoryService,
-    personService: PersonMemoryService,
     resolveCanonicalUserId: (envelope: RequestEnvelope) => string,
   ) {
     this.shannonService = shannonService;
-    this.personService = personService;
     this.scopeDeriver = new ScopeDeriver();
-    this.autonomyUpdater = new AutonomyUpdater(
-      personService,
-      this.scopeDeriver,
-      resolveCanonicalUserId,
-    );
+    this.autonomyUpdater = new AutonomyUpdater(this.scopeDeriver, resolveCanonicalUserId);
   }
 
   async writeback(input: ScopedWritebackInput): Promise<void> {

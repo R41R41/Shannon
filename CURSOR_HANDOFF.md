@@ -1,4 +1,6 @@
-# Shannon / Cursor 引き継ぎ（2026-08-29 13:35 JST）
+# Shannon / Cursor 引き継ぎ（2026-08-29）
+
+RF-04：Radar / LINE会話 / Discord会話は `modules/fca` の同じループを使う。送信先・記憶・ツールはrunごとに注入。詳細は `docs/refactor-fca-kernel.md`。稼働中の本番LINE bundleへは未反映。
 
 ## 最初に守ること
 

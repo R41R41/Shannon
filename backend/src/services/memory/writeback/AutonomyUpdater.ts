@@ -3,13 +3,11 @@ import { deriveMemoryScope, memoryScopeFilter } from '../../../modules/memory/in
 /**
  * AutonomyUpdater
  *
- * Handles autonomy analysis: relationship updates, self-model updates,
+ * Handles autonomy analysis: self-model updates,
  * strategy updates, internal state updates, world pattern updates.
  */
 
 import { ShannonMemory } from '../../../models/ShannonMemory.js';
-import { PersonMemoryService } from '../personMemoryService.js';
-import { PersonMemory } from '../../../models/PersonMemory.js';
 import type { RequestEnvelope } from '@shannon/common';
 import { logger } from '../../../utils/logger.js';
 import { ScopeDeriver } from '../recall/ScopeDeriver.js';
@@ -19,18 +17,6 @@ import { ScopeDeriver } from '../recall/ScopeDeriver.js';
 // ---------------------------------------------------------------------------
 
 export interface AutonomyUpdateAnalysis {
-  relationship?: {
-    directness?: 'low' | 'mid' | 'high';
-    warmth?: 'low' | 'mid' | 'high';
-    structure?: 'low' | 'mid' | 'high';
-    verbosity?: 'short' | 'mid' | 'long';
-    recurringTopics?: string[];
-    activeProjects?: string[];
-    cautionFlags?: string[];
-    inferredNeeds?: string[];
-    familiarityDelta?: number;
-    trustDelta?: number;
-  };
   selfObservations?: Array<{
     observation: string;
     confidence: number;
@@ -65,16 +51,13 @@ export interface AutonomyUpdateAnalysis {
 }
 
 export class AutonomyUpdater {
-  private personService: PersonMemoryService;
   private scopeDeriver: ScopeDeriver;
   public resolveCanonicalUserId: (envelope: RequestEnvelope) => string;
 
   constructor(
-    personService: PersonMemoryService,
     scopeDeriver: ScopeDeriver,
     resolveCanonicalUserId: (envelope: RequestEnvelope) => string,
   ) {
-    this.personService = personService;
     this.scopeDeriver = scopeDeriver;
     this.resolveCanonicalUserId = resolveCanonicalUserId;
   }
@@ -114,7 +97,7 @@ export class AutonomyUpdater {
     });
 
     const systemPrompt = `あなたは Shannon の長期主体性更新器です。
-会話から relationship, selfObservations, activeImprovementGoals, strategyUpdates, internalState, worldPatterns を JSON で抽出してください。
+会話から selfObservations, activeImprovementGoals, strategyUpdates, internalState, worldPatterns を JSON で抽出してください。
 根拠が弱い項目は空配列または省略してください。
 strategyUpdates は失敗・摩擦・改善要求がある場合のみ抽出してください。
 JSON 以外は出力しないでください。`;
@@ -142,39 +125,6 @@ ${conversationText}`;
   }
 
   // ========== Apply updates ==========
-
-  private async applyRelationshipUpdates(
-    envelope: RequestEnvelope,
-    relationship?: AutonomyUpdateAnalysis['relationship'],
-  ): Promise<void> {
-    if (!relationship) return;
-    const platform = this.scopeDeriver.channelToPlatform(envelope.channel);
-    const userId = envelope.sourceUserId;
-    if (!platform || !userId || userId === 'unknown') return;
-
-    const record = await PersonMemory.findOne({ platform, platformUserId: userId });
-    if (!record) return;
-
-    if (relationship.directness) record.interactionPreferences.directness = relationship.directness;
-    if (relationship.warmth) record.interactionPreferences.warmth = relationship.warmth;
-    if (relationship.structure) record.interactionPreferences.structure = relationship.structure;
-    if (relationship.verbosity) record.interactionPreferences.verbosity = relationship.verbosity;
-
-    record.familiarityLevel = this.clamp01To100Delta(
-      record.familiarityLevel,
-      relationship.familiarityDelta ?? 0,
-    );
-    record.trustLevel = this.clamp01To100Delta(
-      record.trustLevel,
-      relationship.trustDelta ?? 0,
-    );
-    record.recurringTopics = this.mergeUniqueStrings(record.recurringTopics, relationship.recurringTopics);
-    record.activeProjects = this.mergeUniqueStrings(record.activeProjects, relationship.activeProjects);
-    record.cautionFlags = this.mergeUniqueStrings(record.cautionFlags, relationship.cautionFlags);
-    record.inferredNeeds = this.mergeUniqueStrings(record.inferredNeeds, relationship.inferredNeeds);
-
-    await record.save();
-  }
 
   private async applySelfModelUpdates(envelope: RequestEnvelope, analysis: AutonomyUpdateAnalysis): Promise<void> {
     const scope = deriveMemoryScope(envelope);

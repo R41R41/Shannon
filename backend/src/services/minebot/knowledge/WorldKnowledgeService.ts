@@ -11,6 +11,7 @@ import {
   WorldDanger,
   BotSnapshot,
 } from '../../../models/WorldKnowledge.js';
+import { isAssignedMinecraftServerId } from '../../../modules/memory/minecraftIdentity.js';
 import { createLogger } from '../../../utils/logger.js';
 
 const log = createLogger('Minebot:WorldKnowledge');
@@ -18,18 +19,22 @@ const log = createLogger('Minebot:WorldKnowledge');
 interface Position { x: number; y: number; z: number }
 
 export class WorldKnowledgeService {
-  private static instance: WorldKnowledgeService;
+  private static instances = new Map<string, WorldKnowledgeService>();
   private serverName: string;
 
   private constructor(serverName: string) {
     this.serverName = serverName;
   }
 
-  static getInstance(serverName = 'default'): WorldKnowledgeService {
-    if (!WorldKnowledgeService.instance || WorldKnowledgeService.instance.serverName !== serverName) {
-      WorldKnowledgeService.instance = new WorldKnowledgeService(serverName);
+  /** Minecraft world knowledge is per server. 'default' is not an identity. */
+  static forServer(serverId: string | undefined): WorldKnowledgeService | null {
+    if (!isAssignedMinecraftServerId(serverId)) return null;
+    let service = this.instances.get(serverId);
+    if (!service) {
+      service = new WorldKnowledgeService(serverId);
+      this.instances.set(serverId, service);
     }
-    return WorldKnowledgeService.instance;
+    return service;
   }
 
   private toGeo(pos: Position) {

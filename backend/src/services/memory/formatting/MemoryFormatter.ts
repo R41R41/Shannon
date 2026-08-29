@@ -7,7 +7,6 @@
 import { IShannonMemory } from '../../../models/ShannonMemory.js';
 import { IPersonMemory } from '../../../models/PersonMemory.js';
 import { ShannonMemoryService } from '../shannonMemoryService.js';
-import { PersonMemoryService } from '../personMemoryService.js';
 import type {
   InternalState,
   RelationshipModel,
@@ -47,19 +46,13 @@ export function safeISOString(value: unknown): string | null {
 
 export class MemoryFormatter {
   private shannonService: ShannonMemoryService;
-  private personService: PersonMemoryService;
 
-  constructor(
-    shannonService: ShannonMemoryService,
-    personService: PersonMemoryService,
-  ) {
+  constructor(shannonService: ShannonMemoryService) {
     this.shannonService = shannonService;
-    this.personService = personService;
   }
 
-  formatPerson(person: IPersonMemory | null): string {
-    if (!person) return '';
-    return this.personService.formatForPrompt(person);
+  formatPerson(_person: IPersonMemory | null): string {
+    return '';
   }
 
   formatForPrompt(memories: IShannonMemory[]): string {

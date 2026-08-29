@@ -11,8 +11,7 @@ import { createRequestPersonMemory } from '../requestPersonMemory.js';
 import type { PersonStatement } from '../../../modules/memory/personMemory.js';
 import { ShannonMemory, IShannonMemory } from '../../../models/ShannonMemory.js';
 import { EmbeddingService } from '../embeddingService.js';
-import { PersonMemoryService } from '../personMemoryService.js';
-import { IPersonMemory, MemoryPlatform } from '../../../models/PersonMemory.js';
+import { IPersonMemory } from '../../../models/PersonMemory.js';
 import type {
   InternalState,
   RelationshipModel,
@@ -53,15 +52,10 @@ const channelToSource: Record<ShannonChannel, string> = {
 
 export class RecallEngine {
   private embeddingService: EmbeddingService;
-  private personService: PersonMemoryService;
   private scopeDeriver: ScopeDeriver;
 
-  constructor(
-    embeddingService: EmbeddingService,
-    personService: PersonMemoryService,
-  ) {
+  constructor(embeddingService: EmbeddingService) {
     this.embeddingService = embeddingService;
-    this.personService = personService;
     this.scopeDeriver = new ScopeDeriver();
   }
 
@@ -324,56 +318,14 @@ export class RecallEngine {
     return deriveMemoryScope(envelope)?.ownerUserId ?? 'unknown';
   }
 
-  toUserProfile(person: IPersonMemory | null): UserProfileSnapshot | null {
-    if (!person) return null;
-    const platformMap: Record<MemoryPlatform, UserProfileSnapshot['platform']> = {
-      discord: 'discord',
-      twitter: 'x',
-      youtube: 'youtube',
-      minebot: 'minecraft',
-    };
-    return {
-      userId: person.canonicalPersonId,
-      displayName: person.displayName,
-      platform: platformMap[person.platform],
-      traits: person.traits,
-      notes: person.notes,
-      conversationSummary: person.conversationSummary,
-      totalInteractions: person.totalInteractions,
-      relationshipLevel: this.toRelationshipLevel(person.familiarityLevel),
-    };
+  toUserProfile(_person: IPersonMemory | null): UserProfileSnapshot | null {
+    return null;
   }
 
   toRelationshipModel(
-    person: IPersonMemory | null,
-    userId: string,
+    _person: IPersonMemory | null,
+    _userId: string,
   ): RelationshipModel | null {
-    if (!person) return null;
-    return {
-      userId,
-      familiarityLevel: person.familiarityLevel ?? 0,
-      trustLevel: person.trustLevel ?? 0,
-      interactionPreferences: {
-        directness: person.interactionPreferences?.directness ?? 'mid',
-        warmth: person.interactionPreferences?.warmth ?? 'mid',
-        structure: person.interactionPreferences?.structure ?? 'mid',
-        verbosity: person.interactionPreferences?.verbosity ?? 'mid',
-      },
-      recurringTopics: person.recurringTopics ?? [],
-      activeProjects: person.activeProjects ?? [],
-      cautionFlags: person.cautionFlags ?? [],
-      inferredNeeds: person.inferredNeeds ?? [],
-      updatedAt: person.lastSeenAt.toISOString(),
-    };
-  }
-
-  private toRelationshipLevel(
-    familiarityLevel: number | undefined,
-  ): UserProfileSnapshot['relationshipLevel'] {
-    const level = familiarityLevel ?? 0;
-    if (level >= 80) return 'close_friend';
-    if (level >= 55) return 'friend';
-    if (level >= 25) return 'acquaintance';
-    return 'stranger';
+    return null;
   }
 }

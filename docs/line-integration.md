@@ -16,7 +16,7 @@
 | `modules/conversation/lineConversation.ts` | SDK非依存の型、本人/グループscope、呼びかけ、期限、静音判断 |
 | `services/line/config.ts` | 明示envパース。空は拒否。グループ名・ワイルドカード・個人宛先へのC…IDを拒否 |
 | `application.ts` | 独立Express Webhook、署名→宛先判定→予約→会話生成→同じreplyTokenへの返信、停止と引用文脈 |
-| `chatModel.ts` | 既存LangChain依存を使うテキスト会話。明示モデル/キー、900出力token、retryなし。旧ツール・記憶・全体graphは接続しない |
+| `chatModel.ts` | 共有FCA核の上のLINE会話。明示モデル/キー、900出力token、retryなし。runごとに公開検索スキルだけを注入。旧記憶・全体graph・LINE transportは接続しない |
 | `ledger.ts` / `mongoLedger.ts` | channel文書のCAS、重複/LLM予算/Push予算/同意・停止/永続outbox。初期挿入の_id一意性、majority+journal ACK後に外部作用 |
 | `transport.ts` | 固定LINE HTTPS APIのReply/本人Pushだけ。redirect/retryなし。本文/secret/返信tokenをログに出さない |
 | `start-line-dev.cjs` | dev専用独立起動、共有.env/Firebase/Discord/main serverなし、起動ロック優先 |

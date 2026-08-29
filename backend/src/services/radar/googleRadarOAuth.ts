@@ -41,8 +41,14 @@ export class GoogleRadarOAuthBroker implements AuthorizedYouTubeGet,CalendarRead
   async authorizeYouTube(signal:AbortSignal):Promise<YouTubeReadGrant>{const token=await this.token(signal);return Object.freeze({owner:this.owner,bindingId:this.bindingId,
     revision:token.revision,scope:YOUTUBE_READONLY_SCOPE,expiresAt:token.expiresAt});}
   async get(grant:YouTubeReadGrant,pathAndQuery:string,signal:AbortSignal):Promise<unknown>{
+    return this.youtube(grant,pathAndQuery,signal,/^\/youtube\/v3\/(?:subscriptions|channels|playlistItems)\?[A-Za-z0-9%&=,._-]+$/);
+  }
+  async search(grant:YouTubeReadGrant,pathAndQuery:string,signal:AbortSignal):Promise<unknown>{
+    return this.youtube(grant,pathAndQuery,signal,/^\/youtube\/v3\/search\?[A-Za-z0-9%&=,._+-]+$/);
+  }
+  private async youtube(grant:YouTubeReadGrant,pathAndQuery:string,signal:AbortSignal,allowed:RegExp):Promise<unknown>{
     if(grant.owner!==this.owner||grant.bindingId!==this.bindingId||grant.scope!==YOUTUBE_READONLY_SCOPE
-      ||!/^\/youtube\/v3\/(?:subscriptions|channels|playlistItems)\?[A-Za-z0-9%&=,._-]+$/.test(pathAndQuery))throw new Error('GOOGLE_RADAR_DENIED');
+      ||!allowed.test(pathAndQuery))throw new Error('GOOGLE_RADAR_DENIED');
     const token=await this.token(signal);if(grant.revision!==token.revision||grant.expiresAt!==token.expiresAt)throw new Error('GOOGLE_RADAR_DENIED');
     const response=await this.http(`https://www.googleapis.com${pathAndQuery}`,{method:'GET',redirect:'error',headers:{authorization:`Bearer ${token.accessToken}`},
       signal:AbortSignal.any([signal,AbortSignal.timeout(10000)])});const text=await this.body(response);if(!response.ok)throw new Error('GOOGLE_RADAR_UNAVAILABLE');

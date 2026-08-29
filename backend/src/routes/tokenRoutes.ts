@@ -43,22 +43,26 @@ export function registerTokenRoutes(app: Express): void {
   // -----------------------------------------------------------------
   // Minebot ワールド知識 API
   // -----------------------------------------------------------------
-  app.get('/api/minebot/knowledge/stats', async (_req, res) => {
+  app.get('/api/minebot/knowledge/stats', async (req, res) => {
     try {
+      const serverId = typeof req.query.serverId === 'string' ? req.query.serverId : undefined;
       const { WorldKnowledgeService } = await import('../services/minebot/knowledge/WorldKnowledgeService.js');
-      const service = WorldKnowledgeService.getInstance();
+      const service = WorldKnowledgeService.forServer(serverId);
+      if (!service) { res.json({}); return; }
       res.json(await service.getStats());
     } catch { res.json({}); }
   });
 
   app.get('/api/minebot/knowledge/nearby', async (req, res) => {
     try {
+      const serverId = typeof req.query.serverId === 'string' ? req.query.serverId : undefined;
       const x = parseInt(req.query.x as string) || 0;
       const y = parseInt(req.query.y as string) || 64;
       const z = parseInt(req.query.z as string) || 0;
       const radius = parseInt(req.query.radius as string) || 64;
       const { WorldKnowledgeService } = await import('../services/minebot/knowledge/WorldKnowledgeService.js');
-      const service = WorldKnowledgeService.getInstance();
+      const service = WorldKnowledgeService.forServer(serverId);
+      if (!service) { res.json({ context: '' }); return; }
       const context = await service.buildContextForPosition({ x, y, z }, radius);
       res.json({ context });
     } catch { res.json({ context: '' }); }

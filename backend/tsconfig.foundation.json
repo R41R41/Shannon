@@ -17,6 +17,7 @@
     "src/modules/execution/**/*.ts",
     "src/modules/memory/**/*.ts",
     "src/modules/conversation/**/*.ts",
-    "src/modules/radar/**/*.ts"
+    "src/modules/radar/**/*.ts",
+    "src/modules/fca/**/*.ts"
   ]
 }

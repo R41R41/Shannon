@@ -4,6 +4,7 @@ import { extractAndSaveKnowledge } from '../knowledge/skillResultExtractor.js';
 import { SkillResultCache } from '../knowledge/SkillResultCache.js';
 import { skillMetrics } from '../knowledge/SkillMetrics.js';
 import { SkillExecutor } from '../execution/SkillExecutor.js';
+import { boundMinecraftServerId } from '../runtime/memoryContext.js';
 import type { CustomBot } from './CustomBot.js';
 import type { SkillParam, SkillResult } from './skillParams.js';
 
@@ -104,10 +105,12 @@ export abstract class InstantSkill extends Skill {
   }
 
   async run(...args: any[]): Promise<SkillResult> {
-    // キャッシュチェック（クエリ系スキルのみ）
-    if (skillCache.isCacheable(this.skillName) && this.bot.entity) {
+    const serverId = boundMinecraftServerId(this.bot);
+
+    // キャッシュチェック（クエリ系スキルのみ）。未bindingの表示名では共有しない。
+    if (serverId && skillCache.isCacheable(this.skillName) && this.bot.entity) {
       const pos = this.bot.entity.position;
-      const cached = skillCache.get(this.skillName, args, { x: pos.x, y: pos.y, z: pos.z });
+      const cached = skillCache.get(this.skillName, args, { x: pos.x, y: pos.y, z: pos.z }, serverId);
       if (cached) return { ...cached, duration: 0 };
     }
 
@@ -181,30 +184,35 @@ export abstract class InstantSkill extends Skill {
       const duration = Date.now() - startTime;
       const finalResult = { ...result, duration };
 
-      // ワールド知識の自動抽出（fire-and-forget）
-      extractAndSaveKnowledge(this.skillName, args, finalResult, this.bot.connectedServerName || 'default')
-        .catch(() => {});
+      // ワールド知識の自動抽出（fire-and-forget）。表示名では開かない。
+      if (serverId) {
+        extractAndSaveKnowledge(this.skillName, args, finalResult, serverId).catch(() => {});
+      }
 
       // キャッシュ書き込み
-      if (skillCache.isCacheable(this.skillName) && this.bot.entity) {
+      if (serverId && skillCache.isCacheable(this.skillName) && this.bot.entity) {
         const pos = this.bot.entity.position;
-        skillCache.set(this.skillName, args, finalResult, { x: pos.x, y: pos.y, z: pos.z });
+        skillCache.set(this.skillName, args, finalResult, { x: pos.x, y: pos.y, z: pos.z }, serverId);
       }
 
       // メトリクス記録
-      skillMetrics.record(
-        this.bot.connectedServerName || 'default',
-        this.skillName, args,
-        finalResult.success, finalResult.duration || 0, null,
-      ).catch(() => {});
+      if (serverId) {
+        skillMetrics.record(
+          serverId,
+          this.skillName, args,
+          finalResult.success, finalResult.duration || 0, null,
+        ).catch(() => {});
+      }
 
       return finalResult;
     } catch (error: any) {
       const duration = Date.now() - startTime;
-      skillMetrics.record(
-        this.bot.connectedServerName || 'default',
-        this.skillName, args, false, duration, error.message,
-      ).catch(() => {});
+      if (serverId) {
+        skillMetrics.record(
+          serverId,
+          this.skillName, args, false, duration, error.message,
+        ).catch(() => {});
+      }
       return {
         success: false,
         result: 'Skill execution failed',

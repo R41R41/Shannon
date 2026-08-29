@@ -1,5 +1,7 @@
 import { bindRequestMemory, snapshotMemoryEnvelope } from '../../memory/requestMemory.js';
 import { bindRequestDiscordConversation } from '../../common/discordConversationPort.js';
+import { selectToolsForChannel } from '../../../modules/access/toolCatalog.js';
+import { minecraftTaskContinuation } from '../../minebot/runtime/minecraftTaskContinuation.js';
 /**
  * Shannon Unified Graph — 3ノード簡素化版
  *
@@ -233,6 +235,12 @@ function createExecuteNode(
 
         // InstantSkills
         const bot = (envelope.metadata as any)?.bot;
+        if (bot?.instantSkills?.getSkills) {
+          for (const skill of bot.instantSkills.getSkills()) {
+            const tool = skillToAnthropicTool(skill);
+            if (!tools.some(t => t.name === tool.name)) tools.push(tool);
+          }
+        }
 
         if (routineManager) {
           for (const def of routineManager.getAll()) {
@@ -254,9 +262,10 @@ function createExecuteNode(
         }
 
         // A fresh context-bearing tool set for this executor invocation.
-        const runTools = fca.createToolsForRun();
-        bindRequestMemory(runTools, memoryEnvelope);
-        bindRequestDiscordConversation(runTools, memoryEnvelope, state._abortSignal);
+        const created = fca.createToolsForRun();
+        bindRequestMemory(created, memoryEnvelope);
+        bindRequestDiscordConversation(created, memoryEnvelope, state._abortSignal);
+        const runTools = selectToolsForChannel('minecraft', created);
         // FCA 登録済みツールを Anthropic 形式に変換
         for (const tool of runTools) {
           // routine:xxx は既に routine-xxx として追加済み、manage-routine / task-complete も追加済み
@@ -330,6 +339,7 @@ function createExecuteNode(
           routineManager,
           routineExecutor,
           llmTools: llmToolMap,
+          continuation: minecraftTaskContinuation(envelope.minecraft),
         });
 
         const previousMessages = (envelope.metadata as any)?.previousMessages as

@@ -49,7 +49,7 @@ export function deriveMemoryScope(request?: MemoryRequest | null): MemoryScope |
     ownerUserId = `minecraft:${request.sourceUserId}`;
     parts = ['minecraft', 'world', m.serverId, m.worldId, m.dimension];
   } else {
-    // Web needs verified UID/project + audience binding; other adapters lack a reviewed scope contract.
+    // LINE/Radar/Web/X/YouTube/scheduler are not Discord/Minecraft scopes. stores.ts forbids sharing.
     return null;
   }
   const scope: MemoryScope = Object.freeze({ scopeVersion: 1, scopeKey: JSON.stringify(parts), visibilityScope, ownerUserId });
@@ -78,3 +78,7 @@ export interface MemoryPort {
   save(draft: MemoryDraft): Promise<MemorySaveResult>;
 }
 export const MEMORY_SCOPE_REQUIRED = '記憶の公開範囲を確認できないため、この経路での保存・検索は停止しています。';
+export {
+  MEMORY_PATHS, MEMORY_STORES, legacyPersonMemoryAllowed, pathMayUseStore, storesForPath,
+  type MemoryPath, type MemoryStore,
+} from './stores.js';

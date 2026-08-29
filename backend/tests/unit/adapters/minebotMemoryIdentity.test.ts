@@ -16,6 +16,15 @@ describe('minebot memory identity transport', () => {
     expect(envelope.minecraft?.worldId).toBe('world-a');
     expect(deriveMemoryScope(envelope)).not.toBeNull();
   });
+  it('does not use a server display name as conversation identity when unbound', () => {
+    const envelope = minebotAdapter.toEnvelope({
+      senderName: 'player', message: 'fixture', serverName: '1.21.11-fabric-test',
+    });
+    expect(envelope.conversationId).not.toContain('1.21.11-fabric-test');
+    expect(envelope.threadId).not.toContain('1.21.11-fabric-test');
+    expect(envelope.minecraft?.serverId).toBeUndefined();
+    expect(deriveMemoryScope(envelope)).toBeNull();
+  });
   it('does not change the conversation when only a server display name changes', () => {
     const input = { senderName: 'player', message: 'fixture', serverId: 'dev:server-a', worldId: 'world-a', dimension: 'minecraft:overworld' };
     const a = minebotAdapter.toEnvelope({ ...input, serverName: 'old-name' });

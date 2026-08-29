@@ -17,6 +17,7 @@ import type { InstantSkills } from '../../minebot/types/collections.js';
 import type { RoutineManager } from '../../minebot/routines/RoutineManager.js';
 import type { RoutineExecutor } from '../../minebot/routines/RoutineExecutor.js';
 import { sendGameChatLimited } from '../../minebot/utils/sendGameChatLimited.js';
+import type { MinecraftTaskContinuation } from '../../minebot/runtime/minecraftTaskContinuation.js';
 
 const log = createLogger('LLM:ShannonExecutor');
 
@@ -34,6 +35,8 @@ export interface ShannonExecutorDeps {
     bot?: import('../../minebot/types/CustomBot.js').CustomBot;
     /** LLM ツール (recall-*, save-*, task-complete, etc.) */
     llmTools?: Map<string, (input: Record<string, unknown>) => Promise<string>>;
+    /** World-scoped previous task notes. Process-global last-task is not used. */
+    continuation?: MinecraftTaskContinuation;
 }
 
 export interface ShannonExecutorState {
@@ -246,10 +249,6 @@ function taskNodesToHierarchicalSubTasks(nodes: TaskNode[]): TaskTreeState['hier
 export class ShannonExecutor {
     private client: Anthropic;
 
-    /** 直前のタスクの結果サマリ（次のタスクにコンテキストとして引き継ぐ） */
-    private static lastTaskSummary: string | null = null;
-    private static lastTaskGoal: string | null = null;
-
     constructor(private deps: ShannonExecutorDeps) {
         this.client = new Anthropic({
             apiKey: config.anthropic.apiKey || undefined,
@@ -302,10 +301,10 @@ export class ShannonExecutor {
         } else {
             messages = [];
             // 前タスクのコンテキストを引き継ぐ
-            if (ShannonExecutor.lastTaskSummary && ShannonExecutor.lastTaskGoal) {
+            if (this.deps.continuation?.lastSummary && this.deps.continuation.lastGoal) {
                 messages.push({
                     role: 'user',
-                    content: `【前のタスクの結果】\nゴール: ${ShannonExecutor.lastTaskGoal}\n結果: ${ShannonExecutor.lastTaskSummary}\n\n---\n以下が新しいタスクです:`,
+                    content: `【前のタスクの結果】\nゴール: ${this.deps.continuation.lastGoal}\n結果: ${this.deps.continuation.lastSummary}\n\n---\n以下が新しいタスクです:`,
                 });
                 messages.push({ role: 'assistant', content: 'はい、前のタスクの結果を踏まえて新しいタスクに取り組みます。' });
             }
@@ -470,8 +469,10 @@ export class ShannonExecutor {
                         lastContent = summary;
                         taskCompleted = true;
                         // 次タスクへのコンテキスト引継ぎ用に保存
-                        ShannonExecutor.lastTaskGoal = state.goal;
-                        ShannonExecutor.lastTaskSummary = summary.slice(0, 500);
+                        if (this.deps.continuation) {
+                            this.deps.continuation.lastGoal = state.goal;
+                            this.deps.continuation.lastSummary = summary.slice(0, 500);
+                        }
                         taskTree = {
                             goal: displayGoal,
                             strategy: summary,
@@ -630,8 +631,10 @@ export class ShannonExecutor {
             if (state.abortSignal?.aborted) {
                 // 緊急割込みで中断 — 次タスクで復帰できるようにコンテキスト保存
                 const treeProgress = taskNodes.length > 0 ? taskNodesToText(taskNodes).slice(0, 200) : 'なし';
-                ShannonExecutor.lastTaskGoal = state.goal;
-                ShannonExecutor.lastTaskSummary = `【中断】緊急割込みにより中断。進捗: ${treeProgress}。このタスクの続きを実行する必要がある`;
+                if (this.deps.continuation) {
+                    this.deps.continuation.lastGoal = state.goal;
+                    this.deps.continuation.lastSummary = `【中断】緊急割込みにより中断。進捗: ${treeProgress}。このタスクの続きを実行する必要がある`;
+                }
                 log.info(`💾 中断タスク保存: "${state.goal.slice(0, 40)}..." → 次タスクで復帰可能`);
                 taskTree = {
                     goal: displayGoal,

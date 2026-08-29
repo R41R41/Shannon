@@ -710,7 +710,8 @@ export class SkillAgent {
     // 60秒ごとにボット状態をスナップショット保存
     setInterval(() => {
       if (!this.bot.entity) return;
-      const wk = WorldKnowledgeService.getInstance(this.bot.connectedServerName || 'default');
+      const wk = WorldKnowledgeService.forServer(minecraftMemoryContext(this.bot)?.serverId);
+      if (!wk) return;
       const pos = this.bot.entity.position;
       wk.recordSnapshot({
         position: { x: Math.floor(pos.x), y: Math.floor(pos.y), z: Math.floor(pos.z) },

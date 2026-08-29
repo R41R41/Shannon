@@ -287,7 +287,7 @@ describe('LINE stateless chat adapter', () => {
     const model = createLineChatModel({ apiKey: 'fixture-key', model: 'fixture-model', profile: 'fictional character only' });
     const signal = new AbortController().signal;
     expect(await model.reply({ kind: 'group', messages: [{ role: 'user', content: 'シャノン、やあ' }], signal })).toBe('こんにちは');
-    expect(modelFake.configurations.at(-1)).toEqual({ apiKey: 'fixture-key', model: 'fixture-model', maxTokens: 900, maxRetries: 0, timeout: 30000 });
+    expect(modelFake.configurations.at(-1)).toEqual({ apiKey: 'fixture-key', model: 'fixture-model', maxTokens: 900, maxRetries: 0, timeout: 30000, temperature: 0.8 });
     const [messages, options] = modelFake.invoke.mock.calls.at(-1)!;
     expect(messages).toHaveLength(2); expect(messages[0].content).toContain('グループ会話'); expect(options.signal).toBe(signal);
   });

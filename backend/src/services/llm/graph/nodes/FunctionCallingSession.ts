@@ -1,6 +1,6 @@
 import { bindRequestMemory, snapshotMemoryEnvelope } from '../../../memory/requestMemory.js';
 import { bindRequestDiscordConversation } from '../../../common/discordConversationPort.js';
-import { selectAllowedTools } from '../../../../modules/access/toolSelection.js';
+import { selectToolsForChannel } from '../../../../modules/access/toolCatalog.js';
 import {
     AIMessage,
     AIMessageChunk,
@@ -34,6 +34,9 @@ import { ThinkingManager } from './execution/ThinkingManager.js';
 import { ToolExecutor } from './execution/ToolExecutor.js';
 import { LoopDetector } from './execution/LoopDetector.js';
 import { ModelSelector } from '../cognitive/ModelSelector.js';
+import { fcaHistoryToLangChain } from '../../../fca/openAiFcaModel.js';
+import { runConversationFca } from './conversationKernel.js';
+import type { FcaModel } from '../../../../modules/fca/index.js';
 
 function stripAssistantContentPrefix(t: string): string {
     return t.replace(/^content:\s*/i, '').trim();
@@ -352,40 +355,17 @@ export class FunctionCallingSession {
 
         // 動的モデル選択 (RAS / ModelSelector)
         const modelSelector = new ModelSelector(state.selectedModel || FunctionCallingSession.MODEL_NAME);
+        const channel = state.requestEnvelope?.channel ?? state.context?.platform ?? null;
         const platform = state.context?.platform ?? null;
         if (platform === 'minecraft' || platform === 'minebot') {
             modelSelector.setMaxEscalationLevel('gpt-5-mini-fast');
         }
         logger.info(`🤖 FunctionCallingAgent: タスク実行開始 "${goal}"${isEmergency ? ' [緊急]' : ''} (model=${modelSelector.modelName})`, 'cyan');
 
-        // allowedTools が指定されている場合、フィルタリングした modelWithTools を使う
-        let effectiveTools = [...this.tools];
-        let effectiveToolMap = new Map(this.toolMap);
-        if (state.allowedTools !== undefined) {
-            effectiveTools = selectAllowedTools(this.tools, state.allowedTools);
-            effectiveToolMap = new Map(effectiveTools.map(t => [t.name, t]));
-            logger.info(`🔒 allowedTools: ${state.allowedTools.join(', ')} (${effectiveTools.length}/${this.tools.length})`, 'cyan');
-        }
-
-        // Phase 2-D: Minecraft はプラットフォーム非関連ツールを除外（入力トークン -1600〜3200）
-        if (platform === 'minecraft' || platform === 'minebot') {
-            const NON_MINECRAFT_TOOLS = new Set([
-                'post-on-twitter', 'like-tweet', 'retweet-tweet', 'quote-retweet',
-                'get-x-or-twitter-post-content-from-url', 'generate-tweet-text',
-                'chat-on-discord', 'get-discord-recent-messages',
-                'get-server-emoji-on-discord', 'react-by-server-emoji-on-discord', 'get-discord-images',
-                'chat-on-web',
-                'get-youtube-video-content-from-url',
-                'get-notion-page-content-from-url',
-                'create-image', 'describe-image', 'edit-image', 'describe-notion-image',
-                'google-search', 'search-by-wikipedia', 'search-weather', 'wolframalpha', 'fetch-url',
-            ]);
-            const beforeCount = effectiveTools.length;
-            effectiveTools = effectiveTools.filter(t => !NON_MINECRAFT_TOOLS.has(t.name));
-            effectiveToolMap = new Map(effectiveTools.map(t => [t.name, t]));
-            if (effectiveTools.length < beforeCount) {
-                logger.info(`🎮 Minecraft ツールフィルタ: ${beforeCount} → ${effectiveTools.length} ツール`, 'cyan');
-            }
+        let effectiveTools = selectToolsForChannel(channel ?? undefined, this.tools, state.allowedTools);
+        let effectiveToolMap = new Map(effectiveTools.map(t => [t.name, t]));
+        if (effectiveTools.length !== this.tools.length) {
+            logger.info(`🔒 tools for ${channel ?? 'unknown'}: ${effectiveTools.length}/${this.tools.length}`, 'cyan');
         }
 
         // Phase: ルーチンカバレッジによるスキル description 短縮（トークン削減）
@@ -449,7 +429,9 @@ export class FunctionCallingSession {
                         try {
                             const envObj = state.environmentState ? JSON.parse(state.environmentState) : null;
                             if (envObj?.botPosition) {
-                                const wk = WorldKnowledgeService.getInstance();
+                                const serverId = state.requestEnvelope?.minecraft?.serverId;
+                                const wk = WorldKnowledgeService.forServer(serverId);
+                                if (!wk) return null;
                                 const pos = envObj.botPosition;
                                 return await wk.buildContextForPosition(
                                     { x: Math.floor(pos.x), y: Math.floor(pos.y), z: Math.floor(pos.z) },
@@ -558,518 +540,111 @@ export class FunctionCallingSession {
         try {
             const maxIter = state.maxIterations
                 ?? (isEmergency ? FunctionCallingSession.MAX_ITERATIONS_EMERGENCY : FunctionCallingSession.MAX_ITERATIONS);
-            while (iteration < maxIter) {
-                // ── 中断チェック ──
-                if (signal?.aborted) throw new Error('Task aborted');
-
-                if (Date.now() - startTime > FunctionCallingSession.MAX_TOTAL_TIME_MS) {
-                    logger.error('⏱ FunctionCallingAgent: 総実行時間超過 (5分)');
-                    break;
-                }
-
-                // ── ユーザーフィードバック（最新のみエフェメラル注入用に保持） ──
-                let latestFeedback: string | null = null;
-                if (this.pendingFeedback.length > 0) {
-                    // 最新のフィードバックのみ使用し、古いものは破棄
-                    latestFeedback = this.pendingFeedback[this.pendingFeedback.length - 1];
-                    this.pendingFeedback.length = 0;
-                    logger.warn(`📝 フィードバックをエフェメラル注入: ${latestFeedback}`);
-                }
-
-                // ── コンテキストウィンドウのトリミング ──
-                const trimmed = trimContext(messages, { maxContextTokens: 16000 });
-                if (trimmed.length < messages.length) {
-                    logger.debug(`コンテキストトリミング: ${messages.length} → ${trimmed.length} メッセージ`);
-                    messages.length = 0;
-                    messages.push(...trimmed);
-                }
-
-                // ── 一時的な思考/感情コンテキストを注入（LLM呼び出し後に除去） ──
-                const ephemeralMessages: BaseMessage[] = [];
-                // ── 初期記憶コンテキスト (初回のみ) ──
-                if (iteration === 0 && state.getInitialMemory) {
+            const kernelModel: FcaModel = {
+                next: async (request, child) => {
+                    child.throwIfAborted();
+                    const names = new Set(request.tools.map(tool => tool.name));
+                    const boundTools = effectiveTools.filter(tool => names.has(tool.name));
+                    const bound = modelSelector.bindTools(boundTools);
+                    const lc = this.sanitizeMessagesForProvider(fcaHistoryToLangChain(request.system, request.messages));
+                    const callAbort = new AbortController();
+                    const callTimeout = setTimeout(() => callAbort.abort(), modelSelector.timeoutMs);
+                    const onChildAbort = () => callAbort.abort();
+                    if ('addEventListener' in child) {
+                        (child as AbortSignal).addEventListener('abort', onChildAbort, { once: true });
+                    }
+                    activeCallAbort = callAbort;
+                    this.relaxAbortSignalListenerLimit(callAbort.signal);
                     try {
-                        const initialMem = await state.getInitialMemory();
-                        if (initialMem) {
-                            ephemeralMessages.push(new SystemMessage(`【初期記憶コンテキスト】\n${initialMem}`));
+                        const response = state.onStreamSentence
+                            ? await this.streamLlmResponse(bound as any, lc, callAbort.signal, state.onStreamSentence)
+                            : await (bound as any).invoke(lc, { signal: callAbort.signal }) as AIMessage;
+                        child.throwIfAborted();
+                        const usage = (response as AIMessage & { usage_metadata?: { input_tokens?: number; output_tokens?: number } })?.usage_metadata;
+                        if (usage) {
+                            tokenTracker.record(modelSelector.modelName || 'unknown', 'FunctionCallingAgent',
+                                usage.input_tokens || 0, usage.output_tokens || 0).catch(() => { });
                         }
+                        const content = typeof response.content === 'string' ? response.content : '';
+                        if (content) this.thinkingManager.addThought(content);
+                        const toolCalls = (response.tool_calls ?? []).map((call: { id?: string; name: string; args?: unknown }) => ({
+                            id: call.id ?? '', name: call.name, arguments: call.args,
+                        }));
+                        return { content, toolCalls };
+                    } finally {
+                        clearTimeout(callTimeout);
+                        activeCallAbort = null;
+                        if ('removeEventListener' in child) {
+                            (child as AbortSignal).removeEventListener('abort', onChildAbort);
+                        }
+                    }
+                },
+            };
+            const kernelResult = await runConversationFca({
+                system: systemPrompt, goal, tools: effectiveTools, model: kernelModel,
+                signal: signal ?? new AbortController().signal,
+                maxTurns: maxIter, maxElapsedMs: FunctionCallingSession.MAX_TOTAL_TIME_MS,
+                needsTools: state.needsTools,
+                filterCalls: (calls) => calls.filter(call => {
+                    if (call.name === 'task-complete' || call.name === 'update-plan') return true;
+                    const args = call.arguments && typeof call.arguments === 'object' && !Array.isArray(call.arguments)
+                        ? call.arguments as Record<string, unknown> : {};
+                    return !this.loopDetector.isCallBlocked(call.name, args);
+                }),
+                onTools: (results) => {
+                    try { state.onToolsExecuted(messages, results); } catch { /* fire-and-forget */ }
+                    this.loopDetector.recordAndCheck(results.map(result => ({ name: result.toolName, args: result.args })), results);
+                },
+                ephemeral: async (turn) => {
+                    const extra: { role: 'system' | 'user'; content: string }[] = [];
+                    if (turn === 1 && state.getInitialMemory) {
+                        const initial = await state.getInitialMemory();
+                        if (initial) extra.push({ role: 'system', content: `【初期記憶コンテキスト】\n${initial}` });
+                    }
+                    if (this.pendingFeedback.length) {
+                        extra.push({ role: 'user', content: `ユーザーからのフィードバック: ${this.pendingFeedback[this.pendingFeedback.length - 1]}` });
+                        this.pendingFeedback.length = 0;
+                    }
+                    if (this._pendingNudge) { extra.push({ role: 'system', content: this._pendingNudge }); this._pendingNudge = null; }
+                    if (this._pendingPlanUpdate) {
+                        extra.push({ role: 'system', content: `【プラン更新】\n${this._pendingPlanUpdate}` });
+                        this._pendingPlanUpdate = null;
+                    }
+                    try {
+                      const effects = this.blackboardAccessor()?.activeEffects;
+                      if (effects?.length) extra.push({ role: 'system', content: `⚠️ 【アクティブ状態効果】${effects.map(e => `${e.name}(Lv${e.amplifier + 1})`).join(', ')}` });
                     } catch { /* optional */ }
-                }
-                if (iteration > 0 && this.thinkingManager.hasThoughts()) {
-                    const thinkingContext = this.thinkingManager.buildThinkingContext();
-                    if (thinkingContext) {
-                        const msg = new SystemMessage(thinkingContext);
-                        ephemeralMessages.push(msg);
-                    }
-                }
-                if (iteration > 0 && state.emotionState.current) {
-                    const msg = new SystemMessage(
-                        `[感情更新] 現在の感情: ${state.emotionState.current.emotion} ` +
-                        `(joy=${state.emotionState.current.parameters.joy}, ` +
-                        `trust=${state.emotionState.current.parameters.trust}, ` +
-                        `anticipation=${state.emotionState.current.parameters.anticipation})`
-                    );
-                    ephemeralMessages.push(msg);
-                }
-                // ── インベントリ差分注入（Minecraft: LLMに在庫の変化を認識させる） ──
-                if (iteration > 0 && state.getInventoryDiff) {
-                    const inventoryDiff = state.getInventoryDiff();
-                    if (inventoryDiff) {
-                        ephemeralMessages.push(new SystemMessage(inventoryDiff));
-                    }
-                }
-                // ── ステータスエフェクト注入 ──
-                if (this.blackboardAccessor) {
-                    const effects = this.blackboardAccessor()?.activeEffects;
-                    if (effects && effects.length > 0) {
-                        const effectText = effects.map(e => `${e.name}(Lv${e.amplifier + 1})`).join(', ');
-                        ephemeralMessages.push(new SystemMessage(`⚠️ 【アクティブ状態効果】${effectText}`));
-                    }
-                }
-                // ── フィードバックをエフェメラル注入 ──
-                if (latestFeedback) {
-                    ephemeralMessages.push(new HumanMessage(`ユーザーからのフィードバック: ${latestFeedback}`));
-                }
-                // ── journalSummary 注入 ──
-                if (state.getJournalSummary) {
-                    const summary = state.getJournalSummary();
-                    if (summary) {
-                        ephemeralMessages.push(new SystemMessage(`【旅程サマリー】\n${summary}`));
-                    }
-                }
-                // ── 現在のサブタスク注入 ──
-                if (state.getActiveSubtaskInfo) {
-                    const info = state.getActiveSubtaskInfo();
-                    if (info) {
-                        ephemeralMessages.push(new SystemMessage(info));
-                    }
-                }
-                // ── プラン更新通知注入 ──
-                if (this._pendingPlanUpdate) {
-                    ephemeralMessages.push(new SystemMessage(`【プラン更新】\n${this._pendingPlanUpdate}`));
-                    this._pendingPlanUpdate = null;
-                }
-                // ── ナッジメッセージ注入（前回イテレーションからの繰越） ──
-                if (this._pendingNudge) {
-                    ephemeralMessages.push(new SystemMessage(this._pendingNudge));
-                    this._pendingNudge = null;
-                }
-                messages.push(...ephemeralMessages);
-
-                // ── LLM 呼び出し（タイムアウト付き） ──
-                signal?.throwIfAborted();
-                const callAbort = new AbortController();
-                const currentTimeoutMs = modelSelector.timeoutMs;
-                const callTimeout = setTimeout(
-                    () => callAbort.abort(),
-                    currentTimeoutMs,
-                );
-                activeCallAbort = callAbort;
-                this.relaxAbortSignalListenerLimit(callAbort.signal);
-
-                const llmStart = Date.now();
-                let response: AIMessage;
-
-                // Anthropic API: SystemMessage は最初の1つのみ許可。
-                // 2つ目以降の SystemMessage を HumanMessage に変換する。
-                const sanitizedMessages = this.sanitizeMessagesForProvider(messages);
-
-                try {
-                    if (state.onStreamSentence) {
-                        response = await this.streamLlmResponse(
-                            effectiveModelWithTools as any, sanitizedMessages, callAbort.signal, state.onStreamSentence,
-                        );
-                    } else {
-                        response = (await (effectiveModelWithTools as any).invoke(sanitizedMessages, {
-                            signal: callAbort.signal,
-                        })) as AIMessage;
-                    }
-                    clearTimeout(callTimeout);
-                    signal?.throwIfAborted();
-                    const usage = (response as AIMessage & { usage_metadata?: { input_tokens?: number; output_tokens?: number } })?.usage_metadata;
-                    if (usage) {
-                        tokenTracker.record(
-                            modelSelector.modelName || 'unknown',
-                            'FunctionCallingAgent',
-                            usage.input_tokens || 0,
-                            usage.output_tokens || 0,
-                        ).catch(() => { });
-                    }
-                    logger.success(`⏱ LLM応答: ${Date.now() - llmStart}ms (iteration ${iteration + 1})`);
-                } catch (e: unknown) {
-                    clearTimeout(callTimeout);
-                    activeCallAbort = null;
-                    if (signal?.aborted) throw new Error('Task aborted');
-                    if ((e instanceof Error && e.name === 'AbortError') || callAbort.signal.aborted) {
-                        throw new Error(
-                            `LLM timeout (${currentTimeoutMs / 1000}s)`,
-                        );
-                    }
-                    throw e;
-                }
-                activeCallAbort = null;
-
-                // ephemeral メッセージを除去（蓄積防止）
-                if (ephemeralMessages.length > 0) {
-                    messages.splice(messages.length - ephemeralMessages.length, ephemeralMessages.length);
-                }
-
-                messages.push(response);
-
-                // ── 思考過程を記録（content があれば） ──
-                const thinkingContent =
-                    typeof response.content === 'string' ? response.content : '';
-                if (thinkingContent) {
-                    lastThinkingContent = thinkingContent;
-                    this.thinkingManager.addThought(thinkingContent);
-                    logger.info(`💭 思考: ${thinkingContent.substring(0, 150)}`, 'cyan');
-                    await this.thinkingManager.maybeSummarizeThinking(FunctionCallingSession.MODEL_NAME);
-                    signal?.throwIfAborted();
-                    if (state.context?.platform === 'minecraft' || state.context?.platform === 'minebot') {
-                        void this.taskTreePublisher.postDetailedLogToMinebotUi(
-                            goal, 'thinking', 'info', 'FunctionCallingAgent', thinkingContent,
-                        );
-                    }
-                }
-
-                // ── ツール呼び出しチェック ──
-                const toolCalls = response.tool_calls || [];
-
-                if (toolCalls.length === 0) {
-                    consecutiveTextOnly++;
-
-                    // ── 分類駆動の即完了: needsTools=false かつ初回テキスト応答を完了扱いにする ──
-                    // 安全条件: (1) ツールが一度も使われていない (2) 初回イテレーション (3) 応答が十分な長さ
-                    // ツール使用後の即完了は禁止 — LLM が途中で止まるのを防ぐ
-                    const textContent = typeof thinkingContent === 'string' ? thinkingContent.trim() : '';
-                    const MIN_SUBSTANTIVE_LENGTH = 30;
-                    if (state.needsTools === false && stepCounter === 0 && iteration === 0 && textContent.length >= MIN_SUBSTANTIVE_LENGTH) {
-                        const cleanContent = stripAssistantContentPrefix(textContent);
-                        if (cleanContent.length > 0) {
-                            logger.info(`⚡ 分類駆動即完了: needsTools=false → テキスト応答で完了 (${iteration + 1}イテレーション, ${((Date.now() - startTime) / 1000).toFixed(1)}s)`);
-
-                            this.taskTreePublisher.publishTaskTree({
-                                status: 'completed',
-                                goal,
-                                strategy: cleanContent,
-                                hierarchicalSubTasks: steps,
-                                currentSubTaskId: null,
-                            }, state.context?.platform ?? null, state.channelId, state.taskId, state.onTaskTreeUpdate);
-
-                            this.thinkingManager.resetThinkingState();
-
-                            return {
-                                taskTree: {
-                                    status: 'completed' as const,
-                                    goal,
-                                    strategy: cleanContent,
-                                    recoveryStatus: 'idle' as const,
-                                    lastFailureType: null,
-                                    recoveryAttempts: 0,
-                                    hierarchicalSubTasks: steps,
-                                    subTasks: null,
-                                } as TaskTreeState,
-                                recoveryStatus: 'idle' as const,
-                                recoveryAttempts: 0,
-                                lastFailureType: undefined,
-                                isEmergency: false,
-                                messages,
-                                forceStop: false,
-                                lastAssistantContent: cleanContent,
-                            };
-                        }
-                    }
-
-                    // UI に思考を反映
-                    this.taskTreePublisher.publishTaskTree({
-                        status: 'in_progress',
-                        goal,
-                        strategy: `思考中... (${consecutiveTextOnly}/${MAX_CONSECUTIVE_TEXT_ONLY})`,
-                        currentThinking: lastThinkingContent,
-                        hierarchicalSubTasks: steps,
-                        currentSubTaskId: steps[steps.length - 1]?.id ?? null,
-                    }, state.context?.platform ?? null, state.channelId, state.taskId, state.onTaskTreeUpdate);
-
-                    // テキストのみ応答が続きすぎたら強制終了
-                    if (consecutiveTextOnly >= MAX_CONSECUTIVE_TEXT_ONLY) {
-                        logger.warn(`⚠ テキストのみ応答が${MAX_CONSECUTIVE_TEXT_ONLY}回連続 → ループ終了`);
-                        break;
-                    }
-
-                    // ツール呼び出しなし → 思考のみ。ループを継続して次のアクションを促す
-                    const relevantRecoveryFailure = pendingRecoveryFailure ?? lastRecoverableFailure;
-                    const needsMinecraftRecovery = ToolExecutor.requiresMinecraftRecoveryResponse(
-                        state.context,
-                        relevantRecoveryFailure,
-                        thinkingContent,
-                    );
-
-                    if (needsMinecraftRecovery && forcedRecoveryAttempts < 2) {
-                        forcedRecoveryAttempts++;
-                        messages.push(
-                            new SystemMessage(
-                                `直前のツール失敗は recoverable (${relevantRecoveryFailure?.failureType ?? 'unknown'}) です。` +
-                                '失敗報告だけで終了せず、次のいずれかを必ず行ってください: ' +
-                                '1. 別手段で再試行する 2. 足りない物や条件を具体的に1つ質問する。',
-                            ),
-                        );
-                        logger.warn(`🔁 Minecraft recovery forced after ${relevantRecoveryFailure?.toolName}`);
-                        iteration++;
-                        continue;
-                    }
-
-                    // 次のアクションを促すプロンプト（エスカレーション付き） → エフェメラルとして次イテレーションで注入
-                    this._pendingNudge = consecutiveTextOnly >= 2
-                        ? 'これが最後の警告です。次の応答では必ずツールを呼び出すか、task-complete を呼んでください。テキストだけの応答は無効です。'
-                        : 'ツール呼び出しがありませんでした。content（テキスト）はユーザーに届きません。' +
-                          '回答が準備できているなら task-complete の summary に完全な回答（表・箇条書き等を含む）を書いてください。' +
-                          'まだ途中なら次のツールを呼び出してください。';
-                    logger.info(`🔄 テキストのみ応答 (${consecutiveTextOnly}/${MAX_CONSECUTIVE_TEXT_ONLY}) → 次のアクションを促して継続`, 'cyan');
-                    iteration++;
-                    continue;
-                }
-
-                // ツール呼び出しがあった → カウンタリセット
-                consecutiveTextOnly = 0;
-
-                // ── LoopDetector: ブロック済みツールのフィルタリング ──
-                const blockedCalls: Array<{ call: typeof toolCalls[0]; reason: string }> = [];
-                const passedToolCalls = toolCalls.filter(tc => {
-                    if (tc.name === 'task-complete' || tc.name === 'update-plan') return true;
-
-                    if (this.loopDetector.isCallBlocked(tc.name, tc.args)) {
-                        blockedCalls.push({ call: tc, reason: 'LoopDetector によりブロック済み' });
-                        return false;
-                    }
-                    return true;
-                });
-
-                if (blockedCalls.length > 0) {
-                    for (const { call, reason } of blockedCalls) {
-                        logger.info(`[LoopDetector] 🧠 ブロック: ${call.name} — ${reason}`, 'yellow');
-                        messages.push(new ToolMessage({
-                            content: `結果: 失敗 詳細: ⚠️ ${call.name} の実行がブロックされました。理由: ${reason} 別のアプローチを試してください。 [failure_type=loop_blocked recoverable=true]`,
-                            tool_call_id: call.id || `call_${Date.now()}`,
-                        }));
-                    }
-
-                    if (passedToolCalls.length === 0) {
-                        consecutiveBlockedOnly++;
-                        if (consecutiveBlockedOnly >= MAX_CONSECUTIVE_BLOCKED_ONLY) {
-                            logger.warn(`⚠ ブロックのみ${MAX_CONSECUTIVE_BLOCKED_ONLY}回連続 → イテレーション消費`);
-                            iteration++;
-                            consecutiveBlockedOnly = 0;
-                        }
-                        continue;
-                    }
-                }
-
-                consecutiveBlockedOnly = 0;
-
-                // ── ツール実行 ──
-                logger.info(`🔧 ${passedToolCalls.length}個のツールを実行中...`, 'cyan');
-
-                const execResult = await this.toolExecutor.executeToolCalls(
-                    passedToolCalls,
-                    effectiveToolMap,
-                    messages,
-                    {
-                        goal,
-                        platform: state.context?.platform ?? null,
-                        channelId: state.channelId,
-                        taskId: state.taskId,
-                        context: state.context,
-                        steps,
-                        stepCounter,
-                        lastThinkingContent,
-                        onToolStarting: state.onToolStarting,
-                        onTaskTreeUpdate: state.onTaskTreeUpdate,
-                    },
-                    signal,
-                );
-                stepCounter = execResult.stepCounter;
-                const iterationResults = execResult.results;
-
-                // ── task-complete 検出 → タスク完了 ──
-                const completeCall = toolCalls.find((tc) => tc.name === 'task-complete');
-                if (completeCall) {
-                    // Guard: needsTools=true なのに task-complete 以外のツールを一度も使わず完了しようとした場合、
-                    // 実際の作業をさせるためにリジェクトして継続する（最大1回）
-                    const onlyTaskComplete = toolCalls.length === 1 && toolCalls[0].name === 'task-complete';
-                    if (state.needsTools !== false && onlyTaskComplete && stepCounter === 0 && iteration < maxIter - 1) {
-                        logger.warn('⚠️ task-complete rejected: needsTools=true but no tools used yet. Continuing loop.');
-                        messages.push(new ToolMessage({
-                            tool_call_id: completeCall.id || 'task-complete',
-                            content: 'Rejected: you have not used any tools yet. This task requires tool use (e.g., search, fetch). ' +
-                                'Gather the needed information first, then call task-complete with the full answer in summary.',
-                        }));
-                        iteration++;
-                        continue;
-                    }
-
-                    const summaryArg = completeCall.args?.summary;
-                    const trimmedSummary =
-                        typeof summaryArg === 'string' && summaryArg.trim().length > 0
-                            ? summaryArg.trim()
-                            : '';
-                    const summary = trimmedSummary.length > 0 ? trimmedSummary : 'タスク完了';
-
-                    const fromThinking =
-                        typeof thinkingContent === 'string' && thinkingContent.trim()
-                            ? stripAssistantContentPrefix(thinkingContent)
-                            : typeof lastThinkingContent === 'string' && lastThinkingContent.trim()
-                                ? stripAssistantContentPrefix(lastThinkingContent)
-                                : undefined;
-
-                    // task-complete の summary をユーザー向け最終文の正とする（言語・ドメイン非依存）。
-                    // summary が空のときだけ思考本文へフォールバック。
-                    const lastAssistantContent =
-                        trimmedSummary.length > 0 ? trimmedSummary : fromThinking;
-
-                    logger.success(`✅ FunctionCallingAgent: タスク完了 (${iteration + 1}イテレーション, ${((Date.now() - startTime) / 1000).toFixed(1)}s)`);
-                    logger.info(`   応答: ${summary.substring(0, 200)}`);
-
-                    const awaitingUser = !!(lastRecoverableFailure && /[?？]/.test(summary));
-
-                    this.taskTreePublisher.publishTaskTree({
-                        status: awaitingUser ? 'in_progress' : 'completed',
-                        goal,
-                        strategy: summary,
-                        recoveryStatus: awaitingUser ? 'awaiting_user' : 'idle',
-                        lastFailureType: (pendingRecoveryFailure ?? lastRecoverableFailure)?.failureType ?? null,
-                        recoveryAttempts: forcedRecoveryAttempts,
-                        hierarchicalSubTasks: steps,
-                        currentSubTaskId: null,
-                    }, state.context?.platform ?? null, state.channelId, state.taskId, state.onTaskTreeUpdate);
-
-                    this.thinkingManager.resetThinkingState();
-
-                    return {
-                        taskTree: {
-                            status: awaitingUser ? 'in_progress' : 'completed',
-                            goal,
-                            strategy: summary,
-                            recoveryStatus: awaitingUser ? 'awaiting_user' : 'idle',
-                            lastFailureType: (pendingRecoveryFailure ?? lastRecoverableFailure)?.failureType ?? null,
-                            recoveryAttempts: forcedRecoveryAttempts,
-                            hierarchicalSubTasks: steps,
-                            subTasks: null,
-                        } as TaskTreeState,
-                        recoveryStatus: awaitingUser ? 'awaiting_user' : 'idle',
-                        recoveryAttempts: forcedRecoveryAttempts,
-                        lastFailureType: (pendingRecoveryFailure ?? lastRecoverableFailure)?.failureType,
-                        isEmergency,
-                        messages,
-                        forceStop: false,
-                        lastAssistantContent,
-                    };
-                }
-
-                // ── LoopDetector: 繰り返し失敗の検出（前帯状皮質） ──
-                const loopDetection = this.loopDetector.recordAndCheck(passedToolCalls, iterationResults);
-
-                if (loopDetection.detected) {
-                    logger.warn(`[LoopDetector] 🔴 ループ検出: ${loopDetection.summary}`);
-
-                    // ブロック対象ツールを effectiveToolMap から除去
-                    if (loopDetection.blockedTools.size > 0) {
-                        const availableTools = [...effectiveToolMap.values()].filter(
-                            t => !loopDetection.blockedTools.has(t.name),
-                        );
-                        effectiveModelWithTools = modelSelector.bindTools(availableTools);
-                        effectiveToolMap = new Map(availableTools.map(t => [t.name, t]));
-                    }
-
-                    // エスカレーション推奨 → モデルを上げる
-                    // Minecraft ではツール失敗はゲーム状態起因が多く、モデル能力不足ではない。
-                    // エスカレーションすると応答速度が低下するだけなのでスキップ。
-                    const isMinecraftPlatform = state.context?.platform === 'minecraft' || state.context?.platform === 'minebot';
-                    if (loopDetection.needsEscalation && !isMinecraftPlatform) {
-                        if (modelSelector.escalate('LoopDetector: 高失敗率')) {
-                            effectiveModelWithTools = modelSelector.bindTools(
-                                [...effectiveToolMap.values()],
-                            );
-                        }
-                    }
-
-                    // ループ回避プロンプトを注入
-                    if (loopDetection.breakingPrompt) {
-                        messages.push(new SystemMessage(loopDetection.breakingPrompt));
-                    }
-                }
-
-                const newRecoverableFailure = ToolExecutor.pickRecoverableFailure(iterationResults, state.context);
-                const madeSuccessfulProgress = iterationResults.some((result) => result.success);
-                if (newRecoverableFailure) {
-                    pendingRecoveryFailure = newRecoverableFailure;
-                    lastRecoverableFailure = newRecoverableFailure;
-                } else {
-                    pendingRecoveryFailure = null;
-                    forcedRecoveryAttempts = 0;
-                    if (madeSuccessfulProgress) {
-                        lastRecoverableFailure = null;
-                    }
-                }
-
-                // UI 更新（ツール実行後）
-                this.taskTreePublisher.publishTaskTree({
-                    status: 'in_progress',
-                    goal,
-                    strategy: pendingRecoveryFailure
-                        ? `${stepCounter}ステップ完了 / recovery ${pendingRecoveryFailure.failureType ?? 'unknown'}`
-                        : `${stepCounter}ステップ完了`,
-                    currentThinking: lastThinkingContent,
-                    recoveryStatus: pendingRecoveryFailure ? 'retrying' : 'idle',
-                    lastFailureType: (pendingRecoveryFailure ?? lastRecoverableFailure)?.failureType ?? null,
-                    recoveryAttempts: forcedRecoveryAttempts,
-                    hierarchicalSubTasks: steps,
-                    currentSubTaskId: null,
-                }, state.context?.platform ?? null, state.channelId, state.taskId, state.onTaskTreeUpdate);
-
-                // ── 非同期感情再評価をトリガー（fire-and-forget） ──
-                if (iterationResults.length > 0) {
                     try {
-                        state.onToolsExecuted(messages, iterationResults);
-                    } catch (e) {
-                        // fire-and-forget: エラーは無視
-                    }
-                }
-
-                iteration++;
-            }
-
-            // 最大イテレーション到達
-            logger.warn(`⚠ FunctionCallingAgent: 最大イテレーション(${maxIter})に到達`);
-
+                      const thinking = this.thinkingManager.buildThinkingContext();
+                      if (thinking) extra.push({ role: 'system', content: thinking });
+                    } catch { /* optional */ }
+                    return extra;
+                },
+            });
+            const summaryValue = kernelResult.value && typeof kernelResult.value === 'object'
+                && typeof (kernelResult.value as { summary?: unknown }).summary === 'string'
+                ? (kernelResult.value as { summary: string }).summary.trim() : '';
+            const summary = summaryValue || kernelResult.content.trim();
+            this.thinkingManager.resetThinkingState();
+            const complete = kernelResult.stop === 'terminal' || kernelResult.stop === 'complete';
+            logger.info(complete
+                ? `✅ FunctionCallingAgent: タスク完了 (${kernelResult.turns}イテレーション)`
+                : `⚠ FunctionCallingAgent: 停止 ${kernelResult.stop} (${maxIter})`);
             this.taskTreePublisher.publishTaskTree({
-                status: 'error',
-                goal,
-                strategy: '最大イテレーション数に到達',
-                currentThinking: lastThinkingContent,
-                recoveryStatus: (pendingRecoveryFailure ?? lastRecoverableFailure) ? 'failed_terminal' : 'idle',
-                lastFailureType: (pendingRecoveryFailure ?? lastRecoverableFailure)?.failureType ?? null,
-                recoveryAttempts: forcedRecoveryAttempts,
-                hierarchicalSubTasks: steps,
-                currentSubTaskId: null,
+                status: complete ? 'completed' : 'error',
+                goal, strategy: complete ? (summary || goal) : '最大イテレーション数に到達',
+                hierarchicalSubTasks: steps, currentSubTaskId: null,
             }, state.context?.platform ?? null, state.channelId, state.taskId, state.onTaskTreeUpdate);
-
             return {
                 taskTree: {
-                    status: 'error',
-                    goal,
-                    strategy: '最大イテレーション数に到達',
-                    recoveryStatus: (pendingRecoveryFailure ?? lastRecoverableFailure) ? 'failed_terminal' : 'idle',
-                    lastFailureType: (pendingRecoveryFailure ?? lastRecoverableFailure)?.failureType ?? null,
-                    recoveryAttempts: forcedRecoveryAttempts,
-                    hierarchicalSubTasks: steps,
-                    subTasks: null,
+                    status: complete ? 'completed' : 'error',
+                    goal, strategy: complete ? (summary || goal) : '最大イテレーション数に到達',
+                    recoveryStatus: 'idle' as const, lastFailureType: null, recoveryAttempts: 0,
+                    hierarchicalSubTasks: steps, subTasks: null,
                 } as TaskTreeState,
-                recoveryStatus: (pendingRecoveryFailure ?? lastRecoverableFailure) ? 'failed_terminal' : 'idle',
-                recoveryAttempts: forcedRecoveryAttempts,
-                lastFailureType: (pendingRecoveryFailure ?? lastRecoverableFailure)?.failureType,
-                isEmergency,
-                messages,
-                forceStop: false,
+                recoveryStatus: 'idle' as const, recoveryAttempts: 0, isEmergency,
+                messages: fcaHistoryToLangChain(systemPrompt, kernelResult.messages),
+                forceStop: false, lastAssistantContent: summary || undefined,
             };
         } catch (error) {
             signal?.throwIfAborted();

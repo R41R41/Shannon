@@ -24,9 +24,6 @@ import { EmbeddingService } from './embeddingService.js';
 import {
   ShannonMemoryService,
 } from './shannonMemoryService.js';
-import {
-  PersonMemoryService,
-} from './personMemoryService.js';
 import { IPersonMemory } from '../../models/PersonMemory.js';
 import { IShannonMemory } from '../../models/ShannonMemory.js';
 import type {
@@ -93,14 +90,12 @@ export class ScopedMemoryService {
   private constructor() {
     const embeddingService = EmbeddingService.getInstance();
     const shannonService = ShannonMemoryService.getInstance();
-    const personService = PersonMemoryService.getInstance();
 
     this.scopeDeriver = new ScopeDeriver();
-    this.recallEngine = new RecallEngine(embeddingService, personService);
-    this.formatter = new MemoryFormatter(shannonService, personService);
+    this.recallEngine = new RecallEngine(embeddingService);
+    this.formatter = new MemoryFormatter(shannonService);
     this.writebackProcessor = new WritebackProcessor(
       shannonService,
-      personService,
       (envelope: RequestEnvelope) => this.recallEngine.resolveCanonicalUserId(envelope),
     );
 
@@ -272,7 +267,6 @@ export class ScopedMemoryService {
     // (accessed through processPendingWritebacks path, but also callable directly)
     const { AutonomyUpdater } = await import('./writeback/AutonomyUpdater.js');
     const autonomyUpdater = new AutonomyUpdater(
-      PersonMemoryService.getInstance(),
       this.scopeDeriver,
       (env: RequestEnvelope) => this.recallEngine.resolveCanonicalUserId(env),
     );

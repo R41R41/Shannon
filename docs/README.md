@@ -12,7 +12,7 @@
 
 | ドキュメント                                                       | 内容                                                        |
 | ------------------------------------------------------------ | --------------------------------------------------------- |
-| **[architecture-current.md](./architecture-current.md)**     | **現行アーキテクチャサマリ**（2026-03）。LLM グラフ・Minebot・自己改善・メモリ・全主要パス。 |
+| **[architecture-current.md](./architecture-current.md)**     | **現行アーキテクチャサマリ**（2026-08-29）。実行核の分裂、LINE分離、記憶混在禁止、ツール2袋。 |
 | [architecture-llm-minebot.md](./architecture-llm-minebot.md) | LLM グラフ・Minebot・自己改善の**詳細設計書**（長文）。                       |
 
 
@@ -47,6 +47,8 @@
 
 
 ## 2026-08-28の責務分離
+
+- [FCA核：送信先・記憶・ツールの注入](refactor-fca-kernel.md)：RF-04（2026-08-29）。Radar/LINE/Discordが同じloopを使い、catalogだけを分ける。
 
 - [Discordテキストの会話限定返信・履歴取得](refactor-discord-conversation.md)：RF-03第6段階。返信/履歴のport、SDK側の宛先・権限確認、実行ごとのツール所有、送信結果/中断。
 

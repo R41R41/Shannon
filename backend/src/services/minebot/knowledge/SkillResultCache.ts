@@ -28,8 +28,8 @@ export class SkillResultCache {
   private cache = new Map<string, CacheEntry>();
   private lastCleanup = Date.now();
 
-  private makeKey(skillName: string, args: string[]): string {
-    return `${skillName}:${args.join(',')}`;
+  private makeKey(skillName: string, args: string[], serverId: string): string {
+    return `${serverId}:${skillName}:${args.join(',')}`;
   }
 
   private distance(a: { x: number; y: number; z: number }, b: { x: number; y: number; z: number }): number {
@@ -40,10 +40,11 @@ export class SkillResultCache {
     return skillName in CACHEABLE_SKILLS;
   }
 
-  get(skillName: string, args: string[], currentPos: { x: number; y: number; z: number }): CacheEntry['result'] | null {
+  get(skillName: string, args: string[], currentPos: { x: number; y: number; z: number }, serverId: string): CacheEntry['result'] | null {
+    if (!serverId) return null;
     if (Date.now() - this.lastCleanup > 60000) this.cleanup();
 
-    const key = this.makeKey(skillName, args);
+    const key = this.makeKey(skillName, args, serverId);
     const entry = this.cache.get(key);
     if (!entry) return null;
 
@@ -61,10 +62,11 @@ export class SkillResultCache {
     return entry.result;
   }
 
-  set(skillName: string, args: string[], result: CacheEntry['result'], currentPos: { x: number; y: number; z: number }): void {
+  set(skillName: string, args: string[], result: CacheEntry['result'], currentPos: { x: number; y: number; z: number }, serverId: string): void {
+    if (!serverId) return;
     const ttlMs = CACHEABLE_SKILLS[skillName];
     if (!ttlMs) return;
-    const key = this.makeKey(skillName, args);
+    const key = this.makeKey(skillName, args, serverId);
     this.cache.set(key, { result, position: currentPos, createdAt: Date.now(), ttlMs });
   }
 

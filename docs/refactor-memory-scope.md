@@ -48,4 +48,4 @@ VM devのNode22.21.1でbackend250件＋frontend18件＝268件合格（前回よ�
 
 モックで2利用者、DM→公開、別guild/channel/conversation/thread、別server/world/dimension、同名利用者、不明scope、旧ラベル、dedup/eviction、意味検索の候補と再取得、旧/新ツール、初期記憶、episode、queue、自律状態、非同期snapshot、保存失敗を確認する。実DBクエリプラン・index・同時write競合は未検証。実Discord/Firebase/LLM、ゲーム、DB移行は実行しない。
 
-残るもの：scope付き人物記憶、旧データ分類dry run、訂正/忘却と派生記憶、キューlease/retry/idempotency、全履歴/checkpointer/WorldKnowledge/共有routineの出典範囲、Web一斉配信と全チャネル宛先認可。DB記憶経路の修正を、全体のプライバシー保証やF04/F05完了とは扱わない。
+2026-08-29: 経路ごとのストア宣言（`modules/memory/stores.ts`）を追加。旧 PersonMemory の会話書き戻しと relationship 更新は拒否。LINE/Radar は Discord の ShannonMemory / 人物引用を使えない。WorldKnowledge は operator の `dev:`/`prod:` serverId のみ（表示名・host では開かない）。Minecraft タスク引継ぎは server+world。Web の durable memory は audience 契約まで拒否が完成。旧データ分類は audit CLI の dry-run のみで自動移行しない。Minecraft 長期記憶は `MINECRAFT_MEMORY_IDENTITIES` が空ならオフ。DB記憶経路の修正を全体のプライバシー保証や F04/F05 完了とは扱わない。

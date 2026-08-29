@@ -499,7 +499,7 @@ dev追加は`youtubeSubscriptionInbox.ts`と`youtubeDataApi.ts`、対象10テス
 
 YouTube候補だけを一度のLLM呼出で順位付けする専用ranker案は採用しない。ShannonのFunction Calling方式をRadar向けに分離し、取得元ごとの読み取りスキルをRadar専用FCAが必要に応じて呼び、最大5件の配信案を提出する。登録YouTubeだけでなく、X、Web、天気、Calendar、選択Notion、重要未読Gmail、許可Discordを同じ拡張形式で追加できるようにする。
 
-会話用FCAは感情・会話記憶・TaskEpisode・EventBus・多数の投稿ツールを持つため、定期Radarへそのまま流用しない。Radar専用FCAは一回限りのsessionで、会話記憶、人物記憶、旧EventBus、Discord/LINE transport、投稿・いいね・返信・既読化・削除の権限を持たない。利用可能なtool catalogはそのrunで注入された読み取りスキルと`submit_personal_digest`だけ。FCAの提出はdraftであり、送信ではない。
+会話用FCAは感情・会話記憶・TaskEpisode・EventBus・多数の投稿ツールを持つため、定期Radarへそのまま流用しない。共通なのはSDK非依存の`modules/fca`ループだけである。Radar専用compositionは一回限りのsessionで、会話記憶、人物記憶、旧EventBus、Discord/LINE transport、投稿・いいね・返信・既読化・削除の権限を持たない。利用可能なtool catalogはそのrunで注入された読み取りスキルと`submit_personal_digest`だけ。FCAの提出はdraftであり、送信ではない。
 
 ### laneと情報境界
 

@@ -8,6 +8,7 @@
 import { StructuredTool } from '@langchain/core/tools';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
+import { isTwitterWriteTool } from '../../../modules/access/toolCatalog.js';
 import { loadToolsFromDirectory } from '../../../utils/toolLoader.js';
 import { EmotionNode } from './nodes/EmotionNode.js';
 import { FunctionCallingAgent } from './nodes/FunctionCallingAgent.js';
@@ -37,10 +38,10 @@ export interface ShannonNodes {
 export async function initializeNodes(): Promise<ShannonNodes> {
   // 1. Load tools
   const toolsDir = join(__dirname, '../tools');
-  const tools = await loadToolsFromDirectory(toolsDir, {
+  const tools = (await loadToolsFromDirectory(toolsDir, {
     label: 'LLM',
     excludeDirs: ['memory'],
-  });
+  })).filter(tool => !isTwitterWriteTool(tool.name));
 
   // 2. Add memory tools
   const memoryTools = createMemoryTools();
