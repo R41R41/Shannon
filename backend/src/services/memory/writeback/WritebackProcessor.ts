@@ -13,6 +13,7 @@ import {
   ShannonMemoryInput,
 } from '../shannonMemoryService.js';
 import { IExchange } from '../../../models/PersonMemory.js';
+import type { MemoryCategory } from '../../../models/ShannonMemory.js';
 import type { RequestEnvelope } from '@shannon/common';
 import { logger } from '../../../utils/logger.js';
 import { ScopeDeriver, channelToSource } from '../recall/ScopeDeriver.js';
@@ -23,6 +24,15 @@ export interface ScopedWritebackInput {
   envelope: RequestEnvelope;
   conversationText: string;
   exchanges: IExchange[];
+}
+
+/** Every field is optional because the extraction model, not the schema, produces it. */
+interface ExtractedMemory {
+  category?: MemoryCategory;
+  content?: string;
+  feeling?: string;
+  importance?: number;
+  tags?: string[];
 }
 
 export class WritebackProcessor {
@@ -142,12 +152,12 @@ export class WritebackProcessor {
 
     const content = response.content.toString().trim();
     try {
-      const parsed = parseLlmJsonObject(content) as { memories?: Array<Record<string, unknown> & { importance?: number }> } | null;
-      if (!parsed?.memories || !Array.isArray(parsed.memories)) return;
+      const parsed = parseLlmJsonObject(content) as { memories?: unknown } | null;
+      if (!Array.isArray(parsed?.memories)) return;
 
-      for (const memory of parsed.memories) {
+      for (const memory of parsed.memories as ExtractedMemory[]) {
         if (!memory.category || !memory.content || !memory.tags) continue;
-        if (memory.importance < 4) continue;
+        if (typeof memory.importance !== 'number' || memory.importance < 4) continue;
 
         const memoryInput: ShannonMemoryInput = {
           category: memory.category,
