@@ -67,10 +67,10 @@
 
 ## 残る入力・本番切替条件
 
-1. dev専用Firebase project/ADC、テスト利用者のUID・管理者権限を確認する。現在prod利用者3件すべてUID未対応付け。対応付けなしで本番を切り替えない。
+1. dev専用Firebase project/ADC、テスト利用者のUID・管理者権限を確認する。**dev リハーサルは 2026-08-30 完了**（`docs/uid-migration-rehearsal.md`）。prod 利用者3件は UID 未対応付けのまま。対応付けなしで本番を切り替えない。
 2. Discord等のテストbotと送信先、LLM費用上限を決める。共有資格情報を使ってdevを起動しない。
 3. 管理コンソール限定・公開チャット停止・Mod認証必須という機能制限をレビューする。必要な利用経路の復旧を実装してからリリースする。
-4. dev限定実機試験、利用者移行のリハーサルと復旧確認、対象commit・native成果物・停止枠を確認する。
+4. dev限定実機試験、**dev UID 移行リハーサル（完了）**、**prod manifest 雛形生成（`prepare-prod-uid-manifest.mjs`）**、本番 apply 前の復旧確認、対象commit・native成果物・停止枠を確認する。
 5. 本番切替は別途実施。現時点で日付は未確定、GitHub push・新コードの本番反映はしていない。
 
 公式実装参照：[sodium-native](https://github.com/holepunchto/sodium-native)、[cmake-napi](https://github.com/holepunchto/cmake-napi)。

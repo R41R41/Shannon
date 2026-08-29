@@ -109,11 +109,38 @@ apply 後:
 
 apply 時に plan 出力先が既存だと `EEXIST` で終了コード 1 になるが、DB 更新は完了している場合がある。绑定確認は `db.users` の `firebaseUid` / `firebaseProjectId` を見る。
 
-## 5. 本番移行（別工程・未実施）
+## 5. 本番移行（別工程・未 apply）
+
+dev リハーサル成功後のみ。prod DB への apply は **Shannon-dev checkout から拒否**（`user-binding-migration.mjs` は `shannon_dev` 限定）。
+
+### 5a. manifest 雛形（読取のみ）
+
+prod `shannon.users` を読取専用で列挙し、レビュー用 template を Git 外へ生成:
+
+```bash
+cd /home/azureuser/Shannon-dev/backend
+node scripts/prepare-prod-uid-manifest.mjs --read-only \
+  --project-id YOUR_PROD_FIREBASE_PROJECT_ID \
+  --reviewed-by reviewer-id \
+  --out scripts/prod-user-binding-manifest.template.json
+```
+
+- 既定 source: `mongodb://127.0.0.1:27017/shannon`（**書込みしない**）
+- 出力は mode 0600。`_reviewNotes` に email / 既存 binding 状態を含む → **apply 前に除去**
+- 各 `uid` を Firebase Console で確認した値に置換
+
+### 5b. 切替手順
 
 - 書込み停止 → 最終 dump → 隔離 restore でリハーサル
-- prod manifest は **prod 利用者3件** の `_id` / レビュー済み UID / 権限
-- prod apply は shannon_dev リハーサル成功後のみ
+- prod manifest は **prod 利用者3件** の `_id` / レビュー済み UID / 権限を明示
+- prod apply は別 checkout・別手順で実施（本 repo の dev スクリプトからは不可）
+
+### 5c. 定期検証（dev）
+
+```bash
+cd /home/azureuser/Shannon-dev
+node scripts/verify-dev-uid-login.cjs --check-login
+```
 
 ## 拒否される例
 
