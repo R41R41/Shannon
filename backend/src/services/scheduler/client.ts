@@ -9,6 +9,7 @@ import fs from 'fs';
 import cron from 'node-cron';
 import { BaseClient } from '../common/BaseClient.js';
 import { getEventBus } from '../eventBus/index.js';
+import { deliverScheduledPostToLlm } from '../runtime/llmInboundDispatch.js';
 import { getWebNotificationHub } from '../web/webNotificationHub.js';
 import { logger } from '../../utils/logger.js';
 
@@ -74,13 +75,9 @@ export class Scheduler extends BaseClient {
           } as TwitterClientInput,
         });
       } else if (platform === 'twitter') {
-        this.eventBus.publish({
-          type: `llm:post_scheduled_message`,
-          memoryZone: `twitter:schedule_post`,
-          data: {
-            command: name,
-          } as TwitterClientInput,
-        });
+        deliverScheduledPostToLlm({
+          command: name,
+        } as TwitterClientInput);
       } else if (platform === 'youtube' && name === 'check_comments') {
         this.eventBus.publish({
           type: `youtube:check_comments`,

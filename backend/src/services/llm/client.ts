@@ -12,6 +12,9 @@ import { z } from 'zod';
 import { config } from '../../config/env.js';
 import { classifyError, formatErrorForLog } from '../../errors/index.js';
 import { getEventBus } from '../eventBus/index.js';
+import type { EventBus } from '../eventBus/eventBus.js';
+import { registerLlmInbound } from '../runtime/llmInboundRegistry.js';
+import { registerSkillListHandler } from '../runtime/skillListRegistry.js';
 import { getWebNotificationHub } from '../web/webNotificationHub.js';
 import { VoicepeakClient } from '../voicepeak/client.js';
 import { loadPrompt } from './config/prompts.js';
@@ -84,7 +87,6 @@ export class LLMService {
     });
 
     this.eventRouter = new EventRouter({
-      eventBus: this.eventBus,
       isDevMode: this.isDevMode,
       realtimeApi: this.realtimeApi,
       agentOrchestrator: this.agentOrchestrator,
@@ -92,7 +94,8 @@ export class LLMService {
       invokeGraph: boundInvokeGraph,
     });
 
-    this.setupEventBus();
+    registerLlmInbound(this.eventRouter);
+    registerSkillListHandler(() => { void this.processGetSkills(); });
     this.setupRealtimeAPICallback();
   }
 
@@ -141,15 +144,6 @@ export class LLMService {
     } finally {
       this.initializationPromise = null;
     }
-  }
-
-  private setupEventBus() {
-    this.eventRouter.setupEventBus();
-
-    // Skills event is handled locally (needs access to tools)
-    this.eventBus.subscribe('llm:get_skills', (event) => {
-      this.processGetSkills();
-    });
   }
 
   private setupRealtimeAPICallback() {

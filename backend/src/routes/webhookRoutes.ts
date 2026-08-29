@@ -2,6 +2,7 @@ import type { Express } from 'express';
 import { TwitterClientInput, TwitterReplyOutput } from '@shannon/common';
 import { config } from '../config/env.js';
 import { getEventBus } from '../services/eventBus/index.js';
+import { deliverTwitterReplyToLlm } from '../services/runtime/llmInboundDispatch.js';
 import { TwitterClient } from '../services/twitter/client.js';
 import { logger } from '../utils/logger.js';
 import { safeAsync } from '../utils/safeAsync.js';
@@ -112,22 +113,18 @@ export function registerWebhookRoutes(app: Express, twitterClient: TwitterClient
           twitterClient.incrementReplyCount();
 
           // LLM に返信生成を依頼 (引用RTである文脈を conversationThread で伝える)
-          eventBus.publish({
-            type: 'llm:post_twitter_reply',
-            memoryZone: 'twitter:post',
-            data: {
-              replyId: tweetId,
-              text: tweetText,
-              authorName,
-              authorId: authorId || null,
-              repliedTweet: quotedText || null,
-              repliedTweetAuthorName: quotedAuthor,
-              conversationThread: [
-                { authorName: quotedAuthor, text: `[元ツイート] ${quotedText}` },
-                { authorName, text: `[引用RT] ${tweetText}` },
-              ],
-            } as TwitterReplyOutput,
-          });
+          deliverTwitterReplyToLlm({
+            replyId: tweetId,
+            text: tweetText,
+            authorName,
+            authorId: authorId || null,
+            repliedTweet: quotedText || null,
+            repliedTweetAuthorName: quotedAuthor,
+            conversationThread: [
+              { authorName: quotedAuthor, text: `[元ツイート] ${quotedText}` },
+              { authorName, text: `[引用RT] ${tweetText}` },
+            ],
+          } as TwitterReplyOutput);
 
           processed++;
           continue;
@@ -190,18 +187,14 @@ export function registerWebhookRoutes(app: Express, twitterClient: TwitterClient
           // 後方互換: thread[0] を repliedTweet として渡す
           const rootTweet = thread.length > 0 ? thread[0] : null;
 
-          eventBus.publish({
-            type: 'llm:post_twitter_reply',
-            memoryZone: 'twitter:post',
-            data: {
-              replyId: tweetId,
-              text: tweetText,
-              authorName,
-              repliedTweet: rootTweet?.text ?? null,
-              repliedTweetAuthorName: rootTweet?.authorName ?? null,
-              conversationThread: thread.length > 0 ? thread : null,
-            } as TwitterReplyOutput,
-          });
+          deliverTwitterReplyToLlm({
+            replyId: tweetId,
+            text: tweetText,
+            authorName,
+            repliedTweet: rootTweet?.text ?? null,
+            repliedTweetAuthorName: rootTweet?.authorName ?? null,
+            conversationThread: thread.length > 0 ? thread : null,
+          } as TwitterReplyOutput);
         });
 
         processed++;

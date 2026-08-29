@@ -78,7 +78,7 @@ export class TwitterClient extends BaseClient {
     });
 
     // --- Tweet Monitor ---
-    this.monitor = new TweetMonitor(this.apiClient, this.eventBus, {
+    this.monitor = new TweetMonitor(this.apiClient, {
       myUserId: config.twitter.userId || null,
       maxRepliesPerDay: config.twitter.maxRepliesPerDay,
       replyProbability: config.twitter.replyProbability,
@@ -88,7 +88,6 @@ export class TwitterClient extends BaseClient {
     // --- Auto Post Manager ---
     this.autoPostManager = new AutoPostManager(
       this.apiClient,
-      this.eventBus,
       () => this.status,
       {
         minAutoPostsPerDay: config.twitter.minAutoPostsPerDay,

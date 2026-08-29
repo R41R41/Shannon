@@ -9,19 +9,16 @@ import {
   WebSocketServiceBase,
   WebSocketServiceConfig,
 } from '../../common/WebSocketService.js';
-import { EventBus } from '../../eventBus/eventBus.js';
-import { getEventBus } from '../../eventBus/index.js';
 import { logger } from '../../../utils/logger.js';
+import { deliverWebMessageToLlm } from '../webNotificationBridge.js';
 import { getWebNotificationHub } from '../webNotificationHub.js';
 
 export class OpenAIClientService extends WebSocketServiceBase {
   private static instance: OpenAIClientService | null = null;
-  private eventBus: EventBus;
   private hubUnsubscribe: (() => void) | null = null;
 
   private constructor(config: WebSocketServiceConfig) {
     super(config);
-    this.eventBus = getEventBus();
 
     this.hubUnsubscribe = getWebNotificationHub().onPostMessage((data) => {
       if (data.sessionId) return;
@@ -40,10 +37,9 @@ export class OpenAIClientService extends WebSocketServiceBase {
   }
 
   protected initialize() {
-    this.onAuthenticatedConnection( (ws) => {
+    this.onAuthenticatedConnection((ws) => {
       logger.debug('New OpenAI client connected');
 
-      // 新しい接続の管理
       this.handleNewConnection(ws);
 
       ws.on('close', () => {
@@ -70,16 +66,10 @@ export class OpenAIClientService extends WebSocketServiceBase {
           );
           if (data.type === 'realtime_text' && data.realtime_text) {
             void getWebNotificationHub().log('web', 'white', data.realtime_text);
-            const message: OpenAIRealTimeTextInput = {
+            deliverWebMessageToLlm({
               type: 'realtime_text',
               realtime_text: data.realtime_text,
-            };
-
-            this.eventBus.publish({
-              type: 'llm:get_web_message',
-              memoryZone: 'web',
-              data: message,
-            });
+            } as OpenAIRealTimeTextInput);
           } else if (
             data.type === 'text' &&
             data.text &&
@@ -87,79 +77,44 @@ export class OpenAIClientService extends WebSocketServiceBase {
             data.senderName
           ) {
             void getWebNotificationHub().log('web', 'white', data.text, true);
-            const message: OpenAITextInput = {
+            deliverWebMessageToLlm({
               type: 'text',
               text: data.text,
               senderName: this.getContext(ws).principal.name,
               recentChatLog: data.recentChatLog,
-            };
-            this.eventBus.publish({
-              type: 'llm:get_web_message',
-              memoryZone: 'web',
-              data: message,
-            });
+            } as OpenAITextInput);
           } else if (data.type === 'realtime_audio' && data.realtime_audio) {
-            const message: OpenAIRealTimeAudioInput = {
+            deliverWebMessageToLlm({
               type: 'realtime_audio',
               realtime_audio: data.realtime_audio,
               command: 'realtime_audio_append',
-            };
-
-            this.eventBus.publish({
-              type: 'llm:get_web_message',
-              memoryZone: 'web',
-              data: message,
-            });
+            } as OpenAIRealTimeAudioInput);
           } else if (
             data.type === 'realtime_audio' &&
             data.command === 'realtime_audio_commit'
           ) {
-            const message: OpenAICommandInput = {
+            deliverWebMessageToLlm({
               type: 'command',
               command: 'realtime_audio_commit',
-            };
-
-            this.eventBus.publish({
-              type: 'llm:get_web_message',
-              memoryZone: 'web',
-              data: message,
-            });
+            } as OpenAICommandInput);
           } else if (data.type === 'command' && data.command) {
             void getWebNotificationHub().log('web', 'white', 'received realtime voice commit', true);
-            const message: OpenAICommandInput = {
+            deliverWebMessageToLlm({
               type: 'command',
               command: data.command,
-            };
-
-            this.eventBus.publish({
-              type: 'llm:get_web_message',
-              memoryZone: 'web',
-              data: message,
-            });
+            } as OpenAICommandInput);
           } else if (data.command === 'realtime_vad_on') {
             void getWebNotificationHub().log('web', 'white', 'received realtime vad on');
-            const message: OpenAICommandInput = {
+            deliverWebMessageToLlm({
               type: 'command',
               command: data.command,
-            };
-
-            this.eventBus.publish({
-              type: 'llm:get_web_message',
-              memoryZone: 'web',
-              data: message,
-            });
+            } as OpenAICommandInput);
           } else if (data.command === 'realtime_vad_off') {
             void getWebNotificationHub().log('web', 'white', 'received realtime vad off');
-            const message: OpenAICommandInput = {
+            deliverWebMessageToLlm({
               type: 'command',
               command: data.command,
-            };
-
-            this.eventBus.publish({
-              type: 'llm:get_web_message',
-              memoryZone: 'web',
-              data: message,
-            });
+            } as OpenAICommandInput);
           }
         } catch (error) {
           void getWebNotificationHub().log('web', 'red', 'Error processing message:' + error, true);

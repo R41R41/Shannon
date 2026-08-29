@@ -29,10 +29,11 @@
 - [x] `EventRouter.setupRealtimeAPICallback` → Hub
 - [x] `EventBus.log` → Hub 委譲（過渡）
 
-### Phase 2 — LLM 入口（進行中）
-- [ ] `EventRouter`: subscribe 削除、public handler のみ
-- [ ] `registerLlmInbound` で起動時配線
-- [ ] 発行元: `openaiAgent`, `discord/client`, `VoiceManager`, `webhookRoutes`, `TweetMonitor`, `AutoPostManager`, `youtube/client`, `skillAgent`
+### Phase 2 — LLM 入口（完了）
+- [x] `EventRouter`: subscribe 削除、public handler のみ
+- [x] `registerLlmInbound` で起動時配線
+- [x] `llmInboundDispatch` 経由で発行元を直接呼び出しに
+- [x] 発行元: `openaiAgent`, `discord/client`, `VoiceManager`, `webhookRoutes`, `TweetMonitor`, `AutoPostManager`, `youtube/client`, `skillAgent`, `scheduler`, `minebot/skillAgent`
 
 ### Phase 3 — 外部ツール RPC
 - [ ] Twitter / Notion / YouTube ツール → 各 Client 直接呼び出し

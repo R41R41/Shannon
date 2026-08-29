@@ -48,6 +48,7 @@ import { voiceResponseChannelIds } from './voiceState.js';
 import { loadServerChoices } from './serverChoices.js';
 import { BaseClient } from '../common/BaseClient.js';
 import { getEventBus } from '../eventBus/index.js';
+import { deliverDiscordMessageToLlm } from '../runtime/llmInboundDispatch.js';
 import { emitWebServiceStatus } from '../web/webNotificationHub.js';
 import { splitDiscordMessage, sendLongMessage } from './utils.js';
 import { VoiceManager } from './voice/VoiceManager.js';
@@ -1067,22 +1068,18 @@ export class DiscordBot extends BaseClient {
       );
       logger.info(guildName + ' ' + channelName, 'blue');
       logger.info(nickname + ': ' + contentWithImages, 'blue');
-      this.eventBus.publish({
-        type: 'llm:get_discord_message',
-        memoryZone: memoryZone,
-        data: {
-          text: contentWithImages,
-          type: 'text',
-          guildName: memoryZone,
-          channelId: message.channelId,
-          guildId: guildId,
-          channelName: channelName,
-          userName: nickname,
-          messageId: messageId,
-          userId: userId,
-          recentMessages: recentMessages,
-          isDM: message.channel.type === ChannelType.DM,
-        } as DiscordSendTextMessageOutput,
+      deliverDiscordMessageToLlm({
+        text: contentWithImages,
+        type: 'text',
+        guildName: memoryZone,
+        channelId: message.channelId,
+        guildId: guildId,
+        channelName: channelName,
+        userName: nickname,
+        messageId: messageId,
+        userId: userId,
+        recentMessages: recentMessages,
+        isDM: message.channel.type === ChannelType.DM,
       });
       } catch (err) {
         logger.error('[Discord] messageCreate ハンドラエラー:', err);
@@ -1099,21 +1096,17 @@ export class DiscordBot extends BaseClient {
       const memoryZone = await getDiscordMemoryZone(channel.guildId);
 
       const nickname = this.getUserNickname(speech.user, channel.guildId);
-      this.eventBus.publish({
-        type: 'llm:get_discord_message',
-        memoryZone: memoryZone,
-        data: {
-          audio: speech.content,
-          type: 'realtime_audio',
-          channelId: speech.channelId,
-          userName: nickname,
-          guildId: channel.guild.id,
-          guildName: channel.guild.name,
-          channelName: channel.name,
-          messageId: speech.messageId,
-          userId: speech.userId,
-        } as DiscordClientInput,
-      });
+      deliverDiscordMessageToLlm({
+        audio: speech.content,
+        type: 'realtime_audio',
+        channelId: speech.channelId,
+        userName: nickname,
+        guildId: channel.guild.id,
+        guildName: channel.guild.name,
+        channelName: channel.name,
+        messageId: speech.messageId,
+        userId: speech.userId,
+      } as DiscordClientInput);
     });
 
     // LLMからの応答を処理

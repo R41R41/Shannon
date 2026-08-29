@@ -2,7 +2,7 @@ import {
   WebSocketServiceBase,
   WebSocketServiceConfig,
 } from '../../common/WebSocketService.js';
-import { getEventBus } from '../../eventBus/index.js';
+import { requestSkillList } from '../../runtime/skillListRegistry.js';
 import { logger } from '../../../utils/logger.js';
 import { getWebNotificationHub } from '../webNotificationHub.js';
 
@@ -33,7 +33,6 @@ export class SkillAgent extends WebSocketServiceBase {
     return SkillAgent.instance;
   }
   protected override initialize() {
-    const eventBus = getEventBus();
     this.onAuthenticatedConnection(async (ws) => {
       logger.debug('Skill client connected');
 
@@ -52,11 +51,7 @@ export class SkillAgent extends WebSocketServiceBase {
         }
 
         if (data.type === 'get_skills') {
-          eventBus.publish({
-            type: 'llm:get_skills',
-            memoryZone: 'web',
-            data: { type: 'get_skills' },
-          });
+          requestSkillList();
         }
       });
 

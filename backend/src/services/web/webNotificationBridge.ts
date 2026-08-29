@@ -1,9 +1,10 @@
-import type { ILog, OpenAIMessageOutput, OpenAITextInput, StatusAgentInput, ServiceOutput } from '@shannon/common';
-import type { WebPlanningPayload, WebPostMessagePayload } from './webNotificationHub.js';
-import { getLlmInbound } from '../runtime/llmInboundRegistry.js';
+import type { OpenAIMessageOutput } from '@shannon/common';
+import { deliverWebMessageToLlm as dispatchWebMessageToLlm } from '../runtime/llmInboundDispatch.js';
 
-export function deliverWebMessageToLlm(message: OpenAIMessageOutput & { recentChatLog?: string[]; sessionId?: string }): void {
-  void getLlmInbound().handleWebMessage(message);
+export function deliverWebMessageToLlm(
+  message: OpenAIMessageOutput & { recentChatLog?: string[]; sessionId?: string },
+): void {
+  dispatchWebMessageToLlm(message);
 }
 
 export function matchesWebSession(
@@ -12,5 +13,3 @@ export function matchesWebSession(
 ): boolean {
   return !payload.sessionId || payload.sessionId === sessionId;
 }
-
-export type { WebPlanningPayload, WebPostMessagePayload, ILog, OpenAITextInput, StatusAgentInput, ServiceOutput };

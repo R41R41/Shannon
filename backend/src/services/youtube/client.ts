@@ -12,6 +12,7 @@ import { google, youtube_v3 } from 'googleapis';
 import { BaseClient } from '../common/BaseClient.js';
 import { config } from '../../config/env.js';
 import { getEventBus } from '../eventBus/index.js';
+import { deliverYoutubeMessageToLlm, deliverYoutubeReplyToLlm } from '../runtime/llmInboundDispatch.js';
 import { emitWebServiceStatus } from '../web/webNotificationHub.js';
 import { logger } from '../../utils/logger.js';
 
@@ -73,11 +74,7 @@ export class YoutubeClient extends BaseClient {
       try {
         const unrepliedComments = await this.getUnrepliedComments();
         for (const comment of unrepliedComments) {
-          this.eventBus.publish({
-            type: 'llm:reply_youtube_comment',
-            memoryZone: 'youtube',
-            data: comment as YoutubeCommentOutput,
-          });
+          deliverYoutubeReplyToLlm(comment as YoutubeCommentOutput);
         }
       } catch (error) {
         logger.error(`Check comments error: ${error}`);
@@ -519,19 +516,15 @@ export class YoutubeClient extends BaseClient {
             (h) => `${h.minutes}：${h.author}「${h.message}」`
           );
           // publish
-          this.eventBus.publish({
-            type: 'llm:get_youtube_message',
-            memoryZone: 'youtube',
-            data: {
-              message,
-              author,
-              jstNow: new Date().toISOString(),
-              minutesSinceStart: 0,
-              history: formattedHistory,
-              liveTitle: this.liveTitle ?? '',
-              liveDescription: this.liveDescription ?? '',
-            } as YoutubeLiveChatMessageOutput,
-          });
+          deliverYoutubeMessageToLlm({
+            message,
+            author,
+            jstNow: new Date().toISOString(),
+            minutesSinceStart: 0,
+            history: formattedHistory,
+            liveTitle: this.liveTitle ?? '',
+            liveDescription: this.liveDescription ?? '',
+          } as YoutubeLiveChatMessageOutput);
         }
       }
     } catch (error) {

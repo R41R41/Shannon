@@ -50,6 +50,7 @@ import { getDiscordMemoryZone } from '../../../utils/discord.js';
 import { voiceResponseChannelIds } from '../voiceState.js';
 import { loadFillers, generateAllFillers } from '../voiceFiller.js';
 import { sendLongMessage } from '../utils.js';
+import { deliverDiscordMessageToLlm } from '../../runtime/llmInboundDispatch.js';
 import { EventBus } from '../../eventBus/eventBus.js';
 
 export interface VoiceManagerHelpers {
@@ -500,23 +501,19 @@ export class VoiceManager {
       const memoryZone = await getDiscordMemoryZone(guildId);
       const recentMessages = await this.helpers.getRecentMessages(channelId, 10);
 
-      this.eventBus.publish({
-        type: 'llm:get_discord_message',
-        memoryZone,
-        data: {
-          type: 'voice',
-          text: lastUserText,
-          audioBuffer: Buffer.alloc(0),
-          guildId,
-          guildName,
-          channelId,
-          channelName,
-          voiceChannelId,
-          userId: lastUserId ?? interaction.user.id,
-          userName: lastUserName ?? this.helpers.getUserNickname(interaction.user, guildId),
-          recentMessages,
-        } as unknown as DiscordClientInput,
-      });
+      deliverDiscordMessageToLlm({
+        type: 'voice',
+        text: lastUserText,
+        audioBuffer: Buffer.alloc(0),
+        guildId,
+        guildName,
+        channelId,
+        channelName,
+        voiceChannelId,
+        userId: lastUserId ?? interaction.user.id,
+        userName: lastUserName ?? this.helpers.getUserNickname(interaction.user, guildId),
+        recentMessages,
+      } as unknown as DiscordClientInput);
 
       logger.info(`[Discord Voice] Generate response from text: "${lastUserText}" by ${lastUserName}`, 'cyan');
       await interaction.editReply(`💬 「${lastUserText}」に対する音声回答を生成中…`);
@@ -816,23 +813,19 @@ export class VoiceManager {
 
       const recentMessages = await this.helpers.getRecentMessages(textChannelId, 10);
 
-      this.eventBus.publish({
-        type: 'llm:get_discord_message',
-        memoryZone: memoryZone,
-        data: {
-          type: 'voice',
-          text: '',
-          audioBuffer: wavBuffer,
-          guildId,
-          guildName,
-          channelId: textChannelId,
-          channelName,
-          voiceChannelId,
-          userId,
-          userName: nickname,
-          recentMessages,
-        } as unknown as DiscordClientInput,
-      });
+      deliverDiscordMessageToLlm({
+        type: 'voice',
+        text: '',
+        audioBuffer: wavBuffer,
+        guildId,
+        guildName,
+        channelId: textChannelId,
+        channelName,
+        voiceChannelId,
+        userId,
+        userName: nickname,
+        recentMessages,
+      } as unknown as DiscordClientInput);
     } finally {
       this.voiceProcessingLock.set(guildId, false);
     }

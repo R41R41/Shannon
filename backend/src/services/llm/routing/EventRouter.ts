@@ -13,7 +13,6 @@ import {
   YoutubeLiveChatMessageOutput,
 } from '@shannon/common';
 import type { RequestEnvelope, ShannonGraphState } from '@shannon/common';
-import { EventBus } from '../../eventBus/eventBus.js';
 import { getWebNotificationHub } from '../../web/webNotificationHub.js';
 import { RealtimeAPIService } from '../agents/realtimeApiAgent.js';
 import {
@@ -31,7 +30,6 @@ export type InvokeGraphFn = (
 ) => Promise<ShannonGraphState>;
 
 export interface EventRouterDeps {
-  eventBus: EventBus;
   isDevMode: boolean;
   realtimeApi: RealtimeAPIService;
   agentOrchestrator: AgentOrchestrator;
@@ -40,7 +38,6 @@ export interface EventRouterDeps {
 }
 
 export class EventRouter {
-  private eventBus: EventBus;
   private isDevMode: boolean;
   private realtimeApi: RealtimeAPIService;
   private agents: AgentOrchestrator;
@@ -48,66 +45,11 @@ export class EventRouter {
   private invokeGraph: InvokeGraphFn;
 
   constructor(deps: EventRouterDeps) {
-    this.eventBus = deps.eventBus;
     this.isDevMode = deps.isDevMode;
     this.realtimeApi = deps.realtimeApi;
     this.agents = deps.agentOrchestrator;
     this.voice = deps.voiceProcessor;
     this.invokeGraph = deps.invokeGraph;
-  }
-
-  setupEventBus() {
-    this.eventBus.subscribe('llm:get_web_message', (event) => {
-      this.processWebMessage(event.data as OpenAIMessageOutput);
-    });
-
-    this.eventBus.subscribe('llm:get_discord_message', (event) => {
-      this.processDiscordMessage(event.data as DiscordSendTextMessageOutput);
-    });
-
-    this.eventBus.subscribe('llm:post_scheduled_message', (event) => {
-      if (this.isDevMode) return;
-      this.agents.processCreateScheduledPost(event.data as TwitterClientInput);
-    });
-
-    this.eventBus.subscribe('llm:post_twitter_reply', (event) => {
-      this.agents.processTwitterReply(event.data as TwitterReplyOutput).catch((err) => {
-        logger.error('[Twitter Reply] 未処理エラー:', err);
-      });
-    });
-
-    this.eventBus.subscribe('llm:post_twitter_quote_rt', (event) => {
-      if (this.isDevMode) return;
-      this.agents.processTwitterQuoteRT(event.data as TwitterQuoteRTOutput);
-    });
-
-    this.eventBus.subscribe('llm:respond_member_tweet', (event) => {
-      if (this.isDevMode) return;
-      this.agents.processMemberTweet(event.data as MemberTweetInput).catch((err) => {
-        logger.error('[MemberTweet] 未処理エラー:', err);
-      });
-    });
-
-    this.eventBus.subscribe('llm:generate_auto_tweet', (event) => {
-      this.agents.processAutoTweet(event.data as TwitterAutoTweetInput);
-    });
-
-    this.eventBus.subscribe('llm:reply_youtube_comment', (event) => {
-      if (this.isDevMode) return;
-      this.agents.processYoutubeReply(event.data as YoutubeCommentOutput);
-    });
-
-    // NOTE: llm:get_skills is subscribed directly in LLMService (needs tool access)
-
-    this.eventBus.subscribe('llm:get_youtube_message', (event) => {
-      this.agents.processYoutubeMessage(event.data as YoutubeLiveChatMessageOutput);
-    });
-
-    this.eventBus.subscribe('minebot:voice_response', (event) => {
-      this.voice.processMinebotVoiceResponse(event.data as MinebotVoiceResponseOutput).catch((err) => {
-        logger.error('[Minebot Voice] 未処理エラー:', err);
-      });
-    });
   }
 
   setupRealtimeAPICallback() {
@@ -149,12 +91,64 @@ export class EventRouter {
     });
   }
 
+  handleWebMessage(message: OpenAIMessageOutput & {
+    recentChatLog?: string[];
+    sessionId?: string;
+  }): void {
+    void this.processWebMessage(message);
+  }
+
+  handleDiscordMessage(message: DiscordSendTextMessageOutput | DiscordVoiceMessageOutput): void {
+    void this.processDiscordMessage(message);
+  }
+
+  handleScheduledPost(data: TwitterClientInput): void {
+    if (this.isDevMode) return;
+    this.agents.processCreateScheduledPost(data);
+  }
+
+  handleTwitterReply(data: TwitterReplyOutput): void {
+    this.agents.processTwitterReply(data).catch((err) => {
+      logger.error('[Twitter Reply] 未処理エラー:', err);
+    });
+  }
+
+  handleTwitterQuoteRT(data: TwitterQuoteRTOutput): void {
+    if (this.isDevMode) return;
+    this.agents.processTwitterQuoteRT(data);
+  }
+
+  handleMemberTweet(data: MemberTweetInput): void {
+    if (this.isDevMode) return;
+    this.agents.processMemberTweet(data).catch((err) => {
+      logger.error('[MemberTweet] 未処理エラー:', err);
+    });
+  }
+
+  handleAutoTweet(data: TwitterAutoTweetInput): void {
+    this.agents.processAutoTweet(data);
+  }
+
+  handleYoutubeReply(data: YoutubeCommentOutput): void {
+    if (this.isDevMode) return;
+    this.agents.processYoutubeReply(data);
+  }
+
+  handleYoutubeMessage(data: YoutubeLiveChatMessageOutput): void {
+    this.agents.processYoutubeMessage(data);
+  }
+
+  handleMinebotVoiceResponse(data: MinebotVoiceResponseOutput): void {
+    this.voice.processMinebotVoiceResponse(data).catch((err) => {
+      logger.error('[Minebot Voice] 未処理エラー:', err);
+    });
+  }
+
   private async processWebMessage(message: OpenAIMessageOutput & {
     recentChatLog?: string[];
     sessionId?: string;
   }) {
     try {
-      // Realtime audio/text passthrough (not graph-routed)
       if (message.type === 'realtime_text' && message.realtime_text) {
         await this.realtimeApi.inputText(message.realtime_text);
         return;
@@ -176,7 +170,6 @@ export class EventRouter {
         return;
       }
 
-      // Text message → unified graph via web adapter
       if (message.type === 'text') {
         const currentTime = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
         const envelope = webAdapter.toEnvelope({
@@ -199,7 +192,6 @@ export class EventRouter {
         const textMsg = message as DiscordSendTextMessageOutput;
         const currentTime = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
 
-        // Build envelope via ChannelAdapter
         const envelope = discordAdapter.toEnvelope({
           text: textMsg.text,
           type: textMsg.type,

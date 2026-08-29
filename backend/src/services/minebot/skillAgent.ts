@@ -3,6 +3,7 @@ import { AIMessage, BaseMessage, HumanMessage } from '@langchain/core/messages';
 import { MinebotSkillInput, MinebotVoiceChatInput } from '@shannon/common';
 import fetch from 'node-fetch';
 import { Vec3 } from 'vec3';
+import { deliverMinebotVoiceResponseToLlm } from '../runtime/llmInboundDispatch.js';
 import { EventBus } from '../eventBus/eventBus.js';
 import { config } from '../../config/env.js';
 import { LLMService } from '../llm/client.js';
@@ -650,14 +651,10 @@ export class SkillAgent {
       const graphResult = result?.graphResult;
       const responseText = graphResult?.actionPlan?.message ?? graphResult?.finalAnswer;
       if (voiceResponseTarget && responseText) {
-        this.eventBus.publish({
-          type: 'minebot:voice_response',
-          memoryZone: 'minebot',
-          data: {
-            guildId: voiceResponseTarget.guildId,
-            channelId: voiceResponseTarget.channelId,
-            responseText,
-          },
+        deliverMinebotVoiceResponseToLlm({
+          guildId: voiceResponseTarget.guildId,
+          channelId: voiceResponseTarget.channelId,
+          responseText,
         });
       }
     } catch (error) {
