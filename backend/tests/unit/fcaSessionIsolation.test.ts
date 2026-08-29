@@ -71,6 +71,9 @@ async function overlap(tool: 'update-plan' | 'recall-memory') {
   fakes.invoke.mockImplementation(async (messages: any[]) => {
     const owner = messages.find(m => m instanceof HumanMessage && ['A', 'B'].includes(m.content))!.content as 'A' | 'B';
     if (turns[owner]++ === 0) {
+      return new AIMessage({ content: '', tool_calls: [{ id: `load-${owner}`, name: 'request-tools', args: { names: [tool] } }] });
+    }
+    if (turns[owner] === 2) {
       entered[owner].resolve(); await release[owner].promise;
       return new AIMessage({ content: `thought-${owner}`, tool_calls: [{ id: `call-${owner}`, name: tool, args: tool === 'update-plan' ? { goal: `plan-${owner}`, strategy: 'test' } : { question: `query-${owner}` } }] });
     }
@@ -90,6 +93,9 @@ describe('actual FCA and tools with external services mocked', () => {
     fakes.invoke.mockImplementation(async (messages: any[]) => {
       const owner = messages.find(m => m instanceof HumanMessage && ['A', 'B'].includes(m.content))!.content as 'A' | 'B';
       if (turns[owner]++ === 0) {
+        return new AIMessage({ content: '', tool_calls: [{ name: 'request-tools', id: `load-${owner}`, args: { names: ['chat-on-discord'] } }] });
+      }
+      if (turns[owner] === 2) {
         entered[owner].resolve(); await release[owner].promise;
         return new AIMessage({ content: '', tool_calls: [{ name: 'chat-on-discord', id: owner, args: { message: `reply-${owner}` } }] });
       }
@@ -126,7 +132,8 @@ describe('actual FCA and tools with external services mocked', () => {
     const turns = { A: 0, B: 0 }; const contexts = {} as Record<string, string>;
     fakes.invoke.mockImplementation(async (messages: any[]) => {
       const owner = messages.find(m => m instanceof HumanMessage && ['A','B'].includes(m.content))!.content as 'A' | 'B';
-      if (turns[owner]++ === 0) return new AIMessage({ content: `thought-${owner}`, tool_calls: [{ name: 'pause', id: `pause-${owner}`, args: { owner } }] });
+      if (turns[owner]++ === 0) return new AIMessage({ content: '', tool_calls: [{ name: 'request-tools', id: `load-${owner}`, args: { names: ['pause'] } }] });
+      if (turns[owner] === 2) return new AIMessage({ content: `thought-${owner}`, tool_calls: [{ name: 'pause', id: `pause-${owner}`, args: { owner } }] });
       contexts[owner] = messages.map(m => m.content).join('\n');
       return new AIMessage({ content: '', tool_calls: [{ name: 'task-complete', id: `done-${owner}`, args: { summary: `done-${owner}` } }] });
     });
@@ -232,6 +239,9 @@ describe('actual FCA and tools with external services mocked', () => {
     const entered = deferred(); const release = deferred(); let turn = 0;
     fakes.invoke.mockImplementation(async () => {
       if (turn++ === 0) {
+        return new AIMessage({ content: '', tool_calls: [{ name: 'request-tools', id: 'load', args: { names: ['recall-memory'] } }] });
+      }
+      if (turn === 2) {
         entered.resolve(); await release.promise;
         return new AIMessage({ content: '', tool_calls: [{ name: 'recall-memory', id: 'recall', args: { question: 'query-A' } }] });
       }
@@ -258,7 +268,8 @@ it('binds the canonical memory port in standalone FCA, without a MemoryAgent', a
   const request = { ...state('A').requestEnvelope, sourceUserId: '100', discord: { guildId: '200', channelId: '300', isDM: false } };
   const search = vi.spyOn(ShannonMemoryService.getInstance(), 'searchKnowledge').mockResolvedValue([]);
   try {
-    fakes.invoke.mockResolvedValueOnce(new AIMessage({ content: '', tool_calls: [{ id: 'r', name: 'recall-knowledge', args: { query: 'fixture' } }] }))
+    fakes.invoke.mockResolvedValueOnce(new AIMessage({ content: '', tool_calls: [{ id: 'load', name: 'request-tools', args: { names: ['recall-knowledge'] } }] }))
+      .mockResolvedValueOnce(new AIMessage({ content: '', tool_calls: [{ id: 'r', name: 'recall-knowledge', args: { query: 'fixture' } }] }))
       .mockResolvedValueOnce(new AIMessage({ content: '', tool_calls: [{ id: 'done', name: 'task-complete', args: { summary: 'done' } }] }));
     const agent = new FunctionCallingAgent([new RecallKnowledgeTool(), { name: 'task-complete', invoke: async () => 'done' } as any]);
     await agent.run({ ...state('A'), requestEnvelope: request });

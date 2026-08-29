@@ -11,7 +11,6 @@ import {
 } from '@langchain/core/messages';
 import { StructuredTool } from '@langchain/core/tools';
 import { ChatOpenAI } from '@langchain/openai';
-import { ChatAnthropic } from '@langchain/anthropic';
 import { HierarchicalSubTask, TaskContext, TaskTreeState } from '@shannon/common';
 import { setMaxListeners } from 'node:events';
 import { config } from '../../../../config/env.js';
@@ -35,7 +34,8 @@ import { ToolExecutor } from './execution/ToolExecutor.js';
 import { LoopDetector } from './execution/LoopDetector.js';
 import { ModelSelector } from '../cognitive/ModelSelector.js';
 import { fcaHistoryToLangChain } from '../../../fca/openAiFcaModel.js';
-import { runConversationFca } from './conversationKernel.js';
+import { createGeminiFcaModel } from '../../../fca/geminiFcaModel.js';
+import { conversationLoadPrompt, catalogLinesForPrompt, RequestToolsTool, REQUEST_TOOLS_NAME, runConversationFca } from './conversationKernel.js';
 import type { FcaModel } from '../../../../modules/fca/index.js';
 
 function stripAssistantContentPrefix(t: string): string {
@@ -124,8 +124,8 @@ export interface FunctionCallingAgentState {
  */
 export class FunctionCallingSession {
     private phase: "created" | "running" | "closed" = "created";
-    private model: ChatOpenAI | ChatAnthropic;
-    private modelWithTools: ReturnType<ChatOpenAI['bindTools']> | ReturnType<ChatAnthropic['bindTools']>;
+    private model: ChatOpenAI;
+    private modelWithTools: ReturnType<ChatOpenAI['bindTools']>;
     private tools: StructuredTool[];
     private toolMap: Map<string, StructuredTool>;
     private updatePlanTool: UpdatePlanTool | null = null;
@@ -169,25 +169,14 @@ export class FunctionCallingSession {
             this.updatePlanTool = planTool;
         }
 
-        // Claude Anthropic を優先、フォールバックで OpenAI
-        if (config.anthropic?.apiKey) {
-            this.model = new ChatAnthropic({
-                model: 'claude-opus-4-20250514',
-                anthropicApiKey: config.anthropic.apiKey,
-                temperature: 1,
-                maxTokens: 16384,
-                streaming: true,
-            });
-            logger.info('🧠 FCA: Using Claude Opus 4.6 (Anthropic)', 'magenta');
-        } else {
-            this.model = createTracedModel({
-                modelName: FunctionCallingSession.MODEL_NAME,
-                apiKey: config.openaiApiKey,
-                temperature: 1,
-                maxTokens: 1024,
-            });
-            logger.info('🤖 FCA: Using OpenAI (Anthropic key not configured)', 'yellow');
-        }
+        // 会話は OpenAI。Anthropic キーがあっても Opus にはしない。
+        this.model = createTracedModel({
+            modelName: FunctionCallingSession.MODEL_NAME,
+            apiKey: config.openaiApiKey,
+            temperature: 1,
+            maxTokens: 2048,
+        });
+        logger.info(`🤖 FCA: Using OpenAI ${FunctionCallingSession.MODEL_NAME}`, 'cyan');
 
         // ツールをモデルに bind
         this.modelWithTools = this.model.bindTools(this.tools);
@@ -220,25 +209,32 @@ export class FunctionCallingSession {
     // ─── メッセージ互換性 ───
 
     /**
-     * Anthropic API は SystemMessage を最初の1つしか受け付けない。
-     * 2つ目以降の SystemMessage を HumanMessage に変換する。
-     * OpenAI の場合はそのまま返す。
+     * Anthropic / Gemini は system を先頭以外に置けない。
+     * 2つ目以降の SystemMessage は先頭の system に結合する。
      */
     private sanitizeMessagesForProvider(messages: BaseMessage[]): BaseMessage[] {
-        if (!(this.model instanceof ChatAnthropic)) return messages;
-
-        let firstSystemSeen = false;
-        return messages.map(msg => {
-            if (msg instanceof SystemMessage) {
-                if (!firstSystemSeen) {
-                    firstSystemSeen = true;
-                    return msg; // 最初の SystemMessage はそのまま
+        const extras: string[] = [];
+        const out: BaseMessage[] = [];
+        let firstSystem: BaseMessage | undefined;
+        for (const msg of messages) {
+            if (msg._getType() === 'system') {
+                const text = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
+                if (!firstSystem) {
+                    firstSystem = msg;
+                    out.push(msg);
+                } else if (text.trim()) {
+                    extras.push(text);
                 }
-                // 2つ目以降は HumanMessage に変換
-                return new HumanMessage({ content: `[System Context] ${msg.content}` });
+            } else {
+                out.push(msg);
             }
-            return msg;
-        });
+        }
+        if (firstSystem && extras.length > 0) {
+            const idx = out.indexOf(firstSystem);
+            const base = typeof firstSystem.content === 'string' ? firstSystem.content : '';
+            out[idx] = new SystemMessage(`${base}\n\n${extras.join('\n\n')}`);
+        }
+        return out;
     }
 
     // ─── Routine 関連 ───
@@ -359,6 +355,8 @@ export class FunctionCallingSession {
         const platform = state.context?.platform ?? null;
         if (platform === 'minecraft' || platform === 'minebot') {
             modelSelector.setMaxEscalationLevel('gpt-5-mini-fast');
+        } else {
+            modelSelector.setMaxEscalationLevel(modelSelector.modelName);
         }
         logger.info(`🤖 FunctionCallingAgent: タスク実行開始 "${goal}"${isEmergency ? ' [緊急]' : ''} (model=${modelSelector.modelName})`, 'cyan');
 
@@ -399,6 +397,11 @@ export class FunctionCallingSession {
             this.updatePlanTool.setContext(state.channelId, state.taskId, state.context?.platform ?? null);
         }
 
+        const deferToolLoad = platform !== 'minecraft' && platform !== 'minebot';
+        const promptClassifyMode = deferToolLoad && state.classifyMode === 'planning'
+            ? 'task_execution'
+            : state.classifyMode;
+
         // メッセージ構築
         let systemPrompt = this.promptBuilder.buildSystemPrompt(
             state.emotionState,
@@ -411,9 +414,17 @@ export class FunctionCallingSession {
             state.strategyPrompt,
             state.internalStatePrompt,
             state.worldModelPrompt,
-            state.classifyMode,
+            promptClassifyMode,
             state.needsTools,
         );
+
+        if (deferToolLoad) {
+            if (!effectiveTools.some(tool => tool.name === REQUEST_TOOLS_NAME)) {
+                effectiveTools = [new RequestToolsTool(), ...effectiveTools];
+                effectiveToolMap = new Map(effectiveTools.map(t => [t.name, t]));
+            }
+            systemPrompt += conversationLoadPrompt(catalogLinesForPrompt(effectiveTools));
+        }
 
         // Phase 3-A: Minecraft 事前準備を並列化（WorldKnowledge + TaskEpisodeMemory: -0.5〜1.5秒）
         {
@@ -540,13 +551,18 @@ export class FunctionCallingSession {
         try {
             const maxIter = state.maxIterations
                 ?? (isEmergency ? FunctionCallingSession.MAX_ITERATIONS_EMERGENCY : FunctionCallingSession.MAX_ITERATIONS);
+            const geminiAdapter = modelSelector.provider === 'google'
+                ? createGeminiFcaModel({
+                    apiKey: config.google.geminiApiKey,
+                    model: modelSelector.apiModelName,
+                    maxTokens: 2048,
+                    temperature: 1,
+                    timeoutMs: modelSelector.timeoutMs,
+                })
+                : null;
             const kernelModel: FcaModel = {
                 next: async (request, child) => {
                     child.throwIfAborted();
-                    const names = new Set(request.tools.map(tool => tool.name));
-                    const boundTools = effectiveTools.filter(tool => names.has(tool.name));
-                    const bound = modelSelector.bindTools(boundTools);
-                    const lc = this.sanitizeMessagesForProvider(fcaHistoryToLangChain(request.system, request.messages));
                     const callAbort = new AbortController();
                     const callTimeout = setTimeout(() => callAbort.abort(), modelSelector.timeoutMs);
                     const onChildAbort = () => callAbort.abort();
@@ -556,6 +572,16 @@ export class FunctionCallingSession {
                     activeCallAbort = callAbort;
                     this.relaxAbortSignalListenerLimit(callAbort.signal);
                     try {
+                        if (geminiAdapter) {
+                            const result = await geminiAdapter.next(request, callAbort.signal);
+                            child.throwIfAborted();
+                            if (result.content) this.thinkingManager.addThought(result.content);
+                            return result;
+                        }
+                        const names = new Set(request.tools.map(tool => tool.name));
+                        const boundTools = effectiveTools.filter(tool => names.has(tool.name));
+                        const bound = modelSelector.bindTools(boundTools);
+                        const lc = this.sanitizeMessagesForProvider(fcaHistoryToLangChain(request.system, request.messages));
                         const response = state.onStreamSentence
                             ? await this.streamLlmResponse(bound as any, lc, callAbort.signal, state.onStreamSentence)
                             : await (bound as any).invoke(lc, { signal: callAbort.signal }) as AIMessage;
@@ -584,7 +610,8 @@ export class FunctionCallingSession {
                 system: systemPrompt, goal, tools: effectiveTools, model: kernelModel,
                 signal: signal ?? new AbortController().signal,
                 maxTurns: maxIter, maxElapsedMs: FunctionCallingSession.MAX_TOTAL_TIME_MS,
-                needsTools: state.needsTools,
+                needsTools: deferToolLoad ? false : state.needsTools,
+                deferToolLoad,
                 filterCalls: (calls) => calls.filter(call => {
                     if (call.name === 'task-complete' || call.name === 'update-plan') return true;
                     const args = call.arguments && typeof call.arguments === 'object' && !Array.isArray(call.arguments)

@@ -11,8 +11,7 @@ import { createTracedModel } from '../../utils/langfuse.js';
  * ClassifyNode の結果に基づいて最適な LLM モデルを選択し、
  * 実行中のエスカレーション/デエスカレーションを制御する。
  *
- * Anthropic API key がある場合: Claude チェーン (Sonnet → Opus)
- * ない場合: OpenAI チェーン (gpt-4.1-mini → gpt-5)
+ * Anthropic キーがあっても会話FCAは OpenAI（既定 gpt-4.1-mini）。Minecraft Executor は別。
  */
 
 export interface ModelConfig {
@@ -23,7 +22,7 @@ export interface ModelConfig {
     reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
     verbosity?: 'low' | 'medium' | 'high';
     timeoutMs: number;
-    provider: 'anthropic' | 'openai';
+    provider: 'anthropic' | 'openai' | 'google';
     streaming?: boolean;
 }
 
@@ -36,7 +35,7 @@ const ANTHROPIC_CHAIN: ModelSlot[] = [
     {
         name: 'claude-opus-4',
         config: {
-            modelName: 'claude-opus-4-20250514',
+            modelName: 'claude-opus-4-6',
             temperature: 1,
             maxTokens: 16384,
             timeoutMs: 120_000,
@@ -66,7 +65,34 @@ const OPENAI_CHAIN: ModelSlot[] = [
 ];
 
 function getChain(): ModelSlot[] {
-    return config.anthropic?.apiKey ? ANTHROPIC_CHAIN : OPENAI_CHAIN;
+    const requested = (process.env.SHANNON_CONVERSATION_MODEL || '').trim();
+    if (requested.startsWith('claude-haiku')) {
+        return [{
+            name: 'claude-haiku-4-5',
+            config: {
+                modelName: 'claude-haiku-4-5-20251001',
+                temperature: 1,
+                maxTokens: 2048,
+                timeoutMs: 30_000,
+                provider: 'anthropic',
+                streaming: false,
+            },
+        }];
+    }
+    if (requested.startsWith('gemini')) {
+        const modelName = requested === 'gemini' ? 'gemini-3.5-flash-lite' : requested;
+        return [{
+            name: modelName,
+            config: {
+                modelName,
+                temperature: 1,
+                maxTokens: 2048,
+                timeoutMs: 30_000,
+                provider: 'google',
+            },
+        }];
+    }
+    return OPENAI_CHAIN;
 }
 
 export class ModelSelector {
@@ -96,6 +122,14 @@ export class ModelSelector {
         return this.chain[this.currentIndex].name;
     }
 
+    get apiModelName(): string {
+        return this.chain[this.currentIndex].config.modelName;
+    }
+
+    get provider(): ModelConfig['provider'] {
+        return this.chain[this.currentIndex].config.provider;
+    }
+
     get model(): ChatOpenAI | ChatAnthropic {
         return this.currentModel;
     }
@@ -120,19 +154,12 @@ export class ModelSelector {
     }
 
     static selectInitialModel(
-        riskLevel: 'low' | 'mid' | 'high' | undefined,
-        needsPlanning: boolean | undefined,
-        mode: string | undefined,
+        _riskLevel: 'low' | 'mid' | 'high' | undefined,
+        _needsPlanning: boolean | undefined,
+        _mode: string | undefined,
     ): string {
         const chain = getChain();
-        if (chain[0].config.provider === 'anthropic') {
-            return 'claude-opus-4';
-        }
-        // OpenAI: 従来ロジック
-        if (mode === 'minecraft_emergency' || mode === 'minecraft_action') return 'gpt-4.1-mini';
-        if (riskLevel === 'high') return 'gpt-5';
-        if (riskLevel === 'mid' && needsPlanning) return 'gpt-5-mini-fast';
-        return 'gpt-4.1-mini';
+        return chain[0].name;
     }
 
     bindTools(tools: StructuredTool[]): ReturnType<ChatOpenAI['bindTools']> | ReturnType<ChatAnthropic['bindTools']> {
@@ -204,6 +231,14 @@ export class ModelSelector {
     }
 
     private createModel(cfg: ModelConfig): ChatOpenAI | ChatAnthropic {
+        if (cfg.provider === 'google') {
+            // Conversation FCA uses REST in geminiFcaModel; this placeholder is not invoked.
+            return new ChatOpenAI({
+                modelName: 'gpt-4.1-mini',
+                apiKey: config.openaiApiKey,
+                maxRetries: 0,
+            });
+        }
         if (cfg.provider === 'anthropic') {
             return new ChatAnthropic({
                 model: cfg.modelName,

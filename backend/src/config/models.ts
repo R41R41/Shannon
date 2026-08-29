@@ -10,7 +10,7 @@
  */
 
 export const models = {
-  /** Main function-calling agent model (Discord/WebUI and Minebot) */
+  /** Main function-calling agent model (Discord/WebUI). Fast non-reasoning default. */
   functionCalling: 'gpt-4.1-mini',
 
   /** Emotion analysis model (lightweight, fast) */

@@ -3,23 +3,33 @@ import { AIMessage, HumanMessage, SystemMessage, ToolMessage, type BaseMessage }
 import type { FcaMessage, FcaModel } from '../../modules/fca/index.js';
 
 export function fcaHistoryToLangChain(system: string, history: readonly FcaMessage[]): BaseMessage[] {
-  return [
-    new SystemMessage(system),
-    ...history.map(message => {
-      if (message.role === 'user') return new HumanMessage(message.content);
-      if (message.role === 'system') return new SystemMessage(message.content);
-      if (message.role === 'tool') return new ToolMessage({ content: message.content, tool_call_id: message.toolCallId ?? '' });
-      return new AIMessage({
-        content: message.content,
-        tool_calls: (message.toolCalls ?? []).map(call => ({
-          id: call.id, name: call.name,
-          args: call.arguments && typeof call.arguments === 'object' && !Array.isArray(call.arguments)
-            ? call.arguments as Record<string, unknown> : {},
-          type: 'tool_call' as const,
-        })),
-      });
-    }),
-  ];
+  const extraSystems: string[] = [];
+  const rest: BaseMessage[] = [];
+  for (const message of history) {
+    if (message.role === 'system') {
+      if (message.content.trim()) extraSystems.push(message.content);
+      continue;
+    }
+    if (message.role === 'user') {
+      rest.push(new HumanMessage(message.content));
+      continue;
+    }
+    if (message.role === 'tool') {
+      rest.push(new ToolMessage({ content: message.content, tool_call_id: message.toolCallId ?? '' }));
+      continue;
+    }
+    rest.push(new AIMessage({
+      content: message.content,
+      tool_calls: (message.toolCalls ?? []).map(call => ({
+        id: call.id, name: call.name,
+        args: call.arguments && typeof call.arguments === 'object' && !Array.isArray(call.arguments)
+          ? call.arguments as Record<string, unknown> : {},
+        type: 'tool_call' as const,
+      })),
+    }));
+  }
+  const systemText = extraSystems.length ? `${system}\n\n${extraSystems.join('\n\n')}` : system;
+  return [new SystemMessage(systemText), ...rest];
 }
 
 /** Stateless OpenAI adapter for the shared FCA kernel. Catalog is per-call, not a process singleton. */
