@@ -1,22 +1,16 @@
-# UID 移行リハーサル（dev）
+# UID 移行リハーサル（dev → 本番）
 
-本番 `users` 3件はすべて `firebaseUid` 未設定。本番切替前に **dev 専用 Firebase + shannon_dev** で dry-run → apply → ログイン確認まで通す。
+dev リハーサルと **本番 apply（2026-08-30）** の手順・記録。本番切替詳細は [prod-cutover-2026-08-30.md](prod-cutover-2026-08-30.md)。
 
 ## 現状（2026-08-30）
 
 | 項目 | 状態 |
 |---|---|
-| 移行スクリプト | `backend/scripts/user-binding-migration.mjs` 実装済み |
-| Settings manifest dry-run | `POST /api/identity/validate-manifest` 実装済み |
-| 隔離 fixture リハーサル | ✅ `scripts/probe-user-binding-migration.cjs --isolated-fixture` 成功（2026-08-30） |
-| prod manifest | ✅ `prod-user-binding-manifest.json` 確定・validate 済（2026-08-30、Git 外） |
-| dev `shannon_dev.users` | ✅ 3件 seed + **UID 绑定 apply 済**（2026-08-30） |
-| dev `.env` の `FIREBASE_PROJECT_ID` | ✅ frontend から同期済 |
-| dev `.env` の `GOOGLE_APPLICATION_CREDENTIALS` | ✅ 配置済 |
-| Firebase Auth 利用者 | ✅ 3件（provision 済、`emailVerified: true`） |
-| dry-run / apply | ✅ plan sha256 一致・`firebase_identity_unique` index 作成済 |
-| ブラウザ `/login` 試験 | ✅ Email/Password 有効化後、3利用者とも sign-in → token 検証 → Mongo 照合成功（2026-08-30） |
-| 本体起動 | `.dev-runtime-lock` 維持 |
+| 隔離 / dev リハーサル | ✅ 完了 |
+| prod manifest | ✅ Git 外で確定 |
+| **prod apply** | ✅ `shannon.users` 3件绑定 |
+| **本番 deploy + admin ログイン** | ✅ `https://sh4nnon.com` |
+| 非 admin 本人試験 | ⏸ 別タイミング |
 
 ## 1. 隔離 fixture（いま実行可能）
 

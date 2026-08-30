@@ -64,6 +64,8 @@
 
 - [R0リリース準備・追加検証（2026-08-28）](r0-release-readiness.md)
 - [UID 移行リハーサル（dev）](uid-migration-rehearsal.md)：隔離 fixture → shannon_dev dry-run/apply 手順。
+- [本番 UID 切替記録（2026-08-30）](prod-cutover-2026-08-30.md)
+- [RF-03 / R0 残作業（C・D）](rf-03-remaining.md)
 
 - [RF-03：記憶scope・検索前制限](./refactor-memory-scope.md)（2026-08-28）：新旧ツールの共通port、旧データ隔離、意図的制限と残課題。
 
