@@ -1,6 +1,13 @@
 import type { DiscordSendServerEmojiInput, DiscordSendTextMessageInput } from '@shannon/common';
+import type { MemoryZone } from '@shannon/common';
 import { config } from '../../config/env.js';
 import { authorizeDiscordVoiceOutbound } from './discordVoiceSession.js';
+
+const AUTHORIZED_SCHEDULED_POST_ZONES = Object.freeze(new Set<MemoryZone>([
+  'discord:test_server',
+  'discord:toyama_server',
+  'discord:douki_server',
+]));
 
 function configuredGuildIds(): ReadonlySet<string> {
   const ids = [
@@ -30,4 +37,15 @@ export function authorizeDiscordOutboundGuildAction(input: Pick<DiscordSendServe
   const { guildId, channelId } = input;
   if (!authorizeDiscordOutboundGuildRead(guildId) || !channelId) return false;
   return authorizeDiscordVoiceOutbound({ guildId, channelId }) != null;
+}
+
+/** Scheduler-only Discord posts. Arbitrary memory zones cannot reach configured channels. */
+export function authorizeDiscordScheduledPost(memoryZone: MemoryZone): boolean {
+  return AUTHORIZED_SCHEDULED_POST_ZONES.has(memoryZone);
+}
+
+/** YouTube subscriber announcements stay on the configured aimine guild only. */
+export function authorizeDiscordSubscriberAnnounce(): boolean {
+  const guildId = config.discord.guilds.aimine.guildId;
+  return typeof guildId === 'string' && guildId.length > 0;
 }

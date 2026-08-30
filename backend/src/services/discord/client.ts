@@ -38,7 +38,7 @@ import { classifyError, formatErrorForLog } from '../../errors/index.js';
 import { getDiscordMemoryZone } from '../../utils/discord.js';
 import { createLogger } from '../../utils/logger.js';
 const logger = createLogger('Discord:Client');
-import { authorizeDiscordOutboundGuildAction, authorizeDiscordOutboundGuildRead, authorizeDiscordOutboundPostMessage } from './discordOutboundAuth.js';
+import { authorizeDiscordOutboundGuildAction, authorizeDiscordOutboundGuildRead, authorizeDiscordOutboundPostMessage, authorizeDiscordScheduledPost, authorizeDiscordSubscriberAnnounce } from './discordOutboundAuth.js';
 import { authorizeDiscordVoiceOutbound, getDiscordVoiceSession } from './discordVoiceSession.js';
 import { loadServerChoices } from './serverChoices.js';
 import { BaseClient } from '../common/BaseClient.js';
@@ -918,6 +918,10 @@ export class DiscordBot extends BaseClient {
 
   private async handleScheduledPost(memoryZone: MemoryZone, input: DiscordScheduledPostInput): Promise<void> {
     if (this.status !== 'running') return;
+    if (!authorizeDiscordScheduledPost(memoryZone)) {
+      logger.warn(`[Discord] Scheduled post rejected for memory zone: ${memoryZone}`);
+      return;
+    }
     const { text, command, imageBuffer } = input;
     if (
       command !== 'forecast' &&
@@ -1028,6 +1032,10 @@ export class DiscordBot extends BaseClient {
 
   private async handleSubscriberUpdate(data: YoutubeSubscriberUpdateOutput): Promise<void> {
     if (this.status !== 'running') return;
+    if (!authorizeDiscordSubscriberAnnounce()) {
+      logger.warn('[Discord] Subscriber announce rejected: aimine guild not configured');
+      return;
+    }
     const { subscriberCount } = data;
     const guildId = config.discord.guilds.aimine.guildId;
     const guild = this.client.guilds.cache.get(guildId);

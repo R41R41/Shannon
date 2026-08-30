@@ -24,6 +24,8 @@ import {
   authorizeDiscordOutboundGuildAction,
   authorizeDiscordOutboundGuildRead,
   authorizeDiscordOutboundPostMessage,
+  authorizeDiscordScheduledPost,
+  authorizeDiscordSubscriberAnnounce,
 } from '../../src/services/discord/discordOutboundAuth.js';
 
 afterEach(() => {
@@ -49,5 +51,17 @@ describe('discordOutboundAuth', () => {
     expect(authorizeDiscordOutboundGuildAction({ guildId: 'guild-test', channelId: 'ch-1' })).toBe(false);
     voiceAuth.mockReturnValue({ requestId: 'voice-1' });
     expect(authorizeDiscordOutboundGuildAction({ guildId: 'guild-test', channelId: 'ch-1' })).toBe(true);
+  });
+
+  it('allows scheduled posts only on configured memory zones', () => {
+    expect(authorizeDiscordScheduledPost('discord:test_server')).toBe(true);
+    expect(authorizeDiscordScheduledPost('discord:toyama_server')).toBe(true);
+    expect(authorizeDiscordScheduledPost('discord:douki_server')).toBe(true);
+    expect(authorizeDiscordScheduledPost('discord:aimine')).toBe(false);
+    expect(authorizeDiscordScheduledPost('web')).toBe(false);
+  });
+
+  it('requires aimine guild configuration for subscriber announce', () => {
+    expect(authorizeDiscordSubscriberAnnounce()).toBe(true);
   });
 });
