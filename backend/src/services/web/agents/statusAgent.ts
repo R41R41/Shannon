@@ -18,6 +18,7 @@ export class StatusAgent extends WebSocketServiceBase {
     super(config);
 
     this.hubUnsubscribe = getWebNotificationHub().onStatus((data) => {
+      if (!('service' in data)) return;
       this.broadcast({
         type: 'service:status',
         service: data.service,

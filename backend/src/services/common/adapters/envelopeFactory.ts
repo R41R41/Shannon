@@ -5,6 +5,7 @@
  * sensible defaults, ensuring all required fields are populated.
  */
 
+import { randomUUID } from 'node:crypto';
 import {
   RequestEnvelope,
   ShannonChannel,
@@ -43,7 +44,7 @@ export interface EnvelopeInput {
  * - Ensures tags array is never undefined
  */
 export function createEnvelope(input: EnvelopeInput): RequestEnvelope {
-  const requestId = crypto.randomUUID();
+  const requestId = randomUUID();
   const now = new Date().toISOString();
 
   // Build a default conversationId from channel + userId if not provided

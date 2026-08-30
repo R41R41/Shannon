@@ -27,10 +27,9 @@ import { generateImage } from '../utils/generateImage.js';
 import { xAdapter } from '../../common/adapters/index.js';
 import { logger } from '../../../utils/logger.js';
 
-export type InvokeGraphFn = (
-  envelope: RequestEnvelope,
-  legacyMessages?: import('@langchain/core/messages').BaseMessage[],
-) => Promise<ShannonGraphState>;
+import type { InvokeGraphFn } from '../graph/invokeGraphTypes.js';
+
+export type { InvokeGraphFn } from '../graph/invokeGraphTypes.js';
 
 export interface AgentOrchestratorDeps {
   isDevMode: boolean;

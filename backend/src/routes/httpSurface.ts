@@ -3,6 +3,16 @@ import { timingSafeEqual } from 'node:crypto';
 import { requireCapability, type AccessService } from '../modules/access/index.js';
 import { authenticateRequest, sendAccessError } from './accessHttp.js';
 
+function profileReadSurface(access: AccessService): RequestHandler {
+  return (req, res, next) => {
+    void authenticateRequest(req, access).then(context => {
+      requireCapability(context, 'profile:read');
+      res.locals.requestContext = context;
+      next();
+    }).catch(error => sendAccessError(res, error));
+  };
+}
+
 /** Default-deny HTTP perimeter. Only liveness and the independently authenticated webhook bypass it. */
 export function protectHttpSurface(access: AccessService): RequestHandler {
   return (req, res, next) => {
@@ -10,12 +20,13 @@ export function protectHttpSurface(access: AccessService): RequestHandler {
     if ((path === '/api/health' || path === '/api/ready') && (req.method === 'GET' || req.method === 'HEAD')) return next();
     if (path === '/api/webhook/twitter' && ['GET', 'HEAD', 'POST'].includes(req.method)) return next();
     res.setHeader('Cache-Control', 'no-store');
-    // The old public graph shares private memory and broadcasts. No flag can reopen it.
-    // Re-enable only through a separately tested, scoped public conversation module.
     if (path === '/api/public' || path.startsWith('/api/public/')) {
       res.status(503).json({ error: 'PUBLIC_CHAT_UNAVAILABLE' }); return;
     }
     if (!path.startsWith('/api/')) { res.status(404).json({ error: 'NOT_FOUND' }); return; }
+    if (path.startsWith('/api/radar/') || path.startsWith('/api/identity/')) {
+      return profileReadSurface(access)(req, res, next);
+    }
     void authenticateRequest(req, access).then(context => {
       requireCapability(context, 'console:access');
       res.locals.requestContext = context;

@@ -30,6 +30,14 @@ describe('HTTP surface perimeter', () => {
     expect((await fetch(url+'/api/webhook/twitter/anything')).status).toBe(401);
     expect((await fetch(url+'/api/health',{method:'POST'})).status).toBe(401);
   });
+  it.each(['/api/radar/sources','/api/identity/status'])('allows profile:read for authorized non-admin on %s', async path => {
+    const url = await start();
+    expect((await fetch(url+path)).status).toBe(401);
+    const user = await fetch(url+path,{headers:{Authorization:'Bearer user'}});
+    expect(user.status).toBe(200);
+    expect(await user.json()).toMatchObject({requestId:'server-request'});
+    expect((await fetch(url+path,{headers:{Authorization:'Bearer admin'}})).status).toBe(200);
+  });
   it('machine endpoint needs a separate long token and rejects browser Origin', async () => {
     const url=await start(true); expect((await fetch(url+'/throw_item')).status).toBe(401);
     expect((await fetch(url+'/throw_item',{headers:{Authorization:'Bearer admin'}})).status).toBe(401);

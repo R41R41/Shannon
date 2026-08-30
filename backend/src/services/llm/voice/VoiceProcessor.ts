@@ -9,6 +9,7 @@ import {
   MemoryZone,
   MinebotVoiceResponseOutput,
 } from '@shannon/common';
+import { File } from 'node:buffer';
 import OpenAI from 'openai';
 import { randomUUID } from 'node:crypto';
 import type { RequestEnvelope, ShannonGraphState } from '@shannon/common';
@@ -52,14 +53,9 @@ function splitIntoSentences(text: string): string[] {
   return sentences.length > 0 ? sentences : [text];
 }
 
-export type InvokeGraphFn = (
-  envelope: RequestEnvelope,
-  legacyMessages?: import('@langchain/core/messages').BaseMessage[],
-  options?: {
-    onToolStarting?: (toolName: string, args?: Record<string, unknown>) => void;
-    onTaskTreeUpdate?: (taskTree: import('@shannon/common').TaskTreeState) => void;
-  },
-) => Promise<ShannonGraphState>;
+import type { InvokeGraphFn } from '../graph/invokeGraphTypes.js';
+
+export type { InvokeGraphFn } from '../graph/invokeGraphTypes.js';
 
 export interface VoiceProcessorDeps {
   openaiClient: OpenAI;

@@ -22,7 +22,8 @@
     "minebot:smoke": "ts-node --esm scripts/minebot-test.ts --smoke",
     "minebot:test": "ts-node --esm scripts/minebot-test.ts --skill",
     "check:foundation": "node ../scripts/check-foundation-boundaries.cjs && tsc -p tsconfig.foundation.json",
-    "check:access-integration": "tsc -p tsconfig.access-integration.json",
+    "check:access-integration": "NODE_OPTIONS='--max-old-space-size=12288' tsc -p tsconfig.access-integration.json",
+    "check:backend-strict": "npm run check:foundation && npm run check:access-integration && npm run check:memory-integration",
     "test:offline": "vitest run tests/unit tests/selfImprove/nightlySchedule.test.ts --maxWorkers=1 --minWorkers=1",
     "check:memory-integration": "tsc -p tsconfig.memory-integration.json"
   },

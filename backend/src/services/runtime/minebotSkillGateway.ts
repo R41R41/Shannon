@@ -32,10 +32,11 @@ export function invokeMinebotSkillFromParameters(
   skillName: string,
   data: SkillParameters | unknown[],
 ): Promise<MinebotOutput> {
-  const parameters = Array.isArray(data)
+  const raw = (data as SkillParameters)?.skillParameters;
+  const parameters: unknown[] = Array.isArray(data)
     ? data
-    : Array.isArray((data as SkillParameters)?.skillParameters)
-      ? (data as SkillParameters).skillParameters
+    : Array.isArray(raw)
+      ? raw
       : [];
   return invokeMinebotSkill(skillName, parameters);
 }

@@ -1,4 +1,5 @@
 import { ILog, MemoryZone, WebMonitoringOutput } from '@shannon/common';
+import type { WebSocket } from 'ws';
 import Log from '../../../models/Log.js';
 import {
   WebSocketServiceBase,

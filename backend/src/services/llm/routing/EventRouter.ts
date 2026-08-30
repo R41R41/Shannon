@@ -13,7 +13,7 @@ import {
   YoutubeLiveChatMessageOutput,
 } from '@shannon/common';
 import type { RequestEnvelope, ShannonGraphState } from '@shannon/common';
-import { getWebNotificationHub } from '../../web/webNotificationHub.js';
+import { getWebNotificationHub, type WebPostMessagePayload } from '../../web/webNotificationHub.js';
 import { acquireWebRealtimeInput } from '../../web/webRealtimeInputLock.js';
 import { RealtimeAPIService } from '../agents/realtimeApiAgent.js';
 import {
@@ -24,11 +24,10 @@ import {
 import { logger } from '../../../utils/logger.js';
 import type { AgentOrchestrator } from '../agents/AgentOrchestrator.js';
 import type { VoiceProcessor } from '../voice/VoiceProcessor.js';
+import type { DiscordInboundMessage, WebInboundMessage } from '../../runtime/llmInboundDispatch.js';
+import type { InvokeGraphFn } from '../graph/invokeGraphTypes.js';
 
-export type InvokeGraphFn = (
-  envelope: RequestEnvelope,
-  legacyMessages?: BaseMessage[],
-) => Promise<ShannonGraphState>;
+export type { InvokeGraphFn } from '../graph/invokeGraphTypes.js';
 
 export interface EventRouterDeps {
   isDevMode: boolean;
@@ -55,7 +54,7 @@ export class EventRouter {
 
   setupRealtimeAPICallback() {
     const hub = getWebNotificationHub();
-    const withSession = <T extends OpenAIMessageOutput>(payload: T): T & { sessionId?: string } => {
+    const withSession = <T extends WebPostMessagePayload>(payload: T): T & { sessionId?: string } => {
       const sessionId = this.realtimeApi.getResponseSessionId();
       return sessionId ? { ...payload, sessionId } : payload;
     };
@@ -63,14 +62,14 @@ export class EventRouter {
       hub.emitPostMessage(withSession({
         type: 'realtime_text',
         realtime_text: text,
-      } as OpenAIMessageOutput));
+      }));
     });
 
     this.realtimeApi.setTextDoneCallback(() => {
       hub.emitPostMessage(withSession({
         type: 'realtime_text',
         command: 'text_done',
-      } as OpenAIMessageOutput));
+      }));
     });
 
     this.realtimeApi.setAudioCallback((audio) => {
@@ -78,32 +77,29 @@ export class EventRouter {
         realtime_audio: audio.toString(),
         type: 'realtime_audio',
         command: 'realtime_audio_append',
-      } as OpenAIMessageOutput));
+      }));
     });
 
     this.realtimeApi.setAudioDoneCallback(() => {
       hub.emitPostMessage(withSession({
         type: 'realtime_audio',
         command: 'realtime_audio_commit',
-      } as OpenAIMessageOutput));
+      }));
     });
 
     this.realtimeApi.setUserTranscriptCallback((text) => {
       hub.emitPostMessage(withSession({
         realtime_text: text,
         type: 'user_transcript',
-      } as OpenAIMessageOutput));
+      }));
     });
   }
 
-  handleWebMessage(message: OpenAIMessageOutput & {
-    recentChatLog?: string[];
-    sessionId?: string;
-  }): void {
+  handleWebMessage(message: WebInboundMessage): void {
     void this.processWebMessage(message);
   }
 
-  handleDiscordMessage(message: DiscordSendTextMessageOutput | DiscordVoiceMessageOutput): void {
+  handleDiscordMessage(message: DiscordInboundMessage): void {
     void this.processDiscordMessage(message);
   }
 
@@ -149,18 +145,14 @@ export class EventRouter {
     });
   }
 
-  private isRealtimeWebMessage(message: OpenAIMessageOutput & { command?: string }): boolean {
+  private isRealtimeWebMessage(message: WebInboundMessage): boolean {
     if (message.type === 'realtime_text' || message.type === 'realtime_audio') return true;
     if (message.command === 'realtime_vad_on' || message.command === 'realtime_vad_off') return true;
     if (message.command === 'realtime_audio_commit') return true;
     return false;
   }
 
-  private async processWebMessage(message: OpenAIMessageOutput & {
-    recentChatLog?: string[];
-    sessionId?: string;
-    sourceUserId?: string;
-  }) {
+  private async processWebMessage(message: WebInboundMessage) {
     try {
       if (this.isRealtimeWebMessage(message)) {
         if (!message.sessionId || !acquireWebRealtimeInput(message.sessionId)) return;
@@ -193,7 +185,9 @@ export class EventRouter {
           type: 'text',
           text: `${currentTime} ${message.senderName ?? ''}: ${message.text ?? ''}`,
           senderName: message.senderName ?? undefined,
-          recentChatLog: message.recentChatLog?.join('\n'),
+          recentChatLog: Array.isArray(message.recentChatLog)
+            ? message.recentChatLog.join('\n')
+            : message.recentChatLog,
           sessionId: message.sessionId,
           sourceUserId: message.sourceUserId,
         });
@@ -204,9 +198,9 @@ export class EventRouter {
     }
   }
 
-  private async processDiscordMessage(message: DiscordSendTextMessageOutput | DiscordVoiceMessageOutput) {
+  private async processDiscordMessage(message: DiscordInboundMessage) {
     try {
-      if (message.type === 'text') {
+      if ('type' in message && message.type === 'text') {
         const textMsg = message as DiscordSendTextMessageOutput;
         const currentTime = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
 
@@ -232,7 +226,7 @@ export class EventRouter {
         return;
       }
 
-      if (message.type === 'voice') {
+      if ('type' in message && message.type === 'voice') {
         await this.voice.processDiscordVoiceMessage(message as DiscordVoiceMessageOutput);
         return;
       }

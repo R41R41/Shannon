@@ -49,7 +49,7 @@ import {
   onMinebotSpawned,
   onMinebotStopped,
 } from '../runtime/minebotLifecycleRegistry.js';
-import { deliverDiscordMessageToLlm } from '../runtime/llmInboundDispatch.js';
+import { deliverDiscordMessageToLlm, type DiscordInboundMessage } from '../runtime/llmInboundDispatch.js';
 import {
   dispatchServiceCommand,
   registerServiceCommandHandler,
@@ -1226,7 +1226,7 @@ export class DiscordBot extends BaseClient {
         type: 'text',
         guildName: memoryZone,
         channelId: message.channelId,
-        guildId: guildId,
+        guildId: guildId ?? '',
         channelName: channelName,
         userName: nickname,
         messageId: messageId,
@@ -1259,7 +1259,7 @@ export class DiscordBot extends BaseClient {
         channelName: channel.name,
         messageId: speech.messageId,
         userId: speech.userId,
-      } as DiscordClientInput);
+      } as DiscordInboundMessage);
     });
   }
 

@@ -10,7 +10,7 @@ import {
   WebSocketServiceConfig,
 } from '../../common/WebSocketService.js';
 import { logger } from '../../../utils/logger.js';
-import { deliverWebMessageToLlm } from '../../runtime/llmInboundDispatch.js';
+import { deliverWebMessageToLlm, type WebInboundMessage } from '../../runtime/llmInboundDispatch.js';
 import { getWebNotificationHub } from '../webNotificationHub.js';
 import { releaseWebRealtimeInput } from '../webRealtimeInputLock.js';
 
@@ -79,7 +79,7 @@ export class OpenAIClientService extends WebSocketServiceBase {
               type: 'realtime_text',
               realtime_text: data.realtime_text,
               sessionId,
-            } as OpenAIRealTimeTextInput & { sessionId: string });
+            } satisfies WebInboundMessage);
           } else if (
             data.type === 'text' &&
             data.text &&
@@ -94,14 +94,14 @@ export class OpenAIClientService extends WebSocketServiceBase {
               recentChatLog: data.recentChatLog,
               sessionId,
               sourceUserId: this.getContext(ws).principal.uid,
-            } as OpenAITextInput & { sessionId: string; sourceUserId: string });
+            } satisfies WebInboundMessage);
           } else if (data.type === 'realtime_audio' && data.realtime_audio) {
             deliverWebMessageToLlm({
               type: 'realtime_audio',
               realtime_audio: data.realtime_audio,
               command: 'realtime_audio_append',
               sessionId,
-            } as OpenAIRealTimeAudioInput & { sessionId: string });
+            } satisfies WebInboundMessage);
           } else if (
             data.type === 'realtime_audio' &&
             data.command === 'realtime_audio_commit'
@@ -110,28 +110,28 @@ export class OpenAIClientService extends WebSocketServiceBase {
               type: 'command',
               command: 'realtime_audio_commit',
               sessionId,
-            } as OpenAICommandInput & { sessionId: string });
+            } satisfies WebInboundMessage);
           } else if (data.type === 'command' && data.command) {
             void getWebNotificationHub().log('web', 'white', 'received realtime voice commit', true, sessionId);
             deliverWebMessageToLlm({
               type: 'command',
               command: data.command,
               sessionId,
-            } as OpenAICommandInput & { sessionId: string });
+            } satisfies WebInboundMessage);
           } else if (data.command === 'realtime_vad_on') {
             void getWebNotificationHub().log('web', 'white', 'received realtime vad on', false, sessionId);
             deliverWebMessageToLlm({
               type: 'command',
               command: data.command,
               sessionId,
-            } as OpenAICommandInput & { sessionId: string });
+            } satisfies WebInboundMessage);
           } else if (data.command === 'realtime_vad_off') {
             void getWebNotificationHub().log('web', 'white', 'received realtime vad off', false, sessionId);
             deliverWebMessageToLlm({
               type: 'command',
               command: data.command,
               sessionId,
-            } as OpenAICommandInput & { sessionId: string });
+            } satisfies WebInboundMessage);
           }
         } catch (error) {
           const sessionId = this.getWebSessionId(ws);

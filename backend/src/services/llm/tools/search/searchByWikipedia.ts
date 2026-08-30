@@ -5,7 +5,7 @@ import { logger } from '../../../../utils/logger.js';
 
 const USER_AGENT = 'ShannonBot/1.0 (https://sh4nnon.com; contact@sh4nnon.com)';
 
-export default class SearchByWikipediaTool extends StructuredTool {
+export default class SearchByWikipediaTool extends StructuredTool<any, any, any, string> {
     name = 'search-by-wikipedia';
     description = 'Wikipediaで対象を検索し、内容を返すツール。日本語・英語どちらも対応。';
     schema = z.object({

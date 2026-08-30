@@ -6,12 +6,12 @@
 
 | ID | 項目 | 状態 | 備考 |
 |---|---|---|---|
-| C1 | Identity binding → 会話経路 | 🚧 | Radar HTTP gate + Discord/Web memory gate 配線済。main server Radar 登録・LINE は未 |
+| C1 | Identity binding → 会話経路 | ✅ | main server Radar 登録・`/api/radar/*`/`/api/identity/*` を `profile:read` に緩和。LINE は未 |
 | C2 | 公開 chat / SSE | 🚫 | 503 停止維持。別設計後に復旧 |
 | C3 | Discord 全宛先認可・LLM 権限伝播 | ✅ | scheduled/subscriber outbound gate、memoryDisabled→ツール除外 |
 | C4 | 記憶 scope 実 DB 移行 | 🚫 | 旧データ自動再分類なし |
-| C5 | backend 全体 strict 型検査 | 🚧 | `--noCheck` 変換のみ |
-| C6 | `check:access-integration` 型エラー | 🚧 | Web エージェント系 |
+| C5 | backend 段階 strict 型検査 | ✅ | `check:foundation` + `check:access-integration` + `check:memory-integration` 合格（フル `tsc` は OOM のため対象外） |
+| C6 | `check:access-integration` 型エラー | ✅ | Web/Discord/Voice/LangChain 深い型・migration `.d.ts` 等を解消 |
 
 ## D — Radar / LINE / インフラ
 
