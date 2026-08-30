@@ -30,5 +30,5 @@ export function createWebAccess(projectId: string) {
     new MongoIdentityMigrationUserRepository(),
     reviewedBindingManifestPlanner,
   );
-  return { access, modelSettings, identityStatus, identityBindingWrite, identityManifestReview };
+  return { access, modelSettings, identityStatus, identityBindingWrite, identityManifestReview, profileRepository };
 }

@@ -52,6 +52,13 @@ export {
   parseWritableChannel,
 } from './bindingWrite.js';
 export { IdentityInputError };
+export {
+  assertRadarPersonalFeedAccess,
+  IdentityGateError,
+  isMemoryChannelAllowed,
+  isRadarPersonalFeedAllowed,
+  type IdentityBindingLookup,
+} from './resolveBinding.js';
 
 export interface IdentityStatusRepository {
   snapshotFor(context: RequestContext): Promise<IdentityStatusSnapshot> | IdentityStatusSnapshot;
