@@ -8,7 +8,7 @@
 |---|---|---|---|
 | C1 | Identity binding → 会話経路 | 🚧 | Radar HTTP gate + Discord/Web memory gate 配線済。main server Radar 登録・LINE は未 |
 | C2 | 公開 chat / SSE | 🚫 | 503 停止維持。別設計後に復旧 |
-| C3 | Discord 全宛先認可・LLM 権限伝播 | 🚧 | voice/Minebot/Web session は済 |
+| C3 | Discord 全宛先認可・LLM 権限伝播 | ✅ | scheduled/subscriber outbound gate、memoryDisabled→ツール除外 |
 | C4 | 記憶 scope 実 DB 移行 | 🚫 | 旧データ自動再分類なし |
 | C5 | backend 全体 strict 型検査 | 🚧 | `--noCheck` 変換のみ |
 | C6 | `check:access-integration` 型エラー | 🚧 | Web エージェント系 |

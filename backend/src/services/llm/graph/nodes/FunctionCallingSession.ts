@@ -300,7 +300,7 @@ export class FunctionCallingSession {
         }
         logger.info(`🤖 FunctionCallingAgent: タスク実行開始 "${goal}"${isEmergency ? ' [緊急]' : ''} (model=${modelSelector.modelName})`, 'cyan');
 
-        let effectiveTools = selectToolsForChannel(channel ?? undefined, this.tools, composition.allowedTools);
+        let effectiveTools = selectToolsForChannel(channel ?? undefined, this.tools, composition.allowedTools, composition.requestEnvelope);
         let effectiveToolMap = new Map(effectiveTools.map(t => [t.name, t]));
         if (effectiveTools.length !== this.tools.length) {
             logger.info(`🔒 tools for ${channel ?? 'unknown'}: ${effectiveTools.length}/${this.tools.length}`, 'cyan');

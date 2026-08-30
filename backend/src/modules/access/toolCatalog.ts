@@ -152,11 +152,23 @@ export function isTwitterWriteTool(name: string): boolean {
   return (TWITTER_WRITE_TOOLS as readonly string[]).includes(name);
 }
 
+const MEMORY_POLICY_TOOLS = Object.freeze(['recall-memory', 'save-memory', 'save-person-memory']);
+
+/** Identity audience gate sets memoryDisabled on the envelope; keep LLM tool exposure aligned. */
+export function filterToolsByMemoryPolicy<T extends { name: string }>(
+  envelope: { metadata?: { memoryDisabled?: boolean } } | undefined,
+  tools: readonly T[],
+): T[] {
+  if (envelope?.metadata?.memoryDisabled !== true) return [...tools];
+  return tools.filter(tool => !MEMORY_POLICY_TOOLS.includes(tool.name));
+}
+
 /** Catalog first for named platform tools. InstantSkills and test tools keep their injected names. Twitter write never leaks onto a conversation path. */
 export function selectToolsForChannel<T extends { name: string }>(
   channel: string | undefined,
   tools: readonly T[],
   extraAllowlist?: readonly string[],
+  envelope?: { metadata?: { memoryDisabled?: boolean } },
 ): T[] {
   const path = toolPathForChannel(channel);
   const allowed = path ? new Set(toolsForPath(path)) : undefined;
@@ -166,5 +178,6 @@ export function selectToolsForChannel<T extends { name: string }>(
     if (!allowed) return !isTwitterWriteTool(tool.name);
     return allowed.has(tool.name);
   });
-  return extraAllowlist === undefined ? selected : selectAllowedTools(selected, extraAllowlist);
+  const narrowed = extraAllowlist === undefined ? selected : selectAllowedTools(selected, extraAllowlist);
+  return filterToolsByMemoryPolicy(envelope, narrowed);
 }
