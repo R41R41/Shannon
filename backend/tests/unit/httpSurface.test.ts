@@ -42,6 +42,7 @@ describe('HTTP surface perimeter', () => {
     const url=await start(true); expect((await fetch(url+'/throw_item')).status).toBe(401);
     expect((await fetch(url+'/throw_item',{headers:{Authorization:'Bearer admin'}})).status).toBe(401);
     const headers={Authorization:`Bearer ${'x'.repeat(32)}`}; expect((await fetch(url+'/throw_item',{headers})).status).toBe(200);
+    expect((await fetch(url+'/throw_item',{headers:{Authorization:`bearer ${'x'.repeat(32)}`}})).status).toBe(200);
     expect((await fetch(url+'/throw_item',{headers:{...headers,Origin:'https://attacker.test'}})).status).toBe(401);
   });
 });
