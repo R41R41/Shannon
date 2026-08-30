@@ -10,6 +10,8 @@ export interface LineRadarFcaPorts {
   youtubeRecommendations?(owner:string,query:string,limit:number,signal:AbortSignal):Promise<readonly RawRadarCandidate[]>;
   twitter?(owner:string,query:string,limit:number,signal:AbortSignal):Promise<readonly RawRadarCandidate[]>;
   webSearch?(owner:string,query:string,limit:number,signal:AbortSignal):Promise<readonly RawRadarCandidate[]>;
+  notion?(owner:string,limit:number,signal:AbortSignal):Promise<readonly RawRadarCandidate[]>;
+  gmail?(owner:string,limit:number,signal:AbortSignal):Promise<readonly RawRadarCandidate[]>;
 }
 interface NewsPreview { items:readonly {contentId:string;sourceId:string;card:{title:string;fact:string;metadata:readonly string[];sourceUrl:string}}[]; }
 interface TemporalPreview { entries:readonly {sourceId:string;content:any;timeZone:string}[]; }
@@ -49,7 +51,9 @@ export async function selectLineRadarDigest(input:{owner:string;policy:LineRadar
     twitter:async(query,limit,signal)=>input.ports.twitter?input.ports.twitter(input.owner,query,limit,signal):Object.freeze([]),
     web:async(query,limit,signal)=>Object.freeze([...(input.ports.webSearch?await input.ports.webSearch(input.owner,query,limit,signal):[]),...web].slice(0,limit)),
     ...(input.policy.weather?{weather:async()=>Object.freeze(weather.slice(0,3))}:{}),
-    ...(input.policy.calendar?{calendar:async(limit:number)=>Object.freeze(calendar.slice(0,limit))}:{})
+    ...(input.policy.calendar?{calendar:async(limit:number)=>Object.freeze(calendar.slice(0,limit))}:{}),
+    ...(input.ports.notion?{notion:(limit:number,signal:AbortSignal)=>input.ports.notion!(input.owner,limit,signal)}:{}),
+    ...(input.ports.gmail?{gmail:(limit:number,signal:AbortSignal)=>input.ports.gmail!(input.owner,limit,signal)}:{})
   },input.ports.receipts,()=>input.now,{lane:'personal'});
   const result=await input.ports.fca.run(skills,input.policy.topics??[...new Set(input.policy.feeds.flatMap(feed=>feed.topicIds))],input.signal);
   const fitting:{candidate:RadarCandidate;reason:string}[]=[];const blocks:string[]=[];let bytes=Buffer.byteLength('Shannon Radar\n\n\n配信停止:「配信停止」');

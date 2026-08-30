@@ -550,3 +550,9 @@ LINE policyは登録YouTube、Calendar、天気、最大3件の選択feedと話�
 個人LINE laneのX探索は、旧Twitter投稿clientを利用しない。LINE専用 XPublicSearch はtwitterapi.ioの公開advanced searchへ1 run 1回、1ページ、最大20件のGETだけを行い、Cookie、アカウントログイン、投稿、いいね、返信、pagination、retryを持たない。返信とretweetを除外し、本文・公開時刻・公開URL・集計値だけをrun内候補へ変換する。API利用不可時は候補0件相当で配信系から失敗を隔離し、資格情報や応答本文を記録しない。
 
 WebSearchDiscoveryは既存のLINE専用Google Custom Search資格情報を使い、1回最大5件の公開HTTPS結果を候補化する。検索結果に信頼できる公開日時がない場合は、取得時刻を内部整列値に使う一方、metadataへ「公開日時不明」と明示し、公開時刻や新着性の根拠として扱わない。X/Webとも候補選定後だけ既存insert-only receiptへhashを予約し、選ばれなかった候補や検索queryをMongo/LINE ledgerへ保存しない。
+
+## Gmail / 選択Notionのprivate source境界（RAD-PRIVATE-1）
+
+個人LINE laneだけにGmailとNotionのoptional portを追加した。Gmailはscopeがgmail.metadataに完全一致する本人bindingだけを許し、重要・未読としてauthorityが返した最大10件の件名、差出人、受信時刻、本人向けURLだけを候補化する。本文、snippet、添付、宛先一覧、既読化、返信、削除は契約に存在しない。
+
+Notionはscopeがnotion:selected:readに一致し、運用者または本人が明示allowlistしたpageだけを返すauthorityを要求する。workspace全体の検索、未選択database、コメント、編集、共有設定変更は契約外。両sourceとも取得前後に同じowner、binding、version、expiryを再照合し、private candidateはcommunity laneへ公開しない。現段階はport・正規化・fixtureまでで、実OAuth/token/allowlistは未設定のためruntime toolは公開されない。
