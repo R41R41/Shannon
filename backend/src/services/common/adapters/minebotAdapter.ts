@@ -1,3 +1,4 @@
+import { minecraftConversationKeys, normalizeMinecraftDimension } from '../../../modules/memory/minecraftIdentity.js';
 /**
  * Minebot Channel Adapter
  *
@@ -24,6 +25,9 @@ export interface MinebotNativeEvent {
 
   // Environment state
   serverName?: string;
+  /** Explicit operator-owned identity, supplied by the connected bot runtime. */
+  serverId?: string;
+  worldId?: string;
   senderPosition?: { x: number; y: number; z: number };
   weather?: string;
   time?: string;
@@ -66,9 +70,13 @@ export const minebotAdapter: ChannelAdapter<MinebotNativeEvent> = {
     if (event.isEmergency) tags.push('emergency');
     if (event.eventType) tags.push(event.eventType);
 
+    const dimension = normalizeMinecraftDimension(event.dimension) ?? undefined;
+    const memoryKeys = minecraftConversationKeys({ serverId: event.serverId, worldId: event.worldId, dimension }, event.senderId ?? event.senderName);
     const minecraft: MinecraftContext = {
+      serverId: event.serverId,
+      worldId: event.worldId,
       serverName: event.serverName,
-      dimension: event.dimension,
+      dimension,
       biome: event.biome,
       position: event.botPosition,
       health: event.botHealth,
@@ -86,8 +94,8 @@ export const minebotAdapter: ChannelAdapter<MinebotNativeEvent> = {
       channel: 'minecraft',
       sourceUserId: event.senderId ?? event.senderName,
       sourceDisplayName: event.senderName,
-      conversationId: `minecraft:${event.serverName ?? 'default'}:${event.senderName}`,
-      threadId: `minecraft:${event.serverName ?? 'default'}`,
+      conversationId: memoryKeys?.conversationId ?? `minecraft:unbound:${event.senderName}`,
+      threadId: memoryKeys?.threadId ?? 'minecraft:unbound',
       text: event.message,
       tags,
       minecraft,

@@ -9,30 +9,21 @@ import {
   WebSocketServiceBase,
   WebSocketServiceConfig,
 } from '../../common/WebSocketService.js';
-import { EventBus } from '../../eventBus/eventBus.js';
-import { getEventBus } from '../../eventBus/index.js';
 import { logger } from '../../../utils/logger.js';
+import { deliverWebMessageToLlm } from '../../runtime/llmInboundDispatch.js';
+import { getWebNotificationHub } from '../webNotificationHub.js';
+import { releaseWebRealtimeInput } from '../webRealtimeInputLock.js';
 
 export class OpenAIClientService extends WebSocketServiceBase {
   private static instance: OpenAIClientService | null = null;
-  private eventBus: EventBus;
-  private messageSubscription: (() => void) | null = null;
+  private hubUnsubscribe: (() => void) | null = null;
 
   private constructor(config: WebSocketServiceConfig) {
     super(config);
-    this.eventBus = getEventBus();
 
-    // グローバルなsubscribeを設定
-    this.messageSubscription = this.eventBus.subscribe(
-      'web:post_message',
-      (event) => {
-        const data = event.data as OpenAITextInput;
-        this.eventBus.log('web', 'white', data.text, true);
-        if (event.memoryZone === 'web') {
-          this.broadcast(event.data);
-        }
-      }
-    );
+    this.hubUnsubscribe = getWebNotificationHub().onPostMessage((data) => {
+      this.broadcastWebPayload(data, data);
+    });
   }
 
   public static getInstance(
@@ -45,22 +36,31 @@ export class OpenAIClientService extends WebSocketServiceBase {
   }
 
   protected initialize() {
-    this.wss.on('connection', (ws) => {
+    this.onAuthenticatedConnection((ws) => {
       logger.debug('New OpenAI client connected');
 
-      // 新しい接続の管理
       this.handleNewConnection(ws);
 
       ws.on('close', () => {
+        releaseWebRealtimeInput(this.getWebSessionId(ws));
         logger.debug('OpenAI client disconnected');
       });
 
-      ws.on('message', (message) => {
+      this.onMessage(ws, (message) => {
         try {
           const data = JSON.parse(message.toString());
+          const sessionId = this.getWebSessionId(ws);
 
           if (data.type === 'ping') {
             this.broadcast({ type: 'pong' } as OpenAIMessageOutput);
+            return;
+          }
+          if (data.type === 'web:bind-session' && typeof data.sessionId === 'string') {
+            this.bindWebSession(ws, data.sessionId);
+            return;
+          }
+          if (!sessionId) {
+            logger.warn('[OpenAIClientService] Dropping web message without bound session');
             return;
           }
           logger.info(
@@ -74,110 +74,68 @@ export class OpenAIClientService extends WebSocketServiceBase {
             'blue',
           );
           if (data.type === 'realtime_text' && data.realtime_text) {
-            this.eventBus.log('web', 'white', data.realtime_text);
-            const message: OpenAIRealTimeTextInput = {
+            void getWebNotificationHub().log('web', 'white', data.realtime_text, false, sessionId);
+            deliverWebMessageToLlm({
               type: 'realtime_text',
               realtime_text: data.realtime_text,
-            };
-
-            this.eventBus.publish({
-              type: 'llm:get_web_message',
-              memoryZone: 'web',
-              data: message,
-            });
+              sessionId,
+            } as OpenAIRealTimeTextInput & { sessionId: string });
           } else if (
             data.type === 'text' &&
             data.text &&
             data.recentChatLog &&
             data.senderName
           ) {
-            this.eventBus.log('web', 'white', data.text, true);
-            const message: OpenAITextInput = {
+            void getWebNotificationHub().log('web', 'white', data.text, true, sessionId);
+            deliverWebMessageToLlm({
               type: 'text',
               text: data.text,
-              senderName: data.senderName,
+              senderName: this.getContext(ws).principal.name,
               recentChatLog: data.recentChatLog,
-            };
-            this.eventBus.publish({
-              type: 'llm:get_web_message',
-              memoryZone: 'web',
-              data: message,
-            });
+              sessionId,
+              sourceUserId: this.getContext(ws).principal.uid,
+            } as OpenAITextInput & { sessionId: string; sourceUserId: string });
           } else if (data.type === 'realtime_audio' && data.realtime_audio) {
-            const message: OpenAIRealTimeAudioInput = {
+            deliverWebMessageToLlm({
               type: 'realtime_audio',
               realtime_audio: data.realtime_audio,
               command: 'realtime_audio_append',
-            };
-
-            this.eventBus.publish({
-              type: 'llm:get_web_message',
-              memoryZone: 'web',
-              data: message,
-            });
+              sessionId,
+            } as OpenAIRealTimeAudioInput & { sessionId: string });
           } else if (
             data.type === 'realtime_audio' &&
             data.command === 'realtime_audio_commit'
           ) {
-            const message: OpenAICommandInput = {
+            deliverWebMessageToLlm({
               type: 'command',
               command: 'realtime_audio_commit',
-            };
-
-            this.eventBus.publish({
-              type: 'llm:get_web_message',
-              memoryZone: 'web',
-              data: message,
-            });
+              sessionId,
+            } as OpenAICommandInput & { sessionId: string });
           } else if (data.type === 'command' && data.command) {
-            this.eventBus.log(
-              'web',
-              'white',
-              'received realtime voice commit',
-              true
-            );
-            const message: OpenAICommandInput = {
+            void getWebNotificationHub().log('web', 'white', 'received realtime voice commit', true, sessionId);
+            deliverWebMessageToLlm({
               type: 'command',
               command: data.command,
-            };
-
-            this.eventBus.publish({
-              type: 'llm:get_web_message',
-              memoryZone: 'web',
-              data: message,
-            });
+              sessionId,
+            } as OpenAICommandInput & { sessionId: string });
           } else if (data.command === 'realtime_vad_on') {
-            this.eventBus.log('web', 'white', 'received realtime vad on');
-            const message: OpenAICommandInput = {
+            void getWebNotificationHub().log('web', 'white', 'received realtime vad on', false, sessionId);
+            deliverWebMessageToLlm({
               type: 'command',
               command: data.command,
-            };
-
-            this.eventBus.publish({
-              type: 'llm:get_web_message',
-              memoryZone: 'web',
-              data: message,
-            });
+              sessionId,
+            } as OpenAICommandInput & { sessionId: string });
           } else if (data.command === 'realtime_vad_off') {
-            this.eventBus.log('web', 'white', 'received realtime vad off');
-            const message: OpenAICommandInput = {
+            void getWebNotificationHub().log('web', 'white', 'received realtime vad off', false, sessionId);
+            deliverWebMessageToLlm({
               type: 'command',
               command: data.command,
-            };
-
-            this.eventBus.publish({
-              type: 'llm:get_web_message',
-              memoryZone: 'web',
-              data: message,
-            });
+              sessionId,
+            } as OpenAICommandInput & { sessionId: string });
           }
         } catch (error) {
-          this.eventBus.log(
-            'web',
-            'red',
-            'Error processing message:' + error,
-            true
-          );
+          const sessionId = this.getWebSessionId(ws);
+          void getWebNotificationHub().log('web', 'red', 'Error processing message:' + error, true, sessionId);
           logger.error('Error processing message:', error);
         }
       });
@@ -185,13 +143,11 @@ export class OpenAIClientService extends WebSocketServiceBase {
   }
 
   public start() {
-    this.initialize();
+    super.start();
   }
 
   public disconnect() {
-    if (this.messageSubscription) {
-      this.messageSubscription();
-      this.messageSubscription = null;
-    }
+    this.hubUnsubscribe?.();
+    this.hubUnsubscribe = null;
   }
 }

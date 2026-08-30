@@ -12,7 +12,11 @@ import { LRUSet } from '../../../utils/LRUSet.js';
 import { createLogger } from '../../../utils/logger.js';
 const logger = createLogger('Twitter:Monitor');
 import { TwitterApiClient, TweetData } from '../api/TwitterApiClient.js';
-import { EventBus } from '../../eventBus/eventBus.js';
+import {
+  deliverMemberTweetToLlm,
+  deliverTwitterQuoteRtToLlm,
+  deliverTwitterReplyToLlm,
+} from '../../runtime/llmInboundDispatch.js';
 
 // 処理済みツイートID の永続化ファイルパス
 const PROCESSED_IDS_FILE = path.resolve('saves/processed_tweet_ids.json');
@@ -53,11 +57,9 @@ export class TweetMonitor {
 
   private myUserId: string | null;
   private apiClient: TwitterApiClient;
-  private eventBus: EventBus;
 
   constructor(
     apiClient: TwitterApiClient,
-    eventBus: EventBus,
     opts: {
       myUserId: string | null;
       maxRepliesPerDay: number;
@@ -66,7 +68,6 @@ export class TweetMonitor {
     },
   ) {
     this.apiClient = apiClient;
-    this.eventBus = eventBus;
     this.myUserId = opts.myUserId;
     this.maxRepliesPerDay = opts.maxRepliesPerDay;
     this.replyProbability = opts.replyProbability;
@@ -197,17 +198,13 @@ export class TweetMonitor {
       }
 
       this.incrementReplyCount();
-      this.eventBus.publish({
-        type: 'llm:post_twitter_reply',
-        memoryZone: 'twitter:post',
-        data: {
-          replyId: replies[0].reply.id,
-          text: replies[0].reply.text,
-          authorName: replies[0].reply.author.name,
-          repliedTweet: replies[0].myTweet,
-          repliedTweetAuthorName: replies[0].reply.author.name,
-        } as TwitterReplyOutput,
-      });
+      deliverTwitterReplyToLlm({
+        replyId: replies[0].reply.id,
+        text: replies[0].reply.text,
+        authorName: replies[0].reply.author.name,
+        repliedTweet: replies[0].myTweet,
+        repliedTweetAuthorName: replies[0].reply.author.name,
+      } as TwitterReplyOutput);
     } catch (err: unknown) {
       const errMsg = isAxiosError(err)
         ? (err.response?.data ?? err.message)
@@ -324,17 +321,13 @@ export class TweetMonitor {
         // 2) 必ず引用RT (ai_mine_lab のみ)
         if (accountConfig.alwaysQuoteRT) {
           const tweetUrl = tweet.url || `https://x.com/${authorUserName}/status/${tweet.id}`;
-          this.eventBus.publish({
-            type: 'llm:post_twitter_quote_rt',
-            memoryZone: 'twitter:post',
-            data: {
-              tweetId: tweet.id,
-              tweetUrl,
-              text: tweet.text,
-              authorName: tweet.author.name,
-              authorUserName,
-            } as TwitterQuoteRTOutput,
-          });
+          deliverTwitterQuoteRtToLlm({
+            tweetId: tweet.id,
+            tweetUrl,
+            text: tweet.text,
+            authorName: tweet.author.name,
+            authorUserName,
+          } as TwitterQuoteRTOutput);
         }
 
         // 3) 確率で返信 (ai_mine_lab 用)
@@ -358,17 +351,13 @@ export class TweetMonitor {
             }
           }
 
-          this.eventBus.publish({
-            type: 'llm:post_twitter_reply',
-            memoryZone: 'twitter:post',
-            data: {
-              replyId: tweet.id,
-              text: tweet.text,
-              authorName: tweet.author.name,
-              repliedTweet: repliedTweetText,
-              repliedTweetAuthorName,
-            } as TwitterReplyOutput,
-          });
+          deliverTwitterReplyToLlm({
+            replyId: tweet.id,
+            text: tweet.text,
+            authorName: tweet.author.name,
+            repliedTweet: repliedTweetText,
+            repliedTweetAuthorName,
+          } as TwitterReplyOutput);
         }
 
         // 4) メンバーFCA: LLMが返信/引用RTを自動判断
@@ -393,19 +382,15 @@ export class TweetMonitor {
             }
           }
 
-          this.eventBus.publish({
-            type: 'llm:respond_member_tweet',
-            memoryZone: 'twitter:post',
-            data: {
-              tweetId: tweet.id,
-              tweetUrl,
-              text: tweet.text,
-              authorName: tweet.author.name,
-              authorUserName,
-              repliedTweet: repliedTweetText,
-              repliedTweetAuthorName,
-            } as MemberTweetInput,
-          });
+          deliverMemberTweetToLlm({
+            tweetId: tweet.id,
+            tweetUrl,
+            text: tweet.text,
+            authorName: tweet.author.name,
+            authorUserName,
+            repliedTweet: repliedTweetText,
+            repliedTweetAuthorName,
+          } as MemberTweetInput);
         }
       }
 

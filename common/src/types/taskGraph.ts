@@ -78,18 +78,4 @@ export interface TaskNode {
   children?: TaskNode[] | null;
 }
 
-export interface EmotionType {
-  emotion: string;
-  parameters: {
-    joy: number;
-    trust: number;
-    fear: number;
-    surprise: number;
-    sadness: number;
-    disgust: number;
-    anger: number;
-    anticipation: number;
-  };
-}
-
 export type TaskEventType = "task:stop" | "task:start";

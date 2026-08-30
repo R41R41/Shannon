@@ -1,0 +1,28 @@
+[Unit]
+Description=Shannon LINE personal chat and Radar
+After=network-online.target mongod.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=azureuser
+Group=azureuser
+WorkingDirectory=/home/azureuser/shannon-line/releases/@COMMIT@
+ExecStart=/home/azureuser/.nvm/versions/node/v22.21.1/bin/node scripts/start-line-service.cjs --serve prod
+Environment=NODE_ENV=production
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=45
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryMax=512M
+TasksMax=64
+LimitNOFILE=1024
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

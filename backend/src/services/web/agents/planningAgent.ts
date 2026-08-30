@@ -3,29 +3,18 @@ import {
   WebSocketServiceBase,
   WebSocketServiceConfig,
 } from '../../common/WebSocketService.js';
-import { EventBus } from '../../eventBus/eventBus.js';
-import { getEventBus } from '../../eventBus/index.js';
 import { logger } from '../../../utils/logger.js';
+import { getWebNotificationHub } from '../webNotificationHub.js';
 
 export class PlanningAgent extends WebSocketServiceBase {
   private static instance: PlanningAgent;
-  private eventBus: EventBus;
-  private messageSubscription: (() => void) | null = null;
+  private unsubscribePlanning: (() => void) | null = null;
 
   private constructor(config: WebSocketServiceConfig) {
     super(config);
-    this.eventBus = getEventBus();
-
-    this.messageSubscription = this.eventBus.subscribe(
-      'web:planning',
-      (event) => {
-        const data = event.data as TaskTreeState;
-        this.broadcast({
-          type: 'web:planning',
-          data: data,
-        });
-      }
-    );
+    this.unsubscribePlanning = getWebNotificationHub().onPlanning((data) => {
+      this.broadcastWebPayload(data, { type: 'web:planning', data: data as TaskTreeState });
+    });
   }
 
   public static getInstance(config: WebSocketServiceConfig): PlanningAgent {
@@ -36,44 +25,23 @@ export class PlanningAgent extends WebSocketServiceBase {
   }
 
   protected override initialize() {
-    this.wss.on('connection', async (ws) => {
+    this.onAuthenticatedConnection(async (ws) => {
       logger.debug('Planning client connected');
-
       this.handleNewConnection(ws);
-
-      ws.on('close', () => {
-        logger.debug('Planning client disconnected');
-      });
-
-      ws.on('message', async (message) => {
+      ws.on('close', () => { logger.debug('Planning client disconnected'); });
+      this.onMessage(ws, async (message) => {
         const data = JSON.parse(message.toString());
-
-        if (data.type === 'ping') {
-          this.broadcast({ type: 'pong' });
+        if (data.type === 'web:bind-session' && typeof data.sessionId === 'string') {
+          this.bindWebSession(ws, data.sessionId);
           return;
         }
-      });
-
-      ws.on('close', () => {
-        logger.debug('Planning Client disconnected');
-      });
-
-      ws.on('error', (error) => {
-        logger.error('WebSocket error:', error);
+        if (data.type === 'ping') this.broadcast({ type: 'pong' });
       });
     });
-
-    logger.debug('PlanningAgent subscribe');
-  }
-
-  public start() {
-    super.start();
   }
 
   public disconnect() {
-    if (this.messageSubscription) {
-      this.messageSubscription();
-      this.messageSubscription = null;
-    }
+    this.unsubscribePlanning?.();
+    this.unsubscribePlanning = null;
   }
 }

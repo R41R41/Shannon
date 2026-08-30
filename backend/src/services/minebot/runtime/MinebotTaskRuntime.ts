@@ -1,3 +1,5 @@
+import { minecraftContextKey, minecraftConversationKeys } from '../../../modules/memory/minecraftIdentity.js';
+import { minecraftMemoryContext, validateMinecraftEnvelope, assertMinecraftContinuation, assertMinecraftConnected } from './memoryContext.js';
 import { BaseMessage, HumanMessage } from '@langchain/core/messages';
 import type { MinecraftInventoryEntry, RequestEnvelope } from '@shannon/common';
 import { createEnvelope } from '../../common/adapters/envelopeFactory.js';
@@ -41,6 +43,7 @@ export class MinebotTaskRuntime {
 
   public currentState: {
     taskId: string;
+    memoryContextKey?: string | null;
     createdAt: number;
     forceStop: boolean;
     retryBudget: number;
@@ -68,7 +71,10 @@ export class MinebotTaskRuntime {
   }
 
   public async invoke(partialState: TaskStateInput) {
+    assertMinecraftConnected(this.bot);
     if (this.isExecuting) {
+      if (partialState.envelope) assertMinecraftContinuation(this.currentState?.memoryContextKey, partialState.envelope, this.bot);
+      else if (this.currentState?.memoryContextKey !== minecraftContextKey(minecraftMemoryContext(this.bot))) throw new Error('MINECRAFT_MEMORY_CONTEXT_CHANGED');
       // タスク実行中にユーザーからメッセージが来たら、フィードバックとして注入
       if (partialState.userMessage) {
         log.info(`💬 タスク実行中にフィードバック受付: "${partialState.userMessage.substring(0, 50)}"`);
@@ -95,6 +101,8 @@ export class MinebotTaskRuntime {
 
     const taskId = partialState.taskId ?? crypto.randomUUID();
     const createdAt = Date.now();
+    let requestMemoryKey: string | null = null;
+    let removeContextListeners = () => {};
     this.currentState = {
       taskId,
       createdAt,
@@ -114,6 +122,22 @@ export class MinebotTaskRuntime {
 
     try {
       const envelope = this.taskInputToEnvelope(partialState);
+      requestMemoryKey = envelope.metadata?.memoryDisabled === true ? null : minecraftContextKey(envelope.minecraft);
+      this.currentState.memoryContextKey = requestMemoryKey;
+      // A dimension transition/disconnect invalidates the physical context of this execution.
+      const controller = this.abortController;
+      const onDisconnect = () => controller?.abort();
+      const onRespawn = () => {
+        if (minecraftContextKey(envelope.minecraft) !== minecraftContextKey(minecraftMemoryContext(this.bot))) controller?.abort();
+      };
+      this.bot.on('end', onDisconnect);
+      this.bot.on('kicked', onDisconnect);
+      this.bot.on('respawn', onRespawn);
+      removeContextListeners = () => {
+        this.bot.removeListener('end', onDisconnect);
+        this.bot.removeListener('kicked', onDisconnect);
+        this.bot.removeListener('respawn', onRespawn);
+      };
       // ShannonExecutor がタスク実行中にユーザーフィードバックを取得できるようにする
       (envelope as any).metadata = {
         ...(envelope as any).metadata,
@@ -147,6 +171,7 @@ export class MinebotTaskRuntime {
         },
         abortSignal: this.abortController?.signal,
       });
+      if (controller?.signal.aborted) throw new Error('MINECRAFT_TASK_CONTEXT_CANCELLED');
 
       const taskTree =
         this.currentState?.forceStop
@@ -159,6 +184,7 @@ export class MinebotTaskRuntime {
 
       this.currentState = {
         taskId,
+        memoryContextKey: requestMemoryKey,
         createdAt,
         forceStop: this.currentState?.forceStop ?? false,
         retryBudget: this.currentState?.retryBudget ?? 2,
@@ -178,6 +204,7 @@ export class MinebotTaskRuntime {
         this.abortedForEmergency = false;
         this.currentState = {
           taskId,
+          memoryContextKey: requestMemoryKey,
           createdAt,
           forceStop: true,
           retryBudget: this.currentState?.retryBudget ?? 2,
@@ -196,6 +223,7 @@ export class MinebotTaskRuntime {
       log.error('Task execution error', error);
       this.currentState = {
         taskId,
+        memoryContextKey: requestMemoryKey,
         createdAt,
         forceStop: this.currentState?.forceStop ?? false,
         retryBudget: this.currentState?.retryBudget ?? 2,
@@ -211,6 +239,7 @@ export class MinebotTaskRuntime {
       this.notifyTaskListUpdate();
       return this.currentState;
     } finally {
+      removeContextListeners();
       this.isExecuting = false;
       this.abortController = null;
       this.bot.suppressMinebotGameChat = false;
@@ -266,6 +295,8 @@ export class MinebotTaskRuntime {
     const awaitingTask = this.taskQueue.find((task) => task.status === 'awaiting_user');
 
     if (awaitingTask) {
+      const previous = awaitingTask.state.envelope;
+      assertMinecraftContinuation(previous?.metadata?.memoryDisabled === true ? null : minecraftContextKey(previous?.minecraft), overrides.envelope, this.bot);
       const goal = awaitingTask.taskTree?.goal || awaitingTask.state.userMessage || 'Task';
       awaitingTask.status = 'pending';
       awaitingTask.state = {
@@ -295,6 +326,7 @@ export class MinebotTaskRuntime {
       return null;
     }
 
+    assertMinecraftContinuation(this.currentState.memoryContextKey, overrides.envelope, this.bot);
     const goal = this.currentState.taskTree?.goal || 'Task';
     const savedMessages = this.currentState.savedMessages;
     const savedTaskNodes = this.currentState.savedTaskNodes;
@@ -402,6 +434,11 @@ export class MinebotTaskRuntime {
       };
     }
 
+    try {
+      taskInput = { ...taskInput, envelope: this.taskInputToEnvelope(taskInput) };
+    } catch {
+      return { success: false, reason: 'Minecraft memory context is unavailable or changed' };
+    }
     const taskId = crypto.randomUUID();
     const task: TaskQueueEntry = {
       id: taskId,
@@ -728,43 +765,47 @@ export class MinebotTaskRuntime {
   }
 
   private taskInputToEnvelope(input: TaskStateInput): RequestEnvelope {
+    assertMinecraftConnected(this.bot);
     if (input.envelope) {
+      const copiedEnvelope = validateMinecraftEnvelope(input.envelope, this.bot);
       // 既存の envelope がある場合でも、Minecraft チャネルなら
       // リアルタイムのインベントリと nearbyInfrastructure で補強する
-      if (input.envelope.channel === 'minecraft' && input.envelope.minecraft) {
+      if (copiedEnvelope.channel === 'minecraft' && copiedEnvelope.minecraft) {
         const freshInventory = mapBotInventoryItems(this.bot.inventory?.items() ?? []);
         const nearbyInfrastructure = this.scanNearbyInfrastructure();
 
         // インベントリが空でない場合のみ上書き（フォールバック保護）
-        if (freshInventory.length > 0 || !input.envelope.minecraft.inventory?.length) {
-          input.envelope.minecraft.inventory = freshInventory.length > 0
+        if (freshInventory.length > 0 || !copiedEnvelope.minecraft.inventory?.length) {
+          copiedEnvelope.minecraft.inventory = freshInventory.length > 0
             ? freshInventory
-            : input.envelope.minecraft.inventory;
+            : copiedEnvelope.minecraft.inventory;
         }
-        input.envelope.minecraft.nearbyInfrastructure = nearbyInfrastructure;
-        input.envelope.minecraft.nearbyResources = this.scanNearbyResources();
+        copiedEnvelope.minecraft.nearbyInfrastructure = nearbyInfrastructure;
+        copiedEnvelope.minecraft.nearbyResources = this.scanNearbyResources();
         const expRefresh = (this.bot as any).experience as
           | { level: number; points: number; progress: number }
           | undefined;
-        input.envelope.minecraft.health = this.bot.health ?? input.envelope.minecraft.health;
-        input.envelope.minecraft.food = this.bot.food ?? input.envelope.minecraft.food;
-        input.envelope.minecraft.experienceLevel = expRefresh?.level;
-        input.envelope.minecraft.totalExperience = expRefresh?.points;
-        input.envelope.minecraft.experienceBarProgress = expRefresh?.progress;
+        copiedEnvelope.minecraft.health = this.bot.health ?? copiedEnvelope.minecraft.health;
+        copiedEnvelope.minecraft.food = this.bot.food ?? copiedEnvelope.minecraft.food;
+        copiedEnvelope.minecraft.experienceLevel = expRefresh?.level;
+        copiedEnvelope.minecraft.totalExperience = expRefresh?.points;
+        copiedEnvelope.minecraft.experienceBarProgress = expRefresh?.progress;
         // ディメンション情報を補完（未設定の場合）
-        if (!input.envelope.minecraft.dimension) {
-          input.envelope.minecraft.dimension = (this.bot as any).game?.dimension?.toString() || 'overworld';
+        if (!copiedEnvelope.minecraft.dimension) {
+          copiedEnvelope.minecraft.dimension = minecraftMemoryContext(this.bot)?.dimension;
         }
       }
       // bot 参照を常に metadata に注入 (ShannonExecutor → SubAgentRoutineExecutor で必要)
-      const prevMeta = ((input.envelope as any).metadata ?? {}) as Record<string, unknown>;
+      const prevMeta = ((copiedEnvelope as any).metadata ?? {}) as Record<string, unknown>;
       const merged: Record<string, unknown> = { ...prevMeta, bot: this.bot };
       if (input.minebotToolPolicy) merged.minebotToolPolicy = input.minebotToolPolicy;
       else delete merged.minebotToolPolicy;
-      (input.envelope as any).metadata = merged;
-      return input.envelope;
+      (copiedEnvelope as any).metadata = merged;
+      return copiedEnvelope;
     }
 
+    const memoryContext = minecraftMemoryContext(this.bot);
+    const memoryKeys = minecraftConversationKeys(memoryContext, 'minebot-system');
     const tags = ['minecraft'];
     if (input.isEmergency) {
       tags.push('emergency');
@@ -785,12 +826,13 @@ export class MinebotTaskRuntime {
       channel: 'minecraft',
       sourceUserId: 'minebot-system',
       sourceDisplayName: 'Minebot System',
-      conversationId: `minecraft:${this.bot.connectedServerName || 'default'}`,
-      threadId: `minecraft:${this.bot.connectedServerName || 'default'}`,
+      conversationId: memoryKeys?.conversationId ?? 'minecraft:unbound',
+      threadId: memoryKeys?.threadId ?? 'minecraft:unbound',
       text: input.userMessage ?? undefined,
       tags,
       minecraft: {
-        worldId: this.bot.connectedServerName || 'default',
+        serverId: memoryContext?.serverId,
+        worldId: memoryContext?.worldId,
         position: pos ? { x: Math.floor(pos.x), y: Math.floor(pos.y), z: Math.floor(pos.z) } : undefined,
         health: this.bot.health ?? undefined,
         food: this.bot.food ?? undefined,
@@ -800,7 +842,7 @@ export class MinebotTaskRuntime {
         inventory,
         nearbyInfrastructure,
         nearbyResources,
-        dimension: (this.bot as any).game?.dimension?.toString() || 'overworld',
+        dimension: memoryContext?.dimension,
       } as any,
       metadata: {
         environmentState: input.environmentState,

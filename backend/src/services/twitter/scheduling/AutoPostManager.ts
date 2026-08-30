@@ -10,7 +10,7 @@ import path from 'path';
 import { createLogger } from '../../../utils/logger.js';
 const logger = createLogger('Twitter:AutoPost');
 import { TwitterApiClient } from '../api/TwitterApiClient.js';
-import { EventBus } from '../../eventBus/eventBus.js';
+import { deliverAutoTweetToLlm } from '../../runtime/llmInboundDispatch.js';
 
 // 自動投稿カウンタの永続化ファイルパス
 const AUTO_POST_COUNT_FILE = path.resolve('saves/auto_post_count.json');
@@ -47,12 +47,10 @@ export class AutoPostManager {
   private recentPostEntries: Array<{ text: string; quoteUrl?: string; topic?: string }> = [];
 
   private apiClient: TwitterApiClient;
-  private eventBus: EventBus;
   private getStatus: () => string;
 
   constructor(
     apiClient: TwitterApiClient,
-    eventBus: EventBus,
     getStatus: () => string,
     opts: {
       minAutoPostsPerDay: number;
@@ -62,7 +60,6 @@ export class AutoPostManager {
     },
   ) {
     this.apiClient = apiClient;
-    this.eventBus = eventBus;
     this.getStatus = getStatus;
     this.minAutoPostsPerDay = opts.minAutoPostsPerDay;
     this.maxAutoPostsPerDay = opts.maxAutoPostsPerDay;
@@ -357,18 +354,14 @@ export class AutoPostManager {
         'cyan'
       );
 
-      this.eventBus.publish({
-        type: 'llm:generate_auto_tweet',
-        memoryZone: 'twitter:post',
-        data: {
-          mode,
-          trends,
-          todayInfo,
-          recentPosts: [...this.recentAutoPosts],
-          recentQuoteUrls: [...this.recentQuoteUrls],
-          recentTopics: [...this.recentTopics],
-        } as TwitterAutoTweetInput,
-      });
+      deliverAutoTweetToLlm({
+        mode,
+        trends,
+        todayInfo,
+        recentPosts: [...this.recentAutoPosts],
+        recentQuoteUrls: [...this.recentQuoteUrls],
+        recentTopics: [...this.recentTopics],
+      } as TwitterAutoTweetInput);
 
       this.autoPostCount++;
       this.lastAutoPostAt = Date.now();

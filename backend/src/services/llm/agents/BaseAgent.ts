@@ -11,7 +11,6 @@ import { PromptType } from '@shannon/common';
 import { models } from '../../../config/models.js';
 import { loadPrompt } from '../config/prompts.js';
 import { createTracedModel } from '../utils/langfuse.js';
-import { MemoryNode } from '../graph/nodes/MemoryNode.js';
 import { logger } from '../../../utils/logger.js';
 
 // ---------------------------------------------------------------------------
@@ -59,7 +58,6 @@ export abstract class BaseAgent {
   protected systemPrompt: string;
   protected tools: StructuredTool[];
   protected toolMap: Map<string, StructuredTool>;
-  protected memoryNode: MemoryNode | null = null;
 
   protected constructor(systemPrompt: string, tools: StructuredTool[] = []) {
     this.systemPrompt = systemPrompt;

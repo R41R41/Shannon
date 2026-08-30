@@ -1,4 +1,6 @@
 import express from 'express';
+import { protectHttpSurface } from './routes/httpSurface.js';
+import { createWebAccess } from './bootstrap/webAccess.js';
 import http from 'http';
 import mongoose from 'mongoose';
 import { config } from './config/env.js';
@@ -17,6 +19,7 @@ import { join } from 'path';
 import { shutdownLangfuse } from './services/llm/utils/langfuse.js';
 import { registerHealthRoutes } from './routes/healthRoutes.js';
 import { registerModelRoutes } from './routes/modelRoutes.js';
+import { registerIdentityRoutes } from './routes/identityRoutes.js';
 import { registerTokenRoutes } from './routes/tokenRoutes.js';
 import { registerTestRoutes } from './routes/testRoutes.js';
 import { registerWebhookRoutes } from './routes/webhookRoutes.js';
@@ -24,16 +27,19 @@ import { registerPublicRoutes } from './routes/publicRoutes.js';
 import { startNightlySelfImproveScheduler } from './services/llm/graph/cognitive/selfImprove/NightlySelfImproveScheduler.js';
 
 class Server {
+  private readonly webAccess = createWebAccess(config.webAuth.firebaseProjectId);
   private llmService: LLMService;
   private discordBot: DiscordBot | null = null;
-  private webClient: WebClient;
+  private webClient: WebClient | null = null;
   private twitterClient: TwitterClient | null = null;
-  private scheduler: Scheduler;
-  private youtubeClient: YoutubeClient;
-  private minecraftClient: MinecraftClient;
-  private minebotClient: MinebotClient;
+  private scheduler: Scheduler | null = null;
+  private youtubeClient: YoutubeClient | null = null;
+  private minecraftClient: MinecraftClient | null = null;
+  private minebotClient: MinebotClient | null = null;
   private notionClient: NotionClient | null = null;
+  private onlyServices: Set<string> | null = null;
   private httpServer: http.Server | null = null;
+  private coreReady = false;
 
   /**
    * サービスを安全に初期化するヘルパー。
@@ -54,28 +60,56 @@ class Server {
 
   constructor() {
     const isDevMode = process.argv.includes('--dev');
+    const raw = process.env.SHANNON_ONLY_SERVICES?.trim();
+    this.onlyServices = raw
+      ? new Set(raw.split(',').map((name) => name.trim()).filter(Boolean))
+      : null;
+    const want = (name: string) => this.onlyServices === null || this.onlyServices.has(name);
+    if (this.onlyServices) {
+      logger.warn(`[Server] 起動するサービスを制限しています: ${[...this.onlyServices].join(', ')}`);
+    }
 
     // --- 必須サービス (失敗時はサーバー起動を中断) ---
     this.llmService = LLMService.getInstance(isDevMode);
-    this.webClient = WebClient.getInstance(false);
-    this.scheduler = Scheduler.getInstance(isDevMode);
-    this.youtubeClient = YoutubeClient.getInstance(isDevMode);
-    this.minecraftClient = MinecraftClient.getInstance(isDevMode);
-    this.minebotClient = MinebotClient.getInstance(isDevMode);
+    this.webClient = want('web') ? WebClient.getInstance(false, this.webAccess.access) : null;
+    this.scheduler = want('scheduler') ? Scheduler.getInstance(isDevMode) : null;
+    this.youtubeClient = want('youtube') ? YoutubeClient.getInstance(isDevMode) : null;
+    this.minecraftClient = want('minecraft') ? MinecraftClient.getInstance(isDevMode) : null;
+    this.minebotClient = want('minebot') ? MinebotClient.getInstance(isDevMode) : null;
 
     // --- オプショナルサービス (認証情報不足時はスキップ) ---
-    this.discordBot = Server.tryCreate('Discord', () => DiscordBot.getInstance(isDevMode));
-    this.twitterClient = Server.tryCreate('Twitter', () => TwitterClient.getInstance(isDevMode));
-    this.notionClient = Server.tryCreate('Notion', () => NotionClient.getInstance(isDevMode));
+    this.discordBot = want('discord')
+      ? Server.tryCreate('Discord', () => DiscordBot.getInstance(isDevMode))
+      : null;
+    if (!want('twitter') || config.twitter.disabled) {
+      if (config.twitter.disabled) {
+        logger.warn('[Server] Twitter は TWITTER_DISABLED=true のため起動しません');
+      }
+      this.twitterClient = null;
+    } else {
+      this.twitterClient = Server.tryCreate('Twitter', () => TwitterClient.getInstance(isDevMode));
+    }
+    this.notionClient = want('notion')
+      ? Server.tryCreate('Notion', () => NotionClient.getInstance(isDevMode))
+      : null;
   }
 
   private startHTTPServer() {
     const app = express();
-    app.use(express.json());
+    app.use(protectHttpSurface(this.webAccess.access));
+    app.use(express.json({ limit: '128kb' }));
 
     // Register route modules
-    registerHealthRoutes(app);
-    registerModelRoutes(app);
+    registerHealthRoutes(app, () => this.coreReady && mongoose.connection.readyState === 1 &&
+      !!config.webAuth.firebaseProjectId && config.webAuth.allowedOrigins.length > 0);
+    registerModelRoutes(app, this.webAccess.access, this.webAccess.modelSettings);
+    registerIdentityRoutes(
+      app,
+      this.webAccess.access,
+      this.webAccess.identityStatus,
+      this.webAccess.identityBindingWrite,
+      this.webAccess.identityManifestReview,
+    );
     registerTokenRoutes(app);
     registerTestRoutes(app);
     registerWebhookRoutes(app, this.twitterClient);
@@ -90,11 +124,12 @@ class Server {
   private async connectDatabase() {
     try {
       const uri = config.mongodbUri;
-      logger.info(`Connecting to MongoDB: ${uri}`);
-      await mongoose.connect(uri);
+      logger.info('Connecting to configured MongoDB');
+      await mongoose.connect(uri, { autoIndex: false, serverSelectionTimeoutMS: 5000 });
       logger.info(`MongoDB connected to: ${mongoose.connection.db.databaseName}`, 'blue');
     } catch (error) {
-      logger.error(`MongoDB connection error: ${error}`);
+      logger.error('MongoDB connection failed');
+      throw new Error('DATABASE_UNAVAILABLE');
     }
   }
 
@@ -134,14 +169,19 @@ class Server {
     // LLM と Web は失敗時にサーバーを停止する
     try {
       await this.llmService.initialize();
+      this.coreReady = true;
       logger.info('LLM Service started', 'blue');
     } catch (error) {
       logger.error(`LLM Service の起動に失敗: ${error}`);
       logger.warn('LLM 機能なしで続行します');
     }
 
-    await this.webClient.start();
-    logger.info('Web Client started', 'blue');
+    if (this.webClient) {
+      await this.webClient.start();
+      logger.info('Web Client started', 'blue');
+    } else {
+      logger.info('[Server] Web: 制限によりスキップ', 'cyan');
+    }
 
     // --- オプショナルサービスの並列起動 ---
     // 個別の失敗がサーバー全体を停止させない
@@ -157,10 +197,13 @@ class Server {
 
     logger.success('[Server] 全サービスの起動処理が完了しました');
 
-    startNightlySelfImproveScheduler();
+    if (this.onlyServices === null) {
+      startNightlySelfImproveScheduler();
+    }
   }
 
   public async shutdown() {
+    this.coreReady = false;
     logger.warn('[Shutdown] グレースフルシャットダウン開始...');
 
     // 注意: Webhook ルールはシャットダウン時に無効化しない。
@@ -169,16 +212,17 @@ class Server {
     // ルールは常時有効のままにしておく。
 
     // 各サービスのクリーンアップ処理
+    await this.webClient?.stop();
     await shutdownLangfuse();
     await mongoose.disconnect();
     logger.error('MongoDB disconnected');
-    process.exit(0);
+    process.exit(process.exitCode ?? 0);
   }
 }
 
 // サーバーのインスタンス化と起動
 const server = new Server();
-server.start();
+void server.start().catch(() => { logger.error('Server startup failed'); process.exitCode = 1; void server.shutdown(); });
 
 // グレースフルシャットダウンの処理
 process.on('SIGTERM', () => server.shutdown());

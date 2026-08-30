@@ -40,32 +40,8 @@ const WeatherSchema = z.object({
   ),
 });
 
-// 上海を含む天気予報のスキーマ
-const ToyamaWeatherSchema = z.object({
-  date: z.string(),
-  overview: z.string(),
-  regions: z.array(
-    z.object({
-      region: z.string(),
-      weather: z.string(),
-      temperature: z.string().nullable(),
-      chanceOfRain: z.string().nullable(),
-      hourlyEmojis: z.array(z.string()).nullable(), // 6時間ごとの天気絵文字
-    })
-  ),
-  shanghai: z.object({
-    weather: z.string(),
-    temperature: z.string(),
-    chanceOfRain: z.string(),
-    hourlyEmojis: z.array(z.string()), // 6時間ごとの天気絵文字
-  }),
-  advice: z.string(),
-  closing: z.string(),
-});
-
 // 型定義
 type WeatherResult = z.infer<typeof WeatherSchema>;
-type ToyamaWeatherResult = z.infer<typeof ToyamaWeatherSchema>;
 
 interface CityForecast {
   city: string;
@@ -95,7 +71,7 @@ interface WeatherApiResponse {
 interface Forecast {
   date: string;
   forecasts: string;
-  weatherData?: WeatherResult | ToyamaWeatherResult;
+  weatherData?: WeatherResult;
 }
 
 export class PostWeatherAgent {
@@ -194,7 +170,6 @@ export class PostWeatherAgent {
     const promptsName: PromptType[] = [
       'forecast',
       'weather_to_emoji',
-      'forecast_for_toyama_server',
     ];
     const systemPrompts = new Map();
     for (const name of promptsName) {
@@ -392,7 +367,7 @@ export class PostWeatherAgent {
     }
   }
 
-  private async setForecasts(date: string, forecast: string, weatherData?: WeatherResult | ToyamaWeatherResult): Promise<void> {
+  private async setForecasts(date: string, forecast: string, weatherData?: WeatherResult): Promise<void> {
     this.forecasts.push({
       date: date,
       forecasts: forecast,
@@ -418,102 +393,6 @@ export class PostWeatherAgent {
     };
   }
 
-  public async createPostForToyama(): Promise<string> {
-    // 最新の天気予報データを取得
-    const lastForecast = this.forecasts[this.forecasts.length - 1];
-    if (!lastForecast || !lastForecast.weatherData) {
-      throw new Error('No weather data available');
-    }
-
-    const infoMessage = JSON.stringify({
-      forecast: lastForecast.forecasts,
-      weatherData: lastForecast.weatherData
-    });
-
-    const prompt = this.systemPrompts.get('forecast_for_toyama_server');
-    if (!prompt) {
-      throw new Error('forecast_for_toyama_server prompt not found');
-    }
-
-    // 構造化出力を得るためのモデル設定
-    const structuredLLM = this.model.withStructuredOutput(ToyamaWeatherSchema);
-
-    try {
-      // LLMに問い合わせ - システムメッセージにスキーマ情報を追加
-      const systemMessage = `${prompt}`;
-
-      const result = await structuredLLM.invoke([
-        new SystemMessage(systemMessage || "天気予報を生成してください"),
-        new HumanMessage(infoMessage),
-      ]);
-
-      // 構造化データから整形された文字列を生成
-      const formattedForecast = this.formatToyamaWeatherResult(result);
-
-      return formattedForecast;
-    } catch (error) {
-      logger.error('Error getting weather forecast for Toyama:', error);
-
-      // エラーが発生した場合、基本的な天気予報を返す
-      if (lastForecast && lastForecast.weatherData) {
-        const basicWeatherData = lastForecast.weatherData as WeatherResult;
-        const basicResult: ToyamaWeatherResult = {
-          date: basicWeatherData.date,
-          overview: basicWeatherData.overview + "（上海の天気情報は取得できませんでした）",
-          regions: [
-            {
-              region: "仙台",
-              weather: basicWeatherData.regions.find(r => r.region === "仙台")?.weather || "情報取得エラー",
-              temperature: basicWeatherData.regions.find(r => r.region === "仙台")?.temperature || "不明",
-              chanceOfRain: basicWeatherData.regions.find(r => r.region === "仙台")?.chanceOfRain || "不明",
-              hourlyEmojis: basicWeatherData.regions.find(r => r.region === "仙台")?.hourlyEmojis || ["❓", "❓", "❓", "❓"]
-            },
-            {
-              region: "東京",
-              weather: basicWeatherData.regions.find(r => r.region === "東京")?.weather || "情報取得エラー",
-              temperature: basicWeatherData.regions.find(r => r.region === "東京")?.temperature || "不明",
-              chanceOfRain: basicWeatherData.regions.find(r => r.region === "東京")?.chanceOfRain || "不明",
-              hourlyEmojis: basicWeatherData.regions.find(r => r.region === "東京")?.hourlyEmojis || ["❓", "❓", "❓", "❓"]
-            },
-            {
-              region: "名古屋",
-              weather: basicWeatherData.regions.find(r => r.region === "名古屋")?.weather || "情報取得エラー",
-              temperature: basicWeatherData.regions.find(r => r.region === "名古屋")?.temperature || "不明",
-              chanceOfRain: basicWeatherData.regions.find(r => r.region === "名古屋")?.chanceOfRain || "不明",
-              hourlyEmojis: basicWeatherData.regions.find(r => r.region === "名古屋")?.hourlyEmojis || ["❓", "❓", "❓", "❓"]
-            },
-            {
-              region: "大阪",
-              weather: basicWeatherData.regions.find(r => r.region === "大阪")?.weather || "情報取得エラー",
-              temperature: basicWeatherData.regions.find(r => r.region === "大阪")?.temperature || "不明",
-              chanceOfRain: basicWeatherData.regions.find(r => r.region === "大阪")?.chanceOfRain || "不明",
-              hourlyEmojis: basicWeatherData.regions.find(r => r.region === "大阪")?.hourlyEmojis || ["❓", "❓", "❓", "❓"]
-            },
-            {
-              region: "福岡",
-              weather: basicWeatherData.regions.find(r => r.region === "福岡")?.weather || "情報取得エラー",
-              temperature: basicWeatherData.regions.find(r => r.region === "福岡")?.temperature || "不明",
-              chanceOfRain: basicWeatherData.regions.find(r => r.region === "福岡")?.chanceOfRain || "不明",
-              hourlyEmojis: basicWeatherData.regions.find(r => r.region === "福岡")?.hourlyEmojis || ["❓", "❓", "❓", "❓"]
-            }
-          ],
-          shanghai: {
-            weather: "情報取得エラー",
-            temperature: "不明",
-            chanceOfRain: "不明",
-            hourlyEmojis: ["❓", "❓", "❓", "❓"]
-          },
-          advice: basicWeatherData.advice,
-          closing: basicWeatherData.closing
-        };
-
-        return this.formatToyamaWeatherResult(basicResult);
-      }
-
-      throw error;
-    }
-  }
-
   // 天気予報の構造化データを整形するメソッド
   private formatWeatherResult(result: WeatherResult): string {
     let formattedResult = `【明日${result.date}の天気】\n\n`;
@@ -533,39 +412,6 @@ export class PostWeatherAgent {
     });
 
     formattedResult += `\n${result.overview}\n\n`;
-    formattedResult += `${result.advice}\n\n`;
-    formattedResult += result.closing;
-
-    return formattedResult;
-  }
-
-  // 上海を含む天気予報の構造化データを整形するメソッド
-  private formatToyamaWeatherResult(result: ToyamaWeatherResult): string {
-    let formattedResult = `【明日${result.date}の天気】\n\n`;
-
-    // 地域ごとの天気
-    result.regions.forEach(region => {
-      // 地域名のパディング（2文字以下の場合は全角スペースを追加）
-      const padding = region.region.length <= 2 ? '　'.repeat(3 - region.region.length) : '';
-      const regionName = region.region + padding;
-
-      // 6時間ごとの天気絵文字を表示（ない場合はデフォルトの絵文字を4つ表示）
-      const hourlyEmojis = region.hourlyEmojis && region.hourlyEmojis.length === 4
-        ? region.hourlyEmojis.join('')
-        : this.getWeatherEmoji(region.weather).repeat(4);
-
-      formattedResult += `${regionName}：${hourlyEmojis}, ${region.temperature || '不明'}, ${region.chanceOfRain || '0%'}\n`;
-    });
-
-    // 上海の天気
-    const shanghaiPadding = '　';
-    const shanghaiEmojis = result.shanghai.hourlyEmojis && result.shanghai.hourlyEmojis.length === 4
-      ? result.shanghai.hourlyEmojis.join('')
-      : this.getWeatherEmoji(result.shanghai.weather).repeat(4);
-
-    formattedResult += `上海${shanghaiPadding}：${shanghaiEmojis}, ${result.shanghai.temperature}, ${result.shanghai.chanceOfRain}\n\n`;
-
-    formattedResult += `${result.overview}\n\n`;
     formattedResult += `${result.advice}\n\n`;
     formattedResult += result.closing;
 

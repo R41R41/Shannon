@@ -4,6 +4,7 @@
  * Derives visibility scope, channel/world/project tags from a RequestEnvelope.
  */
 
+import { deriveMemoryScope } from '../../../modules/memory/index.js';
 import { IShannonMemory } from '../../../models/ShannonMemory.js';
 import { MemoryPlatform } from '../../../models/PersonMemory.js';
 import type {
@@ -24,11 +25,7 @@ export const channelToSource: Record<ShannonChannel, string> = {
 
 export class ScopeDeriver {
   deriveVisibilityScope(envelope: RequestEnvelope): IShannonMemory['visibilityScope'] {
-    if (envelope.metadata?.isDM || envelope.discord?.isDM) return 'private_user';
-    if (envelope.channel === 'minecraft') return 'shared_world';
-    if (envelope.channel === 'discord' && envelope.discord?.guildId) return 'shared_channel';
-    if (envelope.channel === 'x') return 'shared_channel';
-    return 'shared_channel';
+    return deriveMemoryScope(envelope)?.visibilityScope;
   }
 
   deriveScopeTags(envelope: RequestEnvelope): string[] {

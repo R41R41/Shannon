@@ -2,7 +2,7 @@
  * ShannonGraphState and its internal supporting types.
  */
 
-import type { EmotionType, TaskTreeState, HierarchicalSubTask, ActionItem } from '../taskGraph.js';
+import type { TaskTreeState, HierarchicalSubTask, ActionItem } from '../taskGraph.js';
 import type { ShannonChannel, ShannonMode } from './channels.js';
 import type { RequestEnvelope } from './envelope.js';
 import type { ShannonActionPlan } from './action.js';
@@ -168,9 +168,6 @@ export interface ShannonGraphState {
   needsTools?: boolean;
   needsPlanning?: boolean;
   needsSelfModification?: boolean;
-
-  // -- emotion (carried over from existing EmotionNode) --
-  emotion?: EmotionType;
 
   // -- memory recall --
   relevantMemories: MemoryItem[];

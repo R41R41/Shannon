@@ -1,35 +1,23 @@
 import type { Express } from 'express';
-import { modelManager } from '../config/modelManager.js';
+import type { AccessService } from '../modules/access/index.js';
+import type { ModelSettingsService } from '../modules/modelSettings/index.js';
+import { authenticateRequest, sendAccessError } from './accessHttp.js';
 
-export function registerModelRoutes(app: Express): void {
-  app.get('/api/models', (_req, res) => {
-    res.json({
-      current: modelManager.getAll(),
-      overrides: modelManager.getOverrides(),
-    });
+export function registerModelRoutes(app: Express, access: AccessService, settings: ModelSettingsService): void {
+  app.use('/api/models', (_req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
+  app.get('/api/models', async (req, res) => {
+    try { res.json(settings.read(await authenticateRequest(req, access))); }
+    catch (error) { sendAccessError(res, error); }
   });
-
-  app.put('/api/models/:key', (req, res) => {
-    const { key } = req.params;
-    const { model } = req.body as { model?: string };
-    if (!model || typeof model !== 'string') {
-      res.status(400).json({ error: 'model is required' });
-      return;
-    }
+  app.put('/api/models/:key', async (req, res) => {
     try {
-      if (key.startsWith('minebot.')) {
-        modelManager.setMinebotModel(key.replace('minebot.', '') as Parameters<typeof modelManager.setMinebotModel>[0], model);
-      } else {
-        modelManager.set(key as Parameters<typeof modelManager.set>[0], model);
-      }
-      res.json({ ok: true, key, model });
-    } catch (err) {
-      res.status(400).json({ error: String(err) });
-    }
+      const context = await authenticateRequest(req, access);
+      settings.update(context, req.params.key, req.body?.model);
+      res.json({ ok: true, key: req.params.key, model: req.body.model });
+    } catch (error) { sendAccessError(res, error); }
   });
-
-  app.post('/api/models/reset', (_req, res) => {
-    modelManager.resetAll();
-    res.json({ ok: true, models: modelManager.getAll() });
+  app.post('/api/models/reset', async (req, res) => {
+    try { res.json({ ok: true, models: settings.reset(await authenticateRequest(req, access)) }); }
+    catch (error) { sendAccessError(res, error); }
   });
 }

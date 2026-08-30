@@ -1,12 +1,8 @@
 import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import { ChatOpenAI } from '@langchain/openai';
-import { TaskContext } from '@shannon/common';
 import { config } from '../../../config/env.js';
 import { models } from '../../../config/models.js';
 import { createTracedModel } from '../utils/langfuse.js';
-import { MemoryNode } from '../graph/nodes/MemoryNode.js';
-import { IExchange } from '../../../models/PersonMemory.js';
-import { logger } from '../../../utils/logger.js';
 import { BaseAgent } from './BaseAgent.js';
 
 const OPENAI_API_KEY = config.openaiApiKey;
@@ -43,10 +39,7 @@ export class ReplyTwitterCommentAgent extends BaseAgent {
 
   public static async create(): Promise<ReplyTwitterCommentAgent> {
     const prompt = await BaseAgent.loadPrompt('reply_twitter_comment');
-    const agent = new ReplyTwitterCommentAgent(prompt);
-    agent.memoryNode = new MemoryNode();
-    await agent.memoryNode.initialize();
-    return agent;
+    return new ReplyTwitterCommentAgent(prompt);
   }
 
   public async reply(
@@ -55,46 +48,13 @@ export class ReplyTwitterCommentAgent extends BaseAgent {
     repliedTweet?: string | null,
     repliedTweetAuthorName?: string | null,
     conversationThread?: Array<{ authorName: string; text: string }> | null,
-    authorId?: string | null,
+    _authorId?: string | null,
   ): Promise<string> {
     if (!this.systemPrompt) {
       throw new Error('systemPrompt is not set');
     }
 
-    // === 記憶 preProcess ===
-    let memoryContext = '';
-    const context: TaskContext = {
-      platform: 'twitter',
-      twitter: {
-        authorId: authorId ?? authorName,
-        authorName,
-      },
-    };
-
-    if (this.memoryNode) {
-      try {
-        const memState = await this.memoryNode.preProcess({
-          userMessage: text,
-          context,
-        });
-        const sections: string[] = [];
-        if (memState.person) {
-          const p = memState.person;
-          if (p.traits.length > 0) sections.push(`この人の特徴: ${p.traits.join(', ')}`);
-          if (p.conversationSummary) sections.push(`過去のやりとり: ${p.conversationSummary}`);
-        }
-        if (memState.experiences.length > 0) {
-          sections.push('関連する体験: ' + memState.experiences.map((e) => e.content).join('; '));
-        }
-        if (sections.length > 0) {
-          memoryContext = `\n\n【ボクの記憶】\n${sections.join('\n')}`;
-        }
-      } catch (error) {
-        logger.error('❌ Twitter Reply: 記憶取得エラー:', error);
-      }
-    }
-
-    const systemContent = this.systemPrompt + memoryContext;
+    const systemContent = this.systemPrompt;
 
     // 文脈を構築
     const lines: string[] = [];
@@ -124,21 +84,6 @@ export class ReplyTwitterCommentAgent extends BaseAgent {
       new HumanMessage(humanContent),
     ]);
     const replyText = response.content.toString();
-
-    // === 記憶 postProcess (fire-and-forget) ===
-    if (this.memoryNode) {
-      const exchanges: IExchange[] = [
-        { role: 'user', content: text, timestamp: new Date() },
-        { role: 'assistant', content: replyText, timestamp: new Date() },
-      ];
-      this.memoryNode.postProcess({
-        context,
-        conversationText: `${authorName}: ${text}\nシャノン: ${replyText}`,
-        exchanges,
-      }).catch((err) => {
-        logger.error('❌ Twitter Reply: 記憶保存エラー:', err);
-      });
-    }
 
     return replyText;
   }

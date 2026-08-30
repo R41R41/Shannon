@@ -1,8 +1,10 @@
 import { Client } from "@notionhq/client";
 import type { BlockObjectResponse, RichTextItemResponse } from "@notionhq/client/build/src/api-endpoints";
-import { NotionClientInput } from '@shannon/common';
+import { NotionClientOutput } from '@shannon/common';
 import { BaseClient } from '../common/BaseClient.js';
-import { getEventBus } from '../eventBus/index.js';
+import { registerNotionToolPort } from '../runtime/platformToolGateway.js';
+import { registerServiceCommandHandler } from '../runtime/serviceCommandRegistry.js';
+import { emitWebServiceStatus } from '../web/webNotificationHub.js';
 import { config } from '../../config/env.js';
 import { logger } from '../../utils/logger.js';
 
@@ -10,15 +12,14 @@ export class NotionClient extends BaseClient {
     private client: Client;
     private myUserId: string | null = null;
     public isTest: boolean = false;
+    private gatewaysRegistered = false;
 
     private static instance: NotionClient;
 
     public static getInstance(isTest?: boolean) {
-        const eventBus = getEventBus();
         if (!NotionClient.instance) {
             NotionClient.instance = new NotionClient('notion', isTest ?? false);
         }
-        // isTest は初期化時にのみ設定。以降の呼び出しでは上書きしない
         if (isTest !== undefined) {
             NotionClient.instance.isTest = isTest;
         }
@@ -27,8 +28,7 @@ export class NotionClient extends BaseClient {
     }
 
     private constructor(serviceName: 'notion', isTest: boolean) {
-        const eventBus = getEventBus();
-        super(serviceName, eventBus);
+        super(serviceName);
         const apiKey = config.notion.apiKey;
 
         if (!apiKey) {
@@ -38,76 +38,60 @@ export class NotionClient extends BaseClient {
         this.client = new Client({ auth: apiKey });
     }
 
-    private setupEventHandlers() {
-        this.eventBus.subscribe('notion:status', async (event) => {
-            const { serviceCommand } = event.data as NotionClientInput;
-            if (serviceCommand === 'start') {
+    private registerGateways() {
+        if (this.gatewaysRegistered) return;
+        this.gatewaysRegistered = true;
+
+        registerNotionToolPort({
+            getPageMarkdown: (pageId) => this.getPageMarkdown(pageId),
+        });
+
+        registerServiceCommandHandler('notion', async (command) => {
+            if (command === 'start') {
                 await this.start();
-            } else if (serviceCommand === 'stop') {
+            } else if (command === 'stop') {
                 await this.stop();
-            } else if (serviceCommand === 'status') {
-                this.eventBus.publish({
-                    type: 'web:status',
-                    memoryZone: 'web',
-                    data: {
-                        service: 'notion',
-                        status: this.status,
-                    },
+            } else if (command === 'status') {
+                emitWebServiceStatus({
+                    service: 'notion',
+                    status: this.status,
                 });
             }
         });
-        this.eventBus.subscribe('notion:getPageMarkdown', async (event) => {
-            const { pageId } = event.data as NotionClientInput;
-            try {
-                // まずページとして取得を試みる
-                const markdown = await this.getPageBlocksToMarkdown(pageId);
-                const title = await this.getPageTitle(pageId);
-                this.eventBus.publish({
-                    type: 'tool:getPageMarkdown',
-                    memoryZone: 'notion',
-                    data: {
-                        title: title,
-                        content: markdown,
-                    },
-                });
-            } catch (error: unknown) {
-                // ページとして見つからない場合、データベースとして取得を試みる
-                if ((error as { code?: string })?.code === 'object_not_found') {
-                    logger.info(`[Notion] ページとして見つからないため、データベースとして取得: ${pageId}`);
-                    try {
-                        const dbResult = await this.queryDatabase(pageId);
-                        this.eventBus.publish({
-                            type: 'tool:getPageMarkdown',
-                            memoryZone: 'notion',
-                            data: {
-                                title: dbResult.title,
-                                content: dbResult.content,
-                            },
-                        });
-                    } catch (dbError: unknown) {
-                        logger.error(`[Notion] データベース取得エラー: ${dbError instanceof Error ? dbError.message : String(dbError)}`);
-                        this.eventBus.publish({
-                            type: 'tool:getPageMarkdown',
-                            memoryZone: 'notion',
-                            data: {
-                                title: 'エラー',
-                                content: [`Notionのページ/データベースを取得できませんでした。\nエラー: ${dbError instanceof Error ? dbError.message : String(dbError)}\n\n対象のページまたはデータベースがNotion Integrationと共有されているか確認してください。\nNotion > ページ右上の「...」 > 接続 > シャノンのIntegrationを追加`],
-                            },
-                        });
-                    }
-                } else {
-                    logger.error(`[Notion] ページ取得エラー: ${error instanceof Error ? (error as Error).message : String(error)}`);
-                    this.eventBus.publish({
-                        type: 'tool:getPageMarkdown',
-                        memoryZone: 'notion',
-                        data: {
-                            title: 'エラー',
-                            content: [`Notionのページ取得中にエラーが発生しました。\nエラー: ${error instanceof Error ? (error as Error).message : String(error)}`],
-                        },
-                    });
+    }
+
+    public async getPageMarkdown(pageId: string): Promise<NotionClientOutput> {
+        try {
+            const markdown = await this.getPageBlocksToMarkdown(pageId);
+            const title = await this.getPageTitle(pageId);
+            return {
+                title,
+                content: markdown,
+            };
+        } catch (error: unknown) {
+            if ((error as { code?: string })?.code === 'object_not_found') {
+                logger.info(`[Notion] ページとして見つからないため、データベースとして取得: ${pageId}`);
+                try {
+                    const dbResult = await this.queryDatabase(pageId);
+                    return {
+                        title: dbResult.title,
+                        content: dbResult.content,
+                    };
+                } catch (dbError: unknown) {
+                    logger.error(`[Notion] データベース取得エラー: ${dbError instanceof Error ? dbError.message : String(dbError)}`);
+                    return {
+                        title: 'エラー',
+                        content: [`Notionのページ/データベースを取得できませんでした。\nエラー: ${dbError instanceof Error ? dbError.message : String(dbError)}\n\n対象のページまたはデータベースがNotion Integrationと共有されているか確認してください。\nNotion > ページ右上の「...」 > 接続 > シャノンのIntegrationを追加`],
+                    };
                 }
             }
-        });
+
+            logger.error(`[Notion] ページ取得エラー: ${error instanceof Error ? (error as Error).message : String(error)}`);
+            return {
+                title: 'エラー',
+                content: [`Notionのページ取得中にエラーが発生しました。\nエラー: ${error instanceof Error ? (error as Error).message : String(error)}`],
+            };
+        }
     }
 
     async getPageTitle(pageId: string) {
@@ -126,17 +110,13 @@ export class NotionClient extends BaseClient {
         const uuid = this.toUuid(databaseId);
         logger.info(`[Notion] データベースクエリ: ${uuid}`);
 
-        // データベースのメタデータを取得
         const dbMeta = await this.client.databases.retrieve({ database_id: uuid });
 
-        // データベースタイトルを取得
         const dbTitle = (dbMeta as { title?: Array<{ plain_text: string }> }).title?.map((t) => t.plain_text).join('') || 'Untitled Database';
 
-        // プロパティ名一覧を取得
         const properties = Object.entries(dbMeta.properties);
         const propertyNames = properties.map(([name]) => name);
 
-        // データベースのエントリを取得
         const queryResponse = await this.client.databases.query({
             database_id: uuid,
             page_size: pageSize,
@@ -172,7 +152,6 @@ export class NotionClient extends BaseClient {
      */
     private extractPropertyValue(prop: { type: string; [key: string]: unknown }): string {
         if (!prop) return '';
-        // Use a flexible accessor since Notion property shapes are polymorphic
         const p = prop as Record<string, unknown>;
         switch (prop.type) {
             case 'title':
@@ -235,9 +214,6 @@ export class NotionClient extends BaseClient {
         }
     }
 
-    /**
-     * IDをUUID形式に変換
-     */
     private toUuid(id: string): string {
         if (id.includes('-')) return id;
         return [
@@ -249,17 +225,11 @@ export class NotionClient extends BaseClient {
         ].join('-');
     }
 
-    /**
-     * リッチテキストからプレーンテキストを抽出
-     */
     private extractRichText(richTextArray: RichTextItemResponse[]): string {
         if (!richTextArray || !Array.isArray(richTextArray)) return "";
         return richTextArray.map(rt => ('text' in rt ? rt.text.content : null) || rt.plain_text || "").join("");
     }
 
-    /**
-     * 画像ブロックからURLを取得
-     */
     private getImageUrl(imageBlock: Extract<BlockObjectResponse, { type: 'image' }>): string | null {
         const imageData = imageBlock.image;
         if (!imageData) return null;
@@ -272,9 +242,6 @@ export class NotionClient extends BaseClient {
         return null;
     }
 
-    /**
-     * ブロックをマークダウンに変換
-     */
     private blockToMarkdown(block: BlockObjectResponse, indent: number = 0): string {
         const indentStr = "  ".repeat(indent);
         let content = "";
@@ -310,7 +277,6 @@ export class NotionClient extends BaseClient {
             const cells = block.table_row.cells;
             content = `| ${cells.map((cell: RichTextItemResponse[]) => this.extractRichText(cell)).join(" | ")} |`;
         } else if (block.type === "image") {
-            // 画像ブロック: URLを返す（内容分析はdescribe-imageツールで行う）
             const imageUrl = this.getImageUrl(block);
             const caption = this.extractRichText(block.image.caption);
             if (imageUrl) {
@@ -319,27 +285,22 @@ export class NotionClient extends BaseClient {
                 content = "📷 [画像: URLを取得できませんでした]";
             }
         } else if (block.type === "file") {
-            // ファイルブロック
             const fileData = block.file;
             const fileUrl = (fileData.type === 'file' ? fileData.file.url : fileData.external.url) || "";
             const fileName = block.file.name || "添付ファイル";
             content = `📎 [ファイル: ${fileName}] URL: ${fileUrl}`;
         } else if (block.type === "pdf") {
-            // PDFブロック
             const pdfData = block.pdf;
             const pdfUrl = (pdfData.type === 'file' ? pdfData.file.url : pdfData.external.url) || "";
             content = `📄 [PDF] URL: ${pdfUrl}`;
         } else if (block.type === "video") {
-            // ビデオブロック
             const videoData = block.video;
             const videoUrl = (videoData.type === 'external' ? videoData.external.url : videoData.type === 'file' ? videoData.file.url : "") || "";
             content = `🎥 [動画] URL: ${videoUrl}`;
         } else if (block.type === "embed") {
-            // 埋め込みブロック
             const url = block.embed.url || "";
             content = `🔗 [埋め込み] URL: ${url}`;
         } else if (block.type === "bookmark") {
-            // ブックマークブロック
             const url = block.bookmark.url || "";
             content = `🔗 [埋め込み] URL: ${url}`;
         }
@@ -347,9 +308,6 @@ export class NotionClient extends BaseClient {
         return content;
     }
 
-    /**
-     * 再帰的にブロックとその子ブロックを取得してマークダウンに変換
-     */
     async getPageBlocksToMarkdown(pageId: string, indent: number = 0): Promise<string[]> {
         logger.info(`getPageBlocksToMarkdown ${pageId}`, 'blue');
         try {
@@ -360,7 +318,6 @@ export class NotionClient extends BaseClient {
             const markdownLines: string[] = [];
 
             for (const block of response.results) {
-                // Skip PartialBlockObjectResponse (lacks 'type' field)
                 if (!('type' in block)) continue;
 
                 const content = this.blockToMarkdown(block, indent);
@@ -368,7 +325,6 @@ export class NotionClient extends BaseClient {
                     markdownLines.push(content);
                 }
 
-                // 子ブロックがある場合は再帰的に取得
                 if (block.has_children) {
                     const childMarkdown = await this.getPageBlocksToMarkdown(block.id, indent + 1);
                     markdownLines.push(...childMarkdown);
@@ -378,38 +334,11 @@ export class NotionClient extends BaseClient {
             return markdownLines;
         } catch (error) {
             logger.error(`Notionブロック取得エラー: ${error}`);
-            return [];
+            throw error;
         }
     }
 
     public async initialize() {
-        try {
-            this.setupEventHandlers();
-        } catch (error) {
-            if (error instanceof Error && error.message.includes('429')) {
-                const apiError = error as unknown as { rateLimit?: { reset?: number } };
-                if (apiError.rateLimit?.reset) {
-                    const resetTime = apiError.rateLimit.reset * 1000;
-                    const now = Date.now();
-                    const waitTime = resetTime - now + 10000;
-
-                    logger.warn(
-                        `Twitter rate limit reached, waiting until ${new Date(
-                            resetTime
-                        ).toISOString()} (${waitTime / 1000}s)`
-                    );
-
-                    await new Promise((resolve) => setTimeout(resolve, waitTime));
-                    await this.initialize();
-                } else {
-                    logger.warn('Twitter rate limit reached, waiting before retry...');
-                    await new Promise((resolve) => setTimeout(resolve, 5000));
-                    await this.initialize();
-                }
-            } else {
-                logger.error(`Notion initialization error: ${error}`);
-                throw error;
-            }
-        }
+        this.registerGateways();
     }
 }

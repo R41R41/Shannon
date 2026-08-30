@@ -1,11 +1,15 @@
 import path from 'path';
 import type { Express } from 'express';
-import { AutoTweetMode, TwitterClientInput, TwitterReplyOutput } from '@shannon/common';
+import { AutoTweetMode, TwitterReplyOutput } from '@shannon/common';
 import { config } from '../config/env.js';
-import { getEventBus } from '../services/eventBus/index.js';
+import { getTwitterToolPort } from '../services/runtime/platformToolGateway.js';
 import { logger } from '../utils/logger.js';
 
 export function registerTestRoutes(app: Express): void {
+  app.use('/api/test', (_req, res, next) => {
+    if (config.twitter.disabled) { res.status(503).json({ error: 'TWITTER_DISABLED' }); return; }
+    next();
+  });
   // POST: 定期投稿テスト (生成 -> Twitter実投稿)
   // body: { command: 'fortune' | 'forecast' | 'about_today' | 'news_today' }
   // query: ?dry_run=true で投稿せずに生成結果のみ返す
@@ -73,16 +77,11 @@ export function registerTestRoutes(app: Express): void {
       }
 
       if (!dryRun && post) {
-        const eventBus = getEventBus();
-        eventBus.publish({
-          type: 'twitter:post_scheduled_message',
-          memoryZone: 'twitter:schedule_post',
-          data: {
-            text: post,
-            ...(mediaId ? { imageUrl: mediaId } : {}),
-          } as TwitterClientInput,
+        await getTwitterToolPort().postScheduledMessage({
+          text: post,
+          ...(mediaId ? { imageUrl: mediaId } : {}),
         });
-        logger.info(`[Test:ScheduledPost] ${command} Twitter投稿イベント発行${mediaId ? ' (画像付き)' : ''}`);
+        logger.info(`[Test:ScheduledPost] ${command} Twitter投稿${mediaId ? ' (画像付き)' : ''}`);
       }
       res.status(200).json({
         ok: true,
@@ -156,18 +155,13 @@ export function registerTestRoutes(app: Express): void {
       logger.info(`[Test:AutoTweet] 生成結果: ${JSON.stringify(result)}`);
 
       if (!dryRun && result) {
-        const eventBus = getEventBus();
-        eventBus.publish({
-          type: 'twitter:post_scheduled_message',
-          memoryZone: 'twitter:post',
-          data: {
-            text: result.text,
-            ...(result.type === 'quote_rt' && result.quoteUrl
-              ? { quoteTweetUrl: result.quoteUrl }
-              : {}),
-          } as TwitterClientInput,
+        await getTwitterToolPort().postScheduledMessage({
+          text: result.text,
+          ...(result.type === 'quote_rt' && result.quoteUrl
+            ? { quoteTweetUrl: result.quoteUrl }
+            : {}),
         });
-        logger.info(`[Test:AutoTweet] Twitter投稿イベント発行 (type=${result.type})`);
+        logger.info(`[Test:AutoTweet] Twitter投稿 (type=${result.type})`);
       }
       res.status(200).json({
         ok: true,
@@ -260,21 +254,18 @@ export function registerTestRoutes(app: Express): void {
       logger.info(`[Test:MemberTweet] 生成結果: ${JSON.stringify(result)}`);
 
       if (!dryRun && result) {
-        const eventBus = getEventBus();
         if (result.type === 'quote_rt') {
-          eventBus.publish({
-            type: 'twitter:post_message',
-            memoryZone: 'twitter:post',
-            data: { text: result.text, quoteTweetUrl: tweetUrl } as TwitterClientInput,
+          await getTwitterToolPort().postMessage({
+            text: result.text,
+            quoteTweetUrl: tweetUrl,
           });
         } else {
-          eventBus.publish({
-            type: 'twitter:post_message',
-            memoryZone: 'twitter:post',
-            data: { text: result.text, replyId: tweetId } as TwitterClientInput,
+          await getTwitterToolPort().postMessage({
+            text: result.text,
+            replyId: tweetId,
           });
         }
-        logger.info(`[Test:MemberTweet] Twitter投稿イベント発行 (type=${result.type})`);
+        logger.info(`[Test:MemberTweet] Twitter投稿 (type=${result.type})`);
       }
 
       res.status(200).json({

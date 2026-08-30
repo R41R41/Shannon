@@ -1,22 +1,16 @@
 import { Platform, ServiceStatus } from '@shannon/common';
-import { EventBus } from '../eventBus/eventBus.js';
+import { emitWebServiceStatus } from '../web/webNotificationHub.js';
+
 export abstract class BaseClient {
   public status: ServiceStatus = 'stopped';
 
-  constructor(
-    private readonly serviceName: Platform,
-    public eventBus: EventBus
-  ) {}
+  constructor(private readonly serviceName: Platform) {}
 
   private async setStatus(newStatus: ServiceStatus) {
     this.status = newStatus;
-    this.eventBus.publish({
-      type: `web:status`,
-      memoryZone: 'web',
-      data: {
-        service: this.serviceName,
-        status: this.status,
-      },
+    emitWebServiceStatus({
+      service: this.serviceName,
+      status: this.status,
     });
   }
 

@@ -1,7 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import styles from './SettingsModal.module.scss';
+import { authorizedFetch } from '../../features/auth/authorizedFetch';
+import { useAuthSession } from '../../features/auth/AuthSession';
 import { showToast } from '../Toast/Toast';
 import { useTheme, type Theme } from '../../hooks/useTheme';
+import IdentityPanel from '../../features/identity/IdentityPanel';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -13,6 +16,8 @@ interface ModelConfig {
 }
 
 const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
+  const { user } = useAuthSession();
+  const [savedModels, setSavedModels] = useState<ModelConfig>({});
   const [models, setModels] = useState<ModelConfig>({});
   const [overrides, setOverrides] = useState<ModelConfig>({});
   const [logCount, setLogCount] = useState(() =>
@@ -21,24 +26,26 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
   const [theme, setTheme] = useTheme();
 
   useEffect(() => {
-    if (!isOpen) return;
-    fetch('/api/models')
+    if (!isOpen || !user?.isAdmin) return;
+    authorizedFetch('/api/models')
       .then(r => r.json())
       .then(data => {
         setModels(data.current || {});
+        setSavedModels(data.current || {});
         setOverrides(data.overrides || {});
       })
       .catch(() => {});
-  }, [isOpen]);
+  }, [isOpen, user?.isAdmin]);
 
   const handleModelChange = async (key: string, model: string) => {
     try {
-      await fetch(`/api/models/${key}`, {
+      await authorizedFetch(`/api/models/${encodeURIComponent(key)}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model }),
       });
       setModels(prev => ({ ...prev, [key]: model }));
+      setSavedModels(prev => ({ ...prev, [key]: model }));
       setOverrides(prev => ({ ...prev, [key]: model }));
       showToast(`${key} → ${model}`, 'success');
     } catch {
@@ -48,9 +55,10 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
 
   const handleResetModels = async () => {
     try {
-      const res = await fetch('/api/models/reset', { method: 'POST' });
+      const res = await authorizedFetch('/api/models/reset', { method: 'POST' });
       const data = await res.json();
       setModels(data.models || {});
+      setSavedModels(data.models || {});
       setOverrides({});
       showToast('全モデルをデフォルトにリセット', 'success');
     } catch {
@@ -77,6 +85,9 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
         </div>
 
         <div className={styles.modalBody}>
+          <IdentityPanel isAdmin={!!user?.isAdmin} isOpen={isOpen} />
+
+          {user?.isAdmin && (
           <div className={styles.settingItem}>
             <div className={styles.sectionHeader}>
               <h3>LLM モデル</h3>
@@ -95,7 +106,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
                     value={models[key] || ''}
                     onChange={e => setModels(prev => ({ ...prev, [key]: e.target.value }))}
                     onBlur={e => {
-                      if (e.target.value && e.target.value !== models[key]) {
+                      if (e.target.value && e.target.value !== savedModels[key]) {
                         handleModelChange(key, e.target.value);
                       }
                     }}
@@ -131,6 +142,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
               </>
             )}
           </div>
+          )}
 
           <div className={styles.settingItem}>
             <h3>表示設定</h3>

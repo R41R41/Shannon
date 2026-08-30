@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noEmit": true,
+    "types": [],
+    "lib": [
+      "ES2022"
+    ],
+    "skipLibCheck": false
+  },
+  "include": [
+    "src/modules/access/**/*.ts",
+    "src/modules/modelSettings/**/*.ts",
+    "src/modules/execution/**/*.ts",
+    "src/modules/memory/**/*.ts",
+    "src/modules/conversation/**/*.ts",
+    "src/modules/radar/**/*.ts",
+    "src/modules/fca/**/*.ts",
+    "src/modules/identity/**/*.ts"
+  ]
+}

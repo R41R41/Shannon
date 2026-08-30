@@ -4,23 +4,22 @@ import type {
   ShannonActionPlan,
   XAction,
 } from '@shannon/common';
-import type { TwitterClientInput } from '@shannon/common';
-import { getEventBus } from '../../eventBus/index.js';
+import { getTwitterToolPort } from '../../runtime/platformToolGateway.js';
 
 export const xDispatcher: ActionDispatcher = {
   channel: 'x',
 
   async dispatch(envelope: RequestEnvelope, plan: ShannonActionPlan): Promise<void> {
-    const eventBus = getEventBus();
+    const port = getTwitterToolPort();
     const actions = plan.xActions ?? [];
 
     for (const action of actions) {
-      dispatchAction(eventBus, envelope, action);
+      dispatchAction(port, envelope, action);
     }
 
     if (actions.length === 0 && plan.message) {
       const isReply = envelope.x?.isReply ?? (envelope.x?.tweetId != null);
-      dispatchAction(eventBus, envelope, {
+      dispatchAction(port, envelope, {
         type: isReply ? 'reply' : 'post',
         text: plan.message,
       });
@@ -29,40 +28,28 @@ export const xDispatcher: ActionDispatcher = {
 };
 
 function dispatchAction(
-  eventBus: ReturnType<typeof getEventBus>,
+  port: ReturnType<typeof getTwitterToolPort>,
   envelope: RequestEnvelope,
   action: XAction,
 ): void {
   switch (action.type) {
     case 'reply':
-      eventBus.publish({
-        type: 'twitter:post_message',
-        memoryZone: 'twitter:post',
-        data: {
-          text: action.text,
-          replyId: envelope.x?.tweetId ?? null,
-        } as TwitterClientInput,
+      void port.postMessage({
+        text: action.text,
+        replyId: envelope.x?.tweetId ?? null,
       });
       break;
 
     case 'post':
-      eventBus.publish({
-        type: 'twitter:post_message',
-        memoryZone: 'twitter:post',
-        data: {
-          text: action.text,
-        } as TwitterClientInput,
+      void port.postMessage({
+        text: action.text,
       });
       break;
 
     case 'quote':
-      eventBus.publish({
-        type: 'twitter:post_message',
-        memoryZone: 'twitter:post',
-        data: {
-          text: action.text,
-          quoteTweetUrl: `https://x.com/i/status/${action.targetTweetId}`,
-        } as TwitterClientInput,
+      void port.postMessage({
+        text: action.text,
+        quoteTweetUrl: `https://x.com/i/status/${action.targetTweetId}`,
       });
       break;
 

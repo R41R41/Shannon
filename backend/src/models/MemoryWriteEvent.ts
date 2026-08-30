@@ -14,6 +14,8 @@ export interface IMemoryWriteEvent {
   conversationId: string;
   threadId: string;
   sourceUserId: string;
+  scopeVersion?: number;
+  scopeKey?: string;
   payload: {
     envelope: Record<string, unknown>;
     conversationText: string;
@@ -41,6 +43,8 @@ const MemoryWriteEventSchema = new Schema<IMemoryWriteEvent>({
   conversationId: { type: String, required: true, index: true },
   threadId: { type: String, required: true, index: true },
   sourceUserId: { type: String, required: true, index: true },
+  scopeVersion: { type: Number },
+  scopeKey: { type: String },
   payload: {
     envelope: { type: Schema.Types.Mixed, required: true },
     conversationText: { type: String, required: true },
@@ -57,7 +61,7 @@ const MemoryWriteEventSchema = new Schema<IMemoryWriteEvent>({
   processedAt: { type: Date },
 });
 
-MemoryWriteEventSchema.index({ status: 1, createdAt: 1 });
+MemoryWriteEventSchema.index({ status: 1, scopeVersion: 1, createdAt: 1 });
 
 export const MemoryWriteEvent = mongoose.model<IMemoryWriteEvent>(
   'MemoryWriteEvent',

@@ -296,7 +296,6 @@ export class ImprovementGenerator {
     private async readFixedLlmExcerpts(): Promise<string> {
         const root = getBackendRoot();
         const paths = [
-            'src/services/llm/graph/cognitive/ParallelExecutor.ts',
             'src/services/llm/graph/nodes/prompt/PromptBuilder.ts',
         ];
         const parts: string[] = [];

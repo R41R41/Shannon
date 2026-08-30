@@ -6,16 +6,19 @@ import {
   DiscordVoiceQueueStartInput,
   DiscordVoiceStatusInput,
   DiscordVoiceStreamTextInput,
-  EmotionType,
   MemoryZone,
   MinebotVoiceResponseOutput,
 } from '@shannon/common';
 import OpenAI from 'openai';
+import { randomUUID } from 'node:crypto';
 import type { RequestEnvelope, ShannonGraphState } from '@shannon/common';
 import { classifyError, formatErrorForLog } from '../../../errors/index.js';
 import { getDiscordMemoryZone } from '../../../utils/discord.js';
-import { EventBus } from '../../eventBus/eventBus.js';
-import { voiceResponseChannelIds } from '../../discord/voiceState.js';
+import { getVoiceGateway } from '../../runtime/voiceGateway.js';
+import {
+  clearDiscordVoiceSession,
+  registerDiscordVoiceSession,
+} from '../../discord/discordVoiceSession.js';
 import {
   areFillersReady,
   selectFiller,
@@ -59,7 +62,6 @@ export type InvokeGraphFn = (
 ) => Promise<ShannonGraphState>;
 
 export interface VoiceProcessorDeps {
-  eventBus: EventBus;
   openaiClient: OpenAI;
   groqClient: OpenAI;
   voicepeakClient: VoicepeakClient;
@@ -69,7 +71,6 @@ export interface VoiceProcessorDeps {
 }
 
 export class VoiceProcessor {
-  private eventBus: EventBus;
   private openaiClient: OpenAI;
   private groqClient: OpenAI;
   private voicepeakClient: VoicepeakClient;
@@ -78,7 +79,6 @@ export class VoiceProcessor {
   private groqApiKey?: string;
 
   constructor(deps: VoiceProcessorDeps) {
-    this.eventBus = deps.eventBus;
     this.openaiClient = deps.openaiClient;
     this.groqClient = deps.groqClient;
     this.voicepeakClient = deps.voicepeakClient;
@@ -93,11 +93,7 @@ export class VoiceProcessor {
   }
 
   private publishVoiceStatus(memoryZone: MemoryZone, guildId: string, status: string, detail?: string) {
-    this.eventBus.publish({
-      type: 'discord:voice_status',
-      memoryZone,
-      data: { guildId, status, detail } as DiscordVoiceStatusInput,
-    });
+    getVoiceGateway().publishStatus({ guildId, status, detail } as DiscordVoiceStatusInput);
   }
 
   private async getVoiceMode(guildId: string): Promise<'chat' | 'minebot'> {
@@ -111,6 +107,7 @@ export class VoiceProcessor {
 
   async processDiscordVoiceMessage(message: DiscordVoiceMessageOutput) {
     const memoryZone = await getDiscordMemoryZone(message.guildId);
+    const voiceGateway = getVoiceGateway();
     const voiceMsg = message as DiscordVoiceMessageOutput & { audioBuffer?: Buffer; text?: string };
     const audioBuffer: Buffer | undefined = voiceMsg.audioBuffer;
     const directText: string | undefined = voiceMsg.text;
@@ -193,16 +190,11 @@ export class VoiceProcessor {
 
     // Post transcribed text to Discord (skip for direct text - already visible in chat)
     if (!isDirectText) {
-      this.eventBus.publish({
-        type: 'discord:post_message',
-        memoryZone,
-        data: {
-          channelId: message.channelId,
-          guildId: message.guildId,
-          text: `🎤 ${message.userName}: ${transcribedText}`,
-          imageUrl: '',
-        },
-      });
+      voiceGateway.postTranscript(
+        message.channelId,
+        message.guildId,
+        `🎤 ${message.userName}: ${transcribedText}`,
+      );
     }
 
     // 2. Filler selection (fast ~300ms with mini)
@@ -238,51 +230,50 @@ export class VoiceProcessor {
       }
     }
 
-    voiceResponseChannelIds.add(message.channelId);
+    const voiceRequestId = randomUUID();
+    registerDiscordVoiceSession({
+      guildId: message.guildId,
+      textChannelId: message.channelId,
+      userId: message.userId,
+      requestId: voiceRequestId,
+      expiresAt: Date.now() + 180_000,
+    });
 
     // 2b. Filler-only: queue fillers and return
     if (fillerResult.fillerOnly && fillerSequence && fillerSequence.audioBuffers.length > 0) {
-      this.eventBus.publish({
-        type: 'discord:voice_queue_start',
-        memoryZone,
-        data: { guildId: message.guildId, channelId: message.channelId } as DiscordVoiceQueueStartInput,
-      });
+      voiceGateway.startQueue({
+        guildId: message.guildId,
+        channelId: message.channelId,
+      } as DiscordVoiceQueueStartInput);
       for (const buf of fillerSequence.audioBuffers) {
-        this.eventBus.publish({
-          type: 'discord:voice_enqueue',
-          memoryZone,
-          data: { guildId: message.guildId, audioBuffer: buf } as DiscordVoiceEnqueueInput,
-        });
-      }
-      this.eventBus.publish({
-        type: 'discord:voice_queue_end',
-        memoryZone,
-        data: {
+        voiceGateway.enqueueAudio({
           guildId: message.guildId,
-          channelId: message.channelId,
-          text: fillerSequence.combinedText,
-        } as DiscordVoiceQueueEndInput,
-      });
+          audioBuffer: buf,
+        } as DiscordVoiceEnqueueInput);
+      }
+      voiceGateway.endQueue({
+        guildId: message.guildId,
+        channelId: message.channelId,
+        text: fillerSequence.combinedText,
+      } as DiscordVoiceQueueEndInput);
       const totalMs = Date.now() - voiceStartTime;
       logger.info(`[Voice] Filler-only response (${Math.round(fillerSequence.totalDurationMs)}ms audio). STT: ${sttMs}ms | Total: ${totalMs}ms`, 'cyan');
-      voiceResponseChannelIds.delete(message.channelId);
+      clearDiscordVoiceSession(message.channelId, voiceRequestId);
       return;
     }
 
     // 3. Start voice queue and enqueue fillers immediately
-    this.eventBus.publish({
-      type: 'discord:voice_queue_start',
-      memoryZone,
-      data: { guildId: message.guildId, channelId: message.channelId } as DiscordVoiceQueueStartInput,
-    });
+    voiceGateway.startQueue({
+      guildId: message.guildId,
+      channelId: message.channelId,
+    } as DiscordVoiceQueueStartInput);
 
     if (fillerSequence && fillerSequence.audioBuffers.length > 0) {
       for (const buf of fillerSequence.audioBuffers) {
-        this.eventBus.publish({
-          type: 'discord:voice_enqueue',
-          memoryZone,
-          data: { guildId: message.guildId, audioBuffer: buf } as DiscordVoiceEnqueueInput,
-        });
+        voiceGateway.enqueueAudio({
+          guildId: message.guildId,
+          audioBuffer: buf,
+        } as DiscordVoiceEnqueueInput);
       }
       logger.info(`[Voice] Filler enqueued (${fillerSequence.audioBuffers.length} clip(s), ${Math.round(fillerSequence.totalDurationMs)}ms)`, 'cyan');
     }
@@ -292,11 +283,10 @@ export class VoiceProcessor {
     if (fillerResult.needsTools) {
       const preToolFiller = getPreToolFillerAudio();
       if (preToolFiller) {
-        this.eventBus.publish({
-          type: 'discord:voice_enqueue',
-          memoryZone,
-          data: { guildId: message.guildId, audioBuffer: preToolFiller.audio } as DiscordVoiceEnqueueInput,
-        });
+        voiceGateway.enqueueAudio({
+          guildId: message.guildId,
+          audioBuffer: preToolFiller.audio,
+        } as DiscordVoiceEnqueueInput);
         preToolText = preToolFiller.text;
         logger.info(`[Voice] Pre-tool filler enqueued: "${preToolFiller.text}"`, 'cyan');
       }
@@ -307,15 +297,11 @@ export class VoiceProcessor {
     if (voiceMode === 'minebot') {
       logger.info(`[Voice] Minebot mode — routing to minebot:voice_chat`, 'magenta');
       this.publishVoiceStatus(memoryZone, message.guildId, 'llm', '🤖 Minebot処理中...');
-      this.eventBus.publish({
-        type: 'minebot:voice_chat',
-        memoryZone: 'minebot',
-        data: {
-          userName: message.userName,
-          message: transcribedText,
-          guildId: message.guildId,
-          channelId: message.channelId,
-        },
+      voiceGateway.routeToMinebotVoice({
+        userName: message.userName,
+        message: transcribedText,
+        guildId: message.guildId,
+        channelId: message.channelId,
       });
       return;
     }
@@ -342,58 +328,39 @@ export class VoiceProcessor {
       ? `${infoJson}\n\n${this.voiceCharacterPrompt}`
       : infoJson;
 
-    const responsePromise = new Promise<string>((resolve) => {
-      const unsubscribe = this.eventBus.subscribe('discord:post_message', (event) => {
-        const data = event.data as { channelId?: string; text?: string };
-        if (data.channelId === message.channelId && !data.text?.startsWith('🎤')) {
-          unsubscribe();
-          resolve(data.text ?? '');
-        }
-      });
-      setTimeout(() => { unsubscribe(); resolve(''); }, 60000);
-    });
+    const responsePromise = voiceGateway.waitForTextReply(message.channelId, true);
 
     const voiceOnToolStarting = (toolName: string) => {
       this.publishVoiceStatus(memoryZone, message.guildId, 'llm', `🔧 ツール使用中: ${toolName}`);
       const toolAudio = getToolFillerAudio(toolName);
       if (toolAudio) {
-        this.eventBus.publish({
-          type: 'discord:voice_enqueue',
-          memoryZone,
-          data: { guildId: message.guildId, audioBuffer: toolAudio } as DiscordVoiceEnqueueInput,
-        });
+        voiceGateway.enqueueAudio({
+          guildId: message.guildId,
+          audioBuffer: toolAudio,
+        } as DiscordVoiceEnqueueInput);
         logger.info(`[Voice] Tool filler enqueued for: ${toolName}`, 'cyan');
       }
     };
 
     // 5. Streaming TTS: synthesize each sentence as soon as LLM emits it
-    let voiceEmotion: VoicepeakEmotion | undefined;
     let streamedSentenceCount = 0;
     const ttsStartTime = Date.now();
-
-    const onEmotionResolved = (emotion: EmotionType | null) => {
-      if (emotion?.parameters) {
-        voiceEmotion = this.voicepeakClient.mapPlutchikToVoicepeak(emotion.parameters as unknown as Record<string, number>);
-        logger.info(`[Voice] Emotion resolved for streaming TTS: ${emotion.emotion} -> happy=${voiceEmotion.happy} fun=${voiceEmotion.fun} angry=${voiceEmotion.angry} sad=${voiceEmotion.sad}`, 'cyan');
-      }
-    };
 
     const onStreamSentence = async (sentence: string) => {
       if (streamedSentenceCount === 0) {
         this.publishVoiceStatus(memoryZone, message.guildId, 'tts');
       }
       try {
-        this.eventBus.publish({
-          type: 'discord:voice_stream_text',
-          memoryZone,
-          data: { guildId: message.guildId, channelId: message.channelId, sentence } as DiscordVoiceStreamTextInput,
-        });
-        const wavBuf = await this.voicepeakClient.synthesize(sentence, { emotion: voiceEmotion });
-        this.eventBus.publish({
-          type: 'discord:voice_enqueue',
-          memoryZone,
-          data: { guildId: message.guildId, audioBuffer: wavBuf } as DiscordVoiceEnqueueInput,
-        });
+        voiceGateway.streamSentence({
+          guildId: message.guildId,
+          channelId: message.channelId,
+          sentence,
+        } as DiscordVoiceStreamTextInput);
+        const wavBuf = await this.voicepeakClient.synthesize(sentence);
+        voiceGateway.enqueueAudio({
+          guildId: message.guildId,
+          audioBuffer: wavBuf,
+        } as DiscordVoiceEnqueueInput);
         streamedSentenceCount++;
         logger.info(`[Voice] Streamed sentence #${streamedSentenceCount} TTS enqueued: "${sentence.substring(0, 40)}..."`, 'cyan');
       } catch (err) {
@@ -426,27 +393,28 @@ export class VoiceProcessor {
       message.recentMessages
         ? [...message.recentMessages, new HumanMessage(userMessageForLlm)]
         : [],
+      {
+        onToolStarting: voiceOnToolStarting,
+        onStreamSentence,
+        abortSignal: undefined,
+      },
     );
-    const emotion = graphResult.emotion ?? null;
     const responseText = await responsePromise;
     const llmMs = Date.now() - llmStartTime;
-    voiceResponseChannelIds.delete(message.channelId);
+    clearDiscordVoiceSession(message.channelId, voiceRequestId);
 
     if (!responseText) {
       logger.warn('[LLM] No response text for voice message');
-      this.eventBus.publish({
-        type: 'discord:voice_queue_end',
-        memoryZone,
-        data: { guildId: message.guildId, channelId: message.channelId, text: '' } as DiscordVoiceQueueEndInput,
-      });
+      voiceGateway.endQueue({
+        guildId: message.guildId,
+        channelId: message.channelId,
+        text: '',
+      } as DiscordVoiceQueueEndInput);
       return;
     }
 
     // 6. Fallback: if streaming didn't emit any sentences, use batch TTS
     if (streamedSentenceCount === 0) {
-      if (!voiceEmotion && emotion?.parameters) {
-        voiceEmotion = this.voicepeakClient.mapPlutchikToVoicepeak(emotion.parameters as unknown as Record<string, number>);
-      }
       this.publishVoiceStatus(memoryZone, message.guildId, 'tts');
       try {
         const sentences = splitIntoSentences(responseText);
@@ -455,12 +423,11 @@ export class VoiceProcessor {
         );
         logger.info(`[Voice] Fallback: batch TTS for ${sentences.length} sentence(s) (katakana pre-converted)`, 'cyan');
         for (const cs of convertedSentences) {
-          const wavBuf = await this.voicepeakClient.synthesizePreprocessed(cs, { emotion: voiceEmotion });
-          this.eventBus.publish({
-            type: 'discord:voice_enqueue',
-            memoryZone,
-            data: { guildId: message.guildId, audioBuffer: wavBuf } as DiscordVoiceEnqueueInput,
-          });
+          const wavBuf = await this.voicepeakClient.synthesizePreprocessed(cs);
+          voiceGateway.enqueueAudio({
+            guildId: message.guildId,
+            audioBuffer: wavBuf,
+          } as DiscordVoiceEnqueueInput);
         }
       } catch (error) {
         logger.error('[Voice] Fallback batch TTS failed:', error);
@@ -475,26 +442,23 @@ export class VoiceProcessor {
     );
 
     // 7. Signal queue completion with full text for Discord post
-    this.eventBus.publish({
-      type: 'discord:voice_queue_end',
-      memoryZone,
-      data: {
-        guildId: message.guildId,
-        channelId: message.channelId,
-        text: responseText,
-      } as DiscordVoiceQueueEndInput,
-    });
+    voiceGateway.endQueue({
+      guildId: message.guildId,
+      channelId: message.channelId,
+      text: responseText,
+    } as DiscordVoiceQueueEndInput);
   }
 
   async processMinebotVoiceResponse(data: MinebotVoiceResponseOutput) {
     const { guildId, channelId, responseText } = data;
+    const voiceGateway = getVoiceGateway();
     if (!responseText) {
       logger.warn('[Minebot Voice] Empty response text');
-      this.eventBus.publish({
-        type: 'discord:voice_queue_end',
-        memoryZone: 'minebot',
-        data: { guildId, channelId, text: '' } as DiscordVoiceQueueEndInput,
-      });
+      voiceGateway.endQueue({
+        guildId,
+        channelId,
+        text: '',
+      } as DiscordVoiceQueueEndInput);
       return;
     }
 
@@ -507,23 +471,23 @@ export class VoiceProcessor {
       const { emotion, convertedSentences } = await this.voicepeakClient.preprocessBatch(responseText, sentences);
       for (const cs of convertedSentences) {
         const wavBuf = await this.voicepeakClient.synthesizePreprocessed(cs, { emotion });
-        this.eventBus.publish({
-          type: 'discord:voice_enqueue',
-          memoryZone,
-          data: { guildId, audioBuffer: wavBuf } as DiscordVoiceEnqueueInput,
-        });
+        voiceGateway.enqueueAudio({
+          guildId,
+          audioBuffer: wavBuf,
+        } as DiscordVoiceEnqueueInput);
       }
     } catch (error) {
       logger.error('[Minebot Voice] TTS failed:', error);
     }
 
-    this.eventBus.publish({
-      type: 'discord:voice_queue_end',
-      memoryZone,
-      data: { guildId, channelId, text: responseText } as DiscordVoiceQueueEndInput,
-    });
+    voiceGateway.endQueue({
+      guildId,
+      channelId,
+      text: responseText,
+    } as DiscordVoiceQueueEndInput);
 
-    voiceResponseChannelIds.delete(channelId);
+    clearDiscordVoiceSession(channelId);
+
     logger.info(`[Minebot Voice] Response complete`, 'magenta');
   }
 }

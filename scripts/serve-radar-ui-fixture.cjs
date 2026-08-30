@@ -1,0 +1,99 @@
+'use strict';
+// Explicit UI test harness. Starts neither Shannon nor Mongo nor Firebase nor a real feed connector.
+const fs = require('node:fs');
+const path = require('node:path');
+const assert = require('node:assert/strict');
+const { pathToFileURL } = require('node:url');
+async function main() {
+  const root = fs.realpathSync(path.join(__dirname, '..'));
+  assert.equal(root, '/home/azureuser/Shannon-dev'); assert.deepEqual(process.argv.slice(2), ['--isolated-fixture']);
+  assert(fs.existsSync(path.join(root, '.dev-runtime-lock')));
+  const out = '/home/azureuser/.codex-shannon-preservation/radar-workspace-20260829'; fs.mkdirSync(out, { recursive: true, mode: 0o700 });
+  const { build } = await import('vite');
+  await build({ configFile: false, envDir: false, root: path.join(root, 'frontend/tests/fixtures/radar'),
+    resolve: { alias: { '@styles': path.join(root, 'frontend/src/styles') } },
+    cacheDir: path.join(out, 'vite-cache'), esbuild: { jsx: 'automatic' },
+    build: { outDir: path.join(out, 'site'), emptyOutDir: false, minify: false }, logLevel: 'warn' });
+  const load = file => import(pathToFileURL(path.join(root, 'backend/dist', file)).href);
+  const { AccessService, AccessError } = await load('modules/access/index.js');
+  const { registerRadarRoutes } = await load('routes/radarRoutes.js');
+  const { PersonalRadarService } = await load('services/radar/personalRadar.js');
+  const { parseFeed } = await load('services/radar/feedConnector.js');
+  const { RadarSessionRunner } = await load('services/radar/sessionRunner.js');
+  const { PersonalTemporalRadar } = await load('services/radar/personalTemporalRadar.js');
+  const { PersonalTemporalReaders } = await load('services/radar/personalTemporalReaders.js');
+  const { WeatherReadAdapter } = await load('services/radar/weatherReadAdapter.js');
+  const { CalendarReadAdapter, CALENDAR_READ_SCOPE } = await load('services/radar/calendarReadAdapter.js');
+  const { RadarWorkspace } = await load('services/radar/radarWorkspace.js');
+  const { dateAt, nextDate } = await load('services/radar/temporalParsing.js');
+  const express = require('express'); const app = express();
+  const rows = new Map();
+  const store = { read: async owner => structuredClone(rows.get(owner) ?? null), compareAndSwap: async (owner, expected, next) => {
+    if ((rows.get(owner)?.revision ?? 0) !== expected) return false; rows.set(owner, structuredClone(next)); return true;
+  } };
+  const access = new AccessService({ verify: async token => {
+    if (!['fixture-alice', 'fixture-bob'].includes(token)) throw new AccessError('UNAUTHENTICATED');
+    return { projectId: 'isolated-ui-fixture', uid: token, email: 'synthetic@example.test', emailVerified: true, expiresAtMs: Date.now() + 3600000 };
+  } }, { findByIdentity: async (projectId, uid) => ({ projectId, uid, name: 'Synthetic', email: 'synthetic@example.test', isAuthorized: true, isAdmin: false }) }, () => 'fixture-request');
+  const radar = new PersonalRadarService(store, Date.now, { maxPer24Hours: 32, minimumIntervalMs: 0, leaseMs: 30000 });
+  const alice = await access.authenticate('fixture-alice');
+  const seeds = [
+    ['game-news', '任天堂の新作情報をチェック', 'games'],
+    ['science-feed', '海の深くで見つかった、不思議な光', 'science'],
+    ['creator-feed', '配信とものづくりの新しい話題', 'creative'],
+  ];
+  for (const [id, title, topic] of seeds) {
+    const state = await radar.sources(alice);
+    await radar.configure(alice, id, { expectedRevision: state.revision, source: { enabled: true, consentExpiresAt: Date.now() + 86400000,
+      kind: 'web', locator: `https://example.org/${id}/feed`, articleHosts: ['example.org'], topicIds: [topic], maxItems: 10, retentionMs: 86400000 } }, () => access.authenticate('fixture-alice'));
+    const xml = `<feed><entry><id>${id}-1</id><title>${title}（架空fixture）</title><link href="https://example.org/${id}/item"/><published>${new Date(Date.now() - 60000).toISOString()}</published></entry></feed>`;
+    await radar.collect(alice, id, { read: async source => parseFeed(xml, source, Date.now()) }, new AbortController().signal, () => access.authenticate('fixture-alice'));
+  }
+  app.use((req, res, next) => {
+    if (!['127.0.0.1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress)) return res.sendStatus(403);
+    res.setHeader('Cache-Control', 'no-store'); res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('Content-Security-Policy', "default-src 'self'; connect-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; object-src 'none'; frame-ancestors 'none'"); next();
+  });
+  let requestCount = 0; app.use('/api/radar', (_req, _res, next) => { requestCount++; next(); });
+  let collectionCount = 0;
+  const connector = { read: async source => {
+    collectionCount++;
+    const title = seeds.find(seed => seed[0] === source.id)?.[1] ?? '明示的な架空取得';
+    const xml = `<feed><entry><id>${source.id}-explicit</id><title>${title}（手動取得fixture）</title><link href="https://example.org/${source.id}/manual"/><published>${new Date().toISOString()}</published></entry></feed>`;
+    return parseFeed(xml, source, Date.now());
+  } };
+  let weatherCount=0,calendarCount=0; const grantExpiresAt=Date.now()+86400000;
+  const weather=new WeatherReadAdapter({get:async url=>{
+    weatherCount++; const u=new URL(url);const zone=u.searchParams.get('timezone');
+    return JSON.stringify({latitude:Number(u.searchParams.get('latitude')),longitude:Number(u.searchParams.get('longitude')),timezone:zone,
+      daily_units:{time:'iso8601',weather_code:'wmo code',temperature_2m_min:'°C',temperature_2m_max:'°C',precipitation_probability_max:'%'},
+      daily:{time:[0,1,2].map(i=>nextDate(dateAt(Date.now(),zone),i)),weather_code:[0,3,61],temperature_2m_min:[23,22,21],temperature_2m_max:[31,29,27],precipitation_probability_max:[10,20,70]}});
+  }});
+  const calendar=new CalendarReadAdapter({authorize:async source=>({binding:{id:source.bindingId,owner:source.owner,sourceId:source.id,sourceRevision:source.revision,
+    version:1,calendarId:'fixture-only-calendar',timeZone:source.timeZone,expiresAt:grantExpiresAt,scopes:[CALENDAR_READ_SCOPE]},read:async()=>{
+      calendarCount++;const now=Date.now();const today=dateAt(now,source.timeZone);
+      return JSON.stringify({kind:'calendar#events',timeZone:source.timeZone,accessRole:'reader',items:[
+        {id:'fictional-meeting',status:'tentative',summary:'架空の予定・作業時間',updated:new Date(now-1000).toISOString(),start:{dateTime:new Date(now+3600000).toISOString()},end:{dateTime:new Date(now+7200000).toISOString()}},
+        {id:'fictional-allday',status:'confirmed',summary:'架空の終日イベント',updated:new Date(now-1000).toISOString(),start:{date:today},end:{date:nextDate(today,1)}}]});
+    }})});
+  const temporal=new PersonalTemporalRadar(store,new PersonalTemporalReaders(weather,calendar),Date.now,{maxPer24Hours:32,minimumIntervalMs:0,leaseMs:30000});
+  const calendarChoices={list:async owner=>owner===aliceOwner?[{id:'fixture-binding',label:'テスト用カレンダー（架空）',timeZone:'Asia/Tokyo',expiresAt:grantExpiresAt}]:[]};
+  const { personalRadarOwner }=await load('services/radar/personalRadar.js');const aliceOwner=personalRadarOwner(alice);
+  const workspace=new RadarWorkspace(radar,temporal,{weatherAvailable:true,calendars:calendarChoices});
+  await workspace.configure(alice,'local-weather',{expectedRevision:9,source:{kind:'weather',enabled:true,consentExpiresAt:grantExpiresAt,timeZone:'Asia/Tokyo',latitudeTenth:350,longitudeTenth:1390}},()=>access.authenticate('fixture-alice'),new AbortController().signal);
+  await workspace.configure(alice,'personal-calendar',{expectedRevision:10,source:{kind:'calendar',enabled:true,consentExpiresAt:grantExpiresAt,timeZone:'Asia/Tokyo',bindingId:'fixture-binding',days:3}},()=>access.authenticate('fixture-alice'),new AbortController().signal);
+  registerRadarRoutes(app, access, radar, new RadarSessionRunner(access, radar, connector,Date.now,temporal),workspace);
+  app.use(express.static(path.join(out, 'site'), { etag: false, lastModified: false, cacheControl: false }));
+  const server = app.listen(13002, '127.0.0.1', () => {
+    const info = { fixtureOnly: true, pid: process.pid, port: 13002, host: '127.0.0.1', firebase: false, applicationStarted: false,
+      normalDbWritten: false, realSourcesFetched: false, fixtureOwners: 1, seededSources: 5, temporalFetchedAtStartup: false };
+    fs.writeFileSync(path.join(out, 'ui-fixture-start.json'), JSON.stringify(info, null, 2)); console.log(JSON.stringify(info));
+  });
+  server.on('error', () => { console.error('RADAR_UI_FIXTURE_LISTENER_FAILED'); process.exitCode = 1; });
+  const stop = () => { server.closeAllConnections(); server.close(() => {
+    fs.writeFileSync(path.join(out, 'ui-fixture-stop.json'), JSON.stringify({ fixtureOnly: true, stopped: true, requestCount, collectionCount, weatherCount, calendarCount, finalRevisions: [...rows.values()].map(row => row.revision), normalDbWritten: false }));
+    console.log('RADAR_UI_FIXTURE_STOPPED'); process.exit(0);
+  }); };
+  process.once('SIGTERM', stop); process.once('SIGINT', stop);
+}
+main().catch(() => { console.error('RADAR_UI_FIXTURE_FAILED'); process.exitCode = 1; });

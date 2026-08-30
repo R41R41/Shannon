@@ -20,6 +20,8 @@ function optional(name: string, fallback: string): string {
   return process.env[name] || fallback;
 }
 
+const isDev = process.argv.includes('--dev') || process.env.IS_DEV === 'True';
+
 /**
  * Centralized application configuration.
  *
@@ -28,7 +30,7 @@ function optional(name: string, fallback: string): string {
  */
 export const config = {
   /** Whether the app is running in dev mode */
-  isDev: process.argv.includes('--dev') || process.env.IS_DEV === 'True',
+  isDev,
 
   /** OpenAI API key (required, used by all LLM-related services) */
   openaiApiKey: required('OPENAI_API_KEY'),
@@ -39,8 +41,14 @@ export const config = {
   /** Main HTTP server port */
   port: optional('PORT', '5000'),
 
+  webAuth: {
+    firebaseProjectId: optional('FIREBASE_PROJECT_ID', ''),
+    allowedOrigins: optional('WEB_ALLOWED_ORIGINS', '').split(',').map(s => s.trim()).filter(Boolean),
+  },
+
   discord: {
-    token: optional('DISCORD_TOKEN', ''),
+    // --dev never falls back to the production bot token, even if both are in the same .env.
+    token: isDev ? optional('DISCORD_TOKEN_TEST', '') : optional('DISCORD_TOKEN', ''),
     guilds: {
       toyama: {
         guildId: optional('TOYAMA_GUILD_ID', ''),
@@ -85,6 +93,7 @@ export const config = {
   },
 
   twitter: {
+    disabled: optional('TWITTER_DISABLED', 'false').toLowerCase() === 'true' || optional('TWITTER_ENABLED', 'true').toLowerCase() === 'false',
     userId: optional('TWITTER_USER_ID', ''),
     email: optional('TWITTER_EMAIL', ''),
     password: optional('TWITTER_PASSWORD', ''),
@@ -168,9 +177,8 @@ export const config = {
      * Tier 2 が検証に通ったら対象ファイルへ即書き込み。
      * false のときは従来どおり履歴に pending_review のみ。
      */
-    autoApplyTier2:
-      process.env.SELF_IMPROVE_AUTO_APPLY_TIER2 === 'true'
-      || (process.argv.includes('--dev') || process.env.IS_DEV === 'True'),
+    // Dev mode does not authorize self-modifying code. Explicit opt-in only.
+    autoApplyTier2: process.env.SELF_IMPROVE_AUTO_APPLY_TIER2 === 'true',
     /** true のときのみ Tier 2 の delete を実行（危険・本番では使わない想定） */
     allowTier2Delete: process.env.SELF_IMPROVE_ALLOW_DELETE === 'true',
 
@@ -225,7 +233,6 @@ export const config = {
       schedule: optional('WS_SCHEDULE_PORT', '5018'),
       status: optional('WS_STATUS_PORT', '5013'),
       planning: optional('WS_PLANNING_PORT', '5019'),
-      emotion: optional('WS_EMOTION_PORT', '5020'),
       skill: optional('WS_SKILL_PORT', '5016'),
       auth: optional('WS_AUTH_PORT', '5017'),
     },

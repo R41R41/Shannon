@@ -11,7 +11,6 @@ export const PORTS = {
     SCHEDULE: config.ports.ws.schedule,
     STATUS: config.ports.ws.status,
     PLANNING: config.ports.ws.planning,
-    EMOTION: config.ports.ws.emotion,
     SKILL: config.ports.ws.skill,
     AUTH: config.ports.ws.auth,
   },

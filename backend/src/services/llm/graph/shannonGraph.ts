@@ -1,3 +1,8 @@
+import { bindRequestMemory, snapshotMemoryEnvelope } from '../../memory/requestMemory.js';
+import { bindRequestDiscordConversation } from '../../common/discordConversationPort.js';
+import { bindRequestWebConversation } from '../../common/webConversationPort.js';
+import { selectToolsForChannel } from '../../../modules/access/toolCatalog.js';
+import { minecraftTaskContinuation } from '../../minebot/runtime/minecraftTaskContinuation.js';
 /**
  * Shannon Unified Graph — 3ノード簡素化版
  *
@@ -5,7 +10,7 @@
  * Emergency: ingest → emergency_fastpath → execute → writeback
  *
  * Execute: ShannonExecutor (Anthropic API 直接) が主パス。
- * FCA/ParallelExecutor はフォールバック。
+ * FCA はフォールバック。
  */
 
 import { Annotation, END, START, StateGraph } from '@langchain/langgraph';
@@ -24,11 +29,12 @@ import type {
 } from '@shannon/common';
 import { inferInitialMode, envelopeToTaskContext } from './stateBridge.js';
 import { actionFormatterNode } from '../../common/adapters/actionFormatter.js';
-import { EmotionNode, EmotionState } from './nodes/EmotionNode.js';
 import { FunctionCallingAgent } from './nodes/FunctionCallingAgent.js';
-import { ScopedMemoryService } from '../../memory/scopedMemoryService.js';
+import { buildFcaState } from './nodes/fcaState.js';
+import { loadFcaCompositionExtras } from './nodes/fcaCompositionLoader.js';
+import type { ScopedMemoryService } from '../../memory/scopedMemoryService.js';
+import { ScopedMemoryService as ScopedMemoryServiceImpl } from '../../memory/scopedMemoryService.js';
 import { ModelSelector } from './cognitive/ModelSelector.js';
-import { ParallelExecutor } from './cognitive/ParallelExecutor.js';
 import { TaskEpisodeMemory } from './cognitive/TaskEpisodeMemory.js';
 import type { ExecutionResult } from './types.js';
 
@@ -64,6 +70,24 @@ const ShannonState = Annotation.Root({
   _onTaskTreeUpdate: Annotation<((taskTree: TaskTreeState) => void) | undefined>({
     reducer: replace, default: () => undefined,
   }),
+  _onStreamSentence: Annotation<((sentence: string) => Promise<void>) | undefined>({
+    reducer: replace, default: () => undefined,
+  }),
+  _onRequestSkillInterrupt: Annotation<(() => void) | undefined>({
+    reducer: replace, default: () => undefined,
+  }),
+  _getLiveInventory: Annotation<(() => MinecraftInventoryEntry[]) | undefined>({
+    reducer: replace, default: () => undefined,
+  }),
+  _getActiveEffects: Annotation<(() => Array<{ name: string; amplifier: number }>) | undefined>({
+    reducer: replace, default: () => undefined,
+  }),
+  _getInventoryDiff: Annotation<(() => string | null) | undefined>({
+    reducer: replace, default: () => undefined,
+  }),
+  _getInitialMemory: Annotation<(() => Promise<string | null>) | undefined>({
+    reducer: replace, default: () => undefined,
+  }),
   _abortSignal: Annotation<AbortSignal | undefined>({
     reducer: replace, default: () => undefined,
   }),
@@ -77,10 +101,12 @@ const ShannonState = Annotation.Root({
 type ShannonStateType = typeof ShannonState.State;
 
 // ---------------------------------------------------------------------------
-// Shared singletons (initialized once at graph build time)
+// Shared services (initialized once at graph build time)
 // ---------------------------------------------------------------------------
 
-const scopedMemory = ScopedMemoryService.getInstance();
+function resolveScopedMemory(deps?: ShannonGraphDeps): ScopedMemoryService {
+  return deps?.scopedMemory ?? ScopedMemoryServiceImpl.getInstance();
+}
 
 // ---------------------------------------------------------------------------
 // Node implementations
@@ -106,28 +132,91 @@ async function emergencyFastpathNode(state: ShannonStateType): Promise<Partial<S
 }
 
 /**
- * execute: Delegates to SubTaskExecutor (if subtaskPlan exists),
- * ParallelExecutor (3 async loops), or FCA-only mode.
+ * execute: Delegates to ShannonExecutor (Minecraft) or the FCA.
  */
 function createExecuteNode(
   fca: FunctionCallingAgent,
-  emotionNode?: EmotionNode,
+  scopedMemory: ScopedMemoryService,
   routineManager?: import('../../minebot/routines/RoutineManager.js').RoutineManager,
   routineExecutor?: import('../../minebot/routines/RoutineExecutor.js').RoutineExecutor,
 ) {
-  const parallelExecutor = emotionNode
-    ? new ParallelExecutor({ fca, emotionNode })
-    : null;
-
   return async function executeFn(state: ShannonStateType): Promise<Partial<ShannonStateType>> {
+    state._abortSignal?.throwIfAborted();
     const envelope = state.envelope;
+    const memoryEnvelope = snapshotMemoryEnvelope(envelope);
     const context = envelopeToTaskContext(envelope);
-    const emotionState: EmotionState = state._emotionState ?? { current: state.emotion ?? null };
 
-    // ═══ ShannonExecutor パス (Anthropic API 直接呼出) ═══
-    // FCA/LangChain を経由せず、Anthropic SDK で直接実行。
-    // フォールバック: SHANNON_USE_FCA=true で従来の FCA/ParallelExecutor に戻す。
-    if (config.anthropic?.apiKey && process.env.SHANNON_USE_FCA !== 'true') {
+    const platform = context?.platform ?? envelope.channel ?? 'unknown';
+    const goal = envelope.text ?? '';
+    const lightweightMemory = platform === 'minecraft' || platform === 'minebot';
+    const memoryRecall = await scopedMemory.recall({
+      envelope: memoryEnvelope,
+      text: goal,
+      lightweightMode: lightweightMemory,
+    });
+    const compositionExtras = await loadFcaCompositionExtras({
+      goal,
+      platform,
+      memoryEnvelope,
+      environmentState: (envelope.metadata?.environmentState as string) ?? null,
+      serverId: memoryEnvelope.minecraft?.serverId,
+      lightweightMemory,
+      recall: memoryRecall,
+    });
+
+    const fcaState = buildFcaState({
+      taskId: envelope.requestId,
+      requestEnvelope: memoryEnvelope,
+      userMessage: goal || null,
+      messages: state._legacyMessages,
+      context,
+      channelId: envelope.discord?.channelId ?? envelope.conversationId,
+      environmentState: (envelope.metadata?.environmentState as string) ?? null,
+      isEmergency: envelope.tags.includes('emergency'),
+      ...compositionExtras,
+      onToolStarting: state._onToolStarting,
+      onTaskTreeUpdate: state._onTaskTreeUpdate,
+      onStreamSentence: state._onStreamSentence,
+      onRequestSkillInterrupt: state._onRequestSkillInterrupt,
+      getLiveInventory: state._getLiveInventory,
+      getActiveEffects: state._getActiveEffects,
+      getInventoryDiff: state._getInventoryDiff,
+      getInitialMemory: state._getInitialMemory,
+      selectedModel: state.selectedModel,
+      classifyMode: state.mode,
+      needsTools: state.needsTools,
+      needsPlanning: state.needsPlanning,
+    });
+
+    const runFcaPath = async (): Promise<Partial<ShannonStateType>> => {
+      const startTime = Date.now();
+      const agentResult = await fca.run(fcaState, state._abortSignal);
+      state._abortSignal?.throwIfAborted();
+
+      try {
+        TaskEpisodeMemory.saveEpisodeForRun(
+          TaskEpisodeMemory.buildEpisodeFromResult(
+            goal, platform, agentResult.taskTree, startTime, 0,
+          ),
+          memoryEnvelope,
+        );
+      } catch { /* ignore */ }
+
+      return {
+        finalAnswer: agentResult.lastAssistantContent ?? agentResult.taskTree?.strategy ?? undefined,
+        taskTree: agentResult.taskTree ?? undefined,
+        trace: ['node:execute:fca'],
+      };
+    };
+
+    // Discord/Web 等は FCA (OpenAI / LangChain Anthropic)。Minebot のみ ShannonExecutor。
+    const useShannonExecutor =
+      envelope.channel === 'minecraft'
+      && Boolean(config.anthropic?.apiKey)
+      && process.env.SHANNON_USE_FCA !== 'true';
+
+    // ═══ ShannonExecutor パス (Anthropic API 直接呼出・Minecraft のみ) ═══
+    if (useShannonExecutor) {
       try {
         const { ShannonExecutor, skillToAnthropicTool, routineToAnthropicTool } = await import('./ShannonExecutor.js');
         const { PromptBuilder } = await import('./nodes/prompt/PromptBuilder.js');
@@ -159,6 +248,12 @@ function createExecuteNode(
 
         // InstantSkills
         const bot = (envelope.metadata as any)?.bot;
+        if (bot?.instantSkills?.getSkills) {
+          for (const skill of bot.instantSkills.getSkills()) {
+            const tool = skillToAnthropicTool(skill);
+            if (!tools.some(t => t.name === tool.name)) tools.push(tool);
+          }
+        }
 
         if (routineManager) {
           for (const def of routineManager.getAll()) {
@@ -179,8 +274,14 @@ function createExecuteNode(
           });
         }
 
+        // A fresh context-bearing tool set for this executor invocation.
+        const created = fca.createToolsForRun();
+        bindRequestMemory(created, memoryEnvelope);
+        bindRequestDiscordConversation(created, memoryEnvelope, state._abortSignal);
+        bindRequestWebConversation(created, memoryEnvelope, state._abortSignal);
+        const runTools = selectToolsForChannel('minecraft', created);
         // FCA 登録済みツールを Anthropic 形式に変換
-        for (const tool of fca.getTools()) {
+        for (const tool of runTools) {
           // routine:xxx は既に routine-xxx として追加済み、manage-routine / task-complete も追加済み
           if (tool.name.includes(':')) continue; // Anthropic は ':' を許可しない
           const sanitizedName = tool.name.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -210,7 +311,6 @@ function createExecuteNode(
         const promptBuilder = new PromptBuilder();
         if (routineManager) promptBuilder.setRoutineManager(routineManager as any);
         const systemPrompt = promptBuilder.buildSystemPrompt(
-          emotionState,
           context,
           (envelope.metadata?.environmentState as string) ?? null,
         );
@@ -218,14 +318,16 @@ function createExecuteNode(
         // LLM ツール用マップ (FCA のツールを直接呼出)
         // sanitize 後の名前でもマッチするように両方登録
         const llmToolMap = new Map<string, (input: Record<string, unknown>) => Promise<string>>();
-        for (const tool of fca.getTools()) {
+        for (const tool of runTools) {
           if (['task-complete'].includes(tool.name)) continue;
           if (tool.name.includes(':')) continue; // routine:xxx は ShannonExecutor が直接処理
           const sanitized = tool.name.replace(/[^a-zA-Z0-9_-]/g, '_');
           const handler = async (input: Record<string, unknown>) => {
             try {
-              return await (tool as any)._call(input);
+              state._abortSignal?.throwIfAborted();
+              return await tool.invoke(input, { signal: state._abortSignal });
             } catch (e) {
+              state._abortSignal?.throwIfAborted();
               return `エラー: ${e instanceof Error ? e.message : String(e)}`;
             }
           };
@@ -250,6 +352,7 @@ function createExecuteNode(
           routineManager,
           routineExecutor,
           llmTools: llmToolMap,
+          continuation: minecraftTaskContinuation(envelope.minecraft),
         });
 
         const previousMessages = (envelope.metadata as any)?.previousMessages as
@@ -280,18 +383,13 @@ function createExecuteNode(
           savedTaskNodes: result.taskNodes,
         };
       } catch (e) {
-        logger.error(`❌ ShannonExecutor failed: ${e}`, e);
-        return {
-          finalAnswer: `エラーが発生しました: ${e instanceof Error ? e.message : String(e)}`,
-          trace: ["node:execute:error"],
-        };
+        // Cancellation must not start a fallback engine.
+        state._abortSignal?.throwIfAborted();
+        logger.error(`❌ ShannonExecutor failed, falling back to FCA: ${e}`, e);
       }
     }
 
-    return {
-      finalAnswer: "Anthropic API key が設定されていません",
-      trace: ["node:execute:no_api_key"],
-    };
+    return runFcaPath();
   };
 }
 
@@ -302,9 +400,14 @@ function createExecuteNode(
 /**
  * simplifiedWriteback: format + writeback を統合 (Phase 4)
  */
-async function simplifiedWritebackNode(state: ShannonStateType): Promise<Partial<ShannonStateType>> {
+async function simplifiedWritebackNode(
+  state: ShannonStateType,
+  scopedMemory: ScopedMemoryService,
+): Promise<Partial<ShannonStateType>> {
+  state._abortSignal?.throwIfAborted();
   // format
   const formatResult = await actionFormatterNode(state as unknown as ShannonGraphState);
+  state._abortSignal?.throwIfAborted();
 
   // writeback (fire-and-forget)
   const userText = state.envelope.text ?? '';
@@ -325,21 +428,23 @@ async function simplifiedWritebackNode(state: ShannonStateType): Promise<Partial
 }
 
 export interface ShannonGraphDeps {
-  emotionNode: EmotionNode;
   fca: FunctionCallingAgent;
-  /** SubTaskPlannerNode + SubTaskExecutor 用（任意、なければ従来パス） */
+  scopedMemory?: ScopedMemoryService;
+  /** Minecraft ルーチン実行用（任意、なければ従来パス） */
   routineManager?: import('../../minebot/routines/RoutineManager.js').RoutineManager;
   routineExecutor?: import('../../minebot/routines/RoutineExecutor.js').RoutineExecutor;
 }
 
 export function buildShannonGraph(deps: ShannonGraphDeps) {
-  const executeNode = createExecuteNode(deps.fca, deps.emotionNode, deps.routineManager, deps.routineExecutor);
+  const scopedMemory = resolveScopedMemory(deps);
+  const executeNode = createExecuteNode(deps.fca, scopedMemory, deps.routineManager, deps.routineExecutor);
+  const writebackNode = (state: ShannonStateType) => simplifiedWritebackNode(state, scopedMemory);
 
   const workflow = new StateGraph(ShannonState)
     .addNode('ingest', ingestNode)
     .addNode('emergency_fastpath', emergencyFastpathNode)
     .addNode('execute', executeNode)
-    .addNode('writeback', simplifiedWritebackNode)
+    .addNode('writeback', writebackNode)
 
     .addEdge(START, 'ingest')
     .addConditionalEdges('ingest', (state: ShannonStateType) => {
@@ -370,18 +475,29 @@ export async function invokeShannonGraph(
   options?: {
     onToolStarting?: (toolName: string, args?: Record<string, unknown>) => void;
     onTaskTreeUpdate?: (taskTree: TaskTreeState) => void;
+    onStreamSentence?: (sentence: string) => Promise<void>;
     onRequestSkillInterrupt?: () => void;
     getLiveInventory?: () => MinecraftInventoryEntry[];
     getActiveEffects?: () => Array<{ name: string; amplifier: number }>;
+    getInventoryDiff?: () => string | null;
+    getInitialMemory?: () => Promise<string | null>;
     abortSignal?: AbortSignal;
   },
 ): Promise<ShannonGraphState> {
+  options?.abortSignal?.throwIfAborted();
   const result = await graph.invoke({
     envelope,
     _legacyMessages: legacyMessages ?? [],
     _onToolStarting: options?.onToolStarting,
     _onTaskTreeUpdate: options?.onTaskTreeUpdate,
+    _onStreamSentence: options?.onStreamSentence,
+    _onRequestSkillInterrupt: options?.onRequestSkillInterrupt,
+    _getLiveInventory: options?.getLiveInventory,
+    _getActiveEffects: options?.getActiveEffects,
+    _getInventoryDiff: options?.getInventoryDiff,
+    _getInitialMemory: options?.getInitialMemory,
     _abortSignal: options?.abortSignal,
-  });
+  }, { signal: options?.abortSignal });
+  options?.abortSignal?.throwIfAborted();
   return result as unknown as ShannonGraphState;
 }

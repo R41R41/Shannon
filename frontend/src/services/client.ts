@@ -1,11 +1,10 @@
+import { auth } from '../firebase';
 import { MonitoringAgent } from "./agents/monitoringAgent";
 import { OpenAIAgent } from "./agents/openaiAgent";
 import { SchedulerAgent } from "./agents/schedulerAgent";
 import { StatusAgent } from "./agents/statusAgent";
 import { PlanningAgent } from "./agents/planningAgent";
-import { EmotionAgent } from "./agents/emotionAgent";
 import { SkillAgent } from "./agents/skillAgent";
-import { AuthAgent } from "./agents/authAgent";
 
 export class WebClient {
   private static instance: WebClient;
@@ -15,9 +14,7 @@ export class WebClient {
   public schedulerService: SchedulerAgent;
   public statusService: StatusAgent;
   public planningService: PlanningAgent;
-  public emotionService: EmotionAgent;
   public skillService: SkillAgent;
-  public authService: AuthAgent;
 
   public static getInstance() {
     if (!WebClient.instance) {
@@ -32,18 +29,38 @@ export class WebClient {
     this.schedulerService = SchedulerAgent.getInstance();
     this.statusService = StatusAgent.getInstance();
     this.planningService = PlanningAgent.getInstance();
-    this.emotionService = EmotionAgent.getInstance();
     this.skillService = SkillAgent.getInstance();
-    this.authService = AuthAgent.getInstance();
+    const getToken = async () => {
+      const user = auth.currentUser;
+      if (!user) throw new Error('Login required');
+      const token = await user.getIdToken();
+      if (auth.currentUser?.uid !== user.uid) throw new Error('Session changed');
+      return token;
+    };
+    for (const service of [this.openaiService, this.monitoringService, this.schedulerService,
+      this.statusService, this.planningService, this.skillService]) service.setTokenProvider(getToken);
+  }
+
+  private sessionScopedServices() {
+    return [this.openaiService, this.monitoringService, this.planningService] as const;
+  }
+
+  public setWebSessionId(sessionId?: string) {
+    for (const service of this.sessionScopedServices()) service.setWebSessionId(sessionId);
+  }
+
+  public bindWebSession() {
+    for (const service of this.sessionScopedServices()) service.bindWebSessionNow();
   }
 
   public isConnected(): boolean {
     return this.connected;
   }
 
-  public start() {
+  public start(sessionId?: string) {
     if (this.connected) return;
 
+    this.setWebSessionId(sessionId);
     this.disconnect();
 
     this.openaiService.connect();
@@ -51,9 +68,7 @@ export class WebClient {
     this.schedulerService.connect();
     this.statusService.connect();
     this.planningService.connect();
-    this.emotionService.connect();
     this.skillService.connect();
-    this.authService.connect();
 
     this.connected = true;
   }
@@ -66,9 +81,7 @@ export class WebClient {
     this.schedulerService.disconnect();
     this.statusService.disconnect();
     this.planningService.disconnect();
-    this.emotionService.disconnect();
     this.skillService.disconnect();
-    this.authService.disconnect();
 
     this.connected = false;
   }

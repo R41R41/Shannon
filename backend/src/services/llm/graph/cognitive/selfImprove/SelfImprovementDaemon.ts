@@ -5,7 +5,7 @@
  * LLM を使って失敗パターンを分類し、プロンプトルール追加（Tier 1）や
  * スキルコード修正（Tier 2）を自動生成・適用する。
  *
- * Singleton — ParallelExecutor から fire-and-forget で呼ばれる。
+ * Singleton — 実行経路から fire-and-forget で呼ばれる。
  */
 
 import { mkdir, writeFile } from 'node:fs/promises';
@@ -14,7 +14,6 @@ import { config } from '../../../../../config/env.js';
 import { getBackendRoot } from '../../../../../utils/backendRoot.js';
 import { createLogger } from '../../../../../utils/logger.js';
 import type { TaskEpisode } from '../TaskEpisodeMemory.js';
-import type { MetaAssessment, BlackboardSnapshot } from '../CognitiveBlackboard.js';
 import {
     DaemonStatus,
     FailureRecord,
@@ -23,6 +22,7 @@ import {
     SELF_IMPROVE_CONSTANTS as C,
     SkillIdeation,
     SkillCreationRecord,
+    type MetaAssessment,
 } from './types.js';
 import { FailureAnalyzer } from './FailureAnalyzer.js';
 import { ImprovementGenerator } from './ImprovementGenerator.js';
@@ -103,12 +103,12 @@ export class SelfImprovementDaemon {
     }
 
     /**
-     * エピソード保存後に ParallelExecutor から呼ばれる（fire-and-forget）。
+     * エピソード保存後に呼ばれる（fire-and-forget）。
      * 失敗エピソードをバッファに追加し、トリガー条件を評価する。
      */
     async onEpisodeSaved(
         episode: TaskEpisode,
-        snapshot?: BlackboardSnapshot,
+        metaAssessment: MetaAssessment | null = null,
     ): Promise<void> {
         try {
             // 効果測定の更新（成功・失敗問わず）
@@ -132,7 +132,7 @@ export class SelfImprovementDaemon {
 
             const record: FailureRecord = {
                 episode,
-                metaAssessment: snapshot?.metaState?.assessment ?? null,
+                metaAssessment,
                 forwardModelPatternCount: 0, // ForwardModel は per-task で生存しないため 0
                 recordedAt: Date.now(),
             };
@@ -149,9 +149,8 @@ export class SelfImprovementDaemon {
                 `(buffer: ${this.failureBuffer.length}/${C.MIN_FAILURE_BUFFER})`,
             );
 
-            // MetaCognition シグナルを記録
-            if (snapshot?.metaState?.assessment) {
-                this.metaCognitionSignals.push(snapshot.metaState.assessment);
+            if (metaAssessment) {
+                this.metaCognitionSignals.push(metaAssessment);
                 if (this.metaCognitionSignals.length > 20) {
                     this.metaCognitionSignals = this.metaCognitionSignals.slice(-20);
                 }
@@ -737,8 +736,7 @@ export class SelfImprovementDaemon {
             // Step 5: ホットロード
             const { SkillHotLoader } = await import('../../../../minebot/skills/SkillHotLoader.js');
             const { getSkillRegistrar } = await import('../../../../minebot/skills/SkillRegistrar.js');
-            const { getEventBus } = await import('../../../../eventBus/index.js');
-            const hotLoader = new SkillHotLoader(getSkillRegistrar(getEventBus()));
+            const hotLoader = new SkillHotLoader(getSkillRegistrar());
 
             // bot インスタンスを取得
             const bot = this.getMinebotInstance();

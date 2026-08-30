@@ -1,7 +1,6 @@
 import { BaseMessage } from '@langchain/core/messages';
 import {
   ActionItem,
-  EmotionType,
   HierarchicalSubTask,
   MemoryZone,
   RequestEnvelope,
@@ -15,7 +14,6 @@ import {
  */
 export interface TaskStateInput {
   taskId?: string | null;
-  emotion?: EmotionType | null;
 
   // === コンテキスト情報 ===
   /** @deprecated Since v1.5. Use context (TaskContext) instead of memoryZone. Will be removed in v2.0. */
@@ -53,7 +51,6 @@ export interface TaskStateInput {
   onToolStarting?: (toolName: string, args?: Record<string, unknown>) => void;
   onTaskTreeUpdate?: (taskTree: TaskTreeState) => void;
   onStreamSentence?: (sentence: string) => Promise<void>;
-  onEmotionResolved?: (emotion: EmotionType | null) => void;
 }
 
 /**
@@ -125,5 +122,5 @@ export const GRAPH_CONFIG = {
 
 // 既存の型をre-export
 export type {
-  ActionItem, EmotionType, HierarchicalSubTask, MemoryZone, TaskContext, TaskStatus, TaskTreeState
+  ActionItem, HierarchicalSubTask, MemoryZone, TaskContext, TaskStatus, TaskTreeState
 };

@@ -1,34 +1,23 @@
+import { snapshotMemoryEnvelope } from '../requestMemory.js';
+import { deriveMemoryScope, memoryScopeFilter } from '../../../modules/memory/index.js';
 /**
  * AutonomyUpdater
  *
- * Handles autonomy analysis: relationship updates, self-model updates,
+ * Handles autonomy analysis: self-model updates,
  * strategy updates, internal state updates, world pattern updates.
  */
 
 import { ShannonMemory } from '../../../models/ShannonMemory.js';
-import { PersonMemoryService } from '../personMemoryService.js';
-import { PersonMemory } from '../../../models/PersonMemory.js';
 import type { RequestEnvelope } from '@shannon/common';
 import { logger } from '../../../utils/logger.js';
 import { ScopeDeriver } from '../recall/ScopeDeriver.js';
+import { parseLlmJsonObject } from './parseLlmJson.js';
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
 export interface AutonomyUpdateAnalysis {
-  relationship?: {
-    directness?: 'low' | 'mid' | 'high';
-    warmth?: 'low' | 'mid' | 'high';
-    structure?: 'low' | 'mid' | 'high';
-    verbosity?: 'short' | 'mid' | 'long';
-    recurringTopics?: string[];
-    activeProjects?: string[];
-    cautionFlags?: string[];
-    inferredNeeds?: string[];
-    familiarityDelta?: number;
-    trustDelta?: number;
-  };
   selfObservations?: Array<{
     observation: string;
     confidence: number;
@@ -63,16 +52,13 @@ export interface AutonomyUpdateAnalysis {
 }
 
 export class AutonomyUpdater {
-  private personService: PersonMemoryService;
   private scopeDeriver: ScopeDeriver;
   public resolveCanonicalUserId: (envelope: RequestEnvelope) => string;
 
   constructor(
-    personService: PersonMemoryService,
     scopeDeriver: ScopeDeriver,
     resolveCanonicalUserId: (envelope: RequestEnvelope) => string,
   ) {
-    this.personService = personService;
     this.scopeDeriver = scopeDeriver;
     this.resolveCanonicalUserId = resolveCanonicalUserId;
   }
@@ -81,14 +67,14 @@ export class AutonomyUpdater {
     envelope: RequestEnvelope,
     conversationText: string,
   ): Promise<void> {
-    if (!conversationText.trim()) return;
+    envelope = snapshotMemoryEnvelope(envelope);
+    if (!conversationText.trim() || !deriveMemoryScope(envelope)) return;
 
     const analysis = await this.analyzeAutonomyUpdates(envelope, conversationText);
     if (!analysis) return;
 
     await Promise.allSettled([
-      this.applyRelationshipUpdates(envelope, analysis.relationship),
-      this.applySelfModelUpdates(analysis),
+      this.applySelfModelUpdates(envelope, analysis),
       this.applyStrategyUpdates(envelope, analysis.strategyUpdates ?? []),
       this.applyInternalStateUpdate(envelope, analysis.internalState),
       this.applyWorldPatternUpdates(envelope, analysis.worldPatterns ?? []),
@@ -112,7 +98,7 @@ export class AutonomyUpdater {
     });
 
     const systemPrompt = `あなたは Shannon の長期主体性更新器です。
-会話から relationship, selfObservations, activeImprovementGoals, strategyUpdates, internalState, worldPatterns を JSON で抽出してください。
+会話から selfObservations, activeImprovementGoals, strategyUpdates, internalState, worldPatterns を JSON で抽出してください。
 根拠が弱い項目は空配列または省略してください。
 strategyUpdates は失敗・摩擦・改善要求がある場合のみ抽出してください。
 JSON 以外は出力しないでください。`;
@@ -130,9 +116,9 @@ ${conversationText}`;
         new HumanMessage(humanPrompt),
       ]);
       const content = response.content.toString().trim();
-      const jsonMatch = content.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) return null;
-      return JSON.parse(jsonMatch[0]) as AutonomyUpdateAnalysis;
+      const parsed = parseLlmJsonObject(content);
+      if (!parsed || typeof parsed !== 'object') return null;
+      return parsed as AutonomyUpdateAnalysis;
     } catch (error) {
       logger.warn(`⚠ ScopedMemory: autonomy update analysis failed: ${error}`);
       return null;
@@ -141,43 +127,12 @@ ${conversationText}`;
 
   // ========== Apply updates ==========
 
-  private async applyRelationshipUpdates(
-    envelope: RequestEnvelope,
-    relationship?: AutonomyUpdateAnalysis['relationship'],
-  ): Promise<void> {
-    if (!relationship) return;
-    const platform = this.scopeDeriver.channelToPlatform(envelope.channel);
-    const userId = envelope.sourceUserId;
-    if (!platform || !userId || userId === 'unknown') return;
-
-    const record = await PersonMemory.findOne({ platform, platformUserId: userId });
-    if (!record) return;
-
-    if (relationship.directness) record.interactionPreferences.directness = relationship.directness;
-    if (relationship.warmth) record.interactionPreferences.warmth = relationship.warmth;
-    if (relationship.structure) record.interactionPreferences.structure = relationship.structure;
-    if (relationship.verbosity) record.interactionPreferences.verbosity = relationship.verbosity;
-
-    record.familiarityLevel = this.clamp01To100Delta(
-      record.familiarityLevel,
-      relationship.familiarityDelta ?? 0,
-    );
-    record.trustLevel = this.clamp01To100Delta(
-      record.trustLevel,
-      relationship.trustDelta ?? 0,
-    );
-    record.recurringTopics = this.mergeUniqueStrings(record.recurringTopics, relationship.recurringTopics);
-    record.activeProjects = this.mergeUniqueStrings(record.activeProjects, relationship.activeProjects);
-    record.cautionFlags = this.mergeUniqueStrings(record.cautionFlags, relationship.cautionFlags);
-    record.inferredNeeds = this.mergeUniqueStrings(record.inferredNeeds, relationship.inferredNeeds);
-
-    await record.save();
-  }
-
-  private async applySelfModelUpdates(analysis: AutonomyUpdateAnalysis): Promise<void> {
+  private async applySelfModelUpdates(envelope: RequestEnvelope, analysis: AutonomyUpdateAnalysis): Promise<void> {
+    const scope = deriveMemoryScope(envelope);
+    if (!scope) return;
     const existing = await ShannonMemory.findOne({
       category: 'self_model',
-      visibilityScope: 'self_model',
+      ...memoryScopeFilter(scope),
     }).sort({ createdAt: -1 });
 
     const baseSelfModel = existing?.selfModelData ?? {
@@ -233,8 +188,8 @@ ${conversationText}`;
       source: 'autonomy_updater',
       importance: 8,
       tags: ['self_model', 'autonomy'],
-      visibilityScope: 'self_model' as const,
-      generalized: true,
+      ...scope,
+      generalized: false,
       selfModelData: {
         stableIdentity: baseSelfModel.stableIdentity,
         capabilities: {
@@ -262,7 +217,9 @@ ${conversationText}`;
     envelope: RequestEnvelope,
     strategyUpdates: NonNullable<AutonomyUpdateAnalysis['strategyUpdates']>,
   ): Promise<void> {
-    const ownerUserId = this.resolveCanonicalUserId(envelope);
+    const scope = deriveMemoryScope(envelope);
+    if (!scope) return;
+    const ownerUserId = scope.ownerUserId;
     const channelTags = this.scopeDeriver.deriveChannelTags(envelope);
     const worldTags = this.scopeDeriver.deriveWorldTags(envelope);
     const projectTags = this.scopeDeriver.deriveProjectTags(envelope);
@@ -270,6 +227,7 @@ ${conversationText}`;
     for (const strategy of strategyUpdates) {
       const content = `${strategy.basedOnFailure}: ${strategy.newStrategy}`;
       const existing = await ShannonMemory.findOne({
+        ...memoryScopeFilter(scope),
         category: 'strategy_update',
         content,
       });
@@ -280,12 +238,12 @@ ${conversationText}`;
         source: 'autonomy_updater',
         importance: 7,
         tags: ['strategy_update', strategy.basedOnFailure, ...strategy.appliesToModes],
-        visibilityScope: 'self_model' as const,
+        ...scope,
         ownerUserId: ownerUserId !== 'unknown' ? ownerUserId : undefined,
         channelTags,
         worldTags,
         projectTags,
-        generalized: strategy.confidence >= 0.8,
+        generalized: false,
         strategyUpdateData: {
           id: crypto.randomUUID(),
           basedOnFailure: strategy.basedOnFailure,
@@ -312,6 +270,8 @@ ${conversationText}`;
     envelope: RequestEnvelope,
     internalState?: AutonomyUpdateAnalysis['internalState'],
   ): Promise<void> {
+    const scope = deriveMemoryScope(envelope);
+    if (!scope) return;
     if (!internalState) return;
     await ShannonMemory.create({
       category: 'internal_state_snapshot',
@@ -319,7 +279,7 @@ ${conversationText}`;
       source: 'autonomy_updater',
       importance: 6,
       tags: ['internal_state', envelope.channel],
-      visibilityScope: 'self_model',
+      ...scope,
       generalized: false,
       internalStateSnapshot: {
         curiosity: internalState.curiosity,
@@ -339,12 +299,15 @@ ${conversationText}`;
     envelope: RequestEnvelope,
     worldPatterns: NonNullable<AutonomyUpdateAnalysis['worldPatterns']>,
   ): Promise<void> {
+    const scope = deriveMemoryScope(envelope);
+    if (!scope) return;
     const channelTags = this.scopeDeriver.deriveChannelTags(envelope);
     const worldTags = this.scopeDeriver.deriveWorldTags(envelope);
     const projectTags = this.scopeDeriver.deriveProjectTags(envelope);
 
     for (const pattern of worldPatterns) {
       const existing = await ShannonMemory.findOne({
+        ...memoryScopeFilter(scope),
         category: 'world_pattern',
         content: pattern.pattern,
       });
@@ -355,11 +318,11 @@ ${conversationText}`;
         source: 'autonomy_updater',
         importance: 6,
         tags: ['world_pattern', pattern.domain, ...(pattern.applicability ?? [])],
-        visibilityScope: envelope.channel === 'minecraft' ? 'shared_world' as const : 'shared_channel' as const,
+        ...scope,
         channelTags,
         worldTags,
         projectTags,
-        generalized: pattern.confidence >= 0.85,
+        generalized: false,
         worldPatternData: {
           id: crypto.randomUUID(),
           domain: pattern.domain,

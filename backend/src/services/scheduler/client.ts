@@ -3,21 +3,24 @@ import {
   SchedulerInput,
   SchedulerOutput,
   TwitterClientInput,
-  YoutubeClientInput,
 } from '@shannon/common';
 import fs from 'fs';
 import cron from 'node-cron';
 import { BaseClient } from '../common/BaseClient.js';
-import { getEventBus } from '../eventBus/index.js';
+import { deliverScheduledPostToLlm } from '../runtime/llmInboundDispatch.js';
+import { getTwitterToolPort } from '../runtime/platformToolGateway.js';
+import { registerSchedulerPort } from '../runtime/schedulerGateway.js';
+import { YoutubeClient } from '../youtube/client.js';
+import { getWebNotificationHub } from '../web/webNotificationHub.js';
 import { logger } from '../../utils/logger.js';
 
 export class Scheduler extends BaseClient {
   private static instance: Scheduler;
   private schedules: Schedule[];
   public isTest: boolean = false;
+  private portRegistered = false;
 
   public static getInstance(isTest: boolean = false) {
-    const eventBus = getEventBus();
     if (!Scheduler.instance) {
       Scheduler.instance = new Scheduler('scheduler', isTest);
     }
@@ -26,15 +29,25 @@ export class Scheduler extends BaseClient {
   }
 
   constructor(serviceName: 'scheduler', isTest: boolean = false) {
-    const eventBus = getEventBus();
-    super(serviceName, eventBus);
+    super(serviceName);
     this.schedules = [];
   }
 
   public async initialize() {
     await this.setUpSchedule();
-    await this.setupEventBus();
+    this.registerPort();
     await this.schedule();
+  }
+
+  private registerPort() {
+    if (this.portRegistered) return;
+    this.portRegistered = true;
+
+    registerSchedulerPort({
+      getSchedule: (input) => this.getSchedule(input),
+      callSchedule: (input) => this.callSchedule(input),
+      listSchedules: () => this.schedules,
+    });
   }
 
   private async setUpSchedule() {
@@ -43,64 +56,28 @@ export class Scheduler extends BaseClient {
     ) as Schedule[];
   }
 
-  private async setupEventBus() {
-    this.eventBus.subscribe('scheduler:get_schedule', (event) => {
-      this.post_schedule(event.data as SchedulerInput);
-    });
-    this.eventBus.subscribe('scheduler:call_schedule', (event) => {
-      this.call_schedule(event.data as SchedulerInput);
-    });
+  public async getSchedule(_data: SchedulerInput) {
+    getWebNotificationHub().emitPostSchedule({
+      type: 'post_schedule',
+      data: this.schedules,
+    } as SchedulerOutput);
   }
 
-  private async post_schedule(data: SchedulerInput) {
-    this.eventBus.publish({
-      type: 'web:post_schedule',
-      memoryZone: 'web',
-      data: {
-        type: 'post_schedule',
-        data: this.schedules,
-      } as SchedulerOutput,
-      targetMemoryZones: ['web'],
-    });
-  }
-
-  private async call_schedule(data: SchedulerInput) {
+  public async callSchedule(data: SchedulerInput) {
     const platform = data.name?.split(':')[0];
     const name = data.name?.split(':')[1];
     logger.info(`Calling schedule: ${platform} ${name}`, 'blue');
     if (platform && name) {
       if (platform === 'twitter' && name === 'check_replies') {
-        this.eventBus.publish({
-          type: `twitter:check_replies`,
-          memoryZone: `twitter:post`,
-          data: {
-            command: name,
-          } as TwitterClientInput,
-        });
+        await getTwitterToolPort().checkReplies();
       } else if (platform === 'twitter') {
-        this.eventBus.publish({
-          type: `llm:post_scheduled_message`,
-          memoryZone: `twitter:schedule_post`,
-          data: {
-            command: name,
-          } as TwitterClientInput,
-        });
+        deliverScheduledPostToLlm({
+          command: name,
+        } as TwitterClientInput);
       } else if (platform === 'youtube' && name === 'check_comments') {
-        this.eventBus.publish({
-          type: `youtube:check_comments`,
-          memoryZone: `youtube`,
-          data: {
-            command: name,
-          } as YoutubeClientInput,
-        });
+        await YoutubeClient.getInstance().checkComments();
       } else if (platform === 'youtube' && name === 'check_subscribers') {
-        this.eventBus.publish({
-          type: `youtube:check_subscribers`,
-          memoryZone: `youtube`,
-          data: {
-            command: name,
-          } as YoutubeClientInput,
-        });
+        await YoutubeClient.getInstance().checkSubscribers();
       }
     }
   }
@@ -108,7 +85,7 @@ export class Scheduler extends BaseClient {
   private async schedule() {
     this.schedules.forEach((schedule) => {
       cron.schedule(schedule.time, () => {
-        this.eventBus.publish(schedule.data);
+        void this.callSchedule({ type: 'call_schedule', name: schedule.name });
       });
     });
   }

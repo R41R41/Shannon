@@ -1,4 +1,70 @@
+## RF-04 / 共有FCA核（2026-08-29）の注意
+
+`docs/refactor-fca-kernel.md`。Radar digest・LINE会話・Discord会話は`modules/fca`の同じループを使う。送信・記憶・ツールはrunの注入。本体graphやEventBusをLINEに繋がない。稼働中LINE bundleへの差し替えは別工程。
+
+## LINE-1 / D-010（2026-08-29）の注意
+
+個人Radarの届け先はLINEの1対1トークに変更し、envで許可したLINEグループ会話を追加する。`docs/line-integration.md`参照。独立Webhook→署名/allowlist→永続予約→テキスト会話→Replyと、個人同意/停止・Push outbox経路をdevへ追加。主本体/旧EventBus/人物記憶は接続しない。グループは既定で呼びかけ時のみ。個人内容・旧profileの人物関係をグループへ流さない。LINE設定は専用Git外env、既定無効/予算0。実キー/実LINE/LLM・通常DB変更・本体/本番は未実施。dev起動ロックを維持し、`start-line-dev.cjs --serve`もロック優先。モックと別Mongo37030の架空fixtureだけで検証し停止する。定期worker/既存catalog本人binding・実スマホ受信は未完、基盤成功を配信MVP完成と扱わない。以下は過去の段階。
+
+## RAD-1J（2026-08-29）の注意
+
+`docs/shannon-radar.md`19節。個人Radar専用login/runtimeを独立させる。旧本体/Bot/socketを起動せず、明示Firebase/project/UID/取得枠とexact Mongo validatorが必要。CLIはVM dev限定・起動ロック優先・共有.env/ADCなし。実認証/通常DB移行/実取得は未実施。別Mongo37029・15030 loopback fixtureのみ。Calendar brokerは未接続表示。初回本番は個人feed/天気を先行する計画で、dev実接続/復旧と本番用サービス/HTTPS/停止手順を別工程で確認する。CLIをprodへそのまま使用しない。prod read-only・ロック維持。以下は過去の段階。
+
+## RAD-1I（2026-08-29）の注意
+
+`docs/shannon-radar.md`18節。個人Radarの天気/Calendar設定・混合取得・表示・監査をHTTP/session/UIまで接続。RadarWorkspaceとrunnerには同じtemporal service、同じrepository/policyを明示注入する。Calendar選択肢は本人binding列挙portのみ、実OAuth brokerは未接続。公開feed/非公開snapshotの型と配信権限を混ぜない。最大3件/30秒・共通予算/CAS/再認証と表示期限を維持する。実画面試験はloopback13002の架空fixture、終了後停止。main server未登録・通常DB validator未適用・実認証/実取得/投稿/push/prod反映なし。機能単位でまとめて改修し、prod read-onlyとdev起動ロックは維持する。以下は過去の段階。
+
+## RAD-1H（2026-08-29）の注意
+
+`docs/shannon-radar.md`17節。schemaVersion=2とtemporalSourcesを既存owner文書に追加し、公開feedと非公開天気/予定は分けながら取得予算・lease・CAS・監査・ID上限を共用する。Mongo書込みには完全一致のstrict/error validatorが必須。自動導入せず、通常DBへ無断適用しない。旧writerのreplacementは新fieldを落とすため混在/旧版rollbackは禁止。旧文書は読取りで書換えず、最初の明示更新で予算/墓標を保ったままv2へ移す。Calendar権限stampは認証の代替ではなく保存/表示前にbroker再照合する。token/元calendar ID/予定の不要fieldは保存しない。内部serviceまででHTTP/UI/runner・実broker未接続、低水準adapterの直接起動は禁止。テストは外部fakeと別Mongo37029のみ、終了後正常停止。通常DB/env/Bot・main server/scheduler・本体起動/実取得/投稿/push/prod反映なし、prod read-onlyと起動ロック維持。以下は過去の段階。
+
+## RAD-1G（2026-08-29）の注意
+
+`docs/shannon-radar.md`16節。本人の明示選択/確認付き取得と監査表示を追加。collect HTTPはrunnerを明示注入したfactoryだけに存在しmain serverは未登録。再認証・期待版・回数予約・leaseを迂回しない。取消/失敗は回数を返さず、部分保存を自動再試行しない。UIは3ビューの版/期限・sessionで表示を制限、ログアウト/離脱で中断する。架空UI fixtureのみをloopback13002で試し終了後停止。実Firebase/通常DB/実ソース/本体/投稿なし、prod read-only・devロック維持。weather/calendarのcatalog統合とbrokerは未完。
+
+## RAD-1F（2026-08-29）の注意
+
+`docs/shannon-radar.md`15節を参照。WeatherSource/CalendarSourceは公開FeedRecordと別のowner-only型。天気3日・粗い明示座標、Calendarは本人binding・read-only scope・1ページ20件・最大7日で最小情報を扱う。Calendar broker/OAuth transportとcatalog/UI/取得予算への接続は未実装で、低水準adapterをHTTP/jobから直接呼んで本人認証・予約・CAS・監査を迂回しない。共有Firebase admin鍵をCalendar権限に転用しない。公開feed設定はweather/calendarを引き続き拒否。実地域/実アカウント接続・取得・通常DB変更・本体起動/投稿・prod反映はしない。devロック・prod読み取りのみを維持。
+
+## RAD-1E（2026-08-29）の注意
+
+`docs/shannon-radar.md`14節を参照。本人が明示した最大3sourceを30秒以内で順次取得するRadarSessionRunnerを追加。AccessServiceへ毎回再検証し、tokenをjob/DB/logへ保存しない。期待catalog版を予約CASで照合し、失敗時は停止・自動再試行/回復なし。無人worker/委譲grantは未実装、tokenの永続化や本人contextの捏造で代用しない。監査は直近64件かつ7日上限、欠落版を表示。期限切れの物理消去は明示maintain/次の書込み時だけで、全owner purgeや完全な監査ではない。audit APIもserver未登録。実認証/実ソース・通常DB変更/本体起動/投稿・prod反映はしない。prod read-only・devロック維持。
+
 # AGENTS.md
+
+## Radar RAD-1D（2026-08-29）の注意
+
+`docs/shannon-radar.md`13節。取得前にowner文書CASで回数とleaseを予約する。`PersonalRadarService.collect`は明示のserver policyなしでは拒否する。失敗/取消/応答不明も回数を返さず、設定変更/削除で予算を消さない。journal ACK前にconnectorへ進まない。期限切れleaseは本人を再確認した`maintain`で明示回復し、自動再取得しない。設定/版/leaseの最終確認を省略しない。`maintain`は期限切れmetadataだけを消し、設定/墓標/予算を保持。HTTP/server/scheduler未登録、通常DBへ適用しない。試験は別37029・新しい空DB・journal有効の架空fixtureだけで、終わったら正常停止。全owner走査・worker supervisor・外部provider全体の予算・課金予算・全監査/全面撤回は未完。通常の起動ロック・prod read-onlyを維持する。古い実行コードは追加したacquisition stateを落とす可能性があるため混在運用/無検証rollbackをしない。
+
+## Radar RAD-1C（2026-08-28）の注意
+
+`docs/shannon-radar.md`12節。`/radar`の本人用source設定/非通知preview画面を追加。AgentProviderから分離し、session世代・User object・期限とcatalog版で表示を制限する。更新/ログアウト/タブ離脱/期限で表示とdraftを消去し、遅延応答で復活させない。保存後は版を照合して読み戻し、結果不明時に再試行しない。APIはserver未登録のまま。ブラウザ検証は明示的な`serve-radar-ui-fixture.cjs --isolated-fixture`のloopback専用・架空データ・in-memory repositoryだけで、Firebase/通常DB/実ソース/本体へ接続しない。利用後はfixtureとSSH tunnelを停止する。実認証のE2E・lease/予算予約・purge・weather/calendar・投稿は未完。prod read-only、ロック維持。以下は過去の段階。
+
+## Radar RAD-1B（2026-08-28）の注意
+
+`docs/shannon-radar.md`11節。本人限定catalog/変更履歴の単一owner Mongo CAS、設定・撤回・private preview HTTP登録関数を追加。Firebase projectId＋UIDからownerを固定し、他人/admin代理/Discord自動リンクを拒否。再認証callbackを省かず、保存前・返却前に同意/権限/版を確認する。source変更でcatalogを失効、削除は設定/内容を消しID墓標で再投入を拒否。APIはserver未登録、collect/publish endpointなし。別Mongo37029の架空fixtureだけで検証し、通常DB/実ソースに書かない。監査64件・source10件/墓標込み32ID・各20metadataは初期の上限で、永久dedup/全監査/全派生消去/物理expiry purge/lease/queue/本人画面は未完。prod read-only、起動ロック維持。以下は過去の段階。
+
+## Radar RAD-1A（2026-08-28）の注意
+
+`docs/shannon-radar.md`10節。source registry契約/private JSON read adapter、Radar専用のpublic IPv4をpinするHTTPS GET、YouTube/選択Web RSS/Atom、出典正規化→private digest previewを実装。112新規モック試験とRAD-0 65件、対象通常型検査を通過。実ソース設定/定期起動/DB保存/外部通信/投稿はしていない。weather/calendarは未対応で拒否、認証UI・durable catalog/queue・回数予約・全撤回は後続。JSON fixtureだけを作り通常DBに書かない。既存URL取得やschedulerに自動接続しない。取得後と保存/公開前の最新同意・権限確認を省略せず、registryを本人認証の代わりにしない。prod read-only、起動ロックを維持。
+
+## Shannon Radar（2026-08-28）の注意
+
+主用途は静かな個人/コミュニティ情報Bot。`docs/shannon-radar.md`を参照。新しい`modules/radar`はSDK/I/O/会話graph非依存のRAD-0基盤のみ。rankと配信判断は別、未設定は沈黙、個人digestは非通知preview、Discordはカード承認待ちで送信機能なし。approval照合を認証の代わりにしない。本人/同意/scope付きの観測から始め、profileを主記憶にしない。無反応を嫌悪と扱わずセンシティブ属性を推測しない。既存request返信portやscheduler/EventBusから自発投稿を迂回実行しない。connector/queue/本人管理UI/全面撤回は未完、実投稿・設定・本体起動は行わずdevロックとprod読み取りのみを維持する。
+
+## RF-03第6段階（2026-08-28）の注意
+
+VM devでbackend411＋frontend18＝429テスト、対象通常型検査/build/native probe合格。実Discordはfake clientで検証、実接続なし。巨大なclient/FCA等を含む全backendはnoCheck変換のみ。
+
+`docs/refactor-discord-conversation.md`を参照。Discordテキスト返信/履歴ツールは現在の本人・会話のport経由だけとし、未binding・別channel/guild・非対応媒体/添付を拒否する。SDK側もID/権限/private thread membershipを確認し、送信Promise完了後に結果を返す。text dispatcherを旧音声EventBusへ戻さない。音声・旧イベント発行元・Web broadcast等の全宛先認可は未完。起動ロック・prod読み取りのみを維持し、制限を迂回しない。
+
+## RF-03第5段階（2026-08-28）の注意
+
+`docs/refactor-person-memory.md`を参照。新しい人物記憶はDiscordテキストの現在の本人＋会話scope＋原文出典のみ。旧PersonMemory・名前統合・関係性推測は復活させない。新collectionはscopedpersonstatements、1 message 1引用、既存_id一意性で重複を防ぐ。編集/忘却は内部portのみで自動実行しない。忘却はこの記録の本文/source削除と同じ出典の再登録防止に限り、全履歴/派生/旧queueの撤回ではない。VM dev371テストと一時mongodでの架空fixture検証を実施。一時mongod停止済み、通常dev/prod DB・env/Botは未変更。ライブロック維持、本番未反映。
+
+## RF-03第4段階（2026-08-28）の注意
+
+`docs/refactor-minecraft-memory-identity.md`を参照。固定server/world IDの設定・接続所有・runtime/adapter配線を実装したが、実対応付けは未設定。world再生成時はworldIdを変える。表示名/endpointをIDの代用にせず、未設定の長期記憶停止を維持する。Mod/Discord音声は記憶停止・game-chat履歴への混入禁止。旧人物記憶の復旧・全宛先/履歴/WorldKnowledge分離は未完。dev限定のメタデータ監査は各0件で、旧本番データの分類成功とは扱わない。env/DB/Bot変更・ライブ起動・push・prod反映は行っていない。
 
 ## Cursor Cloud specific instructions
 
@@ -34,25 +100,39 @@ Shannon is an autonomous AI agent platform (Minecraft bot, Discord bot, Twitter 
 - **多くのテストは統合テスト**（OpenAI 等が必要）。**例外:** `npx vitest run tests/selfImprove/nightlySchedule.test.ts` は純粋な時刻判定のみ（API 不要）。
 - **Frontend lint has 1 pre-existing error** (`unused variable` in `src/services/config/ports.ts`).
 - **API test endpoint:** `POST /api/test/scheduled-post?dry_run=true` with `x-api-key` header (matches `TWITTERAPI_IO_API_KEY` env var) and body `{"command":"fortune"}` generates a fortune post via OpenAI without posting to Twitter.
-- **Self-improve Tier 2:** `SELF_IMPROVE_AUTO_APPLY_TIER2=true` forces file writes after validation (otherwise proposals stay `pending_review`). Dev defaults: `--dev` or `IS_DEV=True` also enable auto-apply. `SELF_IMPROVE_ALLOW_DELETE=true` is required for Tier 2 `delete` actions. Mutable: almost all of `backend/` except `src/config/`, lockfiles, `package.json`, `tsconfig*`, `.env`, `node_modules/`, `dist/`, etc. (`mutableCodePolicy.ts`). Tier2 prompts prioritize `src/services/minebot/` and `src/services/llm/`.
+- **Self-improve Tier 2:** `SELF_IMPROVE_AUTO_APPLY_TIER2=true` forces file writes after validation (otherwise proposals stay `pending_review`). Dev mode no longer enables auto-apply; explicit `SELF_IMPROVE_AUTO_APPLY_TIER2=true` is required. `SELF_IMPROVE_ALLOW_DELETE=true` is required for Tier 2 `delete` actions. Mutable: almost all of `backend/` except `src/config/`, lockfiles, `package.json`, `tsconfig*`, `.env`, `node_modules/`, `dist/`, etc. (`mutableCodePolicy.ts`). Tier2 prompts prioritize `src/services/minebot/` and `src/services/llm/`.
 - **Minecraft self-test chat (chatMode OFF でも可):** `..test-all` / `..test-smoke` / `..test <suite> [--fix]` に加え、`self_test_cases` や `saves/minecraft/self_test_cases` を含む文、または `basic-skills.json` + 「テスト」などの自然文で同じランナーが起動する（`selfTestIntent.ts`）。
 - **CodeAgentLoop:** `..agent-fix <説明>` でコーディングエージェント級の自律修正を起動。`read_file` / `search_code` / `list_directory` / `edit_file`（差分適用）/ `create_file` / `delete_file` / `run_tsc` / `run_vitest` の 8 ツールを gpt-4.1 が ReAct ループで使う。`SkillPatcher.diagnoseAndFixWithAgent` / `ImprovementApplier.applyWithAgent` でプログラムからも呼べる。
 - **夜間自己改善（課金抑止）:** `SELF_IMPROVE_NIGHTLY_ENABLED=true` で UTC 指定時刻に1日1回 `runNightlyMaintenance` → `saves/self_improve/morning_reports/` に Markdown/JSON。**既定は LLM なし**（レポートに「スキップ」が並ぶだけ）。課金ありにするには明示: `SELF_IMPROVE_NIGHTLY_RUN_REACTIVE=true`（失敗バッファ分析）, `SELF_IMPROVE_NIGHTLY_CODE_AGENT=true`（Anthropic）, `SELF_IMPROVE_NIGHTLY_MINECRAFT_SUITES=smoke-skills` 等。`SELF_IMPROVE_NIGHTLY_MINECRAFT_AUTOFIX=true` は SkillPatcher で追加 LLM。`SELF_IMPROVE_MORNING_WEBHOOK_URL` で Discord 等へ要約投稿可。
 
-### 本番 CD（GitHub Actions → Shannon-prod）
+### 本番CD・リリースの現状
 
-- **トリガー:** **`main` への push / マージ**および手動 `workflow_dispatch`（[`.github/workflows/deploy-production.yml`](.github/workflows/deploy-production.yml)）。
-- **動作:** SSH で本番 VM に入り、本番クローンで `git fetch` → `checkout main` → **`reset --hard origin/main`** → **`npm ci --ignore-scripts --legacy-peer-deps`**（`@langchain/anthropic@1.x` と `@langchain/core@0.3` の peer 衝突回避）→ **`npx patch-package`** → **`./start.sh`**。続けて tmux セッション `shannon-backend-prod` / `shannon-frontend-prod` の存在を確認。
-- **Secrets（Repository secrets）**
+最新状態は `docs/r0-release-readiness.md`。devのworkflow定義はmain自動反映から手動candidate検証へ変更済みだが、未pushのためGitHubは旧定義のまま。本番へpush/mergeしない。実切替はUID/資格情報・限定実機・復旧・機能制限を確認した別工程。
 
-| Secret | 内容 |
-|--------|------|
-| `SHANNON_PROD_SSH_HOST` | 本番 VM の IP または FQDN |
-| `SHANNON_PROD_SSH_USER` | 例: `azureuser` |
-| `SHANNON_PROD_SSH_PRIVATE_KEY` | VM ログイン用の秘密鍵（**BEGIN〜END 全文**。先頭空行は workflow 側で除去） |
-| `SHANNON_PROD_REPO_PATH` | （任意）本番クローンの絶対パス。未設定時は `/home/azureuser/Shannon-prod` |
+## Shannon開発方針（2026-08-28）
 
-- **以前 `SHANNON_SSH_*` だけ登録していた場合:** 上記 `SHANNON_PROD_*` に合わせて Secrets を登録し直すか、同じ値を `SHANNON_PROD_*` 名で追加する。
-- **本番側の前提:** `origin` がこのリポジトリの `main` を向いていること。`git fetch` は VM 上の GitHub 用 SSH（`git@github.com:...`）が通ること。`tmux` が利用できること。
-- **ネイティブモジュール:** `npm ci` は `--ignore-scripts` のため、**初回本番セットアップ**で `canvas` / `@discordjs/opus` 等を手動ビルド済みであること（AGENTS の Native modules 節）。ロック変更後に CI の `npm ci` が失敗したら本番で依存を直してから再デプロイ。
-- **NSG / SSH:** GitHub ホステッドランナーから VM の 22 番へ届く必要あり（aiminelab CD と同様）。
+ユーザー指定の実装・テスト先はAzure VMの `/home/azureuser/Shannon-dev`。同VMの `Shannon-prod` は開発中は読み取りのみとし、検証後の本番反映を別工程にする。ローカル調査用コピーを本番・開発実行元と取り違えない。
+
+[開発手順](docs/development-workflow.md)と[Notion資料ハブ](https://www.notion.so/3ca1e847628881c9b4bbfd5556a55347)を読んでから作業する。設計・実装・検証の変更はNotionの関連資料と変更履歴へ反映し、再取得で確認する。
+
+devの `.dev-runtime-lock` は共有認証情報等の整理が済むまで起動スクリプトを止める。直接node起動で迂回しない。まず外部をモックする単体テストとビルドを行う。DB接続先はdev専用であり、prodのDBや秘密設定を上書きしない。
+
+### RF-01/RF-02の初期実装
+
+`docs/refactor-access-foundation.md`を参照。新しいaccess/modelSettingsモジュールはSDK・DB・環境変数に依存させない。`npm run check:foundation -w backend`と`check:access-integration`で検査する。公開API全体の認証は未完了なので起動ロックを解除しない。旧email-only認証、公開管理者登録、frontendの認証bypassを復活させない。Firebase UIDの利用者対応付けはレビュー後の別工程。
+
+### R0追加検証とGit整理
+
+ユーザーの問題解消依頼に基づきprodのGit記録のみ `95426bb` へ整合、未コミット0件。実ファイル769件と削除済み1パス、環境設定・backend PIDは不変。dev新コードは未反映。今後も開発中のprodファイル/設定/プロセス変更はしない。
+
+Node22.21.1を `bash scripts/with-dev-node.sh` で使用。native probe、158 backend +18 frontendテスト、隔離MongoDB復元に合格。共有外部資格情報とUID対応付けは未解決なので起動ロックを迂回しない。管理consoleのみ許可、public chat停止、Mod専用認証必須という現行制限を勝手に緩めない。詳細と残条件はR0資料。
+
+### RF-03の実行管理とセッション分離
+
+最新のdev実装は `docs/refactor-execution-sessions.md` とNotion 08の15節。第1段階の実行順序・中断管理に続き、共有FCAを登録用catalogと1回限りのsessionへ分離した。状態付きツールは `createForRun()` で生成し、共有agentへ実行状態を注入しない。
+
+VM devでbackend207＋frontend18＝225テスト、対象型検査・common/frontend build・native probe合格。backend全体はnoCheck変換のみ。本番ファイル/設定/プロセス不変、env/DB変更・live起動・push・deployなし。DB記憶検索のscope、旧memoryツール、Webの一斉配信、全チャネル宛先認可は未完。public chat停止と起動ロックを維持する。Halcyonは音楽Botで対象外、新しいテストBotは未作成。
+
+### RF-03の記憶scope（第3段階）
+
+`docs/refactor-memory-scope.md` とNotion 08の16節を参照。scopeVersion/keyのある新規記憶だけを同じ範囲で検索・保存する。旧人物記憶・旧pending queue・範囲不明データを勝手に再分類しない。現行Minebot入力には固定server/world IDがなく長期記憶は拒否、Web等もaudience未配線のため拒否。`MemoryPort` が実行ごとの記憶経路。`check:memory-integration` は記憶サービスの通常型検査。全グラフ完全型検査・実DB移行・実API検証は未完。prod読み取りのみ、起動ロック維持。

@@ -1,13 +1,14 @@
+import { config } from '../../config/env.js';
+import type { AccessService } from '../../modules/access/index.js';
 import { PORTS } from '../../config/ports.js';
 import { MonitoringAgent } from './agents/monitoringAgent.js';
 import { OpenAIClientService } from './agents/openaiAgent.js';
 import { ScheduleAgent } from './agents/scheduleAgent.js';
 import { StatusAgent } from './agents/statusAgent.js';
-import { getEventBus } from '../eventBus/index.js';
 import { PlanningAgent } from './agents/planningAgent.js';
-import { EmotionAgent } from './agents/emotionAgent.js';
 import { SkillAgent } from './agents/skillAgent.js';
 import { AuthAgent } from './agents/authAgent.js';
+import { registerDefaultWebConversationTransport } from './webConversationTransport.js';
 export class WebClient {
   private static instance: WebClient;
   private openaiService: OpenAIClientService;
@@ -15,15 +16,16 @@ export class WebClient {
   private scheduleService: ScheduleAgent;
   private statusService: StatusAgent;
   private planningService: PlanningAgent;
-  private emotionService: EmotionAgent;
   private skillService: SkillAgent;
   private authService: AuthAgent;
 
-  constructor(isTest: boolean) {
+  constructor(isTest: boolean, access: AccessService) {
+    registerDefaultWebConversationTransport();
     this.openaiService = OpenAIClientService.getInstance({
       port: isTest
         ? Number(PORTS.WEBSOCKET.OPENAI) + 10000
         : Number(PORTS.WEBSOCKET.OPENAI),
+      access, allowedOrigins: config.webAuth.allowedOrigins,
       serviceName: 'openai',
     });
 
@@ -31,6 +33,7 @@ export class WebClient {
       port: isTest
         ? Number(PORTS.WEBSOCKET.MONITORING) + 10000
         : Number(PORTS.WEBSOCKET.MONITORING),
+      access, allowedOrigins: config.webAuth.allowedOrigins,
       serviceName: 'monitoring',
     });
 
@@ -38,6 +41,7 @@ export class WebClient {
       port: isTest
         ? Number(PORTS.WEBSOCKET.STATUS) + 10000
         : Number(PORTS.WEBSOCKET.STATUS),
+      access, allowedOrigins: config.webAuth.allowedOrigins,
       serviceName: 'status',
     });
 
@@ -45,6 +49,7 @@ export class WebClient {
       port: isTest
         ? Number(PORTS.WEBSOCKET.SCHEDULE) + 10000
         : Number(PORTS.WEBSOCKET.SCHEDULE),
+      access, allowedOrigins: config.webAuth.allowedOrigins,
       serviceName: 'schedule',
     });
 
@@ -52,20 +57,15 @@ export class WebClient {
       port: isTest
         ? Number(PORTS.WEBSOCKET.PLANNING) + 10000
         : Number(PORTS.WEBSOCKET.PLANNING),
+      access, allowedOrigins: config.webAuth.allowedOrigins,
       serviceName: 'planning',
-    });
-
-    this.emotionService = EmotionAgent.getInstance({
-      port: isTest
-        ? Number(PORTS.WEBSOCKET.EMOTION) + 10000
-        : Number(PORTS.WEBSOCKET.EMOTION),
-      serviceName: 'emotion',
     });
 
     this.skillService = SkillAgent.getInstance({
       port: isTest
         ? Number(PORTS.WEBSOCKET.SKILL) + 10000
         : Number(PORTS.WEBSOCKET.SKILL),
+      access, allowedOrigins: config.webAuth.allowedOrigins,
       serviceName: 'skill',
     });
 
@@ -73,15 +73,23 @@ export class WebClient {
       port: isTest
         ? Number(PORTS.WEBSOCKET.AUTH) + 10000
         : Number(PORTS.WEBSOCKET.AUTH),
+      access, allowedOrigins: config.webAuth.allowedOrigins,
       serviceName: 'auth',
-    });
+    }, access);
   }
 
-  public static getInstance(isTest: boolean): WebClient {
+  public static getInstance(isTest: boolean, access: AccessService): WebClient {
     if (!WebClient.instance) {
-      WebClient.instance = new WebClient(isTest);
+      WebClient.instance = new WebClient(isTest, access);
     }
     return WebClient.instance;
+  }
+
+  public async stop(): Promise<void> {
+    const services = [this.openaiService, this.monitoringService, this.statusService,
+      this.scheduleService, this.planningService, this.skillService];
+    for (const service of services) service.disconnect();
+    await Promise.all([...services, this.authService].map(service => service.stop()));
   }
 
   public start() {
@@ -90,7 +98,6 @@ export class WebClient {
     this.statusService.start();
     this.scheduleService.start();
     this.planningService.start();
-    this.emotionService.start();
     this.skillService.start();
     this.authService.start();
   }

@@ -1,37 +1,30 @@
 import {
   SchedulerInput,
-  SchedulerOutput,
   WebScheduleOutput,
 } from '@shannon/common';
 import {
   WebSocketServiceBase,
   WebSocketServiceConfig,
 } from '../../common/WebSocketService.js';
-import { EventBus } from '../../eventBus/eventBus.js';
-import { getEventBus } from '../../eventBus/index.js';
+import { getSchedulerPort } from '../../runtime/schedulerGateway.js';
 import { logger } from '../../../utils/logger.js';
+import { getWebNotificationHub } from '../webNotificationHub.js';
 
 export class ScheduleAgent extends WebSocketServiceBase {
   private static instance: ScheduleAgent;
-  private eventBus: EventBus;
-  private messageSubscription: (() => void) | null = null;
+  private hubUnsubscribe: (() => void) | null = null;
 
   private constructor(config: WebSocketServiceConfig) {
     super(config);
-    this.eventBus = getEventBus();
 
-    this.messageSubscription = this.eventBus.subscribe(
-      'web:post_schedule',
-      (event) => {
-        const data = event.data as SchedulerOutput;
-        if (data.type === 'post_schedule') {
-          this.broadcast({
-            type: 'post_schedule',
-            data: data.data,
-          } as WebScheduleOutput);
-        }
+    this.hubUnsubscribe = getWebNotificationHub().onPostSchedule((data) => {
+      if (data.type === 'post_schedule') {
+        this.broadcast({
+          type: 'post_schedule',
+          data: data.data,
+        } as WebScheduleOutput);
       }
-    );
+    });
   }
 
   public static getInstance(config: WebSocketServiceConfig): ScheduleAgent {
@@ -42,7 +35,7 @@ export class ScheduleAgent extends WebSocketServiceBase {
   }
 
   protected override initialize() {
-    this.wss.on('connection', async (ws) => {
+    this.onAuthenticatedConnection(async (ws) => {
       logger.debug('Schedule client connected');
 
       this.handleNewConnection(ws);
@@ -51,7 +44,7 @@ export class ScheduleAgent extends WebSocketServiceBase {
         logger.debug('Schedule client disconnected');
       });
 
-      ws.on('message', async (message) => {
+      this.onMessage(ws, async (message) => {
         const data = JSON.parse(message.toString());
 
         if (data.type === 'ping') {
@@ -66,21 +59,13 @@ export class ScheduleAgent extends WebSocketServiceBase {
         );
         if (data.type === 'get_schedule') {
           const name = data.name as string;
-          this.eventBus.publish({
-            type: 'scheduler:get_schedule',
-            memoryZone: 'web',
-            data: { type: 'get_schedule', name } as SchedulerInput,
-          });
+          await getSchedulerPort().getSchedule({ type: 'get_schedule', name } as SchedulerInput);
         }
 
         if (data.type === 'call_schedule') {
           logger.info(`calling schedule ${data.name}`);
           const name = data.name as string;
-          this.eventBus.publish({
-            type: 'scheduler:call_schedule',
-            memoryZone: 'web',
-            data: { type: 'call_schedule', name } as SchedulerInput,
-          });
+          await getSchedulerPort().callSchedule({ type: 'call_schedule', name } as SchedulerInput);
         }
       });
 
@@ -99,9 +84,7 @@ export class ScheduleAgent extends WebSocketServiceBase {
   }
 
   public disconnect() {
-    if (this.messageSubscription) {
-      this.messageSubscription();
-      this.messageSubscription = null;
-    }
+    this.hubUnsubscribe?.();
+    this.hubUnsubscribe = null;
   }
 }

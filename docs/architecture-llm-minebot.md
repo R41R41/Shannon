@@ -1,6 +1,7 @@
 # Shannon System Architecture — LLM & Minebot 設計書
 
 > 最終更新: 2026-03-25（§11 末尾に CodeAgent / 自己テスト JSON / 夜間バッチの追記）  
+> **注意（2026-08-29）**: 感情・メタ認知の3並列と ClassifyNode / SubTaskPlanner、および CognitiveBlackboard / MemoryAgent / MemoryNode は削除済み。本書の該当節は当時の設計の記録であり、現行実装ではない。現行の地図は [architecture-current.md](architecture-current.md)。  
 > **短い現状サマリのみ必要な場合**: [architecture-current.md](architecture-current.md)  
 > 対象ブランチ（例）: `claude/unified-shannon-graph-FC4pI`  
 > v2 設計書: [architecture-shannon-v2.md](architecture-shannon-v2.md)
@@ -1411,7 +1412,6 @@ SSE イベント:
 | `backend/src/services/llm/client.ts` | LLMService シングルトン、グラフ初期化・実行 |
 | `backend/src/services/llm/graph/shannonGraph.ts` | 統一グラフ定義 (ノード接続・ルーター) |
 | `backend/src/services/llm/graph/requestExecutionCoordinator.ts` | レーン別直列化・緊急プリエンプション |
-| `backend/src/services/llm/graph/publicKnowledge.ts` | Web チャネル用 RAG (キーワードベース) |
 | `backend/src/services/llm/graph/cognitive/CognitiveBlackboard.ts` | 共有ワーキングメモリ (emotion, meta, task, selfState, plan, initialMemoryContext) |
 | `backend/src/services/llm/graph/cognitive/EmotionLoop.ts` | 感情評価ループ (扁桃体) — 初回 tick 即座実行 |
 | `backend/src/services/llm/graph/cognitive/MemoryAgent.ts` | **v2 新規**: 記憶エージェント (海馬) — 取得・保存・圧縮 |
@@ -1461,7 +1461,6 @@ SSE イベント:
 | `backend/src/services/common/adapters/actionFormatter.ts` | アクションフォーマット |
 | `backend/src/server.ts` | サーバー起動・サービス初期化 |
 | `backend/src/routes/publicRoutes.ts` | Public Chat SSE エンドポイント |
-| `backend/src/data/public_knowledge.json` | 公開知識ベース |
 | `backend/src/utils/logger.ts` | 構造化ロギング |
 | `frontend/src/components/StatusLog/Emotion/Emotion.tsx` | 感情レーダーチャート |
 | `frontend/src/components/StatusLog/TaskTree/TaskTree.tsx` | タスクツリー表示 |

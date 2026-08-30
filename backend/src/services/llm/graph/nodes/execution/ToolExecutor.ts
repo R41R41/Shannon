@@ -3,7 +3,7 @@ import {
     ToolMessage,
 } from '@langchain/core/messages';
 import { StructuredTool } from '@langchain/core/tools';
-import { TaskContext, HierarchicalSubTask, TaskTreeState } from '@shannon/common';
+import type { RequestEnvelope, TaskContext, HierarchicalSubTask, TaskTreeState } from '@shannon/common';
 import { logger } from '../../../../../utils/logger.js';
 import { ExecutionResult } from '../../types.js';
 import { TaskTreePublisher } from './TaskTreePublisher.js';
@@ -14,6 +14,8 @@ export interface ToolExecutionContext {
     channelId: string | null;
     taskId: string;
     context: TaskContext | null;
+    envelope?: RequestEnvelope;
+    signal?: AbortSignal;
     steps: HierarchicalSubTask[];
     stepCounter: number;
     lastThinkingContent: string | null;
@@ -67,7 +69,14 @@ export class ToolExecutor {
                     currentThinking: execCtx.lastThinkingContent,
                     hierarchicalSubTasks: execCtx.steps,
                     currentSubTaskId: stepId,
-                }, execCtx.platform, execCtx.channelId, execCtx.taskId, execCtx.onTaskTreeUpdate);
+                }, {
+                    platform: execCtx.platform,
+                    channelId: execCtx.channelId,
+                    taskId: execCtx.taskId,
+                    envelope: execCtx.envelope,
+                    signal: execCtx.signal,
+                    onTaskTreeUpdate: execCtx.onTaskTreeUpdate,
+                });
             }
 
             if (execCtx.onToolStarting) {
@@ -91,10 +100,12 @@ export class ToolExecutor {
                         execCtx.goal, 'tool_call', 'info', toolCall.name,
                         `${toolCall.name} を実行中...`,
                         { toolName: toolCall.name, parameters: toolCall.args },
+                        execCtx.envelope,
                     );
                 }
 
-                const result = await tool.invoke(toolCall.args);
+                const result = await tool.invoke(toolCall.args, { signal });
+                signal?.throwIfAborted();
                 const duration = Date.now() - execStart;
 
                 const resultStr =
@@ -111,6 +122,7 @@ export class ToolExecutor {
                         toolCall.name,
                         resultStr.substring(0, 300),
                         { toolName: toolCall.name, parameters: toolCall.args, duration, result: resultStr.substring(0, 200) },
+                        execCtx.envelope,
                     );
                 }
 
@@ -141,6 +153,7 @@ export class ToolExecutor {
                     }),
                 );
             } catch (error) {
+                signal?.throwIfAborted();
                 const errorMsg = `${toolCall.name} 実行エラー: ${error instanceof Error ? error.message : 'Unknown'}`;
                 logger.error(`  ✗ ${errorMsg}`);
 

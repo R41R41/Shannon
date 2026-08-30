@@ -2,6 +2,7 @@
 /frontend/node_modules
 /backend/dist
 /frontend/dist
+/frontend/dist-radar
 /common/dist/
 /common/src/**/*.js
 /common/src/**/*.js.map
@@ -11,6 +12,11 @@
 /frontend/.env
 node_modules
 .env
+/backend/scripts/dev-uid-rehearsal-users.json
+/backend/scripts/user-binding-manifest.json
+/backend/scripts/prod-user-binding-manifest.template.json
+/backend/scripts/prod-user-binding-manifest.json
+/tmp/uid-plan.json
 
 # Runtime data (persisted state, finetune data)
 /backend/saves/processed_tweet_ids.json
@@ -57,3 +63,8 @@ node_modules
 # Editor / merge backup files (do not commit)
 *.bak
 *.orig
+
+# Local environment identity / live-runtime safety lock
+/.shannon-development
+/.dev-runtime-lock
+/backend/dist-line/

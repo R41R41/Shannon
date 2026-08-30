@@ -1,7 +1,18 @@
 #!/bin/bash
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Check before touching tmux sessions or occupied ports.
+bash "$SCRIPT_DIR/../scripts/start-mode-guard.sh" "$SCRIPT_DIR/.." "$@" || exit $?
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+# VM dev pins its own runtime; the global Node and production processes are untouched.
+DEV_NODE_BIN=""
+if [ "$(basename "$ROOT_DIR")" = "Shannon-dev" ]; then
+    DEV_NODE_BIN="$HOME/.nvm/versions/node/v$(cat "$ROOT_DIR/.nvmrc")/bin"
+    [ -x "$DEV_NODE_BIN/node" ] || { echo "Pinned development Node is missing" >&2; exit 4; }
+    export PATH="$DEV_NODE_BIN:$PATH"
+fi
+
 
 # --- OS detection ---
 IS_WINDOWS=false
@@ -123,9 +134,10 @@ fi
 
 # --- Build common + backend ---
 echo "Building common..."
-cd "$ROOT_DIR" && npm run build -w common 2>&1 | tail -3
+set -o pipefail
+cd "$ROOT_DIR" && npm run build -w common 2>&1 | tail -3 || exit 1
 echo "Building backend..."
-cd "$SCRIPT_DIR" && NODE_OPTIONS="--max-old-space-size=12288" npx tsc $TSC_NOCHECK --skipLibCheck 2>&1 | tail -5
+cd "$SCRIPT_DIR" && NODE_OPTIONS="--max-old-space-size=12288" npx tsc $TSC_NOCHECK --skipLibCheck 2>&1 | tail -5 || exit 1
 
 # --- Node flags ---
 NODE_OPTS="--unhandled-rejections=warn --experimental-specifier-resolution=node --es-module-specifier-resolution=node"
@@ -139,6 +151,7 @@ cd "$SCRIPT_DIR"
 export npm_config_script_shell=/bin/bash
 export PORT=$PORT
 export MINEBOT_API_PORT=$MINEBOT_PORT
+export TWITTER_DISABLED=\${TWITTER_DISABLED:-true}
 export WS_OPENAI_PORT=${WS_PORTS[0]}
 export WS_MONITORING_PORT=${WS_PORTS[1]}
 export WS_STATUS_PORT=${WS_PORTS[2]}
@@ -210,8 +223,10 @@ else
         cat > "$LAUNCH_SCRIPT" << LAUNCH_EOF
 #!/bin/bash
 cd "$SCRIPT_DIR"
+export PATH="$DEV_NODE_BIN:\$PATH"
 export PORT=$PORT
 export MINEBOT_API_PORT=$MINEBOT_PORT
+export TWITTER_DISABLED=\${TWITTER_DISABLED:-true}
 export WS_OPENAI_PORT=${WS_PORTS[0]}
 export WS_MONITORING_PORT=${WS_PORTS[1]}
 export WS_STATUS_PORT=${WS_PORTS[2]}
@@ -231,7 +246,7 @@ LAUNCH_EOF
         tmux new-session -d -s "$BACKEND_SESSION" -n "server" "exec bash -l \"$LAUNCH_SCRIPT\""
     else
         tmux new-session -d -s "$BACKEND_SESSION" \
-            "cd $SCRIPT_DIR && PORT=$PORT MINEBOT_API_PORT=$MINEBOT_PORT WS_OPENAI_PORT=${WS_PORTS[0]} WS_MONITORING_PORT=${WS_PORTS[1]} WS_STATUS_PORT=${WS_PORTS[2]} WS_SCHEDULE_PORT=${WS_PORTS[3]} WS_PLANNING_PORT=${WS_PORTS[4]} WS_EMOTION_PORT=${WS_PORTS[5]} WS_SKILL_PORT=${WS_PORTS[6]} WS_AUTH_PORT=${WS_PORTS[7]} node $NODE_OPTS dist/server.js"
+            "cd $SCRIPT_DIR && PORT=$PORT MINEBOT_API_PORT=$MINEBOT_PORT TWITTER_DISABLED=\${TWITTER_DISABLED:-true} WS_OPENAI_PORT=${WS_PORTS[0]} WS_MONITORING_PORT=${WS_PORTS[1]} WS_STATUS_PORT=${WS_PORTS[2]} WS_SCHEDULE_PORT=${WS_PORTS[3]} WS_PLANNING_PORT=${WS_PORTS[4]} WS_EMOTION_PORT=${WS_PORTS[5]} WS_SKILL_PORT=${WS_PORTS[6]} WS_AUTH_PORT=${WS_PORTS[7]} node $NODE_OPTS dist/server.js"
     fi
 fi
 

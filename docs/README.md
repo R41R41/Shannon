@@ -4,10 +4,16 @@
 
 ## すぐ読む
 
+- [LINE連携：個人配信と許可グループ会話](./line-integration.md)（2026-08-29、D-010）：初回の個人宛先はLINEへ変更。Webhook→会話返信と個人Push outboxをdevで追加。定期worker/本人binding・実LINE接続は未完。
+- [Shannon Radar統合設計](./shannon-radar.md)（2026-08-29）：最新19節は専用ログイン/独立HTTP runtime・個人Radar先行リリース。型/service/UIは接続、実Firebase・通常dev DB移行・実ソース取得・本番手順は未検証。Calendar OAuth/Discord投稿/定期実行は未接続。
+- [削除ゲート](./deletion-gate.md)（2026-08-29）：未参照ファイルは`deletion-ledger.json`に期限付きで書くか消す。未使用の宣言は件数の上限で抑える。到達しないだけのコードは検査できない。
+- [開発・検証・本番反映の手順](./development-workflow.md)（2026-08-28）：VMのdevを作業先とし、prodは検証後に反映。
+- [Shannon｜設計・資料ハブ](https://www.notion.so/3ca1e847628881c9b4bbfd5556a55347)：現行設計・計画・判断・変更履歴。
+
 
 | ドキュメント                                                       | 内容                                                        |
 | ------------------------------------------------------------ | --------------------------------------------------------- |
-| **[architecture-current.md](./architecture-current.md)**     | **現行アーキテクチャサマリ**（2026-03）。LLM グラフ・Minebot・自己改善・メモリ・全主要パス。 |
+| **[architecture-current.md](./architecture-current.md)**     | **現行アーキテクチャサマリ**（2026-08-29）。実行核の分裂、LINE分離、記憶混在禁止、ツール2袋。 |
 | [architecture-llm-minebot.md](./architecture-llm-minebot.md) | LLM グラフ・Minebot・自己改善の**詳細設計書**（長文）。                       |
 
 
@@ -40,3 +46,33 @@
 
 - サイト: [アイマイラボ「シャノンの仕組み」](https://aiminelab.com/architecture)
 
+
+## 2026-08-28の責務分離
+
+- [FCA核：送信先・記憶・ツールの注入](refactor-fca-kernel.md)：RF-04（2026-08-29）。Radar/LINE/Discordが同じloopを使い、catalogだけを分ける。
+
+- [Discordテキストの会話限定返信・履歴取得](refactor-discord-conversation.md)：RF-03第6段階。返信/履歴のport、SDK側の宛先・権限確認、実行ごとのツール所有、送信結果/中断。
+
+- [本人・会話・出典に限定した人物記憶](refactor-person-memory.md)：RF-03第5段階。新しいperson port/repository、原文引用、重複/版/忘却、旧データを移行しない復旧基盤。
+
+- [Minecraft固定ID・旧記憶の読み取り監査](refactor-minecraft-memory-identity.md)：RF-03第4段階。接続所有・履歴/キュー境界、非ゲーム入力の記憶停止と人物復旧の前提。
+
+- [FCAの実行状態・ツール参照の分離](refactor-execution-sessions.md)：RF-03第2段階。会話混線の再現・修正と、記憶検索/配信先に残る課題。
+- [実行順序・中断管理の分離](refactor-execution-coordination.md)：RF-03第1段階。緊急割込み・所有者・終了処理。
+- [Web認証・モデル設定の責務分離](refactor-access-foundation.md)：RF-01/RF-02の初期実装、テストと移行前提。
+- [Notionの現行設計](https://www.notion.so/3ca1e84762888170816ee73f25c40ce3)：段階的な責務分離。
+
+- [R0リリース準備・追加検証（2026-08-28）](r0-release-readiness.md)
+- [UID 移行リハーサル（dev）](uid-migration-rehearsal.md)：隔離 fixture → shannon_dev dry-run/apply 手順。
+- [本番 UID 切替記録（2026-08-30）](prod-cutover-2026-08-30.md)
+- [RF-03 / R0 残作業（C・D）](rf-03-remaining.md)
+
+- [RF-03：記憶scope・検索前制限](./refactor-memory-scope.md)（2026-08-28）：新旧ツールの共通port、旧データ隔離、意図的制限と残課題。
+
+- RAD-1E：本人限定の単発取得・期限付き監査、無人workerの委譲境界は[Shannon Radar 14節](shannon-radar.md#14-rad-1e--本人限定の単発実行監査保持)。dev部品のみ、実接続・server登録なし。
+
+- RAD-1F：天気/Calendarの専用read adapterと公開feedからの分離は[Shannon Radar 15節](shannon-radar.md#15-rad-1f--天気calendarの専用read-adapter)。broker/予算/catalog/UIは未接続、架空fixtureのみで検証する。
+
+- Radar本人取得/監査表示（RAD-1G、dev限定・main未登録）：[設計16節](shannon-radar.md#16-rad-1g本人の明示取得と操作履歴2026-08-29dev限定)。
+
+- RAD-1I：本人Radarの天気/Calendar設定・混合取得・表示を統合。[設計18節](shannon-radar.md#18-rad-1i個人radarの画面から取得までを統合2026-08-29dev限定)。実画面は架空connectorで検証し、実認証/本体は未接続。

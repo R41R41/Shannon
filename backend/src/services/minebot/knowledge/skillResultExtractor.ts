@@ -92,7 +92,8 @@ export async function extractAndSaveKnowledge(
   const extractor = EXTRACTORS[skillName];
   if (!extractor) return;
   try {
-    const service = WorldKnowledgeService.getInstance(serverName);
+    const service = WorldKnowledgeService.forServer(serverName);
+    if (!service) return;
     await extractor(args, result, service);
   } catch (err) {
     log.debug(`知識抽出エラー (${skillName}): ${err}`);

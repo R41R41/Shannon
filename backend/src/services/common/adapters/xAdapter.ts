@@ -12,7 +12,7 @@ import { createEnvelope } from './envelopeFactory.js';
 
 /**
  * Shape of the data published by Twitter client
- * via eventBus as 'llm:post_twitter_reply'.
+ * via llmInboundDispatch.
  */
 export interface XNativeReplyEvent {
   replyId: string;

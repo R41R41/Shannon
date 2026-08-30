@@ -2,34 +2,28 @@ import {
   WebSocketServiceBase,
   WebSocketServiceConfig,
 } from '../../common/WebSocketService.js';
-import { SkillInfo } from '@shannon/common';
-import { EventBus } from '../../eventBus/eventBus.js';
-import { getEventBus } from '../../eventBus/index.js';
+import { requestSkillList } from '../../runtime/skillListRegistry.js';
 import { logger } from '../../../utils/logger.js';
+import { getWebNotificationHub } from '../webNotificationHub.js';
 
 export class SkillAgent extends WebSocketServiceBase {
   private static instance: SkillAgent;
-  private eventBus: EventBus;
-  private messageSubscription: (() => void) | null = null;
+  private hubUnsubscribe: (() => void) | null = null;
 
   private constructor(config: WebSocketServiceConfig) {
     super(config);
-    this.eventBus = getEventBus();
 
-    this.messageSubscription = this.eventBus.subscribe('web:skill', (event) => {
-      const data = event.data as SkillInfo[];
+    this.hubUnsubscribe = getWebNotificationHub().onSkill((data) => {
       this.broadcast({
         type: 'web:skill',
-        data: data,
+        data,
       });
     });
   }
 
   public disconnect() {
-    if (this.messageSubscription) {
-      this.messageSubscription();
-      this.messageSubscription = null;
-    }
+    this.hubUnsubscribe?.();
+    this.hubUnsubscribe = null;
   }
 
   public static getInstance(config: WebSocketServiceConfig): SkillAgent {
@@ -39,7 +33,7 @@ export class SkillAgent extends WebSocketServiceBase {
     return SkillAgent.instance;
   }
   protected override initialize() {
-    this.wss.on('connection', async (ws) => {
+    this.onAuthenticatedConnection(async (ws) => {
       logger.debug('Skill client connected');
 
       this.handleNewConnection(ws);
@@ -48,7 +42,7 @@ export class SkillAgent extends WebSocketServiceBase {
         logger.debug('Skill client disconnected');
       });
 
-      ws.on('message', async (message) => {
+      this.onMessage(ws, async (message) => {
         const data = JSON.parse(message.toString());
 
         if (data.type === 'ping') {
@@ -57,11 +51,7 @@ export class SkillAgent extends WebSocketServiceBase {
         }
 
         if (data.type === 'get_skills') {
-          this.eventBus.publish({
-            type: 'llm:get_skills',
-            memoryZone: 'web',
-            data: { type: 'get_skills' },
-          });
+          requestSkillList();
         }
       });
 

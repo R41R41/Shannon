@@ -1,18 +1,18 @@
+import { config } from '../../../config/env.js';
 import {
-  DiscordScheduledPostInput,
   MemberTweetInput,
   TwitterAutoTweetInput,
   TwitterClientInput,
   TwitterQuoteRTOutput,
   TwitterReplyOutput,
-  YoutubeClientInput,
   YoutubeCommentOutput,
-  YoutubeLiveChatMessageInput,
   YoutubeLiveChatMessageOutput,
 } from '@shannon/common';
 import { HumanMessage } from '@langchain/core/messages';
 import type { RequestEnvelope, ShannonGraphState } from '@shannon/common';
-import { EventBus } from '../../eventBus/eventBus.js';
+import { getDiscordOutboundPort } from '../../runtime/discordOutboundGateway.js';
+import { logToWeb } from '../../runtime/logging.js';
+import { getTwitterToolPort } from '../../runtime/platformToolGateway.js';
 import { AutoTweetAgent } from './autoTweetAgent.js';
 import { MemberTweetAgent } from './memberTweetAgent.js';
 import { PostAboutTodayAgent } from './postAboutTodayAgent.js';
@@ -33,13 +33,11 @@ export type InvokeGraphFn = (
 ) => Promise<ShannonGraphState>;
 
 export interface AgentOrchestratorDeps {
-  eventBus: EventBus;
   isDevMode: boolean;
   invokeGraph: InvokeGraphFn;
 }
 
 export class AgentOrchestrator {
-  private eventBus: EventBus;
   private isDevMode: boolean;
   private invokeGraph: InvokeGraphFn;
 
@@ -55,7 +53,6 @@ export class AgentOrchestrator {
   private memberTweetAgent!: MemberTweetAgent;
 
   constructor(deps: AgentOrchestratorDeps) {
-    this.eventBus = deps.eventBus;
     this.isDevMode = deps.isDevMode;
     this.invokeGraph = deps.invokeGraph;
   }
@@ -85,15 +82,12 @@ export class AgentOrchestrator {
       authorName,
       data.authorChannelId,
     );
-    this.eventBus.publish({
-      type: 'youtube:reply_comment',
-      memoryZone: 'youtube',
-      data: {
-        videoId: data.videoId,
-        commentId: data.commentId,
-        reply: reply + ' by シャノン',
-      } as YoutubeClientInput,
-    });
+    const { YoutubeClient } = await import('../../youtube/client.js');
+    await YoutubeClient.getInstance().replyComment(
+      data.videoId,
+      data.commentId,
+      reply + ' by シャノン',
+    );
   }
 
   async processYoutubeMessage(data: YoutubeLiveChatMessageOutput) {
@@ -115,16 +109,12 @@ export class AgentOrchestrator {
       liveDescription,
       data.authorChannelId,
     );
-    this.eventBus.publish({
-      type: 'youtube:live_chat:post_message',
-      memoryZone: 'youtube',
-      data: {
-        response: response,
-      } as YoutubeLiveChatMessageInput,
-    });
+    const { YoutubeClient } = await import('../../youtube/client.js');
+    await YoutubeClient.getInstance().sendLiveChatMessage(response);
   }
 
   async processTwitterReply(data: TwitterReplyOutput) {
+    if (config.twitter.disabled) return;
     const text = data.text;
     const replyId = data.replyId;
     const authorName = data.authorName;
@@ -158,6 +148,7 @@ export class AgentOrchestrator {
   }
 
   async processTwitterQuoteRT(data: TwitterQuoteRTOutput) {
+    if (config.twitter.disabled) return;
     const { tweetId, tweetUrl, text, authorName, authorUserName } = data;
 
     if (!tweetId || !tweetUrl || !text || !authorName) {
@@ -170,17 +161,14 @@ export class AgentOrchestrator {
       authorName,
       authorUserName
     );
-    this.eventBus.publish({
-      type: 'twitter:post_message',
-      memoryZone: 'twitter:post',
-      data: {
-        text: quoteText,
-        quoteTweetUrl: tweetUrl,
-      } as TwitterClientInput,
+    await getTwitterToolPort().postMessage({
+      text: quoteText,
+      quoteTweetUrl: tweetUrl,
     });
   }
 
   async processMemberTweet(data: MemberTweetInput) {
+    if (config.twitter.disabled) return;
     const { tweetId, text, authorName } = data;
 
     if (!tweetId || !text || !authorName) {
@@ -219,6 +207,7 @@ export class AgentOrchestrator {
   }
 
   async processAutoTweet(data: TwitterAutoTweetInput) {
+    if (config.twitter.disabled) return;
     const MAX_DUPLICATE_RETRIES = 2;
     try {
       const { trends, todayInfo, recentPosts, recentQuoteUrls: originalQuoteUrls, mode, recentTopics } = data;
@@ -248,26 +237,18 @@ export class AgentOrchestrator {
           }
 
           logger.info(`🐦 AutoTweet: 引用RT生成完了「${result.text}」→ ${result.quoteUrl}`);
-          this.eventBus.publish({
-            type: 'twitter:post_scheduled_message',
-            memoryZone: 'twitter:post',
-            data: {
-              text: result.text,
-              quoteTweetUrl: result.quoteUrl,
-              topic: result.topic,
-            } as TwitterClientInput,
+          await getTwitterToolPort().postScheduledMessage({
+            text: result.text,
+            quoteTweetUrl: result.quoteUrl,
+            topic: result.topic,
           });
           return;
         }
 
         logger.info(`🐦 AutoTweet: 生成完了「${result.text}」`);
-        this.eventBus.publish({
-          type: 'twitter:post_scheduled_message',
-          memoryZone: 'twitter:post',
-          data: {
-            text: result.text,
-            topic: result.topic,
-          } as TwitterClientInput,
+        await getTwitterToolPort().postScheduledMessage({
+          text: result.text,
+          topic: result.topic,
         });
         return;
       }
@@ -277,6 +258,7 @@ export class AgentOrchestrator {
   }
 
   async processCreateScheduledPost(message: TwitterClientInput) {
+    const discordOutbound = getDiscordOutboundPort();
     let post = '';
     let postForToyama = '';
     let imagePrompt: string | undefined;
@@ -285,7 +267,7 @@ export class AgentOrchestrator {
       const result = await this.weatherAgent.createPost();
       post = result.text;
       imagePrompt = result.imagePrompt;
-      postForToyama = await this.weatherAgent.createPostForToyama();
+      postForToyama = post;
     } else if (message.command === 'fortune') {
       const result = await this.fortuneAgent.createPost();
       post = result.text;
@@ -309,7 +291,7 @@ export class AgentOrchestrator {
     if (imagePrompt) {
       try {
         imageBuffer = await generateImage(imagePrompt, '1024x1024', 'low');
-        if (imageBuffer && !this.isDevMode) {
+        if (imageBuffer && !this.isDevMode && !config.twitter.disabled) {
           const { TwitterClient } = await import('../../twitter/client.js');
           const twitterClient = TwitterClient.getInstance();
           mediaId = await twitterClient.uploadMedia(imageBuffer, `${message.command}.jpg`) ?? null;
@@ -322,54 +304,25 @@ export class AgentOrchestrator {
       }
     }
 
+    const postData = {
+      command: message.command!,
+      ...(imageBuffer ? { imageBuffer } : {}),
+    };
+
     if (this.isDevMode) {
-      this.eventBus.publish({
-        type: 'discord:scheduled_post',
-        memoryZone: 'discord:test_server',
-        data: {
-          command: message.command,
-          text: post,
-          ...(imageBuffer ? { imageBuffer } : {}),
-        } as DiscordScheduledPostInput,
-      });
-      this.eventBus.publish({
-        type: 'discord:scheduled_post',
-        memoryZone: 'discord:test_server',
-        data: {
-          command: message.command,
-          text: postForToyama,
-          ...(imageBuffer ? { imageBuffer } : {}),
-        } as DiscordScheduledPostInput,
-      });
+      await discordOutbound.postScheduledPost('discord:test_server', { ...postData, text: post });
+      await discordOutbound.postScheduledPost('discord:test_server', { ...postData, text: postForToyama });
     } else {
-      this.eventBus.log('twitter:schedule_post', 'green', post, true);
-      this.eventBus.log('discord:toyama_server', 'green', postForToyama, true);
-      this.eventBus.publish({
-        type: 'twitter:post_scheduled_message',
-        memoryZone: 'twitter:schedule_post',
-        data: {
+      void logToWeb('twitter:schedule_post', 'green', post, true);
+      void logToWeb('discord:toyama_server', 'green', postForToyama, true);
+      if (!config.twitter.disabled) {
+        await getTwitterToolPort().postScheduledMessage({
           text: post,
           imageUrl: mediaId,
-        } as TwitterClientInput,
-      });
-      this.eventBus.publish({
-        type: 'discord:scheduled_post',
-        memoryZone: 'discord:toyama_server',
-        data: {
-          command: message.command,
-          text: postForToyama,
-          ...(imageBuffer ? { imageBuffer } : {}),
-        } as DiscordScheduledPostInput,
-      });
-      this.eventBus.publish({
-        type: 'discord:scheduled_post',
-        memoryZone: 'discord:douki_server',
-        data: {
-          command: message.command,
-          text: post,
-          ...(imageBuffer ? { imageBuffer } : {}),
-        } as DiscordScheduledPostInput,
-      });
+        });
+      }
+      await discordOutbound.postScheduledPost('discord:toyama_server', { ...postData, text: postForToyama });
+      await discordOutbound.postScheduledPost('discord:douki_server', { ...postData, text: post });
     }
   }
 }

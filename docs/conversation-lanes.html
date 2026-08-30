@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Shannon 会話レーン — 何を受け取って何を渡すか</title>
+  <style>
+    :root {
+      --bg: #f6f4ef;
+      --ink: #1c1917;
+      --muted: #57534e;
+      --line: #d6d3cd;
+      --paper: #fffdf8;
+      --chat: #0f766e;
+      --chat-bg: #ccfbf1;
+      --fast: #1d4ed8;
+      --fast-bg: #dbeafe;
+      --slow: #9a3412;
+      --slow-bg: #ffedd5;
+      --bad: #b91c1c;
+      --bad-bg: #fee2e2;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      --sans: "Hiragino Sans", "Noto Sans JP", ui-sans-serif, system-ui, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--bg);
+      font: 16px/1.55 var(--sans);
+    }
+    header {
+      padding: 32px 24px 16px;
+      max-width: 1100px;
+      margin: 0 auto;
+    }
+    header p.lead { color: var(--muted); max-width: 46em; }
+    h1 { font-size: 28px; letter-spacing: -0.03em; margin: 0 0 8px; }
+    h2 { font-size: 20px; margin: 0 0 12px; }
+    h3 { font-size: 14px; margin: 0 0 8px; text-transform: none; color: var(--muted); font-weight: 700; }
+    main { max-width: 1100px; margin: 0 auto; padding: 0 24px 80px; }
+    section { margin: 36px 0; }
+    .note {
+      border-left: 3px solid var(--ink);
+      padding: 8px 0 8px 14px;
+      color: var(--muted);
+      max-width: 52em;
+    }
+
+    .flow {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: stretch;
+      gap: 8px;
+    }
+    .box {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 12px 14px;
+      min-width: 140px;
+      flex: 1 1 140px;
+    }
+    .box strong { display: block; font-size: 14px; margin-bottom: 4px; }
+    .box code, .payload code, .plan code { font-family: var(--mono); font-size: 12px; }
+    .box small, .muted { color: var(--muted); font-size: 13px; }
+    .arrow {
+      display: flex;
+      align-items: center;
+      color: var(--muted);
+      font-size: 20px;
+      flex: 0 0 auto;
+      padding: 0 2px;
+    }
+    .bad { outline: 2px solid var(--bad); background: var(--bad-bg); }
+    .lane-chat { outline: 2px solid var(--chat); background: var(--chat-bg); }
+    .lane-fast { outline: 2px solid var(--fast); background: var(--fast-bg); }
+    .lane-slow { outline: 2px solid var(--slow); background: var(--slow-bg); }
+
+    .split {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+    @media (max-width: 860px) {
+      .split { grid-template-columns: 1fr; }
+      .arrow { transform: rotate(90deg); width: 100%; justify-content: center; }
+    }
+
+    .tree {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 20px;
+    }
+    .decision {
+      display: grid;
+      grid-template-columns: 220px 1fr 1fr;
+      gap: 12px;
+      align-items: start;
+    }
+    @media (max-width: 860px) {
+      .decision { grid-template-columns: 1fr; }
+    }
+    .diamond {
+      background: var(--paper);
+      border: 2px solid var(--ink);
+      padding: 18px 12px;
+      text-align: center;
+      font-weight: 700;
+      transform: skewX(-8deg);
+    }
+    .diamond span { display: block; transform: skewX(8deg); }
+
+    .payload {
+      background: #1c1917;
+      color: #f5f5f4;
+      border-radius: 10px;
+      padding: 14px 16px;
+      font-family: var(--mono);
+      font-size: 12.5px;
+      line-height: 1.45;
+      overflow-x: auto;
+      white-space: pre;
+    }
+    .payload .k { color: #93c5fd; }
+    .payload .s { color: #86efac; }
+    .payload .c { color: #a8a29e; }
+
+    .examples { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+    button.ex {
+      border: 1px solid var(--line);
+      background: var(--paper);
+      border-radius: 999px;
+      padding: 8px 14px;
+      cursor: pointer;
+      font: inherit;
+    }
+    button.ex[aria-pressed="true"] { background: var(--ink); color: #fff; border-color: var(--ink); }
+    button.ex:focus-visible { outline: 2px solid var(--fast); outline-offset: 2px; }
+
+    .trace {
+      display: grid;
+      grid-template-columns: 88px 1fr 1fr;
+      gap: 10px;
+      align-items: stretch;
+    }
+    @media (max-width: 860px) {
+      .trace { grid-template-columns: 1fr; }
+    }
+    .step-label {
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+    }
+    .hidden { display: none; }
+    .legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 13px; margin: 8px 0 16px; }
+    .legend i {
+      display: inline-block;
+      width: 10px; height: 10px; border-radius: 2px; margin-right: 6px;
+    }
+    table { width: 100%; border-collapse: collapse; background: var(--paper); }
+    th, td { border: 1px solid var(--line); padding: 10px 12px; text-align: left; vertical-align: top; font-size: 14px; }
+    th { background: #efebe3; font-size: 12px; }
+    footer { color: var(--muted); font-size: 13px; margin-top: 48px; }
+    .try-row {
+      display: grid;
+      grid-template-columns: 52px 1fr 120px;
+      gap: 8px;
+      align-items: center;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px 12px;
+      margin: 6px 0;
+      font-size: 14px;
+    }
+    .try-row.fail { background: var(--bad-bg); }
+    .try-row.pass { background: var(--chat-bg); }
+    .try-out { margin-top: 10px; font-weight: 700; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>会話はゼロ開始。カタログはツールの description から載せる</h1>
+    <p class="lead">
+      Discord / Web の FCA は、最初のターンで <code>request-tools</code> だけを bind する。
+      実体の道具名は <code>StructuredTool.description</code> を行にしたもの。ハードコードしない。
+      本文だけならそのターンで終わる。名前が出たら次ターンで袋を広げる。
+    </p>
+  </header>
+  <main>
+    <section>
+      <h2>1. いまの経路（問題）</h2>
+      <p class="note">ClassifyNode は呼ばれない。<code>needsTools</code> 未設定は道具必須扱いだった。会話は <code>deferToolLoad</code> で必須を外した。</p>
+      <div class="flow" style="margin-top:16px">
+        <div class="box"><strong>Discord 本文</strong><small>こんにちは！元気？</small></div>
+        <div class="arrow">→</div>
+        <div class="box"><strong>discordAdapter</strong><small>toEnvelope()</small></div>
+        <div class="arrow">→</div>
+        <div class="box"><strong>invokeGraph</strong><small>LLMClient</small></div>
+        <div class="arrow">→</div>
+        <div class="box"><strong>ingest</strong><small>mode と model を固定</small></div>
+        <div class="arrow">→</div>
+        <div class="box bad"><strong>execute / FCA</strong><small>道具 ~25個<br>needsTools 未設定 = 必須<br>何周も回る</small></div>
+        <div class="arrow">→</div>
+        <div class="box"><strong>finalAnswer</strong><small>Discord へ返信</small></div>
+      </div>
+    </section>
+
+    <section>
+      <h2>2. 提案の経路</h2>
+      <p class="note">入口と FCA 核は同じ。増えるのは ingest の <code>planConversationTurn(envelope)</code> だけ。遅いモデルは ingest では選ばない。</p>
+      <div class="legend">
+        <span><i style="background:var(--chat)"></i>chat 即答</span>
+        <span><i style="background:var(--fast)"></i>fast 既定</span>
+        <span><i style="background:var(--slow)"></i>slow 実行中だけ</span>
+      </div>
+      <div class="flow">
+        <div class="box"><strong>同じ Envelope</strong><small>text / channel / 会話ID</small></div>
+        <div class="arrow">→</div>
+        <div class="box"><strong>Session</strong><small>description からカタログ行を作る</small></div>
+        <div class="arrow">→</div>
+        <div class="box lane-chat"><strong>ターン1</strong><small>bind は request-tools だけ</small></div>
+        <div class="arrow">→</div>
+        <div class="box lane-fast"><strong>本文なら完了</strong><small>名前が出たら次で実体を bind</small></div>
+        <div class="arrow">→</div>
+        <div class="box"><strong>runFcaLoop</strong><small>beforeModel が tools を差し替え</small></div>
+      </div>
+      <p class="muted" style="margin-top:12px">Minecraft はこの経路に乗らない。遅いモデルへの上げはまだこの差分に含めていない。</p>
+    </section>
+
+    <section>
+      <h2>3. 先頭に分類器は置かない。ターン1の bind が空に近い</h2>
+      <p class="note">
+        判断するのは返事を書くモデル。<code>catalogLinesForPrompt</code> が各ツールの description 先頭行を並べる。
+        実装: <code>conversationKernel.ts</code> / Discord・Web のみ。
+      </p>
+      <div class="tree">
+        <div class="decision">
+          <div class="diamond"><span>ターン1のモデル</span></div>
+          <div class="box lane-chat">
+            <strong>本文だけ</strong>
+            <small>bind は request-tools と task-complete。そのまま完了。</small>
+          </div>
+          <div class="box lane-fast">
+            <strong>request-tools(names)</strong>
+            <small>beforeModel が次ターンでその実体 + task-complete を足す。</small>
+          </div>
+        </div>
+      </div>
+      <div class="payload" style="margin-top:16px">catalogLinesForPrompt(effectiveTools)
+  → "- google-search: Search the public web..."
+  → プロンプトに挿す。PATH の StructuredTool.description がソース。
+
+runConversationFca({ deferToolLoad: true, needsTools: false })
+  turn1 tools: [request-tools, task-complete]
+  turn2 tools: [request-tools, ...requested, task-complete]</div>
+    </section>
+
+    <section>
+      <h2>4. どこで何を受け取って、何を渡すか</h2>
+      <div class="split">
+        <div>
+          <h3>ingest が受け取る</h3>
+          <div class="payload">RequestEnvelope {
+  <span class="k">channel</span>: <span class="s">"discord"</span>,
+  <span class="k">text</span>:          <span class="s">"こんにちは！元気？"</span>,
+  <span class="k">conversationId</span>: <span class="s">"discord:guild:ch"</span>
+}
+<span class="c">// discordAdapter.toEnvelope の出力。今と同じ。</span></div>
+        </div>
+        <div>
+          <h3>ingest が渡す（新規）</h3>
+          <div class="payload">ConversationPlan {
+  <span class="k">lane</span>:      <span class="s">"chat"</span>,
+  <span class="k">model</span>:     <span class="s">"claude-haiku-4-5"</span>,
+  <span class="k">toolNames</span>: [],
+  <span class="k">policy</span>:    { kind: <span class="s">"text"</span> },
+  <span class="k">maxTurns</span>:  1,
+  <span class="k">allowEscalate</span>: false
+}</div>
+        </div>
+      </div>
+      <div class="split" style="margin-top:16px">
+        <div>
+          <h3>Session が FCA 核へ渡す（chat）</h3>
+          <div class="payload">runFcaLoop({
+  model: haiku,
+  tools: [],
+  policy: { kind: <span class="s">"text"</span> },
+  limits: { maxTurns: 1 }
+})
+<span class="c">// 1回話して終わり。task-complete も強制しない。</span></div>
+        </div>
+        <div>
+          <h3>Session が FCA 核へ渡す（fast）</h3>
+          <div class="payload">runFcaLoop({
+  model: haiku,
+  tools: [search, weather, fetch, history],
+  policy: { kind: <span class="s">"terminal-tool"</span>,
+            name: <span class="s">"task-complete"</span> },
+  needsTools: <span class="k">false</span>
+})
+<span class="c">// 道具未使用でも終われる。必須にしない。</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>5. 例を選ぶと、計画の中身が変わる</h2>
+      <div class="examples" role="tablist">
+        <button class="ex" type="button" aria-pressed="true" data-ex="hello">こんにちは！元気？</button>
+        <button class="ex" type="button" aria-pressed="false" data-ex="weather">今日の東京の天気は？</button>
+        <button class="ex" type="button" aria-pressed="false" data-ex="meaning">これどういう意味？</button>
+      </div>
+      <div id="trace-hello" class="trace-panel">
+        <div class="trace">
+          <div class="step-label">判定</div>
+          <div class="box">長さ短い / 作業語なし / 挨拶パターン</div>
+          <div class="box lane-chat"><strong>isObviousChat = true</strong><small>lane: chat</small></div>
+          <div class="step-label">Plan</div>
+          <div class="payload" style="grid-column: span 2">model: haiku
+tools: []
+policy: text / maxTurns: 1
+allowEscalate: false</div>
+          <div class="step-label">実行</div>
+          <div class="box">モデル 1 回。道具を bind しない。</div>
+          <div class="box">finalAnswer を Discord へ。『実行中』は出さない。</div>
+        </div>
+      </div>
+      <div id="trace-weather" class="trace-panel hidden">
+        <div class="trace">
+          <div class="step-label">判定</div>
+          <div class="box">「天気」が TASK_HINT に当たる</div>
+          <div class="box lane-fast"><strong>isObviousChat = false</strong><small>lane: fast（既定）</small></div>
+          <div class="step-label">Plan</div>
+          <div class="payload" style="grid-column: span 2">model: haiku
+tools: [task-complete, google-search, search-weather, fetch-url, get-discord-recent-messages]
+policy: terminal-tool / maxTurns: 4
+allowEscalate: true
+needsTools: false  ← 使うかはモデルが決める</div>
+          <div class="step-label">実行</div>
+          <div class="box">Haiku が search-weather を呼ぶ想定。</div>
+          <div class="box lane-slow">天気 API が失敗したら、同じ履歴のまま setModel(gpt-5-mini)。ingest には戻らない。</div>
+        </div>
+      </div>
+      <div id="trace-meaning" class="trace-panel hidden">
+        <div class="trace">
+          <div class="step-label">判定</div>
+          <div class="box">挨拶でも作業語でもない。迷う。</div>
+          <div class="box lane-fast"><strong>isObviousChat = false</strong><small>分類しない。既定の fast へ。</small></div>
+          <div class="step-label">Plan</div>
+          <div class="payload" style="grid-column: span 2">model: haiku
+tools: 少数（任意）
+政策: 本文でも task-complete でも終了可</div>
+          <div class="step-label">実行</div>
+          <div class="box">モデルが道具なしで答えてよい。</div>
+          <div class="box">ここで LLM 分類器を挟むと、同じ判断をもう1往復するだけ。</div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>6. ファイル上の置き場所</h2>
+      <table>
+        <thead>
+          <tr><th>場所</th><th>役割</th><th>今回触るか</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>discordAdapter.toEnvelope</code></td>
+            <td>Discord イベント → Envelope</td>
+            <td>触らない</td>
+          </tr>
+          <tr>
+            <td><code>shannonGraph.ts</code> の ingest</td>
+            <td><code>planConversationTurn(envelope)</code> を呼び、plan を state へ</td>
+            <td>ここが入口</td>
+          </tr>
+          <tr>
+            <td>新規 <code>planConversationTurn.ts</code></td>
+            <td>isObviousChat と Plan 生成。LLM なし</td>
+            <td>新規</td>
+          </tr>
+          <tr>
+            <td><code>FunctionCallingSession.ts</code></td>
+            <td>plan.model / toolNames / policy / maxTurns を FCA に渡す。失敗時だけ escalate</td>
+            <td>適用層</td>
+          </tr>
+          <tr>
+            <td><code>modules/fca</code> の <code>runFcaLoop</code></td>
+            <td>渡された tools と policy を回す</td>
+            <td>レーンを知らない。核は変えない</td>
+          </tr>
+          <tr>
+            <td><code>ClassifyNode.ts</code></td>
+            <td>旧 LLM 分類</td>
+            <td>呼ばない。復活させない</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+    <footer>説明用の静的ページ。実行コードではない。Shannon-dev / 会話レーン設計。</footer>
+  </main>
+  <script>
+    const panels = {
+      hello: document.getElementById('trace-hello'),
+      weather: document.getElementById('trace-weather'),
+      meaning: document.getElementById('trace-meaning'),
+    };
+    document.querySelectorAll('button.ex').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('button.ex').forEach((b) => b.setAttribute('aria-pressed', 'false'));
+        btn.setAttribute('aria-pressed', 'true');
+        Object.entries(panels).forEach(([key, el]) => {
+          el.classList.toggle('hidden', key !== btn.dataset.ex);
+        });
+      });
+    });
+  </script>
+</body>
+</html>

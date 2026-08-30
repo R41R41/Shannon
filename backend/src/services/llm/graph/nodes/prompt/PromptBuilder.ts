@@ -2,15 +2,13 @@ import { TaskContext } from '@shannon/common';
 import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { TWITTER_WRITE_TOOLS } from '../../../../../modules/access/toolCatalog.js';
 import { CONFIG as MINEBOT_CONFIG } from '../../../../minebot/config/MinebotConfig.js';
 import type { SelfImprovementRulesFile } from '../../cognitive/selfImprove/types.js';
-import { EmotionState } from '../EmotionNode.js';
-import { MemoryState } from '../MemoryNode.js';
-
 /**
  * FunctionCallingAgent 用のシステムプロンプト構築ユーティリティ
  *
- * 感情・記憶・環境・プラットフォーム情報をもとにシステムプロンプトを組み立てる。
+ * 記憶・環境・プラットフォーム情報をもとにシステムプロンプトを組み立てる。
  * ツール情報は API の tools パラメータで渡すため、ここではルールとコンテキストのみ。
  */
 /** シャノンプロフィールのキャッシュ */
@@ -95,10 +93,8 @@ export class PromptBuilder {
      * 完全なシステムプロンプトを構築
      */
     buildSystemPrompt(
-        emotionState: EmotionState,
         context: TaskContext | null,
         environmentState: string | null,
-        memoryState?: MemoryState,
         memoryPrompt?: string,
         relationshipPrompt?: string,
         selfModelPrompt?: string,
@@ -114,10 +110,8 @@ export class PromptBuilder {
 
         const platformInfo = this.formatPlatformInfo(context);
         const minecraftRules = this.formatMinecraftRules(context);
-        const emotionInfo = this.formatEmotionInfo(emotionState);
         const envInfo = this.formatEnvironmentInfo(environmentState, context);
         const memoryInfo = this.formatMemoryInfo(
-            memoryState,
             memoryPrompt,
             relationshipPrompt,
             selfModelPrompt,
@@ -144,7 +138,7 @@ ${responseInstruction}
 - **summary には Markdown が使える**。情報比較や詳細データは content（思考）ではなく **summary に直接** 整形して書くこと。content に書いた表やリストはユーザーに届かない
 
 ## 現在の状態
-- 時刻: ${currentTime}${platformInfo}${emotionInfo}${envInfo}
+- 時刻: ${currentTime}${platformInfo}${envInfo}
 ${memoryInfo}
 ## ルール
 1. 複雑なタスクは manage-task-tree ツールで計画を立ててから実行する。manage-task-tree は他のスキルと同じレスポンスで同時に呼べる（追加ターン不要）
@@ -168,11 +162,8 @@ ${this.formatOutputRules(context)}
 
 ## 記憶の活用（重要）
 - **記憶は自動で読み込まれない**。必要な時に自分でツールを使って思い出せ
-- 相手の名前が分かったら、**最初のターンで recall-person を呼んで相手の情報を確認する**
-- 過去の出来事を聞かれたら recall-experience で思い出す
-- 専門知識や過去に学んだことが必要なら recall-knowledge で思い出す
-- 印象的な体験や新しい発見があったら save-experience で保存する
-- 新しい知識を学んだら save-knowledge で保存する
+- 過去の体験・知識・本人の発言を思い出すときは **recall-memory** を使う
+- 覚えておきたいことは **save-memory** で保存する。本人が「覚えて」と言った発言は **save-person-memory** で原文引用として保存する
 - 保存時には個人情報（本名、住所、連絡先等）を含めないこと（ライ・ヤミー・グリコの名前はOK）
 
 ## 画像編集ガイドライン
@@ -229,14 +220,14 @@ ${this.formatOutputRules(context)}
             case 'discord':
                 // chat-on-discord は無効化しない — ユーザーが複数メッセージ送信を頼んだ場合に必要。
                 // 最終返信に使わないことはプロンプトで指示済み。
-                return [];
+                return [...TWITTER_WRITE_TOOLS];
             case 'web':
-                return ['chat-on-web'];
+                return ['chat-on-web', ...TWITTER_WRITE_TOOLS];
             case 'twitter':
-                return ['post-on-twitter'];
+                return [...TWITTER_WRITE_TOOLS];
             case 'minebot':
             case 'minecraft':
-                return ['chat-on-discord', 'chat-on-web', 'post-on-twitter'];
+                return ['chat-on-discord', 'chat-on-web', ...TWITTER_WRITE_TOOLS];
             default:
                 return [];
         }
@@ -251,8 +242,7 @@ ${this.formatOutputRules(context)}
         return `
 5. 「調べて」「教えて」と言われたら必ず google-search → fetch-url の順でページ本文まで読む。検索結果のスニペットだけで回答しない
 6. 不完全な情報や「サイトで確認してください」は絶対にダメ。具体的な情報を整理して送信する
-7. Notionページの画像は describe-notion-image で全て分析してから報告する
-8. Twitterに投稿する際は、必ず generate-tweet-text でツイート文を生成してから post-on-twitter で投稿する。自分で直接ツイート文を書かない`;
+7. Notionページの画像は describe-notion-image で全て分析してから報告する`;
     }
 
     private formatPlatformInfo(context: TaskContext | null): string {
@@ -347,8 +337,8 @@ ${this.formatOutputRules(context)}
 - **確認を求めずに即座に行動する**。自律的に最後まで実行する
 - **move-to の goalType**: 地上移動は必ず **goalType:"nearxz"**（デフォルト）を使え。Y座標は地形に合わせて自動調整される。goalType:"near" は**Y座標が正確にわかる場合のみ**（かまど・チェスト等ブロック座標が確定しているとき）。**Y座標が不明・推測の場合に "near" を使うと、Yのずれで到達不能になる**
 - **やり方が分からない時、スキルが失敗した時は search-skills で使い方を調べよ**。スキルの正しい引数や前提条件が分かる
-- **Minecraft の知識が必要な時は recall-knowledge で思い出せ**。食料の作り方、採掘に必要なツール等
-- **失敗したら同じことを繰り返すな**。失敗メッセージを読み、search-skills や recall-knowledge で正しい方法を調べてから再試行
+- **Minecraft の知識が必要な時は recall-memory で思い出せ**。食料の作り方、採掘に必要なツール等
+- **失敗したら同じことを繰り返すな**。失敗メッセージを読み、search-skills や recall-memory で正しい方法を調べてから再試行
 - **インベントリ整理**: **満杯になる前**（空きスロットがまだ数個あるが、これから大量採掘・多段クラフトで溢れそうな時点）で \`get-bot-status\` / \`list-inventory\` を見て **先に** \`deposit-to-container\` する。**空きがごく少ないまま採掘を続けない**（\`mine-block\` は満杯前に自動で止まることがある）。**必ず**チェストまたは樽に預けて空きを作る（**drop-item で捨てない**。ユーザーが明示的に捨てよと言った場合のみ例外）。**預け先は地上（天の下・天窓など天光の届く場所）の収納に限定**。近くに無ければ地上へ出て \`find-blocks\` し直すか \`craft-one\`（chest）＋ \`place-block-at\` で設置してから預ける。**ドロップが地上に落ちた・取出し失敗してから**対応しない
 - **預け先（満杯・逼迫で deposit するとき）**: **必ず地上のチェスト・樽**（洞窟・廃坑・地下基地の室内ではなく、天光の届く場所）。地下で \`find-blocks\` だけ当たったチェストへ直行しない（廃坑・**スポナー部屋**・洞窟収納は避ける）。**洞窟が地表に抜けると天光（skyLight）だけではスポナー部屋と区別できない**ため、システム側でスポナー広域検出・苔石ダンジョン壁の検出も行う。**一度地上へ**出てから chest / barrel を探し直すか、\`craft-one\`（chest）＋ \`place-block-at\` で地上に新設してから \`deposit-to-container\` する。**スポナー・ダンジョン疑い・天光不足のチェストは deposit-to-container が拒否**するので、そのメッセージが出たら別の安全な収納へ切り替える
 - **ツール耐久管理**: 採掘・伐採などツールを消耗するタスクの前に \`list-inventory-items\` で耐久を確認する。**残り耐久がタスク完遂に不足しそうなら（目安: 残り耐久 < 掘る予定のブロック数）、先に \`craft-one\` で予備をクラフトしておく**。ツルハシ・斧・シャベル等が壊れてから対処するのではなく、**事前に十分な本数を確保**する。同種ツールが複数ある場合は耐久の合計で判断してよい。\`mine-block\` はツルハシの総耐久が不足すると警告を出すので、その指示に従って補充してから再開する
@@ -432,7 +422,9 @@ ${lines.join('\n')}
 
     private formatOutputRules(context: TaskContext | null): string {
         if (context?.platform === 'discord') {
-            return '- **Discord はテーブル（| col | col |）を表示できない**。代わりに箇条書き・太字・コードブロックで整形する\n' +
+            return '- 一覧・比較・手順・天気は箇条書きと太字（**項目**: 値）。挨拶と一言は地の文のまま（見出しやリストにしない）\n' +
+                '- 数式は Discord が LaTeX を描画しないので \\( \\) や $ は使わず、`y <= 4 - x^2` のように書く\n' +
+                '- **Discord はテーブル（| col | col |）を表示できない**。代わりに箇条書き・太字・コードブロックで整形する\n' +
                 '- 比較データは箇条書きで「**項目**: 値」形式にするか、コードブロック内でスペース整列する\n' +
                 '- task-complete の summary にこれらのフォーマットを使って見やすく書く';
         }
@@ -441,12 +433,6 @@ ${lines.join('\n')}
         }
         return '- task-complete の summary で Markdown を使って見やすく整形する（**太字**, 箇条書き, 表など）\n' +
             '- 比較データや調査結果はテーブル（| 列1 | 列2 |）や箇条書きで構造化する';
-    }
-
-    private formatEmotionInfo(emotionState: EmotionState): string {
-        if (!emotionState.current) return '';
-        const e = emotionState.current;
-        return `\n- 感情: ${e.emotion} (joy=${e.parameters.joy}, trust=${e.parameters.trust}, anticipation=${e.parameters.anticipation})`;
     }
 
     private formatEnvironmentInfo(environmentState: string | null, context: TaskContext | null): string {
@@ -458,7 +444,6 @@ ${lines.join('\n')}
     }
 
     private formatMemoryInfo(
-        memoryState?: MemoryState,
         memoryPrompt?: string,
         relationshipPrompt?: string,
         selfModelPrompt?: string,
@@ -486,58 +471,6 @@ ${lines.join('\n')}
             return `\n\n${memoryPrompt}`;
         }
 
-        if (memoryState) {
-            return this.formatLegacyMemoryState(memoryState);
-        }
-
-        return '';
-    }
-
-    private formatLegacyMemoryState(memoryState: MemoryState): string {
-        const sections: string[] = [];
-
-        // 人物情報
-        if (memoryState.person) {
-            const p = memoryState.person;
-            const lines: string[] = [`## この人について (${p.displayName})`];
-            if (p.traits.length > 0) lines.push(`- 特徴: ${p.traits.join(', ')}`);
-            if (p.notes) lines.push(`- メモ: ${p.notes}`);
-            if (p.conversationSummary) lines.push(`- 過去の要約: ${p.conversationSummary}`);
-            if (p.recentExchanges && p.recentExchanges.length > 0) {
-                lines.push(`- 直近の会話:`);
-                const recent = p.recentExchanges.slice(-6);
-                for (const ex of recent) {
-                    const role = ex.role === 'user' ? p.displayName : 'シャノン';
-                    lines.push(`  ${role}: ${ex.content.substring(0, 100)}`);
-                }
-            }
-            lines.push(`- やりとり回数: ${p.totalInteractions}回`);
-            sections.push(lines.join('\n'));
-        }
-
-        // シャノンの記憶
-        const memLines: string[] = [];
-        if (memoryState.experiences.length > 0) {
-            memLines.push('【体験】');
-            for (const exp of memoryState.experiences) {
-                const date = new Date(exp.createdAt).toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' });
-                const feeling = exp.feeling ? ` → ${exp.feeling}` : '';
-                memLines.push(`- [${date}] ${exp.content}${feeling}`);
-            }
-        }
-        if (memoryState.knowledge.length > 0) {
-            memLines.push('【知識】');
-            for (const k of memoryState.knowledge) {
-                memLines.push(`- ${k.content}`);
-            }
-        }
-        if (memLines.length > 0) {
-            sections.push(`## ボクの関連する記憶\n${memLines.join('\n')}`);
-        }
-
-        if (sections.length > 0) {
-            return `\n\n${sections.join('\n\n')}`;
-        }
         return '';
     }
 }

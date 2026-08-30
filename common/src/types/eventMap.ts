@@ -28,7 +28,7 @@ import {
 import { MinecraftInput, MinecraftServerName } from './minecraft.js';
 import { NotionClientInput, NotionClientOutput } from './notion.js';
 import { SchedulerInput, SchedulerOutput } from './scheduler.js';
-import { EmotionType, TaskInput, TaskTreeState } from './taskGraph.js';
+import { TaskInput, TaskTreeState } from './taskGraph.js';
 import {
   MemberTweetInput,
   TwitterActionResult,
@@ -110,7 +110,6 @@ export interface EventPayloadMap {
   'web:post_schedule': OpenAIInput | SchedulerOutput;
   'web:log': ILog;
   'web:planning': TaskTreeState;
-  'web:emotion': EmotionType;
   'web:status': StatusAgentInput | ServiceOutput;
   'web:skill': SkillInfo[] | WebSkillInput;
 

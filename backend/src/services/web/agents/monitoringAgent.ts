@@ -4,31 +4,26 @@ import {
   WebSocketServiceBase,
   WebSocketServiceConfig,
 } from '../../common/WebSocketService.js';
-import { EventBus } from '../../eventBus/eventBus.js';
-import { getEventBus } from '../../eventBus/index.js';
 import { logger } from '../../../utils/logger.js';
+import { getWebNotificationHub } from '../webNotificationHub.js';
+import { shouldDeliverWebLog, webLogHistoryFilter } from '../webNotificationBridge.js';
 
 interface SearchQuery {
   startDate?: string;
   endDate?: string;
   memoryZone?: MemoryZone;
   content?: string;
+  sessionId?: string;
 }
 
 export class MonitoringAgent extends WebSocketServiceBase {
   private static instance: MonitoringAgent;
-  private eventBus: EventBus;
-  private messageSubscription: (() => void) | null = null;
+  private unsubscribeLog: (() => void) | null = null;
 
   private constructor(config: WebSocketServiceConfig) {
     super(config);
-    this.eventBus = getEventBus();
-
-    this.messageSubscription = this.eventBus.subscribe('web:log', (event) => {
-      this.broadcast({
-        type: 'web:log',
-        data: event.data as ILog,
-      } as WebMonitoringOutput);
+    this.unsubscribeLog = getWebNotificationHub().onLog((entry) => {
+      this.broadcastWebLog(entry, { type: 'web:log', data: entry } as WebMonitoringOutput);
     });
   }
 
@@ -40,89 +35,60 @@ export class MonitoringAgent extends WebSocketServiceBase {
   }
 
   protected override initialize() {
-    this.wss.on('connection', async (ws) => {
+    this.onAuthenticatedConnection(async (ws) => {
       logger.debug('Monitoring client connected');
-
       this.handleNewConnection(ws);
+      ws.on('close', () => { logger.debug('Monitoring client disconnected'); });
 
-      ws.on('close', () => {
-        logger.debug('Monitoring client disconnected');
-      });
-
-      const logs = await Log.find().sort({ timestamp: -1 }).limit(200);
-      const sortedLogs = logs.sort(
-        (a, b) => a.timestamp.getTime() - b.timestamp.getTime()
-      );
-
-      sortedLogs.forEach((log) => {
-        this.broadcast({ type: 'web:log', data: log } as WebMonitoringOutput);
-      });
-
-      // 検索リクエストのハンドリング
-      ws.on('message', async (message) => {
+      this.onMessage(ws, async (message) => {
         const data = JSON.parse(message.toString());
-
         if (data.type === 'ping') {
           this.broadcast({ type: 'pong' } as WebMonitoringOutput);
           return;
         }
-        logger.info(
-          `valid web message received in monitoring agent: ${
-            data.type === 'search'
-              ? JSON.stringify(data.query)
-              : JSON.stringify(data)
-          }`,
-          'blue',
-        );
+        if (data.type === 'web:bind-session' && typeof data.sessionId === 'string') {
+          this.bindWebSession(ws, data.sessionId);
+          await this.sendSessionHistory(ws, data.sessionId);
+          return;
+        }
         if (data.type === 'search') {
           const query = data.query as SearchQuery;
-          const searchResults = await this.searchLogs(query);
-          this.broadcast({
-            type: 'web:searchResults',
-            data: searchResults as ILog[],
-          } as WebMonitoringOutput);
+          const searchResults = await this.searchLogs(query, this.getWebSessionId(ws));
+          this.sendTo(ws, { type: 'web:searchResults', data: searchResults as ILog[] } as WebMonitoringOutput);
         }
-      });
-
-      ws.on('close', () => {
-        logger.debug('Monitoring Client disconnected');
-      });
-
-      ws.on('error', (error) => {
-        logger.error('WebSocket error:', error);
       });
     });
   }
 
-  private async searchLogs(query: SearchQuery) {
-    const filter: any = {};
+  protected broadcastWebLog(entry: ILog, message: unknown): void {
+    for (const ws of this.activeConnections) {
+      if (shouldDeliverWebLog(entry, this.getWebSessionId(ws))) this.sendTo(ws, message);
+    }
+  }
 
+  private async sendSessionHistory(ws: WebSocket, sessionId: string): Promise<void> {
+    const logs = await Log.find(webLogHistoryFilter(sessionId)).sort({ timestamp: -1 }).limit(200);
+    const sortedLogs = logs.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+    for (const log of sortedLogs) {
+      if (shouldDeliverWebLog(log, sessionId)) {
+        this.sendTo(ws, { type: 'web:log', data: log } as WebMonitoringOutput);
+      }
+    }
+  }
+
+  private async searchLogs(query: SearchQuery, connectionSessionId?: string) {
+    const filter: Record<string, unknown> = {};
     if (query.startDate && query.endDate) {
-      filter.timestamp = {
-        $gte: new Date(query.startDate),
-        $lte: new Date(query.endDate),
-      };
+      filter.timestamp = { $gte: new Date(query.startDate), $lte: new Date(query.endDate) };
     }
-
-    if (query.memoryZone) {
-      filter.memoryZone = query.memoryZone as MemoryZone;
-    }
-
-    if (query.content) {
-      filter.content = { $regex: query.content, $options: 'i' };
-    }
-
+    if (query.memoryZone) filter.memoryZone = query.memoryZone;
+    if (query.content) filter.content = { $regex: query.content, $options: 'i' };
+    if (connectionSessionId) Object.assign(filter, webLogHistoryFilter(connectionSessionId));
     return await Log.find(filter).sort({ timestamp: -1 }).limit(200).lean();
   }
 
-  public start() {
-    super.start();
-  }
-
   public disconnect() {
-    if (this.messageSubscription) {
-      this.messageSubscription();
-      this.messageSubscription = null;
-    }
+    this.unsubscribeLog?.();
+    this.unsubscribeLog = null;
   }
 }

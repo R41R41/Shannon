@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "projectId": "YOUR_DEV_FIREBASE_PROJECT_ID",
+  "reviewedBy": "reviewer-id",
+  "bindings": [
+    {
+      "userId": "MONGO_USER_OBJECT_ID",
+      "uid": "FIREBASE_UID_FROM_ADMIN_CONSOLE",
+      "isAuthorized": true,
+      "isAdmin": true
+    }
+  ]
+}

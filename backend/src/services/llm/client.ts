@@ -11,8 +11,10 @@ import { fileURLToPath, pathToFileURL } from 'url';
 import { z } from 'zod';
 import { config } from '../../config/env.js';
 import { classifyError, formatErrorForLog } from '../../errors/index.js';
-import { EventBus } from '../eventBus/eventBus.js';
-import { getEventBus } from '../eventBus/index.js';
+import { logToWeb } from '../runtime/logging.js';
+import { registerLlmInbound } from '../runtime/llmInboundRegistry.js';
+import { registerSkillListHandler } from '../runtime/skillListRegistry.js';
+import { getWebNotificationHub } from '../web/webNotificationHub.js';
 import { VoicepeakClient } from '../voicepeak/client.js';
 import { loadPrompt } from './config/prompts.js';
 import { RealtimeAPIService } from './agents/realtimeApiAgent.js';
@@ -20,6 +22,7 @@ import { buildShannonGraph, invokeShannonGraph, CompiledShannonGraph } from './g
 import { initializeNodes } from './graph/nodeFactory.js';
 import { FunctionCallingAgent } from './graph/nodes/FunctionCallingAgent.js';
 import { RequestExecutionCoordinator } from './graph/requestExecutionCoordinator.js';
+import { runCoordinatedGraph } from './graph/coordinatedGraphInvocation.js';
 import type { RequestEnvelope, ShannonGraphState } from '@shannon/common';
 import { getActionDispatcher } from '../common/adapters/index.js';
 import { getTracedOpenAI } from './utils/langfuse.js';
@@ -27,13 +30,13 @@ import { logger } from '../../utils/logger.js';
 import { VoiceProcessor } from './voice/VoiceProcessor.js';
 import { AgentOrchestrator } from './agents/AgentOrchestrator.js';
 import { EventRouter } from './routing/EventRouter.js';
+import { snapshotMemoryEnvelope } from '../memory/requestMemory.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 export class LLMService {
   private static instance: LLMService;
-  private eventBus: EventBus;
   private realtimeApi: RealtimeAPIService;
   private tools: StructuredTool[] = [];
   private isDevMode: boolean;
@@ -53,7 +56,6 @@ export class LLMService {
 
   constructor(isDevMode: boolean) {
     this.isDevMode = isDevMode;
-    this.eventBus = getEventBus();
     this.realtimeApi = RealtimeAPIService.getInstance();
     this.voicepeakClient = VoicepeakClient.getInstance();
     this.openaiClient = getTracedOpenAI(new OpenAI({ apiKey: config.openaiApiKey }));
@@ -66,7 +68,6 @@ export class LLMService {
     const boundInvokeGraph = this.invokeGraph.bind(this);
 
     this.voiceProcessor = new VoiceProcessor({
-      eventBus: this.eventBus,
       openaiClient: this.openaiClient,
       groqClient: this.groqClient,
       voicepeakClient: this.voicepeakClient,
@@ -76,13 +77,11 @@ export class LLMService {
     });
 
     this.agentOrchestrator = new AgentOrchestrator({
-      eventBus: this.eventBus,
       isDevMode: this.isDevMode,
       invokeGraph: boundInvokeGraph,
     });
 
     this.eventRouter = new EventRouter({
-      eventBus: this.eventBus,
       isDevMode: this.isDevMode,
       realtimeApi: this.realtimeApi,
       agentOrchestrator: this.agentOrchestrator,
@@ -90,7 +89,8 @@ export class LLMService {
       invokeGraph: boundInvokeGraph,
     });
 
-    this.setupEventBus();
+    registerLlmInbound(this.eventRouter);
+    registerSkillListHandler(() => { void this.processGetSkills(); });
     this.setupRealtimeAPICallback();
   }
 
@@ -139,15 +139,6 @@ export class LLMService {
     } finally {
       this.initializationPromise = null;
     }
-  }
-
-  private setupEventBus() {
-    this.eventRouter.setupEventBus();
-
-    // Skills event is handled locally (needs access to tools)
-    this.eventBus.subscribe('llm:get_skills', (event) => {
-      this.processGetSkills();
-    });
   }
 
   private setupRealtimeAPICallback() {
@@ -200,11 +191,7 @@ export class LLMService {
       (skill, index, self) =>
         index === self.findIndex((t) => t.name === skill.name)
     );
-    this.eventBus.publish({
-      type: 'web:skill',
-      memoryZone: 'web',
-      data: uniqueSkills as SkillInfo[],
-    });
+    getWebNotificationHub().emitSkill(uniqueSkills as SkillInfo[]);
   }
 
   /**
@@ -219,27 +206,33 @@ export class LLMService {
     options?: {
       onToolStarting?: (toolName: string, args?: Record<string, unknown>) => void;
       onTaskTreeUpdate?: (taskTree: import('@shannon/common').TaskTreeState) => void;
+      onStreamSentence?: (sentence: string) => Promise<void>;
       onRequestSkillInterrupt?: () => void;
       getLiveInventory?: () => import('@shannon/common').MinecraftInventoryEntry[];
+      getActiveEffects?: () => Array<{ name: string; amplifier: number }>;
+      getInventoryDiff?: () => string | null;
+      getInitialMemory?: () => Promise<string | null>;
       abortSignal?: AbortSignal;
     },
   ): Promise<ShannonGraphState> {
+    const dispatchEnvelope = envelope.channel === 'discord' ? snapshotMemoryEnvelope(envelope) : envelope;
     await this.initialize();
     if (!this.shannonGraph) {
       throw new Error('Shannon graph not initialized');
     }
 
     try {
-      return await this.executionCoordinator.run(envelope, async () => {
-        const result = await invokeShannonGraph(this.shannonGraph!, envelope, legacyMessages, options);
-        await this.dispatchActionPlan(envelope, result);
-        return result;
-      });
+      return await runCoordinatedGraph(
+        this.executionCoordinator, envelope,
+        signal => invokeShannonGraph(this.shannonGraph!, envelope, legacyMessages, { ...options, abortSignal: signal }),
+        (result, signal) => this.dispatchActionPlan(dispatchEnvelope, result, signal),
+        options?.abortSignal,
+      );
     } catch (error) {
       const zone = envelope.metadata?.legacyMemoryZone ?? envelope.channel;
       const sErr = classifyError(error, 'llm');
       logger.error(`Graph invocation error [${zone}]: ${formatErrorForLog(sErr)}`);
-      this.eventBus.log(zone as MemoryZone, 'red', `Error: ${sErr.message}`, true);
+      void logToWeb(zone as MemoryZone, 'red', `Error: ${sErr.message}`, true);
       throw sErr;
     }
   }
@@ -247,11 +240,12 @@ export class LLMService {
   private async dispatchActionPlan(
     envelope: RequestEnvelope,
     result: ShannonGraphState,
+    signal?: AbortSignal,
   ): Promise<void> {
     if (!result.actionPlan) return;
     const dispatcher = getActionDispatcher(envelope.channel);
     if (!dispatcher) return;
-    await dispatcher.dispatch(envelope, result.actionPlan);
+    await dispatcher.dispatch(envelope, result.actionPlan, { signal });
   }
 
   public async registerMinebotTools(bot: import('../minebot/types.js').CustomBot): Promise<void> {

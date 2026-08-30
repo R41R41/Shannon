@@ -1,8 +1,13 @@
+import { minecraftMemoryContext, MinecraftRecentHistory } from './runtime/memoryContext.js';
 import { AIMessage, BaseMessage, HumanMessage } from '@langchain/core/messages';
-import { MinebotSkillInput, MinebotVoiceChatInput } from '@shannon/common';
+import { MinebotVoiceChatInput } from '@shannon/common';
 import fetch from 'node-fetch';
 import { Vec3 } from 'vec3';
-import { EventBus } from '../eventBus/eventBus.js';
+import { deliverMinebotVoiceResponseToLlm } from '../runtime/llmInboundDispatch.js';
+import {
+  registerMinebotChatHandler,
+  registerMinebotVoiceChatHandler,
+} from '../runtime/minebotInboundRegistry.js';
 import { config } from '../../config/env.js';
 import { LLMService } from '../llm/client.js';
 import { minebotAdapter } from '../common/adapters/index.js';
@@ -24,6 +29,8 @@ import {
   looksLikeSelfTestChatIntent,
   parseSelfTestSuiteFromUserMessage,
 } from '../llm/graph/cognitive/selfImprove/selfTestIntent.js';
+
+export { registerMinebotVoiceChatHandler } from '../runtime/minebotInboundRegistry.js';
 
 const log = createLogger('Minebot:SkillAgent');
 
@@ -49,7 +56,6 @@ function isSelfTestSuiteChatMessage(message: string): boolean {
  */
 export class SkillAgent {
   private bot: CustomBot;
-  private eventBus: EventBus;
 
   // コンポーネント
   private skillLoader: SkillLoader;
@@ -60,19 +66,19 @@ export class SkillAgent {
   private taskRuntime: MinebotTaskRuntime;
 
   // 状態
-  private recentMessages: BaseMessage[] = [];
+  private recentHistory: MinecraftRecentHistory<BaseMessage>;
   private lastVoiceGuildId: string | null = null;
   private lastVoiceChannelId: string | null = null;
 
-  constructor(bot: CustomBot, eventBus: EventBus) {
+  constructor(bot: CustomBot) {
     this.bot = bot;
-    this.eventBus = eventBus;
+    this.recentHistory = new MinecraftRecentHistory(this.bot);
 
     // コンポーネント初期化
     this.skillLoader = new SkillLoader();
-    this.skillRegistrar = getSkillRegistrar(eventBus);
+    this.skillRegistrar = getSkillRegistrar();
     this.taskRuntime = new MinebotTaskRuntime(this.bot);
-    this.eventHandler = new BotEventHandler(this.bot, this.taskRuntime, this.recentMessages);
+    this.eventHandler = new BotEventHandler(this.bot, this.taskRuntime, this.recentHistory.messages);
     this.eventReactionSystem = new EventReactionSystem(this.bot, this.taskRuntime);
     this.httpServer = new MinebotHttpServer(this.bot, () => this.sendConstantSkills(), () => this.sendReactionSettings());
     this.httpServer.setTaskRuntime(this.taskRuntime);
@@ -102,9 +108,8 @@ export class SkillAgent {
       await this.setInterval();
       log.success('✅ setInterval done');
 
-      // EventBus購読登録
-      await this.registerEventBusSubscriptions();
-      log.success('✅ registerEventBusSubscriptions done');
+      this.registerInboundHandlers();
+      log.success('✅ registerInboundHandlers done');
 
       this.taskRuntime.setExecutor((envelope, messages, options) =>
         LLMService.getInstance(config.isDev).invokeGraph(envelope, messages, options),
@@ -176,7 +181,6 @@ export class SkillAgent {
     // スキル登録
     this.skillRegistrar.registerInstantSkills(this.bot.instantSkills);
     this.skillRegistrar.registerConstantSkills(this.bot, this.bot.constantSkills);
-    this.skillRegistrar.registerSkillControlEvents(this.bot);
     await LLMService.getInstance(config.isDev).registerMinebotTools(this.bot);
     await LLMService.getInstance(config.isDev).registerRoutineTools(this.bot);
 
@@ -202,7 +206,7 @@ export class SkillAgent {
           timeZone: 'Asia/Tokyo',
         });
         const newMessage = `${currentTime} ${username}: ${message}`;
-        this.recentMessages.push(new AIMessage(newMessage));
+        this.recentHistory.add(new AIMessage(newMessage), true);
         return;
       }
 
@@ -244,17 +248,12 @@ export class SkillAgent {
         username,
         message,
         JSON.stringify(this.bot.environmentState),
-        JSON.stringify(this.bot.selfState)
+        JSON.stringify(this.bot.selfState),
+        undefined,
+        true,
       );
     });
 
-    // EventBus経由のチャット送信
-    this.eventBus.subscribe('minebot:chat', async (event) => {
-      const { text } = event.data as MinebotSkillInput;
-      if (text) {
-        sendGameChatLimited(this.bot, text);
-      }
-    });
   }
 
   /**
@@ -544,20 +543,19 @@ export class SkillAgent {
     environmentState?: string,
     selfState?: string,
     voiceResponseTarget?: { guildId: string; channelId: string },
+    gameChat = false,
   ) {
     try {
       const currentTime = new Date().toLocaleString('ja-JP', {
         timeZone: 'Asia/Tokyo',
       });
       const newMessage = `${currentTime} ${userName}: ${message}`;
-      this.recentMessages.push(new HumanMessage(newMessage));
+      const requestMessages = this.recentHistory.add(new HumanMessage(newMessage), gameChat);
 
-      // メモリリーク防止: 直近50件を超えたら古いメッセージを削除
-      if (this.recentMessages.length > 50) {
-        this.recentMessages.splice(0, this.recentMessages.length - 50);
-      }
-
+      const memoryContext = minecraftMemoryContext(this.bot);
       const envelope = minebotAdapter.toEnvelope({
+        serverId: memoryContext?.serverId,
+        worldId: memoryContext?.worldId,
         senderName: userName,
         senderId: userName,
         message,
@@ -572,7 +570,7 @@ export class SkillAgent {
         weather: this.bot.environmentState.weather,
         time: this.bot.environmentState.time,
         biome: this.bot.environmentState.biome,
-        dimension: this.bot.environmentState.dimension?.toString?.() ?? undefined,
+        dimension: memoryContext?.dimension ?? undefined,
         bossbar: this.bot.environmentState.bossbar ?? undefined,
         botPosition: this.bot.selfState.botPosition
           ? {
@@ -607,12 +605,14 @@ export class SkillAgent {
           selfState,
         };
       }
+      // Physical bot identity does not authorize persisting Mod/Discord voice content to world memory.
+      if (!gameChat) envelope.metadata = { ...envelope.metadata, memoryDisabled: true };
 
       let immediateAckSent = false;
 
-      const resumed = await this.taskRuntime.resumeAwaitingUserTask(message, {
+      const resumed = gameChat ? await this.taskRuntime.resumeAwaitingUserTask(message, {
         envelope,
-        messages: [...this.recentMessages],
+        messages: requestMessages,
         environmentState: environmentState ?? null,
         selfState: selfState ?? null,
         onToolStarting: (toolName, args) => {
@@ -622,7 +622,7 @@ export class SkillAgent {
           immediateAckSent = true;
           this.bot.chat(ack);
         },
-      });
+      }) : null;
       if (resumed) {
         return;
       }
@@ -630,7 +630,7 @@ export class SkillAgent {
       const result = await this.taskRuntime.invoke({
         envelope,
         userMessage: message,
-        messages: [...this.recentMessages],
+        messages: requestMessages,
         environmentState: environmentState ?? null,
         selfState: selfState ?? null,
         onToolStarting: (toolName, args) => {
@@ -645,14 +645,10 @@ export class SkillAgent {
       const graphResult = result?.graphResult;
       const responseText = graphResult?.actionPlan?.message ?? graphResult?.finalAnswer;
       if (voiceResponseTarget && responseText) {
-        this.eventBus.publish({
-          type: 'minebot:voice_response',
-          memoryZone: 'minebot',
-          data: {
-            guildId: voiceResponseTarget.guildId,
-            channelId: voiceResponseTarget.channelId,
-            responseText,
-          },
+        deliverMinebotVoiceResponseToLlm({
+          guildId: voiceResponseTarget.guildId,
+          channelId: voiceResponseTarget.channelId,
+          responseText,
         });
       }
     } catch (error) {
@@ -705,7 +701,8 @@ export class SkillAgent {
     // 60秒ごとにボット状態をスナップショット保存
     setInterval(() => {
       if (!this.bot.entity) return;
-      const wk = WorldKnowledgeService.getInstance(this.bot.connectedServerName || 'default');
+      const wk = WorldKnowledgeService.forServer(minecraftMemoryContext(this.bot)?.serverId);
+      if (!wk) return;
       const pos = this.bot.entity.position;
       wk.recordSnapshot({
         position: { x: Math.floor(pos.x), y: Math.floor(pos.y), z: Math.floor(pos.z) },
@@ -719,12 +716,16 @@ export class SkillAgent {
   }
 
   /**
-   * EventBus購読を登録
+   * 外部からの Minebot インバウンド（チャット・音声）を gateway 経由で受ける
    */
-  private async registerEventBusSubscriptions() {
-    // Discord音声経由のMinebotチャット
-    this.eventBus.subscribe('minebot:voice_chat', async (event) => {
-      const { userName, message, guildId, channelId } = event.data as MinebotVoiceChatInput;
+  private registerInboundHandlers(): void {
+    registerMinebotChatHandler(({ text }) => {
+      if (text) {
+        sendGameChatLimited(this.bot, text);
+      }
+    });
+
+    registerMinebotVoiceChatHandler(async ({ userName, message, guildId, channelId }: MinebotVoiceChatInput) => {
       const mcName = CONFIG.resolveMinecraftName(userName);
       log.info(`🎙️ Voice chat from ${userName} (MC: ${mcName}): ${message}`, 'cyan');
 
@@ -741,30 +742,6 @@ export class SkillAgent {
         JSON.stringify(this.bot.selfState),
         { guildId, channelId },
       );
-    });
-
-    // スキル読み込みイベント
-    this.eventBus.subscribe('minebot:loadSkills', async (event) => {
-      try {
-        const initSkillsResponse = await this.initSkills();
-        this.eventBus.publish({
-          type: `minebot:skillResult`,
-          memoryZone: 'minecraft',
-          data: {
-            success: initSkillsResponse.success,
-            result: initSkillsResponse.result,
-          },
-        });
-      } catch (error) {
-        this.eventBus.publish({
-          type: `minebot:skillResult`,
-          memoryZone: 'minecraft',
-          data: {
-            success: false,
-            result: `error: ${error}`,
-          },
-        });
-      }
     });
   }
 

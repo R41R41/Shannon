@@ -2,7 +2,7 @@
  * SkillHotLoader — ランタイムスキル登録
  *
  * コンパイル済み .js ファイルを動的にインポートし、
- * InstantSkills/ConstantSkills コレクション・EventBus・LLM ツールに登録する。
+ * InstantSkills/ConstantSkills コレクション・skill gateway・LLM ツールに登録する。
  */
 
 import { readFile, writeFile } from 'node:fs/promises';
@@ -77,7 +77,7 @@ export class SkillHotLoader {
             // コレクションに追加
             bot.instantSkills.addSkill(skill);
 
-            // EventBus に登録
+            // skill gateway に登録
             this.registrar.registerSingleInstantSkill(skill);
 
             // LLM ツールに登録
@@ -228,7 +228,7 @@ export class SkillHotLoader {
             bot.instantSkills.removeSkill(skillName);
             bot.instantSkills.addSkill(newSkill);
 
-            // 4. EventBus 再登録
+            // 4. skill gateway 再登録
             this.registrar.registerSingleInstantSkill(newSkill);
 
             // 5. LLM ツール再登録（非致命的）

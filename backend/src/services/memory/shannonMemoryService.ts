@@ -4,6 +4,7 @@ import {
   MemoryCategory,
 } from '../../models/ShannonMemory.js';
 import { EmbeddingService } from './embeddingService.js';
+import { hasMemoryScope, memoryScopeFilter, MEMORY_SCOPE_REQUIRED, type MemoryScope } from '../../modules/memory/index.js';
 import { config } from '../../config/env.js';
 import { logger } from '../../utils/logger.js';
 
@@ -82,14 +83,20 @@ export class ShannonMemoryService {
   /**
    * 重複チェック + 容量制限付き保存
    */
-  async saveWithDedup(data: ShannonMemoryInput): Promise<SaveResult> {
+  async saveWithDedup(data: ShannonMemoryInput, scope?: MemoryScope | null): Promise<SaveResult> {
+    if (!hasMemoryScope(scope)) return { saved: false, message: MEMORY_SCOPE_REQUIRED };
+    if (!['experience', 'knowledge'].includes(data.category) || !data.content?.trim() || !Number.isFinite(data.importance) || data.importance < 1 || data.importance > 10 || !Array.isArray(data.tags) || data.tags.some(tag => typeof tag !== 'string')) {
+      return { saved: false, message: '記憶の保存内容が不正です。' };
+    }
+    // Explicit fields only: injected scope/generalized/owner properties are never trusted.
+    data = { category: data.category, content: data.content, feeling: data.feeling, context: data.context, source: data.source, importance: data.importance, tags: [...data.tags] };
     if (data.category === 'experience') {
-      return this.saveExperienceWithDedup(data);
+      return this.saveExperienceWithDedup(data, scope);
     }
     if (data.category === 'knowledge') {
-      return this.saveKnowledgeWithDedup(data);
+      return this.saveKnowledgeWithDedup(data, scope);
     }
-    return this.createWithEviction(data);
+    return this.createWithEviction(data, scope);
   }
 
   /**
@@ -97,9 +104,11 @@ export class ShannonMemoryService {
    */
   private async saveExperienceWithDedup(
     data: ShannonMemoryInput,
+    scope: MemoryScope,
   ): Promise<SaveResult> {
     if (data.tags.length > 0) {
       const candidates = await ShannonMemory.find({
+        ...memoryScopeFilter(scope),
         category: 'experience',
         tags: { $in: data.tags },
         createdAt: {
@@ -123,7 +132,7 @@ export class ShannonMemoryService {
       }
     }
 
-    return this.createWithEviction(data);
+    return this.createWithEviction(data, scope);
   }
 
   /**
@@ -131,9 +140,11 @@ export class ShannonMemoryService {
    */
   private async saveKnowledgeWithDedup(
     data: ShannonMemoryInput,
+    scope: MemoryScope,
   ): Promise<SaveResult> {
     if (data.tags.length > 0) {
       const candidates = await ShannonMemory.find({
+        ...memoryScopeFilter(scope),
         category: 'knowledge',
         tags: { $in: data.tags },
       })
@@ -150,7 +161,7 @@ export class ShannonMemoryService {
       }
     }
 
-    return this.createWithEviction(data);
+    return this.createWithEviction(data, scope);
   }
 
   /**
@@ -158,8 +169,9 @@ export class ShannonMemoryService {
    */
   private async createWithEviction(
     data: ShannonMemoryInput,
+    scope: MemoryScope,
   ): Promise<SaveResult> {
-    await this.evictIfNeeded(data.category);
+    await this.evictIfNeeded(data.category, scope);
 
     let embedding: number[] | undefined;
     try {
@@ -174,6 +186,8 @@ export class ShannonMemoryService {
 
     const doc = await ShannonMemory.create({
       ...data,
+      ...scope,
+      generalized: false,
       embedding,
       createdAt: new Date(),
     });
@@ -194,8 +208,9 @@ export class ShannonMemoryService {
   async searchExperiences(
     query: string,
     limit: number = 5,
+    scope?: MemoryScope | null,
   ): Promise<IShannonMemory[]> {
-    return this.search('experience', query, limit);
+    return this.search('experience', query, limit, scope);
   }
 
   /**
@@ -204,8 +219,9 @@ export class ShannonMemoryService {
   async searchKnowledge(
     query: string,
     limit: number = 5,
+    scope?: MemoryScope | null,
   ): Promise<IShannonMemory[]> {
-    return this.search('knowledge', query, limit);
+    return this.search('knowledge', query, limit, scope);
   }
 
   /**
@@ -216,14 +232,17 @@ export class ShannonMemoryService {
     category: MemoryCategory,
     query: string,
     limit: number,
+    scope?: MemoryScope | null,
   ): Promise<IShannonMemory[]> {
+    if (!hasMemoryScope(scope)) return [];
+    limit = Number.isFinite(limit) ? Math.max(1, Math.min(20, Math.floor(limit))) : 5;
     const keywords = query
       .split(/[\s,、。]+/)
       .filter((k) => k.length > 0);
 
     if (keywords.length === 0) {
       // キーワードなし: 重要度 + 日時で最新を返す
-      return ShannonMemory.find({ category })
+      return ShannonMemory.find({ ...memoryScopeFilter(scope), category })
         .sort({ importance: -1, createdAt: -1 })
         .limit(limit)
         .lean();
@@ -231,6 +250,7 @@ export class ShannonMemoryService {
 
     // 1. タグ一致で検索
     const tagResults = await ShannonMemory.find({
+      ...memoryScopeFilter(scope),
       category,
       tags: { $in: keywords },
     })
@@ -246,6 +266,7 @@ export class ShannonMemoryService {
     try {
       const textResults = await ShannonMemory.find(
         {
+          ...memoryScopeFilter(scope),
           category,
           $text: { $search: keywords.join(' ') },
         },
@@ -272,13 +293,16 @@ export class ShannonMemoryService {
   }
 
   /**
-   * 直近 + 重要な記憶を取得 (MemoryNode preProcess 用)
+   * 直近 + 重要な記憶を取得
    */
   async getRecentImportant(
     category: MemoryCategory,
     limit: number = 5,
+    scope?: MemoryScope | null,
   ): Promise<IShannonMemory[]> {
+    if (!hasMemoryScope(scope)) return [];
     return ShannonMemory.find({
+      ...memoryScopeFilter(scope),
       category,
       importance: { $gte: 5 },
     })
@@ -293,9 +317,9 @@ export class ShannonMemoryService {
    * 容量制限チェック。閾値超過時はバッチ削除。
    * 保護記憶 (importance >= 8) が上限を超えた場合も最古を削除。
    */
-  private async evictIfNeeded(category: MemoryCategory): Promise<void> {
+  private async evictIfNeeded(category: MemoryCategory, scope: MemoryScope): Promise<void> {
     const maxLimit = CATEGORY_LIMITS[category] ?? MAX_AUTONOMY_MEMORIES;
-    const count = await ShannonMemory.countDocuments({ category });
+    const count = await ShannonMemory.countDocuments({ ...memoryScopeFilter(scope), category });
     const triggerAt = Math.floor(maxLimit * EVICTION_TRIGGER_RATIO);
 
     if (count < triggerAt) return;
@@ -304,7 +328,7 @@ export class ShannonMemoryService {
     const toEvict = Math.min(EVICTION_BATCH_SIZE, count - triggerAt + EVICTION_BATCH_SIZE);
 
     const evicted = await ShannonMemory.find(
-      { category, importance: { $lt: PROTECTED_IMPORTANCE } },
+      { ...memoryScopeFilter(scope), category, importance: { $lt: PROTECTED_IMPORTANCE } },
     )
       .sort({ importance: 1, createdAt: 1 })
       .limit(toEvict)
@@ -312,7 +336,7 @@ export class ShannonMemoryService {
 
     if (evicted.length > 0) {
       const ids = evicted.map((e) => e._id);
-      await ShannonMemory.deleteMany({ _id: { $in: ids } });
+      await ShannonMemory.deleteMany({ ...memoryScopeFilter(scope), _id: { $in: ids } });
       for (const e of evicted) {
         embeddingService.removeFromCache(e._id.toString());
       }
@@ -320,12 +344,14 @@ export class ShannonMemoryService {
     }
 
     const protectedCount = await ShannonMemory.countDocuments({
+      ...memoryScopeFilter(scope),
       category,
       importance: { $gte: PROTECTED_IMPORTANCE },
     });
     if (protectedCount > MAX_PROTECTED_PER_CATEGORY) {
       const excess = protectedCount - MAX_PROTECTED_PER_CATEGORY;
       const oldProtected = await ShannonMemory.find({
+        ...memoryScopeFilter(scope),
         category,
         importance: { $gte: PROTECTED_IMPORTANCE },
       })
@@ -334,7 +360,7 @@ export class ShannonMemoryService {
         .lean();
       if (oldProtected.length > 0) {
         const ids = oldProtected.map((e) => e._id);
-        await ShannonMemory.deleteMany({ _id: { $in: ids } });
+        await ShannonMemory.deleteMany({ ...memoryScopeFilter(scope), _id: { $in: ids } });
         for (const e of oldProtected) {
           embeddingService.removeFromCache(e._id.toString());
         }
@@ -381,7 +407,8 @@ export class ShannonMemoryService {
    * 古い低重要度の記憶を embedding 類似度でクラスタ化し、LLM で要約統合する。
    * 定期実行 or 手動呼び出し。
    */
-  async consolidateMemories(): Promise<{ clustersProcessed: number; memoriesRemoved: number }> {
+  async consolidateMemories(scope?: MemoryScope | null): Promise<{ clustersProcessed: number; memoriesRemoved: number }> {
+    if (!hasMemoryScope(scope)) return { clustersProcessed: 0, memoriesRemoved: 0 };
     const cutoff = new Date(Date.now() - CONSOLIDATION_AGE_DAYS * 24 * 60 * 60 * 1000);
     const embeddingService = EmbeddingService.getInstance();
 
@@ -390,6 +417,7 @@ export class ShannonMemoryService {
 
     for (const category of ['experience', 'knowledge'] as MemoryCategory[]) {
       const candidates = await ShannonMemory.find({
+        ...memoryScopeFilter(scope),
         category,
         importance: { $lte: CONSOLIDATION_MAX_IMPORTANCE },
         createdAt: { $lt: cutoff },
@@ -441,6 +469,8 @@ export class ShannonMemoryService {
         } catch { /* proceed without embedding */ }
 
         const newDoc = await ShannonMemory.create({
+          ...scope,
+          generalized: false,
           category,
           content: summarizedContent,
           feeling: category === 'experience'
@@ -458,7 +488,7 @@ export class ShannonMemoryService {
         }
 
         const oldIds = cluster.map((m) => m._id);
-        await ShannonMemory.deleteMany({ _id: { $in: oldIds } });
+        await ShannonMemory.deleteMany({ ...memoryScopeFilter(scope), _id: { $in: oldIds } });
         for (const m of cluster) {
           embeddingService.removeFromCache(m._id.toString());
         }
@@ -513,10 +543,12 @@ export class ShannonMemoryService {
   /**
    * embedding が未生成の記憶にバックフィルする
    */
-  async backfillEmbeddings(batchSize: number = 20): Promise<number> {
+  async backfillEmbeddings(batchSize: number = 20, scope?: MemoryScope | null): Promise<number> {
+    if (!hasMemoryScope(scope)) return 0;
     const embeddingService = EmbeddingService.getInstance();
 
     const unembedded = await ShannonMemory.find({
+      ...memoryScopeFilter(scope),
       $or: [{ embedding: { $exists: false } }, { embedding: [] }, { embedding: null }],
     }).lean();
 
@@ -538,7 +570,7 @@ export class ShannonMemoryService {
         const embeddings = await embeddingService.generateEmbeddings(texts);
         for (let j = 0; j < batch.length; j++) {
           await ShannonMemory.updateOne(
-            { _id: batch[j]._id },
+            { ...memoryScopeFilter(scope), _id: batch[j]._id },
             { $set: { embedding: embeddings[j] } },
           );
           embeddingService.updateCache(

@@ -1,7 +1,18 @@
 #!/bin/bash
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Check before touching tmux sessions or occupied ports.
+bash "$SCRIPT_DIR/../scripts/start-mode-guard.sh" "$SCRIPT_DIR/.." "$@" || exit $?
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+# VM dev pins its own runtime; the global Node and production processes are untouched.
+DEV_NODE_BIN=""
+if [ "$(basename "$ROOT_DIR")" = "Shannon-dev" ]; then
+    DEV_NODE_BIN="$HOME/.nvm/versions/node/v$(cat "$ROOT_DIR/.nvmrc")/bin"
+    [ -x "$DEV_NODE_BIN/node" ] || { echo "Pinned development Node is missing" >&2; exit 4; }
+    export PATH="$DEV_NODE_BIN:$PATH"
+fi
+
 
 # --- OS detection ---
 IS_WINDOWS=false
@@ -146,7 +157,7 @@ LAUNCH_EOF
     fi
 else
     if [ "$IS_DEV" = true ]; then
-        tmux new-session -d -s "$FRONTEND_SESSION" "cd $SCRIPT_DIR && PORT=$PORT npm run dev:dev"
+        tmux new-session -d -s "$FRONTEND_SESSION" "cd $SCRIPT_DIR && PATH=$DEV_NODE_BIN:\$PATH PORT=$PORT npm run dev:dev"
     else
         tmux new-session -d -s "$FRONTEND_SESSION" "cd $SCRIPT_DIR && PORT=$PORT npm run dev"
     fi

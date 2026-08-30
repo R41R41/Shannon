@@ -8,22 +8,17 @@ import {
   DiscordSendServerEmojiInput,
   DiscordSendServerEmojiOutput,
   DiscordSendTextMessageInput,
-  DiscordSendTextMessageOutput,
-  HierarchicalSubTask,
-  MinebotInput,
+  MemoryZone,
   MinecraftServerName,
-  ServiceInput,
-  TaskTreeState,
   YoutubeSubscriberUpdateOutput,
 } from '@shannon/common';
-
-type LegacyPlanSubTask = NonNullable<TaskTreeState['subTasks']>[number];
 import {
   ActionRowBuilder,
   AttachmentBuilder,
   ButtonBuilder,
   ButtonStyle,
   ChatInputCommandInteraction,
+  ChannelType,
   Client,
   ComponentType,
   EmbedBuilder,
@@ -43,12 +38,27 @@ import { classifyError, formatErrorForLog } from '../../errors/index.js';
 import { getDiscordMemoryZone } from '../../utils/discord.js';
 import { createLogger } from '../../utils/logger.js';
 const logger = createLogger('Discord:Client');
-import { voiceResponseChannelIds } from './voiceState.js';
+import { authorizeDiscordOutboundGuildAction, authorizeDiscordOutboundGuildRead, authorizeDiscordOutboundPostMessage } from './discordOutboundAuth.js';
+import { authorizeDiscordVoiceOutbound, getDiscordVoiceSession } from './discordVoiceSession.js';
 import { loadServerChoices } from './serverChoices.js';
 import { BaseClient } from '../common/BaseClient.js';
-import { getEventBus } from '../eventBus/index.js';
+import { registerDiscordOutboundPort } from '../runtime/discordOutboundGateway.js';
+import { logToWeb } from '../runtime/logging.js';
+import {
+  onMinebotError,
+  onMinebotSpawned,
+  onMinebotStopped,
+} from '../runtime/minebotLifecycleRegistry.js';
+import { deliverDiscordMessageToLlm } from '../runtime/llmInboundDispatch.js';
+import {
+  dispatchServiceCommand,
+  registerServiceCommandHandler,
+} from '../runtime/serviceCommandRegistry.js';
+import { emitWebServiceStatus, getWebNotificationHub } from '../web/webNotificationHub.js';
 import { splitDiscordMessage, sendLongMessage } from './utils.js';
 import { VoiceManager } from './voice/VoiceManager.js';
+import { createDiscordConversationTransport } from './conversationTransport.js';
+import { registerDiscordConversationTransport } from '../common/discordConversationPort.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -82,7 +92,7 @@ export class DiscordBot extends BaseClient {
   public voiceManager: VoiceManager;
   public static getInstance(isDev?: boolean) {
     if (!DiscordBot.instance) {
-      DiscordBot.instance = new DiscordBot('discord', isDev ?? false);
+      DiscordBot.instance = new DiscordBot(isDev ?? false);
     }
     // isDev は初期化時にのみ設定。以降の呼び出しでは上書きしない
     if (isDev !== undefined) {
@@ -91,9 +101,9 @@ export class DiscordBot extends BaseClient {
     return DiscordBot.instance;
   }
 
-  private constructor(serviceName: 'discord', isDev: boolean = false) {
-    const eventBus = getEventBus();
-    super(serviceName, eventBus);
+  private constructor(isDev: boolean = false) {
+    super('discord');
+    this.isDev = isDev;
     this.client = new Client({
       intents: [
         GatewayIntentBits.Guilds,
@@ -110,14 +120,40 @@ export class DiscordBot extends BaseClient {
         Partials.ThreadMember,
       ],
     });
-    this.eventBus = eventBus;
+    registerDiscordConversationTransport(createDiscordConversationTransport(this.client, () => this.status === 'running'));
 
-    this.voiceManager = new VoiceManager(this.client, eventBus, {
+    this.voiceManager = new VoiceManager(this.client, {
       getUserNickname: (user, guildId) => this.getUserNickname(user, guildId),
       shouldSkipGuild: (guildId) => this.shouldSkipGuild(guildId),
-      getRecentMessages: (channelId, limit) => this.getRecentMessages(channelId, limit),
+      getRecentMessages: (channelId, limit) => {
+        if (!getDiscordVoiceSession(channelId)) return Promise.resolve([]);
+        return this.getRecentMessages(channelId, limit);
+      },
     });
-    this.voiceManager.setupEventSubscriptions();
+
+    registerDiscordOutboundPort({
+      postMessage: (input) => this.handlePostMessage(input),
+      postScheduledPost: (memoryZone, input) => this.handleScheduledPost(memoryZone, input),
+      publishPlanning: (_input: DiscordPlanningInput) => {
+        /* planning is delivered via conversation transport */
+      },
+      getServerEmoji: (input) => this.handleGetServerEmoji(input),
+      sendServerEmoji: (input) => this.handleSendServerEmoji(input),
+      announceSubscriberUpdate: (input) => this.handleSubscriberUpdate(input),
+    });
+
+    registerServiceCommandHandler('discord', async (command) => {
+      if (command === 'start') {
+        await this.start();
+      } else if (command === 'stop') {
+        await this.stop();
+      } else if (command === 'status') {
+        emitWebServiceStatus({
+          service: 'discord',
+          status: this.status,
+        });
+      }
+    });
 
     this.client.once('ready', async () => {
       this.setupSlashCommands();
@@ -225,10 +261,10 @@ export class DiscordBot extends BaseClient {
     } catch (error) {
       const sErr = classifyError(error, 'discord');
       logger.error(`Discord bot failed to start: ${formatErrorForLog(sErr)}`);
-      this.eventBus.log(
+      void logToWeb(
         'discord:aiminelab_server',
         'red',
-        `Discord bot failed to start: ${sErr.message}`
+        `Discord bot failed to start: ${sErr.message}`,
       );
     }
   }
@@ -402,28 +438,8 @@ export class DiscordBot extends BaseClient {
                 ) as MinecraftServerName;
               await interaction.deferReply();
               try {
-                // ステータス取得のためにリスナーを設定
-                const statusPromise = new Promise<string>((resolve) => {
-                  const unsubscribe = this.eventBus.subscribe('web:status', (event) => {
-                    const data = event.data as { service: string; status: string };
-                    if (data.service === `minecraft:${serverName}`) {
-                      unsubscribe();
-                      resolve(data.status);
-                    }
-                  });
-                  // 10秒でタイムアウト
-                  setTimeout(() => {
-                    unsubscribe();
-                    resolve('timeout');
-                  }, 10000);
-                });
-
-                this.eventBus.publish({
-                  type: `minecraft:${serverName}:status`,
-                  memoryZone: 'minecraft',
-                  data: { serviceCommand: 'status' } as ServiceInput,
-                });
-
+                const statusPromise = this.waitForServiceStatus(`minecraft:${serverName}`, 10000);
+                await dispatchServiceCommand(`minecraft:${serverName}`, 'status');
                 const status = await statusPromise;
                 const statusEmoji = status === 'running' ? '🟢' : status === 'stopped' ? '🔴' : '⚪';
                 await interaction.editReply(`${statusEmoji} **${serverName}**: ${status}`);
@@ -443,28 +459,8 @@ export class DiscordBot extends BaseClient {
                 ) as MinecraftServerName;
               await interaction.deferReply();
               try {
-                // ステータス取得のためにリスナーを設定
-                const statusPromise = new Promise<string>((resolve) => {
-                  const unsubscribe = this.eventBus.subscribe('web:status', (event) => {
-                    const data = event.data as { service: string; status: string };
-                    if (data.service === `minecraft:${serverName}`) {
-                      unsubscribe();
-                      resolve(data.status);
-                    }
-                  });
-                  // 30秒でタイムアウト（起動に時間がかかる）
-                  setTimeout(() => {
-                    unsubscribe();
-                    resolve('timeout');
-                  }, 30000);
-                });
-
-                this.eventBus.publish({
-                  type: `minecraft:${serverName}:status`,
-                  memoryZone: 'minecraft',
-                  data: { serviceCommand: 'start' } as ServiceInput,
-                });
-
+                const statusPromise = this.waitForServiceStatus(`minecraft:${serverName}`, 30000);
+                await dispatchServiceCommand(`minecraft:${serverName}`, 'start');
                 const status = await statusPromise;
                 if (status === 'running') {
                   await interaction.editReply(`🟢 **${serverName}** を起動しました！`);
@@ -492,28 +488,8 @@ export class DiscordBot extends BaseClient {
                 // 停止開始を通知
                 await interaction.editReply(`⏳ **${serverName}** を停止中...\n（ワールド保存に時間がかかる場合があります）`);
 
-                // ステータス取得のためにリスナーを設定
-                const statusPromise = new Promise<string>((resolve) => {
-                  const unsubscribe = this.eventBus.subscribe('web:status', (event) => {
-                    const data = event.data as { service: string; status: string };
-                    if (data.service === `minecraft:${serverName}`) {
-                      unsubscribe();
-                      resolve(data.status);
-                    }
-                  });
-                  // 90秒でタイムアウト（ワールド保存に時間がかかる）
-                  setTimeout(() => {
-                    unsubscribe();
-                    resolve('timeout');
-                  }, 90000);
-                });
-
-                this.eventBus.publish({
-                  type: `minecraft:${serverName}:status`,
-                  memoryZone: 'minecraft',
-                  data: { serviceCommand: 'stop' } as ServiceInput,
-                });
-
+                const statusPromise = this.waitForServiceStatus(`minecraft:${serverName}`, 90000);
+                await dispatchServiceCommand(`minecraft:${serverName}`, 'stop');
                 const status = await statusPromise;
                 if (status === 'stopped') {
                   await interaction.editReply(`🔴 **${serverName}** を停止しました！`);
@@ -538,35 +514,9 @@ export class DiscordBot extends BaseClient {
                 ) as MinecraftServerName;
               await interaction.deferReply();
               try {
-                // spawn イベントを待つ（実際にログイン完了まで）
-                const spawnPromise = new Promise<{ success: boolean; message?: string }>((resolve) => {
-                  // spawnイベントのリスナー
-                  const unsubscribeSpawn = this.eventBus.subscribe('minebot:spawned', () => {
-                    unsubscribeSpawn();
-                    resolve({ success: true });
-                  });
-                  // エラーイベントのリスナー
-                  const unsubscribeError = this.eventBus.subscribe('minebot:error', (event) => {
-                    unsubscribeError();
-                    resolve({ success: false, message: (event.data as { message?: string })?.message });
-                  });
-                  // 120秒でタイムアウト（Microsoft認証に時間がかかる場合）
-                  setTimeout(() => {
-                    unsubscribeSpawn();
-                    unsubscribeError();
-                    resolve({ success: false, message: 'timeout' });
-                  }, 120000);
-                });
-
-                // ログイン開始を通知
+                const spawnPromise = this.waitForMinebotSpawn(120000);
                 await interaction.editReply(`⏳ Minebotを **${serverName}** にログイン中...\n（Microsoft認証が必要な場合、コンソールでコードを確認してください）`);
-
-                this.eventBus.publish({
-                  type: 'minebot:bot:status',
-                  memoryZone: 'minebot',
-                  data: { serviceCommand: 'start', serverName } as MinebotInput,
-                });
-
+                await dispatchServiceCommand('minebot:bot', 'start', serverName);
                 const result = await spawnPromise;
                 if (result.success) {
                   await interaction.editReply(`🤖 Minebotが **${serverName}** にログインしました！`);
@@ -586,25 +536,8 @@ export class DiscordBot extends BaseClient {
             if (interaction.isChatInputCommand()) {
               await interaction.deferReply();
               try {
-                // 完了イベントを待つ
-                const logoutPromise = new Promise<{ success: boolean; message?: string }>((resolve) => {
-                  const unsubscribe = this.eventBus.subscribe('minebot:stopped', () => {
-                    unsubscribe();
-                    resolve({ success: true });
-                  });
-                  // 30秒でタイムアウト
-                  setTimeout(() => {
-                    unsubscribe();
-                    resolve({ success: false, message: 'timeout' });
-                  }, 30000);
-                });
-
-                this.eventBus.publish({
-                  type: 'minebot:bot:status',
-                  memoryZone: 'minebot',
-                  data: { serviceCommand: 'stop' } as MinebotInput,
-                });
-
+                const logoutPromise = this.waitForMinebotStopped(30000);
+                await dispatchServiceCommand('minebot:bot', 'stop');
                 const result = await logoutPromise;
                 if (result.success) {
                   await interaction.editReply(`👋 Minebotがログアウトしました！`);
@@ -874,24 +807,239 @@ export class DiscordBot extends BaseClient {
     return channelId;
   }
 
-  private setupEventHandlers() {
-    this.eventBus.subscribe('discord:status', async (event) => {
-      const { serviceCommand } = event.data as DiscordClientInput;
-      if (serviceCommand === 'start') {
-        await this.start();
-      } else if (serviceCommand === 'stop') {
-        await this.stop();
-      } else if (serviceCommand === 'status') {
-        this.eventBus.publish({
-          type: 'web:status',
-          memoryZone: 'web',
-          data: {
-            service: 'discord',
-            status: this.status,
-          },
-        });
-      }
+  private waitForServiceStatus(service: string, timeoutMs: number): Promise<string> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        unsub();
+        resolve('timeout');
+      }, timeoutMs);
+      const unsub = getWebNotificationHub().onStatus((payload) => {
+        const data = payload as { service?: string; status?: string };
+        if (data.service === service && data.status) {
+          clearTimeout(timer);
+          unsub();
+          resolve(data.status);
+        }
+      });
     });
+  }
+
+  private waitForMinebotSpawn(timeoutMs: number): Promise<{ success: boolean; message?: string }> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        unsubSpawn();
+        unsubError();
+        resolve({ success: false, message: 'timeout' });
+      }, timeoutMs);
+      const unsubSpawn = onMinebotSpawned(() => {
+        clearTimeout(timer);
+        unsubSpawn();
+        unsubError();
+        resolve({ success: true });
+      });
+      const unsubError = onMinebotError((message) => {
+        clearTimeout(timer);
+        unsubSpawn();
+        unsubError();
+        resolve({ success: false, message });
+      });
+    });
+  }
+
+  private waitForMinebotStopped(timeoutMs: number): Promise<{ success: boolean; message?: string }> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        unsub();
+        resolve({ success: false, message: 'timeout' });
+      }, timeoutMs);
+      const unsub = onMinebotStopped(() => {
+        clearTimeout(timer);
+        unsub();
+        resolve({ success: true });
+      });
+    });
+  }
+
+  private async handlePostMessage(input: DiscordSendTextMessageInput): Promise<void> {
+    if (this.status !== 'running') return;
+    if (!authorizeDiscordOutboundPostMessage(input)) {
+      logger.warn('[Discord] Outbound postMessage rejected: no authorized voice session');
+      return;
+    }
+    const { text, channelId, guildId, imageUrl } = input;
+
+    const activeVoice = authorizeDiscordVoiceOutbound({ guildId, channelId });
+    if (activeVoice && !text?.startsWith('🎤')) {
+      this.voiceManager.notifyTextReply(channelId, text ?? '');
+      logger.info(`[Discord] Voice session ${activeVoice.requestId} captured outbound text for channel ${channelId}`, 'yellow');
+      return;
+    }
+
+    const channel = this.client.channels.cache.get(channelId);
+    const channelName = this.getChannelName(channelId);
+    const guildName = this.getGuildName(channelId);
+    const memoryZone = await getDiscordMemoryZone(guildId);
+
+    if (channel?.isTextBased() && 'send' in channel) {
+      void logToWeb(
+        memoryZone,
+        'white',
+        `${guildName} ${channelName}\nShannon: ${text}`,
+        true,
+      );
+      logger.info(guildName + ' ' + channelName, 'blue');
+      logger.info('shannon: ' + text, 'blue');
+      if (imageUrl) {
+        const content = (text ?? '').slice(0, 2000);
+        try {
+          if (imageUrl.startsWith('/') || imageUrl.startsWith('./') || imageUrl.startsWith('../')) {
+            if (fs.existsSync(imageUrl)) {
+              const fileName = path.basename(imageUrl);
+              const attachment = new AttachmentBuilder(imageUrl, { name: fileName });
+              await channel.send({ content, files: [attachment] });
+            } else {
+              logger.warn(`[Discord] 画像ファイルが見つかりません: ${imageUrl}`);
+              await channel.send({ content: content + '\n(画像ファイルが見つかりませんでした)' });
+            }
+          } else {
+            const embed = { image: { url: imageUrl } };
+            await channel.send({ content, embeds: [embed] });
+          }
+        } catch (imgError) {
+          logger.error('[Discord] 画像送信エラー:', imgError);
+          await sendLongMessage(channel as TextChannel, text ?? '');
+        }
+      } else {
+        await sendLongMessage(channel as TextChannel, text ?? '');
+      }
+      this.voiceManager.notifyTextReply(channelId, text ?? '');
+    }
+  }
+
+  private async handleScheduledPost(memoryZone: MemoryZone, input: DiscordScheduledPostInput): Promise<void> {
+    if (this.status !== 'running') return;
+    const { text, command, imageBuffer } = input;
+    if (
+      command !== 'forecast' &&
+      command !== 'fortune' &&
+      command !== 'about_today' &&
+      command !== 'news_today'
+    ) {
+      return;
+    }
+
+    const message = text ?? '';
+    const sendScheduledPost = async (channel: TextChannel) => {
+      if (imageBuffer) {
+        try {
+          const attachment = new AttachmentBuilder(imageBuffer, { name: `${command}.jpg` });
+          const chunks = splitDiscordMessage(message);
+          await channel.send({ content: chunks[0], files: [attachment] });
+          for (let i = 1; i < chunks.length; i++) {
+            await channel.send(chunks[i]);
+          }
+        } catch (imgErr) {
+          logger.error('[Discord] 定期投稿の画像送信エラー:', imgErr);
+          await sendLongMessage(channel, message);
+        }
+      } else {
+        await sendLongMessage(channel, message);
+      }
+    };
+
+    if (this.isDev) {
+      const xChannelId = this.testXChannelId ?? '';
+      const channel = this.client.channels.cache.get(xChannelId);
+      if (channel?.isTextBased() && 'send' in channel) {
+        await sendScheduledPost(channel as TextChannel);
+      }
+      return;
+    }
+
+    if (memoryZone === 'discord:colab_server') {
+      const colabChannel = this.client.channels.cache.get(this.colabChannelId ?? '');
+      if (colabChannel?.isTextBased() && 'send' in colabChannel) {
+        await sendScheduledPost(colabChannel as TextChannel);
+      }
+    } else if (memoryZone === 'discord:douki_server') {
+      const doukiChannel = this.client.channels.cache.get(this.doukiChannelId ?? '');
+      if (doukiChannel?.isTextBased() && 'send' in doukiChannel) {
+        await sendScheduledPost(doukiChannel as TextChannel);
+      }
+    } else if (memoryZone === 'discord:toyama_server') {
+      const toyamaChannel = this.client.channels.cache.get(this.toyamaChannelId ?? '');
+      if (toyamaChannel?.isTextBased() && 'send' in toyamaChannel) {
+        await sendScheduledPost(toyamaChannel as TextChannel);
+      }
+    } else if (memoryZone === 'discord:test_server') {
+      const testChannelId = this.testXChannelId ?? '';
+      const channel = this.client.channels.cache.get(testChannelId);
+      if (channel?.isTextBased() && 'send' in channel) {
+        await sendScheduledPost(channel as TextChannel);
+      }
+    } else {
+      const xChannelId = this.aiminelabXChannelId ?? '';
+      const channel = this.client.channels.cache.get(xChannelId);
+      if (channel?.isTextBased() && 'send' in channel) {
+        await sendScheduledPost(channel as TextChannel);
+      }
+    }
+  }
+
+  private async handleGetServerEmoji(input: DiscordGetServerEmojiInput): Promise<DiscordGetServerEmojiOutput> {
+    if (!authorizeDiscordOutboundGuildRead(input.guildId)) {
+      return { emojis: [] };
+    }
+    const guild = this.client.guilds.cache.get(input.guildId);
+    if (!guild) return { emojis: [] };
+    return { emojis: guild.emojis.cache.map((emoji) => emoji.toString()) };
+  }
+
+  private async handleSendServerEmoji(input: DiscordSendServerEmojiInput): Promise<DiscordSendServerEmojiOutput> {
+    if (this.status !== 'running') {
+      return { isSuccess: false, errorMessage: 'Discord bot is not running' };
+    }
+    if (!authorizeDiscordOutboundGuildAction(input)) {
+      return { isSuccess: false, errorMessage: 'Outbound guild action denied' };
+    }
+    try {
+      const { guildId, channelId, messageId, emojiId } = input;
+      const guild = this.client.guilds.cache.get(guildId);
+      const channel = this.client.channels.cache.get(channelId);
+      if (!channel?.isTextBased() || !('messages' in channel)) {
+        return { isSuccess: false, errorMessage: 'Invalid channel' };
+      }
+      const message = await channel.messages.fetch(messageId);
+      if (message) {
+        const serverEmoji = guild?.emojis.cache.get(emojiId);
+        if (serverEmoji) {
+          await message.react(serverEmoji);
+        } else {
+          await message.react(emojiId);
+        }
+      }
+      return { isSuccess: true, errorMessage: '' };
+    } catch (error) {
+      const sErr = classifyError(error, 'discord');
+      logger.error(`Error sending server emoji: ${formatErrorForLog(sErr)}`);
+      return { isSuccess: false, errorMessage: sErr.message };
+    }
+  }
+
+  private async handleSubscriberUpdate(data: YoutubeSubscriberUpdateOutput): Promise<void> {
+    if (this.status !== 'running') return;
+    const { subscriberCount } = data;
+    const guildId = config.discord.guilds.aimine.guildId;
+    const guild = this.client.guilds.cache.get(guildId);
+    if (guild) {
+      const channel = guild.channels.cache.get(this.aiminelabAnnounceChannelId ?? '');
+      if (channel?.isTextBased() && 'send' in channel) {
+        await channel.send(`現在のチャンネル登録者数は${subscriberCount}人です。`);
+      }
+    }
+  }
+
+  private setupEventHandlers() {
     // スレッドが作成されたら自動参加（メッセージ受信のため）
     this.client.on('threadCreate', async (thread) => {
       if (!thread.joinable) return;
@@ -1057,29 +1205,26 @@ export class DiscordBot extends BaseClient {
         parentChannelId !== this.colabChannelId
       )
         return;
-      this.eventBus.log(
+      void logToWeb(
         memoryZone,
         'white',
         `${guildName} ${channelName}\n${nickname}: ${contentWithImages}`,
-        true
+        true,
       );
       logger.info(guildName + ' ' + channelName, 'blue');
       logger.info(nickname + ': ' + contentWithImages, 'blue');
-      this.eventBus.publish({
-        type: 'llm:get_discord_message',
-        memoryZone: memoryZone,
-        data: {
-          text: contentWithImages,
-          type: 'text',
-          guildName: memoryZone,
-          channelId: message.channelId,
-          guildId: guildId,
-          channelName: channelName,
-          userName: nickname,
-          messageId: messageId,
-          userId: userId,
-          recentMessages: recentMessages,
-        } as DiscordSendTextMessageOutput,
+      deliverDiscordMessageToLlm({
+        text: contentWithImages,
+        type: 'text',
+        guildName: memoryZone,
+        channelId: message.channelId,
+        guildId: guildId,
+        channelName: channelName,
+        userName: nickname,
+        messageId: messageId,
+        userId: userId,
+        recentMessages: recentMessages,
+        isDM: message.channel.type === ChannelType.DM,
       });
       } catch (err) {
         logger.error('[Discord] messageCreate ハンドラエラー:', err);
@@ -1096,302 +1241,17 @@ export class DiscordBot extends BaseClient {
       const memoryZone = await getDiscordMemoryZone(channel.guildId);
 
       const nickname = this.getUserNickname(speech.user, channel.guildId);
-      this.eventBus.publish({
-        type: 'llm:get_discord_message',
-        memoryZone: memoryZone,
-        data: {
-          audio: speech.content,
-          type: 'realtime_audio',
-          channelId: speech.channelId,
-          userName: nickname,
-          guildId: channel.guild.id,
-          guildName: channel.guild.name,
-          channelName: channel.name,
-          messageId: speech.messageId,
-          userId: speech.userId,
-        } as DiscordClientInput,
-      });
-    });
-
-    // LLMからの応答を処理
-    this.eventBus.subscribe('discord:post_message', async (event) => {
-      if (this.status !== 'running') return;
-      let { text, channelId, guildId, imageUrl } =
-        event.data as DiscordSendTextMessageInput;
-
-      if (voiceResponseChannelIds.has(channelId) && !text?.startsWith('🎤')) {
-        logger.info(`[Discord] Voice processing active, skipping normal text post for channel ${channelId}`, 'yellow');
-        return;
-      }
-
-      const channel = this.client.channels.cache.get(channelId);
-      const channelName = this.getChannelName(channelId);
-      const guildName = this.getGuildName(channelId);
-      const memoryZone = await getDiscordMemoryZone(guildId);
-
-      if (channel?.isTextBased() && 'send' in channel) {
-        this.eventBus.log(
-          memoryZone,
-          'white',
-          `${guildName} ${channelName}\nShannon: ${text}`,
-          true
-        );
-        logger.info(guildName + ' ' + channelName, 'blue');
-        logger.info('shannon: ' + text, 'blue');
-        if (imageUrl) {
-          const content = (text ?? '').slice(0, 2000);
-          try {
-            // ローカルファイルパスの場合はAttachmentBuilderで添付
-            if (imageUrl.startsWith('/') || imageUrl.startsWith('./') || imageUrl.startsWith('../')) {
-              if (fs.existsSync(imageUrl)) {
-                const fileName = path.basename(imageUrl);
-                const attachment = new AttachmentBuilder(imageUrl, { name: fileName });
-                await channel.send({ content, files: [attachment] });
-              } else {
-                logger.warn(`[Discord] 画像ファイルが見つかりません: ${imageUrl}`);
-                await channel.send({ content: content + '\n(画像ファイルが見つかりませんでした)' });
-              }
-            } else {
-              // 外部URLの場合はembed
-              const embed = { image: { url: imageUrl } };
-              await channel.send({ content, embeds: [embed] });
-            }
-          } catch (imgError) {
-            logger.error('[Discord] 画像送信エラー:', imgError);
-            // 画像送信失敗時はテキストだけ送信（クラッシュ防止）
-            await sendLongMessage(channel as TextChannel, text ?? '');
-          }
-        } else {
-          await sendLongMessage(channel as TextChannel, text ?? '');
-        }
-      }
-    });
-    this.eventBus.subscribe('discord:scheduled_post', async (event) => {
-      if (this.status !== 'running') return;
-      const { text, command, imageBuffer } = event.data as DiscordScheduledPostInput;
-      if (
-        command === 'forecast' ||
-        command === 'fortune' ||
-        command === 'about_today' ||
-        command === 'news_today'
-      ) {
-        const message = text ?? '';
-
-        const sendScheduledPost = async (channel: TextChannel) => {
-          if (imageBuffer) {
-            try {
-              const attachment = new AttachmentBuilder(imageBuffer, { name: `${command}.jpg` });
-              const chunks = splitDiscordMessage(message);
-              await channel.send({ content: chunks[0], files: [attachment] });
-              for (let i = 1; i < chunks.length; i++) {
-                await channel.send(chunks[i]);
-              }
-            } catch (imgErr) {
-              logger.error('[Discord] 定期投稿の画像送信エラー:', imgErr);
-              await sendLongMessage(channel, message);
-            }
-          } else {
-            await sendLongMessage(channel, message);
-          }
-        };
-
-        if (this.isDev) {
-          const xChannelId = this.testXChannelId ?? '';
-          const channel = this.client.channels.cache.get(xChannelId);
-          if (channel?.isTextBased() && 'send' in channel) {
-            await sendScheduledPost(channel as TextChannel);
-          }
-        } else {
-          if (event.memoryZone === 'discord:colab_server') {
-            const colabChannel = this.client.channels.cache.get(
-              this.colabChannelId ?? ''
-            );
-            if (colabChannel?.isTextBased() && 'send' in colabChannel) {
-              await sendScheduledPost(colabChannel as TextChannel);
-            }
-          } else if (event.memoryZone === 'discord:douki_server') {
-            const doukiChannel = this.client.channels.cache.get(
-              this.doukiChannelId ?? ''
-            );
-            if (doukiChannel?.isTextBased() && 'send' in doukiChannel) {
-              await sendScheduledPost(doukiChannel as TextChannel);
-            }
-          } else if (event.memoryZone === 'discord:toyama_server') {
-            const toyamaChannel = this.client.channels.cache.get(
-              this.toyamaChannelId ?? ''
-            );
-            if (toyamaChannel?.isTextBased() && 'send' in toyamaChannel) {
-              await sendScheduledPost(toyamaChannel as TextChannel);
-            }
-          } else if (event.memoryZone === 'discord:test_server') {
-            const testChannelId = this.testXChannelId ?? '';
-            const channel = this.client.channels.cache.get(testChannelId);
-            if (channel?.isTextBased() && 'send' in channel) {
-              await sendScheduledPost(channel as TextChannel);
-            }
-          } else {
-            const xChannelId = this.aiminelabXChannelId ?? '';
-            const channel = this.client.channels.cache.get(xChannelId);
-            if (channel?.isTextBased() && 'send' in channel) {
-              await sendScheduledPost(channel as TextChannel);
-            }
-          }
-        }
-        return;
-      }
-    });
-    this.eventBus.subscribe('discord:get_server_emoji', async (event) => {
-      if (this.status !== 'running') return;
-      const data = event.data as DiscordGetServerEmojiInput;
-      const { guildId } = data;
-      const guild = this.client.guilds.cache.get(guildId);
-      const memoryZone = await getDiscordMemoryZone(guildId);
-      if (guild) {
-        const emojis = guild.emojis.cache.map((emoji) => emoji.toString());
-        this.eventBus.publish({
-          type: 'tool:get_server_emoji',
-          memoryZone: memoryZone,
-          data: {
-            emojis: emojis,
-          } as DiscordGetServerEmojiOutput,
-        });
-      }
-    });
-    this.eventBus.subscribe('discord:send_server_emoji', async (event) => {
-      if (this.status !== 'running') return;
-      try {
-        const data = event.data as DiscordSendServerEmojiInput;
-        const { guildId, channelId, messageId, emojiId } = data;
-        const guild = this.client.guilds.cache.get(guildId);
-        const channel = this.client.channels.cache.get(channelId);
-        if (!channel?.isTextBased() || !('messages' in channel)) return;
-        const message = await channel.messages.fetch(messageId);
-        if (message) {
-          // サーバーカスタム絵文字を探す
-          const serverEmoji = guild?.emojis.cache.get(emojiId);
-          if (serverEmoji) {
-            await message.react(serverEmoji);
-          } else {
-            // Unicode 絵文字としてそのまま使う（例: "😂", "👍"）
-            await message.react(emojiId);
-          }
-        }
-        this.eventBus.publish({
-          type: 'tool:send_server_emoji',
-          memoryZone: 'null',
-          data: {
-            isSuccess: true,
-            errorMessage: '',
-          } as DiscordSendServerEmojiOutput,
-        });
-      } catch (error) {
-        const sErr = classifyError(error, 'discord');
-        logger.error(`Error sending server emoji: ${formatErrorForLog(sErr)}`);
-        this.eventBus.publish({
-          type: 'tool:send_server_emoji',
-          memoryZone: 'null',
-          data: {
-            isSuccess: false,
-            errorMessage: sErr.message,
-          } as DiscordSendServerEmojiOutput,
-        });
-      }
-    });
-    this.eventBus.subscribe('discord:planning', async (event) => {
-      if (this.status !== 'running') return;
-      let { planning, channelId, taskId } = event.data as DiscordPlanningInput;
-      const channel = this.client.channels.cache.get(channelId);
-      logger.info(`discord:planning ${taskId}`);
-
-      if (channel?.isTextBased() && 'send' in channel) {
-        const messages = await channel.messages.fetch({ limit: 10 });
-        const existingMessage = messages.find(
-          (msg) =>
-            msg.author.id === this.client.user?.id &&
-            msg.content.includes(`TaskID: ${taskId}`)
-        );
-
-        // ステータスに応じた絵文字を選択
-        const getStatusEmoji = (status: string) => {
-          switch (status) {
-            case 'completed':
-              return '🟢'; // 完了：緑
-            case 'in_progress':
-              return '🔵'; // 進行中：青
-            case 'pending':
-              return '🟡'; // 保留：黄色
-            case 'error':
-              return '🔴'; // エラー：赤
-            default:
-              return '⚪'; // その他：白
-          }
-        };
-
-        const legend = `🟢:完了, 🔵:進行中, 🟡:保留, 🔴:エラー, ⚪:その他`;
-
-        // タスク状態をMarkdown形式に整形
-        let formattedContent = '';
-
-        if (planning.status === 'completed') {
-          if (existingMessage) {
-            await existingMessage.delete();
-          }
-        } else {
-          formattedContent = `TaskID: ${taskId}\n\n${getStatusEmoji(
-            planning.status
-          )} ${planning.goal}\n${planning.strategy}\n`;
-
-          // hierarchicalSubTasks（新フォーマット）がある場合は追加
-          if (planning.hierarchicalSubTasks && planning.hierarchicalSubTasks.length > 0) {
-            planning.hierarchicalSubTasks.forEach((subTask: HierarchicalSubTask) => {
-              const depth = subTask.depth ?? 0;
-              const indent = '  '.repeat(depth + 1);
-              formattedContent += `${indent}${getStatusEmoji(subTask.status)} ${subTask.goal}\n`;
-              if (subTask.result) {
-                formattedContent += `${indent}  → ${subTask.result.substring(0, 100)}\n`;
-              }
-              if (subTask.failureReason) {
-                formattedContent += `${indent}  ✗ ${subTask.failureReason.substring(0, 100)}\n`;
-              }
-            });
-          }
-
-          // subTasks（旧フォーマット互換）がある場合は追加
-          if (planning.subTasks && planning.subTasks.length > 0) {
-            planning.subTasks.forEach((subTask: LegacyPlanSubTask) => {
-              formattedContent += `  ${getStatusEmoji(subTask.subTaskStatus)} ${subTask.subTaskGoal
-                }\n`;
-              formattedContent += `  ${subTask.subTaskStrategy}\n`;
-            });
-          }
-
-          // 既存メッセージがあれば更新、なければ新規送信
-          if (existingMessage) {
-            await existingMessage.edit(
-              `\`\`\`\n${formattedContent}\n\n${legend}\n\`\`\``
-            );
-          } else {
-            await channel.send(
-              `\`\`\`\n${formattedContent}\n\n${legend}\n\`\`\``
-            );
-          }
-        }
-      }
-    });
-    this.eventBus.subscribe('youtube:subscriber_update', async (event) => {
-      if (this.status !== 'running') return;
-      const data = event.data as YoutubeSubscriberUpdateOutput;
-      const { subscriberCount } = data;
-      const guildId = config.discord.guilds.aimine.guildId;
-      const guild = this.client.guilds.cache.get(guildId);
-      if (guild) {
-        const channel = guild.channels.cache.get(
-          this.aiminelabAnnounceChannelId ?? ''
-        );
-        if (channel?.isTextBased() && 'send' in channel) {
-          channel.send(`現在のチャンネル登録者数は${subscriberCount}人です。`);
-        }
-      }
+      deliverDiscordMessageToLlm({
+        audio: speech.content,
+        type: 'realtime_audio',
+        channelId: speech.channelId,
+        userName: nickname,
+        guildId: channel.guild.id,
+        guildName: channel.guild.name,
+        channelName: channel.name,
+        messageId: speech.messageId,
+        userId: speech.userId,
+      } as DiscordClientInput);
     });
   }
 
@@ -1468,10 +1328,10 @@ export class DiscordBot extends BaseClient {
     } catch (error) {
       const sErr = classifyError(error, 'discord');
       logger.error(`Error fetching recent messages: ${formatErrorForLog(sErr)}`);
-      this.eventBus.log(
+      void logToWeb(
         'discord:aiminelab_server',
         'red',
-        `Error fetching recent messages: ${sErr.message}`
+        `Error fetching recent messages: ${sErr.message}`,
       );
       return [];
     }

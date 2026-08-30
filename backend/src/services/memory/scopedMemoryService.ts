@@ -1,3 +1,5 @@
+import { snapshotMemoryEnvelope } from './requestMemory.js';
+import { formatPersonStatements, type PersonStatement } from '../../modules/memory/personMemory.js';
 /**
  * ScopedMemoryService
  *
@@ -22,9 +24,6 @@ import { EmbeddingService } from './embeddingService.js';
 import {
   ShannonMemoryService,
 } from './shannonMemoryService.js';
-import {
-  PersonMemoryService,
-} from './personMemoryService.js';
 import { IPersonMemory } from '../../models/PersonMemory.js';
 import { IShannonMemory } from '../../models/ShannonMemory.js';
 import type {
@@ -56,6 +55,7 @@ export interface ScopedRecallQuery {
 }
 
 export interface ScopedRecallResult {
+  personStatements: PersonStatement[];
   person: IPersonMemory | null;
   memories: IShannonMemory[];
   userProfile: UserProfileSnapshot | null;
@@ -90,14 +90,12 @@ export class ScopedMemoryService {
   private constructor() {
     const embeddingService = EmbeddingService.getInstance();
     const shannonService = ShannonMemoryService.getInstance();
-    const personService = PersonMemoryService.getInstance();
 
     this.scopeDeriver = new ScopeDeriver();
-    this.recallEngine = new RecallEngine(embeddingService, personService);
-    this.formatter = new MemoryFormatter(shannonService, personService);
+    this.recallEngine = new RecallEngine(embeddingService);
+    this.formatter = new MemoryFormatter(shannonService);
     this.writebackProcessor = new WritebackProcessor(
       shannonService,
-      personService,
       (envelope: RequestEnvelope) => this.recallEngine.resolveCanonicalUserId(envelope),
     );
 
@@ -122,7 +120,8 @@ export class ScopedMemoryService {
    * filtered by visibility scope and privacy rules.
    */
   async recall(query: ScopedRecallQuery): Promise<ScopedRecallResult> {
-    const { envelope, text, lightweightMode } = query;
+    const { text, lightweightMode } = query;
+    const envelope = snapshotMemoryEnvelope(query.envelope);
     const userId = this.recallEngine.resolveCanonicalUserId(envelope);
     const channel = envelope.channel;
     const scopeTags = this.scopeDeriver.deriveScopeTags(envelope);
@@ -140,6 +139,7 @@ export class ScopedMemoryService {
       const formattedPrompt = [strategyPrompt, worldModelPrompt].filter(Boolean).join('\n\n');
       return {
         person: null,
+        personStatements: [],
         memories: [],
         userProfile: null,
         relationshipModel: null,
@@ -158,6 +158,8 @@ export class ScopedMemoryService {
 
     // 1. Recall person
     const person = await this.recallEngine.recallPerson(envelope);
+    const personStatements = await this.recallEngine.recallPersonStatements(envelope).catch(() => []);
+    const personPrompt = formatPersonStatements(personStatements);
     const userProfile = this.recallEngine.toUserProfile(person);
     const relationshipModel = this.recallEngine.toRelationshipModel(person, userId);
     const [
@@ -166,9 +168,9 @@ export class ScopedMemoryService {
       internalState,
       worldModelPatterns,
     ] = await Promise.all([
-      this.recallEngine.recallSelfModel(),
+      this.recallEngine.recallSelfModel(envelope),
       this.recallEngine.recallStrategyUpdates(envelope, userId, scopeTags),
-      this.recallEngine.recallInternalState(),
+      this.recallEngine.recallInternalState(envelope),
       this.recallEngine.recallWorldPatterns(envelope, scopeTags),
     ]);
 
@@ -180,6 +182,7 @@ export class ScopedMemoryService {
 
     if (!text) {
       const formattedPrompt = [
+        personPrompt,
         relationshipPrompt,
         selfModelPrompt,
         strategyPrompt,
@@ -188,6 +191,7 @@ export class ScopedMemoryService {
       ].filter(Boolean).join('\n\n');
       return {
         person,
+        personStatements,
         memories: [],
         userProfile,
         relationshipModel,
@@ -205,7 +209,7 @@ export class ScopedMemoryService {
     }
 
     // 2. Semantic search
-    const semanticResults = await this.recallEngine.semanticSearch(text);
+    const semanticResults = await this.recallEngine.semanticSearch(text, envelope);
 
     // 3. Tag-based search
     const tagResults = await this.recallEngine.searchByTags(envelope, text);
@@ -228,10 +232,11 @@ export class ScopedMemoryService {
     const ranked = this.recallEngine.rank(filtered, userId, channel, envelope);
 
     // 7. Format
-    const formattedPrompt = this.formatter.formatForPrompt(ranked);
+    const formattedPrompt = [personPrompt, this.formatter.formatForPrompt(ranked)].filter(Boolean).join('\n\n');
 
     return {
       person,
+      personStatements,
       memories: ranked,
       userProfile,
       relationshipModel,
@@ -262,7 +267,6 @@ export class ScopedMemoryService {
     // (accessed through processPendingWritebacks path, but also callable directly)
     const { AutonomyUpdater } = await import('./writeback/AutonomyUpdater.js');
     const autonomyUpdater = new AutonomyUpdater(
-      PersonMemoryService.getInstance(),
       this.scopeDeriver,
       (env: RequestEnvelope) => this.recallEngine.resolveCanonicalUserId(env),
     );

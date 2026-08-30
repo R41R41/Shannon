@@ -104,7 +104,6 @@ export type WebEventType =
   | "web:post_schedule"
   | "web:log"
   | "web:planning"
-  | "web:emotion"
   | "web:status"
   | "web:skill";
 
@@ -112,4 +111,48 @@ export interface UserInfo {
   name: string;
   email: string;
   isAdmin: boolean;
+  uid?: string;
+  projectId?: string;
+}
+
+export type IdentityChannelKind = 'web' | 'discord' | 'line' | 'minecraft' | 'radar';
+export type BindingStatus = 'linked' | 'unlinked' | 'expired';
+
+export interface ChannelBindingView {
+  channel: IdentityChannelKind;
+  status: BindingStatus;
+  label: string;
+  expiresAtIso?: string;
+}
+
+export interface AudiencePolicyView {
+  memoryChannels: string[];
+  radarPersonalFeed: boolean;
+  lineDeliveryEnabled: boolean;
+}
+
+export interface IdentityStatusResponse {
+  identity: { projectId: string; uid: string; email: string; name: string };
+  bindings: ChannelBindingView[];
+  audience: AudiencePolicyView;
+}
+
+export interface BindingManifestPlanResponse {
+  projectId: string;
+  reviewedBy: string;
+  operationCount: number;
+  unboundAfter: number;
+  sha256: string;
+  operations: Array<{
+    userId: string;
+    email: string;
+    after: { firebaseProjectId: string; firebaseUid: string; isAuthorized: boolean; isAdmin: boolean };
+  }>;
+}
+
+export interface AudienceUpdateRequest {
+  confirm: true;
+  memoryChannels: string[];
+  lineDeliveryEnabled: boolean;
+  radarPersonalFeed: boolean;
 }

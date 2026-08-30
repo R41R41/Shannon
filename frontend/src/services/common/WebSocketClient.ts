@@ -1,3 +1,5 @@
+import { createWebBindSessionMessage } from './webSessionBinding.js';
+
 export type ConnectionStatus = "connecting" | "connected" | "disconnected";
 
 export interface ConnectionInfo {
@@ -17,11 +19,28 @@ export abstract class WebSocketClientBase {
   public status: ConnectionStatus = "disconnected";
   private statusListeners: Array<(status: ConnectionStatus) => void> = [];
   private isConnecting = false;
+  private shouldReconnect = false;
+  private authenticated = false;
+  private tokenProvider?: () => Promise<string>;
+  private authTimeout: ReturnType<typeof setTimeout> | null = null;
+  private webSessionId?: string;
 
   /** EventEmitter-like listener store used by subclasses via on() / emit(). */
   protected listeners: Map<string, Set<Function>> = new Map();
 
   constructor(private url: string) {}
+
+  public setTokenProvider(provider: () => Promise<string>) { this.tokenProvider = provider; }
+
+  public setWebSessionId(sessionId?: string) {
+    const trimmed = sessionId?.trim();
+    this.webSessionId = trimmed || undefined;
+  }
+
+  public bindWebSessionNow() {
+    if (!this.webSessionId || !this.authenticated || this.ws?.readyState !== WebSocket.OPEN) return;
+    this.ws.send(createWebBindSessionMessage(this.webSessionId));
+  }
 
   /**
    * Subscribe to an event. Returns an unsubscribe function.
@@ -47,33 +66,57 @@ export abstract class WebSocketClientBase {
   }
 
   public connect() {
+    this.shouldReconnect = true;
     if (this.isConnecting) return;
     if (this.ws && this.ws.readyState !== WebSocket.CLOSED && this.ws.readyState !== WebSocket.CLOSING) return;
     this.isConnecting = true;
 
     try {
-      this.ws = new WebSocket(this.url);
+      if (this.tokenProvider) {
+        const url = new URL(this.url);
+        if (url.search || url.username || url.password || (url.protocol !== 'wss:' &&
+            !(url.protocol === 'ws:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)))) {
+          throw new Error('Secure WebSocket endpoint required');
+        }
+      }
+      const socket = new WebSocket(this.url);
+      this.ws = socket;
       this.setStatus("connecting");
 
-      this.ws.onopen = () => {
-        this.reconnectAttempts = 0;
-        this.isConnecting = false;
-        this.setStatus("connected");
-        this.startPing();
+      socket.onopen = async () => {
+        if (this.ws !== socket || !this.shouldReconnect) return;
+        if (!this.tokenProvider) { this.markReady(); return; }
+        this.authTimeout = setTimeout(() => socket.close(), 15_000);
+        try {
+          const token = await this.tokenProvider();
+          if (this.ws !== socket || !this.shouldReconnect || socket.readyState !== WebSocket.OPEN) return;
+          socket.send(JSON.stringify({ type: 'auth:check', idToken: token }));
+        } catch { socket.close(); }
       };
 
-      this.ws.onmessage = (event) => {
+      socket.onmessage = (event) => {
+        if (this.ws !== socket || !this.shouldReconnect) return;
+        if (!this.authenticated && this.tokenProvider) {
+          try { if (JSON.parse(event.data)?.type === 'auth:ready') this.markReady(); } catch { socket.close(); }
+          return;
+        }
         this.receivePong(event.data);
         this.handleMessage(event.data);
       };
 
-      this.ws.onclose = () => {
+      socket.onclose = () => {
+        if (this.ws !== socket) return;
+        this.ws = null;
+        this.authenticated = false;
+        if (this.authTimeout) clearTimeout(this.authTimeout);
+        this.stopPing();
         this.isConnecting = false;
         this.setStatus("disconnected");
-        this.reconnect();
+        if (this.shouldReconnect) this.reconnect();
       };
 
-      this.ws.onerror = (error) => {
+      socket.onerror = (error) => {
+        if (this.ws !== socket || !this.shouldReconnect) return;
         console.error("WebSocket error:", error);
       };
     } catch (error) {
@@ -83,7 +126,7 @@ export abstract class WebSocketClientBase {
   }
 
   public send(data: string) {
-    if (this.ws?.readyState === WebSocket.OPEN) {
+    if (this.ws?.readyState === WebSocket.OPEN && this.authenticated) {
       this.ws.send(data);
     } else {
       console.warn("WebSocket is not connected. Current state:", this.status);
@@ -91,6 +134,17 @@ export abstract class WebSocketClientBase {
         this.connect();
       }
     }
+  }
+
+  private markReady() {
+    if (this.authTimeout) clearTimeout(this.authTimeout);
+    this.authTimeout = null;
+    this.authenticated = true;
+    this.reconnectAttempts = 0;
+    this.isConnecting = false;
+    this.setStatus('connected');
+    this.startPing();
+    this.bindWebSessionNow();
   }
 
   private startPing() {
@@ -110,6 +164,10 @@ export abstract class WebSocketClientBase {
   }
 
   private stopPing() {
+    if (this.pingTimeoutId !== null) {
+      clearTimeout(this.pingTimeoutId);
+      this.pingTimeoutId = null;
+    }
     if (this.pingInterval) {
       clearInterval(this.pingInterval);
       this.pingInterval = null;
@@ -121,6 +179,7 @@ export abstract class WebSocketClientBase {
    * 1s → 2s → 4s → 8s → ... 最大 30s、最大 20 回まで。
    */
   private reconnect() {
+    if (!this.shouldReconnect) return;
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
       console.warn(`[WS] Max reconnect attempts (${this.maxReconnectAttempts}) reached for ${this.url}`);
       this.setStatus("disconnected");
@@ -135,7 +194,7 @@ export abstract class WebSocketClientBase {
 
     this.reconnectTimerId = window.setTimeout(() => {
       this.reconnectTimerId = null;
-      this.connect();
+      if (this.shouldReconnect) this.connect();
     }, delay);
   }
 
@@ -187,6 +246,10 @@ export abstract class WebSocketClientBase {
   }
 
   public disconnect() {
+    this.authenticated = false;
+    if (this.authTimeout) clearTimeout(this.authTimeout);
+    this.authTimeout = null;
+    this.shouldReconnect = false;
     this.isConnecting = false;
     this.stopPing();
     if (this.reconnectTimerId !== null) {
@@ -194,8 +257,10 @@ export abstract class WebSocketClientBase {
       this.reconnectTimerId = null;
     }
     if (this.ws) {
-      this.ws.close();
+      const socket = this.ws;
       this.ws = null;
+      socket.close();
     }
+    this.setStatus("disconnected");
   }
 }

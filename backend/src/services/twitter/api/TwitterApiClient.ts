@@ -1,3 +1,4 @@
+import { assertTwitterEnabled } from '../twitterPolicy.js';
 import axios, { isAxiosError } from 'axios';
 import { config } from '../../../config/env.js';
 import { createLogger } from '../../../utils/logger.js';
@@ -41,6 +42,7 @@ export class TwitterApiClient {
   // =========================================================================
 
   public async fetchTweetContent(tweetId: string) {
+    assertTwitterEnabled();
     const endpoint = 'https://api.twitterapi.io/twitter/tweets';
 
     try {
@@ -77,6 +79,7 @@ export class TwitterApiClient {
 
   /** twitter-api-v2 (OAuth 1.0a) 経由でツイート (返信対応) */
   public async postTweetByApi(content: string, replyToId?: string | null) {
+    assertTwitterEnabled();
     try {
       const options: { text: string; reply?: { in_reply_to_tweet_id: string } } = {
         text: content,
@@ -106,6 +109,7 @@ export class TwitterApiClient {
     isTest: boolean = false,
     _retried: boolean = false,
   ): Promise<import('axios').AxiosResponse | undefined> {
+    assertTwitterEnabled();
     // login_cookies が未取得なら自動ログイン
     await this.auth.ensureLoginCookies();
 
@@ -184,6 +188,7 @@ export class TwitterApiClient {
    * twitterapi.io v2 経由でメディアをアップロードし media_id を返す
    */
   public async uploadMedia(imageBuffer: Buffer, filename: string = 'image.png', isRetry: boolean = false): Promise<string | null> {
+    assertTwitterEnabled();
     await this.auth.ensureLoginCookies();
 
     try {
@@ -243,6 +248,7 @@ export class TwitterApiClient {
    * twitterapi.io v2 経由で引用リツイート
    */
   public async postQuoteTweet(content: string, quoteTweetUrl: string) {
+    assertTwitterEnabled();
     await this.auth.ensureLoginCookies();
 
     try {
@@ -278,6 +284,7 @@ export class TwitterApiClient {
 
   /** ツイートにいいね */
   public async likeTweet(tweetId: string) {
+    assertTwitterEnabled();
     try {
       const endpoint = 'https://api.twitterapi.io/twitter/like_tweet';
       const data = {
@@ -295,6 +302,7 @@ export class TwitterApiClient {
 
   /** ツイートをリツイート */
   public async retweetTweet(tweetId: string) {
+    assertTwitterEnabled();
     try {
       const endpoint = 'https://api.twitterapi.io/twitter/retweet_tweet';
       const data = {
@@ -316,6 +324,7 @@ export class TwitterApiClient {
 
   /** 自分の最新ツイートを取得 */
   public async getLatestTweets(userName: string): Promise<TweetData[]> {
+    assertTwitterEnabled();
     try {
       const endpoint = 'https://api.twitterapi.io/twitter/user/last_tweets';
       const options = {
@@ -339,6 +348,7 @@ export class TwitterApiClient {
 
   /** ツイートへの返信を取得 */
   public async getReplies(tweet: TweetData, myUserId: string | null) {
+    assertTwitterEnabled();
     const endpoint = 'https://api.twitterapi.io/twitter/tweet/replies';
     const options = {
       method: 'GET' as const,
@@ -364,6 +374,7 @@ export class TwitterApiClient {
 
   /** advanced_search でツイートを取得 */
   public async advancedSearch(query: string): Promise<TweetData[]> {
+    assertTwitterEnabled();
     const allTweets: TweetData[] = [];
     let nextCursor: string | null = null;
 
@@ -407,6 +418,7 @@ export class TwitterApiClient {
 
   /** トレンドデータを取得 (日本: woeid=23424856) */
   public async fetchTrends(): Promise<import('@shannon/common').TwitterTrendData[]> {
+    assertTwitterEnabled();
     try {
       const res = await axios.get(
         'https://api.twitterapi.io/twitter/trends',
@@ -449,6 +461,7 @@ export class TwitterApiClient {
    * twitterapi.io の Webhook フィルタルールをセットアップし有効化する。
    */
   public async setupWebhookRule(isTest: boolean): Promise<void> {
+    assertTwitterEnabled();
     const baseUrl = config.twitter.webhookBaseUrl;
     const userName = config.twitter.userName;
     if (!baseUrl || !userName) {
@@ -538,6 +551,7 @@ export class TwitterApiClient {
    * twitterapi.io の Webhook フィルタルールを無効化する (is_effect: 0)。
    */
   public async deactivateWebhookRule(isTest: boolean): Promise<void> {
+    assertTwitterEnabled();
     if (!this.webhookRuleId) {
       return;
     }
@@ -574,6 +588,7 @@ export class TwitterApiClient {
    * 引用RT検知用 Webhook ルールをセットアップ。
    */
   public async setupQuoteRTWebhookRule(isTest: boolean): Promise<void> {
+    assertTwitterEnabled();
     const baseUrl = config.twitter.webhookBaseUrl;
     const userName = config.twitter.userName;
     if (!baseUrl || !userName) {
@@ -667,6 +682,7 @@ export class TwitterApiClient {
    * Rate Limit 対応の API 呼び出しラッパー。
    */
   public async callWithRetry<T>(fn: () => Promise<T>, label = 'Twitter API'): Promise<T> {
+    assertTwitterEnabled();
     return retryWithBackoff(fn, { maxRetries: 3, label });
   }
 

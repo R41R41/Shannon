@@ -74,7 +74,7 @@ Channel-specific dispatch
 
 ```
 「原木を10個集めて」
-→ ClassifyNode → FunctionCallingAgent → 70個のスキルで実行 → 完了報告
+→ ShannonExecutor / FunctionCallingAgent → 70個のスキルで実行 → 完了報告
 ```
 
 - 70 個の InstantSkill（移動/採掘/クラフト/戦闘/農業/探索...）
@@ -115,7 +115,6 @@ Shannon2/  (npm workspaces monorepo)
 
 | 役割 | モデル |
 |------|--------|
-| 分類 (ClassifyNode) | gpt-4.1-mini |
 | タスク実行 (FCA) | gpt-4.1-mini → gpt-5-mini-fast → gpt-5 (動的エスカレーション) |
 | 自己改善 (CodeAgent) | Claude Opus / Sonnet |
 

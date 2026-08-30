@@ -7,7 +7,6 @@
  *
  * SSE events:
  *   thinking  — { phase }
- *   emotion   — { emotion, parameters }
  *   task_update — { goal, strategy, status, hierarchicalSubTasks, currentSubTaskId }
  *   meta      — { assessment, suggestion, modelAction, consecutiveSuccesses, consecutiveFailures }
  *   reply     — { text }
@@ -17,10 +16,10 @@
 
 import type { Express, Request, Response } from 'express';
 import type { LLMService } from '../services/llm/client.js';
-import type { EmotionType, TaskTreeState } from '@shannon/common';
+import type { TaskTreeState } from '@shannon/common';
 import { HumanMessage, AIMessage } from '@langchain/core/messages';
 import { webAdapter } from '../services/common/adapters/index.js';
-import { getEventBus } from '../services/eventBus/index.js';
+import { getWebNotificationHub } from '../services/web/webNotificationHub.js';
 import { createLogger } from '../utils/logger.js';
 
 // ---------------------------------------------------------------------------
@@ -142,21 +141,11 @@ export function registerPublicRoutes(app: Express, llmService: LLMService): void
       isAdmin,
     });
 
-    // --- Subscribe to EventBus events ---
-    const eventBus = getEventBus();
     const sid = sessionId ?? 'public-default';
     const unsubscribers: (() => void)[] = [];
 
-    // Emotion events
-    const unsubEmotion = eventBus.subscribe('web:emotion', (event) => {
-      const emotion = event.data as EmotionType;
-      sendSSE(res, 'emotion', emotion);
-    });
-    unsubscribers.push(unsubEmotion);
-
-    // Planning / Task tree events
-    const unsubPlanning = eventBus.subscribe('web:planning', (event) => {
-      const taskTree = event.data as TaskTreeState;
+    const unsubPlanning = getWebNotificationHub().onPlanning((taskTree) => {
+      if (taskTree.sessionId && taskTree.sessionId !== sid) return;
       sendSSE(res, 'task_update', taskTree);
     });
     unsubscribers.push(unsubPlanning);
@@ -209,11 +198,6 @@ export function registerPublicRoutes(app: Express, llmService: LLMService): void
         },
       });
 
-      // Send emotion from final state if available
-      if (result.emotion) {
-        sendSSE(res, 'emotion', result.emotion);
-      }
-
       // Send final task tree if available
       if (result.taskTree) {
         sendSSE(res, 'task_update', result.taskTree);
@@ -245,7 +229,7 @@ export function registerPublicRoutes(app: Express, llmService: LLMService): void
         message: 'シャノンの処理中にエラーが発生しました。もう一度試してみてね！',
       });
     } finally {
-      // Cleanup EventBus subscriptions
+      // Cleanup runtime gateway registrations on shutdown
       unsubscribers.forEach((unsub) => unsub());
 
       // Send done and end stream

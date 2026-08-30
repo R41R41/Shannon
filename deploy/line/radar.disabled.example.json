@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "enabled": false,
+  "hourJst": 8,
+  "minuteJst": 0,
+  "consentExpiresAt": 0,
+  "feeds": [],
+  "weather": null
+}

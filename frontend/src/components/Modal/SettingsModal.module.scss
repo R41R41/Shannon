@@ -179,3 +179,55 @@
 
   &:hover { background: color(surface, tertiary); }
 }
+
+.identityBindings {
+  display: flex;
+  flex-direction: column;
+  gap: spacing(xs);
+  margin-bottom: spacing(md);
+}
+
+.manifestInput {
+  width: 100%;
+  margin: spacing(sm) 0;
+  padding: spacing(sm);
+  border-radius: radius(sm);
+  border: 1px solid color(border, primary);
+  background: color(surface, primary);
+  color: color(text, primary);
+  font-family: monospace;
+  font-size: font-size(xxs);
+}
+
+.identityPlan,
+.identityError {
+  margin-top: spacing(sm);
+  font-size: font-size(xxs);
+  color: color(text, secondary);
+}
+
+.identityError {
+  color: color(error, primary);
+}
+
+.identityConfirmRow {
+  display: flex;
+  align-items: center;
+  gap: spacing(sm);
+  margin-bottom: spacing(sm);
+  font-size: font-size(xxs);
+  color: color(text, secondary);
+}
+
+.identityFormBlock {
+  display: flex;
+  flex-direction: column;
+  gap: spacing(xs);
+  margin-bottom: spacing(md);
+}
+
+.identityActions {
+  display: flex;
+  gap: spacing(sm);
+  flex-wrap: wrap;
+}

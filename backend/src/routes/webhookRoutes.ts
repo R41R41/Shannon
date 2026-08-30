@@ -1,7 +1,8 @@
 import type { Express } from 'express';
-import { TwitterClientInput, TwitterReplyOutput } from '@shannon/common';
+import { TwitterReplyOutput } from '@shannon/common';
 import { config } from '../config/env.js';
-import { getEventBus } from '../services/eventBus/index.js';
+import { getTwitterToolPort } from '../services/runtime/platformToolGateway.js';
+import { deliverTwitterReplyToLlm } from '../services/runtime/llmInboundDispatch.js';
 import { TwitterClient } from '../services/twitter/client.js';
 import { logger } from '../utils/logger.js';
 import { safeAsync } from '../utils/safeAsync.js';
@@ -15,7 +16,7 @@ export function registerWebhookRoutes(app: Express, twitterClient: TwitterClient
   // POST: 実際の Webhook ペイロード受信
   app.post('/api/webhook/twitter', (req, res) => {
     try {
-      if (!twitterClient) {
+      if (!twitterClient || config.twitter.disabled) {
         res.status(503).json({ error: 'Twitter service not available' });
         return;
       }
@@ -57,7 +58,6 @@ export function registerWebhookRoutes(app: Express, twitterClient: TwitterClient
         `[Webhook] Twitter webhook 受信: ${tweets.length}件 (rule: ${rule_tag})${tweets.length > 0 ? ` from:@${tweets[0].author?.userName ?? '?'} "${(tweets[0].text ?? '').slice(0, 60)}"` : ''}`
       );
 
-      const eventBus = getEventBus();
       const myUserId = config.twitter.userId;
       const isQuoteRTWebhook = rule_tag?.includes('quote-rt') ?? false;
       let processed = 0;
@@ -96,11 +96,7 @@ export function registerWebhookRoutes(app: Express, twitterClient: TwitterClient
           );
 
           // いいね
-          eventBus.publish({
-            type: 'twitter:like_tweet',
-            memoryZone: 'twitter:post',
-            data: { tweetId, text: '' } as TwitterClientInput,
-          });
+          void getTwitterToolPort().likeTweet(tweetId);
 
           // 日次返信上限チェック
           if (twitterClient.isReplyLimitReached()) {
@@ -112,22 +108,18 @@ export function registerWebhookRoutes(app: Express, twitterClient: TwitterClient
           twitterClient.incrementReplyCount();
 
           // LLM に返信生成を依頼 (引用RTである文脈を conversationThread で伝える)
-          eventBus.publish({
-            type: 'llm:post_twitter_reply',
-            memoryZone: 'twitter:post',
-            data: {
-              replyId: tweetId,
-              text: tweetText,
-              authorName,
-              authorId: authorId || null,
-              repliedTweet: quotedText || null,
-              repliedTweetAuthorName: quotedAuthor,
-              conversationThread: [
-                { authorName: quotedAuthor, text: `[元ツイート] ${quotedText}` },
-                { authorName, text: `[引用RT] ${tweetText}` },
-              ],
-            } as TwitterReplyOutput,
-          });
+          deliverTwitterReplyToLlm({
+            replyId: tweetId,
+            text: tweetText,
+            authorName,
+            authorId: authorId || null,
+            repliedTweet: quotedText || null,
+            repliedTweetAuthorName: quotedAuthor,
+            conversationThread: [
+              { authorName: quotedAuthor, text: `[元ツイート] ${quotedText}` },
+              { authorName, text: `[引用RT] ${tweetText}` },
+            ],
+          } as TwitterReplyOutput);
 
           processed++;
           continue;
@@ -190,18 +182,14 @@ export function registerWebhookRoutes(app: Express, twitterClient: TwitterClient
           // 後方互換: thread[0] を repliedTweet として渡す
           const rootTweet = thread.length > 0 ? thread[0] : null;
 
-          eventBus.publish({
-            type: 'llm:post_twitter_reply',
-            memoryZone: 'twitter:post',
-            data: {
-              replyId: tweetId,
-              text: tweetText,
-              authorName,
-              repliedTweet: rootTweet?.text ?? null,
-              repliedTweetAuthorName: rootTweet?.authorName ?? null,
-              conversationThread: thread.length > 0 ? thread : null,
-            } as TwitterReplyOutput,
-          });
+          deliverTwitterReplyToLlm({
+            replyId: tweetId,
+            text: tweetText,
+            authorName,
+            repliedTweet: rootTweet?.text ?? null,
+            repliedTweetAuthorName: rootTweet?.authorName ?? null,
+            conversationThread: thread.length > 0 ? thread : null,
+          } as TwitterReplyOutput);
         });
 
         processed++;

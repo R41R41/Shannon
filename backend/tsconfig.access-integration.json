@@ -1,0 +1,39 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": [
+    "src/services/line/**/*.ts",
+    "src/routes/radarRoutes.ts",
+    "src/services/radar/**/*.ts",
+    "src/services/common/discordConversationPort.ts",
+    "src/services/common/webConversationPort.ts",
+    "src/services/discord/conversationTransport.ts",
+    "src/services/discord/planningDelivery.ts",
+    "src/services/web/webConversationTransport.ts",
+    "src/services/common/adapters/discordDispatcher.ts",
+    "src/services/common/adapters/webDispatcher.ts",
+    "src/services/llm/tools/discord/chatOnDiscord.ts",
+    "src/services/llm/tools/discord/getDiscordRecentMessages.ts",
+    "src/services/llm/tools/discord/getServerEmojiOnDiscord.ts",
+    "src/services/llm/tools/discord/reactByServerEmojiOnDiscord.ts",
+    "src/services/llm/tools/utility/chatOnWeb.ts",
+    "src/services/llm/tools/utility/updatePlan.ts",
+    "src/bootstrap/webAccess.ts",
+    "src/routes/modelRoutes.ts",
+    "src/routes/identityRoutes.ts",
+    "src/adapters/identity/StaticIdentityStatusRepository.ts",
+    "src/adapters/identity/MongoIdentityProfileRepository.ts",
+    "src/models/IdentityProfile.ts",
+    "src/adapters/identity/reviewedBindingManifestPlanner.ts",
+    "src/services/web/agents/authAgent.ts",
+    "src/services/web/client.ts",
+    "src/routes/httpSurface.ts",
+    "src/routes/healthRoutes.ts",
+    "src/services/twitter/api/TwitterApiClient.ts",
+    "src/services/twitter/api/TwitterAuthManager.ts",
+    "src/services/llm/graph/requestExecutionCoordinator.ts",
+    "src/services/llm/graph/coordinatedGraphInvocation.ts"
+  ]
+}

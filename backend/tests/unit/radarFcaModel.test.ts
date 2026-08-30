@@ -1,0 +1,16 @@
+import { beforeEach,describe,expect,it,vi } from 'vitest';
+const fake=vi.hoisted(()=>({configs:[] as any[],bind:vi.fn(),invoke:vi.fn()}));
+vi.mock('@langchain/openai',()=>({ChatOpenAI:class{constructor(config:any){fake.configs.push(config);}bindTools=fake.bind;}}));
+import { createRadarFcaModel } from '../../src/services/radar/radarFcaModel.js';
+import { RADAR_DISCOVERY_TOOLS } from '../../src/services/radar/radarDiscovery.js';
+describe('Radar FCA model adapter',()=>{beforeEach(()=>{fake.bind.mockReset();fake.invoke.mockReset();fake.bind.mockReturnValue({invoke:fake.invoke});});
+  it('uses explicit credentials, no retries, fixed limits, nonparallel function calls and preserves tool history',async()=>{fake.invoke.mockResolvedValue({content:'',tool_calls:[{id:'call_submit',name:'submit_personal_digest',args:{items:[]}}]});
+    const model=createRadarFcaModel({apiKey:'fixture-key',model:'fixture-model'});const signal=new AbortController().signal;
+    const result=await model.next({system:'system',tools:RADAR_DISCOVERY_TOOLS,messages:[{role:'user',content:'start'},{role:'assistant',content:'',toolCalls:[{id:'call_y',name:'get_unshared_youtube_videos',arguments:{limit:20}}]},{role:'tool',content:'{"untrustedCandidates":[]}',toolCallId:'call_y'}]},signal);
+    expect(fake.configs.at(-1)).toEqual({apiKey:'fixture-key',model:'fixture-model',maxTokens:1200,maxRetries:0,timeout:30000,temperature:0.4});
+    expect(fake.bind.mock.calls[0][1]).toEqual({parallel_tool_calls:false});expect(fake.bind.mock.calls[0][0]).toHaveLength(4);
+    const [messages,options]=fake.invoke.mock.calls[0];expect(messages).toHaveLength(4);expect(messages[2].tool_calls[0].name).toBe('get_unshared_youtube_videos');expect(messages[3].tool_call_id).toBe('call_y');expect(options.signal).toBe(signal);
+    expect(result.toolCalls[0]).toEqual({id:'call_submit',name:'submit_personal_digest',arguments:{items:[]}});});
+  it('does not start a model call after cancellation',async()=>{const model=createRadarFcaModel({apiKey:'fixture-key',model:'fixture-model'});const c=new AbortController();c.abort(new Error('stopped'));
+    await expect(model.next({system:'x',tools:RADAR_DISCOVERY_TOOLS,messages:[]},c.signal)).rejects.toThrow('stopped');expect(fake.invoke).not.toHaveBeenCalled();});
+});

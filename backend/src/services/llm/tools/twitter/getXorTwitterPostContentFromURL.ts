@@ -1,8 +1,7 @@
+import { assertTwitterEnabled } from '../../../twitter/twitterPolicy.js';
 import { StructuredTool } from '@langchain/core/tools';
 import { z } from 'zod';
-import { getEventBus } from '../../../eventBus/index.js';
-import { EventBus } from '../../../eventBus/eventBus.js';
-import { TwitterClientOutput, TwitterClientInput } from '@shannon/common';
+import { getTwitterToolPort } from '../../../runtime/platformToolGateway.js';
 import { logger } from '../../../../utils/logger.js';
 
 export default class GetXorTwitterPostContentFromURLTool extends StructuredTool {
@@ -17,40 +16,23 @@ export default class GetXorTwitterPostContentFromURLTool extends StructuredTool 
       ),
   });
 
-  private eventBus: EventBus;
-
-  constructor() {
-    super();
-    this.eventBus = getEventBus();
-  }
-
   private extractTweetId(url: string): string | null {
     const match = url.match(/status\/(\d+)/);
     return match ? match[1] : null;
   }
 
   async _call(data: z.infer<typeof this.schema>): Promise<string> {
+    assertTwitterEnabled();
     try {
       const tweetId = this.extractTweetId(data.url);
       if (!tweetId) {
         return 'X(Twitter)の投稿URLを指定してください。';
       }
 
-      const getContent = new Promise<TwitterClientOutput>((resolve) => {
-        const unsubscribe = this.eventBus.subscribe(
-          'tool:get_tweet_content',
-          (event) => {
-            unsubscribe();
-            resolve(event.data as TwitterClientOutput);
-          }
-        );
-        this.eventBus.publish({
-          type: 'twitter:get_tweet_content',
-          memoryZone: 'twitter:get',
-          data: { tweetId } as TwitterClientInput,
-        });
-      });
-      const response = await getContent;
+      const response = await getTwitterToolPort().getTweetContent(tweetId);
+      if (!response) {
+        return 'X(Twitter)の投稿内容を取得できませんでした。';
+      }
 
       return `X(Twitter)の投稿からコンテンツを取得しました。${JSON.stringify(response)} `;
     } catch (error) {
