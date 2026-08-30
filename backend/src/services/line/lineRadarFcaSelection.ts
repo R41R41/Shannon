@@ -8,6 +8,8 @@ export interface LineRadarFcaPorts {
   receipts: RadarDeliveryReceiptPort;
   youtube(owner:string,setting:LineYouTubeSubscriptionsSetting,limit:number,signal:AbortSignal):Promise<readonly RawRadarCandidate[]>;
   youtubeRecommendations?(owner:string,query:string,limit:number,signal:AbortSignal):Promise<readonly RawRadarCandidate[]>;
+  twitter?(owner:string,query:string,limit:number,signal:AbortSignal):Promise<readonly RawRadarCandidate[]>;
+  webSearch?(owner:string,query:string,limit:number,signal:AbortSignal):Promise<readonly RawRadarCandidate[]>;
 }
 interface NewsPreview { items:readonly {contentId:string;sourceId:string;card:{title:string;fact:string;metadata:readonly string[];sourceUrl:string}}[]; }
 interface TemporalPreview { entries:readonly {sourceId:string;content:any;timeZone:string}[]; }
@@ -44,8 +46,8 @@ export async function selectLineRadarDigest(input:{owner:string;policy:LineRadar
   const skills=new RadarDiscoverySkills(input.owner,{
     youtube:async(limit,signal)=>Object.freeze([...(setting?await input.ports.youtube(input.owner,setting,limit,signal):[]),...feedYoutube].slice(0,limit)),
     ...(input.ports.youtubeRecommendations?{youtubeRecommendations:(query:string,limit:number,signal:AbortSignal)=>input.ports.youtubeRecommendations!(input.owner,query,limit,signal)}:{}),
-    twitter:async()=>Object.freeze([]),
-    web:async(_query,limit)=>Object.freeze(web.slice(0,limit)),
+    twitter:async(query,limit,signal)=>input.ports.twitter?input.ports.twitter(input.owner,query,limit,signal):Object.freeze([]),
+    web:async(query,limit,signal)=>Object.freeze([...(input.ports.webSearch?await input.ports.webSearch(input.owner,query,limit,signal):[]),...web].slice(0,limit)),
     ...(input.policy.weather?{weather:async()=>Object.freeze(weather.slice(0,3))}:{}),
     ...(input.policy.calendar?{calendar:async(limit:number)=>Object.freeze(calendar.slice(0,limit))}:{})
   },input.ports.receipts,()=>input.now,{lane:'personal'});

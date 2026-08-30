@@ -25,6 +25,8 @@ import { YouTubeSubscriptionDiscovery } from '../radar/youtubeSubscriptionDiscov
 import { YouTubeRecommendationDiscovery } from '../radar/youtubeRecommendationDiscovery.js';
 import { YouTubeSubscriptionReader } from '../radar/youtubeSubscriptionInbox.js';
 import { issueLineRadarContext, personalRadarOwner } from '../radar/radarAccess.js';
+import { XPublicSearch } from '../radar/xPublicSearch.js';
+import { WebSearchDiscovery } from '../radar/webSearchDiscovery.js';
 
 import { authorizeLinePersonal, authorizeLineRadarPersonal, createMongoLineIdentityPort,
   type LineIdentityPort, type LineWebRadarSync } from './lineIdentityPort.js';
@@ -74,7 +76,9 @@ export async function openLineRuntime(input: { env: Record<string,string>; db: m
   const google = new GoogleRadarOAuthBroker({ clientId: input.env.LINE_GOOGLE_CLIENT_ID ?? '', clientSecret: input.env.LINE_GOOGLE_CLIENT_SECRET ?? '',
     refreshToken: input.env.LINE_GOOGLE_REFRESH_TOKEN ?? '' }, owner);
   const youtubeSearch = new YouTubeDataApiVideoSearch(google);
+  const xSearch = input.env.LINE_X_SEARCH_API_KEY ? new XPublicSearch(input.env.LINE_X_SEARCH_API_KEY) : undefined;
   const webKey = input.env.LINE_WEB_SEARCH_API_KEY ?? '', webEngine = input.env.LINE_WEB_SEARCH_ENGINE_ID ?? '';
+  const webSearch = webKey && webEngine ? new WebSearchDiscovery({ apiKey: webKey, engineId: webEngine }) : undefined;
   let worker: LineRadarWorker;
   const runtime = createLineApplication(config, { state: new MongoLineLedger(input.db),
     chat: config.chatMaxPer24Hours > 0 ? createLineChatModel({ apiKey: input.env.LINE_LLM_API_KEY, model: input.env.LINE_LLM_MODEL, profile: input.profile,
@@ -102,7 +106,15 @@ export async function openLineRuntime(input: { env: Record<string,string>; db: m
       youtubeRecommendations: async (expectedOwner, query, limit, signal) => {
         if (expectedOwner !== owner) throw new Error('LINE_RADAR_OWNER');
         return new YouTubeRecommendationDiscovery(subscriptions, youtubeSearch, owner, () => google.authorizeYouTube(signal)).find(query, limit, signal);
-      } } });
+      },
+      ...(xSearch ? { twitter: async (expectedOwner:string, query:string, limit:number, signal:AbortSignal) => {
+        if (expectedOwner !== owner) throw new Error('LINE_RADAR_OWNER');
+        return xSearch.list(query, limit, signal);
+      } } : {}),
+      ...(webSearch ? { webSearch: async (expectedOwner:string, query:string, limit:number, signal:AbortSignal) => {
+        if (expectedOwner !== owner) throw new Error('LINE_RADAR_OWNER');
+        return webSearch.find(expectedOwner, query, limit, signal);
+      } } : {}) } });
   // Validate all configuration and binding before opening a listener or running a scheduled tick.
   await worker.status(); await runtime.ledger.read();
   const sockets = new Set<Socket>();
