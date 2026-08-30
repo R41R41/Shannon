@@ -45,6 +45,27 @@ async function main() {
     const radarLoad = f => import(pathToFileURL(path.join(root, 'backend/dist/services/radar', f)).href);
     const { MongoPersonalCatalog } = await radarLoad('mongoPersonalCatalog.js');
     const { CATALOG_VALIDATOR } = await import(pathToFileURL(path.join(root,'backend/dist/modules/radar/catalogVersion.js')).href);
+    const { createMongoLineIdentityPort } = await load('lineIdentityPort.js');
+    const { lineRadarPolicyForIdentity } = await load('runtime.js');
+    const { firebasePersonalRadarOwner } = await radarLoad('radarAccess.js');
+    const identityDb = client.db('line_identity_fixture');
+    const firebaseUid = 'fixture-firebase-user'; const projectId = 'fixture-project';
+    const firebaseOwner = firebasePersonalRadarOwner(projectId, firebaseUid);
+    await identityDb.collection('identityprofiles').insertOne({ firebaseProjectId: projectId, firebaseUid,
+      bindings: { line: { externalId: owner, label: 'Fixture LINE', linkedAtIso: new Date(now - 1000).toISOString() } },
+      audience: { memoryChannels: ['web'], lineDeliveryEnabled: true, radarPersonalFeed: true }, revision: 2 });
+    await identityDb.collection('radarpersonalcatalogs').insertOne({ _id: firebaseOwner, owner: firebaseOwner, revision: 1,
+      sources: [{ id: 'web-saved', source: { id: 'web-saved', revision: 1, enabled: true, consentExpiresAt: now + 6 * 86400000,
+        audience: { kind: 'personal', subjectId: firebaseOwner }, kind: 'web', locator: 'https://example.com/feed.xml',
+        articleHosts: ['example.com'], topicIds: ['fixture'], maxItems: 5, retentionMs: 86400000 }, records: [] }], audit: [] });
+    const identityPort = createMongoLineIdentityPort(identityDb);
+    const sync = await identityPort.readWebRadarSync(projectId, owner, now);
+    assert.equal(sync.state, 'linked'); assert.deepEqual(sync.feeds.map(feed => feed.id), ['web-saved']);
+    const syncedPolicy = lineRadarPolicyForIdentity({ version: 1, enabled: true, hourJst: 12, minuteJst: 0,
+      consentExpiresAt: now + 7 * 86400000, feeds: [{ id: 'operator-fallback', kind: 'web', locator: 'https://operator.example/feed.xml',
+        articleHosts: ['operator.example'], topicIds: [], maxItems: 5, retentionMs: 86400000 }], weather: null }, sync, now);
+    assert.deepEqual(syncedPolicy.feeds.map(feed => feed.id), ['web-saved']);
+    assert.equal(syncedPolicy.consentExpiresAt, now + 6 * 86400000);
     const { LineRadarWorker } = await load('radarWorker.js'); const { createLineApplication } = await load('application.js');
     const { parseFeed } = await radarLoad('feedConnector.js');
     const { PersonalTemporalReaders } = await radarLoad('personalTemporalReaders.js');
@@ -95,7 +116,8 @@ async function main() {
     } finally {await isolated.stop();}
     await assert.rejects(()=>fetch('http://127.0.0.1:15040/healthz'));
     result = { reservations: 8, chatWinners: 1, enqueueWinners: 1, claimWinners: 1, reconnectRetainedBudget: true, stopRemovedContent: true, changedOwnerRejected: true,
-      independentBundleRuntime: true, healthWebhookStop: true, nativeLineCatalog: true, concurrentWorkers: 8, scheduledAcquisitions: reads, pendingReconnectSends: sends, quoteAfterSendDeadline: true, normalDatabaseUsed: false, providerCalls: 0, mongoCrashTested: false };
+      independentBundleRuntime: true, healthWebhookStop: true, nativeLineCatalog: true, webSettingsIdentitySync: true,
+      concurrentWorkers: 8, scheduledAcquisitions: reads, pendingReconnectSends: sends, quoteAfterSendDeadline: true, normalDatabaseUsed: false, providerCalls: 0, mongoCrashTested: false };
   } finally {
     await client?.close(); child.kill('SIGTERM');
     const stop = await exited; assert.equal(stop.code, 0); if (result) result.mongoExitCode = stop.code;

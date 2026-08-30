@@ -36,9 +36,9 @@ export function RadarDashboard({ controller, onLogout, isAdmin = false }: {
       <div><p className={styles.eyebrow}>SHANNON / PERSONAL</p><h1>Radar<span>静かに、気になることだけ。</span></h1></div>
       <nav aria-label="Radarナビゲーション">{isAdmin && <a href="/shannonUI">管理コンソール</a>}<button onClick={() => { controller.stop(); onLogout(); }}>ログアウト</button></nav>
     </header>
-    <div className={styles.intro}><div><span className={styles.badge}>本人のみ・非通知</span><p>登録ソースから届いた候補を、最大3件。ここから会話や通知は始まりません。</p></div>
+    <div className={styles.intro}><div><span className={styles.badge}>本人のみ・設定画面</span><p>登録ソースから届いた候補を、最大3件。この画面から会話は始まりません。</p></div>
       <button type="button" onClick={() => void controller.load()} disabled={busy || state.status === 'closed' || state.status === 'hidden'}>{busy ? '確認中…' : '保存内容を再読み込み'}</button></div>
-    <aside className={styles.notice}>開発中：定期実行・Discord投稿は未有効化です。再読み込みは保存済み内容の確認だけです。取得は別の明示操作で、サーバーが接続を許可した場合だけ行えます。</aside>
+    <aside className={styles.notice}>再読み込みは保存済み内容の確認だけです。手動取得は別の明示操作です。LINEを本人連携し「LINE配信」と「個人Radar」を両方許可すると、有効な公開ソースの先頭3件までを日次ダイジェストにも使用します。</aside>
     {state.error && <p role="alert" className={styles.error}>{messages[state.error]}</p>}
     {state.status === 'loading' && <p role="status" className={styles.placeholder}>本人の設定と有効期限を確認しています…</p>}
     {state.status === 'collecting' && <div role="status" className={styles.placeholder}>選択したソースを取得しています。取得中の内容は表示しません。<p>中断しても取得回数は戻らず、保存済みの結果は残る場合があります。</p><button onClick={() => controller.cancelCollection()}>取得を中断</button></div>}
@@ -88,6 +88,7 @@ function ReadyRadar({ controller, data }: { controller: RadarController; data: N
     <section aria-labelledby="sources-title" className={styles.sources}>
       <div className={styles.sectionHeading}><div><h2 id="sources-title">自分のソース</h2><p>公開YouTube / Webフィード。天気・予定とは別に管理します。</p></div>
         <button type="button" disabled={!canAdd} onClick={() => { setEditor('new'); setDeleting(null); setCollecting(false); }}>ソースを追加</button></div>
+      <p className={styles.note}>LINEの日次配信では、ここに並ぶ有効な公開ソースを先頭から最大3件使います。停止中・期限切れのソースは使いません。</p>
       {active.length === 0 && <p className={styles.empty}>ソースはまだ登録されていません。</p>}
       <ul className={styles.sourceList}>{active.map(entry => <li key={entry.id}>
         <div><strong>{entry.id}</strong><span className={styles.sourceState}>{!entry.source!.enabled ? '停止中' : entry.source!.consentExpiresAt <= data.preview.servedAt ? '同意期限切れ' : '同意あり'}</span>

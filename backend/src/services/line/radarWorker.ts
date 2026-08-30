@@ -16,6 +16,7 @@ export interface LineRadarPorts {
   deliver(id: string, authorize: (id: string) => Promise<boolean>): Promise<string>;
   radarFca?: LineRadarFcaPorts;
   authorizePersonal?(lineUserId: string): Promise<void>;
+  authorizeRadarPersonal?(lineUserId: string): Promise<void>;
 }
 const acquisition = { maxPer24Hours: 6, minimumIntervalMs: 0, leaseMs: 30000 };
 /** Background budget for one scheduled attempt. Independent of webhook reply deadlines. */
@@ -37,7 +38,8 @@ export class LineRadarWorker {
   private async authority(policy: LineRadarPolicy, version: number) {
     if (this.stopped.signal.aborted || !this.config.enabled || !policy.enabled || policy.consentExpiresAt <= this.now()
       || lineRadarPolicyHash(await this.policy()) !== lineRadarPolicyHash(policy)) throw new Error('LINE_RADAR_STOPPED');
-    await this.ports.authorizePersonal?.(this.config.personalUserId);
+    if (this.ports.authorizeRadarPersonal) await this.ports.authorizeRadarPersonal(this.config.personalUserId);
+    else await this.ports.authorizePersonal?.(this.config.personalUserId);
     const s = await this.ports.ledger.read();
     if (!s.optedIn || s.consentVersion !== version || s.personalUserId !== this.config.personalUserId) throw new Error('LINE_RADAR_STOPPED');
     return issueLineRadarContext(this.config.botUserId, this.config.personalUserId, Math.min(this.now() + LINE_RADAR_RUN_MS, policy.consentExpiresAt));

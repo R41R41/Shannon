@@ -31,6 +31,10 @@ export function SourceEditor({ entry, onSave, onClose }: {
   return <form className={styles.editor} onSubmit={submit} autoComplete="off">
     <div className={styles.sectionHeading}><h2>{entry ? 'ソースを編集' : 'ソースを追加'}</h2><button type="button" onClick={onClose}>閉じる</button></div>
     <p>公開フィードの設定だけを保存します。この操作で情報取得や通知は始まりません。</p>
+    <details className={styles.note}><summary>登録できる値の確認方法</summary>
+      <p><strong>YouTube：</strong>チャンネルページのURLや @handle ではなく、<code>UC</code>で始まる24文字の公開チャンネルIDを入力します。</p>
+      <p><strong>Web：</strong>ブラウザで読める記事ページではなく、HTTPSのRSS / AtomフィードURLを入力します。記事リンクの許可ホストには、フィード内の記事URLで使われるホスト名だけを指定します。</p>
+    </details>
     <div className={styles.fields}>
       <label>ソースID<input required maxLength={128} value={id} disabled={!!entry} onChange={e => setId(e.target.value)} placeholder="my-youtube" /></label>
       <label>種類<select value={kind} onChange={e => { setKind(e.target.value as SourceInput['kind']); setLocator(''); }}><option value="youtube">YouTube</option><option value="web">Web RSS / Atom</option></select></label>

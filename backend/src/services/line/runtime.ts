@@ -25,7 +25,27 @@ import { YouTubeSubscriptionDiscovery } from '../radar/youtubeSubscriptionDiscov
 import { YouTubeSubscriptionReader } from '../radar/youtubeSubscriptionInbox.js';
 import { issueLineRadarContext, personalRadarOwner } from '../radar/radarAccess.js';
 
-import { authorizeLinePersonal, createMongoLineIdentityPort, type LineIdentityPort } from './lineIdentityPort.js';
+import { authorizeLinePersonal, authorizeLineRadarPersonal, createMongoLineIdentityPort,
+  type LineIdentityPort, type LineWebRadarSync } from './lineIdentityPort.js';
+import { parseLineRadarPolicy, type LineRadarPolicy } from './radarPolicy.js';
+
+export function lineRadarPolicyForIdentity(raw: unknown, sync: LineWebRadarSync, now = Date.now()): LineRadarPolicy {
+  const policy = parseLineRadarPolicy(raw, now);
+  if (sync.state === 'legacy') return policy;
+  const expanded = {
+    ...policy,
+    topics: [...(policy.topics ?? [])],
+    youtubeSubscriptions: policy.youtubeSubscriptions ?? null,
+    calendar: policy.calendar ?? null,
+  };
+  if (sync.state === 'blocked') return parseLineRadarPolicy({ ...expanded, enabled: false, feeds: [], weather: null,
+    topics: [], youtubeSubscriptions: null, calendar: null }, now);
+  const topics = [...new Set([...(policy.topics ?? []), ...sync.topicIds])].slice(0, 20);
+  const consentExpiresAt = Math.min(policy.consentExpiresAt, sync.validUntil);
+  const sourceCount = sync.feeds.length + (policy.weather ? 1 : 0) + (policy.calendar ? 1 : 0) + (policy.youtubeSubscriptions ? 1 : 0);
+  return parseLineRadarPolicy({ ...expanded, enabled: policy.enabled && consentExpiresAt > now && sourceCount > 0,
+    consentExpiresAt, feeds: [...sync.feeds], topics }, now);
+}
 
 /** Independent composition root. Never imports the main server, Discord, shared env or global Mongo connection. */
 export async function openLineRuntime(input: { env: Record<string,string>; db: mongo.Db; readPolicy(): Promise<unknown>;
@@ -42,6 +62,13 @@ export async function openLineRuntime(input: { env: Record<string,string>; db: m
     identityPort = createMongoLineIdentityPort(identityDbClient.db());
   }
   const authorizePersonal = (lineUserId: string) => authorizeLinePersonal(identityPort, identityProjectId, lineUserId);
+  const authorizeRadarPersonal = (lineUserId: string) => authorizeLineRadarPersonal(identityPort, identityProjectId, lineUserId);
+  const readRadarPolicy = async () => {
+    const raw = await input.readPolicy();
+    if (!identityPort || !identityProjectId) return raw;
+    const sync = await identityPort.readWebRadarSync(identityProjectId, config.personalUserId);
+    return lineRadarPolicyForIdentity(raw, sync);
+  };
   const owner = personalRadarOwner(issueLineRadarContext(config.botUserId, config.personalUserId, Date.now()+60000), Date.now());
   const google = new GoogleRadarOAuthBroker({ clientId: input.env.LINE_GOOGLE_CLIENT_ID ?? '', clientSecret: input.env.LINE_GOOGLE_CLIENT_SECRET ?? '',
     refreshToken: input.env.LINE_GOOGLE_REFRESH_TOKEN ?? '' }, owner);
@@ -56,7 +83,7 @@ export async function openLineRuntime(input: { env: Record<string,string>; db: m
       }) })
       : { reply: async () => { throw new Error('LINE_CHAT_DISABLED'); } },
     transport: new LineHttpTransport(config.channelAccessToken),
-    authorizeRuntime: async () => { await input.readPolicy(); },
+    authorizeRuntime: async () => { await readRadarPolicy(); },
     authorizePersonal,
     radar: { status: () => worker.status(), authorizeQuote: id => worker.authorizeQuote(id), conversationVersion: () => worker.conversationVersion() } });
   const receipts = new MongoRadarDeliveryReceipts(input.db);
@@ -64,7 +91,7 @@ export async function openLineRuntime(input: { env: Record<string,string>; db: m
   const uploads = new YouTubeDataApiUploadReader(google);
   worker = new LineRadarWorker(config, { ledger: runtime.ledger, catalog: new MongoPersonalCatalog(input.db),
     feed: new PublicFeedConnector(new SafeFeedHttp()), temporal: new PersonalTemporalReaders(new WeatherReadAdapter(new SafePublicJsonHttp()), new CalendarReadAdapter(google)),
-    readPolicy: input.readPolicy, deliver: runtime.deliver, authorizePersonal,
+    readPolicy: readRadarPolicy, deliver: runtime.deliver, authorizePersonal, authorizeRadarPersonal,
     radarFca: { fca: new RadarFca(createRadarFcaModel({ apiKey: input.env.LINE_LLM_API_KEY ?? '', model: input.env.LINE_LLM_MODEL ?? '' })), receipts,
       youtube: async (expectedOwner, setting, limit, signal) => {
         if (expectedOwner !== owner) throw new Error('LINE_RADAR_OWNER');
