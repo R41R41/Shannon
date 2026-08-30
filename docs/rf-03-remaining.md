@@ -6,29 +6,31 @@
 
 | ID | 項目 | 状態 | 備考 |
 |---|---|---|---|
-| C1 | Identity binding → 会話経路 | 🚧 | Radar HTTP gate + Discord/Web memory gate 配線済。main server Radar 登録・LINE は未 |
+| C1 | Identity binding → 会話経路 | ✅ | main Radar/Discord/Web + LINE runtime gate（`findByLineUserId` / `lineDeliveryEnabled`）。実 LINE 接続は D2 |
 | C2 | 公開 chat / SSE | 🚫 | 503 停止維持。別設計後に復旧 |
 | C3 | Discord 全宛先認可・LLM 権限伝播 | ✅ | scheduled/subscriber outbound gate、memoryDisabled→ツール除外 |
 | C4 | 記憶 scope 実 DB 移行 | 🚫 | 旧データ自動再分類なし |
-| C5 | backend 全体 strict 型検査 | 🚧 | `--noCheck` 変換のみ |
-| C6 | `check:access-integration` 型エラー | 🚧 | Web エージェント系 |
+| C5 | backend 段階 strict 型検査 | ✅ | `check:foundation` + `check:access-integration` + `check:memory-integration` 合格（フル `tsc` は OOM のため対象外） |
+| C6 | `check:access-integration` 型エラー | ✅ | Web/Discord/Voice/LangChain 深い型・migration `.d.ts` 等を解消 |
 
 ## D — Radar / LINE / インフラ
 
 | ID | 項目 | 状態 | 備考 |
 |---|---|---|---|
-| D1 | Radar 個人 feed 本番 runtime | 🚧 | dev 基盤・架空 fixture のみ |
-| D2 | LINE 配備 MVP | 🚫 | 独立 bundle・別工程 |
-| D3 | GitHub Actions 本番 CD | 🚧 | 手動 preflight。main 自動 deploy なし |
+| D1 | Radar 個人 feed 本番 runtime | 🧪 | 隔離 fixture + main server 登録済。`npm run test:radar-catalog-fixture`。本番 validator/実認証は未 |
+| D2 | LINE 配備 MVP | 🧪 | bundle + Mongo fixture + identity gate コード済。`npm run test:line-mongo-fixture` / `test:line-bundle`。実 Webhook/HTTPS 未 |
+| D3 | GitHub Actions 本番 CD | 🧪 | `check-foundation` + automated preflight workflow。main 自動 deploy なし |
 | D4 | `release-preflight.py` 正式実行 | ✅ | 2026-08-30 実行。`ready:false`（dirty worktree・手動証跡・MINEBOT token 等） |
 | D5 | Discord テスト bot・LLM 費用上限 | ⏳ | R0 入力待ち |
 
 ## 優先順位（実装）
 
-1. **C1** — `IdentityProfile` を Radar HTTP / Discord テキストの owner 解決に接続
-2. **C3** — Discord テキスト outbound 残経路
-3. **D4** — main マージ後 preflight 実行
-4. **C5/C6** — 型エラー段階解消
+1. **D1 本番接続** — Mongo validator 適用 + 実 Firebase + 個人 feed/天気限定本番
+2. **D3 手動 cutover** — 手動証跡完了後 preflight `ready:true` → 別承認 deploy
+3. **D2 実 LINE** — permit/env + HTTPS Webhook + 実スマホ受信
+4. **C2/C4** — 公開 chat / 記憶 scope DB 移行（別設計）
+
+検証手順: [release-test-harness.md](release-test-harness.md)
 
 ## 関連
 

@@ -1,4 +1,5 @@
 import type {
+  DiscordClientInput,
   DiscordSendTextMessageOutput,
   DiscordVoiceMessageOutput,
   MemberTweetInput,
@@ -13,15 +14,28 @@ import type {
 } from '@shannon/common';
 import { getLlmInbound } from './llmInboundRegistry.js';
 
-export function deliverWebMessageToLlm(
-  message: OpenAIMessageOutput & { recentChatLog?: string[]; sessionId?: string },
-): void {
+export type WebInboundMessage = {
+  type?: string;
+  text?: string;
+  senderName?: string;
+  recentChatLog?: string[] | string;
+  sessionId?: string;
+  sourceUserId?: string;
+  realtime_text?: string;
+  realtime_audio?: string;
+  command?: string | null;
+};
+
+export type DiscordInboundMessage =
+  | DiscordSendTextMessageOutput
+  | DiscordVoiceMessageOutput
+  | DiscordClientInput;
+
+export function deliverWebMessageToLlm(message: WebInboundMessage): void {
   getLlmInbound().handleWebMessage(message);
 }
 
-export function deliverDiscordMessageToLlm(
-  message: DiscordSendTextMessageOutput | DiscordVoiceMessageOutput,
-): void {
+export function deliverDiscordMessageToLlm(message: DiscordInboundMessage): void {
   getLlmInbound().handleDiscordMessage(message);
 }
 

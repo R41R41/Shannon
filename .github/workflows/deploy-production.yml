@@ -67,5 +67,11 @@ jobs:
             [ -z "$(git status --porcelain)" ] || { echo 'Production is dirty; refusing to proceed'; exit 1; }
             git fetch origin "$RELEASE_SHA"
             git merge-base --is-ancestor 95426bb0cb71e3c8523aebe3ee477cc89fae7ebd "$RELEASE_SHA"
-            echo 'Candidate includes preserved production changes. No deployment performed.'
-            echo 'Complete readiness, user migration, backup/restore and rollback review before a separately approved cutover.'
+            DEV_ROOT="/home/azureuser/Shannon-dev"
+            CANDIDATE_DIR="/tmp/shannon-candidate-${RELEASE_SHA}"
+            cd "$DEV_ROOT"
+            git worktree add --detach "$CANDIDATE_DIR" "$RELEASE_SHA"
+            python3 "$CANDIDATE_DIR/scripts/release-preflight.py" --candidate "$CANDIDATE_DIR" --production "$DEPLOY_ROOT" --automated-only
+            git -C "$DEV_ROOT" worktree remove --force "$CANDIDATE_DIR"
+            echo 'Automated candidate preflight passed. No deployment performed.'
+            echo 'Complete manual cutover evidence before a separately approved production switch.'

@@ -3,16 +3,28 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const net = require('node:net');
+const { spawn } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
 async function main() {
   const root = fs.realpathSync(path.join(__dirname, '..'));
   assert.equal(root, '/home/azureuser/Shannon-dev');
   assert.deepEqual(process.argv.slice(2), ['--isolated-fixture']);
   assert(fs.existsSync(path.join(root, '.dev-runtime-lock')));
+  await new Promise((resolve, reject) => { const probe = net.createServer(); probe.once('error', reject); probe.listen(37029, '127.0.0.1', () => probe.close(resolve)); });
+  const out = '/home/azureuser/.codex-shannon-preservation/radar-catalog-20260830';
+  fs.mkdirSync(out, { recursive: true, mode: 0o700 });
+  const data = fs.mkdtempSync(path.join(out, 'mongo-'));
+  fs.chmodSync(data, 0o700);
+  const mongoChild = spawn('mongod', ['--dbpath', data, '--bind_ip', '127.0.0.1', '--port', '37029', '--journal', '--logpath', path.join(data, 'mongod.log')], { stdio: 'ignore' });
   const mongoose = require('mongoose');
-  const client = new mongoose.mongo.MongoClient('mongodb://127.0.0.1:37029/shannon_radar_fixture', { serverSelectionTimeoutMS: 5000 });
-  await client.connect();
+  let client;
   try {
+    for (let i = 0; i < 50; i++) {
+      client = new mongoose.mongo.MongoClient('mongodb://127.0.0.1:37029/shannon_radar_fixture', { serverSelectionTimeoutMS: 200, socketTimeoutMS: 5000 });
+      try { await client.connect(); break; } catch { await client.close(); client = undefined; await new Promise(r => setTimeout(r, 100)); }
+    }
+    assert(client);
     const db = client.db('shannon_radar_fixture');
     assert.deepEqual(await db.listCollections({}, { nameOnly: true }).toArray(), [], 'New empty fixture database required');
     const load = file => import(pathToFileURL(path.join(root, 'backend/dist', file)).href);
@@ -183,6 +195,12 @@ async function main() {
       singleConnectorCallForEightClaims: true, reservationSurvivesReload: true, recoveryDoesNotRefund: true, ownerScopedPhysicalPurge: true,
       singleCASWinner: true, ownerIsolation: true, repositoryReloadRead: true, contentAndAuditAtomic: true,
       revocationErasesMetadata: true, tombstoneReplayDenied: true, onlyFixtureCollection: true, noSecondaryIndex: true }));
-  } finally { await client.close(); }
+  } finally {
+    await client?.close();
+    if (mongoChild.exitCode === null) {
+      mongoChild.kill('SIGTERM');
+      await new Promise(resolve => mongoChild.once('exit', resolve));
+    }
+  }
 }
 main().catch(error => { console.error('ISOLATED_RADAR_CATALOG_PROBE_FAILED', error.code ?? error.name); process.exitCode = 1; });

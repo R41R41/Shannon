@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { config } from '../../../../config/env.js';
 import { logger } from '../../../../utils/logger.js';
 
-export default class GoogleSearchTool extends StructuredTool {
+export default class GoogleSearchTool extends StructuredTool<any, any, any, string> {
   name = 'google-search';
   description = 'A Google search tool using Custom Search JSON API. Supports query, dateRestrict, siteSearch, num, start, sort, filter, gl, lr.';
   schema = z.object({

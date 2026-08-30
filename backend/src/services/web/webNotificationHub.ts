@@ -2,7 +2,7 @@ import type {
   Color,
   ILog,
   MemoryZone,
-  OpenAITextInput,
+  OpenAIMessageOutput,
   SchedulerOutput,
   ServiceOutput,
   SkillInfo,
@@ -14,15 +14,22 @@ import { logger } from '../../utils/logger.js';
 
 type Unsub = () => void;
 
-export type WebPlanningPayload = TaskTreeState & {
+export type WebPlanningPayload = Partial<TaskTreeState> & {
   sessionId?: string;
   conversationId?: string;
   taskId?: string;
 };
 
-export type WebPostMessagePayload = OpenAITextInput & {
+export type WebPostMessagePayload = {
+  type?: string;
   sessionId?: string;
   conversationId?: string;
+  senderName?: string;
+  recentChatLog?: string[] | string;
+  text?: string;
+  realtime_text?: string;
+  realtime_audio?: string;
+  command?: string | null;
 };
 
 /** In-process Web UI notifications. Not a global authorization bus. */

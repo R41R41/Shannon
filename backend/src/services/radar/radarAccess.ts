@@ -9,6 +9,10 @@ export interface LineRadarContext { readonly kind: 'line-radar'; readonly expire
 export type RadarContext = RequestContext | LineRadarContext;
 export type ReauthorizeRadar = () => Promise<RadarContext>;
 const lineGrants = new WeakMap<LineRadarContext, string>();
+export function firebasePersonalRadarOwner(projectId: string, uid: string): string {
+  if (!projectId || !uid) throw new PersonalRadarError('INVALID_INPUT');
+  return 'firebase:' + createHash('sha256').update(JSON.stringify([projectId, uid])).digest('hex');
+}
 /** Trusted server factory only. LINE ingress/worker must verify signed identity and durable consent first.
  * Opaque in-process grant: JSON copies cannot mint authority; it never impersonates a Firebase UID. */
 export function issueLineRadarContext(botUserId: string, userId: string, expiresAtMs: number): LineRadarContext {
@@ -26,6 +30,5 @@ export function personalRadarOwner(context: RadarContext, now = Date.now()): str
     return owner;
   }
   requireCapability(context, 'profile:read', now);
-  if (!context.principal.projectId || !context.principal.uid) throw new PersonalRadarError('INVALID_INPUT');
-  return 'firebase:' + createHash('sha256').update(JSON.stringify([context.principal.projectId, context.principal.uid])).digest('hex');
+  return firebasePersonalRadarOwner(context.principal.projectId, context.principal.uid);
 }

@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      NODE_OPTIONS: --max-old-space-size=3072
+      NODE_OPTIONS: --max-old-space-size=12288
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -19,9 +19,7 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts --legacy-peer-deps --no-audit --no-fund
       - run: npm run build -w common
-      - run: npm run check:foundation -w backend
-      - run: npm run check:access-integration -w backend
-      - run: npm run check:memory-integration -w backend
+      - run: npm run check:backend-strict -w backend
       - run: npm run check:dead-code
       - run: npm run test:offline -w backend
       - run: npm run test:auth -w frontend

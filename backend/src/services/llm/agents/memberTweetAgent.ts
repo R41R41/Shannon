@@ -25,7 +25,7 @@ export interface MemberTweetResult {
 // Tool 1: submit_reply
 // ---------------------------------------------------------------------------
 
-class SubmitReplyTool extends StructuredTool {
+class SubmitReplyTool extends StructuredTool<any, any, any, string> {
   name = 'submit_reply';
   description =
     '個人的な会話・雑談・ツッコミなど、直接返信が適切な場合に使う。';
@@ -42,7 +42,7 @@ class SubmitReplyTool extends StructuredTool {
 // Tool 2: submit_quote_rt
 // ---------------------------------------------------------------------------
 
-class SubmitQuoteRTTool extends StructuredTool {
+class SubmitQuoteRTTool extends StructuredTool<any, any, any, string> {
   name = 'submit_quote_rt';
   description =
     '成果報告・告知・フォロワーに共有したい話題など、引用リツイートが適切な場合に使う。';
@@ -63,7 +63,7 @@ const MAX_ITERATIONS = 3;
 
 export class MemberTweetAgent extends BaseAgent {
   private constructor(systemPrompt: string) {
-    super(systemPrompt, [new SubmitReplyTool(), new SubmitQuoteRTTool()]);
+    super(systemPrompt, [new SubmitReplyTool(), new SubmitQuoteRTTool()] as unknown as StructuredTool[]);
   }
 
   public static async create(): Promise<MemberTweetAgent> {

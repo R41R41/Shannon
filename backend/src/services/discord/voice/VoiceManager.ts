@@ -49,7 +49,7 @@ const logger = createLogger('Discord:Voice');
 import { getDiscordMemoryZone } from '../../../utils/discord.js';
 import { loadFillers, generateAllFillers } from '../voiceFiller.js';
 import { sendLongMessage } from '../utils.js';
-import { deliverDiscordMessageToLlm } from '../../runtime/llmInboundDispatch.js';
+import { deliverDiscordMessageToLlm, type DiscordInboundMessage } from '../../runtime/llmInboundDispatch.js';
 import { dispatchMinebotVoiceChat } from '../../runtime/minebotInboundRegistry.js';
 import { registerVoiceGateway, type VoiceGateway } from '../../runtime/voiceGateway.js';
 
@@ -539,7 +539,7 @@ export class VoiceManager implements VoiceGateway {
         userId: lastUserId ?? interaction.user.id,
         userName: lastUserName ?? this.helpers.getUserNickname(interaction.user, guildId),
         recentMessages,
-      } as unknown as DiscordClientInput);
+      } as DiscordInboundMessage);
 
       logger.info(`[Discord Voice] Generate response from text: "${lastUserText}" by ${lastUserName}`, 'cyan');
       await interaction.editReply(`💬 「${lastUserText}」に対する音声回答を生成中…`);
@@ -851,7 +851,7 @@ export class VoiceManager implements VoiceGateway {
         userId,
         userName: nickname,
         recentMessages,
-      } as unknown as DiscordClientInput);
+      } as DiscordInboundMessage);
     } finally {
       this.voiceProcessingLock.set(guildId, false);
     }

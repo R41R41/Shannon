@@ -38,6 +38,7 @@ export type {
   WritableChannelKind,
   StoredChannelBinding,
   IdentityProfileRecord,
+  IdentityProfileRepository,
   LinkBindingInput,
   UnlinkBindingInput,
   AudienceUpdateInput,

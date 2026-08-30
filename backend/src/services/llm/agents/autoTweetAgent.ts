@@ -135,7 +135,7 @@ function formatTweet(t: Record<string, unknown>): string {
 // Tools (unchanged)
 // ---------------------------------------------------------------------------
 
-class SearchTweetsTool extends StructuredTool {
+class SearchTweetsTool extends StructuredTool<any, any, any, string> {
   name = 'search_tweets';
   description = `キーワードでツイートを検索する（人気順）。Twitterの高度検索構文をフルサポート。
 使用例:
@@ -165,7 +165,7 @@ class SearchTweetsTool extends StructuredTool {
   }
 }
 
-class GetTweetRepliesTool extends StructuredTool {
+class GetTweetRepliesTool extends StructuredTool<any, any, any, string> {
   name = 'get_tweet_replies';
   description = '特定ツイートへの返信一覧を取得する。会話の流れや反応を確認するのに使う。';
   schema = z.object({
@@ -187,7 +187,7 @@ class GetTweetRepliesTool extends StructuredTool {
   }
 }
 
-class GetTweetDetailsTool extends StructuredTool {
+class GetTweetDetailsTool extends StructuredTool<any, any, any, string> {
   name = 'get_tweet_details';
   description = 'ツイートIDから詳細情報（本文、著者、エンゲージメント）を取得する。';
   schema = z.object({ tweetId: z.string().describe('ツイートID') });
@@ -206,7 +206,7 @@ class GetTweetDetailsTool extends StructuredTool {
   }
 }
 
-class GetUserTweetsTool extends StructuredTool {
+class GetUserTweetsTool extends StructuredTool<any, any, any, string> {
   name = 'get_user_tweets';
   description = '特定ユーザーの最新ツイートを取得する。';
   schema = z.object({
@@ -228,7 +228,7 @@ class GetUserTweetsTool extends StructuredTool {
   }
 }
 
-class GetUserProfileTool extends StructuredTool {
+class GetUserProfileTool extends StructuredTool<any, any, any, string> {
   name = 'get_user_profile';
   description = 'ユーザーのプロフィール情報を取得する。';
   schema = z.object({ userName: z.string().describe('Twitterユーザー名（@なし）') });
@@ -258,7 +258,7 @@ class GetUserProfileTool extends StructuredTool {
   }
 }
 
-class GoogleSearchTool extends StructuredTool {
+class GoogleSearchTool extends StructuredTool<any, any, any, string> {
   name = 'google_search';
   description = 'Googleでキーワード検索する。トレンドの背景情報をWeb上から調べるのに使う。';
   schema = z.object({
@@ -284,7 +284,7 @@ class GoogleSearchTool extends StructuredTool {
   }
 }
 
-class ExploreTrendTweetsTool extends StructuredTool {
+class ExploreTrendTweetsTool extends StructuredTool<any, any, any, string> {
   name = 'explore_trend_tweets';
   description = 'トレンドキーワードの最新ツイートをリアルタイムで探索する。最新順で取得。';
   schema = z.object({
@@ -313,7 +313,7 @@ class ExploreTrendTweetsTool extends StructuredTool {
   }
 }
 
-class AnalyzeTweetImageTool extends StructuredTool {
+class AnalyzeTweetImageTool extends StructuredTool<any, any, any, string> {
   name = 'analyze_tweet_image';
   description = 'ツイートに添付された画像をAIで解析する。';
   schema = z.object({ tweetId: z.string().describe('解析するツイートのID') });
@@ -347,7 +347,7 @@ class AnalyzeTweetImageTool extends StructuredTool {
 // Tool: submit_exploration (replaces submit_tweet for FCA)
 // ---------------------------------------------------------------------------
 
-class SubmitExplorationTool extends StructuredTool {
+class SubmitExplorationTool extends StructuredTool<any, any, any, string> {
   name = 'submit_exploration';
   description = '探索が完了したら、このツールで探索結果を提出する。ツイート文を書く必要はない。素材だけ返せ。';
   schema = z.object({
@@ -395,7 +395,7 @@ export class AutoTweetAgent {
       new ExploreTrendTweetsTool(),
       new AnalyzeTweetImageTool(),
       new SubmitExplorationTool(),
-    ];
+    ] as unknown as StructuredTool[];
     this.toolMap = new Map(this.tools.map((t) => [t.name, t]));
   }
 

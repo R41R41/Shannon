@@ -26,9 +26,11 @@ import { registerWebhookRoutes } from './routes/webhookRoutes.js';
 import { registerPublicRoutes } from './routes/publicRoutes.js';
 import { startNightlySelfImproveScheduler } from './services/llm/graph/cognitive/selfImprove/NightlySelfImproveScheduler.js';
 import { registerIdentityBindingLookup } from './services/runtime/identityBindingGateway.js';
+import { registerMainRadarRoutes } from './bootstrap/mainRadar.js';
 
 class Server {
   private readonly webAccess = createWebAccess(config.webAuth.firebaseProjectId);
+  private app!: express.Application;
   private llmService: LLMService;
   private discordBot: DiscordBot | null = null;
   private webClient: WebClient | null = null;
@@ -97,6 +99,7 @@ class Server {
 
   private startHTTPServer() {
     const app = express();
+    this.app = app;
     app.use(protectHttpSurface(this.webAccess.access));
     app.use(express.json({ limit: '128kb' }));
 
@@ -170,7 +173,18 @@ class Server {
       findForContext: (context) => profiles.find(context),
       findByDiscordUserId: (projectId, discordUserId) => profiles.findByDiscordUserId(projectId, discordUserId),
       findByFirebaseUid: (projectId, firebaseUid) => profiles.findByFirebaseUid(projectId, firebaseUid),
+      findByLineUserId: (projectId, lineUserId) => profiles.findByLineUserId(projectId, lineUserId),
     });
+    const db = mongoose.connection.db;
+    if (db) {
+      registerMainRadarRoutes(this.app, {
+        access: this.webAccess.access,
+        profiles,
+        db,
+        weatherEnabled: process.env.RADAR_WEATHER_ENABLED === 'true',
+      });
+      logger.info('Main Radar routes registered', 'blue');
+    }
 
     // --- 必須サービスの起動 ---
     // LLM と Web は失敗時にサーバーを停止する

@@ -38,4 +38,5 @@ export interface IdentityBindingLookup {
   findForContext(context: RequestContext): Promise<IdentityProfileRecord | null>;
   findByDiscordUserId(projectId: string, discordUserId: string): Promise<IdentityProfileRecord | null>;
   findByFirebaseUid(projectId: string, firebaseUid: string): Promise<IdentityProfileRecord | null>;
+  findByLineUserId(projectId: string, lineUserId: string): Promise<IdentityProfileRecord | null>;
 }
