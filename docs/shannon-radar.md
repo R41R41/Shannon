@@ -538,3 +538,9 @@ LINE policyは登録YouTube、Calendar、天気、最大3件の選択feedと話�
 新しい専用DBでは起動前スクリプトが空DBだけに`radarpersonalcatalogs`と`radardeliveryreceipts`のstrict/error validator、および`linechannelledgers`を作成する。既存collection、通常DB、既存ShannonのDBを自動変更しない。起動時は両validatorの完全一致をread-only確認する。独立bundleは45入力で、DB schema bundleも同時生成する。
 
 検証はbackend offline 1,006件、foundation境界、対象通常型検査、全backend noCheck変換、独立bundle build、架空Mongo validator、実OpenAI FCA（架空候補）、専用Google OAuthの実APIで実施した。Google Cloud projectではCalendar APIを有効化し、YouTube登録件数とCalendar件数だけを確認し、題名/IDをログへ出していない。全backend通常`tsc`は既存巨大コードで約4GiB上限に達したため合格実績に含めない。実LINE webhook/端末受信、配信停止、再起動時重複防止、本番独立service/nginxはこの節の作成時点では次の工程である。
+
+## 未登録YouTubeチャンネル開拓（RAD-YT-REC-1）
+
+個人LINE laneに限り、登録チャンネル新着が弱い場合だけ discover_new_youtube_channels を1 run 1回呼べる。本人のYouTube read-only OAuthで現在の登録チャンネルを全件再確認し、承認済みtopicの公開検索から登録済みchannel IDを除外する。対象は直近30日・最大8件で、検索と登録取得の前後に同じbinding/revisionを再照合する。
+
+候補は既存のrun内candidate registryとinsert-only delivery receiptへ合流する。選ばれなかった候補はreceiptを予約せず、選ばれたvideo IDは登録新着と同じYouTube namespaceで再共有を防ぐ。タイトル、URL、channel ID、検索結果は監査DBへ保存しない。community lane、会話FCA、送信adapterにはこの能力を渡さない。候補0件は正常な沈黙とする。

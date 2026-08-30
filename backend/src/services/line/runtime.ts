@@ -22,6 +22,7 @@ import { createRadarFcaModel } from '../radar/radarFcaModel.js';
 import { MongoRadarDeliveryReceipts } from '../radar/mongoRadarDeliveryReceipts.js';
 import { YouTubeDataApiSubscriptionTransport, YouTubeDataApiUploadReader } from '../radar/youtubeDataApi.js';
 import { YouTubeSubscriptionDiscovery } from '../radar/youtubeSubscriptionDiscovery.js';
+import { YouTubeRecommendationDiscovery } from '../radar/youtubeRecommendationDiscovery.js';
 import { YouTubeSubscriptionReader } from '../radar/youtubeSubscriptionInbox.js';
 import { issueLineRadarContext, personalRadarOwner } from '../radar/radarAccess.js';
 
@@ -97,6 +98,10 @@ export async function openLineRuntime(input: { env: Record<string,string>; db: m
         if (expectedOwner !== owner) throw new Error('LINE_RADAR_OWNER');
         return new YouTubeSubscriptionDiscovery(subscriptions, uploads, owner, () => google.authorizeYouTube(signal),
           setting.baselineAt, setting.maxSubscriptions).find(Math.min(limit, setting.maxCandidates), signal);
+      },
+      youtubeRecommendations: async (expectedOwner, query, limit, signal) => {
+        if (expectedOwner !== owner) throw new Error('LINE_RADAR_OWNER');
+        return new YouTubeRecommendationDiscovery(subscriptions, youtubeSearch, owner, () => google.authorizeYouTube(signal)).find(query, limit, signal);
       } } });
   // Validate all configuration and binding before opening a listener or running a scheduled tick.
   await worker.status(); await runtime.ledger.read();
