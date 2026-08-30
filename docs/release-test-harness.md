@@ -9,7 +9,9 @@ cd /home/azureuser/Shannon-dev
 npm run test:release-fixtures
 ```
 
-含む: common/backend build → Radar catalog fixture → LINE Mongo fixture → LINE bundle build → `check:backend-strict` → `test:offline`
+含む: common/backendのclean build → dist実行時composition smoke → Radar catalog fixture → LINE Mongo fixture → LINE bundle build → `check:backend-strict` → `test:offline`
+
+clean buildは、移動・削除済みTypeScriptソースの古いJavaScriptが`backend/dist`に残って現行toolを上書きする事故を防ぐ。composition smokeは実際のdistから全toolを読み、run scoped tool生成とtool名の一意性を確認する。
 
 ## D1 — Radar 個人 feed runtime
 
@@ -46,9 +48,9 @@ npm run test:release-fixtures
 |---|---|
 | `npx vitest run tests/unit/lineIdentityGate.test.ts` | binding + `lineDeliveryEnabled` gate |
 | `PUT /api/identity/bindings/line` | main server（Settings UI） |
-| LINE runtime | `LINE_FIREBASE_PROJECT_ID` + `LINE_IDENTITY_MONGODB_URI` 設定時に `authorizePersonal` 有効 |
+| LINE runtime | `LINE_FIREBASE_PROJECT_ID` + `LINE_IDENTITY_MONGODB_URI` 設定時に通常LINEは`lineDeliveryEnabled`、定期Radarはさらに`radarPersonalFeed`を要求 |
 
-未設定時は従来どおり gate 無効（profile 未保存と同じ）。
+profile未保存時は従来互換。保存済みprofileが停止ならfail closed。Webの有効なYouTube/RSSは本人catalogから最大3件だけを読み、LINE側の保護policyへ動的に縮約する。元ソースの同意期限は延長しない。
 
 ## 関連
 
