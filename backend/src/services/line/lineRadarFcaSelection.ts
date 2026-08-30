@@ -7,6 +7,7 @@ export interface LineRadarFcaPorts {
   fca: RadarFca;
   receipts: RadarDeliveryReceiptPort;
   youtube(owner:string,setting:LineYouTubeSubscriptionsSetting,limit:number,signal:AbortSignal):Promise<readonly RawRadarCandidate[]>;
+  youtubeRecommendations?(owner:string,query:string,limit:number,signal:AbortSignal):Promise<readonly RawRadarCandidate[]>;
 }
 interface NewsPreview { items:readonly {contentId:string;sourceId:string;card:{title:string;fact:string;metadata:readonly string[];sourceUrl:string}}[]; }
 interface TemporalPreview { entries:readonly {sourceId:string;content:any;timeZone:string}[]; }
@@ -42,6 +43,7 @@ export async function selectLineRadarDigest(input:{owner:string;policy:LineRadar
   const setting=input.policy.youtubeSubscriptions;
   const skills=new RadarDiscoverySkills(input.owner,{
     youtube:async(limit,signal)=>Object.freeze([...(setting?await input.ports.youtube(input.owner,setting,limit,signal):[]),...feedYoutube].slice(0,limit)),
+    ...(input.ports.youtubeRecommendations?{youtubeRecommendations:(query:string,limit:number,signal:AbortSignal)=>input.ports.youtubeRecommendations!(input.owner,query,limit,signal)}:{}),
     twitter:async()=>Object.freeze([]),
     web:async(_query,limit)=>Object.freeze(web.slice(0,limit)),
     ...(input.policy.weather?{weather:async()=>Object.freeze(weather.slice(0,3))}:{}),

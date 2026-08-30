@@ -48,4 +48,15 @@ describe('dedicated Radar FCA',()=>{
     await expect(new RadarFca(prose).run(fixture().skills,[],new AbortController().signal)).rejects.toThrow('RADAR_FCA_NO_SUBMISSION');
     const unknown:RadarFcaModel={next:async()=>({content:'',toolCalls:[{id:'call_bad',name:'send_line_message',arguments:{}}]})};
     await expect(new RadarFca(unknown).run(fixture().skills,[],new AbortController().signal)).rejects.toThrow('RADAR_SKILL_NOT_ALLOWED');});
+  it('offers one bounded new-channel YouTube search only in the personal lane', async () => {
+    const f=fixture(), recommendation=vi.fn(async()=>[candidate('youtube','newchannel1')]);
+    const skills=new RadarDiscoverySkills(owner,{...(f.ports as any),youtubeRecommendations:recommendation},f.receipts,()=>NOW,{lane:'personal'});
+    expect(skills.tools().some(tool=>tool.name==='discover_new_youtube_channels')).toBe(true);
+    const result=await skills.execute('discover_new_youtube_channels',{query:'Nintendo',limit:8},new AbortController().signal);
+    expect(JSON.parse(result.content).untrustedCandidates).toHaveLength(1);
+    await expect(skills.execute('discover_new_youtube_channels',{query:'Nintendo',limit:8},new AbortController().signal)).rejects.toThrow('RADAR_SKILL_NOT_ALLOWED');
+    const community=new RadarDiscoverySkills(owner,{...(f.ports as any),youtubeRecommendations:recommendation},f.receipts,()=>NOW,{lane:'community'});
+    expect(community.tools().some(tool=>tool.name==='discover_new_youtube_channels')).toBe(false);
+  });
+
 });
