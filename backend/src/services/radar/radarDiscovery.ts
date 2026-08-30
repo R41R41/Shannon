@@ -106,7 +106,7 @@ export class RadarDiscoverySkills {
     }
     if(name==='search_shareable_tweets'||name==='search_web_for_sharing'){
       const isX=name==='search_shareable_tweets';if(Object.keys(input).some(k=>!['query','limit'].includes(k)))throw new Error('RADAR_SKILL_INPUT_INVALID');
-      if(isX?++this.twitterCalls>2:++this.webCalls>2)throw new Error('RADAR_SKILL_BUDGET');
+      if(isX?++this.twitterCalls>1:++this.webCalls>2)throw new Error('RADAR_SKILL_BUDGET');
       const query=this.query(input.query),limit=this.integer(input.limit,isX?10:5,isX?20:10);
       const items=await this.discover(isX?'x':'web',await (isX?this.ports.twitter(query,limit,signal):this.ports.web(query,limit,signal)),limit,signal);
       this.audit.push({tool:name,query,returned:items.length});return{content:JSON.stringify({untrustedCandidates:items})};

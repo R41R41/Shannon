@@ -544,3 +544,9 @@ LINE policyは登録YouTube、Calendar、天気、最大3件の選択feedと話�
 個人LINE laneに限り、登録チャンネル新着が弱い場合だけ discover_new_youtube_channels を1 run 1回呼べる。本人のYouTube read-only OAuthで現在の登録チャンネルを全件再確認し、承認済みtopicの公開検索から登録済みchannel IDを除外する。対象は直近30日・最大8件で、検索と登録取得の前後に同じbinding/revisionを再照合する。
 
 候補は既存のrun内candidate registryとinsert-only delivery receiptへ合流する。選ばれなかった候補はreceiptを予約せず、選ばれたvideo IDは登録新着と同じYouTube namespaceで再共有を防ぐ。タイトル、URL、channel ID、検索結果は監査DBへ保存しない。community lane、会話FCA、送信adapterにはこの能力を渡さない。候補0件は正常な沈黙とする。
+
+## X / Web 公開探索（RAD-DISCOVERY-1）
+
+個人LINE laneのX探索は、旧Twitter投稿clientを利用しない。LINE専用 XPublicSearch はtwitterapi.ioの公開advanced searchへ1 run 1回、1ページ、最大20件のGETだけを行い、Cookie、アカウントログイン、投稿、いいね、返信、pagination、retryを持たない。返信とretweetを除外し、本文・公開時刻・公開URL・集計値だけをrun内候補へ変換する。API利用不可時は候補0件相当で配信系から失敗を隔離し、資格情報や応答本文を記録しない。
+
+WebSearchDiscoveryは既存のLINE専用Google Custom Search資格情報を使い、1回最大5件の公開HTTPS結果を候補化する。検索結果に信頼できる公開日時がない場合は、取得時刻を内部整列値に使う一方、metadataへ「公開日時不明」と明示し、公開時刻や新着性の根拠として扱わない。X/Webとも候補選定後だけ既存insert-only receiptへhashを予約し、選ばれなかった候補や検索queryをMongo/LINE ledgerへ保存しない。
