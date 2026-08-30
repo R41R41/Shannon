@@ -41,7 +41,7 @@ export function requireMachineToken(getToken: () => string): RequestHandler {
     res.setHeader('Cache-Control', 'no-store');
     const expected = getToken();
     if (expected.length < 32 || /\s/.test(expected)) { res.status(503).json({ error: 'MACHINE_AUTH_UNCONFIGURED' }); return; }
-    const received = /^Bearer ([^\s]+)$/.exec(req.get('authorization') ?? '')?.[1] ?? '';
+    const received = /^Bearer ([^\s]+)$/i.exec(req.get('authorization') ?? '')?.[1] ?? '';
     if (req.get('origin') || received.length > 512 || Buffer.byteLength(received) !== Buffer.byteLength(expected) ||
         !timingSafeEqual(Buffer.from(received), Buffer.from(expected))) {
       res.status(401).json({ error: 'UNAUTHENTICATED' }); return;
