@@ -52,6 +52,15 @@ export class MongoIdentityProfileRepository implements IdentityProfileRepository
     return toRecord(doc as IdentityProfileRecord);
   }
 
+  async findByLineUserId(projectId: string, lineUserId: string): Promise<IdentityProfileRecord | null> {
+    const doc = await IdentityProfile.findOne({
+      firebaseProjectId: projectId,
+      'bindings.line.externalId': lineUserId,
+    }).lean().exec();
+    if (!doc) return null;
+    return toRecord(doc as IdentityProfileRecord);
+  }
+
   async save(context: RequestContext, profile: IdentityProfileRecord): Promise<IdentityProfileRecord> {
     if (profile.firebaseProjectId !== context.principal.projectId || profile.firebaseUid !== context.principal.uid) {
       throw new Error('IDENTITY_SCOPE_MISMATCH');
@@ -116,6 +125,13 @@ export class InMemoryIdentityProfileRepository implements IdentityProfileReposit
 
   async findByFirebaseUid(projectId: string, firebaseUid: string): Promise<IdentityProfileRecord | null> {
     return this.store.get(`${projectId}:${firebaseUid}`) ?? null;
+  }
+
+  async findByLineUserId(projectId: string, lineUserId: string): Promise<IdentityProfileRecord | null> {
+    for (const profile of this.store.values()) {
+      if (profile.firebaseProjectId === projectId && profile.bindings.line?.externalId === lineUserId) return profile;
+    }
+    return null;
   }
 
   async save(context: RequestContext, profile: IdentityProfileRecord): Promise<IdentityProfileRecord> {

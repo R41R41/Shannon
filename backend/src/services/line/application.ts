@@ -14,6 +14,7 @@ export function validLineSignature(body: Buffer, signature: string | undefined, 
 /** Independent LINE ingress/use-case composition; never imports the legacy main server or global pub/sub. */
 export function createLineApplication(config: LineConfig, ports: { state: LineStatePort; chat: LineChatPort; transport: LineTransport;
   authorizeRuntime?(): Promise<void>;
+  authorizePersonal?(lineUserId: string): Promise<void>;
   radar?: { status(): Promise<string>; authorizeQuote(id: string): Promise<boolean>; conversationVersion?(): Promise<string> } }, now = Date.now) {
   const app = express(); app.disable('x-powered-by');
   const ledger = new LineLedger(ports.state, config, now);
@@ -90,6 +91,9 @@ export function createLineApplication(config: LineConfig, ports: { state: LineSt
         await ledger.finish(lineKey(`event:${turn.eventId}`), result);
       }
       return true;
+    }
+    if (turn.kind === 'personal' && !['/radar status', '配信状況'].includes(turn.text.trim())) {
+      await ports.authorizePersonal?.(turn.userId);
     }
     if (tasks.size + reserving >= 8) return false;
     reserving++;

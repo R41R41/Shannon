@@ -173,6 +173,7 @@ class Server {
       findForContext: (context) => profiles.find(context),
       findByDiscordUserId: (projectId, discordUserId) => profiles.findByDiscordUserId(projectId, discordUserId),
       findByFirebaseUid: (projectId, firebaseUid) => profiles.findByFirebaseUid(projectId, firebaseUid),
+      findByLineUserId: (projectId, lineUserId) => profiles.findByLineUserId(projectId, lineUserId),
     });
     const db = mongoose.connection.db;
     if (db) {

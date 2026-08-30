@@ -12,7 +12,7 @@ async function main() {
     bundle: true, platform: 'node', target: 'node22', format: 'esm', packages: 'external', metafile: true });
   const inputs = [...new Set([...Object.keys(result.metafile.inputs),...Object.keys(schema.metafile.inputs)])];
   const imports = [...new Set([...Object.values(result.metafile.outputs),...Object.values(schema.metafile.outputs)].flatMap(o => o.imports.filter(i => i.external).map(i => i.path)))];
-  const allowed = ['express','cheerio','@langchain/openai','@langchain/core/messages'];
+  const allowed = ['express','mongoose','cheerio','@langchain/openai','@langchain/core/messages'];
   if (imports.some(i => !i.startsWith('node:') && !allowed.includes(i))) throw Error('UNEXPECTED_EXTERNAL_IMPORT');
   const dependencies = Object.fromEntries(['express','mongoose','cheerio','dotenv','@langchain/openai','@langchain/core'].map(name =>
     [name,JSON.parse(fs.readFileSync(path.join(root,'node_modules',name,'package.json'),'utf8')).version]));

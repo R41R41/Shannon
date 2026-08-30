@@ -1,4 +1,4 @@
-import type { mongo } from 'mongoose';
+import mongoose, { type mongo } from 'mongoose';
 import type { Socket } from 'node:net';
 import { createLineApplication } from './application.js';
 import { lineConfig } from './config.js';
@@ -25,12 +25,23 @@ import { YouTubeSubscriptionDiscovery } from '../radar/youtubeSubscriptionDiscov
 import { YouTubeSubscriptionReader } from '../radar/youtubeSubscriptionInbox.js';
 import { issueLineRadarContext, personalRadarOwner } from '../radar/radarAccess.js';
 
+import { authorizeLinePersonal, createMongoLineIdentityPort, type LineIdentityPort } from './lineIdentityPort.js';
+
 /** Independent composition root. Never imports the main server, Discord, shared env or global Mongo connection. */
 export async function openLineRuntime(input: { env: Record<string,string>; db: mongo.Db; readPolicy(): Promise<unknown>;
-  profile: string; port: number; permitUntil?: number; closeResources(): Promise<void> }) {
+  profile: string; port: number; permitUntil?: number; closeResources(): Promise<void>; identity?: LineIdentityPort; identityProjectId?: string }) {
   const config = lineConfig(input.env);
   if (!config.enabled || ![15040,15041].includes(input.port)) throw new Error('LINE_RUNTIME_INVALID');
   await radarDatabaseReady(input.db);
+  const identityProjectId = input.identityProjectId ?? input.env.LINE_FIREBASE_PROJECT_ID;
+  let identityDbClient: mongo.MongoClient | undefined;
+  let identityPort = input.identity;
+  if (!identityPort && identityProjectId && input.env.LINE_IDENTITY_MONGODB_URI) {
+    identityDbClient = new mongoose.mongo.MongoClient(input.env.LINE_IDENTITY_MONGODB_URI, { serverSelectionTimeoutMS: 5000 });
+    await identityDbClient.connect();
+    identityPort = createMongoLineIdentityPort(identityDbClient.db());
+  }
+  const authorizePersonal = (lineUserId: string) => authorizeLinePersonal(identityPort, identityProjectId, lineUserId);
   const owner = personalRadarOwner(issueLineRadarContext(config.botUserId, config.personalUserId, Date.now()+60000), Date.now());
   const google = new GoogleRadarOAuthBroker({ clientId: input.env.LINE_GOOGLE_CLIENT_ID ?? '', clientSecret: input.env.LINE_GOOGLE_CLIENT_SECRET ?? '',
     refreshToken: input.env.LINE_GOOGLE_REFRESH_TOKEN ?? '' }, owner);
@@ -46,13 +57,14 @@ export async function openLineRuntime(input: { env: Record<string,string>; db: m
       : { reply: async () => { throw new Error('LINE_CHAT_DISABLED'); } },
     transport: new LineHttpTransport(config.channelAccessToken),
     authorizeRuntime: async () => { await input.readPolicy(); },
+    authorizePersonal,
     radar: { status: () => worker.status(), authorizeQuote: id => worker.authorizeQuote(id), conversationVersion: () => worker.conversationVersion() } });
   const receipts = new MongoRadarDeliveryReceipts(input.db);
   const subscriptions = new YouTubeSubscriptionReader(new YouTubeDataApiSubscriptionTransport(google));
   const uploads = new YouTubeDataApiUploadReader(google);
   worker = new LineRadarWorker(config, { ledger: runtime.ledger, catalog: new MongoPersonalCatalog(input.db),
     feed: new PublicFeedConnector(new SafeFeedHttp()), temporal: new PersonalTemporalReaders(new WeatherReadAdapter(new SafePublicJsonHttp()), new CalendarReadAdapter(google)),
-    readPolicy: input.readPolicy, deliver: runtime.deliver,
+    readPolicy: input.readPolicy, deliver: runtime.deliver, authorizePersonal,
     radarFca: { fca: new RadarFca(createRadarFcaModel({ apiKey: input.env.LINE_LLM_API_KEY ?? '', model: input.env.LINE_LLM_MODEL ?? '' })), receipts,
       youtube: async (expectedOwner, setting, limit, signal) => {
         if (expectedOwner !== owner) throw new Error('LINE_RADAR_OWNER');
@@ -83,7 +95,7 @@ export async function openLineRuntime(input: { env: Record<string,string>; db: m
     clearInterval(interval); clearTimeout(expiry); runtime.stop();
     for (const socket of sockets) socket.destroy();
     await new Promise<void>(resolve => server.close(() => resolve()));
-    await worker.stop(); await runtime.drain(); await input.closeResources();
+    await worker.stop(); await runtime.drain(); await identityDbClient?.close(); await input.closeResources();
   })();
   if (input.permitUntil !== undefined) expiry = setTimeout(() => { void stop().catch(() => undefined); }, Math.max(0,input.permitUntil-Date.now()));
   server.on('error', () => { void stop().catch(() => undefined); });

@@ -6,6 +6,7 @@
   },
   "include": [
     "src/services/line/**/*.ts",
+    "src/modules/identity/lineIdentityGate.ts",
     "src/routes/radarRoutes.ts",
     "src/bootstrap/mainRadar.ts",
     "src/services/radar/**/*.ts",

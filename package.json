@@ -12,6 +12,8 @@
     "dev": "concurrently \"npm run dev -w backend\" \"npm run dev -w frontend\"",
     "clean": "rm -rf */dist",
     "check:dead-code": "node scripts/check-dead-code.cjs",
+    "test:release-fixtures": "node scripts/run-release-fixtures.cjs",
+    "preflight:automated": "python3 scripts/release-preflight.py --candidate . --production ../Shannon-prod --automated-only",
     "dev-backend": "npm run dev -w backend",
     "dev-frontend": "npm run dev -w frontend"
   },

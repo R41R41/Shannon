@@ -75,10 +75,15 @@ async function main() {
     assert(!JSON.stringify(await composition.runtime.ledger.read()).includes('Fixture science'));
     composition.runtime.stop();
     const runtimeDb=client.db('line_runtime_fixture');
+    const { RADAR_DELIVERY_RECEIPT_VALIDATOR, RADAR_DELIVERY_RECEIPT_COLLECTION } = await import(pathToFileURL(path.join(root, 'backend/dist/services/radar/mongoRadarDeliveryReceipts.js')).href);
+    await runtimeDb.createCollection(RADAR_DELIVERY_RECEIPT_COLLECTION,{validator:RADAR_DELIVERY_RECEIPT_VALIDATOR,validationLevel:'strict',validationAction:'error'});
     await runtimeDb.createCollection('radarpersonalcatalogs',{validator:CATALOG_VALIDATOR,validationLevel:'strict',validationAction:'error'});
     const {openLineRuntime}=await import(pathToFileURL(path.join(root,'backend/dist-line/runtime.mjs')).href);
     const isolated=await openLineRuntime({env:{LINE_ENABLED:'true',LINE_BOT_USER_ID:bot,LINE_PERSONAL_USER_ID:owner,
-      LINE_CHANNEL_SECRET:'a'.repeat(32),LINE_CHANNEL_ACCESS_TOKEN:'a'.repeat(64)},db:runtimeDb,
+      LINE_CHANNEL_SECRET:'a'.repeat(32),LINE_CHANNEL_ACCESS_TOKEN:'a'.repeat(64),
+      LINE_GOOGLE_CLIENT_ID:'fixture-client-id-1234567890',LINE_GOOGLE_CLIENT_SECRET:'fixture-secret-12345678',
+      LINE_GOOGLE_REFRESH_TOKEN:'fixture-refresh-token-12345678901234567890',
+      LINE_LLM_API_KEY:'fixture-llm-key-123456789012345678901234567890',LINE_LLM_MODEL:'gpt-4.1-mini'},db:runtimeDb,
       readPolicy:async()=>({version:1,enabled:false,hourJst:12,minuteJst:0,consentExpiresAt:0,feeds:[],weather:null}),
       profile:'Fixture only',port:15040,closeResources:async()=>{}});
     try {
