@@ -2,6 +2,7 @@ import express from 'express';
 import { randomUUID } from 'node:crypto';
 import { AccessError, AccessService, type IdentityVerifier, type AccessUserRepository } from '../../modules/access/index.js';
 import type { PersonalCatalogPort } from '../../modules/radar/catalog.js';
+import type { IdentityProfileRepository } from '../../modules/identity/index.js';
 import { authenticateRequest, sendAccessError } from '../../routes/accessHttp.js';
 import { registerRadarRoutes } from '../../routes/radarRoutes.js';
 import { PersonalRadarService } from './personalRadar.js';
@@ -22,6 +23,7 @@ export interface RadarRuntimePorts {
   weatherHttp: FeedHttpPort;
   /** Read-only DB ping and exact validator check, no migrations or external provider requests. */
   ready(): Promise<void>;
+  identityProfiles?: IdentityProfileRepository;
 }
 /** Independent HTTP composition. No legacy server, bot, scheduler, model manager or operational sockets. */
 export function createRadarApplication(input: RadarRuntimeConfig, ports: RadarRuntimePorts, now = Date.now) {
@@ -75,7 +77,7 @@ export function createRadarApplication(input: RadarRuntimeConfig, ports: RadarRu
       if (!res.destroyed && active()) res.json({ projectId: context.principal.projectId, uid: context.principal.uid, expiresAt: context.expiresAtMs });
     } catch (e) { if (!res.destroyed) sendAccessError(res, e); }
   });
-  registerRadarRoutes(app, access, feed, runner, workspace);
+  registerRadarRoutes(app, access, feed, runner, workspace, ports.identityProfiles);
   // Reject parser errors with a fixed response: never echo user input or a stack trace.
   app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     if (!res.destroyed) res.status((error as { type?: string })?.type === 'entity.too.large' ? 413 : 400).json({ error: 'INVALID_INPUT' });

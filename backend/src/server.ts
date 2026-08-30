@@ -25,6 +25,7 @@ import { registerTestRoutes } from './routes/testRoutes.js';
 import { registerWebhookRoutes } from './routes/webhookRoutes.js';
 import { registerPublicRoutes } from './routes/publicRoutes.js';
 import { startNightlySelfImproveScheduler } from './services/llm/graph/cognitive/selfImprove/NightlySelfImproveScheduler.js';
+import { registerIdentityBindingLookup } from './services/runtime/identityBindingGateway.js';
 
 class Server {
   private readonly webAccess = createWebAccess(config.webAuth.firebaseProjectId);
@@ -164,6 +165,12 @@ class Server {
 
     // データベース接続
     await this.connectDatabase();
+    const profiles = this.webAccess.profileRepository;
+    registerIdentityBindingLookup({
+      findForContext: (context) => profiles.find(context),
+      findByDiscordUserId: (projectId, discordUserId) => profiles.findByDiscordUserId(projectId, discordUserId),
+      findByFirebaseUid: (projectId, firebaseUid) => profiles.findByFirebaseUid(projectId, firebaseUid),
+    });
 
     // --- 必須サービスの起動 ---
     // LLM と Web は失敗時にサーバーを停止する

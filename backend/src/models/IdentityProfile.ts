@@ -38,5 +38,6 @@ const identityProfileSchema = new mongoose.Schema<IIdentityProfile>({
 }, { autoIndex: false, collection: 'identityprofiles' });
 
 identityProfileSchema.index({ firebaseProjectId: 1, firebaseUid: 1 }, { unique: true });
+identityProfileSchema.index({ firebaseProjectId: 1, 'bindings.discord.externalId': 1 }, { sparse: true });
 
 export const IdentityProfile = mongoose.model<IIdentityProfile>('IdentityProfile', identityProfileSchema);

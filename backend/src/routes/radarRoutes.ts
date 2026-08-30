@@ -4,9 +4,17 @@ import type { RadarSessionRunner } from '../services/radar/sessionRunner.js';
 import type { AccessService } from '../modules/access/index.js';
 import { authenticateRequest, sendAccessError } from './accessHttp.js';
 import { PersonalRadarError, PersonalRadarService, personalRadarOwner } from '../services/radar/personalRadar.js';
+import { assertRadarPersonalFeedAccess, IdentityGateError, type IdentityProfileRepository } from '../modules/identity/index.js';
 
 /** Opt-in route factory, intentionally NOT registered by server/bootstrap yet. Collection is absent unless an explicit runner is injected; no publication endpoint. */
-export function registerRadarRoutes(app: Express, access: AccessService, radar: PersonalRadarService, runner?: Pick<RadarSessionRunner, 'run'>, workspace?: RadarWorkspace): void {
+export function registerRadarRoutes(
+  app: Express,
+  access: AccessService,
+  radar: PersonalRadarService,
+  runner?: Pick<RadarSessionRunner, 'run'>,
+  workspace?: RadarWorkspace,
+  profiles?: IdentityProfileRepository,
+): void {
   app.use('/api/radar', (_req, res, next) => { res.setHeader('Cache-Control', 'no-store'); res.setHeader('Vary', 'Authorization'); next(); });
   const handler = (operation: 'sources' | 'preview' | 'audit' | 'collect' | 'configure' | 'revoke' | 'temporalConfigure' | 'temporalRevoke') => async (req: Request, res: Response) => {
     const controller = new AbortController();
@@ -14,6 +22,14 @@ export function registerRadarRoutes(app: Express, access: AccessService, radar: 
     req.once('aborted', cancel); res.once('close', cancel);
     try {
       const context = await authenticateRequest(req, access);
+      if (profiles) {
+        try {
+          assertRadarPersonalFeedAccess(await profiles.find(context));
+        } catch (error) {
+          if (error instanceof IdentityGateError) throw new PersonalRadarError('FORBIDDEN');
+          throw error;
+        }
+      }
       if (Object.keys(req.query).length) throw new PersonalRadarError('INVALID_INPUT');
       if (['revoke','temporalRevoke'].includes(operation) && (!req.body || Object.keys(req.body).length !== 1 || !Object.prototype.hasOwnProperty.call(req.body, 'expectedRevision')))
         throw new PersonalRadarError('INVALID_INPUT');
@@ -41,7 +57,7 @@ export function registerRadarRoutes(app: Express, access: AccessService, radar: 
     } catch (error) {
       if (res.destroyed || res.writableEnded) return;
       if (error instanceof PersonalRadarError) {
-        const status = { INVALID_INPUT: 400, CONFLICT: 409, NOT_FOUND: 404, LIMIT: 409, UNAVAILABLE: 503, CANCELLED: 409 }[error.code];
+        const status = { INVALID_INPUT: 400, CONFLICT: 409, NOT_FOUND: 404, LIMIT: 409, UNAVAILABLE: 503, CANCELLED: 409, FORBIDDEN: 403 }[error.code];
         res.status(status).json({ error: error.code });
       } else sendAccessError(res, error);
     } finally { req.removeListener('aborted', cancel); res.removeListener('close', cancel); }

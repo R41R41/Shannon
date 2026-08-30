@@ -22,6 +22,8 @@ export interface IdentityProfileRecord {
 export interface IdentityProfileRepository {
   find(context: RequestContext): Promise<IdentityProfileRecord | null>;
   save(context: RequestContext, profile: IdentityProfileRecord): Promise<IdentityProfileRecord>;
+  findByDiscordUserId(projectId: string, discordUserId: string): Promise<IdentityProfileRecord | null>;
+  findByFirebaseUid(projectId: string, firebaseUid: string): Promise<IdentityProfileRecord | null>;
 }
 
 export const ALLOWED_MEMORY_CHANNELS = Object.freeze(['discord_text', 'web'] as const);

@@ -37,6 +37,21 @@ export class MongoIdentityProfileRepository implements IdentityProfileRepository
     return toRecord(doc as IdentityProfileRecord);
   }
 
+  async findByDiscordUserId(projectId: string, discordUserId: string): Promise<IdentityProfileRecord | null> {
+    const doc = await IdentityProfile.findOne({
+      firebaseProjectId: projectId,
+      'bindings.discord.externalId': discordUserId,
+    }).lean().exec();
+    if (!doc) return null;
+    return toRecord(doc as IdentityProfileRecord);
+  }
+
+  async findByFirebaseUid(projectId: string, firebaseUid: string): Promise<IdentityProfileRecord | null> {
+    const doc = await IdentityProfile.findOne({ firebaseProjectId: projectId, firebaseUid }).lean().exec();
+    if (!doc) return null;
+    return toRecord(doc as IdentityProfileRecord);
+  }
+
   async save(context: RequestContext, profile: IdentityProfileRecord): Promise<IdentityProfileRecord> {
     if (profile.firebaseProjectId !== context.principal.projectId || profile.firebaseUid !== context.principal.uid) {
       throw new Error('IDENTITY_SCOPE_MISMATCH');
@@ -90,6 +105,17 @@ export class InMemoryIdentityProfileRepository implements IdentityProfileReposit
 
   async find(context: RequestContext): Promise<IdentityProfileRecord | null> {
     return this.store.get(this.key(context)) ?? null;
+  }
+
+  async findByDiscordUserId(projectId: string, discordUserId: string): Promise<IdentityProfileRecord | null> {
+    for (const profile of this.store.values()) {
+      if (profile.firebaseProjectId === projectId && profile.bindings.discord?.externalId === discordUserId) return profile;
+    }
+    return null;
+  }
+
+  async findByFirebaseUid(projectId: string, firebaseUid: string): Promise<IdentityProfileRecord | null> {
+    return this.store.get(`${projectId}:${firebaseUid}`) ?? null;
   }
 
   async save(context: RequestContext, profile: IdentityProfileRecord): Promise<IdentityProfileRecord> {

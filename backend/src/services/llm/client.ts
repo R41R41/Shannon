@@ -31,6 +31,9 @@ import { VoiceProcessor } from './voice/VoiceProcessor.js';
 import { AgentOrchestrator } from './agents/AgentOrchestrator.js';
 import { EventRouter } from './routing/EventRouter.js';
 import { snapshotMemoryEnvelope } from '../memory/requestMemory.js';
+import { getIdentityBindingLookup } from '../runtime/identityBindingGateway.js';
+import { applyDiscordIdentityMemoryGate, applyWebIdentityMemoryGate } from '../identity/identityMemoryGate.js';
+import { config } from '../../config/env.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -215,7 +218,17 @@ export class LLMService {
       abortSignal?: AbortSignal;
     },
   ): Promise<ShannonGraphState> {
-    const dispatchEnvelope = envelope.channel === 'discord' ? snapshotMemoryEnvelope(envelope) : envelope;
+    let activeEnvelope = envelope;
+    const lookup = getIdentityBindingLookup();
+    const projectId = config.webAuth.firebaseProjectId;
+    if (lookup && projectId) {
+      if (activeEnvelope.channel === 'discord') {
+        activeEnvelope = await applyDiscordIdentityMemoryGate(activeEnvelope, projectId, lookup);
+      } else if (activeEnvelope.channel === 'web') {
+        activeEnvelope = await applyWebIdentityMemoryGate(activeEnvelope, projectId, lookup);
+      }
+    }
+    const dispatchEnvelope = activeEnvelope.channel === 'discord' ? snapshotMemoryEnvelope(activeEnvelope) : activeEnvelope;
     await this.initialize();
     if (!this.shannonGraph) {
       throw new Error('Shannon graph not initialized');
@@ -223,8 +236,8 @@ export class LLMService {
 
     try {
       return await runCoordinatedGraph(
-        this.executionCoordinator, envelope,
-        signal => invokeShannonGraph(this.shannonGraph!, envelope, legacyMessages, { ...options, abortSignal: signal }),
+        this.executionCoordinator, activeEnvelope,
+        signal => invokeShannonGraph(this.shannonGraph!, activeEnvelope, legacyMessages, { ...options, abortSignal: signal }),
         (result, signal) => this.dispatchActionPlan(dispatchEnvelope, result, signal),
         options?.abortSignal,
       );

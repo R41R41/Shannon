@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { requireCapability, type RequestContext } from '../../modules/access/index.js';
 
 export class PersonalRadarError extends Error {
-  constructor(readonly code: 'INVALID_INPUT' | 'CONFLICT' | 'NOT_FOUND' | 'LIMIT' | 'UNAVAILABLE' | 'CANCELLED') { super(code); }
+  constructor(readonly code: 'INVALID_INPUT' | 'CONFLICT' | 'NOT_FOUND' | 'LIMIT' | 'UNAVAILABLE' | 'CANCELLED' | 'FORBIDDEN') { super(code); }
 }
 /** Server-owned callback: renew the same request's identity/authorization, never a body-supplied actor. */
 export interface LineRadarContext { readonly kind: 'line-radar'; readonly expiresAtMs: number }
