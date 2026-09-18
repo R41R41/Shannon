@@ -49,19 +49,19 @@ const ANTHROPIC_CHAIN: ModelSlot[] = [
 const OPENAI_CHAIN: ModelSlot[] = [
     {
         name: 'gpt-4.1-mini',
-        config: { modelName: 'gpt-4.1-mini', temperature: 1, maxTokens: 1024, timeoutMs: 15_000, provider: 'openai' },
+        config: { modelName: 'gpt-4.1-mini', temperature: 1, maxTokens: 8192, timeoutMs: 30_000, provider: 'openai' },
     },
     {
         name: 'gpt-5-mini-fast',
-        config: { modelName: 'gpt-5-mini', temperature: 1, maxTokens: 2048, reasoningEffort: 'low', verbosity: 'low', timeoutMs: 30_000, provider: 'openai' },
+        config: { modelName: 'gpt-5-mini', temperature: 1, maxTokens: 8192, reasoningEffort: 'low', verbosity: 'low', timeoutMs: 45_000, provider: 'openai' },
     },
     {
         name: 'gpt-5-mini',
-        config: { modelName: 'gpt-5-mini', temperature: 1, maxTokens: 2048, reasoningEffort: 'medium', verbosity: 'medium', timeoutMs: 60_000, provider: 'openai' },
+        config: { modelName: 'gpt-5-mini', temperature: 1, maxTokens: 8192, reasoningEffort: 'medium', verbosity: 'medium', timeoutMs: 75_000, provider: 'openai' },
     },
     {
         name: 'gpt-5',
-        config: { modelName: 'gpt-5', temperature: 1, maxTokens: 4096, reasoningEffort: 'medium', verbosity: 'medium', timeoutMs: 120_000, provider: 'openai' },
+        config: { modelName: 'gpt-5', temperature: 1, maxTokens: 8192, reasoningEffort: 'medium', verbosity: 'medium', timeoutMs: 120_000, provider: 'openai' },
     },
 ];
 

@@ -38,6 +38,50 @@ function stripAssistantContentPrefix(t: string): string {
     return t.replace(/^content:\s*/i, '').trim();
 }
 
+const NON_TERMINAL_SUMMARY_PATTERNS = [
+    /少々お待ちください/u,
+    /しばらくお待ちください/u,
+    /別の手段を検討中/u,
+    /(?:作業|処理|調査|作成|対応)を続けます/u,
+    /これから.{0,24}(?:作成|調査|対応|検討)します/u,
+    /今後は.{0,40}(?:まとめ|作成|調査|対応|検討)(?:します|する予定)/u,
+];
+
+const DISCORD_ARTIFACT_GOAL = /(?:PDF|旅行資料|旅程.{0,12}資料|日帰り旅行.{0,20}資料)/iu;
+const DISCORD_ARTIFACT_TOOLS = ['create-travel-brief', 'send-artifact-on-discord'] as const;
+
+export function validateCompletionClaim(input: {
+    goal: string;
+    platform: string | null;
+    summary: string;
+    availableToolNames: ReadonlySet<string>;
+    successfulToolNames: ReadonlySet<string>;
+}): string | null {
+    const requiresDiscordArtifact = input.platform === 'discord'
+        && DISCORD_ARTIFACT_GOAL.test(input.goal)
+        && DISCORD_ARTIFACT_TOOLS.every((toolName) => input.availableToolNames.has(toolName));
+    if (requiresDiscordArtifact) {
+        const missing = DISCORD_ARTIFACT_TOOLS.filter(
+            (toolName) => !input.successfulToolNames.has(toolName),
+        );
+        if (missing.length > 0) {
+            return `依頼されたPDFは未完成です。完了前に次のツールを成功させてください: ${missing.join(', ')}。`;
+        }
+    }
+
+    if (NON_TERMINAL_SUMMARY_PATTERNS.some((pattern) => pattern.test(input.summary))) {
+        return '完了文が「後で作業を続ける」と説明しています。完了時には、すでに終えた作業だけを報告してください。';
+    }
+    return null;
+}
+
+export function formatCompletedSummary(summary: string): string {
+    const trimmed = summary.trim() || 'タスクを完了しました。';
+    return /^(?:#{1,3}\s*)?[✅☑️]\s*(?:完了|Completed)/iu.test(trimmed)
+        ? trimmed
+        : `## ✅ 完了\n${trimmed}`;
+}
+
 /**
  * FunctionCallingAgent の run() に渡す状態
  */
@@ -186,7 +230,9 @@ export class FunctionCallingAgent {
                 modelName: FunctionCallingAgent.MODEL_NAME,
                 apiKey: config.openaiApiKey,
                 temperature: 1,
-                maxTokens: 1024,
+                // Artifact tools require a sizeable structured payload. A 1K cap can
+                // truncate the tool arguments and surface as an empty object.
+                maxTokens: 8192,
             });
             logger.info(`🤖 FCA: Using ${FunctionCallingAgent.MODEL_NAME} (OpenAI default)`, 'yellow');
         }
@@ -553,6 +599,9 @@ export class FunctionCallingAgent {
         let lastThinkingContent: string | null = null;
         let consecutiveBlockedOnly = 0;
         const MAX_CONSECUTIVE_BLOCKED_ONLY = 5;
+        const successfulToolNames = new Set<string>();
+        const initiallyAvailableToolNames = new Set(effectiveToolMap.keys());
+        let lastCompletionIssue: string | null = null;
 
         // 初期 UI 更新
         this.taskTreePublisher.publishTaskTree({
@@ -908,6 +957,9 @@ export class FunctionCallingAgent {
                 );
                 stepCounter = execResult.stepCounter;
                 const iterationResults = execResult.results;
+                for (const result of iterationResults) {
+                    if (result.success) successfulToolNames.add(result.toolName);
+                }
 
                 // ask-user-on-discord はタスクを明示的に一時停止する。モデルの追加出力を
                 // 待たず、Discordフォームの回答を新しいターンとして再開する。
@@ -969,6 +1021,25 @@ export class FunctionCallingAgent {
                             : '';
                     const summary = trimmedSummary.length > 0 ? trimmedSummary : 'タスク完了';
 
+                    const completionIssue = validateCompletionClaim({
+                        goal,
+                        platform,
+                        summary,
+                        availableToolNames: initiallyAvailableToolNames,
+                        successfulToolNames,
+                    });
+                    if (completionIssue) {
+                        lastCompletionIssue = completionIssue;
+                        logger.warn(`⚠️ task-complete rejected: ${completionIssue}`);
+                        messages.push(new SystemMessage(
+                            `Completion rejected: ${completionIssue} ` +
+                            'Do not tell the user to wait after ending the task. ' +
+                            'Either finish the required work now or let the run end as an explicit failure.',
+                        ));
+                        iteration++;
+                        continue;
+                    }
+
                     const fromThinking =
                         typeof thinkingContent === 'string' && thinkingContent.trim()
                             ? stripAssistantContentPrefix(thinkingContent)
@@ -978,8 +1049,9 @@ export class FunctionCallingAgent {
 
                     // task-complete の summary をユーザー向け最終文の正とする（言語・ドメイン非依存）。
                     // summary が空のときだけ思考本文へフォールバック。
-                    const lastAssistantContent =
-                        trimmedSummary.length > 0 ? trimmedSummary : fromThinking;
+                    const lastAssistantContent = formatCompletedSummary(
+                        trimmedSummary.length > 0 ? trimmedSummary : (fromThinking ?? summary),
+                    );
 
                     logger.success(`✅ FunctionCallingAgent: タスク完了 (${iteration + 1}イテレーション, ${((Date.now() - startTime) / 1000).toFixed(1)}s)`);
                     logger.info(`   応答: ${summary.substring(0, 200)}`);
@@ -989,7 +1061,7 @@ export class FunctionCallingAgent {
                     this.taskTreePublisher.publishTaskTree({
                         status: awaitingUser ? 'in_progress' : 'completed',
                         goal,
-                        strategy: summary,
+                        strategy: lastAssistantContent,
                         recoveryStatus: awaitingUser ? 'awaiting_user' : 'idle',
                         lastFailureType: (pendingRecoveryFailure ?? lastRecoverableFailure)?.failureType ?? null,
                         recoveryAttempts: forcedRecoveryAttempts,
@@ -1003,7 +1075,7 @@ export class FunctionCallingAgent {
                         taskTree: {
                             status: awaitingUser ? 'in_progress' : 'completed',
                             goal,
-                            strategy: summary,
+                            strategy: lastAssistantContent,
                             recoveryStatus: awaitingUser ? 'awaiting_user' : 'idle',
                             lastFailureType: (pendingRecoveryFailure ?? lastRecoverableFailure)?.failureType ?? null,
                             recoveryAttempts: forcedRecoveryAttempts,
@@ -1096,10 +1168,13 @@ export class FunctionCallingAgent {
             // 最大イテレーション到達
             logger.warn(`⚠ FunctionCallingAgent: 最大イテレーション(${maxIter})に到達`);
 
+            const terminalReason = lastCompletionIssue
+                ? `成果物を確認できないため停止しました。${lastCompletionIssue}`
+                : '最大イテレーション数に到達';
             this.taskTreePublisher.publishTaskTree({
                 status: 'error',
                 goal,
-                strategy: '最大イテレーション数に到達',
+                strategy: terminalReason,
                 currentThinking: lastThinkingContent,
                 recoveryStatus: (pendingRecoveryFailure ?? lastRecoverableFailure) ? 'failed_terminal' : 'idle',
                 lastFailureType: (pendingRecoveryFailure ?? lastRecoverableFailure)?.failureType ?? null,
@@ -1112,7 +1187,7 @@ export class FunctionCallingAgent {
                 taskTree: {
                     status: 'error',
                     goal,
-                    strategy: '最大イテレーション数に到達',
+                    strategy: terminalReason,
                     recoveryStatus: (pendingRecoveryFailure ?? lastRecoverableFailure) ? 'failed_terminal' : 'idle',
                     lastFailureType: (pendingRecoveryFailure ?? lastRecoverableFailure)?.failureType ?? null,
                     recoveryAttempts: forcedRecoveryAttempts,

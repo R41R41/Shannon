@@ -1466,9 +1466,9 @@ export class DiscordBot extends BaseClient {
       .setDescription([
         !completed && session.proposal ? `**推奨条件**\n${session.proposal}` : null,
         ...lines,
-        completed ? '\n回答を反映して処理を再開します。' : '\n選択肢に合わない場合は、そのまま自由に入力できます。',
+        completed ? '\n回答は反映済みです。現在の状態は下の作業カードで確認できます。' : '\n選択肢に合わない場合は、そのまま自由に入力できます。',
       ].filter(Boolean).join('\n\n').slice(0, 4000))
-      .setFooter({ text: completed ? 'Shannon • 再開中' : 'Shannon • 回答待ち（24時間有効）' });
+      .setFooter({ text: completed ? 'Shannon • 回答反映済み' : 'Shannon • 回答待ち（24時間有効）' });
   }
 
   private buildClarificationComponents(session: ClarificationSession): Array<ActionRowBuilder<any>> {
@@ -1609,18 +1609,22 @@ export class DiscordBot extends BaseClient {
     const elapsed = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
     const awaiting = planning.recoveryStatus === 'awaiting_user';
     const summary = planning.currentThinking || planning.strategy;
+    const statusLine = awaiting
+      ? '**状態: 🟨 回答待ち** — あなたの操作が必要です。'
+      : '**状態: 🟦 実行中** — このままお待ちください。';
     return new EmbedBuilder()
       .setColor(planning.status === 'error' ? 0xed4245 : awaiting ? 0xfee75c : 0x5b8def)
       .setAuthor({ name: awaiting ? 'シャノン • 回答待ち' : 'シャノン • 作業中' })
       .setTitle(compact(planning.goal, 180))
       .setDescription([
+        statusLine,
         summary ? compact(summary, expanded ? 600 : 280) : null,
         expanded
           ? (detailLines.length ? detailLines.join('\n\n') : 'まだ詳細な手順はありません。')
           : (collapsedLines.length ? collapsedLines.join('\n') : null),
       ].filter(Boolean).join('\n\n').slice(0, 4000))
       .setFooter({
-        text: `${completed}/${tasks.length || 1} 完了 • ${elapsed}秒 • ${expanded ? '詳細表示中 • ' : ''}完了時に自動で片付きます`,
+        text: `${completed}/${tasks.length || 1} 完了 • ${elapsed}秒 • 最終更新 ${new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })} • ${expanded ? '詳細表示中 • ' : ''}完了時に自動で片付きます`,
       });
   }
 

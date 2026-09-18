@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { PromptBuilder } from '../../src/services/llm/graph/nodes/prompt/PromptBuilder';
 import { ToolExecutor } from '../../src/services/llm/graph/nodes/execution/ToolExecutor';
+import {
+  formatCompletedSummary,
+  validateCompletionClaim,
+} from '../../src/services/llm/graph/nodes/FunctionCallingAgent';
 
 describe('Discord task guidance', () => {
   it('asks for Markdown output and avoids unnecessary clarification', () => {
@@ -28,5 +32,36 @@ describe('Discord task guidance', () => {
       'URLを取得できませんでした [failure_type=http_fetch_failed recoverable=true]',
     );
     expect(parsed).toEqual({ isError: true, failureType: 'http_fetch_failed', recoverable: true });
+  });
+
+  it('rejects a PDF completion until creation and Discord delivery both succeeded', () => {
+    const common = {
+      goal: '浜松の日帰り旅行について公式情報と雨天案を含むPDFを作って',
+      platform: 'discord',
+      summary: 'PDFを作成しました。',
+      availableToolNames: new Set(['create-travel-brief', 'send-artifact-on-discord']),
+    };
+    expect(validateCompletionClaim({
+      ...common,
+      successfulToolNames: new Set(['google-search']),
+    })).toContain('create-travel-brief');
+    expect(validateCompletionClaim({
+      ...common,
+      successfulToolNames: new Set(['create-travel-brief', 'send-artifact-on-discord']),
+    })).toBeNull();
+  });
+
+  it('rejects terminal wording that tells the user to keep waiting', () => {
+    expect(validateCompletionClaim({
+      goal: '調べて',
+      platform: 'discord',
+      summary: '別の手段を検討中です。少々お待ちください。',
+      availableToolNames: new Set(),
+      successfulToolNames: new Set(),
+    })).toContain('作業を続ける');
+  });
+
+  it('marks a successful final answer as visibly complete', () => {
+    expect(formatCompletedSummary('PDFを添付しました。')).toBe('## ✅ 完了\nPDFを添付しました。');
   });
 });

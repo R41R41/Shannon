@@ -24,9 +24,19 @@ describe('Discord progress card', () => {
 
   it('keeps the collapsed card compact', () => {
     const json = bot.buildProgressEmbed(planning, Date.now(), false).toJSON();
+    expect(json.description).toContain('状態: 🟦 実行中');
     expect(json.description).toContain('雨天案を検索');
     expect(json.description).not.toContain('詳細な検索結果');
     expect(bot.buildProgressControls('task', false).toJSON().components[0].label).toBe('詳細を表示');
+  });
+
+  it('makes an awaiting-user state visibly different from active work', () => {
+    const json = bot.buildProgressEmbed({
+      ...planning,
+      recoveryStatus: 'awaiting_user',
+    }, Date.now(), false).toJSON();
+    expect(json.description).toContain('状態: 🟨 回答待ち');
+    expect(json.description).toContain('あなたの操作が必要');
   });
 
   it('renders details inside the same card and offers collapse', () => {
