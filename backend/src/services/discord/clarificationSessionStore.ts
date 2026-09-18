@@ -12,6 +12,16 @@ export interface ClarificationSession extends DiscordClarificationInput {
   draftAnswers?: Record<string, string>;
 }
 
+/** Preserve native select answers when the requester accepts Shannon's proposal. */
+export function buildAcceptedClarificationAnswers(
+  session: Pick<ClarificationSession, 'draftAnswers' | 'proposal'>,
+): Record<string, string> {
+  return {
+    ...(session.draftAnswers ?? {}),
+    ...(session.proposal ? { '推奨条件': session.proposal } : {}),
+  };
+}
+
 function runtimeRoot(): string {
   const cwd = process.cwd();
   return cwd.endsWith(`${path.sep}backend`)

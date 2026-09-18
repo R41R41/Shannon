@@ -31,6 +31,7 @@ import {
   Partials,
   ModalBuilder,
   ModalSubmitInteraction,
+  MessageFlags,
   SlashCommandBuilder,
   StringSelectMenuBuilder,
   StringSelectMenuInteraction,
@@ -56,7 +57,11 @@ import { getEventBus } from '../eventBus/index.js';
 import { getArtifactStore } from '../artifacts/artifactStore.js';
 import { splitDiscordMessage, sendLongMessage } from './utils.js';
 import { VoiceManager } from './voice/VoiceManager.js';
-import { getClarificationSessionStore, ClarificationSession } from './clarificationSessionStore.js';
+import {
+  buildAcceptedClarificationAnswers,
+  getClarificationSessionStore,
+  ClarificationSession,
+} from './clarificationSessionStore.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -705,6 +710,17 @@ export class DiscordBot extends BaseClient {
             logger.warn(`[Discord] Interaction expired (token timed out): ${interaction.isCommand() ? interaction.commandName : interaction.isButton() ? interaction.customId : 'unknown'}`);
           } else {
             logger.error(`[Discord] Interaction handler error: ${errMsg}`);
+          }
+          if (interaction.isRepliable()) {
+            const response = {
+              content: '操作の処理に失敗しました。回答は保存されているので、もう一度お試しください。',
+              flags: MessageFlags.Ephemeral,
+            } as const;
+            if (interaction.deferred || interaction.replied) {
+              await interaction.followUp(response).catch(() => undefined);
+            } else {
+              await interaction.reply(response).catch(() => undefined);
+            }
           }
         }
       });
@@ -1527,19 +1543,30 @@ export class DiscordBot extends BaseClient {
 
   private async handleClarificationButton(interaction: ButtonInteraction): Promise<void> {
     const [, action, clarificationId] = interaction.customId.split(':');
+    logger.info(`[Clarification] Button received: action=${action}, id=${clarificationId}`);
+
+    // Discord requires an acknowledgement within three seconds. Accepting a proposal
+    // never needs to open a modal, so acknowledge it before filesystem/network work.
+    const acceptsProposal = action === 'accept';
+    if (acceptsProposal) await interaction.deferUpdate();
+
     const store = getClarificationSessionStore();
     const session = await store.get(clarificationId);
     if (!session || session.status !== 'pending') {
-      await interaction.reply({ content: 'この確認は終了または期限切れです。', ephemeral: true });
+      const response = { content: 'この確認は終了または期限切れです。', flags: MessageFlags.Ephemeral } as const;
+      if (interaction.deferred) await interaction.followUp(response);
+      else await interaction.reply(response);
       return;
     }
     if (interaction.user.id !== session.requesterUserId) {
-      await interaction.reply({ content: 'この確認には依頼者本人だけが回答できます。', ephemeral: true });
+      const response = { content: 'この確認には依頼者本人だけが回答できます。', flags: MessageFlags.Ephemeral } as const;
+      if (interaction.deferred) await interaction.followUp(response);
+      else await interaction.reply(response);
       return;
     }
-    if (action === 'accept' && session.proposal) {
-      await interaction.deferUpdate();
-      await this.completeClarification(session, { 推奨条件: session.proposal });
+    if (acceptsProposal && session.proposal) {
+      await this.completeClarification(session, buildAcceptedClarificationAnswers(session));
+      logger.info(`[Clarification] Accepted and resumed: id=${clarificationId}`);
       return;
     }
 
