@@ -6,13 +6,12 @@
  */
 
 import { ShannonMemory } from '../../../models/ShannonMemory.js';
-import { MemoryWriteEvent, IMemoryWriteEvent } from '../../../models/MemoryWriteEvent.js';
-import {
-  ShannonMemoryService,
-  ShannonMemoryInput,
-} from '../shannonMemoryService.js';
+import { MemoryWriteEvent } from '../../../models/MemoryWriteEvent.js';
+import type { IMemoryWriteEvent } from '../../../models/MemoryWriteEvent.js';
+import { ShannonMemoryService } from '../shannonMemoryService.js';
+import type { ShannonMemoryInput } from '../shannonMemoryService.js';
 import { PersonMemoryService } from '../personMemoryService.js';
-import { IExchange } from '../../../models/PersonMemory.js';
+import type { IExchange } from '../../../models/PersonMemory.js';
 import type { RequestEnvelope } from '@shannon/common';
 import { logger } from '../../../utils/logger.js';
 import { ScopeDeriver, channelToSource } from '../recall/ScopeDeriver.js';

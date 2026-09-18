@@ -45,7 +45,11 @@ PDF・プレビュー生成には `wkhtmltopdf` と `wkhtmltoimage` が必要。
 - `SHANNON_ENABLE_DISCORD_ARTIFACT_TEST=true`
 - `DISCORD_TOKEN_TEST`
 - `TEST_GUILD_ID`
-- `TEST_X_CHANNEL_ID`
+- `TEST_DEV_CHANNEL_ID`（未設定時のみ `TEST_X_CHANNEL_ID`）
+
+devモードは既定でテストGuild以外を無視し、スラッシュコマンドもテストGuildだけへ登録する。本番Botトークンへはフォールバックしない。アイマイラボでdev Botを使う特殊な検証に限り、明示的に `SHANNON_DEV_ALLOW_AIMINE=True` を指定する。
+
+通常はハーネス起動後にテストサーバーの `#dev` へ本人が依頼を投稿する。`SHANNON_ARTIFACT_TEST_PROMPT` で合成依頼を投入する場合は、確認フォームを本人だけが操作できるよう `SHANNON_ARTIFACT_TEST_USER_ID` も指定する。
 
 機能別環境変数:
 

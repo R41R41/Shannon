@@ -187,15 +187,16 @@ export class DiscordBot extends BaseClient {
   }
 
   /**
-   * devモード: テストギルド + アイマイラボギルドを許可
-   * prodモード: テストギルド以外を許可（devがアイマイラボ使用中ならそれもスキップ）
+   * devモードは既定でテストギルドだけを許可する。アイマイラボへの接続は
+   * SHANNON_DEV_ALLOW_AIMINE=True を明示した場合に限る。
+   * prodモードはテストギルドを扱わず、明示的なdev占有時だけアイマイラボも避ける。
    */
   private shouldSkipGuild(guildId: string | null): boolean {
     if (!guildId) return true;
     const isTestGuild = guildId === config.discord.guilds.test.guildId;
     if (this.isDev) {
       const isAimineGuild = guildId === config.discord.guilds.aimine.guildId;
-      return !isTestGuild && !isAimineGuild;
+      return !isTestGuild && !(config.discord.devAllowAimine && isAimineGuild);
     }
     if (isTestGuild) return true;
     if (guildId === config.discord.guilds.aimine.guildId && this.isDevHoldingAimine()) {
@@ -223,7 +224,7 @@ export class DiscordBot extends BaseClient {
 
   public async initialize() {
     try {
-      if (this.isDev) {
+      if (this.isDev && config.discord.devAllowAimine) {
         this.setupDevAimineLock();
       }
       if (!config.discord.token) {
@@ -363,9 +364,12 @@ export class DiscordBot extends BaseClient {
       const commandsJson = commands.map((command) => command.toJSON());
 
       // コマンドを特定のギルドに登録（即時反映）
-      // devモード: テストギルド + アイマイラボギルド両方に登録
+      // devモードは既定でテストギルドだけに登録する。
       const targetGuildIds = this.isDev
-        ? [config.discord.guilds.test.guildId, config.discord.guilds.aimine.guildId]
+        ? [
+            config.discord.guilds.test.guildId,
+            ...(config.discord.devAllowAimine ? [config.discord.guilds.aimine.guildId] : []),
+          ]
         : [config.discord.guilds.aimine.guildId];
 
       let registered = false;
