@@ -31,6 +31,9 @@ const runtimePairs = [
   ['src/services/llm/graph/nodes/FunctionCallingAgent.ts', 'dist/services/llm/graph/nodes/FunctionCallingAgent.js'],
   ['src/services/llm/graph/nodes/execution/ToolExecutor.ts', 'dist/services/llm/graph/nodes/execution/ToolExecutor.js'],
   ['src/services/llm/graph/cognitive/ModelSelector.ts', 'dist/services/llm/graph/cognitive/ModelSelector.js'],
+  ['src/services/llm/graph/policies/taskToolPolicy.ts', 'dist/services/llm/graph/policies/taskToolPolicy.js'],
+  ['src/services/llm/responses/OpenAIResponsesToolLoop.ts', 'dist/services/llm/responses/OpenAIResponsesToolLoop.js'],
+  ['src/services/llm/responses/DiscordArtifactResponsesExecutor.ts', 'dist/services/llm/responses/DiscordArtifactResponsesExecutor.js'],
 ];
 for (const [sourcePath, runtimePath] of runtimePairs) {
   const [source, runtime] = await Promise.all([stat(sourcePath), stat(runtimePath)]);
