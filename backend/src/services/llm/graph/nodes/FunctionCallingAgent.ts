@@ -33,6 +33,10 @@ import { ThinkingManager } from './execution/ThinkingManager.js';
 import { ToolExecutor } from './execution/ToolExecutor.js';
 import { LoopDetector } from './execution/LoopDetector.js';
 import { ModelSelector } from '../cognitive/ModelSelector.js';
+import {
+    isDiscordArtifactTask,
+    resolveTaskToolPolicy,
+} from '../policies/taskToolPolicy.js';
 
 function stripAssistantContentPrefix(t: string): string {
     return t.replace(/^content:\s*/i, '').trim();
@@ -47,12 +51,11 @@ const NON_TERMINAL_SUMMARY_PATTERNS = [
     /今後は.{0,40}(?:まとめ|作成|調査|対応|検討)(?:します|する予定)/u,
 ];
 
-const DISCORD_ARTIFACT_GOAL = /(?:PDF|旅行資料|旅程.{0,12}資料|日帰り旅行.{0,20}資料)/iu;
 const DISCORD_ROUTE_MAP_GOAL = /(?:地図|マップ|ルート図|移動ルート.{0,12}(?:分かる|わかる|表示|可視化))/iu;
 const DISCORD_ARTIFACT_TOOLS = ['create-travel-brief', 'send-artifact-on-discord'] as const;
 
 export function isDiscordArtifactRequest(goal: string, platform: string | null): boolean {
-    return platform === 'discord' && DISCORD_ARTIFACT_GOAL.test(goal);
+    return isDiscordArtifactTask(goal, platform);
 }
 
 export function validateCompletionClaim(input: {
@@ -417,13 +420,15 @@ export class FunctionCallingAgent {
             signal.addEventListener('abort', onParentAbort, { once: true });
         }
 
-        // allowedTools が指定されている場合、フィルタリングした modelWithTools を使う
+        // Apply the narrowest known policy before binding tool schemas. This is
+        // also used by direct FCA callers that do not pass allowedTools.
         let effectiveTools = [...this.tools];
         let effectiveToolMap = new Map(this.toolMap);
-        if (state.allowedTools && state.allowedTools.length > 0) {
-            effectiveTools = this.tools.filter(t => state.allowedTools!.includes(t.name));
+        const allowedTools = resolveTaskToolPolicy(goal, platform, state.allowedTools);
+        if (allowedTools?.length) {
+            effectiveTools = this.tools.filter(t => allowedTools.includes(t.name));
             effectiveToolMap = new Map(effectiveTools.map(t => [t.name, t]));
-            logger.info(`🔒 allowedTools: ${state.allowedTools.join(', ')} (${effectiveTools.length}/${this.tools.length})`, 'cyan');
+            logger.info(`🔒 allowedTools: ${allowedTools.join(', ')} (${effectiveTools.length}/${this.tools.length})`, 'cyan');
         }
 
         // Phase 2-D: Minecraft はプラットフォーム非関連ツールを除外（入力トークン -1600〜3200）
@@ -467,14 +472,6 @@ export class FunctionCallingAgent {
             effectiveTools = effectiveTools.filter(
                 (tool) => !channelOutputTools.includes(tool.name),
             );
-            effectiveToolMap = new Map(effectiveTools.map((tool) => [tool.name, tool]));
-        }
-
-        // Persistent routine authoring is unrelated to a one-off Discord artifact
-        // and is not initialized by the isolated test harness. Keeping it bound lets
-        // weaker models choose it instead of the explicit update-plan workflow.
-        if (isDiscordArtifactRequest(goal, platform)) {
-            effectiveTools = effectiveTools.filter((tool) => tool.name !== 'manage-routine');
             effectiveToolMap = new Map(effectiveTools.map((tool) => [tool.name, tool]));
         }
 

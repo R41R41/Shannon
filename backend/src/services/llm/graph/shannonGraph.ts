@@ -194,6 +194,30 @@ function createExecuteNode(
       };
     };
 
+    // First shared-core vertical slice. It is opt-in until production shadow
+    // evaluation confirms quality/latency/cost, and always falls back to FCA.
+    const useResponsesArtifactExecutor =
+      process.env.SHANNON_DISCORD_EXECUTOR === 'responses'
+      && config.llm.provider !== 'anthropic'
+      && isDiscordArtifactRequest(envelope.text ?? '', context?.platform ?? envelope.channel ?? null);
+    if (useResponsesArtifactExecutor) {
+      try {
+        const { DiscordArtifactResponsesExecutor } = await import(
+          '../responses/DiscordArtifactResponsesExecutor.js'
+        );
+        const executor = new DiscordArtifactResponsesExecutor(fca.getTools());
+        const responseResult = await executor.run(fcaState);
+        return {
+          finalAnswer: responseResult.lastAssistantContent,
+          taskTree: responseResult.taskTree,
+          emotion: emotionState.current ?? undefined,
+          trace: [`node:execute:responses:${responseResult.turns}turns`],
+        };
+      } catch (error) {
+        logger.error(`Responses artifact executor failed; falling back to FCA: ${error}`, error);
+      }
+    }
+
     // Discord/Web 等は FCA (OpenAI / LangChain Anthropic)。Minebot のみ ShannonExecutor。
     const useShannonExecutor =
       envelope.channel === 'minecraft'
