@@ -167,13 +167,13 @@ export default class FetchUrlTool extends StructuredTool {
             logger.error('URL取得エラー:', error);
             if (axios.isAxiosError(error)) {
                 if (error.code === 'ECONNABORTED') {
-                    return 'URLの取得中にタイムアウトが発生しました。サイトのサイズが大きすぎる可能性があります。';
+                    return 'URLの取得中にタイムアウトが発生しました。別の情報源で続行してください。 [failure_type=timeout recoverable=true]';
                 }
                 const statusCode = error.response?.status;
                 const statusText = error.response?.statusText;
-                return `URLの取得中にエラーが発生しました: ${statusCode} ${statusText}`;
+                return `URLを取得できませんでした: ${statusCode ?? 'unknown'} ${statusText ?? ''}。別の情報源で続行してください。 [failure_type=http_fetch_failed recoverable=true]`;
             }
-            return `URLの取得中にエラーが発生しました: ${error}`;
+            return `URLを取得できませんでした。別の情報源で続行してください。 [failure_type=http_fetch_failed recoverable=true]`;
         }
     }
 }

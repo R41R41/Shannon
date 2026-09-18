@@ -59,4 +59,23 @@ describe('Discord progress card', () => {
     expect(json.description).not.toContain('Troubleshooting URL');
     expect(json.description).not.toContain('tool_calls');
   });
+
+  it('keeps recovered tool failures out of the compact active view', () => {
+    const recovering = {
+      ...planning,
+      hierarchicalSubTasks: [
+        {
+          id: '1', goal: 'create-travel-brief()', status: 'error', recoverable: true,
+          failureReason: '入力形式を自動調整して再試行します。',
+        },
+        { id: '2', goal: 'create-travel-brief(title=浜松旅行)', status: 'in_progress' },
+      ],
+    };
+    const compact = bot.buildProgressEmbed(recovering, Date.now(), false).toJSON();
+    expect(compact.description).toContain('旅行PDFを作成');
+    expect(compact.description).not.toContain('別の方法で続行');
+
+    const expanded = bot.buildProgressEmbed(recovering, Date.now(), true).toJSON();
+    expect(expanded.description).toContain('↻ 旅行PDFを作成（別の方法で続行）');
+  });
 });

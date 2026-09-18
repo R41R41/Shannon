@@ -42,7 +42,7 @@ const travelBriefSchema = z.object({
 
 export default class CreateTravelBriefTool extends StructuredTool<any> {
   name = 'create-travel-brief';
-  description = '調査済みの旅行計画からPDF・Discordプレビュー画像を生成する（HTMLは内部レンダリング専用で送信しない）。先にWeb、Places、Routes、公式ページを確認し、実在する参照URLをsourcesへ渡す。compute-routeのpolylineがあればrouteMapに指定する。';
+  description = '調査済みの旅行計画からPDF・Discordプレビュー画像を生成する。空オブジェクトで呼ばず、必須のtitle・date・introduction・stops・sourcesを全て組み立ててから1回だけ呼ぶ（HTMLは内部レンダリング専用で送信しない）。先にWeb、Places、Routes、公式ページを確認し、実在する参照URLをsourcesへ渡す。compute-routeのpolylineがあればrouteMapに指定する。';
   schema = travelBriefSchema;
 
   async _call(data: TripBrief): Promise<string> {

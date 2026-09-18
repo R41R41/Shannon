@@ -1551,22 +1551,42 @@ export class DiscordBot extends BaseClient {
   }
 
   private buildProgressEmbed(planning: TaskTreeState, startedAt: number, expanded = false): EmbedBuilder {
-    const statusEmoji = (status: string) => ({
-      completed: '✅', in_progress: '⏳', pending: '○', error: '⚠️',
-    }[status] ?? '•');
+    const statusEmoji = (task: { status: string; recoverable?: boolean | null }) =>
+      task.status === 'error' && task.recoverable === true
+        ? '↻'
+        : ({ completed: '✅', in_progress: '⏳', pending: '○', error: '⚠️' }[task.status] ?? '•');
     const compact = (value: string, limit: number) => {
       const normalized = value.replace(/\s+/g, ' ').trim();
       return normalized.length > limit ? `${normalized.slice(0, limit - 1)}…` : normalized;
     };
     const tasks = planning.hierarchicalSubTasks ?? [];
     const completed = tasks.filter((task) => task.status === 'completed').length;
+    const readableGoal = (goal: string) => {
+      const toolName = goal.match(/^([^ (]+)\(/)?.[1];
+      const labels: Record<string, string> = {
+        'google-search': 'Webで情報を検索',
+        'search-places': '候補地を検索',
+        'fetch-url': '公式ページを確認',
+        'compute-route': '移動ルートを計算',
+        'create-travel-brief': '旅行PDFを作成',
+        'send-artifact-on-discord': 'PDFをDiscordへ送信',
+      };
+      return toolName && labels[toolName] ? labels[toolName] : goal;
+    };
     const taskLine = (task: (typeof tasks)[number], includeResult: boolean) => {
       const indent = '\u00a0'.repeat(Math.min(task.depth ?? 0, 3) * 2);
       const result = task.failureReason ?? task.result;
-      return `${indent}${statusEmoji(task.status)} ${compact(task.goal, 180)}`
+      const retrying = task.status === 'error' && task.recoverable === true;
+      const label = retrying ? `${readableGoal(task.goal)}（別の方法で続行）` : readableGoal(task.goal);
+      return `${indent}${statusEmoji(task)} ${compact(label, 180)}`
         + (includeResult && result ? `\n${indent}  ↳ ${compact(result, 220)}` : '');
     };
-    const activeTasks = tasks.filter((task) => task.status === 'in_progress' || task.status === 'error');
+    const inProgressTasks = tasks.filter((task) => task.status === 'in_progress');
+    const blockingErrors = tasks.filter((task) => task.status === 'error' && task.recoverable !== true);
+    const recoverableErrors = tasks.filter((task) => task.status === 'error' && task.recoverable === true);
+    const activeTasks = inProgressTasks.length > 0
+      ? [...inProgressTasks, ...blockingErrors]
+      : [...blockingErrors, ...recoverableErrors.slice(-1)];
     const collapsedTasks = (activeTasks.length > 0
       ? activeTasks
       : tasks.filter((task) => task.status === 'completed').slice(-1)

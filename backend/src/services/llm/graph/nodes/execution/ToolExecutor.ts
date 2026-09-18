@@ -139,7 +139,10 @@ export class ToolExecutor {
             if (step) {
                 step.status = isError ? 'error' : 'completed';
                 step.result = ToolExecutor.summarizeResultForUI(resultStr);
-                if (isError) step.failureReason = ToolExecutor.summarizeResultForUI(resultStr);
+                if (isError) {
+                    step.failureReason = ToolExecutor.summarizeResultForUI(resultStr);
+                    step.recoverable = failureMeta.recoverable;
+                }
             }
             return {
                 executionResult: {
@@ -150,17 +153,25 @@ export class ToolExecutor {
                 toolMessage: new ToolMessage({ content: resultStr, tool_call_id: toolCall.id || `call_${Date.now()}` }),
             };
         } catch (error) {
-            const errorMsg = `${toolCall.name} 実行エラー: ${error instanceof Error ? error.message : 'Unknown'}`;
+            const rawMessage = error instanceof Error ? error.message : 'Unknown';
+            const invalidArguments = /tool input did not match expected schema|invalid.*argument/i.test(rawMessage);
+            const failureType = invalidArguments ? 'invalid_arguments' : 'unexpected_error';
+            const recoverable = invalidArguments;
+            const errorMsg = `${toolCall.name} 実行エラー: ${rawMessage}`
+                + ` [failure_type=${failureType} recoverable=${recoverable}]`;
             logger.error(`  ✗ ${errorMsg}`);
             if (step) {
                 step.status = 'error';
-                step.failureReason = errorMsg;
+                step.failureReason = invalidArguments
+                    ? '入力形式を自動調整して再試行します。'
+                    : ToolExecutor.summarizeResultForUI(errorMsg);
+                step.recoverable = recoverable;
             }
             return {
                 executionResult: {
                     toolName: toolCall.name, args: toolCall.args || {}, success: false,
                     message: errorMsg, duration: Date.now() - startedAt,
-                    failureType: 'unexpected_error', recoverable: false, error: errorMsg,
+                    failureType, recoverable, error: errorMsg,
                 },
                 toolMessage: new ToolMessage({ content: errorMsg, tool_call_id: toolCall.id || `call_${Date.now()}` }),
             };
@@ -228,6 +239,7 @@ export class ToolExecutor {
         if (step) {
             step.status = 'error';
             step.failureReason = errorMsg;
+            step.recoverable = false;
         }
         return {
             executionResult: {
