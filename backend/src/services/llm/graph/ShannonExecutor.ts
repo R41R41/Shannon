@@ -72,7 +72,7 @@ export interface ShannonExecutorResult {
 
 // ─── 定数 ───
 
-const MODEL_SONNET = process.env.SHANNON_MODEL || 'claude-sonnet-4-20250514';
+const MODEL_SONNET = process.env.SHANNON_MODEL || config.anthropic.model;
 const MODEL_HAIKU = 'claude-haiku-4-5-20251001';
 const MAX_TOKENS = 16384;
 const MAX_ITERATIONS = 30;

@@ -95,6 +95,20 @@ async function dispatchAction(
       });
       break;
 
+    case 'send_artifact':
+      eventBus.publish({
+        type: 'discord:post_message',
+        memoryZone,
+        data: {
+          channelId,
+          guildId,
+          text: action.text,
+          imageUrl: '',
+          artifactIds: action.artifactIds,
+        },
+      });
+      break;
+
     case 'voice_speak':
       eventBus.publish({
         type: 'discord:post_message',

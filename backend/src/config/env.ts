@@ -146,6 +146,8 @@ export const config = {
 
   anthropic: {
     apiKey: optional('ANTHROPIC_API_KEY', ''),
+    /** Override without a code release when Anthropic rotates model IDs. */
+    model: optional('SHANNON_ANTHROPIC_MODEL', 'claude-opus-4-6'),
   },
 
   groq: {

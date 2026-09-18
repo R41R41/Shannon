@@ -25,6 +25,11 @@ export interface DiscordSendTextMessageInput extends ServiceInput {
   guildId: string;
   text: string;
   imageUrl: string;
+  /**
+   * Server-owned generated artifacts. The Discord client resolves these IDs
+   * through ArtifactStore; callers cannot attach arbitrary filesystem paths.
+   */
+  artifactIds?: string[];
 }
 
 export interface DiscordScheduledPostInput extends ServiceInput {

@@ -30,6 +30,7 @@ export type DiscordAction =
   | { type: 'reply'; text: string }
   | { type: 'react'; emoji: string }
   | { type: 'send_embed'; title: string; body: string; color?: number }
+  | { type: 'send_artifact'; text: string; artifactIds: string[] }
   | { type: 'voice_speak'; text: string };
 
 /**

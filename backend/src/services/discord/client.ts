@@ -47,6 +47,7 @@ import { voiceResponseChannelIds } from './voiceState.js';
 import { loadServerChoices } from './serverChoices.js';
 import { BaseClient } from '../common/BaseClient.js';
 import { getEventBus } from '../eventBus/index.js';
+import { getArtifactStore } from '../artifacts/artifactStore.js';
 import { splitDiscordMessage, sendLongMessage } from './utils.js';
 import { VoiceManager } from './voice/VoiceManager.js';
 
@@ -1116,7 +1117,7 @@ export class DiscordBot extends BaseClient {
     // LLMからの応答を処理
     this.eventBus.subscribe('discord:post_message', async (event) => {
       if (this.status !== 'running') return;
-      let { text, channelId, guildId, imageUrl } =
+      let { text, channelId, guildId, imageUrl, artifactIds } =
         event.data as DiscordSendTextMessageInput;
 
       if (voiceResponseChannelIds.has(channelId) && !text?.startsWith('🎤')) {
@@ -1138,7 +1139,27 @@ export class DiscordBot extends BaseClient {
         );
         logger.info(guildName + ' ' + channelName, 'blue');
         logger.info('shannon: ' + text, 'blue');
-        if (imageUrl) {
+        if (artifactIds?.length) {
+          try {
+            const bundles = await Promise.all(
+              [...new Set(artifactIds)].slice(0, 3).map((id) => getArtifactStore().resolveBundle(id)),
+            );
+            const files = bundles.flatMap((bundle) => bundle.files).slice(0, 10).map(
+              (file) => new AttachmentBuilder(file.absolutePath, { name: file.fileName }),
+            );
+            const chunks = splitDiscordMessage(text ?? '');
+            await channel.send({ content: chunks[0]?.slice(0, 2000) || undefined, files });
+            for (let i = 1; i < chunks.length; i++) {
+              await channel.send(chunks[i]);
+            }
+          } catch (artifactError) {
+            logger.error('[Discord] 成果物送信エラー:', artifactError);
+            await sendLongMessage(
+              channel as TextChannel,
+              `${text ?? ''}\n\n（ファイルの添付に失敗しました。少し待ってから再生成してください）`,
+            );
+          }
+        } else if (imageUrl) {
           const content = (text ?? '').slice(0, 2000);
           try {
             // ローカルファイルパスの場合はAttachmentBuilderで添付
@@ -1365,15 +1386,19 @@ export class DiscordBot extends BaseClient {
             });
           }
 
+          const suffix = `\n\n${legend}\n\`\`\``;
+          const prefix = '```\n';
+          const maxContentLength = 2000 - prefix.length - suffix.length;
+          const safeContent = formattedContent.length > maxContentLength
+            ? `${formattedContent.slice(0, Math.max(0, maxContentLength - 2))}…\n`
+            : formattedContent;
+          const planningMessage = `${prefix}${safeContent}${suffix}`;
+
           // 既存メッセージがあれば更新、なければ新規送信
           if (existingMessage) {
-            await existingMessage.edit(
-              `\`\`\`\n${formattedContent}\n\n${legend}\n\`\`\``
-            );
+            await existingMessage.edit(planningMessage);
           } else {
-            await channel.send(
-              `\`\`\`\n${formattedContent}\n\n${legend}\n\`\`\``
-            );
+            await channel.send(planningMessage);
           }
         }
       }

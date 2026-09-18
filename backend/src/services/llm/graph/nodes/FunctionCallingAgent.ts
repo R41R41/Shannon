@@ -163,13 +163,16 @@ export class FunctionCallingAgent {
         // Claude Anthropic を優先、フォールバックで OpenAI
         if (config.anthropic?.apiKey) {
             this.model = new ChatAnthropic({
-                model: 'claude-opus-4-20250514',
+                model: config.anthropic.model,
                 anthropicApiKey: config.anthropic.apiKey,
                 temperature: 1,
                 maxTokens: 16384,
                 streaming: true,
+                // Older @langchain/anthropic sends -1 for omitted sampling
+                // fields; Claude 4.6 requires the fields to be absent.
+                invocationKwargs: { top_p: undefined, top_k: undefined },
             });
-            logger.info('🧠 FCA: Using Claude Opus 4.6 (Anthropic)', 'magenta');
+            logger.info(`🧠 FCA: Using ${config.anthropic.model} (Anthropic)`, 'magenta');
         } else {
             this.model = createTracedModel({
                 modelName: FunctionCallingAgent.MODEL_NAME,

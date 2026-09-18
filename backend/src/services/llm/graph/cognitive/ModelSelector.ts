@@ -36,7 +36,7 @@ const ANTHROPIC_CHAIN: ModelSlot[] = [
     {
         name: 'claude-opus-4',
         config: {
-            modelName: 'claude-opus-4-20250514',
+            modelName: config.anthropic.model,
             temperature: 1,
             maxTokens: 16384,
             timeoutMs: 120_000,
@@ -211,6 +211,9 @@ export class ModelSelector {
                 temperature: cfg.temperature,
                 maxTokens: cfg.maxTokens,
                 streaming: cfg.streaming ?? true,
+                // Older @langchain/anthropic defaults these to -1. Current
+                // Claude APIs reject -1 instead of treating it as omitted.
+                invocationKwargs: { top_p: undefined, top_k: undefined },
             });
         }
 

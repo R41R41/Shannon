@@ -24,6 +24,9 @@ node_modules
 # Generated images
 /backend/saves/images/generated/
 
+# Generated shareable artifacts (HTML/PDF/preview images)
+/backend/saves/artifacts/
+
 # Runtime logs
 /backend/logs/
 

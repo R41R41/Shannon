@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { CONFIG as MINEBOT_CONFIG } from '../../../../minebot/config/MinebotConfig.js';
+import { TRAVEL_BRIEF_SKILL_PROMPT } from '../../../../artifacts/travelBriefSkill.js';
 import type { SelfImprovementRulesFile } from '../../cognitive/selfImprove/types.js';
 import { EmotionState } from '../EmotionNode.js';
 import { MemoryState } from '../MemoryNode.js';
@@ -131,6 +132,9 @@ export class PromptBuilder {
         const profileSection = (context?.platform === 'web' || context?.platform === 'discord')
             ? `\n\n${loadShannonProfile()}\n\n---\n\n`
             : '';
+        const travelBriefSection = context?.platform === 'discord'
+            ? TRAVEL_BRIEF_SKILL_PROMPT
+            : '';
 
         return `あなたはAGI「シャノン」です。${profileSection}ユーザーの指示に従ってツールを使いタスクを実行してください。
 ${responseInstruction}
@@ -180,7 +184,8 @@ ${this.formatOutputRules(context)}
   1. まず get-discord-images でチャンネル内の画像URLを取得する
   2. 該当する画像URLを edit-image の imagePath に渡す（URLは自動ダウンロードされる）
 - ファイル名やパスを推測しない。必ず get-discord-images で正確なURLを取得すること
-- describe-image で画像の内容を確認する場合も、まず get-discord-images でURLを取得する`;
+- describe-image で画像の内容を確認する場合も、まず get-discord-images でURLを取得する
+${travelBriefSection}`;
     }
 
     /**
