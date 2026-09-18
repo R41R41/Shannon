@@ -115,9 +115,12 @@ Shannon2/  (npm workspaces monorepo)
 
 | 役割 | モデル |
 |------|--------|
-| 分類 (ClassifyNode) | gpt-4.1-mini |
-| タスク実行 (FCA) | gpt-4.1-mini → gpt-5-mini-fast → gpt-5 (動的エスカレーション) |
+| 軽量な会話・分類 | GPT-5.6 Luna |
+| タスク実行 (FCA) | GPT-5.6 Luna → Terra → Sol (動的エスカレーション) |
+| Discord旅行資料 | GPT-5.6 Terraから開始、失敗時のみSolへ昇格 |
 | 自己改善 (CodeAgent) | Claude Opus / Sonnet |
+
+GPT-6 Astraはコスト保護のためShannonでは使用禁止です。モデル設定APIからの上書きも拒否します。
 
 ### データストア
 

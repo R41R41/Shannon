@@ -92,7 +92,7 @@ async function ingestNode(state: ShannonStateType): Promise<Partial<ShannonState
   const platform = state.envelope.channel ?? null;
   const selectedModel = config.llm.provider !== 'anthropic'
     && isDiscordArtifactRequest(state.envelope.text ?? '', platform)
-    ? 'gpt-5'
+    ? 'gpt-5.6-terra'
     : ModelSelector.selectInitialModel('mid', false, mode);
   return { mode, selectedModel, trace: ['node:ingest'] };
 }

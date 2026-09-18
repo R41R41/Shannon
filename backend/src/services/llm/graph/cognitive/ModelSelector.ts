@@ -20,7 +20,7 @@ export interface ModelConfig {
     temperature?: number;
     maxTokens?: number;
     isReasoningModel?: boolean;
-    reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
+    reasoningEffort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
     verbosity?: 'low' | 'medium' | 'high';
     timeoutMs: number;
     provider: 'anthropic' | 'openai';
@@ -48,20 +48,37 @@ const ANTHROPIC_CHAIN: ModelSlot[] = [
 
 const OPENAI_CHAIN: ModelSlot[] = [
     {
-        name: 'gpt-4.1-mini',
-        config: { modelName: 'gpt-4.1-mini', temperature: 1, maxTokens: 8192, timeoutMs: 30_000, provider: 'openai' },
+        name: 'gpt-5.6-luna',
+        config: {
+            modelName: 'gpt-5.6-luna',
+            maxTokens: 8192,
+            reasoningEffort: 'none',
+            verbosity: 'low',
+            timeoutMs: 30_000,
+            provider: 'openai',
+        },
     },
     {
-        name: 'gpt-5-mini-fast',
-        config: { modelName: 'gpt-5-mini', temperature: 1, maxTokens: 8192, reasoningEffort: 'low', verbosity: 'low', timeoutMs: 45_000, provider: 'openai' },
+        name: 'gpt-5.6-terra',
+        config: {
+            modelName: 'gpt-5.6-terra',
+            maxTokens: 8192,
+            reasoningEffort: 'low',
+            verbosity: 'low',
+            timeoutMs: 75_000,
+            provider: 'openai',
+        },
     },
     {
-        name: 'gpt-5-mini',
-        config: { modelName: 'gpt-5-mini', temperature: 1, maxTokens: 8192, reasoningEffort: 'medium', verbosity: 'medium', timeoutMs: 75_000, provider: 'openai' },
-    },
-    {
-        name: 'gpt-5',
-        config: { modelName: 'gpt-5', temperature: 1, maxTokens: 8192, reasoningEffort: 'medium', verbosity: 'medium', timeoutMs: 120_000, provider: 'openai' },
+        name: 'gpt-5.6-sol',
+        config: {
+            modelName: 'gpt-5.6-sol',
+            maxTokens: 8192,
+            reasoningEffort: 'medium',
+            verbosity: 'medium',
+            timeoutMs: 120_000,
+            provider: 'openai',
+        },
     },
 ];
 
@@ -131,11 +148,10 @@ export class ModelSelector {
         if (chain[0].config.provider === 'anthropic') {
             return 'claude-opus-4';
         }
-        // OpenAI: 従来ロジック
-        if (mode === 'minecraft_emergency' || mode === 'minecraft_action') return 'gpt-4.1-mini';
-        if (riskLevel === 'high') return 'gpt-5';
-        if (riskLevel === 'mid' && needsPlanning) return 'gpt-5-mini-fast';
-        return 'gpt-4.1-mini';
+        if (mode === 'minecraft_emergency' || mode === 'minecraft_action') return 'gpt-5.6-luna';
+        if (riskLevel === 'high') return 'gpt-5.6-sol';
+        if (riskLevel === 'mid' && needsPlanning) return 'gpt-5.6-terra';
+        return 'gpt-5.6-luna';
     }
 
     bindTools(tools: StructuredTool[]): ReturnType<ChatOpenAI['bindTools']> | ReturnType<ChatAnthropic['bindTools']> {

@@ -11,6 +11,17 @@ type MinebotModelKey = keyof typeof models.minebot;
 const overrides: Partial<Record<ModelKey, string>> = {};
 const minebotOverrides: Partial<Record<MinebotModelKey, string>> = {};
 
+/**
+ * GPT-6 Astra is intentionally disabled for Shannon. Its price profile is not
+ * appropriate for automatic routing, and an API override must not bypass that
+ * product decision.
+ */
+export function assertModelIsAllowed(model: string): void {
+  if (/^gpt-6-astra(?:-|$)/i.test(model.trim())) {
+    throw new Error('GPT-6 Astra is disabled for Shannon because of its cost.');
+  }
+}
+
 export const modelManager = {
   get(key: ModelKey): string {
     return overrides[key] ?? models[key];
@@ -21,11 +32,13 @@ export const modelManager = {
   },
 
   set(key: ModelKey, model: string): void {
+    assertModelIsAllowed(model);
     logger.info(`[ModelManager] ${key}: ${modelManager.get(key)} → ${model}`, 'cyan');
     overrides[key] = model;
   },
 
   setMinebotModel(key: MinebotModelKey, model: string): void {
+    assertModelIsAllowed(model);
     logger.info(`[ModelManager] minebot.${key}: ${modelManager.getMinebotModel(key)} → ${model}`, 'cyan');
     minebotOverrides[key] = model;
   },

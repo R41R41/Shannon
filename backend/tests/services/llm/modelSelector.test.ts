@@ -10,11 +10,18 @@ describe('ModelSelector defaults', () => {
     const { ModelSelector } = await import('../../../src/services/llm/graph/cognitive/ModelSelector');
     const { config } = await import('../../../src/config/env');
     expect(ModelSelector.getChainInfo().map((entry) => entry.name)).toEqual([
-      'gpt-4.1-mini',
-      'gpt-5-mini-fast',
-      'gpt-5-mini',
-      'gpt-5',
+      'gpt-5.6-luna',
+      'gpt-5.6-terra',
+      'gpt-5.6-sol',
     ]);
     expect(config.webSearch.providerOrder).toEqual(['google', 'brave']);
+  });
+
+  it('routes low-cost, planned, and high-risk work to Luna, Terra, and Sol', async () => {
+    const { ModelSelector } = await import('../../../src/services/llm/graph/cognitive/ModelSelector');
+
+    expect(ModelSelector.selectInitialModel('low', false, 'conversation')).toBe('gpt-5.6-luna');
+    expect(ModelSelector.selectInitialModel('mid', true, 'conversation')).toBe('gpt-5.6-terra');
+    expect(ModelSelector.selectInitialModel('high', true, 'conversation')).toBe('gpt-5.6-sol');
   });
 });

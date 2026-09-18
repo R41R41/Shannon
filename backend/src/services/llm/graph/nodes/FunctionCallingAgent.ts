@@ -409,7 +409,7 @@ export class FunctionCallingAgent {
         const modelSelector = new ModelSelector(state.selectedModel || FunctionCallingAgent.MODEL_NAME);
         const platform = state.context?.platform ?? null;
         if (platform === 'minecraft' || platform === 'minebot') {
-            modelSelector.setMaxEscalationLevel('gpt-5-mini-fast');
+            modelSelector.setMaxEscalationLevel('gpt-5.6-luna');
         }
         logger.info(`🤖 FunctionCallingAgent: タスク実行開始 "${goal}"${isEmergency ? ' [緊急]' : ''} (model=${modelSelector.modelName})`, 'cyan');
         if (signal) {
