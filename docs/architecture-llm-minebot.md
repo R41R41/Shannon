@@ -350,10 +350,12 @@ PlanState 生成 (craftPlanToPlanState):
 | Tier | モデル | Temperature | MaxTokens | Timeout | 備考 |
 |------|--------|-------------|-----------|---------|------|
 | 0 | `gpt-5.6-luna` | — | 8192 | 30s | 通常会話・分類、reasoning_effort='none' |
-| 1 | `gpt-5.6-terra` | — | 8192 | 75s | 計画・複数ツール、reasoning_effort='low' |
-| 2 | `gpt-5.6-sol` | — | 8192 | 120s | 高リスク・失敗時、reasoning_effort='medium' |
+| 1 | `gpt-5.6-terra` | — | 8192 | 75s | 計画・複数ツール、reasoning_effort='none' |
+| 2 | `gpt-5.6-sol` | — | 8192 | 120s | 高リスク・失敗時、reasoning_effort='none' |
 
 `gpt-6-astra` はコスト保護のためチェーンに含めず、ランタイム上書きも拒否する。
+現行FCAはChat CompletionsでFunction Toolsを使うため、GPT-5.6各モデルの
+`reasoning_effort` は `none` に固定する。Responses API移行後にタスク別の推論強度を再導入する。
 
 ### 初期選択ロジック
 

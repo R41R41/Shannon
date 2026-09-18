@@ -14,6 +14,11 @@ describe('ModelSelector defaults', () => {
       'gpt-5.6-terra',
       'gpt-5.6-sol',
     ]);
+    expect(ModelSelector.getChainInfo().map((entry) => entry.reasoningEffort)).toEqual([
+      'none',
+      'none',
+      'none',
+    ]);
     expect(config.webSearch.providerOrder).toEqual(['google', 'brave']);
   });
 

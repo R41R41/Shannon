@@ -63,7 +63,11 @@ const OPENAI_CHAIN: ModelSlot[] = [
         config: {
             modelName: 'gpt-5.6-terra',
             maxTokens: 8192,
-            reasoningEffort: 'low',
+            // Chat Completions rejects function tools when reasoning_effort is
+            // above none. FCA currently binds LangChain tools through that
+            // endpoint, so keep reasoning disabled until the Responses API
+            // migration is complete.
+            reasoningEffort: 'none',
             verbosity: 'low',
             timeoutMs: 75_000,
             provider: 'openai',
@@ -74,7 +78,7 @@ const OPENAI_CHAIN: ModelSlot[] = [
         config: {
             modelName: 'gpt-5.6-sol',
             maxTokens: 8192,
-            reasoningEffort: 'medium',
+            reasoningEffort: 'none',
             verbosity: 'medium',
             timeoutMs: 120_000,
             provider: 'openai',
@@ -270,7 +274,11 @@ export class ModelSelector {
         return createTracedModel(params as Parameters<typeof createTracedModel>[0]);
     }
 
-    static getChainInfo(): Array<{ name: string; index: number }> {
-        return getChain().map((s, i) => ({ name: s.name, index: i }));
+    static getChainInfo(): Array<{ name: string; index: number; reasoningEffort?: ModelConfig['reasoningEffort'] }> {
+        return getChain().map((s, i) => ({
+            name: s.name,
+            index: i,
+            reasoningEffort: s.config.reasoningEffort,
+        }));
     }
 }
