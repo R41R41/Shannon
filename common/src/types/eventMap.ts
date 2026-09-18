@@ -7,6 +7,7 @@
 import { ILog, MemoryZone, ServiceInput, ServiceOutput, StatusAgentInput } from './common.js';
 import {
   DiscordClientInput,
+  DiscordClarificationInput,
   DiscordGetServerEmojiInput,
   DiscordGetServerEmojiOutput,
   DiscordPlanningInput,
@@ -68,6 +69,7 @@ export interface EventPayloadMap {
   'discord:get_server_emoji': DiscordGetServerEmojiInput;
   'discord:send_server_emoji': DiscordSendServerEmojiInput;
   'discord:planning': DiscordPlanningInput;
+  'discord:request_clarification': DiscordClarificationInput;
 
   // === Twitter ===
   'twitter:status': ServiceInput;

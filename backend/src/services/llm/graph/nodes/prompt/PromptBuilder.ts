@@ -236,14 +236,14 @@ ${travelBriefSection}`;
                 // 最終返信に使わないことはプロンプトで指示済み。
                 return [];
             case 'web':
-                return ['chat-on-web'];
+                return ['chat-on-web', 'ask-user-on-discord'];
             case 'twitter':
-                return ['post-on-twitter'];
+                return ['post-on-twitter', 'ask-user-on-discord'];
             case 'minebot':
             case 'minecraft':
-                return ['chat-on-discord', 'chat-on-web', 'post-on-twitter'];
+                return ['chat-on-discord', 'chat-on-web', 'post-on-twitter', 'ask-user-on-discord'];
             default:
-                return [];
+                return ['ask-user-on-discord'];
         }
     }
 
@@ -254,10 +254,13 @@ ${travelBriefSection}`;
             return '';
         }
         return `
-5. 「調べて」「教えて」と言われたら必ず google-search → fetch-url の順でページ本文まで読む。検索結果のスニペットだけで回答しない
-6. 不完全な情報や「サイトで確認してください」は絶対にダメ。具体的な情報を整理して送信する
-7. Notionページの画像は describe-notion-image で全て分析してから報告する
-8. Twitterに投稿する際は、必ず generate-tweet-text でツイート文を生成してから post-on-twitter で投稿する。自分で直接ツイート文を書かない`;
+5. 不足情報は影響度で判断する。低影響かつ高確度の仮定は明記して進める。中影響は推奨条件を提案して確認する。高影響または必須情報不足は、Discordなら ask-user-on-discord で最大5問にまとめる
+6. ask-user-on-discord の選択肢には必ず「その他」に相当する自由入力を許容する。質問を小分けにせず、回答後は元の依頼を自動再開する
+7. 相互に依存せず状態を変更しない調査ツールは、同じ応答で複数呼び出して並列化する。書き込み・送信・承認が必要な操作は並列化しない
+8. 「調べて」「教えて」と言われたら google-search で複数の独立した情報源を探し、重要ページを fetch-url で本文まで読む。検索結果のスニペットだけで回答しない。公式・一次情報を優先し、同一ドメインだけに偏らない
+9. 不完全な情報や「サイトで確認してください」だけの回答は避け、確認済みの具体情報と不確実性を整理する
+10. Notionページの画像は describe-notion-image で全て分析してから報告する
+11. Twitterに投稿する際は、必ず generate-tweet-text でツイート文を生成してから post-on-twitter で投稿する。自分で直接ツイート文を書かない`;
     }
 
     private formatPlatformInfo(context: TaskContext | null): string {

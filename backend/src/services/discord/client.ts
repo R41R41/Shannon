@@ -1,6 +1,7 @@
 import { AIMessage, BaseMessage, HumanMessage } from '@langchain/core/messages';
 import {
   DiscordClientInput,
+  DiscordClarificationInput,
   DiscordGetServerEmojiInput,
   DiscordGetServerEmojiOutput,
   DiscordPlanningInput,
@@ -9,7 +10,6 @@ import {
   DiscordSendServerEmojiOutput,
   DiscordSendTextMessageInput,
   DiscordSendTextMessageOutput,
-  HierarchicalSubTask,
   MinebotInput,
   MinecraftServerName,
   ServiceInput,
@@ -17,11 +17,11 @@ import {
   YoutubeSubscriberUpdateOutput,
 } from '@shannon/common';
 
-type LegacyPlanSubTask = NonNullable<TaskTreeState['subTasks']>[number];
 import {
   ActionRowBuilder,
   AttachmentBuilder,
   ButtonBuilder,
+  ButtonInteraction,
   ButtonStyle,
   ChatInputCommandInteraction,
   Client,
@@ -29,7 +29,13 @@ import {
   EmbedBuilder,
   GatewayIntentBits,
   Partials,
+  ModalBuilder,
+  ModalSubmitInteraction,
   SlashCommandBuilder,
+  StringSelectMenuBuilder,
+  StringSelectMenuInteraction,
+  TextInputBuilder,
+  TextInputStyle,
   TextChannel,
   ThreadChannel,
   User,
@@ -50,6 +56,7 @@ import { getEventBus } from '../eventBus/index.js';
 import { getArtifactStore } from '../artifacts/artifactStore.js';
 import { splitDiscordMessage, sendLongMessage } from './utils.js';
 import { VoiceManager } from './voice/VoiceManager.js';
+import { getClarificationSessionStore, ClarificationSession } from './clarificationSessionStore.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -78,6 +85,8 @@ export class DiscordBot extends BaseClient {
   private doukiChannelId: string | null = null;
   private colabGuildId: string | null = null;
   private colabChannelId: string | null = null;
+  private progressMessages = new Map<string, { channelId: string; messageId: string; startedAt: number }>();
+  private progressDetails = new Map<string, TaskTreeState>();
   private static instance: DiscordBot;
   public isDev: boolean = false;
   public voiceManager: VoiceManager;
@@ -379,6 +388,23 @@ export class DiscordBot extends BaseClient {
       this.client.on('interactionCreate', async (interaction) => {
         try {
         if (this.shouldSkipGuild(interaction.guildId)) return;
+
+        if (interaction.isButton() && interaction.customId.startsWith('shannon_clarify:')) {
+          await this.handleClarificationButton(interaction);
+          return;
+        }
+        if (interaction.isModalSubmit() && interaction.customId.startsWith('shannon_clarify_submit:')) {
+          await this.handleClarificationSubmit(interaction);
+          return;
+        }
+        if (interaction.isButton() && interaction.customId.startsWith('shannon_progress_detail:')) {
+          await this.handleProgressDetail(interaction);
+          return;
+        }
+        if (interaction.isStringSelectMenu() && interaction.customId.startsWith('shannon_clarify_select:')) {
+          await this.handleClarificationSelect(interaction);
+          return;
+        }
 
         if (interaction.isButton() && interaction.customId === 'voice_ptt') {
           const handlers = this.voiceManager.setupVoiceInteractions();
@@ -1144,7 +1170,9 @@ export class DiscordBot extends BaseClient {
             const bundles = await Promise.all(
               [...new Set(artifactIds)].slice(0, 3).map((id) => getArtifactStore().resolveBundle(id)),
             );
-            const files = bundles.flatMap((bundle) => bundle.files).slice(0, 10).map(
+            const files = bundles.flatMap((bundle) => bundle.files)
+              .filter((file) => file.role !== 'html')
+              .slice(0, 10).map(
               (file) => new AttachmentBuilder(file.absolutePath, { name: file.fileName }),
             );
             const chunks = splitDiscordMessage(text ?? '');
@@ -1320,88 +1348,53 @@ export class DiscordBot extends BaseClient {
     });
     this.eventBus.subscribe('discord:planning', async (event) => {
       if (this.status !== 'running') return;
-      let { planning, channelId, taskId } = event.data as DiscordPlanningInput;
-      const channel = this.client.channels.cache.get(channelId);
+      const { planning, channelId, taskId } = event.data as DiscordPlanningInput;
+      const channel = this.client.channels.cache.get(channelId)
+        ?? await this.client.channels.fetch(channelId).catch(() => null);
       logger.info(`discord:planning ${taskId}`);
+      if (!channel?.isTextBased() || !('send' in channel) || !('messages' in channel)) return;
+      this.progressDetails.set(taskId, planning);
+      const tracked = this.progressMessages.get(taskId);
 
-      if (channel?.isTextBased() && 'send' in channel) {
-        const messages = await channel.messages.fetch({ limit: 10 });
-        const existingMessage = messages.find(
-          (msg) =>
-            msg.author.id === this.client.user?.id &&
-            msg.content.includes(`TaskID: ${taskId}`)
-        );
+      if (planning.status === 'completed') {
+        if (tracked) {
+          const message = await channel.messages.fetch(tracked.messageId).catch(() => null);
+          if (message) await message.delete().catch(() => undefined);
+        }
+        this.progressMessages.delete(taskId);
+        this.progressDetails.delete(taskId);
+        return;
+      }
 
-        // ステータスに応じた絵文字を選択
-        const getStatusEmoji = (status: string) => {
-          switch (status) {
-            case 'completed':
-              return '🟢'; // 完了：緑
-            case 'in_progress':
-              return '🔵'; // 進行中：青
-            case 'pending':
-              return '🟡'; // 保留：黄色
-            case 'error':
-              return '🔴'; // エラー：赤
-            default:
-              return '⚪'; // その他：白
-          }
-        };
-
-        const legend = `🟢:完了, 🔵:進行中, 🟡:保留, 🔴:エラー, ⚪:その他`;
-
-        // タスク状態をMarkdown形式に整形
-        let formattedContent = '';
-
-        if (planning.status === 'completed') {
-          if (existingMessage) {
-            await existingMessage.delete();
-          }
-        } else {
-          formattedContent = `TaskID: ${taskId}\n\n${getStatusEmoji(
-            planning.status
-          )} ${planning.goal}\n${planning.strategy}\n`;
-
-          // hierarchicalSubTasks（新フォーマット）がある場合は追加
-          if (planning.hierarchicalSubTasks && planning.hierarchicalSubTasks.length > 0) {
-            planning.hierarchicalSubTasks.forEach((subTask: HierarchicalSubTask) => {
-              const depth = subTask.depth ?? 0;
-              const indent = '  '.repeat(depth + 1);
-              formattedContent += `${indent}${getStatusEmoji(subTask.status)} ${subTask.goal}\n`;
-              if (subTask.result) {
-                formattedContent += `${indent}  → ${subTask.result.substring(0, 100)}\n`;
-              }
-              if (subTask.failureReason) {
-                formattedContent += `${indent}  ✗ ${subTask.failureReason.substring(0, 100)}\n`;
-              }
-            });
-          }
-
-          // subTasks（旧フォーマット互換）がある場合は追加
-          if (planning.subTasks && planning.subTasks.length > 0) {
-            planning.subTasks.forEach((subTask: LegacyPlanSubTask) => {
-              formattedContent += `  ${getStatusEmoji(subTask.subTaskStatus)} ${subTask.subTaskGoal
-                }\n`;
-              formattedContent += `  ${subTask.subTaskStrategy}\n`;
-            });
-          }
-
-          const suffix = `\n\n${legend}\n\`\`\``;
-          const prefix = '```\n';
-          const maxContentLength = 2000 - prefix.length - suffix.length;
-          const safeContent = formattedContent.length > maxContentLength
-            ? `${formattedContent.slice(0, Math.max(0, maxContentLength - 2))}…\n`
-            : formattedContent;
-          const planningMessage = `${prefix}${safeContent}${suffix}`;
-
-          // 既存メッセージがあれば更新、なければ新規送信
-          if (existingMessage) {
-            await existingMessage.edit(planningMessage);
-          } else {
-            await channel.send(planningMessage);
-          }
+      const startedAt = tracked?.startedAt ?? Date.now();
+      const embed = this.buildProgressEmbed(planning, startedAt);
+      const controls = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`shannon_progress_detail:${taskId}`.slice(0, 100))
+          .setLabel('詳細')
+          .setStyle(ButtonStyle.Secondary),
+      );
+      if (tracked) {
+        const message = await channel.messages.fetch(tracked.messageId).catch(() => null);
+        if (message) {
+          await message.edit({ embeds: [embed], components: [controls] });
+          return;
         }
       }
+      const sent = await channel.send({ embeds: [embed], components: [controls] });
+      this.progressMessages.set(taskId, { channelId, messageId: sent.id, startedAt });
+    });
+    this.eventBus.subscribe('discord:request_clarification', async (event) => {
+      if (this.status !== 'running') return;
+      const input = event.data as DiscordClarificationInput;
+      const channel = this.client.channels.cache.get(input.channelId)
+        ?? await this.client.channels.fetch(input.channelId).catch(() => null);
+      if (!channel?.isTextBased() || !('send' in channel)) return;
+
+      const session = await getClarificationSessionStore().create(input);
+      const embed = this.buildClarificationEmbed(session);
+      const sent = await channel.send({ embeds: [embed], components: this.buildClarificationComponents(session) });
+      await getClarificationSessionStore().attachMessage(session.clarificationId, sent.id);
     });
     this.eventBus.subscribe('youtube:subscriber_update', async (event) => {
       if (this.status !== 'running') return;
@@ -1417,6 +1410,273 @@ export class DiscordBot extends BaseClient {
           channel.send(`現在のチャンネル登録者数は${subscriberCount}人です。`);
         }
       }
+    });
+  }
+
+  private buildClarificationEmbed(session: ClarificationSession, completed = false): EmbedBuilder {
+    const lines = completed && session.answers
+      ? session.questions.map((question) => `**${question.label}**\n${session.answers?.[question.id] || '指定なし'}`)
+      : session.questions.map((question, index) => {
+        const options = question.options?.length
+          ? `\n候補: ${question.options.map((option, optionIndex) => `${optionIndex + 1}. ${option}`).join(' / ')} / その他（自由入力）`
+          : question.kind === 'number'
+            ? '\n数値で入力（補足も可）'
+            : '\n自由入力';
+        return `**${index + 1}. ${question.label}**${question.description ? `\n${question.description}` : ''}${options}`;
+      });
+    if (completed && session.answers?.['推奨条件']) {
+      lines.unshift(`**承認した条件**\n${session.answers['推奨条件']}`);
+    }
+    return new EmbedBuilder()
+      .setColor(completed ? 0x57f287 : 0x5b8def)
+      .setTitle(completed ? '要件を受け取りました' : '少しだけ確認させてください')
+      .setDescription([
+        !completed && session.proposal ? `**推奨条件**\n${session.proposal}` : null,
+        ...lines,
+        completed ? '\n回答を反映して処理を再開します。' : '\n選択肢に合わない場合は、そのまま自由に入力できます。',
+      ].filter(Boolean).join('\n\n').slice(0, 4000))
+      .setFooter({ text: completed ? 'Shannon • 再開中' : 'Shannon • 回答待ち（24時間有効）' });
+  }
+
+  private buildClarificationComponents(session: ClarificationSession): Array<ActionRowBuilder<any>> {
+    const rows: Array<ActionRowBuilder<any>> = [];
+    session.questions.forEach((question, index) => {
+      if (rows.length >= 4) return;
+      if (question.kind !== 'single_select' && question.kind !== 'multi_select' && question.kind !== 'confirm') return;
+      const sourceOptions = question.options?.length
+        ? question.options
+        : question.kind === 'confirm' ? ['はい', 'いいえ'] : [];
+      const options = sourceOptions.slice(0, 7).map((option, optionIndex) => ({
+        label: option.slice(0, 100),
+        value: `option_${optionIndex}`,
+        description: option.length > 100 ? option.slice(100, 200) : undefined,
+      }));
+      options.push({ label: 'その他（自由入力）', value: '__custom__', description: '選択肢にない内容を入力' });
+      const select = new StringSelectMenuBuilder()
+        .setCustomId(`shannon_clarify_select:${session.clarificationId}:${index}`)
+        .setPlaceholder(question.label.slice(0, 150))
+        .addOptions(options)
+        .setMinValues(question.required === false ? 0 : 1)
+        .setMaxValues(question.kind === 'multi_select' ? options.length : 1);
+      rows.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select));
+    });
+
+    const buttons = new ActionRowBuilder<ButtonBuilder>();
+    if (session.proposal) {
+      buttons.addComponents(
+        new ButtonBuilder().setCustomId(`shannon_clarify:accept:${session.clarificationId}`)
+          .setLabel('この条件で開始').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(`shannon_clarify:edit:${session.clarificationId}`)
+          .setLabel('条件を変更').setStyle(ButtonStyle.Secondary),
+      );
+    } else {
+      buttons.addComponents(
+        new ButtonBuilder().setCustomId(`shannon_clarify:edit:${session.clarificationId}`)
+          .setLabel('回答を送信').setStyle(ButtonStyle.Primary),
+      );
+    }
+    rows.push(buttons);
+    return rows;
+  }
+
+  private buildProgressEmbed(planning: TaskTreeState, startedAt: number): EmbedBuilder {
+    const statusEmoji = (status: string) => ({
+      completed: '✅', in_progress: '⏳', pending: '○', error: '⚠️',
+    }[status] ?? '•');
+    const tasks = planning.hierarchicalSubTasks ?? [];
+    const completed = tasks.filter((task) => task.status === 'completed').length;
+    const visibleTasks = tasks.slice(0, 6).map((task) => {
+      const indent = '\u00a0'.repeat(Math.min(task.depth ?? 0, 3) * 2);
+      return `${indent}${statusEmoji(task.status)} ${task.goal}`;
+    });
+    if (tasks.length > visibleTasks.length) visibleTasks.push(`…ほか ${tasks.length - visibleTasks.length} 件`);
+    const elapsed = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
+    const awaiting = planning.recoveryStatus === 'awaiting_user';
+    return new EmbedBuilder()
+      .setColor(planning.status === 'error' ? 0xed4245 : awaiting ? 0xfee75c : 0x5b8def)
+      .setAuthor({ name: awaiting ? 'シャノン • 回答待ち' : 'シャノン • 作業中' })
+      .setTitle(planning.goal.slice(0, 250))
+      .setDescription([
+        planning.strategy ? planning.strategy.slice(0, 800) : null,
+        visibleTasks.length ? visibleTasks.join('\n') : null,
+      ].filter(Boolean).join('\n\n').slice(0, 4000))
+      .setFooter({ text: `${completed}/${tasks.length || 1} 完了 • ${elapsed}秒 • 完了時に自動で片付きます` });
+  }
+
+  private async handleProgressDetail(interaction: ButtonInteraction): Promise<void> {
+    const taskId = interaction.customId.replace('shannon_progress_detail:', '');
+    const planning = this.progressDetails.get(taskId);
+    if (!planning) {
+      await interaction.reply({ content: 'この作業は完了したため、進捗表示は片付けられました。', ephemeral: true });
+      return;
+    }
+    const statusEmoji = (status: string) => ({ completed: '✅', in_progress: '⏳', pending: '○', error: '⚠️' }[status] ?? '•');
+    const details = (planning.hierarchicalSubTasks ?? []).map((task) => {
+      const result = task.failureReason ?? task.result;
+      return `${statusEmoji(task.status)} **${task.goal}**${result ? `\n↳ ${result}` : ''}`;
+    });
+    await interaction.reply({
+      content: (details.length ? details.join('\n\n') : planning.strategy).slice(0, 1900),
+      ephemeral: true,
+    });
+  }
+
+  private async handleClarificationButton(interaction: ButtonInteraction): Promise<void> {
+    const [, action, clarificationId] = interaction.customId.split(':');
+    const store = getClarificationSessionStore();
+    const session = await store.get(clarificationId);
+    if (!session || session.status !== 'pending') {
+      await interaction.reply({ content: 'この確認は終了または期限切れです。', ephemeral: true });
+      return;
+    }
+    if (interaction.user.id !== session.requesterUserId) {
+      await interaction.reply({ content: 'この確認には依頼者本人だけが回答できます。', ephemeral: true });
+      return;
+    }
+    if (action === 'accept' && session.proposal) {
+      await interaction.deferUpdate();
+      await this.completeClarification(session, { 推奨条件: session.proposal });
+      return;
+    }
+
+    const questionsForModal = session.questions.filter((question) => {
+      if (question.kind === 'text' || question.kind === 'number') return true;
+      const draft = session.draftAnswers?.[question.id];
+      return !draft || draft === '__custom__';
+    }).slice(0, 5);
+    if (questionsForModal.length === 0) {
+      await interaction.deferUpdate();
+      await this.completeClarification(session, session.draftAnswers ?? {});
+      return;
+    }
+
+    const modal = new ModalBuilder()
+      .setCustomId(`shannon_clarify_submit:${clarificationId}`)
+      .setTitle('追加情報を入力');
+    for (const question of questionsForModal) {
+      const optionHint = question.options?.length
+        ? question.options.map((option, index) => `${index + 1}:${option}`).join(' / ')
+        : question.kind === 'number' ? '数値を入力' : '自由に入力';
+      const input = new TextInputBuilder()
+        .setCustomId(question.id)
+        .setLabel(question.label.slice(0, 45))
+        .setStyle(question.kind === 'text' ? TextInputStyle.Paragraph : TextInputStyle.Short)
+        .setPlaceholder(`${optionHint} / その他も自由入力可`.slice(0, 100))
+        .setRequired(question.required !== false);
+      if (question.defaultValue) input.setValue(question.defaultValue.slice(0, 4000));
+      modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(input));
+    }
+    await interaction.showModal(modal);
+  }
+
+  private async handleClarificationSelect(interaction: StringSelectMenuInteraction): Promise<void> {
+    const [, clarificationId, indexText] = interaction.customId.split(':');
+    const store = getClarificationSessionStore();
+    const session = await store.get(clarificationId);
+    if (!session || session.status !== 'pending') {
+      await interaction.reply({ content: 'この確認は終了または期限切れです。', ephemeral: true });
+      return;
+    }
+    if (interaction.user.id !== session.requesterUserId) {
+      await interaction.reply({ content: 'この確認には依頼者本人だけが回答できます。', ephemeral: true });
+      return;
+    }
+    const question = session.questions[Number(indexText)];
+    if (!question) {
+      await interaction.reply({ content: '質問を特定できませんでした。', ephemeral: true });
+      return;
+    }
+    const answer = interaction.values.includes('__custom__')
+      ? '__custom__'
+      : interaction.values.map((value) => {
+        const optionIndex = Number(value.replace('option_', ''));
+        return question.options?.[optionIndex]
+          ?? (question.kind === 'confirm' ? ['はい', 'いいえ'][optionIndex] : value);
+      }).join('、');
+    await store.updateDraft(clarificationId, question.id, answer);
+    await interaction.reply({
+      content: answer === '__custom__'
+        ? '「その他」を選びました。「回答を送信」または「条件を変更」から内容を入力してください。'
+        : `「${question.label}」を保存しました。`,
+      ephemeral: true,
+    });
+  }
+
+  private async handleClarificationSubmit(interaction: ModalSubmitInteraction): Promise<void> {
+    const clarificationId = interaction.customId.replace('shannon_clarify_submit:', '');
+    const store = getClarificationSessionStore();
+    const session = await store.get(clarificationId);
+    if (!session || session.status !== 'pending') {
+      await interaction.reply({ content: 'この確認は終了または期限切れです。', ephemeral: true });
+      return;
+    }
+    if (interaction.user.id !== session.requesterUserId) {
+      await interaction.reply({ content: 'この確認には依頼者本人だけが回答できます。', ephemeral: true });
+      return;
+    }
+
+    const answers: Record<string, string> = { ...(session.draftAnswers ?? {}) };
+    for (const question of session.questions) {
+      let value: string;
+      try {
+        value = interaction.fields.getTextInputValue(question.id).trim();
+      } catch {
+        continue;
+      }
+      if (question.kind === 'number' && value && !Number.isFinite(Number(value.replace(/[,，]/g, '')))) {
+        await interaction.reply({ content: `「${question.label}」は数値で入力してください。`, ephemeral: true });
+        return;
+      }
+      answers[question.id] = value;
+    }
+    await interaction.deferUpdate();
+    await this.completeClarification(session, answers);
+  }
+
+  private async completeClarification(session: ClarificationSession, answers: Record<string, string>): Promise<void> {
+    const answered = await getClarificationSessionStore().answer(session.clarificationId, answers);
+    if (!answered) return;
+    const channel = this.client.channels.cache.get(session.channelId)
+      ?? await this.client.channels.fetch(session.channelId).catch(() => null);
+    if (!channel?.isTextBased() || !('messages' in channel)) return;
+
+    if (session.messageId) {
+      const formMessage = await channel.messages.fetch(session.messageId).catch(() => null);
+      if (formMessage) await formMessage.edit({ embeds: [this.buildClarificationEmbed(answered, true)], components: [] });
+    }
+    const trackedProgress = this.progressMessages.get(session.taskId);
+    if (trackedProgress) {
+      const progressChannel = this.client.channels.cache.get(trackedProgress.channelId)
+        ?? await this.client.channels.fetch(trackedProgress.channelId).catch(() => null);
+      if (progressChannel?.isTextBased() && 'messages' in progressChannel) {
+        const progressMessage = await progressChannel.messages.fetch(trackedProgress.messageId).catch(() => null);
+        if (progressMessage) await progressMessage.delete().catch(() => undefined);
+      }
+      this.progressMessages.delete(session.taskId);
+      this.progressDetails.delete(session.taskId);
+    }
+
+    const answerLines = session.questions.map((question) =>
+      `- ${question.label}: ${answers[question.id] || '指定なし'}`,
+    );
+    if (answers['推奨条件']) answerLines.unshift(`- 承認した条件: ${answers['推奨条件']}`);
+    const recentMessages = await this.getRecentMessages(session.channelId, 10);
+    const guild = this.client.guilds.cache.get(session.guildId);
+    this.eventBus.publish({
+      type: 'llm:get_discord_message',
+      memoryZone: 'discord:general',
+      data: {
+        type: 'text',
+        guildName: guild?.name ?? 'discord',
+        channelName: 'name' in channel ? String(channel.name) : 'channel',
+        guildId: session.guildId,
+        channelId: session.channelId,
+        messageId: session.messageId ?? session.clarificationId,
+        userId: session.requesterUserId,
+        userName: session.requesterUserName ?? '依頼者',
+        text: `[追加要件への回答]\n元の依頼: ${session.originalRequest}\n${answerLines.join('\n')}\nこの条件を反映して元の依頼を続行してください。`,
+        recentMessages,
+      } as DiscordSendTextMessageOutput,
     });
   }
 

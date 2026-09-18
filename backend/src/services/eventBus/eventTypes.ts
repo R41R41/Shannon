@@ -24,6 +24,8 @@ export const DISCORD_EVENTS = {
   SEND_SERVER_EMOJI: 'discord:send_server_emoji',
   /** Push planning / task-tree update to Discord */
   PLANNING: 'discord:planning',
+  /** Ask the requester for structured missing requirements */
+  REQUEST_CLARIFICATION: 'discord:request_clarification',
   /** Voice: start queuing audio chunks */
   VOICE_QUEUE_START: 'discord:voice_queue_start',
   /** Voice: enqueue a single audio chunk */

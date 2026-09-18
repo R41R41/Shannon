@@ -69,6 +69,8 @@ export interface DiscordContext {
   channelId?: string;
   channelName?: string;
   messageId?: string;
+  userId?: string;
+  userName?: string;
   isVoiceChannel?: boolean;
   isDM?: boolean;
 }

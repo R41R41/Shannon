@@ -17,6 +17,10 @@ const travelBriefSchema = z.object({
   participants: z.string().trim().max(120).optional().describe('参加者や人数'),
   meetingPoint: z.string().trim().max(200).optional().describe('集合場所・時刻'),
   weatherNote: z.string().trim().max(300).optional().describe('天気・気温・服装メモ'),
+  routeMap: z.object({
+    encodedPolyline: z.string().min(1).max(12000).describe('compute-route が返した routes[0].polyline.encodedPolyline'),
+    caption: z.string().trim().max(240).optional(),
+  }).optional().describe('Google Routesの結果がある場合だけ指定。静的地図をPDF内へ安全に埋め込む'),
   stops: z.array(z.object({
     time: shortText(30).describe('開始時刻または時間帯'),
     title: shortText(120).describe('立ち寄り先・行動'),
@@ -38,7 +42,7 @@ const travelBriefSchema = z.object({
 
 export default class CreateTravelBriefTool extends StructuredTool<any> {
   name = 'create-travel-brief';
-  description = '調査済みの旅行計画から、共有用HTML・PDF・Discordプレビュー画像を安全なサーバーテンプレートで生成する。先にgoogle-searchとfetch-urlで公式情報を確認し、実在する参照URLをsourcesへ渡すこと。';
+  description = '調査済みの旅行計画からPDF・Discordプレビュー画像を生成する（HTMLは内部レンダリング専用で送信しない）。先にWeb、Places、Routes、公式ページを確認し、実在する参照URLをsourcesへ渡す。compute-routeのpolylineがあればrouteMapに指定する。';
   schema = travelBriefSchema;
 
   async _call(data: TripBrief): Promise<string> {

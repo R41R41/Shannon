@@ -41,6 +41,9 @@ export function renderTravelBriefHtml(brief: TripBrief): string {
     const safeUrl = /^https?:\/\//i.test(source.url) ? escapeHtml(source.url) : '#';
     return `<li><a href="${safeUrl}">${text(source.label)}</a>${source.note ? ` — ${text(source.note)}` : ''}</li>`;
   }).join('');
+  const routeMap = brief.routeMapImageDataUri
+    ? `<section class="route-map"><h2>移動ルート</h2><img src="${brief.routeMapImageDataUri}" alt="旅程の移動ルート地図">${brief.routeMap?.caption ? `<p>${text(brief.routeMap.caption)}</p>` : ''}</section>`
+    : '';
 
   return `<!doctype html>
 <html lang="ja">
@@ -82,6 +85,9 @@ export function renderTravelBriefHtml(brief: TripBrief): string {
     li { margin-bottom: 7px; }
     a { color: #0877b1; word-break: break-all; }
     .sources { margin-top: 36px; padding-top: 20px; border-top: 1px solid #d7e8f1; font-size: 12px; color: #546c79; }
+    .route-map { page-break-inside: avoid; margin: 30px 0 8px; }
+    .route-map img { display: block; width: 100%; border-radius: 14px; border: 1px solid #d7e8f1; }
+    .route-map p { margin: 8px 2px 0; color: #546c79; font-size: 12px; }
     .sources h2 { margin-top: 0; font-size: 17px; }
     .muted { color: #718793; }
     footer { padding: 18px 54px 28px; color: #6c828e; font-size: 11px; background: #f7fafc; }
@@ -113,6 +119,7 @@ export function renderTravelBriefHtml(brief: TripBrief): string {
 
       <h2>当日の流れ</h2>
       ${stops}
+      ${routeMap}
 
       <div class="two-column">
         <section class="panel"><h2>見どころ</h2>${renderList(brief.highlights, '当日の気分に合わせて楽しみましょう。')}</section>

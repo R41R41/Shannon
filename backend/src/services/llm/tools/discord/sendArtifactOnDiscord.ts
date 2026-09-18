@@ -42,7 +42,7 @@ export default class SendArtifactOnDiscordTool extends StructuredTool<any> {
     return JSON.stringify({
       status: 'queued',
       artifactId: data.artifactId,
-      files: bundle.files.map((file) => file.fileName),
+      files: bundle.files.filter((file) => file.role !== 'html').map((file) => file.fileName),
       message: 'Discord送信キューへ登録しました。',
     });
   }

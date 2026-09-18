@@ -26,6 +26,7 @@ export { default as GetDiscordRecentMessagesTool } from './discord/getDiscordRec
 export { default as GetServerEmojiOnDiscordTool } from './discord/getServerEmojiOnDiscord.js';
 export { default as ReactByServerEmojiOnDiscordTool } from './discord/reactByServerEmojiOnDiscord.js';
 export { default as GetDiscordImagesTool } from './discord/getDiscordImages.js';
+export { default as AskUserOnDiscordTool } from './discord/askUserOnDiscord.js';
 
 // === Search tools ===
 export { default as GoogleSearchTool } from './search/googleSearch.js';
@@ -33,6 +34,8 @@ export { default as SearchByWikipediaTool } from './search/searchByWikipedia.js'
 export { default as SearchWeatherTool } from './search/searchWeather.js';
 export { default as WolframAlphaTool } from './search/wolframAlpha.js';
 export { default as FetchUrlTool } from './search/fetchUrl.js';
+export { default as SearchPlacesTool } from './search/searchPlaces.js';
+export { default as ComputeRouteTool } from './search/computeRoute.js';
 
 // === Utility tools ===
 export { default as UpdatePlanTool } from './utility/updatePlan.js';

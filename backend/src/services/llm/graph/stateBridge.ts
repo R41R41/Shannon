@@ -53,6 +53,8 @@ export function envelopeToTaskContext(envelope: RequestEnvelope): TaskContext {
       channelId: envelope.discord.channelId,
       channelName: envelope.discord.channelName,
       messageId: envelope.discord.messageId,
+      userId: envelope.discord.userId ?? envelope.sourceUserId,
+      userName: envelope.discord.userName ?? envelope.sourceDisplayName,
     };
   }
 

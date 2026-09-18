@@ -52,6 +52,12 @@ export interface TripBrief {
   participants?: string;
   meetingPoint?: string;
   weatherNote?: string;
+  routeMap?: {
+    encodedPolyline: string;
+    caption?: string;
+  };
+  /** Server-generated data URI; never accepted directly from an LLM tool call. */
+  routeMapImageDataUri?: string;
   stops: TripBriefStop[];
   highlights?: string[];
   rainPlan?: string[];

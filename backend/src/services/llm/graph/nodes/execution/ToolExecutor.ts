@@ -1,9 +1,6 @@
-import {
-    BaseMessage,
-    ToolMessage,
-} from '@langchain/core/messages';
+import { BaseMessage, ToolMessage } from '@langchain/core/messages';
 import { StructuredTool } from '@langchain/core/tools';
-import { TaskContext, HierarchicalSubTask, TaskTreeState } from '@shannon/common';
+import { HierarchicalSubTask, TaskContext, TaskTreeState } from '@shannon/common';
 import { logger } from '../../../../../utils/logger.js';
 import { ExecutionResult } from '../../types.js';
 import { TaskTreePublisher } from './TaskTreePublisher.js';
@@ -21,159 +18,154 @@ export interface ToolExecutionContext {
     onTaskTreeUpdate?: (taskTree: TaskTreeState) => void;
 }
 
-/**
- * ツール実行ループとエラーハンドリング
- */
-export class ToolExecutor {
-    private taskTreePublisher: TaskTreePublisher;
+type ToolCall = { id?: string; name: string; args: Record<string, unknown> };
+type ToolOutcome = { executionResult: ExecutionResult; toolMessage: ToolMessage };
 
-    constructor(taskTreePublisher: TaskTreePublisher) {
-        this.taskTreePublisher = taskTreePublisher;
-    }
+/** Executes tool calls while preserving model call order in the message history. */
+export class ToolExecutor {
+    private static readonly PARALLEL_SAFE_TOOLS = new Set([
+        'google-search', 'fetch-url', 'search-by-wikipedia', 'search-weather',
+        'wolframalpha', 'describe-image', 'describe-notion-image',
+        'get-discord-recent-messages', 'get-discord-images',
+        'get-youtube-video-content-from-url', 'get-notion-page-content-from-url',
+        'search-places', 'compute-route',
+    ]);
+    private static readonly MAX_PARALLEL_TOOLS = Math.max(
+        1,
+        Math.min(8, Number(process.env.SHANNON_TOOL_CONCURRENCY ?? 4) || 4),
+    );
+
+    constructor(private readonly taskTreePublisher: TaskTreePublisher) {}
 
     /**
-     * ツール呼び出し配列を順次実行し、ToolMessage を messages に追加する
-     * @returns 更新された stepCounter
+     * Consecutive read-only calls may run concurrently. Mutating/unknown tools form
+     * barriers and execute sequentially. ToolMessages are appended in call order.
      */
     async executeToolCalls(
-        toolCalls: Array<{ id?: string; name: string; args: Record<string, unknown> }>,
+        toolCalls: ToolCall[],
         effectiveToolMap: Map<string, StructuredTool>,
         messages: BaseMessage[],
         execCtx: ToolExecutionContext,
         signal?: AbortSignal,
     ): Promise<{ results: ExecutionResult[]; stepCounter: number }> {
-        const iterationResults: ExecutionResult[] = [];
+        const results: ExecutionResult[] = [];
         let { stepCounter } = execCtx;
+        let cursor = 0;
 
-        for (const toolCall of toolCalls) {
+        while (cursor < toolCalls.length) {
             if (signal?.aborted) throw new Error('Task aborted');
+            const isParallelGroup = ToolExecutor.PARALLEL_SAFE_TOOLS.has(toolCalls[cursor].name);
+            let groupEnd = cursor + 1;
+            if (isParallelGroup) {
+                while (groupEnd < toolCalls.length && ToolExecutor.PARALLEL_SAFE_TOOLS.has(toolCalls[groupEnd].name)) {
+                    groupEnd++;
+                }
+            }
 
-            const isUpdatePlan = toolCall.name === 'update-plan';
+            for (let start = cursor; start < groupEnd; start += ToolExecutor.MAX_PARALLEL_TOOLS) {
+                const batch = toolCalls.slice(start, Math.min(groupEnd, start + ToolExecutor.MAX_PARALLEL_TOOLS));
+                const prepared = batch.map((toolCall) => {
+                    const isUpdatePlan = toolCall.name === 'update-plan';
+                    let step: HierarchicalSubTask | null = null;
+                    if (!isUpdatePlan) {
+                        stepCounter++;
+                        step = {
+                            id: `step_${stepCounter}`,
+                            goal: `${toolCall.name}(${ToolExecutor.summarizeArgs(toolCall.args)})`,
+                            status: 'in_progress',
+                        };
+                        execCtx.steps.push(step);
+                    }
+                    try { execCtx.onToolStarting?.(toolCall.name, toolCall.args || {}); } catch { /* UI callback */ }
+                    return { toolCall, tool: effectiveToolMap.get(toolCall.name), step };
+                });
 
-            if (!isUpdatePlan) {
-                stepCounter++;
-                const stepId = `step_${stepCounter}`;
-                const step: HierarchicalSubTask = {
-                    id: stepId,
-                    goal: `${toolCall.name}(${ToolExecutor.summarizeArgs(toolCall.args)})`,
-                    status: 'in_progress',
-                };
-                execCtx.steps.push(step);
-
+                const labels = prepared.map(({ toolCall }) => toolCall.name).join('、');
                 this.taskTreePublisher.publishTaskTree({
                     status: 'in_progress',
                     goal: execCtx.goal,
-                    strategy: `${toolCall.name} を実行中...`,
+                    strategy: prepared.length > 1 ? `${prepared.length}件を並列実行中: ${labels}` : `${labels} を実行中...`,
                     currentThinking: execCtx.lastThinkingContent,
                     hierarchicalSubTasks: execCtx.steps,
-                    currentSubTaskId: stepId,
+                    currentSubTaskId: prepared[0]?.step?.id ?? null,
                 }, execCtx.platform, execCtx.channelId, execCtx.taskId, execCtx.onTaskTreeUpdate);
-            }
 
-            if (execCtx.onToolStarting) {
-                try { execCtx.onToolStarting(toolCall.name, toolCall.args || {}); } catch { /* fire-and-forget */ }
-            }
-
-            const tool = effectiveToolMap.get(toolCall.name);
-            if (!tool) {
-                const result = this.handleMissingTool(toolCall, execCtx, isUpdatePlan);
-                iterationResults.push(result.executionResult);
-                messages.push(result.toolMessage);
-                continue;
-            }
-
-            try {
-                const execStart = Date.now();
-                logger.info(`  ▶ ${toolCall.name}(${JSON.stringify(toolCall.args).substring(0, 200)})`, 'cyan');
-
-                if (execCtx.context?.platform === 'minecraft' || execCtx.context?.platform === 'minebot') {
-                    void this.taskTreePublisher.postDetailedLogToMinebotUi(
-                        execCtx.goal, 'tool_call', 'info', toolCall.name,
-                        `${toolCall.name} を実行中...`,
-                        { toolName: toolCall.name, parameters: toolCall.args },
-                    );
-                }
-
-                const result = await tool.invoke(toolCall.args);
-                const duration = Date.now() - execStart;
-
-                const resultStr =
-                    typeof result === 'string'
-                        ? result
-                        : JSON.stringify(result);
-                const failureMeta = ToolExecutor.parseToolFailureMetadata(resultStr);
-                logger.success(`  ✓ ${toolCall.name} (${duration}ms): ${resultStr.substring(0, 200)}`);
-
-                if (execCtx.context?.platform === 'minecraft' || execCtx.context?.platform === 'minebot') {
-                    void this.taskTreePublisher.postDetailedLogToMinebotUi(
-                        execCtx.goal, 'tool_result',
-                        failureMeta.isError ? 'error' : 'success',
-                        toolCall.name,
-                        resultStr.substring(0, 300),
-                        { toolName: toolCall.name, parameters: toolCall.args, duration, result: resultStr.substring(0, 200) },
-                    );
-                }
-
-                const isError = failureMeta.isError;
-
-                if (!isUpdatePlan && execCtx.steps.length > 0) {
-                    const lastStep = execCtx.steps[execCtx.steps.length - 1];
-                    lastStep.status = isError ? 'error' : 'completed';
-                    lastStep.result = ToolExecutor.summarizeResultForUI(resultStr);
-                    if (isError) lastStep.failureReason = ToolExecutor.summarizeResultForUI(resultStr);
-                }
-
-                iterationResults.push({
-                    toolName: toolCall.name,
-                    args: toolCall.args || {},
-                    success: !isError,
-                    message: resultStr,
-                    duration,
-                    failureType: failureMeta.failureType,
-                    recoverable: failureMeta.recoverable,
-                    error: isError ? resultStr : undefined,
-                });
-
-                messages.push(
-                    new ToolMessage({
-                        content: resultStr,
-                        tool_call_id: toolCall.id || `call_${Date.now()}`,
-                    }),
+                const outcomes = await Promise.all(
+                    prepared.map(({ toolCall, tool, step }) => this.executeOne(toolCall, tool, step, execCtx, signal)),
                 );
-            } catch (error) {
-                const errorMsg = `${toolCall.name} 実行エラー: ${error instanceof Error ? error.message : 'Unknown'}`;
-                logger.error(`  ✗ ${errorMsg}`);
-
-                if (!isUpdatePlan && execCtx.steps.length > 0) {
-                    const lastStep = execCtx.steps[execCtx.steps.length - 1];
-                    lastStep.status = 'error';
-                    lastStep.failureReason = errorMsg;
+                for (const outcome of outcomes) {
+                    results.push(outcome.executionResult);
+                    messages.push(outcome.toolMessage);
                 }
-
-                iterationResults.push({
-                    toolName: toolCall.name,
-                    args: toolCall.args || {},
-                    success: false,
-                    message: errorMsg,
-                    duration: 0,
-                    failureType: 'unexpected_error',
-                    recoverable: false,
-                    error: errorMsg,
-                });
-
-                messages.push(
-                    new ToolMessage({
-                        content: errorMsg,
-                        tool_call_id: toolCall.id || `call_${Date.now()}`,
-                    }),
-                );
             }
+            cursor = groupEnd;
         }
 
-        return { results: iterationResults, stepCounter };
+        return { results, stepCounter };
     }
 
-    // ── Static utility methods ──
+    private async executeOne(
+        toolCall: ToolCall,
+        tool: StructuredTool | undefined,
+        step: HierarchicalSubTask | null,
+        execCtx: ToolExecutionContext,
+        signal?: AbortSignal,
+    ): Promise<ToolOutcome> {
+        if (signal?.aborted) throw new Error('Task aborted');
+        if (!tool) return this.handleMissingTool(toolCall, step);
+
+        const startedAt = Date.now();
+        try {
+            logger.info(`  ▶ ${toolCall.name}(${JSON.stringify(toolCall.args).substring(0, 200)})`, 'cyan');
+            if (execCtx.context?.platform === 'minecraft' || execCtx.context?.platform === 'minebot') {
+                void this.taskTreePublisher.postDetailedLogToMinebotUi(
+                    execCtx.goal, 'tool_call', 'info', toolCall.name, `${toolCall.name} を実行中...`,
+                    { toolName: toolCall.name, parameters: toolCall.args },
+                );
+            }
+            const result = await tool.invoke(toolCall.args);
+            const duration = Date.now() - startedAt;
+            const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
+            const failureMeta = ToolExecutor.parseToolFailureMetadata(resultStr);
+            const isError = failureMeta.isError;
+            logger.success(`  ✓ ${toolCall.name} (${duration}ms): ${resultStr.substring(0, 200)}`);
+            if (execCtx.context?.platform === 'minecraft' || execCtx.context?.platform === 'minebot') {
+                void this.taskTreePublisher.postDetailedLogToMinebotUi(
+                    execCtx.goal, 'tool_result', isError ? 'error' : 'success', toolCall.name,
+                    resultStr.substring(0, 300),
+                    { toolName: toolCall.name, parameters: toolCall.args, duration, result: resultStr.substring(0, 200) },
+                );
+            }
+            if (step) {
+                step.status = isError ? 'error' : 'completed';
+                step.result = ToolExecutor.summarizeResultForUI(resultStr);
+                if (isError) step.failureReason = ToolExecutor.summarizeResultForUI(resultStr);
+            }
+            return {
+                executionResult: {
+                    toolName: toolCall.name, args: toolCall.args || {}, success: !isError,
+                    message: resultStr, duration, failureType: failureMeta.failureType,
+                    recoverable: failureMeta.recoverable, error: isError ? resultStr : undefined,
+                },
+                toolMessage: new ToolMessage({ content: resultStr, tool_call_id: toolCall.id || `call_${Date.now()}` }),
+            };
+        } catch (error) {
+            const errorMsg = `${toolCall.name} 実行エラー: ${error instanceof Error ? error.message : 'Unknown'}`;
+            logger.error(`  ✗ ${errorMsg}`);
+            if (step) {
+                step.status = 'error';
+                step.failureReason = errorMsg;
+            }
+            return {
+                executionResult: {
+                    toolName: toolCall.name, args: toolCall.args || {}, success: false,
+                    message: errorMsg, duration: Date.now() - startedAt,
+                    failureType: 'unexpected_error', recoverable: false, error: errorMsg,
+                },
+                toolMessage: new ToolMessage({ content: errorMsg, tool_call_id: toolCall.id || `call_${Date.now()}` }),
+            };
+        }
+    }
 
     static parseToolFailureMetadata(result: string): {
         isError: boolean;
@@ -183,17 +175,11 @@ export class ToolExecutor {
         const failureTypeMatch = result.match(/failure_type=([a-z_]+)/i);
         const recoverableMatch = result.match(/recoverable=(true|false)/i);
         const failureType = failureTypeMatch?.[1];
-        const recoverable = recoverableMatch
-            ? recoverableMatch[1].toLowerCase() === 'true'
-            : undefined;
+        const recoverable = recoverableMatch ? recoverableMatch[1].toLowerCase() === 'true' : undefined;
         const isError = Boolean(
-            failureType
-            || result.includes('失敗')
-            || result.includes('エラー')
-            || result.includes('error')
-            || result.includes('見つかりません')
+            failureType || result.includes('失敗') || result.includes('エラー')
+            || result.includes('error') || result.includes('見つかりません'),
         );
-
         return {
             isError,
             failureType,
@@ -201,17 +187,9 @@ export class ToolExecutor {
         };
     }
 
-    static pickRecoverableFailure(
-        results: ExecutionResult[],
-        context: TaskContext | null,
-    ): ExecutionResult | null {
-        if (context?.platform !== 'minecraft' && context?.platform !== 'minebot') {
-            return null;
-        }
-        const failed = [...results]
-            .reverse()
-            .find((result) => result.success === false && result.recoverable !== false);
-        return failed ?? null;
+    static pickRecoverableFailure(results: ExecutionResult[], context: TaskContext | null): ExecutionResult | null {
+        if (context?.platform !== 'minecraft' && context?.platform !== 'minebot') return null;
+        return [...results].reverse().find((result) => result.success === false && result.recoverable !== false) ?? null;
     }
 
     static requiresMinecraftRecoveryResponse(
@@ -219,77 +197,42 @@ export class ToolExecutor {
         failure: ExecutionResult | null,
         content: string,
     ): boolean {
-        if ((context?.platform !== 'minecraft' && context?.platform !== 'minebot') || !failure) {
-            return false;
-        }
+        if ((context?.platform !== 'minecraft' && context?.platform !== 'minebot') || !failure) return false;
         return !/[?？]/.test(content);
     }
 
-    /**
-     * ツール引数を表示用に要約
-     */
     static summarizeArgs(args: Record<string, unknown>): string {
         if (!args || Object.keys(args).length === 0) return '';
         const entries = Object.entries(args);
-        if (entries.length <= 2) {
-            return entries
-                .map(([k, v]) => {
-                    const val = typeof v === 'string' ? v.substring(0, 50) : v;
-                    return `${k}=${val}`;
-                })
-                .join(', ');
-        }
-        return (
-            entries
-                .slice(0, 2)
-                .map(([k, v]) => {
-                    const val = typeof v === 'string' ? v.substring(0, 50) : v;
-                    return `${k}=${val}`;
-                })
-                .join(', ') + ', ...'
-        );
+        const summary = entries.slice(0, 2).map(([key, value]) => {
+            const shown = typeof value === 'string' ? value.substring(0, 50) : value;
+            return `${key}=${shown}`;
+        }).join(', ');
+        return entries.length > 2 ? `${summary}, ...` : summary;
     }
 
-    /**
-     * UI表示用にツール実行結果を短縮
-     */
     static summarizeResultForUI(resultStr: string): string {
-        let s = resultStr;
-        s = s.replace(/^結果:\s*(成功|失敗)\s*詳細:\s*/, (_, status) => `${status}: `);
-        s = s.replace(/座標\s*\([^)]*\)/g, '');
-        s = s.replace(/\(\s*-?\d+,\s*-?\d+,?\s*-?\d*\)/g, '');
-        s = s.replace(/距離\s*[\d.]+m/g, '');
-        s = s.replace(/\[failure_type=[^\]]*\]/g, '');
-        s = s.replace(/,\s*,/g, ',').replace(/\s{2,}/g, ' ').trim();
-        s = s.replace(/,\s*$/, '');
-        if (s.length > 60) s = s.substring(0, 57) + '...';
-        return s;
+        let summary = resultStr;
+        summary = summary.replace(/^結果:\s*(成功|失敗)\s*詳細:\s*/, (_, status) => `${status}: `);
+        summary = summary.replace(/座標\s*\([^)]*\)/g, '');
+        summary = summary.replace(/\(\s*-?\d+,\s*-?\d+,?\s*-?\d*\)/g, '');
+        summary = summary.replace(/距離\s*[\d.]+m/g, '');
+        summary = summary.replace(/\[failure_type=[^\]]*\]/g, '');
+        summary = summary.replace(/,\s*,/g, ',').replace(/\s{2,}/g, ' ').trim().replace(/,\s*$/, '');
+        return summary.length > 60 ? `${summary.substring(0, 57)}...` : summary;
     }
 
-    // ── private helpers ──
-
-    private handleMissingTool(
-        toolCall: { id?: string; name: string; args: Record<string, unknown> },
-        execCtx: ToolExecutionContext,
-        isUpdatePlan: boolean,
-    ): { executionResult: ExecutionResult; toolMessage: ToolMessage } {
+    private handleMissingTool(toolCall: ToolCall, step: HierarchicalSubTask | null): ToolOutcome {
         const errorMsg = `ツール "${toolCall.name}" が見つかりません`;
         logger.error(`  ✗ ${errorMsg}`);
-
-        if (!isUpdatePlan && execCtx.steps.length > 0) {
-            const lastStep = execCtx.steps[execCtx.steps.length - 1];
-            lastStep.status = 'error';
-            lastStep.failureReason = errorMsg;
+        if (step) {
+            step.status = 'error';
+            step.failureReason = errorMsg;
         }
-
         return {
             executionResult: {
-                toolName: toolCall.name,
-                args: toolCall.args || {},
-                success: false,
-                message: errorMsg,
-                duration: 0,
-                error: errorMsg,
+                toolName: toolCall.name, args: toolCall.args || {}, success: false,
+                message: errorMsg, duration: 0, error: errorMsg,
             },
             toolMessage: new ToolMessage({
                 content: errorMsg,

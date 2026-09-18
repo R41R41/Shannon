@@ -19,6 +19,7 @@ import { WorldKnowledgeService } from '../../../minebot/knowledge/WorldKnowledge
 import { RecipeDependencyResolver } from '../../../minebot/knowledge/RecipeDependencyResolver.js';
 import { TaskEpisodeMemory } from '../cognitive/TaskEpisodeMemory.js';
 import UpdatePlanTool from '../../tools/utility/updatePlan.js';
+import AskUserOnDiscordTool from '../../tools/discord/askUserOnDiscord.js';
 import { trimContext } from '../../utils/contextManager.js';
 import { createTracedModel } from '../../utils/langfuse.js';
 import { tokenTracker } from '../../utils/tokenTracker.js';
@@ -120,6 +121,7 @@ export class FunctionCallingAgent {
     private tools: StructuredTool[];
     private toolMap: Map<string, StructuredTool>;
     private updatePlanTool: UpdatePlanTool | null = null;
+    private askUserOnDiscordTool: AskUserOnDiscordTool | null = null;
 
     // Sub-components
     private promptBuilder: PromptBuilder;
@@ -158,6 +160,10 @@ export class FunctionCallingAgent {
         const planTool = tools.find((t) => t.name === 'update-plan');
         if (planTool && planTool instanceof UpdatePlanTool) {
             this.updatePlanTool = planTool;
+        }
+        const askTool = tools.find((t) => t.name === 'ask-user-on-discord');
+        if (askTool && askTool instanceof AskUserOnDiscordTool) {
+            this.askUserOnDiscordTool = askTool;
         }
 
         // Claude Anthropic を優先、フォールバックで OpenAI
@@ -205,6 +211,9 @@ export class FunctionCallingAgent {
             added += 1;
             if (tool.name === 'update-plan' && tool instanceof UpdatePlanTool) {
                 this.updatePlanTool = tool;
+            }
+            if (tool.name === 'ask-user-on-discord' && tool instanceof AskUserOnDiscordTool) {
+                this.askUserOnDiscordTool = tool;
             }
         }
 
@@ -415,6 +424,9 @@ export class FunctionCallingAgent {
         // update-plan ツールにコンテキストを設定
         if (this.updatePlanTool) {
             this.updatePlanTool.setContext(state.channelId, state.taskId);
+        }
+        if (this.askUserOnDiscordTool) {
+            this.askUserOnDiscordTool.setContext(state.context ?? null, state.taskId);
         }
 
         // メッセージ構築
@@ -880,6 +892,42 @@ export class FunctionCallingAgent {
                 );
                 stepCounter = execResult.stepCounter;
                 const iterationResults = execResult.results;
+
+                // ask-user-on-discord はタスクを明示的に一時停止する。モデルの追加出力を
+                // 待たず、Discordフォームの回答を新しいターンとして再開する。
+                const clarificationResult = iterationResults.find(
+                    (result) => result.toolName === 'ask-user-on-discord'
+                        && result.success
+                        && result.message.startsWith('SHANNON_AWAITING_USER '),
+                );
+                if (clarificationResult) {
+                    const strategy = 'Discordで追加情報を確認しています。回答後に自動で再開します。';
+                    this.taskTreePublisher.publishTaskTree({
+                        status: 'in_progress',
+                        goal,
+                        strategy,
+                        recoveryStatus: 'awaiting_user',
+                        hierarchicalSubTasks: steps,
+                        currentSubTaskId: null,
+                    }, state.context?.platform ?? null, state.channelId, state.taskId, state.onTaskTreeUpdate);
+                    this.thinkingManager.resetThinkingState();
+                    return {
+                        taskTree: {
+                            status: 'in_progress' as const,
+                            goal,
+                            strategy,
+                            recoveryStatus: 'awaiting_user' as const,
+                            hierarchicalSubTasks: steps,
+                            subTasks: null,
+                        } as TaskTreeState,
+                        recoveryStatus: 'awaiting_user' as const,
+                        recoveryAttempts: forcedRecoveryAttempts,
+                        isEmergency,
+                        messages,
+                        forceStop: false,
+                        lastAssistantContent: strategy,
+                    };
+                }
 
                 // ── task-complete 検出 → タスク完了 ──
                 const completeCall = toolCalls.find((tc) => tc.name === 'task-complete');

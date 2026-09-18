@@ -72,7 +72,7 @@ describe('travel brief artifacts', () => {
     expect(commands.map((command) => command.executable)).toEqual(
       expect.arrayContaining(['pdf-renderer', 'image-renderer']),
     );
-    expect(bundle.files.map((file) => file.role)).toEqual(['preview', 'pdf', 'html']);
+    expect(bundle.files.map((file) => file.role)).toEqual(['preview', 'pdf']);
     expect(bundle.files.every((file) => file.absolutePath.startsWith(rootDirectory))).toBe(true);
     expect(bundle.manifest.kind).toBe('travel_brief');
   });

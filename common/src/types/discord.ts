@@ -44,12 +44,43 @@ export interface DiscordPlanningInput extends ServiceInput {
   taskId: string;
 }
 
+export type DiscordClarificationQuestionKind =
+  | "single_select"
+  | "multi_select"
+  | "number"
+  | "text"
+  | "confirm";
+
+export interface DiscordClarificationQuestion {
+  id: string;
+  label: string;
+  kind: DiscordClarificationQuestionKind;
+  description?: string;
+  required?: boolean;
+  options?: string[];
+  defaultValue?: string;
+}
+
+export interface DiscordClarificationInput extends ServiceInput {
+  clarificationId: string;
+  taskId: string;
+  guildId: string;
+  channelId: string;
+  requesterUserId: string;
+  requesterUserName?: string;
+  originalRequest: string;
+  proposal?: string;
+  questions: DiscordClarificationQuestion[];
+  expiresAt: string;
+}
+
 export type DiscordClientInput =
   | DiscordGetServerEmojiInput
   | DiscordSendServerEmojiInput
   | DiscordSendTextMessageInput
   | DiscordScheduledPostInput
-  | DiscordPlanningInput;
+  | DiscordPlanningInput
+  | DiscordClarificationInput;
 
 export interface DiscordGetServerEmojiOutput extends ServiceOutput {
   emojis: string[];
@@ -152,6 +183,7 @@ export type DiscordEventType =
   | "discord:get_server_emoji"
   | "discord:send_server_emoji"
   | "discord:planning"
+  | "discord:request_clarification"
   | "discord:post_voice_response"
   | "discord:play_voice_filler"
   | "discord:voice_queue_start"

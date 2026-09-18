@@ -136,8 +136,15 @@ export const config = {
 
   google: {
     apiKey: optional('GOOGLE_API_KEY', ''),
+    mapsApiKey: optional('GOOGLE_MAPS_API_KEY', optional('GOOGLE_API_KEY', '')),
     geminiApiKey: optional('GEMINI_API_KEY', optional('GOOGLE_API_KEY', '')),
     searchEngineId: optional('SEARCH_ENGINE_ID', ''),
+  },
+
+  webSearch: {
+    providerOrder: optional('WEB_SEARCH_PROVIDER_ORDER', 'anthropic,brave,google')
+      .split(',').map((value) => value.trim().toLowerCase()).filter(Boolean),
+    braveApiKey: optional('BRAVE_SEARCH_API_KEY', ''),
   },
 
   wolframAlpha: {
