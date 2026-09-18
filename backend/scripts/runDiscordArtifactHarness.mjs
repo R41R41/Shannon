@@ -22,6 +22,23 @@ process.env.DISCORD_TOKEN = '';
 process.env.IS_DEV = 'True';
 process.env.TWITTER_DISABLED = 'true';
 
+// This harness imports dist/ directly. Refuse to start when a changed source
+// file has not been transpiled, otherwise tests can silently exercise old code.
+const { stat } = await import('node:fs/promises');
+const runtimePairs = [
+  ['src/services/discord/client.ts', 'dist/services/discord/client.js'],
+  ['src/services/llm/graph/shannonGraph.ts', 'dist/services/llm/graph/shannonGraph.js'],
+  ['src/services/llm/graph/nodes/FunctionCallingAgent.ts', 'dist/services/llm/graph/nodes/FunctionCallingAgent.js'],
+  ['src/services/llm/graph/nodes/execution/ToolExecutor.ts', 'dist/services/llm/graph/nodes/execution/ToolExecutor.js'],
+  ['src/services/llm/graph/cognitive/ModelSelector.ts', 'dist/services/llm/graph/cognitive/ModelSelector.js'],
+];
+for (const [sourcePath, runtimePath] of runtimePairs) {
+  const [source, runtime] = await Promise.all([stat(sourcePath), stat(runtimePath)]);
+  if (source.mtimeMs > runtime.mtimeMs) {
+    throw new Error(`Discord artifact harness runtime is stale: ${runtimePath} is older than ${sourcePath}`);
+  }
+}
+
 const { LLMService } = await import('../dist/services/llm/client.js');
 const { DiscordBot } = await import('../dist/services/discord/client.js');
 const { config } = await import('../dist/config/env.js');

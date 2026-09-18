@@ -50,6 +50,10 @@ const NON_TERMINAL_SUMMARY_PATTERNS = [
 const DISCORD_ARTIFACT_GOAL = /(?:PDF|旅行資料|旅程.{0,12}資料|日帰り旅行.{0,20}資料)/iu;
 const DISCORD_ARTIFACT_TOOLS = ['create-travel-brief', 'send-artifact-on-discord'] as const;
 
+export function isDiscordArtifactRequest(goal: string, platform: string | null): boolean {
+    return platform === 'discord' && DISCORD_ARTIFACT_GOAL.test(goal);
+}
+
 export function validateCompletionClaim(input: {
     goal: string;
     platform: string | null;
@@ -57,8 +61,7 @@ export function validateCompletionClaim(input: {
     availableToolNames: ReadonlySet<string>;
     successfulToolNames: ReadonlySet<string>;
 }): string | null {
-    const requiresDiscordArtifact = input.platform === 'discord'
-        && DISCORD_ARTIFACT_GOAL.test(input.goal)
+    const requiresDiscordArtifact = isDiscordArtifactRequest(input.goal, input.platform)
         && DISCORD_ARTIFACT_TOOLS.every((toolName) => input.availableToolNames.has(toolName));
     if (requiresDiscordArtifact) {
         const missing = DISCORD_ARTIFACT_TOOLS.filter(
@@ -463,6 +466,14 @@ export class FunctionCallingAgent {
             effectiveTools = effectiveTools.filter(
                 (tool) => !channelOutputTools.includes(tool.name),
             );
+            effectiveToolMap = new Map(effectiveTools.map((tool) => [tool.name, tool]));
+        }
+
+        // Persistent routine authoring is unrelated to a one-off Discord artifact
+        // and is not initialized by the isolated test harness. Keeping it bound lets
+        // weaker models choose it instead of the explicit update-plan workflow.
+        if (isDiscordArtifactRequest(goal, platform)) {
+            effectiveTools = effectiveTools.filter((tool) => tool.name !== 'manage-routine');
             effectiveToolMap = new Map(effectiveTools.map((tool) => [tool.name, tool]));
         }
 

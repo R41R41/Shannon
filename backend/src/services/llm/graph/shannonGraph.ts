@@ -25,7 +25,7 @@ import type {
 import { inferInitialMode, envelopeToTaskContext } from './stateBridge.js';
 import { actionFormatterNode } from '../../common/adapters/actionFormatter.js';
 import { EmotionNode, EmotionState } from './nodes/EmotionNode.js';
-import { FunctionCallingAgent } from './nodes/FunctionCallingAgent.js';
+import { FunctionCallingAgent, isDiscordArtifactRequest } from './nodes/FunctionCallingAgent.js';
 import { ScopedMemoryService } from '../../memory/scopedMemoryService.js';
 import { ModelSelector } from './cognitive/ModelSelector.js';
 import { ParallelExecutor } from './cognitive/ParallelExecutor.js';
@@ -89,7 +89,11 @@ const scopedMemory = ScopedMemoryService.getInstance();
 async function ingestNode(state: ShannonStateType): Promise<Partial<ShannonStateType>> {
   const mode = inferInitialMode(state.envelope);
   // Phase 4: ClassifyNode 削除により、ingest でモデル選択を設定
-  const selectedModel = ModelSelector.selectInitialModel('mid', false, mode);
+  const platform = state.envelope.channel ?? null;
+  const selectedModel = config.llm.provider !== 'anthropic'
+    && isDiscordArtifactRequest(state.envelope.text ?? '', platform)
+    ? 'gpt-5'
+    : ModelSelector.selectInitialModel('mid', false, mode);
   return { mode, selectedModel, trace: ['node:ingest'] };
 }
 
@@ -174,10 +178,12 @@ function createExecuteNode(
       try {
         const platform = context?.platform ?? envelope.channel ?? 'unknown';
         const goal = envelope.text ?? '';
-        const episode = TaskEpisodeMemory.buildEpisodeFromResult(
-          goal, platform, agentResult.taskTree, startTime, 0,
-        );
-        TaskEpisodeMemory.getInstance().saveEpisode(episode).catch(() => {});
+        if (agentResult.recoveryStatus !== 'awaiting_user') {
+          const episode = TaskEpisodeMemory.buildEpisodeFromResult(
+            goal, platform, agentResult.taskTree, startTime, 0,
+          );
+          TaskEpisodeMemory.getInstance().saveEpisode(episode).catch(() => {});
+        }
       } catch { /* ignore */ }
 
       return {

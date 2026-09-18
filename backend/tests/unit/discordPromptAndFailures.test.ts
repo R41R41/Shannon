@@ -3,6 +3,7 @@ import { PromptBuilder } from '../../src/services/llm/graph/nodes/prompt/PromptB
 import { ToolExecutor } from '../../src/services/llm/graph/nodes/execution/ToolExecutor';
 import {
   formatCompletedSummary,
+  isDiscordArtifactRequest,
   validateCompletionClaim,
 } from '../../src/services/llm/graph/nodes/FunctionCallingAgent';
 
@@ -32,6 +33,17 @@ describe('Discord task guidance', () => {
       'URLを取得できませんでした [failure_type=http_fetch_failed recoverable=true]',
     );
     expect(parsed).toEqual({ isError: true, failureType: 'http_fetch_failed', recoverable: true });
+  });
+
+  it('classifies capitalized tool errors as failures', () => {
+    expect(ToolExecutor.parseToolFailureMetadata(
+      "Error: Cannot read properties of undefined (reading 'create')",
+    ).isError).toBe(true);
+  });
+
+  it('recognizes Discord PDF work for stronger model routing', () => {
+    expect(isDiscordArtifactRequest('公式情報を含むPDFを作って', 'discord')).toBe(true);
+    expect(isDiscordArtifactRequest('公式情報を含むPDFを作って', 'web')).toBe(false);
   });
 
   it('rejects a PDF completion until creation and Discord delivery both succeeded', () => {

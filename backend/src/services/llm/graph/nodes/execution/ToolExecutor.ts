@@ -189,7 +189,7 @@ export class ToolExecutor {
         const recoverable = recoverableMatch ? recoverableMatch[1].toLowerCase() === 'true' : undefined;
         const isError = Boolean(
             failureType || result.includes('失敗') || result.includes('エラー')
-            || result.includes('error') || result.includes('見つかりません'),
+            || /\b(?:error|failed|failure)\b/i.test(result) || result.includes('見つかりません'),
         );
         return {
             isError,
