@@ -613,6 +613,7 @@ export class FunctionCallingAgent {
         const successfulToolNames = new Set<string>();
         const initiallyAvailableToolNames = new Set(effectiveToolMap.keys());
         let lastCompletionIssue: string | null = null;
+        let loopTerminalReason: string | null = null;
 
         // 初期 UI 更新
         this.taskTreePublisher.publishTaskTree({
@@ -632,6 +633,7 @@ export class FunctionCallingAgent {
 
                 if (Date.now() - startTime > FunctionCallingAgent.MAX_TOTAL_TIME_MS) {
                     logger.error('⏱ FunctionCallingAgent: 総実行時間超過 (5分)');
+                    loopTerminalReason = '総実行時間の上限（5分）に到達';
                     break;
                 }
 
@@ -972,6 +974,91 @@ export class FunctionCallingAgent {
                     if (result.success) successfulToolNames.add(result.toolName);
                 }
 
+                // A created Discord artifact has all information required for delivery.
+                // Finish the deterministic handoff here instead of spending another
+                // slow reasoning turn merely to copy artifactId into the send tool.
+                const createdArtifact = iterationResults.find(
+                    (result) => result.toolName === 'create-travel-brief' && result.success,
+                );
+                if (createdArtifact && isDiscordArtifactRequest(goal, platform)) {
+                    const sendTool = effectiveToolMap.get('send-artifact-on-discord');
+                    const channelId = state.context?.discord?.channelId ?? state.channelId;
+                    const guildId = state.context?.discord?.guildId;
+                    try {
+                        const artifact = JSON.parse(createdArtifact.message) as {
+                            artifactId?: string;
+                            title?: string;
+                        };
+                        if (sendTool && artifact.artifactId && channelId && guildId) {
+                            stepCounter++;
+                            const deliveryStep: HierarchicalSubTask = {
+                                id: `step_${stepCounter}`,
+                                goal: `send-artifact-on-discord(artifactId=${artifact.artifactId})`,
+                                status: 'in_progress',
+                            };
+                            steps.push(deliveryStep);
+                            this.taskTreePublisher.publishTaskTree({
+                                status: 'in_progress',
+                                goal,
+                                strategy: 'PDFをDiscordへ添付しています。',
+                                currentThinking: lastThinkingContent,
+                                hierarchicalSubTasks: steps,
+                                currentSubTaskId: deliveryStep.id,
+                            }, platform, state.channelId, state.taskId, state.onTaskTreeUpdate);
+
+                            const deliveryRaw = await sendTool.invoke({
+                                artifactId: artifact.artifactId,
+                                message: `## ✅ 旅行資料が完成しました\n「${artifact.title ?? '旅行計画'}」のプレビューとPDFを添付します。`,
+                                channelId,
+                                guildId,
+                                memoryZone: 'discord:general',
+                            });
+                            const deliveryText = typeof deliveryRaw === 'string'
+                                ? deliveryRaw
+                                : JSON.stringify(deliveryRaw);
+                            const deliveryFailure = ToolExecutor.parseToolFailureMetadata(deliveryText);
+                            if (!deliveryFailure.isError) {
+                                successfulToolNames.add('send-artifact-on-discord');
+                                deliveryStep.status = 'completed';
+                                deliveryStep.result = 'PDFとプレビューをDiscordの送信キューへ登録しました。';
+                                const lastAssistantContent = formatCompletedSummary(
+                                    `「${artifact.title ?? '旅行計画'}」を作成し、PDFとプレビューをDiscordへ添付しました。`,
+                                );
+                                this.taskTreePublisher.publishTaskTree({
+                                    status: 'completed',
+                                    goal,
+                                    strategy: lastAssistantContent,
+                                    recoveryStatus: 'idle',
+                                    hierarchicalSubTasks: steps,
+                                    currentSubTaskId: null,
+                                }, platform, state.channelId, state.taskId, state.onTaskTreeUpdate);
+                                this.thinkingManager.resetThinkingState();
+                                return {
+                                    taskTree: {
+                                        status: 'completed' as const,
+                                        goal,
+                                        strategy: lastAssistantContent,
+                                        recoveryStatus: 'idle' as const,
+                                        hierarchicalSubTasks: steps,
+                                        subTasks: null,
+                                    } as TaskTreeState,
+                                    recoveryStatus: 'idle' as const,
+                                    recoveryAttempts: forcedRecoveryAttempts,
+                                    isEmergency,
+                                    messages,
+                                    forceStop: false,
+                                    lastAssistantContent,
+                                };
+                            }
+                            deliveryStep.status = 'error';
+                            deliveryStep.failureReason = deliveryText;
+                            deliveryStep.recoverable = true;
+                        }
+                    } catch (error) {
+                        logger.error(`Discord artifact auto-delivery failed: ${error instanceof Error ? error.message : String(error)}`);
+                    }
+                }
+
                 // ask-user-on-discord はタスクを明示的に一時停止する。モデルの追加出力を
                 // 待たず、Discordフォームの回答を新しいターンとして再開する。
                 const clarificationResult = iterationResults.find(
@@ -1177,11 +1264,11 @@ export class FunctionCallingAgent {
             }
 
             // 最大イテレーション到達
-            logger.warn(`⚠ FunctionCallingAgent: 最大イテレーション(${maxIter})に到達`);
+            logger.warn(`⚠ FunctionCallingAgent: ${loopTerminalReason ?? `最大イテレーション(${maxIter})に到達`}`);
 
             const terminalReason = lastCompletionIssue
                 ? `成果物を確認できないため停止しました。${lastCompletionIssue}`
-                : '最大イテレーション数に到達';
+                : (loopTerminalReason ?? '最大イテレーション数に到達');
             this.taskTreePublisher.publishTaskTree({
                 status: 'error',
                 goal,
