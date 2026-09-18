@@ -35,6 +35,16 @@ export const config = {
   /** OpenAI API key (required, used by all LLM-related services) */
   openaiApiKey: required('OPENAI_API_KEY'),
 
+  llm: {
+    /**
+     * OpenAI is the safe default for interactive Web/Discord orchestration.
+     * Anthropic remains available only as an explicit operator choice.
+     */
+    provider: optional('SHANNON_LLM_PROVIDER', 'openai').trim().toLowerCase() === 'anthropic'
+      ? 'anthropic'
+      : 'openai',
+  },
+
   /** MongoDB connection URI */
   mongodbUri: required('MONGODB_URI'),
 
@@ -148,7 +158,9 @@ export const config = {
   },
 
   webSearch: {
-    providerOrder: optional('WEB_SEARCH_PROVIDER_ORDER', 'anthropic,brave,google')
+    // Do not spend Anthropic credits implicitly. Operators can add
+    // "anthropic" explicitly when they want it as a search fallback.
+    providerOrder: optional('WEB_SEARCH_PROVIDER_ORDER', 'google,brave')
       .split(',').map((value) => value.trim().toLowerCase()).filter(Boolean),
     braveApiKey: optional('BRAVE_SEARCH_API_KEY', ''),
   },

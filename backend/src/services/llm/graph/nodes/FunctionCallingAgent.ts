@@ -166,8 +166,9 @@ export class FunctionCallingAgent {
             this.askUserOnDiscordTool = askTool;
         }
 
-        // Claude Anthropic を優先、フォールバックで OpenAI
-        if (config.anthropic?.apiKey) {
+        // OpenAI is the interactive default. Merely configuring an Anthropic
+        // key must not silently route every Web/Discord request to Opus.
+        if (config.llm.provider === 'anthropic' && config.anthropic?.apiKey) {
             this.model = new ChatAnthropic({
                 model: config.anthropic.model,
                 anthropicApiKey: config.anthropic.apiKey,
@@ -186,7 +187,7 @@ export class FunctionCallingAgent {
                 temperature: 1,
                 maxTokens: 1024,
             });
-            logger.info('🤖 FCA: Using OpenAI (Anthropic key not configured)', 'yellow');
+            logger.info(`🤖 FCA: Using ${FunctionCallingAgent.MODEL_NAME} (OpenAI default)`, 'yellow');
         }
 
         // ツールをモデルに bind

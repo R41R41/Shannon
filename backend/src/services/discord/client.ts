@@ -1388,6 +1388,21 @@ export class DiscordBot extends BaseClient {
         return;
       }
 
+      if (planning.status === 'error') {
+        const startedAt = tracked?.startedAt ?? Date.now();
+        const failureEmbed = this.buildProgressFailureEmbed(planning, startedAt);
+        if (tracked) {
+          const message = await channel.messages.fetch(tracked.messageId).catch(() => null);
+          if (message) await message.edit({ embeds: [failureEmbed], components: [] });
+        } else {
+          await channel.send({ embeds: [failureEmbed] });
+        }
+        this.progressMessages.delete(taskId);
+        this.progressDetails.delete(taskId);
+        this.progressExpanded.delete(taskId);
+        return;
+      }
+
       const startedAt = tracked?.startedAt ?? Date.now();
       const expanded = this.progressExpanded.has(taskId);
       const embed = this.buildProgressEmbed(planning, startedAt, expanded);
@@ -1504,6 +1519,30 @@ export class DiscordBot extends BaseClient {
         .setLabel(expanded ? '詳細を隠す' : '詳細を表示')
         .setStyle(ButtonStyle.Secondary),
     );
+  }
+
+  private buildProgressFailureEmbed(planning: TaskTreeState, startedAt: number): EmbedBuilder {
+    const tasks = planning.hierarchicalSubTasks ?? [];
+    const completed = tasks.filter((task) => task.status === 'completed').length;
+    const elapsed = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
+    const rawReason = planning.error || planning.strategy || planning.lastFailureType || '不明なエラー';
+    const timeout = rawReason.match(/LLM timeout \((\d+)s\)/i);
+    const reason = timeout
+      ? `AIモデルが${timeout[1]}秒以内に応答を完了できませんでした。`
+      : rawReason.replace(/^\s*エラー\s*:\s*/u, '').slice(0, 900);
+    const progress = tasks.length > 0
+      ? `${completed}/${tasks.length}ステップ完了後に停止しました。`
+      : '処理の開始後に停止しました。';
+    return new EmbedBuilder()
+      .setColor(0xed4245)
+      .setAuthor({ name: 'シャノン • 処理失敗' })
+      .setTitle('処理を完了できませんでした')
+      .setDescription([
+        `**原因**\n${reason}`,
+        `**状況**\n${progress}`,
+        '作業中の詳細ログは片付けました。同じ依頼を送ると再試行できます。',
+      ].join('\n\n'))
+      .setFooter({ text: `Shannon • 失敗 • ${elapsed}秒` });
   }
 
   private buildProgressEmbed(planning: TaskTreeState, startedAt: number, expanded = false): EmbedBuilder {

@@ -34,4 +34,15 @@ describe('Discord progress card', () => {
     expect(json.description).toContain('詳細な検索結果');
     expect(bot.buildProgressControls('task', true).toJSON().components[0].label).toBe('詳細を隠す');
   });
+
+  it('replaces verbose progress with one concise failure summary', () => {
+    const json = bot.buildProgressFailureEmbed({
+      ...planning,
+      status: 'error',
+      strategy: 'エラー: LLM timeout (120s)',
+    }, Date.now() - 120_000).toJSON();
+    expect(json.title).toBe('処理を完了できませんでした');
+    expect(json.description).toContain('AIモデルが120秒以内に応答を完了できませんでした');
+    expect(json.description).toContain('1/3ステップ完了');
+  });
 });

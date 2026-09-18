@@ -11,8 +11,8 @@ import { createTracedModel } from '../../utils/langfuse.js';
  * ClassifyNode の結果に基づいて最適な LLM モデルを選択し、
  * 実行中のエスカレーション/デエスカレーションを制御する。
  *
- * Anthropic API key がある場合: Claude チェーン (Sonnet → Opus)
- * ない場合: OpenAI チェーン (gpt-4.1-mini → gpt-5)
+ * OpenAI is the default chain. Claude is used only when
+ * SHANNON_LLM_PROVIDER=anthropic is configured explicitly.
  */
 
 export interface ModelConfig {
@@ -66,7 +66,10 @@ const OPENAI_CHAIN: ModelSlot[] = [
 ];
 
 function getChain(): ModelSlot[] {
-    return config.anthropic?.apiKey ? ANTHROPIC_CHAIN : OPENAI_CHAIN;
+    if (config.llm.provider === 'anthropic' && config.anthropic?.apiKey) {
+        return ANTHROPIC_CHAIN;
+    }
+    return OPENAI_CHAIN;
 }
 
 export class ModelSelector {

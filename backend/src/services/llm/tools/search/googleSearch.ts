@@ -6,7 +6,7 @@ import { logger } from '../../../../utils/logger.js';
 /** Backward-compatible tool name backed by a replaceable provider chain. */
 export default class GoogleSearchTool extends StructuredTool {
   name = 'google-search';
-  description = '最新のWebを検索する。Anthropic Web Searchを優先し、Brave Search、移行期間中のGoogle CSEへ自動フォールバックする。複数の独立した情報源を返す。同時に調べられる別クエリは並列呼び出ししてよい。';
+  description = '最新のWebを検索する。Google CSEを標準とし、設定済みの代替プロバイダへ順にフォールバックする。複数の独立した情報源を返す。同時に調べられる別クエリは並列呼び出ししてよい。';
   schema = z.object({
     query: z.string().min(1).max(600).describe('検索クエリ'),
     dateRestrict: z.string().optional().describe('日付範囲（例: d1, w1, m1, y1）。対応プロバイダで使用'),
