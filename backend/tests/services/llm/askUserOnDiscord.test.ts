@@ -32,4 +32,32 @@ describe('ask-user-on-discord', () => {
     });
     expect(String(result)).toContain('unsupported_channel');
   });
+
+  it('normalizes verbose model output instead of aborting clarification', async () => {
+    const tool = new AskUserOnDiscordTool();
+    tool.setContext({
+      platform: 'discord',
+      discord: { guildId: 'guild', channelId: 'channel', userId: 'user', userName: 'Rai' },
+    }, 'task');
+    let published: any;
+    const unsubscribe = getEventBus().subscribe('discord:request_clarification', (event) => { published = event.data; });
+    const result = await tool.invoke({
+      originalRequest: '旅行計画を作って'.repeat(300),
+      proposal: '推奨条件'.repeat(1000),
+      questions: Array.from({ length: 6 }, (_, index) => ({
+        id: `question_${index}`,
+        label: `質問${index}`.repeat(40),
+        kind: 'text' as const,
+        description: '説明'.repeat(400),
+      })),
+    });
+    unsubscribe();
+
+    expect(String(result)).toContain('SHANNON_AWAITING_USER');
+    expect(published.originalRequest.length).toBeLessThanOrEqual(1500);
+    expect(published.proposal.length).toBeLessThanOrEqual(1000);
+    expect(published.questions).toHaveLength(5);
+    expect(published.questions[0].label.length).toBeLessThanOrEqual(100);
+    expect(published.questions[0].description.length).toBeLessThanOrEqual(300);
+  });
 });

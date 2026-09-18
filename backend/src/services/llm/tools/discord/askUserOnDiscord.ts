@@ -6,12 +6,17 @@ import { getEventBus } from '../../../eventBus/index.js';
 
 const questionSchema = z.object({
   id: z.string().min(1).max(40).describe('Stable snake_case answer key'),
-  label: z.string().min(1).max(100).describe('Short question shown to the user'),
+  // Discord itself applies tighter display limits below. Accept slightly verbose
+  // model output here and normalize it instead of aborting the whole task.
+  label: z.string().min(1).max(300).transform((value) => value.slice(0, 100))
+    .describe('Short question shown to the user'),
   kind: z.enum(['single_select', 'multi_select', 'number', 'text', 'confirm']),
-  description: z.string().max(300).optional(),
+  description: z.string().max(1000).transform((value) => value.slice(0, 300)).optional(),
   required: z.boolean().default(true),
-  options: z.array(z.string().min(1).max(80)).max(8).optional(),
-  defaultValue: z.string().max(200).optional(),
+  options: z.array(z.string().min(1).max(200))
+    .transform((values) => values.slice(0, 8).map((value) => value.slice(0, 80)))
+    .optional(),
+  defaultValue: z.string().max(1000).transform((value) => value.slice(0, 200)).optional(),
 });
 
 /**
@@ -29,9 +34,14 @@ export default class AskUserOnDiscordTool extends StructuredTool {
   ].join(' ');
 
   schema = z.object({
-    originalRequest: z.string().min(1).max(1500).describe('元の依頼を簡潔に保持したもの'),
-    proposal: z.string().max(1000).optional().describe('推奨する仮定・進め方。妥当ならワンクリックで承認できる'),
-    questions: z.array(questionSchema).min(1).max(5),
+    originalRequest: z.string().min(1).max(4000).transform((value) => value.slice(0, 1500))
+      .describe('元の依頼を簡潔に保持したもの'),
+    proposal: z.string().max(4000).transform((value) => value.slice(0, 1000)).optional()
+      .describe('推奨する仮定・進め方。妥当ならワンクリックで承認できる'),
+    // The model occasionally emits six closely-related questions even though
+    // the prompt asks for five. Preserve the first five rather than failing the
+    // clarification tool and prematurely completing the task.
+    questions: z.array(questionSchema).min(1).max(10).transform((questions) => questions.slice(0, 5)),
   });
 
   private context: TaskContext | null = null;
