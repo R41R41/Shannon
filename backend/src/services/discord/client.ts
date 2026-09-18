@@ -92,6 +92,7 @@ export class DiscordBot extends BaseClient {
   private colabChannelId: string | null = null;
   private progressMessages = new Map<string, { channelId: string; messageId: string; startedAt: number }>();
   private progressDetails = new Map<string, TaskTreeState>();
+  private progressExpanded = new Set<string>();
   private static instance: DiscordBot;
   public isDev: boolean = false;
   public voiceManager: VoiceManager;
@@ -1383,17 +1384,14 @@ export class DiscordBot extends BaseClient {
         }
         this.progressMessages.delete(taskId);
         this.progressDetails.delete(taskId);
+        this.progressExpanded.delete(taskId);
         return;
       }
 
       const startedAt = tracked?.startedAt ?? Date.now();
-      const embed = this.buildProgressEmbed(planning, startedAt);
-      const controls = new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder()
-          .setCustomId(`shannon_progress_detail:${taskId}`.slice(0, 100))
-          .setLabel('詳細')
-          .setStyle(ButtonStyle.Secondary),
-      );
+      const expanded = this.progressExpanded.has(taskId);
+      const embed = this.buildProgressEmbed(planning, startedAt, expanded);
+      const controls = this.buildProgressControls(taskId, expanded);
       if (tracked) {
         const message = await channel.messages.fetch(tracked.messageId).catch(() => null);
         if (message) {
@@ -1499,45 +1497,86 @@ export class DiscordBot extends BaseClient {
     return rows;
   }
 
-  private buildProgressEmbed(planning: TaskTreeState, startedAt: number): EmbedBuilder {
+  private buildProgressControls(taskId: string, expanded: boolean): ActionRowBuilder<ButtonBuilder> {
+    return new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`shannon_progress_detail:${taskId}`.slice(0, 100))
+        .setLabel(expanded ? '詳細を隠す' : '詳細を表示')
+        .setStyle(ButtonStyle.Secondary),
+    );
+  }
+
+  private buildProgressEmbed(planning: TaskTreeState, startedAt: number, expanded = false): EmbedBuilder {
     const statusEmoji = (status: string) => ({
       completed: '✅', in_progress: '⏳', pending: '○', error: '⚠️',
     }[status] ?? '•');
+    const compact = (value: string, limit: number) => {
+      const normalized = value.replace(/\s+/g, ' ').trim();
+      return normalized.length > limit ? `${normalized.slice(0, limit - 1)}…` : normalized;
+    };
     const tasks = planning.hierarchicalSubTasks ?? [];
     const completed = tasks.filter((task) => task.status === 'completed').length;
-    const visibleTasks = tasks.slice(0, 6).map((task) => {
+    const taskLine = (task: (typeof tasks)[number], includeResult: boolean) => {
       const indent = '\u00a0'.repeat(Math.min(task.depth ?? 0, 3) * 2);
-      return `${indent}${statusEmoji(task.status)} ${task.goal}`;
-    });
-    if (tasks.length > visibleTasks.length) visibleTasks.push(`…ほか ${tasks.length - visibleTasks.length} 件`);
+      const result = task.failureReason ?? task.result;
+      return `${indent}${statusEmoji(task.status)} ${compact(task.goal, 180)}`
+        + (includeResult && result ? `\n${indent}  ↳ ${compact(result, 220)}` : '');
+    };
+    const activeTasks = tasks.filter((task) => task.status === 'in_progress' || task.status === 'error');
+    const collapsedTasks = (activeTasks.length > 0
+      ? activeTasks
+      : tasks.filter((task) => task.status === 'completed').slice(-1)
+    ).slice(0, 3);
+    const collapsedLines = collapsedTasks.map((task) => taskLine(task, false));
+    const hiddenCount = Math.max(0, tasks.length - collapsedTasks.length);
+    if (hiddenCount > 0) collapsedLines.push(`…ほか ${hiddenCount} 件`);
+
+    const detailLines: string[] = [];
+    let detailLength = 0;
+    for (const task of tasks) {
+      const line = taskLine(task, true);
+      if (detailLength + line.length > 3_100) {
+        detailLines.push(`…ほか ${tasks.length - detailLines.length} 件`);
+        break;
+      }
+      detailLines.push(line);
+      detailLength += line.length;
+    }
     const elapsed = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
     const awaiting = planning.recoveryStatus === 'awaiting_user';
+    const summary = planning.currentThinking || planning.strategy;
     return new EmbedBuilder()
       .setColor(planning.status === 'error' ? 0xed4245 : awaiting ? 0xfee75c : 0x5b8def)
       .setAuthor({ name: awaiting ? 'シャノン • 回答待ち' : 'シャノン • 作業中' })
-      .setTitle(planning.goal.slice(0, 250))
+      .setTitle(compact(planning.goal, 180))
       .setDescription([
-        planning.strategy ? planning.strategy.slice(0, 800) : null,
-        visibleTasks.length ? visibleTasks.join('\n') : null,
+        summary ? compact(summary, expanded ? 600 : 280) : null,
+        expanded
+          ? (detailLines.length ? detailLines.join('\n\n') : 'まだ詳細な手順はありません。')
+          : (collapsedLines.length ? collapsedLines.join('\n') : null),
       ].filter(Boolean).join('\n\n').slice(0, 4000))
-      .setFooter({ text: `${completed}/${tasks.length || 1} 完了 • ${elapsed}秒 • 完了時に自動で片付きます` });
+      .setFooter({
+        text: `${completed}/${tasks.length || 1} 完了 • ${elapsed}秒 • ${expanded ? '詳細表示中 • ' : ''}完了時に自動で片付きます`,
+      });
   }
 
   private async handleProgressDetail(interaction: ButtonInteraction): Promise<void> {
     const taskId = interaction.customId.replace('shannon_progress_detail:', '');
     const planning = this.progressDetails.get(taskId);
     if (!planning) {
-      await interaction.reply({ content: 'この作業は完了したため、進捗表示は片付けられました。', ephemeral: true });
+      await interaction.reply({
+        content: 'この作業は完了したため、進捗表示は片付けられました。',
+        flags: MessageFlags.Ephemeral,
+      });
       return;
     }
-    const statusEmoji = (status: string) => ({ completed: '✅', in_progress: '⏳', pending: '○', error: '⚠️' }[status] ?? '•');
-    const details = (planning.hierarchicalSubTasks ?? []).map((task) => {
-      const result = task.failureReason ?? task.result;
-      return `${statusEmoji(task.status)} **${task.goal}**${result ? `\n↳ ${result}` : ''}`;
-    });
-    await interaction.reply({
-      content: (details.length ? details.join('\n\n') : planning.strategy).slice(0, 1900),
-      ephemeral: true,
+    const expanded = !this.progressExpanded.has(taskId);
+    if (expanded) this.progressExpanded.add(taskId);
+    else this.progressExpanded.delete(taskId);
+    const startedAt = this.progressMessages.get(taskId)?.startedAt ?? Date.now();
+    await interaction.update({
+      embeds: [this.buildProgressEmbed(planning, startedAt, expanded)],
+      components: [this.buildProgressControls(taskId, expanded)],
     });
   }
 
