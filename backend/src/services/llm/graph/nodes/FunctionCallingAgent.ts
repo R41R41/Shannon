@@ -23,6 +23,7 @@ import AskUserOnDiscordTool from '../../tools/discord/askUserOnDiscord.js';
 import { trimContext } from '../../utils/contextManager.js';
 import { createTracedModel } from '../../utils/langfuse.js';
 import { tokenTracker } from '../../utils/tokenTracker.js';
+import { normalizeAIMessageToolCalls, repairMissingToolResults } from '../../utils/toolCallMessages.js';
 import { ExecutionResult } from '../types.js';
 import { EmotionState } from './EmotionNode.js';
 import { MemoryState } from './MemoryNode.js';
@@ -591,6 +592,18 @@ export class FunctionCallingAgent {
                     messages.push(...trimmed);
                 }
 
+                // OpenAI requires one ToolMessage for every tool_call_id before
+                // another model request. Repair legacy/incomplete histories
+                // instead of letting a single malformed turn terminate the task.
+                const repairedHistory = repairMissingToolResults(messages);
+                if (repairedHistory.repairedCallIds.length > 0) {
+                    messages.length = 0;
+                    messages.push(...repairedHistory.messages);
+                    logger.warn(
+                        `🔧 Missing tool results repaired: ${repairedHistory.repairedCallIds.join(', ')}`,
+                    );
+                }
+
                 // ── 一時的な思考/感情コンテキストを注入（LLM呼び出し後に除去） ──
                 const ephemeralMessages: BaseMessage[] = [];
                 // ── 初期記憶コンテキスト (初回のみ) ──
@@ -713,6 +726,8 @@ export class FunctionCallingAgent {
                     throw e;
                 }
                 activeCallAbort = null;
+
+                response = normalizeAIMessageToolCalls(response);
 
                 // ephemeral メッセージを除去（蓄積防止）
                 if (ephemeralMessages.length > 0) {

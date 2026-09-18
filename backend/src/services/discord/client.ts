@@ -1527,11 +1527,16 @@ export class DiscordBot extends BaseClient {
     const elapsed = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
     const rawReason = planning.error || planning.strategy || planning.lastFailureType || '不明なエラー';
     const timeout = rawReason.match(/LLM timeout \((\d+)s\)/i);
+    const incompleteToolResults = /tool_calls.*tool messages|INVALID_TOOL_RESULTS/i.test(rawReason);
     const reason = timeout
       ? `AIモデルが${timeout[1]}秒以内に応答を完了できませんでした。`
-      : rawReason.replace(/^\s*エラー\s*:\s*/u, '').slice(0, 900);
+      : incompleteToolResults
+        ? '内部のツール実行履歴に不整合が発生しました。'
+        : rawReason.replace(/^\s*エラー\s*:\s*/u, '').split(/\n\s*Troubleshooting URL:/i)[0].slice(0, 500);
     const progress = tasks.length > 0
-      ? `${completed}/${tasks.length}ステップ完了後に停止しました。`
+      ? completed === tasks.length
+        ? `${completed}件の処理は完了しましたが、結果の生成中に停止しました。`
+        : `${completed}/${tasks.length}ステップ完了後に停止しました。`
       : '処理の開始後に停止しました。';
     return new EmbedBuilder()
       .setColor(0xed4245)

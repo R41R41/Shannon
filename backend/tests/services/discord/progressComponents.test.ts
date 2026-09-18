@@ -45,4 +45,18 @@ describe('Discord progress card', () => {
     expect(json.description).toContain('AIモデルが120秒以内に応答を完了できませんでした');
     expect(json.description).toContain('1/3ステップ完了');
   });
+
+  it('hides provider protocol details and explains post-processing failures', () => {
+    const allCompleted = {
+      ...planning,
+      status: 'error',
+      hierarchicalSubTasks: planning.hierarchicalSubTasks.map((task) => ({ ...task, status: 'completed' })),
+      strategy: "400 An assistant message with 'tool_calls' must be followed by tool messages.\nTroubleshooting URL: https://example.invalid",
+    };
+    const json = bot.buildProgressFailureEmbed(allCompleted, Date.now() - 13_000).toJSON();
+    expect(json.description).toContain('内部のツール実行履歴に不整合が発生しました');
+    expect(json.description).toContain('3件の処理は完了しましたが、結果の生成中に停止しました');
+    expect(json.description).not.toContain('Troubleshooting URL');
+    expect(json.description).not.toContain('tool_calls');
+  });
 });
