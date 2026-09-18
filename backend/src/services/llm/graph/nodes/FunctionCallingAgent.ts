@@ -48,6 +48,7 @@ const NON_TERMINAL_SUMMARY_PATTERNS = [
 ];
 
 const DISCORD_ARTIFACT_GOAL = /(?:PDF|旅行資料|旅程.{0,12}資料|日帰り旅行.{0,20}資料)/iu;
+const DISCORD_ROUTE_MAP_GOAL = /(?:地図|マップ|ルート図|移動ルート.{0,12}(?:分かる|わかる|表示|可視化))/iu;
 const DISCORD_ARTIFACT_TOOLS = ['create-travel-brief', 'send-artifact-on-discord'] as const;
 
 export function isDiscordArtifactRequest(goal: string, platform: string | null): boolean {
@@ -614,6 +615,7 @@ export class FunctionCallingAgent {
         const initiallyAvailableToolNames = new Set(effectiveToolMap.keys());
         let lastCompletionIssue: string | null = null;
         let loopTerminalReason: string | null = null;
+        let latestRoutePolyline: string | null = null;
 
         // 初期 UI 更新
         this.taskTreePublisher.publishTaskTree({
@@ -965,10 +967,12 @@ export class FunctionCallingAgent {
                         lastThinkingContent,
                         onToolStarting: state.onToolStarting,
                         onTaskTreeUpdate: state.onTaskTreeUpdate,
+                        routePolyline: latestRoutePolyline,
                     },
                     signal,
                 );
                 stepCounter = execResult.stepCounter;
+                latestRoutePolyline = execResult.routePolyline;
                 const iterationResults = execResult.results;
                 for (const result of iterationResults) {
                     if (result.success) successfulToolNames.add(result.toolName);
@@ -988,7 +992,17 @@ export class FunctionCallingAgent {
                         const artifact = JSON.parse(createdArtifact.message) as {
                             artifactId?: string;
                             title?: string;
+                            routeMapIncluded?: boolean;
                         };
+                        if (DISCORD_ROUTE_MAP_GOAL.test(goal) && !artifact.routeMapIncluded) {
+                            successfulToolNames.delete('create-travel-brief');
+                            messages.push(new SystemMessage(
+                                'Completion rejected: the user explicitly requested a route map, but the created PDF did not include one. '
+                                + 'Run compute-route and create-travel-brief again; the route polyline will be carried forward automatically.',
+                            ));
+                            iteration++;
+                            continue;
+                        }
                         if (sendTool && artifact.artifactId && channelId && guildId) {
                             stepCounter++;
                             const deliveryStep: HierarchicalSubTask = {

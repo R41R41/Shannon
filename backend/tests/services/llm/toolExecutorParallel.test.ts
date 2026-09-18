@@ -2,7 +2,11 @@ import { ToolMessage } from '@langchain/core/messages';
 import { StructuredTool } from '@langchain/core/tools';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { ToolExecutor } from '../../../src/services/llm/graph/nodes/execution/ToolExecutor';
+import {
+  attachRouteMapToTravelBrief,
+  extractEncodedRoutePolyline,
+  ToolExecutor,
+} from '../../../src/services/llm/graph/nodes/execution/ToolExecutor';
 
 class DelayTool extends StructuredTool {
   schema = z.object({ delay: z.number() });
@@ -21,6 +25,23 @@ class DelayTool extends StructuredTool {
 }
 
 describe('ToolExecutor parallel scheduling', () => {
+  it('carries a computed route into the travel brief call', () => {
+    const encodedPolyline = 'abc123_polyline';
+    expect(extractEncodedRoutePolyline(JSON.stringify({
+      provider: 'google_routes',
+      polyline: { encodedPolyline },
+    }))).toBe(encodedPolyline);
+
+    const call = attachRouteMapToTravelBrief({
+      name: 'create-travel-brief',
+      args: { title: '浜松日帰り旅' },
+    }, encodedPolyline);
+    expect(call.args.routeMap).toEqual({
+      encodedPolyline,
+      caption: 'Google Routes APIで算出した移動ルート',
+    });
+  });
+
   it('read-only calls run concurrently while results stay in model call order', async () => {
     let active = 0;
     let maxActive = 0;

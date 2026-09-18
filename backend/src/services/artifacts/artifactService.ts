@@ -9,6 +9,7 @@ export class ArtifactService {
   constructor(
     private readonly store: ArtifactStore = getArtifactStore(),
     private readonly renderer: ArtifactRenderer = new ArtifactRenderer(),
+    private readonly renderRouteMap: (encodedPolyline: string) => Promise<string> = renderStaticRouteMap,
   ) {}
 
   async createTravelBrief(brief: TripBrief): Promise<ArtifactManifest> {
@@ -17,10 +18,11 @@ export class ArtifactService {
       let routeMapImageDataUri: string | undefined;
       if (brief.routeMap?.encodedPolyline) {
         try {
-          routeMapImageDataUri = await renderStaticRouteMap(brief.routeMap.encodedPolyline);
+          routeMapImageDataUri = await this.renderRouteMap(brief.routeMap.encodedPolyline);
         } catch (error) {
-          // Map is an enhancement; a route API or billing failure must not discard the PDF.
-          logger.warn(`[ArtifactService] Route map omitted: ${error instanceof Error ? error.message : String(error)}`);
+          const detail = error instanceof Error ? error.message : String(error);
+          logger.error(`[ArtifactService] Route map rendering failed: ${detail}`);
+          throw new Error(`Route map rendering failed: ${detail}`);
         }
       }
       const html = renderTravelBriefHtml({ ...brief, routeMapImageDataUri });

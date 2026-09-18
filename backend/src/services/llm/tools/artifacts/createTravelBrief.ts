@@ -18,9 +18,15 @@ const travelBriefSchema = z.object({
   meetingPoint: z.string().trim().max(200).optional().describe('集合場所・時刻'),
   weatherNote: z.string().trim().max(300).optional().describe('天気・気温・服装メモ'),
   routeMap: z.object({
-    encodedPolyline: z.string().min(1).max(12000).describe('compute-route が返した routes[0].polyline.encodedPolyline'),
+    encodedPolyline: z.string().min(1).max(12000).optional().describe('compute-route が返した polyline.encodedPolyline'),
+    polyline: z.object({
+      encodedPolyline: z.string().min(1).max(12000),
+    }).optional().describe('compute-route の結果をそのまま渡す場合の互換形式'),
     caption: z.string().trim().max(240).optional(),
-  }).optional().describe('Google Routesの結果がある場合だけ指定。静的地図をPDF内へ安全に埋め込む'),
+  }).refine(
+    (value) => Boolean(value.encodedPolyline || value.polyline?.encodedPolyline),
+    'encodedPolyline is required',
+  ).optional().describe('Google Routesの結果がある場合だけ指定。静的地図をPDF内へ安全に埋め込む'),
   stops: z.array(z.object({
     time: shortText(30).describe('開始時刻または時間帯'),
     title: shortText(120).describe('立ち寄り先・行動'),
@@ -45,12 +51,21 @@ export default class CreateTravelBriefTool extends StructuredTool<any> {
   description = '調査済みの旅行計画からPDF・Discordプレビュー画像を生成する。空オブジェクトで呼ばず、必須のtitle・date・introduction・stops・sourcesを全て組み立ててから1回だけ呼ぶ（HTMLは内部レンダリング専用で送信しない）。先にWeb、Places、Routes、公式ページを確認し、実在する参照URLをsourcesへ渡す。compute-routeのpolylineがあればrouteMapに指定する。';
   schema = travelBriefSchema;
 
-  async _call(data: TripBrief): Promise<string> {
-    const manifest = await new ArtifactService().createTravelBrief(data);
+  async _call(data: z.infer<typeof travelBriefSchema>): Promise<string> {
+    const { routeMap, ...rest } = data;
+    const normalizedBrief: TripBrief = {
+      ...rest,
+      routeMap: routeMap ? {
+        encodedPolyline: routeMap.encodedPolyline ?? routeMap.polyline!.encodedPolyline,
+        caption: routeMap.caption,
+      } : undefined,
+    };
+    const manifest = await new ArtifactService().createTravelBrief(normalizedBrief);
     return JSON.stringify({
       status: 'created',
       artifactId: manifest.id,
       title: manifest.title,
+      routeMapIncluded: Boolean(normalizedBrief.routeMap?.encodedPolyline),
       expiresAt: manifest.expiresAt,
       files: manifest.files.map((file) => ({ role: file.role, fileName: file.fileName })),
       next: 'Discordではsend-artifact-on-discordにartifactIdと現在のguildId/channelIdを渡してください。',

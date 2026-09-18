@@ -16,10 +16,51 @@ export interface ToolExecutionContext {
     lastThinkingContent: string | null;
     onToolStarting?: (toolName: string, args?: Record<string, unknown>) => void;
     onTaskTreeUpdate?: (taskTree: TaskTreeState) => void;
+    /** A route calculated in an earlier FCA iteration. */
+    routePolyline?: string | null;
 }
 
 type ToolCall = { id?: string; name: string; args: Record<string, unknown> };
 type ToolOutcome = { executionResult: ExecutionResult; toolMessage: ToolMessage };
+
+export function extractEncodedRoutePolyline(rawResult: string): string | null {
+    try {
+        const parsed = JSON.parse(rawResult) as {
+            polyline?: { encodedPolyline?: unknown };
+            routes?: Array<{ polyline?: { encodedPolyline?: unknown } }>;
+        };
+        const value = parsed.polyline?.encodedPolyline
+            ?? parsed.routes?.[0]?.polyline?.encodedPolyline;
+        return typeof value === 'string' && value.length > 0 ? value : null;
+    } catch {
+        return null;
+    }
+}
+
+export function attachRouteMapToTravelBrief(
+    toolCall: ToolCall,
+    encodedPolyline: string | null,
+): ToolCall {
+    if (toolCall.name !== 'create-travel-brief' || !encodedPolyline) return toolCall;
+    const current = toolCall.args?.routeMap;
+    if (
+        current
+        && typeof current === 'object'
+        && typeof (current as { encodedPolyline?: unknown }).encodedPolyline === 'string'
+    ) {
+        return toolCall;
+    }
+    return {
+        ...toolCall,
+        args: {
+            ...toolCall.args,
+            routeMap: {
+                encodedPolyline,
+                caption: 'Google Routes APIで算出した移動ルート',
+            },
+        },
+    };
+}
 
 /** Executes tool calls while preserving model call order in the message history. */
 export class ToolExecutor {
@@ -47,9 +88,10 @@ export class ToolExecutor {
         messages: BaseMessage[],
         execCtx: ToolExecutionContext,
         signal?: AbortSignal,
-    ): Promise<{ results: ExecutionResult[]; stepCounter: number }> {
+    ): Promise<{ results: ExecutionResult[]; stepCounter: number; routePolyline: string | null }> {
         const results: ExecutionResult[] = [];
         let { stepCounter } = execCtx;
+        let routePolyline = execCtx.routePolyline ?? null;
         let cursor = 0;
 
         while (cursor < toolCalls.length) {
@@ -63,7 +105,9 @@ export class ToolExecutor {
             }
 
             for (let start = cursor; start < groupEnd; start += ToolExecutor.MAX_PARALLEL_TOOLS) {
-                const batch = toolCalls.slice(start, Math.min(groupEnd, start + ToolExecutor.MAX_PARALLEL_TOOLS));
+                const batch = toolCalls
+                    .slice(start, Math.min(groupEnd, start + ToolExecutor.MAX_PARALLEL_TOOLS))
+                    .map((toolCall) => attachRouteMapToTravelBrief(toolCall, routePolyline));
                 const prepared = batch.map((toolCall) => {
                     const isUpdatePlan = toolCall.name === 'update-plan';
                     let step: HierarchicalSubTask | null = null;
@@ -96,12 +140,16 @@ export class ToolExecutor {
                 for (const outcome of outcomes) {
                     results.push(outcome.executionResult);
                     messages.push(outcome.toolMessage);
+                    if (outcome.executionResult.toolName === 'compute-route' && outcome.executionResult.success) {
+                        routePolyline = extractEncodedRoutePolyline(outcome.executionResult.message)
+                            ?? routePolyline;
+                    }
                 }
             }
             cursor = groupEnd;
         }
 
-        return { results, stepCounter };
+        return { results, stepCounter, routePolyline };
     }
 
     private async executeOne(

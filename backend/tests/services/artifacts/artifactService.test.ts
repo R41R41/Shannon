@@ -57,6 +57,32 @@ describe('travel brief artifacts', () => {
     expect(html).not.toContain('<script');
   });
 
+  it('ルート画像を旅行資料へ埋め込む', () => {
+    const brief = sampleBrief();
+    brief.routeMap = { encodedPolyline: 'encoded-route', caption: '車で巡るルート' };
+    brief.routeMapImageDataUri = 'data:image/png;base64,cm91dGU=';
+    const html = renderTravelBriefHtml(brief);
+
+    expect(html).toContain('<h2>移動ルート</h2>');
+    expect(html).toContain('data:image/png;base64,cm91dGU=');
+    expect(html).toContain('車で巡るルート');
+  });
+
+  it('依頼されたルート地図の生成失敗を成功扱いにしない', async () => {
+    const rootDirectory = await makeTemporaryDirectory();
+    const store = new ArtifactStore({ rootDirectory, ttlMs: 60_000 });
+    const renderer = new ArtifactRenderer(async () => {}, { pdf: 'pdf-renderer', image: 'image-renderer' });
+    const brief = sampleBrief();
+    brief.routeMap = { encodedPolyline: 'encoded-route' };
+    const service = new ArtifactService(store, renderer, async () => {
+      throw new Error('Static Maps unavailable');
+    });
+
+    await expect(service.createTravelBrief(brief)).rejects.toThrow(
+      'Route map rendering failed: Static Maps unavailable',
+    );
+  });
+
   it('HTML・PDF・プレビュー画像を生成し、IDから安全に解決できる', async () => {
     const rootDirectory = await makeTemporaryDirectory();
     const commands: Array<{ executable: string; args: string[] }> = [];
