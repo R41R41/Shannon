@@ -93,6 +93,11 @@ export class DiscordBot extends BaseClient {
   private progressMessages = new Map<string, { channelId: string; messageId: string; startedAt: number }>();
   private progressDetails = new Map<string, TaskTreeState>();
   private progressExpanded = new Set<string>();
+  private progressPending = new Map<string, {
+    channelId: string;
+    startedAt: number;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
   private static instance: DiscordBot;
   public isDev: boolean = false;
   public voiceManager: VoiceManager;
@@ -1376,8 +1381,11 @@ export class DiscordBot extends BaseClient {
       if (!channel?.isTextBased() || !('send' in channel) || !('messages' in channel)) return;
       this.progressDetails.set(taskId, planning);
       const tracked = this.progressMessages.get(taskId);
+      const pending = this.progressPending.get(taskId);
 
       if (planning.status === 'completed') {
+        if (pending) clearTimeout(pending.timer);
+        this.progressPending.delete(taskId);
         if (tracked) {
           const message = await channel.messages.fetch(tracked.messageId).catch(() => null);
           if (message) await message.delete().catch(() => undefined);
@@ -1389,6 +1397,8 @@ export class DiscordBot extends BaseClient {
       }
 
       if (planning.status === 'error') {
+        if (pending) clearTimeout(pending.timer);
+        this.progressPending.delete(taskId);
         const startedAt = tracked?.startedAt ?? Date.now();
         const failureEmbed = this.buildProgressFailureEmbed(planning, startedAt);
         if (tracked) {
@@ -1396,6 +1406,22 @@ export class DiscordBot extends BaseClient {
           if (message) await message.edit({ embeds: [failureEmbed], components: [] });
         } else {
           await channel.send({ embeds: [failureEmbed] });
+        }
+        this.progressMessages.delete(taskId);
+        this.progressDetails.delete(taskId);
+        this.progressExpanded.delete(taskId);
+        return;
+      }
+
+      // The clarification form is the only UI needed while waiting for the
+      // requester. Remove the generic progress card so Discord does not show
+      // three versions of the same state (progress, notice, and form).
+      if (planning.recoveryStatus === 'awaiting_user') {
+        if (pending) clearTimeout(pending.timer);
+        this.progressPending.delete(taskId);
+        if (tracked) {
+          const message = await channel.messages.fetch(tracked.messageId).catch(() => null);
+          if (message) await message.delete().catch(() => undefined);
         }
         this.progressMessages.delete(taskId);
         this.progressDetails.delete(taskId);
@@ -1414,8 +1440,29 @@ export class DiscordBot extends BaseClient {
           return;
         }
       }
-      const sent = await channel.send({ embeds: [embed], components: [controls] });
-      this.progressMessages.set(taskId, { channelId, messageId: sent.id, startedAt });
+      if (pending) return;
+
+      // Fast responses should feel like normal Discord messages. Only reveal a
+      // progress card when work lasts long enough to make the feedback useful.
+      const configuredDelay = Number(process.env.SHANNON_DISCORD_PROGRESS_DELAY_MS ?? 2000);
+      const delayMs = Math.max(0, Math.min(10_000, Number.isFinite(configuredDelay) ? configuredDelay : 2000));
+      const timer = setTimeout(() => {
+        void (async () => {
+          this.progressPending.delete(taskId);
+          const latest = this.progressDetails.get(taskId);
+          if (!latest || latest.status !== 'in_progress' || latest.recoveryStatus === 'awaiting_user') return;
+          const latestChannel = this.client.channels.cache.get(channelId)
+            ?? await this.client.channels.fetch(channelId).catch(() => null);
+          if (!latestChannel?.isTextBased() || !('send' in latestChannel)) return;
+          const latestExpanded = this.progressExpanded.has(taskId);
+          const sent = await latestChannel.send({
+            embeds: [this.buildProgressEmbed(latest, startedAt, latestExpanded)],
+            components: [this.buildProgressControls(taskId, latestExpanded)],
+          });
+          this.progressMessages.set(taskId, { channelId, messageId: sent.id, startedAt });
+        })().catch((error) => logger.warn(`[Discord] progress display failed: ${error}`));
+      }, delayMs);
+      this.progressPending.set(taskId, { channelId, startedAt, timer });
     });
     this.eventBus.subscribe('discord:request_clarification', async (event) => {
       if (this.status !== 'running') return;
@@ -1516,7 +1563,7 @@ export class DiscordBot extends BaseClient {
     return new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder()
         .setCustomId(`shannon_progress_detail:${taskId}`.slice(0, 100))
-        .setLabel(expanded ? '詳細を隠す' : '詳細を表示')
+        .setLabel(expanded ? '閉じる' : '詳細')
         .setStyle(ButtonStyle.Secondary),
     );
   }
@@ -1592,8 +1639,6 @@ export class DiscordBot extends BaseClient {
       : tasks.filter((task) => task.status === 'completed').slice(-1)
     ).slice(0, 3);
     const collapsedLines = collapsedTasks.map((task) => taskLine(task, false));
-    const hiddenCount = Math.max(0, tasks.length - collapsedTasks.length);
-    if (hiddenCount > 0) collapsedLines.push(`…ほか ${hiddenCount} 件`);
 
     const detailLines: string[] = [];
     let detailLength = 0;
@@ -1609,23 +1654,27 @@ export class DiscordBot extends BaseClient {
     const elapsed = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
     const awaiting = planning.recoveryStatus === 'awaiting_user';
     const summary = planning.currentThinking || planning.strategy;
-    const statusLine = awaiting
-      ? '**状態: 🟨 回答待ち** — あなたの操作が必要です。'
-      : '**状態: 🟦 実行中** — このままお待ちください。';
-    return new EmbedBuilder()
+    const statusLine = awaiting ? '🟨 **回答待ち**' : '🟦 **実行中**';
+    const compactActivity = collapsedLines[0] ?? '⏳ 準備しています';
+    const embed = new EmbedBuilder()
       .setColor(planning.status === 'error' ? 0xed4245 : awaiting ? 0xfee75c : 0x5b8def)
       .setAuthor({ name: awaiting ? 'シャノン • 回答待ち' : 'シャノン • 作業中' })
-      .setTitle(compact(planning.goal, 180))
       .setDescription([
         statusLine,
-        summary ? compact(summary, expanded ? 600 : 280) : null,
+        expanded
+          ? summary ? compact(summary, 600) : null
+          : compactActivity,
         expanded
           ? (detailLines.length ? detailLines.join('\n\n') : 'まだ詳細な手順はありません。')
-          : (collapsedLines.length ? collapsedLines.join('\n') : null),
+          : `${completed}/${tasks.length || 1} 完了 · ${elapsed}秒`,
       ].filter(Boolean).join('\n\n').slice(0, 4000))
       .setFooter({
-        text: `${completed}/${tasks.length || 1} 完了 • ${elapsed}秒 • 最終更新 ${new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })} • ${expanded ? '詳細表示中 • ' : ''}完了時に自動で片付きます`,
+        text: expanded
+          ? `${completed}/${tasks.length || 1} 完了 • ${elapsed}秒 • 完了時に自動で片付きます`
+          : '完了時に自動で片付きます',
       });
+    if (expanded) embed.setTitle(compact(planning.goal, 180));
+    return embed;
   }
 
   private async handleProgressDetail(interaction: ButtonInteraction): Promise<void> {
@@ -1780,7 +1829,7 @@ export class DiscordBot extends BaseClient {
 
     if (session.messageId) {
       const formMessage = await channel.messages.fetch(session.messageId).catch(() => null);
-      if (formMessage) await formMessage.edit({ embeds: [this.buildClarificationEmbed(answered, true)], components: [] });
+      if (formMessage) await formMessage.delete().catch(() => undefined);
     }
     const trackedProgress = this.progressMessages.get(session.taskId);
     if (trackedProgress) {

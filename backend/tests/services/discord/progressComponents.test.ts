@@ -24,10 +24,11 @@ describe('Discord progress card', () => {
 
   it('keeps the collapsed card compact', () => {
     const json = bot.buildProgressEmbed(planning, Date.now(), false).toJSON();
-    expect(json.description).toContain('状態: 🟦 実行中');
+    expect(json.description).toContain('🟦 **実行中**');
     expect(json.description).toContain('雨天案を検索');
     expect(json.description).not.toContain('詳細な検索結果');
-    expect(bot.buildProgressControls('task', false).toJSON().components[0].label).toBe('詳細を表示');
+    expect(json.title).toBeUndefined();
+    expect(bot.buildProgressControls('task', false).toJSON().components[0].label).toBe('詳細');
   });
 
   it('makes an awaiting-user state visibly different from active work', () => {
@@ -35,14 +36,14 @@ describe('Discord progress card', () => {
       ...planning,
       recoveryStatus: 'awaiting_user',
     }, Date.now(), false).toJSON();
-    expect(json.description).toContain('状態: 🟨 回答待ち');
-    expect(json.description).toContain('あなたの操作が必要');
+    expect(json.description).toContain('🟨 **回答待ち**');
   });
 
   it('renders details inside the same card and offers collapse', () => {
     const json = bot.buildProgressEmbed(planning, Date.now(), true).toJSON();
     expect(json.description).toContain('詳細な検索結果');
-    expect(bot.buildProgressControls('task', true).toJSON().components[0].label).toBe('詳細を隠す');
+    expect(json.title).toBe(planning.goal);
+    expect(bot.buildProgressControls('task', true).toJSON().components[0].label).toBe('閉じる');
   });
 
   it('replaces verbose progress with one concise failure summary', () => {
