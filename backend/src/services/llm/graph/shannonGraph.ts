@@ -168,6 +168,15 @@ function createExecuteNode(
       lightweightMemory,
       recall: memoryRecall,
     });
+    const canonicalProjection = typeof envelope.metadata?.shannonCoreProjection === 'string'
+      ? envelope.metadata.shannonCoreProjection.slice(0, 2_400).trim()
+      : '';
+    const memoryPrompt = [
+      canonicalProjection
+        ? `[Canonical Shannon owner context — prefer this over legacy person memory]\n${canonicalProjection}`
+        : '',
+      compositionExtras.memoryPrompt ?? '',
+    ].filter(Boolean).join('\n\n') || undefined;
 
     const fcaState = buildFcaState({
       taskId: envelope.requestId,
@@ -179,6 +188,7 @@ function createExecuteNode(
       environmentState: (envelope.metadata?.environmentState as string) ?? null,
       isEmergency: envelope.tags.includes('emergency'),
       ...compositionExtras,
+      memoryPrompt,
       onToolStarting: state._onToolStarting,
       onTaskTreeUpdate: state._onTaskTreeUpdate,
       onStreamSentence: state._onStreamSentence,

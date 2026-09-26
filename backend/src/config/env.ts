@@ -177,6 +177,13 @@ export const config = {
     model: optional('SHANNON_ANTHROPIC_MODEL', 'claude-opus-4-6'),
   },
 
+  shannonCoreBridge: {
+    url: optional('SHANNON_CORE_PLATFORM_URL', ''),
+    token: optional('SHANNON_CORE_PLATFORM_TOKEN', ''),
+    bindingsJson: optional('SHANNON_CORE_PLATFORM_BINDINGS_JSON', ''),
+    timeoutMs: Math.min(10_000, Math.max(500, parseInt(optional('SHANNON_CORE_PLATFORM_TIMEOUT_MS', '3000'), 10))),
+  },
+
   groq: {
     apiKey: optional('GROQ_API_KEY', ''),
   },
