@@ -17,6 +17,15 @@ interface NewsPreview { items:readonly {contentId:string;sourceId:string;card:{t
 interface TemporalPreview { entries:readonly {sourceId:string;content:any;timeZone:string}[]; }
 
 const safeTime=(value:unknown,fallback:number)=>typeof value==='string'&&Number.isSafeInteger(Date.parse(value))?Date.parse(value):fallback;
+const isolatedDiscovery = async <T>(signal: AbortSignal, expectedPrefixes: readonly string[], run: () => Promise<readonly T[]>) => {
+  try {
+    return await run();
+  } catch (error) {
+    signal.throwIfAborted();
+    if (error instanceof Error && expectedPrefixes.some(prefix => error.message.startsWith(prefix))) return Object.freeze([]);
+    throw error;
+  }
+};
 const webCandidates=(news:NewsPreview,policy:LineRadarPolicy,now:number,kind:'web'|'youtube')=>news.items.flatMap(item=>{
   const setting=policy.feeds.find(source=>source.id===item.sourceId&&source.kind===kind);if(!setting)return[];
   return[{source:kind,externalId:kind==='youtube'&&/^https:\/\/www\.youtube\.com\/watch\?v=([A-Za-z0-9_-]{11})$/.test(item.card.sourceUrl)
@@ -47,9 +56,14 @@ export async function selectLineRadarDigest(input:{owner:string;policy:LineRadar
   const setting=input.policy.youtubeSubscriptions;
   const skills=new RadarDiscoverySkills(input.owner,{
     youtube:async(limit,signal)=>Object.freeze([...(setting?await input.ports.youtube(input.owner,setting,limit,signal):[]),...feedYoutube].slice(0,limit)),
-    ...(input.ports.youtubeRecommendations?{youtubeRecommendations:(query:string,limit:number,signal:AbortSignal)=>input.ports.youtubeRecommendations!(input.owner,query,limit,signal)}:{}),
-    twitter:async(query,limit,signal)=>input.ports.twitter?input.ports.twitter(input.owner,query,limit,signal):Object.freeze([]),
-    web:async(query,limit,signal)=>Object.freeze([...(input.ports.webSearch?await input.ports.webSearch(input.owner,query,limit,signal):[]),...web].slice(0,limit)),
+    ...(input.ports.youtubeRecommendations?{youtubeRecommendations:(query:string,limit:number,signal:AbortSignal)=>
+      isolatedDiscovery(signal,['YOUTUBE_RECOMMENDATION_'],()=>input.ports.youtubeRecommendations!(input.owner,query,limit,signal))}:{}),
+    twitter:async(query,limit,signal)=>input.ports.twitter
+      ? isolatedDiscovery(signal,['X_SEARCH_'],()=>input.ports.twitter!(input.owner,query,limit,signal))
+      : Object.freeze([]),
+    web:async(query,limit,signal)=>Object.freeze([...(input.ports.webSearch
+      ? await isolatedDiscovery(signal,['SEARCH_','WEB_DISCOVERY_'],()=>input.ports.webSearch!(input.owner,query,limit,signal))
+      : []),...web].slice(0,limit)),
     ...(input.policy.weather?{weather:async()=>Object.freeze(weather.slice(0,3))}:{}),
     ...(input.policy.calendar?{calendar:async(limit:number)=>Object.freeze(calendar.slice(0,limit))}:{}),
     ...(input.ports.notion?{notion:(limit:number,signal:AbortSignal)=>input.ports.notion!(input.owner,limit,signal)}:{}),

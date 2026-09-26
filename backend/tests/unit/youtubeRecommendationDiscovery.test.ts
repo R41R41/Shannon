@@ -14,6 +14,8 @@ describe('new YouTube channel discovery', () => {
     const search = { list: vi.fn(async () => [
       { videoId: 'a'.repeat(11), channelId: subscribed, title: 'Known upload', channelTitle: 'Known', publishedAt: NOW - 1000, fact: 'known' },
       { videoId: 'b'.repeat(11), channelId: fresh, title: 'New creator', channelTitle: 'Fresh', publishedAt: NOW - 2000, fact: 'fresh' },
+      { videoId: 'c'.repeat(11), channelId: fresh, title: 'Stale result', channelTitle: 'Fresh', publishedAt: NOW - 31 * 86400000, fact: 'stale' },
+      { videoId: 'd'.repeat(11), channelId: fresh, title: 'Future result', channelTitle: 'Fresh', publishedAt: NOW + 600000, fact: 'future' },
     ]) };
     const service = new YouTubeRecommendationDiscovery(subscriptions as any, search as any, owner, async () => grant(), 500, () => NOW);
     const result = await service.find('nintendo', 8, new AbortController().signal);
@@ -28,5 +30,18 @@ describe('new YouTube channel discovery', () => {
     const service = new YouTubeRecommendationDiscovery({ list: async () => [] } as any, { list: async () => [] } as any,
       owner, async () => grant({ revision: ++calls < 3 ? 1 : 2 }), 500, () => NOW);
     await expect(service.find('science', 4, new AbortController().signal)).rejects.toThrow('YOUTUBE_RECOMMENDATION_DENIED');
+  });
+
+  it('does not authorize or call providers after cancellation', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const authorize = vi.fn(async () => grant());
+    const subscriptions = { list: vi.fn(async () => []) };
+    const search = { list: vi.fn(async () => []) };
+    const service = new YouTubeRecommendationDiscovery(subscriptions as any, search as any, owner, authorize, 500, () => NOW);
+    await expect(service.find('science', 4, controller.signal)).rejects.toMatchObject({ name: 'AbortError' });
+    expect(authorize).not.toHaveBeenCalled();
+    expect(subscriptions.list).not.toHaveBeenCalled();
+    expect(search.list).not.toHaveBeenCalled();
   });
 });

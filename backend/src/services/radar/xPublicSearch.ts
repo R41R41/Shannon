@@ -12,12 +12,14 @@ export class XPublicSearch {
     if (!/^[A-Za-z0-9._-]{16,256}$/.test(apiKey)) throw new Error('X_SEARCH_CONFIG_INVALID');
   }
   async list(query: string, limit: number, signal: AbortSignal): Promise<readonly RawRadarCandidate[]> {
+    signal.throwIfAborted();
     if (!clean(query, 120) || /[\r\n]/.test(query) || !Number.isSafeInteger(limit) || limit < 1 || limit > 20)
       throw new Error('X_SEARCH_POLICY_INVALID');
     const url = new URL('https://api.twitterapi.io/twitter/tweet/advanced_search');
     url.search = new URLSearchParams({ query: query.trim(), queryType: 'Latest' }).toString();
     const response = await this.http(url, { method: 'GET', redirect: 'error', headers: { 'X-API-Key': this.apiKey },
       signal: AbortSignal.any([signal, AbortSignal.timeout(10000)]) });
+    signal.throwIfAborted();
     const declared = Number(response.headers.get('content-length') ?? 0);
     if (declared > 1024 * 1024) throw new Error('X_SEARCH_RESPONSE_INVALID');
     const text = await response.text();

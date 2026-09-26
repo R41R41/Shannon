@@ -90,6 +90,41 @@ describe('selectLineRadarDigest', () => {
     expect(stored.size).toBe(1);
   });
 
+  it('keeps feed candidates available when optional public search is unavailable', async () => {
+    const { port } = receipts();
+    let turn = 0;
+    const fca = new RadarFca({
+      next: async input => {
+        turn += 1;
+        if (turn === 1) {
+          return { content: '', toolCalls: [{ id: 'call_w', name: 'search_web_for_sharing', arguments: { query: 'science', limit: 3 } }] };
+        }
+        const payload = JSON.parse(input.messages.at(-1)!.content);
+        expect(payload.untrustedCandidates).toHaveLength(1);
+        return { content: '', toolCalls: [{ id: 'call_s', name: 'submit_personal_digest', arguments: {
+          items: [{ candidateId: payload.untrustedCandidates[0].candidateId, reason: 'feed fallback' }],
+        } }] };
+      },
+    });
+    const result = await selectLineRadarDigest({
+      owner,
+      policy: policy(),
+      news: { items: [{ contentId: 'content-1', sourceId: 'news', card: {
+        title: 'フィード候補', fact: 'fixture fact', metadata: [new Date(now).toISOString()], sourceUrl: 'https://example.com/fallback',
+      } }] },
+      temporal: { entries: [] },
+      ports: {
+        fca,
+        receipts: port,
+        youtube: async () => [],
+        webSearch: async () => { throw new Error('SEARCH_UNAVAILABLE'); },
+      },
+      signal: new AbortController().signal,
+      now,
+    });
+    expect(result.blocks[0]).toContain('フィード候補');
+  });
+
   it('exposes weather candidates to the FCA when weather is configured', async () => {
     const { port } = receipts();
     let turn = 0;

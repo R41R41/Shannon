@@ -17,6 +17,7 @@ export class YouTubeRecommendationDiscovery {
       throw new Error('YOUTUBE_RECOMMENDATION_CONFIG_INVALID');
   }
   async find(query: string, limit: number, signal: AbortSignal): Promise<readonly RawRadarCandidate[]> {
+    signal.throwIfAborted();
     const now = this.now();
     if (typeof query !== 'string' || !query.trim() || query.trim().length > 80 || /[\r\n]/.test(query)
       || !Number.isSafeInteger(limit) || limit < 1 || limit > 8) throw new Error('YOUTUBE_RECOMMENDATION_POLICY_INVALID');
@@ -28,11 +29,16 @@ export class YouTubeRecommendationDiscovery {
       return grant;
     };
     const subscribed = await this.subscriptions.list(this.owner, bound, signal, { maxSubscriptions: this.maxSubscriptions });
+    signal.throwIfAborted();
     const subscribedIds = new Set(subscribed.map(item => item.channelId));
     const hits = await this.search.list(await bound(), query.trim(), limit, signal,
       { publishedAfter: now - 30 * 86400000, order: 'date' });
     await bound();
-    return Object.freeze(hits.filter(hit => !subscribedIds.has(hit.channelId)).slice(0, limit).map(hit => Object.freeze({
+    signal.throwIfAborted();
+    const oldestAllowed = now - 30 * 86400000;
+    return Object.freeze(hits.filter(hit => !subscribedIds.has(hit.channelId)
+      && Number.isSafeInteger(hit.publishedAt) && hit.publishedAt >= oldestAllowed && hit.publishedAt <= now + 300000)
+      .slice(0, limit).map(hit => Object.freeze({
       source: 'youtube' as const, externalId: hit.videoId, title: hit.title, fact: `${hit.channelTitle} · ${hit.fact}`,
       url: `https://www.youtube.com/watch?v=${hit.videoId}`, publishedAt: hit.publishedAt,
       metadata: Object.freeze([hit.channelTitle, '未登録チャンネル候補']),
