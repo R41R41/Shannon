@@ -85,7 +85,9 @@ export class Scheduler extends BaseClient {
   private async schedule() {
     this.schedules.forEach((schedule) => {
       cron.schedule(schedule.time, () => {
-        void this.callSchedule({ type: 'call_schedule', name: schedule.name });
+        void this.callSchedule({ type: 'call_schedule', name: schedule.name }).catch(error => {
+          logger.error(`Scheduled task failed: ${schedule.name}`, error);
+        });
       });
     });
   }
