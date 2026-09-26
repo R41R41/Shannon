@@ -8,12 +8,14 @@
 - [Shannon Radar統合設計](./shannon-radar.md)（2026-08-29）：最新19節は専用ログイン/独立HTTP runtime・個人Radar先行リリース。型/service/UIは接続、実Firebase・通常dev DB移行・実ソース取得・本番手順は未検証。Calendar OAuth/Discord投稿/定期実行は未接続。
 - [削除ゲート](./deletion-gate.md)（2026-08-29）：未参照ファイルは`deletion-ledger.json`に期限付きで書くか消す。未使用の宣言は件数の上限で抑える。到達しないだけのコードは検査できない。
 - [開発・検証・本番反映の手順](./development-workflow.md)（2026-08-28）：VMのdevを作業先とし、prodは検証後に反映。
+- [アプリ版Shannon Coreへの会話ミラー](./shannon-core-bridge.md)：Discord返信成功後の本人ターンだけを、専用tokenと完全一致bindingでアプリ版の会話・記憶へ非同期ミラーする統合第1段階。
 - [Shannon｜設計・資料ハブ](https://www.notion.so/3ca1e847628881c9b4bbfd5556a55347)：現行設計・計画・判断・変更履歴。
 
 
 | ドキュメント                                                       | 内容                                                        |
 | ------------------------------------------------------------ | --------------------------------------------------------- |
 | **[architecture-current.md](./architecture-current.md)**     | **現行アーキテクチャサマリ**（2026-08-29）。実行核の分裂、LINE分離、記憶混在禁止、ツール2袋。 |
+| [shannon-core-bridge.md](./shannon-core-bridge.md)           | アプリ版Shannonとの段階統合。Discord transportを維持した会話・記憶shadow write。 |
 | [architecture-llm-minebot.md](./architecture-llm-minebot.md) | LLM グラフ・Minebot・自己改善の**詳細設計書**（長文）。                       |
 
 

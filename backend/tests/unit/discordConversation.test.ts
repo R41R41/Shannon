@@ -1,7 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 const legacy = vi.hoisted(() => ({ getRecentMessages: vi.fn(async () => [{ content: 'other channel private text' }]) }));
+const coreBridge = vi.hoisted(() => ({
+  mirror: vi.fn(async () => undefined),
+  read: vi.fn(async () => ({ status: 'ineligible' as const })),
+}));
 vi.mock('../../src/services/discord/client.js', () => ({ DiscordBot: { getInstance: () => ({ getRecentMessages: legacy.getRecentMessages }) } }));
 vi.mock('../../src/utils/logger.js', () => ({ logger: { error: vi.fn(), warn: vi.fn() }, createLogger: () => ({ warn: vi.fn() }) }));
+vi.mock('../../src/services/integration/configuredShannonCoreBridge.js', () => ({
+  mirrorCompletedDiscordTurn: coreBridge.mirror,
+  readShannonCoreDiscordContext: coreBridge.read,
+}));
 import ChatOnDiscordTool from '../../src/services/llm/tools/discord/chatOnDiscord.js';
 import GetDiscordRecentMessagesTool from '../../src/services/llm/tools/discord/getDiscordRecentMessages.js';
 import { ChannelType, PermissionFlagsBits } from 'discord.js';
@@ -32,7 +40,13 @@ function sdk() {
   return { channel, client, transport, actorDenied, botDenied, stop: () => { running = false; } };
 }
 
-beforeEach(() => { vi.clearAllMocks(); registered.reply.mockResolvedValue(undefined); registered.recent.mockResolvedValue([]); });
+beforeEach(() => {
+  vi.clearAllMocks();
+  registered.reply.mockResolvedValue(undefined);
+  registered.recent.mockResolvedValue([]);
+  coreBridge.mirror.mockResolvedValue(undefined);
+  coreBridge.read.mockResolvedValue({ status: 'ineligible' });
+});
 describe('Discord tools require a request-bound destination', () => {
   it('does not send to a model-selected channel without a bound request', async () => {
     await new ChatOnDiscordTool()._call({ guildId: '111', channelId: '222', message: 'not authorized' });
@@ -54,6 +68,27 @@ describe('Discord request scope and tool ownership', () => {
     const router = new EventRouter({ invokeGraph, realtimeApi: {}, agentOrchestrator: {}, voiceProcessor: {}, isDevMode: true } as any);
     await (router as any).processDiscordMessage({ type: 'text', text: 'my actual words', userName: 'not user text', userId: '333', guildId: '', guildName: '', channelId: '222', channelName: 'DM', messageId: '900', isDM: true, recentMessages: [] });
     expect(invokeGraph.mock.calls[0][0]).toMatchObject({ text: 'my actual words', discord: { isDM: true, channelId: '222' } });
+  });
+  it('adds canonical owner context to metadata without changing user text', async () => {
+    coreBridge.read.mockResolvedValueOnce({
+      status: 'available', projection: '[Shannon shared state v3]', stateVersion: 3,
+      updatedAt: '2026-09-17T10:00:00.000Z',
+    });
+    const invokeGraph = vi.fn(async () => ({}));
+    const router = new EventRouter({ invokeGraph, realtimeApi: {}, agentOrchestrator: {}, voiceProcessor: {}, isDevMode: true } as any);
+    await (router as any).processDiscordMessage({ type: 'text', text: 'owner words', userName: 'owner', userId: '333', guildId: '111', guildName: 'guild', channelId: '222', channelName: 'channel', messageId: '900', recentMessages: [] });
+    expect(invokeGraph.mock.calls[0][0]).toMatchObject({
+      text: 'owner words',
+      metadata: { shannonCoreProjection: '[Shannon shared state v3]', shannonCoreStateVersion: 3 },
+    });
+  });
+  it('keeps replying with the legacy prompt when canonical context is unavailable', async () => {
+    coreBridge.read.mockResolvedValueOnce({ status: 'unavailable' });
+    const invokeGraph = vi.fn(async () => ({}));
+    const router = new EventRouter({ invokeGraph, realtimeApi: {}, agentOrchestrator: {}, voiceProcessor: {}, isDevMode: true } as any);
+    await (router as any).processDiscordMessage({ type: 'text', text: 'fallback words', userName: 'owner', userId: '333', guildId: '111', guildName: 'guild', channelId: '222', channelName: 'channel', messageId: '901', recentMessages: [] });
+    expect(invokeGraph).toHaveBeenCalledOnce();
+    expect(invokeGraph.mock.calls[0][0].metadata?.shannonCoreProjection).toBeUndefined();
   });
   it.each(['web', 'minecraft', 'internal'])('rejects %s before transport', async channel => {
     const r = request(); r.channel = channel;
@@ -140,8 +175,10 @@ describe('Discord request scope and tool ownership', () => {
   it('routes structured text replies through the same port, never the legacy voice bus', async () => {
     await discordDispatcher.dispatch(request() as any, { message: 'answer' } as any);
     expect(registered.reply.mock.calls[0][0]).toMatchObject({ channelId: '222' }); expect(registered.reply.mock.calls).toHaveLength(1);
+    expect(coreBridge.mirror).toHaveBeenCalledWith(expect.objectContaining({ requestId: 'request-1' }), 'answer');
     registered.reply.mockRejectedValueOnce(new Error('network unknown'));
     await expect(discordDispatcher.dispatch(request() as any, { message: 'answer' } as any)).rejects.toThrow('配信結果');
+    expect(coreBridge.mirror).toHaveBeenCalledTimes(1);
   });
   it('prevalidates all action kinds before sending anything', async () => {
     await expect(discordDispatcher.dispatch(request() as any, { discordActions: [{ type: 'reply', text: 'first' }, { type: 'voice_speak', text: 'second' }] } as any)).rejects.toThrow();

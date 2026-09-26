@@ -21,6 +21,7 @@ import {
   webAdapter,
   type DiscordNativeEvent,
 } from '../../common/adapters/index.js';
+import { readShannonCoreDiscordContext } from '../../integration/configuredShannonCoreBridge.js';
 import { logger } from '../../../utils/logger.js';
 import type { AgentOrchestrator } from '../agents/AgentOrchestrator.js';
 import type { VoiceProcessor } from '../voice/VoiceProcessor.js';
@@ -204,7 +205,7 @@ export class EventRouter {
         const textMsg = message as DiscordSendTextMessageOutput;
         const currentTime = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
 
-        const envelope = discordAdapter.toEnvelope({
+        const baseEnvelope = discordAdapter.toEnvelope({
           text: textMsg.text,
           type: textMsg.type,
           guildName: textMsg.guildName,
@@ -217,6 +218,20 @@ export class EventRouter {
           recentMessages: textMsg.recentMessages as unknown[],
           isDM: textMsg.isDM === true,
         } as DiscordNativeEvent);
+        const coreContext = await readShannonCoreDiscordContext(baseEnvelope);
+        if (coreContext.status === 'unavailable') {
+          logger.warn('[ShannonCoreBridge] canonical context unavailable; using legacy prompt');
+        }
+        const envelope = coreContext.status === 'available'
+          ? Object.freeze({
+            ...baseEnvelope,
+            metadata: Object.freeze({
+              ...baseEnvelope.metadata,
+              shannonCoreProjection: coreContext.projection,
+              shannonCoreStateVersion: coreContext.stateVersion,
+            }),
+          })
+          : baseEnvelope;
 
         const msgs = textMsg.recentMessages
           ? [...textMsg.recentMessages, new HumanMessage(`${currentTime} ${textMsg.userName}: ${textMsg.text}`)]

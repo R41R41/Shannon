@@ -142,6 +142,13 @@ Radar の discovery スキルは general 袋の読み取り専用サブセット
 
 **宛先認可・記憶検索・ツール実行の同期経路に pub/sub を使わない。** Discord テキスト返信・履歴は `discordConversationPort`、Web 返信・計画通知は `webConversationPort` / `WebNotificationHub`（`web:bind-session` 必須、sessionId 不一致は破棄）。Discord 音声 outbound は `discordVoiceSession`。Minebot skill dispatch / UI Mod POST は envelope の minecraft scope 必須。**会話イベント**と**運用 telemetry**（status/skill/schedule/log）は配信経路を分ける。
 
+アプリ版Shannonとの統合第1段階では、Discordテキストのrequest-bound送信が
+成功した後だけ、本人ターンを専用service tokenでアプリAPIへ非同期ミラーする。
+旧FCA・Discord tools・配信はそのまま残し、アプリAPIがcanonical owner scope、
+exact conversation/owner binding、idempotency、会話・記憶queueを所有する。ミラー
+失敗は送信済みDiscord返信を失敗扱いにせず、voice・友人発言・未binding会話は
+取り込まない。詳細は [shannon-core-bridge.md](./shannon-core-bridge.md)。
+
 フロントとバックエンドはすでに HTTP で分かれている。**契約は port/gateway、実装は in-process、本当に秘密が違うものだけ別プロセス（LINE の前例）。**
 
 ---

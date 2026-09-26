@@ -80,7 +80,6 @@ export class DiscordBot extends BaseClient {
   private aiminelabGuildId: string | null = null;
   private aiminelabXChannelId: string | null = null;
   private aiminelabAnnounceChannelId: string | null = null;
-  private aiminelabUpdateChannelId: string | null = null;
   private testGuildId: string | null = null;
   private testXChannelId: string | null = null;
   private doukiGuildId: string | null = null;
@@ -241,8 +240,6 @@ export class DiscordBot extends BaseClient {
     this.aiminelabXChannelId = config.discord.guilds.aimine.xChannelId;
     this.aiminelabAnnounceChannelId =
       config.discord.guilds.aimine.announceChannelId;
-    this.aiminelabUpdateChannelId =
-      config.discord.guilds.aimine.updateChannelId;
     this.testGuildId = config.discord.guilds.test.guildId;
     this.testXChannelId = config.discord.guilds.test.xChannelId;
   }
@@ -1102,8 +1099,6 @@ export class DiscordBot extends BaseClient {
         if (isThread) logger.info(`[Discord] スレッドメッセージスキップ: 他ユーザーへのメンション`);
         return;
       }
-
-      if (message.channelId === this.aiminelabUpdateChannelId) return;
 
       // アイマイラボ！サーバーではメンション時のみ返信
       if (message.guildId === this.aiminelabGuildId && !isMentioned) return;

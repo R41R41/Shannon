@@ -15,6 +15,7 @@ import type {
 import { getDiscordOutboundPort } from '../../runtime/discordOutboundGateway.js';
 import { createRequestDiscordConversation } from '../discordConversationPort.js';
 import { authorizeDiscordVoiceOutbound } from '../../discord/discordVoiceSession.js';
+import { mirrorCompletedDiscordTurn } from '../../integration/configuredShannonCoreBridge.js';
 import { createLogger } from '../../../utils/logger.js';
 const logger = createLogger('DiscordDispatcher', 'discord');
 
@@ -33,6 +34,12 @@ export const discordDispatcher: ActionDispatcher = {
       for (const message of messages) {
         const result = await port.reply({ message });
         if (result.status !== 'sent') throw new Error(result.message);
+      }
+      if (messages.length) {
+        void mirrorCompletedDiscordTurn(envelope, messages.join('\n\n')).catch(error => {
+          const code = error instanceof Error ? error.name : 'UnknownError';
+          logger.warn(`[ShannonCoreBridge] mirror skipped: ${code}`);
+        });
       }
       return;
     }
