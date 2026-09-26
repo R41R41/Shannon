@@ -84,9 +84,11 @@ export function validateCompletionClaim(input: {
 
 export function formatCompletedSummary(summary: string): string {
     const trimmed = summary.trim() || 'タスクを完了しました。';
-    return /^(?:#{1,3}\s*)?[✅☑️]\s*(?:完了|Completed)/iu.test(trimmed)
-        ? trimmed
-        : `## ✅ 完了\n${trimmed}`;
+    const withoutGenericHeading = trimmed.replace(
+        /^(?:#{1,3}\s*)?[✅☑️]\s*(?:完了|Completed)\s*(?:\r?\n|$)/iu,
+        '',
+    ).trim();
+    return withoutGenericHeading || 'タスクを完了しました。';
 }
 
 /**

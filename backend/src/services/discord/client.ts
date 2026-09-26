@@ -50,6 +50,7 @@ import { classifyError, formatErrorForLog } from '../../errors/index.js';
 import { getDiscordMemoryZone } from '../../utils/discord.js';
 import { createLogger } from '../../utils/logger.js';
 const logger = createLogger('Discord:Client');
+import { acceptsDiscordMessage } from './messageAcceptance.js';
 import { voiceResponseChannelIds } from './voiceState.js';
 import { loadServerChoices } from './serverChoices.js';
 import { BaseClient } from '../common/BaseClient.js';
@@ -1095,21 +1096,16 @@ export class DiscordBot extends BaseClient {
         ? channel.parentId ?? message.channelId
         : message.channelId;
 
-      if (
-        guildId === this.toyamaGuildId &&
-        parentChannelId !== this.toyamaChannelId
-      )
-        return;
-      if (
-        guildId === this.doukiGuildId &&
-        parentChannelId !== this.doukiChannelId
-      )
-        return;
-      if (
-        guildId === this.colabGuildId &&
-        parentChannelId !== this.colabChannelId
-      )
-        return;
+      if (!acceptsDiscordMessage({
+        guildId,
+        parentChannelId,
+        isBotMentioned: isMentioned,
+        designatedChannels: [
+          { guildId: this.toyamaGuildId, channelId: this.toyamaChannelId },
+          { guildId: this.doukiGuildId, channelId: this.doukiChannelId },
+          { guildId: this.colabGuildId, channelId: this.colabChannelId },
+        ],
+      })) return;
       this.eventBus.log(
         memoryZone,
         'white',
@@ -1448,18 +1444,29 @@ export class DiscordBot extends BaseClient {
       const delayMs = Math.max(0, Math.min(10_000, Number.isFinite(configuredDelay) ? configuredDelay : 2000));
       const timer = setTimeout(() => {
         void (async () => {
-          this.progressPending.delete(taskId);
-          const latest = this.progressDetails.get(taskId);
-          if (!latest || latest.status !== 'in_progress' || latest.recoveryStatus === 'awaiting_user') return;
-          const latestChannel = this.client.channels.cache.get(channelId)
-            ?? await this.client.channels.fetch(channelId).catch(() => null);
-          if (!latestChannel?.isTextBased() || !('send' in latestChannel)) return;
-          const latestExpanded = this.progressExpanded.has(taskId);
-          const sent = await latestChannel.send({
-            embeds: [this.buildProgressEmbed(latest, startedAt, latestExpanded)],
-            components: [this.buildProgressControls(taskId, latestExpanded)],
-          });
-          this.progressMessages.set(taskId, { channelId, messageId: sent.id, startedAt });
+          try {
+            const latest = this.progressDetails.get(taskId);
+            if (!latest || latest.status !== 'in_progress' || latest.recoveryStatus === 'awaiting_user') return;
+            const latestChannel = this.client.channels.cache.get(channelId)
+              ?? await this.client.channels.fetch(channelId).catch(() => null);
+            if (!latestChannel?.isTextBased() || !('send' in latestChannel)) return;
+            const latestExpanded = this.progressExpanded.has(taskId);
+            const sent = await latestChannel.send({
+              embeds: [this.buildProgressEmbed(latest, startedAt, latestExpanded)],
+              components: [this.buildProgressControls(taskId, latestExpanded)],
+            });
+            const stillPending = this.progressPending.get(taskId)?.timer === timer;
+            const current = this.progressDetails.get(taskId);
+            if (!stillPending || !current || current.status !== 'in_progress' || current.recoveryStatus === 'awaiting_user') {
+              await sent.delete().catch(() => undefined);
+              return;
+            }
+            this.progressMessages.set(taskId, { channelId, messageId: sent.id, startedAt });
+          } finally {
+            if (this.progressPending.get(taskId)?.timer === timer) {
+              this.progressPending.delete(taskId);
+            }
+          }
         })().catch((error) => logger.warn(`[Discord] progress display failed: ${error}`));
       }, delayMs);
       this.progressPending.set(taskId, { channelId, startedAt, timer });

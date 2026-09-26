@@ -73,7 +73,8 @@ describe('Discord task guidance', () => {
     })).toContain('作業を続ける');
   });
 
-  it('marks a successful final answer as visibly complete', () => {
-    expect(formatCompletedSummary('PDFを添付しました。')).toBe('## ✅ 完了\nPDFを添付しました。');
+  it('keeps a successful final answer conversational without a generic completion banner', () => {
+    expect(formatCompletedSummary('PDFを添付しました。')).toBe('PDFを添付しました。');
+    expect(formatCompletedSummary('## ✅ 完了\nPDFを添付しました。')).toBe('PDFを添付しました。');
   });
 });

@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 describe('Discord progress card', () => {
   let bot: any;
@@ -8,6 +8,15 @@ describe('Discord progress card', () => {
     process.env.MONGODB_URI ||= 'mongodb://127.0.0.1:27017/test';
     const { DiscordBot } = await import('../../../src/services/discord/client');
     bot = DiscordBot.getInstance(true);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    bot.progressMessages.clear();
+    bot.progressDetails.clear();
+    bot.progressExpanded.clear();
+    for (const pending of bot.progressPending.values()) clearTimeout(pending.timer);
+    bot.progressPending.clear();
   });
 
   const planning = {
@@ -88,5 +97,55 @@ describe('Discord progress card', () => {
 
     const expanded = bot.buildProgressEmbed(recovering, Date.now(), true).toJSON();
     expect(expanded.description).toContain('↻ 旅行PDFを作成（別の方法で続行）');
+  });
+
+  it('removes a progress card whose send finishes after task completion', async () => {
+    vi.useFakeTimers();
+    bot.status = 'running';
+
+    let finishSend!: () => void;
+    const sentMessage = {
+      id: 'progress-message',
+      delete: vi.fn().mockResolvedValue(undefined),
+    };
+    const send = vi.fn(() => new Promise((resolve) => {
+      finishSend = () => resolve(sentMessage);
+    }));
+    const channel = {
+      isTextBased: () => true,
+      send,
+      messages: { fetch: vi.fn().mockResolvedValue(null) },
+    };
+    bot.client = {
+      channels: {
+        cache: new Map([['channel', channel]]),
+        fetch: vi.fn().mockResolvedValue(channel),
+      },
+    };
+
+    const publish = (nextPlanning: typeof planning) => bot.eventBus.publish({
+      type: 'discord:planning',
+      memoryZone: 'web',
+      data: { planning: nextPlanning, channelId: 'channel', taskId: 'task' },
+    });
+
+    publish(planning);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(send).toHaveBeenCalledTimes(1);
+
+    publish({
+      ...planning,
+      status: 'completed',
+      hierarchicalSubTasks: planning.hierarchicalSubTasks.map((task) => ({ ...task, status: 'completed' })),
+    });
+    await Promise.resolve();
+
+    finishSend();
+    await send.mock.results[0].value;
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(sentMessage.delete).toHaveBeenCalledTimes(1);
+    expect(bot.progressMessages.has('task')).toBe(false);
+    expect(bot.progressPending.has('task')).toBe(false);
   });
 });
