@@ -143,8 +143,9 @@ export class ToolExecutor {
                     onTaskTreeUpdate: execCtx.onTaskTreeUpdate,
                 });
 
-                const outcomes = isParallelGroup
-                    ? await Promise.all(prepared.map(item => this.executeOne(item.toolCall, item.tool, item.step, execCtx, signal)))
+                const outcomes: ToolOutcome[] = isParallelGroup
+                    ? await Promise.all(prepared.map((item): Promise<ToolOutcome> =>
+                        this.executeOne(item.toolCall, item.tool, item.step, execCtx, signal)))
                     : [await this.executeOne(prepared[0].toolCall, prepared[0].tool, prepared[0].step, execCtx, signal)];
                 signal?.throwIfAborted();
                 for (const outcome of outcomes) {
@@ -180,7 +181,11 @@ export class ToolExecutor {
                     { toolName: toolCall.name, parameters: toolCall.args },
                 );
             }
-            const result = await tool.invoke(toolCall.args, { signal });
+            const invoke = tool.invoke.bind(tool) as (
+                input: Record<string, unknown>,
+                config?: { signal?: AbortSignal },
+            ) => Promise<unknown>;
+            const result = await invoke(toolCall.args, { signal });
             signal?.throwIfAborted();
             const duration = Date.now() - startedAt;
             const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
