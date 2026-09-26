@@ -175,12 +175,13 @@ export class ModelSelector {
     }
 
     static selectInitialModel(
-        _riskLevel: 'low' | 'mid' | 'high' | undefined,
-        _needsPlanning: boolean | undefined,
+        riskLevel: 'low' | 'mid' | 'high' | undefined,
+        needsPlanning: boolean | undefined,
         _mode: string | undefined,
     ): string {
         const chain = getChain();
-        return chain[0].name;
+        const desiredIndex = riskLevel === 'high' ? 2 : needsPlanning || riskLevel === 'mid' ? 1 : 0;
+        return chain[Math.min(desiredIndex, chain.length - 1)].name;
     }
 
     bindTools(tools: StructuredTool[]): ReturnType<ChatOpenAI['bindTools']> | ReturnType<ChatAnthropic['bindTools']> {

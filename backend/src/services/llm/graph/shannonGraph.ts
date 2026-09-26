@@ -117,7 +117,7 @@ async function ingestNode(state: ShannonStateType): Promise<Partial<ShannonState
   const mode = inferInitialMode(state.envelope);
   // Phase 4: ClassifyNode 削除により、ingest でモデル選択を設定
   const platform = state.envelope.channel ?? null;
-  const selectedModel = config.llm.provider !== 'anthropic'
+  const selectedModel = config.llm?.provider !== 'anthropic'
     && isDiscordArtifactTask(state.envelope.text ?? '', platform)
     ? 'gpt-5.6-terra'
     : ModelSelector.selectInitialModel('mid', false, mode);
@@ -228,7 +228,7 @@ function createExecuteNode(
     // evaluation confirms quality/latency/cost, and always falls back to FCA.
     const useResponsesArtifactExecutor =
       process.env.SHANNON_DISCORD_EXECUTOR === 'responses'
-      && config.llm.provider !== 'anthropic'
+      && config.llm?.provider !== 'anthropic'
       && isDiscordArtifactTask(envelope.text ?? '', context?.platform ?? envelope.channel ?? null);
     if (useResponsesArtifactExecutor) {
       try {

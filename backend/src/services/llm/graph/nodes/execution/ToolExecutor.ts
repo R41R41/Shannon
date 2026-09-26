@@ -97,7 +97,7 @@ export class ToolExecutor {
         let cursor = 0;
 
         while (cursor < toolCalls.length) {
-            if (signal?.aborted) throw new Error('Task aborted');
+            signal?.throwIfAborted();
             const isParallelGroup = ToolExecutor.PARALLEL_SAFE_TOOLS.has(toolCalls[cursor].name);
             let groupEnd = cursor + 1;
             if (isParallelGroup) {
@@ -133,7 +133,7 @@ export class ToolExecutor {
                     strategy: prepared.length > 1 ? `${prepared.length}件を並列実行中: ${labels}` : `${labels} を実行中...`,
                     currentThinking: execCtx.lastThinkingContent,
                     hierarchicalSubTasks: execCtx.steps,
-                    currentSubTaskId: stepId,
+                    currentSubTaskId: prepared.find(item => item.step)?.step?.id,
                 }, {
                     platform: execCtx.platform,
                     channelId: execCtx.channelId,
@@ -142,90 +142,17 @@ export class ToolExecutor {
                     signal: execCtx.signal,
                     onTaskTreeUpdate: execCtx.onTaskTreeUpdate,
                 });
-            }
 
-            if (execCtx.onToolStarting) {
-                try { execCtx.onToolStarting(toolCall.name, toolCall.args || {}); } catch { /* fire-and-forget */ }
-            }
-
-            const tool = effectiveToolMap.get(toolCall.name);
-            if (!tool) {
-                const result = this.handleMissingTool(toolCall, execCtx, isUpdatePlan);
-                iterationResults.push(result.executionResult);
-                messages.push(result.toolMessage);
-                continue;
-            }
-
-            try {
-                const execStart = Date.now();
-                logger.info(`  ▶ ${toolCall.name}(${JSON.stringify(toolCall.args).substring(0, 200)})`, 'cyan');
-
-                if (execCtx.context?.platform === 'minecraft' || execCtx.context?.platform === 'minebot') {
-                    void this.taskTreePublisher.postDetailedLogToMinebotUi(
-                        execCtx.goal, 'tool_call', 'info', toolCall.name,
-                        `${toolCall.name} を実行中...`,
-                        { toolName: toolCall.name, parameters: toolCall.args },
-                        execCtx.envelope,
-                    );
-                }
-
-                const result = await tool.invoke(toolCall.args, { signal });
+                const outcomes = isParallelGroup
+                    ? await Promise.all(prepared.map(item => this.executeOne(item.toolCall, item.tool, item.step, execCtx, signal)))
+                    : [await this.executeOne(prepared[0].toolCall, prepared[0].tool, prepared[0].step, execCtx, signal)];
                 signal?.throwIfAborted();
-                const duration = Date.now() - execStart;
-
-                const resultStr =
-                    typeof result === 'string'
-                        ? result
-                        : JSON.stringify(result);
-                const failureMeta = ToolExecutor.parseToolFailureMetadata(resultStr);
-                logger.success(`  ✓ ${toolCall.name} (${duration}ms): ${resultStr.substring(0, 200)}`);
-
-                if (execCtx.context?.platform === 'minecraft' || execCtx.context?.platform === 'minebot') {
-                    void this.taskTreePublisher.postDetailedLogToMinebotUi(
-                        execCtx.goal, 'tool_result',
-                        failureMeta.isError ? 'error' : 'success',
-                        toolCall.name,
-                        resultStr.substring(0, 300),
-                        { toolName: toolCall.name, parameters: toolCall.args, duration, result: resultStr.substring(0, 200) },
-                        execCtx.envelope,
-                    );
-                }
-
-                const isError = failureMeta.isError;
-
-                if (!isUpdatePlan && execCtx.steps.length > 0) {
-                    const lastStep = execCtx.steps[execCtx.steps.length - 1];
-                    lastStep.status = isError ? 'error' : 'completed';
-                    lastStep.result = ToolExecutor.summarizeResultForUI(resultStr);
-                    if (isError) lastStep.failureReason = ToolExecutor.summarizeResultForUI(resultStr);
-                }
-
-                iterationResults.push({
-                    toolName: toolCall.name,
-                    args: toolCall.args || {},
-                    success: !isError,
-                    message: resultStr,
-                    duration,
-                    failureType: failureMeta.failureType,
-                    recoverable: failureMeta.recoverable,
-                    error: isError ? resultStr : undefined,
-                });
-
-                messages.push(
-                    new ToolMessage({
-                        content: resultStr,
-                        tool_call_id: toolCall.id || `call_${Date.now()}`,
-                    }),
-                );
-            } catch (error) {
-                signal?.throwIfAborted();
-                const errorMsg = `${toolCall.name} 実行エラー: ${error instanceof Error ? error.message : 'Unknown'}`;
-                logger.error(`  ✗ ${errorMsg}`);
-
-                if (!isUpdatePlan && execCtx.steps.length > 0) {
-                    const lastStep = execCtx.steps[execCtx.steps.length - 1];
-                    lastStep.status = 'error';
-                    lastStep.failureReason = errorMsg;
+                for (const outcome of outcomes) {
+                    results.push(outcome.executionResult);
+                    messages.push(outcome.toolMessage);
+                    if (outcome.executionResult.success && outcome.executionResult.toolName === 'compute-route') {
+                        routePolyline = extractEncodedRoutePolyline(outcome.executionResult.message) ?? routePolyline;
+                    }
                 }
             }
             cursor = groupEnd;
@@ -241,7 +168,7 @@ export class ToolExecutor {
         execCtx: ToolExecutionContext,
         signal?: AbortSignal,
     ): Promise<ToolOutcome> {
-        if (signal?.aborted) throw new Error('Task aborted');
+        signal?.throwIfAborted();
         if (!tool) return this.handleMissingTool(toolCall, step);
 
         const startedAt = Date.now();
@@ -253,7 +180,8 @@ export class ToolExecutor {
                     { toolName: toolCall.name, parameters: toolCall.args },
                 );
             }
-            const result = await tool.invoke(toolCall.args);
+            const result = await tool.invoke(toolCall.args, { signal });
+            signal?.throwIfAborted();
             const duration = Date.now() - startedAt;
             const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
             const failureMeta = ToolExecutor.parseToolFailureMetadata(resultStr);
@@ -283,6 +211,7 @@ export class ToolExecutor {
                 toolMessage: new ToolMessage({ content: resultStr, tool_call_id: toolCall.id || `call_${Date.now()}` }),
             };
         } catch (error) {
+            signal?.throwIfAborted();
             const rawMessage = error instanceof Error ? error.message : 'Unknown';
             const invalidArguments = /tool input did not match expected schema|invalid.*argument/i.test(rawMessage);
             const failureType = invalidArguments ? 'invalid_arguments' : 'unexpected_error';
