@@ -13,7 +13,13 @@ function defaultPorts(): ScheduledPostSearchPorts {
   const web = new GoogleSearchTool();
   const wikipedia = new SearchByWikipediaTool();
   return {
-    web: async (query, signal) => String(await web.invoke({ query }, { signal })),
+    web: async (input, signal) => String(await web.invoke({
+      query: input.query,
+      ...(input.dateRestrict ? { dateRestrict: input.dateRestrict } : {}),
+      ...(input.gl ? { gl: input.gl } : {}),
+      ...(input.lr ? { lr: input.lr } : {}),
+      ...(input.num ? { num: input.num } : {}),
+    }, { signal })),
     wikipedia: async (query, signal) => String(await wikipedia.invoke({ query, lang: 'ja', summary: true }, { signal })),
   };
 }
@@ -32,6 +38,7 @@ export class PostAboutTodayAgent {
       logLabel: '[AboutToday]',
       temperature: 0.8,
       maxToolCalls: 8,
+      toolBudgets: { maxWebCalls: 6, maxWikiCalls: 4 },
       fallbackText: '今日も何かの記念日かも…調べてみたけどうまく見つけられなかった',
       reviewHuman: '以下の「今日は何の日」ツイート案を審査してください。JSON形式で結果を返してください。\n\nツイート:',
       userPrompt: today => {

@@ -13,7 +13,13 @@ function defaultPorts(): ScheduledPostSearchPorts {
   const web = new GoogleSearchTool();
   const wikipedia = new SearchByWikipediaTool();
   return {
-    web: async (query, signal) => String(await web.invoke({ query }, { signal })),
+    web: async (input, signal) => String(await web.invoke({
+      query: input.query,
+      ...(input.dateRestrict ? { dateRestrict: input.dateRestrict } : {}),
+      ...(input.gl ? { gl: input.gl } : {}),
+      ...(input.lr ? { lr: input.lr } : {}),
+      ...(input.num ? { num: input.num } : {}),
+    }, { signal })),
     wikipedia: async (query, signal) => String(await wikipedia.invoke({ query, lang: 'ja', summary: true }, { signal })),
   };
 }
@@ -32,16 +38,18 @@ export class PostNewsAgent {
       header: '【今日のAIニュース】',
       logLabel: '[News]',
       temperature: 0.7,
-      maxToolCalls: 10,
+      maxToolCalls: 16,
+      toolBudgets: { maxWebCalls: 10, maxWikiCalls: 5 },
       fallbackText: `今日${jstDateLabel(jstToday())}のAIニュース、うまく見つけられなかった…また明日チェックするね`,
       reviewHuman: '以下のAIニュースツイート案を審査してください。JSON形式で結果を返してください。\n\nツイート:',
       userPrompt: today => [
         `# 今日の日付`,
         today,
         '',
-        'まず Google 検索で今日の最新 AI ニュースを調べてください。',
-        '注目度の高い1件を選び、Wikipedia や追加検索で背景を深掘りしてください。',
-        '十分に調べたら submit_post でツイートを提出してください。投稿そのものはしない。',
+        'まず google-search で今日の最新 AI ニュースを調べてください。',
+        '最初の検索では dateRestrict=d1, gl=jp, lr=lang_ja を必ず使ってください（例: query="AI ニュース"）。',
+        '注目度の高い1件を選び、Wikipedia または追加 google-search で背景を深掘りしてください（追加検索は合計2回まで）。',
+        '十分に調べたら submit_post でツイート本文と imagePrompt を提出してください。本文だけ返して終了しないでください。',
       ].join('\n'),
     }, ports);
   }
