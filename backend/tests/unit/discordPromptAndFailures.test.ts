@@ -10,7 +10,6 @@ import {
 describe('Discord task guidance', () => {
   it('asks for Markdown output and avoids unnecessary clarification', () => {
     const prompt = new PromptBuilder().buildSystemPrompt(
-      { current: null, history: [] } as any,
       {
         platform: 'discord',
         discord: {

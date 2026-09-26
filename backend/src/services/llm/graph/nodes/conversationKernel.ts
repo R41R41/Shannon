@@ -90,6 +90,7 @@ export async function runConversationFca(input: {
   onToolStarting?: (toolName: string, args?: Record<string, unknown>) => void;
   filterCalls?: (calls: readonly { id: string; name: string; arguments: unknown }[]) => readonly { id: string; name: string; arguments: unknown }[];
   onTools?: (results: ExecutionResult[]) => void;
+  validateComplete?: (args: Record<string, unknown>) => string | null;
   ephemeral?: (turn: number) => readonly { role: 'system' | 'user'; content: string }[] | Promise<readonly { role: 'system' | 'user'; content: string }[]>;
 }): Promise<FcaRunResult> {
   const toolHooks = input.onToolStarting ? { onToolStarting: input.onToolStarting } : undefined;
@@ -172,6 +173,13 @@ export async function runConversationFca(input: {
           call, content: `結果: 失敗 詳細: ⚠️ ${call.name} の実行がブロックされました。別のアプローチを試してください。 [failure_type=loop_blocked recoverable=true]`,
         }));
         const complete = filtered.find(call => call.name === 'task-complete');
+        const completionIssue = complete ? input.validateComplete?.(asArgs(complete.arguments)) : null;
+        if (complete && completionIssue) {
+          return {
+            execute: filtered.filter(call => call.id !== complete.id),
+            synthetic: [...synthetic, { call: complete, content: `Rejected: ${completionIssue}` }],
+          };
+        }
         const onlyComplete = filtered.length === 1 && complete;
         if (complete && input.needsTools !== false && onlyComplete && !worked) {
           return { execute: filtered.filter(call => call.name !== 'task-complete'), synthetic: [...synthetic, { call: complete, content: 'Rejected: you have not used any tools yet. This task requires tool use (e.g., search, fetch). Gather the needed information first, then call task-complete with the full answer in summary.' }] };

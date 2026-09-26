@@ -35,6 +35,7 @@ import { conversationLoadPrompt, catalogLinesForPrompt, RequestToolsTool, REQUES
 import type { FcaModel } from '../../../../modules/fca/index.js';
 import type { FunctionCallingAgentState, FlatFcaStateInput } from './fcaState.js';
 import { normalizeFcaState } from './fcaState.js';
+import { formatCompletedSummary, validateCompletionClaim } from './completionPolicy.js';
 
 function stripAssistantContentPrefix(t: string): string {
     return t.replace(/^content:\s*/i, '').trim();
@@ -429,6 +430,8 @@ export class FunctionCallingSession {
         let lastThinkingContent: string | null = null;
         let consecutiveBlockedOnly = 0;
         const MAX_CONSECUTIVE_BLOCKED_ONLY = 5;
+        const successfulToolNames = new Set<string>();
+        let awaitingUser = false;
 
         // 初期 UI 更新
         signal?.throwIfAborted();
@@ -521,9 +524,20 @@ export class FunctionCallingSession {
                     return !this.loopDetector.isCallBlocked(call.name, args);
                 }),
                 onTools: (results) => {
+                    for (const result of results) {
+                        if (result.success) successfulToolNames.add(result.toolName);
+                        if (result.toolName === 'ask-user-on-discord' && result.message.includes('SHANNON_AWAITING_USER')) awaitingUser = true;
+                    }
                     try { channelAdapter.onToolsExecuted?.(messages, results); } catch { /* fire-and-forget */ }
                     this.loopDetector.recordAndCheck(results.map(result => ({ name: result.toolName, args: result.args })), results);
                 },
+                validateComplete: (args) => validateCompletionClaim({
+                    goal,
+                    platform,
+                    summary: typeof args.summary === 'string' ? args.summary : '',
+                    availableToolNames: new Set(effectiveTools.map(tool => tool.name)),
+                    successfulToolNames,
+                }),
                 ephemeral: async (turn) => {
                     const extra: { role: 'system' | 'user'; content: string }[] = [];
                     if (turn === 1 && channelAdapter.getInitialMemory) {
@@ -555,15 +569,16 @@ export class FunctionCallingSession {
             const summaryValue = kernelResult.value && typeof kernelResult.value === 'object'
                 && typeof (kernelResult.value as { summary?: unknown }).summary === 'string'
                 ? (kernelResult.value as { summary: string }).summary.trim() : '';
-            const summary = summaryValue || kernelResult.content.trim();
+            const summary = formatCompletedSummary(summaryValue || kernelResult.content.trim());
             this.thinkingManager.resetThinkingState();
-            const complete = kernelResult.stop === 'terminal' || kernelResult.stop === 'complete';
+            const complete = !awaitingUser && (kernelResult.stop === 'terminal' || kernelResult.stop === 'complete');
             logger.info(complete
                 ? `✅ FunctionCallingAgent: タスク完了 (${kernelResult.turns}イテレーション)`
                 : `⚠ FunctionCallingAgent: 停止 ${kernelResult.stop} (${maxIter})`);
             this.taskTreePublisher.publishTaskTree({
-                status: complete ? 'completed' : 'error',
-                goal, strategy: complete ? (summary || goal) : '最大イテレーション数に到達',
+                status: awaitingUser ? 'in_progress' : complete ? 'completed' : 'error',
+                goal, strategy: awaitingUser ? '回答待ち' : complete ? (summary || goal) : '最大イテレーション数に到達',
+                recoveryStatus: awaitingUser ? 'awaiting_user' : undefined,
                 hierarchicalSubTasks: steps, currentSubTaskId: null,
             }, {
                 platform: composition.context?.platform ?? null,
@@ -575,14 +590,14 @@ export class FunctionCallingSession {
             });
             return {
                 taskTree: {
-                    status: complete ? 'completed' : 'error',
-                    goal, strategy: complete ? (summary || goal) : '最大イテレーション数に到達',
-                    recoveryStatus: 'idle' as const, lastFailureType: null, recoveryAttempts: 0,
+                    status: awaitingUser ? 'in_progress' : complete ? 'completed' : 'error',
+                    goal, strategy: awaitingUser ? '回答待ち' : complete ? (summary || goal) : '最大イテレーション数に到達',
+                    recoveryStatus: awaitingUser ? 'awaiting_user' as const : 'idle' as const, lastFailureType: null, recoveryAttempts: 0,
                     hierarchicalSubTasks: steps, subTasks: null,
                 } as TaskTreeState,
-                recoveryStatus: 'idle' as const, recoveryAttempts: 0, isEmergency,
+                recoveryStatus: awaitingUser ? 'awaiting_user' as const : 'idle' as const, recoveryAttempts: 0, isEmergency,
                 messages: fcaHistoryToLangChain(systemPrompt, kernelResult.messages),
-                forceStop: false, lastAssistantContent: summary || undefined,
+                forceStop: false, lastAssistantContent: awaitingUser ? undefined : summary || undefined,
             };
         } catch (error) {
             signal?.throwIfAborted();

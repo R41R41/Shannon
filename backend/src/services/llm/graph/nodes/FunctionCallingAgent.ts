@@ -5,6 +5,7 @@ import type { FunctionCallingAgentState, FlatFcaStateInput } from './fcaState.js
 import { normalizeFcaState } from './fcaState.js';
 export type { FcaChannelAdapter, FcaComposition, FcaRunIdentity, FunctionCallingAgentState, FlatFcaStateInput } from './fcaState.js';
 export { buildFcaState, normalizeFcaState } from './fcaState.js';
+export { formatCompletedSummary, isDiscordArtifactRequest, validateCompletionClaim } from './completionPolicy.js';
 
 /** Reusable tool catalog/configuration. All per-invocation mutable state belongs to a session. */
 export class FunctionCallingAgent {
