@@ -23,6 +23,7 @@ export interface HierarchicalSubTask {
   status: TaskStatus;              // ステータス: pending | in_progress | completed | error
   result?: string | null;          // 結果（完了時）
   failureReason?: string | null;   // エラー理由（失敗時）
+  recoverable?: boolean | null;    // trueなら自動調整・代替手段で続行可能
 
   // フラット構造で親子関係を表現（再帰スキーマ回避）
   parentId?: string | null;        // 親サブタスクID（トップレベルはnull）

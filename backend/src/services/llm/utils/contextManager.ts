@@ -18,6 +18,14 @@ function getMessageText(msg: BaseMessage): string {
   return typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
 }
 
+function isMessageType(msg: BaseMessage, type: 'ai' | 'tool'): boolean {
+  try {
+    return msg.getType() === type;
+  } catch {
+    return type === 'ai' ? msg instanceof AIMessage : msg instanceof ToolMessage;
+  }
+}
+
 export interface ContextConfig {
   maxContextTokens: number;
   reservedForResponse: number;
@@ -57,12 +65,12 @@ export function trimContext(
     const emergencyBlocks: BaseMessage[][] = [];
     let ei = nonSystem.length - 1;
     // 末尾の ToolMessage 群を集める
-    while (ei >= 0 && nonSystem[ei] instanceof ToolMessage) ei--;
+    while (ei >= 0 && isMessageType(nonSystem[ei], 'tool')) ei--;
     // その直前の AIMessage を含むブロック
     if (ei >= 0) {
       const block = [nonSystem[ei]];
       for (let j = ei + 1; j < nonSystem.length; j++) {
-        if (nonSystem[j] instanceof ToolMessage) block.push(nonSystem[j]);
+        if (isMessageType(nonSystem[j], 'tool')) block.push(nonSystem[j]);
         else break;
       }
       emergencyBlocks.push(block);
@@ -76,15 +84,16 @@ export function trimContext(
   let idx = 0;
   while (idx < nonSystem.length) {
     const msg = nonSystem[idx];
+    const aiMessage = msg as AIMessage;
     const hasToolCalls =
-      msg instanceof AIMessage &&
-      ((msg.tool_calls?.length ?? 0) > 0 ||
-       (msg.additional_kwargs?.tool_calls as unknown[])?.length > 0);
+      isMessageType(msg, 'ai') &&
+      ((aiMessage.tool_calls?.length ?? 0) > 0 ||
+       (aiMessage.additional_kwargs?.tool_calls as unknown[])?.length > 0);
 
     if (hasToolCalls) {
       const block = [msg];
       let j = idx + 1;
-      while (j < nonSystem.length && nonSystem[j] instanceof ToolMessage) {
+      while (j < nonSystem.length && isMessageType(nonSystem[j], 'tool')) {
         block.push(nonSystem[j]);
         j++;
       }
@@ -119,7 +128,7 @@ export function trimContext(
   // ドロップされたメッセージをサマリー化
   if (dropped.length > 0) {
     const summaryLines = dropped
-      .filter((m) => !(m instanceof ToolMessage))
+      .filter((m) => !isMessageType(m, 'tool'))
       .map((m) => {
         const role = m instanceof HumanMessage ? 'User' : 'AI';
         const text = getMessageText(m);

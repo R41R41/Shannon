@@ -54,6 +54,8 @@ export const discordAdapter: ChannelAdapter<DiscordNativeEvent> = {
         channelId: event.channelId,
         channelName: event.channelName,
         messageId: event.messageId,
+        userId: event.userId,
+        userName: event.userName,
         isVoiceChannel: event.isVoiceChannel,
         isDM: event.isDM,
       },

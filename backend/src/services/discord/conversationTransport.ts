@@ -1,8 +1,11 @@
-import { ChannelType, PermissionFlagsBits, type Client } from 'discord.js';
+import { AttachmentBuilder, ChannelType, PermissionFlagsBits, type Client } from 'discord.js';
 import { ConversationDeniedError, hasDiscordConversation, discordId, type DiscordConversationBinding, type DiscordHistoryEntry } from '../../modules/conversation/discordConversation.js';
 import type { DiscordConversationTransport } from '../common/discordConversationPort.js';
 import { deliverDiscordPlanning, listGuildEmojis, reactToMessage } from './planningDelivery.js';
 import type { TaskTreeState } from '@shannon/common';
+import { getArtifactStore } from '../artifacts/artifactStore.js';
+import { getClarificationSessionStore } from './clarificationSessionStore.js';
+import { buildClarificationComponents, buildClarificationEmbed } from './clarificationPresentation.js';
 
 /** SDK boundary: recheck destination and current permissions before every I/O. */
 export function createDiscordConversationTransport(client: Client, isRunning: () => boolean): DiscordConversationTransport {
@@ -66,6 +69,31 @@ export function createDiscordConversationTransport(client: Client, isRunning: ()
     async publishPlanning(binding, planning, taskId, signal) {
       check(binding, false, signal);
       await deliverDiscordPlanning(client, binding, planning as TaskTreeState, taskId, isRunning);
+      signal?.throwIfAborted();
+    },
+    async replyWithArtifacts(binding, message, artifactIds, signal) {
+      const channel = check(binding, false, signal);
+      const bundles = await Promise.all(artifactIds.map(id => getArtifactStore().resolveBundle(id)));
+      const files = bundles.flatMap(bundle => bundle.files)
+        .filter(file => file.role !== 'html')
+        .map(file => new AttachmentBuilder(file.absolutePath, { name: file.fileName }));
+      if (!files.length || files.length > 10) throw new ConversationDeniedError();
+      check(binding, false, signal);
+      await channel.send({ content: message, files, allowedMentions: { parse: [], repliedUser: false } });
+      signal?.throwIfAborted();
+    },
+    async requestClarification(binding, clarification, signal) {
+      const channel = check(binding, false, signal);
+      if (clarification.channelId !== binding.channelId || clarification.guildId !== binding.guildId
+          || clarification.requesterUserId !== binding.subjectId) throw new ConversationDeniedError();
+      const session = await getClarificationSessionStore().create(clarification);
+      check(binding, false, signal);
+      const message = await channel.send({
+        embeds: [buildClarificationEmbed(session)],
+        components: buildClarificationComponents(session),
+        allowedMentions: { parse: [], repliedUser: false },
+      });
+      await getClarificationSessionStore().attachMessage(session.clarificationId, message.id);
       signal?.throwIfAborted();
     },
   } satisfies DiscordConversationTransport);

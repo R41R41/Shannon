@@ -37,6 +37,7 @@ import { ScopedMemoryService as ScopedMemoryServiceImpl } from '../../memory/sco
 import { ModelSelector } from './cognitive/ModelSelector.js';
 import { TaskEpisodeMemory } from './cognitive/TaskEpisodeMemory.js';
 import type { ExecutionResult } from './types.js';
+import { isDiscordArtifactTask } from './policies/taskToolPolicy.js';
 
 // ---------------------------------------------------------------------------
 // LangGraph Annotation (state schema)
@@ -115,7 +116,11 @@ function resolveScopedMemory(deps?: ShannonGraphDeps): ScopedMemoryService {
 async function ingestNode(state: ShannonStateType): Promise<Partial<ShannonStateType>> {
   const mode = inferInitialMode(state.envelope);
   // Phase 4: ClassifyNode 削除により、ingest でモデル選択を設定
-  const selectedModel = ModelSelector.selectInitialModel('mid', false, mode);
+  const platform = state.envelope.channel ?? null;
+  const selectedModel = config.llm.provider !== 'anthropic'
+    && isDiscordArtifactTask(state.envelope.text ?? '', platform)
+    ? 'gpt-5.6-terra'
+    : ModelSelector.selectInitialModel('mid', false, mode);
   return { mode, selectedModel, trace: ['node:ingest'] };
 }
 
@@ -208,6 +213,29 @@ function createExecuteNode(
         trace: ['node:execute:fca'],
       };
     };
+
+    // First shared-core vertical slice. It is opt-in until production shadow
+    // evaluation confirms quality/latency/cost, and always falls back to FCA.
+    const useResponsesArtifactExecutor =
+      process.env.SHANNON_DISCORD_EXECUTOR === 'responses'
+      && config.llm.provider !== 'anthropic'
+      && isDiscordArtifactTask(envelope.text ?? '', context?.platform ?? envelope.channel ?? null);
+    if (useResponsesArtifactExecutor) {
+      try {
+        const { DiscordArtifactResponsesExecutor } = await import(
+          '../responses/DiscordArtifactResponsesExecutor.js'
+        );
+        const executor = new DiscordArtifactResponsesExecutor(fca.createToolsForRun());
+        const responseResult = await executor.run(fcaState);
+        return {
+          finalAnswer: responseResult.lastAssistantContent,
+          taskTree: responseResult.taskTree,
+          trace: [`node:execute:responses:${responseResult.turns}turns`],
+        };
+      } catch (error) {
+        logger.error(`Responses artifact executor failed; falling back to FCA: ${error}`, error);
+      }
+    }
 
     // Discord/Web 等は FCA (OpenAI / LangChain Anthropic)。Minebot のみ ShannonExecutor。
     const useShannonExecutor =

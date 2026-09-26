@@ -19,7 +19,7 @@ export interface ModelConfig {
     temperature?: number;
     maxTokens?: number;
     isReasoningModel?: boolean;
-    reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
+    reasoningEffort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
     verbosity?: 'low' | 'medium' | 'high';
     timeoutMs: number;
     provider: 'anthropic' | 'openai' | 'google';
@@ -47,20 +47,41 @@ const ANTHROPIC_CHAIN: ModelSlot[] = [
 
 const OPENAI_CHAIN: ModelSlot[] = [
     {
-        name: 'gpt-4.1-mini',
-        config: { modelName: 'gpt-4.1-mini', temperature: 1, maxTokens: 1024, timeoutMs: 15_000, provider: 'openai' },
+        name: 'gpt-5.6-luna',
+        config: {
+            modelName: 'gpt-5.6-luna',
+            maxTokens: 8192,
+            reasoningEffort: 'none',
+            verbosity: 'low',
+            timeoutMs: 30_000,
+            provider: 'openai',
+        },
     },
     {
-        name: 'gpt-5-mini-fast',
-        config: { modelName: 'gpt-5-mini', temperature: 1, maxTokens: 2048, reasoningEffort: 'low', verbosity: 'low', timeoutMs: 30_000, provider: 'openai' },
+        name: 'gpt-5.6-terra',
+        config: {
+            modelName: 'gpt-5.6-terra',
+            maxTokens: 8192,
+            // Chat Completions rejects function tools when reasoning_effort is
+            // above none. FCA currently binds LangChain tools through that
+            // endpoint, so keep reasoning disabled until the Responses API
+            // migration is complete.
+            reasoningEffort: 'none',
+            verbosity: 'low',
+            timeoutMs: 75_000,
+            provider: 'openai',
+        },
     },
     {
-        name: 'gpt-5-mini',
-        config: { modelName: 'gpt-5-mini', temperature: 1, maxTokens: 2048, reasoningEffort: 'medium', verbosity: 'medium', timeoutMs: 60_000, provider: 'openai' },
-    },
-    {
-        name: 'gpt-5',
-        config: { modelName: 'gpt-5', temperature: 1, maxTokens: 4096, reasoningEffort: 'medium', verbosity: 'medium', timeoutMs: 120_000, provider: 'openai' },
+        name: 'gpt-5.6-sol',
+        config: {
+            modelName: 'gpt-5.6-sol',
+            maxTokens: 8192,
+            reasoningEffort: 'none',
+            verbosity: 'medium',
+            timeoutMs: 120_000,
+            provider: 'openai',
+        },
     },
 ];
 
@@ -246,6 +267,9 @@ export class ModelSelector {
                 temperature: cfg.temperature,
                 maxTokens: cfg.maxTokens,
                 streaming: cfg.streaming ?? true,
+                // Older @langchain/anthropic defaults these to -1. Current
+                // Claude APIs reject -1 instead of treating it as omitted.
+                invocationKwargs: { top_p: undefined, top_k: undefined },
             });
         }
 
@@ -283,7 +307,11 @@ export class ModelSelector {
         return createTracedModel(params as Parameters<typeof createTracedModel>[0]);
     }
 
-    static getChainInfo(): Array<{ name: string; index: number }> {
-        return getChain().map((s, i) => ({ name: s.name, index: i }));
+    static getChainInfo(): Array<{ name: string; index: number; reasoningEffort?: ModelConfig['reasoningEffort'] }> {
+        return getChain().map((s, i) => ({
+            name: s.name,
+            index: i,
+            reasoningEffort: s.config.reasoningEffort,
+        }));
     }
 }

@@ -118,6 +118,8 @@ Shannon2/  (npm workspaces monorepo)
 | タスク実行 (FCA) | gpt-4.1-mini → gpt-5-mini-fast → gpt-5 (動的エスカレーション) |
 | 自己改善 (CodeAgent) | Claude Opus / Sonnet |
 
+GPT-6 Astraはコスト保護のためShannonでは使用禁止です。モデル設定APIからの上書きも拒否します。
+
 ### データストア
 
 - **MongoDB** - メモリ、ワールド知識、ユーザー管理

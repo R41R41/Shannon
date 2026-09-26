@@ -35,6 +35,16 @@ export const config = {
   /** OpenAI API key (required, used by all LLM-related services) */
   openaiApiKey: required('OPENAI_API_KEY'),
 
+  llm: {
+    /**
+     * OpenAI is the safe default for interactive Web/Discord orchestration.
+     * Anthropic remains available only as an explicit operator choice.
+     */
+    provider: optional('SHANNON_LLM_PROVIDER', 'openai').trim().toLowerCase() === 'anthropic'
+      ? 'anthropic'
+      : 'openai',
+  },
+
   /** MongoDB connection URI */
   mongodbUri: required('MONGODB_URI'),
 
@@ -144,8 +154,17 @@ export const config = {
 
   google: {
     apiKey: optional('GOOGLE_API_KEY', ''),
+    mapsApiKey: optional('GOOGLE_MAPS_API_KEY', optional('GOOGLE_API_KEY', '')),
     geminiApiKey: optional('GEMINI_API_KEY', optional('GOOGLE_API_KEY', '')),
     searchEngineId: optional('SEARCH_ENGINE_ID', ''),
+  },
+
+  webSearch: {
+    // Do not spend Anthropic credits implicitly. Operators can add
+    // "anthropic" explicitly when they want it as a search fallback.
+    providerOrder: optional('WEB_SEARCH_PROVIDER_ORDER', 'google,brave')
+      .split(',').map((value) => value.trim().toLowerCase()).filter(Boolean),
+    braveApiKey: optional('BRAVE_SEARCH_API_KEY', ''),
   },
 
   wolframAlpha: {
@@ -154,6 +173,8 @@ export const config = {
 
   anthropic: {
     apiKey: optional('ANTHROPIC_API_KEY', ''),
+    /** Override without a code release when Anthropic rotates model IDs. */
+    model: optional('SHANNON_ANTHROPIC_MODEL', 'claude-opus-4-6'),
   },
 
   groq: {

@@ -27,11 +27,12 @@ export const discordDispatcher: ActionDispatcher = {
       const port = createRequestDiscordConversation(envelope, options?.signal);
       const actions = plan.discordActions ?? [];
       // Validate all action kinds before sending the first message. No arbitrary destinations or attachments.
-      if (actions.some(a => a.type !== 'reply' && a.type !== 'send_embed')) throw new Error('Unsupported Discord text action');
-      const messages = actions.length ? actions.map(a => a.type === 'send_embed' ? `## ${a.title}\n\n${a.body}` : a.type === 'reply' ? a.text : '') : plan.message ? [plan.message] : [];
-      if (messages.some(m => !m.trim() || m.length > 12000)) throw new Error('Invalid Discord text reply');
-      for (const message of messages) {
-        const result = await port.reply({ message });
+      if (actions.some(a => a.type !== 'reply' && a.type !== 'send_embed' && a.type !== 'send_artifact')) throw new Error('Unsupported Discord text action');
+      const normalizedActions = actions.length ? actions : plan.message ? [{ type: 'reply' as const, text: plan.message }] : [];
+      for (const action of normalizedActions) {
+        const result = action.type === 'send_artifact'
+          ? await port.replyWithArtifacts({ message: action.text, artifactIds: action.artifactIds })
+          : await port.reply({ message: action.type === 'send_embed' ? `## ${action.title}\n\n${action.body}` : action.text });
         if (result.status !== 'sent') throw new Error(result.message);
       }
       return;
@@ -101,6 +102,9 @@ async function dispatchAction(
         imageUrl: '',
       });
       break;
+
+    case 'send_artifact':
+      throw new Error('Artifacts may only be sent through a request-bound Discord text conversation');
 
     case 'voice_speak':
       await outbound.postMessage({

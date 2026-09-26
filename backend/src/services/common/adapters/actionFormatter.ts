@@ -174,8 +174,12 @@ function formatDiscordPlan(
   message: string,
 ): ShannonActionPlan {
   const actions: DiscordAction[] = [];
+  const awaitingClarification = state.taskTree?.recoveryStatus === 'awaiting_user';
 
-  if (message) {
+  // The structured Discord form already communicates this state. Sending the
+  // executor's generic "waiting for answers" text as a second message only
+  // duplicates the form and makes the channel noisy.
+  if (message && !awaitingClarification) {
     // Check if the envelope indicates voice channel
     if (state.envelope.discord?.isVoiceChannel) {
       actions.push({ type: 'voice_speak', text: message });
@@ -186,7 +190,7 @@ function formatDiscordPlan(
 
   return {
     channel: 'discord',
-    message,
+    message: awaitingClarification ? '' : message,
     discordActions: actions.length > 0 ? actions : undefined,
   };
 }

@@ -213,23 +213,23 @@ interface RequestEnvelope {
   → needsPlanning=true (テキスト長 > 50 でも true)
 
 モデル選択:
-  minecraft_emergency + !needsPlanning → gpt-4.1-mini
-  minecraft_action + needsPlanning    → gpt-5-mini-fast
-  minecraft_action + !needsPlanning   → gpt-4.1-mini
+  minecraft_emergency + !needsPlanning → gpt-5.6-luna
+  minecraft_action + needsPlanning    → gpt-5.6-luna（高額モデルへ自動昇格しない）
+  minecraft_action + !needsPlanning   → gpt-5.6-luna
 ```
 
 #### 他チャネル (LLM使用)
 
 ```
-LLMモデル: gpt-4.1-mini
+LLMモデル: GPT-5.6 Luna（軽量経路）
 入力: envelope.text + チャネルコンテキスト
 スキーマ: ClassifySchema { mode, intent, riskLevel, needsTools, needsPlanning }
 出力: 分類結果
 
 モデル選択:
-  riskLevel='high'                     → gpt-5
-  riskLevel='mid' + needsPlanning=true → gpt-5-mini-fast
-  default                              → gpt-4.1-mini
+  riskLevel='high'                     → gpt-5.6-sol
+  riskLevel='mid' + needsPlanning=true → gpt-5.6-terra
+  default                              → gpt-5.6-luna
 ```
 
 #### Classify ルーター
@@ -350,19 +350,22 @@ PlanState 生成 (craftPlanToPlanState):
 
 | Tier | モデル | Temperature | MaxTokens | Timeout | 備考 |
 |------|--------|-------------|-----------|---------|------|
-| 0 | `gpt-4.1-mini` | 1 | 1024 | 15s | 最軽量・最速 |
-| 1 | `gpt-5-mini-fast` | — | — | 30s | reasoning_effort='low', verbosity='low' |
-| 2 | `gpt-5-mini` | — | — | 60s | reasoning_effort='medium', verbosity='medium' |
-| 3 | `gpt-5` | — | 4096 | 120s | 最高性能 |
+| 0 | `gpt-5.6-luna` | — | 8192 | 30s | 通常会話・分類、reasoning_effort='none' |
+| 1 | `gpt-5.6-terra` | — | 8192 | 75s | 計画・複数ツール、reasoning_effort='none' |
+| 2 | `gpt-5.6-sol` | — | 8192 | 120s | 高リスク・失敗時、reasoning_effort='none' |
+
+`gpt-6-astra` はコスト保護のためチェーンに含めず、ランタイム上書きも拒否する。
+現行FCAはChat CompletionsでFunction Toolsを使うため、GPT-5.6各モデルの
+`reasoning_effort` は `none` に固定する。Responses API移行後にタスク別の推論強度を再導入する。
 
 ### 初期選択ロジック
 
 ```typescript
 selectInitialModel(riskLevel, needsPlanning, mode):
-  minecraft_emergency or minecraft_action → gpt-4.1-mini (Tier 0)
-  riskLevel='high'                        → gpt-5 (Tier 3)
-  riskLevel='mid' + needsPlanning=true    → gpt-5-mini-fast (Tier 1)
-  default                                 → gpt-4.1-mini (Tier 0)
+  minecraft_emergency or minecraft_action → gpt-5.6-luna (Tier 0)
+  riskLevel='high'                        → gpt-5.6-sol (Tier 2)
+  riskLevel='mid' + needsPlanning=true    → gpt-5.6-terra (Tier 1)
+  default                                 → gpt-5.6-luna (Tier 0)
 ```
 
 ### エスカレーション/デエスカレーション
@@ -378,8 +381,8 @@ selectInitialModel(riskLevel, needsPlanning, mode):
   - 自動: consecutiveSuccesses >= 8 → deescalate
 
 Minecraft プラットフォーム制限:
-  setMaxEscalationLevel('gpt-5-mini-fast')
-  → gpt-5 へのエスカレーションをブロック (レイテンシ優先)
+  setMaxEscalationLevel('gpt-5.6-luna')
+  → Terra / Sol へのエスカレーションをブロック (レイテンシ・費用優先)
 ```
 
 ---
@@ -580,7 +583,7 @@ CognitiveBlackboard 上の一級状態。感情やメタ認知と同列に管理
 
 ```
 1. ModelSelector(selectedModel) — 初期モデル設定
-2. Minecraft: setMaxEscalationLevel('gpt-5-mini-fast')
+2. Minecraft: setMaxEscalationLevel('gpt-5.6-luna')
 3. ツールフィルタリング:
    - allowedTools 指定時 → 許可リストのみ
    - Minecraft チャネル → 非MC ツール除外
