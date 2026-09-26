@@ -48,6 +48,10 @@ export default class AskUserOnDiscordTool extends StructuredTool {
   private taskId = '';
   private discordConversation: DiscordConversationPort | null = null;
 
+  createForRun(): AskUserOnDiscordTool {
+    return new AskUserOnDiscordTool();
+  }
+
   setContext(context: TaskContext | null, taskId: string | null): void {
     this.context = context;
     this.taskId = taskId ?? '';

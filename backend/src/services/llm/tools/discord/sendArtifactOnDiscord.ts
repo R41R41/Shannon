@@ -25,6 +25,10 @@ export default class SendArtifactOnDiscordTool extends StructuredTool<any> {
   schema = schema;
   private discordConversation: DiscordConversationPort | null = null;
 
+  createForRun(): SendArtifactOnDiscordTool {
+    return new SendArtifactOnDiscordTool();
+  }
+
   setDiscordConversationPort(port: DiscordConversationPort): void {
     this.discordConversation = port;
   }
