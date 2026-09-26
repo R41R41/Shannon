@@ -29,7 +29,10 @@ export const discordDispatcher: ActionDispatcher = {
       const actions = plan.discordActions ?? [];
       // Validate all action kinds before sending the first message. No arbitrary destinations or attachments.
       if (actions.some(a => a.type !== 'reply' && a.type !== 'send_embed' && a.type !== 'send_artifact')) throw new Error('Unsupported Discord text action');
-      const normalizedActions = actions.length ? actions : plan.message ? [{ type: 'reply' as const, text: plan.message }] : [];
+      type DiscordTextAction = Extract<DiscordAction, { type: 'reply' | 'send_embed' | 'send_artifact' }>;
+      const normalizedActions: DiscordTextAction[] = actions.length
+        ? actions as DiscordTextAction[]
+        : plan.message ? [{ type: 'reply', text: plan.message }] : [];
       for (const action of normalizedActions) {
         const result = action.type === 'send_artifact'
           ? await port.replyWithArtifacts({ message: action.text, artifactIds: action.artifactIds })

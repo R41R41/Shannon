@@ -59,6 +59,7 @@ export const config = {
   discord: {
     // --dev never falls back to the production bot token, even if both are in the same .env.
     token: isDev ? optional('DISCORD_TOKEN_TEST', '') : optional('DISCORD_TOKEN', ''),
+    devAllowAimine: optional('SHANNON_DEV_ALLOW_AIMINE', 'false').toLowerCase() === 'true',
     guilds: {
       toyama: {
         guildId: optional('TOYAMA_GUILD_ID', ''),
