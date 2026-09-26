@@ -3,20 +3,18 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ArtifactStore, setArtifactStoreForTests } from '../../../src/services/artifacts/artifactStore';
-import { clearEventBus, getEventBus } from '../../../src/services/eventBus';
 import SendArtifactOnDiscordTool from '../../../src/services/llm/tools/discord/sendArtifactOnDiscord';
 
 let rootDirectory: string | null = null;
 
 afterEach(async () => {
   setArtifactStoreForTests(null);
-  clearEventBus();
   if (rootDirectory) await rm(rootDirectory, { recursive: true, force: true });
   rootDirectory = null;
 });
 
 describe('send-artifact-on-discord', () => {
-  it('保管済みartifactIdだけをDiscordイベントへ渡す', async () => {
+  it('保管済みartifactIdだけをリクエスト境界のDiscord会話へ渡す', async () => {
     rootDirectory = await mkdtemp(join(tmpdir(), 'shannon-artifact-send-test-'));
     const store = new ArtifactStore({ rootDirectory, ttlMs: 60_000 });
     setArtifactStoreForTests(store);
@@ -28,17 +26,22 @@ describe('send-artifact-on-discord', () => {
       files: [{ role: 'pdf', fileName: 'guide.pdf', mediaType: 'application/pdf' }],
     });
 
+    const tool = new SendArtifactOnDiscordTool();
     const received: unknown[] = [];
-    getEventBus().subscribe('discord:post_message', (event) => received.push(event.data));
-
-    const result = await new SendArtifactOnDiscordTool().invoke({
+    tool.setDiscordConversationPort({
+      replyWithArtifacts: async input => {
+        received.push(input);
+        return { status: 'sent', message: 'ok' };
+      },
+    } as any);
+    const result = await tool.invoke({
       artifactId: draft.id,
       message: '資料を作りました。',
       channelId: 'channel-1',
       guildId: 'guild-1',
     });
 
-    expect(JSON.parse(String(result)).status).toBe('queued');
+    expect(JSON.parse(String(result)).status).toBe('sent');
     expect(received).toHaveLength(1);
     expect(received[0]).toMatchObject({
       channelId: 'channel-1',

@@ -4,6 +4,7 @@ import type { DiscordConversationBinding } from '../../modules/conversation/disc
 import { ConversationDeniedError, hasDiscordConversation } from '../../modules/conversation/discordConversation.js';
 
 type LegacyPlanSubTask = NonNullable<TaskTreeState['subTasks']>[number];
+const deliveryQueues = new Map<string, Promise<void>>();
 
 function statusEmoji(status: string): string {
   switch (status) {
@@ -16,6 +17,26 @@ function statusEmoji(status: string): string {
 }
 
 export async function deliverDiscordPlanning(
+  client: Client,
+  binding: DiscordConversationBinding,
+  planning: TaskTreeState,
+  taskId: string,
+  isRunning: () => boolean,
+): Promise<void> {
+  const queueKey = `${binding.channelId}:${taskId}`;
+  const previous = deliveryQueues.get(queueKey) ?? Promise.resolve();
+  const delivery = previous.catch(() => undefined).then(() => deliverDiscordPlanningSerial(
+    client, binding, planning, taskId, isRunning,
+  ));
+  deliveryQueues.set(queueKey, delivery);
+  try {
+    await delivery;
+  } finally {
+    if (deliveryQueues.get(queueKey) === delivery) deliveryQueues.delete(queueKey);
+  }
+}
+
+async function deliverDiscordPlanningSerial(
   client: Client,
   binding: DiscordConversationBinding,
   planning: TaskTreeState,
