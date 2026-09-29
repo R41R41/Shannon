@@ -104,9 +104,9 @@ export class EventRouter {
     void this.processDiscordMessage(message);
   }
 
-  handleScheduledPost(data: TwitterClientInput): void {
+  async handleScheduledPost(data: TwitterClientInput): Promise<void> {
     if (this.isDevMode) return;
-    this.agents.processCreateScheduledPost(data);
+    await this.agents.processCreateScheduledPost(data);
   }
 
   handleTwitterReply(data: TwitterReplyOutput): void {

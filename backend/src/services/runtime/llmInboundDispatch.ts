@@ -39,8 +39,8 @@ export function deliverDiscordMessageToLlm(message: DiscordInboundMessage): void
   getLlmInbound().handleDiscordMessage(message);
 }
 
-export function deliverScheduledPostToLlm(data: TwitterClientInput): void {
-  getLlmInbound().handleScheduledPost(data);
+export async function deliverScheduledPostToLlm(data: TwitterClientInput): Promise<void> {
+  await getLlmInbound().handleScheduledPost(data);
 }
 
 export function deliverTwitterReplyToLlm(data: TwitterReplyOutput): void {

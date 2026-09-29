@@ -34,7 +34,7 @@ export function fcaHistoryToLangChain(system: string, history: readonly FcaMessa
 }
 
 /** Stateless OpenAI adapter for the shared FCA kernel. Catalog is per-call, not a process singleton. */
-export function createOpenAiFcaModel(input: { apiKey: string; model: string; maxTokens: number; temperature: number; timeoutMs?: number }): FcaModel {
+export function createOpenAiFcaModel(input: { apiKey: string; model: string; maxTokens: number; temperature: number; timeoutMs?: number; requireSingleTool?: string }): FcaModel {
   if (!input.apiKey || !/^[A-Za-z0-9._:-]{1,100}$/.test(input.model)
     || !Number.isSafeInteger(input.maxTokens) || input.maxTokens < 1 || input.maxTokens > 8000
     || !Number.isFinite(input.temperature) || input.temperature < 0 || input.temperature > 2) {
@@ -50,7 +50,10 @@ export function createOpenAiFcaModel(input: { apiKey: string; model: string; max
     const abort = toAbortSignal(signal);
     const result = request.tools.length
       ? await model.bindTools(request.tools.map(tool => ({ type: 'function' as const, function: { name: tool.name, description: tool.description, parameters: tool.parameters } })),
-        { parallel_tool_calls: false }).invoke(messages, { signal: abort })
+        { parallel_tool_calls: false,
+          ...(request.tools.length === 1 && request.tools[0].name === input.requireSingleTool
+            ? { tool_choice: { type: 'function' as const, function: { name: input.requireSingleTool } } } : {}),
+        }).invoke(messages, { signal: abort })
       : await model.invoke(messages, { signal: abort });
     signal.throwIfAborted();
     const content = typeof result.content === 'string' ? result.content : '';

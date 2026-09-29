@@ -9,6 +9,7 @@ import { createTracedModel } from '../utils/langfuse.js';
 import { logger } from '../../../utils/logger.js';
 import {
   scheduledPostTools,
+  SCHEDULED_POST_TEXT_MAX,
   type ScheduledPostDraft,
   type ScheduledPostSearchPorts,
   type ScheduledPostToolBudgets,
@@ -16,8 +17,6 @@ import {
 
 const JST = 'Asia/Tokyo';
 const MAX_REVIEW_RETRIES = 3;
-const PROSE_DRAFT_MIN = 120;
-const PROSE_DRAFT_MAX = 400;
 const DEFAULT_TOOL_BUDGETS: ScheduledPostToolBudgets = { maxWebCalls: 10, maxWikiCalls: 5 };
 
 /** 検索なし修正で LLM が差し替えやすい、数年前の製品発表 */
@@ -123,7 +122,7 @@ function reviewFailureFeedback(
   ];
   if (spec.kind === 'news') {
     lines.push(
-      `今日は ${today}（${dateText}）です。google-search（dateRestrict=d1）で今日のニュースを再調査し、同じトピックを維持してよいので事実関係を裏取りしてください。`,
+      `今日は ${today}（${dateText}）です。google-search（dateRestrict=d1）で今日のニュースを再調査し、事実関係を裏取りしてください。NGトピックが理由なら、条件を満たす別の題材を選んでください。`,
       '数年前の製品（GPT-4 Turbo 等）を「今日の新発表」として書き換えないでください。',
       '口調・構成だけ直すのではなく、検索結果に基づいて submit_post で提出してください。',
     );
@@ -150,13 +149,26 @@ async function explore(
     maxTokens: 1200,
     temperature: spec.temperature,
     timeoutMs: 45000,
+    requireSingleTool: 'submit_post',
   });
   const user = [spec.userPrompt(today), feedback ? `\n# 前回のフィードバック\n${feedback}` : ''].filter(Boolean).join('\n');
+  const budgets = resolvedToolBudgets(spec);
+  const used = new Map<string, number>();
+  let calls = 0;
+  let activeNames = new Set<string>();
+  const tools = scheduledPostTools(ports, budgets).map(tool => ({
+    ...tool,
+    async execute(args: unknown, toolSignal: Parameters<typeof tool.execute>[1]) {
+      calls += 1;
+      used.set(tool.name, (used.get(tool.name) ?? 0) + 1);
+      return tool.execute(args, toolSignal);
+    },
+  }));
   try {
     const result = await runFcaLoop({
       system: spec.systemPrompt,
       messages: [{ role: 'user', content: user }],
-      tools: scheduledPostTools(ports, resolvedToolBudgets(spec)),
+      tools,
       model,
       signal,
       limits: {
@@ -167,16 +179,33 @@ async function explore(
       },
       policy: { kind: 'terminal-tool', name: 'submit_post', drain: 'until-terminal' },
       hooks: {
-        onTextOnly: ({ content }) => {
-          const text = content.trim();
-          if (text.length >= PROSE_DRAFT_MIN && text.length <= PROSE_DRAFT_MAX) return 'complete';
-          return 'continue';
+        beforeModel: ({ turn, elapsedMs }) => {
+          // Reserve room for submission and one length/format correction. Keep
+          // all collected search results in the same session when a cap is hit.
+          const submitOnly = calls >= spec.maxToolCalls - 2 || turn >= 13 || elapsedMs >= 60000;
+          const active = tools.filter(tool => tool.name === 'submit_post' || (!submitOnly && (
+            tool.name === 'google-search'
+              ? (used.get(tool.name) ?? 0) < (budgets.maxWebCalls ?? 10)
+              : (used.get(tool.name) ?? 0) < (budgets.maxWikiCalls ?? 5)
+          )));
+          activeNames = new Set(active.map(tool => tool.name));
+          return {
+            tools: active,
+            ephemeral: [{ role: 'user' as const, content: active.length === 1
+              ? `検索枠は終了しました。既に取得した情報だけを使い、本文（最大${SCHEDULED_POST_TEXT_MAX}文字）とimagePromptをsubmit_postで提出してください。確認できない事実は作らないでください。`
+              : `調査後は本文（最大${SCHEDULED_POST_TEXT_MAX}文字）とimagePromptをsubmit_postで提出してください。本文だけ返して終了しないでください。` }],
+          };
         },
+        planCalls: toolCalls => ({
+          execute: toolCalls.filter(call => activeNames.has(call.name) || !tools.some(tool => tool.name === call.name)),
+          synthetic: toolCalls.filter(call => !activeNames.has(call.name) && tools.some(tool => tool.name === call.name))
+            .map(call => ({ call, content: '検索上限です。収集済みの情報を使ってsubmit_postで提出してください。' })),
+        }),
+        onTextOnly: () => 'continue',
       },
     });
     const value = result.value as ScheduledPostDraft | undefined;
     if (value && typeof value.text === 'string' && value.text.trim()) return value;
-    if (result.content.trim()) return { text: result.content.trim() };
     return null;
   } catch (error) {
     if (error instanceof FcaError && (error.code === 'FCA_NO_TERMINAL' || error.code === 'FCA_TOOL_BUDGET')) {

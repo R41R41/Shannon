@@ -71,7 +71,7 @@ export class Scheduler extends BaseClient {
       if (platform === 'twitter' && name === 'check_replies') {
         await getTwitterToolPort().checkReplies();
       } else if (platform === 'twitter') {
-        deliverScheduledPostToLlm({
+        await deliverScheduledPostToLlm({
           command: name,
         } as TwitterClientInput);
       } else if (platform === 'youtube' && name === 'check_comments') {

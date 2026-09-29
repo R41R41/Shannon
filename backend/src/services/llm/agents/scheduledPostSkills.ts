@@ -19,10 +19,12 @@ const GOOGLE_SEARCH = {
   required: ['query'],
   additionalProperties: false,
 };
+export const SCHEDULED_POST_TEXT_MAX = 500;
+
 const SUBMIT = {
   type: 'object',
   properties: {
-    text: { type: 'string', minLength: 1, maxLength: 400 },
+    text: { type: 'string', minLength: 1, maxLength: SCHEDULED_POST_TEXT_MAX },
     imagePrompt: { type: 'string', minLength: 1, maxLength: 800 },
   },
   required: ['text', 'imagePrompt'],
@@ -101,7 +103,7 @@ export function scheduledPostTools(
       if (!args || typeof args !== 'object' || Array.isArray(args)) return { content: JSON.stringify({ error: 'invalid' }) };
       const text = (args as { text?: unknown }).text;
       const imagePrompt = (args as { imagePrompt?: unknown }).imagePrompt;
-      if (typeof text !== 'string' || !text.trim() || text.trim().length > 400) {
+      if (typeof text !== 'string' || !text.trim() || text.trim().length > SCHEDULED_POST_TEXT_MAX) {
         return { content: JSON.stringify({ error: 'text required' }) };
       }
       const draft: ScheduledPostDraft = {
