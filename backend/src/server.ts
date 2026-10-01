@@ -24,6 +24,7 @@ import { registerTokenRoutes } from './routes/tokenRoutes.js';
 import { registerTestRoutes } from './routes/testRoutes.js';
 import { registerWebhookRoutes } from './routes/webhookRoutes.js';
 import { registerPublicRoutes } from './routes/publicRoutes.js';
+import { startShannonOpsReporter } from './services/integration/configuredShannonOpsReporter.js';
 import { startNightlySelfImproveScheduler } from './services/llm/graph/cognitive/selfImprove/NightlySelfImproveScheduler.js';
 import { registerIdentityBindingLookup } from './services/runtime/identityBindingGateway.js';
 import { registerMainRadarRoutes } from './bootstrap/mainRadar.js';
@@ -217,6 +218,7 @@ class Server {
     ]);
 
     logger.success('[Server] 全サービスの起動処理が完了しました');
+    void startShannonOpsReporter();
 
     if (this.onlyServices === null) {
       startNightlySelfImproveScheduler();
