@@ -41,6 +41,7 @@ const DISCORD_CONVERSATION_TOOLS = Object.freeze([
   'google-search',
   'search-by-wikipedia',
   'search-weather',
+  'search-places',
   'fetch-url',
   'describe-image',
   'create-image',

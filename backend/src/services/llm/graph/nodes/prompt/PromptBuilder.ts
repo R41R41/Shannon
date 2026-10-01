@@ -249,7 +249,8 @@ ${travelBriefSection}`;
 6. 必要条件が揃っている場合は、好みの微調整を追加質問せずそのまま進める。「質問せず進めて」「おまかせ」があれば質問しない
 7. ツールは必須項目を満たして呼ぶ。引数を空オブジェクトで呼ばない
 8. 「調べて」「教えて」と言われたら google-search → fetch-url の順で本文まで読む
-9. 不完全な情報や「サイトで確認してください」だけの回答は避ける`;
+9. 不完全な情報や「サイトで確認してください」だけの回答は避ける
+${context?.platform === 'discord' ? '10. 店・施設・観光地を探す依頼では search-places を使い、候補の地図リンクを回答に含める' : ''}`;
     }
 
     private formatPlatformInfo(context: TaskContext | null): string {

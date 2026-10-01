@@ -60,6 +60,8 @@ describe('tool path catalog', () => {
     expect(selectToolsForChannel('discord', tools).map(t => t.name)).toEqual(['chat-on-discord', 'google-search']);
     expect(selectToolsForChannel('web', tools).map(t => t.name)).toEqual(['google-search']);
     expect(isToolAllowedOnPath('discord_conversation', 'post-on-twitter')).toBe(false);
+    expect(isToolAllowedOnPath('discord_conversation', 'search-places')).toBe(true);
+    expect(isToolAllowedOnPath('minecraft_executor', 'search-places')).toBe(false);
     expect(selectToolsForChannel('scheduler', tools).map(t => t.name)).toEqual(['google-search']);
     expect(selectToolsForChannel('discord', [...tools, { name: 'pause' }]).map(t => t.name)).toEqual([
       'chat-on-discord', 'google-search', 'pause',
