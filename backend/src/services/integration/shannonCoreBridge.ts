@@ -50,9 +50,14 @@ export function createShannonCoreBridge(
   contextUrl.pathname = '/v1/platform/context';
   return Object.freeze({
     async mirrorDiscordTurn(envelope: RequestEnvelope, reply: string): Promise<void> {
-      const body = discordTurnBody(envelope, reply);
-      const binding = bindings.find(candidate => matchesConversation(candidate, body.conversationId));
-      if (!binding || binding.ownerUserId !== body.sourceUserId) return;
+      const ownerBody = discordTurnBody(envelope, reply);
+      const binding = bindings.find(candidate => matchesConversation(candidate, ownerBody.conversationId));
+      if (!binding) return;
+      // Someone other than the owner: the core remembers them as a person of this conversation,
+      // identified by the platform account. Without a display name there is nothing to remember.
+      const otherPerson = binding.ownerUserId !== ownerBody.sourceUserId;
+      const body = otherPerson ? personTurnBody(envelope, ownerBody) : ownerBody;
+      if (!body) return;
       const response = await fetcher(url, {
         method: 'POST',
         headers: {
@@ -63,14 +68,22 @@ export function createShannonCoreBridge(
         redirect: 'error',
         signal: AbortSignal.timeout(bridgeConfig.timeoutMs),
       }).catch(() => { throw new ShannonCoreBridgeError('UPSTREAM_UNAVAILABLE'); });
-      if (response.status !== 200 && response.status !== 201) {
-        throw new ShannonCoreBridgeError('UPSTREAM_UNAVAILABLE');
-      }
+      if (response.status === 200 || response.status === 201) return;
+      // Remembering other people is best effort: a refusal, the switch being off, a changed
+      // message under the same id, or a rate limit never fails the Discord turn.
+      if (otherPerson && [403, 409, 429].includes(response.status)) return;
+      throw new ShannonCoreBridgeError('UPSTREAM_UNAVAILABLE');
     },
     async readDiscordContext(envelope: RequestEnvelope): Promise<ShannonCoreContextResult> {
-      const body = discordContextBody(envelope);
-      const binding = bindings.find(candidate => matchesConversation(candidate, body.conversationId));
-      if (!binding || binding.ownerUserId !== body.sourceUserId) return { status: 'ineligible' };
+      const baseBody = discordContextBody(envelope);
+      const binding = bindings.find(candidate => matchesConversation(candidate, baseBody.conversationId));
+      if (!binding) return { status: 'ineligible' };
+      // The core filters the projection by who is in the conversation. An owner-authored
+      // request keeps today's shape; another person's request states the conversation kind
+      // and names that person as a participant.
+      const body = binding.ownerUserId === baseBody.sourceUserId
+        ? baseBody
+        : { ...baseBody, conversationKind: discordConversationKind(envelope), participants: [baseBody.sourceUserId] };
       let response: Response;
       try {
         response = await fetcher(contextUrl.toString(), {
@@ -141,6 +154,22 @@ function discordTurnBody(envelope: RequestEnvelope, reply: string) {
     userMessage: envelope.text.trim(),
     shannonReply: reply.trim(),
     observedAt: new Date(envelope.timestampIso).toISOString(),
+  };
+}
+
+function discordConversationKind(envelope: RequestEnvelope): 'dm' | 'channel' {
+  return envelope.discord?.isDM === true ? 'dm' : 'channel';
+}
+
+/** Adds what the core needs to remember a person: the account's shown name and the conversation kind. */
+function personTurnBody(envelope: RequestEnvelope, body: ReturnType<typeof discordTurnBody>) {
+  const displayName = (envelope.sourceDisplayName ?? envelope.discord?.userName ?? '').trim().slice(0, 80);
+  if (!bounded(displayName, 80)) return null;
+  return {
+    ...body,
+    conversationKind: discordConversationKind(envelope),
+    sourceDisplayName: displayName,
+    sourceKind: 'person' as const,
   };
 }
 
