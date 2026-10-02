@@ -34,6 +34,9 @@ export type OpsReportResult = 'reported' | 'refused' | 'unavailable';
 
 export interface ShannonOpsReporter {
   observeStatus(service: string, status: ServiceStatus | null | undefined): void;
+  /** The state a service last reported. */
+  statusOf(service: string): OpsServiceStatus | undefined;
+  scheduleNames(): readonly string[];
   observeSchedules(schedules: readonly Schedule[]): void;
   observeSkills(skills: readonly SkillInfo[]): void;
   snapshot(now?: Date): OpsSnapshot;
@@ -71,6 +74,8 @@ export function createShannonOpsReporter(
       if (typeof service !== 'string' || service.length > LIMITS.id || !SERVICE_ID.test(service)) return;
       services.set(service, status === 'running' ? 'running' : status === 'stopped' ? 'stopped' : status === 'connecting' ? 'degraded' : 'unknown');
     },
+    statusOf: service => services.get(service),
+    scheduleNames: () => schedules.map(schedule => schedule.name),
     observeSchedules(next) {
       // Only the name and the time: a schedule's data is the post it will make.
       schedules = next.flatMap(schedule => {

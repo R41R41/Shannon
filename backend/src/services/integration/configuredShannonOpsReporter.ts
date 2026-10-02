@@ -1,3 +1,4 @@
+import { execFile } from 'node:child_process';
 import path from 'node:path';
 import type { Platform, ServiceCommand } from '@shannon/common';
 import { logger } from '../../utils/logger.js';
@@ -5,12 +6,20 @@ import { dispatchServiceCommand } from '../runtime/serviceCommandRegistry.js';
 import { getSchedulerPort } from '../runtime/schedulerGateway.js';
 import { requestSkillList } from '../runtime/skillListRegistry.js';
 import { getWebNotificationHub } from '../web/webNotificationHub.js';
+import { createOpsCommandPuller } from './shannonOpsCommands.js';
 import { createShannonOpsReporter, type OpsReportResult } from './shannonOpsReporter.js';
 
 const REPORT_MILLISECONDS = 60_000;
-const SERVICES: readonly string[] = ['discord', 'twitter', 'youtube', 'youtube:live_chat', 'minecraft', 'minebot', 'notion'];
+const COMMAND_POLL_MILLISECONDS = 10_000;
+// The Minecraft servers this runtime manages (minecraft/client.ts VALID_SERVERS). Lab servers are not among them.
+const MINECRAFT_SERVERS: readonly string[] = ['1.21.4-fabric-youtube', '1.21.4-test', '1.19.0-youtube', '1.21.1-play', '1.21.11-fabric-test'];
+const SERVICES: readonly string[] = [
+  'discord', 'twitter', 'youtube', 'youtube:live_chat', 'minecraft', 'minebot', 'notion',
+  ...MINECRAFT_SERVERS.map(server => `minecraft:${server}`),
+];
 
 let timer: NodeJS.Timeout | null = null;
+let commandTimer: NodeJS.Timeout | null = null;
 
 /**
  * Starts the once-a-minute operational report to the Shannon app API. It does nothing
@@ -43,6 +52,30 @@ export async function startShannonOpsReporter(): Promise<void> {
       last = result;
     };
     timer = setInterval(() => { void tick(); }, REPORT_MILLISECONDS);
+    // Operations asked for in the management window: pulled, performed one at a time, reported with a fixed code.
+    const puller = createOpsCommandPuller({
+      url: config.shannonCoreBridge.url, token: config.shannonCoreBridge.token, timeoutMs: config.shannonCoreBridge.timeoutMs,
+    }, {
+      dispatch: async (service, command) => {
+        const registered = await dispatchServiceCommand(service, command as ServiceCommand, service).then(() => true, () => false);
+        return registered && (command !== 'status' || reporter.statusOf(service) !== undefined);
+      },
+      statusOf: service => reporter.statusOf(service),
+      scheduleNames: () => reporter.scheduleNames(),
+      runSchedule: name => getSchedulerPort().callSchedule({ type: 'call_schedule', name }),
+      labRunning,
+    });
+    if (puller) {
+      let lastPull = '';
+      commandTimer = setInterval(() => {
+        void puller.pull().then(result => {
+          if (result === 'performed') { logger.info('[ShannonOps] command performed'); void tick(); }
+          else if (result !== lastPull && result === 'unavailable') logger.info('[ShannonOps] commands: unavailable');
+          lastPull = result;
+        });
+      }, COMMAND_POLL_MILLISECONDS);
+      commandTimer.unref();
+    }
     timer.unref();
     setTimeout(() => { void tick(); }, 5_000).unref();
   } catch (error) {
@@ -52,5 +85,18 @@ export async function startShannonOpsReporter(): Promise<void> {
 
 export function stopShannonOpsReporter(): void {
   if (timer) clearInterval(timer);
+  if (commandTimer) clearInterval(commandTimer);
   timer = null;
+  commandTimer = null;
+}
+
+/** A paid lab run is in progress (its probe process exists). Starting a server then would slow it. */
+function labRunning(): Promise<boolean> {
+  return new Promise(resolve => {
+    execFile('pgrep', ['-f', 'minecraft-campaign-live-probe'], { timeout: 5_000 }, (error, stdout) => {
+      // pgrep exits 1 when nothing matches; any other failure is treated as "running", the safe side.
+      if (!error) resolve(stdout.trim().length > 0);
+      else resolve((error as NodeJS.ErrnoException & { code?: number | string }).code !== 1);
+    });
+  });
 }
