@@ -7,7 +7,7 @@
  * The app API keeps the allowlist; it is checked again here, so a change over there
  * cannot widen what this runtime does.
  */
-export type OpsCommandType = 'service.start' | 'service.stop' | 'schedule.run' | 'minecraft.start' | 'minecraft.stop';
+export type OpsCommandType = 'service.start' | 'service.stop' | 'schedule.run' | 'minecraft.start' | 'minecraft.stop' | 'minebot.start';
 export type OpsCommandOutcome = 'done' | 'failed' | 'refused';
 export type OpsCommandCode =
   | 'not_registered' | 'already_running' | 'already_stopped' | 'lab_running' | 'timeout' | 'error' | 'unsupported' | 'not_allowed';
@@ -18,7 +18,7 @@ export interface OpsCommandResult { outcome: OpsCommandOutcome; code?: OpsComman
 
 export interface OpsCommandActions {
   /** Sends `start`, `stop` or `status` to a registered service; false when no handler is registered. */
-  dispatch(service: string, command: 'start' | 'stop' | 'status'): Promise<boolean>;
+  dispatch(service: string, command: 'start' | 'stop' | 'status', serverName?: string): Promise<boolean>;
   /** The state a service last reported, after a `status` command. */
   statusOf(service: string): OpsObservedStatus | undefined;
   scheduleNames(): readonly string[];
@@ -27,8 +27,10 @@ export interface OpsCommandActions {
   labRunning(): Promise<boolean>;
 }
 
-const START_ALLOWED = new Set(['discord', 'twitter', 'youtube', 'youtube:live_chat', 'notion', 'minecraft']);
-// Stopping discord would take Shannon offline there; starting minebot would start a paid planner.
+const START_ALLOWED = new Set(['discord', 'twitter', 'youtube', 'youtube:live_chat', 'notion', 'minecraft', 'minebot']);
+// Stopping discord would take Shannon offline there. The Minebot body is started with `minebot.start` and a server
+// (owner decision 2026-10-02): it begins using a paid planner, which the console confirms first.
+const MINEBOT_BODY = 'minebot:bot';
 const STOP_ALLOWED = new Set(['twitter', 'youtube', 'youtube:live_chat', 'notion', 'minebot', 'minebot:bot', 'minecraft']);
 const LAB = /^(?:minecraft:)?progressive-lab-/u;
 const MINECRAFT_SERVER = /^minecraft:[A-Za-z0-9][A-Za-z0-9_.-]{0,60}$/u;
@@ -38,7 +40,7 @@ export function opsCommandAllowed(command: OpsCommand): boolean {
   switch (command.type) {
     case 'service.start': return START_ALLOWED.has(command.target);
     case 'service.stop': return STOP_ALLOWED.has(command.target);
-    case 'minecraft.start': case 'minecraft.stop': return MINECRAFT_SERVER.test(command.target);
+    case 'minecraft.start': case 'minecraft.stop': case 'minebot.start': return MINECRAFT_SERVER.test(command.target);
     case 'schedule.run': return command.target.length > 0 && command.target.length <= 80;
     default: return false;
   }
@@ -53,6 +55,7 @@ export async function performOpsCommand(command: OpsCommand, actions: OpsCommand
       await actions.runSchedule(command.target);
       return { outcome: 'done' };
     }
+    if (command.type === 'minebot.start') return await startMinebotBody(command.target, actions);
     const start = command.type.endsWith('.start');
     if (command.type === 'minecraft.start' && await actions.labRunning()) return { outcome: 'refused', code: 'lab_running' };
     if (!(await actions.dispatch(command.target, 'status'))) return { outcome: 'refused', code: 'not_registered' };
@@ -66,6 +69,17 @@ export async function performOpsCommand(command: OpsCommand, actions: OpsCommand
   } catch {
     return { outcome: 'failed', code: 'error' };
   }
+}
+
+/** The body joins one running server. Nothing is started while a paid lab run is in progress. */
+async function startMinebotBody(server: string, actions: OpsCommandActions): Promise<OpsCommandResult> {
+  if (await actions.labRunning()) return { outcome: 'refused', code: 'lab_running' };
+  if (!(await actions.dispatch(server, 'status')) || !(await actions.dispatch(MINEBOT_BODY, 'status'))) return { outcome: 'refused', code: 'not_registered' };
+  if (actions.statusOf(server) !== 'running') return { outcome: 'refused', code: 'already_stopped' };
+  if (actions.statusOf(MINEBOT_BODY) === 'running') return { outcome: 'refused', code: 'already_running' };
+  await actions.dispatch(MINEBOT_BODY, 'start', server.slice('minecraft:'.length));
+  await actions.dispatch(MINEBOT_BODY, 'status');
+  return actions.statusOf(MINEBOT_BODY) === 'running' ? { outcome: 'done' } : { outcome: 'failed', code: 'error' };
 }
 
 export interface OpsCommandPullerConfig { url: string; token: string; timeoutMs: number; performMilliseconds?: number }

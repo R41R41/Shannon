@@ -8,8 +8,8 @@ function actions(initial: Record<string, OpsObservedStatus>, overrides: Partial<
   const state = { ...initial };
   const calls: string[] = [];
   const value: OpsCommandActions = {
-    async dispatch(service, command) {
-      calls.push(`${service}:${command}`);
+    async dispatch(service, command, serverName) {
+      calls.push(`${service}:${command}${serverName ? `@${serverName}` : ''}`);
       if (!(service in state)) return false;
       if (command === 'start') state[service] = 'running';
       if (command === 'stop') state[service] = 'stopped';
@@ -28,7 +28,9 @@ describe('Shannon operations commands', () => {
   it('keeps its own allowlist', () => {
     expect(opsCommandAllowed({ id: '1', type: 'service.stop', target: 'discord' })).toBe(false);
     expect(opsCommandAllowed({ id: '1', type: 'service.start', target: 'discord' })).toBe(true);
-    expect(opsCommandAllowed({ id: '1', type: 'service.start', target: 'minebot' })).toBe(false);
+    expect(opsCommandAllowed({ id: '1', type: 'service.start', target: 'minebot' })).toBe(true);
+    expect(opsCommandAllowed({ id: '1', type: 'minebot.start', target: 'minecraft:1.21.1-play' })).toBe(true);
+    expect(opsCommandAllowed({ id: '1', type: 'minebot.start', target: 'minecraft:progressive-lab-1' })).toBe(false);
     expect(opsCommandAllowed({ id: '1', type: 'service.start', target: 'minebot:bot' })).toBe(false);
     expect(opsCommandAllowed({ id: '1', type: 'service.stop', target: 'minebot:bot' })).toBe(true);
     expect(opsCommandAllowed({ id: '1', type: 'minecraft.start', target: 'minecraft:progressive-lab-1' })).toBe(false);
@@ -58,6 +60,21 @@ describe('Shannon operations commands', () => {
     await expect(performOpsCommand({ id: '2', type: 'minecraft.stop', target: 'minecraft:1.21.1-play' }, running.value)).resolves.toEqual({ outcome: 'done' });
     const free = actions({ 'minecraft:1.21.1-play': 'stopped' });
     await expect(performOpsCommand({ id: '3', type: 'minecraft.start', target: 'minecraft:1.21.1-play' }, free.value)).resolves.toEqual({ outcome: 'done' });
+  });
+
+  it('starts the Minebot body only on a running server, and not during a paid lab run', async () => {
+    const command = { id: '1', type: 'minebot.start' as const, target: 'minecraft:1.21.1-play' };
+    const ready = actions({ 'minecraft:1.21.1-play': 'running', 'minebot:bot': 'stopped' });
+    await expect(performOpsCommand(command, ready.value)).resolves.toEqual({ outcome: 'done' });
+    expect(ready.calls).toEqual(['minecraft:1.21.1-play:status', 'minebot:bot:status', 'minebot:bot:start@1.21.1-play', 'minebot:bot:status']);
+    await expect(performOpsCommand(command, ready.value)).resolves.toEqual({ outcome: 'refused', code: 'already_running' });
+    const stopped = actions({ 'minecraft:1.21.1-play': 'stopped', 'minebot:bot': 'stopped' });
+    await expect(performOpsCommand(command, stopped.value)).resolves.toEqual({ outcome: 'refused', code: 'already_stopped' });
+    const lab = actions({ 'minecraft:1.21.1-play': 'running', 'minebot:bot': 'stopped' }, { labRunning: async () => true });
+    await expect(performOpsCommand(command, lab.value)).resolves.toEqual({ outcome: 'refused', code: 'lab_running' });
+    expect(lab.calls).toEqual([]);
+    const absent = actions({ 'minecraft:1.21.1-play': 'running' });
+    await expect(performOpsCommand(command, absent.value)).resolves.toEqual({ outcome: 'refused', code: 'not_registered' });
   });
 
   it('reports a start that did not take as failed, and an error as failed', async () => {

@@ -14,7 +14,7 @@ const COMMAND_POLL_MILLISECONDS = 10_000;
 // The Minecraft servers this runtime manages (minecraft/client.ts VALID_SERVERS). Lab servers are not among them.
 const MINECRAFT_SERVERS: readonly string[] = ['1.21.4-fabric-youtube', '1.21.4-test', '1.19.0-youtube', '1.21.1-play', '1.21.11-fabric-test'];
 const SERVICES: readonly string[] = [
-  'discord', 'twitter', 'youtube', 'youtube:live_chat', 'minecraft', 'minebot', 'notion',
+  'discord', 'twitter', 'youtube', 'youtube:live_chat', 'minecraft', 'minebot', 'minebot:bot', 'notion',
   ...MINECRAFT_SERVERS.map(server => `minecraft:${server}`),
 ];
 
@@ -56,8 +56,8 @@ export async function startShannonOpsReporter(): Promise<void> {
     const puller = createOpsCommandPuller({
       url: config.shannonCoreBridge.url, token: config.shannonCoreBridge.token, timeoutMs: config.shannonCoreBridge.timeoutMs,
     }, {
-      dispatch: async (service, command) => {
-        const registered = await dispatchServiceCommand(service, command as ServiceCommand, service).then(() => true, () => false);
+      dispatch: async (service, command, serverName) => {
+        const registered = await dispatchServiceCommand(service, command as ServiceCommand, serverName ?? service).then(() => true, () => false);
         return registered && (command !== 'status' || reporter.statusOf(service) !== undefined);
       },
       statusOf: service => reporter.statusOf(service),
