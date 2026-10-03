@@ -8,7 +8,12 @@ vi.mock('../../src/utils/logger.js', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), success: vi.fn() },
 }));
 vi.mock('../../src/services/minebot/config/MinebotConfig.js', () => ({
-  CONFIG: { MAX_TASK_QUEUE_SIZE: 3, MINEBOT_API_PORT: 0, UI_MOD_BASE_URL: 'http://127.0.0.1:1' },
+  CONFIG: {
+    MAX_TASK_QUEUE_SIZE: 3,
+    MINEBOT_API_PORT: 0,
+    UI_MOD_BASE_URL: 'http://127.0.0.1:1',
+    resolveMinecraftName: (name: string) => (name === 'ryo07010' ? 'Rai1241' : name),
+  },
 }));
 
 import {
@@ -22,6 +27,7 @@ import { MinebotHttpServer } from '../../src/services/minebot/http/MinebotHttpSe
 import { MinebotTaskRuntime } from '../../src/services/minebot/runtime/MinebotTaskRuntime.js';
 import { bindMinecraftMemory } from '../../src/services/minebot/runtime/memoryContext.js';
 import { minebotAdapter } from '../../src/services/common/adapters/minebotAdapter.js';
+import { notifyUiModVoiceTranscript } from '../../src/services/minebot/uiMod/uiModChat.js';
 
 const TOKEN = 'm'.repeat(32);
 
@@ -208,5 +214,33 @@ describe('MinebotTaskRuntime.resumeByControl', () => {
     expect(seen[1].text).toContain('続けて');
     expect(seen[1].metadata.marker).toBe('original');
     expect(seen[1].metadata.memoryDisabled).toBe(true);
+  });
+});
+
+describe('notifyUiModVoiceTranscript', () => {
+  it('sends the transcript with the speaker\'s Minecraft name so only they see it', async () => {
+    const fetcher = vi.fn(async () => new Response('{}', { status: 200 }));
+    await notifyUiModVoiceTranscript({ text: ' シャノン、木を集めて ', discordName: 'ryo07010', mode: 'minebot' }, fetcher as unknown as typeof fetch);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    const [url, init] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('http://127.0.0.1:1/voice_transcript');
+    expect(JSON.parse(String(init.body))).toEqual({
+      text: 'シャノン、木を集めて',
+      speaker: 'ryo07010',
+      mcUsername: 'Rai1241',
+      mode: 'minebot',
+    });
+  });
+
+  it('sends nothing for empty words', async () => {
+    const fetcher = vi.fn();
+    await notifyUiModVoiceTranscript({ text: '   ', discordName: 'ryo07010', mode: 'chat' }, fetcher as unknown as typeof fetch);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it('ignores a missing Mod', async () => {
+    const fetcher = vi.fn(async () => { throw new Error('ECONNREFUSED'); });
+    await expect(notifyUiModVoiceTranscript({ text: 'やあ', discordName: 'x', mode: 'chat' }, fetcher as unknown as typeof fetch))
+      .resolves.toBeUndefined();
   });
 });

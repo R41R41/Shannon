@@ -23,3 +23,42 @@ export async function notifyUiModChat(message: string, fetcher: typeof fetch = f
     // The Mod is not running; game chat already carries the message.
   }
 }
+
+export interface UiModVoiceTranscript {
+  /** What speech-to-text heard. */
+  text: string;
+  /** The speaker's Discord name. */
+  discordName: string;
+  /** Where the words went: an order to the bot, or conversation. */
+  mode: 'chat' | 'minebot';
+}
+
+/**
+ * Shows the speaker, in Minecraft, what the bot heard (ShannonUIMod's push-to-talk box).
+ *
+ * The same words are already posted to the Discord channel. The Mod delivers them only to the
+ * online player with the resolved Minecraft name and drops them otherwise, so other players never
+ * see someone else's voice.
+ */
+export async function notifyUiModVoiceTranscript(
+  input: UiModVoiceTranscript,
+  fetcher: typeof fetch = fetch,
+): Promise<void> {
+  const text = input.text.trim();
+  if (!text || !input.discordName) return;
+  try {
+    const response = await fetcher(`${CONFIG.UI_MOD_BASE_URL}/voice_transcript`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json; charset=UTF-8' },
+      body: JSON.stringify({
+        text,
+        speaker: input.discordName,
+        mcUsername: CONFIG.resolveMinecraftName(input.discordName),
+        mode: input.mode,
+      }),
+    });
+    if (!response.ok) log.warn(`UI Mod voice transcript notification failed: ${response.status}`);
+  } catch {
+    // The Mod is not running; Discord already shows the transcript.
+  }
+}

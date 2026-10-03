@@ -18,6 +18,9 @@ ShannonUIMod v2.0.0（状況カード・すぐ話す・指示メニュー・詳�
   - タスク実行中は、実行中のタスクに混ぜずにキューへ入れる。従来は記憶境界の検査で例外になり「エラーが発生しました」と返っていた。
   - 返事待ちのときは、ゲーム内チャットで答えるように案内する。Mod の入力で game-chat のタスクを再開しない。
 - **Mod にも同じ発言を送る**ようにした（`minebot/uiMod/uiModChat.ts`）。対象は、即時の了解、処理エラー、MAX_ITERATIONS の「続けますか？」、指示への応答。どれもゲーム内チャットにも出す言葉なので、Mod に届く情報は増えない。
+- **音声の聞き取り結果**を、話した本人の Minecraft にも出すようにした（`notifyUiModVoiceTranscript`）。`VoiceProcessor` が Discord に聞き取り結果を投稿するときに、Mod の `POST /voice_transcript` へ `{ text, speaker, mcUsername, mode }` を送る。
+  - `mcUsername` は `CONFIG.resolveMinecraftName` で Discord 名から求める。Mod はその名前のオンラインのプレイヤーにだけ届け、いなければ捨てる。ほかのプレイヤーには見えない。
+  - 送る言葉は Discord のチャンネルにすでに出ているものと同じ。Mod が無ければ何もしない。
 - **開発者ログ**を `ShannonExecutor` のツール実行から `/task_logs` へ送るようにした。宛先は `/task` と同じ。FCA 経路の `ToolExecutor` には envelope を渡すようにした。従来は envelope を渡しておらず、ログが一度も送られていなかった。
 
 ## 変えていないもの
@@ -27,7 +30,11 @@ ShannonUIMod v2.0.0（状況カード・すぐ話す・指示メニュー・詳�
 
 ## 検証
 
-- `tests/unit/minebotModBridge.test.ts` に10件を追加した。指示の解析、各指示の動作、HTTP の検証と 202、`resumeByControl` が元の envelope と固定文で再開することを確かめる。
+- `tests/unit/minebotModBridge.test.ts` に13件を追加した（音声の聞き取り結果の3件を含む）。指示の解析、各指示の動作、HTTP の検証と 202、`resumeByControl` が元の envelope と固定文で再開することを確かめる。
 - `tests/unit` 全体はダミーの必須 env で 78 ファイル・1183 件が合格した。env なしでは、OPENAI_API_KEY を import 時に要求する3ファイルが失敗する。これは変更前と同じ。
 - `check:foundation` の型エラー37件と dead-code 検査の結果は、変更前の main と同じ。変更したファイルに型エラーはない。
-- 実 Minecraft・実 Mod での動作は未確認。
+- Mod は実 Minecraft 1.21.11（開発用サーバーとクライアント、mineflayer の I_am_Shannon、ボット本体の代わりの記録用サーバー）で確認した。実際のボット本体との接続は未確認。
+
+## Mod 側で使えるが、ボット本体が送っていないもの
+
+- `/task` の `replyChoices`（文字列の配列）。返事待ちのとき Mod が返事の候補として出す。無ければ Mod は「いいよ・だめ・おまかせ」を出す。

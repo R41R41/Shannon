@@ -35,6 +35,7 @@ import {
   type DiscordNativeEvent,
 } from '../../common/adapters/index.js';
 import { logger } from '../../../utils/logger.js';
+import { notifyUiModVoiceTranscript } from '../../minebot/uiMod/uiModChat.js';
 
 const VOICE_ALLOWED_TOOLS = [
   'google-search', 'fetch-url', 'chat-on-discord',
@@ -191,6 +192,10 @@ export class VoiceProcessor {
         message.guildId,
         `🎤 ${message.userName}: ${transcribedText}`,
       );
+      // And to the speaker in Minecraft, in ShannonUIMod's push-to-talk box.
+      const heard = transcribedText;
+      void this.getVoiceMode(message.guildId).then((mode) =>
+        notifyUiModVoiceTranscript({ text: heard, discordName: message.userName, mode }));
     }
 
     // 2. Filler selection (fast ~300ms with mini)
