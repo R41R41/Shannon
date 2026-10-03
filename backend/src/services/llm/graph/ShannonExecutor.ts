@@ -17,6 +17,7 @@ import type { InstantSkills } from '../../minebot/types/collections.js';
 import type { RoutineManager } from '../../minebot/routines/RoutineManager.js';
 import type { RoutineExecutor } from '../../minebot/routines/RoutineExecutor.js';
 import { sendGameChatLimited } from '../../minebot/utils/sendGameChatLimited.js';
+import { notifyUiModChat } from '../../minebot/uiMod/uiModChat.js';
 import type { MinecraftTaskContinuation } from '../../minebot/runtime/minecraftTaskContinuation.js';
 
 const log = createLogger('LLM:ShannonExecutor');
@@ -451,6 +452,7 @@ export class ShannonExecutor {
 
                 state.onToolStarting?.(toolName, toolInput);
                 log.info(`  ▶ ${toolName}(${JSON.stringify(toolInput).slice(0, 80)})`, 'cyan');
+                this.postToolLogToUiMod(displayGoal, 'tool_call', 'info', toolName, `${toolName} を実行中...`);
 
                 let resultText: string;
 
@@ -586,6 +588,9 @@ export class ShannonExecutor {
                     ? resultText.slice(0, 150) + '...'
                     : resultText;
                 log.info(`  ✓ ${toolName}: ${truncated}`, resultText.includes('失敗') ? 'yellow' : 'green');
+                this.postToolLogToUiMod(displayGoal, 'tool_result',
+                    resultText.startsWith('エラー') || resultText.includes('失敗') ? 'error' : 'success',
+                    toolName, resultText.slice(0, 300));
 
                 const MAX_TOOL_RESULT_CHARS = 2000;
                 const trimmedResult = resultText.length > MAX_TOOL_RESULT_CHARS
@@ -654,6 +659,7 @@ export class ShannonExecutor {
                 try {
                     if (this.deps.bot) {
                         sendGameChatLimited(this.deps.bot, chatMsg, 240);
+                        void notifyUiModChat(chatMsgFull);
                     }
                 } catch (e) {
                     log.warn(`⚠ MAX_ITERATIONS chat notification failed: ${e}`);
@@ -808,6 +814,22 @@ export class ShannonExecutor {
         const firstNewline = tail.indexOf('\n');
         const trimmed = firstNewline >= 0 ? tail.slice(firstNewline + 1) : tail;
         return `${header}\n\n（前半省略）\n${trimmed}`;
+    }
+
+    /** UI Mod の開発者ログ（/task_logs）へ、/task と同じ宛先に1行送る */
+    private postToolLogToUiMod(goal: string, phase: string, level: string, source: string, content: string): void {
+        if (!this.deps.bot) return;
+        const body = JSON.stringify({
+            goal,
+            logs: [{ timestamp: new Date().toISOString(), phase, level, source, content }],
+        });
+        fetch(`${MINEBOT_CONFIG.UI_MOD_BASE_URL}/task_logs`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json; charset=UTF-8' },
+            body,
+        }).catch(() => {
+            // UI Mod 未接続時は黙って無視
+        });
     }
 
     /** UI Mod の /task エンドポイントにタスクツリーを直接送信 */

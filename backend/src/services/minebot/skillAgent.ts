@@ -16,6 +16,8 @@ import AutoFaceSpeaker from './constantSkills/autoFaceSpeaker.js';
 import { EventReactionSystem } from './eventReaction/EventReactionSystem.js';
 import { BotEventHandler } from './events/BotEventHandler.js';
 import { MinebotHttpServer } from './http/MinebotHttpServer.js';
+import { BotCommandService } from './commands/BotCommandService.js';
+import { notifyUiModChat } from './uiMod/uiModChat.js';
 import { MinebotTaskRuntime } from './runtime/MinebotTaskRuntime.js';
 import { SkillLoader } from './skills/SkillLoader.js';
 import { SkillRegistrar, getSkillRegistrar } from './skills/SkillRegistrar.js';
@@ -135,14 +137,31 @@ export class SkillAgent {
       // チャットメッセージコールバックを設定
       this.httpServer.setOnChatMessageCallback(async (sender: string, message: string) => {
         log.info(`💬 Processing chat from ${sender}: ${message}`, 'cyan');
-        // マイクラチャットと同様に処理（環境情報も渡す）
-        await this.processMessage(
-          sender,
-          message,
-          JSON.stringify(this.bot.environmentState),
-          JSON.stringify(this.bot.selfState)
-        );
+        await this.handleModMessage(sender, message);
       });
+
+      // ShannonUIMod の指示メニュー（止まって・ついてきて等）
+      const commands = new BotCommandService(
+        this.taskRuntime,
+        {
+          canSee: (name) => Boolean(this.bot.players[name]?.entity),
+          runSkill: async (name, ...args) => {
+            const skill = this.bot.instantSkills.getSkill(name);
+            if (!skill) return { success: false, result: `${name} not found` };
+            const result = await skill.run(...args);
+            return { success: result.success, result: String(result.result ?? '') };
+          },
+          disableConstantSkill: (name) => {
+            const skill = this.bot.constantSkills.getSkill(name);
+            if (!skill?.status) return false;
+            skill.status = false;
+            return true;
+          },
+          say: (message) => this.say(message),
+        },
+        () => this.sendConstantSkills(),
+      );
+      this.httpServer.setOnBotCommandCallback((command, sender) => commands.run(command, sender));
 
       // HTTPサーバー起動
       this.httpServer.start();
@@ -535,6 +554,117 @@ export class SkillAgent {
   }
 
   /**
+   * Builds the request for one message. Mod and voice input (gameChat=false) are marked
+   * memoryDisabled and kept out of the game-chat history.
+   */
+  private buildRequest(
+    userName: string,
+    message: string,
+    environmentState: string | undefined,
+    selfState: string | undefined,
+    gameChat: boolean,
+  ) {
+    const currentTime = new Date().toLocaleString('ja-JP', {
+      timeZone: 'Asia/Tokyo',
+    });
+    const newMessage = `${currentTime} ${userName}: ${message}`;
+    const requestMessages = this.recentHistory.add(new HumanMessage(newMessage), gameChat);
+
+    const memoryContext = minecraftMemoryContext(this.bot);
+    const envelope = minebotAdapter.toEnvelope({
+      serverId: memoryContext?.serverId,
+      worldId: memoryContext?.worldId,
+      senderName: userName,
+      senderId: userName,
+      message,
+      serverName: this.bot.connectedServerName || 'default',
+      senderPosition: this.bot.environmentState.senderPosition
+        ? {
+            x: this.bot.environmentState.senderPosition.x,
+            y: this.bot.environmentState.senderPosition.y,
+            z: this.bot.environmentState.senderPosition.z,
+          }
+        : undefined,
+      weather: this.bot.environmentState.weather,
+      time: this.bot.environmentState.time,
+      biome: this.bot.environmentState.biome,
+      dimension: memoryContext?.dimension ?? undefined,
+      bossbar: this.bot.environmentState.bossbar ?? undefined,
+      botPosition: this.bot.selfState.botPosition
+        ? {
+            x: this.bot.selfState.botPosition.x,
+            y: this.bot.selfState.botPosition.y,
+            z: this.bot.selfState.botPosition.z,
+          }
+        : undefined,
+      botHealth: Number(this.bot.health ?? 0),
+      botFoodLevel: Number(this.bot.food ?? 0),
+      botExperienceLevel: this.bot.selfState.botExperienceLevel,
+      botTotalExperience: this.bot.selfState.botTotalExperience,
+      botExperienceBarProgress: this.bot.selfState.botExperienceBarProgress,
+      botHeldItem: this.bot.selfState.botHeldItem,
+      lookingAt: this.bot.selfState.lookingAt?.name,
+      inventory: this.bot.selfState.inventory,
+      nearbyEntities: Object.values(this.bot.entities)
+        .filter((entity: any) => entity?.position && entity !== this.bot.entity)
+        .map((entity: any) => entity.username || entity.name || entity.type)
+        .filter(Boolean)
+        .slice(0, 12),
+      activeFurnaces: this.bot.activeFurnaces?.filter(
+        f => Date.now() - f.startedAt < 600_000, // 10分以上前のエントリは除外
+      ),
+      eventType: 'chat',
+    });
+
+    if (environmentState || selfState) {
+      envelope.metadata = {
+        ...(envelope.metadata ?? {}),
+        environmentState,
+        selfState,
+      };
+    }
+    // Physical bot identity does not authorize persisting Mod/Discord voice content to world memory.
+    if (!gameChat) envelope.metadata = { ...envelope.metadata, memoryDisabled: true };
+
+    return { envelope, requestMessages };
+  }
+
+  /**
+   * A message typed in ShannonUIMod. While a task runs it waits in the queue instead of being
+   * mixed into that task; a question the bot asked in game chat is answered in game chat.
+   */
+  private async handleModMessage(sender: string, message: string): Promise<void> {
+    const environmentState = JSON.stringify(this.bot.environmentState);
+    const selfState = JSON.stringify(this.bot.selfState);
+    const list = this.taskRuntime.getTaskListState();
+    const waiting = list.currentRecoveryStatus === 'awaiting_user'
+      || list.tasks.some((task) => task.status === 'awaiting_user');
+    if (this.taskRuntime.isRunning()) {
+      const { envelope, requestMessages } = this.buildRequest(sender, message, environmentState, selfState, false);
+      const queued = this.taskRuntime.addTaskToQueue({
+        envelope,
+        userMessage: message,
+        messages: requestMessages,
+        environmentState,
+        selfState,
+      });
+      this.say(queued.success ? 'いまの作業が終わったらやるね。' : (queued.reason ?? '今は受け付けられないよ。'));
+      return;
+    }
+    if (waiting) {
+      this.say('返事はゲームのチャットで「シャノン、」から送ってね。そのまま続けるなら指示メニューの「続けて」を選んでね。');
+      return;
+    }
+    await this.processMessage(sender, message, environmentState, selfState);
+  }
+
+  /** Says a line in game chat (unless an emergency silences it) and in ShannonUIMod. */
+  private say(message: string): void {
+    if (!this.bot.suppressMinebotGameChat) this.bot.chat(message);
+    void notifyUiModChat(message);
+  }
+
+  /**
    * メッセージを処理
    */
   private async processMessage(
@@ -546,67 +676,7 @@ export class SkillAgent {
     gameChat = false,
   ) {
     try {
-      const currentTime = new Date().toLocaleString('ja-JP', {
-        timeZone: 'Asia/Tokyo',
-      });
-      const newMessage = `${currentTime} ${userName}: ${message}`;
-      const requestMessages = this.recentHistory.add(new HumanMessage(newMessage), gameChat);
-
-      const memoryContext = minecraftMemoryContext(this.bot);
-      const envelope = minebotAdapter.toEnvelope({
-        serverId: memoryContext?.serverId,
-        worldId: memoryContext?.worldId,
-        senderName: userName,
-        senderId: userName,
-        message,
-        serverName: this.bot.connectedServerName || 'default',
-        senderPosition: this.bot.environmentState.senderPosition
-          ? {
-              x: this.bot.environmentState.senderPosition.x,
-              y: this.bot.environmentState.senderPosition.y,
-              z: this.bot.environmentState.senderPosition.z,
-            }
-          : undefined,
-        weather: this.bot.environmentState.weather,
-        time: this.bot.environmentState.time,
-        biome: this.bot.environmentState.biome,
-        dimension: memoryContext?.dimension ?? undefined,
-        bossbar: this.bot.environmentState.bossbar ?? undefined,
-        botPosition: this.bot.selfState.botPosition
-          ? {
-              x: this.bot.selfState.botPosition.x,
-              y: this.bot.selfState.botPosition.y,
-              z: this.bot.selfState.botPosition.z,
-            }
-          : undefined,
-        botHealth: Number(this.bot.health ?? 0),
-        botFoodLevel: Number(this.bot.food ?? 0),
-        botExperienceLevel: this.bot.selfState.botExperienceLevel,
-        botTotalExperience: this.bot.selfState.botTotalExperience,
-        botExperienceBarProgress: this.bot.selfState.botExperienceBarProgress,
-        botHeldItem: this.bot.selfState.botHeldItem,
-        lookingAt: this.bot.selfState.lookingAt?.name,
-        inventory: this.bot.selfState.inventory,
-        nearbyEntities: Object.values(this.bot.entities)
-          .filter((entity: any) => entity?.position && entity !== this.bot.entity)
-          .map((entity: any) => entity.username || entity.name || entity.type)
-          .filter(Boolean)
-          .slice(0, 12),
-        activeFurnaces: this.bot.activeFurnaces?.filter(
-          f => Date.now() - f.startedAt < 600_000, // 10分以上前のエントリは除外
-        ),
-        eventType: 'chat',
-      });
-
-      if (environmentState || selfState) {
-        envelope.metadata = {
-          ...(envelope.metadata ?? {}),
-          environmentState,
-          selfState,
-        };
-      }
-      // Physical bot identity does not authorize persisting Mod/Discord voice content to world memory.
-      if (!gameChat) envelope.metadata = { ...envelope.metadata, memoryDisabled: true };
+      const { envelope, requestMessages } = this.buildRequest(userName, message, environmentState, selfState, gameChat);
 
       let immediateAckSent = false;
 
@@ -620,7 +690,7 @@ export class SkillAgent {
           const ack = this.buildImmediateToolAck(toolName, args);
           if (!ack) return;
           immediateAckSent = true;
-          this.bot.chat(ack);
+          this.say(ack);
         },
       }) : null;
       if (resumed) {
@@ -638,7 +708,7 @@ export class SkillAgent {
           const ack = this.buildImmediateToolAck(toolName, args);
           if (!ack) return;
           immediateAckSent = true;
-          this.bot.chat(ack);
+          this.say(ack);
         },
       });
 
@@ -654,7 +724,7 @@ export class SkillAgent {
     } catch (error) {
       const llmError = new LLMError('message-processing', error as Error);
       log.error(`Message processing failed: ${llmError.message}`, error);
-      this.bot.chat('エラーが発生しました。もう一度お試しください。');
+      this.say('エラーが発生しました。もう一度お試しください。');
     }
   }
 

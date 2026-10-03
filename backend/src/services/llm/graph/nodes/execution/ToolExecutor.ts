@@ -179,6 +179,7 @@ export class ToolExecutor {
                 void this.taskTreePublisher.postDetailedLogToMinebotUi(
                     execCtx.goal, 'tool_call', 'info', toolCall.name, `${toolCall.name} を実行中...`,
                     { toolName: toolCall.name, parameters: toolCall.args },
+                    execCtx.envelope,
                 );
             }
             const invoke = tool.invoke.bind(tool) as (
@@ -197,6 +198,7 @@ export class ToolExecutor {
                     execCtx.goal, 'tool_result', isError ? 'error' : 'success', toolCall.name,
                     resultStr.substring(0, 300),
                     { toolName: toolCall.name, parameters: toolCall.args, duration, result: resultStr.substring(0, 200) },
+                    execCtx.envelope,
                 );
             }
             if (step) {

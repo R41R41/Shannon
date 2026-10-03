@@ -56,6 +56,9 @@ export class MinebotTaskRuntime {
     savedMessages?: unknown[];
     /** LLM管理型タスクツリーのノード（再開に使用） */
     savedTaskNodes?: unknown[];
+    /** The request that started this task. A control resume reuses it, so no new content changes its audience. */
+    sourceEnvelope?: RequestEnvelope;
+    sourceMessages?: BaseMessage[];
   } | null = null;
 
   constructor(bot: CustomBot) {
@@ -102,6 +105,8 @@ export class MinebotTaskRuntime {
     const taskId = partialState.taskId ?? crypto.randomUUID();
     const createdAt = Date.now();
     let requestMemoryKey: string | null = null;
+    let sourceEnvelope: RequestEnvelope | undefined;
+    let sourceMessages: BaseMessage[] | undefined;
     let removeContextListeners = () => {};
     this.currentState = {
       taskId,
@@ -124,6 +129,10 @@ export class MinebotTaskRuntime {
       const envelope = this.taskInputToEnvelope(partialState);
       requestMemoryKey = envelope.metadata?.memoryDisabled === true ? null : minecraftContextKey(envelope.minecraft);
       this.currentState.memoryContextKey = requestMemoryKey;
+      sourceEnvelope = { ...envelope, tags: [...envelope.tags], metadata: { ...envelope.metadata } };
+      sourceMessages = [...(partialState.messages ?? [])];
+      this.currentState.sourceEnvelope = sourceEnvelope;
+      this.currentState.sourceMessages = sourceMessages;
       // A dimension transition/disconnect invalidates the physical context of this execution.
       const controller = this.abortController;
       const onDisconnect = () => controller?.abort();
@@ -188,6 +197,8 @@ export class MinebotTaskRuntime {
         createdAt,
         forceStop: this.currentState?.forceStop ?? false,
         retryBudget: this.currentState?.retryBudget ?? 2,
+        sourceEnvelope,
+        sourceMessages,
         recoveryStatus: this.deriveRecoveryStatus(graphResult),
         taskTree,
         graphResult,
@@ -208,6 +219,8 @@ export class MinebotTaskRuntime {
           createdAt,
           forceStop: true,
           retryBudget: this.currentState?.retryBudget ?? 2,
+          sourceEnvelope,
+          sourceMessages,
           recoveryStatus: 'idle',
           taskTree: this.currentState?.taskTree ?? {
             status: 'in_progress',
@@ -227,6 +240,8 @@ export class MinebotTaskRuntime {
         createdAt,
         forceStop: this.currentState?.forceStop ?? false,
         retryBudget: this.currentState?.retryBudget ?? 2,
+        sourceEnvelope,
+        sourceMessages,
         recoveryStatus: 'failed_terminal',
         taskTree: {
           status: 'error',
@@ -359,6 +374,64 @@ export class MinebotTaskRuntime {
       taskTree: this.currentState.taskTree ?? null,
       onToolStarting: overrides.onToolStarting,
     });
+  }
+
+  /**
+   * Resumes the task that waits for the player, or retries the one that just failed, as if the
+   * player had said "続けて". Unlike {@link resumeAwaitingUserTask} no new text is taken: the task's
+   * own envelope is reused, so a control from a UI cannot change the audience of its memory.
+   */
+  public async resumeByControl(): Promise<{ success: boolean; reason?: string }> {
+    const feedback = '続けて';
+    if (this.isExecuting) return { success: false, reason: 'TASK_RUNNING' };
+    const awaitingTask = this.taskQueue.find((task) => task.status === 'awaiting_user');
+    if (awaitingTask) {
+      const previous = awaitingTask.state.envelope;
+      if (!previous) return { success: false, reason: 'NO_SOURCE_REQUEST' };
+      try {
+        validateMinecraftEnvelope(previous, this.bot);
+      } catch {
+        return { success: false, reason: 'MINECRAFT_MEMORY_CONTEXT_CHANGED' };
+      }
+      const goal = awaitingTask.taskTree?.goal || awaitingTask.state.userMessage || 'Task';
+      const prompt = this.buildContinuationPrompt(goal, feedback);
+      awaitingTask.status = 'pending';
+      awaitingTask.state = {
+        ...awaitingTask.state,
+        taskId: awaitingTask.id,
+        envelope: { ...previous, text: prompt },
+        userMessage: prompt,
+        humanFeedback: feedback,
+        taskTree: awaitingTask.taskTree ?? awaitingTask.state.taskTree ?? null,
+      };
+      this.notifyTaskListUpdate();
+      if (!this.isEmergencyMode) void this.executeNextTask();
+      return { success: true };
+    }
+
+    const state = this.currentState;
+    const resumable = state?.recoveryStatus === 'awaiting_user' || state?.recoveryStatus === 'failed_terminal';
+    if (!state || !resumable || !state.sourceEnvelope) return { success: false, reason: 'NO_WAITING_TASK' };
+    try {
+      validateMinecraftEnvelope(state.sourceEnvelope, this.bot);
+    } catch {
+      return { success: false, reason: 'MINECRAFT_MEMORY_CONTEXT_CHANGED' };
+    }
+    const goal = state.taskTree?.goal || 'Task';
+    const prompt = this.buildContinuationPrompt(goal, feedback);
+    const metadata: Record<string, unknown> = { ...((state.sourceEnvelope as any).metadata ?? {}) };
+    if (state.savedMessages && state.savedMessages.length > 0) metadata.previousMessages = state.savedMessages;
+    if (state.savedTaskNodes && state.savedTaskNodes.length > 0) metadata.previousTaskNodes = state.savedTaskNodes;
+    const envelope = { ...state.sourceEnvelope, text: prompt, metadata } as RequestEnvelope;
+    void this.invoke({
+      taskId: state.taskId,
+      envelope,
+      userMessage: prompt,
+      messages: state.sourceMessages ?? [],
+      humanFeedback: feedback,
+      taskTree: state.taskTree ?? null,
+    }).catch((error) => log.error('Control resume failed', error));
+    return { success: true };
   }
 
   public isRunning(): boolean {

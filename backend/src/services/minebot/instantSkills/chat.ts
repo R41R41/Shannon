@@ -1,4 +1,5 @@
 import { CONFIG } from '../config/MinebotConfig.js';
+import { notifyUiModChat } from '../uiMod/uiModChat.js';
 import { CustomBot, InstantSkill } from '../types.js';
 import { createLogger } from '../../../utils/logger.js';
 import { SkillParam } from '../types/skillParams.js';
@@ -34,7 +35,7 @@ class Chat extends InstantSkill {
         }
 
         if (this.bot.suppressMinebotGameChat) {
-            await this.notifyUIMod(message).catch((err) => {
+            await notifyUiModChat(message).catch((err) => {
                 log.error('Failed to notify UI Mod', err);
             });
             return {
@@ -74,7 +75,7 @@ class Chat extends InstantSkill {
             log.info(`💬 チャット送信: ${sent}`, 'magenta');
         }
 
-        this.notifyUIMod(message).catch(err => {
+        notifyUiModChat(message).catch(err => {
             log.error('Failed to notify UI Mod', err);
         });
 
@@ -84,24 +85,6 @@ class Chat extends InstantSkill {
         return { success: true, result: detail };
     }
 
-    /**
-     * UI Modのチャットタブにボットのメッセージを通知
-     */
-    private async notifyUIMod(message: string): Promise<void> {
-        try {
-            const response = await fetch(`${CONFIG.UI_MOD_BASE_URL}/bot_chat`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ message }),
-            });
-
-            if (!response.ok) {
-                log.warn(`UI Mod notification failed: ${response.status}`);
-            }
-        } catch (error) {
-            // UI Modが起動していない場合など、エラーは無視
-        }
-    }
 }
 
 export default Chat;

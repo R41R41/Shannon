@@ -1,3 +1,7 @@
+## ShannonUIMod v2 接続（2026-10-03）の注意
+
+`docs/minebot-ui-mod-bridge.md`。Modの指示メニューは`POST /bot_command`の固定操作だけで、自由文・LLM・記憶書込みを伴わない。再開は`resumeByControl`でタスク自身のenvelopeを使い、Mod入力でgame-chatタスクを再開・継続しない。Mod/音声の`memoryDisabled`とUI宛先検査は変えていない。`/chat_message`は受理時に202を返し、実行中はキューへ入れる。Modへの`/bot_chat`はゲーム内チャットにも出す言葉だけ。実Minecraft・実Modでの確認とprod反映は未実施。
+
 ## RF-04 / 共有FCA核（2026-08-29）の注意
 
 `docs/refactor-fca-kernel.md`。Radar digest・LINE会話・Discord会話は`modules/fca`の同じループを使う。送信・記憶・ツールはrunの注入。本体graphやEventBusをLINEに繋がない。稼働中LINE bundleへの差し替えは別工程。

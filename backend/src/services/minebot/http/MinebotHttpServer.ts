@@ -8,6 +8,7 @@ import { DEFAULT_HOSTILE_DETECTION } from '../eventReaction/types.js';
 const log = createLogger('Minebot:HTTP');
 import { EventReactionSystem } from '../eventReaction/EventReactionSystem.js';
 import type { MinebotTaskRuntime } from '../runtime/MinebotTaskRuntime.js';
+import { isPlayerName, parseBotCommand, type BotCommand, type CommandResult } from '../commands/BotCommandService.js';
 import { SkillLoader } from '../skills/SkillLoader.js';
 import { CustomBot } from '../types.js';
 import {
@@ -47,6 +48,7 @@ export class MinebotHttpServer {
     private sendConstantSkillsCallback: () => Promise<void>;
     private sendReactionSettingsCallback: () => Promise<void>;
     private onChatMessageCallback: ((sender: string, message: string) => Promise<void>) | null = null;
+    private onBotCommandCallback: ((command: BotCommand, sender: string) => Promise<CommandResult>) | null = null;
     private eventReactionSystem: EventReactionSystem | null = null;
     private taskRuntime: MinebotTaskRuntime | null = null;
 
@@ -69,6 +71,11 @@ export class MinebotHttpServer {
      */
     setOnChatMessageCallback(callback: (sender: string, message: string) => Promise<void>): void {
         this.onChatMessageCallback = callback;
+    }
+
+    /** Handles the Mod's quick orders; see BotCommandService. */
+    setOnBotCommandCallback(callback: (command: BotCommand, sender: string) => Promise<CommandResult>): void {
+        this.onBotCommandCallback = callback;
     }
 
     /**
@@ -315,27 +322,40 @@ export class MinebotHttpServer {
         });
 
         // チャットメッセージエンドポイント
-        this.app.post('/chat_message', async (req: any, res: any) => {
+        // Answers at once: the bot works on the message for as long as the task takes, and its
+        // replies reach the Mod through /bot_chat. Holding the request open would stall the caller.
+        this.app.post('/chat_message', (req: any, res: any) => {
+            const { sender, message } = (req.body ?? {}) as Partial<ChatMessageRequest>;
+            if (!isPlayerName(sender) || typeof message !== 'string' || !message.trim() || message.length > 256) {
+                return res.status(400).json({ success: false, result: 'sender and message are required' });
+            }
+            if (!this.onChatMessageCallback) {
+                return res.status(503).json({ success: false, result: 'Chat callback not set' });
+            }
+            log.info(`💬 Chat from ${sender}: ${message}`);
+            res.status(202).json({ success: true, result: 'Message accepted' } satisfies ApiResponse);
+            this.onChatMessageCallback(sender, message.trim()).catch((error) => {
+                log.error('/chat_message processing failed', new HttpServerError('/chat_message', 500, error as Error));
+            });
+        });
+
+        // Quick orders from the Mod's command switcher: fixed actions, no free text, no LLM.
+        this.app.post('/bot_command', async (req: any, res: any) => {
+            const { command, sender } = (req.body ?? {}) as { command?: unknown; sender?: unknown };
+            const parsed = parseBotCommand(command);
+            if (!parsed || !isPlayerName(sender)) {
+                return res.status(400).json({ success: false, result: 'command and sender are required' });
+            }
+            if (!this.onBotCommandCallback) {
+                return res.status(503).json({ success: false, result: 'Command handler not set' });
+            }
             try {
-                const { sender, message } = req.body as ChatMessageRequest;
-                log.info(`💬 Chat from ${sender}: ${message}`);
-
-                if (this.onChatMessageCallback) {
-                    await this.onChatMessageCallback(sender, message);
-                }
-
-                const response: ApiResponse = {
-                    success: true,
-                    result: 'Message received'
-                };
-                res.status(200).json(response);
+                log.info(`🎮 Command ${parsed} from ${sender}`);
+                res.status(200).json(await this.onBotCommandCallback(parsed, sender));
             } catch (error) {
-                const httpError = new HttpServerError('/chat_message', 500, error as Error);
-                log.error('/chat_message エラー', httpError);
-                res.status(500).json({
-                    success: false,
-                    result: httpError.message,
-                });
+                const httpError = new HttpServerError('/bot_command', 500, error as Error);
+                log.error('/bot_command エラー', httpError);
+                res.status(500).json({ success: false, result: httpError.message });
             }
         });
 
@@ -402,23 +422,16 @@ export class MinebotHttpServer {
         });
 
         // タスク続行エンドポイント（ShannonUI Mod の「続行」ボタンから）
-        this.app.post('/task_continue', async (req: any, res: any) => {
+        // A control, not a message: the waiting task resumes with its own request, so no text from
+        // the Mod enters a game-chat task's memory.
+        this.app.post('/task_continue', async (_req: any, res: any) => {
             try {
-                const { taskId } = req.body;
-                log.info(`▶ /task_continue: taskId=${taskId ?? '(current)'}`);
-
                 if (!this.taskRuntime) {
                     return res.status(400).json({ success: false, result: 'Task runtime not initialized' });
                 }
-
-                if (this.onChatMessageCallback) {
-                    await this.onChatMessageCallback('system', '続けて');
-                } else {
-                    return res.status(400).json({ success: false, result: 'Chat callback not set' });
-                }
-
-                const response: ApiResponse = { success: true, result: 'Task continuation triggered' };
-                res.status(200).json(response);
+                const result = await this.taskRuntime.resumeByControl();
+                log.info(`▶ /task_continue: ${result.success ? 'resumed' : result.reason}`);
+                res.status(200).json({ success: result.success, result: result.success ? 'Task resumed' : result.reason });
             } catch (error) {
                 const httpError = new HttpServerError('/task_continue', 500, error as Error);
                 log.error('/task_continue エラー', httpError);
