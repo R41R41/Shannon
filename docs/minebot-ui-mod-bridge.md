@@ -21,6 +21,11 @@ ShannonUIMod v2.0.0（状況カード・すぐ話す・指示メニュー・詳�
 - **音声の聞き取り結果**を、話した本人の Minecraft にも出すようにした（`notifyUiModVoiceTranscript`）。`VoiceProcessor` が Discord に聞き取り結果を投稿するときに、Mod の `POST /voice_transcript` へ `{ text, speaker, mcUsername, mode }` を送る。
   - `mcUsername` は `CONFIG.resolveMinecraftName` で Discord 名から求める。Mod はその名前のオンラインのプレイヤーにだけ届け、いなければ捨てる。ほかのプレイヤーには見えない。
   - 送る言葉は Discord のチャンネルにすでに出ているものと同じ。Mod が無ければ何もしない。
+- **返事の候補**を、返事待ちの `/task` に `replyChoices`（文字列2〜4個）として付けるようにした（`minebot/uiMod/replyChoices.ts`）。
+  - いまの Minecraft で返事待ちになるのは `ShannonExecutor` の MAX_ITERATIONS（「…続けますか？」）だけで、そこで作る。
+  - 質問文・目標・進捗だけを Haiku に渡し、プレイヤーが言う短い返事を作らせる。記憶には書かず、ゲーム内チャットに出ている情報しか使わない。
+  - 4秒で返らない、失敗する、2個に満たない、長すぎるなどのときは「続けて」「やめて」に戻す。返事待ちの流れは止めない。
+  - Mod は候補を押すと「シャノン、<候補>」をゲーム内チャットに送る。答えの扱いは、手で打った返事と同じ。
 - **開発者ログ**を `ShannonExecutor` のツール実行から `/task_logs` へ送るようにした。宛先は `/task` と同じ。FCA 経路の `ToolExecutor` には envelope を渡すようにした。従来は envelope を渡しておらず、ログが一度も送られていなかった。
 
 ## 変えていないもの
@@ -30,11 +35,8 @@ ShannonUIMod v2.0.0（状況カード・すぐ話す・指示メニュー・詳�
 
 ## 検証
 
-- `tests/unit/minebotModBridge.test.ts` に13件を追加した（音声の聞き取り結果の3件を含む）。指示の解析、各指示の動作、HTTP の検証と 202、`resumeByControl` が元の envelope と固定文で再開することを確かめる。
+- `tests/unit/minebotModBridge.test.ts` に13件を追加した（音声の聞き取り結果の3件を含む）。
+- `tests/unit/minebotReplyChoices.test.ts` に6件を追加した。出力の取り出しと整え方、モデルへ渡す内容、失敗・不正な出力・タイムアウトで決まった候補に戻ることを確かめる。指示の解析、各指示の動作、HTTP の検証と 202、`resumeByControl` が元の envelope と固定文で再開することを確かめる。
 - `tests/unit` 全体はダミーの必須 env で 78 ファイル・1183 件が合格した。env なしでは、OPENAI_API_KEY を import 時に要求する3ファイルが失敗する。これは変更前と同じ。
 - `check:foundation` の型エラー37件と dead-code 検査の結果は、変更前の main と同じ。変更したファイルに型エラーはない。
 - Mod は実 Minecraft 1.21.11（開発用サーバーとクライアント、mineflayer の I_am_Shannon、ボット本体の代わりの記録用サーバー）で確認した。実際のボット本体との接続は未確認。
-
-## Mod 側で使えるが、ボット本体が送っていないもの
-
-- `/task` の `replyChoices`（文字列の配列）。返事待ちのとき Mod が返事の候補として出す。無ければ Mod は「いいよ・だめ・おまかせ」を出す。

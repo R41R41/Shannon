@@ -18,6 +18,7 @@ import type { RoutineManager } from '../../minebot/routines/RoutineManager.js';
 import type { RoutineExecutor } from '../../minebot/routines/RoutineExecutor.js';
 import { sendGameChatLimited } from '../../minebot/utils/sendGameChatLimited.js';
 import { notifyUiModChat } from '../../minebot/uiMod/uiModChat.js';
+import { suggestReplyChoices } from '../../minebot/uiMod/replyChoices.js';
 import type { MinecraftTaskContinuation } from '../../minebot/runtime/minecraftTaskContinuation.js';
 
 const log = createLogger('LLM:ShannonExecutor');
@@ -668,11 +669,20 @@ export class ShannonExecutor {
                 resultRecoveryStatus = 'awaiting_user';
                 resultMessages = messages;
 
+                // ShannonUIMod が出す返事の候補。Minecraft のときだけ、質問と同じ情報から作る
+                const replyChoices = this.deps.bot
+                    ? await suggestReplyChoices(
+                        { question: chatMsgFull, goal: displayGoal, progress: treeProgress },
+                        (system, user) => this.askHaiku(system, user),
+                    )
+                    : undefined;
+
                 taskTree = {
                     goal: displayGoal,
                     strategy: `${MAX_ITERATIONS}ターン到達 — ユーザーの続行確認待ち`,
                     status: 'in_progress',
                     recoveryStatus: 'awaiting_user',
+                    replyChoices,
                     hierarchicalSubTasks: taskNodes.length > 0 ? taskNodesToHierarchicalSubTasks(taskNodes) : [],
                 } as TaskTreeState;
                 state.onTaskTreeUpdate?.(taskTree);
@@ -830,6 +840,21 @@ export class ShannonExecutor {
         }).catch(() => {
             // UI Mod 未接続時は黙って無視
         });
+    }
+
+    /** 軽いモデルに短い問い合わせをして、テキストだけを返す */
+    private async askHaiku(system: string, user: string): Promise<string> {
+        const response = await this.client.messages.create({
+            model: MODEL_HAIKU,
+            max_tokens: 150,
+            system,
+            messages: [{ role: 'user', content: user }],
+        });
+        return response.content
+            .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+            .map(b => b.text)
+            .join('')
+            .trim();
     }
 
     /** UI Mod の /task エンドポイントにタスクツリーを直接送信 */

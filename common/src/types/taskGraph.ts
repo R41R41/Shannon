@@ -48,6 +48,8 @@ export interface TaskTreeState {
   lastFailureType?: string | null;
   recoveryAttempts?: number | null;
   retryBudget?: number | null;
+  /** 返事待ち（awaiting_user）のとき、プレイヤーがそのまま返せる短い返事の候補。ShannonUIMod が表示する */
+  replyChoices?: string[] | null;
 
   // === 表示用: タスクの全体像 ===
   hierarchicalSubTasks?: HierarchicalSubTask[] | null;

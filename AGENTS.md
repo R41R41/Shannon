@@ -1,6 +1,6 @@
 ## ShannonUIMod v2 接続（2026-10-03）の注意
 
-`docs/minebot-ui-mod-bridge.md`。Modの指示メニューは`POST /bot_command`の固定操作だけで、自由文・LLM・記憶書込みを伴わない。再開は`resumeByControl`でタスク自身のenvelopeを使い、Mod入力でgame-chatタスクを再開・継続しない。Mod/音声の`memoryDisabled`とUI宛先検査は変えていない。`/chat_message`は受理時に202を返し、実行中はキューへ入れる。Modへの`/bot_chat`はゲーム内チャットにも出す言葉だけ。音声の聞き取り結果は`/voice_transcript`へ`mcUsername`付きで送り、Modは本人にだけ届ける（Discordに出ている言葉と同じ）。Modは実Minecraftで確認済み、実ボット本体との接続とprod反映は未実施。
+`docs/minebot-ui-mod-bridge.md`。Modの指示メニューは`POST /bot_command`の固定操作だけで、自由文・LLM・記憶書込みを伴わない。再開は`resumeByControl`でタスク自身のenvelopeを使い、Mod入力でgame-chatタスクを再開・継続しない。Mod/音声の`memoryDisabled`とUI宛先検査は変えていない。`/chat_message`は受理時に202を返し、実行中はキューへ入れる。Modへの`/bot_chat`はゲーム内チャットにも出す言葉だけ。音声の聞き取り結果は`/voice_transcript`へ`mcUsername`付きで送り、Modは本人にだけ届ける（Discordに出ている言葉と同じ）。返事待ちの`/task`には`replyChoices`をHaikuで付ける（質問・目標・進捗だけを使い記憶に書かない、失敗時は「続けて」「やめて」）。Modは実Minecraftで確認済み、実ボット本体との接続とprod反映は未実施。
 
 ## RF-04 / 共有FCA核（2026-08-29）の注意
 
