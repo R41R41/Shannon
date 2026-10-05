@@ -8,6 +8,8 @@ Minecraft でのシャノンの動作を検証するための包括的なテス�
 
 - **default / chain / goal** モードの違い、夜間バッチとの関係 → [architecture-current.md §5–6](./architecture-current.md#5-json-自己テストselftestrunner)
 - マイクラ内チャットからの起動（`..test` 等）→ `selfTestIntent.ts`
+- サーバーコマンドを真実源にした自動判定、隔離サーバー、実画面確認 → [Minecraft Shannon test lab](./minecraft-test-lab.md)
+- 条件を段階的に厳しくする複合実ゲーム試験 → [Minecraft progressive evaluation](./minecraft-progressive-evaluation.md)
 
 以下は **人手での確認観点**（チェックリスト）です。
 

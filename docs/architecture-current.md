@@ -1,10 +1,14 @@
 # Shannon 現状アーキテクチャ
 
-> **最終更新: 2026-08-29**
-> 作業先: Azure VM `/home/azureuser/Shannon-dev`（`codex/shannon-foundation`）
-> 本番 `/home/azureuser/Shannon-prod` は開発中読み取りのみ。この文書は **いま動いているコードの地図** であり、2026-04 の「FCA置換済み」記述は誤りだった。
+> **最終更新: 2026-09-30**
+> 作業先: Azure VM `/home/azureuser/Shannon-dev`（main）
+> Minebot本番反映は2026-09-30に明示承認。稼働実体は`Shannon-current`配下で、`Shannon-prod` checkout HEADとは異なる。切替の実績・検証境界は[Minebot本番リリース](./minecraft-production-release.md)。2026-04の「FCA置換済み」記述は誤りだった。
 
-関連: [FCA核](./refactor-fca-kernel.md) · [記憶scope](./refactor-memory-scope.md) · [人物記憶](./refactor-person-memory.md) · [LINE](./line-integration.md) · [Radar](./shannon-radar.md) · [開発手順](./development-workflow.md)
+関連: [FCA核](./refactor-fca-kernel.md) · [Minecraft適応認知](./minecraft-adaptive-cognition.md) · [記憶scope](./refactor-memory-scope.md) · [人物記憶](./refactor-person-memory.md) · [LINE](./line-integration.md) · [Radar](./shannon-radar.md) · [開発手順](./development-workflow.md)
+
+Minecraft実行層の2026-09-29拡張: [実行効率と途中評価](./minecraft-execution-efficiency.md)。原子的スキルはbot別の資源lease・不変abort signal・実行中進捗を共有し、System 2のスキル実行中にも独立したCriticが観測できる。物理中断は独立のdefault-off設定。精錬待ちは外部ジョブとして公開し、収集は対象を限定したイベント駆動確認へ変更。反映状況は本番リリース文書を正とする。
+
+同日の追加改善: [観測・自己評価・完了証明・身体所有権](./minecraft-architecture-improvements.md)。native観測とJevの判断ごとの分布を接続し、Constant/Combat/緊急経路のleaseを統一。固定GoalContractのnative検証と依存・証拠付きGoalGraphを追加した。限定direct reflexは実装済みだが、本番のcognition/supervisionはshadow。2026-09-30にOpenAI Responses planner bridge・永続予算・node ID墓標・未停止検知を追加した。
 
 ---
 
@@ -14,7 +18,7 @@ Shannon は **複数の実行核と複数のプロセス** を持つエージェ
 
 | プロセス | 役割 | 起動 |
 |---|---|---|
-| 本体 backend（Discord / Minecraft / Web / X） | Shannon Graph。dev は `.dev-runtime-lock` で停止 | ロック中は起動しない |
+| 本体 backend（Discord / Minecraft / Web / X） | Shannon Graph。dev起動には運用上の許可が必要 | 本作業では起動しない。2026-09-29確認で `.dev-runtime-lock` は不在だが、起動許可とは解釈しない |
 | LINE 専用サービス | Webhook・1対1会話・個人Radar配信。本体グラフを起動しない | `shannon-line.service`（prod）。dev は permit 付き |
 | フロント Vite | 管理console。public chat は停止 | 本体とは別 |
 
@@ -25,7 +29,7 @@ Shannon は **複数の実行核と複数のプロセス** を持つエージェ
    Radar digest / LINE chat / Discord FunctionCallingSession / 定期投稿の探索
 
 ② ShannonExecutor（Minecraft 主パス）
-   Anthropic SDK 直接。失敗時だけ ① の Discord FCA へ落ちる
+   Anthropic SDK または OpenAI Responses adapter。同じMinecraft専用制御契約を使う
 
 ③ 独自ループ（核の外）
    CodeAgentLoop（ステイ）/ 一部 scheduler の配信（X投稿・画像生成）
@@ -43,7 +47,7 @@ Channel Adapter → RequestEnvelope
 Shannon Graph: ingest → execute → writeback
     ↓
 execute:
-  Minecraft かつ Anthropic key あり かつ SHANNON_USE_FCA≠true
+  Minecraft かつ選択したplanner providerのkeyあり かつ SHANNON_USE_FCA≠true
     → ShannonExecutor（InstantSkills / Routines / prompt cache）
     → 例外時のみ FunctionCallingAgent（= 共有核 + LangChain ツール袋）
   それ以外（Discord / Web 等）
@@ -51,6 +55,10 @@ execute:
 ```
 
 感情・メタ認知の3並列（`EmotionNode` / `EmotionLoop` / `MetaCognitionLoop` / `ParallelExecutor`）と `ClassifyNode` / `SubTaskPlannerNode` / `SubTaskExecutor` は削除済み。`EmotionType` も画面・音声・共有型から消えた。Discord 音声の感情は Voicepeak 自身の `analyzeEmotionForTTS` で、Plutchik とは別系統。`CognitiveBlackboard` / `MemoryAgent` / 空の `MemoryNode` も削除した。記憶ツールは `recall-memory` / `save-memory` / `save-person-memory` に統合し、旧 `save-experience` 等5ツールは廃止。記憶の実行経路は `MemoryPort`（`bindRequestMemory`）と `ScopedMemoryService`。X/YouTube 投稿エージェントは不完全な TaskContext では記憶しない。未参照のコードは [削除ゲート](./deletion-gate.md) が止める。
+
+2026-09-27に、旧Blackboardをそのまま復活させず、Minecraftだけにrun-scopedな `TaskWorkspace` を追加した。InstantSkill/ Routineの前後を `WorldFrame`、結果を `ActionReceipt` として保存し、高速System 1（Jev、またはJev利用開始までのGPT-5.6 Luna）が `ReflexPolicy` と `ExecutionCritic` の型付き制御候補を返す。既定は `MINECRAFT_COGNITION_MODE=off`、providerは`auto`（Jev→OpenAI→local fallback）。`shadow` は記録のみ、`feedback` でも新鮮かつ高信頼の結果をSystem 2へ観測として返すだけで、高速モデルはbotを直接操作しない。詳細は [Minecraft適応認知](./minecraft-adaptive-cognition.md)。同日に `SelfTestRunner` へMinecraftコマンドOracleを追加し、所持数・体力・満腹度・位置・ブロック・周辺entity・次元・ゲームモードをサーバー側の事後条件として判定できるようにした。隔離E2E手順は [Minecraft Shannon test lab](./minecraft-test-lab.md)。
+
+上の2026-09-27段落は導入時の境界。現行の限定direct reflexとnative完了証明は2026-09-29追加改善を参照する。
 
 LINE と Radar はこのグラフに入らない。独立 HTTP runtime。
 
@@ -60,7 +68,7 @@ LINE と Radar はこのグラフに入らない。独立 HTTP runtime。
 
 ### どこで使われるか
 
-`ShannonExecutor` の呼び出し元は実質 `shannonGraph.ts` の execute ノードだけ。Minecraft かつ Anthropic キーがあるとき。`MinebotTaskRuntime` はフィードバック注入と bot 参照渡し、`SubAgentRoutineExecutor` は Executor のツール変換を再利用する。Discord / LINE / Radar / 投稿エージェントは Executor を使わない。
+`ShannonExecutor` の呼び出し元は実質 `shannonGraph.ts` の execute ノードだけ。Minecraftかつ選択したproviderのキーがあるとき。`MINECRAFT_PLANNER_PROVIDER=auto`はAnthropic keyがあればAnthropic、なければOpenAI。明示指定は尊重する。本番は`openai`/`gpt-5.6-luna`を選択する。`MinebotTaskRuntime` はフィードバック注入と bot 参照渡し、`SubAgentRoutineExecutor` は Executor のツール変換を再利用する。Discord / LINE / Radar / 投稿エージェントは Executor を使わない。
 
 ### どちらが高性能か
 
@@ -69,7 +77,7 @@ LINE と Radar はこのグラフに入らない。独立 HTTP runtime。
 | | ShannonExecutor | modules/fca |
 |---|---|---|
 | 目的 | Minecraft 長時間タスク | 会話・選択・短いツールループ |
-| モデル | Anthropic 直接（Sonnet / Haiku、prompt cache） | 注入された model（LINE/Radar は OpenAI 系、Discord は OpenAI または LangChain Anthropic） |
+| モデル | Anthropic（prompt cache）またはOpenAI Responses（GPT-5.6 Luna、store=false） | 注入された model（LINE/Radar は OpenAI 系、Discord は OpenAI または LangChain Anthropic） |
 | 強み | 50K 級ツール定義の cache、InstantSkill 直実行、緊急 Abort、タスクツリー | 短いループ、fail-closed な未登録ツール、catalog 差し替え、送信/記憶を核に持たない |
 | 弱み | プロセス静的な前回タスク要約、Minecraft 専用 | Minecraft の 70 スキル袋・生存ポリシー・prompt cache を持たない |
 | 失敗時 | FCA へフォールバック（Discord 用ツール袋が載る） | 呼び出し側が扱う |
@@ -224,7 +232,7 @@ Discord の旧 `FunctionCallingAgentState` 1袋は解消。Minecraft Executor �
 
 ## 12. 型とテスト
 
-「429 テスト合格」は **オフライン unit + 対象 foundation 型検査** の話である。backend 全体は `tsc --noCheck` 変換で、グラフ全体の strict は未完。統合テストは OpenAI と通常 Mongo が要るのでロック中は走らせない。
+テスト件数は実行時点のログで示す。backend 全体は `tsc --noCheck` 変換で、グラフ全体の strict は未完。オフラインunit、Minecraft隔離サーバーのコマンドOracle、外部モデルを使うcognition probeは別の証拠であり、互いに代用しない。通常Mongoを使う統合テストはdev runtime lock中に起動しない。
 
 方針: foundation / memory / access / fca は strict を維持して増やす。本体グラフの noCheck を「設計が正しい」証拠にしない。ライブ E2E をロック解除の代わりにしない。
 

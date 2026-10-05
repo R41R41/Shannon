@@ -62,6 +62,24 @@ token、Discord Bot tokenを流用しない。
 - canonical conversation／個人記憶へmirrorするのは、どちらもbinding済みowner IDの完了ターンだけ。
 - 旧runtimeでも同じbindingを照合して非owner turnを送信せず、アプリAPIでもowner不一致を403で拒否する。
 
+## 返事も心が書く（第5a段階、2026-10-06、dev のみ）
+
+`SHANNON_CORE_PLATFORM_REPLY=true`（既定は無効）の時、Discord テキストの返信は Bot 自身の LLM ではなく、心（shannon-ios）の
+`POST /v1/platform/reply` が書く。心の会話の中心（アプリと同じ履歴・想起・気分・道具）を通るので、本人の DM（心の側で
+`owner-private` に結んだ会話）で「マイクラで木材集めといて」と言えば `minecraft.request` で体の列に積まれる。
+
+```dotenv
+SHANNON_CORE_PLATFORM_REPLY=true
+# 本人以外の発言も心に答えさせる時だけ（既定は本人のみ）
+SHANNON_CORE_PLATFORM_REPLY_PEOPLE=false
+SHANNON_CORE_PLATFORM_REPLY_TIMEOUT_MS=55000
+```
+
+- 送るのは既存の binding に一致する会話だけ（未 binding の channel は送らない）。既定は本人の発言だけ。音声・添付/画像URLを含む本文・追加要件フォームの回答は送らない。
+- 心が答えられない時（無効・拒否・タイムアウト・形式不正）は従来の経路で答える。心の返事は同じ会話の port で送り、`/v1/platform/turns` へは二重に mirror しない（心が既に記録した）。送信に失敗しても旧経路で答え直さない。
+- 心の側も `SHANNON_PLATFORM_REPLY=on` が必要（既定は 503）。契約は shannon-ios の `docs/platform-people-contract.md`「Replies」。
+- 実装: `backend/src/services/integration/shannonCoreBridge.ts`（`requestDiscordReply`）、`discordCompanionReply.ts`、`EventRouter.processDiscordMessage`。テスト: `tests/unit/shannonCoreBridge.test.ts`、`discordCompanionReply.test.ts`（loopback の偽の心）、`discordCompanionReplyRouting.test.ts`。
+
 ## 検証
 
 - `backend/tests/unit/shannonCoreBridge.test.ts`

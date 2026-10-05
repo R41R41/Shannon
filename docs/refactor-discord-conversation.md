@@ -30,6 +30,10 @@ EventBusへの投入だけで送信完了とはしない。SDKの送信Promise�
 
 実行coordinatorからdispatchへ中断signalを伝播。LLMServiceは待機前にDiscordのdispatchに使うenvelopeをsnapshot化する。入力routerは表示用の時刻・表示名をcanonical textに混ぜず、DMフラグも維持する。表示用の履歴文字列とは分ける。
 
+## 心が返事を書く経路（2026-10-06、第5a段階）
+
+`SHANNON_CORE_PLATFORM_REPLY=true`（既定は無効）の時、`EventRouter.processDiscordMessage` はグラフを呼ぶ前に `answerDiscordFromCompanion` で心（shannon-ios）の `POST /v1/platform/reply` に返事を頼む。対象は既存の core bridge binding に一致する会話の本人発言だけ（`SHANNON_CORE_PLATFORM_REPLY_PEOPLE=true` で本人以外も）。返事は上と同じ request-bound port で現在の会話にだけ送り、mirror はしない。心が使えない時は従来どおりグラフが答える。宛先の認可・本文の制限・送信の再検査は変わらない。詳細は `docs/shannon-core-bridge.md`。
+
 ## 型検査
 
 coreは通常のfoundation型検査・SDK依存禁止検査の対象。port/transport/dispatcher/2ツールもaccess-integrationの通常型検査へ追加した。LangChain 0.3のinterop schema型の再帰展開を避けるため、ツール基底classのschema型引数はunknownとし、入出力型を明示する。実際のschemaプロパティは具体的なZod schemaのままで、invokeでの入力検証を回帰テストする。anyやts-ignoreで検査を無効化しない。
