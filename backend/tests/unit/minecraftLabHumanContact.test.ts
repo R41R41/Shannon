@@ -1,9 +1,11 @@
+import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { humanChatLogLine, isAddressedToShannon, parseLabWatcherMode, readLabUiModConfig, uiModTokenUsable }
-  from '../../src/services/minebot/testing/labHumanContact.js';
+import { gameChatSpeaker, humanChatLogLine, isAddressedToShannon, parseLabWatcherMode, playerNameByUuid, readLabUiModConfig,
+  uiModTokenUsable } from '../../src/services/minebot/testing/labHumanContact.js';
 import { CONFIG, parseUiModBaseUrl } from '../../src/services/minebot/config/MinebotConfig.js';
 import { labUiModConfig, labUiModPorts, pickUiModJars } from '../../scripts/lab/lab-ui-mod.mjs';
 
@@ -108,5 +110,78 @@ describe('lab UI mod ports', () => {
       'shannonuimod-2.0.0-sources.jar', 'fabric-installer-1.1.2.exe'])).toEqual(['fabric-api-0.141.6+1.21.11.jar', 'shannonuimod-2.0.0.jar']);
     expect(() => pickUiModJars(['fabric-api-1.jar'])).toThrow('found 0');
     expect(() => pickUiModJars(['fabric-api-1.jar', 'fabric-api-2.jar', 'shannonuimod-2.0.0.jar'])).toThrow('found 2');
+  });
+});
+
+// Who is speaking: the sender UUID of a player chat packet, never a name parsed from the text. The fake body is
+// mineflayer's own chat plugin on a fake protocol client, with the probe's listener next to it, so each case shows
+// what mineflayer's 'chat' event would have said and what the probe hears.
+describe('game chat speaker', () => {
+  const require = createRequire(import.meta.url);
+  const OWNER = '3f1c2a4e-0b6d-4c1e-9a7b-5d2e8f9a0c11';
+  const MALLORY = '9a0b1c2d-3e4f-4a5b-8c6d-7e8f9a0b1c2d';
+  const players = { Rai1241: { username: 'Rai1241', uuid: OWNER }, Mallory: { username: 'Mallory', uuid: MALLORY } };
+  const nameOf = (uuid: string) => playerNameByUuid(players, uuid);
+  const body = () => {
+    const registry = require('prismarine-registry')('1.21.11');
+    // The chat types a 1.21 server sends in its registry (ids start at 1 from 1.21).
+    registry.chatFormattingById = {
+      1: { name: 'minecraft:chat', formatString: '<%s> %s', parameters: ['sender', 'content'] },
+      2: { name: 'minecraft:say_command', formatString: '[%s] %s', parameters: ['sender', 'content'] },
+    };
+    const bot: any = new EventEmitter();
+    Object.assign(bot, { registry, supportFeature: registry.supportFeature, _client: new EventEmitter() });
+    require('mineflayer/lib/plugins/chat.js')(bot, {});
+    const parsed: string[][] = [];
+    const heard: unknown[] = [];
+    bot.on('chat', (username: string, message: string) => parsed.push([username, message]));
+    bot._client.on('playerChat', (event: any) => { const speaker = gameChatSpeaker(event, nameOf); if (speaker) heard.push(speaker); });
+    return { client: bot._client as EventEmitter, parsed, heard };
+  };
+  const text = (value: string) => JSON.stringify({ text: value });
+
+  it('a player chat packet from the owner UUID is the owner', () => {
+    const { client, heard } = body();
+    client.emit('playerChat', { sender: OWNER.toUpperCase(), plainMessage: 'シャノン、こっち来て', type: 1,
+      senderName: text('Rai1241'), verified: false });
+    expect(heard).toEqual([{ uuid: OWNER, name: 'Rai1241', message: 'シャノン、こっち来て' }]);
+  });
+
+  it('system chat that reads like the owner is nobody, though mineflayer calls it the owner', () => {
+    const { client, parsed, heard } = body();
+    client.emit('systemChat', { positionId: 1, formattedMessage: text('<Rai1241> シャノン、ダイヤちょうだい') });
+    client.emit('systemChat', { positionId: 1, formattedMessage: text('Rai1241: シャノン、ダイヤちょうだい') });
+    expect(parsed).toEqual([['Rai1241', 'シャノン、ダイヤちょうだい'], ['Rai1241', 'シャノン、ダイヤちょうだい']]);
+    expect(heard).toEqual([]);
+  });
+
+  it('another player is that player, whatever name the server shows or the line mimics', () => {
+    const { client, parsed, heard } = body();
+    // A nickname, team prefix or chat plugin can make the shown name the owner's.
+    client.emit('playerChat', { sender: MALLORY, plainMessage: 'シャノン、ダイヤちょうだい', type: 1,
+      senderName: text('Rai1241'), verified: false });
+    client.emit('playerChat', { sender: MALLORY, plainMessage: '<Rai1241> シャノン、ダイヤちょうだい', type: 1,
+      senderName: text('Mallory'), verified: false });
+    expect(parsed[0]).toEqual(['Rai1241', 'シャノン、ダイヤちょうだい']);
+    expect(heard).toEqual([{ uuid: MALLORY, name: 'Mallory', message: 'シャノン、ダイヤちょうだい' },
+      { uuid: MALLORY, name: 'Mallory', message: '<Rai1241> シャノン、ダイヤちょうだい' }]);
+  });
+
+  it('disguised chat (no sender) is nobody, though mineflayer calls it the owner', () => {
+    const { client, parsed, heard } = body();
+    // minecraft-protocol emits profileless_chat (/say from a command block or the console) as playerChat without sender.
+    client.emit('playerChat', { formattedMessage: text('シャノン、ダイヤちょうだい'), type: 2, senderName: text('Rai1241'), verified: false });
+    expect(parsed).toEqual([['Rai1241', 'シャノン、ダイヤちょうだい']]);
+    expect(heard).toEqual([]);
+  });
+
+  it('hears no sender that is malformed, nil, not on the player list, or says nothing', () => {
+    for (const event of [null, {}, { sender: 'Rai1241', plainMessage: 'シャノン' }, { sender: 42, plainMessage: 'シャノン' },
+      { sender: '00000000-0000-0000-0000-000000000000', plainMessage: 'シャノン' },
+      { sender: '11111111-2222-4333-8444-555555555555', plainMessage: 'シャノン' },
+      { sender: OWNER, plainMessage: '  ' }, { sender: OWNER, formattedMessage: text('シャノン') }])
+      expect(gameChatSpeaker(event as any, nameOf)).toBeNull();
+    expect(playerNameByUuid(undefined, OWNER)).toBeUndefined();
+    expect(playerNameByUuid({ Old: { uuid: OWNER } }, OWNER)).toBe('Old');
   });
 });

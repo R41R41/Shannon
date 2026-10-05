@@ -25,7 +25,8 @@ import { SkillRegistrar } from '../src/services/minebot/skills/SkillRegistrar.js
 import type { GoalPredicate } from '../src/services/minebot/cognition/GoalVerifier.js';
 import { MinecraftLearningService, type MinecraftLearningMode } from '../src/services/minebot/learning/MinecraftLearningService.js';
 import { minecraftKnowledgeScope } from '../src/modules/minecraftLearning/index.js';
-import { humanChatLogLine, isAddressedToShannon, parseLabWatcherMode, readLabUiModConfig } from '../src/services/minebot/testing/labHumanContact.js';
+import { gameChatSpeaker, humanChatLogLine, isAddressedToShannon, parseLabWatcherMode, playerNameByUuid, readLabUiModConfig,
+  type PlayerChatEvent } from '../src/services/minebot/testing/labHumanContact.js';
 import type { LabUiModBridge } from '../src/services/minebot/testing/LabUiModBridge.js';
 
 // A stray error from a timer or promise of an action that was already cancelled must not end a paid run:
@@ -362,13 +363,20 @@ if (rcon) {
   for (const player of Object.values(actor.players)) onPlayerJoined(player);
 }
 // Game chat that starts with her name is for her. The full runtime sets the receiver once it can take tasks.
-let receiveHumanChat: ((player: string, message: string, via: 'game_chat' | 'ui_mod') => void) | null = null;
-const onGameChat = (username: string, message: string) => {
-  if (!username || username === actorName || username === operator?.username || !isAddressedToShannon(message)) return;
-  if (receiveHumanChat) receiveHumanChat(username, message, 'game_chat');
-  else console.log(`CAMPAIGN_HUMAN_CHAT_UNHEARD ${username}`);
+// Who spoke is the sender UUID of the player chat packet (the server's word on an online-mode lab), never a name
+// parsed out of the text: mineflayer's 'chat' event matches `<name> text` in any chat or system message, which
+// another player could make look like the owner's. System and disguised chat are not heard (see gameChatSpeaker).
+// speakerUuid: from the packet for game chat; for the UI mod, looked up by the name it sends (trusted local client).
+let receiveHumanChat: ((player: string, message: string, via: 'game_chat' | 'ui_mod', speakerUuid?: string) => void) | null = null;
+const onGameChat = (event: unknown) => {
+  const heard = gameChatSpeaker(event as PlayerChatEvent, uuid => playerNameByUuid(actor.players as any, uuid));
+  if (!heard || !isAddressedToShannon(heard.message)) return;
+  const self = [actor.player?.uuid, operator?.player?.uuid].map(uuid => String(uuid ?? '').toLowerCase());
+  if (self.includes(heard.uuid) || heard.name === actorName || heard.name === operator?.username) return;
+  if (receiveHumanChat) receiveHumanChat(heard.name, heard.message, 'game_chat', heard.uuid);
+  else console.log(`CAMPAIGN_HUMAN_CHAT_UNHEARD ${heard.name}`);
 };
-actor.on('chat', onGameChat);
+actor._client.on('playerChat', onGameChat);
 const operatorChat = (message: string) => rcon ? void rcon.send(message) : operator!.chat(message);
 // Shannon's one mind (the companion, shannon-ios) writes what she says to people and keeps her death as a memory;
 // this body acts. Only on a public lab, where Mojang proves who each player is. Off unless both are given.
@@ -575,14 +583,17 @@ try {
       await reactions.initialize();
       // A person's words become a task put ahead of the campaign, which pauses at its last checkpoint and
       // resumes after it. A few may wait at once; beyond that they are logged and dropped (each one is paid for).
-      receiveHumanChat = (player, message, via) => {
+      receiveHumanChat = (player, message, via, packetSenderUuid) => {
         const text = String(message ?? '').trim().slice(0, 256);
         if (!text || !player || player === actorName) return;
         const record = { atMs: Date.now() - startedAt, player, via, message: text.slice(0, 200),
           taskId: null as string | null, dropped: null as string | null };
         humanChats.push(record);
         console.log(humanChatLogLine(player, text));
-        const speakerUuid = String((actor.players?.[player] as any)?.uuid ?? '');
+        // Game chat: the packet's sender. The UI mod's /chat_message (loopback, mod token) is the owner's own
+        // client on this machine, so its name is trusted and looked up in the player list.
+        const speakerUuid = via === 'game_chat' ? String(packetSenderUuid ?? '')
+          : String((actor.players?.[player] as any)?.uuid ?? '');
         if (companion && speakerUuid && !plannerClosed && !probeStopRequested()) {
           void answerFromCompanion(record, player, speakerUuid, text);
           return;
@@ -899,7 +910,7 @@ try {
 } finally {
   clearInterval(stopPollTimer);
   actor.removeListener('death', onCampaignDeath);
-  actor.removeListener('chat', onGameChat);
+  actor._client.removeListener('playerChat', onGameChat);
   try {
     try { await learning.flush(); report.learning = learning.summary(); }
     catch (error) { report.learningError = String(error); }
