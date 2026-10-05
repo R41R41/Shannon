@@ -1,4 +1,5 @@
 import { CustomBot, InstantSkill } from '../types.js';
+import { actionDelay } from '../execution/observedWait.js';
 
 /**
  * 原子的スキル: 動物を繁殖させる
@@ -85,11 +86,11 @@ class BreedAnimal extends InstantSkill {
 
       // 1匹目に食べ物を与える
       await this.bot.activateEntity(animal1);
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await actionDelay(this.bot, 500);
 
       // 2匹目に食べ物を与える
       await this.bot.activateEntity(animal2);
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await actionDelay(this.bot, 500);
 
       return {
         success: true,

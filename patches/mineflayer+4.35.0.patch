@@ -1,0 +1,39 @@
+diff --git a/node_modules/mineflayer/lib/plugins/entities.js b/node_modules/mineflayer/lib/plugins/entities.js
+index bd0514e..bbe923f 100644
+--- a/node_modules/mineflayer/lib/plugins/entities.js
++++ b/node_modules/mineflayer/lib/plugins/entities.js
+@@ -271,13 +271,13 @@ function inject (bot) {
+     entity.pitch = conv.fromNotchianPitchByte(packet.pitch)
+     entity.headPitch = conv.fromNotchianPitchByte(packet.headPitch)
+ 
+-    let notchVel
++    // From 1.21.9 the velocity comes as blocks per tick (an lpVec3), not in 1/8000ths: dividing it by 8000 as
++    // before left every entity, the bot itself included, with a velocity of next to nothing.
+     if (bot.supportFeature('entityVelocityIsLpVec3')) {
+-      notchVel = new Vec3(packet.velocity.x, packet.velocity.y, packet.velocity.z)
++      entity.velocity.update(new Vec3(packet.velocity.x, packet.velocity.y, packet.velocity.z))
+     } else {
+-      notchVel = new Vec3(packet.velocityX, packet.velocityY, packet.velocityZ)
++      entity.velocity.update(conv.fromNotchVelocity(new Vec3(packet.velocityX, packet.velocityY, packet.velocityZ)))
+     }
+-    entity.velocity.update(conv.fromNotchVelocity(notchVel))
+     entity.metadata = parseMetadata(packet.metadata, entity.metadata)
+ 
+     bot.emit('entitySpawn', entity)
+@@ -286,13 +286,12 @@ function inject (bot) {
+   bot._client.on('entity_velocity', (packet) => {
+     // entity velocity
+     const entity = fetchEntity(packet.entityId)
+-    let notchVel
++    // Blocks per tick from 1.21.9 (see spawn_entity above): this is where the bot's own knockback arrives.
+     if (bot.supportFeature('entityVelocityIsLpVec3')) {
+-      notchVel = new Vec3(packet.velocity.x, packet.velocity.y, packet.velocity.z)
++      entity.velocity.update(new Vec3(packet.velocity.x, packet.velocity.y, packet.velocity.z))
+     } else {
+-      notchVel = new Vec3(packet.velocityX, packet.velocityY, packet.velocityZ)
++      entity.velocity.update(conv.fromNotchVelocity(new Vec3(packet.velocityX, packet.velocityY, packet.velocityZ)))
+     }
+-    entity.velocity.update(conv.fromNotchVelocity(notchVel))
+   })
+ 
+   bot._client.on('entity_destroy', (packet) => {

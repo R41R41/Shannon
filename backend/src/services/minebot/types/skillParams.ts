@@ -1,4 +1,5 @@
 import { createLogger } from '../../../utils/logger.js';
+import type { ActionTrace } from '../execution/actionTypes.js';
 
 const log = createLogger('Minebot:Types');
 
@@ -46,6 +47,7 @@ export interface SkillResult {
     recoverable?: boolean;
     error?: string;
     duration?: number;
+    execution?: ActionTrace;
 }
 
 /**
@@ -151,4 +153,3 @@ export class SkillParamValidator {
         };
     }
 }
-

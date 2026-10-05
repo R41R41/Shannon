@@ -203,6 +203,7 @@ describe('actual MinebotTaskRuntime with mock bot and executor', () => {
     let captured: any;
     runtime.setExecutor(async (_envelope, _messages, options) => {
       captured = options;
+      options?.onToolStarting?.('get-position', { source: 'fixture' });
       options?.onTaskTreeUpdate?.({
         status: 'in_progress',
         goal: 'fixture',
@@ -214,7 +215,9 @@ describe('actual MinebotTaskRuntime with mock bot and executor', () => {
       return { taskTree: { status: 'completed' } };
     });
     await runtime.invoke({ userMessage: 'go', onToolStarting });
-    expect(captured.onToolStarting).toBe(onToolStarting);
+    expect(captured.onToolStarting).toEqual(expect.any(Function));
+    expect(onToolStarting).toHaveBeenCalledOnce();
+    expect(onToolStarting).toHaveBeenCalledWith('get-position', { source: 'fixture' });
     expect(captured.getLiveInventory?.()).toEqual([{ name: 'iron_ingot', count: 2 }]);
     expect(captured.getActiveEffects?.()).toEqual([{ name: 'speed', amplifier: 1 }]);
     expect(captured.abortSignal).toBeDefined();

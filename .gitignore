@@ -41,6 +41,8 @@ node_modules
 /backend/saves/analysis/
 
 /backend/saves/minecraft/self_test_reports/
+/backend/saves/minecraft/progressive_reports/
+/backend/saves/minecraft/places/
 /backend/saves/self_improve/nightly_state.json
 
 # Sensitive / runtime
@@ -72,3 +74,4 @@ node_modules
 /.shannon-development
 /.dev-runtime-lock
 /backend/dist-line/
+/backend/saves/minecraft/learning/

@@ -1,0 +1,90 @@
+{
+  "name": "slit_cage",
+  "description": "スポナーの隣に建てる囲い。身体は中央のマスに入り、目の高さの上半分をハーフブロックで塞いだ隙間から、周りの1ブロック幅の通路（十字形に12マス。どのマスも手が届く）に湧いた相手だけを殴る。通路は壁と屋根で閉じてあるので、殴られた相手は手の届く所に残る。最初の15個で身体の四方と頭上を塞ぎ、そのあと外側を建てる。建築用ブロック約80個と、ハーフブロック8個が要る。",
+  "materials": {
+    "F": "@solid",
+    "W": "@solid",
+    "R": "@solid",
+    "I": "@solid",
+    "i": "@solid",
+    "j": "@solid",
+    "c": "@solid",
+    "k": "@solid",
+    "Q": "@solid",
+    "P": "@solid",
+    "q": "@solid",
+    "L": "@solid",
+    "S": "@slab:top",
+    "s": "@slab:top",
+    "A": "@air",
+    "X": "@keep"
+  },
+  "phases": {
+    "I": 0,
+    "j": 1,
+    "c": 2,
+    "k": 3,
+    "Q": 4,
+    "L": 5,
+    "P": 6,
+    "S": 7,
+    "i": 8,
+    "q": 9,
+    "s": 10,
+    "F": 11,
+    "W": 12,
+    "R": 13,
+    "A": 14
+  },
+  "anchor": [
+    3,
+    1,
+    3
+  ],
+  "landmark": {
+    "char": "X",
+    "block": "spawner"
+  },
+  "layers": [
+    [
+      "..FFF..",
+      ".FFFFF.",
+      "FFFFFFF",
+      "FFFFFFF",
+      "FFFFFFF",
+      ".FFFFF.",
+      "..FFF.."
+    ],
+    [
+      "..WWW..",
+      ".WAAAW.",
+      "WAjIiAW",
+      "WAI.XAW",
+      "WAiIiAW",
+      ".WAAAW.",
+      "..WWW.."
+    ],
+    [
+      "..WWW..",
+      ".WAAAW.",
+      "WAcSsAW",
+      "WAS.SAW",
+      "WAsSsAW",
+      ".WAAAW.",
+      "..WWW.."
+    ],
+    [
+      ".......",
+      "..RRR..",
+      ".RkQqR.",
+      ".RQLPR.",
+      ".RqPqR.",
+      "..RRR..",
+      "......."
+    ]
+  ],
+  "usage": "いま中央のマスにいて、頭上と周囲は閉じています。外の相手からは身体の目が見えないので狙われません。通路に湧いた相手は、attack-continuously に holdPosition=true を付けて呼ぶと、隙間ごしに手の届くものだけを殴ります（動かない・取りに出ない。1回の呼び出しは60秒まで。繰り返し呼ぶ）。倒した相手の落とし物は通路に落ちます: 通路に相手がいない時に pickup-nearest-item で拾い（壁を掘って通路へ出ます）、すぐ中央のマスへ move-to で戻って、build-around-self をもう一度呼ぶと掘った壁が直ります",
+  "then": {
+    "c": "@slab:top"
+  }
+}

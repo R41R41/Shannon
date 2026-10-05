@@ -4,6 +4,7 @@ import { CustomBot, InstantSkill } from '../types.js';
 import { createLogger } from '../../../utils/logger.js';
 import { gotoSafe } from '../utils/gotoSafe.js';
 import { ensureLineOfSight } from '../utils/blockLineOfSight.js';
+import { actionDelay } from '../execution/observedWait.js';
 
 const { goals } = pathfinder;
 const log = createLogger('Minebot:Skill:useStonecutter');
@@ -94,6 +95,9 @@ class UseStonecutter extends InstantSkill {
         // 1 = 出力
         // レシピはボタン選択（protocol レベル）
 
+        const initialOutputCount = stonecutterWindow.slots
+          .filter((item: any) => item?.name === outputItem)
+          .reduce((sum: number, item: any) => sum + item.count, 0);
         let processed = 0;
 
         for (let i = 0; i < count; i++) {
@@ -101,23 +105,35 @@ class UseStonecutter extends InstantSkill {
           const currentInput = this.bot.inventory.items().find(it => it.name === inputItem);
           if (!currentInput) break;
 
-          // アイテムをスロット0に配置
-          await this.bot.clickWindow(currentInput.slot, 0, 0); // pickup
-          await this.bot.clickWindow(0, 0, 0); // place
-          await new Promise(resolve => setTimeout(resolve, 200));
+          // 開いたコンテナではプレイヤー側スロット番号が通常 inventory
+          // と異なるため、slot を直接クリックせず transfer で移す。
+          await this.bot.transfer({
+            window: stonecutterWindow,
+            itemType: currentInput.type,
+            metadata: currentInput.metadata,
+            count: Math.min(count - processed, currentInput.count),
+            nbt: currentInput.nbt,
+            sourceStart: stonecutterWindow.inventoryStart,
+            sourceEnd: stonecutterWindow.inventoryEnd,
+            destStart: 0,
+            destEnd: 1,
+          });
+          await actionDelay(this.bot, 200);
+          log.info(`🪨 石切台入力: ${stonecutterWindow.slots[0]?.name ?? 'empty'} x${stonecutterWindow.slots[0]?.count ?? 0}`);
 
-          // レシピ選択: 出力スロットに目的のアイテムが現れるまで
-          // stonecutter protocol で recipe を選択する
-          // mineflayer では bot.clickWindow(1, 0, 0) で出力を取得
-          const output = stonecutterWindow.slots[1];
+          // 石切台は入力だけでは出力されず、クライアントがレシピ番号を
+          // select_trade パケットで選ぶ必要がある。Mineflayer 4.35には
+          // 石切台APIがないため、実際の出力スロットを見ながら選択する。
+          const output = await this.selectRecipe(stonecutterWindow, outputItem);
           if (output && output.name === outputItem) {
-            // 出力を取り出す
-            await this.bot.clickWindow(1, 0, 0); // pickup output
-            const emptySlot = this.bot.inventory.firstEmptyInventorySlot();
-            if (emptySlot !== null) {
-              await this.bot.clickWindow(emptySlot, 0, 0);
-            }
-            processed++;
+            // shift-clickで出力を回収。入力スタックが残る場合は次の
+            // ループで同じレシピを選び直して1個ずつ確実に処理する。
+            await this.bot.clickWindow(1, 0, 1);
+            await actionDelay(this.bot, 300);
+            processed = stonecutterWindow.slots
+              .filter((item: any) => item?.name === outputItem)
+              .reduce((sum: number, item: any) => sum + item.count, 0) - initialOutputCount;
+            if (processed >= count || !stonecutterWindow.slots[0]) break;
           } else {
             // レシピが一致しない場合 — 入力を戻す
             log.warn(`⚠️ ${inputItem} → ${outputItem} のレシピが見つかりません`);
@@ -130,7 +146,7 @@ class UseStonecutter extends InstantSkill {
             break;
           }
 
-          await new Promise(resolve => setTimeout(resolve, 100));
+          await actionDelay(this.bot, 100);
         }
 
         stonecutterWindow.close();
@@ -161,6 +177,35 @@ class UseStonecutter extends InstantSkill {
         recoverable: true,
       };
     }
+  }
+
+  private async selectRecipe(window: any, outputItem: string): Promise<any | null> {
+    const observed = new Set<string>();
+    for (let recipeIndex = 0; recipeIndex < 64; recipeIndex++) {
+      // Stonecutter recipe buttons use the generic container-button packet
+      // (named enchant_item by minecraft-protocol), not merchant select_trade.
+      (this.bot as any)._client.write('enchant_item', {
+        windowId: window.id,
+        enchantment: recipeIndex,
+      });
+      const output = await this.waitForOutput(window, outputItem, 120);
+      if (output?.name && !observed.has(output.name)) {
+        observed.add(output.name);
+        log.info(`🪨 石切台候補[${recipeIndex}]: ${output.name} x${output.count}`);
+      }
+      if (output?.name === outputItem) return output;
+    }
+    return null;
+  }
+
+  private async waitForOutput(window: any, outputItem: string, timeoutMs: number): Promise<any | null> {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+      const output = window.slots[1];
+      if (output?.name === outputItem) return output;
+      await actionDelay(this.bot, 20);
+    }
+    return window.slots[1] ?? null;
   }
 
   /** 石切台を開く（windowOpen イベント経由） */

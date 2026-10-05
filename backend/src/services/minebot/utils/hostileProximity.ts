@@ -1,5 +1,5 @@
 import type { CustomBot } from '../types/CustomBot.js';
-import { isLikelyHostileMobName } from './hostileMobHints.js';
+import { isHostileEntity } from './hostileMobHints.js';
 
 /** 最も近い敵対 Mob（検知範囲内）。いなければ null */
 export function getNearestHostileInfo(
@@ -14,7 +14,7 @@ export function getNearestHostileInfo(
     if (!entity?.position || entity.id === bot.entity.id) continue;
 
     const mobName = String((entity as { name?: string }).name || '').toLowerCase();
-    if (!isLikelyHostileMobName(mobName)) continue;
+    if (!isHostileEntity(entity as any, bot as any)) continue;
 
     const distance = bot.entity.position.distanceTo(entity.position);
     if (distance > maxRange) continue;

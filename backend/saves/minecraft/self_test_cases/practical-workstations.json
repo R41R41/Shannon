@@ -1,0 +1,86 @@
+{
+  "testSuite": "practical-workstations",
+  "description": "遠征準備として装備強化、醸造、修理、石材加工、村人取引の確認を行う作業設備シナリオ",
+  "mode": "default",
+  "commandOracle": true,
+  "globalSetup": [
+    "/gamemode survival @s",
+    "/difficulty peaceful",
+    "/gamerule doMobSpawning false",
+    "/time set day",
+    "/weather clear",
+    "/effect clear @s",
+    "/clear @s",
+    "/tp @s 0 100 0",
+    "/kill @e[type=!player]",
+    "/kill @e[type=item]",
+    "/fill -8 99 -8 8 99 8 stone",
+    "/fill -8 100 -8 8 106 8 air",
+    "/tp @s 0 100 0"
+  ],
+  "cases": [
+    {
+      "skillName": "enchant-item",
+      "args": [3, 100, 0, 0],
+      "description": "採掘用ダイヤツルハシへ低レベルエンチャントを付与する",
+      "expectedOutcome": "success",
+      "setup": [
+        "/setblock 3 100 0 enchanting_table",
+        "/fill 2 100 -2 4 101 -2 bookshelf",
+        "/fill 2 100 2 4 101 2 bookshelf",
+        "/fill 5 100 -1 5 101 1 bookshelf",
+        "/give @s diamond_pickaxe 1",
+        "/give @s lapis_lazuli 10",
+        "/experience add @s 30 levels"
+      ],
+      "assertions": [{ "type": "inventory_count", "item": "diamond_pickaxe", "minCount": 1 }]
+    },
+    {
+      "skillName": "brew-potion",
+      "args": [3, 100, 0, "nether_wart"],
+      "description": "ネザー探索用ポーションの基礎として水入り瓶を奇妙なポーションへ醸造する",
+      "expectedOutcome": "success",
+      "setup": [
+        "/setblock 3 100 0 brewing_stand",
+        "/give @s nether_wart 1",
+        "/give @s blaze_powder 1",
+        "/give @s potion[potion_contents={potion:\"minecraft:water\"}] 3"
+      ],
+      "assertions": [{ "type": "inventory_count", "item": "nether_wart", "minCount": 0, "maxCount": 0 }]
+    },
+    {
+      "skillName": "repair-item",
+      "args": [3, 100, 0, "diamond_sword", "diamond"],
+      "description": "耐久の減ったダイヤ剣を金床とダイヤで修理する",
+      "expectedOutcome": "success",
+      "setup": [
+        "/setblock 3 100 0 anvil",
+        "/give @s diamond_sword[damage=500] 1",
+        "/give @s diamond 3",
+        "/experience add @s 30 levels"
+      ],
+      "assertions": [{ "type": "inventory_count", "item": "diamond_sword", "minCount": 1 }]
+    },
+    {
+      "skillName": "use-stonecutter",
+      "args": [3, 100, 0, "stone", "stone_bricks", 4],
+      "description": "拠点建築用に石4個を石レンガ4個へ加工する",
+      "expectedOutcome": "success",
+      "setup": [
+        "/setblock 3 100 0 stonecutter",
+        "/give @s stone 4"
+      ],
+      "assertions": [{ "type": "inventory_count", "item": "stone_bricks", "minCount": 4 }]
+    },
+    {
+      "skillName": "trade-with-villager",
+      "args": [null, null, null, null, "farmer", null, null, true],
+      "description": "農民の村人へ接触し、食糧調達に利用できる取引一覧を確認する",
+      "expectedOutcome": "success",
+      "setup": [
+        "/summon villager 3 100 0 {NoAI:1b,VillagerData:{profession:\"minecraft:farmer\",level:2,type:\"minecraft:plains\"}}"
+      ],
+      "assertions": [{ "type": "entity_nearby", "entity": "villager", "maxDistance": 8, "present": true }]
+    }
+  ]
+}

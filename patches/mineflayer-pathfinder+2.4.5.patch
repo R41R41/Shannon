@@ -1,8 +1,96 @@
 diff --git a/node_modules/mineflayer-pathfinder/index.js b/node_modules/mineflayer-pathfinder/index.js
-index b38bd30..560c985 100644
+index b38bd30..8163a92 100644
 --- a/node_modules/mineflayer-pathfinder/index.js
 +++ b/node_modules/mineflayer-pathfinder/index.js
-@@ -521,7 +521,14 @@ function inject (bot) {
+@@ -28,6 +28,7 @@ function inject (bot) {
+   let placingBlock = null
+   let lastNodeTime = performance.now()
+   let returningPos = null
++  let returningSince = 0
+   let stopPathing = false
+   const physics = new Physics(bot)
+   const lockPlaceBlock = new Lock()
+@@ -129,6 +130,9 @@ function inject (bot) {
+       bot.stopDigging()
+     }
+     placing = false
++    // A return position belongs to the placement that set it, on the path that was being walked.
++    returningPos = null
++    returningSince = 0
+     pathUpdated = false
+     astarContext = null
+     lockEquipItem.release()
+@@ -139,6 +143,28 @@ function inject (bot) {
+     if (stopPathing) return stop()
+   }
+ 
++  // The server puts no block where a living body stands. The plan knows this (a pillar or a step is not
++  // planned through a cell a mob is in) but the plan is made before the walk: by the time the block is
++  // to be laid a pursuer may be on the body. The placement was then sent, refused, and waited on for five
++  // seconds while the body jumped in place under the blows (paid run L65). The cell is looked at again
++  // when the block is about to go down, by the rule the plan used.
++  function entityInPlacementCell (placement) {
++    const x = placement.x + placement.dx
++    const y = placement.y + placement.dy
++    const z = placement.z + placement.dz
++    for (const ent of Object.values(bot.entities)) {
++      if (!ent || ent === bot.entity || !ent.position) continue
++      if (stateMovements.passableEntities.has(ent.name) && !stateMovements.entitiesToAvoid.has(ent.name)) continue
++      const radius = (ent.width ?? 0.6) / 2
++      const height = ent.height ?? 1.8
++      if (ent.position.x + radius <= x || ent.position.x - radius >= x + 1) continue
++      if (ent.position.z + radius <= z || ent.position.z - radius >= z + 1) continue
++      if (ent.position.y + height <= y || ent.position.y >= y + 1) continue
++      return ent
++    }
++    return null
++  }
++
+   bot.pathfinder.setGoal = (goal, dynamic = false) => {
+     stateGoal = goal
+     dynamicGoal = dynamic
+@@ -338,6 +364,12 @@ function inject (bot) {
+     const blockX = Math.floor(bot.entity.position.x) + 0.5
+     const blockZ = Math.floor(bot.entity.position.z) + 0.5
+ 
++    // Recentre only onto footing. The cell the body's centre is in is not always one it stands on: crouched
++    // at a rim to place a block it leans out over the empty cell beyond, and a stop at that moment moved it
++    // to the middle of that cell, into the air (a body fell fourteen blocks from the end of its own bridge).
++    const under = bot.blockAt(new Vec3(Math.floor(bot.entity.position.x), Math.floor(bot.entity.position.y - 0.01), Math.floor(bot.entity.position.z)), false)
++    if (!under || under.boundingBox !== 'block') return
++
+     // Make sure our bounding box don't collide with neighboring blocks
+     // otherwise recenter the position
+     if (Math.abs(bot.entity.position.x - blockX) > 0.2) { bot.entity.position.x = blockX }
+@@ -391,6 +423,8 @@ function inject (bot) {
+     stopPathing = false
+     stateGoal = null
+     path = []
++    returningPos = null
++    returningSince = 0
+     bot.emit('path_stop')
+     fullStop()
+   }
+@@ -449,8 +483,17 @@ function inject (bot) {
+     }
+ 
+     if (bot.pathfinder.LOSWhenPlacingBlocks && returningPos) {
+-      if (!moveToBlock(returningPos)) return
++      // Stepping back onto the block the body leaned out from is a convenience, and it is checked
++      // before anything else here: a position the body could not get back to (the move was cut short,
++      // the body is on another level, something stands in between) held the whole executor, with no
++      // path computed and no block dug, for every goal that followed. Give it a moment, then go on
++      // from where the body is.
++      if (!returningSince) returningSince = performance.now()
++      const waited = performance.now() - returningSince
++      if (waited < 1500 && Math.abs(bot.entity.position.y - returningPos.y) < 0.6 && !moveToBlock(returningPos)) return
++      bot.setControlState('forward', false)
+       returningPos = null
++      returningSince = 0
+     }
+ 
+     if (path.length === 0) {
+@@ -521,7 +564,14 @@ function inject (bot) {
        // Open gates or doors
        if (placingBlock?.useOne) {
          if (!lockUseBlock.tryAcquire()) return
@@ -18,7 +106,14 @@ index b38bd30..560c985 100644
            lockUseBlock.release()
            placingBlock = nextPoint.toPlace.shift()
          }, err => {
-@@ -538,11 +545,81 @@ function inject (bot) {
+@@ -535,14 +585,95 @@ function inject (bot) {
+         resetPath('no_scaffolding_blocks')
+         return
+       }
++      if (entityInPlacementCell(placingBlock)) {
++        resetPath('place_blocked_by_entity')
++        return
++      }
        if (bot.pathfinder.LOSWhenPlacingBlocks && placingBlock.y === bot.entity.position.floored().y - 1 && placingBlock.dy === 0) {
          if (!moveToEdge(new Vec3(placingBlock.x, placingBlock.y, placingBlock.z), new Vec3(placingBlock.dx, 0, placingBlock.dz))) return
        }
@@ -67,6 +162,13 @@ index b38bd30..560c985 100644
 +                else finishFail()
 +                return
 +              }
++              if (entityInPlacementCell(placingBlock)) {
++                bot.setControlState('jump', false)
++                bot.setControlState('sneak', false)
++                placing = false
++                resetPath('place_blocked_by_entity')
++                return
++              }
 +              if (!lockPlaceBlock.tryAcquire()) {
 +                if (attempts < maxAttempts) setTimeout(tryTowerPlace, retryMs)
 +                else finishFail()
@@ -103,3 +205,20 @@ index b38bd30..560c985 100644
        if (canPlace) {
          if (!lockEquipItem.tryAcquire()) return
          bot.equip(block, 'hand')
+diff --git a/node_modules/mineflayer-pathfinder/lib/movements.js b/node_modules/mineflayer-pathfinder/lib/movements.js
+index a7e3505..b326dfe 100644
+--- a/node_modules/mineflayer-pathfinder/lib/movements.js
++++ b/node_modules/mineflayer-pathfinder/lib/movements.js
+@@ -293,7 +293,11 @@ class Movements {
+     const enchants = (tool && tool.nbt) ? nbt.simplify(tool.nbt).Enchantments : []
+     const effects = this.bot.entity.effects
+     const digTime = block.digTime(tool ? tool.type : null, false, false, false, enchants, effects)
+-    const laborCost = (1 + 3 * digTime / 1000) * this.digCost
++    // A step that costs over 100 is dropped as impossible (100 is this file's mark for "cannot"). A block of
++    // stone dug bare-handed takes 7.5 s: at a dig cost of 10 that is 235, so a body with no pickaxe, shut in by
++    // stone, had no step to take at all (paid run L73). `maxLaborCost`, when set, keeps a slow dig a costly
++    // step instead of no step.
++    const laborCost = Math.min((1 + 3 * digTime / 1000) * this.digCost, this.maxLaborCost ?? Infinity)
+     cost += laborCost
+     return cost
+   }

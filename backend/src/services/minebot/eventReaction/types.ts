@@ -85,6 +85,8 @@ export interface HostileEntry {
     mobType: string;
     position: { x: number; y: number; z: number };
     distance: number;
+    /** Seconds until it is on the body at the rate it has been seen to close, when that is sooner than the body can get safe. */
+    arrivesInSeconds?: number;
 }
 
 /**
@@ -163,6 +165,8 @@ export interface DamageEventData extends BaseEventData {
     currentHealth: number;
     consecutiveCount: number;
     possibleSource?: string;    // 攻撃元（わかる場合）
+    /** What the body itself can tell is hurting it, when no attacker is named (burning, in lava, starving, poisoned). */
+    harm?: string;
 }
 
 /**
@@ -170,7 +174,7 @@ export interface DamageEventData extends BaseEventData {
  */
 export interface SuffocationEventData extends BaseEventData {
     eventType: 'suffocation';
-    oxygen: number;
+    oxygen: number | null;
     health: number;
     isInWater: boolean;
 }
@@ -234,4 +238,3 @@ export interface ReactionSettingsState {
         description: string;
     }[];
 }
-

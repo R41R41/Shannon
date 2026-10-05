@@ -4,7 +4,8 @@ import { AIMessage, AIMessageChunk, HumanMessage } from '@langchain/core/message
 const fakes = vi.hoisted(() => ({ invoke: vi.fn(), stream: vi.fn(), utilityInvoke: vi.fn(), memoryReads: [] as any[], memoryWrites: [] as any[] }));
 vi.mock('../../src/config/env.js', () => ({ config: { anthropic: { apiKey: '' }, openaiApiKey: 'mock' } }));
 vi.mock('../../src/config/modelManager.js', () => ({ modelManager: { get: () => 'mock-model' } }));
-vi.mock('../../src/utils/logger.js', () => ({ logger: Object.fromEntries(['info','warn','error','success','debug'].map(k => [k, vi.fn()])) }));
+vi.mock('../../src/utils/logger.js', () => ({ logger: Object.fromEntries(['info','warn','error','success','debug'].map(k => [k, vi.fn()])),
+  createLogger: () => Object.fromEntries(['info','warn','error','success','debug'].map(k => [k, vi.fn()])) }));
 vi.mock('../../src/services/minebot/config/MinebotConfig.js', () => ({ CONFIG: { UI_MOD_BASE_URL: 'http://unused.invalid' } }));
 vi.mock('../../src/services/minebot/knowledge/WorldKnowledgeService.js', () => ({ WorldKnowledgeService: { forServer: () => null } }));
 vi.mock('../../src/services/minebot/knowledge/RecipeDependencyResolver.js', () => ({ RecipeDependencyResolver: {} }));

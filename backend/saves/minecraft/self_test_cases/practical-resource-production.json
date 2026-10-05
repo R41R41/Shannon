@@ -1,0 +1,154 @@
+{
+  "testSuite": "practical-resource-production",
+  "description": "木と鉄を採取し、作業台・かまどを使って鉄のツルハシを完成させ、追加の石材を掘る生産シナリオ",
+  "mode": "chain",
+  "commandOracle": true,
+  "globalSetup": [
+    "/gamemode survival @s",
+    "/difficulty peaceful",
+    "/time set day",
+    "/weather clear",
+    "/effect clear @s",
+    "/clear @s",
+    "/kill @e[type=!player]",
+    "/kill @e[type=item]",
+    "/fill -12 99 -12 12 99 12 stone",
+    "/fill -12 100 -12 12 106 12 air",
+    "/setblock 6 100 0 oak_log",
+    "/setblock 6 101 0 oak_log",
+    "/setblock 6 102 0 oak_log",
+    "/setblock -6 100 -1 iron_ore",
+    "/setblock -6 100 0 iron_ore",
+    "/setblock -6 100 1 iron_ore",
+    "/setblock 2 100 3 furnace",
+    "/setblock 4 100 3 stone",
+    "/give @s iron_axe 1",
+    "/give @s stone_pickaxe 1",
+    "/give @s coal 1",
+    "/tp @s 0 100 0"
+  ],
+  "cases": [
+    {
+      "skillName": "mine-block",
+      "args": ["oak_log", 3, 16],
+      "description": "製作材料として3段の木を伐採し原木を回収する",
+      "expectedOutcome": "success",
+      "assertions": [
+        { "type": "block_at", "x": 6, "y": 100, "z": 0, "block": "air" },
+        { "type": "block_at", "x": 6, "y": 101, "z": 0, "block": "air" },
+        { "type": "block_at", "x": 6, "y": 102, "z": 0, "block": "air" },
+        { "type": "inventory_count", "item": "oak_log", "minCount": 3 }
+      ]
+    },
+    {
+      "skillName": "mine-block",
+      "args": ["iron_ore", 3, 20],
+      "description": "反対側の鉱脈まで移動し鉄鉱石3個を採掘・回収する",
+      "expectedOutcome": "success",
+      "assertions": [
+        { "type": "block_at", "x": -6, "y": 100, "z": -1, "block": "air" },
+        { "type": "block_at", "x": -6, "y": 100, "z": 0, "block": "air" },
+        { "type": "block_at", "x": -6, "y": 100, "z": 1, "block": "air" },
+        { "type": "inventory_count", "item": "raw_iron", "minCount": 3 }
+      ]
+    },
+    {
+      "skillName": "craft-one",
+      "args": ["oak_planks", 12],
+      "description": "回収した原木を板材12個へ加工する",
+      "expectedOutcome": "success",
+      "assertions": [{ "type": "inventory_count", "item": "oak_planks", "minCount": 12 }]
+    },
+    {
+      "skillName": "craft-one",
+      "args": ["stick", 4],
+      "description": "道具用の棒を4本作る",
+      "expectedOutcome": "success",
+      "assertions": [{ "type": "inventory_count", "item": "stick", "minCount": 4 }]
+    },
+    {
+      "skillName": "craft-one",
+      "args": ["crafting_table", 1],
+      "description": "現地加工用の作業台を作る",
+      "expectedOutcome": "success",
+      "assertions": [{ "type": "inventory_count", "item": "crafting_table", "minCount": 1 }]
+    },
+    {
+      "skillName": "move-to",
+      "args": [0, 100, 2, 2, "near"],
+      "description": "設備区画へ戻る",
+      "expectedOutcome": "success",
+      "assertions": [{ "type": "position_within", "x": 0, "y": 100, "z": 2, "radius": 3 }]
+    },
+    {
+      "skillName": "place-block-at",
+      "args": ["crafting_table", 0, 100, 2],
+      "description": "作業台を設備区画へ設置する",
+      "expectedOutcome": "success",
+      "assertions": [{ "type": "block_at", "x": 0, "y": 100, "z": 2, "block": "crafting_table" }]
+    },
+    {
+      "skillName": "activate-block",
+      "args": ["crafting_table", 0, 100, 2],
+      "description": "設置した作業台を開けることを確認する",
+      "expectedOutcome": "success",
+      "assertions": [{ "type": "block_at", "x": 0, "y": 100, "z": 2, "block": "crafting_table" }]
+    },
+    {
+      "skillName": "move-to",
+      "args": [2, 100, 3, 2, "near"],
+      "description": "かまどへ近づく",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "start-smelting",
+      "args": [2, 100, 3, "raw_iron", "coal", 3],
+      "description": "採掘した原鉄3個の製錬を開始する",
+      "expectedOutcome": "success",
+      "assertions": [{ "type": "inventory_count", "item": "raw_iron", "minCount": 0, "maxCount": 0 }]
+    },
+    {
+      "skillName": "check-furnace",
+      "args": [2, 100, 3],
+      "description": "製錬中のかまど状態を確認する",
+      "expectedOutcome": "success",
+      "assertions": [{ "type": "block_at", "x": 2, "y": 100, "z": 3, "block": "furnace" }]
+    },
+    {
+      "skillName": "withdraw-from-furnace",
+      "args": [2, 100, 3, "output"],
+      "description": "製錬完了を待って鉄インゴットを回収する",
+      "expectedOutcome": "success",
+      "assertions": [{ "type": "inventory_count", "item": "iron_ingot", "minCount": 3 }]
+    },
+    {
+      "skillName": "craft-one",
+      "args": ["iron_pickaxe", 1],
+      "description": "採取・製錬した材料から鉄のツルハシを作る",
+      "expectedOutcome": "success",
+      "assertions": [{ "type": "inventory_count", "item": "iron_pickaxe", "minCount": 1 }]
+    },
+    {
+      "skillName": "equip-item",
+      "args": ["iron_pickaxe", "main"],
+      "description": "完成した鉄のツルハシを装備する",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "move-to",
+      "args": [4, 100, 3, 2, "near"],
+      "description": "追加採掘対象の石へ移動する",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "dig-block-at",
+      "args": [4, 100, 3, true],
+      "description": "完成した道具で指定座標の石を掘る",
+      "expectedOutcome": "success",
+      "assertions": [
+        { "type": "block_at", "x": 4, "y": 100, "z": 3, "block": "air" },
+        { "type": "inventory_count", "item": "cobblestone", "minCount": 1 }
+      ]
+    }
+  ]
+}

@@ -3,6 +3,7 @@ import pathfinder from 'mineflayer-pathfinder';
 import { CustomBot, InstantSkill } from '../types.js';
 import { createLogger } from '../../../utils/logger.js';
 import { gotoSafe } from '../utils/gotoSafe.js';
+import { actionDelay } from '../execution/observedWait.js';
 
 const { goals } = pathfinder;
 const log = createLogger('Minebot:Skill:enchantItem');
@@ -99,9 +100,28 @@ class EnchantItem extends InstantSkill {
       }
 
       try {
+        const targetItem = this.bot.inventory.items().find(item =>
+          item.name !== 'lapis_lazuli'
+          && (item.maxDurability > 0 || item.name === 'book' || item.name === 'bow' || item.name === 'crossbow')
+        );
+        const lapisItem = this.bot.inventory.items().find(item => item.name === 'lapis_lazuli');
+        if (!targetItem || !lapisItem) {
+          enchantTable.close();
+          return {
+            success: false,
+            result: 'エンチャント対象またはラピスラズリが見つかりません',
+            failureType: 'material_missing',
+            recoverable: true,
+          };
+        }
+
+        await this.transferToSlot(enchantTable, targetItem, 0, 1);
+        await this.transferToSlot(enchantTable, lapisItem, 1, requiredLapis);
+
         // エンチャント可能な情報を取得
         // enchantTable.enchantments は配列: [{level, expected?}]
-        await new Promise(resolve => setTimeout(resolve, 300)); // UI反映待ち
+        await actionDelay(this.bot, 500);
+        log.info(`✨ エンチャント台スロット: target=${enchantTable.slots[0]?.name ?? 'empty'}, lapis=${enchantTable.slots[1]?.name ?? 'empty'}`);
 
         const enchantments = enchantTable.enchantments;
         if (!enchantments || enchantments.length === 0) {
@@ -126,15 +146,37 @@ class EnchantItem extends InstantSkill {
         }
 
         const targetEnchant = enchantments[slot];
-        log.info(`✨ エンチャント実行: スロット${slot} (Lv${targetEnchant.level})`);
+        const selectedLevel = targetEnchant.level;
+        log.info(`✨ エンチャント実行: スロット${slot} (候補Lv${selectedLevel})`);
 
-        // エンチャント実行
-        await enchantTable.enchant(slot);
+        // Mineflayer 4.35 waits specifically for updateSlot:0, but modern
+        // servers can acknowledge this container action through a full window
+        // update instead. Send the real button packet and verify the durable
+        // XP/item state rather than hanging on one event shape.
+        const xpBefore = this.bot.experience?.level ?? 0;
+        (this.bot as any)._client.write('enchant_item', {
+          windowId: enchantTable.id,
+          enchantment: slot,
+        });
+        await actionDelay(this.bot, 750);
+        const enchantedItem = enchantTable.slots[0];
+        const xpAfter = this.bot.experience?.level ?? xpBefore;
+        const hasEnchants = Array.isArray(enchantedItem?.enchants) && enchantedItem.enchants.length > 0;
+        if (!hasEnchants && xpAfter >= xpBefore) {
+          enchantTable.close();
+          return {
+            success: false,
+            result: `エンチャントがサーバーに受理されませんでした（候補Lv${selectedLevel}）`,
+            failureType: 'interaction_failed',
+            recoverable: true,
+          };
+        }
+        await enchantTable.takeTargetItem();
         enchantTable.close();
 
         return {
           success: true,
-          result: `エンチャント成功！スロット${slot}（Lv${targetEnchant.level}）を適用しました`,
+          result: `エンチャント成功！スロット${slot}（Lv${selectedLevel}）を適用しました`,
         };
       } catch (error: any) {
         try { enchantTable.close(); } catch { /* ignore */ }
@@ -149,6 +191,21 @@ class EnchantItem extends InstantSkill {
       };
     }
   }
+
+  private async transferToSlot(window: any, item: any, destination: number, count: number): Promise<void> {
+    await this.bot.transfer({
+      window,
+      itemType: item.type,
+      metadata: item.metadata,
+      count,
+      nbt: item.nbt,
+      sourceStart: window.inventoryStart,
+      sourceEnd: window.inventoryEnd,
+      destStart: destination,
+      destEnd: destination + 1,
+    });
+  }
+
 }
 
 export default EnchantItem;

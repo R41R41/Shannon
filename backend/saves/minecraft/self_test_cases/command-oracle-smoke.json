@@ -1,0 +1,40 @@
+{
+  "testSuite": "command-oracle-smoke",
+  "description": "Minecraftコマンドを第三者Oracleとして使い、スキル自己申告と実ワールド状態を分離して判定するスモーク",
+  "commandOracle": true,
+  "globalSetup": [
+    "/fill -5 99 -5 5 99 5 stone",
+    "/tp @s 0 100 0",
+    "/gamemode survival @s",
+    "/clear @s",
+    "/give @s iron_ingot 3",
+    "/time set day",
+    "/weather clear"
+  ],
+  "cases": [
+    {
+      "skillName": "get-position",
+      "args": [],
+      "description": "固定試験床にいることをスキル結果ではなくサーバーコマンドで確認",
+      "expectedOutcome": "success",
+      "assertions": [
+        { "type": "position_within", "x": 0, "y": 100, "z": 0, "radius": 2 },
+        { "type": "block_at", "x": 0, "y": 99, "z": 0, "block": "stone" },
+        { "type": "dimension", "dimension": "overworld" },
+        { "type": "gamemode", "gamemode": "survival" },
+        { "type": "health_between", "min": 20, "max": 20 },
+        { "type": "food_between", "min": 20, "max": 20 },
+        { "type": "entity_nearby", "entity": "zombie", "maxDistance": 8, "present": false }
+      ]
+    },
+    {
+      "skillName": "check-inventory-item",
+      "args": ["iron_ingot"],
+      "description": "鉄インゴット3個が実インベントリに存在することをclear 0のコマンド結果で確認",
+      "expectedOutcome": "success",
+      "assertions": [
+        { "type": "inventory_count", "item": "iron_ingot", "minCount": 3, "maxCount": 3 }
+      ]
+    }
+  ]
+}

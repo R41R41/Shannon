@@ -35,6 +35,18 @@ interface ChatMessageRequest {
     message: string;
 }
 
+export interface MinebotHttpServerOptions {
+    /** The bearer token the UI mod must send. Defaults to MINEBOT_API_TOKEN, read on every request. */
+    machineToken?: () => string;
+    /**
+     * Refuse changes to constant skills and reaction settings. They are written to the shared saves files,
+     * which an isolated lab run must neither change nor be changed by in the middle of a run.
+     */
+    settingsLocked?: boolean;
+}
+
+const SETTING_PATHS = ['/constant_skill_switch', '/reaction_setting_update', '/reaction_settings_reset'];
+
 /**
  * MinebotHttpServer
  * Express APIサーバーの管理を担当
@@ -49,16 +61,19 @@ export class MinebotHttpServer {
     private onChatMessageCallback: ((sender: string, message: string) => Promise<void>) | null = null;
     private eventReactionSystem: EventReactionSystem | null = null;
     private taskRuntime: MinebotTaskRuntime | null = null;
+    private options: MinebotHttpServerOptions;
 
     constructor(
         bot: CustomBot,
         sendConstantSkillsCallback: () => Promise<void>,
-        sendReactionSettingsCallback?: () => Promise<void>
+        sendReactionSettingsCallback?: () => Promise<void>,
+        options: MinebotHttpServerOptions = {}
     ) {
         this.bot = bot;
         this.skillLoader = new SkillLoader();
         this.sendConstantSkillsCallback = sendConstantSkillsCallback;
         this.sendReactionSettingsCallback = sendReactionSettingsCallback || (async () => { });
+        this.options = options;
         this.app = express();
         this.setupMiddleware();
         this.registerEndpoints();
@@ -86,8 +101,15 @@ export class MinebotHttpServer {
      * ミドルウェアの設定
      */
     private setupMiddleware(): void {
-        this.app.use(requireMachineToken(() => process.env.MINEBOT_API_TOKEN ?? ''));
+        this.app.use(requireMachineToken(this.options.machineToken ?? (() => process.env.MINEBOT_API_TOKEN ?? '')));
         this.app.use(express.json({ limit: '64kb' }));
+        if (this.options.settingsLocked) {
+            this.app.use(SETTING_PATHS, (req: any, res: any) => {
+                // The UI shows the state it is sent, so it is resent as it stands.
+                void (req.baseUrl === '/constant_skill_switch' ? this.sendConstantSkillsCallback() : this.sendReactionSettingsCallback());
+                res.status(403).json({ success: false, result: 'settings are fixed for this run' });
+            });
+        }
     }
 
     /**
@@ -492,14 +514,14 @@ export class MinebotHttpServer {
     /**
      * サーバーを起動
      */
-    start(): void {
+    start(port: number = CONFIG.MINEBOT_API_PORT): void {
         if (this.server) {
             log.warn('⚠️ Server is already running');
             return;
         }
 
-        this.server = this.app.listen(CONFIG.MINEBOT_API_PORT, '127.0.0.1', () => {
-            log.success(`✅ Express server listening on port ${CONFIG.MINEBOT_API_PORT}`);
+        this.server = this.app.listen(port, '127.0.0.1', () => {
+            log.success(`✅ Express server listening on port ${port}`);
         });
     }
 

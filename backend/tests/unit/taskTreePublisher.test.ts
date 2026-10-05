@@ -8,6 +8,7 @@ vi.mock('../../src/services/minebot/config/MinebotConfig.js', () => ({
 }));
 vi.mock('../../src/utils/logger.js', () => ({
   logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn() },
+  createLogger: () => ({ warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn(), success: vi.fn() }),
 }));
 vi.mock('../../src/services/common/webConversationPort.js', () => ({
   createRequestWebConversation: () => ({ publishPlanning: vi.fn(async () => ({ status: 'sent' })) }),

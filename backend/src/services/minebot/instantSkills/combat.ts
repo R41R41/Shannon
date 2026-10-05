@@ -3,6 +3,7 @@ import { CustomBot, InstantSkill } from '../types.js';
 import { createLogger } from '../../../utils/logger.js';
 import { shouldRefuseAggressiveCombat } from '../utils/minebotToolPolicy.js';
 import { setMovements } from '../utils/setMovements.js';
+import { actionDelay } from '../execution/observedWait.js';
 
 const { goals } = pathfinder;
 const log = createLogger('Minebot:Skill:combat');
@@ -282,7 +283,7 @@ class Combat extends InstantSkill {
                     }
 
                     // 攻撃クールダウン
-                    await new Promise(resolve => setTimeout(resolve, 500));
+                    await actionDelay(this.bot, 500);
                 } else {
                     // 追いかける
                     const goal = new goals.GoalFollow(enemy, CHASE_RANGE);
@@ -294,7 +295,7 @@ class Combat extends InstantSkill {
                     }
 
                     // 少し待つ
-                    await new Promise(resolve => setTimeout(resolve, 200));
+                    await actionDelay(this.bot, 200);
                 }
 
                 // HPが危険な場合は撤退
@@ -313,7 +314,7 @@ class Combat extends InstantSkill {
             const remaining = this.scanRemainingEntities(target, 16);
             const baseMsg = `タイムアウト。${enemyName}を${attackCount}回攻撃しましたが、まだ生きています。`;
             return {
-                success: true,
+                success: false,
                 result: remaining ? `${baseMsg} ${remaining}` : baseMsg,
             };
 
@@ -332,4 +333,3 @@ class Combat extends InstantSkill {
 }
 
 export default Combat;
-

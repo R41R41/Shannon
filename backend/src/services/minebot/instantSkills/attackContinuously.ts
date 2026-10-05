@@ -3,6 +3,8 @@ import { createLogger } from '../../../utils/logger.js';
 import { CustomBot, InstantSkill } from '../types.js';
 import { shouldRefuseAggressiveCombat } from '../utils/minebotToolPolicy.js';
 import { gotoSafe } from '../utils/gotoSafe.js';
+import { actionDelay } from '../execution/observedWait.js';
+import { visiblePointOn } from '../utils/sightLine.js';
 
 const { goals } = pathfinder;
 const log = createLogger('Minebot:Skill:attackContinuously');
@@ -14,6 +16,11 @@ const log = createLogger('Minebot:Skill:attackContinuously');
  * 1体倒した後は自動的に次のターゲットを探して攻撃を続行する。
  * 倒した後に周囲の同種モブを再スキャンし、結果に含める。
  */
+const DROP_COLLECT_BUDGET_MS = 8_000;
+const DROP_COLLECT_RADIUS = 10;
+/** From the eyes to the nearest point of a target's body within which a blow lands. */
+const HOLD_REACH = 3;
+
 class AttackContinuously extends InstantSkill {
   constructor(bot: CustomBot) {
     super(bot);
@@ -23,7 +30,8 @@ class AttackContinuously extends InstantSkill {
       {
         name: 'entityName',
         type: 'string',
-        description: '攻撃対象。単体名(cow)、カンマ区切り(cow,pig,chicken,sheep)、または特殊キーワード: "food_animals"(食料モブ一括), "hostile"(敵対Mob)。省略時は敵対的Mobのみ',
+        description: '攻撃対象。単体名(cow)、カンマ区切り(cow,pig,chicken,sheep)、または特殊キーワード: "food_animals"(食料モブ一括), "hostile"(敵対Mob)。省略時は敵対的Mobのみ。'
+          + 'ここで指定した相手は、このスキルの実行中は「近くに居る・当ててきた」だけでは緊急対応に中断されない（体力が半分以下になるか、指定していない別の種類が近づくと中断される）',
         default: '',
       },
       {
@@ -44,12 +52,19 @@ class AttackContinuously extends InstantSkill {
         description: '最大キル数（0=制限なし。指定するとその数だけ倒して停止）',
         default: 0,
       },
+      {
+        name: 'holdPosition',
+        type: 'boolean',
+        description: 'trueにすると、その場から動かず、手の届く所に来た対象だけを攻撃する（囲いの中や、壁の穴ごしに戦う時用。追いかけず、落とし物も取りに出ない）。デフォルト: false',
+        default: false,
+      },
     ];
   }
 
-  async runImpl(entityName: string = '', maxAttacks: number = 30, maxDistance: number = 24, maxKills: number = 0) {
+  async runImpl(entityName: string = '', maxAttacks: number = 30, maxDistance: number = 24, maxKills: number = 0, holdPosition: boolean = false) {
+    this.holding = holdPosition === true;
     try {
-      const refuse = shouldRefuseAggressiveCombat(this.bot);
+      const refuse = shouldRefuseAggressiveCombat(this.bot, entityName, this.holding);
       if (refuse) {
         return { success: false, result: refuse };
       }
@@ -120,7 +135,11 @@ class AttackContinuously extends InstantSkill {
       const startTime = Date.now();
       const TIMEOUT = 60000;
 
-      for (let i = 0; i < maxAttacks; i++) {
+      // Until that many blows have been struck, not that many times round: a round that only closes the
+      // distance, waits for the target to come down into reach, or counts a kill is no blow. Counting rounds,
+      // a call for forty blows went back to the planner after ten, with two blazes a block away (lab; the
+      // time limit below is what bounds a fight that cannot be had).
+      while (attackCount < maxAttacks) {
         if (this.shouldInterrupt()) {
           this.stopMovement();
           const killInfo = kills > 0 ? `（${kills}体撃破: ${killedNames.join(', ')}）` : '';
@@ -169,6 +188,26 @@ class AttackContinuously extends InstantSkill {
           continue;
         }
 
+        // Holding its ground (inside a cover, at a hole in a wall): it does not go after anything. A blow is
+        // struck only at what has come within a blow of the eyes, and the nearest of those is the one struck.
+        if (this.holding) {
+          const inReach = this.nearestInReach(matchesTarget);
+          if (inReach) {
+            target = inReach.entity as NonNullable<typeof target>;
+            lastTargetName = target.name || 'unknown';
+            await this.bot.lookAt(inReach.point);
+            await this.bot.attack(target);
+            attackCount++;
+            await actionDelay(this.bot, weaponEquipped.includes('axe') ? 900 : weaponEquipped.includes('sword') ? 550 : 200);
+          } else {
+            await actionDelay(this.bot, 100);
+            const other = findTarget();
+            if (other) { target = other; lastTargetName = target.name || 'unknown'; }
+            else if (!target.isValid) break;
+          }
+          continue;
+        }
+
         // ── 追跡: パスファインダーで安全に近づく ──
         if (distance > 3.5) {
           const tp = target.position;
@@ -191,9 +230,9 @@ class AttackContinuously extends InstantSkill {
           attackCount++;
 
           const cooldown = weaponEquipped.includes('axe') ? 900 : weaponEquipped.includes('sword') ? 550 : 200;
-          await new Promise(r => setTimeout(r, cooldown));
+          await actionDelay(this.bot, cooldown);
         } else {
-          await new Promise(r => setTimeout(r, 100));
+          await actionDelay(this.bot, 100);
         }
 
         // 最後のターゲットが死んだ場合もキルカウント
@@ -227,9 +266,13 @@ class AttackContinuously extends InstantSkill {
       }
 
       if (attackCount === 0) {
+        const near = this.holding ? Object.values(this.bot.entities).filter((entity: any) => entity?.position && entity !== this.bot.entity
+          && matchesTarget(String(entity.name ?? '').toLowerCase()) && entity.position.distanceTo(this.bot.entity.position) <= maxDistance).length : 0;
         return {
           success: false,
-          result: `${lastTargetName}に攻撃できませんでした`,
+          result: this.holding
+            ? `${maxDistance}ブロック以内に${targetDesc}は${near}体いますが、その場から見えて手の届く所（目から3ブロック以内）には来ませんでした`
+            : `${lastTargetName}に攻撃できませんでした`,
           failureType: 'target_not_found',
           recoverable: true,
         };
@@ -324,40 +367,59 @@ class AttackContinuously extends InstantSkill {
    *   2. 増分なし → gotoSafe でアイテムエンティティに歩いて拾う
    *   3. 拾えたか再度インベントリで確認
    */
+  /** Set for the run: the body stays where it is (see the holdPosition parameter). */
+  private holding = false;
+
+  /**
+   * The nearest wanted target with a point of its body that the eyes can see within a blow (three blocks, as
+   * the server allows), and that point. What is behind a wall is not struck at: see utils/sightLine.
+   */
+  private nearestInReach(matches: (name: string) => boolean): { entity: any; point: any } | null {
+    const eyes = this.bot.entity.position.offset(0, 1.62, 0);
+    let best: { entity: any; point: any } | null = null, bestDistance = Infinity;
+    for (const entity of Object.values(this.bot.entities) as any[]) {
+      if (!entity?.position || entity === this.bot.entity || entity.isValid === false) continue;
+      if (!matches(String(entity.name ?? '').toLowerCase())) continue;
+      if (entity.position.distanceTo(this.bot.entity.position) > HOLD_REACH + 3) continue;
+      const point = visiblePointOn(this.bot as any, entity, HOLD_REACH);
+      if (!point) continue;
+      const distance = point.distanceTo(eyes);
+      if (distance < bestDistance) { best = { entity, point }; bestDistance = distance; }
+    }
+    return best;
+  }
+
   private async collectNearbyDrops(): Promise<string[]> {
     const before = this.snapshotInventory();
 
     // ドロップスポーン待ち
-    await new Promise(r => setTimeout(r, 450));
+    await actionDelay(this.bot, 450);
 
     // Phase 1: 自然回収を待つ（近くにいれば自動で拾う）
-    const autoPicked = await this.waitForPickup(before, 1500);
-    if (autoPicked.length > 0) return autoPicked;
+    await this.waitForPickup(before, 1500);
+    if (this.holding) return this.inventoryDiff(before);
 
-    // Phase 2: アイテムエンティティに歩いて拾う（最大3パス）
-    for (let pass = 0; pass < 3; pass++) {
-      if (this.shouldInterrupt()) break;
-
+    // Phase 2: walk to every drop still lying there. A kill leaves several
+    // items (a sheep: wool and mutton); stopping at the first one picked up
+    // left the rest on the ground, and three sheep yielded two wool, one
+    // short of a bed (lab probe).
+    const deadline = Date.now() + DROP_COLLECT_BUDGET_MS;
+    const given = new Set<number>();
+    while (Date.now() < deadline && !this.shouldInterrupt()) {
       const item = this.bot.nearestEntity(
-        e => e.name === 'item' && e.position.distanceTo(this.bot.entity.position) < 12,
+        e => e.name === 'item' && !given.has(e.id) && e.position.distanceTo(this.bot.entity.position) < DROP_COLLECT_RADIUS,
       );
       if (!item) break;
-
-      const d = item.position.distanceTo(this.bot.entity.position);
-      if (d > 1.5) {
-        const itemPos = item.position;
+      const itemPos = item.position;
+      if (itemPos.distanceTo(this.bot.entity.position) > 1) {
         try {
-          await gotoSafe(this.bot, new goals.GoalNear(
-            itemPos.x, itemPos.y, itemPos.z, 1,
-          ), { timeoutMs: 4000, stuckAbortCount: 3, logStuck: false });
+          await gotoSafe(this.bot, new goals.GoalNear(itemPos.x, itemPos.y, itemPos.z, 0), { timeoutMs: 4000, stuckAbortCount: 3, logStuck: false });
         } catch { /* ignore */ }
         this.stopMovement();
       }
-
-      await new Promise(r => setTimeout(r, 400));
-
-      const diff = this.inventoryDiff(before);
-      if (diff.length > 0) return diff;
+      await actionDelay(this.bot, 400);
+      // Still there after standing on it: not ours to pick up (full pack, or out of reach). Do not circle it.
+      if (this.bot.entities[item.id]) given.add(item.id);
     }
 
     return this.inventoryDiff(before);
@@ -376,7 +438,7 @@ class AttackContinuously extends InstantSkill {
     let sawPickup = false;
 
     while (Date.now() < deadline) {
-      await new Promise(r => setTimeout(r, POLL_MS));
+      await actionDelay(this.bot, POLL_MS);
       const diff = this.inventoryDiff(before);
       if (diff.length > 0) sawPickup = true;
 

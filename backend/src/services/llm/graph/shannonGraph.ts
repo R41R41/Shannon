@@ -15,6 +15,7 @@ import { minecraftTaskContinuation } from '../../minebot/runtime/minecraftTaskCo
 
 import { Annotation, END, START, StateGraph } from '@langchain/langgraph';
 import { config } from '../../../config/env.js';
+import { minecraftPlannerProvider } from '../../minebot/cognition/OpenAIPlannerClient.js';
 import { createLogger } from '../../../utils/logger.js';
 
 const logger = createLogger('LLM:ShannonGraph');
@@ -36,7 +37,7 @@ import type { ScopedMemoryService } from '../../memory/scopedMemoryService.js';
 import { ScopedMemoryService as ScopedMemoryServiceImpl } from '../../memory/scopedMemoryService.js';
 import { ModelSelector } from './cognitive/ModelSelector.js';
 import { TaskEpisodeMemory } from './cognitive/TaskEpisodeMemory.js';
-import type { ExecutionResult } from './types.js';
+import type { ExecutionResult, MinecraftTaskCheckpoint, MinecraftToolFinishedEvent } from './types.js';
 import { isDiscordArtifactTask } from './policies/taskToolPolicy.js';
 
 // ---------------------------------------------------------------------------
@@ -68,6 +69,12 @@ const ShannonState = Annotation.Root({
   _onToolStarting: Annotation<((toolName: string, args?: Record<string, unknown>) => void) | undefined>({
     reducer: replace, default: () => undefined,
   }),
+  _onToolFinished: Annotation<((event: MinecraftToolFinishedEvent) => void) | undefined>({
+    reducer: replace, default: () => undefined,
+  }),
+  _onCheckpoint: Annotation<((checkpoint: MinecraftTaskCheckpoint) => void) | undefined>({
+    reducer: replace, default: () => undefined,
+  }),
   _onTaskTreeUpdate: Annotation<((taskTree: TaskTreeState) => void) | undefined>({
     reducer: replace, default: () => undefined,
   }),
@@ -97,6 +104,7 @@ const ShannonState = Annotation.Root({
   recoveryStatus: Annotation<string | undefined>({ reducer: replace, default: () => undefined }),
   savedMessages: Annotation<unknown[] | undefined>({ reducer: replace, default: () => undefined }),
   savedTaskNodes: Annotation<unknown[] | undefined>({ reducer: replace, default: () => undefined }),
+  savedCognitiveWorkspace: Annotation<unknown | undefined>({ reducer: replace, default: () => undefined }),
 });
 
 type ShannonStateType = typeof ShannonState.State;
@@ -250,13 +258,14 @@ function createExecuteNode(
     // Discord/Web 等は FCA (OpenAI / LangChain Anthropic)。Minebot のみ ShannonExecutor。
     const useShannonExecutor =
       envelope.channel === 'minecraft'
-      && Boolean(config.anthropic?.apiKey)
+      && Boolean(minecraftPlannerProvider(config))
       && process.env.SHANNON_USE_FCA !== 'true';
 
     // ═══ ShannonExecutor パス (Anthropic API 直接呼出・Minecraft のみ) ═══
     if (useShannonExecutor) {
       try {
         const { ShannonExecutor, skillToAnthropicTool, routineToAnthropicTool } = await import('./ShannonExecutor.js');
+        const { createConfiguredExecutionCritic } = await import('../../minebot/cognition/JevExecutionCritic.js');
         const { PromptBuilder } = await import('./nodes/prompt/PromptBuilder.js');
 
         // ツール定義を構築 (Anthropic ネイティブ形式)
@@ -391,25 +400,52 @@ function createExecuteNode(
           routineExecutor,
           llmTools: llmToolMap,
           continuation: minecraftTaskContinuation(envelope.minecraft),
+          criticMode: config.minecraftCognition.mode,
+          executionSupervisionMode: config.minecraftCognition.mode === 'off'
+            ? 'off' : config.minecraftCognition.executionSupervisionMode,
+          executionCritic: config.minecraftCognition.mode === 'off'
+            ? undefined
+            : createConfiguredExecutionCritic({
+                MINECRAFT_COGNITION_PROVIDER: config.minecraftCognition.provider,
+                TYPESAFE_API_KEY: config.minecraftCognition.jevApiKey,
+                SHANNON_JEV_ENDPOINT: config.minecraftCognition.jevEndpoint,
+                SHANNON_JEV_MODEL: config.minecraftCognition.jevModel,
+                SHANNON_JEV_TIMEOUT_MS: String(config.minecraftCognition.jevTimeoutMs),
+                OPENAI_API_KEY: config.minecraftCognition.openAIApiKey,
+                MINECRAFT_OPENAI_ENDPOINT: config.minecraftCognition.openAIEndpoint,
+                MINECRAFT_OPENAI_MODEL: config.minecraftCognition.openAIModel,
+                MINECRAFT_OPENAI_REASONING_EFFORT: config.minecraftCognition.openAIReasoningEffort,
+                MINECRAFT_OPENAI_TIMEOUT_MS: String(config.minecraftCognition.openAITimeoutMs),
+              }),
         });
 
         const previousMessages = (envelope.metadata as any)?.previousMessages as
           import('./ShannonExecutor.js').ShannonExecutorState['previousMessages'];
         const previousTaskNodes = (envelope.metadata as any)?.previousTaskNodes as
           import('@shannon/common').TaskNode[] | undefined;
+        const previousWorkspaceSnapshot = (envelope.metadata as any)?.previousCognitiveWorkspace as
+          import('../../minebot/cognition/types.js').TaskWorkspaceSnapshot | undefined;
+        const initialReflexDecision = (envelope.metadata as any)?.reflexDecision as
+          import('../../minebot/cognition/types.js').ReflexDecision | undefined;
 
         const result = await executor.run({
+          runId: previousWorkspaceSnapshot?.runId ?? envelope.requestId,
           goal: envelope.text ?? '',
           context,
           systemPrompt,
           tools: toolsForRun,
           tags: envelope.tags,
           onToolStarting: state._onToolStarting,
+          onToolFinished: state._onToolFinished,
+          onCheckpoint: state._onCheckpoint,
           onTaskTreeUpdate: state._onTaskTreeUpdate,
           abortSignal: state._abortSignal,
           getHumanFeedback: (envelope.metadata as any)?.getHumanFeedback,
           previousMessages,
           previousTaskNodes,
+          previousWorkspaceSnapshot,
+          initialReflexDecision,
+          goalContract: (envelope.metadata as any)?.goalContract,
         });
 
         return {
@@ -419,6 +455,7 @@ function createExecuteNode(
           recoveryStatus: result.recoveryStatus,
           savedMessages: result.messages,
           savedTaskNodes: result.taskNodes,
+          savedCognitiveWorkspace: result.cognitiveWorkspace,
         };
       } catch (e) {
         // Cancellation must not start a fallback engine.
@@ -512,6 +549,8 @@ export async function invokeShannonGraph(
   legacyMessages?: BaseMessage[],
   options?: {
     onToolStarting?: (toolName: string, args?: Record<string, unknown>) => void;
+    onToolFinished?: (event: MinecraftToolFinishedEvent) => void;
+    onCheckpoint?: (checkpoint: MinecraftTaskCheckpoint) => void;
     onTaskTreeUpdate?: (taskTree: TaskTreeState) => void;
     onStreamSentence?: (sentence: string) => Promise<void>;
     onRequestSkillInterrupt?: () => void;
@@ -527,6 +566,8 @@ export async function invokeShannonGraph(
     envelope,
     _legacyMessages: legacyMessages ?? [],
     _onToolStarting: options?.onToolStarting,
+    _onToolFinished: options?.onToolFinished,
+    _onCheckpoint: options?.onCheckpoint,
     _onTaskTreeUpdate: options?.onTaskTreeUpdate,
     _onStreamSentence: options?.onStreamSentence,
     _onRequestSkillInterrupt: options?.onRequestSkillInterrupt,

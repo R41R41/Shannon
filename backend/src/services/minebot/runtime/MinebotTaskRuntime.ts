@@ -1,4 +1,5 @@
 import { minecraftContextKey, minecraftConversationKeys } from '../../../modules/memory/minecraftIdentity.js';
+import { scanLoadedBlocks } from '../utils/loadedBlockScan.js';
 import { minecraftMemoryContext, validateMinecraftEnvelope, assertMinecraftContinuation, assertMinecraftConnected } from './memoryContext.js';
 import { BaseMessage, HumanMessage } from '@langchain/core/messages';
 import type { MinecraftInventoryEntry, RequestEnvelope } from '@shannon/common';
@@ -8,12 +9,15 @@ import type {
   TaskListState,
   TaskQueueEntry,
   TaskStateInput,
+  MinecraftTaskCheckpoint,
+  MinecraftToolFinishedEvent,
 } from '../../llm/graph/types.js';
 import { GRAPH_CONFIG } from '../../llm/graph/types.js';
 import type { TaskTreeState } from '@shannon/common';
 import type { CustomBot } from '../types.js';
 import { CONFIG } from '../config/MinebotConfig.js';
 import { mapBotInventoryItems } from '../utils/inventorySnapshot.js';
+import { hasActiveSafetyLease } from '../execution/ActionExecution.js';
 
 const log = createLogger('Minebot:TaskRuntime');
 
@@ -22,6 +26,8 @@ type UnifiedExecutor = (
   messages?: BaseMessage[],
   options?: {
     onToolStarting?: (toolName: string, args?: Record<string, unknown>) => void;
+    onToolFinished?: (event: MinecraftToolFinishedEvent) => void;
+    onCheckpoint?: (checkpoint: MinecraftTaskCheckpoint) => void;
     onTaskTreeUpdate?: (taskTree: TaskTreeState) => void;
     onRequestSkillInterrupt?: () => void;
     getLiveInventory?: () => MinecraftInventoryEntry[];
@@ -35,11 +41,19 @@ export class MinebotTaskRuntime {
   private taskQueue: TaskQueueEntry[] = [];
   private emergencyTask: TaskQueueEntry | null = null;
   private isEmergencyMode = false;
-  private abortedForEmergency = false;
+  private preemptedRuns = new Set<number>();
+  private runGeneration = 0;
+  private activeRunGeneration = 0;
+  private taskRunGenerations = new Map<string, number>();
+  private activeTaskInput: TaskStateInput | null = null;
   private isExecuting = false;
   private abortController: AbortController | null = null;
   private onTaskListUpdate: ((tasks: TaskListState) => void) | null = null;
   private executor: UnifiedExecutor | null = null;
+  /** Tasks put ahead of the queue by putTaskFirst, still in it; later ones line up behind them. */
+  private firstTaskIds = new Set<string>();
+  /** Queue tasks paused by putTaskFirst; their cancelled run must not count as their end. */
+  private yieldedTaskIds = new Set<string>();
 
   public currentState: {
     taskId: string;
@@ -56,6 +70,8 @@ export class MinebotTaskRuntime {
     savedMessages?: unknown[];
     /** LLM管理型タスクツリーのノード（再開に使用） */
     savedTaskNodes?: unknown[];
+    /** Run-scoped WorldFrame / ActionReceipt / Jev critic state. */
+    savedCognitiveWorkspace?: unknown;
   } | null = null;
 
   constructor(bot: CustomBot) {
@@ -90,6 +106,9 @@ export class MinebotTaskRuntime {
 
     this.isExecuting = true;
     this.abortController = new AbortController();
+    const runGeneration = ++this.runGeneration;
+    this.activeRunGeneration = runGeneration;
+    const ownsCurrentRun = () => this.activeRunGeneration === runGeneration;
 
     if (partialState.isEmergency) {
       this.bot.suppressMinebotGameChat = true;
@@ -101,6 +120,10 @@ export class MinebotTaskRuntime {
 
     const taskId = partialState.taskId ?? crypto.randomUUID();
     const createdAt = Date.now();
+    if (!partialState.isEmergency) this.activeTaskInput = { ...partialState, taskId };
+    if (this.taskQueue.some(task => task.id === taskId && task.status === 'executing')) {
+      this.taskRunGenerations.set(taskId, runGeneration);
+    }
     let requestMemoryKey: string | null = null;
     let removeContextListeners = () => {};
     this.currentState = {
@@ -109,7 +132,7 @@ export class MinebotTaskRuntime {
       forceStop: false,
       retryBudget: 2,
       recoveryStatus: 'idle',
-      taskTree: {
+      taskTree: partialState.taskTree ?? {
         status: 'in_progress',
         goal: partialState.userMessage ?? '',
         strategy: '',
@@ -142,7 +165,7 @@ export class MinebotTaskRuntime {
       (envelope as any).metadata = {
         ...(envelope as any).metadata,
         getHumanFeedback: () => {
-          if (this.currentState?.humanFeedbackPending && this.currentState?.humanFeedback) {
+          if (ownsCurrentRun() && this.currentState?.humanFeedbackPending && this.currentState?.humanFeedback) {
             const fb = this.currentState.humanFeedback;
             this.currentState.humanFeedback = undefined;
             this.currentState.humanFeedbackPending = false;
@@ -158,9 +181,18 @@ export class MinebotTaskRuntime {
       }
 
       const graphResult = await this.executor(envelope, messages, {
-        onToolStarting: partialState.onToolStarting,
-        onTaskTreeUpdate: (taskTree) => this.handleTaskTreeUpdate(taskId, taskTree),
+        onToolStarting: (name, args) => {
+          if (ownsCurrentRun() && !controller?.signal.aborted) partialState.onToolStarting?.(name, args);
+        },
+        onToolFinished: event => {
+          if (ownsCurrentRun() && !controller?.signal.aborted) partialState.onToolFinished?.(event);
+        },
+        onCheckpoint: checkpoint => this.handleExecutionCheckpoint(taskId, runGeneration, checkpoint),
+        onTaskTreeUpdate: (taskTree) => {
+          if (ownsCurrentRun()) this.handleTaskTreeUpdate(taskId, taskTree);
+        },
         onRequestSkillInterrupt: () => {
+          if (!ownsCurrentRun() || controller?.signal.aborted) return;
           this.bot.interruptExecution = true;
           log.warn('⚡ MetaCognition からスキル中断要求 → bot.interruptExecution = true');
         },
@@ -171,7 +203,15 @@ export class MinebotTaskRuntime {
         },
         abortSignal: this.abortController?.signal,
       });
+      if (controller?.signal.aborted && this.preemptedRuns.has(runGeneration)) {
+        this.handleExecutionCheckpoint(taskId, runGeneration, {
+          messages: graphResult?.savedMessages ?? [],
+          taskNodes: graphResult?.savedTaskNodes ?? [],
+          cognitiveWorkspace: graphResult?.savedCognitiveWorkspace,
+        });
+      }
       if (controller?.signal.aborted) throw new Error('MINECRAFT_TASK_CONTEXT_CANCELLED');
+      if (!ownsCurrentRun()) return null;
 
       const taskTree =
         this.currentState?.forceStop
@@ -193,15 +233,17 @@ export class MinebotTaskRuntime {
         graphResult,
         savedMessages: graphResult?.savedMessages,
         savedTaskNodes: graphResult?.savedTaskNodes,
+        savedCognitiveWorkspace: graphResult?.savedCognitiveWorkspace,
       };
       this.notifyTaskListUpdate();
 
       return this.currentState;
     } catch (error) {
       // 緊急プリエンプションによる中断の場合はエラー扱いにしない（paused タスクを保全）
-      if (this.abortedForEmergency) {
+      if (this.preemptedRuns.has(runGeneration)) {
         log.info('♻️ タスクは緊急プリエンプションにより中断 — 緊急タスク完了後に再開予定');
-        this.abortedForEmergency = false;
+        this.preemptedRuns.delete(runGeneration);
+        if (!ownsCurrentRun()) return null;
         this.currentState = {
           taskId,
           memoryContextKey: requestMemoryKey,
@@ -209,6 +251,9 @@ export class MinebotTaskRuntime {
           forceStop: true,
           retryBudget: this.currentState?.retryBudget ?? 2,
           recoveryStatus: 'idle',
+          savedMessages: this.currentState?.savedMessages,
+          savedTaskNodes: this.currentState?.savedTaskNodes,
+          savedCognitiveWorkspace: this.currentState?.savedCognitiveWorkspace,
           taskTree: this.currentState?.taskTree ?? {
             status: 'in_progress',
             goal: partialState.userMessage ?? 'Task',
@@ -219,6 +264,8 @@ export class MinebotTaskRuntime {
         this.notifyTaskListUpdate();
         return this.currentState;
       }
+
+      if (!ownsCurrentRun()) return null;
 
       log.error('Task execution error', error);
       this.currentState = {
@@ -240,33 +287,45 @@ export class MinebotTaskRuntime {
       return this.currentState;
     } finally {
       removeContextListeners();
-      this.isExecuting = false;
-      this.abortController = null;
-      this.bot.suppressMinebotGameChat = false;
-      this.bot.minebotControlState = 'idle';
+      this.preemptedRuns.delete(runGeneration);
+      if (ownsCurrentRun()) {
+        this.isExecuting = false;
+        this.abortController = null;
+        if (!partialState.isEmergency) this.activeTaskInput = null;
+        this.bot.suppressMinebotGameChat = false;
+        this.bot.minebotControlState = 'idle';
 
-      if (partialState.isEmergency || this.isEmergencyMode) {
-        this.isEmergencyMode = false;
-        this.emergencyTask = null;
-      }
+      // A preempted main task must leave emergency mode owned by the emergency
+      // handler. Clearing it here would restart the paused task before the
+      // emergency executor has taken control.
+      // Emergency ownership is released only by resumePreviousTask after
+      // native clearance. An unsuccessful model run must leave the main task paused.
+        if (partialState.isEmergency && this.isEmergencyMode) {
+          this.bot.minebotControlState = 'emergency_reflect';
+        }
 
-      const hasPendingTasks = this.taskQueue.some(
-        (task) => task.status === 'pending' || task.status === 'paused',
-      );
-      if (hasPendingTasks && !this.isEmergencyMode) {
-        setTimeout(() => {
-          void this.executeNextTask();
-        }, 500);
+        const hasPendingTasks = this.taskQueue.some(
+          (task) => task.status === 'pending' || task.status === 'paused',
+        );
+        if (hasPendingTasks && !this.isEmergencyMode) {
+          setTimeout(() => {
+            void this.executeNextTask();
+          }, 500);
+        }
+        this.notifyTaskListUpdate();
       }
-      this.notifyTaskListUpdate();
     }
   }
 
-  public forceStop(): void {
+  public forceStop(options: { preserveSafetyLease?: boolean } = {}): void {
     if (this.currentState) {
       this.currentState.forceStop = true;
     }
-    this.stopBotActions();
+    // An emergency may arrive after an independent critical ConstantSkill has
+    // already taken the motor lease. Abort this task, not that live safety
+    // action: blanket control clearing and the legacy interrupt bit would
+    // otherwise cancel its jump/movement on the next 50 ms action poll.
+    if (!(options.preserveSafetyLease && hasActiveSafetyLease(this.bot))) this.stopBotActions();
     if (this.abortController) {
       this.abortController.abort();
       this.abortController = null;
@@ -330,6 +389,7 @@ export class MinebotTaskRuntime {
     const goal = this.currentState.taskTree?.goal || 'Task';
     const savedMessages = this.currentState.savedMessages;
     const savedTaskNodes = this.currentState.savedTaskNodes;
+    const savedCognitiveWorkspace = this.currentState.savedCognitiveWorkspace;
 
     const envelopeForResume: RequestEnvelope = {
       ...overrides.envelope,
@@ -346,6 +406,10 @@ export class MinebotTaskRuntime {
       resumeMetadata.previousTaskNodes = savedTaskNodes;
       log.info(`🌳 MAX_ITERATIONS 再開: ${savedTaskNodes.length} タスクノードを引き継ぎ`);
     }
+    if (savedCognitiveWorkspace) {
+      resumeMetadata.previousCognitiveWorkspace = savedCognitiveWorkspace;
+      log.info('🧭 MAX_ITERATIONS 再開: cognitive workspace を引き継ぎ');
+    }
     (envelopeForResume as any).metadata = resumeMetadata;
 
     return this.invoke({
@@ -361,6 +425,21 @@ export class MinebotTaskRuntime {
     });
   }
 
+  /** Continue a bounded autonomous campaign turn without inventing user feedback. */
+  public async resumeAwaitingCampaignTask(taskId: string, expectedGoal: string): Promise<boolean> {
+    if (this.isExecuting || this.isEmergencyMode) return false;
+    const task = this.taskQueue.find(entry => entry.id === taskId && entry.status === 'awaiting_user');
+    if (!task || task.state.isEmergency || task.state.userMessage !== expectedGoal ||
+      task.state.envelope?.text !== expectedGoal) return false;
+    // Reuse the original user objective and audience. This throws if the bot
+    // reconnected into another world rather than silently moving a campaign.
+    this.taskInputToEnvelope(task.state);
+    task.status = 'pending';
+    this.notifyTaskListUpdate();
+    void this.executeNextTask();
+    return true;
+  }
+
   public isRunning(): boolean {
     return this.isExecuting;
   }
@@ -370,16 +449,37 @@ export class MinebotTaskRuntime {
   }
 
   public async interruptForEmergency(_message: string): Promise<void> {
-    const executingTask = this.taskQueue.find((task) => task.status === 'executing');
+    let executingTask = this.taskQueue.find((task) => task.status === 'executing');
+    if (!executingTask && this.isExecuting && this.currentState && this.activeTaskInput) {
+      // SkillAgent's direct chat path does not enter the queue. Preserve its
+      // exact original objective and envelope so it can resume after danger.
+      executingTask = {
+        id: this.currentState.taskId, createdAt: this.currentState.createdAt,
+        state: { ...this.activeTaskInput, taskId: this.currentState.taskId },
+        taskTree: this.currentState.taskTree ?? null, status: 'executing',
+      };
+      this.taskQueue.unshift(executingTask);
+      this.taskRunGenerations.set(executingTask.id, this.activeRunGeneration);
+    }
     if (executingTask) {
       executingTask.status = 'paused';
       executingTask.taskTree = (this.currentState?.taskTree as any) ?? executingTask.taskTree;
+      executingTask.state.taskTree = executingTask.taskTree;
+      if (this.currentState?.savedMessages?.length || this.currentState?.savedTaskNodes?.length ||
+        this.currentState?.savedCognitiveWorkspace) {
+        executingTask.state.continuationCheckpoint = {
+          messages: this.currentState.savedMessages ?? [],
+          taskNodes: this.currentState.savedTaskNodes ?? [],
+          cognitiveWorkspace: this.currentState.savedCognitiveWorkspace,
+        };
+      }
     }
+    this.activeTaskInput = null;
 
     this.isEmergencyMode = true;
     if (this.isExecuting) {
-      this.abortedForEmergency = true;
-      this.forceStop();
+      this.preemptedRuns.add(this.activeRunGeneration);
+      this.forceStop({ preserveSafetyLease: true });
 
       // forceStop() は AbortController.abort() するが、FCA の実行ループが
       // 実際に終了して isExecuting = false になるまでラグがある。
@@ -392,8 +492,10 @@ export class MinebotTaskRuntime {
       }
       if (this.isExecuting) {
         log.warn(
-          `⚡ タスクが ${CONFIG.EMERGENCY_INTERRUPT_WAIT_MS}ms 以内に停止しなかったため isExecuting を強制クリア（緊急デッドロック回避）`,
+          `⚡ タスクが ${CONFIG.EMERGENCY_INTERRUPT_WAIT_MS}ms 以内に停止しなかったため旧runを隔離して緊急runへ所有権移譲`,
         );
+        // The old executor may still settle later. Its generation is fenced
+        // from currentState, abortController, control state and queue completion.
         this.isExecuting = false;
         this.abortController = null;
       }
@@ -463,6 +565,65 @@ export class MinebotTaskRuntime {
     return { success: true, taskId };
   }
 
+  /**
+   * Runs a task before the queue task in progress, as when a person speaks to the bot during a long task.
+   * The running task is paused with its last checkpoint, as for an emergency, and resumes from there once
+   * this one is over. An emergency in progress is not interrupted; the task waits for it.
+   */
+  public putTaskFirst(
+    taskInput: TaskStateInput,
+    envelopeExtras: { tags?: string[]; metadata?: Record<string, unknown> } = {},
+  ): { success: boolean; reason?: string; taskId?: string } {
+    if (this.taskQueue.length >= GRAPH_CONFIG.MAX_QUEUE_SIZE) {
+      return { success: false, reason: 'タスクキューがいっぱいです。' };
+    }
+    let envelope: RequestEnvelope;
+    try {
+      envelope = this.taskInputToEnvelope(taskInput);
+    } catch {
+      return { success: false, reason: 'Minecraft memory context is unavailable or changed' };
+    }
+    envelope.tags = [...new Set([...envelope.tags, ...(envelopeExtras.tags ?? [])])];
+    envelope.metadata = { ...envelope.metadata, ...envelopeExtras.metadata };
+    const taskId = crypto.randomUUID();
+    const task: TaskQueueEntry = {
+      id: taskId,
+      taskTree: taskInput.taskTree || ({ goal: taskInput.userMessage || 'New Task', status: 'pending' } as any),
+      state: { ...taskInput, envelope, taskId },
+      createdAt: Date.now(),
+      status: 'pending',
+    };
+    for (const id of this.firstTaskIds) if (!this.taskQueue.some(entry => entry.id === id)) this.firstTaskIds.delete(id);
+    let index = 0;
+    while (index < this.taskQueue.length && this.firstTaskIds.has(this.taskQueue[index].id)) index++;
+    this.taskQueue.splice(index, 0, task);
+    this.firstTaskIds.add(taskId);
+
+    const running = this.taskQueue.find(entry => entry.status === 'executing');
+    if (running && !this.firstTaskIds.has(running.id) && this.isExecuting && !this.isEmergencyMode
+      && this.taskRunGenerations.get(running.id) === this.activeRunGeneration) {
+      running.status = 'paused';
+      running.taskTree = (this.currentState?.taskTree as any) ?? running.taskTree;
+      running.state.taskTree = running.taskTree;
+      if (this.currentState?.savedMessages?.length || this.currentState?.savedTaskNodes?.length ||
+        this.currentState?.savedCognitiveWorkspace) {
+        running.state.continuationCheckpoint = {
+          messages: this.currentState.savedMessages ?? [],
+          taskNodes: this.currentState.savedTaskNodes ?? [],
+          cognitiveWorkspace: this.currentState.savedCognitiveWorkspace,
+        };
+      }
+      this.yieldedTaskIds.add(running.id);
+      this.activeTaskInput = null;
+      this.preemptedRuns.add(this.activeRunGeneration);
+      // The next task starts once this run has wound down (invoke's own end picks it up).
+      this.forceStop({ preserveSafetyLease: true });
+    }
+    this.notifyTaskListUpdate();
+    if (!this.isExecuting && !this.isEmergencyMode) void this.executeNextTask();
+    return { success: true, taskId };
+  }
+
   public removeTask(taskId: string): { success: boolean; reason?: string } {
     if (this.emergencyTask?.id === taskId) {
       this.emergencyTask = null;
@@ -488,6 +649,7 @@ export class MinebotTaskRuntime {
       if (qIdx !== -1) {
         this.taskQueue.splice(qIdx, 1);
       }
+      this.taskRunGenerations.delete(taskId);
       this.notifyTaskListUpdate();
       if (!this.isEmergencyMode) {
         void this.executeNextTask();
@@ -503,6 +665,7 @@ export class MinebotTaskRuntime {
     const task = this.taskQueue[taskIndex];
     const wasExecuting = task.status === 'executing';
     this.taskQueue.splice(taskIndex, 1);
+    this.taskRunGenerations.delete(taskId);
 
     if (wasExecuting && this.isExecuting) {
       this.forceStop();
@@ -565,6 +728,7 @@ export class MinebotTaskRuntime {
 
     const executingIndex = this.taskQueue.findIndex((task) => task.status === 'executing');
     if (executingIndex !== -1) {
+      this.taskRunGenerations.delete(this.taskQueue[executingIndex].id);
       this.taskQueue.splice(executingIndex, 1);
     }
 
@@ -648,7 +812,9 @@ export class MinebotTaskRuntime {
     nextTask.status = 'executing';
     this.notifyTaskListUpdate();
 
+    const expectedRunGeneration = this.runGeneration + 1;
     await this.invoke(nextTask.state);
+    if (this.runGeneration !== expectedRunGeneration) return;
     this.handleTaskCompletion(nextTask.id);
   }
 
@@ -658,14 +824,30 @@ export class MinebotTaskRuntime {
       const task = this.taskQueue[taskIndex];
       const taskStatus = this.currentState?.taskTree?.status;
       const recoveryStatus = this.currentState?.recoveryStatus;
-      if (recoveryStatus === 'awaiting_user') {
+      const yielded = this.yieldedTaskIds.delete(taskId);
+      if (task.status === 'paused' && (this.isEmergencyMode || yielded)) {
+        // interruptForEmergency already preserved this task for resumePreviousTask.
+        // A cancelled invoke must not make the queue owner delete it as completed.
+        task.taskTree = (this.currentState?.taskTree as any) ?? task.taskTree;
+      } else if (recoveryStatus === 'awaiting_user') {
         task.status = 'awaiting_user';
         task.taskTree = (this.currentState?.taskTree as any) ?? task.taskTree;
+        if (this.currentState?.savedMessages?.length || this.currentState?.savedTaskNodes?.length ||
+          this.currentState?.savedCognitiveWorkspace) {
+          task.state.continuationCheckpoint = {
+            messages: this.currentState.savedMessages ?? [],
+            taskNodes: this.currentState.savedTaskNodes ?? [],
+            cognitiveWorkspace: this.currentState.savedCognitiveWorkspace,
+          };
+        }
+        this.taskRunGenerations.delete(taskId);
       } else if (taskStatus === 'error' || recoveryStatus === 'failed_terminal') {
         task.status = 'failed_terminal';
         task.taskTree = (this.currentState?.taskTree as any) ?? task.taskTree;
+        this.taskRunGenerations.delete(taskId);
       } else {
         this.taskQueue.splice(taskIndex, 1);
+        this.taskRunGenerations.delete(taskId);
       }
     }
 
@@ -695,9 +877,25 @@ export class MinebotTaskRuntime {
     const queuedTask = this.taskQueue.find((task) => task.id === taskId);
     if (queuedTask) {
       queuedTask.taskTree = taskTree;
+      queuedTask.state.taskTree = taskTree;
     }
 
     this.notifyTaskListUpdate();
+  }
+
+  private handleExecutionCheckpoint(taskId: string, runGeneration: number,
+    checkpoint: MinecraftTaskCheckpoint): void {
+    if (!checkpoint.messages?.length && !checkpoint.taskNodes?.length && !checkpoint.cognitiveWorkspace) return;
+    const queuedTask = this.taskQueue.find(task => task.id === taskId);
+    if (queuedTask && this.taskRunGenerations.get(taskId) === runGeneration &&
+      (queuedTask.status === 'executing' || queuedTask.status === 'paused')) {
+      queuedTask.state.continuationCheckpoint = checkpoint;
+    }
+    if (this.activeRunGeneration === runGeneration && this.currentState?.taskId === taskId) {
+      this.currentState.savedMessages = checkpoint.messages;
+      this.currentState.savedTaskNodes = checkpoint.taskNodes;
+      this.currentState.savedCognitiveWorkspace = checkpoint.cognitiveWorkspace;
+    }
   }
 
   private buildContinuationPrompt(goal: string, feedback: string): string {
@@ -798,8 +996,15 @@ export class MinebotTaskRuntime {
       // bot 参照を常に metadata に注入 (ShannonExecutor → SubAgentRoutineExecutor で必要)
       const prevMeta = ((copiedEnvelope as any).metadata ?? {}) as Record<string, unknown>;
       const merged: Record<string, unknown> = { ...prevMeta, bot: this.bot };
+      if (input.continuationCheckpoint) {
+        if (input.continuationCheckpoint.messages.length) merged.previousMessages = input.continuationCheckpoint.messages;
+        if (input.continuationCheckpoint.taskNodes.length) merged.previousTaskNodes = input.continuationCheckpoint.taskNodes;
+        if (input.continuationCheckpoint.cognitiveWorkspace) merged.previousCognitiveWorkspace = input.continuationCheckpoint.cognitiveWorkspace;
+      }
       if (input.minebotToolPolicy) merged.minebotToolPolicy = input.minebotToolPolicy;
       else delete merged.minebotToolPolicy;
+      if (input.reflexDecision) merged.reflexDecision = input.reflexDecision;
+      if (input.goalContract) merged.goalContract = input.goalContract;
       (copiedEnvelope as any).metadata = merged;
       return copiedEnvelope;
     }
@@ -852,6 +1057,14 @@ export class MinebotTaskRuntime {
         ...(input.minebotToolPolicy
           ? { minebotToolPolicy: input.minebotToolPolicy }
           : {}),
+        ...(input.reflexDecision ? { reflexDecision: input.reflexDecision } : {}),
+        ...(input.goalContract ? { goalContract: input.goalContract } : {}),
+        ...(input.continuationCheckpoint?.messages.length
+          ? { previousMessages: input.continuationCheckpoint.messages } : {}),
+        ...(input.continuationCheckpoint?.taskNodes.length
+          ? { previousTaskNodes: input.continuationCheckpoint.taskNodes } : {}),
+        ...(input.continuationCheckpoint?.cognitiveWorkspace
+          ? { previousCognitiveWorkspace: input.continuationCheckpoint.cognitiveWorkspace } : {}),
       },
     });
   }
@@ -869,24 +1082,19 @@ export class MinebotTaskRuntime {
     const results: Array<{ name: string; x: number; y: number; z: number; distance: number }> = [];
 
     try {
-      const pos = this.bot.entity?.position;
-      if (!pos) return results;
-
-      for (const blockName of SCAN_BLOCKS) {
-        const blockId = (this.bot as any).registry?.blocksByName?.[blockName]?.id;
-        if (blockId == null) continue;
-
-        const found = this.bot.findBlocks({ matching: blockId, maxDistance: 8, count: 3 });
-        for (const blockPos of found) {
-          results.push({
-            name: blockName,
-            x: blockPos.x,
-            y: blockPos.y,
-            z: blockPos.z,
-            distance: Math.round(pos.distanceTo(blockPos) * 10) / 10,
-          });
-        }
+      if (!this.bot.entity?.position) return results;
+      // One pass over the loaded chunks' palettes (about a millisecond). The library's search was run once per
+      // block name and read every cell of every matching section: with the resource scan below it held the
+      // whole process for about two seconds at the start of every task, emergencies included, and nothing
+      // moved meanwhile: a drowning body's retrace was judged "no headway" before its first tick (L38, lab).
+      const perName = new Map<string, number>();
+      for (const hit of scanLoadedBlocks(this.bot as any, SCAN_BLOCKS, { maxDistance: 8 }).hits.sort((a, b) => a.distance - b.distance)) {
+        const seen = perName.get(hit.name) ?? 0;
+        if (seen >= 3) continue;
+        perName.set(hit.name, seen + 1);
+        results.push({ name: hit.name, x: hit.position.x, y: hit.position.y, z: hit.position.z, distance: Math.round(hit.distance * 10) / 10 });
       }
+      results.sort((a, b) => SCAN_BLOCKS.indexOf(a.name) - SCAN_BLOCKS.indexOf(b.name) || a.distance - b.distance);
     } catch (err) {
       log.warn(`Failed to scan nearby infrastructure: ${err}`);
     }
@@ -906,18 +1114,10 @@ export class MinebotTaskRuntime {
     const results: Array<{ name: string; count: number }> = [];
 
     try {
-      const registry = (this.bot as any).registry;
-      if (!registry?.blocksByName) return results;
-
-      for (const blockName of RESOURCE_BLOCKS) {
-        const blockId = registry.blocksByName[blockName]?.id;
-        if (blockId == null) continue;
-
-        const found = this.bot.findBlocks({ matching: blockId, maxDistance: 32, count: 20 });
-        if (found.length > 0) {
-          results.push({ name: blockName, count: found.length });
-        }
-      }
+      if (!this.bot.entity?.position) return results;
+      const counts = new Map<string, number>();
+      for (const hit of scanLoadedBlocks(this.bot as any, RESOURCE_BLOCKS, { maxDistance: 32 }).hits) counts.set(hit.name, (counts.get(hit.name) ?? 0) + 1);
+      for (const name of RESOURCE_BLOCKS) if (counts.has(name)) results.push({ name, count: Math.min(20, counts.get(name)!) });
     } catch (err) {
       log.warn(`Failed to scan nearby resources: ${err}`);
     }

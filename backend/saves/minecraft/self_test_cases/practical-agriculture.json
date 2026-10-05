@@ -1,0 +1,84 @@
+{
+  "testSuite": "practical-agriculture",
+  "description": "畑を耕し、播種・骨粉成長・成熟作物の収穫・家畜繁殖を行う食糧生産シナリオ",
+  "mode": "default",
+  "commandOracle": true,
+  "globalSetup": [
+    "/gamemode survival @s",
+    "/difficulty peaceful",
+    "/gamerule doMobSpawning false",
+    "/time set day",
+    "/weather clear",
+    "/effect clear @s",
+    "/clear @s",
+    "/tp @s 0 100 0",
+    "/kill @e[type=!player]",
+    "/kill @e[type=item]",
+    "/fill -8 99 -8 8 99 8 stone",
+    "/fill -8 100 -8 8 106 8 air",
+    "/setblock 3 99 0 dirt",
+    "/tp @s 0 100 0"
+  ],
+  "cases": [
+    {
+      "skillName": "use-item-on-block",
+      "args": [3, 99, 0],
+      "description": "木のクワを土へ使って畑を耕す",
+      "expectedOutcome": "success",
+      "setup": ["/item replace entity @s weapon.mainhand with minecraft:wooden_hoe"],
+      "assertions": [{ "type": "block_at", "x": 3, "y": 99, "z": 0, "block": "farmland" }]
+    },
+    {
+      "skillName": "plant-crop",
+      "args": [3, 99, 0, "wheat_seeds"],
+      "description": "耕地へ小麦の種を植える",
+      "expectedOutcome": "success",
+      "setup": [
+        "/setblock 3 99 0 farmland[moisture=7]",
+        "/give @s wheat_seeds 1"
+      ],
+      "assertions": [
+        { "type": "block_at", "x": 3, "y": 100, "z": 0, "block": "wheat" },
+        { "type": "inventory_count", "item": "wheat_seeds", "minCount": 0, "maxCount": 0 }
+      ]
+    },
+    {
+      "skillName": "use-bone-meal",
+      "args": [3, 100, 0],
+      "description": "発芽した小麦へ骨粉を使って成長を促進する",
+      "expectedOutcome": "success",
+      "setup": [
+        "/setblock 3 99 0 farmland[moisture=7]",
+        "/setblock 3 100 0 wheat[age=0]",
+        "/give @s bone_meal 4"
+      ],
+      "assertions": [{ "type": "inventory_count", "item": "bone_meal", "minCount": 3, "maxCount": 3 }]
+    },
+    {
+      "skillName": "harvest-crop",
+      "args": [3, 100, 0],
+      "description": "完全に成熟した小麦を収穫する",
+      "expectedOutcome": "success",
+      "setup": [
+        "/setblock 3 99 0 farmland[moisture=7]",
+        "/setblock 3 100 0 wheat[age=7]"
+      ],
+      "assertions": [{ "type": "block_at", "x": 3, "y": 100, "z": 0, "block": "air" }]
+    },
+    {
+      "skillName": "breed-animal",
+      "args": ["cow", "wheat"],
+      "description": "牧場の牛2頭へ小麦を与えて繁殖させる",
+      "expectedOutcome": "success",
+      "setup": [
+        "/summon cow 2 100 0",
+        "/summon cow 3 100 1",
+        "/give @s wheat 2"
+      ],
+      "assertions": [
+        { "type": "inventory_count", "item": "wheat", "minCount": 0, "maxCount": 0 },
+        { "type": "entity_nearby", "entity": "cow", "maxDistance": 8, "present": true }
+      ]
+    }
+  ]
+}

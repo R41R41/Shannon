@@ -1,12 +1,14 @@
 import minecraftData from 'minecraft-data';
+import { Vec3 } from 'vec3';
 import { CustomBot, InstantSkill } from '../types.js';
 import { getWaterLevel } from '../utils/waterLevel.js';
 import { createLogger } from '../../../utils/logger.js';
+import { estimateBlockApproachCost } from '../utils/blockApproachCost.js';
 
+import { findLoadedBlocks } from '../utils/loadedBlockScan.js';
 const log = createLogger('Minebot:Skill:findBlocks');
 
 const INITIAL_RADIUS = 16;
-const RADIUS_STEP = 16;
 
 /** ラージチェストは2ブロック分あるため、count が小さいと取りこぼす */
 const CHEST_LIKE = new Set(['chest', 'trapped_chest', 'ender_chest', 'barrel']);
@@ -35,7 +37,7 @@ class FindBlocks extends InstantSkill {
     super(bot);
     this.skillName = 'find-blocks';
     this.description =
-      '指定したブロックを周囲からプログラムで検索して座標リストを返します。' +
+      '指定したブロックをロード済みチャンクからプログラムで検索して座標リストを返します。未ロード領域は探索できないため、見つからなければ安全な新しい地点へ移動して再検索してください。' +
       '特定ブロックの位置を知りたいときは必ずこのスキルを使うこと。' +
       'water/lava検索時は水源・溶岩源（level=0, バケツで汲める）を自動判別し優先表示する。' +
       '粉雪（powder_snow）もバケツで回収可能。' +
@@ -101,43 +103,60 @@ class FindBlocks extends InstantSkill {
 
       let blocks: any[] = [];
       const startRadius = Math.min(INITIAL_RADIUS, maxDistance);
-      if (liquidSearch_) {
-        for (let radius = startRadius; radius <= maxDistance; radius += RADIUS_STEP) {
-          blocks = this.bot.findBlocks({
-            matching,
-            maxDistance: radius,
-            count: effectiveCount,
-            useExtraInfo: (block: any) => getWaterLevel(block) === 0,
-          });
-        }
-      } else {
-        for (let radius = startRadius; radius <= maxDistance; radius += RADIUS_STEP) {
-          blocks = this.bot.findBlocks({
-            matching,
-            maxDistance: radius,
-            count: effectiveCount,
-          });
-        }
+      if (!Number.isFinite(maxDistance) || maxDistance <= 0 || !Number.isFinite(effectiveCount) || effectiveCount <= 0) {
+        return { success: false, result: '検索半径と件数は正の有限値が必要です', failureType: 'invalid_input', recoverable: true };
+      }
+      // By name, over what the server has sent: about a millisecond. The native
+      // search took seconds when it found nothing (2.2s at 96 blocks, 9.9s at
+      // 256, measured) and stopped the body meanwhile. Liquids keep the native
+      // search: water is everywhere, and its level must be read per block.
+      if (!liquidSearch_ && typeof (this.bot.world as any)?.getColumns === 'function') {
+        blocks = findLoadedBlocks(this.bot as any, blockNames.filter(n => !invalidNames.includes(n)), maxDistance, effectiveCount);
+      } else for (let radius = startRadius; ; radius = Math.min(radius * 2, maxDistance)) {
+        // Native search is synchronous. Yield between radii so accumulated scans
+        // cannot starve keepalive, health updates, or action cancellation.
+        await new Promise<void>(resolve => setImmediate(resolve));
+        if (this.shouldInterrupt()) return { success: false, result: '検索を中断しました', failureType: 'interrupted', recoverable: true };
+        blocks = this.bot.findBlocks({ matching, maxDistance: radius, count: effectiveCount,
+          ...(liquidSearch_ ? { useExtraInfo: (block: any) => getWaterLevel(block) === 0 } : {}) });
+        // Once count nearest results are found, a wider sphere cannot add a
+        // nearer result. Otherwise still search the ENTIRE requested distance,
+        // including a non-multiple final radius (e.g. 24, formerly skipped).
+        if (blocks.length >= effectiveCount || radius >= maxDistance) break;
       }
 
       if (blocks.length === 0) {
         const invalidNote = invalidNames.length > 0 ? `（不明なブロック: ${invalidNames.join(', ')}）` : '';
+        // Not in what is loaded now; the body may have seen it earlier, further off.
+        const remembered = blockNames.flatMap(name => {
+          try { return ((this.bot as any).placeMemory?.recall(name.replace(/^deepslate_/, ''), 3) ?? []) as Array<{ kind: string; position: { x: number; y: number; z: number }; distance: number; direction: string }>; }
+          catch { return []; }
+        }).sort((a, b) => a.distance - b.distance).slice(0, 3);
+        if (remembered.length) {
+          return {
+            success: true,
+            result: `いま読み込まれている範囲（${maxDistance}ブロック以内）に${displayName}はありませんが、以前に見た場所を覚えています: `
+              + remembered.map(place => `${place.kind}(${place.position.x}, ${place.position.y}, ${place.position.z}) ${place.distance}m ${place.direction}`).join('、')
+              + `${invalidNote}。そこへ移動すれば使えます（離れている間に変わっていることがあります）`,
+          };
+        }
         if (liquidSearch_) {
           return {
             success: true,
-            result: `${maxDistance}ブロック以内に${displayName}の水源ブロック（level=0）は見つかりませんでした。` +
-              '水流がある場合その上流に水源があるはず。maxDistance を増やすか、水流の上流方向に移動して再検索してください。' +
+            result: `ロード済みチャンクの${maxDistance}ブロック以内に${displayName}の水源ブロック（level=0）は見つかりませんでした。未ロード領域は未探索です。` +
+              '水流がある場合その上流に水源があるはず。安全に新しい地点へ移動してチャンクをロードし、再検索してください。' +
               '無限水源を作るにもまず既存の水源からバケツで水を汲む必要があります。',
           };
         }
         return {
           success: true,
-          result: `${maxDistance}ブロック以内に${displayName}は見つかりませんでした${invalidNote}`,
+          result: `ロード済みチャンクの${maxDistance}ブロック以内に${displayName}は見つかりませんでした${invalidNote}。未ロード領域は未探索です。安全に新しい地点へ移動してチャンクをロードし、再検索してください。`,
         };
       }
 
       const botPos = this.bot.entity.position;
       const isFarmland = blockNames.includes('farmland');
+      const isOreSearch = blockNames.every(name => name.endsWith('_ore'));
       const sortedBlocks = blocks
         .map((pos) => {
           const block = this.bot.blockAt(pos);
@@ -147,8 +166,17 @@ class FindBlocks extends InstantSkill {
             z: pos.z,
             distance:
               Math.floor(botPos.distanceTo(pos) * 10) / 10,
+            verticalDelta: pos.y - Math.floor(botPos.y),
             blockName: block?.name ?? 'unknown',
           };
+
+          if (isOreSearch) {
+            const exposed = [new Vec3(1, 0, 0), new Vec3(-1, 0, 0), new Vec3(0, 1, 0),
+              new Vec3(0, -1, 0), new Vec3(0, 0, 1), new Vec3(0, 0, -1)]
+              .some(offset => ['air', 'cave_air', 'void_air'].includes(this.bot.blockAt(pos.offset(offset.x, offset.y, offset.z))?.name ?? ''));
+            blockData.approachCost = estimateBlockApproachCost(botPos, pos, exposed);
+            blockData.exposed = exposed;
+          }
 
           if (isFarmland) {
             const aboveBlock = this.bot.blockAt(pos.offset(0, 1, 0));
@@ -163,7 +191,8 @@ class FindBlocks extends InstantSkill {
 
           return blockData;
         })
-        .sort((a, b) => a.distance - b.distance);
+        .sort((a, b) => (isOreSearch ? a.approachCost - b.approachCost : a.distance - b.distance)
+          || a.distance - b.distance);
 
       if (isFarmland) {
         const emptyFarmland = sortedBlocks.filter((b) => !b.above);
@@ -221,14 +250,17 @@ class FindBlocks extends InstantSkill {
       const blockList = sortedBlocks
         .slice(0, listCap)
         .map((b) => showBlockName
-          ? `${b.blockName}(${b.x}, ${b.y}, ${b.z}) 距離${b.distance}m`
-          : `(${b.x}, ${b.y}, ${b.z}) 距離${b.distance}m`)
+          ? `${b.blockName}(${b.x}, ${b.y}, ${b.z}) 距離${b.distance}m 高低差${b.verticalDelta >= 0 ? '+' : ''}${b.verticalDelta}m${isOreSearch ? ` 到達概算${b.approachCost.toFixed(1)}${b.exposed ? ' 露出' : ' 埋没'}` : ''}`
+          : `(${b.x}, ${b.y}, ${b.z}) 距離${b.distance}m 高低差${b.verticalDelta >= 0 ? '+' : ''}${b.verticalDelta}m${isOreSearch ? ` 到達概算${b.approachCost.toFixed(1)}${b.exposed ? ' 露出' : ' 埋没'}` : ''}`)
         .join(', ');
 
       const truncated = sortedBlocks.length > listCap;
+      const inaccessibleDepthWarning = sortedBlocks.every((b) => b.verticalDelta < -32)
+        ? ' 全候補が現在地より32m以上地下です。地表から直通できるとは限りません。地表資源を探しているなら探索地点を変えて再検索してください。'
+        : '';
       return {
         success: true,
-        result: `${displayName}を${sortedBlocks.length}個発見: ${blockList}${truncated ? '...' : ''}`,
+        result: `${displayName}を${sortedBlocks.length}個発見: ${blockList}${truncated ? '...' : ''}${isOreSearch ? ' 鉱石候補は高低差・露出を加味した到達概算順です（実経路の保証ではありません）。' : ''}${inaccessibleDepthWarning}`,
       };
     } catch (error: any) {
       return {

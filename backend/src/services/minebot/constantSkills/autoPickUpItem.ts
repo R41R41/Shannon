@@ -1,5 +1,8 @@
 import { ConstantSkill, CustomBot } from '../types.js';
 import { gotoSafe } from '../utils/gotoSafe.js';
+import { abortable, actionDelay } from '../execution/observedWait.js';
+
+const COLLECT_LIMIT_MS = 6_000;
 
 /**
  * 自動アイテム拾得スキル
@@ -25,9 +28,8 @@ class AutoPickUpItem extends ConstantSkill {
     if (entity) {
       if (entity.displayName === 'Item' || entity.name === 'item') {
         // 少し待ってから処理（投げられた直後のアイテムが落ち着くまで）
-        setTimeout(async () => {
-          await this.collectItem(entity);
-        }, 500);
+        await actionDelay(this.bot, 500);
+        await this.collectItem(entity);
       }
       return;
     }
@@ -105,9 +107,22 @@ class AutoPickUpItem extends ConstantSkill {
         }
       }
 
-      // アイテムを収集
-      if (this.bot.collectBlock) {
-        await this.bot.collectBlock.collect(entity);
+      // アイテムを収集。The plugin walks to the item by itself and waits for the
+      // pick-up without a time limit: for an item it cannot reach (drifting
+      // in water) it never returned, and the body's lease with it (paid run
+      // L29). Bounded, cancellable, and told to stop when given up on.
+      const collector = (this.bot as any).collectBlock;
+      if (collector) {
+        const collecting = Promise.resolve(collector.collect(entity));
+        collecting.catch(() => {});
+        try {
+          const done = await Promise.race([abortable(this.bot, collecting).then(() => true),
+            actionDelay(this.bot, COLLECT_LIMIT_MS).then(() => false)]);
+          if (!done) collector.cancelTask?.();
+        } catch (error) {
+          try { collector.cancelTask?.(); } catch { /* already stopped */ }
+          throw error;
+        }
       }
     } catch (error) {
       // 収集失敗は無視（アイテムが消えた等）

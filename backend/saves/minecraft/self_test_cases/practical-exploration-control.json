@@ -1,0 +1,97 @@
+{
+  "testSuite": "practical-exploration-control",
+  "description": "釣り・進捗確認・LLM地形調査と常時反応スキルの運転切替を実環境で呼び出す探索管制シナリオ",
+  "mode": "default",
+  "commandOracle": true,
+  "globalSetup": [
+    "/gamemode survival @s",
+    "/difficulty peaceful",
+    "/gamerule doMobSpawning false",
+    "/time set day",
+    "/weather clear",
+    "/effect clear @s",
+    "/clear @s",
+    "/tp @s 0 100 0",
+    "/kill @e[type=!player]",
+    "/kill @e[type=item]",
+    "/fill -12 99 -12 12 99 12 stone",
+    "/fill -12 100 -12 12 112 12 air",
+    "/tp @s 0 100 0"
+  ],
+  "cases": [
+    {
+      "skillName": "fish",
+      "args": [1],
+      "description": "岸から囲われた池へ一度キャストし、実際に魚を釣り上げる",
+      "expectedOutcome": "success",
+      "setup": [
+        "/fill 2 99 -3 7 99 3 stone",
+        "/fill 2 100 -3 7 102 3 air",
+        "/fill 2 100 -3 7 100 3 stone",
+        "/fill 3 100 -2 6 100 2 water",
+        "/give @s fishing_rod 1"
+      ],
+      "assertions": [
+        { "type": "inventory_count", "item": "fishing_rod", "minCount": 1 }
+      ]
+    },
+    {
+      "skillName": "get-advancements",
+      "args": ["ShannonProbe", "minecraft:story"],
+      "description": "遠征の進捗状況をShannon UI Mod経由で問い合わせる（隔離サーバーでは外部依存の可否を記録）",
+      "expectedOutcome": "either"
+    },
+    {
+      "skillName": "investigate-terrain",
+      "args": ["池と石床の配置を調べ、拠点建築に適するか評価する", 8],
+      "description": "LLM地形調査を実際のブロック配置に対して実行する（試験用API資格情報では依存失敗も記録）",
+      "expectedOutcome": "either",
+      "setup": [
+        "/fill 3 100 -2 6 100 2 water",
+        "/setblock -4 100 0 diamond_ore"
+      ]
+    },
+    {
+      "skillName": "switch-auto-detect-block-or-entity",
+      "args": [true, "diamond_ore", "cow", 16],
+      "description": "鉱石と家畜の自動検知を遠征中に有効化する",
+      "expectedOutcome": "success",
+      "setup": [
+        "/setblock 4 100 0 diamond_ore",
+        "/summon cow 5 100 0 {NoAI:1b}"
+      ]
+    },
+    {
+      "skillName": "switch-auto-shoot-arrow-to-block",
+      "args": [true, "target"],
+      "description": "射撃訓練用ターゲットの自動射撃を有効化する",
+      "expectedOutcome": "success",
+      "setup": [
+        "/setblock 6 101 0 target",
+        "/give @s bow 1",
+        "/give @s arrow 16"
+      ]
+    },
+    {
+      "skillName": "auto-shoot-arrow-to-block",
+      "args": [],
+      "constantArgs": { "blockName": "target", "searchDistance": 16 },
+      "description": "射撃訓練用ターゲットへ実際に矢を一発放つ",
+      "expectedOutcome": "success",
+      "setup": [
+        "/setblock 6 101 0 target",
+        "/give @s bow 1",
+        "/give @s arrow 16"
+      ],
+      "assertions": [
+        { "type": "inventory_count", "item": "arrow", "minCount": 15, "maxCount": 15 }
+      ]
+    },
+    {
+      "skillName": "switch-constant-skill",
+      "args": [true, true, true, true, true, true, true, true, true],
+      "description": "長期遠征に必要な九つの常時反応を一括で有効化する",
+      "expectedOutcome": "success"
+    }
+  ]
+}

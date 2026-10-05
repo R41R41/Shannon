@@ -6,6 +6,7 @@ import { Entity } from 'prismarine-entity';
 import { Vec3 } from 'vec3';
 import { Utils } from '../utils/index.js';
 import type { InstantSkills, ConstantSkills } from './collections.js';
+import type { ActionProgress } from '../execution/actionTypes.js';
 
 export type Goal = pathfinderPkg.goals.Goal;
 
@@ -42,6 +43,7 @@ export type ArmorCategory =
 // BotEventsを拡張
 interface CustomBotEvents extends BotEvents {
   [key: `taskPer${number}ms`]: () => void;
+  minebotActionProgress: (progress: ActionProgress) => void;
 }
 
 export type DroppedItem = {
@@ -59,6 +61,9 @@ export interface ActiveFurnace {
   readyAt: number;
   /** 精錬開始時刻 */
   startedAt: number;
+  dimension?: string;
+  /** Input left in the furnace without fuel; it never smelts until refueled. */
+  unfueledCount?: number;
 }
 
 // CustomBotの定義を更新

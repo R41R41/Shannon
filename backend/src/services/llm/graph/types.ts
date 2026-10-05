@@ -32,6 +32,8 @@ export interface TaskStateInput {
 
   // === タスク情報 ===
   taskTree?: TaskTreeState | null;
+  /** Closed planner turn retained only for interruption/continuation. */
+  continuationCheckpoint?: MinecraftTaskCheckpoint;
   envelope?: RequestEnvelope;
   messages?: BaseMessage[];
   responseMessage?: string | null;
@@ -40,8 +42,13 @@ export interface TaskStateInput {
   // === 制御フラグ ===
   retryCount?: number;
   isEmergency?: boolean;
+  emergencyType?: string;
   /** ShannonExecutor: 攻撃系ツールの機械的除外（hostile_warning / 緊急生存など） */
   minebotToolPolicy?: 'normal' | 'hostile_warning' | 'defensive_low_hp' | 'emergency_survival';
+  /** Jev emergency reflex output, persisted into the run-scoped cognitive workspace. */
+  reflexDecision?: import('../../minebot/cognition/types.js').ReflexDecision;
+  /** Event-scoped native completion conditions for an emergency run. */
+  goalContract?: import('../../minebot/cognition/GoalVerifier.js').GoalContract;
 
   // === 実行結果 ===
   executionResults?: ExecutionResult[] | null;
@@ -49,8 +56,27 @@ export interface TaskStateInput {
   // === 音声パイプライン向け ===
   allowedTools?: string[];
   onToolStarting?: (toolName: string, args?: Record<string, unknown>) => void;
+  onToolFinished?: (event: MinecraftToolFinishedEvent) => void;
   onTaskTreeUpdate?: (taskTree: TaskTreeState) => void;
   onStreamSentence?: (sentence: string) => Promise<void>;
+}
+
+/** Latest fully closed planner turn; used to resume a preempted Minecraft task. */
+export interface MinecraftTaskCheckpoint {
+  messages: unknown[];
+  taskNodes: unknown[];
+  cognitiveWorkspace: unknown;
+}
+
+export interface MinecraftToolFinishedEvent {
+  iteration: number;
+  tool: string;
+  args: Record<string, unknown>;
+  durationMs: number;
+  success: boolean | null;
+  result: string;
+  /** More actions written in the same response are still to run after this one. */
+  moreInResponse?: boolean;
 }
 
 /**
