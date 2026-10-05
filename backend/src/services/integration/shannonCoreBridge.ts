@@ -5,6 +5,15 @@ export interface ShannonCoreBridgeConfiguration {
   token: string;
   bindingsJson: string;
   timeoutMs: number;
+  /**
+   * `SHANNON_CORE_PLATFORM_REPLY=true`: a Discord text message in a bound conversation is answered by the companion's
+   * `POST /v1/platform/reply` (her one mind) instead of this runtime's own model. Default off.
+   */
+  replyEnabled?: boolean;
+  /** `SHANNON_CORE_PLATFORM_REPLY_PEOPLE=true`: also messages of people other than the bound owner. Default off (owner only). */
+  replyPeopleEnabled?: boolean;
+  /** How long a reply may take (a model turn, with tools): 5,000–60,000 ms, default 55,000. */
+  replyTimeoutMs?: number;
 }
 
 interface ShannonCoreBridgeBinding {
@@ -17,7 +26,13 @@ interface ShannonCoreBridgeBinding {
 export interface ShannonCoreBridge {
   mirrorDiscordTurn(envelope: RequestEnvelope, reply: string): Promise<void>;
   readDiscordContext(envelope: RequestEnvelope): Promise<ShannonCoreContextResult>;
+  /** Her reply from the companion, or why this runtime answers with its own path. Never throws. */
+  requestDiscordReply(envelope: RequestEnvelope): Promise<ShannonCoreReplyResult>;
 }
+
+export type ShannonCoreReplyResult =
+  | { status: 'available'; reply: string; threadId: string; duplicate: boolean }
+  | { status: 'ineligible' | 'unavailable' };
 
 export type ShannonCoreContextResult =
   | { status: 'available'; projection: string; stateVersion: number; updatedAt: string }
@@ -45,9 +60,16 @@ export function createShannonCoreBridge(
     || bridgeConfig.timeoutMs > 10_000) {
     throw new ShannonCoreBridgeError('CONFIG_INVALID');
   }
+  const replyTimeoutMs = bridgeConfig.replyTimeoutMs ?? 55_000;
+  if (bridgeConfig.replyEnabled === true
+    && (!Number.isSafeInteger(replyTimeoutMs) || replyTimeoutMs < 5_000 || replyTimeoutMs > 60_000)) {
+    throw new ShannonCoreBridgeError('CONFIG_INVALID');
+  }
   const bindings = validatedBindings(bindingsJson);
   const contextUrl = new URL(url);
   contextUrl.pathname = '/v1/platform/context';
+  const replyUrl = new URL(url);
+  replyUrl.pathname = '/v1/platform/reply';
   return Object.freeze({
     async mirrorDiscordTurn(envelope: RequestEnvelope, reply: string): Promise<void> {
       const body = discordTurnBody(envelope, reply);
@@ -104,7 +126,76 @@ export function createShannonCoreBridge(
         return { status: 'unavailable' };
       }
     },
+    async requestDiscordReply(envelope: RequestEnvelope): Promise<ShannonCoreReplyResult> {
+      if (bridgeConfig.replyEnabled !== true) return { status: 'ineligible' };
+      const body = discordReplyBody(envelope);
+      if (!body) return { status: 'ineligible' };
+      // Only a bound conversation is ever sent; anyone but the bound owner only when explicitly switched on.
+      const binding = bindings.find(candidate => matchesConversation(candidate, body.conversationId));
+      if (!binding) return { status: 'ineligible' };
+      const owner = binding.ownerUserId === body.sourceUserId;
+      if (!owner && (bridgeConfig.replyPeopleEnabled !== true || !body.sourceDisplayName)) return { status: 'ineligible' };
+      const { sourceDisplayName, ...ownerBody } = body;
+      let response: Response;
+      try {
+        response = await fetcher(replyUrl.toString(), {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${token}`,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify(owner ? ownerBody : { ...ownerBody, sourceDisplayName }),
+          redirect: 'error',
+          signal: AbortSignal.timeout(replyTimeoutMs),
+        });
+      } catch {
+        return { status: 'unavailable' };
+      }
+      if (response.status !== 200 && response.status !== 201) return { status: 'unavailable' };
+      try {
+        const decoded = await response.json() as Record<string, unknown>;
+        if (!bounded(decoded.reply, 12_000) || !bounded(decoded.threadId, 200) || typeof decoded.duplicate !== 'boolean') {
+          return { status: 'unavailable' };
+        }
+        return { status: 'available', reply: decoded.reply.trim(), threadId: decoded.threadId, duplicate: decoded.duplicate };
+      } catch {
+        return { status: 'unavailable' };
+      }
+    },
   });
+}
+
+/**
+ * A Discord text message as `POST /v1/platform/reply` takes it, or null when this runtime answers it itself: voice,
+ * malformed, an attachment or image URL (text only crosses the bridge), or this bot's own clarification follow-up.
+ */
+function discordReplyBody(envelope: RequestEnvelope) {
+  const sourceRequestId = envelope.discord?.messageId ?? envelope.requestId;
+  if (envelope.channel !== 'discord'
+    || envelope.discord?.isVoiceChannel === true
+    || !bounded(sourceRequestId, 160)
+    || !bounded(envelope.conversationId, 240)
+    || !bounded(envelope.sourceUserId, 160)
+    || !bounded(envelope.text, 8_000)
+    || !validTimestamp(envelope.timestampIso)
+    || !companionText(envelope.text)) return null;
+  const displayName = envelope.sourceDisplayName ?? envelope.discord?.userName;
+  return {
+    platform: 'discord' as const,
+    requestId: sourceRequestId.trim(),
+    conversationId: envelope.conversationId.trim(),
+    conversationKind: envelope.discord?.isDM === true ? 'dm' as const : 'channel' as const,
+    sourceUserId: envelope.sourceUserId.trim(),
+    userMessage: envelope.text.trim(),
+    observedAt: new Date(envelope.timestampIso).toISOString(),
+    ...(bounded(displayName, 80) ? { sourceDisplayName: displayName.trim() } : {}),
+  };
+}
+
+/** Text the companion may receive: no Discord attachment or image URLs, and not the agent-task clarification follow-up. */
+function companionText(text: string): boolean {
+  return !text.trimStart().startsWith('[追加要件への回答]')
+    && !/https?:\/\/(?:cdn|media)\.discordapp\.(?:com|net)\//i.test(text);
 }
 
 function discordContextBody(envelope: RequestEnvelope) {

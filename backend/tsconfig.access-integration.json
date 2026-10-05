@@ -16,6 +16,7 @@
     "src/services/discord/planningDelivery.ts",
     "src/services/integration/shannonCoreBridge.ts",
     "src/services/integration/configuredShannonCoreBridge.ts",
+    "src/services/integration/discordCompanionReply.ts",
     "src/services/web/webConversationTransport.ts",
     "src/services/common/adapters/discordDispatcher.ts",
     "src/services/common/adapters/webDispatcher.ts",

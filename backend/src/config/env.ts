@@ -1,6 +1,8 @@
 import dotenv from 'dotenv';
 
-dotenv.config();
+// Isolated Minebot probes provide explicit dummy env and dedicated provider
+// clients. They must not implicitly import shared service credentials.
+if (process.env.SHANNON_ISOLATED_MINEBOT_PROBE !== 'true') dotenv.config();
 
 /**
  * Helper to read a required env var, throwing if missing.
@@ -18,6 +20,21 @@ function required(name: string): string {
  */
 function optional(name: string, fallback: string): string {
   return process.env[name] || fallback;
+}
+
+function minecraftCognitionMode(value: string): 'off' | 'shadow' | 'feedback' {
+  const normalized = value.trim().toLowerCase();
+  return normalized === 'shadow' || normalized === 'feedback' ? normalized : 'off';
+}
+
+function minecraftCognitionProvider(value: string): 'auto' | 'jev' | 'openai' | 'local' {
+  const normalized = value.trim().toLowerCase();
+  return normalized === 'jev' || normalized === 'openai' || normalized === 'local' ? normalized : 'auto';
+}
+
+function minecraftOpenAIReasoningEffort(value: string): 'none' | 'low' | 'medium' {
+  const normalized = value.trim().toLowerCase();
+  return normalized === 'low' || normalized === 'medium' ? normalized : 'none';
 }
 
 const isDev = process.argv.includes('--dev') || process.env.IS_DEV === 'True';
@@ -92,6 +109,28 @@ export const config = {
     botUserName: optional('MINECRAFT_BOT_USER_NAME', ''),
     botPassword: optional('MINECRAFT_BOT_PASSWORD', ''),
     uiModHost: optional('UI_MOD_HOST', 'localhost'),
+  },
+
+  minecraftPlanner: {
+    provider: ['anthropic', 'openai'].includes(optional('MINECRAFT_PLANNER_PROVIDER', 'auto'))
+      ? optional('MINECRAFT_PLANNER_PROVIDER', 'auto') : 'auto',
+    openAIModel: optional('MINECRAFT_PLANNER_OPENAI_MODEL', 'gpt-5.6-luna'),
+  },
+
+  /** Minecraft adaptive cognition. Off by default; shadow is the first rollout stage. */
+  minecraftCognition: {
+    executionSupervisionMode: minecraftCognitionMode(optional('MINECRAFT_EXECUTION_SUPERVISION_MODE', 'off')),
+    mode: minecraftCognitionMode(optional('MINECRAFT_COGNITION_MODE', optional('MINECRAFT_JEV_MODE', 'off'))),
+    provider: minecraftCognitionProvider(optional('MINECRAFT_COGNITION_PROVIDER', 'auto')),
+    jevApiKey: optional('TYPESAFE_API_KEY', ''),
+    jevEndpoint: optional('SHANNON_JEV_ENDPOINT', 'https://api.typesafe.ai/v1/systemone'),
+    jevModel: optional('SHANNON_JEV_MODEL', 'jev-latest'),
+    jevTimeoutMs: Math.min(5_000, Math.max(50, parseInt(optional('SHANNON_JEV_TIMEOUT_MS', '900'), 10))),
+    openAIApiKey: optional('OPENAI_API_KEY', ''),
+    openAIEndpoint: optional('MINECRAFT_OPENAI_ENDPOINT', 'https://api.openai.com/v1/responses'),
+    openAIModel: optional('MINECRAFT_OPENAI_MODEL', 'gpt-5.6-luna'),
+    openAIReasoningEffort: minecraftOpenAIReasoningEffort(optional('MINECRAFT_OPENAI_REASONING_EFFORT', 'none')),
+    openAITimeoutMs: Math.min(5_000, Math.max(50, parseInt(optional('MINECRAFT_OPENAI_TIMEOUT_MS', '2500'), 10))),
   },
 
   youtube: {
@@ -183,6 +222,11 @@ export const config = {
     token: optional('SHANNON_CORE_PLATFORM_TOKEN', ''),
     bindingsJson: optional('SHANNON_CORE_PLATFORM_BINDINGS_JSON', ''),
     timeoutMs: Math.min(10_000, Math.max(500, parseInt(optional('SHANNON_CORE_PLATFORM_TIMEOUT_MS', '3000'), 10))),
+    /** Discord text replies from the companion's /v1/platform/reply (her one mind). Default off; any failure falls back. */
+    replyEnabled: optional('SHANNON_CORE_PLATFORM_REPLY', '') === 'true',
+    /** Also messages of people other than the bound owner. Default off. */
+    replyPeopleEnabled: optional('SHANNON_CORE_PLATFORM_REPLY_PEOPLE', '') === 'true',
+    replyTimeoutMs: Math.min(60_000, Math.max(5_000, parseInt(optional('SHANNON_CORE_PLATFORM_REPLY_TIMEOUT_MS', '55000'), 10) || 55_000)),
   },
 
   groq: {

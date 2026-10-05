@@ -3,6 +3,7 @@ import {
   createShannonCoreBridge,
   type ShannonCoreBridge,
   type ShannonCoreContextResult,
+  type ShannonCoreReplyResult,
 } from './shannonCoreBridge.js';
 
 let configuredBridge: Promise<ShannonCoreBridge | null> | undefined;
@@ -20,6 +21,18 @@ export async function readShannonCoreDiscordContext(envelope: RequestEnvelope): 
       .then(({ config }) => createShannonCoreBridge(config.shannonCoreBridge));
     const bridge = await configuredBridge;
     return bridge ? bridge.readDiscordContext(envelope) : { status: 'ineligible' };
+  } catch {
+    return { status: 'unavailable' };
+  }
+}
+
+/** Her reply from the companion (`SHANNON_CORE_PLATFORM_REPLY=true`), or why the legacy path answers. Never throws. */
+export async function requestShannonCoreDiscordReply(envelope: RequestEnvelope): Promise<ShannonCoreReplyResult> {
+  try {
+    configuredBridge ??= import('../../config/env.js')
+      .then(({ config }) => createShannonCoreBridge(config.shannonCoreBridge));
+    const bridge = await configuredBridge;
+    return bridge ? await bridge.requestDiscordReply(envelope) : { status: 'ineligible' };
   } catch {
     return { status: 'unavailable' };
   }

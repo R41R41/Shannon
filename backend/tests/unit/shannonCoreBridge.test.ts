@@ -127,6 +127,71 @@ describe('Shannon canonical-core bridge', () => {
   });
 });
 
+describe('Shannon canonical-core reply (SHANNON_CORE_PLATFORM_REPLY)', () => {
+  const replying = { ...configuration, replyEnabled: true };
+  const answered = () => vi.fn(async () => new Response(JSON.stringify({
+    reply: '任せてください、体に頼んでおきます。', threadId: 'platform:discord:0123456789abcdef0123456789abcdef', duplicate: false,
+  }), { status: 201, headers: { 'content-type': 'application/json' } }));
+
+  it('is off by default and with the switch off sends nothing', async () => {
+    const fetcher = answered();
+    const bridge = createShannonCoreBridge(configuration, fetcher as typeof fetch)!;
+    expect(await bridge.requestDiscordReply(envelope())).toEqual({ status: 'ineligible' });
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(() => createShannonCoreBridge({ ...replying, replyTimeoutMs: 1_000 })).toThrow(ShannonCoreBridgeError);
+  });
+
+  it('asks the sibling reply route for the bound owner, with the bearer token and only the text turn', async () => {
+    const fetcher = answered();
+    const bridge = createShannonCoreBridge(replying, fetcher as typeof fetch)!;
+    expect(await bridge.requestDiscordReply({ ...envelope(), sourceDisplayName: 'ライ' })).toEqual({
+      status: 'available', reply: '任せてください、体に頼んでおきます。', threadId: 'platform:discord:0123456789abcdef0123456789abcdef', duplicate: false,
+    });
+    const [url, init] = fetcher.mock.calls[0]!;
+    expect(url).toBe('http://127.0.0.1:4319/v1/platform/reply');
+    expect(init).toMatchObject({ method: 'POST', redirect: 'error', headers: { authorization: `Bearer ${token}` } });
+    // The owner's own turn carries no display name; the binding says who he is.
+    expect(JSON.parse(String(init?.body))).toEqual({
+      platform: 'discord', requestId: '900', conversationId: 'discord:111:222', conversationKind: 'channel', sourceUserId: '333',
+      userMessage: '僕はうなぎが好き', observedAt: '2026-09-17T10:00:00.000Z',
+    });
+  });
+
+  it('never sends an unbound conversation, a friend (unless switched on), voice, attachments or the clarification follow-up', async () => {
+    const fetcher = answered();
+    const bridge = createShannonCoreBridge(replying, fetcher as typeof fetch)!;
+    for (const candidate of [
+      { ...envelope(), conversationId: 'discord:111:999' },
+      { ...envelope(), sourceUserId: 'friend', sourceDisplayName: 'ミキ' },
+      { ...envelope(), discord: { ...envelope().discord, isVoiceChannel: true } },
+      { ...envelope(), text: '見て\n画像: https://cdn.discordapp.com/attachments/1/2/a.png' },
+      { ...envelope(), text: '[追加要件への回答]\n元の依頼: x' },
+      { ...envelope(), text: '' },
+    ]) expect(await bridge.requestDiscordReply(candidate)).toEqual({ status: 'ineligible' });
+    expect(fetcher).not.toHaveBeenCalled();
+
+    const people = createShannonCoreBridge({ ...replying, replyPeopleEnabled: true }, fetcher as typeof fetch)!;
+    expect(await people.requestDiscordReply({ ...envelope(), sourceUserId: 'friend' })).toEqual({ status: 'ineligible' });
+    expect(fetcher).not.toHaveBeenCalled();
+    await people.requestDiscordReply({ ...envelope(), sourceUserId: 'friend', sourceDisplayName: 'ミキ', discord: { ...envelope().discord, isDM: true } });
+    expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toMatchObject({ sourceUserId: 'friend', sourceDisplayName: 'ミキ', conversationKind: 'dm' });
+  });
+
+  it('answers unavailable, without throwing, on a network failure, a refusal, or a malformed answer', async () => {
+    const cases = [
+      vi.fn(async () => { throw new Error('secret network detail'); }),
+      vi.fn(async () => new Response('{"error":"PLATFORM_REPLY_DISABLED"}', { status: 503 })),
+      vi.fn(async () => new Response('{"error":"PLATFORM_CONVERSATION_DENIED"}', { status: 403 })),
+      vi.fn(async () => new Response(JSON.stringify({ reply: '', threadId: 'x', duplicate: false }), { status: 201 })),
+      vi.fn(async () => new Response('not json', { status: 200 })),
+    ];
+    for (const fetcher of cases) {
+      const bridge = createShannonCoreBridge(replying, fetcher as typeof fetch)!;
+      expect(await bridge.requestDiscordReply(envelope())).toEqual({ status: 'unavailable' });
+    }
+  });
+});
+
 function envelope() {
   return {
     channel: 'discord', requestId: 'request-1', conversationId: 'discord:111:222', sourceUserId: '333',

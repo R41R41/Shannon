@@ -22,6 +22,7 @@ import {
   type DiscordNativeEvent,
 } from '../../common/adapters/index.js';
 import { readShannonCoreDiscordContext } from '../../integration/configuredShannonCoreBridge.js';
+import { answerDiscordFromCompanion } from '../../integration/discordCompanionReply.js';
 import { logger } from '../../../utils/logger.js';
 import type { AgentOrchestrator } from '../agents/AgentOrchestrator.js';
 import type { VoiceProcessor } from '../voice/VoiceProcessor.js';
@@ -218,6 +219,8 @@ export class EventRouter {
           recentMessages: textMsg.recentMessages as unknown[],
           isDM: textMsg.isDM === true,
         } as DiscordNativeEvent);
+        // SHANNON_CORE_PLATFORM_REPLY=true: her one mind answers a bound conversation; anything else keeps the path below.
+        if (await answerDiscordFromCompanion(baseEnvelope) !== 'fallback') return;
         const coreContext = await readShannonCoreDiscordContext(baseEnvelope);
         if (coreContext.status === 'unavailable') {
           logger.warn('[ShannonCoreBridge] canonical context unavailable; using legacy prompt');
