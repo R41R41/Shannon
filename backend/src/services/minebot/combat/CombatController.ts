@@ -12,6 +12,7 @@ import { ActionScorer } from './ActionScorer.js';
 import { ActionExecutor } from './ActionExecutor.js';
 import type { CombatConfig } from './types.js';
 import { DEFAULT_COMBAT_CONFIG } from './types.js';
+import { executeAction, actionSignal, assertActionActive } from '../execution/ActionExecution.js';
 
 const log = createLogger('Minebot:CombatController');
 
@@ -36,6 +37,7 @@ export class CombatController {
     private kills = 0;
     private actionsExecuted = 0;
     private startHp = 0;
+    private died = false;
 
     constructor(
         private bot: CustomBot,
@@ -58,8 +60,10 @@ export class CombatController {
         this.startHp = this.bot.health;
         this.lastAttackTime = 0;
         this.isBlocking = false;
+        this.died = false;
 
         const startTime = Date.now();
+        let lastAction: string | undefined;
 
         // #2 fix: entityDead イベントで正確に kill 数を追跡
         const onEntityDead = (entity: any) => {
@@ -69,6 +73,8 @@ export class CombatController {
             }
         };
         (this.bot as any).on('entityDead', onEntityDead);
+        const onDeath = () => { this.died = true; this.executor.cleanup(); };
+        this.bot.on('death', onDeath);
 
         log.warn(`⚔️ 戦闘開始${targetName ? ` (target: ${targetName})` : ''}`);
 
@@ -84,6 +90,10 @@ export class CombatController {
             while (this.running && (Date.now() - startTime) < this.config.maxDurationMs) {
                 const tickStart = Date.now();
 
+                // Mineflayer respawns automatically. A new full-health player
+                // and an empty entity cache must never turn death into victory.
+                if (this.died || this.bot.health <= 0) return this.buildResult(false, '死亡', startTime);
+
                 if (this.bot.interruptExecution) {
                     log.info('⚡ 戦闘中断: interruptExecution');
                     break;
@@ -94,36 +104,48 @@ export class CombatController {
 
                 // 敵がいない → 戦闘終了
                 if (situation.hostiles.length === 0) {
-                    log.success(`✅ 戦闘終了: 敵全滅 (${this.kills} kills)`);
+                    const escaped = lastAction === 'flee';
+                    const reason = escaped ? '逃走成功（敵撃破ではない）'
+                        : this.kills > 0 ? '周囲の敵なし（撃破を確認）' : '周囲の敵を見失った';
+                    log.info(`戦闘終了: ${reason} (${this.kills} kills)`);
                     this.executor.cleanup();
-                    return this.buildResult(true, '敵全滅', startTime);
+                    return this.buildResult(escaped || this.kills > 0, reason, startTime);
                 }
 
                 // 2. スコアリング
+                // Shield use persists across ticks, but its original facing does
+                // not follow moving enemies. Rotate without reactivating/resetting
+                // the shield's warm-up or changing the scorer's safety decisions.
+                if (this.isBlocking && situation.nearestHostile) {
+                    await this.executor.faceThreat(situation.nearestHostile.entity);
+                }
                 const actions = this.scorer.score(situation);
                 const best = actions[0];
+                lastAction = best.type;
+                log.debug(`decision=${best.type} score=${best.score.toFixed(2)} hp=${situation.hp.toFixed(1)} armor=${situation.armorPoints} threat=${situation.totalThreat.toFixed(1)} nearest=${situation.nearestHostile?.name ?? 'none'} distance=${situation.nearestHostile?.distance.toFixed(2) ?? '-'} ready=${situation.attackCooldownReady} blocking=${situation.isBlocking}`);
 
                 // 3. 実行 (tower 等の長いアクションを考慮して 4秒)
                 let attacked = false;
                 try {
-                    const result = await Promise.race([
-                        this.executor.execute(best),
-                        new Promise<{ attacked: boolean }>((_, reject) =>
-                            setTimeout(() => reject(new Error('action timeout')), 4000)
-                        ),
-                    ]);
-                    attacked = result.attacked;
+                    const result = await executeAction(this.bot, 'combat-action', 4000, async () => {
+                        const action = await this.executor.execute(best);
+                        assertActionActive(this.bot);
+                        return { success: true, result: '', attacked: action.attacked };
+                    });
+                    attacked = result.success && Boolean((result as unknown as { attacked?: boolean }).attacked);
+                    if (!result.success) this.executor.cleanup();
                 } catch {
                     log.warn(`⚠ アクション "${best.type}" がタイムアウト`);
                     this.executor.cleanup();
                 }
                 this.actionsExecuted++;
 
+                if (actionSignal(this.bot)?.aborted) break;
                 if (attacked) this.lastAttackTime = Date.now();
 
                 // ブロッキング状態追跡
                 if (best.type === 'shield-block') this.isBlocking = true;
-                if (best.type === 'shield-release' || best.type === 'attack' || best.type === 'jump-attack') {
+                if (best.type === 'shield-release' || best.type === 'attack' || best.type === 'jump-attack' || best.type === 'retreat-attack') {
                     this.isBlocking = false;
                 }
 
@@ -150,6 +172,7 @@ export class CombatController {
         } finally {
             this.running = false;
             (this.bot as any).removeListener('entityDead', onEntityDead);
+            this.bot.removeListener('death', onDeath);
             this.executor.cleanup();
         }
     }
@@ -181,10 +204,10 @@ export class CombatController {
 
     private buildResult(success: boolean, reason: string, startTime: number): CombatResult {
         return {
-            success,
-            reason,
+            success: success && !this.died,
+            reason: this.died ? '死亡' : reason,
             kills: this.kills,
-            damageTaken: Math.max(0, this.startHp - this.bot.health),
+            damageTaken: this.died ? this.startHp : Math.max(0, this.startHp - this.bot.health),
             durationMs: Date.now() - startTime,
             actionsExecuted: this.actionsExecuted,
         };

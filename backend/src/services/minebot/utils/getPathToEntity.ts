@@ -3,6 +3,7 @@ import pkg from 'mineflayer-pathfinder';
 const { goals, Movements } = pkg;
 import { Vec3 } from 'vec3';
 import { CustomBot } from '../types.js';
+import { installSafeParkour } from './setMovements.js';
 
 export class GetPathToEntity {
   bot: CustomBot;
@@ -16,6 +17,8 @@ export class GetPathToEntity {
     defaultMove.canDig = true;
     defaultMove.allowParkour = true;
     defaultMove.allowSprinting = true;
+    (defaultMove as any).infiniteLiquidDropdownDistance = false;
+    installSafeParkour(defaultMove, defaultMove.maxDropDown);
     const path = await this.bot.pathfinder.getPathTo(defaultMove, goal);
     return path;
   }

@@ -1,8 +1,10 @@
 import minecraftData from 'minecraft-data';
 import pathfinder from 'mineflayer-pathfinder';
+import type { Vec3 } from 'vec3';
 import { CustomBot, InstantSkill } from '../types.js';
 import { setMovements } from '../utils/setMovements.js';
 import { gotoSafe } from '../utils/gotoSafe.js';
+import { actionDelay } from '../execution/observedWait.js';
 
 const { goals } = pathfinder;
 /**
@@ -37,6 +39,8 @@ class PickupNearestItem extends InstantSkill {
    */
   private getItemNameFromEntity(entity: any): string | null {
     try {
+      const droppedItem = entity.getDroppedItem?.();
+      if (droppedItem?.name) return droppedItem.name;
       // mineflayerのitem entityからアイテム情報を取得
       const metadata = entity.metadata;
       if (!metadata) return null;
@@ -82,11 +86,7 @@ class PickupNearestItem extends InstantSkill {
 
         // 特定アイテムを指定している場合
         if (itemName) {
-          if (entityItemName && entityItemName.includes(itemName.replace('_', ''))) {
-            foundItemName = entityItemName;
-            return true;
-          }
-          if (entityItemName && entityItemName === itemName) {
+          if (entityItemName && this.matchesRequestedItem(entityItemName, itemName)) {
             foundItemName = entityItemName;
             return true;
           }
@@ -108,6 +108,8 @@ class PickupNearestItem extends InstantSkill {
         };
       }
 
+      foundItemName = this.getItemNameFromEntity(itemEntity);
+
       const distance = itemEntity.position.distanceTo(this.bot.entity.position);
 
       // アイテムに近づく（アイテムの真上に移動してピックアップ）
@@ -126,12 +128,7 @@ class PickupNearestItem extends InstantSkill {
         );
 
         // まずアイテムの近くに移動
-        const goal = new goals.GoalNear(
-          itemEntity.position.x,
-          itemEntity.position.y,
-          itemEntity.position.z,
-          0.5  // より近くに移動（ピックアップ範囲内）
-        );
+        const goal = this.pickupGoal(itemEntity.position);
 
         const moveResult = await gotoSafe(this.bot, goal, { timeoutMs: 10_000, stuckAbortCount: 5 });
         if (!moveResult.success && (moveResult.error === 'timeout' || moveResult.error === 'stuck')) {
@@ -143,19 +140,19 @@ class PickupNearestItem extends InstantSkill {
       }
 
       // アイテムが自動的に拾われるまで待つ（少し長めに）
-      await new Promise((resolve) => setTimeout(resolve, 800));
+      await actionDelay(this.bot, 800);
 
       // まだアイテムが存在する場合、直接その位置に歩いてみる
       const stillExists = this.bot.nearestEntity((e) => e === itemEntity);
       if (stillExists) {
         try {
           const sp = stillExists.position;
-          await gotoSafe(this.bot, new goals.GoalNear(sp.x, sp.y, sp.z, 0.5), {
+          await gotoSafe(this.bot, this.pickupGoal(sp), {
             timeoutMs: 3000,
             stuckAbortCount: 2,
             logStuck: false,
           });
-          await new Promise((resolve) => setTimeout(resolve, 500));
+          await actionDelay(this.bot, 500);
         } catch {
           // エラーは無視
         }
@@ -176,7 +173,9 @@ class PickupNearestItem extends InstantSkill {
         }
       }
 
-      if (pickedItems.length > 0) {
+      const requestedPicked = itemName === null || [...afterInventory].some(([name, count]) =>
+        this.matchesRequestedItem(name, itemName) && count > (beforeInventory.get(name) ?? 0));
+      if (pickedItems.length > 0 && requestedPicked) {
         return {
           success: true,
           result: `${pickedItems.join(', ')}を拾いました（距離: ${distance.toFixed(1)}m）`,
@@ -198,6 +197,8 @@ class PickupNearestItem extends InstantSkill {
         }
         return {
           success: false,
+          failureType: 'target_not_picked',
+          recoverable: true,
           result: `${targetItem}に近づきましたが、拾えませんでした（既に消えた可能性）`,
         };
       }
@@ -207,6 +208,25 @@ class PickupNearestItem extends InstantSkill {
         result: `アイテム拾得エラー: ${error.message}`,
       };
     }
+  }
+
+  private matchesRequestedItem(actual: string, requested: string): boolean {
+    const normalized = requested.replace(/^minecraft:/, '');
+    // Exact IDs must not match another item such as wheat_seeds. Preserve
+    // the old fuzzy search only for a query that is not itself an item ID.
+    return this.mcData.itemsByName[normalized]
+      ? actual === normalized
+      : actual.replace(/_/g, '').includes(normalized.replace(/_/g, ''));
+  }
+
+  private pickupGoal(position: Vec3) {
+    const floored = position.floored();
+    const support = this.bot.blockAt(floored);
+    // A drop on farmland/slabs lies at a fractional surface height. Pathfinder
+    // uses the node ABOVE a partial solid block; flooring the item's Y asks it
+    // to enter (and excavate) that support instead of walking on the surface.
+    const y = support?.boundingBox === 'block' ? floored.y + 1 : floored.y;
+    return new goals.GoalNear(position.x, y, position.z, 0.5);
   }
 }
 

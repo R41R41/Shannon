@@ -59,14 +59,16 @@ export class ActionScorer {
         // ─── 盾で防御 ───
         if (sit.hasShield && !sit.isBlocking) {
             let score = 0.3;
-            if (sit.hasRangedEnemy) score = 1.4;
+            // Do not repeatedly raise the shield instead of taking an available
+            // melee strike. Preserve ranged defence and cooldown protection.
+            if (sit.hasRangedEnemy && (!nearest || nearest.distance > this.config.meleeRange)) score = 1.4;
             if (!sit.attackCooldownReady) score = Math.max(score, 0.8);
             actions.push({ type: 'shield-block', score });
         }
 
         // ─── 盾解除 (攻撃のため) ───
         if (sit.isBlocking && sit.attackCooldownReady && nearest && nearest.distance <= this.config.meleeRange) {
-            actions.push({ type: 'shield-release', score: 1.1 });
+            actions.push({ type: 'shield-release', score: 1.1, target: nearest.entity });
         }
 
         // ─── 弓で射撃 ───

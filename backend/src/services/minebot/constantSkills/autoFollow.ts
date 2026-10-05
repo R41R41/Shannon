@@ -1,11 +1,13 @@
 import { Entity } from 'prismarine-entity';
 import { createLogger } from '../../../utils/logger.js';
 import { ConstantSkill, CustomBot } from '../types.js';
+import { actionDelay } from '../execution/observedWait.js';
 
 const log = createLogger('Minebot:Skill:autoFollow');
 
 class AutoFollow extends ConstantSkill {
   private lastStatus: boolean = false;
+  private targetName: string | undefined;
   constructor(bot: CustomBot) {
     super(bot);
     this.skillName = 'auto-follow';
@@ -14,6 +16,8 @@ class AutoFollow extends ConstantSkill {
     this.status = false;
     this.priority = 8;
     this.containMovement = true;
+    this.interval = 1000; // Resume an enabled follow after an owned emergency/task handoff.
+    this.maxDurationMs = 0; // Persistent behavior; cancellation, not an arbitrary deadline, ends it.
   }
 
   /**
@@ -24,7 +28,10 @@ class AutoFollow extends ConstantSkill {
     return (this.bot.entity as any)?.isInWater || false;
   }
 
-  async runImpl(entityName: string) {
+  async runImpl(entityName?: string) {
+    if (entityName) this.targetName = entityName;
+    if (!this.targetName) return;
+    entityName = this.targetName;
     try {
       while (this.status) {
         const entities = await this.bot.utils.getNearestEntitiesByName(
@@ -32,7 +39,7 @@ class AutoFollow extends ConstantSkill {
           entityName
         );
         if (entities.length === 0) {
-          await new Promise((resolve) => setTimeout(resolve, 1000));
+          await actionDelay(this.bot, 1000);
           continue;
         }
 
@@ -48,7 +55,7 @@ class AutoFollow extends ConstantSkill {
           this.bot.setControlState('jump', false);
           this.bot.setControlState('sneak', false);
           await this.bot.utils.goalFollow.run(entity, 1.5);
-          await new Promise((resolve) => setTimeout(resolve, 1000));
+          await actionDelay(this.bot, 1000);
         }
       }
       this.bot.pathfinder.setGoal(null);
@@ -73,7 +80,7 @@ class AutoFollow extends ConstantSkill {
       );
       const entity = entities.length > 0 ? entities[0] : null;
       await this.swim(entity);
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      await actionDelay(this.bot, 200);
     }
 
     // 水から出た → 制御状態をリセット（陸上ループに引き継ぐ）

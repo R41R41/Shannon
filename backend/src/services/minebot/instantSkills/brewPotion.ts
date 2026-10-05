@@ -4,6 +4,7 @@ import { CustomBot, InstantSkill } from '../types.js';
 import { createLogger } from '../../../utils/logger.js';
 import { gotoSafe } from '../utils/gotoSafe.js';
 import { ensureLineOfSight } from '../utils/blockLineOfSight.js';
+import { actionDelay } from '../execution/observedWait.js';
 
 const { goals } = pathfinder;
 const log = createLogger('Minebot:Skill:brewPotion');
@@ -118,7 +119,7 @@ class BrewPotion extends InstantSkill {
         const fuelSlot = brewingStand.slots[4];
         if (!fuelSlot) {
           await this.clickWindowItem(brewingStand, blazePowder, 4);
-          await new Promise(resolve => setTimeout(resolve, 200));
+          await actionDelay(this.bot, 200);
         }
 
         // ポーション瓶を下段に入れる（最大3本）
@@ -129,7 +130,7 @@ class BrewPotion extends InstantSkill {
             const currentPotions = this.bot.inventory.items().filter(it => it.name === 'potion');
             if (currentPotions.length > 0) {
               await this.clickWindowItem(brewingStand, currentPotions[0], i);
-              await new Promise(resolve => setTimeout(resolve, 200));
+              await actionDelay(this.bot, 200);
             }
           }
         }
@@ -138,19 +139,34 @@ class BrewPotion extends InstantSkill {
         const currentIngredient = this.bot.inventory.items().find(i => i.name === ingredient);
         if (currentIngredient) {
           await this.clickWindowItem(brewingStand, currentIngredient, 3);
-          await new Promise(resolve => setTimeout(resolve, 200));
+          await actionDelay(this.bot, 200);
         }
 
-        log.info(`🧪 醸造開始: ${ingredient} x ${bottlesToAdd}本`);
+        await actionDelay(this.bot, 500);
+        log.info(`🧪 醸造台スロット: ${brewingStand.slots.slice(0, 5).map((item: any) => item ? `${item.name}x${item.count}` : 'empty').join(', ')}`);
+        const loadedBottles = brewingStand.slots.slice(0, 3).filter((item: any) => item?.name === 'potion').length;
+        // Fuel may already have been consumed into the stand's internal fuel
+        // meter, in which case slot 4 is legitimately empty.
+        if (!brewingStand.slots[3] || loadedBottles === 0) {
+          brewingStand.close();
+          return {
+            success: false,
+            result: '醸造台へ材料・水入り瓶・燃料を正しく配置できませんでした',
+            failureType: 'interaction_failed',
+            recoverable: true,
+          };
+        }
 
-        // 醸造完了を待つ（約20秒）
-        await new Promise(resolve => setTimeout(resolve, 21_000));
+        log.info(`🧪 醸造開始: ${ingredient} x ${loadedBottles}本`);
+
+        // 醸造完了（材料スロットの消費）をサーバー状態で確認する。
+        await this.waitUntil(() => !brewingStand.slots[3], 25_000);
 
         brewingStand.close();
 
         return {
           success: true,
-          result: `醸造完了！${ingredient}を使って${bottlesToAdd}本のポーションを醸造しました。醸造台から回収してください。`,
+          result: `醸造完了！${ingredient}を使って${loadedBottles}本のポーションを醸造しました。醸造台から回収してください。`,
         };
       } catch (error: any) {
         try { brewingStand.close(); } catch { /* ignore */ }
@@ -190,8 +206,25 @@ class BrewPotion extends InstantSkill {
 
   /** windowにアイテムを入れる */
   private async clickWindowItem(window: any, item: any, destSlot: number): Promise<void> {
-    // shift-click でインベントリのアイテムをウィンドウスロットに移動
-    await this.bot.clickWindow(item.slot, 0, 1); // shift-click
+    await this.bot.transfer({
+      window,
+      itemType: item.type,
+      metadata: item.metadata,
+      count: 1,
+      nbt: item.nbt,
+      sourceStart: window.inventoryStart,
+      sourceEnd: window.inventoryEnd,
+      destStart: destSlot,
+      destEnd: destSlot + 1,
+    });
+  }
+
+  private async waitUntil(predicate: () => boolean, timeoutMs: number): Promise<void> {
+    const startedAt = Date.now();
+    while (!predicate()) {
+      if (Date.now() - startedAt >= timeoutMs) throw new Error('醸造完了の待機がタイムアウトしました');
+      await actionDelay(this.bot, 250);
+    }
   }
 }
 

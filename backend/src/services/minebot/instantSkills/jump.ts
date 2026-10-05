@@ -1,4 +1,5 @@
 import { CustomBot, InstantSkill } from '../types.js';
+import { actionDelay } from '../execution/observedWait.js';
 
 /**
  * 原子的スキル: ジャンプする
@@ -39,7 +40,7 @@ class Jump extends InstantSkill {
         // 地面にいるまで待つ（最大2秒）
         const waitStart = Date.now();
         while (!this.bot.entity.onGround && Date.now() - waitStart < 2000) {
-          await new Promise((resolve) => setTimeout(resolve, 50));
+          await actionDelay(this.bot, 50);
         }
 
         if (!this.bot.entity.onGround) {
@@ -53,26 +54,26 @@ class Jump extends InstantSkill {
           this.bot.setControlState('jump', true);
 
           // ジャンプ中は移動キーを押し続ける（着地まで最大800ms）
-          await new Promise((resolve) => setTimeout(resolve, 100));
+          await actionDelay(this.bot, 100);
           this.bot.setControlState('jump', false);
 
           // 着地を待つ
           const landStart = Date.now();
           while (!this.bot.entity.onGround && Date.now() - landStart < 800) {
-            await new Promise((resolve) => setTimeout(resolve, 50));
+            await actionDelay(this.bot, 50);
           }
 
           this.bot.setControlState(direction, false);
         } else {
           // その場ジャンプ
           this.bot.setControlState('jump', true);
-          await new Promise((resolve) => setTimeout(resolve, 100));
+          await actionDelay(this.bot, 100);
           this.bot.setControlState('jump', false);
 
           // 着地を待つ
           const landStart = Date.now();
           while (!this.bot.entity.onGround && Date.now() - landStart < 800) {
-            await new Promise((resolve) => setTimeout(resolve, 50));
+            await actionDelay(this.bot, 50);
           }
         }
 

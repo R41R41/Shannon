@@ -1,0 +1,99 @@
+{
+  "testSuite": "practical-combat-survival",
+  "description": "夜間の拠点防衛で近接・連続・自律戦闘・弓射撃・逃走・追従を使い分ける戦闘シナリオ",
+  "mode": "default",
+  "commandOracle": true,
+  "globalSetup": [
+    "/gamemode survival @s",
+    "/difficulty normal",
+    "/gamerule doMobSpawning false",
+    "/time set midnight",
+    "/weather clear",
+    "/effect clear @s",
+    "/effect give @s instant_health 1 10 true",
+    "/effect give @s saturation 1 10 true",
+    "/clear @s",
+    "/tp @s 0 100 0",
+    "/kill @e[type=!player]",
+    "/kill @e[type=item]",
+    "/fill -20 99 -20 20 99 20 stone",
+    "/fill -20 100 -20 20 108 20 air",
+    "/give @s diamond_sword 1",
+    "/give @s shield 1",
+    "/give @s bow 1",
+    "/give @s arrow 16",
+    "/give @s iron_helmet 1",
+    "/give @s iron_chestplate 1",
+    "/give @s iron_leggings 1",
+    "/give @s iron_boots 1",
+    "/item replace entity @s weapon.mainhand with diamond_sword",
+    "/effect give @s resistance 300 4 true",
+    "/tp @s 0 100 0"
+  ],
+  "cases": [
+    {
+      "skillName": "combat-engage",
+      "args": ["zombie", 25],
+      "description": "汎用戦闘AIでゾンビとの交戦を完遂する",
+      "expectedOutcome": "success",
+      "setup": ["/summon zombie 6 100 0 {NoAI:1b}"],
+      "postActionSettleMs": 1200,
+      "assertions": [{ "type": "entity_nearby", "entity": "zombie", "maxDistance": 24, "present": false }]
+    },
+    {
+      "skillName": "combat",
+      "args": ["husk", 20],
+      "description": "武器と防具を自動選択してハスクを討伐する",
+      "expectedOutcome": "success",
+      "setup": ["/summon husk 6 100 0 {NoAI:1b}"],
+      "postActionSettleMs": 1200,
+      "assertions": [{ "type": "entity_nearby", "entity": "husk", "maxDistance": 24, "present": false }]
+    },
+    {
+      "skillName": "attack-nearest",
+      "args": ["drowned", 4.5],
+      "description": "目前まで迫った弱ったドラウンドへ即座に一撃を加える",
+      "expectedOutcome": "success",
+      "setup": ["/summon drowned 3 100 0 {Health:1.0f,NoAI:1b}"],
+      "assertions": [{ "type": "entity_nearby", "entity": "drowned", "maxDistance": 8, "present": false }]
+    },
+    {
+      "skillName": "attack-continuously",
+      "args": ["skeleton", 30, 24, 1],
+      "description": "侵入したスケルトン1体を追跡して倒し切る",
+      "expectedOutcome": "success",
+      "setup": ["/summon skeleton 6 100 0 {NoAI:1b}"],
+      "assertions": [{ "type": "entity_nearby", "entity": "skeleton", "maxDistance": 24, "present": false }]
+    },
+    {
+      "skillName": "shoot-bow",
+      "args": ["stray", 1, 1.0, 48],
+      "description": "離れた弱ったストレイを弓の一射で倒す",
+      "expectedOutcome": "success",
+      "setup": [
+        "/give @s bow 1",
+        "/summon stray 10 100 0 {Health:1.0f,NoAI:1b}"
+      ],
+      "assertions": [{ "type": "entity_nearby", "entity": "stray", "maxDistance": 20, "present": false }]
+    },
+    {
+      "skillName": "flee-from",
+      "args": ["creeper", 8, 10000],
+      "description": "爆発圏内のクリーパーから安全距離まで逃走する",
+      "expectedOutcome": "success",
+      "setup": ["/summon creeper 3 100 0 {NoAI:1b}"],
+      "assertions": [
+        { "type": "entity_nearby", "entity": "creeper", "maxDistance": 16, "present": true },
+        { "type": "health_between", "min": 1, "max": 20 }
+      ]
+    },
+    {
+      "skillName": "follow-entity",
+      "args": ["cow", 2, 10000],
+      "description": "移動する家畜の護送を想定して牛へ追従する",
+      "expectedOutcome": "success",
+      "setup": ["/summon cow 7 100 0 {NoAI:1b}"],
+      "assertions": [{ "type": "position_within", "x": 7, "y": 100, "z": 0, "radius": 3 }]
+    }
+  ]
+}

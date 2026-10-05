@@ -3,6 +3,7 @@ import { Vec3 } from 'vec3';
 import { CustomBot, InstantSkill } from '../types.js';
 import { createLogger } from '../../../utils/logger.js';
 import { gotoSafe } from '../utils/gotoSafe.js';
+import { actionDelay } from '../execution/observedWait.js';
 
 const { goals } = pathfinder;
 const log = createLogger('Minebot:Skill:sleepInBed');
@@ -165,7 +166,7 @@ class SleepInBed extends InstantSkill {
               log.warn(`村人起こしエラー: ${error.message}`);
             }
             // 村人が起きるまで少し待つ
-            await new Promise((resolve) => setTimeout(resolve, 500));
+            await actionDelay(this.bot, 500);
             bed = this.bot.findBlock({
               matching: this.bot.isABed,
               maxDistance: 8,
@@ -264,7 +265,7 @@ class SleepInBed extends InstantSkill {
 
       // ベッドを設置
       await this.bot.placeBlock(referenceBlock, new Vec3(0, 1, 0));
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await actionDelay(this.bot, 500);
 
       // 設置したベッドを探す
       const placedBed = this.bot.findBlock({

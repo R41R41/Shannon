@@ -1,4 +1,6 @@
 import minecraftData from 'minecraft-data';
+import { detectVillage } from '../utils/landmarks.js';
+import { scanLoadedBlocks } from '../utils/loadedBlockScan.js';
 import { CustomBot, InstantSkill } from '../types.js';
 
 /**
@@ -10,7 +12,7 @@ class FindStructure extends InstantSkill {
   constructor(bot: CustomBot) {
     super(bot);
     this.skillName = 'find-structure';
-    this.description = '指定した構造物（要塞、村、ネザー要塞など）を探します。';
+    this.description = '指定した構造物（要塞、村、ネザー要塞など）を、読み込み済みの範囲から探します。村は観測のlandmarksにも自動で出ます。';
     this.mcData = minecraftData(this.bot.version);
     this.params = [
       {
@@ -63,7 +65,7 @@ class FindStructure extends InstantSkill {
           searchDistance = 256;
           break;
         case 'village':
-          searchBlocks = ['oak_planks', 'cobblestone', 'hay_block'];
+          searchBlocks = ['bell', 'hay_block'];
           searchDistance = 128;
           break;
         case 'stronghold':
@@ -77,43 +79,36 @@ class FindStructure extends InstantSkill {
           };
       }
 
-      // 特徴的なブロックを探す
-      let foundBlocks = [];
-      for (const blockName of searchBlocks) {
-        const blockType = this.mcData.blocksByName[blockName];
-        if (!blockType) continue;
-
-        const blocks = this.bot.findBlocks({
-          matching: blockType.id,
-          maxDistance: searchDistance,
-          count: 10,
-        });
-
-        if (blocks.length > 0) {
-          foundBlocks.push(...blocks);
-        }
+      // Only what the server has sent can be read: the loaded chunks around the body.
+      if (normalizedType === 'village') {
+        const reach = scanLoadedBlocks(this.bot as any, ['bell']).reachMetres;
+        const village = detectVillage(this.bot as any);
+        return { success: true, result: village
+          ? `村を発見: ${village.direction}へ約${village.distance}m、座標(${village.position.x}, ${village.position.y}, ${village.position.z})。根拠: ${village.evidence}`
+          : `読み込み済みの範囲（約${reach}m）に村の目印（鐘、干し草、職業ブロック、ベッドの集まり、村人）はありません。別の方向へ移動すると新しい範囲が読み込まれます` };
       }
-
-      if (foundBlocks.length === 0) {
+      const scan = scanLoadedBlocks(this.bot as any, searchBlocks, { maxHits: 10, maxDistance: searchDistance });
+      if (scan.hits.length === 0) {
+        // Not in sight now: what was seen before, and which way has not been looked at yet.
+        let known = '';
+        try {
+          const memory = (this.bot as any).placeMemory;
+          const remembered = memory?.recall(normalizedType, 1)?.[0];
+          known = remembered
+            ? `以前に見た場所を覚えています: (${remembered.position.x}, ${remembered.position.y}, ${remembered.position.z}) ${remembered.distance}m ${remembered.direction}。`
+            : memory ? `まだ見ていない方角: ${memory.unseen()}。` : '';
+        } catch { known = ''; }
         return {
           success: true,
-          result: `${searchDistance}ブロック以内に${structureType}の痕跡が見つかりませんでした。移動してから再度探索してください`,
+          result: `読み込み済みの範囲（約${Math.min(scan.reachMetres, searchDistance)}m）に${structureType}の痕跡が見つかりませんでした。${known}移動してから再度探索してください`,
         };
       }
-
-      // 最も近いブロックを選択
-      foundBlocks.sort((a, b) => {
-        const distA = a.distanceTo(this.bot.entity.position);
-        const distB = b.distanceTo(this.bot.entity.position);
-        return distA - distB;
-      });
-
-      const nearest = foundBlocks[0];
-      const distance = Math.floor(nearest.distanceTo(this.bot.entity.position));
-
+      const nearest = scan.hits[0];
+      // Found once, known from then on (also after the body has died and come back).
+      try { (this.bot as any).placeMemory?.remember(normalizedType, nearest.position, { note: nearest.name }); } catch { /* memory is optional */ }
       return {
         success: true,
-        result: `${structureType}の痕跡を発見: 座標(${nearest.x}, ${nearest.y}, ${nearest.z}), 距離${distance}m`,
+        result: `${structureType}の痕跡（${nearest.name}）を発見: 座標(${nearest.position.x}, ${nearest.position.y}, ${nearest.position.z}), 距離${Math.floor(nearest.distance)}m`,
       };
     } catch (error: any) {
       return {

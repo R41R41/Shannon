@@ -1,5 +1,5 @@
+import { findLoadedBlocks } from '../utils/loadedBlockScan.js';
 import minecraftData from 'minecraft-data';
-import pathfinder from 'mineflayer-pathfinder';
 import { Vec3 } from 'vec3';
 import { createLogger } from '../../../utils/logger.js';
 import { CustomBot, InstantSkill } from '../types.js';
@@ -9,13 +9,47 @@ import {
   INVENTORY_FULL_RECOVERY_HINT_JA,
   shouldPauseMiningForDeposit,
 } from '../utils/inventorySpillDetection.js';
-import { gotoSafe } from '../utils/gotoSafe.js';
+import { assertActionActive, reportActionProgress } from '../execution/ActionExecution.js';
+import { collectDrops, expectedBlockDrops, inventoryCounts, type CollectionPolicy } from '../execution/collectDrops.js';
+import { canDigFromHere, DIG_REACH } from '../utils/blockInteractionReach.js';
+import { estimateBlockApproachCost } from '../utils/blockApproachCost.js';
+import { dropBurnsIn } from '../utils/dropFate.js';
+import { digMsWithBestTool as bestToolDigMs } from '../utils/bestToolDigTime.js';
 
-const { goals } = pathfinder;
 const log = createLogger('Minebot:Skill:mineBlock');
+
+/**
+ * Targets the approach failed to reach, per bot. A paid run asked for the same
+ * two cliff-top logs again and again; each call re-picked the nearest ones and
+ * timed out. They go to the back of the list for a while, not out of it.
+ */
+const UNREACHABLE_MEMORY_MS = 10 * 60_000;
+const unreachableTargets = new WeakMap<object, Map<string, number>>();
+function recentlyUnreachable(bot: object): Map<string, number> {
+  let memory = unreachableTargets.get(bot);
+  if (!memory) { memory = new Map(); unreachableTargets.set(bot, memory); }
+  const now = Date.now();
+  for (const [key, at] of memory) if (now - at > UNREACHABLE_MEMORY_MS) memory.delete(key);
+  return memory;
+}
 
 class MineBlock extends InstantSkill {
   private mcData: any;
+
+  /**
+   * Only defer pickup when each block has a solid floor and the whole batch is
+   * level. Tree trunks, cliff faces and mixed-height veins still need pickup
+   * after every dig: their drops can fall to a different ledge before the bot
+   * returns. Keep the deferred group small so collectDrops can reach every
+   * spawned item within its bounded pickup passes.
+   */
+  private canDeferBatchCollection(blockName: string, targets: Vec3[]): boolean {
+    if (targets.length < 2 || !(['stone', 'cobblestone', 'deepslate'].includes(blockName)
+      || blockName.endsWith('_ore'))) return false;
+    const level = targets[0].y;
+    return targets.every(target => target.y === level
+      && this.bot.blockAt(new Vec3(target.x, target.y - 1, target.z))?.boundingBox === 'block');
+  }
 
   /**
    * 通常鉱石と deepslate 対をまとめて探す（iron_ore と deepslate_iron_ore など）。
@@ -32,21 +66,15 @@ class MineBlock extends InstantSkill {
     return [...out];
   }
 
-  private static distSqToBlockCenter(
-    botPos: { x: number; y: number; z: number },
-    pos: { x: number; y: number; z: number },
-  ): number {
-    const cx = pos.x + 0.5;
-    const cy = pos.y + 0.5;
-    const cz = pos.z + 0.5;
-    return (botPos.x - cx) ** 2 + (botPos.y - cy) ** 2 + (botPos.z - cz) ** 2;
-  }
-
   constructor(bot: CustomBot) {
     super(bot);
     this.skillName = 'mine-block';
+    // Longer than the approach it calls (a move ends by itself at 110 seconds and says how far it got): with
+    // the same two minutes for both, the order ran out first and all the planner was told was "timeout".
+    // A tunnel towards diamonds ended that way twice running, and wore out the pickaxe on the way (paid run L81).
+    this.maxDurationMs = 180_000;
     this.description =
-      '指定した種類のブロックを近くから探し、**都度いまの位置から最も近い候補**を選んで採掘します。手の届く範囲に複数あればまとめて掘って一括回収（バッチ採掘）するため効率的です。`*_ore` は通常石と深層（deepslate_*）をまとめて扱います。ブロック名は正式ID（例: iron_ore, coal_ore, hay_block, oak_log 等）を使用してください。';
+      '指定した種類のブロックを近くから探し、都度いまの位置から高低差と露出を含む到達コスト概算が低い候補を選んで採掘します。実経路は移動時に検証し、深い候補も除外しません。手の届く範囲に複数あればまとめて掘って一括回収（バッチ採掘）するため効率的です。`*_ore` は通常石と深層（deepslate_*）をまとめて扱います。ブロック名は正式ID（例: iron_ore, coal_ore, hay_block, oak_log 等）を使用してください。';
     this.mcData = minecraftData(this.bot.version);
     this.params = [
       {
@@ -67,10 +95,16 @@ class MineBlock extends InstantSkill {
         description: '検索半径（デフォルト: 32）',
         default: 32,
       },
+      { name: 'collectionPolicy', type: 'string', description: 'target=採掘対象のドロップを優先（既定）、all=周辺ドロップも回収', default: 'target' },
     ];
   }
 
-  async runImpl(blockName: string, count: number = 1, searchRadius: number = 32) {
+  async runImpl(blockName: string, count: number = 1, searchRadius: number = 32, collectionPolicy: CollectionPolicy = 'target') {
+    assertActionActive(this.bot);
+    reportActionProgress(this.bot, 'precondition', { blockName, count, searchRadius });
+    if (!Number.isInteger(count) || count < 1 || !Number.isFinite(searchRadius) || searchRadius <= 0
+      || !['target', 'all'].includes(collectionPolicy)) return { success: false,
+        failureType: 'invalid_input', recoverable: false, result: '個数は正の整数、検索半径は正の数、回収方針は target / all を指定してください' };
     const blockType = this.mcData.blocksByName[blockName];
     if (!blockType) {
       const allBlocks = Object.keys(this.mcData.blocksByName);
@@ -101,38 +135,41 @@ class MineBlock extends InstantSkill {
     const scanCount = Math.min(384, Math.max(want * 12, want + 48));
     const familyNames = MineBlock.oreMiningFamily(this.mcData, blockName);
     const candidateKeySet = new Set<string>();
-    const candidates: Array<{ x: number; y: number; z: number }> = [];
+    const candidates: Array<{ x: number; y: number; z: number; exposed?: boolean }> = [];
+    // Ore on a lake floor or in a flooded cave pulled paid runs under water,
+    // where mining is ~25x slower and two bots drowned. Skip blocks touching a
+    // water source; dry ore is plentiful.
+    const submergedKeys = new Set<string>();
+    const touchesWaterSource = (p: { x: number; y: number; z: number }) => [new Vec3(1, 0, 0), new Vec3(-1, 0, 0), new Vec3(0, 1, 0),
+      new Vec3(0, 0, 1), new Vec3(0, 0, -1)].some(offset => {
+      const neighbor = this.bot.blockAt(new Vec3(p.x + offset.x, p.y + offset.y, p.z + offset.z));
+      return neighbor?.name === 'water' && (neighbor.metadata === 0 || (neighbor as any).getProperties?.().level === 0);
+    });
 
     const mergeTargetsFromWorld = (): void => {
+      reportActionProgress(this.bot, 'search', { blockName, searchRadius, queuedTargets: candidates.length });
+      const queuedKeys = new Set(candidates.map(p => `${p.x},${p.y},${p.z}`));
       for (const name of familyNames) {
         const id = this.mcData.blocksByName[name]?.id;
         if (id === undefined) continue;
-        const found = this.bot.findBlocks({
-          matching: id,
-          maxDistance: searchRadius,
-          count: scanCount,
-        });
+        const found = typeof (this.bot.world as any)?.getColumns === 'function'
+          ? findLoadedBlocks(this.bot as any, [name], searchRadius, scanCount)
+          : this.bot.findBlocks({ matching: id, maxDistance: searchRadius, count: scanCount });
         for (const p of found) {
           const k = `${p.x},${p.y},${p.z}`;
-          if (candidateKeySet.has(k)) continue;
+          if (queuedKeys.has(k)) continue;
           const blk = this.bot.blockAt(new Vec3(p.x, p.y, p.z));
           if (!blk || !familyNames.includes(blk.name)) continue;
+          if (touchesWaterSource(p)) { submergedKeys.add(k); continue; }
           candidateKeySet.add(k);
-          candidates.push(p);
+          queuedKeys.add(k);
+          const exposed = [new Vec3(1, 0, 0), new Vec3(-1, 0, 0), new Vec3(0, 1, 0),
+            new Vec3(0, -1, 0), new Vec3(0, 0, 1), new Vec3(0, 0, -1)]
+            .some(offset => ['air', 'cave_air', 'void_air'].includes(this.bot.blockAt(new Vec3(p.x + offset.x, p.y + offset.y, p.z + offset.z))?.name ?? ''));
+          candidates.push({ x: p.x, y: p.y, z: p.z, exposed });
         }
       }
     };
-
-    mergeTargetsFromWorld();
-
-    if (candidates.length === 0) {
-      return {
-        success: false,
-        result: `${searchRadius}ブロック以内に${blockName}が見つかりません`,
-        failureType: 'target_not_found',
-        recoverable: true,
-      };
-    }
 
     // ツルハシの有無・耐久を事前チェック
     const needsPickaxe = ['stone', 'ore', 'cobble', 'deepslate', 'brick', 'obsidian', 'concrete', 'terracotta', 'basalt', 'netherrack']
@@ -190,6 +227,20 @@ class MineBlock extends InstantSkill {
       }
     }
 
+    // Cheap prerequisites precede the synchronous, radius-dependent scan.
+    if (blockType.harvestTools && !this.bot.inventory.items().some(item =>
+      Object.keys(blockType.harvestTools).map(Number).includes(item.type))) {
+      return { success: false, failureType: 'missing_tool', recoverable: true,
+        result: `${blockName}を回収できる適切なツールがありません。先に必要な道具を用意してください` };
+    }
+    reportActionProgress(this.bot, 'search', { blockName, searchRadius });
+    mergeTargetsFromWorld();
+    assertActionActive(this.bot);
+    if (candidates.length === 0) return { success: false, failureType: 'target_not_found', recoverable: true,
+      result: `${searchRadius}ブロック以内に${blockName}が見つかりません`
+        + (submergedKeys.size ? `（水源に接する${submergedKeys.size}個は水中作業になるため除外。水の無い場所を探してください）` : '') };
+    const beforeEntityIds = new Set(Object.values(this.bot.entities ?? {}).map(entity => entity.id));
+    const expectedItems = expectedBlockDrops(this.bot, blockType);
     // 採掘前のインベントリをスナップショット（ドロップアイテム検出用）
     const beforeInventory = new Map<string, number>();
     for (const item of this.bot.inventory.items()) {
@@ -202,11 +253,45 @@ class MineBlock extends InstantSkill {
     let lastRecoverable = false;
     let stoppedForInventoryFull = false;
     let stoppedForInventoryTight = false;
+    // One action has a fixed time (two minutes). Obsidian is nine seconds a block with a diamond pickaxe and
+    // more over lava: ten of it ran the action out with a block half dug, the water it had poured left
+    // standing and two drops lying uncollected (lab, 2026-10-02). A block that cannot be finished and
+    // picked up in what is left is not started; what was done is reported and the rest is asked for again.
+    const actionStartedAt = Date.now();
+    const timeLeftMs = () => (this.maxDurationMs || 120_000) - (Date.now() - actionStartedAt);
+    const COLLECT_RESERVE_MS = 8000;
+    const OVER_LAVA_EXTRA_MS = 5000;
+    const digMsWithBestTool = (block: any): number => bestToolDigMs(this.bot as any, block);
+    const noTimeFor = (block: any, at: Vec3) => mined > 0
+      && timeLeftMs() < digMsWithBestTool(block) + (dropBurnsIn(this.bot as any, at) ? OVER_LAVA_EXTRA_MS : 0) + COLLECT_RESERVE_MS;
+    let stoppedForTime = false;
+    /** The least time worth starting a walk to a block with, and what is said when an action ends on the way to one. */
+    const APPROACH_MIN_MS = 45_000;
+    let approachNote = '';
     let consecutiveFailures = 0;
     const MAX_CONSECUTIVE_FAILURES = 3;
 
-    while (mined < count && candidates.length > 0) {
+    // Nested movement/drop collection can mine another target through the
+    // pathfinder. Count actual completed digs, not just direct skill calls.
+    const completedTargets = new Set<string>();
+    const targetKey = (p: { x: number; y: number; z: number }) => `${p.x},${p.y},${p.z}`;
+    const onDiggingCompleted = (dug: any) => {
+      // Mineflayer emits the new AIR block, not the original material.
+      if (dug?.position && candidateKeySet.has(targetKey(dug.position))) {
+        completedTargets.add(targetKey(dug.position));
+        mined = completedTargets.size;
+      }
+    };
+    this.bot.on('diggingCompleted', onDiggingCompleted);
+
+    try {
+
+    while (mined < count) {
       if (this.shouldInterrupt()) break;
+      if (candidates.length === 0) {
+        mergeTargetsFromWorld();
+        if (candidates.length === 0) break;
+      }
 
       const remainingToMine = want - mined;
       if (shouldPauseMiningForDeposit(this.bot, remainingToMine)) {
@@ -219,14 +304,30 @@ class MineBlock extends InstantSkill {
           failureType: 'inventory_full',
           recoverable: true,
           result:
-            `インベントリの空きが${emptySlotCountSafe(this.bot)}スロットしかありません。満杯になる前に deposit-to-container で地上のチェストまたは樽に預けてから採掘してください（目安: 空きが約${DEPOSIT_BEFORE_EMPTY_SLOTS_FALLS_TO}以下で、これから掘る個数が空きを超えるときは先に預ける）。${INVENTORY_FULL_RECOVERY_HINT_JA}${toolWarning}`,
+            `インベントリの空きが${emptySlotCountSafe(this.bot)}スロットしかなく、これから掘る分が入りません。先に空きを作ってください。${INVENTORY_FULL_RECOVERY_HINT_JA}${toolWarning}`,
         };
       }
 
       const here = this.bot.entity.position;
-      candidates.sort(
-        (a, b) => MineBlock.distSqToBlockCenter(here, a) - MineBlock.distSqToBlockCenter(here, b),
-      );
+      // Geometric nearness alone made a 13m-deeper ore win over a similarly
+      // distant ore 2m below, then spent the action budget tunnelling toward
+      // it. Estimate vertical travel and excavation cost, but retain every
+      // lower/buried candidate as a fallback if the easier route fails. A
+      // block already diggable from here needs no approach at all.
+      const reachable = new Set(candidates.filter(candidate => {
+        const target = new Vec3(candidate.x, candidate.y, candidate.z);
+        const block = this.bot.blockAt(target);
+        return block && canDigFromHere(this.bot, block, target);
+      }).map(candidate => targetKey(candidate)));
+      const unreachable = recentlyUnreachable(this.bot);
+      // A block whose drop would burn (lava under or beside it) takes water and a foothold to mine; one of
+      // the same kind that needs neither comes first.
+      const burning = new Set(candidates.filter(candidate => dropBurnsIn(this.bot as any, new Vec3(candidate.x, candidate.y, candidate.z)))
+        .map(candidate => targetKey(candidate)));
+      candidates.sort((a, b) => Number(reachable.has(targetKey(b))) - Number(reachable.has(targetKey(a)))
+        || Number(unreachable.has(targetKey(a))) - Number(unreachable.has(targetKey(b)))
+        || Number(burning.has(targetKey(a))) - Number(burning.has(targetKey(b)))
+        || estimateBlockApproachCost(here, a, a.exposed) - estimateBlockApproachCost(here, b, b.exposed));
 
       const pos = candidates.shift()!;
       const target = new Vec3(pos.x, pos.y, pos.z);
@@ -234,16 +335,39 @@ class MineBlock extends InstantSkill {
       if (!block || !familyNames.includes(block.name)) {
         continue;
       }
+      if (noTimeFor(block, target)) { stoppedForTime = true; break; }
 
-      const distance = this.bot.entity.position.distanceTo(target);
-      if (distance > 4.5) {
-        const moveResult = await moveTo.run(target.x, target.y, target.z, 1, 'near');
+      if (!canDigFromHere(this.bot, block, target)) {
+        // The pathfinder rarely plans a dig several blocks straight down to a
+        // buried ore and gives up at once; descend by stairs toward it first,
+        // as a player would, then approach.
+        const stairMine = this.bot.instantSkills.getSkill('stair-mine');
+        const here = this.bot.entity.position;
+        if (stairMine && target.y < here.y - 3) {
+          const dx = target.x + 0.5 - here.x, dz = target.z + 0.5 - here.z;
+          const direction = Math.abs(dx) >= Math.abs(dz) ? (dx >= 0 ? 'east' : 'west') : (dz >= 0 ? 'south' : 'north');
+          await stairMine.run(target.y + 1, direction, 'cobblestone');
+        }
+        // Not enough of the action left for the walk: said, with where the body is now, instead of a timeout.
+        if (timeLeftMs() < APPROACH_MIN_MS) {
+          approachNote = `${blockName}(${target.x}, ${target.y}, ${target.z})へ向かう途中で1回の行動の時間が尽きました（いま ${this.bot.entity.position.floored()}、あと約${Math.round(this.bot.entity.position.distanceTo(target))}m）。もう一度 mine-block を呼べば続きから進みます`;
+          stoppedForTime = true;
+          break;
+        }
+        const moveResult = await moveTo.run(target.x, target.y, target.z, DIG_REACH, 'block');
         if (!moveResult.success) {
           lastFailureType = moveResult.failureType ?? 'movement_failed';
           lastRecoverable = moveResult.recoverable ?? true;
-          failures.push(
-            `移動失敗(${target.x},${target.y},${target.z}): ${moveResult.failureType ?? moveResult.result}`,
-          );
+          const closer = moveResult.failureType === 'movement_incomplete';
+          failures.push(`移動失敗(${target.x},${target.y},${target.z}): ${moveResult.failureType ?? 'movement_failed'} — ${String(moveResult.result).slice(0, 200)}`);
+          // A walk that ran out of time while getting nearer is not a place that cannot be reached: it is
+          // gone on with at the next call, not put behind every other candidate.
+          if (!closer) recentlyUnreachable(this.bot).set(targetKey(target), Date.now());
+          if (closer || timeLeftMs() < APPROACH_MIN_MS) {
+            approachNote = `${blockName}(${target.x}, ${target.y}, ${target.z})へ向かう途中です（いま ${this.bot.entity.position.floored()}、あと約${Math.round(this.bot.entity.position.distanceTo(target))}m）。もう一度 mine-block を呼べば続きから進みます`;
+            stoppedForTime = true;
+            break;
+          }
           consecutiveFailures++;
           if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
             failures.push(`${MAX_CONSECUTIVE_FAILURES}回連続で到達失敗 — これ以上の候補を試行しません`);
@@ -254,7 +378,6 @@ class MineBlock extends InstantSkill {
       }
 
       // ── バッチ採掘: 手の届く範囲の同種ブロックをまとめて掘る ──
-      const REACH = 4.5;
       const batchTargets: Vec3[] = [target];
       // candidates から手の届く範囲のブロックも集める
       const maxBatch = Math.min(remainingToMine, 16);
@@ -262,10 +385,9 @@ class MineBlock extends InstantSkill {
       for (const c of candidates) {
         if (batchTargets.length >= maxBatch) { kept.push(c); continue; }
         const cv = new Vec3(c.x, c.y, c.z);
-        const dFromBot = this.bot.entity.position.distanceTo(cv);
-        if (dFromBot <= REACH) {
-          const blk = this.bot.blockAt(cv);
-          if (blk && familyNames.includes(blk.name)) {
+        const blk = this.bot.blockAt(cv);
+        if (blk && canDigFromHere(this.bot, blk, cv)) {
+          if (familyNames.includes(blk.name)) {
             batchTargets.push(cv);
             continue;
           }
@@ -276,53 +398,116 @@ class MineBlock extends InstantSkill {
       candidates.push(...kept);
 
       if (batchTargets.length >= 2) {
-        // ── 複数ブロックをまとめて掘り、後から一括回収 ──
+        // ── 複数ブロックをまとめて掘る。安全な水平面だけ小分けで回収 ──
         log.info(`⛏️ バッチ採掘: ${batchTargets.length}個の${blockName}を一括で掘削`);
         let batchDug = 0;
         let batchAbortReason: { type: string; result: string } | null = null;
+        const deferCollection = this.canDeferBatchCollection(blockName, batchTargets);
+        let pendingOrigins: Vec3[] = [];
+        let pendingBeforeInventory = inventoryCounts(this.bot);
+        let pendingBeforeEntityIds = new Set(Object.values(this.bot.entities ?? {}).map(entity => entity.id));
+        const flushPendingDrops = async () => {
+          if (pendingOrigins.length === 0) return;
+          const collected = await this.collectAllNearbyDrops(
+            pendingOrigins, expectedItems, pendingBeforeEntityIds, collectionPolicy, pendingBeforeInventory,
+          );
+          if (collected.length > 0) log.info(`📦 小バッチ回収: ${collected.join(', ')}`, 'green');
+          pendingOrigins = [];
+        };
 
         for (const bt of batchTargets) {
-          if (this.shouldInterrupt()) break;
+          if (this.shouldInterrupt() || mined >= want) break;
           const blk = this.bot.blockAt(bt);
           if (!blk || !familyNames.includes(blk.name)) continue;
+          if (noTimeFor(blk, bt)) { stoppedForTime = true; break; }
 
-          let digResult = await digBlockAt.run(bt.x, bt.y, bt.z, false);
+          // Collecting the previous block's drop may move the bot. A batch
+          // selected in reach is not guaranteed to remain in reach afterwards.
+          if (!canDigFromHere(this.bot, blk, bt)) {
+            // Collect already-dug blocks before any movement can strand their
+            // drops, then re-evaluate reach from the new position.
+            await flushPendingDrops();
+            const movement = await moveTo.run(bt.x, bt.y, bt.z, DIG_REACH, 'block');
+            if (!movement.success) {
+              lastFailureType = movement.failureType ?? 'movement_failed';
+              lastRecoverable = movement.recoverable ?? true;
+              consecutiveFailures++;
+              failures.push(`移動失敗(${bt.x},${bt.y},${bt.z}): ${movement.result}`);
+              recentlyUnreachable(this.bot).set(targetKey(bt), Date.now());
+              if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) break;
+              continue;
+            }
+            if (!familyNames.includes(this.bot.blockAt(bt)?.name ?? '')) continue;
+          }
+
+          // A block over lava is dug from a foothold with water over it, and its drop is left lying on the
+          // floor the water makes under it. Walking down for each one would mean a new foothold each time:
+          // those drops are gathered a few at a time too.
+          const overLava = !!dropBurnsIn(this.bot as any, bt);
+          let collectImmediately = !deferCollection && !overLava;
+          if (!collectImmediately && pendingOrigins.length === 0) {
+            pendingBeforeInventory = inventoryCounts(this.bot);
+            pendingBeforeEntityIds = new Set(Object.values(this.bot.entities ?? {}).map(entity => entity.id));
+          }
+          let digResult = await digBlockAt.run(bt.x, bt.y, bt.z, collectImmediately, collectionPolicy, false, true);
           // 遮蔽物を除去した場合は同じブロックをリトライ
           if (digResult.failureType === 'obstruction_cleared') {
-            digResult = await digBlockAt.run(bt.x, bt.y, bt.z, false);
+            await flushPendingDrops();
+            collectImmediately = true;
+            digResult = await digBlockAt.run(bt.x, bt.y, bt.z, true, collectionPolicy);
           }
+          if (!digResult.success) await flushPendingDrops();
           if (digResult.failureType === 'missing_tool') {
             batchAbortReason = { type: 'missing_tool', result: digResult.result };
             break;
           }
-          if (digResult.failureType === 'lava_danger') {
-            batchAbortReason = { type: 'lava_danger', result: digResult.result };
-            break;
+          // Judged block by block: the one under the feet, or one with lava beside it, says nothing of the
+          // next. Ending the whole order at the first of them left a body standing on the obsidian it had
+          // made with every other piece of it in reach and untouched (lab, 2026-10-02).
+          if (digResult.failureType === 'lava_danger' || digResult.failureType === 'drop_would_burn') {
+            recentlyUnreachable(this.bot).set(targetKey(bt), Date.now());
           }
+          // The body is under water and cannot dig there for want of air: no other block of the batch differs.
+          if (digResult.failureType === 'air_short') { batchAbortReason = { type: 'air_short', result: digResult.result }; break; }
           if (digResult.success) {
+            completedTargets.add(targetKey(bt));
             batchDug++;
             consecutiveFailures = 0;
+            if (!collectImmediately) {
+              pendingOrigins.push(bt);
+              if (pendingOrigins.length >= 4) await flushPendingDrops();
+            }
           } else {
+            lastFailureType = digResult.failureType ?? 'dig_failed';
+            lastRecoverable = digResult.recoverable ?? true;
             consecutiveFailures++;
-            failures.push(`採掘失敗(${bt.x},${bt.y},${bt.z}): ${digResult.failureType ?? digResult.result}`);
+            const failure = `採掘失敗(${bt.x},${bt.y},${bt.z}): ${digResult.failureType ?? 'dig_failed'} — ${digResult.result}`;
+            if (failures.at(-1) !== failure) failures.push(failure);
             if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) break;
           }
         }
 
-        // 一括ドロップ回収
+        await flushPendingDrops();
+
+        // Fortune can yield several items from one ore, so a batch inventory
+        // total cannot prove that every dug block's drop was retrieved. Always
+        // make a final sweep; deferred batches also allow the last drop time
+        // to spawn before leaving the area.
         if (batchDug > 0) {
-          const collected = await this.collectAllNearbyDrops();
+          const collected = await this.collectAllNearbyDrops(batchTargets, expectedItems, beforeEntityIds,
+            collectionPolicy, inventoryCounts(this.bot), deferCollection ? 1200 : 0);
           if (collected.length > 0) {
             log.info(`📦 一括回収: ${collected.join(', ')}`, 'green');
           }
         }
 
-        mined += batchDug;
+        mined = completedTargets.size;
+        if (stoppedForTime) break;
 
         if (batchAbortReason) {
           lastFailureType = batchAbortReason.type;
           lastRecoverable = true;
-          failures.push(`ツール不足: ${batchAbortReason.result}`);
+          failures.push(`${batchAbortReason.type === 'missing_tool' ? 'ツール不足' : '中止'}: ${batchAbortReason.result}`);
           break;
         }
 
@@ -332,14 +517,21 @@ class MineBlock extends InstantSkill {
           if (toolCheck) return toolCheck;
         }
 
-        // 掘削後に近傍を再スキャン
-        mergeTargetsFromWorld();
+        // Rescanning can now requeue failed targets. Preserve the existing
+        // failure bound across batches instead of looping forever on them.
+        if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+          failures.push(`${MAX_CONSECUTIVE_FAILURES}回連続で採掘失敗 — 別のアプローチを検討してください`);
+          break;
+        }
+
+        // Revalidate queued blocks cheaply before each dig. Rescan only when
+        // the queue is exhausted; never scan after the requested count is met.
 
       } else {
         // ── 単体採掘: 従来通り collect=true で1個ずつ ──
-        let digResult = await digBlockAt.run(target.x, target.y, target.z, true);
+        let digResult = await digBlockAt.run(target.x, target.y, target.z, true, collectionPolicy);
         if (digResult.failureType === 'obstruction_cleared') {
-          digResult = await digBlockAt.run(target.x, target.y, target.z, true);
+          digResult = await digBlockAt.run(target.x, target.y, target.z, true, collectionPolicy);
         }
         if (digResult.failureType === 'missing_tool') {
           lastFailureType = 'missing_tool';
@@ -347,14 +539,17 @@ class MineBlock extends InstantSkill {
           failures.push(`ツール不足: ${digResult.result}`);
           break;
         }
-        if (digResult.failureType === 'lava_danger') {
-          lastFailureType = 'lava_danger';
-          lastRecoverable = true;
-          failures.push(`マグマ危険: ${digResult.result}`);
+        if (digResult.failureType === 'lava_danger' || digResult.failureType === 'drop_would_burn') {
+          recentlyUnreachable(this.bot).set(targetKey(target), Date.now());
+        }
+        if (digResult.failureType === 'air_short') {
+          lastFailureType = 'air_short'; lastRecoverable = true;
+          failures.push(`中止: ${digResult.result}`);
           break;
         }
         if (digResult.success) {
-          mined += 1;
+          completedTargets.add(targetKey(target));
+          mined = completedTargets.size;
           consecutiveFailures = 0;
 
           if (needsPickaxe) {
@@ -362,13 +557,12 @@ class MineBlock extends InstantSkill {
             if (toolCheck) return toolCheck;
           }
 
-          mergeTargetsFromWorld();
+          reportActionProgress(this.bot, 'confirm', { completed: mined, requested: want }, true);
         } else {
           lastFailureType = digResult.failureType ?? 'dig_failed';
           lastRecoverable = digResult.recoverable ?? true;
-          failures.push(
-            `採掘失敗(${target.x},${target.y},${target.z}): ${digResult.failureType ?? digResult.result}`,
-          );
+          const failure = `採掘失敗(${target.x},${target.y},${target.z}): ${digResult.failureType ?? 'dig_failed'} — ${digResult.result}`;
+          if (failures.at(-1) !== failure) failures.push(failure);
           consecutiveFailures++;
           if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
             failures.push(`${MAX_CONSECUTIVE_FAILURES}回連続で採掘失敗 — 別のアプローチを検討してください`);
@@ -391,20 +585,26 @@ class MineBlock extends InstantSkill {
     }
 
     const tightNote = stoppedForInventoryTight
-      ? ` 【満杯前整理】空きが少ないためここで中断しました。先に deposit-to-container で預けてから続行してください。${INVENTORY_FULL_RECOVERY_HINT_JA}`
+      ? ` 【満杯前整理】空きが少ないためここで中断しました。先に空きを作ってから続行してください。${INVENTORY_FULL_RECOVERY_HINT_JA}`
       : '';
 
     if (mined === 0) {
+      if (approachNote) {
+        return { success: false, failureType: 'movement_incomplete', recoverable: true,
+          result: `まだ${blockName}を掘っていません。${approachNote}${toolWarning}` };
+      }
       return {
         success: false,
-        result: `${blockName}を採掘できませんでした${failures.length > 0 ? `: ${failures.join(', ')}` : ''}`,
+        result: `${blockName}を採掘できませんでした${failures.length > 0 ? `: ${failures.join(', ')}` : ''}`
+          + (failures.some(failure => failure.startsWith('移動失敗')) ? '。到達できなかった位置は次回から後回しにします（崖の上などは別の場所の同じ資源を探す）' : ''),
         failureType: lastFailureType ?? 'mine_failed',
         recoverable: lastRecoverable || failures.length === 0,
       };
     }
 
     // 採掘後のインベントリ差分からドロップアイテムを検出
-    const drops = this.detectDrops(beforeInventory);
+    const drops = this.detectDrops(beforeInventory).filter(drop => collectionPolicy === 'all'
+      || expectedItems.length === 0 || expectedItems.includes(drop.item));
     const totalDropCount = drops.reduce((sum, d) => sum + d.count, 0);
 
     if (totalDropCount === 0) {
@@ -422,75 +622,34 @@ class MineBlock extends InstantSkill {
     const totalsText = this.formatDropTotals(drops);
 
     const isPartial = mined < count || stoppedForInventoryTight;
+    const timeNote = stoppedForTime && mined < count
+      ? `1回の行動の時間（${Math.round((this.maxDurationMs || 120_000) / 1000)}秒）を使い切る前に区切りました。掘った分は回収済みです。`
+      : '';
+    // Flint is a 10% gravel drop; without the hint a planner keeps searching for more gravel.
+    const flintNote = blockName === 'gravel' && !drops.some(drop => drop.item === 'flint')
+      ? '。flint（火打石）は砂利1個あたり約10%で落ちる。必要なら所持した砂利をplace-block-atで置き直してdig-block-atで掘り直せる'
+      : '';
     return {
       success: !isPartial,
       result: isPartial
-        ? `${blockName}を${count}個中${mined}個のみ採掘しました${dropsText}${totalsText}。残り${count - mined}個が不足しています。再度 mine-block を実行してください${tightNote}${failures.length > 0 ? `（失敗詳細: ${failures.join(', ')}）` : ''}${toolWarning}`
-        : `${blockName}を${mined}個採掘しました${dropsText}${totalsText}${failures.length > 0 ? `（一部失敗: ${failures.join(', ')}）` : ''}${toolWarning}`,
+        ? `${blockName}を${count}個中${mined}個${timeNote ? '' : 'のみ'}採掘しました${dropsText}${totalsText}。${timeNote}残り${count - mined}個${timeNote ? 'は、' : 'が不足しています。'}再度 mine-block を実行してください${tightNote}${failures.length > 0 ? `（失敗詳細: ${failures.join(', ')}）` : ''}${toolWarning}`
+        : `${blockName}を${mined}個採掘しました${dropsText}${totalsText}${failures.length > 0 ? `（一部失敗: ${failures.join(', ')}）` : ''}${toolWarning}${flintNote}`,
       ...(isPartial && { failureType: stoppedForInventoryTight ? 'inventory_full' : 'partial_completion', recoverable: true }),
     };
+    } finally {
+      this.bot.removeListener('diggingCompleted', onDiggingCompleted);
+    }
   }
 
   /**
    * バッチ掘削後に周辺のドロップアイテムを一括回収する。
    * inventory 差分で確認しながら、近くの item エンティティに歩いて拾う。
    */
-  private async collectAllNearbyDrops(): Promise<string[]> {
-    const before = new Map<string, number>();
-    for (const item of this.bot.inventory.items()) {
-      before.set(item.name, (before.get(item.name) ?? 0) + item.count);
-    }
-
-    // ドロップスポーン待ち
-    await new Promise(r => setTimeout(r, 500));
-
-    // 自動ピックアップ待ち（近くにいれば勝手に拾う）
-    const autoDeadline = Date.now() + 1200;
-    while (Date.now() < autoDeadline) {
-      await new Promise(r => setTimeout(r, 150));
-      const nearby = this.bot.nearestEntity(
-        e => e.name === 'item' && e.position.distanceTo(this.bot.entity.position) < 2,
-      );
-      if (!nearby) break;
-    }
-
-    // まだ残ってるアイテムエンティティを拾いに行く（最大8パス）
-    for (let pass = 0; pass < 8; pass++) {
-      if (this.shouldInterrupt()) break;
-      const item = this.bot.nearestEntity(
-        e => e.name === 'item' && e.position.distanceTo(this.bot.entity.position) < 16,
-      );
-      if (!item) break;
-
-      const d = item.position.distanceTo(this.bot.entity.position);
-      if (d > 1.5) {
-        const ip = item.position;
-        try {
-          await gotoSafe(this.bot, new goals.GoalNear(ip.x, ip.y, ip.z, 1), {
-            timeoutMs: 4000,
-            stuckAbortCount: 3,
-            logStuck: false,
-          });
-        } catch { /* ignore */ }
-      }
-      await new Promise(r => setTimeout(r, 400));
-    }
-
-    // 差分を返す
-    const result: string[] = [];
-    const seen = new Set<string>();
-    for (const item of this.bot.inventory.items()) {
-      if (seen.has(item.name)) continue;
-      seen.add(item.name);
-      const beforeCount = before.get(item.name) ?? 0;
-      const currentCount = this.bot.inventory.items()
-        .filter(i => i.name === item.name)
-        .reduce((sum, i) => sum + i.count, 0);
-      if (currentCount > beforeCount) {
-        result.push(`${item.name}x${currentCount - beforeCount}`);
-      }
-    }
-    return result;
+  private async collectAllNearbyDrops(origins: Vec3[], expectedItems: string[],
+    beforeEntityIds: Set<number>, policy: CollectionPolicy,
+    beforeInventory = inventoryCounts(this.bot), spawnWaitMs = 0): Promise<string[]> {
+    return collectDrops(this.bot, { origins, expectedItems, beforeEntityIds, policy,
+      beforeInventory, spawnWaitMs, radius: 16 });
   }
 
   /**

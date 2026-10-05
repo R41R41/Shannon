@@ -1,0 +1,127 @@
+{
+  "testSuite": "practical-storage-logistics",
+  "description": "採掘拠点で資材をチェストへ保管・回収し、不要物の受け渡しと装備・消耗品の利用まで確認する物流シナリオ",
+  "mode": "default",
+  "commandOracle": true,
+  "globalSetup": [
+    "/gamemode survival @s",
+    "/difficulty peaceful",
+    "/gamerule doMobSpawning false",
+    "/time set day",
+    "/weather clear",
+    "/effect clear @s",
+    "/clear @s",
+    "/tp @s 1 100 0",
+    "/kill @e[type=!player]",
+    "/kill @e[type=item]",
+    "/fill -12 99 -12 12 99 12 stone",
+    "/fill -12 100 -12 12 106 12 air",
+    "/setblock 4 100 0 chest",
+    "/setblock -3 100 0 water",
+    "/give @s cobblestone 12",
+    "/give @s dirt 2",
+    "/give @s shield 1",
+    "/give @s golden_apple 1",
+    "/give @s bucket 1",
+    "/tp @s 1 100 0"
+  ],
+  "cases": [
+    {
+      "skillName": "deposit-to-container",
+      "args": [4, 100, 0, "cobblestone", 5],
+      "description": "採掘資材5個を地上の拠点チェストへ安全に預ける",
+      "expectedOutcome": "success",
+      "assertions": [{ "type": "inventory_count", "item": "cobblestone", "minCount": 7, "maxCount": 7 }]
+    },
+    {
+      "skillName": "check-container",
+      "args": [4, 100, 0, true],
+      "description": "拠点チェストを開き、預けた資材を確認する",
+      "expectedOutcome": "success",
+      "setup": ["/setblock 4 100 0 chest{Items:[{Slot:0b,id:\"minecraft:cobblestone\",count:5}]}"],
+      "assertions": [{ "type": "block_at", "x": 4, "y": 100, "z": 0, "block": "chest" }]
+    },
+    {
+      "skillName": "withdraw-from-container",
+      "args": [4, 100, 0, "cobblestone", 3],
+      "description": "建築に必要な丸石3個だけをチェストから取り出す",
+      "expectedOutcome": "success",
+      "setup": [
+        "/clear @s",
+        "/setblock 4 100 0 chest{Items:[{Slot:0b,id:\"minecraft:cobblestone\",count:5}]}"
+      ],
+      "assertions": [{ "type": "inventory_count", "item": "cobblestone", "minCount": 3, "maxCount": 3 }]
+    },
+    {
+      "skillName": "drop-item",
+      "args": ["dirt", 1],
+      "description": "仲間への受け渡しを想定して土1個を地面へ落とす",
+      "expectedOutcome": "success",
+      "assertions": [{ "type": "inventory_count", "item": "dirt", "minCount": 1, "maxCount": 1 }]
+    },
+    {
+      "skillName": "pickup-nearest-item",
+      "args": ["dirt", 16],
+      "description": "落とした土を探索して回収する",
+      "expectedOutcome": "success",
+      "setup": [
+        "/clear @s",
+        "/summon item 6 100 0 {Item:{id:\"minecraft:dirt\",count:1}}"
+      ],
+      "assertions": [{ "type": "inventory_count", "item": "dirt", "minCount": 1, "maxCount": 1 }]
+    },
+    {
+      "skillName": "equip-item",
+      "args": ["shield", "off"],
+      "description": "危険地帯へ戻る前に盾をオフハンドへ装備する",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "set-shield",
+      "args": [true],
+      "description": "盾を構えて防御状態に入る",
+      "expectedOutcome": "success",
+      "setup": ["/item replace entity @s weapon.offhand with minecraft:shield"]
+    },
+    {
+      "skillName": "set-shield",
+      "args": [false],
+      "description": "危険が去った後に盾の構えを解除する",
+      "expectedOutcome": "success",
+      "setup": ["/item replace entity @s weapon.offhand with minecraft:shield"]
+    },
+    {
+      "skillName": "use-item",
+      "args": ["golden_apple"],
+      "description": "緊急回復用の金のリンゴを使用する",
+      "expectedOutcome": "success",
+      "assertions": [{ "type": "inventory_count", "item": "golden_apple", "minCount": 0, "maxCount": 0 }]
+    },
+    {
+      "skillName": "move-to",
+      "args": [-2, 100, 0, 1, "near"],
+      "description": "水源のそばまで移動する",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "equip-item",
+      "args": ["bucket", "main"],
+      "description": "水を回収するため空バケツを持つ",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "use-item-on-block",
+      "args": [-3, 100, 0],
+      "description": "拠点の水源から水を汲む",
+      "expectedOutcome": "success",
+      "setup": [
+        "/clear @s",
+        "/item replace entity @s weapon.mainhand with minecraft:bucket",
+        "/tp @s -1 100 0"
+      ],
+      "assertions": [
+        { "type": "inventory_count", "item": "water_bucket", "minCount": 1 }
+      ]
+    }
+  ]
+}

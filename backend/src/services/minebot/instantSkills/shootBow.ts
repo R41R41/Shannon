@@ -1,6 +1,8 @@
 import { createLogger } from '../../../utils/logger.js';
 import { CustomBot, InstantSkill } from '../types.js';
+import { activateItemFacing } from '../utils/activateItemFacing.js';
 import { shouldRefuseAggressiveCombat } from '../utils/minebotToolPolicy.js';
+import { actionDelay } from '../execution/observedWait.js';
 
 const log = createLogger('Minebot:Skill:shootBow');
 
@@ -143,7 +145,7 @@ class ShootBow extends InstantSkill {
         if (isCrossbow) {
           await this.shootCrossbow(chargeMs, aimPos);
         } else {
-          await this.shootRegularBow(chargeMs);
+          await this.shootRegularBow(chargeMs, aimPos);
         }
 
         shotsLanded++;
@@ -168,27 +170,27 @@ class ShootBow extends InstantSkill {
     }
   }
 
-  private async shootRegularBow(chargeMs: number): Promise<void> {
-    this.bot.activateItem(false);
+  private async shootRegularBow(chargeMs: number, aimPos: any): Promise<void> {
+    await activateItemFacing(this.bot, aimPos, false);
     await this.sleep(chargeMs);
     this.bot.deactivateItem();
   }
 
   private async shootCrossbow(chargeMs: number, aimPos: any): Promise<void> {
-    this.bot.activateItem(false);
+    await activateItemFacing(this.bot, aimPos, false);
     await this.sleep(chargeMs);
     this.bot.deactivateItem();
 
     await this.sleep(100);
     await this.bot.lookAt(aimPos, true);
 
-    this.bot.activateItem(false);
+    await activateItemFacing(this.bot, aimPos, false);
     await this.sleep(50);
     this.bot.deactivateItem();
   }
 
   private sleep(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+    return actionDelay(this.bot, ms);
   }
 }
 

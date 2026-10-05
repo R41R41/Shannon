@@ -8,6 +8,15 @@
 - [Shannon Radar統合設計](./shannon-radar.md)（2026-08-29）：最新19節は専用ログイン/独立HTTP runtime・個人Radar先行リリース。型/service/UIは接続、実Firebase・通常dev DB移行・実ソース取得・本番手順は未検証。Calendar OAuth/Discord投稿/定期実行は未接続。
 - [削除ゲート](./deletion-gate.md)（2026-08-29）：未参照ファイルは`deletion-ledger.json`に期限付きで書くか消す。未使用の宣言は件数の上限で抑える。到達しないだけのコードは検査できない。
 - [開発・検証・本番反映の手順](./development-workflow.md)（2026-08-28）：VMのdevを作業先とし、prodは検証後に反映。
+- [Minecraft adaptive cognition runtime](./minecraft-adaptive-cognition.md)（2026-09-27）：TaskWorkspace、WorldFrame/ActionReceipt、Jev/OpenAI高速反射判断・実行Critic、shadow→feedback段階導入。
+- [Minecraft cognition latency benchmark](./minecraft-cognition-latency.md)（2026-09-28）：Jev/Luna/ローカル経路と実Minecraftプローブのp50/p95、段階別ボトルネック。
+- [Minecraft Shannon test lab](./minecraft-test-lab.md)：隔離サーバー、Minecraftコマンドによる第三者Oracle、全93スキルの実用シナリオ、JSON判定、実画面確認の運用手順。
+- [Minecraft progressive evaluation](./minecraft-progressive-evaluation.md)：資材不足・遠距離・迂回路・夜／雨・複数敵を3段階で厳しくする実ゲーム試験、死亡／敵撃破／作物成熟の独立判定。
+- [Minecraft 自律実行の自然地形・夜間受入試験](./minecraft-natural-autonomous-acceptance.md)：非OP・実Luna・自然地形での昼作業、丘への運搬、夜戦闘・採集と残課題。
+- [Minecraft execution efficiency](./minecraft-execution-efficiency.md)：イベント駆動回収、実行中進捗、取り消し／資源所有、Jev途中評価、精錬の外部ジョブ化と再計測。
+- [Minebot本番リリース](./minecraft-production-release.md)（2026-09-30）：実稼働releaseを親にした限定反映、OpenAI Responses planner、永続予算、非OP実モデル受入、バックアップ・復旧・検証境界。
+- [Minecraftエンダードラゴン・キャンペーン](./minecraft-dragon-campaign.md)：永続目標ツリーの縦断実装、自然生成ワールドでの空手からの実走、予算・到達点・未検証範囲。
+- [Minebotの原因調査とコードレベル改善案](./minecraft-root-causes-and-improvement-plan.md)：完了・観測・確信度・制御所有・反応速度・自律試験の再現証拠と、機能を維持する具体的な改修案（未実装）。
 - [Shannon｜設計・資料ハブ](https://www.notion.so/3ca1e847628881c9b4bbfd5556a55347)：現行設計・計画・判断・変更履歴。
 
 
@@ -15,6 +24,10 @@
 | ------------------------------------------------------------ | --------------------------------------------------------- |
 | **[architecture-current.md](./architecture-current.md)**     | **現行アーキテクチャサマリ**（2026-08-29）。実行核の分裂、LINE分離、記憶混在禁止、ツール2袋。 |
 | [architecture-llm-minebot.md](./architecture-llm-minebot.md) | LLM グラフ・Minebot・自己改善の**詳細設計書**（長文）。                       |
+| [minecraft-adaptive-cognition.md](./minecraft-adaptive-cognition.md) | Minecraftの高速フィードバックループ。TaskWorkspace、交換可能なJev/OpenAI System 1、System 2、段階的ロールアウト。 |
+| [minecraft-cognition-latency.md](./minecraft-cognition-latency.md) | Jev/Luna/ローカルと実サーバー経路の反応時間、シナリオ別結果、ボトルネック。 |
+| [minecraft-test-lab.md](./minecraft-test-lab.md) | Minebotの隔離E2E環境と、サーバーコマンドを真実源にした成功判定・状況把握。 |
+| [minebot-lab-ui-mod.md](./minebot-lab-ui-mod.md) | 公開ラボの実走と ShannonUIMod の接続、ゲーム内で話しかける経路、人が関わった実走を受入にしない規則。 |
 
 
 ## トピック別

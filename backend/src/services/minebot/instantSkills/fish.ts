@@ -61,6 +61,12 @@ class Fish extends InstantSkill {
     const surfaceBlocks: { pos: Vec3; totalDist: number; horizontalDist: number }[] = [];
 
     for (const pos of waterPositions) {
+      const waterBlock = this.bot.blockAt(pos);
+      const waterLevel = Number((waterBlock as any)?.getProperties?.()?.level ?? 0);
+      // Flowing water can spread several blocks beyond a pond and makes the
+      // nearest candidate look attractive even though a bobber cannot fish
+      // there reliably. Prefer only real source blocks.
+      if (waterLevel !== 0) continue;
       const aboveBlock = this.bot.blockAt(pos.offset(0, 1, 0));
       if (!aboveBlock || aboveBlock.name !== 'air') continue;
 
@@ -236,27 +242,17 @@ class Fish extends InstantSkill {
         const dz = aimTarget.z - eyePos.z;
         const horizontalDist = Math.sqrt(dx * dx + dz * dz);
 
-        // ボバー弧補正: 水面より下を狙って放物線で着水させる
-        const arcCompensation = 1.5 + horizontalDist * 0.4;
-        const compensatedTarget = new Vec3(
-          aimTarget.x,
-          aimTarget.y - arcCompensation,
-          aimTarget.z,
-        );
+        // Fishing hooks already leave the rod on an upward arc. A previous
+        // extra downward correction (up to 50°+) drove the hook into the bank
+        // or ground. Aim at the selected source-water surface directly.
+        const compensatedTarget = aimTarget;
 
         if (i === 0) {
           // 初回のみ詳細ログ
           const directPitchDeg = Math.round(
             Math.atan2(-dy, horizontalDist) * (180 / Math.PI),
           );
-          const fishingPitchDeg = Math.round(
-            Math.atan2(
-              -(compensatedTarget.y - eyePos.y),
-              horizontalDist,
-            ) *
-              (180 / Math.PI),
-          );
-          log.info(`🎯 自動照準: ターゲット (${aimTarget.x.toFixed(1)}, ${aimTarget.y.toFixed(1)}, ${aimTarget.z.toFixed(1)}) dist=${eyePos.distanceTo(aimTarget).toFixed(1)}m 水平=${horizontalDist.toFixed(1)}m / 弧補正: pitch=${directPitchDeg}°→${fishingPitchDeg}°`, 'cyan');
+          log.info(`🎯 自動照準: 水源面 (${aimTarget.x.toFixed(1)}, ${aimTarget.y.toFixed(1)}, ${aimTarget.z.toFixed(1)}) dist=${eyePos.distanceTo(aimTarget).toFixed(1)}m 水平=${horizontalDist.toFixed(1)}m / pitch=${directPitchDeg}°`, 'cyan');
         }
 
         // lookAt で方向設定 (force=true でパケット即送信)

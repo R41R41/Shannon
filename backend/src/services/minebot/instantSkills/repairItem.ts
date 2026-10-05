@@ -78,7 +78,10 @@ class RepairItem extends InstantSkill {
       log.info(`🔨 金床を開きます: (${x}, ${y}, ${z})`);
       let anvilWindow: any;
       try {
-        anvilWindow = await this.openAnvil(block);
+        // Use Mineflayer's anvil abstraction. It maps the player inventory
+        // into the open container, computes the XP cost, and takes slot 2 with
+        // the correct transaction state for the current protocol.
+        anvilWindow = await (this.bot as any).openAnvil(block);
       } catch (actionError: any) {
         const los = await ensureLineOfSight(this.bot, pos);
         if (!los.clear) {
@@ -97,68 +100,15 @@ class RepairItem extends InstantSkill {
       }
 
       try {
-        // 金床のスロット:
-        // 0 = 修理対象（左）
-        // 1 = 材料（右）
-        // 2 = 結果（出力）
-
-        // 修理対象をスロット0に入れる
-        await this.bot.clickWindow(target.slot, 0, 0); // pickup
-        await this.bot.clickWindow(0, 0, 0); // place in slot 0
-        await new Promise(resolve => setTimeout(resolve, 200));
-
-        // 材料をスロット1に入れる
-        const currentMaterial = this.bot.inventory.items().find(i => i.name === materialItem);
-        if (currentMaterial) {
-          await this.bot.clickWindow(currentMaterial.slot, 0, 0); // pickup
-          await this.bot.clickWindow(1, 0, 0); // place in slot 1
-          await new Promise(resolve => setTimeout(resolve, 300));
-        }
-
-        // 結果スロットを確認
-        const outputSlot = anvilWindow.slots[2];
-        if (!outputSlot) {
-          // 出力がない場合、組み合わせが無効
-          anvilWindow.close();
-          return {
-            success: false,
-            result: `${targetItem}と${materialItem}の組み合わせは修理/合成できません`,
-            failureType: 'invalid_combination',
-            recoverable: true,
-          };
-        }
-
-        // XPコスト確認
-        const xpLevel = this.bot.experience?.level ?? 0;
-        // anvil window の xpCost は property で取得できる場合がある
-        const xpCost = (anvilWindow as any).xpCost ?? 0;
-        if (xpCost > 0 && xpLevel < xpCost) {
-          anvilWindow.close();
-          return {
-            success: false,
-            result: `XPレベルが不足です（必要: Lv${xpCost}、現在: Lv${xpLevel}）`,
-            failureType: 'insufficient_xp',
-            recoverable: false,
-          };
-        }
-
-        // 結果を取り出す
-        await this.bot.clickWindow(2, 0, 0); // pickup output
-        // 空いてるインベントリスロットに置く
-        const emptySlot = this.bot.inventory.firstEmptyInventorySlot();
-        if (emptySlot !== null) {
-          await this.bot.clickWindow(emptySlot, 0, 0);
-        }
-        await new Promise(resolve => setTimeout(resolve, 200));
+        await anvilWindow.combine(target, material);
 
         anvilWindow.close();
 
-        const outputName = outputSlot.name ?? targetItem;
-        log.success(`🔨 修理完了: ${outputName}`);
+        log.success(`🔨 修理完了: ${targetItem}`);
 
         return {
           success: true,
-          result: `修理成功！${targetItem}を${materialItem}で修理しました${xpCost > 0 ? `（XPコスト: Lv${xpCost}）` : ''}`,
+          result: `修理成功！${targetItem}を${materialItem}で修理しました`,
         };
       } catch (error: any) {
         try { anvilWindow.close(); } catch { /* ignore */ }
@@ -174,27 +124,6 @@ class RepairItem extends InstantSkill {
     }
   }
 
-  /** 金床を開く（windowOpen イベント経由） */
-  private async openAnvil(block: any): Promise<any> {
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        this.bot.removeListener('windowOpen', onWindow);
-        reject(new Error('金床を開くのがタイムアウトしました'));
-      }, 5000);
-
-      const onWindow = (window: any) => {
-        clearTimeout(timeout);
-        resolve(window);
-      };
-
-      this.bot.once('windowOpen', onWindow);
-      this.bot.activateBlock(block).catch((err: any) => {
-        clearTimeout(timeout);
-        this.bot.removeListener('windowOpen', onWindow);
-        reject(err);
-      });
-    });
-  }
 }
 
 export default RepairItem;

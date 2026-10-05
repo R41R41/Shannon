@@ -152,7 +152,8 @@ class TradeWithVillager extends InstantSkill {
       }
 
       // 検索条件チェック
-      if (!profession && villagerId === undefined && !villagerName) {
+      const hasVillagerId = Number.isSafeInteger(villagerId) && Number(villagerId) >= 0;
+      if (!profession && !hasVillagerId && !villagerName) {
         return {
           success: false,
           result:
@@ -164,8 +165,8 @@ class TradeWithVillager extends InstantSkill {
       let villagers: any[] = [];
 
       // villagerIdが指定されている場合は直接その村人を使用
-      if (villagerId !== undefined) {
-        const villager = this.bot.entities[villagerId];
+      if (hasVillagerId) {
+        const villager = this.bot.entities[Number(villagerId)];
         if (!villager) {
           return {
             success: false,
@@ -225,8 +226,13 @@ class TradeWithVillager extends InstantSkill {
         villagers = Object.values(this.bot.entities).filter((e: any) => {
           if (e.name !== 'villager') return false;
           if (myPos.distanceTo(e.position) > 64) return false;
-          const professionId = e.metadata?.[18]?.villagerProfession ?? 0;
-          const professionName = professionMap[professionId] || 'none';
+          const villagerData = Array.isArray(e.metadata)
+            ? e.metadata.find((value: any) => value && typeof value === 'object' && 'villagerProfession' in value)
+            : null;
+          const rawProfession = villagerData?.villagerProfession ?? 0;
+          const professionName = typeof rawProfession === 'string'
+            ? rawProfession.replace(/^minecraft:/, '')
+            : professionMap[rawProfession] || 'none';
           return professionName === profession;
         });
 

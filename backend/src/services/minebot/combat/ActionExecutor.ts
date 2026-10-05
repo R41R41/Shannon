@@ -11,6 +11,8 @@ import { DEFAULT_COMBAT_CONFIG } from './types.js';
 import type { Entity } from 'prismarine-entity';
 import { pickSaferFleeYaw } from '../utils/fleeGroundSafety.js';
 import { gotoSafe } from '../utils/gotoSafe.js';
+import { activateItemFacing } from '../utils/activateItemFacing.js';
+import { createMotorPort } from '../execution/ActionExecution.js';
 
 const { goals } = pathfinder;
 
@@ -22,7 +24,7 @@ export class ActionExecutor {
     constructor(
         private bot: CustomBot,
         private config: CombatConfig = DEFAULT_COMBAT_CONFIG,
-    ) {}
+    ) { this.bot = createMotorPort(bot); }
 
     async execute(action: ScoredAction): Promise<{ attacked: boolean }> {
         let attacked = false;
@@ -43,6 +45,10 @@ export class ActionExecutor {
                     break;
                 case 'shield-release':
                     await this.shieldRelease();
+                    // The scorer releases specifically for a ready close strike.
+                    // Execute it in this tick instead of leaving an unprotected
+                    // extra tick between releasing the shield and attacking.
+                    if (action.target) attacked = await this.meleeAttack(action.target);
                     break;
                 case 'shoot-bow':
                     await this.shootBow(action.target!);
@@ -80,8 +86,10 @@ export class ActionExecutor {
             const dist = this.bot.entity.position.distanceTo(target.position);
             if (dist > this.config.meleeRange + 0.5) return false;
 
+            this.bot.deactivateItem(); // Attacks while using a shield are rejected by the server.
             await this.bot.lookAt(target.position.offset(0, target.height * 0.8, 0), true);
             await this.bot.attack(target);
+            this.bot.emit?.('minebotTargetAttacked', target);
             return true;
         } catch (e) {
             log.warn(`⚠ meleeAttack: ${e instanceof Error ? e.message : e}`);
@@ -94,6 +102,7 @@ export class ActionExecutor {
             const dist = this.bot.entity.position.distanceTo(target.position);
             if (dist > this.config.meleeRange + 0.5) return false;
 
+            this.bot.deactivateItem();
             // #8 fix: ジャンプして落下中 (velocity.y < 0) に攻撃 = クリティカル
             this.bot.setControlState('jump', true);
             // ジャンプの頂点を待つ (約 200ms)
@@ -104,6 +113,7 @@ export class ActionExecutor {
 
             await this.bot.lookAt(target.position.offset(0, target.height * 0.8, 0), true);
             await this.bot.attack(target);
+            this.bot.emit?.('minebotTargetAttacked', target);
             return true;
         } catch (e) {
             log.warn(`⚠ jumpAttack: ${e instanceof Error ? e.message : e}`);
@@ -116,8 +126,10 @@ export class ActionExecutor {
             const dist = this.bot.entity.position.distanceTo(target.position);
             if (dist > this.config.meleeRange + 0.5) return false;
 
+            this.bot.deactivateItem();
             await this.bot.lookAt(target.position.offset(0, target.height * 0.8, 0), true);
             await this.bot.attack(target);
+            this.bot.emit?.('minebotTargetAttacked', target);
 
             // #4 fix: setTimeout ではなく await で後退。次の tick とレースしない
             this.bot.setControlState('back', true);
@@ -135,14 +147,16 @@ export class ActionExecutor {
 
     private async shieldBlock(): Promise<void> {
         try {
+            const target = this.bot.nearestEntity(entity => entity.type === 'hostile');
+            if (!target) return;
             const offHand = this.bot.inventory.slots[this.bot.getEquipmentDestSlot('off-hand')];
             if (offHand?.name === 'shield') {
-                this.bot.activateItem(true);
+                await activateItemFacing(this.bot, target.position.offset(0, target.height * 0.8, 0), true);
             } else {
                 const shield = this.bot.inventory.items().find(i => i.name === 'shield');
                 if (shield) {
                     await this.bot.equip(shield, 'off-hand');
-                    this.bot.activateItem(true);
+                    await activateItemFacing(this.bot, target.position.offset(0, target.height * 0.8, 0), true);
                 }
             }
         } catch (e) {
@@ -156,17 +170,33 @@ export class ActionExecutor {
         } catch {}
     }
 
+    /** Holding a shield does not automatically track a moving threat's bearing. */
+    async faceThreat(target: Entity): Promise<void> {
+        try {
+            if (target.isValid === false) return;
+            await this.bot.lookAt(target.position.offset(0, target.height * 0.8, 0), true);
+        } catch (e) {
+            log.warn(`⚠ faceThreat: ${e instanceof Error ? e.message : e}`);
+        }
+    }
+
     private async shootBow(target: Entity): Promise<void> {
         try {
             const bow = this.bot.inventory.items().find(i => i.name === 'bow' || i.name === 'crossbow');
             if (!bow) return;
             await this.bot.equip(bow, 'hand');
-            await this.bot.lookAt(target.position.offset(0, target.height * 0.8, 0), true);
-            this.bot.activateItem(false);
+            const aimPos = target.position.offset(0, target.height * 0.8, 0);
+            await activateItemFacing(this.bot, aimPos, false);
             // #10 fix: フルチャージ 1200ms (弓), 1250ms (クロスボウ)
             const chargeMs = bow.name === 'crossbow' ? 1250 : 1200;
             await new Promise(r => setTimeout(r, chargeMs));
             this.bot.deactivateItem();
+            if (bow.name === 'crossbow') {
+                await new Promise(r => setTimeout(r, 100));
+                await activateItemFacing(this.bot, aimPos, false);
+                await new Promise(r => setTimeout(r, 50));
+                this.bot.deactivateItem();
+            }
         } catch (e) {
             log.warn(`⚠ shootBow: ${e instanceof Error ? e.message : e}`);
         }

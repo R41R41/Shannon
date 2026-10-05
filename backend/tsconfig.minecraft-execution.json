@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "noEmit": true, "lib": ["ES2022", "DOM"] },
+  "include": [
+    "src/services/minebot/execution/ActionExecution.ts",
+    "src/services/minebot/execution/actionTypes.ts",
+    "src/services/minebot/execution/observedWait.ts",
+    "src/services/minebot/execution/SkillExecutor.ts",
+    "src/services/minebot/cognition/TaskWorkspace.ts",
+    "src/services/minebot/cognition/ExecutionSupervisor.ts",
+    "src/services/minebot/cognition/DirectReflexExecutor.ts",
+    "src/services/minebot/cognition/JevExecutionCritic.ts",
+    "src/services/minebot/cognition/JevReflexPolicy.ts"
+    ,"src/services/minebot/cognition/OpenAIPlannerClient.ts"
+  ]
+}

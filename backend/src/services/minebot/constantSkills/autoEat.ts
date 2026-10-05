@@ -1,5 +1,6 @@
 import { createLogger } from '../../../utils/logger.js';
 import { ConstantSkill, CustomBot } from '../types.js';
+import { abortable, waitForObservation } from '../execution/observedWait.js';
 
 const log = createLogger('Minebot:Skill:autoEat');
 
@@ -104,8 +105,8 @@ class AutoEat extends ConstantSkill {
 
         // 既に手に持っている場合
         if (this.bot.heldItem?.name === foodItem.name) {
-          await this.bot.consume();
-          log.success(`✓ ${foodItem.name}を食べました (food=${food}/20 health=${health}/20)`);
+          await this.consumeAndObserve();
+          log.success(`✓ ${foodItem.name}を食べました (food=${this.bot.food}/20 health=${this.bot.health}/20)`);
           return;
         }
 
@@ -113,12 +114,28 @@ class AutoEat extends ConstantSkill {
         await this.bot.equip(foodItem, 'hand');
 
         // 食べる
-        await this.bot.consume();
-        log.success(`✓ ${foodItem.name}を食べました (food=${food}/20 health=${health}/20)`);
+        await this.consumeAndObserve();
+        log.success(`✓ ${foodItem.name}を食べました (food=${this.bot.food}/20 health=${this.bot.health}/20)`);
       } catch (error) {
         log.warn(`⚠ 食事に失敗: ${error instanceof Error ? error.message : '不明なエラー'}`);
       }
     }
+  }
+
+  protected shouldPreempt(): boolean {
+    return (this.bot.health <= 8 || this.bot.food <= 6) && this.bot.food < 20
+      && this.bot.inventory.items().some(item => this.getFoodPoints(item.name) > 0);
+  }
+
+  private async consumeAndObserve(): Promise<void> {
+    const beforeFood = this.bot.food;
+    await abortable(this.bot, this.bot.consume());
+    // A delayed held-item/window update can resolve Mineflayer's consume task
+    // immediately even though the server is still running the eating animation.
+    // Confirm its effect before logging completion or releasing the skill lock.
+    const ate = await waitForObservation(this.bot, () => this.bot.health <= 0 || this.bot.food > beforeFood, 5000);
+    if (this.bot.health <= 0) throw new Error('食事が中断されました');
+    if (!ate) throw new Error('食事後の満腹度更新を確認できませんでした');
   }
 
   private getFoodPoints(itemName: string): number {

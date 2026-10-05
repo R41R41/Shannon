@@ -3,6 +3,12 @@ import { Vec3 } from 'vec3';
 import { CustomBot, InstantSkill } from '../types.js';
 import { createLogger } from '../../../utils/logger.js';
 import { PROTECTED_UTILITY_BLOCKS } from '../constants.js';
+import { digBlockVerified } from '../utils/digBlockVerified.js';
+import { LavaReleaseError } from '../utils/lavaSafety.js';
+import { ThreatExposedError } from '../utils/exposureGuard.js';
+import { actionDelay } from '../execution/observedWait.js';
+import { chooseTool } from '../utils/toolChoice.js';
+import { blocksAlong, keepCheapTool } from '../utils/toolStock.js';
 const log = createLogger('Minebot:Skill:stairMine');
 
 /**
@@ -10,6 +16,8 @@ const log = createLogger('Minebot:Skill:stairMine');
  * 目標の高さまで階段状に移動する（掘る or ブロックを置く）
  */
 class StairMine extends InstantSkill {
+    /** Concrete cause of the last stopped step, reported to the planner. */
+    private lastStopReason: string | null = null;
     private mcData: any;
 
     constructor(bot: CustomBot) {
@@ -40,6 +48,7 @@ class StairMine extends InstantSkill {
     }
 
     async runImpl(targetY: number, direction: string = '', placeBlock: string = 'cobblestone') {
+        this.lastStopReason = null;
         try {
             const currentY = Math.floor(this.bot.entity.position.y);
             const diff = targetY - currentY;
@@ -88,16 +97,26 @@ class StairMine extends InstantSkill {
             let successSteps = 0;
 
             // タイムアウト設定（60秒）
-            const TIMEOUT_MS = 60 * 1000;
+            // Deepslate steps take several seconds each; a fixed 60s stopped a
+            // 125-step descent to the diamond band after a fraction of it.
+            const TIMEOUT_MS = Math.min(600_000, Math.max(60_000, steps * 4_000));
             const startTime = Date.now();
 
-            log.info(`⛏️ 階段${isDescending ? '下降' : '上昇'}開始: Y=${currentY} → Y=${targetY} (${steps}段, 最大60秒)`, 'cyan');
+            // Every step is dug: a dear pickaxe is not spent on it when a cheaper one can be made (utils/toolStock).
+            const here = this.bot.entity.position;
+            await keepCheapTool(this.bot as any, blocksAlong(this.bot as any, here,
+                { x: here.x + dir.x * steps, y: here.y + diff, z: here.z + dir.z * steps }),
+                (skill, ...args) => this.callSkill(skill, ...args));
+
+            log.info(`⛏️ 階段${isDescending ? '下降' : '上昇'}開始: Y=${currentY} → Y=${targetY} (${steps}段, 最大${Math.round(TIMEOUT_MS / 1000)}秒)`, 'cyan');
 
             for (let i = 0; i < steps; i++) {
                 // 中断チェック
                 if (this.shouldInterrupt()) {
                     return {
-                        success: successSteps > 0,
+                        success: false,
+                        failureType: 'interrupted',
+                        recoverable: true,
                         result: `中断: ${successSteps}段${isDescending ? '下降' : '上昇'}しました（Y=${Math.floor(this.bot.entity.position.y)}）`,
                     };
                 }
@@ -106,7 +125,9 @@ class StairMine extends InstantSkill {
                 if (Date.now() - startTime > TIMEOUT_MS) {
                     const elapsed = Math.round((Date.now() - startTime) / 1000);
                     return {
-                        success: successSteps > 0,
+                        success: false,
+                        failureType: 'timeout',
+                        recoverable: true,
                         result: `タイムアウト（${elapsed}秒）: ${successSteps}段${isDescending ? '下降' : '上昇'}しました（Y=${Math.floor(this.bot.entity.position.y)}）`,
                     };
                 }
@@ -115,7 +136,7 @@ class StairMine extends InstantSkill {
                 const toolCheck = this.checkPickaxeAvailable();
                 if (toolCheck) {
                     return {
-                        success: successSteps > 0,
+                        success: false,
                         failureType: toolCheck.failureType,
                         recoverable: true,
                         result: `${successSteps}段${isDescending ? '下降' : '上昇'}しました（Y=${Math.floor(this.bot.entity.position.y)}）。${toolCheck.message}`,
@@ -126,11 +147,14 @@ class StairMine extends InstantSkill {
 
                 if (isDescending) {
                     // 下降: 前方に1ブロック進んで1ブロック下を掘る
-                    const success = await this.digStairDown(currentPos, dir);
+                    const success = await this.digStairDown(currentPos, dir, placeBlock);
                     if (!success) {
                         return {
-                            success: successSteps > 0,
-                            result: `${successSteps}段下降しました（Y=${Math.floor(this.bot.entity.position.y)}）。これ以上掘れません`,
+                            success: false,
+                            failureType: 'stair_progress_blocked',
+                            recoverable: true,
+                            result: `${successSteps}段下降しました（Y=${Math.floor(this.bot.entity.position.y)}）。`
+                                + (this.lastStopReason ?? '次の段で高さと位置を確認できず中断しました'),
                         };
                     }
                 } else {
@@ -138,8 +162,11 @@ class StairMine extends InstantSkill {
                     const success = await this.buildStairUp(currentPos, dir, placeBlock);
                     if (!success) {
                         return {
-                            success: successSteps > 0,
-                            result: `${successSteps}段上昇しました（Y=${Math.floor(this.bot.entity.position.y)}）。これ以上登れません`,
+                            success: false,
+                            failureType: 'stair_progress_blocked',
+                            recoverable: true,
+                            result: `${successSteps}段上昇しました（Y=${Math.floor(this.bot.entity.position.y)}）。`
+                                + (this.lastStopReason ?? '次の段で高さと位置を確認できず中断しました'),
                         };
                     }
                 }
@@ -155,9 +182,14 @@ class StairMine extends InstantSkill {
                 await this.sleep(100);
             }
 
+            const finalY = Math.floor(this.bot.entity.position.y);
             return {
-                success: true,
-                result: `${successSteps}段${isDescending ? '下降' : '上昇'}してY=${Math.floor(this.bot.entity.position.y)}に到達しました`,
+                success: finalY === targetY,
+                failureType: finalY === targetY ? undefined : 'stair_progress_blocked',
+                recoverable: finalY === targetY ? undefined : true,
+                result: finalY === targetY
+                    ? `${successSteps}段${isDescending ? '下降' : '上昇'}してY=${finalY}に到達しました`
+                    : `${successSteps}段移動しましたが目標Y=${targetY}には到達していません（現在Y=${finalY}）`,
             };
         } catch (error: any) {
             return {
@@ -170,7 +202,7 @@ class StairMine extends InstantSkill {
     /**
      * 下降用: 階段を掘って降りる
      */
-    private async digStairDown(currentPos: Vec3, dir: Vec3): Promise<boolean> {
+    private async digStairDown(currentPos: Vec3, dir: Vec3, blockName = 'cobblestone'): Promise<boolean> {
         try {
             // 次の位置（前方1ブロック、下1ブロック）
             const nextPos = currentPos.offset(dir.x, -1, dir.z);
@@ -186,22 +218,48 @@ class StairMine extends InstantSkill {
                 if (block && block.boundingBox !== 'empty') {
                     if (!block.diggable) {
                         log.warn(`⚠ ${label}の${block.name}は掘れません`);
+                        this.lastStopReason = `${label}の${block.name}(${pos.x}, ${pos.y}, ${pos.z})は掘れません。別の方向で再実行してください`;
+                        return false;
+                    }
+                    // Breaking into an aquifer floods the stair: mining underwater is ~25x
+                    // slower and paid runs lost the bot in flooded caves. Stop dry instead.
+                    const water = this.adjacentWater(pos);
+                    if (water) {
+                        this.lastStopReason = `${label}の${block.name}(${pos.x}, ${pos.y}, ${pos.z})の隣(${water.x}, ${water.y}, ${water.z})が水です。`
+                            + '掘ると浸水するため停止しました。別の方向で再実行するか、水の無い場所から降りてください';
                         return false;
                     }
                     const dug = await this.digBlockSafe(block);
-                    if (!dug) return false;
+                    if (!dug) {
+                        this.lastStopReason ??= `${label}の${block.name}(${pos.x}, ${pos.y}, ${pos.z})を掘れませんでした（液体・危険の可能性）。別の方向で再実行してください`;
+                        return false;
+                    }
                 }
             }
 
-            // 移動（前方に1ブロック進む → 自然に落ちる）
-            this.bot.setControlState('forward', true);
-            await this.sleep(300);
-            this.bot.setControlState('forward', false);
+            // 次の段に足場がない場合は、穴へ踏み込まずに停止する。
+            let support = this.bot.blockAt(nextPos.offset(0, -1, 0));
+            // A cave edge: bridge the step with a carried block, as a player
+            // does, instead of stopping at the first open floor.
+            if (support && support.boundingBox === 'empty' && !['lava', 'water'].includes(support.name)) {
+                const scaffold = [blockName, 'cobblestone', 'cobbled_deepslate', 'stone', 'deepslate', 'dirt', 'andesite',
+                    'diorite', 'granite', 'tuff', 'netherrack'].find(name => this.bot.inventory.items().some(i => i.name === name));
+                if (scaffold && await this.placeBlockSafe(scaffold, support.position)) {
+                    const deadline = Date.now() + 1000;
+                    while (Date.now() < deadline && this.bot.blockAt(support.position)?.boundingBox !== 'block') await this.sleep(100);
+                    support = this.bot.blockAt(support.position);
+                }
+            }
+            if (!support || support.boundingBox === 'empty') {
+                const below = support?.position ?? nextPos.offset(0, -1, 0);
+                this.lastStopReason = `前方の足場(${below.x}, ${below.y}, ${below.z})が${support?.name ?? '未ロード'}で空いています`
+                    + '（木の上・崖・洞窟の縁など）。地面へ降りるか別の方向で再実行してください';
+                return false;
+            }
 
-            // 落下を待つ
-            await this.sleep(200);
-
-            return true;
+            const moved = await this.moveOneStair(currentPos, dir, false);
+            if (!moved) this.lastStopReason ??= `次の段(${nextPos.x}, ${nextPos.y}, ${nextPos.z})への移動を確認できませんでした（段差・水・障害物）。別の方向で再実行してください`;
+            return moved;
         } catch (error: any) {
             log.error(`下降エラー: ${error.message}`, error);
             return false;
@@ -213,26 +271,6 @@ class StairMine extends InstantSkill {
      */
     private async buildStairUp(currentPos: Vec3, dir: Vec3, blockName: string): Promise<boolean> {
         try {
-            // 置くブロックがあるか確認
-            const item = this.bot.inventory.items().find(i => i.name === blockName);
-            if (!item) {
-                // 代替ブロックを探す
-                const alternatives = ['cobblestone', 'stone', 'dirt', 'netherrack', 'cobbled_deepslate'];
-                let found = false;
-                for (const alt of alternatives) {
-                    const altItem = this.bot.inventory.items().find(i => i.name === alt);
-                    if (altItem) {
-                        blockName = alt;
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found) {
-                    log.warn('⚠ 置けるブロックがありません');
-                    return false;
-                }
-            }
-
             // 通過経路上のブロックをすべて掘削 — 1つでも掘れなければ中断
             const clearTargets: [number, number, number][] = [
                 [0, 2, 0],          // 頭上+1
@@ -255,6 +293,17 @@ class StairMine extends InstantSkill {
             const nextFoot = this.bot.blockAt(currentPos.offset(dir.x, 0, dir.z));
 
             if (!nextFoot || nextFoot.boundingBox === 'empty') {
+                // 自然の段差がある場合は設置材を消費しない。
+                const item = this.bot.inventory.items().find(i => i.name === blockName);
+                if (!item) {
+                    const alternatives = ['cobblestone', 'stone', 'dirt', 'netherrack', 'cobbled_deepslate'];
+                    const alternative = alternatives.find(name => this.bot.inventory.items().some(i => i.name === name));
+                    if (!alternative) {
+                        log.warn('⚠ 置けるブロックがありません');
+                        return false;
+                    }
+                    blockName = alternative;
+                }
                 // 空気なら階段ブロックを置く
                 const placePos = currentPos.offset(dir.x, 0, dir.z);
                 const placed = await this.placeBlockSafe(blockName, placePos);
@@ -264,20 +313,55 @@ class StairMine extends InstantSkill {
                 }
             }
 
-            // ジャンプして前方に移動
-            this.bot.setControlState('jump', true);
-            this.bot.setControlState('forward', true);
-            await this.sleep(400);
-            this.bot.setControlState('jump', false);
-            this.bot.setControlState('forward', false);
-
-            // 着地を待つ
-            await this.sleep(200);
-
-            return true;
+            return await this.moveOneStair(currentPos, dir, true);
         } catch (error: any) {
             log.error(`上昇エラー: ${error.message}`, error);
             return false;
+        }
+    }
+
+    /** One staircase step is complete only after the bot reaches the adjacent column at the expected height. */
+    private async moveOneStair(start: Vec3, dir: Vec3, ascending: boolean): Promise<boolean> {
+        const target = start.offset(dir.x, ascending ? 1 : -1, dir.z);
+        // Mineflayer yaw: north=0, west=π/2, south=π, east=-π/2.
+        await this.bot.look(Math.atan2(-dir.x, -dir.z), 0, true);
+        this.bot.setControlState('forward', true);
+        if (ascending) this.bot.setControlState('jump', true);
+        let released = false;
+        try {
+            // 36 physics observations bound one step to 1.8 s; the outer task has a 60 s limit.
+            for (let tick = 0; tick < 36; tick++) {
+                if (this.shouldInterrupt()) return false;
+                await this.sleep(50);
+                const pos = this.bot.entity.position;
+                const progress = (pos.x - (start.x + 0.5)) * dir.x +
+                    (pos.z - (start.z + 0.5)) * dir.z;
+                if (!released && progress >= 0.85) {
+                    this.bot.setControlState('forward', false);
+                    if (ascending) this.bot.setControlState('jump', false);
+                    released = true;
+                }
+                const inColumn = Math.floor(pos.x) === target.x && Math.floor(pos.z) === target.z;
+                // In an aquifer the bot floats at the right column and height without touching ground.
+                const inWater = !!(this.bot.entity as any).isInWater;
+                const onGround = (this.bot.entity as any).onGround;
+                if (inColumn && Math.floor(pos.y) === target.y && (onGround !== false || inWater)) {
+                    // Allow physics one more tick before reporting a stable landing.
+                    await this.sleep(50);
+                    const landed = this.bot.entity.position;
+                    const support = this.bot.blockAt(target.offset(0, -1, 0));
+                    if (Math.floor(landed.x) === target.x && Math.floor(landed.z) === target.z &&
+                        Math.floor(landed.y) === target.y && ((this.bot.entity as any).onGround !== false || inWater) &&
+                        support && support.boundingBox !== 'empty') {
+                        return true;
+                    }
+                }
+            }
+            log.warn(`⚠ 階段移動が進みません: 目標(${target.x},${target.y},${target.z}), 現在${this.bot.entity.position}`);
+            return false;
+        } finally {
+            this.bot.setControlState('forward', false);
+            if (ascending) this.bot.setControlState('jump', false);
         }
     }
 
@@ -332,10 +416,8 @@ class StairMine extends InstantSkill {
                 return false;
             }
 
-            const blockName = block.name.toLowerCase();
-            const needsPickaxe = ['stone', 'ore', 'cobble', 'deepslate', 'brick', 'obsidian',
-                'concrete', 'terracotta', 'basalt', 'netherrack', 'granite', 'diorite', 'andesite', 'tuff']
-                .some(kw => blockName.includes(kw));
+            // Blocks with harvest tools drop nothing without one.
+            const needsPickaxe = !!block.harvestTools;
 
             // 最適なツールを装備
             const tool = this.findBestTool(block);
@@ -346,11 +428,22 @@ class StairMine extends InstantSkill {
                 return false;
             }
 
-            await this.bot.dig(block);
-            return true;
+            await digBlockVerified(this.bot, block);
+            return this.bot.blockAt(block.position)?.boundingBox === 'empty';
         } catch (error) {
+            // A dig the body's guards refused (lava behind the block, a shut-out mob behind it) is said as that:
+            // "could not confirm height and position" sent a planner back to the same stair three times (paid run L74).
+            if (error instanceof ThreatExposedError || error instanceof LavaReleaseError) this.lastStopReason = error.message;
             return false;
         }
+    }
+
+    private adjacentWater(pos: Vec3): Vec3 | null {
+        for (const off of [new Vec3(1, 0, 0), new Vec3(-1, 0, 0), new Vec3(0, 1, 0), new Vec3(0, 0, 1), new Vec3(0, 0, -1), new Vec3(0, -1, 0)]) {
+            const neighbor = this.bot.blockAt(pos.plus(off));
+            if (neighbor && (neighbor.name === 'water' || neighbor.name === 'bubble_column')) return pos.plus(off);
+        }
+        return null;
     }
 
     private hasAdjacentLava(pos: Vec3): boolean {
@@ -409,33 +502,19 @@ class StairMine extends InstantSkill {
     /**
      * ブロックに最適なツールを探す
      */
+    /**
+     * Fastest held tool that can harvest the block, from the versioned block
+     * data rather than name keywords (andesite, tuff and granite need a
+     * pickaxe too). Returns null when only the bare hand qualifies.
+     */
     private findBestTool(block: any): any {
-        const items = this.bot.inventory.items();
-        const blockName = block.name.toLowerCase();
-
-        let toolType: string[] = [];
-
-        if (blockName.includes('stone') || blockName.includes('ore') || blockName.includes('cobble') ||
-            blockName.includes('deepslate') || blockName.includes('brick')) {
-            toolType = ['netherite_pickaxe', 'diamond_pickaxe', 'iron_pickaxe', 'stone_pickaxe', 'wooden_pickaxe'];
-        } else if (blockName.includes('dirt') || blockName.includes('sand') || blockName.includes('gravel')) {
-            toolType = ['netherite_shovel', 'diamond_shovel', 'iron_shovel', 'stone_shovel', 'wooden_shovel'];
-        } else if (blockName.includes('log') || blockName.includes('wood') || blockName.includes('plank')) {
-            toolType = ['netherite_axe', 'diamond_axe', 'iron_axe', 'stone_axe', 'wooden_axe'];
-        }
-
-        for (const name of toolType) {
-            const tool = items.find(i => i.name === name);
-            if (tool) return tool;
-        }
-
-        return null;
+        // Cheapest in time and wear (utils/toolChoice), not the fastest: the iron pickaxe is not spent on stone steps.
+        return chooseTool(block, this.bot.inventory.items(), { requireHarvest: !!block.harvestTools, effects: (this.bot.entity as any)?.effects ?? {} });
     }
 
     private sleep(ms: number): Promise<void> {
-        return new Promise(resolve => setTimeout(resolve, ms));
+        return actionDelay(this.bot, ms);
     }
 }
 
 export default StairMine;
-

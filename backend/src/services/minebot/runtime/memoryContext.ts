@@ -1,4 +1,5 @@
 import type { RequestEnvelope } from '@shannon/common';
+import { nativeActionHost } from '../execution/ActionExecution.js';
 import { minecraftContextKey, minecraftConversationKeys, normalizeMinecraftDimension, type MinecraftWorldIdentity, type MinecraftMemoryContext } from '../../../modules/memory/minecraftIdentity.js';
 
 export type MemoryBot = { game?: { dimension?: unknown } };
@@ -11,9 +12,10 @@ export function bindMinecraftMemory(bot: object, identity: MinecraftWorldIdentit
 }
 export function revokeMinecraftMemory(bot: object): void { bindings.delete(bot); revoked.add(bot); }
 export function assertMinecraftConnected(bot: object): void {
-  if (revoked.has(bot)) throw new Error('MINECRAFT_MEMORY_DISCONNECTED');
+  if (revoked.has(nativeActionHost(bot))) throw new Error('MINECRAFT_MEMORY_DISCONNECTED');
 }
 export function minecraftMemoryContext(bot: MemoryBot): MinecraftMemoryContext | null {
+  bot = nativeActionHost(bot);
   const identity = bindings.get(bot); const dimension = normalizeMinecraftDimension(bot.game?.dimension);
   if (!identity || !dimension || revoked.has(bot)) return null;
   return Object.freeze({ ...identity, dimension });

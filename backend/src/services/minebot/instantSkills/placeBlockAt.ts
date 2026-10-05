@@ -1,11 +1,18 @@
+import { resyncInventory } from '../utils/inventorySync.js';
 import minecraftData from 'minecraft-data';
 import pathfinder from 'mineflayer-pathfinder';
 import { Vec3 } from 'vec3';
 import { CustomBot, InstantSkill } from '../types.js';
 import { gotoSafe } from '../utils/gotoSafe.js';
 import { ensureLineOfSight } from '../utils/blockLineOfSight.js';
+import { actionDelay } from '../execution/observedWait.js';
 
 const { goals } = pathfinder;
+
+/** Cells a block can be placed into, as in vanilla (fluids and non-solid plants are replaced). */
+const REPLACEABLE_TARGETS = new Set(['air', 'cave_air', 'void_air', 'water', 'lava', 'bubble_column', 'short_grass',
+  'tall_grass', 'fern', 'large_fern', 'dead_bush', 'seagrass', 'tall_seagrass', 'vine', 'glow_lichen', 'snow',
+  'fire', 'soul_fire', 'light']);
 
 /**
  * 原子的スキル: 指定座標にブロックを設置
@@ -44,6 +51,20 @@ class PlaceBlockAt extends InstantSkill {
         required: true,
       },
     ];
+  }
+
+  /** Too far to place from where the body is now: said without waiting for the body, with where the body is. */
+  protected preflight(_blockName: string, x: number, y: number, z: number) {
+    const position = this.bot.entity?.position;
+    if (!position || ![x, y, z].every(Number.isFinite)) return null;
+    const distance = position.distanceTo(new Vec3(x, y, z));
+    if (distance <= 5) return null;
+    return {
+      success: false,
+      result: `設置場所が遠すぎます（距離: ${distance.toFixed(1)}m、5m以内に近づいてください。現在位置: ${position.x.toFixed(1)}, ${position.y.toFixed(1)}, ${position.z.toFixed(1)}）`,
+      failureType: 'distance_too_far',
+      recoverable: true,
+    };
   }
 
   async runImpl(blockName: string, x: number, y: number, z: number) {
@@ -96,9 +117,9 @@ class PlaceBlockAt extends InstantSkill {
         };
       }
 
-      // 設置場所がすでにブロックで埋まっているかチェック
+      // 設置場所がすでにブロックで埋まっているかチェック（水・草など置き換え可能なものは埋まっていない扱い）
       const existingBlock = this.bot.blockAt(targetPos);
-      if (existingBlock && existingBlock.name !== 'air') {
+      if (existingBlock && !REPLACEABLE_TARGETS.has(existingBlock.name)) {
         return {
           success: false,
           result: `座標(${x}, ${y}, ${z})にはすでに${existingBlock.name}があります`,
@@ -145,7 +166,8 @@ class PlaceBlockAt extends InstantSkill {
 
       for (const [ox, oy, oz, fx, fy, fz] of offsets) {
         const candidate = this.bot.blockAt(targetPos.offset(ox, oy, oz));
-        if (candidate && candidate.name !== 'air') {
+        // A placement face needs a solid block; water or grass beside the target cannot hold one.
+        if (candidate && candidate.boundingBox === 'block') {
           referenceBlock = candidate;
           faceVector = new Vec3(fx, fy, fz);
           break;
@@ -172,6 +194,23 @@ class PlaceBlockAt extends InstantSkill {
         if (!los.clear) {
           const failType = los.dugBlocks?.length ? 'obstruction_cleared' : 'line_of_sight_blocked';
           return { success: false, result: los.message!, failureType: failType, recoverable: true };
+        }
+        // The server placed nothing. One reason is that the body does not hold what its copy of its pack says
+        // it holds: a chest "crafted" in that copy only was placed eleven times, each waiting five seconds for a
+        // block that never came (paid run L74). The pack is looked at before the failure is reported.
+        const hadBefore = this.bot.inventory.items().filter((entry) => entry.name === blockName).reduce((sum, entry) => sum + entry.count, 0);
+        let synced = false;
+        try { synced = await resyncInventory(this.bot as any); } catch { synced = false; }
+        const hasNow = this.bot.inventory.items().filter((entry) => entry.name === blockName).reduce((sum, entry) => sum + entry.count, 0);
+        if (synced && hasNow === 0) {
+          return { success: false, failureType: 'missing_item', recoverable: true,
+            result: `${blockName}は実際には持っていませんでした（所持品をサーバーと照合した結果。写しでは${hadBefore}個）。作り直すか、入手してください` };
+        }
+        // Something stands in the cell (the body itself, a mob, a dropped block of sand): the server answers nothing.
+        if (String(actionError?.message ?? '').includes('did not fire within timeout')) {
+          return { success: false, failureType: 'place_failed', recoverable: true,
+            result: `${blockName}を(${x}, ${y}, ${z})に置けませんでした: サーバーが設置を受け付けませんでした（${blockName}は${hasNow}個持っています）。`
+              + '置き先に身体やMobが重なっているか、支えにしたブロックに届いていません。立ち位置か置き先を変えてください' };
         }
         throw actionError;
       }
@@ -233,7 +272,7 @@ class PlaceBlockAt extends InstantSkill {
             stuckAbortCount: 2,
             logStuck: false,
           });
-          await new Promise(r => setTimeout(r, 200));
+          await actionDelay(this.bot, 200);
 
           const newPos = this.bot.entity.position;
           const dx = Math.floor(newPos.x) - Math.floor(target.x);

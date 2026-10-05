@@ -5,7 +5,13 @@ const fakes = vi.hoisted(() => ({
   run: vi.fn(), format: vi.fn(), writeback: vi.fn(),
   saveEpisode: vi.fn(), native: vi.fn(), nativeDeps: undefined as any, nativeEnabled: false,
 }));
-vi.mock('../../src/config/env.js', () => ({ config: { anthropic: { get apiKey() { return fakes.nativeEnabled ? 'mock' : ''; } } } }));
+vi.mock('../../src/config/env.js', () => ({ config: {
+  anthropic: { get apiKey() { return fakes.nativeEnabled ? 'mock' : ''; } },
+  minecraftCognition: {
+    mode: 'off', jevApiKey: '', jevEndpoint: 'https://example.invalid',
+    jevModel: 'jev-test', jevTimeoutMs: 100,
+  },
+} }));
 vi.mock('../../src/utils/logger.js', () => ({ createLogger: () => ({ info: vi.fn(), error: vi.fn() }) }));
 vi.mock('../../src/services/llm/graph/nodes/FunctionCallingAgent.js', () => ({ FunctionCallingAgent: class {} }));
 vi.mock('../../src/services/memory/scopedMemoryService.js', () => ({

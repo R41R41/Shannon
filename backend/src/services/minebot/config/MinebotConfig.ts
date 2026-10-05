@@ -78,14 +78,28 @@ export class MinebotConfig {
   /** 現在接続中のサーバーのUI Mod BaseURL（接続時に更新される） */
   private _currentUiModBaseUrl: string = `http://${config.minecraft.uiModHost}:8081`;
 
+  /**
+   * A server not in the name table (an isolated lab world) names its UI mod explicitly, by
+   * MINEBOT_UI_MOD_BASE_URL or setUiModBaseUrlOverride. While set it wins over the name lookup.
+   */
+  private _uiModBaseUrlOverride: string | null = parseUiModBaseUrl(process.env.MINEBOT_UI_MOD_BASE_URL);
+
   /** 現在のUI ModサーバーURLを設定（ボット接続時に呼び出す） */
   setCurrentUiModBaseUrl(serverName: string): void {
     this._currentUiModBaseUrl = this.getUiModBaseUrl(serverName);
   }
 
+  /** null clears the override. Only a loopback http URL is accepted: the pushes carry the bot's state. */
+  setUiModBaseUrlOverride(url: string | null): void {
+    if (url === null) { this._uiModBaseUrlOverride = null; return; }
+    const parsed = parseUiModBaseUrl(url);
+    if (!parsed) throw new Error('UI_MOD_BASE_URL_INVALID');
+    this._uiModBaseUrlOverride = parsed;
+  }
+
   /** 現在接続中サーバーのUI ModサーバーのベースURL */
   get UI_MOD_BASE_URL(): string {
-    return this._currentUiModBaseUrl;
+    return this._uiModBaseUrlOverride ?? this._currentUiModBaseUrl;
   }
 
   /** UI Mod クライアントサーバーのベースURL（スクリーンショット用） */
@@ -345,6 +359,19 @@ export class MinebotConfig {
       `Task=[retry:${this.MAX_RETRY_COUNT}, timeout:${this.TASK_TIMEOUT}ms, queue:${this.MAX_QUEUE_SIZE}] ` +
       `Dev=${this.IS_DEV}`
     );
+  }
+}
+
+/** A loopback http origin (no path), or null for anything else, including an unset value. */
+export function parseUiModBaseUrl(value: string | undefined | null): string | null {
+  if (!value?.trim()) return null;
+  try {
+    const url = new URL(value.trim());
+    if (url.protocol !== 'http:' || !['127.0.0.1', 'localhost'].includes(url.hostname) || !url.port
+      || url.username || url.password || url.pathname !== '/' || url.search || url.hash) return null;
+    return url.origin;
+  } catch {
+    return null;
   }
 }
 

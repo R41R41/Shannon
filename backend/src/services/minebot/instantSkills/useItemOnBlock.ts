@@ -3,6 +3,13 @@ import { CustomBot, InstantSkill } from '../types.js';
 import { ensureLineOfSight } from '../utils/blockLineOfSight.js';
 import { getWaterLevel } from '../utils/waterLevel.js';
 import { createLogger } from '../../../utils/logger.js';
+import { activateItemFacing } from '../utils/activateItemFacing.js';
+import { actionDelay } from '../execution/observedWait.js';
+import pathfinder from 'mineflayer-pathfinder';
+import { gotoSafe } from '../utils/gotoSafe.js';
+import { liquidAim, liquidAimPoints } from '../utils/liquidAim.js';
+
+const { goals } = pathfinder;
 
 const log = createLogger('Minebot:Skill:useItemOnBlock');
 
@@ -38,10 +45,18 @@ class UseItemOnBlock extends InstantSkill {
         description: 'Z座標',
         required: true,
       },
+      {
+        name: 'itemName',
+        type: 'string',
+        description: '使うアイテムの正確なID（例: bucket, water_bucket, flint_and_steel）。指定すると使用直前にメインハンドへ装備する。省略時は現在の手持ち',
+        required: false,
+      },
     ];
   }
 
-  async runImpl(x: number, y: number, z: number) {
+  private liquidAim(pos: Vec3): { point?: Vec3; reason?: string } { return liquidAim(this.bot, pos); }
+
+  async runImpl(x: number, y: number, z: number, itemName?: string) {
     try {
       if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
         return {
@@ -50,6 +65,13 @@ class UseItemOnBlock extends InstantSkill {
         };
       }
 
+      if (itemName) {
+        const wanted = this.bot.inventory.items().find(item => item.name === itemName);
+        if (!wanted && this.bot.heldItem?.name !== itemName) {
+          return { success: false, result: `${itemName}を持っていません`, failureType: 'material_missing', recoverable: true };
+        }
+        if (wanted && this.bot.heldItem?.name !== itemName) await this.bot.equip(wanted, 'hand');
+      }
       const heldItem = this.bot.heldItem;
       if (!heldItem) {
         return {
@@ -98,8 +120,29 @@ class UseItemOnBlock extends InstantSkill {
       const itemBefore = heldItem.name;
 
       try {
-        await this.bot.lookAt(pos.offset(0.5, 0.5, 0.5));
-        await this.bot.activateBlock(block);
+        if (!(itemBefore === 'bucket' && (block.name === 'water' || block.name === 'lava'))) await this.bot.lookAt(pos.offset(0.5, 0.5, 0.5), true);
+        // 液体は衝突判定のないブロックなので activateBlock() のレイキャスト
+        // 対象にならない。空バケツは視線方向へ use_item を送り、Minecraft
+        // サーバー自身に水源/溶岩源をレイキャストさせる。
+        if (itemBefore === 'bucket' && (block.name === 'water' || block.name === 'lava')) {
+          // The server takes the liquid its own ray from the eyes finds, within reach. Aimed at the middle of the
+          // source from wherever the body stood, the ray met a bank or fell short, and the answer was only "could
+          // not scoop: far, a bad angle or something in the way": a planner with a bucket spent seven calls
+          // and two pillars on one pool (paid run L74). A point on the source the eyes can see is looked for;
+          // with none, the body steps up to the source once.
+          let aim = this.liquidAim(pos);
+          if (!aim.point) {
+            try { await gotoSafe(this.bot, new goals.GoalNear(pos.x, pos.y, pos.z, 2), { timeoutMs: 8000 }); } catch { /* judged by the aim below */ }
+            aim = this.liquidAim(pos);
+          }
+          if (!aim.point) {
+            return { success: false, failureType: 'line_of_sight_blocked', recoverable: true,
+              result: `${block.name}(${pos.x},${pos.y},${pos.z})にバケツが届きません: ${aim.reason}。その水源の真横か真上に立ってからやり直してください` };
+          }
+          await activateItemFacing(this.bot, aim.point);
+        } else {
+          await this.bot.activateBlock(block);
+        }
       } catch (actionError: any) {
         // 失敗 → LOS遮蔽が原因かを診断
         const los = await ensureLineOfSight(this.bot, pos);
@@ -112,11 +155,13 @@ class UseItemOnBlock extends InstantSkill {
 
       // バケツで液体/粉雪を汲む操作の検証: 手持ちが実際に変化したか確認
       if (itemBefore === 'bucket' && (block.name === 'water' || block.name === 'lava' || block.name === 'powder_snow')) {
-        await new Promise(r => setTimeout(r, 150));
-        const itemAfter = this.bot.heldItem?.name;
         const expected = block.name === 'water' ? 'water_bucket'
           : block.name === 'lava' ? 'lava_bucket'
           : 'powder_snow_bucket';
+        // The held-item update can arrive after several ticks.
+        const heldDeadline = Date.now() + 1500;
+        while (Date.now() < heldDeadline && this.bot.heldItem?.name !== expected) await actionDelay(this.bot, 100);
+        const itemAfter = this.bot.heldItem?.name;
         if (itemAfter !== expected) {
           const blockAfter = this.bot.blockAt(pos);
           const stillThere = blockAfter && blockAfter.name === block.name;
@@ -174,9 +219,24 @@ class UseItemOnBlock extends InstantSkill {
     log.info(`💧 マグマ(${lavaPos.x},${lavaPos.y},${lavaPos.z})に対し ${refBlock.name}(${losTarget.x},${losTarget.y},${losTarget.z}) の面(${faceVec.x},${faceVec.y},${faceVec.z})に水を設置`);
 
     try {
-      await this.bot.lookAt(losTarget.offset(0.5, 0.5, 0.5));
-      await this.bot.placeBlock(refBlock, faceVec);
+      // A bucket is an item use resolved by the server's own ray cast, not a
+      // block placement: placeBlock sends only use_item_on and never pours.
+      const faceCenter = refBlock.position.offset(0.5, 0.5, 0.5).plus(faceVec.scaled(0.5));
+      await activateItemFacing(this.bot, faceCenter);
+      const deadline = Date.now() + 1500;
+      while (Date.now() < deadline && this.bot.blockAt(waterPos)?.name !== 'water') await actionDelay(this.bot, 100);
+      if (this.bot.blockAt(waterPos)?.name !== 'water') {
+        return {
+          success: false,
+          result: `水バケツを(${waterPos.x},${waterPos.y},${waterPos.z})へ使いましたが水が置かれていません（手持ち: ${this.bot.heldItem?.name ?? 'なし'}）。`
+            + '設置面が見える位置へ近づき、別の縁から再試行してください。',
+          failureType: 'placement_unconfirmed',
+          recoverable: true,
+        };
+      }
     } catch (placeError: any) {
+      // Cancellation is not a line-of-sight failure: never dig obstructions after it.
+      if (this.shouldInterrupt()) throw placeError;
       const los = await ensureLineOfSight(this.bot, losTarget);
       if (!los.clear) {
         const failType = los.dugBlocks?.length ? 'obstruction_cleared' : 'line_of_sight_blocked';
@@ -185,19 +245,43 @@ class UseItemOnBlock extends InstantSkill {
       return { success: false, result: `水の設置エラー: ${placeError.message}` };
     }
 
-    // 水流がマグマに到達するまで少し待つ
-    await new Promise(r => setTimeout(r, 500));
+    // 水流がマグマに到達するまで待つ（流水は数tickずつ広がる）。長く待つと
+    // Bot自身が流されて水源に届かなくなるため、1.5秒で打ち切る。
+    const convertDeadline = Date.now() + 1500;
+    while (Date.now() < convertDeadline && this.bot.blockAt(lavaPos)?.name !== 'obsidian') await actionDelay(this.bot, 100);
+    // Scoop the source back at once, as a player does: a flooded pit slows
+    // obsidian mining about fivefold and pushes the bot out of reach.
+    let recovered = false;
+    if (this.bot.heldItem?.name === 'bucket' && this.bot.blockAt(waterPos)?.name === 'water') {
+      // Read afresh each tick: the held item changes from a server packet.
+      const heldName = (): string | undefined => this.bot.heldItem?.name;
+      // Each point of the source the eyes can see, in turn: the centre can lie behind the edge of a block
+      // the line to it clips (paid run L77 left its water standing and lost it).
+      const visible = liquidAimPoints(this.bot, waterPos).points;
+      for (const point of visible.length ? visible.slice(0, 4) : [waterPos.offset(0.5, 0.5, 0.5)]) {
+        try {
+          await activateItemFacing(this.bot, point);
+          const scoopDeadline = Date.now() + 800;
+          while (Date.now() < scoopDeadline && heldName() !== 'water_bucket') await actionDelay(this.bot, 100);
+        } catch { /* reported below */ }
+        if (heldName() === 'water_bucket') { recovered = true; break; }
+      }
+    }
 
     const afterBlock = this.bot.blockAt(lavaPos);
     const converted = afterBlock && afterBlock.name === 'obsidian';
+    const obsidianNearby = this.bot.findBlocks?.({ matching: (candidate: any) => candidate?.name === 'obsidian',
+      point: lavaPos, maxDistance: 8, count: 64 })?.length ?? 0;
 
     return {
       success: true,
       result: converted
-        ? `✅ マグマ(${lavaPos.x},${lavaPos.y},${lavaPos.z})が黒曜石に変換されました！`
-          + `水源(${waterPos.x},${waterPos.y},${waterPos.z})を空バケツで回収してから、diamond_pickaxeで黒曜石を採掘してください。`
-        : `💧 水を(${waterPos.x},${waterPos.y},${waterPos.z})に設置しました。`
-          + `水流がマグマに向かって流れています。近くのマグマが黒曜石になっている可能性があります。`
+        ? `✅ マグマ(${lavaPos.x},${lavaPos.y},${lavaPos.z})が黒曜石に変換されました（周囲8m内の黒曜石${obsidianNearby}個）。`
+          + (recovered ? '水はwater_bucketへ回収済み。残りの溶岩には別の縁から同様に水を流せます。diamond_pickaxeで黒曜石を採掘できます。'
+            : `水源(${waterPos.x},${waterPos.y},${waterPos.z})が残っています。近づいて空バケツで回収してから、diamond_pickaxeで黒曜石を採掘してください（水中の採掘は遅い）。`)
+        : `💧 水を(${waterPos.x},${waterPos.y},${waterPos.z})に設置しました。指定したマグマはまだ変換されていません（周囲8m内の黒曜石${obsidianNearby}個）。`
+          + (recovered ? '水はwater_bucketへ回収済み。' : '水源が残っています。空バケツで回収してください。')
+          + `水流の届かない溶岩源は、隣の縁から別に水を流してください。`
           + `水源を空バケツで回収してから、diamond_pickaxeでobsidianを採掘してください。`,
     };
   }

@@ -37,9 +37,9 @@ class AutoShield extends ConstantSkill {
 
         // 近くの敵を検知
         const nearbyHostiles = Object.values(this.bot.entities).filter(entity => {
-            if (!entity || !entity.position || !entity.isValid) return false;
+            if (!entity || !entity.position || entity.isValid === false) return false;
             const name = entity.name?.toLowerCase() ?? '';
-            if (!this.HOSTILE_MOBS.has(name)) return false;
+            if (entity.type !== 'hostile' && !this.HOSTILE_MOBS.has(name)) return false;
             return this.bot.entity.position.distanceTo(entity.position) <= this.SHIELD_RANGE;
         });
 
@@ -49,8 +49,8 @@ class AutoShield extends ConstantSkill {
                 await this.bot.equip(shield, 'off-hand');
                 this.shieldEquipped = true;
                 log.info(`🛡️ 盾を自動装備 (敵${nearbyHostiles.length}体検知)`);
-            } catch {
-                // 装備失敗は無視
+            } catch (error) {
+                log.warn(`⚠ 盾の自動装備に失敗: ${error instanceof Error ? error.message : String(error)}`);
             }
         }
     }

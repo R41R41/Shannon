@@ -1,0 +1,228 @@
+{
+  "testSuite": "practical-worksite-survey",
+  "description": "平坦な建築予定地を調査し、資材・経路・周辺生物を確認して現場へ移動する実用シナリオ",
+  "mode": "chain",
+  "commandOracle": true,
+  "globalSetup": [
+    "/gamemode survival @s",
+    "/difficulty peaceful",
+    "/time set day",
+    "/weather clear",
+    "/effect clear @s",
+    "/clear @s",
+    "/kill @e[type=!player]",
+    "/kill @e[type=item]",
+    "/fill -20 99 -20 20 99 20 stone",
+    "/fill -20 100 -20 20 106 20 air",
+    "/setblock 6 100 0 oak_log",
+    "/setblock 6 101 0 oak_log",
+    "/setblock 10 100 0 hay_block",
+    "/setblock 10 100 1 cobblestone",
+    "/setblock 10 100 -1 oak_planks",
+    "/summon cow 4 100 4 {NoAI:1b,PersistenceRequired:1b}",
+    "/give @s iron_pickaxe 1",
+    "/give @s cobblestone 16",
+    "/give @s bread 4",
+    "/tp @s 0 100 0"
+  ],
+  "cases": [
+    {
+      "skillName": "get-position",
+      "args": [],
+      "description": "建築予定地で現在位置を確認する",
+      "expectedOutcome": "success",
+      "assertions": [{ "type": "position_within", "x": 0, "y": 100, "z": 0, "radius": 1 }]
+    },
+    {
+      "skillName": "get-health",
+      "args": [],
+      "description": "作業開始前の体力と空腹を確認する",
+      "expectedOutcome": "success",
+      "assertions": [{ "type": "health_between", "min": 20, "max": 20 }]
+    },
+    {
+      "skillName": "get-bot-status",
+      "args": [],
+      "description": "作業開始前の総合状態を確認する",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "get-time-and-weather",
+      "args": [],
+      "description": "屋外作業に適した時刻と天候か確認する",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "list-inventory-items",
+      "args": [],
+      "description": "作業資材と食料を棚卸しする",
+      "expectedOutcome": "success",
+      "assertions": [
+        { "type": "inventory_count", "item": "cobblestone", "minCount": 16, "maxCount": 16 },
+        { "type": "inventory_count", "item": "bread", "minCount": 4, "maxCount": 4 }
+      ]
+    },
+    {
+      "skillName": "get-equipment",
+      "args": [],
+      "description": "採掘道具の装備状態を確認する",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "check-inventory-item",
+      "args": ["cobblestone"],
+      "description": "建築用丸石の所持数を個別確認する",
+      "expectedOutcome": "success",
+      "assertions": [{ "type": "inventory_count", "item": "cobblestone", "minCount": 16, "maxCount": 16 }]
+    },
+    {
+      "skillName": "check-recipe",
+      "args": ["stone_pickaxe"],
+      "description": "予備の石のツルハシのレシピを確認する",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "get-block-at",
+      "args": [0, 99, 0],
+      "description": "足場が石であることを調べる",
+      "expectedOutcome": "success",
+      "assertions": [{ "type": "block_at", "x": 0, "y": 99, "z": 0, "block": "stone" }]
+    },
+    {
+      "skillName": "is-block-loaded",
+      "args": [10, 100, 0],
+      "description": "調査対象区画がロード済みか確認する",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "can-dig-block",
+      "args": [6, 100, 0],
+      "description": "予定地の原木が掘削可能か確認する",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "find-blocks",
+      "args": ["oak_log", 16, 10],
+      "description": "近隣の木材候補を検索する",
+      "expectedOutcome": "success",
+      "assertions": [{ "type": "block_at", "x": 6, "y": 100, "z": 0, "block": "oak_log" }]
+    },
+    {
+      "skillName": "get-blocks-in-area",
+      "args": [-2, 99, -2, 12, 102, 5, "stats", false],
+      "description": "建築候補区画のブロック構成を集計する",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "find-placeable-spot",
+      "args": [6, 8, true],
+      "description": "設備を置ける安全な空き座標を探す",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "find-structure",
+      "args": ["village"],
+      "description": "干草・丸石・板材の痕跡から村候補を探す",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "list-nearby-entities",
+      "args": [16, 10],
+      "description": "予定地周辺の生物を一覧する",
+      "expectedOutcome": "success",
+      "assertions": [{ "type": "entity_nearby", "entity": "cow", "maxDistance": 8, "present": true }]
+    },
+    {
+      "skillName": "find-nearest-entity",
+      "args": ["cow", 16],
+      "description": "最寄りの牛を見つける",
+      "expectedOutcome": "success",
+      "assertions": [{ "type": "entity_nearby", "entity": "cow", "maxDistance": 8, "present": true }]
+    },
+    {
+      "skillName": "get-entity-look-direction",
+      "args": ["cow"],
+      "description": "近くの牛が向いている方向を把握する",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "check-path-to",
+      "args": [12, 100, 8],
+      "description": "資材搬入地点への経路があるか確認する",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "look-at",
+      "args": [6, 100, 0],
+      "description": "伐採予定の原木へ視線を向ける",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "get-block-in-sight",
+      "args": [16],
+      "description": "視線先の伐採対象を再確認する",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "jump",
+      "args": [],
+      "description": "現場でジャンプ動作を確認する",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "set-sprint",
+      "args": [true],
+      "description": "搬入地点への移動前にダッシュを有効にする",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "move-to",
+      "args": [12, 100, 8, 1, "near"],
+      "description": "建築資材の搬入地点まで移動する",
+      "expectedOutcome": "success",
+      "assertions": [{ "type": "position_within", "x": 12, "y": 100, "z": 8, "radius": 2 }]
+    },
+    {
+      "skillName": "set-sprint",
+      "args": [false],
+      "description": "到着後にダッシュを解除する",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "set-sneak",
+      "args": [true],
+      "description": "区画端で安全確認のためしゃがむ",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "swing-arm",
+      "args": [],
+      "description": "共同作業者への合図として腕を振る",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "wait-time",
+      "args": [300],
+      "description": "現場状態の安定を短時間待つ",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "stop-movement",
+      "args": [],
+      "description": "搬入地点で移動状態を確実に停止する",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "set-sneak",
+      "args": [false],
+      "description": "安全確認後にしゃがみを解除する",
+      "expectedOutcome": "success"
+    },
+    {
+      "skillName": "chat",
+      "args": ["Worksite survey complete"],
+      "description": "建築予定地の調査完了をチャットで報告する",
+      "expectedOutcome": "success"
+    }
+  ]
+}

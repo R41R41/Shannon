@@ -1,5 +1,6 @@
 import { createLogger } from '../../../utils/logger.js';
 import { CustomBot, InstantSkill } from '../types.js';
+import { actionDelay } from '../execution/observedWait.js';
 
 const log = createLogger('Minebot:EquipItem');
 
@@ -68,14 +69,17 @@ class EquipItem extends InstantSkill {
       const inventoryItems = this.bot.inventory.items();
       const equippedItems = this.getEquippedItems();
 
+      // An exact item ID never falls back to a similar name: water_bucket must
+      // not equip an empty bucket and report success.
+      const exactId = !!(this.bot.registry as any)?.itemsByName?.[itemName];
       const item = inventoryItems.find((i) => i.name === itemName)
-        ?? inventoryItems.find((i) => i.name.includes(itemName) || itemName.includes(i.name));
+        ?? (exactId ? undefined : inventoryItems.find((i) => i.name.includes(itemName) || itemName.includes(i.name)));
 
       if (item) {
         await this.bot.equip(item, mapping.dest as any);
         return {
           success: true,
-          result: `${itemName}を${mapping.label}に装備しました`,
+          result: `${item.name}を${mapping.label}に装備しました`,
         };
       }
 
@@ -88,7 +92,7 @@ class EquipItem extends InstantSkill {
           };
         }
         await this.bot.unequip(equippedMatch.slot as any);
-        await new Promise((r) => setTimeout(r, 100));
+        await actionDelay(this.bot, 100);
 
         const movedItem = this.bot.inventory.items().find((i) => i.name === itemName);
         if (movedItem) {

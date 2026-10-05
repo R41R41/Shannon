@@ -24,6 +24,30 @@ import { CONFIG } from './config/MinebotConfig.js';
 import { SkillAgent } from './skillAgent.js';
 import { ConstantSkills, CustomBot, InstantSkills } from './types.js';
 import { Utils } from './utils/index.js';
+import { installPlayerLoadedHandshake } from './utils/playerLoadedHandshake.js';
+import { installTierToolMaterialRepair } from './utils/registryRepairs.js';
+import { installAirSupplyDefault } from './utils/airSupplyDefault.js';
+import { edgeGuardPlugin } from './utils/edgeGuard.js';
+import { breathingReflexPlugin } from './utils/breathingReflex.js';
+import { exertionMeterPlugin } from './utils/exertionMeter.js';
+import { threatTrackerPlugin } from './utils/threatTracker.js';
+import { toolWearPlugin } from './utils/toolWear.js';
+import { landmarkWatcherPlugin } from './utils/landmarks.js';
+import { placeMemoryPlugin } from './utils/placeMemory.js';
+import { fireballDeflectPlugin } from './utils/fireballDeflect.js';
+import { shieldBlockPlugin } from './utils/shieldBlock.js';
+import { knockBracePlugin } from './utils/knockBrace.js';
+import { digConfirmationPlugin } from './utils/digConfirmation.js';
+import { serverRefusalPlugin } from './utils/serverRefusals.js';
+import { lavaDigGuardPlugin, lavaReflexPlugin } from './utils/lavaSafety.js';
+import { gazeGuardPlugin } from './utils/gazeGuard.js';
+import { exposureDigGuardPlugin } from './utils/exposureGuard.js';
+import { promptPlacePlugin } from './utils/promptPlace.js';
+import { installCollisionTolerance } from './utils/collisionTolerance.js';
+
+installCollisionTolerance();
+import { installMotionRecorder } from './utils/motionRecorder.js';
+import { installToolChoice } from './utils/toolChoice.js';
 import { createLogger } from '../../utils/logger.js';
 
 const log = createLogger('Minebot:Client');
@@ -83,6 +107,10 @@ export class MinebotClient extends BaseClient {
       skipValidation: true,
     }) as CustomBot;
     const connectedBot = this.bot;
+    installPlayerLoadedHandshake(connectedBot);
+    installTierToolMaterialRepair(connectedBot);
+    installAirSupplyDefault(connectedBot);
+    installMotionRecorder(connectedBot);
     bindMinecraftMemory(connectedBot, memoryIdentity);
     connectedBot.once('end', () => revokeMinecraftMemory(connectedBot));
     connectedBot.once('kicked', () => revokeMinecraftMemory(connectedBot));
@@ -92,6 +120,8 @@ export class MinebotClient extends BaseClient {
     this.bot.loadPlugin(projectile);
     this.bot.loadPlugin(pvp);
     this.bot.loadPlugin(toolPlugin);
+    // Plugins are injected at login: the wear-aware tool choice goes in once they exist.
+    this.bot.once('spawn', () => installToolChoice(this.bot));
     cmd.allowConsoleInput = true;
     this.bot.loadPlugin(cmd);
     const minecraftHawkEye = pkg.default;
@@ -100,6 +130,24 @@ export class MinebotClient extends BaseClient {
     } catch (error) {
       log.error('HawkEye plugin load failed', error);
     }
+    // Last, so its physics tick listener has the final say over every mover's controls.
+    this.bot.loadPlugin(edgeGuardPlugin);
+    this.bot.loadPlugin(breathingReflexPlugin);
+    this.bot.loadPlugin(exertionMeterPlugin);
+    this.bot.loadPlugin(threatTrackerPlugin);
+    this.bot.loadPlugin(toolWearPlugin);
+    this.bot.loadPlugin(landmarkWatcherPlugin);
+    this.bot.loadPlugin(placeMemoryPlugin);
+    this.bot.loadPlugin(digConfirmationPlugin);
+    this.bot.loadPlugin(serverRefusalPlugin);
+    this.bot.loadPlugin(lavaDigGuardPlugin);
+    this.bot.loadPlugin(exposureDigGuardPlugin);
+    this.bot.loadPlugin(promptPlacePlugin);
+    this.bot.loadPlugin(lavaReflexPlugin);
+    this.bot.loadPlugin(gazeGuardPlugin);
+    this.bot.loadPlugin(fireballDeflectPlugin);
+    this.bot.loadPlugin(shieldBlockPlugin);
+    this.bot.loadPlugin(knockBracePlugin);
 
     this.bot.on('login', async () => {
       log.info('✅ Bot has logged in.');

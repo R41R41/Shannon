@@ -5,6 +5,7 @@ import { CustomBot, InstantSkill } from '../types.js';
 import { createLogger } from '../../../utils/logger.js';
 import { gotoSafe } from '../utils/gotoSafe.js';
 import { CONFIG } from '../config/MinebotConfig.js';
+import { actionDelay } from '../execution/observedWait.js';
 
 const { goals } = pathfinder;
 const log = createLogger('Minebot:Skill:buildStructure');
@@ -42,12 +43,24 @@ const SCAFFOLD_CANDIDATES = ['dirt', 'cobblestone', 'stone', 'netherrack', 'cobb
 
 type Dir = 'north' | 'south' | 'east' | 'west';
 
-function rotateLocal(col: number, row: number, facing: Dir): [number, number] {
+/**
+ * Rotate a blueprint while keeping its entire footprint in the positive local
+ * quadrant. The public API defines origin as the lower bounding-box corner;
+ * rotating around (0,0) made south/east builds unexpectedly extend into
+ * negative coordinates and contradicted that contract.
+ */
+function rotateLocalFromOrigin(
+  col: number,
+  row: number,
+  facing: Dir,
+  width: number,
+  depth: number,
+): [number, number] {
   switch (facing) {
     case 'north': return [col, row];
-    case 'east':  return [-row, col];
-    case 'south': return [-col, -row];
-    case 'west':  return [row, -col];
+    case 'east':  return [depth - 1 - row, col];
+    case 'south': return [width - 1 - col, depth - 1 - row];
+    case 'west':  return [row, width - 1 - col];
   }
 }
 
@@ -176,7 +189,7 @@ class BuildStructure extends InstantSkill {
 
     if (placed === total && bp.afterBuild) {
       for (const action of bp.afterBuild) {
-        await this.executeAfterBuild(action, origin, dir);
+        await this.executeAfterBuild(action, bp, origin, dir);
       }
     }
 
@@ -242,6 +255,8 @@ class BuildStructure extends InstantSkill {
 
   private resolvePositions(bp: Blueprint, origin: Vec3, facing: Dir): BlockPlacement[] {
     const out: BlockPlacement[] = [];
+    const width = Math.max(1, ...bp.layers.flat().map(row => row.length));
+    const depth = Math.max(1, ...bp.layers.map(layer => layer.length));
     for (let layerIdx = 0; layerIdx < bp.layers.length; layerIdx++) {
       const layer = bp.layers[layerIdx];
       for (let rowIdx = 0; rowIdx < layer.length; rowIdx++) {
@@ -251,7 +266,7 @@ class BuildStructure extends InstantSkill {
           if (ch === '.') continue;
           const blockName = bp.materials[ch];
           if (!blockName) continue;
-          const [dx, dz] = rotateLocal(colIdx, rowIdx, facing);
+          const [dx, dz] = rotateLocalFromOrigin(colIdx, rowIdx, facing, width, depth);
           out.push({ worldPos: origin.offset(dx, layerIdx, dz), blockName });
         }
       }
@@ -472,10 +487,19 @@ class BuildStructure extends InstantSkill {
   /*  After-build actions                                            */
   /* ============================================================== */
 
-  private async executeAfterBuild(action: AfterBuildAction, origin: Vec3, facing: Dir): Promise<void> {
+  private async executeAfterBuild(
+    action: AfterBuildAction,
+    bp: Blueprint,
+    origin: Vec3,
+    facing: Dir,
+  ): Promise<void> {
     if (action.type !== 'use_item') return;
 
-    const [dx, dz] = rotateLocal(action.offset[0], action.offset[2], facing);
+    const width = Math.max(1, ...bp.layers.flat().map(row => row.length));
+    const depth = Math.max(1, ...bp.layers.map(layer => layer.length));
+    const [dx, dz] = rotateLocalFromOrigin(
+      action.offset[0], action.offset[2], facing, width, depth,
+    );
     const targetAir = origin.offset(dx, action.offset[1], dz);
 
     const item = this.bot.inventory.items().find(i => i.name === action.item);
@@ -514,7 +538,7 @@ class BuildStructure extends InstantSkill {
   /* ============================================================== */
 
   private sleep(ms: number) {
-    return new Promise<void>(r => setTimeout(r, ms));
+    return actionDelay(this.bot, ms);
   }
 }
 

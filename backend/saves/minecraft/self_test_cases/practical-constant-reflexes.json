@@ -1,0 +1,206 @@
+{
+  "testSuite": "practical-constant-reflexes",
+  "description": "敵・飛翔体・空腹・落下物・水中・夜・他プレイヤーに対する18種の常駐反射を実環境で発火させる生存シナリオ",
+  "mode": "default",
+  "commandOracle": true,
+  "globalSetup": [
+    "/gamemode survival @s",
+    "/difficulty normal",
+    "/gamerule doMobSpawning false",
+    "/time set day",
+    "/weather clear",
+    "/effect clear @s",
+    "/clear @s",
+    "/tp @s 0 100 0",
+    "/kill @e[type=!player]",
+    "/kill @e[type=item]",
+    "/fill -24 99 -24 24 99 24 stone",
+    "/fill -24 100 -24 24 110 24 air",
+    "/tp @s 0 100 0",
+    "/tp ProbeActor 5 100 0"
+  ],
+  "cases": [
+    {
+      "skillName": "auto-avoid-dragon-breath",
+      "args": [],
+      "description": "接近するドラゴン火球を検知して回避判断する",
+      "expectedOutcome": "success",
+      "setup": ["/summon dragon_fireball 3 104 0 {Motion:[-0.1d,-0.5d,0.0d]}"],
+      "assertions": [{ "type": "health_between", "min": 1, "max": 20 }]
+    },
+    {
+      "skillName": "auto-avoid-projectile-range",
+      "args": [],
+      "description": "弓を持つスケルトンの射線を検知して横へ退避する",
+      "expectedOutcome": "success",
+      "setup": ["/summon skeleton 8 100 0 {NoAI:1b}"],
+      "assertions": [{ "type": "health_between", "min": 1, "max": 20 }]
+    },
+    {
+      "skillName": "auto-combat-assess",
+      "args": [],
+      "description": "武器なしで複数のゾンビに囲まれた不利を評価して逃走する",
+      "expectedOutcome": "success",
+      "setup": [
+        "/summon zombie 3 100 0 {NoAI:1b}",
+        "/summon zombie 4 100 1 {NoAI:1b}"
+      ],
+      "assertions": [{ "type": "health_between", "min": 1, "max": 20 }]
+    },
+    {
+      "skillName": "auto-detect-block-or-entity",
+      "args": [],
+      "constantArgs": { "blockName": "diamond_ore", "entityName": "cow", "searchDistance": 16 },
+      "description": "希少鉱石と家畜を周辺監視で検知する",
+      "expectedOutcome": "success",
+      "setup": [
+        "/setblock 4 100 0 diamond_ore",
+        "/summon cow 5 100 0 {NoAI:1b}"
+      ],
+      "assertions": [
+        { "type": "block_at", "x": 4, "y": 100, "z": 0, "block": "diamond_ore" },
+        { "type": "entity_nearby", "entity": "cow", "maxDistance": 16, "present": true }
+      ]
+    },
+    {
+      "skillName": "auto-eat",
+      "args": [],
+      "description": "強い空腹状態を検知してパンを自動摂取する",
+      "expectedOutcome": "success",
+      "setup": [
+        "/give @s bread 1",
+        "/effect give @s hunger 15 255 true"
+      ],
+      "setupSettleMs": 8000,
+      "assertions": [{ "type": "inventory_count", "item": "bread", "minCount": 0, "maxCount": 0 }]
+    },
+    {
+      "skillName": "auto-equip-weapon",
+      "args": [],
+      "description": "近距離のゾンビを検知して最強のダイヤ剣を自動装備する",
+      "expectedOutcome": "success",
+      "setup": [
+        "/give @s wooden_sword 1",
+        "/give @s diamond_sword 1",
+        "/summon zombie 5 100 0 {NoAI:1b}"
+      ],
+      "assertions": [{ "type": "equipped_item", "slot": "mainhand", "item": "diamond_sword" }]
+    },
+    {
+      "skillName": "auto-face-moved-entity",
+      "args": ["$entity:cow"],
+      "description": "動いた牛へ即時に顔を向ける",
+      "expectedOutcome": "success",
+      "setup": ["/summon cow 4 100 0 {NoAI:1b}"],
+      "assertions": [{ "type": "entity_nearby", "entity": "cow", "maxDistance": 8, "present": true }]
+    },
+    {
+      "skillName": "auto-face-nearest-entity",
+      "args": [],
+      "description": "最寄りの牛を常時注視する",
+      "expectedOutcome": "success",
+      "setup": ["/summon cow 4 100 0 {NoAI:1b}"],
+      "assertions": [{ "type": "entity_nearby", "entity": "cow", "maxDistance": 8, "present": true }]
+    },
+    {
+      "skillName": "auto-face-speaker",
+      "args": ["ProbeActor"],
+      "description": "会話相手のテストプレイヤーへ顔を向ける",
+      "expectedOutcome": "success",
+      "assertions": [{ "type": "entity_nearby", "entity": "player", "maxDistance": 8, "present": true }]
+    },
+    {
+      "skillName": "auto-face-updated-block",
+      "args": ["$block:4,100,0"],
+      "description": "更新された作業台ブロックへ即時に顔を向ける",
+      "expectedOutcome": "success",
+      "setup": ["/setblock 4 100 0 crafting_table"],
+      "assertions": [{ "type": "block_at", "x": 4, "y": 100, "z": 0, "block": "crafting_table" }]
+    },
+    {
+      "skillName": "auto-follow",
+      "args": ["cow"],
+      "description": "護送対象の牛へ数秒間自動追従する",
+      "expectedOutcome": "success",
+      "setup": ["/summon cow 8 100 0 {NoAI:1b}"],
+      "assertions": [{ "type": "position_within", "x": 8, "y": 100, "z": 0, "radius": 4 }]
+    },
+    {
+      "skillName": "auto-pick-up-item",
+      "args": [],
+      "description": "近くへ落ちた丸石を自動回収する",
+      "expectedOutcome": "success",
+      "setup": ["/summon item 3 100 0 {Item:{id:\"minecraft:cobblestone\",count:1}}"],
+      "assertions": [{ "type": "inventory_count", "item": "cobblestone", "minCount": 1 }]
+    },
+    {
+      "skillName": "auto-run-from-hostiles",
+      "args": [],
+      "description": "瀕死状態で近くのゾンビから自動逃走する",
+      "expectedOutcome": "success",
+      "setup": [
+        "/damage @s 16 minecraft:generic",
+        "/summon zombie 3 100 0 {NoAI:1b}"
+      ],
+      "assertions": [{ "type": "entity_nearby", "entity": "zombie", "maxDistance": 8, "present": false }]
+    },
+    {
+      "skillName": "auto-shield",
+      "args": [],
+      "description": "近距離のゾンビを検知して盾を自動装備する",
+      "expectedOutcome": "success",
+      "setup": [
+        "/give @s shield 1",
+        "/summon zombie 4 100 0 {NoAI:1b}"
+      ],
+      "assertions": [{ "type": "equipped_item", "slot": "offhand", "item": "shield" }]
+    },
+    {
+      "skillName": "auto-sleep",
+      "args": [],
+      "description": "夜を検知して拠点のベッドで自動就寝する",
+      "expectedOutcome": "success",
+      "setup": [
+        "/time set midnight",
+        "/setblock 3 100 0 red_bed[part=foot,facing=east]",
+        "/setblock 4 100 0 red_bed[part=head,facing=east]"
+      ],
+      "assertions": [{ "type": "block_at", "x": 3, "y": 100, "z": 0, "block": "red_bed" }]
+    },
+    {
+      "skillName": "auto-swim",
+      "args": [],
+      "description": "酸素が減った深い水槽から自動浮上し、実際に呼吸可能な水面へ到達する",
+      "expectedOutcome": "success",
+      "setup": [
+        "/fill -2 99 -2 2 105 2 stone",
+        "/fill -1 100 -1 1 104 1 water",
+        "/fill -1 105 -1 1 106 1 air",
+        "/effect give @s instant_health 1 10 true",
+        "/tp @s 0 100 0"
+      ],
+      "setupSettleMs": 9000,
+      "postActionSettleMs": 250,
+      "assertions": [
+        { "type": "position_within", "x": 0, "y": 105, "z": 0, "radius": 2 },
+        { "type": "health_between", "min": 18, "max": 20 }
+      ]
+    },
+    {
+      "skillName": "auto-update-looking-at",
+      "args": [],
+      "description": "視線先ブロックの共有状態を即時更新する",
+      "expectedOutcome": "success",
+      "setup": ["/setblock 3 101 0 gold_block"],
+      "assertions": [{ "type": "block_at", "x": 3, "y": 101, "z": 0, "block": "gold_block" }]
+    },
+    {
+      "skillName": "auto-update-state",
+      "args": [],
+      "description": "位置・体力・所持品・時刻・天候を共有ステートへ反映する",
+      "expectedOutcome": "success",
+      "setup": ["/give @s torch 3"],
+      "assertions": [{ "type": "inventory_count", "item": "torch", "minCount": 3 }]
+    }
+  ]
+}

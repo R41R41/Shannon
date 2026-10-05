@@ -6,6 +6,7 @@
 import { Vec3 } from 'vec3';
 import type { CustomBot } from '../types/CustomBot.js';
 import { createLogger } from '../../../utils/logger.js';
+import { digBlockVerified } from './digBlockVerified.js';
 import { PROTECTED_UTILITY_BLOCKS } from '../constants.js';
 
 const log = createLogger('Minebot:LOS');
@@ -30,13 +31,16 @@ export function checkBlockLineOfSight(
   bot: CustomBot,
   targetPos: Vec3,
   maxDistance: number = 5,
+  observerFeet: Vec3 = bot.entity.position,
 ): LOSResult {
   const block = bot.blockAt(targetPos);
   if (!block) {
     return { clear: false, message: `座標(${targetPos.x},${targetPos.y},${targetPos.z})にブロックがありません` };
   }
 
-  const eyePos = bot.entity.position.offset(0, bot.entity.height, 0);
+  // The optional observer position lets workstation navigation assess a
+  // candidate stance without moving the bot or mutating its live entity.
+  const eyePos = observerFeet.offset(0, bot.entity.height, 0);
   const targetCenter = targetPos.offset(0.5, 0.5, 0.5);
   const dist = eyePos.distanceTo(targetCenter);
   if (dist > maxDistance) {
@@ -166,7 +170,7 @@ export async function ensureLineOfSight(
 
     try {
       await bot.lookAt(obsBlock.position.offset(0.5, 0.5, 0.5));
-      await bot.dig(obsBlock);
+      await digBlockVerified(bot, obsBlock);
       dugBlocks.push(obsBlock.name);
     } catch (e) {
       return {
@@ -235,4 +239,3 @@ function isLOSTransparent(name: string): boolean {
   if (name === 'scaffolding') return true;
   return false;
 }
-

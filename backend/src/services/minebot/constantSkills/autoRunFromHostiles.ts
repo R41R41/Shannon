@@ -1,3 +1,4 @@
+import { isThreatEntity } from '../utils/hostileMobHints.js';
 import { ConstantSkill, CustomBot } from '../types.js';
 
 class AutoRunFromHostiles extends ConstantSkill {
@@ -23,12 +24,12 @@ class AutoRunFromHostiles extends ConstantSkill {
 
     const hostiles = Object.values(this.bot.entities).filter(
       (entity) =>
-        entity.type === 'hostile' &&
+        isThreatEntity(entity as any, undefined, Date.now(), this.bot as any) &&
         this.bot.entity.position.distanceTo(entity.position) <= this.distance
     );
     if (
       (!this.runIfFatal && hostiles.length > 0) ||
-      (this.runIfFatal && this.bot.health <= 5)
+      (this.runIfFatal && this.bot.health <= 5 && hostiles.length > 0)
     ) {
       await this.bot.utils.runFromEntities(this.bot, hostiles, this.radius);
     }

@@ -199,15 +199,9 @@ export class ConstantSkills {
 
     try {
       // タイムアウト処理
-      const timeoutPromise = new Promise((_, reject) => {
-        setTimeout(() => reject(new Error('Task timeout')), this.TASK_TIMEOUT);
-      });
-
-      // タスク実行
-      await Promise.race([
-        this.currentTask.skill.run(...this.currentTask.args),
-        timeoutPromise
-      ]);
+      // ConstantSkill owns its cancellable deadline. Do not release scheduler
+      // ownership while an async body is still able to write to the bot.
+      await this.currentTask.skill.run(...this.currentTask.args);
     } catch (error) {
       log.error('タスク実行エラー', error);
     } finally {
@@ -218,14 +212,18 @@ export class ConstantSkills {
 
   // スキルの実行を要求
   async requestExecution(skill: ConstantSkill, args: any[] = []) {
+    // Live survival work must not wait behind a persistent follow body, but
+    // still acquires the same physical lease and waits for its cancellation.
+    if (skill.wantsPreemption()) { await skill.run(...args); return; }
     this.addToQueue(skill, args);
   }
 
   // キューのクリア
   clearQueue() {
     this.taskQueue.clear();
-    this.isProcessing = false;
-    this.currentTask = null;
+    this.currentTask?.skill.cancel();
+    // The current body owns these fields until its finally; clearing queued
+    // work must not allow a concurrent successor to start.
   }
 
   // デストラクタ

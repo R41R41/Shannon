@@ -1,8 +1,14 @@
 import type { CustomBot } from '../types.js';
 
 /** LLM / ツール結果用の満杯時リカバリ（他スキルと文言を揃える） */
+/**
+ * What to do about a full pack, as the choices there are. It used to be an order: never drop anything, always
+ * put it in a chest or barrel under the open sky. A body with seven stacks of stone it had no use for, deep
+ * in a cave, could then neither mine nor drop: it crafted a chest it could not place and built walls to be
+ * rid of granite (paid runs L64, L74). What is worth keeping is the planner's to judge.
+ */
 export const INVENTORY_FULL_RECOVERY_HINT_JA =
-  '満杯になる前に空きが減ってきた段階で預けるのが望ましい。インベントリ満杯のまま捨ててはいけません。必ず deposit-to-container で**地上（天光の届く場所）の**チェストまたは樽に預けて空きを作る。洞窟内の収納は拒否される。地上へ出て find-blocks で chest / barrel を探すか、craft-one(chest) と place-block-at で屋外・天窓付近に設置してから預ける。地上に落ちたアイテムは pickup-nearest-item で回収したあとも、整理はチェスト預けで行う。';
+  '空きを作る方法は2つ: (a) 要らない物（余った丸石・安山岩・土など）は drop-item で捨てる。(b) 残したい物はチェストか樽に預ける（deposit-to-container。収納は地上＝天光の届く場所に置いたものだけ使える。無ければ craft-one(chest) と place-block-at で置く）。地上に落ちたアイテムは pickup-nearest-item で回収できる。';
 
 export function countItemInInventory(bot: CustomBot, itemName: string): number {
   return bot.inventory

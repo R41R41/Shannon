@@ -1,6 +1,7 @@
 import { Vec3 } from 'vec3';
 import { CustomBot, InstantSkill } from '../types.js';
 import { ensureLineOfSight } from '../utils/blockLineOfSight.js';
+import { digBlockVerified, ServerDigUnconfirmedError } from '../utils/digBlockVerified.js';
 
 /**
  * 原子的スキル: 作物を収穫する
@@ -84,19 +85,32 @@ class HarvestCrop extends InstantSkill {
 
       // 成長度チェック（age プロパティ）
       const properties = block.getProperties();
-      const age = properties.age;
-      const maxAge = block.type === 7 ? 7 : 3; // wheatは7、他は3が多い
+      // Prismarine block states can expose integer properties as strings.
+      const rawAge = properties.age;
+      const age = rawAge === undefined ? NaN : Number(rawAge);
+      // Numeric block IDs change between versions; the registry describes each
+      // crop's actual age range (wheat/carrot/potato 7, beetroot 3, cocoa 2).
+      const ageState = this.bot.registry.blocksByName[block.name]?.states?.find(state => state.name === 'age');
+      const maxAge = ageState ? ageState.num_values - 1 : undefined;
+
+      if (maxAge === undefined || !Number.isInteger(age) || age < 0 || age > maxAge) {
+        return { success: false, result: `${block.name}の成長度を確認できません`, failureType: 'crop_age_unknown' };
+      }
 
       if (age !== undefined && typeof age === 'number' && age < maxAge) {
         return {
           success: false,
           result: `${block.name}はまだ成長していません（成長度: ${age}/${maxAge}）`,
+          failureType: 'crop_immature',
         };
       }
 
       try {
-        await this.bot.dig(block);
+        await digBlockVerified(this.bot, block);
       } catch (actionError: any) {
+        if (actionError instanceof ServerDigUnconfirmedError) {
+          return { success: false, result: actionError.message, failureType: actionError.failureType, recoverable: true };
+        }
         const los = await ensureLineOfSight(this.bot, pos);
         if (!los.clear) {
           const failType = los.dugBlocks?.length ? 'obstruction_cleared' : 'line_of_sight_blocked';

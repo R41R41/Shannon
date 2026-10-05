@@ -5,6 +5,10 @@
  */
 
 import type { TaskEpisode } from '../TaskEpisodeMemory.js';
+import type {
+    MinecraftCommandAssertion,
+    MinecraftCommandAssertionResult,
+} from '../../../../minebot/testing/MinecraftCommandOracle.js';
 
 /** 削除した MetaCognitionLoop の評価ラベル。デーモンの失敗記録に欄だけ残している。 */
 export type MetaAssessment = 'on_track' | 'struggling' | 'stuck' | 'wrong_approach';
@@ -284,14 +288,22 @@ export interface TestCase {
     id: string;
     skillName: string;
     args: unknown[];
+    /** ConstantSkill の this.args へテスト前に適用する設定 */
+    constantArgs?: Record<string, unknown>;
     /** テスト内容の説明 */
     description: string;
     /** テスト前に実行するコマンド（/tp, /give, /clear 等） */
     setup?: string[];
+    /** setup後、状態変化（空腹・成長・AI移動など）を待つ時間 */
+    setupSettleMs?: number;
+    /** スキル完了後、サーバー側の死亡・ドロップ等が確定するまで待つ時間 */
+    postActionSettleMs?: number;
     /** テスト実行前の前提条件チェック */
     prechecks?: Precheck[];
     /** 期待される結果 */
     expectedOutcome: 'success' | 'failure' | 'either';
+    /** Minecraftサーバーの /execute 判定で確認する事後条件 */
+    assertions?: MinecraftCommandAssertion[];
 }
 
 /** テストスイート JSON ファイルの形式 */
@@ -306,6 +318,8 @@ export interface TestSuiteFile {
      *            cases は不要。goal と successCriteria を指定する。
      */
     mode?: 'default' | 'chain' | 'goal';
+    /** setupコマンドもtellraw barrierで処理確認する */
+    commandOracle?: boolean;
     /** 全テスト共通の setup */
     globalSetup?: string[];
     cases: Array<Omit<TestCase, 'id'>>;
@@ -338,6 +352,8 @@ export interface TestResult {
     passed: boolean;
     errorMessage: string | null;
     durationMs: number;
+    /** スキル自己申告とは独立したMinecraftサーバー側の事後条件 */
+    serverAssertions?: MinecraftCommandAssertionResult[];
 }
 
 export interface FixAttempt {

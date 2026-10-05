@@ -18,6 +18,7 @@
 import { mkdir, writeFile, readdir, readFile } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { Vec3 } from 'vec3';
 import { createLogger } from '../../../../../utils/logger.js';
 import { getBackendRoot } from '../../../../../utils/backendRoot.js';
 import { SkillPatcher } from './SkillPatcher.js';
@@ -32,12 +33,20 @@ import {
     type SelfTestRunReport,
 } from './types.js';
 import type { CustomBot } from '../../../../minebot/types.js';
+import {
+    MinecraftCommandOracle,
+    type MinecraftCommandAssertionResult,
+} from '../../../../minebot/testing/MinecraftCommandOracle.js';
 import { MinecraftGoalExecutor } from './MinecraftGoalExecutor.js';
 
 const log = createLogger('SelfTest:Runner');
 
 /** setup コマンドで許可されるプレフィックス */
-const ALLOWED_COMMANDS = ['/tp ', '/give ', '/clear', '/time ', '/weather ', '/gamemode ', '/effect ', '/summon ', '/fill ', '/setblock '];
+const ALLOWED_COMMANDS = [
+    '/tp ', '/give ', '/clear', '/time ', '/weather ', '/difficulty ',
+    '/gamemode ', '/effect ', '/summon ', '/kill ', '/fill ', '/setblock ', '/item ',
+    '/gamerule ', '/experience ', '/damage ',
+];
 
 /** setup コマンド実行後の待機時間 (ms) */
 const SETUP_DELAY_MS = 500;
@@ -45,8 +54,17 @@ const SETUP_DELAY_MS = 500;
 /** precheck 評価後の余裕待ち (ms) */
 const PRECHECK_DELAY_MS = 200;
 
+/**
+ * スキル完了直後に Mineflayer のローカル状態だけでなく、サーバーが
+ * interaction/dig/equipment packet を処理し終えるまで待つ時間。
+ * コマンド oracle はサーバー authoritative な検証なので、同一 tick 内で
+ * 競合させると正しい操作も未反映として観測してしまう。
+ */
+const POST_ACTION_SETTLE_MS = 350;
+
 export class SelfTestRunner {
     private patcher = new SkillPatcher();
+    private commandOracles = new WeakMap<object, MinecraftCommandOracle>();
 
     /** skillName → .ts ソースファイルパスのキャッシュ */
     private sourceFileCache: Map<string, string> | null = null;
@@ -62,9 +80,11 @@ export class SelfTestRunner {
             autoFix?: boolean;
             trigger?: 'manual' | 'auto' | 'api';
             persistReport?: boolean;
+            /** default-mode suite内で実行するスキルだけを選ぶ（反復診断用） */
+            skillNames?: string[];
         } = {},
     ): Promise<SelfTestRunReport> {
-        const { autoFix = false, trigger = 'manual', persistReport = true } = options;
+        const { autoFix = false, trigger = 'manual', persistReport = true, skillNames } = options;
         const runId = randomUUID().slice(0, 8);
         const startedAt = Date.now();
 
@@ -92,8 +112,14 @@ export class SelfTestRunner {
         }
 
         const isChain = suite.mode === 'chain';
+        if (isChain && skillNames && skillNames.length > 0) {
+            throw new Error('CHAIN_SUITE_SKILL_FILTER_UNSUPPORTED');
+        }
+        const selectedSkillNames = skillNames?.length ? new Set(skillNames) : null;
 
-        const testCases: TestCase[] = suite.cases.map((c, i) => ({
+        const testCases: TestCase[] = suite.cases
+          .filter(c => !selectedSkillNames || selectedSkillNames.has(c.skillName))
+          .map((c, i) => ({
             id: `${suiteName}-${i}`,
             ...c,
             setup: isChain
@@ -105,9 +131,9 @@ export class SelfTestRunner {
 
         if (isChain) {
             if (suite.globalSetup?.length) {
-                await this.executeSetup(bot, suite.globalSetup);
+                await this.executeSetup(bot, suite.globalSetup, suite.commandOracle === true);
             }
-            skillReports = await this.runChain(testCases, bot, autoFix);
+            skillReports = await this.runChain(testCases, bot, autoFix, suite.commandOracle === true);
         } else {
             const bySkill = new Map<string, TestCase[]>();
             for (const tc of testCases) {
@@ -119,7 +145,9 @@ export class SelfTestRunner {
             skillReports = [];
             for (const [skillName, cases] of bySkill) {
                 try {
-                    const report = await this.testSkillGroup(skillName, cases, bot, autoFix);
+                    const report = await this.testSkillGroup(
+                        skillName, cases, bot, autoFix, suite.commandOracle === true,
+                    );
                     skillReports.push(report);
 
                     const icon = report.finalStatus === 'pass' ? '✅' :
@@ -180,7 +208,11 @@ export class SelfTestRunner {
     async runMultiple(
         bot: CustomBot,
         suiteNames: string[],
-        options: { autoFix?: boolean; trigger?: 'manual' | 'auto' | 'api' } = {},
+        options: {
+            autoFix?: boolean;
+            trigger?: 'manual' | 'auto' | 'api';
+            skillNames?: string[];
+        } = {},
     ): Promise<SelfTestRunReport> {
         const { autoFix = false, trigger = 'manual' } = options;
         const runId = randomUUID().slice(0, 8);
@@ -281,6 +313,7 @@ export class SelfTestRunner {
         testCases: TestCase[],
         bot: CustomBot,
         autoFix: boolean,
+        commandOracle: boolean,
     ): Promise<SkillTestReport[]> {
         const reportsBySkill = new Map<string, SkillTestReport>();
         const chainHistory: Array<{ step: number; skill: string; description?: string; status: string; error?: string }> = [];
@@ -305,7 +338,7 @@ export class SelfTestRunner {
                 continue;
             }
 
-            const result = await this.executeSingleTest(bot, skillName, skillKind, tc);
+            const result = await this.executeSingleTest(bot, skillName, skillKind, tc, commandOracle);
 
             if (result.passed) {
                 const icon = '✅';
@@ -324,7 +357,7 @@ export class SelfTestRunner {
                     skillName, sourceFile, [result], bot, skillKind, chainContext,
                 );
                 if (fixed) {
-                    const retry = await this.executeSingleTest(bot, skillName, skillKind, tc);
+                    const retry = await this.executeSingleTest(bot, skillName, skillKind, tc, commandOracle);
                     if (fixAttempts.length > 0) {
                         fixAttempts[fixAttempts.length - 1].testPassed = retry.passed;
                     }
@@ -406,9 +439,13 @@ export class SelfTestRunner {
         skillName: string,
         skillKind: 'instant' | 'constant',
         tc: TestCase,
+        commandOracle: boolean,
     ): Promise<TestResult> {
         if (tc.setup && tc.setup.length > 0) {
-            await this.executeSetup(bot, tc.setup);
+            await this.executeSetup(bot, tc.setup, commandOracle);
+        }
+        if (tc.setupSettleMs && tc.setupSettleMs > 0) {
+            await new Promise(r => setTimeout(r, tc.setupSettleMs));
         }
 
         if (tc.prechecks && tc.prechecks.length > 0) {
@@ -439,6 +476,16 @@ export class SelfTestRunner {
                 passed = !skillResult.success;
             }
 
+            if (tc.assertions && tc.assertions.length > 0) {
+                await new Promise(r => setTimeout(r, tc.postActionSettleMs ?? POST_ACTION_SETTLE_MS));
+            }
+            const serverAssertions = await this.evaluateServerAssertions(bot, tc);
+            passed = passed && serverAssertions.every(result => result.passed);
+            const assertionError = serverAssertions
+                .filter(result => !result.passed)
+                .map(result => result.error ?? `server assertion failed: ${result.assertion.type}`)
+                .join('; ');
+
             return {
                 testCase: tc,
                 skillResult: {
@@ -449,8 +496,9 @@ export class SelfTestRunner {
                     duration: skillResult.duration,
                 },
                 passed,
-                errorMessage: passed ? null : skillResult.result,
+                errorMessage: passed ? null : assertionError || skillResult.result,
                 durationMs,
+                serverAssertions,
             };
         } catch (err: any) {
             return {
@@ -471,6 +519,7 @@ export class SelfTestRunner {
         testCases: TestCase[],
         bot: CustomBot,
         autoFix: boolean,
+        commandOracle: boolean,
     ): Promise<SkillTestReport> {
         const sourceFile = await this.resolveSourceFile(skillName) ?? '';
         const instant = bot.instantSkills.getSkill(skillName);
@@ -491,7 +540,7 @@ export class SelfTestRunner {
             };
         }
 
-        const initialResults = await this.executeTests(bot, skillName, skillKind, testCases);
+        const initialResults = await this.executeTests(bot, skillName, skillKind, testCases, commandOracle);
 
         const failedTests = initialResults.filter(r => !r.passed);
         if (failedTests.length === 0) {
@@ -542,7 +591,7 @@ export class SelfTestRunner {
             };
         }
 
-        const retestResults = await this.executeTests(bot, skillName, skillKind, testCases);
+        const retestResults = await this.executeTests(bot, skillName, skillKind, testCases, commandOracle);
         const retestFailed = retestResults.filter(r => !r.passed);
 
         if (fixAttempts.length > 0) {
@@ -566,12 +615,16 @@ export class SelfTestRunner {
         skillName: string,
         skillKind: 'instant' | 'constant',
         testCases: TestCase[],
+        commandOracle: boolean,
     ): Promise<TestResult[]> {
         const results: TestResult[] = [];
 
         for (const tc of testCases) {
             if (tc.setup && tc.setup.length > 0) {
-                await this.executeSetup(bot, tc.setup);
+                await this.executeSetup(bot, tc.setup, commandOracle);
+            }
+            if (tc.setupSettleMs && tc.setupSettleMs > 0) {
+                await new Promise(r => setTimeout(r, tc.setupSettleMs));
             }
 
             if (tc.prechecks && tc.prechecks.length > 0) {
@@ -591,7 +644,13 @@ export class SelfTestRunner {
 
             const start = Date.now();
             try {
-                const skillResult = await this.invokeSkillRun(bot, skillName, skillKind, tc.args);
+                const skillResult = await this.invokeSkillRun(
+                    bot,
+                    skillName,
+                    skillKind,
+                    tc.args,
+                    tc.constantArgs,
+                );
                 const durationMs = Date.now() - start;
 
                 let passed: boolean;
@@ -603,6 +662,16 @@ export class SelfTestRunner {
                     passed = !skillResult.success;
                 }
 
+                if (tc.assertions && tc.assertions.length > 0) {
+                    await new Promise(r => setTimeout(r, tc.postActionSettleMs ?? POST_ACTION_SETTLE_MS));
+                }
+                const serverAssertions = await this.evaluateServerAssertions(bot, tc);
+                passed = passed && serverAssertions.every(result => result.passed);
+                const assertionError = serverAssertions
+                    .filter(result => !result.passed)
+                    .map(result => result.error ?? `server assertion failed: ${result.assertion.type}`)
+                    .join('; ');
+
                 results.push({
                     testCase: tc,
                     skillResult: {
@@ -613,8 +682,9 @@ export class SelfTestRunner {
                         duration: skillResult.duration,
                     },
                     passed,
-                    errorMessage: passed ? null : skillResult.result,
+                    errorMessage: passed ? null : assertionError || skillResult.result,
                     durationMs,
+                    serverAssertions,
                 });
             } catch (err: any) {
                 results.push({
@@ -639,6 +709,7 @@ export class SelfTestRunner {
         skillName: string,
         skillKind: 'instant' | 'constant',
         args: unknown[],
+        constantArgs?: Record<string, unknown>,
     ): Promise<{
         success: boolean;
         result: string;
@@ -658,9 +729,44 @@ export class SelfTestRunner {
         if (!c) {
             return { success: false, result: `ConstantSkill 未登録: ${skillName}` };
         }
+        if (constantArgs) Object.assign(c.args, constantArgs);
+        const resolvedArgs = args.map(arg => {
+            if (typeof arg !== 'string') return arg;
+            if (arg.startsWith('$entity:')) {
+                const name = arg.slice('$entity:'.length).toLowerCase();
+                return Object.values(bot.entities)
+                    .filter(entity => entity !== bot.entity && entity.position)
+                    .filter(entity => (entity.name ?? entity.username ?? '').toLowerCase().includes(name))
+                    .sort((a, b) =>
+                        a.position.distanceTo(bot.entity.position)
+                        - b.position.distanceTo(bot.entity.position)
+                    )[0];
+            }
+            if (arg.startsWith('$block:')) {
+                const coordinates = arg.slice('$block:'.length).split(',').map(Number);
+                if (coordinates.length === 3 && coordinates.every(Number.isFinite)) {
+                    return bot.blockAt(new Vec3(
+                        coordinates[0], coordinates[1], coordinates[2],
+                    ));
+                }
+            }
+            return arg;
+        });
         const t0 = Date.now();
         try {
-            await c.run(...args as any);
+            if (skillName === 'auto-follow') {
+                const previousStatus = c.status;
+                c.status = true;
+                const timer = setTimeout(() => { c.status = false; }, 4_000);
+                try {
+                    await c.run(...resolvedArgs as any);
+                } finally {
+                    clearTimeout(timer);
+                    c.status = previousStatus;
+                }
+            } else {
+                await c.run(...resolvedArgs as any);
+            }
             return {
                 success: true,
                 result: 'constant run ok',
@@ -682,7 +788,9 @@ export class SelfTestRunner {
      * setup コマンドを bot.chat() で実行する。
      * 許可されたコマンドのみ実行（安全弁）。
      */
-    private async executeSetup(bot: CustomBot, commands: string[]): Promise<void> {
+    private async executeSetup(bot: CustomBot, commands: string[], commandOracle = false): Promise<void> {
+        const oracle = commandOracle ? this.commandOracle(bot) : null;
+        if (oracle) await oracle.verifyReady();
         for (const cmd of commands) {
             const trimmed = cmd.trim();
             if (!trimmed.startsWith('/')) {
@@ -695,9 +803,41 @@ export class SelfTestRunner {
             }
 
             log.info(`⚙️ setup: ${trimmed}`);
-            bot.chat(trimmed);
-            await new Promise(r => setTimeout(r, SETUP_DELAY_MS));
+            if (oracle) {
+                await oracle.executeSetupCommand(trimmed);
+                // Teleporting adds a chunk ticket, but terrain packets and
+                // command-side chunk availability can lag the tellraw barrier.
+                // Fixtures that immediately /fill or /setblock the destination
+                // must wait until that chunk is actually usable.
+                await new Promise(r => setTimeout(r, trimmed.startsWith('/tp ') ? 750 : 25));
+            } else {
+                bot.chat(trimmed);
+                await new Promise(r => setTimeout(r, SETUP_DELAY_MS));
+            }
         }
+        // The tellraw marker proves the server processed each command, but the
+        // corresponding entity/inventory/block packets can arrive at the
+        // Mineflayer client just after that marker. Give the client one short
+        // physics tick window before a skill reads the freshly prepared state.
+        if (oracle && commands.length > 0) {
+            await new Promise(r => setTimeout(r, 500));
+        }
+    }
+
+    private commandOracle(bot: CustomBot): MinecraftCommandOracle {
+        const existing = this.commandOracles.get(bot);
+        if (existing) return existing;
+        const created = new MinecraftCommandOracle(bot);
+        this.commandOracles.set(bot, created);
+        return created;
+    }
+
+    private async evaluateServerAssertions(
+        bot: CustomBot,
+        testCase: TestCase,
+    ): Promise<MinecraftCommandAssertionResult[]> {
+        if (!testCase.assertions || testCase.assertions.length === 0) return [];
+        return this.commandOracle(bot).evaluateAll(testCase.assertions);
     }
 
     /**
@@ -786,7 +926,7 @@ export class SelfTestRunner {
 
         // globalSetup 実行
         if (suite.globalSetup?.length) {
-            await this.executeSetup(bot, suite.globalSetup);
+            await this.executeSetup(bot, suite.globalSetup, suite.commandOracle === true);
         }
 
         const executor = new MinecraftGoalExecutor(bot);

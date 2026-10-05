@@ -1,5 +1,11 @@
+import pathfinder from 'mineflayer-pathfinder';
 import { Vec3 } from 'vec3';
 import { CustomBot, InstantSkill } from '../types.js';
+import { gotoSafe } from '../utils/gotoSafe.js';
+
+const { goals } = pathfinder;
+/** How far a cell's centre may be from the body's feet for a placement (place-block-at refuses beyond five). */
+const REACH = 4.2;
 
 /**
  * 原子的スキル: エリアを特定ブロックで埋める
@@ -87,32 +93,23 @@ class FillArea extends InstantSkill {
       const dz = Math.abs(z2 - z1) + 1;
       const totalBlocks = dx * dy * dz;
 
-      // 安全チェック（最大100ブロック）
-      if (totalBlocks > 100) {
+      // A bound on what is looked at; what is placed is bounded below by the cells that are empty.
+      if (totalBlocks > 1000) {
         return {
           success: false,
-          result: `範囲が大きすぎます（${totalBlocks}ブロック、最大100ブロックまで）`,
+          result: `範囲が大きすぎます（${totalBlocks}マス、最大1000マスまで）`,
         };
       }
 
-      // ブロックの所持数チェック
-      const item = this.bot.inventory
-        .items()
-        .find((item) => item.name === blockName);
-
-      if (!item) {
+      const held = () => this.bot.inventory.items().filter((entry) => entry.name === blockName).reduce((sum, entry) => sum + entry.count, 0);
+      if (held() === 0) {
         return {
           success: false,
           result: `${blockName}を持っていません`,
         };
       }
-
-      if (item.count < totalBlocks) {
-        return {
-          success: false,
-          result: `${blockName}が不足しています（必要: ${totalBlocks}個、所持: ${item.count}個）`,
-        };
-      }
+      const placer = this.bot.instantSkills?.getSkill('place-block-at');
+      if (!placer) return { success: false, result: 'place-block-at が使えません' };
 
       // 範囲の正規化
       const minX = Math.min(x1, x2);
@@ -122,90 +119,58 @@ class FillArea extends InstantSkill {
       const minZ = Math.min(z1, z2);
       const maxZ = Math.max(z1, z2);
 
-      // ブロックを順次設置
-      let placedCount = 0;
+      // What is to be filled is what is empty now: cells already holding a block need no item. The whole
+      // range used to be counted against a single stack ("needs 75, has 64" with 126 in the pack and half
+      // the range already stone), and a cell more than five blocks from where the body happened to stand
+      // ended the fill with nothing placed (paid run L64: eleven calls, seven blocks).
+      const open = (pos: Vec3) => { const block = this.bot.blockAt(pos); return !block || block.boundingBox !== 'block'; };
+      const pending: Vec3[] = [];
+      for (let y = minY; y <= maxY; y++) for (let x = minX; x <= maxX; x++) for (let z = minZ; z <= maxZ; z++) {
+        const pos = new Vec3(x, y, z);
+        if (open(pos)) pending.push(pos);
+      }
+      const wanted = pending.length;
+      if (wanted > 100) return { success: false, result: `埋める空きマスが多すぎます（${wanted}マス、1回に最大100マスまで）。範囲を分けてください` };
+      if (wanted === 0) return { success: true, result: `範囲(${minX},${minY},${minZ})〜(${maxX},${maxY},${maxZ})は既に埋まっています` };
 
-      for (let x = minX; x <= maxX; x++) {
-        // 中断チェック（外側ループで確認）
-        if (this.shouldInterrupt()) {
-          return {
-            success: placedCount > 0,
-            result: `中断: ${placedCount}個のブロックを設置しました`,
-          };
+      let placedCount = 0, consecutiveFailures = 0;
+      const failures = new Map<string, number>();
+      const fail = (reason: string) => { failures.set(reason, (failures.get(reason) ?? 0) + 1); consecutiveFailures++; };
+      const supported = (pos: Vec3) => [[0, -1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, 1, 0]]
+        .some(([dx, dy, dz]) => this.bot.blockAt(pos.offset(dx, dy, dz))?.boundingBox === 'block');
+      // Lowest layer first, and within it the nearest cell that has something to be placed against: each
+      // block laid is the support for the next.
+      while (pending.length && held() > 0 && consecutiveFailures < 6 && !this.shouldInterrupt()) {
+        const here = this.bot.entity.position;
+        const lowest = Math.min(...pending.filter(supported).map((pos) => pos.y));
+        const layer = pending.filter((pos) => pos.y === lowest && supported(pos));
+        if (!layer.length) break; // nothing left that touches a block
+        const next = layer.reduce((a, b) => (a.offset(0.5, 0.5, 0.5).distanceTo(here) <= b.offset(0.5, 0.5, 0.5).distanceTo(here) ? a : b));
+        pending.splice(pending.indexOf(next), 1);
+        if (next.offset(0.5, 0.5, 0.5).distanceTo(here) > REACH) {
+          const moved = await gotoSafe(this.bot, new goals.GoalNear(next.x, next.y, next.z, 3), { timeoutMs: 8000 });
+          if (this.shouldInterrupt()) break;
+          if (next.offset(0.5, 0.5, 0.5).distanceTo(this.bot.entity.position) > 5) { fail(`届く所まで行けない（${moved.error ?? '未到達'}）`); continue; }
         }
-
-        for (let y = minY; y <= maxY; y++) {
-          for (let z = minZ; z <= maxZ; z++) {
-            const pos = new Vec3(x, y, z);
-            const block = this.bot.blockAt(pos);
-
-            // 既にブロックがある場合はスキップ
-            if (block && block.name !== 'air') {
-              continue;
-            }
-
-            // 距離チェック（5m以内）
-            const distance = this.bot.entity.position.distanceTo(pos);
-            if (distance > 5) {
-              return {
-                success: false,
-                result: `座標(${x}, ${y}, ${z})が遠すぎます（距離: ${distance.toFixed(
-                  1
-                )}m）。${placedCount}個設置して中断しました`,
-              };
-            }
-
-            try {
-              // 参照ブロックを探す（隣接するブロック）
-              const referenceBlock = this.bot.blockAt(pos.offset(0, -1, 0));
-              if (!referenceBlock || referenceBlock.name === 'air') {
-                // 下にブロックがない場合は他の隣接ブロックを探す
-                const offsets = [
-                  [1, 0, 0],
-                  [-1, 0, 0],
-                  [0, 0, 1],
-                  [0, 0, -1],
-                ];
-                let foundReference = false;
-
-                for (const [ox, oy, oz] of offsets) {
-                  const ref = this.bot.blockAt(pos.offset(ox, oy, oz));
-                  if (ref && ref.name !== 'air') {
-                    foundReference = true;
-                    break;
-                  }
-                }
-
-                if (!foundReference) {
-                  continue; // 参照ブロックがない場合はスキップ
-                }
-              }
-
-              // ブロックを設置
-              await this.bot.equip(item, 'hand');
-              await this.bot.placeBlock(
-                this.bot.blockAt(pos.offset(0, -1, 0))!,
-                new Vec3(0, 1, 0)
-              );
-              placedCount++;
-            } catch (error) {
-              // 設置に失敗した場合はスキップ
-              continue;
-            }
-          }
+        const outcome = await placer.run(blockName, next.x, next.y, next.z);
+        if (outcome.success || !open(next)) { placedCount++; consecutiveFailures = 0; }
+        else {
+          const reason = String((outcome as { failureType?: string }).failureType ?? outcome.result).slice(0, 60);
+          fail(reason);
+          // Something stands in the cell that is not to be built over (a flower, a torch): not a sign that placing has stopped working.
+          if (reason === 'target_occupied') consecutiveFailures--;
         }
       }
 
-      if (placedCount === 0) {
-        return {
-          success: false,
-          result: '設置可能な場所がありませんでした',
-        };
-      }
-
+      const remaining = wanted - placedCount;
+      const why = [...failures].map(([reason, times]) => `${reason}×${times}`).join('、');
+      const range = `範囲: (${minX},${minY},${minZ})〜(${maxX},${maxY},${maxZ})`;
+      if (remaining === 0) return { success: true, result: `${blockName}を${placedCount}個設置しました（${range}）` };
+      const stopped = this.shouldInterrupt() ? '中断された' : held() === 0 ? `${blockName}が尽きた` : consecutiveFailures >= 6 ? '6回続けて置けなかった'
+        : '残りは周りに支えになるブロックが無い（空中）';
       return {
-        success: true,
-        result: `${blockName}を${placedCount}個設置しました（範囲: (${minX},${minY},${minZ})〜(${maxX},${maxY},${maxZ})）`,
+        success: placedCount > 0,
+        result: `${blockName}を${placedCount}個設置、残り${remaining}個は未設置（${stopped}${why ? `。${why}` : ''}）。${range}、残りの${blockName}: ${held()}個`,
       };
     } catch (error: any) {
       return {

@@ -27,7 +27,7 @@ class AttackNearest extends InstantSkill {
 
   async runImpl(entityName: string = '', maxDistance: number = 4.5) {
     try {
-      const refuse = shouldRefuseAggressiveCombat(this.bot);
+      const refuse = shouldRefuseAggressiveCombat(this.bot, entityName);
       if (refuse) {
         return { success: false, result: refuse };
       }

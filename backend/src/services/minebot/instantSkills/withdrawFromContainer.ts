@@ -8,6 +8,7 @@ import {
   inventoryNoEmptySlots,
   INVENTORY_FULL_RECOVERY_HINT_JA,
 } from '../utils/inventorySpillDetection.js';
+import { actionDelay } from '../execution/observedWait.js';
 
 /**
  * 原子的スキル: コンテナからアイテムを取り出す
@@ -119,6 +120,7 @@ class WithdrawFromContainer extends InstantSkill {
         };
       }
 
+      let containerClosed = false;
       try {
         // コンテナ内のアイテムを探す
         const containerItems = container.containerItems();
@@ -153,11 +155,12 @@ class WithdrawFromContainer extends InstantSkill {
         }
 
         container.close();
+        containerClosed = true;
 
-        await new Promise(r => setTimeout(r, 450));
+        await actionDelay(this.bot, 450);
         let gained = countItemInInventory(this.bot, itemName) - beforeInv;
         if (gained < withdrawCount) {
-          await new Promise(r => setTimeout(r, 350));
+          await actionDelay(this.bot, 350);
           gained = countItemInInventory(this.bot, itemName) - beforeInv;
         }
 
@@ -188,7 +191,8 @@ class WithdrawFromContainer extends InstantSkill {
             `${itemName}を${gained}個のみ取り出せました（要求${withdrawCount}個）。pickup-nearest-itemを試すか、インベントリを整理してください。`,
         };
       } catch (error: any) {
-        container.close();
+        // A cancelled settle wait after close must not re-copy the stale window.
+        if (!containerClosed) container.close();
         throw error;
       }
     } catch (error: any) {

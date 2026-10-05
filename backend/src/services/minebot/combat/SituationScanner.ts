@@ -7,7 +7,7 @@
 
 import type { CustomBot } from '../types/CustomBot.js';
 import { getMobProfile, isHostileMob } from './MobProfiles.js';
-import type { SituationVector, HostileInfo, CombatConfig } from './types.js';
+import type { SituationVector, HostileInfo, CombatConfig, MobProfile } from './types.js';
 import { DEFAULT_COMBAT_CONFIG } from './types.js';
 
 // 武器のダメージ + クールダウンテーブル
@@ -34,6 +34,12 @@ const WEAPON_STATS: Record<string, { damage: number; cooldownMs: number }> = {
 };
 
 const WEAPON_NAMES = new Set(Object.keys(WEAPON_STATS));
+
+// Vanilla armour points are slot-specific, not a constant per material.
+const ARMOR_POINTS: Record<string, readonly number[]> = {
+    netherite: [3, 8, 6, 3], diamond: [3, 8, 6, 3], iron: [2, 6, 5, 2],
+    chainmail: [2, 5, 4, 1], golden: [2, 5, 3, 1], leather: [1, 3, 2, 1],
+};
 
 // #17 fix: 実際に足元に積めるブロック名
 const PLACEABLE_BLOCKS = new Set([
@@ -86,7 +92,7 @@ export class SituationScanner {
         const hasHighGround = hostiles.some(h =>
             h.entity.position.y < pos.y - 0.5
         );
-        const inWater = this.bot.entity.isInWater;
+        const inWater = Boolean((this.bot.entity as typeof this.bot.entity & { isInWater?: boolean }).isInWater);
 
         // #23 fix: 武器種別でクールダウンを変える
         const now = Date.now();
@@ -151,21 +157,16 @@ export class SituationScanner {
     }
 
     private calcArmorPoints(): number {
-        // 簡易: 装備スロットの名前からポイントを推定
         let points = 0;
         const slots = ['head', 'torso', 'legs', 'feet'] as const;
         const slotIndices = slots.map(s => this.bot.getEquipmentDestSlot(s));
 
-        for (const idx of slotIndices) {
+        for (const [slotIndex, idx] of slotIndices.entries()) {
             const item = this.bot.inventory.slots[idx];
             if (!item) continue;
             const name = item.name;
-            if (name.includes('netherite')) points += 4;
-            else if (name.includes('diamond')) points += 3.5;
-            else if (name.includes('iron')) points += 2.5;
-            else if (name.includes('chainmail')) points += 2;
-            else if (name.includes('golden')) points += 1.5;
-            else if (name.includes('leather')) points += 1;
+            const material = name.split('_')[0];
+            points += ARMOR_POINTS[material]?.[slotIndex] ?? (name === 'turtle_helmet' ? 2 : 0);
         }
         return Math.min(20, points);
     }

@@ -1,6 +1,9 @@
 import { Vec3 } from 'vec3';
+import pathfinder from 'mineflayer-pathfinder';
 import { CustomBot, InstantSkill } from '../types.js';
 import { gotoSafe } from '../utils/gotoSafe.js';
+
+const { goals } = pathfinder;
 
 /**
  * 原子的スキル: ポータルに入って次元移動
@@ -70,8 +73,6 @@ class EnterPortal extends InstantSkill {
         : '不明';
 
       // ポータルの位置に移動
-      const pathfinder = require('mineflayer-pathfinder');
-      const { goals } = pathfinder;
       const goal = new goals.GoalBlock(x, y, z);
 
       const moveResult = await gotoSafe(this.bot, goal, { timeoutMs: 20_000 });

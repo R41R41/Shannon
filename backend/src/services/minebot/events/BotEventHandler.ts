@@ -1,8 +1,11 @@
+import { engagedWith, isEngaged } from '../utils/engagement.js';
 import { BaseMessage } from '@langchain/core/messages';
 import { EventReactionSystem } from '../eventReaction/EventReactionSystem.js';
 import { MinebotTaskRuntime } from '../runtime/MinebotTaskRuntime.js';
 import { CustomBot } from '../types.js';
 import { createLogger } from '../../../utils/logger.js';
+import { Vec3 } from 'vec3';
+import { BURIED_AT } from '../utils/bodyPose.js';
 
 const log = createLogger('Minebot:Event');
 
@@ -16,9 +19,12 @@ export class BotEventHandler {
     private recentMessages: BaseMessage[];
     private lastHealth: number = 20;
     private lastOxygen: number = 20;  // 酸素の最大値は20
+    private suffocationCheckPending = false;
     private consecutiveDamageCount: number = 0;
     private lastDamageTime: number = 0;
     private lastDeathMessage: string = '';  // Minecraftの死亡メッセージ
+    /** A death since the last spawn. A spawn also follows every pass through a portal, and that is no death. */
+    private diedSinceSpawn = false;
     private eventReactionSystem: EventReactionSystem | null = null;
 
     constructor(bot: CustomBot, taskRuntime: MinebotTaskRuntime, recentMessages: BaseMessage[]) {
@@ -42,6 +48,7 @@ export class BotEventHandler {
         this.registerEntitySpawn();
         this.registerEntityHurt();
         this.registerHealth();
+        this.registerBreath();
         this.registerBlockUpdate();
         this.registerEntityMove();
         this.registerBossbar();
@@ -112,11 +119,19 @@ export class BotEventHandler {
                 //   3. 一撃で大ダメージ（40%以上 = 8HP以上）
                 // それ以外（HP 15/20で落下ダメージ等）は autoEat に任せる
                 const isCriticalHP = currentHealth <= 10;
-                const isUnderAttack = this.consecutiveDamageCount >= 3;
+                // In a fight the planner chose, being hit again and again is the fight, not news: what is left
+                // to stop it is the body's own state (see engagement).
+                const isUnderAttack = this.consecutiveDamageCount >= 3 && !isEngaged(this.bot);
                 const isMassiveDamage = damagePercent >= 40;
 
-                if (this.eventReactionSystem && (isCriticalHP || isUnderAttack || isMassiveDamage)) {
-                    const reason = isCriticalHP ? 'HP危険域' : isUnderAttack ? '連続攻撃' : '大ダメージ';
+                // A hit the server names a mob for, from beyond where hostiles are watched (or by a kind not
+                // known as hostile), is an attack however much health is left: see attackerBeyondWatch.
+                let attacker: string | null = null;
+                try { attacker = this.eventReactionSystem?.attackerBeyondWatch?.() ?? null; } catch { attacker = null; }
+                if (engagedWith(this.bot, attacker)) attacker = null;
+
+                if (this.eventReactionSystem && (isCriticalHP || isUnderAttack || isMassiveDamage || attacker)) {
+                    const reason = isCriticalHP ? 'HP危険域' : isUnderAttack ? '連続攻撃' : isMassiveDamage ? '大ダメージ' : `${attacker}に攻撃された`;
                     log.error(`🚨 緊急対応トリガー: ${reason}`);
 
                     await this.eventReactionSystem.handleDamage({
@@ -136,24 +151,7 @@ export class BotEventHandler {
                 this.consecutiveDamageCount = 0;
             }
 
-            // 窒息検知（水中または埋まっている状態でHPが減っている）
-            const entity = this.bot.entity as any;
-            if (entity?.isInWater || entity?.isCollidedVertically) {
-                const oxygen = this.bot.oxygenLevel || 20;
-                // 酸素が大きく減った（3以上）または、酸素が半分以下でHPが減っている
-                if (oxygen < this.lastOxygen - 3 || (oxygen < 10 && currentHealth < this.lastHealth)) {
-                    log.error(`⚠️ 窒息検知 (酸素: ${oxygen}/20, HP: ${currentHealth}/20)`);
-
-                    if (this.eventReactionSystem) {
-                        await this.eventReactionSystem.handleSuffocation({
-                            oxygen,
-                            health: currentHealth,
-                            isInWater: entity?.isInWater || false,
-                        });
-                    }
-                }
-                this.lastOxygen = oxygen;
-            }
+            await this.checkSuffocation(currentHealth, this.lastHealth);
 
             this.lastHealth = currentHealth;
 
@@ -170,6 +168,44 @@ export class BotEventHandler {
                 log.error('autoEat エラー', error);
             }
         });
+    }
+
+    /** Mineflayer emits breath when air_supply changes; detect drowning before HP loss. */
+    private registerBreath(): void {
+        this.bot.on('breath', () => { void this.checkSuffocation(this.bot.health ?? 0, this.lastHealth); });
+    }
+
+    private headInsideSolidBlock(): boolean {
+        const position = this.bot.entity?.position;
+        if (!position) return false;
+        try {
+            // A block right over the feet's cell (the body cannot even crouch). Under a ceiling higher than
+            // that the server holds the body crouched and the head is not inside anything.
+            const head = this.bot.blockAt(new Vec3(Math.floor(position.x), Math.floor(position.y + BURIED_AT), Math.floor(position.z)));
+            return head?.boundingBox === 'block';
+        } catch { return false; }
+    }
+
+    private async checkSuffocation(currentHealth: number, previousHealth: number): Promise<void> {
+        const rawOxygen = this.bot.oxygenLevel;
+        const oxygen = Number.isFinite(rawOxygen) ? rawOxygen : null;
+        const inWater = (this.bot.entity as any)?.isInWater === true;
+        const drowning = inWater && oxygen !== null && oxygen < 10
+            && (oxygen < this.lastOxygen || currentHealth < previousHealth);
+        // Vertical collision alone also occurs while standing on ordinary ground.
+        const embedded = currentHealth < previousHealth && this.headInsideSolidBlock();
+        if (oxygen !== null) this.lastOxygen = oxygen;
+        if ((!drowning && !embedded) || !this.eventReactionSystem || this.suffocationCheckPending) return;
+
+        this.suffocationCheckPending = true;
+        try {
+            log.error(`⚠️ 窒息検知 (酸素: ${oxygen ?? '不明'}/20, HP: ${currentHealth}/20)`);
+            await this.eventReactionSystem.handleSuffocation({ oxygen, health: currentHealth, isInWater: inWater });
+        } catch (error) {
+            log.error('窒息緊急対応エラー', error);
+        } finally {
+            this.suffocationCheckPending = false;
+        }
     }
 
     /**
@@ -322,6 +358,7 @@ export class BotEventHandler {
             }
 
             log.error(`💀 ボット死亡: ${this.lastDeathMessage}`);
+            this.diedSinceSpawn = true;
 
             // 即座にタスクを失敗させてemergencyModeをリセット（pathfinder等も停止）
             if (this.taskRuntime.isRunning()) {
@@ -337,8 +374,10 @@ export class BotEventHandler {
         this.bot.on('spawn', async () => {
             log.success('🔄 Bot has respawned');
 
-            // deathイベントで処理済みだが、フォールバックとして残す
-            if (this.taskRuntime.isRunning()) {
+            // deathイベントで処理済みだが、フォールバックとして残す。ポータルを通った時の spawn は死亡ではない:
+            // そのタスクはディメンションの変化として実行時の側が扱う（paid run L88: ネザーに着いた瞬間に「死亡により
+            // タスク失敗」とされていた）。
+            if ((this.diedSinceSpawn || this.lastHealth <= 0) && this.taskRuntime.isRunning()) {
                 const deathReason = this.lastDeathMessage || '死亡によりタスク失敗';
                 this.taskRuntime.failCurrentTaskDueToDeath(deathReason);
             }
@@ -348,6 +387,7 @@ export class BotEventHandler {
             this.lastOxygen = 20;
             this.consecutiveDamageCount = 0;
             this.lastDeathMessage = '';
+            this.diedSinceSpawn = false;
         });
     }
 
@@ -424,4 +464,3 @@ export class BotEventHandler {
         });
     }
 }
-
