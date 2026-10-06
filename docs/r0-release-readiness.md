@@ -41,7 +41,7 @@
 - `backend/scripts/user-binding-migration.mjs`：既定dry run。明示した利用者ID・UID・権限・レビュアーからplanとhashを作る。旧管理者フラグやメールだけで自動移行しない。
 - applyは**VM dev / shannon_dev限定**（`user-binding-migration.mjs`）。**本番 apply** は `apply-prod-user-binding.mjs` で別手順（2026-08-30 実施済）。
 - `/api/health`はliveness、`/api/ready`はDB・LLM初期化・Web認証設定の最低条件を返す。readiness 200だけでFirebase実認証・全bot・リリース安全性を証明しない。
-- devの本番workflow定義からmain pushによる自動反映を外し、手動のcandidate確認に変更。hard reset・npm ci・再起動をしない。**未pushなのでGitHub上の現行workflowはまだ旧定義**。
+- devの本番workflow定義からmain pushによる自動反映を外し、手動のcandidate確認に変更。hard reset・npm ci・再起動をしない。（2026-10-06 確認: GitHub の main の `deploy-production.yml` も `workflow_dispatch` のみで、main への push では本番に反映されない。本番への反映は手動実行でレビュー済みの release_sha を指定した時だけ）。
 - `scripts/release-preflight.py`は読み取り専用で、未完の実接続・移行・切替条件を明示して停止する。自動デプロイや自己承認の機構ではない。
 
 ## ランタイムとDB復元の実績

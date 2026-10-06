@@ -107,7 +107,7 @@ Shannon is an autonomous AI agent platform (Minecraft bot, Discord bot, Twitter 
 
 ### 本番CD・リリースの現状
 
-最新状態は `docs/r0-release-readiness.md`。devのworkflow定義はmain自動反映から手動candidate検証へ変更済みだが、未pushのためGitHubは旧定義のまま。本番へpush/mergeしない。実切替はUID/資格情報・限定実機・復旧・機能制限を確認した別工程。
+最新状態は `docs/r0-release-readiness.md`。本番workflowは手動candidate検証（`workflow_dispatch` の release_sha 指定）だけで、GitHub の main への push では本番に反映されない（2026-10-06 確認）。本番への反映（手動実行）はユーザーの承認を得た別工程。実切替はUID/資格情報・限定実機・復旧・機能制限を確認した別工程。
 
 ## Shannon開発方針（2026-08-28）
 
