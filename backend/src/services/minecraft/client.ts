@@ -20,7 +20,19 @@ const SERVER_TMUX_SESSIONS: Record<string, string> = {
   '1.19.0-youtube': 'minecraft-youtube-old',
   '1.21.1-play': 'minecraft-play',
   '1.21.11-fabric-test': 'minecraft-test-12111',
+  'shannon-home': 'shannon-home',
 };
+
+// A server whose start.sh runs tmux on its own socket (`tmux -L <socket>`): its session is looked up there.
+const SERVER_TMUX_SOCKETS: Record<string, string> = {
+  'shannon-home': 'shannon-home',
+};
+
+/** The tmux command that lists a server's sessions (its own socket, or the default one). */
+export function tmuxListSessionsCommand(serverName: string): string {
+  const socket = SERVER_TMUX_SOCKETS[serverName];
+  return socket ? `tmux -L ${socket} list-sessions 2>/dev/null || true` : 'tmux list-sessions 2>/dev/null || true';
+}
 
 // start.sh に渡す追加引数のマッピング（ワールド名など）
 const SERVER_START_ARGS: Record<string, string> = {
@@ -38,6 +50,7 @@ export class MinecraftClient extends BaseClient {
     '1.19.0-youtube',
     '1.21.1-play',
     '1.21.11-fabric-test',
+    'shannon-home',
   ];
   private readonly SERVER_BASE_PATH = config.minecraft.serverBasePath;
   public isDev: boolean = false;
@@ -101,7 +114,8 @@ export class MinecraftClient extends BaseClient {
         // stop.shがない場合はtmuxでstopコマンドを送信
         const tmuxSession = SERVER_TMUX_SESSIONS[serverName];
         if (tmuxSession) {
-          await execAsync(`tmux send-keys -t ${tmuxSession} "stop" Enter`);
+          const socket = SERVER_TMUX_SOCKETS[serverName];
+          await execAsync(`tmux${socket ? ` -L ${socket}` : ''} send-keys -t ${tmuxSession} "stop" Enter`);
           // 停止を待つ
           await new Promise(resolve => setTimeout(resolve, 5000));
         }
@@ -123,7 +137,7 @@ export class MinecraftClient extends BaseClient {
       // tmuxセッションを確認
       const tmuxSession = SERVER_TMUX_SESSIONS[serverName];
       if (tmuxSession) {
-        const { stdout } = await execAsync('tmux list-sessions 2>/dev/null || true');
+        const { stdout } = await execAsync(tmuxListSessionsCommand(serverName));
         const isRunning = stdout.includes(tmuxSession);
         this.serverStatuses.set(serverName, isRunning);
         return isRunning ? 'running' : 'stopped';

@@ -8,50 +8,127 @@ import { listenToPlayerChat } from '../../src/services/minebot/integration/gameC
 import { MinebotCompanionBody } from '../../src/services/minebot/integration/MinebotCompanionBody.js';
 import { companionBodyNow } from '../../src/services/minebot/integration/companionBodyParts.js';
 import type { CompanionRequest, CompanionTurn } from '../../src/services/minebot/integration/CompanionBodyClient.js';
+import { bindMinecraftMemory, minecraftMemoryContext } from '../../src/services/minebot/runtime/memoryContext.js';
+import { performOpsCommand } from '../../src/services/integration/shannonOpsCommands.js';
+import { tmuxListSessionsCommand } from '../../src/services/minecraft/client.js';
 
 const OWNER = 'b9191317-c52d-4d67-85fe-ab831e6db146';
 const SELF = '11111111-1111-1111-1111-111111111111';
 const MALLORY = '44444444-4444-4444-4444-444444444444';
 const REQUEST_ID = '7d0c1c5e-3b0a-4a51-9c58-2f6a8f0f3b11';
-const builtInServers = { '1.19.0-youtube': 25564, '1.21.1-play': 25565, '1.21.11-fabric-youtube': 25566, '1.21.11-fabric-test': 25567 };
-const settings = {
-  url: 'http://127.0.0.1:4329', tokenFile: '/run/companion-body.token', serverId: 'home-world',
-  serverName: 'shannon-home', serverPort: '25560', serverVersion: '1.21.11', uiModBaseUrl: 'http://127.0.0.1:8086',
+const knownServers = {
+  '1.19.0-youtube': { port: 25564, version: '1.19.0' }, '1.21.1-play': { port: 25565, version: '1.21.1' },
+  '1.21.11-fabric-youtube': { port: 25566, version: '1.21.11' }, '1.21.11-fabric-test': { port: 25567, version: '1.21.11' },
+  'shannon-home': { port: 25560, version: '1.21.11' },
 };
+const settings = {
+  url: 'http://127.0.0.1:4329', tokenFile: '/run/companion-body.token', serverId: 'shannon-home', serverName: 'shannon-home',
+};
+// The identity of shannon-home's world (docs/minebot-companion-body.md); a regenerated world gets a new worldId.
+const homeIdentity = (environment: 'dev' | 'prod') => JSON.stringify({ version: 1, environment, bindings: [
+  { name: 'shannon-home', host: '127.0.0.1', port: 25560, serverId: 'shannon-home', worldId: 'shannon_home-20261006' }] });
 
 describe('companion body settings', () => {
-  const parse = (raw: Record<string, string>) => parseCompanionBodySettings(raw, { builtInServers, parseUiModBaseUrl });
+  const parse = (raw: Record<string, string>) => parseCompanionBodySettings(raw,
+    { knownServers, companionWorlds: ['shannon-home'], parseUiModBaseUrl });
 
   it('is off when nothing is set, and off (fail closed) when anything is missing or unsafe', () => {
     expect(parse({})).toEqual({ enabled: false, reason: null });
     expect(parse({ ...settings, tokenFile: '' })).toEqual({ enabled: false, reason: 'COMPANION_BODY_CONFIG_INCOMPLETE:tokenFile' });
     expect(parse({ ...settings, url: 'https://sh4nnon.com' })).toMatchObject({ enabled: false, reason: 'COMPANION_BODY_URL_MUST_BE_LOOPBACK' });
     // Never the YouTube or shared worlds: neither their names nor their ports.
-    expect(parse({ ...settings, serverName: '1.21.11-fabric-youtube' })).toMatchObject({ enabled: false, reason: 'COMPANION_BODY_SERVER_NAME_BUILT_IN' });
-    expect(parse({ ...settings, serverPort: '25566' })).toMatchObject({ enabled: false, reason: 'COMPANION_BODY_SERVER_PORT_BUILT_IN' });
+    expect(parse({ ...settings, serverName: '1.21.11-fabric-youtube' })).toMatchObject({ enabled: false, reason: 'COMPANION_BODY_SERVER_NAME_SHARED' });
+    expect(parse({ ...settings, serverName: 'other-home', serverPort: '25566', serverVersion: '1.21.11' }))
+      .toMatchObject({ enabled: false, reason: 'COMPANION_BODY_SERVER_PORT_SHARED' });
+    expect(parse({ ...settings, serverPort: '25561' })).toMatchObject({ enabled: false, reason: 'COMPANION_BODY_SERVER_PORT_MISMATCH' });
+    expect(parse({ ...settings, serverVersion: '1.21.4' })).toMatchObject({ enabled: false, reason: 'COMPANION_BODY_SERVER_VERSION_MISMATCH' });
+    expect(parse({ ...settings, serverName: 'other-home' })).toMatchObject({ enabled: false, reason: 'COMPANION_BODY_CONFIG_INCOMPLETE:serverPort' });
+    expect(parse({ ...settings, serverName: 'other-home', serverPort: '25590', serverVersion: 'latest' }))
+      .toMatchObject({ enabled: false, reason: 'COMPANION_BODY_SERVER_VERSION_INVALID' });
     expect(parse({ ...settings, serverName: 'shannon home' })).toMatchObject({ enabled: false, reason: 'COMPANION_BODY_SERVER_NAME_INVALID' });
-    expect(parse({ ...settings, serverVersion: 'latest' })).toMatchObject({ enabled: false, reason: 'COMPANION_BODY_SERVER_VERSION_INVALID' });
     expect(parse({ ...settings, uiModBaseUrl: 'http://10.0.0.5:8095' })).toMatchObject({ enabled: false, reason: 'COMPANION_BODY_UI_MOD_URL_INVALID' });
+    // shannon-home's port and version come from the table.
     expect(parse(settings)).toEqual({ enabled: true, url: 'http://127.0.0.1:4329', tokenFile: '/run/companion-body.token',
-      serverId: 'home-world', serverName: 'shannon-home', serverPort: 25560, serverVersion: '1.21.11', uiModBaseUrl: 'http://127.0.0.1:8086' });
+      serverId: 'shannon-home', serverName: 'shannon-home', serverPort: 25560, serverVersion: '1.21.11', uiModBaseUrl: null });
+    expect(parse({ ...settings, serverName: 'other-home', serverPort: '25590', serverVersion: '1.21.11' }))
+      .toMatchObject({ enabled: true, serverName: 'other-home', serverPort: 25590 });
   });
 
-  it('off: the server table and UI mod ports are as before; on: only the dedicated world is added and gets its UI mod', () => {
+  it('shannon-home is in the table at 25560 / 1.21.11 with its UI mod at 8086; the mode is off and the other servers are as before', () => {
     const minebot = new MinebotConfig();
-    const before = { ...minebot.MINECRAFT_SERVERS };
     expect(minebot.COMPANION_BODY).toEqual({ enabled: false, reason: null });
-    for (const name of Object.keys(before)) expect(minebot.companionBodyFor(name)).toBeNull();
-    expect(minebot.getUiModBaseUrl('1.21.11-fabric-test')).toBe(`http://${minebot.UI_MOD_HOST}:8085`);
-
-    minebot.useCompanionBody(parseCompanionBodySettings(settings, { builtInServers: before, parseUiModBaseUrl }));
-    expect(minebot.MINECRAFT_SERVERS).toEqual({ ...before, 'shannon-home': 25560 });
-    expect(minebot.getUiModBaseUrl('shannon-home')).toBe('http://127.0.0.1:8086');
+    expect(minebot.MINECRAFT_SERVERS).toEqual({ '1.21.4-test': 25566, '1.19.0-youtube': 25564, '1.21.1-play': 25565,
+      '1.21.4-fabric-youtube': 25566, '1.21.11-fabric-youtube': 25566, '1.21.11-fabric-test': 25567, 'shannon-home': 25560 });
+    for (const name of Object.keys(minebot.MINECRAFT_SERVERS)) expect(minebot.companionBodyFor(name)).toBeNull();
     expect(minebot.serverVersion('shannon-home')).toBe('1.21.11');
     expect(minebot.serverVersion('1.21.11-fabric-test')).toBe('1.21.11');
+    expect(minebot.serverVersion('1.19.0-youtube')).toBe('1.19.0');
+    expect(minebot.getUiModBaseUrl('shannon-home')).toBe(`http://${minebot.UI_MOD_HOST}:8086`);
     expect(minebot.getUiModBaseUrl('1.21.11-fabric-test')).toBe(`http://${minebot.UI_MOD_HOST}:8085`);
-    expect(minebot.companionBodyFor('shannon-home')?.serverId).toBe('home-world');
+    expect(minebot.getUiModBaseUrl('1.21.4-test')).toBe(`http://${minebot.UI_MOD_HOST}:8081`);
+  });
+
+  it('on: the mode applies to shannon-home only, and may name its UI mod', () => {
+    const minebot = new MinebotConfig();
+    const before = { ...minebot.MINECRAFT_SERVERS };
+    minebot.useCompanionBody(parseCompanionBodySettings({ ...settings, uiModBaseUrl: 'http://127.0.0.1:8086' }, minebot.companionBodyParseOptions()));
+    expect(minebot.MINECRAFT_SERVERS).toEqual(before);
+    expect(minebot.getUiModBaseUrl('shannon-home')).toBe('http://127.0.0.1:8086');
+    expect(minebot.companionBodyFor('shannon-home')?.serverId).toBe('shannon-home');
     expect(minebot.companionBodyFor('1.21.11-fabric-test')).toBeNull();
     expect(minebot.companionBodyFor('1.21.11-fabric-youtube')).toBeNull();
+    expect(minebot.getUiModBaseUrl('1.21.11-fabric-test')).toBe(`http://${minebot.UI_MOD_HOST}:8085`);
+    // A new server name joins the table with its own port and version.
+    const other = new MinebotConfig();
+    other.useCompanionBody(parseCompanionBodySettings({ ...settings, serverName: 'other-home', serverPort: '25590', serverVersion: '1.21.4' },
+      other.companionBodyParseOptions()));
+    expect(other.MINECRAFT_SERVERS['other-home']).toBe(25590);
+    expect(other.serverVersion('other-home')).toBe('1.21.4');
+  });
+
+  it('with shannon-home\'s world identity configured, its connection binds world memory and the other servers stay unbound', () => {
+    const minebot = new MinebotConfig();
+    const environment = minebot.IS_DEV ? 'dev' : 'prod';
+    const previous = process.env.MINECRAFT_MEMORY_IDENTITIES;
+    try {
+      expect(minebot.getMemoryIdentity('shannon-home')).toBeNull();
+      process.env.MINECRAFT_MEMORY_IDENTITIES = homeIdentity(environment);
+      const identity = minebot.getMemoryIdentity('shannon-home');
+      expect(identity).toEqual({ serverId: `${environment}:shannon-home`, worldId: 'shannon_home-20261006' });
+      for (const name of Object.keys(minebot.MINECRAFT_SERVERS).filter(name => name !== 'shannon-home')) {
+        expect(minebot.getMemoryIdentity(name)).toBeNull();
+      }
+      // What client.ts does on connect: the bot is bound to that world (server, world, dimension).
+      const bot = Object.assign(new EventEmitter(), { game: { dimension: 'minecraft:overworld' } });
+      bindMinecraftMemory(bot, identity);
+      expect(minecraftMemoryContext(bot as any)).toEqual({ serverId: `${environment}:shannon-home`, worldId: 'shannon_home-20261006',
+        dimension: 'minecraft:overworld' });
+      const other = Object.assign(new EventEmitter(), { game: { dimension: 'minecraft:overworld' } });
+      bindMinecraftMemory(other, minebot.getMemoryIdentity('1.21.11-fabric-test'));
+      expect(minecraftMemoryContext(other as any)).toBeNull();
+    } finally {
+      if (previous === undefined) delete process.env.MINECRAFT_MEMORY_IDENTITIES;
+      else process.env.MINECRAFT_MEMORY_IDENTITIES = previous;
+    }
+  });
+
+  it('the management window can start the Minebot on shannon-home, and the server is watched on its own tmux socket', async () => {
+    const dispatched: any[] = [];
+    const statuses: Record<string, string> = { 'minecraft:shannon-home': 'running', 'minebot:bot': 'stopped' };
+    const actions = {
+      dispatch: async (service: string, command: string, serverName?: string) => {
+        dispatched.push([service, command, serverName]);
+        if (service === 'minebot:bot' && command === 'start') statuses['minebot:bot'] = 'running';
+        return true;
+      },
+      statusOf: (service: string) => statuses[service] as any,
+      scheduleNames: () => [], runSchedule: async () => {}, labRunning: async () => false,
+    };
+    expect(await performOpsCommand({ id: 'c1', type: 'minebot.start', target: 'minecraft:shannon-home' } as any, actions))
+      .toEqual({ outcome: 'done' });
+    expect(dispatched).toContainEqual(['minebot:bot', 'start', 'shannon-home']);
+    expect(tmuxListSessionsCommand('shannon-home')).toBe('tmux -L shannon-home list-sessions 2>/dev/null || true');
+    expect(tmuxListSessionsCommand('1.21.11-fabric-test')).toBe('tmux list-sessions 2>/dev/null || true');
   });
 
   it('reads the token when the bot connects and refuses an unreadable or short one', () => {

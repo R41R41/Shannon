@@ -5,7 +5,9 @@ export type MinecraftServerName =
   | "1.21.4-test"
   | "1.21.1-play"
   | "1.21.4-fabric-youtube"
-  | "1.21.11-fabric-test";
+  | "1.21.11-fabric-test"
+  /** Shannon's own persistent world, where the Minebot can be her companion body (docs/minebot-companion-body.md). */
+  | "shannon-home";
 
 export interface MinecraftInput {
   serverName?: MinecraftServerName | null;

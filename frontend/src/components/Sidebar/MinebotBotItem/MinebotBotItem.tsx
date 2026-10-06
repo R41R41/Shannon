@@ -15,6 +15,7 @@ const SERVERS = [
   { id: "1.19.0-youtube", label: "1.19.0-youtube" },
   { id: "1.21.1-play", label: "1.21.1-play" },
   { id: "1.21.11-fabric-test", label: "1.21.11-fabric-test" },
+  { id: "shannon-home", label: "shannon-home" },
 ];
 
 export const MinebotBotItem: React.FC<MinebotBotItemProps> = ({

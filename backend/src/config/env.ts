@@ -113,7 +113,8 @@ export const config = {
 
   /**
    * The production Minebot as Shannon's Minecraft body on one dedicated world (docs/minebot-companion-body.md).
-   * Off unless all of URL, token file, server id, server name and port are set; validated in MinebotConfig.
+   * Off unless URL, token file, server id and server name are set (port and version only for a server name the
+   * bot does not know; shannon-home is in its table); validated in MinebotConfig.
    * The token file is read when the bot connects and its value is never logged.
    */
   minebotCompanionBody: {

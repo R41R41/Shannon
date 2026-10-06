@@ -17,8 +17,16 @@ const __dirname = dirname(__filename);
  */
 export class MinebotConfig {
   constructor() {
-    this.useCompanionBody(parseCompanionBodySettings(config.minebotCompanionBody,
-      { builtInServers: { ...this.MINECRAFT_SERVERS }, parseUiModBaseUrl }));
+    this.useCompanionBody(parseCompanionBodySettings(config.minebotCompanionBody, this.companionBodyParseOptions()));
+  }
+
+  /** What the companion body settings are checked against: the server table, and the one world the mode may use. */
+  companionBodyParseOptions(): Parameters<typeof parseCompanionBodySettings>[1] {
+    return {
+      knownServers: Object.fromEntries(Object.entries(this.MINECRAFT_SERVERS)
+        .map(([name, port]) => [name, { port, version: this.serverVersion(name) }])),
+      companionWorlds: COMPANION_WORLDS, parseUiModBaseUrl,
+    };
   }
 
   // ===== LLM設定 =====
@@ -69,6 +77,7 @@ export class MinebotConfig {
     '1.21.4-fabric-youtube': 8081 + this.UI_MOD_PORT_OFFSET,
     '1.21.11-fabric-youtube': 8085 + this.UI_MOD_PORT_OFFSET,
     '1.21.11-fabric-test': 8085 + this.UI_MOD_PORT_OFFSET,
+    'shannon-home': 8086 + this.UI_MOD_PORT_OFFSET,
   };
 
   /** 指定サーバーのUI Mod HTTPポートを取得 */
@@ -189,12 +198,19 @@ export class MinebotConfig {
     '1.21.4-fabric-youtube': 25566,
     '1.21.11-fabric-youtube': 25566,
     '1.21.11-fabric-test': 25567,
+    // Shannon's own persistent world (/home/azureuser/minecraft/shannon-home, online-mode, secure chat enforced):
+    // the companion body mode may use it (docs/minebot-companion-body.md).
+    'shannon-home': 25560,
+  };
+
+  /** The game version of a server whose name does not start with it. */
+  readonly MINECRAFT_SERVER_VERSIONS: Record<string, string> = {
+    'shannon-home': '1.21.11',
   };
 
   /**
    * The production bot's companion body mode (integration/companionBodyConfig.ts): off unless configured. When on,
-   * its dedicated world joins the server table under its own name and port (never a built-in one) and may name
-   * its own UI mod.
+   * it applies to Shannon's own world (or a new server name, which then joins the table) and may name its UI mod.
    */
   COMPANION_BODY: CompanionBodySettings = { enabled: false, reason: null };
 
@@ -204,13 +220,13 @@ export class MinebotConfig {
       if (settings.reason) log.warn(`Companion body mode is off: ${settings.reason}`);
       return;
     }
-    this.MINECRAFT_SERVERS[settings.serverName] = settings.serverPort;
+    this.MINECRAFT_SERVERS[settings.serverName] ??= settings.serverPort;
     if (settings.uiModBaseUrl) this.serverUiModBaseUrls[settings.serverName] = settings.uiModBaseUrl;
   }
 
-  /** The game version to speak on a server: the companion world's own, else the name's prefix (`1.21.11-fabric-test`). */
+  /** The game version to speak on a server: the table's or the companion world's, else the name's prefix (`1.21.11-fabric-test`). */
   serverVersion(serverName: string): string | undefined {
-    return this.companionBodyFor(serverName)?.serverVersion ?? serverName?.split('-')[0];
+    return this.MINECRAFT_SERVER_VERSIONS[serverName] ?? this.companionBodyFor(serverName)?.serverVersion ?? serverName?.split('-')[0];
   }
 
   /** The companion body settings for this server, or null: the mode applies to its dedicated world only. */
@@ -411,6 +427,9 @@ export function parseUiModBaseUrl(value: string | undefined | null): string | nu
     return null;
   }
 }
+
+/** Known servers the companion body mode may apply to: Shannon's own world. Every other known server is shared. */
+export const COMPANION_WORLDS: readonly string[] = ['shannon-home'];
 
 // シングルトンインスタンスをエクスポート
 export const CONFIG = new MinebotConfig();

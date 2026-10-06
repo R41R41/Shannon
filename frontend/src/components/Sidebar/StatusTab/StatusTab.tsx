@@ -34,6 +34,7 @@ const SERVICE_CATEGORIES = [
       { id: "minecraft:1.21.4-test", name: "MC 1.21.4-test" },
       { id: "minecraft:1.21.1-play", name: "MC 1.21.1-play" },
       { id: "minecraft:1.21.11-fabric-test", name: "MC 1.21.11-fabric-test" },
+      { id: "minecraft:shannon-home", name: "MC shannon-home" },
     ],
   },
   {
