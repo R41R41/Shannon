@@ -45,64 +45,9 @@ export function uiModTokenUsable(token: string): boolean {
   return token.length >= 32 && !/\s/.test(token);
 }
 
-const ADDRESS = /^\s*(シャノン|しゃのん|shannon)/i;
-
-/** A line of game chat meant for Shannon: it starts with her name. */
-export function isAddressedToShannon(message: string | null | undefined): boolean {
-  return ADDRESS.test(message ?? '');
-}
-
-/**
- * The fields of minecraft-protocol's client 'playerChat' event (src/client/chat.js) this reads. A real player
- * chat packet (player_chat) carries `sender`, the UUID the server says sent it, and `plainMessage`, what that
- * player typed. Disguised chat (profileless_chat: /say from a command block or the console) is emitted on the
- * same event without `sender`; system chat (system_chat) is a different event.
- */
-export interface PlayerChatEvent {
-  sender?: unknown;
-  plainMessage?: unknown;
-}
-
-/** Who spoke in game chat and what they said: the UUID decides who it is, the name is only for display. */
-export interface GameChatSpeaker {
-  uuid: string;
-  name: string;
-  message: string;
-}
-
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/**
- * A line of game chat with the server-attested sender, or null when there is none. Only player chat packets
- * name a sender; mineflayer's 'chat' event instead parses the rendered text of every chat and system message
- * with a pattern like `<name> text`, so whoever can make a message look like that (a server that sends player
- * chat as system chat, a nickname or chat plugin, a team name or prefix, disguised chat from /say) could speak
- * as someone else. The owner is told apart by UUID alone (CompanionBodyClient), so the speaker must come
- * from here. `nameOf` maps the UUID to the player's current name from the player list; a sender who is not in
- * the list is not answered. The message is what the player sent (`plainMessage`), never the server's decoration.
- */
-export function gameChatSpeaker(event: PlayerChatEvent | null | undefined,
-  nameOf: (uuid: string) => string | undefined): GameChatSpeaker | null {
-  const sender = typeof event?.sender === 'string' ? event.sender.toLowerCase() : '';
-  if (!UUID.test(sender) || /^0{8}-0{4}-0{4}-0{4}-0{12}$/.test(sender)) return null;
-  const message = typeof event?.plainMessage === 'string' ? event.plainMessage : '';
-  if (!message.trim()) return null;
-  const name = nameOf(sender);
-  if (!name) return null;
-  return { uuid: sender, name, message };
-}
-
-/** The current name of the player with this UUID, from mineflayer's `bot.players` (keyed by name). */
-export function playerNameByUuid(players: Record<string, { uuid?: unknown; username?: unknown } | undefined> | null | undefined,
-  uuid: string): string | undefined {
-  const wanted = uuid.toLowerCase();
-  for (const [name, player] of Object.entries(players ?? {})) {
-    if (typeof player?.uuid === 'string' && player.uuid.toLowerCase() === wanted) {
-      return typeof player.username === 'string' && player.username ? player.username : name;
-    }
-  }
-  return undefined;
-}
+// Who spoke in game chat lives in integration/gameChat.ts (the production bot's companion body mode uses it too).
+export { gameChatSpeaker, isAddressedToShannon, playerNameByUuid, type GameChatSpeaker, type PlayerChatEvent }
+  from '../integration/gameChat.js';
 
 export type LabWatcherMode = 'spectator' | 'free';
 

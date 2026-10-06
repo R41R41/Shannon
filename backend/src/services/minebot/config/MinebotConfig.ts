@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import { config } from '../../../config/env.js';
 import { models } from '../../../config/models.js';
 import { createLogger } from '../../../utils/logger.js';
+import { parseCompanionBodySettings, type CompanionBodySettings } from '../integration/companionBodyConfig.js';
 
 const log = createLogger('Minebot:Config');
 
@@ -15,6 +16,11 @@ const __dirname = dirname(__filename);
  * 全ての設定値を1箇所で管理し、変更を容易にする
  */
 export class MinebotConfig {
+  constructor() {
+    this.useCompanionBody(parseCompanionBodySettings(config.minebotCompanionBody,
+      { builtInServers: { ...this.MINECRAFT_SERVERS }, parseUiModBaseUrl }));
+  }
+
   // ===== LLM設定 =====
 
   /** Execution用モデル */
@@ -70,9 +76,12 @@ export class MinebotConfig {
     return this.MINECRAFT_UI_MOD_PORTS[serverName] ?? this.UI_MOD_PORT;
   }
 
+  /** A server's own UI mod origin (loopback), when it has one: the companion body world (MINEBOT_COMPANION_UI_MOD_BASE_URL). */
+  private readonly serverUiModBaseUrls: Record<string, string> = {};
+
   /** 指定サーバーのUI ModサーバーのベースURLを取得 */
   getUiModBaseUrl(serverName: string): string {
-    return `http://${this.UI_MOD_HOST}:${this.getUiModPort(serverName)}`;
+    return this.serverUiModBaseUrls[serverName] ?? `http://${this.UI_MOD_HOST}:${this.getUiModPort(serverName)}`;
   }
 
   /** 現在接続中のサーバーのUI Mod BaseURL（接続時に更新される） */
@@ -181,6 +190,34 @@ export class MinebotConfig {
     '1.21.11-fabric-youtube': 25566,
     '1.21.11-fabric-test': 25567,
   };
+
+  /**
+   * The production bot's companion body mode (integration/companionBodyConfig.ts): off unless configured. When on,
+   * its dedicated world joins the server table under its own name and port (never a built-in one) and may name
+   * its own UI mod.
+   */
+  COMPANION_BODY: CompanionBodySettings = { enabled: false, reason: null };
+
+  useCompanionBody(settings: CompanionBodySettings): void {
+    this.COMPANION_BODY = settings;
+    if (!settings.enabled) {
+      if (settings.reason) log.warn(`Companion body mode is off: ${settings.reason}`);
+      return;
+    }
+    this.MINECRAFT_SERVERS[settings.serverName] = settings.serverPort;
+    if (settings.uiModBaseUrl) this.serverUiModBaseUrls[settings.serverName] = settings.uiModBaseUrl;
+  }
+
+  /** The game version to speak on a server: the companion world's own, else the name's prefix (`1.21.11-fabric-test`). */
+  serverVersion(serverName: string): string | undefined {
+    return this.companionBodyFor(serverName)?.serverVersion ?? serverName?.split('-')[0];
+  }
+
+  /** The companion body settings for this server, or null: the mode applies to its dedicated world only. */
+  companionBodyFor(serverName: string | null | undefined): Extract<CompanionBodySettings, { enabled: true }> | null {
+    const settings = this.COMPANION_BODY;
+    return settings.enabled && serverName === settings.serverName ? settings : null;
+  }
 
   /** No default IDs: operators must assign a new worldId whenever the world is reset/replaced. */
   getMemoryIdentity(serverName: string): MinecraftWorldIdentity | null {

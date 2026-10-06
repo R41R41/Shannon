@@ -109,6 +109,11 @@
     "/home/azureuser/Shannon-dev/backend/src/services/minebot/utils/toolChoice.ts",
     "/home/azureuser/Shannon-dev/backend/src/services/minebot/utils/toolStock.ts",
     "/home/azureuser/Shannon-dev/backend/src/services/minebot/instantSkills/stairMine.ts",
-    "/home/azureuser/Shannon-dev/backend/src/services/minebot/instantSkills/craftOne.ts"
+    "/home/azureuser/Shannon-dev/backend/src/services/minebot/instantSkills/craftOne.ts",
+    "/home/azureuser/Shannon-dev/backend/src/services/minebot/integration/gameChat.ts",
+    "/home/azureuser/Shannon-dev/backend/src/services/minebot/integration/companionBodyParts.ts",
+    "/home/azureuser/Shannon-dev/backend/src/services/minebot/integration/CompanionRuntimeTasks.ts",
+    "/home/azureuser/Shannon-dev/backend/src/services/minebot/integration/companionBodyConfig.ts",
+    "/home/azureuser/Shannon-dev/backend/src/services/minebot/integration/MinebotCompanionBody.ts"
   ]
 }

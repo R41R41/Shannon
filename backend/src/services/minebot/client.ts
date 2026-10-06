@@ -88,7 +88,7 @@ export class MinebotClient extends BaseClient {
 
     const { serverName } = data as MinebotStartOrStopInput;
     const port = CONFIG.MINECRAFT_SERVERS[serverName as string];
-    const version = serverName?.split('-')[0];
+    const version = CONFIG.serverVersion(serverName as string);
 
     if (!port) {
       throw new Error(`Unknown server: ${serverName}`);
@@ -394,6 +394,8 @@ export class MinebotClient extends BaseClient {
       }
       revokeMinecraftMemory(this.bot);
       if (this.skillAgent) {
+        // Companion body mode: open requests are reported to her mind as run over (also done on 'end').
+        void this.skillAgent.stopCompanionBody();
         const httpServer = this.skillAgent.getHttpServer();
         await httpServer.stop();
       }

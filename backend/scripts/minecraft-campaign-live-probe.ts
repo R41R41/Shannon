@@ -9,8 +9,11 @@ import { createProbeBot, closeProbeBot } from '../src/services/minebot/testing/M
 import { MinecraftCommandOracle } from '../src/services/minebot/testing/MinecraftCommandOracle.js';
 import { RconClient } from '../src/services/minebot/testing/RconClient.js';
 import { CONFIG } from '../src/services/minebot/config/MinebotConfig.js';
-import { CompanionBodyClient, advancementId, chatLines, deathCause, timeOfDayPart, type CompanionBodyNow } from '../src/services/minebot/integration/CompanionBodyClient.js';
+import { CompanionBodyClient } from '../src/services/minebot/integration/CompanionBodyClient.js';
 import { CompanionRequestLoop } from '../src/services/minebot/integration/CompanionRequestLoop.js';
+import { CompanionRuntimeTasks, inventoryCounts } from '../src/services/minebot/integration/CompanionRuntimeTasks.js';
+import { companionBodyNow, othersOnline, speakCompanionReply, takeCompanionTurn, watchCompanionBodyEvents }
+  from '../src/services/minebot/integration/companionBodyParts.js';
 import { AutonomousScenarioRunner } from '../src/services/minebot/testing/AutonomousScenarioRunner.js';
 import { AcceptanceBudget, ActualUsageBudget, ANTHROPIC_PRICING, seedSharedCampaignBudget } from '../src/services/minebot/testing/AcceptanceBudget.js';
 import { CampaignGoalGraph } from '../src/services/minebot/cognition/CampaignGoalGraph.js';
@@ -388,24 +391,11 @@ const companion = publicServer && companionUrl && companionTokenFile
     serverId: process.env.MINECRAFT_LAB_COMPANION_SERVER_ID || `lab-${path.basename(worldDirectory).replace(/^progressive-lab-/, '')}` })
   : null;
 if (companion) console.log(`CAMPAIGN_COMPANION ${JSON.stringify({ url: companionUrl })}`);
-const othersOnline = () => Object.keys(actor.players ?? {}).some(name => name !== actorName);
-// Her own advancements, newest last, for the body's present she tells her mind.
-const recentAdvancements: string[] = [];
-// The vanilla death message names the damage type; it is the body's report of how she died.
-actor.on('message', (message: any) => {
-  const key = String(message?.translate ?? '');
-  if (key.startsWith('chat.type.advancement.') && String(message?.with?.[0]?.text ?? message?.with?.[0] ?? '') === actorName) {
-    const title = message?.with?.[1]?.with?.[0]?.translate ?? message?.with?.[1]?.translate ?? '';
-    const id = advancementId(String(title));
-    if (id && !recentAdvancements.includes(id)) {
-      recentAdvancements.push(id);
-      if (recentAdvancements.length > 5) recentAdvancements.shift();
-    }
-  }
-  if (!companion || !key.startsWith('death.') || String(message?.with?.[0]?.text ?? message?.with?.[0] ?? '') !== actorName) return;
-  const cause = deathCause(key);
-  void companion.died(cause, othersOnline()).then(stored => console.log(`CAMPAIGN_COMPANION_DIED ${JSON.stringify({ cause, stored })}`));
-});
+// Her own advancements (newest last) for the body's present she tells her mind, and her death: the vanilla death
+// message names the damage type, the body's report of how she died (integration/companionBodyParts.ts).
+const { recentAdvancements } = watchCompanionBodyEvents(actor as any, { name: () => actorName,
+  onDeath: companion ? cause => void companion.died(cause, othersOnline(actor as any))
+    .then(stored => console.log(`CAMPAIGN_COMPANION_DIED ${JSON.stringify({ cause, stored })}`)) : undefined });
 // Dev-only general-knowledge scope shared by isolated labs; off unless requested.
 const learningMode = (process.env.MINECRAFT_LEARNING_MODE ?? 'off') as MinecraftLearningMode;
 if (!['off', 'shadow', 'feedback'].includes(learningMode)) throw new Error('MINECRAFT_LEARNING_MODE_INVALID');
@@ -504,9 +494,8 @@ try {
     const emergencyResults: any[] = [];
     const humanChatResults: any[] = [];
     const humanChatTaskIds = new Set<string>();
-    // Requests from her mind (phase 4): how each one's last run ended, and the deaths when it was taken.
-    const requestRuns = new Map<string, { completed: boolean }>();
-    const requestDeaths = new Map<string, number>();
+    // Requests from her mind (phase 4) as tasks of this runtime; it is told how each one's run ended.
+    let requestTasksOf: CompanionRuntimeTasks | null = null;
     // The game-chat turn a queued request came from, so the person's words are counted once.
     const requestRecords = new Map<string, any>();
     const requestTaskIds = new Map<string, string>();
@@ -571,7 +560,7 @@ try {
           } });
         (emergency ? emergencyResults : humanChat ? humanChatResults : mainResults).push(result);
         // A request from her mind: how its last run ended, for the result the request loop reports.
-        if (humanChat?.requestId) requestRuns.set(humanChat.requestId, { completed: result.taskTree?.status === 'completed' });
+        if (humanChat?.requestId) requestTasksOf?.noteRun(humanChat.requestId, result.taskTree?.status === 'completed');
         if (humanChat) console.log(`CAMPAIGN_HUMAN_CHAT_DONE ${JSON.stringify({ player: humanChat.player,
           iterations: result.iterations, completed: result.taskTree?.status === 'completed' })}`);
         return { ...result, savedMessages: result.messages, savedTaskNodes: result.taskNodes,
@@ -616,87 +605,61 @@ try {
         if (record.dropped) console.log(`CAMPAIGN_HUMAN_CHAT_DROPPED ${JSON.stringify({ player, reason: record.dropped })}`);
       };
       // What her body is doing now, from the campaign graph and the body itself: no coordinates or inventory.
-      const bodyNow = (): CompanionBodyNow => {
+      const bodyNow = () => {
         const active = graph.getActiveId() ? graph.getNode(graph.getActiveId()!) : undefined;
         const requestRunning = runtime.getTaskListState().tasks.some(task => humanChatTaskIds.has(task.id) && task.status === 'executing');
-        const dimension = String(actor.game?.dimension ?? '').replace(/^minecraft:/, '');
-        return {
-          task: (active && active.id !== 'root' ? `${goal} → 今は${active.goal}` : goal).slice(0, 120),
-          ...(['overworld', 'the_nether', 'the_end'].includes(dimension) ? { dimension: dimension as CompanionBodyNow['dimension'] } : {}),
-          health: Math.round(actor.health ?? 0), food: Math.round(actor.food ?? 0),
-          ...(typeof actor.time?.timeOfDay === 'number' ? { timeOfDay: timeOfDayPart(actor.time.timeOfDay) } : {}),
-          ...(recentAdvancements.length ? { recentAdvancements: recentAdvancements.slice(-5) } : {}),
-          busyWith: requestRunning ? 'request' : 'campaign',
-        };
+        return companionBodyNow(actor as any, { task: active && active.id !== 'root' ? `${goal} → 今は${active.goal}` : goal,
+          busyWith: requestRunning ? 'request' : 'campaign', recentAdvancements });
       };
       const answerFromCompanion = async (record: any, player: string, speakerUuid: string, text: string) => {
-        const turn = await companion!.turn({ speakerUuid, speakerName: player, message: text, body: bodyNow() });
-        if (!turn) {
+        const outcome = await takeCompanionTurn(companion!, { speakerUuid, speakerName: player, message: text, body: bodyNow() },
+          reply => speakCompanionReply(actor as any, reply, { uiModBaseUrl: CONFIG.UI_MOD_BASE_URL }));
+        if (outcome.kind === 'unavailable') {
           console.log(`CAMPAIGN_COMPANION_UNAVAILABLE ${player}`);
           queueHumanTask(record, player, text, false);
           return;
         }
-        for (const line of chatLines(turn.reply)) actor.chat(line);
-        void fetch(`${CONFIG.UI_MOD_BASE_URL}/bot_chat`, { method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ message: turn.reply }), signal: AbortSignal.timeout(2000) }).catch(() => {});
-        record.companion = { intent: turn.intent?.kind ?? null, ignored: turn.ignored ?? null, requestId: turn.intent?.request?.id ?? null };
+        const { turn } = outcome;
+        record.companion = { intent: turn.intent?.kind ?? null, ignored: turn.ignored ?? null, requestId: outcome.requestId };
         console.log(`CAMPAIGN_COMPANION_REPLY ${JSON.stringify({ player, intent: turn.intent ?? null, reply: turn.reply.slice(0, 80) })}`);
         // Queued on her mind as a request: the request loop takes it through its claim (one path for progress, stop and result).
-        if (turn.intent?.kind === 'task' && turn.intent.request?.id && requestLoop) {
-          requestRecords.set(turn.intent.request.id, record);
-          record.taskId = requestTaskIds.get(turn.intent.request.id) ?? null;
+        if (outcome.requestId && requestLoop) {
+          requestRecords.set(outcome.requestId, record);
+          record.taskId = requestTaskIds.get(outcome.requestId) ?? null;
           return;
         }
-        if (turn.intent?.kind === 'task' && turn.intent.goal.trim()) queueHumanTask(record, player, turn.intent.goal.trim(), true);
+        if (outcome.goal) queueHumanTask(record, player, outcome.goal, true);
       };
       // Requests from her mind (phase 4: shannon-ios docs/minecraft-body-contract.md): only with the companion configured.
       // A claimed request becomes a task ahead of the campaign, like a person's request in game chat, and counts as a human interaction.
       if (companion) {
-        const loop: CompanionRequestLoop = new CompanionRequestLoop(companion, {
-          start: request => {
-            if (plannerClosed || probeStopRequested()) return { refused: 'run_over' };
+        const requestTasks = new CompanionRuntimeTasks(runtime, {
+          refuse: () => plannerClosed || probeStopRequested() ? 'run_over' : null,
+          waiting: () => runtime.getTaskListState().tasks.filter(task => humanChatTaskIds.has(task.id)
+            && ['pending', 'paused', 'executing'].includes(task.status)).length,
+          envelope: request => ({ tags: ['user_chat'],
+            metadata: { humanChat: { player: 'owner', message: request.goal, answered: true, requestId: request.id } } }),
+          deaths: () => deaths,
+          // The skill the body started last for the task running now: a short label, nothing else.
+          step: taskId => runtime.getTaskListState().currentTaskId === taskId
+            ? toolStarts.filter(start => start.mode === 'human_chat').at(-1)?.tool : undefined,
+          inventory: () => inventoryCounts(actor.inventory.items()),
+          onTaken: (request, result) => {
+            if ('refused' in result && result.reason === 'run_over') return;
             let record = requestRecords.get(request.id);
             if (!record && request.surface !== 'minecraft') {
               record = { atMs: Date.now() - startedAt, player: 'owner', via: 'companion_request', message: request.goal.slice(0, 200), taskId: null, dropped: null };
               humanChats.push(record);
             }
             console.log(`CAMPAIGN_COMPANION_REQUEST ${JSON.stringify({ id: request.id, surface: request.surface, goal: request.goal.slice(0, 80) })}`);
-            const waiting = runtime.getTaskListState().tasks.filter(task => humanChatTaskIds.has(task.id)
-              && ['pending', 'paused', 'executing'].includes(task.status)).length;
-            if (waiting >= 3) { if (record) record.dropped = 'busy'; return { refused: 'queue_full' }; }
-            const queued = runtime.putTaskFirst({ userMessage: request.goal },
-              { tags: ['user_chat'], metadata: { humanChat: { player: 'owner', message: request.goal, answered: true, requestId: request.id } } });
-            if (!queued.success) { if (record) record.dropped = queued.reason ?? 'queue_refused'; return { refused: 'queue_full' }; }
-            humanChatTaskIds.add(queued.taskId!);
-            requestTaskIds.set(request.id, queued.taskId!);
-            requestDeaths.set(request.id, deaths);
-            if (record) record.taskId = queued.taskId!;
-            return { taskId: queued.taskId! };
+            if ('refused' in result) { if (record) record.dropped = result.reason; return; }
+            humanChatTaskIds.add(result.taskId);
+            requestTaskIds.set(request.id, result.taskId);
+            if (record) record.taskId = result.taskId;
           },
-          status: taskId => {
-            const task = runtime.getTaskListState().tasks.find(entry => entry.id === taskId);
-            const request = loop.requestOf(taskId);
-            const died = !!request && deaths > (requestDeaths.get(request.id) ?? deaths);
-            if (task) {
-              if (task.status === 'executing') return { state: 'running' };
-              if (task.status === 'awaiting_user') return { state: 'failed', code: died ? 'died' : 'gave_up' };
-              if (task.status === 'failed_terminal') return { state: 'failed', code: died ? 'died' : 'error' };
-              return { state: 'waiting' };
-            }
-            const run = request ? requestRuns.get(request.id) : undefined;
-            if (run) return run.completed ? { state: 'done' } : { state: 'failed', code: died ? 'died' : 'gave_up' };
-            return { state: 'gone' };
-          },
-          stop: taskId => { runtime.removeTask(taskId); },
-          // The skill the body started last for the task running now: a short label, nothing else.
-          step: taskId => runtime.getTaskListState().currentTaskId === taskId
-            ? toolStarts.filter(start => start.mode === 'human_chat').at(-1)?.tool : undefined,
-          inventory: () => {
-            const counts: Record<string, number> = {};
-            for (const item of actor.inventory.items()) counts[item.name] = (counts[item.name] ?? 0) + item.count;
-            return counts;
-          },
-        }, { log: line => console.log(`CAMPAIGN_${line}`) });
+        });
+        requestTasksOf = requestTasks;
+        const loop: CompanionRequestLoop = new CompanionRequestLoop(companion, requestTasks, { log: line => console.log(`CAMPAIGN_${line}`) });
         requestLoop = loop;
         loop.start();
       }

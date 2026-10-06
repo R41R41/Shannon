@@ -28,6 +28,7 @@
 | [minecraft-cognition-latency.md](./minecraft-cognition-latency.md) | Jev/Luna/ローカルと実サーバー経路の反応時間、シナリオ別結果、ボトルネック。 |
 | [minecraft-test-lab.md](./minecraft-test-lab.md) | Minebotの隔離E2E環境と、サーバーコマンドを真実源にした成功判定・状況把握。 |
 | [minebot-lab-ui-mod.md](./minebot-lab-ui-mod.md) | 公開ラボの実走と ShannonUIMod の接続、ゲーム内で話しかける経路、人が関わった実走を受入にしない規則。 |
+| [minebot-companion-body.md](./minebot-companion-body.md) | 本番 Minebot を専用ワールド（shannon-home）でシャノンの心の体にするモード（既定オフ）の設定と本番投入の順番。 |
 
 
 ## トピック別

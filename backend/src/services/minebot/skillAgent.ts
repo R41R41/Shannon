@@ -25,6 +25,10 @@ import { mapBotInventoryItems } from './utils/inventorySnapshot.js';
 import { ConstantSkillInfo, LLMError, SkillExecutionError } from './types/index.js';
 import { WorldKnowledgeService } from './knowledge/WorldKnowledgeService.js';
 import { createLogger } from '../../utils/logger.js';
+import { CompanionBodyClient } from './integration/CompanionBodyClient.js';
+import { readCompanionBodyToken } from './integration/companionBodyConfig.js';
+import { isAddressedToShannon, listenToPlayerChat, playerUuidByName } from './integration/gameChat.js';
+import { MinebotCompanionBody } from './integration/MinebotCompanionBody.js';
 import {
   looksLikeSelfTestChatIntent,
   parseSelfTestSuiteFromUserMessage,
@@ -69,6 +73,8 @@ export class SkillAgent {
   private recentHistory: MinecraftRecentHistory<BaseMessage>;
   private lastVoiceGuildId: string | null = null;
   private lastVoiceChannelId: string | null = null;
+  /** Shannon's Minecraft body mode: only on the dedicated companion world (CONFIG.companionBodyFor), else null. */
+  private companionBody: MinebotCompanionBody | null = null;
 
   constructor(bot: CustomBot) {
     this.bot = bot;
@@ -98,6 +104,9 @@ export class SkillAgent {
         return { success: false, result: initSkillsResponse.result };
       }
 
+      // Companion body mode (docs/minebot-companion-body.md): only on its dedicated world.
+      this.companionBody = this.createCompanionBody();
+
       // チャットイベント登録
       await this.botOnChat();
 
@@ -111,8 +120,16 @@ export class SkillAgent {
       this.registerInboundHandlers();
       log.success('✅ registerInboundHandlers done');
 
-      this.taskRuntime.setExecutor((envelope, messages, options) =>
-        LLMService.getInstance(config.isDev).invokeGraph(envelope, messages, options),
+      const companionBody = this.companionBody;
+      this.taskRuntime.setExecutor(companionBody
+        // Her mind is told how a request it queued ended, from the run's own result.
+        ? async (envelope, messages, options) => {
+          const result = await LLMService.getInstance(config.isDev).invokeGraph(envelope, messages, options);
+          companionBody.noteRun(envelope, result as any);
+          return result;
+        }
+        : (envelope, messages, options) =>
+          LLMService.getInstance(config.isDev).invokeGraph(envelope, messages, options),
       );
       log.success('✅ minebot task runtime connected to unified graph');
 
@@ -135,6 +152,9 @@ export class SkillAgent {
       // チャットメッセージコールバックを設定
       this.httpServer.setOnChatMessageCallback(async (sender: string, message: string) => {
         log.info(`💬 Processing chat from ${sender}: ${message}`, 'cyan');
+        // The UI mod is the owner's own client on this machine (loopback, mod token): its name is looked up by UUID.
+        const modSpeakerUuid = this.companionBody && sender !== 'system' ? playerUuidByName(this.bot.players as any, sender) : undefined;
+        if (modSpeakerUuid && await this.companionBody!.answer({ uuid: modSpeakerUuid, name: sender }, message)) return;
         // マイクラチャットと同様に処理（環境情報も渡す）
         await this.processMessage(
           sender,
@@ -146,6 +166,7 @@ export class SkillAgent {
 
       // HTTPサーバー起動
       this.httpServer.start();
+      this.companionBody?.start();
 
       // UI Modにスキル情報を送信
       await this.sendConstantSkills();
@@ -199,61 +220,103 @@ export class SkillAgent {
    * チャットイベントを登録
    */
   private async botOnChat() {
+    if (this.companionBody) {
+      // On the companion world, who spoke is the player chat packet's sender UUID: mineflayer's 'chat' event reads
+      // names out of rendered text (system chat, disguised /say, nicknames) and is not listened to there.
+      listenToPlayerChat(this.bot as any, speaker => {
+        void this.handleChat(speaker.self ? 'I_am_Shannon' : speaker.name, speaker.message, speaker.self ? undefined : speaker.uuid);
+      });
+      return;
+    }
     this.bot.on('chat', async (username, message) => {
-      // 自分の発言は記録のみ（chatMode に関わらず）
-      if (username === 'I_am_Shannon') {
-        const currentTime = new Date().toLocaleString('ja-JP', {
-          timeZone: 'Asia/Tokyo',
-        });
-        const newMessage = `${currentTime} ${username}: ${message}`;
-        this.recentHistory.add(new AIMessage(newMessage), true);
-        return;
-      }
-
-      if (!this.bot.chatMode && !isSelfTestSuiteChatMessage(message)) {
-        return;
-      }
-
-      log.info(`[${username}] ${message}`);
-      if (!message) {
-        return;
-      }
-
-      // 話しかけられたら向く（常時スキル）
-      const autoFaceSpeaker = this.bot.constantSkills.getSkill('auto-face-speaker') as AutoFaceSpeaker | undefined;
-      if (autoFaceSpeaker?.status) {
-        await autoFaceSpeaker.onPlayerSpeak(username);
-      }
-
-      // コマンド処理
-      if (await this.handleCommands(username, message)) {
-        return;
-      }
-
-      // 「シャノン、」で始まるメッセージのみ処理
-      if (!message.startsWith('シャノン、')) {
-        return;
-      }
-
-      // 送信者情報を設定
-      this.updateSenderInfo(username);
-
-      // voice_mode がアクティブなら音声応答もセット
-      if (this.lastVoiceGuildId && this.lastVoiceChannelId) {
-        this.setupVoiceResponse(this.lastVoiceGuildId, this.lastVoiceChannelId);
-      }
-
-      // メッセージを処理
-      await this.processMessage(
-        username,
-        message,
-        JSON.stringify(this.bot.environmentState),
-        JSON.stringify(this.bot.selfState),
-        undefined,
-        true,
-      );
+      await this.handleChat(username, message);
     });
+  }
 
+  /** One line of game chat. `speakerUuid`: from the player chat packet (companion world only). */
+  private async handleChat(username: string, message: string, speakerUuid?: string) {
+    // 自分の発言は記録のみ（chatMode に関わらず）
+    if (username === 'I_am_Shannon') {
+      const currentTime = new Date().toLocaleString('ja-JP', {
+        timeZone: 'Asia/Tokyo',
+      });
+      const newMessage = `${currentTime} ${username}: ${message}`;
+      this.recentHistory.add(new AIMessage(newMessage), true);
+      return;
+    }
+
+    if (!this.bot.chatMode && !isSelfTestSuiteChatMessage(message)) {
+      return;
+    }
+
+    log.info(`[${username}] ${message}`);
+    if (!message) {
+      return;
+    }
+
+    // 話しかけられたら向く（常時スキル）
+    const autoFaceSpeaker = this.bot.constantSkills.getSkill('auto-face-speaker') as AutoFaceSpeaker | undefined;
+    if (autoFaceSpeaker?.status) {
+      await autoFaceSpeaker.onPlayerSpeak(username);
+    }
+
+    // コマンド処理
+    if (await this.handleCommands(username, message)) {
+      return;
+    }
+
+    // 「シャノン、」で始まるメッセージのみ処理（彼女の心とつながる世界では名前で始まる発言）
+    if (this.companionBody ? !isAddressedToShannon(message) : !message.startsWith('シャノン、')) {
+      return;
+    }
+
+    // 送信者情報を設定
+    this.updateSenderInfo(username);
+
+    // Her mind answers on the companion world; when it cannot, the bot answers as before.
+    if (this.companionBody && speakerUuid && await this.companionBody.answer({ uuid: speakerUuid, name: username }, message)) {
+      return;
+    }
+
+    // voice_mode がアクティブなら音声応答もセット
+    if (this.lastVoiceGuildId && this.lastVoiceChannelId) {
+      this.setupVoiceResponse(this.lastVoiceGuildId, this.lastVoiceChannelId);
+    }
+
+    // メッセージを処理
+    await this.processMessage(
+      username,
+      message,
+      JSON.stringify(this.bot.environmentState),
+      JSON.stringify(this.bot.selfState),
+      undefined,
+      true,
+    );
+  }
+
+  /** The companion body for this connection, or null (another server, or the mode off or misconfigured). */
+  private createCompanionBody(): MinebotCompanionBody | null {
+    const settings = CONFIG.companionBodyFor(this.bot.connectedServerName);
+    if (!settings) return null;
+    const token = readCompanionBodyToken(settings.tokenFile);
+    if (!token) {
+      log.warn('Companion body mode is off for this connection: MINEBOT_COMPANION_BODY_TOKEN_FILE is unreadable or too short');
+      return null;
+    }
+    const client = new CompanionBodyClient({ baseUrl: settings.url, token, serverId: settings.serverId });
+    log.info(`🫀 Companion body mode on ${settings.serverName} (serverId ${settings.serverId})`, 'cyan');
+    return new MinebotCompanionBody(this.bot as any, this.taskRuntime, client, {
+      serverId: settings.serverId,
+      uiModBaseUrl: () => CONFIG.UI_MOD_BASE_URL,
+      lineLimit: CONFIG.MINECRAFT_CHAT_MAX_CHARS,
+      maxLines: 3,
+      log: line => log.info(line),
+    });
+  }
+
+  /** Ends the companion body mode for this connection (open requests are reported as run over). */
+  async stopCompanionBody(): Promise<void> {
+    await this.companionBody?.stop('run_over');
   }
 
   /**

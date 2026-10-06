@@ -58,3 +58,7 @@
 ### Discord から心へ（第5a段階、2026-10-06、dev のみ）
 
 Discord Bot が `SHANNON_CORE_PLATFORM_REPLY=true`（既定は無効）の時、binding 済みの会話の本人の発言は心の `POST /v1/platform/reply` が答える（心の側も `SHANNON_PLATFORM_REPLY=on`）。本人の DM（心の側で `owner-private`）は「ライ氏と二人」なので、体がワールドにいれば「マイクラで木材集めといて」が `minecraft.request` でスマホと同じ列に積まれ、体が claim で受け取る。「何頼んだっけ？」には `[マイクラの体で起きたこと]` と会話の履歴で答える。共有チャンネル・友人には道具を出さない。心が答えられない時は従来の Bot の LLM が答える。詳細は `docs/shannon-core-bridge.md`。
+
+### 本番 Minebot を体にする（2026-10-06、dev）
+
+ここまでの心とのつなぎ（話しかけ・頼みごとの列・死亡）は、普段の Shannon Minebot でも専用の常設ワールド（`shannon-home`）でだけ使えるようにした（既定オフ）。部品はラボと共有（`backend/src/services/minebot/integration/`）。設定と本番投入の順番は `docs/minebot-companion-body.md`。

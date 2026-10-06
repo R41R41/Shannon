@@ -111,6 +111,21 @@ export const config = {
     uiModHost: optional('UI_MOD_HOST', 'localhost'),
   },
 
+  /**
+   * The production Minebot as Shannon's Minecraft body on one dedicated world (docs/minebot-companion-body.md).
+   * Off unless all of URL, token file, server id, server name and port are set; validated in MinebotConfig.
+   * The token file is read when the bot connects and its value is never logged.
+   */
+  minebotCompanionBody: {
+    url: optional('MINEBOT_COMPANION_BODY_URL', ''),
+    tokenFile: optional('MINEBOT_COMPANION_BODY_TOKEN_FILE', ''),
+    serverId: optional('MINEBOT_COMPANION_SERVER_ID', ''),
+    serverName: optional('MINEBOT_COMPANION_SERVER_NAME', ''),
+    serverPort: optional('MINEBOT_COMPANION_SERVER_PORT', ''),
+    serverVersion: optional('MINEBOT_COMPANION_SERVER_VERSION', ''),
+    uiModBaseUrl: optional('MINEBOT_COMPANION_UI_MOD_BASE_URL', ''),
+  },
+
   minecraftPlanner: {
     provider: ['anthropic', 'openai'].includes(optional('MINECRAFT_PLANNER_PROVIDER', 'auto'))
       ? optional('MINECRAFT_PLANNER_PROVIDER', 'auto') : 'auto',
