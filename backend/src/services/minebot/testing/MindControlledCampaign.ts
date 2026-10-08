@@ -17,7 +17,11 @@ interface Runtime {
   removeTask(taskId: string): unknown;
 }
 export type MindCampaignAttestor = (input: { threadId: string; requestId: string; signal?: AbortSignal }) => Promise<string | null | { pending: true }>;
-interface Options { now?: () => number; setupMs: number; windowMs: number; ownerThreadId: string; attestRoot: MindCampaignAttestor }
+interface Options {
+  now?: () => number; setupMs: number; windowMs: number; ownerThreadId: string; attestRoot: MindCampaignAttestor;
+  /** Bind the canonical goal after attestation, before the runtime can synchronously dispatch it. */
+  beforeRootDispatch?: (request: Readonly<CompanionRequest>) => void;
+}
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** The private launch context supplies identity; a model's goal/response never supplies authority. */
@@ -114,7 +118,10 @@ export class MindControlledCampaign implements CompanionRequestTasks {
     this.root = { ...request };
     this.provisional.delete(request.id);
     let started: ReturnType<CompanionRequestTasks['start']>;
-    try { started = this.delegate.start(request); }
+    try {
+      this.options.beforeRootDispatch?.({ ...this.root });
+      started = this.delegate.start(request);
+    }
     catch { this.rejected = 'MIND_CAMPAIGN_ROOT_QUEUE_REFUSED'; return { refused: 'error' }; }
     if ('taskId' in started) {
       this.initialTaskId = this.activeTaskId = started.taskId; this.aliases.add(started.taskId);

@@ -351,3 +351,24 @@ After a run:
 - Advancement and LLM terrain-analysis capability cannot be certified by the offline isolated probe because their UI Mod and model-provider dependencies are deliberately absent.
 - Client visuals are still a human/Codex inspection step; they are not automatically scored.
 - Passing an isolated test is necessary but not sufficient for a production release.
+
+## Mind-controlled campaign goal identity
+
+A Mind-controlled campaign opens its world-scoped graph only after the claimed
+root request has passed the existing private attestation and closed goal-alias
+checks, immediately before runtime dispatch. The exact accepted goal is shared by
+the graph, executor state and goal contract. The original submitted goal remains
+separate provenance; semantic alias admission does not weaken the executor's
+exact goal or native success-predicate guards.
+
+Before admission there is no campaign graph or public campaign task. Setup failure
+must remain reportable without manufacturing a root. An existing graph with a
+different goal or success identity is still refused on restore; operators must not
+silently rewrite or reset it to make a new request fit.
+
+The offline pipeline regression composes the real body client/request loop,
+admission wrapper, runtime task adapter, graph and executor with a fake HTTP
+transport, runtime queue and model response. It proves binding order and guard
+behavior, not a live Mind request or world progress. The active-duration clock
+starts at runtime admission; elapsed time alone does not prove a planner call,
+physical gameplay, native completion or canonical acknowledgement.

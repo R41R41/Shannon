@@ -201,10 +201,16 @@ const budget = actualBudget
     maxRequests: budgetProfile === 'actual-haiku-40min-20261008' ? 300 : 20000, margin: 1.25 })
   : new AcceptanceBudget(budgetFile,
     { maxUsd: extraBudget ? 13 : 8, maxRequests: extraBudget ? 400 : 500, priorReservedUsd: 0 });
-const graph = CampaignGoalGraph.open({ directory: campaignDirectory,
-  id: `${ironPickaxeObjective ? 'iron-pickaxe' : 'dragon'}-${worldId}`, worldId, goal, success });
-if (resumeCampaign && graph.currentRevision <= 1) throw new Error('CAMPAIGN_RESUME_STATE_NOT_FOUND');
-if (!resumeCampaign && graph.currentRevision > 1) throw new Error('CAMPAIGN_ALREADY_STARTED_USE_RESUME');
+const openCampaignGraph = (acceptedGoal: string): CampaignGoalGraph => {
+  const graph = CampaignGoalGraph.open({ directory: campaignDirectory,
+    id: `${ironPickaxeObjective ? 'iron-pickaxe' : 'dragon'}-${worldId}`, worldId, goal: acceptedGoal, success });
+  if (resumeCampaign && graph.currentRevision <= 1) throw new Error('CAMPAIGN_RESUME_STATE_NOT_FOUND');
+  if (!resumeCampaign && graph.currentRevision > 1) throw new Error('CAMPAIGN_ALREADY_STARTED_USE_RESUME');
+  return graph;
+};
+// Her mind may use a closed semantic alias. The graph's immutable identity must be that
+// attested request's exact goal, not the submitted wording known before the claim.
+let graph = mindControlled ? undefined : openCampaignGraph(goal);
 const keyFile = '/home/azureuser/Shannon-current/backend/.env';
 const apiKey = dotenv.parse(fs.readFileSync(keyFile)).OPENAI_API_KEY ?? '';
 if (!apiKey) throw new Error('CAMPAIGN_OPENAI_KEY_UNAVAILABLE');
@@ -470,7 +476,7 @@ stopPollTimer.unref();
 console.log(`CAMPAIGN_STOP_FILE ${stopFile}`);
 let deaths = 0, minHealth = actor.health;
 actor.on('death', () => { deaths++; }); actor.on('health', () => { minHealth = Math.min(minHealth, actor.health); });
-const onCampaignDeath = () => graph.noteActorDeath('native bot death',
+const onCampaignDeath = () => graph?.noteActorDeath('native bot death',
   actor.inventory.items().map(item => ({ name: item.name, count: item.count })));
 actor.on('death', onCampaignDeath);
 const survivalTrace: any[] = [];
@@ -578,10 +584,11 @@ try {
         // A person spoke to her (see receiveHumanChat): she answers and does what was asked, then the campaign goes on.
         const segmentTaskId = runtime.currentState?.taskId;
         const mindRoot = !emergency && mindCampaign?.isRootRequest(String(runMetadata.mindCampaignRequestId ?? ''));
-        if (mindRoot && mindCampaign!.markStarted(String(runMetadata.mindCampaignRequestId))) activeStartedAt ??= mindCampaign!.activeStartedAt;
         const humanChat = !emergency && !mindRoot && envelope.tags.includes('user_chat')
           ? runMetadata.humanChat as { player: string; message: string; answered?: boolean; requestId?: string } : null;
         const mode = emergency ? 'emergency' : humanChat ? 'human_chat' : 'campaign';
+        if (mode === 'campaign' && !graph) throw new Error('MIND_CAMPAIGN_ROOT_NOT_BOUND');
+        if (mindRoot && mindCampaign!.markStarted(String(runMetadata.mindCampaignRequestId))) activeStartedAt ??= mindCampaign!.activeStartedAt;
         const executionGoal = emergency ? envelope.text || '敵から生き延びる' : mindRoot ? mindCampaign!.acceptedGoal! : humanChat ? humanChat.message : goal;
         const previousWorkspaceSnapshot = runMetadata.previousCognitiveWorkspace as ShannonExecutorState['previousWorkspaceSnapshot'];
         // What a person asked for is not her own experience: it is not recorded for learning.
@@ -668,10 +675,11 @@ try {
       };
       // What her body is doing now, from the campaign graph and the body itself: no coordinates or inventory.
       const bodyNow = () => {
-        const active = graph.getActiveId() ? graph.getNode(graph.getActiveId()!) : undefined;
+        const activeId = graph?.getActiveId();
+        const active = activeId ? graph?.getNode(activeId) : undefined;
         const requestRunning = runtime.getTaskListState().tasks.some(task => humanChatTaskIds.has(task.id) && task.status === 'executing');
-        return companionBodyNow(actor as any, { task: active && active.id !== 'root' ? `${goal} → 今は${active.goal}` : goal,
-          busyWith: requestRunning ? 'request' : 'campaign', recentAdvancements });
+        return companionBodyNow(actor as any, { task: active && active.id !== 'root' ? `${graph!.goal} → 今は${active.goal}` : graph?.goal,
+          busyWith: requestRunning ? 'request' : graph ? 'campaign' : 'idle', recentAdvancements });
       };
       const answerFromCompanion = async (record: any, player: string, speakerUuid: string, text: string) => {
         const outcome = await takeCompanionTurn(companion!, { speakerUuid, speakerName: player, message: text, body: bodyNow() },
@@ -733,7 +741,11 @@ try {
             throw new Error('MIND_CAMPAIGN_BODY_NOT_QUIET');
           }
           mindCampaign = new MindControlledCampaign(requestTasks, runtime, { setupMs: 120_000, windowMs: segmentLimit,
-            ownerThreadId: mindThreadId, attestRoot: privateMindCampaignAttestor({ configPath: mindAttestorConfig, threadId: mindThreadId }) });
+            ownerThreadId: mindThreadId, attestRoot: privateMindCampaignAttestor({ configPath: mindAttestorConfig, threadId: mindThreadId }),
+            beforeRootDispatch: request => {
+              if (graph) throw new Error('MIND_CAMPAIGN_ROOT_ALREADY_BOUND');
+              graph = openCampaignGraph(request.goal);
+            } });
         }
         const requestClient = mindCampaign ? mindCampaign.trackClient(companion) : companion;
         // Trial-only short holding renewal; normal bodies retain their 25-second long poll.
@@ -806,7 +818,7 @@ try {
       const deadline = mindCampaign?.deadline ?? Date.now() + segmentLimit;
       let netherSaid = inNether();
       while (!probeStopRequested() && !mindCampaign?.stopped && Date.now() < deadline && !deaths
-        && graph.getNode('root')?.state !== 'verified' && !reachedMilestone()) {
+        && graph?.getNode('root')?.state !== 'verified' && !reachedMilestone()) {
         // The moment of arrival, for a run that goes on past it.
         if (!netherSaid && inNether()) { netherSaid = true; console.log(`CAMPAIGN_NETHER_REACHED ${JSON.stringify({ elapsedMs: Date.now() - startedAt, deaths })}`); }
         // An answer that ran out of turns or failed is not asked to continue: the person can speak again.
@@ -863,7 +875,7 @@ try {
         await new Promise(resolve => setTimeout(resolve, 200));
       }
       stopReason = probeStopReason() ?? stopReason;
-      stopReason ??= mindCampaign?.stopped ? 'mind_cancelled' : graph.getNode('root')?.state === 'verified' ? 'dragon_verified'
+      stopReason ??= mindCampaign?.stopped ? 'mind_cancelled' : graph?.getNode('root')?.state === 'verified' ? 'dragon_verified'
         : reachedMilestone() ? 'milestone_reached' : deaths ? 'actor_died'
           : Date.now() >= deadline ? 'window_expired' : 'loop_exited';
     } catch (error) {
@@ -879,7 +891,7 @@ try {
         const rootSettleDeadline = Date.now() + 5_000;
         while (!mindCampaign.executionSettled && Date.now() < rootSettleDeadline) await new Promise(resolve => setTimeout(resolve, 50));
         independentDragonProof = independentDragonOracle.verify({ goal: mindCampaign.acceptedGoal, predicates: success });
-        if (mindCampaign.finishVerified(graph.getNode('root')?.state === 'verified', independentDragonProof.status === 'verified')) await requestLoop?.tick();
+        if (mindCampaign.finishVerified(graph?.getNode('root')?.state === 'verified', independentDragonProof.status === 'verified')) await requestLoop?.tick();
       }
       // What her mind asked and is still open ends with the run (or with her death).
       await requestLoop?.stop(deaths ? 'died' : stopReason === 'window_expired' ? 'timeout' : 'run_over').catch(() => undefined);
@@ -895,7 +907,7 @@ try {
       }
       const finalMain = mainResults.at(-1);
       segments.push({ scenario: scenario.id, plannerKind: 'real_provider', fullRuntime: true,
-        passed: (milestone ? reachedMilestone() : graph.getNode('root')?.state === 'verified') && deaths === 0,
+        passed: (milestone ? reachedMilestone() : graph?.getNode('root')?.state === 'verified') && deaths === 0,
         durationMs: Date.now() - runtimeStartedAt,
         executor: finalMain ?? { durationMs: Date.now() - runtimeStartedAt, iterations: 0, messages: null },
         toolTrace, toolStarts, mainRuns: mainResults.length, emergencyRuns: emergencyResults.length,
@@ -920,9 +932,9 @@ try {
       const result = await runner!.run(scenario, { tools, plannerKind: 'real_provider', oracle,
         timeoutMs: Number(process.env.MINECRAFT_CAMPAIGN_WINDOW_MS ?? 240000), continuation });
       segments.push(result);
-      graph.checkpoint();
+      graph?.checkpoint();
       console.log(`CAMPAIGN_SEGMENT ${JSON.stringify({ segment, executorMs: result.executor.durationMs,
-        iterations: result.executor.iterations, rootState: graph.getNode('root')?.state, nodes: graph.size,
+        iterations: result.executor.iterations, rootState: graph?.getNode('root')?.state, nodes: graph?.size ?? 0,
         inventory: actor.inventory.items().map(item => ({ name: item.name, count: item.count })), deaths,
         requests: requests.length, budgetReservedUsd: requests.at(-1)?.totalReservedUsd ?? requests.at(-1)?.settledUsd ?? 0 })}`);
       if (result.passed || deaths || !result.executor.messages || result.executor.iterations < 2) break;
@@ -949,22 +961,22 @@ try {
   const accepted = !contact.acceptanceVoidReason && (!mindControlled || (mindCampaign?.verifiedAcknowledged === true && independentDragonProof?.status === 'verified')) && (milestone
     ? milestoneReached && nativeSuccess?.passed === true && survivalContinuous
     : ironPickaxeObjective
-    ? graph.getNode('root')?.state === 'verified' && nativeSuccess?.passed === true && survivalContinuous
-    : graph.getNode('root')?.state === 'verified');
+    ? graph?.getNode('root')?.state === 'verified' && nativeSuccess?.passed === true && survivalContinuous
+    : graph?.getNode('root')?.state === 'verified');
   report = { startedAt: new Date(startedAt).toISOString(), durationMs: Date.now() - startedAt, objective, milestone: milestone || null,
     milestoneCrafted, milestoneReached, budgetProfile, fullRuntime, survivalTrace, progressTrace, survivalContinuous,
     stopReason: probeStopReason() ?? campaignStopReason,
     operatorStopSource, stopFile,
     worldId, port, resumed: resumeCampaign, initialInventory, initialChecks,
-    campaignRevision: graph.currentRevision, campaignNodes: graph.size,
-    root: graph.getNode('root'), accepted, ...contact, humanChats, humanControls, watchers: watcherMode, uiMod: uiModStatus,
-    nativeSuccess, nativeSurvival, frontier: graph.projection(graph.getActiveId()),
+    campaignRevision: graph?.currentRevision ?? null, campaignNodes: graph?.size ?? 0,
+    root: graph?.getNode('root'), accepted, ...contact, humanChats, humanControls, watchers: watcherMode, uiMod: uiModStatus,
+    nativeSuccess, nativeSurvival, frontier: graph?.projection(graph.getActiveId()) ?? null,
     actor: { position: actor.entity?.position, health: actor.health, food: actor.food,
       inventory: actor.inventory.items().map(item => ({ name: item.name, count: item.count })), deaths, minHealth },
     requests, segments };
   console.log(`CAMPAIGN_RESULT ${JSON.stringify({ durationMs: report.durationMs, objective, milestone: milestone || null,
     milestoneCrafted, milestoneReached, accepted, humanInteractions: contact.humanInteractions,
-    acceptanceVoidReason: contact.acceptanceVoidReason, stopReason: report.stopReason, rootState: report.root.state,
+    acceptanceVoidReason: contact.acceptanceVoidReason, stopReason: report.stopReason, rootState: report.root?.state ?? null,
     nativeSuccess: nativeSuccess?.passed ?? null, nativeSurvival: survivalContinuous,
     nodes: report.campaignNodes, inventory: report.actor.inventory, deaths, requests: requests.length,
     budgetReservedUsd: requests.at(-1)?.totalReservedUsd ?? requests.at(-1)?.settledUsd ?? 0 })}`);
@@ -978,8 +990,8 @@ try {
     stopReason: probeStopReason() ?? campaignStopReason ?? 'error',
     operatorStopSource, stopFile, accepted: false, ...humanContactSummary(), humanChats, humanControls,
     watchers: watcherMode, uiMod: uiModStatus, error: String(error), survivalTrace, segments,
-    campaignRevision: graph.currentRevision, campaignNodes: graph.size,
-    root: graph.getNode('root'), frontier: graph.projection(graph.getActiveId()), requests,
+    campaignRevision: graph?.currentRevision ?? null, campaignNodes: graph?.size ?? 0,
+    root: graph?.getNode('root'), frontier: graph?.projection(graph.getActiveId()) ?? null, requests,
     actor: { position: actor.entity?.position, health: actor.health, food: actor.food,
       inventory: actor.inventory.items().map(item => ({ name: item.name, count: item.count })), deaths, minHealth } };
   if (interrupted) console.log(`CAMPAIGN_EARLY_STOP ${probeStopReason()}`);
@@ -991,7 +1003,7 @@ try {
   try {
     try { await learning.flush(); report.learning = learning.summary(); }
     catch (error) { report.learningError = String(error); }
-    try { graph.checkpoint(); }
+    try { graph?.checkpoint(); }
     catch (error) { report.checkpointError = String(error); process.exitCode = 1; }
     // Include late provider usage before saving. Physical operation has ended;
     // waiting here is bounded accounting drain, not extra gameplay.
