@@ -78,6 +78,21 @@ export function isAnthropicCacheEvidenceError(error: unknown): error is Anthropi
   return error instanceof AnthropicCacheEvidenceError;
 }
 
+type RefusalCategory = 'cyber' | 'frontier_llm' | 'bio' | 'general_harms' | 'unknown';
+/** A refusal ends this Haiku run; resending the same goal is not recovery. */
+export class AnthropicPlannerRefusalError extends Error {
+  readonly code = 'MINECRAFT_PLANNER_REFUSED' as const;
+  readonly category: RefusalCategory;
+  constructor(category: unknown) {
+    super('MINECRAFT_PLANNER_REFUSED'); this.name = 'AnthropicPlannerRefusalError';
+    this.category = typeof category === 'string' && ['cyber', 'frontier_llm', 'bio', 'general_harms'].includes(category)
+      ? category as RefusalCategory : 'unknown';
+  }
+}
+export function isAnthropicPlannerTerminalError(error: unknown): error is AnthropicCacheEvidenceError | AnthropicPlannerRefusalError {
+  return isAnthropicCacheEvidenceError(error) || error instanceof AnthropicPlannerRefusalError;
+}
+
 /** The metered fetch has already stored the provider's original usage before this success gate. */
 export function validateMinecraftHaikuUsage(usage: any): void {
   if (!usage || ![usage.input_tokens, usage.output_tokens, usage.cache_creation_input_tokens, usage.cache_read_input_tokens].every(count)) {
@@ -132,10 +147,12 @@ export function createAnthropicPlannerClient(options: Options): Pick<Anthropic, 
   if (options.workspaceId !== undefined && !/^[A-Za-z0-9_-]{1,128}$/.test(options.workspaceId)) throw new Error('MINECRAFT_PLANNER_ANTHROPIC_WORKSPACE_INVALID');
   const haiku = options.model === MINECRAFT_HAIKU_MODEL;
   let cacheEvidenceFailure: AnthropicCacheEvidenceError | undefined;
+  let providerRefusalFailure: AnthropicPlannerRefusalError | undefined;
   if (haiku && options.cacheTTL !== undefined && options.cacheTTL !== '1h') throw new Error('MINECRAFT_PLANNER_HAIKU_CACHE_TTL_REQUIRED');
   const run = async (request: any, requestOptions?: { signal?: AbortSignal }) => {
     if (haiku && requestOptions?.signal?.aborted) throw requestOptions.signal.reason ?? new DOMException('Aborted', 'AbortError');
     if (cacheEvidenceFailure) throw cacheEvidenceFailure;
+    if (providerRefusalFailure) throw providerRefusalFailure;
     const prepared = haiku ? cacheMinecraftHaikuRequest(request) : options.cacheTTL ? cacheMinecraftRequest(request, options.cacheTTL, false) : request;
     if (haiku && (!Number.isSafeInteger(request.max_tokens ?? MAX_OUTPUT_TOKENS) || (request.max_tokens ?? MAX_OUTPUT_TOKENS) < 1)) throw new Error('MINECRAFT_PLANNER_OUTPUT_LIMIT_INVALID');
     const timeout = AbortSignal.timeout(options.timeoutMs ?? 60_000);
@@ -165,13 +182,20 @@ export function createAnthropicPlannerClient(options: Options): Pick<Anthropic, 
     }
     if (haiku) signal.throwIfAborted();
     if (cacheEvidenceFailure) throw cacheEvidenceFailure;
+    if (providerRefusalFailure) throw providerRefusalFailure;
     if (haiku) {
       try { validateMinecraftHaikuUsage(payload?.usage); }
       catch (error) { if (isAnthropicCacheEvidenceError(error)) cacheEvidenceFailure = error; throw error; }
     }
     if (payload?.type !== 'message' || !Array.isArray(payload.content)) throw new Error('MINECRAFT_PLANNER_RESPONSE_INVALID');
     if (haiku && payload.stop_reason === 'max_tokens') throw new Error('MINECRAFT_PLANNER_RESPONSE_INCOMPLETE');
-    if (payload.stop_reason === 'refusal') throw new Error('MINECRAFT_PLANNER_REFUSED');
+    if (payload.stop_reason === 'refusal') {
+      if (haiku) {
+        providerRefusalFailure ??= new AnthropicPlannerRefusalError(payload.stop_details?.category);
+        throw providerRefusalFailure;
+      }
+      throw new Error('MINECRAFT_PLANNER_REFUSED');
+    }
     if (!payload.content.some((block: any) => block.type === 'text' || block.type === 'tool_use')) throw new Error('MINECRAFT_PLANNER_EMPTY_OUTPUT');
     return payload;
   };

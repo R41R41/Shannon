@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { cacheMinecraftHaikuRequest, createAnthropicPlannerClient, MINECRAFT_HAIKU_MODEL,
-  MINECRAFT_HAIKU_PROTOCOL_PREFIX, isAnthropicCacheEvidenceError } from '../../src/services/minebot/cognition/AnthropicPlannerClient.js';
+  MINECRAFT_HAIKU_PROTOCOL_PREFIX, isAnthropicCacheEvidenceError, AnthropicPlannerRefusalError, isAnthropicPlannerTerminalError } from '../../src/services/minebot/cognition/AnthropicPlannerClient.js';
 
 const usage = { input_tokens: 25, output_tokens: 40, cache_creation_input_tokens: 700, cache_read_input_tokens: 0,
   cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 700 } };
@@ -225,12 +225,39 @@ describe('Haiku 5.5 native Minecraft transport', () => {
     expect(recorded).toEqual([usage]); expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps a metered model refusal terminal without retry', async () => {
-    const recorded: any[] = []; const payload = reply({ stop_reason: 'refusal' });
-    const fetcher = vi.fn(async () => { recorded.push(payload.usage); return response(payload); });
+  it.each([['general_harms', 'general_harms'], ['unexpected-private-detail', 'unknown'], [undefined, 'unknown']])(
+    'keeps a metered refusal terminal with a closed category: %s', async (category, expected) => {
+      const recorded: any[] = []; const payload = reply({ stop_reason: 'refusal', stop_details: { category } });
+      const fetcher = vi.fn(async () => { recorded.push(payload.usage); return response(payload); });
+      const client = createAnthropicPlannerClient({ apiKey: 'offline-fixture', model: MINECRAFT_HAIKU_MODEL, fetcher: fetcher as any });
+      const error = await (client.messages as any).create(request()).catch((error: unknown) => error);
+      expect(error).toBeInstanceOf(AnthropicPlannerRefusalError);
+      expect(isAnthropicPlannerTerminalError(error)).toBe(true); expect(isAnthropicCacheEvidenceError(error)).toBe(false);
+      expect(error.category).toBe(expected); expect(error.message).toBe('MINECRAFT_PLANNER_REFUSED');
+      await expect((client.messages as any).create(request())).rejects.toBe(error);
+      await expect((client.messages as any).stream(request()).finalMessage()).rejects.toBe(error);
+      expect(recorded).toEqual([usage]); expect(fetcher).toHaveBeenCalledTimes(1);
+    });
+
+  it('does not accept an in-flight success after a concurrent refusal stopped the client', async () => {
+    let finish!: (value: Response) => void;
+    const fetcher = vi.fn()
+      .mockImplementationOnce(() => new Promise<Response>(resolve => { finish = resolve; }))
+      .mockResolvedValueOnce(response(reply({ stop_reason: 'refusal' })));
     const client = createAnthropicPlannerClient({ apiKey: 'offline-fixture', model: MINECRAFT_HAIKU_MODEL, fetcher: fetcher as any });
-    await expect((client.messages as any).create(request())).rejects.toThrow('PLANNER_REFUSED');
-    expect(recorded).toEqual([usage]); expect(fetcher).toHaveBeenCalledTimes(1);
+    const pending = (client.messages as any).create(request());
+    const error = await (client.messages as any).create(request()).catch((error: unknown) => error);
+    expect(error).toBeInstanceOf(AnthropicPlannerRefusalError); finish(response(reply()));
+    await expect(pending).rejects.toBe(error); expect(fetcher).toHaveBeenCalledTimes(2);
+    await expect((client.messages as any).create(request())).rejects.toBe(error);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it('preserves the legacy non-Haiku refusal contract', async () => {
+    const fetcher = vi.fn(async () => response(reply({ stop_reason: 'refusal' })));
+    const client = createAnthropicPlannerClient({ apiKey: 'offline-fixture', model: 'claude-sonnet-5-5', fetcher: fetcher as any });
+    for (let i = 0; i < 2; i++) await expect((client.messages as any).create(request())).rejects.toThrow('MINECRAFT_PLANNER_REFUSED');
+    expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
   it('retains legacy Sonnet cache behavior unless its caller explicitly requests another TTL', async () => {

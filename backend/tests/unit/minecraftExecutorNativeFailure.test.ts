@@ -172,4 +172,39 @@ describe('executor native evidence failure admission', () => {
     const ordinary: any = { messages: { stream: () => ({ finalMessage: async () => { throw new Error('ordinary transport failure'); } }) } };
     expect((await executor(ordinary).run(state())).recoveryStatus).toBe('awaiting_user');
   });
+
+  it.each(['main', 'resume-summary'])('holds a known provider refusal during %s without a paid automatic continuation', async stage => {
+    const known = { type: 'message', role: 'assistant', model: MINECRAFT_HAIKU_MODEL,
+      stop_reason: 'refusal', stop_details: { category: 'general_harms' },
+      content: [{ type: 'text', text: 'offline refusal' }], usage: GOOD };
+    const rawUsage: unknown[] = [];
+    const fetcher = vi.fn(async () => { rawUsage.push(known.usage); return new Response(JSON.stringify(known)); });
+    const client = createAnthropicPlannerClient({ apiKey: 'offline-native', model: MINECRAFT_HAIKU_MODEL, fetcher: fetcher as any });
+    const first = await executor(client).run(state(stage === 'resume-summary' ? { previousMessages: prior } : {}));
+    expect(first.recoveryStatus).toBe('failed_terminal'); expect(first.providerEvidenceFailure).toBe('MINECRAFT_PLANNER_REFUSED');
+    expect(first.taskTree).toMatchObject({ status: 'error', recoveryStatus: 'failed_terminal' });
+    expect(first.taskTree?.strategy).toContain('拒否'); expect(first.toolCallCount).toBe(0);
+    if (stage === 'resume-summary') expect(first.messages).toEqual(prior);
+    const retry = await executor(client).run(state({ previousMessages: first.messages }));
+    expect(retry.recoveryStatus).toBe('failed_terminal'); expect(retry.providerEvidenceFailure).toBe('MINECRAFT_PLANNER_REFUSED');
+    expect(fetcher).toHaveBeenCalledOnce(); expect(rawUsage).toEqual([GOOD]);
+  });
+
+  it('joins a late paid title refusal before classifying an earlier verified main result', async () => {
+    const title = deferred<Response>(), entered = deferred<void>();
+    const fetcher = vi.fn(async (_url: unknown, init: any) => {
+      if (!JSON.parse(init.body).tools?.length) { entered.resolve(); return title.promise; }
+      return payload(GOOD, done);
+    });
+    const client = createAnthropicPlannerClient({ apiKey: 'offline-native', model: MINECRAFT_HAIKU_MODEL, fetcher: fetcher as any });
+    const goal = '安全を確認してから必要な資源を集めてネザーポータルを建設する'; let returned = false;
+    const running = executor(client).run(state({ goal, goalContract: { ...contract, goal } })).then(value => { returned = true; return value; });
+    await entered.promise; await new Promise<void>(resolve => setImmediate(resolve)); expect(returned).toBe(false);
+    title.resolve(new Response(JSON.stringify({ type: 'message', role: 'assistant', model: MINECRAFT_HAIKU_MODEL,
+      stop_reason: 'refusal', content: [{ type: 'text', text: 'offline title refusal' }], usage: GOOD })));
+    const result = await running;
+    expect(result.recoveryStatus).toBe('failed_terminal'); expect(result.providerEvidenceFailure).toBe('MINECRAFT_PLANNER_REFUSED');
+    expect(result.taskTree?.status).toBe('error'); expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
 });

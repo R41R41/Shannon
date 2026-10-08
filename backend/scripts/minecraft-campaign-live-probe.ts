@@ -18,7 +18,7 @@ import { AutonomousScenarioRunner } from '../src/services/minebot/testing/Autono
 import { AcceptanceBudget, ActualUsageBudget, ANTHROPIC_PRICING, seedSharedCampaignBudget } from '../src/services/minebot/testing/AcceptanceBudget.js';
 import { CampaignGoalGraph } from '../src/services/minebot/cognition/CampaignGoalGraph.js';
 import { createOpenAIPlannerClient } from '../src/services/minebot/cognition/OpenAIPlannerClient.js';
-import { createAnthropicPlannerClient, isAnthropicCacheEvidenceError } from '../src/services/minebot/cognition/AnthropicPlannerClient.js';
+import { createAnthropicPlannerClient, isAnthropicCacheEvidenceError, isAnthropicPlannerTerminalError } from '../src/services/minebot/cognition/AnthropicPlannerClient.js';
 import { reserveMinecraftModelRequest } from '../src/services/minebot/cognition/MinecraftModelBudget.js';
 import { summarizeCampaignUsage } from '../src/services/minebot/testing/CampaignUsageSummary.js';
 import { MindControlledCampaign, MIND_CAMPAIGN_USER_GOAL, assertMindCampaignQuiet, submitMindCampaignGoal,
@@ -306,7 +306,13 @@ const performMetered = async (url: string, options?: RequestInit, role = 'planne
   try {
     // Only the end of the whole run, or two minutes without an answer, cuts a request short.
     const signal = AbortSignal.any([probeStopController.signal, AbortSignal.timeout(120_000)]);
-    const response = await fetch(url, { ...options, signal }); const payload: any = await response.clone().json();
+    const response = await fetch(url, { ...options, signal });
+    const payload: any = await response.clone().json().catch(error => {
+      // Meter unknown usage, then let the native client validate the original unread success body.
+      // Provider refusals/failures are classified by status even when their body is not JSON.
+      if (budgetProfile === 'actual-haiku-40min-20261008' && (response.ok || response.status >= 400)) return {};
+      throw error;
+    });
     if (response.status >= 400 && response.status < 500) {
       // Refused before processing: not billed. A refusal for lack of credit is
       // terminal; any other rate limit waits before the caller may try again
@@ -323,7 +329,7 @@ const performMetered = async (url: string, options?: RequestInit, role = 'planne
       return response;
     }
     // A server-side failure without usage has an unknown billing outcome.
-    if (response.status >= 500 && payload?.type === 'error' && budget instanceof ActualUsageBudget) {
+    if (response.status >= 500 && (budgetProfile === 'actual-haiku-40min-20261008' || payload?.type === 'error') && budget instanceof ActualUsageBudget) {
       const settled = budget.settle(reservation.request, null, requestModel);
       requests.push({ ...reservation, ...metering, ...settled, durationMs: Date.now() - startedAt, httpStatus: response.status, providerError: String(payload?.error?.type ?? `http_${response.status}`) });
       if (++transportFailures >= 5) requestProviderStop('transport_failures');
@@ -361,8 +367,14 @@ const plannerFetch: typeof fetch = (input, options) => plannerClosed && !operato
 // The usual model: learning reflections always (they also close the run), and planning unless another planner was chosen.
 const haikuTrial = plannerModel === 'claude-haiku-5-5';
 if (mindControlled && (!haikuTrial || plannerProvider !== 'anthropic')) throw new Error('MIND_CAMPAIGN_HAIKU_REQUIRED');
-const watchedHaikuClient = (native: ReturnType<typeof createAnthropicPlannerClient>) => watchCampaignEvidenceFailures(native,
-  isAnthropicCacheEvidenceError, () => requestProviderStop('cache_evidence_invalid'));
+const watchedHaikuClient = (native: ReturnType<typeof createAnthropicPlannerClient>) => {
+  let stopCode = 'cache_evidence_invalid';
+  return watchCampaignEvidenceFailures(native, error => {
+    if (!isAnthropicPlannerTerminalError(error)) return false;
+    stopCode = isAnthropicCacheEvidenceError(error) ? 'cache_evidence_invalid' : 'provider_refusal';
+    return true;
+  }, () => requestProviderStop(stopCode));
+};
 const client = haikuTrial
   ? watchedHaikuClient(createAnthropicPlannerClient({ apiKey: anthropicKey, model: plannerModel, effort: anthropicEffort,
     workspaceId: anthropicAccess.workspaceId, fetcher: meteredFetch }))

@@ -85,3 +85,7 @@ dev で試す時は `"environment":"dev"`（`dev:shannon-home`、記憶は本番
 新規自然ワールド、非OP、支給なし。正規オーナーの`/v1/chat`へ「エンドラを討伐してください」だけを一度送り、心のfresh requestをbodyがclaimして開始する。独立したroot taskを重ねない。40分はrootの開始から数え、setupと停止後の精算を分ける。人が途中目標を追加しない。身体の現行観測・独立oracleで到達度を判定し、モデルの完了宣言だけで討伐としない。
 
 今回専用の$1 Minebot台帳、既存の日次要求/予約量、有限時間のいずれでも止まる。古い台帳や上限を初期化・拡大しない。結果にはusage由来の料金、未知の保守的予約、cache読取り率、要求数、待ち時間、実時間、停止理由を別々に残す。Jev→画像付きDecisions反射は今回未実装で、黙って比較条件へ追加しない。
+
+## Haiku 5.5 公式ガイドの適用
+
+公式 [Prompting Claude Haiku 5.5](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/prompting-claude-haiku-5-5) と [Preserved thinking](https://platform.claude.com/docs/en/build-with-claude/preserved-thinking) を参照する。native Haiku の同一会話では静的 system/tools と送信済み履歴を保持し、現在の観測だけを末尾へ追記する。要約を作る境界では新しい会話を開始し、旧 prefix に結び付いた署名を移植しない。refusal は既知の usage を残した終端として扱い、同じ要求の自動再送で回復を装わない。adaptive・固定 effort・既存の完了証拠・停止・予算・1時間 cache を維持する。実 cache reuse と到達度は統合後に測定する。
