@@ -1,3 +1,4 @@
+import { companionPrimaryModel, type CompanionPrimaryModel, COMPANION_PRIMARY_MODELS } from '../integration/companionPrimaryModel.js';
 import Anthropic from '@anthropic-ai/sdk';
 import { createAnthropicPlannerClient } from './AnthropicPlannerClient.js';
 import { budgetedMinecraftFetch } from './MinecraftModelBudget.js';
@@ -27,4 +28,14 @@ export function createConfiguredMinecraftPlanner(
     return { client: createAnthropicPlannerClient({ apiKey: configuration.anthropic.apiKey ?? '', model, fetcher }), model };
   }
   return { client: new Anthropic({ apiKey: configuration.anthropic.apiKey || undefined }) };
+}
+
+/** The original request selects this pair once; helpers remain Haiku and use the same unchanged budget transport. */
+export function createPinnedMinecraftPlanners(configuration: MinecraftPlannerConfiguration, selection: CompanionPrimaryModel,
+  fetcher: typeof fetch = budgetedMinecraftFetch) {
+  const pin = companionPrimaryModel(selection);
+  if (!pin) throw new Error('MINECRAFT_PRIMARY_MODEL_PIN_INVALID');
+  const apiKey = configuration.anthropic.apiKey ?? '';
+  return { primary: { client: createAnthropicPlannerClient({ apiKey, model: pin.model, effort: pin.mode === 'sonnet' ? 'medium' : 'low', fetcher }), model: pin.model },
+    auxiliary: { client: createAnthropicPlannerClient({ apiKey, model: COMPANION_PRIMARY_MODELS.haiku, effort: 'low', fetcher }), model: COMPANION_PRIMARY_MODELS.haiku } };
 }

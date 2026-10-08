@@ -1,3 +1,4 @@
+import type { CompanionPrimaryModel } from '../../minebot/integration/companionPrimaryModel.js';
 /**
  * ShannonExecutor — Anthropic API 直接呼出による実行エンジン
  *
@@ -9,8 +10,8 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
-import { createConfiguredMinecraftPlanner } from '../../minebot/cognition/configuredMinecraftPlanner.js';
-import { isAnthropicPlannerTerminalError, MINECRAFT_HAIKU_MODEL, type AnthropicCacheEvidenceError, type AnthropicPlannerRefusalError } from '../../minebot/cognition/AnthropicPlannerClient.js';
+import { createConfiguredMinecraftPlanner, createPinnedMinecraftPlanners } from '../../minebot/cognition/configuredMinecraftPlanner.js';
+import { isAnthropicPlannerTerminalError, isNativeMinecraftModel, type AnthropicCacheEvidenceError, type AnthropicPlannerRefusalError } from '../../minebot/cognition/AnthropicPlannerClient.js';
 import { config } from '../../../config/env.js';
 import { createLogger } from '../../../utils/logger.js';
 import { CONFIG as MINEBOT_CONFIG } from '../../minebot/config/MinebotConfig.js';
@@ -52,6 +53,8 @@ type ProviderTerminalError = AnthropicCacheEvidenceError | AnthropicPlannerRefus
 // ─── 型定義 ───
 
 export interface ShannonExecutorDeps {
+    /** Frozen selection from the original authenticated companion request. */
+    primaryModel?: CompanionPrimaryModel;
     /** Explicit injection for isolated planner evals; never load shared credentials there. */
     modelClient?: Pick<Anthropic, 'messages'>;
     /** Actual identity of an injected transport, for request/log attribution. */
@@ -535,15 +538,25 @@ export function withLiveState(messages: Anthropic.MessageParam[], liveState: str
 export class ShannonExecutor {
     private client: Pick<Anthropic, 'messages'>;
     private readonly configuredModel?: string;
+    private auxiliaryClient!: Pick<Anthropic, 'messages'>;
+    private auxiliaryModel?: string;
 
     constructor(private deps: ShannonExecutorDeps) {
         if (this.deps.modelClient) {
             this.client = this.deps.modelClient;
+        } else if (this.deps.primaryModel) {
+            const planners = createPinnedMinecraftPlanners(config, this.deps.primaryModel);
+            this.client = planners.primary.client;
+            this.configuredModel = planners.primary.model;
+            this.auxiliaryClient = planners.auxiliary.client;
+            this.auxiliaryModel = planners.auxiliary.model;
         } else {
             const planner = createConfiguredMinecraftPlanner(config);
             this.client = planner.client;
             this.configuredModel = planner.model;
         }
+        this.auxiliaryClient ??= this.client;
+        this.auxiliaryModel ??= this.configuredModel;
     }
 
     async run(state: ShannonExecutorState): Promise<ShannonExecutorResult> {
@@ -561,10 +574,10 @@ export class ShannonExecutor {
         const startTime = Date.now();
         const model = this.deps.modelIdentity?.model ?? this.configuredModel
           ?? (isLightweightTask(state.goal, state.tags) ? MODEL_HAIKU : MODEL_SONNET);
-        const nativeHaiku = model === MINECRAFT_HAIKU_MODEL;
+        const native = isNativeMinecraftModel(model);
         // The API binds signed thinking to system, tools and all earlier messages.
         // Snapshot the session inputs before any parallel request can yield.
-        const baseSystemPrompt = nativeHaiku ? state.systemPrompt : undefined;
+        const baseSystemPrompt = native ? state.systemPrompt : undefined;
         const terminalStopReason = () => providerEvidenceFailure?.code === 'MINECRAFT_PLANNER_REFUSED'
           ? 'provider_refused' : 'provider_evidence_invalid';
         let messages: MessageParam[];
@@ -590,7 +603,7 @@ export class ShannonExecutor {
             const invalidated = campaign.reconcileCurrentInventory(initialObservation);
             if (invalidated.length) log.warn(`Campaign current-inventory proof invalidated after native loss observation: ${invalidated.join(', ')}`);
         }
-        const sessionTools = nativeHaiku ? structuredClone([...(state.tools ?? []),
+        const sessionTools = native ? structuredClone([...(state.tools ?? []),
           ...(campaign ? [MANAGE_CAMPAIGN_GOALS_TOOL, INSPECT_CAMPAIGN_GOALS_TOOL] : [MANAGE_TASK_TREE_TOOL]),
           ...(verifier && !campaign ? [GOAL_CONTRACT_TOOL as Tool] : [])]) : undefined;
         let goalContract = state.goalContract ?? state.previousWorkspaceSnapshot?.goalContract;
@@ -748,19 +761,19 @@ export class ShannonExecutor {
             if (verifier) systemPromptWithTree += campaign
               ? '\n\n長期キャンペーンはmanage-campaign-goalsで必要な枝だけ分解し、inspect-campaign-goalsで詳細を検索する。joinは親ノード自身の子群に作用し、all=全子必須、any=子のどれか一つ。methodはデフォルトで展開中。必要な子枝を計画し終えた時だけ理由と最新expectedRevisionを付けてseal-methodし、追加が必要なら未検証のうちにunseal-methodしてから子を足す。子なしmethodや未seal methodは条件が成立しても完了しない。身体操作前に未完了のactiveNodeIdを選ぶ。action葉が望ましいが、method/outcomeも作業文脈にできる。観測と未検証ノードの事後条件・joinが食い違う場合はreasonを付けてreviseする。reviseではgoalの意味を保ち、食料目標を木材所持など無関係な条件へ変えない。別の出力は別ノードで表現する。子を持つ親のreviseは最新projectionのexpectedRevisionが必須。検証済み子孫がいる親ではpostconditionsだけを訂正しjoinを変えない。完成条件を根拠なく弱めず、既存子孫を消さない。完成済みノードをpendingに戻さず、次の枝を選ぶ。モデルはverifiedを設定できず、native証拠が完了を決める。blockedなら原因を記録して代替methodを提案する。大きなmethod/outcomeは子証拠と自分のnative条件を満たして初めて完成する。全木を一度に展開しない。資源検索の候補は高低差と経路可能性を確認する。地表で対象なし、または全候補が地下深部なら、同地点の再検索や成長待ちを繰り返さず、新しい地表地点へ移動して再探索する。必要アイテム不足で失敗したスキルは入手まで同じ引数で再実行しない。設備を要求するレシピでも、手持ちに設備がないだけで新造せず、既設設備を探して利用する。craft-oneは近傍の作業台を探索できる。遠方・大きな高低差のある既設設備への移動が失敗したら、同じ経路を再試行する前に障害を実測し、所持資源から近くに同じ設備を作る代替案をレシピと所持数で比較する。移動・階段・採掘の成功申告だけで位置や資材の達成を推定せず、返された実座標と所持品を照合する。'
               : '\n\nMinecraft完了は世界の証拠で検証する。task-completeは検証要求であって無条件完了ではない。条件を満たさない/不明なら観測・計画を続ける。親を含む各ノードにpostconditionsを設定し、依存をrequiresで示す。証拠が揃ったノードはnative側がcompletedへ反映する。完了したノードをactiveにしない。既知の事実を繰り返し観測せず、独立した観測や計画作成は同じ応答にまとめる。身体操作は返された結果を確認して進める。';
-            if (verifier && nativeHaiku) systemPromptWithTree += '\n完了条件が未設定なら、作業開始前にset-goal-contractでユーザー原文に対応する完了条件を設定する。設定済みの主契約は変更不可で、再設定しない。主目標rootにも同じpostconditionsを設定し、単一作業ならroot 1つで十分。position/block/defeated条件にはdimensionが必須。途中で素材を消費する目標は現在所持と歴史的達成を区別する。現在の契約は最新の状態メッセージに示す。';
-            if (!nativeHaiku && verifier && !goalContract) systemPromptWithTree += '\n作業開始前にset-goal-contractでユーザー原文に対応する完了条件を設定する。';
-            if (!nativeHaiku && goalContract) systemPromptWithTree += campaign
+            if (verifier && native) systemPromptWithTree += '\n完了条件が未設定なら、作業開始前にset-goal-contractでユーザー原文に対応する完了条件を設定する。設定済みの主契約は変更不可で、再設定しない。主目標rootにも同じpostconditionsを設定し、単一作業ならroot 1つで十分。position/block/defeated条件にはdimensionが必須。途中で素材を消費する目標は現在所持と歴史的達成を区別する。現在の契約は最新の状態メッセージに示す。';
+            if (!native && verifier && !goalContract) systemPromptWithTree += '\n作業開始前にset-goal-contractでユーザー原文に対応する完了条件を設定する。';
+            if (!native && goalContract) systemPromptWithTree += campaign
               ? '\n完了条件は設定済み。rootの契約は変更不可。途中で素材を消費する目標は、現在所持と歴史的達成を区別する。'
               : '\n完了条件は設定済み。set-goal-contractを再度呼ぶ必要はない。主目標のroot nodeにも、この契約と同じpostconditionsを設定する。単一作業ならroot 1つで十分。position/block/defeated条件にはdimensionが必須。';
-            if (!nativeHaiku && goalContract) systemPromptWithTree += `\n\n変更不可の完了条件: ${JSON.stringify(goalContract)}`;
+            if (!native && goalContract) systemPromptWithTree += `\n\n変更不可の完了条件: ${JSON.stringify(goalContract)}`;
             if (campaign) systemPromptWithTree += '\nサバイバルでは現在時刻・空腹・体力・敵の密度を長時間作業や地表への遠征前に見積もる。危険なら目的ツリーに安全確保・食料・装備などの依存作業を追加し、状況に応じて安全な場所で進める。既に必要量を満たした資源は追加採取を目的化せず、次の依存工程へ進む。準備の数量を満たすために長期目標の道具・資源の連鎖を止めない。最新native観測に所持品・体力・位置・時刻があるので、同じ事実をcheck-inventory-itemやget-bot-statusで再確認しない。キャンペーン操作とそれに続く身体操作は同じ応答で順に呼べる。固定手順ではなく最新のnative観測に基づいて判断する。';
             // Everything from here on changes with every call. The planner model's
             // prompt cache matches whole blocks from the start: one changed
             // character in the system prompt made every call pay full price for
             // ~16k input tokens (measured: cache written each time, never read).
             // The system prompt stays fixed and the live state goes last.
-            let liveState = nativeHaiku && goalContract ? `\n\n変更不可の完了条件（設定済み）: ${JSON.stringify(goalContract)}` : '';
+            let liveState = native && goalContract ? `\n\n変更不可の完了条件（設定済み）: ${JSON.stringify(goalContract)}` : '';
             if (campaign) {
                 const projection = campaign.projection(campaignActiveId);
                 // The only number that is an expectedRevision. The world observation
@@ -797,7 +810,7 @@ export class ShannonExecutor {
             const beforeKnowledge = liveState.length;
             // Stage each observation/lesson in a new unsent user message. Never
             // rewrite an earlier tool result or a user turn bound by a signature.
-            const knowledgeHistory: MessageParam[] = nativeHaiku ? [{ role: 'user', content: [] }] : messages;
+            const knowledgeHistory: MessageParam[] = native ? [{ role: 'user', content: [] }] : messages;
             if (learnedKnowledge) liveState += knowledgeIntoHistory(knowledgeHistory, learnedKnowledge, knowledgeWritten);
             const pace = (this.deps.learning as { paceSection?: () => string | null } | undefined)?.paceSection?.();
             if (pace) liveState += `\n\n${pace}`;
@@ -805,7 +818,7 @@ export class ShannonExecutor {
             // cache mark sits before it), and in a paid run it was over half of the planner's bill (L88).
             log.debug(`📏 現在の状態の注記: ${liveState.length}字（うち知識${liveState.length - beforeKnowledge}字、観測${liveState.match(/最新native観測[^\n]*/)?.[0].length ?? 0}字）`);
 
-            if (nativeHaiku) {
+            if (native) {
                 const freshKnowledge = knowledgeHistory[0].content as Anthropic.ContentBlockParam[];
                 const liveBlocks: Anthropic.ContentBlockParam[] = liveState.trim()
                   ? [{ type: 'text', text: `## 現在の状態（この時点の実測。これまでの結果より新しい）${liveState}` }] : [];
@@ -839,7 +852,7 @@ export class ShannonExecutor {
                         { type: 'text' as const, text: systemPromptWithTree, cache_control: { type: 'ephemeral' as const } },
                     ],
                     tools: cachedTools as any,
-                    messages: nativeHaiku ? messages : withLiveState(messages, liveState),
+                    messages: native ? messages : withLiveState(messages, liveState),
                     temperature: 1,
                 }, { signal: state.abortSignal });
                 response = await stream.finalMessage();
@@ -1494,8 +1507,8 @@ export class ShannonExecutor {
      * 例: 「ダイヤモンドが欲しいんだけどさ、地下に行って掘ってきてくれない？」→「ダイヤモンドの採掘」
      */
     private async summarizeGoal(rawGoal: string, signal?: AbortSignal): Promise<string> {
-        const response = await this.client.messages.create({
-            model: this.configuredModel ?? MODEL_HAIKU,
+        const response = await this.auxiliaryClient.messages.create({
+            model: this.auxiliaryModel ?? MODEL_HAIKU,
             max_tokens: 60,
             system: 'ユーザーの指示を短い動作名詞句（〜10文字）に要約せよ。例:「ダイヤモンドの採掘」「ネザーポータル建設」「鉄装備の作成」。要約のみ出力。',
             messages: [{ role: 'user', content: rawGoal }],
@@ -1517,8 +1530,8 @@ export class ShannonExecutor {
         const mechanical = ShannonExecutor.compressMessagesMechanical(messages);
         if (signal?.aborted) return mechanical;
         try {
-            const response = await this.client.messages.create({
-                model: this.configuredModel ?? MODEL_HAIKU,
+            const response = await this.auxiliaryClient.messages.create({
+                model: this.auxiliaryModel ?? MODEL_HAIKU,
                 max_tokens: 1024,
                 system: `あなたはタスク実行ログの要約者です。以下のツール呼出し履歴を、後続のAIエージェントが作業を引き継げるように要約してください。
 

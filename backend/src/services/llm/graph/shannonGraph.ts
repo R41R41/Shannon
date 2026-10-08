@@ -1,3 +1,4 @@
+import { companionPrimaryModelFromMetadata } from '../../minebot/integration/companionPrimaryModel.js';
 import { bindRequestMemory, snapshotMemoryEnvelope } from '../../memory/requestMemory.js';
 import { bindRequestDiscordConversation } from '../../common/discordConversationPort.js';
 import { bindRequestWebConversation } from '../../common/webConversationPort.js';
@@ -256,10 +257,10 @@ function createExecuteNode(
     }
 
     // Discord/Web 等は FCA (OpenAI / LangChain Anthropic)。Minebot のみ ShannonExecutor。
+    const primaryModel = envelope.channel === 'minecraft' ? companionPrimaryModelFromMetadata(envelope.metadata) : undefined;
     const useShannonExecutor =
       envelope.channel === 'minecraft'
-      && Boolean(minecraftPlannerProvider(config))
-      && process.env.SHANNON_USE_FCA !== 'true';
+      && (Boolean(primaryModel) || (Boolean(minecraftPlannerProvider(config)) && process.env.SHANNON_USE_FCA !== 'true'));
 
     // ═══ ShannonExecutor パス (Anthropic API 直接呼出・Minecraft のみ) ═══
     if (useShannonExecutor) {
@@ -396,6 +397,7 @@ function createExecuteNode(
         }
 
         const executor = new ShannonExecutor({
+          primaryModel,
           instantSkills: bot?.instantSkills,
           bot,
           routineManager,
@@ -462,6 +464,7 @@ function createExecuteNode(
       } catch (e) {
         // Cancellation must not start a fallback engine.
         state._abortSignal?.throwIfAborted();
+        if (primaryModel) throw e; // A pinned request never switches provider/model after failure.
         logger.error(`❌ ShannonExecutor failed, falling back to FCA: ${e}`, e);
       }
     }

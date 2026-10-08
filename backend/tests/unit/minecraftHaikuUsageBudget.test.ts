@@ -60,7 +60,7 @@ describe('Haiku native usage pricing', () => {
   });
   it('retains the historical valid prices of old models and omitted zero cache fields', () => {
     const old = { input_tokens: 900, output_tokens: 200, cache_creation_input_tokens: 1500, cache_read_input_tokens: 25_000 };
-    expect(anthropicUsageCostUsd('claude-sonnet-5-5', old)).toBeCloseTo((900 * 2 + 1500 * 2.5 + 25_000 * 0.2 + 200 * 10) / 1e6, 12);
+    expect(anthropicUsageCostUsd('claude-sonnet-5-5', { ...old, cache_creation: { ephemeral_5m_input_tokens: 1500, ephemeral_1h_input_tokens: 0 } })).toBeCloseTo((900 * 2 + 1500 * 2.5 + 25_000 * 0.2 + 200 * 10) / 1e6, 12);
     expect(anthropicUsageCostUsd('claude-opus-5-5', old)).toBeCloseTo((900 * 4 + 1500 * 5 + 25_000 * 0.2 + 200 * 20) / 1e6, 12);
     expect(anthropicUsageCostUsd('claude-haiku-4-5', { input_tokens: 1000, output_tokens: 100 }))
       .toBeCloseTo((1000 + 100 * 5) / 1e6, 12);
@@ -136,11 +136,25 @@ describe('Haiku bounded reservation and restart-safe settlement', () => {
     expect(() => budget.settle(first.request, usage(), model)).toThrow('RESERVATION_UNKNOWN');
     expect(fs.readFileSync(budget.file, 'utf8')).toBe(before);
   });
-  it('retains old-model 5m reservation price and honors an explicitly requested 1h bound', () => {
+  it('reserves Sonnet 5.5 at its mandatory 1h write price even before explicit markers', () => {
     const oldBody = JSON.stringify({ model: 'claude-sonnet-5-5', max_tokens: 8192, messages: [] });
     const oldInputBound = Buffer.byteLength(oldBody) + 4096;
-    expect(fixture().reserve(oldBody).reservedUsd).toBeCloseTo((oldInputBound * 2.5 + 8192 * 10) / 1e6 * 1.25, 12);
+    expect(fixture().reserve(oldBody).reservedUsd).toBeCloseTo((oldInputBound * 4 + 8192 * 10) / 1e6 * 1.25, 12);
     const hourBody = body({ model: 'claude-sonnet-5-5' });
     expect(fixture().reserve(hourBody).reservedUsd).toBeCloseTo(((Buffer.byteLength(hourBody) + 4096) * 4 + 8192 * 10) / 1e6 * 1.25, 12);
+  });
+});
+
+
+describe('Sonnet 5.5 usage evidence under the unchanged acceptance cap', () => {
+  const model = 'claude-sonnet-5-5';
+  it('retains known consumed usage before a cache-policy failure and keeps absent TTL evidence unknown', () => {
+    const uncached = { input_tokens: 100, output_tokens: 5, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 };
+    expect(anthropicUsageCostUsd(model, uncached)).toBeCloseTo((100 * 2 + 5 * 10) / 1e6, 12);
+    expect(anthropicUsageCostUsd(model, { ...uncached, cache_creation_input_tokens: 700 })).toBeNull();
+    expect(anthropicUsageCostUsd(model, { input_tokens: 100, output_tokens: 5 })).toBeNull();
+    expect(anthropicUsageCostUsd(model, { ...uncached, cache_creation_input_tokens: 700,
+      cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 700 } }))
+      .toBeCloseTo((100 * 2 + 700 * 4 + 5 * 10) / 1e6, 12);
   });
 });

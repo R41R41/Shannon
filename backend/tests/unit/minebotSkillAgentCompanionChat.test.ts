@@ -72,11 +72,14 @@ describe('SkillAgent game chat', () => {
     expect(processed).toEqual([]);
   });
 
-  it('mode on, her mind unavailable: the bot answers through its own path as before', async () => {
-    const { agent, client, processed } = agentOn({ answer: async () => false });
+  it.each(['unavailable', 'throw'] as const)('mode on, her mind %s: report uncertainty without an unpinned local task', async failure => {
+    const answer = vi.fn(async () => { if (failure === 'throw') throw new Error('offline'); return false; });
+    const { agent, bot, client, processed } = agentOn({ answer });
     await agent.botOnChat();
     client.emit('playerChat', { sender: OWNER, plainMessage: 'シャノン、こんにちは' });
     await settle();
-    expect(processed).toEqual([['Rai1241', 'シャノン、こんにちは']]);
+    expect(processed).toEqual([]);
+    expect(answer).toHaveBeenCalledTimes(1);
+    expect(bot.chat).toHaveBeenCalledWith(expect.stringContaining('届いたか分からない'));
   });
 });

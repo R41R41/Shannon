@@ -92,8 +92,9 @@ export function anthropicUsageCostUsd(model: string, usage: AnthropicUsage): num
   const input = usage?.input_tokens, output = usage?.output_tokens;
   if (!pricing || !tokenCount(input) || !tokenCount(output)) return null;
   const haiku = model === 'claude-haiku-5-5';
+  const native = haiku || model === 'claude-sonnet-5-5';
   // Older recorded usage omitted zero cache fields. New native usage must be complete.
-  if (haiku && (usage?.cache_creation_input_tokens === undefined || usage.cache_read_input_tokens === undefined)) return null;
+  if (native && (usage?.cache_creation_input_tokens === undefined || usage.cache_read_input_tokens === undefined)) return null;
   const written = usage?.cache_creation_input_tokens === undefined ? 0 : usage.cache_creation_input_tokens;
   const read = usage?.cache_read_input_tokens === undefined ? 0 : usage.cache_read_input_tokens;
   if (!tokenCount(written) || !tokenCount(read)) return null;
@@ -103,7 +104,7 @@ export function anthropicUsageCostUsd(model: string, usage: AnthropicUsage): num
     if (!detail || !tokenCount(detail.ephemeral_5m_input_tokens) || !tokenCount(detail.ephemeral_1h_input_tokens)) return null;
     fiveMinutes = detail.ephemeral_5m_input_tokens; oneHour = detail.ephemeral_1h_input_tokens;
     if (!Number.isSafeInteger(fiveMinutes + oneHour) || fiveMinutes + oneHour !== written) return null;
-  } else if (haiku && written > 0) return null; // A write with an unknown TTL has an unknown price.
+  } else if (native && written > 0) return null; // A write with an unknown TTL has an unknown price.
   const totalInput = input + written + read;
   if (!Number.isSafeInteger(totalInput)) return null;
   const multiplier = haiku && totalInput > 100_000 ? 5 : 1;
@@ -187,12 +188,12 @@ export class ActualUsageBudget {
     const parsed = JSON.parse(body);
     const outputBound = parsed.model === 'gpt-5.6-luna' ? parsed.max_output_tokens : parsed.max_tokens;
     if ((parsed.model !== 'gpt-5.6-luna' && !Object.prototype.hasOwnProperty.call(ANTHROPIC_PRICING, parsed.model)) || !Number.isSafeInteger(outputBound) || outputBound < 1
-      || (parsed.model === 'claude-haiku-5-5' && outputBound > 8192))
+      || (['claude-haiku-5-5', 'claude-sonnet-5-5'].includes(parsed.model) && outputBound > 8192))
       throw new Error('ACCEPTANCE_MODEL_OR_OUTPUT_BOUND_INVALID');
     // A token covers at least one byte of the request, so bytes bound the input
     // (for a cached prompt, at the price of writing it, the dearest way to send it).
     const inputBound = Buffer.byteLength(body) + 4096;
-    const oneHour = parsed.model === 'claude-haiku-5-5' || hasOneHourCache(parsed);
+    const oneHour = ['claude-haiku-5-5', 'claude-sonnet-5-5'].includes(parsed.model) || hasOneHourCache(parsed);
     const bound = parsed.model === 'gpt-5.6-luna' ? lunaUsageCostUsd({ input_tokens: inputBound, output_tokens: outputBound })
       : anthropicUsageCostUsd(parsed.model, { input_tokens: 0, cache_creation_input_tokens: inputBound, cache_read_input_tokens: 0,
         output_tokens: outputBound, ...(oneHour ? { cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: inputBound } } : {}) });
