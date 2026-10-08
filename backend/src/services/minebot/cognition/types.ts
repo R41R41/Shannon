@@ -1,5 +1,5 @@
 export type CognitiveRuntimeMode = 'off' | 'shadow' | 'feedback';
-export type CognitiveDecisionSource = 'jev' | 'openai' | 'fallback';
+export type CognitiveDecisionSource = 'jev' | 'openai' | 'anthropic' | 'fallback';
 
 export type ProgressState =
   | 'ON_TRACK'

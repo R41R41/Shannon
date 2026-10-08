@@ -10,7 +10,7 @@ import { MinecraftCommandOracle } from '../src/services/minebot/testing/Minecraf
 import { RconClient } from '../src/services/minebot/testing/RconClient.js';
 import { CONFIG } from '../src/services/minebot/config/MinebotConfig.js';
 import { CompanionBodyClient } from '../src/services/minebot/integration/CompanionBodyClient.js';
-import { CompanionRequestLoop } from '../src/services/minebot/integration/CompanionRequestLoop.js';
+import { CompanionRequestLoop, type CompanionRequestClient } from '../src/services/minebot/integration/CompanionRequestLoop.js';
 import { CompanionRuntimeTasks, inventoryCounts } from '../src/services/minebot/integration/CompanionRuntimeTasks.js';
 import { companionBodyNow, othersOnline, speakCompanionReply, takeCompanionTurn, watchCompanionBodyEvents }
   from '../src/services/minebot/integration/companionBodyParts.js';
@@ -18,7 +18,12 @@ import { AutonomousScenarioRunner } from '../src/services/minebot/testing/Autono
 import { AcceptanceBudget, ActualUsageBudget, ANTHROPIC_PRICING, seedSharedCampaignBudget } from '../src/services/minebot/testing/AcceptanceBudget.js';
 import { CampaignGoalGraph } from '../src/services/minebot/cognition/CampaignGoalGraph.js';
 import { createOpenAIPlannerClient } from '../src/services/minebot/cognition/OpenAIPlannerClient.js';
-import { createAnthropicPlannerClient } from '../src/services/minebot/cognition/AnthropicPlannerClient.js';
+import { createAnthropicPlannerClient, isAnthropicCacheEvidenceError } from '../src/services/minebot/cognition/AnthropicPlannerClient.js';
+import { reserveMinecraftModelRequest } from '../src/services/minebot/cognition/MinecraftModelBudget.js';
+import { summarizeCampaignUsage } from '../src/services/minebot/testing/CampaignUsageSummary.js';
+import { MindControlledCampaign, MIND_CAMPAIGN_USER_GOAL, assertMindCampaignQuiet, submitMindCampaignGoal,
+  privateMindCampaignAttestor, readMindCampaignThread, watchCampaignEvidenceFailures } from '../src/services/minebot/testing/MindControlledCampaign.js';
+import { GoalVerifier } from '../src/services/minebot/cognition/GoalVerifier.js';
 import { ShannonExecutor, skillToAnthropicTool, type ShannonExecutorState } from '../src/services/llm/graph/ShannonExecutor.js';
 import { MinebotTaskRuntime } from '../src/services/minebot/runtime/MinebotTaskRuntime.js';
 import { BotEventHandler } from '../src/services/minebot/events/BotEventHandler.js';
@@ -75,6 +80,7 @@ let uiModConfig: ReturnType<typeof readLabUiModConfig> = null;
 try { uiModConfig = readLabUiModConfig(worldDirectory); }
 catch (error) { console.warn(`CAMPAIGN_UI_MOD_DISABLED ${error instanceof Error ? error.message : String(error)}`); }
 
+const mindControlled = process.env.MINECRAFT_CAMPAIGN_MIND_CONTROLLED === 'true';
 const objective = process.env.MINECRAFT_CAMPAIGN_OBJECTIVE ?? 'dragon';
 if (!['dragon', 'iron_pickaxe'].includes(objective)) throw new Error('CAMPAIGN_OBJECTIVE_INVALID');
 const ironPickaxeObjective = objective === 'iron_pickaxe';
@@ -85,9 +91,13 @@ if (!['', 'iron_pickaxe', 'nether', 'blaze_rod'].includes(milestone) || mileston
   throw new Error('CAMPAIGN_MILESTONE_INVALID');
 const goal = ironPickaxeObjective
   ? '何も持っていない状態から、自然生成ワールドで自力で鉄のツルハシを1個製作し、所持する'
-  : 'エンドラを倒す';
+  : mindControlled ? MIND_CAMPAIGN_USER_GOAL : (process.env.MINECRAFT_CAMPAIGN_GOAL ?? 'エンドラを倒す');
+if (!goal.trim() || goal.length > 256) throw new Error('CAMPAIGN_GOAL_INVALID');
 const resumeCampaign = process.env.MINECRAFT_CAMPAIGN_RESUME === 'true';
 const fullRuntime = process.env.MINECRAFT_CAMPAIGN_FULL_RUNTIME === 'true';
+if (mindControlled && (!fullRuntime || ironPickaxeObjective || milestone || resumeCampaign)) throw new Error('MIND_CAMPAIGN_ROOT_ONLY_REQUIRED');
+const mindAttestorConfig = process.env.MINECRAFT_CAMPAIGN_MIND_ATTESTOR_CONFIG ?? '';
+const mindThreadId = mindControlled ? readMindCampaignThread(mindAttestorConfig, process.env.MINECRAFT_CAMPAIGN_MIND_THREAD_ID ?? '') : '';
 const success: GoalPredicate[] = ironPickaxeObjective
   ? [{ kind: 'inventory', item: 'iron_pickaxe', count: 1 }]
   : [{ kind: 'boss_defeated', entity: 'ender_dragon', dimension: 'the_end' }];
@@ -141,6 +151,8 @@ const extraBudgetFiles: Record<string, string> = {
 // up to 5,000 JPY of actual usage. Settled from billed usage at official Luna
 // prices x1.25, capped at 5,000 JPY / 160 JPY/USD.
 const actualBudgetFiles: Record<string, string> = {
+  // One bounded trial requested by the owner on 2026-10-08; never reuse historical approvals.
+  'actual-haiku-40min-20261008': 'dragon-campaign-actual-haiku-40min-20261008.json',
   'actual-5000-20261001-night': 'dragon-campaign-actual-5000-20261001-night.json',
   // Separately approved by the user on 2026-10-01 JST (afternoon), after the
   // overnight cap was used up: a further 5,000 JPY of actual usage.
@@ -171,7 +183,7 @@ const actualBudgetFiles: Record<string, string> = {
   'actual-1000-20261005c': 'dragon-campaign-actual-1000-20261005c.json',
 };
 /** Ledgers approved for less than the usual 5,000 JPY. */
-const actualBudgetCapsJpy: Record<string, number> = { 'actual-1000-20261005c': 1000 };
+const actualBudgetCapsJpy: Record<string, number> = { 'actual-1000-20261005c': 1000, 'actual-haiku-40min-20261008': 160 };
 if (budgetProfile !== 'prior-3000' && !extraBudgetFiles[budgetProfile] && !actualBudgetFiles[budgetProfile])
   throw new Error('CAMPAIGN_BUDGET_PROFILE_INVALID');
 const actualBudget = !!actualBudgetFiles[budgetProfile];
@@ -185,7 +197,8 @@ if (!extraBudget) seedSharedCampaignBudget(budgetFile, fs.readdirSync(reportsDir
 // above the current Luna token prices. Each separately authorized $13 cap
 // × 375 JPY/USD = 4,875 JPY, leaving 125 JPY headroom below 5,000 JPY.
 const budget = actualBudget
-  ? new ActualUsageBudget(budgetFile, { maxUsd: (actualBudgetCapsJpy[budgetProfile] ?? 5000) / 160, maxRequests: 20000, margin: 1.25 })
+  ? new ActualUsageBudget(budgetFile, { maxUsd: (actualBudgetCapsJpy[budgetProfile] ?? 5000) / 160,
+    maxRequests: budgetProfile === 'actual-haiku-40min-20261008' ? 300 : 20000, margin: 1.25 })
   : new AcceptanceBudget(budgetFile,
     { maxUsd: extraBudget ? 13 : 8, maxRequests: extraBudget ? 400 : 500, priorReservedUsd: 0 });
 const graph = CampaignGoalGraph.open({ directory: campaignDirectory,
@@ -196,6 +209,9 @@ const keyFile = '/home/azureuser/Shannon-current/backend/.env';
 const apiKey = dotenv.parse(fs.readFileSync(keyFile)).OPENAI_API_KEY ?? '';
 if (!apiKey) throw new Error('CAMPAIGN_OPENAI_KEY_UNAVAILABLE');
 const requests: any[] = [];
+let activeStartedAt: number | null = null;
+let activeEndedAt: number | null = null;
+let transportFailures = 0;
 // A held item alone could have been found as loot. For this checkpoint require
 // a successful craft-one action as well as the independent inventory oracle.
 const inNether = () => String(actor.game?.dimension ?? '').includes('the_nether');
@@ -249,10 +265,10 @@ const ENDPOINTS = ['https://api.openai.com/v1/responses', 'https://api.anthropic
  */
 /** Requests the provider has not answered yet: the process waits for them (bounded) so each is settled by its usage. */
 const inFlight = new Set<Promise<unknown>>();
-const meteredFetch: typeof fetch = (input, options) => {
+const meterFor = (role: 'planner' | 'learning'): typeof fetch => (input, options) => {
   const caller = options?.signal ?? undefined;
   if (caller?.aborted) return Promise.reject(caller.reason ?? new DOMException('This operation was aborted', 'AbortError'));
-  const work = performMetered(String(input), options);
+  const work = performMetered(String(input), options, role);
   inFlight.add(work);
   work.catch(() => undefined).finally(() => inFlight.delete(work));
   if (!caller) return work;
@@ -263,20 +279,27 @@ const meteredFetch: typeof fetch = (input, options) => {
     work.then(resolve, reject).finally(() => caller.removeEventListener('abort', onAbort));
   });
 };
-const performMetered = async (url: string, options?: RequestInit): Promise<Response> => {
+const meteredFetch = meterFor('learning');
+const meteredPlannerFetch = meterFor('planner');
+const performMetered = async (url: string, options?: RequestInit, role = 'planner'): Promise<Response> => {
   if (!ENDPOINTS.includes(url) || typeof options?.body !== 'string') throw new Error('CAMPAIGN_OFFICIAL_ENDPOINT_REQUIRED');
   const requestModel = String(JSON.parse(options.body).model);
+  const metering = { role, requestedModel: requestModel, provider: url.includes('anthropic.com') ? 'anthropic' : 'openai',
+    phase: activeEndedAt ? 'drain' : activeStartedAt ? 'active' : 'setup', startedAt: new Date().toISOString() };
   // Check before reserving. In-flight reservations remain charged
   // conservatively, but an operator stop cannot create another one.
   if (operatorStopRequested()) throw new Error('CAMPAIGN_OPERATOR_EARLY_STOP');
   if (budgetStopRequested) throw new Error('ACCEPTANCE_SHARED_BUDGET_EXHAUSTED');
   if (providerStopCode) throw new Error(`CAMPAIGN_PROVIDER_CREDIT_EXHAUSTED:${providerStopCode}`);
   let reservation: { request: number; reservedUsd: number };
-  try { reservation = budget.reserve(options.body); }
+  try {
+    if (budgetProfile === 'actual-haiku-40min-20261008') reserveMinecraftModelRequest(options.body);
+    reservation = budget.reserve(options.body);
+  }
   catch (error) {
     // An exhausted reservation is terminal for the isolated live probe. Do
     // not strand a connected non-OP actor in a hostile world awaiting a model.
-    if (String(error).includes('ACCEPTANCE_SHARED_BUDGET_EXHAUSTED')) requestBudgetStop();
+    if (/ACCEPTANCE_SHARED_BUDGET_EXHAUSTED|MINECRAFT_MODEL_BUDGET_EXHAUSTED/.test(String(error))) requestBudgetStop();
     throw error;
   }
   const startedAt = Date.now();
@@ -290,7 +313,8 @@ const performMetered = async (url: string, options?: RequestInit): Promise<Respo
       // (a paid run re-sent every two seconds for 85s against an empty balance).
       const settled = budget instanceof ActualUsageBudget ? budget.settleRejected(reservation.request) : null;
       const code = String(payload?.error?.code ?? payload?.error?.type ?? `http_${response.status}`);
-      requests.push({ ...reservation, ...(settled ?? {}), durationMs: Date.now() - startedAt, httpStatus: response.status, providerError: code });
+      requests.push({ ...reservation, ...metering, ...(settled ?? {}), durationMs: Date.now() - startedAt, httpStatus: response.status, providerError: code });
+      if (++transportFailures >= 5) requestProviderStop('transport_failures');
       if (/insufficient_quota|credit_balance_exhausted|billing|credit balance is too low/.test(`${payload?.error?.type} ${payload?.error?.code} ${payload?.error?.message}`)) requestProviderStop(code);
       else if (response.status === 429) {
         const retryAfter = Number(response.headers.get('retry-after'));
@@ -298,15 +322,17 @@ const performMetered = async (url: string, options?: RequestInit): Promise<Respo
       }
       return response;
     }
-    // A server-side failure (5xx, overloaded) returns an error body and no usage: it was not processed, so it is not billed.
+    // A server-side failure without usage has an unknown billing outcome.
     if (response.status >= 500 && payload?.type === 'error' && budget instanceof ActualUsageBudget) {
-      const settled = budget.settleRejected(reservation.request);
-      requests.push({ ...reservation, ...settled, durationMs: Date.now() - startedAt, httpStatus: response.status, providerError: String(payload?.error?.type ?? `http_${response.status}`) });
+      const settled = budget.settle(reservation.request, null, requestModel);
+      requests.push({ ...reservation, ...metering, ...settled, durationMs: Date.now() - startedAt, httpStatus: response.status, providerError: String(payload?.error?.type ?? `http_${response.status}`) });
+      if (++transportFailures >= 5) requestProviderStop('transport_failures');
       await new Promise(resolve => setTimeout(resolve, 3000));
       return response;
     }
     const settled = budget instanceof ActualUsageBudget ? budget.settle(reservation.request, payload.usage, requestModel) : null;
-    requests.push({ ...reservation, ...(settled ?? {}), durationMs: Date.now() - startedAt, httpStatus: response.status,
+    transportFailures = 0;
+    requests.push({ ...reservation, ...metering, ...(settled ?? {}), durationMs: Date.now() - startedAt, httpStatus: response.status,
       model: payload.model, usage: payload.usage,
       toolCalls: [...(payload.output ?? []).filter((item: any) => item.type === 'function_call'),
         ...(payload.content ?? []).filter((item: any) => item.type === 'tool_use')].map((item: any) => item.name) });
@@ -317,7 +343,8 @@ const performMetered = async (url: string, options?: RequestInit): Promise<Respo
     if (budget instanceof ActualUsageBudget) {
       try { settled = budget.settle(reservation.request, null); } catch { /* already settled above */ }
     }
-    requests.push({ ...reservation, ...(settled ?? {}), durationMs: Date.now() - startedAt, error: String(error) });
+    requests.push({ ...reservation, ...metering, ...(settled ?? {}), durationMs: Date.now() - startedAt, error: String(error) });
+    if (++transportFailures >= 5) requestProviderStop('transport_failures');
     throw error;
   }
 };
@@ -330,11 +357,18 @@ const performMetered = async (url: string, options?: RequestInit): Promise<Respo
 let plannerClosed = false;
 // (An operator stop keeps its own, more specific refusal.)
 const plannerFetch: typeof fetch = (input, options) => plannerClosed && !operatorStopRequested()
-  ? Promise.reject(new Error('CAMPAIGN_OVER')) : meteredFetch(input, options);
+  ? Promise.reject(new Error('CAMPAIGN_OVER')) : meteredPlannerFetch(input, options);
 // The usual model: learning reflections always (they also close the run), and planning unless another planner was chosen.
-const client = createOpenAIPlannerClient({ apiKey, model: 'gpt-5.6-luna', reasoningEffort, promptCacheKey: `minebot-${worldId}`, fetcher: meteredFetch });
+const haikuTrial = plannerModel === 'claude-haiku-5-5';
+if (mindControlled && (!haikuTrial || plannerProvider !== 'anthropic')) throw new Error('MIND_CAMPAIGN_HAIKU_REQUIRED');
+const watchedHaikuClient = (native: ReturnType<typeof createAnthropicPlannerClient>) => watchCampaignEvidenceFailures(native,
+  isAnthropicCacheEvidenceError, () => requestProviderStop('cache_evidence_invalid'));
+const client = haikuTrial
+  ? watchedHaikuClient(createAnthropicPlannerClient({ apiKey: anthropicKey, model: plannerModel, effort: anthropicEffort,
+    workspaceId: anthropicAccess.workspaceId, fetcher: meteredFetch }))
+  : createOpenAIPlannerClient({ apiKey, model: 'gpt-5.6-luna', reasoningEffort, promptCacheKey: `minebot-${worldId}`, fetcher: meteredFetch });
 const plannerClient = plannerProvider === 'anthropic'
-  ? createAnthropicPlannerClient({ apiKey: anthropicKey, model: plannerModel, effort: anthropicEffort, workspaceId: anthropicAccess.workspaceId, fetcher: plannerFetch })
+  ? (haikuTrial ? watchedHaikuClient : (native: ReturnType<typeof createAnthropicPlannerClient>) => native)(createAnthropicPlannerClient({ apiKey: anthropicKey, model: plannerModel, effort: anthropicEffort, workspaceId: anthropicAccess.workspaceId, fetcher: plannerFetch }))
   : createOpenAIPlannerClient({ apiKey, model: 'gpt-5.6-luna', reasoningEffort, promptCacheKey: `minebot-${worldId}`, fetcher: plannerFetch });
 
 const rcon = publicServer ? new RconClient('127.0.0.1', rconPort, rconPassword) : null;
@@ -382,15 +416,24 @@ const onGameChat = (event: unknown) => {
 actor._client.on('playerChat', onGameChat);
 const operatorChat = (message: string) => rcon ? void rcon.send(message) : operator!.chat(message);
 // Shannon's one mind (the companion, shannon-ios) writes what she says to people and keeps her death as a memory;
-// this body acts. Only on a public lab, where Mojang proves who each player is. Off unless both are given.
+// this body acts. Game chat requires a public Mojang-authenticated lab; the opt-in Mind campaign uses a separate owner HTTP turn.
 const companionUrl = process.env.MINECRAFT_LAB_COMPANION_URL ?? '';
 const companionTokenFile = process.env.MINECRAFT_LAB_COMPANION_TOKEN_FILE ?? '';
-const companion = publicServer && companionUrl && companionTokenFile
+const companion = (publicServer || mindControlled) && companionUrl && companionTokenFile
   ? new CompanionBodyClient({ baseUrl: companionUrl, token: fs.readFileSync(companionTokenFile, 'utf8').trim(),
     // One id for the server people join (its address stays the same across lab worlds), so she knows it is the same place.
     serverId: process.env.MINECRAFT_LAB_COMPANION_SERVER_ID || `lab-${path.basename(worldDirectory).replace(/^progressive-lab-/, '')}` })
   : null;
 if (companion) console.log(`CAMPAIGN_COMPANION ${JSON.stringify({ url: companionUrl })}`);
+const mindOwnerTokenFile = process.env.MINECRAFT_CAMPAIGN_OWNER_TOKEN_FILE ?? '';
+if (mindControlled && (!companion || !mindOwnerTokenFile || !process.env.MINECRAFT_LAB_COMPANION_SERVER_ID)) throw new Error('MIND_CAMPAIGN_AUTH_CONFIGURATION_REQUIRED');
+const mindOwnerToken = mindControlled ? fs.readFileSync(mindOwnerTokenFile, 'utf8').trim() : '';
+if (mindControlled && (mindOwnerToken.length < 16 || mindOwnerToken === fs.readFileSync(companionTokenFile, 'utf8').trim())) throw new Error('MIND_CAMPAIGN_SEPARATE_OWNER_AUTH_REQUIRED');
+let mindCampaign: MindControlledCampaign | null = null;
+let mindSubmission: { status: number; acknowledged: boolean } | { uncertain: true } | null = null;
+let independentDragonProof: ReturnType<GoalVerifier['verify']> | null = null;
+let originalExecutionAtReport: { known: boolean; activeCount: number | null; abortedCount?: number; stopRequestedCount?: number } | null = null;
+let originalExecutionSnapshot: (() => readonly { aborted: boolean; stopRequested: boolean }[]) | null = null;
 // Her own advancements (newest last) for the body's present she tells her mind, and her death: the vanilla death
 // message names the damage type, the body's report of how she died (integration/companionBodyParts.ts).
 const { recentAdvancements } = watchCompanionBodyEvents(actor as any, { name: () => actorName,
@@ -402,7 +445,7 @@ if (!['off', 'shadow', 'feedback'].includes(learningMode)) throw new Error('MINE
 const learningNamespace = process.env.MINECRAFT_LEARNING_NAMESPACE ?? 'dev-isolated-lab';
 const learning = new MinecraftLearningService({ mode: learningMode, scope: minecraftKnowledgeScope(learningNamespace),
   directory: path.resolve('saves/minecraft/learning', learningNamespace), runId: `${worldId}-${randomUUID().slice(0, 8)}`,
-  modelClient: client, model: 'gpt-5.6-luna' });
+  modelClient: client, model: haikuTrial ? plannerModel : 'gpt-5.6-luna' });
 learning.attach(actor as any);
 // The map in the body's head is kept per world: this world is known by its directory, not by a name.
 (actor as any).placeMemory?.persistTo(path.resolve('saves/minecraft/places', `${worldId}.json`));
@@ -423,6 +466,7 @@ const progressTrace: any[] = [];
 const PROGRESS_ITEMS = new Set(['crafting_table', 'wooden_pickaxe', 'stone_pickaxe', 'furnace', 'raw_iron', 'iron_ingot',
   'iron_pickaxe', 'bucket', 'water_bucket', 'lava_bucket', 'diamond', 'diamond_pickaxe', 'obsidian', 'gravel', 'flint',
   'flint_and_steel']);
+const independentDragonOracle = mindControlled ? new GoalVerifier(actor) : null;
 const oracle = new MinecraftCommandOracle({ version: actor.version,
   chat: message => operatorChat(`/execute as @a[name=${actorName},limit=1] at @s run ${message.replace(/^\//, '')}`),
   on: (_event, listener) => actor.on('message', listener as any),
@@ -482,6 +526,7 @@ try {
       await control.executeSetupCommand('tp ShannonProbe -500 150 -500');
     }
     const runtime = new MinebotTaskRuntime(actor);
+    if (mindControlled) originalExecutionSnapshot = () => runtime.getOriginalExecutionSnapshot();
     const savedSettings = loadEventReactionSettingsFile();
     const isolatedSettings = { ...savedSettings, reactions: savedSettings.reactions.map(row =>
       row.eventType === 'hostile_approach' ? { ...row, enabled: true, probability: 100 } : row) };
@@ -519,17 +564,21 @@ try {
         const emergency = envelope.tags.includes('emergency');
         const runMetadata = (envelope.metadata ?? {}) as Record<string, unknown>;
         // A person spoke to her (see receiveHumanChat): she answers and does what was asked, then the campaign goes on.
-        const humanChat = !emergency && envelope.tags.includes('user_chat')
+        const segmentTaskId = runtime.currentState?.taskId;
+        const mindRoot = !emergency && mindCampaign?.isRootRequest(String(runMetadata.mindCampaignRequestId ?? ''));
+        if (mindRoot && mindCampaign!.markStarted(String(runMetadata.mindCampaignRequestId))) activeStartedAt ??= mindCampaign!.activeStartedAt;
+        const humanChat = !emergency && !mindRoot && envelope.tags.includes('user_chat')
           ? runMetadata.humanChat as { player: string; message: string; answered?: boolean; requestId?: string } : null;
         const mode = emergency ? 'emergency' : humanChat ? 'human_chat' : 'campaign';
-        const executionGoal = emergency ? envelope.text || '敵から生き延びる' : humanChat ? humanChat.message : goal;
+        const executionGoal = emergency ? envelope.text || '敵から生き延びる' : mindRoot ? mindCampaign!.acceptedGoal! : humanChat ? humanChat.message : goal;
         const previousWorkspaceSnapshot = runMetadata.previousCognitiveWorkspace as ShannonExecutorState['previousWorkspaceSnapshot'];
         // What a person asked for is not her own experience: it is not recorded for learning.
         const executor = new ShannonExecutor({ modelClient: plannerClient,
           modelIdentity: plannerIdentity, bot: actor,
           instantSkills: actor.instantSkills, campaign: mode === 'campaign' ? graph : undefined,
           criticMode: 'off', publishTaskTree, learning: humanChat ? undefined : learning, conversation: !!humanChat });
-        const result = await executor.run({ runId: previousWorkspaceSnapshot?.runId ?? randomUUID(), goal: executionGoal,
+        let result: Awaited<ReturnType<ShannonExecutor['run']>>;
+        try { result = await executor.run({ runId: previousWorkspaceSnapshot?.runId ?? randomUUID(), goal: executionGoal,
           context: null, systemPrompt: emergency
             ? 'You are Minebot in a real survival world. Perform only immediate survival actions; leave crafting and mining for the paused campaign.'
             : humanChat?.requestId
@@ -542,7 +591,7 @@ try {
           tools: humanChat && !humanChat.requestId ? conversationTools : tools, abortSignal: options?.abortSignal
             ? AbortSignal.any([options.abortSignal, probeStopController.signal]) : probeStopController.signal,
           tags: envelope.tags,
-          goalContract: emergency ? (envelope.metadata as any)?.goalContract : humanChat ? undefined : scenario.goalContract,
+          goalContract: emergency ? (envelope.metadata as any)?.goalContract : humanChat ? undefined : { ...scenario.goalContract, goal: executionGoal },
           getHumanFeedback: runMetadata.getHumanFeedback as ShannonExecutorState['getHumanFeedback'],
           previousMessages: runMetadata.previousMessages as ShannonExecutorState['previousMessages'],
           previousTaskNodes: runMetadata.previousTaskNodes as ShannonExecutorState['previousTaskNodes'],
@@ -558,6 +607,7 @@ try {
             toolTrace.push({ mode, ...event });
             options?.onToolFinished?.(event);
           } });
+        } finally { if (mindRoot && segmentTaskId) mindCampaign!.markSegmentEnded(segmentTaskId); }
         (emergency ? emergencyResults : humanChat ? humanChatResults : mainResults).push(result);
         // A request from her mind: how its last run ended, for the result the request loop reports.
         if (humanChat?.requestId) requestTasksOf?.noteRun(humanChat.requestId, result.taskTree?.status === 'completed');
@@ -583,7 +633,7 @@ try {
         // client on this machine, so its name is trusted and looked up in the player list.
         const speakerUuid = via === 'game_chat' ? String(packetSenderUuid ?? '')
           : String((actor.players?.[player] as any)?.uuid ?? '');
-        if (companion && speakerUuid && !plannerClosed && !probeStopRequested()) {
+        if (companion && publicServer && speakerUuid && !plannerClosed && !probeStopRequested()) {
           void answerFromCompanion(record, player, speakerUuid, text);
           return;
         }
@@ -637,15 +687,20 @@ try {
           refuse: () => plannerClosed || probeStopRequested() ? 'run_over' : null,
           waiting: () => runtime.getTaskListState().tasks.filter(task => humanChatTaskIds.has(task.id)
             && ['pending', 'paused', 'executing'].includes(task.status)).length,
-          envelope: request => ({ tags: ['user_chat'],
-            metadata: { humanChat: { player: 'owner', message: request.goal, answered: true, requestId: request.id } } }),
+          envelope: request => mindCampaign?.isRootRequest(request.id)
+            ? { tags: ['mind_campaign_root'], metadata: { mindCampaignRequestId: request.id, companionTask: { requestId: request.id } } }
+            : { tags: ['user_chat'], metadata: { humanChat: { player: 'owner', message: request.goal, answered: true, requestId: request.id } } },
           deaths: () => deaths,
           // The skill the body started last for the task running now: a short label, nothing else.
           step: taskId => runtime.getTaskListState().currentTaskId === taskId
-            ? toolStarts.filter(start => start.mode === 'human_chat').at(-1)?.tool : undefined,
+            ? toolStarts.filter(start => start.mode === (mindCampaign?.taskId === taskId ? 'campaign' : 'human_chat')).at(-1)?.tool : undefined,
           inventory: () => inventoryCounts(actor.inventory.items()),
           onTaken: (request, result) => {
             if ('refused' in result && result.reason === 'run_over') return;
+            if (mindCampaign?.isRootRequest(request.id)) {
+              if ('taskId' in result) requestTaskIds.set(request.id, result.taskId);
+              return;
+            }
             let record = requestRecords.get(request.id);
             if (!record && request.surface !== 'minecraft') {
               record = { atMs: Date.now() - startedAt, player: 'owner', via: 'companion_request', message: request.goal.slice(0, 200), taskId: null, dropped: null };
@@ -659,7 +714,22 @@ try {
           },
         });
         requestTasksOf = requestTasks;
-        const loop: CompanionRequestLoop = new CompanionRequestLoop(companion, requestTasks, { log: line => console.log(`CAMPAIGN_${line}`) });
+        if (mindControlled) {
+          await assertMindCampaignQuiet({ baseUrl: companionUrl, ownerToken: mindOwnerToken, signal: probeStopController.signal });
+          const presence = await companion.claim([], 0, probeStopController.signal);
+          if (!presence || presence.request || presence.cancel.length) {
+            throw new Error('MIND_CAMPAIGN_BODY_NOT_QUIET');
+          }
+          mindCampaign = new MindControlledCampaign(requestTasks, runtime, { setupMs: 120_000, windowMs: segmentLimit,
+            ownerThreadId: mindThreadId, attestRoot: privateMindCampaignAttestor({ configPath: mindAttestorConfig, threadId: mindThreadId }) });
+        }
+        const requestClient = mindCampaign ? mindCampaign.trackClient(companion) : companion;
+        // Trial-only short holding renewal; normal bodies retain their 25-second long poll.
+        const loopClient: CompanionRequestClient = mindControlled ? {
+          claim: (holding, waitSeconds, signal) => requestClient.claim(holding, waitSeconds ?? 1, signal),
+          progress: requestClient.progress.bind(requestClient), report: requestClient.report.bind(requestClient),
+        } : requestClient;
+        const loop: CompanionRequestLoop = new CompanionRequestLoop(loopClient, mindCampaign ?? requestTasks, { log: line => console.log(`CAMPAIGN_${line}`) });
         requestLoop = loop;
         loop.start();
       }
@@ -697,14 +767,33 @@ try {
         progressTrace.push({ elapsedMs: Date.now() - runtimeStartedAt, dimension: actor.game?.dimension ?? null,
           y: actor.entity?.position?.y ?? null, timeOfDay: actor.time?.timeOfDay ?? null, counts });
       }, 5000));
-      const queued = runtime.addTaskToQueue({ userMessage: goal });
-      if (!queued.success) throw new Error(`CAMPAIGN_MAIN_TASK_QUEUE_FAILED:${queued.reason}`);
+      let campaignTaskId: string;
+      if (mindCampaign) {
+        mindCampaign.submitting();
+        // One canonical owner turn only; ambiguous response never resends the goal. Claim remains the execution evidence.
+        const submission = submitMindCampaignGoal({ baseUrl: companionUrl, ownerToken: mindOwnerToken,
+          threadId: mindThreadId, signal: probeStopController.signal })
+          .then(result => { mindSubmission = result; }, () => { mindSubmission = { uncertain: true }; });
+        while (!mindCampaign.taskId || mindCampaign.activeStartedAt === null) {
+          if (probeStopRequested() || mindCampaign.setupExpired || mindCampaign.rejection || deaths) {
+            throw new Error(mindCampaign.rejection ?? (mindCampaign.setupExpired ? 'MIND_CAMPAIGN_SETUP_TIMEOUT' : 'MIND_CAMPAIGN_SETUP_STOPPED'));
+          }
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        void submission;
+        campaignTaskId = mindCampaign.taskId; activeStartedAt = mindCampaign.activeStartedAt;
+      } else {
+        activeStartedAt = Date.now();
+        const queued = runtime.addTaskToQueue({ userMessage: goal });
+        if (!queued.success) throw new Error(`CAMPAIGN_MAIN_TASK_QUEUE_FAILED:${queued.reason}`);
+        campaignTaskId = queued.taskId!;
+      }
+      console.log(`CAMPAIGN_ACTIVE_STARTED ${JSON.stringify({ at: new Date(activeStartedAt).toISOString(), windowMs: segmentLimit, model: plannerModel, mindControlled })}`);
       // The task carrying the campaign now, and the dimension it was given in (see the portal below).
-      let campaignTaskId = queued.taskId!;
       let campaignDimension = String(actor.game?.dimension ?? '');
-      const deadline = Date.now() + segmentLimit;
+      const deadline = mindCampaign?.deadline ?? Date.now() + segmentLimit;
       let netherSaid = inNether();
-      while (!probeStopRequested() && Date.now() < deadline && !deaths
+      while (!probeStopRequested() && !mindCampaign?.stopped && Date.now() < deadline && !deaths
         && graph.getNode('root')?.state !== 'verified' && !reachedMilestone()) {
         // The moment of arrival, for a run that goes on past it.
         if (!netherSaid && inNether()) { netherSaid = true; console.log(`CAMPAIGN_NETHER_REACHED ${JSON.stringify({ elapsedMs: Date.now() - startedAt, deaths })}`); }
@@ -721,7 +810,7 @@ try {
           // while the configured time, run count and paid reservation remain.
           if (!probeStopRequested() && autonomousContinuations < maxSegments - 1
             && deadline - Date.now() >= 30_000 && budgetHasRoom()
-            && await runtime.resumeAwaitingCampaignTask(campaignTaskId, goal)) {
+            && await runtime.resumeAwaitingCampaignTask(campaignTaskId, mindCampaign?.acceptedGoal ?? goal)) {
             autonomousContinuations++;
             continue;
           }
@@ -739,10 +828,15 @@ try {
         if (campaignTask?.status === 'failed_terminal' && nowDimension && nowDimension !== campaignDimension
           && !runtime.isRunning() && !runtime.isInEmergencyMode() && !probeStopRequested()
           && autonomousContinuations < maxSegments - 1 && deadline - Date.now() >= 30_000 && budgetHasRoom()) {
+          if (mindCampaign && !mindCampaign.canReplaceTask()) { stopReason = 'original_execution_unknown'; break; }
           runtime.removeTask(campaignTaskId);
-          const next = runtime.addTaskToQueue({ userMessage: goal });
+          const next = mindCampaign
+            ? runtime.putTaskFirst({ userMessage: mindCampaign.acceptedGoal! }, { tags: ['mind_campaign_root'],
+                metadata: { mindCampaignRequestId: mindCampaign.requestId!, companionTask: { requestId: mindCampaign.requestId! } } })
+            : runtime.addTaskToQueue({ userMessage: goal });
           if (next.success) {
             console.log(`CAMPAIGN_DIMENSION_CONTINUED ${JSON.stringify({ from: campaignDimension, to: nowDimension, elapsedMs: Date.now() - startedAt })}`);
+            if (mindCampaign) mindCampaign.replaceTask(next.taskId!);
             campaignTaskId = next.taskId!;
             campaignDimension = nowDimension;
             autonomousContinuations++;
@@ -757,7 +851,7 @@ try {
         await new Promise(resolve => setTimeout(resolve, 200));
       }
       stopReason = probeStopReason() ?? stopReason;
-      stopReason ??= graph.getNode('root')?.state === 'verified' ? 'dragon_verified'
+      stopReason ??= mindCampaign?.stopped ? 'mind_cancelled' : graph.getNode('root')?.state === 'verified' ? 'dragon_verified'
         : reachedMilestone() ? 'milestone_reached' : deaths ? 'actor_died'
           : Date.now() >= deadline ? 'window_expired' : 'loop_exited';
     } catch (error) {
@@ -765,14 +859,22 @@ try {
       if (!probeStopRequested()) throw error;
       stopReason = probeStopReason();
     } finally {
+      activeEndedAt = Date.now();
       stopReason = probeStopReason() ?? stopReason;
       campaignStopReason = stopReason ?? 'runtime_error';
+      // The canonical done ACK requires a separate native observer plus original executor settlement.
+      if (mindCampaign && independentDragonOracle && mindCampaign.acceptedGoal) {
+        const rootSettleDeadline = Date.now() + 5_000;
+        while (!mindCampaign.executionSettled && Date.now() < rootSettleDeadline) await new Promise(resolve => setTimeout(resolve, 50));
+        independentDragonProof = independentDragonOracle.verify({ goal: mindCampaign.acceptedGoal, predicates: success });
+        if (mindCampaign.finishVerified(graph.getNode('root')?.state === 'verified', independentDragonProof.status === 'verified')) await requestLoop?.tick();
+      }
       // What her mind asked and is still open ends with the run (or with her death).
-      await requestLoop?.stop(deaths ? 'died' : 'run_over').catch(() => undefined);
+      await requestLoop?.stop(deaths ? 'died' : stopReason === 'window_expired' ? 'timeout' : 'run_over').catch(() => undefined);
       plannerClosed = true;
       if (runtime.isRunning()) runtime.forceStop();
       const settleDeadline = Date.now() + 10000;
-      while (runtime.isRunning() && Date.now() < settleDeadline) await new Promise(resolve => setTimeout(resolve, 100));
+      while ((mindControlled ? runtime.getOriginalExecutionSnapshot().length > 0 : runtime.isRunning()) && Date.now() < settleDeadline) await new Promise(resolve => setTimeout(resolve, 100));
       if (learning.mode !== 'off' && !probeStopRequested()) {
         const held = actor.inventory.items().map(item => `${item.name}x${item.count}`).join(',');
         await learning.reflect(actor, 'run_end', `試行の終了: 理由=${campaignStopReason}、死亡${deaths}回、`
@@ -832,7 +934,7 @@ try {
   // Reaching the Nether is judged by the server dimension; deaths are reported separately.
   const milestoneReached = milestone === 'nether' || milestone === 'blaze_rod' ? nativeSuccess?.passed === true : milestoneCrafted;
   const contact = humanContactSummary();
-  const accepted = !contact.acceptanceVoidReason && (milestone
+  const accepted = !contact.acceptanceVoidReason && (!mindControlled || (mindCampaign?.verifiedAcknowledged === true && independentDragonProof?.status === 'verified')) && (milestone
     ? milestoneReached && nativeSuccess?.passed === true && survivalContinuous
     : ironPickaxeObjective
     ? graph.getNode('root')?.state === 'verified' && nativeSuccess?.passed === true && survivalContinuous
@@ -879,6 +981,25 @@ try {
     catch (error) { report.learningError = String(error); }
     try { graph.checkpoint(); }
     catch (error) { report.checkpointError = String(error); process.exitCode = 1; }
+    // Include late provider usage before saving. Physical operation has ended;
+    // waiting here is bounded accounting drain, not extra gameplay.
+    plannerClosed = true;
+    const drainDeadline = Date.now() + 125_000;
+    while (inFlight.size && Date.now() < drainDeadline) await new Promise(resolve => setTimeout(resolve, 250));
+    report.metering = summarizeCampaignUsage(requests);
+    if (mindControlled) {
+      const original = originalExecutionSnapshot?.();
+      originalExecutionAtReport = original ? { known: true, activeCount: original.length,
+        abortedCount: original.filter(run => run.aborted).length, stopRequestedCount: original.filter(run => run.stopRequested).length }
+        : { known: false, activeCount: null };
+    }
+    if (mindControlled) report.mindControl = { ...(mindCampaign?.receipt() ?? { enabled: true, rootClaimed: false }), submission: mindSubmission,
+      independentDragonVerified: independentDragonProof?.status === 'verified', originalExecutionAtReport };
+    independentDragonOracle?.dispose();
+    report.activeStartedAt = activeStartedAt ? new Date(activeStartedAt).toISOString() : null;
+    report.activeEndedAt = activeEndedAt ? new Date(activeEndedAt).toISOString() : null;
+    report.activeDurationMs = activeStartedAt && activeEndedAt ? activeEndedAt - activeStartedAt : null;
+    report.unresolvedProviderRequests = inFlight.size;
     const file = path.join(reportsDirectory, `${new Date().toISOString().replace(/[:.]/g, '-')}-${ironPickaxeObjective ? 'iron-pickaxe' : 'dragon'}-campaign.json`);
     fs.writeFileSync(file, JSON.stringify(report, null, 2), { mode: 0o600 });
     console.log(`CAMPAIGN_REPORT ${file}`);

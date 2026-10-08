@@ -6,6 +6,9 @@ export interface CompanionTaskRuntime {
   putTaskFirst(taskInput: { userMessage?: string | null; onToolStarting?: (toolName: string, args?: Record<string, unknown>) => void },
     envelopeExtras?: { tags?: string[]; metadata?: Record<string, unknown> }): { success: boolean; reason?: string; taskId?: string };
   removeTask(taskId: string): { success: boolean; reason?: string };
+  /** True only after original executor completion, not just logical removal. */
+  stopTaskAndWait?(taskId: string): Promise<boolean>;
+  isTaskExecuting?(taskId: string): boolean;
   getTaskListState(): { tasks: Array<{ id: string; status: string }>; currentTaskId?: string | null };
   isRunning?(): boolean;
 }
@@ -72,6 +75,7 @@ export class CompanionRuntimeTasks implements CompanionRequestTasks {
   status(taskId: string): { state: RequestTaskState; code?: CompanionReportCode } {
     const held = this.byTask.get(taskId);
     const died = !!held && this.options.deaths() > held.deathsAtStart;
+    if (this.runtime.isTaskExecuting?.(taskId)) return { state: 'running' };
     const task = this.runtime.getTaskListState().tasks.find(entry => entry.id === taskId);
     if (task) {
       if (task.status === 'executing') return { state: 'running' };
@@ -87,8 +91,12 @@ export class CompanionRuntimeTasks implements CompanionRequestTasks {
     return died ? { state: 'failed', code: 'died' } : { state: 'gone' };
   }
 
-  stop(taskId: string): void {
+  async stop(taskId: string): Promise<boolean> {
+    if (this.runtime.stopTaskAndWait) return this.runtime.stopTaskAndWait(taskId);
+    // Compatibility with a runtime without completion evidence: request the
+    // control stop, but do not promote it into a confirmed terminal ACK.
     this.runtime.removeTask(taskId);
+    return false;
   }
 
   step(taskId: string): string | undefined {

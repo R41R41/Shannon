@@ -19,8 +19,8 @@ export interface CompanionRequestTasks {
   start(request: CompanionRequest): { taskId: string } | { refused: CompanionReportCode };
   /** Where the task is now; `failed` may say why. */
   status(taskId: string): { state: RequestTaskState; code?: CompanionReportCode };
-  /** Stops the task (the owner asked it to stop). */
-  stop(taskId: string): void;
+  /** Requests stop and confirms true only once the original executor has ended. */
+  stop(taskId: string): boolean | Promise<boolean>;
   /** A short label of what the body is doing for the task now (a skill name), or undefined. */
   step?(taskId: string): string | undefined;
   /** The body's item counts now, for the items gained while a request ran. */
@@ -40,6 +40,8 @@ interface Held {
   final?: { outcome: CompanionReportOutcome; code?: CompanionReportCode; gained: CompanionGained[]; attempts: number };
   /** The owner asked it to stop. */
   cancelled: boolean;
+  stopRequested?: { outcome: 'failed' | 'stopped'; code: CompanionReportCode };
+  stopping?: Promise<void>;
 }
 
 export interface CompanionRequestLoopOptions {
@@ -49,6 +51,8 @@ export interface CompanionRequestLoopOptions {
   retryMs?: number;
   /** A changed step is reported at most this often. */
   stepEveryMs?: number;
+  /** Shutdown waits this long for known completion; unfinished requests remain held. */
+  stopWaitMs?: number;
   log?: (line: string) => void;
   now?: () => number;
 }
@@ -67,6 +71,10 @@ export class CompanionRequestLoop {
   private watcher: ReturnType<typeof setInterval> | null = null;
   private abort = new AbortController();
   private ticking = false;
+  private stopped = false;
+  private delivery: Promise<void> | null = null;
+  private deliveryDirty = false;
+  private readonly stopWaitMs: number;
   /** Every request this body took, for the run's report. */
   readonly taken: Array<{ id: string; surface: CompanionRequest['surface']; taskId: string | null; outcome?: string; code?: string }> = [];
 
@@ -74,6 +82,7 @@ export class CompanionRequestLoop {
     this.watchMs = options.watchMs ?? 2000;
     this.retryMs = options.retryMs ?? 5000;
     this.stepEveryMs = options.stepEveryMs ?? 15_000;
+    this.stopWaitMs = Math.max(0, Math.min(30_000, options.stopWaitMs ?? 5000));
     this.log = options.log ?? (() => {});
     this.now = options.now ?? Date.now;
   }
@@ -81,23 +90,34 @@ export class CompanionRequestLoop {
   start(): void {
     if (this.running) return;
     this.running = true;
+    this.stopped = false;
     this.abort = new AbortController();
     this.claims = this.claimLoop();
     this.watcher = setInterval(() => { void this.tick(); }, this.watchMs);
     this.watcher.unref?.();
   }
 
-  /** The run is over: open requests are reported as failed (`run_over`, or `died`), and the claim ends. */
+  /** End claiming and request stop. Only known completed executions receive a
+   * terminal report; an unfinished or uncertain stop remains held for recovery.
+   */
   async stop(code: CompanionReportCode = 'run_over'): Promise<void> {
     this.running = false;
+    this.stopped = true;
     this.abort.abort();
     if (this.watcher) clearInterval(this.watcher);
     this.watcher = null;
     await this.claims?.catch(() => undefined);
+    const stopping: Promise<void>[] = [];
     for (const held of this.held.values()) {
-      if (!held.final) held.final = { outcome: held.cancelled ? 'stopped' : 'failed', code: held.cancelled ? 'cancelled' : code, gained: this.gained(held), attempts: 0 };
-      if (held.taskId) { try { this.tasks.stop(held.taskId); } catch { /* the run is over anyway */ } }
+      if (held.final) continue;
+      held.stopRequested ??= { outcome: held.cancelled ? 'stopped' : 'failed', code: held.cancelled ? 'cancelled' : code };
+      this.requestStop(held);
+      if (held.stopping) stopping.push(held.stopping);
     }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([Promise.all(stopping), new Promise<void>(resolve => { timer = setTimeout(resolve, this.stopWaitMs); })]);
+    } finally { if (timer) clearTimeout(timer); }
     for (let attempt = 0; attempt < 2 && this.held.size; attempt++) await this.deliver();
   }
 
@@ -127,6 +147,7 @@ export class CompanionRequestLoop {
     try {
       for (const held of this.held.values()) {
         if (held.final || !held.taskId) continue;
+        if (held.stopRequested) { this.requestStop(held); continue; }
         const status = this.tasks.status(held.taskId);
         if (status.state === 'done') held.final = { outcome: 'done', gained: this.gained(held), attempts: 0 };
         else if (status.state === 'failed' || status.state === 'gone') {
@@ -189,15 +210,48 @@ export class CompanionRequestLoop {
       return;
     }
     held.cancelled = true;
-    if (held.taskId) { try { this.tasks.stop(held.taskId); } catch { /* stopped or gone */ } }
-    held.final = { outcome: 'stopped', code: 'cancelled', gained: this.gained(held), attempts: 0 };
+    held.stopRequested = { outcome: 'stopped', code: 'cancelled' };
+    this.requestStop(held);
     this.log(`COMPANION_REQUEST_CANCELLED ${JSON.stringify({ id })}`);
   }
 
-  /** Sends every waiting result; one the companion took (or refused for good) is dropped from the held list. */
-  private async deliver(): Promise<void> {
+  private requestStop(held: Held): void {
+    if (held.final || held.stopping || !held.stopRequested) return;
+    const requested = held.stopRequested;
+    let completion: boolean | Promise<boolean>;
+    try { completion = held.taskId ? this.tasks.stop(held.taskId) : true; }
+    catch { return; /* Unknown control result; keep the request held. */ }
+    held.stopping = Promise.resolve(completion).then(confirmed => {
+      if (confirmed !== true) return;
+      held.final = { ...requested, gained: this.gained(held), attempts: 0 };
+    }).catch(() => { /* Unknown stop: retain holding, no terminal ACK. */ }).finally(() => {
+      held.stopping = undefined;
+      if (this.stopped && held.final) void this.deliver().catch(() => undefined);
+    });
+  }
+
+  /** Serialize ACK delivery; a late original stop may settle during shutdown. */
+  private deliver(): Promise<void> {
+    if (this.delivery) { this.deliveryDirty = true; return this.delivery; }
+    const attempted = new Set<Held>();
+    this.delivery = Promise.resolve().then(async () => {
+      try {
+        do {
+          this.deliveryDirty = false;
+          await this.deliverHeld(attempted);
+        } while (this.deliveryDirty && [...this.held.values()].some(held => held.final && !attempted.has(held)));
+      } finally { this.delivery = null; }
+    });
+    return this.delivery;
+  }
+
+  /** Sends every known result; an acknowledged (or definitively refused) result leaves holding. */
+  private async deliverHeld(attempted: Set<Held>): Promise<void> {
     for (const [id, held] of [...this.held]) {
-      if (!held.final) continue;
+      if (!held.final || attempted.has(held)) continue;
+      // A rescan catches newly closed results without retrying a failed report
+      // more than once in this delivery window.
+      attempted.add(held);
       held.final.attempts += 1;
       const answer = await this.client.report(id, held.final.outcome, { ...(held.final.code ? { code: held.final.code } : {}), gained: held.final.gained });
       if (answer || held.final.attempts >= REPORT_ATTEMPTS) {

@@ -131,6 +131,8 @@ export const config = {
     provider: ['anthropic', 'openai'].includes(optional('MINECRAFT_PLANNER_PROVIDER', 'auto'))
       ? optional('MINECRAFT_PLANNER_PROVIDER', 'auto') : 'auto',
     openAIModel: optional('MINECRAFT_PLANNER_OPENAI_MODEL', 'gpt-5.6-luna'),
+    /** Explicit fixed native model; absent preserves legacy Sonnet/Opus selection. */
+    anthropicModel: optional('MINECRAFT_PLANNER_ANTHROPIC_MODEL', ''),
   },
 
   /** Minecraft adaptive cognition. Off by default; shadow is the first rollout stage. */

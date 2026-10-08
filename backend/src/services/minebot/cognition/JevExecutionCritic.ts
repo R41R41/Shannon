@@ -12,6 +12,7 @@ import {
 } from './OpenAIStructuredDecisionGateway.js';
 import { parseChoiceAnswer, receiptOutcome, supportsControl } from './decisionEvidence.js';
 import { budgetedMinecraftFetch } from './MinecraftModelBudget.js';
+import { AnthropicStructuredDecisionGateway, type AnthropicStructuredDecisionGatewayOptions } from './AnthropicStructuredDecisionGateway.js';
 
 const PROGRESS_STATES = ['ON_TRACK', 'UNCERTAIN', 'STALLED', 'REGRESSING', 'COMPLETED_UNVERIFIED'] as const;
 const FAILURE_CAUSES = [
@@ -114,6 +115,34 @@ export class OpenAIExecutionCritic implements ExecutionCritic {
   }
 }
 
+export interface AnthropicExecutionCriticOptions extends AnthropicStructuredDecisionGatewayOptions {
+  nowMilliseconds?: () => number;
+  idFactory?: () => string;
+}
+export class AnthropicExecutionCritic implements ExecutionCritic {
+  readonly source = 'anthropic' as const;
+  private readonly gateway: AnthropicStructuredDecisionGateway;
+  private readonly nowMilliseconds: () => number;
+  private readonly idFactory: () => string;
+  constructor(options: AnthropicExecutionCriticOptions) {
+    this.gateway = new AnthropicStructuredDecisionGateway(options);
+    this.nowMilliseconds = options.nowMilliseconds ?? Date.now;
+    this.idFactory = options.idFactory ?? (() => crypto.randomUUID());
+  }
+  async assess(input: CriticInput): Promise<CriticAssessment> {
+    const startedAt = this.nowMilliseconds();
+    try {
+      const value = await this.gateway.decide<OpenAICriticOutput>({
+        instructions: criticInstructions, state: compactCriticState(input),
+        schemaName: 'minecraft_execution_critic', schema: openAICriticSchema,
+      });
+      return parseOpenAIAssessment(value, input, this.nowMilliseconds() - startedAt, this.idFactory, 'anthropic');
+    } catch {
+      return fallbackAssessment(input, this.nowMilliseconds() - startedAt, this.idFactory);
+    }
+  }
+}
+
 export class LocalExecutionCritic implements ExecutionCritic {
   readonly source = 'fallback' as const;
   constructor(
@@ -129,6 +158,7 @@ export class LocalExecutionCritic implements ExecutionCritic {
 
 export function createConfiguredExecutionCritic(
   environment: Readonly<Record<string, string | undefined>> = process.env,
+  anthropic?: AnthropicExecutionCriticOptions,
 ): ExecutionCritic {
   const provider = configuredProvider(environment);
   const jevApiKey = environment.TYPESAFE_API_KEY?.trim();
@@ -140,6 +170,9 @@ export function createConfiguredExecutionCritic(
       model: environment.SHANNON_JEV_MODEL?.trim() || 'jev-latest',
       timeoutMilliseconds: positiveInteger(environment.SHANNON_JEV_TIMEOUT_MS) ?? 900,
     });
+  }
+  if (provider === 'auto' && anthropic?.model === 'claude-haiku-5-5') {
+    return anthropic.apiKey.trim() ? new AnthropicExecutionCritic(anthropic) : new LocalExecutionCritic();
   }
   if ((provider === 'auto' || provider === 'openai') && openAIApiKey) {
     return new OpenAIExecutionCritic({
@@ -309,6 +342,7 @@ function parseOpenAIAssessment(
   input: CriticInput,
   elapsedMilliseconds: number,
   idFactory: () => string,
+  source: 'openai' | 'anthropic' = 'openai',
 ): CriticAssessment {
   const confidenceLevel = directChoiceValue(value.confidence, CONFIDENCE_LEVELS);
   return {
@@ -317,7 +351,7 @@ function parseOpenAIAssessment(
     evaluatedRevision: input.evaluatedRevision,
     receivedAt: new Date().toISOString(),
     elapsedMilliseconds: Math.max(0, Math.round(elapsedMilliseconds)),
-    source: 'openai',
+    source,
     confidenceKind: 'self_reported',
     stale: false,
     progressState: directChoiceValue(value.progress_state, PROGRESS_STATES),

@@ -9,7 +9,8 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
-import { createOpenAIPlannerClient, minecraftPlannerProvider } from '../../minebot/cognition/OpenAIPlannerClient.js';
+import { createConfiguredMinecraftPlanner } from '../../minebot/cognition/configuredMinecraftPlanner.js';
+import { isAnthropicCacheEvidenceError, type AnthropicCacheEvidenceError } from '../../minebot/cognition/AnthropicPlannerClient.js';
 import { config } from '../../../config/env.js';
 import { createLogger } from '../../../utils/logger.js';
 import { CONFIG as MINEBOT_CONFIG } from '../../minebot/config/MinebotConfig.js';
@@ -121,7 +122,9 @@ export interface ShannonExecutorResult {
     /** MAX_ITERATIONS 到達時に会話履歴を保存し、再開に使う */
     messages?: MessageParam[];
     /** awaiting_user: ユーザーに続行確認中 */
-    recoveryStatus?: 'awaiting_user';
+    recoveryStatus?: 'awaiting_user' | 'failed_terminal';
+    /** Closed native usage/cache evidence failure; never an automatic continuation. */
+    providerEvidenceFailure?: AnthropicCacheEvidenceError['code'];
     /** LLM管理型タスクツリーのノード（再開時に引き継ぐ） */
     taskNodes?: TaskNode[];
     /** Append-only world/action/critic state for observability and continuation. */
@@ -532,16 +535,30 @@ export function withLiveState(messages: Anthropic.MessageParam[], liveState: str
 
 export class ShannonExecutor {
     private client: Pick<Anthropic, 'messages'>;
+    private readonly configuredModel?: string;
 
     constructor(private deps: ShannonExecutorDeps) {
-        this.client = this.deps.modelClient ?? (minecraftPlannerProvider(config) === 'openai'
-          ? createOpenAIPlannerClient({ apiKey: config.openaiApiKey, model: config.minecraftPlanner?.openAIModel })
-          : new Anthropic({
-            apiKey: config.anthropic.apiKey || undefined,
-        }));
+        if (this.deps.modelClient) {
+            this.client = this.deps.modelClient;
+        } else {
+            const planner = createConfiguredMinecraftPlanner(config);
+            this.client = planner.client;
+            this.configuredModel = planner.model;
+        }
     }
 
     async run(state: ShannonExecutorState): Promise<ShannonExecutorResult> {
+        const evidenceStop = new AbortController();
+        let providerEvidenceFailure: AnthropicCacheEvidenceError | undefined;
+        const holdEvidence = (error: unknown): boolean => {
+            if (!isAnthropicCacheEvidenceError(error)) return false;
+            providerEvidenceFailure ??= error;
+            evidenceStop.abort(error);
+            return true;
+        };
+        state = { ...state, abortSignal: state.abortSignal
+            ? AbortSignal.any([state.abortSignal, evidenceStop.signal]) : evidenceStop.signal };
+        holdEvidence(state.abortSignal?.reason);
         const startTime = Date.now();
         let messages: MessageParam[];
 
@@ -608,8 +625,10 @@ export class ShannonExecutor {
 
         // ── 表示用タスク名の非同期要約（メイン処理をブロックしない） ──
         let displayGoal = state.goal;
-        if (!isResume && state.goal.length > 20) {
-            this.summarizeGoal(state.goal).then(summary => {
+        let titleWork: Promise<void> | null = null;
+        if (!isResume && state.goal.length > 20 && !state.abortSignal?.aborted) {
+            titleWork = this.summarizeGoal(state.goal, state.abortSignal).then(summary => {
+                if (state.abortSignal?.aborted) return;
                 displayGoal = summary;
                 log.info(`📝 タスク名要約: "${summary}"`, 'green');
                 if (taskTree) {
@@ -618,6 +637,7 @@ export class ShannonExecutor {
                     this.postTaskTreeToUiMod(taskTree);
                 }
             }).catch(e => {
+                holdEvidence(e);
                 log.warn(`⚠ タスク名要約失敗 (元テキストを使用): ${e instanceof Error ? e.message : e}`);
             });
         }
@@ -626,18 +646,22 @@ export class ShannonExecutor {
             // MAX_ITERATIONS 到達後の再開: LLM で会話履歴を要約して圧縮
             const prev = state.previousMessages!;
             log.info(`♻️ ShannonExecutor: 前回の会話 (${prev.length} messages) → LLM要約して再開`, 'cyan');
-            const summary = await this.summarizeWithLLM(prev, state.goal);
+            let summary = '';
+            try { summary = await this.summarizeWithLLM(prev, state.goal, state.abortSignal); }
+            catch (error) { if (!holdEvidence(error)) throw error; }
+            if (providerEvidenceFailure || state.abortSignal?.aborted) messages = prev;
+            else {
+                // タスクツリーがあれば構造化コンテキストとしても渡す
+                const treeContext = campaign ? `\n\n【キャンペーンの現在地】\n${JSON.stringify(campaign.projection(campaignActiveId))}` : taskNodes.length > 0
+                    ? `\n\n【タスクツリー（前半の計画と進捗）】\n${taskNodesToText(taskNodes)}`
+                    : '';
 
-            // タスクツリーがあれば構造化コンテキストとしても渡す
-            const treeContext = campaign ? `\n\n【キャンペーンの現在地】\n${JSON.stringify(campaign.projection(campaignActiveId))}` : taskNodes.length > 0
-                ? `\n\n【タスクツリー（前半の計画と進捗）】\n${taskNodesToText(taskNodes)}`
-                : '';
-
-            messages = [
-                { role: 'user', content: `【前半の実行ログ（要約）】\nゴール: ${state.goal}\n\n${summary}${treeContext}` },
-                { role: 'assistant', content: 'ここまでの経緯とタスクツリーを把握しました。続きを実行します。' },
-                { role: 'user', content: `【続行指示】${state.goal}\n上の要約とタスクツリーは前半の実行履歴です。タスクツリーを更新しながら未完了の作業を引き継いでください。同じ失敗を繰り返さないこと。` },
-            ];
+                messages = [
+                    { role: 'user', content: `【前半の実行ログ（要約）】\nゴール: ${state.goal}\n\n${summary}${treeContext}` },
+                    { role: 'assistant', content: 'ここまでの経緯とタスクツリーを把握しました。続きを実行します。' },
+                    { role: 'user', content: `【続行指示】${state.goal}\n上の要約とタスクツリーは前半の実行履歴です。タスクツリーを更新しながら未完了の作業を引き継いでください。同じ失敗を繰り返さないこと。` },
+                ];
+            }
         } else {
             messages = [];
             // 前タスクのコンテキストを引き継ぐ
@@ -674,14 +698,14 @@ export class ShannonExecutor {
         let pendingShadowAssessment: Promise<void> | null = null;
         const activeSupervisors: ExecutionSupervisor[] = [];
 
-        // 軽量タスクは Haiku、それ以外は Sonnet
-        const model = this.deps.modelIdentity?.model ?? (!this.deps.modelClient && minecraftPlannerProvider(config) === 'openai'
-          ? config.minecraftPlanner.openAIModel
-          : isLightweightTask(state.goal, state.tags) ? MODEL_HAIKU : MODEL_SONNET);
+        // 明示モデルは全タスク共通。未指定なら従来の軽量/通常選択を保つ。
+        const model = this.deps.modelIdentity?.model ?? this.configuredModel
+          ?? (isLightweightTask(state.goal, state.tags) ? MODEL_HAIKU : MODEL_SONNET);
         log.info(`▶ ShannonExecutor: "${state.goal.slice(0, 60)}..." (model=${model}, taskTreeCb=${!!state.onTaskTreeUpdate})`, 'cyan');
 
         const recentLearningTools: string[] = [];
         for (let iter = 0; iter < MAX_ITERATIONS && !taskCompleted; iter++) {
+            if (providerEvidenceFailure) { stopReason = 'provider_evidence_invalid'; break; }
             if (state.abortSignal?.aborted) {
                 log.warn('⚠ ShannonExecutor aborted');
                 break;
@@ -795,10 +819,12 @@ export class ShannonExecutor {
             } catch (e) {
                 const msg = e instanceof Error ? e.message : String(e);
                 log.error(`❌ API error: ${msg}`, e);
-                stopReason = 'provider_error';
+                holdEvidence(e);
+                stopReason = providerEvidenceFailure ? 'provider_evidence_invalid' : 'provider_error';
                 break;
             }
 
+            if (providerEvidenceFailure) { stopReason = 'provider_evidence_invalid'; break; }
             const llmMs = Date.now() - llmStart;
 
             // usage ログ（キャッシュ効果を確認）
@@ -1343,14 +1369,27 @@ export class ShannonExecutor {
         if (verifier && goalContract) workspace.recordGoalProof(verifier.verify(goalContract));
         verifier?.dispose();
 
+        // A parallel title request is paid work of this run. Its evidence must
+        // settle before a terminal result is returned. Both requests retain the
+        // original abort signal; an uncooperative transport grants no early ACK.
+        if (titleWork) await titleWork;
         const durationMs = Date.now() - startTime;
 
         // MAX_ITERATIONS 到達 or 中断の処理
-        let resultRecoveryStatus: 'awaiting_user' | undefined;
+        let resultRecoveryStatus: 'awaiting_user' | 'failed_terminal' | undefined;
         let resultMessages: MessageParam[] | undefined;
 
+        if (providerEvidenceFailure) taskCompleted = false;
         if (!taskCompleted) {
-            if (state.abortSignal?.aborted) {
+            if (providerEvidenceFailure) {
+                resultRecoveryStatus = 'failed_terminal';
+                resultMessages = messages;
+                taskTree = { goal: displayGoal, strategy: `モデルの利用量・キャッシュ証拠を確認できない (${providerEvidenceFailure.code})`,
+                    status: 'error', recoveryStatus: 'failed_terminal',
+                    hierarchicalSubTasks: taskNodes.length > 0 ? taskNodesToHierarchicalSubTasks(taskNodes) : [] } as TaskTreeState;
+                state.onTaskTreeUpdate?.(taskTree);
+                this.postTaskTreeToUiMod(taskTree);
+            } else if (state.abortSignal?.aborted) {
                 // 緊急割込みで中断 — 次タスクで復帰できるようにコンテキスト保存
                 const treeProgress = taskNodes.length > 0 ? taskNodesToText(taskNodes).slice(0, 200) : 'なし';
                 if (this.deps.continuation) {
@@ -1417,6 +1456,7 @@ export class ShannonExecutor {
             recoveryStatus: resultRecoveryStatus,
             taskNodes: taskNodes.length > 0 ? taskNodes : undefined,
             cognitiveWorkspace: workspace.snapshot(),
+            ...(providerEvidenceFailure ? { providerEvidenceFailure: providerEvidenceFailure.code } : {}),
         };
     }
 
@@ -1424,13 +1464,13 @@ export class ShannonExecutor {
      * ユーザーの生チャットを短い表示用タスク名に要約する（並列実行用）。
      * 例: 「ダイヤモンドが欲しいんだけどさ、地下に行って掘ってきてくれない？」→「ダイヤモンドの採掘」
      */
-    private async summarizeGoal(rawGoal: string): Promise<string> {
+    private async summarizeGoal(rawGoal: string, signal?: AbortSignal): Promise<string> {
         const response = await this.client.messages.create({
-            model: MODEL_HAIKU,
+            model: this.configuredModel ?? MODEL_HAIKU,
             max_tokens: 60,
             system: 'ユーザーの指示を短い動作名詞句（〜10文字）に要約せよ。例:「ダイヤモンドの採掘」「ネザーポータル建設」「鉄装備の作成」。要約のみ出力。',
             messages: [{ role: 'user', content: rawGoal }],
-        });
+        }, { signal });
         const text = response.content
             .filter((b): b is Anthropic.TextBlock => b.type === 'text')
             .map(b => b.text)
@@ -1444,11 +1484,12 @@ export class ShannonExecutor {
      * LLM (Haiku) で前回の会話を意味的に要約する。
      * 失敗時は機械的要約にフォールバック。
      */
-    private async summarizeWithLLM(messages: MessageParam[], goal: string): Promise<string> {
+    private async summarizeWithLLM(messages: MessageParam[], goal: string, signal?: AbortSignal): Promise<string> {
         const mechanical = ShannonExecutor.compressMessagesMechanical(messages);
+        if (signal?.aborted) return mechanical;
         try {
             const response = await this.client.messages.create({
-                model: MODEL_HAIKU,
+                model: this.configuredModel ?? MODEL_HAIKU,
                 max_tokens: 1024,
                 system: `あなたはタスク実行ログの要約者です。以下のツール呼出し履歴を、後続のAIエージェントが作業を引き継げるように要約してください。
 
@@ -1465,7 +1506,7 @@ export class ShannonExecutor {
                         content: `ゴール: ${goal}\n\n以下がツール呼出し履歴です:\n\n${mechanical}`,
                     },
                 ],
-            });
+            }, { signal });
 
             const usage = response.usage as any;
             if (usage) {
@@ -1482,6 +1523,7 @@ export class ShannonExecutor {
                 return text;
             }
         } catch (e) {
+            if (isAnthropicCacheEvidenceError(e)) throw e;
             log.warn(`⚠ LLM要約失敗、機械的要約にフォールバック: ${e instanceof Error ? e.message : e}`);
         }
         return mechanical;

@@ -21,7 +21,7 @@ export function reserveMinecraftModelRequest(body: string, environment = process
   const requestsLimit = integer(environment.MINECRAFT_MODEL_DAILY_REQUEST_LIMIT, 300);
   const tokensLimit = integer(environment.MINECRAFT_MODEL_DAILY_TOKEN_RESERVATION, 2_000_000);
   const request = JSON.parse(body);
-  const output = request.max_output_tokens ?? 4096; // Jev does not expose a hard output cap.
+  const output = request.max_output_tokens ?? request.max_tokens ?? 4096; // Jev does not expose a hard output cap.
   if (!Number.isSafeInteger(output) || output < 1) throw new Error('MINECRAFT_MODEL_OUTPUT_LIMIT_INVALID');
   const tokens = Buffer.byteLength(body, 'utf8') + output + 4096;
   let lock: number | undefined;

@@ -1,3 +1,4 @@
+import { configuredAnthropicCognition } from '../cognition/AnthropicStructuredDecisionGateway.js';
 /**
  * EventReactionSystem
  * イベント反応を管理するシステム — ハンドラーの統括・タイマー管理
@@ -224,7 +225,7 @@ export class EventReactionSystem {
                 MINECRAFT_OPENAI_MODEL: appConfig.minecraftCognition.openAIModel,
                 MINECRAFT_OPENAI_REASONING_EFFORT: appConfig.minecraftCognition.openAIReasoningEffort,
                 MINECRAFT_OPENAI_TIMEOUT_MS: String(appConfig.minecraftCognition.openAITimeoutMs),
-            });
+            }, configuredAnthropicCognition(appConfig));
 
         this.combat.applyHostileDetection(reactionSettings.hostileDetection);
         reactionSettings.reactions.forEach(config => {

@@ -82,7 +82,7 @@ describe('actual-usage acceptance budget', () => {
   it('releases a request the provider refused outright without charging it (58 refusals had cost a dollar of the cap)', () => {
     const budget = actual();
     const refused = budget.reserve(body);
-    expect(budget.settleRejected(refused.request)).toEqual({ chargedUsd: 0, settledUsd: 0 });
+    expect(budget.settleRejected(refused.request)).toEqual({ chargedUsd: 0, settledUsd: 0, priceDerivedUsd: 0, unknownReservedUsd: 0 });
     const state = JSON.parse(fs.readFileSync(budget.file, 'utf8'));
     expect(state).toMatchObject({ inFlight: {}, committedUsd: 0, rejected: 1, requests: 1 });
     expect(() => budget.settleRejected(refused.request)).toThrow('ACCEPTANCE_RESERVATION_UNKNOWN');

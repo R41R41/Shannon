@@ -266,6 +266,8 @@ function createExecuteNode(
       try {
         const { ShannonExecutor, skillToAnthropicTool, routineToAnthropicTool } = await import('./ShannonExecutor.js');
         const { createConfiguredExecutionCritic } = await import('../../minebot/cognition/JevExecutionCritic.js');
+        const { configuredAnthropicCognition } = await import('../../minebot/cognition/AnthropicStructuredDecisionGateway.js');
+        const anthropicCognition = configuredAnthropicCognition(config);
         const { PromptBuilder } = await import('./nodes/prompt/PromptBuilder.js');
 
         // ツール定義を構築 (Anthropic ネイティブ形式)
@@ -416,7 +418,7 @@ function createExecuteNode(
                 MINECRAFT_OPENAI_MODEL: config.minecraftCognition.openAIModel,
                 MINECRAFT_OPENAI_REASONING_EFFORT: config.minecraftCognition.openAIReasoningEffort,
                 MINECRAFT_OPENAI_TIMEOUT_MS: String(config.minecraftCognition.openAITimeoutMs),
-              }),
+              }, anthropicCognition ? { ...anthropicCognition, signal: state._abortSignal } : undefined),
         });
 
         const previousMessages = (envelope.metadata as any)?.previousMessages as

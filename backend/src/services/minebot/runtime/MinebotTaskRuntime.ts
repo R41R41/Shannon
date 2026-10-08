@@ -45,6 +45,10 @@ export class MinebotTaskRuntime {
   private runGeneration = 0;
   private activeRunGeneration = 0;
   private taskRunGenerations = new Map<string, number>();
+  /** Original executor completion, independent of the current logical owner. */
+  private readonly inFlightRuns = new Map<number, { taskId: string; controller: AbortController; settled: Promise<void> }>();
+  /** A requested stop blocks new body runs until those original executions end. */
+  private readonly stoppingRuns = new Set<number>();
   private activeTaskInput: TaskStateInput | null = null;
   private isExecuting = false;
   private abortController: AbortController | null = null;
@@ -88,6 +92,7 @@ export class MinebotTaskRuntime {
 
   public async invoke(partialState: TaskStateInput) {
     assertMinecraftConnected(this.bot);
+    if (this.stoppingRuns.size) return null;
     if (this.isExecuting) {
       if (partialState.envelope) assertMinecraftContinuation(this.currentState?.memoryContextKey, partialState.envelope, this.bot);
       else if (this.currentState?.memoryContextKey !== minecraftContextKey(minecraftMemoryContext(this.bot))) throw new Error('MINECRAFT_MEMORY_CONTEXT_CHANGED');
@@ -119,6 +124,9 @@ export class MinebotTaskRuntime {
     }
 
     const taskId = partialState.taskId ?? crypto.randomUUID();
+    let settleRun!: () => void;
+    const settled = new Promise<void>(resolve => { settleRun = resolve; });
+    this.inFlightRuns.set(runGeneration, { taskId, controller: this.abortController, settled });
     const createdAt = Date.now();
     if (!partialState.isEmergency) this.activeTaskInput = { ...partialState, taskId };
     if (this.taskQueue.some(task => task.id === taskId && task.status === 'executing')) {
@@ -126,24 +134,24 @@ export class MinebotTaskRuntime {
     }
     let requestMemoryKey: string | null = null;
     let removeContextListeners = () => {};
-    this.currentState = {
-      taskId,
-      createdAt,
-      forceStop: false,
-      retryBudget: 2,
-      recoveryStatus: 'idle',
-      taskTree: partialState.taskTree ?? {
-        status: 'in_progress',
-        goal: partialState.userMessage ?? '',
-        strategy: '',
-        hierarchicalSubTasks: [],
-        currentSubTaskId: null,
-        subTasks: null,
-      },
-    };
-    this.notifyTaskListUpdate();
-
     try {
+      this.currentState = {
+        taskId,
+        createdAt,
+        forceStop: false,
+        retryBudget: 2,
+        recoveryStatus: 'idle',
+        taskTree: partialState.taskTree ?? {
+          status: 'in_progress',
+          goal: partialState.userMessage ?? '',
+          strategy: '',
+          hierarchicalSubTasks: [],
+          currentSubTaskId: null,
+          subTasks: null,
+        },
+      };
+      this.notifyTaskListUpdate();
+
       const envelope = this.taskInputToEnvelope(partialState);
       requestMemoryKey = envelope.metadata?.memoryDisabled === true ? null : minecraftContextKey(envelope.minecraft);
       this.currentState.memoryContextKey = requestMemoryKey;
@@ -286,35 +294,73 @@ export class MinebotTaskRuntime {
       this.notifyTaskListUpdate();
       return this.currentState;
     } finally {
-      removeContextListeners();
-      this.preemptedRuns.delete(runGeneration);
-      if (ownsCurrentRun()) {
-        this.isExecuting = false;
-        this.abortController = null;
-        if (!partialState.isEmergency) this.activeTaskInput = null;
-        this.bot.suppressMinebotGameChat = false;
-        this.bot.minebotControlState = 'idle';
+      try {
+        removeContextListeners();
+        this.preemptedRuns.delete(runGeneration);
+        if (ownsCurrentRun()) {
+          this.isExecuting = false;
+          this.abortController = null;
+          if (!partialState.isEmergency) this.activeTaskInput = null;
+          this.bot.suppressMinebotGameChat = false;
+          this.bot.minebotControlState = 'idle';
 
-      // A preempted main task must leave emergency mode owned by the emergency
-      // handler. Clearing it here would restart the paused task before the
-      // emergency executor has taken control.
-      // Emergency ownership is released only by resumePreviousTask after
-      // native clearance. An unsuccessful model run must leave the main task paused.
-        if (partialState.isEmergency && this.isEmergencyMode) {
-          this.bot.minebotControlState = 'emergency_reflect';
-        }
+        // A preempted main task must leave emergency mode owned by the emergency
+        // handler. Clearing it here would restart the paused task before the
+        // emergency executor has taken control.
+        // Emergency ownership is released only by resumePreviousTask after
+        // native clearance. An unsuccessful model run must leave the main task paused.
+          if (partialState.isEmergency && this.isEmergencyMode) {
+            this.bot.minebotControlState = 'emergency_reflect';
+          }
 
-        const hasPendingTasks = this.taskQueue.some(
-          (task) => task.status === 'pending' || task.status === 'paused',
-        );
-        if (hasPendingTasks && !this.isEmergencyMode) {
-          setTimeout(() => {
-            void this.executeNextTask();
-          }, 500);
+          const hasPendingTasks = this.taskQueue.some(
+            (task) => task.status === 'pending' || task.status === 'paused',
+          );
+          if (hasPendingTasks && !this.isEmergencyMode) {
+            setTimeout(() => {
+              void this.executeNextTask();
+            }, 500);
+          }
+          this.notifyTaskListUpdate();
         }
-        this.notifyTaskListUpdate();
+      } finally {
+        this.inFlightRuns.delete(runGeneration);
+        const wasStopping = this.stoppingRuns.delete(runGeneration);
+        settleRun();
+        if (wasStopping && !this.stoppingRuns.size) queueMicrotask(() => { void this.executeNextTask(); });
       }
     }
+  }
+
+  /** Original promises, including logically detached emergency generations. */
+  public getOriginalExecutionSnapshot(): readonly { taskId: string; generation: number; aborted: boolean; stopRequested: boolean }[] {
+    return Object.freeze([...this.inFlightRuns].map(([generation, run]) => Object.freeze({
+      taskId: run.taskId, generation, aborted: run.controller.signal.aborted,
+      stopRequested: this.stoppingRuns.has(generation),
+    })));
+  }
+
+  /** Whether any original generation of this task is still executing. */
+  public isTaskExecuting(taskId: string): boolean {
+    return [...this.inFlightRuns.values()].some(run => run.taskId === taskId);
+  }
+
+  /** A control request is not a completion ACK. Keep admission fenced while all
+   * original generations finish, even after emergency logical-owner transfer.
+   * A missing task with no original run is uncertain, never a known stop.
+   */
+  public async stopTaskAndWait(taskId: string): Promise<boolean> {
+    const runs = [...this.inFlightRuns.entries()].filter(([, run]) => run.taskId === taskId);
+    for (const [generation, run] of runs) {
+      this.stoppingRuns.add(generation);
+      run.controller.abort();
+    }
+    const removed = this.removeTask(taskId);
+    if (!removed.success && !runs.length) return false;
+    await Promise.all(runs.map(([, run]) => run.settled));
+    // An aborted invoke may leave its old terminal state. Never clear another task.
+    if (this.currentState?.taskId === taskId) this.removeTask(taskId);
+    return true;
   }
 
   public forceStop(options: { preserveSafetyLease?: boolean } = {}): void {
@@ -795,7 +841,7 @@ export class MinebotTaskRuntime {
   }
 
   private async executeNextTask(): Promise<void> {
-    if (this.isExecuting || this.isEmergencyMode) {
+    if (this.isExecuting || this.isEmergencyMode || this.stoppingRuns.size) {
       return;
     }
 

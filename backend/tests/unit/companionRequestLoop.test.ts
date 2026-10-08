@@ -75,7 +75,7 @@ function world() {
       return { taskId };
     },
     status: taskId => states.get(taskId) ?? { state: 'gone' },
-    stop: taskId => { stopped.push(taskId); states.set(taskId, { state: 'gone' }); },
+    stop: taskId => { stopped.push(taskId); states.set(taskId, { state: 'gone' }); return true; },
     step: () => 'collect-block',
     inventory: () => ({ ...inventory }),
   };

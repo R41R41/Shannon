@@ -10,6 +10,7 @@ import {
 } from './OpenAIStructuredDecisionGateway.js';
 import { parseChoiceAnswer, supportsControl } from './decisionEvidence.js';
 import { budgetedMinecraftFetch } from './MinecraftModelBudget.js';
+import { AnthropicStructuredDecisionGateway, type AnthropicStructuredDecisionGatewayOptions } from './AnthropicStructuredDecisionGateway.js';
 
 const REFLEX_ACTIONS = [
   'FLEE', 'EAT', 'SURFACE', 'STOP_MOVEMENT', 'SEEK_SHELTER', 'OBSERVE', 'DELEGATE_SYSTEM2',
@@ -121,6 +122,34 @@ export class OpenAIReflexPolicy implements ReflexPolicy {
   }
 }
 
+export interface AnthropicReflexPolicyOptions extends AnthropicStructuredDecisionGatewayOptions {
+  nowMilliseconds?: () => number;
+  idFactory?: () => string;
+}
+export class AnthropicReflexPolicy implements ReflexPolicy {
+  readonly source = 'anthropic' as const;
+  private readonly gateway: AnthropicStructuredDecisionGateway;
+  private readonly nowMilliseconds: () => number;
+  private readonly idFactory: () => string;
+  constructor(options: AnthropicReflexPolicyOptions) {
+    this.gateway = new AnthropicStructuredDecisionGateway(options);
+    this.nowMilliseconds = options.nowMilliseconds ?? Date.now;
+    this.idFactory = options.idFactory ?? (() => crypto.randomUUID());
+  }
+  async decide(input: ReflexDecisionInput): Promise<ReflexDecision> {
+    const startedAt = this.nowMilliseconds();
+    try {
+      const value = await this.gateway.decide<OpenAIReflexOutput>({
+        instructions: reflexInstructions, state: input as unknown as Record<string, unknown>,
+        schemaName: 'minecraft_reflex_policy', schema: openAIReflexSchema, maxOutputTokens: 140,
+      });
+      return parseOpenAIDecision(value, input, this.nowMilliseconds() - startedAt, this.idFactory, 'anthropic');
+    } catch {
+      return fallbackDecision(input, this.nowMilliseconds() - startedAt, this.idFactory);
+    }
+  }
+}
+
 export class LocalReflexPolicy implements ReflexPolicy {
   readonly source = 'fallback' as const;
   constructor(
@@ -136,6 +165,7 @@ export class LocalReflexPolicy implements ReflexPolicy {
 
 export function createConfiguredReflexPolicy(
   environment: Readonly<Record<string, string | undefined>> = process.env,
+  anthropic?: AnthropicReflexPolicyOptions,
 ): ReflexPolicy {
   const provider = configuredProvider(environment);
   const jevApiKey = environment.TYPESAFE_API_KEY?.trim();
@@ -147,6 +177,9 @@ export function createConfiguredReflexPolicy(
       model: environment.SHANNON_JEV_MODEL?.trim() || 'jev-latest',
       timeoutMilliseconds: positiveInteger(environment.SHANNON_JEV_TIMEOUT_MS) ?? 900,
     });
+  }
+  if (provider === 'auto' && anthropic?.model === 'claude-haiku-5-5') {
+    return anthropic.apiKey.trim() ? new AnthropicReflexPolicy(anthropic) : new LocalReflexPolicy();
   }
   if ((provider === 'auto' || provider === 'openai') && openAIApiKey) {
     return new OpenAIReflexPolicy({
@@ -260,6 +293,7 @@ function parseOpenAIDecision(
   input: ReflexDecisionInput,
   elapsedMilliseconds: number,
   idFactory: () => string,
+  source: 'openai' | 'anthropic' = 'openai',
 ): ReflexDecision {
   const requestedAction = directChoiceValue(value.immediate_action, REFLEX_ACTIONS);
   const requiredCapability = capabilityForAction[requestedAction];
@@ -270,7 +304,7 @@ function parseOpenAIDecision(
     eventType: stringEventType(input.event),
     evaluatedAt: new Date().toISOString(),
     elapsedMilliseconds: Math.max(0, Math.round(elapsedMilliseconds)),
-    source: 'openai',
+    source,
     confidenceKind: 'self_reported',
     shouldPreemptProbability: directProbability(value.should_preempt_probability),
     immediateAction: capabilityAvailable ? requestedAction : 'DELEGATE_SYSTEM2',
