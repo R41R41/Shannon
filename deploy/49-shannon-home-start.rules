@@ -1,0 +1,10 @@
+// Install root:root 0644 in /etc/polkit-1/rules.d/. Keep shannon.service NoNewPrivileges=yes.
+// This fixed user/unit/verb grant does not authorize stop, restart, kill or other services.
+polkit.addRule(function(action, subject) {
+    if (action.id === "org.freedesktop.systemd1.manage-units" &&
+        subject.user === "azureuser" &&
+        action.lookup("unit") === "shannon-home.service" &&
+        action.lookup("verb") === "start") {
+        return polkit.Result.YES;
+    }
+});

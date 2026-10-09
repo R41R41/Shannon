@@ -1,9 +1,10 @@
 #!/bin/sh
 # Install as the registered home start.sh only after the existing world has stopped under the owner's control.
-# Grant azureuser only this exact systemctl start command. No stop/restart/kill authority is introduced.
+# Install the exact root-owned Polkit rule beside this wrapper; NoNewPrivileges stays enabled.
+# No stop/restart/kill authority is introduced.
 set -eu
 loaded=$(systemctl show shannon-home.service --property=LoadState --value) || exit 1
 [ "$loaded" = loaded ] || { echo 'Dedicated home unit is not installed' >&2; exit 1; }
 listeners=$(ss -H -ltn 'sport = :25560') || { echo 'Cannot verify the registered home port' >&2; exit 1; }
 [ -z "$listeners" ] || { echo 'Existing home listener remains; no second world is started' >&2; exit 1; }
-exec sudo -n /usr/bin/systemctl start shannon-home.service
+exec /usr/bin/systemctl --no-ask-password start shannon-home.service
