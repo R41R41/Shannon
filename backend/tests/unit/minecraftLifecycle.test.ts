@@ -79,8 +79,26 @@ describe('native Minecraft lifecycle', () => {
     expect(r.outcome).toBe('completed'); expect(r.state.running).toBe('stopped');
     expect(r.stopGuard).toMatchObject({ admissionClosed: true, otherPlayers: 0 });
   });
+  it('never promotes a coincidentally stopped process to native atomic guard proof', async () => {
+    const f = fixture(), original = f.ports.command;
+    f.ports.command = async (text, signal) => {
+      if (text === 'list uuids') return original(text, signal);
+      f.stopped(); throw Error('lost native command acknowledgement');
+    };
+    const r = await f.native.execute(f.command('stop'), new AbortController().signal);
+    expect(r.outcome).toBe('unknown'); expect(r.inputsReleased).toBe(false); expect(r.stopGuard).toBeUndefined();
+  });
   it('rechecks revoked original authority after fresh reads and before any native effect', async () => {
     const f = fixture(); f.revoke(); f.stopped();
+    expect((await f.native.execute(f.command('start'), new AbortController().signal)).code).toBe('authority_revoked');
+    expect(f.effects).toEqual([]);
+  });
+  it('preserves the machine admission guard and rechecks authority only after its awaited read', async () => {
+    const f = fixture(); f.stopped();
+    f.ports.admission = async () => false;
+    expect((await f.native.execute(f.command('start'), new AbortController().signal)).outcome).toBe('refused');
+    expect(f.effects).toEqual([]);
+    f.ports.admission = async () => { f.revoke(); return true; };
     expect((await f.native.execute(f.command('start'), new AbortController().signal)).code).toBe('authority_revoked');
     expect(f.effects).toEqual([]);
   });

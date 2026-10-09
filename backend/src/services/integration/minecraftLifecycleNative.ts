@@ -25,7 +25,7 @@ export function rconCommand(config: { port: number; password: string }, command:
     if (!Number.isInteger(config.port) || config.port < 1024 || config.port > 65535 || !config.password || command.length > 512) return reject(Error('LIFECYCLE_RCON_CONFIG'));
     const socket = createConnection({ host: '127.0.0.1', port: config.port });
     let pending = Buffer.alloc(0), output = '', authorized = false, finished = false;
-    const finish = (error?: Error) => { if (finished) return; finished = true; clearTimeout(timeout); signal?.removeEventListener('abort', aborted); socket.destroy(); error ? reject(error) : resolve(output); };
+    const finish = (error?: Error) => { if (finished) return; finished = true; clearTimeout(timeout); signal?.removeEventListener('abort', aborted); socket.destroy(); error ? reject(Object.assign(error, { responseText: output })) : resolve(output); };
     const aborted = () => finish(Error('LIFECYCLE_RCON_ABORTED'));
     const timeout = setTimeout(() => finish(Error('LIFECYCLE_RCON_TIMEOUT')), 2500);
     const packet = (id: number, type: number, body: string) => {
@@ -70,6 +70,8 @@ export interface LifecycleNativePorts {
   operationHeld?(): boolean;
   /** Rechecks the original lease, sources and own-time pause/budget after fresh native reads, immediately before effect. */
   authorize(command: MinecraftLifecycleCommand, signal: AbortSignal): Promise<boolean>;
+  /** Existing machine admission guard, before final authority recheck (for example a paid isolated lab already running). */
+  admission?(action: MinecraftLifecycleCommand['action']): Promise<boolean>;
 }
 export class MinecraftLifecycleNative {
   private busy = false;
@@ -110,20 +112,26 @@ export class MinecraftLifecycleNative {
       if (c.action !== 'logout' && (state.running === 'unknown' || state.bot === 'unknown')
         || c.action === 'login' && state.running !== 'running') return receipt('refused', 'state_unknown');
       if (c.action === 'stop' && state.otherPlayers !== 0) return receipt('refused', state.otherPlayers === null ? 'state_unknown' : 'players_present');
+      if (this.ports.admission && !await this.ports.admission(c.action)) return receipt('refused', 'state_unknown');
       if (!await this.ports.authorize(c, signal) || signal.aborted || Date.parse(c.deadlineAt) <= this.now()) return receipt('cancelled', 'authority_revoked');
       const checkedAt = new Date(this.now()).toISOString();
+      let stopAccepted = false;
       // One native server command evaluates @a and executes stop on the same server thread/tick. No API snapshot can grant stop.
-      if (c.action === 'stop') await this.ports.command(guardedStopCommand(this.ports.botUuid, this.ports.onlineMode), signal).catch(() => undefined);
+      if (c.action === 'stop') {
+        try { stopAccepted = (await this.ports.command(guardedStopCommand(this.ports.botUuid, this.ports.onlineMode), signal)).trim() === 'Stopping the server'; }
+        catch (error) { stopAccepted = (error as { responseText?: string }).responseText?.trim() === 'Stopping the server'; }
+      }
       else if (c.action === 'start') await this.ports.start(signal);
       else if (c.action === 'login') await this.ports.login(signal);
       else await this.ports.logout(signal);
       for (let i = 0; i < 80; i++) {
         state = await this.observe();
-        if (c.action === 'start' && state.running === 'running' || c.action === 'stop' && state.running === 'stopped'
+        if (c.action === 'start' && state.running === 'running' || c.action === 'stop' && stopAccepted && state.running === 'stopped'
           || c.action === 'login' && state.bot === 'joined' || c.action === 'logout' && state.bot === 'absent') {
           return receipt('completed', 'changed', true, c.action === 'stop' ? { admissionClosed: true, otherPlayers: 0, checkedAt } : undefined);
         }
         if (c.action === 'stop' && state.running === 'running' && state.otherPlayers !== null && state.otherPlayers > 0) return receipt('refused', 'players_present');
+        if (c.action === 'stop' && !stopAccepted && state.running === 'stopped') return receipt('unknown', 'state_unknown', false);
         if (signal.aborted || Date.parse(c.deadlineAt) <= this.now()) break;
         await delay(250);
       }
