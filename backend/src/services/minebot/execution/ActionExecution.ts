@@ -310,14 +310,15 @@ export async function executeAction(
       // call that never returned, and every later action timed out on the
       // lock for the rest of the run (paid run L29). Its controls are fenced
       // and stopped again; after this bound the body goes to the next action.
-      leaseReclaim = setTimeout(() => {
+      // Exact handoff callers require actual unwind; a timed reclamation is not a stop acknowledgement.
+      if (!options.waitForQuiescence) leaseReclaim = setTimeout(() => {
         if (context.settled) return;
         logger.error(`[Minebot:ActionContainment] Action ${context.progress.actionId} (${capability}) did not settle ${LEASE_RECLAIM_MS / 1000}s after cancellation; its lease is reclaimed`);
         for (const stop of physicalStops(bot)) { try { stop(); } catch { /* keep reclaiming */ } }
         context.trace.containment!.reclaimedAt = Date.now();
         settle();
       }, LEASE_RECLAIM_MS);
-      leaseReclaim.unref();
+      leaseReclaim?.unref();
     }
     context.progress = { ...context.progress, status: 'cancelling', updatedAt: Date.now(),
       sequence: context.progress.sequence + 1 };

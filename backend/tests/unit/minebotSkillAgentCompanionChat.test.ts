@@ -79,4 +79,27 @@ describe('SkillAgent game chat', () => {
     await settle();
     expect(processed).toEqual([['Rai1241', 'シャノン、こんにちは']]);
   });
+  it('common FCA mode preserves companion chat and never falls back to the old graph or direct commands', async () => {
+    const { agent, client, processed } = agentOn({ answer: async () => false });
+    agent.commonFca = true;
+    await agent.botOnChat();
+    client.emit('playerChat', { sender: OWNER, plainMessage: 'シャノン、こんにちは' });
+    client.emit('playerChat', { sender: OWNER, plainMessage: '..agent-fix start planner' });
+    await settle();
+    expect(processed).toEqual([]);
+  });
+
+  it('common mode loads bot.instantSkills for the control catalog without registering a legacy tool gateway', async () => {
+    const { agent, bot } = agentOn(null); agent.commonFca = true;
+    const instantSkills = { getSkills: () => [{ skillName: 'mine-block' }] };
+    const constantSkills = { skills: [{ skillName: 'auto-update-state' }, { skillName: 'auto-swim' }, { skillName: 'auto-follow' }], getSkills() { return this.skills; } };
+    agent.skillLoader = { loadInstantSkills: async () => ({ success: true, skills: instantSkills }), loadConstantSkills: async () => ({ success: true, skills: constantSkills }) };
+    agent.skillRegistrar = { registerInstantSkills: vi.fn(), registerConstantSkills: vi.fn() };
+    expect(await agent.initSkills()).toMatchObject({ success: true });
+    expect(bot.instantSkills).toBe(instantSkills);
+    expect(bot.constantSkills.getSkills().map((skill: any) => skill.skillName)).toEqual(['auto-update-state', 'auto-swim']);
+    expect(agent.skillRegistrar.registerInstantSkills).not.toHaveBeenCalled();
+    expect(agent.skillRegistrar.registerConstantSkills).toHaveBeenCalledTimes(1);
+  });
+
 });

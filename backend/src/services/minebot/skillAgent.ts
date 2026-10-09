@@ -29,6 +29,9 @@ import { CompanionBodyClient } from './integration/CompanionBodyClient.js';
 import { readCompanionBodyToken } from './integration/companionBodyConfig.js';
 import { isAddressedToShannon, listenToPlayerChat, playerUuidByName } from './integration/gameChat.js';
 import { MinebotCompanionBody } from './integration/MinebotCompanionBody.js';
+import { createCommonFcaBody } from './integration/commonFca/createCommonFcaBody.js';
+import type { CommonFcaControlLoop } from './integration/commonFca/controlLoop.js';
+import { skillCategory } from './execution/SkillExecutor.js';
 import {
   looksLikeSelfTestChatIntent,
   parseSelfTestSuiteFromUserMessage,
@@ -75,6 +78,8 @@ export class SkillAgent {
   private lastVoiceChannelId: string | null = null;
   /** Shannon's Minecraft body mode: only on the dedicated companion world (CONFIG.companionBodyFor), else null. */
   private companionBody: MinebotCompanionBody | null = null;
+  private commonFcaBody: CommonFcaControlLoop | null = null;
+  private readonly commonFca = process.env.MINEBOT_COMMON_FCA === 'on';
 
   constructor(bot: CustomBot) {
     this.bot = bot;
@@ -87,7 +92,7 @@ export class SkillAgent {
     this.eventHandler = new BotEventHandler(this.bot, this.taskRuntime, this.recentHistory.messages);
     this.eventReactionSystem = new EventReactionSystem(this.bot, this.taskRuntime);
     this.httpServer = new MinebotHttpServer(this.bot, () => this.sendConstantSkills(), () => this.sendReactionSettings());
-    this.httpServer.setTaskRuntime(this.taskRuntime);
+    if (!this.commonFca) this.httpServer.setTaskRuntime(this.taskRuntime);
   }
 
   /**
@@ -121,7 +126,7 @@ export class SkillAgent {
       log.success('✅ registerInboundHandlers done');
 
       const companionBody = this.companionBody;
-      this.taskRuntime.setExecutor(companionBody
+      if (!this.commonFca) this.taskRuntime.setExecutor(companionBody
         // Her mind is told how a request it queued ended, from the run's own result.
         ? async (envelope, messages, options) => {
           const result = await LLMService.getInstance(config.isDev).invokeGraph(envelope, messages, options);
@@ -139,15 +144,15 @@ export class SkillAgent {
       });
 
       // EventReactionSystem初期化
-      await this.eventReactionSystem.initialize();
+      if (!this.commonFca) await this.eventReactionSystem.initialize();
       log.success('✅ EventReactionSystem initialized');
 
       // 緊急イベントハンドラーを設定（EventReactionSystemを使用）
-      this.eventHandler.setEventReactionSystem(this.eventReactionSystem);
+      if (!this.commonFca) this.eventHandler.setEventReactionSystem(this.eventReactionSystem);
       log.success('✅ Event reaction system registered');
 
       // HTTPサーバーにEventReactionSystemを設定
-      this.httpServer.setEventReactionSystem(this.eventReactionSystem);
+      if (!this.commonFca) this.httpServer.setEventReactionSystem(this.eventReactionSystem);
 
       // チャットメッセージコールバックを設定
       this.httpServer.setOnChatMessageCallback(async (sender: string, message: string) => {
@@ -155,6 +160,7 @@ export class SkillAgent {
         // The UI mod is the owner's own client on this machine (loopback, mod token): its name is looked up by UUID.
         const modSpeakerUuid = this.companionBody && sender !== 'system' ? playerUuidByName(this.bot.players as any, sender) : undefined;
         if (modSpeakerUuid && await this.companionBody!.answer({ uuid: modSpeakerUuid, name: sender }, message)) return;
+        if (this.commonFca) return; // No old planner fallback after unavailable/unidentified companion chat.
         // マイクラチャットと同様に処理（環境情報も渡す）
         await this.processMessage(
           sender,
@@ -167,6 +173,7 @@ export class SkillAgent {
       // HTTPサーバー起動
       this.httpServer.start();
       this.companionBody?.start();
+      this.commonFcaBody?.start();
 
       // UI Modにスキル情報を送信
       await this.sendConstantSkills();
@@ -198,10 +205,16 @@ export class SkillAgent {
       return { success: false, result: constantResult.result };
     }
     this.bot.constantSkills = constantResult.skills;
+    if (this.commonFca) {
+      // Observation plus the existing local air safety reflex only; every physical owner shares ActionExecution.
+      this.bot.constantSkills.skills = this.bot.constantSkills.getSkills().filter(skill =>
+        skillCategory(skill.skillName) === 'query' || skill.skillName === 'auto-swim');
+    }
 
     // スキル登録
-    this.skillRegistrar.registerInstantSkills(this.bot.instantSkills);
+    if (!this.commonFca) this.skillRegistrar.registerInstantSkills(this.bot.instantSkills);
     this.skillRegistrar.registerConstantSkills(this.bot, this.bot.constantSkills);
+    if (this.commonFca) return { success: true, result: 'body skills initialized' };
     await LLMService.getInstance(config.isDev).registerMinebotTools(this.bot);
     await LLMService.getInstance(config.isDev).registerRoutineTools(this.bot);
 
@@ -254,6 +267,13 @@ export class SkillAgent {
       return;
     }
 
+    if (this.commonFca) {
+      if (this.companionBody && speakerUuid && isAddressedToShannon(message)) {
+        await this.companionBody.answer({ uuid: speakerUuid, name: username }, message);
+      }
+      return;
+    }
+
     // 話しかけられたら向く（常時スキル）
     const autoFaceSpeaker = this.bot.constantSkills.getSkill('auto-face-speaker') as AutoFaceSpeaker | undefined;
     if (autoFaceSpeaker?.status) {
@@ -297,16 +317,21 @@ export class SkillAgent {
   /** The companion body for this connection, or null (another server, or the mode off or misconfigured). */
   private createCompanionBody(): MinebotCompanionBody | null {
     const settings = CONFIG.companionBodyFor(this.bot.connectedServerName);
-    if (!settings) return null;
+    if (!settings) {
+      if (this.commonFca) throw new Error('COMMON_FCA_REQUIRES_COMPANION_WORLD');
+      return null;
+    }
     const token = readCompanionBodyToken(settings.tokenFile);
     if (!token) {
+      if (this.commonFca) throw new Error('COMMON_FCA_REQUIRES_DEVICE_TOKEN');
       log.warn('Companion body mode is off for this connection: MINEBOT_COMPANION_BODY_TOKEN_FILE is unreadable or too short');
       return null;
     }
+    if (this.commonFca) this.commonFcaBody = createCommonFcaBody(this.bot, settings, token, process.env.MINEBOT_COMMON_FCA_RENDERER_DIR);
     const client = new CompanionBodyClient({ baseUrl: settings.url, token, serverId: settings.serverId });
     log.info(`🫀 Companion body mode on ${settings.serverName} (serverId ${settings.serverId})`, 'cyan');
     return new MinebotCompanionBody(this.bot as any, this.taskRuntime, client, {
-      serverId: settings.serverId,
+      serverId: settings.serverId, commonFca: this.commonFca, commonFcaBusy: () => this.commonFcaBody?.busy ?? false,
       uiModBaseUrl: () => CONFIG.UI_MOD_BASE_URL,
       lineLimit: CONFIG.MINECRAFT_CHAT_MAX_CHARS,
       maxLines: 3,
@@ -316,6 +341,7 @@ export class SkillAgent {
 
   /** Ends the companion body mode for this connection (open requests are reported as run over). */
   async stopCompanionBody(): Promise<void> {
+    await this.commonFcaBody?.stop();
     await this.companionBody?.stop('run_over');
   }
 
@@ -556,6 +582,7 @@ export class SkillAgent {
    * 送信者情報を更新
    */
   private updateSenderInfo(username: string): void {
+    if (this.commonFca) return;
     this.bot.environmentState.senderName = username;
 
     // bot.players → bot.entities の順でプレイヤーエンティティを探す
@@ -608,6 +635,7 @@ export class SkillAgent {
     voiceResponseTarget?: { guildId: string; channelId: string },
     gameChat = false,
   ) {
+    if (this.commonFca) return;
     try {
       const currentTime = new Date().toLocaleString('ja-JP', {
         timeZone: 'Asia/Tokyo',

@@ -29,6 +29,9 @@ export interface MinebotCompanionBodyRuntime extends CompanionTaskRuntime {
 
 export interface MinebotCompanionBodyOptions {
   serverId: string;
+  /** Common FCA owns requests; this object keeps only chat/death transport. */
+  commonFca?: boolean;
+  commonFcaBusy?: () => boolean;
   /** Where her reply goes in the UI mod's chat tab (the current server's UI mod). */
   uiModBaseUrl: () => string;
   /** Game chat line length (the bot's MINECRAFT_CHAT_MAX_CHARS) and the most lines one reply may take. */
@@ -122,6 +125,7 @@ export class MinebotCompanionBody {
       return false;
     }
     this.log(`MINEBOT_COMPANION_REPLY ${JSON.stringify({ player: speaker.name, action: outcome.action, requestId: outcome.requestId })}`);
+    if (this.options.commonFca) return true;
     if (outcome.action === 'task') this.queueAnswered(speaker.name, outcome.goal);
     else if (outcome.action === 'stop') this.stopCurrent();
     // `request`: queued on her mind; the claim loop takes it (one path for progress, stop and result).
@@ -136,6 +140,8 @@ export class MinebotCompanionBody {
 
   /** What her body is doing now. Every production task is something someone asked for: busy with a request, or idle. */
   bodyNow() {
+    if (this.options.commonFca) return companionBodyNow(this.bot, { busyWith: this.options.commonFcaBusy?.() ? 'request' : 'idle',
+      recentAdvancements: this.events?.recentAdvancements ?? [] });
     const state = this.runtime.getTaskListState();
     const current = state.currentTaskId ? state.tasks.find(task => task.id === state.currentTaskId) : undefined;
     const busy = !!current && current.status === 'executing';
@@ -149,7 +155,7 @@ export class MinebotCompanionBody {
   }
 
   private startLoop(): void {
-    if (this.stopped) return;
+    if (this.stopped || this.options.commonFca) return;
     this.loop.start();
   }
 

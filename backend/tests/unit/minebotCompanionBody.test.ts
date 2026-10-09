@@ -326,3 +326,21 @@ describe('the production bot as her Minecraft body', () => {
     expect(await v.body.answer({ uuid: OWNER, name: 'Rai1241' }, 'シャノン、いる？')).toBe(false);
   });
 });
+
+
+describe('common FCA body presence', () => {
+  it('reads shared physical activity instead of the retired local task queue and never claims legacy requests', async () => {
+    let busy = true;
+    const bot: any = Object.assign(new EventEmitter(), { entity: {}, username: 'I_am_Shannon', health: 20, food: 20, chat: vi.fn() });
+    const runtime: any = { getTaskListState: vi.fn(() => { throw Error('LEGACY_TASK_QUEUE_MUST_NOT_BE_READ'); }) };
+    const client: any = { claim: vi.fn(), turn: vi.fn(), died: vi.fn(), progress: vi.fn(), report: vi.fn() };
+    const body = new MinebotCompanionBody(bot, runtime, client, { serverId: 'home', uiModBaseUrl: () => 'http://127.0.0.1:1',
+      commonFca: true, commonFcaBusy: () => busy });
+    body.start();
+    expect(body.bodyNow()).toMatchObject({ busyWith: 'request' });
+    expect(body.bodyNow()).not.toHaveProperty('task');
+    busy = false; expect(body.bodyNow()).toMatchObject({ busyWith: 'idle' });
+    expect(runtime.getTaskListState).not.toHaveBeenCalled(); expect(client.claim).not.toHaveBeenCalled();
+    await body.stop();
+  });
+});
