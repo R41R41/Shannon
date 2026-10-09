@@ -37,6 +37,7 @@ export async function startConfiguredMinecraftLifecycle(): Promise<void> {
     onlineMode,
     async admission(action) {
       if (action !== 'start' && action !== 'login') return true;
+      if (action === 'start' && minecraft.status !== 'running' || action === 'login' && minebot.status !== 'running') return false;
       // Preserve the existing operations console's admission guard for a paid lab process.
       try { const { stdout } = await exec('pgrep', ['-f', 'minecraft-campaign-live-probe'], { timeout: 2000 }); return !stdout.trim(); }
       catch (error) { return (error as NodeJS.ErrnoException).code === 1; }

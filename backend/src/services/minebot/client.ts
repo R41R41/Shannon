@@ -444,7 +444,7 @@ export class MinebotClient extends BaseClient {
   }
   /** Uses the existing configured native body, with no old planner fallback or process spawn permission. */
   public async lifecycleLogin(serverName: string, signal: AbortSignal): Promise<void> {
-    if (this.lifecycleBusy || process.env.MINEBOT_COMMON_FCA !== 'on' || !CONFIG.companionBodyFor(serverName)) throw Error('LIFECYCLE_BODY_UNAVAILABLE');
+    if (this.lifecycleBusy || this.status !== 'running' || process.env.MINEBOT_COMMON_FCA !== 'on' || !CONFIG.companionBodyFor(serverName)) throw Error('LIFECYCLE_BODY_UNAVAILABLE');
     signal.throwIfAborted();
     if (this.bot && !this.connectionEnded) throw Error('LIFECYCLE_BODY_BUSY');
     this.lifecycleBusy = true;
