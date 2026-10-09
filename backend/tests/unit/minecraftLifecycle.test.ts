@@ -31,7 +31,7 @@ function fixture() {
   };
   const native = new MinecraftLifecycleNative(ports);
   const command = (action: MinecraftLifecycleCommand['action']): MinecraftLifecycleCommand => ({ schemaVersion: 1, id: `operation:${action}`, serverId: 'home', connectionId: 'connection', action,
-    authority: { scopeKey: 'owner', origin: 'own_time', executionId: 'session', lease: { id: 'lease', holder: 'worker', generation: 1 }, sourceIds: ['source:own_time'] }, deadlineAt: new Date(Date.now() + 30000).toISOString() });
+    authority: { scopeKey: 'owner', origin: 'own_time', executionId: 'session', lease: { id: 'lease', holder: 'worker', generation: 1 }, sourceIds: ['source:own_time'] }, issuedAt: new Date().toISOString(), deadlineAt: new Date(Date.now() + 30000).toISOString() });
   return { ports, native, command, effects, stopped() { running = false; }, human() { players.push(humanUuid); }, joined() { bot = 'joined'; players.push(botUuid); }, race() { race = true; }, revoke() { permitted = false; } };
 }
 describe('native Minecraft lifecycle', () => {
@@ -48,6 +48,17 @@ describe('native Minecraft lifecycle', () => {
     expect((await f.native.observe()).running).toBe('unknown');
     const r = await f.native.execute(f.command('stop'), new AbortController().signal);
     expect(r.outcome).toBe('refused'); expect(f.effects).toEqual([]);
+  });
+  it('rejects absent, future and invalid original command clocks before native effects', async () => {
+    const f = fixture(); f.stopped();
+    for (const issuedAt of ['', new Date(Date.now() + 60000).toISOString(), 'invalid']) {
+      const r = await f.native.execute({ ...f.command('start'), issuedAt }, new AbortController().signal);
+      expect(r.outcome).toBe('cancelled'); expect(f.effects).toEqual([]);
+    }
+    const c = f.command('start'), r = await f.native.execute(c, new AbortController().signal);
+    expect(r.outcome).toBe('completed');
+    expect(Date.parse(r.state.observedAt)).toBeGreaterThanOrEqual(Date.parse(c.issuedAt));
+    expect(Date.parse(r.observedAt)).toBeGreaterThanOrEqual(Date.parse(c.issuedAt));
   });
   it('starts only stopped worlds and treats already-running state as an idempotent no-op', async () => {
     const f = fixture();

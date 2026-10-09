@@ -78,6 +78,8 @@ export class MinecraftLifecycleOperator {
   }
   private accept(command: MinecraftLifecycleCommand): void {
     if (!command || command.schemaVersion !== 1 || command.connectionId !== this.connectionId
+      || !Number.isFinite(Date.parse(command.issuedAt)) || Date.parse(command.issuedAt) > Date.now()
+      || !Number.isFinite(Date.parse(command.deadlineAt)) || Date.parse(command.issuedAt) >= Date.parse(command.deadlineAt)
       || command.serverId !== this.options.native.ports.serverId || !['start', 'stop', 'login', 'logout'].includes(command.action)
       || !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/.test(command.id) || this.active || this.options.journal.held) return;
     if (!this.options.journal.begin(command)) return;

@@ -101,7 +101,8 @@ export class MinecraftLifecycleNative {
     const receipt = (outcome: MinecraftLifecycleReceipt['outcome'], code: MinecraftLifecycleReceipt['code'], inputsReleased = true, stopGuard?: MinecraftLifecycleReceipt['stopGuard']): MinecraftLifecycleReceipt => ({
       id: c.id, connectionId: c.connectionId, serverId: c.serverId, action: c.action, outcome, code, inputsReleased, state, observedAt: new Date(this.now()).toISOString(), ...(stopGuard ? { stopGuard } : {}) });
     if (c.serverId !== this.ports.serverId || this.busy || this.ports.operationHeld?.()) return receipt('refused', 'state_unknown');
-    if (signal.aborted || Date.parse(c.deadlineAt) <= this.now()) return receipt('cancelled', 'deadline');
+    if (!Number.isFinite(Date.parse(c.issuedAt)) || Date.parse(c.issuedAt) > this.now() || Date.parse(c.issuedAt) >= Date.parse(c.deadlineAt)
+      || !Number.isFinite(Date.parse(c.deadlineAt)) || signal.aborted || Date.parse(c.deadlineAt) <= this.now()) return receipt('cancelled', 'deadline');
     this.busy = true;
     try {
       if (c.action === 'start' && state.running === 'running') return receipt('completed', 'already_running');

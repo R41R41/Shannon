@@ -17,7 +17,7 @@ export interface MinecraftLifecycleAuthority {
 }
 export interface MinecraftLifecycleCommand {
   schemaVersion: 1; id: string; connectionId: string; serverId: string;
-  action: MinecraftLifecycleAction; authority: MinecraftLifecycleAuthority; deadlineAt: string;
+  action: MinecraftLifecycleAction; authority: MinecraftLifecycleAuthority; issuedAt: string; deadlineAt: string;
 }
 export interface MinecraftLifecycleReceipt {
   id: string; connectionId: string; serverId: string; action: MinecraftLifecycleAction;
