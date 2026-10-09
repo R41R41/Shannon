@@ -7,7 +7,7 @@ import { Vec3 } from 'vec3';
 import {
   describeSeenReach, emptyPlaceMemory, forgetPlaces, markSeen, MAX_PLACES, parsePlaceMemory, placesDigest, recallPlaces, rememberPlace, seenReach,
 } from '../../src/modules/minecraftLearning/places.js';
-import { installPlaceMemory } from '../../src/services/minebot/utils/placeMemory.js';
+import { installPlaceMemory, placeMemoryPlugin } from '../../src/services/minebot/utils/placeMemory.js';
 
 const overworld = 'overworld';
 
@@ -122,6 +122,46 @@ function world(cells: Record<string, number>, blockEntities: Record<string, unkn
   return { bot, cells };
 }
 const ticks = (bot: EventEmitter, count: number) => { for (let index = 0; index < count; index++) bot.emit('physicsTick'); };
+
+describe('place memory waits for Mineflayer world readiness', () => {
+  it('installs before login without dropping a column received while the world is absent', () => {
+    const { bot } = world({ '14,8,1': STATES.furnace });
+    const ready = bot.world;
+    delete bot.world;
+    expect(() => placeMemoryPlugin(bot)).not.toThrow();
+    bot.emit('chunkColumnLoad', new Vec3(0, 0, 0));
+    expect(() => bot.placeMemory.work(20)).not.toThrow();
+    expect(bot.placeMemory.stats.columnsRead).toBe(0);
+    expect(bot.placeMemory.recall('furnace')).toEqual([]);
+    bot.world = ready;
+    bot.placeMemory.work(20);
+    expect(bot.placeMemory.recall('furnace')).toMatchObject([{ position: { x: 14, y: 8, z: 1 } }]);
+  });
+
+  it('seeds already loaded columns on login or spawn without requiring another chunk event', () => {
+    for (const event of ['login', 'spawn']) {
+      const { bot } = world({ '14,8,1': STATES.furnace });
+      const ready = bot.world;
+      delete bot.world;
+      placeMemoryPlugin(bot);
+      bot.world = ready;
+      bot.emit(event);
+      ticks(bot, 3);
+      expect(bot.placeMemory.recall('furnace')).toMatchObject([{ position: { x: 14, y: 8, z: 1 } }]);
+      expect(bot.placeMemory.stats.columnsRead).toBeGreaterThan(0);
+    }
+  });
+
+  it('keeps the initial world scan and avoids duplicate listeners on reinstall', () => {
+    const { bot } = world({ '14,8,1': STATES.furnace });
+    placeMemoryPlugin(bot);
+    placeMemoryPlugin(bot);
+    ticks(bot, 3);
+    expect(bot.placeMemory.recall('furnace')).toMatchObject([{ position: { x: 14, y: 8, z: 1 } }]);
+    expect(bot.listenerCount('spawn')).toBe(1);
+    expect(bot.listenerCount('physicsTick')).toBe(1);
+  });
+});
 
 describe('the body notes what comes into view without being asked', () => {
   it('notes water a bucket can reach, ore that shows, and what stands to be used; not what is buried or still flowing', () => {

@@ -41,7 +41,7 @@ interface MemoryBot {
   entity?: { position: Vec3 };
   game?: { dimension?: unknown };
   registry: { blocksByName: Record<string, { name?: string; minStateId?: number; maxStateId?: number } | undefined> };
-  world: { getColumns?(): ColumnEntry[]; getColumn?(chunkX: number, chunkZ: number): any; getBlockStateId?(position: Vec3): number };
+  world?: { getColumns?(): ColumnEntry[]; getColumn?(chunkX: number, chunkZ: number): any; getBlockStateId?(position: Vec3): number };
   blockAt?(position: Vec3): { stateId?: number } | null;
   landmarks?: Array<{ kind: string; position: { x: number; y: number; z: number }; evidence?: string }>;
   placeMemory?: PlaceMemory;
@@ -122,7 +122,7 @@ function readSection(bot: MemoryBot, wanted: Wanted, job: ColumnJob): void {
   const stateAt = (x: number, y: number, z: number): number | null => {
     try {
       const chunkX = Math.floor(x / 16), chunkZ = Math.floor(z / 16);
-      const other = chunkX === job.chunkX && chunkZ === job.chunkZ ? column : bot.world.getColumn?.(chunkX, chunkZ);
+      const other = chunkX === job.chunkX && chunkZ === job.chunkZ ? column : bot.world?.getColumn?.(chunkX, chunkZ);
       if (!other?.getBlockStateId) return null;
       local.x = x & 15; local.y = y; local.z = z & 15;
       return other.getBlockStateId(local);
@@ -226,6 +226,8 @@ export function installPlaceMemory(bot: MemoryBot, options: { file?: string } = 
     memory.stats.totalReadMs += done.startedReadMs;
   };
   const work = (budgetMs: number) => {
+    // Mineflayer injects plugins before login creates the world. Keep queued columns for readiness.
+    if (!bot.world) return;
     const started = performance.now();
     while (performance.now() - started < budgetMs) {
       if (!job) {
@@ -233,7 +235,7 @@ export function installPlaceMemory(bot: MemoryBot, options: { file?: string } = 
         if (key === undefined) return;
         queue.delete(key);
         const [chunkX, chunkZ] = key.split(',').map(Number);
-        const column = bot.world.getColumn?.(chunkX, chunkZ);
+        const column = bot.world?.getColumn?.(chunkX, chunkZ);
         if (!column?.sections) continue;
         wanted ??= wantedStates(bot);
         job = { chunkX, chunkZ, column, index: 0, clusters: [], startedReadMs: 0 };
@@ -249,8 +251,15 @@ export function installPlaceMemory(bot: MemoryBot, options: { file?: string } = 
 
   bot.on('chunkColumnLoad', (corner: Vec3) => { if (corner) enqueue(Math.floor(corner.x / 16), Math.floor(corner.z / 16)); });
   bot.on('death', () => { if (bot.entity?.position) memory.remember('death', bot.entity.position); });
-  bot.on('end', () => flush());
-  for (const entry of bot.world.getColumns?.() ?? []) enqueue(Number(entry.chunkX), Number(entry.chunkZ));
+  const seedLoadedColumns = () => {
+    for (const entry of bot.world?.getColumns?.() ?? []) enqueue(Number(entry.chunkX), Number(entry.chunkZ));
+  };
+  bot.on('login', seedLoadedColumns);
+  // Spawn also covers plugin installation before login and a later respawn/dimension switch.
+  // An unfinished column belongs to the previous world, never the new dimension.
+  bot.on('spawn', () => { job = null; queue.clear(); seedLoadedColumns(); });
+  bot.on('end', () => { job = null; queue.clear(); flush(); });
+  seedLoadedColumns();
   let tick = 0;
   bot.on('physicsTick', () => {
     tick++;
