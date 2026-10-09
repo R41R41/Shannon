@@ -17,7 +17,7 @@ describe('CompanionBodyClient requests (phase 4)', () => {
     }) as unknown as typeof fetch;
     const client = new CompanionBodyClient({ baseUrl: 'http://127.0.0.1:4329', token, serverId: 'lab-0i4Tdi', fetcher });
     const answer = await client.claim([OTHER], 25);
-    expect(sent[0]).toEqual({ url: 'http://127.0.0.1:4329/v1/body/minecraft/claim', body: { scopeKey: 'owner', waitSeconds: 25, holding: [OTHER] } });
+    expect(sent[0]).toEqual({ url: 'http://127.0.0.1:4329/v1/body/minecraft/claim', body: { scopeKey: 'owner', waitSeconds: 25, holding: [OTHER], supportedPrimaryModels: [] } });
     expect(answer).toEqual({ request: request(), cancel: [OTHER] });
   });
 

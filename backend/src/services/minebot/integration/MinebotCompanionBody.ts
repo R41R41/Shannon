@@ -11,7 +11,7 @@ import {
  * docs/minecraft-body-contract.md). Built by SkillAgent only while the bot is connected to the dedicated companion
  * world; on any other server the bot is as before. Her mind answers what a player writes to her and queues what the
  * owner asks of her body; this body says the reply, takes requests through the claim loop as tasks of its own
- * runtime, reports how they ended, and reports her death. When her mind cannot answer, the caller's own path answers.
+ * runtime, reports how they ended, and reports her death. When her mind cannot answer, the managed caller reports unavailable without starting a local task.
  */
 export interface MinebotCompanionBodyBot extends CompanionBodyBot {
   entity?: unknown;
@@ -112,7 +112,7 @@ export class MinebotCompanionBody {
 
   /**
    * A player wrote to her (the speaker's UUID is from the player chat packet, or the UI mod's own client). True when
-   * her mind answered; false when it could not, and the caller answers as before.
+   * her mind answered; false when it could not, so the managed caller reports unavailable.
    */
   async answer(speaker: { uuid: string; name: string }, message: string): Promise<boolean> {
     if (this.stopped) return false;

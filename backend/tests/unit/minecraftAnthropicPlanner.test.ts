@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createAnthropicPlannerClient, markConversationForCache } from '../../src/services/minebot/cognition/AnthropicPlannerClient.js';
+import { createAnthropicPlannerClient, markConversationForCache, MINECRAFT_HAIKU_PROTOCOL_PREFIX } from '../../src/services/minebot/cognition/AnthropicPlannerClient.js';
 import { ActualUsageBudget, anthropicUsageCostUsd, modelUsageCostUsd } from '../../src/services/minebot/testing/AcceptanceBudget.js';
 
 const ok = (payload: unknown) => new Response(JSON.stringify(payload), { status: 200, headers: { 'content-type': 'application/json' } });
@@ -12,7 +12,7 @@ const reply = { type: 'message', role: 'assistant', stop_reason: 'tool_use',
 
 describe('Messages API transport for the planner', () => {
   it('sends the executor\'s request as it is, with one model, adaptive thinking at a fixed effort, and no sampling temperature', async () => {
-    const fetcher = vi.fn(async (_url: any, _init: any) => ok(reply));
+    const fetcher = vi.fn(async (_url: any, _init: any) => ok({ ...reply, usage: { ...reply.usage, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 1500 } } }));
     const client = createAnthropicPlannerClient({ apiKey: 'k', model: 'claude-sonnet-5-5', effort: 'low', fetcher: fetcher as any });
     const system = [{ type: 'text', text: 'rules', cache_control: { type: 'ephemeral' } }];
     const tools = [{ name: 'move-to', description: 'd', input_schema: { type: 'object' }, cache_control: { type: 'ephemeral' } }];
@@ -22,11 +22,14 @@ describe('Messages API transport for the planner', () => {
     const body = JSON.parse(init.body);
     expect(url).toBe('https://api.anthropic.com/v1/messages');
     expect(init.headers).toMatchObject({ 'x-api-key': 'k', 'anthropic-version': '2023-06-01' });
-    expect(body).toMatchObject({ model: 'claude-sonnet-5-5', max_tokens: 8192, system, tools, thinking: { type: 'adaptive' }, output_config: { effort: 'low' } });
+    expect(body).toMatchObject({ model: 'claude-sonnet-5-5', max_tokens: 8192, thinking: { type: 'adaptive' }, output_config: { effort: 'low' } });
+    expect(body.system).toEqual([{ type: 'text', text: MINECRAFT_HAIKU_PROTOCOL_PREFIX, cache_control: { type: 'ephemeral', ttl: '1h' } },
+      { ...system[0], cache_control: { type: 'ephemeral', ttl: '1h' } }]);
+    expect(body.tools).toEqual([{ ...tools[0], cache_control: { type: 'ephemeral', ttl: '1h' } }]);
     expect(body).not.toHaveProperty('temperature');
     // The reply reaches the executor whole: its thinking block goes back unchanged on the next turn.
     expect(response.content).toEqual(reply.content);
-    expect(response.usage).toEqual(reply.usage);
+    expect(response.usage).toMatchObject(reply.usage);
   });
 
   it('marks the conversation for the cache at the last thing the model said, never on a thinking block or the changing tail', () => {
@@ -57,7 +60,7 @@ describe('Messages API transport for the planner', () => {
 
   it('names the workspace for a key that is not tied to one, and only then', async () => {
     const seen: any[] = [];
-    const fetcher = (async (_url: any, init: any) => { seen.push(init.headers); return ok(reply); }) as any;
+    const fetcher = (async (_url: any, init: any) => { seen.push(init.headers); return ok({ ...reply, usage: { ...reply.usage, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 1500 } } }); }) as any;
     await (createAnthropicPlannerClient({ apiKey: 'k', model: 'claude-sonnet-5-5', workspaceId: 'wrkspc_01ABC', fetcher }).messages as any).create({ messages: [{ role: 'user', content: 'go' }] });
     await (createAnthropicPlannerClient({ apiKey: 'k', model: 'claude-sonnet-5-5', fetcher }).messages as any).create({ messages: [{ role: 'user', content: 'go' }] });
     expect(seen[0]).toMatchObject({ 'anthropic-workspace-id': 'wrkspc_01ABC' });
@@ -71,7 +74,7 @@ describe('one ledger for either planner', () => {
   afterEach(() => { for (const directory of directories.splice(0)) fs.rmSync(directory, { recursive: true, force: true }); });
 
   it('prices uncached input, cache writes, cache reads and output at each model\'s own rates', () => {
-    expect(anthropicUsageCostUsd('claude-sonnet-5-5', reply.usage)).toBeCloseTo((900 * 2 + 1500 * 2.5 + 25000 * 0.2 + 200 * 10) / 1e6, 10);
+    expect(anthropicUsageCostUsd('claude-sonnet-5-5', { ...reply.usage, cache_creation: { ephemeral_5m_input_tokens: 1500, ephemeral_1h_input_tokens: 0 } })).toBeCloseTo((900 * 2 + 1500 * 2.5 + 25000 * 0.2 + 200 * 10) / 1e6, 10);
     expect(anthropicUsageCostUsd('claude-opus-5-5', reply.usage)).toBeCloseTo((900 * 4 + 1500 * 5 + 25000 * 0.2 + 200 * 20) / 1e6, 10);
     expect(modelUsageCostUsd('claude-opus-5-5', reply.usage)).toBe(anthropicUsageCostUsd('claude-opus-5-5', reply.usage));
     expect(modelUsageCostUsd('gpt-5.6-luna', { input_tokens: 1000, output_tokens: 100, input_tokens_details: { cached_tokens: 400 } }))

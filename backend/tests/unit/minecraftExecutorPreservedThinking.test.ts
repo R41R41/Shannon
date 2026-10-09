@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 vi.mock('../../src/config/env.js', () => ({ config: { anthropic: { apiKey: 'offline', model: 'claude-sonnet-5-5' } } }));
 vi.mock('../../src/services/minebot/config/MinebotConfig.js', () => ({ CONFIG: { UI_MOD_BASE_URL: 'http://example.invalid' } }));
-import { createAnthropicPlannerClient, MINECRAFT_HAIKU_MODEL } from '../../src/services/minebot/cognition/AnthropicPlannerClient.js';
+import { createAnthropicPlannerClient, MINECRAFT_HAIKU_MODEL, MINECRAFT_SONNET_MODEL } from '../../src/services/minebot/cognition/AnthropicPlannerClient.js';
 import { ShannonExecutor } from '../../src/services/llm/graph/ShannonExecutor.js';
 
 const GOOD = { input_tokens: 12, output_tokens: 30, cache_creation_input_tokens: 700, cache_read_input_tokens: 0,
@@ -35,26 +35,27 @@ function signedTransport(replies: any[][], beforeReply?: (index: number, body: a
     }
     if (!body.tools?.length) {
       summaries++; sent.push(body);
-      return new Response(JSON.stringify({ type: 'message', role: 'assistant', model: MINECRAFT_HAIKU_MODEL,
+      return new Response(JSON.stringify({ type: 'message', role: 'assistant', model: body.model,
         stop_reason: 'end_turn', content: [{ type: 'text', text: '確認済みの位置と実行結果を保持し、残りを続行する。' }], usage: GOOD }));
     }
     const index = sent.filter(request => request.tools?.length).length;
     sent.push(body); beforeReply?.(index, body);
     const signature = `offline-signature-${index}`;
     signatures.set(signature, { system: clean.system, tools: clean.tools, messages: clean.messages });
-    return new Response(JSON.stringify({ type: 'message', role: 'assistant', model: MINECRAFT_HAIKU_MODEL,
+    return new Response(JSON.stringify({ type: 'message', role: 'assistant', model: body.model,
       stop_reason: 'tool_use', content: [{ type: 'thinking', thinking: `offline reasoning ${index}`, signature }, ...replies[index]], usage: GOOD }));
   });
   return { fetcher, sent, summaries: () => summaries };
 }
-const native = (transport: ReturnType<typeof signedTransport>, body: any, extra: any = {}) => new ShannonExecutor({
-  modelClient: createAnthropicPlannerClient({ apiKey: 'offline-only', model: MINECRAFT_HAIKU_MODEL, fetcher: transport.fetcher as any }),
-  modelIdentity: { provider: 'anthropic', model: MINECRAFT_HAIKU_MODEL }, bot: body, publishTaskTree: () => {},
+const executor = (model: string, transport: ReturnType<typeof signedTransport>, body: any, extra: any = {}) => new ShannonExecutor({
+  modelClient: createAnthropicPlannerClient({ apiKey: 'offline-only', model, fetcher: transport.fetcher as any }),
+  modelIdentity: { provider: 'anthropic', model }, bot: body, publishTaskTree: () => {},
   llmTools: new Map([['offline-observe', async () => 'observed result '.repeat(200)]]), ...extra,
 });
-afterEach(() => { vi.restoreAllMocks(); });
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 
-describe('native Haiku preserved thinking through real Executor requests', () => {
+describe.each([MINECRAFT_HAIKU_MODEL, MINECRAFT_SONNET_MODEL])('%s preserved thinking through real Executor requests', model => {
+  const native = (transport: ReturnType<typeof signedTransport>, body: any, extra: any = {}) => executor(model, transport, body, extra);
   it('keeps the signed prefix exact while contracts, plans, live facts, lessons and human feedback change', async () => {
     const body = bot(); const original = state(); const checkpoints: any[] = [];
     let lessonCall = 0, feedbackCall = 0;
@@ -121,7 +122,7 @@ describe('native Haiku preserved thinking through real Executor requests', () =>
       return { finalMessage: async () => ({ usage: {}, content: ++index === 1
         ? [tool('observe', 'offline-observe')] : [tool('done', 'task-complete', { summary: 'legacy complete' })] }) };
     } } };
-    const result = await new ShannonExecutor({ modelClient: client, modelIdentity: { provider: 'anthropic', model: 'claude-sonnet-5-5' },
+    const result = await new ShannonExecutor({ modelClient: client, modelIdentity: { provider: 'anthropic', model: 'claude-sonnet-4-6' },
       bot: bot(), publishTaskTree: () => {}, llmTools: new Map([['offline-observe', async () => 'legacy observation']]) }).run(state({ tools: [], goalContract: contract,
       previousTaskNodes: [{ id: 'root', goal: contract.goal, status: 'pending', children: [], postconditions: contract.predicates }],
       onCheckpoint: (checkpoint: any) => checkpoints.push(checkpoint) }));
@@ -134,4 +135,21 @@ describe('native Haiku preserved thinking through real Executor requests', () =>
       && message.content.some((block: any) => block.tool_use_id === 'observe')).content[0];
     expect(legacyResult.content).toContain('legacy observation'); expect(legacyResult.content).toContain('現在の状態');
   });
+});
+
+
+it('the production Executor binds a companion Sonnet pin and runs its continuation summary on Haiku', async () => {
+  const transport = signedTransport([[tool('observe', 'offline-observe')], [tool('done', 'task-complete', { summary: 'native position verified' })]]);
+  vi.stubEnv('MINECRAFT_MODEL_BUDGET_FILE', '');
+  vi.stubGlobal('fetch', transport.fetcher);
+  const pin = { mode: 'sonnet' as const, model: MINECRAFT_SONNET_MODEL, revision: 19 };
+  const executor = new ShannonExecutor({ primaryModel: pin, bot: bot(), publishTaskTree: () => {},
+    llmTools: new Map([['offline-observe', async () => 'observed location']]) });
+  pin.model = MINECRAFT_HAIKU_MODEL; pin.revision++;
+  const result = await executor.run(state({ goalContract: contract,
+    previousMessages: [{ role: 'user', content: 'Earlier original request' }, { role: 'assistant', content: 'Earlier observation only' }] }));
+  expect(result.taskTree?.status).toBe('completed');
+  expect(transport.sent.map(request => request.model)).toEqual([MINECRAFT_HAIKU_MODEL, MINECRAFT_SONNET_MODEL, MINECRAFT_SONNET_MODEL]);
+  expect(transport.sent.map(request => request.output_config.effort)).toEqual(['low', 'medium', 'medium']);
+  expect(transport.sent[2].system).toEqual(transport.sent[1].system);
 });

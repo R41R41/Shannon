@@ -1,3 +1,4 @@
+import { companionPrimaryModel } from './companionPrimaryModel.js';
 import type { CompanionReportCode, CompanionRequest } from './CompanionBodyClient.js';
 import type { CompanionRequestTasks, RequestTaskState } from './CompanionRequestLoop.js';
 
@@ -45,7 +46,8 @@ export class CompanionRuntimeTasks implements CompanionRequestTasks {
   constructor(private readonly runtime: CompanionTaskRuntime, private readonly options: CompanionRuntimeTasksOptions) {}
 
   start(request: CompanionRequest): { taskId: string } | { refused: CompanionReportCode } {
-    const refusal = this.options.refuse?.(request) ?? null;
+    const pin = request.primaryModel === undefined ? undefined : companionPrimaryModel(request.primaryModel);
+    const refusal = request.primaryModel !== undefined && !pin ? 'unsupported' : this.options.refuse?.(request) ?? null;
     if (refusal) {
       this.options.onTaken?.(request, { refused: refusal, reason: refusal });
       return { refused: refusal };
@@ -58,9 +60,11 @@ export class CompanionRuntimeTasks implements CompanionRequestTasks {
     let startedId: string | undefined;
     let early: string | undefined;
     const onToolStarting = this.options.onToolStarting;
+    const envelope = this.options.envelope(request);
+    if (pin) envelope.metadata = { ...envelope.metadata, minecraftPrimaryModel: pin };
     const queued = this.runtime.putTaskFirst({ userMessage: request.goal,
       ...(onToolStarting ? { onToolStarting: (tool: string) => { if (startedId) onToolStarting(startedId, tool); else early = tool; } } : {}) },
-    this.options.envelope(request));
+    envelope);
     startedId = queued.taskId;
     if (startedId && early) onToolStarting?.(startedId, early);
     if (!queued.success || !queued.taskId) {

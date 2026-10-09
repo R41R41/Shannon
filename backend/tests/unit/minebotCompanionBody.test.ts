@@ -253,7 +253,7 @@ describe('the production bot as her Minecraft body', () => {
     await w.body.stop();
   });
 
-  it('companion down: the caller answers as before', async () => {
+  it('companion down: the caller receives unavailable and no task starts', async () => {
     const w = world({ turn: null });
     w.body.start();
     expect(await w.body.answer({ uuid: OWNER, name: 'Rai1241' }, 'シャノン、こんにちは')).toBe(false);

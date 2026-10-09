@@ -1,3 +1,4 @@
+import { companionPrimaryModel, type CompanionPrimaryModel } from './companionPrimaryModel.js';
 import { randomUUID } from 'node:crypto';
 
 /**
@@ -32,6 +33,7 @@ export interface CompanionRequest {
   surface: 'text' | 'voice' | 'minecraft';
   createdAt: string;
   leaseExpiresAt: string;
+  primaryModel?: CompanionPrimaryModel;
 }
 
 export type CompanionProgressPhase = 'accepted' | 'started' | 'working';
@@ -47,6 +49,8 @@ export interface CompanionBodyOptions {
   serverId: string;
   fetcher?: typeof fetch;
   timeoutMs?: number;
+  /** Exact primary models supported by this executor and its configured credentials. */
+  supportedPrimaryModels?: () => readonly string[];
 }
 
 const TURN_TIMEOUT_MS = 30_000;
@@ -117,16 +121,22 @@ export class CompanionBodyClient {
    */
   async claim(holding: readonly string[], waitSeconds = COMPANION_CLAIM_WAIT_SECONDS, signal?: AbortSignal): Promise<{ request: CompanionRequest | null; cancel: string[] } | null> {
     const timeout = AbortSignal.timeout((Math.min(COMPANION_CLAIM_WAIT_SECONDS, waitSeconds) + 10) * 1000);
-    const response = await this.post('/v1/body/minecraft/claim', { scopeKey: 'owner', waitSeconds: Math.min(COMPANION_CLAIM_WAIT_SECONDS, Math.max(0, Math.floor(waitSeconds))), holding: holding.slice(0, 4) },
+    const response = await this.post('/v1/body/minecraft/claim', { scopeKey: 'owner', waitSeconds: Math.min(COMPANION_CLAIM_WAIT_SECONDS, Math.max(0, Math.floor(waitSeconds))), holding: holding.slice(0, 4),
+      supportedPrimaryModels: [...(this.options.supportedPrimaryModels?.() ?? [])] },
       CLAIM_TIMEOUT_MS, signal ? AbortSignal.any([signal, timeout]) : timeout).catch(() => null);
     if (!response?.ok) return null;
     const data = await response.json().catch(() => null) as { request?: unknown; cancel?: unknown } | null;
     if (!data) return null;
+    const cancel = Array.isArray(data.cancel) ? data.cancel.filter((id): id is string => typeof id === 'string' && REQUEST_ID.test(id)) : [];
     const request = data.request as Partial<CompanionRequest> | null | undefined;
+    const pin = request?.primaryModel === undefined ? undefined : companionPrimaryModel(request.primaryModel);
+    if (request?.primaryModel !== undefined && (!pin || !this.options.supportedPrimaryModels?.().includes(pin.model))) {
+      if (typeof request.id === 'string' && REQUEST_ID.test(request.id)) await this.report(request.id, 'failed', { code: 'unsupported' });
+      return { request: null, cancel };
+    }
     const valid = request && typeof request.id === 'string' && REQUEST_ID.test(request.id) && typeof request.goal === 'string' && request.goal.trim()
       ? { id: request.id, goal: request.goal.slice(0, 120), surface: (['text', 'voice', 'minecraft'].includes(String(request.surface)) ? request.surface : 'text') as CompanionRequest['surface'],
-        createdAt: String(request.createdAt ?? ''), leaseExpiresAt: String(request.leaseExpiresAt ?? '') } : null;
-    const cancel = Array.isArray(data.cancel) ? data.cancel.filter((id): id is string => typeof id === 'string' && REQUEST_ID.test(id)) : [];
+        createdAt: String(request.createdAt ?? ''), leaseExpiresAt: String(request.leaseExpiresAt ?? ''), ...(pin ? { primaryModel: pin } : {}) } : null;
     return { request: valid, cancel };
   }
 

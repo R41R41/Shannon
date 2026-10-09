@@ -91,6 +91,34 @@ describe('common FCA native body', () => {
     const abort = new AbortController(); abort.abort(); expect(await body.release(abort.signal)).toBe(false);
     finish(); await safety; expect(await body.release(new AbortController().signal)).toBe(true); await body.dispose();
   });
+  it.each([false, true])('reports unavailable capture without physical uncertainty (already cancelled: %s)', async cancelled => {
+    const original = fixture(); await original.body.dispose(); const { bot } = original;
+    const capture = vi.fn(async () => { throw Error('BODY_CAPTURE_EXACT_VERSION_ASSETS_REQUIRED'); });
+    const body = new NativeCommonFcaBody(bot, { serverId: 'home', capture });
+    let finish!: () => void;
+    const safety = executeAction(bot, 'auto-swim', 0, async () => { await new Promise<void>(resolve => { finish = resolve; });
+      return { success: true, result: 'surfaced' }; }, { waitForQuiescence: true, safetyLease: true, priority: 300 });
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    const abort = new AbortController(); if (cancelled) abort.abort();
+    const result = await body.execute(command({ kind: 'capture' }), abort.signal);
+    expect(result).toMatchObject({ outcome: cancelled ? 'cancelled' : 'failed', inputsReleased: true, result: 'BODY_CAPTURE_UNAVAILABLE' });
+    expect(result.image).toBeUndefined(); expect(body.observe().facts.imageAvailable).toBe(false);
+    expect(capture).toHaveBeenCalledTimes(cancelled ? 0 : 1);
+    expect(physicalActionBusy(bot)).toBe(true); expect(bot.clearControlStates).not.toHaveBeenCalled();
+    const stop = new AbortController(); stop.abort(); expect(await body.release(stop.signal)).toBe(false);
+    finish(); await safety; await body.dispose();
+  });
+  it('advertises an image only after capture succeeds and clears availability when the next capture fails', async () => {
+    const original = fixture(); await original.body.dispose();
+    const capture = vi.fn().mockResolvedValueOnce({ dataUrl: 'data:image/jpeg;base64,YQ==', capturedAt: new Date().toISOString() })
+      .mockRejectedValueOnce(Error('renderer unavailable'));
+    const body = new NativeCommonFcaBody(original.bot, { serverId: 'home', capture });
+    expect(body.observe().facts.imageAvailable).toBe(false);
+    expect((await body.execute(command({ kind: 'capture' }), new AbortController().signal)).outcome).toBe('completed');
+    expect(body.observe().facts.imageAvailable).toBe(true);
+    expect((await body.execute(command({ kind: 'capture' }), new AbortController().signal)).outcome).toBe('failed');
+    expect(body.observe().facts.imageAvailable).toBe(false); await body.dispose();
+  });
   it('rechecks safety ownership after awaited plugin cleanup before clearing controls', async () => {
     const { bot, body } = fixture(); let finish!: () => void; let safety!: Promise<unknown>;
     bot.collectBlock = { cancelTask: async () => {
