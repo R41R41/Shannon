@@ -88,6 +88,7 @@ describe('task-bound native Minecraft goal evidence', () => {
     receipt = await body.execute(command({ id: 'fresh-query' }), new AbortController().signal);
     expect(receipt).toMatchObject({ outcome: 'completed', inputsReleased: true }); expect(JSON.parse(receipt.result!).boss.verified).toBe(true);
     await expect(body.execute(command({ arguments: { verified: true } }), new AbortController().signal)).rejects.toThrow('EVIDENCE_ARGUMENTS');
+    await expect(body.execute(command({ deadlineAt: new Date(f.now() - 1).toISOString() }), new AbortController().signal)).rejects.toThrow('BODY_DEADLINE');
     await body.dispose(); expect(f.bot.listenerCount('entityDead')).toBe(0);
   });
 });

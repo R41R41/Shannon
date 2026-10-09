@@ -64,6 +64,8 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
   async execute(command: Command, signal: AbortSignal): Promise<Receipt> {
     signal.throwIfAborted();
     if (!this.connected || !this.bot.entity) throw Error('BODY_DISCONNECTED');
+    const milliseconds = Math.min(120_000, Date.parse(command.deadlineAt) - this.now());
+    if (!Number.isFinite(milliseconds) || milliseconds <= 0) throw Error('BODY_DEADLINE');
     this.goalEvidence.begin(command);
     const cancelled = () => this.goalEvidence.cancel(command.context);
     signal.addEventListener('abort', cancelled, { once: true });
@@ -76,8 +78,6 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
         const image = await this.options.capture(signal); signal.throwIfAborted();
         return this.receipt(command, 'completed', true, undefined, image);
       }
-      const milliseconds = Math.min(120_000, Date.parse(command.deadlineAt) - this.now());
-      if (milliseconds <= 0) throw Error('BODY_DEADLINE');
       let capability: string, work: () => Promise<{ success: boolean; result: string; failureType?: string }>;
       if (command.kind === 'skill') {
         const resolved = this.catalog.resolve(command.skill ?? '', command.arguments ?? {});
