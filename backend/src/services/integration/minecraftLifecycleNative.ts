@@ -24,7 +24,7 @@ export function rconCommand(config: { port: number; password: string }, command:
   return new Promise((resolve, reject) => {
     if (!Number.isInteger(config.port) || config.port < 1024 || config.port > 65535 || !config.password || command.length > 512) return reject(Error('LIFECYCLE_RCON_CONFIG'));
     const socket = createConnection({ host: '127.0.0.1', port: config.port });
-    let pending = Buffer.alloc(0), output = '', authorized = false, finished = false;
+    let pending = Buffer.alloc(0), output = '', outputBytes = 0, authorized = false, markerSent = false, finished = false;
     const finish = (error?: Error) => { if (finished) return; finished = true; clearTimeout(timeout); signal?.removeEventListener('abort', aborted); socket.destroy(); error ? reject(Object.assign(error, { responseText: output })) : resolve(output); };
     const aborted = () => finish(Error('LIFECYCLE_RCON_ABORTED'));
     const timeout = setTimeout(() => finish(Error('LIFECYCLE_RCON_TIMEOUT')), 2500);
@@ -39,18 +39,30 @@ export function rconCommand(config: { port: number; password: string }, command:
     socket.on('close', () => { if (!finished) finish(Error('LIFECYCLE_RCON_CLOSED')); });
     socket.on('data', chunk => {
       pending = Buffer.concat([pending, chunk]);
-      if (pending.length + output.length > 262144) return finish(Error('LIFECYCLE_RCON_TOO_LARGE'));
+      if (pending.length + outputBytes > 262144) return finish(Error('LIFECYCLE_RCON_TOO_LARGE'));
       while (pending.length >= 4) {
         const size = pending.readInt32LE(0); if (size < 10 || size > 262144) return finish(Error('LIFECYCLE_RCON_PACKET'));
         if (pending.length < size + 4) break;
         const frame = pending.subarray(0, size + 4); pending = pending.subarray(size + 4);
         const id = frame.readInt32LE(4), type = frame.readInt32LE(8);
         if (frame[frame.length - 1] || frame[frame.length - 2]) return finish(Error('LIFECYCLE_RCON_PACKET'));
-        if (id === -1) return finish(Error('LIFECYCLE_RCON_AUTH'));
-        if (!authorized && id === 1 && type === 2) {
-          authorized = true; socket.write(Buffer.concat([packet(2, 2, command), packet(3, 2, '')]));
-        } else if (authorized && id === 2 && type === 0) output += frame.toString('utf8', 12, frame.length - 2);
-        else if (authorized && id === 3) return finish();
+        if (id === -1 && type === 2 && !authorized) return finish(Error('LIFECYCLE_RCON_AUTH'));
+        if (!authorized) {
+          // Source RCON may precede its auth reply with an empty response-value packet.
+          if (id === 1 && type === 0 && size === 10) continue;
+          if (id !== 1 || type !== 2 || size !== 10) return finish(Error('LIFECYCLE_RCON_PACKET'));
+          authorized = true;
+          // Minecraft handles requests serially. Never batch the effect with an empty marker request.
+          socket.write(packet(2, 2, command));
+        } else if (id === 2 && type === 0) {
+          outputBytes += size - 10;
+          if (outputBytes + pending.length > 262144) return finish(Error('LIFECYCLE_RCON_TOO_LARGE'));
+          output += frame.toString('utf8', 12, frame.length - 2);
+          // A separate response marker bounds completion across multiple response frames. It is sent
+          // only after the command answered; neither a close nor timeout retries the native command.
+          if (!markerSent) { markerSent = true; socket.write(packet(3, 2, '')); }
+        } else if (id === 3 && type === 0 && markerSent) return finish();
+        else return finish(Error('LIFECYCLE_RCON_PACKET'));
       }
     });
   });

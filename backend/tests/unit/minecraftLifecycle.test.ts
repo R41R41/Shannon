@@ -144,21 +144,81 @@ describe('operator durable dispatch', () => {
     expect(storage.journal.entries.get(command.id)?.receipt).toEqual(receipt);
   });
 });
+const rconFrame = (id: number, type: number, text: string) => {
+  const body = Buffer.from(text), result = Buffer.alloc(body.length + 14);
+  result.writeInt32LE(body.length + 10, 0); result.writeInt32LE(id, 4); result.writeInt32LE(type, 8); body.copy(result, 12); return result;
+};
+async function withRconServer(handler: (socket: import('node:net').Socket) => void, test: (port: number) => Promise<void>) {
+  const sockets = new Set<import('node:net').Socket>();
+  const server = createServer(socket => { sockets.add(socket); socket.on('error', () => undefined); socket.on('close', () => sockets.delete(socket)); handler(socket); });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  try { await test((server.address() as { port: number }).port); }
+  finally { for (const socket of sockets) socket.destroy(); await new Promise<void>(resolve => server.close(() => resolve())); }
+}
+function rconRequests(socket: import('node:net').Socket, handler: (id: number, type: number, body: string, pipelined: boolean) => void) {
+  let incoming = Buffer.alloc(0);
+  socket.on('data', bytes => {
+    incoming = Buffer.concat([incoming, bytes]);
+    while (incoming.length >= 4 && incoming.length >= incoming.readInt32LE(0) + 4) {
+      const size = incoming.readInt32LE(0), frame = incoming.subarray(0, size + 4); incoming = incoming.subarray(size + 4);
+      handler(frame.readInt32LE(4), frame.readInt32LE(8), frame.toString('utf8', 12, frame.length - 2), incoming.length > 0);
+    }
+  });
+}
 describe('bounded native RCON transport', () => {
-  it('authenticates, assembles split frames and waits for the sentinel command response', async () => {
-    const frame = (id: number, type: number, text: string) => { const body = Buffer.from(text), result = Buffer.alloc(body.length + 14); result.writeInt32LE(body.length + 10, 0); result.writeInt32LE(id, 4); result.writeInt32LE(type, 8); body.copy(result, 12); return result; };
-    const server = createServer(socket => {
-      let incoming = Buffer.alloc(0);
-      socket.on('data', bytes => { incoming = Buffer.concat([incoming, bytes]); while (incoming.length >= 4 && incoming.length >= incoming.readInt32LE(0) + 4) {
-        const size = incoming.readInt32LE(0), item = incoming.subarray(0, size + 4); incoming = incoming.subarray(size + 4);
-        const id = item.readInt32LE(4);
-        if (id === 1) socket.write(frame(1, 2, ''));
-        if (id === 2) { const response = frame(2, 0, 'There are 0 of a max of 20 players online: '); socket.write(response.subarray(0, 7)); socket.write(response.subarray(7)); }
-        if (id === 3) socket.write(frame(3, 0, ''));
-      } });
+  it('serializes the marker after one command response, assembling fragmented and multiple packets', async () => {
+    const ids: number[] = [];
+    await withRconServer(socket => rconRequests(socket, (id, type, body, pipelined) => {
+      ids.push(id);
+      // The real Minecraft transport rejects a command plus marker batched in one read.
+      if (pipelined) { socket.destroy(); return; }
+      if (id === 1) { expect(type).toBe(3); socket.write(Buffer.concat([rconFrame(1, 0, ''), rconFrame(1, 2, '')])); }
+      if (id === 2) {
+        expect(type).toBe(2); expect(body).toBe('list uuids');
+        const response = rconFrame(2, 0, 'There are 0 of a max of 20 ');
+        socket.write(response.subarray(0, 7)); socket.write(Buffer.concat([response.subarray(7), rconFrame(2, 0, 'players online: ')]));
+      }
+      if (id === 3) { expect(body).toBe(''); socket.write(rconFrame(3, 0, 'Unknown command')); }
+    }), async port => { expect(await rconCommand({ port, password: 'fixture-password' }, 'list uuids')).toBe('There are 0 of a max of 20 players online: '); });
+    expect(ids).toEqual([1, 2, 3]);
+  });
+  it('keeps a close before the marker unknown with partial response and never replays the command', async () => {
+    let commands = 0;
+    await withRconServer(socket => rconRequests(socket, id => {
+      if (id === 1) socket.write(rconFrame(1, 2, ''));
+      if (id === 2) { commands++; socket.end(rconFrame(2, 0, 'Stopping the server')); }
+    }), async port => {
+      await expect(rconCommand({ port, password: 'fixture-password' }, 'execute unless entity @a run stop')).rejects.toMatchObject({ message: 'LIFECYCLE_RCON_CLOSED', responseText: 'Stopping the server' });
     });
-    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
-    try { expect(await rconCommand({ port: (server.address() as { port: number }).port, password: 'fixture-password' }, 'list uuids')).toContain('0 of a max'); }
-    finally { await new Promise<void>(resolve => server.close(() => resolve())); }
+    expect(commands).toBe(1);
+  });
+  it('rejects failed authentication before sending a native command', async () => {
+    const ids: number[] = [];
+    await withRconServer(socket => rconRequests(socket, id => { ids.push(id); socket.write(rconFrame(-1, 2, '')); }), async port => {
+      await expect(rconCommand({ port, password: 'fixture-password' }, 'list uuids')).rejects.toThrow('LIFECYCLE_RCON_AUTH');
+    });
+    expect(ids).toEqual([1]);
+  });
+  it.each(['wrong-id', 'wrong-type', 'bad-terminator', 'oversize'])('rejects %s responses instead of manufacturing an observation', async scenario => {
+    let commands = 0;
+    await withRconServer(socket => rconRequests(socket, id => {
+      if (id === 1) socket.write(rconFrame(1, 2, ''));
+      if (id === 2) {
+        commands++;
+        const response = rconFrame(scenario === 'wrong-id' ? 9 : 2, scenario === 'wrong-type' ? 2 : 0, 'There are 0 of a max of 20 players online: ');
+        if (scenario === 'bad-terminator') response[response.length - 1] = 1;
+        if (scenario === 'oversize') response.writeInt32LE(262145, 0);
+        socket.write(response);
+      }
+    }), async port => { await expect(rconCommand({ port, password: 'fixture-password' }, 'list uuids')).rejects.toThrow('LIFECYCLE_RCON_PACKET'); });
+    expect(commands).toBe(1);
+  });
+  it('preserves bounded timeout with no command retry', async () => {
+    let commands = 0;
+    await withRconServer(socket => rconRequests(socket, id => {
+      if (id === 1) socket.write(rconFrame(1, 2, ''));
+      if (id === 2) commands++;
+    }), async port => { await expect(rconCommand({ port, password: 'fixture-password' }, 'list uuids')).rejects.toThrow('LIFECYCLE_RCON_TIMEOUT'); });
+    expect(commands).toBe(1);
   });
 });
