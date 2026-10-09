@@ -340,9 +340,10 @@ export class SkillAgent {
   }
 
   /** Ends the companion body mode for this connection (open requests are reported as run over). */
-  async stopCompanionBody(): Promise<void> {
-    await this.commonFcaBody?.stop();
+  async stopCompanionBody(): Promise<boolean> {
+    const released = !this.commonFcaBody || await this.commonFcaBody.stop();
     await this.companionBody?.stop('run_over');
+    return released;
   }
 
   /**

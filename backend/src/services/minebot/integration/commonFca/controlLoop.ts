@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { companionBaseUrl } from '../CompanionBodyClient.js';
-import type { BodyCandidateDraft, BodyObservation } from './bodyControlContract.js';
+import type { BodyCandidateDraft, BodyObservation, BodyTaskContext } from './bodyControlContract.js';
 import { MINECRAFT_CONTROL_PATH, type MinecraftControlCommand as Command, type MinecraftControlReceipt as Receipt,
   type MinecraftControlReply, type MinecraftSkillDefinition } from './minecraftControlContract.js';
 
@@ -12,6 +12,7 @@ export interface CommonFcaActuator {
   /** Cancels/fences old native work and confirms all physical controllers have actually released. */
   release(signal: AbortSignal): Promise<boolean>;
   dispose?(): Promise<void>;
+  closeEvidence?(context: BodyTaskContext): void;
 }
 export interface CommonFcaControlOptions {
   baseUrl: string; token: string; serverId: string; actuator: CommonFcaActuator;
@@ -137,18 +138,21 @@ export class CommonFcaControlLoop {
     // An old cleanup cannot stop a later owner. It can acknowledge its own already released lease.
     const sessionKey = `${key}:${command.context.sessionId}`;
     const released = this.closedSessions.has(sessionKey) ? true : await this.options.actuator.release(signal);
+    if (released) this.options.actuator.closeEvidence?.(command.context);
     if (released && command.kind === 'release') this.closedSessions.add(sessionKey);
     const observedAt = new Date((this.options.now ?? Date.now)()).toISOString();
     return { id: command.id, connectionId: this.connectionId, outcome: released ? 'completed' : 'unknown', inputsReleased: released, observedAt,
       ...(command.stop ? { stop: { bodyId: command.context.bodyId, sessionId: command.context.sessionId,
         generation: command.context.generation, requestId: command.stop.requestId, state: released ? 'stopped' : 'unknown', inputsReleased: released, observedAt } } : {}) };
   }
-  async stop(): Promise<void> {
-    if (this.closed) return;
+  async stop(): Promise<boolean> {
+    if (this.closed) return !this.held;
     this.closed = true; this.lifetime.abort('body_disconnected');
     clearTimeout(this.timer); clearInterval(this.observationTimer);
     for (const value of this.active.values()) value.controller.abort('body_disconnected');
-    await this.options.actuator.release(AbortSignal.timeout(3000)).catch(() => false);
+    const released = await this.options.actuator.release(AbortSignal.timeout(3000)).catch(() => false);
+    this.held = !released;
     await this.options.actuator.dispose?.();
+    return released;
   }
 }

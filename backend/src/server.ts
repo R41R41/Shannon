@@ -25,6 +25,7 @@ import { registerTestRoutes } from './routes/testRoutes.js';
 import { registerWebhookRoutes } from './routes/webhookRoutes.js';
 import { registerPublicRoutes } from './routes/publicRoutes.js';
 import { startShannonOpsReporter } from './services/integration/configuredShannonOpsReporter.js';
+import { startConfiguredMinecraftLifecycle } from './services/integration/configuredMinecraftLifecycle.js';
 import { startNightlySelfImproveScheduler } from './services/llm/graph/cognitive/selfImprove/NightlySelfImproveScheduler.js';
 import { registerIdentityBindingLookup } from './services/runtime/identityBindingGateway.js';
 import { registerMainRadarRoutes } from './bootstrap/mainRadar.js';
@@ -219,6 +220,8 @@ class Server {
 
     logger.success('[Server] 全サービスの起動処理が完了しました');
     void startShannonOpsReporter();
+    // Remains alive while the world and bot are offline. Failure is content-free and cannot start a service.
+    void startConfiguredMinecraftLifecycle().catch(() => logger.warn('[MinecraftLifecycle] operator unavailable'));
 
     if (this.onlyServices === null) {
       startNightlySelfImproveScheduler();

@@ -68,6 +68,10 @@ export class MinebotClient extends BaseClient {
   /** 直前の接続パラメータ（自動再接続用） */
   private lastBotData: MinebotInput | null = null;
   private autoReconnecting = false;
+  private lifecycleBusy = false;
+  private explicitlyDisconnected = false;
+  private connectionEnded = true;
+  private reconnectEpoch = 0;
 
   constructor(serviceName: 'minebot', isDev: boolean) {
     super(serviceName);
@@ -106,6 +110,8 @@ export class MinebotClient extends BaseClient {
       checkTimeoutInterval: CONFIG.CHECK_TIMEOUT_INTERVAL,
       skipValidation: true,
     }) as CustomBot;
+    this.connectionEnded = false;
+    this.explicitlyDisconnected = false;
     const connectedBot = this.bot;
     installPlayerLoadedHandshake(connectedBot);
     installTierToolMaterialRepair(connectedBot);
@@ -176,6 +182,7 @@ export class MinebotClient extends BaseClient {
     });
 
     this.bot.on('end', (reason: string) => {
+      if (this.bot === connectedBot) this.connectionEnded = true;
       const trace = new Error('disconnect trace').stack;
       log.error(`🔌🔌🔌 BOT DISCONNECTED 🔌🔌🔌 reason: "${reason ?? 'unknown'}" | trace: ${trace}`);
       void logToWeb('minecraft', 'red', `Bot disconnected: ${reason ?? 'unknown'}`);
@@ -315,12 +322,14 @@ export class MinebotClient extends BaseClient {
 
     registerServiceCommandHandler('minebot:bot', async (serviceCommand, input) => {
       if (this.status !== 'running') return;
+      if (this.lifecycleBusy) return;
       const data = {
         serviceCommand,
         serverName: input?.serverName,
       } as MinebotInput;
 
       if (serviceCommand === 'start') {
+        this.reconnectEpoch++;
         const result = await this.startBot(data);
         if (!result) return;
         emitWebServiceStatus({
@@ -328,6 +337,8 @@ export class MinebotClient extends BaseClient {
           status: this.getStatus(),
         });
       } else if (serviceCommand === 'stop') {
+        this.reconnectEpoch++;
+        this.explicitlyDisconnected = true;
         const result = await this.stopBot(data);
         if (!result) return;
         emitWebServiceStatus({
@@ -350,11 +361,14 @@ export class MinebotClient extends BaseClient {
   private scheduleAutoReconnect(): void {
     if (this.autoReconnecting || !this.lastBotData) return;
     this.autoReconnecting = true;
+    const epoch = this.reconnectEpoch;
     setTimeout(async () => {
       try {
+        if (epoch !== this.reconnectEpoch || this.lifecycleBusy || this.explicitlyDisconnected || !this.lastBotData) return;
         log.info('🔄 自動再接続を開始します…');
         try { await this.stopBot(this.lastBotData!); } catch { /* ignore */ }
         await new Promise(r => setTimeout(r, 2_000));
+        if (epoch !== this.reconnectEpoch || this.explicitlyDisconnected || !this.lastBotData) return;
         const ok = await this.startBot(this.lastBotData!);
         if (ok) {
           log.info('✅ 自動再接続に成功しました');
@@ -395,7 +409,7 @@ export class MinebotClient extends BaseClient {
       revokeMinecraftMemory(this.bot);
       if (this.skillAgent) {
         // Companion body mode: open requests are reported to her mind as run over (also done on 'end').
-        void this.skillAgent.stopCompanionBody();
+        if (!await this.skillAgent.stopCompanionBody()) throw Error('COMMON_FCA_BODY_RELEASE_UNKNOWN');
         const httpServer = this.skillAgent.getHttpServer();
         await httpServer.stop();
       }
@@ -407,6 +421,7 @@ export class MinebotClient extends BaseClient {
       }
       this.skillAgent = null;
       this.bot = null;
+      this.connectionEnded = true;
       void logToWeb('minecraft', 'green', 'Minecraft bot stopped');
       emitMinebotStopped();
       return true;
@@ -418,5 +433,49 @@ export class MinebotClient extends BaseClient {
       );
       return false;
     }
+  }
+
+  /** Content-free native lifecycle state; a created mineflayer object alone is never proof of joining. */
+  public lifecycleState(): { phase: 'joined' | 'absent' | 'unknown'; serverName: string | null; uuid: string | null } {
+    const bot = this.bot;
+    if ((!bot || this.connectionEnded) && !this.autoReconnecting) return { phase: 'absent', serverName: null, uuid: null };
+    if (!bot || this.connectionEnded) return { phase: 'unknown', serverName: this.lastBotData?.serverName ?? null, uuid: null };
+    return { phase: bot.entity && bot.player?.uuid ? 'joined' : 'unknown', serverName: bot.connectedServerName ?? null, uuid: bot.player?.uuid?.toLowerCase() ?? null };
+  }
+  /** Uses the existing configured native body, with no old planner fallback or process spawn permission. */
+  public async lifecycleLogin(serverName: string, signal: AbortSignal): Promise<void> {
+    if (this.lifecycleBusy || process.env.MINEBOT_COMMON_FCA !== 'on' || !CONFIG.companionBodyFor(serverName)) throw Error('LIFECYCLE_BODY_UNAVAILABLE');
+    signal.throwIfAborted();
+    if (this.bot && !this.connectionEnded) throw Error('LIFECYCLE_BODY_BUSY');
+    this.lifecycleBusy = true;
+    this.reconnectEpoch++;
+    try {
+      if (this.bot && !await this.stopBot(this.lastBotData!)) throw Error('LIFECYCLE_BODY_CLEANUP_UNKNOWN');
+      signal.throwIfAborted();
+      if (!await this.startBot({ serverName, serviceCommand: 'start' } as MinebotInput)) throw Error('LIFECYCLE_LOGIN_UNKNOWN');
+    } finally { this.lifecycleBusy = false; }
+  }
+  public async lifecycleLogout(serverName: string, signal: AbortSignal): Promise<void> {
+    if (this.lifecycleBusy || this.bot && this.bot.connectedServerName !== serverName) throw Error('LIFECYCLE_BODY_BUSY');
+    signal.throwIfAborted();
+    this.explicitlyDisconnected = true;
+    this.reconnectEpoch++;
+    this.autoReconnecting = false;
+    this.lifecycleBusy = true;
+    try {
+      const bot = this.bot;
+      if (!bot) return;
+      const ended = this.connectionEnded ? Promise.resolve() : new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => { cleanup(); reject(Error('LIFECYCLE_LOGOUT_UNKNOWN')); }, 5000);
+        const onEnd = () => { cleanup(); resolve(); };
+        const cleanup = () => { clearTimeout(timer); bot.removeListener('end', onEnd); };
+        bot.once('end', onEnd);
+      });
+      // Attach a rejection handler while native cleanup runs; it does not make a timeout an acknowledgement.
+      void ended.catch(() => undefined);
+      if (!await this.stopBot({ serverName, serviceCommand: 'stop' } as MinebotInput)) throw Error('LIFECYCLE_LOGOUT_UNKNOWN');
+      await ended;
+      this.lastBotData = null;
+    } finally { this.lifecycleBusy = false; }
   }
 }

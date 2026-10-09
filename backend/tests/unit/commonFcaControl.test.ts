@@ -20,6 +20,18 @@ function fixture() {
   return { loop, requests, responses, actuator };
 }
 describe('common FCA body transport', () => {
+  it('closes scoped evidence only after actual cleanup and reports lifecycle release truthfully', async () => {
+    const f = fixture(); f.actuator.closeEvidence = vi.fn();
+    f.actuator.release = vi.fn(async () => false);
+    f.responses.push({ commands: [command('stop-unknown', { kind: 'stop' })] }); await f.loop.poll(); await tick();
+    expect(f.actuator.closeEvidence).not.toHaveBeenCalled();
+    f.actuator.release = vi.fn(async () => true);
+    f.responses.push({ commands: [command('stop-confirmed', { kind: 'stop' })] }); await f.loop.poll(); await tick();
+    expect(f.actuator.closeEvidence).toHaveBeenCalledWith(context);
+    expect(await f.loop.stop()).toBe(true);
+    const failed = fixture(); failed.actuator.release = vi.fn(async () => false);
+    expect(await failed.loop.stop()).toBe(false); expect(await failed.loop.stop()).toBe(false);
+  });
   it('executes a command once and keeps delivery until exact receipt acknowledgement', async () => {
     const f = fixture(); f.responses.push({ commands: [command('one')] }); await f.loop.poll(); await tick();
     f.responses.push({ commands: [command('one')] }); await f.loop.poll();
