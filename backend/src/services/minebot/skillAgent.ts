@@ -1,3 +1,4 @@
+import { supportedCompanionPrimaryModels } from './integration/companionPrimaryModel.js';
 import { minecraftMemoryContext, MinecraftRecentHistory } from './runtime/memoryContext.js';
 import { AIMessage, BaseMessage, HumanMessage } from '@langchain/core/messages';
 import { MinebotVoiceChatInput } from '@shannon/common';
@@ -293,8 +294,13 @@ export class SkillAgent {
     // 送信者情報を設定
     this.updateSenderInfo(username);
 
-    // Her mind answers on the companion world; when it cannot, the bot answers as before.
-    if (this.companionBody && speakerUuid && await this.companionBody.answer({ uuid: speakerUuid, name: username }, message)) {
+    // On a managed companion world only her mind can accept an owner request and pin its model.
+    // An unavailable/unknown turn must not become a second, unpinned local execution.
+    if (this.companionBody || CONFIG.companionBodyFor(this.bot.connectedServerName)) {
+      let answered = false;
+      try { answered = !!(this.companionBody && speakerUuid && await this.companionBody.answer({ uuid: speakerUuid, name: username }, message)); }
+      catch { log.warn('MINEBOT_COMPANION_TURN_UNAVAILABLE'); }
+      if (!answered) sendGameChatLimited(this.bot, 'いま心との通信を確認できない。頼みごとが届いたか分からないので、別の実行は始めない。');
       return;
     }
 
@@ -328,7 +334,8 @@ export class SkillAgent {
       return null;
     }
     if (this.commonFca) this.commonFcaBody = createCommonFcaBody(this.bot, settings, token, process.env.MINEBOT_COMMON_FCA_RENDERER_DIR);
-    const client = new CompanionBodyClient({ baseUrl: settings.url, token, serverId: settings.serverId });
+    const client = new CompanionBodyClient({ baseUrl: settings.url, token, serverId: settings.serverId,
+      supportedPrimaryModels: () => supportedCompanionPrimaryModels(config) });
     log.info(`🫀 Companion body mode on ${settings.serverName} (serverId ${settings.serverId})`, 'cyan');
     return new MinebotCompanionBody(this.bot as any, this.taskRuntime, client, {
       serverId: settings.serverId, commonFca: this.commonFca, commonFcaBusy: () => this.commonFcaBody?.busy ?? false,

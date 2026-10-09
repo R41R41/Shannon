@@ -30,6 +30,12 @@ node scripts/prepare-common-fca-renderer.cjs 1.21.11 /absolute/new/renderer-dire
 
 Set `MINEBOT_COMMON_FCA_RENDERER_DIR` to that output directory. The script never modifies installed dependencies; it generates matching textures/block states and corrects the vertical range and section indices for negative Y. Rendering additionally requires the existing headless GL/canvas runtime to be available. No actual frame, game-world run, renderer preparation or latency measurement was performed here; image-source and cancellation behavior were verified with fake renderer sessions. Do not claim a measured reflex latency from these offline tests.
 
+## Deployment preparation: unavailable images
+
+The private release source combines deployed model-mode revision 0581706002cf2ba41b68e69c8fe8bfca8ff0e9eb with the common FCA body changes through 5ac00cf6722aed915474bcd5a4d13cfba10afb61. The one initialization conflict retains both the supported-primary-model callback and common-body construction.
+
+Exact 1.21.11 renderer assets are not installed. Renderer creation remains lazy, so server startup and ordinary skills do not require image initialization. Body frames explicitly report imageAvailable=false until a successful capture. A failed or cancelled capture returns a confirmed observation receipt with no image and inputsReleased=true: capture owns no motor inputs. This does not release a concurrently unknown physical owner; only confirmed cleanup clears that hold. Ordinary skills and structured body observation remain available. Both production reflex entry paths require an image; without one the real controller returns observation_unavailable with zero selector calls and zero actions, then returns control only after an exact release ACK. This preparation does not enable or claim state-only production reflex execution. No relabelled 1.21.4 assets, world startup or visual-latency claim is part of this deployment preparation. The merged source passed 11 offline files / 110 tests before this capture-only repair and 11 files / 114 tests afterwards, including both real API wire variants, the image-required controller's no-image safe return, and the deployed primary-model / AcceptanceBudget regressions. Common compilation and the separately labelled backend noCheck conversion both exited 0. The two recorded baseline strict type errors remain a limitation.
+
 ## Offline verification
 
 Use Node 22.21.1 and an isolated checkout. Existing dependency directories can be linked read-only, with Vitest caching disabled. Supply synthetic credentials solely to satisfy legacy module configuration; tests do not call a model or connect a world.
@@ -46,6 +52,9 @@ For the real cross-repository JSON protocol test, create a fresh `/tmp/shannon-f
 - `surfaces/minecraft/minecraftControl.ts`
 - `surfaces/minecraft/minecraftControlValidation.ts`
 - `surfaces/minecraft/store/minecraftControlStore.ts`
+- `mind/action/reflex/reflexController.ts`
+- `mind/action/reflex/reflexCandidates.ts`
+- `mind/action/reflex/reflexHandoff.ts`
 
 Then add `FCA_API_WIRE_ROOT=/tmp/shannon-fca-api-wire` to the environment and include `tests/unit/commonFcaApiWire.test.ts` in the command. This test runs the actual body poller through the actual API poll/store/validation code: skill → stop → capture → reflex → release, exact receipts, no effect replay, and no persisted pixels. The actual catalog test also validates all offered schemas with the API validator when this environment variable is present. Without that optional fixture directory, the wire test is skipped.
 

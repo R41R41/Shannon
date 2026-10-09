@@ -22,6 +22,7 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
   private readonly goalEvidence: NativeGoalEvidence;
   private sequence = 0;
   private connected = true;
+  private imageAvailable = false;
   private lastPosition: Vec3 | null = null;
   private movedAt = 0;
   private lastSafety: Record<string, BodyValue> | null = null;
@@ -51,7 +52,7 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
       yaw: Number(this.bot.entity?.yaw ?? 0), pitch: Number(this.bot.entity?.pitch ?? 0),
       equipped: this.bot.heldItem?.name ?? null, window: this.bot.currentWindow?.type ?? null,
       danger: (this.bot.health ?? 20) <= 8 || (this.bot.oxygenLevel ?? 20) <= 6 || (world.nearbyThreats ?? []).some(t => t.distance <= 5 && t.canReachMe !== false),
-      stuck: !!moving && now - this.movedAt > 1500, visualRequired: false,
+      stuck: !!moving && now - this.movedAt > 1500, visualRequired: false, imageAvailable: this.imageAvailable,
     };
     const primitives = primitiveState(this.bot); Object.assign(facts, primitives.facts);
     return { schemaVersion: 1, bodyId: `minecraft:${this.options.serverId}`, sequence: ++this.sequence,
@@ -62,6 +63,20 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
     return primitiveCandidates(observation, this.now());
   }
   async execute(command: Command, signal: AbortSignal): Promise<Receipt> {
+    if (command.kind === 'capture') {
+      // Capture never owns motor inputs. Missing exact assets or cancelled observation are a
+      // known no-image result, not an uncertain physical effect. Existing cleanup holds remain held.
+      try {
+        signal.throwIfAborted();
+        if (!this.connected || !this.bot.entity) throw Error('BODY_DISCONNECTED');
+        const image = await this.options.capture(signal); signal.throwIfAborted();
+        this.imageAvailable = true;
+        return this.receipt(command, 'completed', true, undefined, image);
+      } catch {
+        this.imageAvailable = false;
+        return this.receipt(command, signal.aborted ? 'cancelled' : 'failed', true, 'BODY_CAPTURE_UNAVAILABLE');
+      }
+    }
     signal.throwIfAborted();
     if (!this.connected || !this.bot.entity) throw Error('BODY_DISCONNECTED');
     const milliseconds = Math.min(120_000, Date.parse(command.deadlineAt) - this.now());
@@ -73,10 +88,6 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
       if (command.kind === 'skill' && command.skill === GOAL_EVIDENCE_SKILL.name) {
         if (!command.arguments || typeof command.arguments !== 'object' || Array.isArray(command.arguments) || Object.keys(command.arguments).length) throw Error('BODY_EVIDENCE_ARGUMENTS');
         return this.receipt(command, 'completed', true, JSON.stringify(this.goalEvidence.snapshot()));
-      }
-      if (command.kind === 'capture') {
-        const image = await this.options.capture(signal); signal.throwIfAborted();
-        return this.receipt(command, 'completed', true, undefined, image);
       }
       let capability: string, work: () => Promise<{ success: boolean; result: string; failureType?: string }>;
       if (command.kind === 'skill') {
