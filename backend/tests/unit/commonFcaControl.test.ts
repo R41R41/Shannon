@@ -88,6 +88,30 @@ describe('common FCA body transport', () => {
     f.responses.push({ commands: [command('b-again', { context: other, lease })] }); await f.loop.poll(); await tick();
     expect(f.actuator.execute).toHaveBeenCalledTimes(1); await f.loop.stop();
   });
+  it.each(['capture', 'query', 'physical'])('a late %s result cannot clear an unresolved cleanup', async kind => {
+    const f = fixture(); let done!: () => void;
+    f.actuator.execute = vi.fn(async (c, signal) => {
+      if (c.id === 'pending') await new Promise<void>(resolve => { done = resolve; });
+      return { id: c.id, connectionId: c.connectionId, outcome: signal.aborted ? 'cancelled' : 'completed',
+        inputsReleased: true, observedAt: new Date(NOW).toISOString() };
+    });
+    const fields = kind === 'capture' ? { kind: 'capture' } : { skill: kind === 'query' ? 'get-health' : 'dig-block' };
+    f.responses.push({ commands: [command('pending', fields)] }); await f.loop.poll(); await tick();
+    f.actuator.release = vi.fn(async () => false);
+    f.responses.push({ commands: [command('unresolved-stop', { kind: 'stop' })] });
+    await f.loop.poll(); await tick(); await f.loop.poll();
+    expect(f.requests.at(-1).receipts.find((r: any) => r.id === 'unresolved-stop'))
+      .toMatchObject({ outcome: 'unknown', inputsReleased: false });
+    done(); await tick();
+    expect(f.loop.busy).toBe(true);
+    f.responses.push({ commands: [command('refused')] }); await f.loop.poll(); await tick();
+    expect(f.actuator.execute).toHaveBeenCalledTimes(1);
+    f.actuator.release = vi.fn(async () => true);
+    f.responses.push({ commands: [command('confirmed-stop', { kind: 'stop' })] }); await f.loop.poll(); await tick();
+    expect(f.loop.busy).toBe(false);
+    f.responses.push({ commands: [command('after-cleanup')] }); await f.loop.poll(); await tick();
+    expect(f.actuator.execute).toHaveBeenCalledTimes(2); await f.loop.stop();
+  });
   it('observes while skill execution is pending, aborts on disconnect, and rejects late transport adoption', async () => {
     const f = fixture(); let done!: () => void; let signal!: AbortSignal;
     f.actuator.execute = vi.fn(async (c, s) => { signal = s; await new Promise<void>(r => { done = r; }); return { id: c.id, connectionId: c.connectionId, outcome: 'unknown', inputsReleased: false, observedAt: new Date(NOW).toISOString() }; });

@@ -123,8 +123,11 @@ export class CommonFcaControlLoop {
           requestId: command.stop.requestId, state: 'unknown', inputsReleased: false, observedAt: receipt.observedAt };
       }
       if (!historicalCleanup) {
-        this.held = !receipt.inputsReleased;
-        if (receipt.inputsReleased && this.owner === key) this.owner = null;
+        // Ordinary receipts only release their own inputs. A concurrent failed cleanup
+        // remains unknown until a fresh cleanup confirms the whole body is quiescent.
+        if (!receipt.inputsReleased) this.held = true;
+        else if (cleanup) this.held = false;
+        if (!this.held && receipt.inputsReleased && this.owner === key) this.owner = null;
       }
       this.receipts.set(command.id, receipt);
     }).finally(() => { clearTimeout(timeout); this.active.delete(command.id); });
