@@ -10,6 +10,7 @@ import { config } from '../../config/env.js';
 import { registerServiceCommandHandler } from '../runtime/serviceCommandRegistry.js';
 import { emitWebServiceStatus } from '../web/webNotificationHub.js';
 import { logger } from '../../utils/logger.js';
+import { shannonHomeProcessStatus } from './serverProcessStatus.js';
 
 const execAsync = promisify(exec);
 
@@ -81,6 +82,9 @@ export class MinecraftClient extends BaseClient {
     if (currentStatus === 'running') {
       return { success: false, message: 'サーバーは既に起動しています' };
     }
+    if (serverName === 'shannon-home' && currentStatus !== 'stopped') {
+      return { success: false, message: 'サーバーの停止状態を確認できないため起動しません' };
+    }
 
     try {
       const serverPath = `${this.SERVER_BASE_PATH}/${serverName}`;
@@ -104,6 +108,9 @@ export class MinecraftClient extends BaseClient {
     const currentStatus = await this.getServerStatus(serverName);
     if (currentStatus === 'stopped') {
       return { success: false, message: 'サーバーは既に停止しています' };
+    }
+    if (serverName === 'shannon-home' && currentStatus !== 'running') {
+      return { success: false, message: 'サーバーの稼働状態を確認できないため停止しません' };
     }
     try {
       const serverPath = `${this.SERVER_BASE_PATH}/${serverName}`;
@@ -133,6 +140,12 @@ export class MinecraftClient extends BaseClient {
   public async getServerStatus(
     serverName: MinecraftServerName
   ): Promise<ServiceStatus> {
+    if (serverName === 'shannon-home') {
+      const observed = await shannonHomeProcessStatus();
+      if (observed !== 'unknown') this.serverStatuses.set(serverName, observed === 'running');
+      // Preserve the existing desktop vocabulary; an uncertain process is never advertised as stopped.
+      return observed === 'unknown' ? 'connecting' : observed;
+    }
     try {
       // tmuxセッションを確認
       const tmuxSession = SERVER_TMUX_SESSIONS[serverName];

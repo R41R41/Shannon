@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { shannonHomeProcessStatus } from '../minecraft/serverProcessStatus.js';
 import { MinecraftLifecycleNative, rconCommand } from './minecraftLifecycleNative.js';
 import { LifecycleOperationJournal, MinecraftLifecycleOperator } from './minecraftLifecycleOperator.js';
 
@@ -42,10 +43,7 @@ export async function startConfiguredMinecraftLifecycle(): Promise<void> {
       try { const { stdout } = await exec('pgrep', ['-f', 'minecraft-campaign-live-probe'], { timeout: 2000 }); return !stdout.trim(); }
       catch (error) { return (error as NodeJS.ErrnoException).code === 1; }
     },
-    async processState() {
-      try { await exec('tmux', ['-L', 'shannon-home', 'has-session', '-t', '=shannon-home'], { timeout: 2000 }); return 'running'; }
-      catch (error) { return (error as NodeJS.ErrnoException).code === 1 ? 'stopped' : 'unknown'; }
-    },
+    processState: () => shannonHomeProcessStatus(),
     command: (text, signal) => rconCommand({ port: rconPort, password }, text, signal),
     async start(signal) {
       signal.throwIfAborted();

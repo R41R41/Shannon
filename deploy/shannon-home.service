@@ -1,0 +1,14 @@
+[Unit]
+Description=Shannon dedicated Minecraft home world
+After=network.target
+
+[Service]
+Type=simple
+User=azureuser
+WorkingDirectory=/home/azureuser/minecraft/shannon-home
+ExecStart=/usr/bin/java -Xms1G -Xmx3G -jar fabric-server-launch.jar nogui
+Restart=no
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target
