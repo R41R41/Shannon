@@ -1,0 +1,9 @@
+[Unit]
+Description=Fixed Shannon home start request watcher
+
+[Path]
+PathExists=/run/shannon-home-start/request
+Unit=shannon-home-start-request.service
+
+[Install]
+WantedBy=multi-user.target

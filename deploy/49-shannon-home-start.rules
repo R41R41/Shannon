@@ -1,3 +1,4 @@
+// Candidate-only alternative: unsupported by the current Ubuntu 20.04 Polkit 0.105. Do not install there.
 // Install root:root 0644 in /etc/polkit-1/rules.d/. Keep shannon.service NoNewPrivileges=yes.
 // This fixed user/unit/verb grant does not authorize stop, restart, kill or other services.
 polkit.addRule(function(action, subject) {

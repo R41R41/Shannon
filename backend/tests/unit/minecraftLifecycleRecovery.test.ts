@@ -105,27 +105,13 @@ describe('fixed home start permission assets', () => {
     expect(grant(undefined, 'foreign')).toBeUndefined(); expect(grant(undefined, undefined, 'shannon.service')).toBeUndefined();
     expect(grant('org.freedesktop.systemd1.manage-unit-files')).toBeUndefined();
   });
-  it('preserves NNP and passes only fixed noninteractive start argv, refusing an existing listener', () => {
-    const f = fixture(), wrapper = fs.readFileSync(path.join(deploy, 'shannon-home-start.sh.template'), 'utf8');
-    expect(wrapper).toContain('exec /usr/bin/systemctl --no-ask-password start shannon-home.service');
-    expect(wrapper).not.toMatch(/exec sudo|NoNewPrivileges=no|--ask-password/);
+  it('uses only the fixed root-owned client with no privilege gain or arbitrary arguments', () => {
+    const wrapper = fs.readFileSync(path.join(deploy, 'shannon-home-start.sh.template'), 'utf8');
+    expect(wrapper).toContain('exec /usr/bin/python3 -I /usr/local/libexec/shannon-home-start-client.py');
+    expect(wrapper).not.toMatch(/sudo|NoNewPrivileges=no|systemctl stop|systemctl restart/);
     execFileSync('/bin/sh', ['-n', path.join(deploy, 'shannon-home-start.sh.template')]);
-    const mock = path.join(f.dir, 'systemctl'), trace = path.join(f.dir, 'trace'), script = path.join(f.dir, 'start.sh');
-    fs.writeFileSync(mock, `#!/bin/sh
-if [ "$1" = show ]; then echo loaded; exit 0; fi
-printf '%s\n' "$@" > "$TRACE"
-grep '^NoNewPrivs:' /proc/$$/status >> "$TRACE"
-`); fs.chmodSync(mock, 0o700);
-    fs.writeFileSync(path.join(f.dir, 'ss'), `#!/bin/sh
-printf "%s" "$LISTENER"
-`); fs.chmodSync(path.join(f.dir, 'ss'), 0o700);
-    // Only the fixture copy executes; its final absolute binary is replaced by our temp mock.
-    fs.writeFileSync(script, wrapper.replace('/usr/bin/systemctl', mock)); fs.chmodSync(script, 0o700);
-    const env = { ...process.env, PATH: `${f.dir}:${process.env.PATH}`, TRACE: trace, LISTENER: '' };
-    execFileSync('/usr/bin/setpriv', ['--no-new-privs', '/bin/sh', script], { env });
-    expect(fs.readFileSync(trace, 'utf8')).toBe('--no-ask-password\nstart\nshannon-home.service\nNoNewPrivs:\t1\n');
-    fs.unlinkSync(trace);
-    expect(() => execFileSync('/usr/bin/setpriv', ['--no-new-privs', '/bin/sh', script], { env: { ...env, LISTENER: 'existing-world' }, stdio: 'pipe' })).toThrow();
-    expect(fs.existsSync(trace)).toBe(false);
+    const helper = fs.readFileSync(path.join(deploy, 'shannon-home-start-request.service'), 'utf8');
+    expect(helper).toContain('User=root'); expect(helper).toContain('NoNewPrivileges=yes');
+    expect(helper).toContain('ExecStart=/usr/bin/python3 -I /usr/local/libexec/shannon-home-start-request.py');
   });
 });

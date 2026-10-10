@@ -1,0 +1,13 @@
+[Unit]
+Description=Consume one fresh original fixed home start request
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/python3 -I /usr/local/libexec/shannon-home-start-request.py
+TimeoutStartSec=20
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/run/shannon-home-start
