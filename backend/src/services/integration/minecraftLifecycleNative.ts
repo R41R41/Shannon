@@ -153,12 +153,14 @@ export class MinecraftLifecycleNative {
       }
       else if (c.action === 'set_day') {
         // The guard and the effect are one server-thread command; the reply names the new time only when it ran.
-        let reply = '';
+        let reply = '', answered = true;
         try { reply = (await this.ports.command(guardedServerCommand(this.ports.botUuid, this.ports.onlineMode, 'time set day'), signal)).trim(); }
-        catch (error) { reply = (error as { responseText?: string }).responseText?.trim() ?? ''; }
+        catch (error) { answered = false; reply = (error as { responseText?: string }).responseText?.trim() ?? ''; }
         if (/^Set the time to \d+$/.test(reply)) return receipt('completed', 'changed');
+        // A lost or cut reply may follow a command that ran: unknown, whoever is in the world now. Only an answered empty reply
+        // (the guard's own test failed) proves nothing changed.
         state = await this.observe();
-        if (state.otherPlayers !== null && state.otherPlayers > 0) return receipt('refused', 'players_present');
+        if (answered && !reply && state.otherPlayers !== null && state.otherPlayers > 0) return receipt('refused', 'players_present');
         return receipt('unknown', 'state_unknown', false);
       }
       else if (c.action === 'start') await this.ports.start(signal);

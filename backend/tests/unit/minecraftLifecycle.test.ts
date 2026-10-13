@@ -135,6 +135,18 @@ describe('native Minecraft lifecycle', () => {
     expect((await stopped.native.execute(stopped.command('set_day'), new AbortController().signal))).toMatchObject({ outcome: 'refused', code: 'state_unknown' });
     expect(stopped.effects).toEqual([]);
   });
+  it('keeps set_day unknown when its reply is lost or unexpected, even if someone is in the world afterwards', async () => {
+    const lost = fixture(), players = [botUuid];
+    // The reply is lost after the command may have run, and someone joins before the snapshot that follows.
+    lost.ports.command = async text => {
+      if (text === 'list uuids') return `There are ${players.length} of a max of 20 players online: ${players.map(uuid => `p (${uuid})`).join(', ')}`;
+      players.push(humanUuid); throw Object.assign(Error('LIFECYCLE_RCON_TIMEOUT'), { responseText: '' });
+    };
+    expect(await lost.native.execute(lost.command('set_day'), new AbortController().signal)).toMatchObject({ outcome: 'unknown', inputsReleased: false });
+    const odd = fixture(); odd.joined();
+    odd.ports.command = async text => text === 'list uuids' ? `There are 1 of a max of 20 players online: p (${botUuid})` : 'Unknown or incomplete command';
+    expect(await odd.native.execute(odd.command('set_day'), new AbortController().signal)).toMatchObject({ outcome: 'unknown', inputsReleased: false });
+  });
   it('builds guarded commands for the two fixed effects only, exempting nobody offline', () => {
     expect(guardedServerCommand(botUuid, true, 'time set day')).toMatch(/^execute unless entity @a\[nbt=!\{UUID:\[I;-?\d+,-?\d+,-?\d+,-?\d+\]\}\] run time set day$/);
     expect(guardedServerCommand(botUuid, false, 'time set day')).toBe('execute unless entity @a run time set day');
