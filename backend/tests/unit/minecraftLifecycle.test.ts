@@ -2,9 +2,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createServer } from 'node:net';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { guardedStopCommand, MinecraftLifecycleNative, nativePlayers, rconCommand, type LifecycleNativePorts } from '../../src/services/integration/minecraftLifecycleNative.js';
-import { LifecycleOperationJournal, MinecraftLifecycleOperator } from '../../src/services/integration/minecraftLifecycleOperator.js';
+import { LifecycleOperationJournal, LOST_CONTACT_MS, MinecraftLifecycleOperator, UNKNOWN_EXIT_MS } from '../../src/services/integration/minecraftLifecycleOperator.js';
 import type { MinecraftLifecycleCommand } from '../../src/services/integration/minecraftLifecycleContract.js';
 
 const botUuid = 'b9191317-c52d-4d67-85fe-ab831e6db146', humanUuid = '11111111-2222-3333-4444-555555555555';
@@ -119,6 +119,22 @@ describe('native Minecraft lifecycle', () => {
     const receipt = await f.native.execute(f.command('login'), controller.signal);
     expect(receipt.outcome).toBe('unknown'); expect(receipt.inputsReleased).toBe(false); expect(f.effects).toEqual(['login']);
   });
+  it('keeps observing after a revoked effect and completes when the original postcondition appears before the deadline', async () => {
+    const f = fixture(), controller = new AbortController(); f.stopped();
+    let boot = 0;
+    f.ports.processState = async () => boot > 2 ? 'running' : 'stopped';
+    f.ports.command = async text => { if (boot > 2 && text === 'list uuids') return 'There are 0 of a max of 20 players online:'; boot += 1; throw Object.assign(Error('booting'), { code: 'ECONNREFUSED' }); };
+    f.ports.start = async () => { f.effects.push('start'); controller.abort('authority_revoked'); };
+    const receipt = await f.native.execute(f.command('start'), controller.signal);
+    expect(receipt).toMatchObject({ outcome: 'completed', code: 'changed', inputsReleased: true });
+    expect(receipt.state.running).toBe('running'); expect(f.effects).toEqual(['start']);
+  });
+  it('ends at once as unknown when the operator closes, even if the goal would appear later', async () => {
+    const f = fixture(), controller = new AbortController();
+    f.ports.login = async () => { f.effects.push('login'); controller.abort('operator_closed'); setTimeout(() => f.joined(), 300); };
+    const receipt = await f.native.execute(f.command('login'), controller.signal);
+    expect(receipt).toMatchObject({ outcome: 'unknown', code: 'authority_revoked', inputsReleased: false }); expect(f.effects).toEqual(['login']);
+  });
 });
 describe('operator durable dispatch', () => {
   function journal() { const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lifecycle-test-')); temporary.push(dir); return { dir, journal: new LifecycleOperationJournal(path.join(dir, 'operations.json')) }; }
@@ -134,6 +150,44 @@ describe('operator durable dispatch', () => {
     expect(recovered.entries.get(command.id)?.command.authority.origin).toBe('own_time');
     expect(JSON.stringify(bodies)).toContain('unknown');
     expect(recovered.begin(command)).toBe(false);
+  });
+  it('interrupts a command in progress only after losing contact for LOST_CONTACT_MS, not on one failed poll', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const f = fixture(), storage = journal(); f.stopped();
+      let signal: AbortSignal | undefined, release: () => void = () => undefined;
+      f.ports.start = s => { signal = s; return new Promise<void>(resolve => { release = resolve; }); };
+      let fail = false;
+      const operator = new MinecraftLifecycleOperator({ baseUrl: 'http://127.0.0.1:1', token: 'fixture-only-token', native: f.native, journal: storage.journal,
+        fetcher: (async (_url, init) => {
+          if (fail) throw Error('timeout');
+          const body = JSON.parse(String(init?.body)) as { connectionId: string };
+          const command = { ...f.command('start'), connectionId: body.connectionId, issuedAt: new Date(Date.now() - 1).toISOString() };
+          return new Response(JSON.stringify({ schemaVersion: 1, commands: storage.journal.entries.size ? [] : [command], cancel: [], acknowledged: [] }));
+        }) as typeof fetch });
+      await operator.poll();
+      await vi.waitFor(() => expect(signal).toBeDefined());
+      fail = true;
+      await expect(operator.poll()).rejects.toThrow('timeout');
+      expect(signal!.aborted).toBe(false);
+      vi.setSystemTime(Date.now() + LOST_CONTACT_MS + 1);
+      await expect(operator.poll()).rejects.toThrow('timeout');
+      expect(signal!.aborted).toBe(true); expect(signal!.reason).toBe('operator_disconnected');
+      release();
+    } finally { vi.useRealTimers(); }
+  });
+  it('stops holding new commands ten minutes after an unknown receipt, but keeps holding a begin without any receipt', () => {
+    const f = fixture(), storage = journal(), command = f.command('start');
+    storage.journal.begin(command);
+    const later = Date.parse(command.deadlineAt) + 10 * UNKNOWN_EXIT_MS;
+    expect(storage.journal.heldAt(later)).toBe(true);
+    const observedAt = new Date(Date.parse(command.issuedAt) + 1000).toISOString();
+    storage.journal.settle({ id: command.id, connectionId: command.connectionId, serverId: 'home', action: 'start', outcome: 'unknown', code: 'authority_revoked',
+      inputsReleased: false, observedAt, state: { serverId: 'home', observedAt, running: 'unknown', bot: 'absent', otherPlayers: null } });
+    const exit = Math.max(Date.parse(command.deadlineAt), Date.parse(observedAt)) + UNKNOWN_EXIT_MS;
+    expect(storage.journal.heldAt(exit - 1)).toBe(true);
+    expect(storage.journal.heldAt(exit)).toBe(false);
+    expect(storage.journal.entries.get(command.id)?.receipt?.outcome).toBe('unknown');
   });
   it('replays an immutable result receipt after transport recovery, without another native operation', async () => {
     const f = fixture(), storage = journal(), command = f.command('login'); storage.journal.begin(command);

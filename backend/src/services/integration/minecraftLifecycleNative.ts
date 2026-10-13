@@ -3,6 +3,14 @@ import { setTimeout as delay } from 'node:timers/promises';
 import type { MinecraftLifecycleCommand, MinecraftLifecycleReceipt, MinecraftLifecycleState } from './minecraftLifecycleContract.js';
 
 const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
+/**
+ * Interruptions after which the native keeps observing, never acting, until the original deadline. The effect was already sent;
+ * when its own postcondition appears in that window, the original command completed (2026-10-13: a start was revoked one second
+ * before the server finished booting, and every later command was held). A deadline or a closing operator ends observation.
+ */
+const OBSERVE_THROUGH = new Set(['authority_revoked', 'operator_disconnected']);
+/** Observations of one command, bounded by its deadline (the API gives 120 s); a cold start took about 31 s. */
+const OBSERVATIONS = 480;
 /** Uses a configured account UUID only. Offline servers exempt nobody, including a name resembling Shannon. */
 export function guardedStopCommand(botUuid: string, onlineMode: boolean): string {
   if (!UUID.test(botUuid)) throw Error('LIFECYCLE_BOT_UUID_INVALID');
@@ -137,7 +145,9 @@ export class MinecraftLifecycleNative {
       else if (c.action === 'start') await this.ports.start(signal);
       else if (c.action === 'login') await this.ports.login(signal);
       else await this.ports.logout(signal);
-      for (let i = 0; i < 80; i++) {
+      // Only observation follows the effect. An interruption in OBSERVE_THROUGH stops nothing more, because nothing more is sent.
+      let interrupted = false;
+      for (let i = 0; i < OBSERVATIONS; i++) {
         state = await this.observe();
         if (c.action === 'start' && state.running === 'running' || c.action === 'stop' && stopAccepted && state.running === 'stopped'
           || c.action === 'login' && state.bot === 'joined' || c.action === 'logout' && state.bot === 'absent') {
@@ -145,10 +155,11 @@ export class MinecraftLifecycleNative {
         }
         if (c.action === 'stop' && state.running === 'running' && state.otherPlayers !== null && state.otherPlayers > 0) return receipt('refused', 'players_present');
         if (c.action === 'stop' && !stopAccepted && state.running === 'stopped') return receipt('unknown', 'state_unknown', false);
-        if (signal.aborted || Date.parse(c.deadlineAt) <= this.now()) break;
+        if (Date.parse(c.deadlineAt) <= this.now()) break;
+        if (signal.aborted) { interrupted = true; if (!OBSERVE_THROUGH.has(String(signal.reason))) break; }
         await delay(250);
       }
-      return receipt('unknown', signal.aborted ? 'authority_revoked' : 'state_unknown', false);
+      return receipt('unknown', interrupted || signal.aborted ? 'authority_revoked' : 'state_unknown', false);
     } catch { state = await this.observe(); return receipt('unknown', 'error', false); }
     finally { this.busy = false; }
   }

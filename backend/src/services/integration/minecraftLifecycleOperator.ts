@@ -6,6 +6,20 @@ import { MINECRAFT_LIFECYCLE_PATH, validLifecycleState } from './minecraftLifecy
 import type { MinecraftLifecycleNative } from './minecraftLifecycleNative.js';
 
 export interface LifecycleReceiptReview { reviewedBy: string; evidenceSha256: string }
+/**
+ * When an unknown or unreleased receipt stops holding new commands (Syzygy ADR-0009 D2, the API's exit for the same operation):
+ * ten minutes after the later of its deadline and its receipt. The operator has finished with a command once it settled a receipt,
+ * so nothing of it is still acting; the entry stays unknown, is still resent until acknowledged, and is never replayed. A begin
+ * without any receipt keeps holding until a poll settles it.
+ */
+export const UNKNOWN_EXIT_MS = 600_000;
+/** How long the operator may lose contact with the API before it interrupts a command in progress (a poll times out after 2 s). */
+export const LOST_CONTACT_MS = 15_000;
+function unknownExpired(row: JournalEntry, now: number): boolean {
+  if (!row.receipt) return false;
+  const ended = Math.max(Date.parse(row.command.deadlineAt), Date.parse(row.receipt.observedAt));
+  return Number.isFinite(ended) && now >= ended + UNKNOWN_EXIT_MS;
+}
 interface JournalEntry {
   command: MinecraftLifecycleCommand; receipt?: MinecraftLifecycleReceipt;
   receiptHistory?: readonly MinecraftLifecycleReceipt[]; receiptReview?: LifecycleReceiptReview;
@@ -72,7 +86,10 @@ export class LifecycleOperationJournal {
     this.entries.set(row.command.id, revised);
     try { this.persist(); } catch (error) { this.entries.set(row.command.id, row); throw error; }
   }
-  get held(): boolean { return [...this.entries.values()].some(v => !v.receipt || v.receipt.outcome === 'unknown' || !v.receipt.inputsReleased); }
+  get held(): boolean { return this.heldAt(Date.now()); }
+  heldAt(now: number): boolean {
+    return [...this.entries.values()].some(v => !v.receipt || (v.receipt.outcome === 'unknown' || !v.receipt.inputsReleased) && !unknownExpired(v, now));
+  }
 }
 export class MinecraftLifecycleOperator {
   readonly connectionId = randomUUID();
@@ -82,6 +99,8 @@ export class MinecraftLifecycleOperator {
   private acknowledged = new Set<string>();
   private timer?: ReturnType<typeof setTimeout>;
   private closed = false;
+  /** The last poll the API answered; a command in progress is interrupted only after LOST_CONTACT_MS without one. */
+  private contactAt = Date.now();
   constructor(readonly options: { baseUrl: string; token: string; native: MinecraftLifecycleNative; journal: LifecycleOperationJournal; fetcher?: typeof fetch; pollMilliseconds?: number }) {}
   private async post(path: string, body: unknown, signal?: AbortSignal): Promise<Response> {
     return (this.options.fetcher ?? fetch)(`${this.options.baseUrl}${path}`, { method: 'POST', headers: { authorization: `Bearer ${this.options.token}`, 'content-type': 'application/json' },
@@ -113,8 +132,13 @@ export class MinecraftLifecycleOperator {
       for (const id of reply.acknowledged) if (receipts.some(r => r.id === id)) this.acknowledged.add(id);
       const active = this.active;
       for (const id of reply.cancel) if (active && id === active.id) active.controller.abort('authority_revoked');
+      this.contactAt = Date.now();
       for (const command of reply.commands) this.accept(command);
-    } catch (error) { this.active?.controller.abort('operator_disconnected'); throw error; }
+    } catch (error) {
+      // 2026-10-13: one poll timed out while the API's event loop was blocked for 2.1 s, and a start one second from done was lost.
+      if (Date.now() - this.contactAt > LOST_CONTACT_MS) this.active?.controller.abort('operator_disconnected');
+      throw error;
+    }
     finally { this.polling = false; }
   }
   private accept(command: MinecraftLifecycleCommand): void {
