@@ -50,6 +50,7 @@ function validReviewedReceipt(command: MinecraftLifecycleCommand, previous: Mine
       || receipt.code === 'changed' && receipt.stopGuard?.admissionClosed === true && receipt.stopGuard.otherPlayers === 0);
     case 'login': return receipt.state.running === 'running' && receipt.state.bot === 'joined' && ['changed', 'already_joined'].includes(receipt.code);
     case 'logout': return receipt.state.bot === 'absent' && ['changed', 'already_absent'].includes(receipt.code);
+    case 'set_day': return receipt.state.running === 'running' && receipt.code === 'changed';
   }
 }
 /** Single-writer operator journal. Begin commits before the actuator; a crash does not replay a lifecycle effect. */
@@ -146,7 +147,7 @@ export class MinecraftLifecycleOperator {
     if (!command || command.schemaVersion !== 1 || command.connectionId !== this.connectionId
       || !Number.isFinite(Date.parse(command.issuedAt)) || Date.parse(command.issuedAt) > Date.now()
       || !Number.isFinite(Date.parse(command.deadlineAt)) || Date.parse(command.issuedAt) >= Date.parse(command.deadlineAt)
-      || command.serverId !== this.options.native.ports.serverId || !['start', 'stop', 'login', 'logout'].includes(command.action)
+      || command.serverId !== this.options.native.ports.serverId || !['start', 'stop', 'login', 'logout', 'set_day'].includes(command.action)
       || !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/.test(command.id) || this.active || this.options.journal.held) return;
     if (!this.options.journal.begin(command)) return;
     const controller = new AbortController(); this.active = { id: command.id, controller };

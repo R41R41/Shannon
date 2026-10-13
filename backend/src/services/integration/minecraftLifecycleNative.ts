@@ -11,13 +11,21 @@ const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 const OBSERVE_THROUGH = new Set(['authority_revoked', 'operator_disconnected']);
 /** Observations of one command, bounded by its deadline (the API gives 120 s); a cold start took about 31 s. */
 const OBSERVATIONS = 480;
-/** Uses a configured account UUID only. Offline servers exempt nobody, including a name resembling Shannon. */
-export function guardedStopCommand(botUuid: string, onlineMode: boolean): string {
+/**
+ * One server-thread command that runs only while no one but the configured bot is in the world: Minecraft evaluates the
+ * selector and runs the effect in the same tick. Uses a configured account UUID only. Offline servers exempt nobody, including
+ * a name resembling Shannon. Only the two fixed effects below exist; nothing from a model or an API caller reaches it.
+ */
+export function guardedServerCommand(botUuid: string, onlineMode: boolean, effect: 'stop' | 'time set day'): string {
   if (!UUID.test(botUuid)) throw Error('LIFECYCLE_BOT_UUID_INVALID');
-  if (!onlineMode) return 'execute unless entity @a run stop';
+  if (effect !== 'stop' && effect !== 'time set day') throw Error('LIFECYCLE_EFFECT_INVALID');
+  if (!onlineMode) return `execute unless entity @a run ${effect}`;
   const bytes = Buffer.from(botUuid.replace(/-/g, ''), 'hex');
   const words = [0, 4, 8, 12].map(offset => bytes.readInt32BE(offset));
-  return `execute unless entity @a[nbt=!{UUID:[I;${words.join(',')}]}] run stop`;
+  return `execute unless entity @a[nbt=!{UUID:[I;${words.join(',')}]}] run ${effect}`;
+}
+export function guardedStopCommand(botUuid: string, onlineMode: boolean): string {
+  return guardedServerCommand(botUuid, onlineMode, 'stop');
 }
 /** Minecraft's native list-uuids output; mismatches never become a zero-player observation. */
 export function nativePlayers(text: string): readonly string[] | null {
@@ -131,8 +139,9 @@ export class MinecraftLifecycleNative {
       if (c.action === 'logout' && state.bot === 'absent') return receipt('completed', 'already_absent');
       // Logging out also cancels a pending reconnect. It is scoped to the configured native body, and requires no server shutdown.
       if (c.action !== 'logout' && (state.running === 'unknown' || state.bot === 'unknown')
-        || c.action === 'login' && state.running !== 'running') return receipt('refused', 'state_unknown');
-      if (c.action === 'stop' && state.otherPlayers !== 0) return receipt('refused', state.otherPlayers === null ? 'state_unknown' : 'players_present');
+        || (c.action === 'login' || c.action === 'set_day') && state.running !== 'running') return receipt('refused', 'state_unknown');
+      // Stopping and changing the time both act on everyone in the world: never while anyone else is there.
+      if ((c.action === 'stop' || c.action === 'set_day') && state.otherPlayers !== 0) return receipt('refused', state.otherPlayers === null ? 'state_unknown' : 'players_present');
       if (this.ports.admission && !await this.ports.admission(c.action)) return receipt('refused', 'state_unknown');
       if (!await this.ports.authorize(c, signal) || signal.aborted || Date.parse(c.deadlineAt) <= this.now()) return receipt('cancelled', 'authority_revoked');
       const checkedAt = new Date(this.now()).toISOString();
@@ -141,6 +150,16 @@ export class MinecraftLifecycleNative {
       if (c.action === 'stop') {
         try { stopAccepted = (await this.ports.command(guardedStopCommand(this.ports.botUuid, this.ports.onlineMode), signal)).trim() === 'Stopping the server'; }
         catch (error) { stopAccepted = (error as { responseText?: string }).responseText?.trim() === 'Stopping the server'; }
+      }
+      else if (c.action === 'set_day') {
+        // The guard and the effect are one server-thread command; the reply names the new time only when it ran.
+        let reply = '';
+        try { reply = (await this.ports.command(guardedServerCommand(this.ports.botUuid, this.ports.onlineMode, 'time set day'), signal)).trim(); }
+        catch (error) { reply = (error as { responseText?: string }).responseText?.trim() ?? ''; }
+        if (/^Set the time to \d+$/.test(reply)) return receipt('completed', 'changed');
+        state = await this.observe();
+        if (state.otherPlayers !== null && state.otherPlayers > 0) return receipt('refused', 'players_present');
+        return receipt('unknown', 'state_unknown', false);
       }
       else if (c.action === 'start') await this.ports.start(signal);
       else if (c.action === 'login') await this.ports.login(signal);

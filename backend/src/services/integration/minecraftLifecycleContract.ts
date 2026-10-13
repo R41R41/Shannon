@@ -2,7 +2,8 @@ export interface ActionLease { id: string; holder: string; generation: number }
 
 /** Always-on operator channel; independent of world-body presence and paid game planning. */
 export const MINECRAFT_LIFECYCLE_PATH = '/v1/body/minecraft/lifecycle';
-export const MINECRAFT_LIFECYCLE_ACTIONS = ['start', 'stop', 'login', 'logout'] as const;
+/** `set_day` (2026-10-14, owner): one fixed guarded `time set day`, refused while anyone else is in the world. */
+export const MINECRAFT_LIFECYCLE_ACTIONS = ['start', 'stop', 'login', 'logout', 'set_day'] as const;
 export type MinecraftLifecycleAction = typeof MINECRAFT_LIFECYCLE_ACTIONS[number];
 export interface MinecraftLifecycleState {
   serverId: string; observedAt: string;

@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createServer } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { guardedStopCommand, MinecraftLifecycleNative, nativePlayers, rconCommand, type LifecycleNativePorts } from '../../src/services/integration/minecraftLifecycleNative.js';
+import { guardedServerCommand, guardedStopCommand, MinecraftLifecycleNative, nativePlayers, rconCommand, type LifecycleNativePorts } from '../../src/services/integration/minecraftLifecycleNative.js';
 import { LifecycleOperationJournal, LOST_CONTACT_MS, MinecraftLifecycleOperator, UNKNOWN_EXIT_MS } from '../../src/services/integration/minecraftLifecycleOperator.js';
 import type { MinecraftLifecycleCommand } from '../../src/services/integration/minecraftLifecycleContract.js';
 
@@ -20,6 +20,7 @@ function fixture() {
       if (text === 'list uuids') return `There are ${players.length} of a max of 20 players online: ${players.map(uuid => `player (${uuid})`).join(', ')}`;
       if (race) players.push(humanUuid);
       effects.push(text);
+      if (text.endsWith('run time set day')) return players.every(uuid => uuid === botUuid) ? 'Set the time to 1000' : '';
       if (players.every(uuid => uuid === botUuid)) { running = false; bot = 'absent'; return 'Stopping the server'; }
       return '';
     },
@@ -118,6 +119,27 @@ describe('native Minecraft lifecycle', () => {
     f.ports.login = async () => { f.effects.push('login'); controller.abort(); };
     const receipt = await f.native.execute(f.command('login'), controller.signal);
     expect(receipt.outcome).toBe('unknown'); expect(receipt.inputsReleased).toBe(false); expect(f.effects).toEqual(['login']);
+  });
+  it('sets the day with one guarded server command only while no one else is in the world', async () => {
+    const f = fixture(); f.joined();
+    const done = await f.native.execute(f.command('set_day'), new AbortController().signal);
+    expect(done).toMatchObject({ outcome: 'completed', code: 'changed', inputsReleased: true });
+    expect(f.effects).toEqual([guardedServerCommand(botUuid, true, 'time set day')]);
+    const human = fixture(); human.human();
+    expect((await human.native.execute(human.command('set_day'), new AbortController().signal))).toMatchObject({ outcome: 'refused', code: 'players_present' });
+    expect(human.effects).toEqual([]);
+    // Someone joins between the snapshot and the command: the guard inside the one command keeps the time as it was.
+    const race = fixture(); race.race();
+    expect((await race.native.execute(race.command('set_day'), new AbortController().signal))).toMatchObject({ outcome: 'refused', code: 'players_present', inputsReleased: true });
+    const stopped = fixture(); stopped.stopped();
+    expect((await stopped.native.execute(stopped.command('set_day'), new AbortController().signal))).toMatchObject({ outcome: 'refused', code: 'state_unknown' });
+    expect(stopped.effects).toEqual([]);
+  });
+  it('builds guarded commands for the two fixed effects only, exempting nobody offline', () => {
+    expect(guardedServerCommand(botUuid, true, 'time set day')).toMatch(/^execute unless entity @a\[nbt=!\{UUID:\[I;-?\d+,-?\d+,-?\d+,-?\d+\]\}\] run time set day$/);
+    expect(guardedServerCommand(botUuid, false, 'time set day')).toBe('execute unless entity @a run time set day');
+    expect(() => guardedServerCommand(botUuid, true, 'op someone' as never)).toThrow('LIFECYCLE_EFFECT_INVALID');
+    expect(guardedStopCommand(botUuid, true)).toBe(guardedServerCommand(botUuid, true, 'stop'));
   });
   it('keeps observing after a revoked effect and completes when the original postcondition appears before the deadline', async () => {
     const f = fixture(), controller = new AbortController(); f.stopped();

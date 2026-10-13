@@ -54,6 +54,10 @@ The client refuses an existing listener or any non-inactive home unit. It atomic
 
 Installation must preserve the existing home world/unit and recovered journal. Enabling the watcher must wait until no old request remains, no old wrapper is alive and the original operation is quiescent. No live installation or game action is performed by candidate tests.
 
+## Set the day (2026-10-14)
+
+`set_day` makes the world's time day, so that a run can start in the morning (the owner's request). It sends one fixed command, `time set day`, inside the same server-thread guard as stop: `execute unless entity @a[nbt=!{UUID:[I;<bot UUID words>]}] run time set day` (offline: `execute unless entity @a run time set day`, exempting nobody). It requires a running server and zero other players in the native snapshot, the same final authority recheck as every command, and completes only when the reply names the new time (`Set the time to …`). Someone who joins between the snapshot and the command keeps the time as it was (`refused/players_present`). The effect is the only one besides stop that the guard builds; nothing from a model or an API caller reaches the command text. The API offers it as `minecraft.set_time` to the owner alone.
+
 ## 2026-10-13 incidents
 
 - A chat-started `start` was aborted one second before the server finished booting: the API's event loop was blocked for 2.1 s, one poll timed out, and the operator aborted at once. The journal then held every later command. Fixed by the contact grace, observation through the original deadline and the held exit above.
