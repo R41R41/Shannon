@@ -1,0 +1,197 @@
+import { Vec3 } from 'vec3';
+import { createLogger } from '../../../utils/logger.js';
+import { currentAction, executeAction, hasActiveSafetyLease, preemptLowerPriorityActions } from '../execution/ActionExecution.js';
+import { FALLBACK_FOOD_POINTS } from '../constantSkills/autoEat.js';
+
+const log = createLogger('Minebot:FloorReflexes');
+
+/**
+ * The floor (Syzygy ADR-0010 D8, ADR-0011 §4.6, owner answer "defence only", 2026-10-14): what cannot wait for a network
+ * decision, done in the body on its physics tick, with no model and no attack. The breathing, lava, shield, knock and edge
+ * reflexes already run here; this adds the three that common-FCA mode had switched off with the constant skills: stepping
+ * back from a lit creeper or an arrow on its way, eating when short, and wearing armour into an empty slot. Each takes the
+ * body through ActionExecution with a safety lease, so a model's action or a reflex session underneath gives way, and gives
+ * it back by ending; the one above decides again from a fresh observation.
+ */
+export const FLOOR_RETREAT_PRIORITY = 350;
+export const FLOOR_EAT_PRIORITY = 200;
+export const FLOOR_ARMOR_PRIORITY = 150;
+/** One retreat lasts at most a second, or three blocks (ADR-0010 D8). */
+const RETREAT_TICKS = 20;
+const RETREAT_BLOCKS = 3;
+const RETREAT_COOLDOWN_TICKS = 10;
+/** A creeper starts its fuse at three blocks and blows at about three; a lit one this close is stepped away from. */
+const CREEPER_REACH = 4.5;
+const ARROW_REACH = 12;
+const HOSTILE_NEAR = 5;
+const RETRY_AFTER_MS = 3000;
+
+type Item = { name: string; type?: number; slot?: number };
+interface FloorEntity {
+  id?: number; name?: string; type?: string; position: Vec3; velocity?: Vec3; metadata?: unknown[];
+  isInLava?: boolean; isInWater?: boolean;
+}
+export interface FloorBody {
+  entity?: FloorEntity; entities?: Record<string, FloorEntity>;
+  health?: number; food?: number; heldItem?: Item | null;
+  inventory?: { items(): Item[]; slots?: (Item | null)[] };
+  setControlState(control: string, state: boolean): void;
+  look?(yaw: number, pitch: number, force?: boolean): unknown;
+  equip?(item: Item, destination: string): Promise<void>;
+  consume?(): Promise<void>;
+  on(event: 'physicsTick', listener: () => void): unknown;
+  floorReflexes?: FloorState;
+}
+export interface RetreatState {
+  engaged: boolean; kind?: 'creeper' | 'arrow'; from?: Vec3; origin?: Vec3; ticks: number; cooldown: number; engagements: number;
+  release?: () => void;
+}
+export interface FloorState { retreat: RetreatState; busy: 'eat' | 'armor' | null; retryAt: number; engagements: { eat: number; armor: number } }
+
+/** Minecraft 1.21 creeper metadata: index 16 is the fuse state (1 while swelling), index 18 is lit by flint and steel. */
+export function creeperLit(entity: FloorEntity): boolean {
+  const meta = Array.isArray(entity.metadata) ? entity.metadata : [];
+  return meta[16] === 1 || meta[18] === true;
+}
+const hostileNames = new Set(['zombie', 'husk', 'drowned', 'skeleton', 'stray', 'creeper', 'spider', 'cave_spider', 'witch',
+  'pillager', 'vindicator', 'piglin_brute', 'hoglin', 'zoglin', 'blaze', 'wither_skeleton', 'slime', 'magma_cube', 'phantom']);
+function others(bot: FloorBody): FloorEntity[] {
+  return Object.values(bot.entities ?? {}).filter(entity => entity && entity !== bot.entity && entity.position);
+}
+export function hostileWithin(bot: FloorBody, reach: number): boolean {
+  const at = bot.entity?.position; if (!at) return false;
+  return others(bot).some(entity => hostileNames.has(String(entity.name)) && entity.position.distanceTo(at) <= reach);
+}
+function holdsShield(bot: FloorBody): boolean {
+  return bot.inventory?.slots?.[45]?.name === 'shield' || bot.heldItem?.name === 'shield';
+}
+/** What to step away from now, if anything: a lit creeper close by, or an arrow flying at the body (the shield reflex takes those when one is held). */
+export function retreatThreat(bot: FloorBody): { kind: 'creeper' | 'arrow'; from: Vec3 } | null {
+  const body = bot.entity; if (!body) return null;
+  const at = body.position;
+  for (const entity of others(bot)) {
+    if (entity.name === 'creeper' && creeperLit(entity) && entity.position.distanceTo(at) <= CREEPER_REACH) return { kind: 'creeper', from: entity.position };
+  }
+  if (holdsShield(bot)) return null;
+  for (const entity of others(bot)) {
+    if (!['arrow', 'spectral_arrow', 'trident'].includes(String(entity.name)) || !entity.velocity) continue;
+    const toBody = at.offset(0, 1, 0).minus(entity.position), distance = toBody.norm(), speed = entity.velocity.norm();
+    if (distance > ARROW_REACH || speed < 0.05) continue;
+    // Flying at the body: its course passes within a block of the chest.
+    const along = toBody.dot(entity.velocity) / speed;
+    if (along <= 0) continue;
+    const closest = entity.position.plus(entity.velocity.scaled(along / speed)).distanceTo(at.offset(0, 1, 0));
+    if (closest <= 1) return { kind: 'arrow', from: entity.position };
+  }
+  return null;
+}
+function releaseKeys(bot: FloorBody) { for (const key of ['forward', 'sprint', 'left', 'right', 'jump']) bot.setControlState(key, false); }
+function steer(bot: FloorBody, state: RetreatState) {
+  const at = bot.entity!.position, from = state.from!;
+  if (state.kind === 'creeper') {
+    // Straight away from it; the edge guard keeps the final say over the keys at a drop.
+    bot.look?.(Math.atan2(at.x - from.x, at.z - from.z) + Math.PI, 0, true);
+    bot.setControlState('forward', true); bot.setControlState('sprint', true);
+  } else {
+    // Sideways out of the arrow's line.
+    bot.look?.(Math.atan2(at.x - from.x, at.z - from.z) + Math.PI, 0, true);
+    bot.setControlState('left', true);
+  }
+}
+/** One physics tick of the retreat. Keys are set every tick while engaged, after the other movers, like the lava reflex. */
+export function floorRetreatTick(bot: FloorBody, state: RetreatState): 'engaged' | 'released' | null {
+  const body = bot.entity;
+  if (!body || (bot.health ?? 20) <= 0 || body.isInLava) {
+    if (!state.engaged) return null;
+    state.engaged = false; releaseKeys(bot); return 'released';
+  }
+  if (state.engaged) {
+    state.ticks++;
+    const threat = retreatThreat(bot);
+    if (threat) state.from = threat.from;
+    if (!threat || state.ticks >= RETREAT_TICKS || body.position.distanceTo(state.origin!) >= RETREAT_BLOCKS) {
+      state.engaged = false; state.cooldown = RETREAT_COOLDOWN_TICKS; releaseKeys(bot); return 'released';
+    }
+    steer(bot, state); return null;
+  }
+  if (state.cooldown > 0) { state.cooldown--; return null; }
+  const threat = retreatThreat(bot);
+  if (!threat) return null;
+  Object.assign(state, { engaged: true, kind: threat.kind, from: threat.from, origin: body.position.clone(), ticks: 0 });
+  state.engagements++;
+  steer(bot, state);
+  return 'engaged';
+}
+
+const NEVER_EAT = new Set(['pufferfish', 'chorus_fruit', 'suspicious_stew', 'spider_eye', 'poisonous_potato']);
+/** Food to eat now, or null: short of food, or hurt and not full; no enemy at arm's length unless nearly dead. */
+export function floorEatChoice(bot: FloorBody): Item | null {
+  const health = bot.health ?? 20, food = bot.food ?? 20;
+  if (!(food <= 6 || (health <= 12 && food < 18))) return null;
+  if (bot.entity?.isInLava || (hostileWithin(bot, HOSTILE_NEAR) && health > 6)) return null;
+  const items = (bot.inventory?.items() ?? []).filter(item => (FALLBACK_FOOD_POINTS[item.name] ?? 0) > 0 && !NEVER_EAT.has(item.name)
+    && (item.name !== 'rotten_flesh' || food <= 6));
+  items.sort((a, b) => (FALLBACK_FOOD_POINTS[b.name] ?? 0) - (FALLBACK_FOOD_POINTS[a.name] ?? 0));
+  return items[0] ?? null;
+}
+const ARMOR = [['head', '_helmet', 5], ['torso', '_chestplate', 6], ['legs', '_leggings', 7], ['feet', '_boots', 8]] as const;
+const MATERIAL = ['netherite', 'diamond', 'iron', 'chainmail', 'turtle', 'golden', 'leather'];
+/** Armour for an empty slot, best material first; a worn piece is never swapped (that choice is the model's). */
+export function floorArmorChoice(bot: FloorBody): { item: Item; destination: string } | null {
+  const slots = bot.inventory?.slots; if (!slots) return null;
+  for (const [destination, suffix, slot] of ARMOR) {
+    if (slots[slot]) continue;
+    const pieces = (bot.inventory?.items() ?? []).filter(item => item.name.endsWith(suffix));
+    pieces.sort((a, b) => MATERIAL.findIndex(m => a.name.startsWith(m)) - MATERIAL.findIndex(m => b.name.startsWith(m)));
+    if (pieces[0]) return { item: pieces[0], destination };
+  }
+  return null;
+}
+
+export function installFloorReflexes(bot: FloorBody): void {
+  if (bot.floorReflexes) return;
+  const state: FloorState = bot.floorReflexes = { retreat: { engaged: false, ticks: 0, cooldown: 0, engagements: 0 }, busy: null, retryAt: 0,
+    engagements: { eat: 0, armor: 0 } };
+  const take = (capability: string, priority: number, timeoutMs: number, work: () => Promise<{ success: boolean; result: string }>) => {
+    preemptLowerPriorityActions(bot, priority, capability);
+    return executeAction(bot as any, capability, timeoutMs, work as any,
+      { priority, safetyLease: true, waitForQuiescence: false, legacyExecutingSkill: true });
+  };
+  bot.on('physicsTick', () => {
+    let outcome: ReturnType<typeof floorRetreatTick> = null;
+    try { outcome = floorRetreatTick(bot, state.retreat); } catch { return; }
+    if (outcome === 'engaged') {
+      log.warn(state.retreat.kind === 'creeper' ? '💥 火の付いたクリーパー: 離れる' : '🏹 矢が向かってくる: 横へよける');
+      void take('floor-retreat', FLOOR_RETREAT_PRIORITY, 3000,
+        () => new Promise(resolve => { state.retreat.release = () => resolve({ success: true, result: '下がった' }); }))
+        .catch(() => undefined).finally(() => { state.retreat.release = undefined; });
+      return;
+    }
+    if (outcome === 'released') { state.retreat.release?.(); return; }
+    if (state.retreat.engaged || state.busy || Date.now() < state.retryAt) return;
+    let food: Item | null = null, armor: ReturnType<typeof floorArmorChoice> = null;
+    try { food = floorEatChoice(bot); armor = food ? null : floorArmorChoice(bot); } catch { return; }
+    if (food && bot.equip && bot.consume) {
+      // Over a model's action or a reflex session, never over another safety reflex (breath, lava).
+      if (hasActiveSafetyLease(bot)) return;
+      state.busy = 'eat'; state.engagements.eat++;
+      log.info(`🍖 食べる: ${food.name}（体力 ${bot.health} / 満腹度 ${bot.food}）`);
+      const held = bot.heldItem;
+      void take('floor-eat', FLOOR_EAT_PRIORITY, 6000, async () => {
+        await bot.equip!(food!, 'hand'); await bot.consume!();
+        if (held && held.name !== food!.name) await bot.equip!(held, 'hand').catch(() => undefined);
+        return { success: true, result: `${food!.name}を食べた` };
+      }).catch(() => { state.retryAt = Date.now() + RETRY_AFTER_MS; }).finally(() => { state.busy = null; });
+    } else if (armor && bot.equip && !hasActiveSafetyLease(bot) && (!currentAction(bot) || hostileWithin(bot, 16))) {
+      state.busy = 'armor'; state.engagements.armor++;
+      log.info(`🛡️ 防具を着ける: ${armor.item.name}`);
+      void take('floor-armor', FLOOR_ARMOR_PRIORITY, 3000, async () => {
+        await bot.equip!(armor!.item, armor!.destination);
+        return { success: true, result: `${armor!.item.name}を着けた` };
+      }).catch(() => { state.retryAt = Date.now() + RETRY_AFTER_MS; }).finally(() => { state.busy = null; });
+    }
+  });
+}
+
+/** mineflayer plugin form, loaded after the other reflexes so its keys win a tick it is engaged in. */
+export function floorReflexPlugin(bot: unknown): void { installFloorReflexes(bot as FloorBody); }

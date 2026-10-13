@@ -34,6 +34,7 @@ import { threatTrackerPlugin } from './utils/threatTracker.js';
 import { toolWearPlugin } from './utils/toolWear.js';
 import { landmarkWatcherPlugin } from './utils/landmarks.js';
 import { placeMemoryPlugin } from './utils/placeMemory.js';
+import { floorReflexPlugin } from './utils/floorReflexes.js';
 import { fireballDeflectPlugin } from './utils/fireballDeflect.js';
 import { shieldBlockPlugin } from './utils/shieldBlock.js';
 import { knockBracePlugin } from './utils/knockBrace.js';
@@ -154,6 +155,8 @@ export class MinebotClient extends BaseClient {
     this.bot.loadPlugin(fireballDeflectPlugin);
     this.bot.loadPlugin(shieldBlockPlugin);
     this.bot.loadPlugin(knockBracePlugin);
+    // The floor's eat, armour and retreat reflexes (ADR-0010 D8), after the others.
+    this.bot.loadPlugin(floorReflexPlugin);
 
     this.bot.on('login', async () => {
       log.info('✅ Bot has logged in.');

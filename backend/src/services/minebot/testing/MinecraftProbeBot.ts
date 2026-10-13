@@ -22,6 +22,7 @@ import { placeMemoryPlugin } from '../utils/placeMemory.js';
 import { fireballDeflectPlugin } from '../utils/fireballDeflect.js';
 import { shieldBlockPlugin } from '../utils/shieldBlock.js';
 import { knockBracePlugin } from '../utils/knockBrace.js';
+import { floorReflexPlugin } from '../utils/floorReflexes.js';
 import { digConfirmationPlugin } from '../utils/digConfirmation.js';
 import { serverRefusalPlugin } from '../utils/serverRefusals.js';
 import { lavaDigGuardPlugin, lavaReflexPlugin } from '../utils/lavaSafety.js';
@@ -85,6 +86,7 @@ export async function createProbeBot(port: number, username = 'ShannonProbe', ac
   bot.loadPlugin(fireballDeflectPlugin);
   bot.loadPlugin(shieldBlockPlugin);
   bot.loadPlugin(knockBracePlugin);
+  if (process.env.MINECRAFT_PROBE_FLOOR !== 'off') bot.loadPlugin(floorReflexPlugin);
   Object.assign(bot, {
     isTest: true, chatMode: false, connectedServerName: 'isolated-progressive-probe',
     attackEntity: null, runFromEntity: null, goal: null, interruptExecution: false,

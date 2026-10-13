@@ -4,7 +4,7 @@ import { abortable, waitForObservation } from '../execution/observedWait.js';
 
 const log = createLogger('Minebot:Skill:autoEat');
 
-const FALLBACK_FOOD_POINTS: Record<string, number> = {
+export const FALLBACK_FOOD_POINTS: Record<string, number> = {
   baked_potato: 5,
   bread: 5,
   cooked_beef: 8,
