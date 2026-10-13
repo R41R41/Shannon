@@ -173,7 +173,10 @@ describe('operator durable dispatch', () => {
       vi.setSystemTime(Date.now() + LOST_CONTACT_MS + 1);
       await expect(operator.poll()).rejects.toThrow('timeout');
       expect(signal!.aborted).toBe(true); expect(signal!.reason).toBe('operator_disconnected');
+      // The start returns and its server comes up, so the observation that follows ends inside this test.
+      f.ports.processState = async () => 'running'; f.ports.command = async () => 'There are 0 of a max of 20 players online:';
       release();
+      await vi.waitFor(() => expect(storage.journal.entries.values().next().value?.receipt?.outcome).toBe('completed'));
     } finally { vi.useRealTimers(); }
   });
   it('stops holding new commands ten minutes after an unknown receipt, but keeps holding a begin without any receipt', () => {
@@ -184,7 +187,7 @@ describe('operator durable dispatch', () => {
     const observedAt = new Date(Date.parse(command.issuedAt) + 1000).toISOString();
     storage.journal.settle({ id: command.id, connectionId: command.connectionId, serverId: 'home', action: 'start', outcome: 'unknown', code: 'authority_revoked',
       inputsReleased: false, observedAt, state: { serverId: 'home', observedAt, running: 'unknown', bot: 'absent', otherPlayers: null } });
-    const exit = Math.max(Date.parse(command.deadlineAt), Date.parse(observedAt)) + UNKNOWN_EXIT_MS;
+    const exit = Date.parse(observedAt) + UNKNOWN_EXIT_MS;
     expect(storage.journal.heldAt(exit - 1)).toBe(true);
     expect(storage.journal.heldAt(exit)).toBe(false);
     expect(storage.journal.entries.get(command.id)?.receipt?.outcome).toBe('unknown');

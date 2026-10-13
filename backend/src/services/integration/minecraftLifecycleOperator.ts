@@ -7,17 +7,18 @@ import type { MinecraftLifecycleNative } from './minecraftLifecycleNative.js';
 
 export interface LifecycleReceiptReview { reviewedBy: string; evidenceSha256: string }
 /**
- * When an unknown or unreleased receipt stops holding new commands (Syzygy ADR-0009 D2, the API's exit for the same operation):
- * ten minutes after the later of its deadline and its receipt. The operator has finished with a command once it settled a receipt,
- * so nothing of it is still acting; the entry stays unknown, is still resent until acknowledged, and is never replayed. A begin
- * without any receipt keeps holding until a poll settles it.
+ * When an unknown or unreleased receipt stops holding new commands (Syzygy ADR-0009 D2): ten minutes after the receipt. The operator
+ * has finished with a command once it settled a receipt, so nothing of it is still acting; the entry stays unknown, is still resent
+ * until acknowledged, and is never replayed. A begin without any receipt keeps holding until a poll settles it. The API closes the
+ * same operation ten minutes after its own action went unknown, a few seconds apart from this; a command the API sends in between
+ * is not admitted here and comes back unknown again, never acted on.
  */
 export const UNKNOWN_EXIT_MS = 600_000;
 /** How long the operator may lose contact with the API before it interrupts a command in progress (a poll times out after 2 s). */
 export const LOST_CONTACT_MS = 15_000;
 function unknownExpired(row: JournalEntry, now: number): boolean {
   if (!row.receipt) return false;
-  const ended = Math.max(Date.parse(row.command.deadlineAt), Date.parse(row.receipt.observedAt));
+  const ended = Date.parse(row.receipt.observedAt);
   return Number.isFinite(ended) && now >= ended + UNKNOWN_EXIT_MS;
 }
 interface JournalEntry {
