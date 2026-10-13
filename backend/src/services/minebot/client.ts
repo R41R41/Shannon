@@ -155,8 +155,9 @@ export class MinebotClient extends BaseClient {
     this.bot.loadPlugin(fireballDeflectPlugin);
     this.bot.loadPlugin(shieldBlockPlugin);
     this.bot.loadPlugin(knockBracePlugin);
-    // The floor's eat, armour and retreat reflexes (ADR-0010 D8), after the others.
-    this.bot.loadPlugin(floorReflexPlugin);
+    // The floor's eat, armour and retreat reflexes (ADR-0010 D8), after the others. Common-FCA mode only: legacy mode keeps
+    // its own constant skills for these, and two eaters would fight.
+    if (process.env.MINEBOT_COMMON_FCA === 'on') this.bot.loadPlugin(floorReflexPlugin);
 
     this.bot.on('login', async () => {
       log.info('✅ Bot has logged in.');

@@ -91,6 +91,18 @@ describe('common FCA native body', () => {
     const abort = new AbortController(); abort.abort(); expect(await body.release(abort.signal)).toBe(false);
     finish(); await safety; expect(await body.release(new AbortController().signal)).toBe(true); await body.dispose();
   });
+  it('waits, bounded, for a safety reflex that holds the body to end instead of reporting it held', async () => {
+    const { bot, body } = fixture();
+    // A floor meal over an interrupted action: about 1.6 s in the game, shortened here.
+    const safety = executeAction(bot, 'floor-eat', 0, async () => { await new Promise(resolve => setTimeout(resolve, 400));
+      return { success: true, result: 'ate' }; }, { waitForQuiescence: false, safetyLease: true, priority: 200 });
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect(physicalActionBusy(bot)).toBe(true);
+    const started = Date.now();
+    expect(await body.release(AbortSignal.timeout(50))).toBe(true);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(300);
+    await safety; await body.dispose();
+  });
   it.each([false, true])('reports unavailable capture without physical uncertainty (already cancelled: %s)', async cancelled => {
     const original = fixture(); await original.body.dispose(); const { bot } = original;
     const capture = vi.fn(async () => { throw Error('BODY_CAPTURE_EXACT_VERSION_ASSETS_REQUIRED'); });

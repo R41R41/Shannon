@@ -3,7 +3,7 @@ import { NativeGoalEvidence, GOAL_EVIDENCE_SKILL } from './goalEvidence.js';
 import { primitiveState, primitiveCandidates, executePrimitive } from './primitives.js';
 import { captureWorldObservation } from '../../cognition/worldFrame.js';
 import { activeActionCapabilities, cancelNonSurvivalActions, createMotorPort, executeAction,
-  physicalActionBusy, withActionSignal } from '../../execution/ActionExecution.js';
+  hasActiveSafetyLease, physicalActionBusy, withActionSignal } from '../../execution/ActionExecution.js';
 import { bodySkillCatalog, type BodySkill } from './skillCatalog.js';
 import type { BodyCandidateDraft, BodyObservation, BodyValue } from './bodyControlContract.js';
 import type { MinecraftControlCommand as Command, MinecraftControlReceipt as Receipt } from './minecraftControlContract.js';
@@ -16,6 +16,8 @@ export interface NativeBodyOptions {
   disposeCapture?(): Promise<void>;
 }
 /** One native bot, one ActionExecution resource arbiter, no game planner or model. */
+/** How long a release waits for a safety reflex that holds the body to end by itself (eating takes about 1.6 s). */
+const SAFETY_RELEASE_WAIT_MS = 7000;
 export class NativeCommonFcaBody implements CommonFcaActuator {
   readonly skills;
   private readonly catalog;
@@ -129,8 +131,21 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
   }
   async release(signal: AbortSignal): Promise<boolean> {
     cancelNonSurvivalActions(this.bot, 'common_fca_release');
-    // Critical air reflex owns the same arbiter; never acknowledge stopped while it is moving.
-    while (physicalActionBusy(this.bot)) { if (signal.aborted) return false; await delay(10); }
+    // Critical air reflex owns the same arbiter; never acknowledge stopped while it is moving. A safety reflex (the floor's
+    // eat/armour/retreat, lava, breath) ends by itself within seconds: wait for it, bounded, instead of reporting the body held
+    // (2026-10-14 review: an interrupted action came back inputsReleased=false and every later command was refused).
+    // Only a caller still waiting gets the extension; one that has already given up is answered at once, as before.
+    const extend = !signal.aborted, safetyUntil = Date.now() + SAFETY_RELEASE_WAIT_MS;
+    let cleanup = signal;
+    while (physicalActionBusy(this.bot)) {
+      if (signal.aborted) {
+        if (!extend || !hasActiveSafetyLease(this.bot) || Date.now() >= safetyUntil) return false;
+        if (cleanup === signal) cleanup = AbortSignal.timeout(SAFETY_RELEASE_WAIT_MS);
+      }
+      await delay(10);
+    }
+    if (cleanup !== signal) cleanup = AbortSignal.timeout(300);
+    signal = cleanup;
     try {
       if (signal.aborted) return false;
       let removeAbort = () => {};

@@ -56,7 +56,10 @@ describe('floor reflexes (ADR-0010 D8, defence only)', () => {
     const bot = body();
     add(bot, 2, { name: 'arrow', position: new Vec3(8, 65, 0), velocity: new Vec3(-2, 0, 0) });
     expect(retreatThreat(bot)?.kind).toBe('arrow');
+    // The tick follows each arrow: it engages once the arrow is seen moving (one physics tick, 50 ms, after it appears).
     const state = retreat();
+    expect(floorRetreatTick(bot, state)).toBeNull();
+    bot.entities![2].position = new Vec3(6, 65, 0);
     expect(floorRetreatTick(bot, state)).toBe('engaged');
     expect(bot.keys.left).toBe(true);
     const shielded = body({ slots: Object.assign(new Array(46).fill(null), { 45: { name: 'shield' } }) });
@@ -77,9 +80,32 @@ describe('floor reflexes (ADR-0010 D8, defence only)', () => {
     const threatened = body({ items, food: 5, health: 15 });
     add(threatened, 2, { name: 'zombie', position: new Vec3(2, 64, 0) });
     expect(floorEatChoice(threatened)).toBeNull();
+    // Standing to eat next to an enemy killed the body (L18): not even when nearly dead.
     const dying = body({ items, food: 5, health: 5 });
     add(dying, 2, { name: 'zombie', position: new Vec3(2, 64, 0) });
-    expect(floorEatChoice(dying)?.name).toBe('cooked_beef');
+    expect(floorEatChoice(dying)).toBeNull();
+    expect(floorEatChoice(body({ items: [{ name: 'enchanted_golden_apple' }], food: 2 }))).toBeNull();
+  });
+  it('leaves the keys to the lava and breathing reflexes while either holds them', () => {
+    const bot = body(), state = retreat(), lit: unknown[] = []; lit[16] = 1;
+    add(bot, 2, { name: 'creeper', position: new Vec3(3, 64, 0), metadata: lit });
+    bot.breathingReflex = { engaged: true };
+    expect(floorRetreatTick(bot, state)).toBeNull();
+    expect(bot.keys.forward).toBeUndefined();
+    bot.breathingReflex = { engaged: false }; bot.lavaReflex = { engaged: true };
+    expect(floorRetreatTick(bot, state)).toBeNull();
+    bot.lavaReflex = { engaged: false };
+    expect(floorRetreatTick(bot, state)).toBe('engaged');
+    bot.lavaReflex = { engaged: true };
+    expect(floorRetreatTick(bot, state)).toBe('released');
+  });
+  it('ignores an arrow that has stopped moving, whatever velocity it last reported', () => {
+    const bot = body(), arrows = new Map();
+    add(bot, 2, { name: 'arrow', position: new Vec3(8, 65, 0), velocity: new Vec3(-2, 0, 0) });
+    expect(retreatThreat(bot, arrows)).toBeNull();
+    expect(retreatThreat(bot, arrows)).toBeNull();
+    bot.entities![2].position = new Vec3(6, 65, 0);
+    expect(retreatThreat(bot, arrows)?.kind).toBe('arrow');
   });
   it('wears the best armour into an empty slot and never swaps a worn piece', () => {
     const items = [{ name: 'leather_chestplate' }, { name: 'iron_chestplate' }, { name: 'diamond_helmet' }];

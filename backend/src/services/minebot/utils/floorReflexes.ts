@@ -1,6 +1,6 @@
 import { Vec3 } from 'vec3';
 import { createLogger } from '../../../utils/logger.js';
-import { currentAction, executeAction, hasActiveSafetyLease, preemptLowerPriorityActions } from '../execution/ActionExecution.js';
+import { executeAction, hasActiveSafetyLease, physicalActionBusy, preemptLowerPriorityActions } from '../execution/ActionExecution.js';
 import { FALLBACK_FOOD_POINTS } from '../constantSkills/autoEat.js';
 
 const log = createLogger('Minebot:FloorReflexes');
@@ -41,10 +41,16 @@ export interface FloorBody {
   consume?(): Promise<void>;
   on(event: 'physicsTick', listener: () => void): unknown;
   floorReflexes?: FloorState;
+  lavaReflex?: { engaged: boolean };
+  breathingReflex?: { engaged: boolean };
 }
 export interface RetreatState {
   engaged: boolean; kind?: 'creeper' | 'arrow'; from?: Vec3; origin?: Vec3; ticks: number; cooldown: number; engagements: number;
   release?: () => void;
+  /** Set when the retreat ended before its action started, so a waiting action ends at once instead of holding the body. */
+  done?: boolean;
+  /** Last seen position of each arrow: one that did not move since the last tick is stuck, whatever velocity it reported. */
+  arrows?: Map<number, Vec3>;
 }
 export interface FloorState { retreat: RetreatState; busy: 'eat' | 'armor' | null; retryAt: number; engagements: { eat: number; armor: number } }
 
@@ -66,24 +72,32 @@ function holdsShield(bot: FloorBody): boolean {
   return bot.inventory?.slots?.[45]?.name === 'shield' || bot.heldItem?.name === 'shield';
 }
 /** What to step away from now, if anything: a lit creeper close by, or an arrow flying at the body (the shield reflex takes those when one is held). */
-export function retreatThreat(bot: FloorBody): { kind: 'creeper' | 'arrow'; from: Vec3 } | null {
+export function retreatThreat(bot: FloorBody, arrows?: Map<number, Vec3>): { kind: 'creeper' | 'arrow'; from: Vec3 } | null {
   const body = bot.entity; if (!body) return null;
   const at = body.position;
   for (const entity of others(bot)) {
     if (entity.name === 'creeper' && creeperLit(entity) && entity.position.distanceTo(at) <= CREEPER_REACH) return { kind: 'creeper', from: entity.position };
   }
   if (holdsShield(bot)) return null;
+  const seen = new Map<number, Vec3>();
+  let found: { kind: 'arrow'; from: Vec3 } | null = null;
   for (const entity of others(bot)) {
     if (!['arrow', 'spectral_arrow', 'trident'].includes(String(entity.name)) || !entity.velocity) continue;
+    if (entity.id !== undefined) {
+      seen.set(entity.id, entity.position.clone());
+      const before = arrows?.get(entity.id);
+      if (arrows && (!before || before.distanceTo(entity.position) < 0.05)) continue;
+    }
     const toBody = at.offset(0, 1, 0).minus(entity.position), distance = toBody.norm(), speed = entity.velocity.norm();
     if (distance > ARROW_REACH || speed < 0.05) continue;
     // Flying at the body: its course passes within a block of the chest.
     const along = toBody.dot(entity.velocity) / speed;
     if (along <= 0) continue;
     const closest = entity.position.plus(entity.velocity.scaled(along / speed)).distanceTo(at.offset(0, 1, 0));
-    if (closest <= 1) return { kind: 'arrow', from: entity.position };
+    if (closest <= 1 && !found) found = { kind: 'arrow', from: entity.position };
   }
-  return null;
+  if (arrows) { arrows.clear(); for (const [id, at] of seen) arrows.set(id, at); }
+  return found;
 }
 function releaseKeys(bot: FloorBody) { for (const key of ['forward', 'sprint', 'left', 'right', 'jump']) bot.setControlState(key, false); }
 function steer(bot: FloorBody, state: RetreatState) {
@@ -101,34 +115,36 @@ function steer(bot: FloorBody, state: RetreatState) {
 /** One physics tick of the retreat. Keys are set every tick while engaged, after the other movers, like the lava reflex. */
 export function floorRetreatTick(bot: FloorBody, state: RetreatState): 'engaged' | 'released' | null {
   const body = bot.entity;
-  if (!body || (bot.health ?? 20) <= 0 || body.isInLava) {
+  // Lava and breath come first (400, 300): while either holds the keys, the retreat neither steers nor takes the body.
+  const yielding = bot.lavaReflex?.engaged === true || bot.breathingReflex?.engaged === true;
+  if (!body || (bot.health ?? 20) <= 0 || body.isInLava || yielding) {
     if (!state.engaged) return null;
     state.engaged = false; releaseKeys(bot); return 'released';
   }
   if (state.engaged) {
     state.ticks++;
-    const threat = retreatThreat(bot);
+    const threat = retreatThreat(bot, state.arrows ??= new Map());
     if (threat) state.from = threat.from;
     if (!threat || state.ticks >= RETREAT_TICKS || body.position.distanceTo(state.origin!) >= RETREAT_BLOCKS) {
       state.engaged = false; state.cooldown = RETREAT_COOLDOWN_TICKS; releaseKeys(bot); return 'released';
     }
     steer(bot, state); return null;
   }
+  const threat = retreatThreat(bot, state.arrows ??= new Map());
   if (state.cooldown > 0) { state.cooldown--; return null; }
-  const threat = retreatThreat(bot);
   if (!threat) return null;
-  Object.assign(state, { engaged: true, kind: threat.kind, from: threat.from, origin: body.position.clone(), ticks: 0 });
+  Object.assign(state, { engaged: true, kind: threat.kind, from: threat.from, origin: body.position.clone(), ticks: 0, done: false });
   state.engagements++;
   steer(bot, state);
   return 'engaged';
 }
 
-const NEVER_EAT = new Set(['pufferfish', 'chorus_fruit', 'suspicious_stew', 'spider_eye', 'poisonous_potato']);
-/** Food to eat now, or null: short of food, or hurt and not full; no enemy at arm's length unless nearly dead. */
+const NEVER_EAT = new Set(['pufferfish', 'chorus_fruit', 'suspicious_stew', 'spider_eye', 'poisonous_potato', 'enchanted_golden_apple']);
+/** Food to eat now, or null: short of food, or hurt and not full; never with an enemy at arm's length (standing to eat there killed the body, L18). */
 export function floorEatChoice(bot: FloorBody): Item | null {
   const health = bot.health ?? 20, food = bot.food ?? 20;
   if (!(food <= 6 || (health <= 12 && food < 18))) return null;
-  if (bot.entity?.isInLava || (hostileWithin(bot, HOSTILE_NEAR) && health > 6)) return null;
+  if (bot.entity?.isInLava || hostileWithin(bot, HOSTILE_NEAR)) return null;
   const items = (bot.inventory?.items() ?? []).filter(item => (FALLBACK_FOOD_POINTS[item.name] ?? 0) > 0 && !NEVER_EAT.has(item.name)
     && (item.name !== 'rotten_flesh' || food <= 6));
   items.sort((a, b) => (FALLBACK_FOOD_POINTS[b.name] ?? 0) - (FALLBACK_FOOD_POINTS[a.name] ?? 0));
@@ -163,17 +179,22 @@ export function installFloorReflexes(bot: FloorBody): void {
     if (outcome === 'engaged') {
       log.warn(state.retreat.kind === 'creeper' ? '💥 火の付いたクリーパー: 離れる' : '🏹 矢が向かってくる: 横へよける');
       void take('floor-retreat', FLOOR_RETREAT_PRIORITY, 3000,
-        () => new Promise(resolve => { state.retreat.release = () => resolve({ success: true, result: '下がった' }); }))
+        () => new Promise(resolve => {
+          if (state.retreat.done || !state.retreat.engaged) return resolve({ success: true, result: '下がった' });
+          state.retreat.release = () => resolve({ success: true, result: '下がった' });
+        }))
         .catch(() => undefined).finally(() => { state.retreat.release = undefined; });
       return;
     }
-    if (outcome === 'released') { state.retreat.release?.(); return; }
+    if (outcome === 'released') { state.retreat.done = true; state.retreat.release?.(); return; }
     if (state.retreat.engaged || state.busy || Date.now() < state.retryAt) return;
     let food: Item | null = null, armor: ReturnType<typeof floorArmorChoice> = null;
     try { food = floorEatChoice(bot); armor = food ? null : floorArmorChoice(bot); } catch { return; }
     if (food && bot.equip && bot.consume) {
-      // Over a model's action or a reflex session, never over another safety reflex (breath, lava).
+      // Never over another safety reflex (breath, lava). Over a model's action or a reflex session only when it cannot wait
+      // (starving or nearly dead); otherwise between actions, so the work it would cut is not cut for a meal.
       if (hasActiveSafetyLease(bot)) return;
+      if (physicalActionBusy(bot) && (bot.food ?? 20) > 3 && (bot.health ?? 20) > 6) return;
       state.busy = 'eat'; state.engagements.eat++;
       log.info(`🍖 食べる: ${food.name}（体力 ${bot.health} / 満腹度 ${bot.food}）`);
       const held = bot.heldItem;
@@ -181,14 +202,16 @@ export function installFloorReflexes(bot: FloorBody): void {
         await bot.equip!(food!, 'hand'); await bot.consume!();
         if (held && held.name !== food!.name) await bot.equip!(held, 'hand').catch(() => undefined);
         return { success: true, result: `${food!.name}を食べた` };
-      }).catch(() => { state.retryAt = Date.now() + RETRY_AFTER_MS; }).finally(() => { state.busy = null; });
-    } else if (armor && bot.equip && !hasActiveSafetyLease(bot) && (!currentAction(bot) || hostileWithin(bot, 16))) {
+      }).then(result => { if (!result?.success) state.retryAt = Date.now() + RETRY_AFTER_MS; })
+        .catch(() => { state.retryAt = Date.now() + RETRY_AFTER_MS; }).finally(() => { state.busy = null; });
+    } else if (armor && bot.equip && !hasActiveSafetyLease(bot) && (!physicalActionBusy(bot) || hostileWithin(bot, 16))) {
       state.busy = 'armor'; state.engagements.armor++;
       log.info(`🛡️ 防具を着ける: ${armor.item.name}`);
       void take('floor-armor', FLOOR_ARMOR_PRIORITY, 3000, async () => {
         await bot.equip!(armor!.item, armor!.destination);
         return { success: true, result: `${armor!.item.name}を着けた` };
-      }).catch(() => { state.retryAt = Date.now() + RETRY_AFTER_MS; }).finally(() => { state.busy = null; });
+      }).then(result => { if (!result?.success) state.retryAt = Date.now() + RETRY_AFTER_MS; })
+        .catch(() => { state.retryAt = Date.now() + RETRY_AFTER_MS; }).finally(() => { state.busy = null; });
     }
   });
 }
