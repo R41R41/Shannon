@@ -18,10 +18,11 @@ export interface NativeBodyOptions {
 /** One native bot, one ActionExecution resource arbiter, no game planner or model. */
 /**
  * How long a release waits for a safety reflex that holds the body to end by itself: a meal takes about 1.6 s, a retreat at
- * most 1 s, armour under 0.5 s. With the 300 ms cleanup after it, the whole stays inside the 5 s an API stop or release command
- * allows (minecraftReflexAdapter); a longer hold (a lava escape) still ends held, as before.
+ * most 1 s, armour under 0.5 s. With the 300 ms cleanup after it, the whole leaves room inside the 5 s an API stop or release
+ * command allows (minecraftReflexAdapter, delivery included) and the 5 s of a lifecycle logout; a longer hold (a lava escape)
+ * still ends held, as before.
  */
-const SAFETY_RELEASE_WAIT_MS = 4000;
+const SAFETY_RELEASE_WAIT_MS = 3000;
 export class NativeCommonFcaBody implements CommonFcaActuator {
   readonly skills;
   private readonly catalog;
