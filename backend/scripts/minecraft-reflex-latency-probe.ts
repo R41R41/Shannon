@@ -47,7 +47,8 @@ let armed: { scenario: string; at: number; first?: { kind: string; at: number } 
 const record = (kind: string) => { if (armed && Number.isFinite(armed.at) && !armed.first) armed.first = { kind, at: performance.now() }; };
 const wrap = (target: any, name: string, counts: (...args: any[]) => boolean = () => true) => {
   const original = target?.[name]; if (typeof original !== 'function') return;
-  target[name] = function (...args: any[]) { if (counts(...args)) record(name); return original.apply(this, args); };
+  // equip is recorded with its destination, so a hand swap is not taken for armour.
+  target[name] = function (...args: any[]) { if (counts(...args)) record(name === 'equip' ? `equip:${args[1] ?? 'hand'}` : name); return original.apply(this, args); };
 };
 wrap(actor, 'setControlState', (_key: string, value: boolean) => value === true);
 for (const name of ['look', 'lookAt', 'attack', 'equip', 'activateItem', 'consume', 'swingArm', 'dig', 'placeBlock']) wrap(actor, name);
@@ -129,8 +130,10 @@ try {
     if (only.includes('hunger')) { await stage(n++);
       await oracle.executeSetupCommand('give MinebotTrial cooked_beef 8');
       await sleep(800);
-      await measure('hunger', async () => { const seen = triggerWhen(() => (actor.food ?? 20) < 18, 15000);
-        await oracle.executeSetupCommand('effect give MinebotTrial minecraft:hunger 10 255'); return seen; }, 4000);
+      // Legacy auto-eat starts below 18; the floor (common-FCA mode) eats at 6 or less, so its trigger is that threshold.
+      const hungerAt = process.env.MINECRAFT_LATENCY_LEGACY === 'off' ? 7 : 18;
+      await measure('hunger', async () => { const seen = triggerWhen(() => (actor.food ?? 20) < hungerAt, 25000);
+        await oracle.executeSetupCommand('effect give MinebotTrial minecraft:hunger 20 255'); return seen; }, 4000);
       await oracle.executeSetupCommand('effect clear MinebotTrial'); }
     if (only.includes('armor')) { await stage(n++);
       await measure('armor', async () => { const seen = triggerWhen(() => actor.inventory.items().some(item => item.name === 'iron_chestplate'), 4000);
