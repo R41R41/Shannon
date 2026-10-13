@@ -16,8 +16,12 @@ export interface NativeBodyOptions {
   disposeCapture?(): Promise<void>;
 }
 /** One native bot, one ActionExecution resource arbiter, no game planner or model. */
-/** How long a release waits for a safety reflex that holds the body to end by itself (eating takes about 1.6 s). */
-const SAFETY_RELEASE_WAIT_MS = 7000;
+/**
+ * How long a release waits for a safety reflex that holds the body to end by itself: a meal takes about 1.6 s, a retreat at
+ * most 1 s, armour under 0.5 s. With the 300 ms cleanup after it, the whole stays inside the 5 s an API stop or release command
+ * allows (minecraftReflexAdapter); a longer hold (a lava escape) still ends held, as before.
+ */
+const SAFETY_RELEASE_WAIT_MS = 4000;
 export class NativeCommonFcaBody implements CommonFcaActuator {
   readonly skills;
   private readonly catalog;
@@ -136,16 +140,16 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
     // (2026-10-14 review: an interrupted action came back inputsReleased=false and every later command was refused).
     // Only a caller still waiting gets the extension; one that has already given up is answered at once, as before.
     const extend = !signal.aborted, safetyUntil = Date.now() + SAFETY_RELEASE_WAIT_MS;
-    let cleanup = signal;
+    let waited = false;
     while (physicalActionBusy(this.bot)) {
       if (signal.aborted) {
         if (!extend || !hasActiveSafetyLease(this.bot) || Date.now() >= safetyUntil) return false;
-        if (cleanup === signal) cleanup = AbortSignal.timeout(SAFETY_RELEASE_WAIT_MS);
+        waited = true;
       }
       await delay(10);
     }
-    if (cleanup !== signal) cleanup = AbortSignal.timeout(300);
-    signal = cleanup;
+    // The caller's time was spent waiting for the safety reflex: the cleanup that follows gets its own short bound.
+    if (waited) signal = AbortSignal.timeout(300);
     try {
       if (signal.aborted) return false;
       let removeAbort = () => {};
