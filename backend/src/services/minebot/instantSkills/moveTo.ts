@@ -2,6 +2,8 @@ import pathfinder, { type Move } from 'mineflayer-pathfinder';
 import { CustomBot, InstantSkill } from '../types.js';
 import { createLogger } from '../../../utils/logger.js';
 import { setMovements } from '../utils/setMovements.js';
+import { travelProfile } from '../utils/travelProfile.js';
+import { strandedOnHeight } from '../utils/descent.js';
 import { PROTECTED_UTILITY_BLOCKS } from '../constants.js';
 import { swimOntoBank, waterLevelUnderBody } from '../utils/exitWater.js';
 import { forcedMoves } from '../utils/motionRecorder.js';
@@ -32,6 +34,21 @@ function digRefusalSince(bot: unknown, before: { lava: number; threat: number })
 const SLOWEST_TRAVEL_SPEED = 1.5;
 /** The same for a move that starts in the water: a body swimming a route made 24m in 28s (paid run L32). */
 const SLOWEST_SWIM_SPEED = 0.7;
+
+/**
+ * On a perch (a branch, a pillar): every neighbour drops more than the four blocks a route may fall, so no move
+ * goes anywhere. Common run 7 tried eleven, and, told to "place blocks and climb", built itself two blocks
+ * higher. Says how to get down instead, or nothing when the body is not on one.
+ */
+function perchNote(bot: any): string {
+  try {
+    const perch = strandedOnHeight(bot);
+    if (!perch) return '';
+    return '高い所に取り残されています（周りはどこも4ブロックより深い落差で、経路はそこを降りません）。climb-down で降りられます（'
+      + (perch.via === 'climbable' ? 'ツタ・はしごを伝って' : perch.via === 'water' ? '水へ飛び込んで'
+        : `${perch.drop}ブロック飛び降りて約${perch.damage}のダメージ`) + '）。tower-up で積むと、さらに高くなります';
+  } catch { return ''; }
+}
 
 class MoveTo extends InstantSkill {
   constructor(bot: CustomBot) {
@@ -207,20 +224,8 @@ class MoveTo extends InstantSkill {
       // 水中にいる場合はallowFreeMotionとcanSwimを有効化
       const isInWater = (this.bot.entity as any)?.isInWater || false;
 
-      setMovements(
-        this.bot,
-        false, // allow1by1towers
-        true,  // allowSprinting
-        true,  // allowParkour
-        true,  // canOpenDoors
-        true,  // canDig
-        true,  // dontMineUnderFallingBlock
-        isInWater ? 8 : 10, // prefer existing routes; still tunnel when necessary
-        isInWater, // allowFreeMotion
-        true,  // canSwim
-        4,     // maxDropDown
-        isInWater ? 2 : 10, // liquidCost: 水中では低め、陸上では水を強く回避
-      );
+      // The same profile check-path-to plans with (utils/travelProfile).
+      setMovements(this.bot, ...travelProfile(isInWater));
 
       if (isInWater) {
         log.info('🏊 水中移動モード', 'cyan');
@@ -342,6 +347,7 @@ class MoveTo extends InstantSkill {
           try {
             const refusal = digRefusalSince(this.bot, refusalsBefore);
             if (refusal) why = `経路上の掘削を断りました: ${refusal}`;
+            else if ((why = perchNote(this.bot))) { /* on a perch: climbing higher is the wrong advice there */ }
             else {
               const items = this.bot.inventory.items();
               const noPickaxe = !items.some(item => item.name.includes('pickaxe'));
@@ -388,6 +394,8 @@ class MoveTo extends InstantSkill {
             errorDetail += '。つるはしを持っていないため、石などの硬いブロックは素手で掘ることになります（1個数秒、何も手に入りません）。硬いブロックに囲まれている場合は、dig-block-at（collect=false）で一方向を開けるか、つるはしを作ってください';
           }
         } catch { /* inventory unreadable: the plain reason stands */ }
+        const perch = perchNote(this.bot);
+        if (perch) errorDetail += `。${perch}`;
       } else if (errorMessage.includes('スタック検出')) {
         errorDetail =
           '数秒間同じ場所から動けませんでした（障害物やスタックの可能性があります）';

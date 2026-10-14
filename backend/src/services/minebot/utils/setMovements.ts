@@ -6,6 +6,7 @@ import { serverRefusalStepCost } from './serverRefusals.js';
 import { refusedDigBreakCost } from './refusedDigs.js';
 import { lavaBesideStepCost } from './lavaClearance.js';
 import { CustomBot } from '../types.js';
+import { travelProfile } from './travelProfile.js';
 import { PROTECTED_UTILITY_BLOCKS } from '../constants.js';
 const { Movements } = pathfinder;
 
@@ -91,7 +92,19 @@ function gapDrop(movements: any, node: any, dx: number, dz: number, bound: numbe
   return Infinity;
 }
 
-export function setMovements(
+export function setMovements(bot: CustomBot, ...profile: MovementProfile): void {
+  bot.pathfinder.setMovements(buildMovements(bot, ...profile));
+}
+
+type MovementProfile = Parameters<typeof buildMovements> extends [any, ...infer Rest] ? Rest : never;
+
+/** The profile move-to travels with (utils/travelProfile), built but not applied: for planning without moving. */
+export function travelMovements(bot: CustomBot): any {
+  return buildMovements(bot, ...travelProfile((bot.entity as any)?.isInWater || false));
+}
+
+/** A movement profile for the route planner, not yet applied (see setMovements). */
+export function buildMovements(
   bot: CustomBot,
   allow1by1towers = false,
   allowSprinting = true,
@@ -210,5 +223,5 @@ export function setMovements(
     });
   }
 
-  bot.pathfinder.setMovements(defaultMove);
+  return defaultMove;
 }

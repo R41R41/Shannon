@@ -46,7 +46,7 @@ const SKILL_CATEGORIES: Record<string, SkillCategory> = {
   'check-container': 'interaction', 'check-furnace': 'interaction',
   'get-background-jobs': 'query',
 
-  'move-to': 'movement', 'follow-entity': 'movement', 'flee-from': 'movement', 'leave-water': 'movement',
+  'move-to': 'movement', 'climb-down': 'movement', 'follow-entity': 'movement', 'flee-from': 'movement', 'leave-water': 'movement',
   'jump': 'movement', 'stop-movement': 'movement', 'look-at': 'movement',
   'enter-portal': 'movement',
 
