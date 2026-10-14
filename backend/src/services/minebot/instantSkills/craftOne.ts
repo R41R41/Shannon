@@ -234,10 +234,16 @@ class CraftOne extends InstantSkill {
       }
 
       if (requiresCraftingTable) {
-        craftingTable = this.bot.findBlock({
-          matching: this.mcData.blocksByName.crafting_table?.id,
-          maxDistance: tableRadius,
-        });
+        // The nearest table, measured: findBlock returns the first match of the nearest chunk *section*, which can be
+        // one 14 blocks away and behind a wall while a table just placed stands three blocks off (common run 10 then
+        // walked toward the far one twice and failed both crafts).
+        const here = this.bot.entity.position, matching = this.mcData.blocksByName.crafting_table?.id;
+        craftingTable = typeof this.bot.findBlocks === 'function'
+          ? this.bot.findBlocks({ matching, maxDistance: tableRadius, count: 16 })
+            .map(position => this.bot.blockAt(position))
+            .filter((block): block is NonNullable<typeof block> => !!block)
+            .sort((a, b) => a.position.distanceTo(here) - b.position.distanceTo(here))[0] ?? null
+          : this.bot.findBlock({ matching, maxDistance: tableRadius });
       }
 
       if (requiresCraftingTable && !craftingTable) {

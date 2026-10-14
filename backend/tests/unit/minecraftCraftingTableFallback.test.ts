@@ -32,6 +32,29 @@ describe('craft-one workbench recovery', () => {
     expect(bot.craft).toHaveBeenCalledWith(expect.any(Object), 1, table);
   });
 
+  it('crafts at the nearest table, not the first one of the nearest chunk section (common run 10)', async () => {
+    const far = { name: 'crafting_table', position: new Vec3(-7, 64, -8), boundingBox: 'block' };
+    const near = { name: 'crafting_table', position: new Vec3(-18, 56, 0), boundingBox: 'block' };
+    const feet = new Vec3(-16.5, 56, 1.5);
+    const move = vi.fn(async () => ({ success: false, result: 'no path' }));
+    const bot: any = {
+      version: '1.21.11', currentWindow: null, entity: { position: feet, height: 1.8 },
+      inventory: { items: () => [{ name: 'cobblestone', count: 8 }] },
+      findBlocks: vi.fn(() => [far.position, near.position]),
+      findBlock: vi.fn(() => far),
+      blockAt: vi.fn(blockAtTables(far, near)),
+      instantSkills: { getSkill: (name: string) => name === 'move-to' ? { run: move } : null },
+      recipesFor: vi.fn(() => [{ result: { count: 1 } }]),
+      craft: vi.fn(async () => {}),
+    };
+    const skill = new CraftOne(bot);
+    vi.spyOn(skill as any, 'refreshIncompleteTableOutput').mockResolvedValue(undefined);
+    vi.spyOn(skill as any, 'finalizeCraftOutcome').mockResolvedValue({ success: true, result: 'crafted' });
+    expect(await skill.runImpl('furnace', 1)).toMatchObject({ success: true });
+    expect(bot.craft).toHaveBeenCalledWith(expect.any(Object), 1, near);
+    expect(move).not.toHaveBeenCalled();
+  });
+
   it('opens one ordinary stone cell and ascends beside a protected furnace before crafting', async () => {
     const table = { name: 'crafting_table', position: new Vec3(-343, 64, -113), boundingBox: 'block' };
     const furnace = { name: 'furnace', position: new Vec3(-343, 62, -115), boundingBox: 'block', diggable: true };
