@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { createLogger } from '../../../../utils/logger.js';
 import { companionBaseUrl } from '../CompanionBodyClient.js';
 import type { BodyCandidateDraft, BodyObservation, BodyTaskContext } from './bodyControlContract.js';
 import { MINECRAFT_CONTROL_PATH, type MinecraftControlCommand as Command, type MinecraftControlReceipt as Receipt,
@@ -18,6 +19,11 @@ export interface CommonFcaControlOptions {
   baseUrl: string; token: string; serverId: string; actuator: CommonFcaActuator;
   fetcher?: typeof fetch; now?: () => number; connectionId?: string; pollMilliseconds?: number;
 }
+const log = createLogger('Minebot:CommonFcaControl');
+/** One poll's wait for the API; a slower reply is a failed poll, not lost contact. */
+const POLL_TIMEOUT_MS = 5000;
+/** How long the API may stay silent before running commands are stopped (an API restart takes about this long). */
+const CONTACT_LOSS_MS = 15_000;
 const identity = (c: Command) => JSON.stringify([c.lease.id, c.lease.generation, c.lease.holder, c.context.scopeKey, c.context.taskId]);
 const ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/;
 export class CommonFcaControlLoop {
@@ -37,6 +43,8 @@ export class CommonFcaControlLoop {
   private closed = false;
   private catalogSent = false;
   private readonly lifetime = new AbortController();
+  /** When a poll last got a well-formed reply; running commands survive a short loss of contact (see poll). */
+  private contactAt = (this.options.now ?? Date.now)();
   constructor(private readonly options: CommonFcaControlOptions) {
     this.baseUrl = companionBaseUrl(options.baseUrl);
     this.connectionId = options.connectionId ?? randomUUID();
@@ -60,7 +68,7 @@ export class CommonFcaControlLoop {
       const sent = [...this.receipts.values()].slice(0, 16);
       const response = await (this.options.fetcher ?? fetch)(`${this.baseUrl}${MINECRAFT_CONTROL_PATH}`, {
         method: 'POST', headers: { authorization: `Bearer ${this.options.token}`, 'content-type': 'application/json' },
-        signal: AbortSignal.any([this.lifetime.signal, AbortSignal.timeout(2000)]),
+        signal: AbortSignal.any([this.lifetime.signal, AbortSignal.timeout(POLL_TIMEOUT_MS)]),
         body: JSON.stringify({ schemaVersion: 1, serverId: this.options.serverId, connectionId: this.connectionId,
           observation: this.observation, candidates: this.options.actuator.candidates(this.observation),
           ...(!this.catalogSent ? { skills: this.options.actuator.skills } : {}),
@@ -72,13 +80,21 @@ export class CommonFcaControlLoop {
       if (reply.schemaVersion !== 1 || reply.mode !== 'common-fca' || !Array.isArray(reply.commands)
         || reply.commands.length > 8 || !Array.isArray(reply.cancel) || !Array.isArray(reply.acknowledged)) throw Error('BODY_CONTROL_REPLY');
       this.catalogSent = true;
+      this.contactAt = (this.options.now ?? Date.now)();
       for (const id of reply.acknowledged) if (sent.some(receipt => receipt.id === id)) this.receipts.delete(id);
       for (const id of reply.cancel) this.active.get(id)?.controller.abort('server_cancel');
       for (const command of reply.commands) this.accept(command);
     } catch (error) {
       // No action replay after lost contact. Command IDs remain tombstoned for this connection.
       this.catalogSent = false;
-      for (const value of this.active.values()) value.controller.abort('control_disconnected');
+      // One slow or failed poll is not lost contact: a two-second stall of the API's event loop used to cut every
+      // running move (common run 9, 2026-10-14 20:40). Running commands keep their own deadlines; they are stopped
+      // only once the API has not answered for CONTACT_LOSS_MS (an API restart, a dead network).
+      const silent = (this.options.now ?? Date.now)() - this.contactAt;
+      if (silent >= CONTACT_LOSS_MS && this.active.size) {
+        log.warn(`API と ${Math.round(silent / 1000)} 秒話せないので、実行中の命令を止める（${this.active.size}件）`);
+        for (const value of this.active.values()) value.controller.abort('control_disconnected');
+      }
       throw error;
     } finally { this.polling = false; }
   }

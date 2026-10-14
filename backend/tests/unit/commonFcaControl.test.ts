@@ -13,11 +13,12 @@ function fixture() {
     stateAt: new Date(NOW).toISOString(), receivedAt: new Date(NOW).toISOString(), state: {}, facts: {}, connected: true }),
     candidates: () => [], execute: vi.fn(async c => ({ id: c.id, connectionId: c.connectionId, outcome: 'completed', inputsReleased: true, observedAt: new Date(NOW).toISOString() })),
     release: vi.fn(async () => true) };
+  let clock = NOW;
   const loop = new CommonFcaControlLoop({ baseUrl: 'http://127.0.0.1:3000', token: 'fake-device-token', serverId: 'home', connectionId: 'connection1',
-    now: () => NOW, actuator, fetcher: vi.fn(async (_, init) => { requests.push(JSON.parse(init!.body as string));
+    now: () => clock, actuator, fetcher: vi.fn(async (_, init) => { requests.push(JSON.parse(init!.body as string));
       const response = responses.shift(); if (response instanceof Error) throw response;
       return new Response(JSON.stringify({ schemaVersion: 1, mode: 'common-fca', commands: [], cancel: [], acknowledged: [], ...response })); }) });
-  return { loop, requests, responses, actuator };
+  return { loop, requests, responses, actuator, advance: (ms: number) => { clock += ms; } };
 }
 describe('common FCA body transport', () => {
   it('closes scoped evidence only after actual cleanup and reports lifecycle release truthfully', async () => {
@@ -144,6 +145,9 @@ describe('common FCA body transport', () => {
     f.responses.push({ commands: [command('one')] }); await f.loop.poll(); await tick();
     await f.loop.poll(); expect(f.requests[1].observation.sequence).toBeGreaterThan(f.requests[0].observation.sequence);
     expect(f.requests[1].activeOperationIds).toEqual(['one']);
+    // A failed poll alone (a stalled API) does not cut the running command; fifteen seconds without contact does.
+    f.responses.push(new Error('slow')); await expect(f.loop.poll()).rejects.toThrow(); expect(signal.aborted).toBe(false);
+    f.advance(15_000);
     f.responses.push(new Error('disconnect')); await expect(f.loop.poll()).rejects.toThrow(); expect(signal.aborted).toBe(true);
     done(); await tick(); await f.loop.stop();
   });
