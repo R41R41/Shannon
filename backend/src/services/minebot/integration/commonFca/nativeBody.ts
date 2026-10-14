@@ -99,7 +99,8 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
     }
     signal.throwIfAborted();
     if (!this.connected || !this.bot.entity) throw Error('BODY_DISCONNECTED');
-    // Each skill runs for its own time (build-around-self five minutes, mine-block three), never past the command's deadline.
+    // Each skill runs for its own time (build-around-self five minutes, mine-block three), never past the command's deadline
+    // (the API sets that deadline from the catalog's maxDurationMs; until it does, its two minutes still bound every skill).
     const limit = command.kind === 'skill' ? this.skills.find(skill => skill.name === command.skill)?.maxDurationMs ?? 120_000 : 120_000;
     const milliseconds = Math.min(limit, Date.parse(command.deadlineAt) - this.now());
     if (!Number.isFinite(milliseconds) || milliseconds <= 0) throw Error('BODY_DEADLINE');

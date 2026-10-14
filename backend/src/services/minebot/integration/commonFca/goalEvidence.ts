@@ -92,7 +92,8 @@ export class NativeGoalEvidence {
       inventory: { coverage: known ? 'known' : 'unknown', counts },
       // Milestones on the way, as native observations (the Nether stood in, rods and eyes carried); not the goal's proof.
       milestones: { dimension: dimension(this.bot) || null, visited: [...this.visited], netherReached: this.visited.has('the_nether'),
-        blazeRods: counts.blaze_rod ?? 0, blazePowder: counts.blaze_powder ?? 0, enderPearls: counts.ender_pearl ?? 0, enderEyes: counts.ender_eye ?? 0 },
+        ...Object.fromEntries([['blazeRods', 'blaze_rod'], ['blazePowder', 'blaze_powder'], ['enderPearls', 'ender_pearl'], ['enderEyes', 'ender_eye']]
+          .map(([key, item]) => [key, known ? counts[item] ?? 0 : null])) },
     };
   }
   dispose(): void {

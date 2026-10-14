@@ -158,7 +158,8 @@ export function floorArmorChoice(bot: FloorBody): { item: Item; destination: str
   const slots = bot.inventory?.slots; if (!slots) return null;
   for (const [destination, suffix, slot] of ARMOR) {
     if (slots[slot]) continue;
-    const pieces = (bot.inventory?.items() ?? []).filter(item => item.name.endsWith(suffix));
+    // A shield the planner holds in the main hand is its choice: only a stowed one goes to the off-hand.
+    const pieces = (bot.inventory?.items() ?? []).filter(item => item.name.endsWith(suffix) && !(slot === 45 && item === bot.heldItem));
     pieces.sort((a, b) => MATERIAL.findIndex(m => a.name.startsWith(m)) - MATERIAL.findIndex(m => b.name.startsWith(m)));
     if (pieces[0]) return { item: pieces[0], destination };
   }

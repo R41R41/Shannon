@@ -118,5 +118,7 @@ describe('floor reflexes (ADR-0010 D8, defence only)', () => {
     expect(floorArmorChoice(body({ items: [{ name: 'shield' }], slots: full }))).toEqual({ item: { name: 'shield' }, destination: 'off-hand' });
     const holding = [...full]; holding[45] = { name: 'torch' };
     expect(floorArmorChoice(body({ items: [{ name: 'shield' }], slots: holding }))).toBeNull();
+    const shield = { name: 'shield' };
+    expect(floorArmorChoice(body({ items: [shield], slots: full, heldItem: shield as any }))).toBeNull();
   });
 });

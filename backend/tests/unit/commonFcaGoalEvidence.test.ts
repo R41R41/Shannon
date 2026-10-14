@@ -34,6 +34,8 @@ describe('task-bound native Minecraft goal evidence', () => {
     f.bot.inventory.items = () => [{ name: 'blaze_rod', count: 3 }, { name: 'ender_eye', count: 2 }];
     f.bot.game.dimension = 'minecraft:overworld'; f.bot.emit('game');
     expect(f.evidence.snapshot().milestones).toMatchObject({ dimension: 'overworld', netherReached: true, blazeRods: 3, enderEyes: 2 });
+    f.bot.inventory.items = () => { throw Error('unreadable'); };
+    expect(f.evidence.snapshot().milestones).toMatchObject({ netherReached: true, blazeRods: null });
     f.evidence.dispose();
   });
   it('keeps witnessed proof across segments of the exact original task but refuses changed task/scope/goal/criteria/body and reconnect', () => {

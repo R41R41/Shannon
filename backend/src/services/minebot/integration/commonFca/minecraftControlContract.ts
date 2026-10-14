@@ -19,7 +19,7 @@ export interface MinecraftControlCommand {
 export interface MinecraftControlReceipt {
   id: string; connectionId: string; outcome: 'completed' | 'failed' | 'cancelled' | 'unknown';
   inputsReleased: boolean; observedAt: string; result?: string;
-  /** The skill's own failure kind and whether it said trying again could help (see SKILL_RETRY in the API). */
+  /** The skill's own failure kind and whether it said trying again could help (the API turns them into retry hints). */
   failureType?: string; recoverable?: boolean;
   action?: BodyActionReceipt; stop?: BodyStopAcknowledgement;
   /** Ephemeral pixels only: the companion stores an expiring reference, never this field in SQLite. */
