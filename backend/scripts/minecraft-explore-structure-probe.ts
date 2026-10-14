@@ -28,8 +28,8 @@ try {
   await sleep(2000);
   const y = Math.floor(actor.entity.position.y);
   await oracle.executeSetupCommand(`forceload add ${distance - 2} -2 ${distance + 2} 2`);
-  await oracle.executeSetupCommand(`fill ${distance} ${y} 0 ${distance} ${y + 2} 0 nether_bricks`);
-  await oracle.executeSetupCommand(`forceload remove ${distance - 2} -2 ${distance + 2} 2`);
+  try { await oracle.executeSetupCommand(`fill ${distance} ${y} 0 ${distance} ${y + 2} 0 nether_bricks`); }
+  finally { await oracle.executeSetupCommand(`forceload remove ${distance - 2} -2 ${distance + 2} 2`); }
   await sleep(1000);
   const before: any = await actor.instantSkills.getSkill('find-structure')!.run('fortress');
   report.findBefore = String(before?.result).slice(0, 120);

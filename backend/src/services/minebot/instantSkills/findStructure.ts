@@ -7,10 +7,12 @@ import { CustomBot, InstantSkill } from '../types.js';
  * 原子的スキル: 特定の構造物を探す
  */
 /** Blocks that only a structure of the kind places, read from the loaded chunks (village: see detectVillage). */
+// Plain blackstone lies about the Nether and stone bricks stand in villages and ruins: only blocks the structure alone
+// places count, so an explore does not stop (and remember a place) on a false sign.
 export const STRUCTURE_MARKERS: Record<string, { blocks: string[]; distance: number }> = {
   fortress: { blocks: ['nether_bricks', 'nether_brick_fence'], distance: 256 },
-  bastion: { blocks: ['blackstone', 'polished_blackstone_bricks'], distance: 256 },
-  stronghold: { blocks: ['stone_bricks', 'mossy_stone_bricks'], distance: 64 },
+  bastion: { blocks: ['polished_blackstone_bricks', 'gilded_blackstone'], distance: 256 },
+  stronghold: { blocks: ['end_portal_frame', 'infested_stone_bricks', 'infested_mossy_stone_bricks', 'infested_cracked_stone_bricks'], distance: 64 },
 };
 
 /** The nearest marker of the structure in the loaded chunks, or null. */

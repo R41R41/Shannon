@@ -16,8 +16,8 @@ describe('exploring for a structure', () => {
   it('goes in legs of 48 blocks', () => {
     expect(exploreLegs(exploreHeading('north', 0)!, 120)).toEqual([48, 48, 24]);
   });
-  it('keeps places per server and world (the spawn point stands for the world)', () => {
-    expect(placesFile('shannon-home', { x: 12.7, y: 64, z: -3.2 })).toBe('shannon-home-spawn_12_64_-4.json');
-    expect(placesFile('../etc', { x: 0, y: 0, z: 0 })).toBe('___etc-spawn_0_0_0.json');
+  it('keeps places per named server and world', () => {
+    expect(placesFile('shannon-home', 'home-2026-10-14b')).toBe('shannon-home--home-2026-10-14b.json');
+    expect(placesFile('../etc', 'a/b')).toBe('___etc--a_b.json');
   });
 });
