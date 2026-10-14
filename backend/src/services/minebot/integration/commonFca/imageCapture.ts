@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { Worker } from 'node:worker_threads';
 import path from 'node:path';
@@ -11,14 +12,21 @@ export function createBodyImageCapture(bot: any, options: { rendererDirectory?: 
   let session: Promise<RenderSession> | undefined;
   let busy = false;
   let closed = false;
+  // A renderer that cannot be resolved, or whose session failed to start, will not give a picture on this connection.
+  let configured = options.create ? true : rendererResolvable(options.rendererDirectory);
   return {
+    get configured() { return configured && !closed; },
     async capture(signal: AbortSignal) {
       signal.throwIfAborted();
-      if (closed || busy) throw Error('BODY_CAPTURE_UNAVAILABLE');
+      if (closed || busy || !configured) throw Error('BODY_CAPTURE_UNAVAILABLE');
       busy = true;
       try {
         session ??= (options.create ?? (bot => createPrismarineSession(bot, options.rendererDirectory)))(bot);
-        const renderer = await session; signal.throwIfAborted();
+        const renderer = await session.catch(error => {
+          if (!/BODY_CAPTURE_NOT_SPAWNED/.test(String(error?.message))) configured = false; else session = undefined;
+          throw error;
+        });
+        signal.throwIfAborted();
         const result = await renderer.capture(signal); signal.throwIfAborted();
         if (!/^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(result.dataUrl) || result.dataUrl.length > 700_000
           || !Number.isFinite(Date.parse(result.capturedAt))) throw Error('BODY_CAPTURE_INVALID');
@@ -27,6 +35,22 @@ export function createBodyImageCapture(bot: any, options: { rendererDirectory?: 
     },
     async dispose() { closed = true; if (session) { try { await (await session).dispose(); } catch { /* initialization failed */ } } },
   };
+}
+
+/**
+ * Whether the renderer resolves from here with its native WebGL and canvas bindings built, without loading them.
+ * A release whose dependencies were installed without those builds has the JavaScript but can never draw.
+ */
+export function rendererResolvable(rendererDirectory?: string): boolean {
+  try {
+    const require = createRequire(import.meta.url);
+    const root = rendererDirectory ? path.resolve(rendererDirectory) : path.dirname(require.resolve('prismarine-viewer/package.json'));
+    const rendererRequire = createRequire(path.join(root, 'package.json'));
+    for (const name of ['./viewer/lib/version.js', './viewer/index.js', 'three', 'node-canvas-webgl/lib']) rendererRequire.resolve(name);
+    const canvasRequire = createRequire(rendererRequire.resolve('node-canvas-webgl/package.json'));
+    return [['gl', 'webgl.node'], ['canvas', 'canvas.node']].every(([name, binding]) =>
+      existsSync(path.join(path.dirname(canvasRequire.resolve(`${name}/package.json`)), 'build', 'Release', binding)));
+  } catch { return false; }
 }
 
 async function createPrismarineSession(bot: any, rendererDirectory?: string): Promise<RenderSession> {

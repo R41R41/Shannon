@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { bodySkillCatalog, normalizeSkillSchema } from '../../src/services/minebot/integration/commonFca/skillCatalog.js';
 import { executeAction, cancelActiveActions, physicalActionBusy } from '../../src/services/minebot/execution/ActionExecution.js';
 import { NativeCommonFcaBody } from '../../src/services/minebot/integration/commonFca/nativeBody.js';
-import { createBodyImageCapture } from '../../src/services/minebot/integration/commonFca/imageCapture.js';
+import { createBodyImageCapture, rendererResolvable } from '../../src/services/minebot/integration/commonFca/imageCapture.js';
 const context = { scopeKey: 'owner', taskId: 'task1', taskRevision: 1, bodyId: 'minecraft:home', sessionId: 'session1', generation: 1, goal: 'test', completionCondition: 'done' };
 const command = (fields = {}): any => ({ schemaVersion: 1, id: 'one', serverId: 'home', connectionId: 'connection1', kind: 'skill', context,
   lease: { id: 'lease1', generation: 1, holder: 'task1' }, deadlineAt: new Date(Date.now() + 2000).toISOString(), skill: 'get-health', arguments: {}, ...fields });
@@ -130,6 +130,34 @@ describe('common FCA native body', () => {
     expect(body.observe().facts.imageAvailable).toBe(true);
     expect((await body.execute(command({ kind: 'capture' }), new AbortController().signal)).outcome).toBe('failed');
     expect(body.observe().facts.imageAvailable).toBe(false); await body.dispose();
+  });
+  it('reports whether a renderer is configured, and leaves the fact unknown when the body cannot tell', async () => {
+    const original = fixture(); await original.body.dispose();
+    const capture = vi.fn(); let configured = true;
+    const body = new NativeCommonFcaBody(original.bot, { serverId: 'home', capture, rendererConfigured: () => configured });
+    expect(body.observe().facts.rendererConfigured).toBe(true);
+    configured = false; expect(body.observe().facts.rendererConfigured).toBe(false); await body.dispose();
+    const unknown = new NativeCommonFcaBody(original.bot, { serverId: 'home', capture });
+    expect(unknown.observe().facts.rendererConfigured).toBeNull(); await unknown.dispose();
+  });
+  it('stops claiming a renderer when its session fails to start, but retries a session that only waited for spawn', async () => {
+    const bot = {};
+    const notSpawned = vi.fn().mockRejectedValueOnce(Error('BODY_CAPTURE_NOT_SPAWNED'))
+      .mockResolvedValueOnce({ capture: async () => ({ dataUrl: 'data:image/jpeg;base64,YQ==', capturedAt: new Date().toISOString() }), dispose: async () => {} });
+    const waiting = createBodyImageCapture(bot, { create: notSpawned });
+    await expect(waiting.capture(new AbortController().signal)).rejects.toThrow('NOT_SPAWNED');
+    expect(waiting.configured).toBe(true);
+    await expect(waiting.capture(new AbortController().signal)).resolves.toMatchObject({ dataUrl: expect.any(String) });
+    await waiting.dispose(); expect(waiting.configured).toBe(false);
+    const broken = vi.fn(async () => { throw Error('BODY_CAPTURE_EXACT_VERSION_ASSETS_REQUIRED'); });
+    const images = createBodyImageCapture(bot, { create: broken });
+    await expect(images.capture(new AbortController().signal)).rejects.toThrow('EXACT_VERSION');
+    expect(images.configured).toBe(false);
+    await expect(images.capture(new AbortController().signal)).rejects.toThrow('UNAVAILABLE'); expect(broken).toHaveBeenCalledTimes(1);
+  });
+  it('does not claim a renderer whose packages do not resolve', () => {
+    expect(rendererResolvable('/nonexistent/renderer')).toBe(false);
+    expect(createBodyImageCapture({}, { rendererDirectory: '/nonexistent/renderer' }).configured).toBe(false);
   });
   it('rechecks safety ownership after awaited plugin cleanup before clearing controls', async () => {
     const { bot, body } = fixture(); let finish!: () => void; let safety!: Promise<unknown>;

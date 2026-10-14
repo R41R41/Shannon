@@ -14,6 +14,8 @@ export interface NativeBodyOptions {
   serverId: string; now?: () => number;
   capture(signal: AbortSignal): Promise<{ dataUrl: string; capturedAt: string }>;
   disposeCapture?(): Promise<void>;
+  /** False when no first-person picture can come from this connection, so the API does not offer visual control. */
+  rendererConfigured?(): boolean;
 }
 /** One native bot, one ActionExecution resource arbiter, no game planner or model. */
 /**
@@ -60,6 +62,7 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
       equipped: this.bot.heldItem?.name ?? null, window: this.bot.currentWindow?.type ?? null,
       danger: (this.bot.health ?? 20) <= 8 || (this.bot.oxygenLevel ?? 20) <= 6 || (world.nearbyThreats ?? []).some(t => t.distance <= 5 && t.canReachMe !== false),
       stuck: !!moving && now - this.movedAt > 1500, visualRequired: false, imageAvailable: this.imageAvailable,
+      rendererConfigured: this.options.rendererConfigured?.() ?? null,
     };
     const primitives = primitiveState(this.bot); Object.assign(facts, primitives.facts);
     return { schemaVersion: 1, bodyId: `minecraft:${this.options.serverId}`, sequence: ++this.sequence,
