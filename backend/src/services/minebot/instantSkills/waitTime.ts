@@ -11,7 +11,10 @@ class WaitTime extends InstantSkill {
     this.description = '指定されたミリ秒数待機します（1回は最長110秒。それより長く待つ時は、状況を見てから呼び直します）。'
       // Right after start-smelting the planner waited the batch out here, 30 to 110 seconds at a time, the body
       // standing still (paid runs L101, L102, once withdraw-from-furnace had stopped doing the waiting for it).
-      + '待つ間は身体が止まり、何も進みません。かまどの精錬の完成を待つためには使わず、その間に採掘など次の作業を進めて、終わった頃に取り出します。';
+      + '待つ間は身体が止まり、何も進みません。かまどの精錬の完成を待つためには使わず、その間に採掘など次の作業を進めて、終わった頃に取り出します。'
+      // Common run 9 sheltered for the night and then waited here eight times, six and a half minutes, while the iron
+      // pickaxe it needed next was a few blocks of digging away; L101-L103 lost their nights the same way.
+      + '夜明けを待つためにも使いません。夜は避難した縦穴から横・下へ掘り進め、鉱石を探す・精錬する・作業台で作るなど、地下でできる用事を進めます。';
     this.params = [
       {
         name: 'milliseconds',
