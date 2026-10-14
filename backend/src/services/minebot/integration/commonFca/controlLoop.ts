@@ -114,7 +114,7 @@ export class CommonFcaControlLoop {
       // A command refused for its own shape (stale connection, a deadline out of reach) never took the body: say so, so the
       // API can treat it as a known failure. One refused because the body is held or another owner has it says not released.
       this.receipts.set(command.id, { id: command.id, connectionId: this.connectionId, outcome: 'failed',
-        inputsReleased: !valid && !this.held && this.active.size === 0, observedAt: new Date(now).toISOString(), result: 'BODY_COMMAND_REFUSED' });
+        inputsReleased: !cleanup && !valid && !this.held && this.active.size === 0, observedAt: new Date(now).toISOString(), result: 'BODY_COMMAND_REFUSED' });
       return;
     }
     if (!cleanup) { this.owner = key; this.leaseGenerations.set(command.lease.id, command.lease.generation); }

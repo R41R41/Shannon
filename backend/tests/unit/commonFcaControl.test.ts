@@ -49,6 +49,10 @@ describe('common FCA body transport', () => {
     f.responses.push({}); await f.loop.poll();
     const refused = f.requests.at(-1).receipts.find((r: any) => r.id === 'too-far');
     expect(refused).toMatchObject({ outcome: 'failed', result: 'BODY_COMMAND_REFUSED', inputsReleased: true });
+    // A malformed stop never reads as a release that did not run.
+    f.responses.push({ commands: [command('bad-stop', { kind: 'stop', connectionId: 'old' })] }); await f.loop.poll(); await tick();
+    f.responses.push({}); await f.loop.poll();
+    expect(f.requests.at(-1).receipts.find((r: any) => r.id === 'bad-stop')).toMatchObject({ result: 'BODY_COMMAND_REFUSED', inputsReleased: false });
     expect(f.actuator.execute).toHaveBeenCalledTimes(1); await f.loop.stop();
   });
   it('rejects wrong connection, expired actions, concurrent dispatch and other owners', async () => {
