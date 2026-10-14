@@ -84,7 +84,10 @@ export class BotEventHandler {
      */
     private registerEntityHurt(): void {
         this.bot.on('entityHurt', async (entity) => {
-            if (entity === this.bot.entity) {
+            // Not in the common FCA mode: the API reads health from observations, and a chat line per hit came
+            // in bursts under attack until the server refused one (Chat message validation failure) and kicked the
+            // body, which rejoined among the zombies and died again (common run 11, 2026-10-15).
+            if (entity === this.bot.entity && process.env.MINEBOT_COMMON_FCA !== 'on') {
                 this.bot.chat(`ダメージを受けました: ${this.bot.health.toFixed(1)}/20`);
             }
         });
