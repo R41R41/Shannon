@@ -6,7 +6,9 @@
  */
 import { createRequire } from 'node:module';
 import { EventEmitter } from 'node:events';
+import { realpathSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
 
 export type RenderRequest =
@@ -67,7 +69,11 @@ function start(root: string) {
   };
   process.on('disconnect', () => { void close(); });
   process.on('message', (request: RenderRequest) => {
-    if (request.type === 'event') { if (session && RENDER_EVENTS.has(request.name)) events.emit(request.name, request.data); return; }
+    if (request.type === 'event') {
+      // One malformed chunk or entity must not take the renderer down.
+      try { if (session && RENDER_EVENTS.has(request.name)) events.emit(request.name, request.data); } catch { /* skipped */ }
+      return;
+    }
     if (request.type === 'init') {
       try { init(request); reply({ type: 'ready', id: request.id }); } catch (error) { reply({ type: 'failed', id: request.id, error: message(error) }); }
       return;
@@ -76,4 +82,5 @@ function start(root: string) {
   });
 }
 
-if (process.send && process.argv[2]) start(path.resolve(process.argv[2]));
+// Only as the entry point: imageCapture.ts imports this module for its event list.
+if (process.send && process.argv[2] && process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) start(path.resolve(process.argv[2]));

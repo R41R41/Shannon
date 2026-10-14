@@ -177,7 +177,7 @@ describe('common FCA native body', () => {
     };
     const pkg = (dir: string, name: string, main = 'index.js') => { file(`${dir}/package.json`, JSON.stringify({ name, main })); file(`${dir}/${main}`); };
     // The renderer process runs under `nice xvfb-run`; stand-ins on PATH keep this independent of the test machine.
-    const pathBefore = process.env.PATH; file('bin/xvfb-run'); file('bin/nice'); process.env.PATH = path.join(root, 'bin');
+    const pathBefore = process.env.PATH; file('bin/xvfb-run'); file('bin/xauth'); file('bin/nice'); process.env.PATH = path.join(root, 'bin');
     try {
       pkg('.', 'prismarine-viewer'); file('viewer/lib/version.js'); file('viewer/index.js');
       pkg('node_modules/three', 'three'); pkg('node_modules/node-canvas-webgl', 'node-canvas-webgl', 'lib/index.js');
@@ -228,9 +228,11 @@ describe('common FCA native body', () => {
       child.emit('message', { type: 'failed', id: sent.at(-1).id, error: 'BODY_CAPTURE_GEOMETRY_PENDING' });
       await expect(failed).rejects.toThrow('GEOMETRY_PENDING');
       const lost = session.capture(new AbortController().signal); await new Promise(resolve => setImmediate(resolve));
-      child.emit('exit', 1); await expect(lost).rejects.toThrow('RENDERER_EXITED');
+      child.emit('exit', 1, null); await expect(lost).rejects.toThrow('RENDERER_EXITED code=1');
+      // A dead renderer is not fed: the body stops reading chunks for it at once.
+      expect(session.alive!()).toBe(false); expect(bot.listenerCount('move')).toBe(0);
       await expect(session.capture(new AbortController().signal)).rejects.toThrow();
-      await session.dispose(); expect(child.disconnect).toHaveBeenCalled(); expect(bot.listenerCount('move')).toBe(0);
+      await session.dispose(); expect(child.disconnect).toHaveBeenCalled();
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
   it('kills a renderer process that does not start, and refuses versions it has no exact assets for', async () => {
@@ -250,7 +252,30 @@ describe('common FCA native body', () => {
       vi.advanceTimersByTime(5000); expect(child.kill).toHaveBeenCalledWith('SIGKILL'); vi.useRealTimers();
       await expect(createRenderProcessSession({ ...bot, version: '1.21.10' }, root, launch)).rejects.toThrow('EXACT_VERSION');
       expect(launch).toHaveBeenCalledTimes(1);
-    } finally { rmSync(root, { recursive: true, force: true }); }
+    } finally { vi.useRealTimers(); rmSync(root, { recursive: true, force: true }); }
+  });
+  it('tears down a renderer that stops answering, and stops claiming it can draw', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'renderer-ipc-'));
+    writeFileSync(path.join(root, 'package.json'), '{"name":"prismarine-viewer"}');
+    mkdirSync(path.join(root, 'viewer/lib'), { recursive: true });
+    writeFileSync(path.join(root, 'viewer/lib/version.js'), "module.exports = { supportedVersions: ['1.21.11'] };");
+    writeFileSync(path.join(root, 'viewer/lib/worldView.js'), `class WorldView { constructor(w, d, p, emitter) {} listenToBot() {} removeListenersFromBot() {}
+      removeAllListeners() {} async init() {} async updatePosition() {} } module.exports = { WorldView };`);
+    const child = Object.assign(new EventEmitter(), { connected: true, disconnect: vi.fn(), kill: vi.fn(() => true),
+      send: vi.fn((m: any) => { if (m.type === 'init') setImmediate(() => child.emit('message', { type: 'ready', id: m.id })); return true; }) });
+    const bot = Object.assign(new EventEmitter(), { version: '1.21.11', world: {}, entity: { position: new Vec3(0, 64, 0), yaw: 0, pitch: 0 } });
+    try {
+      const images = createBodyImageCapture(bot, { create: b => createRenderProcessSession(b, root, () => child as any) });
+      images.prepare(); for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve));
+      vi.useFakeTimers({ toFake: ['setTimeout'] });
+      const first = expect(images.capture(new AbortController().signal)).rejects.toThrow('RENDERER_TIMEOUT');
+      await vi.advanceTimersByTimeAsync(5000); await first;
+      expect(child.kill).not.toHaveBeenCalled(); expect(images.configured).toBe(true);
+      const second = expect(images.capture(new AbortController().signal)).rejects.toThrow('RENDERER_TIMEOUT');
+      await vi.advanceTimersByTimeAsync(5000); await second;
+      expect(child.kill).toHaveBeenCalledWith('SIGKILL'); expect(images.configured).toBe(false); expect(bot.listenerCount('move')).toBe(0);
+      await expect(images.capture(new AbortController().signal)).rejects.toThrow('UNAVAILABLE');
+    } finally { vi.useRealTimers(); rmSync(root, { recursive: true, force: true }); }
   });
   it('rechecks safety ownership after awaited plugin cleanup before clearing controls', async () => {
     const { bot, body } = fixture(); let finish!: () => void; let safety!: Promise<unknown>;

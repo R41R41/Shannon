@@ -4,15 +4,18 @@ import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import type { RenderReply, RenderRequest } from './renderProcess.js';
+import { RENDER_EVENTS, type RenderReply, type RenderRequest } from './renderProcess.js';
 
 interface RenderSession {
   capture(signal: AbortSignal): Promise<{ dataUrl: string; capturedAt: string }>;
   dispose(): Promise<void>;
+  /** False once the renderer has exited or been torn down; it is not restarted on the same connection. */
+  alive?(): boolean;
 }
 /** The renderer process's IPC end, as `child_process.spawn` with an `ipc` stdio returns it. */
 export type RenderChild = Pick<ChildProcess, 'send' | 'disconnect' | 'kill' | 'on' | 'once' | 'connected'>;
-const WIDTH = 512, HEIGHT = 288, INIT_MS = 30_000, GEOMETRY_WAIT_MS = 2000, REPLY_MARGIN_MS = 1500;
+// The margin covers render + encode under nice on two busy cores (up to 1.55 s measured in-process) and the IPC reply.
+const WIDTH = 512, HEIGHT = 288, INIT_MS = 30_000, GEOMETRY_WAIT_MS = 2000, REPLY_MARGIN_MS = 3000, HUNG_AFTER_TIMEOUTS = 2;
 /** Same connected bot and world. No bot login, HTTP listener, remote screenshot, model, or file journal. */
 export function createBodyImageCapture(bot: any, options: { rendererDirectory?: string; create?: (bot: any) => Promise<RenderSession> } = {}) {
   let session: Promise<RenderSession> | undefined;
@@ -20,26 +23,34 @@ export function createBodyImageCapture(bot: any, options: { rendererDirectory?: 
   let closed = false;
   // A renderer that cannot be resolved, or whose session failed to start, will not give a picture on this connection.
   let configured = options.create ? true : rendererResolvable(options.rendererDirectory);
+  let current: RenderSession | undefined;
   const open = () => {
     if (session) return session;
     const opening = (options.create ?? (bot => createRenderProcessSession(bot, options.rendererDirectory)))(bot);
     session = opening;
+    opening.then(value => { if (session === opening) current = value; }, () => undefined);
     opening.catch(error => {
       if (session !== opening) return;
       if (/BODY_CAPTURE_NOT_SPAWNED/.test(String(error?.message))) session = undefined; else configured = false;
     });
     return opening;
   };
+  const usable = () => configured && !closed && current?.alive?.() !== false;
   return {
-    get configured() { return configured && !closed; },
+    get configured() { return usable(); },
     /** Starts the renderer ahead of the first capture: it takes seconds, and a capture that misses holds vision back. */
     prepare() { if (!closed && configured) void open().catch(() => undefined); },
     async capture(signal: AbortSignal) {
       signal.throwIfAborted();
-      if (closed || busy || !configured) throw Error('BODY_CAPTURE_UNAVAILABLE');
+      if (busy || !usable()) throw Error('BODY_CAPTURE_UNAVAILABLE');
       busy = true;
       try {
-        const renderer = await open();
+        // A renderer still starting must not hold a capture past its own deadline.
+        const renderer = await new Promise<RenderSession>((resolve, reject) => {
+          const aborted = () => reject(signal.reason ?? Error('aborted'));
+          signal.addEventListener('abort', aborted, { once: true });
+          open().then(resolve, reject).finally(() => signal.removeEventListener('abort', aborted));
+        });
         signal.throwIfAborted();
         const result = await renderer.capture(signal); signal.throwIfAborted();
         if (!/^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(result.dataUrl) || result.dataUrl.length > 700_000
@@ -58,7 +69,7 @@ export function createBodyImageCapture(bot: any, options: { rendererDirectory?: 
  */
 export function rendererResolvable(rendererDirectory?: string): boolean {
   try {
-    if (!['xvfb-run', 'nice'].every(onPath)) return false;
+    if (!['xvfb-run', 'xauth', 'nice'].every(onPath)) return false;
     const require = createRequire(import.meta.url);
     const root = rendererDirectory ? path.resolve(rendererDirectory) : path.dirname(require.resolve('prismarine-viewer/package.json'));
     const rendererRequire = createRequire(path.join(root, 'package.json'));
@@ -105,28 +116,33 @@ export async function createRenderProcessSession(bot: any, rendererDirectory?: s
   const { WorldView } = rendererRequire('./viewer/lib/worldView.js');
   const child = launch(root);
   const pending = new Map<number, { resolve(reply: RenderReply): void; reject(error: Error): void }>();
-  let nextId = 0, ended: Error | null = null;
+  let nextId = 0, ended: Error | null = null, timeouts = 0, detach = () => {};
+  // Once the renderer is gone the body stops serializing chunks for it: the WorldView and move listener come off.
   const end = (error: Error) => {
     ended ??= error;
     for (const waiter of pending.values()) waiter.reject(ended);
-    pending.clear();
+    pending.clear(); detach();
   };
   child.on('message', (reply: RenderReply) => {
     const waiter = pending.get(reply.id); if (!waiter) return;
     pending.delete(reply.id);
     if (reply.type === 'failed') waiter.reject(Error(reply.error)); else waiter.resolve(reply);
   });
-  child.on('exit', () => end(Error('BODY_CAPTURE_RENDERER_EXITED')));
+  child.on('exit', (code: number | null, signal: string | null) => end(Error(`BODY_CAPTURE_RENDERER_EXITED code=${code} signal=${signal}`)));
   child.on('error', () => end(Error('BODY_CAPTURE_RENDERER_UNAVAILABLE')));
   const post = (request: RenderRequest) => { if (!ended && child.connected) child.send(request); };
   const request = (make: (id: number) => RenderRequest, milliseconds: number, signal?: AbortSignal) => new Promise<RenderReply>((resolve, reject) => {
     if (ended) return reject(ended);
     const id = ++nextId;
     const finish = () => { clearTimeout(timer); signal?.removeEventListener('abort', aborted); pending.delete(id); };
-    const timer = setTimeout(() => { finish(); reject(Error('BODY_CAPTURE_RENDERER_TIMEOUT')); }, milliseconds);
+    const timer = setTimeout(() => {
+      finish(); reject(Error('BODY_CAPTURE_RENDERER_TIMEOUT'));
+      // A renderer that misses replies in a row is hung (a stuck GL call): tear it down rather than queue more work behind it.
+      if (++timeouts >= HUNG_AFTER_TIMEOUTS) { end(Error('BODY_CAPTURE_RENDERER_HUNG')); close(); child.kill('SIGKILL'); }
+    }, milliseconds);
     const aborted = () => { finish(); reject(signal!.reason ?? Error('aborted')); };
     signal?.addEventListener('abort', aborted, { once: true });
-    pending.set(id, { resolve: reply => { finish(); resolve(reply); }, reject: error => { finish(); reject(error); } });
+    pending.set(id, { resolve: reply => { finish(); timeouts = 0; resolve(reply); }, reject: error => { finish(); reject(error); } });
     post(make(id));
   });
   let exited = false;
@@ -143,7 +159,7 @@ export async function createRenderProcessSession(bot: any, rendererDirectory?: s
   const forward = new EventEmitter();
   const emit = forward.emit.bind(forward);
   forward.emit = (name: string | symbol, ...args: unknown[]) => {
-    if (typeof name === 'string' && ['entity', 'loadChunk', 'unloadChunk', 'blockUpdate'].includes(name)) post({ type: 'event', name, data: args[0] });
+    if (typeof name === 'string' && RENDER_EVENTS.has(name)) post({ type: 'event', name, data: args[0] });
     return emit(name, ...args);
   };
   const world = new WorldView(bot.world, 3, bot.entity.position, forward);
@@ -152,6 +168,8 @@ export async function createRenderProcessSession(bot: any, rendererDirectory?: s
   const update = () => { void world.updatePosition(bot.entity.position); };
   bot.on('move', update);
   let closed = false;
+  detach = () => { bot.removeListener('move', update); world.removeListenersFromBot(bot); world.removeAllListeners(); detach = () => {}; };
+  if (ended) detach();
   return {
     async capture(signal) {
       signal.throwIfAborted();
@@ -163,9 +181,9 @@ export async function createRenderProcessSession(bot: any, rendererDirectory?: s
       if (reply.type !== 'captured') throw Error('BODY_CAPTURE_INVALID');
       return { dataUrl: reply.dataUrl, capturedAt: reply.capturedAt };
     },
+    alive: () => !ended,
     async dispose() {
       if (closed) return; closed = true;
-      bot.removeListener('move', update); world.removeListenersFromBot(bot); world.removeAllListeners();
       end(Error('BODY_CAPTURE_DISCONNECTED')); close();
     },
   };
