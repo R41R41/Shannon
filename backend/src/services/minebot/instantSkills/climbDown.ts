@@ -48,9 +48,13 @@ class ClimbDown extends InstantSkill {
       try {
         await this.bot.lookAt(middle.offset(0, 1.6, 0), true);
         this.bot.setControlState('forward', true);
-        const centreDeadline = Date.now() + 1500;
-        while (Date.now() < centreDeadline && !this.shouldInterrupt()
-          && Math.hypot(this.bot.entity.position.x - middle.x, this.bot.entity.position.z - middle.z) > 0.12) await actionDelay(this.bot, 50);
+        const centreDeadline = Date.now() + 1500, away = () => Math.hypot(this.bot.entity.position.x - middle.x, this.bot.entity.position.z - middle.z);
+        // Stop at the middle, or as soon as a step carries the body past it.
+        let last = away();
+        while (Date.now() < centreDeadline && !this.shouldInterrupt() && last > 0.12) {
+          await actionDelay(this.bot, 50);
+          const now = away(); if (now > last) break; last = now;
+        }
       } finally { this.bot.clearControlStates(); }
       await actionDelay(this.bot, 150);
     }

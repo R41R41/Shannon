@@ -41,15 +41,20 @@ const openWater = (block: DescentBlock) => block.boundingBox === 'empty' && hold
 const harmfulBeside = (bot: DescentBot, x: number, y: number, z: number) =>
   CARDINALS.some(({ dx, dz }) => { const block = bot.blockAt(new Vec3(x + dx, y, z + dz)); return !!block && HARMFUL.has(block.name); });
 
+/** The cell the feet are in. On footing lower than a block (a path, farmland, soul sand) the floored cell is that block. */
+function feetCell(bot: DescentBot): Vec3 {
+  const feet = bot.entity!.position.floored();
+  if (bot.blockAt(feet)?.boundingBox === 'block') feet.y += 1;
+  return feet;
+}
+
 /**
  * Every way off the body's cell, best first: least damage, then not onto leaves, then the shortest drop. A
  * neighbour level with the body (drop 0) is a walk and is included, so a caller can tell a ledge from a perch.
  */
 export function planDescent(bot: DescentBot): DescentOption[] {
   if (!bot.entity) return [];
-  const feet = bot.entity.position.floored();
-  // On footing lower than a block (a path, farmland, soul sand) the floored cell is that block: the feet are above it.
-  if (bot.blockAt(feet)?.boundingBox === 'block') feet.y += 1;
+  const feet = feetCell(bot);
   const options: DescentOption[] = [];
   for (const { dx, dz } of CARDINALS) {
     const x = feet.x + dx, z = feet.z + dz;
@@ -90,7 +95,8 @@ export function descentAllowance(health: number, requested?: number): number {
 export function strandedOnHeight(bot: DescentBot): DescentOption | null {
   const options = planDescent(bot);
   // The planner neither climbs down vines nor drops more than four into water: it sees each way's whole height.
-  const plannerDrop = (option: DescentOption) => bot.entity!.position.floored().y - (option.landingY + 1);
+  const feetY = feetCell(bot).y;
+  const plannerDrop = (option: DescentOption) => feetY - (option.landingY + 1);
   if (!options.length || options.some(option => plannerDrop(option) <= 4)) return null;
   return options[0];
 }
