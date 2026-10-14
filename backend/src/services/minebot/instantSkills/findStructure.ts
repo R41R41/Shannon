@@ -6,6 +6,21 @@ import { CustomBot, InstantSkill } from '../types.js';
 /**
  * 原子的スキル: 特定の構造物を探す
  */
+/** Blocks that only a structure of the kind places, read from the loaded chunks (village: see detectVillage). */
+export const STRUCTURE_MARKERS: Record<string, { blocks: string[]; distance: number }> = {
+  fortress: { blocks: ['nether_bricks', 'nether_brick_fence'], distance: 256 },
+  bastion: { blocks: ['blackstone', 'polished_blackstone_bricks'], distance: 256 },
+  stronghold: { blocks: ['stone_bricks', 'mossy_stone_bricks'], distance: 64 },
+};
+
+/** The nearest marker of the structure in the loaded chunks, or null. */
+export function structureNearby(bot: any, type: string): { name: string; position: { x: number; y: number; z: number } } | null {
+  if (type === 'village') { const village = detectVillage(bot); return village ? { name: 'village', position: village.position } : null; }
+  const marker = STRUCTURE_MARKERS[type]; if (!marker) return null;
+  const scan = scanLoadedBlocks(bot, marker.blocks, { maxHits: 1, maxDistance: marker.distance });
+  return scan.hits[0] ? { name: scan.hits[0].name, position: scan.hits[0].position } : null;
+}
+
 class FindStructure extends InstantSkill {
   private mcData: any;
 
