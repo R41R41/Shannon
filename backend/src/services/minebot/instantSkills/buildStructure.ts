@@ -82,7 +82,10 @@ class BuildStructure extends InstantSkill {
     this.skillName = 'build-structure';
     this.description =
       '事前登録された構造物（例: nether_portal）を指定座標に建築します。'
-      + '材料がインベントリに揃っている必要があります。';
+      + '材料がインベントリに揃っている必要があります。'
+      // The portal's recipe and its lighting were known only to the old planner's knowledge (a common FCA run asked).
+      + 'nether_portal は黒曜石10個（4×5の枠、角なし）。flint_and_steel を持っていれば完成後に自動で着火する。'
+      + '黒曜石はダイヤのつるはしで掘る（溶岩に水をかけてその場で作れる）。slit_cage・slit_shelter は build-around-self で使う';
     this.params = [
       {
         name: 'structureName',

@@ -4,7 +4,7 @@ import type { MinecraftControlCommand, MinecraftSkillDefinition } from './minecr
 
 export const GOAL_EVIDENCE_SKILL: MinecraftSkillDefinition = {
   name: 'goal-evidence', readOnly: true,
-  description: '現在の元タスクに結び付いたnative死亡観測と所持数を読む。攻撃後にThe Endで実際に観測したドラゴンの死亡だけが証拠。未観測・別タスク・再接続は達成ではない。',
+  description: '現在の元タスクに結び付いたnative死亡観測と所持数を読む。攻撃後にThe Endで実際に観測したドラゴンの死亡だけが証拠。未観測・別タスク・再接続は達成ではない。途中の節目（今いる次元、この接続で入った次元、ネザー到達、ブレイズロッド・エンダーパール・エンダーアイの所持数）も milestones で返す（節目は討伐の証拠ではない）。',
   inputSchema: { type: 'object', properties: {}, required: [], additionalProperties: false },
 };
 const dimension = (bot: any) => String(bot.game?.dimension ?? '').replace(/^minecraft:/u, '');
@@ -19,6 +19,9 @@ export class NativeGoalEvidence {
   private readonly proofs = new Map<string, Proof>();
   private readonly attacks = new Map<number, Witness>();
   private disconnected = false;
+  /** Dimensions this connection has stood in: the Nether reached is a milestone even after leaving it. */
+  private readonly visited = new Set<string>();
+  private readonly onDimension = () => { const name = dimension(this.bot); if (name) this.visited.add(name); };
   private readonly originalAttack;
   private readonly attackTap;
   constructor(private readonly bot: any, private readonly now: () => number = Date.now) {
@@ -31,6 +34,7 @@ export class NativeGoalEvidence {
     if (typeof this.originalAttack === 'function') bot.attack = this.attackTap;
     bot.on('entityDead', this.onDeath); bot.on('entityGone', this.onGone);
     bot.on('respawn', this.onRespawn); bot.on('end', this.onEnd);
+    bot.on('game', this.onDimension); bot.on('spawn', this.onDimension); this.onDimension();
   }
   enter(command: MinecraftControlCommand): void {
     const key = contractKey(command.context);
@@ -86,12 +90,16 @@ export class NativeGoalEvidence {
       boss: { entity: 'ender_dragon', dimension: 'the_end', verified: !this.disconnected && !!this.bot.entity && !!proof,
         status: proof && !this.disconnected ? 'witnessed' : 'unknown', witness: proof ?? null },
       inventory: { coverage: known ? 'known' : 'unknown', counts },
+      // Milestones on the way, as native observations (the Nether stood in, rods and eyes carried); not the goal's proof.
+      milestones: { dimension: dimension(this.bot) || null, visited: [...this.visited], netherReached: this.visited.has('the_nether'),
+        blazeRods: counts.blaze_rod ?? 0, blazePowder: counts.blaze_powder ?? 0, enderPearls: counts.ender_pearl ?? 0, enderEyes: counts.ender_eye ?? 0 },
     };
   }
   dispose(): void {
     if (this.bot.attack === this.attackTap) this.bot.attack = this.originalAttack;
     this.bot.removeListener('entityDead', this.onDeath); this.bot.removeListener('entityGone', this.onGone);
     this.bot.removeListener('respawn', this.onRespawn); this.bot.removeListener('end', this.onEnd);
+    this.bot.removeListener('game', this.onDimension); this.bot.removeListener('spawn', this.onDimension);
     this.onEnd();
   }
 }

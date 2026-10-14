@@ -45,6 +45,17 @@ describe('common FCA native body', () => {
     expect(query.run).toHaveBeenCalledTimes(1); expect(result).toMatchObject({ outcome: 'completed', result: 'health 20', inputsReleased: true });
     expect(await body.release(new AbortController().signal)).toBe(true); await body.dispose();
   });
+  it('says the failure kind of the skill on the receipt (no route as the agreed no_path) and gives each skill its own time', async () => {
+    const { body, bot, query } = fixture();
+    query.run.mockResolvedValueOnce({ success: false, result: 'パスが見つかりません', failureType: 'path_not_found', recoverable: true } as any);
+    const failed = await body.execute(command(), new AbortController().signal);
+    expect(failed).toMatchObject({ outcome: 'failed', failureType: 'no_path', recoverable: true });
+    const done = await body.execute(command({ id: 'skill:two' }), new AbortController().signal);
+    expect(done).not.toHaveProperty('failureType');
+    expect(bodySkillCatalog([{ ...skill('build-around-self'), maxDurationMs: 300_000 }, { ...skill('huge'), maxDurationMs: 9e9 }], {}).definitions
+      .map(d => d.maxDurationMs)).toEqual([300_000, 600_000]);
+    expect(bot).toBeTruthy(); await body.dispose();
+  });
   it('checks current candidate facts and refuses new arguments before motor calls', async () => {
     const { body, bot } = fixture(); const observation = body.observe();
     const draft = body.candidates(observation).find(c => c.operation === 'control')!;

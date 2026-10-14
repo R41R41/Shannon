@@ -27,6 +27,15 @@ describe('task-bound native Minecraft goal evidence', () => {
       boss: { verified: true, witness: { sessionId: 'session1', generation: 1, entityUuid: 'dragon-one', commandId: 'attack-one' } } });
     f.evidence.dispose();
   });
+  it('reports the milestones on the way: the Nether reached stays reached, rods and eyes are counted', () => {
+    const f = fixture(); f.bot.game.dimension = 'minecraft:overworld'; f.evidence.begin(f.command());
+    expect(f.evidence.snapshot().milestones).toMatchObject({ dimension: 'overworld', netherReached: false, blazeRods: 0 });
+    f.bot.game.dimension = 'minecraft:the_nether'; f.bot.emit('game');
+    f.bot.inventory.items = () => [{ name: 'blaze_rod', count: 3 }, { name: 'ender_eye', count: 2 }];
+    f.bot.game.dimension = 'minecraft:overworld'; f.bot.emit('game');
+    expect(f.evidence.snapshot().milestones).toMatchObject({ dimension: 'overworld', netherReached: true, blazeRods: 3, enderEyes: 2 });
+    f.evidence.dispose();
+  });
   it('keeps witnessed proof across segments of the exact original task but refuses changed task/scope/goal/criteria/body and reconnect', () => {
     const f = fixture(); f.evidence.begin(f.command()); f.bot.attack(f.target); f.bot.emit('entityDead', f.target);
     f.evidence.begin(f.command({ context: { ...context, sessionId: 'session2', generation: 2 } }));

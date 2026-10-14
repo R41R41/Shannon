@@ -12,7 +12,9 @@ class FindStructure extends InstantSkill {
   constructor(bot: CustomBot) {
     super(bot);
     this.skillName = 'find-structure';
-    this.description = '指定した構造物（要塞、村、ネザー要塞など）を、読み込み済みの範囲から探します。村は観測のlandmarksにも自動で出ます。';
+    this.description = '指定した構造物（要塞、村、ネザー要塞など）を、読み込み済みの範囲から探します。村は観測のlandmarksにも自動で出ます。'
+      // Only the loaded chunks are searched: not found means not here yet, not nowhere.
+      + '見つからなければ、まだ行っていない方角へ100〜200ブロック移動してから、もう一度探してください（ネザー要塞はネザーの中だけ）';
     this.mcData = minecraftData(this.bot.version);
     this.params = [
       {

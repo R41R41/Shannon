@@ -36,7 +36,8 @@ class DigShelter extends InstantSkill {
     this.skillName = 'dig-shelter';
     this.description = '夜や敵が多い時の一時避難。足元を3段掘り下げて縦穴に入り、頭上（地面の高さ）と周囲の開口をブロックで塞ぐ。'
       + '足元が掘れない・横に液体がある時は、数ブロック以内の掘れる地点へ自分で移動してから掘る。'
-      + '塞いだ後は朝までwait-timeで待つか、地下を横へ掘って作業を続けられる。出る時は頭上のブロックを掘る。'
+      // Waiting the night out spent paid runs L101-L103 minutes for nothing: the night is worked through underground.
+      + '塞いだ後は待たずに、地下を横・下へ掘って作業を続ける（夜でも地下は安全に進める）。出る時は頭上のブロックを掘る。'
       + '掘って塞ぐまで数秒かかるので、敵がそれより早く届く見込みの時は始めずに所要時間と到達見込みを返す。';
     this.params = [];
   }
@@ -161,7 +162,7 @@ class DigShelter extends InstantSkill {
     if (isSealedIn(this.bot as any)) {
       const here = this.bot.entity.position.floored();
       return { success: true, result: `既に塞いだ縦穴(${here.x}, ${here.y}, ${here.z})の中にいます（頭上と周囲は塞がっています）。敵は入れません。`
-        + 'このまま待つ（wait-time）か、横へ掘って地下を進めます。壁や天井を開けると敵に届くようになります' };
+        + '待たずに横・下へ掘って地下を進めてください。壁や天井を開けると敵に届くようになります' };
     }
     let top = this.bot.entity.position.floored();
     let problem = this.siteProblem(top);
@@ -232,7 +233,7 @@ class DigShelter extends InstantSkill {
     return {
       success: true,
       result: `${moved}地下(${bottom.x}, ${bottom.y}, ${bottom.z})の縦穴に入り、頭上(${roof.x}, ${roof.y}, ${roof.z})と周囲を塞ぎました。`
-        + '塞いでいる間、敵は縦穴に入れません。朝まで待つ（wait-time）か、横へ掘って地下で作業を続けられます。出る時は頭上のブロックを掘ってください',
+        + '塞いでいる間、敵は縦穴に入れません。待たずに横・下へ掘って地下で作業を続けてください。出る時は頭上のブロックを掘ってください',
     };
   }
 }

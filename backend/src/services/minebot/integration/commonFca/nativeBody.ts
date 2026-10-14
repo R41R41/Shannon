@@ -25,6 +25,16 @@ export interface NativeBodyOptions {
  * still ends held, as before.
  */
 const SAFETY_RELEASE_WAIT_MS = 3000;
+/**
+ * The skill's own failure kind for the API to sort retries by (agreed 2026-10-14: retry the same, change the situation,
+ * get material first, or fix the input). move-to's old name for "no route" is said as the agreed no_path.
+ */
+function failureOf(result: { failureType?: string; recoverable?: boolean }): Pick<Receipt, 'failureType' | 'recoverable'> | undefined {
+  const type = typeof result.failureType === 'string' && /^[a-z][a-z0-9_]{0,63}$/.test(result.failureType)
+    ? (result.failureType === 'path_not_found' ? 'no_path' : result.failureType) : undefined;
+  if (!type && typeof result.recoverable !== 'boolean') return undefined;
+  return { ...(type ? { failureType: type } : {}), ...(typeof result.recoverable === 'boolean' ? { recoverable: result.recoverable } : {}) };
+}
 export class NativeCommonFcaBody implements CommonFcaActuator {
   readonly skills;
   private readonly catalog;
@@ -89,7 +99,9 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
     }
     signal.throwIfAborted();
     if (!this.connected || !this.bot.entity) throw Error('BODY_DISCONNECTED');
-    const milliseconds = Math.min(120_000, Date.parse(command.deadlineAt) - this.now());
+    // Each skill runs for its own time (build-around-self five minutes, mine-block three), never past the command's deadline.
+    const limit = command.kind === 'skill' ? this.skills.find(skill => skill.name === command.skill)?.maxDurationMs ?? 120_000 : 120_000;
+    const milliseconds = Math.min(limit, Date.parse(command.deadlineAt) - this.now());
     if (!Number.isFinite(milliseconds) || milliseconds <= 0) throw Error('BODY_DEADLINE');
     this.goalEvidence.begin(command);
     const cancelled = () => this.goalEvidence.cancel(command.context);
@@ -99,7 +111,7 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
         if (!command.arguments || typeof command.arguments !== 'object' || Array.isArray(command.arguments) || Object.keys(command.arguments).length) throw Error('BODY_EVIDENCE_ARGUMENTS');
         return this.receipt(command, 'completed', true, JSON.stringify(this.goalEvidence.snapshot()));
       }
-      let capability: string, work: () => Promise<{ success: boolean; result: string; failureType?: string }>;
+      let capability: string, work: () => Promise<{ success: boolean; result: string; failureType?: string; recoverable?: boolean }>;
       if (command.kind === 'skill') {
         const resolved = this.catalog.resolve(command.skill ?? '', command.arguments ?? {});
         capability = resolved.skill.skillName; work = () => resolved.skill.run(...resolved.args);
@@ -126,13 +138,14 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
       const outcome = signal.aborted ? 'cancelled' : result.success ? 'completed' : 'failed';
       const readOnly = command.kind === 'skill' && this.skills.find(skill => skill.name === capability)?.readOnly === true;
       const released = readOnly || await this.release(AbortSignal.timeout(300));
-      return this.receipt(command, outcome, released, result.result);
+      return this.receipt(command, outcome, released, result.result, undefined, outcome === 'failed' ? failureOf(result) : undefined);
     } finally { signal.removeEventListener('abort', cancelled); }
   }
-  private receipt(command: Command, outcome: Receipt['outcome'], inputsReleased: boolean, result?: string, image?: Receipt['image']): Receipt {
+  private receipt(command: Command, outcome: Receipt['outcome'], inputsReleased: boolean, result?: string, image?: Receipt['image'],
+    failure?: Pick<Receipt, 'failureType' | 'recoverable'>): Receipt {
     const observedAt = new Date(this.now()).toISOString();
     return { id: command.id, connectionId: command.connectionId, outcome, inputsReleased, observedAt,
-      ...(result ? { result: result.slice(0, 16_000) } : {}), ...(image ? { image } : {}),
+      ...(result ? { result: result.slice(0, 16_000) } : {}), ...(image ? { image } : {}), ...(failure ?? {}),
       ...(command.operation ? { action: { schemaVersion: 1, operationId: command.operation.operationId, bodyId: command.context.bodyId,
         sessionId: command.context.sessionId, generation: command.context.generation, outcome, inputsReleased, observedAt,
         evidenceId: command.id, observation: this.observe() } } : {}) };

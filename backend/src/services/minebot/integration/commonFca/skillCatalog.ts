@@ -42,6 +42,10 @@ export function normalizeSkillSchema(raw: any, depth = 0): Record<string, any> {
   if (JSON.stringify(output).length > 16_000) throw Error('BODY_SKILL_SCHEMA_SIZE');
   return output;
 }
+/** A skill's own time, within one second and ten minutes (0 or nonsense: the old flat two minutes). */
+export function skillRunLimit(maxDurationMs: number): number {
+  return Number.isFinite(maxDurationMs) && maxDurationMs > 0 ? Math.min(600_000, Math.max(1_000, Math.round(maxDurationMs))) : 120_000;
+}
 export function bodySkillCatalog(skills: readonly BodySkill[], bot: object) {
   const entries = skills.filter(skill => skill.isToolForLLM && /^[a-z][a-z0-9-]{0,58}$/.test(skill.skillName)
     && !forbidden.test(skill.skillName) && Number.isFinite(skill.maxDurationMs) && skill.maxDurationMs > 0)
@@ -49,7 +53,7 @@ export function bodySkillCatalog(skills: readonly BodySkill[], bot: object) {
       const tool = new InstantSkillTool(skill, bot as any);
       const schema = normalizeSkillSchema((zodToJsonSchema as unknown as (schema: unknown, options: { $refStrategy: 'none' }) => unknown)(tool.schema, { $refStrategy: 'none' }));
       const definition: MinecraftSkillDefinition = { name: skill.skillName, description: skill.description.slice(0, 3000),
-        inputSchema: schema, readOnly: skillCategory(skill.skillName) === 'query' };
+        inputSchema: schema, readOnly: skillCategory(skill.skillName) === 'query', maxDurationMs: skillRunLimit(skill.maxDurationMs) };
       return { skill, schema: tool.schema.strict(), definition };
     });
   if (entries.length > 128 || JSON.stringify(entries.map(e => e.definition)).length > 250_000

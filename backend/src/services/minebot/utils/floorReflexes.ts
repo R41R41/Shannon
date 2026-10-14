@@ -150,9 +150,10 @@ export function floorEatChoice(bot: FloorBody): Item | null {
   items.sort((a, b) => (FALLBACK_FOOD_POINTS[b.name] ?? 0) - (FALLBACK_FOOD_POINTS[a.name] ?? 0));
   return items[0] ?? null;
 }
-const ARMOR = [['head', '_helmet', 5], ['torso', '_chestplate', 6], ['legs', '_leggings', 7], ['feet', '_boots', 8]] as const;
+// The off-hand takes a shield: the shield reflex blocks with an off-hand shield only (a blaze's fireballs, a skeleton's arrows).
+const ARMOR = [['head', '_helmet', 5], ['torso', '_chestplate', 6], ['legs', '_leggings', 7], ['feet', '_boots', 8], ['off-hand', 'shield', 45]] as const;
 const MATERIAL = ['netherite', 'diamond', 'iron', 'chainmail', 'turtle', 'golden', 'leather'];
-/** Armour for an empty slot, best material first; a worn piece is never swapped (that choice is the model's). */
+/** Armour or a shield for an empty slot, best material first; what is worn or held is never swapped (that choice is the model's). */
 export function floorArmorChoice(bot: FloorBody): { item: Item; destination: string } | null {
   const slots = bot.inventory?.slots; if (!slots) return null;
   for (const [destination, suffix, slot] of ARMOR) {

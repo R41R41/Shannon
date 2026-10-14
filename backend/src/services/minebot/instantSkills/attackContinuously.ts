@@ -31,7 +31,8 @@ class AttackContinuously extends InstantSkill {
         name: 'entityName',
         type: 'string',
         description: '攻撃対象。単体名(cow)、カンマ区切り(cow,pig,chicken,sheep)、または特殊キーワード: "food_animals"(食料モブ一括), "hostile"(敵対Mob)。省略時は敵対的Mobのみ。'
-          + 'ここで指定した相手は、このスキルの実行中は「近くに居る・当ててきた」だけでは緊急対応に中断されない（体力が半分以下になるか、指定していない別の種類が近づくと中断される）',
+          + 'ここで指定した相手は、このスキルの実行中は「近くに居る・当ててきた」だけでは緊急対応に中断されない（体力が半分以下になるか、指定していない別の種類が近づくと中断される）'
+          + (process.env.MINEBOT_COMMON_FCA === 'on' ? '。今の作り（共通FCA）では自動の割り込みはないので、体力は観測で見て自分で退くこと' : ''),
         default: '',
       },
       {

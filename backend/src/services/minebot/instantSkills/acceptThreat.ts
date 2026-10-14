@@ -18,7 +18,9 @@ class AcceptThreat extends InstantSkill {
     super(bot);
     this.skillName = 'accept-threat';
     this.description = 'これから指定した秒数のあいだ、指定した種類の相手が「近くに居る・当ててきた」だけでは緊急対応にしません（その相手のいる場所へ自分の意思で入っていく・そばで作業する時に、先に呼ぶ）。'
-      + '体力が半分以下になった時・一撃で大きく削られた時と、指定していない種類の相手は、今まで通り緊急対応になります。時間が過ぎると自動で元に戻ります';
+      + '体力が半分以下になった時・一撃で大きく削られた時と、指定していない種類の相手は、今まで通り緊急対応になります。時間が過ぎると自動で元に戻ります'
+      // In the common FCA mode no emergency layer interrupts a skill (EventReactionSystem does not run): say so.
+      + (process.env.MINEBOT_COMMON_FCA === 'on' ? '。ただし今の作り（共通FCA）では緊急対応の自動の割り込みはありません。体力は観測で見て、危なければ自分で退いてください' : '');
     this.params = [
       { name: 'kinds', type: 'string', description: '相手の種類。カンマ区切りで複数可（例: "blaze" や "blaze,wither_skeleton"）', required: true },
       { name: 'seconds', type: 'number', description: `続ける秒数（1〜${MAX_SECONDS}、デフォルト: 120）`, default: 120 },

@@ -114,5 +114,9 @@ describe('floor reflexes (ADR-0010 D8, defence only)', () => {
     expect(floorArmorChoice(body({ items, slots }))).toEqual({ item: { name: 'iron_chestplate' }, destination: 'torso' });
     const full = new Array(46).fill(null); for (const i of [5, 6, 7, 8]) full[i] = { name: 'leather_x' };
     expect(floorArmorChoice(body({ items, slots: full }))).toBeNull();
+    // A shield goes into an empty off-hand (the shield reflex blocks with an off-hand shield only); a held one stays.
+    expect(floorArmorChoice(body({ items: [{ name: 'shield' }], slots: full }))).toEqual({ item: { name: 'shield' }, destination: 'off-hand' });
+    const holding = [...full]; holding[45] = { name: 'torch' };
+    expect(floorArmorChoice(body({ items: [{ name: 'shield' }], slots: holding }))).toBeNull();
   });
 });
