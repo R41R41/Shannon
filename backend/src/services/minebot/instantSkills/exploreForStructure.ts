@@ -41,9 +41,10 @@ class ExploreForStructure extends InstantSkill {
     let current: Heading = heading, travelled = 0;
     const tried: string[] = [];
     // Each leg may take a hand-dug move's full time: stop while there is still time to say what was covered.
-    const deadline = Date.now() + this.maxDurationMs - 20_000;
+    const deadline = Date.now() + this.maxDurationMs - 10_000;
     for (const leg of legs) {
-      if (this.shouldInterrupt() || Date.now() > deadline - 30_000) break;
+      // A leg may take a whole move's time (two minutes when digging by hand): start one only when it fits.
+      if (this.shouldInterrupt() || Date.now() > deadline - 125_000) break;
       const at = this.bot.entity.position;
       const x = Math.round(at.x + current.dx * leg), z = Math.round(at.z + current.dz * leg);
       const moved = await this.callSkill('move-to', x, Math.round(at.y), z, 6, 'nearxz');
@@ -62,7 +63,7 @@ class ExploreForStructure extends InstantSkill {
         const next = sides.shift();
         if (!next) break;
         current = next;
-      }
+      } else if (current !== heading) current = heading; // round the obstacle, then on along the original heading
     }
     const end = this.bot.entity.position;
     return { success: false, failureType: 'target_not_found', recoverable: true,
