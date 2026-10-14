@@ -17,12 +17,14 @@ const properties = fs.readFileSync(path.join(worldDirectory, 'server.properties'
 if (!properties.includes('server-ip=127.0.0.1') || !properties.includes(`server-port=${port}`)) throw new Error('ISOLATED_PROBE_WORLD_CONFIGURATION_INVALID');
 const mode = process.env.MINECRAFT_PERCH_MODE ?? 'fall';
 const drop = Number(process.env.MINECRAFT_PERCH_DROP ?? 12);
-if (!['fall', 'vine', 'water'].includes(mode) || !Number.isInteger(drop) || drop < 5 || drop > 30) throw new Error('PERCH_PROBE_SHAPE_INVALID');
+// Start off the middle of the log (sideways to the step), so the steering back over the chosen cell is exercised.
+const offset = Number(process.env.MINECRAFT_PERCH_OFFSET ?? 0);
+if (!['fall', 'vine', 'water'].includes(mode) || !Number.isInteger(drop) || drop < 5 || drop > 30 || !(Math.abs(offset) <= 0.25)) throw new Error('PERCH_PROBE_SHAPE_INVALID');
 const actor = await createProbeBot(port, 'MinebotTrial');
 const operator = await createProbeBot(port);
 const oracle = new MinecraftCommandOracle(operator);
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-const report: any = { mode, drop };
+const report: any = { mode, drop, offset };
 try {
   await oracle.verifyReady();
   for (const command of ['gamerule spawn_mobs false', 'time set day', 'gamemode spectator ShannonProbe', 'kill @e[type=!minecraft:player]',
@@ -41,7 +43,7 @@ try {
     await oracle.executeSetupCommand(`fill -1 ${ground - 3} -3 1 ${ground - 3} -1 stone`);
     await oracle.executeSetupCommand(`fill 0 ${ground - 2} -1 0 ${ground} -1 water`);
   }
-  await oracle.executeSetupCommand(`tp MinebotTrial 0.5 ${y} 0.5`);
+  await oracle.executeSetupCommand(`tp MinebotTrial ${(0.5 + offset).toFixed(2)} ${y} ${(0.5 + offset).toFixed(2)}`);
   await oracle.executeSetupCommand('give MinebotTrial minecraft:jungle_planks 16');
   await sleep(2000);
   await oracle.executeSetupCommand('effect give MinebotTrial minecraft:instant_health 1 5');

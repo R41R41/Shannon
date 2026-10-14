@@ -40,45 +40,66 @@ class ClimbDown extends InstantSkill {
           + '体力を回復するか、ブロックを置いて段を作るか、別の方向へ移ってから試してください' };
     }
     const chosen = usable[0];
+    // First to the middle of the perch, with the edge guard still on: the step off is then always one block, and a
+    // start near the far side no longer falls short of a pool one block wide (the lab's did, and took nine damage).
+    const cell = this.bot.entity.position.floored();
+    const middle = new Vec3(cell.x + 0.5, this.bot.entity.position.y, cell.z + 0.5);
+    if (Math.hypot(this.bot.entity.position.x - middle.x, this.bot.entity.position.z - middle.z) > 0.12) {
+      try {
+        await this.bot.lookAt(middle.offset(0, 1.6, 0), true);
+        this.bot.setControlState('forward', true);
+        const centreDeadline = Date.now() + 1500;
+        while (Date.now() < centreDeadline && !this.shouldInterrupt()
+          && Math.hypot(this.bot.entity.position.x - middle.x, this.bot.entity.position.z - middle.z) > 0.12) await actionDelay(this.bot, 50);
+      } finally { this.bot.clearControlStates(); }
+      await actionDelay(this.bot, 150);
+    }
     const start = this.bot.entity.position.clone(), startY = start.y;
-    const target = new Vec3(Math.floor(start.x) + chosen.dx + 0.5, Math.floor(startY), Math.floor(start.z) + chosen.dz + 0.5);
+    const target = new Vec3(cell.x + chosen.dx + 0.5, Math.floor(startY), cell.z + chosen.dz + 0.5);
     log.info(`🪜 降下: ${chosen.via} 方向(${chosen.dx},${chosen.dz}) 落差${chosen.drop} 着地${chosen.landing}@Y${chosen.landingY} 想定ダメージ${chosen.damage}`);
     const guard = (this.rootBot as any).edgeGuard as { enabled: boolean } | undefined;
     const guarded = guard?.enabled ?? false;
     try {
       if (guard) guard.enabled = false;
       await this.bot.lookAt(target.offset(0, 1.6, 0), true);
+      // The heading is held while the guard is off: a turned head would walk the body toward a column never checked.
+      const { yaw, pitch } = this.bot.entity;
       this.bot.setControlState('sneak', false);
+      this.bot.setControlState('sprint', false);
       this.bot.setControlState('forward', true);
       // Off the edge: forward only until the body is over the chosen cell, then it drops (or slides down the vine).
       const stepDeadline = Date.now() + 2500;
       while (Date.now() < stepDeadline && !this.shouldInterrupt()) {
         const at = this.bot.entity.position;
         if (Math.hypot(at.x - target.x, at.z - target.z) < 0.35 || at.y < startY - 0.6) break;
+        if (Math.abs(this.bot.entity.yaw - yaw) > 0.01) await this.bot.look(yaw, pitch, true);
         await actionDelay(this.bot, 50);
       }
       this.bot.setControlState('forward', false);
       // Momentum carries the body past the cell it stepped off into; a pool or a vine one block wide is then missed
       // and the edge beside it taken instead (the lab's pool cost nine health). Steer back over the cell while falling.
+      // Facing (dx, dz), the left hand is (dz, -dx).
       const along = (at: Vec3) => (at.x - target.x) * chosen.dx + (at.z - target.z) * chosen.dz;
+      const leftward = (at: Vec3) => (at.x - target.x) * chosen.dz - (at.z - target.z) * chosen.dx;
       const landDeadline = Date.now() + 12_000;
       while (Date.now() < landDeadline && !this.shouldInterrupt()) {
         const entity = this.bot.entity as any;
         if ((entity.onGround || entity.isInWater) && entity.position.y < startY - 0.6) break;
-        const off = along(entity.position);
+        const off = along(entity.position), side = leftward(entity.position);
         this.bot.setControlState('back', off > 0.1);
         this.bot.setControlState('forward', off < -0.1);
+        this.bot.setControlState('right', side > 0.1);
+        this.bot.setControlState('left', side < -0.1);
+        if (Math.abs(this.bot.entity.yaw - yaw) > 0.01) await this.bot.look(yaw, pitch, true);
         await actionDelay(this.bot, 50);
       }
     } finally {
       this.bot.clearControlStates();
       if (guard) guard.enabled = guarded;
     }
-    // The fall's damage reaches the body a moment after it lands.
-    if (chosen.damage > 0) {
-      const settle = Date.now() + 1500;
-      while (Date.now() < settle && (this.bot.health ?? health) >= health) await actionDelay(this.bot, 50);
-    }
+    // The fall's damage reaches the body a moment after it lands, whether or not any was expected.
+    const settle = Date.now() + (chosen.damage > 0 ? 1500 : 800);
+    while (Date.now() < settle && (this.bot.health ?? health) >= health) await actionDelay(this.bot, 50);
     const end = this.bot.entity.position, healthAfter = this.bot.health ?? health;
     const fell = startY - end.y;
     if (fell < 0.6) {

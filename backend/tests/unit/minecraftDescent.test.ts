@@ -8,7 +8,8 @@ function world(cells: Record<string, string>, floor = 60, at = new Vec3(0.5, 80,
     entity: { position: at }, health,
     blockAt(p: Vec3) {
       const name = cells[`${p.x},${p.y},${p.z}`] ?? (p.y <= floor ? 'stone' : 'air');
-      return { name, boundingBox: ['air', 'vine', 'ladder', 'water', 'short_grass'].includes(name) ? 'empty' : 'block' };
+      return { name, boundingBox: ['air', 'vine', 'ladder', 'water', 'short_grass'].includes(name) ? 'empty' : 'block',
+        ...(name.startsWith('waterlogged_') ? { getProperties: () => ({ waterlogged: true }) } : {}) };
     },
   };
 }
@@ -38,6 +39,23 @@ describe('getting down from a height the route planner will not leave (common ru
     const best = planDescent(world({ '0,79,0': 'jungle_log', '0,61,1': 'water', '0,61,-1': 'lava', '-1,61,0': 'lava' }))[0];
     expect(best).toMatchObject({ dx: 0, dz: 1, via: 'water', damage: 0 });
     expect(planDescent(world({ '0,79,0': 'jungle_log', '0,61,-1': 'lava' })).some(o => o.dz === -1)).toBe(false);
+  });
+  it('counts a pool as safe only when the body sinks into it, and knows what missing it would cost', () => {
+    const pool = planDescent(world({ '0,79,0': 'jungle_log', '0,61,1': 'water' })).find(o => o.dz === 1)!;
+    expect(pool).toMatchObject({ via: 'water', damage: 0, worstDamage: 15 });
+    // Waterlogged roots are landed on, above their water: the whole fall.
+    const roots = planDescent(world({ '0,79,0': 'jungle_log', '0,61,1': 'waterlogged_mangrove_roots' })).find(o => o.dz === 1)!;
+    expect(roots).toMatchObject({ via: 'fall', damage: 15 });
+  });
+  it('does not land on dripstone or a campfire, nor beside lava', () => {
+    const options = planDescent(world({ '0,79,0': 'jungle_log', '1,61,0': 'pointed_dripstone', '-1,61,0': 'campfire', '0,61,1': 'stone', '1,61,1': 'lava' }));
+    expect(options.map(o => [o.dx, o.dz])).toEqual([[0, -1]]);
+  });
+  it('stands above footing lower than a block', () => {
+    // On a dirt path (not a full block) at y=79: the feet are at 80, and a level neighbour is a walk.
+    const bot = world({ '0,79,0': 'dirt_path', '1,79,0': 'stone' }, 60, new Vec3(0.5, 79.94, 0.5));
+    expect(strandedOnHeight(bot)).toBeNull();
+    expect(planDescent(bot).find(o => o.dx === 1)).toMatchObject({ drop: 0 });
   });
   it('is not a perch when a neighbour is level or a short step down', () => {
     expect(strandedOnHeight(world({ '0,79,0': 'stone', '1,79,0': 'stone' }))).toBeNull();

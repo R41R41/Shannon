@@ -25,14 +25,21 @@ export interface DescentOption {
 }
 
 const CARDINALS = [{ dx: 1, dz: 0 }, { dx: -1, dz: 0 }, { dx: 0, dz: 1 }, { dx: 0, dz: -1 }];
-const CLIMBABLE = new Set(['vine', 'ladder', 'scaffolding', 'weeping_vines', 'weeping_vines_plant', 'twisting_vines',
+// Scaffolding is solid from above: it is landed on, not slid down.
+const CLIMBABLE = new Set(['vine', 'ladder', 'weeping_vines', 'weeping_vines_plant', 'twisting_vines',
   'twisting_vines_plant', 'cave_vines', 'cave_vines_plant']);
-const HARMFUL = new Set(['lava', 'fire', 'soul_fire', 'magma_block', 'sweet_berry_bush', 'wither_rose', 'powder_snow', 'cactus']);
+// Landings that hurt beyond the fall: a fall onto dripstone does about twice its height plus four.
+const HARMFUL = new Set(['lava', 'fire', 'soul_fire', 'campfire', 'soul_campfire', 'magma_block', 'pointed_dripstone',
+  'sweet_berry_bush', 'wither_rose', 'powder_snow', 'cactus']);
 const SCAN_DEPTH = 64;
 
 /** Vanilla fall damage: one point per block fallen beyond three. */
 export const fallDamage = (drop: number) => Math.max(0, Math.ceil(drop - 3));
 const passable = (block: DescentBlock | null) => !!block && block.boundingBox === 'empty' && !HARMFUL.has(block.name);
+/** Water the body sinks into: a waterlogged block (roots, leaves, slabs) is landed on, above its water. */
+const openWater = (block: DescentBlock) => block.boundingBox === 'empty' && holdsWater(block as any);
+const harmfulBeside = (bot: DescentBot, x: number, y: number, z: number) =>
+  CARDINALS.some(({ dx, dz }) => { const block = bot.blockAt(new Vec3(x + dx, y, z + dz)); return !!block && HARMFUL.has(block.name); });
 
 /**
  * Every way off the body's cell, best first: least damage, then not onto leaves, then the shortest drop. A
@@ -41,6 +48,8 @@ const passable = (block: DescentBlock | null) => !!block && block.boundingBox ==
 export function planDescent(bot: DescentBot): DescentOption[] {
   if (!bot.entity) return [];
   const feet = bot.entity.position.floored();
+  // On footing lower than a block (a path, farmland, soul sand) the floored cell is that block: the feet are above it.
+  if (bot.blockAt(feet)?.boundingBox === 'block') feet.y += 1;
   const options: DescentOption[] = [];
   for (const { dx, dz } of CARDINALS) {
     const x = feet.x + dx, z = feet.z + dz;
@@ -52,15 +61,17 @@ export function planDescent(bot: DescentBot): DescentOption[] {
       if (!block) break;
       if (HARMFUL.has(block.name)) break;
       const worstDamage = fallDamage(feet.y - (y + 1));
-      if (holdsWater(block as any)) {
-        option = { dx, dz, drop: fallFrom - (y + 1), damage: 0, worstDamage: 0, landing: block.name, landingY: y, via: 'water' };
-      } else if (CLIMBABLE.has(block.name)) { fallFrom = y; climbed = true; }
+      if (openWater(block)) {
+        // Missing a pool one block wide lands beside it, about at its surface: that is the worst case.
+        option = { dx, dz, drop: fallFrom - (y + 1), damage: 0, worstDamage, landing: block.name, landingY: y, via: 'water' };
+      } else if (CLIMBABLE.has(block.name) && block.name !== 'scaffolding') { fallFrom = y; climbed = true; }
       else if (block.boundingBox === 'block') {
         const drop = fallFrom - (y + 1);
         option = { dx, dz, drop, damage: fallDamage(drop), worstDamage, landing: block.name, landingY: y, via: climbed ? 'climbable' : 'fall' };
       }
     }
-    if (option) options.push(option);
+    // Fire or lava beside where the body comes to rest is a step away from it.
+    if (option && !harmfulBeside(bot, x, option.landingY + 1, z) && !harmfulBeside(bot, x, option.landingY, z)) options.push(option);
   }
   return options.sort((a, b) => a.damage - b.damage || Number(a.landing.endsWith('leaves')) - Number(b.landing.endsWith('leaves'))
     || a.drop - b.drop);

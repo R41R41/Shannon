@@ -3,7 +3,7 @@ import { CustomBot, InstantSkill } from '../types.js';
 import { createLogger } from '../../../utils/logger.js';
 import { setMovements } from '../utils/setMovements.js';
 import { travelProfile } from '../utils/travelProfile.js';
-import { strandedOnHeight } from '../utils/descent.js';
+import { descentAllowance, strandedOnHeight } from '../utils/descent.js';
 import { PROTECTED_UTILITY_BLOCKS } from '../constants.js';
 import { swimOntoBank, waterLevelUnderBody } from '../utils/exitWater.js';
 import { forcedMoves } from '../utils/motionRecorder.js';
@@ -44,9 +44,14 @@ function perchNote(bot: any): string {
   try {
     const perch = strandedOnHeight(bot);
     if (!perch) return '';
-    return '高い所に取り残されています（周りはどこも4ブロックより深い落差で、経路はそこを降りません）。climb-down で降りられます（'
-      + (perch.via === 'climbable' ? 'ツタ・はしごを伝って' : perch.via === 'water' ? '水へ飛び込んで'
-        : `${perch.drop}ブロック飛び降りて約${perch.damage}のダメージ`) + '）。tower-up で積むと、さらに高くなります';
+    const health = bot.health ?? 20;
+    const way = perch.via === 'climbable' ? 'ツタ・はしごを伝って' : perch.via === 'water' ? '水へ飛び込んで'
+      : `${perch.drop}ブロック飛び降りて約${perch.damage}のダメージ`;
+    // climb-down keeps eight health: a fall it would refuse is said as such, with what would make it possible.
+    const able = perch.damage <= descentAllowance(health) && perch.worstDamage < health - 1;
+    return '高い所に取り残されています（周りはどこも4ブロックより深い落差で、経路はそこを降りません）。'
+      + (able ? `climb-down で降りられます（${way}）。` : `降りるには${way}になり、いまの体力${health}では climb-down は降りません。食べて体力を戻すか、別の方向を探してください。`)
+      + 'tower-up で積むと、さらに高くなります';
   } catch { return ''; }
 }
 
