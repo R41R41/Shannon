@@ -41,6 +41,16 @@ describe('common FCA body transport', () => {
     expect(f.requests[4].receipts).toEqual([]); expect(f.actuator.execute).toHaveBeenCalledTimes(1);
     expect(f.requests[0].skills).toEqual([]); expect(f.requests[1].skills).toBeUndefined(); await f.loop.stop();
   });
+  it('accepts a deadline as far as the skill own time, and says a refusal for shape took nothing', async () => {
+    const f = fixture(); (f.actuator as any).skills = [{ name: 'mine-block', description: '', inputSchema: {}, readOnly: false, maxDurationMs: 180_000 }];
+    f.responses.push({ commands: [command('long', { skill: 'mine-block', deadlineAt: new Date(NOW + 180_000).toISOString() })] }); await f.loop.poll(); await tick();
+    expect(f.actuator.execute).toHaveBeenCalledTimes(1);
+    f.responses.push({ commands: [command('too-far', { id: 'too-far', skill: 'mine-block', deadlineAt: new Date(NOW + 700_000).toISOString() })] }); await f.loop.poll(); await tick();
+    f.responses.push({}); await f.loop.poll();
+    const refused = f.requests.at(-1).receipts.find((r: any) => r.id === 'too-far');
+    expect(refused).toMatchObject({ outcome: 'failed', result: 'BODY_COMMAND_REFUSED', inputsReleased: true });
+    expect(f.actuator.execute).toHaveBeenCalledTimes(1); await f.loop.stop();
+  });
   it('rejects wrong connection, expired actions, concurrent dispatch and other owners', async () => {
     const f = fixture(); let done!: () => void;
     f.actuator.execute = vi.fn(async (c, signal) => { await new Promise<void>(r => { done = r; }); return { id: c.id, connectionId: c.connectionId,

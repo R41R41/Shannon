@@ -82,6 +82,15 @@ export class CommonFcaControlLoop {
       throw error;
     } finally { this.polling = false; }
   }
+  /**
+   * How far ahead a command's deadline may lie: the skill's own time from the catalog plus delivery slack. A flat two
+   * minutes refused every longer skill once the API set deadlines from the catalog (common run 8: mine-block at three
+   * minutes came back BODY_COMMAND_REFUSED, held, and the step ended unknown).
+   */
+  private acceptWindow(command: Command): number {
+    const own = command.kind === 'skill' ? this.options.actuator.skills.find(skill => skill.name === command.skill)?.maxDurationMs : undefined;
+    return Math.min(630_000, (typeof own === 'number' && Number.isFinite(own) && own > 0 ? Math.max(own, 120_000) : 120_000) + 30_000);
+  }
   private accept(command: Command): void {
     if (!command || !ID.test(command.id) || this.seen.has(command.id)) return;
     if (this.seen.size >= 10_000) { void this.stop(); return; }
@@ -95,15 +104,17 @@ export class CommonFcaControlLoop {
       && context.generation >= 0 && Number.isSafeInteger(context.taskRevision) && context.taskRevision >= 0
       && command.lease && ID.test(command.lease.id) && typeof command.lease.holder === 'string'
       && Number.isSafeInteger(command.lease.generation) && Number.isFinite(Date.parse(command.deadlineAt))
-      && (cleanup || Date.parse(command.deadlineAt) > now && Date.parse(command.deadlineAt) - now <= 120_000);
+      && (cleanup || Date.parse(command.deadlineAt) > now && Date.parse(command.deadlineAt) - now <= this.acceptWindow(command));
     const key = valid ? identity(command) : '';
     const sessionKey = `${key}:${context?.sessionId}`;
     const historicalCleanup = cleanup && this.closedSessions.has(sessionKey);
     if (!valid || (!cleanup && (this.closedSessions.has(sessionKey) || this.held || this.active.size > 0 || this.owner !== null && this.owner !== key
         || command.lease.generation < (this.leaseGenerations.get(command.lease.id) ?? -1)))
       || cleanup && this.owner !== null && this.owner !== key && !this.closedSessions.has(sessionKey)) {
+      // A command refused for its own shape (stale connection, a deadline out of reach) never took the body: say so, so the
+      // API can treat it as a known failure. One refused because the body is held or another owner has it says not released.
       this.receipts.set(command.id, { id: command.id, connectionId: this.connectionId, outcome: 'failed',
-        inputsReleased: false, observedAt: new Date(now).toISOString(), result: 'BODY_COMMAND_REFUSED' });
+        inputsReleased: !valid && !this.held && this.active.size === 0, observedAt: new Date(now).toISOString(), result: 'BODY_COMMAND_REFUSED' });
       return;
     }
     if (!cleanup) { this.owner = key; this.leaseGenerations.set(command.lease.id, command.lease.generation); }
