@@ -1,4 +1,7 @@
 import { EventEmitter } from 'node:events';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { Vec3 } from 'vec3';
 import { describe, expect, it, vi } from 'vitest';
 import { bodySkillCatalog, normalizeSkillSchema } from '../../src/services/minebot/integration/commonFca/skillCatalog.js';
@@ -158,6 +161,26 @@ describe('common FCA native body', () => {
   it('does not claim a renderer whose packages do not resolve', () => {
     expect(rendererResolvable('/nonexistent/renderer')).toBe(false);
     expect(createBodyImageCapture({}, { rendererDirectory: '/nonexistent/renderer' }).configured).toBe(false);
+  });
+  it('claims a renderer only when the WebGL and canvas bindings that node-canvas-webgl loads are built', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'renderer-')), file = (relative: string, text = '') => {
+      mkdirSync(path.dirname(path.join(root, relative)), { recursive: true }); writeFileSync(path.join(root, relative), text);
+    };
+    const pkg = (dir: string, name: string, main = 'index.js') => { file(`${dir}/package.json`, JSON.stringify({ name, main })); file(`${dir}/${main}`); };
+    try {
+      pkg('.', 'prismarine-viewer'); file('viewer/lib/version.js'); file('viewer/index.js');
+      pkg('node_modules/three', 'three'); pkg('node_modules/node-canvas-webgl', 'node-canvas-webgl', 'lib/index.js');
+      pkg('node_modules/gl', 'gl'); pkg('node_modules/node-canvas-webgl/node_modules/canvas', 'canvas');
+      // A release installed without the native builds: JavaScript present, bindings missing.
+      expect(rendererResolvable(root)).toBe(false);
+      file('node_modules/gl/build/Release/webgl.node');
+      expect(rendererResolvable(root)).toBe(false);
+      // The nested canvas that node-canvas-webgl resolves is the one that counts, not a top-level copy.
+      pkg('node_modules/canvas', 'canvas'); file('node_modules/canvas/build/Release/canvas.node');
+      expect(rendererResolvable(root)).toBe(false);
+      file('node_modules/node-canvas-webgl/node_modules/canvas/build/Release/canvas.node');
+      expect(rendererResolvable(root)).toBe(true);
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
   it('rechecks safety ownership after awaited plugin cleanup before clearing controls', async () => {
     const { bot, body } = fixture(); let finish!: () => void; let safety!: Promise<unknown>;
