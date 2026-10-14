@@ -242,7 +242,7 @@ class CraftOne extends InstantSkill {
           ? this.bot.findBlocks({ matching, maxDistance: tableRadius, count: 16 })
             .map(position => this.bot.blockAt(position))
             .filter((block): block is NonNullable<typeof block> => !!block)
-            .sort((a, b) => a.position.distanceTo(here) - b.position.distanceTo(here))[0] ?? null
+            .sort((a, b) => a.position.offset(0.5, 0.5, 0.5).distanceTo(here) - b.position.offset(0.5, 0.5, 0.5).distanceTo(here))[0] ?? null
           : this.bot.findBlock({ matching, maxDistance: tableRadius });
       }
 
@@ -761,10 +761,9 @@ class CraftOne extends InstantSkill {
           const result = await placeSkill.run('crafting_table', c.x, c.y, c.z);
           if (result.success) {
             await actionDelay(this.bot, 200);
-            return this.bot.findBlock({
-              matching: this.mcData.blocksByName.crafting_table?.id,
-              maxDistance: 4,
-            });
+            // The table just placed, not whichever table a search finds first within reach.
+            const placed = this.bot.blockAt(new Vec3(c.x, c.y, c.z));
+            return placed?.name === 'crafting_table' ? placed : null;
           }
         }
       }
