@@ -8,6 +8,7 @@ export function createCommonFcaBody(bot: any, settings: { url: string; serverId:
   const actuator = new NativeCommonFcaBody(bot, { serverId: settings.serverId,
     capture: signal => images.capture(signal), disposeCapture: () => images.dispose(),
     rendererConfigured: () => images.configured });
+  images.prepare();
   const loop = new CommonFcaControlLoop({ baseUrl: settings.url, token, serverId: settings.serverId, actuator });
   const end = () => { void loop.stop(); };
   bot.once('end', end);
