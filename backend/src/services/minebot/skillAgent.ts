@@ -165,7 +165,8 @@ export class SkillAgent {
         // The UI mod is the owner's own client on this machine (loopback, mod token): its name is looked up by UUID.
         const modSpeakerUuid = this.companionBody && sender !== 'system' ? playerUuidByName(this.bot.players as any, sender) : undefined;
         if (modSpeakerUuid && await this.companionBody!.answer({ uuid: modSpeakerUuid, name: sender }, message)) return;
-        if (this.commonFca) return; // No old planner fallback after unavailable/unidentified companion chat.
+        // No old planner fallback after unavailable/unidentified companion chat; but she says so rather than stay silent.
+        if (this.commonFca) { this.tellMindUnavailable(); return; }
         // マイクラチャットと同様に処理（環境情報も渡す）
         await this.processMessage(
           sender,
@@ -276,7 +277,9 @@ export class SkillAgent {
 
     if (this.commonFca) {
       if (this.companionBody && speakerUuid && isAddressedToShannon(message)) {
-        await this.companionBody.answer({ uuid: speakerUuid, name: username }, message);
+        let answered = false;
+        try { answered = await this.companionBody.answer({ uuid: speakerUuid, name: username }, message); } catch { /* told below */ }
+        if (!answered) this.tellMindUnavailable();
       }
       return;
     }
@@ -354,6 +357,20 @@ export class SkillAgent {
       maxLines: 3,
       log: line => log.info(line),
     });
+  }
+
+  /**
+   * Her mind did not answer (unreachable, or it failed): she says so in game chat and in the mod, so the player is not
+   * left wondering whether the message arrived. Nothing else is done: the body never answers for her mind. At most one
+   * line per 15 seconds, so a run of failing turns cannot flood chat (chat validation kicks follow floods).
+   */
+  private mindUnavailableAt = 0;
+  private tellMindUnavailable(): void {
+    const now = Date.now();
+    if (now - this.mindUnavailableAt < 15_000) return;
+    this.mindUnavailableAt = now;
+    speakCompanionReply(this.bot as any, 'いま心と話せないみたい。届いたか分からないから、少ししてからもう一度話しかけてね。',
+      { uiModBaseUrl: CONFIG.UI_MOD_BASE_URL, lineLimit: CONFIG.MINECRAFT_CHAT_MAX_CHARS, maxLines: 2 });
   }
 
   /** The mod's buttons, as the common FCA body answers them (see integration/commonFca/uiModControls.ts). */

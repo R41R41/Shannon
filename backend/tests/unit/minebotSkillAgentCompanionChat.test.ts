@@ -92,6 +92,29 @@ describe('SkillAgent game chat', () => {
     expect(processed).toEqual([]);
   });
 
+  it('common FCA mode says so when her mind does not answer, once per quiet spell, and stays silent when it does', async () => {
+    const down = agentOn({ answer: async () => false });
+    down.agent.commonFca = true;
+    await down.agent.botOnChat();
+    down.client.emit('playerChat', { sender: OWNER, plainMessage: 'シャノン、エンドラを討伐して' });
+    await settle();
+    expect(down.bot.chat).toHaveBeenCalledTimes(1);
+    expect(down.bot.chat).toHaveBeenCalledWith(expect.stringContaining('心と話せない'));
+    // A second failing turn right after does not repeat it (chat floods get a bot kicked).
+    down.client.emit('playerChat', { sender: OWNER, plainMessage: 'シャノン、もう一度' });
+    await settle();
+    expect(down.bot.chat).toHaveBeenCalledTimes(1);
+    // A message that is not for her says nothing, and neither does one her mind answered.
+    const up = agentOn({ answer: async () => true });
+    up.agent.commonFca = true;
+    await up.agent.botOnChat();
+    up.client.emit('playerChat', { sender: OWNER, plainMessage: 'シャノン、こんにちは' });
+    up.client.emit('playerChat', { sender: OWNER, plainMessage: 'みんなこんにちは' });
+    await settle();
+    expect(up.bot.chat).not.toHaveBeenCalled();
+    expect(down.agent.processed ?? []).toEqual([]);
+  });
+
   it('common mode loads bot.instantSkills for the control catalog without registering a legacy tool gateway', async () => {
     const { agent, bot } = agentOn(null); agent.commonFca = true;
     const instantSkills = { getSkills: () => [{ skillName: 'mine-block' }] };
