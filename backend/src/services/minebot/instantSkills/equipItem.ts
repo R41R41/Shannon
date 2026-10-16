@@ -1,6 +1,7 @@
 import { createLogger } from '../../../utils/logger.js';
 import { CustomBot, InstantSkill } from '../types.js';
 import { actionDelay } from '../execution/observedWait.js';
+import { equipToHandVerified } from '../utils/equipVerified.js';
 
 const log = createLogger('Minebot:EquipItem');
 
@@ -52,6 +53,18 @@ class EquipItem extends InstantSkill {
     return equipped;
   }
 
+  /** bot.equip returned but the item is not in the hand, and moving it to the hotbar did not help either. */
+  private notHeld(name: string, detail: string) {
+    log.warn(`equip-item失敗: ${name} が手に入りません（${detail}）`);
+    return {
+      success: false,
+      failureType: 'equip_failed',
+      recoverable: true,
+      result: `${name}をメインハンドに持てませんでした（装備しても手が変わらず、ホットバーへ移す再試行も効きませんでした）。`
+        + 'ホットバー（クイックバー）の空きを作る（不要な物を捨てる・預ける）か、サーバーが枠の移動を拒否している可能性があります。空きを作ってからもう一度試してください',
+    };
+  }
+
   async runImpl(itemName: string, destination: string = 'main') {
     try {
       if (!itemName) {
@@ -76,7 +89,13 @@ class EquipItem extends InstantSkill {
         ?? (exactId ? undefined : inventoryItems.find((i) => i.name.includes(itemName) || itemName.includes(i.name)));
 
       if (item) {
-        await this.bot.equip(item, mapping.dest as any);
+        if (mapping.dest === 'hand') {
+          const outcome = await equipToHandVerified(this.bot, item);
+          if (!outcome.held) return this.notHeld(item.name, outcome.detail);
+          if (outcome.retried) log.info(`${item.name}: ホットバーへ移して手に持ちました（${outcome.detail}）`);
+        } else {
+          await this.bot.equip(item, mapping.dest as any);
+        }
         return {
           success: true,
           result: `${item.name}を${mapping.label}に装備しました`,
@@ -96,7 +115,12 @@ class EquipItem extends InstantSkill {
 
         const movedItem = this.bot.inventory.items().find((i) => i.name === itemName);
         if (movedItem) {
-          await this.bot.equip(movedItem, mapping.dest as any);
+          if (mapping.dest === 'hand') {
+            const outcome = await equipToHandVerified(this.bot, movedItem);
+            if (!outcome.held) return this.notHeld(movedItem.name, outcome.detail);
+          } else {
+            await this.bot.equip(movedItem, mapping.dest as any);
+          }
           return {
             success: true,
             result: `${itemName}を${equippedMatch.slot}から${mapping.label}に移動しました`,
