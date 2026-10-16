@@ -102,11 +102,15 @@ export class MinebotClient extends BaseClient {
     const memoryIdentity = CONFIG.getMemoryIdentity(serverName as string);
     log.info(`🔌 ${serverName} (host:${CONFIG.MINECRAFT_HOST}, port:${port}, v${version}) に接続します`, 'cyan');
 
+    // A throwaway world on this machine (docs/minebot-ui-mod-fca.md, "確認の手順") is not online-mode: the bot joins it without a
+    // Microsoft login. Only for the companion-body world that is named for it, never for a table's world, and only on loopback.
+    const offlineLab = process.env.MINEBOT_LAB_OFFLINE_AUTH === 'on' && serverName !== 'shannon-home'
+      && CONFIG.companionBodyFor(serverName as string) !== null && ['127.0.0.1', 'localhost'].includes(CONFIG.MINECRAFT_HOST);
     this.bot = mineflayer.createBot({
       host: CONFIG.MINECRAFT_HOST,
       port,
       username,
-      auth: 'microsoft',
+      auth: offlineLab ? 'offline' : 'microsoft',
       version,
       checkTimeoutInterval: CONFIG.CHECK_TIMEOUT_INTERVAL,
       skipValidation: true,
