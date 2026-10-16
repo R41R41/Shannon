@@ -6,6 +6,7 @@ import { closingSpeed, secondsToContact } from '../utils/threatTracker.js';
 import { threatExposure } from '../utils/threatExposure.js';
 import { isSealedIn } from '../utils/shelter.js';
 import { builtAroundStatus } from '../utils/builtAround.js';
+import { creeperLit } from '../utils/creeperFuse.js';
 
 /** The shelter check, for whatever stands in for a body here (a cached self-state has no world to read). */
 function sealedIn(bot: unknown): boolean {
@@ -26,6 +27,7 @@ interface WorldFrameEntityLike {
   displayName?: { toString(): string } | string;
   type?: string;
   isInWater?: boolean;
+  metadata?: unknown[];
   effects?: Record<string, { id?: number; amplifier?: number }>;
 }
 
@@ -164,6 +166,7 @@ export function captureWorldObservation(bot?: unknown): WorldObservation {
           position: entityPosition,
           ...(closing !== null && Math.abs(closing) >= 0.3 ? { closingSpeed: Math.round(closing * 10) / 10 } : {}),
           ...(contact !== null ? { secondsToContact: Math.round(contact * 10) / 10 } : {}),
+          ...(entity.name === 'creeper' ? { ignited: creeperLit(entity) } : {}),
           ...(sealed ? { canReachMe: false as const } : {}),
         };
       })

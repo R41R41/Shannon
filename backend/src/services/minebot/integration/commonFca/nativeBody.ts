@@ -2,6 +2,7 @@ import { Vec3 } from 'vec3';
 import { NativeGoalEvidence, GOAL_EVIDENCE_SKILL } from './goalEvidence.js';
 import { primitiveState, primitiveCandidates, executePrimitive } from './primitives.js';
 import { captureWorldObservation } from '../../cognition/worldFrame.js';
+import { floorActive } from '../../utils/floorReflexes.js';
 import { activeActionCapabilities, cancelNonSurvivalActions, createMotorPort, executeAction,
   hasActiveSafetyLease, physicalActionBusy, withActionSignal } from '../../execution/ActionExecution.js';
 import { bodySkillCatalog, type BodySkill } from './skillCatalog.js';
@@ -71,6 +72,7 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
       yaw: Number(this.bot.entity?.yaw ?? 0), pitch: Number(this.bot.entity?.pitch ?? 0),
       equipped: this.bot.heldItem?.name ?? null, window: this.bot.currentWindow?.type ?? null,
       danger: (this.bot.health ?? 20) <= 8 || (this.bot.oxygenLevel ?? 20) <= 6 || (world.nearbyThreats ?? []).some(t => t.distance <= 5 && t.canReachMe !== false),
+      floorActive: floorActive(this.bot),
       stuck: !!moving && now - this.movedAt > 1500, visualRequired: false, imageAvailable: this.imageAvailable,
       rendererConfigured: this.options.rendererConfigured?.() ?? null,
     };

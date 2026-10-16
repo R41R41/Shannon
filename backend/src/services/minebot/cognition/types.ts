@@ -103,6 +103,8 @@ export interface NearbyEntityObservation {
   secondsToContact?: number;
   /** Present (false) for a hostile that has no line of sight to the body and no open way to it: solid blocks all round. */
   canReachMe?: false;
+  /** Creepers only: true while its fuse is lit or swelling (entity metadata). */
+  ignited?: boolean;
 }
 
 export interface WorldObservation {

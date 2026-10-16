@@ -1,6 +1,7 @@
 import { Vec3 } from 'vec3';
 import { createLogger } from '../../../utils/logger.js';
 import { executeAction, hasActiveSafetyLease, physicalActionBusy, preemptLowerPriorityActions } from '../execution/ActionExecution.js';
+import { creeperLit } from './creeperFuse.js';
 import { FALLBACK_FOOD_POINTS } from '../constantSkills/autoEat.js';
 
 const log = createLogger('Minebot:FloorReflexes');
@@ -54,11 +55,7 @@ export interface RetreatState {
 }
 export interface FloorState { retreat: RetreatState; busy: 'eat' | 'armor' | null; retryAt: number; engagements: { eat: number; armor: number } }
 
-/** Minecraft 1.21 creeper metadata: index 16 is the fuse state (1 while swelling), index 18 is lit by flint and steel. */
-export function creeperLit(entity: FloorEntity): boolean {
-  const meta = Array.isArray(entity.metadata) ? entity.metadata : [];
-  return meta[16] === 1 || meta[18] === true;
-}
+export { creeperLit };
 const hostileNames = new Set(['zombie', 'husk', 'drowned', 'skeleton', 'stray', 'creeper', 'spider', 'cave_spider', 'witch',
   'pillager', 'vindicator', 'piglin_brute', 'hoglin', 'zoglin', 'blaze', 'wither_skeleton', 'slime', 'magma_cube', 'phantom']);
 function others(bot: FloorBody): FloorEntity[] {
@@ -164,6 +161,16 @@ export function floorArmorChoice(bot: FloorBody): { item: Item; destination: str
     if (pieces[0]) return { item: pieces[0], destination };
   }
   return null;
+}
+
+/**
+ * True while the body's own safety reflexes are controlling it: a floor retreat, meal or armour change, the lava or breathing
+ * reflex, or any other action holding a safety lease. The API's fast judgment waits while this is true (`facts.floorActive`).
+ */
+export function floorActive(bot: object): boolean {
+  const b = bot as { floorReflexes?: FloorState; lavaReflex?: { engaged?: boolean }; breathingReflex?: { engaged?: boolean } };
+  return b.floorReflexes?.retreat.engaged === true || !!b.floorReflexes?.busy || b.lavaReflex?.engaged === true
+    || b.breathingReflex?.engaged === true || hasActiveSafetyLease(bot);
 }
 
 export function installFloorReflexes(bot: FloorBody): void {

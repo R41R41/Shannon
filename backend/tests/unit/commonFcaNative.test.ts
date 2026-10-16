@@ -24,6 +24,41 @@ function fixture() {
   const body = new NativeCommonFcaBody(bot, { serverId: 'home', capture: async () => ({ dataUrl: 'data:image/jpeg;base64,YQ==', capturedAt: new Date().toISOString() }) });
   return { bot, body, query };
 }
+describe('floor facts for the API fast judgment (ADR-0011 stage 2)', () => {
+  it('says facts.floorActive only while a floor reflex or a safety lease holds the body', async () => {
+    const { body, bot } = fixture();
+    expect(body.observe().facts.floorActive).toBe(false);
+    bot.floorReflexes = { retreat: { engaged: true, ticks: 0, cooldown: 0, engagements: 1 }, busy: null, retryAt: 0, engagements: { eat: 0, armor: 0 } };
+    expect(body.observe().facts.floorActive).toBe(true);
+    bot.floorReflexes.retreat.engaged = false; bot.floorReflexes.busy = 'eat';
+    expect(body.observe().facts.floorActive).toBe(true);
+    bot.floorReflexes.busy = null; expect(body.observe().facts.floorActive).toBe(false);
+    bot.lavaReflex = { engaged: true }; expect(body.observe().facts.floorActive).toBe(true);
+    bot.lavaReflex = { engaged: false }; bot.breathingReflex = { engaged: true }; expect(body.observe().facts.floorActive).toBe(true);
+    bot.breathingReflex = { engaged: false }; expect(body.observe().facts.floorActive).toBe(false);
+    const held = executeAction(bot, 'floor-retreat', 1000, () => new Promise(resolve => setTimeout(() => resolve({ success: true, result: 'ok' }), 50)),
+      { priority: 350, safetyLease: true, waitForQuiescence: false, legacyExecutingSkill: true });
+    await new Promise(resolve => setTimeout(resolve, 10));
+    expect(body.observe().facts.floorActive).toBe(true);
+    await held; expect(body.observe().facts.floorActive).toBe(false); await body.dispose();
+  });
+  it('marks a swelling or lit creeper as nearbyThreats[].ignited and leaves other mobs without the field', async () => {
+    const { body, bot } = fixture();
+    bot.registry = { entitiesByName: { creeper: { type: 'hostile' }, zombie: { type: 'hostile' } } };
+    const meta = (fuse: unknown, lit: unknown) => { const m: unknown[] = []; m[16] = fuse; m[18] = lit; return m; };
+    bot.entities = {
+      2: { id: 2, name: 'creeper', position: new Vec3(2, 65, 0), metadata: meta(1, false) },
+      3: { id: 3, name: 'creeper', position: new Vec3(3, 65, 0), metadata: meta(-1, false) },
+      4: { id: 4, name: 'creeper', position: new Vec3(4, 65, 0) },
+      5: { id: 5, name: 'zombie', position: new Vec3(5, 65, 0), metadata: meta(1, true) },
+    };
+    const threats = (body.observe().state as any).world.nearbyThreats;
+    expect(threats.map((t: any) => [t.name, t.ignited])).toEqual([['creeper', true], ['creeper', false], ['creeper', false], ['zombie', undefined]]);
+    expect(threats[3]).not.toHaveProperty('ignited');
+    bot.entities[3].metadata = meta(-1, true);
+    expect((body.observe().state as any).world.nearbyThreats[1].ignited).toBe(true); await body.dispose();
+  });
+});
 describe('common FCA native body', () => {
   it('advertises real bounded schemas, query categories and finite native skills only', () => {
     const query = skill('get-health'), unknown = skill('new-physical-skill'), planner = skill('campaign-planner'), code = skill('run-command');
