@@ -29,6 +29,35 @@ FCA の体では `setFcaControls` が入り、ボタンは心への言葉にな�
 
 `VoiceProcessor` が Discord に聞き取り結果を載せる時に、Mod の `POST /voice_transcript`（`integration/uiModVoice.ts`）へ `{text, speaker, mcUsername, mode}` を送る。Mod は同名のオンラインのプレイヤーにだけ出す。`codex/shannonuimod-v2-bridge` にあった同じ機能の移植。
 
+## 確認の手順（隔離した使い捨てのラボ）
+
+隔離ラボ（`MINECRAFT_LAB_UI_MOD=true`、キャンペーンの実走）は旧来の実行経路（`LabUiModBridge`）で動き、FCA の体を通らない。この変更の確認には使えない。代わりに、本物の Minebot クライアント（FCA の体）を使い捨てのワールドに入れ、心だけを偽物（`backend/scripts/lab/fake-fca-mind.mjs`）にする。
+
+部品（すべて `~/uimod-fca-lab` の下、専用の tmux サーバー `-L uimod-fca-lab`、待ち受けはループバックのみ。VM の既存のフォルダー・プロセス・ファイアウォール・本番の心には触れない）:
+
+| 部品 | 内容 |
+| --- | --- |
+| ワールド | Fabric 1.21.11、`127.0.0.1:25570`、offline-mode、フラット、平和、Fabric API と ShannonUIMod 2.0.0（VM の `uimod-test` にある jar のコピー） |
+| Mod の設定 | `backendPort` 38092、`httpServerPort` 38081、`backendToken` は 48 桁の乱数（`mod.token`、権限 600） |
+| 偽の心 | `127.0.0.1:34329`。`/control` に読み取り専用の命令を返し、`/turns` に「止まって」「続けて」などの返事を返す。モデル・DB・実データなし |
+| 体 | `scripts/lab/uimod-fca-lab.ts`（実物の `MinebotClient`、`MINEBOT_COMMON_FCA=on`、`MINEBOT_LAB_OFFLINE_AUTH=on`＝Microsoft ログインなしで入れるのはこのラボ名のワールドだけ） |
+
+手順（操作は `backend/scripts/lab/uimod-fca-lab.sh`）:
+
+1. `git archive` で作ったソースの tarball を VM の `/tmp` に置き、`uimod-fca-lab.sh setup <tarball>`（`node_modules` は VM の開発用チェックアウトからのハードリンクで、元は書き換えない。不足の `@langchain/community` と `date-fns-tz`（nested の date-fns v3）は `~/uimod-fca-lab/extra` に入れてラボの `node_modules` にだけ足す）。
+2. `uimod-fca-lab.sh start`（ワールド → 偽の心 → 体の順）。`status` で 4 つのポートと偽の心の状態（`polls` が増える）を見る。体のログは `~/uimod-fca-lab/logs/body.log`（`LAB_BOT_STARTED`、`MINEBOT_COMPANION_STARTED`）。
+3. 自分の PC で `ssh -L 25570:127.0.0.1:25570 azure-constant-server` をつなぎっぱなしにし、Minecraft 1.21.11（Fabric Loader 0.18 以降、Fabric API、`shannonuimod-2.0.0.jar`）で `localhost:25570` に入る（offline-mode なので名前は何でもよい。`Rai1241` 等）。
+4. `uimod-fca-lab.sh task "木を見て回る" 8` で偽の心がタスクを始める。見るもの:
+   - 状況カードが「作業中」になり、目標・進み具合（`n/8`）が出る。`U` の詳細画面のタスクタブにステップ（`goal-evidence` など）が増えていく。
+   - 設定タブのデバッグログに、命令の開始と結果が出る。
+   - 終わると「待機中」に戻る。
+5. 操作の確認（`G` の指示メニューなど）: 「止まって」「続けて」を押すと、偽の心の `turns`（`uimod-fca-lab.sh turns`）に `止まって` などが届き、偽の心が返事を `/bot_chat` 経由でチャットに出す。タスクの途中で「今の作業をやめて」を押すとタスクタブが「中止」になり、体は止まる。
+6. 終わったら `uimod-fca-lab.sh stop`、片付けは `clean`（`~/uimod-fca-lab` だけを消す）。
+
+2026-10-17 に実行して確認したこと（Mod の画面を人が見る確認は未実施）: 体がワールドに入り（`LAB_BOT_STARTED`、ワールドのログに `I_am_Shannon joined`）、偽の心へ 380 回超ポーリングし、4 ステップのタスクが命令 → receipt → `release` まで完了した。実物の Mod の受信口に、ブリッジと同じ形の `/task` `/task_list` `/task_logs` `/bot_chat` を送ると 200、壊れた JSON は 400。体の `GET /task_list` は 200、`POST /bot_command` は本物のトークンで 200。
+
+ラボの限り: 体のカタログが `goal-evidence` の 1 つだけだった（偽の心はこれを使う。ts-node で動かしているためスキルの読み込みが本番の `dist`（`.js`）と違うのでは、と推測しているが、原因は未確認）。体の本物のスキル（掘る・歩く）の確認ではない。
+
 ## まだやっていないこと
 
 - `codex/shannonuimod-v2-bridge` の旧実行器向け部分（`BotCommandService`・`resumeByControl`・返事の候補 `replyChoices`）は取り込んでいない。FCA の体には返事待ちの状態がないため。旧実行器で使う時は別に扱う。

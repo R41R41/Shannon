@@ -14,6 +14,9 @@ FABRIC_SRC="$HOME/minecraft/1.21.11-fabric-test"          # read only: launcher,
 JARS_SRC="$HOME/Shannon-dev/backend/saves/minecraft/uimod-test" # read only: fabric-api and shannonuimod 2.0.0
 NODE_SRC="$HOME/Shannon-dev/node_modules"                 # read only: hard-linked into the lab
 
+# The same Node the production bot runs on (v22); the shell's default on the VM is older.
+[ -d "$HOME/.nvm/versions/node/v22.21.1/bin" ] && export PATH="$HOME/.nvm/versions/node/v22.21.1/bin:$PATH"
+
 need() { command -v "$1" >/dev/null || { echo "missing: $1" >&2; exit 1; }; }
 
 setup() {
