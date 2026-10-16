@@ -31,6 +31,9 @@ import { readCompanionBodyToken } from './integration/companionBodyConfig.js';
 import { isAddressedToShannon, listenToPlayerChat, playerUuidByName } from './integration/gameChat.js';
 import { MinebotCompanionBody } from './integration/MinebotCompanionBody.js';
 import { createCommonFcaBody } from './integration/commonFca/createCommonFcaBody.js';
+import { CommonFcaUiModBridge } from './integration/commonFca/uiModBridge.js';
+import { createFcaUiControls } from './integration/commonFca/uiModControls.js';
+import { speakCompanionReply } from './integration/companionBodyParts.js';
 import type { CommonFcaControlLoop } from './integration/commonFca/controlLoop.js';
 import { skillCategory } from './execution/SkillExecutor.js';
 import {
@@ -80,6 +83,7 @@ export class SkillAgent {
   /** Shannon's Minecraft body mode: only on the dedicated companion world (CONFIG.companionBodyFor), else null. */
   private companionBody: MinebotCompanionBody | null = null;
   private commonFcaBody: CommonFcaControlLoop | null = null;
+  private fcaUiBridge: CommonFcaUiModBridge | null = null;
   private readonly commonFca = process.env.MINEBOT_COMMON_FCA === 'on';
 
   constructor(bot: CustomBot) {
@@ -174,7 +178,9 @@ export class SkillAgent {
       // HTTPサーバー起動
       this.httpServer.start();
       this.companionBody?.start();
+      this.wireFcaUiMod();
       this.commonFcaBody?.start();
+      this.fcaUiBridge?.start();
 
       // UI Modにスキル情報を送信
       await this.sendConstantSkills();
@@ -333,7 +339,11 @@ export class SkillAgent {
       log.warn('Companion body mode is off for this connection: MINEBOT_COMPANION_BODY_TOKEN_FILE is unreadable or too short');
       return null;
     }
-    if (this.commonFca) this.commonFcaBody = createCommonFcaBody(this.bot, settings, token, process.env.MINEBOT_COMMON_FCA_RENDERER_DIR);
+    if (this.commonFca) {
+      // The task lives in the API: the mod's task tab, status card and log are drawn from the commands the body receives.
+      this.fcaUiBridge = new CommonFcaUiModBridge({ baseUrl: () => CONFIG.UI_MOD_BASE_URL, log: line => log.info(line) });
+      this.commonFcaBody = createCommonFcaBody(this.bot, settings, token, process.env.MINEBOT_COMMON_FCA_RENDERER_DIR, this.fcaUiBridge);
+    }
     const client = new CompanionBodyClient({ baseUrl: settings.url, token, serverId: settings.serverId,
       supportedPrimaryModels: () => supportedCompanionPrimaryModels(config) });
     log.info(`🫀 Companion body mode on ${settings.serverName} (serverId ${settings.serverId})`, 'cyan');
@@ -346,8 +356,25 @@ export class SkillAgent {
     });
   }
 
+  /** The mod's buttons, as the common FCA body answers them (see integration/commonFca/uiModControls.ts). */
+  private wireFcaUiMod(): void {
+    const bridge = this.fcaUiBridge;
+    const body = this.companionBody;
+    if (!this.commonFca || !bridge || !body) return;
+    this.httpServer.setFcaControls(createFcaUiControls({
+      say: (speaker, message) => body.answer(speaker, message),
+      uuidOf: name => playerUuidByName(this.bot.players as any, name),
+      humans: () => Object.keys(this.bot.players ?? {}).filter(name => name !== this.bot.username),
+      abortActive: () => this.commonFcaBody?.abortActive() ?? 0,
+      currentTaskId: () => bridge.currentTaskId(),
+      taskList: () => bridge.taskList(),
+      tell: message => { speakCompanionReply(this.bot as any, message, { uiModBaseUrl: CONFIG.UI_MOD_BASE_URL, lineLimit: CONFIG.MINECRAFT_CHAT_MAX_CHARS, maxLines: 1 }); },
+    }));
+  }
+
   /** Ends the companion body mode for this connection (open requests are reported as run over). */
   async stopCompanionBody(): Promise<boolean> {
+    this.fcaUiBridge?.stop();
     const released = !this.commonFcaBody || await this.commonFcaBody.stop();
     await this.companionBody?.stop('run_over');
     return released;

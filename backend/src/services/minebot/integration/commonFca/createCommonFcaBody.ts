@@ -1,4 +1,4 @@
-import { CommonFcaControlLoop } from './controlLoop.js';
+import { CommonFcaControlLoop, type CommonFcaObserver } from './controlLoop.js';
 import { NativeCommonFcaBody } from './nativeBody.js';
 import path from 'node:path';
 import { createBodyImageCapture } from './imageCapture.js';
@@ -7,7 +7,7 @@ import { minecraftMemoryContext } from '../../runtime/memoryContext.js';
 const WORLD_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
 export function createCommonFcaBody(bot: any, settings: { url: string; serverId: string }, token: string,
-  rendererDirectory?: string): CommonFcaControlLoop {
+  rendererDirectory?: string, observer?: CommonFcaObserver): CommonFcaControlLoop {
   const images = createBodyImageCapture(bot, { rendererDirectory });
   const actuator = new NativeCommonFcaBody(bot, { serverId: settings.serverId,
     capture: signal => images.capture(signal), disposeCapture: () => images.dispose(),
@@ -28,7 +28,7 @@ export function createCommonFcaBody(bot: any, settings: { url: string; serverId:
     bot.placeMemory.persistTo(path.resolve('saves/minecraft/places', placesFile(world?.serverId ?? settings.serverId, worldId)));
   };
   if (bot.entity && (bot.health ?? 0) > 0) persistPlaces(); else bot.once('spawn', persistPlaces);
-  const loop = new CommonFcaControlLoop({ baseUrl: settings.url, token, serverId: settings.serverId, actuator });
+  const loop = new CommonFcaControlLoop({ baseUrl: settings.url, token, serverId: settings.serverId, actuator, observer });
   const end = () => { void loop.stop(); };
   bot.once('end', end);
   return loop;

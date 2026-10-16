@@ -15,9 +15,20 @@ export interface CommonFcaActuator {
   dispose?(): Promise<void>;
   closeEvidence?(context: BodyTaskContext): void;
 }
+/**
+ * What the loop tells a watcher (the UI mod's view of the task). Read only: a watcher cannot change what the loop does,
+ * and one that throws is ignored.
+ */
+export interface CommonFcaObserver {
+  /** The API's command was accepted and starts now. */
+  commandStarted?(command: Command): void;
+  /** The command ended (or was refused) with this receipt. */
+  commandEnded?(command: Command, receipt: Receipt): void;
+}
 export interface CommonFcaControlOptions {
   baseUrl: string; token: string; serverId: string; actuator: CommonFcaActuator;
   fetcher?: typeof fetch; now?: () => number; connectionId?: string; pollMilliseconds?: number;
+  observer?: CommonFcaObserver;
 }
 const log = createLogger('Minebot:CommonFcaControl');
 /** One poll's wait for the API; a slower reply is a failed poll, not lost contact. */
@@ -129,13 +140,16 @@ export class CommonFcaControlLoop {
       || cleanup && this.owner !== null && this.owner !== key && !this.closedSessions.has(sessionKey)) {
       // A command refused for its own shape (stale connection, a deadline out of reach) never took the body: say so, so the
       // API can treat it as a known failure. One refused because the body is held or another owner has it says not released.
-      this.receipts.set(command.id, { id: command.id, connectionId: this.connectionId, outcome: 'failed',
-        inputsReleased: !cleanup && !valid && !this.held && this.active.size === 0, observedAt: new Date(now).toISOString(), result: 'BODY_COMMAND_REFUSED' });
+      const refused: Receipt = { id: command.id, connectionId: this.connectionId, outcome: 'failed',
+        inputsReleased: !cleanup && !valid && !this.held && this.active.size === 0, observedAt: new Date(now).toISOString(), result: 'BODY_COMMAND_REFUSED' };
+      this.receipts.set(command.id, refused);
+      if (valid) this.watch(() => this.options.observer?.commandEnded?.(command, refused));
       return;
     }
     if (!cleanup) { this.owner = key; this.leaseGenerations.set(command.lease.id, command.lease.generation); }
     else if (!this.closedSessions.has(sessionKey)) for (const item of this.active.values()) item.controller.abort('owner_release');
     const controller = new AbortController();
+    this.watch(() => this.options.observer?.commandStarted?.(command));
     const timeout = setTimeout(() => controller.abort('deadline'), cleanup ? 3000 : Math.max(1, Date.parse(command.deadlineAt) - now));
     const running = Promise.resolve().then(async () => {
       let receipt: Receipt;
@@ -158,8 +172,20 @@ export class CommonFcaControlLoop {
         if (!this.held && receipt.inputsReleased && this.owner === key) this.owner = null;
       }
       this.receipts.set(command.id, receipt);
+      this.watch(() => this.options.observer?.commandEnded?.(command, receipt));
     }).finally(() => { clearTimeout(timeout); this.active.delete(command.id); });
     this.active.set(command.id, { controller, running });
+  }
+  /** A watcher never changes what the loop does: its failure is dropped. */
+  private watch(notify: () => void): void { try { notify(); } catch { /* the UI mod is optional */ } }
+  /**
+   * The operator's stop (the UI mod's stop button): running commands are aborted at once, as the API's own cancel does,
+   * and end with an honest `cancelled` receipt. The API still owns the task and learns of it from the receipt and the
+   * mind's turn; this only lets the body stand still without waiting for them.
+   */
+  abortActive(reason = 'operator_stop'): number {
+    for (const item of this.active.values()) item.controller.abort(reason);
+    return this.active.size;
   }
   private async cleanup(command: Command, key: string, signal: AbortSignal): Promise<Receipt> {
     // An old cleanup cannot stop a later owner. It can acknowledge its own already released lease.

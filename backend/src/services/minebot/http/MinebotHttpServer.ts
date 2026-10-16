@@ -8,6 +8,7 @@ import { DEFAULT_HOSTILE_DETECTION } from '../eventReaction/types.js';
 const log = createLogger('Minebot:HTTP');
 import { EventReactionSystem } from '../eventReaction/EventReactionSystem.js';
 import type { MinebotTaskRuntime } from '../runtime/MinebotTaskRuntime.js';
+import { isPlayerName, parseBotCommand, type FcaUiControls, type UiControlResult } from '../integration/commonFca/uiModControls.js';
 import { SkillLoader } from '../skills/SkillLoader.js';
 import { CustomBot } from '../types.js';
 import {
@@ -61,6 +62,8 @@ export class MinebotHttpServer {
     private onChatMessageCallback: ((sender: string, message: string) => Promise<void>) | null = null;
     private eventReactionSystem: EventReactionSystem | null = null;
     private taskRuntime: MinebotTaskRuntime | null = null;
+    /** Set when the body is the common FCA one: the mod's buttons then go to her mind (see uiModControls.ts). */
+    private fca: FcaUiControls | null = null;
     private options: MinebotHttpServerOptions;
 
     constructor(
@@ -97,6 +100,51 @@ export class MinebotHttpServer {
         this.taskRuntime = taskRuntime;
     }
 
+    /** The common FCA body has no task runtime, planner or always-on skills: the mod's controls are answered here. */
+    setFcaControls(controls: FcaUiControls): void {
+        this.fca = controls;
+    }
+
+    /** The old runtime's /chat_message: answers when the message has been handled. */
+    private async legacyChatMessage(req: any, res: any): Promise<void> {
+        try {
+            const { sender, message } = req.body as ChatMessageRequest;
+            log.info(`💬 Chat from ${sender}: ${message}`);
+
+            if (this.onChatMessageCallback) {
+                await this.onChatMessageCallback(sender, message);
+            }
+
+            const response: ApiResponse = {
+                success: true,
+                result: 'Message received'
+            };
+            res.status(200).json(response);
+        } catch (error) {
+            const httpError = new HttpServerError('/chat_message', 500, error as Error);
+            log.error('/chat_message エラー', httpError);
+            res.status(500).json({
+                success: false,
+                result: httpError.message,
+            });
+        }
+    }
+
+    private async fcaTaskAction(req: any, res: any, action: 'delete' | 'prioritize'): Promise<void> {
+        const taskId = (req.body ?? {}).taskId;
+        if (typeof taskId !== 'string' || !taskId) { res.status(400).json({ success: false, result: 'taskId is required' }); return; }
+        this.fcaReply(res, await this.fca!.taskAction(action, taskId));
+    }
+
+    private fcaReply(res: any, result: UiControlResult): void {
+        res.status(result.status ?? (result.success ? 200 : 400)).json({ success: result.success, result: result.result });
+    }
+
+    /** What the FCA body cannot do at all (the settings of the old runtime): said once, so the mod does not retry. */
+    private fcaRefuses(res: any, what: string): void {
+        res.status(409).json({ success: false, result: `${what} is decided by her mind in the common FCA body` });
+    }
+
     /**
      * ミドルウェアの設定
      */
@@ -118,6 +166,13 @@ export class MinebotHttpServer {
     private registerEndpoints(): void {
         // アイテム投げ捨てエンドポイント
         this.app.post('/throw_item', async (req: any, res: any) => {
+            if (this.fca) {
+                const { itemName, count = 1 } = (req.body ?? {}) as Partial<ThrowItemRequest>;
+                if (typeof itemName !== 'string' || !itemName.trim() || itemName.length > 80 || !Number.isFinite(Number(count))) {
+                    return res.status(400).json({ success: false, result: 'itemName and count are required' });
+                }
+                return this.fcaReply(res, await this.fca.giveItem(itemName.trim(), Number(count)));
+            }
             try {
                 const { itemName, count = 1 } = req.body as ThrowItemRequest;
                 const dropItem = this.bot.instantSkills.getSkill('drop-item');
@@ -147,6 +202,13 @@ export class MinebotHttpServer {
 
         // コンスタントスキル切り替えエンドポイント
         this.app.post('/constant_skill_switch', async (req: any, res: any) => {
+            if (this.fca) {
+                const { skillName, status } = (req.body ?? {}) as Partial<ConstantSkillSwitchRequest>;
+                if (typeof skillName !== 'string') return res.status(400).json({ success: false, result: 'skillName is required' });
+                const result = await this.fca.switchSkill(skillName, String(status) === 'true');
+                void this.sendConstantSkillsCallback();
+                return this.fcaReply(res, result);
+            }
             try {
                 const { skillName, status } = req.body as ConstantSkillSwitchRequest;
                 const constantSkill = this.bot.constantSkills.getSkill(skillName);
@@ -227,6 +289,7 @@ export class MinebotHttpServer {
 
         // 反応設定更新エンドポイント
         this.app.post('/reaction_setting_update', async (req: any, res: any) => {
+            if (this.fca) return this.fcaRefuses(res, 'how she reacts');
             try {
                 const { eventType, enabled, probability, hostileDetection } =
                     req.body as ReactionSettingUpdateRequest;
@@ -269,6 +332,7 @@ export class MinebotHttpServer {
 
         // 反応設定リセットエンドポイント
         this.app.post('/reaction_settings_reset', async (req: any, res: any) => {
+            if (this.fca) return this.fcaRefuses(res, 'how she reacts');
             try {
                 // EventReactionSystemで設定をリセット
                 if (this.eventReactionSystem) {
@@ -337,32 +401,42 @@ export class MinebotHttpServer {
         });
 
         // チャットメッセージエンドポイント
-        this.app.post('/chat_message', async (req: any, res: any) => {
+        // Answers at once: her mind takes seconds to reply, and her words reach the mod through /bot_chat. Holding the
+        // request open would stall the mod's backend thread (read timeout 10 s) and repeat the message on a timeout.
+        this.app.post('/chat_message', (req: any, res: any) => {
+            if (!this.fca) return this.legacyChatMessage(req, res);
+            const { sender, message } = (req.body ?? {}) as Partial<ChatMessageRequest>;
+            if (!isPlayerName(sender) || typeof message !== 'string' || !message.trim() || message.length > 256) {
+                return res.status(400).json({ success: false, result: 'sender and message are required' });
+            }
+            if (!this.onChatMessageCallback) return res.status(503).json({ success: false, result: 'Chat callback not set' });
+            log.info(`💬 Chat from ${sender}: ${message}`);
+            res.status(202).json({ success: true, result: 'Message accepted' } satisfies ApiResponse);
+            this.onChatMessageCallback(sender, message.trim()).catch((error) => {
+                log.error('/chat_message processing failed', new HttpServerError('/chat_message', 500, error as Error));
+            });
+        });
+
+        // The mod's quick orders (stop, follow, come, resume, cancel): fixed words to her mind. Only the FCA body has
+        // this route; the old runtime answers 404, which the mod reads as "use the older endpoints".
+        this.app.post('/bot_command', async (req: any, res: any) => {
+            if (!this.fca) return res.status(404).json({ success: false, result: 'not supported' });
+            const { command, sender } = (req.body ?? {}) as { command?: unknown; sender?: unknown };
+            const parsed = parseBotCommand(command);
+            if (!parsed || !isPlayerName(sender)) return res.status(400).json({ success: false, result: 'command and sender are required' });
             try {
-                const { sender, message } = req.body as ChatMessageRequest;
-                log.info(`💬 Chat from ${sender}: ${message}`);
-
-                if (this.onChatMessageCallback) {
-                    await this.onChatMessageCallback(sender, message);
-                }
-
-                const response: ApiResponse = {
-                    success: true,
-                    result: 'Message received'
-                };
-                res.status(200).json(response);
+                log.info(`🎮 Command ${parsed} from ${sender}`);
+                this.fcaReply(res, await this.fca.command(parsed, sender));
             } catch (error) {
-                const httpError = new HttpServerError('/chat_message', 500, error as Error);
-                log.error('/chat_message エラー', httpError);
-                res.status(500).json({
-                    success: false,
-                    result: httpError.message,
-                });
+                const httpError = new HttpServerError('/bot_command', 500, error as Error);
+                log.error('/bot_command エラー', httpError);
+                res.status(500).json({ success: false, result: httpError.message });
             }
         });
 
         // タスクリスト取得エンドポイント
         this.app.get('/task_list', async (req: any, res: any) => {
+            if (this.fca) return res.status(200).json(this.fca.taskList());
             try {
                 if (!this.taskRuntime) {
                     return res.status(200).json({ tasks: [], emergencyTask: null, currentTaskId: null });
@@ -378,6 +452,7 @@ export class MinebotHttpServer {
 
         // タスク削除エンドポイント
         this.app.post('/task_delete', async (req: any, res: any) => {
+            if (this.fca) return this.fcaTaskAction(req, res, 'delete');
             try {
                 const { taskId } = req.body;
                 if (!taskId) {
@@ -404,6 +479,7 @@ export class MinebotHttpServer {
 
         // タスク優先実行エンドポイント
         this.app.post('/task_prioritize', async (req: any, res: any) => {
+            if (this.fca) return this.fcaTaskAction(req, res, 'prioritize');
             try {
                 const { taskId } = req.body;
                 if (!taskId) {
@@ -425,6 +501,11 @@ export class MinebotHttpServer {
 
         // タスク続行エンドポイント（ShannonUI Mod の「続行」ボタンから）
         this.app.post('/task_continue', async (req: any, res: any) => {
+            if (this.fca) {
+                const sender = (req.body ?? {}).sender;
+                // The mod sends no name here: with exactly one other player on the server it is that player.
+                return this.fcaReply(res, await this.fca.command('RESUME', isPlayerName(sender) ? sender : ''));
+            }
             try {
                 const { taskId } = req.body;
                 log.info(`▶ /task_continue: taskId=${taskId ?? '(current)'}`);
