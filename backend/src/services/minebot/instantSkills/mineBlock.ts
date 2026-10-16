@@ -248,6 +248,7 @@ class MineBlock extends InstantSkill {
     }
 
     let mined = 0;
+    let handDugCount = 0;
     const failures: string[] = [];
     let lastFailureType: string | undefined;
     let lastRecoverable = false;
@@ -457,8 +458,8 @@ class MineBlock extends InstantSkill {
             digResult = await digBlockAt.run(bt.x, bt.y, bt.z, true, collectionPolicy);
           }
           if (!digResult.success) await flushPendingDrops();
-          if (digResult.failureType === 'missing_tool') {
-            batchAbortReason = { type: 'missing_tool', result: digResult.result };
+          if (digResult.failureType === 'missing_tool' || digResult.failureType === 'equip_failed') {
+            batchAbortReason = { type: digResult.failureType, result: digResult.result };
             break;
           }
           // Judged block by block: the one under the feet, or one with lava beside it, says nothing of the
@@ -470,6 +471,7 @@ class MineBlock extends InstantSkill {
           // The body is under water and cannot dig there for want of air: no other block of the batch differs.
           if (digResult.failureType === 'air_short') { batchAbortReason = { type: 'air_short', result: digResult.result }; break; }
           if (digResult.success) {
+            if (digResult.handDug) handDugCount++;
             completedTargets.add(targetKey(bt));
             batchDug++;
             consecutiveFailures = 0;
@@ -507,7 +509,7 @@ class MineBlock extends InstantSkill {
         if (batchAbortReason) {
           lastFailureType = batchAbortReason.type;
           lastRecoverable = true;
-          failures.push(`${batchAbortReason.type === 'missing_tool' ? 'ツール不足' : '中止'}: ${batchAbortReason.result}`);
+          failures.push(`${batchAbortReason.type === 'missing_tool' ? 'ツール不足' : batchAbortReason.type === 'equip_failed' ? '装備失敗' : '中止'}: ${batchAbortReason.result}`);
           break;
         }
 
@@ -533,10 +535,10 @@ class MineBlock extends InstantSkill {
         if (digResult.failureType === 'obstruction_cleared') {
           digResult = await digBlockAt.run(target.x, target.y, target.z, true, collectionPolicy);
         }
-        if (digResult.failureType === 'missing_tool') {
-          lastFailureType = 'missing_tool';
+        if (digResult.failureType === 'missing_tool' || digResult.failureType === 'equip_failed') {
+          lastFailureType = digResult.failureType;
           lastRecoverable = true;
-          failures.push(`ツール不足: ${digResult.result}`);
+          failures.push(`${digResult.failureType === 'equip_failed' ? '装備失敗' : 'ツール不足'}: ${digResult.result}`);
           break;
         }
         if (digResult.failureType === 'lava_danger' || digResult.failureType === 'drop_would_burn') {
@@ -548,6 +550,7 @@ class MineBlock extends InstantSkill {
           break;
         }
         if (digResult.success) {
+          if (digResult.handDug) handDugCount++;
           completedTargets.add(targetKey(target));
           mined = completedTargets.size;
           consecutiveFailures = 0;
@@ -606,6 +609,17 @@ class MineBlock extends InstantSkill {
     const drops = this.detectDrops(beforeInventory).filter(drop => collectionPolicy === 'all'
       || expectedItems.length === 0 || expectedItems.includes(drop.item));
     const totalDropCount = drops.reduce((sum, d) => sum + d.count, 0);
+
+    if (totalDropCount === 0 && handDugCount > 0) {
+      // Not drops_lost: nothing vanished. A block that needs a harvest tool, broken without one, drops nothing by design.
+      return {
+        success: false,
+        result: `${blockName}を${mined}個掘削しましたが、適切なツールを手に持たず素手で掘ったためドロップはありません（消失ではなく仕様）。`
+          + `ブロックは破壊済みです。mc.equip-item でツルハシを手に持ってから残りを掘り直してください。${toolWarning}`,
+        failureType: 'hand_dug_no_drop',
+        recoverable: true,
+      };
+    }
 
     if (totalDropCount === 0) {
       return {

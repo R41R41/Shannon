@@ -1,6 +1,7 @@
 import { Vec3 } from 'vec3';
 import { chooseTool } from '../utils/toolChoice.js';
 import { keepCheapTool } from '../utils/toolStock.js';
+import { equipToHandVerified } from '../utils/equipVerified.js';
 import { CustomBot, InstantSkill } from '../types.js';
 import { createLogger } from '../../../utils/logger.js';
 import { PROTECTED_UTILITY_BLOCKS } from '../constants.js';
@@ -191,11 +192,14 @@ class DigBlockAt extends InstantSkill {
           const tool = chooseTool(block, validTools, { requireHarvest: true, effects: this.bot.entity?.effects }) ?? validTools[0];
 
           // ツールを装備
-          try {
-            await this.bot.equip(tool, 'hand');
-            log.info(`🔧 ${tool.name}を装備しました`);
-          } catch (equipError: any) {
-            log.error(`ツール装備エラー: ${equipError.message}`, equipError);
+          // "Equipped" is only logged once the tool is seen in the hand (paid run 14 logged it and dug ore bare-handed).
+          const equipped = await equipToHandVerified(this.bot, tool);
+          if (equipped.held) {
+            log.info(`🔧 ${tool.name}を装備しました${equipped.retried ? `（ホットバーへ移して再試行: ${equipped.detail}）` : ''}`);
+          } else {
+            log.error(`ツール装備失敗: ${tool.name} が手に入りません（${equipped.detail}）`);
+            // The block only drops with this tool, and by hand it takes many times as long: not dug when its drop is wanted.
+            if (collect || keepDrop === true) return this.equipFailure(block, tool.name);
           }
 
           durabilityWarning = this.checkToolDurabilityWarning(tool);
@@ -243,6 +247,14 @@ class DigBlockAt extends InstantSkill {
           const again = tool ? this.bot.inventory.items().find(item => item.type === tool.type) : null;
           if (again) { try { await this.bot.equip(again, 'hand'); } catch { /* dug with what is held */ } }
         }
+      }
+
+      // Whatever happened since the equip (a re-equip after the lava work, a tool lost): a block that needs a
+      // harvest tool is dug without one only when its drop is not wanted.
+      const handDug = !!block.harvestTools && !(this.bot.heldItem && block.harvestTools[this.bot.heldItem.type]);
+      if (handDug && (collect || keepDrop === true)) {
+        await this.takeWaterBack(poured);
+        return this.equipFailure(block, null);
       }
 
       const equippedTool = this.bot.heldItem?.name ?? '素手';
@@ -314,7 +326,13 @@ class DigBlockAt extends InstantSkill {
       const waterWarning = left
         ? ` ⚠️ ドロップを溶岩から守るために置いた水(${left.x}, ${left.y}, ${left.z})をバケツへ戻せませんでした（バケツは空です）。その水源を use-item-on-block（bucket）で汲み直してください`
         : '';
-      const warnings = [slowWarning, durabilityWarning, waterWarning].filter(Boolean).join('');
+      // Only reachable when the drop was not wanted (collect=false, nothing kept): said anyway, for a caller that is
+      // counting what it will find on the ground.
+      const handNote = handDug
+        ? ` ⚠️${blockName}は適切なツールを持たず素手で掘ったためドロップはありません`
+        : '';
+      const handFlag = handDug ? { handDug: true } : {};
+      const warnings = [slowWarning, durabilityWarning, waterWarning, handNote].filter(Boolean).join('');
 
       // インベントリに空きがない場合は回収を試みない
       const noEmptySlots = typeof this.bot.inventory.emptySlotCount === 'function'
@@ -327,6 +345,7 @@ class DigBlockAt extends InstantSkill {
         return {
           success: true,
           result: `${blockName}を掘りました${note}${warnings}`,
+          ...handFlag,
         };
       }
 
@@ -371,6 +390,18 @@ class DigBlockAt extends InstantSkill {
           error.message.includes('aborted'),
       };
     }
+  }
+
+  /** The tool that yields this block could not be put in the hand: nothing is dug (by hand it takes long and drops nothing). */
+  private equipFailure(block: any, toolName: string | null) {
+    const tool = toolName ?? '採掘用のツール';
+    return {
+      success: false as const,
+      failureType: 'equip_failed',
+      recoverable: true,
+      result: `${tool}を手に持てなかったため、${block.name}は掘りませんでした（素手では時間がかかり、ドロップも得られません）。`
+        + `mc.equip-item で${toolName ?? 'ツルハシなど'}を装備できるか試すか、ホットバー（クイックバー）の空きを作ってから再実行してください`,
+    };
   }
 
   private getToolDurabilityRemaining(item: any): number {

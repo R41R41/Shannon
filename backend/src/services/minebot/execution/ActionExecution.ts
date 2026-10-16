@@ -75,7 +75,7 @@ export function createMotorPort<T extends object>(bot: T): T {
     if (owner && (owner.controller.signal.aborted || owner.settled || (owner.root ?? owner).trace.quiescent)) throw new Error('Motor owner expired');
     assertActionActive(bot);
   };
-  const writes = new Set(['equip', 'consume', 'look', 'lookAt', 'attack', 'activateItem', 'deactivateItem',
+  const writes = new Set(['equip', 'moveSlotItem', 'setQuickBarSlot', 'consume', 'look', 'lookAt', 'attack', 'activateItem', 'deactivateItem',
     'setControlState', 'clearControlStates', 'dig', 'stopDigging', 'placeBlock', 'activateBlock', 'openContainer', 'openFurnace']);
   const paths = new Set(['setGoal', 'goto', 'stop', 'setMovements']);
   const path = (value: any) => new Proxy(value, { get(target, key) {

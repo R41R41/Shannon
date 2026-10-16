@@ -63,10 +63,16 @@ export class BotEventHandler {
      * entitySpawnイベント - アイテム自動収集
      */
     private registerEntitySpawn(): void {
+        let warnedMissing = false;
         this.bot.on('entitySpawn', async (entity) => {
             const autoPickUpItem = this.bot.constantSkills.getSkill('auto-pick-up-item');
             if (!autoPickUpItem) {
-                log.warn('autoPickUpItem not found');
+                // Not registered on purpose in the common-FCA body (skillAgent keeps only query skills and auto-swim),
+                // and this fires for every entity spawn: said once, not thousands of times (4,426 in production run 14).
+                if (!warnedMissing) {
+                    warnedMissing = true;
+                    log.warn('autoPickUpItem not found (この体では登録されていません。以後この警告は出しません)');
+                }
                 return;
             }
             if (!autoPickUpItem.status) return;

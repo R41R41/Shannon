@@ -45,6 +45,8 @@ export interface SkillResult {
     result: string;
     failureType?: string;
     recoverable?: boolean;
+    /** dig-block-at: a block that needs a harvest tool was dug without one in hand, so it dropped nothing. */
+    handDug?: boolean;
     error?: string;
     duration?: number;
     execution?: ActionTrace;
