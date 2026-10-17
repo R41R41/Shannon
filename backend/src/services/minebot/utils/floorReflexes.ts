@@ -1,8 +1,11 @@
 import { Vec3 } from 'vec3';
 import { createLogger } from '../../../utils/logger.js';
-import { executeAction, hasActiveSafetyLease, physicalActionBusy, preemptLowerPriorityActions } from '../execution/ActionExecution.js';
+import { activeActionCapabilities, createMotorPort, executeAction, hasActiveSafetyLease, physicalActionBusy, preemptLowerPriorityActions } from '../execution/ActionExecution.js';
 import { creeperLit } from './creeperFuse.js';
 import { FALLBACK_FOOD_POINTS } from '../constantSkills/autoEat.js';
+import { floorConfig, type FloorConfig } from './floorConfig.js';
+import { ensureReflexLedger, type ReflexKind } from './reflexLedger.js';
+import { threatExposure } from './threatExposure.js';
 
 const log = createLogger('Minebot:FloorReflexes');
 
@@ -17,6 +20,18 @@ const log = createLogger('Minebot:FloorReflexes');
 export const FLOOR_RETREAT_PRIORITY = 350;
 export const FLOOR_EAT_PRIORITY = 200;
 export const FLOOR_ARMOR_PRIORITY = 150;
+/** Between the retreat (350) and the meal (200): the low-health flee (`extended` only, P8). */
+export const FLOOR_FLEE_PRIORITY = 250;
+/** At or below this health (the API's own `lowHealth`) a hostile within FLEE_RANGE is run from at once. */
+export const FLEE_HEALTH = 6;
+const FLEE_RANGE = 3;
+/** One flee lasts at most 1.2 s or 5 blocks, twice in 20 s; what comes after is the API's fast judgment (shelter, flee-from). */
+const FLEE_TICKS = 24;
+const FLEE_BLOCKS = 5;
+const FLEE_WINDOW_MS = 20_000;
+const FLEE_MAX_IN_WINDOW = 2;
+/** Skills that are already getting the body away: the flee never cuts one of these (the API's DEFENSIVE_SKILLS that escape). */
+export const ESCAPE_SKILLS: ReadonlySet<string> = new Set(['flee-from', 'dig-shelter', 'build-around-self', 'retreat-attack']);
 /** One retreat lasts at most a second, or three blocks (ADR-0010 D8). */
 const RETREAT_TICKS = 20;
 const RETREAT_BLOCKS = 3;
@@ -53,7 +68,11 @@ export interface RetreatState {
   /** Last seen position of each arrow: one that did not move since the last tick is stuck, whatever velocity it reported. */
   arrows?: Map<number, Vec3>;
 }
-export interface FloorState { retreat: RetreatState; busy: 'eat' | 'armor' | null; retryAt: number; engagements: { eat: number; armor: number } }
+export interface FloorState {
+  retreat: RetreatState; busy: 'eat' | 'armor' | 'flee' | null; retryAt: number; engagements: { eat: number; armor: number; flee?: number };
+  /** When each flee of the last 20 s began (the budget). */
+  fleeStarts?: number[];
+}
 
 export { creeperLit };
 const hostileNames = new Set(['zombie', 'husk', 'drowned', 'skeleton', 'stray', 'creeper', 'spider', 'cave_spider', 'witch',
@@ -173,21 +192,79 @@ export function floorActive(bot: object): boolean {
     || b.breathingReflex?.engaged === true || hasActiveSafetyLease(bot);
 }
 
-export function installFloorReflexes(bot: FloorBody): void {
+/** The hostile to run from at low health: reachable (not walled off), within FLEE_RANGE, nearest first. Null above FLEE_HEALTH. */
+export function fleeThreat(bot: FloorBody): { from: Vec3 } | null {
+  const health = bot.health ?? 20, at = bot.entity?.position;
+  if (!at || !(health > 0 && health <= FLEE_HEALTH) || bot.entity?.isInLava) return null;
+  let nearest: { distance: number; position: Vec3 } | null = null;
+  for (const entity of others(bot)) {
+    if (!hostileNames.has(String(entity.name))) continue;
+    const distance = entity.position.distanceTo(at);
+    if (distance > FLEE_RANGE || (nearest && distance >= nearest.distance)) continue;
+    let sealed = false;
+    try { sealed = threatExposure(bot as any, entity as any) === 'sealed'; } catch { sealed = false; }
+    if (!sealed) nearest = { distance, position: entity.position };
+  }
+  return nearest ? { from: nearest.position } : null;
+}
+/**
+ * Whether the low-health flee may start now. Precedence (P8): a floor retreat, meal or armour change, or any other safety lease
+ * holds the body first; the API's own escape skills (flee-from, a shelter) are never cut; the budget is two flees in 20 s.
+ * A fight or a task action under it is cut: at this health the API's fast judgment would cut it too.
+ */
+export function fleeStart(bot: FloorBody, state: FloorState, now: number): { from: Vec3 } | null {
+  if (state.retreat.engaged || state.busy || hasActiveSafetyLease(bot)) return null;
+  if (bot.lavaReflex?.engaged === true || bot.breathingReflex?.engaged === true) return null;
+  if (activeActionCapabilities(bot).some(capability => ESCAPE_SKILLS.has(capability))) return null;
+  state.fleeStarts = (state.fleeStarts ?? []).filter(at => now - at < FLEE_WINDOW_MS);
+  if (state.fleeStarts.length >= FLEE_MAX_IN_WINDOW) return null;
+  return fleeThreat(bot);
+}
+/**
+ * The flee itself, run as the work of a safety-lease action. Keys go through the motor port, so an action that took the body
+ * from it (a retreat, lava) makes the next write fail instead of fighting it; the keys are always let go at the end.
+ */
+export async function runLowHealthFlee(bot: FloorBody, port: FloorBody, tickMs = 50): Promise<{ success: boolean; result: string }> {
+  const origin = bot.entity!.position.clone();
+  let ticks = 0;
+  try {
+    for (; ticks < FLEE_TICKS; ticks++) {
+      const threat = fleeThreat(bot), body = bot.entity;
+      if (!threat || !body || bot.lavaReflex?.engaged === true || bot.breathingReflex?.engaged === true) break;
+      if (body.position.distanceTo(origin) >= FLEE_BLOCKS) break;
+      // Straight away from it; the edge guard keeps the final say over the keys at a drop.
+      port.look?.(Math.atan2(body.position.x - threat.from.x, body.position.z - threat.from.z) + Math.PI, 0, true);
+      port.setControlState('forward', true); port.setControlState('sprint', true);
+      await new Promise(resolve => setTimeout(resolve, tickMs));
+    }
+  } finally { releaseKeys(bot); }
+  return { success: true, result: ticks > 0 ? '低体力のため敵から離れた' : '離れる必要がなくなった' };
+}
+
+export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floorConfig(), options: { fleeTickMs?: number } = {}): void {
   if (bot.floorReflexes) return;
   const state: FloorState = bot.floorReflexes = { retreat: { engaged: false, ticks: 0, cooldown: 0, engagements: 0 }, busy: null, retryAt: 0,
-    engagements: { eat: 0, armor: 0 } };
-  const take = (capability: string, priority: number, timeoutMs: number, work: () => Promise<{ success: boolean; result: string }>) => {
+    engagements: { eat: 0, armor: 0, flee: 0 }, fleeStarts: [] };
+  const ledger = ensureReflexLedger(bot as any);
+  type Work = () => Promise<{ success: boolean; result: string }>;
+  const take = (capability: string, priority: number, timeoutMs: number, work: Work) => {
     preemptLowerPriorityActions(bot, priority, capability);
     return executeAction(bot as any, capability, timeoutMs, work as any,
       { priority, safetyLease: true, waitForQuiescence: false, legacyExecutingSkill: true });
   };
+  /** `take`, with the ledger told when it began and how it ended (done, cut off by a stronger reflex, or failed). */
+  const takeNoted = (kind: ReflexKind, detail: string, capability: string, priority: number, timeoutMs: number, work: Work) => {
+    const handle = ledger.begin(kind, detail);
+    return take(capability, priority, timeoutMs, work).then(result => {
+      ledger.end(handle, result?.success ? 'done' : result?.failureType === 'interrupted' ? 'cut' : 'failed'); return result;
+    }, error => { ledger.end(handle, 'failed'); throw error; });
+  };
   bot.on('physicsTick', () => {
     let outcome: ReturnType<typeof floorRetreatTick> = null;
-    try { outcome = floorRetreatTick(bot, state.retreat); } catch { return; }
+    try { outcome = config.retreat ? floorRetreatTick(bot, state.retreat) : null; } catch { return; }
     if (outcome === 'engaged') {
       log.warn(state.retreat.kind === 'creeper' ? '💥 火の付いたクリーパー: 離れる' : '🏹 矢が向かってくる: 横へよける');
-      void take('floor-retreat', FLOOR_RETREAT_PRIORITY, 3000,
+      void takeNoted('retreat', state.retreat.kind === 'creeper' ? '火の付いたクリーパーから離れた' : '飛んでくる矢をよけた', 'floor-retreat', FLOOR_RETREAT_PRIORITY, 3000,
         () => new Promise(resolve => {
           if (state.retreat.done || !state.retreat.engaged) return resolve({ success: true, result: '下がった' });
           state.retreat.release = () => resolve({ success: true, result: '下がった' });
@@ -196,9 +273,22 @@ export function installFloorReflexes(bot: FloorBody): void {
       return;
     }
     if (outcome === 'released') { state.retreat.done = true; state.retreat.release?.(); return; }
-    if (state.retreat.engaged || state.busy || Date.now() < state.retryAt) return;
+    if (state.retreat.engaged || state.busy) return;
+    if (config.flee) {
+      let threat: ReturnType<typeof fleeStart> = null;
+      try { threat = fleeStart(bot, state, Date.now()); } catch { threat = null; }
+      if (threat) {
+        state.busy = 'flee'; state.engagements.flee = (state.engagements.flee ?? 0) + 1; (state.fleeStarts ??= []).push(Date.now());
+        log.warn(`🏃 低体力（${bot.health}）で敵が近い: 離れる`);
+        void takeNoted('flee', '低体力のため敵から離れた', 'floor-flee', FLOOR_FLEE_PRIORITY, 3000,
+          () => runLowHealthFlee(bot, createMotorPort(bot), options.fleeTickMs))
+          .catch(() => undefined).finally(() => { state.busy = null; });
+        return;
+      }
+    }
+    if (Date.now() < state.retryAt) return;
     let food: Item | null = null, armor: ReturnType<typeof floorArmorChoice> = null;
-    try { food = floorEatChoice(bot); armor = food ? null : floorArmorChoice(bot); } catch { return; }
+    try { food = config.eat ? floorEatChoice(bot) : null; armor = food || !config.armor ? null : floorArmorChoice(bot); } catch { return; }
     if (food && bot.equip && bot.consume) {
       // Never over another safety reflex (breath, lava). Over a model's action or a reflex session only when it cannot wait
       // (starving or nearly dead); otherwise between actions, so the work it would cut is not cut for a meal.
@@ -207,7 +297,7 @@ export function installFloorReflexes(bot: FloorBody): void {
       state.busy = 'eat'; state.engagements.eat++;
       log.info(`🍖 食べる: ${food.name}（体力 ${bot.health} / 満腹度 ${bot.food}）`);
       const held = bot.heldItem;
-      void take('floor-eat', FLOOR_EAT_PRIORITY, 6000, async () => {
+      void takeNoted('eat', `食事（${food.name}）`, 'floor-eat', FLOOR_EAT_PRIORITY, 6000, async () => {
         await bot.equip!(food!, 'hand'); await bot.consume!();
         if (held && held.name !== food!.name) await bot.equip!(held, 'hand').catch(() => undefined);
         return { success: true, result: `${food!.name}を食べた` };
@@ -216,7 +306,7 @@ export function installFloorReflexes(bot: FloorBody): void {
     } else if (armor && bot.equip && !hasActiveSafetyLease(bot) && (!physicalActionBusy(bot) || hostileWithin(bot, 16))) {
       state.busy = 'armor'; state.engagements.armor++;
       log.info(`🛡️ 防具を着ける: ${armor.item.name}`);
-      void take('floor-armor', FLOOR_ARMOR_PRIORITY, 3000, async () => {
+      void takeNoted('armor', `防具（${armor.item.name}）を着けた`, 'floor-armor', FLOOR_ARMOR_PRIORITY, 3000, async () => {
         await bot.equip!(armor!.item, armor!.destination);
         return { success: true, result: `${armor!.item.name}を着けた` };
       }).then(result => { if (!result?.success) state.retryAt = Date.now() + RETRY_AFTER_MS; })

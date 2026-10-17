@@ -151,6 +151,13 @@ export interface WorldObservation {
    * what it cost, and what the body has measured of that kind. What to do about it is the planner's.
    */
   recentInterruptions?: string;
+  /**
+   * Said only when a body reflex acted lately (P8): the last few within 3 minutes, newest first, with seconds ago, and how many
+   * of each kind since connecting. Reflexes act on the physics tick without the planner; this is how it learns what they did.
+   */
+  reflexes?: { recent: Array<{ ageSec: number; kind: string; detail: string }>; counts: Record<string, number> };
+  /** Said only while a furnace is working (start-smelting): status, estimated time left, input and where; `completionVerified` is always false (an estimate is not a result). */
+  jobs?: Array<{ status: string; remainingEstimateMs: number; input: unknown; count: unknown; position: WorldVector; unfueledInputCount?: number; completionVerified: false }>;
   /** Said only while the body is near what it last built round itself (build-around-self): where, and how many of its blocks are missing. */
   builtAround?: string;
   /** Said only while the planner has taken a kind of mob on for a time (accept-threat): which, and the seconds left. */

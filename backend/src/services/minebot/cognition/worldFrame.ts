@@ -7,6 +7,7 @@ import { threatExposure } from '../utils/threatExposure.js';
 import { isSealedIn } from '../utils/shelter.js';
 import { builtAroundStatus } from '../utils/builtAround.js';
 import { creeperLit } from '../utils/creeperFuse.js';
+import { backgroundJobs } from '../execution/backgroundJobs.js';
 
 /** The shelter check, for whatever stands in for a body here (a cached self-state has no world to read). */
 function sealedIn(bot: unknown): boolean {
@@ -37,7 +38,8 @@ export interface WorldFrameBotLike {
   entities?: Record<string, WorldFrameEntityLike | undefined>;
   inventory?: { items?(): Array<{ name: string; count: number; maxDurability?: number; durabilityUsed?: number }> };
   currentWindow?: { type?: string; inventoryStart: number; inventoryEnd: number; slots: Array<{ name: string; count: number } | null> } | null;
-  registry?: { effects?: Record<string, { name: string }>; entitiesByName?: Record<string, { type?: string }> };
+  registry?: { effects?: Record<string, { name: string }>; entitiesByName?: Record<string, { type?: string }>; biomes?: Record<number, { name?: string }> };
+  world?: { getBiome?(position: unknown): unknown };
   time?: { timeOfDay?: number };
   isRaining?: boolean;
   game?: { dimension?: unknown };
@@ -106,6 +108,43 @@ function survivalMargin(bot: unknown, health: number | null, food: number | null
     foodItems: foods ? inventory.filter(item => item.name in foods).reduce((sum, item) => sum + item.count, 0) : 0,
     ...(hitsLeft ? { hitsLeft } : {}),
   };
+}
+
+const biomeCache = new WeakMap<object, { key: string; name: string }>();
+/**
+ * The biome under the body, read from the world itself. `environmentState.biome` is filled by `auto-update-state`, which the
+ * common-FCA body never runs, so it stayed empty. Cached per 2-block cell (a biome does not change inside one) so the 100 ms
+ * observation does not look it up each time; an unloaded cell is null, never an empty string.
+ */
+function biomeAt(bot: WorldFrameBotLike | undefined): string | null {
+  const world = bot?.world, position = bot?.entity?.position as { x?: number; y?: number; z?: number } | undefined;
+  if (!bot || typeof world?.getBiome !== 'function' || !position) return null;
+  const x = finiteNumber(position.x), y = finiteNumber(position.y), z = finiteNumber(position.z);
+  if (x === null || y === null || z === null) return null;
+  const key = `${Math.floor(x / 2)},${Math.floor(y / 2)},${Math.floor(z / 2)}`;
+  const cached = biomeCache.get(bot);
+  if (cached?.key === key) return cached.name;
+  try {
+    const id = world.getBiome(bot.entity!.position);
+    const name = typeof id === 'number' ? bot.registry?.biomes?.[id]?.name : undefined;
+    if (!name) return null;
+    biomeCache.set(bot, { key, name });
+    return name;
+  } catch { return null; }
+}
+
+/** Furnaces still working, as said in the observation (the long instruction is the API's own wording). Under 600 characters or fewer entries. */
+const JOBS_MAX_CHARS = 600;
+function jobsFrame(bot: unknown): WorldObservation['jobs'] | undefined {
+  const furnaces = (bot as { activeFurnaces?: unknown[] } | undefined)?.activeFurnaces;
+  if (!Array.isArray(furnaces) || !furnaces.length) return undefined;
+  const jobs = backgroundJobs(bot as Parameters<typeof backgroundJobs>[0]).map(job => ({
+    status: job.status, remainingEstimateMs: job.remainingEstimateMs, input: job.input, count: job.count,
+    position: { x: job.position.x, y: job.position.y, z: job.position.z },
+    ...(job.unfueledInputCount ? { unfueledInputCount: job.unfueledInputCount } : {}), completionVerified: false as const,
+  }));
+  while (jobs.length > 1 && JSON.stringify(jobs).length > JOBS_MAX_CHARS) jobs.pop();
+  return jobs.length ? jobs : undefined;
 }
 
 function finiteNumber(value: unknown): number | null {
@@ -218,7 +257,7 @@ export function captureWorldObservation(bot?: unknown): WorldObservation {
     ...(sealedIn(observedBot) ? { sealedInShelter: true as const } : {}),
     weather,
     time,
-    biome: observedBot?.environmentState?.biome ?? null,
+    biome: biomeAt(observedBot) ?? (observedBot?.environmentState?.biome || null),
     heldItem: observedBot?.heldItem?.name ?? observedBot?.selfState?.botHeldItem ?? null,
     inventory,
     activeEffects,
@@ -248,6 +287,15 @@ export function captureWorldObservation(bot?: unknown): WorldObservation {
         const stops = (observedBot as { recentInterruptions?: () => string | null } | undefined)?.recentInterruptions?.();
         return stops ? { recentInterruptions: stops } : {};
       } catch { return {}; }
+    })(),
+    ...(() => {
+      try {
+        const reflexes = (observedBot as { reflexLedger?: { summary(): WorldObservation['reflexes'] } } | undefined)?.reflexLedger?.summary();
+        return reflexes ? { reflexes } : {};
+      } catch { return {}; }
+    })(),
+    ...(() => {
+      try { const jobs = jobsFrame(observedBot); return jobs ? { jobs } : {}; } catch { return {}; }
     })(),
     facts: {
       water: fact(isInWater, observedBot?.entity?.isInWater !== undefined ? 'native' : 'cache', isInWater !== undefined),

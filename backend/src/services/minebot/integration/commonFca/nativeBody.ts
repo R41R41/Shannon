@@ -3,7 +3,9 @@ import { NativeGoalEvidence, GOAL_EVIDENCE_SKILL } from './goalEvidence.js';
 import { primitiveState, primitiveCandidates, executePrimitive } from './primitives.js';
 import { captureWorldObservation } from '../../cognition/worldFrame.js';
 import { floorActive } from '../../utils/floorReflexes.js';
-import { activeActionCapabilities, cancelNonSurvivalActions, createMotorPort, executeAction,
+import { floorConfig } from '../../utils/floorConfig.js';
+import type { ReflexLedger } from '../../utils/reflexLedger.js';
+import { activeActionCapabilities, cancelIdleActions, cancelNonSurvivalActions, createMotorPort, executeAction,
   hasActiveSafetyLease, physicalActionBusy, withActionSignal } from '../../execution/ActionExecution.js';
 import { bodySkillCatalog, type BodySkill } from './skillCatalog.js';
 import type { BodyCandidateDraft, BodyObservation, BodyValue } from './bodyControlContract.js';
@@ -11,8 +13,12 @@ import type { MinecraftControlCommand as Command, MinecraftControlReceipt as Rec
 import type { CommonFcaActuator } from './controlLoop.js';
 
 const delay = (milliseconds: number) => new Promise(resolve => setTimeout(resolve, milliseconds));
+/** The floor's action names, as the planner reads them in a receipt. */
+const REFLEX_LABELS: Record<string, string> = { 'floor-eat': '食事', 'floor-armor': '防具の装着', 'floor-retreat': '退避', 'floor-flee': '低体力の逃走' };
 export interface NativeBodyOptions {
   serverId: string; now?: () => number;
+  /** The reflex note on receipts and the `interrupted_by_reflex` failure type (default: MINEBOT_FCA_REFLEX_OFF has no `ledger-tag`). */
+  reflexTag?: boolean;
   capture(signal: AbortSignal): Promise<{ dataUrl: string; capturedAt: string }>;
   disposeCapture?(): Promise<void>;
   /** False when no first-person picture can come from this connection, so the API does not offer visual control. */
@@ -46,12 +52,14 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
   private lastPosition: Vec3 | null = null;
   private movedAt = 0;
   private lastSafety: Record<string, BodyValue> | null = null;
+  private readonly reflexTag: boolean;
   private readonly onEnd = () => { this.connected = false; };
   private readonly onProgress = (progress: any) => {
     if (progress.capability === 'auto-swim') this.lastSafety = { capability: 'auto-swim', status: String(progress.status),
       actionId: String(progress.actionId), observedAt: new Date(this.now()).toISOString() };
   };
   constructor(private readonly bot: any, private readonly options: NativeBodyOptions) {
+    this.reflexTag = options.reflexTag ?? floorConfig().ledgerTag;
     this.catalog = bodySkillCatalog(bot.instantSkills.getSkills() as BodySkill[], bot);
     if (this.catalog.definitions.some(skill => skill.name === GOAL_EVIDENCE_SKILL.name)) throw Error('BODY_RESERVED_SKILL');
     this.skills = [...this.catalog.definitions, GOAL_EVIDENCE_SKILL];
@@ -136,12 +144,28 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
           return { success: true, result: 'bounded primitive finished' };
         };
       } else throw Error('BODY_COMMAND_UNSUPPORTED');
+      // A command is what idle work (a pickup walk) yields to, at once; then the ledger's position is taken, so only what the
+      // reflexes do from here on is told with this command's result.
+      cancelIdleActions(this.bot, 'fca_command');
+      const ledger: ReflexLedger | undefined = this.reflexTag ? this.bot.reflexLedger : undefined;
+      const mark = ledger?.mark() ?? 0;
       const result = await withActionSignal(this.bot, signal, () => executeAction(this.bot, capability, milliseconds,
         work, { waitForQuiescence: true }));
       const outcome = signal.aborted ? 'cancelled' : result.success ? 'completed' : 'failed';
       const readOnly = command.kind === 'skill' && this.skills.find(skill => skill.name === capability)?.readOnly === true;
       const released = readOnly || await this.release(AbortSignal.timeout(300));
-      return this.receipt(command, outcome, released, result.result, undefined, outcome === 'failed' ? failureOf(result) : undefined);
+      let failure = outcome === 'failed' ? failureOf(result) : undefined;
+      let text = result.result;
+      // A body reflex that took the body (a meal, a step back from a creeper) is not the model's failure: say so, and let it
+      // look at the world again. Never for an API cancel, an operator stop or a deadline (those are `cancelled` / `timeout`).
+      const cut = ledger && outcome === 'failed' && !signal.aborted && result.failureType === 'interrupted' ? ledger.cutOff(mark, capability) : undefined;
+      if (cut) {
+        failure = { failureType: 'interrupted_by_reflex', recoverable: true };
+        text = `${text ?? capability}。体の反射「${REFLEX_LABELS[cut.by] ?? cut.by}」が先に動いたため中断（反射が終わってから、観測を見て再開できる）`;
+      }
+      const note = ledger?.noteSince(mark);
+      if (note) text = `${(text ?? '').slice(0, 16_000 - note.length - 1)}${text ? ' ' : ''}${note}`;
+      return this.receipt(command, outcome, released, text, undefined, failure);
     } finally { signal.removeEventListener('abort', cancelled); }
   }
   private receipt(command: Command, outcome: Receipt['outcome'], inputsReleased: boolean, result?: string, image?: Receipt['image'],

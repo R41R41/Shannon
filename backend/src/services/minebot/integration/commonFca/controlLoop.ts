@@ -61,6 +61,8 @@ export class CommonFcaControlLoop {
     this.connectionId = options.connectionId ?? randomUUID();
     this.observation = options.actuator.observe();
   }
+  /** A command, an owner or a held body is the loop's: idle work (a pickup walk) starts only when this is false. */
+  get leaseHeld(): boolean { return this.owner !== null || this.held || this.active.size > 0; }
   get busy(): boolean { return this.held || this.active.size > 0 || (Array.isArray(this.observation.state.activeCapabilities) && this.observation.state.activeCapabilities.length > 0); }
   start(): void {
     if (this.timer || this.observationTimer || this.closed) return;

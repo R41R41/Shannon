@@ -155,8 +155,27 @@ export function cancelNonSurvivalActions(bot: object, reason = 'interrupted'): v
 export function preemptLowerPriorityActions(bot: object, priority: number, reason = 'interrupted'): boolean {
   const running = [...(active.get(actionHost(bot)) ?? [])].filter(context => !context.settled);
   if (running.some(context => context.physical && context.priority >= priority)) return false;
+  const cut = running.filter(context => !context.controller.signal.aborted);
   for (const context of running) context.controller.abort(reason);
+  // Said to the body's reflex ledger, if it has one: which actions this reflex really cut off (P8, `interrupted_by_reflex`).
+  if (cut.length) {
+    try {
+      (actionHost(bot) as { reflexLedger?: { preempted(by: string, aborted: string[]): void } }).reflexLedger
+        ?.preempted(reason, cut.map(context => context.progress.capability));
+    } catch { /* a report must not change what the reflex did */ }
+  }
   return true;
+}
+/**
+ * Idle work (priority below 0: nothing is waiting for it) gives way to a command at once. Safety leases are never idle work.
+ * Returns how many were cancelled.
+ */
+export function cancelIdleActions(bot: object, reason = 'interrupted'): number {
+  let cancelled = 0;
+  for (const context of [...(active.get(actionHost(bot)) ?? [])]) {
+    if (context.priority < 0 && !context.safetyLease && !context.settled && !context.controller.signal.aborted) { context.controller.abort(reason); cancelled++; }
+  }
+  return cancelled;
 }
 export function cancelAction(bot: object, actionId: string, reason = 'interrupted'): boolean {
   const context = [...(active.get(actionHost(bot)) ?? [])].find(c => c.progress.actionId === actionId);
