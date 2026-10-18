@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { describeFloorConfig, floorConfig } from '../../src/services/minebot/utils/floorConfig.js';
 import { LEDGER_SIZE, ReflexLedger, SUMMARY_MAX_CHARS, ensureReflexLedger } from '../../src/services/minebot/utils/reflexLedger.js';
@@ -31,10 +32,21 @@ describe('floorConfig (the reflex switch, P8)', () => {
     expect(config.warnings[0]).toContain('未知');
   });
   it('says what is on in one start-up line', () => {
-    expect(describeFloorConfig(floorConfig({}))).toBe('🧱 床の反射: floor（retreat,eat,armor） 台帳=on タグ=on 拒否=[]');
+    expect(describeFloorConfig(floorConfig({}))).toBe('🧱 床の反射: floor（retreat,eat,armor） 台帳=on タグ=on 戦闘知識=on 拒否=[]');
     expect(describeFloorConfig(floorConfig({ MINEBOT_FCA_REFLEXES: 'extended', MINEBOT_FCA_REFLEX_OFF: 'ledger-tag' })))
-      .toBe('🧱 床の反射: extended（retreat,eat,armor,flee,pickup） 台帳=on タグ=off 拒否=[ledger-tag]');
+      .toBe('🧱 床の反射: extended（retreat,eat,armor,flee,pickup） 台帳=on タグ=off 戦闘知識=on 拒否=[ledger-tag]');
     expect(describeFloorConfig(floorConfig({ MINEBOT_FCA_REFLEXES: 'off' }))).toContain('off（なし）');
+    expect(describeFloorConfig(floorConfig({ MINEBOT_FCA_REFLEX_OFF: 'combat' }))).toContain('戦闘知識=off 拒否=[combat]');
+  });
+  it('loads the combat-knowledge providers by default (they restore what the legacy mode had), and `combat` alone removes them', () => {
+    expect(floorConfig({}).combatKnowledge).toBe(true);
+    expect(floorConfig({ MINEBOT_FCA_REFLEXES: 'extended' }).combatKnowledge).toBe(true);
+    const without = floorConfig({ MINEBOT_FCA_REFLEX_OFF: 'combat' });
+    expect(without).toMatchObject({ combatKnowledge: false, retreat: true, eat: true, armor: true, ledgerTag: true });
+    expect(without.denied).toEqual(['combat']);
+    // The client loads the plugin exactly when the config says so.
+    const client = readFileSync(new URL('../../src/services/minebot/client.ts', import.meta.url), 'utf8');
+    expect(client).toMatch(/if \(reflexes\.combatKnowledge\) this\.bot\.loadPlugin\(combatKnowledgePlugin\)/u);
   });
 });
 

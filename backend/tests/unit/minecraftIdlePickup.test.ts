@@ -94,6 +94,41 @@ describe('idle pickup: yielding to a command', () => {
     // The walk was idle work: it is not why the command was interrupted, and it is not in the command's receipt.
     expect(receipt.result).not.toContain('反射'); await body.dispose();
   });
+  const context = { scopeKey: 'o', taskId: 't', taskRevision: 1, bodyId: 'minecraft:home', sessionId: 's', generation: 1, goal: 'g', completionCondition: 'c' };
+  const command = (skill: string): any => ({ schemaVersion: 1, id: `c-${skill}`, serverId: 'home', connectionId: 'x', kind: 'skill', context,
+    lease: { id: 'l', generation: 1, holder: 't' }, deadlineAt: new Date(Date.now() + 3000).toISOString(), skill, arguments: {} });
+  it('a command accepted between the idle check and the walk\'s start takes the body at once: the walk does not even begin', async () => {
+    const { bot, hold, ledger } = fixture(); installIdlePickup(bot, extended, { goals });
+    walking.goto.mockImplementation(() => new Promise(() => undefined));
+    const skill = { skillName: 'mine-block', description: 'x', isToolForLLM: true, maxDurationMs: 1000, params: [], run: vi.fn(async () => ({ success: true, result: '掘った' })) };
+    bot.instantSkills = { getSkills: () => [skill] };
+    const body = new NativeCommonFcaBody(bot, { serverId: 'home', capture: async () => { throw Error('unused'); } });
+    // The tick starts the idle action (not yet in the action list); the command is accepted in the same turn, before it registers.
+    ticks(bot); hold(true);
+    const started = Date.now();
+    const receipt = await body.execute(command('mine-block'), new AbortController().signal);
+    expect(receipt).toMatchObject({ outcome: 'completed', result: '掘った', inputsReleased: true });
+    expect(Date.now() - started).toBeLessThan(400);
+    expect(walking.goto).not.toHaveBeenCalled();
+    await settle(10);
+    expect(ledger.entriesSince(-1).map(entry => [entry.kind, entry.outcome])).toEqual([['pickup', 'cut']]);
+    await body.dispose();
+  });
+  it('a read-only query does not cancel the walk; a command that needs the body does', async () => {
+    const { bot } = fixture(); installIdlePickup(bot, extended, { goals });
+    walking.goto.mockImplementation(async (walker: any) => { const signal = actionSignal(walker)!; await new Promise<void>(resolve => signal.addEventListener('abort', () => resolve(), { once: true })); return { success: false, error: 'no_path' }; });
+    const read = { skillName: 'get-position', description: 'x', isToolForLLM: true, maxDurationMs: 1000, params: [], run: vi.fn(async () => ({ success: true, result: '(0,65,0)' })) };
+    const dig = { skillName: 'mine-block', description: 'x', isToolForLLM: true, maxDurationMs: 1000, params: [], run: vi.fn(async () => ({ success: true, result: '掘った' })) };
+    bot.instantSkills = { getSkills: () => [read, dig] };
+    const body = new NativeCommonFcaBody(bot, { serverId: 'home', capture: async () => { throw Error('unused'); } });
+    ticks(bot); await settle(10);
+    expect(activeActionCapabilities(bot)).toEqual(['idle-pickup']);
+    expect(await body.execute(command('get-position'), new AbortController().signal)).toMatchObject({ outcome: 'completed', result: '(0,65,0)' });
+    expect(activeActionCapabilities(bot)).toEqual(['idle-pickup']);
+    expect(await body.execute(command('mine-block'), new AbortController().signal)).toMatchObject({ outcome: 'completed' });
+    expect(activeActionCapabilities(bot)).toEqual([]);
+    await body.dispose();
+  });
   it('does not start a second walk while one is running, nor a walk over a safety reflex', async () => {
     const { bot } = fixture(); installIdlePickup(bot, extended, { goals });
     let release!: () => void;

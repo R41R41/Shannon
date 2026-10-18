@@ -47,6 +47,16 @@ describe('combat knowledge (the providers EventReaction used to install, without
     bot.health = 20; bot.emit('health'); bot.health = 0; bot.emit('health');
     expect(hits() - before).toBe(1);
   });
+  it('records combat stats for mobs only: a player\'s blow, or a player standing nearby, is never counted as a mob\'s', () => {
+    vi.useFakeTimers();
+    const { bot } = fixture({ entities: { 3: { id: 3, name: 'Steve', type: 'player', position: new Vec3(1, 65, 0) } } }); installCombatKnowledge(bot);
+    const before = JSON.stringify(bot.combatStats());
+    bot.emit('entityHurt', bot.entity, bot.entities[3]); bot.health = 15; bot.emit('health');
+    // No named mob, and the nearby player is not guessed at as one.
+    bot.health = 12; bot.emit('health'); vi.advanceTimersByTime(2000);
+    expect(JSON.stringify(bot.combatStats())).toBe(before);
+    expect(Object.keys(bot.combatStats().mobs)).not.toContain('steve');
+  });
   it('counts the time hostiles spend in contact, and stops when the body is gone', () => {
     vi.useFakeTimers();
     const { bot } = fixture(); installCombatKnowledge(bot);

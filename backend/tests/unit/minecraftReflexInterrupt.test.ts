@@ -102,6 +102,47 @@ describe('interrupted_by_reflex', () => {
     cancelActiveActions(bot, 'planner_interrupt');
     expect(await pending).toMatchObject({ failureType: 'interrupted' }); await body.dispose();
   });
+  it('does not blame a reflex that cut off another action of the same name: the command\'s own action id decides', async () => {
+    const { bot, body, ledger } = fixture();
+    const pending = body.execute(command(), new AbortController().signal);
+    await settle();
+    // Some other `mine-block` (an earlier, already cancelled one) was cut off by a meal while this one runs.
+    ledger.preempted('floor-eat', ['mine-block'], ['another-action-id']);
+    cancelActiveActions(bot, 'planner_interrupt');
+    expect(await pending).toMatchObject({ failureType: 'interrupted' });
+    // The same record naming this very action does blame the reflex: take its id from the live action and record it.
+    const second = body.execute(command({ id: 'two' }), new AbortController().signal);
+    await settle();
+    const live = (await import('../../src/services/minebot/execution/ActionExecution.js'));
+    live.preemptLowerPriorityActions(bot, 200, 'floor-eat');
+    expect(await second).toMatchObject({ failureType: 'interrupted_by_reflex' }); await body.dispose();
+  });
+  it('an API cancel that races a reflex taking the body stays cancelled, in either order', async () => {
+    const { bot, body } = fixture({ food: 2 });
+    installFloorReflexes(bot, floorConfig({}));
+    const first = new AbortController(), a = body.execute(command(), first.signal);
+    await settle(); tick(bot); first.abort('server_cancel');
+    const cancelled = await a;
+    expect(cancelled.outcome).toBe('cancelled'); expect(cancelled).not.toHaveProperty('failureType');
+    await settle(50);
+    const second = new AbortController(), b = body.execute(command({ id: 'two' }), second.signal);
+    await settle(); second.abort('server_cancel'); bot.food = 2; tick(bot);
+    const again = await b;
+    expect(again.outcome).toBe('cancelled'); expect(again).not.toHaveProperty('failureType');
+    await body.dispose();
+  });
+  it('names a constant skill or an unknown reflex readably, never the raw action name', async () => {
+    const { bot, body } = fixture();
+    const swim = body.execute(command(), new AbortController().signal);
+    await settle();
+    (await import('../../src/services/minebot/execution/ActionExecution.js')).preemptLowerPriorityActions(bot, 300, 'auto-swim');
+    expect((await swim).result).toContain('体の反射「泳ぎ（呼吸の確保）」');
+    const other = body.execute(command({ id: 'two' }), new AbortController().signal);
+    await settle();
+    (await import('../../src/services/minebot/execution/ActionExecution.js')).preemptLowerPriorityActions(bot, 300, 'constant:auto-shield');
+    expect((await other).result).toContain('体の反射「反射（shield）」');
+    await body.dispose();
+  });
   it('is switched off by ledger-tag: the old interrupted and no note', async () => {
     const { bot, body } = fixture({ food: 2, reflexTag: false });
     installFloorReflexes(bot, floorConfig({ MINEBOT_FCA_REFLEX_OFF: 'ledger-tag' }));

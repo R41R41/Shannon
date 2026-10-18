@@ -18,7 +18,7 @@ export interface ReflexEntry {
   n: number;
   hp?: [number, number]; food?: [number, number];
 }
-export interface PreemptRecord { seq: number; at: number; by: string; aborted: string[] }
+export interface PreemptRecord { seq: number; at: number; by: string; aborted: string[]; ids: string[] }
 export interface ReflexHandle { seq: number; kind: ReflexKind; detail: string; hp: number | null; food: number | null }
 
 export const LEDGER_SIZE = 16;
@@ -87,9 +87,9 @@ export class ReflexLedger {
   }
 
   /** A reflex took the body and cut these actions off (`preemptLowerPriorityActions`, only when it cut at least one). */
-  preempted(by: string, aborted: string[]): void {
+  preempted(by: string, aborted: string[], ids: string[] = []): void {
     if (!aborted.length) return;
-    this.preempts.push({ seq: ++this.seq, at: this.now(), by, aborted: aborted.slice(0, 8) });
+    this.preempts.push({ seq: ++this.seq, at: this.now(), by, aborted: aborted.slice(0, 8), ids: ids.slice(0, 8) });
     if (this.preempts.length > LEDGER_SIZE) this.preempts.shift();
   }
 
@@ -115,9 +115,12 @@ export class ReflexLedger {
   entriesSince(mark: number): ReflexEntry[] { return this.entries.filter(entry => entry.seq > mark); }
   preemptsSince(mark: number): PreemptRecord[] { return this.preempts.filter(record => record.seq > mark); }
 
-  /** Whether a reflex cut `capability` off after `mark`: the only evidence for `interrupted_by_reflex`. */
-  cutOff(mark: number, capability: string): PreemptRecord | undefined {
-    return this.preemptsSince(mark).find(record => record.aborted.includes(capability));
+  /**
+   * Whether a reflex cut this action off after `mark`: the only evidence for `interrupted_by_reflex`. By the action's own id when
+   * it is known (another action of the same name is not this one), else by capability name.
+   */
+  cutOff(mark: number, capability: string, actionId?: string): PreemptRecord | undefined {
+    return this.preemptsSince(mark).find(record => actionId !== undefined && record.ids.length ? record.ids.includes(actionId) : record.aborted.includes(capability));
   }
 
   /** The note for a receipt: what reflexes did while the command ran, or null. */

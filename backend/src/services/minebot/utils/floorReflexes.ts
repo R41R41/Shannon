@@ -237,7 +237,10 @@ export async function runLowHealthFlee(bot: FloorBody, port: FloorBody, tickMs =
       port.setControlState('forward', true); port.setControlState('sprint', true);
       await new Promise(resolve => setTimeout(resolve, tickMs));
     }
-  } finally { releaseKeys(bot); }
+  } finally {
+    // Through the port: when another reflex has taken the body this fails and is ignored, so its keys are not let go from under it.
+    try { releaseKeys(port); } catch { /* ownership lost: the new owner holds the keys */ }
+  }
   return { success: true, result: ticks > 0 ? '低体力のため敵から離れた' : '離れる必要がなくなった' };
 }
 

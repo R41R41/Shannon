@@ -5,7 +5,7 @@ import { captureWorldObservation } from '../../cognition/worldFrame.js';
 import { floorActive } from '../../utils/floorReflexes.js';
 import { floorConfig } from '../../utils/floorConfig.js';
 import type { ReflexLedger } from '../../utils/reflexLedger.js';
-import { activeActionCapabilities, cancelIdleActions, cancelNonSurvivalActions, createMotorPort, executeAction,
+import { activeActionCapabilities, cancelIdleActions, currentAction, cancelNonSurvivalActions, createMotorPort, executeAction,
   hasActiveSafetyLease, physicalActionBusy, withActionSignal } from '../../execution/ActionExecution.js';
 import { bodySkillCatalog, type BodySkill } from './skillCatalog.js';
 import type { BodyCandidateDraft, BodyObservation, BodyValue } from './bodyControlContract.js';
@@ -14,7 +14,13 @@ import type { CommonFcaActuator } from './controlLoop.js';
 
 const delay = (milliseconds: number) => new Promise(resolve => setTimeout(resolve, milliseconds));
 /** The floor's action names, as the planner reads them in a receipt. */
-const REFLEX_LABELS: Record<string, string> = { 'floor-eat': '食事', 'floor-armor': '防具の装着', 'floor-retreat': '退避', 'floor-flee': '低体力の逃走' };
+const REFLEX_LABELS: Record<string, string> = { 'floor-eat': '食事', 'floor-armor': '防具の装着', 'floor-retreat': '退避', 'floor-flee': '低体力の逃走',
+  'auto-swim': '泳ぎ（呼吸の確保）' };
+/** A reflex's action name as the planner reads it: the table, else the name without its `floor-` / `constant:` / `auto-` prefix. */
+function reflexLabel(by: string): string {
+  const bare = by.replace(/^constant:/u, '');
+  return REFLEX_LABELS[by] ?? REFLEX_LABELS[bare] ?? `反射（${bare.replace(/^(floor|auto)-/u, '')}）`;
+}
 export interface NativeBodyOptions {
   serverId: string; now?: () => number;
   /** The reflex note on receipts and the `interrupted_by_reflex` failure type (default: MINEBOT_FCA_REFLEX_OFF has no `ledger-tag`). */
@@ -146,22 +152,27 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
       } else throw Error('BODY_COMMAND_UNSUPPORTED');
       // A command is what idle work (a pickup walk) yields to, at once; then the ledger's position is taken, so only what the
       // reflexes do from here on is told with this command's result.
-      cancelIdleActions(this.bot, 'fca_command');
+      // A read-only query (get-position and the like) does not need the body: it never cancels idle work.
+      // The action's own id, so a reflex that cut off another action of the same name is not blamed for this one.
+      let actionId: string | undefined;
+      const started = work;
+      work = () => { actionId = currentAction(this.bot)?.progress.actionId; return started(); };
+      const readOnly = command.kind === 'skill' && this.skills.find(skill => skill.name === capability)?.readOnly === true;
+      if (!readOnly) cancelIdleActions(this.bot, 'fca_command');
       const ledger: ReflexLedger | undefined = this.reflexTag ? this.bot.reflexLedger : undefined;
       const mark = ledger?.mark() ?? 0;
       const result = await withActionSignal(this.bot, signal, () => executeAction(this.bot, capability, milliseconds,
         work, { waitForQuiescence: true }));
       const outcome = signal.aborted ? 'cancelled' : result.success ? 'completed' : 'failed';
-      const readOnly = command.kind === 'skill' && this.skills.find(skill => skill.name === capability)?.readOnly === true;
       const released = readOnly || await this.release(AbortSignal.timeout(300));
       let failure = outcome === 'failed' ? failureOf(result) : undefined;
       let text = result.result;
       // A body reflex that took the body (a meal, a step back from a creeper) is not the model's failure: say so, and let it
       // look at the world again. Never for an API cancel, an operator stop or a deadline (those are `cancelled` / `timeout`).
-      const cut = ledger && outcome === 'failed' && !signal.aborted && result.failureType === 'interrupted' ? ledger.cutOff(mark, capability) : undefined;
+      const cut = ledger && outcome === 'failed' && !signal.aborted && result.failureType === 'interrupted' ? ledger.cutOff(mark, capability, actionId) : undefined;
       if (cut) {
         failure = { failureType: 'interrupted_by_reflex', recoverable: true };
-        text = `${text ?? capability}。体の反射「${REFLEX_LABELS[cut.by] ?? cut.by}」が先に動いたため中断（反射が終わってから、観測を見て再開できる）`;
+        text = `${text ?? capability}。体の反射「${reflexLabel(cut.by)}」が先に動いたため中断（反射が終わってから、観測を見て再開できる）`;
       }
       const note = ledger?.noteSince(mark);
       if (note) text = `${(text ?? '').slice(0, 16_000 - note.length - 1)}${text ? ' ' : ''}${note}`;

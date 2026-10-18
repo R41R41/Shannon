@@ -49,7 +49,7 @@ export function installCombatKnowledge(bot: KnowledgeBot, options: { memory?: En
     const self = bot.entity; if (!self) return [];
     return Object.values(bot.entities ?? {})
       .filter((entity): entity is KnowledgeEntity => !!entity && entity !== self && entity.id !== self.id && !!entity.position
-        && isHostileEntity(entity as any, bot as any))
+        && entity.type !== 'player' && isHostileEntity(entity as any, bot as any))
       .map(entity => ({ name: String(entity.name).toLowerCase(), distance: self.position.distanceTo(entity.position) }))
       .filter(entry => entry.distance <= radius)
       .sort((a, b) => a.distance - b.distance);
@@ -64,14 +64,15 @@ export function installCombatKnowledge(bot: KnowledgeBot, options: { memory?: En
     if (!entity || entity.id !== bot.entity?.id) return;
     let from: number | undefined;
     try { if (source?.position && bot.entity) from = bot.entity.position.distanceTo(source.position); } catch { from = undefined; }
-    lastHurt = { at: now(), source: source?.name ? String(source.name).toLowerCase() : null, from };
+    // A player's blow is not a mob's: it is never counted as what a kind of mob does (and so never guessed at either).
+    lastHurt = { at: now(), source: source?.name && source.type !== 'player' ? String(source.name).toLowerCase() : null, from };
     // A mob the server names as the cause of a hit is hostile to the body for a while, listed or not.
     if (source?.name && source.type !== 'player' && source.type !== 'projectile' && source.type !== 'object') noteAttackedBy(String(source.name));
   });
   bot._client?.on?.('damage_event', (packet: any) => {
     if (packet?.entityId !== bot.entity?.id) return;
     const cause = bot.entities?.[packet.sourceCauseId - 1], direct = bot.entities?.[packet.sourceDirectId - 1];
-    if (cause?.name && direct === cause) lastBlow = { at: now(), cause: String(cause.name).toLowerCase() };
+    if (cause?.name && cause.type !== 'player' && direct === cause) lastBlow = { at: now(), cause: String(cause.name).toLowerCase() };
   });
   // A hit with no named cause (a fall, drowning) belongs to no mob: the nearest hostile is guessed only when nothing was named.
   bot.on('health', () => {

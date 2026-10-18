@@ -160,8 +160,8 @@ export function preemptLowerPriorityActions(bot: object, priority: number, reaso
   // Said to the body's reflex ledger, if it has one: which actions this reflex really cut off (P8, `interrupted_by_reflex`).
   if (cut.length) {
     try {
-      (actionHost(bot) as { reflexLedger?: { preempted(by: string, aborted: string[]): void } }).reflexLedger
-        ?.preempted(reason, cut.map(context => context.progress.capability));
+      (actionHost(bot) as { reflexLedger?: { preempted(by: string, aborted: string[], ids?: string[]): void } }).reflexLedger
+        ?.preempted(reason, cut.map(context => context.progress.capability), cut.map(context => context.progress.actionId));
     } catch { /* a report must not change what the reflex did */ }
   }
   return true;

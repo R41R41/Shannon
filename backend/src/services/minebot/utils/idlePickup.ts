@@ -92,6 +92,9 @@ export function installIdlePickup(bot: PickupBody, config: FloorConfig = floorCo
     log.info(`🎒 手が空いている: 近くの落とし物へ歩く（${target.position.x.toFixed(0)},${target.position.y.toFixed(0)},${target.position.z.toFixed(0)}）`);
     const handle = ledger.begin('pickup', '近くの落とし物を拾いに歩いた');
     void executeAction(bot as any, 'idle-pickup', WALK_MS + 500, async () => {
+      // A command accepted between the check above and this start has not reached the action list yet (so `cancelIdleActions` could
+      // not see this walk): ask again here, and give the body back at once.
+      if (typeof bot.fcaLeaseHeld !== 'function' || bot.fcaLeaseHeld()) return { success: false, result: '命令が来たので歩かない', failureType: 'interrupted', recoverable: true };
       const goals = await loadGoals(), spot = target!.position;
       const result = await gotoSafe(createMotorPort(bot) as any, new goals.GoalNear(spot.x, spot.y, spot.z, 1) as any,
         { timeoutMs: WALK_MS, stuckAbortCount: 2, logStuck: false });

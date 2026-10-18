@@ -8,14 +8,15 @@
  *                                           ledger keeps counting them, the combat-knowledge providers are not installed.
  *   `extended`                              `floor` plus the two new motor reflexes: low-health immediate flee and idle pickup.
  *
- * MINEBOT_FCA_REFLEX_OFF is a comma separated deny list (retreat, eat, armor, flee, pickup, ledger-tag). `ledger-tag` turns off
+ * MINEBOT_FCA_REFLEX_OFF is a comma separated deny list (retreat, eat, armor, flee, pickup, ledger-tag, combat). `combat` removes
+ * the combat-knowledge providers alone (they are on by default: they restore what the legacy mode had). `ledger-tag` turns off
  * both the receipt's reflex note and the `interrupted_by_reflex` failure type, so an API that dislikes the new type can be
  * answered at once with the old `interrupted`.
  *
  * Read once at start up (a pure function of the environment), never per physics tick.
  */
 export type ReflexMode = 'floor' | 'off' | 'extended';
-export const REFLEX_NAMES = ['retreat', 'eat', 'armor', 'flee', 'pickup', 'ledger-tag'] as const;
+export const REFLEX_NAMES = ['retreat', 'eat', 'armor', 'flee', 'pickup', 'ledger-tag', 'combat'] as const;
 export type ReflexName = typeof REFLEX_NAMES[number];
 
 export interface FloorConfig {
@@ -58,12 +59,12 @@ export function floorConfig(env: Record<string, string | undefined> = process.en
     mode, denied: REFLEX_NAMES.filter(name => denied.has(name)), floor,
     retreat: allowed('retreat'), eat: allowed('eat'), armor: allowed('armor'),
     flee: mode === 'extended' && !denied.has('flee'), pickup: mode === 'extended' && !denied.has('pickup'),
-    ledgerTag: !denied.has('ledger-tag'), combatKnowledge: mode !== 'off', warnings,
+    ledgerTag: !denied.has('ledger-tag'), combatKnowledge: mode !== 'off' && !denied.has('combat'), warnings,
   };
 }
 
 /** The one start-up line: what the journal shows of the switch. */
 export function describeFloorConfig(config: FloorConfig): string {
   const on = (['retreat', 'eat', 'armor', 'flee', 'pickup'] as const).filter(name => config[name]);
-  return `🧱 床の反射: ${config.mode}（${on.join(',') || 'なし'}） 台帳=on タグ=${config.ledgerTag ? 'on' : 'off'} 拒否=[${config.denied.join(',')}]`;
+  return `🧱 床の反射: ${config.mode}（${on.join(',') || 'なし'}） 台帳=on タグ=${config.ledgerTag ? 'on' : 'off'} 戦闘知識=${config.combatKnowledge ? 'on' : 'off'} 拒否=[${config.denied.join(',')}]`;
 }

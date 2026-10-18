@@ -119,10 +119,13 @@ describe('low-health flee: the reflex itself (extended only)', () => {
     tick(bot); await settle(25);
     expect(activeActionCapabilities(bot)).toEqual(['floor-flee']);
     preemptLowerPriorityActions(bot, 350, 'floor-retreat');
+    const writes = bot.setControlState.mock.calls.length;
     await settle(60);
+    // Having lost the body, the flee writes nothing more (not even its key release): whatever took it holds the keys now.
+    expect(bot.setControlState.mock.calls.length).toBe(writes);
     expect(ledger.entriesSince(-1).map(entry => [entry.kind, entry.outcome])).toEqual([['flee', 'cut']]);
     expect(ledger.preemptsSince(-1)[0]).toMatchObject({ by: 'floor-retreat', aborted: ['floor-flee'] });
-    expect(bot.controlState.forward).toBe(false); expect(bot.floorReflexes.busy).toBeNull();
+    expect(bot.floorReflexes.busy).toBeNull();
   });
   it('cuts a fight under it at this health, and never the API\'s own flee', async () => {
     const { bot, ledger } = fixture();
