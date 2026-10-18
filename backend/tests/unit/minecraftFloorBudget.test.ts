@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { Vec3 } from 'vec3';
+import { actionSignal, executeAction } from '../../src/services/minebot/execution/ActionExecution.js';
 import { describe, expect, it, vi } from 'vitest';
 import { NativeCommonFcaBody } from '../../src/services/minebot/integration/commonFca/nativeBody.js';
 import { floorConfig } from '../../src/services/minebot/utils/floorConfig.js';
@@ -230,5 +231,57 @@ describe('the observation says what the budget holds back (facts.floorSilenced)'
     for (let tick = 0; tick < 150; tick++) { time.advance(100); bot.emit('physicsTick'); await settle(0); }
     expect(body.observe().facts).toMatchObject({ floorSilenced: 'eat', floorActive: false });
     await body.dispose();
+  });
+});
+
+describe('the default-mode top-up meal (owner criterion: better than before; the legacy auto-eat trigger)', () => {
+  const bread = { items: () => [{ name: 'bread' }], slots: new Array(46).fill(null) };
+  async function run(env: Record<string, string>, patch: Record<string, unknown>, command = false) {
+    const time = clock(), { bot } = fixture({ inventory: bread, ...patch });
+    bot.consume = vi.fn(async () => { bot.food = 20; });
+    installFloorReflexes(bot, floorConfig(env), { now: time.now });
+    let finish: (() => void) | undefined, work: Promise<unknown> | undefined;
+    if (command) {
+      work = executeAction(bot, 'mine-block', 0, async () => { await new Promise<void>(resolve => { finish = resolve; actionSignal(bot)?.addEventListener('abort', () => resolve()); }); return { success: true, result: 'done' }; }, {});
+      await settle(0);
+    }
+    for (let tick = 0; tick < 10; tick++) { time.advance(100); bot.emit('physicsTick'); await settle(0); }
+    const eaten = bot.consume.mock.calls.length;
+    finish?.(); await work;
+    return eaten;
+  }
+  it('food 17 with an idle body: eats (default), but not in floor mode', async () => {
+    expect(await run({}, { food: 17 })).toBe(1);
+    expect(await run({ MINEBOT_FCA_REFLEXES: 'floor' }, { food: 17 })).toBe(0);
+  });
+  it('food 17 while an API command runs: does not eat, and the command is not cut', async () => {
+    expect(await run({}, { food: 17 }, true)).toBe(0);
+  });
+  it('food 6 while a command runs is critical but does not cut it (as in the production floor); food 3 does', async () => {
+    expect(await run({}, { food: 6 }, true)).toBe(0);
+    expect(await run({}, { food: 3 }, true)).toBe(1);
+    expect(await run({ MINEBOT_FCA_REFLEXES: 'floor' }, { food: 3 }, true)).toBe(1);
+  });
+  it('food 6 while the pathfinder walks: eats; food 17 while it walks: waits', async () => {
+    expect(await run({}, { food: 6, pathfinder: { isMoving: () => true } })).toBe(1);
+    expect(await run({}, { food: 17, pathfinder: { isMoving: () => true } })).toBe(0);
+  });
+  it('an enemy 4 m away and food 10: does not eat (default and floor); the same at critical food too', async () => {
+    const zombie = { entities: { 2: { id: 2, name: 'zombie', position: new Vec3(4, 65, 0) } } };
+    expect(await run({}, { food: 10, ...zombie })).toBe(0);
+    expect(await run({ MINEBOT_FCA_REFLEXES: 'floor' }, { food: 10, ...zombie })).toBe(0);
+    expect(await run({}, { food: 4, ...zombie })).toBe(0);
+  });
+  it('a top-up still obeys the budget (a failing one backs off and latches) while a critical meal is exempt', async () => {
+    const time = clock(), { bot } = fixture({ inventory: bread, food: 17, consume: vi.fn(async () => { throw new Error('the server never answered'); }) });
+    installFloorReflexes(bot, floorConfig({}), { now: time.now });
+    for (let tick = 0; tick < 100; tick++) { time.advance(100); bot.emit('physicsTick'); await settle(0); }
+    expect(bot.consume.mock.calls.length).toBeLessThanOrEqual(LATCH_AFTER + 1);
+    expect(floorSilenced(bot)).toBe('eat');
+    const starving = fixture({ inventory: bread, food: 5, consume: vi.fn(async () => { throw new Error('the server never answered'); }) }).bot;
+    installFloorReflexes(starving, floorConfig({}), { now: time.now });
+    for (let tick = 0; tick < 100; tick++) { time.advance(100); starving.emit('physicsTick'); await settle(0); }
+    expect(starving.consume.mock.calls.length).toBeGreaterThanOrEqual(3);
+    expect(floorSilenced(starving)).toBeNull();
   });
 });

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Vec3 } from 'vec3';
+import { executeAction, physicalActionBusy } from '../../src/services/minebot/execution/ActionExecution.js';
 import { creeperLit, floorArmorChoice, floorEatChoice, floorRetreatTick, retreatThreat, type FloorBody, type RetreatState } from '../../src/services/minebot/utils/floorReflexes.js';
 
 function body(patch: Partial<FloorBody> & { items?: { name: string }[]; slots?: ({ name: string } | null)[] } = {}) {
@@ -69,22 +70,76 @@ describe('floor reflexes (ADR-0010 D8, defence only)', () => {
     add(away, 2, { name: 'arrow', position: new Vec3(8, 65, 0), velocity: new Vec3(2, 0, 0) });
     expect(retreatThreat(away)).toBeNull();
   });
-  it('eats only when short, best food first, never with an enemy at arm\'s length unless nearly dead', () => {
+  it('`floor` mode (wide = false) is exactly the production meal: food <= 6, or health <= 12 and food < 18, never with an enemy at arm\'s length', () => {
     const items = [{ name: 'bread' }, { name: 'cooked_beef' }, { name: 'rotten_flesh' }, { name: 'pufferfish' }];
-    expect(floorEatChoice(body({ items, food: 14, health: 20 }))).toBeNull();
-    expect(floorEatChoice(body({ items, food: 6 }))?.name).toBe('cooked_beef');
-    expect(floorEatChoice(body({ items, food: 17, health: 12 }))?.name).toBe('cooked_beef');
-    expect(floorEatChoice(body({ items: [{ name: 'rotten_flesh' }], food: 10, health: 10 }))).toBeNull();
-    expect(floorEatChoice(body({ items: [{ name: 'rotten_flesh' }], food: 5 }))?.name).toBe('rotten_flesh');
-    expect(floorEatChoice(body({ items: [{ name: 'pufferfish' }], food: 2 }))).toBeNull();
+    expect(floorEatChoice(body({ items, food: 14, health: 20 }), false)).toBeNull();
+    expect(floorEatChoice(body({ items, food: 17, health: 20 }), false)).toBeNull();
+    expect(floorEatChoice(body({ items, food: 6 }), false)?.name).toBe('cooked_beef');
+    expect(floorEatChoice(body({ items, food: 17, health: 12 }), false)?.name).toBe('cooked_beef');
+    expect(floorEatChoice(body({ items, food: 17, health: 13 }), false)).toBeNull();
+    expect(floorEatChoice(body({ items: [{ name: 'rotten_flesh' }], food: 10, health: 10 }), false)).toBeNull();
+    expect(floorEatChoice(body({ items: [{ name: 'rotten_flesh' }], food: 5 }), false)?.name).toBe('rotten_flesh');
+    expect(floorEatChoice(body({ items: [{ name: 'pufferfish' }], food: 2 }), false)).toBeNull();
     const threatened = body({ items, food: 5, health: 15 });
     add(threatened, 2, { name: 'zombie', position: new Vec3(2, 64, 0) });
-    expect(floorEatChoice(threatened)).toBeNull();
+    expect(floorEatChoice(threatened, false)).toBeNull();
     // Standing to eat next to an enemy killed the body (L18): not even when nearly dead.
     const dying = body({ items, food: 5, health: 5 });
     add(dying, 2, { name: 'zombie', position: new Vec3(2, 64, 0) });
-    expect(floorEatChoice(dying)).toBeNull();
+    expect(floorEatChoice(dying, false)).toBeNull();
+    expect(floorEatChoice(body({ items: [{ name: 'enchanted_golden_apple' }], food: 2 }), false)).toBeNull();
+    // `floor` ignores the pathfinder and the running command altogether.
+    expect(floorEatChoice(body({ items, food: 6, pathfinder: { isMoving: () => true } }), false)?.name).toBe('cooked_beef');
+  });
+  it('the default meal is the legacy auto-eat trigger: food < 18, or health < 18 and food < 20', () => {
+    const items = [{ name: 'bread' }, { name: 'cooked_beef' }, { name: 'rotten_flesh' }, { name: 'pufferfish' }];
+    expect(floorEatChoice(body({ items, food: 18, health: 20 }))).toBeNull();
+    expect(floorEatChoice(body({ items, food: 17, health: 20 }))?.name).toBe('cooked_beef');
+    expect(floorEatChoice(body({ items, food: 14, health: 20 }))?.name).toBe('cooked_beef');
+    expect(floorEatChoice(body({ items, food: 19, health: 17 }))?.name).toBe('cooked_beef');
+    expect(floorEatChoice(body({ items, food: 19, health: 18 }))).toBeNull();
+    expect(floorEatChoice(body({ items, food: 20, health: 10 }))).toBeNull();
+    expect(floorEatChoice(body({ items, food: 6 }))?.name).toBe('cooked_beef');
+    // Poisonous food is avoided as before (the legacy skill ate anything); rotten flesh only when starving.
+    expect(floorEatChoice(body({ items: [{ name: 'rotten_flesh' }], food: 10, health: 10 }))).toBeNull();
+    expect(floorEatChoice(body({ items: [{ name: 'rotten_flesh' }], food: 5 }))?.name).toBe('rotten_flesh');
+    expect(floorEatChoice(body({ items: [{ name: 'pufferfish' }], food: 2 }))).toBeNull();
     expect(floorEatChoice(body({ items: [{ name: 'enchanted_golden_apple' }], food: 2 }))).toBeNull();
+  });
+  it('the default meal keeps the safety gates: no meal with an enemy within 5 m, critical or not (the safer of the legacy skill and the floor)', () => {
+    const items = [{ name: 'bread' }];
+    const near = (patch: Partial<FloorBody>, x = 4) => { const b = body({ items, ...patch }); add(b, 2, { name: 'zombie', position: new Vec3(x, 64, 0) }); return b; };
+    expect(floorEatChoice(near({ food: 10 }, 4))).toBeNull();
+    expect(floorEatChoice(near({ food: 10 }, 6))?.name).toBe('bread');
+    expect(floorEatChoice(near({ food: 5, health: 5 }, 4))).toBeNull();
+    expect(floorEatChoice(near({ food: 3, health: 20 }, 2))).toBeNull();
+    expect(floorEatChoice({ ...body({ items, food: 3 }), entity: { id: 1, name: 'player', position: new Vec3(0, 64, 0), isInLava: true } })).toBeNull();
+  });
+  it('the default meal while walking: only at health 8 or less, or food 6 or less (the legacy rule)', () => {
+    const items = [{ name: 'bread' }], moving = { isMoving: () => true }, still = { isMoving: () => false };
+    expect(floorEatChoice(body({ items, food: 17, pathfinder: moving }))).toBeNull();
+    expect(floorEatChoice(body({ items, food: 17, pathfinder: still }))?.name).toBe('bread');
+    expect(floorEatChoice(body({ items, food: 7, pathfinder: moving }))).toBeNull();
+    expect(floorEatChoice(body({ items, food: 6, pathfinder: moving }))?.name).toBe('bread');
+    expect(floorEatChoice(body({ items, food: 17, health: 9, pathfinder: moving }))).toBeNull();
+    expect(floorEatChoice(body({ items, food: 17, health: 8, pathfinder: moving }))?.name).toBe('bread');
+  });
+  it('the default top-up waits for an idle body: not while a command runs or waits, but a critical meal does not', async () => {
+    const items = [{ name: 'bread' }];
+    const bot = body({ items, food: 17 });
+    expect(floorEatChoice(bot)?.name).toBe('bread');
+    let finish!: () => void;
+    const work = executeAction(bot as any, 'mine-block', 0, async () => { await new Promise<void>(resolve => { finish = resolve; }); return { success: true, result: 'done' }; }, {});
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect(physicalActionBusy(bot)).toBe(true);
+    expect(floorEatChoice(bot)).toBeNull();                    // food 17, a command runs: no top-up
+    expect(floorEatChoice(bot, false)).toBeNull();             // (floor: food 17 is no meal at all)
+    bot.food = 7; expect(floorEatChoice(bot)).toBeNull();      // still a top-up
+    bot.food = 6; expect(floorEatChoice(bot)?.name).toBe('bread');   // critical: not held back here (the tick decides whether to cut)
+    bot.food = 20; bot.health = 6; expect(floorEatChoice(bot)).toBeNull();  // full food, nothing to eat for
+    bot.food = 19; expect(floorEatChoice(bot)?.name).toBe('bread');
+    finish(); await work;
+    bot.food = 17; bot.health = 20; expect(floorEatChoice(bot)?.name).toBe('bread');
   });
   it('leaves the keys to the lava and breathing reflexes while either holds them', () => {
     const bot = body(), state = retreat(), lit: unknown[] = []; lit[16] = 1;

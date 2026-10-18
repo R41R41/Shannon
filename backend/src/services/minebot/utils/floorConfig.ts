@@ -103,7 +103,9 @@ export function describeFloorConfig(config: FloorConfig): string {
 export function reflexPromptText(config: FloorConfig = floorConfig()): string {
   const parts: string[] = [];
   if (config.retreat) parts.push('点火したクリーパーや飛んでくる矢から下がる');
-  if (config.eat) parts.push('飢え・低体力で食べる');
+  if (config.eat) parts.push(config.wideThreats
+    ? '満腹度18未満（体力18未満なら満腹度20未満）で手が空いている間に食べる（体力6以下か満腹度3以下では実行中の命令を切ってでも食べる。敵が5m内なら食べない）'
+    : '飢え・低体力で食べる');
   if (config.armor) parts.push('空いた防具の枠に防具を着ける');
   if (config.flee) parts.push('体力6以下で敵が近いと走って離れる（走っている間は実行中の戦闘・作業を中断する。20秒に2回まで）');
   if (config.pickup) parts.push('手が空いている間だけ近くの落とし物を拾いに歩く');

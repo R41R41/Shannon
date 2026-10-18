@@ -6,7 +6,7 @@ import { FALLBACK_FOOD_POINTS } from '../constantSkills/autoEat.js';
 import { edgeRisk } from './edgeGuard.js';
 import { escapeHeading } from './escapeHeading.js';
 import { floorConfig, type FloorConfig } from './floorConfig.js';
-import { FloorBudget, type BudgetKind } from './floorBudget.js';
+import { BUDGET_EXEMPT_HEALTH, EAT_CRITICAL_FOOD, FloorBudget, type BudgetKind } from './floorBudget.js';
 import { isThreatEntity, type ThreatBody } from './hostileMobHints.js';
 import { ensureReflexLedger, type ReflexKind, type ReflexOutcome } from './reflexLedger.js';
 import { threatExposure } from './threatExposure.js';
@@ -226,10 +226,28 @@ export function floorRetreatTick(bot: FloorBody, state: RetreatState, allow?: (k
 }
 
 const NEVER_EAT = new Set(['pufferfish', 'chorus_fruit', 'suspicious_stew', 'spider_eye', 'poisonous_potato', 'enchanted_golden_apple']);
-/** Food to eat now, or null: short of food, or hurt and not full; never with an enemy at arm's length (standing to eat there killed the body, L18). */
+/** The old auto-eat's trigger (legacy constant skill, e94a236): food below 18, or health below 18 and food below 20. */
+const TOPUP_FOOD = 18, TOPUP_FOOD_HURT = 20, TOPUP_HEALTH = 18;
+/** While the pathfinder is walking the legacy auto-eat ate only at health 8 or less, or food 6 or less. */
+const MOVING_EAT_HEALTH = 8;
+/**
+ * Food to eat now, or null; never with an enemy at arm's length (standing to eat there killed the body, L18).
+ *
+ * `wide` is the default mode (`FloorConfig.wideThreats`): the legacy auto-eat's trigger (food < 18, or health < 18 and food < 20), with
+ * the production floor's safety kept on top. A meal at health 6 or less or food 6 or less is critical (exempt from the budget, and the idle rule
+ * below does not apply to it; the tick still cuts a running command only at health 6 or less or food 3 or less, as before); any other meal is a top-up and happens only when the body is idle (no physical action running, no
+ * command waiting for the body), so that a top-up never cuts an API command. While the pathfinder is walking a top-up waits unless health
+ * is 8 or less or food 6 or less (the legacy rule). `wide = false` is `floor` mode: exactly the production floor (food <= 6, or health
+ * <= 12 and food < 18), unchanged.
+ */
 export function floorEatChoice(bot: FloorBody, wide = true): Item | null {
   const health = bot.health ?? 20, food = bot.food ?? 20;
-  if (!(food <= 6 || (health <= 12 && food < 18))) return null;
+  if (wide) {
+    if (!(food < TOPUP_FOOD || (health < TOPUP_HEALTH && food < TOPUP_FOOD_HURT))) return null;
+    const critical = health <= BUDGET_EXEMPT_HEALTH || food <= EAT_CRITICAL_FOOD;
+    if (!critical && (physicalActionBusy(bot) || hasActiveSafetyLease(bot) || commandWaiting(bot))) return null;
+    if (health > MOVING_EAT_HEALTH && food > EAT_CRITICAL_FOOD && (bot as { pathfinder?: { isMoving?(): boolean } }).pathfinder?.isMoving?.() === true) return null;
+  } else if (!(food <= 6 || (health <= 12 && food < 18))) return null;
   if (bot.entity?.isInLava || hostileWithin(bot, HOSTILE_NEAR, wide)) return null;
   const items = (bot.inventory?.items() ?? []).filter(item => (FALLBACK_FOOD_POINTS[item.name] ?? 0) > 0 && !NEVER_EAT.has(item.name)
     && (item.name !== 'rotten_flesh' || food <= 6));
@@ -585,7 +603,8 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
     try { food = config.eat ? floorEatChoice(bot, config.wideThreats) : null; armor = food || !config.armor ? null : floorArmorChoice(bot); } catch { return; }
     if (food && bot.equip && bot.consume) {
       // Never over another safety reflex (breath, lava). Over a model's action or a reflex session only when it cannot wait
-      // (starving or nearly dead); otherwise between actions, so the work it would cut is not cut for a meal.
+      // (starving or nearly dead); otherwise between actions, so the work it would cut is not cut for a meal. (In the default mode a
+      // top-up, a meal above health 6 and food 6, is already refused by `floorEatChoice` while anything physical runs or waits.)
       if (hasActiveSafetyLease(bot)) return;
       if (physicalActionBusy(bot) && (bot.food ?? 20) > 3 && (bot.health ?? 20) > 6) return;
       // Starving or at 6 health or less the meal is not metered (floorBudget.ts): only a short backoff after one that failed.
