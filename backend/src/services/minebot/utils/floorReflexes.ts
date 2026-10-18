@@ -6,7 +6,7 @@ import { FALLBACK_FOOD_POINTS } from '../constantSkills/autoEat.js';
 import { edgeRisk, fallIsDangerous } from './edgeGuard.js';
 import { escapeHeading } from './escapeHeading.js';
 import { floorConfig, type FloorConfig } from './floorConfig.js';
-import { BUDGET_EXEMPT_HEALTH, EAT_CRITICAL_FOOD, FloorBudget, type BudgetKind } from './floorBudget.js';
+import { EAT_CRITICAL_FOOD, eatIsCritical, FloorBudget, type BudgetKind } from './floorBudget.js';
 import { isThreatEntity, type ThreatBody } from './hostileMobHints.js';
 import { ensureReflexLedger, type ReflexKind, type ReflexOutcome } from './reflexLedger.js';
 import { threatExposure } from './threatExposure.js';
@@ -59,8 +59,14 @@ const FLEE_WINDOW_MS = 20_000;
 const FLEE_MAX_IN_WINDOW = 2;
 /** Kinds that hurt from afar: the flee starts earlier for them (what the legacy 16 m watch was for). */
 const SHOOTERS = new Set(['skeleton', 'stray', 'bogged', 'pillager', 'blaze', 'ghast', 'witch', 'evoker', 'breeze']);
-/** Skills that are already getting the body away: the flee never cuts one of these (the API's DEFENSIVE_SKILLS that escape). */
-export const ESCAPE_SKILLS: ReadonlySet<string> = new Set(['flee-from', 'dig-shelter', 'build-around-self']);
+/**
+ * Skills that are already getting the body out of danger: no floor reflex (the flee, a meal, an armour change, an arrow step-aside) cuts one of
+ * these, except starvation (food 3 or less) and a lit creeper. The API's DEFENSIVE_SKILLS (`mind/action/reflex/fastJudgment.ts`) that escape
+ * (flee-from, dig-shelter, build-around-self; its attack-* / retreat-attack are fights, which the API's own fast judgment cuts at health 6 or
+ * less, so they stay cuttable here), and the other commands whose whole purpose is to get the body out of danger: leave-water (out of water),
+ * tower-up (up out of reach), climb-down (off a ledge or out of a hole) and enter-portal (out of the dimension).
+ */
+export const ESCAPE_SKILLS: ReadonlySet<string> = new Set(['flee-from', 'dig-shelter', 'build-around-self', 'leave-water', 'tower-up', 'climb-down', 'enter-portal']);
 /** One retreat lasts at most a second, or three blocks (ADR-0010 D8). */
 const RETREAT_TICKS = 20;
 const RETREAT_BLOCKS = 3;
@@ -241,14 +247,9 @@ const NEVER_EAT = new Set(['pufferfish', 'chorus_fruit', 'suspicious_stew', 'spi
 const TOPUP_FOOD = 18, TOPUP_FOOD_HURT = 20, TOPUP_HEALTH = 18;
 /** While the pathfinder is walking the legacy auto-eat ate only at health 8 or less, or food 6 or less. */
 const MOVING_EAT_HEALTH = 8;
-/** Low health makes a meal critical only while there is hunger to fill: at food 18 or 19 a meal gains next to nothing (P8 fifth review, M1). */
-const CRITICAL_BY_HEALTH_MAX_FOOD = 17;
 /** Food that is worth more than its hunger points (a regeneration potion, a poison cure, a brewing ingredient): a top-up leaves it alone while it can. */
 const VALUABLE_FOOD = new Set(['golden_apple', 'golden_carrot', 'honey_bottle']);
-/** Whether a meal cannot wait: starving, or at low health with hunger to fill. Shared by the choice and the tick's cut rule. */
-function eatIsCritical(health: number, food: number): boolean {
-  return food <= EAT_CRITICAL_FOOD || (health <= BUDGET_EXEMPT_HEALTH && food <= CRITICAL_BY_HEALTH_MAX_FOOD);
-}
+// (Whether a meal is critical, `eatIsCritical`, is floorBudget.ts's one definition: this choice, the tick's cut rule and the budget's exemption share it.)
 /**
  * Food to eat now, or null; never with an enemy at arm's length (standing to eat there killed the body, L18).
  *
@@ -333,21 +334,55 @@ const STEP_UP = 0.6;
 const BODY_HEIGHT = 1.8;
 /** A jump lifts the feet a little over a block (1.25): a whole block is climbed by jumping, with a hair to spare for a position that is not exact. */
 const JUMP_UP = 1.001;
+/** How high the feet get in a jump above the take-off (a jump's arc peaks 1.25 blocks up). */
+const JUMP_APEX = 1.25;
+/** A jump is pressed when the body's speed over the ground points within about 25 degrees of the heading (cosine), or is below this (blocks per tick). */
+const JUMP_ALONG = 0.9;
+const JUMP_STANDSTILL = 0.05;
 /** How far below the feet the landing of a step down is looked for. */
 const LANDING_SCAN = 8;
 const EDGE = 1e-6;
 type FleeBlock = { name?: string; boundingBox?: string; shapes?: number[][]; isWaterlogged?: boolean; getProperties?: () => Record<string, unknown> } | null;
 type TerrainBody = { blockAt?(position: Vec3): FleeBlock };
 
+/** The way a heading runs along the ground (its unit vector on the x and z axes). */
+type Heading = { dx: number; dz: number };
+/** A heading enters a cell through a face only when it runs across that face at more than this (sin 22.5 degrees). */
+const ENTRY_AXIS = 0.38;
+const FACE_EPS = 1e-6;
+
+/**
+ * How high the part of a stair that a body running along `dir` meets first is: the low step of a stair met from its front (0.5, then the
+ * body climbs on to the back half), the whole block when it comes at the back or at the side of the high half (a jump). The height of the
+ * shapes that touch the face(s) of the block the heading enters through (and where the lowest of them begins: an upside-down stair is an
+ * overhang); null when the shapes say nothing of it.
+ */
+function stairEntry(shapes: number[][] | undefined, dir: Heading): { low: number; high: number } | null {
+  if (!Array.isArray(shapes) || !shapes.length) return null;
+  let low = Infinity, high = 0;
+  const touching = (touches: (shape: number[]) => boolean) => {
+    for (const shape of shapes) {
+      if (!touches(shape) || !Number.isFinite(shape[1]) || !Number.isFinite(shape[4])) continue;
+      low = Math.min(low, shape[1]); high = Math.max(high, shape[4]);
+    }
+  };
+  if (dir.dx > ENTRY_AXIS) touching(shape => shape[0] <= FACE_EPS);
+  else if (dir.dx < -ENTRY_AXIS) touching(shape => shape[3] >= 1 - FACE_EPS);
+  if (dir.dz > ENTRY_AXIS) touching(shape => shape[2] <= FACE_EPS);
+  else if (dir.dz < -ENTRY_AXIS) touching(shape => shape[5] >= 1 - FACE_EPS);
+  return high > 0 && Number.isFinite(low) ? { low, high } : null;
+}
+
 /**
  * The part of a cell, bottom to top (0 to 1), that stops a body walking, or null when it does not. Read from the block's shapes when it
- * has them; a stair is judged by its first step (a body walks up a stair from the low side), and without shapes a slab is half a block and
- * a carpet a sliver, so that stepping up onto either is not taken for a wall.
+ * has them; a stair is judged by the part the heading `dir` meets first (a body walks up a stair from the low side, but the back of one is
+ * a block to jump), and without shapes (or a heading) by its low step; without shapes a slab is half a block and a carpet a sliver, so that
+ * stepping up onto either is not taken for a wall.
  */
-function blockSpan(block: FleeBlock): { low: number; high: number } | null {
+function blockSpan(block: FleeBlock, dir?: Heading): { low: number; high: number } | null {
   if (!block || block.boundingBox !== 'block') return null;
   const name = String(block.name ?? '');
-  if (name.endsWith('_stairs')) return { low: 0, high: 0.5 };
+  if (name.endsWith('_stairs')) return (dir ? stairEntry(block.shapes, dir) : null) ?? { low: 0, high: 0.5 };
   if (Array.isArray(block.shapes) && block.shapes.length) {
     const low = Math.min(...block.shapes.map(shape => shape[1])), high = Math.max(...block.shapes.map(shape => shape[4]));
     if (Number.isFinite(low) && Number.isFinite(high)) return { low, high };
@@ -362,8 +397,8 @@ function blockSpan(block: FleeBlock): { low: number; high: number } | null {
 type Column = { kind: 'wall' } | { kind: 'open' } | { kind: 'ground'; top: number; jump: boolean };
 
 /** Whether the cell `y` of a column holds something that would stop a body standing with its feet at `feet` (a block whose top is not above `feet` does not). */
-function stopsBodyAt(terrain: TerrainBody, x: number, y: number, z: number, feet: number): boolean {
-  const span = blockSpan(terrain.blockAt!(new Vec3(x, y, z)));
+function stopsBodyAt(terrain: TerrainBody, x: number, y: number, z: number, feet: number, dir: Heading): boolean {
+  const span = blockSpan(terrain.blockAt!(new Vec3(x, y, z)), dir);
   return !!span && y + span.high > feet + EDGE && y + span.low < feet + BODY_HEIGHT - EDGE;
 }
 
@@ -373,10 +408,10 @@ function stopsBodyAt(terrain: TerrainBody, x: number, y: number, z: number, feet
  * the new floor are free, and so is the cell above the head where it takes off: the pathfinder's own rule for a jump); anything else
  * that meets the body is a wall.
  */
-function readColumn(terrain: TerrainBody, cx: number, cz: number, fromX: number, fromZ: number, stand: number, feetY: number, cells: FleeBlock[]): Column {
+function readColumn(terrain: TerrainBody, cx: number, cz: number, fromX: number, fromZ: number, stand: number, feetY: number, cells: FleeBlock[], dir: Heading): Column {
   let support: number | null = null, jump: number | null = null;
   for (const [index, block] of cells.entries()) {
-    const span = blockSpan(block);
+    const span = blockSpan(block, dir);
     if (!span) continue;
     const low = stand + index + span.low, top = stand + index + span.high;
     if (low >= feetY + BODY_HEIGHT) continue;
@@ -390,7 +425,7 @@ function readColumn(terrain: TerrainBody, cx: number, cz: number, fromX: number,
     const target = jump;
     for (let index = 0; index <= 3; index++) {
       // Room for the body on top of the block (its two cells above), and over the head where the jump begins.
-      if (stopsBodyAt(terrain, cx, stand + index, cz, target)) return { kind: 'wall' };
+      if (stopsBodyAt(terrain, cx, stand + index, cz, target, dir)) return { kind: 'wall' };
       const span = blockSpan(terrain.blockAt!(new Vec3(fromX, stand + index, fromZ)));
       if (span && stand + index + span.high > feetY + BODY_HEIGHT + EDGE && stand + index + span.low < target + BODY_HEIGHT - EDGE) return { kind: 'wall' };
     }
@@ -399,17 +434,21 @@ function readColumn(terrain: TerrainBody, cx: number, cz: number, fromX: number,
   return support !== null ? { kind: 'ground', top: support, jump: false } : { kind: 'open' };
 }
 
+/** Whether the body would be hurt, held or sent off by standing on this block (the floor of a cell it stands in) or in it. */
+const isHazardousToStandOn = (name: unknown) => LETHAL_TO_STAND_ON.has(String(name)) || isLethalToStandIn(name);
+
 /**
- * Where a step down through air lands: the top of the first block under the column (lethal: onto lava, magma and the like, or nothing to
- * land on within LANDING_SCAN), or null when the way down meets water or unloaded ground (the frame is then left as it was, as before).
+ * Where a step down through air lands: the top of the first block under the column (lethal: onto lava, magma, a campfire and the like, or
+ * through fire or a web on the way, or nothing to land on within LANDING_SCAN), or null when the way down meets water or unloaded ground
+ * (the frame is then left as it was, as before).
  */
-function landing(terrain: TerrainBody, cx: number, cz: number, stand: number): { top: number | null; lethal: boolean } {
+function landing(terrain: TerrainBody, cx: number, cz: number, stand: number, dir: Heading): { top: number | null; lethal: boolean } {
   for (let y = stand - 1; y >= stand - LANDING_SCAN; y--) {
     const block = terrain.blockAt!(new Vec3(cx, y, cz));
     if (!block) return { top: null, lethal: false };
-    if (LETHAL_TO_STAND_ON.has(String(block.name))) return { top: null, lethal: true };
+    if (isHazardousToStandOn(block.name)) return { top: null, lethal: true };
     if (holdsWater(block)) return { top: null, lethal: false };
-    const span = blockSpan(block);
+    const span = blockSpan(block, dir);
     if (span) return { top: y + span.high, lethal: false };
   }
   // Eight blocks of air and no ground (water and unloaded cells returned above): a fall that costs health.
@@ -417,50 +456,127 @@ function landing(terrain: TerrainBody, cx: number, cz: number, stand: number): {
 }
 
 /**
- * Walks a heading cell by cell for the look-ahead and says whether it is safe, and whether the body must jump to follow it (a whole
- * block to climb within two cells).
+ * Whether the body can stand on the ground `column.top` reads in the column (cx, cz) and move through the cells above it: the block it
+ * stands on is not one that hurts or holds it (magma, a campfire, a stalagmite, fire, cactus ...), and none of the cells the body fills there
+ * (and the one its head reaches after a jump) holds lava, fire, a web or another trap. A jump onto a block is judged by the block it lands
+ * ON, not only by the one under the block it climbs (P8 sixth review, M1/L2).
+ */
+function groundIsSafe(terrain: TerrainBody, cx: number, cz: number, top: number): boolean {
+  const supporting = Math.ceil(top - EDGE) - 1;
+  if (isHazardousToStandOn(terrain.blockAt!(new Vec3(cx, supporting, cz))?.name)) return false;
+  for (let y = supporting + 1; y < top + BODY_HEIGHT - EDGE; y++) {
+    if (isLethalToStandIn(terrain.blockAt!(new Vec3(cx, y, cz))?.name)) return false;
+  }
+  return true;
+}
+
+/** How far to each side of the line the body reaches (half its width and a little more: a run drifts off the line it was planned on). */
+const BODY_REACH = 0.4;
+/**
+ * Whether the column (cx, cz) beside the path holds a hazard where the body could touch it: in the cells from the head of a body standing
+ * on `stand` down to the first block that would stop a fall (or water), anything the flee will not stand on or in.
+ */
+function columnHasHazard(terrain: TerrainBody, cx: number, cz: number, stand: number): boolean {
+  for (let y = stand + 2; y >= stand - LANDING_SCAN; y--) {
+    const block = terrain.blockAt!(new Vec3(cx, y, cz));
+    if (!block) return false;
+    if (isHazardousToStandOn(block.name)) return true;
+    if (block.boundingBox === 'block' || holdsWater(block)) return false;
+  }
+  return false;
+}
+
+/** How far along the heading the cells are told apart (every cell the line crosses is read, also the ones a coarser step would skip over). */
+const SCAN_SAMPLE = 0.25;
+/** The reach of one flight over steps: a running body comes down about this far (in blocks) beyond the edge it left (see `descentIsDangerous`). */
+const FLIGHT_REACH = 2;
+
+/**
+ * The most the body may come down at a cell: a fall costs nothing up to three blocks, and the limit is the edge guard's (one point to
+ * spare). A running body does not stop at each cell of a flight of steps: it comes off one ledge with the speed to clear the next, so the
+ * drop at a cell is judged from the HIGHEST floor within the FLIGHT_REACH blocks of the heading before it (two cells on a straight line):
+ * a slope of one block per block (or 1.5) is run, steps of two or three blocks each are not (open-loop: 2:1 fell six blocks, 3:1 fifteen;
+ * P8 sixth review, M2). `apex` is the top of a jump's arc, when the body is to jump (the flight may end anywhere under it).
+ */
+function descentIsDangerous(passed: Array<{ d: number; y: number }>, at: number, to: number, apex = -Infinity): boolean {
+  let from = apex;
+  for (const cell of passed) if (cell.d >= at - FLIGHT_REACH - 0.01) from = Math.max(from, cell.y);
+  return fallIsDangerous(from - to, 1);
+}
+
+/**
+ * Walks a heading for the look-ahead and says whether it is safe, and whether the body must jump to follow it (a whole block to climb
+ * within two blocks). Every cell the line crosses is read in order (the body would be in each).
  *
  * The body is followed from cell to cell at its own height: after a step up (by a jump or a half block) or a step down the next cell is
- * read from the new floor. So a slope of one block per block, up or down, is run; what is refused is a single drop of more than three
- * blocks (judged from the cell before, not from where the run began), lava, fire and the rest below.
+ * read from the new floor. So a slope of one block per block, up or down, is run; what is refused is a cell where the body would come down
+ * more than three blocks from the highest floor of the two blocks before it (a single drop of four, or steps of two blocks each:
+ * `descentIsDangerous`), lava, fire and the rest below, and a landing (also on top of a block it jumps onto) that hurts.
  */
 function scanHeading(bot: FloorBody, at: Vec3, yaw: number): { safe: boolean; jump: boolean } {
+  const walked = walkHeading(bot, at, yaw);
+  if (!walked.safe || !walked.jump) return walked;
+  // A sprint jump flies about four blocks and comes down at the end of the flight, not on the step it was pressed for: from the top of the arc
+  // (a block and a quarter over the take-off). So every cell the flight can end in is judged as a drop from there (open-loop: a jump toward a
+  // plateau that ends in a drop of five fell 5.25 blocks). The take-off is where the body is now; the jump is pressed at once.
+  return { safe: walkHeading(bot, at, yaw, at.y + JUMP_APEX).safe, jump: true };
+}
+
+function walkHeading(bot: FloorBody, at: Vec3, yaw: number, apex?: number): { safe: boolean; jump: boolean } {
   const terrain = bot as unknown as TerrainBody;
   if (typeof terrain.blockAt !== 'function') return { safe: true, jump: false };
-  const dx = -Math.sin(yaw), dz = -Math.cos(yaw);
+  const dx = -Math.sin(yaw), dz = -Math.cos(yaw), heading: Heading = { dx, dz };
   let jump = false;
   try {
     const start = Math.floor(at.y - 0.01);
     const here = terrain.blockAt(new Vec3(Math.floor(at.x), start, Math.floor(at.z)));
     const swimmingNow = holdsWater(here) || (here?.boundingBox !== 'block' && holdsWater(terrain.blockAt(new Vec3(Math.floor(at.x), start + 1, Math.floor(at.z)))));
     let reachesShallow = false, feetY = at.y, fromX = Math.floor(at.x), fromZ = Math.floor(at.z);
-    for (let step = 1; step <= FLEE_LOOKAHEAD; step++) {
-      const x = at.x + dx * step, z = at.z + dz * step, cx = Math.floor(x), cz = Math.floor(z);
+    // The cells the line crosses, in order, how far along it each is entered, and the cells beside it that the body's width reaches there.
+    const cells: Array<{ cx: number; cz: number; x: number; z: number; d: number; beside: Map<string, [number, number]> }> = [];
+    let lastX = fromX, lastZ = fromZ;
+    for (let d = SCAN_SAMPLE; d <= FLEE_LOOKAHEAD + 1e-9; d += SCAN_SAMPLE) {
+      const x = at.x + dx * d, z = at.z + dz * d, cx = Math.floor(x), cz = Math.floor(z);
+      if (cx !== lastX || cz !== lastZ) { cells.push({ cx, cz, x, z, d, beside: new Map() }); lastX = cx; lastZ = cz; }
+      const current = cells[cells.length - 1];
+      if (!current) continue;
+      for (const ox of [-BODY_REACH, BODY_REACH]) for (const oz of [-BODY_REACH, BODY_REACH]) {
+        const bx = Math.floor(x + ox), bz = Math.floor(z + oz);
+        if (bx !== current.cx || bz !== current.cz) current.beside.set(`${bx},${bz}`, [bx, bz]);
+      }
+    }
+    // The height of the feet in each cell passed (the first is where the body is).
+    const passed = [{ d: 0, y: at.y }];
+    for (const { cx, cz, x, z, d, beside } of cells) {
       const stand = Math.floor(feetY - 0.01);
       const floor = terrain.blockAt(new Vec3(cx, stand, cz)), feet = terrain.blockAt(new Vec3(cx, stand + 1, cz)), head = terrain.blockAt(new Vec3(cx, stand + 2, cz));
       if ([floor, feet, head].some(block => isLethalToStandIn(block?.name))) return { safe: false, jump };
       // What the feet would rest on: the floor cell, or the one under it when that is open (a step down).
       const resting = floor && floor.boundingBox === 'block' ? floor : terrain.blockAt(new Vec3(cx, stand - 1, cz));
       if (LETHAL_TO_STAND_ON.has(String(resting?.name))) return { safe: false, jump };
+      // The body is 0.6 wide, and a run does not keep to the line: a trap or a lava, magma or fire cell it would brush is as bad as one under it.
+      for (const [bx, bz] of beside.values()) if (columnHasHazard(terrain, bx, bz, stand)) return { safe: false, jump };
       const swim = holdsWater(floor) || (floor?.boundingBox !== 'block' && holdsWater(feet));
       if (swim && !swimmingNow) return { safe: false, jump };
       if (!swim) reachesShallow = true;
-      // A wall at the first two steps: the run would be into it. (Further on the flee has stopped by then, and the frame is left as it is.)
-      const column = readColumn(terrain, cx, cz, fromX, fromZ, stand, feetY, [floor, feet, head]);
-      if (column.kind === 'wall' && step <= 2) return { safe: false, jump };
+      // A wall in the first two blocks: the run would be into it. (Further on the flee has stopped by then, and the frame is left as it is.)
+      const column = readColumn(terrain, cx, cz, fromX, fromZ, stand, feetY, [floor, feet, head], heading);
+      if (column.kind === 'wall' && d <= 2) return { safe: false, jump };
       // Any drop that would cost health (more than three blocks, or lava below), judged as the edge guard does with one point to spare,
       // from the floor the body stands on at the cell before: a slope is a row of small drops, not one big one.
-      if (!blockSpan(floor) && edgeRisk(bot as any, x, feetY, z, 1) !== null) return { safe: false, jump };
+      if (!blockSpan(floor, heading) && edgeRisk(bot as any, x, feetY, z, 1) !== null) return { safe: false, jump };
       if (column.kind === 'ground') {
-        if (column.jump && step <= 2) jump = true;
+        if (!groundIsSafe(terrain, cx, cz, column.top) || descentIsDangerous(passed, d, column.top, apex)) return { safe: false, jump };
+        if (column.jump && d <= 2) jump = true;
         feetY = column.top;
       } else if (column.kind === 'open' && !swim) {
-        const down = landing(terrain, cx, cz, stand);
+        const down = landing(terrain, cx, cz, stand, heading);
         if (down.lethal) return { safe: false, jump };
-        // The drop of this one step, from the floor the body stands on (the same judgment as the edge guard's, on the cell's own column).
-        if (down.top !== null && fallIsDangerous(feetY - down.top, 1)) return { safe: false, jump };
+        // The drop at this cell, from the highest floor of the blocks before it (see `descentIsDangerous`).
+        if (down.top !== null && descentIsDangerous(passed, d, down.top, apex)) return { safe: false, jump };
         if (down.top !== null) feetY = down.top;
       }
+      passed.push({ d, y: feetY });
       fromX = cx; fromZ = cz;
     }
     if (swimmingNow && !reachesShallow) return { safe: false, jump };
@@ -479,6 +595,12 @@ function scanHeading(bot: FloorBody, at: Vec3, yaw: number): { safe: boolean; ju
  * block the feet rest on (the edge guard's `floorY`); the body fills the two cells above it; and a wall is any block that would stop the
  * body, judged by its real top and bottom: half a block up is a step, a whole block up is a jump (when there is room above it), more is a
  * wall. The body is followed along the heading, so a slope of one block per block, up or down, is open ground (P8 fifth review, M2).
+ *
+ * The drop at a cell is judged from the highest floor of the two blocks before it, so a slope of 1:1 or 1.5:1 is run and steps of two or more
+ * blocks each (2:1, terraces) are not: a running body clears one step and comes down on the next (P8 sixth review, M2). A heading that needs a
+ * jump is judged again for the flight, from the top of the arc. Every cell the line crosses is read, and the cells the body's width reaches
+ * beside it are checked for traps and lava (a run does not keep to the line). The block a jump lands on, and the cells its head passes, are
+ * read like any other (M1, L2); a stair is read on the side the heading meets (L3).
  *
  * Also refused: the portals, pressure plates and tripwires (a trap, another dimension) and a fall onto a stalagmite.
  *
@@ -584,8 +706,7 @@ const escapeRunning = (bot: object) => activeActionCapabilities(bot).some(capabi
 /**
  * Whether the low-health flee may run a segment now, and from what. Precedence (P8): a floor retreat, meal or armour change, or any other
  * safety lease holds the body first; the API's own escape skills (flee-from, a shelter) are never cut; a command waiting for the body
- * ends the segment (
-unLowHealthFlee) and, with it, the episode. A fight or a task action under it is cut: at this health the API's fast judgment would cut it too.
+ * ends the segment (`runLowHealthFlee`) and, with it, the episode. A fight or a task action under it is cut: at this health the API's fast judgment would cut it too.
  * A new episode costs one of the two in 20 seconds; the segments after the first (`continuing`) are part of it and cost nothing.
  */
 export function fleeStart(bot: FloorBody, state: FloorState, now: number): FleeStart | null {
@@ -630,6 +751,38 @@ export function fleeStart(bot: FloorBody, state: FloorState, now: number): FleeS
   }
   return { ...threat, continuing: !!episode };
 }
+
+/**
+ * The heading and the jump key for one tick of the run, or null when there is no safe way (`fleeHeadingPlan`, with `memory.heading` as the
+ * previous heading; it is set to the heading taken). Two things the plan alone does not say:
+ *  - In the air the heading is held: a jump (or a step off a ledge) has committed the body to the flight the heading was judged for
+ *    (`scanHeading` reads its landing), and turning on the way only drifts it off that line, onto cells nobody read (open-loop, the body
+ *    came down on magma and in lava a block to the side of the planned line).
+ *  - In water the jump key is the way up and out: a body that swims is never `onGround`, so a step up to the shore that needs a jump
+ *    would be a wall for ever (the physics: pressing jump at the shore gets out of the water onto a bank flush with it; without, it
+ *    sticks there).
+ */
+export function fleeKeys(bot: FloorBody, threats: Vec3[], memory: { heading?: number }): { yaw: number; jump: boolean } | null {
+  const body = bot.entity;
+  const swimming = body?.isInWater === true;
+  if (body && body.onGround === false && !swimming && body.isInLava !== true && memory.heading !== undefined) return { yaw: memory.heading, jump: false };
+  const plan = fleeHeadingPlan(bot, threats, memory.heading);
+  if (plan === null) return null;
+  memory.heading = plan.yaw;
+  // A jump carries the speed the body has into the air, and it is judged for a flight along the heading: it is pressed once the body runs
+  // that way (a few ticks after a turn), or from a standstill (open-loop: a jump pressed right after a 40 degree turn flew 15 degrees off the
+  // line it was judged for and came down on lava).
+  return { yaw: plan.yaw, jump: plan.jump && (swimming || (body?.onGround !== false && runsAlong(body, plan.yaw))) };
+}
+
+/** Whether the body's own speed over the ground is (nearly) along `yaw`, or too small to matter. */
+function runsAlong(body: FloorEntity | undefined, yaw: number): boolean {
+  const v = body?.velocity;
+  if (!v) return true;
+  const speed = Math.hypot(v.x, v.z);
+  return speed < JUMP_STANDSTILL || (v.x * -Math.sin(yaw) + v.z * -Math.cos(yaw)) / speed >= JUMP_ALONG;
+}
+
 /**
  * One segment of the flee, run as the work of a safety-lease action. Keys go through the motor port, so an action that took the body
  * from it (a retreat, lava) makes the next write fail instead of fighting it; the keys are always let go at the end. At most
@@ -647,14 +800,12 @@ export async function runLowHealthFlee(bot: FloorBody, port: FloorBody, tickMs =
       if (ticks >= FLEE_YIELD_AFTER_TICKS && commandWaiting(bot)) { ended = 'yield'; break; }
       // Away from all of them, or the nearest turn that does not lead to lava or a drop (and none: it stops here). The edge guard
       // still has the final say over the keys at the physics tick.
-      const plan = fleeHeadingPlan(bot, threat.threats, memory.heading);
-      if (plan === null) { ended = 'blocked'; break; }
-      memory.heading = plan.yaw;
-      port.look?.(plan.yaw, 0, true);
+      const keys = fleeKeys(bot, threat.threats, memory);
+      if (keys === null) { ended = 'blocked'; break; }
+      port.look?.(keys.yaw, 0, true);
       port.setControlState('forward', true); port.setControlState('sprint', true);
       // A whole block to climb a step or two ahead: a sprint jump (set only on a change, so level ground costs no extra write).
-      const wantJump = plan.jump && bot.entity?.onGround !== false;
-      if (wantJump !== jumping) { jumping = wantJump; port.setControlState('jump', jumping); }
+      if (keys.jump !== jumping) { jumping = keys.jump; port.setControlState('jump', jumping); }
       await new Promise(resolve => setTimeout(resolve, tickMs));
     }
   } finally {

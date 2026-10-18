@@ -10,7 +10,8 @@
  *              until the window has room again (health 6 or less is exempt: that is when they matter most)
  *   latch      three failures of the same reflex in a row stop it for a minute (then two, then four; a success clears it)
  *
- * The meal at 6 health or less, or starving (food 6 or less), is outside the allowance and the latch altogether (P8 third review, M2):
+ * The meal that cannot wait (`eatIsCritical`: food 6 or less, or health 6 or less with food 17 or less; at food 18 or 19 a meal gains next
+ * to nothing, so that one is an ordinary top-up and is metered) is outside the allowance and the latch altogether (P8 third review, M2):
  * the legacy auto-eat tried every second without limit there, and the API's fast judgment never eats, so a latch that stops the one thing
  * that can still save the body is worse than a loop. Only a short backoff (3 s) after one that failed or was cut off, so that a meal that
  * cannot work does not spin the tick. Its time is not counted against the allowance either.
@@ -37,6 +38,15 @@ export const BUDGET_EXEMPT_HEALTH = 6;
 export const EAT_CRITICAL_FOOD = 6;
 /** The only wait after a meal that failed or was cut off, when it is critical. */
 export const CRITICAL_EAT_RETRY_MS = 3_000;
+/** Low health makes a meal critical only while there is hunger to fill: at food 18 or 19 a meal gains next to nothing (P8 fifth review, M1). */
+export const CRITICAL_BY_HEALTH_MAX_FOOD = 17;
+/**
+ * Whether a meal cannot wait: starving, or at low health with hunger to fill. The one definition: the floor's choice and its tick's cut rule
+ * (`floorReflexes.ts`) and this budget's exemption from the allowance and the latch all use it (P8 sixth review, L5).
+ */
+export function eatIsCritical(health: number, food: number): boolean {
+  return food <= EAT_CRITICAL_FOOD || (health <= BUDGET_EXEMPT_HEALTH && food <= CRITICAL_BY_HEALTH_MAX_FOOD);
+}
 
 const LABEL: Record<BudgetKind, string> = { arrow: '矢のよけ', eat: '食事', armor: '防具の装着' };
 
@@ -60,7 +70,7 @@ export class FloorBudget {
   allow(kind: BudgetKind, health: number, food = 20): boolean {
     const at = this.now(), track = this.tracks[kind];
     this.lowHealth = health <= BUDGET_EXEMPT_HEALTH;
-    track.critical = kind === 'eat' && (this.lowHealth || food <= EAT_CRITICAL_FOOD);
+    track.critical = kind === 'eat' && eatIsCritical(health, food);
     if (track.critical) return at >= track.criticalUntil;
     if (at < track.latchedUntil || at < track.until) return false;
     if (this.lowHealth) return true;

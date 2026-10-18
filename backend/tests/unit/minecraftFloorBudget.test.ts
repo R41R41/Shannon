@@ -4,7 +4,7 @@ import { actionSignal, executeAction } from '../../src/services/minebot/executio
 import { describe, expect, it, vi } from 'vitest';
 import { NativeCommonFcaBody } from '../../src/services/minebot/integration/commonFca/nativeBody.js';
 import { floorConfig } from '../../src/services/minebot/utils/floorConfig.js';
-import { ARROW_GAP_LOW_HEALTH_MS, ARROW_GAP_MS, BUDGET_ALLOWANCE_MS, BUDGET_WINDOW_MS, CRITICAL_EAT_RETRY_MS, FloorBudget, LATCH_AFTER, LATCH_MS, RETRY_BASE_MS } from '../../src/services/minebot/utils/floorBudget.js';
+import { ARROW_GAP_LOW_HEALTH_MS, ARROW_GAP_MS, BUDGET_ALLOWANCE_MS, BUDGET_WINDOW_MS, CRITICAL_EAT_RETRY_MS, eatIsCritical, FloorBudget, LATCH_AFTER, LATCH_MS, RETRY_BASE_MS, RETRY_MAX_MS } from '../../src/services/minebot/utils/floorBudget.js';
 import { floorActive, floorSilenced, installFloorReflexes } from '../../src/services/minebot/utils/floorReflexes.js';
 import { ensureReflexLedger } from '../../src/services/minebot/utils/reflexLedger.js';
 
@@ -62,7 +62,7 @@ describe('FloorBudget (P8 design R1, review M3)', () => {
     expect(cut.allow('eat', 20)).toBe(false); time.advance(RETRY_BASE_MS); expect(cut.allow('eat', 20)).toBe(true);
   });
   it('does not meter the meal at 6 health or less, or starving (food 6 or less): no allowance, no latch, only a 3 s wait after one that failed (P8 third review, M2)', () => {
-    for (const [label, health, food] of [['low health', 5, 20], ['starving', 20, 4], ['both', 3, 1], ['edge: 6 health', 6, 20], ['edge: food 6', 20, 6]] as const) {
+    for (const [label, health, food] of [['low health', 5, 17], ['starving', 20, 4], ['both', 3, 1], ['edge: 6 health', 6, 17], ['edge: food 6', 20, 6]] as const) {
       const time = clock(), said: string[] = [], budget = new FloorBudget(time.now, detail => said.push(detail));
       // The allowance is spent on other things, and the arrow's own cooldown runs: the meal is outside both.
       budget.end('armor', time.now() - BUDGET_ALLOWANCE_MS, 'done');
@@ -84,9 +84,21 @@ describe('FloorBudget (P8 design R1, review M3)', () => {
       budget.end('eat', time.now() - 10, 'failed'); budget.end('eat', time.now() - 10, 'done'); expect(budget.allow('eat', health, food), label).toBe(true);
     }
   });
-  it('still meters the meal when it is not critical (7 health or more and food above 6), and a critical meal that failed leaves no failure behind for it', () => {
+  it('one definition of "critical" for the floor\'s choice, its tick and the budget (P8 sixth review, L5): at health 6 or less with food 18 or 19 a meal is a top-up, and the budget latches it like any other', () => {
+    expect(eatIsCritical(6, 17)).toBe(true); expect(eatIsCritical(6, 18)).toBe(false); expect(eatIsCritical(1, 19)).toBe(false);
+    expect(eatIsCritical(7, 6)).toBe(true); expect(eatIsCritical(7, 7)).toBe(false); expect(eatIsCritical(20, 0)).toBe(true);
+    // The budget's behaviour is the definition's, over every health and food: three failures in a row latch a metered meal for a minute, and a critical one never.
+    for (let health = 1; health <= 20; health++) for (let food = 0; food <= 20; food++) {
+      const time = clock(), budget = new FloorBudget(time.now);
+      for (let attempt = 0; attempt < 3; attempt++) {
+        expect(budget.allow('eat', health, food), `${health}/${food} #${attempt}`).toBe(true);
+        time.advance(100); budget.end('eat', time.now() - 100, 'failed'); time.advance(RETRY_MAX_MS);
+      }
+      expect(budget.allow('eat', health, food), `${health}/${food} after three failures`).toBe(eatIsCritical(health, food));
+    }
+  });  it('still meters the meal when it is not critical (7 health or more and food above 6), and a critical meal that failed leaves no failure behind for it', () => {
     const time = clock(), budget = new FloorBudget(time.now);
-    expect(budget.allow('eat', 5, 20)).toBe(true); budget.end('eat', time.now() - 10, 'failed'); budget.end('eat', time.now() - 10, 'failed'); budget.end('eat', time.now() - 10, 'failed');
+    expect(budget.allow('eat', 5, 17)).toBe(true); budget.end('eat', time.now() - 10, 'failed'); budget.end('eat', time.now() - 10, 'failed'); budget.end('eat', time.now() - 10, 'failed');
     // Health came back: the last three failures were not counted against the metered meal.
     time.advance(CRITICAL_EAT_RETRY_MS);
     expect(budget.allow('eat', 7, 7)).toBe(true); budget.end('eat', time.now() - 10, 'failed');

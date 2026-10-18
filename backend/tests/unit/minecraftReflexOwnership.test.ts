@@ -53,17 +53,20 @@ describe('low-health flee: when it may start (precedence)', () => {
     bot.lavaReflex = { engaged: true }; expect(fleeStart(bot, state(), Date.now())).toBeNull(); bot.lavaReflex = { engaged: false };
     bot.breathingReflex = { engaged: true }; expect(fleeStart(bot, state(), Date.now())).toBeNull(); bot.breathingReflex = { engaged: false };
     for (const skill of ESCAPE_SKILLS) {
-      const held = executeAction(bot, skill, 1000, () => new Promise(resolve => setTimeout(() => resolve({ success: true, result: 'ok' }), 40)), { priority: 0 });
-      await settle(5);
+      const held = executeAction(bot, skill, 1000, () => new Promise(resolve => setTimeout(() => resolve({ success: true, result: 'ok' }), 200)), { priority: 0 });
+      await until(() => expect(activeActionCapabilities(bot)).toContain(skill));
       expect(fleeStart(bot, state(), Date.now()), skill).toBeNull();
       await held;
     }
     const lease = executeAction(bot, 'floor-eat', 1000, () => new Promise(resolve => setTimeout(() => resolve({ success: true, result: 'ok' }), 40)),
       { priority: 200, safetyLease: true });
-    await settle(5); expect(fleeStart(bot, state(), Date.now())).toBeNull(); await lease;
+    await until(() => expect(activeActionCapabilities(bot)).toContain('floor-eat')); expect(fleeStart(bot, state(), Date.now())).toBeNull(); await lease;
     // A fight or a task action under it does not stop it: at this health the API's fast judgment would cut it too.
     const fight = executeAction(bot, 'attack-continuously', 1000, () => new Promise(resolve => setTimeout(() => resolve({ success: true, result: 'ok' }), 40)), { priority: 0 });
-    await settle(5); expect(fleeStart(bot, state(), Date.now())).not.toBeNull(); await fight;
+    await until(() => expect(activeActionCapabilities(bot)).toContain('attack-continuously'));
+    const begun = fleeStart(bot, state(), Date.now());
+    expect(begun).toMatchObject({ continuing: false, nearest: 2 }); expect(begun!.threats).toHaveLength(1);
+    await fight;
   });
   it('is at most twice in 20 seconds', () => {
     const { bot } = fixture();

@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { Vec3 } from 'vec3';
 import { describe, expect, it, vi } from 'vitest';
-import { executeAction } from '../../src/services/minebot/execution/ActionExecution.js';
+import { activeActionCapabilities, executeAction } from '../../src/services/minebot/execution/ActionExecution.js';
 import { floorConfig } from '../../src/services/minebot/utils/floorConfig.js';
 import { ESCAPE_SKILLS, fleeHeading, fleeHeadingPlan, fleeHeadingSafe, fleeStart, floorEatChoice, installFloorReflexes, runLowHealthFlee, type FloorBody, type FloorState } from '../../src/services/minebot/utils/floorReflexes.js';
 import { ensureReflexLedger } from '../../src/services/minebot/utils/reflexLedger.js';
@@ -41,6 +41,10 @@ async function within(ms: number, check: () => boolean): Promise<boolean> {
   while (!check() && Date.now() < end) await settle(3);
   return check();
 }
+/** Waits until the command is the one running on the body (a fixed sleep let the tick come before the command had begun, or after it had ended, on a loaded machine). */
+async function running(bot: object, skill: string): Promise<void> {
+  expect(await within(3000, () => activeActionCapabilities(bot).includes(skill)), `${skill} is running`).toBe(true);
+}
 
 // ---- M1 ------------------------------------------------------------------------------------------------------------------------------
 describe('M1: a meal does not cut the API\'s own escape and shelter commands (default mode), except to save a starving body', () => {
@@ -50,7 +54,7 @@ describe('M1: a meal does not cut the API\'s own escape and shelter commands (de
     bot.entities[2].position = new Vec3(zombieX, 65, 0.5);
     installFloorReflexes(bot, floorConfig(mode === 'floor' ? { MINEBOT_FCA_REFLEXES: 'floor' } : {}), { fleeTickMs: 1 });
     const command = executeAction(bot, skill, 5000, () => new Promise(resolve => setTimeout(() => resolve({ success: true, result: 'ok' }), 150)), { priority: 0 });
-    await settle(5); tick(bot);
+    await running(bot, skill); tick(bot);
     const result: any = await command;
     const ate = await within(800, () => bot.consume.mock.calls.length > 0);
     return { cut: result.success === false, ate, flees: bot.floorReflexes.engagements.flee ?? 0 };
@@ -82,7 +86,7 @@ describe('M1: a meal does not cut the API\'s own escape and shelter commands (de
       bot.entities[2].position = new Vec3(10, 65, 0.5);
       installFloorReflexes(bot, floorConfig(mode === 'floor' ? { MINEBOT_FCA_REFLEXES: 'floor' } : {}));
       const command = executeAction(bot, skill, 5000, () => new Promise(resolve => setTimeout(() => resolve({ success: true, result: 'ok' }), 150)), { priority: 0 });
-      await settle(5); tick(bot);
+      await running(bot, skill); tick(bot);
       const result: any = await command;
       return { cut: result.success === false, equipped: await within(800, () => bot.equip.mock.calls.length > 0) };
     };
@@ -96,7 +100,7 @@ describe('M1: a meal does not cut the API\'s own escape and shelter commands (de
       bot.entities = { 3: { id: 3, name: 'arrow', position: new Vec3(8, 66, 0.5), velocity: new Vec3(-2, 0, 0) } };
       installFloorReflexes(bot, floorConfig(mode === 'floor' ? { MINEBOT_FCA_REFLEXES: 'floor' } : {}));
       const command = executeAction(bot, 'flee-from', 5000, () => new Promise(resolve => setTimeout(() => resolve({ success: true, result: 'ok' }), 200)), { priority: 0 });
-      await settle(5); tick(bot);
+      await running(bot, 'flee-from'); tick(bot);
       bot.entities[3].position = new Vec3(6, 66, 0.5); tick(bot);
       const result: any = await command;
       return result.success === false;
@@ -108,7 +112,7 @@ describe('M1: a meal does not cut the API\'s own escape and shelter commands (de
     bot.entities = { 3: { id: 3, name: 'creeper', position: new Vec3(3, 65, 0.5), metadata: lit } };
     installFloorReflexes(bot, floorConfig({}));
     const command = executeAction(bot, 'flee-from', 5000, () => new Promise(resolve => setTimeout(() => resolve({ success: true, result: 'ok' }), 200)), { priority: 0 });
-    await settle(5); tick(bot);
+    await running(bot, 'flee-from'); tick(bot);
     expect(((await command) as any).success).toBe(false);
   });
   it('health 6 or less at food 18 or 19 is a top-up, not a critical meal; at food 17 or less it is critical', () => {
@@ -192,9 +196,11 @@ describe('M2: the flee climbs a block, runs slopes of one block per block, and s
     const { safe, plan } = check(x => x < 0 ? 64 - x : 64);
     expect(safe).toBe(true); expect(plan?.jump).toBe(true);
   });
-  it('a slope down of one block per block (five blocks in five) is open ground; a single drop of four is not, and three is', () => {
+  it('a slope down of one block per block (five blocks in five) is open ground, and so is one of a block and a half; steps of two are not (P8 sixth review, M2); a single drop of four is not, and three is', () => {
     expect(check(x => x < 0 ? 64 + x : 64).safe).toBe(true);
-    expect(check(x => x < 0 ? 64 + 2 * x : 64).safe).toBe(true);           // two per block: ten blocks down in five, but each drop is two
+    expect(check(x => x < 0 ? 64 + Math.ceil(1.5 * x) : 64).safe).toBe(true);   // 1.5 : 1 (drops of 1 and 2, three in two cells)
+    // Two per block: a running body clears a step in one stride and comes down on the one after (open-loop physics: six blocks), so it is refused.
+    expect(check(x => x < 0 ? 64 + 2 * x : 64).safe).toBe(false);
     expect(check(x => x <= -1 ? 61 : 64).safe).toBe(true);                  // a drop of three
     expect(check(x => x <= -1 ? 60 : 64).safe).toBe(false);                 // a drop of four
     expect(check(x => x <= -3 ? 60 : 64).safe).toBe(false);

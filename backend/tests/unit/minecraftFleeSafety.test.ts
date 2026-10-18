@@ -134,7 +134,7 @@ describe('the low-health flee does not run toward a cliff or lava (P8 second rev
     expect(refused).not.toBeNull();
     expect(entity.position.x).toBeGreaterThanOrEqual(-0.31);
   });
-  it('the API\'s own escape skills are exactly the ones the flee gives way to, and retreat-attack (not a skill) is not among them', () => {
-    expect([...ESCAPE_SKILLS].sort()).toEqual(['build-around-self', 'dig-shelter', 'flee-from']);
+  it('the commands that get the body out of danger are exactly the ones the flee gives way to: the API\'s flee and shelters plus leave-water, tower-up, climb-down and enter-portal; its fights (attack-*, retreat-attack) are not among them (P8 sixth review, L4)', () => {
+    expect([...ESCAPE_SKILLS].sort()).toEqual(['build-around-self', 'climb-down', 'dig-shelter', 'enter-portal', 'flee-from', 'leave-water', 'tower-up']);
   });
 });

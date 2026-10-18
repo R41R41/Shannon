@@ -2,10 +2,10 @@ import { EventEmitter } from 'node:events';
 import { readFileSync } from 'node:fs';
 import { Vec3 } from 'vec3';
 import { describe, expect, it, vi } from 'vitest';
-import { executeAction } from '../../src/services/minebot/execution/ActionExecution.js';
+import { activeActionCapabilities, executeAction } from '../../src/services/minebot/execution/ActionExecution.js';
 import { floorConfig, reflexPromptText } from '../../src/services/minebot/utils/floorConfig.js';
 import { noteAttackedBy } from '../../src/services/minebot/utils/hostileMobHints.js';
-import { fleeHeading, fleeHeadingSafe, fleeStart, fleeThreat, floorEatChoice, hostileWithin, installFloorReflexes, isThreat, type FloorBody, type FloorState } from '../../src/services/minebot/utils/floorReflexes.js';
+import { fleeHeading, fleeHeadingSafe, fleeStart, fleeThreat, floorActive, floorEatChoice, hostileWithin, installFloorReflexes, isThreat, type FloorBody, type FloorState } from '../../src/services/minebot/utils/floorReflexes.js';
 import { ensureReflexLedger } from '../../src/services/minebot/utils/reflexLedger.js';
 
 // ---- terrain -------------------------------------------------------------------------------------------------------------------------
@@ -379,8 +379,17 @@ describe('the flee runs in segments for as long as the danger is near, up to the
     const began = Date.now();
     expect(await command).toMatchObject({ success: true, result: 'arrived' });
     expect(Date.now() - began).toBeLessThan(800);
-    await settle(20);
-    expect(sim.bot.floorReflexes.busy).toBeNull();
+    await vi.waitFor(() => expect(sim.bot.floorReflexes.busy).toBeNull(), { timeout: 5000, interval: 2 });
+    // What was handed over: the keys the run held are let go (the last write to each is "released"), nothing of the flee still owns the body,
+    // the episode is over and the 2 s of rest has begun.
+    const written: Array<[string, boolean]> = sim.bot.setControlState.mock.calls;
+    const lastWrite = (key: string) => [...written].reverse().find(([name]) => name === key)?.[1];
+    expect(written.some(([name, value]) => name === 'forward' && value === true), 'it did run before it gave way').toBe(true);
+    for (const key of ['forward', 'sprint', 'jump', 'left', 'right']) expect(lastWrite(key), `${key} released`).not.toBe(true);
+    expect(activeActionCapabilities(sim.bot)).not.toContain('floor-flee');
+    expect(floorActive(sim.bot)).toBe(false);
+    expect(sim.bot.floorReflexes.fleeEpisode).toBeUndefined();
+    expect(sim.bot.floorReflexes.fleeRestUntil).toBe(sim.clock.at + 2000);
     const writes = sim.bot.setControlState.mock.calls.length;
     for (let i = 0; i < 5; i++) { sim.clock.at += 100; tick(sim.bot); await settle(3); }
     expect(sim.bot.setControlState.mock.calls.length).toBe(writes);
