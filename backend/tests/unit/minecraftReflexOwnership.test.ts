@@ -22,13 +22,19 @@ const full = floorConfig({});
 const state = (patch: Partial<FloorState> = {}): FloorState => ({ retreat: { engaged: false, ticks: 0, cooldown: 0, engagements: 0 }, busy: null, retryAt: 0, engagements: { eat: 0, armor: 0 }, fleeStarts: [], ...patch });
 
 describe('low-health flee: when it may start (precedence)', () => {
-  it('needs health at most 6 and a reachable hostile within 3 blocks', () => {
+  it('needs health at most 6 and a reachable threat within 8 blocks (16 for a kind that shoots)', () => {
     const { bot } = fixture();
     expect(fleeThreat(bot as FloorBody)?.from.x).toBe(2);
     bot.health = 7; expect(fleeThreat(bot)).toBeNull();
     bot.health = 6; expect(fleeThreat(bot)).not.toBeNull();
     bot.health = 0; expect(fleeThreat(bot)).toBeNull();
-    bot.health = 5; bot.entities[2].position = new Vec3(3.5, 65, 0); expect(fleeThreat(bot)).toBeNull();
+    bot.health = 5; bot.entities[2].position = new Vec3(8.5, 65, 0); expect(fleeThreat(bot)).toBeNull();
+    bot.entities[2].position = new Vec3(7.5, 65, 0); expect(fleeThreat(bot)).not.toBeNull();
+    // A shooter from further away; once running, the body is kept going until 12 m (20 m for the shooter), so it is not let go at 8.1.
+    bot.entities[2] = { id: 2, name: 'skeleton', position: new Vec3(15, 65, 0) }; expect(fleeThreat(bot)).not.toBeNull();
+    bot.entities[2].position = new Vec3(17, 65, 0); expect(fleeThreat(bot)).toBeNull(); expect(fleeThreat(bot, true)).not.toBeNull();
+    bot.entities[2] = { id: 2, name: 'zombie', position: new Vec3(10, 65, 0) }; expect(fleeThreat(bot)).toBeNull(); expect(fleeThreat(bot, true)).not.toBeNull();
+    bot.entities[2].position = new Vec3(12.5, 65, 0); expect(fleeThreat(bot, true)).toBeNull();
     bot.entities[2] = { id: 2, name: 'cow', position: new Vec3(1, 65, 0) }; expect(fleeThreat(bot)).toBeNull();
     bot.entities[2] = { id: 2, name: 'zombie', position: new Vec3(1, 65, 0) }; bot.entity.isInLava = true; expect(fleeThreat(bot)).toBeNull();
     // Walled off (it can neither see nor reach the body): nothing to run from.
@@ -84,6 +90,8 @@ describe('low-health flee: the reflex itself (on by default, off in floor mode o
     await settle(500);
     expect(bot.floorReflexes.busy).toBeNull();
     expect(floorActive(bot)).toBe(false);
+    // The enemy is gone: the next tick ends the episode, and that is the one ledger entry.
+    bot.entities = {}; tick(bot);
     const forward = bot.setControlState.mock.calls.filter(([key, value]: [string, boolean]) => key === 'forward' && value).length;
     expect(forward).toBeGreaterThan(0); expect(forward).toBeLessThanOrEqual(24);
     expect(bot.controlState.forward).toBe(false); expect(bot.controlState.sprint).toBe(false);
@@ -110,7 +118,11 @@ describe('low-health flee: the reflex itself (on by default, off in floor mode o
   it('is twice in 20 seconds however often the danger comes back', async () => {
     const { bot, ledger } = fixture();
     installFloorReflexes(bot, full, { fleeTickMs: 1 });
-    for (let i = 0; i < 4; i++) { tick(bot); await settle(500); }
+    for (let i = 0; i < 4; i++) {
+      bot.entities = { 2: { id: 2, name: 'zombie', position: new Vec3(2, 65, 0) } };
+      tick(bot); await settle(500);
+      bot.entities = {}; tick(bot); // gone: that episode is over
+    }
     expect(ledger.entriesSince(-1).filter(entry => entry.kind === 'flee')).toHaveLength(2);
   });
   it('gives way to a stronger reflex taking the body, and is reported as cut', async () => {

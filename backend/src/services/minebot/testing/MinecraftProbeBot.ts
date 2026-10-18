@@ -22,7 +22,8 @@ import { placeMemoryPlugin } from '../utils/placeMemory.js';
 import { fireballDeflectPlugin } from '../utils/fireballDeflect.js';
 import { shieldBlockPlugin } from '../utils/shieldBlock.js';
 import { knockBracePlugin } from '../utils/knockBrace.js';
-import { floorReflexPlugin } from '../utils/floorReflexes.js';
+import { floorConfig } from '../utils/floorConfig.js';
+import { installFloorReflexes, type FloorBody } from '../utils/floorReflexes.js';
 import { digConfirmationPlugin } from '../utils/digConfirmation.js';
 import { serverRefusalPlugin } from '../utils/serverRefusals.js';
 import { lavaDigGuardPlugin, lavaReflexPlugin } from '../utils/lavaSafety.js';
@@ -86,7 +87,13 @@ export async function createProbeBot(port: number, username = 'ShannonProbe', ac
   bot.loadPlugin(fireballDeflectPlugin);
   bot.loadPlugin(shieldBlockPlugin);
   bot.loadPlugin(knockBracePlugin);
-  if (process.env.MINECRAFT_PROBE_FLOOR !== 'off') bot.loadPlugin(floorReflexPlugin);
+  // The lab probe's floor is stated, not inherited from the client's switch (P8 third review): by default it is the production floor of
+  // 2026-10-16 alone (retreat, eat, armour; no flee, no budget, no pickup), the baseline the probes' results were measured against.
+  // MINECRAFT_PROBE_FLOOR=default loads the floor as the client would read MINEBOT_FCA_REFLEXES / MINEBOT_FCA_REFLEX_OFF from the
+  // environment (flee and budget included; the idle pickup and the combat knowledge are the client's own layer and are not loaded here);
+  // MINECRAFT_PROBE_FLOOR=off loads none.
+  const probeFloor = process.env.MINECRAFT_PROBE_FLOOR ?? 'floor';
+  if (probeFloor !== 'off') bot.loadPlugin(target => installFloorReflexes(target as unknown as FloorBody, probeFloor === 'default' ? floorConfig() : floorConfig({ MINEBOT_FCA_REFLEXES: 'floor' })));
   Object.assign(bot, {
     isTest: true, chatMode: false, connectedServerName: 'isolated-progressive-probe',
     attackEntity: null, runFromEntity: null, goal: null, interruptExecution: false,

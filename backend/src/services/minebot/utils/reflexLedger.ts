@@ -10,7 +10,7 @@ const log = createLogger('Minebot:ReflexLedger');
  *
  * It only reports. It never starts a reflex and never issues a command.
  */
-/** udget: not a reflex but the floor saying it has stopped trying for a while (the allowance is used up, or a reflex keeps failing). */
+/** budget: not a reflex but the floor saying it has stopped trying for a while (the allowance is used up, or a reflex keeps failing). */
 export type ReflexKind = 'retreat' | 'eat' | 'armor' | 'flee' | 'pickup' | 'budget' | 'shield' | 'fireball' | 'knock' | 'lava' | 'breath';
 export type ReflexOutcome = 'done' | 'cut' | 'failed';
 export interface ReflexEntry {

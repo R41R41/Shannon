@@ -3,7 +3,7 @@ import { Vec3 } from 'vec3';
 import { describe, expect, it, vi } from 'vitest';
 import { NativeCommonFcaBody } from '../../src/services/minebot/integration/commonFca/nativeBody.js';
 import { floorConfig } from '../../src/services/minebot/utils/floorConfig.js';
-import { ARROW_GAP_LOW_HEALTH_MS, ARROW_GAP_MS, BUDGET_ALLOWANCE_MS, BUDGET_WINDOW_MS, FloorBudget, LATCH_AFTER, LATCH_MS, RETRY_BASE_MS } from '../../src/services/minebot/utils/floorBudget.js';
+import { ARROW_GAP_LOW_HEALTH_MS, ARROW_GAP_MS, BUDGET_ALLOWANCE_MS, BUDGET_WINDOW_MS, CRITICAL_EAT_RETRY_MS, FloorBudget, LATCH_AFTER, LATCH_MS, RETRY_BASE_MS } from '../../src/services/minebot/utils/floorBudget.js';
 import { floorActive, floorSilenced, installFloorReflexes } from '../../src/services/minebot/utils/floorReflexes.js';
 import { ensureReflexLedger } from '../../src/services/minebot/utils/reflexLedger.js';
 
@@ -37,14 +37,14 @@ describe('FloorBudget (P8 design R1, review M3)', () => {
   });
   it('backs a failed meal off (3 s, 6 s), latches it after three in a row for a minute, and says so', () => {
     const time = clock(), said: string[] = [], budget = new FloorBudget(time.now, detail => said.push(detail));
-    const fail = () => { expect(budget.allow('eat', 5)).toBe(true); time.advance(100); budget.end('eat', time.now() - 100, 'failed'); };
-    fail(); expect(budget.allow('eat', 5)).toBe(false);
-    time.advance(RETRY_BASE_MS); fail(); time.advance(RETRY_BASE_MS * 2 - 1); expect(budget.allow('eat', 5)).toBe(false);
+    const fail = () => { expect(budget.allow('eat', 10)).toBe(true); time.advance(100); budget.end('eat', time.now() - 100, 'failed'); };
+    fail(); expect(budget.allow('eat', 10)).toBe(false);
+    time.advance(RETRY_BASE_MS); fail(); time.advance(RETRY_BASE_MS * 2 - 1); expect(budget.allow('eat', 10)).toBe(false);
     time.advance(1); fail();
     expect(said).toHaveLength(1); expect(said[0]).toContain(`${LATCH_AFTER}回続けて失敗`);
     expect(budget.silenced()).toEqual(['eat']);
-    time.advance(LATCH_MS - 1); expect(budget.allow('eat', 5)).toBe(false);
-    time.advance(1); expect(budget.allow('eat', 5)).toBe(true);
+    time.advance(LATCH_MS - 1); expect(budget.allow('eat', 10)).toBe(false);
+    time.advance(1); expect(budget.allow('eat', 10)).toBe(true);
     // One more failure closes it again, for twice as long; the other reflexes were never held.
     budget.end('eat', time.now() - 100, 'failed'); expect(said).toHaveLength(2); expect(said[1]).toContain(`${LATCH_MS * 2 / 1000}秒`);
     expect(budget.allow('armor', 20)).toBe(true);
@@ -59,6 +59,38 @@ describe('FloorBudget (P8 design R1, review M3)', () => {
     for (let i = 0; i < 10; i++) { time.advance(RETRY_BASE_MS); cut.end('eat', time.now() - 10, 'cut'); }
     expect(cut.silenced()).toEqual([]);
     expect(cut.allow('eat', 20)).toBe(false); time.advance(RETRY_BASE_MS); expect(cut.allow('eat', 20)).toBe(true);
+  });
+  it('does not meter the meal at 6 health or less, or starving (food 6 or less): no allowance, no latch, only a 3 s wait after one that failed (P8 third review, M2)', () => {
+    for (const [label, health, food] of [['low health', 5, 20], ['starving', 20, 4], ['both', 3, 1], ['edge: 6 health', 6, 20], ['edge: food 6', 20, 6]] as const) {
+      const time = clock(), said: string[] = [], budget = new FloorBudget(time.now, detail => said.push(detail));
+      // The allowance is spent on other things, and the arrow's own cooldown runs: the meal is outside both.
+      budget.end('armor', time.now() - BUDGET_ALLOWANCE_MS, 'done');
+      expect(budget.allow('armor', 20), label).toBe(false);
+      said.length = 0; // (the armour's own refusal said the allowance had run out)
+      for (let attempt = 0; attempt < 10; attempt++) {
+        expect(budget.allow('eat', health, food), `${label} #${attempt}`).toBe(true);
+        time.advance(200); budget.end('eat', time.now() - 200, 'failed');
+        // The short wait: closed for 3 s, open again at 3 s.
+        time.advance(CRITICAL_EAT_RETRY_MS - 1); expect(budget.allow('eat', health, food), label).toBe(false);
+        time.advance(1);
+      }
+      expect(said, label).toEqual([]); expect(budget.silenced().includes('eat'), label).toBe(false);
+      // Its time is not the allowance's: only the armour's span is in it.
+      expect(budget.spent(), label).toBe(BUDGET_ALLOWANCE_MS);
+      // A cut meal waits the same 3 s; a meal that worked clears the wait.
+      budget.end('eat', time.now() - 10, 'cut'); expect(budget.allow('eat', health, food), label).toBe(false);
+      time.advance(CRITICAL_EAT_RETRY_MS); expect(budget.allow('eat', health, food), label).toBe(true);
+      budget.end('eat', time.now() - 10, 'failed'); budget.end('eat', time.now() - 10, 'done'); expect(budget.allow('eat', health, food), label).toBe(true);
+    }
+  });
+  it('still meters the meal when it is not critical (7 health or more and food above 6), and a critical meal that failed leaves no failure behind for it', () => {
+    const time = clock(), budget = new FloorBudget(time.now);
+    expect(budget.allow('eat', 5, 20)).toBe(true); budget.end('eat', time.now() - 10, 'failed'); budget.end('eat', time.now() - 10, 'failed'); budget.end('eat', time.now() - 10, 'failed');
+    // Health came back: the last three failures were not counted against the metered meal.
+    time.advance(CRITICAL_EAT_RETRY_MS);
+    expect(budget.allow('eat', 7, 7)).toBe(true); budget.end('eat', time.now() - 10, 'failed');
+    expect(budget.allow('eat', 7, 7)).toBe(false);
+    expect(budget.silenced()).toEqual([]);
   });
 });
 
@@ -120,10 +152,10 @@ describe('arrow spam cannot keep the body in reflex for good', () => {
   });
 });
 
-describe('a meal that keeps failing is tried a few times and then reported, not looped (at 6 health or less too)', () => {
-  async function hungry(config: ReturnType<typeof floorConfig>, seconds: number) {
+describe('a meal that keeps failing is tried a few times and then reported, not looped (not critical: 7 to 12 health, food above 6)', () => {
+  async function hungry(config: ReturnType<typeof floorConfig>, seconds: number, health = 10, food = 15) {
     const time = clock();
-    const { bot, ledger } = fixture({ health: 5, food: 2, inventory: { items: () => [{ name: 'bread' }], slots: new Array(46).fill(null) },
+    const { bot, ledger } = fixture({ health, food, inventory: { items: () => [{ name: 'bread' }], slots: new Array(46).fill(null) },
       consume: vi.fn(async () => { throw new Error('the server never answered'); }) });
     installFloorReflexes(bot, config, { now: time.now });
     let activeWhileLatched = false;
@@ -165,10 +197,32 @@ describe('a meal that keeps failing is tried a few times and then reported, not 
   });
 });
 
+describe('a meal that is critical (6 health or less, or starving) is never latched: it keeps trying every 3 s (P8 third review, M2)', () => {
+  async function critical(health: number, food: number, seconds: number, consume: () => Promise<void>) {
+    const time = clock();
+    const { bot, ledger } = fixture({ health, food, inventory: { items: () => [{ name: 'bread' }], slots: new Array(46).fill(null) }, consume: vi.fn(consume) });
+    installFloorReflexes(bot, floorConfig({}), { now: time.now });
+    let silenced = false;
+    for (let tick = 0; tick < seconds * 10; tick++) { time.advance(100); bot.emit('physicsTick'); await settle(0); if (floorSilenced(bot)) silenced = true; }
+    return { bot, ledger, silenced };
+  }
+  const broken = async () => { throw new Error('the server never answered'); };
+  it.each([['5 health', 5, 10], ['starving', 20, 3], ['both', 4, 2], ['6 health', 6, 10], ['food 6', 20, 6]] as const)('%s: a meal that keeps failing is tried about every 3 s for a minute, never latched, and said in the ledger as it was', async (_label, health, food) => {
+    const { bot, ledger, silenced } = await critical(health, food, 60, broken);
+    // Every 3 s and a little (the attempt itself): 60 s holds 15 to 20 tries, where the metered meal would have had 3 and a latch.
+    expect(bot.consume.mock.calls.length).toBeGreaterThanOrEqual(15); expect(bot.consume.mock.calls.length).toBeLessThanOrEqual(21);
+    expect(silenced).toBe(false); expect(floorSilenced(bot)).toBeNull();
+    expect(ledger.entriesSince(-1).filter(entry => entry.kind === 'budget')).toHaveLength(0);
+    expect(ledger.entriesSince(-1).filter(entry => entry.kind === 'eat' && entry.outcome === 'failed').length).toBeGreaterThanOrEqual(15);
+    // It does not spin: at most about one try per 3 s, and none of the time is counted against the allowance.
+    expect(bot.floorReflexes.budget!.spent()).toBe(0);
+  }, 20_000);
+});
+
 describe('the observation says what the budget holds back (facts.floorSilenced)', () => {
   it('is null when nothing is held, and names the held reflex while a latch is closed', async () => {
     const time = clock();
-    const { bot } = fixture({ health: 5, food: 2, inventory: { items: () => [{ name: 'bread' }], slots: new Array(46).fill(null) },
+    const { bot } = fixture({ health: 10, food: 15, inventory: { items: () => [{ name: 'bread' }], slots: new Array(46).fill(null) },
       consume: vi.fn(async () => { throw new Error('the server never answered'); }), instantSkills: { getSkills: () => [] } });
     installFloorReflexes(bot, floorConfig({}), { now: time.now });
     const body = new NativeCommonFcaBody(bot, { serverId: 'home', capture: async () => { throw Error('unused'); } });

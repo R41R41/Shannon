@@ -10,6 +10,11 @@
  *              until the window has room again (health 6 or less is exempt: that is when they matter most)
  *   latch      three failures of the same reflex in a row stop it for a minute (then two, then four; a success clears it)
  *
+ * The meal at 6 health or less, or starving (food 6 or less), is outside the allowance and the latch altogether (P8 third review, M2):
+ * the legacy auto-eat tried every second without limit there, and the API's fast judgment never eats, so a latch that stops the one thing
+ * that can still save the body is worse than a loop. Only a short backoff (3 s) after one that failed or was cut off, so that a meal that
+ * cannot work does not spin the tick. Its time is not counted against the allowance either.
+ *
  * Never limited here: a lit creeper's retreat (it ends by itself in an explosion), the low-health flee (it has its own two in
  * twenty seconds), lava and breath (not the floor's). Whatever the budget silences it SAYS: one ledger note when the allowance
  * runs out or a latch closes (shown to the mind in `state.world.reflexes`), and `facts.floorSilenced` while it holds.
@@ -28,10 +33,14 @@ export const LATCH_MS = 60_000;
 export const LATCH_MAX_MS = 240_000;
 /** At or below this health the allowance does not apply (the API's own `lowHealth`). */
 export const BUDGET_EXEMPT_HEALTH = 6;
+/** At or below this food level (starving) the meal is exempt from the allowance and the latch, as at low health. */
+export const EAT_CRITICAL_FOOD = 6;
+/** The only wait after a meal that failed or was cut off, when it is critical. */
+export const CRITICAL_EAT_RETRY_MS = 3_000;
 
 const LABEL: Record<BudgetKind, string> = { arrow: '矢のよけ', eat: '食事', armor: '防具の装着' };
 
-interface Track { until: number; failures: number; latchedUntil: number; latches: number }
+interface Track { until: number; failures: number; latchedUntil: number; latches: number; critical: boolean; criticalUntil: number }
 
 export class FloorBudget {
   private spans: Array<{ at: number; ms: number }> = [];
@@ -47,10 +56,12 @@ export class FloorBudget {
     return this.spans.reduce((sum, span) => sum + span.ms, 0);
   }
 
-  /** Whether this reflex may start now. */
-  allow(kind: BudgetKind, health: number): boolean {
+  /** Whether this reflex may start now (`food` matters to the meal: starving is as critical as low health). */
+  allow(kind: BudgetKind, health: number, food = 20): boolean {
     const at = this.now(), track = this.tracks[kind];
     this.lowHealth = health <= BUDGET_EXEMPT_HEALTH;
+    track.critical = kind === 'eat' && (this.lowHealth || food <= EAT_CRITICAL_FOOD);
+    if (track.critical) return at >= track.criticalUntil;
     if (at < track.latchedUntil || at < track.until) return false;
     if (this.lowHealth) return true;
     if (this.spent(at) >= BUDGET_ALLOWANCE_MS) {
@@ -67,6 +78,11 @@ export class FloorBudget {
   /** A reflex that began at `startedAt` is over. */
   end(kind: BudgetKind, startedAt: number, outcome: BudgetOutcome): void {
     const at = this.now(), track = this.tracks[kind];
+    if (kind === 'eat' && track.critical) {
+      // Not metered, not counted as a failure and never latched (see the head of this file): only the short wait.
+      if (outcome === 'done') { track.failures = 0; track.latches = 0; track.until = 0; track.criticalUntil = 0; } else track.criticalUntil = at + CRITICAL_EAT_RETRY_MS;
+      return;
+    }
     this.spans.push({ at, ms: Math.max(0, at - startedAt) });
     if (kind === 'arrow') { track.until = at + (this.lowHealth ? ARROW_GAP_LOW_HEALTH_MS : ARROW_GAP_MS); return; }
     if (outcome === 'done') { track.failures = 0; track.latches = 0; track.until = 0; return; }
@@ -89,4 +105,4 @@ export class FloorBudget {
   }
 }
 
-function fresh(): Track { return { until: 0, failures: 0, latchedUntil: 0, latches: 0 }; }
+function fresh(): Track { return { until: 0, failures: 0, latchedUntil: 0, latches: 0, critical: false, criticalUntil: 0 }; }

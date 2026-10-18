@@ -1,13 +1,16 @@
 import { Vec3 } from 'vec3';
 import { createLogger } from '../../../utils/logger.js';
-import { activeActionCapabilities, createMotorPort, executeAction, hasActiveSafetyLease, physicalActionBusy, preemptLowerPriorityActions } from '../execution/ActionExecution.js';
+import { actionLeaseStatus, activeActionCapabilities, createMotorPort, executeAction, hasActiveSafetyLease, physicalActionBusy, preemptLowerPriorityActions } from '../execution/ActionExecution.js';
 import { creeperLit } from './creeperFuse.js';
 import { FALLBACK_FOOD_POINTS } from '../constantSkills/autoEat.js';
 import { edgeRisk } from './edgeGuard.js';
+import { escapeHeading } from './escapeHeading.js';
 import { floorConfig, type FloorConfig } from './floorConfig.js';
 import { FloorBudget, type BudgetKind } from './floorBudget.js';
-import { ensureReflexLedger, type ReflexKind } from './reflexLedger.js';
+import { isThreatEntity, type ThreatBody } from './hostileMobHints.js';
+import { ensureReflexLedger, type ReflexKind, type ReflexOutcome } from './reflexLedger.js';
 import { threatExposure } from './threatExposure.js';
+import { holdsWater } from './waterBlocks.js';
 
 const log = createLogger('Minebot:FloorReflexes');
 
@@ -22,16 +25,40 @@ const log = createLogger('Minebot:FloorReflexes');
 export const FLOOR_RETREAT_PRIORITY = 350;
 export const FLOOR_EAT_PRIORITY = 200;
 export const FLOOR_ARMOR_PRIORITY = 150;
-/** Between the retreat (350) and the meal (200): the low-health flee (`extended` only, P8). */
+/** Between the retreat (350) and the meal (200): the low-health flee (default mode, P8). */
 export const FLOOR_FLEE_PRIORITY = 250;
-/** At or below this health (the API's own `lowHealth`) a hostile within FLEE_RANGE is run from at once. */
+/**
+ * The low-health flee (P8, third round). At or below this health (the API's own `lowHealth`; the legacy autoRunFromHostiles ran at 5) a
+ * threat (the legacy `isThreatEntity`, not a fixed list) within FLEE_RANGE that can get at the body starts a flee episode: 8 m, or 16 m for
+ * a kind that shoots (the legacy radius, where being seen is the danger). An episode keeps going while one is within FLEE_KEEP_RANGE (12 m,
+ * 20 m for shooters; so the body does not stop the moment it is 8.1 m away), in segments of one lease each (at most 1.2 s or 7 blocks:
+ * a segment is shorter than the 3 s an API release waits for a safety lease, and a command waiting behind it ends the segment and the episode), the heading
+ * chosen again every physics tick from ALL threats. An episode ends at 32 blocks from where it began (the legacy run was 32 m), after 6 s,
+ * when it is not getting anywhere, or when nothing is near; it is then followed by 2 s of rest in which the API's fast judgment (shelter,
+ * flee-from, a fight) has the body. At most two episodes in 20 s: the guard against a loop.
+ */
 export const FLEE_HEALTH = 6;
-const FLEE_RANGE = 3;
-/** One flee lasts at most 1.2 s or 5 blocks, twice in 20 s; what comes after is the API's fast judgment (shelter, flee-from). */
-const FLEE_TICKS = 24;
-const FLEE_BLOCKS = 5;
+const FLEE_RANGE = 8;
+const FLEE_RANGE_SHOOTER = 16;
+const FLEE_KEEP_RANGE = 12;
+const FLEE_KEEP_RANGE_SHOOTER = 20;
+const FLEE_SEGMENT_TICKS = 24;
+const FLEE_SEGMENT_BLOCKS = 7;
+const FLEE_YIELD_AFTER_TICKS = 4;
+/** How far ahead a heading is read for lava, fire, a drop or a wall (the heading itself is chosen again at every tick). */
+const FLEE_LOOKAHEAD = 5;
+const FLEE_EPISODE_BLOCKS = 32;
+const FLEE_EPISODE_MS = 6000;
+const FLEE_REST_MS = 2000;
+/** A segment that moved less than this made no headway; two in a row end the episode. */
+const FLEE_MIN_HEADWAY = 1.5;
+/** After a refusal (no safe way) the ground is not read again for this long. */
+const FLEE_REFUSAL_CACHE_MS = 500;
+const FLEE_REFUSAL_NOTE_GAP_MS = 10_000;
 const FLEE_WINDOW_MS = 20_000;
 const FLEE_MAX_IN_WINDOW = 2;
+/** Kinds that hurt from afar: the flee starts earlier for them (what the legacy 16 m watch was for). */
+const SHOOTERS = new Set(['skeleton', 'stray', 'bogged', 'pillager', 'blaze', 'ghast', 'witch', 'evoker', 'breeze']);
 /** Skills that are already getting the body away: the flee never cuts one of these (the API's DEFENSIVE_SKILLS that escape). */
 export const ESCAPE_SKILLS: ReadonlySet<string> = new Set(['flee-from', 'dig-shelter', 'build-around-self']);
 /** One retreat lasts at most a second, or three blocks (ADR-0010 D8). */
@@ -61,6 +88,12 @@ export interface FloorBody {
   floorReflexes?: FloorState;
   lavaReflex?: { engaged: boolean };
   breathingReflex?: { engaged: boolean };
+  /** The game's data, as far as `isThreatEntity` reads it (an entity's kind, an angry enderman's flag). */
+  registry?: { entitiesByName?: Record<string, { type?: string; metadataKeys?: string[] } | undefined> } | null;
+  /** Kinds the body has learned shoot at it (combat knowledge), added to the flee's shooters. */
+  shootsAtBody?: (kind: string) => boolean;
+  /** Where a refused flee is told to the mind (`state.world.reflexes`). */
+  reflexLedger?: { note(kind: ReflexKind, detail: string, outcome?: ReflexOutcome): unknown };
 }
 export interface RetreatState {
   engaged: boolean; kind?: 'creeper' | 'arrow'; from?: Vec3; origin?: Vec3; ticks: number; cooldown: number; engagements: number;
@@ -70,23 +103,52 @@ export interface RetreatState {
   /** Last seen position of each arrow: one that did not move since the last tick is stuck, whatever velocity it reported. */
   arrows?: Map<number, Vec3>;
 }
+/** One run from danger, in segments (`fleeStart`). */
+export interface FleeEpisode {
+  startedAt: number; origin: Vec3; segments: number;
+  /** Segments in a row that made no headway. */
+  stalls: number;
+  /** How the latest segment ended, for the ledger entry the episode leaves. */
+  outcome: ReflexOutcome;
+  /** Called once when the episode is over (the ledger entry). */
+  end?: (outcome: ReflexOutcome) => void;
+}
 export interface FloorState {
   retreat: RetreatState; busy: 'eat' | 'armor' | 'flee' | null; retryAt: number; engagements: { eat: number; armor: number; flee?: number; fleeRefused?: number };
-  /** When each flee of the last 20 s began (the flee's own allowance). */
+  /** When each flee episode of the last 20 s began (the flee's own allowance). */
   fleeStarts?: number[];
+  fleeEpisode?: FleeEpisode;
+  /** No new episode before this (the rest after one) and no ground reading before this (the cache after a refusal). */
+  fleeRestUntil?: number;
+  fleeRefusedUntil?: number;
+  fleeRefusedNotedAt?: number;
   /** Cooldowns, the allowance and the stuck latch of the arrow step-aside, the meal and the armour change (`floorBudget.ts`); absent when denied. */
   budget?: FloorBudget;
 }
 
 export { creeperLit };
+/** What `floor` mode (exactly the 2026-10-16 production floor) takes for an enemy when it decides whether to eat or put on armour. */
 const hostileNames = new Set(['zombie', 'husk', 'drowned', 'skeleton', 'stray', 'creeper', 'spider', 'cave_spider', 'witch',
   'pillager', 'vindicator', 'piglin_brute', 'hoglin', 'zoglin', 'blaze', 'wither_skeleton', 'slime', 'magma_cube', 'phantom']);
 function others(bot: FloorBody): FloorEntity[] {
   return Object.values(bot.entities ?? {}).filter(entity => entity && entity !== bot.entity && entity.position);
 }
-export function hostileWithin(bot: FloorBody, reach: number): boolean {
+/**
+ * Whether an entity is a threat to the body: the legacy system's one answer (`isThreatEntity`, hostileMobHints.ts), not a list of
+ * names. It counts what the game says is hostile (silverfish, vex, ravager, guardian, warden, evoker, bogged ...), a piglin while the
+ * body wears no gold, a zombified piglin or enderman only once angry or after one has struck, and any kind that has hit the body
+ * (`noteAttackedBy`, 5 minutes). The same predicate decides the flee, eating near an enemy and walking to a drop.
+ */
+export function isThreat(bot: FloorBody, entity: FloorEntity): boolean {
+  const name = String(entity.name ?? '').toLowerCase();
+  if (!name) return false;
+  try { return isThreatEntity({ name, type: entity.type, metadata: entity.metadata }, bot.registry?.entitiesByName?.[name]?.type, Date.now(), bot as ThreatBody); }
+  catch { return false; }
+}
+/** An enemy within `reach`. `wide` (default mode) is `isThreat`; `floor` mode keeps the production floor's fixed list of names. */
+export function hostileWithin(bot: FloorBody, reach: number, wide = true): boolean {
   const at = bot.entity?.position; if (!at) return false;
-  return others(bot).some(entity => hostileNames.has(String(entity.name)) && entity.position.distanceTo(at) <= reach);
+  return others(bot).some(entity => (wide ? isThreat(bot, entity) : hostileNames.has(String(entity.name))) && entity.position.distanceTo(at) <= reach);
 }
 function holdsShield(bot: FloorBody): boolean {
   return bot.inventory?.slots?.[45]?.name === 'shield' || bot.heldItem?.name === 'shield';
@@ -165,10 +227,10 @@ export function floorRetreatTick(bot: FloorBody, state: RetreatState, allow?: (k
 
 const NEVER_EAT = new Set(['pufferfish', 'chorus_fruit', 'suspicious_stew', 'spider_eye', 'poisonous_potato', 'enchanted_golden_apple']);
 /** Food to eat now, or null: short of food, or hurt and not full; never with an enemy at arm's length (standing to eat there killed the body, L18). */
-export function floorEatChoice(bot: FloorBody): Item | null {
+export function floorEatChoice(bot: FloorBody, wide = true): Item | null {
   const health = bot.health ?? 20, food = bot.food ?? 20;
   if (!(food <= 6 || (health <= 12 && food < 18))) return null;
-  if (bot.entity?.isInLava || hostileWithin(bot, HOSTILE_NEAR)) return null;
+  if (bot.entity?.isInLava || hostileWithin(bot, HOSTILE_NEAR, wide)) return null;
   const items = (bot.inventory?.items() ?? []).filter(item => (FALLBACK_FOOD_POINTS[item.name] ?? 0) > 0 && !NEVER_EAT.has(item.name)
     && (item.name !== 'rotten_flesh' || food <= 6));
   items.sort((a, b) => (FALLBACK_FOOD_POINTS[b.name] ?? 0) - (FALLBACK_FOOD_POINTS[a.name] ?? 0));
@@ -209,92 +271,232 @@ export function floorSilenced(bot: object): string | null {
   return held.length ? held.join(',') : null;
 }
 
-/** Cells the flee will not run into: standing in or on any of these hurts or kills. */
-const LETHAL_TO_STAND_IN = new Set(['lava', 'fire', 'soul_fire', 'cactus', 'sweet_berry_bush', 'wither_rose', 'powder_snow']);
-const LETHAL_TO_STAND_ON = new Set(['lava', 'magma_block', 'fire', 'soul_fire']);
-/** The directions the flee may take, nearest to straight away first: not toward the enemy, so no further round than a right angle. */
+/** Cells the flee will not run into: standing in or on any of these hurts, kills or (cobweb) holds the body for the enemy. */
+const LETHAL_TO_STAND_IN = new Set(['lava', 'fire', 'soul_fire', 'cactus', 'sweet_berry_bush', 'wither_rose', 'powder_snow', 'cobweb', 'campfire', 'soul_campfire']);
+const LETHAL_TO_STAND_ON = new Set(['lava', 'magma_block', 'fire', 'soul_fire', 'campfire', 'soul_campfire']);
+/** The directions the flee may take around the one it prefers, nearest first: no further round than a right angle. */
 const FLEE_TURNS = [0, Math.PI / 4, -Math.PI / 4, Math.PI / 2, -Math.PI / 2];
-type TerrainBody = { blockAt?(position: Vec3): { name?: string; boundingBox?: string } | null };
+/** A heading that brings the body more than this much nearer to a threat within TOWARD_RANGE than it is now runs toward it. */
+const TOWARD_RANGE = 10;
+const TOWARD_MARGIN = 0.75;
+const TOWARD_RUN = 8;
+/** The height the body steps up without a jump, and its height: a block above the one is a wall, one below the other bumps the head. */
+const STEP_UP = 0.6;
+const BODY_HEIGHT = 1.8;
+type FleeBlock = { name?: string; boundingBox?: string; shapes?: number[][]; isWaterlogged?: boolean; getProperties?: () => Record<string, unknown> } | null;
+type TerrainBody = { blockAt?(position: Vec3): FleeBlock };
 
 /**
- * Whether running from `at` along `yaw` for the length of a flee meets lava, fire, a drop that would cost health, or a wall. The edge
- * guard also clips a step over a ledge or into lava at the physics tick, but the flee does not rely on it alone: a heading that
- * leads there is not taken. Missing terrain data (no `blockAt`, an unloaded cell) is not a danger, as in the guard.
+ * The part of a cell, bottom to top (0 to 1), that stops a body walking, or null when it does not. Read from the block's shapes when it
+ * has them; a stair is judged by its first step (a body walks up a stair from the low side), and without shapes a slab is half a block and
+ * a carpet a sliver, so that stepping up onto either is not taken for a wall.
+ */
+function blockSpan(block: FleeBlock): { low: number; high: number } | null {
+  if (!block || block.boundingBox !== 'block') return null;
+  const name = String(block.name ?? '');
+  if (name.endsWith('_stairs')) return { low: 0, high: 0.5 };
+  if (Array.isArray(block.shapes) && block.shapes.length) {
+    const low = Math.min(...block.shapes.map(shape => shape[1])), high = Math.max(...block.shapes.map(shape => shape[4]));
+    if (Number.isFinite(low) && Number.isFinite(high)) return { low, high };
+  }
+  if (name.endsWith('_slab')) return { low: 0, high: 0.5 };
+  if (name.endsWith('_carpet')) return { low: 0, high: 0.0625 };
+  if (name === 'lily_pad') return { low: 0, high: 0.09375 };
+  return { low: 0, high: 1 };
+}
+
+/**
+ * Whether running from `at` along `yaw` for the look-ahead meets lava, fire, a drop that would cost health, a wall, or (from land) deep
+ * water. The edge guard also clips a step over a ledge or into lava at the physics tick, but the flee does not rely on it alone: a heading
+ * that leads there is not taken. Missing terrain data (no `blockAt`, an unloaded cell) is not a danger, as in the guard.
+ *
+ * The cells are read by what the feet stand on, not by the cell the position falls in: on a slab, soul sand, farmland, a path, a carpet,
+ * mud, honey, a lily pad or a stair the position is inside the floor block's own cell (y 64.5 on a slab at 64), and taking that cell for
+ * the feet's turned every such floor into a wall, so that the low-health flee never started there (P8 third review, H1). `stand` is the
+ * block the feet rest on (the edge guard's `floorY`); the body fills the two cells above it; and a wall is any block that would stop the
+ * body, judged by its real top and bottom: half a block up is a step, a block up is a wall.
+ *
+ * In water the flee only runs for a shore: a heading is taken only when it reaches ground that is not deep water within the look-ahead,
+ * so that being chased by a drowned does not send the body out to sea. From land it does not run into deep water.
  */
 export function fleeHeadingSafe(bot: FloorBody, at: Vec3, yaw: number): boolean {
   const terrain = bot as unknown as TerrainBody;
   if (typeof terrain.blockAt !== 'function') return true;
-  const dx = -Math.sin(yaw), dz = -Math.cos(yaw), y = Math.floor(at.y);
+  const dx = -Math.sin(yaw), dz = -Math.cos(yaw), stand = Math.floor(at.y - 0.01);
   try {
-    for (let step = 1; step <= FLEE_BLOCKS; step++) {
-      const x = at.x + dx * step, z = at.z + dz * step, cell = new Vec3(Math.floor(x), y, Math.floor(z));
-      const feet = terrain.blockAt(cell), head = terrain.blockAt(cell.offset(0, 1, 0)), under = terrain.blockAt(cell.offset(0, -1, 0));
-      if (LETHAL_TO_STAND_IN.has(String(feet?.name)) || LETHAL_TO_STAND_IN.has(String(head?.name)) || LETHAL_TO_STAND_ON.has(String(under?.name))) return false;
+    const here = terrain.blockAt(new Vec3(Math.floor(at.x), stand, Math.floor(at.z)));
+    const swimmingNow = holdsWater(here) || (here?.boundingBox !== 'block' && holdsWater(terrain.blockAt(new Vec3(Math.floor(at.x), stand + 1, Math.floor(at.z)))));
+    let reachesShallow = false;
+    for (let step = 1; step <= FLEE_LOOKAHEAD; step++) {
+      const x = at.x + dx * step, z = at.z + dz * step, cx = Math.floor(x), cz = Math.floor(z);
+      const floor = terrain.blockAt(new Vec3(cx, stand, cz)), feet = terrain.blockAt(new Vec3(cx, stand + 1, cz)), head = terrain.blockAt(new Vec3(cx, stand + 2, cz));
+      if ([floor, feet, head].some(block => LETHAL_TO_STAND_IN.has(String(block?.name)))) return false;
+      // What the feet would rest on: the floor cell, or the one under it when that is open (a step down).
+      const resting = floor && floor.boundingBox === 'block' ? floor : terrain.blockAt(new Vec3(cx, stand - 1, cz));
+      if (LETHAL_TO_STAND_ON.has(String(resting?.name))) return false;
+      const swim = holdsWater(floor) || (floor?.boundingBox !== 'block' && holdsWater(feet));
+      if (swim && !swimmingNow) return false;
+      if (!swim) reachesShallow = true;
       // A wall at the first two steps: the run would be into it. (Further on the flee has stopped by then.)
-      if (step <= 2 && feet?.boundingBox === 'block') return false;
+      if (step <= 2) {
+        for (const [index, block] of [floor, feet, head].entries()) {
+          const span = blockSpan(block);
+          if (span && stand + index + span.high > at.y + STEP_UP && stand + index + span.low < at.y + BODY_HEIGHT) return false;
+        }
+      }
       // Any drop that would cost health (more than three blocks, or lava below), judged as the edge guard does with one point to spare.
       if (edgeRisk(bot as any, x, at.y, z, 1) !== null) return false;
     }
+    if (swimmingNow && !reachesShallow) return false;
   } catch { return true; }
   return true;
 }
 
-/** The yaw to flee along from `from`: straight away when that is safe, else the nearest safe turn; null when no way out is safe. */
-export function fleeHeading(bot: FloorBody, from: Vec3): number | null {
+/** Whether running along `yaw` brings the body more than TOWARD_MARGIN nearer to a threat (within TOWARD_RANGE) than it stands now. */
+function runsToward(at: Vec3, yaw: number, from: Vec3[]): boolean {
+  const dx = -Math.sin(yaw), dz = -Math.cos(yaw);
+  return from.some(point => {
+    const ax = point.x - at.x, az = point.z - at.z, distance = Math.hypot(ax, az);
+    if (distance > TOWARD_RANGE) return false;
+    const along = Math.max(0, Math.min(TOWARD_RUN, ax * dx + az * dz));
+    return Math.hypot(ax - dx * along, az - dz * along) < distance - TOWARD_MARGIN;
+  });
+}
+
+/**
+ * Where `from` pushes the body: the yaw straight away from the sum of the threats' pushes, each weighted by 1 / distance squared (the
+ * near one counts most). Threats on two sides push against each other and what is left is noise (the legacy note, paid run L65), and a
+ * push can also lead past another threat on the same line: then the legacy gap heading (`escapeHeading`, the way that stays farthest
+ * from every one) is used instead.
+ */
+function repulsionYaw(at: Vec3, from: Vec3[]): number {
+  let sx = 0, sz = 0, weights = 0;
+  for (const point of from) {
+    const ax = at.x - point.x, az = at.z - point.z, distance = Math.max(Math.hypot(ax, az), 0.5), weight = 1 / (distance * distance);
+    sx += (ax / distance) * weight; sz += (az / distance) * weight; weights += weight;
+  }
+  const strength = weights > 0 ? Math.hypot(sx, sz) / weights : 0;
+  const pushed = Math.hypot(sx, sz) < 1e-9 ? 0 : Math.atan2(sx, sz) + Math.PI;
+  if (from.length > 1 && (strength < 0.3 || runsToward(at, pushed, from))) {
+    const gap = escapeHeading({ x: at.x, z: at.z }, from.map(point => ({ x: point.x, z: point.z })), null, 12);
+    return Math.atan2(-gap.x, -gap.z);
+  }
+  return pushed;
+}
+
+/**
+ * The yaw to flee along from `from` (one threat, or all of them: the heading is the repulsion of every one, weighted by nearness): straight
+ * away when that is safe, else the nearest safe turn that does not run toward another threat; null when no way out is safe.
+ */
+export function fleeHeading(bot: FloorBody, from: Vec3 | Vec3[]): number | null {
   const at = bot.entity?.position; if (!at) return null;
-  const away = Math.atan2(at.x - from.x, at.z - from.z) + Math.PI;
-  for (const turn of FLEE_TURNS) if (fleeHeadingSafe(bot, at, away + turn)) return away + turn;
+  const sources = Array.isArray(from) ? from : [from];
+  if (!sources.length) return null;
+  const away = repulsionYaw(at, sources);
+  for (const turn of FLEE_TURNS) {
+    const yaw = away + turn;
+    if (turn !== 0 && runsToward(at, yaw, sources)) continue;
+    if (fleeHeadingSafe(bot, at, yaw)) return yaw;
+  }
   return null;
 }
 
-/** The hostile to run from at low health: reachable (not walled off), within FLEE_RANGE, nearest first. Null above FLEE_HEALTH. */
-export function fleeThreat(bot: FloorBody): { from: Vec3 } | null {
+/** What the flee is run from: every threat in range (the nearest first in `from`, for logging and the single-threat callers), and how near the nearest is. */
+export interface FleeThreat { from: Vec3; threats: Vec3[]; nearest: number }
+
+/**
+ * The threats to run from at low health: every `isThreat` entity that can get at the body (not walled off) within the flee's range, which is
+ * wider for a kind that shoots, and wider once an episode is running (`keeping`: so that the body is not let go at 8.1 m). Null above FLEE_HEALTH.
+ */
+export function fleeThreat(bot: FloorBody, keeping = false): FleeThreat | null {
   const health = bot.health ?? 20, at = bot.entity?.position;
   if (!at || !(health > 0 && health <= FLEE_HEALTH) || bot.entity?.isInLava) return null;
-  let nearest: { distance: number; position: Vec3 } | null = null;
+  const found: Array<{ distance: number; position: Vec3 }> = [];
   for (const entity of others(bot)) {
-    if (!hostileNames.has(String(entity.name))) continue;
+    if (!isThreat(bot, entity)) continue;
+    const name = String(entity.name).toLowerCase(), shooter = SHOOTERS.has(name) || bot.shootsAtBody?.(name) === true;
+    const range = shooter ? (keeping ? FLEE_KEEP_RANGE_SHOOTER : FLEE_RANGE_SHOOTER) : (keeping ? FLEE_KEEP_RANGE : FLEE_RANGE);
     const distance = entity.position.distanceTo(at);
-    if (distance > FLEE_RANGE || (nearest && distance >= nearest.distance)) continue;
+    if (distance > range) continue;
     let sealed = false;
     try { sealed = threatExposure(bot as any, entity as any) === 'sealed'; } catch { sealed = false; }
-    if (!sealed) nearest = { distance, position: entity.position };
+    if (!sealed) found.push({ distance, position: entity.position });
   }
-  return nearest ? { from: nearest.position } : null;
+  if (!found.length) return null;
+  found.sort((a, b) => a.distance - b.distance);
+  return { from: found[0].position, threats: found.map(item => item.position), nearest: found[0].distance };
 }
+
+export interface FleeStart extends FleeThreat { continuing: boolean }
+/** A command (the API's) is queued for the body behind this lease. */
+const commandWaiting = (bot: object) => (actionLeaseStatus(bot)?.waitQueue ?? 0) > 0;
 /**
- * Whether the low-health flee may start now. Precedence (P8): a floor retreat, meal or armour change, or any other safety lease
- * holds the body first; the API's own escape skills (flee-from, a shelter) are never cut; the budget is two flees in 20 s.
- * A fight or a task action under it is cut: at this health the API's fast judgment would cut it too.
+ * Whether the low-health flee may run a segment now, and from what. Precedence (P8): a floor retreat, meal or armour change, or any other
+ * safety lease holds the body first; the API's own escape skills (flee-from, a shelter) are never cut; a command waiting for the body
+ * ends the segment (unLowHealthFlee) and, with it, the episode. A fight or a task action under it is cut: at this health the API's fast judgment would cut it too.
+ * A new episode costs one of the two in 20 seconds; the segments after the first (`continuing`) are part of it and cost nothing.
  */
-export function fleeStart(bot: FloorBody, state: FloorState, now: number): { from: Vec3 } | null {
+export function fleeStart(bot: FloorBody, state: FloorState, now: number): FleeStart | null {
+  const endEpisode = (outcome?: ReflexOutcome) => {
+    const episode = state.fleeEpisode; if (!episode) return;
+    state.fleeEpisode = undefined;
+    try { episode.end?.(outcome ?? episode.outcome); } catch { /* a report must not change what the reflex did */ }
+  };
+  // An episode nobody came back to (the body was held by something else for longer than it could run) is over.
+  if (state.fleeEpisode && now - state.fleeEpisode.startedAt > FLEE_EPISODE_MS + 2000) endEpisode();
+  // Healthy, and nothing to end: nothing to do (this runs every physics tick).
+  if (!state.fleeEpisode && !((bot.health ?? 20) > 0 && (bot.health ?? 20) <= FLEE_HEALTH)) return null;
   if (state.retreat.engaged || state.busy || hasActiveSafetyLease(bot)) return null;
   if (bot.lavaReflex?.engaged === true || bot.breathingReflex?.engaged === true) return null;
   if (activeActionCapabilities(bot).some(capability => ESCAPE_SKILLS.has(capability))) return null;
-  state.fleeStarts = (state.fleeStarts ?? []).filter(at => now - at < FLEE_WINDOW_MS);
-  if (state.fleeStarts.length >= FLEE_MAX_IN_WINDOW) return null;
-  const threat = fleeThreat(bot);
+  // After a refusal the ground is not read again for half a second: a body that cannot run must not cost the tick a search every 50 ms.
+  if (now < (state.fleeRefusedUntil ?? 0)) return null;
+  const at = bot.entity?.position;
+  let episode = state.fleeEpisode;
+  if (episode) {
+    if (now - episode.startedAt >= FLEE_EPISODE_MS || (at && at.distanceTo(episode.origin) >= FLEE_EPISODE_BLOCKS) || episode.stalls >= 2) {
+      endEpisode(); state.fleeRestUntil = now + FLEE_REST_MS; return null;
+    }
+  } else {
+    if (now < (state.fleeRestUntil ?? 0)) return null;
+    state.fleeStarts = (state.fleeStarts ?? []).filter(started => now - started < FLEE_WINDOW_MS);
+    if (state.fleeStarts.length >= FLEE_MAX_IN_WINDOW) return null;
+  }
+  const threat = fleeThreat(bot, !!episode);
+  if (!threat) { endEpisode(); return null; }
   // No safe way to run (a cliff or lava on every side the flee may take): it does not take the body, nor spend its allowance.
-  // The API's fast judgment (a shelter, its own flee) decides what to do instead.
-  if (threat && fleeHeading(bot, threat.from) === null) { state.engagements.fleeRefused = (state.engagements.fleeRefused ?? 0) + 1; return null; }
-  return threat;
+  // The API's fast judgment (a shelter, its own flee) decides what to do instead, and is told so (`state.world.reflexes`).
+  if (fleeHeading(bot, threat.threats) === null) {
+    state.engagements.fleeRefused = (state.engagements.fleeRefused ?? 0) + 1;
+    state.fleeRefusedUntil = now + FLEE_REFUSAL_CACHE_MS;
+    endEpisode();
+    if (now - (state.fleeRefusedNotedAt ?? -Infinity) >= FLEE_REFUSAL_NOTE_GAP_MS) {
+      state.fleeRefusedNotedAt = now;
+      try { bot.reflexLedger?.note('flee', '低体力だが安全な逃げ道が無く走れなかった', 'failed'); } catch { /* a report must not change what the reflex did */ }
+    }
+    return null;
+  }
+  return { ...threat, continuing: !!episode };
 }
 /**
- * The flee itself, run as the work of a safety-lease action. Keys go through the motor port, so an action that took the body
- * from it (a retreat, lava) makes the next write fail instead of fighting it; the keys are always let go at the end.
+ * One segment of the flee, run as the work of a safety-lease action. Keys go through the motor port, so an action that took the body
+ * from it (a retreat, lava) makes the next write fail instead of fighting it; the keys are always let go at the end. At most
+ * FLEE_SEGMENT_TICKS ticks or FLEE_SEGMENT_BLOCKS blocks; the heading is chosen again each tick from every threat in range.
  */
-export async function runLowHealthFlee(bot: FloorBody, port: FloorBody, tickMs = 50): Promise<{ success: boolean; result: string }> {
+export async function runLowHealthFlee(bot: FloorBody, port: FloorBody, tickMs = 50): Promise<{ success: boolean; result: string; moved: number; ended: 'clear' | 'blocked' | 'cap' | 'yield' }> {
   const origin = bot.entity!.position.clone();
-  let ticks = 0;
+  let ticks = 0, ended: 'clear' | 'blocked' | 'cap' | 'yield' = 'cap';
   try {
-    for (; ticks < FLEE_TICKS; ticks++) {
-      const threat = fleeThreat(bot), body = bot.entity;
-      if (!threat || !body || bot.lavaReflex?.engaged === true || bot.breathingReflex?.engaged === true) break;
-      if (body.position.distanceTo(origin) >= FLEE_BLOCKS) break;
-      // Straight away from it, or the nearest turn that does not lead to lava or a drop (and none: it stops here). The edge guard
+    for (; ticks < FLEE_SEGMENT_TICKS; ticks++) {
+      const threat = fleeThreat(bot, true), body = bot.entity;
+      if (!threat || !body || bot.lavaReflex?.engaged === true || bot.breathingReflex?.engaged === true) { ended = 'clear'; break; }
+      if (body.position.distanceTo(origin) >= FLEE_SEGMENT_BLOCKS) break;
+      // A command is waiting for the body: it has it after a fifth of a second of the run (the API decides from a fresh observation).
+      if (ticks >= FLEE_YIELD_AFTER_TICKS && commandWaiting(bot)) { ended = 'yield'; break; }
+      // Away from all of them, or the nearest turn that does not lead to lava or a drop (and none: it stops here). The edge guard
       // still has the final say over the keys at the physics tick.
-      const yaw = fleeHeading(bot, threat.from);
-      if (yaw === null) break;
+      const yaw = fleeHeading(bot, threat.threats);
+      if (yaw === null) { ended = 'blocked'; break; }
       port.look?.(yaw, 0, true);
       port.setControlState('forward', true); port.setControlState('sprint', true);
       await new Promise(resolve => setTimeout(resolve, tickMs));
@@ -303,7 +505,8 @@ export async function runLowHealthFlee(bot: FloorBody, port: FloorBody, tickMs =
     // Through the port: when another reflex has taken the body this fails and is ignored, so its keys are not let go from under it.
     try { releaseKeys(port); } catch { /* ownership lost: the new owner holds the keys */ }
   }
-  return { success: true, result: ticks > 0 ? '低体力のため敵から離れた' : '離れる必要がなくなった（または安全な逃げ道がない）' };
+  const moved = bot.entity ? bot.entity.position.distanceTo(origin) : 0;
+  return { success: true, result: ticks > 0 ? '低体力のため敵から離れた' : '離れる必要がなくなった（または安全な逃げ道がない）', moved, ended };
 }
 
 export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floorConfig(), options: { fleeTickMs?: number; now?: () => number } = {}): void {
@@ -353,23 +556,40 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
       let threat: ReturnType<typeof fleeStart> = null;
       try { threat = fleeStart(bot, state, now()); } catch { threat = null; }
       if (threat) {
-        state.busy = 'flee'; state.engagements.flee = (state.engagements.flee ?? 0) + 1; (state.fleeStarts ??= []).push(now());
-        log.warn(`🏃 低体力（${bot.health}）で敵が近い: 離れる`);
-        void takeNoted('flee', '低体力のため敵から離れた', 'floor-flee', FLOOR_FLEE_PRIORITY, 3000,
-          () => runLowHealthFlee(bot, createMotorPort(bot), options.fleeTickMs))
+        // A new episode is one ledger entry and one of the two in 20 s; its later segments (`continuing`) are part of it.
+        if (!threat.continuing) {
+          state.engagements.flee = (state.engagements.flee ?? 0) + 1; (state.fleeStarts ??= []).push(now());
+          const handle = ledger.begin('flee', '低体力のため敵から離れた');
+          state.fleeEpisode = { startedAt: now(), origin: bot.entity!.position.clone(), segments: 0, stalls: 0, outcome: 'done', end: outcome => { ledger.end(handle, outcome); } };
+          log.warn(`🏃 低体力（${bot.health}）で敵が近い（${threat.threats.length}体、最寄り${threat.nearest.toFixed(1)}m）: 離れる`);
+        }
+        const episode = state.fleeEpisode!;
+        episode.segments++;
+        state.busy = 'flee';
+        const finish = (outcome: ReflexOutcome) => { if (state.fleeEpisode === episode) { state.fleeEpisode = undefined; try { episode.end?.(outcome); } catch { /* a report */ } } };
+        void take('floor-flee', FLOOR_FLEE_PRIORITY, 3000, () => runLowHealthFlee(bot, createMotorPort(bot), options.fleeTickMs))
+          .then(result => {
+            const done = result as { success?: boolean; failureType?: string; moved?: number; ended?: string } | undefined;
+            // Taken away by a stronger reflex, or failed: the episode ends now, and says how.
+            if (!done?.success) { episode.outcome = done?.failureType === 'interrupted' ? 'cut' : 'failed'; finish(episode.outcome); return; }
+            episode.stalls = (done.moved ?? 0) < FLEE_MIN_HEADWAY ? episode.stalls + 1 : 0;
+            if (done.ended === 'clear') finish('done');
+            else if (done.ended === 'yield') { finish('done'); state.fleeRestUntil = now() + FLEE_REST_MS; }
+          }, () => finish('failed'))
           .catch(() => undefined).finally(() => { state.busy = null; });
         return;
       }
     }
     if (!budget && Date.now() < state.retryAt) return;
     let food: Item | null = null, armor: ReturnType<typeof floorArmorChoice> = null;
-    try { food = config.eat ? floorEatChoice(bot) : null; armor = food || !config.armor ? null : floorArmorChoice(bot); } catch { return; }
+    try { food = config.eat ? floorEatChoice(bot, config.wideThreats) : null; armor = food || !config.armor ? null : floorArmorChoice(bot); } catch { return; }
     if (food && bot.equip && bot.consume) {
       // Never over another safety reflex (breath, lava). Over a model's action or a reflex session only when it cannot wait
       // (starving or nearly dead); otherwise between actions, so the work it would cut is not cut for a meal.
       if (hasActiveSafetyLease(bot)) return;
       if (physicalActionBusy(bot) && (bot.food ?? 20) > 3 && (bot.health ?? 20) > 6) return;
-      if (budget && !budget.allow('eat', bot.health ?? 20)) return;
+      // Starving or at 6 health or less the meal is not metered (floorBudget.ts): only a short backoff after one that failed.
+      if (budget && !budget.allow('eat', bot.health ?? 20, bot.food ?? 20)) return;
       state.busy = 'eat'; state.engagements.eat++;
       log.info(`🍖 食べる: ${food.name}（体力 ${bot.health} / 満腹度 ${bot.food}）`);
       const held = bot.heldItem;
@@ -379,7 +599,7 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
         return { success: true, result: `${food!.name}を食べた` };
       }, 'eat').then(result => { if (!result?.success) failed(); })
         .catch(() => failed()).finally(() => { state.busy = null; });
-    } else if (armor && bot.equip && !hasActiveSafetyLease(bot) && (!physicalActionBusy(bot) || hostileWithin(bot, 16)) && (!budget || budget.allow('armor', bot.health ?? 20))) {
+    } else if (armor && bot.equip && !hasActiveSafetyLease(bot) && (!physicalActionBusy(bot) || hostileWithin(bot, 16, config.wideThreats)) && (!budget || budget.allow('armor', bot.health ?? 20))) {
       state.busy = 'armor'; state.engagements.armor++;
       log.info(`🛡️ 防具を着ける: ${armor.item.name}`);
       void takeNoted('armor', `防具（${armor.item.name}）を着けた`, 'floor-armor', FLOOR_ARMOR_PRIORITY, 3000, async () => {

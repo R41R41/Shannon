@@ -87,7 +87,7 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
       equipped: this.bot.heldItem?.name ?? null, window: this.bot.currentWindow?.type ?? null,
       danger: (this.bot.health ?? 20) <= 8 || (this.bot.oxygenLevel ?? 20) <= 6 || (world.nearbyThreats ?? []).some(t => t.distance <= 5 && t.canReachMe !== false),
       floorActive: floorActive(this.bot),
-      // What the floor's budget is holding back right now (rrow, eat, rmor, udget), or null: why no reflex came.
+      // What the floor's budget is holding back right now (arrow, eat, armor, budget), or null: why no reflex came.
       floorSilenced: floorSilenced(this.bot),
       stuck: !!moving && now - this.movedAt > 1500, visualRequired: false, imageAvailable: this.imageAvailable,
       rendererConfigured: this.options.rendererConfigured?.() ?? null,

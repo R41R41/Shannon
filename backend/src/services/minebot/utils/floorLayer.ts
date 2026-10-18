@@ -16,7 +16,8 @@ const log = createLogger('Minebot:FloorLayer');
 export function loadFloorLayer(bot: { loadPlugin(plugin: (bot: any) => void): void }, env: Record<string, string | undefined> = process.env): FloorConfig {
   const reflexes = floorConfig(env);
   log.info(describeFloorConfig(reflexes));
-  for (const warning of reflexes.warnings) log.warn(`🧱 ${warning}`);
+  // A setting that was not understood is an error in the journal, not a warning: it decides what the body does.
+  for (const warning of reflexes.warnings) { if (warning.startsWith('‼')) log.error(`🧱 ${warning}`); else log.warn(`🧱 ${warning}`); }
   bot.loadPlugin(reflexLedgerPlugin);
   if (reflexes.floor) bot.loadPlugin(target => installFloorReflexes(target, reflexes));
   if (reflexes.pickup) bot.loadPlugin(target => installIdlePickup(target, reflexes));
