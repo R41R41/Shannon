@@ -110,8 +110,9 @@ describe('walls and steps on stairs and slabs terrain', () => {
     expect(run({ name: 'oak_stairs', boundingBox: 'block', shapes: [[0, 0, 0, 1, 0.5, 1], [0, 0.5, 0, 0.5, 1, 1]] })).toBe(true);
     expect(run(block('white_carpet', 0.0625))).toBe(true);
     expect(run(strip(block('oak_slab', 0.5)))).toBe(true); expect(run(strip(block('oak_stairs', 1)))).toBe(true); expect(run(strip(block('white_carpet', 1)))).toBe(true);
-    expect(run(stone)).toBe(false);
-    expect(run(strip(stone))).toBe(false);
+    // A whole block at the feet's height is a step to jump (fifth review, M2), when there is room above it; with a block over it, or two high, it is a wall.
+    expect(run(stone)).toBe(true);
+    expect(run(strip(stone))).toBe(true);
     // A ceiling the head would hit: one block above the feet's cell.
     expect(run(stone, 66)).toBe(false);
     expect(run(block('oak_slab', 1, { shapes: [[0, 0.5, 0, 1, 1, 1]] }), 66)).toBe(false); // a top slab at head height

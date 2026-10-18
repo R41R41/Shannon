@@ -18,6 +18,9 @@ function fixture(patch: Record<string, unknown> = {}) {
 }
 const tick = (bot: EventEmitter) => bot.emit('physicsTick');
 const settle = (ms = 15) => new Promise(resolve => setTimeout(resolve, ms));
+/** Waits for a condition instead of a fixed time: a timer hop is 15 ms on Windows and longer under load, so fixed sleeps made these tests flaky. */
+const until = (check: () => unknown, timeout = 10_000) => vi.waitFor(check, { timeout, interval: 2 });
+const idle = (bot: any) => until(() => expect(bot.floorReflexes.busy).toBeNull());
 const full = floorConfig({});
 const state = (patch: Partial<FloorState> = {}): FloorState => ({ retreat: { engaged: false, ticks: 0, cooldown: 0, engagements: 0 }, busy: null, retryAt: 0, engagements: { eat: 0, armor: 0 }, fleeStarts: [], ...patch });
 
@@ -87,8 +90,7 @@ describe('low-health flee: the reflex itself (on by default, off in floor mode o
     expect(floorActive(bot)).toBe(true);
     // A second tick while it runs starts nothing more.
     tick(bot); tick(bot);
-    await settle(500);
-    expect(bot.floorReflexes.busy).toBeNull();
+    await idle(bot);
     expect(floorActive(bot)).toBe(false);
     // The enemy is gone: the next tick ends the episode, and that is the one ledger entry.
     bot.entities = {}; tick(bot);
@@ -107,20 +109,18 @@ describe('low-health flee: the reflex itself (on by default, off in floor mode o
     const far = fixture();
     installFloorReflexes(far.bot, full, { fleeTickMs: 1 });
     far.bot.setControlState = vi.fn(function(this: any, key: string, value: boolean) { if (key === 'forward' && value) far.bot.entity.position = far.bot.entity.position.offset(-2.5, 0, 0); });
-    tick(far.bot); await settle(40);
-    expect(far.bot.floorReflexes.busy).toBeNull();
+    tick(far.bot); await idle(far.bot);
     expect(far.bot.setControlState.mock.calls.filter(([key, value]: [string, boolean]) => key === 'forward' && value).length).toBeLessThanOrEqual(3);
     const gone = fixture();
     installFloorReflexes(gone.bot, full, { fleeTickMs: 1 });
-    tick(gone.bot); gone.bot.entities = {}; await settle(40);
-    expect(gone.bot.floorReflexes.busy).toBeNull();
+    tick(gone.bot); gone.bot.entities = {}; await idle(gone.bot);
   });
   it('is twice in 20 seconds however often the danger comes back', async () => {
     const { bot, ledger } = fixture();
     installFloorReflexes(bot, full, { fleeTickMs: 1 });
     for (let i = 0; i < 4; i++) {
       bot.entities = { 2: { id: 2, name: 'zombie', position: new Vec3(2, 65, 0) } };
-      tick(bot); await settle(500);
+      tick(bot); await idle(bot);
       bot.entities = {}; tick(bot); // gone: that episode is over
     }
     expect(ledger.entriesSince(-1).filter(entry => entry.kind === 'flee')).toHaveLength(2);
@@ -128,11 +128,11 @@ describe('low-health flee: the reflex itself (on by default, off in floor mode o
   it('gives way to a stronger reflex taking the body, and is reported as cut', async () => {
     const { bot, ledger } = fixture();
     installFloorReflexes(bot, full, { fleeTickMs: 20 });
-    tick(bot); await settle(25);
-    expect(activeActionCapabilities(bot)).toEqual(['floor-flee']);
+    tick(bot);
+    await until(() => { expect(activeActionCapabilities(bot)).toEqual(['floor-flee']); expect(bot.setControlState).toHaveBeenCalled(); });
     preemptLowerPriorityActions(bot, 350, 'floor-retreat');
     const writes = bot.setControlState.mock.calls.length;
-    await settle(60);
+    await idle(bot);
     // Having lost the body, the flee writes nothing more (not even its key release): whatever took it holds the keys now.
     expect(bot.setControlState.mock.calls.length).toBe(writes);
     expect(ledger.entriesSince(-1).map(entry => [entry.kind, entry.outcome])).toEqual([['flee', 'cut']]);
@@ -143,14 +143,14 @@ describe('low-health flee: the reflex itself (on by default, off in floor mode o
     const { bot, ledger } = fixture();
     installFloorReflexes(bot, full, { fleeTickMs: 1 });
     const fight = executeAction(bot, 'attack-continuously', 5000, () => new Promise(resolve => setTimeout(() => resolve({ success: true, result: 'ok' }), 500)), { priority: 0 });
-    await settle(5); tick(bot);
+    await until(() => expect(activeActionCapabilities(bot)).toEqual(['attack-continuously'])); tick(bot);
     expect(await fight).toMatchObject({ success: false, failureType: 'interrupted' });
-    await settle(60);
-    expect(ledger.cutOff(-1, 'attack-continuously')?.by).toBe('floor-flee');
+    await until(() => expect(ledger.cutOff(-1, 'attack-continuously')?.by).toBe('floor-flee'));
+    await idle(bot);
     const running = fixture();
     installFloorReflexes(running.bot, full, { fleeTickMs: 1 });
     const escape = executeAction(running.bot, 'flee-from', 5000, () => new Promise(resolve => setTimeout(() => resolve({ success: true, result: 'ran' }), 60)), { priority: 0 });
-    await settle(5); tick(running.bot);
+    await until(() => expect(activeActionCapabilities(running.bot)).toEqual(['flee-from'])); tick(running.bot);
     expect(running.bot.floorReflexes.busy).toBeNull();
     expect(await escape).toMatchObject({ success: true, result: 'ran' });
   });
@@ -162,7 +162,7 @@ describe('low-health flee: the reflex itself (on by default, off in floor mode o
     expect(bot.floorReflexes.busy).toBe('flee');
     await settle(10);
     expect(bot.equip).not.toHaveBeenCalled(); expect(bot.consume).not.toHaveBeenCalled();
-    await settle(600);
+    await idle(bot);
   });
 });
 
@@ -170,19 +170,19 @@ describe('floor reflexes under the switch', () => {
   it('off settings for retreat, eat and armor stop each one without touching the others', async () => {
     const items = [{ name: 'bread' }];
     const eatOff = fixture({ health: 20, food: 2, entities: {}, inventory: { items: () => items, slots: new Array(46).fill(null) } });
-    installFloorReflexes(eatOff.bot, floorConfig({ MINEBOT_FCA_REFLEX_OFF: 'eat' })); tick(eatOff.bot); await settle(5);
+    installFloorReflexes(eatOff.bot, floorConfig({ MINEBOT_FCA_REFLEX_OFF: 'eat' })); tick(eatOff.bot); await settle(20);
     expect(eatOff.bot.consume).not.toHaveBeenCalled();
     const eatOn = fixture({ health: 20, food: 2, entities: {}, inventory: { items: () => items, slots: new Array(46).fill(null) } });
-    installFloorReflexes(eatOn.bot, floorConfig({})); tick(eatOn.bot); await settle(5);
-    expect(eatOn.bot.consume).toHaveBeenCalledTimes(1);
+    installFloorReflexes(eatOn.bot, floorConfig({})); tick(eatOn.bot);
+    await until(() => expect(eatOn.bot.consume).toHaveBeenCalledTimes(1));
     const lit: unknown[] = []; lit[16] = 1;
     const retreatOff = fixture({ health: 20, entities: { 2: { id: 2, name: 'creeper', position: new Vec3(3, 65, 0), metadata: lit } } });
     installFloorReflexes(retreatOff.bot, floorConfig({ MINEBOT_FCA_REFLEX_OFF: 'retreat' })); tick(retreatOff.bot); await settle(5);
     expect(retreatOff.bot.setControlState).not.toHaveBeenCalled();
     const retreatOn = fixture({ health: 20, entities: { 2: { id: 2, name: 'creeper', position: new Vec3(3, 65, 0), metadata: lit } } });
-    installFloorReflexes(retreatOn.bot, floorConfig({})); tick(retreatOn.bot); await settle(5);
+    installFloorReflexes(retreatOn.bot, floorConfig({})); tick(retreatOn.bot);
     expect(retreatOn.bot.setControlState).toHaveBeenCalledWith('forward', true);
-    retreatOn.bot.entities = {}; tick(retreatOn.bot); await settle(5);
-    expect(retreatOn.ledger.entriesSince(-1).map(entry => [entry.kind, entry.detail])).toEqual([['retreat', '火の付いたクリーパーから離れた']]);
+    retreatOn.bot.entities = {}; tick(retreatOn.bot);
+    await until(() => expect(retreatOn.ledger.entriesSince(-1).map(entry => [entry.kind, entry.detail])).toEqual([['retreat', '火の付いたクリーパーから離れた']]));
   });
 });

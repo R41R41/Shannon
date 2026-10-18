@@ -137,7 +137,9 @@ describe('floor reflexes (ADR-0010 D8, defence only)', () => {
     bot.food = 7; expect(floorEatChoice(bot)).toBeNull();      // still a top-up
     bot.food = 6; expect(floorEatChoice(bot)?.name).toBe('bread');   // critical: not held back here (the tick decides whether to cut)
     bot.food = 20; bot.health = 6; expect(floorEatChoice(bot)).toBeNull();  // full food, nothing to eat for
-    bot.food = 19; expect(floorEatChoice(bot)?.name).toBe('bread');
+    // Health 6 at food 18 or 19 gains next to nothing from a meal: a top-up, held back while a command runs (fifth review, M1).
+    bot.food = 19; expect(floorEatChoice(bot)).toBeNull();
+    bot.food = 17; expect(floorEatChoice(bot)?.name).toBe('bread');
     finish(); await work;
     bot.food = 17; bot.health = 20; expect(floorEatChoice(bot)?.name).toBe('bread');
   });

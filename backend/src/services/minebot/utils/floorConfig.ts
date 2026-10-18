@@ -24,7 +24,8 @@
  *   retreat, eat, armor   the floor's own reflexes one by one
  *   flee                  the low-health flee           pickup  the idle pickup
  *   combat                the combat-knowledge providers alone
- *   budget                the floor's budget (cooldowns, the per-minute allowance and the stuck latch); the reflexes then run unmetered\n *                         (`floor mode has none to begin with)
+ *   budget                the floor's budget (cooldowns, the per-minute allowance and the stuck latch); the reflexes then run unmetered
+ *                         (`floor` mode has none to begin with)
  *   ledger-tag            the receipt's reflex note and the `interrupted_by_reflex` failure type, so an API that dislikes the new type
  *                         can be answered at once with the old `interrupted`
  * Denying what the mode does not run changes nothing. What cannot be switched off: the ledger's counting, the observation's
@@ -104,7 +105,7 @@ export function reflexPromptText(config: FloorConfig = floorConfig()): string {
   const parts: string[] = [];
   if (config.retreat) parts.push('点火したクリーパーや飛んでくる矢から下がる');
   if (config.eat) parts.push(config.wideThreats
-    ? '満腹度18未満（体力18未満なら満腹度20未満）で手が空いている間に食べる（体力6以下か満腹度3以下では実行中の命令を切ってでも食べる。敵が5m内なら食べない）'
+    ? '満腹度18未満（体力18未満なら満腹度20未満）で手が空いている間に食べる（体力6以下か満腹度3以下では実行中の命令を切ってでも食べる。ただし flee-from・dig-shelter・build-around-self は満腹度3以下でしか切らない。壁越しでない敵が5m内なら食べない）'
     : '飢え・低体力で食べる');
   if (config.armor) parts.push('空いた防具の枠に防具を着ける');
   if (config.flee) parts.push('体力6以下で敵が近いと走って離れる（走っている間は実行中の戦闘・作業を中断する。20秒に2回まで）');
