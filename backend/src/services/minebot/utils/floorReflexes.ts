@@ -3,7 +3,9 @@ import { createLogger } from '../../../utils/logger.js';
 import { activeActionCapabilities, createMotorPort, executeAction, hasActiveSafetyLease, physicalActionBusy, preemptLowerPriorityActions } from '../execution/ActionExecution.js';
 import { creeperLit } from './creeperFuse.js';
 import { FALLBACK_FOOD_POINTS } from '../constantSkills/autoEat.js';
+import { edgeRisk } from './edgeGuard.js';
 import { floorConfig, type FloorConfig } from './floorConfig.js';
+import { FloorBudget, type BudgetKind } from './floorBudget.js';
 import { ensureReflexLedger, type ReflexKind } from './reflexLedger.js';
 import { threatExposure } from './threatExposure.js';
 
@@ -31,7 +33,7 @@ const FLEE_BLOCKS = 5;
 const FLEE_WINDOW_MS = 20_000;
 const FLEE_MAX_IN_WINDOW = 2;
 /** Skills that are already getting the body away: the flee never cuts one of these (the API's DEFENSIVE_SKILLS that escape). */
-export const ESCAPE_SKILLS: ReadonlySet<string> = new Set(['flee-from', 'dig-shelter', 'build-around-self', 'retreat-attack']);
+export const ESCAPE_SKILLS: ReadonlySet<string> = new Set(['flee-from', 'dig-shelter', 'build-around-self']);
 /** One retreat lasts at most a second, or three blocks (ADR-0010 D8). */
 const RETREAT_TICKS = 20;
 const RETREAT_BLOCKS = 3;
@@ -69,9 +71,11 @@ export interface RetreatState {
   arrows?: Map<number, Vec3>;
 }
 export interface FloorState {
-  retreat: RetreatState; busy: 'eat' | 'armor' | 'flee' | null; retryAt: number; engagements: { eat: number; armor: number; flee?: number };
-  /** When each flee of the last 20 s began (the budget). */
+  retreat: RetreatState; busy: 'eat' | 'armor' | 'flee' | null; retryAt: number; engagements: { eat: number; armor: number; flee?: number; fleeRefused?: number };
+  /** When each flee of the last 20 s began (the flee's own allowance). */
   fleeStarts?: number[];
+  /** Cooldowns, the allowance and the stuck latch of the arrow step-aside, the meal and the armour change (`floorBudget.ts`); absent when denied. */
+  budget?: FloorBudget;
 }
 
 export { creeperLit };
@@ -128,8 +132,11 @@ function steer(bot: FloorBody, state: RetreatState) {
     bot.setControlState('left', true);
   }
 }
-/** One physics tick of the retreat. Keys are set every tick while engaged, after the other movers, like the lava reflex. */
-export function floorRetreatTick(bot: FloorBody, state: RetreatState): 'engaged' | 'released' | null {
+/**
+ * One physics tick of the retreat. Keys are set every tick while engaged, after the other movers, like the lava reflex.
+ * `allow` is the budget's say on starting one (a lit creeper's retreat is never asked about it).
+ */
+export function floorRetreatTick(bot: FloorBody, state: RetreatState, allow?: (kind: 'creeper' | 'arrow') => boolean): 'engaged' | 'released' | null {
   const body = bot.entity;
   // Lava and breath come first (400, 300): while either holds the keys, the retreat neither steers nor takes the body.
   const yielding = bot.lavaReflex?.engaged === true || bot.breathingReflex?.engaged === true;
@@ -149,6 +156,7 @@ export function floorRetreatTick(bot: FloorBody, state: RetreatState): 'engaged'
   const threat = retreatThreat(bot, state.arrows ??= new Map());
   if (state.cooldown > 0) { state.cooldown--; return null; }
   if (!threat) return null;
+  if (allow && !allow(threat.kind)) return null;
   Object.assign(state, { engaged: true, kind: threat.kind, from: threat.from, origin: body.position.clone(), ticks: 0, done: false });
   state.engagements++;
   steer(bot, state);
@@ -192,6 +200,53 @@ export function floorActive(bot: object): boolean {
     || b.breathingReflex?.engaged === true || hasActiveSafetyLease(bot);
 }
 
+/**
+ * What the floor's budget is holding back right now (a closed latch, or the allowance used up), or null: the observation's
+ * `facts.floorSilenced`, so that a mind that sees no reflex knows why none came. Nothing to say when the floor has no budget.
+ */
+export function floorSilenced(bot: object): string | null {
+  const held = (bot as { floorReflexes?: FloorState }).floorReflexes?.budget?.silenced() ?? [];
+  return held.length ? held.join(',') : null;
+}
+
+/** Cells the flee will not run into: standing in or on any of these hurts or kills. */
+const LETHAL_TO_STAND_IN = new Set(['lava', 'fire', 'soul_fire', 'cactus', 'sweet_berry_bush', 'wither_rose', 'powder_snow']);
+const LETHAL_TO_STAND_ON = new Set(['lava', 'magma_block', 'fire', 'soul_fire']);
+/** The directions the flee may take, nearest to straight away first: not toward the enemy, so no further round than a right angle. */
+const FLEE_TURNS = [0, Math.PI / 4, -Math.PI / 4, Math.PI / 2, -Math.PI / 2];
+type TerrainBody = { blockAt?(position: Vec3): { name?: string; boundingBox?: string } | null };
+
+/**
+ * Whether running from `at` along `yaw` for the length of a flee meets lava, fire, a drop that would cost health, or a wall. The edge
+ * guard also clips a step over a ledge or into lava at the physics tick, but the flee does not rely on it alone: a heading that
+ * leads there is not taken. Missing terrain data (no `blockAt`, an unloaded cell) is not a danger, as in the guard.
+ */
+export function fleeHeadingSafe(bot: FloorBody, at: Vec3, yaw: number): boolean {
+  const terrain = bot as unknown as TerrainBody;
+  if (typeof terrain.blockAt !== 'function') return true;
+  const dx = -Math.sin(yaw), dz = -Math.cos(yaw), y = Math.floor(at.y);
+  try {
+    for (let step = 1; step <= FLEE_BLOCKS; step++) {
+      const x = at.x + dx * step, z = at.z + dz * step, cell = new Vec3(Math.floor(x), y, Math.floor(z));
+      const feet = terrain.blockAt(cell), head = terrain.blockAt(cell.offset(0, 1, 0)), under = terrain.blockAt(cell.offset(0, -1, 0));
+      if (LETHAL_TO_STAND_IN.has(String(feet?.name)) || LETHAL_TO_STAND_IN.has(String(head?.name)) || LETHAL_TO_STAND_ON.has(String(under?.name))) return false;
+      // A wall at the first two steps: the run would be into it. (Further on the flee has stopped by then.)
+      if (step <= 2 && feet?.boundingBox === 'block') return false;
+      // Any drop that would cost health (more than three blocks, or lava below), judged as the edge guard does with one point to spare.
+      if (edgeRisk(bot as any, x, at.y, z, 1) !== null) return false;
+    }
+  } catch { return true; }
+  return true;
+}
+
+/** The yaw to flee along from `from`: straight away when that is safe, else the nearest safe turn; null when no way out is safe. */
+export function fleeHeading(bot: FloorBody, from: Vec3): number | null {
+  const at = bot.entity?.position; if (!at) return null;
+  const away = Math.atan2(at.x - from.x, at.z - from.z) + Math.PI;
+  for (const turn of FLEE_TURNS) if (fleeHeadingSafe(bot, at, away + turn)) return away + turn;
+  return null;
+}
+
 /** The hostile to run from at low health: reachable (not walled off), within FLEE_RANGE, nearest first. Null above FLEE_HEALTH. */
 export function fleeThreat(bot: FloorBody): { from: Vec3 } | null {
   const health = bot.health ?? 20, at = bot.entity?.position;
@@ -218,7 +273,11 @@ export function fleeStart(bot: FloorBody, state: FloorState, now: number): { fro
   if (activeActionCapabilities(bot).some(capability => ESCAPE_SKILLS.has(capability))) return null;
   state.fleeStarts = (state.fleeStarts ?? []).filter(at => now - at < FLEE_WINDOW_MS);
   if (state.fleeStarts.length >= FLEE_MAX_IN_WINDOW) return null;
-  return fleeThreat(bot);
+  const threat = fleeThreat(bot);
+  // No safe way to run (a cliff or lava on every side the flee may take): it does not take the body, nor spend its allowance.
+  // The API's fast judgment (a shelter, its own flee) decides what to do instead.
+  if (threat && fleeHeading(bot, threat.from) === null) { state.engagements.fleeRefused = (state.engagements.fleeRefused ?? 0) + 1; return null; }
+  return threat;
 }
 /**
  * The flee itself, run as the work of a safety-lease action. Keys go through the motor port, so an action that took the body
@@ -232,8 +291,11 @@ export async function runLowHealthFlee(bot: FloorBody, port: FloorBody, tickMs =
       const threat = fleeThreat(bot), body = bot.entity;
       if (!threat || !body || bot.lavaReflex?.engaged === true || bot.breathingReflex?.engaged === true) break;
       if (body.position.distanceTo(origin) >= FLEE_BLOCKS) break;
-      // Straight away from it; the edge guard keeps the final say over the keys at a drop.
-      port.look?.(Math.atan2(body.position.x - threat.from.x, body.position.z - threat.from.z) + Math.PI, 0, true);
+      // Straight away from it, or the nearest turn that does not lead to lava or a drop (and none: it stops here). The edge guard
+      // still has the final say over the keys at the physics tick.
+      const yaw = fleeHeading(bot, threat.from);
+      if (yaw === null) break;
+      port.look?.(yaw, 0, true);
       port.setControlState('forward', true); port.setControlState('sprint', true);
       await new Promise(resolve => setTimeout(resolve, tickMs));
     }
@@ -241,14 +303,20 @@ export async function runLowHealthFlee(bot: FloorBody, port: FloorBody, tickMs =
     // Through the port: when another reflex has taken the body this fails and is ignored, so its keys are not let go from under it.
     try { releaseKeys(port); } catch { /* ownership lost: the new owner holds the keys */ }
   }
-  return { success: true, result: ticks > 0 ? '低体力のため敵から離れた' : '離れる必要がなくなった' };
+  return { success: true, result: ticks > 0 ? '低体力のため敵から離れた' : '離れる必要がなくなった（または安全な逃げ道がない）' };
 }
 
-export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floorConfig(), options: { fleeTickMs?: number } = {}): void {
+export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floorConfig(), options: { fleeTickMs?: number; now?: () => number } = {}): void {
   if (bot.floorReflexes) return;
+  const now = options.now ?? Date.now;
   const state: FloorState = bot.floorReflexes = { retreat: { engaged: false, ticks: 0, cooldown: 0, engagements: 0 }, busy: null, retryAt: 0,
     engagements: { eat: 0, armor: 0, flee: 0 }, fleeStarts: [] };
   const ledger = ensureReflexLedger(bot as any);
+  // Said to the mind (ledger -> state.world.reflexes) when the allowance runs out or a latch closes; the facts say what is held.
+  const budget = config.budget ? state.budget = new FloorBudget(now, detail => {
+    log.warn(`🚦 ${detail}`);
+    ledger.note('budget', detail);
+  }) : null;
   type Work = () => Promise<{ success: boolean; result: string }>;
   const take = (capability: string, priority: number, timeoutMs: number, work: Work) => {
     preemptLowerPriorityActions(bot, priority, capability);
@@ -256,22 +324,26 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
       { priority, safetyLease: true, waitForQuiescence: false, legacyExecutingSkill: true });
   };
   /** `take`, with the ledger told when it began and how it ended (done, cut off by a stronger reflex, or failed). */
-  const takeNoted = (kind: ReflexKind, detail: string, capability: string, priority: number, timeoutMs: number, work: Work) => {
-    const handle = ledger.begin(kind, detail);
+  const takeNoted = (kind: ReflexKind, detail: string, capability: string, priority: number, timeoutMs: number, work: Work, metered?: BudgetKind) => {
+    const handle = ledger.begin(kind, detail), startedAt = now();
     return take(capability, priority, timeoutMs, work).then(result => {
-      ledger.end(handle, result?.success ? 'done' : result?.failureType === 'interrupted' ? 'cut' : 'failed'); return result;
-    }, error => { ledger.end(handle, 'failed'); throw error; });
+      const outcome = result?.success ? 'done' : result?.failureType === 'interrupted' ? 'cut' : 'failed';
+      ledger.end(handle, outcome); if (metered) budget?.end(metered, startedAt, outcome);
+      return result;
+    }, error => { ledger.end(handle, 'failed'); if (metered) budget?.end(metered, startedAt, 'failed'); throw error; });
   };
+  /** The retry after a failed meal or armour change: the budget's backoff, or (budget denied) the fixed three seconds as before. */
+  const failed = () => { if (!budget) state.retryAt = Date.now() + RETRY_AFTER_MS; };
   bot.on('physicsTick', () => {
     let outcome: ReturnType<typeof floorRetreatTick> = null;
-    try { outcome = config.retreat ? floorRetreatTick(bot, state.retreat) : null; } catch { return; }
+    try { outcome = config.retreat ? floorRetreatTick(bot, state.retreat, budget ? kind => kind === 'creeper' || budget.allow('arrow', bot.health ?? 20) : undefined) : null; } catch { return; }
     if (outcome === 'engaged') {
       log.warn(state.retreat.kind === 'creeper' ? '💥 火の付いたクリーパー: 離れる' : '🏹 矢が向かってくる: 横へよける');
       void takeNoted('retreat', state.retreat.kind === 'creeper' ? '火の付いたクリーパーから離れた' : '飛んでくる矢をよけた', 'floor-retreat', FLOOR_RETREAT_PRIORITY, 3000,
         () => new Promise(resolve => {
           if (state.retreat.done || !state.retreat.engaged) return resolve({ success: true, result: '下がった' });
           state.retreat.release = () => resolve({ success: true, result: '下がった' });
-        }))
+        }), state.retreat.kind === 'arrow' ? 'arrow' : undefined)
         .catch(() => undefined).finally(() => { state.retreat.release = undefined; });
       return;
     }
@@ -279,9 +351,9 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
     if (state.retreat.engaged || state.busy) return;
     if (config.flee) {
       let threat: ReturnType<typeof fleeStart> = null;
-      try { threat = fleeStart(bot, state, Date.now()); } catch { threat = null; }
+      try { threat = fleeStart(bot, state, now()); } catch { threat = null; }
       if (threat) {
-        state.busy = 'flee'; state.engagements.flee = (state.engagements.flee ?? 0) + 1; (state.fleeStarts ??= []).push(Date.now());
+        state.busy = 'flee'; state.engagements.flee = (state.engagements.flee ?? 0) + 1; (state.fleeStarts ??= []).push(now());
         log.warn(`🏃 低体力（${bot.health}）で敵が近い: 離れる`);
         void takeNoted('flee', '低体力のため敵から離れた', 'floor-flee', FLOOR_FLEE_PRIORITY, 3000,
           () => runLowHealthFlee(bot, createMotorPort(bot), options.fleeTickMs))
@@ -289,7 +361,7 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
         return;
       }
     }
-    if (Date.now() < state.retryAt) return;
+    if (!budget && Date.now() < state.retryAt) return;
     let food: Item | null = null, armor: ReturnType<typeof floorArmorChoice> = null;
     try { food = config.eat ? floorEatChoice(bot) : null; armor = food || !config.armor ? null : floorArmorChoice(bot); } catch { return; }
     if (food && bot.equip && bot.consume) {
@@ -297,6 +369,7 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
       // (starving or nearly dead); otherwise between actions, so the work it would cut is not cut for a meal.
       if (hasActiveSafetyLease(bot)) return;
       if (physicalActionBusy(bot) && (bot.food ?? 20) > 3 && (bot.health ?? 20) > 6) return;
+      if (budget && !budget.allow('eat', bot.health ?? 20)) return;
       state.busy = 'eat'; state.engagements.eat++;
       log.info(`🍖 食べる: ${food.name}（体力 ${bot.health} / 満腹度 ${bot.food}）`);
       const held = bot.heldItem;
@@ -304,16 +377,16 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
         await bot.equip!(food!, 'hand'); await bot.consume!();
         if (held && held.name !== food!.name) await bot.equip!(held, 'hand').catch(() => undefined);
         return { success: true, result: `${food!.name}を食べた` };
-      }).then(result => { if (!result?.success) state.retryAt = Date.now() + RETRY_AFTER_MS; })
-        .catch(() => { state.retryAt = Date.now() + RETRY_AFTER_MS; }).finally(() => { state.busy = null; });
-    } else if (armor && bot.equip && !hasActiveSafetyLease(bot) && (!physicalActionBusy(bot) || hostileWithin(bot, 16))) {
+      }, 'eat').then(result => { if (!result?.success) failed(); })
+        .catch(() => failed()).finally(() => { state.busy = null; });
+    } else if (armor && bot.equip && !hasActiveSafetyLease(bot) && (!physicalActionBusy(bot) || hostileWithin(bot, 16)) && (!budget || budget.allow('armor', bot.health ?? 20))) {
       state.busy = 'armor'; state.engagements.armor++;
       log.info(`🛡️ 防具を着ける: ${armor.item.name}`);
       void takeNoted('armor', `防具（${armor.item.name}）を着けた`, 'floor-armor', FLOOR_ARMOR_PRIORITY, 3000, async () => {
         await bot.equip!(armor!.item, armor!.destination);
         return { success: true, result: `${armor!.item.name}を着けた` };
-      }).then(result => { if (!result?.success) state.retryAt = Date.now() + RETRY_AFTER_MS; })
-        .catch(() => { state.retryAt = Date.now() + RETRY_AFTER_MS; }).finally(() => { state.busy = null; });
+      }, 'armor').then(result => { if (!result?.success) failed(); })
+        .catch(() => failed()).finally(() => { state.busy = null; });
     }
   });
 }

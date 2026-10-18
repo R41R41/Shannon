@@ -2,7 +2,7 @@ import { Vec3 } from 'vec3';
 import { NativeGoalEvidence, GOAL_EVIDENCE_SKILL } from './goalEvidence.js';
 import { primitiveState, primitiveCandidates, executePrimitive } from './primitives.js';
 import { captureWorldObservation } from '../../cognition/worldFrame.js';
-import { floorActive } from '../../utils/floorReflexes.js';
+import { floorActive, floorSilenced } from '../../utils/floorReflexes.js';
 import { floorConfig } from '../../utils/floorConfig.js';
 import type { ReflexLedger } from '../../utils/reflexLedger.js';
 import { activeActionCapabilities, cancelIdleActions, currentAction, cancelNonSurvivalActions, createMotorPort, executeAction,
@@ -87,6 +87,8 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
       equipped: this.bot.heldItem?.name ?? null, window: this.bot.currentWindow?.type ?? null,
       danger: (this.bot.health ?? 20) <= 8 || (this.bot.oxygenLevel ?? 20) <= 6 || (world.nearbyThreats ?? []).some(t => t.distance <= 5 && t.canReachMe !== false),
       floorActive: floorActive(this.bot),
+      // What the floor's budget is holding back right now (rrow, eat, rmor, udget), or null: why no reflex came.
+      floorSilenced: floorSilenced(this.bot),
       stuck: !!moving && now - this.movedAt > 1500, visualRequired: false, imageAvailable: this.imageAvailable,
       rendererConfigured: this.options.rendererConfigured?.() ?? null,
     };

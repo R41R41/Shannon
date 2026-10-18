@@ -92,3 +92,5 @@
 - RAD-1I：本人Radarの天気/Calendar設定・混合取得・表示を統合。[設計18節](shannon-radar.md#18-rad-1i個人radarの画面から取得までを統合2026-08-29dev限定)。実画面は架空connectorで検証し、実認証/本体は未接続。
 
 - [共通FCAのMinecraft身体アダプタ](./minecraft-common-fca-body.md)：既定OFFのcontrol protocol、実停止ACK、同一bot画像、offline wire検証。
+
+- [体の反射P8の運用メモ](./minecraft-body-reflexes-p8.md)：`MINEBOT_FCA_REFLEXES` / `MINEBOT_FCA_REFLEX_OFF` のスイッチ・既定・部品ごとの巻き戻し、床の予算、旧と合わせた戦闘知識。

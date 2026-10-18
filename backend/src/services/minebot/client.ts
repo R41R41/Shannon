@@ -34,11 +34,7 @@ import { threatTrackerPlugin } from './utils/threatTracker.js';
 import { toolWearPlugin } from './utils/toolWear.js';
 import { landmarkWatcherPlugin } from './utils/landmarks.js';
 import { placeMemoryPlugin } from './utils/placeMemory.js';
-import { floorReflexPlugin } from './utils/floorReflexes.js';
-import { describeFloorConfig, floorConfig } from './utils/floorConfig.js';
-import { reflexLedgerPlugin } from './utils/reflexLedger.js';
-import { idlePickupPlugin } from './utils/idlePickup.js';
-import { combatKnowledgePlugin } from './utils/combatKnowledge.js';
+import { loadFloorLayer } from './utils/floorLayer.js';
 import { fireballDeflectPlugin } from './utils/fireballDeflect.js';
 import { shieldBlockPlugin } from './utils/shieldBlock.js';
 import { knockBracePlugin } from './utils/knockBrace.js';
@@ -165,17 +161,10 @@ export class MinebotClient extends BaseClient {
     this.bot.loadPlugin(knockBracePlugin);
     // The floor's eat, armour and retreat reflexes (ADR-0010 D8), after the others. Common-FCA mode only: legacy mode keeps
     // its own constant skills for these, and two eaters would fight.
-    // MINEBOT_FCA_REFLEXES (floorConfig): `floor` (unset) is this behaviour; `off` does not load the floor (rollback); `extended` adds
-    // the low-health flee and the idle pickup. The reflex ledger always counts what the resident reflexes do (P8).
-    if (process.env.MINEBOT_COMMON_FCA === 'on') {
-      const reflexes = floorConfig();
-      log.info(describeFloorConfig(reflexes));
-      for (const warning of reflexes.warnings) log.warn(`🧱 ${warning}`);
-      this.bot.loadPlugin(reflexLedgerPlugin);
-      if (reflexes.floor) this.bot.loadPlugin(floorReflexPlugin);
-      if (reflexes.pickup) this.bot.loadPlugin(idlePickupPlugin);
-      if (reflexes.combatKnowledge) this.bot.loadPlugin(combatKnowledgePlugin);
-    }
+    // MINEBOT_FCA_REFLEXES / MINEBOT_FCA_REFLEX_OFF (floorConfig, docs/minecraft-body-reflexes-p8.md): unset loads the whole layer (the floor,
+    // the low-health flee and idle pickup, the combat-knowledge providers); `floor` is the 2026-10-16 production floor alone; `off` loads no
+    // floor (rollback). The reflex ledger always counts what the resident reflexes do (P8).
+    if (process.env.MINEBOT_COMMON_FCA === 'on') loadFloorLayer(this.bot);
 
     this.bot.on('login', async () => {
       log.info('✅ Bot has logged in.');

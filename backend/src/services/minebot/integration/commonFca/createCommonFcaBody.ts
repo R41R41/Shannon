@@ -29,7 +29,7 @@ export function createCommonFcaBody(bot: any, settings: { url: string; serverId:
   };
   if (bot.entity && (bot.health ?? 0) > 0) persistPlaces(); else bot.once('spawn', persistPlaces);
   const loop = new CommonFcaControlLoop({ baseUrl: settings.url, token, serverId: settings.serverId, actuator, observer });
-  // Idle work (the extended pickup) asks this before it starts: a body with a command, an owner or a hold is not idle.
+  // Idle work (the idle pickup) asks this before it starts: a body with a command, an owner or a hold is not idle.
   bot.fcaLeaseHeld = () => loop.leaseHeld;
   const end = () => { void loop.stop(); };
   bot.once('end', end);

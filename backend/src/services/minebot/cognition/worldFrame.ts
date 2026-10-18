@@ -133,9 +133,12 @@ function biomeAt(bot: WorldFrameBotLike | undefined): string | null {
   } catch { return null; }
 }
 
-/** Furnaces still working, as said in the observation (the long instruction is the API's own wording). Under 600 characters or fewer entries. */
+/**
+ * Furnaces still working, as said in the observation (the long instruction is the API's own wording). Under 600 characters, with the
+ * number of furnaces left out said beside them (`jobsOmitted`): a mind that sees two of five must not think there are two.
+ */
 const JOBS_MAX_CHARS = 600;
-function jobsFrame(bot: unknown): WorldObservation['jobs'] | undefined {
+function jobsFrame(bot: unknown): { jobs: NonNullable<WorldObservation['jobs']>; omitted: number } | undefined {
   const furnaces = (bot as { activeFurnaces?: unknown[] } | undefined)?.activeFurnaces;
   if (!Array.isArray(furnaces) || !furnaces.length) return undefined;
   const jobs = backgroundJobs(bot as Parameters<typeof backgroundJobs>[0]).map(job => ({
@@ -143,8 +146,9 @@ function jobsFrame(bot: unknown): WorldObservation['jobs'] | undefined {
     position: { x: job.position.x, y: job.position.y, z: job.position.z },
     ...(job.unfueledInputCount ? { unfueledInputCount: job.unfueledInputCount } : {}), completionVerified: false as const,
   }));
+  const total = jobs.length;
   while (jobs.length > 1 && JSON.stringify(jobs).length > JOBS_MAX_CHARS) jobs.pop();
-  return jobs.length ? jobs : undefined;
+  return jobs.length ? { jobs, omitted: total - jobs.length } : undefined;
 }
 
 function finiteNumber(value: unknown): number | null {
@@ -295,7 +299,13 @@ export function captureWorldObservation(bot?: unknown): WorldObservation {
       } catch { return {}; }
     })(),
     ...(() => {
-      try { const jobs = jobsFrame(observedBot); return jobs ? { jobs } : {}; } catch { return {}; }
+      // Only where the P8 layer is loaded (the reflex ledger is its mark: common-FCA mode): the legacy planner has its own
+      // `get-background-jobs` and keeps the observation it had.
+      try {
+        if (!(observedBot as { reflexLedger?: unknown } | undefined)?.reflexLedger) return {};
+        const frame = jobsFrame(observedBot);
+        return frame ? { jobs: frame.jobs, ...(frame.omitted ? { jobsOmitted: frame.omitted } : {}) } : {};
+      } catch { return {}; }
     })(),
     facts: {
       water: fact(isInWater, observedBot?.entity?.isInWater !== undefined ? 'native' : 'cache', isInWater !== undefined),

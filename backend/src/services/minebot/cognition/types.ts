@@ -158,6 +158,8 @@ export interface WorldObservation {
   reflexes?: { recent: Array<{ ageSec: number; kind: string; detail: string }>; counts: Record<string, number> };
   /** Said only while a furnace is working (start-smelting): status, estimated time left, input and where; `completionVerified` is always false (an estimate is not a result). */
   jobs?: Array<{ status: string; remainingEstimateMs: number; input: unknown; count: unknown; position: WorldVector; unfueledInputCount?: number; completionVerified: false }>;
+  /** How many furnaces jobs leaves out to stay within its size (said only when some are). */
+  jobsOmitted?: number;
   /** Said only while the body is near what it last built round itself (build-around-self): where, and how many of its blocks are missing. */
   builtAround?: string;
   /** Said only while the planner has taken a kind of mob on for a time (accept-threat): which, and the seconds left. */
