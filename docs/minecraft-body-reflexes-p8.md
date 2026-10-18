@@ -118,6 +118,7 @@ env を戻して `shannon.service` を再起動する。`MINEBOT_FCA_REFLEXES=of
 ## ラボ用プローブの床
 
 `testing/MinecraftProbeBot.ts` は、床を自分で言う（クライアントの設定を受け継がない）。既定は `MINECRAFT_PROBE_FLOOR` 未設定 = **2026-10-16 の本番の床だけ**（retreat / eat / armor。flee・予算・拾い物は無い。これまでのプローブの結果はその床で取ったため）。`MINECRAFT_PROBE_FLOOR=default` で、クライアントと同じに `MINEBOT_FCA_REFLEXES` / `MINEBOT_FCA_REFLEX_OFF` を読んだ床（flee と予算を含む。拾い物と戦闘知識はクライアントの層なので載らない）、`off` で床なし。
+
 ## API 側（`codex/shannon/reflex-aware-api`）
 
 - `interrupted_by_reflex` は `retry_same`。失敗の数に数えない。ただし同じ道具が 3 回続けて（道具が混ざれば 6 回続けて）切られたら普通の失敗として数え、5 で止める。**読み取りだけの成功（`minecraft.observe` や問い合わせ）は、この連続を断ち切らない**。止める時の理由は、**切られた分が失敗の数を限度に押し上げた時だけ** `repeated_reflex_interruption`（その時に限度に届いたのが普通の失敗なら、切られた連続が続いていても `repeated_tool_failure`）。
@@ -129,3 +130,49 @@ env を戻して `shannon.service` を再起動する。`MINEBOT_FCA_REFLEXES=of
 - `🍖 食べる` `🛡️ 防具を着ける` `💥` `🏹` `🏃 低体力` `🎒 手が空いている` `🧾 反射:` `🚦`
 - `Motor owner expired` / `body_not_quiescent` / `containment` が増えていないこと
 - API 側: 受信票の `failureType`（`interrupted_by_reflex` の件数）、停止理由（`repeated_reflex_interruption`）
+
+## リリースノート / 運用（2026-10-19、本番反映の前）
+
+本番の体は 65b4bd1（2026-10-17、床の反射 retreat / eat / armor と equip-verify）。ここへ P8（660ab6d）を層の差し替えで足す。反映は、前回（equip-verify）と同じ層の差し替え（前のリリースを `cp -a` で複製し、変わった src の .ts・テスト・dist の .js/.map だけを重ねる。`node_modules`・`.env`・`saves` は同じ symlink のまま）。**本番の env 変更・再起動は、そのつどオーナーの承認を取ってから行う。**
+
+### 既定（何も設定しない時の動き）
+
+- 既定のモードは `default`。**新しい環境変数は無い**（`MINEBOT_FCA_REFLEXES` も `MINEBOT_FCA_REFLEX_OFF` も、いまの本番の drop-in には入っていない）。再起動しただけで次のものが入る。
+  - 床の反射 retreat / eat / armor（2026-10-16 から本番にあるもの。食べる条件は旧 auto-eat に戻してある）
+  - 低体力の逃走 flee: 体力 6 以下、到達できる敵が 8m 内（弓を撃つ種類は 16m 内）
+  - 手が空いている時の拾い物（pickup）
+  - 戦闘知識（盾の学習、掘りの脅威半径、`hitsLeft`、被弾した Mob を敵にする）
+  - 床の予算（60 秒あたりの割り当てと失敗の止め）
+- 反射台帳・`interrupted_by_reflex`・観測の `biome` / `jobs` は常に入る（体を動かさず、言うだけ）。
+- 体はログインした時に床を読み込む（`MINEBOT_COMMON_FCA=on` の本番では、`client.ts` が bot を作る時に `loadFloorLayer` を呼ぶ）。**サービスを再起動しただけでは起動ログの `🧱 床の反射:` は出ない**。次にログインした時に出る。
+
+### 巻き戻しのスイッチ（変えたら `shannon.service` の再起動が要る。起動時に 1 回だけ読む）
+
+| やりたいこと | 設定 | 結果 |
+| --- | --- | --- |
+| flee だけ外す | `MINEBOT_FCA_REFLEX_OFF=flee` | 逃走だけ無くなる（API の fast judgment の逃げ・避難所だけになる）。ほかの P8 は残る |
+| P8 の運動と知識を全部外す（本番 65b4bd1 の床そのもの） | `MINEBOT_FCA_REFLEXES=floor` | retreat / eat / armor だけ。flee・pickup・戦闘知識・予算は無い |
+| 打ち間違い | （`MINEBOT_FCA_REFLEXES` の値を間違える） | `floor` として扱い、`‼` 付きのエラー行を出す。P8 全部が入ることも、床が止まることもない |
+
+- **巻き戻しに `MINEBOT_FCA_REFLEXES=off` は使わない。** 本番の床（retreat / eat / armor）まで止まる。`off` は床そのものの障害調査用。
+- コードごと戻すなら、リリースの `Shannon-current` を前のリリース（`minecraft-equip-verify-20261017-65b4bd1`）へ戻して再起動する（env は触っていないので、これだけで戻る）。
+
+### 反映後に見るもの（`journalctl -u shannon.service`、API 側の台帳）
+
+1. 体のログインの後、起動の 1 行: `🧱 床の反射: default（retreat,eat,armor,flee,pickup） 台帳=on タグ=on 戦闘知識=on 予算=on 拒否=[]`。`‼` 付きの行が出ていたら設定の打ち間違い。
+2. `🏃 低体力（N）で敵が近い…`: flee が始まった印。始まった後に **溶岩の反射が出た、または 3 秒以内に体力が急に落ちた**ら、走った向きが悪かった可能性がある（要調査）。
+3. 台帳（観測の `world.reflexes`）の `flee ... failed`: 「安全な逃げ道が無く走れなかった」。flee が断った印で、体は動かず、API の判断に渡される（失敗ではなく仕様。多発するなら地形や敵の判定を見る）。
+4. `🚦`: 床の予算が反射を黙らせた。連続して出るなら予算の値を見直す（`MINEBOT_FCA_REFLEX_OFF=budget` で外せる）。
+5. `Motor owner expired` / `body_not_quiescent` / `containment` が増えていないこと。
+6. API 側: 受信票の `failureType=interrupted_by_reflex` の件数、停止理由 `repeated_reflex_interruption`。
+
+### 分かっている残り（P8 の最終レビュー時点）
+
+- 危険物の多い地形で、安全な向きが残っていない時に、危険物へ滑り込む確率が **約 0.1〜0.3%**。安全な向きが無ければ走らずに断り（台帳に `flee ... failed`）、その時は API に実行権が渡る。
+- `ESCAPE_SKILLS`（`flee-from` / `dig-shelter` / `build-around-self` / `leave-water` / `tower-up` / `climb-down` / `enter-portal`）で床の反射が API の逃げを切らない保護は **`default` だけ**で、対象は**トップレベルの命令だけ**。`floor` モードは本番どおり、どれも切る。
+- ジャンプの許容 `JUMP_ALONG` = 0.9（`floorReflexes.ts`）。実物理の試験 12,500 例のうち 1 例でこの許容に当たった。
+- `prismarine-physics` は推移的なテスト依存（flee の物理試験だけが使う。実行時の import は `vec3` だけ）。
+
+### 性能
+
+- 逃走の計画（向きの読み取り）は 1 回あたり **平均 0.1 ms 未満、最大 0.4 ms**。
