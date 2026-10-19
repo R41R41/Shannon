@@ -59,7 +59,9 @@ export function nearbyNeeds(bot: NeedsBody, now = Date.now()): NearbyNeed[] {
   let needs: NearbyNeed[];
   if (cached && now - cached.at < CACHE_MS && cached.from.distanceTo(at) < CACHE_MOVE) needs = cached.needs;
   else {
-    try { needs = readNeeds(bot, at, now); } catch { needs = []; }
+    // A failed reading is not cached and not hidden: the caller (the observation, the body events) skips it, rather than every need
+    // seeming gone for the next three seconds.
+    needs = readNeeds(bot, at, now);
     cache.set(key, { at: now, from: at.clone(), needs });
   }
   return needs.map(need => ({ ...need, position: { ...need.position } }));
@@ -102,10 +104,19 @@ function readNeeds(bot: NeedsBody, at: Vec3, now: number): NearbyNeed[] {
   if (iron < IRON_ENOUGH) out.push(...pick(blockNeeds(bot, 'iron', IRON_ORES, now)));
   const planks = count(name => name.endsWith('_planks')) + 4 * count(name => /_(log|wood|stem|hyphae)$/.test(name));
   if (planks < WOOD_ENOUGH) {
-    const logs = Object.keys(bot.registry?.blocksByName ?? {}).filter(name => name.endsWith('_log') && !name.startsWith('stripped_'));
+    const logs = logNames(bot.registry);
     out.push(...pick(blockNeeds(bot, 'wood', logs, now)));
   }
   return out.slice(0, MAX_NEEDS);
+}
+
+const logCache = new WeakMap<object, string[]>();
+/** The log blocks of this registry (read once per registry). */
+function logNames(registry: any): string[] {
+  if (!registry?.blocksByName) return [];
+  let names = logCache.get(registry);
+  if (!names) { names = Object.keys(registry.blocksByName).filter(name => name.endsWith('_log') && !name.startsWith('stripped_')); logCache.set(registry, names); }
+  return names;
 }
 
 /** Those that can be got at first, then the nearest; PER_NEED of them. */
@@ -117,7 +128,7 @@ function pick(needs: NearbyNeed[]): NearbyNeed[] {
 function animalNeed(bot: NeedsBody, at: Vec3, need: NearbyNeed['need'], entity: { id?: number; name: string; position: Vec3; height?: number }, distance: number, color?: string): NearbyNeed {
   const seen = inSight(bot, at.offset(0, 1.62, 0), entity.position.offset(0, (entity.height ?? 1) * 0.5, 0));
   const position = rounded(entity.position);
-  return { id: typeof entity.id === 'number' ? `e:${entity.id}` : `a:${entity.name}:${position.x},${position.y},${position.z}`, need, name: entity.name, ...(color ? { color } : {}), position, distance: Math.round(distance * 10) / 10,
+  return { id: typeof entity.id === 'number' ? `${need}:e:${entity.id}` : `${need}:a:${entity.name}:${position.x},${position.y},${position.z}`, need, name: entity.name, ...(color ? { color } : {}), position, distance: Math.round(distance * 10) / 10,
     canReach: true, ...(seen === false ? { exposed: false } : {}) };
 }
 
@@ -143,7 +154,7 @@ function blockNeeds(bot: NeedsBody, need: NearbyNeed['need'], names: string[], n
     const exposed = typeof bot.blockAt !== 'function'
       || NEIGHBOURS.some(([dx, dy, dz]) => bot.blockAt!(hit.position.offset(dx, dy, dz))?.boundingBox !== 'block');
     const position = rounded(hit.position);
-    return { id: `b:${position.x},${position.y},${position.z}`, need, name: hit.name, position, distance: Math.round(hit.distance * 10) / 10,
+    return { id: `${need}:b:${position.x},${position.y},${position.z}`, need, name: hit.name, position, distance: Math.round(hit.distance * 10) / 10,
       canReach: !failed, ...(exposed ? {} : { exposed: false }), ...(failed ? { why: 'failed_recently' as const } : {}) };
   });
 }

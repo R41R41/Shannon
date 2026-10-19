@@ -24,8 +24,14 @@ export const BODY_EVENTS = Object.freeze({
   needsEveryMs: 3_000,
   /** A move toward a target counts as getting somewhere when the best distance shrinks by this much. */
   closerBy: 1,
-  /** A walk without a target (a dig looking for its ore, an exploration) counts when it gets this far from where it last counted. */
+  /**
+   * A walk without a target (a dig looking for its ore, an exploration) counts when it gets this far from each of the last `trail`
+   * places it counted at (so pacing between two spots does not count); a move toward a target counts new ground of `detourBy` the
+   * same way (a way round a pond or a cliff takes it away from its target for a while).
+   */
   travelBy: 4,
+  detourBy: 10,
+  trail: 8,
 });
 
 /**
@@ -46,7 +52,7 @@ interface EventsBody {
 interface Running {
   id: string; skill: string; measure: 'target' | 'depth' | 'travel' | null; args: Readonly<Record<string, unknown>>;
   startedAt: number; lastProgressAt: number; lastToldAt: number; stalledTold: boolean;
-  best: number | null; anchor: Point | null; carried: Map<string, number>; gained: number;
+  best: number | null; trail: Array<{ at: Point; time: number }>; carried: Map<string, number>; gained: number;
 }
 
 export interface BodyEventSource {
@@ -75,7 +81,9 @@ export class BodyEventWatcher implements BodyEventSource {
     const skill = String(command.skill ?? '').replace(/^mc\./u, '');
     const now = this.now();
     this.running = { id: command.id, skill, measure: WATCHED[skill] ?? null, args: command.arguments ?? {}, startedAt: now,
-      lastProgressAt: now, lastToldAt: now, stalledTold: false, best: null, anchor: this.position(), carried: this.carried(), gained: 0 };
+      lastProgressAt: now, lastToldAt: now, stalledTold: false, best: null, trail: [], carried: this.carried(), gained: 0 };
+    const at = this.position();
+    if (at) this.running.trail.push({ at, time: now });
     this.running.best = this.distance(this.running);
   }
 
@@ -119,10 +127,12 @@ export class BodyEventWatcher implements BodyEventSource {
       run.best = distance;
     }
     const at = this.position();
-    if (run.measure === 'travel' && at && run.anchor && Math.hypot(at.x - run.anchor.x, at.y - run.anchor.y, at.z - run.anchor.z) >= BODY_EVENTS.travelBy) {
-      progressed = true; run.anchor = at;
-    }
-    if (progressed) { run.lastProgressAt = now; run.stalledTold = false; if (run.measure === 'travel') run.anchor = at ?? run.anchor; }
+    // The last places it counted at, by number not by time: forgetting them after a while let pacing between two spots count again.
+    if (run.trail.length > BODY_EVENTS.trail) run.trail = run.trail.slice(-BODY_EVENTS.trail);
+    if (!run.trail.length && at) run.trail.push({ at, time: now });
+    const away = run.measure === 'travel' ? BODY_EVENTS.travelBy : run.measure === 'target' ? BODY_EVENTS.detourBy : null;
+    if (away !== null && at && run.trail.length && run.trail.every(mark => Math.hypot(at.x - mark.at.x, at.y - mark.at.y, at.z - mark.at.z) >= away)) progressed = true;
+    if (progressed) { run.lastProgressAt = now; run.stalledTold = false; if (at) run.trail.push({ at, time: now }); }
     const facts = (): Record<string, Scalar> => ({ skill: run.skill, measure: run.measure, elapsedMs: now - run.startedAt,
       sinceProgressMs: now - run.lastProgressAt, gained: run.gained, ...(distance !== null ? { distance: round(distance) } : {}) });
     if (now - run.lastToldAt >= BODY_EVENTS.progressEveryMs) { run.lastToldAt = now; this.push('action.progress', run.id, facts(), now); }
@@ -149,8 +159,10 @@ export class BodyEventWatcher implements BodyEventSource {
   private diffNeeds(now: number): void {
     const seen = new Map(this.readNeeds(this.bot, now).map(need => [need.id, need]));
     for (const [id, need] of seen) {
-      if (this.needs.has(id)) { this.needs.set(id, { need, missing: 0 }); continue; }
+      const before = this.needs.get(id)?.need;
       this.needs.set(id, { need, missing: 0 });
+      // Told again when whether it can be got at changed (a block mine-block just failed to reach), so the API never sends her back to it.
+      if (before && before.canReach === need.canReach && (before.exposed === false) === (need.exposed === false)) continue;
       this.push('need.appeared', id, { need: need.need, name: need.name, distance: need.distance, canReach: need.canReach,
         x: need.position.x, y: need.position.y, z: need.position.z,
         ...(need.color ? { color: need.color } : {}), ...(need.exposed === false ? { exposed: false } : {}) }, now);

@@ -98,7 +98,7 @@ export interface WorldInventoryStack {
  * the eyes reaches, or an ore with no face open to the air (still reached by digging).
  */
 export interface NearbyNeed {
-  /** The same thing from one reading to the next: `e:<entity id>`, or `b:x,y,z` for a block. */
+  /** The same thing for the same need from one reading to the next: `<need>:e:<entity id>`, or `<need>:b:x,y,z` for a block. */
   id: string;
   need: 'bed_wool' | 'food' | 'iron' | 'wood';
   name: string;

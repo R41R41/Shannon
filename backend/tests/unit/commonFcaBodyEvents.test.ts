@@ -63,6 +63,25 @@ describe('body events (mb-arch stage 1)', () => {
     expect(kinds(walk.watcher)).toContain('action.stalled');
   });
 
+  it('does not count pacing between two spots as ground covered, and counts a move going round as progress', () => {
+    const pace = body();
+    pace.watcher.begin({ id: 'p', skill: 'mine-block', arguments: {} });
+    for (let i = 0; i < 10; i++) { pace.bot.entity.position.x = i % 2 ? 0 : 5; pace.advance(2_000); }
+    expect(kinds(pace.watcher)).toContain('action.stalled');
+    const round = body();
+    round.watcher.begin({ id: 'r', skill: 'move-to', arguments: { x: 40, z: 0 } });
+    for (let i = 0; i < 10; i++) { round.bot.entity.position.z += 3; round.advance(2_000); }
+    expect(kinds(round.watcher)).not.toContain('action.stalled');
+  });
+
+  it('tells a need again when whether it can be got at changed', () => {
+    const f = body();
+    f.setNeeds([need('iron:b:16,43,0')]); f.advance(BODY_EVENTS.needsEveryMs);
+    f.setNeeds([need('iron:b:16,43,0', { canReach: false, why: 'failed_recently' })]); f.advance(BODY_EVENTS.needsEveryMs);
+    f.advance(BODY_EVENTS.needsEveryMs);
+    expect(f.watcher.pending(999).map(event => [event.kind, event.data.canReach])).toEqual([['need.appeared', true], ['need.appeared', false]]);
+  });
+
   it('tells a need when it comes into the list, and as gone only after two readings without it', () => {
     const f = body();
     f.setNeeds([need('b:16,43,0'), need('e:7', { need: 'food', name: 'pig', distance: 9, position: { x: 9, y: 64, z: 0 } })]);
