@@ -222,6 +222,23 @@ export function describeLastDeath(state: PlaceMemoryState, now: number, here?: {
   return line(0, 0).slice(0, 200);
 }
 
+export interface ObservedDeath { at: string; position: PlacePosition; dimension: string; cause?: string; lostItems: string[] }
+/** The JSON of the deaths in an observation stays under this (a decision's summary drops a part over 600 whole). */
+export const DEATHS_CHARACTERS = 580;
+/**
+ * The recent deaths as records for the API's recall (newest last; the last day only), as many of the newest as fit:
+ * `{ at, position, dimension, cause, lostItems: ['name×n', ...] }`. lastDeath says the newest one as a line, with
+ * what to do about it.
+ */
+export function observedDeaths(state: PlaceMemoryState, now: number): ObservedDeath[] {
+  const recent = (state.deaths ?? []).filter(death => now - death.at <= 24 * 60 * 60_000);
+  const shaped = recent.map(death => ({ at: new Date(death.at).toISOString(), position: { ...death.position },
+    dimension: death.dimension.replace(/^minecraft:/, ''), ...(death.cause ? { cause: death.cause.slice(0, 60) } : {}),
+    lostItems: [...death.lost.slice(0, 4).map(item => `${item.name}×${item.count}`), ...(death.lost.length > 4 ? [`ほか${death.lost.length - 4}種`] : [])] }));
+  while (shaped.length && JSON.stringify(shaped).length > DEATHS_CHARACTERS) shaped.shift();
+  return shaped;
+}
+
 /** Removes the places for which `gone` holds (looked at again and no longer there). Returns how many. */
 export function forgetPlaces(state: PlaceMemoryState, gone: (place: Place) => boolean): number {
   const before = state.places.length;

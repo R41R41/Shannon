@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
 import { Vec3 } from 'vec3';
 import {
-  describeLastDeath, DIGEST_CHARACTERS, DRAGON_PLACES, emptyPlaceMemory, MAX_PLACES, parsePlaceMemory, placesDigest, recordDeath, rememberPlace,
+  describeLastDeath, DIGEST_CHARACTERS, DRAGON_PLACES, emptyPlaceMemory, MAX_PLACES, observedDeaths, parsePlaceMemory, placesDigest, recordDeath, rememberPlace,
 } from '../../src/modules/minecraftLearning/places.js';
 import { installPlaceMemory } from '../../src/services/minebot/utils/placeMemory.js';
 import { captureWorldObservation } from '../../src/services/minebot/cognition/worldFrame.js';
@@ -222,10 +222,27 @@ describe('the body notes its deaths, its base, its portals and its chests as the
     } finally { vi.useRealTimers(); }
   });
 
+  it('gives the deaths of the last day as records for the API, newest last, within 580 characters', () => {
+    const state = emptyPlaceMemory();
+    const now = 100 * 24 * 60 * 60_000;
+    recordDeath(state, { at: now - 2 * 24 * 60 * 60_000, dimension: overworld, position: { x: 0, y: 0, z: 0 }, lost: [], nearMs: 0 });
+    for (let n = 0; n < 4; n++) recordDeath(state, { at: now - (4 - n) * 60_000, dimension: 'minecraft:the_nether', position: { x: n, y: 70, z: -n },
+      cause: 'Shannon was burnt to a crisp whilst fighting Blaze and a very long name', nearMs: 0,
+      lost: ['netherite_sword', 'diamond_helmet', 'blaze_rod', 'ender_pearl', 'obsidian', 'bread'].map((name, k) => ({ name, count: k + 1 })) });
+    const deaths = observedDeaths(state, now);
+    expect(JSON.stringify(deaths).length).toBeLessThanOrEqual(580);
+    expect(deaths.length).toBeGreaterThan(0);
+    expect(deaths.at(-1)).toEqual({ at: new Date(now - 60_000).toISOString(), position: { x: 3, y: 70, z: -3 }, dimension: 'the_nether',
+      cause: 'Shannon was burnt to a crisp whilst fighting Blaze and a ver', lostItems: ['netherite_sword×1', 'diamond_helmet×2', 'blaze_rod×3', 'ender_pearl×4', 'ほか2種'] });
+    // The one two days old is not among them.
+    expect(deaths.every(death => death.dimension === 'the_nether')).toBe(true);
+  });
+
   it('puts the last death in the observation as one line', () => {
     const { bot } = body();
     recordDeath(bot.placeMemory.state, { at: Date.now() - 60_000, dimension: overworld, position: { x: 20, y: 64, z: 10 }, lost: [{ name: 'bread', count: 2 }], nearMs: 60_000 });
     const world = captureWorldObservation(bot);
     expect(world.lastDeath).toMatch(/^1分前 overworld \(20,64,10\) 10m 東 落とした物: bread×2/);
+    expect(world.deaths).toEqual([expect.objectContaining({ position: { x: 20, y: 64, z: 10 }, dimension: overworld, lostItems: ['bread×2'] })]);
   });
 });

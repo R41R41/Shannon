@@ -298,8 +298,10 @@ export function captureWorldObservation(bot?: unknown): WorldObservation {
     ...(() => {
       // The last death, while its dropped items may still lie there or for half an hour: a cue to go back for them.
       try {
-        const line = (observedBot as { placeMemory?: { lastDeath?(): string | undefined } } | undefined)?.placeMemory?.lastDeath?.();
-        return line ? { lastDeath: line } : {};
+        const memory = (observedBot as { placeMemory?: { lastDeath?(): string | undefined; deaths?(): WorldObservation['deaths'] } } | undefined)?.placeMemory;
+        const line = memory?.lastDeath?.(), deaths = memory?.deaths?.();
+        // `deaths` is for the API's recall (a death raises its "died" cue); `lastDeath` is the line to act on.
+        return { ...(line ? { lastDeath: line } : {}), ...(deaths?.length ? { deaths } : {}) };
       } catch { return {}; }
     })(),
     ...(() => {

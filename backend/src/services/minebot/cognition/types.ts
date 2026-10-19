@@ -139,6 +139,8 @@ export interface WorldObservation {
   worn?: string;
   /** The last death in one line (how long ago, where, of what, what was dropped, how long it may lie there). */
   lastDeath?: string;
+  /** The deaths of the last day, newest last, as many as fit in 580 characters of JSON. */
+  deaths?: Array<{ at: string; position: { x: number; y: number; z: number }; dimension: string; cause?: string; lostItems: string[] }>;
   inventory: WorldInventoryStack[];
   activeEffects: Array<{ name: string; amplifier: number }>;
   nearbyEntities: NearbyEntityObservation[];

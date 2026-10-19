@@ -3,7 +3,8 @@ import path from 'node:path';
 import { Vec3 } from 'vec3';
 import { createLogger } from '../../../utils/logger.js';
 import {
-  describeLastDeath, describeSeenReach, DRAGON_PLACES, DROP_LIFETIME_MS, emptyPlaceMemory, forgetPlaces, makeRoom, markSeen, mergeRadius, parsePlaceMemory,
+  describeLastDeath, describeSeenReach, DRAGON_PLACES, DROP_LIFETIME_MS, emptyPlaceMemory, forgetPlaces, makeRoom, markSeen, mergeRadius, observedDeaths, parsePlaceMemory,
+  type ObservedDeath,
   placesDigest, recallPlaces, recordDeath, rememberPlace, seenReach, type PlaceKeep, type PlaceMemoryState, type RecalledPlace, type Sighting,
 } from '../../../modules/minecraftLearning/places.js';
 
@@ -78,6 +79,8 @@ export interface PlaceMemory {
   focus: 'dragon' | null;
   /** The last death as one line, while it matters (see describeLastDeath). */
   lastDeath(): string | undefined;
+  /** The deaths of the last day as records, newest last, within what a decision's summary keeps (see observedDeaths). */
+  deaths(): ObservedDeath[];
   /** How far the ground already seen reaches in each direction from the body, as one line (nearest new ground first). */
   unseen(): string;
   flush(): void;
@@ -216,6 +219,7 @@ export function installPlaceMemory(bot: MemoryBot, options: { file?: string } = 
     digest(limit = 10) { return placesDigest(memory.state, here(), dimension(), limit, memory.focus === 'dragon' ? { ensure: DRAGON_PLACES } : {}); },
     focus: null,
     lastDeath() { return describeLastDeath(memory.state, Date.now(), from()); },
+    deaths() { return observedDeaths(memory.state, Date.now()); },
     unseen() { return describeSeenReach(seenReach(memory.state, here(), dimension())); },
     flush,
     persistTo(target) {
