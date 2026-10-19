@@ -22,26 +22,64 @@ export interface Place {
   /** How much of it was seen together (blocks of a vein, open cells of a pool), when that means something. */
   count?: number;
   note?: string;
+  /**
+   * Why the place is never let go for room: `base` the first crafting table, bed or furnace the body set down in a
+   * dimension, `respawn` the bed it last set its respawn point at, `portal` a portal it went through (with its pair).
+   */
+  keep?: PlaceKeep;
   firstSeenAt: number;
   lastSeenAt: number;
+}
+export type PlaceKeep = 'base' | 'respawn' | 'portal';
+
+/** What a death left behind, kept as one record (the place of kind `death` is only where). */
+export interface DeathRecord {
+  at: number;
+  dimension: string;
+  position: PlacePosition;
+  /** The server's death message, as said in the chat ("Shannon was slain by Zombie"). */
+  cause?: string;
+  /** What was carried and worn just before, most first; empty when nothing was lost (keepInventory). */
+  lost: Array<{ name: string; count: number }>;
+  /** How long the body has been near enough for the dropped items to age (they last 5 minutes of that). */
+  nearMs: number;
+  /** The body went back and found nothing there any more (picked up, or gone). */
+  cleared?: boolean;
 }
 
 export interface PlaceMemoryState {
   version: 1;
   places: Place[];
+  /** The last few deaths, newest last. */
+  deaths?: DeathRecord[];
   /**
    * The ground the body has had in view, per dimension, as chunk columns ("cx,cz"). Not what is in them: only
    * that they were seen, so that "which way have I not been" has an answer.
    */
   seen?: Record<string, string[]>;
 }
-export interface Sighting { kind: string; dimension: string; position: PlacePosition; count?: number; note?: string }
+export interface Sighting { kind: string; dimension: string; position: PlacePosition; count?: number; note?: string; keep?: PlaceKeep }
 export interface RecalledPlace extends Place { distance: number; direction: string }
 
 export const emptyPlaceMemory = (): PlaceMemoryState => ({ version: 1, places: [] });
 
-/** Places kept at most; beyond it the kind with the most places loses the one seen longest ago. */
+/**
+ * Places kept at most; beyond it the kind with the most places gives one up: the one furthest off and longest unseen.
+ * Ore, water and lava filled all 1,500 within half an hour of a run (run 15: water 210, lava 67, the rest ore), and
+ * the oldest of the crowded kind went first, which near the body was the pool it had just walked past.
+ */
 export const MAX_PLACES = 1500;
+/**
+ * Kinds that are never given up for room: the ones a long journey comes back to (portals, villages, structures, the
+ * blaze spawner of a fortress). Only being found gone removes them.
+ */
+export const KEPT_KINDS: ReadonlySet<string> = new Set(['nether_portal', 'end_portal_frame', 'village', 'fortress', 'bastion', 'stronghold', 'spawner']);
+/** The newest deaths' places are kept too (the items lie there for a while). */
+export const KEPT_DEATHS = 5;
+/** Deaths kept as records. */
+export const MAX_DEATHS = 5;
+/** In weighing what to give up: a minute unseen counts as much as this many blocks off; another dimension, as far as this. */
+const BLOCKS_PER_MINUTE = 16, OTHER_DIMENSION = 1000;
 
 const distance = (a: PlacePosition, b: PlacePosition) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
 
@@ -50,7 +88,10 @@ const distance = (a: PlacePosition, b: PlacePosition) => Math.hypot(a.x - b.x, a
  * is exactly where it stands.
  */
 export function mergeRadius(kind: string): number {
-  if (kind === 'village' || kind === 'fortress') return 96;
+  if (kind === 'village' || kind === 'fortress' || kind === 'bastion' || kind === 'stronghold') return 96;
+  // One portal is one place: its cells (2×3 and up) and the twelve frames round an end portal.
+  if (kind === 'nether_portal') return 4;
+  if (kind === 'end_portal_frame') return 8;
   if (kind === 'water' || kind === 'lava') return 24;
   if (kind.endsWith('_ore') || kind === 'ancient_debris') return 8;
   if (kind === 'death') return 4;
@@ -74,31 +115,85 @@ function nearestOfKind(state: PlaceMemoryState, sighting: Sighting, radius: numb
   return best;
 }
 
-/** Adds a sighting: a place already known within the kind's radius is seen again, anything else is new. */
-export function rememberPlace(state: PlaceMemoryState, sighting: Sighting, now: number): Place {
+/**
+ * Adds a sighting: a place already known within the kind's radius is seen again, anything else is new. `from` is where
+ * the body is, when known: what is near it is the last to be given up for room.
+ */
+export function rememberPlace(state: PlaceMemoryState, sighting: Sighting, now: number, from?: { dimension: string; position: PlacePosition }): Place {
   const position = { x: Math.floor(sighting.position.x), y: Math.floor(sighting.position.y), z: Math.floor(sighting.position.z) };
   const known = nearestOfKind(state, { ...sighting, position }, mergeRadius(sighting.kind));
   if (known) {
     known.lastSeenAt = now;
     if (sighting.count !== undefined) known.count = Math.max(known.count ?? 0, sighting.count);
     if (sighting.note) known.note = sighting.note;
+    if (sighting.keep) known.keep = sighting.keep;
     return known;
   }
   const place: Place = { id: `${sighting.kind}@${sighting.dimension}:${position.x},${position.y},${position.z}`, kind: sighting.kind,
     dimension: sighting.dimension, position, ...(sighting.count !== undefined ? { count: sighting.count } : {}),
-    ...(sighting.note ? { note: sighting.note } : {}), firstSeenAt: now, lastSeenAt: now };
+    ...(sighting.note ? { note: sighting.note } : {}), ...(sighting.keep ? { keep: sighting.keep } : {}), firstSeenAt: now, lastSeenAt: now };
   state.places.push(place);
-  while (state.places.length > MAX_PLACES) {
-    const perKind = new Map<string, number>();
-    for (const entry of state.places) perKind.set(entry.kind, (perKind.get(entry.kind) ?? 0) + 1);
-    const crowded = [...perKind.entries()].sort((a, b) => b[1] - a[1])[0][0];
-    let oldest = -1;
-    for (let index = 0; index < state.places.length; index++) {
-      if (state.places[index].kind === crowded && (oldest < 0 || state.places[index].lastSeenAt < state.places[oldest].lastSeenAt)) oldest = index;
-    }
-    state.places.splice(oldest, 1);
-  }
+  if (state.places.length > MAX_PLACES) makeRoom(state, now, from);
   return place;
+}
+
+/** Whether a place is kept whatever the room (see KEPT_KINDS, Place.keep). */
+function keptPlaces(state: PlaceMemoryState): Set<Place> {
+  const kept = new Set(state.places.filter(place => place.keep || KEPT_KINDS.has(place.kind)));
+  for (const death of state.places.filter(place => place.kind === 'death').sort((a, b) => b.lastSeenAt - a.lastSeenAt).slice(0, KEPT_DEATHS)) kept.add(death);
+  return kept;
+}
+
+/** Gives up places until the memory fits: of the kind with the most places, the one furthest off and longest unseen. */
+function makeRoom(state: PlaceMemoryState, now: number, from?: { dimension: string; position: PlacePosition }): void {
+  const kept = keptPlaces(state);
+  while (state.places.length > MAX_PLACES) {
+    const free = state.places.filter(place => !kept.has(place));
+    // Nothing left to give up but what is kept (it does not happen in play): the longest unseen goes.
+    const pool = free.length ? free : state.places;
+    const perKind = new Map<string, number>();
+    for (const entry of pool) perKind.set(entry.kind, (perKind.get(entry.kind) ?? 0) + 1);
+    const crowded = [...perKind.entries()].sort((a, b) => b[1] - a[1])[0][0];
+    const weight = (place: Place) => (now - place.lastSeenAt) / 60_000 * BLOCKS_PER_MINUTE
+      + (!from ? 0 : place.dimension === from.dimension ? distance(place.position, from.position) : OTHER_DIMENSION);
+    let worst: Place | null = null;
+    for (const place of pool) if (place.kind === crowded && (!worst || weight(place) > weight(worst))) worst = place;
+    state.places.splice(state.places.indexOf(worst!), 1);
+  }
+}
+
+/** Notes a death; the newest few are kept. */
+export function recordDeath(state: PlaceMemoryState, death: DeathRecord): DeathRecord {
+  const deaths = state.deaths ??= [];
+  deaths.push(death);
+  if (deaths.length > MAX_DEATHS) deaths.splice(0, deaths.length - MAX_DEATHS);
+  return death;
+}
+
+/** Dropped items last this long while their chunk is loaded (6000 ticks). */
+export const DROP_LIFETIME_MS = 5 * 60_000;
+
+/**
+ * The last death as one line for the observation (under 200 characters, the length a decision's summary keeps):
+ * how long ago, where, of what, what was dropped and how long it may still lie there. Said for half an hour, or for
+ * as long as the dropped items may still be there.
+ */
+export function describeLastDeath(state: PlaceMemoryState, now: number, here?: { dimension: string; position: PlacePosition }): string | undefined {
+  const death = state.deaths?.at(-1);
+  if (!death) return undefined;
+  const left = Math.max(0, DROP_LIFETIME_MS - death.nearMs);
+  const waiting = death.lost.length > 0 && !death.cleared && left > 0;
+  if (now - death.at > 30 * 60_000 && !waiting) return undefined;
+  const minutes = Math.max(0, Math.round((now - death.at) / 60_000));
+  const where = `${death.dimension.replace(/^minecraft:/, '')} (${death.position.x},${death.position.y},${death.position.z})`
+    + (here && here.dimension === death.dimension
+      ? ` ${Math.round(distance(here.position, death.position))}m ${compassDirection(here.position, death.position)}` : '');
+  const items = death.lost.slice(0, 4).map(item => `${item.name}×${item.count}`).join(', ') + (death.lost.length > 4 ? ` ほか${death.lost.length - 4}種` : '');
+  const what = death.lost.length === 0 ? '何も落としていない'
+    : death.cleared ? `落とした物（${items}）は、戻った時にはもう無かった`
+    : left === 0 ? `落とした物（${items}）は消えた見込み`
+    : `落とした物: ${items}。消えるまで最長約${Math.ceil(left / 60_000)}分（近くにいる間だけ減る）→拾いに戻れる`;
+  return `${minutes}分前 ${where}${death.cause ? `「${death.cause.slice(0, 50)}」` : ''} ${what}`.slice(0, 200);
 }
 
 /** Removes the places for which `gone` holds (looked at again and no longer there). Returns how many. */
@@ -134,21 +229,52 @@ export function recallPlaces(state: PlaceMemoryState, query: PlaceQuery): Recall
  * vein of coal, which a search of what is loaded finds anyway. Everything else is there to be recalled.
  */
 const SHORT_NOTE = 24;
-export function placesDigest(state: PlaceMemoryState, from: PlacePosition, dimension: string, limit = 10): Record<string, string> {
+/** A chest's contents are shown this far in a line. */
+const CONTENTS_NOTE = 40;
+/**
+ * At most this many characters of JSON: a decision's summary drops a part longer than 600 whole (the API's
+ * minecraftObservationSummary), and the remembered places went from every decision as soon as there were ten kinds.
+ */
+export const DIGEST_CHARACTERS = 560;
+/** What a dragon task is always told of, ahead of the rest (the way there goes through each). */
+export const DRAGON_PLACES: readonly string[] = ['base', 'nether_portal', 'stronghold', 'end_portal_frame', 'fortress', 'village'];
+
+/** The note as a line shows it: a word, a portal's pair, the start of a chest's contents; a sentence stays for recall-places. */
+function shownNote(note: string | undefined): string {
+  if (!note) return '';
+  if (note.startsWith('↔')) return ` ${note}`;
+  if (note.startsWith('中身:')) return ` ${note.length > CONTENTS_NOTE ? `${note.slice(0, CONTENTS_NOTE)}…` : note}`;
+  return note.length <= SHORT_NOTE ? ` ${note}` : '';
+}
+
+export function placesDigest(state: PlaceMemoryState, from: PlacePosition, dimension: string, limit = 10,
+  options: { ensure?: readonly string[]; maxCharacters?: number } = {}): Record<string, string> {
   const nearest = new Map<string, RecalledPlace>();
   const known = new Map<string, number>();
+  let base: RecalledPlace | undefined;
   for (const place of recallPlaces(state, { from, dimension, limit: Number.MAX_SAFE_INTEGER })) {
     if (!nearest.has(place.kind)) nearest.set(place.kind, place);
     known.set(place.kind, (known.get(place.kind) ?? 0) + 1);
+    if (!base && (place.keep === 'base' || place.keep === 'respawn')) base = place;
   }
-  const kept = [...nearest.values()].sort((a, b) => known.get(a.kind)! - known.get(b.kind)! || a.distance - b.distance).slice(0, limit);
+  // First what the task needs (in its order), then the kinds known fewest of: the one furnace and the one village are worth
+  // a line before the two hundredth vein of coal.
+  const ensured = (options.ensure ?? []).flatMap(kind => kind === 'base' ? (base ? [{ key: 'base', place: base }] : [])
+    : nearest.has(kind) ? [{ key: kind, place: nearest.get(kind)! }] : []);
+  const rest = [...nearest.values()].filter(place => !ensured.some(entry => entry.key === place.kind))
+    .sort((a, b) => known.get(a.kind)! - known.get(b.kind)! || a.distance - b.distance).map(place => ({ key: place.kind, place }));
+  const line = (key: string, place: RecalledPlace) => `${place.distance}m ${place.direction} (${place.position.x},${place.position.y},${place.position.z})`
+    + (key === 'base' ? ` ${place.kind}` : '') + (place.count && place.count > 1 ? ` ×${place.count}` : '') + shownNote(place.note);
+  const chosen: Array<{ key: string; place: RecalledPlace }> = [];
+  let used = 2;
+  for (const entry of [...ensured, ...rest]) {
+    if (chosen.length >= limit) break;
+    const cost = JSON.stringify(entry.key).length + JSON.stringify(line(entry.key, entry.place)).length + 2;
+    if (used + cost > (options.maxCharacters ?? DIGEST_CHARACTERS)) continue;
+    chosen.push(entry); used += cost;
+  }
   const digest: Record<string, string> = {};
-  for (const place of kept.sort((a, b) => a.distance - b.distance)) {
-    digest[place.kind] = `${place.distance}m ${place.direction} (${place.position.x},${place.position.y},${place.position.z})`
-      + (place.count && place.count > 1 ? ` ×${place.count}` : '')
-      // A word about the place, when it is one (what a spawner makes); a sentence stays for recall-places.
-      + (place.note && place.note.length <= SHORT_NOTE ? ` ${place.note}` : '');
-  }
+  for (const entry of chosen.sort((a, b) => a.place.distance - b.place.distance)) digest[entry.key] = line(entry.key, entry.place);
   return digest;
 }
 
@@ -217,5 +343,9 @@ export function parsePlaceMemory(value: unknown): PlaceMemoryState {
       if (Array.isArray(columns)) seen[dimension] = columns.filter(column => typeof column === 'string' && /^-?\d+,-?\d+$/.test(column)).slice(-MAX_SEEN_COLUMNS);
     }
   }
-  return { version: 1, places: places.slice(-MAX_PLACES), ...(Object.keys(seen).length ? { seen } : {}) };
+  const point = (p: any) => !!p && finite(p.x) && finite(p.y) && finite(p.z);
+  const deaths = (Array.isArray(input.deaths) ? input.deaths : []).filter((death): death is DeathRecord => !!death && finite(death.at)
+    && typeof death.dimension === 'string' && point(death.position) && finite(death.nearMs) && Array.isArray(death.lost)
+    && death.lost.every(item => !!item && typeof item.name === 'string' && finite(item.count))).slice(-MAX_DEATHS);
+  return { version: 1, places: places.slice(-MAX_PLACES), ...(deaths.length ? { deaths } : {}), ...(Object.keys(seen).length ? { seen } : {}) };
 }

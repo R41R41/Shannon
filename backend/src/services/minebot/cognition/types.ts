@@ -137,6 +137,8 @@ export interface WorldObservation {
   heldItem: string | null;
   /** What is worn and in the off hand, with wear (live body only): the inventory lists the pack's slots, not these. */
   worn?: string;
+  /** The last death in one line (how long ago, where, of what, what was dropped, how long it may lie there). */
+  lastDeath?: string;
   inventory: WorldInventoryStack[];
   activeEffects: Array<{ name: string; amplifier: number }>;
   nearbyEntities: NearbyEntityObservation[];

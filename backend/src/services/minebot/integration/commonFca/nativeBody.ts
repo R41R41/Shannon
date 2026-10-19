@@ -65,8 +65,13 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
    * ordinary one: the next request may be anything (fishing after the dragon), and its first decision sees every tool.
    */
   get skills() {
-    if (this.dragonTask && this.running === 0 && this.now() - this.idleSince > DRAGON_CATALOG_IDLE_MS) this.dragonTask = false;
+    if (this.dragonTask && this.running === 0 && this.now() - this.idleSince > DRAGON_CATALOG_IDLE_MS) this.setDragonTask(false);
     return this.dragonTask ? this.offeredForDragon : this.offered;
+  }
+  /** The task's kind also says which remembered places the observation puts first (the dragon's: base, portals, structures). */
+  private setDragonTask(dragon: boolean) {
+    this.dragonTask = dragon;
+    if (this.bot.placeMemory) this.bot.placeMemory.focus = dragon ? 'dragon' : null;
   }
   private readonly goalEvidence: NativeGoalEvidence;
   private sequence = 0;
@@ -121,7 +126,7 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
   }
   async execute(command: Command, signal: AbortSignal): Promise<Receipt> {
     // The task each command carries says which catalog the next decisions are offered.
-    if (typeof command.context?.goal === 'string') this.dragonTask = isDragonGoal(command.context.goal);
+    if (typeof command.context?.goal === 'string') this.setDragonTask(isDragonGoal(command.context.goal));
     this.running++;
     try { return await this.executeCommand(command, signal); }
     finally { this.running--; this.idleSince = this.now(); }

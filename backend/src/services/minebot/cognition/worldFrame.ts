@@ -296,6 +296,13 @@ export function captureWorldObservation(bot?: unknown): WorldObservation {
       } catch { return {}; }
     })(),
     ...(() => {
+      // The last death, while its dropped items may still lie there or for half an hour: a cue to go back for them.
+      try {
+        const line = (observedBot as { placeMemory?: { lastDeath?(): string | undefined } } | undefined)?.placeMemory?.lastDeath?.();
+        return line ? { lastDeath: line } : {};
+      } catch { return {}; }
+    })(),
+    ...(() => {
       try {
         const built = builtAroundStatus(observedBot);
         return built ? { builtAround: built } : {};

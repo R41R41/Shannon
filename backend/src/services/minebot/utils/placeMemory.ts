@@ -3,8 +3,8 @@ import path from 'node:path';
 import { Vec3 } from 'vec3';
 import { createLogger } from '../../../utils/logger.js';
 import {
-  describeSeenReach, emptyPlaceMemory, forgetPlaces, markSeen, mergeRadius, parsePlaceMemory, placesDigest, recallPlaces, rememberPlace, seenReach,
-  type PlaceMemoryState, type RecalledPlace, type Sighting,
+  describeLastDeath, describeSeenReach, DRAGON_PLACES, DROP_LIFETIME_MS, emptyPlaceMemory, forgetPlaces, markSeen, mergeRadius, parsePlaceMemory,
+  placesDigest, recallPlaces, recordDeath, rememberPlace, seenReach, type PlaceKeep, type PlaceMemoryState, type RecalledPlace, type Sighting,
 } from '../../../modules/minecraftLearning/places.js';
 
 const log = createLogger('Minebot:PlaceMemory');
@@ -35,24 +35,51 @@ const NEARBY_REREAD_TICKS = 200;
 const VILLAGE_SAMPLE_TICKS = 100;
 const SAVE_INTERVAL_MS = 30_000;
 const FACES: Array<[number, number, number]> = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+/** What a body sets down to live by: the first of each it places in a dimension is its base. */
+const BASE_KINDS = new Set(['crafting_table', 'furnace', 'bed']);
+/** Containers whose contents are noted when opened (the kinds the reading of columns knows them by). */
+const CONTAINERS: Record<string, string> = { chest: 'chest', barrel: 'barrel' };
+/**
+ * Dropped items age only while their chunk is ticked: within the server's simulation distance of a player (10 chunks
+ * by default). Further off, the five minutes stand still.
+ */
+const DROPS_AGE_WITHIN = 160;
+/** How long after going through a portal the arrival is taken as its other end. */
+const PORTAL_PAIR_MS = 20_000;
+/** A death message is matched to a death this close in time (the chat and the health come in either order). */
+const DEATH_MESSAGE_MS = 10_000;
 
 interface ColumnEntry { chunkX: number | string; chunkZ: number | string; column: any }
+interface ItemLike { name?: string; count?: number }
 interface MemoryBot {
   entity?: { position: Vec3 };
   game?: { dimension?: unknown };
+  username?: string;
+  health?: number;
   registry: { blocksByName: Record<string, { name?: string; minStateId?: number; maxStateId?: number } | undefined> };
   world?: { getColumns?(): ColumnEntry[]; getColumn?(chunkX: number, chunkZ: number): any; getBlockStateId?(position: Vec3): number };
-  blockAt?(position: Vec3): { stateId?: number } | null;
+  blockAt?(position: Vec3): { stateId?: number; name?: string } | null;
+  blockAtCursor?(maxDistance?: number): { name?: string; position: Vec3 } | null;
+  placeBlock?(reference: { position: Vec3 }, face: Vec3, ...rest: unknown[]): Promise<unknown>;
+  inventory?: { slots?: Array<ItemLike | null> };
+  entities?: Record<string, { name?: string; position?: Vec3 } | undefined>;
+  currentWindow?: unknown;
   landmarks?: Array<{ kind: string; position: { x: number; y: number; z: number }; evidence?: string }>;
   placeMemory?: PlaceMemory;
   on?(event: string, listener: (...args: any[]) => void): unknown;
+  removeListener?(event: string, listener: (...args: any[]) => void): unknown;
 }
 
 export interface PlaceMemory {
   state: PlaceMemoryState;
-  remember(kind: string, position: { x: number; y: number; z: number }, extra?: { count?: number; note?: string }): void;
+  remember(kind: string, position: { x: number; y: number; z: number }, extra?: { count?: number; note?: string; keep?: PlaceKeep }): void;
   recall(kind?: string, limit?: number): RecalledPlace[];
+  /** The nearest of each kind, one short line each, within what a decision's summary keeps (see placesDigest). */
   digest(limit?: number): Record<string, string>;
+  /** The task's need: `dragon` puts the base, the portals, the stronghold, the fortress and the village first in the digest. */
+  focus: 'dragon' | null;
+  /** The last death as one line, while it matters (see describeLastDeath). */
+  lastDeath(): string | undefined;
   /** How far the ground already seen reaches in each direction from the body, as one line (nearest new ground first). */
   unseen(): string;
   flush(): void;
@@ -183,11 +210,14 @@ export function installPlaceMemory(bot: MemoryBot, options: { file?: string } = 
       dirty = false; savedAt = Date.now();
     } catch (error) { log.warn(`場所の記憶を保存できなかった: ${String(error)}`); }
   };
+  const from = () => ({ dimension: dimension(), position: here() });
   const memory: PlaceMemory = bot.placeMemory = {
     state,
-    remember(kind, position, extra = {}) { rememberPlace(memory.state, { kind, dimension: dimension(), position, ...extra }, Date.now()); dirty = true; },
+    remember(kind, position, extra = {}) { rememberPlace(memory.state, { kind, dimension: dimension(), position, ...extra }, Date.now(), from()); dirty = true; },
     recall(kind, limit = 10) { return recallPlaces(memory.state, { from: here(), dimension: dimension(), kind, limit }); },
-    digest(limit = 10) { return placesDigest(memory.state, here(), dimension(), limit); },
+    digest(limit = 10) { return placesDigest(memory.state, here(), dimension(), limit, memory.focus === 'dragon' ? { ensure: DRAGON_PLACES } : {}); },
+    focus: null,
+    lastDeath() { return describeLastDeath(memory.state, Date.now(), from()); },
     unseen() { return describeSeenReach(seenReach(memory.state, here(), dimension())); },
     flush,
     persistTo(target) {
@@ -196,6 +226,7 @@ export function installPlaceMemory(bot: MemoryBot, options: { file?: string } = 
       memory.state = load(target);
       const now = Date.now();
       for (const place of before.places) rememberPlace(memory.state, place, now);
+      for (const death of before.deaths ?? []) recordDeath(memory.state, death);
       for (const [where, columns] of Object.entries(before.seen ?? {})) {
         for (const column of columns) { const [chunkX, chunkZ] = column.split(',').map(Number); markSeen(memory.state, where, chunkX, chunkZ); }
       }
@@ -220,7 +251,7 @@ export function installPlaceMemory(bot: MemoryBot, options: { file?: string } = 
       && place.position.x >= baseX && place.position.x < baseX + 16 && place.position.z >= baseZ && place.position.z < baseZ + 16
       && !sightings.some(sighting => sighting.kind === place.kind
         && Math.hypot(sighting.position.x - place.position.x, sighting.position.y - place.position.y, sighting.position.z - place.position.z) <= mergeRadius(place.kind)));
-    for (const sighting of sightings) rememberPlace(memory.state, sighting, now);
+    for (const sighting of sightings) rememberPlace(memory.state, sighting, now, from());
     if (markSeen(memory.state, where, done.chunkX, done.chunkZ) || sightings.length || forgotten) dirty = true;
     memory.stats.columnsRead++; memory.stats.forgotten += forgotten;
     memory.stats.totalReadMs += done.startedReadMs;
@@ -250,14 +281,155 @@ export function installPlaceMemory(bot: MemoryBot, options: { file?: string } = 
   };
 
   bot.on('chunkColumnLoad', (corner: Vec3) => { if (corner) enqueue(Math.floor(corner.x / 16), Math.floor(corner.z / 16)); });
-  bot.on('death', () => { if (bot.entity?.position) memory.remember('death', bot.entity.position); });
+  // What is carried and worn, taken while alive: at the moment of death the pack may already be emptied.
+  let carried: Array<{ name: string; count: number }> = [];
+  const takeStock = () => {
+    const slots = bot.inventory?.slots;
+    if (!Array.isArray(slots) || !(Number(bot.health) > 0)) return;
+    const counts = new Map<string, number>();
+    for (let slot = 1; slot <= 45 && slot < slots.length; slot++) {
+      const item = slots[slot];
+      if (item?.name && Number(item.count) > 0) counts.set(item.name, (counts.get(item.name) ?? 0) + Number(item.count));
+    }
+    // Fewest first: the one pickaxe and the armour before the stack of stone.
+    carried = [...counts].map(([name, count]) => ({ name, count })).sort((a, b) => a.count - b.count || a.name.localeCompare(b.name));
+  };
+  let deathMessage: { text: string; at: number } | null = null;
+  let deathAwaitingRespawn = false;
+  bot.on('death', () => {
+    const position = bot.entity?.position;
+    if (!position) return;
+    memory.remember('death', position);
+    const now = Date.now();
+    recordDeath(memory.state, { at: now, dimension: dimension(), position: { x: Math.floor(position.x), y: Math.floor(position.y), z: Math.floor(position.z) },
+      lost: [...carried], nearMs: 0, ...(deathMessage && now - deathMessage.at < DEATH_MESSAGE_MS ? { cause: deathMessage.text } : {}) });
+    deathMessage = null; deathAwaitingRespawn = true; dirty = true;
+  });
+  bot.on('message', (message: any) => {
+    const key = String(message?.translate ?? '');
+    try {
+      if (key.startsWith('death.')) {
+        const victim = message?.with?.[0];
+        const name = String(victim?.toString?.() ?? victim?.text ?? '');
+        if (bot.username && name && name !== bot.username) return;
+        const text = String(message?.toString?.() ?? key).slice(0, 80);
+        const latest = memory.state.deaths?.at(-1);
+        if (latest && !latest.cause && Date.now() - latest.at < DEATH_MESSAGE_MS) { latest.cause = text; dirty = true; }
+        else deathMessage = { text, at: Date.now() };
+      } else if (key === 'block.minecraft.set_spawn') {
+        // The bed the body used (activate-block by day, or sleep): the one it looks at, else the nearest beside it.
+        const looked = bot.blockAtCursor?.(6);
+        const bed = looked?.name?.endsWith('_bed') ? looked.position : nearbyBed();
+        if (bed) setRespawn(bed);
+      }
+    } catch (error) { log.warn(`チャットから場所の記憶を更新できなかった: ${String(error)}`); }
+  });
+  const nearbyBed = (): Vec3 | null => {
+    const at = bot.entity?.position?.floored?.();
+    if (!at || !bot.blockAt) return null;
+    for (let dx = -2; dx <= 2; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -2; dz <= 2; dz++) {
+      const position = at.offset(dx, dy, dz);
+      if (bot.blockAt(position)?.name?.endsWith('_bed')) return position;
+    }
+    return null;
+  };
+  /** One bed holds the respawn point: the one before it stays a kept bed, no longer the respawn. */
+  const setRespawn = (position: Vec3) => {
+    for (const place of memory.state.places) if (place.keep === 'respawn') { place.keep = 'base'; if (place.note === 'リスポーン地点') delete place.note; }
+    memory.remember('bed', position, { keep: 'respawn', note: 'リスポーン地点' });
+  };
+  // What the body sets down itself: the first crafting table, bed and furnace in a dimension are its base.
+  const placeBlock = bot.placeBlock;
+  if (typeof placeBlock === 'function') {
+    bot.placeBlock = async (reference, face, ...rest) => {
+      try { return await placeBlock.call(bot, reference, face, ...rest); }
+      finally {
+        try {
+          const position = reference?.position?.plus?.(face);
+          const name = position ? bot.blockAt?.(position)?.name : undefined;
+          const kind = name?.endsWith('_bed') ? 'bed' : name;
+          if (position && kind && BASE_KINDS.has(kind)) {
+            const first = !memory.state.places.some(place => place.kind === kind && place.dimension === dimension() && (place.keep === 'base' || place.keep === 'respawn'));
+            memory.remember(kind, position, first ? { keep: 'base', note: '拠点' } : {});
+          }
+        } catch { /* the placement's own answer stands */ }
+      }
+    };
+  }
+  // A chest's contents, noted on the place when it is opened and again when it is closed (after taking or putting).
+  let containerWatch: (() => void) | null = null;
+  bot.on('windowOpen', (window: any) => {
+    containerWatch?.();
+    const block = bot.blockAtCursor?.(6);
+    const kind = block?.name ? CONTAINERS[block.name] : undefined;
+    if (!block || !kind) return;
+    const position = block.position;
+    const note = () => {
+      try {
+        const counts = new Map<string, number>();
+        for (const item of (window?.containerItems?.() ?? []) as ItemLike[]) if (item?.name) counts.set(item.name, (counts.get(item.name) ?? 0) + Number(item.count ?? 0));
+        const items = [...counts].sort((a, b) => b[1] - a[1]);
+        memory.remember(kind, position, { note: items.length ? `中身: ${items.slice(0, 6).map(([name, count]) => `${name}×${count}`).join(' ')}${items.length > 6 ? ` ほか${items.length - 6}種` : ''}` : '中身: 空' });
+      } catch { /* a window without contents says nothing */ }
+    };
+    // The items come a moment after the window itself.
+    const read = setTimeout(() => { if (bot.currentWindow === window) note(); }, 500);
+    const onClose = (closed: unknown) => { if (closed === window) { note(); containerWatch?.(); } };
+    containerWatch = () => { clearTimeout(read); bot.removeListener?.('windowClose', onClose); containerWatch = null; };
+    bot.on?.('windowClose', onClose);
+  });
+  // A portal gone through: its two ends, each with the other, kept.
+  let lastPortal: { dimension: string; position: Vec3; at: number } | null = null;
+  const pairPortal = () => {
+    const arrived = dimension(), position = bot.entity?.position;
+    if (!lastPortal || !position || lastPortal.dimension === arrived || Date.now() - lastPortal.at > PORTAL_PAIR_MS) return;
+    const there = position.floored(), back = lastPortal.position;
+    const short = (name: string) => name.replace(/^minecraft:/, '').replace(/^the_/, '');
+    const now = Date.now();
+    rememberPlace(memory.state, { kind: 'nether_portal', dimension: lastPortal.dimension, position: back, keep: 'portal',
+      note: `↔${short(arrived)}(${there.x},${there.y},${there.z})` }, now);
+    rememberPlace(memory.state, { kind: 'nether_portal', dimension: arrived, position: there, keep: 'portal',
+      note: `↔${short(lastPortal.dimension)}(${back.x},${back.y},${back.z})` }, now);
+    lastPortal = null; dirty = true;
+  };
+  // A death's items: they age only near the body, and are gone once it has been back and found none.
+  let agedAt = Date.now();
+  const ageDrops = () => {
+    const now = Date.now(), elapsed = Math.min(2000, now - agedAt);
+    agedAt = now;
+    const death = memory.state.deaths?.at(-1), position = bot.entity?.position;
+    if (!death || !position || death.cleared || !death.lost.length || death.nearMs >= DROP_LIFETIME_MS || death.dimension !== dimension()) return;
+    const away = Math.hypot(position.x - death.position.x, position.y - death.position.y, position.z - death.position.z);
+    if (away <= DROPS_AGE_WITHIN) { death.nearMs = Math.min(DROP_LIFETIME_MS, death.nearMs + elapsed); dirty = true; }
+    if (away <= 4 && Number(bot.health) > 0 && now - death.at > 5000
+      && !Object.values(bot.entities ?? {}).some(entity => entity?.name === 'item' && entity.position
+        && Math.hypot(entity.position.x - death.position.x, entity.position.y - death.position.y, entity.position.z - death.position.z) <= 8)) {
+      death.cleared = true; dirty = true;
+    }
+  };
   const seedLoadedColumns = () => {
     for (const entry of bot.world?.getColumns?.() ?? []) enqueue(Number(entry.chunkX), Number(entry.chunkZ));
   };
   bot.on('login', seedLoadedColumns);
   // Spawn also covers plugin installation before login and a later respawn/dimension switch.
   // An unfinished column belongs to the previous world, never the new dimension.
-  bot.on('spawn', () => { job = null; queue.clear(); seedLoadedColumns(); });
+  bot.on('spawn', () => {
+    job = null; queue.clear(); seedLoadedColumns();
+    try { pairPortal(); } catch { /* the memory is optional */ }
+    if (deathAwaitingRespawn) {
+      deathAwaitingRespawn = false;
+      // keepInventory: the pack comes back with the body, so nothing lies at the place of death.
+      setTimeout(() => {
+        try {
+          const death = memory.state.deaths?.at(-1);
+          const lostCount = death?.lost.reduce((sum, item) => sum + item.count, 0) ?? 0;
+          const slots = bot.inventory?.slots ?? [];
+          const have = slots.slice(1, 46).reduce((sum, item) => sum + (item?.name ? Number(item.count ?? 0) : 0), 0);
+          if (death && lostCount > 0 && have * 2 >= lostCount) { death.lost = []; dirty = true; }
+        } catch { /* unknown stays as it was */ }
+      }, 2000);
+    }
+  });
   bot.on('end', () => { job = null; queue.clear(); flush(); });
   seedLoadedColumns();
   let tick = 0;
@@ -268,6 +440,10 @@ export function installPlaceMemory(bot: MemoryBot, options: { file?: string } = 
         const chunkX = Math.floor(bot.entity.position.x / 16), chunkZ = Math.floor(bot.entity.position.z / 16);
         for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) enqueue(chunkX + dx, chunkZ + dz);
       }
+      if (tick % 5 === 0 && bot.entity?.position && bot.blockAt?.(bot.entity.position.floored())?.name === 'nether_portal') {
+        lastPortal = { dimension: dimension(), position: bot.entity.position.floored(), at: Date.now() };
+      }
+      if (tick % 20 === 0) { takeStock(); ageDrops(); }
       if (tick % VILLAGE_SAMPLE_TICKS === 0) {
         for (const landmark of bot.landmarks ?? []) memory.remember(landmark.kind, landmark.position, landmark.evidence ? { note: landmark.evidence } : {});
       }
