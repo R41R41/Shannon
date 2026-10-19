@@ -8,7 +8,8 @@
  */
 const BREAK_STATUS: Record<number, 'hand' | 'off-hand' | 'armor'> = { 47: 'hand', 48: 'off-hand', 49: 'armor', 50: 'armor', 51: 'armor', 52: 'armor' };
 
-export interface ToolBreak { name: string; at: number }
+/** `part`: what broke, the hand's tool, the off hand's (a shield) or a piece of armour. */
+export interface ToolBreak { name: string; at: number; part?: 'hand' | 'off-hand' | 'armor' }
 
 interface WearBot {
   entity?: { id?: number };
@@ -99,7 +100,7 @@ export function installToolWearMonitor(bot: WearBot): void {
     const part = BREAK_STATUS[packet.entityStatus];
     if (!part || packet.entityId !== bot.entity?.id) return;
     const name = part === 'hand' ? held : part === 'off-hand' ? offhand : null;
-    const entry = { name: name ?? (part === 'armor' ? '防具' : '手に持っていた道具'), at: Date.now() };
+    const entry: ToolBreak = { name: name ?? (part === 'armor' ? '防具' : '手に持っていた道具'), at: Date.now(), part };
     if (part === 'hand') held = null; else if (part === 'off-hand') offhand = null;
     breaks.push(entry);
     if (breaks.length > 32) breaks.splice(0, breaks.length - 32);

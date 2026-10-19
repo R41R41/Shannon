@@ -5,6 +5,7 @@ import { activeActionCapabilities, executeAction } from '../../src/services/mine
 import { floorConfig } from '../../src/services/minebot/utils/floorConfig.js';
 import { ESCAPE_SKILLS, fleeHeading, fleeHeadingPlan, fleeHeadingSafe, fleeStart, floorEatChoice, installFloorReflexes, runLowHealthFlee, type FloorBody, type FloorState } from '../../src/services/minebot/utils/floorReflexes.js';
 import { ensureReflexLedger } from '../../src/services/minebot/utils/reflexLedger.js';
+import { beginEngagement } from '../../src/services/minebot/utils/engagement.js';
 
 // P8 fifth review: M1 (a meal never cuts the API's escape), M2 (steps and slopes), L1 (walled-off enemies), L2 (valuable food), L3 (the avoid set),
 // L4 (heading hysteresis), L6 (top-up and the control loop's lease).
@@ -107,6 +108,27 @@ describe('M1: a meal does not cut the API\'s own escape and shelter commands (de
     };
     expect(await arrow('default')).toBe(false);
     expect(await arrow('floor')).toBe(true);
+    // A fight of the planner's choosing is not cut by an arrow's step aside either (engagement, told under common FCA since run 18);
+    // the same fight with no engagement told is (the step aside takes the body).
+    // Only a fight against archers (or whatever is hostile): a fight with a zombie still steps out of a skeleton's arrow.
+    const fight = async (engaged: boolean | string[]) => {
+      const { bot } = fixture(heights(() => 64), { health: 20 });
+      bot.entities = { 3: { id: 3, name: 'arrow', position: new Vec3(8, 66, 0.5), velocity: new Vec3(-2, 0, 0) } };
+      installFloorReflexes(bot, floorConfig({}));
+      const end = engaged ? beginEngagement(bot, engaged === true ? ['skeleton'] : engaged) : () => {};
+      const command = executeAction(bot, 'attack-continuously', 5000, () => new Promise(resolve => setTimeout(() => resolve({ success: true, result: 'ok' }), 200)), { priority: 0 });
+      await running(bot, 'attack-continuously'); tick(bot);
+      bot.entities[3].position = new Vec3(6, 66, 0.5); tick(bot);
+      const result: any = await command;
+      end();
+      return result.success === false;
+    };
+    expect(await fight(true)).toBe(false);
+    expect(await fight(false)).toBe(true);
+    expect(await fight(['*'])).toBe(false);
+    expect(await fight(['zombie'])).toBe(true);
+    expect(await fight(['blaze'])).toBe(true);     // shoots, but not arrows
+    expect(await fight(['stray'])).toBe(false);
     const lit: unknown[] = []; lit[16] = 1;
     const creeperNear = (straightRun: boolean) => {
       const { bot } = fixture(heights(() => 64), { health: 20 });

@@ -11,6 +11,7 @@ import { isThreatEntity, type ThreatBody } from './hostileMobHints.js';
 import { ensureReflexLedger, type ReflexKind, type ReflexOutcome } from './reflexLedger.js';
 import { threatExposure } from './threatExposure.js';
 import { holdsWater } from './waterBlocks.js';
+import { engagedWithAny } from './engagement.js';
 
 const log = createLogger('Minebot:FloorReflexes');
 
@@ -82,6 +83,8 @@ const FLEE_WINDOW_MS = 20_000;
 const FLEE_MAX_IN_WINDOW = 2;
 /** Kinds that hurt from afar: the flee starts earlier for them (what the legacy 16 m watch was for). */
 const SHOOTERS = new Set(['skeleton', 'stray', 'bogged', 'pillager', 'blaze', 'ghast', 'witch', 'evoker', 'breeze']);
+/** The kinds whose shots are arrows: a fight with one of them is not cut by an arrow's step aside (a blaze fight still is). */
+const ARCHERS = ['skeleton', 'stray', 'bogged', 'pillager', 'piglin'];
 /**
  * Skills that are already getting the body out of danger: no floor reflex (the flee, a meal, an armour change, an arrow step-aside) cuts one of
  * these, except starvation (food 3 or less) and a lit creeper. The API's DEFENSIVE_SKILLS (`mind/action/reflex/fastJudgment.ts`) that escape
@@ -928,9 +931,14 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
   // A lit creeper is stepped back from whatever runs, except flee-from's straight run away (`fleeStraightRun`, set on the body while
   // it lasts): a one-second step cut that off and handed the body back standing (run 17: interrupted, then caught at 3 m). The route
   // search after the run is still cut: stuck there, the step back is the last thing between the body and the blast.
+  // An arrow's step aside does not cut a fight of the planner's choosing against archers either (engagement with a kind that shoots,
+  // or with whatever is hostile: attack-*, combat, shoot-bow, accept-threat): the fight moves the body itself, and a step that ends
+  // the command hands the body back standing in the archer's line while the next decision is made. A fight with a zombie is still
+  // stepped out of for a skeleton's arrow (a kind not taken on is an emergency as before). The low-health flee and a lit creeper
+  // still come first.
   const retreatAllow = config.wideThreats || budget
     ? (kind: 'creeper' | 'arrow') => kind === 'creeper' ? !(config.wideThreats && (bot as { fleeStraightRun?: boolean }).fleeStraightRun === true)
-      : ((!config.wideThreats || !escapeRunning(bot)) && (!budget || budget.allow('arrow', bot.health ?? 20)))
+      : ((!config.wideThreats || (!escapeRunning(bot) && !engagedWithAny(bot, ARCHERS))) && (!budget || budget.allow('arrow', bot.health ?? 20)))
     : undefined;
   bot.on('physicsTick', () => {
     let outcome: ReturnType<typeof floorRetreatTick> = null;

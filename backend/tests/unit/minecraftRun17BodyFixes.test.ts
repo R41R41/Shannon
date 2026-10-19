@@ -50,6 +50,101 @@ describe('preflight runs for the command itself under common FCA (run 17: no wai
   });
 });
 
+describe('the command level under common FCA also stops a command on a tool break and tells the body of a fight (run 18)', async () => {
+  const { InstantSkill } = await import('../../src/services/minebot/types.js');
+  const { isEngaged } = await import('../../src/services/minebot/utils/engagement.js');
+  /** A stand-in skill: breaks a tool part-way and goes on working until it is stopped (as a dig loop would). */
+  class Breaker extends (InstantSkill as any) {
+    seenEngaged = false; ranOn = 0;
+    constructor(bot: any, name: string) { super(bot); this.skillName = name; }
+    async runImpl() {
+      this.seenEngaged = isEngaged(this.rootBot);
+      (this.rootBot as any).emit('minebotToolBroke', { name: 'stone_pickaxe', at: Date.now() });
+      for (let i = 0; i < 40 && !this.shouldInterrupt(); i++) { this.ranOn++; await new Promise(resolve => setTimeout(resolve, 10)); }
+      return { success: true, result: 'dug on' };
+    }
+  }
+  const body = () => Object.assign(host(), { entity: { position: new Vec3(0, 64, 0) }, entities: {}, game: { dimension: 'overworld' }, time: { timeOfDay: 6000 },
+    inventory: { items: () => [{ name: 'wooden_pickaxe', count: 1, maxDurability: 59, durabilityUsed: 10 }] } }) as any;
+
+  it('a tool break stops the command run as nativeBody runs it, and says so (it used to dig on with what was left)', async () => {
+    const bot = body();
+    const skill: any = new Breaker(bot, 'mine-block');
+    const result: any = await executeAction(bot, 'mine-block', 0, () => skill.run(), { waitForQuiescence: true });
+    expect(result).toMatchObject({ success: false, failureType: 'tool_broke' });
+    expect(result.result).toContain('stone_pickaxeが壊れたため、行動を止めました');
+    expect(skill.ranOn).toBeLessThan(40);
+  });
+
+  it('the legacy command (no action around it) is stopped as before', async () => {
+    const bot = body();
+    const skill: any = new Breaker(bot, 'mine-block');
+    expect(await skill.run()).toMatchObject({ failureType: 'tool_broke' });
+  });
+
+  it('a break inside a skill the command called (callSkill) stops the command, which says so', async () => {
+    const bot = body();
+    const inner: any = new Breaker(bot, 'dig-block-at');
+    bot.instantSkills = { getSkill: (name: string) => name === 'dig-block-at' ? inner : null };
+    const outer: any = new Breaker(bot, 'mine-block');
+    outer.runImpl = async function () {
+      const dug = await this.callSkill('dig-block-at').catch((error: Error) => ({ success: false, result: String(error) }));
+      this.ranOn++;
+      return dug.success ? { success: true, result: 'mined on' } : dug;
+    };
+    const result: any = await executeAction(bot, 'mine-block', 0, () => outer.run(), { waitForQuiescence: true });
+    expect(result).toMatchObject({ success: false, failureType: 'tool_broke' });
+    expect(result.result).toContain('mine-blockの途中でstone_pickaxeが壊れた');
+    expect(inner.ranOn).toBeLessThan(40);
+  });
+
+  it('a skill run directly inside another command does not take the break as its own', async () => {
+    const bot = body();
+    const skill: any = new Breaker(bot, 'dig-block-at');
+    const inner: any = await executeAction(bot, 'mine-block', 0, () => skill.run(), { waitForQuiescence: true });
+    expect(inner.failureType).not.toBe('tool_broke');
+    expect(skill.ranOn).toBe(40);
+  });
+
+  it('armour or a shield breaking is said with the result, and the command goes on', async () => {
+    const bot = body();
+    const skill: any = new Breaker(bot, 'attack-continuously');
+    skill.runImpl = async function () {
+      (this.rootBot as any).emit('minebotToolBroke', { name: 'iron_chestplate', at: Date.now(), part: 'armor' });
+      (this.rootBot as any).emit('minebotToolBroke', { name: 'shield', at: Date.now(), part: 'off-hand' });
+      for (let i = 0; i < 5 && !this.shouldInterrupt(); i++) { this.ranOn++; await new Promise(resolve => setTimeout(resolve, 5)); }
+      return { success: true, result: 'fought' };
+    };
+    const result: any = await executeAction(bot, 'attack-continuously', 0, () => skill.run('zombie'), { waitForQuiescence: true });
+    expect(result).toMatchObject({ success: true });
+    expect(result.result).toContain('途中でiron_chestplate、shieldが壊れました');
+    expect(skill.ranOn).toBe(5);
+  });
+
+  it('a safety reflex run as a command digs on by hand after a break', async () => {
+    const bot = body();
+    const skill: any = new Breaker(bot, 'dig-out');
+    skill.runImpl = async function () {
+      (this.rootBot as any).emit('minebotToolBroke', { name: 'stone_pickaxe', at: Date.now(), part: 'hand' });
+      for (let i = 0; i < 5 && !this.shouldInterrupt(); i++) { this.ranOn++; await new Promise(resolve => setTimeout(resolve, 5)); }
+      return { success: true, result: 'dug out' };
+    };
+    const result: any = await executeAction(bot, 'dig-out', 0, () => skill.run(), { waitForQuiescence: true, safetyLease: true });
+    expect(result).toMatchObject({ success: true, result: 'dug out' });
+    expect(skill.ranOn).toBe(5);
+  });
+
+  it('a fight run as nativeBody runs it is told while it lasts, and only then', async () => {
+    const bot = body();
+    const skill: any = new Breaker(bot, 'attack-continuously');
+    bot.removeAllListeners?.('minebotToolBroke');
+    skill.runImpl = async function () { this.seenEngaged = isEngaged(this.rootBot); return { success: true, result: 'fought' }; };
+    await executeAction(bot, 'attack-continuously', 0, () => skill.run('skeleton'), { waitForQuiescence: true });
+    expect(skill.seenEngaged).toBe(true);
+    expect(isEngaged(bot)).toBe(false);
+  });
+});
+
 describe('wait-time is refused in the night shaft too, unless the wait heals (run 17: 190 s at night)', () => {
   const body = (patch: Record<string, unknown>) => ({ entity: { position: new Vec3(0, 64, 0) }, entities: {}, game: { dimension: 'overworld' },
     time: { timeOfDay: 18_000 }, health: 20, food: 20, activeFurnaces: [],

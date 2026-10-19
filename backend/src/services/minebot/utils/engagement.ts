@@ -74,6 +74,12 @@ export function isEngaged(bot: object | null | undefined): boolean {
   return live(bot).length > 0;
 }
 
+/** Whether one of these kinds (or whatever is hostile) is being fought by choice now. */
+export function engagedWithAny(bot: object | null | undefined, kinds: Iterable<string>): boolean {
+  const names = [...kinds].map(kind => kind.toLowerCase());
+  return live(bot).some(entry => entry.kinds.includes(ANY) || entry.kinds.some(fought => names.some(name => name.includes(fought))));
+}
+
 /** Whether this kind is one being fought by choice now. */
 export function engagedWith(bot: object | null | undefined, kind: string | null | undefined): boolean {
   if (!kind) return false;

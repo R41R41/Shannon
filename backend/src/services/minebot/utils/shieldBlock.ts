@@ -171,6 +171,9 @@ export function installShieldBlock(bot: ShieldBot): void {
       }
       for (const id of seen.keys()) if (!alive.has(id)) seen.delete(id);
       if (!shielded) { lower(); return; }
+      // Lowered by another hand (a fight's own deactivateItem, a bow): what the body holds now says so, and the shield goes up again
+      // when it is wanted, against what is coming or in a fight's guard.
+      if (state.up && bot.usingHeldItem === false) state.up = false;
       if (soonest && soonest.ticks > RAISE_AHEAD_TICKS && !state.up) soonest = null;      // coming, but not yet
       if (soonest) lastComing = tick;
       if (tick - lastComing > HOLD_TICKS) {

@@ -130,6 +130,29 @@ describe('the shield goes up at what is flying at the body (lab: a skeleton thir
     end();
   });
 
+  it('raises it again when another hand lowered it (a fight\'s own deactivateItem, a bow), in a guard or against a shot', () => {
+    const bot = body();
+    bot.entities[2] = { id: 2, name: 'zombie', type: 'hostile', position: new Vec3(2.5, 64, 0.5), height: 1.9 };
+    installShieldBlock(bot);
+    const end = beginEngagement(bot, ['zombie']);
+    bot.usingHeldItem = false;
+    bot.emit('physicsTick');
+    expect(bot.calls).toEqual(['raise true']);
+    bot.usingHeldItem = true;
+    bot.emit('physicsTick');
+    bot.usingHeldItem = false;                                              // lowered elsewhere: the hand says so
+    bot.emit('physicsTick');
+    expect(bot.calls.filter((call: string) => call === 'raise true')).toHaveLength(2);
+    end();
+    delete bot.entities[2];
+    bot.usingHeldItem = true;
+    shoot(bot, 5, new Vec3(13.5, 65.6, 0.5), new Vec3(-1.6, 0.12, 0));
+    bot.emit('physicsTick');
+    bot.usingHeldItem = false;
+    bot.emit('physicsTick');
+    expect(bot.calls.filter((call: string) => call === 'raise true')).toHaveLength(3);
+  });
+
   it('leaves a ghast\'s ball to the reflex that strikes it back while that one is on, and takes it when it is off', () => {
     const bot = body();
     bot.fireballDeflect = { enabled: true };

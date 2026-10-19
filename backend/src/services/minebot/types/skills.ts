@@ -163,24 +163,48 @@ export abstract class InstantSkill extends Skill {
     // its last two pickaxes inside one mining action). Only the action the
     // planner called is stopped; nested skills end with it.
     const broken: string[] = [];
-    const topLevel = !currentAction(host);
+    // The command the planner called, also under common FCA, where nativeBody has opened an action of this skill's name around the
+    // call: `!currentAction(host)` was never true there, so no tool break stopped a command, no fight was told to the body's layers,
+    // and no restock note reached a result (run 17; see isCommandLevel).
+    const topLevel = isCommandLevel(host, this.skillName);
     let actionId: string | null = null;
     let rootAction: object | null = null;
-    const onBroke = (entry: { name: string }) => {
+    /**
+     * Stops this command on a tool break. Its own action when it runs inside nativeBody's: that one is aborted, not nativeBody's,
+     * whose abort would make its own return throw and lose the tool_broke result. The legacy command is the root itself.
+     */
+    let stopOwn: (() => void) | null = null;
+    /** A safety reflex run as a command (the dig out of a trap) is not stopped by a break: it digs on by hand. */
+    let mayStop = true;
+    /** Armour or a shield that broke: said with the result, the command goes on (in a fight, stopping is standing there). */
+    const wornOut: string[] = [];
+    const onBroke = (entry: { name: string; part?: string }) => {
+      if (entry.part && entry.part !== 'hand') { wornOut.push(entry.name); return; }
       broken.push(entry.name);
-      if (actionId) cancelAction(host, actionId, 'tool_broke');
+      if (!mayStop) return;
+      if (stopOwn) stopOwn();
+      else if (actionId) cancelAction(host, actionId, 'tool_broke');
     };
-    if (topLevel) host.on?.('minebotToolBroke' as any, onBroke as any);
-    // A fight the planner called is said to the layer that keeps the body alive for as long as it runs (see engagement).
-    const endEngagement = topLevel ? beginEngagement(host, engagementOf(this.skillName, args)) : null;
+    let endEngagement: (() => void) | null = null;
     let finalResult: SkillResult;
     try {
+      if (topLevel) host.on?.('minebotToolBroke' as any, onBroke as any);
+      // A fight the planner called is said to the layer that keeps the body alive for as long as it runs (see engagement).
+      endEngagement = topLevel ? beginEngagement(host, engagementOf(this.skillName, args)) : null;
       finalResult = await executeAction(host, this.skillName, this.maxDurationMs, async () => {
         this.status = true;
         const port = createMotorPort(host);
         this.bot = port;
-        actionId = currentAction(host)?.progress.actionId ?? null;
-        if (topLevel) rootAction = currentAction(host) ?? null;
+        const own = currentAction(host);
+        actionId = own?.progress.actionId ?? null;
+        // A break while the call still waited for the body (another action's) was that action's, not this command's.
+        broken.length = 0; wornOut.length = 0;
+        if (topLevel) {
+          // The restock notes are kept on the root of the action (toolStock): nativeBody's, under common FCA.
+          rootAction = own?.root ?? own ?? null;
+          mayStop = !(own?.root ?? own)?.safetyLease;
+          if (own?.root) stopOwn = () => own.controller.abort('tool_broke');
+        }
         try { return await this.runImpl(...args); }
         // Only this run's own port is handed back: a later run may already have put its own in place.
         finally { this.status = false; if (this.bot === port) this.bot = host; }
@@ -189,13 +213,16 @@ export abstract class InstantSkill extends Skill {
       endEngagement?.();
       if (topLevel) host.removeListener?.('minebotToolBroke' as any, onBroke as any);
     }
-    if (broken.length) {
+    if (broken.length && mayStop) {
       // What the carried materials can make is said with what is left, so the planner can choose (paid run L111).
       let options = '';
       try { options = describeToolOptions(host, broken); } catch { options = ''; }
       finalResult = { ...finalResult, success: false, failureType: 'tool_broke', recoverable: true,
         result: `${this.skillName}の途中で${[...new Set(broken)].join('、')}が壊れたため、行動を止めました（実行済みの効果は残っています）。`
           + `残っている道具: ${describeRemainingTools(host)}${options ? `。${options}` : ''}` };
+    }
+    if (wornOut.length && typeof finalResult.result === 'string') {
+      finalResult = { ...finalResult, result: `${finalResult.result}（途中で${[...new Set(wornOut)].join('、')}が壊れました）` };
     }
     // A cheap tool the action made (or could not make) on the way is said in its result (see utils/toolStock).
     const stockNotes = takeToolStockNotes(rootAction);
