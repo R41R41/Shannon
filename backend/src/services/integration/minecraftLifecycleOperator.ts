@@ -127,7 +127,9 @@ export class MinecraftLifecycleOperator {
         id: row.command.id, connectionId: row.command.connectionId, serverId: row.command.serverId, action: row.command.action,
         outcome: 'unknown', code: 'state_unknown', inputsReleased: false, observedAt: new Date().toISOString(), state });
       const receipts = [...this.options.journal.entries.values()].flatMap(row => row.receipt && !this.acknowledged.has(row.command.id) ? [row.receipt] : []).slice(0, 16);
-      const response = await this.post(MINECRAFT_LIFECYCLE_PATH, { schemaVersion: 1, connectionId: this.connectionId, sequence: this.sequence++, states: [state], receipts });
+      // `capabilities` is read by an API that knows it and ignored by one that does not (an old API never attaches an option it cannot name).
+      const response = await this.post(MINECRAFT_LIFECYCLE_PATH, { schemaVersion: 1, connectionId: this.connectionId, sequence: this.sequence++, states: [state], receipts,
+        capabilities: this.options.native.capabilities() });
       if (!response.ok) throw Error('LIFECYCLE_HTTP');
       const reply = await response.json() as MinecraftLifecycleReply;
       if (reply.schemaVersion !== 1 || !Array.isArray(reply.commands) || reply.commands.length > 1 || !Array.isArray(reply.cancel) || !Array.isArray(reply.acknowledged)) throw Error('LIFECYCLE_REPLY');

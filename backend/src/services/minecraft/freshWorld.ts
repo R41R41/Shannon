@@ -16,9 +16,13 @@ import path from 'node:path';
 export const WORLD_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 /** `<server directory>/world-id`: one line, the id the body keys its places memory by. Written by a fresh world, read at every spawn. */
 export const WORLD_ID_FILE = 'world-id';
-/** Directories of a server install that are never a world, whatever `level-name` says. */
-const RESERVED_NAMES = new Set(['mods', 'plugins', 'config', 'logs', 'libraries', 'versions', 'crash-reports', 'defaultconfigs',
-  'resourcepacks', 'datapacks', 'backups', 'world-backups', 'cache', 'tmp', 'bin', 'jre', 'java']);
+/**
+ * Names in a server install that are never a world, whatever `level-name` says. The first nine are the server-side script's own
+ * reserved list (`new-world.sh`: mods, config, logs, plugins, libraries, versions, crash-reports, world-id, .fabric); the rest are
+ * further install directories.
+ */
+const RESERVED_NAMES = new Set(['mods', 'config', 'logs', 'plugins', 'libraries', 'versions', 'crash-reports', 'world-id', '.fabric',
+  'defaultconfigs', 'resourcepacks', 'datapacks', 'backups', 'world-backups', 'cache', 'tmp', 'bin', 'jre', 'java']);
 
 export function worldIdFilePath(serverDir: string): string { return path.join(serverDir, WORLD_ID_FILE); }
 
@@ -32,20 +36,28 @@ export function serverDirectory(serverName: string | undefined, base: string | u
 /**
  * The world id the operator wrote for this server, or null (no file, unreadable, oversize, or not a valid id). Synchronous and
  * uncached on purpose: it is read at every bot spawn, so a world made while the process runs is picked up by the next spawn.
+ * A file that exists but cannot be used is reported to `onInvalid` (the caller falls back to the env value or the context's id,
+ * which would otherwise file a new world's places under the old name without anyone knowing).
  */
-export function readWorldIdFile(serverDir: string | null | undefined): string | null {
+export function readWorldIdFile(serverDir: string | null | undefined, onInvalid?: (reason: 'unreadable' | 'oversize' | 'invalid_id') => void): string | null {
   if (!serverDir) return null;
-  try {
-    const text = fs.readFileSync(worldIdFilePath(serverDir), 'utf8');
-    if (text.length > 512) return null;
-    const id = text.trim();
-    return WORLD_ID.test(id) ? id : null;
-  } catch { return null; }
+  let text: string;
+  try { text = fs.readFileSync(worldIdFilePath(serverDir), 'utf8'); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') onInvalid?.('unreadable');
+    return null;
+  }
+  if (text.length > 512) { onInvalid?.('oversize'); return null; }
+  const id = text.trim();
+  if (WORLD_ID.test(id)) return id;
+  onInvalid?.('invalid_id');
+  return null;
 }
 
 /** Priority: a valid world-id file, else a valid MINEBOT_PLACES_WORLD_ID, else the memory context's id. */
-export function resolvePlacesWorldId(serverDir: string | null | undefined, envValue: string | undefined, contextWorldId: string | undefined): string | undefined {
-  const fromFile = readWorldIdFile(serverDir);
+export function resolvePlacesWorldId(serverDir: string | null | undefined, envValue: string | undefined, contextWorldId: string | undefined,
+  onInvalid?: (reason: 'unreadable' | 'oversize' | 'invalid_id') => void): string | undefined {
+  const fromFile = readWorldIdFile(serverDir, onInvalid);
   if (fromFile) return fromFile;
   const fromEnv = envValue?.trim();
   if (fromEnv && WORLD_ID.test(fromEnv)) return fromEnv;
@@ -58,11 +70,15 @@ export function jstStamp(nowMs: number): string {
   return `${jst.slice(0, 4)}${jst.slice(5, 7)}${jst.slice(8, 10)}T${jst.slice(11, 13)}${jst.slice(14, 16)}`;
 }
 
-/** `<prefix>-<JST YYYYMMDDTHHMM>` plus `-s<seed>` when `level-seed` is set (seed: every character outside A-Za-z0-9- becomes `-`, at most 32; so -77 gives `-s-77`). */
+/**
+ * `<prefix>-<JST YYYYMMDDTHHMM>` plus `-s<seed>` when `level-seed` is set. The seed is not trimmed (the server-side script does not
+ * trim it): every Unicode code point outside A-Za-z0-9- becomes one `-` (a space at either end too, and an emoji is one `-`, not
+ * two), at most 32 of them; so -77 gives `-s-77`.
+ */
 export function freshWorldId(prefix: string, nowMs: number, seed = ''): string {
   const stamp = jstStamp(nowMs);
-  const trimmed = seed.trim();
-  const id = `${prefix}-${stamp}${trimmed ? `-s${trimmed.replace(/[^A-Za-z0-9-]/g, '-').slice(0, 32)}` : ''}`;
+  const suffix = Array.from(seed, ch => /^[A-Za-z0-9-]$/.test(ch) ? ch : '-').slice(0, 32).join('');
+  const id = `${prefix}-${stamp}${suffix ? `-s${suffix}` : ''}`;
   if (!WORLD_ID.test(id)) throw new FreshWorldRefused('world_id_invalid');
   return id;
 }
@@ -72,17 +88,27 @@ export class FreshWorldRefused extends Error {
   constructor(readonly reason: string) { super(`FRESH_WORLD_REFUSED:${reason}`); }
 }
 
-/** Java properties as the server reads them: `key=value`, `#`/`!` comments, the last occurrence wins. */
+/**
+ * Java properties as the server reads them: `key=value`, `#`/`!` comments, the last occurrence wins. Only the line ending is
+ * stripped from a value (and the blanks before it, as Java skips them): trailing blanks stay, because the server keeps them, so
+ * `level-name=world ` names a directory this code must not treat as `world`.
+ */
 export function parseServerProperties(text: string): Map<string, string> {
   const map = new Map<string, string>();
-  for (const line of text.split(/\r?\n/)) {
+  for (const line of text.split(/\r\n|\r|\n/)) {
     const trimmed = line.trimStart();
     if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith('!')) continue;
     const split = trimmed.indexOf('=');
     if (split < 0) continue;
-    map.set(trimmed.slice(0, split).trim(), trimmed.slice(split + 1).trim());
+    map.set(trimmed.slice(0, split).trim(), trimmed.slice(split + 1).trimStart());
   }
   return map;
+}
+
+/** A port as the server parses it (`Integer.parseInt`): digits only, no blank on either side. */
+function portNumber(value: string | undefined, fallback: number): number {
+  if (value === undefined) return fallback;
+  return /^\d{1,5}$/.test(value) ? Number(value) : Number.NaN;
 }
 
 /** True only when the connection is actively refused; a listener, a timeout or any other error is "not proven closed". */
@@ -96,6 +122,15 @@ export function tcpRefused(port: number, host = '127.0.0.1', timeoutMs = 1500): 
   });
 }
 
+/**
+ * What the caller can still tell the preparation while it runs. `stop` is synchronous on purpose (it is asked between two file
+ * steps): a reason to stop now (aborted, past the command's deadline) or null. `authorized` is asked once, before the first change.
+ */
+export interface FreshWorldGuard {
+  stop(): string | null;
+  authorized?(): Promise<boolean>;
+}
+
 export interface FreshWorldOptions {
   /** The server's own directory (holds server.properties, the world directory and world-id). */
   serverDir: string;
@@ -103,6 +138,8 @@ export interface FreshWorldOptions {
   /** True only when the port is proven closed. Default: a refused local TCP connection. */
   portClosed?: (port: number) => Promise<boolean>;
   log?: (line: string) => void;
+  /** Checked immediately before the id is written and again immediately before the world is moved (then the id is put back). */
+  guard?: FreshWorldGuard;
 }
 /** `movedTo`: the name (in the server directory) the old world was moved to, or null when there was no world directory. */
 export interface FreshWorldResult { worldId: string; levelName: string; movedTo: string | null }
@@ -117,7 +154,10 @@ export function validLevelName(value: string | undefined): value is string {
 /**
  * Prepare a fresh world. The caller has already established, from a fresh read, that the server is stopped; this re-checks the
  * listeners and then, in this order: validate everything, write `world-id` atomically (temp + rename), move the level
- * directory to `<level-name>.before-regen-<JST stamp>` (-2, -3 ... if taken). It throws FreshWorldRefused before any change; any other error means a step failed after the id was written.
+ * directory to `<level-name>.before-regen-<JST stamp>` (-2, -3 ... if taken). It throws FreshWorldRefused before any change, and
+ * also when a step after the id was written fails while the server is provably still stopped: the previous id is put back (or the
+ * file removed if there was none) and the world has not moved, so nothing is changed. Any other error means the state is not
+ * known (the id could not be put back, or the world moved and something else is wrong).
  * `level-seed` is left as configured (empty = random).
  */
 export async function prepareFreshWorld(options: FreshWorldOptions): Promise<FreshWorldResult> {
@@ -130,9 +170,9 @@ export async function prepareFreshWorld(options: FreshWorldOptions): Promise<Fre
   } catch { throw new FreshWorldRefused('server_directory_unreadable'); }
 
   // The server must not be listening: the game port and the RCON port both refuse connections.
-  const gamePort = properties.has('server-port') ? Number(properties.get('server-port')) : 25565;
+  const gamePort = portNumber(properties.get('server-port'), 25565);
   const ports = [gamePort];
-  if (properties.get('enable-rcon') === 'true') ports.push(Number(properties.get('rcon.port')));
+  if (properties.get('enable-rcon') === 'true') ports.push(portNumber(properties.get('rcon.port'), Number.NaN));
   if (!ports.every(p => Number.isInteger(p) && p >= 1 && p <= 65535)) throw new FreshWorldRefused('port_unreadable');
   for (const port of ports) if (!await portClosed(port).catch(() => false)) throw new FreshWorldRefused('server_listening');
 
@@ -153,8 +193,12 @@ export async function prepareFreshWorld(options: FreshWorldOptions): Promise<Fre
 
   const nowMs = now();
   const worldId = freshWorldId(path.basename(options.serverDir), nowMs, properties.get('level-seed') ?? '');
-  const previous = readWorldIdFile(root);
-  if (previous === worldId) throw new FreshWorldRefused('world_id_not_new');
+  // What the id file holds now, byte for byte, so that it can be put back exactly: null = there is no file.
+  const file = worldIdFilePath(root), temporary = `${file}.${process.pid}.tmp`;
+  let before: string | null;
+  try { before = fs.readFileSync(file, 'utf8'); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new FreshWorldRefused('world_id_unreadable'); before = null; }
+  if (before !== null && before.trim() === worldId) throw new FreshWorldRefused('world_id_not_new');
   // Where the old world goes: a sibling in the same server directory, a name that is free now (-2, -3 ... when it is taken).
   let movedTo: string | null = null;
   if (lstat(levelDir)) {
@@ -165,24 +209,53 @@ export async function prepareFreshWorld(options: FreshWorldOptions): Promise<Fre
     if (!movedTo) throw new FreshWorldRefused('backup_name_taken');
   }
 
-  // The id first: a body that spawns after this point never files its places under the old world's name.
-  const file = worldIdFilePath(root), temporary = `${file}.${process.pid}.tmp`;
-  try {
+  // The command may have been aborted, run past its deadline or lost its authority while the checks above waited.
+  const stopReason = (): string | null => options.guard?.stop() ?? null;
+  const beforeChange = stopReason();
+  if (beforeChange) throw new FreshWorldRefused(beforeChange);
+  if (options.guard?.authorized && !await options.guard.authorized().catch(() => false)) throw new FreshWorldRefused('not_authorized');
+  const beforeWrite = stopReason();
+  if (beforeWrite) throw new FreshWorldRefused(beforeWrite);
+
+  /** Writes `text` to the id file atomically (temp, fsync, rename). */
+  const writeId = (text: string): void => {
     const fd = fs.openSync(temporary, 'w', 0o644);
-    try { fs.writeFileSync(fd, `${worldId}\n`); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+    try { fs.writeFileSync(fd, text); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
     fs.renameSync(temporary, file);
-  } catch {
+    try { const dir = fs.openSync(root, 'r'); try { fs.fsyncSync(dir); } finally { fs.closeSync(dir); } } catch { /* best effort */ }
+  };
+  /**
+   * Puts the id file back as it was (the old text, or no file). Used when the world has not moved and the server is provably
+   * still stopped: then nothing is changed and the failure is a refusal. A failure to put it back leaves the state unknown.
+   */
+  const restoreId = (): void => {
+    try {
+      if (before === null) fs.rmSync(file, { force: true });
+      else writeId(before);
+    } catch { throw Error('FRESH_WORLD_ID_NOT_RESTORED'); }
+  };
+
+  // The id first: a body that spawns after this point never files its places under the old world's name.
+  try { writeId(`${worldId}\n`); }
+  catch {
     try { fs.rmSync(temporary, { force: true }); } catch { /* nothing else to undo */ }
     throw new FreshWorldRefused('world_id_not_written');
   }
-  try { const dir = fs.openSync(root, 'r'); try { fs.fsyncSync(dir); } finally { fs.closeSync(dir); } } catch { /* best effort */ }
 
-  // From here on a failure is not a refusal: the id is new and the old world may not have been moved. One rename inside the
-  // server directory (never a copy, never a delete); the old world stays whole under its new name.
+  // One rename inside the server directory (never a copy, never a delete); the old world stays whole under its new name. Until
+  // it has happened, any failure puts the previous id back and is a refusal: the world is where it was and the server is stopped.
+  const beforeMove = stopReason();
+  if (beforeMove) { restoreId(); throw new FreshWorldRefused(beforeMove); }
   const last = lstat(levelDir);
   if (last) {
-    if (last.isSymbolicLink() || !last.isDirectory() || !movedTo || lstat(path.join(root, movedTo))) throw Error('FRESH_WORLD_LEVEL_DIR_CHANGED');
-    fs.renameSync(levelDir, path.join(root, movedTo));
+    if (last.isSymbolicLink() || !last.isDirectory() || !movedTo || lstat(path.join(root, movedTo))) { restoreId(); throw new FreshWorldRefused('level_dir_changed'); }
+    try { fs.renameSync(levelDir, path.join(root, movedTo)); }
+    catch {
+      // A rename either happened or it did not; the level directory still being there proves it did not.
+      const still = lstat(levelDir);
+      if (still && !lstat(path.join(root, movedTo))) { restoreId(); throw new FreshWorldRefused('level_dir_not_moved'); }
+      throw Error('FRESH_WORLD_MOVE_UNKNOWN');
+    }
   } else movedTo = null;
   if (lstat(levelDir)) throw Error('FRESH_WORLD_LEVEL_DIR_REMAINS');
   options.log?.(`🌱 新しいワールド: ${worldId}`);

@@ -1,7 +1,7 @@
 import { createConnection } from 'node:net';
 import { setTimeout as delay } from 'node:timers/promises';
-import { wantsFreshWorld, type MinecraftLifecycleCommand, type MinecraftLifecycleReceipt, type MinecraftLifecycleState } from './minecraftLifecycleContract.js';
-import { FreshWorldRefused } from '../minecraft/freshWorld.js';
+import { LIFECYCLE_CAPABILITY_FRESH_WORLD, wantsFreshWorld, type MinecraftLifecycleCommand, type MinecraftLifecycleReceipt, type MinecraftLifecycleState } from './minecraftLifecycleContract.js';
+import { FreshWorldRefused, type FreshWorldGuard } from '../minecraft/freshWorld.js';
 
 const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 /**
@@ -93,10 +93,13 @@ export interface LifecycleNativePorts {
   start(signal: AbortSignal): Promise<void>;
   /**
    * Fresh world (optional port): called only for a `start` with `options.freshWorld`, after a fresh read proved the server stopped
-   * and the final authority recheck passed, immediately before `start`. Throws FreshWorldRefused when nothing was changed; any
-   * other error means the world may be partly reset. Absent: a fresh-world start is refused.
+   * and the final authority recheck passed, immediately before `start`. The old world is kept under another name, never deleted:
+   * `movedTo` is that name (null when there was no world directory). Throws FreshWorldRefused when nothing was changed (including
+   * when a step after the id was written failed and the previous id was put back); any other error means the state is not known.
+   * Absent: a fresh-world start is refused, and the body does not advertise the capability. `guard` is asked immediately before
+   * the id is written and again immediately before the world is moved.
    */
-  prepareFreshWorld?(signal: AbortSignal): Promise<{ worldId: string }>;
+  prepareFreshWorld?(signal: AbortSignal, guard: FreshWorldGuard): Promise<{ worldId: string; movedTo: string | null }>;
   botState(): { phase: 'joined' | 'absent' | 'unknown'; serverId: string | null; uuid: string | null };
   login(signal: AbortSignal): Promise<void>;
   logout(signal: AbortSignal): Promise<void>;
@@ -116,6 +119,8 @@ export class MinecraftLifecycleNative {
     guardedStopCommand(ports.botUuid, ports.onlineMode);
   }
   private now(): number { return (this.ports.now ?? Date.now)(); }
+  /** What this body can do beyond the base protocol, told to the API in every poll (it attaches an option only to a body that says so). */
+  capabilities(): readonly string[] { return this.ports.prepareFreshWorld ? [LIFECYCLE_CAPABILITY_FRESH_WORLD] : []; }
   async observe(): Promise<MinecraftLifecycleState> {
     const local = this.ports.botState();
     let running: MinecraftLifecycleState['running'] = 'unknown', players: readonly string[] | null = null;
@@ -135,16 +140,22 @@ export class MinecraftLifecycleNative {
   }
   async execute(c: MinecraftLifecycleCommand, signal: AbortSignal): Promise<MinecraftLifecycleReceipt> {
     let state = await this.observe();
+    // Set once the world was really prepared: every later receipt of this command (completed or not) says which world it is.
+    let made: { worldId: string; movedTo: string | null } | null = null;
     const receipt = (outcome: MinecraftLifecycleReceipt['outcome'], code: MinecraftLifecycleReceipt['code'], inputsReleased = true, stopGuard?: MinecraftLifecycleReceipt['stopGuard']): MinecraftLifecycleReceipt => ({
-      id: c.id, connectionId: c.connectionId, serverId: c.serverId, action: c.action, outcome, code, inputsReleased, state, observedAt: new Date(this.now()).toISOString(), ...(stopGuard ? { stopGuard } : {}) });
+      id: c.id, connectionId: c.connectionId, serverId: c.serverId, action: c.action, outcome, code, inputsReleased, state, observedAt: new Date(this.now()).toISOString(), ...(stopGuard ? { stopGuard } : {}),
+      ...(made ? { worldId: made.worldId, movedTo: made.movedTo } : {}) });
     if (c.serverId !== this.ports.serverId || this.busy || this.ports.operationHeld?.()) return receipt('refused', 'state_unknown');
     if (!Number.isFinite(Date.parse(c.issuedAt)) || Date.parse(c.issuedAt) > this.now() || Date.parse(c.issuedAt) >= Date.parse(c.deadlineAt)
       || !Number.isFinite(Date.parse(c.deadlineAt)) || signal.aborted || Date.parse(c.deadlineAt) <= this.now()) return receipt('cancelled', 'deadline');
     this.busy = true;
     const freshWorld = wantsFreshWorld(c);
     try {
-      // A new world is never made under a running server (and "already running" would hide that the world was not reset).
-      if (freshWorld && (state.running === 'running' || !this.ports.prepareFreshWorld || this.freshWorldAttempted.has(c.id))) return receipt('refused', 'error');
+      // A new world is never made under a running server (and "already running" would hide that the world was not reset), only
+      // for the owner's own request (the API puts the option on a start of the owner's request or the operator's, whose authority
+      // origin is `owner_request` too; her own time never carries it), and never twice for one command id.
+      if (freshWorld && (state.running === 'running' || !this.ports.prepareFreshWorld || this.freshWorldAttempted.has(c.id)
+        || c.authority?.origin !== 'owner_request')) return receipt('refused', 'error');
       if (c.action === 'start' && state.running === 'running') return receipt('completed', 'already_running');
       if (c.action === 'stop' && state.running === 'stopped') return receipt('completed', 'already_stopped');
       if (c.action === 'login' && state.bot === 'joined') return receipt('completed', 'already_joined');
@@ -181,7 +192,11 @@ export class MinecraftLifecycleNative {
           this.freshWorldAttempted.add(c.id);
           state = await this.observe();
           if (state.running !== 'stopped') return receipt('refused', state.running === 'running' ? 'error' : 'state_unknown');
-          try { await this.ports.prepareFreshWorld!(signal); }
+          const guard: FreshWorldGuard = {
+            stop: () => signal.aborted ? 'aborted' : Date.parse(c.deadlineAt) <= this.now() ? 'deadline' : null,
+            authorized: () => this.ports.authorize(c, signal),
+          };
+          try { const prepared = await this.ports.prepareFreshWorld!(signal, guard); made = { worldId: prepared.worldId, movedTo: prepared.movedTo }; }
           catch (error) { if (error instanceof FreshWorldRefused) return receipt('refused', 'error'); throw error; }
           signal.throwIfAborted();
         }

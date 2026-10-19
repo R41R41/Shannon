@@ -54,10 +54,12 @@ export async function startConfiguredMinecraftLifecycle(): Promise<void> {
       if (!result.success) throw Error('LIFECYCLE_START_UNKNOWN');
     },
     // A fresh-world start (options.freshWorld): the native has just proven the server stopped; this re-checks the listeners, writes
-    // <server dir>/world-id, moves the level-name directory of this server aside (rename, no delete), and leaves level-seed as configured.
-    prepareFreshWorld: async () => {
-      const { worldId } = await prepareFreshWorld({ serverDir: path.join(config.minecraft.serverBasePath, settings.serverName), log: line => logger.info(line) });
-      return { worldId };
+    // <server dir>/world-id, moves the level-name directory of this server aside (rename, kept under another name, no delete), and
+    // leaves level-seed as configured. The guard stops it before the id is written and again before the move.
+    prepareFreshWorld: async (_signal, guard) => {
+      const { worldId, movedTo } = await prepareFreshWorld({ serverDir: path.join(config.minecraft.serverBasePath, settings.serverName),
+        log: line => logger.info(line), guard });
+      return { worldId, movedTo };
     },
     botState() { const state = minebot.lifecycleState(); return { phase: state.phase, uuid: state.uuid, serverId: state.serverName === settings.serverName ? settings.serverId : null }; },
     login: signal => minebot.lifecycleLogin(settings.serverName, signal), logout: signal => minebot.lifecycleLogout(settings.serverName, signal),

@@ -18,8 +18,10 @@ export interface MinecraftLifecycleAuthority {
 }
 /**
  * Optional, `start` only. `freshWorld: true` (strictly the boolean true) asks for a new world before the start: the world
- * directory is moved aside (renamed, not deleted) and a new places-world id written, only if the server is proven stopped. Anything else (absent, another
- * value, unknown keys, any other action) is an ordinary command.
+ * directory is moved aside (renamed, kept under another name, never deleted) and a new places-world id written, only if the
+ * server is proven stopped and the command is the owner's own request (`authority.origin === 'owner_request'`; the operator's
+ * path uses that origin too, her own time does not). Anything else (absent, another value, unknown keys, any other action) is an
+ * ordinary command. The API attaches it only to a body whose polls advertise `capabilities: ['freshWorld']`.
  */
 export interface MinecraftLifecycleOptions { freshWorld?: boolean }
 export interface MinecraftLifecycleCommand {
@@ -39,10 +41,19 @@ export interface MinecraftLifecycleReceipt {
   observedAt: string; inputsReleased: boolean; state: MinecraftLifecycleState;
   /** Successful stop must be one atomic runtime decision under a join barrier, including a fresh player check. */
   stopGuard?: { admissionClosed: true; otherPlayers: 0; checkedAt: string };
+  /**
+   * Only on a `start` whose world was really prepared (`options.freshWorld`): the new world's id, and the name (in the server
+   * directory) the previous world was kept under, or null when there was no world directory. Receivers that predate these ignore them.
+   */
+  worldId?: string; movedTo?: string | null;
 }
+/** Poll `capabilities`: what this body can do beyond the base protocol. Unknown names are ignored by the receiver. */
+export const LIFECYCLE_CAPABILITY_FRESH_WORLD = 'freshWorld';
 export interface MinecraftLifecyclePoll {
   schemaVersion: 1; connectionId: string; sequence: number;
   states: readonly MinecraftLifecycleState[]; receipts: readonly MinecraftLifecycleReceipt[];
+  /** Optional: absent from a body that predates it (then it has none). Sent in every poll, so the API knows the connected body's. */
+  capabilities?: readonly string[];
 }
 export interface MinecraftLifecycleReply {
   schemaVersion: 1; commands: readonly MinecraftLifecycleCommand[]; cancel: readonly string[]; acknowledged: readonly string[];
@@ -68,5 +79,13 @@ export function validLifecyclePoll(v: unknown, now: number): v is MinecraftLifec
       && ['completed', 'refused', 'cancelled', 'unknown'].includes(String(r.outcome))
       && ['changed', 'already_running', 'already_stopped', 'already_joined', 'already_absent', 'players_present', 'state_unknown', 'authority_revoked', 'deadline', 'error'].includes(String(r.code))
       && typeof r.inputsReleased === 'boolean' && recorded(r.observedAt, now) && validLifecycleState(r.state, now, true)
-      && (r.stopGuard === undefined || record(r.stopGuard) && r.stopGuard.admissionClosed === true && r.stopGuard.otherPlayers === 0 && recorded(r.stopGuard.checkedAt, now)));
+      && (r.stopGuard === undefined || record(r.stopGuard) && r.stopGuard.admissionClosed === true && r.stopGuard.otherPlayers === 0 && recorded(r.stopGuard.checkedAt, now))
+      && (r.worldId === undefined || typeof r.worldId === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(r.worldId))
+      && (r.movedTo === undefined || r.movedTo === null || typeof r.movedTo === 'string' && /^[A-Za-z0-9][A-Za-z0-9._ -]{0,127}$/.test(r.movedTo)))
+    && (v.capabilities === undefined || Array.isArray(v.capabilities) && v.capabilities.length <= 64);
+}
+/** The capability names a poll advertises: only well-formed strings count, anything else is ignored (never a reason to refuse the poll). */
+export function lifecycleCapabilities(poll: Pick<MinecraftLifecyclePoll, 'capabilities'> | null | undefined): ReadonlySet<string> {
+  const names = Array.isArray(poll?.capabilities) ? poll.capabilities : [];
+  return new Set(names.filter((name): name is string => typeof name === 'string' && /^[A-Za-z][A-Za-z0-9]{0,31}$/.test(name)));
 }

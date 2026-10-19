@@ -3,6 +3,7 @@ import { NativeCommonFcaBody } from './nativeBody.js';
 import path from 'node:path';
 import { createBodyImageCapture } from './imageCapture.js';
 import { minecraftMemoryContext } from '../../runtime/memoryContext.js';
+import { logger } from '../../../../utils/logger.js';
 
 import { resolvePlacesWorldId, serverDirectory } from '../../../minecraft/freshWorld.js';
 
@@ -25,7 +26,9 @@ export function createCommonFcaBody(bot: any, settings: { url: string; serverId:
   const persistPlaces = () => {
     const world = minecraftMemoryContext(bot);
     const serverDir = serverDirectory(settings.serverName ?? bot.connectedServerName);
-    const worldId = resolvePlacesWorldId(serverDir, process.env.MINEBOT_PLACES_WORLD_ID, world?.worldId);
+    // A world-id file that exists but cannot be used would silently file a new world's places under the old name: say so.
+    const worldId = resolvePlacesWorldId(serverDir, process.env.MINEBOT_PLACES_WORLD_ID, world?.worldId,
+      reason => logger.warn(`world-id file in ${settings.serverName ?? bot.connectedServerName ?? 'the server directory'} is not usable (${reason}); falling back to MINEBOT_PLACES_WORLD_ID or the memory context's world id`));
     if (!worldId || typeof bot.placeMemory?.persistTo !== 'function') return;
     bot.placeMemory.persistTo(path.resolve('saves/minecraft/places', placesFile(world?.serverId ?? settings.serverId, worldId)));
   };
