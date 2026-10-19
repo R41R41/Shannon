@@ -14,7 +14,7 @@ import {
 } from '../../src/services/minecraft/freshWorld.js';
 import { MinecraftLifecycleNative, type LifecycleNativePorts } from '../../src/services/integration/minecraftLifecycleNative.js';
 import { LifecycleOperationJournal, MinecraftLifecycleOperator } from '../../src/services/integration/minecraftLifecycleOperator.js';
-import { lifecycleCapabilities, validLifecyclePoll, wantsFreshWorld, type MinecraftLifecycleCommand } from '../../src/services/integration/minecraftLifecycleContract.js';
+import { lifecycleCapabilities, sendableReceipt, validLifecyclePoll, wantsFreshWorld, type MinecraftLifecycleCommand } from '../../src/services/integration/minecraftLifecycleContract.js';
 import { createCommonFcaBody } from '../../src/services/minebot/integration/commonFca/createCommonFcaBody.js';
 
 const temporary: string[] = [];
@@ -285,6 +285,27 @@ describe('prepareFreshWorld', () => {
     // A guard that never stops lets it through.
     expect((await prepareFreshWorld({ serverDir: dir, now: () => T, portClosed: closed, guard: { stop: () => null, authorized: async () => true } })).worldId).toBe('shannon-home-20261019T1204');
   });
+  it('reads the game and RCON ports again right before the rename: a server that came up after the first read changes nothing', async () => {
+    for (const listening of [25560, 26560]) {
+      const { dir } = fakeServer(); const seen: string[] = []; let reads = 0; const order: string[] = [];
+      // The first two reads (game, RCON) see a stopped server; the re-check sees `listening` open.
+      const portClosed = async (port: number) => { seen.push(`${port}:id=${readWorldIdFile(dir)}`); return ++reads <= 2 || port !== listening; };
+      const guard = { stop: () => { order.push('stop'); return null; }, authorized: async () => { order.push('authorized'); return true; } };
+      await expect(prepareFreshWorld({ serverDir: dir, now: () => T, portClosed, guard }), String(listening)).rejects.toMatchObject({ reason: 'server_listening' });
+      // The re-check comes after the authorization and after the id was written, so it is the last look before the move.
+      expect(seen.slice(0, 2)).toEqual(['25560:id=shannon-home-20261001T0900', '26560:id=shannon-home-20261001T0900']);
+      expect(seen.slice(2).every(line => line.endsWith('id=shannon-home-20261019T1204'))).toBe(true);
+      expect(order).toEqual(['stop', 'authorized', 'stop']);
+      // Nothing is changed: the previous id byte for byte, the world where it was, no temporary file.
+      expect(fs.readFileSync(path.join(dir, WORLD_ID_FILE), 'utf8')).toBe('shannon-home-20261001T0900\n');
+      expect(fs.existsSync(path.join(dir, 'shannon_home', 'level.dat'))).toBe(true);
+      expect(fs.readdirSync(dir).sort()).toEqual(['mods', 'server.properties', 'shannon_home', WORLD_ID_FILE].sort());
+    }
+    // A re-check that cannot tell (throws) is "not proven closed" too.
+    const { dir } = fakeServer(); let reads = 0;
+    await expect(prepareFreshWorld({ serverDir: dir, now: () => T, portClosed: async () => { if (++reads > 2) throw Error('x'); return true; } })).rejects.toMatchObject({ reason: 'server_listening' });
+    expect(readWorldIdFile(dir)).toBe('shannon-home-20261001T0900'); expect(fs.existsSync(path.join(dir, 'shannon_home', 'level.dat'))).toBe(true);
+  });
 });
 
 describe('a world-id file that cannot be used', () => {
@@ -423,6 +444,44 @@ describe('fresh-world start through the lifecycle native', () => {
     expect(f.effects).toEqual([]); expect(fs.existsSync(path.join(dir, 'shannon_home', 'level.dat'))).toBe(true); expect(readWorldIdFile(dir)).toBe('shannon-home-20261001T0900');
     // An ordinary start from her own time is still an ordinary start.
     expect(await f.native.execute(f.command('start', undefined, undefined, 'own_time'), signal())).toMatchObject({ outcome: 'completed', code: 'changed' });
+  });
+  it('never sends a world value the API would refuse: it is left out, the receipt stays, and the poll stays valid', async () => {
+    const state = { serverId: 'home', observedAt: new Date().toISOString(), running: 'running', bot: 'absent', otherPlayers: 0 };
+    const poll = (receipt: object) => ({ schemaVersion: 1, connectionId: 'c', sequence: 0, states: [state], receipts: [receipt] });
+    const odd = [{ worldId: 'shannon-home-20261019T1204', movedTo: 'a/b' }, { worldId: '../x', movedTo: null }, { worldId: 'ok-1', movedTo: '' },
+      { worldId: '', movedTo: 'shannon_home.before-regen-20261019T1204' }, { worldId: 'x'.repeat(129), movedTo: 'y'.repeat(129) }];
+    for (const prepared of odd) {
+      const f = lifecycle(); f.ports.prepareFreshWorld = async () => prepared;
+      const receipt = await f.native.execute(f.command('start', { freshWorld: true }), signal());
+      expect(receipt, JSON.stringify(prepared)).toMatchObject({ outcome: 'completed', code: 'changed', inputsReleased: true });
+      expect(validLifecyclePoll(poll(receipt), Date.now()), JSON.stringify(prepared)).toBe(true);
+      // Only the values that fail are dropped; a good one next to a bad one is kept.
+      expect('worldId' in receipt).toBe(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(prepared.worldId));
+      expect('movedTo' in receipt).toBe(prepared.movedTo === null || /^[A-Za-z0-9][A-Za-z0-9._ -]{0,127}$/.test(prepared.movedTo));
+    }
+    const good = { id: 'a', connectionId: 'c', serverId: 'home', action: 'start' as const, outcome: 'completed' as const, code: 'changed' as const, inputsReleased: true, state: state as never, observedAt: state.observedAt };
+    expect(sendableReceipt({ ...good, worldId: 'w-1', movedTo: 'moved 1' })).toEqual({ ...good, worldId: 'w-1', movedTo: 'moved 1' });
+    expect(sendableReceipt({ ...good, worldId: 'w-1', movedTo: null })).toEqual({ ...good, worldId: 'w-1', movedTo: null });
+    expect(sendableReceipt({ ...good, worldId: 'w-1', movedTo: '../x' })).toEqual({ ...good, worldId: 'w-1' });
+    expect(sendableReceipt(good)).toBe(good);
+  });
+  it('sends a receipt that was journaled with bad world values without them (after a restart too)', async () => {
+    const realFsync = fs.fsyncSync.bind(fs);
+    vi.spyOn(fs, 'fsyncSync').mockImplementation(fd => { try { realFsync(fd); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EPERM') throw error; } });
+    const f = lifecycle(); const file = path.join(tmp('journal-'), 'operations.json'); const journal = new LifecycleOperationJournal(file);
+    const command = f.command('start', { freshWorld: true }, 'operation:fresh:bad-world');
+    const state = { serverId: 'home', observedAt: new Date().toISOString(), running: 'running' as const, bot: 'absent' as const, otherPlayers: 0 };
+    journal.begin(command);
+    journal.settle({ id: command.id, connectionId: command.connectionId, serverId: 'home', action: 'start', outcome: 'completed', code: 'changed', inputsReleased: true,
+      observedAt: state.observedAt, state, worldId: 'shannon-home-20261019T1204', movedTo: '../escape' });
+    const bodies: any[] = [];
+    const operator = new MinecraftLifecycleOperator({ baseUrl: 'http://127.0.0.1:1', token: 'fixture-only-token', native: f.native, journal,
+      fetcher: (async (_url: string, init: { body: string }) => { bodies.push(JSON.parse(String(init.body)));
+        return new Response(JSON.stringify({ schemaVersion: 1, commands: [], cancel: [], acknowledged: [] })); }) as never });
+    await operator.poll();
+    expect(bodies[0].receipts).toHaveLength(1);
+    expect(bodies[0].receipts[0]).toMatchObject({ id: command.id, worldId: 'shannon-home-20261019T1204' }); expect(bodies[0].receipts[0]).not.toHaveProperty('movedTo');
+    expect(validLifecyclePoll(bodies[0], Date.now())).toBe(true);
   });
   it('advertises the capability only when the fresh-world port is wired, in every poll, and the API contract accepts the poll', async () => {
     const wired = lifecycle(); expect(wired.native.capabilities()).toEqual(['freshWorld']);

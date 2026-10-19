@@ -1,6 +1,6 @@
 import { createConnection } from 'node:net';
 import { setTimeout as delay } from 'node:timers/promises';
-import { LIFECYCLE_CAPABILITY_FRESH_WORLD, wantsFreshWorld, type MinecraftLifecycleCommand, type MinecraftLifecycleReceipt, type MinecraftLifecycleState } from './minecraftLifecycleContract.js';
+import { LIFECYCLE_CAPABILITY_FRESH_WORLD, sendableReceipt, wantsFreshWorld, type MinecraftLifecycleCommand, type MinecraftLifecycleReceipt, type MinecraftLifecycleState } from './minecraftLifecycleContract.js';
 import { FreshWorldRefused, type FreshWorldGuard } from '../minecraft/freshWorld.js';
 
 const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
@@ -142,7 +142,8 @@ export class MinecraftLifecycleNative {
     let state = await this.observe();
     // Set once the world was really prepared: every later receipt of this command (completed or not) says which world it is.
     let made: { worldId: string; movedTo: string | null } | null = null;
-    const receipt = (outcome: MinecraftLifecycleReceipt['outcome'], code: MinecraftLifecycleReceipt['code'], inputsReleased = true, stopGuard?: MinecraftLifecycleReceipt['stopGuard']): MinecraftLifecycleReceipt => ({
+    // A value the API would not accept is never sent (it would refuse the whole poll): it is left out and the receipt stays.
+    const receipt = (outcome: MinecraftLifecycleReceipt['outcome'], code: MinecraftLifecycleReceipt['code'], inputsReleased = true, stopGuard?: MinecraftLifecycleReceipt['stopGuard']): MinecraftLifecycleReceipt => sendableReceipt({
       id: c.id, connectionId: c.connectionId, serverId: c.serverId, action: c.action, outcome, code, inputsReleased, state, observedAt: new Date(this.now()).toISOString(), ...(stopGuard ? { stopGuard } : {}),
       ...(made ? { worldId: made.worldId, movedTo: made.movedTo } : {}) });
     if (c.serverId !== this.ports.serverId || this.busy || this.ports.operationHeld?.()) return receipt('refused', 'state_unknown');

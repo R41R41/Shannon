@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { MinecraftLifecycleCommand, MinecraftLifecycleReceipt, MinecraftLifecycleReply } from './minecraftLifecycleContract.js';
-import { MINECRAFT_LIFECYCLE_PATH, validLifecycleState } from './minecraftLifecycleContract.js';
+import { MINECRAFT_LIFECYCLE_PATH, sendableReceipt, validLifecycleState } from './minecraftLifecycleContract.js';
 import type { MinecraftLifecycleNative } from './minecraftLifecycleNative.js';
 
 export interface LifecycleReceiptReview { reviewedBy: string; evidenceSha256: string }
@@ -126,7 +126,8 @@ export class MinecraftLifecycleOperator {
       for (const row of this.options.journal.entries.values()) if (!row.receipt && row.command.id !== this.active?.id) this.options.journal.settle({
         id: row.command.id, connectionId: row.command.connectionId, serverId: row.command.serverId, action: row.command.action,
         outcome: 'unknown', code: 'state_unknown', inputsReleased: false, observedAt: new Date().toISOString(), state });
-      const receipts = [...this.options.journal.entries.values()].flatMap(row => row.receipt && !this.acknowledged.has(row.command.id) ? [row.receipt] : []).slice(0, 16);
+      // sendableReceipt: a journaled receipt whose world values the API would not accept is sent without them (never the whole poll refused).
+      const receipts = [...this.options.journal.entries.values()].flatMap(row => row.receipt && !this.acknowledged.has(row.command.id) ? [sendableReceipt(row.receipt)] : []).slice(0, 16);
       // `capabilities` is read by an API that knows it and ignored by one that does not (an old API never attaches an option it cannot name).
       const response = await this.post(MINECRAFT_LIFECYCLE_PATH, { schemaVersion: 1, connectionId: this.connectionId, sequence: this.sequence++, states: [state], receipts,
         capabilities: this.options.native.capabilities() });

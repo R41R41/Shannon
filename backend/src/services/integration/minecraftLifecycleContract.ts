@@ -13,7 +13,11 @@ export interface MinecraftLifecycleState {
 }
 export interface MinecraftLifecycleAuthority {
   scopeKey: string; origin: 'owner_request' | 'own_time';
-  /** Original execution and provenance; operator never manufactures an owner request. */
+  /**
+   * Original execution and provenance. The operator never makes up an authority: an operator-CLI command is an `owner_request` that the
+   * API admitted under its own action and audit row (the same as a conversation's or the Ops page's), and a start follows the owner's
+   * 「新しいワールドで始める」 switch unless `--keep-world` was given; her own time is `own_time`.
+   */
   executionId: string; lease: ActionLease; sourceIds: readonly string[];
 }
 /**
@@ -69,6 +73,20 @@ export function validLifecycleState(v: unknown, now: number, historical = false)
   return record(v) && id(v.serverId) && (historical ? recorded(v.observedAt, now) : fresh(v.observedAt, now)) && ['running', 'stopped', 'unknown'].includes(String(v.running))
     && ['joined', 'absent', 'unknown'].includes(String(v.bot))
     && (v.otherPlayers === null || Number.isSafeInteger(v.otherPlayers) && Number(v.otherPlayers) >= 0 && Number(v.otherPlayers) <= 10000);
+}
+/** The shapes the API accepts for a receipt's `worldId` and `movedTo` (the same patterns, `minecraftLifecycleContract.ts` of the API). */
+export const RECEIPT_WORLD_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+export const RECEIPT_MOVED_TO = /^[A-Za-z0-9][A-Za-z0-9._ -]{0,127}$/;
+/**
+ * A receipt as it may be sent: a `worldId` or `movedTo` that does not match what the API accepts is left out (the receipt itself is
+ * kept), so one odd value can never make the API refuse the whole poll. The same receipt comes back unchanged when both are fine.
+ */
+export function sendableReceipt<T extends Pick<MinecraftLifecycleReceipt, 'worldId' | 'movedTo'>>(receipt: T): T {
+  const badId = receipt.worldId !== undefined && !(typeof receipt.worldId === 'string' && RECEIPT_WORLD_ID.test(receipt.worldId));
+  const badMoved = receipt.movedTo !== undefined && receipt.movedTo !== null && !(typeof receipt.movedTo === 'string' && RECEIPT_MOVED_TO.test(receipt.movedTo));
+  if (!badId && !badMoved) return receipt;
+  const { worldId, movedTo, ...rest } = receipt;
+  return { ...rest, ...(badId ? {} : worldId !== undefined ? { worldId } : {}), ...(badMoved ? {} : movedTo !== undefined ? { movedTo } : {}) } as T;
 }
 export function validLifecyclePoll(v: unknown, now: number): v is MinecraftLifecyclePoll {
   return record(v) && v.schemaVersion === 1 && id(v.connectionId) && Number.isSafeInteger(v.sequence) && Number(v.sequence) >= 0

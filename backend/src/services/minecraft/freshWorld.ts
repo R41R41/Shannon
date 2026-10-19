@@ -244,6 +244,11 @@ export async function prepareFreshWorld(options: FreshWorldOptions): Promise<Fre
 
   // One rename inside the server directory (never a copy, never a delete); the old world stays whole under its new name. Until
   // it has happened, any failure puts the previous id back and is a refusal: the world is where it was and the server is stopped.
+  // The ports are read again here, right before the rename: the first read is before the authorization round trip and the id write,
+  // and a server started by someone else in between must never have its world moved from under it.
+  for (const port of ports) {
+    if (!await portClosed(port).catch(() => false)) { restoreId(); throw new FreshWorldRefused('server_listening'); }
+  }
   const beforeMove = stopReason();
   if (beforeMove) { restoreId(); throw new FreshWorldRefused(beforeMove); }
   const last = lstat(levelDir);
