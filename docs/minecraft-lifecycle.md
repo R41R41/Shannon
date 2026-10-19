@@ -58,6 +58,22 @@ Installation must preserve the existing home world/unit and recovered journal. E
 
 `set_day` makes the world's time day, so that a run can start in the morning (the owner's request). It sends one fixed command, `time set day`, inside the same server-thread guard as stop: `execute unless entity @a[nbt=!{UUID:[I;<bot UUID words>]}] run time set day` (offline: `execute unless entity @a run time set day`, exempting nobody). It requires a running server and zero other players in the native snapshot, the same final authority recheck as every command, and completes only when the reply names the new time (`Set the time to …`). Someone who joins between the snapshot and the command keeps the time as it was (`refused/players_present`). A lost or cut reply (RCON timeout, abort) or an unexpected reply comes back unknown, because the command may have run; only an answered empty reply, with someone now in the world, is `refused/players_present`. The operations console's admission guard (a paid lab process, the manager's running state) applies to start and login only; set_day relies on the native running and player checks. The effect is the only one besides stop that the guard builds; nothing from a model or an API caller reaches the command text. The API offers it as `minecraft.set_time` to the owner alone.
 
+## Fresh world (2026-10-19)
+
+A `start` command may carry `options: { freshWorld: true }` (strictly the boolean `true`; absent, any other value, unknown keys, or any other action means an ordinary command). It makes a new world for the dedicated home server: the old world is deleted without a backup (the owner's decision) and the server starts on a new map.
+
+Steps, after the usual fresh native read, admission and final authority recheck, and only for a server that is proven stopped:
+
+1. The stopped proof is read again (process state plus a refused RCON connection), then the game port (`server-port`) and the RCON port must also refuse connections. A running server returns `refused/error` (not `already_running`, which would hide that nothing was reset); an uncertain state returns `refused/state_unknown`. Nothing is touched in either case.
+2. Everything is validated before any change: `level-name` in the server's own `server.properties` must be one plain name (no `/`, `\`, `..`, leading `.` or `-`, not empty, not a reserved install directory such as `mods` or `config`); the resolved path must be a direct child of the server directory; the directory must not be a symlink and must be a directory containing `level.dat` (or be empty or absent). Otherwise `refused/error`.
+3. A new world id `shannon-home-<JST YYYYMMDDTHHMM>` is made, with `-s<seed>` appended when `level-seed` is set (every character of the seed outside `A-Za-z0-9` becomes `_`, at most 32 characters). It is written to `<server dir>/world-id` first, atomically (temp file, fsync, rename). An id equal to the current one (two fresh worlds in one minute) is refused.
+4. Only then is the `level-name` directory deleted (never following a link; links inside it are unlinked, not entered). `level-seed` is left as configured (empty means random).
+5. Then the ordinary `startServer`. Logs are content-free: `🌱 新しいワールド: <id>`.
+
+A failure before the id is written is `refused/error`. A failure after it (the delete or the start) is `unknown/error` with inputs not released, like any unconfirmed effect. The operator journal admits a command id once (begin is fsynced before acting, resent receipts never re-execute), and the native also refuses a second reset for an id it has already attempted. The server-side `new-world.sh` does the same steps with the same id format, file path and checks.
+
+World id for the places memory (`createCommonFcaBody`): read at every bot spawn, never cached, from `<SERVER_BASE_PATH>/<serverName>/world-id` (trimmed, same pattern as before: `^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`). Priority: valid file, then a valid `MINEBOT_PLACES_WORLD_ID`, then the memory context's world id. An unreadable, empty or invalid file is ignored. A new world therefore needs no drop-in change and no restart: the next spawn files its places under the new id.
+
 ## 2026-10-13 incidents
 
 - A chat-started `start` was aborted one second before the server finished booting: the API's event loop was blocked for 2.1 s, one poll timed out, and the operator aborted at once. The journal then held every later command. Fixed by the contact grace, observation through the original deadline and the held exit above.

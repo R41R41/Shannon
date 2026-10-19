@@ -4,9 +4,9 @@ import path from 'node:path';
 import { createBodyImageCapture } from './imageCapture.js';
 import { minecraftMemoryContext } from '../../runtime/memoryContext.js';
 
-const WORLD_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+import { resolvePlacesWorldId, serverDirectory } from '../../../minecraft/freshWorld.js';
 
-export function createCommonFcaBody(bot: any, settings: { url: string; serverId: string }, token: string,
+export function createCommonFcaBody(bot: any, settings: { url: string; serverId: string; serverName?: string }, token: string,
   rendererDirectory?: string, observer?: CommonFcaObserver): CommonFcaControlLoop {
   const images = createBodyImageCapture(bot, { rendererDirectory });
   const actuator = new NativeCommonFcaBody(bot, { serverId: settings.serverId,
@@ -20,10 +20,12 @@ export function createCommonFcaBody(bot: any, settings: { url: string; serverId:
   // tell a reset world from the old one, and a spawn point is not an identity. MINEBOT_PLACES_WORLD_ID names it for
   // the places alone; the full memory identity (MINECRAFT_MEMORY_IDENTITIES) also turns on query caching and world
   // stores keyed by server only, which the API-driven body does not want.
+  // A new world is named by the file `<server dir>/world-id` (written by a fresh-world start), which is read at every spawn so a
+  // world made while this process lives is picked up without a restart. Priority: valid file, valid env, memory context.
   const persistPlaces = () => {
-    const placesWorld = process.env.MINEBOT_PLACES_WORLD_ID?.trim();
     const world = minecraftMemoryContext(bot);
-    const worldId = placesWorld && WORLD_ID.test(placesWorld) ? placesWorld : world?.worldId;
+    const serverDir = serverDirectory(settings.serverName ?? bot.connectedServerName);
+    const worldId = resolvePlacesWorldId(serverDir, process.env.MINEBOT_PLACES_WORLD_ID, world?.worldId);
     if (!worldId || typeof bot.placeMemory?.persistTo !== 'function') return;
     bot.placeMemory.persistTo(path.resolve('saves/minecraft/places', placesFile(world?.serverId ?? settings.serverId, worldId)));
   };

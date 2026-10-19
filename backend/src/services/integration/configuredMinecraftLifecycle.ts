@@ -2,7 +2,9 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { prepareFreshWorld } from '../minecraft/freshWorld.js';
 import { shannonHomeProcessStatus } from '../minecraft/serverProcessStatus.js';
+import { logger } from '../../utils/logger.js';
 import { MinecraftLifecycleNative, rconCommand } from './minecraftLifecycleNative.js';
 import { LifecycleOperationJournal, MinecraftLifecycleOperator } from './minecraftLifecycleOperator.js';
 
@@ -50,6 +52,12 @@ export async function startConfiguredMinecraftLifecycle(): Promise<void> {
       // Existing registered service implementation owns the fixed start script/table. No caller controls a path or shell.
       const result = await minecraft.startServer('shannon-home');
       if (!result.success) throw Error('LIFECYCLE_START_UNKNOWN');
+    },
+    // A fresh-world start (options.freshWorld): the native has just proven the server stopped; this re-checks the listeners, writes
+    // <server dir>/world-id, deletes the level-name directory of this server only, and leaves level-seed as configured.
+    prepareFreshWorld: async () => {
+      const { worldId } = await prepareFreshWorld({ serverDir: path.join(config.minecraft.serverBasePath, settings.serverName), log: line => logger.info(line) });
+      return { worldId };
     },
     botState() { const state = minebot.lifecycleState(); return { phase: state.phase, uuid: state.uuid, serverId: state.serverName === settings.serverName ? settings.serverId : null }; },
     login: signal => minebot.lifecycleLogin(settings.serverName, signal), logout: signal => minebot.lifecycleLogout(settings.serverName, signal),

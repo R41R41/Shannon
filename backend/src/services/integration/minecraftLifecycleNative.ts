@@ -1,6 +1,7 @@
 import { createConnection } from 'node:net';
 import { setTimeout as delay } from 'node:timers/promises';
-import type { MinecraftLifecycleCommand, MinecraftLifecycleReceipt, MinecraftLifecycleState } from './minecraftLifecycleContract.js';
+import { wantsFreshWorld, type MinecraftLifecycleCommand, type MinecraftLifecycleReceipt, type MinecraftLifecycleState } from './minecraftLifecycleContract.js';
+import { FreshWorldRefused } from '../minecraft/freshWorld.js';
 
 const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 /**
@@ -90,6 +91,12 @@ export interface LifecycleNativePorts {
   processState(): Promise<'running' | 'stopped' | 'unknown'>;
   command(text: string, signal?: AbortSignal): Promise<string>;
   start(signal: AbortSignal): Promise<void>;
+  /**
+   * Fresh world (optional port): called only for a `start` with `options.freshWorld`, after a fresh read proved the server stopped
+   * and the final authority recheck passed, immediately before `start`. Throws FreshWorldRefused when nothing was changed; any
+   * other error means the world may be partly reset. Absent: a fresh-world start is refused.
+   */
+  prepareFreshWorld?(signal: AbortSignal): Promise<{ worldId: string }>;
   botState(): { phase: 'joined' | 'absent' | 'unknown'; serverId: string | null; uuid: string | null };
   login(signal: AbortSignal): Promise<void>;
   logout(signal: AbortSignal): Promise<void>;
@@ -103,6 +110,8 @@ export interface LifecycleNativePorts {
 }
 export class MinecraftLifecycleNative {
   private busy = false;
+  /** Command ids whose world reset was attempted in this process (the operator's journal already admits an id once, across restarts). */
+  private readonly freshWorldAttempted = new Set<string>();
   constructor(readonly ports: LifecycleNativePorts) {
     guardedStopCommand(ports.botUuid, ports.onlineMode);
   }
@@ -132,7 +141,10 @@ export class MinecraftLifecycleNative {
     if (!Number.isFinite(Date.parse(c.issuedAt)) || Date.parse(c.issuedAt) > this.now() || Date.parse(c.issuedAt) >= Date.parse(c.deadlineAt)
       || !Number.isFinite(Date.parse(c.deadlineAt)) || signal.aborted || Date.parse(c.deadlineAt) <= this.now()) return receipt('cancelled', 'deadline');
     this.busy = true;
+    const freshWorld = wantsFreshWorld(c);
     try {
+      // A new world is never made under a running server (and "already running" would hide that the world was not reset).
+      if (freshWorld && (state.running === 'running' || !this.ports.prepareFreshWorld || this.freshWorldAttempted.has(c.id))) return receipt('refused', 'error');
       if (c.action === 'start' && state.running === 'running') return receipt('completed', 'already_running');
       if (c.action === 'stop' && state.running === 'stopped') return receipt('completed', 'already_stopped');
       if (c.action === 'login' && state.bot === 'joined') return receipt('completed', 'already_joined');
@@ -163,7 +175,18 @@ export class MinecraftLifecycleNative {
         if (answered && !reply && state.otherPlayers !== null && state.otherPlayers > 0) return receipt('refused', 'players_present');
         return receipt('unknown', 'state_unknown', false);
       }
-      else if (c.action === 'start') await this.ports.start(signal);
+      else if (c.action === 'start') {
+        if (freshWorld) {
+          // The stopped proof is read again here, after the awaits above, and only a proven stop lets the world be touched.
+          this.freshWorldAttempted.add(c.id);
+          state = await this.observe();
+          if (state.running !== 'stopped') return receipt('refused', state.running === 'running' ? 'error' : 'state_unknown');
+          try { await this.ports.prepareFreshWorld!(signal); }
+          catch (error) { if (error instanceof FreshWorldRefused) return receipt('refused', 'error'); throw error; }
+          signal.throwIfAborted();
+        }
+        await this.ports.start(signal);
+      }
       else if (c.action === 'login') await this.ports.login(signal);
       else await this.ports.logout(signal);
       // Only observation follows the effect. An interruption in OBSERVE_THROUGH stops nothing more, because nothing more is sent.

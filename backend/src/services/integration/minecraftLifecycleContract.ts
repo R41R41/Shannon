@@ -16,9 +16,20 @@ export interface MinecraftLifecycleAuthority {
   /** Original execution and provenance; operator never manufactures an owner request. */
   executionId: string; lease: ActionLease; sourceIds: readonly string[];
 }
+/**
+ * Optional, `start` only. `freshWorld: true` (strictly the boolean true) asks for a new world before the start: the world
+ * directory is deleted and a new places-world id written, only if the server is proven stopped. Anything else (absent, another
+ * value, unknown keys, any other action) is an ordinary command.
+ */
+export interface MinecraftLifecycleOptions { freshWorld?: boolean }
 export interface MinecraftLifecycleCommand {
   schemaVersion: 1; id: string; connectionId: string; serverId: string;
   action: MinecraftLifecycleAction; authority: MinecraftLifecycleAuthority; issuedAt: string; deadlineAt: string;
+  options?: MinecraftLifecycleOptions;
+}
+/** True for a `start` that carries `options.freshWorld === true`. */
+export function wantsFreshWorld(command: Pick<MinecraftLifecycleCommand, 'action' | 'options'>): boolean {
+  return command.action === 'start' && !!command.options && typeof command.options === 'object' && command.options.freshWorld === true;
 }
 export interface MinecraftLifecycleReceipt {
   id: string; connectionId: string; serverId: string; action: MinecraftLifecycleAction;
