@@ -6,7 +6,7 @@ import { reflexPromptText } from '../utils/floorConfig.js';
 import { gotoSafe } from '../utils/gotoSafe.js';
 import { actionDelay } from '../execution/observedWait.js';
 import { visiblePointOn } from '../utils/sightLine.js';
-import { WOOL_COLORS } from '../utils/nightGate.js';
+import { WOOL_COLORS, woolStatusLine } from '../utils/nightGate.js';
 import type { Vec3 } from 'vec3';
 
 const { goals } = pathfinder;
@@ -340,10 +340,14 @@ class AttackContinuously extends InstantSkill {
         ? `。回収: ${allCollected.join(', ')}`
         : '';
       const baseMsg = `${killInfo}、計${attackCount}回攻撃（${this.describeBlows()}）${collectInfo}`;
+      // After sheep: whether the wool makes a bed now, or which colour is still wanted (the owner, 2026-10-20: make the bed as soon
+      // as three are in hand, and know at once when the colours do not match).
+      let woolLine = '';
+      try { if (killedNames.includes('sheep')) woolLine = woolStatusLine(this.bot.inventory.items()); } catch { woolLine = ''; }
 
       return {
         success: true,
-        result: remainingInfo ? `${baseMsg}。${remainingInfo}` : baseMsg,
+        result: [baseMsg, remainingInfo, woolLine].filter(Boolean).join('。'),
       };
     } catch (error: any) {
       this.stopMovement();

@@ -134,7 +134,9 @@ export interface WorldObservation {
      */
     descentKit?: { missing: Array<'armor' | 'cooked_food' | 'bed'>; gated: boolean };
     /** The most wool of one colour carried, towards the three one bed takes; said while no bed is carried and some wool is. */
-    bedWool?: { color: string; have: number; need: 3 } };
+    bedWool?: { color: string; have: number; need: 3 };
+    /** Said from three pieces of raw meat: where they can be cooked now, or what stands in the way (busy furnaces, none, no fuel). */
+    cookRaw?: string };
   isInWater: boolean;
   /** Present (true) only while the body stands closed in: solid floor, roof and walls round its two cells. Mobs cannot reach it; opening a wall or the roof ends that. */
   sealedInShelter?: true;

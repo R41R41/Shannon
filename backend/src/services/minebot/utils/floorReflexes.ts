@@ -274,11 +274,12 @@ export function floorRetreatTick(bot: FloorBody, state: RetreatState, allow?: (k
 
 const NEVER_EAT = new Set(['pufferfish', 'chorus_fruit', 'suspicious_stew', 'spider_eye', 'poisonous_potato', 'enchanted_golden_apple']);
 /**
- * A top-up at food 14 or less, or at health below 14 with food below 18 (to get back to the 18 that regenerates). It was the old
- * auto-eat's food below 18 (health below 18 and food below 20): run 16 ate at 16 and 17 with full health, raw meat each time, the
- * meal worth a third of what it would be cooked (owner's change, 2026-10-19).
+ * A top-up at food 14 or less, or at health 10 or less with food below 18 (to get back to the 18 that regenerates). It was the old
+ * auto-eat's food below 18 (health below 18 and food below 20): run 16 ate four times at food 16 and 17 with full health and once at
+ * health 15 and food 19, raw meat each time, the meal worth a third of what it would be cooked. A scratch in daylight is not a
+ * reason to eat (owner's change, 2026-10-19/20).
  */
-const TOPUP_FOOD = 15, TOPUP_FOOD_HURT = 18, TOPUP_HEALTH = 14;
+const TOPUP_FOOD = 15, TOPUP_FOOD_HURT = 18, TOPUP_HEALTH = 11;
 /** Raw meat (RAW_FOOD) is eaten only when nothing else is carried and the meal cannot wait: critical, or health this low. */
 const RAW_OK_HEALTH = 8;
 /** While the pathfinder is walking the legacy auto-eat ate only at health 8 or less, or food 6 or less. */
@@ -289,7 +290,7 @@ const VALUABLE_FOOD = new Set(['golden_apple', 'golden_carrot', 'honey_bottle'])
 /**
  * Food to eat now, or null; never with an enemy at arm's length (standing to eat there killed the body, L18).
  *
- * `wide` is the default mode (`FloorConfig.wideThreats`): food 14 or less, or health below 14 and food below 18 (TOPUP_*; cooked before
+ * `wide` is the default mode (`FloorConfig.wideThreats`): food 14 or less, or health 10 or less and food below 18 (TOPUP_*; cooked before
  * raw, raw only when nothing else is carried and the meal is critical or health is 8 or less), with
  * the production floor's safety kept on top. A meal at food 6 or less, or at health 6 or less with food 17 or less, is critical (exempt
  * from the budget, and the idle rule below does not apply to it; the tick cuts a running command for it only at health 6 or less or food

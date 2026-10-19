@@ -1,6 +1,7 @@
 import { createLogger } from '../../../utils/logger.js';
 import { ConstantSkill, CustomBot } from '../types.js';
 import { abortable, waitForObservation } from '../execution/observedWait.js';
+import { RAW_FOOD } from '../utils/nightGate.js';
 
 const log = createLogger('Minebot:Skill:autoEat');
 
@@ -46,12 +47,8 @@ export const FALLBACK_FOOD_POINTS: Record<string, number> = {
   rotten_flesh: 4,
 };
 
-/**
- * Food that the fire makes several times better (raw mutton 2, cooked 6): eaten only when there is nothing else and it cannot wait.
- * Run 16 ate raw mutton four times and raw chicken twice with a furnace and eleven coal in hand (rotten flesh and pufferfish have
- * their own rules where food is chosen).
- */
-export const RAW_FOOD: ReadonlySet<string> = new Set(['beef', 'porkchop', 'mutton', 'chicken', 'rabbit', 'cod', 'salmon', 'potato']);
+/** Raw food, cooked before it is eaten (see utils/nightGate). */
+export { RAW_FOOD };
 
 /**
  * 自動食事スキル

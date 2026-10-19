@@ -5,7 +5,8 @@ import minecraftData from 'minecraft-data';
 
 vi.mock('../../src/services/minebot/utils/gotoSafe.js', () => ({ gotoSafe: vi.fn(async () => ({ success: true })) }));
 
-const { bedWool, descentFloor, descentKit, descentKitNotice, nightGateFor, isPreparedFood } = await import('../../src/services/minebot/utils/nightGate.js');
+const { bedWool, cookRawNotice, descentFloor, descentKit, descentKitNotice, nightGateFor, isPreparedFood, woolStatusLine } = await import('../../src/services/minebot/utils/nightGate.js');
+const { bedFromWool } = await import('../../src/services/minebot/instantSkills/craftOne.js');
 const { default: MoveTo } = await import('../../src/services/minebot/instantSkills/moveTo.js');
 const { default: StairMine } = await import('../../src/services/minebot/instantSkills/stairMine.js');
 const { default: DigBlockAt } = await import('../../src/services/minebot/instantSkills/digBlockAt.js');
@@ -258,6 +259,80 @@ describe('cooking what is raw: queued behind a smelt, started when the batch is 
     const noCoal: any = await skill.runImpl(0, 64, 0);
     expect(skill.callSkill).not.toHaveBeenCalled();
     expect(noCoal.result).toContain('石炭・木炭が無いため焼き始めていません');
+  });
+});
+
+describe('the owner\'s second round (2026-10-20): wool to a bed, raw meat to a furnace, two furnaces, villages', () => {
+  it('craft-one says the wool by colour and what is short when the colours make no bed; another colour that does is made', () => {
+    const mixed = [{ name: 'white_wool', count: 2 }, { name: 'light_gray_wool', count: 1 }];
+    const refused: any = bedFromWool(mixed, 'white_bed');
+    expect(refused.refusal).toMatchObject({ success: false, failureType: 'bed_wool_mismatch', recoverable: true });
+    expect(refused.refusal.result).toContain('今: white 2・light_gray 1');
+    expect(refused.refusal.result).toMatch(/足りない: white_wool×1$/);
+    expect((bedFromWool([], 'bed') as any).refusal.result).toMatch(/足りない: wool×3$/);
+    expect(bedFromWool([{ name: 'red_wool', count: 3 }], 'white_bed')).toMatchObject({ itemName: 'red_bed' });
+    expect(bedFromWool([{ name: 'white_wool', count: 3 }], 'white_bed')).toEqual({ itemName: 'white_bed', note: '' });
+    expect(bedFromWool([{ name: 'white_wool', count: 4 }], 'bed')).toMatchObject({ itemName: 'white_bed' });
+  });
+
+  it('after sheep the hunt says whether the wool makes a bed now', () => {
+    expect(woolStatusLine([{ name: 'white_wool', count: 3 }])).toContain('craft-one white_bed でベッドを作れる');
+    expect(woolStatusLine([{ name: 'white_wool', count: 2 }, { name: 'light_gray_wool', count: 1 }])).toContain('同じ色があと1個（white');
+    expect(woolStatusLine([{ name: 'white_wool', count: 3 }, { name: 'white_bed', count: 1 }])).toBe('');
+  });
+
+  it('the observation says where three pieces of raw meat can be cooked, or what stands in the way', () => {
+    const now = 1_000_000;
+    const body = (items: Array<{ name: string; count: number }>, furnaces: Array<{ x: number; y: number; z: number; distance: number }>, active: any[] = []) => ({
+      inventory: { items: () => items }, activeFurnaces: active,
+      placeMemory: { recall: (kind: string) => kind === 'furnace' ? furnaces.map(f => ({ position: { x: f.x, y: f.y, z: f.z }, distance: f.distance })) : [] },
+    }) as any;
+    const meat = [{ name: 'mutton', count: 4 }, { name: 'chicken', count: 2 }, { name: 'coal', count: 11 }, { name: 'cobblestone', count: 12 }];
+    expect(cookRawNotice(body([{ name: 'mutton', count: 2 }], []), now)).toBeUndefined();
+    expect(cookRawNotice(body(meat, [{ x: 28, y: 67, z: -1, distance: 6 }]), now)).toBe('生肉 mutton×4・chicken×2 → 空いているかまど(28,67,-1) 6m で焼ける（start-smelting、燃料 coal×11）');
+    const busy = cookRawNotice(body(meat, [{ x: 28, y: 67, z: -1, distance: 6 }], [{ pos: { x: 28, y: 67, z: -1 }, item: 'raw_iron', readyAt: now + 40_000 }]), now)!;
+    expect(busy).toContain('raw_iron を精錬中（残り約40秒）。2個目のかまどを置けば今すぐ焼ける（丸石8個、手持ち12個）');
+    expect(cookRawNotice(body(meat, []), now)).toContain('かまどが無い');
+    expect(cookRawNotice(body([{ name: 'mutton', count: 4 }], []), now)).toContain('燃料が無い');
+    for (const line of [busy]) expect(line.length).toBeLessThanOrEqual(150);
+  });
+
+  it('start-smelting puts the batch into a free furnace within reach when the one asked for is busy, and says what to do meanwhile', async () => {
+    const Chunk = (await import('prismarine-chunk')).default('1.21.11') as any;
+    const chunk = new Chunk({ minY: -64, worldHeight: 384 });
+    for (const [x, y, z, name] of [[1, 64, 0, 'furnace'], [2, 64, 0, 'furnace'], [8, 60, 3, 'iron_ore']] as const) chunk.setBlockStateId(new Vec3(x, y, z), registry.blocksByName[name].defaultState);
+    const counts = new Map<string, number>([['mutton', 4], ['coal', 5]]);
+    const inventory = { items: () => [...counts].map(([name, count]) => ({ name, count, type: registry.itemsByName[name].id })) };
+    const furnace = (input: { name: string; count: number } | null) => ({ inputItem: () => input, fuelItem: () => null, outputItem: () => null,
+      fuel: 0, progress: 0, close: vi.fn(), putInput: vi.fn(async () => {}), putFuel: vi.fn(async () => {}), takeOutput: vi.fn() });
+    const busyFurnace = furnace({ name: 'raw_iron', count: 8 }), freeFurnace = furnace(null);
+    const bot: any = { version: '1.21.11', registry, entity: { position: new Vec3(1.5, 64, 1.5) }, game: { dimension: 'overworld' }, inventory,
+      world: { getColumns: () => [{ chunkX: 0, chunkZ: 0, column: chunk }] },
+      blockAt: (p: Vec3) => ({ name: (p.x === 1 || p.x === 2) && p.y === 64 && p.z === 0 ? 'furnace' : 'air', position: p }),
+      openFurnace: vi.fn(async (block: any) => block.position.x === 1 ? busyFurnace : freeFurnace),
+      activeFurnaces: [{ pos: { x: 1, y: 64, z: 0 }, item: 'raw_iron', count: 8, readyAt: Date.now() + 80_000, startedAt: Date.now() }] };
+    const { default: StartSmelting } = await import('../../src/services/minebot/instantSkills/startSmelting.js');
+    const result: any = await new StartSmelting(bot).runImpl(1, 64, 0, 'mutton', 'coal', 4);
+    expect(result.success).toBe(true);
+    expect(result.result).toContain('かまど(1, 64, 0)は raw_iron×8 を精錬中のため、隣の空いているfurnace(2, 64, 0)を使いました');
+    expect(freeFurnace.putInput).toHaveBeenCalled();
+    expect(result.result).toContain('待たずにできること: 近くのiron_ore (8, 60, 3)');
+  });
+
+  it('a village is found in real 1.21.11 chunks (a bell; not a lone bed) by find-structure and the explore\'s check', async () => {
+    const Chunk = (await import('prismarine-chunk')).default('1.21.11') as any;
+    const { detectVillage } = await import('../../src/services/minebot/utils/landmarks.js');
+    const { structureNearby } = await import('../../src/services/minebot/instantSkills/findStructure.js');
+    const world = (chunk: any) => ({ entity: { position: new Vec3(0.5, 70, 0.5) }, registry, entities: {},
+      world: { getColumns: () => [{ chunkX: 2, chunkZ: 1, column: chunk }] } }) as any;
+    const village = new Chunk({ minY: -64, worldHeight: 384 });
+    village.setBlockStateId(new Vec3(3, 70, 4), registry.blocksByName.bell.defaultState);
+    const found = detectVillage(world(village));
+    expect(found).toMatchObject({ kind: 'village', position: { x: 35, y: 70, z: 20 } });
+    expect(structureNearby(world(village), 'village')?.position).toEqual({ x: 35, y: 70, z: 20 });
+    const lone = new Chunk({ minY: -64, worldHeight: 384 });
+    lone.setBlockStateId(new Vec3(3, 70, 4), registry.blocksByName.white_bed.defaultState);
+    expect(detectVillage(world(lone))).toBeNull();
   });
 });
 

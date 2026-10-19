@@ -105,7 +105,7 @@ export function reflexPromptText(config: FloorConfig = floorConfig()): string {
   const parts: string[] = [];
   if (config.retreat) parts.push('点火したクリーパーや飛んでくる矢から下がる');
   if (config.eat) parts.push(config.wideThreats
-    ? '満腹度14以下（体力14未満なら満腹度18未満）で手が空いている間に、焼いた物から食べる（生肉は、ほかに食べ物が無く、満腹度6以下か体力8以下の時だけ。体力6以下か満腹度3以下では実行中の命令を切ってでも食べる。ただし flee-from・dig-shelter・build-around-self は満腹度3以下でしか切らない。壁越しでない敵が5m内なら食べない）'
+    ? '満腹度14以下（体力10以下なら満腹度18未満）で手が空いている間に、焼いた物から食べる（生肉は、ほかに食べ物が無く、満腹度6以下か体力8以下の時だけ。体力6以下か満腹度3以下では実行中の命令を切ってでも食べる。ただし flee-from・dig-shelter・build-around-self は満腹度3以下でしか切らない。壁越しでない敵が5m内なら食べない）'
     : '飢え・低体力で食べる');
   if (config.armor) parts.push('空いた防具の枠に防具を着ける');
   if (config.flee) parts.push('体力8以下で敵が近いと走って離れる（走っている間は実行中の戦闘・作業を中断する。20秒に2回まで。逃げ道が無ければ、その場を囲う（建築用ブロック10個とハーフブロック4個、敵が隣にいない時）か、3段の柱に登る（ブロック3個））');

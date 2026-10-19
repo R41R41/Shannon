@@ -28,6 +28,18 @@ const DEEPER_MARGIN = 2;
 
 export type KitPart = 'armor' | 'cooked_food' | 'bed';
 
+/**
+ * Food that the fire makes several times better (raw mutton 2, cooked 6): eaten only when there is nothing else and it cannot wait.
+ * Run 16 ate raw mutton four times and raw chicken twice with a furnace and eleven coal in hand (rotten flesh and pufferfish have
+ * their own rules where food is chosen). Kept here, beside the cooked food the night gate counts, so the observation can read it
+ * without the skills (constantSkills/autoEat re-exports it).
+ */
+export const RAW_FOOD: ReadonlySet<string> = new Set(['beef', 'porkchop', 'mutton', 'chicken', 'rabbit', 'cod', 'salmon', 'potato']);
+/** Raw meat counted towards cooking a batch (a potato is not worth a furnace's attention on its own). */
+const RAW_MEAT = [...RAW_FOOD].filter(name => name !== 'potato');
+/** From this many pieces of raw meat the observation says where they can be cooked. */
+export const COOK_RAW_FROM = 3;
+
 const PREPARED_FOOD = new Set(['bread', 'baked_potato', 'pumpkin_pie', 'mushroom_stew', 'rabbit_stew', 'beetroot_soup', 'golden_carrot']);
 /** Food that needs no fire (cooked meat and fish, bread and the like): what the night is lived through on. */
 export function isPreparedFood(name: string): boolean { return name.startsWith('cooked_') || PREPARED_FOOD.has(name); }
@@ -40,9 +52,12 @@ export interface GateBody {
   time?: { timeOfDay?: number; day?: number; age?: number | bigint };
   game?: { dimension?: unknown };
   inventory?: { items?(): GateItem[]; slots?: Array<GateItem | null | undefined> };
-  placeMemory?: { state?: { places?: Array<{ keep?: string; dimension?: string }> } };
+  placeMemory?: { state?: { places?: Array<{ keep?: string; dimension?: string }> };
+    recall?(kind?: string, limit?: number): Array<{ position: { x: number; y: number; z: number }; distance: number }> };
   /** The lowest the body has stood below y 16 since the gate closed this night (see descentFloor). */
   nightGateAnchor?: { night: number; y: number };
+  /** Furnaces at work on a batch the body put in (start-smelting). */
+  activeFurnaces?: Array<{ pos: { x: number; y: number; z: number }; item: string; readyAt: number }>;
 }
 
 function carried(bot: GateBody): GateItem[] {
@@ -178,6 +193,40 @@ export function descentKitNotice(bot: GateBody): { missing: KitPart[]; gated: bo
   return kit.missing.length ? { missing: kit.missing, gated: gateHours(clock) } : undefined;
 }
 
+/** A furnace remembered this far off is still worth walking back to for a batch of meat. */
+const COOK_FURNACE_RANGE = 64;
+const FURNACE_COBBLE = ['cobblestone', 'cobbled_deepslate', 'blackstone'];
+
+/**
+ * Raw meat to be cooked (`state.world.margin.cookRaw`), from COOK_RAW_FROM pieces: where it can be cooked now (a remembered furnace
+ * not at work on a batch, with the fuel carried), or what stands in the way (every furnace busy, none known, no fuel). Run 16
+ * carried raw mutton and chicken past its furnace and eleven coal, and ate them raw. One line, under 150 characters.
+ */
+export function cookRawNotice(bot: GateBody, now = Date.now()): string | undefined {
+  let items: GateItem[] = [];
+  try { items = bot.inventory?.items?.() ?? []; } catch { items = []; }
+  const count = (test: (name: string) => boolean) => items.filter(item => test(item.name)).reduce((sum, item) => sum + (item.count ?? 1), 0);
+  const raw = RAW_MEAT.map(name => [name, count(item => item === name)] as const).filter(([, n]) => n > 0);
+  const total = raw.reduce((sum, [, n]) => sum + n, 0);
+  if (total < COOK_RAW_FROM) return undefined;
+  const head = `生肉 ${raw.map(([name, n]) => `${name}×${n}`).join('・')}`;
+  const coal = count(name => name === 'coal' || name === 'charcoal');
+  const wood = count(name => name.endsWith('_planks') || name.endsWith('_log'));
+  if (!coal && !wood) return `${head} → 燃料が無い（石炭・木炭・板材）`;
+  const fuel = coal ? `coal×${coal}` : `板材・原木×${wood}`;
+  let furnaces: Array<{ position: { x: number; y: number; z: number }; distance: number }> = [];
+  try { furnaces = [...(bot.placeMemory?.recall?.('furnace', 3) ?? []), ...(bot.placeMemory?.recall?.('smoker', 1) ?? [])]
+    .filter(place => place.distance <= COOK_FURNACE_RANGE).sort((a, b) => a.distance - b.distance); } catch { furnaces = []; }
+  const job = (p: { x: number; y: number; z: number }) => (bot.activeFurnaces ?? []).find(f => f.pos.x === p.x && f.pos.y === p.y && f.pos.z === p.z && f.readyAt > now);
+  const at = (p: { x: number; y: number; z: number }) => `(${p.x},${p.y},${p.z})`;
+  const free = furnaces.find(place => !job(place.position));
+  if (free) return `${head} → 空いているかまど${at(free.position)} ${Math.round(free.distance)}m で焼ける（start-smelting、燃料 ${fuel}）`;
+  const cobble = count(name => FURNACE_COBBLE.includes(name));
+  if (!furnaces.length) return `${head} → かまどが無い（丸石8個で craft-one furnace、手持ち${cobble}個）`;
+  const busy = job(furnaces[0].position)!;
+  return `${head} → かまど${at(furnaces[0].position)}は ${busy.item} を精錬中（残り約${Math.ceil((busy.readyAt - now) / 1000)}秒）。2個目のかまどを置けば今すぐ焼ける（丸石8個、手持ち${cobble}個）`;
+}
+
 /** Wool colours by the sheep's metadata number (the low four bits). */
 export const WOOL_COLORS = ['white', 'orange', 'magenta', 'light_blue', 'yellow', 'lime', 'pink', 'gray', 'light_gray', 'cyan',
   'purple', 'blue', 'brown', 'green', 'red', 'black'] as const;
@@ -189,13 +238,32 @@ export const WOOL_COLORS = ['white', 'orange', 'magenta', 'light_blue', 'yellow'
 export function bedWool(bot: GateBody): { color: string; have: number; need: 3 } | undefined {
   const items = carried(bot);
   if (items.some(item => item.name.endsWith('_bed'))) return undefined;
+  let best: { color: string; have: number } | null = null;
+  for (const [color, have] of woolByColor(items)) if (!best || have > best.have) best = { color, have };
+  return best ? { color: best.color, have: best.have, need: 3 } : undefined;
+}
+
+/** Wool carried, by colour (white_wool → white). */
+export function woolByColor(items: Array<{ name: string; count?: number }>): Map<string, number> {
   const counts = new Map<string, number>();
   for (const item of items) {
     if (!item.name.endsWith('_wool')) continue;
     const color = item.name.slice(0, -'_wool'.length);
     counts.set(color, (counts.get(color) ?? 0) + (item.count ?? 1));
   }
-  let best: { color: string; have: number } | null = null;
-  for (const [color, have] of counts) if (!best || have > best.have) best = { color, have };
-  return best ? { color: best.color, have: best.have, need: 3 } : undefined;
+  return counts;
+}
+
+/**
+ * The wool after a sheep hunt, as one sentence for the result: a bed can be made now (three of a colour, none carried), or the
+ * colours do not make one and how many of which are still wanted. Empty when no wool is carried, or a bed is.
+ */
+export function woolStatusLine(items: Array<{ name: string; count?: number }>): string {
+  if (items.some(item => item.name.endsWith('_bed'))) return '';
+  const wool = [...woolByColor(items).entries()].sort((a, b) => b[1] - a[1]);
+  if (!wool.length) return '';
+  const [color, have] = wool[0];
+  if (have >= 3) return `羊毛: ${color} ${have}/3 → craft-one ${color}_bed でベッドを作れる`;
+  const now = wool.map(([c, n]) => `${c} ${n}`).join('・');
+  return `羊毛: ${now} → 同じ色があと${3 - have}個（${color}。attack-continuously color=${color}）`;
 }

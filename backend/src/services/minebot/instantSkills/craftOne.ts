@@ -14,6 +14,31 @@ import {
 import { actionDelay } from '../execution/observedWait.js';
 import { resyncInventory } from '../utils/inventorySync.js';
 import { placeableSpots } from './findPlaceableSpot.js';
+import { woolByColor } from '../utils/nightGate.js';
+import type { SkillResult } from '../types/skillParams.js';
+
+/**
+ * Which bed the wool carried makes, for a request of `bed` or `<colour>_bed`: the one asked for when there are three of its colour,
+ * else the colour with the most wool when that is three or more (said in `note`), else the refusal `bed_wool_mismatch` with the
+ * count of each colour and what is short, ending in "足りない: <colour>_wool×<n>" (agreed with the API, mb-head 2026-10-20).
+ */
+export function bedFromWool(items: Array<{ name: string; count: number }>, itemName: string):
+  { itemName: string; note: string } | { refusal: { success: false; failureType: 'bed_wool_mismatch'; recoverable: true; result: string } } {
+  const asked = itemName === 'bed' ? null : itemName.slice(0, -'_bed'.length);
+  const wool = woolByColor(items);
+  if (asked && (wool.get(asked) ?? 0) >= 3) return { itemName, note: '' };
+  const best = [...wool.entries()].sort((a, b) => b[1] - a[1])[0];
+  if (best && best[1] >= 3) {
+    return { itemName: `${best[0]}_bed`, note: asked ? `${asked}の羊毛は${wool.get(asked) ?? 0}個のため、${best[0]}の羊毛3個で${best[0]}_bedを作ります。` : '' };
+  }
+  const now = [...wool.entries()].sort((a, b) => b[1] - a[1]).map(([color, n]) => `${color} ${n}`).join('・');
+  const target = asked && !best ? asked : best?.[0] ?? asked;
+  const short = target ? 3 - (wool.get(target) ?? 0) : 3;
+  return { refusal: { success: false, failureType: 'bed_wool_mismatch', recoverable: true,
+    result: `ベッドには同じ色の羊毛が3個要る（今: ${now || '羊毛なし'}）`
+      + (target ? `→ ${target} の羊をもう${short}匹（attack-continuously color=${target}）。足りない: ${target}_wool×${short}`
+        : '→ 同じ色の羊を3匹（attack-continuously color=white など）。足りない: wool×3') } };
+}
 const log = createLogger('Minebot:Skill:craftOne');
 
 /**
@@ -183,7 +208,7 @@ class CraftOne extends InstantSkill {
    * `tableSearchRadius` is not a parameter the planner sees: a caller that makes a tool on the way (utils/toolStock)
    * uses a table only where it can be reached, and otherwise puts down the one it carries.
    */
-  async runImpl(itemName: string, count: number = 1, tableSearchRadius: number = 32) {
+  async runImpl(itemName: string, count: number = 1, tableSearchRadius: number = 32): Promise<SkillResult> {
     const tableRadius = Number.isFinite(tableSearchRadius) && tableSearchRadius > 0 ? Math.min(32, tableSearchRadius) : 32;
     let beforeCount = 0;
     let craftCount = Math.max(1, Math.min(count, 64));
@@ -200,6 +225,17 @@ class CraftOne extends InstantSkill {
       // server's first, and anything an earlier craft left in the pack's own grid is taken back out of it:
       // one item left there spoils every recipe made in that grid afterwards (see resyncInventory).
       await resyncInventory(this.bot as any);
+
+      // A bed takes three wool of one colour. Asked for one the wool does not make, the body says what it has of each colour and
+      // what is missing; a colour that does make one is made instead (run 16 had white 2 and light grey 1 and never knew).
+      if (itemName === 'bed' || itemName.endsWith('_bed')) {
+        const choice = bedFromWool(this.bot.inventory.items(), itemName);
+        if ('refusal' in choice) return choice.refusal;
+        if (choice.itemName !== itemName) {
+          const made: SkillResult = await this.runImpl(choice.itemName, count, tableSearchRadius);
+          return { ...made, result: `${choice.note}${made.result}` };
+        }
+      }
 
       const item = this.mcData.itemsByName[itemName];
       if (!item) {

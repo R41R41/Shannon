@@ -91,14 +91,15 @@ describe('floor reflexes (ADR-0010 D8, defence only)', () => {
     // `floor` ignores the pathfinder and the running command altogether.
     expect(floorEatChoice(body({ items, food: 6, pathfinder: { isMoving: () => true } }), false)?.name).toBe('cooked_beef');
   });
-  it('the default meal: food 14 or less, or health below 14 and food below 18 (run 16 ate at 16 and 17, raw)', () => {
+  it('the default meal: food 14 or less, or health 10 or less and food below 18 (run 16 ate at 16 and 17, and at health 15, raw)', () => {
     const items = [{ name: 'bread' }, { name: 'cooked_beef' }, { name: 'rotten_flesh' }, { name: 'pufferfish' }];
     expect(floorEatChoice(body({ items, food: 18, health: 20 }))).toBeNull();
     expect(floorEatChoice(body({ items, food: 17, health: 20 }))).toBeNull();
     expect(floorEatChoice(body({ items, food: 15, health: 20 }))).toBeNull();
     expect(floorEatChoice(body({ items, food: 14, health: 20 }))?.name).toBe('cooked_beef');
-    expect(floorEatChoice(body({ items, food: 17, health: 13 }))?.name).toBe('cooked_beef');
-    expect(floorEatChoice(body({ items, food: 17, health: 14 }))).toBeNull();
+    expect(floorEatChoice(body({ items, food: 17, health: 10 }))?.name).toBe('cooked_beef');
+    expect(floorEatChoice(body({ items, food: 17, health: 11 }))).toBeNull();   // a scratch is not a reason to eat
+    expect(floorEatChoice(body({ items, food: 19, health: 15 }))).toBeNull();   // run 16's meal at 15 health
     expect(floorEatChoice(body({ items, food: 18, health: 10 }))).toBeNull();
     expect(floorEatChoice(body({ items, food: 20, health: 10 }))).toBeNull();
     expect(floorEatChoice(body({ items, food: 6 }))?.name).toBe('cooked_beef');
@@ -115,7 +116,7 @@ describe('floor reflexes (ADR-0010 D8, defence only)', () => {
     expect(floorEatChoice(body({ items: [{ name: 'beef' }, { name: 'apple' }], food: 14 }))?.name).toBe('apple');
     const raw = [{ name: 'mutton' }, { name: 'chicken' }];
     expect(floorEatChoice(body({ items: raw, food: 14, health: 20 }))).toBeNull();   // left to be cooked
-    expect(floorEatChoice(body({ items: raw, food: 10, health: 12 }))).toBeNull();
+    expect(floorEatChoice(body({ items: raw, food: 10, health: 10 }))).toBeNull();
     expect(floorEatChoice(body({ items: raw, food: 6 }))?.name).toBe('mutton');       // starving: whatever there is
     expect(floorEatChoice(body({ items: raw, food: 12, health: 8 }))?.name).toBe('mutton'); // health in danger
     // Rotten flesh (hunger) after raw meat, though it fills more.

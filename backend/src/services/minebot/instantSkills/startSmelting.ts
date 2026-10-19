@@ -2,7 +2,15 @@ import minecraftData from 'minecraft-data';
 import { Vec3 } from 'vec3';
 import { CustomBot, InstantSkill } from '../types.js';
 import { ensureLineOfSight } from '../utils/blockLineOfSight.js';
-import { RAW_FOOD } from '../constantSkills/autoEat.js';
+import { FALLBACK_FOOD_POINTS, RAW_FOOD } from '../constantSkills/autoEat.js';
+import { scanLoadedBlocks } from '../utils/loadedBlockScan.js';
+import type { SkillResult } from '../types/skillParams.js';
+
+/** How far a free furnace is looked for when the one asked for is busy. */
+const FREE_FURNACE_RANGE = 24;
+/** Ores worth mining while a batch smelts, and how far they are looked for. */
+const MEANWHILE_ORES = ['iron_ore', 'deepslate_iron_ore', 'coal_ore', 'deepslate_coal_ore'];
+const MEANWHILE_RANGE = 24;
 
 /**
  * 原子的スキル: かまどで精錬を開始
@@ -274,12 +282,10 @@ class StartSmelting extends InstantSkill {
         // 材料スロットに別のアイテムが入っているかチェック
         if (currentInput && currentInput.name !== inputItem) {
           furnace.close();
-          return {
-            success: false,
-            result: `材料スロットに別のアイテムがあります: ${currentInput.name} x${currentInput.count}。先に取り出してください（withdraw-from-furnace slot="input"）`,
-            failureType: 'slot_conflict',
-            recoverable: true,
-          };
+          // Busy with something else: another furnace within reach takes this batch (iron in one, meat in the other); else
+          // where one is, or how to make one, and raw food is queued behind the batch here.
+          const elsewhere = await this.otherFurnace(pos, inputItem, fuelItem, count, currentInput);
+          return { ...elsewhere, result: `${elsewhere.result}（このかまどを空けるなら withdraw-from-furnace slot="input"）` };
         }
 
         // 既存燃料はプレイヤーの所持品に無くても使用できる。異なる
@@ -451,8 +457,11 @@ class StartSmelting extends InstantSkill {
         // the food). Not in a blast furnace (it smelts no food); a smoker takes nothing but food anyway.
         const queued = block.name.includes('blast_furnace') ? []
           : [...new Set(this.bot.inventory.items().filter(item => RAW_FOOD.has(item.name) && item.name !== inputItem).map(item => item.name))];
+        // A second furnace within reach: say it can cook now, in one call (the queue stays as the fallback).
+        const besideFree = queued.length ? this.freeFurnaces(pos, queued[0]).find(spot => spot.distance <= 4.5) : undefined;
         const queuedNote = queued.length
           ? `。手持ちの生の食べ物（${queued.map(name => `${name}×${this.inventoryCount(name)}`).join('、')}）は、この精錬の後に同じかまどで焼くよう並べました（withdraw-from-furnace で取り出す時に自動で入れます。燃料は手持ちから）`
+            + (besideFree ? `。隣の空いている${besideFree.name}(${besideFree.position.x}, ${besideFree.position.y}, ${besideFree.position.z})なら今すぐ焼けます: start-smelting inputItem=${queued[0]}` : '')
           : '';
 
         // 部分的に燃料が足りなくても、実際に進められる分を表示する。
@@ -472,7 +481,7 @@ class StartSmelting extends InstantSkill {
             resultMsg += `。※完成品スロットから${withdrawnOutput.name} x${withdrawnOutput.count}を自動回収しました`;
           }
           if (fuelSwitchNote) resultMsg = `${fuelSwitchNote}。${resultMsg}`;
-          return { success: true, result: resultMsg + queuedNote };
+          return { success: true, result: resultMsg + queuedNote + this.meanwhileNote() };
         }
 
         let resultMsg: string;
@@ -489,7 +498,7 @@ class StartSmelting extends InstantSkill {
         if (withdrawnOutput) {
           resultMsg += `。※完成品スロットから${withdrawnOutput.name} x${withdrawnOutput.count}を自動回収しインベントリに入れました`;
         }
-        resultMsg += `。精錬は独立して進むので、待たずに（wait-timeで待たずに）次の作業（採掘など）へ進み、終わった頃に同じかまどから取り出してください。${process.env.MINEBOT_COMMON_FCA === 'on' ? '' : 'get-background-jobsで推定残り時間を確認できます。'}withdraw-from-furnace は残りが約20秒以内なら完了を待ち、長ければ待たずに完成済みの分だけ回収して残り時間を返す（waitForCompletion=true で最後まで待つ）${queuedNote}`;
+        resultMsg += `。精錬は独立して進むので、待たずに（wait-timeで待たずに）次の作業（採掘など）へ進み、終わった頃に同じかまどから取り出してください。${process.env.MINEBOT_COMMON_FCA === 'on' ? '' : 'get-background-jobsで推定残り時間を確認できます。'}withdraw-from-furnace は残りが約20秒以内なら完了を待ち、長ければ待たずに完成済みの分だけ回収して残り時間を返す（waitForCompletion=true で最後まで待つ）${queuedNote}${this.meanwhileNote()}`;
 
         return {
           success: true,
@@ -508,6 +517,70 @@ class StartSmelting extends InstantSkill {
       };
     }
   }
+  /** Set while a busy furnace's batch is being put into the one beside it (`otherFurnace`). */
+  private hopping = false;
+
+  /** Furnaces that take this input: any furnace; a smoker for food only; a blast furnace for ores and metal only. */
+  private furnaceKindsFor(inputItem: string): string[] {
+    const food = RAW_FOOD.has(inputItem) || (FALLBACK_FOOD_POINTS[inputItem] ?? 0) > 0;
+    return ['furnace', ...(food ? ['smoker'] : ['blast_furnace'])];
+  }
+
+  /** A furnace that is not working on a batch the body put in (`activeFurnaces`), other than the one at `except`, nearest first. */
+  private freeFurnaces(except: Vec3, inputItem: string): Array<{ position: Vec3; name: string; distance: number }> {
+    const now = Date.now();
+    const busy = (p: Vec3) => (this.bot.activeFurnaces ?? []).some(f => f.pos.x === p.x && f.pos.y === p.y && f.pos.z === p.z && f.readyAt > now);
+    let hits: Array<{ name: string; position: Vec3; distance: number }> = [];
+    try { hits = scanLoadedBlocks(this.bot as any, this.furnaceKindsFor(inputItem), { maxDistance: FREE_FURNACE_RANGE, maxHits: 8 }).hits; } catch { hits = []; }
+    const here = this.bot.entity.position;
+    return hits.filter(hit => !hit.position.equals(except) && !busy(hit.position))
+      .map(hit => ({ ...hit, distance: hit.position.offset(0.5, 0.5, 0.5).distanceTo(here) }))
+      .sort((a, b) => a.distance - b.distance);
+  }
+
+  /**
+   * The furnace asked for is busy with something else. Within reach, another furnace takes the batch at once (iron in one and meat
+   * in the other: the owner's two furnaces, 2026-10-20). Further off, where it is. None: raw food is queued behind the batch here,
+   * and how to set down a second furnace is said. Null only when there is nothing to say beyond the plain conflict.
+   */
+  private async otherFurnace(pos: Vec3, inputItem: string, fuelItem: string, count: number,
+    busyWith: { name: string; count: number }): Promise<SkillResult> {
+    const free = this.freeFurnaces(pos, inputItem);
+    // One hop only: a furnace someone else filled is not in `activeFurnaces`, and two of those would send the call back and forth.
+    const reachable = this.hopping ? undefined : free.find(spot => spot.distance <= 4.5);
+    const busyNote = `かまど(${pos.x}, ${pos.y}, ${pos.z})は ${busyWith.name}×${busyWith.count} を精錬中`;
+    if (reachable) {
+      this.hopping = true;
+      let result: SkillResult;
+      try { result = await this.runImpl(reachable.position.x, reachable.position.y, reachable.position.z, inputItem, fuelItem, count); }
+      finally { this.hopping = false; }
+      return { ...result, result: `${busyNote}のため、隣の空いている${reachable.name}(${reachable.position.x}, ${reachable.position.y}, ${reachable.position.z})を使いました。${result.result}` };
+    }
+    const far = free[0];
+    let queued = '';
+    if (RAW_FOOD.has(inputItem)) {
+      const job = (this.bot.activeFurnaces ?? []).find(f => f.pos.x === pos.x && f.pos.y === pos.y && f.pos.z === pos.z);
+      if (job && !(job.then ?? []).includes(inputItem)) { job.then = [...(job.then ?? []), inputItem]; queued = `。${inputItem}はこの精錬の後に同じかまどで焼くよう並べました`; }
+      else if (job) queued = `。${inputItem}はこの精錬の後に焼くよう並んでいます`;
+    }
+    const cobble = this.inventoryCount('cobblestone') + this.inventoryCount('cobbled_deepslate') + this.inventoryCount('blackstone');
+    const advice = far
+      ? `空いている${far.name}が(${far.position.x}, ${far.position.y}, ${far.position.z})、約${Math.round(far.distance)}mにあります。move-to で近づいてから start-smelting`
+      : `2個目のかまどを置けば並行して焼けます（丸石8個で craft-one furnace → place-block-at。手持ちの丸石${cobble}個）`;
+    return { success: false, failureType: 'slot_conflict', recoverable: true, result: `${busyNote}です。${advice}${queued}` };
+  }
+
+  /** What could be done while the furnace works: the nearest ores in the loaded chunks, said as places to mine. */
+  private meanwhileNote(): string {
+    try {
+      const hits = scanLoadedBlocks(this.bot as any, MEANWHILE_ORES, { maxDistance: MEANWHILE_RANGE, maxHits: 12 }).hits;
+      const kinds = new Map<string, (typeof hits)[number]>();
+      for (const hit of hits) { const kind = hit.name.replace(/^deepslate_/, ''); if (!kinds.has(kind)) kinds.set(kind, hit); }
+      if (!kinds.size) return '';
+      return `。待たずにできること: ${[...kinds.entries()].map(([kind, hit]) => `近くの${kind} (${hit.position.x}, ${hit.position.y}, ${hit.position.z}) 約${Math.round(hit.distance)}m`).join('・')} を mine-block で掘る`;
+    } catch { return ''; }
+  }
+
   private registerActiveFurnace(
     x: number, y: number, z: number,
     item: string, count: number, estimatedSec: number, unfueledCount = 0, then: string[] = [],
