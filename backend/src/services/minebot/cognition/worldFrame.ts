@@ -10,7 +10,6 @@ import { creeperLit } from '../utils/creeperFuse.js';
 import { backgroundJobs } from '../execution/backgroundJobs.js';
 import { bedWool, cookRawNotice, descentKitNotice, type GateBody } from '../utils/nightGate.js';
 import { toolKitNotice } from '../utils/toolWear.js';
-import { nearbyNeeds } from '../utils/nearbyNeeds.js';
 
 /** The shelter check, for whatever stands in for a body here (a cached self-state has no world to read). */
 function sealedIn(bot: unknown): boolean {
@@ -310,12 +309,6 @@ export function captureWorldObservation(bot?: unknown): WorldObservation {
     nearbyEntities,
     nearbyThreats,
     ...(landmarks?.length ? { landmarks: structuredClone(landmarks) } : {}),
-    ...(() => {
-      try {
-        const needs = observedBot?.entity ? nearbyNeeds(observedBot as any) : [];
-        return needs.length ? { nearbyNeeds: needs } : {};
-      } catch { return {}; }
-    })(),
     ...(() => {
       try {
         const remembered = (observedBot as { placeMemory?: { digest(limit?: number): Record<string, string> } } | undefined)?.placeMemory?.digest(10);
