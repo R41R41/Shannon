@@ -135,6 +135,8 @@ export interface WorldObservation {
   time: string | null;
   biome: string | null;
   heldItem: string | null;
+  /** What is worn and in the off hand, with wear (live body only): the inventory lists the pack's slots, not these. */
+  worn?: string;
   inventory: WorldInventoryStack[];
   activeEffects: Array<{ name: string; amplifier: number }>;
   nearbyEntities: NearbyEntityObservation[];

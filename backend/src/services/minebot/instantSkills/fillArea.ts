@@ -15,7 +15,7 @@ class FillArea extends InstantSkill {
     super(bot);
     this.skillName = 'fill-area';
     this.description =
-      '指定した範囲を特定のブロックで埋めます（整地や簡単な建築に使用）。';
+      '2つの角で決めた直方体を1種類のブロックで埋める（床・壁・足場）。1個ならplace-block-at、登録済みの設計ならbuild-structure';
     this.params = [
       {
         name: 'x1',

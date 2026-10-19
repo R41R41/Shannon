@@ -8,7 +8,7 @@ class AttackNearest extends InstantSkill {
   constructor(bot: CustomBot) {
     super(bot);
     this.skillName = 'attack-nearest';
-    this.description = '最も近いエンティティに1回攻撃します。entityNameで対象を指定可能。省略時は敵対的Mobのみ。';
+    this.description = '手の届く最も近い1体を1回だけ殴る（追わない）。entityNameで対象を指定、省略時は敵対Mob。倒すまで戦うならcombat、何体も狩るならattack-continuously';
     this.params = [
       {
         name: 'entityName',

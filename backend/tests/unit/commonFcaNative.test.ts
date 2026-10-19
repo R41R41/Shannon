@@ -61,10 +61,13 @@ describe('floor facts for the API fast judgment (ADR-0011 stage 2)', () => {
 });
 describe('common FCA native body', () => {
   it('advertises real bounded schemas, query categories and finite native skills only', () => {
-    const query = skill('get-health'), unknown = skill('new-physical-skill'), planner = skill('campaign-planner'), code = skill('run-command');
+    const query = skill('wait-time'), unknown = skill('new-physical-skill'), planner = skill('campaign-planner'), code = skill('run-command');
     const vec = skill('move-to', [{ name: 'target', type: 'Vec3', required: true, description: 'coordinate' }]);
-    const catalog = bodySkillCatalog([query, unknown, planner, code, vec, { ...skill('forever'), maxDurationMs: 0 }], {});
-    expect(catalog.definitions.map(d => [d.name, d.readOnly])).toEqual([['get-health', true], ['new-physical-skill', false], ['move-to', false]]);
+    const observed = skill('get-health');
+    const catalog = bodySkillCatalog([query, unknown, planner, code, vec, { ...skill('forever'), maxDurationMs: 0 }, observed], {});
+    expect(catalog.definitions.map(d => [d.name, d.readOnly])).toEqual([['wait-time', true], ['new-physical-skill', false], ['move-to', false]]);
+    // What the observation already says is not offered, but still runs when asked for.
+    expect(catalog.runnable.map(d => d.name)).toContain('get-health');
     const schema: any = catalog.definitions[2].inputSchema;
     expect(schema.additionalProperties).toBe(false); expect(schema.properties.target.additionalProperties).toBe(false);
     expect(catalog.resolve('move-to', { target: { x: 1, y: 2, z: 3 } }).args[0]).toBeInstanceOf(Vec3);

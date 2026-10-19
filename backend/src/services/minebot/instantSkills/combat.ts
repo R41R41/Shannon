@@ -18,7 +18,7 @@ class Combat extends InstantSkill {
     constructor(bot: CustomBot) {
         super(bot);
         this.skillName = 'combat';
-        this.description = '指定した敵を追いかけながら倒すまで攻撃します。武器が必要です。';
+        this.description = '指定した1体を追いかけて、倒すまで（最長timeout秒）攻撃する。武器が必要';
         this.params = [
             {
                 name: 'target',

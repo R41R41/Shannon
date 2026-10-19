@@ -27,7 +27,7 @@ class UseItem extends InstantSkill {
   constructor(bot: CustomBot) {
     super(bot);
     this.skillName = 'use-item';
-    this.description = '指定したアイテムを装備して使用します（右クリック）。食べ物を食べる・ポーションを飲む場合にも使用します。';
+    this.description = '指定したアイテムを装備して使用します（右クリック）。食べ物を食べる・ポーションを飲む場合にも使用します。ender_eyeは投げて、目玉の飛んだ方位を測って返します（要塞の三角測量）。';
     this.mcData = minecraftData(this.bot.version);
     this.params = [
       {
@@ -127,6 +127,8 @@ class UseItem extends InstantSkill {
         const effects = Object.values((this.bot.entity as any)?.effects ?? {}).map((effect: any) =>
           `${String((this.bot as any).registry?.effects?.[effect.id]?.name ?? `effect_${effect.id}`)}（残り約${Math.round((effect.duration ?? 0) / 20)}秒）`);
         return { success: true, result: `${heldItem.name}${contents ? `（${contents}）` : ''}を足元に投げました。いま付いている効果: ${effects.length ? effects.join('、') : 'なし'}` };
+      } else if (heldItem.name === 'ender_eye') {
+        return await this.throwEnderEye();
       } else {
         await this.bot.activateItem();
       }
@@ -141,6 +143,41 @@ class UseItem extends InstantSkill {
         result: `アイテム使用エラー: ${error.message}`,
       };
     }
+  }
+
+  /**
+   * The thrown eye flies toward the nearest stronghold: its course, read over about a second of flight, is one line of
+   * a triangulation. Two throws some hundreds of blocks apart cross near the stronghold; the crossing is worked out
+   * by whoever reads the two results, not here.
+   */
+  private async throwEnderEye() {
+    const eyes = () => Object.values(this.bot.entities).filter((entity: any) =>
+      entity?.name === 'eye_of_ender' && entity.position?.distanceTo(this.bot.entity.position) < 6);
+    const before = new Set(eyes().map((entity: any) => entity.id));
+    const from = this.bot.entity.position.floored();
+    await this.bot.activateItem();
+    let eye: any = null;
+    for (const deadline = Date.now() + 1000; !eye && Date.now() < deadline;) {
+      await actionDelay(this.bot, 50);
+      eye = eyes().find((entity: any) => !before.has(entity.id)) ?? null;
+    }
+    // No eye leaves the hand where there is no stronghold to lead to (the Nether, the End), or when the look is on a frame.
+    if (!eye) return { success: false, result: 'エンダーアイは飛びませんでした（要塞の無い次元にいるか、エンドポータルの枠を見ています）', failureType: 'eye_not_thrown', recoverable: true };
+    const start = eye.position.clone();
+    let end = start;
+    for (const deadline = Date.now() + 1000; Date.now() < deadline && this.bot.entities[eye.id];) {
+      await actionDelay(this.bot, 50);
+      if (this.bot.entities[eye.id]) end = this.bot.entities[eye.id].position.clone();
+    }
+    const dx = end.x - start.x, dy = end.y - start.y, dz = end.z - start.z, flat = Math.hypot(dx, dz);
+    if (flat < 0.3) return { success: true, result: `エンダーアイを${from.x}, ${from.y}, ${from.z}で投げましたが、目玉は横にほとんど動かず、向きは読めませんでした（真上なら要塞はほぼ真下です）` };
+    // North (−z) is 0° and east (+x) is 90°, the way a map is read.
+    const bearing = (Math.atan2(dx, -dz) * 180 / Math.PI + 360) % 360;
+    const elevation = Math.atan2(dy, flat) * 180 / Math.PI;
+    const compass = ['北', '北東', '東', '南東', '南', '南西', '西', '北西'][Math.round(bearing / 45) % 8];
+    return { success: true, result: `エンダーアイを(${from.x}, ${from.y}, ${from.z})で投げました。目玉は方位${bearing.toFixed(1)}°（北=0°、東=90°。${compass}）、`
+      + `仰角${elevation.toFixed(0)}°へ飛びました（水平の向き x=${(dx / flat).toFixed(3)}, z=${(dz / flat).toFixed(3)}）。`
+      + '数百ブロック離れた2地点で投げた線の交わる所が要塞の目安です。目玉は数秒後に落ちる（拾える）か、割れて消えます' };
   }
 }
 

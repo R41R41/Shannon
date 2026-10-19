@@ -26,7 +26,7 @@ class AttackContinuously extends InstantSkill {
   constructor(bot: CustomBot) {
     super(bot);
     this.skillName = 'attack-continuously';
-    this.description = '対象を追跡しながら連続攻撃。武器自動装備。1体倒すと自動で次を攻撃。maxKillsで倒す数を制限可能。';
+    this.description = '範囲内の対象を次々に追って倒す（狩り・群れ。武器は自動で持つ）。maxKillsで数を決め、holdPositionで動かずに迎え撃つ';
     this.params = [
       {
         name: 'entityName',

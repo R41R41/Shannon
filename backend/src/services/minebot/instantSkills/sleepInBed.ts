@@ -4,6 +4,7 @@ import { CustomBot, InstantSkill } from '../types.js';
 import { createLogger } from '../../../utils/logger.js';
 import { gotoSafe } from '../utils/gotoSafe.js';
 import { actionDelay } from '../execution/observedWait.js';
+import { BED_EXPLODES, bedExplodesHere, isBedName } from '../utils/bedRules.js';
 
 const { goals } = pathfinder;
 const log = createLogger('Minebot:Skill:sleepInBed');
@@ -16,7 +17,7 @@ class SleepInBed extends InstantSkill {
     super(bot);
     this.skillName = 'sleep-in-bed';
     this.description =
-      'ベッドで眠ります。近くにベッドがない場合はインベントリのベッドを設置して眠ります。wakeUpをtrueにするとベッドから起きます。';
+      'ベッドで眠ります（夜か雷雨の時だけ。ネザー・エンドでは爆発するので拒みます）。近くにベッドがない場合はインベントリのベッドを設置して眠ります。wakeUpをtrueにするとベッドから起きます。';
     this.params = [
       {
         name: 'wakeUp',
@@ -99,13 +100,18 @@ class SleepInBed extends InstantSkill {
         }
       }
 
+      // A bed placed or used in the Nether or the End explodes.
+      if (bedExplodesHere(this.bot)) return { success: false, result: BED_EXPLODES, failureType: 'bed_explodes', recoverable: true };
+
       // 時間チェック
       const timeOfDay = this.bot.time.timeOfDay;
-      // 夜は12542～23459
-      if (timeOfDay < 12542 || timeOfDay > 23459) {
+      // 夜は12542～23459（雷雨の時は昼でも眠れる）
+      if ((timeOfDay < 12542 || timeOfDay > 23459) && !((this.bot as any).thunderState > 0)) {
         return {
           success: false,
-          result: '夜または嵐の時にしか寝られません（現在の時間: ' + timeOfDay + '）',
+          result: '夜または雷雨の時にしか寝られません（現在の時間: ' + timeOfDay + '）。'
+            + 'リスポーン地点を決めるだけなら、昼でも activate-block（blockName: bed）でベッドを右クリックすれば決まります',
+          failureType: 'not_night', recoverable: true,
         };
       }
 
@@ -225,7 +231,7 @@ class SleepInBed extends InstantSkill {
       // インベントリにベッドがあるか確認
       const bedItem = this.bot.inventory
         .items()
-        .find((i) => i.name.includes('bed'));
+        .find((i) => isBedName(i.name));
 
       if (!bedItem) {
         return {

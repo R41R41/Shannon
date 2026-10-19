@@ -15,7 +15,7 @@ class CombatEngage extends InstantSkill {
     constructor(bot: CustomBot) {
         super(bot);
         this.skillName = 'combat-engage';
-        this.description = '汎用戦闘AI。敵モブと戦闘する。状況を評価し最善の行動を自律選択。複数体の敵、遠距離攻撃にも対処。不利なら自動逃走。';
+        this.description = '複数の敵や弓の敵との戦い方を体が自分で選ぶ（近接・距離を取る・不利なら逃げる）。相手と倒す数を決めて戦うならcombat/attack-continuously';
         this.params = [
             {
                 name: 'target',

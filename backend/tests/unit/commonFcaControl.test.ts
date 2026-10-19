@@ -42,6 +42,19 @@ describe('common FCA body transport', () => {
     expect(f.requests[4].receipts).toEqual([]); expect(f.actuator.execute).toHaveBeenCalledTimes(1);
     expect(f.requests[0].skills).toEqual([]); expect(f.requests[1].skills).toBeUndefined(); await f.loop.stop();
   });
+  it('sends the catalog again, whole, only when the body offers a different one (the task changed kind), and after lost contact', async () => {
+    const f = fixture();
+    const ordinary = [{ name: 'fish', description: 'fish', readOnly: false, inputSchema: { type: 'object', properties: {}, required: [], additionalProperties: false } }];
+    let offered: any[] = ordinary;
+    Object.defineProperty(f.actuator, 'skills', { get: () => offered });
+    await f.loop.poll(); await f.loop.poll();
+    expect(f.requests[0].skills).toEqual(ordinary); expect(f.requests[1].skills).toBeUndefined();
+    offered = []; await f.loop.poll(); await f.loop.poll();
+    expect(f.requests[2].skills).toEqual([]); expect(f.requests[3].skills).toBeUndefined();
+    f.responses.push(new Error('lost')); await expect(f.loop.poll()).rejects.toThrow();
+    await f.loop.poll(); expect(f.requests[5].skills).toEqual([]);
+    await f.loop.stop();
+  });
   it('accepts a deadline as far as the skill own time, and says a refusal for shape took nothing', async () => {
     const f = fixture(); (f.actuator as any).skills = [{ name: 'mine-block', description: '', inputSchema: {}, readOnly: false, maxDurationMs: 180_000 }];
     f.responses.push({ commands: [command('long', { skill: 'mine-block', deadlineAt: new Date(NOW + 180_000).toISOString() })] }); await f.loop.poll(); await tick();

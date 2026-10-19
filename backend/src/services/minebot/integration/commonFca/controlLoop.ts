@@ -52,7 +52,8 @@ export class CommonFcaControlLoop {
   private observation: BodyObservation;
   private polling = false;
   private closed = false;
-  private catalogSent = false;
+  /** The catalog the API last acknowledged; a different one (the task changed kind) is sent again, whole. */
+  private catalogSent: readonly MinecraftSkillDefinition[] | null = null;
   private readonly lifetime = new AbortController();
   /** When a poll last got a well-formed reply; running commands survive a short loss of contact (see poll). */
   private contactAt = (this.options.now ?? Date.now)();
@@ -79,12 +80,13 @@ export class CommonFcaControlLoop {
     try {
       this.observation = this.options.actuator.observe();
       const sent = [...this.receipts.values()].slice(0, 16);
+      const catalog = this.options.actuator.skills;
       const response = await (this.options.fetcher ?? fetch)(`${this.baseUrl}${MINECRAFT_CONTROL_PATH}`, {
         method: 'POST', headers: { authorization: `Bearer ${this.options.token}`, 'content-type': 'application/json' },
         signal: AbortSignal.any([this.lifetime.signal, AbortSignal.timeout(POLL_TIMEOUT_MS)]),
         body: JSON.stringify({ schemaVersion: 1, serverId: this.options.serverId, connectionId: this.connectionId,
           observation: this.observation, candidates: this.options.actuator.candidates(this.observation),
-          ...(!this.catalogSent ? { skills: this.options.actuator.skills } : {}),
+          ...(this.catalogSent !== catalog ? { skills: catalog } : {}),
           receipts: sent, activeOperationIds: [...this.active.keys()] }),
       });
       if (!response.ok) throw Error('BODY_CONTROL_HTTP');
@@ -92,14 +94,14 @@ export class CommonFcaControlLoop {
       if (this.closed) return;
       if (reply.schemaVersion !== 1 || reply.mode !== 'common-fca' || !Array.isArray(reply.commands)
         || reply.commands.length > 8 || !Array.isArray(reply.cancel) || !Array.isArray(reply.acknowledged)) throw Error('BODY_CONTROL_REPLY');
-      this.catalogSent = true;
+      this.catalogSent = catalog;
       this.contactAt = (this.options.now ?? Date.now)();
       for (const id of reply.acknowledged) if (sent.some(receipt => receipt.id === id)) this.receipts.delete(id);
       for (const id of reply.cancel) this.active.get(id)?.controller.abort('server_cancel');
       for (const command of reply.commands) this.accept(command);
     } catch (error) {
       // No action replay after lost contact. Command IDs remain tombstoned for this connection.
-      this.catalogSent = false;
+      this.catalogSent = null;
       // One slow or failed poll is not lost contact: a two-second stall of the API's event loop used to cut every
       // running move (common run 9, 2026-10-14 20:40). Running commands keep their own deadlines; they are stopped
       // only once the API has not answered for CONTACT_LOSS_MS (an API restart, a dead network).

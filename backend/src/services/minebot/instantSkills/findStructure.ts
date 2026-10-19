@@ -74,22 +74,18 @@ class FindStructure extends InstantSkill {
       let searchBlocks: string[] = [];
       let searchDistance = 128;
 
+      // The same markers the explore stops on: stone bricks stand in villages and ruins, plain blackstone in the
+      // basalt deltas, so neither says a stronghold or a bastion is here.
       switch (normalizedType) {
         case 'fortress':
-          searchBlocks = ['nether_bricks', 'nether_brick_fence'];
-          searchDistance = 256;
-          break;
         case 'bastion':
-          searchBlocks = ['blackstone', 'polished_blackstone_bricks'];
-          searchDistance = 256;
+        case 'stronghold':
+          searchBlocks = STRUCTURE_MARKERS[normalizedType].blocks;
+          searchDistance = STRUCTURE_MARKERS[normalizedType].distance;
           break;
         case 'village':
           searchBlocks = ['bell', 'hay_block'];
           searchDistance = 128;
-          break;
-        case 'stronghold':
-          searchBlocks = ['stone_bricks', 'mossy_stone_bricks'];
-          searchDistance = 64;
           break;
         default:
           return {
@@ -117,6 +113,8 @@ class FindStructure extends InstantSkill {
             ? `以前に見た場所を覚えています: (${remembered.position.x}, ${remembered.position.y}, ${remembered.position.z}) ${remembered.distance}m ${remembered.direction}。`
             : memory ? `まだ見ていない方角: ${memory.unseen()}。` : '';
         } catch { known = ''; }
+        // A stronghold lies underground, often thousands of blocks off: the eye of ender is what points to it.
+        if (normalizedType === 'stronghold') known += 'エンダーアイを離れた2地点で投げると（use-item ender_eye）、方位から要塞の位置を絞れます。';
         return {
           success: true,
           result: `読み込み済みの範囲（約${Math.min(scan.reachMetres, searchDistance)}m）に${structureType}の痕跡が見つかりませんでした。${known}移動してから再度探索してください`,

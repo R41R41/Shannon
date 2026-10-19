@@ -7,7 +7,7 @@ import { floorConfig } from '../../utils/floorConfig.js';
 import type { ReflexLedger } from '../../utils/reflexLedger.js';
 import { activeActionCapabilities, cancelIdleActions, currentAction, cancelNonSurvivalActions, createMotorPort, executeAction,
   hasActiveSafetyLease, physicalActionBusy, withActionSignal } from '../../execution/ActionExecution.js';
-import { bodySkillCatalog, type BodySkill } from './skillCatalog.js';
+import { bodySkillCatalog, isDragonGoal, type BodySkill } from './skillCatalog.js';
 import type { BodyCandidateDraft, BodyObservation, BodyValue } from './bodyControlContract.js';
 import type { MinecraftControlCommand as Command, MinecraftControlReceipt as Receipt } from './minecraftControlContract.js';
 import type { CommonFcaActuator } from './controlLoop.js';
@@ -49,8 +49,14 @@ function failureOf(result: { failureType?: string; recoverable?: boolean }): Pic
   return { ...(type ? { failureType: type } : {}), ...(typeof result.recoverable === 'boolean' ? { recoverable: result.recoverable } : {}) };
 }
 export class NativeCommonFcaBody implements CommonFcaActuator {
-  readonly skills;
   private readonly catalog;
+  /** The catalog for an ordinary task, and for the dragon (fewer life tools); `skills` is the one for the latest task. */
+  private readonly offered;
+  private readonly offeredForDragon;
+  private readonly runnable;
+  private dragonTask = false;
+  /** What the planner is offered now. A new array only when the task changes kind, which is when the loop sends it again. */
+  get skills() { return this.dragonTask ? this.offeredForDragon : this.offered; }
   private readonly goalEvidence: NativeGoalEvidence;
   private sequence = 0;
   private connected = true;
@@ -67,8 +73,10 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
   constructor(private readonly bot: any, private readonly options: NativeBodyOptions) {
     this.reflexTag = options.reflexTag ?? floorConfig().ledgerTag;
     this.catalog = bodySkillCatalog(bot.instantSkills.getSkills() as BodySkill[], bot);
-    if (this.catalog.definitions.some(skill => skill.name === GOAL_EVIDENCE_SKILL.name)) throw Error('BODY_RESERVED_SKILL');
-    this.skills = [...this.catalog.definitions, GOAL_EVIDENCE_SKILL];
+    if (this.catalog.runnable.some(skill => skill.name === GOAL_EVIDENCE_SKILL.name)) throw Error('BODY_RESERVED_SKILL');
+    this.offered = [...this.catalog.definitions, GOAL_EVIDENCE_SKILL];
+    this.offeredForDragon = [...this.catalog.dragonDefinitions, GOAL_EVIDENCE_SKILL];
+    this.runnable = [...this.catalog.runnable, GOAL_EVIDENCE_SKILL];
     this.goalEvidence = new NativeGoalEvidence(bot, () => this.now());
     bot.on('end', this.onEnd); bot.on('minebotActionProgress', this.onProgress);
   }
@@ -101,6 +109,8 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
     return primitiveCandidates(observation, this.now());
   }
   async execute(command: Command, signal: AbortSignal): Promise<Receipt> {
+    // The task each command carries says which catalog the next decisions are offered.
+    if (typeof command.context?.goal === 'string') this.dragonTask = isDragonGoal(command.context.goal);
     if (command.kind === 'capture') {
       // Capture never owns motor inputs. Missing exact assets or cancelled observation are a
       // known no-image result, not an uncertain physical effect. Existing cleanup holds remain held.
@@ -119,7 +129,7 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
     if (!this.connected || !this.bot.entity) throw Error('BODY_DISCONNECTED');
     // Each skill runs for its own time (build-around-self five minutes, mine-block three), never past the command's deadline
     // (the API sets that deadline from the catalog's maxDurationMs; until it does, its two minutes still bound every skill).
-    const limit = command.kind === 'skill' ? this.skills.find(skill => skill.name === command.skill)?.maxDurationMs ?? 120_000 : 120_000;
+    const limit = command.kind === 'skill' ? this.runnable.find(skill => skill.name === command.skill)?.maxDurationMs ?? 120_000 : 120_000;
     const milliseconds = Math.min(limit, Date.parse(command.deadlineAt) - this.now());
     if (!Number.isFinite(milliseconds) || milliseconds <= 0) throw Error('BODY_DEADLINE');
     this.goalEvidence.begin(command);
@@ -159,7 +169,7 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
       let actionId: string | undefined;
       const started = work;
       work = () => { actionId = currentAction(this.bot)?.progress.actionId; return started(); };
-      const readOnly = command.kind === 'skill' && this.skills.find(skill => skill.name === capability)?.readOnly === true;
+      const readOnly = command.kind === 'skill' && this.runnable.find(skill => skill.name === capability)?.readOnly === true;
       if (!readOnly) cancelIdleActions(this.bot, 'fca_command');
       const ledger: ReflexLedger | undefined = this.reflexTag ? this.bot.reflexLedger : undefined;
       const mark = ledger?.mark() ?? 0;

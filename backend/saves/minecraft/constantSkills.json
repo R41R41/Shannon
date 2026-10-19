@@ -12,10 +12,6 @@
     "status": false
   },
   {
-    "skillName": "auto-attack-hostile",
-    "status": false
-  },
-  {
     "skillName": "auto-face-moved-entity",
     "status": false
   },
@@ -32,10 +28,6 @@
     "status": true
   },
   {
-    "skillName": "auto-equip-best-tool",
-    "status": false
-  },
-  {
     "skillName": "auto-shoot-arrow-to-block",
     "status": false
   },
@@ -48,24 +40,8 @@
     "status": false
   },
   {
-    "skillName": "auto-throw-ender-pearl",
-    "status": false
-  },
-  {
     "skillName": "auto-avoid-dragon-breath",
-    "status": false
-  },
-  {
-    "skillName": "auto-shoot-dragon",
-    "status": false
-  },
-  {
-    "skillName": "auto-attack-dragon-perch",
-    "status": false
-  },
-  {
-    "skillName": "auto-break-spawner",
-    "status": false
+    "status": true
   },
   {
     "skillName": "auto-update-looking-at",

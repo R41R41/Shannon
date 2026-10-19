@@ -23,7 +23,7 @@ class StairMine extends InstantSkill {
     constructor(bot: CustomBot) {
         super(bot);
         this.skillName = 'stair-mine';
-        this.description = '階段を掘りながら（または置きながら）目標の高さまで移動します。';
+        this.description = '斜めの階段を掘って（登りは置いて）目標の高さへ行く。種類で探して掘るならmine-block、1マスならdig-block-at';
         this.mcData = minecraftData(this.bot.version);
         this.params = [
             {

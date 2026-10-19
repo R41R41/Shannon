@@ -23,7 +23,7 @@ class PlaceBlockAt extends InstantSkill {
   constructor(bot: CustomBot) {
     super(bot);
     this.skillName = 'place-block-at';
-    this.description = '指定座標にブロックを設置します。';
+    this.description = '指定座標にブロックを1個置く';
     this.mcData = minecraftData(this.bot.version);
     this.params = [
       {

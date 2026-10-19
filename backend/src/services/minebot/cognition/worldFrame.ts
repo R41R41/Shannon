@@ -70,6 +70,24 @@ function bodyEconomy(bot: unknown): Pick<WorldObservation, 'saturation' | 'exert
   };
 }
 
+/** The player window's armour slots and off hand, in mineflayer's numbering. */
+const WORN_SLOTS: ReadonlyArray<[number, string]> = [[5, '頭'], [6, '胴'], [7, '脚'], [8, '足'], [45, '左手']];
+
+/**
+ * What the body wears and holds in the off hand, in one line. The pack (`inventory`) is slots 9-44 only, so armour put
+ * on and a shield in the off hand were in no observation: only get-equipment told of them.
+ */
+function wornLine(bot: unknown): Pick<WorldObservation, 'worn'> {
+  const slots = (bot as { inventory?: { slots?: unknown } } | undefined)?.inventory?.slots;
+  if (!Array.isArray(slots)) return {};
+  return { worn: WORN_SLOTS.map(([slot, label]) => {
+    const item = slots[slot] as { name?: string; maxDurability?: unknown; durabilityUsed?: unknown } | null | undefined;
+    if (!item?.name) return `${label}: なし`;
+    const max = item.maxDurability, used = item.durabilityUsed;
+    return `${label}: ${item.name}${typeof max === 'number' && max > 0 && typeof used === 'number' ? `(残り${Math.max(0, max - used)}/${max})` : ''}`;
+  }).join('、') };
+}
+
 const NIGHTFALL_TICK = 13000;
 const MORNING_TICK = 23000;
 const HIT_RANGE = 24;
@@ -263,6 +281,7 @@ export function captureWorldObservation(bot?: unknown): WorldObservation {
     time,
     biome: biomeAt(observedBot) ?? (observedBot?.environmentState?.biome || null),
     heldItem: observedBot?.heldItem?.name ?? observedBot?.selfState?.botHeldItem ?? null,
+    ...wornLine(observedBot),
     inventory,
     activeEffects,
     nearbyEntities,
