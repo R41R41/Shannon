@@ -80,12 +80,15 @@ function isAirBlockName(name: string | undefined): boolean {
   return name === 'air' || name === 'cave_air' || name === 'void_air';
 }
 
-/** このセルに固体隣接があり place-block-at が参照ブロックを取れるか */
-function canPlaceAtCell(bot: { blockAt(position: Vec3): { name?: string } | null }, targetPos: Vec3): { ok: boolean; faceLabel: string } {
+/**
+ * このセルに固体隣接があり place-block-at が参照ブロックを取れるか. A face to place against is a full block, as place-block-at takes it:
+ * grass, a flower, water or a torch beside the cell is not one (run 18, D2: a spot chosen by the grass beside it, refused as "in the air").
+ */
+function canPlaceAtCell(bot: { blockAt(position: Vec3): { name?: string; boundingBox?: string } | null }, targetPos: Vec3): { ok: boolean; faceLabel: string } {
   for (let i = 0; i < FindPlaceableSpot.OFFSETS.length; i++) {
     const [ox, oy, oz] = FindPlaceableSpot.OFFSETS[i];
     const candidate = bot.blockAt(targetPos.offset(ox, oy, oz));
-    if (candidate && !isAirBlockName(candidate.name)) {
+    if (candidate && !isAirBlockName(candidate.name) && (candidate.boundingBox === undefined ? true : candidate.boundingBox === 'block')) {
       return { ok: true, faceLabel: FindPlaceableSpot.FACE_LABELS[i] };
     }
   }
@@ -98,7 +101,7 @@ export interface PlaceableSpot { x: number; y: number; z: number; dist: number; 
  * Air cells round the body that place-block-at can fill (a solid block beside them to place against), nearest first; never the two
  * cells the body stands in. Used by find-placeable-spot and by craft-one's own placing of a crafting table.
  */
-export function placeableSpots(bot: { entity: { position: Vec3 }; blockAt(position: Vec3): { name?: string } | null },
+export function placeableSpots(bot: { entity: { position: Vec3 }; blockAt(position: Vec3): { name?: string; boundingBox?: string } | null },
   radius: number, limit: number, requireHeadSpace = false): PlaceableSpot[] {
   const botPos = bot.entity.position;
   const ox0 = Math.floor(botPos.x);

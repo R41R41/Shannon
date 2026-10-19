@@ -15,6 +15,47 @@ const HEALING_HEALTH = 10;
 /** After the exposure guard refused a dig (a hostile right outside), waits are let be this long. */
 const GUARD_WAIT_MS = 60_000;
 
+/** Hurt and regenerating: a wait is what heals it (natural regeneration needs food 18). */
+export function healingNow(bot: { health?: number; food?: number }): boolean {
+  const health = Number(bot.health ?? 20), food = Number(bot.food ?? 20);
+  return health <= HEALING_HEALTH && food >= 18;
+}
+
+/** A dig out was just refused for the hostile it would let in, and that refusal says to wait for it to go: a wait then is let be. */
+export function guardAskedToWait(bot: object, now = Date.now()): boolean {
+  const guard = (bot as { exposureDigGuard?: { lastAt?: number } }).exposureDigGuard;
+  return !!guard?.lastAt && now - guard.lastAt < GUARD_WAIT_MS;
+}
+
+/**
+ * What the body could do instead of waiting, from what it carries: a few short suggestions, the most useful first. `concrete` when
+ * one of them is definite (an ore in reach by name and place, armour the ingots carried make).
+ */
+export function meanwhileWork(bot: any): { work: string[]; concrete: boolean } {
+  const items: Array<{ name: string; count: number }> = (() => { try { return bot.inventory.items(); } catch { return []; } })();
+  const count = (test: (name: string) => boolean) => items.filter(item => test(item.name)).reduce((sum, item) => sum + item.count, 0);
+  const out: string[] = [];
+  let concrete = false;
+  try {
+    const kit = descentKit(bot);
+    if (kit.missing.includes('armor') && count(name => name === 'iron_ingot') >= 8) out.push('craft-one で iron_chestplate を作る');
+    const wool = bedWool(bot);
+    if (kit.missing.includes('bed') && (!wool || wool.have < 3)) out.push(`羊を狩って同じ色の羊毛を集める（attack-continuously の color）${wool ? `（いま ${wool.color} ${wool.have}/3）` : ''}`);
+    if (kit.missing.includes('cooked_food') && count(name => RAW_FOOD.has(name)) === 0) out.push('動物を狩って食料を集める');
+  } catch { /* the kit unknown: the generic work below */ }
+  if (count(name => name.endsWith('_pickaxe')) > 0) {
+    // The nearest ores by name and place, above the night gate's floor when it is closed: the planner can mine them at once.
+    let floor = -Infinity;
+    try { floor = descentFloor(bot)?.floor ?? -Infinity; } catch { floor = -Infinity; }
+    const ores = nearestOres(bot, 32, floor);
+    out.unshift(ores.length ? `mine-block で近くの${ores.join('・')}を掘る` : 'mine-block で石炭・鉄などを掘る');
+    if (ores.length) concrete = true;
+  }
+  if (out.some(line => line.includes('iron_chestplate'))) concrete = true;
+  if (count(name => name.endsWith('_log')) < 4) out.push('原木を集める');
+  return { work: out.slice(0, 3), concrete };
+}
+
 /**
  * 原子的スキル: 指定時間待機
  */
@@ -62,9 +103,7 @@ class WaitTime extends InstantSkill {
     const sheltered = overworld && this.sheltered();
     if (!furnaceWait && !sheltered && !night) return null;
     if (this.healing()) return null;
-    // A dig out was just refused for the hostile it would let in, and that refusal says to wait for it to go: a wait then is let be.
-    const guard = (this.bot as { exposureDigGuard?: { lastAt?: number } }).exposureDigGuard;
-    if (guard?.lastAt && Date.now() - guard.lastAt < GUARD_WAIT_MS) return null;
+    if (guardAskedToWait(this.bot)) return null;
     const { work: meanwhile, concrete } = this.otherWork();
     if (!meanwhile.length) return null;
     // Out of a night or a shaft only for something definite to do (an ore in reach, a piece of the night's kit), not for "gather logs".
@@ -74,7 +113,7 @@ class WaitTime extends InstantSkill {
     if (sheltered || night) why.push(`${night ? `夜（明けるまで約${clock!.lightInSeconds ?? 0}秒）` : '縦穴の中'}を待って過ごすこと`);
     return { success: false, failureType: 'wait_refused', recoverable: true,
       result: `待ちを断りました: ${why.join('、')}。その間にできること: ${meanwhile.join('、')}。`
-        + (furnaceWait ? '終わった頃に withdraw-from-furnace で取り出す（どうしても完成を待つなら withdraw-from-furnace の waitForCompletion=true）。' : '')
+        + (furnaceWait ? '終わった頃に withdraw-from-furnace で取り出す。' : '')
         + (sheltered ? '縦穴からは横へ掘って進めば、塞いだまま作業できる' : '') };
   }
 
@@ -82,37 +121,9 @@ class WaitTime extends InstantSkill {
     try { return typeof this.bot.blockAt === 'function' && !!this.bot.entity && isSealedIn(this.bot as any); } catch { return false; }
   }
 
-  /** Hurt and regenerating: a wait is what heals it (natural regeneration needs food 18). */
-  private healing(): boolean {
-    const health = Number(this.bot.health ?? 20), food = Number(this.bot.food ?? 20);
-    return health <= HEALING_HEALTH && food >= 18;
-  }
+  private healing(): boolean { return healingNow(this.bot); }
 
-  /** What the body could do instead, from what it carries: a few short suggestions, the most useful first. */
-  private otherWork(): { work: string[]; concrete: boolean } {
-    const items = (() => { try { return this.bot.inventory.items(); } catch { return []; } })();
-    const count = (test: (name: string) => boolean) => items.filter(item => test(item.name)).reduce((sum, item) => sum + item.count, 0);
-    const out: string[] = [];
-    let concrete = false;
-    try {
-      const kit = descentKit(this.bot as any);
-      if (kit.missing.includes('armor') && count(name => name === 'iron_ingot') >= 8) out.push('craft-one で iron_chestplate を作る');
-      const wool = bedWool(this.bot as any);
-      if (kit.missing.includes('bed') && (!wool || wool.have < 3)) out.push(`羊を狩って同じ色の羊毛を集める（attack-continuously の color）${wool ? `（いま ${wool.color} ${wool.have}/3）` : ''}`);
-      if (kit.missing.includes('cooked_food') && count(name => RAW_FOOD.has(name)) === 0) out.push('動物を狩って食料を集める');
-    } catch { /* the kit unknown: the generic work below */ }
-    if (count(name => name.endsWith('_pickaxe')) > 0) {
-      // The nearest ores by name and place, above the night gate's floor when it is closed: the planner can mine them at once.
-      let floor = -Infinity;
-      try { floor = descentFloor(this.bot as any)?.floor ?? -Infinity; } catch { floor = -Infinity; }
-      const ores = nearestOres(this.bot as any, 32, floor);
-      out.unshift(ores.length ? `mine-block で近くの${ores.join('・')}を掘る` : 'mine-block で石炭・鉄などを掘る');
-      if (ores.length) concrete = true;
-    }
-    if (out.some(line => line.includes('iron_chestplate'))) concrete = true;
-    if (count(name => name.endsWith('_log')) < 4) out.push('原木を集める');
-    return { work: out.slice(0, 3), concrete };
-  }
+  private otherWork(): { work: string[]; concrete: boolean } { return meanwhileWork(this.bot); }
 
   async runImpl(milliseconds: number) {
     try {

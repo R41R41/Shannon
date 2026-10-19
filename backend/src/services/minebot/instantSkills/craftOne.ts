@@ -11,8 +11,9 @@ import {
   inventoryNoEmptySlots,
   INVENTORY_FULL_RECOVERY_HINT_JA,
 } from '../utils/inventorySpillDetection.js';
-import { actionDelay } from '../execution/observedWait.js';
+import { actionDelay, waitForObservation } from '../execution/observedWait.js';
 import { resyncInventory } from '../utils/inventorySync.js';
+import { isWood as isLogName, lastLogNote } from '../utils/toolWear.js';
 import { placeableSpots } from './findPlaceableSpot.js';
 import { woolByColor } from '../utils/nightGate.js';
 import type { SkillResult } from '../types/skillParams.js';
@@ -21,6 +22,8 @@ import { isSealedIn } from '../utils/shelter.js';
 
 /** A table further than this (eyes to block) is replaced by one set down here, if the pack has or makes one. */
 const OWN_TABLE_BEYOND = 6;
+/** How long the drop of a table just dug is waited for before it is looked for by name. */
+const TABLE_PICKUP_WAIT_MS = 1_500;
 /** A table or bed set down is not taken back up with a hostile this near: it is left and said. */
 export const PICKUP_SAFE_RANGE = 8;
 export function hostileNear(bot: { entity?: { position: Vec3 }; entities?: Record<string, any>; registry?: any }, range: number): boolean {
@@ -228,23 +231,53 @@ class CraftOne extends InstantSkill {
   async runImpl(itemName: string, count: number = 1, tableSearchRadius: number = 32): Promise<SkillResult> {
     const outer = this.placedTables === null;
     if (outer) this.placedTables = [];
+    const logsBefore = outer ? this.carriedCount(isLogName) : 0;
     try {
       const result = await this.craftImpl(itemName, count, tableSearchRadius);
-      if (!outer || !this.placedTables!.length || this.shouldInterrupt()) return result;
+      if (!outer || this.shouldInterrupt()) return result;
       const notes: string[] = [];
       for (const pos of this.placedTables!) {
         if (this.bot.blockAt(pos)?.name !== 'crafting_table') continue;
         // Not with a hostile at hand: the table is left, and said, to be taken up later.
         if (hostileNear(this.bot, PICKUP_SAFE_RANGE)) { notes.push(`置いた作業台(${pos.x}, ${pos.y}, ${pos.z})は、敵が近いのでそのままにしました`); continue; }
-        let taken: SkillResult;
-        try { taken = await this.callSkill('dig-block-at', pos.x, pos.y, pos.z, true, 'target', true); }
-        catch (error: any) { taken = { success: false, result: String(error?.message ?? error) }; }
-        notes.push(taken.success ? `置いた作業台(${pos.x}, ${pos.y}, ${pos.z})は拾い直しました` : `置いた作業台(${pos.x}, ${pos.y}, ${pos.z})は拾えませんでした`);
+        notes.push(await this.takeTableBack(pos));
       }
+      // The last log gone into this craft: said, with what is left to make a table of (run 18: the last of five logs went into a
+      // table at D27, and from D36 on there was neither a table nor planks for one, 176 s of walking back to the base).
+      if (logsBefore > 0 && this.carriedCount(isLogName) === 0) notes.push(lastLogNote(this.bot));
       return notes.length ? { ...result, result: `${result.result}。${notes.join('。')}` } : result;
     } finally {
       if (outer) this.placedTables = null;
     }
+  }
+
+  private carriedCount(test: (name: string) => boolean): number {
+    try { return this.bot.inventory.items().filter((item: any) => test(item.name)).reduce((sum: number, item: any) => sum + item.count, 0); }
+    catch { return 0; }
+  }
+
+  /**
+   * The table this call set down, dug and taken back up, as the pack says: a dig that succeeded is no table in hand. Run 18 (D27)
+   * was told "拾い直しました" for a table dug in its shelter and never picked up, and went on without one. The drop is looked for once
+   * by name; what is said is what the pack holds after.
+   */
+  private async takeTableBack(pos: Vec3): Promise<string> {
+    const at = `(${pos.x}, ${pos.y}, ${pos.z})`;
+    const before = this.carriedCount(name => name === 'crafting_table');
+    let taken: SkillResult;
+    try { taken = await this.callSkill('dig-block-at', pos.x, pos.y, pos.z, true, 'target', true); }
+    catch (error: any) { taken = { success: false, result: String(error?.message ?? error) }; }
+    if (!taken.success) return `置いた作業台${at}は拾えませんでした`;
+    const inHand = () => this.carriedCount(name => name === 'crafting_table') > before;
+    if (!inHand()) {
+      // A stopped command stops here too (the abort is not turned into "not picked up").
+      try { await waitForObservation(this.bot, inHand, TABLE_PICKUP_WAIT_MS); } catch (error) { if (this.shouldInterrupt()) throw error; }
+    }
+    if (!inHand()) {
+      try { await this.callSkill('pickup-nearest-item', 'crafting_table', 6); } catch { /* said below from the pack */ }
+    }
+    return inHand() ? `置いた作業台${at}は拾い直しました`
+      : `置いた作業台${at}は掘りましたが、拾えていません（持ち物に作業台がありません。近くに落ちていれば pickup-nearest-item crafting_table で拾えます）`;
   }
 
   /** Crafting tables this call set down, to be taken back up when it is done; null outside a call. */

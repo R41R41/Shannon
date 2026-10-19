@@ -246,6 +246,15 @@ export function bedWool(bot: GateBody): { color: string; have: number; need: 3 }
   return best ? { color: best.color, have: best.have, need: 3 } : undefined;
 }
 
+/** A sheep's wool, from its metadata (the `wool` byte: colour in the low four bits, shorn at 0x10), or null when unknown. */
+export function sheepWool(bot: { registry?: any }, entity: { metadata?: unknown[] }): { color: string; sheared: boolean } | null {
+  const keys: string[] | undefined = bot.registry?.entitiesByName?.sheep?.metadataKeys;
+  const index = Array.isArray(keys) && keys.includes('wool') ? keys.indexOf('wool') : 17;
+  const value = entity.metadata?.[index];
+  if (typeof value !== 'number') return null;
+  return { color: WOOL_COLORS[value & 0x0f], sheared: (value & 0x10) !== 0 };
+}
+
 /** Wool carried, by colour (white_wool → white). */
 export function woolByColor(items: Array<{ name: string; count?: number }>): Map<string, number> {
   const counts = new Map<string, number>();

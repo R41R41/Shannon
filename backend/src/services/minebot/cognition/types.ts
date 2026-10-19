@@ -92,6 +92,22 @@ export interface WorldInventoryStack {
   contents?: string;
 }
 
+/**
+ * One thing an unmet need wants, near the body (shape proposed to the API, mb-head). `canReach` false only for a block mine-block could
+ * not get to lately (`why: failed_recently`). `exposed: false` (said only when false): out of sight, an animal no straight line from
+ * the eyes reaches, or an ore with no face open to the air (still reached by digging).
+ */
+export interface NearbyNeed {
+  need: 'bed_wool' | 'food' | 'iron' | 'wood';
+  name: string;
+  color?: string;
+  position: WorldVector;
+  distance: number;
+  canReach: boolean;
+  exposed?: false;
+  why?: 'failed_recently';
+}
+
 export interface NearbyEntityObservation {
   name: string;
   kind: string;
@@ -101,8 +117,13 @@ export interface NearbyEntityObservation {
   closingSpeed?: number;
   /** Seconds until it is within reach at that rate; absent when it is not closing. */
   secondsToContact?: number;
-  /** Present (false) for a hostile that has no line of sight to the body and no open way to it: solid blocks all round. */
-  canReachMe?: false;
+  /**
+   * Hostiles: false when it has no line of sight to the body and no open way to it (solid blocks all round); true when it sees the
+   * body or has an open way. Said for every hostile within 16 m (true or false), and beyond that up to 32 m only when false.
+   */
+  canReachMe?: boolean;
+  /** Hostiles within 16 m: whether nothing solid lies between its eyes and the body (a blow or a shot can come at once). */
+  canSee?: boolean;
   /** Creepers only: true while its fuse is lit or swelling (entity metadata). */
   ignited?: boolean;
 }
@@ -136,7 +157,9 @@ export interface WorldObservation {
     /** The most wool of one colour carried, towards the three one bed takes; said while no bed is carried and some wool is. */
     bedWool?: { color: string; have: number; need: 3 };
     /** Said from three pieces of raw meat: where they can be cooked now, or what stands in the way (busy furnaces, none, no fuel). */
-    cookRaw?: string };
+    cookRaw?: string;
+    /** Said when short: the best pickaxe low with no spare (or none), no table nor what makes one (utils/toolWear toolKitNotice). */
+    toolKit?: string };
   isInWater: boolean;
   /** Present (true) only while the body stands closed in: solid floor, roof and walls round its two cells. Mobs cannot reach it; opening a wall or the roof ends that. */
   sealedInShelter?: true;
@@ -156,6 +179,8 @@ export interface WorldObservation {
   nearbyThreats?: NearbyEntityObservation[];
   /** Notable places within the loaded chunks (a village), with distance, direction and what gave them away. */
   landmarks?: Array<{ kind: string; distance: number; direction: string; position: WorldVector; evidence: string }>;
+  /** What an unmet need wants that lies within 24 m (utils/nearbyNeeds): sheep for the bed, animals, iron ore, logs. */
+  nearbyNeeds?: NearbyNeed[];
   /**
    * Places seen before and kept in mind, also when out of sight now: for each kind the nearest one, as
    * "distance direction (x,y,z) ×count". The rest is recalled on request (recall-places).

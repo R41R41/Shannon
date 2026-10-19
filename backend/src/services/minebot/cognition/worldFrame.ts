@@ -9,6 +9,8 @@ import { builtAroundStatus } from '../utils/builtAround.js';
 import { creeperLit } from '../utils/creeperFuse.js';
 import { backgroundJobs } from '../execution/backgroundJobs.js';
 import { bedWool, cookRawNotice, descentKitNotice, type GateBody } from '../utils/nightGate.js';
+import { toolKitNotice } from '../utils/toolWear.js';
+import { nearbyNeeds } from '../utils/nearbyNeeds.js';
 
 /** The shelter check, for whatever stands in for a body here (a cached self-state has no world to read). */
 function sealedIn(bot: unknown): boolean {
@@ -20,6 +22,8 @@ function sealedIn(bot: unknown): boolean {
 const MAX_NEARBY_ENTITIES = 16;
 /** How far out a hostile's exposure is judged: beyond this it is no immediate concern either way. */
 const EXPOSURE_RANGE = 32;
+/** Within this, every hostile is said with whether it sees the body and whether it can get to it (canSee, canReachMe). */
+const SIGHT_RANGE = 16;
 
 interface WorldFrameEntityLike {
   id?: number;
@@ -100,7 +104,7 @@ const HIT_RANGE = 24;
  * L64, L65, L70). Nothing here is a rule: the damage a hit does is what the body has measured.
  */
 function survivalMargin(bot: unknown, health: number | null, food: number | null, timeOfDay: number | null,
-  inventory: Array<{ name: string; count: number }>, threats: Array<{ name: string; distance: number; canReachMe?: false }>): WorldObservation['margin'] | undefined {
+  inventory: Array<{ name: string; count: number }>, threats: Array<{ name: string; distance: number; canReachMe?: boolean }>): WorldObservation['margin'] | undefined {
   if (health === null || food === null) return undefined;
   const body = bot as { registry?: { foodsByName?: Record<string, unknown> }; combatStats?: () => { mobs?: Record<string, { hits: number; damage: number }> } } | undefined;
   const foods = body?.registry?.foodsByName;
@@ -132,7 +136,8 @@ function survivalMargin(bot: unknown, health: number | null, food: number | null
         const kit = timeOfDay === null ? undefined : descentKitNotice(bot as GateBody);
         const wool = bedWool(bot as GateBody);
         const cook = cookRawNotice(bot as GateBody);
-        return { ...(kit ? { descentKit: kit } : {}), ...(wool ? { bedWool: wool } : {}), ...(cook ? { cookRaw: cook } : {}) };
+        const tools = toolKitNotice(bot);
+        return { ...(kit ? { descentKit: kit } : {}), ...(wool ? { bedWool: wool } : {}), ...(cook ? { cookRaw: cook } : {}), ...(tools ? { toolKit: tools } : {}) };
       } catch { return {}; }
     })(),
   };
@@ -228,8 +233,14 @@ export function captureWorldObservation(bot?: unknown): WorldObservation {
         const closing = closingSpeed(observedBot, entity.id);
         const contact = secondsToContact(range, closing);
         const kind = observedBot?.registry?.entitiesByName?.[entity.name ?? '']?.type ?? entity.type ?? 'unknown';
-        // A hostile with rock all round between it and the body: near, but it can neither see nor get here.
-        const sealed = kind === 'hostile' && range <= EXPOSURE_RANGE && threatExposure(observedBot as any, entity as any) === 'sealed';
+        // A hostile with rock all round between it and the body: near, but it can neither see nor get here. Within SIGHT_RANGE every
+        // hostile is said both ways: run 18's fast decisions twice set out to fight zombies behind a wall, with nothing in the
+        // observation to tell them from the ones in the open (only the sealed ones were marked).
+        // Nothing to judge with (no world to read): nothing is said, rather than threatExposure's "seen" taken for a fact.
+        const exposure = kind === 'hostile' && range <= EXPOSURE_RANGE && typeof (observedBot as { blockAt?: unknown }).blockAt === 'function'
+          ? threatExposure(observedBot as any, entity as any) : null;
+        const reach = exposure === null ? {} : range <= SIGHT_RANGE ? { canReachMe: exposure !== 'sealed', canSee: exposure === 'seen' }
+          : exposure === 'sealed' ? { canReachMe: false as const } : {};
         return {
           name: entity.name ?? entity.username ?? entity.displayName?.toString?.() ?? 'unknown',
           kind,
@@ -238,7 +249,7 @@ export function captureWorldObservation(bot?: unknown): WorldObservation {
           ...(closing !== null && Math.abs(closing) >= 0.3 ? { closingSpeed: Math.round(closing * 10) / 10 } : {}),
           ...(contact !== null ? { secondsToContact: Math.round(contact * 10) / 10 } : {}),
           ...(entity.name === 'creeper' ? { ignited: creeperLit(entity) } : {}),
-          ...(sealed ? { canReachMe: false as const } : {}),
+          ...reach,
         };
       })
       .filter((entity): entity is NonNullable<typeof entity> => entity !== null)
@@ -299,6 +310,12 @@ export function captureWorldObservation(bot?: unknown): WorldObservation {
     nearbyEntities,
     nearbyThreats,
     ...(landmarks?.length ? { landmarks: structuredClone(landmarks) } : {}),
+    ...(() => {
+      try {
+        const needs = observedBot?.entity ? nearbyNeeds(observedBot as any) : [];
+        return needs.length ? { nearbyNeeds: needs } : {};
+      } catch { return {}; }
+    })(),
     ...(() => {
       try {
         const remembered = (observedBot as { placeMemory?: { digest(limit?: number): Record<string, string> } } | undefined)?.placeMemory?.digest(10);

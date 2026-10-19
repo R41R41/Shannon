@@ -439,8 +439,9 @@ describe("the observation says what the body's reserves come to (paid runs L64, 
       combatStats: () => ({ mobs: { zombie: { hits: 4, damage: 12 }, skeleton: { hits: 2, damage: 9 } } }), ...extra });
     // Late afternoon, hurt and hungry: 100 seconds to dark, no regeneration, 4 things to eat, two skeleton hits left.
     // Within five minutes of dark with no armour and no bed: the night gate's kit is said too (the cooked food is there), and it is closed.
+    // No pickaxe and nothing to make a table of: the tool kit is said too (run 18).
     expect(captureWorldObservation(body(11000, 7, 9)).margin).toEqual({ darkInSeconds: 100, regenerating: false, foodItems: 4, hitsLeft: { from: 'skeleton', hits: 2 },
-      descentKit: { missing: ['armor', 'bed'], gated: true } });
+      descentKit: { missing: ['armor', 'bed'], gated: true }, toolKit: expect.stringContaining('つるはしが無い') });
     // Night: dark now, 250 seconds to morning. Fed and whole.
     expect(captureWorldObservation(body(18000, 20, 20)).margin).toMatchObject({ darkInSeconds: 0, lightInSeconds: 250, regenerating: true, hitsLeft: { from: 'skeleton', hits: 5 } });
     // Nothing hostile near: no hits to count. No measurements: nothing said about hits.

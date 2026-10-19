@@ -86,7 +86,33 @@ describe('exposure decides what counts as a threat', () => {
       3: { id: 3, name: 'zombie', position: new Vec3(1.5, 50, 0.5), height: 1.95 } };
     bot.inventory = { items: () => [] };
     const threats = captureWorldObservation(bot).nearbyThreats ?? [];
-    expect(threats.find(entity => entity.name === 'skeleton')).toMatchObject({ canReachMe: false });
-    expect(threats.find(entity => entity.name === 'zombie')).not.toHaveProperty('canReachMe');
+    expect(threats.find(entity => entity.name === 'skeleton')).toMatchObject({ canReachMe: false, canSee: false });
+    // Within 16 m every hostile is said both ways (run 18: fast decisions set out for zombies behind a wall).
+    expect(threats.find(entity => entity.name === 'zombie')).toMatchObject({ canReachMe: true, canSee: true });
+  });
+
+  it('says a hostile round a corner can get here but cannot see the body, and says nothing of one beyond 32 m', () => {
+    const bent = cave((x, y, z) => room(0, x, y, z) || room(12, x, y, z)
+      || (y >= 50 && y <= 51 && ((x === 0 && z >= 0 && z <= 6) || (z === 6 && x >= 0 && x <= 12) || (x === 12 && z >= 0 && z <= 6)))).bot;
+    bent.registry = { entitiesByName: { zombie: { type: 'hostile' } } };
+    bent.entities = { 2: { id: 2, name: 'zombie', position: new Vec3(12.5, 50, 0.5), height: 1.95 },
+      3: { id: 3, name: 'zombie', position: new Vec3(40.5, 50, 0.5), height: 1.95 } };
+    bent.inventory = { items: () => [] };
+    const threats = captureWorldObservation(bent).nearbyThreats ?? [];
+    expect(threats[0]).toMatchObject({ distance: 12, canReachMe: true, canSee: false });
+    expect(threats[1]).not.toHaveProperty('canSee');
+    expect(threats[1]).not.toHaveProperty('canReachMe');
+    // Between 16 and 32 m only a sealed one is said; one in the open there is not.
+    const open = cave(() => true).bot;
+    open.registry = { entitiesByName: { zombie: { type: 'hostile' } } };
+    open.entities = { 2: { id: 2, name: 'zombie', position: new Vec3(20.5, 50, 0.5), height: 1.95 } };
+    open.inventory = { items: () => [] };
+    const far = (captureWorldObservation(open).nearbyThreats ?? [])[0];
+    expect(far).not.toHaveProperty('canSee');
+    expect(far).not.toHaveProperty('canReachMe');
+    // No world to read: nothing said, rather than a guess.
+    const blind: any = { entity: { position: new Vec3(0.5, 50, 0.5) }, registry: open.registry, inventory: { items: () => [] },
+      entities: { 2: { id: 2, name: 'zombie', position: new Vec3(3.5, 50, 0.5) } } };
+    expect((captureWorldObservation(blind).nearbyThreats ?? [])[0]).not.toHaveProperty('canSee');
   });
 });

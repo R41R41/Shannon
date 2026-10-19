@@ -6,7 +6,7 @@ import { reflexPromptText } from '../utils/floorConfig.js';
 import { gotoSafe } from '../utils/gotoSafe.js';
 import { actionDelay } from '../execution/observedWait.js';
 import { visiblePointOn } from '../utils/sightLine.js';
-import { WOOL_COLORS, woolStatusLine } from '../utils/nightGate.js';
+import { WOOL_COLORS, sheepWool, woolStatusLine } from '../utils/nightGate.js';
 import { creeperMeleeRefusal } from '../utils/creeperFuse.js';
 import type { Vec3 } from 'vec3';
 
@@ -25,14 +25,7 @@ const DROP_COLLECT_RADIUS = 10;
 /** Drops are also looked for this close to where the target was last seen alive. */
 const DROP_NEAR_KILL = 6;
 
-/** A sheep's wool, from its metadata (the `wool` byte: colour in the low four bits, shorn at 0x10), or null when unknown. */
-export function sheepWool(bot: { registry?: any }, entity: { metadata?: unknown[] }): { color: string; sheared: boolean } | null {
-  const keys: string[] | undefined = bot.registry?.entitiesByName?.sheep?.metadataKeys;
-  const index = Array.isArray(keys) && keys.includes('wool') ? keys.indexOf('wool') : 17;
-  const value = entity.metadata?.[index];
-  if (typeof value !== 'number') return null;
-  return { color: WOOL_COLORS[value & 0x0f], sheared: (value & 0x10) !== 0 };
-}
+export { sheepWool };
 /** From the eyes to the nearest point of a target's body within which a blow lands. */
 const HOLD_REACH = 3;
 

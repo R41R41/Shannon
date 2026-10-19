@@ -44,8 +44,8 @@ export interface ObservationLike {
   time: string | null;
   heldItem: string | null;
   inventory: Array<{ name: string; count: number }>;
-  nearbyEntities: Array<{ name: string; kind: string; distance: number; secondsToContact?: number; canReachMe?: false }>;
-  nearbyThreats?: Array<{ name: string; kind: string; distance: number; secondsToContact?: number; canReachMe?: false }>;
+  nearbyEntities: Array<{ name: string; kind: string; distance: number; secondsToContact?: number; canReachMe?: boolean }>;
+  nearbyThreats?: Array<{ name: string; kind: string; distance: number; secondsToContact?: number; canReachMe?: boolean }>;
   landmarks?: Array<{ kind: string; distance: number }>;
 }
 

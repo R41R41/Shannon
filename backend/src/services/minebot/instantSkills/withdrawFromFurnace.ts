@@ -5,6 +5,8 @@ import { ensureLineOfSight } from '../utils/blockLineOfSight.js';
 import { approachFurnace } from '../utils/furnaceReach.js';
 import { assertActionActive, bindActionCallback, reportActionProgress } from '../execution/ActionExecution.js';
 import { waitForObservation, type ObservationSource } from '../execution/observedWait.js';
+import { backgroundJobs } from '../execution/backgroundJobs.js';
+import { guardAskedToWait, healingNow, meanwhileWork } from './waitTime.js';
 import {
   hasNearbyDroppedItemNamed,
   inventoryNoEmptySlots,
@@ -53,8 +55,29 @@ class WithdrawFromFurnace extends InstantSkill {
                 description: '取り出すスロット: "input"（材料）, "fuel"（燃料）, "output"（完成品）, "all"（すべて）。デフォルト: "all"',
                 default: 'all',
             },
-            { name: 'waitForCompletion', type: 'boolean', description: '省略時は、残りが約20秒以内なら完成まで待ち、それより長ければ待たずに完成済みの出力だけ回収して残り時間を返す。true=残りが長くても完成するまで待つ（最大120秒、その間は身体が止まる）。false=決して待たない。allは精錬中の材料・燃料を取り出さない' },
+            { name: 'waitForCompletion', type: 'boolean', description: '省略時は、残りが約20秒以内なら完成まで待ち、それより長ければ待たずに完成済みの出力だけ回収して残り時間を返す。true=残りが長くても完成するまで待つ（最大120秒、その間は身体が止まる。ただし残りが20秒を超え、近くにできる仕事がある時は wait-time と同じく断る）。false=決して待たない。allは精錬中の材料・燃料を取り出さない' },
         ];
+    }
+
+    /**
+     * A wait for the batch longer than SHORT_WAIT_MS, asked for with waitForCompletion=true, is refused as wait-time refuses one when
+     * there is something definite to do meanwhile (wait_refused, with what). Run 18 (D15) stood at its furnace 53 s for six iron, with
+     * iron ore 16 m off named in the same refusal of wait-time that had pointed it here. Not refused: a hurt body regenerating, a wait
+     * the exposure guard asked for, nothing definite to do.
+     */
+    protected preflight(x: number, y: number, z: number, slot: string = 'all', waitForCompletion?: boolean) {
+        // Only the output (and `all`) waits for the batch: taking the input or the fuel out never stands at the furnace.
+        if (waitForCompletion !== true || ![x, y, z].every(Number.isFinite) || !['output', 'all'].includes(String(slot).toLowerCase())) return null;
+        let job: ReturnType<typeof backgroundJobs>[number] | undefined;
+        try { job = backgroundJobs(this.bot).find(entry => entry.position.x === x && entry.position.y === y && entry.position.z === z && entry.status === 'waiting_external'); }
+        catch { return null; }
+        if (!job || job.remainingEstimateMs <= SHORT_WAIT_MS) return null;
+        if (healingNow(this.bot) || guardAskedToWait(this.bot)) return null;
+        const { work, concrete } = meanwhileWork(this.bot);
+        if (!concrete || !work.length) return null;
+        return { success: false, failureType: 'wait_refused', recoverable: true,
+            result: `待ちを断りました: かまど(${x},${y},${z})の${job.input}×${job.count} は残り約${Math.ceil(job.remainingEstimateMs / 1000)}秒。`
+                + `その間にできること: ${work.join('、')}。終わった頃に withdraw-from-furnace で取り出す（waitForCompletion は付けない）。` };
     }
 
     async runImpl(

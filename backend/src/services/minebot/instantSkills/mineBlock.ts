@@ -19,6 +19,7 @@ import { descentFloor, nightGateRefusal } from '../utils/nightGate.js';
 import { axeAdviceNote, isWood, spareToolNote } from '../utils/toolWear.js';
 import { slotsUsed, tidyPlan } from '../utils/inventoryTidy.js';
 import { hostileNear } from './craftOne.js';
+import { noteUnreachable, recentlyUnreachable, THREAT_REFUSAL_MS } from '../utils/unreachableTargets.js';
 
 /** The pack is tidied only with this much of the action left, and with no hostile this near. */
 const TIDY_TIME_MS = 40_000;
@@ -27,19 +28,14 @@ const TIDY_SAFE_RANGE = 16;
 const log = createLogger('Minebot:Skill:mineBlock');
 
 /**
- * Targets the approach failed to reach, per bot. A paid run asked for the same
- * two cliff-top logs again and again; each call re-picked the nearest ones and
- * timed out. They go to the back of the list for a while, not out of it.
+ * A dig (or the clearing of the line to it) the exposure guard refused for a hostile it would let in: that ore is put behind the
+ * others for a minute (the mob moves on), and the next one is tried. Run 18 (D30) stopped at one ore of ten when the stone in front
+ * of the first was refused for a zombie.
  */
-const UNREACHABLE_MEMORY_MS = 10 * 60_000;
-const unreachableTargets = new WeakMap<object, Map<string, number>>();
-function recentlyUnreachable(bot: object): Map<string, number> {
-  let memory = unreachableTargets.get(bot);
-  if (!memory) { memory = new Map(); unreachableTargets.set(bot, memory); }
-  const now = Date.now();
-  for (const [key, at] of memory) if (now - at > UNREACHABLE_MEMORY_MS) memory.delete(key);
-  return memory;
+function refusedForThreat(result: { failureType?: string; result?: unknown }): boolean {
+  return result.failureType === 'threat_exposed' || /掘削中止: .*身体が見える・届く/.test(String(result.result ?? ''));
 }
+
 
 class MineBlock extends InstantSkill {
   private mcData: any;
@@ -520,7 +516,7 @@ class MineBlock extends InstantSkill {
           // made with every other piece of it in reach and untouched (lab, 2026-10-02).
           if (digResult.failureType === 'lava_danger' || digResult.failureType === 'drop_would_burn') {
             recentlyUnreachable(this.bot).set(targetKey(bt), Date.now());
-          }
+          } else if (refusedForThreat(digResult)) noteUnreachable(this.bot, bt, Date.now(), THREAT_REFUSAL_MS);
           // The body is under water and cannot dig there for want of air: no other block of the batch differs.
           if (digResult.failureType === 'air_short') { batchAbortReason = { type: 'air_short', result: digResult.result }; break; }
           if (digResult.success) {
@@ -596,7 +592,7 @@ class MineBlock extends InstantSkill {
         }
         if (digResult.failureType === 'lava_danger' || digResult.failureType === 'drop_would_burn') {
           recentlyUnreachable(this.bot).set(targetKey(target), Date.now());
-        }
+        } else if (refusedForThreat(digResult)) noteUnreachable(this.bot, target, Date.now(), THREAT_REFUSAL_MS);
         if (digResult.failureType === 'air_short') {
           lastFailureType = 'air_short'; lastRecoverable = true;
           failures.push(`中止: ${digResult.result}`);

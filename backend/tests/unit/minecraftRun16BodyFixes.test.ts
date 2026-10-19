@@ -182,7 +182,9 @@ describe('wait-time is refused while a furnace works and there is something else
     expect(refused).toMatchObject({ success: false, failureType: 'wait_refused', recoverable: true });
     expect(refused.result).toContain('raw_iron×8 残り約60秒');
     expect(refused.result).toContain('mine-block');
-    expect(refused.result).toContain('waitForCompletion=true');
+    expect(refused.result).toContain('withdraw-from-furnace で取り出す');
+    // The way round this refusal is no longer offered: withdraw-from-furnace waitForCompletion=true is refused the same way (run 18, D15).
+    expect(refused.result).not.toContain('waitForCompletion=true');
   });
   it('lets a short wait, a furnace nearly done, a hurt body healing, and no furnace at all (by day) go by', () => {
     const items = [{ name: 'stone_pickaxe', count: 1 }];
