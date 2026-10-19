@@ -157,7 +157,8 @@ class UseItem extends InstantSkill {
     const from = this.bot.entity.position.floored();
     await this.bot.activateItem();
     let eye: any = null;
-    for (const deadline = Date.now() + 1000; !eye && Date.now() < deadline;) {
+    // Up to two seconds for the server's word of the eye: under lag a thrown eye was answered "not thrown".
+    for (const deadline = Date.now() + 2000; !eye && Date.now() < deadline;) {
       await actionDelay(this.bot, 50);
       eye = eyes().find((entity: any) => !before.has(entity.id)) ?? null;
     }

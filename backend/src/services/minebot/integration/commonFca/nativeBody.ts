@@ -38,6 +38,8 @@ export interface NativeBodyOptions {
  * still ends held, as before.
  */
 const SAFETY_RELEASE_WAIT_MS = 3000;
+/** No command for this long, the dragon catalog goes back to the ordinary one (decisions between commands take seconds). */
+const DRAGON_CATALOG_IDLE_MS = 90_000;
 /**
  * The skill's own failure kind for the API to sort retries by (agreed 2026-10-14: retry the same, change the situation,
  * get material first, or fix the input). move-to's old name for "no route" is said as the agreed no_path.
@@ -55,8 +57,17 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
   private readonly offeredForDragon;
   private readonly runnable;
   private dragonTask = false;
-  /** What the planner is offered now. A new array only when the task changes kind, which is when the loop sends it again. */
-  get skills() { return this.dragonTask ? this.offeredForDragon : this.offered; }
+  private running = 0;
+  private idleSince = 0;
+  /**
+   * What the planner is offered now. A new array only when the task changes kind, which is when the loop sends it again.
+   * The body learns the task only from a command, so a dragon catalog with no command for a while goes back to the
+   * ordinary one: the next request may be anything (fishing after the dragon), and its first decision sees every tool.
+   */
+  get skills() {
+    if (this.dragonTask && this.running === 0 && this.now() - this.idleSince > DRAGON_CATALOG_IDLE_MS) this.dragonTask = false;
+    return this.dragonTask ? this.offeredForDragon : this.offered;
+  }
   private readonly goalEvidence: NativeGoalEvidence;
   private sequence = 0;
   private connected = true;
@@ -111,6 +122,11 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
   async execute(command: Command, signal: AbortSignal): Promise<Receipt> {
     // The task each command carries says which catalog the next decisions are offered.
     if (typeof command.context?.goal === 'string') this.dragonTask = isDragonGoal(command.context.goal);
+    this.running++;
+    try { return await this.executeCommand(command, signal); }
+    finally { this.running--; this.idleSince = this.now(); }
+  }
+  private async executeCommand(command: Command, signal: AbortSignal): Promise<Receipt> {
     if (command.kind === 'capture') {
       // Capture never owns motor inputs. Missing exact assets or cancelled observation are a
       // known no-image result, not an uncertain physical effect. Existing cleanup holds remain held.

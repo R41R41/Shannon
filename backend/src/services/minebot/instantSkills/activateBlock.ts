@@ -74,7 +74,9 @@ class ActivateBlock extends InstantSkill {
           };
         }
         targetBlock = this.bot.findBlock({
-          matching: bed ? (block: any) => isBedName(block?.name) : blockId,
+          // Ids, not a test of each block: the search then skips every chunk section that holds no bed.
+          matching: bed ? Object.values(this.mcData.blocksByName as Record<string, { id: number; name: string }>)
+            .filter((block) => isBedName(block.name)).map((block) => block.id) : blockId,
           maxDistance: 32,
         });
         if (!targetBlock) {

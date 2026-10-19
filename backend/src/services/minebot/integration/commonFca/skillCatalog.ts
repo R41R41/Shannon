@@ -80,16 +80,16 @@ export const OFFERED_ELSEWHERE: ReadonlySet<string> = new Set(['get-position', '
 /**
  * Life in the Overworld that the way to the dragon does not pass through: hidden only while the task is the dragon
  * (see isDragonGoal), and offered again as soon as a task is anything else. Food on the way is hunted
- * (attack-continuously) or harvested (harvest-crop), both still offered.
+ * (attack-continuously) or harvested (harvest-crop), both still offered. What the way may use stays: brewing (fire
+ * resistance for a fortress), trading (a cleric's pearls), enchanting and repairing.
  */
-export const HIDDEN_FOR_DRAGON: ReadonlySet<string> = new Set(['breed-animal', 'plant-crop', 'use-bone-meal', 'fish', 'brew-potion',
-  'enchant-item', 'use-stonecutter', 'trade-with-villager', 'repair-item']);
+export const HIDDEN_FOR_DRAGON: ReadonlySet<string> = new Set(['breed-animal', 'plant-crop', 'use-bone-meal', 'fish', 'use-stonecutter']);
 /**
  * The requests the API binds to the dragon's native evidence (mc.goal-evidence): a mirror of the closed set in Shannon API
  * wiring/fcaMinecraftGoalBinding.ts (update both together). Closed on purpose: "farm before the dragon" is not one of them,
  * so an ordinary request never loses a tool.
  */
-const DRAGON_GOALS = new Set([
+export const DRAGON_GOALS: ReadonlySet<string> = new Set([
   'エンダードラゴンを倒して', 'エンダードラゴンを倒してきて', 'エンダードラゴンを倒す',
   'エンダードラゴンを倒してください', 'エンダードラゴンを倒してきてください',
   'エンダードラゴンを討伐して', 'エンダードラゴンを討伐してください', 'エンダードラゴン討伐して',

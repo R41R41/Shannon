@@ -260,7 +260,9 @@ export function captureWorldObservation(bot?: unknown): WorldObservation {
   const isInWater = observedBot?.entity?.isInWater ?? observedBot?.isInWater;
   const timeOfDay = finiteNumber(observedBot?.time?.timeOfDay);
   const time = timeOfDay !== null ? String(timeOfDay) : observedBot?.environmentState?.time || null;
-  const weather = typeof observedBot?.isRaining === 'boolean' ? observedBot.isRaining ? 'rain' : 'clear' : observedBot?.environmentState?.weather || null;
+  // A thunderstorm is said apart from rain: the body may sleep in it by day (get-time-and-weather said so, and is no longer offered).
+  const thunder = observedBot?.isRaining === true && Number((observedBot as { thunderState?: unknown }).thunderState) > 0;
+  const weather = typeof observedBot?.isRaining === 'boolean' ? thunder ? 'thunder' : observedBot.isRaining ? 'rain' : 'clear' : observedBot?.environmentState?.weather || null;
   const fact = (value: unknown, source: 'native' | 'window' | 'cache', known: boolean) => ({ value: known ? value : null, observedAt, source, coverage: known ? 'known' as const : 'unknown' as const });
   return {
     observedAt,

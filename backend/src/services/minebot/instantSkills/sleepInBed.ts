@@ -106,7 +106,8 @@ class SleepInBed extends InstantSkill {
       // 時間チェック
       const timeOfDay = this.bot.time.timeOfDay;
       // 夜は12542～23459（雷雨の時は昼でも眠れる）
-      if ((timeOfDay < 12542 || timeOfDay > 23459) && !((this.bot as any).thunderState > 0)) {
+      // The library's own test for a storm (bed.js): rain with thunder.
+      if ((timeOfDay < 12542 || timeOfDay > 23459) && !((this.bot as any).isRaining && (this.bot as any).thunderState > 0)) {
         return {
           success: false,
           result: '夜または雷雨の時にしか寝られません（現在の時間: ' + timeOfDay + '）。'

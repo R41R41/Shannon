@@ -6,7 +6,7 @@ import UseItem from '../../src/services/minebot/instantSkills/useItem.js';
 import ActivateBlock from '../../src/services/minebot/instantSkills/activateBlock.js';
 import SleepInBed from '../../src/services/minebot/instantSkills/sleepInBed.js';
 import AutoAvoidDragonBreath from '../../src/services/minebot/constantSkills/autoAvoidDragonBreath.js';
-import { HIDDEN_FOR_DRAGON, OFFERED_ELSEWHERE, bodySkillCatalog, isDragonGoal, offeredSchema } from '../../src/services/minebot/integration/commonFca/skillCatalog.js';
+import { DRAGON_GOALS, HIDDEN_FOR_DRAGON, OFFERED_ELSEWHERE, bodySkillCatalog, isDragonGoal, offeredSchema } from '../../src/services/minebot/integration/commonFca/skillCatalog.js';
 import { captureWorldObservation } from '../../src/services/minebot/cognition/worldFrame.js';
 import { isBedName } from '../../src/services/minebot/utils/bedRules.js';
 
@@ -69,7 +69,10 @@ function bedBot(options: { colour?: string; dimension?: string; say?: string[]; 
     version: '1.21.11', game: { dimension: options.dimension ?? 'overworld' }, entity: { position: new Vec3(4, 64, 5) },
     time: { timeOfDay: 6000 }, entities: {}, isSleeping: false, inventory: { items: () => [] },
     blockAt: (position: Vec3) => (position.equals(bed.position) ? bed : { name: 'air', position }),
-    findBlock: vi.fn(({ matching }: any) => (typeof matching === 'function' ? (matching(bed) ? bed : null) : null)),
+    findBlock: vi.fn(({ matching }: any) => {
+      const id = minecraftData('1.21.11').blocksByName[bed.name].id;
+      return (Array.isArray(matching) ? matching.includes(id) : matching === id) ? bed : null;
+    }),
   });
   bot.activateBlock = vi.fn(async () => {
     for (const key of options.say ?? []) bot.emit('message', { translate: key });
@@ -171,6 +174,21 @@ describe('the dragon breath reflex', () => {
     await new AutoAvoidDragonBreath(bot).runImpl();
     expect(runFromEntities).not.toHaveBeenCalled();
   });
+
+  it('takes the body from a task only while a danger is near, and takes no action at all when none is', async () => {
+    const { bot } = endBot();
+    const reflex: any = new AutoAvoidDragonBreath(bot);
+    const runImpl = vi.spyOn(reflex, 'runImpl');
+    expect(reflex.wantsPreemption()).toBe(false);
+    await reflex.run();
+    expect(runImpl).not.toHaveBeenCalled();
+    const metadata: unknown[] = []; metadata[8] = 3; metadata[10] = { type: 'dragon_breath' };
+    bot.entities = { 4: { id: 4, name: 'area_effect_cloud', position: new Vec3(4, 64, 0), metadata } };
+    expect(reflex.wantsPreemption()).toBe(true);
+    // A small cloud further off than its radius and a step: not yet.
+    bot.entities[4].position = new Vec3(7, 64, 0);
+    expect(reflex.wantsPreemption()).toBe(false);
+  });
 });
 
 describe('the catalog offered to the planner', () => {
@@ -181,7 +199,8 @@ describe('the catalog offered to the planner', () => {
     const names = ['move-to', 'get-position', 'set-sneak', 'fish', 'brew-potion', 'harvest-crop'];
     const catalog = bodySkillCatalog(names.map(name => skill(name)), {});
     expect(catalog.definitions.map(d => d.name)).toEqual(['move-to', 'fish', 'brew-potion', 'harvest-crop']);
-    expect(catalog.dragonDefinitions.map(d => d.name)).toEqual(['move-to', 'harvest-crop']);
+    // Brewing (fire resistance for a fortress) stays on the way to the dragon; fishing does not.
+    expect(catalog.dragonDefinitions.map(d => d.name)).toEqual(['move-to', 'brew-potion', 'harvest-crop']);
     expect(catalog.runnable.map(d => d.name)).toEqual(names);
     // Still carried out when asked for.
     expect(catalog.resolve('get-position', {}).skill.skillName).toBe('get-position');
@@ -194,6 +213,12 @@ describe('the catalog offered to the planner', () => {
     expect(isDragonGoal('Kill the Ender Dragon!')).toBe(true);
     expect(isDragonGoal('エンドラを倒す前に畑を作って')).toBe(false);
     expect(isDragonGoal(undefined)).toBe(false);
+  });
+
+  it.skipIf(!process.env.FCA_API_WIRE_ROOT)('agrees with the API on every dragon request (FCA_API_WIRE_ROOT set)', async () => {
+    const binding = await import(`${process.env.FCA_API_WIRE_ROOT}/src/wiring/fcaMinecraftGoalBinding.ts`);
+    for (const goal of DRAGON_GOALS) expect(binding.isNativeDragonGoal(goal)).toBe(true);
+    for (const goal of ['エンドラを倒す前に畑を作って', '木を集めて']) expect(binding.isNativeDragonGoal(goal)).toBe(isDragonGoal(goal));
   });
 
   it('shows an optional value by its own type: null and leaving it out are read alike', () => {
@@ -217,7 +242,8 @@ describe('the native body offers the catalog of the latest task', () => {
     const bot: any = Object.assign(new EventEmitter(), { entity: { id: 1, position: new Vec3(0, 65, 0), yaw: 0, pitch: 0, onGround: true },
       health: 20, food: 20, game: { dimension: 'overworld' }, entities: {}, inventory: { items: () => [] }, controlState: {},
       instantSkills: { getSkills: () => [skill('wait-time'), skill('fish')] }, clearControlStates: vi.fn(), attack: vi.fn() });
-    const body = new NativeCommonFcaBody(bot, { serverId: 'home', capture: async () => ({ dataUrl: 'data:image/jpeg;base64,YQ==', capturedAt: new Date().toISOString() }) });
+    let clock = Date.now();
+    const body = new NativeCommonFcaBody(bot, { serverId: 'home', now: () => clock, capture: async () => ({ dataUrl: 'data:image/jpeg;base64,YQ==', capturedAt: new Date().toISOString() }) });
     const run = (goal: string) => body.execute({ schemaVersion: 1, id: `c-${goal}`, serverId: 'home', connectionId: 'connection1', kind: 'skill',
       context: { scopeKey: 'owner', taskId: 't', taskRevision: 1, bodyId: 'minecraft:home', sessionId: 's', generation: 1, goal, completionCondition: 'done' },
       lease: { id: 'l', generation: 1, holder: 't' }, deadlineAt: new Date(Date.now() + 2000).toISOString(), skill: 'wait-time', arguments: {} } as any,
@@ -229,6 +255,9 @@ describe('the native body offers the catalog of the latest task', () => {
     const dragon = body.skills; await run('エンドラを討伐して'); expect(body.skills).toBe(dragon);
     await run('木を集めて');
     expect(body.skills).toBe(ordinary);
+    // No command for a minute and a half after the dragon: the next request, whatever it is, sees every tool.
+    await run('エンドラを討伐して'); clock += 60_000; expect(body.skills).toBe(dragon);
+    clock += 31_000; expect(body.skills).toBe(ordinary);
     await body.dispose();
   });
 });
@@ -238,5 +267,9 @@ describe('the observation says what is worn', () => {
     const slots: any[] = []; slots[5] = { name: 'iron_helmet', maxDurability: 165, durabilityUsed: 15 }; slots[45] = { name: 'shield', maxDurability: 336, durabilityUsed: 0 };
     const world = captureWorldObservation({ entity: { position: new Vec3(0, 64, 0) }, inventory: { items: () => [], slots } } as any);
     expect(world.worn).toBe('頭: iron_helmet(残り150/165)、胴: なし、脚: なし、足: なし、左手: shield(残り336/336)');
+  });
+  it('tells a thunderstorm from rain (sleep is allowed in one by day)', () => {
+    const at = (isRaining: boolean, thunderState: number) => captureWorldObservation({ entity: { position: new Vec3(0, 64, 0) }, isRaining, thunderState } as any).weather;
+    expect([at(true, 1), at(true, 0), at(false, 0)]).toEqual(['thunder', 'rain', 'clear']);
   });
 });
