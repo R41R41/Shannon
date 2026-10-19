@@ -19,7 +19,7 @@ interface GuardBody {
   dig?: (block: any, ...rest: any[]) => Promise<unknown>;
   /** Set by the emergency layer: how near a hostile has to be to be a threat (farther for kinds that have hit from afar). */
   hostileThreatRadius?: () => number;
-  exposureDigGuard?: { enabled: boolean; refused: number; last?: string };
+  exposureDigGuard?: { enabled: boolean; refused: number; last?: string; /** When the last dig was refused (wait-time lets a wait be then). */ lastAt?: number };
 }
 
 /** A dig refused because it would open a way to the body for a hostile that has none. */
@@ -74,7 +74,7 @@ export function assertNoThreatExposure(bot: GuardBody, block: { name?: string; p
   try { threat = threatExposedBy(bot, block.position); } catch { threat = null; }
   if (!threat) return;
   const error = new ThreatExposedError(block, threat);
-  if (bot.exposureDigGuard) { bot.exposureDigGuard.refused++; bot.exposureDigGuard.last = error.message; }
+  if (bot.exposureDigGuard) { bot.exposureDigGuard.refused++; bot.exposureDigGuard.last = error.message; bot.exposureDigGuard.lastAt = Date.now(); }
   // The mob moves on: the route planner leaves this block alone for a quarter of a minute, then may ask again.
   const repeated = digRefusedAt(bot, block.position);
   noteRefusedDig(bot, block.position, 15_000);

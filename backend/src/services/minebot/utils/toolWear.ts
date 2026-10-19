@@ -28,6 +28,58 @@ export function describeRemainingTools(bot: unknown): string {
   return tools.length ? tools.join('、') : 'なし';
 }
 
+/** Below this many uses the last sound pickaxe is said to want a spare. */
+const SPARE_WHEN_LEFT = 50;
+/** A pickaxe with more uses than this counts as one that can still dig (a stair stops at 3). */
+const SOUND_USES = 3;
+
+/**
+ * A spare pickaxe, said when one is wanted: none that can still dig, or only one with fewer than SPARE_WHEN_LEFT uses left. Says
+ * what the pack can make one of (iron, cobblestone, planks; sticks from planks). Run 17 went down to y 4 with one pickaxe, 157
+ * cobblestone in the pack, and stopped there worn out. Advice, not a craft done unasked: making one takes a crafting table, and the
+ * planner may want the iron for armour. Empty when nothing is to be said.
+ */
+export function spareToolNote(bot: unknown): string {
+  const items = (bot as WearBot | undefined)?.inventory?.items?.() ?? [];
+  const pickaxes = items.filter(item => item.name.endsWith('_pickaxe'));
+  const left = (item: { maxDurability?: number; durabilityUsed?: number }) =>
+    typeof item.maxDurability === 'number' && item.maxDurability > 0 ? Math.max(0, item.maxDurability - (item.durabilityUsed ?? 0)) : Infinity;
+  const sound = pickaxes.filter(item => left(item) > SOUND_USES);
+  if (sound.length > 1 || (sound.length === 1 && left(sound[0]) >= SPARE_WHEN_LEFT)) return '';
+  const count = (test: (name: string) => boolean) => items.filter(item => test(item.name)).reduce((sum, item) => sum + item.count, 0);
+  const planks = count(name => name.endsWith('_planks')), sticks = count(name => name === 'stick');
+  const handles = sticks >= 2 || planks >= 2 + 3;
+  const options = [
+    count(name => name === 'iron_ingot') >= 3 && handles ? 'iron_pickaxe（鉄3）' : '',
+    count(name => ['cobblestone', 'cobbled_deepslate', 'blackstone'].includes(name)) >= 3 && handles
+      ? `stone_pickaxe（丸石3。手持ちの丸石${count(name => ['cobblestone', 'cobbled_deepslate', 'blackstone'].includes(name))}個）` : '',
+  ].filter(Boolean);
+  const now = sound.length ? `${sound[0].name}の残りは${left(sound[0])}回` : '掘れるツルハシが無い';
+  return `。予備のツルハシ: ${now}。${options.length ? `craft-one で ${options.join(' か ')} を作っておける（棒2本も要る）` : '材料（丸石3か鉄3、棒2）を集めて作っておく'}`;
+}
+
+/** Logs (and the nether's stems) are cut far faster with an axe. */
+export function isWood(name: string): boolean { return /_(log|wood|stem|hyphae)$/.test(name); }
+
+/**
+ * An axe for the logs, said after logs were cut without one: what the pack can make one of (cobblestone, else planks; sticks from
+ * planks). Run 17 cut seventeen logs by hand in 132 s; with a stone axe a log takes about a quarter of the time (the owner: cut a
+ * few, make a stone axe, cut the rest with it). Advice only (an axe takes a crafting table). Empty when an axe is carried or none can
+ * be made.
+ */
+export function axeAdviceNote(bot: unknown, logsCut: number): string {
+  const items = (bot as WearBot | undefined)?.inventory?.items?.() ?? [];
+  if (logsCut < AXE_ADVICE_FROM || items.some(item => item.name.endsWith('_axe'))) return '';
+  const count = (test: (name: string) => boolean) => items.filter(item => test(item.name)).reduce((sum, item) => sum + item.count, 0);
+  const planks = count(name => name.endsWith('_planks')), sticks = count(name => name === 'stick'), logs = count(isWood);
+  const handles = sticks >= 2 || planks >= 2 + 3 || logs >= 1;
+  const cobble = count(name => ['cobblestone', 'cobbled_deepslate', 'blackstone'].includes(name));
+  const what = cobble >= 3 && handles ? 'stone_axe（丸石3・棒2）' : planks + logs * 4 >= 5 ? 'wooden_axe（板材3・棒2）' : '';
+  return what ? `。斧が無く素手で伐りました（原木1本 約3秒。石の斧なら約0.8秒、木の斧なら約1.5秒）。craft-one ${what} を作ってから伐ると速い` : '';
+}
+/** From this many logs cut by hand, the axe is said. */
+const AXE_ADVICE_FROM = 3;
+
 export function installToolWearMonitor(bot: WearBot): void {
   if (bot.toolBreaks) return;
   const breaks: ToolBreak[] = [];

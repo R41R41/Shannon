@@ -16,6 +16,13 @@ import { estimateBlockApproachCost } from '../utils/blockApproachCost.js';
 import { dropBurnsIn } from '../utils/dropFate.js';
 import { digMsWithBestTool as bestToolDigMs } from '../utils/bestToolDigTime.js';
 import { descentFloor, nightGateRefusal } from '../utils/nightGate.js';
+import { axeAdviceNote, isWood, spareToolNote } from '../utils/toolWear.js';
+import { slotsUsed, tidyPlan } from '../utils/inventoryTidy.js';
+import { hostileNear } from './craftOne.js';
+
+/** The pack is tidied only with this much of the action left, and with no hostile this near. */
+const TIDY_TIME_MS = 40_000;
+const TIDY_SAFE_RANGE = 16;
 
 const log = createLogger('Minebot:Skill:mineBlock');
 
@@ -680,11 +687,15 @@ class MineBlock extends InstantSkill {
 
     // ドロップアイテムの現在所持数を付記（LLMが過剰採掘しないようにする）
     const totalsText = this.formatDropTotals(drops);
+    // A pack past 30 of its 36 slots: the plain stone and the clutter go (inventoryTidy), so the next ore is not dropped for want of room.
+    toolWarning += await this.tidyPack(familyNames.flatMap(name => [name, ...expectedItems]), timeLeftMs());
 
     const isPartial = mined < count || stoppedForInventoryTight;
     // Said beside what was mined: the rest of the kind lies below the night gate's floor (utils/nightGate).
     if (gate && gatedKeys.size) toolWarning += ` 夜の門: y${gate.floor}より下の${gatedKeys.size}個は、夜の準備（${gate.kit.missing.map(part => part === 'armor' ? '防具' : part === 'cooked_food' ? '焼いた食料' : 'ベッド').join('・')}）が揃うまで掘りません`;
     if (unknownNote) toolWarning += unknownNote;
+    if (needsPickaxe) toolWarning += spareToolNote(this.bot);
+    if (knownNames.some(isWood)) toolWarning += axeAdviceNote(this.bot, mined);
     const timeNote = stoppedForTime && mined < count
       ? `1回の行動の時間（${Math.round((this.maxDurationMs || 120_000) / 1000)}秒）を使い切る前に区切りました。掘った分は回収済みです。`
       : '';
@@ -716,6 +727,28 @@ class MineBlock extends InstantSkill {
   }
 
   /**
+   * Throws away what tidyPlan names (drop-item: thrown and walked away from), and says what went. Empty when nothing did. Never the
+   * kinds this call was asked to mine; not with a hostile near or in an emergency (the throw walks the body about); not when the action
+   * has less than TIDY_TIME_MS left (it would be cut off with its mined result unsaid); two kinds at most.
+   */
+  private async tidyPack(asked: string[], timeLeftMs: number): Promise<string> {
+    if (timeLeftMs < TIDY_TIME_MS || hostileNear(this.bot as any, TIDY_SAFE_RANGE)
+      || String((this.bot as any).minebotControlState ?? '').startsWith('emergency')) return '';
+    let plan: ReturnType<typeof tidyPlan> = [];
+    try { plan = tidyPlan(this.bot.inventory.items()).filter(entry => !asked.includes(entry.name)); } catch { plan = []; }
+    if (!plan.length || this.shouldInterrupt()) return '';
+    const before = slotsUsed(this.bot.inventory.items());
+    const gone: string[] = [];
+    for (const { name, count } of plan.slice(0, 2)) {
+      let dropped: { success: boolean; failureType?: string } = { success: false };
+      try { dropped = await this.callSkill('drop-item', name, count); } catch { break; }
+      if (dropped.success) gone.push(`${name}×${count}`);
+      if (dropped.failureType === 'no_room_to_drop' || this.shouldInterrupt()) break;
+    }
+    return gone.length ? ` 持ち物が${before}/36マス埋まっていたため、${gone.join('・')}を捨てました（いま${slotsUsed(this.bot.inventory.items())}マス）` : '';
+  }
+
+  /**
    * ツルハシの生存・耐久チェック。問題があれば返却オブジェクトを返す。
    */
   private checkToolSurvival(want: number, mined: number): any {
@@ -731,16 +764,16 @@ class MineBlock extends InstantSkill {
           'craft-one で新しいツルハシをクラフトしてから mine-block を再実行してください。',
       };
     }
-    let minRemaining = Infinity;
+    // The pickaxe with the most left decides, as in stair-mine: a worn-out spare beside a sound one is not a reason to stop (run 17).
+    let minRemaining = -Infinity;
     for (const p of pickaxesNow) {
       const mx = (p as any).maxDurability;
       const us = (p as any).durabilityUsed;
-      if (mx != null && mx > 0 && us != null && us >= 0) {
-        minRemaining = Math.min(minRemaining, mx - us);
-      }
+      minRemaining = mx != null && mx > 0 && us != null && us >= 0 ? Math.max(minRemaining, mx - us) : Infinity;
+      if (minRemaining === Infinity) break;
     }
     const remaining = want - mined;
-    if (minRemaining !== Infinity && minRemaining <= 3 && remaining > 0) {
+    if (Number.isFinite(minRemaining) && minRemaining <= 3 && remaining > 0) {
       return {
         success: mined > 0,
         failureType: 'tool_durability_low',

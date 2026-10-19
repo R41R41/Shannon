@@ -2,6 +2,7 @@ import minecraftData from 'minecraft-data';
 import { Vec3 } from 'vec3';
 import { CustomBot, InstantSkill } from '../types.js';
 import { ensureLineOfSight } from '../utils/blockLineOfSight.js';
+import { approachFurnace } from '../utils/furnaceReach.js';
 import { assertActionActive, bindActionCallback, reportActionProgress } from '../execution/ActionExecution.js';
 import { waitForObservation, type ObservationSource } from '../execution/observedWait.js';
 import {
@@ -16,6 +17,8 @@ import {
 /** A furnace smelts one item in ten seconds; what is left is waited out only when it is about this short. */
 const SMELT_MS_PER_ITEM = 10_000;
 const SHORT_WAIT_MS = 20_000;
+/** How long the burn bar has to read empty (with no fuel in the slot) before the furnace is taken to be out of fuel. */
+const FUEL_EMPTY_CONFIRM_MS = 2_500;
 
 class WithdrawFromFurnace extends InstantSkill {
     private mcData: any;
@@ -84,14 +87,10 @@ class WithdrawFromFurnace extends InstantSkill {
                 };
             }
 
-            // 距離チェック
-            const distance = this.bot.entity.position.distanceTo(pos);
-            if (distance > 4.5) {
-                return {
-                    success: false,
-                    result: `かまどが遠すぎます（距離: ${distance.toFixed(1)}m）`,
-                };
-            }
+            // Out of reach: walk to where it can be opened first (a stand from which the block is in reach, whatever the height:
+            // run 17 was told "too far" three times, once standing 14 blocks under the furnace after a move "already there" in XZ).
+            const approach = await approachFurnace(this.bot, pos, (...args) => this.callSkill('move-to', ...args));
+            if (approach) return approach;
 
             // スロット名の正規化
             const normalizedSlot = slot.toLowerCase();
@@ -126,9 +125,20 @@ class WithdrawFromFurnace extends InstantSkill {
                 let stoppedForFuel = false;
                 // Mineflayer initializes these fields from separate window
                 // packets. Do not mistake an incomplete snapshot for no fuel.
-                const fuelExhausted = () => furnace.fuel === 0
+                const fuelReadsEmpty = () => furnace.fuel === 0
                     && typeof (furnace as typeof furnace & { totalFuel?: number | null }).totalFuel === 'number'
                     && !furnace.fuelItem();
+                // Read as empty for a while, not for a moment: just after start-smelting the one coal has gone from the slot into the
+                // fire and the burn bar has not been sent yet. Run 17 was told "add fuel" at once, 29 s from done, with fuel burning.
+                let emptySince: number | null = null;
+                const fuelExhausted = () => {
+                    if (!fuelReadsEmpty()) { emptySince = null; return false; }
+                    emptySince ??= Date.now();
+                    return Date.now() - emptySince >= FUEL_EMPTY_CONFIRM_MS;
+                };
+                /** Out of fuel, said only when it still reads empty after the burn bar has had time to come in. */
+                const confirmedOutOfFuel = async () => fuelReadsEmpty() && !(await waitForObservation(this.bot, () => !fuelReadsEmpty(),
+                    FUEL_EMPTY_CONFIRM_MS, [{ source: furnace as unknown as ObservationSource, event: 'update' }]));
 
                 // Output must be handled before the other slots. In particular,
                 // the default slot="all" must not remove input or fuel while
@@ -146,7 +156,7 @@ class WithdrawFromFurnace extends InstantSkill {
                         const inputCount = furnace.inputItem()!.count;
                         const expectedOutputCount = inputCount + (outputItem?.count ?? 0);
                         if (!waits(inputCount)) {
-                            const outOfFuel = fuelExhausted();
+                            const outOfFuel = await confirmedOutOfFuel();
                             furnace.close();
                             return { success: false, failureType: outOfFuel ? 'material_missing' : 'waiting_external', recoverable: true,
                                 result: outOfFuel
@@ -228,7 +238,7 @@ class WithdrawFromFurnace extends InstantSkill {
                 }
 
                 const remainingInput = furnace.inputItem();
-                stoppedForFuel = !!remainingInput && (stoppedForFuel || fuelExhausted());
+                stoppedForFuel = !!remainingInput && (stoppedForFuel || fuelExhausted() || await confirmedOutOfFuel());
                 furnace.close();
 
                 // 燃料切れなら残った材料は待機中の仕事ではない。

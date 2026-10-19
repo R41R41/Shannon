@@ -16,6 +16,19 @@ import { resyncInventory } from '../utils/inventorySync.js';
 import { placeableSpots } from './findPlaceableSpot.js';
 import { woolByColor } from '../utils/nightGate.js';
 import type { SkillResult } from '../types/skillParams.js';
+import { nightClock } from '../utils/nightGate.js';
+import { isSealedIn } from '../utils/shelter.js';
+
+/** A table further than this (eyes to block) is replaced by one set down here, if the pack has or makes one. */
+const OWN_TABLE_BEYOND = 6;
+/** A table or bed set down is not taken back up with a hostile this near: it is left and said. */
+export const PICKUP_SAFE_RANGE = 8;
+export function hostileNear(bot: { entity?: { position: Vec3 }; entities?: Record<string, any>; registry?: any }, range: number): boolean {
+  const at = bot.entity?.position;
+  if (!at) return false;
+  return Object.values(bot.entities ?? {}).some((entity: any) => entity?.position && entity !== bot.entity
+    && bot.registry?.entitiesByName?.[entity.name]?.type === 'hostile' && entity.position.distanceTo(at) <= range);
+}
 
 /**
  * Which bed the wool carried makes, for a request of `bed` or `<colour>_bed`: the one asked for when there are three of its colour,
@@ -208,7 +221,36 @@ class CraftOne extends InstantSkill {
    * `tableSearchRadius` is not a parameter the planner sees: a caller that makes a tool on the way (utils/toolStock)
    * uses a table only where it can be reached, and otherwise puts down the one it carries.
    */
+  /**
+   * The craft, then the crafting table this call set down itself is taken back up (the owner: run 17 left three of them where it had
+   * crafted). A table that was standing there before is left where it is.
+   */
   async runImpl(itemName: string, count: number = 1, tableSearchRadius: number = 32): Promise<SkillResult> {
+    const outer = this.placedTables === null;
+    if (outer) this.placedTables = [];
+    try {
+      const result = await this.craftImpl(itemName, count, tableSearchRadius);
+      if (!outer || !this.placedTables!.length || this.shouldInterrupt()) return result;
+      const notes: string[] = [];
+      for (const pos of this.placedTables!) {
+        if (this.bot.blockAt(pos)?.name !== 'crafting_table') continue;
+        // Not with a hostile at hand: the table is left, and said, to be taken up later.
+        if (hostileNear(this.bot, PICKUP_SAFE_RANGE)) { notes.push(`置いた作業台(${pos.x}, ${pos.y}, ${pos.z})は、敵が近いのでそのままにしました`); continue; }
+        let taken: SkillResult;
+        try { taken = await this.callSkill('dig-block-at', pos.x, pos.y, pos.z, true, 'target', true); }
+        catch (error: any) { taken = { success: false, result: String(error?.message ?? error) }; }
+        notes.push(taken.success ? `置いた作業台(${pos.x}, ${pos.y}, ${pos.z})は拾い直しました` : `置いた作業台(${pos.x}, ${pos.y}, ${pos.z})は拾えませんでした`);
+      }
+      return notes.length ? { ...result, result: `${result.result}。${notes.join('。')}` } : result;
+    } finally {
+      if (outer) this.placedTables = null;
+    }
+  }
+
+  /** Crafting tables this call set down, to be taken back up when it is done; null outside a call. */
+  private placedTables: Vec3[] | null = null;
+
+  private async craftImpl(itemName: string, count: number = 1, tableSearchRadius: number = 32): Promise<SkillResult> {
     const tableRadius = Number.isFinite(tableSearchRadius) && tableSearchRadius > 0 ? Math.min(32, tableSearchRadius) : 32;
     let beforeCount = 0;
     let craftCount = Math.max(1, Math.min(count, 64));
@@ -283,8 +325,26 @@ class CraftOne extends InstantSkill {
           : this.bot.findBlock({ matching, maxDistance: tableRadius });
       }
 
+      // A table out of reach is not walked to when one can be set down here: further than a few blocks, or at night, or from inside
+      // a shelter. Run 17 walked 17 s up to a table on the surface at night, stayed there 76 s and was shot dead by a skeleton (D6).
+      if (requiresCraftingTable && craftingTable && !this.tableAccess(craftingTable).inReach) {
+        const why = this.preferOwnTable(craftingTable);
+        // Far by day: only a table carried is set down (making one would spend planks the recipe may need). Night or a shelter: one
+        // is made if need be, and if none can be set down here the far one is not walked to either (out of the shaft, into the dark).
+        const own = why === 'safety' || (why === 'far' && this.bot.inventory.items().some(i => i.name === 'crafting_table')) ? await this.ownTable() : null;
+        if (own) craftingTable = own;
+        else if (why === 'safety') {
+          const p = craftingTable.position;
+          return { success: false, failureType: 'table_out_of_reach', recoverable: true,
+            result: `${itemName}には作業台が要りますが、夜か縦穴の中なので、離れた作業台(${p.x}, ${p.y}, ${p.z})へは歩きません。ここに置ける場所もありません`
+              + `（${this.bot.inventory.items().some(i => i.name === 'crafting_table') ? '作業台は持っています' : '作業台も、作る板材もありません'}）。`
+              + '壁を1マス掘って空きを作ってから craft-one を呼び直すか、place-block-at crafting_table で置いてください' };
+        }
+      }
+
       if (requiresCraftingTable && !craftingTable) {
-        // インベントリにcrafting_tableがあれば自動設置を試みる
+        // インベントリにcrafting_tableがあれば自動設置を試みる（無ければ、材料から作って置く）
+        if (!this.bot.inventory.items().some(i => i.name === 'crafting_table')) await this.makeTable();
         const tableInInventory = this.bot.inventory.items().find(i => i.name === 'crafting_table');
         if (tableInInventory) {
           craftingTable = await this.tryPlaceCraftingTable();
@@ -775,8 +835,47 @@ class CraftOne extends InstantSkill {
   }
 
   /**
+   * Why a table out of reach should be replaced by one set down here, or null: `safety` at night or from inside a shelter (walking to
+   * it goes out into the dark or through the shaft's wall), `far` further than OWN_TABLE_BEYOND by day.
+   */
+  private preferOwnTable(table: { position: Vec3 }): 'safety' | 'far' | null {
+    const clock = nightClock(this.bot as any);
+    if (clock && clock.darkInSeconds === 0) return 'safety';
+    try { if (isSealedIn(this.bot as any)) return 'safety'; } catch { /* not known: by distance */ }
+    const distance = table.position.offset(0.5, 0.5, 0.5).distanceTo(this.bot.entity.position);
+    return distance > OWN_TABLE_BEYOND ? 'far' : null;
+  }
+
+  /** A crafting table in the pack: carried, or made now from planks (planks from a log first). False when the pack has neither. */
+  private async makeTable(): Promise<boolean> {
+    const items = () => this.bot.inventory.items();
+    if (items().some(i => i.name === 'crafting_table')) return true;
+    const planks = () => items().filter(i => i.name.endsWith('_planks')).reduce((sum, i) => sum + i.count, 0);
+    try {
+      if (planks() < 4) {
+        const log = items().find(i => /_(log|stem)$/.test(i.name));
+        const plankName = log ? log.name.replace(/_(log|stem)$/, '_planks') : null;
+        if (!plankName || !this.mcData.itemsByName[plankName]) return false;
+        // This skill's own craft, not callSkill: calling itself that way hands its body back to the root at the end, and the rest of
+        // this run would then move the body without the motor fence.
+        await this.craftImpl(plankName, 4);
+      }
+      if (planks() < 4) return false;
+      const made = await this.craftImpl('crafting_table', 1);
+      return made.success && items().some(i => i.name === 'crafting_table');
+    } catch { return false; }
+  }
+
+  /** A table set down within reach of where the body stands (made first if need be), or null. */
+  private async ownTable(): Promise<any> {
+    if (!(await this.makeTable())) return null;
+    const placed = await this.tryPlaceCraftingTable();
+    return placed && this.tableAccess(placed).ready ? placed : null;
+  }
+
+  /**
    * crafting_table をボットの足元付近に自動設置する。
-   * 成功したら設置されたブロックを返す。失敗したら null。
+   * 成功したら設置されたブロックを返す。失敗したら null。置いたものは、この呼び出しの後で拾う（placedTables）。
    */
   private async tryPlaceCraftingTable(): Promise<any> {
     try {
@@ -801,7 +900,7 @@ class CraftOne extends InstantSkill {
         for (let wait = 0; wait < 5; wait++) {
           await actionDelay(this.bot, 200);
           const placed = this.bot.blockAt(new Vec3(c.x, c.y, c.z));
-          if (placed?.name === 'crafting_table') return { outcome: 'placed', block: placed };
+          if (placed?.name === 'crafting_table') { this.placedTables?.push(new Vec3(c.x, c.y, c.z)); return { outcome: 'placed', block: placed }; }
         }
         return { outcome: 'lost' };
       };

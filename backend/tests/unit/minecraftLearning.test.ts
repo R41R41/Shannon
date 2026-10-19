@@ -438,9 +438,9 @@ describe("the observation says what the body's reserves come to (paid runs L64, 
       entities: { 2: { id: 2, name: 'zombie', position: new Vec3(6.5, 64, 0.5) }, 3: { id: 3, name: 'skeleton', position: new Vec3(0.5, 64, 12.5) } },
       combatStats: () => ({ mobs: { zombie: { hits: 4, damage: 12 }, skeleton: { hits: 2, damage: 9 } } }), ...extra });
     // Late afternoon, hurt and hungry: 100 seconds to dark, no regeneration, 4 things to eat, two skeleton hits left.
-    // Within five minutes of dark with no armour and no bed: the night gate's kit is said too (the cooked food is there), not yet closed.
+    // Within five minutes of dark with no armour and no bed: the night gate's kit is said too (the cooked food is there), and it is closed.
     expect(captureWorldObservation(body(11000, 7, 9)).margin).toEqual({ darkInSeconds: 100, regenerating: false, foodItems: 4, hitsLeft: { from: 'skeleton', hits: 2 },
-      descentKit: { missing: ['armor', 'bed'], gated: false } });
+      descentKit: { missing: ['armor', 'bed'], gated: true } });
     // Night: dark now, 250 seconds to morning. Fed and whole.
     expect(captureWorldObservation(body(18000, 20, 20)).margin).toMatchObject({ darkInSeconds: 0, lightInSeconds: 250, regenerating: true, hitsLeft: { from: 'skeleton', hits: 5 } });
     // Nothing hostile near: no hits to count. No measurements: nothing said about hits.

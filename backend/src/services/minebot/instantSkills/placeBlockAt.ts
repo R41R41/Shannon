@@ -6,6 +6,8 @@ import { CustomBot, InstantSkill } from '../types.js';
 import { gotoSafe } from '../utils/gotoSafe.js';
 import { ensureLineOfSight } from '../utils/blockLineOfSight.js';
 import { actionDelay } from '../execution/observedWait.js';
+import { placeableSpots } from './findPlaceableSpot.js';
+import { bodyCells, isFreeCell } from './sleepInBed.js';
 
 const { goals } = pathfinder;
 
@@ -35,22 +37,50 @@ class PlaceBlockAt extends InstantSkill {
       {
         name: 'x',
         type: 'number',
-        description: 'X座標（整数）',
-        required: true,
+        description: 'X座標（整数）。x・y・z を省略すると、手の届く置ける場所（床の上、自分の体と重ならない所）を自分で選ぶ',
+        required: false,
       },
       {
         name: 'y',
         type: 'number',
         description: 'Y座標（整数）',
-        required: true,
+        required: false,
       },
       {
         name: 'z',
         type: 'number',
         description: 'Z座標（整数）',
-        required: true,
+        required: false,
       },
     ];
+  }
+
+  /**
+   * Where to put it when no place was given: the nearest cell within reach that can take it (find-placeable-spot's search), on a
+   * floor first, out of the cells the body fills, with the head cell free too for a bed. Run 17 called find-placeable-spot and then
+   * place-block-at five times over; three of its placements were refused for a cell its own body stood in.
+   */
+  private chooseSpot(blockName: string): Vec3 | null {
+    const body = bodyCells(this.bot.entity.position);
+    const eyes = this.bot.entity.position.offset(0, 1.62, 0);
+    const bed = blockName.endsWith('_bed');
+    const spots = placeableSpots(this.bot as any, 4, 32)
+      .filter(spot => !body.some(cell => cell.x === spot.x && cell.y === spot.y && cell.z === spot.z))
+      .filter(spot => new Vec3(spot.x + 0.5, spot.y + 0.5, spot.z + 0.5).distanceTo(eyes) <= 4.5)
+      // A bed stands on floor under both its halves; the head cell has to be free as well.
+      .filter(spot => !bed || (this.bot.blockAt(new Vec3(spot.x, spot.y - 1, spot.z))?.boundingBox === 'block'
+        && this.bedHeadFree(new Vec3(spot.x, spot.y, spot.z), body)))
+      .sort((a, b) => Number(b.ref === '下') - Number(a.ref === '下') || a.dist - b.dist);
+    return spots[0] ? new Vec3(spots[0].x, spots[0].y, spots[0].z) : null;
+  }
+
+  /** A bed lies the way the body faces as it places it: its head is the cell past the foot, away from the body. */
+  private bedHeadFree(foot: Vec3, body: Vec3[]): boolean {
+    const at = this.bot.entity.position;
+    const dx = foot.x + 0.5 - at.x, dz = foot.z + 0.5 - at.z;
+    const head = Math.abs(dx) >= Math.abs(dz) ? foot.offset(Math.sign(dx), 0, 0) : foot.offset(0, 0, Math.sign(dz));
+    return isFreeCell(this.bot.blockAt(head)) && this.bot.blockAt(head.offset(0, -1, 0))?.boundingBox === 'block'
+      && !body.some(cell => cell.equals(head));
   }
 
   /** Too far to place from where the body is now: said without waiting for the body, with where the body is. */
@@ -67,16 +97,32 @@ class PlaceBlockAt extends InstantSkill {
     };
   }
 
-  async runImpl(blockName: string, x: number, y: number, z: number) {
+  async runImpl(blockName: string, x?: number, y?: number, z?: number) {
     try {
-      // パラメータチェック
+      let note = '';
+      // パラメータチェック（座標が無ければ、自分で選ぶ）
+      if (x == null && y == null && z == null) {
+        const spot = this.chooseSpot(blockName);
+        if (!spot) return { success: false, failureType: 'target_not_found', recoverable: true,
+          result: `手の届く所に${blockName}を置ける場所がありません（床があり、自分の体と重ならない空きマス）。少し動いてから呼んでください` };
+        ({ x, y, z } = spot);
+        note = `置き場所(${x}, ${y}, ${z})は自分で選びました。`;
+      }
       if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
         return {
           success: false,
-          result: '座標は有効な数値である必要があります',
+          result: '座標は有効な数値である必要があります（x・y・z を全部省略すると自分で選びます）',
           failureType: 'invalid_input',
           recoverable: false,
         };
+      }
+      x = x as number; y = y as number; z = z as number;
+      // A solid block given where the cell above it is meant (the ground under the spot): one up, said (run 17, D54: grass_block).
+      const given = this.bot.blockAt(new Vec3(x, y, z));
+      if (given && given.boundingBox === 'block' && isFreeCell(this.bot.blockAt(new Vec3(x, y + 1, z)))
+        && !bodyCells(this.bot.entity.position).some(cell => cell.x === x && cell.y === y! + 1 && cell.z === z)) {
+        note += `(${x}, ${y}, ${z})は${given.name}で埋まっているため、その上(${x}, ${y + 1}, ${z})に置きます。`;
+        y = y + 1;
       }
 
       const blockType = this.mcData.blocksByName[blockName];
@@ -128,17 +174,9 @@ class PlaceBlockAt extends InstantSkill {
         };
       }
 
-      // ボット自身がいる位置なら自動で退避してから設置
-      const botPos = this.bot.entity.position;
-      const botBlockX = Math.floor(botPos.x);
-      const botBlockY = Math.floor(botPos.y);
-      const botBlockZ = Math.floor(botPos.z);
-
-      if (
-        x === botBlockX &&
-        z === botBlockZ &&
-        (y === botBlockY || y === botBlockY + 1)
-      ) {
+      // ボット自身がいる位置なら自動で退避してから設置。The whole box of the body, not only the cell its centre is in: standing
+      // near an edge it is in the next cell too, and the server refuses a block there (run 17: three "no block has been placed").
+      if (bodyCells(this.bot.entity.position).some(cell => cell.x === x && cell.y === y && cell.z === z)) {
         const moved = await this.stepAside(targetPos);
         if (!moved) {
           return {
@@ -217,7 +255,7 @@ class PlaceBlockAt extends InstantSkill {
 
       return {
         success: true,
-        result: `${blockName}を(${x}, ${y}, ${z})に設置しました`,
+        result: `${note}${blockName}を(${x}, ${y}, ${z})に設置しました`,
       };
     } catch (error: any) {
       // エラーメッセージを詳細化

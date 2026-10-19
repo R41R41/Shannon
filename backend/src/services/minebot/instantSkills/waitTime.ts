@@ -2,15 +2,18 @@ import { CustomBot, InstantSkill } from '../types.js';
 import { actionDelay } from '../execution/observedWait.js';
 import { backgroundJobs } from '../execution/backgroundJobs.js';
 import { isSealedIn } from '../utils/shelter.js';
-import { descentKit, bedWool } from '../utils/nightGate.js';
+import { descentFloor, descentKit, bedWool, nightClock } from '../utils/nightGate.js';
+import { nearestOres } from '../utils/loadedBlockScan.js';
 import { RAW_FOOD } from '../constantSkills/autoEat.js';
 
 /** A wait this short is never refused (a beat between two actions). */
 const FREE_WAIT_MS = 5_000;
 /** A furnace that is done within this long may be waited for: the body would only walk off and come straight back. */
 const NEARLY_DONE_MS = 10_000;
-/** Hostile within this far: the wait may be about them, not about the furnace. */
-const THREAT_RANGE = 16;
+/** At or below this health, with food to regenerate on, a wait heals the body and is let be. */
+const HEALING_HEALTH = 10;
+/** After the exposure guard refused a dig (a hostile right outside), waits are let be this long. */
+const GUARD_WAIT_MS = 60_000;
 
 /**
  * 原子的スキル: 指定時間待機
@@ -23,7 +26,7 @@ class WaitTime extends InstantSkill {
       // Right after start-smelting the planner waited the batch out here, 30 to 110 seconds at a time, the body
       // standing still (paid runs L101, L102, once withdraw-from-furnace had stopped doing the waiting for it).
       + '待つ間は身体が止まり、何も進みません。かまどの精錬の完成を待つためには使わず、その間に採掘など次の作業を進めて、終わった頃に取り出します'
-      + '（かまどが動いていて、ほかにできることがある間は、5秒を超える待ちは断ります）。'
+      + '（かまどが動いている間・夜・縦穴の中では、ほかにできることがある限り、5秒を超える待ちは断ります。体力10以下で回復中なら待てます）。'
       // Common run 9 sheltered for the night and then waited here eight times, six and a half minutes, while the iron
       // pickaxe it needed next was a few blocks of digging away; L101-L103 lost their nights the same way.
       + '夜明けを待つためにも使いません。夜は避難した縦穴から横へ掘り進め、鉱石を探す・精錬する・作業台で作るなど、地下でできる用事を進めます'
@@ -39,44 +42,58 @@ class WaitTime extends InstantSkill {
   }
 
   /**
-   * A wait for a furnace is refused while there is something else to do: run 16 waited 30 s and 40 s at its furnace right after
-   * start-smelting had said not to (70 s of a 20-minute run). Not refused: a short wait, a furnace done within ten seconds, a body
-   * shut in its shelter or with a hostile near (the wait may be about that), or nothing else to do. What is said: the furnace's
-   * time left, and what could be done meanwhile.
+   * A wait for a furnace, or a wait out of the night (in a shelter, or at night anywhere), is refused while there is something else
+   * to do. Run 16 waited 70 s at its furnace right after start-smelting had said not to; run 17 waited 175 s at furnaces and 190 s in
+   * its night shaft, a fifth of the run (the refusal, written then, never ran: see isCommandLevel). Not refused: a short wait, a
+   * furnace done within ten seconds (and no night to wait out), a hurt body that is regenerating (health 10 or less and food 18 or
+   * more: the wait heals it), or nothing else to do. What is said: what the wait was for, and what could be done instead (the
+   * nearest ores, above the night gate's floor).
    */
   protected preflight(milliseconds: number) {
     const asked = Number(milliseconds);
     if (!(asked > FREE_WAIT_MS)) return null;
     const dimension = String(this.bot.game?.dimension ?? 'unknown');
     const jobs = backgroundJobs(this.bot).filter(job => job.status === 'waiting_external' && (job.dimension ?? dimension) === dimension);
-    if (!jobs.length) return null;
-    const soonest = Math.min(...jobs.map(job => job.remainingEstimateMs));
-    if (soonest <= NEARLY_DONE_MS) return null;
-    if (this.sheltered() || this.threatNear()) return null;
-    const meanwhile = this.otherWork();
+    const furnaceWait = jobs.length > 0 && Math.min(...jobs.map(job => job.remainingEstimateMs)) > NEARLY_DONE_MS;
+    // The night and the shaft are the overworld's: in the End a hollow to wait for the dragon in is a different matter.
+    const clock = nightClock(this.bot as any);
+    const overworld = String(this.bot.game?.dimension ?? 'overworld').includes('overworld');
+    const night = !!clock && clock.darkInSeconds === 0;
+    const sheltered = overworld && this.sheltered();
+    if (!furnaceWait && !sheltered && !night) return null;
+    if (this.healing()) return null;
+    // A dig out was just refused for the hostile it would let in, and that refusal says to wait for it to go: a wait then is let be.
+    const guard = (this.bot as { exposureDigGuard?: { lastAt?: number } }).exposureDigGuard;
+    if (guard?.lastAt && Date.now() - guard.lastAt < GUARD_WAIT_MS) return null;
+    const { work: meanwhile, concrete } = this.otherWork();
     if (!meanwhile.length) return null;
-    const furnaces = jobs.map(job => `(${job.position.x},${job.position.y},${job.position.z})の${job.input}×${job.count} 残り約${Math.ceil(job.remainingEstimateMs / 1000)}秒`).join('、');
+    // Out of a night or a shaft only for something definite to do (an ore in reach, a piece of the night's kit), not for "gather logs".
+    if (!furnaceWait && !concrete) return null;
+    const why: string[] = [];
+    if (furnaceWait) why.push(`かまどの仕事 ${jobs.map(job => `(${job.position.x},${job.position.y},${job.position.z})の${job.input}×${job.count} 残り約${Math.ceil(job.remainingEstimateMs / 1000)}秒`).join('、')}`);
+    if (sheltered || night) why.push(`${night ? `夜（明けるまで約${clock!.lightInSeconds ?? 0}秒）` : '縦穴の中'}を待って過ごすこと`);
     return { success: false, failureType: 'wait_refused', recoverable: true,
-      result: `待ちを断りました: かまどの仕事 ${furnaces}。その間にできること: ${meanwhile.join('、')}。`
-        + '終わった頃に withdraw-from-furnace で取り出す（どうしても完成を待つなら withdraw-from-furnace の waitForCompletion=true）' };
+      result: `待ちを断りました: ${why.join('、')}。その間にできること: ${meanwhile.join('、')}。`
+        + (furnaceWait ? '終わった頃に withdraw-from-furnace で取り出す（どうしても完成を待つなら withdraw-from-furnace の waitForCompletion=true）。' : '')
+        + (sheltered ? '縦穴からは横へ掘って進めば、塞いだまま作業できる' : '') };
   }
 
   private sheltered(): boolean {
     try { return typeof this.bot.blockAt === 'function' && !!this.bot.entity && isSealedIn(this.bot as any); } catch { return false; }
   }
 
-  private threatNear(): boolean {
-    const at = this.bot.entity?.position;
-    if (!at) return false;
-    return Object.values(this.bot.entities ?? {}).some((entity: any) => entity && entity !== this.bot.entity && entity.position
-      && this.bot.registry?.entitiesByName?.[entity.name]?.type === 'hostile' && entity.position.distanceTo(at) <= THREAT_RANGE);
+  /** Hurt and regenerating: a wait is what heals it (natural regeneration needs food 18). */
+  private healing(): boolean {
+    const health = Number(this.bot.health ?? 20), food = Number(this.bot.food ?? 20);
+    return health <= HEALING_HEALTH && food >= 18;
   }
 
   /** What the body could do instead, from what it carries: a few short suggestions, the most useful first. */
-  private otherWork(): string[] {
+  private otherWork(): { work: string[]; concrete: boolean } {
     const items = (() => { try { return this.bot.inventory.items(); } catch { return []; } })();
     const count = (test: (name: string) => boolean) => items.filter(item => test(item.name)).reduce((sum, item) => sum + item.count, 0);
     const out: string[] = [];
+    let concrete = false;
     try {
       const kit = descentKit(this.bot as any);
       if (kit.missing.includes('armor') && count(name => name === 'iron_ingot') >= 8) out.push('craft-one で iron_chestplate を作る');
@@ -84,9 +101,17 @@ class WaitTime extends InstantSkill {
       if (kit.missing.includes('bed') && (!wool || wool.have < 3)) out.push(`羊を狩って同じ色の羊毛を集める（attack-continuously の color）${wool ? `（いま ${wool.color} ${wool.have}/3）` : ''}`);
       if (kit.missing.includes('cooked_food') && count(name => RAW_FOOD.has(name)) === 0) out.push('動物を狩って食料を集める');
     } catch { /* the kit unknown: the generic work below */ }
-    if (count(name => name.endsWith('_pickaxe')) > 0) out.push('mine-block で石炭・鉄などを掘る');
+    if (count(name => name.endsWith('_pickaxe')) > 0) {
+      // The nearest ores by name and place, above the night gate's floor when it is closed: the planner can mine them at once.
+      let floor = -Infinity;
+      try { floor = descentFloor(this.bot as any)?.floor ?? -Infinity; } catch { floor = -Infinity; }
+      const ores = nearestOres(this.bot as any, 32, floor);
+      out.unshift(ores.length ? `mine-block で近くの${ores.join('・')}を掘る` : 'mine-block で石炭・鉄などを掘る');
+      if (ores.length) concrete = true;
+    }
+    if (out.some(line => line.includes('iron_chestplate'))) concrete = true;
     if (count(name => name.endsWith('_log')) < 4) out.push('原木を集める');
-    return out.slice(0, 3);
+    return { work: out.slice(0, 3), concrete };
   }
 
   async runImpl(milliseconds: number) {

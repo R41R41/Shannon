@@ -20,6 +20,10 @@ export interface Landmark {
 const JOB_SITES = ['composter', 'lectern', 'smithing_table', 'blast_furnace', 'smoker', 'grindstone', 'fletching_table',
   'cartography_table', 'loom', 'barrel', 'stonecutter', 'brewing_stand', 'cauldron'];
 const CLUSTER_RADIUS = 48;
+/** Work sites that only villages put down in numbers (not the barrel or cauldron of a ship or a hut). */
+const STRONG_JOB_SITES = new Set(JOB_SITES.filter(name => name !== 'barrel' && name !== 'cauldron'));
+/** Villages stand on the surface: markers below this are a ruin, a mineshaft's or a cave's, not a village. */
+const VILLAGE_MIN_Y = 40;
 const LANDMARK_SAMPLE_TICKS = 100;
 
 interface LandmarkBot {
@@ -58,8 +62,10 @@ export function detectVillage(bot: LandmarkBot): Landmark | null {
     const counts = new Map<string, number>();
     for (const hit of cluster) counts.set(kindOf(hit), (counts.get(kindOf(hit)) ?? 0) + 1);
     const near = villagers.filter(villager => villager.position.distanceTo(seed.position) <= CLUSTER_RADIUS).length;
-    // A bed is two blocks: three beds are six bed blocks.
-    const isVillage = counts.has('bell') || (near > 0 && counts.size > 0) || counts.size >= 2 || (counts.get('bed') ?? 0) >= 6;
+    // Near the surface, with a bell or a work site that villages alone put down: eight barrels and four beds at y -13 were taken for a
+    // village from the first decision of run 17 to the last (barrels and cauldrons stand in shipwrecks, huts and ruins too).
+    const strongSite = [...counts.keys()].some(kind => STRONG_JOB_SITES.has(kind));
+    const isVillage = seed.position.y >= VILLAGE_MIN_Y && (counts.has('bell') || (strongSite && (counts.size >= 2 || near > 0)));
     if (!isVillage) continue;
     const evidence = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5)
       .map(([name, count]) => name === 'bed' ? `ベッド${Math.ceil(count / 2)}台` : `${name}×${count}`);

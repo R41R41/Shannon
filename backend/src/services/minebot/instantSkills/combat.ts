@@ -4,6 +4,7 @@ import { createLogger } from '../../../utils/logger.js';
 import { shouldRefuseAggressiveCombat } from '../utils/minebotToolPolicy.js';
 import { setMovements } from '../utils/setMovements.js';
 import { actionDelay } from '../execution/observedWait.js';
+import { creeperMeleeRefusal } from '../utils/creeperFuse.js';
 
 const { goals } = pathfinder;
 const log = createLogger('Minebot:Skill:combat');
@@ -172,6 +173,11 @@ class Combat extends InstantSkill {
         } catch {
             return null;
         }
+    }
+
+    /** A creeper asked for by name is not fought hand to hand (utils/creeperFuse). */
+    protected preflight(target?: string) {
+        return creeperMeleeRefusal([String(target ?? '')]);
     }
 
     async runImpl(target?: string, timeout: number = 30) {

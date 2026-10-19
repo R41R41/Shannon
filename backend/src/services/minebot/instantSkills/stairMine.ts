@@ -7,7 +7,8 @@ import { digBlockVerified } from '../utils/digBlockVerified.js';
 import { LavaReleaseError } from '../utils/lavaSafety.js';
 import { ThreatExposedError } from '../utils/exposureGuard.js';
 import { actionDelay } from '../execution/observedWait.js';
-import { chooseTool } from '../utils/toolChoice.js';
+import { chooseTool, usesLeft } from '../utils/toolChoice.js';
+import { spareToolNote } from '../utils/toolWear.js';
 import { blocksAlong, keepCheapTool } from '../utils/toolStock.js';
 import { nightGateFor } from '../utils/nightGate.js';
 const log = createLogger('Minebot:Skill:stairMine');
@@ -101,6 +102,9 @@ class StairMine extends InstantSkill {
             const isDescending = diff < 0;
             const steps = Math.abs(diff);
             let successSteps = 0;
+            /** Directions given up on in this call, with why (the stair turns to another by itself), and the one it was asked for. */
+            const triedDirections: string[] = [];
+            const firstDirection = dir.clone();
 
             // タイムアウト設定（60秒）
             // Deepslate steps take several seconds each; a fixed 60s stopped a
@@ -145,7 +149,7 @@ class StairMine extends InstantSkill {
                         success: false,
                         failureType: toolCheck.failureType,
                         recoverable: true,
-                        result: `${successSteps}段${isDescending ? '下降' : '上昇'}しました（Y=${Math.floor(this.bot.entity.position.y)}）。${toolCheck.message}`,
+                        result: `${successSteps}段${isDescending ? '下降' : '上昇'}しました（Y=${Math.floor(this.bot.entity.position.y)}）。${toolCheck.message.replace(/。$/, '')}${spareToolNote(this.bot)}`,
                     };
                 }
 
@@ -155,12 +159,21 @@ class StairMine extends InstantSkill {
                     // 下降: 前方に1ブロック進んで1ブロック下を掘る
                     const success = await this.digStairDown(currentPos, dir, placeBlock);
                     if (!success) {
+                        // Blocked this way (a ledge, water beside the step, a block that will not break): the other ways from here
+                        // first, the sides before the way back. Run 17 was sent east and north by hand and lost two calls to it.
+                        const next = this.otherDirection(firstDirection, triedDirections);
+                        if (next && !this.shouldInterrupt()) {
+                            triedDirections.push(`${this.directionName(dir)}（${(this.lastStopReason ?? '進めず').slice(0, 40)}）`);
+                            dir = next; this.lastStopReason = null; i--;
+                            continue;
+                        }
                         return {
                             success: false,
                             failureType: 'stair_progress_blocked',
                             recoverable: true,
                             result: `${successSteps}段下降しました（Y=${Math.floor(this.bot.entity.position.y)}）。`
-                                + (this.lastStopReason ?? '次の段で高さと位置を確認できず中断しました'),
+                                + (this.lastStopReason ?? '次の段で高さと位置を確認できず中断しました')
+                                + (triedDirections.length ? `（ほかに試した方向: ${triedDirections.join('、')}）` : ''),
                         };
                     }
                 } else {
@@ -193,9 +206,9 @@ class StairMine extends InstantSkill {
                 success: finalY === targetY,
                 failureType: finalY === targetY ? undefined : 'stair_progress_blocked',
                 recoverable: finalY === targetY ? undefined : true,
-                result: finalY === targetY
+                result: (finalY === targetY
                     ? `${successSteps}段${isDescending ? '下降' : '上昇'}してY=${finalY}に到達しました`
-                    : `${successSteps}段移動しましたが目標Y=${targetY}には到達していません（現在Y=${finalY}）`,
+                    : `${successSteps}段移動しましたが目標Y=${targetY}には到達していません（現在Y=${finalY}）`) + spareToolNote(this.bot),
             };
         } catch (error: any) {
             return {
@@ -270,6 +283,18 @@ class StairMine extends InstantSkill {
             log.error(`下降エラー: ${error.message}`, error);
             return false;
         }
+    }
+
+    /** The next way to try, from the one first asked for (`dir`): its sides, then back; null once all four have been tried. */
+    private otherDirection(dir: Vec3, tried: string[]): Vec3 | null {
+        const left = new Vec3(dir.z, 0, -dir.x), right = new Vec3(-dir.z, 0, dir.x), back = new Vec3(-dir.x, 0, -dir.z);
+        const given = tried.length + 1;   // this one is given up on as well
+        if (given >= 4) return null;
+        return [left, right, back][given - 1] ?? null;
+    }
+
+    private directionName(dir: Vec3): string {
+        return dir.x > 0 ? 'east' : dir.x < 0 ? 'west' : dir.z > 0 ? 'south' : 'north';
     }
 
     /**
@@ -383,21 +408,21 @@ class StairMine extends InstantSkill {
             };
         }
 
-        let minDurability = Infinity;
+        // The pickaxe with the most left decides (each step chooses its own tool): measured by the worst one, a stone pickaxe at 1
+        // stopped the stair five times while an iron one was in the hand (run 17).
+        let bestDurability = -Infinity;
         let hasDurabilityInfo = false;
         for (const p of pickaxes) {
-            const max = (p as any).maxDurability;
-            const used = (p as any).durabilityUsed;
-            if (max != null && max > 0 && used != null && used >= 0) {
-                hasDurabilityInfo = true;
-                minDurability = Math.min(minDurability, max - used);
-            }
+            const left = usesLeft(p as any);
+            if (left === null) { bestDurability = Infinity; continue; }
+            hasDurabilityInfo = true;
+            bestDurability = Math.max(bestDurability, left);
         }
 
-        if (hasDurabilityInfo && minDurability <= 3) {
+        if (hasDurabilityInfo && bestDurability <= 3) {
             return {
                 failureType: 'tool_durability_low',
-                message: `ツルハシの残り耐久が${minDurability}しかありません。craft-one で新しいツルハシをクラフトしてから再実行してください。`,
+                message: `ツルハシの残り耐久が${bestDurability}しかありません。craft-one で新しいツルハシをクラフトしてから再実行してください。`,
             };
         }
 

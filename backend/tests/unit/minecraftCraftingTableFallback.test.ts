@@ -129,7 +129,7 @@ describe('craft-one workbench recovery', () => {
     expect(bot.blockAt(furnace.position)).toBe(furnace);
   });
 
-  it('places a carried table when a detected table cannot be reached', async () => {
+  it('places a carried table rather than walk to one 20 blocks off (run 17 walked to a far table at night and died)', async () => {
     const distantTable = { name: 'crafting_table', position: new Vec3(20, 64, 0), boundingBox: 'block' };
     const localTable = { name: 'crafting_table', position: new Vec3(1, 64, 0), boundingBox: 'block' };
     const move = vi.fn(async () => ({ success: false, result: 'no_path' }));
@@ -150,7 +150,7 @@ describe('craft-one workbench recovery', () => {
     vi.spyOn(skill as any, 'finalizeCraftOutcome').mockResolvedValue({ success: true, result: 'crafted' });
 
     expect(await skill.runImpl('iron_pickaxe', 1)).toMatchObject({ success: true });
-    expect(move).toHaveBeenCalledOnce();
+    expect(move).not.toHaveBeenCalled();
     expect(place).toHaveBeenCalledOnce();
     expect(bot.recipesFor).toHaveBeenCalledWith(expect.any(Number), null, 1, localTable);
     expect(bot.craft).toHaveBeenCalledWith(expect.any(Object), 1, localTable);

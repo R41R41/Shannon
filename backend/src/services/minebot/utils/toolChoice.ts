@@ -48,15 +48,42 @@ export function toolCost(block: BlockLike, item: ToolLike | null | undefined, ef
  * drop (an ore wanted for its drop); otherwise the hand counts too (clearing a way).
  */
 export function chooseTool<T extends ToolLike>(block: BlockLike, items: T[], options: { requireHarvest?: boolean; effects?: unknown } = {}): T | null {
-  const candidates: Array<T | null> = [null, ...items];
-  let best: T | null = null;
-  let bestCost = Infinity;
-  for (const item of candidates) {
-    if (options.requireHarvest && !canHarvest(block, item)) continue;
-    const cost = toolCost(block, item, options.effects);
-    if (cost < bestCost) { bestCost = cost; best = item; }
+  const pick = (pool: T[]) => {
+    const candidates: Array<T | null> = [null, ...pool];
+    let best: T | null = null;
+    let bestCost = Infinity;
+    for (const item of candidates) {
+      if (options.requireHarvest && !canHarvest(block, item)) continue;
+      const cost = toolCost(block, item, options.effects);
+      if (cost < bestCost) { bestCost = cost; best = item; }
+    }
+    return { best, bestCost };
+  };
+  // A tool one or two uses from breaking is the last choice: the cheapest, it was picked again and again while an iron pickaxe
+  // lay beside it, and a stair stopped on it five times as "durability 1" (run 17). It is still used when nothing else does the job.
+  const sound = items.filter(item => !nearlyBroken(item));
+  if (sound.length < items.length) {
+    const first = pick(sound);
+    if (first.best) return first.best;
+    // The hand is the best of the sound choices: the worn tool only when it is far quicker (stone by hand is 7.5 s a block).
+    if (Number.isFinite(first.bestCost)) {
+      const any = pick(items);
+      return any.best && any.bestCost < first.bestCost / 3 ? any.best : null;
+    }
   }
-  return best;
+  return pick(items).best;
+}
+
+/** Uses left before a tool breaks, or null when it does not wear (or nothing is known of it). */
+export function usesLeft(item: { maxDurability?: number; durabilityUsed?: number } | null | undefined): number | null {
+  if (!item || !(Number(item.maxDurability) > 0)) return null;
+  return Math.max(0, Number(item.maxDurability) - Number(item.durabilityUsed ?? 0));
+}
+/** At most this many uses left: kept for when nothing else will do. */
+export const NEARLY_BROKEN_USES = 2;
+export function nearlyBroken(item: { maxDurability?: number; durabilityUsed?: number } | null | undefined): boolean {
+  const left = usesLeft(item);
+  return left !== null && left <= NEARLY_BROKEN_USES;
 }
 
 /**

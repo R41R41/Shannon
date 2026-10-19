@@ -42,6 +42,16 @@ export function currentAction(bot: object): Context | undefined {
   const context = contextStorage.getStore();
   return context?.bot === actionHost(bot) ? context : undefined;
 }
+/**
+ * Whether a skill about to run is the command itself, not a skill called inside another: no action yet (the legacy planner), or
+ * only the action the common-FCA body opened for this very command (nativeBody runs `skill.run` inside an action of the skill's own
+ * name). Every skill's preflight was skipped under common FCA, because there an action is always open: run 17's wait-time refusal
+ * and the night gate of move-to, stair-mine and dig-block-at never ran (2026-10-20).
+ */
+export function isCommandLevel(bot: object, capability: string): boolean {
+  const context = currentAction(bot);
+  return !context || (!context.root && context.progress.capability === capability);
+}
 export function actionSignal(bot: object): AbortSignal | undefined {
   return currentAction(bot)?.controller.signal;
 }

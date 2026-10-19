@@ -345,7 +345,17 @@ class BuildAroundSelf extends InstantSkill {
     }
     // What the body stands on is a floor already, whatever its shape (fortress stairs, a slab): dug out to be
     // replaced, it would drop the body out of the plan.
-    const cells = cellsOf(plan, feet, turns).filter(cell => !this.inBody(cell.pos) && !cell.pos.equals(feet.offset(0, -1, 0)));
+    let cells = cellsOf(plan, feet, turns).filter(cell => !this.inBody(cell.pos) && !cell.pos.equals(feet.offset(0, -1, 0)));
+    // No slabs, but whole blocks enough for those cells too: the cover is closed with whole blocks (no slit to strike through, but
+    // shut). Run 17 was refused its shelter for 0 of 4 slabs with 40 cobblestone in the pack, a skeleton on it at 3 health.
+    let slabNote = '';
+    const slabCells = cells.filter(cell => cell.spec === '@slab:top' && !this.done(cell)).length;
+    const solidCells = cells.filter(cell => cell.spec === '@solid' && !this.done(cell)).length;
+    // Only for the one-cell shelter (the floor's fallback, and any emergency): a cage at a spawner without its slit is no cage.
+    if (plan.name === 'slit_shelter' && slabCells > this.carried('@slab:top') && this.carried('@solid') >= solidCells + slabCells) {
+      cells = cells.map(cell => cell.spec === '@slab:top' ? { ...cell, spec: '@solid' } : cell);
+      slabNote = 'ハーフブロックが無いため、隙間の段も丸石などで塞ぎました（外は見えず、隙間ごしには殴れません。敵がいなくなってから出てください）。';
+    }
     const total = cells.filter(cell => !cell.becomes).length;
     const lacking = ['@solid', '@slab:top', ...new Set(cells.map(cell => cell.spec).filter(spec => !spec.startsWith('@')))].map(spec => {
       const need = cells.filter(cell => cell.spec === spec && !this.done(cell)).length;   // what stands first and what it becomes are both carried
@@ -394,7 +404,7 @@ class BuildAroundSelf extends InstantSkill {
     const built = total - left.length;
     if (!left.length) {
       log.info(`🧱 ${plan.name} 完成（${total}マス）`);
-      return { success: true, result: `${plan.name} をその場に建てました（${total}マスすべて）。中央のマスは (${feet.x}, ${feet.y}, ${feet.z})。${plan.usage ?? ''}` };
+      return { success: true, result: `${plan.name} をその場に建てました（${total}マスすべて）。中央のマスは (${feet.x}, ${feet.y}, ${feet.z})。${slabNote || (plan.usage ?? '')}` };
     }
     const where = left.slice(0, 6).map(cell => `(${cell.pos.x},${cell.pos.y},${cell.pos.z})`).join(' ');
     return { success: false, failureType: this.shouldInterrupt() ? 'interrupted' : 'place_failed', recoverable: true,

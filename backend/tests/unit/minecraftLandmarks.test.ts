@@ -64,12 +64,18 @@ describe('a village in view', () => {
   const body = (blocks: Array<[number, number, number, string]>, entities: any = {}) =>
     ({ entity: { position: new Vec3(0.5, 64, 0.5) }, registry, world: world(blocks, square(5)), entities }) as any;
 
-  it('is recognised by a bell, by two kinds of marker together, by three beds, or by villagers beside a marker', () => {
+  it('is recognised near the surface by a bell, or by a village work site with another marker or villagers beside it', () => {
     expect(detectVillage(body([[60, 64, -40, 'bell']]))).toMatchObject({ kind: 'village', direction: '北東', distance: 72 });
     expect(detectVillage(body([[30, 64, 0, 'hay_block'], [36, 64, 4, 'composter']]))?.evidence).toContain('hay_block×1');
+    expect(detectVillage(body([[30, 64, 0, 'composter']], { 7: { name: 'villager', position: new Vec3(33, 64, 2) } }))?.evidence).toContain('村人1人');
+  });
+
+  it('is not claimed for beds and barrels alone, nor for markers deep underground (run 17: 8 barrels and 4 beds at y -13)', () => {
     const threeBeds: Array<[number, number, number, string]> = [0, 4, 8].flatMap(dz => [[40, 64, dz, 'white_bed'], [41, 64, dz, 'white_bed']] as Array<[number, number, number, string]>);
-    expect(detectVillage(body(threeBeds))?.evidence).toBe('ベッド3台');
-    expect(detectVillage(body([[30, 64, 0, 'barrel']], { 7: { name: 'villager', position: new Vec3(33, 64, 2) } }))?.evidence).toContain('村人1人');
+    expect(detectVillage(body(threeBeds))).toBeNull();
+    expect(detectVillage(body([[30, 64, 0, 'barrel'], [32, 64, 0, 'barrel'], [40, 64, 2, 'white_bed'], [41, 64, 2, 'white_bed']]))).toBeNull();
+    expect(detectVillage(body([[30, 64, 0, 'barrel']], { 7: { name: 'villager', position: new Vec3(33, 64, 2) } }))).toBeNull();
+    expect(detectVillage(body([[30, -13, 0, 'bell']]))).toBeNull();
   });
 
   it('is not claimed for the body\'s own bed or barrel, for markers far apart, or for plain building blocks', () => {

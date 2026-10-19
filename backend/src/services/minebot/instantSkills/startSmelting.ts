@@ -2,14 +2,14 @@ import minecraftData from 'minecraft-data';
 import { Vec3 } from 'vec3';
 import { CustomBot, InstantSkill } from '../types.js';
 import { ensureLineOfSight } from '../utils/blockLineOfSight.js';
+import { approachFurnace } from '../utils/furnaceReach.js';
 import { FALLBACK_FOOD_POINTS, RAW_FOOD } from '../constantSkills/autoEat.js';
-import { scanLoadedBlocks } from '../utils/loadedBlockScan.js';
+import { nearestOres, scanLoadedBlocks } from '../utils/loadedBlockScan.js';
 import type { SkillResult } from '../types/skillParams.js';
 
 /** How far a free furnace is looked for when the one asked for is busy. */
 const FREE_FURNACE_RANGE = 24;
-/** Ores worth mining while a batch smelts, and how far they are looked for. */
-const MEANWHILE_ORES = ['iron_ore', 'deepslate_iron_ore', 'coal_ore', 'deepslate_coal_ore'];
+/** How far ores worth mining while a batch smelts are looked for. */
 const MEANWHILE_RANGE = 24;
 
 /**
@@ -230,16 +230,9 @@ class StartSmelting extends InstantSkill {
         };
       }
 
-      // 距離チェック
-      const distance = this.bot.entity.position.distanceTo(pos);
-      if (distance > 4.5) {
-        return {
-          success: false,
-          result: `かまどが遠すぎます（距離: ${distance.toFixed(1)}m）`,
-          failureType: 'distance_too_far',
-          recoverable: true,
-        };
-      }
+      // Out of reach: walk to a stand it can be opened from first (utils/furnaceReach).
+      const approach = await approachFurnace(this.bot, pos, (...args) => this.callSkill('move-to', ...args));
+      if (approach) return approach;
 
       if (!this.isValidFuel(fuelItem)) {
         return {
@@ -572,13 +565,8 @@ class StartSmelting extends InstantSkill {
 
   /** What could be done while the furnace works: the nearest ores in the loaded chunks, said as places to mine. */
   private meanwhileNote(): string {
-    try {
-      const hits = scanLoadedBlocks(this.bot as any, MEANWHILE_ORES, { maxDistance: MEANWHILE_RANGE, maxHits: 12 }).hits;
-      const kinds = new Map<string, (typeof hits)[number]>();
-      for (const hit of hits) { const kind = hit.name.replace(/^deepslate_/, ''); if (!kinds.has(kind)) kinds.set(kind, hit); }
-      if (!kinds.size) return '';
-      return `。待たずにできること: ${[...kinds.entries()].map(([kind, hit]) => `近くの${kind} (${hit.position.x}, ${hit.position.y}, ${hit.position.z}) 約${Math.round(hit.distance)}m`).join('・')} を mine-block で掘る`;
-    } catch { return ''; }
+    const ores = nearestOres(this.bot as any, MEANWHILE_RANGE);
+    return ores.length ? `。待たずにできること: ${ores.map(ore => `近くの${ore}`).join('・')} を mine-block で掘る` : '';
   }
 
   private registerActiveFurnace(

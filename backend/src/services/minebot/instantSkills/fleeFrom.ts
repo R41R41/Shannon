@@ -7,7 +7,14 @@ import { gotoSafe } from '../utils/gotoSafe.js';
 import { isHostileEntity } from '../utils/hostileMobHints.js';
 import { isExposedTo } from '../utils/threatExposure.js';
 import { escapeMayWork } from '../utils/escapeHeading.js';
+import { fleeKeys } from '../utils/floorReflexes.js';
+import { actionDelay } from '../execution/observedWait.js';
 const { goals } = pathfinder;
+/** Within this, the flee starts by running straight away rather than by planning a route to a point. */
+const DIRECT_RUN_RANGE = 10;
+/** The longest the straight run lasts before the route search takes over (a lit creeper's fuse is 1.5 s). */
+const DIRECT_RUN_MS = 4_000;
+const DIRECT_RUN_TICK_MS = 50;
 const log = createLogger('Minebot:Skill:fleeFrom');
 type FleeTarget = { position: Vec3; name: string; id?: number; /** The live hostile, when the target is one: its exposure is judged from it. */ entity?: any };
 const ESCAPE_DIRECTIONS = 16;
@@ -213,6 +220,20 @@ class FleeFrom extends InstantSkill {
       let fleeResult: Awaited<ReturnType<typeof gotoSafe>> = { success: false, error: 'timeout' };
       const attemptedWaypoints = new Set<string>();
       let traveled = 0;
+
+      // Close by, the run comes first: straight away from everything near, the heading read again each tick and kept off drops,
+      // lava and walls (the floor flee's own steering). Planning a route to a point first cost a creeper 6.2 m away the time the
+      // body had: it moved 2 m and 1 m, and the second creeper went off at 3 m (run 17).
+      if (currentDistance <= DIRECT_RUN_RANGE) {
+        const run = await this.runStraightAway(actualTarget, hostileGroup, minDistance, Math.min(timeout, DIRECT_RUN_MS));
+        traveled += run.moved;
+        finalTargets = this.resolveTargets(actualTarget, hostileGroup);
+        finalDistance = this.nearestDistance(finalTargets);
+        if (finalDistance >= minDistance) {
+          return { success: true,
+            result: `${name}から走って離れました（最短距離: ${currentDistance.toFixed(1)}m → ${Number.isFinite(finalDistance) ? `${finalDistance.toFixed(1)}m` : '視界外'}、自分の移動: ${traveled.toFixed(0)}m）` };
+        }
+      }
       let routesChecked = 0;
       const cutOff: string[] = [];
 
@@ -309,6 +330,49 @@ class FleeFrom extends InstantSkill {
     const original = now.filter(target => target.id != null && pursuers.has(target.id));
     const left = original.length ? `${Math.min(...original.map(distance)).toFixed(1)}m` : '視界外';
     return `。当初の対象からは${initialDistance.toFixed(1)}m → ${left}に離れたが、逃走中に別の${nearest.name}が${distance(nearest).toFixed(1)}mに現れた`;
+  }
+
+  /**
+   * Sprint straight away from the targets that can get at the body, the heading chosen again every tick from all of them (the floor
+   * flee's `fleeKeys`: away, or the nearest turn that is not a drop, lava or a wall, never toward another threat). Ends when the
+   * nearest is `minDistance` off, when no heading is safe, or after `ms`. The keys are always let go.
+   */
+  private async runStraightAway(actualTarget: string, hostileGroup: boolean, minDistance: number, ms: number): Promise<{ moved: number; blocked: boolean }> {
+    const start = this.bot.entity.position.clone();
+    // Without the ground to read or a head to turn (a body that is only a stand-in), there is no safe straight run to make.
+    if (typeof this.bot.look !== 'function' || typeof this.bot.blockAt !== 'function') return { moved: 0, blocked: true };
+    const until = Date.now() + ms;
+    const memory: { heading?: number } = {};
+    let blocked = false;
+    try { this.bot.pathfinder?.setGoal?.(null); } catch { /* nothing to stop */ }
+    // Said on the body while the run lasts: the floor's step back from a lit creeper does not cut this run (it is the same run),
+    // and does cut the route search after it (floorReflexes, retreatAllow).
+    const root = this.rootBot as unknown as { fleeStraightRun?: boolean };
+    root.fleeStraightRun = true;
+    try {
+      for (let tick = 0; tick * DIRECT_RUN_TICK_MS < ms && Date.now() < until && !this.shouldInterrupt(); tick++) {
+        const near = this.resolveTargets(actualTarget, hostileGroup).filter(target => !target.entity || isExposedTo(this.bot as any, target.entity));
+        if (!near.length || this.nearestDistance(near) >= minDistance) break;
+        // Every hostile close by steers the run, not only the one named: away from a zombie must not be into a creeper.
+        const others = hostileGroup ? [] : this.resolveTargets('hostile', true).filter(other => !near.some(target => target.id != null && target.id === other.id)
+          && this.bot.entity.position.distanceTo(other.position) <= DIRECT_RUN_RANGE && (!other.entity || isExposedTo(this.bot as any, other.entity)));
+        const keys = fleeKeys(this.bot as any, [...near, ...others].map(target => target.position), memory);
+        if (!keys) { blocked = true; break; }
+        await this.bot.look(keys.yaw, 0, true);
+        this.bot.setControlState('forward', true);
+        this.bot.setControlState('sprint', true);
+        this.bot.setControlState('jump', keys.jump);
+        await actionDelay(this.bot, DIRECT_RUN_TICK_MS);
+      }
+    } catch (error) {
+      // Cancelled: the caller ends. Anything else (a body that cannot be steered this way): the route search below takes over.
+      if (this.shouldInterrupt()) throw error;
+      blocked = true;
+    } finally {
+      root.fleeStraightRun = false;
+      for (const key of ['forward', 'sprint', 'jump'] as const) { try { this.bot.setControlState(key, false); } catch { /* ownership lost */ } }
+    }
+    return { moved: start.distanceTo(this.bot.entity.position), blocked };
   }
 
   private clearFleeGoal(goal: InstanceType<typeof goals.GoalNearXZ>): void {

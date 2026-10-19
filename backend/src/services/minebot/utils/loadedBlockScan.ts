@@ -79,6 +79,27 @@ export function scanLoadedBlocks(bot: ScanBot, names: Iterable<string>,
   return result;
 }
 
+/** Ores worth mining while something else waits (a furnace, the night). */
+const ORES_WORTH_A_WAIT = ['iron_ore', 'deepslate_iron_ore', 'coal_ore', 'deepslate_coal_ore'];
+
+/**
+ * The nearest iron and coal ore in the loaded chunks, one of each kind (deepslate counted as the same kind), as
+ * "iron_ore (8, 60, 3) 約9m": what start-smelting and a refused wait offer the planner to do instead of standing still. `floor`
+ * leaves out what lies below it (the night gate's floor).
+ */
+export function nearestOres(bot: ScanBot, range = 24, floor = -Infinity): string[] {
+  try {
+    const kinds = new Map<string, LoadedBlockHit>();
+    // Enough hits that a coal seam does not hide the iron, and that what lies below the floor is not all there is.
+    for (const hit of scanLoadedBlocks(bot, ORES_WORTH_A_WAIT, { maxDistance: range, maxHits: 64 }).hits) {
+      if (hit.position.y < floor) continue;
+      const kind = hit.name.replace(/^deepslate_/, '');
+      if (!kinds.has(kind)) kinds.set(kind, hit);
+    }
+    return [...kinds.entries()].map(([kind, hit]) => `${kind} (${hit.position.x}, ${hit.position.y}, ${hit.position.z}) 約${Math.round(hit.distance)}m`);
+  } catch { return []; }
+}
+
 /** Nearest-first positions of the named blocks within the loaded chunks: the role of bot.findBlocks by id. */
 export function findLoadedBlocks(bot: ScanBot, names: Iterable<string>, maxDistance: number, count: number): Vec3[] {
   return scanLoadedBlocks(bot, names, { maxDistance, maxHits: count }).hits.map(hit => hit.position);

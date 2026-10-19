@@ -4,7 +4,7 @@ import { CONFIG } from '../config/MinebotConfig.js';
 import { extractAndSaveKnowledge } from '../knowledge/skillResultExtractor.js';
 import { SkillResultCache } from '../knowledge/SkillResultCache.js';
 import { skillMetrics } from '../knowledge/SkillMetrics.js';
-import { actionSignal, assertActionActive, executeAction, preemptLowerPriorityActions, cancelAction, cancelCapability, physicalActionBusy, waitForActionQuiescence, createMotorPort, currentAction } from '../execution/ActionExecution.js';
+import { actionSignal, assertActionActive, executeAction, preemptLowerPriorityActions, cancelAction, cancelCapability, physicalActionBusy, waitForActionQuiescence, createMotorPort, currentAction, isCommandLevel } from '../execution/ActionExecution.js';
 import { skillCategory } from '../execution/SkillExecutor.js';
 import { describeRemainingTools } from '../utils/toolWear.js';
 import { describeToolOptions, takeToolStockNotes } from '../utils/toolStock.js';
@@ -151,8 +151,9 @@ export abstract class InstantSkill extends Skill {
     }
 
     const host = this.rootBot;
-    // What needs no body is said before the body is asked for (see preflight).
-    if (!currentAction(host)) {
+    // What needs no body is said before the body is asked for (see preflight): for the command itself, never for a skill called
+    // inside another (mine-block's own walk is not refused by move-to's gate: mine-block chose its targets above it).
+    if (isCommandLevel(host, this.skillName)) {
       let refused: SkillResult | null = null;
       try { refused = this.preflight(...args); } catch { refused = null; }
       if (refused) return { ...refused, duration: 0 };

@@ -19,10 +19,13 @@ export const NIGHT_GATE_Y = 16;
 /** Nightfall (monsters spawn under the sky) and morning, in ticks of the day. */
 const NIGHTFALL_TICK = 13000;
 const MORNING_TICK = 23000;
-/** The gate closes this many seconds before dark: a descent started then is still under way when the night begins. */
-export const DUSK_LEAD_SECONDS = 60;
+/**
+ * The gate closes this many seconds before dark: a descent started then is still under way when the night begins. It was 60; run 17
+ * went down to y 4 with no bed 260 and 168 seconds before dark, and was still down there at nightfall (the owner, 2026-10-20).
+ */
+export const DUSK_LEAD_SECONDS = 300;
 /** The observation tells of the missing kit this long before dark, so that the planner can get it in daylight. */
-export const KIT_NOTICE_SECONDS = 300;
+export const KIT_NOTICE_SECONDS = 600;
 /** Further down than this below the feet counts as going deeper (a block dug at the feet, a step down, is not). */
 const DEEPER_MARGIN = 2;
 
@@ -109,7 +112,7 @@ export function nightClock(bot: GateBody): NightClock | null {
   return { darkInSeconds: Math.round((24000 - tick + NIGHTFALL_TICK) / 20) };
 }
 
-/** True while the gate is closed by the clock (night, or dark within a minute). */
+/** True while the gate is closed by the clock (night, or dark within DUSK_LEAD_SECONDS). */
 export function gateHours(clock: NightClock | null): boolean {
   return !!clock && clock.darkInSeconds <= DUSK_LEAD_SECONDS;
 }
@@ -184,7 +187,7 @@ export function nightGateFor(bot: GateBody, targetY: number, what: string): Retu
 
 /**
  * The observation's word on the kit (`state.world.margin.descentKit`): said only in the overworld, when something is missing and
- * the night is near (five minutes) or here, with whether the gate is closed now.
+ * the night is near (KIT_NOTICE_SECONDS) or here, with whether the gate is closed now.
  */
 export function descentKitNotice(bot: GateBody): { missing: KitPart[]; gated: boolean } | undefined {
   const clock = nightClock(bot);

@@ -94,7 +94,7 @@ describe('M1: a meal does not cut the API\'s own escape and shelter commands (de
     expect(await trial('default', 'attack-continuously')).toEqual({ cut: true, equipped: true });
     expect(await trial('floor', 'dig-shelter')).toEqual({ cut: true, equipped: true });
   });
-  it('an arrow step-aside does not cut an escape skill in default; a lit creeper\'s retreat still does (an explosion is a second away)', async () => {
+  it('an arrow step-aside does not cut an escape skill in default; a lit creeper\'s retreat still cuts one, except flee-from (run 17)', async () => {
     const arrow = async (mode: 'default' | 'floor') => {
       const { bot } = fixture(heights(() => 64), { health: 20 });
       bot.entities = { 3: { id: 3, name: 'arrow', position: new Vec3(8, 66, 0.5), velocity: new Vec3(-2, 0, 0) } };
@@ -108,12 +108,24 @@ describe('M1: a meal does not cut the API\'s own escape and shelter commands (de
     expect(await arrow('default')).toBe(false);
     expect(await arrow('floor')).toBe(true);
     const lit: unknown[] = []; lit[16] = 1;
-    const { bot } = fixture(heights(() => 64), { health: 20 });
-    bot.entities = { 3: { id: 3, name: 'creeper', position: new Vec3(3, 65, 0.5), metadata: lit } };
-    installFloorReflexes(bot, floorConfig({}));
-    const command = executeAction(bot, 'flee-from', 5000, () => new Promise(resolve => setTimeout(() => resolve({ success: true, result: 'ok' }), 200)), { priority: 0 });
-    await running(bot, 'flee-from'); tick(bot);
-    expect(((await command) as any).success).toBe(false);
+    const creeperNear = (straightRun: boolean) => {
+      const { bot } = fixture(heights(() => 64), { health: 20 });
+      bot.entities = { 3: { id: 3, name: 'creeper', position: new Vec3(3, 65, 0.5), metadata: lit } };
+      installFloorReflexes(bot, floorConfig({}));
+      (bot as any).fleeStraightRun = straightRun;
+      return bot;
+    };
+    const cut = async (bot: any, skill: string) => {
+      const command = executeAction(bot, skill, 5000, () => new Promise(resolve => setTimeout(() => resolve({ success: true, result: 'ok' }), 200)), { priority: 0 });
+      await running(bot, skill); tick(bot);
+      return ((await command) as any).success === false;
+    };
+    // flee-from's straight run away from it is not cut: a one-second step that cuts it off hands the body back standing (run 17).
+    expect(await cut(creeperNear(true), 'flee-from')).toBe(false);
+    // Its route search afterwards is: stuck there, the step back is the last thing between the body and the blast.
+    expect(await cut(creeperNear(false), 'flee-from')).toBe(true);
+    // Any other escape (a shelter being dug) is still cut: an explosion is a second away.
+    expect(await cut(creeperNear(false), 'dig-shelter')).toBe(true);
   });
   it('health 6 or less at food 18 or 19 is no meal at all (the body regenerates there; run 16 change); at food 17 or less it is critical', () => {
     const idle = (health: number, food: number) => floorEatChoice({ ...fixture(flat()).bot, health, food, entities: {}, inventory: { items: () => [bread], slots: [] } })?.name ?? null;

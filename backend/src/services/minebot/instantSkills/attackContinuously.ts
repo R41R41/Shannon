@@ -7,6 +7,7 @@ import { gotoSafe } from '../utils/gotoSafe.js';
 import { actionDelay } from '../execution/observedWait.js';
 import { visiblePointOn } from '../utils/sightLine.js';
 import { WOOL_COLORS, woolStatusLine } from '../utils/nightGate.js';
+import { creeperMeleeRefusal } from '../utils/creeperFuse.js';
 import type { Vec3 } from 'vec3';
 
 const { goals } = pathfinder;
@@ -82,6 +83,13 @@ class AttackContinuously extends InstantSkill {
     ];
   }
 
+  /** A creeper asked for by name is not chased into melee (utils/creeperFuse). */
+  protected preflight(entityName: string = '', _maxAttacks?: number, _maxDistance?: number, _maxKills?: number, holdPosition?: boolean) {
+    // Holding position (in a shelter, at a slit), a creeper that comes up is struck: it is the one place a blow at it is safe.
+    if (holdPosition === true) return null;
+    return creeperMeleeRefusal(String(entityName ?? '').split(','));
+  }
+
   async runImpl(entityName: string = '', maxAttacks: number = 30, maxDistance: number = 24, maxKills: number = 0, holdPosition: boolean = false, color: string = '') {
     this.holding = holdPosition === true;
     this.blows = new Map();
@@ -130,6 +138,8 @@ class AttackContinuously extends InstantSkill {
       const matchesEntity = (entity: any): boolean => {
         const name = String(entity?.name ?? '').toLowerCase();
         if (!matchesTarget(name)) return false;
+        // A group ("hostile", or none named) leaves creepers out; holding position, one that comes up to the slit is still struck.
+        if (name === 'creeper' && !this.holding && !rawInput.split(',').map(s => s.trim()).includes('creeper')) return false;
         if (!woolColor || name !== 'sheep') return true;
         const wool = sheepWool(this.bot, entity);
         return !!wool && !wool.sheared && wool.color === woolColor;

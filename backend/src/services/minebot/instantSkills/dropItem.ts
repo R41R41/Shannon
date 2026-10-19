@@ -13,6 +13,8 @@ const RETREAT_AFTER_TOSS_BLOCKS = 6;
 const PICKUP_CLEARANCE_BLOCKS = 2.5;
 const PICKUP_DELAY_MS = 2000;
 const PIT_SEARCH_RADIUS = 10;
+/** With nowhere to walk to, a throw needs this many open cells ahead to land out of reach. */
+const MIN_THROW_OPEN = 3;
 const MIN_PIT_DEPTH = 3;
 
 function isAirBlock(block: { name: string } | null): boolean {
@@ -224,7 +226,16 @@ class DropItem extends InstantSkill {
             while (open < 5 && isAirBlock(this.bot.blockAt(new Vec3(Math.floor(here.x + ux * (open + 1)), Math.floor(here.y + 1.62), Math.floor(here.z + uz * (open + 1)))))) open++;
             if (!best || open > best.open) best = { x: ux, z: uz, open };
           }
-          if (best) await this.bot.lookAt(new Vec3(here.x + best.x * 4, here.y + 1.62, here.z + best.z * 4), true);
+          // Shut in (a 1x1 shaft, a tunnel's end): whatever is thrown lands within reach and walks back into the pack two seconds
+          // later. Said before throwing, not after (run 17 threw a stone pickaxe in its shaft and picked it up again).
+          const line = best as { x: number; z: number; open: number } | null;
+          const openAhead = line?.open ?? 0;
+          if (!line || openAhead < MIN_THROW_OPEN) {
+            return { success: false, failureType: 'no_room_to_drop', recoverable: true,
+              result: `ここは狭く、${itemName}を捨てても1ブロック以内に落ちて拾い直します（投げられる空きは${openAhead}マス）。`
+                + '捨てずに持っておくか、開けた所（3マス以上の空き）へ出てから捨ててください' };
+          }
+          await this.bot.lookAt(new Vec3(here.x + line.x * 4, here.y + 1.62, here.z + line.z * 4), true);
         }
       }
       await this.bot.toss(item.type, null, dropCount);

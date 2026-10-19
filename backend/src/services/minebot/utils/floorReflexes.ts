@@ -876,7 +876,9 @@ export function shelterChoice(bot: FloorBody, nearest = Infinity): { skill: 'bui
   const count = (test: (name: string) => boolean) => items.filter(item => test(item.name)).reduce((sum, item) => sum + ((item as { count?: number }).count ?? 1), 0);
   const blocks = count(name => WALL_BLOCKS.has(name)), slabs = count(name => name.endsWith('_slab'));
   const has = (name: string) => { try { return !!bot.instantSkills?.getSkill(name); } catch { return false; } };
-  if (blocks >= SHELTER_BLOCKS && slabs >= SHELTER_SLABS && nearest > SHELTER_CLEAR && has('build-around-self')) return { skill: 'build-around-self', args: [SHELTER_PLAN] };
+  // Without slabs the shelter closes its slit with whole blocks too (build-around-self): ten and four of them.
+  const enough = (blocks >= SHELTER_BLOCKS && slabs >= SHELTER_SLABS) || blocks >= SHELTER_BLOCKS + SHELTER_SLABS;
+  if (enough && nearest > SHELTER_CLEAR && has('build-around-self')) return { skill: 'build-around-self', args: [SHELTER_PLAN] };
   if (blocks >= PILLAR_BLOCKS && has('tower-up')) return { skill: 'tower-up', args: [PILLAR_BLOCKS] };
   return null;
 }
@@ -923,8 +925,12 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
   const failed = () => { if (!budget) state.retryAt = Date.now() + RETRY_AFTER_MS; };
   // The budget's say on an arrow step-aside. In the default mode it also does not cut the API's escape or shelter command (a lit creeper's
   // retreat is never asked about: that is a second from an explosion, as in production).
+  // A lit creeper is stepped back from whatever runs, except flee-from's straight run away (`fleeStraightRun`, set on the body while
+  // it lasts): a one-second step cut that off and handed the body back standing (run 17: interrupted, then caught at 3 m). The route
+  // search after the run is still cut: stuck there, the step back is the last thing between the body and the blast.
   const retreatAllow = config.wideThreats || budget
-    ? (kind: 'creeper' | 'arrow') => kind === 'creeper' || ((!config.wideThreats || !escapeRunning(bot)) && (!budget || budget.allow('arrow', bot.health ?? 20)))
+    ? (kind: 'creeper' | 'arrow') => kind === 'creeper' ? !(config.wideThreats && (bot as { fleeStraightRun?: boolean }).fleeStraightRun === true)
+      : ((!config.wideThreats || !escapeRunning(bot)) && (!budget || budget.allow('arrow', bot.health ?? 20)))
     : undefined;
   bot.on('physicsTick', () => {
     let outcome: ReturnType<typeof floorRetreatTick> = null;

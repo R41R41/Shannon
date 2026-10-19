@@ -112,6 +112,46 @@ class DigShelter extends InstantSkill {
     return false;
   }
 
+  private sealBlocks(): number {
+    return this.bot.inventory.items().filter(i => SEAL_BLOCKS.includes(i.name)).reduce((sum, i) => sum + i.count, 0);
+  }
+
+  /**
+   * Blocks for the seal, from under the feet: dug and picked up, the body standing a block deeper each time (the floor under that
+   * one solid, so nothing is fallen into, and walled in at the new level). Up to two, until `need` are carried. Stops when a dig
+   * fails or brings nothing the seal can use (stone dug by hand, sand). Returns how many blocks deeper the body stands.
+   */
+  private async digForSealBlock(need: number): Promise<number> {
+    const dig = this.bot.instantSkills.getSkill('dig-block-at');
+    if (!dig) return 0;
+    let deeper = 0;
+    for (let extra = 0; extra < 2 && this.sealBlocks() < need; extra++) {
+      const feet = this.bot.entity.position.floored();
+      const under = feet.offset(0, -1, 0), below = feet.offset(0, -2, 0);
+      const block = this.bot.blockAt(under);
+      if (!isSolid(block) || !block?.diggable || PROTECTED_UTILITY_BLOCKS.has(block.name) || !isSolid(this.bot.blockAt(below)) || isLiquid(this.bot.blockAt(below))) break;
+      // Walled in at the new level too: a side open into a cave would be one more hole to close.
+      if (SIDES.some(side => !isSolid(this.bot.blockAt(under.plus(side))))) break;
+      const before = this.sealBlocks();
+      let dug: any = null;
+      try { dug = await dig.run(under.x, under.y, under.z, true); } catch { break; }
+      const deadline = Date.now() + 1500;
+      while (Date.now() < deadline && this.bot.entity.position.y > under.y + 0.2) await actionDelay(this.bot, 100);
+      if (Math.floor(this.bot.entity.position.y) < feet.y) deeper++;
+      if (!dug?.success || this.sealBlocks() <= before || this.shouldInterrupt()) break;
+    }
+    return deeper;
+  }
+
+  /** What else covers the body when a shaft cannot be dug in time: the one-cell shelter, a pillar, or running. */
+  private otherCover(distance: number): string {
+    const blocks = this.bot.inventory.items().filter(i => SEAL_BLOCKS.includes(i.name)).reduce((sum, i) => sum + i.count, 0);
+    const slabs = this.bot.inventory.items().filter(i => i.name.endsWith('_slab')).reduce((sum, i) => sum + i.count, 0);
+    if (distance > 2.5 && (blocks >= 14 || (blocks >= 10 && slabs >= 4))) return 'build-around-self（slit_shelter、その場で囲う。数秒）';
+    if (blocks >= 3) return 'tower-up 3（ブロックを積んで登る。近接の敵は届かない）';
+    return 'flee-from hostile（走って離れる）';
+  }
+
   private async centre(): Promise<void> {
     if (typeof (this.bot as any).setControlState !== 'function') return;
     const deadline = Date.now() + 1500;
@@ -191,7 +231,7 @@ class DigShelter extends InstantSkill {
     if (arriving && arriving.seconds < needed) {
       return { success: false, failureType: 'threat_too_close', recoverable: true,
         result: `間に合いません: ${arriving.name}（${arriving.distance.toFixed(0)}m）が約${arriving.seconds.toFixed(0)}秒で届く見込みで、縦穴を掘って塞ぐには約${needed.toFixed(0)}秒かかります。`
-          + '掘り始めると塞ぐ前に穴の中で追いつかれます。' };
+          + `掘り始めると塞ぐ前に穴の中で追いつかれます。代わりの手: ${this.otherCover(arriving.distance)}` };
     }
     const dig = this.bot.instantSkills.getSkill('dig-block-at');
     if (!dig) return { success: false, result: 'dig-block-atが見つかりません', failureType: 'not_ready', recoverable: false };
@@ -221,7 +261,14 @@ class DigShelter extends InstantSkill {
     for (const level of [bottom, bottom.offset(0, 1, 0)]) {
       for (const side of SIDES) if (!isSolid(this.bot.blockAt(level.plus(side)))) openings.push(level.plus(side));
     }
-    const roof = column[0];
+    let roof = column[0];
+    // Nothing to close it with (just back from a death, the pack empty): the floor under the feet is dug, a block or two deeper,
+    // and those blocks close it. Run 17 stood in an open shaft twice for want of one block. Deeper, the roof is the cell over the
+    // head where the body now stands (the cell the shelter check reads), not the old one a block higher.
+    if (this.sealBlocks() < openings.length + 1) {
+      const deeper = await this.digForSealBlock(openings.length + 1);
+      if (deeper > 0) roof = this.bot.entity.position.floored().offset(0, 2, 0);
+    }
     for (const pos of [...openings, roof]) {
       if (!await this.placeAt(pos)) {
         const noItem = this.sealFailure.includes('持っていません');

@@ -47,9 +47,10 @@ describe('the night gate: no going below y 16 at dusk or night without armour, c
     expect(isPreparedFood('chicken')).toBe(false);
   });
 
-  it('is closed only at night or within a minute of dark, in the overworld, while something is missing', () => {
-    expect(descentFloor(gateBody(70, NOON))).toBeNull();
-    expect(descentFloor(gateBody(70, 11_700))).toBeNull();          // 65 s to dark
+  it('is closed only at night or within five minutes of dark (run 17 went down 260 s before it), in the overworld, while something is missing', () => {
+    expect(descentFloor(gateBody(70, NOON))).toBeNull();             // 350 s to dark
+    expect(descentFloor(gateBody(70, 6_900))).toBeNull();            // 305 s
+    expect(descentFloor(gateBody(70, 7_100))?.floor).toBe(16);       // 295 s
     expect(descentFloor(gateBody(70, DUSK))?.floor).toBe(16);
     expect(descentFloor(gateBody(70, NIGHT))?.floor).toBe(16);
     expect(descentFloor(gateBody(70, 23_500))).toBeNull();           // dawn
@@ -125,8 +126,9 @@ describe('the night gate: no going below y 16 at dusk or night without armour, c
   });
 
   it('the observation says the kit from five minutes before dark, and the wool towards a bed', () => {
-    expect(descentKitNotice(gateBody(70, NOON))).toBeUndefined();
-    expect(descentKitNotice(gateBody(70, 8_000))).toEqual({ missing: ['armor', 'cooked_food', 'bed'], gated: false });   // 250 s
+    expect(descentKitNotice(gateBody(70, 0))).toBeUndefined();                                                            // 650 s
+    expect(descentKitNotice(gateBody(70, NOON))).toEqual({ missing: ['armor', 'cooked_food', 'bed'], gated: false });   // 350 s
+    expect(descentKitNotice(gateBody(70, 8_000))).toEqual({ missing: ['armor', 'cooked_food', 'bed'], gated: true });   // 250 s
     expect(descentKitNotice(gateBody(70, NIGHT))).toEqual({ missing: ['armor', 'cooked_food', 'bed'], gated: true });
     expect(bedWool(gateBody(70, NOON, [{ name: 'white_wool', count: 2 }, { name: 'light_gray_wool', count: 1 }]))).toEqual({ color: 'white', have: 2, need: 3 });
     expect(bedWool(gateBody(70, NOON, [{ name: 'white_wool', count: 2 }, { name: 'red_bed' }]))).toBeUndefined();
@@ -182,12 +184,14 @@ describe('wait-time is refused while a furnace works and there is something else
     expect(refused.result).toContain('mine-block');
     expect(refused.result).toContain('waitForCompletion=true');
   });
-  it('lets a short wait, a furnace nearly done, a hostile near, and no furnace at all go by', () => {
+  it('lets a short wait, a furnace nearly done, a hurt body healing, and no furnace at all (by day) go by', () => {
     const items = [{ name: 'stone_pickaxe', count: 1 }];
     expect((new WaitTime(body(60_000, items)) as any).preflight(3_000)).toBeNull();
     expect((new WaitTime(body(8_000, items)) as any).preflight(30_000)).toBeNull();
+    // A hostile near is no longer a reason to stand still (run 17); a body at 6 health with food to regenerate on is.
     const zombie = { entities: { 2: { name: 'zombie', position: new Vec3(5, 64, 0) } } };
-    expect((new WaitTime(body(60_000, items, zombie)) as any).preflight(30_000)).toBeNull();
+    expect((new WaitTime(body(60_000, items, zombie)) as any).preflight(30_000)).not.toBeNull();
+    expect((new WaitTime(body(60_000, items, { health: 6, food: 19 })) as any).preflight(30_000)).toBeNull();
     expect((new WaitTime(body(60_000, items, { activeFurnaces: [] })) as any).preflight(30_000)).toBeNull();
   });
 });
@@ -342,7 +346,8 @@ describe('the flee with no way out falls back on a shelter where the body stands
       instantSkills: { getSkill: () => ({}) } }) as any;
     expect(shelterChoice(body(20, 4), 4)).toEqual({ skill: 'build-around-self', args: ['slit_shelter'] });
     expect(shelterChoice(body(20, 4), 1.3)).toEqual({ skill: 'tower-up', args: [3] });   // the zombie's cell cannot take a block
-    expect(shelterChoice(body(20), 4)).toEqual({ skill: 'tower-up', args: [3] });        // no slabs
+    expect(shelterChoice(body(20), 4)).toEqual({ skill: 'build-around-self', args: ['slit_shelter'] });   // no slabs: whole blocks shut the slit
+    expect(shelterChoice(body(12), 4)).toEqual({ skill: 'tower-up', args: [3] });        // no slabs, too few for that
     expect(shelterChoice(body(5))).toEqual({ skill: 'tower-up', args: [3] });
     expect(shelterChoice(body(2))).toBeNull();
   });
