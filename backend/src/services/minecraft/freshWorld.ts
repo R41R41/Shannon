@@ -4,11 +4,12 @@ import path from 'node:path';
 
 /**
  * A fresh world for the dedicated home server (the owner's request): the world gets a new id, the old world directory is
- * deleted (no backup, decided by the owner) and the server starts on a new map. The same steps are done by the server-side
- * `new-world.sh`; keep the id format, the file path and the safety checks identical.
+ * moved aside (renamed to `<level-name>.before-regen-<JST YYYYMMDDTHHMM>` in the same server directory; nothing is deleted,
+ * owner's decision of 2026-10-19) and the server starts on a new map. The same steps are done by the server-side
+ * `new-world.sh`; keep the id format, the file path, the moved name and the safety checks identical.
  *
  * Nothing here takes a path or a name from a model or an API caller: the directory is the configured server directory and the
- * only directory ever deleted is the one `level-name` names in that server's own `server.properties`.
+ * only directory ever moved is the one `level-name` names in that server's own `server.properties`.
  */
 
 /** The places-memory world id (the same rule createCommonFcaBody has always applied to MINEBOT_PLACES_WORLD_ID). */
@@ -51,12 +52,17 @@ export function resolvePlacesWorldId(serverDir: string | null | undefined, envVa
   return contextWorldId || undefined;
 }
 
-/** `<prefix>-<JST YYYYMMDDTHHMM>` plus `-s<seed>` when `level-seed` is set (seed: every character outside A-Za-z0-9 becomes `_`, at most 32). */
-export function freshWorldId(prefix: string, nowMs: number, seed = ''): string {
+/** JST `YYYYMMDDTHHMM`. */
+export function jstStamp(nowMs: number): string {
   const jst = new Date(nowMs + 9 * 3600_000).toISOString(); // 2026-10-19T12:34:56.789Z, shifted to JST
-  const stamp = `${jst.slice(0, 4)}${jst.slice(5, 7)}${jst.slice(8, 10)}T${jst.slice(11, 13)}${jst.slice(14, 16)}`;
+  return `${jst.slice(0, 4)}${jst.slice(5, 7)}${jst.slice(8, 10)}T${jst.slice(11, 13)}${jst.slice(14, 16)}`;
+}
+
+/** `<prefix>-<JST YYYYMMDDTHHMM>` plus `-s<seed>` when `level-seed` is set (seed: every character outside A-Za-z0-9- becomes `-`, at most 32; so -77 gives `-s-77`). */
+export function freshWorldId(prefix: string, nowMs: number, seed = ''): string {
+  const stamp = jstStamp(nowMs);
   const trimmed = seed.trim();
-  const id = `${prefix}-${stamp}${trimmed ? `-s${trimmed.replace(/[^A-Za-z0-9]/g, '_').slice(0, 32)}` : ''}`;
+  const id = `${prefix}-${stamp}${trimmed ? `-s${trimmed.replace(/[^A-Za-z0-9-]/g, '-').slice(0, 32)}` : ''}`;
   if (!WORLD_ID.test(id)) throw new FreshWorldRefused('world_id_invalid');
   return id;
 }
@@ -98,7 +104,8 @@ export interface FreshWorldOptions {
   portClosed?: (port: number) => Promise<boolean>;
   log?: (line: string) => void;
 }
-export interface FreshWorldResult { worldId: string; levelName: string; deleted: boolean }
+/** `movedTo`: the name (in the server directory) the old world was moved to, or null when there was no world directory. */
+export interface FreshWorldResult { worldId: string; levelName: string; movedTo: string | null }
 
 /** `level-name` accepted as a single plain directory name. */
 export function validLevelName(value: string | undefined): value is string {
@@ -109,8 +116,8 @@ export function validLevelName(value: string | undefined): value is string {
 
 /**
  * Prepare a fresh world. The caller has already established, from a fresh read, that the server is stopped; this re-checks the
- * listeners and then, in this order: validate everything, write `world-id` atomically (temp + rename), delete the level
- * directory. It throws FreshWorldRefused before any change; any other error means a step failed after the id was written.
+ * listeners and then, in this order: validate everything, write `world-id` atomically (temp + rename), move the level
+ * directory to `<level-name>.before-regen-<JST stamp>` (-2, -3 ... if taken). It throws FreshWorldRefused before any change; any other error means a step failed after the id was written.
  * `level-seed` is left as configured (empty = random).
  */
 export async function prepareFreshWorld(options: FreshWorldOptions): Promise<FreshWorldResult> {
@@ -136,7 +143,7 @@ export async function prepareFreshWorld(options: FreshWorldOptions): Promise<Fre
   try {
     const existing = lstat(levelDir);
     if (existing) {
-      // Never follow a link, never delete a file, and only delete what is recognizably a world (or an empty directory).
+      // Never follow a link, never move a file, and only move what is recognizably a world (or an empty directory).
       if (existing.isSymbolicLink()) throw new FreshWorldRefused('level_dir_is_symlink');
       if (!existing.isDirectory()) throw new FreshWorldRefused('level_dir_not_directory');
       const levelDat = lstat(path.join(levelDir, 'level.dat'));
@@ -144,9 +151,19 @@ export async function prepareFreshWorld(options: FreshWorldOptions): Promise<Fre
     }
   } catch (error) { throw error instanceof FreshWorldRefused ? error : new FreshWorldRefused('level_dir_unreadable'); }
 
-  const worldId = freshWorldId(path.basename(options.serverDir), now(), properties.get('level-seed') ?? '');
+  const nowMs = now();
+  const worldId = freshWorldId(path.basename(options.serverDir), nowMs, properties.get('level-seed') ?? '');
   const previous = readWorldIdFile(root);
   if (previous === worldId) throw new FreshWorldRefused('world_id_not_new');
+  // Where the old world goes: a sibling in the same server directory, a name that is free now (-2, -3 ... when it is taken).
+  let movedTo: string | null = null;
+  if (lstat(levelDir)) {
+    try {
+      const base = `${levelName}.before-regen-${jstStamp(nowMs)}`;
+      for (let n = 1; n <= 1000 && !movedTo; n++) { const name = n === 1 ? base : `${base}-${n}`; if (!lstat(path.join(root, name))) movedTo = name; }
+    } catch { throw new FreshWorldRefused('backup_name_unreadable'); }
+    if (!movedTo) throw new FreshWorldRefused('backup_name_taken');
+  }
 
   // The id first: a body that spawns after this point never files its places under the old world's name.
   const file = worldIdFilePath(root), temporary = `${file}.${process.pid}.tmp`;
@@ -160,17 +177,17 @@ export async function prepareFreshWorld(options: FreshWorldOptions): Promise<Fre
   }
   try { const dir = fs.openSync(root, 'r'); try { fs.fsyncSync(dir); } finally { fs.closeSync(dir); } } catch { /* best effort */ }
 
-  // From here on a failure is not a refusal: the id is new and the old world may be partly gone.
-  let deleted = false;
+  // From here on a failure is not a refusal: the id is new and the old world may not have been moved. One rename inside the
+  // server directory (never a copy, never a delete); the old world stays whole under its new name.
   const last = lstat(levelDir);
   if (last) {
-    if (last.isSymbolicLink() || !last.isDirectory()) throw Error('FRESH_WORLD_LEVEL_DIR_CHANGED');
-    await fs.promises.rm(levelDir, { recursive: true, force: false, maxRetries: 2 });
-    deleted = true;
-  }
+    if (last.isSymbolicLink() || !last.isDirectory() || !movedTo || lstat(path.join(root, movedTo))) throw Error('FRESH_WORLD_LEVEL_DIR_CHANGED');
+    fs.renameSync(levelDir, path.join(root, movedTo));
+  } else movedTo = null;
   if (lstat(levelDir)) throw Error('FRESH_WORLD_LEVEL_DIR_REMAINS');
   options.log?.(`🌱 新しいワールド: ${worldId}`);
-  return { worldId, levelName, deleted };
+  if (movedTo) options.log?.(`📦 旧ワールドを退避: ${movedTo}`);
+  return { worldId, levelName, movedTo };
 }
 
 function lstat(target: string): fs.Stats | null {

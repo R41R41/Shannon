@@ -10,7 +10,7 @@ vi.mock('../../src/services/minebot/integration/commonFca/imageCapture.js', () =
 
 import {
   FreshWorldRefused, freshWorldId, parseServerProperties, prepareFreshWorld, readWorldIdFile, resolvePlacesWorldId, serverDirectory,
-  validLevelName, WORLD_ID_FILE,
+  validLevelName, WORLD_ID, WORLD_ID_FILE,
 } from '../../src/services/minecraft/freshWorld.js';
 import { MinecraftLifecycleNative, type LifecycleNativePorts } from '../../src/services/integration/minecraftLifecycleNative.js';
 import { LifecycleOperationJournal, MinecraftLifecycleOperator } from '../../src/services/integration/minecraftLifecycleOperator.js';
@@ -96,9 +96,17 @@ describe('fresh world id and level name', () => {
     expect(freshWorldId('shannon-home', T)).toBe('shannon-home-20261019T1204');
     expect(freshWorldId('shannon-home', Date.UTC(2026, 9, 19, 16, 0, 59))).toBe('shannon-home-20261020T0100');
     expect(freshWorldId('shannon-home', T, '12345')).toBe('shannon-home-20261019T1204-s12345');
-    expect(freshWorldId('shannon-home', T, '-77')).toBe('shannon-home-20261019T1204-s_77');
-    expect(freshWorldId('shannon-home', T, ' my seed/../x ')).toBe('shannon-home-20261019T1204-smy_seed____x');
+    expect(freshWorldId('shannon-home', T, '-77')).toBe('shannon-home-20261019T1204-s-77');
+    expect(freshWorldId('shannon-home', T, ' my seed/../x ')).toBe('shannon-home-20261019T1204-smy-seed----x');
     expect(freshWorldId('shannon-home', T, 'a'.repeat(50))).toBe(`shannon-home-20261019T1204-s${'a'.repeat(32)}`);
+  });
+  it('only makes ids the reader accepts (the same pattern as MINEBOT_PLACES_WORLD_ID), whatever the seed', () => {
+    const { dir } = fakeServer();
+    for (const seed of ['', '0', '-77', '12345', 'hello world', ' my seed/../x ', 'a:b_c.d', 'ü日本', '-', '--', 'a'.repeat(200), '9223372036854775807', '$(rm -rf)']) {
+      const id = freshWorldId('shannon-home', T, seed);
+      expect(WORLD_ID.test(id), id).toBe(true); expect(id.length).toBeLessThanOrEqual(128);
+      fs.writeFileSync(path.join(dir, WORLD_ID_FILE), id + '\n'); expect(readWorldIdFile(dir), id).toBe(id);
+    }
   });
   it('parses properties the way the server reads them (last wins, comments ignored)', () => {
     const p = parseServerProperties('# c\r\nlevel-name=a\r\n! x\nlevel-name = b \nlevel-seed=\n');
@@ -112,22 +120,36 @@ describe('fresh world id and level name', () => {
 });
 
 describe('prepareFreshWorld', () => {
-  it('writes the id first, then deletes only the level directory, and leaves everything else', async () => {
+  const MOVED = 'shannon_home.before-regen-20261019T1204';
+  it('writes the id first, then moves (renames, never copies or deletes) only the level directory, and leaves everything else', async () => {
     const { dir } = fakeServer(); const lines: string[] = []; const order: string[] = [];
-    const real = fs.promises.rm.bind(fs.promises);
-    vi.spyOn(fs.promises, 'rm').mockImplementation(async (target, options) => {
-      order.push(`rm:${path.basename(String(target))}:id=${fs.readFileSync(path.join(dir, WORLD_ID_FILE), 'utf8').trim()}`);
-      return real(target, options);
+    const realRename = fs.renameSync.bind(fs);
+    vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+      if (path.basename(String(from)) === 'shannon_home') order.push(`rename:${path.basename(String(to))}:id=${fs.readFileSync(path.join(dir, WORLD_ID_FILE), 'utf8').trim()}`);
+      return realRename(from, to);
     });
+    const rm = vi.spyOn(fs.promises, 'rm'), rmSync = vi.spyOn(fs, 'rmSync'), cp = vi.spyOn(fs, 'cpSync');
     const result = await prepareFreshWorld({ serverDir: dir, now: () => T, portClosed: closed, log: l => lines.push(l) });
-    expect(result).toEqual({ worldId: 'shannon-home-20261019T1204', levelName: 'shannon_home', deleted: true });
-    expect(order).toEqual(['rm:shannon_home:id=shannon-home-20261019T1204']);
+    expect(result).toEqual({ worldId: 'shannon-home-20261019T1204', levelName: 'shannon_home', movedTo: MOVED });
+    expect(order).toEqual([`rename:${MOVED}:id=shannon-home-20261019T1204`]);
+    expect(rm).not.toHaveBeenCalled(); expect(cp).not.toHaveBeenCalled();
+    expect(rmSync.mock.calls.filter(([target]) => String(target).includes('shannon_home'))).toEqual([]);
     expect(fs.readFileSync(path.join(dir, WORLD_ID_FILE), 'utf8')).toBe('shannon-home-20261019T1204\n');
     expect(fs.existsSync(path.join(dir, 'shannon_home'))).toBe(false);
+    // The old world is whole under its new name, next to the server files.
+    expect(fs.readFileSync(path.join(dir, MOVED, 'level.dat'), 'utf8')).toBe('x'); expect(fs.existsSync(path.join(dir, MOVED, 'DIM1', 'r.0.0.mca'))).toBe(true);
+    expect(fs.existsSync(path.join(dir, MOVED, 'DIM-1'))).toBe(true);
     expect(fs.existsSync(path.join(dir, 'mods', 'a.jar'))).toBe(true); expect(fs.existsSync(path.join(dir, 'server.properties'))).toBe(true);
-    expect(fs.readdirSync(dir).sort()).toEqual(['mods', 'server.properties', WORLD_ID_FILE].sort());
+    expect(fs.readdirSync(dir).sort()).toEqual(['mods', 'server.properties', MOVED, WORLD_ID_FILE].sort());
     expect(fs.readFileSync(path.join(dir, 'server.properties'), 'utf8')).toBe(PROPERTIES);
-    expect(lines).toEqual(['🌱 新しいワールド: shannon-home-20261019T1204']);
+    expect(lines).toEqual(['🌱 新しいワールド: shannon-home-20261019T1204', `📦 旧ワールドを退避: ${MOVED}`]);
+  });
+  it('picks the first free moved name (-2, -3 ...) and never overwrites an earlier moved world', async () => {
+    const { dir } = fakeServer();
+    for (const taken of [MOVED, `${MOVED}-2`]) { fs.mkdirSync(path.join(dir, taken)); fs.writeFileSync(path.join(dir, taken, 'earlier'), taken); }
+    expect((await prepareFreshWorld({ serverDir: dir, now: () => T, portClosed: closed })).movedTo).toBe(`${MOVED}-3`);
+    expect(fs.readFileSync(path.join(dir, MOVED, 'earlier'), 'utf8')).toBe(MOVED); expect(fs.readFileSync(path.join(dir, `${MOVED}-2`, 'earlier'), 'utf8')).toBe(`${MOVED}-2`);
+    expect(fs.existsSync(path.join(dir, `${MOVED}-3`, 'level.dat'))).toBe(true);
   });
   it('puts a configured seed in the id and leaves level-seed as configured', async () => {
     const { dir } = fakeServer(PROPERTIES.replace('level-seed=', 'level-seed=424242'));
@@ -136,7 +158,7 @@ describe('prepareFreshWorld', () => {
   });
   it('works when the world is already gone, and when the id file never existed', async () => {
     const { dir } = fakeServer(); fs.rmSync(path.join(dir, 'shannon_home'), { recursive: true }); fs.rmSync(path.join(dir, WORLD_ID_FILE));
-    expect(await prepareFreshWorld({ serverDir: dir, now: () => T, portClosed: closed })).toMatchObject({ deleted: false });
+    expect(await prepareFreshWorld({ serverDir: dir, now: () => T, portClosed: closed })).toMatchObject({ movedTo: null });
     expect(readWorldIdFile(dir)).toBe('shannon-home-20261019T1204');
   });
   it('refuses with nothing changed while anything listens on the game or RCON port, or the port is uncertain', async () => {
@@ -148,7 +170,7 @@ describe('prepareFreshWorld', () => {
     expect(readWorldIdFile(dir)).toBe('shannon-home-20261001T0900');
   });
   it.each([['empty', 'level-name='], ['missing', ''], ['parent', 'level-name=..'], ['traversal', 'level-name=../shannon-home2'], ['slash', 'level-name=a/b'],
-    ['absolute', 'level-name=/etc'], ['mods', 'level-name=mods'], ['dot', 'level-name=.'], ['backslash', 'level-name=a\\b']])('refuses level-name %s and deletes nothing', async (_name, line) => {
+    ['absolute', 'level-name=/etc'], ['mods', 'level-name=mods'], ['dot', 'level-name=.'], ['backslash', 'level-name=a\\b']])('refuses level-name %s and moves nothing', async (_name, line) => {
     const { dir } = fakeServer(`${line}\nserver-port=25560\n`);
     fs.mkdirSync(path.join(dir, '..', 'shannon-home2'), { recursive: true }); fs.writeFileSync(path.join(dir, '..', 'shannon-home2', 'keep'), 'x');
     await expect(prepareFreshWorld({ serverDir: dir, now: () => T, portClosed: closed })).rejects.toBeInstanceOf(FreshWorldRefused);
@@ -168,11 +190,12 @@ describe('prepareFreshWorld', () => {
     expect(result.worldId).toBe('shannon-home-20261019T1204'); expect(fs.existsSync(path.join(dir, 'shannon_home'))).toBe(false);
     expect(fs.existsSync(path.join(dir, 'mods', 'a.jar'))).toBe(true);
   });
-  it('unlinks a symlink inside the world without following it', async () => {
+  it('moves a world that holds a symlink as it is, without following it', async () => {
     const { dir } = fakeServer(); const outside = tmp('outside-'); fs.writeFileSync(path.join(outside, 'precious'), 'x');
     fs.symlinkSync(outside, path.join(dir, 'shannon_home', 'DIM1', 'escape'), 'junction');
     await prepareFreshWorld({ serverDir: dir, now: () => T, portClosed: closed });
     expect(fs.existsSync(path.join(dir, 'shannon_home'))).toBe(false); expect(fs.readFileSync(path.join(outside, 'precious'), 'utf8')).toBe('x');
+    expect(fs.lstatSync(path.join(dir, MOVED, 'DIM1', 'escape')).isSymbolicLink()).toBe(true);
   });
   it('refuses a level path that is a file, or a non-empty directory that is not a world', async () => {
     const { dir } = fakeServer(); fs.rmSync(path.join(dir, 'shannon_home'), { recursive: true }); fs.writeFileSync(path.join(dir, 'shannon_home'), 'file');
@@ -181,7 +204,7 @@ describe('prepareFreshWorld', () => {
     await expect(prepareFreshWorld({ serverDir: dir, now: () => T, portClosed: closed })).rejects.toMatchObject({ reason: 'level_dir_not_a_world' });
     expect(fs.existsSync(path.join(dir, 'shannon_home', 'notes.txt'))).toBe(true); expect(readWorldIdFile(dir)).toBe('shannon-home-20261001T0900');
     fs.rmSync(path.join(dir, 'shannon_home', 'notes.txt'));
-    expect(await prepareFreshWorld({ serverDir: dir, now: () => T, portClosed: closed })).toMatchObject({ deleted: true });
+    expect(await prepareFreshWorld({ serverDir: dir, now: () => T, portClosed: closed })).toMatchObject({ movedTo: MOVED });
   });
   it('refuses when the new id would equal the current one (two fresh worlds in one minute) and when the directory is unreadable', async () => {
     const { dir } = fakeServer(); fs.writeFileSync(path.join(dir, WORLD_ID_FILE), 'shannon-home-20261019T1204\n');
@@ -189,17 +212,18 @@ describe('prepareFreshWorld', () => {
     expect(fs.existsSync(path.join(dir, 'shannon_home', 'level.dat'))).toBe(true);
     await expect(prepareFreshWorld({ serverDir: path.join(dir, 'missing'), now: () => T, portClosed: closed })).rejects.toBeInstanceOf(FreshWorldRefused);
   });
-  it('leaves no temporary file and the old id when the id cannot be written, and deletes nothing', async () => {
+  it('leaves no temporary file and the old id when the id cannot be written, and moves nothing', async () => {
     const { dir } = fakeServer(); vi.spyOn(fs, 'renameSync').mockImplementation(() => { throw Error('disk'); });
     await expect(prepareFreshWorld({ serverDir: dir, now: () => T, portClosed: closed })).rejects.toMatchObject({ reason: 'world_id_not_written' });
     expect(fs.readdirSync(dir).sort()).toEqual(['mods', 'server.properties', 'shannon_home', WORLD_ID_FILE].sort());
     expect(readWorldIdFile(dir)).toBe('shannon-home-20261001T0900');
   });
-  it('is not a refusal when deleting fails after the id was written', async () => {
-    const { dir } = fakeServer(); vi.spyOn(fs.promises, 'rm').mockRejectedValue(Error('EBUSY'));
+  it('is not a refusal when moving fails after the id was written, and the old world stays where it was', async () => {
+    const { dir } = fakeServer(); const realRename = fs.renameSync.bind(fs);
+    vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => { if (path.basename(String(from)) === 'shannon_home') throw Error('EBUSY'); return realRename(from, to); });
     const failure = await prepareFreshWorld({ serverDir: dir, now: () => T, portClosed: closed }).catch(e => e);
     expect(failure).toBeInstanceOf(Error); expect(failure).not.toBeInstanceOf(FreshWorldRefused);
-    expect(readWorldIdFile(dir)).toBe('shannon-home-20261019T1204');
+    expect(readWorldIdFile(dir)).toBe('shannon-home-20261019T1204'); expect(fs.existsSync(path.join(dir, 'shannon_home', 'level.dat'))).toBe(true);
   });
 });
 
@@ -233,13 +257,14 @@ function lifecycle(serverDir?: string) {
 const signal = () => new AbortController().signal;
 
 describe('fresh-world start through the lifecycle native', () => {
-  it('re-checks stopped, writes the id, deletes the world, then starts, and completes as an ordinary start', async () => {
+  it('re-checks stopped, writes the id, moves the world aside, then starts, and completes as an ordinary start', async () => {
     const { dir } = fakeServer(); const f = lifecycle(dir);
     const receipt = await f.native.execute(f.command('start', { freshWorld: true }), signal());
     expect(receipt).toMatchObject({ outcome: 'completed', code: 'changed', inputsReleased: true });
     expect(receipt.state.running).toBe('running');
     expect(f.effects).toEqual(['fresh', 'start(id=shannon-home-20261019T1204,world=false)']);
     expect(fs.existsSync(path.join(dir, 'mods', 'a.jar'))).toBe(true);
+    expect(fs.existsSync(path.join(dir, 'shannon_home.before-regen-20261019T1204', 'level.dat'))).toBe(true);
   });
   it('refuses while the server is running: no world touched, no start, and not reported as already_running', async () => {
     const { dir } = fakeServer(); const f = lifecycle(dir); f.run();

@@ -18,7 +18,7 @@ export interface MinecraftLifecycleAuthority {
 }
 /**
  * Optional, `start` only. `freshWorld: true` (strictly the boolean true) asks for a new world before the start: the world
- * directory is deleted and a new places-world id written, only if the server is proven stopped. Anything else (absent, another
+ * directory is moved aside (renamed, not deleted) and a new places-world id written, only if the server is proven stopped. Anything else (absent, another
  * value, unknown keys, any other action) is an ordinary command.
  */
 export interface MinecraftLifecycleOptions { freshWorld?: boolean }
