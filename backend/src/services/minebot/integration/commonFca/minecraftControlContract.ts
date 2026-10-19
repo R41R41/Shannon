@@ -25,14 +25,30 @@ export interface MinecraftControlReceipt {
   /** Ephemeral pixels only: the companion stores an expiring reference, never this field in SQLite. */
   image?: { dataUrl: string; capturedAt: string };
 }
+/**
+ * What changed in the body between polls, told while a command runs (session mb-arch, stage 1): a thing an unmet need wants came
+ * into or went out of reach (`need.*`, subject = the need's id), and how the running command goes (`action.*`, subject = the
+ * command's id): `action.progress` every few seconds, `action.stalled` once when its measure has not got better for a while.
+ * The body only measures; whether to cut, queue or ignore is the API's. Numbered per connection; sent until acknowledged.
+ */
+export interface MinecraftBodyEvent {
+  seq: number; at: string;
+  kind: 'need.appeared' | 'need.gone' | 'action.progress' | 'action.stalled';
+  subject: string;
+  data: Readonly<Record<string, string | number | boolean | null>>;
+}
 export interface MinecraftControlPoll {
   schemaVersion: 1; serverId: string; connectionId: string;
   observation: BodyObservation; candidates: readonly BodyCandidateDraft[];
   /** Whole catalog on initial connection and changes. Not selected by a second game planner. */
   skills?: readonly MinecraftSkillDefinition[];
   receipts: readonly MinecraftControlReceipt[]; activeOperationIds: readonly string[];
+  /** Oldest first, at most 32; absent while the API has not shown it reads them (an older API ignores the field). */
+  events?: readonly MinecraftBodyEvent[];
 }
 export interface MinecraftControlReply {
   schemaVersion: 1; mode: 'common-fca';
   commands: readonly MinecraftControlCommand[]; cancel: readonly string[]; acknowledged: readonly string[];
+  /** The highest event `seq` the API has taken; the body drops those. Absent from an API that does not read events. */
+  eventsThrough?: number;
 }

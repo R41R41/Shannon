@@ -11,6 +11,7 @@ import { bodySkillCatalog, isDragonGoal, type BodySkill } from './skillCatalog.j
 import type { BodyCandidateDraft, BodyObservation, BodyValue } from './bodyControlContract.js';
 import type { MinecraftControlCommand as Command, MinecraftControlReceipt as Receipt } from './minecraftControlContract.js';
 import type { CommonFcaActuator } from './controlLoop.js';
+import { BodyEventWatcher } from './bodyEvents.js';
 
 const delay = (milliseconds: number) => new Promise(resolve => setTimeout(resolve, milliseconds));
 /** The floor's action names, as the planner reads them in a receipt. */
@@ -29,6 +30,8 @@ export interface NativeBodyOptions {
   disposeCapture?(): Promise<void>;
   /** False when no first-person picture can come from this connection, so the API does not offer visual control. */
   rendererConfigured?(): boolean;
+  /** Whether the body tells the API what changes while it works (bodyEvents; default: on unless MINEBOT_BODY_EVENTS=off). */
+  events?: boolean;
 }
 /** One native bot, one ActionExecution resource arbiter, no game planner or model. */
 /**
@@ -74,6 +77,7 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
     if (this.bot.placeMemory) this.bot.placeMemory.focus = dragon ? 'dragon' : null;
   }
   private readonly goalEvidence: NativeGoalEvidence;
+  readonly events?: BodyEventWatcher;
   private sequence = 0;
   private connected = true;
   private imageAvailable = false;
@@ -94,6 +98,7 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
     this.offeredForDragon = [...this.catalog.dragonDefinitions, GOAL_EVIDENCE_SKILL];
     this.runnable = [...this.catalog.runnable, GOAL_EVIDENCE_SKILL];
     this.goalEvidence = new NativeGoalEvidence(bot, () => this.now());
+    if (options.events ?? process.env.MINEBOT_BODY_EVENTS !== 'off') this.events = new BodyEventWatcher(bot, () => this.now());
     bot.on('end', this.onEnd); bot.on('minebotActionProgress', this.onProgress);
   }
   private now() { return (this.options.now ?? Date.now)(); }
@@ -192,6 +197,7 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
       work = () => { actionId = currentAction(this.bot)?.progress.actionId; return started(); };
       const readOnly = command.kind === 'skill' && this.runnable.find(skill => skill.name === capability)?.readOnly === true;
       if (!readOnly) cancelIdleActions(this.bot, 'fca_command');
+      if (command.kind === 'skill' && !readOnly) this.events?.begin(command);
       const ledger: ReflexLedger | undefined = this.reflexTag ? this.bot.reflexLedger : undefined;
       const mark = ledger?.mark() ?? 0;
       const result = await withActionSignal(this.bot, signal, () => executeAction(this.bot, capability, milliseconds,
@@ -210,7 +216,7 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
       const note = ledger?.noteSince(mark);
       if (note) text = `${(text ?? '').slice(0, 16_000 - note.length - 1)}${text ? ' ' : ''}${note}`;
       return this.receipt(command, outcome, released, text, undefined, failure);
-    } finally { signal.removeEventListener('abort', cancelled); }
+    } finally { signal.removeEventListener('abort', cancelled); this.events?.end(command.id); }
   }
   private receipt(command: Command, outcome: Receipt['outcome'], inputsReleased: boolean, result?: string, image?: Receipt['image'],
     failure?: Pick<Receipt, 'failureType' | 'recoverable'>): Receipt {

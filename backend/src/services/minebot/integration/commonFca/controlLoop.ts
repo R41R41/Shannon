@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { createLogger } from '../../../../utils/logger.js';
 import { companionBaseUrl } from '../CompanionBodyClient.js';
 import type { BodyCandidateDraft, BodyObservation, BodyTaskContext } from './bodyControlContract.js';
+import type { BodyEventSource } from './bodyEvents.js';
 import { MINECRAFT_CONTROL_PATH, type MinecraftControlCommand as Command, type MinecraftControlReceipt as Receipt,
   type MinecraftControlReply, type MinecraftSkillDefinition } from './minecraftControlContract.js';
 
@@ -14,6 +15,8 @@ export interface CommonFcaActuator {
   release(signal: AbortSignal): Promise<boolean>;
   dispose?(): Promise<void>;
   closeEvidence?(context: BodyTaskContext): void;
+  /** What changed while a command runs (needs, progress, a stall), sent with each poll until the API takes it (mb-arch stage 1). */
+  events?: BodyEventSource;
 }
 /**
  * What the loop tells a watcher (the UI mod's view of the task). Read only: a watcher cannot change what the loop does,
@@ -35,6 +38,8 @@ const log = createLogger('Minebot:CommonFcaControl');
 const POLL_TIMEOUT_MS = 5000;
 /** How long the API may stay silent before running commands are stopped (an API restart takes about this long). */
 const CONTACT_LOSS_MS = 15_000;
+/** After an API answered a poll that carried events without taking them (an older API), they are offered again this much later. */
+const EVENTS_RETRY_MS = 60_000;
 const identity = (c: Command) => JSON.stringify([c.lease.id, c.lease.generation, c.lease.holder, c.context.scopeKey, c.context.taskId]);
 const ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/;
 export class CommonFcaControlLoop {
@@ -57,6 +62,8 @@ export class CommonFcaControlLoop {
   private readonly lifetime = new AbortController();
   /** When a poll last got a well-formed reply; running commands survive a short loss of contact (see poll). */
   private contactAt = (this.options.now ?? Date.now)();
+  /** Events are sent until an API answers without taking them; then again after EVENTS_RETRY_MS (it may have been updated). */
+  private eventsRetryAt = 0;
   constructor(private readonly options: CommonFcaControlOptions) {
     this.baseUrl = companionBaseUrl(options.baseUrl);
     this.connectionId = options.connectionId ?? randomUUID();
@@ -68,7 +75,10 @@ export class CommonFcaControlLoop {
   start(): void {
     if (this.timer || this.observationTimer || this.closed) return;
     // Independent of a provider/skill/HTTP wait: the body keeps observing.
-    this.observationTimer = setInterval(() => { this.observation = this.options.actuator.observe(); }, 100);
+    this.observationTimer = setInterval(() => {
+      this.observation = this.options.actuator.observe();
+      try { this.options.actuator.events?.tick(); } catch { /* events never stop the body observing */ }
+    }, 100);
     this.observationTimer.unref();
     const tick = async () => { try { await this.poll(); } catch { /* pending receipts remain until acknowledged */ }
       finally { if (!this.closed) { this.timer = setTimeout(tick, this.options.pollMilliseconds ?? 200); this.timer.unref(); } } };
@@ -81,13 +91,15 @@ export class CommonFcaControlLoop {
       this.observation = this.options.actuator.observe();
       const sent = [...this.receipts.values()].slice(0, 16);
       const catalog = this.options.actuator.skills;
+      const now = (this.options.now ?? Date.now)();
+      const events = this.options.actuator.events && now >= this.eventsRetryAt ? this.options.actuator.events.pending() : [];
       const response = await (this.options.fetcher ?? fetch)(`${this.baseUrl}${MINECRAFT_CONTROL_PATH}`, {
         method: 'POST', headers: { authorization: `Bearer ${this.options.token}`, 'content-type': 'application/json' },
         signal: AbortSignal.any([this.lifetime.signal, AbortSignal.timeout(POLL_TIMEOUT_MS)]),
         body: JSON.stringify({ schemaVersion: 1, serverId: this.options.serverId, connectionId: this.connectionId,
           observation: this.observation, candidates: this.options.actuator.candidates(this.observation),
           ...(this.catalogSent !== catalog ? { skills: catalog } : {}),
-          receipts: sent, activeOperationIds: [...this.active.keys()] }),
+          receipts: sent, activeOperationIds: [...this.active.keys()], ...(events.length ? { events } : {}) }),
       });
       if (!response.ok) throw Error('BODY_CONTROL_HTTP');
       const reply = await response.json() as MinecraftControlReply;
@@ -97,6 +109,8 @@ export class CommonFcaControlLoop {
       this.catalogSent = catalog;
       this.contactAt = (this.options.now ?? Date.now)();
       for (const id of reply.acknowledged) if (sent.some(receipt => receipt.id === id)) this.receipts.delete(id);
+      if (typeof reply.eventsThrough === 'number') this.options.actuator.events?.acknowledge(reply.eventsThrough);
+      else if (events.length) this.eventsRetryAt = now + EVENTS_RETRY_MS;
       for (const id of reply.cancel) this.active.get(id)?.controller.abort('server_cancel');
       for (const command of reply.commands) this.accept(command);
     } catch (error) {

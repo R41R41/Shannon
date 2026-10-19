@@ -92,6 +92,24 @@ export interface WorldInventoryStack {
   contents?: string;
 }
 
+/**
+ * One thing an unmet need wants, near the body (shape proposed to the API, mb-head). `canReach` false only for a block mine-block could
+ * not get to lately (`why: failed_recently`). `exposed: false` (said only when false): out of sight, an animal no straight line from
+ * the eyes reaches, or an ore with no face open to the air (still reached by digging).
+ */
+export interface NearbyNeed {
+  /** The same thing from one reading to the next: `e:<entity id>`, or `b:x,y,z` for a block. */
+  id: string;
+  need: 'bed_wool' | 'food' | 'iron' | 'wood';
+  name: string;
+  color?: string;
+  position: WorldVector;
+  distance: number;
+  canReach: boolean;
+  exposed?: false;
+  why?: 'failed_recently';
+}
+
 export interface NearbyEntityObservation {
   name: string;
   kind: string;
@@ -162,7 +180,10 @@ export interface WorldObservation {
   nearbyEntities: NearbyEntityObservation[];
   nearbyThreats?: NearbyEntityObservation[];
   /** Notable places within the loaded chunks (a village), with distance, direction and what gave them away. */
-  landmarks?: Array<{ kind: string; distance: number; direction: string; position: WorldVector; evidence: string }>;  /**
+  landmarks?: Array<{ kind: string; distance: number; direction: string; position: WorldVector; evidence: string }>;
+  /** What an unmet need wants that lies within 24 m (utils/nearbyNeeds): sheep for the bed, animals, iron ore, logs. */
+  nearbyNeeds?: NearbyNeed[];
+  /**
    * Places seen before and kept in mind, also when out of sight now: for each kind the nearest one, as
    * "distance direction (x,y,z) ×count". The rest is recalled on request (recall-places).
    */
