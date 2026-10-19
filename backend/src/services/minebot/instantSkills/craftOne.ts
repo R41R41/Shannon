@@ -13,6 +13,7 @@ import {
 } from '../utils/inventorySpillDetection.js';
 import { actionDelay } from '../execution/observedWait.js';
 import { resyncInventory } from '../utils/inventorySync.js';
+import { placeableSpots } from './findPlaceableSpot.js';
 const log = createLogger('Minebot:Skill:craftOne');
 
 /**
@@ -755,17 +756,38 @@ class CraftOne extends InstantSkill {
         { x: Math.floor(pos.x), y: Math.floor(pos.y), z: Math.floor(pos.z) - 1 },
       ];
 
+      // 'placed': a table stands there now; 'lost': the place succeeded but no table showed (not tried again elsewhere: a second
+      // table would be four logs spent); 'failed': nothing was placed, the next spot may do.
+      const tryAt = async (c: { x: number; y: number; z: number }): Promise<{ outcome: 'placed' | 'lost' | 'failed'; block?: any }> => {
+        const result = await placeSkill.run('crafting_table', c.x, c.y, c.z);
+        if (!result.success) return { outcome: 'failed' };
+        // The table just placed, not whichever table a search finds first within reach.
+        for (let wait = 0; wait < 5; wait++) {
+          await actionDelay(this.bot, 200);
+          const placed = this.bot.blockAt(new Vec3(c.x, c.y, c.z));
+          if (placed?.name === 'crafting_table') return { outcome: 'placed', block: placed };
+        }
+        return { outcome: 'lost' };
+      };
+      const tried = new Set<string>();
       for (const c of candidates) {
         const block = this.bot.blockAt(new Vec3(c.x, c.y, c.z));
         if (block && (block.name === 'air' || block.name === 'cave_air')) {
-          const result = await placeSkill.run('crafting_table', c.x, c.y, c.z);
-          if (result.success) {
-            await actionDelay(this.bot, 200);
-            // The table just placed, not whichever table a search finds first within reach.
-            const placed = this.bot.blockAt(new Vec3(c.x, c.y, c.z));
-            return placed?.name === 'crafting_table' ? placed : null;
-          }
+          tried.add(`${c.x},${c.y},${c.z}`);
+          const attempt = await tryAt(c);
+          if (attempt.outcome !== 'failed') return attempt.block ?? null;
         }
+      }
+      // The four cells beside the feet were not air (leaf litter, grass, a tree's trunk) or would not take it: the same search as
+      // find-placeable-spot, within reach, cells with a floor under them first. Run 16 spent four decisions on this by hand.
+      const spots = placeableSpots(this.bot as any, 3, 12)
+        .filter(spot => spot.dist <= 4 && !tried.has(`${spot.x},${spot.y},${spot.z}`))
+        .sort((a, b) => Number(b.ref === '下') - Number(a.ref === '下') || a.dist - b.dist)
+        .slice(0, 4);
+      for (const spot of spots) {
+        if (this.shouldInterrupt()) return null;
+        const attempt = await tryAt(spot);
+        if (attempt.outcome !== 'failed') return attempt.block ?? null;
       }
       return null;
     } catch (e: any) {

@@ -232,8 +232,13 @@ class WithdrawFromFurnace extends InstantSkill {
                 furnace.close();
 
                 // 燃料切れなら残った材料は待機中の仕事ではない。
+                let queuedNote = '';
                 if ((normalizedSlot === 'output' || normalizedSlot === 'all') && (!remainingInput || stoppedForFuel)) {
+                    const queued = this.bot.activeFurnaces?.find(f => f.pos.x === x && f.pos.y === y && f.pos.z === z)?.then ?? [];
                     this.unregisterActiveFurnace(x, y, z);
+                    // The raw food start-smelting queued behind the batch goes in now, the furnace being empty: cooked while the
+                    // body goes on with its work, eaten cooked later (see start-smelting).
+                    if (!remainingInput) queuedNote = await this.startQueued(x, y, z, queued);
                 }
 
                 // An output-only request succeeds when it actually retrieved
@@ -273,7 +278,7 @@ class WithdrawFromFurnace extends InstantSkill {
                         failureType: 'inventory_full',
                         recoverable: true,
                         result:
-                            `取り出し結果: ${withdrawnItems.join(', ')}。${INVENTORY_FULL_RECOVERY_HINT_JA}`,
+                            `取り出し結果: ${withdrawnItems.join(', ')}。${INVENTORY_FULL_RECOVERY_HINT_JA}${queuedNote}`,
                     };
                 }
 
@@ -282,7 +287,7 @@ class WithdrawFromFurnace extends InstantSkill {
                     result: `取り出しました: ${withdrawnItems.join(', ')}${remainingInput && normalizedSlot === 'output'
                         ? stoppedForFuel
                             ? `。材料${remainingInput.count}個が燃料切れで残っています。燃料を追加してください`
-                            : `。材料${remainingInput.count}個の精錬は未完了です。かまどの追跡を継続しています` : ''}`,
+                            : `。材料${remainingInput.count}個の精錬は未完了です。かまどの追跡を継続しています` : ''}${queuedNote}`,
                 };
             } catch (error: any) {
                 furnace.close();
@@ -345,6 +350,31 @@ class WithdrawFromFurnace extends InstantSkill {
             inventoryFull: false,
         };
     }
+    /**
+     * The first queued raw food still carried goes into the empty furnace (start-smelting, with whatever fuel it finds), the rest
+     * queued behind it again. Said in one sentence for the result; nothing when nothing was queued or carried.
+     */
+    private async startQueued(x: number, y: number, z: number, queued: string[]): Promise<string> {
+        const carried = (name: string) => this.bot.inventory.items().filter(item => item.name === name).reduce((sum, item) => sum + item.count, 0);
+        const next = queued.find(name => carried(name) > 0);
+        if (!next) return '';
+        // Only on coal or charcoal: planks and logs left in the pack are for crafting, not something to burn unasked.
+        const fuel = ['coal', 'charcoal'].find(name => carried(name) > 0);
+        if (!fuel) return `。並べていた${next}は、石炭・木炭が無いため焼き始めていません（燃料を指定して start-smelting で焼けます）`;
+        try {
+            const started = await this.callSkill('start-smelting', x, y, z, next, fuel, carried(next));
+            if (!started.success) return `。並べていた${next}は焼き始められませんでした（${String(started.result).slice(0, 80)}）`;
+            // start-smelting queued what else is raw behind this one itself: nothing more to carry over.
+            const job = this.bot.activeFurnaces?.find(f => f.pos.x === x && f.pos.y === y && f.pos.z === z);
+            const seconds = job ? Math.max(0, Math.round((job.readyAt - Date.now()) / 1000)) : null;
+            return `。続けて、並べていた${next}×${job?.count ?? carried(next)}を同じかまどで焼き始めました${seconds !== null ? `（約${seconds}秒。待たずに次の作業へ）` : ''}`;
+        } catch (error: any) {
+            // A cancelled action is the caller's to see, not a sentence in the result.
+            if (this.shouldInterrupt()) throw error;
+            return `。並べていた${next}は焼き始められませんでした（${String(error?.message ?? error).slice(0, 80)}）`;
+        }
+    }
+
     private unregisterActiveFurnace(x: number, y: number, z: number): void {
         if (!this.bot.activeFurnaces) return;
         this.bot.activeFurnaces = this.bot.activeFurnaces.filter(

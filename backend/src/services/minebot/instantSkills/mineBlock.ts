@@ -15,6 +15,7 @@ import { canDigFromHere, DIG_REACH } from '../utils/blockInteractionReach.js';
 import { estimateBlockApproachCost } from '../utils/blockApproachCost.js';
 import { dropBurnsIn } from '../utils/dropFate.js';
 import { digMsWithBestTool as bestToolDigMs } from '../utils/bestToolDigTime.js';
+import { descentFloor, nightGateRefusal } from '../utils/nightGate.js';
 
 const log = createLogger('Minebot:Skill:mineBlock');
 
@@ -80,7 +81,7 @@ class MineBlock extends InstantSkill {
       {
         name: 'blockName',
         type: 'string',
-        description: '採掘するブロック名（Minecraft正式ID: coal_ore, iron_ore, deepslate_iron_ore, diamond_ore, oak_log, stone 等。coalやironではなく_ore付きの正式名を使うこと）',
+        description: '採掘するブロック名（Minecraft正式ID: coal_ore, iron_ore, deepslate_iron_ore, diamond_ore, oak_log, stone 等。coalやironではなく_ore付きの正式名を使うこと。カンマ区切りで複数の種類も可: birch_log,oak_log）',
         required: true,
       },
       {
@@ -105,11 +106,16 @@ class MineBlock extends InstantSkill {
     if (!Number.isInteger(count) || count < 1 || !Number.isFinite(searchRadius) || searchRadius <= 0
       || !['target', 'all'].includes(collectionPolicy)) return { success: false,
         failureType: 'invalid_input', recoverable: false, result: '個数は正の整数、検索半径は正の数、回収方針は target / all を指定してください' };
-    const blockType = this.mcData.blocksByName[blockName];
-    if (!blockType) {
+    // Several kinds may be asked for at once, joined by commas ("birch_log,oak_log", as find-blocks takes them): a planner did so
+    // and was told the block did not exist (run 16). Each is mined as its own kind; the first is the one the messages name.
+    const askedNames = String(blockName ?? '').split(',').map(name => name.trim()).filter(Boolean);
+    const unknownNames = askedNames.filter(name => !this.mcData.blocksByName[name]);
+    const knownNames = [...new Set(askedNames.filter(name => this.mcData.blocksByName[name]))];
+    if (!knownNames.length) {
+      const first = unknownNames[0] ?? String(blockName ?? '');
       const allBlocks = Object.keys(this.mcData.blocksByName);
       const suggestions = allBlocks
-        .filter((name: string) => name.includes(blockName.replace('_ore', '').replace('_log', '')))
+        .filter((name: string) => name.includes(first.replace('_ore', '').replace('_log', '')))
         .slice(0, 5);
       return {
         success: false,
@@ -118,6 +124,9 @@ class MineBlock extends InstantSkill {
         recoverable: false,
       };
     }
+    const unknownNote = unknownNames.length ? `（${unknownNames.join(', ')}は無い名前のため除外）` : '';
+    blockName = knownNames.join(',');
+    const blockTypes = knownNames.map(name => this.mcData.blocksByName[name]);
 
     const moveTo = this.bot.instantSkills.getSkill('move-to');
     const digBlockAt = this.bot.instantSkills.getSkill('dig-block-at');
@@ -133,7 +142,11 @@ class MineBlock extends InstantSkill {
     const want = Math.max(1, count);
     // findBlocks の返却順は不定なので候補を多めに取り、ループ毎に「いまの位置」から近い順に選ぶ
     const scanCount = Math.min(384, Math.max(want * 12, want + 48));
-    const familyNames = MineBlock.oreMiningFamily(this.mcData, blockName);
+    const familyNames = [...new Set(knownNames.flatMap(name => MineBlock.oreMiningFamily(this.mcData, name)))];
+    // The night gate (utils/nightGate): at night without the kit, nothing below the floor it sets is a target. Read once, at the start.
+    let gate: ReturnType<typeof descentFloor> = null;
+    try { gate = descentFloor(this.bot as any); } catch { gate = null; }
+    const gatedKeys = new Set<string>();
     const candidateKeySet = new Set<string>();
     const candidates: Array<{ x: number; y: number; z: number; exposed?: boolean }> = [];
     // Ore on a lake floor or in a flooded cave pulled paid runs under water,
@@ -160,6 +173,7 @@ class MineBlock extends InstantSkill {
           if (queuedKeys.has(k)) continue;
           const blk = this.bot.blockAt(new Vec3(p.x, p.y, p.z));
           if (!blk || !familyNames.includes(blk.name)) continue;
+          if (gate && p.y < gate.floor) { gatedKeys.add(k); continue; }
           if (touchesWaterSource(p)) { submergedKeys.add(k); continue; }
           candidateKeySet.add(k);
           queuedKeys.add(k);
@@ -228,19 +242,28 @@ class MineBlock extends InstantSkill {
     }
 
     // Cheap prerequisites precede the synchronous, radius-dependent scan.
-    if (blockType.harvestTools && !this.bot.inventory.items().some(item =>
-      Object.keys(blockType.harvestTools).map(Number).includes(item.type))) {
+    const harvestable = (type: any) => !type.harvestTools || this.bot.inventory.items().some(item =>
+      Object.keys(type.harvestTools).map(Number).includes(item.type));
+    if (!blockTypes.some(harvestable)) {
       return { success: false, failureType: 'missing_tool', recoverable: true,
         result: `${blockName}を回収できる適切なツールがありません。先に必要な道具を用意してください` };
+    }
+    // Of several kinds, only those that drop for the tools carried are looked for.
+    if (blockTypes.length > 1) {
+      const kept = new Set(blockTypes.filter(harvestable).flatMap((type: any) => MineBlock.oreMiningFamily(this.mcData, type.name)));
+      familyNames.splice(0, familyNames.length, ...familyNames.filter(name => kept.has(name)));
     }
     reportActionProgress(this.bot, 'search', { blockName, searchRadius });
     mergeTargetsFromWorld();
     assertActionActive(this.bot);
+    if (candidates.length === 0 && gate && gatedKeys.size) {
+      return nightGateRefusal(gate, `mine-block（${blockName}は${searchRadius}ブロック以内に${gatedKeys.size}個あるが、どれも y${gate.floor} より下）`);
+    }
     if (candidates.length === 0) return { success: false, failureType: 'target_not_found', recoverable: true,
-      result: `${searchRadius}ブロック以内に${blockName}が見つかりません`
+      result: `${searchRadius}ブロック以内に${blockName}が見つかりません${unknownNote}`
         + (submergedKeys.size ? `（水源に接する${submergedKeys.size}個は水中作業になるため除外。水の無い場所を探してください）` : '') };
     const beforeEntityIds = new Set(Object.values(this.bot.entities ?? {}).map(entity => entity.id));
-    const expectedItems = expectedBlockDrops(this.bot, blockType);
+    const expectedItems = [...new Set(blockTypes.flatMap((type: any) => expectedBlockDrops(this.bot, type)))];
     // 採掘前のインベントリをスナップショット（ドロップアイテム検出用）
     const beforeInventory = new Map<string, number>();
     for (const item of this.bot.inventory.items()) {
@@ -271,6 +294,14 @@ class MineBlock extends InstantSkill {
     let approachNote = '';
     let consecutiveFailures = 0;
     const MAX_CONSECUTIVE_FAILURES = 3;
+    /**
+     * The target being walked to, kept first while the walk to it gets nearer. Re-sorting from wherever a stair or a failed move
+     * left the body picked another diamond of the same vein each time, and each pick began a new stair in a new direction: three
+     * stairs and 136 s, the diamonds still not reached (run 16).
+     */
+    let pinnedKey: string | null = null;
+    /** Least headway (metres nearer) for a failed approach to count as getting there. */
+    const APPROACH_HEADWAY = 3;
 
     // Nested movement/drop collection can mine another target through the
     // pathfinder. Count actual completed digs, not just direct skill calls.
@@ -325,7 +356,8 @@ class MineBlock extends InstantSkill {
       // the same kind that needs neither comes first.
       const burning = new Set(candidates.filter(candidate => dropBurnsIn(this.bot as any, new Vec3(candidate.x, candidate.y, candidate.z)))
         .map(candidate => targetKey(candidate)));
-      candidates.sort((a, b) => Number(reachable.has(targetKey(b))) - Number(reachable.has(targetKey(a)))
+      candidates.sort((a, b) => Number(targetKey(b) === pinnedKey) - Number(targetKey(a) === pinnedKey)
+        || Number(reachable.has(targetKey(b))) - Number(reachable.has(targetKey(a)))
         || Number(unreachable.has(targetKey(a))) - Number(unreachable.has(targetKey(b)))
         || Number(burning.has(targetKey(a))) - Number(burning.has(targetKey(b)))
         || estimateBlockApproachCost(here, a, a.exposed) - estimateBlockApproachCost(here, b, b.exposed));
@@ -344,6 +376,7 @@ class MineBlock extends InstantSkill {
         // as a player would, then approach.
         const stairMine = this.bot.instantSkills.getSkill('stair-mine');
         const here = this.bot.entity.position;
+        const startGap = here.distanceTo(target);
         if (stairMine && target.y < here.y - 3) {
           const dx = target.x + 0.5 - here.x, dz = target.z + 0.5 - here.z;
           const direction = Math.abs(dx) >= Math.abs(dz) ? (dx >= 0 ? 'east' : 'west') : (dz >= 0 ? 'south' : 'north');
@@ -355,15 +388,28 @@ class MineBlock extends InstantSkill {
           stoppedForTime = true;
           break;
         }
-        const moveResult = await moveTo.run(target.x, target.y, target.z, DIG_REACH, 'block');
+        // The walk is given what is left of this action (less what the dig and the pickup take): ended by the move itself, it says
+        // how far it got; ended by this action's own time-out, nothing is said at all.
+        const moveResult = await moveTo.run(target.x, target.y, target.z, DIG_REACH, 'block', timeLeftMs() - COLLECT_RESERVE_MS - 5_000);
         if (!moveResult.success) {
           lastFailureType = moveResult.failureType ?? 'movement_failed';
           lastRecoverable = moveResult.recoverable ?? true;
-          const closer = moveResult.failureType === 'movement_incomplete';
+          // Nearer by the stair and the walk together, whatever the move called its end (a stuck walk in a tunnel, a time-out); but
+          // not when the body's guards refused a dig on the way (lava, a mob behind the wall): the same way would be refused again.
+          const gained = startGap - this.bot.entity.position.distanceTo(target);
+          const refusedOnWay = String(moveResult.result ?? '').includes('掘削を断りました');
+          const closer = moveResult.failureType === 'movement_incomplete' || (gained >= APPROACH_HEADWAY && !refusedOnWay);
           failures.push(`移動失敗(${target.x},${target.y},${target.z}): ${moveResult.failureType ?? 'movement_failed'} — ${String(moveResult.result).slice(0, 200)}`);
           // A walk that ran out of time while getting nearer is not a place that cannot be reached: it is
           // gone on with at the next call, not put behind every other candidate.
           if (!closer) recentlyUnreachable(this.bot).set(targetKey(target), Date.now());
+          // Nearer and time left: the same target again from here (a new stair toward it), not the next of the vein.
+          if (closer && timeLeftMs() >= APPROACH_MIN_MS && consecutiveFailures + 1 < MAX_CONSECUTIVE_FAILURES) {
+            consecutiveFailures++;
+            pinnedKey = targetKey(target);
+            candidates.unshift(pos);
+            continue;
+          }
           if (closer || timeLeftMs() < APPROACH_MIN_MS) {
             approachNote = `${blockName}(${target.x}, ${target.y}, ${target.z})へ向かう途中です（いま ${this.bot.entity.position.floored()}、あと約${Math.round(this.bot.entity.position.distanceTo(target))}m）。もう一度 mine-block を呼べば続きから進みます`;
             stoppedForTime = true;
@@ -636,6 +682,9 @@ class MineBlock extends InstantSkill {
     const totalsText = this.formatDropTotals(drops);
 
     const isPartial = mined < count || stoppedForInventoryTight;
+    // Said beside what was mined: the rest of the kind lies below the night gate's floor (utils/nightGate).
+    if (gate && gatedKeys.size) toolWarning += ` 夜の門: y${gate.floor}より下の${gatedKeys.size}個は、夜の準備（${gate.kit.missing.map(part => part === 'armor' ? '防具' : part === 'cooked_food' ? '焼いた食料' : 'ベッド').join('・')}）が揃うまで掘りません`;
+    if (unknownNote) toolWarning += unknownNote;
     const timeNote = stoppedForTime && mined < count
       ? `1回の行動の時間（${Math.round((this.maxDurationMs || 120_000) / 1000)}秒）を使い切る前に区切りました。掘った分は回収済みです。`
       : '';

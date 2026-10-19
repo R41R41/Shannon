@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Vec3 } from 'vec3';
 
 const gotoSafeMock = vi.hoisted(() => vi.fn());
@@ -29,6 +29,15 @@ describe('flee-from target and safety postconditions', () => {
   beforeEach(() => {
     gotoSafeMock.mockReset();
     setMovementsMock.mockReset();
+    // fleeFrom measures its deadline with Date.now(): "remaining = deadline - now" is the timeoutMs it hands to gotoSafe,
+    // and a tiny timeout (5 ms) is spent before the first leg on a slow or loaded machine. Freeze only the clock so the
+    // tests do not depend on how long the machine takes (promises and the mocks are untouched).
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it.each(['hostile', 'all-hostiles', 'ALL-HOSTILES'])('treats %s as every classified hostile', async target => {

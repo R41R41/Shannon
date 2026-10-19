@@ -115,10 +115,10 @@ describe('M1: a meal does not cut the API\'s own escape and shelter commands (de
     await running(bot, 'flee-from'); tick(bot);
     expect(((await command) as any).success).toBe(false);
   });
-  it('health 6 or less at food 18 or 19 is a top-up, not a critical meal; at food 17 or less it is critical', () => {
+  it('health 6 or less at food 18 or 19 is no meal at all (the body regenerates there; run 16 change); at food 17 or less it is critical', () => {
     const idle = (health: number, food: number) => floorEatChoice({ ...fixture(flat()).bot, health, food, entities: {}, inventory: { items: () => [bread], slots: [] } })?.name ?? null;
-    expect(idle(5, 19)).toBe('bread');   // idle: a top-up still happens
-    expect(idle(5, 18)).toBe('bread');
+    expect(idle(5, 19)).toBeNull();
+    expect(idle(5, 18)).toBeNull();
     expect(idle(5, 17)).toBe('bread');
     expect(idle(20, 19)).toBeNull();
   });

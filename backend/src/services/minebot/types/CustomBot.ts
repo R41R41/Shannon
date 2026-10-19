@@ -64,6 +64,8 @@ export interface ActiveFurnace {
   dimension?: string;
   /** Input left in the furnace without fuel; it never smelts until refueled. */
   unfueledCount?: number;
+  /** Raw food queued behind this batch (start-smelting): put in by withdraw-from-furnace when the batch is taken out. */
+  then?: string[];
 }
 
 // CustomBotの定義を更新

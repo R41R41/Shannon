@@ -11,6 +11,9 @@ import { nativeActionHost } from '../execution/ActionExecution.js';
 import { gotoSafe } from '../utils/gotoSafe.js';
 import { GoalReachBlock, DIG_REACH } from '../utils/blockInteractionReach.js';
 import { blocksAlong, keepCheapTool } from '../utils/toolStock.js';
+import { nightGateFor } from '../utils/nightGate.js';
+import { tunnelDigMs } from '../utils/routeEstimate.js';
+import { chooseTool } from '../utils/toolChoice.js';
 const { goals } = pathfinder;
 const log = createLogger('Minebot:Skill:moveTo');
 
@@ -34,6 +37,8 @@ function digRefusalSince(bot: unknown, before: { lava: number; threat: number })
 const SLOWEST_TRAVEL_SPEED = 1.5;
 /** The same for a move that starts in the water: a body swimming a route made 24m in 28s (paid run L32). */
 const SLOWEST_SWIM_SPEED = 0.7;
+/** A dug route is longer than the straight line it is estimated on. */
+const TUNNEL_DETOUR = 1.3;
 
 /**
  * On a perch (a branch, a pillar): every neighbour drops more than the four blocks a route may fall, so no move
@@ -96,12 +101,24 @@ class MoveTo extends InstantSkill {
     ];
   }
 
+  /** The night gate (utils/nightGate): a goal height below y 16 at night without the kit is refused before the body is asked for. */
+  protected preflight(_x: number, y: number, _z: number, _range?: number, goalType: string = 'nearxz') {
+    // Only the goals that ignore the height pass: any other (an unknown name falls through to GoalNear below) goes to its y.
+    if (goalType === 'nearxz' || goalType === 'xz') return null;
+    return nightGateFor(this.bot, y, `move-to（目標 y${Math.floor(y)}）`);
+  }
+
+  /**
+   * `budgetCapMs` is not a parameter the planner sees: a caller inside a longer action (mine-block) gives the time it has left,
+   * so that the walk ends with an account of how far it got before the caller's own time runs out.
+   */
   async runImpl(
     x: number,
     y: number,
     z: number,
     range: number = 2,
-    goalType: string = 'nearxz'
+    goalType: string = 'nearxz',
+    budgetCapMs?: number,
   ) {
     // move-to実行中は、移動系のConstantSkillを一時的に無効化
     const autoFollow = this.bot.constantSkills.getSkill('auto-follow');
@@ -289,8 +306,19 @@ class MoveTo extends InstantSkill {
       // the whole of what a move may take. Standing still is still caught by the stuck check.
       const handDigging = !this.bot.inventory.items().some(item => item.name.includes('pickaxe'));
       const longestMs = Math.max(30_000, (this.maxDurationMs || 120_000) - 10_000);
-      const travelBudgetMs = handDigging ? longestMs
-        : Math.min(Math.max(30_000, (distance / (isInWater ? SLOWEST_SWIM_SPEED : SLOWEST_TRAVEL_SPEED)) * 1000), longestMs);
+      // Through rock the walk is mostly digging: the time of the blocks on the straight line is added, with a third more for a
+      // route that does not go straight (run 16: a 37 m tunnel given 30 s ran out, and was taken for a place out of reach).
+      // Only a goal with a height is read this way: an XZ goal's straight line at the feet's height runs into every hill on the way,
+      // which the walk goes over, not through.
+      let digMs = 0;
+      if (!handDigging && !isInWater && distance > range && goalType !== 'xz' && goalType !== 'nearxz') {
+        const toward = goalType === 'y' ? { x: currentPos.x, y, z: currentPos.z } : { x, y, z };
+        try { digMs = tunnelDigMs(this.bot as any, startedFrom, toward, (block, items, effects) => chooseTool(block, items, { effects })) * TUNNEL_DETOUR; }
+        catch { digMs = 0; }
+      }
+      const cap = Number.isFinite(budgetCapMs) && (budgetCapMs as number) > 0 ? Math.max(5_000, budgetCapMs as number) : Infinity;
+      const travelBudgetMs = Math.min(cap, handDigging ? longestMs
+        : Math.min(Math.max(30_000, (distance / (isInWater ? SLOWEST_SWIM_SPEED : SLOWEST_TRAVEL_SPEED)) * 1000 + digMs), longestMs));
       const travelStartedAt = Date.now();
       let gotoResult = await gotoSafe(this.bot, goal, { timeoutMs: travelBudgetMs });
       // Still in the water and not there: the pathfinder plans no step up out

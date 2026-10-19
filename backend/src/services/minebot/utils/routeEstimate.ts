@@ -1,4 +1,5 @@
 import pathfinder from 'mineflayer-pathfinder';
+import { Vec3 } from 'vec3';
 
 const { goals } = pathfinder;
 
@@ -36,6 +37,54 @@ export function estimateRoute(bot: RoutingBot, x: number, y: number, z: number, 
   } catch {
     return null;
   }
+}
+
+/** What the server's answer to a dig adds to the block's own time (the start, the confirmation, the step into the gap). */
+const DIG_OVERHEAD_MS = 250;
+/** The straight line is read at most this far: a walk is cut to the action's time well before it would matter. */
+const TUNNEL_SCAN_LIMIT = 96;
+
+interface TunnelBot {
+  blockAt?(position: any): { name?: string; boundingBox?: string; diggable?: boolean; harvestTools?: Record<string, boolean> | null;
+    digTime?(type: number | null, creative: boolean, inWater: boolean, notOnGround: boolean, enchants: unknown[], effects: unknown): number } | null;
+  inventory?: { items(): Array<{ type: number; name: string; maxDurability?: number }> };
+  entity?: { effects?: unknown };
+}
+
+/**
+ * The time the digging of a walk takes, by the straight line: every whole block in the two cells a body fills along it, at the
+ * time of the tool the route would choose for it (`chooseTool`: the cheapest in time and wear, the stone pickaxe on stone even with
+ * an iron one in the bag). A walk to diamonds 37 m off through rock was given the 30 s that walking it takes, ran out with most of
+ * the tunnel to dig, and was taken for a place that could not be reached; the next call started a new stair elsewhere (run 16).
+ */
+export function tunnelDigMs(bot: TunnelBot, from: { x: number; y: number; z: number }, to: { x: number; y: number; z: number },
+  choose: (block: any, items: any[], effects: unknown) => { type: number } | null): number {
+  if (typeof bot.blockAt !== 'function') return 0;
+  const distance = Math.hypot(to.x - from.x, to.y - from.y, to.z - from.z);
+  // A block a metre along the line, for the first TUNNEL_SCAN_LIMIT metres only.
+  const steps = Math.ceil(distance);
+  const items = (() => { try { return bot.inventory?.items() ?? []; } catch { return []; } })();
+  const seen = new Set<string>();
+  let total = 0;
+  for (let i = 1; i <= Math.min(steps, TUNNEL_SCAN_LIMIT); i++) {
+    const t = i / steps;
+    const x = Math.floor(from.x + (to.x - from.x) * t), y = Math.floor(from.y + (to.y - from.y) * t), z = Math.floor(from.z + (to.z - from.z) * t);
+    for (const dy of [0, 1]) {
+      const key = `${x},${y + dy},${z}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      let block: ReturnType<NonNullable<TunnelBot['blockAt']>> = null;
+      try { block = bot.blockAt(new Vec3(x, y + dy, z)) ?? null; } catch { block = null; }
+      if (!block || block.boundingBox !== 'block' || block.diggable === false || typeof block.digTime !== 'function') continue;
+      let ms = 0;
+      try {
+        const tool = choose(block, items, bot.entity?.effects ?? {});
+        ms = Number(block.digTime(tool ? tool.type : null, false, false, false, [], bot.entity?.effects ?? {}));
+      } catch { ms = 0; }
+      if (Number.isFinite(ms) && ms > 0) total += ms + DIG_OVERHEAD_MS;
+    }
+  }
+  return total;
 }
 
 /**

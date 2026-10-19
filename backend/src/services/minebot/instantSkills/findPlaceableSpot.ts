@@ -7,7 +7,7 @@ import { CustomBot, InstantSkill } from '../types.js';
  */
 class FindPlaceableSpot extends InstantSkill {
   /** placeBlockAt と同順: [隣接オフセット, 設置時の面ベクトル] の対応 */
-  private static readonly OFFSETS: [number, number, number, number, number, number][] = [
+  static readonly OFFSETS: [number, number, number, number, number, number][] = [
     [0, -1, 0, 0, 1, 0],
     [1, 0, 0, -1, 0, 0],
     [-1, 0, 0, 1, 0, 0],
@@ -16,7 +16,7 @@ class FindPlaceableSpot extends InstantSkill {
     [0, 1, 0, 0, -1, 0],
   ];
 
-  private static readonly FACE_LABELS = ['下', '東', '西', '南', '北', '上'] as const;
+  static readonly FACE_LABELS = ['下', '東', '西', '南', '北', '上'] as const;
 
   constructor(bot: CustomBot) {
     super(bot);
@@ -46,80 +46,11 @@ class FindPlaceableSpot extends InstantSkill {
     ];
   }
 
-  private isAirBlockName(name: string | undefined): boolean {
-    if (!name) return false;
-    return name === 'air' || name === 'cave_air' || name === 'void_air';
-  }
-
-  /**
-   * このセルに固体隣接があり place-block-at が参照ブロックを取れるか
-   */
-  private canPlaceAtCell(targetPos: Vec3): { ok: boolean; faceLabel: string } {
-    for (let i = 0; i < FindPlaceableSpot.OFFSETS.length; i++) {
-      const [ox, oy, oz] = FindPlaceableSpot.OFFSETS[i];
-      const candidate = this.bot.blockAt(targetPos.offset(ox, oy, oz));
-      if (candidate && !this.isAirBlockName(candidate.name)) {
-        return { ok: true, faceLabel: FindPlaceableSpot.FACE_LABELS[i] };
-      }
-    }
-    return { ok: false, faceLabel: '' };
-  }
 
   async runImpl(searchRadius: number = 8, maxResults: number = 12, requireHeadSpace: boolean = false) {
     const R = Math.max(1, Math.min(24, Math.floor(Number(searchRadius)) || 8));
     const limit = Math.max(1, Math.min(32, Math.floor(Number(maxResults)) || 12));
-
-    const botPos = this.bot.entity.position;
-    const ox0 = Math.floor(botPos.x);
-    const oy0 = Math.floor(botPos.y);
-    const oz0 = Math.floor(botPos.z);
-
-    type Spot = { x: number; y: number; z: number; dist: number; ref: string };
-    const spots: Spot[] = [];
-    const rsq = R * R;
-
-    for (let dx = -R; dx <= R; dx++) {
-      for (let dy = -R; dy <= R; dy++) {
-        for (let dz = -R; dz <= R; dz++) {
-          if (dx * dx + dy * dy + dz * dz > rsq) continue;
-
-          const x = ox0 + dx;
-          const y = oy0 + dy;
-          const z = oz0 + dz;
-
-          if (
-            x === ox0 &&
-            z === oz0 &&
-            (y === oy0 || y === oy0 + 1)
-          ) {
-            continue;
-          }
-
-          const targetPos = new Vec3(x, y, z);
-          const cell = this.bot.blockAt(targetPos);
-          if (!cell || !this.isAirBlockName(cell.name)) continue;
-
-          if (requireHeadSpace) {
-            const above = this.bot.blockAt(targetPos.offset(0, 1, 0));
-            if (!above || !this.isAirBlockName(above.name)) continue;
-          }
-
-          const { ok, faceLabel } = this.canPlaceAtCell(targetPos);
-          if (!ok) continue;
-
-          const cx = x + 0.5;
-          const cy = y + 0.5;
-          const cz = z + 0.5;
-          const dist = Math.sqrt(
-            (botPos.x - cx) ** 2 + (botPos.y - cy) ** 2 + (botPos.z - cz) ** 2,
-          );
-          spots.push({ x, y, z, dist, ref: faceLabel });
-        }
-      }
-    }
-
-    spots.sort((a, b) => a.dist - b.dist);
-    const picked = spots.slice(0, limit);
+    const picked = placeableSpots(this.bot, R, limit, requireHeadSpace);
 
     if (picked.length === 0) {
       return {
@@ -142,6 +73,65 @@ class FindPlaceableSpot extends InstantSkill {
         lines.join('\n'),
     };
   }
+}
+
+function isAirBlockName(name: string | undefined): boolean {
+  if (!name) return false;
+  return name === 'air' || name === 'cave_air' || name === 'void_air';
+}
+
+/** このセルに固体隣接があり place-block-at が参照ブロックを取れるか */
+function canPlaceAtCell(bot: { blockAt(position: Vec3): { name?: string } | null }, targetPos: Vec3): { ok: boolean; faceLabel: string } {
+  for (let i = 0; i < FindPlaceableSpot.OFFSETS.length; i++) {
+    const [ox, oy, oz] = FindPlaceableSpot.OFFSETS[i];
+    const candidate = bot.blockAt(targetPos.offset(ox, oy, oz));
+    if (candidate && !isAirBlockName(candidate.name)) {
+      return { ok: true, faceLabel: FindPlaceableSpot.FACE_LABELS[i] };
+    }
+  }
+  return { ok: false, faceLabel: '' };
+}
+
+export interface PlaceableSpot { x: number; y: number; z: number; dist: number; ref: string }
+
+/**
+ * Air cells round the body that place-block-at can fill (a solid block beside them to place against), nearest first; never the two
+ * cells the body stands in. Used by find-placeable-spot and by craft-one's own placing of a crafting table.
+ */
+export function placeableSpots(bot: { entity: { position: Vec3 }; blockAt(position: Vec3): { name?: string } | null },
+  radius: number, limit: number, requireHeadSpace = false): PlaceableSpot[] {
+  const botPos = bot.entity.position;
+  const ox0 = Math.floor(botPos.x);
+  const oy0 = Math.floor(botPos.y);
+  const oz0 = Math.floor(botPos.z);
+  const spots: PlaceableSpot[] = [];
+  const rsq = radius * radius;
+
+  for (let dx = -radius; dx <= radius; dx++) {
+    for (let dy = -radius; dy <= radius; dy++) {
+      for (let dz = -radius; dz <= radius; dz++) {
+        if (dx * dx + dy * dy + dz * dz > rsq) continue;
+        const x = ox0 + dx;
+        const y = oy0 + dy;
+        const z = oz0 + dz;
+        if (x === ox0 && z === oz0 && (y === oy0 || y === oy0 + 1)) continue;
+
+        const targetPos = new Vec3(x, y, z);
+        const cell = bot.blockAt(targetPos);
+        if (!cell || !isAirBlockName(cell.name)) continue;
+        if (requireHeadSpace) {
+          const above = bot.blockAt(targetPos.offset(0, 1, 0));
+          if (!above || !isAirBlockName(above.name)) continue;
+        }
+        const { ok, faceLabel } = canPlaceAtCell(bot, targetPos);
+        if (!ok) continue;
+        const dist = Math.sqrt((botPos.x - (x + 0.5)) ** 2 + (botPos.y - (y + 0.5)) ** 2 + (botPos.z - (z + 0.5)) ** 2);
+        spots.push({ x, y, z, dist, ref: faceLabel });
+      }
+    }
+  }
+  spots.sort((a, b) => a.dist - b.dist);
+  return spots.slice(0, limit);
 }
 
 export default FindPlaceableSpot;

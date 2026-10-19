@@ -127,7 +127,14 @@ export interface WorldObservation {
    * `foodItems`: things to eat in the pack. `hitsLeft`: how many more hits the body can take from the
    * hardest-hitting hostile that can reach it now, by the damage that kind has been measured to do.
    */
-  margin?: { darkInSeconds?: number; lightInSeconds?: number; regenerating: boolean; foodItems: number; hitsLeft?: { from: string; hits: number } };
+  margin?: { darkInSeconds?: number; lightInSeconds?: number; regenerating: boolean; foodItems: number; hitsLeft?: { from: string; hits: number };
+    /**
+     * The night gate's kit (utils/nightGate), said in the overworld from five minutes before dark while something is missing:
+     * what, and whether the gate is closed now (night, or dark within a minute). Closed, the tools refuse to go below y 16.
+     */
+    descentKit?: { missing: Array<'armor' | 'cooked_food' | 'bed'>; gated: boolean };
+    /** The most wool of one colour carried, towards the three one bed takes; said while no bed is carried and some wool is. */
+    bedWool?: { color: string; have: number; need: 3 } };
   isInWater: boolean;
   /** Present (true) only while the body stands closed in: solid floor, roof and walls round its two cells. Mobs cannot reach it; opening a wall or the roof ends that. */
   sealedInShelter?: true;

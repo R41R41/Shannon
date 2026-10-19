@@ -47,6 +47,13 @@ export const FALLBACK_FOOD_POINTS: Record<string, number> = {
 };
 
 /**
+ * Food that the fire makes several times better (raw mutton 2, cooked 6): eaten only when there is nothing else and it cannot wait.
+ * Run 16 ate raw mutton four times and raw chicken twice with a furnace and eleven coal in hand (rotten flesh and pufferfish have
+ * their own rules where food is chosen).
+ */
+export const RAW_FOOD: ReadonlySet<string> = new Set(['beef', 'porkchop', 'mutton', 'chicken', 'rabbit', 'cod', 'salmon', 'potato']);
+
+/**
  * 自動食事スキル
  * 体力または満腹度が低い時に自動で食べ物を食べる
  */
@@ -85,6 +92,9 @@ class AutoEat extends ConstantSkill {
           return this.getFoodPoints(item.name) > 0;
         })
         .sort((a, b) => {
+          // Cooked before raw (RAW_FOOD), then the most filling.
+          const raw = Number(RAW_FOOD.has(a.name)) - Number(RAW_FOOD.has(b.name));
+          if (raw) return raw;
           const aFood = this.getFoodPoints(a.name);
           const bFood = this.getFoodPoints(b.name);
           return bFood - aFood;

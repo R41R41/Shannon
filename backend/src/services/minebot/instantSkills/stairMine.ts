@@ -9,6 +9,7 @@ import { ThreatExposedError } from '../utils/exposureGuard.js';
 import { actionDelay } from '../execution/observedWait.js';
 import { chooseTool } from '../utils/toolChoice.js';
 import { blocksAlong, keepCheapTool } from '../utils/toolStock.js';
+import { nightGateFor } from '../utils/nightGate.js';
 const log = createLogger('Minebot:Skill:stairMine');
 
 /**
@@ -45,6 +46,11 @@ class StairMine extends InstantSkill {
                 default: 'cobblestone',
             },
         ];
+    }
+
+    /** The night gate (utils/nightGate): a stair below y 16 at night without the kit is refused before the body is asked for. */
+    protected preflight(targetY: number) {
+        return nightGateFor(this.bot, Number(targetY), `stair-mine（目標 y${Math.floor(Number(targetY))}）`);
     }
 
     async runImpl(targetY: number, direction: string = '', placeBlock: string = 'cobblestone') {

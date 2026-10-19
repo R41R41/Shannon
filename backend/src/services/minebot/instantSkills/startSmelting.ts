@@ -2,6 +2,7 @@ import minecraftData from 'minecraft-data';
 import { Vec3 } from 'vec3';
 import { CustomBot, InstantSkill } from '../types.js';
 import { ensureLineOfSight } from '../utils/blockLineOfSight.js';
+import { RAW_FOOD } from '../constantSkills/autoEat.js';
 
 /**
  * 原子的スキル: かまどで精錬を開始
@@ -445,8 +446,17 @@ class StartSmelting extends InstantSkill {
         }
         const estimatedSec = fueledSmelts * secPerItem;
 
+        // Raw meat carried is cooked next in the same furnace: queued behind this batch, put in when the batch is taken out
+        // (withdraw-from-furnace). Run 16 smelted iron twice with raw mutton and chicken in the pack and ate them raw (a third of
+        // the food). Not in a blast furnace (it smelts no food); a smoker takes nothing but food anyway.
+        const queued = block.name.includes('blast_furnace') ? []
+          : [...new Set(this.bot.inventory.items().filter(item => RAW_FOOD.has(item.name) && item.name !== inputItem).map(item => item.name))];
+        const queuedNote = queued.length
+          ? `。手持ちの生の食べ物（${queued.map(name => `${name}×${this.inventoryCount(name)}`).join('、')}）は、この精錬の後に同じかまどで焼くよう並べました（withdraw-from-furnace で取り出す時に自動で入れます。燃料は手持ちから）`
+          : '';
+
         // 部分的に燃料が足りなくても、実際に進められる分を表示する。
-        this.registerActiveFurnace(x, y, z, inputItem, fueledSmelts, estimatedSec, totalSmeltCount - fueledSmelts);
+        this.registerActiveFurnace(x, y, z, inputItem, fueledSmelts, estimatedSec, totalSmeltCount - fueledSmelts, queued);
 
         if (fueledSmelts < totalSmeltCount) {
           const otherFuels = [...new Set(this.bot.inventory.items().map(item => item.name))]
@@ -462,7 +472,7 @@ class StartSmelting extends InstantSkill {
             resultMsg += `。※完成品スロットから${withdrawnOutput.name} x${withdrawnOutput.count}を自動回収しました`;
           }
           if (fuelSwitchNote) resultMsg = `${fuelSwitchNote}。${resultMsg}`;
-          return { success: true, result: resultMsg };
+          return { success: true, result: resultMsg + queuedNote };
         }
 
         let resultMsg: string;
@@ -479,7 +489,7 @@ class StartSmelting extends InstantSkill {
         if (withdrawnOutput) {
           resultMsg += `。※完成品スロットから${withdrawnOutput.name} x${withdrawnOutput.count}を自動回収しインベントリに入れました`;
         }
-        resultMsg += `。精錬は独立して進むので、待たずに（wait-timeで待たずに）次の作業（採掘など）へ進み、終わった頃に同じかまどから取り出してください。${process.env.MINEBOT_COMMON_FCA === 'on' ? '' : 'get-background-jobsで推定残り時間を確認できます。'}withdraw-from-furnace は残りが約20秒以内なら完了を待ち、長ければ待たずに完成済みの分だけ回収して残り時間を返す（waitForCompletion=true で最後まで待つ）`;
+        resultMsg += `。精錬は独立して進むので、待たずに（wait-timeで待たずに）次の作業（採掘など）へ進み、終わった頃に同じかまどから取り出してください。${process.env.MINEBOT_COMMON_FCA === 'on' ? '' : 'get-background-jobsで推定残り時間を確認できます。'}withdraw-from-furnace は残りが約20秒以内なら完了を待ち、長ければ待たずに完成済みの分だけ回収して残り時間を返す（waitForCompletion=true で最後まで待つ）${queuedNote}`;
 
         return {
           success: true,
@@ -500,7 +510,7 @@ class StartSmelting extends InstantSkill {
   }
   private registerActiveFurnace(
     x: number, y: number, z: number,
-    item: string, count: number, estimatedSec: number, unfueledCount = 0,
+    item: string, count: number, estimatedSec: number, unfueledCount = 0, then: string[] = [],
   ): void {
     if (!this.bot.activeFurnaces) this.bot.activeFurnaces = [];
     // 同一座標の古いエントリを置換
@@ -515,6 +525,7 @@ class StartSmelting extends InstantSkill {
       startedAt: Date.now(),
       dimension: String(this.bot.game?.dimension ?? 'unknown'),
       ...(unfueledCount > 0 ? { unfueledCount } : {}),
+      ...(then.length ? { then } : {}),
     });
   }
 }

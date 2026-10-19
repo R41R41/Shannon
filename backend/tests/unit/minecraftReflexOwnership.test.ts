@@ -25,10 +25,11 @@ const full = floorConfig({});
 const state = (patch: Partial<FloorState> = {}): FloorState => ({ retreat: { engaged: false, ticks: 0, cooldown: 0, engagements: 0 }, busy: null, retryAt: 0, engagements: { eat: 0, armor: 0 }, fleeStarts: [], ...patch });
 
 describe('low-health flee: when it may start (precedence)', () => {
-  it('needs health at most 6 and a reachable threat within 8 blocks (16 for a kind that shoots)', () => {
+  it('needs health at most 8 (6 before run 16) and a reachable threat within 8 blocks (16 for a kind that shoots)', () => {
     const { bot } = fixture();
     expect(fleeThreat(bot as FloorBody)?.from.x).toBe(2);
-    bot.health = 7; expect(fleeThreat(bot)).toBeNull();
+    bot.health = 9; expect(fleeThreat(bot)).toBeNull();
+    bot.health = 8; expect(fleeThreat(bot)).not.toBeNull();
     bot.health = 6; expect(fleeThreat(bot)).not.toBeNull();
     bot.health = 0; expect(fleeThreat(bot)).toBeNull();
     bot.health = 5; bot.entities[2].position = new Vec3(8.5, 65, 0); expect(fleeThreat(bot)).toBeNull();

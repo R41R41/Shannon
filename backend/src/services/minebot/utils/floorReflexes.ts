@@ -2,7 +2,7 @@ import { Vec3 } from 'vec3';
 import { createLogger } from '../../../utils/logger.js';
 import { actionLeaseStatus, activeActionCapabilities, createMotorPort, executeAction, hasActiveSafetyLease, physicalActionBusy, preemptLowerPriorityActions } from '../execution/ActionExecution.js';
 import { creeperLit } from './creeperFuse.js';
-import { FALLBACK_FOOD_POINTS } from '../constantSkills/autoEat.js';
+import { FALLBACK_FOOD_POINTS, RAW_FOOD } from '../constantSkills/autoEat.js';
 import { edgeRisk, fallIsDangerous } from './edgeGuard.js';
 import { escapeHeading } from './escapeHeading.js';
 import { floorConfig, type FloorConfig } from './floorConfig.js';
@@ -37,7 +37,30 @@ export const FLOOR_FLEE_PRIORITY = 250;
  * when it is not getting anywhere, or when nothing is near; it is then followed by 2 s of rest in which the API's fast judgment (shelter,
  * flee-from, a fight) has the body. At most two episodes in 20 s: the guard against a loop.
  */
-export const FLEE_HEALTH = 6;
+// Was 6 (the API's lowHealth). Run 16 died to zombies in a cave: the flee began at 3.7 with one hit left, found no way out, and that was
+// the end. At 8 the body still has two zombie hits in hand when it starts (owner's change, 2026-10-19).
+export const FLEE_HEALTH = 8;
+/**
+ * When the flee finds no safe way out (a cave, a cliff): the body walls itself in where it stands (build-around-self's one-cell
+ * slit_shelter, about 16 blocks, a few seconds) or, short of blocks for that, stands on a pillar (tower-up, out of a zombie's reach).
+ * Once in this many milliseconds, and only with the blocks for it.
+ */
+const SHELTER_GAP_MS = 20_000;
+const SHELTER_PLAN = 'slit_shelter';
+/** What slit_shelter takes (its plan: ten whole blocks and four slabs), and how near an enemy may be for it still to be built. */
+const SHELTER_BLOCKS = 10;
+const SHELTER_SLABS = 4;
+/** A cell with an enemy in it cannot take a block (the plan says so): with one this close, the pillar instead. */
+const SHELTER_CLEAR = 2.5;
+const PILLAR_BLOCKS = 3;
+/**
+ * How long the shelter may hold the body. An API stop or release waits three seconds for a safety lease (nativeBody); a pillar of
+ * three is about that, the one-cell shelter a few seconds more. Longer than this and the shelter is not what saves the body.
+ */
+const SHELTER_TIMEOUT_MS: Record<'build-around-self' | 'tower-up', number> = { 'build-around-self': 7_000, 'tower-up': 4_000 };
+/** Whole blocks a wall or a pillar can be made of (build-around-self's BUILDING_BLOCKS, without importing the skill here). */
+const WALL_BLOCKS = new Set(['cobblestone', 'cobbled_deepslate', 'stone', 'deepslate', 'andesite', 'diorite', 'granite', 'blackstone',
+  'tuff', 'basalt', 'nether_bricks', 'stone_bricks', 'end_stone', 'dirt', 'netherrack']);
 const FLEE_RANGE = 8;
 const FLEE_RANGE_SHOOTER = 16;
 const FLEE_KEEP_RANGE = 12;
@@ -102,6 +125,8 @@ export interface FloorBody {
   shootsAtBody?: (kind: string) => boolean;
   /** Where a refused flee is told to the mind (`state.world.reflexes`). */
   reflexLedger?: { note(kind: ReflexKind, detail: string, outcome?: ReflexOutcome): unknown };
+  /** The body's skills: the shelter a refused flee falls back on (build-around-self, tower-up). Absent in most tests. */
+  instantSkills?: { getSkill(name: string): unknown };
 }
 export interface RetreatState {
   engaged: boolean; kind?: 'creeper' | 'arrow'; from?: Vec3; origin?: Vec3; ticks: number; cooldown: number; engagements: number;
@@ -132,6 +157,11 @@ export interface FloorState {
   fleeRestUntil?: number;
   fleeRefusedUntil?: number;
   fleeRefusedNotedAt?: number;
+  /** Set by a refused flee: the tick builds a shelter instead (`shelterChoice`), at most once in SHELTER_GAP_MS. */
+  shelterWanted?: boolean;
+  shelterAt?: number;
+  /** How far the nearest threat was when the flee was refused (`shelterChoice`). */
+  shelterNearest?: number;
   /** Cooldowns, the allowance and the stuck latch of the arrow step-aside, the meal and the armour change (`floorBudget.ts`); absent when denied. */
   budget?: FloorBudget;
 }
@@ -243,8 +273,14 @@ export function floorRetreatTick(bot: FloorBody, state: RetreatState, allow?: (k
 }
 
 const NEVER_EAT = new Set(['pufferfish', 'chorus_fruit', 'suspicious_stew', 'spider_eye', 'poisonous_potato', 'enchanted_golden_apple']);
-/** The old auto-eat's trigger (legacy constant skill, e94a236): food below 18, or health below 18 and food below 20. */
-const TOPUP_FOOD = 18, TOPUP_FOOD_HURT = 20, TOPUP_HEALTH = 18;
+/**
+ * A top-up at food 14 or less, or at health below 14 with food below 18 (to get back to the 18 that regenerates). It was the old
+ * auto-eat's food below 18 (health below 18 and food below 20): run 16 ate at 16 and 17 with full health, raw meat each time, the
+ * meal worth a third of what it would be cooked (owner's change, 2026-10-19).
+ */
+const TOPUP_FOOD = 15, TOPUP_FOOD_HURT = 18, TOPUP_HEALTH = 14;
+/** Raw meat (RAW_FOOD) is eaten only when nothing else is carried and the meal cannot wait: critical, or health this low. */
+const RAW_OK_HEALTH = 8;
 /** While the pathfinder is walking the legacy auto-eat ate only at health 8 or less, or food 6 or less. */
 const MOVING_EAT_HEALTH = 8;
 /** Food that is worth more than its hunger points (a regeneration potion, a poison cure, a brewing ingredient): a top-up leaves it alone while it can. */
@@ -253,7 +289,8 @@ const VALUABLE_FOOD = new Set(['golden_apple', 'golden_carrot', 'honey_bottle'])
 /**
  * Food to eat now, or null; never with an enemy at arm's length (standing to eat there killed the body, L18).
  *
- * `wide` is the default mode (`FloorConfig.wideThreats`): the legacy auto-eat's trigger (food < 18, or health < 18 and food < 20), with
+ * `wide` is the default mode (`FloorConfig.wideThreats`): food 14 or less, or health below 14 and food below 18 (TOPUP_*; cooked before
+ * raw, raw only when nothing else is carried and the meal is critical or health is 8 or less), with
  * the production floor's safety kept on top. A meal at food 6 or less, or at health 6 or less with food 17 or less, is critical (exempt
  * from the budget, and the idle rule below does not apply to it; the tick cuts a running command for it only at health 6 or less or food
  * 3 or less, and never the API's own escape skills unless food is 3 or less); any other meal is a top-up and happens only when the body
@@ -273,8 +310,18 @@ export function floorEatChoice(bot: FloorBody, wide = true): Item | null {
     if (health > MOVING_EAT_HEALTH && food > EAT_CRITICAL_FOOD && (bot as { pathfinder?: { isMoving?(): boolean } }).pathfinder?.isMoving?.() === true) return null;
   } else if (!(food <= 6 || (health <= 12 && food < 18))) return null;
   if (bot.entity?.isInLava || hostileWithin(bot, HOSTILE_NEAR, wide, wide)) return null;
-  const items = (bot.inventory?.items() ?? []).filter(item => (FALLBACK_FOOD_POINTS[item.name] ?? 0) > 0 && !NEVER_EAT.has(item.name)
+  let items = (bot.inventory?.items() ?? []).filter(item => (FALLBACK_FOOD_POINTS[item.name] ?? 0) > 0 && !NEVER_EAT.has(item.name)
     && (item.name !== 'rotten_flesh' || food <= 6) && !(topUp && VALUABLE_FOOD.has(item.name)));
+  if (wide) {
+    // Cooked (or anything not raw) first; raw meat only when that is all there is and the meal cannot wait. Left raw, it is cooked
+    // with the next smelting (start-smelting queues it).
+    // Rotten flesh (hunger) comes after raw meat, though it fills more: it is the last resort, not something ready to eat.
+    const rank = (name: string) => name === 'rotten_flesh' ? 2 : RAW_FOOD.has(name) ? 1 : 0;
+    const ready = items.filter(item => rank(item.name) === 0);
+    items = ready.length ? ready : eatIsCritical(health, food) || health <= RAW_OK_HEALTH ? items : [];
+    items.sort((a, b) => rank(a.name) - rank(b.name) || (FALLBACK_FOOD_POINTS[b.name] ?? 0) - (FALLBACK_FOOD_POINTS[a.name] ?? 0));
+    return items[0] ?? null;
+  }
   items.sort((a, b) => (FALLBACK_FOOD_POINTS[b.name] ?? 0) - (FALLBACK_FOOD_POINTS[a.name] ?? 0));
   return items[0] ?? null;
 }
@@ -743,6 +790,8 @@ export function fleeStart(bot: FloorBody, state: FloorState, now: number): FleeS
     state.engagements.fleeRefused = (state.engagements.fleeRefused ?? 0) + 1;
     state.fleeRefusedUntil = now + FLEE_REFUSAL_CACHE_MS;
     endEpisode();
+    // Not standing there to be hit: the body walls itself in, or climbs out of reach, where it is (the tick's shelter, below).
+    if (now - (state.shelterAt ?? -Infinity) >= SHELTER_GAP_MS) { state.shelterWanted = true; state.shelterNearest = threat.nearest; }
     if (now - (state.fleeRefusedNotedAt ?? -Infinity) >= FLEE_REFUSAL_NOTE_GAP_MS) {
       state.fleeRefusedNotedAt = now;
       try { bot.reflexLedger?.note('flee', '低体力だが安全な逃げ道が無く走れなかった', 'failed'); } catch { /* a report must not change what the reflex did */ }
@@ -814,6 +863,33 @@ export async function runLowHealthFlee(bot: FloorBody, port: FloorBody, tickMs =
   }
   const moved = bot.entity ? bot.entity.position.distanceTo(origin) : 0;
   return { success: true, result: ticks > 0 ? '低体力のため敵から離れた' : '離れる必要がなくなった（または安全な逃げ道がない）', moved, ended };
+}
+
+/**
+ * What a refused flee falls back on: a one-cell shelter built round the body where it stands (slit_shelter: SHELTER_BLOCKS whole blocks
+ * and SHELTER_SLABS slabs, and no enemy within SHELTER_CLEAR, whose cell could not take a block), else a pillar to stand on out of a
+ * melee mob's reach (PILLAR_BLOCKS), else nothing. `nearest` is how far the nearest threat is.
+ */
+export function shelterChoice(bot: FloorBody, nearest = Infinity): { skill: 'build-around-self'; args: [string] } | { skill: 'tower-up'; args: [number] } | null {
+  const items = bot.inventory?.items() ?? [];
+  const count = (test: (name: string) => boolean) => items.filter(item => test(item.name)).reduce((sum, item) => sum + ((item as { count?: number }).count ?? 1), 0);
+  const blocks = count(name => WALL_BLOCKS.has(name)), slabs = count(name => name.endsWith('_slab'));
+  const has = (name: string) => { try { return !!bot.instantSkills?.getSkill(name); } catch { return false; } };
+  if (blocks >= SHELTER_BLOCKS && slabs >= SHELTER_SLABS && nearest > SHELTER_CLEAR && has('build-around-self')) return { skill: 'build-around-self', args: [SHELTER_PLAN] };
+  if (blocks >= PILLAR_BLOCKS && has('tower-up')) return { skill: 'tower-up', args: [PILLAR_BLOCKS] };
+  return null;
+}
+
+/**
+ * Runs a body skill as the work of the floor's own action (a safety lease): the skill moves the body through a motor port of it,
+ * and is handed its own body back at the end, as `callSkill` does for a nested skill.
+ */
+async function runBodySkill(bot: FloorBody, name: string, args: unknown[]): Promise<{ success: boolean; result: string }> {
+  const skill = bot.instantSkills?.getSkill(name) as { bot: unknown; rootBot?: unknown; runImpl(...args: unknown[]): Promise<{ success: boolean; result: string }> } | undefined;
+  if (!skill) return { success: false, result: `${name}が無い` };
+  const host = skill.rootBot ?? skill.bot, port = createMotorPort(bot as any);
+  skill.bot = port;
+  try { return await skill.runImpl(...args); } finally { if (skill.bot === port) skill.bot = host; }
 }
 
 export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floorConfig(), options: { fleeTickMs?: number; now?: () => number } = {}): void {
@@ -891,6 +967,20 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
           .catch(() => undefined).finally(() => { state.busy = null; });
         return;
       }
+      // The flee found no way out: a shelter where the body stands, if the blocks are there (once in 20 s).
+      if (state.shelterWanted) {
+        state.shelterWanted = false;
+        let choice: ReturnType<typeof shelterChoice> = null;
+        try { choice = !hasActiveSafetyLease(bot) && !escapeRunning(bot) && (bot.health ?? 20) > 0 ? shelterChoice(bot, state.shelterNearest) : null; } catch { choice = null; }
+        if (choice) {
+          state.shelterAt = now(); state.busy = 'flee';
+          const detail = choice.skill === 'build-around-self' ? '逃げ道が無いため、その場を囲った（build-around-self）' : '逃げ道が無いため、柱に登った（tower-up）';
+          log.warn(`🧱 低体力で逃げ道なし: ${choice.skill}`);
+          void takeNoted('flee', detail, 'floor-shelter', FLOOR_FLEE_PRIORITY, SHELTER_TIMEOUT_MS[choice.skill], () => runBodySkill(bot, choice!.skill, choice!.args))
+            .catch(() => undefined).finally(() => { state.busy = null; });
+          return;
+        }
+      }
     }
     if (!budget && Date.now() < state.retryAt) return;
     let food: Item | null = null, armor: ReturnType<typeof floorArmorChoice> = null;
@@ -912,8 +1002,15 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
       log.info(`🍖 食べる: ${food.name}（体力 ${bot.health} / 満腹度 ${bot.food}）`);
       const held = bot.heldItem;
       void takeNoted('eat', `食事（${food.name}）`, 'floor-eat', FLOOR_EAT_PRIORITY, 6000, async () => {
-        await bot.equip!(food!, 'hand'); await bot.consume!();
-        if (held && held.name !== food!.name) await bot.equip!(held, 'hand').catch(() => undefined);
+        try { await bot.equip!(food!, 'hand'); await bot.consume!(); }
+        finally {
+          // What was in hand before the meal goes back, also when the meal was cut off: a fight went on with mutton in hand (run 16).
+          // Found again by name: the stack the body held may have moved slots while the food was in hand.
+          if (held && held.name !== food!.name) {
+            const again = (bot.inventory?.items() ?? []).find(item => item.name === held.name) ?? held;
+            await bot.equip!(again, 'hand').catch(() => undefined);
+          }
+        }
         return { success: true, result: `${food!.name}を食べた` };
       }, 'eat').then(result => { if (!result?.success) failed(); })
         .catch(() => failed()).finally(() => { state.busy = null; });

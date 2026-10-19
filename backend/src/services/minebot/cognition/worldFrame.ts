@@ -8,6 +8,7 @@ import { isSealedIn } from '../utils/shelter.js';
 import { builtAroundStatus } from '../utils/builtAround.js';
 import { creeperLit } from '../utils/creeperFuse.js';
 import { backgroundJobs } from '../execution/backgroundJobs.js';
+import { bedWool, descentKitNotice, type GateBody } from '../utils/nightGate.js';
 
 /** The shelter check, for whatever stands in for a body here (a cached self-state has no world to read). */
 function sealedIn(bot: unknown): boolean {
@@ -125,6 +126,14 @@ function survivalMargin(bot: unknown, health: number | null, food: number | null
     regenerating: food >= 18,
     foodItems: foods ? inventory.filter(item => item.name in foods).reduce((sum, item) => sum + item.count, 0) : 0,
     ...(hitsLeft ? { hitsLeft } : {}),
+    ...(() => {
+      // The night gate's kit, near nightfall, and the wool towards a bed (utils/nightGate): said only when something is short.
+      try {
+        const kit = timeOfDay === null ? undefined : descentKitNotice(bot as GateBody);
+        const wool = bedWool(bot as GateBody);
+        return { ...(kit ? { descentKit: kit } : {}), ...(wool ? { bedWool: wool } : {}) };
+      } catch { return {}; }
+    })(),
   };
 }
 

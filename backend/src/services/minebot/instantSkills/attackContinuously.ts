@@ -6,6 +6,8 @@ import { reflexPromptText } from '../utils/floorConfig.js';
 import { gotoSafe } from '../utils/gotoSafe.js';
 import { actionDelay } from '../execution/observedWait.js';
 import { visiblePointOn } from '../utils/sightLine.js';
+import { WOOL_COLORS } from '../utils/nightGate.js';
+import type { Vec3 } from 'vec3';
 
 const { goals } = pathfinder;
 const log = createLogger('Minebot:Skill:attackContinuously');
@@ -19,6 +21,17 @@ const log = createLogger('Minebot:Skill:attackContinuously');
  */
 const DROP_COLLECT_BUDGET_MS = 8_000;
 const DROP_COLLECT_RADIUS = 10;
+/** Drops are also looked for this close to where the target was last seen alive. */
+const DROP_NEAR_KILL = 6;
+
+/** A sheep's wool, from its metadata (the `wool` byte: colour in the low four bits, shorn at 0x10), or null when unknown. */
+export function sheepWool(bot: { registry?: any }, entity: { metadata?: unknown[] }): { color: string; sheared: boolean } | null {
+  const keys: string[] | undefined = bot.registry?.entitiesByName?.sheep?.metadataKeys;
+  const index = Array.isArray(keys) && keys.includes('wool') ? keys.indexOf('wool') : 17;
+  const value = entity.metadata?.[index];
+  if (typeof value !== 'number') return null;
+  return { color: WOOL_COLORS[value & 0x0f], sheared: (value & 0x10) !== 0 };
+}
 /** From the eyes to the nearest point of a target's body within which a blow lands. */
 const HOLD_REACH = 3;
 
@@ -60,12 +73,23 @@ class AttackContinuously extends InstantSkill {
         description: 'trueにすると、その場から動かず、手の届く所に来た対象だけを攻撃する（囲いの中や、壁の穴ごしに戦う時用。追いかけず、落とし物も取りに出ない）。デフォルト: false',
         default: false,
       },
+      {
+        name: 'color',
+        type: 'string',
+        description: '羊の毛の色で狙いを絞る（例: white。ベッドには同じ色の羊毛が3個要る）。毛を刈られた羊は狙わない。羊以外の対象には効かない',
+        default: '',
+      },
     ];
   }
 
-  async runImpl(entityName: string = '', maxAttacks: number = 30, maxDistance: number = 24, maxKills: number = 0, holdPosition: boolean = false) {
+  async runImpl(entityName: string = '', maxAttacks: number = 30, maxDistance: number = 24, maxKills: number = 0, holdPosition: boolean = false, color: string = '') {
     this.holding = holdPosition === true;
+    this.blows = new Map();
     try {
+      const woolColor = String(color ?? '').trim().toLowerCase().replace(/_wool$/, '');
+      if (woolColor && !(WOOL_COLORS as readonly string[]).includes(woolColor)) {
+        return { success: false, failureType: 'invalid_input', recoverable: false, result: `羊の色 ${woolColor} はありません（使える色: ${WOOL_COLORS.join(', ')}）` };
+      }
       const refuse = shouldRefuseAggressiveCombat(this.bot, entityName, this.holding);
       if (refuse) {
         return { success: false, result: refuse };
@@ -102,21 +126,28 @@ class AttackContinuously extends InstantSkill {
         }
         return hostileMobs.some(mob => name.includes(mob));
       };
+      // A colour asked for: a sheep of another colour, or one already shorn, is not a target (other kinds are not affected).
+      const matchesEntity = (entity: any): boolean => {
+        const name = String(entity?.name ?? '').toLowerCase();
+        if (!matchesTarget(name)) return false;
+        if (!woolColor || name !== 'sheep') return true;
+        const wool = sheepWool(this.bot, entity);
+        return !!wool && !wool.sheared && wool.color === woolColor;
+      };
 
-      const targetDesc = targetNames.length > 0
+      const targetDesc = (targetNames.length > 0
         ? (targetNames.length <= 3 ? targetNames.join('/') : `${targetNames.slice(0, 3).join('/')}等`)
-        : '敵対的Mob';
+        : '敵対的Mob') + (woolColor ? `（${woolColor}の羊）` : '');
 
       // ── 武器を装備 ──
-      const weaponEquipped = await this.equipBestWeapon();
+      let weaponEquipped = await this.equipBestWeapon();
 
       // ── 対象を検索 (広い範囲) ──
       const findTarget = () => this.bot.nearestEntity((entity) => {
         if (!entity || !entity.position) return false;
         const d = entity.position.distanceTo(this.bot.entity.position);
         if (d > maxDistance) return false;
-        const name = entity.name?.toLowerCase() || '';
-        return matchesTarget(name);
+        return matchesEntity(entity);
       });
 
       let target = findTarget();
@@ -132,6 +163,10 @@ class AttackContinuously extends InstantSkill {
       let attackCount = 0;
       let kills = 0;
       let lastTargetName = target.name || 'unknown';
+      /** Where the target was last seen alive: its drops lie there, wherever the body is when it is found dead. */
+      let lastSeenAt = target.position.clone();
+      /** The target the weapon was last chosen for: a new one gets the best weapon in hand again (a walk or a meal may have changed it). */
+      let armedFor: unknown = null;
       const killedNames: string[] = [];
       const allCollected: string[] = [];
       const startTime = Date.now();
@@ -148,7 +183,7 @@ class AttackContinuously extends InstantSkill {
           return {
             success: attackCount > 0,
             result: attackCount > 0
-              ? `中断。${attackCount}回攻撃${killInfo}（${weaponEquipped}使用）`
+              ? `中断。${attackCount}回攻撃${killInfo}（${this.describeBlows()}）`
               : '中断されました',
           };
         }
@@ -164,7 +199,7 @@ class AttackContinuously extends InstantSkill {
           killedNames.push(lastTargetName);
           log.info(`🎯 ${lastTargetName}を撃破 (${kills}体目, ${attackCount}回攻撃)`, 'green');
 
-          const drops = await this.collectNearbyDrops();
+          const drops = await this.collectNearbyDrops(lastSeenAt);
           if (drops.length > 0) {
             allCollected.push(...drops);
             log.info(`📦 ドロップ回収: ${drops.join(', ')}`, 'green');
@@ -181,6 +216,7 @@ class AttackContinuously extends InstantSkill {
           continue;
         }
 
+        lastSeenAt = target.position.clone();
         const distance = target.position.distanceTo(this.bot.entity.position);
 
         if (distance > maxDistance) {
@@ -193,11 +229,13 @@ class AttackContinuously extends InstantSkill {
         // Holding its ground (inside a cover, at a hole in a wall): it does not go after anything. A blow is
         // struck only at what has come within a blow of the eyes, and the nearest of those is the one struck.
         if (this.holding) {
-          const inReach = this.nearestInReach(matchesTarget);
+          const inReach = this.nearestInReach(matchesEntity);
           if (inReach) {
             target = inReach.entity as NonNullable<typeof target>;
             lastTargetName = target.name || 'unknown';
+            if (armedFor !== target || !this.holdsWeapon(weaponEquipped)) { weaponEquipped = await this.equipBestWeapon(); armedFor = target; }
             await this.bot.lookAt(inReach.point);
+            this.noteBlow();
             await this.bot.attack(target);
             attackCount++;
             await actionDelay(this.bot, weaponEquipped.includes('axe') ? 900 : weaponEquipped.includes('sword') ? 550 : 200);
@@ -211,10 +249,13 @@ class AttackContinuously extends InstantSkill {
         }
 
         // ── 追跡: パスファインダーで安全に近づく ──
-        if (distance > 3.5) {
+        // Within a blow means a point of the target's body within three blocks of the eyes, as the server counts it. A blow
+        // struck from 4.5 m (feet to feet) at a chicken missed: four chickens took nineteen blows (run 16).
+        let aim = visiblePointOn(this.bot as any, target, HOLD_REACH);
+        if (!aim && distance > 2.5) {
           const tp = target.position;
           try {
-            await gotoSafe(this.bot, new goals.GoalNear(tp.x, tp.y, tp.z, 3), {
+            await gotoSafe(this.bot, new goals.GoalNear(tp.x, tp.y, tp.z, 2), {
               timeoutMs: Math.min(6000, Math.max(2500, distance * 250)),
               stuckAbortCount: 3,
               logStuck: false,
@@ -222,12 +263,21 @@ class AttackContinuously extends InstantSkill {
           } catch { /* ignore */ }
           this.stopMovement();
           if (!target.isValid) continue;
+          lastSeenAt = target.position.clone();
+          aim = visiblePointOn(this.bot as any, target, HOLD_REACH);
         }
 
         // ── 攻撃 ──
+        // The best weapon back in hand for each new target, and whenever the hand holds something else: the walk puts blocks and
+        // tools in hand, a meal puts food there, and the blows went in with them while the result said "stone_sword" (run 16).
+        if (target.isValid && (armedFor !== target || !this.holdsWeapon(weaponEquipped))) {
+          weaponEquipped = await this.equipBestWeapon();
+          armedFor = target;
+        }
         const attackDist = target.position.distanceTo(this.bot.entity.position);
-        if (attackDist <= 4.5 && target.isValid) {
-          await this.bot.lookAt(target.position.offset(0, target.height * 0.8, 0));
+        if (target.isValid && (aim || attackDist <= HOLD_REACH)) {
+          await this.bot.lookAt(aim ?? target.position.offset(0, target.height * 0.8, 0));
+          this.noteBlow();
           await this.bot.attack(target);
           attackCount++;
 
@@ -243,7 +293,7 @@ class AttackContinuously extends InstantSkill {
           killedNames.push(lastTargetName);
           log.info(`🎯 ${lastTargetName}を撃破 (${kills}体目, ${attackCount}回攻撃)`, 'green');
 
-          const drops2 = await this.collectNearbyDrops();
+          const drops2 = await this.collectNearbyDrops(lastSeenAt);
           if (drops2.length > 0) {
             allCollected.push(...drops2);
             log.info(`📦 ドロップ回収: ${drops2.join(', ')}`, 'green');
@@ -269,7 +319,7 @@ class AttackContinuously extends InstantSkill {
 
       if (attackCount === 0) {
         const near = this.holding ? Object.values(this.bot.entities).filter((entity: any) => entity?.position && entity !== this.bot.entity
-          && matchesTarget(String(entity.name ?? '').toLowerCase()) && entity.position.distanceTo(this.bot.entity.position) <= maxDistance).length : 0;
+          && matchesEntity(entity) && entity.position.distanceTo(this.bot.entity.position) <= maxDistance).length : 0;
         return {
           success: false,
           result: this.holding
@@ -281,7 +331,7 @@ class AttackContinuously extends InstantSkill {
       }
 
       // 周囲の同種エンティティを再スキャンして残りを報告
-      const remainingInfo = this.scanRemaining(matchesTarget, targetDesc, maxDistance);
+      const remainingInfo = this.scanRemaining(matchesEntity, targetDesc, maxDistance);
 
       const killInfo = kills > 0
         ? `${kills}体撃破（${killedNames.join(', ')}）`
@@ -289,7 +339,7 @@ class AttackContinuously extends InstantSkill {
       const collectInfo = allCollected.length > 0
         ? `。回収: ${allCollected.join(', ')}`
         : '';
-      const baseMsg = `${killInfo}、計${attackCount}回攻撃（${weaponEquipped}使用）${collectInfo}`;
+      const baseMsg = `${killInfo}、計${attackCount}回攻撃（${this.describeBlows()}）${collectInfo}`;
 
       return {
         success: true,
@@ -324,7 +374,7 @@ class AttackContinuously extends InstantSkill {
    * 周囲の対象エンティティを再スキャンし、残りの情報を返す。
    */
   private scanRemaining(
-    matchFn: (name: string) => boolean,
+    matchFn: (entity: any) => boolean,
     targetDesc: string,
     maxDistance: number,
   ): string | null {
@@ -337,7 +387,7 @@ class AttackContinuously extends InstantSkill {
         if (!name) continue;
         const d = entity.position.distanceTo(this.bot.entity.position);
         if (d > maxDistance) continue;
-        if (!matchFn(name)) continue;
+        if (!matchFn(entity)) continue;
 
         nearby.push({
           name: entity.name || name,
@@ -376,12 +426,12 @@ class AttackContinuously extends InstantSkill {
    * The nearest wanted target with a point of its body that the eyes can see within a blow (three blocks, as
    * the server allows), and that point. What is behind a wall is not struck at: see utils/sightLine.
    */
-  private nearestInReach(matches: (name: string) => boolean): { entity: any; point: any } | null {
+  private nearestInReach(matches: (entity: any) => boolean): { entity: any; point: any } | null {
     const eyes = this.bot.entity.position.offset(0, 1.62, 0);
     let best: { entity: any; point: any } | null = null, bestDistance = Infinity;
     for (const entity of Object.values(this.bot.entities) as any[]) {
       if (!entity?.position || entity === this.bot.entity || entity.isValid === false) continue;
-      if (!matches(String(entity.name ?? '').toLowerCase())) continue;
+      if (!matches(entity)) continue;
       if (entity.position.distanceTo(this.bot.entity.position) > HOLD_REACH + 3) continue;
       const point = visiblePointOn(this.bot as any, entity, HOLD_REACH);
       if (!point) continue;
@@ -391,7 +441,12 @@ class AttackContinuously extends InstantSkill {
     return best;
   }
 
-  private async collectNearbyDrops(): Promise<string[]> {
+  /**
+   * `at`: where the target was last seen alive. Its drops are looked for round there as well as round the body, and when none is
+   * seen, the body walks there once: three kills of run 16 left their drops lying (two of them a chicken's, one a sheep's wool),
+   * the search having looked only round the spot the body stood on when it struck.
+   */
+  private async collectNearbyDrops(at?: Vec3): Promise<string[]> {
     const before = this.snapshotInventory();
 
     // ドロップスポーン待ち
@@ -407,15 +462,29 @@ class AttackContinuously extends InstantSkill {
     // short of a bed (lab probe).
     const deadline = Date.now() + DROP_COLLECT_BUDGET_MS;
     const given = new Set<number>();
+    let wentToKill = false;
+    const isItem = (e: any) => e?.name === 'item' || String(e?.displayName) === 'Item';
     while (Date.now() < deadline && !this.shouldInterrupt()) {
       const item = this.bot.nearestEntity(
-        e => e.name === 'item' && !given.has(e.id) && e.position.distanceTo(this.bot.entity.position) < DROP_COLLECT_RADIUS,
+        e => isItem(e) && !given.has(e.id) && (e.position.distanceTo(this.bot.entity.position) < DROP_COLLECT_RADIUS
+          || (!!at && e.position.distanceTo(at) < DROP_NEAR_KILL)),
       );
-      if (!item) break;
+      if (!item) {
+        // Nothing seen from here: the drop may lie where the target fell, out of sight of where the body stood. One walk there.
+        if (at && !wentToKill && at.distanceTo(this.bot.entity.position) > 1.5) {
+          wentToKill = true;
+          try { await gotoSafe(this.bot, new goals.GoalNear(at.x, at.y, at.z, 1), { timeoutMs: 4000, stuckAbortCount: 3, logStuck: false }); } catch { /* ignore */ }
+          this.stopMovement();
+          await actionDelay(this.bot, 300);
+          continue;
+        }
+        break;
+      }
       const itemPos = item.position;
       if (itemPos.distanceTo(this.bot.entity.position) > 1) {
         try {
-          await gotoSafe(this.bot, new goals.GoalNear(itemPos.x, itemPos.y, itemPos.z, 0), { timeoutMs: 4000, stuckAbortCount: 3, logStuck: false });
+          // Within a block: the body picks up what is within a block of it, and an exact cell on a slope or an edge often has no route.
+          await gotoSafe(this.bot, new goals.GoalNear(itemPos.x, itemPos.y, itemPos.z, 1), { timeoutMs: 4000, stuckAbortCount: 3, logStuck: false });
         } catch { /* ignore */ }
         this.stopMovement();
       }
@@ -425,6 +494,22 @@ class AttackContinuously extends InstantSkill {
     }
 
     return this.inventoryDiff(before);
+  }
+
+  /** What each blow was struck with, by the hand at the time: blows by what was really held, not by the weapon first chosen. */
+  private blows = new Map<string, number>();
+  private noteBlow(): void {
+    const held = this.bot.heldItem?.name ?? '素手';
+    this.blows.set(held, (this.blows.get(held) ?? 0) + 1);
+  }
+  private describeBlows(): string {
+    const used = [...this.blows.entries()].sort((a, b) => b[1] - a[1]);
+    if (!used.length) return `${this.bot.heldItem?.name ?? '素手'}を手に`;
+    return used.length === 1 ? `${used[0][0]}使用` : `${used.map(([name, count]) => `${name}×${count}`).join('・')}で攻撃`;
+  }
+  /** The hand holds the weapon chosen (with no weapon carried there is nothing to put back in hand). */
+  private holdsWeapon(weapon: string): boolean {
+    return weapon === '素手' || this.bot.heldItem?.name === weapon;
   }
 
   /** インベントリ増分をポーリングで待つ（軽量版 waitForCollection） */

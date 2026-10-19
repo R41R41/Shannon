@@ -20,6 +20,7 @@ import { liquidAimPoints } from '../utils/liquidAim.js';
 import { holdsWater } from '../utils/waterBlocks.js';
 import { fallIsDangerous, stepOffDrop } from '../utils/edgeGuard.js';
 import { actionDelay } from '../execution/observedWait.js';
+import { nightGateFor } from '../utils/nightGate.js';
 
 const log = createLogger('Minebot:Skill:digBlockAt');
 
@@ -83,6 +84,13 @@ class DigBlockAt extends InstantSkill {
     let drop = 0;
     try { drop = stepOffDrop(without, position.x, position.y, position.z); } catch { return null; }
     return fallIsDangerous(drop, this.bot.health ?? 20) ? drop : null;
+  }
+
+  /** The night gate (utils/nightGate): a block below the feet and below y 16, at night without the kit, is not dug. */
+  protected preflight(_x: number, y: number) {
+    const feet = this.bot.entity?.position?.y;
+    if (typeof feet !== 'number' || !(Number(y) < Math.floor(feet))) return null;
+    return nightGateFor(this.bot, Number(y), `dig-block-at（y${Math.floor(Number(y))}）`);
   }
 
   async runImpl(x: number, y: number, z: number, collect: boolean = true, collectionPolicy: CollectionPolicy = 'target', takeEquipment: boolean = false, keepDrop: boolean = collect) {
