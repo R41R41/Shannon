@@ -3,7 +3,7 @@ import path from 'node:path';
 import { Vec3 } from 'vec3';
 import { createLogger } from '../../../utils/logger.js';
 import {
-  describeLastDeath, describeSeenReach, DRAGON_PLACES, DROP_LIFETIME_MS, emptyPlaceMemory, forgetPlaces, markSeen, mergeRadius, parsePlaceMemory,
+  describeLastDeath, describeSeenReach, DRAGON_PLACES, DROP_LIFETIME_MS, emptyPlaceMemory, forgetPlaces, makeRoom, markSeen, mergeRadius, parsePlaceMemory,
   placesDigest, recallPlaces, recordDeath, rememberPlace, seenReach, type PlaceKeep, type PlaceMemoryState, type RecalledPlace, type Sighting,
 } from '../../../modules/minecraftLearning/places.js';
 
@@ -35,8 +35,6 @@ const NEARBY_REREAD_TICKS = 200;
 const VILLAGE_SAMPLE_TICKS = 100;
 const SAVE_INTERVAL_MS = 30_000;
 const FACES: Array<[number, number, number]> = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
-/** What a body sets down to live by: the first of each it places in a dimension is its base. */
-const BASE_KINDS = new Set(['crafting_table', 'furnace', 'bed']);
 /** Containers whose contents are noted when opened (the kinds the reading of columns knows them by). */
 const CONTAINERS: Record<string, string> = { chest: 'chest', barrel: 'barrel' };
 /**
@@ -60,7 +58,7 @@ interface MemoryBot {
   world?: { getColumns?(): ColumnEntry[]; getColumn?(chunkX: number, chunkZ: number): any; getBlockStateId?(position: Vec3): number };
   blockAt?(position: Vec3): { stateId?: number; name?: string } | null;
   blockAtCursor?(maxDistance?: number): { name?: string; position: Vec3 } | null;
-  placeBlock?(reference: { position: Vec3 }, face: Vec3, ...rest: unknown[]): Promise<unknown>;
+  heldItem?: { name?: string } | null;
   inventory?: { slots?: Array<ItemLike | null> };
   entities?: Record<string, { name?: string; position?: Vec3 } | undefined>;
   currentWindow?: unknown;
@@ -251,7 +249,9 @@ export function installPlaceMemory(bot: MemoryBot, options: { file?: string } = 
       && place.position.x >= baseX && place.position.x < baseX + 16 && place.position.z >= baseZ && place.position.z < baseZ + 16
       && !sightings.some(sighting => sighting.kind === place.kind
         && Math.hypot(sighting.position.x - place.position.x, sighting.position.y - place.position.y, sighting.position.z - place.position.z) <= mergeRadius(place.kind)));
-    for (const sighting of sightings) rememberPlace(memory.state, sighting, now, from());
+    // Room is made once for the column (a column can bring dozens of sightings).
+    for (const sighting of sightings) rememberPlace(memory.state, sighting, now, from(), { later: true });
+    makeRoom(memory.state, now, from());
     if (markSeen(memory.state, where, done.chunkX, done.chunkZ) || sightings.length || forgotten) dirty = true;
     memory.stats.columnsRead++; memory.stats.forgotten += forgotten;
     memory.stats.totalReadMs += done.startedReadMs;
@@ -303,7 +303,8 @@ export function installPlaceMemory(bot: MemoryBot, options: { file?: string } = 
     const now = Date.now();
     recordDeath(memory.state, { at: now, dimension: dimension(), position: { x: Math.floor(position.x), y: Math.floor(position.y), z: Math.floor(position.z) },
       lost: [...carried], nearMs: 0, ...(deathMessage && now - deathMessage.at < DEATH_MESSAGE_MS ? { cause: deathMessage.text } : {}) });
-    deathMessage = null; deathAwaitingRespawn = true; dirty = true;
+    // A body that died next to a portal did not go through it: the respawn is not its other end.
+    deathMessage = null; deathAwaitingRespawn = true; lastPortal = null; dirty = true;
   });
   bot.on('message', (message: any) => {
     const key = String(message?.translate ?? '');
@@ -333,29 +334,29 @@ export function installPlaceMemory(bot: MemoryBot, options: { file?: string } = 
     }
     return null;
   };
-  /** One bed holds the respawn point: the one before it stays a kept bed, no longer the respawn. */
+  /** One bed holds the respawn point: the one before it is an ordinary bed again (unless it was the base). */
   const setRespawn = (position: Vec3) => {
-    for (const place of memory.state.places) if (place.keep === 'respawn') { place.keep = 'base'; if (place.note === 'リスポーン地点') delete place.note; }
+    for (const place of memory.state.places) if (place.keep === 'respawn') { delete place.keep; if (place.note === 'リスポーン地点') delete place.note; }
     memory.remember('bed', position, { keep: 'respawn', note: 'リスポーン地点' });
   };
-  // What the body sets down itself: the first crafting table, bed and furnace in a dimension are its base.
-  const placeBlock = bot.placeBlock;
-  if (typeof placeBlock === 'function') {
-    bot.placeBlock = async (reference, face, ...rest) => {
-      try { return await placeBlock.call(bot, reference, face, ...rest); }
-      finally {
-        try {
-          const position = reference?.position?.plus?.(face);
-          const name = position ? bot.blockAt?.(position)?.name : undefined;
-          const kind = name?.endsWith('_bed') ? 'bed' : name;
-          if (position && kind && BASE_KINDS.has(kind)) {
-            const first = !memory.state.places.some(place => place.kind === kind && place.dimension === dimension() && (place.keep === 'base' || place.keep === 'respawn'));
-            memory.remember(kind, position, first ? { keep: 'base', note: '拠点' } : {});
-          }
-        } catch { /* the placement's own answer stands */ }
-      }
-    };
-  }
+  /**
+   * What the body sets down itself: the first crafting table, bed and furnace in a dimension are its base. Told by the
+   * world, not by a wrapped call (the placing methods are replaced by later plugins, and some skills place by another
+   * one): such a block appears beside the body just after it held one.
+   */
+  let held: { name: string; at: number } | null = null;
+  bot.on('blockUpdate', (_old: unknown, block: { name?: string; position?: Vec3 } | null) => {
+    const name = block?.name;
+    if (!name || !(name === 'crafting_table' || name === 'furnace' || name.endsWith('_bed')) || !block.position) return;
+    try {
+      const body = bot.entity?.position;
+      if (!body || !held || Date.now() - held.at > 1500 || block.position.distanceTo(body) > 6) return;
+      if (!(held.name === name || (name.endsWith('_bed') && held.name.endsWith('_bed')))) return;
+      const kind = name.endsWith('_bed') ? 'bed' : name;
+      const first = !memory.state.places.some(place => place.kind === kind && place.dimension === dimension() && place.keep === 'base');
+      memory.remember(kind, block.position, first ? { keep: 'base', note: '拠点' } : {});
+    } catch { /* the memory is optional */ }
+  });
   // A chest's contents, noted on the place when it is opened and again when it is closed (after taking or putting).
   let containerWatch: (() => void) | null = null;
   bot.on('windowOpen', (window: any) => {
@@ -413,9 +414,11 @@ export function installPlaceMemory(bot: MemoryBot, options: { file?: string } = 
   bot.on('login', seedLoadedColumns);
   // Spawn also covers plugin installation before login and a later respawn/dimension switch.
   // An unfinished column belongs to the previous world, never the new dimension.
+  // The arrival is read a few ticks after the spawn: the spawn comes with the health, which may be ahead of the position.
+  let pairInTicks = 0;
   bot.on('spawn', () => {
     job = null; queue.clear(); seedLoadedColumns();
-    try { pairPortal(); } catch { /* the memory is optional */ }
+    pairInTicks = 10;
     if (deathAwaitingRespawn) {
       deathAwaitingRespawn = false;
       // keepInventory: the pack comes back with the body, so nothing lies at the place of death.
@@ -440,6 +443,9 @@ export function installPlaceMemory(bot: MemoryBot, options: { file?: string } = 
         const chunkX = Math.floor(bot.entity.position.x / 16), chunkZ = Math.floor(bot.entity.position.z / 16);
         for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) enqueue(chunkX + dx, chunkZ + dz);
       }
+      const hand = bot.heldItem?.name;
+      if (hand) held = { name: hand, at: Date.now() };
+      if (pairInTicks > 0 && --pairInTicks === 0) pairPortal();
       if (tick % 5 === 0 && bot.entity?.position && bot.blockAt?.(bot.entity.position.floored())?.name === 'nether_portal') {
         lastPortal = { dimension: dimension(), position: bot.entity.position.floored(), at: Date.now() };
       }

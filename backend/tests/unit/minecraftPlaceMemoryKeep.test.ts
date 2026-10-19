@@ -52,11 +52,15 @@ describe('the remembered places fit what a decision keeps, with what the task ne
     const state = emptyPlaceMemory();
     for (let n = 0; n < 12; n++) rememberPlace(state, { kind: `kind_${n}`, dimension: overworld, position: { x: n, y: 64, z: n } }, 1);
     rememberPlace(state, { kind: 'bed', dimension: overworld, position: { x: 400, y: 64, z: 0 }, keep: 'respawn', note: 'リスポーン地点' }, 1);
+    rememberPlace(state, { kind: 'crafting_table', dimension: overworld, position: { x: 450, y: 64, z: 0 }, keep: 'base', note: '拠点' }, 1);
     rememberPlace(state, { kind: 'nether_portal', dimension: overworld, position: { x: 600, y: 64, z: 0 }, keep: 'portal', note: '↔nether(-1234,64,-5678)' }, 1);
     rememberPlace(state, { kind: 'stronghold', dimension: overworld, position: { x: 1500, y: 20, z: -900 } }, 1);
     rememberPlace(state, { kind: 'village', dimension: overworld, position: { x: -300, y: 70, z: 10 } }, 1);
     const digest = placesDigest(state, here.position, overworld, 10, { ensure: DRAGON_PLACES });
-    expect(digest.base).toBe('400m 東 (400,64,0) bed リスポーン地点');
+    expect(digest.respawn).toBe('400m 東 (400,64,0) bed リスポーン地点');
+    expect(digest.base).toBe('450m 東 (450,64,0) crafting_table 拠点');
+    // Each place once: the base is not said again as the nearest crafting table, nor the respawn as the nearest bed.
+    expect(digest.crafting_table).toBeUndefined(); expect(digest.bed).toBeUndefined();
     expect(digest.nether_portal).toContain('↔nether(-1234,64,-5678)');
     expect(digest.stronghold).toBeDefined(); expect(digest.village).toBeDefined();
     expect(JSON.stringify(digest).length).toBeLessThanOrEqual(DIGEST_CHARACTERS);
@@ -84,6 +88,18 @@ describe('a death kept as one record (run 15 died four times and never went back
     expect(describeLastDeath(state, at + 40 * 60_000, here)).toContain('拾いに戻れる');
     // Read back from disk as written.
     expect(parsePlaceMemory(JSON.parse(JSON.stringify(state))).deaths).toEqual(state.deaths);
+    // A day on, it is no longer said.
+    expect(describeLastDeath(state, at + 25 * 60 * 60_000, here)).toBeUndefined();
+  });
+
+  it('keeps what to do at the end of the line when the line is long (fewer names, a shorter cause)', () => {
+    const state = emptyPlaceMemory();
+    recordDeath(state, { at: 0, dimension: 'the_nether', position: { x: -12345, y: 120, z: 23456 },
+      cause: 'Shannon was shot by Wither Skeleton using Bow of Unbelievable Length', nearMs: 0,
+      lost: ['netherite_pickaxe', 'diamond_chestplate', 'golden_carrot', 'blaze_rod', 'ender_pearl', 'obsidian'].map((name, n) => ({ name, count: n + 1 })) });
+    const line = describeLastDeath(state, 60_000, { dimension: 'the_nether', position: { x: 0, y: 64, z: 0 } })!;
+    expect(line.length).toBeLessThanOrEqual(200);
+    expect(line.endsWith('→拾いに戻れる')).toBe(true);
   });
 });
 
@@ -139,30 +155,56 @@ describe('the body notes its deaths, its base, its portals and its chests as the
     expect(bot.placeMemory.state.deaths.at(-1).cleared).toBe(true);
   });
 
-  it('keeps the first crafting table, bed and furnace it sets down as its base, and the bed of the respawn point', async () => {
-    const { bot, blocks } = body();
-    bot.nextPlaced = 'crafting_table';
-    await bot.placeBlock({ position: new Vec3(12, 63, 10) }, new Vec3(0, 1, 0));
-    bot.nextPlaced = 'crafting_table';
-    await bot.placeBlock({ position: new Vec3(30, 63, 10) }, new Vec3(0, 1, 0));
+  it('keeps the first crafting table, bed and furnace it sets down as its base (told by the world, whoever placed the call)', () => {
+    const { bot, ticks } = body();
+    const appear = (name: string, at: Vec3) => bot.emit('blockUpdate', { name: 'air', position: at }, { name, position: at });
+    // Not held: someone else's table, or one that fell into view.
+    appear('crafting_table', new Vec3(12, 64, 10));
+    expect(bot.placeMemory.state.places).toEqual([]);
+    bot.heldItem = { name: 'crafting_table' }; ticks(1); bot.heldItem = null;
+    appear('crafting_table', new Vec3(12, 64, 11));
+    appear('crafting_table', new Vec3(13, 64, 14));
+    // Out of reach of the body.
+    appear('crafting_table', new Vec3(40, 64, 10));
     const tables = bot.placeMemory.state.places.filter((place: any) => place.kind === 'crafting_table');
-    expect(tables.map((place: any) => place.keep ?? null)).toEqual(['base', null]);
+    expect(tables.map((place: any) => [place.position.x, place.keep ?? null])).toEqual([[12, 'base'], [13, null]]);
+    bot.heldItem = { name: 'white_bed' }; ticks(1);
+    appear('white_bed', new Vec3(9, 64, 10));
+    expect(bot.placeMemory.state.places.find((place: any) => place.kind === 'bed')).toMatchObject({ keep: 'base', note: '拠点' });
+  });
+
+  it('keeps the bed of the respawn point, and lets the one before it be an ordinary bed again', () => {
+    const { bot, blocks } = body();
     blocks.set(new Vec3(11, 64, 10).toString(), { name: 'red_bed' });
     bot.emit('message', { translate: 'block.minecraft.set_spawn', toString: () => 'Respawn point set' });
     expect(bot.placeMemory.state.places.find((place: any) => place.kind === 'bed')).toMatchObject({ keep: 'respawn', note: 'リスポーン地点' });
+    bot.entity.position = new Vec3(60.5, 64, 10.5); blocks.set(new Vec3(61, 64, 10).toString(), { name: 'blue_bed' });
+    bot.emit('message', { translate: 'block.minecraft.set_spawn', toString: () => 'Respawn point set' });
+    const beds = bot.placeMemory.state.places.filter((place: any) => place.kind === 'bed');
+    expect(beds.map((place: any) => [place.position.x, place.keep ?? null, place.note ?? null])).toEqual([[11, null, null], [61, 'respawn', 'リスポーン地点']]);
   });
 
   it('pairs the two ends of a portal gone through', () => {
     const { bot, blocks, ticks } = body();
     blocks.set(new Vec3(10, 64, 10).toString(), { name: 'nether_portal' });
     ticks(5);
-    bot.game.dimension = 'the_nether'; bot.entity.position = new Vec3(1.5, 70, 1.5);
-    bot.emit('spawn');
+    // The spawn comes with the health; the new position a moment later.
+    bot.game.dimension = 'the_nether'; bot.emit('spawn'); bot.entity.position = new Vec3(1.5, 70, 1.5);
+    ticks(10);
     const portals = bot.placeMemory.state.places.filter((place: any) => place.kind === 'nether_portal');
     expect(portals).toEqual([
       expect.objectContaining({ dimension: overworld, position: { x: 10, y: 64, z: 10 }, keep: 'portal', note: '↔nether(1,70,1)' }),
       expect.objectContaining({ dimension: 'the_nether', position: { x: 1, y: 70, z: 1 }, keep: 'portal', note: '↔overworld(10,64,10)' }),
     ]);
+  });
+
+  it('does not pair a portal with a respawn after dying beside it', () => {
+    const { bot, blocks, ticks } = body();
+    blocks.set(new Vec3(10, 64, 10).toString(), { name: 'nether_portal' });
+    ticks(5);
+    bot.health = 0; bot.emit('death');
+    bot.health = 20; bot.game.dimension = 'the_nether'; bot.emit('spawn'); bot.entity.position = new Vec3(1.5, 70, 1.5); ticks(10);
+    expect(bot.placeMemory.state.places.filter((place: any) => place.kind === 'nether_portal')).toEqual([]);
   });
 
   it('notes what a chest holds when it is opened and closed', () => {
