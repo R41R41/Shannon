@@ -65,40 +65,32 @@ describe('stair-mine past water (mb-body\'s lab: runs 9 and 18 stopped at a sour
       inventory: { items: () => items },
       blockAt: (p: Vec3) => {
         const name = cells[`${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`] ?? 'stone';
-        return { name, boundingBox: ['air', 'water'].includes(name) ? 'empty' : 'block', diggable: true, position: p };
+        return { name, boundingBox: ['air', 'water', 'lava'].includes(name) ? 'empty' : 'block', diggable: true, position: p };
       },
     } as any;
   }
 
-  it('puts a carried block into the water beside a block of the stair, then lets it be dug', async () => {
-    const cells: Record<string, string> = { '2,40,0': 'water' };
+  it('puts a carried block into the lava beside a block of the stair, then lets it be dug; never the lava under it', async () => {
+    const cells: Record<string, string> = { '2,40,0': 'lava', '1,39,0': 'lava' };
     const skill: any = new StairMine(waterBot(cells));
     skill.sleep = async () => {};
     skill.placeBlockSafe = vi.fn(async (name: string, at: Vec3) => { cells[`${at.x},${at.y},${at.z}`] = name; return true; });
-    expect(await skill.plugWaterBeside(new Vec3(1, 40, 0), 'cobblestone')).toBe(true);
+    expect(await skill.plugLavaBeside(new Vec3(1, 40, 0))).toBe(true);
     expect(skill.placeBlockSafe).toHaveBeenCalledWith('cobblestone', new Vec3(2, 40, 0));
+    expect(skill.placeBlockSafe).toHaveBeenCalledTimes(1);
+    expect(cells['1,39,0']).toBe('lava');
   });
 
   it('never fills the cells the body stands in, and says so when there is nothing to fill with', async () => {
-    const inBody: any = new StairMine(waterBot({ '0,40,0': 'water' }));
+    const inBody: any = new StairMine(waterBot({ '0,40,0': 'lava' }));
     inBody.placeBlockSafe = vi.fn(async () => true);
-    expect(await inBody.plugWaterBeside(new Vec3(1, 40, 0), 'cobblestone')).toBe(false);
+    expect(await inBody.plugLavaBeside(new Vec3(1, 40, 0))).toBe(false);
     expect(inBody.placeBlockSafe).not.toHaveBeenCalled();
-    const empty: any = new StairMine(waterBot({ '2,40,0': 'water' }, []));
+    const empty: any = new StairMine(waterBot({ '2,40,0': 'lava' }, []));
     empty.placeBlockSafe = vi.fn(async () => true);
-    expect(await empty.plugWaterBeside(new Vec3(1, 40, 0), 'cobblestone')).toBe(false);
+    expect(await empty.plugLavaBeside(new Vec3(1, 40, 0))).toBe(false);
   });
 
-  it('afloat, goes to the bank first; still in the water after, says where to go instead of four ways of "water"', async () => {
-    const bot = waterBot({});
-    bot.entity.isInWater = true;
-    const skill: any = new StairMine(bot);
-    skill.callSkill = vi.fn(async () => ({ success: false, result: '岸が見つかりません' }));
-    const result = await skill.runImpl(10, 'east');
-    expect(skill.callSkill).toHaveBeenCalledWith('leave-water');
-    expect(result).toMatchObject({ success: false, failureType: 'stair_progress_blocked' });
-    expect(result.result).toContain('水の中からは階段を掘れません');
-  });
 });
 
 const { EventEmitter } = await import('node:events');
