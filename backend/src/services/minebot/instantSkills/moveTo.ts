@@ -357,14 +357,15 @@ class MoveTo extends InstantSkill {
           blocked: () => hostileNear(this.bot as any, 16) || String((this.bot as any).minebotControlState ?? '').startsWith('emergency'),
         });
       };
-      let gotoResult = await gotoSafe(this.bot, goal, { timeoutMs: travelBudgetMs, rockTravel, tunnelTidy });
+      const tunnelPillar = (height: number) => this.callSkill('tower-up', height);
+      let gotoResult = await gotoSafe(this.bot, goal, { timeoutMs: travelBudgetMs, rockTravel, tunnelTidy, tunnelPillar });
       // Still in the water and not there: the pathfinder plans no step up out
       // of a liquid. Climb the bank at the waterline, then travel on from land.
       if (waterLevelUnderBody(this.bot as any) !== null && !this.shouldInterrupt()
         && (!gotoResult.success || !goal.isEnd(this.bot.entity.position.floored() as unknown as Move))
         && await swimOntoBank(this.bot as any, x, z)) {
         log.info('🏊 水際の岸へ泳ぎ上がった。陸から移動を続ける');
-        gotoResult = await gotoSafe(this.bot, goal, { timeoutMs: Math.max(5_000, travelBudgetMs - (Date.now() - travelStartedAt)), rockTravel, tunnelTidy });
+        gotoResult = await gotoSafe(this.bot, goal, { timeoutMs: Math.max(5_000, travelBudgetMs - (Date.now() - travelStartedAt)), rockTravel, tunnelTidy, tunnelPillar });
       }
       if (gotoResult.stuckBlock) stuckBlockRef.info = gotoResult.stuckBlock;
       if (!gotoResult.success) executorActivity = gotoResult.activity ?? null;

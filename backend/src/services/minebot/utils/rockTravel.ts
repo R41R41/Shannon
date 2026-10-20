@@ -91,8 +91,10 @@ export function chooseRockTravel(bot: CustomBot, goal: Goal, env: NodeJS.Process
   const walk = walkOnlyEstimate(bot, goal);
   const plan = planStairLine(feet, aim);
   let tunnel: { cells: Vec3[]; seconds: number; digs: number } | null = null;
+  let tunnelWhy = plan.cells.length === 0 ? 'no_plan' : `short_by_${plan.shortBy}`;
   if (plan.cells.length > 0 && plan.shortBy <= MAX_SHORT_BY) {
     const estimate = estimateCells(bot, feet, plan.cells);
+    tunnelWhy = estimate.why ?? 'ok';
     if (estimate.feasible) {
       const uncut = plan.cells.length - estimate.stoppedAt;
       tunnel = { cells: plan.cells, seconds: (estimate.ms + uncut * UNCUT_MS_PER_CELL) / 1000, digs: estimate.digs };
@@ -103,5 +105,5 @@ export function chooseRockTravel(bot: CustomBot, goal: Goal, env: NodeJS.Process
   }
   if (walk && (!tunnel || walk.seconds <= tunnel.seconds + WALK_PREFERENCE_MS / 1000)) return { mode: 'walk', movements: walk.movements, seconds: walk.seconds };
   if (tunnel) return { mode: 'cells', cells: tunnel.cells, seconds: tunnel.seconds, source: 'tunnel', digs: tunnel.digs };
-  return { mode: 'default', why: 'nothing_fits' };
+  return { mode: 'default', why: `nothing_fits（地面を歩く道: ${walk ? 'あり' : 'なし'}、掘る道: ${tunnelWhy}）` };
 }

@@ -70,11 +70,24 @@ describe('the shape of a tunnel (utils/stairLine)', () => {
     expect(plan.shortBy).toBe(0);
   });
 
-  it('says how many levels are left when the height asked is more than the way along', () => {
-    const plan = planStairLine(new Vec3(0, 93, 0), { x: 4, y: 60, z: 0 });
-    expect(plan.cells).toHaveLength(4);
-    expect(plan.shortBy).toBe(33 - 4);
-    expect(planStairLine(new Vec3(0, 93, 0), { x: 0, y: 60, z: 0 })).toMatchObject({ cells: [], shortBy: 33 });
+  it('takes the levels over the stair straight: a shaft first going down, a pillar last going up (run 21: 32 m down in 19 m, 40 m up in 9 m)', () => {
+    const down = planStairLine(new Vec3(0, 93, 0), { x: 4, y: 60, z: 0 });
+    expect(down.cells).toHaveLength(33);
+    expect(down.shortBy).toBe(0);
+    // 29 levels straight down in the first column, then 4 stair steps down
+    expect(down.cells.slice(0, 29).every(c => c.x === 0 && c.z === 0)).toBe(true);
+    expect(down.cells.slice(29).map(c => c.x)).toEqual([1, 2, 3, 4]);
+    expect(down.cells.at(-1)).toMatchObject({ x: 4, y: 60, z: 0 });
+    const up = planStairLine(new Vec3(0, 57, 0), { x: 9, y: 97, z: 0 });
+    expect(up.cells.slice(0, 9).map(c => c.x)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(up.cells.slice(9).every(c => c.x === 9)).toBe(true);
+    expect(up.cells.at(-1)).toMatchObject({ x: 9, y: 97, z: 0 });
+    let from = new Vec3(0, 93, 0);
+    for (const cell of down.cells) { expect(isStep(from, cell)).toBe(true); from = cell; }
+    // straight down or up with no way along at all
+    expect(planStairLine(new Vec3(0, 93, 0), { x: 0, y: 60, z: 0 }).cells).toHaveLength(33);
+    // past MAX_VERTICAL the rest is said
+    expect(planStairLine(new Vec3(0, 200, 0), { x: 0, y: 0, z: 0 })).toMatchObject({ shortBy: 130 });
   });
 });
 
@@ -112,6 +125,11 @@ describe('what a step needs and costs (utils/tunnelWalk)', () => {
     expect(cells([0, 70, 0], [1, 69, 0])).toEqual(['1,71,0', '1,70,0', '1,69,0']);
     expect(cells([0, 70, 0], [1, 70, 0])).toEqual(['1,70,0', '1,71,0']);
     expect(cells([0, 70, 0], [1, 71, 0])).toEqual(['0,72,0', '1,71,0', '1,72,0']);
+    // straight down opens the floor cell; straight up opens the cell over the head
+    expect(cells([0, 70, 0], [0, 69, 0])).toEqual(['0,69,0']);
+    expect(cells([0, 70, 0], [0, 71, 0])).toEqual(['0,72,0']);
+    expect(isStep(new Vec3(0, 70, 0), new Vec3(0, 69, 0))).toBe(true);
+    expect(isStep(new Vec3(0, 70, 0), new Vec3(0, 68, 0))).toBe(false);
     expect(stepNeeds(new Vec3(0, 70, 0), new Vec3(1, 69, 0)).floor).toMatchObject({ x: 1, y: 68, z: 0 });
     expect(stepNeeds(new Vec3(0, 70, 0), new Vec3(1, 71, 0)).floor).toMatchObject({ x: 1, y: 70, z: 0 });
   });

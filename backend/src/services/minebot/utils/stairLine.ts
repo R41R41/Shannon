@@ -16,22 +16,32 @@ import { nativeActionHost } from '../execution/ActionExecution.js';
 export interface StairPlan {
   /** The feet cells in order, the first a step from `from`. */
   cells: Vec3[];
-  /** Levels the plan could not take (the height asked is more than the steps along the level): left to whoever walks on from the end. */
+  /** Levels the plan could not take (more than MAX_VERTICAL): left to whoever walks on from the end. */
   shortBy: number;
 }
+
+/** The most levels taken straight down or up in one plan (a shaft or a pillar of the cells on the way, not a stair). */
+export const MAX_VERTICAL = 70;
 
 /**
  * Whole cells from `from` towards `to`: one step along the dominant axis at a time (a diagonal alternates x and z, an axis-aligned line
  * is straight) and a level changed on |dy| of the steps, spread evenly (a 1:1 stair when the height asked equals the way along).
+ *
+ * When the height asked is more than the way along (run 21: the water 32 m below and 19 m off, the furnace 40 m above and 9 m off), a
+ * stair at 1:1 cannot take it: the levels over are taken straight, a shaft down (dig the floor, drop) FIRST when going down, a pillar
+ * up (tower-up) LAST when going up. They are the stair's own reverse: the way back up the shaft is a pillar, the way back down is a drop.
  */
 export function planStairLine(from: Vec3, to: { x: number; y: number; z: number }): StairPlan {
   const ax = Math.floor(to.x) - from.x, az = Math.floor(to.z) - from.z, dy = Math.floor(to.y) - from.y;
   const along = Math.abs(ax) + Math.abs(az);
   const cells: Vec3[] = [];
-  if (along === 0) return { cells, shortBy: Math.abs(dy) };
   const levels = Math.min(Math.abs(dy), along);
   const sx = Math.sign(ax), sz = Math.sign(az), sy = Math.sign(dy);
-  let x = from.x, y = from.y, z = from.z, doneX = 0, doneZ = 0, taken = 0;
+  const straight = Math.min(MAX_VERTICAL, Math.abs(dy) - levels);
+  let x = from.x, y = from.y, z = from.z;
+  // Down: the shaft first.
+  if (sy < 0) for (let i = 0; i < straight; i++) cells.push(new Vec3(x, --y, z));
+  let doneX = 0, doneZ = 0, taken = 0;
   for (let i = 0; i < along; i++) {
     // The axis with the larger share of its way still to go; the x axis on a tie.
     const shareX = Math.abs(ax) === 0 ? -1 : (Math.abs(ax) - doneX) / Math.abs(ax);
@@ -41,9 +51,10 @@ export function planStairLine(from: Vec3, to: { x: number; y: number; z: number 
     if (wanted > taken) { y += sy; taken++; }
     cells.push(new Vec3(x, y, z));
   }
-  return { cells, shortBy: Math.max(0, Math.abs(dy) - levels) };
+  // Up: the pillar last.
+  if (sy > 0) for (let i = 0; i < straight; i++) cells.push(new Vec3(x, ++y, z));
+  return { cells, shortBy: Math.max(0, Math.abs(dy) - levels - straight) };
 }
-
 const key = (cell: { x: number; y: number; z: number }) => `${cell.x},${cell.y},${cell.z}`;
 const parse = (text: string) => { const [x, y, z] = text.split(',').map(Number); return new Vec3(x, y, z); };
 

@@ -64,6 +64,8 @@ export interface GotoSafeOptions {
   rockTravel?: boolean;
   /** Called every few steps of a tunnel cut by a rockTravel walk: the stone it brings in is thrown away here. */
   tunnelTidy?: () => Promise<void>;
+  /** Straight up by this many levels (tower-up): the climb of a rockTravel walk that is steeper than its stair. */
+  tunnelPillar?: (height: number) => Promise<unknown>;
 }
 
 export interface GotoSafeResult {
@@ -165,7 +167,10 @@ export async function gotoSafe(
   for (let round = 0; opts.rockTravel && round < MAX_ROCK_ROUNDS && Date.now() < deadline; round++) {
     assertActionActive(bot);
     const choice = chooseRockTravel(bot, goal);
-    if (choice.mode === 'default') { if (round === 0 && logStuck) log.debug(`岩の移動: 従来の経路探索（${choice.why}）`); break; }
+    if (choice.mode === 'default') {
+      if (round === 0 && logStuck) (choice.why.startsWith('nothing_fits') ? log.info : log.debug).call(log, `岩の移動: 従来の経路探索（${choice.why}）`);
+      break;
+    }
     if (choice.mode === 'walk') {
       log.info(`🥾 岩の多い遠い移動: 掘らず・置かずに地面を歩ける道があります（約${choice.seconds.toFixed(0)}秒）`);
       reportActionProgress(bot, 'navigate', { rockTravel: 'walk', seconds: Math.round(choice.seconds) }, true);
@@ -186,7 +191,7 @@ export async function gotoSafe(
     log.info(`⛏️ 岩の多い遠い移動: ${choice.source === 'trail' ? '掘ってきた道をたどります' : 'まっすぐ・斜めの階段で掘り進みます'}`
       + `（${choice.cells.length}歩、約${choice.seconds.toFixed(0)}秒${choice.digs ? `、掘る所${choice.digs}か所` : ''}）`);
     reportActionProgress(bot, 'navigate', { rockTravel: choice.source, steps: choice.cells.length, seconds: Math.round(choice.seconds) }, true);
-    const outcome = await walkCells(bot, choice.cells, { isEnd: feet => goal.isEnd(feet as never), deadline, tidy: opts.tunnelTidy });
+    const outcome = await walkCells(bot, choice.cells, { isEnd: feet => goal.isEnd(feet as never), deadline, tidy: opts.tunnelTidy, pillar: opts.tunnelPillar });
     log.info(`⛏️ トンネルの歩き: ${outcome.stopped}（${outcome.steps}歩、掘った${outcome.digs}か所${outcome.reason ? `、${outcome.reason}` : ''}）`);
     if (outcome.stopped === 'reached') return { success: true };
     if (outcome.stopped === 'timeout') return { success: false, error: 'timeout' };

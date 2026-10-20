@@ -18,6 +18,7 @@ import { assertActionActive } from '../execution/ActionExecution.js';
 import { chooseTool } from './toolChoice.js';
 import { digBlockVerified } from './digBlockVerified.js';
 import { trailOf } from './stairLine.js';
+import { shaftStepRefusal } from './shaftDown.js';
 
 const log = createLogger('Minebot:tunnelWalk');
 
@@ -45,12 +46,15 @@ export interface StepNeeds {
 
 /** Whether `to` is one legal step from `from`: one cell along x or z, a level up or down or none. */
 export function isStep(from: Cell, to: Cell): boolean {
-  return Math.abs(to.x - from.x) + Math.abs(to.z - from.z) === 1 && Math.abs(to.y - from.y) <= 1;
+  const across = Math.abs(to.x - from.x) + Math.abs(to.z - from.z), up = Math.abs(to.y - from.y);
+  return (across === 1 && up <= 1) || (across === 0 && up === 1);   // a vertical step: a shaft down or a pillar up
 }
 
 /** The cells a step passes and the floor it ends on (see the block comment of utils/stairLine for the shapes). */
 export function stepNeeds(from: Cell, to: Cell): StepNeeds {
   const dy = to.y - from.y;
+  // A shaft down opens the floor cell and drops onto the rock under it; a pillar up opens the cell over the head and stands on a block laid.
+  if (to.x === from.x && to.z === from.z) return dy < 0 ? { clear: [at(to)], floor: at(to, 0, -1) } : { clear: [at(from, 0, 2)], floor: at(from) };
   // Down: the column ahead at the head's height and the feet's height of the level left (walked into), and the cell stepped down to.
   if (dy < 0) return { clear: [at({ x: to.x, y: from.y, z: to.z }, 0, 1), at({ x: to.x, y: from.y, z: to.z }), at(to)], floor: at(to, 0, -1) };
   if (dy === 0) return { clear: [at(to), at(to, 0, 1)], floor: at(to, 0, -1) };
@@ -111,9 +115,39 @@ export function digRefusal(bot: WorldBot, cell: Cell, others: Cell[]): string | 
 
 export interface StepEstimate { ms: number; digs: number; extraDrop: number }
 
-/** What one step costs: null when it cannot be taken (a cell that must not be dug, no floor). */
-export function estimateStep(bot: WorldBot, from: Cell, to: Cell): StepEstimate | null {
+/** Blocks that can be laid under a pillar, and what a level of a pillar and of a shaft costs apart from digging. */
+const PILLAR_BLOCKS = new Set(['cobblestone', 'cobbled_deepslate', 'stone', 'deepslate', 'dirt', 'andesite', 'diorite', 'granite', 'tuff', 'netherrack']);
+const PILLAR_MS = 1300;
+const SHAFT_DROP_MS = 600;
+export function pillarBlocks(bot: WorldBot): number {
+  try { return bot.inventory.items().filter(item => PILLAR_BLOCKS.has(item.name)).reduce((sum, item) => sum + item.count, 0); } catch { return 0; }
+}
+
+/** The time to dig the cell with the tool that would be used (0 for an empty cell). */
+function digMs(bot: WorldBot, cell: Cell): number {
+  const block = blockOf(bot, cell);
+  if (!block || block.boundingBox === 'empty') return 0;
+  try {
+    const effects = (bot.entity as unknown as { effects?: unknown })?.effects ?? {};
+    const tool = chooseTool(block as never, bot.inventory.items() as never[], { requireHarvest: !!block.harvestTools, effects }) as { type: number } | null;
+    const time = Number(block.digTime?.(tool ? tool.type : null, false, false, false, [], effects));
+    return (Number.isFinite(time) && time > 0 ? time : 1500) + DIG_OVERHEAD_MS;
+  } catch { return 1500; }
+}
+
+/** What one step costs: null when it cannot be taken (a cell that must not be dug, no floor). `ctx.blocks`: what the pillars still have to lay. */
+export function estimateStep(bot: WorldBot, from: Cell, to: Cell, ctx: { blocks: number } = { blocks: pillarBlocks(bot) }): StepEstimate | null {
   const needs = stepNeeds(from, to);
+  if (to.x === from.x && to.z === from.z) {
+    // Straight down: the floor under the feet dug and dropped onto, only where the rock under it is whole (utils/shaftDown). Straight up: a pillar.
+    if (to.y < from.y) {
+      if (shaftStepRefusal(bot as never, new Vec3(from.x, from.y, from.z)) || digRefusal(bot, needs.clear[0], [])) return null;
+      return { ms: SHAFT_DROP_MS + digMs(bot, needs.clear[0]), digs: 1, extraDrop: 0 };
+    }
+    if (ctx.blocks < 1 || digRefusal(bot, needs.clear[0], [])) return null;
+    ctx.blocks--;
+    return { ms: PILLAR_MS + digMs(bot, needs.clear[0]), digs: blockOf(bot, needs.clear[0])?.boundingBox === 'empty' ? 0 : 1, extraDrop: 0 };
+  }
   const items = (() => { try { return bot.inventory.items(); } catch { return []; } })();
   const effects = (bot.entity as unknown as { effects?: unknown })?.effects ?? {};
   let ms = STEP_MOVE_MS, digs = 0;
@@ -136,7 +170,17 @@ export function estimateStep(bot: WorldBot, from: Cell, to: Cell): StepEstimate 
   return { ms: ms + drop * 200, digs, extraDrop: drop };
 }
 
-export interface PlanEstimate { feasible: boolean; ms: number; digs: number; steps: number; stoppedAt: number }
+export interface PlanEstimate { feasible: boolean; ms: number; digs: number; steps: number; stoppedAt: number; why?: string }
+
+/** Why a step cannot be taken (for the journal): the first thing in its way. */
+export function explainStep(bot: WorldBot, from: Cell, to: Cell): string {
+  const needs = stepNeeds(from, to);
+  const vertical = to.x === from.x && to.z === from.z;
+  if (vertical && to.y < from.y) return shaftStepRefusal(bot as never, new Vec3(from.x, from.y, from.z)) ?? digRefusal(bot, needs.clear[0], []) ?? 'ok';
+  for (const cell of needs.clear) { const refusal = digRefusal(bot, cell, vertical ? [] : needs.clear); if (refusal) return `${refusal}(${cell.x},${cell.y},${cell.z})`; }
+  if (vertical) return 'no_blocks_to_pillar';
+  return `no_floor(${needs.floor.x},${needs.floor.y},${needs.floor.z}:${blockOf(bot, needs.floor)?.name ?? 'unloaded'})`;
+}
 
 /**
  * The time of walking `cells` from `start`: the steps up to the first that cannot be taken (`stoppedAt` is its index, or the length).
@@ -144,13 +188,15 @@ export interface PlanEstimate { feasible: boolean; ms: number; digs: number; ste
  */
 export function estimateCells(bot: WorldBot, start: Cell, cells: Vec3[], minSteps = 3): PlanEstimate {
   let ms = 0, digs = 0, from: Cell = start, index = 0;
+  const ctx = { blocks: pillarBlocks(bot) };
   for (; index < cells.length; index++) {
-    const step = estimateStep(bot, from, cells[index]);
+    const step = estimateStep(bot, from, cells[index], ctx);
     if (!step) break;
     ms += step.ms; digs += step.digs;
     from = cells[index];
   }
-  return { feasible: index >= Math.min(minSteps, cells.length) && index > 0, ms, digs, steps: index, stoppedAt: index };
+  return { feasible: index >= Math.min(minSteps, cells.length) && index > 0, ms, digs, steps: index, stoppedAt: index,
+    why: index < cells.length ? `${index}/${cells.length}歩目: ${explainStep(bot, from, cells[index])}` : undefined };
 }
 
 export interface TunnelOutcome {
@@ -166,6 +212,8 @@ export interface WalkOptions {
   deadline: number;
   /** Called every few steps: the stone the tunnel brings in is thrown away here. */
   tidy?: () => Promise<void>;
+  /** Straight up by `height` levels (the tower-up skill): the pillar of a plan that climbs more than its stair can. */
+  pillar?: (height: number) => Promise<unknown>;
 }
 
 const sleep = (bot: CustomBot, ms: number) => actionDelay(bot, ms);
@@ -221,6 +269,40 @@ async function moveOneCell(bot: CustomBot, start: Cell, to: Cell, extraDrop: num
   }
 }
 
+/**
+ * One level straight down: the floor under the feet is dug and the body drops onto the rock under it (the shaft step of stair-mine,
+ * held to the same rules, utils/shaftDown). Null when it did, otherwise why not.
+ */
+async function shaftDownOne(bot: CustomBot, feet: Vec3): Promise<string | null> {
+  const refusal = shaftStepRefusal(bot as never, feet);
+  if (refusal) return refusal;
+  // The body's box has to be over this column alone, or it stays on the rim of the next.
+  const centre = feet.offset(0.5, 0, 0.5);
+  const off = () => Math.max(Math.abs(bot.entity.position.x - centre.x), Math.abs(bot.entity.position.z - centre.z));
+  if (off() > 0.2) {
+    try {
+      await bot.lookAt(centre.offset(0, 1.6, 0), true);
+      bot.setControlState('sneak', true);
+      bot.setControlState('forward', true);
+      for (let tick = 0; tick < 16 && off() > 0.15; tick++) { assertActionActive(bot); await sleep(bot, 50); }
+    } finally {
+      bot.setControlState('forward', false);
+      bot.setControlState('sneak', false);
+    }
+    if (off() > 0.2 || Math.floor(bot.entity.position.y) !== feet.y) return 'not_centred';
+  }
+  try { if (!(await digCell(bot, at(feet, 0, -1)))) return 'dig_failed'; } catch (error) {
+    if (/interrupt/i.test(String((error as Error)?.message))) throw error;
+    return `dig_failed:${String((error as Error)?.message ?? error).slice(0, 60)}`;
+  }
+  const deadline = Date.now() + 1500;
+  while (Date.now() < deadline && (Math.floor(bot.entity.position.y) >= feet.y || (bot.entity as unknown as { onGround?: boolean }).onGround === false)) {
+    assertActionActive(bot);
+    await sleep(bot, 50);
+  }
+  return Math.floor(bot.entity.position.y) === feet.y - 1 ? null : 'did_not_drop';
+}
+
 /** Walks the cells, one step at a time. Returns why it stopped and how far it got; the body stands where it stopped. */
 export async function walkCells(bot: CustomBot, cells: Vec3[], options: WalkOptions): Promise<TunnelOutcome> {
   const trail = trailOf(bot);
@@ -233,6 +315,33 @@ export async function walkCells(bot: CustomBot, cells: Vec3[], options: WalkOpti
     const next = cells[index];
     if (feet.x === next.x && feet.y === next.y && feet.z === next.z) continue;
     if (!isStep(feet, next)) return { stopped: 'off_line', steps, digs, reason: `(${feet.x},${feet.y},${feet.z})から(${next.x},${next.y},${next.z})は一歩ではありません` };
+    if (next.x === feet.x && next.z === feet.z) {
+      // A level straight down (a shaft) or a run of levels straight up (a pillar).
+      const cell = stepNeeds(feet, next).clear[0];
+      const refused = digRefusal(bot, cell, []);
+      if (refused) return { stopped: 'blocked', steps, digs, reason: `${refused}(${cell.x},${cell.y},${cell.z})` };
+      if (next.y < feet.y) {
+        const why = await shaftDownOne(bot, feet);
+        if (why) return { stopped: 'blocked', steps, digs, reason: `縦穴で下りられません(${why})` };
+        digs++;
+        trail.add(feet, bot.entity.position.floored());
+        steps++;
+        continue;
+      }
+      let run = 1;
+      while (cells[index + run] && cells[index + run].x === next.x && cells[index + run].z === next.z && cells[index + run].y === next.y + run) run++;
+      if (!options.pillar) return { stopped: 'blocked', steps, digs, reason: '直上登りの手段がありません' };
+      try { await options.pillar(run); } catch (error) {
+        if (/interrupt/i.test(String((error as Error)?.message))) throw error;
+        return { stopped: 'blocked', steps, digs, reason: `直上登りに失敗: ${String((error as Error)?.message ?? error).slice(0, 60)}` };
+      }
+      const gained = Math.floor(bot.entity.position.y) - feet.y;
+      for (let level = 0; level < gained; level++) trail.add(at(feet, 0, level), at(feet, 0, level + 1));
+      steps += Math.max(0, gained);
+      if (gained < run) return { stopped: 'blocked', steps, digs, reason: `直上登りが${Math.max(0, gained)}/${run}段で止まりました` };
+      index += run - 1;
+      continue;
+    }
     const needs = stepNeeds(feet, next);
     for (const cell of needs.clear) {
       const refusal = digRefusal(bot, cell, needs.clear);
