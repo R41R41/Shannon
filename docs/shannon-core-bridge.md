@@ -80,6 +80,26 @@ SHANNON_CORE_PLATFORM_REPLY_TIMEOUT_MS=55000
 - 心の側も `SHANNON_PLATFORM_REPLY=on` が必要（既定は 503）。契約は shannon-ios の `docs/platform-people-contract.md`「Replies」。
 - 実装: `backend/src/services/integration/shannonCoreBridge.ts`（`requestDiscordReply`）、`discordCompanionReply.ts`、`EventRouter.processDiscordMessage`。テスト: `tests/unit/shannonCoreBridge.test.ts`、`discordCompanionReply.test.ts`（loopback の偽の心）、`discordCompanionReplyRouting.test.ts`。
 
+## ボイスチャンネルも心が答える（dc-voice、2026-10-20、既定は切）
+
+`SHANNON_DC_VOICE=on` の時、VC の声を心の `POST /v1/platform/voice/turn`（NDJSON）に通し、返事は心の `POST /v1/platform/voice/speech`
+（ElevenLabs の PCM）で再生する。契約は shannon-ios の `docs/discord-voice-contract.md`。心の側にも `SHANNON_DC_VOICE=on` が要る（切の間は 503）。
+
+```dotenv
+SHANNON_DC_VOICE=on
+# VC にいる人（bot 以外）を人ごとに聞く。off なら PTT の人だけ（既定 on）
+SHANNON_DC_VOICE_OPEN_MIC=on
+# しゃべる口（getVoiceMouth().say / setSituation。既定 on）
+SHANNON_DC_VOICE_MOUTH=on
+# 長い発話の途中の相づち（既定 off）
+SHANNON_DC_VOICE_BACKCHANNEL=off
+```
+
+- 会話は `discord:<guildId>:<声の文字チャンネル>` で、`SHANNON_CORE_PLATFORM_BINDINGS_JSON` に結ばれたものだけ。束縛が無い・voiceMode が minebot・URL/token 未設定の時は旧の作り（PTT、Whisper、invokeGraph、VOICEPEAK）のまま。
+- 心の最初の行（decision）が 4 秒以内に来なければ、その発話は旧の作りに任せる。decision のあとの失敗では旧に落とさない（言った分は言ってある）。
+- 戻し方は `SHANNON_DC_VOICE` を外して再起動。
+- 実装: `services/discord/voice/`（`dcVoiceGuild.ts`、`utteranceCollector.ts`、`turnQueue.ts`、`bargeIn.ts`、`speechPlayer.ts`、`voiceMouth*.ts`）、`services/llm/voice/dcVoiceTurn.ts`、`services/integration/shannonCoreVoiceClient.ts`。テスト: `tests/unit/dcVoice*.test.ts`、`voiceMouth.test.ts`、`shannonCoreVoiceClient.test.ts`。
+
 ## 検証
 
 - `backend/tests/unit/shannonCoreBridge.test.ts`
