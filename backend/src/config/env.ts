@@ -22,6 +22,14 @@ function optional(name: string, fallback: string): string {
   return process.env[name] || fallback;
 }
 
+/** `on`/`true`/`1` -> true, `off`/`false`/`0` -> false, anything else (including unset) -> the fallback. */
+function dcVoiceSwitch(name: string, fallback: boolean): boolean {
+  const raw = (process.env[name] ?? '').trim().toLowerCase();
+  if (raw === 'on' || raw === 'true' || raw === '1') return true;
+  if (raw === 'off' || raw === 'false' || raw === '0') return false;
+  return fallback;
+}
+
 function minecraftCognitionMode(value: string): 'off' | 'shadow' | 'feedback' {
   const normalized = value.trim().toLowerCase();
   return normalized === 'shadow' || normalized === 'feedback' ? normalized : 'off';
@@ -125,6 +133,16 @@ export const config = {
     serverPort: optional('MINEBOT_COMPANION_SERVER_PORT', ''),
     serverVersion: optional('MINEBOT_COMPANION_SERVER_VERSION', ''),
     uiModBaseUrl: optional('MINEBOT_COMPANION_UI_MOD_BASE_URL', ''),
+  },
+
+  /**
+   * Her live lines about what happens to her Minecraft body (session dc-live; the API's SHANNON_MINECRAFT_LIVE_SPEECH writes them).
+   * Off unless MINEBOT_LIVE_SPEECH=on. Voice goes to the voice channel she is in; text goes to MINEBOT_LIVE_DISCORD_CHANNEL
+   * (`<guild id>:<channel id>`), the one channel she may write in unasked. Without a channel, only voice.
+   */
+  minebotLive: {
+    speech: optional('MINEBOT_LIVE_SPEECH', '') === 'on',
+    discordChannel: optional('MINEBOT_LIVE_DISCORD_CHANNEL', ''),
   },
 
   minecraftPlanner: {
@@ -245,6 +263,27 @@ export const config = {
     /** Also messages of people other than the bound owner. Default off. */
     replyPeopleEnabled: optional('SHANNON_CORE_PLATFORM_REPLY_PEOPLE', '') === 'true',
     replyTimeoutMs: Math.min(60_000, Math.max(5_000, parseInt(optional('SHANNON_CORE_PLATFORM_REPLY_TIMEOUT_MS', '55000'), 10) || 55_000)),
+    /**
+     * One head (owner 2026-10-20): every Discord message and every voice-channel utterance goes to the head's POST /v1/converse,
+     * bound or not, the owner's or anyone's; this runtime's own model (invokeGraph, VOICEPEAK) answers only when the head cannot.
+     * Default off (the paths above as they are).
+     */
+    oneHead: dcVoiceSwitch('SHANNON_ONE_HEAD', false),
+  },
+
+  /**
+   * dc-voice: Discord voice-channel conversation through the companion (the head's /v1/platform/voice/*).
+   * Everything is off unless SHANNON_DC_VOICE=on; with it off the legacy VC path (PTT, Whisper, invokeGraph, VOICEPEAK)
+   * behaves exactly as before. The sub-switches only matter while the parent is on.
+   */
+  dcVoice: {
+    enabled: dcVoiceSwitch('SHANNON_DC_VOICE', false),
+    /** Hear everyone in the VC (bots excluded), person by person. Off = PTT user only. Default on when the parent is on. */
+    openMic: dcVoiceSwitch('SHANNON_DC_VOICE', false) && dcVoiceSwitch('SHANNON_DC_VOICE_OPEN_MIC', true),
+    /** The "speaking mouth": event-driven one-liners into the VC (getVoiceMouth()). Default on when the parent is on. */
+    mouth: dcVoiceSwitch('SHANNON_DC_VOICE', false) && dcVoiceSwitch('SHANNON_DC_VOICE_MOUTH', true),
+    /** Short backchannel ("un") during a long utterance. Default off. */
+    backchannel: dcVoiceSwitch('SHANNON_DC_VOICE', false) && dcVoiceSwitch('SHANNON_DC_VOICE_BACKCHANNEL', false),
   },
 
   groq: {

@@ -9,7 +9,6 @@ import {
   MemoryZone,
   MinebotVoiceResponseOutput,
 } from '@shannon/common';
-import { File } from 'node:buffer';
 import OpenAI from 'openai';
 import { randomUUID } from 'node:crypto';
 import type { RequestEnvelope, ShannonGraphState } from '@shannon/common';
@@ -35,6 +34,7 @@ import {
   type DiscordNativeEvent,
 } from '../../common/adapters/index.js';
 import { logger } from '../../../utils/logger.js';
+import { isWhisperHallucination, transcribeWavWithWhisper } from './voiceStt.js';
 import { notifyUiModVoiceTranscript } from '../../minebot/integration/uiModVoice.js';
 
 const VOICE_ALLOWED_TOOLS = [
@@ -126,18 +126,10 @@ export class VoiceProcessor {
     } else {
       this.publishVoiceStatus(memoryZone, message.guildId, 'stt');
       try {
-        const audioBlob = new Blob([new Uint8Array(audioBuffer!)], { type: 'audio/wav' });
-        const audioFile = new File([audioBlob], 'voice.wav', { type: 'audio/wav' });
-
-        const sttClient = this.groqApiKey ? this.groqClient : this.openaiClient;
-        const sttModel = this.groqApiKey ? 'whisper-large-v3-turbo' : 'whisper-1';
-        const transcription = await sttClient.audio.transcriptions.create({
-          model: sttModel,
-          file: audioFile,
-          language: 'ja',
-          prompt: 'シャノンとの日常会話です。',
-        });
-        transcribedText = transcription.text.trim();
+        transcribedText = await transcribeWavWithWhisper(
+          { openaiClient: this.openaiClient, groqClient: this.groqClient, groqApiKey: this.groqApiKey },
+          audioBuffer!,
+        );
       } catch (error) {
         const sErr = classifyError(error, 'llm');
         logger.error(`[LLM] Whisper STT failed: ${formatErrorForLog(sErr)}`);
@@ -150,34 +142,7 @@ export class VoiceProcessor {
         return;
       }
 
-      const whisperHallucinations = [
-        'ご視聴ありがとうございました',
-        'ご視聴いただきありがとうございます',
-        'ご視聴頂きありがとうございました',
-        'チャンネル登録よろしくお願いします',
-        '字幕は自動生成されています',
-        'ご視聴ありがとうございます',
-        'おやすみなさい',
-        'Thanks for watching',
-        'Thank you for watching',
-        'Subscribe to my channel',
-        'Subtitles by',
-        'はじめしゃちょー',
-        'エンディング',
-        'チャンネル登録',
-        '高評価',
-        'いいねボタン',
-        'お気に入り登録',
-        '次の動画',
-        '次回の動画',
-        '次回へつづき',
-        'お楽しみに',
-        'ご覧いただき',
-        'グッドボタン',
-        'よろしくお願いします',
-        '最後までご視聴',
-      ];
-      if (whisperHallucinations.some(h => transcribedText.includes(h))) {
+      if (isWhisperHallucination(transcribedText)) {
         logger.info(`[LLM] Whisper hallucination filtered: "${transcribedText}"`, 'yellow');
         return;
       }

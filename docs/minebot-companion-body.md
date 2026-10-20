@@ -13,6 +13,8 @@
 | `MINEBOT_COMPANION_SERVER_PORT` | 表に無い新しいサーバー名の時だけ必要（他のサーバーのポートは拒否）。`shannon-home` では省略（書くなら表と同じ 25560 でなければ拒否） |
 | `MINEBOT_COMPANION_SERVER_VERSION` | 同上。表に無い名前の時だけ必要（`shannon-home` は表で 1.21.11） |
 | `MINEBOT_COMPANION_UI_MOD_BASE_URL` | 任意。そのワールドの UI Mod の受信サーバー（loopback）。省略時は表のポート（`shannon-home` は 8086） |
+| `MINEBOT_LIVE_SPEECH` | 任意。`on` の時だけ、心が書いた実況の一言（control の返事の `speech`、dc-live）を Discord へ出す。既定はオフ（オフなら poll に `liveRoom`・`speechReceipts` も付かない） |
+| `MINEBOT_LIVE_DISCORD_CHANNEL` | 任意。`<guild id>:<channel id>`（数字のみ）。声のチャンネルに居ない時に一言を文字で出してよい、唯一の場所。無ければ声だけ（ボイスの口は `services/discord/voice/voiceMouth.ts`） |
 
 一部だけ設定・不正な値は「オフ」で起動し、理由（`COMPANION_BODY_CONFIG_INCOMPLETE:…` など。トークンは含まない）を警告に出す。
 

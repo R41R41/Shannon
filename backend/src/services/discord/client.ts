@@ -69,6 +69,8 @@ import { splitDiscordMessage, sendLongMessage } from './utils.js';
 import { VoiceManager } from './voice/VoiceManager.js';
 import { createDiscordConversationTransport } from './conversationTransport.js';
 import { registerDiscordConversationTransport } from '../common/discordConversationPort.js';
+import { registerLiveSpeechSink } from '../common/liveSpeech.js';
+import { createDiscordLiveSpeechSink, liveTextTarget } from './liveSpeechSink.js';
 import { acceptsDiscordMessage } from './messageAcceptance.js';
 import {
   buildAcceptedClarificationAnswers,
@@ -145,6 +147,10 @@ export class DiscordBot extends BaseClient {
       ],
     });
     registerDiscordConversationTransport(createDiscordConversationTransport(this.client, () => this.status === 'running'));
+    // Her live lines about her Minecraft body (session dc-live): off unless MINEBOT_LIVE_SPEECH=on.
+    if (config.minebotLive.speech) {
+      registerLiveSpeechSink(createDiscordLiveSpeechSink(this.client, { isRunning: () => this.status === 'running', target: liveTextTarget(config.minebotLive.discordChannel) }));
+    }
 
     this.voiceManager = new VoiceManager(this.client, {
       getUserNickname: (user, guildId) => this.getUserNickname(user, guildId),

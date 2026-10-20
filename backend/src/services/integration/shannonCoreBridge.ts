@@ -1,4 +1,8 @@
 import type { RequestEnvelope } from '@shannon/common';
+import { ONE_HEAD_CONVERSE_PATH, converseAnswer, converseTextTurn } from './oneHeadConverse.js';
+import { createLogger } from '../../utils/logger.js';
+
+const logger = createLogger('OneHead', 'discord');
 
 export interface ShannonCoreBridgeConfiguration {
   url: string;
@@ -14,9 +18,14 @@ export interface ShannonCoreBridgeConfiguration {
   replyPeopleEnabled?: boolean;
   /** How long a reply may take (a model turn, with tools): 5,000–60,000 ms, default 55,000. */
   replyTimeoutMs?: number;
+  /**
+   * `SHANNON_ONE_HEAD=on` (owner 2026-10-20): every Discord text message and voice-channel utterance goes to the head's
+   * `POST /v1/converse` in one shape, bound or not, the owner's or anyone's; the head decides who is present. Default off.
+   */
+  oneHead?: boolean;
 }
 
-interface ShannonCoreBridgeBinding {
+export interface ShannonCoreBridgeBinding {
   platform: 'discord';
   conversationId?: string;
   conversationIdPrefix?: string;
@@ -61,7 +70,7 @@ export function createShannonCoreBridge(
     throw new ShannonCoreBridgeError('CONFIG_INVALID');
   }
   const replyTimeoutMs = bridgeConfig.replyTimeoutMs ?? 55_000;
-  if (bridgeConfig.replyEnabled === true
+  if ((bridgeConfig.replyEnabled === true || bridgeConfig.oneHead === true)
     && (!Number.isSafeInteger(replyTimeoutMs) || replyTimeoutMs < 5_000 || replyTimeoutMs > 60_000)) {
     throw new ShannonCoreBridgeError('CONFIG_INVALID');
   }
@@ -70,6 +79,30 @@ export function createShannonCoreBridge(
   contextUrl.pathname = '/v1/platform/context';
   const replyUrl = new URL(url);
   replyUrl.pathname = '/v1/platform/reply';
+  const converseUrl = new URL(url);
+  converseUrl.pathname = ONE_HEAD_CONVERSE_PATH;
+  /** One head: the message in the one shape to `POST /v1/converse`, whoever wrote it, bound or not; the head decides who is present. */
+  const converse = async (envelope: RequestEnvelope): Promise<ShannonCoreReplyResult> => {
+    const turn = converseTextTurn(envelope);
+    if (!turn) return { status: 'ineligible' };
+    try {
+      const response = await fetcher(converseUrl.toString(), {
+        method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify(turn), redirect: 'error', signal: AbortSignal.timeout(replyTimeoutMs),
+      });
+      if (response.status !== 200) {
+        void response.body?.cancel().catch(() => undefined);
+        logger.warn(`fallback: the head answered ${response.status}; this runtime answers the message`);
+        return { status: 'unavailable' };
+      }
+      const answer = converseAnswer(await response.text());
+      if (!answer) logger.warn('fallback: the head ended without an answer; this runtime answers the message');
+      return answer ? { status: 'available', ...answer } : { status: 'unavailable' };
+    } catch {
+      logger.warn('fallback: the head could not be reached; this runtime answers the message');
+      return { status: 'unavailable' };
+    }
+  };
   return Object.freeze({
     async mirrorDiscordTurn(envelope: RequestEnvelope, reply: string): Promise<void> {
       const ownerBody = discordTurnBody(envelope, reply);
@@ -140,6 +173,7 @@ export function createShannonCoreBridge(
       }
     },
     async requestDiscordReply(envelope: RequestEnvelope): Promise<ShannonCoreReplyResult> {
+      if (bridgeConfig.oneHead === true) return converse(envelope);
       if (bridgeConfig.replyEnabled !== true) return { status: 'ineligible' };
       const body = discordReplyBody(envelope);
       if (!body) return { status: 'ineligible' };
@@ -264,7 +298,7 @@ function personTurnBody(envelope: RequestEnvelope, body: ReturnType<typeof disco
   };
 }
 
-function validBridgeUrl(value: string): boolean {
+export function validBridgeUrl(value: string): boolean {
   try {
     const url = new URL(value);
     if (url.username || url.password || url.search || url.hash || url.pathname !== '/v1/platform/turns') return false;
@@ -274,7 +308,7 @@ function validBridgeUrl(value: string): boolean {
   }
 }
 
-function bounded(value: unknown, maximum: number): value is string {
+export function bounded(value: unknown, maximum: number): value is string {
   return typeof value === 'string' && value.trim().length > 0 && value.length <= maximum && !value.includes('\0');
 }
 
@@ -282,7 +316,7 @@ function validTimestamp(value: unknown): value is string {
   return typeof value === 'string' && Number.isFinite(Date.parse(value));
 }
 
-function validatedBindings(raw: string): readonly ShannonCoreBridgeBinding[] {
+export function validatedBindings(raw: string): readonly ShannonCoreBridgeBinding[] {
   let decoded: unknown;
   try {
     decoded = JSON.parse(raw);
@@ -318,7 +352,7 @@ function validatedBinding(value: unknown): ShannonCoreBridgeBinding {
   });
 }
 
-function matchesConversation(binding: ShannonCoreBridgeBinding, conversationId: string): boolean {
+export function matchesConversation(binding: ShannonCoreBridgeBinding, conversationId: string): boolean {
   return binding.conversationId === conversationId
     || (binding.conversationIdPrefix !== undefined
       && conversationId.startsWith(binding.conversationIdPrefix)
