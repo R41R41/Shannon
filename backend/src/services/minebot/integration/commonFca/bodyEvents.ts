@@ -20,10 +20,17 @@ export const BODY_EVENTS = Object.freeze({
   perPoll: 32,
   progressEveryMs: 2_000,
   stallMs: 15_000,
+  /**
+   * In water a stall is told sooner: a chase there gets slower and the breath reflex cuts in. Run 19: four salmon in 334 s, one chase
+   * of 201 s never told as stalled (attack-continuously was not measured at all).
+   */
+  waterStallMs: 8_000,
   /** The needs list is read this often (utils/nearbyNeeds caches for 3 s itself). */
   needsEveryMs: 3_000,
   /** A move toward a target counts as getting somewhere when the best distance shrinks by this much. */
   closerBy: 1,
+  /** A chase counts as getting somewhere when the nearest of what it hunts gets this much closer (they run; a step or two is noise). */
+  chaseCloserBy: 2,
   /**
    * A walk without a target (a dig looking for its ore, an exploration) counts when it gets this far from each of the last `trail`
    * places it counted at (so pacing between two spots does not count); a move toward a target counts new ground of `detourBy` the
@@ -36,21 +43,24 @@ export const BODY_EVENTS = Object.freeze({
 
 /**
  * How each long skill's progress is measured. `target`: the distance to the coordinates it was given (as move-to measures it);
- * `depth`: the height still to go (targetY); `travel`: getting away from where it last counted. Every one also counts a gain in what
- * the body carries (a mined ore, a dug block). A skill not named here (a wait, a craft) is told in `action.progress` but never stalled.
+ * `depth`: the height still to go (targetY); `travel`: getting away from where it last counted; `chase`: the nearest of what it
+ * hunts (`entityName`) getting closer. Every one also counts a gain in what the body carries (a mined ore, a dug block, a kill's
+ * drop). A skill not named here (a wait, a craft) is told in `action.progress` but never stalled.
  */
-const WATCHED: Readonly<Record<string, 'target' | 'depth' | 'travel'>> = {
-  'move-to': 'target', 'mine-block': 'travel', 'stair-mine': 'depth', 'explore-for-structure': 'travel',
+type Measure = 'target' | 'depth' | 'travel' | 'chase';
+const WATCHED: Readonly<Record<string, Measure>> = {
+  'move-to': 'target', 'mine-block': 'travel', 'stair-mine': 'depth', 'explore-for-structure': 'travel', 'attack-continuously': 'chase',
 };
 
 type Scalar = string | number | boolean | null;
 interface Point { x: number; y: number; z: number }
 interface EventsBody {
-  entity?: { position?: Point & { distanceTo?(other: Point): number } };
+  entity?: { position?: Point & { distanceTo?(other: Point): number }; isInWater?: boolean };
+  entities?: Record<string, { name?: string; position?: Point } | undefined>;
   inventory?: { items?(): Array<{ name: string; count: number }> };
 }
 interface Running {
-  id: string; skill: string; measure: 'target' | 'depth' | 'travel' | null; args: Readonly<Record<string, unknown>>;
+  id: string; skill: string; measure: Measure | null; args: Readonly<Record<string, unknown>>;
   startedAt: number; lastProgressAt: number; lastToldAt: number; stalledTold: boolean;
   best: number | null; trail: Array<{ at: Point; time: number }>; carried: Map<string, number>; gained: number;
 }
@@ -122,7 +132,8 @@ export class BodyEventWatcher implements BodyEventSource {
     let progressed = gained > 0;
     run.gained += gained;
     const distance = this.distance(run);
-    if (distance !== null && (run.best === null || distance <= run.best - BODY_EVENTS.closerBy)) {
+    const closer = run.measure === 'chase' ? BODY_EVENTS.chaseCloserBy : BODY_EVENTS.closerBy;
+    if (distance !== null && (run.best === null || distance <= run.best - closer)) {
       if (run.best !== null) progressed = true;
       run.best = distance;
     }
@@ -133,10 +144,12 @@ export class BodyEventWatcher implements BodyEventSource {
     const away = run.measure === 'travel' ? BODY_EVENTS.travelBy : run.measure === 'target' ? BODY_EVENTS.detourBy : null;
     if (away !== null && at && run.trail.length && run.trail.every(mark => Math.hypot(at.x - mark.at.x, at.y - mark.at.y, at.z - mark.at.z) >= away)) progressed = true;
     if (progressed) { run.lastProgressAt = now; run.stalledTold = false; if (at) run.trail.push({ at, time: now }); }
+    const water = this.bot.entity?.isInWater === true;
     const facts = (): Record<string, Scalar> => ({ skill: run.skill, measure: run.measure, elapsedMs: now - run.startedAt,
-      sinceProgressMs: now - run.lastProgressAt, gained: run.gained, ...(distance !== null ? { distance: round(distance) } : {}) });
+      sinceProgressMs: now - run.lastProgressAt, gained: run.gained, ...(distance !== null ? { distance: round(distance) } : {}),
+      ...(water ? { hazard: 'water' } : {}) });
     if (now - run.lastToldAt >= BODY_EVENTS.progressEveryMs) { run.lastToldAt = now; this.push('action.progress', run.id, facts(), now); }
-    if (run.measure && !run.stalledTold && now - run.lastProgressAt >= BODY_EVENTS.stallMs) {
+    if (run.measure && !run.stalledTold && now - run.lastProgressAt >= (water ? BODY_EVENTS.waterStallMs : BODY_EVENTS.stallMs)) {
       run.stalledTold = true;
       this.push('action.stalled', run.id, facts(), now);
     }
@@ -147,6 +160,7 @@ export class BodyEventWatcher implements BodyEventSource {
     const at = this.position();
     if (!at) return null;
     if (run.measure === 'depth') { const y = number(run.args.targetY); return y === null ? null : Math.abs(at.y - y); }
+    if (run.measure === 'chase') return this.nearest(String(run.args.entityName ?? ''), at);
     if (run.measure !== 'target') return null;
     const x = number(run.args.x), y = number(run.args.y), z = number(run.args.z);
     const goal = typeof run.args.goalType === 'string' ? run.args.goalType : 'nearxz';
@@ -154,6 +168,19 @@ export class BodyEventWatcher implements BodyEventSource {
     if (x === null || z === null) return null;
     if (goal === 'xz' || goal === 'nearxz' || y === null) return Math.hypot(x - at.x, z - at.z);
     return Math.hypot(x - at.x, y - at.y, z - at.z);
+  }
+
+  /** How far the nearest entity of this name is (a group word such as hostile or food_animals has none), or null. */
+  private nearest(name: string, at: Point): number | null {
+    if (!/^[a-z_]+$/u.test(name)) return null;
+    let best: number | null = null;
+    for (const entity of Object.values(this.bot.entities ?? {})) {
+      const p = entity?.name === name ? entity.position : undefined;
+      if (!p) continue;
+      const d = Math.hypot(p.x - at.x, p.y - at.y, p.z - at.z);
+      if (best === null || d < best) best = d;
+    }
+    return best;
   }
 
   private diffNeeds(now: number): void {

@@ -100,7 +100,7 @@ export interface WorldInventoryStack {
 export interface NearbyNeed {
   /** The same thing for the same need from one reading to the next: `<need>:e:<entity id>`, or `<need>:b:x,y,z` for a block. */
   id: string;
-  need: 'bed_wool' | 'food' | 'iron' | 'wood';
+  need: 'bed' | 'bed_wool' | 'food' | 'iron' | 'fuel' | 'wood';
   name: string;
   color?: string;
   position: WorldVector;

@@ -146,10 +146,12 @@ describe('the observation says what an unmet need wants nearby (the owner: run 1
     expect(needs.find(need => need.need === 'wood')).toMatchObject({ need: 'wood' });
     expect(needs.some(need => need.name === 'cow')).toBe(false);
   });
-  it('says nothing of a need already met: a bed, six cooked, iron armour and ingots, planks', () => {
-    scanned.hits = [{ name: 'iron_ore', position: new Vec3(3, 60, 3), distance: 5.8 }];
+  it('says nothing of a need already met: a bed, six cooked, iron armour and ingots for the rest, planks, coal', () => {
+    scanned.hits = [{ name: 'iron_ore', position: new Vec3(3, 60, 3), distance: 5.8 }, { name: 'coal_ore', position: new Vec3(2, 62, 2), distance: 3 }];
+    // Still to make (run 19's count): two pickaxes 6, the helmet 5, the boots 4 = 15; a bucket is had. 15 ingots cover it.
     const met = body([{ name: 'white_bed', count: 1 }, { name: 'cooked_beef', count: 6 }, { name: 'iron_chestplate', count: 1 },
-      { name: 'iron_leggings', count: 1 }, { name: 'iron_ingot', count: 9 }, { name: 'oak_planks', count: 12 }]);
+      { name: 'iron_leggings', count: 1 }, { name: 'bucket', count: 1 }, { name: 'iron_ingot', count: 15 }, { name: 'oak_planks', count: 12 },
+      { name: 'coal', count: 8 }]);
     expect(nearbyNeeds(met, 1_000)).toEqual([]);
   });
   it('an ore mine-block failed to reach is said, and why', () => {

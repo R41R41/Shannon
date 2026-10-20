@@ -10,9 +10,13 @@ import { wasUnreachable } from './unreachableTargets.js';
  * remembered (rememberedPlaces, ten kinds): run 18 made 49 decisions and never once had the iron ore in its own surroundings before it
  * (the owner, 2026-10-20). Only the needs not met yet, judged from what the body carries:
  *
+ * - bed: no bed (carried or set): a bed already standing (an igloo's, a village's), from the places seen, within BED_RANGE; dig it
+ *   (dig-block-at) and it is carried. Run 19: an igloo's bed 13 m away at D10, never taken in 30 minutes, and no sheep at all.
  * - bed_wool: no bed (carried or set): sheep, of the colour most wool is carried of (any colour with none), not shorn.
  * - food: fewer than FOOD_ENOUGH portions of cooked food: the animals that are food.
- * - iron: less than IRON_ENOUGH iron (ingots, raw, ore blocks, iron blocks as nine, and what the armour worn or carried took): iron ore.
+ * - iron: less iron at hand than what is still to be made needs (`ironStillNeeded`): iron ore. Run 19 dug about 55 for about 33:
+ *   the ore in a furnace and what was made of it were not counted, and each load into a furnace brought the ore back as a need.
+ * - fuel: fewer than FUEL_ENOUGH coal (charcoal counts, a coal block is nine): coal ore. Run 19 burnt logs with coal 12 m away.
  * - wood: fewer than WOOD_ENOUGH planks (a log is four): logs.
  *
  * Each with where it is and how far. `canReach` is false only for a block mine-block failed to reach lately (why: failed_recently):
@@ -24,10 +28,13 @@ import { wasUnreachable } from './unreachableTargets.js';
  */
 const RANGE = 24;
 const PER_NEED = 2;
-const MAX_NEEDS = 8;
+const MAX_NEEDS = 10;
 const FOOD_ENOUGH = 6;
-const IRON_ENOUGH = 24;
 const WOOD_ENOUGH = 12;
+/** A smelt of eight takes one coal: about thirty iron and a few meals. */
+const FUEL_ENOUGH = 8;
+/** A standing bed is worth a walk this far (the places seen reach further than the loaded blocks). */
+const BED_RANGE = 96;
 /** Read again after this long, or when the body has moved this far: the observation is taken far more often than this. */
 const CACHE_MS = 3_000;
 const CACHE_MOVE = 4;
@@ -35,8 +42,33 @@ const RAY_STEP = 0.25;
 
 const FOOD_ANIMALS = new Set(['cow', 'pig', 'sheep', 'chicken', 'rabbit', 'mooshroom']);
 const IRON_ORES = ['iron_ore', 'deepslate_iron_ore'];
-/** The iron each piece of armour took: a body in iron armour needs less ore. */
-const IRON_IN: Record<string, number> = { iron_chestplate: 8, iron_leggings: 7, iron_helmet: 5, iron_boots: 4 };
+const COAL_ORES = ['coal_ore', 'deepslate_coal_ore'];
+/**
+ * What the iron is for, in the order it is made (the milestones: an iron pickaxe and a bucket, then the whole iron armour, and a spare
+ * pickaxe), with the iron each takes and what counts as having it already (a better one does).
+ */
+const IRON_PLAN: ReadonlyArray<{ iron: number; have: (name: string) => boolean; wanted?: number }> = [
+  { iron: 3, have: name => /^(iron|diamond|netherite)_pickaxe$/u.test(name), wanted: 2 },
+  { iron: 3, have: name => name === 'bucket' || name.endsWith('_bucket') },
+  { iron: 5, have: name => /^(iron|diamond|netherite)_helmet$/u.test(name) },
+  { iron: 8, have: name => /^(iron|diamond|netherite)_chestplate$/u.test(name) },
+  { iron: 7, have: name => /^(iron|diamond|netherite)_leggings$/u.test(name) },
+  { iron: 4, have: name => /^(iron|diamond|netherite)_boots$/u.test(name) },
+];
+
+/**
+ * The iron still to get: what the things not made yet take (`IRON_PLAN`; two pickaxes, the second a spare), less the iron at hand:
+ * ingots, raw iron and ore carried (a block is nine), and what is in a furnace now (`activeFurnaces`, its input until withdrawn).
+ * What was made is counted by having it, worn or carried.
+ */
+export function ironStillNeeded(carried: ReadonlyArray<{ name: string; count: number }>, furnaces: ReadonlyArray<{ item?: string; count?: number }> = []): number {
+  const owned = (test: (name: string) => boolean) => carried.filter(item => test(item.name)).reduce((sum, item) => sum + item.count, 0);
+  const wanted = IRON_PLAN.reduce((sum, part) => sum + part.iron * Math.max(0, (part.wanted ?? 1) - owned(part.have)), 0);
+  const loose = owned(name => name === 'iron_ingot' || name === 'raw_iron' || IRON_ORES.includes(name))
+    + 9 * owned(name => name === 'iron_block' || name === 'raw_iron_block')
+    + furnaces.filter(furnace => /raw_iron|iron_ore/u.test(String(furnace.item ?? ''))).reduce((sum, furnace) => sum + (furnace.count ?? 0), 0);
+  return Math.max(0, wanted - loose);
+}
 const NEIGHBOURS = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
 
 interface NeedsBody {
@@ -45,6 +77,8 @@ interface NeedsBody {
   inventory?: { items?(): Array<{ name: string; count: number }>; slots?: Array<{ name?: string; count?: number } | null | undefined> };
   registry?: any;
   world?: any;
+  activeFurnaces?: Array<{ item?: string; count?: number }>;
+  placeMemory?: { recall?(kind?: string, limit?: number): Array<{ position: { x: number; y: number; z: number }; distance: number; keep?: string }> };
   blockAt?(position: Vec3, extra?: boolean): { name?: string; boundingBox?: string } | null;
 }
 
@@ -96,12 +130,14 @@ function readNeeds(bot: NeedsBody, at: Vec3, now: number): NearbyNeed[] {
     }
     if (wantFood) out.push(...animals.slice(0, PER_NEED).map(({ entity, distance }) => animalNeed(bot, at, 'food', entity, distance)));
   }
+  if (wantBed) out.unshift(...standingBeds(bot, now));
 
-  // iron and wood: blocks in the loaded chunks.
-  const iron = count(name => name === 'iron_ingot' || name === 'raw_iron' || IRON_ORES.includes(name))
-    + 9 * count(name => name === 'iron_block' || name === 'raw_iron_block')
-    + [...items, ...worn].reduce((sum, item) => sum + (IRON_IN[item.name] ?? 0) * ((item as { count?: number }).count ?? 1), 0);
-  if (iron < IRON_ENOUGH) out.push(...pick(blockNeeds(bot, 'iron', IRON_ORES, now)));
+  // iron, fuel and wood: blocks in the loaded chunks.
+  const carried = [...items, ...worn.map(item => ({ name: item.name, count: 1 }))];
+  if (ironStillNeeded(carried, bot.activeFurnaces ?? []) > 0) out.push(...pick(blockNeeds(bot, 'iron', IRON_ORES, now)));
+  if (count(name => name === 'coal' || name === 'charcoal') + 9 * count(name => name === 'coal_block') < FUEL_ENOUGH) {
+    out.push(...pick(blockNeeds(bot, 'fuel', COAL_ORES, now)));
+  }
   const planks = count(name => name.endsWith('_planks')) + 4 * count(name => /_(log|wood|stem|hyphae)$/.test(name));
   if (planks < WOOD_ENOUGH) {
     const logs = logNames(bot.registry);
@@ -117,6 +153,21 @@ function logNames(registry: any): string[] {
   let names = logCache.get(registry);
   if (!names) { names = Object.keys(registry.blocksByName).filter(name => name.endsWith('_log') && !name.startsWith('stripped_')); logCache.set(registry, names); }
   return names;
+}
+
+/**
+ * Beds standing within BED_RANGE, from the places seen (a respawn bed of her own is not one to take: it is set already), nearest
+ * first; the block's own name when it is loaded.
+ */
+function standingBeds(bot: NeedsBody, now: number): NearbyNeed[] {
+  const places = (() => { try { return bot.placeMemory?.recall?.('bed', 4) ?? []; } catch { return []; } })();
+  return places.filter(place => place.keep !== 'respawn' && place.distance <= BED_RANGE).slice(0, PER_NEED).map(place => {
+    const position = { x: Math.floor(place.position.x), y: Math.floor(place.position.y), z: Math.floor(place.position.z) };
+    const name = (() => { try { return bot.blockAt?.(new Vec3(position.x, position.y, position.z))?.name; } catch { return undefined; } })();
+    const failed = wasUnreachable(bot, new Vec3(position.x, position.y, position.z), now);
+    return { id: `bed:b:${position.x},${position.y},${position.z}`, need: 'bed' as const, name: name?.endsWith('_bed') ? name : 'bed', position,
+      distance: place.distance, canReach: !failed, ...(failed ? { why: 'failed_recently' as const } : {}) };
+  });
 }
 
 /** Those that can be got at first, then the nearest; PER_NEED of them. */
