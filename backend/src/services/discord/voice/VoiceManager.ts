@@ -33,12 +33,15 @@ import {
   getVoiceConnection,
   joinVoiceChannel,
 } from '@discordjs/voice';
-let OpusEncoder: any;
-try {
-  const OpusPackage = (await import('@discordjs/opus')).default;
-  OpusEncoder = OpusPackage.OpusEncoder;
-} catch {
-  console.warn('[VoiceManager] @discordjs/opus not available – voice encoding disabled');
+import { loadOpusCodec } from './opusCodec.js';
+// Listening decodes with @discordjs/opus, or opusscript when the native addon is not built for this node / CPU.
+const opusCodec = await loadOpusCodec();
+if (!opusCodec) {
+  console.warn('[VoiceManager] neither @discordjs/opus nor opusscript is available – voice decoding disabled');
+} else if (opusCodec.backend !== '@discordjs/opus') {
+  console.warn(`[VoiceManager] @discordjs/opus not available – decoding with ${opusCodec.backend}`);
+} else {
+  console.info('[VoiceManager] opus codec: @discordjs/opus');
 }
 import { Readable } from 'stream';
 import fs from 'fs';
@@ -954,16 +957,21 @@ export class VoiceManager implements VoiceGateway {
   // ── Audio encoding / decoding ─────────────────────────────────────────
 
   decodeOpusBuffers(opusBuffers: Buffer[]): Buffer {
-    const encoder = new OpusEncoder(48000, 2);
+    if (!opusCodec) throw new Error('no opus codec (@discordjs/opus / opusscript) is available');
+    const decoder = opusCodec.decoder(48000, 2);
     const pcmChunks: Buffer[] = [];
 
-    for (const opusPacket of opusBuffers) {
-      try {
-        const pcm = encoder.decode(opusPacket);
-        pcmChunks.push(pcm);
-      } catch {
-        // skip corrupted packets
+    try {
+      for (const opusPacket of opusBuffers) {
+        try {
+          const pcm = decoder.decode(opusPacket);
+          pcmChunks.push(pcm);
+        } catch {
+          // skip corrupted packets
+        }
       }
+    } finally {
+      decoder.dispose();
     }
 
     return Buffer.concat(pcmChunks);

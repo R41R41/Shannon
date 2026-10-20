@@ -120,6 +120,18 @@ SHANNON_DC_VOICE=on
 - 実装: `services/integration/oneHeadConverse.ts`、`shannonCoreBridge.ts`（`requestDiscordReply`）、`shannonCoreVoiceClient.ts`（`turn`）。
   テスト: `tests/unit/oneHeadConverse.test.ts`。
 
+## テスト用サーバーも本番で（2026-10-21、既定は切）と声の符号化
+
+`SHANNON_PROD_ALLOW_TEST_GUILD=on` の時、本番（`--dev` でない）もテスト用サーバー（`TEST_GUILD_ID`）のメッセージ・命令・声を受け、
+スラッシュコマンドをメインのサーバーとテスト用サーバーの両方に登録する。切（既定）なら今まで通り、本番はテスト用サーバーを
+扱わない。dev の動きはスイッチに関係なく同じ。会話をシャノンの心に結ぶには、両側の束縛（体の `SHANNON_CORE_PLATFORM_BINDINGS_JSON`、
+心の `SHANNON_PLATFORM_BRIDGE_BINDINGS_JSON`）にテスト用サーバーの `conversationIdPrefix` を足す。
+
+VC の聞き取りは `@discordjs/opus` で復号し、その native addon がこの node / CPU 向けに無い時は `opusscript` で復号する
+（`services/discord/voice/opusCodec.ts`）。起動の行は `[VoiceManager] opus codec: @discordjs/opus`（native）、
+`... decoding with opusscript`（代わり）、どちらも無い時だけ `voice decoding disabled`。
+実装: `services/discord/guildPolicy.ts`、`opusCodec.ts`。テスト: `tests/unit/discordGuildPolicy.test.ts`、`opusCodec.test.ts`。
+
 ## 検証
 
 - `backend/tests/unit/shannonCoreBridge.test.ts`

@@ -85,6 +85,8 @@ export const config = {
     // --dev never falls back to the production bot token, even if both are in the same .env.
     token: isDev ? optional('DISCORD_TOKEN_TEST', '') : optional('DISCORD_TOKEN', ''),
     devAllowAimine: optional('SHANNON_DEV_ALLOW_AIMINE', 'false').toLowerCase() === 'true',
+    /** Production also serves the test guild and registers its slash commands there (owner 2026-10-21). Default off. */
+    prodAllowTestGuild: dcVoiceSwitch('SHANNON_PROD_ALLOW_TEST_GUILD', false),
     guilds: {
       toyama: {
         guildId: optional('TOYAMA_GUILD_ID', ''),

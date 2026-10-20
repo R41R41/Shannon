@@ -72,6 +72,7 @@ import { registerDiscordConversationTransport } from '../common/discordConversat
 import { registerLiveSpeechSink } from '../common/liveSpeech.js';
 import { createDiscordLiveSpeechSink, liveTextTarget } from './liveSpeechSink.js';
 import { acceptsDiscordMessage } from './messageAcceptance.js';
+import { commandGuildIds, skipsDiscordGuild, type DiscordGuildPolicy } from './guildPolicy.js';
 import {
   buildAcceptedClarificationAnswers,
   getClarificationSessionStore,
@@ -245,20 +246,20 @@ export class DiscordBot extends BaseClient {
   /**
    * devモードは既定でテストギルドだけを許可する。アイマイラボへの接続は
    * SHANNON_DEV_ALLOW_AIMINE=True を明示した場合に限る。
-   * prodモードはテストギルドを扱わず、明示的なdev占有時だけアイマイラボも避ける。
+   * prodモードはテストギルドを扱わず（SHANNON_PROD_ALLOW_TEST_GUILD=on の時だけ扱う）、明示的なdev占有時だけアイマイラボも避ける。
    */
+  private guildPolicy(): DiscordGuildPolicy {
+    return {
+      isDev: this.isDev,
+      testGuildId: config.discord.guilds.test.guildId,
+      aimineGuildId: config.discord.guilds.aimine.guildId,
+      devAllowAimine: config.discord.devAllowAimine,
+      prodAllowTestGuild: config.discord.prodAllowTestGuild,
+    };
+  }
+
   private shouldSkipGuild(guildId: string | null): boolean {
-    if (!guildId) return true;
-    const isTestGuild = guildId === config.discord.guilds.test.guildId;
-    if (this.isDev) {
-      const isAimineGuild = guildId === config.discord.guilds.aimine.guildId;
-      return !isTestGuild && !(config.discord.devAllowAimine && isAimineGuild);
-    }
-    if (isTestGuild) return true;
-    if (guildId === config.discord.guilds.aimine.guildId && this.isDevHoldingAimine()) {
-      return true;
-    }
-    return false;
+    return skipsDiscordGuild(this.guildPolicy(), guildId, () => this.isDevHoldingAimine());
   }
 
   private setUpChannels() {
@@ -420,13 +421,8 @@ export class DiscordBot extends BaseClient {
       const commandsJson = commands.map((command) => command.toJSON());
 
       // コマンドを特定のギルドに登録（即時反映）
-      // devモードは既定でテストギルドだけに登録する。
-      const targetGuildIds = this.isDev
-        ? [
-            config.discord.guilds.test.guildId,
-            ...(config.discord.devAllowAimine ? [config.discord.guilds.aimine.guildId] : []),
-          ]
-        : [config.discord.guilds.aimine.guildId];
+      // devモードは既定でテストギルドだけに登録する。prodはアイマイラボ（SHANNON_PROD_ALLOW_TEST_GUILD=on ならテストギルドも）。
+      const targetGuildIds = commandGuildIds(this.guildPolicy());
 
       let registered = false;
       for (const guildId of targetGuildIds) {
