@@ -472,3 +472,22 @@ describe('VoiceMouth: the head\'s queue (long poll)', () => {
     expect(await waiting.done).toBe('not_in_voice');
   });
 });
+
+describe('VoiceMouth: state()', () => {
+  it('says whether she is in a VC and whether a person is talking, without throwing', () => {
+    const off = setup({ enabled: false });
+    off.mouth.attach(off.host);
+    expect(off.mouth.state()).toEqual({ inVoice: false, humanSpeaking: false, sinceHumanMs: null });
+    const t = setup();
+    expect(t.mouth.state()).toEqual({ inVoice: false, humanSpeaking: false, sinceHumanMs: null });
+    t.mouth.attach(t.host);
+    expect(t.mouth.state()).toEqual({ inVoice: true, humanSpeaking: false, sinceHumanMs: null });
+    t.tracker.start('u1');
+    expect(t.mouth.state()).toEqual({ inVoice: true, humanSpeaking: true, sinceHumanMs: 0 });
+    t.tracker.end('u1');
+    vi.advanceTimersByTime(1_500);
+    expect(t.mouth.state()).toEqual({ inVoice: true, humanSpeaking: false, sinceHumanMs: 1_500 });
+    t.mouth.detach('g1');
+    expect(t.mouth.state().inVoice).toBe(false);
+  });
+});

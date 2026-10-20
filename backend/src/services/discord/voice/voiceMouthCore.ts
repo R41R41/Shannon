@@ -144,6 +144,17 @@ export class VoiceMouth {
     }
   }
 
+  /**
+   * Whether she is in a VC she may speak in, and whether a person is talking in it (dc-live uses this to choose between a short line to say and a
+   * longer one to write). `sinceHumanMs` is 0 while someone speaks, null when nobody has spoken since she joined or she is not in a VC.
+   */
+  state(): { inVoice: boolean; humanSpeaking: boolean; sinceHumanMs: number | null } {
+    const host = this.deps.enabled() ? this.pickHost() : null;
+    if (!host) return { inVoice: false, humanSpeaking: false, sinceHumanMs: null };
+    const since = host.tracker.sinceAnyoneMs();
+    return { inVoice: true, humanSpeaking: since === 0, sinceHumanMs: since };
+  }
+
   setSituation(input: { text: string; ttlMs?: number }): void {
     const text = typeof input?.text === 'string' ? input.text.trim().slice(0, SITUATION_MAX) : '';
     if (!text) {

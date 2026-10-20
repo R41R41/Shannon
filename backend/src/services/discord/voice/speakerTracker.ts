@@ -98,6 +98,12 @@ export class SpeakerTracker {
     return this.lastAnyEnd + this.hangoverMs;
   }
 
+  /** How long nobody has spoken: 0 while someone does; null when nobody has spoken yet. */
+  sinceAnyoneMs(): number | null {
+    if (this.speakingUsers().length > 0) return 0;
+    return this.lastAnyEnd === null ? null : Math.max(0, this.now() - this.lastAnyEnd);
+  }
+
   /** Start of this person's current run of speech (gaps <= mergeGapMs ignored), or undefined if not in a run. */
   runStart(userId: string): number | undefined {
     const state = this.users.get(userId);
