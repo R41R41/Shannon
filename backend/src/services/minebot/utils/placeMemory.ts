@@ -4,7 +4,7 @@ import { Vec3 } from 'vec3';
 import { createLogger } from '../../../utils/logger.js';
 import {
   biomesAround, describeBiomes, noteBiome,
-  describeLastDeath, describeSeenReach, DRAGON_PLACES, DROP_LIFETIME_MS, emptyPlaceMemory, forgetPlaces, makeRoom, mapSummary, markSeen, mergeRadius, observedDeaths, parsePlaceMemory,
+  describeLastDeath, describeSeenReach, DRAGON_PLACES, DROP_LIFETIME_MS, emptyPlaceMemory, forgetPlaces, indexPlaces, makeRoom, mapSummary, markSeen, mergeRadius, observedDeaths, parsePlaceMemory,
   type ObservedDeath,
   placesDigest, recallPlaces, recordDeath, rememberPlace, seenReach, type PlaceKeep, type PlaceMemoryState, type RecalledPlace, type Sighting,
 } from '../../../modules/minecraftLearning/places.js';
@@ -23,6 +23,8 @@ const log = createLogger('Minebot:PlaceMemory');
  *   - things made to be used where they stand (crafting table, furnace, chest, bed, portal, spawner),
  *   - a structure, by the blocks only it is built of (a Nether fortress by its bricks),
  *   - a village, when the landmark watcher makes one out,
+ *   - a cave under the overworld (a section with many open cells), and a cave entrance: a mouth at the surface from which the
+ *     hollow under ground goes down 12 blocks or more (with the bottom it was followed to),
  *   - where the body died.
  * A place looked at again and found gone (ore mined, a furnace taken along) is dropped.
  */
@@ -31,7 +33,7 @@ const EQUIPMENT = ['crafting_table', 'furnace', 'blast_furnace', 'smoker', 'ches
 /**
  * Blocks only a built structure puts in the world, and the structure they give away (a whole one is one place). A village's bell;
  * a ruined portal's crying obsidian, and its netherrack, which the overworld has nowhere else (see OVERWORLD_ONLY); an igloo's
- * white carpet (on snow blocks: see readSection). A shipwreck is a chest with water beside it (see readSection).
+ * white carpet (on snow blocks: see noteCell). A shipwreck is a chest with water beside it (see noteCell).
  */
 const STRUCTURE_MARKS: Record<string, string> = { nether_bricks: 'fortress', nether_brick_fence: 'fortress', nether_brick_stairs: 'fortress',
   bell: 'village', crying_obsidian: 'ruined_portal', netherrack: 'ruined_portal', white_carpet: 'igloo' };
@@ -41,8 +43,29 @@ const OVERWORLD_ONLY = new Set(['netherrack']);
 const CAVE_BELOW_Y = 40;
 const CAVE_MIN_CELLS = 400;
 const SECTION_VOLUME = 4096;
+/**
+ * Cells read in one step: a quarter of a section. A whole section was one step, and the longest took 30-61 ms in natural worlds
+ * (mb-body's runs 20-21): the body stood still for a tick or two.
+ */
+const SLICE_CELLS = 1024;
+/**
+ * A cave entrance: open air under the sky beside open air under ground (ground above it), from which the hollow under ground is
+ * followed (air only, never out under the sky again) for at most ENTRANCE_CELLS cells. It is an entrance when that reaches
+ * ENTRANCE_DEPTH blocks or more below the mouth: a way down to the iron and the diamonds that is walked, not dug. A ledge or a
+ * nook is followed too, and found shallow.
+ */
+const ENTRANCE_CELLS = 1500;
+const ENTRANCE_DEPTH = 12;
+/** Mouths followed per column (the lowest first, each this far from the last), and cells followed in one step. */
+const ENTRANCE_SEEDS = 4;
+const ENTRANCE_SEED_APART = 6;
+const ENTRANCE_STEP_CELLS = 100;
+/** A cave followed this far below its mouth is deep enough to be worth the walk: it is followed no further. */
+const ENTRANCE_DEEP_ENOUGH = 40;
 /** Milliseconds of reading columns allowed in one physics tick (50ms): the body's own motion comes first. */
 const TICK_BUDGET_MS = 2;
+/** Steps kept in the stats as the slowest (to set beside the garbage collector's pauses). */
+const SLOWEST_KEPT = 12;
 const NEARBY_REREAD_TICKS = 200;
 const VILLAGE_SAMPLE_TICKS = 100;
 const SAVE_INTERVAL_MS = 30_000;
@@ -104,38 +127,67 @@ export interface PlaceMemory {
   flush(): void;
   /** Keep the memory in this file from now on (what the file already holds is taken up). */
   persistTo(file: string): void;
-  /** `maxReadMs` is the longest single step (one section of one column). */
-  stats: { columnsRead: number; maxReadMs: number; totalReadMs: number; forgotten: number };
+  /**
+   * What reading costs the body. `maxReadMs` is the longest single step (a quarter of a section, a row of the ground, or a part of
+   * following a cave down); `maxColumnMs` the most one chunk column took in all, its steps added up (they are spread over ticks);
+   * `maxTickMs` the most the memory took out of one physics tick (reading, noting, saving); `setupMs` the reckoning of what is read
+   * for, once per dimension; `stepBuckets` / `columnBuckets` how many steps / columns took under 0.5, 1, 2, 5 and 10 ms, and longer.
+   */
+  stats: { columnsRead: number; maxReadMs: number; totalReadMs: number; forgotten: number; maxColumnMs: number; maxTickMs: number;
+    setupMs: number; stepBuckets: number[]; columnBuckets: number[];
+    /** The steps of each kind (sections, ground, mouths, entrances): how many, their time in all, the longest (a column's noting is in its last step). */
+    phases: Record<string, { steps: number; totalMs: number; maxMs: number; maxCpuMs: number }>;
+    /**
+     * The same longest step and column in CPU time (the process's, from getrusage): on a busy machine the clock also counts the
+     * time the process waited for a core, and a garbage collection that fell in the step.
+     */
+    maxStepCpuMs: number; maxColumnCpuMs: number; columnCpuBuckets: number[];
+    /** The slowest steps (at most SLOWEST_KEPT): which kind, when (performance.now), how long by the clock and in CPU. */
+    slowest: Array<{ phase: string; at: number; ms: number; cpuMs: number }> };
   /** Reads what is waiting to be read, for at most this long (tests and probes; the tick does it by itself). */
   work(budgetMs: number): void;
 }
 
-interface Wanted { byState: Map<number, string>; air: Set<number>; liquidSource: Map<number, string>; kinds: Set<string>; snow: Set<number>; overworld: boolean }
+/** What a block state is, for the reading: one look-up in a table instead of a set or a map per cell. */
+const AIR = 1, KIND = 2, GROUND = 4, SNOW = 8;
+/**
+ * The ground a cave is under, and the ground under the sky: natural rock, earth, sand, snow and ice (a tree, a plant, a house is not
+ * ground: the air under a canopy is not a cave).
+ */
+const GROUND_NAMES = /(^|_)(stone|deepslate|tuff|calcite|granite|diorite|andesite|dirt|grass_block|podzol|mycelium|mud|clay|gravel|sand|sandstone|terracotta|snow_block|ice|powder_snow|dripstone_block|moss_block|basalt|amethyst_block|budding_amethyst|obsidian|bedrock|magma_block|netherrack|blackstone|soul_sand|soul_soil|end_stone)$|_ore$/;
 
-function wantedStates(bot: MemoryBot, dimension = 'overworld'): Wanted {
-  const byState = new Map<number, string>();
+export interface Wanted { flags: Uint8Array; kindOf: Map<number, string>; liquidSource: Map<number, string>; kinds: Set<string>; overworld: boolean }
+
+export function wantedStates(bot: MemoryBot, dimension = 'overworld'): Wanted {
+  const blocks = Object.entries(bot.registry.blocksByName);
+  let maxState = 0;
+  for (const [, block] of blocks) if (block?.maxStateId !== undefined && block.maxStateId > maxState) maxState = block.maxStateId;
+  const flags = new Uint8Array(maxState + 1);
+  const kindOf = new Map<number, string>();
   const liquidSource = new Map<number, string>();
-  const air = new Set<number>();
-  const snow = new Set<number>();
   const kinds = new Set<string>();
   const overworld = dimension.includes('overworld');
-  for (const [name, block] of Object.entries(bot.registry.blocksByName)) {
+  for (const [name, block] of blocks) {
     if (block?.minStateId === undefined || block.maxStateId === undefined) continue;
-    if (name === 'air' || name === 'cave_air' || name === 'void_air') { for (let state = block.minStateId; state <= block.maxStateId; state++) air.add(state); continue; }
-    if (name === 'snow_block') for (let state = block.minStateId; state <= block.maxStateId; state++) snow.add(state);
+    const mark = (flag: number) => { for (let state = block.minStateId!; state <= block.maxStateId!; state++) flags[state] |= flag; };
+    if (name === 'air' || name === 'cave_air' || name === 'void_air') { mark(AIR); continue; }
+    if (name === 'snow_block') mark(SNOW);
+    if (GROUND_NAMES.test(name)) mark(GROUND);
     if (OVERWORLD_ONLY.has(name) && !overworld) continue;
     // A source is the first state of a liquid (level 0); only a source fills a bucket.
-    if (name === 'water' || name === 'lava') { liquidSource.set(block.minStateId, name); byState.set(block.minStateId, name); kinds.add(name); continue; }
+    if (name === 'water' || name === 'lava') { liquidSource.set(block.minStateId, name); kindOf.set(block.minStateId, name); flags[block.minStateId] |= KIND; kinds.add(name); continue; }
     const kind = name.endsWith('_ore') ? name.replace(/^deepslate_/, '') : name === 'ancient_debris' ? name
       : name.endsWith('_bed') ? 'bed' : EQUIPMENT.includes(name) ? name : STRUCTURE_MARKS[name] ?? null;
     if (!kind) continue;
     kinds.add(kind);
-    for (let state = block.minStateId; state <= block.maxStateId; state++) byState.set(state, kind);
+    for (let state = block.minStateId; state <= block.maxStateId; state++) kindOf.set(state, kind);
+    mark(KIND);
   }
-  if (overworld) kinds.add('cave');
+  if (overworld) { kinds.add('cave'); kinds.add('cave_entrance'); }
   kinds.add('shipwreck');
-  return { byState, air, liquidSource, kinds, snow, overworld };
+  return { flags, kindOf, liquidSource, kinds, overworld };
 }
+const flagOf = (wanted: Wanted, state: number | null | undefined): number => (state === null || state === undefined ? 0 : wanted.flags[state] | 0);
 
 interface Cluster { kind: string; position: Vec3; count: number; note?: string }
 
@@ -152,73 +204,376 @@ function spawnedBy(column: any, x: number, y: number, z: number): string | undef
     return typeof id === 'string' && id ? id.replace(/^minecraft:/, '') : undefined;
   } catch { return undefined; }
 }
-interface ColumnJob { chunkX: number; chunkZ: number; column: any; index: number; clusters: Cluster[] }
+
+interface Point { x: number; y: number; z: number }
+/** Which of the stats' buckets (under 0.5, 1, 2, 5, 10 ms, and longer) a time falls in. */
+const BUCKET_EDGES = [0.5, 1, 2, 5, 10];
+const bucketOf = (ms: number) => { const index = BUCKET_EDGES.findIndex(edge => ms < edge); return index < 0 ? BUCKET_EDGES.length : index; };
+/** The section being read: its cells, and for a palette the flags of each entry (only those that matter in this section). */
+interface SectionRead { data: any; palette?: number[]; bits?: { get(index: number): number }; paletteFlags?: Uint8Array; mask: number;
+  cave: boolean; baseY: number; open: number; sumX: number; sumY: number; sumZ: number }
 
 /**
- * Reads one section (16 blocks of height) of the job's column and moves the job on. A column is read a
- * section at a time so that reading never takes more than a few milliseconds out of one tick: read whole,
- * a column cost 10ms on average and 120ms at worst (measured), and the body stood still meanwhile.
+ * The caves already followed down, shared by the columns read after them: one cave has a mouth in many columns (in a lab world, 38
+ * mouths led to a dozen caves), and following it again from each cost up to 200 ms a column. The last CAVES_KEPT searches are kept
+ * with the cells they reached; a mouth whose first cell one of them reached takes its bottom.
  */
-function readSection(bot: MemoryBot, wanted: Wanted, job: ColumnJob): void {
-  const column = job.column;
-  const index = job.index++;
+export interface CaveFollowed { bottom: Point; cells: number }
+interface FollowedCave { origin: Point; seen: Set<number>; followed: CaveFollowed }
+export interface CaveCache { searches: FollowedCave[] }
+export const newCaveCache = (): CaveCache => ({ searches: [] });
+const CAVES_KEPT = 64;
+function caveReaching(caves: CaveCache, cell: Point): CaveFollowed | null {
+  for (const search of caves.searches) {
+    const packed = packCell(search.origin, cell.x, cell.y, cell.z);
+    if (packed >= 0 && search.seen.has(packed)) return search.followed;
+  }
+  return null;
+}
+
+/** Following the hollow under ground from one mouth (breadth first, down first), within ENTRANCE_CELLS. */
+interface EntranceSearch extends FollowedCave { mouth: Point; queue: number[]; head: number }
+interface ColumnJob {
+  chunkX: number; chunkZ: number; column: any; clusters: Cluster[];
+  phase: 'sections' | 'ground' | 'mouths' | 'entrances' | 'done';
+  index: number; cell: number; section: SectionRead | null;
+  /**
+   * The top of the ground of each of the column's 256 cells (z*16+x), read row by row, and the highest open cell under it within
+   * MOUTH_SPAN (NO_HOLLOW where there is none): where a cave under the ground comes nearest the surface.
+   */
+  top: Int16Array | null; hollow: Int16Array | null; groundRow: number;
+  mouths: Array<{ mouth: Point; under: Point }>; search: EntranceSearch | null;
+  caves: CaveCache;
+  /** The columns round this one, the tops of their ground and which of their sections hold ground, as they are asked for. */
+  columns: Map<number, any>; tops: Map<number, Int16Array>; hollows: Map<number, Int16Array>; groundSections: Map<any, Int8Array>;
+  airSections: Map<any, Int8Array>;
+  local: Vec3;
+  readMs: number; cpuMs: number;
+}
+const newJob = (chunkX: number, chunkZ: number, column: any, caves: CaveCache): ColumnJob => ({ chunkX, chunkZ, column, clusters: [], phase: 'sections',
+  index: 0, cell: 0, section: null, top: null, hollow: null, groundRow: 0, mouths: [], search: null, caves, columns: new Map(), tops: new Map(),
+  hollows: new Map(), groundSections: new Map(), airSections: new Map(),
+  local: new Vec3(0, 0, 0), readMs: 0, cpuMs: 0 });
+const minYOf = (column: any): number => (typeof column?.minY === 'number' ? column.minY : 0);
+/** A column as a small integer (chunks 32,768 apart share one: never both round one job). */
+const columnKey = (chunkX: number, chunkZ: number) => ((chunkX & 0x7fff) << 15) | (chunkZ & 0x7fff);
+
+/** The state of a cell of a column (local x and z, world y), straight from its section; null where the section is not there. */
+function cellIn(column: any, lx: number, y: number, lz: number): number | null {
+  const offset = y - minYOf(column);
+  if (offset < 0) return null;
+  const data = column.sections[offset >> 4]?.data;
+  return data ? data.get(((offset & 15) << 8) | (lz << 4) | lx) : null;
+}
+
+function columnAt(bot: MemoryBot, job: ColumnJob, chunkX: number, chunkZ: number): any {
+  if (chunkX === job.chunkX && chunkZ === job.chunkZ) return job.column;
+  const key = columnKey(chunkX, chunkZ);
+  let column = job.columns.get(key);
+  if (column === undefined) {
+    try { column = bot.world?.getColumn?.(chunkX, chunkZ) ?? null; } catch { column = null; }
+    job.columns.set(key, column?.sections ? column : null);
+  }
+  return job.columns.get(key);
+}
+
+// The state of a cell anywhere, or null where it is not known. A column the server has not sent is not air:
+// read as air (what the world object answers), every ore on the edge of a column counted as showing.
+function stateAt(bot: MemoryBot, job: ColumnJob, x: number, y: number, z: number): number | null {
+  const column = columnAt(bot, job, x >> 4, z >> 4);
+  if (!column) return null;
+  const state = cellIn(column, x & 15, y, z & 15);
+  if (state !== null || typeof column.getBlockStateId !== 'function') return state;
+  // Outside the sections it has (above or below the world): what the column itself says.
+  try { job.local.x = x & 15; job.local.y = y; job.local.z = z & 15; return column.getBlockStateId(job.local); } catch { return null; }
+}
+
+function note(job: ColumnJob, kind: string, position: Vec3, what?: string): void {
+  const radius = mergeRadius(kind);
+  const known = job.clusters.find(cluster => cluster.kind === kind && cluster.position.distanceTo(position) <= radius);
+  if (known) known.count++; else job.clusters.push({ kind, position, count: 1, ...(what ? { note: what } : {}) });
+}
+
+/** The section at `index` as it is to be read, or null when nothing in it is of note (told by its palette alone). */
+function openSection(wanted: Wanted, column: any, index: number): SectionRead | null {
   const data = column.sections[index]?.data;
-  if (!data) return;
-  const palette: number[] | undefined = data.palette;
-  const minY = typeof column.minY === 'number' ? column.minY : 0;
+  if (!data) return null;
+  const baseY = minYOf(column) + index * 16;
   // A cave: the open cells of a section of the overworld's underground, counted (a section of solid rock or of nothing but air is
   // passed over by its palette).
-  const caveSection = wanted.overworld && minY + index * 16 + 15 < CAVE_BELOW_Y && !!palette && palette.some(state => wanted.air.has(state))
-    && palette.some(state => !wanted.air.has(state));
-  if (!caveSection && (palette ? !palette.some(state => wanted.byState.has(state)) : !(typeof data.value === 'number' && wanted.byState.has(data.value)))) return;
-  const baseX = job.chunkX * 16, baseZ = job.chunkZ * 16;
-  let open = 0, sumX = 0, sumY = 0, sumZ = 0;
-  const local = new Vec3(0, 0, 0);
-  // The state beside a cell, or null where it is not known. A column the server has not sent is not air:
-  // read as air (what the world object answers), every ore on the edge of a column counted as showing.
-  const stateAt = (x: number, y: number, z: number): number | null => {
-    try {
-      const chunkX = Math.floor(x / 16), chunkZ = Math.floor(z / 16);
-      const other = chunkX === job.chunkX && chunkZ === job.chunkZ ? column : bot.world?.getColumn?.(chunkX, chunkZ);
-      if (!other?.getBlockStateId) return null;
-      local.x = x & 15; local.y = y; local.z = z & 15;
-      return other.getBlockStateId(local);
-    } catch { return null; }
-  };
-  const note = (kind: string, position: Vec3, what?: string) => {
-    const radius = mergeRadius(kind);
-    const known = job.clusters.find(cluster => cluster.kind === kind && cluster.position.distanceTo(position) <= radius);
-    if (known) known.count++; else job.clusters.push({ kind, position, count: 1, ...(what ? { note: what } : {}) });
-  };
-  for (let cell = 0; cell < SECTION_VOLUME; cell++) {
-    const state = data.get(cell);
-    if (caveSection && wanted.air.has(state)) { open++; sumX += cell & 15; sumY += cell >> 8; sumZ += (cell >> 4) & 15; continue; }
-    const kind = wanted.byState.get(state);
-    if (!kind) continue;
-    const x = baseX + (cell & 15), y = minY + index * 16 + (cell >> 8), z = baseZ + ((cell >> 4) & 15);
-    if (kind === 'igloo') {
-      // An igloo's floor: white carpet on snow blocks (a carpet elsewhere is a house's).
-      const under = stateAt(x, y - 1, z);
-      if (under !== null && wanted.snow.has(under)) note(kind, new Vec3(x, y, z));
-      continue;
+  const below = wanted.overworld && baseY + 15 < CAVE_BELOW_Y;
+  const fresh = { data, baseY, open: 0, sumX: 0, sumY: 0, sumZ: 0 };
+  const palette: number[] | undefined = Array.isArray(data.palette) ? data.palette : undefined;
+  if (palette) {
+    let air = false, solid = false, kind = false;
+    for (const state of palette) {
+      const flag = flagOf(wanted, state);
+      if (flag & AIR) air = true; else solid = true;
+      if (flag & KIND) kind = true;
     }
-    if (kind === 'chest' && FACES.some(([dx, dy, dz]) => { const beside = stateAt(x + dx, y + dy, z + dz); return beside !== null && wanted.liquidSource.get(beside) === 'water'; })) {
-      note('shipwreck', new Vec3(x, y, z));
-    }
-    if (wanted.liquidSource.has(state)) {
-      // Reachable with a bucket: air over it. The cell above is in this section or the next one up.
-      const above = (cell >> 8) < 15 ? data.get(cell + 256) : column.sections[index + 1]?.data?.get(cell & 255);
-      if (above !== undefined && wanted.air.has(above)) note(kind, new Vec3(x, y, z));
-    } else if (kind.endsWith('_ore') || kind === 'ancient_debris') {
-      if (FACES.some(([dx, dy, dz]) => { const beside = stateAt(x + dx, y + dy, z + dz); return beside !== null && wanted.air.has(beside); })) note(kind, new Vec3(x, y, z));
-    } else note(kind, new Vec3(x, y, z), kind === 'spawner' ? spawnedBy(column, cell & 15, y, (cell >> 4) & 15) : undefined);
+    const cave = below && air && solid;
+    if (!cave && !kind) return null;
+    const mask = KIND | (cave ? AIR : 0);
+    // A palette's cells are indices into it: read straight from the bits, one look-up per cell.
+    const bits = typeof data.data?.get === 'function' ? data.data : undefined;
+    return { ...fresh, palette, bits, paletteFlags: Uint8Array.from(palette, state => flagOf(wanted, state) & mask), mask, cave };
   }
-  if (open >= CAVE_MIN_CELLS) {
+  // One state fills the section.
+  if (typeof data.value === 'number') return flagOf(wanted, data.value) & KIND ? { ...fresh, mask: KIND, cave: false } : null;
+  // No palette (more states than one holds): every cell is read.
+  return { ...fresh, mask: KIND | (below ? AIR : 0), cave: below };
+}
+
+/** Notes what one cell of note is (it has the KIND flag). */
+function noteCell(bot: MemoryBot, wanted: Wanted, job: ColumnJob, section: SectionRead, cell: number, state: number): void {
+  const kind = wanted.kindOf.get(state);
+  if (!kind) return;
+  const x = job.chunkX * 16 + (cell & 15), y = section.baseY + (cell >> 8), z = job.chunkZ * 16 + ((cell >> 4) & 15);
+  if (kind === 'igloo') {
+    // An igloo's floor: white carpet on snow blocks (a carpet elsewhere is a house's).
+    if (flagOf(wanted, stateAt(bot, job, x, y - 1, z)) & SNOW) note(job, kind, new Vec3(x, y, z));
+    return;
+  }
+  if (kind === 'chest' && FACES.some(([dx, dy, dz]) => wanted.liquidSource.get(stateAt(bot, job, x + dx, y + dy, z + dz) ?? -1) === 'water')) {
+    note(job, 'shipwreck', new Vec3(x, y, z));
+  }
+  if (wanted.liquidSource.has(state)) {
+    // Reachable with a bucket: air over it. The cell above is in this section or the next one up.
+    const above = (cell >> 8) < 15 ? section.data.get(cell + 256) : job.column.sections[job.index + 1]?.data?.get(cell & 255);
+    if (flagOf(wanted, above) & AIR) note(job, kind, new Vec3(x, y, z));
+  } else if (kind.endsWith('_ore') || kind === 'ancient_debris') {
+    if (FACES.some(([dx, dy, dz]) => flagOf(wanted, stateAt(bot, job, x + dx, y + dy, z + dz)) & AIR)) note(job, kind, new Vec3(x, y, z));
+  } else note(job, kind, new Vec3(x, y, z), kind === 'spawner' ? spawnedBy(job.column, cell & 15, y, (cell >> 4) & 15) : undefined);
+}
+
+/** Reads at most SLICE_CELLS cells of the column's sections, from where the last step stopped. */
+function readSlice(bot: MemoryBot, wanted: Wanted, job: ColumnJob): void {
+  const sections = job.column.sections;
+  while (!job.section) {
+    if (job.index >= sections.length) { job.phase = wanted.overworld ? 'ground' : 'done'; return; }
+    job.section = openSection(wanted, job.column, job.index);
+    if (!job.section) job.index++;
+  }
+  const section = job.section;
+  const end = Math.min(SECTION_VOLUME, job.cell + SLICE_CELLS);
+  const { bits, palette, paletteFlags, mask, data } = section;
+  for (let cell = job.cell; cell < end; cell++) {
+    let state: number, flag: number;
+    if (bits) {
+      const entry = bits.get(cell);
+      flag = paletteFlags![entry];
+      if (!flag) continue;
+      state = palette![entry];
+    } else {
+      state = data.get(cell);
+      flag = flagOf(wanted, state) & mask;
+      if (!flag) continue;
+    }
+    if (flag & AIR) { section.open++; section.sumX += cell & 15; section.sumY += cell >> 8; section.sumZ += (cell >> 4) & 15; continue; }
+    noteCell(bot, wanted, job, section, cell, state);
+  }
+  job.cell = end;
+  if (end < SECTION_VOLUME) return;
+  if (section.open >= CAVE_MIN_CELLS) {
     // One cave across sections and columns: its open cells added up where the hollows meet (mergeRadius of a cave).
-    const middle = new Vec3(baseX + Math.floor(sumX / open), minY + index * 16 + Math.floor(sumY / open), baseZ + Math.floor(sumZ / open));
+    const middle = new Vec3(job.chunkX * 16 + Math.floor(section.sumX / section.open), section.baseY + Math.floor(section.sumY / section.open),
+      job.chunkZ * 16 + Math.floor(section.sumZ / section.open));
     const known = job.clusters.find(cluster => cluster.kind === 'cave' && cluster.position.distanceTo(middle) <= mergeRadius('cave'));
-    if (known) known.count += open; else job.clusters.push({ kind: 'cave', position: middle, count: open });
+    if (known) known.count += section.open; else job.clusters.push({ kind: 'cave', position: middle, count: section.open });
   }
+  job.section = null; job.cell = 0; job.index++;
+}
+
+/** Which sections of a column hold any ground (by their palettes), worked out once a column for the job. */
+function groundSectionsOf(wanted: Wanted, job: ColumnJob, column: any): Int8Array {
+  let known = job.groundSections.get(column);
+  if (known) return known;
+  const sections = column.sections;
+  known = new Int8Array(sections.length);
+  for (let index = 0; index < sections.length; index++) {
+    const data = sections[index]?.data;
+    known[index] = !data ? 0 : Array.isArray(data.palette) ? (data.palette.some((state: number) => flagOf(wanted, state) & GROUND) ? 1 : 0)
+      : typeof data.value === 'number' ? (flagOf(wanted, data.value) & GROUND ? 1 : 0) : 1;
+  }
+  job.groundSections.set(column, known);
+  return known;
+}
+
+/** The highest ground block of one cell of a column (minY - 1 when it has none), from the top down; sections without ground are passed over. */
+function groundTop(wanted: Wanted, job: ColumnJob, column: any, lx: number, lz: number): number {
+  const sections = column.sections, minY = minYOf(column), withGround = groundSectionsOf(wanted, job, column);
+  for (let index = sections.length - 1; index >= 0; index--) {
+    if (!withGround[index]) continue;
+    const data = sections[index].data;
+    for (let ly = 15; ly >= 0; ly--) if (flagOf(wanted, data.get((ly << 8) | (lz << 4) | lx)) & GROUND) return minY + index * 16 + ly;
+  }
+  return minY - 1;
+}
+
+/** Which sections of a column have any air (by their palettes), worked out once a column for the job. */
+function airSectionsOf(wanted: Wanted, job: ColumnJob, column: any): Int8Array {
+  let known = job.airSections.get(column);
+  if (known) return known;
+  const sections = column.sections;
+  known = new Int8Array(sections.length);
+  for (let index = 0; index < sections.length; index++) {
+    const data = sections[index]?.data;
+    known[index] = !data ? 0 : Array.isArray(data.palette) ? (data.palette.some((state: number) => flagOf(wanted, state) & AIR) ? 1 : 0)
+      : typeof data.value === 'number' ? (flagOf(wanted, data.value) & AIR ? 1 : 0) : 1;
+  }
+  job.airSections.set(column, known);
+  return known;
+}
+
+/** The highest open cell under the top of the ground of one cell of a column, within MOUTH_SPAN of it; NO_HOLLOW where there is none. */
+function hollowUnder(wanted: Wanted, job: ColumnJob, column: any, lx: number, lz: number, top: number): number {
+  const minY = minYOf(column), withAir = airSectionsOf(wanted, job, column), sections = column.sections;
+  for (let y = top - 1; y >= Math.max(minY, top - MOUTH_SPAN); y--) {
+    const index = (y - minY) >> 4;
+    // A section with no air in it is passed over whole.
+    if (!withAir[index]) { y = minY + index * 16; continue; }
+    if (flagOf(wanted, sections[index].data.get((((y - minY) & 15) << 8) | (lz << 4) | lx)) & AIR) return y;
+  }
+  return NO_HOLLOW;
+}
+
+/** Reads the top of the ground, and the highest hollow under it, of four rows of the column (64 cells) per step. */
+function readGround(wanted: Wanted, job: ColumnJob): void {
+  job.top ??= new Int16Array(256);
+  job.hollow ??= new Int16Array(256);
+  const last = Math.min(16, job.groundRow + 4);
+  for (let lz = job.groundRow; lz < last; lz++) for (let lx = 0; lx < 16; lx++) {
+    const top = job.top[lz * 16 + lx] = groundTop(wanted, job, job.column, lx, lz);
+    job.hollow[lz * 16 + lx] = hollowUnder(wanted, job, job.column, lx, lz, top);
+  }
+  job.groundRow = last;
+  if (last >= 16) job.phase = 'mouths';
+}
+
+const NO_TOP = -32_768;
+const NO_HOLLOW = -32_767;
+
+/** The highest hollow under the ground at a cell of another column (see hollowUnder), or null where the column is not known. */
+function hollowAt(bot: MemoryBot, wanted: Wanted, job: ColumnJob, x: number, z: number): number | null {
+  const top = groundTopAt(bot, wanted, job, x, z);
+  if (top === null) return null;
+  const key = columnKey(x >> 4, z >> 4);
+  let hollows = job.hollows.get(key);
+  if (!hollows) { hollows = new Int16Array(256).fill(NO_TOP); job.hollows.set(key, hollows); }
+  const cell = (z & 15) * 16 + (x & 15);
+  if (hollows[cell] === NO_TOP) hollows[cell] = hollowUnder(wanted, job, columnAt(bot, job, x >> 4, z >> 4), x & 15, z & 15, top);
+  return hollows[cell];
+}
+/** The top of the ground at a cell of any column (the job's own from its rows), or null where the column is not known. */
+function groundTopAt(bot: MemoryBot, wanted: Wanted, job: ColumnJob, x: number, z: number): number | null {
+  const chunkX = x >> 4, chunkZ = z >> 4;
+  if (chunkX === job.chunkX && chunkZ === job.chunkZ) return job.top![(z & 15) * 16 + (x & 15)];
+  const column = columnAt(bot, job, chunkX, chunkZ);
+  if (!column) return null;
+  const key = columnKey(chunkX, chunkZ);
+  let tops = job.tops.get(key);
+  if (!tops) { tops = new Int16Array(256).fill(NO_TOP); job.tops.set(key, tops); }
+  const cell = (z & 15) * 16 + (x & 15);
+  if (tops[cell] === NO_TOP) tops[cell] = groundTop(wanted, job, column, x & 15, z & 15);
+  return tops[cell];
+}
+
+const SIDES: Array<[number, number]> = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+/** A hollow is looked for this far under the top of the ground at most (a cave in the face of a cliff of that height). */
+const MOUTH_SPAN = 48;
+/**
+ * Where open air under the sky meets open air under a roof of ground, beside it: the mouths a cave down may start from. Each cell
+ * beside is looked at once, at its highest hollow (see hollowUnder): looking up every height between the two grounds took 2-3 ms a
+ * column and up to 37 ms in hills (lab world 20261020). The lowest first, a few blocks apart, at most ENTRANCE_SEEDS.
+ */
+function findMouths(bot: MemoryBot, wanted: Wanted, job: ColumnJob): void {
+  const top = job.top!, hollow = job.hollow!, baseX = job.chunkX * 16, baseZ = job.chunkZ * 16, column = job.column;
+  const found: Array<{ mouth: Point; under: Point }> = [];
+  for (let lz = 0; lz < 16; lz++) for (let lx = 0; lx < 16; lx++) {
+    const own = top[lz * 16 + lx];
+    for (const [dx, dz] of SIDES) {
+      // The cell beside, in this column or across its edge: its highest hollow, above this cell's ground and open to its air.
+      const nx = lx + dx, nz = lz + dz, inside = nx >= 0 && nx < 16 && nz >= 0 && nz < 16;
+      const y = inside ? hollow[nz * 16 + nx] : hollowAt(bot, wanted, job, baseX + nx, baseZ + nz);
+      if (y === null || y === NO_HOLLOW || y <= own || !(flagOf(wanted, cellIn(column, lx, y, lz)) & AIR)) continue;
+      found.push({ mouth: { x: baseX + lx, y, z: baseZ + lz }, under: { x: baseX + nx, y, z: baseZ + nz } });
+    }
+  }
+  found.sort((a, b) => a.mouth.y - b.mouth.y);
+  for (const candidate of found) {
+    if (job.mouths.length >= ENTRANCE_SEEDS) break;
+    if (job.mouths.some(kept => Math.hypot(kept.mouth.x - candidate.mouth.x, kept.mouth.y - candidate.mouth.y, kept.mouth.z - candidate.mouth.z) < ENTRANCE_SEED_APART)) continue;
+    job.mouths.push(candidate);
+  }
+  job.phase = job.mouths.length ? 'entrances' : 'done';
+}
+
+/** A cell as a small integer, relative to where the search began (-1 beyond 255 blocks across or 511 up or down of it). */
+const packCell = (origin: Point, x: number, y: number, z: number) => {
+  const dx = x - origin.x + 256, dz = z - origin.z + 256, dy = y - origin.y + 512;
+  return dx < 0 || dx > 511 || dz < 0 || dz > 511 || dy < 0 || dy > 1023 ? -1 : (dx << 19) | (dz << 10) | dy;
+};
+const DOWN_FIRST: Array<[number, number, number]> = [[0, -1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, 1, 0]];
+
+/** Notes the mouth as an entrance when the cave it leads into goes deep enough below it. */
+function noteEntrance(job: ColumnJob, mouthAt: Point, followed: CaveFollowed): void {
+  if (mouthAt.y - followed.bottom.y < ENTRANCE_DEPTH) return;
+  const mouth = new Vec3(mouthAt.x, mouthAt.y, mouthAt.z);
+  const bottom = `底 (${followed.bottom.x},${followed.bottom.y},${followed.bottom.z})`;
+  // Two mouths of one cave within a column: the one that goes deeper is kept.
+  const known = job.clusters.find(cluster => cluster.kind === 'cave_entrance' && cluster.position.distanceTo(mouth) <= mergeRadius('cave_entrance'));
+  if (!known) job.clusters.push({ kind: 'cave_entrance', position: mouth, count: followed.cells, note: bottom });
+  else if (Number(known.note?.match(/,(-?\d+),/)?.[1] ?? Infinity) > followed.bottom.y) Object.assign(known, { position: mouth, count: followed.cells, note: bottom });
+}
+
+/** Follows the hollow under ground from the next mouth, ENTRANCE_STEP_CELLS cells per step; notes an entrance where it goes deep enough. */
+function followEntrance(bot: MemoryBot, wanted: Wanted, job: ColumnJob): void {
+  if (!job.search) {
+    const next = job.mouths.shift();
+    if (!next) { job.phase = 'done'; return; }
+    // A cave already followed (from this column or one read before): its bottom is known.
+    const known = caveReaching(job.caves, next.under);
+    if (known) { noteEntrance(job, next.mouth, known); return; }
+    const start = packCell(next.under, next.under.x, next.under.y, next.under.z);
+    job.search = { mouth: next.mouth, origin: next.under, queue: [start], head: 0, seen: new Set([start]), followed: { bottom: { ...next.under }, cells: 1 } };
+  }
+  const search = job.search, origin = search.origin, followed = search.followed;
+  let cells = 0;
+  while (search.head < search.queue.length && cells++ < ENTRANCE_STEP_CELLS) {
+    // Deep enough to be worth the walk: no need to follow it further.
+    if (search.mouth.y - followed.bottom.y >= ENTRANCE_DEEP_ENOUGH) { search.head = search.queue.length; break; }
+    const key = search.queue[search.head++];
+    const x = (key >> 19) - 256 + origin.x, z = ((key >> 10) & 511) - 256 + origin.z, y = (key & 1023) - 512 + origin.y;
+    if (y < followed.bottom.y) followed.bottom = { x, y, z };
+    for (const [dx, dy, dz] of DOWN_FIRST) {
+      if (search.seen.size >= ENTRANCE_CELLS) break;
+      const nx = x + dx, ny = y + dy, nz = z + dz;
+      const packed = packCell(origin, nx, ny, nz);
+      if (packed < 0 || search.seen.has(packed)) continue;
+      // Open air only (not water, not rock), and never out under the sky again.
+      if (!(flagOf(wanted, stateAt(bot, job, nx, ny, nz)) & AIR)) continue;
+      const top = groundTopAt(bot, wanted, job, nx, nz);
+      if (top === null || ny > top) continue;
+      search.seen.add(packed);
+      search.queue.push(packed);
+    }
+  }
+  followed.cells = search.seen.size;
+  if (search.head < search.queue.length) return;
+  job.search = null;
+  job.caves.searches.unshift({ origin, seen: search.seen, followed });
+  if (job.caves.searches.length > CAVES_KEPT) job.caves.searches.pop();
+  noteEntrance(job, search.mouth, followed);
+}
+
+/** One step of reading a column: a slice of a section, rows of the ground, the mouths, or a part of following one down. Returns which. */
+function stepColumn(bot: MemoryBot, wanted: Wanted, job: ColumnJob): string {
+  const phase = job.phase;
+  if (phase === 'sections') readSlice(bot, wanted, job);
+  else if (phase === 'ground') readGround(wanted, job);
+  else if (phase === 'mouths') findMouths(bot, wanted, job);
+  else if (phase === 'entrances') followEntrance(bot, wanted, job);
+  return phase;
 }
 
 const sightingsOf = (job: ColumnJob, dimension: string): Sighting[] => job.clusters.map(cluster => ({ kind: cluster.kind, dimension,
@@ -226,10 +581,10 @@ const sightingsOf = (job: ColumnJob, dimension: string): Sighting[] => job.clust
   ...(cluster.note ? { note: cluster.note } : {}) }));
 
 /** What is worth noting in one chunk column, as sightings already gathered into places (a pool is one, a vein is one). */
-export function readColumn(bot: MemoryBot, wanted: Wanted, entry: ColumnEntry, dimension: string): Sighting[] {
+export function readColumn(bot: MemoryBot, wanted: Wanted, entry: ColumnEntry, dimension: string, caves = newCaveCache()): Sighting[] {
   if (!entry.column?.sections) return [];
-  const job: ColumnJob = { chunkX: Number(entry.chunkX), chunkZ: Number(entry.chunkZ), column: entry.column, index: 0, clusters: [] };
-  while (job.index < job.column.sections.length) readSection(bot, wanted, job);
+  const job = newJob(Number(entry.chunkX), Number(entry.chunkZ), entry.column, caves);
+  while (job.phase !== 'done') stepColumn(bot, wanted, job);
   return sightingsOf(job, dimension);
 }
 
@@ -298,7 +653,9 @@ export function installPlaceMemory(bot: MemoryBot, options: { file?: string } = 
       }
       dirty = true;
     },
-    stats: { columnsRead: 0, maxReadMs: 0, totalReadMs: 0, forgotten: 0 },
+    stats: { columnsRead: 0, maxReadMs: 0, totalReadMs: 0, forgotten: 0, maxColumnMs: 0, maxTickMs: 0, setupMs: 0,
+      stepBuckets: [0, 0, 0, 0, 0, 0], columnBuckets: [0, 0, 0, 0, 0, 0], phases: {}, maxStepCpuMs: 0, maxColumnCpuMs: 0,
+      columnCpuBuckets: [0, 0, 0, 0, 0, 0], slowest: [] },
     work: budgetMs => work(budgetMs),
   };
 
@@ -329,9 +686,11 @@ export function installPlaceMemory(bot: MemoryBot, options: { file?: string } = 
   let wanted: Wanted | null = null;
   const queue = new Set<string>();
   const enqueue = (chunkX: number, chunkZ: number) => queue.add(`${chunkX},${chunkZ}`);
-  // One column at a time, a section per step, within the tick's budget.
-  let job: (ColumnJob & { startedReadMs: number }) | null = null;
-  const finish = (done: ColumnJob & { startedReadMs: number }) => {
+  // One column at a time, a slice per step, within the tick's budget.
+  let job: ColumnJob | null = null;
+  // The caves followed down in this dimension (see CaveCache); forgotten with the dimension.
+  let caves = newCaveCache();
+  const finish = (done: ColumnJob) => {
     const where = dimension();
     const sightings = sightingsOf(done, where);
     const now = Date.now();
@@ -342,19 +701,20 @@ export function installPlaceMemory(bot: MemoryBot, options: { file?: string } = 
       && !sightings.some(sighting => sighting.kind === place.kind
         && Math.hypot(sighting.position.x - place.position.x, sighting.position.y - place.position.y, sighting.position.z - place.position.z) <= mergeRadius(place.kind)));
     // Room is made once for the column (a column can bring dozens of sightings).
-    for (const sighting of sightings) rememberPlace(memory.state, sighting, now, from(), { later: true });
+    const index = sightings.length ? indexPlaces(memory.state) : undefined;
+    for (const sighting of sightings) rememberPlace(memory.state, sighting, now, from(), { later: true, index });
     makeRoom(memory.state, now, from());
     if (markSeen(memory.state, where, done.chunkX, done.chunkZ) || sightings.length || forgotten) dirty = true;
     const biome = biomeOfColumn(done.column);
     if (biome && noteBiome(memory.state, where, done.chunkX, done.chunkZ, biome)) dirty = true;
     memory.stats.columnsRead++; memory.stats.forgotten += forgotten;
-    memory.stats.totalReadMs += done.startedReadMs;
   };
   const work = (budgetMs: number) => {
     // Mineflayer injects plugins before login creates the world. Keep queued columns for readiness.
     if (!bot.world) return;
     const started = performance.now();
-    while (performance.now() - started < budgetMs) {
+    // At least one step a call, however small the budget: a step is a slice (see SLICE_CELLS).
+    for (let first = true; first || performance.now() - started < budgetMs; first = false) {
       if (!job) {
         const key = queue.values().next().value as string | undefined;
         if (key === undefined) return;
@@ -363,15 +723,43 @@ export function installPlaceMemory(bot: MemoryBot, options: { file?: string } = 
         const column = bot.world?.getColumn?.(chunkX, chunkZ);
         if (!column?.sections) continue;
         const where = dimension();
-        wanted = wantedByDimension.get(where) ?? wantedByDimension.set(where, wantedStates(bot, where)).get(where)!;
-        job = { chunkX, chunkZ, column, index: 0, clusters: [], startedReadMs: 0 };
+        wanted = wantedByDimension.get(where) ?? null;
+        if (!wanted) {
+          const setupStarted = performance.now();
+          wanted = wantedStates(bot, where);
+          wantedByDimension.set(where, wanted);
+          memory.stats.setupMs += performance.now() - setupStarted;
+        }
+        job = newJob(chunkX, chunkZ, column, caves);
       }
-      const stepStarted = performance.now();
-      readSection(bot, wanted!, job);
-      const stepMs = performance.now() - stepStarted;
-      job.startedReadMs += stepMs;
+      // A column's noting (merging what it showed into the places kept) is a step of its own: once the memory is full it is the
+      // largest part of a column (lab world 20261020), and it was not timed before.
+      const stepStarted = performance.now(), cpuStarted = process.cpuUsage();
+      const phase = job.phase === 'done' ? 'noting' : stepColumn(bot, wanted!, job);
+      if (phase === 'noting') finish(job);
+      const stepMs = performance.now() - stepStarted, cpu = process.cpuUsage(cpuStarted), stepCpuMs = (cpu.user + cpu.system) / 1000;
+      const slowest = memory.stats.slowest;
+      if (slowest.length < SLOWEST_KEPT || stepMs > slowest[slowest.length - 1].ms) {
+        slowest.push({ phase, at: stepStarted, ms: stepMs, cpuMs: stepCpuMs });
+        slowest.sort((a, b) => b.ms - a.ms);
+        if (slowest.length > SLOWEST_KEPT) slowest.pop();
+      }
+      job.cpuMs += stepCpuMs;
+      memory.stats.maxStepCpuMs = Math.max(memory.stats.maxStepCpuMs, stepCpuMs);
+      const byPhase = memory.stats.phases[phase] ??= { steps: 0, totalMs: 0, maxMs: 0, maxCpuMs: 0 };
+      byPhase.steps++; byPhase.totalMs += stepMs; byPhase.maxMs = Math.max(byPhase.maxMs, stepMs); byPhase.maxCpuMs = Math.max(byPhase.maxCpuMs, stepCpuMs);
+      job.readMs += stepMs;
       memory.stats.maxReadMs = Math.max(memory.stats.maxReadMs, stepMs);
-      if (job.index >= job.column.sections.length) { finish(job); job = null; }
+      memory.stats.stepBuckets[bucketOf(stepMs)]++;
+      if (phase === 'noting') {
+        // A column's cost is its steps added up, its noting included.
+        memory.stats.totalReadMs += job.readMs;
+        memory.stats.maxColumnMs = Math.max(memory.stats.maxColumnMs, job.readMs);
+        memory.stats.columnBuckets[bucketOf(job.readMs)]++;
+        memory.stats.maxColumnCpuMs = Math.max(memory.stats.maxColumnCpuMs, job.cpuMs);
+        memory.stats.columnCpuBuckets[bucketOf(job.cpuMs)]++;
+        job = null;
+      }
     }
   };
 
@@ -512,7 +900,7 @@ export function installPlaceMemory(bot: MemoryBot, options: { file?: string } = 
   // The arrival is read a few ticks after the spawn: the spawn comes with the health, which may be ahead of the position.
   let pairInTicks = 0;
   bot.on('spawn', () => {
-    job = null; queue.clear(); seedLoadedColumns();
+    job = null; queue.clear(); caves = newCaveCache(); seedLoadedColumns();
     pairInTicks = 10;
     if (deathAwaitingRespawn) {
       deathAwaitingRespawn = false;
@@ -533,6 +921,7 @@ export function installPlaceMemory(bot: MemoryBot, options: { file?: string } = 
   let tick = 0;
   bot.on('physicsTick', () => {
     tick++;
+    const tickStarted = performance.now();
     try {
       if (tick % NEARBY_REREAD_TICKS === 0 && bot.entity?.position) {
         const chunkX = Math.floor(bot.entity.position.x / 16), chunkZ = Math.floor(bot.entity.position.z / 16);
@@ -551,6 +940,7 @@ export function installPlaceMemory(bot: MemoryBot, options: { file?: string } = 
       work(TICK_BUDGET_MS);
       if (dirty && Date.now() - savedAt >= SAVE_INTERVAL_MS) flush();
     } catch (error) { log.warn(`場所の記憶の更新に失敗（身体は止めない）: ${String(error)}`); }
+    memory.stats.maxTickMs = Math.max(memory.stats.maxTickMs, performance.now() - tickStarted);
   });
 }
 
