@@ -1,4 +1,5 @@
 import { beginEngagement, engagementOf } from '../utils/engagement.js';
+import { markHeadCombat } from '../utils/combatOwner.js';
 import { createLogger } from '../../../utils/logger.js';
 import { CONFIG } from '../config/MinebotConfig.js';
 import { extractAndSaveKnowledge } from '../knowledge/skillResultExtractor.js';
@@ -192,6 +193,8 @@ export abstract class InstantSkill extends Skill {
       else if (actionId) cancelAction(host, actionId, 'tool_broke');
     };
     let endEngagement: (() => void) | null = null;
+    /** The planner's fight as the floor's reflexes read it (utils/combatOwner): marked while its action runs. */
+    const headCombat: { end: (() => void) | null } = { end: null };
     let finalResult: SkillResult;
     let sleepNote = '';
     try {
@@ -210,6 +213,9 @@ export abstract class InstantSkill extends Skill {
           // The restock notes are kept on the root of the action (toolStock): nativeBody's, under common FCA.
           rootAction = own?.root ?? own ?? null;
           mayStop = !(own?.root ?? own)?.safetyLease;
+          // Run 21: a fight the planner chose was dropped again and again by the floor's flee and shelter. While it runs the floor
+          // leaves it alone (a fight run by a reflex's own lease is not the planner's).
+          if (mayStop) headCombat.end = markHeadCombat(host, this.skillName, engagementOf(this.skillName, args));
           if (own?.root) stopOwn = () => own.controller.abort('tool_broke');
           // At night with a bed, the night is slept through before the work (utils/nightSleep), once a night.
           if (NIGHT_SLEEP_SKILLS.has(this.skillName)) {
@@ -228,6 +234,7 @@ export abstract class InstantSkill extends Skill {
       });
     } finally {
       endEngagement?.();
+      headCombat.end?.();
       if (topLevel) host.removeListener?.('minebotToolBroke' as any, onBroke as any);
     }
     if (broken.length && mayStop) {
