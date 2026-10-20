@@ -26,7 +26,8 @@ describe('a descent straight down where the rock allows (lab: a stair 2.45 s a l
     // Gravel under the floor falls into whatever is below it once the floor is gone, the body on top.
     expect(shaftStepRefusal(world({ '0,38,0': 'gravel' }), feet)).toBe('falling_under');
     expect(shaftStepRefusal(world({ '1,39,0': 'lava' }), feet)).toBe('liquid_beside');
-    expect(shaftStepRefusal(world({ '0,38,-1': 'water' }), feet)).toBe('liquid_beside');
+    expect(shaftStepRefusal(world({ '0,39,-1': 'water' }), feet)).toBe('liquid_beside');
+    expect(shaftStepRefusal(world({ '0,38,-1': 'water' }), feet)).toBeNull();   // the level under: asked from there
     expect(shaftStepRefusal(world({ '0,39,0': 'bedrock' }), feet)).toBe('floor_not_diggable');
     expect(shaftStepRefusal(world({ '0,39,0': 'chest' }), feet)).toBe('floor_protected');
   });
@@ -141,5 +142,29 @@ describe('mine-block makes room just before a dig (mb-body\'s lab, run 21: two d
     expect(spareRockToDrop([{ name: 'cobblestone', count: 64 }, { name: 'tuff', count: 12 }])).toEqual({ name: 'cobblestone', count: 32 });
     expect(spareRockToDrop([{ name: 'cobblestone', count: 64 }, { name: 'tuff', count: 12 }], ['cobblestone'])).toEqual({ name: 'tuff', count: 12 });
     expect(spareRockToDrop([{ name: 'diamond', count: 3 }])).toBeNull();
+  });
+});
+
+describe('gravel dug for its flint (mb-body: flint within 60 s; ten gravel gave none in the lab)', () => {
+  it('sets the gravel carried down and digs it again until a flint comes', async () => {
+    const registry = minecraftData('1.21.11');
+    const pack: Array<{ name: string; count: number; type?: number }> = [{ name: 'gravel', count: 5 }];
+    let cell: string = 'air';
+    const bot: any = Object.assign(new EventEmitter(), {
+      version: '1.21.11', registry, entity: { position: new Vec3(0.5, 64, 0.5) }, entities: {}, interruptExecution: false,
+      inventory: { items: () => pack, emptySlotCount: () => 30 },
+      blockAt: (p: Vec3) => p.equals(new Vec3(2, 64, 0)) ? { name: cell, boundingBox: cell === 'air' ? 'empty' : 'block' } : { name: 'stone', boundingBox: 'block' },
+    });
+    const skill: any = new MineBlock(bot);
+    let digs = 0;
+    skill.callSkill = vi.fn(async (name: string) => {
+      if (name === 'place-block-at') { cell = 'gravel'; pack[0].count--; return { success: true, result: 'gravelを(2, 64, 0)に設置しました' }; }
+      digs++; cell = 'air';
+      if (digs === 3) pack.push({ name: 'flint', count: 1 }); else pack[0].count++;
+      return { success: true, result: 'dug' };
+    });
+    const note = await skill.flintFromGravel(120_000);
+    expect(note).toContain('3回目で出ました');
+    expect(skill.callSkill).toHaveBeenCalledWith('dig-block-at', 2, 64, 0, true, 'target');
   });
 });

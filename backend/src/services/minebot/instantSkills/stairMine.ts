@@ -16,6 +16,8 @@ import pathfinder from 'mineflayer-pathfinder';
 import { gotoSafe } from '../utils/gotoSafe.js';
 const { goals } = pathfinder;
 const log = createLogger('Minebot:Skill:stairMine');
+/** The most blocks walked along the level, each way, to get clear of a lava lake or a cave under the descent (sidestepToRock). */
+const SIDESTEP_BLOCKS = 6;
 
 /**
  * 階段掘り/埋めスキル
@@ -131,6 +133,9 @@ class StairMine extends InstantSkill {
             const BACKOFFS = 3;
             /** Walks down to a cave's floor in this call (see the fallback below). */
             let caveWalks = 0;
+            /** Walks along the level away from a lava lake or a cave under the descent (sidestepToRock). */
+            let sidesteps = 0;
+            const SIDESTEPS = 3;
 
             // タイムアウト設定（60秒）
             // Deepslate steps take several seconds each; a fixed 60s stopped a
@@ -238,6 +243,12 @@ class StairMine extends InstantSkill {
                                     continue;
                                 }
                             }
+                        }
+                        // A lava lake (or a cave) under every way: along the level to where the rock under is whole, then down again.
+                        if (sidesteps < SIDESTEPS && !this.shouldInterrupt() && await this.sidestepToRock(firstDirection)) {
+                            sidesteps++;
+                            triedDirections.length = 0; dir = firstDirection.clone(); this.lastStopReason = null; i--;
+                            continue;
                         }
                         return {
                             success: false,
@@ -368,7 +379,14 @@ class StairMine extends InstantSkill {
      * nothing dug, where that is not safe or the body cannot be stood over the middle of its column; the caller then takes a stair step.
      */
     private async shaftStep(feet: Vec3): Promise<boolean> {
-        if (shaftStepRefusal(this.bot as any, feet)) return false;
+        let refusal = shaftStepRefusal(this.bot as any, feet);
+        if (refusal === 'liquid_beside') {
+            const into = feet.offset(0, -1, 0);
+            await this.plugLavaBeside(into);
+            await this.plugWaterBeside(into, 'cobblestone');
+            refusal = shaftStepRefusal(this.bot as any, feet);
+        }
+        if (refusal) return false;
         // The body's box (0.6 wide) has to be over this column alone, or it stays on the rim of the next.
         const centre = feet.offset(0.5, 0, 0.5);
         const off = () => Math.max(Math.abs(this.bot.entity.position.x - centre.x), Math.abs(this.bot.entity.position.z - centre.z));
@@ -648,7 +666,9 @@ class StairMine extends InstantSkill {
                 return false;
             }
 
-            // マグマ隣接チェック — 掘ると溶岩が流入する場合は中止
+            // マグマ隣接チェック — 掘ると溶岩が流入する場合は中止. Lava beside or over the block is filled with a carried block first
+            // (plugLavaBeside); lava under it is not (the step would stand over it), and still stops the dig.
+            if (this.hasAdjacentLava(block.position)) await this.plugLavaBeside(block.position);
             if (this.hasAdjacentLava(block.position)) {
                 log.warn(`⚠ ${block.name}(${block.position.x},${block.position.y},${block.position.z})の隣にマグマがあるため掘削中止`);
                 return false;
@@ -674,6 +694,57 @@ class StairMine extends InstantSkill {
             if (error instanceof ThreatExposedError || error instanceof LavaReleaseError) this.lastStopReason = error.message;
             return false;
         }
+    }
+
+    /**
+     * Lava beside or over `pos` (never under it), filled with a carried block in each such cell, at most four; never in the cells the
+     * body stands in. True when none is left there. A descent that meets a lava pocket beside its shaft goes on past it, as a person
+     * blocks it off: the stair used to refuse the block and turn, four ways round, and stop (mb-body's diamond descents, 2026-10-20).
+     */
+    private async plugLavaBeside(pos: Vec3): Promise<boolean> {
+        const feet = this.bot.entity.position.floored();
+        const offsets = [new Vec3(1, 0, 0), new Vec3(-1, 0, 0), new Vec3(0, 0, 1), new Vec3(0, 0, -1), new Vec3(0, 1, 0)];
+        const lavaAt = () => offsets.map(off => pos.plus(off)).find(cell => ['lava', 'flowing_lava'].includes(this.bot.blockAt(cell)?.name ?? '')) ?? null;
+        for (let tries = 0; tries < 4; tries++) {
+            const lava = lavaAt();
+            if (!lava) return true;
+            if ((lava.x === feet.x && lava.z === feet.z && (lava.y === feet.y || lava.y === feet.y + 1)) || this.shouldInterrupt()) return false;
+            const filler = ['cobblestone', 'cobbled_deepslate', 'stone', 'deepslate', 'dirt', 'andesite', 'diorite', 'granite', 'tuff', 'netherrack']
+                .find(name => this.bot.inventory.items().some(item => item.name === name));
+            if (!filler || !(await this.placeBlockSafe(filler, lava))) return false;
+            const deadline = Date.now() + 1000;
+            while (Date.now() < deadline && ['lava', 'flowing_lava'].includes(this.bot.blockAt(lava)?.name ?? '')) await this.sleep(50);
+            log.info(`🧱 階段の脇の溶岩(${lava.x},${lava.y},${lava.z})を${filler}で塞いだ`);
+        }
+        return !lavaAt();
+    }
+
+    /**
+     * Along the level, away from what lies under the descent (a lava lake, a cave): up to SIDESTEP_BLOCKS forward in the first way that
+     * has rock to walk on, the head and feet cells dug as needed (each dig held to the lava rules), until a step straight down is safe
+     * again. The ways in turn: the one asked for, its sides, back. False, with the body where it got to, when no way leads there.
+     */
+    private async sidestepToRock(first: Vec3): Promise<boolean> {
+        const ways = [first, new Vec3(first.z, 0, -first.x), new Vec3(-first.z, 0, first.x), new Vec3(-first.x, 0, -first.z)];
+        for (const way of ways) {
+            for (let n = 0; n < SIDESTEP_BLOCKS && !this.shouldInterrupt(); n++) {
+                const here = this.bot.entity.position.floored();
+                const floor = this.bot.blockAt(here.offset(way.x, -1, way.z));
+                if (!floor || floor.boundingBox !== 'block' || ['lava', 'water', 'magma_block'].includes(floor.name)) break;
+                let open = true;
+                for (const dy of [1, 0]) {
+                    const cell = this.bot.blockAt(here.offset(way.x, dy, way.z));
+                    if (cell && cell.boundingBox !== 'empty' && !(await this.digBlockSafe(cell))) { open = false; break; }
+                    if (['lava', 'flowing_lava', 'water'].includes(this.bot.blockAt(here.offset(way.x, dy, way.z))?.name ?? '')) { open = false; break; }
+                }
+                if (!open || !(await this.moveOneStair(here, way, false, -1))) break;
+                if (!shaftStepRefusal(this.bot as any, this.bot.entity.position.floored())) {
+                    log.info(`⛏️ 下りの真下が開いていたので、横へ${n + 1}ブロック進んでから縦穴を続けます`);
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     /** Afloat or with the feet in water. */

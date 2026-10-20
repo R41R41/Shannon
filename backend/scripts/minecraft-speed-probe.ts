@@ -149,6 +149,43 @@ try {
       const y = Math.floor(actor.entity.position.y);
       record.calls.push(await call('deep', 'stair-mine', -40, 'west'));
       record.steps = y - Math.floor(actor.entity.position.y);
+    } else if (scenario === 'diamond') {
+      // From the surface to the diamonds (y -58), calls of stair-mine as a planner would make them, within 420 s: the levels, the deaths.
+      await setup(spawnAt, [...TOOLS, 'minecraft:stone_pickaxe 1', 'minecraft:cooked_beef 8', 'minecraft:water_bucket 1']);
+      const startY = Math.floor(actor.entity.position.y);
+      let deaths = 0;
+      const onDeath = () => { deaths++; };
+      actor.on('death', onDeath);
+      const begun = Date.now();
+      for (const direction of ['east', 'south', 'west', 'north', 'east', 'south']) {
+        if (Math.floor(actor.entity.position.y) <= -58 || Date.now() - begun > 420_000) break;
+        record.calls.push(await call(`diamond ${direction}`, 'stair-mine', -58, direction));
+      }
+      actor.removeListener('death', onDeath);
+      record.descent = { from: startY, to: Math.floor(actor.entity.position.y), seconds: Math.round((Date.now() - begun) / 1000), deaths, health: actor.health };
+    } else if (scenario === 'lava') {
+      // Lava on the way down: a source beside the shaft six below, and a lake one block thick fifteen below, under the column and round it.
+      await setup(spawnAt, [...TOOLS, 'minecraft:cooked_beef 8']);
+      const p = actor.entity.position.floored();
+      await oracle.executeSetupCommand(`setblock ${p.x + 1} ${p.y - 6} ${p.z} minecraft:lava`);
+      await oracle.executeSetupCommand(`fill ${p.x - 3} ${p.y - 15} ${p.z - 3} ${p.x + 3} ${p.y - 15} ${p.z + 3} minecraft:lava`);
+      await sleep(1500);
+      let deaths = 0;
+      const onDeath = () => { deaths++; };
+      actor.on('death', onDeath);
+      record.calls.push(await call('lava', 'stair-mine', p.y - 30, 'east'));
+      actor.removeListener('death', onDeath);
+      record.descent = { from: p.y, to: Math.floor(actor.entity.position.y), deaths, health: actor.health };
+    } else if (scenario === 'gravel') {
+      // Flint from gravel: a heap of gravel (a column four high and a few loose blocks) beside the body, a shovel-less kit as early on.
+      await setup(spawnAt, TOOLS);
+      const p = actor.entity.position.floored();
+      await oracle.executeSetupCommand(`fill ${p.x + 3} ${p.y} ${p.z} ${p.x + 3} ${p.y + 3} ${p.z} minecraft:gravel`);
+      await oracle.executeSetupCommand(`fill ${p.x + 3} ${p.y} ${p.z + 2} ${p.x + 4} ${p.y + 1} ${p.z + 3} minecraft:gravel`);
+      await sleep(1500);
+      const begun = Date.now();
+      record.calls.push(await call('gravel', 'mine-block', 'gravel', 10, 16));
+      record.flint = { count: count(n => n === 'flint'), gravel: count(n => n === 'gravel'), seconds: Math.round((Date.now() - begun) / 1000) };
     } else if (scenario === 'full') {
       // A pack all but full of the rock a long descent brings in (one slot free), and iron asked for: is each ore's drop taken?
       const rock = ['andesite', 'diorite', 'granite', 'tuff', 'cobbled_deepslate', 'dirt'];

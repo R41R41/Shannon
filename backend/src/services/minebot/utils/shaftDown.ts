@@ -33,12 +33,10 @@ export function shaftStepRefusal(bot: ShaftBody, feet: Vec3): string | null {
   if (!under || under.boundingBox !== 'block' || LIQUIDS.has(under.name) || BAD_FLOORS.has(under.name)) return 'no_rock_under';
   if (FALLING.test(under.name)) return 'falling_under';
   for (const [dx, dz] of SIDES) {
-    // The cell dropped into, and the rock under it (the next level): no liquid beside either.
-    for (const dy of [-1, -2]) {
-      const side = bot.blockAt(feet.offset(dx, dy, dz));
-      if (!side) return 'unloaded';
-      if (LIQUIDS.has(side.name)) return 'liquid_beside';
-    }
+    // The cell dropped into: no liquid beside it (the level under it is asked at the next step, from there).
+    const side = bot.blockAt(feet.offset(dx, -1, dz));
+    if (!side) return 'unloaded';
+    if (LIQUIDS.has(side.name)) return 'liquid_beside';
   }
   return null;
 }
