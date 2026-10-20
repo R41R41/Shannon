@@ -474,7 +474,7 @@ class StartSmelting extends InstantSkill {
             resultMsg += `。※完成品スロットから${withdrawnOutput.name} x${withdrawnOutput.count}を自動回収しました`;
           }
           if (fuelSwitchNote) resultMsg = `${fuelSwitchNote}。${resultMsg}`;
-          return { success: true, result: resultMsg + queuedNote + this.meanwhileNote() };
+          return { success: true, result: resultMsg + this.coalNote(fuelItem) + queuedNote + this.meanwhileNote() };
         }
 
         let resultMsg: string;
@@ -491,6 +491,8 @@ class StartSmelting extends InstantSkill {
         if (withdrawnOutput) {
           resultMsg += `。※完成品スロットから${withdrawnOutput.name} x${withdrawnOutput.count}を自動回収しインベントリに入れました`;
         }
+        // Said early: the result is cut at some length on the planner's side, and the instructions that follow are long.
+        resultMsg += this.coalNote(fuelItem);
         resultMsg += `。精錬は独立して進むので、待たずに（wait-timeで待たずに）次の作業（採掘など）へ進み、終わった頃に同じかまどから取り出してください。${process.env.MINEBOT_COMMON_FCA === 'on' ? '' : 'get-background-jobsで推定残り時間を確認できます。'}withdraw-from-furnace は残りが約20秒以内なら完了を待ち、長ければ待たずに完成済みの分だけ回収して残り時間を返す（waitForCompletion=true で最後まで待つ）${queuedNote}${this.meanwhileNote()}`;
 
         return {
@@ -561,6 +563,23 @@ class StartSmelting extends InstantSkill {
       ? `空いている${far.name}が(${far.position.x}, ${far.position.y}, ${far.position.z})、約${Math.round(far.distance)}mにあります。move-to で近づいてから start-smelting`
       : `2個目のかまどを置けば並行して焼けます（丸石8個で craft-one furnace → place-block-at。手持ちの丸石${cobble}個）`;
     return { success: false, failureType: 'slot_conflict', recoverable: true, result: `${busyNote}です。${advice}${queued}` };
+  }
+
+  /**
+   * Wood burned for fuel while coal was to be had: said, with where. Run 19 (D13, D15) put six spruce logs under nine iron with
+   * coal ore 12 m off (mined at D16) and was short of wood from then on. A log smelts one and a half items and makes four planks
+   * (a table, sticks); a coal smelts eight. Empty for any other fuel, or when no coal is carried or near.
+   */
+  private coalNote(fuelItem: string): string {
+    if (!/_(log|wood|stem|hyphae|planks)$/.test(fuelItem)) return '';
+    try {
+      const carried = this.bot.inventory.items().filter(item => item.name === 'coal' || item.name === 'charcoal').reduce((sum, item) => sum + item.count, 0);
+      if (carried > 0) return `。燃料に${fuelItem}を使いましたが、石炭・木炭を${carried}個持っています（石炭1個で8個焼ける。原木は板材4枚・作業台になる）。次からは fuelItem=coal に`;
+      const coal = scanLoadedBlocks(this.bot as any, ['coal_ore', 'deepslate_coal_ore'], { maxDistance: MEANWHILE_RANGE, maxHits: 1 }).hits[0];
+      if (coal) return `。燃料に${fuelItem}を使いました。近くに石炭: ${coal.name} (${coal.position.x}, ${coal.position.y}, ${coal.position.z}) 約${Math.round(coal.distance)}m`
+        + '（石炭1個で8個焼ける。原木1本は1.5個分で、板材4枚・作業台になる）。mine-block で掘っておけば、次から原木を燃やさずに済む';
+    } catch { /* nothing said */ }
+    return '';
   }
 
   /** What could be done while the furnace works: the nearest ores in the loaded chunks, said as places to mine. */

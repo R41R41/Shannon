@@ -160,6 +160,19 @@ class BuildStructure extends InstantSkill {
         await this.digBlock(pl.worldPos);
       }
     }
+    // The cells the frame encloses are dug out too: a portal built into rock has stone inside it, and neither lights nor lets the body
+    // through (the inside of a blueprint is '.', which was never touched). Only for a portal: a house's inside holds its furniture.
+    const enclosed = /portal/.test(structureName) ? this.enclosedCells(bp, origin, dir) : [];
+    // Where the body must not stand while it builds: the frame and the inside it encloses (see stepAside).
+    this.buildCells = [...placements.map(pl => pl.worldPos), ...enclosed];
+    for (const inside of enclosed) {
+      if (this.shouldInterrupt()) break;
+      const existing = this.bot.blockAt(inside);
+      if (existing && existing.boundingBox !== 'empty' && !['water', 'lava'].includes(existing.name)) {
+        log.info(`🧹 内側の除去: ${existing.name} @ ${inside}`);
+        await this.digBlock(inside);
+      }
+    }
 
     let placed = 0;
     const total = placements.length;
@@ -177,6 +190,13 @@ class BuildStructure extends InstantSkill {
 
       const ok = await this.placeOneBlockWithScaffold(pl, scaffolds);
       if (ok) { placed++; } else { failed.push({ pos: pl.worldPos, blockName: pl.blockName }); }
+    }
+    // Once more for each that failed, now that the rest stands (the body has moved and the faces around it are there).
+    for (const miss of [...failed]) {
+      if (this.shouldInterrupt()) break;
+      const done = this.bot.blockAt(miss.pos)?.name === miss.blockName
+        || await this.placeOneBlockWithScaffold({ worldPos: miss.pos, blockName: miss.blockName }, scaffolds);
+      if (done) { placed++; failed.splice(failed.indexOf(miss), 1); }
     }
 
     // スカフォールド撤去
@@ -215,10 +235,12 @@ class BuildStructure extends InstantSkill {
       ...failedCommands,
       `注意: 上記座標以外にブロックを置かないでください。参照ブロックがない場合はまず真下に仮ブロックを置いてから設置し、後で仮ブロックを掘ってください。`,
     ].join('\n');
+    // Short of the whole is not built: a portal of nine blocks neither lights nor is a gate (a ladder probe, 2026-10-20, was told
+    // success with one block of its frame missing).
     return {
-      success: placed > 0,
-      result: `${bp.name} 建築: ${placed}/${total} ブロック設置（${posStr}）。${hint}`,
-      failureType: placed === 0 ? ('place_failed' as const) : undefined,
+      success: false,
+      result: `${bp.name} 建築: ${placed}/${total} ブロック設置（${posStr}）。未完成のため着火していません。${hint}`,
+      failureType: placed === 0 ? ('place_failed' as const) : ('partial_completion' as const),
       recoverable: true,
     };
   }
@@ -271,6 +293,36 @@ class BuildStructure extends InstantSkill {
           if (!blockName) continue;
           const [dx, dz] = rotateLocalFromOrigin(colIdx, rowIdx, facing, width, depth);
           out.push({ worldPos: origin.offset(dx, layerIdx, dz), blockName });
+        }
+      }
+    }
+    return out;
+  }
+
+  /**
+   * The empty cells ('.') a frame encloses: with a material cell to their left and right in their row, and above and below in their
+   * column (other layers). A portal's 2×3 inside; nothing for a blueprint without a frame.
+   */
+  enclosedCells(bp: Blueprint, origin: Vec3, facing: Dir): Vec3[] {
+    const width = Math.max(1, ...bp.layers.flat().map(row => row.length));
+    const depth = Math.max(1, ...bp.layers.map(layer => layer.length));
+    const filled = (layer: number, row: number, col: number) => {
+      const ch = bp.layers[layer]?.[row]?.[col];
+      return !!ch && ch !== '.' && !!bp.materials[ch];
+    };
+    const out: Vec3[] = [];
+    for (let layer = 0; layer < bp.layers.length; layer++) {
+      for (let row = 0; row < bp.layers[layer].length; row++) {
+        const line = bp.layers[layer][row];
+        for (let col = 0; col < line.length; col++) {
+          if (filled(layer, row, col)) continue;
+          const left = [...Array(col).keys()].some(c => filled(layer, row, c));
+          const right = [...Array(line.length).keys()].some(c => c > col && filled(layer, row, c));
+          const below = [...Array(layer).keys()].some(l => filled(l, row, col));
+          const above = [...Array(bp.layers.length).keys()].some(l => l > layer && filled(l, row, col));
+          if (!(left && right && below && above)) continue;
+          const [dx, dz] = rotateLocalFromOrigin(col, row, facing, width, depth);
+          out.push(origin.offset(dx, layer, dz));
         }
       }
     }
@@ -428,7 +480,13 @@ class BuildStructure extends InstantSkill {
   private async digBlock(pos: Vec3): Promise<boolean> {
     const block = this.bot.blockAt(pos);
     if (!block || block.boundingBox === 'empty') return true;
-    const result = await this.callSkill('dig-block-at', pos.x, pos.y, pos.z, false);
+    let result = await this.callSkill('dig-block-at', pos.x, pos.y, pos.z, false);
+    // Out of reach from where the body stands (a frame cell high up the far side): a walk to within reach, and once more. Left
+    // standing, the cell made its obsidian fail "something may be standing in that cell" (ladder probe 2026-10-20, 9/10 placed).
+    if (!result.success && result.failureType === 'distance_too_far') {
+      try { await gotoSafe(this.bot, new goals.GoalNear(pos.x, pos.y, pos.z, 3), { timeoutMs: 8000 }); } catch { /* judged by the dig */ }
+      result = await this.callSkill('dig-block-at', pos.x, pos.y, pos.z, false);
+    }
     if (!result.success) {
       log.warn(`⚠ 掘削失敗 (${pos}): ${result.result}`);
     }
@@ -442,28 +500,47 @@ class BuildStructure extends InstantSkill {
     return target.x === bx && target.z === bz && (target.y === by || target.y === by + 1);
   }
 
-  private async stepAside(target: Vec3): Promise<boolean> {
-    for (const dir of [new Vec3(1,0,0), new Vec3(-1,0,0), new Vec3(0,0,1), new Vec3(0,0,-1)]) {
-      const dest = target.plus(dir);
+  /** The frame and its inside, for the build in hand (set by runImpl). */
+  private buildCells: Vec3[] = [];
+
+  /**
+   * Out of the cell to be filled, to a stand off the frame and its inside: the nearest of those within two blocks across and one up
+   * or down, nearest first, four tried. None free: a pocket two high is dug beside, off the frame. A body that had dug a portal's inside
+   * stood in its bottom row, and the four cells beside it were frame or rock (ladder probe 2026-10-20: 9 of 10).
+   */
+  async stepAside(target: Vec3): Promise<boolean> {
+    const liquid = (block: any) => ['water', 'lava', 'flowing_water', 'flowing_lava'].includes(block?.name ?? '');
+    const onFrame = (at: Vec3) => this.buildCells.some(cell => cell.x === at.x && cell.y === at.y && cell.z === at.z);
+    const feetY = Math.floor(this.bot.entity.position.y);
+    const out = () => { const p = this.bot.entity.position; return Math.floor(p.x) !== target.x || Math.floor(p.z) !== target.z; };
+    const stands: Vec3[] = [];
+    for (let dx = -2; dx <= 2; dx++) for (let dz = -2; dz <= 2; dz++) for (const dy of [0, -1, 1]) {
+      if (!dx && !dz) continue;
+      const dest = new Vec3(target.x + dx, feetY + dy, target.z + dz);
+      const ground = this.bot.blockAt(dest.offset(0, -1, 0)), feet = this.bot.blockAt(dest), head = this.bot.blockAt(dest.offset(0, 1, 0));
+      if (onFrame(dest) || onFrame(dest.offset(0, 1, 0)) || !ground || ground.boundingBox === 'empty' || liquid(ground)) continue;
+      if (feet?.boundingBox !== 'empty' || head?.boundingBox !== 'empty' || liquid(feet) || liquid(head)) continue;
+      stands.push(dest);
+    }
+    const from = this.bot.entity.position;
+    stands.sort((a, b) => a.offset(0.5, 0, 0.5).distanceTo(from) - b.offset(0.5, 0, 0.5).distanceTo(from));
+    for (const dest of stands.slice(0, 4)) {
+      try { await gotoSafe(this.bot, new goals.GoalBlock(dest.x, dest.y, dest.z), { timeoutMs: 4000, stuckAbortCount: 2 }); } catch { /* the next */ }
+      await this.sleep(150);
+      if (out()) return true;
+    }
+    // A pocket: the feet and head cells of a side off the frame, dug, then stepped into.
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const dest = new Vec3(target.x + dx, feetY, target.z + dz);
       const ground = this.bot.blockAt(dest.offset(0, -1, 0));
-      const feet = this.bot.blockAt(dest);
-      const head = this.bot.blockAt(dest.offset(0, 1, 0));
-      if (
-        ground && ground.boundingBox !== 'empty' &&
-        feet && feet.boundingBox === 'empty' &&
-        head && head.boundingBox === 'empty'
-      ) {
-        try {
-          await gotoSafe(
-            this.bot,
-            new goals.GoalNear(dest.x + 0.5, dest.y, dest.z + 0.5, 0.5),
-            { timeoutMs: 2000, stuckAbortCount: 2 },
-          );
-          await this.sleep(200);
-          const p = this.bot.entity.position;
-          if (Math.floor(p.x) !== target.x || Math.floor(p.z) !== target.z) return true;
-        } catch { /* try next */ }
-      }
+      if (onFrame(dest) || onFrame(dest.offset(0, 1, 0)) || !ground || ground.boundingBox === 'empty') continue;
+      const cells = [dest, dest.offset(0, 1, 0)];
+      if (cells.some(cell => liquid(this.bot.blockAt(cell)) || [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([x, z]) => liquid(this.bot.blockAt(cell.offset(x, 0, z)))))) continue;
+      for (const cell of cells) if (this.bot.blockAt(cell)?.boundingBox !== 'empty') await this.digBlock(cell);
+      if (cells.some(cell => this.bot.blockAt(cell)?.boundingBox !== 'empty')) continue;
+      try { await gotoSafe(this.bot, new goals.GoalBlock(dest.x, dest.y, dest.z), { timeoutMs: 4000, stuckAbortCount: 2 }); } catch { /* judged below */ }
+      await this.sleep(150);
+      if (out()) return true;
     }
     return false;
   }

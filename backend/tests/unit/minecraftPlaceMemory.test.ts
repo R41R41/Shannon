@@ -45,7 +45,8 @@ describe('places seen are kept in mind after they are out of sight (paid run L74
     rememberPlace(state, { kind: 'water', dimension: overworld, position: { x: 30, y: 62, z: 0 }, count: 5 }, 1);
     rememberPlace(state, { kind: 'water', dimension: overworld, position: { x: 300, y: 62, z: 0 } }, 1);
     rememberPlace(state, { kind: 'village', dimension: overworld, position: { x: 0, y: 70, z: 120 }, note: 'bell×1' }, 1);
-    expect(placesDigest(state, { x: 0, y: 62, z: 0 }, overworld)).toEqual({ water: '30m 東 (30,62,0) ×5', village: '120m 南 (0,70,120) bell×1' });
+    // A village says what it is good for (run 19).
+    expect(placesDigest(state, { x: 0, y: 62, z: 0 }, overworld)).toEqual({ water: '30m 東 (30,62,0) ×5', village: '120m 南 (0,70,120) bell×1 羊・ベッド・食べ物がある見込み' });
     // One line only: the one village, not the nearer of two pools.
     expect(Object.keys(placesDigest(state, { x: 0, y: 62, z: 0 }, overworld, 1))).toEqual(['village']);
   });

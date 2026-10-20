@@ -188,6 +188,8 @@ export interface WorldObservation {
    * "distance direction (x,y,z) ×count". The rest is recalled on request (recall-places).
    */
   rememberedPlaces?: Record<string, string>;
+  /** The biomes seen in this dimension, each by its nearest column, nearest first ("snowy_plains（ここ）・plains 東 120m"). */
+  biomesSeen?: string;
   /**
    * Said only when the task has been stopped for the same thing again and again lately: how often, for what,
    * what it cost, and what the body has measured of that kind. What to do about it is the planner's.

@@ -1,6 +1,7 @@
 import minecraftData from 'minecraft-data';
 import { detectVillage } from '../utils/landmarks.js';
 import { scanLoadedBlocks } from '../utils/loadedBlockScan.js';
+import { WOOL_COLORS } from '../utils/nightGate.js';
 import { CustomBot, InstantSkill } from '../types.js';
 
 /**
@@ -13,6 +14,8 @@ export const STRUCTURE_MARKERS: Record<string, { blocks: string[]; distance: num
   fortress: { blocks: ['nether_bricks', 'nether_brick_fence'], distance: 256 },
   bastion: { blocks: ['polished_blackstone_bricks', 'gilded_blackstone'], distance: 256 },
   stronghold: { blocks: ['end_portal_frame', 'infested_stone_bricks', 'infested_mossy_stone_bricks', 'infested_cracked_stone_bricks'], distance: 64 },
+  // A bed set down in the world (an igloo's, a village's): one to take, not a structure to enter (explore-for-structure only).
+  bed: { blocks: WOOL_COLORS.map(color => `${color}_bed`), distance: 128 },
 };
 
 /** The nearest marker of the structure in the loaded chunks, or null. */

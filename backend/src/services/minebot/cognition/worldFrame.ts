@@ -323,6 +323,13 @@ export function captureWorldObservation(bot?: unknown): WorldObservation {
       } catch { return {}; }
     })(),
     ...(() => {
+      // The biomes passed through, each by its nearest column (see placeMemory.biomes): where the grass was, not only where it is now.
+      try {
+        const line = (observedBot as { placeMemory?: { biomes?(): string } } | undefined)?.placeMemory?.biomes?.();
+        return line ? { biomesSeen: line } : {};
+      } catch { return {}; }
+    })(),
+    ...(() => {
       // The last death, while its dropped items may still lie there or for half an hour: a cue to go back for them.
       try {
         const memory = (observedBot as { placeMemory?: { lastDeath?(): string | undefined; deaths?(): WorldObservation['deaths'] } } | undefined)?.placeMemory;

@@ -3,6 +3,8 @@ import { createLogger } from '../../../utils/logger.js';
 import { structureNearby, STRUCTURE_MARKERS } from './findStructure.js';
 import { exploreHeading, exploreLegs, type Heading } from '../utils/explore.js';
 import { sheepWool, WOOL_COLORS } from '../utils/nightGate.js';
+import { prospectNote } from '../utils/biomeProspects.js';
+import { scanLoadedBlocks } from '../utils/loadedBlockScan.js';
 import type { Vec3 } from 'vec3';
 
 const log = createLogger('Minebot:Skill:exploreForStructure');
@@ -16,11 +18,12 @@ class ExploreForStructure extends InstantSkill {
   constructor(bot: CustomBot) {
     super(bot);
     this.skillName = 'explore-for-structure';
-    this.description = '構造物（fortress=ネザー要塞、bastion=砦の遺跡、village=村、stronghold=要塞）か動物（sheep / cow / pig / chicken / rabbit / food_animals）を探して、指定の方角へ一区間（約48ブロック）ずつ進みます。'
+    this.description = '構造物（fortress=ネザー要塞、bastion=砦の遺跡、village=村、stronghold=要塞、bed=置かれたベッド・イグルー）か動物（sheep / cow / pig / chicken / rabbit / food_animals）を探して、指定の方角へ一区間（約48ブロック）ずつ進みます。'
       + '区間ごとに読み込み範囲の目印（動物なら見えている動物）を読み直し、見つかったら止まって座標を返します。道がなければ左右の方角へ切り替えます。'
-      + 'ネザー要塞はネザーの中だけ。direction を省略すると、いま向いている方角へ進みます。羊は color で毛の色を指定できます（ベッドには同じ色が3個）。';
+      + 'ネザー要塞はネザーの中だけ。direction を省略すると、いま向いている方角へ進みます。羊は color で毛の色を指定できます（ベッドには同じ色が3個）。'
+      + '置かれたベッドは dig-block-at takeEquipment=true で掘れば持てる（作らなくてよい）。bed は場所の記憶にあれば歩かずに答えます。';
     this.params = [
-      { name: 'structureType', type: 'string', description: 'fortress / bastion / village / stronghold、または動物 sheep / cow / pig / chicken / rabbit / food_animals', required: true },
+      { name: 'structureType', type: 'string', description: 'fortress / bastion / village / stronghold / bed、または動物 sheep / cow / pig / chicken / rabbit / food_animals', required: true },
       { name: 'direction', type: 'string', description: 'north / south / east / west（省略時は向いている方角）', required: false },
       { name: 'maxDistance', type: 'number', description: '進む距離の上限（ブロック、48〜400、既定240）', required: false },
       { name: 'color', type: 'string', description: '羊を探す時だけ: 毛の色（例 white、brown）。毛を刈られた羊は数えない', required: false },
@@ -32,7 +35,7 @@ class ExploreForStructure extends InstantSkill {
     const type = String(structureType ?? '').toLowerCase();
     const animals = ANIMAL_TARGETS[type];
     if (!STRUCTURE_MARKERS[type] && type !== 'village' && !animals) {
-      return { success: false, result: `探せるもの: fortress, bastion, village, stronghold, ${Object.keys(ANIMAL_TARGETS).join(', ')}`, failureType: 'invalid_input', recoverable: false };
+      return { success: false, result: `探せるもの: fortress, bastion, village, stronghold, bed, ${Object.keys(ANIMAL_TARGETS).join(', ')}`, failureType: 'invalid_input', recoverable: false };
     }
     const woolColor = String(color ?? '').trim().toLowerCase().replace(/_wool$/, '');
     if (woolColor && !(WOOL_COLORS as readonly string[]).includes(woolColor)) {
@@ -42,8 +45,14 @@ class ExploreForStructure extends InstantSkill {
     if (!heading) return { success: false, result: 'direction は north / south / east / west で指定してください', failureType: 'invalid_input', recoverable: false };
     const start = this.bot.entity.position.clone();
     if (animals) return this.exploreForAnimals(type, animals, woolColor, heading, maxDistance, start);
-    const found0 = structureNearby(this.bot as any, type);
-    if (found0) return { success: true, result: `${type}の痕跡（${found0.name}）は既に見えています: 座標(${found0.position.x}, ${found0.position.y}, ${found0.position.z})` };
+    // A bed already in mind (an igloo's, a village's): said at once, with how to take it, instead of a walk.
+    if (type === 'bed') {
+      const known = this.rememberedBed();
+      if (known) return { success: true, result: `記憶にある置かれたベッド: ${known.direction}へ約${known.distance}m、座標(${known.position.x}, ${known.position.y}, ${known.position.z})。${BED_HOW}` };
+    }
+    const look = () => type === 'bed' ? this.bedInSight() : structureNearby(this.bot as any, type);
+    const found0 = look();
+    if (found0) return { success: true, result: `${type}の痕跡（${found0.name}）は既に見えています: 座標(${found0.position.x}, ${found0.position.y}, ${found0.position.z})${type === 'bed' ? `。${BED_HOW}` : ''}` };
     const legs = exploreLegs(heading, Math.max(48, Math.min(400, Math.round(maxDistance ?? 240))));
     // Blocked ahead: the left of the original heading, then its right; never back over covered ground.
     const sides = [heading.left, heading.right];
@@ -60,12 +69,12 @@ class ExploreForStructure extends InstantSkill {
       const step = Math.hypot(this.bot.entity.position.x - at.x, this.bot.entity.position.z - at.z);
       travelled += step;
       tried.push(`${current.name}${Math.round(step)}m`);
-      const found = structureNearby(this.bot as any, type);
+      const found = look();
       if (found) {
         try { (this.bot as any).placeMemory?.remember(type, found.position, { note: found.name }); } catch { /* memory is optional */ }
         log.info(`🧭 ${type} を発見: ${found.name} (${found.position.x}, ${found.position.y}, ${found.position.z})`);
         return { success: true, result: `${type}の痕跡（${found.name}）を発見: 座標(${found.position.x}, ${found.position.y}, ${found.position.z})、`
-          + `ここから約${Math.round(this.bot.entity.position.distanceTo(found.position as Vec3))}m。探索 ${Math.round(travelled)}m（${tried.join(' → ')}）` };
+          + `ここから約${Math.round(this.bot.entity.position.distanceTo(found.position as Vec3))}m。探索 ${Math.round(travelled)}m（${tried.join(' → ')}）${type === 'bed' ? `。${BED_HOW}` : ''}` };
       }
       // No way on (water, a cliff, the move refused): the next side of the original heading.
       if (!moved.success && step < 8) {
@@ -78,6 +87,37 @@ class ExploreForStructure extends InstantSkill {
     return { success: false, failureType: 'target_not_found', recoverable: true,
       result: `${type}は見つかりませんでした。探索 ${Math.round(travelled)}m（${tried.join(' → ') || 'なし'}）、出発点から${Math.round(end.distanceTo(start))}m。`
         + '別の方角で続けるか、距離を伸ばしてください' };
+  }
+
+  /** The nearest bed in the place memory that is not the body's own (its base or respawn bed), or null. */
+  private rememberedBed(): { distance: number; direction: string; position: { x: number; y: number; z: number } } | null {
+    try {
+      const beds = (this.bot as any).placeMemory?.recall?.('bed', 5) as Array<{ keep?: string; distance: number; direction: string; position: { x: number; y: number; z: number } }> | undefined;
+      return beds?.find(bed => !bed.keep) ?? null;
+    } catch { return null; }
+  }
+
+  /**
+   * The nearest placed bed in the loaded chunks that is not the body's own (its base or respawn bed, as the place memory keeps them):
+   * the nearest bed is most often the one the body set down itself, and digging that one loses its respawn point.
+   */
+  private bedInSight(): { name: string; position: { x: number; y: number; z: number } } | null {
+    try {
+      const own = ((this.bot as any).placeMemory?.state?.places ?? []).filter((place: any) => place.kind === 'bed' && place.keep);
+      const hits = scanLoadedBlocks(this.bot as any, STRUCTURE_MARKERS.bed.blocks, { maxHits: 8, maxDistance: STRUCTURE_MARKERS.bed.distance }).hits;
+      const hit = hits.find(entry => !own.some((place: any) => Math.hypot(place.position.x - entry.position.x, place.position.y - entry.position.y,
+        place.position.z - entry.position.z) <= 2));
+      return hit ? { name: hit.name, position: hit.position } : null;
+    } catch { return null; }
+  }
+
+  /** The biome under the body, from the world itself (null when it cannot say). */
+  private biomeHere(): string | null {
+    try {
+      const id = (this.bot as any).world?.getBiome?.(this.bot.entity.position);
+      const name = typeof id === 'number' ? (this.bot as any).registry?.biomes?.[id]?.name : undefined;
+      return typeof name === 'string' ? name : null;
+    } catch { return null; }
   }
 
   /** The nearest animal of these kinds the body can see now (a sheep of the colour, not shorn), or null. */
@@ -114,6 +154,9 @@ class ExploreForStructure extends InstantSkill {
     const sides = [heading.left, heading.right];
     let current: Heading = heading, travelled = 0;
     const tried: string[] = [];
+    const passed: string[] = [];
+    const notePassed = () => { const biome = this.biomeHere(); if (biome && passed.at(-1) !== biome) passed.push(biome); };
+    notePassed();
     const deadline = Date.now() + this.maxDurationMs - 10_000;
     for (const leg of legs) {
       if (this.shouldInterrupt() || Date.now() > deadline - 125_000) break;
@@ -123,6 +166,7 @@ class ExploreForStructure extends InstantSkill {
       const step = Math.hypot(this.bot.entity.position.x - at.x, this.bot.entity.position.z - at.z);
       travelled += step;
       tried.push(`${current.name}${Math.round(step)}m`);
+      notePassed();
       const seen = this.animalInSight(kinds, color);
       if (seen) { log.info(`🧭 ${what} を発見: ${seen.name} (${seen.position.x}, ${seen.position.y}, ${seen.position.z})`); return said(seen, travelled, tried); }
       if (!moved.success && step < 8) {
@@ -132,11 +176,19 @@ class ExploreForStructure extends InstantSkill {
       } else if (current !== heading) current = heading;
     }
     const end = this.bot.entity.position;
+    // Which of the ground covered was poor for the kind, and where the memory has better: run 19 searched snow for sheep, 130 m, with
+    // a village 171 m off in mind, and went on to chase salmon in a frozen sea.
+    let prospect = '';
+    try { prospect = prospectNote(type, kinds, passed, (this.bot as any).placeMemory, end, String(this.bot.game?.dimension ?? 'overworld')); } catch { prospect = ''; }
     return { success: false, failureType: 'target_not_found', recoverable: true,
       result: `${what}は見つかりませんでした。探索 ${Math.round(travelled)}m（${tried.join(' → ') || 'なし'}）、出発点から${Math.round(end.distanceTo(start))}m。`
-        + '別の方角で続けるか、距離を伸ばしてください（羊は草地・平原に多い）' };
+        + (prospect ? `${prospect}。` : '')
+        + '別の方角で続けるか、距離を伸ばしてください（羊・牛・豚・鶏は草地・平原・森・タイガ・サバンナに多い）' };
   }
 }
+
+/** How a placed bed is had (run 19: an igloo's bed was in mind for thirty minutes and never taken). */
+const BED_HOW = 'dig-block-at（その座標、takeEquipment=true）で掘れば持てる（作る必要は無い）';
 
 /** The animals explore-for-structure looks for, by the word it is given. */
 const ANIMAL_TARGETS: Record<string, string[]> = {

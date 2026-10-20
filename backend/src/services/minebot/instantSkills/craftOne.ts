@@ -267,7 +267,10 @@ class CraftOne extends InstantSkill {
     let taken: SkillResult;
     try { taken = await this.callSkill('dig-block-at', pos.x, pos.y, pos.z, true, 'target', true); }
     catch (error: any) { taken = { success: false, result: String(error?.message ?? error) }; }
-    if (!taken.success) return `置いた作業台${at}は拾えませんでした`;
+    // Dug, but not in the pack after dig-block-at's own look for it: said as that, with where it may lie.
+    if (!taken.success) return (taken as { failureType?: string }).failureType === 'drop_not_collected'
+      ? `置いた作業台${at}は掘りましたが、拾えていません（持ち物に作業台がありません。近くに落ちていれば pickup-nearest-item crafting_table で拾えます）`
+      : `置いた作業台${at}は拾えませんでした`;
     const inHand = () => this.carriedCount(name => name === 'crafting_table') > before;
     if (!inHand()) {
       // A stopped command stops here too (the abort is not turned into "not picked up").

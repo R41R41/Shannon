@@ -127,6 +127,7 @@ class MineBlock extends InstantSkill {
 
   async runImpl(blockName: string, count: number = 1, searchRadius: number = 32, collectionPolicy: CollectionPolicy = 'target') {
     assertActionActive(this.bot);
+    this.quenched = 0;
     reportActionProgress(this.bot, 'precondition', { blockName, count, searchRadius });
     if (!Number.isInteger(count) || count < 1 || !Number.isFinite(searchRadius) || searchRadius <= 0
       || !['target', 'all'].includes(collectionPolicy)) return { success: false,
@@ -325,6 +326,8 @@ class MineBlock extends InstantSkill {
      * stairs and 136 s, the diamonds still not reached (run 16).
      */
     let pinnedKey: string | null = null;
+    /** The pack was tidied for room in this call (once). */
+    let tidiedForRoom = false;
     /** Least headway (metres nearer) for a failed approach to count as getting there. */
     const APPROACH_HEADWAY = 3;
 
@@ -351,7 +354,14 @@ class MineBlock extends InstantSkill {
       }
 
       const remainingToMine = want - mined;
-      if (shouldPauseMiningForDeposit(this.bot, remainingToMine)) {
+      // Short of room: what tidyPlan names (spare stone, dirt and the like) is thrown away first, once, and the room looked at again. A
+      // ladder probe (2026-10-20) came to ten obsidian with five slots free, full of the rock its descent had dug, and was refused all
+      // twenty times it asked.
+      if (shouldPauseMiningForDeposit(this.bot, remainingToMine, expectedItems) && !tidiedForRoom) {
+        tidiedForRoom = true;
+        toolWarning += await this.tidyPack(familyNames.flatMap(name => [name, ...expectedItems]), timeLeftMs());
+      }
+      if (shouldPauseMiningForDeposit(this.bot, remainingToMine, expectedItems)) {
         if (mined > 0) {
           stoppedForInventoryTight = true;
           break;
@@ -536,6 +546,9 @@ class MineBlock extends InstantSkill {
             collectImmediately = true;
             digResult = await digBlockAt.run(bt.x, bt.y, bt.z, true, collectionPolicy);
           }
+          if (digResult.failureType === 'lava_danger' && await this.quenchLavaBeside(digResult)) {
+            digResult = await digBlockAt.run(bt.x, bt.y, bt.z, true, collectionPolicy);
+          }
           if (!digResult.success) await flushPendingDrops();
           if (digResult.failureType === 'missing_tool' || digResult.failureType === 'equip_failed') {
             batchAbortReason = { type: digResult.failureType, result: digResult.result };
@@ -612,6 +625,9 @@ class MineBlock extends InstantSkill {
         // ── 単体採掘: 従来通り collect=true で1個ずつ ──
         let digResult = await digBlockAt.run(target.x, target.y, target.z, true, collectionPolicy);
         if (digResult.failureType === 'obstruction_cleared') {
+          digResult = await digBlockAt.run(target.x, target.y, target.z, true, collectionPolicy);
+        }
+        if (digResult.failureType === 'lava_danger' && await this.quenchLavaBeside(digResult)) {
           digResult = await digBlockAt.run(target.x, target.y, target.z, true, collectionPolicy);
         }
         if (digResult.failureType === 'missing_tool' || digResult.failureType === 'equip_failed') {
@@ -750,6 +766,28 @@ class MineBlock extends InstantSkill {
     beforeInventory = inventoryCounts(this.bot), spawnWaitMs = 0): Promise<string[]> {
     return collectDrops(this.bot, { origins, expectedItems, beforeEntityIds, policy,
       beforeInventory, spawnWaitMs, radius: 16 });
+  }
+
+  /** Lava poured on in this call (see quenchLavaBeside). */
+  private quenched = 0;
+
+  /**
+   * The lava a refused dig named beside its block, poured on with the water bucket carried (use-item-on-block: it becomes obsidian
+   * and the water is taken back), so the dig can go on. Obsidian made over a pool has lava beside it as often as not: a ladder probe
+   * (2026-10-20) mined three of ten and was refused for the rest. At most three a call. False when nothing was poured.
+   */
+  private async quenchLavaBeside(refusal: { result?: unknown }): Promise<boolean> {
+    if (this.quenched >= 3 || !this.bot.inventory.items().some(item => item.name === 'water_bucket')
+      || String(this.bot.game?.dimension ?? '').includes('nether')) return false;
+    const match = /隣の溶岩\((-?\d+),\s*(-?\d+),\s*(-?\d+)\)/.exec(String(refusal.result ?? ''));
+    if (!match) return false;
+    this.quenched++;
+    const named = new Vec3(Number(match[1]), Number(match[2]), Number(match[3]));
+    try {
+      await this.callSkill('use-item-on-block', named.x, named.y, named.z, 'water_bucket');
+      // The lava named is what has to be gone (the pour may have gone to another source of the pool).
+      return this.bot.blockAt(named)?.name !== 'lava';
+    } catch (error) { if (this.shouldInterrupt()) throw error; return false; }
   }
 
   /**

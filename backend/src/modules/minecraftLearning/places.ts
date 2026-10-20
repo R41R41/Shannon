@@ -57,6 +57,8 @@ export interface PlaceMemoryState {
    * that they were seen, so that "which way have I not been" has an answer.
    */
   seen?: Record<string, string[]>;
+  /** The biome of each chunk column seen, per dimension ("cx,cz" → biome), read at its middle (see noteBiome). */
+  biomes?: Record<string, Record<string, string>>;
 }
 export interface Sighting { kind: string; dimension: string; position: PlacePosition; count?: number; note?: string; keep?: PlaceKeep }
 export interface RecalledPlace extends Place { distance: number; direction: string }
@@ -290,6 +292,21 @@ function shownNote(note: string | undefined): string {
   return note.length <= SHORT_NOTE ? ` ${note}` : '';
 }
 
+/**
+ * What a remembered place is good for, said on its line: run 19 had "bed: 72m 東 (69,66,4) ×2" (an igloo's) in all 64 decisions,
+ * went for it in none, and never had a bed; a village 171 m off was never gone to either (the owner, 2026-10-20).
+ */
+const PLACE_MEANING: Record<string, string> = {
+  bed: ' 置かれたベッド: dig-block-at takeEquipment=true で掘れば持てる',
+  village: ' 羊・ベッド・食べ物がある見込み',
+};
+
+/** How many were seen together. A bed is two blocks (foot and head), so its count is halved: "×2" was one bed. */
+function countShown(place: { kind: string; count?: number }): string {
+  const count = place.kind === 'bed' ? Math.ceil((place.count ?? 1) / 2) : place.count ?? 1;
+  return count > 1 ? ` ×${count}` : '';
+}
+
 export function placesDigest(state: PlaceMemoryState, from: PlacePosition, dimension: string, limit = 10,
   options: { ensure?: readonly string[]; maxCharacters?: number } = {}): Record<string, string> {
   const nearest = new Map<string, RecalledPlace>();
@@ -297,7 +314,9 @@ export function placesDigest(state: PlaceMemoryState, from: PlacePosition, dimen
   // The base and the respawn bed by what they are kept as, whatever their kind.
   const marked = new Map<string, RecalledPlace>();
   for (const place of recallPlaces(state, { from, dimension, limit: Number.MAX_SAFE_INTEGER })) {
-    if (!nearest.has(place.kind)) nearest.set(place.kind, place);
+    // A bed's line is the nearest one that is not the body's own (that one has its base / respawn line): the one to take.
+    const shown = nearest.get(place.kind);
+    if (!shown || (place.kind === 'bed' && shown.keep && !place.keep)) nearest.set(place.kind, place);
     known.set(place.kind, (known.get(place.kind) ?? 0) + 1);
     if ((place.keep === 'base' || place.keep === 'respawn') && !marked.has(place.keep)) marked.set(place.keep, place);
   }
@@ -310,7 +329,10 @@ export function placesDigest(state: PlaceMemoryState, from: PlacePosition, dimen
   const rest = [...nearest.values()].filter(place => !ensured.some(entry => entry.key === place.kind || entry.place.id === place.id))
     .sort((a, b) => known.get(a.kind)! - known.get(b.kind)! || a.distance - b.distance).map(place => ({ key: place.kind, place }));
   const line = (key: string, place: RecalledPlace) => `${place.distance}m ${place.direction} (${place.position.x},${place.position.y},${place.position.z})`
-    + (key === 'base' || key === 'respawn' ? ` ${place.kind}` : '') + (place.count && place.count > 1 ? ` ×${place.count}` : '') + shownNote(place.note);
+    + (key === 'base' || key === 'respawn' ? ` ${place.kind}` : '') + countShown(place) + shownNote(place.note)
+    // Not for the body's own base or respawn bed: that one is already its own. Said in the dragon's digest too (run 19 was one, and
+    // a bed is on its way); the kinds that task ensures are chosen first, so the longer lines take room only from the rest.
+    + (key === place.kind && !place.keep ? PLACE_MEANING[place.kind] ?? '' : '');
   const chosen: Array<{ key: string; place: RecalledPlace }> = [];
   let used = 2;
   for (const entry of [...ensured, ...rest]) {
@@ -394,5 +416,58 @@ export function parsePlaceMemory(value: unknown): PlaceMemoryState {
   const deaths = (Array.isArray(input.deaths) ? input.deaths : []).filter((death): death is DeathRecord => !!death && finite(death.at)
     && typeof death.dimension === 'string' && point(death.position) && finite(death.nearMs) && Array.isArray(death.lost)
     && death.lost.every(item => !!item && typeof item.name === 'string' && finite(item.count))).slice(-MAX_DEATHS);
-  return { version: 1, places: places.slice(-MAX_PLACES), ...(deaths.length ? { deaths } : {}), ...(Object.keys(seen).length ? { seen } : {}) };
+  const biomes: Record<string, Record<string, string>> = {};
+  if (input.biomes && typeof input.biomes === 'object') {
+    for (const [dimension, columns] of Object.entries(input.biomes)) {
+      if (!columns || typeof columns !== 'object') continue;
+      const kept = Object.entries(columns).filter(([column, biome]) => /^-?\d+,-?\d+$/.test(column) && typeof biome === 'string' && /^[a-z_]+$/.test(biome));
+      if (kept.length) biomes[dimension] = Object.fromEntries(kept.slice(-MAX_BIOME_COLUMNS));
+    }
+  }
+  return { version: 1, places: places.slice(-MAX_PLACES), ...(deaths.length ? { deaths } : {}), ...(Object.keys(seen).length ? { seen } : {}),
+    ...(Object.keys(biomes).length ? { biomes } : {}) };
+}
+
+/** Chunk columns kept with their biome per dimension; the oldest noted go first. */
+export const MAX_BIOME_COLUMNS = 6000;
+
+/** Notes the biome of a chunk column (read at its middle). Returns whether anything changed. */
+export function noteBiome(state: PlaceMemoryState, dimension: string, chunkX: number, chunkZ: number, biome: string): boolean {
+  const columns = (state.biomes ??= {})[dimension] ??= {};
+  const key = `${chunkX},${chunkZ}`;
+  if (columns[key] === biome) return false;
+  delete columns[key]; // noted again: it goes to the end, the last to be given up
+  columns[key] = biome;
+  const keys = Object.keys(columns);
+  if (keys.length > MAX_BIOME_COLUMNS) for (const old of keys.slice(0, keys.length - MAX_BIOME_COLUMNS)) delete columns[old];
+  return true;
+}
+
+export interface BiomeArea { biome: string; distance: number; direction: string; here: boolean }
+/**
+ * The biomes seen in this dimension, each by its nearest column: how far and which way from `from`, nearest first, the one under the
+ * body first of all. Run 19 went badlands, snowy plains, frozen ocean, and only the one it stood in was ever in an observation: a
+ * search for sheep went south through snow for 130 m with the grass it had walked through nowhere in mind.
+ */
+export function biomesAround(state: PlaceMemoryState, from: PlacePosition, dimension: string, limit = 6): BiomeArea[] {
+  const columns = state.biomes?.[dimension];
+  if (!columns) return [];
+  const hereKey = `${Math.floor(from.x / 16)},${Math.floor(from.z / 16)}`;
+  const best = new Map<string, { distance: number; x: number; z: number; here: boolean }>();
+  for (const [key, biome] of Object.entries(columns)) {
+    const [chunkX, chunkZ] = key.split(',').map(Number);
+    const x = chunkX * 16 + 8, z = chunkZ * 16 + 8;
+    const here = key === hereKey;
+    const d = here ? 0 : Math.hypot(x - from.x, z - from.z);
+    const known = best.get(biome);
+    if (!known || d < known.distance) best.set(biome, { distance: d, x, z, here });
+  }
+  return [...best.entries()].map(([biome, area]) => ({ biome, distance: Math.round(area.distance), here: area.here,
+    direction: area.here ? '' : compassDirection(from, { x: area.x, z: area.z }) }))
+    .sort((a, b) => Number(b.here) - Number(a.here) || a.distance - b.distance).slice(0, limit);
+}
+
+/** The same as one line: "snowy_plains（ここ）・frozen_ocean 南 60m・badlands 西 130m". */
+export function describeBiomes(areas: BiomeArea[]): string {
+  return areas.map(area => area.here ? `${area.biome}（ここ）` : `${area.biome} ${area.direction} ${area.distance}m`).join('・');
 }

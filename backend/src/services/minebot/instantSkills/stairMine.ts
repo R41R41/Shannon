@@ -12,6 +12,9 @@ import { spareToolNote } from '../utils/toolWear.js';
 import { blocksAlong, keepCheapTool } from '../utils/toolStock.js';
 import { nightGateFor } from '../utils/nightGate.js';
 import { shaftStepRefusal } from '../utils/shaftDown.js';
+import pathfinder from 'mineflayer-pathfinder';
+import { gotoSafe } from '../utils/gotoSafe.js';
+const { goals } = pathfinder;
 const log = createLogger('Minebot:Skill:stairMine');
 
 /**
@@ -108,9 +111,14 @@ class StairMine extends InstantSkill {
             let successSteps = 0;
             /** Directions given up on in this call, with why (the stair turns to another by itself), and the one it was asked for. */
             const triedDirections: string[] = [];
-            const firstDirection = dir.clone();
+            let firstDirection = dir.clone();
             /** Levels of this descent taken straight down (the rest were stair steps). */
             let shaftLevels = 0;
+            /** Steps back up taken at a cave edge in this call (see the fallback below). */
+            let backoffs = 0;
+            const BACKOFFS = 3;
+            /** Walks down to a cave's floor in this call (see the fallback below). */
+            let caveWalks = 0;
 
             // タイムアウト設定（60秒）
             // Deepslate steps take several seconds each; a fixed 60s stopped a
@@ -173,9 +181,51 @@ class StairMine extends InstantSkill {
                         // first, the sides before the way back. Run 17 was sent east and north by hand and lost two calls to it.
                         const next = this.otherDirection(firstDirection, triedDirections);
                         if (next && !this.shouldInterrupt()) {
-                            triedDirections.push(`${this.directionName(dir)}（${(this.lastStopReason ?? '進めず').slice(0, 40)}）`);
+                            triedDirections.push(`${this.directionName(dir)}（${(this.lastStopReason ?? '進めず').slice(0, 56)}）`);
                             dir = next; this.lastStopReason = null; i--;
                             continue;
+                        }
+                        // Every way opens onto a cave too deep to step down into: the column the body stands on goes on down, dug
+                        // a block at a time while there is solid rock under each (a ledge or a pillar over a cave), and the stair is
+                        // taken up again from its foot. Ladder probe (2026-10-20): stopped at y -22 with all four ways open.
+                        const voids = [...triedDirections, this.lastStopReason ?? ''].every(reason => reason.includes('で空いています'));
+                        if (voids && !this.shouldInterrupt()) {
+                            const down = await this.digDownInPlace(Math.min(8, Math.max(0, Math.floor(this.bot.entity.position.y) - targetY)));
+                            if (down > 0) {
+                                successSteps += down; i += down - 1;
+                                triedDirections.length = 0; dir = firstDirection.clone(); this.lastStopReason = null;
+                                continue;
+                            }
+                            // No rock under the feet either (a thin floor over the cave): one step back up the stair just dug, and
+                            // the stair goes on to the side from there, where the rock is whole (ladder probe: y 27, the cave
+                            // open on every side and under). At most BACKOFFS times a call.
+                            if (backoffs < BACKOFFS) {
+                                const back = new Vec3(-firstDirection.x, 0, -firstDirection.z);
+                                const from = this.bot.entity.position.floored();
+                                const feet = this.bot.blockAt(from.offset(back.x, 1, back.z)), head = this.bot.blockAt(from.offset(back.x, 2, back.z));
+                                const step = this.bot.blockAt(from.offset(back.x, 0, back.z));
+                                const dry = (block: any) => !['lava', 'water', 'flowing_lava', 'flowing_water'].includes(block?.name ?? '');
+                                if (step?.boundingBox === 'block' && feet?.boundingBox === 'empty' && head?.boundingBox === 'empty' && dry(feet) && dry(head)
+                                    && await this.moveOneStair(from, back, true)) {
+                                    backoffs++; successSteps--; i -= 2;
+                                    firstDirection = new Vec3(firstDirection.z, 0, -firstDirection.x);   // a quarter turn
+                                    dir = firstDirection.clone(); triedDirections.length = 0; this.lastStopReason = null;
+                                    continue;
+                                }
+                            }
+                            // A cave too wide to step round: its floor, found below, is walked down to (the route planner digs and
+                            // drops its own way), and the stair goes on from there. Ladder probe (2026-10-20): y 3, every way and the
+                            // way back open, sixteen calls of no step.
+                            if (caveWalks < 2) {
+                                caveWalks++;
+                                const fromY = Math.floor(this.bot.entity.position.y);
+                                if (await this.walkToCaveFloor(targetY)) {
+                                    const down = fromY - Math.floor(this.bot.entity.position.y);
+                                    successSteps += down; i += down - 1;
+                                    triedDirections.length = 0; dir = firstDirection.clone(); this.lastStopReason = null;
+                                    continue;
+                                }
+                            }
                         }
                         return {
                             success: false,
@@ -278,6 +328,14 @@ class StairMine extends InstantSkill {
                 }
             }
             if (!support || support.boundingBox === 'empty') {
+                // Nothing to bridge against (a cave opens under the step): a floor a block or two further down is stepped down to,
+                // as a player drops into a cave, when the fall does no harm (three blocks in all) and no liquid is there. A
+                // probe of the diamond descent (2026-10-20) stood at y -13 over such a cave with all four ways "open", and stopped.
+                const drop = this.shallowFloorBelow(nextPos);
+                if (drop !== null) {
+                    const dropped = await this.moveOneStair(currentPos, dir, false, drop);
+                    if (dropped) return true;
+                }
                 const below = support?.position ?? nextPos.offset(0, -1, 0);
                 this.lastStopReason = `前方の足場(${below.x}, ${below.y}, ${below.z})が${support?.name ?? '未ロード'}で空いています`
                     + '（木の上・崖・洞窟の縁など）。地面へ降りるか別の方向で再実行してください';
@@ -389,8 +447,93 @@ class StairMine extends InstantSkill {
     }
 
     /** One staircase step is complete only after the bot reaches the adjacent column at the expected height. */
-    private async moveOneStair(start: Vec3, dir: Vec3, ascending: boolean): Promise<boolean> {
-        const target = start.offset(dir.x, ascending ? 1 : -1, dir.z);
+    /**
+     * Straight down where the body stands, up to `maxBlocks`: the block under the feet is dug only when the one under that is solid
+     * (a fall of one), with no liquid beside either. Returns how many blocks it went down.
+     */
+    private async digDownInPlace(maxBlocks: number): Promise<number> {
+        const liquid = (at: Vec3) => ['lava', 'water', 'flowing_lava', 'flowing_water'].includes(this.bot.blockAt(at)?.name ?? '');
+        let down = 0;
+        while (down < maxBlocks && !this.shouldInterrupt()) {
+            const feet = this.bot.entity.position.floored();
+            const floor = this.bot.blockAt(feet.offset(0, -1, 0)), under = this.bot.blockAt(feet.offset(0, -2, 0));
+            if (!floor || floor.boundingBox !== 'block' || !floor.diggable || !under || under.boundingBox !== 'block') break;
+            if ([feet.offset(0, -1, 0), feet.offset(0, -2, 0)].some(cell => [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dz]) => liquid(cell.offset(dx, 0, dz))))) break;
+            if (this.adjacentWater(feet.offset(0, -1, 0))) break;
+            if (!(await this.digBlockSafe(floor))) break;
+            const deadline = Date.now() + 1500;
+            while (Date.now() < deadline && Math.floor(this.bot.entity.position.y) >= feet.y) await this.sleep(50);
+            if (Math.floor(this.bot.entity.position.y) >= feet.y) break;
+            down++;
+        }
+        if (down) log.info(`⛏️ 洞窟の縁: 足元を${down}ブロック真下へ掘り下げました（Y=${Math.floor(this.bot.entity.position.y)}）`);
+        return down;
+    }
+
+    /**
+     * The nearest dry floor of the cave below (3 to 24 blocks down, within 8 across, not below `targetY`), walked to by the route
+     * planner in at most 30 s. True when the body came down 3 blocks or more.
+     */
+    private async walkToCaveFloor(targetY: number): Promise<boolean> {
+        const floor = this.caveFloorBelow(this.bot.entity.position.floored(), targetY);
+        if (!floor) return false;
+        const fromY = this.bot.entity.position.y;
+        try { await gotoSafe(this.bot, new goals.GoalBlock(floor.x, floor.y + 1, floor.z), { timeoutMs: 30_000 }); } catch (error) {
+            if (this.shouldInterrupt()) throw error;
+        }
+        const came = fromY - this.bot.entity.position.y >= 3;
+        if (came) log.info(`⛏️ 洞窟の縁: 洞窟の床(${floor.x}, ${floor.y + 1}, ${floor.z})へ歩いて降りました（Y=${Math.floor(this.bot.entity.position.y)}）`);
+        return came;
+    }
+
+    /** See walkToCaveFloor: the floor block (feet and head above it open and dry, no lava beside, no magma), nearest across first. */
+    caveFloorBelow(from: Vec3, targetY: number): Vec3 | null {
+        const liquid = (at: Vec3) => ['lava', 'water', 'flowing_lava', 'flowing_water'].includes(this.bot.blockAt(at)?.name ?? '');
+        const open = (at: Vec3) => { const block = this.bot.blockAt(at); return !!block && block.boundingBox === 'empty' && !liquid(at); };
+        let best: Vec3 | null = null, bestCost = Infinity;
+        for (let dx = -8; dx <= 8; dx++) for (let dz = -8; dz <= 8; dz++) {
+            const across = Math.abs(dx) + Math.abs(dz);
+            if (across * 4 >= bestCost) continue;
+            for (let down = 1; down <= 25; down++) {
+                const cell = from.offset(dx, -down, dz);
+                if (cell.y + 1 < targetY) break;
+                const block = this.bot.blockAt(cell);
+                if (!block) break;
+                if (block.boundingBox !== 'block') continue;
+                const feet = cell.offset(0, 1, 0);
+                // Ground within three blocks is what the stair already stands on, not the cave's floor.
+                if (down >= 4 && block.name !== 'magma_block' && open(feet) && open(feet.offset(0, 1, 0))
+                    && ![[1, 0], [-1, 0], [0, 1], [0, -1]].some(([x, z]) => liquid(feet.offset(x, 0, z)) || liquid(cell.offset(x, 0, z)))) {
+                    const cost = across * 4 + down;
+                    if (cost < bestCost) { best = cell; bestCost = cost; }
+                }
+                break;   // the first solid block under the column is its floor; a deeper one is not reached through it
+            }
+        }
+        return best;
+    }
+
+    /**
+     * How many blocks below the step (`nextPos`) a solid floor lies that the body can drop to unharmed: 1 or 2 (a fall of two or
+     * three blocks in all), with nothing but air between and no lava or water in the landing cell or beside it. Null otherwise.
+     */
+    private shallowFloorBelow(nextPos: Vec3): number | null {
+        const liquid = (at: Vec3) => ['lava', 'water', 'flowing_lava', 'flowing_water'].includes(this.bot.blockAt(at)?.name ?? '');
+        const open = (at: Vec3) => { const block = this.bot.blockAt(at); return !!block && block.boundingBox === 'empty' && !liquid(at); };
+        for (let extra = 1; extra <= 2; extra++) {
+            if (!open(nextPos.offset(0, -extra, 0))) return null;
+            const floor = this.bot.blockAt(nextPos.offset(0, -extra - 1, 0));
+            if (!floor) return null;
+            if (floor.boundingBox !== 'block') continue;
+            const landing = nextPos.offset(0, -extra, 0);
+            const beside = [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dz]) => liquid(landing.offset(dx, 0, dz)) || liquid(landing.offset(dx, -1, dz)));
+            return beside || floor.name === 'magma_block' ? null : extra;
+        }
+        return null;
+    }
+
+    private async moveOneStair(start: Vec3, dir: Vec3, ascending: boolean, extraDrop = 0): Promise<boolean> {
+        const target = start.offset(dir.x, ascending ? 1 : -1 - extraDrop, dir.z);
         // Mineflayer yaw: north=0, west=π/2, south=π, east=-π/2.
         await this.bot.look(Math.atan2(-dir.x, -dir.z), 0, true);
         this.bot.setControlState('forward', true);

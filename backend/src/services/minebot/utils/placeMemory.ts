@@ -3,6 +3,7 @@ import path from 'node:path';
 import { Vec3 } from 'vec3';
 import { createLogger } from '../../../utils/logger.js';
 import {
+  biomesAround, describeBiomes, noteBiome,
   describeLastDeath, describeSeenReach, DRAGON_PLACES, DROP_LIFETIME_MS, emptyPlaceMemory, forgetPlaces, makeRoom, markSeen, mergeRadius, observedDeaths, parsePlaceMemory,
   type ObservedDeath,
   placesDigest, recallPlaces, recordDeath, rememberPlace, seenReach, type PlaceKeep, type PlaceMemoryState, type RecalledPlace, type Sighting,
@@ -45,6 +46,9 @@ const CONTAINERS: Record<string, string> = { chest: 'chest', barrel: 'barrel' };
 const DROPS_AGE_WITHIN = 160;
 /** How long after going through a portal the arrival is taken as its other end. */
 const PORTAL_PAIR_MS = 20_000;
+/** The biome line is read again after this long, or after this much travel. */
+const BIOME_LINE_MS = 5_000;
+const BIOME_LINE_MOVE = 16;
 /** A death message is matched to a death this close in time (the chat and the health come in either order). */
 const DEATH_MESSAGE_MS = 10_000;
 
@@ -83,6 +87,8 @@ export interface PlaceMemory {
   deaths(): ObservedDeath[];
   /** How far the ground already seen reaches in each direction from the body, as one line (nearest new ground first). */
   unseen(): string;
+  /** The biomes seen in this dimension, each by its nearest column, as one line (see describeBiomes); empty when none. */
+  biomes(): string;
   flush(): void;
   /** Keep the memory in this file from now on (what the file already holds is taken up). */
   persistTo(file: string): void;
@@ -221,6 +227,14 @@ export function installPlaceMemory(bot: MemoryBot, options: { file?: string } = 
     lastDeath() { return describeLastDeath(memory.state, Date.now(), from()); },
     deaths() { return observedDeaths(memory.state, Date.now()); },
     unseen() { return describeSeenReach(seenReach(memory.state, here(), dimension())); },
+    biomes() {
+      // Read again every few seconds, or after a few blocks of travel: the observation is taken far more often.
+      const at = here(), now = Date.now();
+      if (biomeLine && now - biomeLine.at < BIOME_LINE_MS && biomeLine.from.distanceTo(at) < BIOME_LINE_MOVE) return biomeLine.text;
+      const text = describeBiomes(biomesAround(memory.state, at, dimension()));
+      biomeLine = { at: now, from: at.clone(), text };
+      return text;
+    },
     flush,
     persistTo(target) {
       const before = memory.state;
@@ -232,11 +246,35 @@ export function installPlaceMemory(bot: MemoryBot, options: { file?: string } = 
       for (const [where, columns] of Object.entries(before.seen ?? {})) {
         for (const column of columns) { const [chunkX, chunkZ] = column.split(',').map(Number); markSeen(memory.state, where, chunkX, chunkZ); }
       }
+      for (const [where, columns] of Object.entries(before.biomes ?? {})) {
+        for (const [column, biome] of Object.entries(columns)) { const [chunkX, chunkZ] = column.split(',').map(Number); noteBiome(memory.state, where, chunkX, chunkZ, biome); }
+      }
       dirty = true;
     },
     stats: { columnsRead: 0, maxReadMs: 0, totalReadMs: 0, forgotten: 0 },
     work: budgetMs => work(budgetMs),
   };
+
+  /**
+   * The biome of a column, read at its middle: in the overworld at the height of the ground most of it lies at (y 64), so that the
+   * caves under it do not stand for it; elsewhere at the body's own height. Null when the world cannot say.
+   */
+  // Read from the column just read itself, not through the world: a column gone from the world by then (it can unload while
+  // the job spans ticks) answers 0 there, which is the id of badlands, and would be noted as that. A section not sent is no answer.
+  const biomeOfColumn = (column: any): string | null => {
+    try {
+      if (typeof column?.getBiome !== 'function') return null;
+      const y = dimension().includes('overworld') ? 64 : Math.floor(bot.entity?.position?.y ?? 64);
+      const minY = typeof column.minY === 'number' ? column.minY : 0;
+      // The biome section itself (prismarine-chunk answers 0, badlands, for one it does not have).
+      const sections = Array.isArray(column.biomes) ? column.biomes : column.sections;
+      if (Array.isArray(sections) && !sections[(y - minY) >> 4]) return null;
+      const id = column.getBiome(new Vec3(8, y, 8));
+      const name = typeof id === 'number' ? (bot.registry as { biomes?: Record<number, { name?: string }> }).biomes?.[id]?.name : undefined;
+      return name && /^[a-z_]+$/.test(name) ? name : null;
+    } catch { return null; }
+  };
+  let biomeLine: { at: number; from: Vec3; text: string } | null = null;
 
   let wanted: Wanted | null = null;
   const queue = new Set<string>();
@@ -257,6 +295,8 @@ export function installPlaceMemory(bot: MemoryBot, options: { file?: string } = 
     for (const sighting of sightings) rememberPlace(memory.state, sighting, now, from(), { later: true });
     makeRoom(memory.state, now, from());
     if (markSeen(memory.state, where, done.chunkX, done.chunkZ) || sightings.length || forgotten) dirty = true;
+    const biome = biomeOfColumn(done.column);
+    if (biome && noteBiome(memory.state, where, done.chunkX, done.chunkZ, biome)) dirty = true;
     memory.stats.columnsRead++; memory.stats.forgotten += forgotten;
     memory.stats.totalReadMs += done.startedReadMs;
   };
