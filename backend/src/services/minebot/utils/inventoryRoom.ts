@@ -8,7 +8,7 @@
  * Skill-independent: the skill passes `call` (its own callSkill) and the checks that are its to make (a hostile near, an emergency).
  */
 import { emptySlotCountSafe } from './inventorySpillDetection.js';
-import { describePack, slotsUsed, spareRockToDrop, tidyPlan, TIDY_ABOVE } from './inventoryTidy.js';
+import { clutterPlan, describePack, slotsUsed, spareRockToDrop, surplusPickaxes, tidyPlan, TIDY_ABOVE } from './inventoryTidy.js';
 
 export type RoomCall = (skill: string, ...args: any[]) => Promise<{ success?: boolean; result?: unknown; failureType?: string }>;
 interface Stack { name: string; count: number; stackSize?: number }
@@ -99,6 +99,80 @@ export async function tidyPackNow(bot: RoomBody, call: RoomCall, options: { aske
     if (dropped.failureType === 'no_room_to_drop' || options.interrupted?.()) break;
   }
   return gone.length ? ` 持ち物が${before}/36マス埋まっていたため、${gone.join('・')}を捨てました（いま${slotsUsed(bot.inventory.items() as Stack[])}マス）` : '';
+}
+
+/**
+ * At least this long between two tidies by the cheap check: short after a throw that went (the digging brings in a hundred more a
+ * minute), long after one that was refused or came back (it would be refused in the same place again).
+ */
+export const CLUTTER_GAP_MS = 8_000;
+export const CLUTTER_REFUSED_GAP_MS = 30_000;
+const CLUTTER_SLOT_TIDY_FREE = 4;
+const lastClutterTidy = new WeakMap<object, { at: number; gap: number }>();
+const tidyHolds = new WeakMap<object, number>();
+
+/**
+ * While a throw (drop-item) or a tidy is under way the cheap check stays quiet: drop-item digs its pit through dig-block-at, which
+ * would otherwise start a second tidy inside the first. Returns the release; holds nest.
+ */
+export function holdClutterTidy(bot: object): () => void {
+  tidyHolds.set(bot, (tidyHolds.get(bot) ?? 0) + 1);
+  let released = false;
+  return () => { if (!released) { released = true; tidyHolds.set(bot, Math.max(0, (tidyHolds.get(bot) ?? 1) - 1)); } };
+}
+
+/** What the cheap check would throw, or empty: kinds over the limits (inventoryTidy clutterPlan), the pickaxes over their allowance, and tidyPlan when short of room. */
+export function clutterToThrow(bot: RoomBody, asked: string[] = []): Array<{ name: string; count: number }> {
+  let items: Stack[] = [];
+  try { items = bot.inventory.items() as Stack[]; } catch { return []; }
+  const free = emptySlotCountSafe(bot as any);
+  const plan = [...clutterPlan(items, free), ...surplusPickaxes(items as any)];
+  if (free <= CLUTTER_SLOT_TIDY_FREE) {
+    // A nearly full pack: what the slot table names too (andesite, tuff... under the cobblestone limit, saplings, seeds).
+    for (const entry of tidyPlan(items)) if (!plan.some(have => have.name === entry.name)) plan.push(entry);
+  }
+  return plan.filter(entry => !asked.includes(entry.name));
+}
+
+/**
+ * The body's own tidy, called from places that dig or walk (mine-block, dig-block-at, the tunnel walker; also outside any procedure of the
+ * head): a cheap look at the pack (a count over the items, no await) and, only when rock has piled up, a throw. Run 21 dug a lot on the
+ * way and had 545 cobblestone in a 34/36 pack a minute after two tidies; mine-block then refused for a full pack.
+ *
+ * Acts when one kind is over CLUTTER_HARD (192), or over CLUTTER_SOFT (160) with CLUTTER_FEW_SLOTS (6) or fewer slots free, or when
+ * spare pickaxes pile up (more than one spare of a tier). Throws down to 96 cobblestone (the head keeps 128 in its own tidy: no fight).
+ * At most two kinds a call, never `asked`, never twice within CLUTTER_GAP_MS (a refused throw is not retried at once), not while it is
+ * already running (drop-item digs its pit through dig-block-at, which calls this), not with a hostile near, in an emergency
+ * (`blocked`) or with under TIDY_TIME_MS of the action left. Returns a sentence for the result, empty when nothing was thrown.
+ */
+export async function tidyIfCluttered(bot: RoomBody, call: RoomCall,
+  options: { asked?: string[]; timeLeftMs?: number; blocked?: () => boolean; interrupted?: () => boolean; now?: () => number } = {}): Promise<string> {
+  if ((tidyHolds.get(bot) ?? 0) > 0) return '';
+  const now = (options.now ?? Date.now)();
+  const last = lastClutterTidy.get(bot);
+  if (last && now - last.at < last.gap) return '';
+  const plan = clutterToThrow(bot, options.asked ?? []);
+  if (!plan.length) return '';
+  if ((options.timeLeftMs ?? Infinity) < TIDY_TIME_MS || options.blocked?.() || options.interrupted?.()) return '';
+  const release = holdClutterTidy(bot);
+  lastClutterTidy.set(bot, { at: now, gap: CLUTTER_REFUSED_GAP_MS });
+  const gone: string[] = [];
+  const refused: string[] = [];
+  try {
+    const before = slotsUsed(bot.inventory.items() as Stack[]);
+    for (const { name, count } of plan.slice(0, 2)) {
+      if (options.interrupted?.()) break;
+      let dropped: { success?: boolean; result?: unknown; failureType?: string } = { success: false };
+      try { dropped = await call('drop-item', name, count); } catch (error) { if (options.interrupted?.()) throw error; break; }
+      if (dropped.success) gone.push(`${name}×${count}`); else refused.push(refusalOf(name, count, dropped));
+      // Nowhere to throw is the same for every kind (and a heap that came back is not thrown again in the same place).
+      if (dropped.failureType === 'no_room_to_drop' || dropped.failureType === 'picked_up_again') break;
+    }
+    const used = slotsUsed(bot.inventory.items() as Stack[]);
+    if (!gone.length) return refused.length ? ` 持ち物の石が溜まっていたので捨てようとしましたが断られました: ${refused.join('、')}` : '';
+    lastClutterTidy.set(bot, { at: now, gap: CLUTTER_GAP_MS });
+    return ` 掘り進みで石が溜まっていたため、${gone.join('・')}を捨てました（${before}→${used}マス）`;
+  } finally { release(); }
 }
 
 /** Whether the pack is past the point where tidyPackNow would act. */

@@ -2,6 +2,7 @@ import pathfinder from 'mineflayer-pathfinder';
 import { Vec3 } from 'vec3';
 import type { CustomBot } from '../types/CustomBot.js';
 import { gotoSafe } from '../utils/gotoSafe.js';
+import { isSelfDropped } from '../utils/selfDropped.js';
 import { assertActionActive, reportActionProgress } from './ActionExecution.js';
 import { waitForObservation, type ObservationSource } from './observedWait.js';
 
@@ -76,6 +77,9 @@ export async function collectDrops(bot: CustomBot, options: {
   ];
   const relevant = (entity: any) => {
     if (entity.name !== 'item' || entity.isValid === false) return false;
+    // A heap the body threw away itself is not this dig's drop, whatever its kind (run 21: cobblestone thrown from a tidy was walked back
+    // to and taken in again by the next dig that yielded cobblestone).
+    if (isSelfDropped(bot, entity)) return false;
     const originDistance = Math.min(...options.origins.map(origin => entity.position.distanceTo(origin)));
     if (originDistance > (options.radius ?? 10)) return false;
     if (policy === 'all') return true;

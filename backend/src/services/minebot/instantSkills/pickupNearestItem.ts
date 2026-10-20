@@ -5,6 +5,7 @@ import { CustomBot, InstantSkill } from '../types.js';
 import { setMovements } from '../utils/setMovements.js';
 import { gotoSafe } from '../utils/gotoSafe.js';
 import { actionDelay } from '../execution/observedWait.js';
+import { isSelfDropped } from '../utils/selfDropped.js';
 
 const { goals } = pathfinder;
 /**
@@ -76,6 +77,8 @@ class PickupNearestItem extends InstantSkill {
       const itemEntity = this.bot.nearestEntity((entity) => {
         // アイテムエンティティかチェック
         if (entity.name !== 'item') return false;
+        // Rock the body threw away itself a moment ago is not "the nearest item" (run 21: a heap just thrown was taken straight back).
+        if (isSelfDropped(this.bot, entity)) return false;
 
         // 距離チェック
         const distance = entity.position.distanceTo(this.bot.entity.position);

@@ -1,7 +1,7 @@
 import { Vec3 } from 'vec3';
 import { chooseTool } from '../utils/toolChoice.js';
 import { ensureToolUses, keepCheapTool } from '../utils/toolStock.js';
-import { makeRoom } from '../utils/inventoryRoom.js';
+import { makeRoom, tidyIfCluttered } from '../utils/inventoryRoom.js';
 import { emptySlotCountSafe } from '../utils/inventorySpillDetection.js';
 import { hostileNear } from './craftOne.js';
 import { equipToHandVerified } from '../utils/equipVerified.js';
@@ -174,6 +174,23 @@ class DigBlockAt extends InstantSkill {
         });
         prepNote += room.note;
         assertActionActive(this.bot);
+      }
+      // The body's own limit on the rock it digs (run 21: 545 cobblestone, 34/36): a count over the items, a throw only past the limit. The
+      // throw walks the body off, so when it did, the way back to the block is walked before the reach check.
+      const beforeTidy = this.bot.entity.position.clone();
+      let askedKinds: string[] = [block.name];
+      try { askedKinds = [block.name, ...expectedBlockDrops(this.bot, block)]; } catch { /* a body that cannot say what the block drops */ }
+      const tidied = await tidyIfCluttered(this.bot as any, (skill, ...args) => this.callSkill(skill, ...args), {
+        asked: askedKinds, interrupted: () => this.shouldInterrupt(),
+        blocked: () => hostileNear(this.bot as any, 16) || String((this.bot as any).minebotControlState ?? '').startsWith('emergency'),
+      });
+      if (tidied) {
+        prepNote += tidied;
+        assertActionActive(this.bot);
+        if (this.bot.entity.position.distanceTo(beforeTidy) > 1.5 && !canDigFromHere(this.bot, block, pos)) {
+          try { await this.callSkill('move-to', beforeTidy.x, beforeTidy.y, beforeTidy.z, 1, 'near'); } catch (error) { if (this.shouldInterrupt()) throw error; }
+          assertActionActive(this.bot);
+        }
       }
 
       if (!canDigFromHere(this.bot, block, pos)) {

@@ -6,6 +6,7 @@ import { floorConfig, type FloorConfig } from './floorConfig.js';
 import { hostileWithin, type FloorBody } from './floorReflexes.js';
 import { ensureReflexLedger } from './reflexLedger.js';
 import { gotoSafe } from './gotoSafe.js';
+import { isSelfDropped } from './selfDropped.js';
 
 const log = createLogger('Minebot:IdlePickup');
 
@@ -84,6 +85,8 @@ export function pickupTarget(bot: PickupBody, now: number, options: { checkLease
     // Still moving (thrown, falling, drifting): not yet where it will lie.
     if (entity.velocity && entity.velocity.norm() > 0.1) continue;
     if (recentToss.some(toss => toss.position.distanceTo(entity.position) <= SELF_TOSS_RADIUS)) continue;
+    // ...and the item entities drop-item recorded as its own (they can lie farther off than the radius, and for longer than a minute).
+    if (isSelfDropped(bot, entity as never)) continue;
     try { if (dropBurnsIn(bot as any, entity.position.floored()) !== null) continue; } catch { continue; }
     best = { id: entity.id, position: entity.position, distance };
   }
