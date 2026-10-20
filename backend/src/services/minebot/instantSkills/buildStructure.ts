@@ -165,7 +165,7 @@ class BuildStructure extends InstantSkill {
     const enclosed = /portal/.test(structureName) ? this.enclosedCells(bp, origin, dir) : [];
     // Where the body must not stand while it builds: the frame and the inside it encloses (see stepAside).
     this.buildCells = [...placements.map(pl => pl.worldPos), ...enclosed];
-    for (const inside of enclosed) {
+    for (const inside of [...enclosed].sort((a, b) => b.y - a.y)) {   // top down: sand under sand falls in otherwise
       if (this.shouldInterrupt()) break;
       const existing = this.bot.blockAt(inside);
       if (existing && existing.boundingBox !== 'empty' && !['water', 'lava'].includes(existing.name)) {
@@ -212,13 +212,21 @@ class BuildStructure extends InstantSkill {
 
     // The inside again, after the frame: the route planner stacks blocks to reach the top row and leaves them there (a ladder
     // probe, 2026-10-20: a dirt block inside a whole frame, and the flint and steel lit nothing).
+    // Top down, and again while something falls in: sand dug from under sand brings the next one down (a ladder probe, 2026-10-20,
+    // dug four sand blocks out of a portal twice and lit nothing).
     const clearInside = async () => {
-      for (const inside of enclosed) {
-        const existing = this.bot.blockAt(inside);
-        if (existing && existing.boundingBox !== 'empty' && !['water', 'lava'].includes(existing.name)) {
-          log.info(`🧹 内側の除去（建てた後）: ${existing.name} @ ${inside}`);
-          await this.digBlock(inside);
+      for (let pass = 0; pass < 4; pass++) {
+        let dug = 0;
+        for (const inside of [...enclosed].sort((a, b) => b.y - a.y)) {
+          const existing = this.bot.blockAt(inside);
+          if (existing && existing.boundingBox !== 'empty' && !['water', 'lava'].includes(existing.name)) {
+            log.info(`🧹 内側の除去（建てた後）: ${existing.name} @ ${inside}`);
+            await this.digBlock(inside);
+            dug++;
+          }
         }
+        if (!dug) return;
+        await this.sleep(700);   // what was left over it falls and lands
       }
     };
     const lit = () => enclosed.some(cell => this.bot.blockAt(cell)?.name === 'nether_portal');

@@ -133,8 +133,35 @@ try {
     console.log(`LADDER_START ${JSON.stringify(seaStart)}`);
   }
 
-  // ── 1. Down to the diamond band ──
   const directions = ['east', 'south', 'west', 'north'];
+  // MINECRAFT_LADDER_GATE_TEST=true: the gate alone, twice (obsidian and flint and steel given): on the ground where the body
+  // stands, then in the rock at y -40, the second gone through.
+  if (process.env.MINECRAFT_LADDER_GATE_TEST === 'true') {
+    for (const command of ['give MinebotTrial obsidian 20', 'give MinebotTrial flint_and_steel 2', 'give MinebotTrial diamond_pickaxe 1'])
+      await control.executeSetupCommand(command);
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    const gate = async (stage: string, enter: boolean) => {
+      const from = Date.now();
+      const here = actor.entity.position.floored();
+      const built = await step('build-structure', ['nether_portal', here.x + 2, here.y, here.z, 'south'], 240_000);
+      // This gate's own (the first one may be within reach of the second).
+      const origin = here.offset(2, 0, 0);
+      const inside = nearest(block => block?.name === 'nether_portal', 12).find((at: Vec3) => at.distanceTo(origin) <= 6);
+      mark(stage, !!inside, `${inside ? `at ${inside}` : String(built.result).slice(0, 200)} in ${Math.round((Date.now() - from) / 1000)} s`);
+      if (inside && enter) {
+        await step('enter-portal', [inside.x, inside.y, inside.z], 60_000);
+        await new Promise(resolve => setTimeout(resolve, 3000));
+      }
+    };
+    await gate('gate_ground', false);
+    for (let attempt = 0; attempt < 4 && actor.entity.position.y > -36; attempt++) await step('stair-mine', [-40, directions[attempt % 4], 'cobblestone'], 300_000);
+    mark('gate_descent', actor.entity.position.y <= -36, `y=${Math.round(actor.entity.position.y)}`);
+    await gate('gate_rock', true);
+    mark('nether', String(actor.game?.dimension ?? '').includes('nether'));
+  }
+
+  // ── 1. Down to the diamond band ──
+  if (process.env.MINECRAFT_LADDER_GATE_TEST !== 'true') {
   const descentFrom = Date.now();
   // Four ways tried without a step down: 24 blocks off and down again from there, as a planner would.
   for (let attempt = 0, still = 0, legs = 0; attempt < 16 && actor.entity.position.y > targetY + 4; attempt++) {
@@ -249,6 +276,7 @@ try {
     } else mark('portal', false, 'no obsidian or no flint and steel');
     mark('nether', String(actor.game?.dimension ?? '').includes('nether'));
   }
+  }   // the ladder (not the gate test)
   report = { passed: stages.nether?.ok === true && deaths === 0, diagnosisOnly: true, asFca, peaceful, targetY, seaStart,
     fixtureGrants: [...(peaceful ? ['difficulty peaceful'] : []), ...kit], durationMs: Date.now() - startedAt, deaths, stages, steps };
 } catch (error) {
