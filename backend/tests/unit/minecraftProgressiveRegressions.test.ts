@@ -343,7 +343,10 @@ describe('progressive live trial regressions', () => {
     expect(cobblestone).toBe(4);
     expect(bot.listenerCount('diggingCompleted')).toBe(0);
   });
-  it('keeps per-block pickup for a mixed-height vein', async () => {
+  // A mixed-height vein: drops that come to rest by the body (the upper one falls into the lower one's cell) are gathered in one walk
+  // (mb-speed, 2026-10-20); one over a deep drop is still taken at once, before it can be lost down there.
+  for (const [label, pit, perBlock] of [['gathers in one walk the drops of a mixed-height vein that rest by the body', false, [false, false]],
+    ['keeps per-block pickup where a drop would fall far', true, [true, true]]] as const) it(label, async () => {
     const positions = [new Vec3(1, 100, 0), new Vec3(1, 101, 0)];
     const dug = new Set<string>();
     let rawIron = 0;
@@ -358,6 +361,7 @@ describe('progressive live trial regressions', () => {
       findBlocks: () => positions.filter(position => !dug.has(position.toString())),
       blockAt: (position: Vec3) => positions.some(target => target.toString() === position.toString()) && !dug.has(position.toString())
         ? { name: 'iron_ore', position, diggable: true }
+        : pit && position.x === 1 && position.z === 0 && position.y < 100 ? { name: 'air', boundingBox: 'empty' }
         : { name: 'stone', boundingBox: 'block' },
     });
     const dig = { run: vi.fn(async (x: number, y: number, z: number) => {
@@ -370,7 +374,7 @@ describe('progressive live trial regressions', () => {
     const skill: any = new MineBlock(bot);
     skill.collectAllNearbyDrops = async () => [];
     expect(await skill.runImpl('iron_ore', 2, 16)).toMatchObject({ success: true });
-    expect(dig.run.mock.calls.map(call => (call as unknown[])[3])).toEqual([true, true]);
+    expect(dig.run.mock.calls.map(call => (call as unknown[])[3])).toEqual(perBlock);
   });
   it('keeps failed-target rescans bounded across batches', async () => {
     const positions = [new Vec3(1, 100, 0), new Vec3(1, 101, 0)];

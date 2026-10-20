@@ -13,6 +13,11 @@
  * The kit: armour (a chestplate of any kind, or two pieces of iron or better), two portions of cooked food (or bread and
  * the like), and a bed (carried, or a respawn bed already set). Worn and carried both count: carried armour is put on by
  * the floor's armour reflex.
+ *
+ * Only the armour shuts the gate. With it on, the stone round a stair is the safer place to spend a night than the surface:
+ * run 19 had the whole iron suit and no bed, was refused its stair at 1,790 s and spent the end of the run building a shelter
+ * on a frozen shore (the owner, 2026-10-20: "防具を着ていて地下にいる・地下へ向かう時は断らない。地上で待たない"). The food
+ * and the bed are still told (descentKit, the observation's notice) as what the night wants, not as what bars the way down.
  */
 
 export const NIGHT_GATE_Y = 16;
@@ -117,8 +122,13 @@ export function gateHours(clock: NightClock | null): boolean {
   return !!clock && clock.darkInSeconds <= DUSK_LEAD_SECONDS;
 }
 
+/** What shuts the gate: no armour. Cooked food and a bed are wanted for the night, but an armoured body goes down without them. */
+export function gateShutBy(kit: DescentKit): boolean {
+  return kit.missing.includes('armor');
+}
+
 /**
- * The lowest goal height allowed now, with what is missing, or null when nothing is gated (day, kit complete, not the overworld).
+ * The lowest goal height allowed now, with what is missing, or null when nothing is gated (day, armour on, not the overworld).
  * On the surface the floor is y 16; below it, two blocks under where the body stood when the gate first closed on it underground
  * this night (`nightGateAnchor`, kept on the body), or the feet if they are lower now: no deeper, but along and up are free.
  * Measured from the feet alone, two blocks at a time would have gone all the way down, one call after another.
@@ -127,7 +137,7 @@ export function descentFloor(bot: GateBody): { floor: number; kit: DescentKit; c
   const clock = nightClock(bot);
   if (!gateHours(clock)) return null;
   const kit = descentKit(bot);
-  if (!kit.missing.length) return null;
+  if (!gateShutBy(kit)) return null;
   const feet = bot.entity?.position?.y;
   if (typeof feet !== 'number' || !Number.isFinite(feet)) return null;
   const feetY = Math.floor(feet);
@@ -158,10 +168,11 @@ function missingText(kit: DescentKit): string {
 function nextText(kit: DescentKit, underground: boolean): string {
   const how = kit.missing.map(part => part === 'armor' ? '鉄インゴット8個で iron_chestplate'
     : part === 'cooked_food' ? '生肉は start-smelting で焼ける' : '同じ色の羊毛3個と板材3個で bed');
+  // Never "wait on the surface": the stone above y 16 holds iron and coal, and the armour they make opens the way down.
   return (underground
     ? '今の高さで横へ掘るか、上へ戻る（stair-mine で上へ、move-to で y16 以上）。'
-    : '地上（y16以上）でできることを進めるか、dig-shelter で夜を越す。')
-    + `用意: ${how.join('、')}。敵が近い時は build-around-self か dig-shelter（この断りは備えがそろうまで続く）`;
+    : 'y16 より上の地下で鉄・石炭を掘って防具を作る（地上で待たない）。')
+    + `用意: ${how.join('、')}。敵が近い時は build-around-self か dig-shelter（この断りは防具を着るまで続く。着れば夜でも降りられる）`;
 }
 
 /**
@@ -193,7 +204,7 @@ export function descentKitNotice(bot: GateBody): { missing: KitPart[]; gated: bo
   const clock = nightClock(bot);
   if (!clock || clock.darkInSeconds > KIT_NOTICE_SECONDS) return undefined;
   const kit = descentKit(bot);
-  return kit.missing.length ? { missing: kit.missing, gated: gateHours(clock) } : undefined;
+  return kit.missing.length ? { missing: kit.missing, gated: gateHours(clock) && gateShutBy(kit) } : undefined;
 }
 
 /** A furnace remembered this far off is still worth walking back to for a batch of meat. */

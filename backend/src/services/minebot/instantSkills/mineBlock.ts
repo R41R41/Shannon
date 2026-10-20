@@ -8,22 +8,33 @@ import {
   emptySlotCountSafe,
   INVENTORY_FULL_RECOVERY_HINT_JA,
   shouldPauseMiningForDeposit,
+  slotsForDrops,
 } from '../utils/inventorySpillDetection.js';
 import { assertActionActive, reportActionProgress } from '../execution/ActionExecution.js';
 import { collectDrops, expectedBlockDrops, inventoryCounts, type CollectionPolicy } from '../execution/collectDrops.js';
 import { canDigFromHere, DIG_REACH } from '../utils/blockInteractionReach.js';
-import { estimateBlockApproachCost } from '../utils/blockApproachCost.js';
+import { estimateBlockApproachCost, minedApproachCost } from '../utils/blockApproachCost.js';
 import { dropBurnsIn } from '../utils/dropFate.js';
 import { digMsWithBestTool as bestToolDigMs } from '../utils/bestToolDigTime.js';
 import { descentFloor, nightGateRefusal } from '../utils/nightGate.js';
 import { axeAdviceNote, isWood, spareToolNote } from '../utils/toolWear.js';
-import { slotsUsed, tidyPlan } from '../utils/inventoryTidy.js';
+import { slotsUsed, spareRockToDrop, tidyPlan } from '../utils/inventoryTidy.js';
 import { hostileNear } from './craftOne.js';
 import { noteUnreachable, recentlyUnreachable, THREAT_REFUSAL_MS } from '../utils/unreachableTargets.js';
 
 /** The pack is tidied only with this much of the action left, and with no hostile this near. */
 const TIDY_TIME_MS = 40_000;
 const TIDY_SAFE_RANGE = 16;
+/** The room made just before a dig (roomForDig): this many free slots at most are asked for, and only with this much of the action left. */
+const DIG_ROOM_SLOTS = 3;
+const ROOM_TIME_MS = 8_000;
+/** Candidates ranked by the rock between (utils/blockApproachCost) on each pick; the rest by distance alone, behind them. */
+const REFINED_CANDIDATES = 48;
+/** A deferred drop falls at most this far, and comes to rest this near the body (see canDeferBatchCollection). */
+const DEFER_FALL_LIMIT = 6;
+const DEFER_REST_RANGE = 6;
+/** Deferred drops are gathered in one walk once this many blocks are dug. */
+const DEFER_GATHER_EVERY = 8;
 
 const log = createLogger('Minebot:Skill:mineBlock');
 
@@ -47,12 +58,27 @@ class MineBlock extends InstantSkill {
    * returns. Keep the deferred group small so collectDrops can reach every
    * spawned item within its bounded pickup passes.
    */
-  private canDeferBatchCollection(blockName: string, targets: Vec3[]): boolean {
-    if (targets.length < 2 || !(['stone', 'cobblestone', 'deepslate'].includes(blockName)
-      || blockName.endsWith('_ore'))) return false;
-    const level = targets[0].y;
-    return targets.every(target => target.y === level
-      && this.bot.blockAt(new Vec3(target.x, target.y - 1, target.z))?.boundingBox === 'block');
+  private canDeferBatchCollection(_blockName: string, targets: Vec3[]): boolean {
+    if (targets.length < 2) return false;
+    // Where each drop will come to rest: straight down from its block (the batch's other blocks counted as dug) to the first solid
+    // floor. Deferred only when every one rests close by and near the body's height, out of any liquid: the face of a vein, a trunk,
+    // a pit dug at the feet. A drop that would fall far (a ledge, a ravine) or into water is still taken at once. Collected after
+    // every dig, a vein of iron took 2-7 s a block more than its digging (run 19 10:34-10:40; lab, 2026-10-20).
+    const dug = new Set(targets.map(target => `${target.x},${target.y},${target.z}`));
+    const feet = this.bot.entity.position;
+    return targets.every(target => {
+      for (let depth = 1; depth <= DEFER_FALL_LIMIT; depth++) {
+        const below = new Vec3(target.x, target.y - depth, target.z);
+        if (dug.has(`${below.x},${below.y},${below.z}`)) continue;
+        const block = this.bot.blockAt(below);
+        if (!block) return false;
+        if (['water', 'lava', 'flowing_water', 'flowing_lava', 'bubble_column'].includes(block.name)) return false;
+        if (block.boundingBox !== 'block') continue;
+        const rest = below.offset(0.5, 1, 0.5);
+        return rest.distanceTo(feet) <= DEFER_REST_RANGE && Math.abs(rest.y - feet.y) <= 3;
+      }
+      return false;
+    });
   }
 
   /**
@@ -105,6 +131,7 @@ class MineBlock extends InstantSkill {
 
   async runImpl(blockName: string, count: number = 1, searchRadius: number = 32, collectionPolicy: CollectionPolicy = 'target') {
     assertActionActive(this.bot);
+    this.quenched = 0;
     reportActionProgress(this.bot, 'precondition', { blockName, count, searchRadius });
     if (!Number.isInteger(count) || count < 1 || !Number.isFinite(searchRadius) || searchRadius <= 0
       || !['target', 'all'].includes(collectionPolicy)) return { success: false,
@@ -303,6 +330,10 @@ class MineBlock extends InstantSkill {
      * stairs and 136 s, the diamonds still not reached (run 16).
      */
     let pinnedKey: string | null = null;
+    /** The pack was tidied for room in this call (once). */
+    let tidiedForRoom = false;
+    /** What this call mines and what that drops: never thrown away for room (see roomForDig). */
+    const keptKinds = familyNames.flatMap(name => [name, ...expectedItems]);
     /** Least headway (metres nearer) for a failed approach to count as getting there. */
     const APPROACH_HEADWAY = 3;
 
@@ -329,7 +360,18 @@ class MineBlock extends InstantSkill {
       }
 
       const remainingToMine = want - mined;
-      if (shouldPauseMiningForDeposit(this.bot, remainingToMine)) {
+      // Short of room: what tidyPlan names (spare stone, dirt and the like) is thrown away first, once, and the room looked at again. A
+      // ladder probe (2026-10-20) came to ten obsidian with five slots free, full of the rock its descent had dug, and was refused all
+      // twenty times it asked.
+      if (shouldPauseMiningForDeposit(this.bot, remainingToMine, expectedItems) && !tidiedForRoom) {
+        tidiedForRoom = true;
+        toolWarning += await this.tidyPack(familyNames.flatMap(name => [name, ...expectedItems]), timeLeftMs());
+      }
+      // Still short (nothing tidyPlan names): the spare rock goes too, as before each dig.
+      if (shouldPauseMiningForDeposit(this.bot, remainingToMine, expectedItems)) {
+        toolWarning += await this.roomForDig(keptKinds, Math.min(DIG_ROOM_SLOTS, slotsForDrops(this.bot, remainingToMine, expectedItems)), timeLeftMs());
+      }
+      if (shouldPauseMiningForDeposit(this.bot, remainingToMine, expectedItems)) {
         if (mined > 0) {
           stoppedForInventoryTight = true;
           break;
@@ -359,11 +401,19 @@ class MineBlock extends InstantSkill {
       // the same kind that needs neither comes first.
       const burning = new Set(candidates.filter(candidate => dropBurnsIn(this.bot as any, new Vec3(candidate.x, candidate.y, candidate.z)))
         .map(candidate => targetKey(candidate)));
+      // Ranked by the way to them, the rock on the straight line counted (utils/blockApproachCost): an ore in sight first. Read for the
+      // nearest few dozen only (by the plain estimate); the rest keep the plain one, with the buried penalty, behind them.
+      const eyes = here.offset(0, 1.62, 0);
+      const cost = new Map<string, number>();
+      const byGeometry = candidates.map(candidate => ({ candidate, plain: estimateBlockApproachCost(here, candidate, candidate.exposed) }))
+        .sort((a, b) => a.plain - b.plain);
+      byGeometry.forEach(({ candidate, plain }, index) => cost.set(targetKey(candidate),
+        index < REFINED_CANDIDATES ? minedApproachCost(this.bot as any, eyes, candidate) : plain + 1000));
       candidates.sort((a, b) => Number(targetKey(b) === pinnedKey) - Number(targetKey(a) === pinnedKey)
         || Number(reachable.has(targetKey(b))) - Number(reachable.has(targetKey(a)))
         || Number(unreachable.has(targetKey(a))) - Number(unreachable.has(targetKey(b)))
         || Number(burning.has(targetKey(a))) - Number(burning.has(targetKey(b)))
-        || estimateBlockApproachCost(here, a, a.exposed) - estimateBlockApproachCost(here, b, b.exposed));
+        || cost.get(targetKey(a))! - cost.get(targetKey(b))!);
 
       const pos = candidates.shift()!;
       const target = new Vec3(pos.x, pos.y, pos.z);
@@ -499,11 +549,15 @@ class MineBlock extends InstantSkill {
             pendingBeforeInventory = inventoryCounts(this.bot);
             pendingBeforeEntityIds = new Set(Object.values(this.bot.entities ?? {}).map(entity => entity.id));
           }
+          toolWarning += await this.roomForDig(keptKinds, Math.min(DIG_ROOM_SLOTS, 1 + pendingOrigins.length), timeLeftMs());
           let digResult = await digBlockAt.run(bt.x, bt.y, bt.z, collectImmediately, collectionPolicy, false, true);
           // 遮蔽物を除去した場合は同じブロックをリトライ
           if (digResult.failureType === 'obstruction_cleared') {
             await flushPendingDrops();
             collectImmediately = true;
+            digResult = await digBlockAt.run(bt.x, bt.y, bt.z, true, collectionPolicy);
+          }
+          if (digResult.failureType === 'lava_danger' && await this.quenchLavaBeside(digResult)) {
             digResult = await digBlockAt.run(bt.x, bt.y, bt.z, true, collectionPolicy);
           }
           if (!digResult.success) await flushPendingDrops();
@@ -526,7 +580,7 @@ class MineBlock extends InstantSkill {
             consecutiveFailures = 0;
             if (!collectImmediately) {
               pendingOrigins.push(bt);
-              if (pendingOrigins.length >= 4) await flushPendingDrops();
+              if (pendingOrigins.length >= DEFER_GATHER_EVERY) await flushPendingDrops();
             }
           } else {
             lastFailureType = digResult.failureType ?? 'dig_failed';
@@ -580,8 +634,12 @@ class MineBlock extends InstantSkill {
 
       } else {
         // ── 単体採掘: 従来通り collect=true で1個ずつ ──
+        toolWarning += await this.roomForDig(keptKinds, 1, timeLeftMs());
         let digResult = await digBlockAt.run(target.x, target.y, target.z, true, collectionPolicy);
         if (digResult.failureType === 'obstruction_cleared') {
+          digResult = await digBlockAt.run(target.x, target.y, target.z, true, collectionPolicy);
+        }
+        if (digResult.failureType === 'lava_danger' && await this.quenchLavaBeside(digResult)) {
           digResult = await digBlockAt.run(target.x, target.y, target.z, true, collectionPolicy);
         }
         if (digResult.failureType === 'missing_tool' || digResult.failureType === 'equip_failed') {
@@ -688,7 +746,7 @@ class MineBlock extends InstantSkill {
 
     const isPartial = mined < count || stoppedForInventoryTight;
     // Said beside what was mined: the rest of the kind lies below the night gate's floor (utils/nightGate).
-    if (gate && gatedKeys.size) toolWarning += ` 夜の門: y${gate.floor}より下の${gatedKeys.size}個は、夜の準備（${gate.kit.missing.map(part => part === 'armor' ? '防具' : part === 'cooked_food' ? '焼いた食料' : 'ベッド').join('・')}）が揃うまで掘りません`;
+    if (gate && gatedKeys.size) toolWarning += ` 夜の門: y${gate.floor}より下の${gatedKeys.size}個は、防具（胸当てか、鉄以上の部位2つ）を着るまで夜は掘りません`;
     if (unknownNote) toolWarning += unknownNote;
     if (needsPickaxe) toolWarning += spareToolNote(this.bot);
     if (knownNames.some(isWood)) toolWarning += axeAdviceNote(this.bot, mined);
@@ -722,11 +780,59 @@ class MineBlock extends InstantSkill {
       beforeInventory, spawnWaitMs, radius: 16 });
   }
 
+  /** Lava poured on in this call (see quenchLavaBeside). */
+  private quenched = 0;
+
+  /**
+   * The lava a refused dig named beside its block, poured on with the water bucket carried (use-item-on-block: it becomes obsidian
+   * and the water is taken back), so the dig can go on. Obsidian made over a pool has lava beside it as often as not: a ladder probe
+   * (2026-10-20) mined three of ten and was refused for the rest. At most three a call. False when nothing was poured.
+   */
+  private async quenchLavaBeside(refusal: { result?: unknown }): Promise<boolean> {
+    if (this.quenched >= 3 || !this.bot.inventory.items().some(item => item.name === 'water_bucket')
+      || String(this.bot.game?.dimension ?? '').includes('nether')) return false;
+    const match = /隣の溶岩\((-?\d+),\s*(-?\d+),\s*(-?\d+)\)/.exec(String(refusal.result ?? ''));
+    if (!match) return false;
+    this.quenched++;
+    const named = new Vec3(Number(match[1]), Number(match[2]), Number(match[3]));
+    try {
+      await this.callSkill('use-item-on-block', named.x, named.y, named.z, 'water_bucket');
+      // The lava named is what has to be gone (the pour may have gone to another source of the pool).
+      return this.bot.blockAt(named)?.name !== 'lava';
+    } catch (error) { if (this.shouldInterrupt()) throw error; return false; }
+  }
+
   /**
    * Throws away what tidyPlan names (drop-item: thrown and walked away from), and says what went. Empty when nothing did. Never the
    * kinds this call was asked to mine; not with a hostile near or in an emergency (the throw walks the body about); not when the action
    * has less than TIDY_TIME_MS left (it would be cut off with its mined result unsaid); two kinds at most.
    */
+  /**
+   * Room for a dig's drop, made just before the dig: with fewer than `slots` (and two at least) free, what tidyPlan names goes, else the
+   * largest heap of spare rock (spareRockToDrop), until there is room or nothing more can go. The walk to an ore through rock fills
+   * the pack on the way: a descent from y 108 to -59 left no room, and two diamonds and five obsidian were dug and left lying
+   * (mb-body's lab, run 21, 2026-10-20); the check before the walk, and the once-only tidy, had both passed. Not with a hostile near,
+   * or with under ROOM_TIME_MS of the action left.
+   */
+  private async roomForDig(asked: string[], slots: number, timeLeftMs: number): Promise<string> {
+    const free = () => emptySlotCountSafe(this.bot);
+    const need = Math.max(2, slots);
+    if (free() >= need || timeLeftMs < ROOM_TIME_MS || hostileNear(this.bot as any, TIDY_SAFE_RANGE)
+      || String((this.bot as any).minebotControlState ?? '').startsWith('emergency')) return '';
+    const gone: string[] = [];
+    for (let round = 0; round < 3 && free() < need && !this.shouldInterrupt(); round++) {
+      let plan: Array<{ name: string; count: number }> = [];
+      try { plan = tidyPlan(this.bot.inventory.items()).filter(entry => !asked.includes(entry.name)).slice(0, 1); } catch { plan = []; }
+      if (!plan.length) { const rock = spareRockToDrop(this.bot.inventory.items(), asked); if (rock) plan = [rock]; }
+      if (!plan.length) break;
+      let dropped: { success: boolean; failureType?: string } = { success: false };
+      try { dropped = await this.callSkill('drop-item', plan[0].name, plan[0].count); } catch (error) { if (this.shouldInterrupt()) throw error; break; }
+      if (!dropped.success) break;
+      gone.push(`${plan[0].name}×${plan[0].count}`);
+    }
+    return gone.length ? ` 掘る前に持ち物の空きを作るため、${gone.join('・')}を捨てました（空き${free()}マス）` : '';
+  }
+
   private async tidyPack(asked: string[], timeLeftMs: number): Promise<string> {
     if (timeLeftMs < TIDY_TIME_MS || hostileNear(this.bot as any, TIDY_SAFE_RANGE)
       || String((this.bot as any).minebotControlState ?? '').startsWith('emergency')) return '';

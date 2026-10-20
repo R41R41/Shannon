@@ -66,7 +66,9 @@ export async function collectDrops(bot: CustomBot, options: {
   const policy = options.policy ?? 'target';
   const expected = new Set(options.expectedItems);
   const observedLoot = new Set<string>();
-  const deadline = Date.now() + (options.timeoutMs ?? 10_000);
+  // A batch gathered in one walk (mine-block defers up to eight) gets the passes and the time its drops need, not one block's.
+  const deadline = Date.now() + (options.timeoutMs ?? Math.max(10_000, 3_000 * options.origins.length));
+  const passes = Math.max(6, options.origins.length * 2);
   const sources = [
     ...['entitySpawn', 'entityGone', 'entityMoved', 'entityUpdate', 'playerCollect']
       .map(event => ({ source: bot as unknown as ObservationSource, event })),
@@ -91,7 +93,7 @@ export async function collectDrops(bot: CustomBot, options: {
   // Inventory or visible loot can already be present: no unconditional wait.
   await waitForObservation(bot, () => received() || candidates().length > 0,
     Math.min(options.spawnWaitMs ?? 1200, Math.max(0, deadline - Date.now())), sources);
-  for (let pass = 0; pass < 6 && Date.now() < deadline; pass++) {
+  for (let pass = 0; pass < passes && Date.now() < deadline; pass++) {
     assertActionActive(bot);
     const item = candidates()[0];
     if (!item) break;

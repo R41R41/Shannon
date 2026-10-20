@@ -4,10 +4,12 @@ import { CustomBot, InstantSkill } from '../types.js';
 import { shouldRefuseAggressiveCombat } from '../utils/minebotToolPolicy.js';
 import { reflexPromptText } from '../utils/floorConfig.js';
 import { gotoSafe } from '../utils/gotoSafe.js';
+import { pickupGoal } from '../execution/collectDrops.js';
 import { actionDelay } from '../execution/observedWait.js';
 import { visiblePointOn } from '../utils/sightLine.js';
 import { WOOL_COLORS, sheepWool, woolStatusLine } from '../utils/nightGate.js';
 import { creeperMeleeRefusal } from '../utils/creeperFuse.js';
+import { holdsWater } from '../utils/waterBlocks.js';
 import type { Vec3 } from 'vec3';
 
 const { goals } = pathfinder;
@@ -28,6 +30,9 @@ const DROP_NEAR_KILL = 6;
 export { sheepWool };
 /** From the eyes to the nearest point of a target's body within which a blow lands. */
 const HOLD_REACH = 3;
+/** A target in the water is let go after this long without a blow; the whole call stops after WATER_TOTAL_MS in the water. */
+const WATER_TARGET_MS = 12_000;
+const WATER_TOTAL_MS = 40_000;
 
 class AttackContinuously extends InstantSkill {
   constructor(bot: CustomBot) {
@@ -145,9 +150,11 @@ class AttackContinuously extends InstantSkill {
       // ── 武器を装備 ──
       let weaponEquipped = await this.equipBestWeapon();
 
+      // Targets let go of in the water (see WATER_TARGET_MS): not picked again in this call.
+      const letGo = new Set<unknown>();
       // ── 対象を検索 (広い範囲) ──
       const findTarget = () => this.bot.nearestEntity((entity) => {
-        if (!entity || !entity.position) return false;
+        if (!entity || !entity.position || letGo.has(entity)) return false;
         const d = entity.position.distanceTo(this.bot.entity.position);
         if (d > maxDistance) return false;
         return matchesEntity(entity);
@@ -174,6 +181,12 @@ class AttackContinuously extends InstantSkill {
       const allCollected: string[] = [];
       const startTime = Date.now();
       const TIMEOUT = 60000;
+      // The chase in the water, kept short (run 19: salmon in a frozen sea, four calls and about 400 s for four fish, the air reflex
+      // cutting in twice): a target in the water, or the body swimming, is let go after WATER_TARGET_MS without a blow, and the whole
+      // call stops after WATER_TOTAL_MS of it.
+      let waterSince: number | null = null, waterTotal = 0, waterTick = Date.now(), lastWet = false;
+      const wetNames: string[] = [];
+      let waterStopped = false;
 
       // Until that many blows have been struck, not that many times round: a round that only closes the
       // distance, waits for the target to come down into reach, or counts a kill is no blow. Counting rounds,
@@ -221,6 +234,26 @@ class AttackContinuously extends InstantSkill {
 
         lastSeenAt = target.position.clone();
         const distance = target.position.distanceTo(this.bot.entity.position);
+
+        // Not for a hostile: one in the water that is coming at the body is not left to it.
+        if (!this.holding && this.bot.registry?.entitiesByName?.[target.name ?? '']?.type !== 'hostile') {
+          const now = Date.now();
+          const wet = (this.bot.entity as { isInWater?: boolean } | undefined)?.isInWater === true || this.inWater(target);
+          // Counted only between two passes both in the water: a walk on land that ends at the shore is not time in it.
+          if (wet) { if (lastWet) waterTotal += now - waterTick; waterSince ??= now; } else waterSince = null;
+          waterTick = now; lastWet = wet;
+          if (wet && (now - waterSince! > WATER_TARGET_MS || waterTotal > WATER_TOTAL_MS)) {
+            this.stopMovement();
+            letGo.add(target);
+            wetNames.push(target.name || 'unknown');
+            if (waterTotal > WATER_TOTAL_MS) { waterStopped = true; break; }
+            waterSince = null;
+            target = findTarget();
+            if (!target) break;
+            lastTargetName = target.name || 'unknown';
+            continue;
+          }
+        }
 
         if (distance > maxDistance) {
           target = findTarget();
@@ -283,6 +316,7 @@ class AttackContinuously extends InstantSkill {
           this.noteBlow();
           await this.bot.attack(target);
           attackCount++;
+          waterSince = null; // a blow struck: the chase in the water is getting somewhere
 
           const cooldown = weaponEquipped.includes('axe') ? 900 : weaponEquipped.includes('sword') ? 550 : 200;
           await actionDelay(this.bot, cooldown);
@@ -320,6 +354,12 @@ class AttackContinuously extends InstantSkill {
         log.info(`📦 最終回収: ${finalDrops.join(', ')}`, 'green');
       }
 
+      const waterNote = wetNames.length
+        ? `水中の${[...new Set(wetNames)].join('・')}は追いきれず、${wetNames.length}匹をあきらめました（水の中で計${Math.round(waterTotal / 1000)}秒${waterStopped ? '、この呼び出しはここまで' : ''}。泳ぎながらでは攻撃が届きにくい）。陸の動物か、岸から届く相手を先に`
+        : '';
+      if (attackCount === 0 && waterNote) {
+        return { success: false, failureType: 'target_not_found', recoverable: true, result: `${lastTargetName}に攻撃できませんでした。${waterNote}` };
+      }
       if (attackCount === 0) {
         const near = this.holding ? Object.values(this.bot.entities).filter((entity: any) => entity?.position && entity !== this.bot.entity
           && matchesEntity(entity) && entity.position.distanceTo(this.bot.entity.position) <= maxDistance).length : 0;
@@ -350,7 +390,7 @@ class AttackContinuously extends InstantSkill {
 
       return {
         success: true,
-        result: [baseMsg, remainingInfo, woolLine].filter(Boolean).join('。'),
+        result: [baseMsg, remainingInfo, woolLine, waterNote].filter(Boolean).join('。'),
       };
     } catch (error: any) {
       this.stopMovement();
@@ -459,8 +499,11 @@ class AttackContinuously extends InstantSkill {
     // ドロップスポーン待ち
     await actionDelay(this.bot, 450);
 
-    // Phase 1: 自然回収を待つ（近くにいれば自動で拾う）
-    await this.waitForPickup(before, 1500);
+    // Phase 1: 自然回収を待つ（近くにいれば自動で拾う）. Only for a drop at the feet: one lying a few blocks off is not picked up by
+    // waiting, and the wait cost each such kill a second and a half before the walk to it began (run 19: the rabbits at 226 s and 1,085 s).
+    const isDrop = (e: any) => e?.name === 'item' || String(e?.displayName) === 'Item';
+    const atFeet = this.bot.nearestEntity(e => isDrop(e) && e.position.distanceTo(this.bot.entity.position) < 1.6);
+    await this.waitForPickup(before, atFeet ? 1500 : 0);
     if (this.holding) return this.inventoryDiff(before);
 
     // Phase 2: walk to every drop still lying there. A kill leaves several
@@ -490,8 +533,15 @@ class AttackContinuously extends InstantSkill {
       const itemPos = item.position;
       if (itemPos.distanceTo(this.bot.entity.position) > 1) {
         try {
-          // Within a block: the body picks up what is within a block of it, and an exact cell on a slope or an edge often has no route.
-          await gotoSafe(this.bot, new goals.GoalNear(itemPos.x, itemPos.y, itemPos.z, 1), { timeoutMs: 4000, stuckAbortCount: 3, logStuck: false });
+          // A cell from which the drop is within pickup reach (collectDrops' own goal, judged against the item's real position): "within a
+          // block" of its cell let the walk stop up to 1.4 m off, out of reach, and the drop was given up (run 19: 6 of 9 kills left theirs).
+          // Where that cell has no route (a slope, an edge), within a block of it as before.
+          let goal: ReturnType<typeof pickupGoal> | null = null;
+          try { goal = pickupGoal(this.bot, itemPos); } catch { goal = null; }
+          const near = goal ? await gotoSafe(this.bot, goal as any, { timeoutMs: 4000, stuckAbortCount: 3, logStuck: false }) : { success: false };
+          if (!near.success && this.bot.entities[item.id]) {
+            await gotoSafe(this.bot, new goals.GoalNear(itemPos.x, itemPos.y, itemPos.z, 1), { timeoutMs: 3000, stuckAbortCount: 3, logStuck: false });
+          }
         } catch { /* ignore */ }
         this.stopMovement();
       }
@@ -577,6 +627,15 @@ class AttackContinuously extends InstantSkill {
       .map(i => `${i.name}:${i.count}`)
       .sort()
       .join(',');
+  }
+
+  /** Whether the entity is in the water (its feet or its middle in a water cell). */
+  private inWater(entity: { position?: Vec3; height?: number } | null | undefined): boolean {
+    try {
+      const at = entity?.position;
+      if (!at) return false;
+      return holdsWater(this.bot.blockAt(at.floored())) || holdsWater(this.bot.blockAt(at.offset(0, (entity!.height ?? 0.5) / 2, 0).floored()));
+    } catch { return false; }
   }
 
   private stopMovement() {

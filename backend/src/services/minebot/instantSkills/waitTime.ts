@@ -71,7 +71,7 @@ class WaitTime extends InstantSkill {
       // Common run 9 sheltered for the night and then waited here eight times, six and a half minutes, while the iron
       // pickaxe it needed next was a few blocks of digging away; L101-L103 lost their nights the same way.
       + '夜明けを待つためにも使いません。夜は避難した縦穴から横へ掘り進め、鉱石を探す・精錬する・作業台で作るなど、地下でできる用事を進めます'
-      + '（防具・焼いた食料・ベッドがそろうまでは、夜に y16 より下へは降りられません）。';
+      + '（防具（胸当てか、鉄以上の部位2つ）を着るまでは、夜に y16 より下へは降りられません。ベッドがあれば先に眠って夜を飛ばします）。';
     this.params = [
       {
         name: 'milliseconds',

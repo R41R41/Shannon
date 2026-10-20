@@ -70,7 +70,9 @@ describe('the night gate: no going below y 16 at dusk or night without armour, c
     expect(refused.result).toContain('備え: 防具（胸当てか、鉄以上の部位2つ）、焼いた食料（2個以上。いま0個）、ベッドが無い');
     expect(refused.result).toContain('次の手:');
     expect(refused.result).toMatch(/足りない: armor, cooked_food, bed$/);
-    expect(nightGateFor(gateBody(70, NIGHT, [{ name: 'red_bed' }, { name: 'iron_chestplate' }]), 10, 'x')!.result).toMatch(/足りない: cooked_food$/);
+    // Armour on: the gate is open, though the food and the bed are still missing (run 19's stair at 1,790 s; the owner, 2026-10-20).
+    expect(nightGateFor(gateBody(70, NIGHT, [{ name: 'red_bed' }, { name: 'iron_chestplate' }]), 10, 'x')).toBeNull();
+    expect(nightGateFor(gateBody(70, NIGHT, [{ name: 'red_bed' }, { name: 'cooked_beef', count: 4 }]), 10, 'x')!.result).toMatch(/足りない: armor$/);
     const cave = gateBody(-7, NIGHT);
     expect(nightGateFor(cave, -8, 'stair-mine')).toBeNull();          // a step down
     expect(nightGateFor(cave, 30, 'move-to')).toBeNull();             // up

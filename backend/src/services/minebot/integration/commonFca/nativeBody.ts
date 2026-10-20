@@ -6,7 +6,7 @@ import { floorActive, floorSilenced } from '../../utils/floorReflexes.js';
 import { floorConfig } from '../../utils/floorConfig.js';
 import type { ReflexLedger } from '../../utils/reflexLedger.js';
 import { activeActionCapabilities, cancelIdleActions, currentAction, cancelNonSurvivalActions, createMotorPort, executeAction,
-  hasActiveSafetyLease, physicalActionBusy, withActionSignal } from '../../execution/ActionExecution.js';
+  hasActiveSafetyLease, physicalActionBusy, safetyLeaseCapabilities, withActionSignal } from '../../execution/ActionExecution.js';
 import { bodySkillCatalog, isDragonGoal, type BodySkill } from './skillCatalog.js';
 import type { BodyCandidateDraft, BodyObservation, BodyValue } from './bodyControlContract.js';
 import type { MinecraftControlCommand as Command, MinecraftControlReceipt as Receipt } from './minecraftControlContract.js';
@@ -41,6 +41,13 @@ export interface NativeBodyOptions {
  * still ends held, as before.
  */
 const SAFETY_RELEASE_WAIT_MS = 3000;
+/**
+ * How long the release after a command waits for auto-swim to have the body back at the air: a surfacing from a few blocks down takes
+ * 2 to 5 s, under an ice sheet longer. Only after a command (an API stop or release keeps the 3 s above).
+ */
+const BREATH_RELEASE_WAIT_MS = 12_000;
+/** The wait for auto-swim ends at least this long before the command's deadline: the cleanup (300 ms) and the receipt follow it. */
+const RECEIPT_MARGIN_MS = 1500;
 /** No command for this long, the dragon catalog goes back to the ordinary one (decisions between commands take seconds). */
 const DRAGON_CATALOG_IDLE_MS = 90_000;
 /**
@@ -203,7 +210,7 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
       const result = await withActionSignal(this.bot, signal, () => executeAction(this.bot, capability, milliseconds,
         work, { waitForQuiescence: true }));
       const outcome = signal.aborted ? 'cancelled' : result.success ? 'completed' : 'failed';
-      const released = readOnly || await this.release(AbortSignal.timeout(300));
+      const released = readOnly || await this.release(AbortSignal.timeout(300), Date.parse(command.deadlineAt) - RECEIPT_MARGIN_MS);
       let failure = outcome === 'failed' ? failureOf(result) : undefined;
       let text = result.result;
       // A body reflex that took the body (a meal, a step back from a creeper) is not the model's failure: say so, and let it
@@ -227,17 +234,27 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
         sessionId: command.context.sessionId, generation: command.context.generation, outcome, inputsReleased, observedAt,
         evidenceId: command.id, observation: this.observe() } } : {}) };
   }
-  async release(signal: AbortSignal): Promise<boolean> {
+  async release(signal: AbortSignal, until = Infinity): Promise<boolean> {
     cancelNonSurvivalActions(this.bot, 'common_fca_release');
     // Critical air reflex owns the same arbiter; never acknowledge stopped while it is moving. A safety reflex (the floor's
     // eat/armour/retreat, lava, breath) ends by itself within seconds: wait for it, bounded, instead of reporting the body held
     // (2026-10-14 review: an interrupted action came back inputsReleased=false and every later command was refused).
     // Only a caller still waiting gets the extension; one that has already given up is answered at once, as before.
-    const extend = !signal.aborted, safetyUntil = Date.now() + SAFETY_RELEASE_WAIT_MS;
+    // Surfacing for air takes longer than a meal: run 19 had two commands come back held (the API's FCA_BODY_OUTCOME_UNKNOWN and
+    // a recovery of 17 s and 3 s) while auto-swim took 3.3 s and longer to reach the air. It is waited for up to
+    // BREATH_RELEASE_WAIT_MS, not past `until` (the command's own deadline less the cleanup and receipt time) unless the 3 s every
+    // safety reflex gets reach further. Only after a skill command (an `until` given): an API stop or release keeps the 3 s. Once
+    // auto-swim has been seen holding the body, the longer bound stays (a meal that follows the surfacing does not cut it short).
+    const extend = !signal.aborted, started = Date.now();
+    let breathing = false;
+    const bound = () => {
+      breathing ||= Number.isFinite(until) && safetyLeaseCapabilities(this.bot).includes('auto-swim');
+      return breathing ? Math.max(started + SAFETY_RELEASE_WAIT_MS, Math.min(until, started + BREATH_RELEASE_WAIT_MS)) : started + SAFETY_RELEASE_WAIT_MS;
+    };
     let waited = false;
     while (physicalActionBusy(this.bot)) {
       if (signal.aborted) {
-        if (!extend || !hasActiveSafetyLease(this.bot) || Date.now() >= safetyUntil) return false;
+        if (!extend || !hasActiveSafetyLease(this.bot) || Date.now() >= bound()) return false;
         waited = true;
       }
       await delay(10);

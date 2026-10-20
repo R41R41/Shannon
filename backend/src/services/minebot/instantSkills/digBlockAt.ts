@@ -346,6 +346,11 @@ class DigBlockAt extends InstantSkill {
       const noEmptySlots = typeof this.bot.inventory.emptySlotCount === 'function'
         && this.bot.inventory.emptySlotCount() === 0;
 
+      // Equipment dug to be carried, with no room for it: not carried, and said as that.
+      if (collect && noEmptySlots && takeEquipment === true) {
+        return { success: false, failureType: 'inventory_full', recoverable: true,
+          result: `${blockName}を掘りましたが、持ち物が満杯で拾えません（空きを作ってから pickup-nearest-item ${expectedItems[0] ?? blockName}）${warnings}` };
+      }
       if (!collect || noEmptySlots) {
         const note = noEmptySlots && collect
           ? '（インベントリ満杯のため回収スキップ — pickup-nearest-item で後から回収可能）'
@@ -359,6 +364,22 @@ class DigBlockAt extends InstantSkill {
 
       const collected = await collectDrops(this.bot, { origins: [pos], expectedItems,
         beforeInventory: beforeItems, beforeEntityIds, policy: collectionPolicy });
+
+      // Equipment dug to be carried (a crafting table, a bed found in an igloo or a village) is in hand only when the pack says so: the
+      // drop is looked for once more by name, and a dig that did not bring it into the pack is no success (run 18 D27: a table "taken
+      // back" that was not; run 19 walked past an igloo's bed for want of knowing it could be taken).
+      if (takeEquipment === true && expectedItems.length) {
+        const have = () => expectedItems.some(name => (inventoryCounts(this.bot).get(name) ?? 0) > (beforeItems.get(name) ?? 0));
+        if (!have()) {
+          try { await this.callSkill('pickup-nearest-item', expectedItems[0], 6); } catch (error) { if (this.shouldInterrupt()) throw error; }
+        }
+        if (!have()) {
+          return { success: false, failureType: 'drop_not_collected', recoverable: true,
+            result: `${blockName}を掘りましたが、${expectedItems[0]}は持ち物に入っていません（近くに落ちていれば pickup-nearest-item ${expectedItems[0]} で拾えます）${warnings}` };
+        }
+        const got = collected.length ? collected : expectedItems.filter(name => (inventoryCounts(this.bot).get(name) ?? 0) > (beforeItems.get(name) ?? 0)).map(name => `${name}x1`);
+        return { success: true, result: `${blockName}を掘り、${got.join(', ')}を持ち物に入れました${blockName.endsWith('_bed') ? '（ベッドは置けば使える。作る必要は無い）' : ''}${warnings}` };
+      }
 
       if (collected.length > 0) {
         return {
