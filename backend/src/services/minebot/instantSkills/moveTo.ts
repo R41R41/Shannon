@@ -15,6 +15,8 @@ import { nightGateFor } from '../utils/nightGate.js';
 import { tunnelDigMs } from '../utils/routeEstimate.js';
 import { chooseTool } from '../utils/toolChoice.js';
 import { settleAfterRespawn } from '../utils/respawnSettle.js';
+import { tidyIfCluttered } from '../utils/inventoryRoom.js';
+import { hostileNear } from './craftOne.js';
 const { goals } = pathfinder;
 const log = createLogger('Minebot:Skill:moveTo');
 
@@ -348,14 +350,21 @@ class MoveTo extends InstantSkill {
       // A far walk through rock is walked on the ground, along a tunnel cut before, or along a straight / 1:1 stair cut now
       // (utils/rockTravel); a walk that digs and lays blocks at the route search's whim zigzagged in run 21.
       const rockTravel = !isInWater && !handDigging;
-      let gotoResult = await gotoSafe(this.bot, goal, { timeoutMs: travelBudgetMs, rockTravel });
+      // The stone a tunnel brings in is thrown away every few steps (cobblestone piled to 545 in run 21 and the pack filled).
+      const tunnelTidy = async () => {
+        await tidyIfCluttered(this.bot as any, (skill, ...args) => this.callSkill(skill, ...args), {
+          timeLeftMs: travelBudgetMs - (Date.now() - travelStartedAt), interrupted: () => this.shouldInterrupt(),
+          blocked: () => hostileNear(this.bot as any, 16) || String((this.bot as any).minebotControlState ?? '').startsWith('emergency'),
+        });
+      };
+      let gotoResult = await gotoSafe(this.bot, goal, { timeoutMs: travelBudgetMs, rockTravel, tunnelTidy });
       // Still in the water and not there: the pathfinder plans no step up out
       // of a liquid. Climb the bank at the waterline, then travel on from land.
       if (waterLevelUnderBody(this.bot as any) !== null && !this.shouldInterrupt()
         && (!gotoResult.success || !goal.isEnd(this.bot.entity.position.floored() as unknown as Move))
         && await swimOntoBank(this.bot as any, x, z)) {
         log.info('🏊 水際の岸へ泳ぎ上がった。陸から移動を続ける');
-        gotoResult = await gotoSafe(this.bot, goal, { timeoutMs: Math.max(5_000, travelBudgetMs - (Date.now() - travelStartedAt)), rockTravel });
+        gotoResult = await gotoSafe(this.bot, goal, { timeoutMs: Math.max(5_000, travelBudgetMs - (Date.now() - travelStartedAt)), rockTravel, tunnelTidy });
       }
       if (gotoResult.stuckBlock) stuckBlockRef.info = gotoResult.stuckBlock;
       if (!gotoResult.success) executorActivity = gotoResult.activity ?? null;

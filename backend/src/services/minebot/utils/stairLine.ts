@@ -11,6 +11,7 @@
  * the steps are a pure function of the two ends, so a plan can be tested without a world.
  */
 import { Vec3 } from 'vec3';
+import { nativeActionHost } from '../execution/ActionExecution.js';
 
 export interface StairPlan {
   /** The feet cells in order, the first a step from `from`. */
@@ -118,9 +119,13 @@ export class TunnelTrail {
 }
 
 const trails = new WeakMap<object, TunnelTrail>();
-/** The trail of this body (kept for the life of the body object; a new world starts with a new body). */
+/**
+ * The trail of this body, kept for the life of the body object (a new world starts with a new body). Keyed by the native body: a skill
+ * works through a motor port made for its action (a new proxy every action), and a trail kept on that would be gone by the way back.
+ */
 export function trailOf(bot: object): TunnelTrail {
-  let trail = trails.get(bot);
-  if (!trail) trails.set(bot, trail = new TunnelTrail());
+  const host = nativeActionHost(bot);
+  let trail = trails.get(host);
+  if (!trail) trails.set(host, trail = new TunnelTrail());
   return trail;
 }
