@@ -8,6 +8,7 @@ import { actionSignal, assertActionActive, executeAction, preemptLowerPriorityAc
 import { skillCategory } from '../execution/SkillExecutor.js';
 import { describeRemainingTools } from '../utils/toolWear.js';
 import { describeToolOptions, takeToolStockNotes } from '../utils/toolStock.js';
+import { NIGHT_SLEEP_SKILLS, sleepRefusal, sleepThroughNight } from '../utils/nightSleep.js';
 import { boundMinecraftServerId } from '../runtime/memoryContext.js';
 import type { CustomBot } from './CustomBot.js';
 import type { SkillParam, SkillResult } from './skillParams.js';
@@ -153,9 +154,14 @@ export abstract class InstantSkill extends Skill {
     const host = this.rootBot;
     // What needs no body is said before the body is asked for (see preflight): for the command itself, never for a skill called
     // inside another (mine-block's own walk is not refused by move-to's gate: mine-block chose its targets above it).
+    /** The night gate's refusal put off: a bed is at hand, and the night is slept through first (then asked again). */
+    let gateAfterSleep = false;
     if (isCommandLevel(host, this.skillName)) {
       let refused: SkillResult | null = null;
       try { refused = this.preflight(...args); } catch { refused = null; }
+      if (refused?.failureType === 'night_unprepared' && NIGHT_SLEEP_SKILLS.has(this.skillName) && !sleepRefusal(host as any)) {
+        gateAfterSleep = true; refused = null;
+      }
       if (refused) return { ...refused, duration: 0 };
     }
     // A tool breaking is the body's news, not the skill's: hand the decision
@@ -187,6 +193,7 @@ export abstract class InstantSkill extends Skill {
     };
     let endEngagement: (() => void) | null = null;
     let finalResult: SkillResult;
+    let sleepNote = '';
     try {
       if (topLevel) host.on?.('minebotToolBroke' as any, onBroke as any);
       // A fight the planner called is said to the layer that keeps the body alive for as long as it runs (see engagement).
@@ -204,6 +211,16 @@ export abstract class InstantSkill extends Skill {
           rootAction = own?.root ?? own ?? null;
           mayStop = !(own?.root ?? own)?.safetyLease;
           if (own?.root) stopOwn = () => own.controller.abort('tool_broke');
+          // At night with a bed, the night is slept through before the work (utils/nightSleep), once a night.
+          if (NIGHT_SLEEP_SKILLS.has(this.skillName)) {
+            try { sleepNote = await sleepThroughNight(host as any, (name, ...rest) => this.callSkill(name, ...rest)); }
+            catch (error) { if (this.shouldInterrupt()) throw error; sleepNote = ''; }
+            if (gateAfterSleep) {
+              let still: SkillResult | null = null;
+              try { still = this.preflight(...args); } catch { still = null; }
+              if (still) return still;
+            }
+          }
         }
         try { return await this.runImpl(...args); }
         // Only this run's own port is handed back: a later run may already have put its own in place.
@@ -221,6 +238,7 @@ export abstract class InstantSkill extends Skill {
         result: `${this.skillName}の途中で${[...new Set(broken)].join('、')}が壊れたため、行動を止めました（実行済みの効果は残っています）。`
           + `残っている道具: ${describeRemainingTools(host)}${options ? `。${options}` : ''}` };
     }
+    if (sleepNote && typeof finalResult.result === 'string') finalResult = { ...finalResult, result: `${sleepNote}${finalResult.result}` };
     if (wornOut.length && typeof finalResult.result === 'string') {
       finalResult = { ...finalResult, result: `${finalResult.result}（途中で${[...new Set(wornOut)].join('、')}が壊れました）` };
     }

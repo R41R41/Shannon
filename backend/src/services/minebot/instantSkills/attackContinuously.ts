@@ -459,8 +459,11 @@ class AttackContinuously extends InstantSkill {
     // ドロップスポーン待ち
     await actionDelay(this.bot, 450);
 
-    // Phase 1: 自然回収を待つ（近くにいれば自動で拾う）
-    await this.waitForPickup(before, 1500);
+    // Phase 1: 自然回収を待つ（近くにいれば自動で拾う）. Only for a drop at the feet: one lying a few blocks off is not picked up by
+    // waiting, and the wait cost each such kill a second and a half before the walk to it began (run 19: the rabbits at 226 s and 1,085 s).
+    const isDrop = (e: any) => e?.name === 'item' || String(e?.displayName) === 'Item';
+    const atFeet = this.bot.nearestEntity(e => isDrop(e) && e.position.distanceTo(this.bot.entity.position) < 1.6);
+    await this.waitForPickup(before, atFeet ? 1500 : 0);
     if (this.holding) return this.inventoryDiff(before);
 
     // Phase 2: walk to every drop still lying there. A kill leaves several

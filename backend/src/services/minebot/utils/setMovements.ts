@@ -124,7 +124,9 @@ export function buildMovements(
    * block the path executor crouches and backs to the edge: about a block a second. An escape with a pursuer
    * near is not to do that: in paid run L110 it did, over four seconds, and a creeper closed to the body.
    */
-  canPlace = true
+  canPlace = true,
+  /** What laying one block on the way costs the planner, in steps (pathfinder's own default is 1). */
+  placeCost = 1,
 ) {
   const mcData = minecraftData(bot.version);
   const defaultMove = new Movements(bot as Bot);
@@ -138,6 +140,7 @@ export function buildMovements(
   defaultMove.canDig = canDig;
   defaultMove.dontMineUnderFallingBlock = dontMineUnderFallingBlock;
   defaultMove.digCost = digCost;
+  defaultMove.placeCost = placeCost;
   defaultMove.allowFreeMotion = allowFreeMotion;
   (defaultMove as any).liquidCost = liquidCost;
 

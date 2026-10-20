@@ -11,6 +11,7 @@ import { chooseTool, usesLeft } from '../utils/toolChoice.js';
 import { spareToolNote } from '../utils/toolWear.js';
 import { blocksAlong, keepCheapTool } from '../utils/toolStock.js';
 import { nightGateFor } from '../utils/nightGate.js';
+import { shaftStepRefusal } from '../utils/shaftDown.js';
 const log = createLogger('Minebot:Skill:stairMine');
 
 /**
@@ -27,6 +28,9 @@ class StairMine extends InstantSkill {
         this.skillName = 'stair-mine';
         this.description = '斜めの階段を掘って（登りは置いて）目標の高さへ行く。種類で探して掘るならmine-block、1マスならdig-block-at';
         this.mcData = minecraftData(this.bot.version);
+        // A descent to the diamonds is a hundred levels and more: two minutes cut a stair through stone at y 20 of 65 to -40, with
+        // only "timeout" to say (lab copy of run 19's world, 2026-10-20). The stair's own bound (below) ends it first, with its account.
+        this.maxDurationMs = 240_000;
         this.params = [
             {
                 name: 'targetY',
@@ -105,11 +109,13 @@ class StairMine extends InstantSkill {
             /** Directions given up on in this call, with why (the stair turns to another by itself), and the one it was asked for. */
             const triedDirections: string[] = [];
             const firstDirection = dir.clone();
+            /** Levels of this descent taken straight down (the rest were stair steps). */
+            let shaftLevels = 0;
 
             // タイムアウト設定（60秒）
             // Deepslate steps take several seconds each; a fixed 60s stopped a
             // 125-step descent to the diamond band after a fraction of it.
-            const TIMEOUT_MS = Math.min(600_000, Math.max(60_000, steps * 4_000));
+            const TIMEOUT_MS = Math.min(600_000, Math.max(60_000, steps * 4_000), (this.maxDurationMs || 120_000) - 4_000);
             const startTime = Date.now();
 
             // Every step is dug: a dear pickaxe is not spent on it when a cheaper one can be made (utils/toolStock).
@@ -156,6 +162,8 @@ class StairMine extends InstantSkill {
                 const currentPos = this.bot.entity.position.floored();
 
                 if (isDescending) {
+                    // Straight down where the rock allows (utils/shaftDown): one block dug for the level instead of a stair's three.
+                    if (await this.shaftStep(currentPos)) { successSteps++; shaftLevels++; continue; }
                     // 下降: 前方に1ブロック進んで1ブロック下を掘る
                     const success = await this.digStairDown(currentPos, dir, placeBlock);
                     if (!success) {
@@ -197,8 +205,6 @@ class StairMine extends InstantSkill {
                     log.debug(`⛏️ ${successSteps}/${steps}段完了`);
                 }
 
-                // 少し待機
-                await this.sleep(100);
             }
 
             const finalY = Math.floor(this.bot.entity.position.y);
@@ -207,7 +213,7 @@ class StairMine extends InstantSkill {
                 failureType: finalY === targetY ? undefined : 'stair_progress_blocked',
                 recoverable: finalY === targetY ? undefined : true,
                 result: (finalY === targetY
-                    ? `${successSteps}段${isDescending ? '下降' : '上昇'}してY=${finalY}に到達しました`
+                    ? `${successSteps}段${isDescending ? '下降' : '上昇'}してY=${finalY}に到達しました${shaftLevels ? `（うち${shaftLevels}段は縦穴で真下へ。足元の下が岩で、横に液体が無い所だけ）` : ''}`
                     : `${successSteps}段移動しましたが目標Y=${targetY}には到達していません（現在Y=${finalY}）`) + spareToolNote(this.bot),
             };
         } catch (error: any) {
@@ -283,6 +289,35 @@ class StairMine extends InstantSkill {
             log.error(`下降エラー: ${error.message}`, error);
             return false;
         }
+    }
+
+    /**
+     * One level straight down (utils/shaftDown): the block under the feet is dug and the body drops onto the rock under it. False, with
+     * nothing dug, where that is not safe or the body cannot be stood over the middle of its column; the caller then takes a stair step.
+     */
+    private async shaftStep(feet: Vec3): Promise<boolean> {
+        if (shaftStepRefusal(this.bot as any, feet)) return false;
+        // The body's box (0.6 wide) has to be over this column alone, or it stays on the rim of the next.
+        const centre = feet.offset(0.5, 0, 0.5);
+        const off = () => Math.max(Math.abs(this.bot.entity.position.x - centre.x), Math.abs(this.bot.entity.position.z - centre.z));
+        if (off() > 0.2) {
+            try {
+                await this.bot.lookAt(centre.offset(0, 1.6, 0), true);
+                this.bot.setControlState('sneak', true);
+                this.bot.setControlState('forward', true);
+                for (let tick = 0; tick < 16 && off() > 0.15 && !this.shouldInterrupt(); tick++) await this.sleep(50);
+            } finally {
+                this.bot.setControlState('forward', false);
+                this.bot.setControlState('sneak', false);
+            }
+            if (off() > 0.2 || Math.floor(this.bot.entity.position.y) !== feet.y) return false;
+        }
+        const floor = this.bot.blockAt(feet.offset(0, -1, 0));
+        if (!floor || !(await this.digBlockSafe(floor))) return false;
+        const deadline = Date.now() + 1500;
+        while (Date.now() < deadline && !this.shouldInterrupt()
+            && (Math.floor(this.bot.entity.position.y) >= feet.y || (this.bot.entity as any).onGround === false)) await this.sleep(50);
+        return Math.floor(this.bot.entity.position.y) === feet.y - 1;
     }
 
     /** The next way to try, from the one first asked for (`dir`): its sides, then back; null once all four have been tried. */
@@ -453,7 +488,7 @@ class StairMine extends InstantSkill {
             // 最適なツールを装備
             const tool = this.findBestTool(block);
             if (tool) {
-                await this.bot.equip(tool, 'hand');
+                if (this.bot.heldItem?.type !== tool.type || this.bot.heldItem?.slot !== tool.slot) await this.bot.equip(tool, 'hand');
             } else if (needsPickaxe) {
                 log.warn(`⚠ ${block.name}を掘るためのツルハシがありません`);
                 return false;

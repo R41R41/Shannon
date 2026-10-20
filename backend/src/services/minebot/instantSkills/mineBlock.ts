@@ -12,7 +12,7 @@ import {
 import { assertActionActive, reportActionProgress } from '../execution/ActionExecution.js';
 import { collectDrops, expectedBlockDrops, inventoryCounts, type CollectionPolicy } from '../execution/collectDrops.js';
 import { canDigFromHere, DIG_REACH } from '../utils/blockInteractionReach.js';
-import { estimateBlockApproachCost } from '../utils/blockApproachCost.js';
+import { estimateBlockApproachCost, minedApproachCost } from '../utils/blockApproachCost.js';
 import { dropBurnsIn } from '../utils/dropFate.js';
 import { digMsWithBestTool as bestToolDigMs } from '../utils/bestToolDigTime.js';
 import { descentFloor, nightGateRefusal } from '../utils/nightGate.js';
@@ -24,6 +24,13 @@ import { noteUnreachable, recentlyUnreachable, THREAT_REFUSAL_MS } from '../util
 /** The pack is tidied only with this much of the action left, and with no hostile this near. */
 const TIDY_TIME_MS = 40_000;
 const TIDY_SAFE_RANGE = 16;
+/** Candidates ranked by the rock between (utils/blockApproachCost) on each pick; the rest by distance alone, behind them. */
+const REFINED_CANDIDATES = 48;
+/** A deferred drop falls at most this far, and comes to rest this near the body (see canDeferBatchCollection). */
+const DEFER_FALL_LIMIT = 6;
+const DEFER_REST_RANGE = 6;
+/** Deferred drops are gathered in one walk once this many blocks are dug. */
+const DEFER_GATHER_EVERY = 8;
 
 const log = createLogger('Minebot:Skill:mineBlock');
 
@@ -47,12 +54,27 @@ class MineBlock extends InstantSkill {
    * returns. Keep the deferred group small so collectDrops can reach every
    * spawned item within its bounded pickup passes.
    */
-  private canDeferBatchCollection(blockName: string, targets: Vec3[]): boolean {
-    if (targets.length < 2 || !(['stone', 'cobblestone', 'deepslate'].includes(blockName)
-      || blockName.endsWith('_ore'))) return false;
-    const level = targets[0].y;
-    return targets.every(target => target.y === level
-      && this.bot.blockAt(new Vec3(target.x, target.y - 1, target.z))?.boundingBox === 'block');
+  private canDeferBatchCollection(_blockName: string, targets: Vec3[]): boolean {
+    if (targets.length < 2) return false;
+    // Where each drop will come to rest: straight down from its block (the batch's other blocks counted as dug) to the first solid
+    // floor. Deferred only when every one rests close by and near the body's height, out of any liquid: the face of a vein, a trunk,
+    // a pit dug at the feet. A drop that would fall far (a ledge, a ravine) or into water is still taken at once. Collected after
+    // every dig, a vein of iron took 2-7 s a block more than its digging (run 19 10:34-10:40; lab, 2026-10-20).
+    const dug = new Set(targets.map(target => `${target.x},${target.y},${target.z}`));
+    const feet = this.bot.entity.position;
+    return targets.every(target => {
+      for (let depth = 1; depth <= DEFER_FALL_LIMIT; depth++) {
+        const below = new Vec3(target.x, target.y - depth, target.z);
+        if (dug.has(`${below.x},${below.y},${below.z}`)) continue;
+        const block = this.bot.blockAt(below);
+        if (!block) return false;
+        if (['water', 'lava', 'flowing_water', 'flowing_lava', 'bubble_column'].includes(block.name)) return false;
+        if (block.boundingBox !== 'block') continue;
+        const rest = below.offset(0.5, 1, 0.5);
+        return rest.distanceTo(feet) <= DEFER_REST_RANGE && Math.abs(rest.y - feet.y) <= 3;
+      }
+      return false;
+    });
   }
 
   /**
@@ -359,11 +381,19 @@ class MineBlock extends InstantSkill {
       // the same kind that needs neither comes first.
       const burning = new Set(candidates.filter(candidate => dropBurnsIn(this.bot as any, new Vec3(candidate.x, candidate.y, candidate.z)))
         .map(candidate => targetKey(candidate)));
+      // Ranked by the way to them, the rock on the straight line counted (utils/blockApproachCost): an ore in sight first. Read for the
+      // nearest few dozen only (by the plain estimate); the rest keep the plain one, with the buried penalty, behind them.
+      const eyes = here.offset(0, 1.62, 0);
+      const cost = new Map<string, number>();
+      const byGeometry = candidates.map(candidate => ({ candidate, plain: estimateBlockApproachCost(here, candidate, candidate.exposed) }))
+        .sort((a, b) => a.plain - b.plain);
+      byGeometry.forEach(({ candidate, plain }, index) => cost.set(targetKey(candidate),
+        index < REFINED_CANDIDATES ? minedApproachCost(this.bot as any, eyes, candidate) : plain + 1000));
       candidates.sort((a, b) => Number(targetKey(b) === pinnedKey) - Number(targetKey(a) === pinnedKey)
         || Number(reachable.has(targetKey(b))) - Number(reachable.has(targetKey(a)))
         || Number(unreachable.has(targetKey(a))) - Number(unreachable.has(targetKey(b)))
         || Number(burning.has(targetKey(a))) - Number(burning.has(targetKey(b)))
-        || estimateBlockApproachCost(here, a, a.exposed) - estimateBlockApproachCost(here, b, b.exposed));
+        || cost.get(targetKey(a))! - cost.get(targetKey(b))!);
 
       const pos = candidates.shift()!;
       const target = new Vec3(pos.x, pos.y, pos.z);
@@ -526,7 +556,7 @@ class MineBlock extends InstantSkill {
             consecutiveFailures = 0;
             if (!collectImmediately) {
               pendingOrigins.push(bt);
-              if (pendingOrigins.length >= 4) await flushPendingDrops();
+              if (pendingOrigins.length >= DEFER_GATHER_EVERY) await flushPendingDrops();
             }
           } else {
             lastFailureType = digResult.failureType ?? 'dig_failed';
@@ -688,7 +718,7 @@ class MineBlock extends InstantSkill {
 
     const isPartial = mined < count || stoppedForInventoryTight;
     // Said beside what was mined: the rest of the kind lies below the night gate's floor (utils/nightGate).
-    if (gate && gatedKeys.size) toolWarning += ` 夜の門: y${gate.floor}より下の${gatedKeys.size}個は、夜の準備（${gate.kit.missing.map(part => part === 'armor' ? '防具' : part === 'cooked_food' ? '焼いた食料' : 'ベッド').join('・')}）が揃うまで掘りません`;
+    if (gate && gatedKeys.size) toolWarning += ` 夜の門: y${gate.floor}より下の${gatedKeys.size}個は、防具（胸当てか、鉄以上の部位2つ）を着るまで夜は掘りません`;
     if (unknownNote) toolWarning += unknownNote;
     if (needsPickaxe) toolWarning += spareToolNote(this.bot);
     if (knownNames.some(isWood)) toolWarning += axeAdviceNote(this.bot, mined);
