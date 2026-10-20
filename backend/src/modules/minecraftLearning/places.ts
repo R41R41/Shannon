@@ -94,7 +94,7 @@ export function mergeRadius(kind: string): number {
   if (kind === 'village' || kind === 'fortress' || kind === 'bastion' || kind === 'stronghold') return 96;
   // A ruined portal (its netherrack, crying obsidian and scattered frame), a cave's hollow, a shipwreck, an igloo: one place each.
   if (kind === 'ruined_portal' || kind === 'cave') return 24;
-  if (kind === 'shipwreck') return 16;
+  if (kind === 'shipwreck' || kind === 'cave_entrance') return 16;
   if (kind === 'igloo') return 12;
   if (kind === 'obsidian') return 8;
   // One portal is one place: its cells (2×3 and up) and the twelve frames round an end portal.
@@ -112,10 +112,18 @@ export function compassDirection(from: { x: number; z: number }, to: { x: number
   return names[((Math.round(angle / (Math.PI / 4)) % 8) + 8) % 8];
 }
 
-function nearestOfKind(state: PlaceMemoryState, sighting: Sighting, radius: number): Place | null {
+/** The places of each kind, for merging many sightings at once (see indexPlaces); kept up to date by rememberPlace. */
+export type PlaceIndex = Map<string, Place[]>;
+export function indexPlaces(state: PlaceMemoryState): PlaceIndex {
+  const index: PlaceIndex = new Map();
+  for (const place of state.places) (index.get(place.kind) ?? index.set(place.kind, []).get(place.kind)!).push(place);
+  return index;
+}
+
+function nearestOfKind(state: PlaceMemoryState, sighting: Sighting, radius: number, index?: PlaceIndex): Place | null {
   let best: Place | null = null;
   let bestDistance = Infinity;
-  for (const place of state.places) {
+  for (const place of index ? index.get(sighting.kind) ?? [] : state.places) {
     if (place.kind !== sighting.kind || place.dimension !== sighting.dimension) continue;
     const d = distance(place.position, sighting.position);
     if (d <= radius && d < bestDistance) { best = place; bestDistance = d; }
@@ -128,9 +136,10 @@ function nearestOfKind(state: PlaceMemoryState, sighting: Sighting, radius: numb
  * the body is, when known: what is near it is the last to be given up for room.
  */
 export function rememberPlace(state: PlaceMemoryState, sighting: Sighting, now: number, from?: { dimension: string; position: PlacePosition },
-  options: { later?: boolean } = {}): Place {
+  options: { later?: boolean; index?: PlaceIndex } = {}): Place {
   const position = { x: Math.floor(sighting.position.x), y: Math.floor(sighting.position.y), z: Math.floor(sighting.position.z) };
-  const known = nearestOfKind(state, { ...sighting, position }, mergeRadius(sighting.kind));
+  // With an index, a column's dozens of sightings are each matched against their own kind, not against all 1,500 places.
+  const known = nearestOfKind(state, { ...sighting, position }, mergeRadius(sighting.kind), options.index);
   if (known) {
     known.lastSeenAt = now;
     if (sighting.count !== undefined) known.count = Math.max(known.count ?? 0, sighting.count);
@@ -142,6 +151,7 @@ export function rememberPlace(state: PlaceMemoryState, sighting: Sighting, now: 
     dimension: sighting.dimension, position, ...(sighting.count !== undefined ? { count: sighting.count } : {}),
     ...(sighting.note ? { note: sighting.note } : {}), ...(sighting.keep ? { keep: sighting.keep } : {}), firstSeenAt: now, lastSeenAt: now };
   state.places.push(place);
+  options.index && (options.index.get(place.kind) ?? options.index.set(place.kind, []).get(place.kind)!).push(place);
   // `later`: the caller makes room once for a whole column's sightings (see makeRoom), not once for each.
   if (!options.later && state.places.length > MAX_PLACES) makeRoom(state, now, from);
   return place;
@@ -170,12 +180,15 @@ export function makeRoom(state: PlaceMemoryState, now: number, from?: { dimensio
   let free = state.places.filter(place => !kept.has(place));
   // Nothing left to give up but what is kept (it does not happen in play): those go too, longest unseen first.
   if (free.length < excess) free = state.places;
-  const weight = (place: Place) => (now - place.lastSeenAt) / 60_000 * BLOCKS_PER_MINUTE
+  const weightOf = (place: Place) => (now - place.lastSeenAt) / 60_000 * BLOCKS_PER_MINUTE
     + (!from ? 0 : place.dimension === from.dimension ? distance(place.position, from.position) : OTHER_DIMENSION);
+  // Weighed once each (in the sort they were weighed again at every comparison: room is made after every column once full).
+  const weights = new Map<Place, number>();
+  for (const place of free) weights.set(place, weightOf(place));
   const byKind = new Map<string, Place[]>();
   for (const place of free) (byKind.get(place.kind) ?? byKind.set(place.kind, []).get(place.kind)!).push(place);
   // Each kind's places, worst last, so that the next to give up is popped.
-  for (const list of byKind.values()) list.sort((a, b) => weight(a) - weight(b));
+  for (const list of byKind.values()) list.sort((a, b) => weights.get(a)! - weights.get(b)!);
   const gone = new Set<Place>();
   while (excess-- > 0) {
     let crowded: Place[] | null = null;
@@ -249,6 +262,8 @@ export function observedDeaths(state: PlaceMemoryState, now: number): ObservedDe
 
 /** Removes the places for which `gone` holds (looked at again and no longer there). Returns how many. */
 export function forgetPlaces(state: PlaceMemoryState, gone: (place: Place) => boolean): number {
+  // Most calls forget nothing: the list is only built again when something goes.
+  if (!state.places.some(gone)) return 0;
   const before = state.places.length;
   state.places = state.places.filter(place => !gone(place));
   return before - state.places.length;
@@ -305,6 +320,7 @@ function shownNote(note: string | undefined): string {
 const PLACE_MEANING: Record<string, string> = {
   bed: ' 置かれたベッド: dig-block-at takeEquipment=true で掘れば持てる',
   village: ' 羊・ベッド・食べ物がある見込み',
+  cave_entrance: ' 歩いて地下へ下りられる洞窟の入口',
 };
 
 /** How many were seen together. A bed is two blocks (foot and head), so its count is halved: "×2" was one bed. */
@@ -363,6 +379,16 @@ const STRUCTURE_NAMES: Array<[string, string]> = [['village', '村'], ['ruined_p
 export const MAP_CHARACTERS = 3000;
 /** A cave of this many open cells or more is "a large hollow". */
 const LARGE_CAVE = 2000;
+/**
+ * What a depth is good for, said with a cave or the bottom of an entrance: diamonds lie mostly below y -45 (the most at -58), iron
+ * mostly between -24 and 56 (the most at 16).
+ */
+function depthWord(y: number): string {
+  if (y <= -45) return 'ダイヤの深さ';
+  if (y <= -24) return 'ダイヤに近い深さ';
+  if (y <= 40) return '鉄の多い深さ';
+  return '';
+}
 
 /**
  * The map in the body's memory, as lines for a planner that lays out a whole route: each kind of place by how many are known and
@@ -381,14 +407,19 @@ export function mapSummary(state: PlaceMemoryState, from: PlacePosition, dimensi
     places.slice(0, shown).map(describe).join('、') + (places.length > shown ? ` ほか${places.length - shown}` : '');
   const lines: string[] = [];
 
+  // An igloo's basement has a bed, a brewing stand and a villager: what the landmark watcher takes for a village. A village without
+  // a bell that close to an igloo is the igloo (lab world 20261020: "村: 6m" stood on the igloo's floor).
+  const igloos = of('igloo');
+  const isIgloo = (village: RecalledPlace) => !/bell/.test(village.note ?? '')
+    && igloos.some(igloo => Math.hypot(igloo.position.x - village.position.x, igloo.position.z - village.position.z) <= 24);
   const structures = STRUCTURE_NAMES.flatMap(([kind, name]) => {
-    const places = of(kind);
+    const places = kind === 'village' ? of(kind).filter(village => !isIgloo(village)) : of(kind);
     if (!places.length) return [];
     return [`${name}: ${listed(places, place => {
       let extra = '';
       if (kind === 'village') {
-        // A smith's chest: one beside a grindstone (weaponsmith) or a smithing table (toolsmith) in the village.
-        const smith = [...near(place, 'grindstone', 96), ...near(place, 'smithing_table', 96)]
+        // A smith's chest: one beside a grindstone (weaponsmith), a smithing table (toolsmith) or a blast furnace (armorer) in the village.
+        const smith = [...near(place, 'grindstone', 96), ...near(place, 'smithing_table', 96), ...near(place, 'blast_furnace', 96)]
           .flatMap(station => near(station, 'chest', 8)).filter((chest, index, list) => list.findIndex(other => other.id === chest.id) === index);
         if (smith.length) extra = `（鍛冶屋の箱 ${smith.slice(0, 2).map(chest => `(${chest.position.x},${chest.position.y},${chest.position.z})${chestNote(chest)}`).join('・')}: 鉄・黒曜石が入ることがある）`;
       } else if (kind === 'ruined_portal') {
@@ -396,8 +427,12 @@ export function mapSummary(state: PlaceMemoryState, from: PlacePosition, dimensi
         const chests = near(place, 'chest', 20);
         extra = `（黒曜石${obsidian ? `${obsidian}個` : 'あり'}${chests.length ? `・箱 (${chests[0].position.x},${chests[0].position.y},${chests[0].position.z})${chestNote(chests[0])}: 火打石と打ち金・黒曜石が入ることがある` : ''}）`;
       } else if (kind === 'shipwreck' || kind === 'igloo') {
-        const chests = near(place, 'chest', 16);
-        if (chests.length) extra = `（箱 (${chests[0].position.x},${chests[0].position.y},${chests[0].position.z})${chestNote(chests[0])}）`;
+        // A ship's chests (supply, map, treasure: only one is beside the water it is known by); an igloo's is in the basement, down
+        // a ladder under the floor (30 blocks down in lab world 20261020).
+        const chests = kind === 'shipwreck' ? near(place, 'chest', 16)
+          : all.filter(other => other.kind === 'chest' && Math.hypot(other.position.x - place.position.x, other.position.z - place.position.z) <= 8
+            && other.position.y <= place.position.y && other.position.y >= place.position.y - 40);
+        if (chests.length) extra = `（箱 ${chests.slice(0, 3).map(chest => `(${chest.position.x},${chest.position.y},${chest.position.z})${chestNote(chest)}`).join('・')}${kind === 'igloo' ? ': 地下室（床の下の梯子）' : ''}）`;
       } else if (place.note) extra = shownNote(place.note);
       return `${at(place)}${extra}`;
     }, kind === 'village' || kind === 'ruined_portal' ? 2 : 1)}`];
@@ -413,13 +448,28 @@ export function mapSummary(state: PlaceMemoryState, from: PlacePosition, dimensi
   const lava = of('lava');
   if (lava.length) lines.push(`溶岩の溜まり ${lava.length}か所: ${listed(lava, place => `${at(place)} ${place.position.y >= 50 ? '地表' : '地下'}${countShown(place)}`)}`
     + '（水バケツで黒曜石にできる: use-item-on-block water_bucket count=10）');
-  const obsidian = of('obsidian');
-  if (obsidian.length) lines.push(`黒曜石 ${obsidian.length}か所: ${listed(obsidian, place => `${at(place)}${countShown(place)}`)}`);
+  // The ways down that are walked: an entrance's mouth (where to stand) and the bottom its hollow was followed to.
+  const entrances = of('cave_entrance');
+  if (entrances.length) {
+    lines.push(`洞窟の入口 ${entrances.length}か所（地表から歩いて地下へ下りられる。鉄・ダイヤへの近道）: ${listed(entrances, place => {
+      const bottom = Number(place.note?.match(/(-?d+,(-?d+),-?d+)/)?.[1]);
+      const word = Number.isFinite(bottom) ? depthWord(bottom) : '';
+      return `${at(place)}${place.note ? ` → ${place.note}` : ''}${word ? ` ${word}` : ''}`;
+    })}`);
+  }
+  // The hollows under ground: the nearest large ones, and the nearest at the diamonds' depth.
   const caves = of('cave');
   if (caves.length) {
     const large = caves.filter(cave => (cave.count ?? 0) >= LARGE_CAVE);
-    lines.push(`洞窟 ${caves.length}か所（うち大きな空洞${large.length}）: ${listed(caves, cave => `${at(cave)} 約${cave.count ?? 0}マス${(cave.count ?? 0) >= LARGE_CAVE ? '（大きな空洞）' : ''}`)}`);
+    const shown = (large.length ? large : caves).slice(0, 2);
+    const deep = caves.find(cave => cave.position.y <= -45 && !shown.includes(cave));
+    if (deep) shown.push(deep);
+    const words = (cave: RecalledPlace) => [(cave.count ?? 0) >= LARGE_CAVE ? '大きな空洞' : '', depthWord(cave.position.y)].filter(Boolean);
+    lines.push(`洞窟 ${caves.length}か所（うち大きな空洞${large.length}）: ${shown.map(cave => `${at(cave)} 約${cave.count ?? 0}マス${words(cave).length ? `（${words(cave).join('・')}）` : ''}`).join('、')}`
+      + (caves.length > shown.length ? ` ほか${caves.length - shown.length}` : ''));
   }
+  const obsidian = of('obsidian');
+  if (obsidian.length) lines.push(`黒曜石 ${obsidian.length}か所: ${listed(obsidian, place => `${at(place)}${countShown(place)}`)}`);
   const water = of('water');
   if (water.length) lines.push(`水源 ${water.length}か所: ${listed(water, at, 2)}`);
 
@@ -533,15 +583,23 @@ export function parsePlaceMemory(value: unknown): PlaceMemoryState {
 /** Chunk columns kept with their biome per dimension; the oldest noted go first. */
 export const MAX_BIOME_COLUMNS = 6000;
 
+const biomeCounts = new WeakMap<object, number>();
 /** Notes the biome of a chunk column (read at its middle). Returns whether anything changed. */
 export function noteBiome(state: PlaceMemoryState, dimension: string, chunkX: number, chunkZ: number, biome: string): boolean {
   const columns = (state.biomes ??= {})[dimension] ??= {};
   const key = `${chunkX},${chunkZ}`;
   if (columns[key] === biome) return false;
+  const known = key in columns;
   delete columns[key]; // noted again: it goes to the end, the last to be given up
   columns[key] = biome;
-  const keys = Object.keys(columns);
-  if (keys.length > MAX_BIOME_COLUMNS) for (const old of keys.slice(0, keys.length - MAX_BIOME_COLUMNS)) delete columns[old];
+  // How many are kept, counted once and then kept count of (listing 6,000 keys for each column read was most of noting one).
+  let count = biomeCounts.get(columns);
+  count = count === undefined ? Object.keys(columns).length : count + (known ? 0 : 1);
+  if (count > MAX_BIOME_COLUMNS) {
+    for (const old of Object.keys(columns).slice(0, count - MAX_BIOME_COLUMNS)) delete columns[old];
+    count = MAX_BIOME_COLUMNS;
+  }
+  biomeCounts.set(columns, count);
   return true;
 }
 

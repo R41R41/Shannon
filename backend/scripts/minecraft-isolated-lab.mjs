@@ -15,6 +15,9 @@ const unassisted = process.env.MINECRAFT_LAB_UNASSISTED === 'true';
 // How far the body sees (chunks sent to it). Five is light on a two-core VM; a person plays at ten or more, and a
 // village 100 blocks off is in view for them. Mobs and block changes are still simulated five chunks out.
 const viewDistance = Math.max(5, Math.min(12, Number(process.env.MINECRAFT_LAB_VIEW_DISTANCE ?? 5) || 5));
+// MINECRAFT_LAB_SEED: a natural world from a chosen seed (to check the map near a structure the seed is known to have); a number only.
+const chosenSeed = process.env.MINECRAFT_LAB_SEED ?? '';
+if (chosenSeed && !/^-?\d{1,20}$/.test(chosenSeed)) throw new Error('MINECRAFT_LAB_SEED must be a number');
 if (!['flat', 'natural'].includes(terrain)) throw new Error('Invalid terrain profile');
 if (unassisted && terrain !== 'natural') throw new Error('Unassisted campaign requires natural terrain');
 if (!Number.isInteger(port) || port < 1 || port > 65535 || (port >= 25565 && port <= 25569)) {
@@ -106,7 +109,7 @@ fs.writeFileSync(path.join(directory, 'server.properties'), [
   'enforce-secure-profile=false', 'spawn-protection=0', 'allow-flight=true',
   `view-distance=${viewDistance}`, 'simulation-distance=5', `max-players=${publicServer ? 10 : 3}`,
   'level-name=progressive_world', `level-type=minecraft:${terrain === 'natural' ? 'normal' : 'flat'}`,
-  ...(unassisted ? [] : ['level-seed=9272026']),
+  ...(chosenSeed ? [`level-seed=${chosenSeed}`] : unassisted ? [] : ['level-seed=9272026']),
   ...(terrain === 'flat' ? ['generator-settings={"layers":[{"block":"minecraft:bedrock","height":1},{"block":"minecraft:dirt","height":2},{"block":"minecraft:grass_block","height":1}],"biome":"minecraft:plains","structures":{}}'] : []),
   `generate-structures=${terrain === 'natural'}`, `difficulty=${unassisted ? 'normal' : 'peaceful'}`, 'gamemode=survival',
   'enable-command-block=false', 'max-tick-time=60000', 'sync-chunk-writes=true',
@@ -115,5 +118,5 @@ const started = spawnSync('tmux', ['-L', tmuxSocket, 'new-session', '-d', '-s', 
   'java -Xms512M -Xmx2G -jar fabric-server-launch.jar nogui']);
 if (started.status !== 0) throw new Error('Failed to start isolated server');
 process.stdout.write(JSON.stringify({ directory, session, tmuxSocket, port, uuid, terrain,
-  seed: unassisted ? 'random-hidden-from-bot' : 9272026, unassisted, public: publicServer,
+  seed: chosenSeed || (unassisted ? 'random-hidden-from-bot' : 9272026), unassisted, public: publicServer,
   ...(publicServer ? { whitelist: whitelistNames } : {}), ...(uiModPorts ? { uiMod: { ...uiModPorts, jars: uiModJars } } : {}) }) + '\n');
