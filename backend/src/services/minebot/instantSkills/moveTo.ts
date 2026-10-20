@@ -14,6 +14,7 @@ import { blocksAlong, keepCheapTool } from '../utils/toolStock.js';
 import { nightGateFor } from '../utils/nightGate.js';
 import { tunnelDigMs } from '../utils/routeEstimate.js';
 import { chooseTool } from '../utils/toolChoice.js';
+import { settleAfterRespawn } from '../utils/respawnSettle.js';
 const { goals } = pathfinder;
 const log = createLogger('Minebot:Skill:moveTo');
 
@@ -39,6 +40,8 @@ const SLOWEST_TRAVEL_SPEED = 1.5;
 const SLOWEST_SWIM_SPEED = 0.7;
 /** A dug route is longer than the straight line it is estimated on. */
 const TUNNEL_DETOUR = 1.3;
+/** A walk whose digging alone needs more than this many calls' time is refused with the figures (see below). */
+const TUNNEL_REFUSE_CALLS = 2.5;
 
 /**
  * On a perch (a branch, a pillar): every neighbour drops more than the four blocks a route may fall, so no move
@@ -233,6 +236,13 @@ class MoveTo extends InstantSkill {
         };
       }
 
+      // Just after a respawn the chunks around the new place are still arriving: a long walk planned now has its search thrown away by
+      // every one of them (run 20: a 400 m walk asked for 15 s after the respawn, then 70 s of silence and a dropped connection).
+      if (distance > 48) {
+        const settled = await settleAfterRespawn(this.bot);
+        if (settled) log.info(`⏳ 復活直後なので、周りの区画が届き終わるのを待ってから歩き始めます（${settled.waitedMs}ms、${settled.chunks}区画）`);
+      }
+
       // A walk that will tunnel takes, for each block it breaks, the cheapest tool carried; if that is a dear one
       // and a cheaper one can be made from the bag, it is made first (utils/toolStock; the iron pickaxe of L111).
       if (distance > range) {
@@ -315,6 +325,21 @@ class MoveTo extends InstantSkill {
         const toward = goalType === 'y' ? { x: currentPos.x, y, z: currentPos.z } : { x, y, z };
         try { digMs = tunnelDigMs(this.bot as any, startedFrom, toward, (block, items, effects) => chooseTool(block, items, { effects })) * TUNNEL_DETOUR; }
         catch { digMs = 0; }
+      }
+      // A goal so far through rock that it would take more than TUNNEL_REFUSE_CALLS calls' worth of digging is said so at once, with the figures,
+      // instead of after a whole call spent on its first third (run 20: four moves of 17-110 s toward water 30-100 m off through deepslate).
+      // The line is read for its first 96 m only: the rest is taken to be like it.
+      if (digMs > 0 && distance > 96) digMs *= distance / 96;
+      const tunnelNeedMs = digMs + (distance / SLOWEST_TRAVEL_SPEED) * 1000;
+      if (digMs > 0 && tunnelNeedMs > longestMs * TUNNEL_REFUSE_CALLS && !(Number.isFinite(budgetCapMs) && (budgetCapMs as number) > 0)) {
+        return {
+          success: false,
+          failureType: 'tunnel_too_long',
+          recoverable: true,
+          result: `その目標まで岩の中を約${Math.round(distance)}m掘り進むことになり、掘るだけで約${Math.round(digMs / 1000)}秒かかる見込みです`
+            + `（1 回の移動は最長${Math.round(longestMs / 1000)}秒、${Math.ceil(tunnelNeedMs / longestMs)}回以上に分けることになります）。`
+            + '近い目標（地上への出口・近くの水や鉱石）を選ぶか、stair-mine で先に高さを合わせてから、掘らずに歩ける道を探してください',
+        };
       }
       const cap = Number.isFinite(budgetCapMs) && (budgetCapMs as number) > 0 ? Math.max(5_000, budgetCapMs as number) : Infinity;
       const travelBudgetMs = Math.min(cap, handDigging ? longestMs

@@ -32,6 +32,7 @@ import { exposureDigGuardPlugin } from '../utils/exposureGuard.js';
 import { promptPlacePlugin } from '../utils/promptPlace.js';
 import { installCollisionTolerance } from '../utils/collisionTolerance.js';
 import { installToolChoice } from '../utils/toolChoice.js';
+import { installBotLoopWatch } from '../utils/eventLoopWatch.js';
 
 installCollisionTolerance();
 import { installMotionRecorder } from '../utils/motionRecorder.js';
@@ -58,6 +59,8 @@ export async function createProbeBot(port: number, username = 'ShannonProbe', ac
   installTierToolMaterialRepair(bot);
   installAirSupplyDefault(bot);
   installMotionRecorder(bot);
+  // A probe that hangs says where (utils/eventLoopWatch: the main thread's stack, written by a worker while it is stuck).
+  if (process.env.MINECRAFT_PROBE_LOOP_WATCH !== 'off') installBotLoopWatch(bot as any);
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('Spawn timeout')), 30000);
     bot.once('spawn', () => { clearTimeout(timer); resolve(); });

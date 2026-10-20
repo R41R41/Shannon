@@ -18,16 +18,21 @@ import { dropBurnsIn } from '../utils/dropFate.js';
 import { digMsWithBestTool as bestToolDigMs } from '../utils/bestToolDigTime.js';
 import { descentFloor, nightGateRefusal } from '../utils/nightGate.js';
 import { axeAdviceNote, isWood, spareToolNote } from '../utils/toolWear.js';
-import { slotsUsed, spareRockToDrop, tidyPlan } from '../utils/inventoryTidy.js';
+import { explainNoRoom, makeRoom, TIDY_TIME_MS, tidyPackNow } from '../utils/inventoryRoom.js';
+import { ensureToolUses, pickaxeUsesFor } from '../utils/toolStock.js';
+import { solidCellsBetween } from '../utils/blockApproachCost.js';
 import { hostileNear } from './craftOne.js';
 import { noteUnreachable, recentlyUnreachable, THREAT_REFUSAL_MS } from '../utils/unreachableTargets.js';
 
-/** The pack is tidied only with this much of the action left, and with no hostile this near. */
-const TIDY_TIME_MS = 40_000;
+/** The pack is tidied only with this much of the action left (TIDY_TIME_MS), and with no hostile this near. */
 const TIDY_SAFE_RANGE = 16;
-/** The room made just before a dig (roomForDig): this many free slots at most are asked for, and only with this much of the action left. */
+/** The pack is tidied again no sooner than this after the last time (a tunnel through rock fills it again as it goes). */
+const TIDY_AGAIN_MS = 20_000;
+/** The room made just before a dig (roomForDig): this many free slots at most are asked for. */
 const DIG_ROOM_SLOTS = 3;
-const ROOM_TIME_MS = 8_000;
+/** Uses of the pickaxe a block mined is counted to take (the stone dug on the way as well), and the most digs counted for the way to the first ore. */
+const USES_PER_BLOCK = 1.2;
+const APPROACH_DIG_CAP = 48;
 /** Tries of setting down and digging again the gravel carried for a flint (one in ten each: 30 leave none 4% of the time). */
 const FLINT_CYCLES = 30;
 /** The action's time each try leaves for the result to be told. */
@@ -236,44 +241,13 @@ class MineBlock extends InstantSkill {
           '先に craft-one で wooden_pickaxe / stone_pickaxe / iron_pickaxe 等をクラフトしてから再度 mine-block を実行してください。' +
           '（素材例: wooden_pickaxe = planks×3 + stick×2、stone_pickaxe = cobblestone×3 + stick×2）',
       };
-    } else if (needsPickaxe && hasPickaxe) {
-      // 全ツルハシの総残り耐久を算出
-      let totalDurability = 0;
-      let hasDurabilityInfo = false;
-      for (const pick of pickaxes) {
-        const max = (pick as any).maxDurability;
-        const used = (pick as any).durabilityUsed;
-        if (max != null && max > 0 && used != null && used >= 0) {
-          totalDurability += Math.max(0, max - used);
-          hasDurabilityInfo = true;
-        } else {
-          totalDurability += 100;
-        }
-      }
-
-      if (hasDurabilityInfo && totalDurability < want) {
-        return {
-          success: false,
-          failureType: 'tool_durability_low',
-          recoverable: true,
-          result:
-            `ツルハシの総残り耐久（${totalDurability}）が採掘予定数（${want}個）に対して不足しています。` +
-            `途中でツルハシが壊れる可能性が高いです。先に craft-one で予備のツルハシをクラフトしてから再度 mine-block を実行してください。` +
-            `（所持ツルハシ: ${pickaxes.map(p => {
-              const mx = (p as any).maxDurability;
-              const us = (p as any).durabilityUsed;
-              return mx != null && us != null ? `${p.name} 耐久${Math.max(0, mx - us)}/${mx}` : p.name;
-            }).join(', ')}）`,
-        };
-      }
-
-      const LOW_DURABILITY_THRESHOLD = 10;
-      if (hasDurabilityInfo && totalDurability < want + LOW_DURABILITY_THRESHOLD) {
-        toolWarning =
-          ` ⚠️ ツルハシの総残り耐久（${totalDurability}）が残り少なめです（採掘予定: ${want}個）。` +
-          `タスク完了後に予備のツルハシをクラフトすることを推奨します`;
-      }
     }
+    // The pickaxes' wear is looked at once the targets are known (assessPickaxe below), and again as the order goes on.
+    const pickaxeList = (): string => this.bot.inventory.items().filter(item => item.name.includes('pickaxe')).map(p => {
+      const mx = (p as any).maxDurability;
+      const us = (p as any).durabilityUsed;
+      return mx != null && us != null ? `${p.name} 耐久${Math.max(0, mx - us)}/${mx}` : p.name;
+    }).join(', ');
 
     // Cheap prerequisites precede the synchronous, radius-dependent scan.
     const harvestable = (type: any) => !type.harvestTools || this.bot.inventory.items().some(item =>
@@ -334,10 +308,53 @@ class MineBlock extends InstantSkill {
      * stairs and 136 s, the diamonds still not reached (run 16).
      */
     let pinnedKey: string | null = null;
-    /** The pack was tidied for room in this call (once). */
-    let tidiedForRoom = false;
+    /** When the pack was last tidied for room in this call (it is tidied again after TIDY_AGAIN_MS if it has filled up). */
+    let lastTidyAt = 0;
+    this.roomRefused = [];
     /** What this call mines and what that drops: never thrown away for room (see roomForDig). */
     const keptKinds = familyNames.flatMap(name => [name, ...expectedItems]);
+    /**
+     * The most blocks this call may count as mined before the pickaxes carried are spent (Infinity: no limit). Set by assessPickaxe.
+     * Run 20 broke its only stone pickaxe on the twelfth iron ore: the check was of the uses against the ore alone (not the stone dug on
+     * the way), and a spare was only advised, never made.
+     */
+    let durabilityCap = Infinity;
+    let stoppedForTool = false;
+    const toolNotes: string[] = [];
+    const goal = () => Math.min(want, durabilityCap);
+    /**
+     * Before the digging, and each time round after it: the pickaxes that can break this ore have fewer uses between them than the
+     * ore still to mine (USES_PER_BLOCK each) and, at first, the stone on the straight way to the nearest of it. If so, a spare is made
+     * when the bag allows (utils/toolStock ensureToolUses); if none can be, the order is cut to what the pickaxes can take, said in
+     * the result, rather than dug until one breaks.
+     */
+    const assessPickaxe = async (first: boolean): Promise<void> => {
+      if (!needsPickaxe || !hasPickaxe || want - mined <= 0) return;
+      let digs = 0;
+      if (first && candidates.length) {
+        const here = this.bot.entity.position;
+        const nearest = candidates.reduce((a, b) => (Math.hypot(a.x - here.x, a.y - here.y, a.z - here.z) <= Math.hypot(b.x - here.x, b.y - here.y, b.z - here.z) ? a : b));
+        // A tunnel through a solid cell digs about two blocks (head and feet), as the approach cost counts it.
+        try { digs = Math.min(APPROACH_DIG_CAP, 2 * solidCellsBetween(this.bot as any, here.offset(0, 1.62, 0), nearest)); } catch { digs = 0; }
+      }
+      const need = Math.ceil((want - mined) * USES_PER_BLOCK) + digs;
+      if (pickaxeUsesFor(this.bot.inventory.items() as any, blockTypes as any) >= need) { durabilityCap = Infinity; return; }
+      const check = await ensureToolUses(this.bot as any, blockTypes as any, need, (skill, ...args) => this.callSkill(skill, ...args));
+      if (check.note && !toolNotes.includes(check.note)) toolNotes.push(check.note);
+      if (check.enough) { durabilityCap = Infinity; return; }
+      durabilityCap = mined + Math.floor(Math.max(0, check.have - digs) / USES_PER_BLOCK);
+    };
+    await assessPickaxe(true);
+    if (needsPickaxe && durabilityCap <= mined) {
+      return {
+        success: false,
+        failureType: 'tool_durability_low',
+        recoverable: true,
+        result:
+          `${blockName}を掘る前に止めました。${toolNotes.join('。')}。これ以上掘るとツルハシが壊れるため掘っていません。`
+          + `craft-one で予備のツルハシ（stone_pickaxe: 丸石3・棒2）を作ってから再度 mine-block を実行してください。（所持ツルハシ: ${pickaxeList()}）`,
+      };
+    }
     /** Least headway (metres nearer) for a failed approach to count as getting there. */
     const APPROACH_HEADWAY = 3;
 
@@ -363,12 +380,16 @@ class MineBlock extends InstantSkill {
         if (candidates.length === 0) break;
       }
 
-      const remainingToMine = want - mined;
-      // Short of room: what tidyPlan names (spare stone, dirt and the like) is thrown away first, once, and the room looked at again. A
+      // The pickaxes still hold what is left to mine (a spare is made, or the order is cut to what they can take).
+      if (mined > 0) await assessPickaxe(false);
+      if (mined >= durabilityCap) { stoppedForTool = true; break; }
+      const remainingToMine = goal() - mined;
+      // Short of room: what tidyPlan names (spare stone, dirt and the like) is thrown away first, and the room looked at again. A
       // ladder probe (2026-10-20) came to ten obsidian with five slots free, full of the rock its descent had dug, and was refused all
-      // twenty times it asked.
-      if (shouldPauseMiningForDeposit(this.bot, remainingToMine, expectedItems) && !tidiedForRoom) {
-        tidiedForRoom = true;
+      // twenty times it asked. Tidied again when the last time was a while ago: run 20's second mine-block found the tidy "done" from
+      // the walk's start and refused after the tunnel had filled the pack again.
+      if (shouldPauseMiningForDeposit(this.bot, remainingToMine, expectedItems) && Date.now() - lastTidyAt > TIDY_AGAIN_MS) {
+        lastTidyAt = Date.now();
         toolWarning += await this.tidyPack(familyNames.flatMap(name => [name, ...expectedItems]), timeLeftMs());
       }
       // Still short (nothing tidyPlan names): the spare rock goes too, as before each dig.
@@ -385,7 +406,8 @@ class MineBlock extends InstantSkill {
           failureType: 'inventory_full',
           recoverable: true,
           result:
-            `インベントリの空きが${emptySlotCountSafe(this.bot)}スロットしかなく、これから掘る分が入りません。先に空きを作ってください。${INVENTORY_FULL_RECOVERY_HINT_JA}${toolWarning}`,
+            `インベントリの空きが${emptySlotCountSafe(this.bot)}スロットしかなく、これから掘る分が入りません。先に片づけを試みましたが空きを作れませんでした。`
+            + `${explainNoRoom(this.bot as any, keptKinds, this.roomRefused)}${INVENTORY_FULL_RECOVERY_HINT_JA}${toolWarning}`,
         };
       }
 
@@ -520,7 +542,7 @@ class MineBlock extends InstantSkill {
         };
 
         for (const bt of batchTargets) {
-          if (this.shouldInterrupt() || mined >= want) break;
+          if (this.shouldInterrupt() || mined >= goal()) break;
           const blk = this.bot.blockAt(bt);
           if (!blk || !familyNames.includes(blk.name)) continue;
           if (noTimeFor(blk, bt)) { stoppedForTime = true; break; }
@@ -623,7 +645,7 @@ class MineBlock extends InstantSkill {
         // ツルハシ生存チェック
         if (needsPickaxe) {
           const toolCheck = this.checkToolSurvival(want, mined);
-          if (toolCheck) return toolCheck;
+          if (toolCheck) return this.withToolNotes(toolCheck, toolNotes);
         }
 
         // Rescanning can now requeue failed targets. Preserve the existing
@@ -668,7 +690,7 @@ class MineBlock extends InstantSkill {
 
           if (needsPickaxe) {
             const toolCheck = this.checkToolSurvival(want, mined);
-            if (toolCheck) return toolCheck;
+            if (toolCheck) return this.withToolNotes(toolCheck, toolNotes);
           }
 
           reportActionProgress(this.bot, 'confirm', { completed: mined, requested: want }, true);
@@ -752,10 +774,14 @@ class MineBlock extends InstantSkill {
     // A pack past 30 of its 36 slots: the plain stone and the clutter go (inventoryTidy), so the next ore is not dropped for want of room.
     toolWarning += await this.tidyPack(familyNames.flatMap(name => [name, ...expectedItems]), timeLeftMs());
 
-    const isPartial = mined < count || stoppedForInventoryTight;
+    const isPartial = mined < count || stoppedForInventoryTight || stoppedForTool;
     // Said beside what was mined: the rest of the kind lies below the night gate's floor (utils/nightGate).
     if (gate && gatedKeys.size) toolWarning += ` 夜の門: y${gate.floor}より下の${gatedKeys.size}個は、防具（胸当てか、鉄以上の部位2つ）を着るまで夜は掘りません`;
     if (unknownNote) toolWarning += unknownNote;
+    if (toolNotes.length) toolWarning += ` ${toolNotes.join('。')}`;
+    if (stoppedForTool) {
+      toolWarning += ` これ以上掘るとツルハシが壊れるため${mined}個で止めました（残りの耐久は${pickaxeList()}）。craft-one で予備のツルハシを作ってから続きを掘ってください`;
+    }
     if (needsPickaxe) toolWarning += spareToolNote(this.bot);
     if (knownNames.some(isWood)) toolWarning += axeAdviceNote(this.bot, mined);
     const timeNote = stoppedForTime && mined < count
@@ -770,7 +796,7 @@ class MineBlock extends InstantSkill {
       result: isPartial
         ? `${blockName}を${count}個中${mined}個${timeNote ? '' : 'のみ'}採掘しました${dropsText}${totalsText}。${timeNote}残り${count - mined}個${timeNote ? 'は、' : 'が不足しています。'}再度 mine-block を実行してください${tightNote}${failures.length > 0 ? `（失敗詳細: ${failures.join(', ')}）` : ''}${toolWarning}${flintNote}`
         : `${blockName}を${mined}個採掘しました${dropsText}${totalsText}${failures.length > 0 ? `（一部失敗: ${failures.join(', ')}）` : ''}${toolWarning}${flintNote}`,
-      ...(isPartial && { failureType: stoppedForInventoryTight ? 'inventory_full' : 'partial_completion', recoverable: true }),
+      ...(isPartial && { failureType: stoppedForTool ? 'tool_durability_low' : stoppedForInventoryTight ? 'inventory_full' : 'partial_completion', recoverable: true }),
     };
     } finally {
       this.bot.removeListener('diggingCompleted', onDiggingCompleted);
@@ -823,23 +849,18 @@ class MineBlock extends InstantSkill {
    * or with under ROOM_TIME_MS of the action left.
    */
   private async roomForDig(asked: string[], slots: number, timeLeftMs: number): Promise<string> {
-    const free = () => emptySlotCountSafe(this.bot);
-    const need = Math.max(2, slots);
-    if (free() >= need || timeLeftMs < ROOM_TIME_MS || hostileNear(this.bot as any, TIDY_SAFE_RANGE)
-      || String((this.bot as any).minebotControlState ?? '').startsWith('emergency')) return '';
-    const gone: string[] = [];
-    for (let round = 0; round < 3 && free() < need && !this.shouldInterrupt(); round++) {
-      let plan: Array<{ name: string; count: number }> = [];
-      try { plan = tidyPlan(this.bot.inventory.items()).filter(entry => !asked.includes(entry.name)).slice(0, 1); } catch { plan = []; }
-      if (!plan.length) { const rock = spareRockToDrop(this.bot.inventory.items(), asked); if (rock) plan = [rock]; }
-      if (!plan.length) break;
-      let dropped: { success: boolean; failureType?: string } = { success: false };
-      try { dropped = await this.callSkill('drop-item', plan[0].name, plan[0].count); } catch (error) { if (this.shouldInterrupt()) throw error; break; }
-      if (!dropped.success) break;
-      gone.push(`${plan[0].name}×${plan[0].count}`);
-    }
-    return gone.length ? ` 掘る前に持ち物の空きを作るため、${gone.join('・')}を捨てました（空き${free()}マス）` : '';
+    // The doing is utils/inventoryRoom's (shared with the skills that could be refused for a full pack). A refused throw is kept, and
+    // another kind tried; what was refused is said if the order is refused in the end.
+    const outcome = await makeRoom(this.bot as any, (skill, ...args) => this.callSkill(skill, ...args), {
+      asked, slots, timeLeftMs, interrupted: () => this.shouldInterrupt(),
+      blocked: () => hostileNear(this.bot as any, TIDY_SAFE_RANGE) || String((this.bot as any).minebotControlState ?? '').startsWith('emergency'),
+    });
+    for (const refusal of outcome.refused) if (!this.roomRefused.includes(refusal)) this.roomRefused.push(refusal);
+    return outcome.note;
   }
+
+  /** What drop-item refused in this call, for the refusal an order may end with (see explainNoRoom). */
+  private roomRefused: string[] = [];
 
   /**
    * Flint from the gravel carried: one set down beside the body (place-block-at chooses the spot), dug again, until a flint comes, the
@@ -874,20 +895,16 @@ class MineBlock extends InstantSkill {
   }
 
   private async tidyPack(asked: string[], timeLeftMs: number): Promise<string> {
-    if (timeLeftMs < TIDY_TIME_MS || hostileNear(this.bot as any, TIDY_SAFE_RANGE)
-      || String((this.bot as any).minebotControlState ?? '').startsWith('emergency')) return '';
-    let plan: ReturnType<typeof tidyPlan> = [];
-    try { plan = tidyPlan(this.bot.inventory.items()).filter(entry => !asked.includes(entry.name)); } catch { plan = []; }
-    if (!plan.length || this.shouldInterrupt()) return '';
-    const before = slotsUsed(this.bot.inventory.items());
-    const gone: string[] = [];
-    for (const { name, count } of plan.slice(0, 2)) {
-      let dropped: { success: boolean; failureType?: string } = { success: false };
-      try { dropped = await this.callSkill('drop-item', name, count); } catch { break; }
-      if (dropped.success) gone.push(`${name}×${count}`);
-      if (dropped.failureType === 'no_room_to_drop' || this.shouldInterrupt()) break;
-    }
-    return gone.length ? ` 持ち物が${before}/36マス埋まっていたため、${gone.join('・')}を捨てました（いま${slotsUsed(this.bot.inventory.items())}マス）` : '';
+    if (timeLeftMs < TIDY_TIME_MS) return '';
+    return tidyPackNow(this.bot as any, (skill, ...args) => this.callSkill(skill, ...args), {
+      asked, timeLeftMs, interrupted: () => this.shouldInterrupt(),
+      blocked: () => hostileNear(this.bot as any, TIDY_SAFE_RANGE) || String((this.bot as any).minebotControlState ?? '').startsWith('emergency'),
+    });
+  }
+
+  /** What assessPickaxe found out (a spare made, or none to make) is said with the end of the order a worn pickaxe brought. */
+  private withToolNotes(check: any, notes: string[]): any {
+    return notes.length ? { ...check, result: `${check.result} ${notes.join('。')}` } : check;
   }
 
   /**

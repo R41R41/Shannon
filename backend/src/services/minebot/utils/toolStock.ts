@@ -14,7 +14,7 @@
 import { Vec3 } from 'vec3';
 import { currentAction, nativeActionHost } from '../execution/ActionExecution.js';
 import { isEngaged } from './engagement.js';
-import { chooseTool, toolCost, wearCostSeconds, type BlockLike, type ToolLike } from './toolChoice.js';
+import { canHarvest, chooseTool, NEARLY_BROKEN_USES, toolCost, usesLeft, wearCostSeconds, type BlockLike, type ToolLike } from './toolChoice.js';
 
 type Cell = number | null | undefined | { id?: number } | Cell[];
 interface RawRecipe { inShape?: Cell[][]; ingredients?: Cell[]; result: { id: number; count?: number } | number }
@@ -295,6 +295,119 @@ export async function keepCheapTool(bot: StockBody, blocks: Array<BlockLike & { 
   }
   note(root, `道具の補充: ${decision.block}に${decision.current}を使わないよう、${describePlan(plan)}を作りました（1ブロックあたり約${decision.saving.toFixed(1)}秒分の節約）。`);
   return plan.item;
+}
+
+/** Uses a pickaxe is counted to have left for a job: its last NEARLY_BROKEN_USES are kept (toolChoice leaves them alone). */
+function usableUses(item: CarriedItem): number {
+  const left = usesLeft(item);
+  return left === null ? Infinity : Math.max(0, left - NEARLY_BROKEN_USES);
+}
+
+/**
+ * Uses the pickaxes carried have between them for these blocks: only those that can break every one of them count, each less its last
+ * two uses. Infinity when one of them does not say how worn it is.
+ */
+export function pickaxeUsesFor(items: CarriedItem[], blocks: Array<BlockLike & { name: string }>): number {
+  let total = 0;
+  for (const item of items) {
+    if (!item.name.endsWith('_pickaxe')) continue;
+    if (!blocks.every(block => !block.harvestTools || canHarvest(block, item))) continue;
+    total += usableUses(item);
+  }
+  return total;
+}
+
+/** Crafts made to keep a pickaxe in hand, per action: a second try at what failed is not worth the seconds. */
+const spareCrafts = new WeakMap<object, number>();
+const MAX_SPARE_CRAFTS = 2;
+/** Pickaxes in the order they are made as a spare: stone (131 uses, a few cobblestone), wood (59), then iron and the rest. */
+const SPARE_ORDER = ['stone_pickaxe', 'wooden_pickaxe', 'iron_pickaxe', 'golden_pickaxe', 'diamond_pickaxe', 'netherite_pickaxe'];
+
+export interface ToolUsesCheck {
+  /** Uses the pickaxes carried have for these blocks (before any spare was made), or after, when one was. */
+  have: number;
+  need: number;
+  /** The spare that was made, if one was. */
+  made: string | null;
+  /** True when the pickaxes carried (with what was made) cover the need. */
+  enough: boolean;
+  /** One sentence for the result: what was made, or why no spare could be, empty when nothing is to be said. */
+  note: string;
+}
+
+/**
+ * Before a job that wears a pickaxe by about `need` uses (blocks to mine times one and a fifth, the stone dug on the way, the levels
+ * of a stair): if the pickaxes carried that can break `blocks` have fewer between them, a spare is made when it can be now from what
+ * is carried (a stone pickaxe from cobblestone and sticks, with a table put down and taken back as in keepCheapTool). Run 20 broke its
+ * only stone pickaxe on the twelfth iron ore (1 of 131 left, 75 cobblestone in the pack) and the order ended as tool_broke. Nothing is
+ * crafted in an emergency, a fight or a reflex; when no spare can be made the note says how little is left and what is missing.
+ */
+export async function ensureToolUses(bot: StockBody, blocks: Array<BlockLike & { name: string }>, need: number, call: SkillCall): Promise<ToolUsesCheck> {
+  const items = bot.inventory?.items?.() ?? [];
+  const have = pickaxeUsesFor(items, blocks);
+  const fine: ToolUsesCheck = { have, need, made: null, enough: true, note: '' };
+  if (have >= need) return fine;
+  const short = (note: string, now = have): ToolUsesCheck => ({ have: now, need, made: null, enough: false, note });
+  const context = currentAction(bot) as unknown as { root?: object; priority?: number; safetyLease?: boolean } | undefined;
+  const root = context ? (context.root ?? context) : null;
+  const registry = bot.registry;
+  const describe = (missing: string) => `ツルハシの残り耐久は合計${have}で、これから掘る見込み${need}ブロックに足りません。予備のツルハシは作れません（${missing}）`;
+  if (!registry?.recipes) return short(describe('レシピが分かりません'));
+  const rank = root as { priority?: number; safetyLease?: boolean } | null;
+  const host = nativeActionHost(bot) as StockBody;
+  if (!root || (rank!.priority ?? 0) !== 0 || rank!.safetyLease || String(host.minebotControlState ?? '').startsWith('emergency') || isEngaged(host)) {
+    return short(`ツルハシの残り耐久は合計${have}で、これから掘る見込み${need}ブロックに足りません（いまは予備を作る時ではありません）`);
+  }
+  // The pickaxes that break every one of the blocks, in the order a spare is made.
+  const defs = Object.values(registry.itemsByName)
+    .filter((def): def is ItemDef => !!def && def.name.endsWith('_pickaxe') && Number(def.maxDurability) > 0)
+    .filter(def => blocks.every(block => !block.harvestTools || canHarvest(block, { type: def.id })))
+    .sort((a, b) => (SPARE_ORDER.indexOf(a.name) + 1 || 99) - (SPARE_ORDER.indexOf(b.name) + 1 || 99));
+  const made: string[] = [];
+  let now = have;
+  let lastMissing = '';
+  while (now < need && (spareCrafts.get(root) ?? 0) < MAX_SPARE_CRAFTS) {
+    const carried = bot.inventory?.items?.() ?? [];
+    const tableNear = tablesNear(bot, RESTOCK_TABLE_REACH).length > 0;
+    const shortfall = need - now;
+    const plans: Array<{ def: ItemDef; plan: CraftPlan }> = [];
+    for (const def of defs) {
+      const outcome = planCraft(registry, carried, def.name, tableNear);
+      if ('plan' in outcome) plans.push({ def, plan: outcome.plan }); else lastMissing = lastMissing || `${def.name}: ${outcome.missing}`;
+    }
+    // The first (cheapest) that covers what is short, else the one with the most uses.
+    const chosen = plans.find(entry => entry.def.maxDurability! - NEARLY_BROKEN_USES >= shortfall)
+      ?? [...plans].sort((a, b) => b.def.maxDurability! - a.def.maxDurability!)[0];
+    if (!chosen) break;
+    spareCrafts.set(root, (spareCrafts.get(root) ?? 0) + 1);
+    const tablesBefore = tablesNear(bot, RESTOCK_TABLE_REACH + 2);
+    let failed = '';
+    // A cancelled action must not be swallowed here; any other failure of the craft is only "not made".
+    const cancelled = () => !!(context as unknown as { controller?: { signal?: { aborted?: boolean } } } | undefined)?.controller?.signal?.aborted;
+    for (const step of chosen.plan.steps) {
+      try {
+        const result = await call('craft-one', step.item, step.count, RESTOCK_TABLE_REACH);
+        if (!result.success) { failed = `${step.item}のクラフトに失敗（${String(result.result).slice(0, 100)}）`; break; }
+      } catch (error) {
+        if (cancelled()) throw error;
+        failed = `${step.item}のクラフトでエラー（${error instanceof Error ? error.message.slice(0, 100) : 'unknown'}）`; break;
+      }
+    }
+    if (chosen.plan.table === 'carried' || chosen.plan.table === 'made') {
+      const known = new Set(tablesBefore.map(p => `${p.x},${p.y},${p.z}`));
+      const placed = tablesNear(bot, RESTOCK_TABLE_REACH + 2).find(p => !known.has(`${p.x},${p.y},${p.z}`));
+      if (placed) { try { await call('dig-block-at', placed.x, placed.y, placed.z, true, 'target', true); } catch (error) { if (cancelled()) throw error; } }
+    }
+    if (failed) { lastMissing = failed; break; }
+    made.push(chosen.def.name);
+    now = pickaxeUsesFor(bot.inventory?.items?.() ?? [], blocks);
+  }
+  if (made.length) {
+    return { have: now, need, made: made.join('・'), enough: now >= need,
+      note: `道具の補充: ツルハシの残りが${have}で、これから掘る見込み${need}ブロックに足りなかったため、予備の${made.join('・')}を作りました（残り合計${now}）${now >= need ? '' : '。それでも見込みには足りません'}` };
+  }
+  const why = lastMissing || ((spareCrafts.get(root) ?? 0) >= MAX_SPARE_CRAFTS ? '作る回数の上限' : '材料（丸石3か鉄3、棒2）が足りません');
+  return short(describe(why));
 }
 
 /**

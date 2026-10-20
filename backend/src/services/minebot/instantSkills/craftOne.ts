@@ -15,6 +15,7 @@ import { actionDelay, waitForObservation } from '../execution/observedWait.js';
 import { resyncInventory } from '../utils/inventorySync.js';
 import { isWood as isLogName, lastLogNote } from '../utils/toolWear.js';
 import { placeableSpots } from './findPlaceableSpot.js';
+import { PLAUSIBLE_REACH, explainOpenFailure, findStances, planWorkstationSpot, stationAccess } from '../utils/workstationAccess.js';
 import { woolByColor } from '../utils/nightGate.js';
 import type { SkillResult } from '../types/skillParams.js';
 import { nightClock } from '../utils/nightGate.js';
@@ -292,6 +293,8 @@ class CraftOne extends InstantSkill {
     let craftCount = Math.max(1, Math.min(count, 64));
     let craftingTable: ReturnType<typeof this.bot.findBlock> = null;
     let craftAttempted = false;
+    /** The table was not in reach and in sight from anywhere found, and the craft was tried from here all the same. */
+    let triedAnyway = false;
     try {
       // 開いているGUIを閉じる（activate-blockで開いたクラフトテーブルなど）
       if (this.bot.currentWindow) {
@@ -441,9 +444,18 @@ class CraftOne extends InstantSkill {
 
         if (!access.ready) {
           const carriedTable = this.bot.inventory.items().some(i => i.name === 'crafting_table');
-          const localTable = !this.shouldInterrupt() && carriedTable ? await this.tryPlaceCraftingTable() : null;
+          // No stand sees this table: one set down here instead (carried, or made from planks/a log; taken up again after the craft).
+          // Run 20 was told line_of_sight_blocked with planks in the pack.
+          const localTable = this.shouldInterrupt() ? null
+            : carriedTable ? await this.tryPlaceCraftingTable()
+              : this.canMakeTable() ? await this.ownTable() : null;
           if (localTable && this.tableAccess(localTable).ready) {
             craftingTable = localTable;
+          } else if (!this.shouldInterrupt() && stationAccess(this.bot as any, craftingTable.position).eyeDistance <= PLAUSIBLE_REACH) {
+            // Nothing better is to be had and the server may well take it (it opened a furnace through a table in the lab): tried
+            // here, and said why if the window does not open (below). Cheaper than a failure and a table made for it.
+            triedAnyway = true;
+            log.info('🔧 作業台に届く立ち位置も見える立ち位置も無いため、そのまま試します');
           } else {
             const pos = craftingTable.position;
             const obstruction = access.obstruction ? `。視線の遮蔽物: ${access.obstruction}` : '';
@@ -567,6 +579,10 @@ class CraftOne extends InstantSkill {
         return await this.finalizeCraftOutcome(itemName, beforeCount, craftCount);
       }
 
+      if (triedAnyway && craftingTable) {
+        const why = explainOpenFailure(this.bot as any, craftingTable.position, 'crafting_table');
+        if (why) return why;
+      }
       let errorDetail = error.message;
       if (error.message.includes('missing')) {
         errorDetail = '必要な材料が不足しています';
@@ -722,13 +738,6 @@ class CraftOne extends InstantSkill {
       && !CraftOne.UNSAFE_STANCE_BLOCKS.has(block.name);
   }
 
-  private isSafeStance(pos: Vec3): boolean {
-    const support = this.bot.blockAt(pos.offset(0, -1, 0));
-    return this.isOpenStanceBlock(pos) && this.isOpenStanceBlock(pos.offset(0, 1, 0))
-      && !!support && support.boundingBox !== 'empty'
-      && !CraftOne.UNSAFE_STANCE_BLOCKS.has(support.name);
-  }
-
   private isSafeToClear(pos: Vec3): boolean {
     const block = this.bot.blockAt(pos);
     return !!block && !CraftOne.UNSAFE_OVERHEAD_BLOCKS.has(block.name)
@@ -745,24 +754,10 @@ class CraftOne extends InstantSkill {
     const move = this.bot.instantSkills?.getSkill('move-to');
     if (!move) return false;
     const origin = this.bot.entity.position;
-    const base = origin.floored();
-    const candidates: Array<{ feet: Vec3; score: number }> = [];
-    for (const dy of [0, 1, -1, 2, -2, 3, -3, 4, -4]) {
-      for (let dx = -3; dx <= 3; dx++) {
-        for (let dz = -3; dz <= 3; dz++) {
-          if (Math.abs(dx) + Math.abs(dz) > 4) continue;
-          const cell = new Vec3(base.x + dx, base.y + dy, base.z + dz);
-          if (!this.isSafeStance(cell)) continue;
-          const feet = cell.offset(0.5, 0, 0.5);
-          if (!blockCenterWithinUseReach(feet, table.position)) continue;
-          if (!checkBlockLineOfSight(this.bot, table.position, 4.5, feet).clear) continue;
-          if (origin.distanceTo(feet) < 0.45) continue;
-          candidates.push({ feet, score: Math.hypot(dx, dz) + Math.abs(dy) * 2 });
-        }
-      }
-    }
-    candidates.sort((a, b) => a.score - b.score);
-    for (const { feet } of candidates.slice(0, 2)) {
+    // Searched round the table (not round the body, as it was): the cells from which it is in reach and in sight, nearest first.
+    // Run 20 lost 13.9 s to a table behind the first furnace with a stand on the far side of the table never looked for.
+    const candidates = findStances(this.bot as any, [table.position], { limit: 8 }).filter(stance => origin.distanceTo(stance.feet) >= 0.45);
+    for (const { feet } of candidates.slice(0, 3)) {
       if (this.shouldInterrupt()) return false;
       await move.run(feet.x, feet.y, feet.z, 0.5, 'near');
       if (this.tableAccess(table).ready) return true;
@@ -882,6 +877,12 @@ class CraftOne extends InstantSkill {
     return distance > OWN_TABLE_BEYOND ? 'far' : null;
   }
 
+  /** Whether a table can be made from what is carried: four planks, or a log to make them from. */
+  private canMakeTable(): boolean {
+    const planks = this.carriedCount(name => name.endsWith('_planks'));
+    return planks >= 4 || this.bot.inventory.items().some(i => /_(log|stem)$/.test(i.name));
+  }
+
   /** A crafting table in the pack: carried, or made now from planks (planks from a log first). False when the pack has neither. */
   private async makeTable(): Promise<boolean> {
     const items = () => this.bot.inventory.items();
@@ -941,7 +942,27 @@ class CraftOne extends InstantSkill {
         return { outcome: 'lost' };
       };
       const tried = new Set<string>();
+      // First the cells that suit a worksite: in sight from here, hiding no furnace or table that can be used from here, not closing
+      // the way out (a wall cell is dug out in a tunnel). The plain neighbours below are the fallback.
+      try {
+        const plan = planWorkstationSpot(this.bot as any, 'crafting_table', placeableSpots(this.bot as any, 4, 48));
+        for (const entry of plan.slice(0, 3)) {
+          if (entry.score >= 1000 || this.shouldInterrupt()) break;
+          const c = { x: entry.cell.x, y: entry.cell.y, z: entry.cell.z };
+          if (entry.niche) {
+            const dig = this.bot.instantSkills?.getSkill('dig-block-at');
+            if (!dig) continue;
+            const dug = await dig.run(c.x, c.y, c.z, false);
+            const cell = this.bot.blockAt(entry.cell);
+            if (!dug.success || !cell || cell.boundingBox !== 'empty') continue;
+          }
+          tried.add(`${c.x},${c.y},${c.z}`);
+          const attempt = await tryAt(c);
+          if (attempt.outcome !== 'failed') return attempt.block ?? null;
+        }
+      } catch (error) { if (this.shouldInterrupt()) throw error; }
       for (const c of candidates) {
+        if (tried.has(`${c.x},${c.y},${c.z}`)) continue;
         const block = this.bot.blockAt(new Vec3(c.x, c.y, c.z));
         if (block && (block.name === 'air' || block.name === 'cave_air')) {
           tried.add(`${c.x},${c.y},${c.z}`);

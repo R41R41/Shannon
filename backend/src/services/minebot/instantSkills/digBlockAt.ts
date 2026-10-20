@@ -1,6 +1,9 @@
 import { Vec3 } from 'vec3';
 import { chooseTool } from '../utils/toolChoice.js';
-import { keepCheapTool } from '../utils/toolStock.js';
+import { ensureToolUses, keepCheapTool } from '../utils/toolStock.js';
+import { makeRoom } from '../utils/inventoryRoom.js';
+import { emptySlotCountSafe } from '../utils/inventorySpillDetection.js';
+import { hostileNear } from './craftOne.js';
 import { equipToHandVerified } from '../utils/equipVerified.js';
 import { CustomBot, InstantSkill } from '../types.js';
 import { createLogger } from '../../../utils/logger.js';
@@ -23,6 +26,9 @@ import { actionDelay } from '../execution/observedWait.js';
 import { nightGateFor } from '../utils/nightGate.js';
 
 const log = createLogger('Minebot:Skill:digBlockAt');
+
+/** A dig starts with this many uses between the pickaxes that can break the block, or a spare is made (a few digs of leeway, not a plan). */
+const DIG_PICKAXE_RESERVE = 6;
 
 /**
  * 原子的スキル: 近くのブロックを掘る（座標指定版）
@@ -150,6 +156,25 @@ class DigBlockAt extends InstantSkill {
       // allows (utils/toolStock). Before the reach check, since putting down a table may move the body.
       await keepCheapTool(this.bot as any, [block as any], (skill, ...args) => this.callSkill(skill, ...args));
       assertActionActive(this.bot);
+
+      // A pickaxe with a few uses left is not the only one the dig goes on: a spare is made when the bag allows (the stone pickaxe of run
+      // 20 broke on the twelfth iron ore). And a dig that collects its drop makes room first when the pack is nearly full, instead of
+      // leaving the drop lying (run 20's full pack). Both before the reach check: throwing and crafting move the body.
+      let prepNote = '';
+      const pickaxeBlock = !!block.harvestTools && Object.keys(block.harvestTools).some(id => (this.bot.registry as any)?.items?.[Number(id)]?.name?.endsWith('_pickaxe'));
+      if (pickaxeBlock) {
+        const check = await ensureToolUses(this.bot as any, [block as any], DIG_PICKAXE_RESERVE, (skill, ...args) => this.callSkill(skill, ...args));
+        if (check.note) prepNote += ` ${check.note}`;
+        assertActionActive(this.bot);
+      }
+      if (collect && emptySlotCountSafe(this.bot) < 2) {
+        const room = await makeRoom(this.bot as any, (skill, ...args) => this.callSkill(skill, ...args), {
+          asked: [block.name, ...expectedBlockDrops(this.bot, block)], slots: 2, interrupted: () => this.shouldInterrupt(),
+          blocked: () => hostileNear(this.bot as any, 16) || String((this.bot as any).minebotControlState ?? '').startsWith('emergency'),
+        });
+        prepNote += room.note;
+        assertActionActive(this.bot);
+      }
 
       if (!canDigFromHere(this.bot, block, pos)) {
         return {
@@ -340,7 +365,7 @@ class DigBlockAt extends InstantSkill {
         ? ` ⚠️${blockName}は適切なツールを持たず素手で掘ったためドロップはありません`
         : '';
       const handFlag = handDug ? { handDug: true } : {};
-      const warnings = [slowWarning, durabilityWarning, waterWarning, handNote].filter(Boolean).join('');
+      const warnings = [slowWarning, durabilityWarning, waterWarning, handNote, prepNote].filter(Boolean).join('');
 
       // インベントリに空きがない場合は回収を試みない
       const noEmptySlots = typeof this.bot.inventory.emptySlotCount === 'function'

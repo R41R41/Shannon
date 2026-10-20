@@ -8,6 +8,7 @@ import { ensureLineOfSight } from '../utils/blockLineOfSight.js';
 import { actionDelay } from '../execution/observedWait.js';
 import { placeableSpots } from './findPlaceableSpot.js';
 import { bodyCells, isFreeCell } from './sleepInBed.js';
+import { WORKSTATION_BLOCKS, findStances, planWorkstationSpot, stationAccess, worksiteState } from '../utils/workstationAccess.js';
 
 const { goals } = pathfinder;
 
@@ -66,12 +67,83 @@ class PlaceBlockAt extends InstantSkill {
     const bed = blockName.endsWith('_bed');
     const spots = placeableSpots(this.bot as any, 4, 32)
       .filter(spot => !body.some(cell => cell.x === spot.x && cell.y === spot.y && cell.z === spot.z))
+      .filter(spot => !this.avoidCells.some(cell => cell.x === spot.x && cell.y === spot.y && cell.z === spot.z))
       .filter(spot => new Vec3(spot.x + 0.5, spot.y + 0.5, spot.z + 0.5).distanceTo(eyes) <= 4.5)
       // A bed stands on floor under both its halves; the head cell has to be free as well.
       .filter(spot => !bed || (this.bot.blockAt(new Vec3(spot.x, spot.y - 1, spot.z))?.boundingBox === 'block'
         && this.bedHeadFree(new Vec3(spot.x, spot.y, spot.z), body)))
       .sort((a, b) => Number(b.ref === '下') - Number(a.ref === '下') || a.dist - b.dist);
     return spots[0] ? new Vec3(spots[0].x, spots[0].y, spots[0].z) : null;
+  }
+
+  /** Cells not to choose again: a workstation just taken up because it hid another (one re-placement only). */
+  private avoidCells: Vec3[] = [];
+  private replacing = false;
+
+  /**
+   * A cell for a crafting table or a furnace (utils/workstationAccess): in use reach and in sight from where the body stands, hiding
+   * no workstation that can be used from here, leaving a way out. In a corridor with no such cell, a wall cell beside the body is
+   * dug out and the block goes into it. Null: nothing better than the plain search is known.
+   */
+  private async chooseWorkstationSpot(blockName: string): Promise<{ cell: Vec3; note: string } | null> {
+    try {
+      const plan = planWorkstationSpot(this.bot as any, blockName, placeableSpots(this.bot as any, 4, 48), { exclude: this.avoidCells });
+      for (const entry of plan.slice(0, 4)) {
+        if (entry.score >= 1000) break;
+        if (!entry.niche) return { cell: entry.cell, note: '' };
+        if (this.shouldInterrupt()) return null;
+        // collect=false: the drop stays in the niche (the body would otherwise walk into the hole after it, and out of its place).
+        const dug = await this.callSkill('dig-block-at', entry.cell.x, entry.cell.y, entry.cell.z, false);
+        if (dug.success && isFreeCell(this.bot.blockAt(entry.cell))) return { cell: entry.cell, note: '狭い所なので、壁を1マス掘って置き場所にしました。' };
+      }
+    } catch (error) { if (this.shouldInterrupt()) throw error; }
+    return null;
+  }
+
+  /**
+   * After a workstation is down: every workstation of the worksite is checked to be usable from here. Hidden ones (the new block in
+   * front of a table, a furnace behind it) are put right by a step to a spot from which all are in sight; failing that, a block this
+   * call chose itself is taken up and put elsewhere, once. Said when something stays hidden. Empty when all is well.
+   */
+  private async settleWorksite(blockName: string, placed: Vec3, autoChosen: boolean): Promise<string | { replaced: { success: boolean; result: string; failureType?: string; recoverable?: boolean } }> {
+    try {
+      const bot = this.bot as any;
+      const eyes = this.bot.entity.position.offset(0, 1.62, 0);
+      const state = worksiteState(bot);
+      const near = state.stations.filter(station => station.position.offset(0.5, 0.5, 0.5).distanceTo(eyes) <= 5.5);
+      const hidden = state.unusable.filter(item => item.inReach || (item.position.x === placed.x && item.position.y === placed.y && item.position.z === placed.z));
+      if (!hidden.length) return '';
+      const label = (item: { name: string; position: Vec3 }) => `${item.name}(${item.position.x}, ${item.position.y}, ${item.position.z})`;
+      // A spot from which the nearby ones are all in sight; else at least the hidden ones and the new block.
+      const wanted = [near.map(item => item.position), [...hidden.map(item => item.position), placed]];
+      for (const targets of wanted) {
+        const stance = findStances(bot, targets, { limit: 3 })[0];
+        if (!stance || this.shouldInterrupt()) continue;
+        await this.callSkill('move-to', stance.feet.x, stance.feet.y, stance.feet.z, 0.5, 'near');
+        if (targets.every(target => stationAccess(bot, target).ready)) {
+          return `。${hidden.map(label).join('、')}が見えるよう、立ち位置を(${Math.floor(stance.feet.x)}, ${Math.floor(stance.feet.y)}, ${Math.floor(stance.feet.z)})に変えました`;
+        }
+      }
+      // The new block hides another one and no spot sees both: taken up and put elsewhere (once).
+      const hiddenByNew = hidden.some(item => !(item.position.x === placed.x && item.position.y === placed.y && item.position.z === placed.z));
+      if (autoChosen && hiddenByNew && !this.replacing && !this.shouldInterrupt()) {
+        this.replacing = true;
+        this.avoidCells.push(placed);
+        try {
+          const taken = await this.callSkill('dig-block-at', placed.x, placed.y, placed.z, true, 'target', true);
+          if (taken.success) {
+            const again = await this.runImpl(blockName);
+            // The new placement's own answer stands (its position is the one the caller reads); the first is said after it.
+            if (again.success) return { replaced: { ...again, result: `${again.result}。先に置いた(${placed.x}, ${placed.y}, ${placed.z})は他の設備を隠したので拾い直して置き直しました` } };
+          }
+        } finally { this.replacing = false; this.avoidCells = []; }
+      }
+      return `。注意: ${hidden.map(item => `${label(item)}${item.obstruction ? `は${item.obstruction}に遮られて` : 'は'}今の立ち位置から使えません`).join('、')}`
+        + '（使う時に自分で立ち位置を変えます）';
+    } catch (error) {
+      if (this.shouldInterrupt()) throw error;
+      return '';
+    }
   }
 
   /** A bed lies the way the body faces as it places it: its head is the cell past the foot, away from the body. */
@@ -101,12 +173,21 @@ class PlaceBlockAt extends InstantSkill {
     try {
       let note = '';
       // パラメータチェック（座標が無ければ、自分で選ぶ）
+      let autoChosen = false;
       if (x == null && y == null && z == null) {
-        const spot = this.chooseSpot(blockName);
+        let spot: Vec3 | null = null;
+        // A crafting table or a furnace: where it hides no other workstation from here and does not close the way out (a wall cell
+        // is dug out for it in a tunnel). Run 20: the second furnace's table stood behind the first furnace.
+        if (WORKSTATION_BLOCKS.has(blockName)) {
+          const picked = await this.chooseWorkstationSpot(blockName);
+          if (picked) { spot = picked.cell; note += picked.note; }
+        }
+        spot ??= this.chooseSpot(blockName);
         if (!spot) return { success: false, failureType: 'target_not_found', recoverable: true,
           result: `手の届く所に${blockName}を置ける場所がありません（床があり、自分の体と重ならない空きマス）。少し動いてから呼んでください` };
         ({ x, y, z } = spot);
-        note = `置き場所(${x}, ${y}, ${z})は自分で選びました。`;
+        note += `置き場所(${x}, ${y}, ${z})は自分で選びました。`;
+        autoChosen = true;
       }
       if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
         return {
@@ -253,9 +334,12 @@ class PlaceBlockAt extends InstantSkill {
         throw actionError;
       }
 
+      // A workstation is used from the spot it was set down from: that nothing else of the worksite is now hidden is checked here.
+      const worksite = WORKSTATION_BLOCKS.has(blockName) ? await this.settleWorksite(blockName, targetPos, autoChosen) : '';
+      if (typeof worksite !== 'string') return worksite.replaced;
       return {
         success: true,
-        result: `${note}${blockName}を(${x}, ${y}, ${z})に設置しました`,
+        result: `${note}${blockName}を(${x}, ${y}, ${z})に設置しました${worksite}`,
       };
     } catch (error: any) {
       // エラーメッセージを詳細化
