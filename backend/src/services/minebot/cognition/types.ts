@@ -191,6 +191,11 @@ export interface WorldObservation {
   /** The biomes seen in this dimension, each by its nearest column, nearest first ("snowy_plains（ここ）・plains 東 120m"). */
   biomesSeen?: string;
   /**
+   * The map in the body's memory (placeMemory.map): ores, lava pools, obsidian, caves, structures with their chests, the base, the
+   * biomes and how far the land has been seen, each with count, distance, direction and coordinates; 3,000 characters at most.
+   */
+  mapSummary?: string;
+  /**
    * Said only when the task has been stopped for the same thing again and again lately: how often, for what,
    * what it cost, and what the body has measured of that kind. What to do about it is the planner's.
    */

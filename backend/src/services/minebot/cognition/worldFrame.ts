@@ -330,6 +330,13 @@ export function captureWorldObservation(bot?: unknown): WorldObservation {
       } catch { return {}; }
     })(),
     ...(() => {
+      // The map (see placeMemory.map): every kind of place known, for a planner laying out a whole route.
+      try {
+        const map = (observedBot as { placeMemory?: { map?(): string } } | undefined)?.placeMemory?.map?.();
+        return map ? { mapSummary: map } : {};
+      } catch { return {}; }
+    })(),
+    ...(() => {
       // The last death, while its dropped items may still lie there or for half an hour: a cue to go back for them.
       try {
         const memory = (observedBot as { placeMemory?: { lastDeath?(): string | undefined; deaths?(): WorldObservation['deaths'] } } | undefined)?.placeMemory;
