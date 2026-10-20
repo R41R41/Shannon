@@ -16,7 +16,7 @@ export interface ShannonCoreBridgeConfiguration {
   replyTimeoutMs?: number;
 }
 
-interface ShannonCoreBridgeBinding {
+export interface ShannonCoreBridgeBinding {
   platform: 'discord';
   conversationId?: string;
   conversationIdPrefix?: string;
@@ -264,7 +264,7 @@ function personTurnBody(envelope: RequestEnvelope, body: ReturnType<typeof disco
   };
 }
 
-function validBridgeUrl(value: string): boolean {
+export function validBridgeUrl(value: string): boolean {
   try {
     const url = new URL(value);
     if (url.username || url.password || url.search || url.hash || url.pathname !== '/v1/platform/turns') return false;
@@ -274,7 +274,7 @@ function validBridgeUrl(value: string): boolean {
   }
 }
 
-function bounded(value: unknown, maximum: number): value is string {
+export function bounded(value: unknown, maximum: number): value is string {
   return typeof value === 'string' && value.trim().length > 0 && value.length <= maximum && !value.includes('\0');
 }
 
@@ -282,7 +282,7 @@ function validTimestamp(value: unknown): value is string {
   return typeof value === 'string' && Number.isFinite(Date.parse(value));
 }
 
-function validatedBindings(raw: string): readonly ShannonCoreBridgeBinding[] {
+export function validatedBindings(raw: string): readonly ShannonCoreBridgeBinding[] {
   let decoded: unknown;
   try {
     decoded = JSON.parse(raw);
@@ -318,7 +318,7 @@ function validatedBinding(value: unknown): ShannonCoreBridgeBinding {
   });
 }
 
-function matchesConversation(binding: ShannonCoreBridgeBinding, conversationId: string): boolean {
+export function matchesConversation(binding: ShannonCoreBridgeBinding, conversationId: string): boolean {
   return binding.conversationId === conversationId
     || (binding.conversationIdPrefix !== undefined
       && conversationId.startsWith(binding.conversationIdPrefix)

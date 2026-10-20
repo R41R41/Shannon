@@ -22,6 +22,14 @@ function optional(name: string, fallback: string): string {
   return process.env[name] || fallback;
 }
 
+/** `on`/`true`/`1` -> true, `off`/`false`/`0` -> false, anything else (including unset) -> the fallback. */
+function dcVoiceSwitch(name: string, fallback: boolean): boolean {
+  const raw = (process.env[name] ?? '').trim().toLowerCase();
+  if (raw === 'on' || raw === 'true' || raw === '1') return true;
+  if (raw === 'off' || raw === 'false' || raw === '0') return false;
+  return fallback;
+}
+
 function minecraftCognitionMode(value: string): 'off' | 'shadow' | 'feedback' {
   const normalized = value.trim().toLowerCase();
   return normalized === 'shadow' || normalized === 'feedback' ? normalized : 'off';
@@ -245,6 +253,21 @@ export const config = {
     /** Also messages of people other than the bound owner. Default off. */
     replyPeopleEnabled: optional('SHANNON_CORE_PLATFORM_REPLY_PEOPLE', '') === 'true',
     replyTimeoutMs: Math.min(60_000, Math.max(5_000, parseInt(optional('SHANNON_CORE_PLATFORM_REPLY_TIMEOUT_MS', '55000'), 10) || 55_000)),
+  },
+
+  /**
+   * dc-voice: Discord voice-channel conversation through the companion (the head's /v1/platform/voice/*).
+   * Everything is off unless SHANNON_DC_VOICE=on; with it off the legacy VC path (PTT, Whisper, invokeGraph, VOICEPEAK)
+   * behaves exactly as before. The sub-switches only matter while the parent is on.
+   */
+  dcVoice: {
+    enabled: dcVoiceSwitch('SHANNON_DC_VOICE', false),
+    /** Hear everyone in the VC (bots excluded), person by person. Off = PTT user only. Default on when the parent is on. */
+    openMic: dcVoiceSwitch('SHANNON_DC_VOICE', false) && dcVoiceSwitch('SHANNON_DC_VOICE_OPEN_MIC', true),
+    /** The "speaking mouth": event-driven one-liners into the VC (getVoiceMouth()). Default on when the parent is on. */
+    mouth: dcVoiceSwitch('SHANNON_DC_VOICE', false) && dcVoiceSwitch('SHANNON_DC_VOICE_MOUTH', true),
+    /** Short backchannel ("un") during a long utterance. Default off. */
+    backchannel: dcVoiceSwitch('SHANNON_DC_VOICE', false) && dcVoiceSwitch('SHANNON_DC_VOICE_BACKCHANNEL', false),
   },
 
   groq: {
