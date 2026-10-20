@@ -149,6 +149,14 @@ try {
       const y = Math.floor(actor.entity.position.y);
       record.calls.push(await call('deep', 'stair-mine', -40, 'west'));
       record.steps = y - Math.floor(actor.entity.position.y);
+    } else if (scenario === 'sea') {
+      // A pool of still water three deep, the body afloat in its middle, and a stair asked for down from there.
+      await setup(spawnAt, TOOLS);
+      const p = actor.entity.position.floored();
+      await oracle.executeSetupCommand(`fill ${p.x + 3} ${p.y - 3} ${p.z - 2} ${p.x + 7} ${p.y - 1} ${p.z + 2} minecraft:water`);
+      await oracle.executeSetupCommand(`tp ${NAME} ${p.x + 5.5} ${p.y - 1} ${p.z + 0.5}`);
+      await sleep(2500);
+      record.calls.push(await call('sea', 'stair-mine', p.y - 20, 'east'));
     } else if (scenario === 'hunt') {
       // Three sheep and three rabbits a few blocks off: the kills, and what each left lying.
       await setup(spawnAt, [...TOOLS, 'minecraft:iron_sword 1']);

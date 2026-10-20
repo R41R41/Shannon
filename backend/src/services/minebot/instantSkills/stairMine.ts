@@ -107,7 +107,19 @@ class StairMine extends InstantSkill {
             }
 
             const isDescending = diff < 0;
-            const steps = Math.abs(diff);
+            // A stair cannot start from water (every way is "water beside"): run 11 and 12 asked for one on a sea and a frozen sea and
+            // were refused four ways round (mb-body's lab, 2026-10-20). The body swims to the bank first and goes down from there.
+            let leftWater = '';
+            if (isDescending && this.inWaterNow()) {
+                let out: { success?: boolean; result?: unknown } | null = null;
+                try { out = await this.callSkill('leave-water'); } catch (error) { if (this.shouldInterrupt()) throw error; out = null; }
+                if (!out?.success || this.inWaterNow()) {
+                    return { success: false, failureType: 'stair_progress_blocked', recoverable: true,
+                        result: `水の中からは階段を掘れません。岸へ上がれませんでした（${String(out?.result ?? 'leave-water なし').slice(0, 120)}）。find-dry-footholds で岸を探して move-to してから再実行してください` };
+                }
+                leftWater = '水から岸へ上がってから降りました。';
+            }
+            const steps = Math.abs(targetY - Math.floor(this.bot.entity.position.y));
             let successSteps = 0;
             /** Directions given up on in this call, with why (the stair turns to another by itself), and the one it was asked for. */
             const triedDirections: string[] = [];
@@ -265,7 +277,7 @@ class StairMine extends InstantSkill {
                 failureType: finalY === targetY ? undefined : 'stair_progress_blocked',
                 recoverable: finalY === targetY ? undefined : true,
                 result: (finalY === targetY
-                    ? `${successSteps}段${isDescending ? '下降' : '上昇'}してY=${finalY}に到達しました${shaftLevels ? `（うち${shaftLevels}段は縦穴で真下へ。足元の下が岩で、横に液体が無い所だけ）` : ''}`
+                    ? `${leftWater}${successSteps}段${isDescending ? '下降' : '上昇'}してY=${finalY}に到達しました${shaftLevels ? `（うち${shaftLevels}段は縦穴で真下へ。足元の下が岩で、横に液体が無い所だけ）` : ''}`
                     : `${successSteps}段移動しましたが目標Y=${targetY}には到達していません（現在Y=${finalY}）`) + spareToolNote(this.bot),
             };
         } catch (error: any) {
@@ -300,10 +312,10 @@ class StairMine extends InstantSkill {
                     }
                     // Breaking into an aquifer floods the stair: mining underwater is ~25x
                     // slower and paid runs lost the bot in flooded caves. Stop dry instead.
-                    const water = this.adjacentWater(pos);
+                    const water = await this.plugWaterBeside(pos, blockName) ? null : this.adjacentWater(pos);
                     if (water) {
                         this.lastStopReason = `${label}の${block.name}(${pos.x}, ${pos.y}, ${pos.z})の隣(${water.x}, ${water.y}, ${water.z})が水です。`
-                            + '掘ると浸水するため停止しました。別の方向で再実行するか、水の無い場所から降りてください';
+                            + '塞ぐブロックが無いか塞げず、掘ると浸水するため停止しました。丸石などを持って再実行するか、水の無い場所から降りてください';
                         return false;
                     }
                     const dug = await this.digBlockSafe(block);
@@ -534,8 +546,17 @@ class StairMine extends InstantSkill {
 
     private async moveOneStair(start: Vec3, dir: Vec3, ascending: boolean, extraDrop = 0): Promise<boolean> {
         const target = start.offset(dir.x, ascending ? 1 : -1 - extraDrop, dir.z);
-        // Mineflayer yaw: north=0, west=π/2, south=π, east=-π/2.
-        await this.bot.look(Math.atan2(-dir.x, -dir.z), 0, true);
+        // Aimed at the middle of the next column, not straight along the way: from a spot off the middle of its own column (the bank a
+        // swim ended on, a landing a little to the side) a walk straight ahead ended with the box over the rim of the next block,
+        // held up by it, and the step was given up four ways round (lab, 2026-10-20, after leave-water at x 12.73).
+        const centre = { x: target.x + 0.5, z: target.z + 0.5 };
+        const offCentre = () => Math.hypot(centre.x - this.bot.entity.position.x, centre.z - this.bot.entity.position.z);
+        const aim = async () => {
+            const p = this.bot.entity.position;
+            // Mineflayer yaw: north=0, west=π/2, south=π, east=-π/2.
+            await this.bot.look(Math.atan2(-(centre.x - p.x), -(centre.z - p.z)), 0, true);
+        };
+        await aim();
         this.bot.setControlState('forward', true);
         if (ascending) this.bot.setControlState('jump', true);
         let released = false;
@@ -547,10 +568,16 @@ class StairMine extends InstantSkill {
                 const pos = this.bot.entity.position;
                 const progress = (pos.x - (start.x + 0.5)) * dir.x +
                     (pos.z - (start.z + 0.5)) * dir.z;
-                if (!released && progress >= 0.85) {
+                if (!released && (progress >= 0.85 && offCentre() < 0.3 || progress >= 1.15)) {
                     this.bot.setControlState('forward', false);
                     if (ascending) this.bot.setControlState('jump', false);
                     released = true;
+                } else if (!released && tick % 2 === 1) await aim();
+                else if (released && !ascending && Math.floor(pos.y) > target.y && offCentre() > 0.35 && tick < 30) {
+                    // Over the rim still (the drop has not come): towards the middle once more.
+                    await aim();
+                    this.bot.setControlState('forward', true);
+                    released = false;
                 }
                 const inColumn = Math.floor(pos.x) === target.x && Math.floor(pos.z) === target.z;
                 // In an aquifer the bot floats at the right column and height without touching ground.
@@ -647,6 +674,36 @@ class StairMine extends InstantSkill {
             if (error instanceof ThreatExposedError || error instanceof LavaReleaseError) this.lastStopReason = error.message;
             return false;
         }
+    }
+
+    /** Afloat or with the feet in water. */
+    private inWaterNow(): boolean {
+        const entity = this.bot.entity as any;
+        if (entity?.isInWater) return true;
+        const name = this.bot.blockAt(this.bot.entity.position.floored())?.name;
+        return name === 'water' || name === 'bubble_column';
+    }
+
+    /**
+     * Water beside a block about to be dug, put out with a carried block in each such cell (at most four), as a person blocks a leak
+     * before breaking through. True when no water is left beside it. Run 18 stopped at y 51 with one source beside the stair, and
+     * run 9 at an aquifer at y 25: four ways round, "water beside", the stair given up with stone in the bag (mb-body's lab).
+     */
+    private async plugWaterBeside(pos: Vec3, preferred: string): Promise<boolean> {
+        const feet = this.bot.entity.position.floored();
+        for (let tries = 0; tries < 4; tries++) {
+            const water = this.adjacentWater(pos);
+            if (!water) return true;
+            // Never into the cells the body stands in: a block there is refused, and the body would be shut in.
+            if ((water.x === feet.x && water.z === feet.z && (water.y === feet.y || water.y === feet.y + 1)) || this.shouldInterrupt()) return false;
+            const filler = [preferred, 'cobblestone', 'cobbled_deepslate', 'stone', 'deepslate', 'dirt', 'andesite', 'diorite', 'granite', 'tuff', 'netherrack']
+                .find(name => this.bot.inventory.items().some(item => item.name === name));
+            if (!filler || !(await this.placeBlockSafe(filler, water))) return false;
+            const deadline = Date.now() + 1000;
+            while (Date.now() < deadline && ['water', 'bubble_column'].includes(this.bot.blockAt(water)?.name ?? '')) await this.sleep(50);
+            log.info(`🧱 階段の脇の水(${water.x},${water.y},${water.z})を${filler}で塞いだ`);
+        }
+        return !this.adjacentWater(pos);
     }
 
     private adjacentWater(pos: Vec3): Vec3 | null {
