@@ -8,7 +8,7 @@ vi.mock('../../src/services/minebot/execution/observedWait.js', async (original)
 }));
 vi.mock('../../src/services/minebot/utils/gotoSafe.js', () => ({ gotoSafe: vi.fn(async () => ({ success: false })) }));
 
-const { biomesAround, describeBiomes, emptyPlaceMemory, noteBiome, parsePlaceMemory, placesDigest, rememberPlace } = await import('../../src/modules/minecraftLearning/places.js');
+const { biomesAround, describeBiomes, emptyPlaceMemory, mapSummary, noteBiome, parsePlaceMemory, placesDigest, rememberPlace } = await import('../../src/modules/minecraftLearning/places.js');
 const { installPlaceMemory } = await import('../../src/services/minebot/utils/placeMemory.js');
 const { animalProspect, prospectNote } = await import('../../src/services/minebot/utils/biomeProspects.js');
 const { default: ExploreForStructure } = await import('../../src/services/minebot/instantSkills/exploreForStructure.js');
@@ -77,6 +77,69 @@ describe('the biomes passed through are kept and said, each by its nearest colum
     expect(bot.placeMemory.biomes()).toBe('snowy_plains（ここ）');            // within the five seconds
     bot.entity.position = new Vec3(40, 64, 8);
     expect(bot.placeMemory.biomes()).toContain('plains 東');
+  });
+});
+
+describe('the map: structures, caves and lava read from the loaded world, and said for a route planner (owner, 2026-10-20)', () => {
+  const columnWith = async () => {
+    const Chunk = (await import('prismarine-chunk')).default('1.21.11') as any;
+    const chunk = new Chunk({ minY: -64, worldHeight: 384 });
+    const set = (x: number, y: number, z: number, name: string) => chunk.setBlockStateId(new Vec3(x, y, z), registry.blocksByName[name].defaultState);
+    // A ruined portal: netherrack, crying obsidian, two obsidian of its frame and its chest.
+    set(3, 69, 3, 'netherrack'); set(4, 69, 3, 'netherrack'); set(5, 70, 3, 'crying_obsidian'); set(3, 70, 3, 'obsidian'); set(3, 71, 3, 'obsidian'); set(6, 70, 5, 'chest');
+    // An igloo's floor; a lone carpet on grass is not one.
+    set(10, 69, 10, 'snow_block'); set(10, 70, 10, 'white_carpet'); set(14, 69, 1, 'grass_block'); set(14, 70, 1, 'white_carpet');
+    // A shipwreck's chest with water beside it, a lava pool open to the air.
+    set(12, 40, 12, 'chest'); set(13, 40, 12, 'water'); set(1, 60, 14, 'lava');
+    // A cave: a section of stone (y -32..-17) with a hollow of 1,000 cells.
+    for (let x = 0; x < 16; x++) for (let y = -32; y <= -17; y++) for (let z = 0; z < 16; z++) {
+      set(x, y, z, x >= 2 && x < 12 && y >= -30 && y < -20 && z >= 2 && z < 12 ? 'air' : 'stone');
+    }
+    return chunk;
+  };
+  const bodyWith = (chunk: any, dimension = 'overworld') => Object.assign(new EventEmitter(), { entity: { position: new Vec3(8, 70, 8) }, registry,
+    game: { dimension }, world: { getColumns: () => [{ chunkX: 0, chunkZ: 0, column: chunk }], getColumn: (x: number, z: number) => x === 0 && z === 0 ? chunk : undefined } }) as any;
+
+  it('reads a ruined portal, an igloo, a shipwreck, a cave and obsidian from a real 1.21.11 column, and the map says each with its chest', async () => {
+    const bot = bodyWith(await columnWith());
+    installPlaceMemory(bot);
+    bot.placeMemory.work(5000);
+    const kinds = new Set(bot.placeMemory.state.places.map((place: any) => place.kind));
+    for (const kind of ['ruined_portal', 'obsidian', 'igloo', 'shipwreck', 'cave', 'lava', 'chest']) expect(kinds).toContain(kind);
+    expect(bot.placeMemory.state.places.filter((place: any) => place.kind === 'igloo')).toHaveLength(1);
+    expect(bot.placeMemory.state.places.find((place: any) => place.kind === 'cave').count).toBe(1000);
+    const map: string = bot.placeMemory.map();
+    expect(map).toContain('荒廃したポータル: ');
+    expect(map).toMatch(/荒廃したポータル: \d+m \S+ \(\d+,\d+,\d+\)（黒曜石2個・箱 \(6,70,5\): 火打石と打ち金・黒曜石が入ることがある）/);
+    expect(map).toContain('イグルー: ');
+    expect(map).toContain('難破船: ');
+    expect(map).toMatch(/洞窟 1か所（うち大きな空洞0）: \d+m \S+ \(\d+,-\d+,\d+\) 約1000マス/);
+    expect(map).toContain('溶岩の溜まり 1か所: ');
+    expect(map).toContain('地表');
+  });
+  it('in the Nether netherrack is the ground, not a ruined portal, and no caves are counted', async () => {
+    const bot = bodyWith(await columnWith(), 'the_nether');
+    installPlaceMemory(bot);
+    bot.placeMemory.work(5000);
+    const kinds = new Set(bot.placeMemory.state.places.map((place: any) => place.kind));
+    expect(kinds).toContain('ruined_portal');   // the crying obsidian still is one
+    expect(bot.placeMemory.state.places.filter((place: any) => place.kind === 'ruined_portal')[0].count ?? 1).toBe(1);
+    expect(kinds).not.toContain('cave');
+  });
+  it('a village says its smith\'s chest, ores are counted with the nearest few, and the whole stays within 3,000 characters', () => {
+    const state = emptyPlaceMemory();
+    const now = 1;
+    rememberPlace(state, { kind: 'village', dimension: 'overworld', position: { x: 171, y: 70, z: 0 } }, now);
+    rememberPlace(state, { kind: 'grindstone', dimension: 'overworld', position: { x: 180, y: 70, z: 10 } }, now);
+    rememberPlace(state, { kind: 'chest', dimension: 'overworld', position: { x: 182, y: 70, z: 12 }, note: '中身: iron_ingot×5 obsidian×3' }, now);
+    for (let i = 0; i < 400; i++) rememberPlace(state, { kind: i % 2 ? 'iron_ore' : 'coal_ore', dimension: 'overworld', position: { x: (i % 40) * 20 - 400, y: 30, z: Math.floor(i / 40) * 20 - 100 } }, now);
+    for (let column = 0; column < 30; column++) noteBiome(state, 'overworld', column - 15, 0, ['plains', 'forest', 'desert', 'snowy_plains', 'badlands', 'savanna', 'taiga', 'swamp', 'jungle', 'river'][column % 10]);
+    const map = mapSummary(state, { x: 0, y: 70, z: 0 }, 'overworld');
+    expect(map).toContain('村: 171m 東 (171,70,0)（鍛冶屋の箱 (182,70,12) 中身: iron_ingot×5 obsidian×3: 鉄・黒曜石が入ることがある）');
+    expect(map).toMatch(/鉄 200か所（\d+m \S+ \(-?\d+,30,-?\d+\)、\d+m/);
+    expect(map).toContain('バイオーム: ');
+    expect(map.length).toBeLessThanOrEqual(3000);
+    expect(mapSummary(state, { x: 0, y: 70, z: 0 }, 'overworld', { maxCharacters: 300 }).length).toBeLessThanOrEqual(300);
   });
 });
 
@@ -291,6 +354,83 @@ describe('the release after a command waits for auto-swim to reach the air (run 
     expect(await body.release(AbortSignal.timeout(50))).toBe(false);
     await swim; await body.dispose();
   }, 10_000);
+});
+
+describe('use-item-on-block count≥2 makes and mines obsidian from a pool in one call (mb-arch: ten decisions for ten obsidian)', () => {
+  const pool = (length: number) => {
+    // A row of lava sources at y 60 on stone, stone walls round it; the body stands on the bank at its west end.
+    const cells = new Map<string, string>();
+    for (let x = 0; x < length; x++) cells.set(`${x},60,0`, 'lava');
+    const name = (p: Vec3) => cells.get(`${p.x},${p.y},${p.z}`) ?? (p.y >= 61 ? 'air' : 'stone');
+    const inventory: Array<{ name: string; count: number; type?: number }> = [
+      { name: 'diamond_pickaxe', count: 1 }, { name: 'water_bucket', count: 1 }];
+    const bot: any = {
+      version: '1.21.11', game: { dimension: 'overworld' }, entity: { position: new Vec3(-0.5, 61, 0.5) },
+      inventory: { items: () => inventory.filter(item => item.count > 0) },
+      instantSkills: { getSkill: () => ({}) },
+      blockAt: (p: Vec3) => { const n = name(p); return { name: n, position: p, metadata: 0, getProperties: () => ({ level: 0 }),
+        boundingBox: n === 'air' || n === 'lava' ? 'empty' : 'block' }; },
+      findBlocks: ({ matching, point, maxDistance }: any) => {
+        const out: Vec3[] = [];
+        for (let x = -12; x <= 12; x++) for (let y = 56; y <= 64; y++) for (let z = -4; z <= 4; z++) {
+          const p = new Vec3(x, y, z);
+          if (p.distanceTo(point) <= maxDistance && matching(bot.blockAt(p))) out.push(p);
+        }
+        return out;
+      },
+    };
+    return { cells, inventory, bot };
+  };
+  const skillFor = async (world: ReturnType<typeof pool>) => {
+    const { default: UseItemOnBlock } = await import('../../src/services/minebot/instantSkills/useItemOnBlock.js');
+    const skill: any = new UseItemOnBlock(world.bot);
+    const poured: string[] = [], dug: string[] = [];
+    skill.placeWaterNearLava = async (lava: Vec3) => { world.cells.set(`${lava.x},${lava.y},${lava.z}`, 'obsidian'); poured.push(`${lava.x}`); return { success: true }; };
+    skill.callSkill = async (name: string, x: any, y: number, z: number) => {
+      if (name === 'drop-item') { for (const item of world.inventory) if (item.name === x) item.count = 0; return { success: true }; }
+      world.cells.set(`${x},${y},${z}`, 'air'); dug.push(`${x}`);
+      const held = world.inventory.find(item => item.name === 'obsidian');
+      if (held) held.count++; else world.inventory.push({ name: 'obsidian', count: 1 });
+      return { success: true };
+    };
+    return { skill, poured, dug };
+  };
+  it('pours first while too few can be taken (obsidian beside lava burns its drop), then mines them, and says how many', async () => {
+    const world = pool(5);
+    const { skill, poured, dug } = await skillFor(world);
+    const result = await skill.runImpl(0, 60, 0, 'water_bucket', 5);
+    expect(result.success).toBe(true);
+    expect(result.result).toContain('黒曜石を5個作って掘りました（溶岩5か所に水をかけ、所持 obsidian=5個）');
+    expect(poured).toEqual(['0', '1', '2', '3', '4']);
+    expect(dug).toHaveLength(5);
+  });
+  it('a pool too small says how many it got and why, with the water bucket kept', async () => {
+    const world = pool(3);
+    const { skill } = await skillFor(world);
+    const result = await skill.runImpl(0, 60, 0, 'water_bucket', 5);
+    expect(result.success).toBe(false);
+    expect(result.failureType).toBe('partial_completion');
+    expect(result.result).toContain('黒曜石を3個作って掘りました');
+    expect(result.result).toContain('残り2個: 近くに水をかけられる溶岩も、すぐ掘れる黒曜石も、もうありません');
+    expect(result.result).toContain('水はwater_bucketへ回収済み');
+  });
+  it('a full pack is made room in first, so the obsidian is taken and not left on the floor (ladder probe: five dug, none taken)', async () => {
+    const world = pool(2);
+    for (let i = 0; i < 34; i++) world.inventory.push({ name: 'cobbled_deepslate', count: 64 });
+    const { skill } = await skillFor(world);
+    const result = await skill.runImpl(0, 60, 0, 'water_bucket', 2);
+    expect(result.success).toBe(true);
+    expect(result.result).toContain('持ち物の空きを作るためcobbled_deepslate×');
+  });
+  it('without a diamond pickaxe, or in the Nether, nothing is poured', async () => {
+    const world = pool(3);
+    world.inventory.splice(0, 1);
+    const { skill, poured } = await skillFor(world);
+    expect((await skill.runImpl(0, 60, 0, 'water_bucket', 5)).failureType).toBe('missing_tool');
+    world.bot.game.dimension = 'the_nether';
+    expect((await skill.runImpl(0, 60, 0, 'water_bucket', 5)).failureType).toBe('invalid_input');
+    expect(poured).toEqual([]);
+  });
 });
 
 const { shouldPauseMiningForDeposit, slotsForDrops } = await import('../../src/services/minebot/utils/inventorySpillDetection.js');
