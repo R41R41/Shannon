@@ -16,6 +16,9 @@ export interface FillerSource {
   ids(): string[];
 }
 
+/** No fillers at all (`SHANNON_DC_VOICE_FILLER` off): nothing is played before the head's decision. */
+export const NO_FILLERS: FillerSource = Object.freeze({ get: () => undefined, ids: () => [] });
+
 const MAX_FILLERS = 24;
 const MAX_FILLER_BYTES = 24_000 * 2 * 8; // 8 s of audio is not a filler
 const REFRESH_AFTER_MS = 30 * 60_000;

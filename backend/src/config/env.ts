@@ -286,6 +286,12 @@ export const config = {
     mouth: dcVoiceSwitch('SHANNON_DC_VOICE', false) && dcVoiceSwitch('SHANNON_DC_VOICE_MOUTH', true),
     /** Short backchannel ("un") during a long utterance. Default off. */
     backchannel: dcVoiceSwitch('SHANNON_DC_VOICE', false) && dcVoiceSwitch('SHANNON_DC_VOICE_BACKCHANNEL', false),
+    /**
+     * The recorded fillers (the 84 VOICEPEAK clips of voiceFiller.ts, and the head's short `うん。`-style sounds): off unless
+     * SHANNON_DC_VOICE_FILLER is on (owner 2026-10-21: they are the old voice, and a filler would play before a decision not to answer).
+     * Does not need SHANNON_DC_VOICE: the legacy path's fillers are switched by it too.
+     */
+    filler: dcVoiceSwitch('SHANNON_DC_VOICE_FILLER', false),
   },
 
   groq: {

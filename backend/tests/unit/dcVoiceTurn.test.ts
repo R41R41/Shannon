@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { SpeechFillerStore } from '../../src/services/discord/voice/speechFillerStore.js';
+import { NO_FILLERS, SpeechFillerStore } from '../../src/services/discord/voice/speechFillerStore.js';
 import { SpeechPlayer, type PlaybackSession } from '../../src/services/discord/voice/speechPlayer.js';
 import type { TurnItem } from '../../src/services/discord/voice/turnQueue.js';
 import { runDcVoiceTurn, type DcVoiceTurnEnv } from '../../src/services/llm/voice/dcVoiceTurn.js';
@@ -303,6 +303,17 @@ describe('runDcVoiceTurn: backchannel before the decision (one person alone in t
     await runDcVoiceTurn(t.env, t.item);
     expect((t.client.turn.mock.calls[0]![0] as { fillerId?: string }).fillerId).toBeUndefined();
     expect((await t.sessions[0]!.whenDone()).spokenText).toBe('はい。');
+  });
+
+  it('plays no filler at all with the fillers off (SHANNON_DC_VOICE_FILLER, owner 2026-10-21), even alone and even if the head names one', async () => {
+    const t = setup({
+      turn: scriptedTurn({ respond: true, filler: { id: 'un', text: 'うん。' } }, [sentence(0, 'いいよ。'), done('いいよ。')]),
+      env: { participants: () => [], fillers: NO_FILLERS },
+    });
+    t.item.text = longText;
+    await runDcVoiceTurn(t.env, t.item);
+    expect((t.client.turn.mock.calls[0]![0] as { fillerId?: string }).fillerId).toBeUndefined();
+    expect((await t.sessions[0]!.whenDone()).spokenText).toBe('いいよ。');
   });
 
   it('does not when other people are in the VC (the decision decides)', async () => {

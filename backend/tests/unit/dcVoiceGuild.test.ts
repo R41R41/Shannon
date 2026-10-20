@@ -154,6 +154,10 @@ describe('DcVoiceGuildSession: one person talks to Shannon', () => {
     t.speak('u1', 2);
     await waitFor(() => t.requests.length === 2, 2_000, 'follow-up');
     expect(t.requests[1]!.followsShannonTurn).toBe(true);
+    // The head counts its follow-up window (SHANNON_ADDRESSED) from the end of her speech: told only once she has spoken.
+    expect(t.requests[0]).not.toHaveProperty('shannonSpokeMsAgo');
+    expect(t.requests[1]!.shannonSpokeMsAgo).toBeGreaterThanOrEqual(0);
+    expect(t.requests[1]!.shannonSpokeMsAgo).toBeLessThan(8_000);
   });
 });
 

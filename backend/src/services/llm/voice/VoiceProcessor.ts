@@ -34,6 +34,7 @@ import {
   type DiscordNativeEvent,
 } from '../../common/adapters/index.js';
 import { logger } from '../../../utils/logger.js';
+import { config as appConfig } from '../../../config/env.js';
 import { isWhisperHallucination, transcribeWavWithWhisper } from './voiceStt.js';
 import { notifyUiModVoiceTranscript } from '../../minebot/integration/uiModVoice.js';
 
@@ -169,7 +170,8 @@ export class VoiceProcessor {
     let fillerResult: FillerSelection = { fillerIds: [], fillerOnly: false, needsTools: false };
     let fillerSequence: { audioBuffers: Buffer[]; combinedText: string; totalDurationMs: number } | null = null;
 
-    if (areFillersReady()) {
+    // The recorded fillers are the old voice (owner 2026-10-21): none unless SHANNON_DC_VOICE_FILLER is on.
+    if (appConfig.dcVoice?.filler && areFillersReady()) {
       try {
         const recentContext = message.recentMessages
           ?.slice(-5)

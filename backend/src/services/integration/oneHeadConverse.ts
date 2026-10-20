@@ -21,6 +21,8 @@ export interface ConverseTurn {
     heard?: Array<{ userId: string; name: string; text: string; at: string }>;
     followsShannonTurn?: boolean;
     speakingNow?: boolean;
+    /** Ms since she last finished speaking (0: speaking now): the head's follow-up window (SHANNON_ADDRESSED). */
+    shannonSpokeMsAgo?: number;
     situation?: string;
   };
   words: string;

@@ -63,7 +63,7 @@ import { createDcVoiceStt, type DcVoiceStt } from '../../llm/voice/dcVoiceStt.js
 import { DcVoiceGuildSession, type DcVoiceGuildDeps } from './dcVoiceGuild.js';
 import { EventLoopDelayLogger } from './dcVoiceMetrics.js';
 import { createDiscordSpeechPlayer } from './discordSpeechPlayer.js';
-import { getSpeechFillerStore } from './speechFillerStore.js';
+import { getSpeechFillerStore, NO_FILLERS } from './speechFillerStore.js';
 import type { TurnItem } from './turnQueue.js';
 import { getVoiceMouth } from './voiceMouth.js';
 
@@ -132,8 +132,9 @@ export class VoiceManager implements VoiceGateway {
 
   /** Call once after the Discord client is ready to load fillers */
   async onReady(): Promise<void> {
-    loadFillers().catch(err => logger.warn(`[Discord] Filler loading failed: ${err}`));
-    if (config.dcVoice.enabled) {
+    // The recorded fillers are the old voice: neither loaded nor voiced unless SHANNON_DC_VOICE_FILLER is on (owner 2026-10-21).
+    if (config.dcVoice.filler) loadFillers().catch(err => logger.warn(`[Discord] Filler loading failed: ${err}`));
+    if (config.dcVoice.enabled && config.dcVoice.filler) {
       void getConfiguredShannonCoreVoiceClient()
         .then(client => (client ? getSpeechFillerStore().warmUp(client) : undefined))
         .catch(err => logger.warn(`[DcVoice] filler warm-up failed: ${err}`));
@@ -900,7 +901,7 @@ export class VoiceManager implements VoiceGateway {
           && (openMic || this.activeVoiceUsers.get(guildId) === userId),
         player: createDiscordSpeechPlayer(audioPlayer),
         client,
-        fillers: getSpeechFillerStore(),
+        fillers: config.dcVoice.filler ? getSpeechFillerStore() : NO_FILLERS,
         stt: this.dcStt,
         voicepeakWav: (text) => voicepeak.synthesize(text),
         legacy: (item) => this.deliverLegacyVoiceText(guildId, textChannelId, voiceChannelId, item),
@@ -913,7 +914,7 @@ export class VoiceManager implements VoiceGateway {
       });
       this.dcSessions.set(guildId, session);
       session.start();
-      void getSpeechFillerStore().warmUp(client).catch(() => undefined);
+      if (config.dcVoice.filler) void getSpeechFillerStore().warmUp(client).catch(() => undefined);
       logger.info(`[DcVoice] head-served voice started: ${conversationId} (openMic=${openMic}, mouth=${config.dcVoice.mouth})`, 'cyan');
     } catch (error) {
       logger.warn(`[DcVoice] could not start (legacy voice path stays): ${error instanceof Error ? error.message : String(error)}`);

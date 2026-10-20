@@ -246,6 +246,20 @@ export class DcVoiceGuildSession implements MouthHost {
     }
   }
 
+  /**
+   * How long before an utterance began she last finished speaking, in ms (0: she was speaking when it began); undefined when she has not
+   * lately. The head counts its follow-up window (~20 s, `SHANNON_ADDRESSED`) from this.
+   */
+  private shannonSpokeMsAgo(startedAt: number): number | undefined {
+    let latest: number | undefined;
+    for (const span of this.spans) {
+      if (span.start > startedAt) continue;
+      if (span.end === null || span.end >= startedAt) return 0;
+      latest = Math.max(latest ?? -Infinity, span.end);
+    }
+    return latest === undefined ? undefined : Math.max(0, startedAt - latest);
+  }
+
   private followsShannonTurn(startedAt: number): boolean {
     return this.spans.some(span => span.start <= startedAt && (span.end === null || startedAt <= span.end + FOLLOW_WINDOW_MS));
   }
@@ -260,6 +274,7 @@ export class DcVoiceGuildSession implements MouthHost {
       player: this.deps.player,
       speakingNow: () => this.deps.player.speaking() !== null,
       followsShannonTurn: (startedAt: number) => this.followsShannonTurn(startedAt),
+      shannonSpokeMsAgo: (startedAt: number) => this.shannonSpokeMsAgo(startedAt),
       participants: () => this.deps.humanIds(),
       heard: (userId: string) => this.queue.heard(userId),
       situation: () => this.deps.mouth?.getSituation(),

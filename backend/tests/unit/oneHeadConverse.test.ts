@@ -121,6 +121,14 @@ describe('a voice-channel utterance through the head (SHANNON_ONE_HEAD)', () => 
     expect(converseVoiceBody({ ...request, conversationTitle: '   ' }).where.title).toBeUndefined();
   });
 
+  it('tells the head how long ago she last finished speaking (the follow-up window of 「話しかけられたか」), only when she has lately', () => {
+    expect(converseVoiceBody({ ...request, shannonSpokeMsAgo: 4_321.6 }).presence).toEqual({
+      participants: ['444', '333'], heard: [], followsShannonTurn: false, speakingNow: false, shannonSpokeMsAgo: 4_322,
+    });
+    expect(converseVoiceBody({ ...request, shannonSpokeMsAgo: 0 }).presence.shannonSpokeMsAgo).toBe(0);
+    expect(converseVoiceBody(request).presence).not.toHaveProperty('shannonSpokeMsAgo');
+  });
+
   it('is sent for a channel nobody bound, to /v1/converse, and reads past her face', async () => {
     const urls: string[] = [];
     const fetcher = vi.fn(async (url: string | URL | Request) => {

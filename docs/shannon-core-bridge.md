@@ -93,7 +93,13 @@ SHANNON_DC_VOICE_OPEN_MIC=on
 SHANNON_DC_VOICE_MOUTH=on
 # 長い発話の途中の相づち（既定 off）
 SHANNON_DC_VOICE_BACKCHANNEL=off
+# 録音済みのフィラー（旧い声の 84 本と、心の「うん。」など。2026-10-21 から既定 off。SHANNON_DC_VOICE が切でも旧経路のフィラーを止める）
+SHANNON_DC_VOICE_FILLER=off
 ```
+
+- 「話しかけられたか」（2026-10-21、心の `SHANNON_ADDRESSED=on`）: 返事をするか（名前で呼ばれた・直後の続きの言葉）は心が決める。体は発話ごとに
+  「シャノンが最後に話し終えてから何 ms か」（`shannonSpokeMsAgo`、話している間は 0）を添えて送り、心の `decision` が `respond: false` なら黙る
+  （フィラーも鳴らさない）。心と通信できない時の旧経路は、これまでどおり全部に答える。
 
 - 会話は `discord:<guildId>:<声の文字チャンネル>` で、`SHANNON_CORE_PLATFORM_BINDINGS_JSON` に結ばれたものだけ。束縛が無い・voiceMode が minebot・URL/token 未設定の時は旧の作り（PTT、Whisper、invokeGraph、VOICEPEAK）のまま。
 - 心の最初の行（decision）が 4 秒以内に来なければ、その発話は旧の作りに任せる。decision のあとの失敗では旧に落とさない（言った分は言ってある）。

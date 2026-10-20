@@ -121,3 +121,16 @@ describe('minecraft Jev rollout mode', () => {
     expect(config.minecraftCognition.openAITimeoutMs).toBe(2_500);
   });
 });
+
+describe('the recorded fillers (owner 2026-10-21)', () => {
+  it('are off unless SHANNON_DC_VOICE_FILLER is turned on, and need no other switch', async () => {
+    expect((await import('../../../src/config/env.js')).config.dcVoice.filler).toBe(false);
+    vi.resetModules();
+    vi.stubEnv('SHANNON_DC_VOICE_FILLER', 'on');
+    expect((await import('../../../src/config/env.js')).config.dcVoice.filler).toBe(true);
+    vi.resetModules();
+    vi.stubEnv('SHANNON_DC_VOICE_FILLER', 'off');
+    vi.stubEnv('SHANNON_DC_VOICE', 'on');
+    expect((await import('../../../src/config/env.js')).config.dcVoice.filler).toBe(false);
+  });
+});

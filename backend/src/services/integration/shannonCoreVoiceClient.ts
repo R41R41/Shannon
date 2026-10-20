@@ -43,6 +43,8 @@ export interface VoiceTurnRequest {
   heard: VoiceHeardItem[];
   followsShannonTurn: boolean;
   speakingNow: boolean;
+  /** How long before the utterance began she last finished speaking (ms; 0: speaking). The head's follow-up window of 「話しかけられたか」. */
+  shannonSpokeMsAgo?: number;
   /** A backchannel the body already started playing without waiting for the decision (solo VC only). */
   fillerId?: string;
   situation?: string;
@@ -480,6 +482,7 @@ function turnBody(request: VoiceTurnRequest) {
     })),
     followsShannonTurn: request.followsShannonTurn,
     speakingNow: request.speakingNow,
+    ...(request.shannonSpokeMsAgo === undefined ? {} : { shannonSpokeMsAgo: Math.max(0, Math.round(request.shannonSpokeMsAgo)) }),
     ...(request.fillerId ? { fillerId: request.fillerId.slice(0, 80) } : {}),
     ...(request.situation ? { situation: request.situation.slice(0, 300) } : {}),
     ...(request.sttMs === undefined ? {} : { sttMs: Math.max(0, Math.round(request.sttMs)) }),
@@ -498,6 +501,7 @@ export function converseVoiceBody(request: VoiceTurnRequest): ConverseTurn {
     who: { userId: body.sourceUserId, displayName: body.sourceDisplayName },
     presence: {
       participants: body.participants, heard: body.heard, followsShannonTurn: body.followsShannonTurn, speakingNow: body.speakingNow,
+      ...(body.shannonSpokeMsAgo === undefined ? {} : { shannonSpokeMsAgo: body.shannonSpokeMsAgo }),
       ...(body.situation ? { situation: body.situation } : {}),
     },
     words: body.userMessage,

@@ -33,6 +33,8 @@ export interface DcVoiceTurnEnv {
   speakingNow(): boolean;
   /** Whether an utterance that began at `startedAt` came while Shannon was speaking or within 8 s after. */
   followsShannonTurn(startedAt: number): boolean;
+  /** How long before an utterance began she last finished speaking (ms; 0: speaking), undefined when not lately: the head's follow-up window. */
+  shannonSpokeMsAgo?(startedAt: number): number | undefined;
   participants(): string[];
   heard(excludeUserId: string): HeardEntry[];
   situation(): string | undefined;
@@ -95,6 +97,7 @@ export async function runDcVoiceTurn(env: DcVoiceTurnEnv, item: TurnItem): Promi
     inChars: item.text.length,
   };
   const finishLog = () => env.log?.(formatTurnLog(metrics));
+  const spokeAgo = env.shannonSpokeMsAgo?.(item.startedAt);
   const request: VoiceTurnRequest = {
     requestId,
     conversationId: env.conversationId,
@@ -108,6 +111,7 @@ export async function runDcVoiceTurn(env: DcVoiceTurnEnv, item: TurnItem): Promi
     heard: env.heard(item.userId).map(toHeardItem),
     followsShannonTurn: env.followsShannonTurn(item.startedAt),
     speakingNow: env.speakingNow(),
+    ...(spokeAgo === undefined ? {} : { shannonSpokeMsAgo: spokeAgo }),
     ...(env.situation() ? { situation: env.situation() } : {}),
     sttMs: item.sttMs,
     utteranceMs: item.utteranceMs,
