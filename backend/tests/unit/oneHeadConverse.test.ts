@@ -115,6 +115,10 @@ describe('a voice-channel utterance through the head (SHANNON_ONE_HEAD)', () => 
       presence: { participants: ['444', '333'], heard: [], followsShannonTurn: false, speakingNow: false },
       words: 'こんにちは', voice: { fillerId: 'un', sttMs: 420 },
     });
+    // The text channel's name titles the conversation (the head shows it for a conversation nobody bound); the old body never carries it.
+    const titled = converseVoiceBody({ ...request, conversationTitle: '  雑談  ' });
+    expect(titled.where).toEqual({ platform: 'discord', conversationId: 'discord:777:888', conversationKind: 'channel', voiceChannelId: '999', title: '雑談' });
+    expect(converseVoiceBody({ ...request, conversationTitle: '   ' }).where.title).toBeUndefined();
   });
 
   it('is sent for a channel nobody bound, to /v1/converse, and reads past her face', async () => {

@@ -32,6 +32,8 @@ export interface VoiceTurnRequest {
   requestId: string;
   conversationId: string;
   voiceChannelId: string;
+  /** The conversation's channel name (one head only: `where.title`; the old turn body does not carry it). */
+  conversationTitle?: string;
   sourceUserId: string;
   sourceDisplayName: string;
   userMessage: string;
@@ -488,9 +490,11 @@ function turnBody(request: VoiceTurnRequest) {
 /** One head: the same utterance in the one shape of `POST /v1/converse` (`oneHeadConverse.ts`). */
 export function converseVoiceBody(request: VoiceTurnRequest): ConverseTurn {
   const body = turnBody(request);
+  const title = request.conversationTitle?.trim().slice(0, 80);
   return {
     version: 1, requestId: body.requestId, observedAt: body.observedAt, modality: 'voice',
-    where: { platform: 'discord', conversationId: body.conversationId, conversationKind: 'channel', voiceChannelId: body.voiceChannelId },
+    where: { platform: 'discord', conversationId: body.conversationId, conversationKind: 'channel', voiceChannelId: body.voiceChannelId,
+      ...(title ? { title } : {}) },
     who: { userId: body.sourceUserId, displayName: body.sourceDisplayName },
     presence: {
       participants: body.participants, heard: body.heard, followsShannonTurn: body.followsShannonTurn, speakingNow: body.speakingNow,

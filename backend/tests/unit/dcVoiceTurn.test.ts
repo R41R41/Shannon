@@ -102,6 +102,16 @@ describe('runDcVoiceTurn: through the head', () => {
     expect((await t.sessions[0]!.whenDone()).spokenText).toBe('文0。文1。文2。文3。文4。');
   });
 
+  it('names the conversation by its text channel when the body knows the name (one head titles a conversation nobody bound)', async () => {
+    const silent: VoiceTurnLine = { type: 'done', reply: '', silent: true, reason: 'table_talk' };
+    const t = setup({ turn: scriptedTurn({ respond: false, filler: null }, [silent]), env: { title: () => ' 雑談 ' } });
+    await runDcVoiceTurn(t.env, t.item);
+    expect(t.client.turn.mock.calls[0]![0]).toMatchObject({ conversationId: 'discord:1:2', conversationTitle: '雑談' });
+    const nameless = setup({ turn: scriptedTurn({ respond: false, filler: null }, [silent]) });
+    await runDcVoiceTurn(nameless.env, nameless.item);
+    expect(nameless.client.turn.mock.calls[0]![0]).not.toHaveProperty('conversationTitle');
+  });
+
   it('does not play a filler it has no audio for', async () => {
     const t = setup({ fillers: false, turn: scriptedTurn({ respond: true, filler: { id: 'un', text: 'うん。' } }, [sentence(0, 'はい。'), done('はい。')]) });
     await runDcVoiceTurn(t.env, t.item);

@@ -29,6 +29,8 @@ export interface DcVoiceGuildDeps {
   guildId: string;
   textChannelId: string;
   voiceChannelId: string;
+  /** The text channel's own name, for the head to title a conversation nobody bound (one head). */
+  title?: () => string | undefined;
   receiver: ReceiverLike;
   /** EndBehaviorType.AfterSilence */
   endBehaviorAfterSilence: number;
@@ -252,6 +254,7 @@ export class DcVoiceGuildSession implements MouthHost {
     return {
       conversationId: this.conversationId,
       voiceChannelId: this.deps.voiceChannelId,
+      title: () => this.deps.title?.(),
       client: this.deps.client,
       fillers: this.deps.fillers,
       player: this.deps.player,

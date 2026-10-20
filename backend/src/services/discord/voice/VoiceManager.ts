@@ -874,6 +874,10 @@ export class VoiceManager implements VoiceGateway {
         guildId,
         textChannelId,
         voiceChannelId,
+        title: () => {
+          const channel = this.client.channels.cache.get(textChannelId);
+          return channel && 'name' in channel && typeof channel.name === 'string' ? channel.name : undefined;
+        },
         receiver: connection.receiver as unknown as DcVoiceGuildDeps['receiver'],
         endBehaviorAfterSilence: EndBehaviorType.AfterSilence,
         decodeOpus: (packets) => this.decodeOpusBuffers(packets),

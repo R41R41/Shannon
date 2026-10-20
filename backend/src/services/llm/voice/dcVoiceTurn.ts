@@ -24,6 +24,8 @@ import { formatTurnLog, type TurnMetrics, type TurnPath } from '../../discord/vo
 export interface DcVoiceTurnEnv {
   conversationId: string;
   voiceChannelId: string;
+  /** The conversation's channel name, when known (one head titles a conversation nobody bound by it). */
+  title?(): string | undefined;
   client: Pick<ShannonCoreVoiceClient, 'turn' | 'speech' | 'said'>;
   fillers: FillerSource;
   player: Pick<SpeechPlayer, 'open'>;
@@ -97,6 +99,7 @@ export async function runDcVoiceTurn(env: DcVoiceTurnEnv, item: TurnItem): Promi
     requestId,
     conversationId: env.conversationId,
     voiceChannelId: env.voiceChannelId,
+    ...(env.title?.()?.trim() ? { conversationTitle: env.title?.()?.trim() } : {}),
     sourceUserId: item.userId,
     sourceDisplayName: item.name,
     userMessage: item.text,
