@@ -40,6 +40,8 @@ export interface VoiceTurnRequest {
   heard: VoiceHeardItem[];
   followsShannonTurn: boolean;
   speakingNow: boolean;
+  /** A backchannel the body already started playing without waiting for the decision (solo VC only). */
+  fillerId?: string;
   situation?: string;
   sttMs?: number;
   utteranceMs?: number;
@@ -467,6 +469,7 @@ function turnBody(request: VoiceTurnRequest) {
     })),
     followsShannonTurn: request.followsShannonTurn,
     speakingNow: request.speakingNow,
+    ...(request.fillerId ? { fillerId: request.fillerId.slice(0, 80) } : {}),
     ...(request.situation ? { situation: request.situation.slice(0, 300) } : {}),
     ...(request.sttMs === undefined ? {} : { sttMs: Math.max(0, Math.round(request.sttMs)) }),
     ...(request.utteranceMs === undefined ? {} : { utteranceMs: Math.max(0, Math.round(request.utteranceMs)) }),
