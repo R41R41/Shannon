@@ -345,14 +345,17 @@ class MoveTo extends InstantSkill {
       const travelBudgetMs = Math.min(cap, handDigging ? longestMs
         : Math.min(Math.max(30_000, (distance / (isInWater ? SLOWEST_SWIM_SPEED : SLOWEST_TRAVEL_SPEED)) * 1000 + digMs), longestMs));
       const travelStartedAt = Date.now();
-      let gotoResult = await gotoSafe(this.bot, goal, { timeoutMs: travelBudgetMs });
+      // A far walk through rock is walked on the ground, along a tunnel cut before, or along a straight / 1:1 stair cut now
+      // (utils/rockTravel); a walk that digs and lays blocks at the route search's whim zigzagged in run 21.
+      const rockTravel = !isInWater && !handDigging;
+      let gotoResult = await gotoSafe(this.bot, goal, { timeoutMs: travelBudgetMs, rockTravel });
       // Still in the water and not there: the pathfinder plans no step up out
       // of a liquid. Climb the bank at the waterline, then travel on from land.
       if (waterLevelUnderBody(this.bot as any) !== null && !this.shouldInterrupt()
         && (!gotoResult.success || !goal.isEnd(this.bot.entity.position.floored() as unknown as Move))
         && await swimOntoBank(this.bot as any, x, z)) {
         log.info('🏊 水際の岸へ泳ぎ上がった。陸から移動を続ける');
-        gotoResult = await gotoSafe(this.bot, goal, { timeoutMs: Math.max(5_000, travelBudgetMs - (Date.now() - travelStartedAt)) });
+        gotoResult = await gotoSafe(this.bot, goal, { timeoutMs: Math.max(5_000, travelBudgetMs - (Date.now() - travelStartedAt)), rockTravel });
       }
       if (gotoResult.stuckBlock) stuckBlockRef.info = gotoResult.stuckBlock;
       if (!gotoResult.success) executorActivity = gotoResult.activity ?? null;

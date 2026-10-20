@@ -19,8 +19,13 @@ import { getWaterLevel } from './waterLevel.js';
 import { actionSignal, assertActionActive, reportActionProgress } from '../execution/ActionExecution.js';
 import { actionDelay } from '../execution/observedWait.js';
 import { nextLeg, configuredLegM, LEG_ATTEMPTS } from './farLegs.js';
+import { chooseRockTravel } from './rockTravel.js';
+import { walkCells } from './tunnelWalk.js';
 
 const log = createLogger('Minebot:gotoSafe');
+
+/** Rounds of "choose a way, take it, look again" a far walk through rock gets before the route search takes what is left (utils/rockTravel). */
+const MAX_ROCK_ROUNDS = 5;
 
 export interface GotoSafeOptions {
   /**
@@ -51,6 +56,14 @@ export interface GotoSafeOptions {
   logStuck?: boolean;
   /** 後方互換: 旧 stuckAbortCount → macroStuckAbort にマップ */
   stuckAbortCount?: number;
+  /**
+   * A far walk to a place with a height, through rock, is made on the ground that neither digs nor lays a block, along a tunnel cut
+   * before, or along a straight / 1:1 stair tunnel cut now (utils/rockTravel); the route search only when none fits. Off unless asked
+   * for (move-to asks): the escapes and short walks of the other callers keep the route search.
+   */
+  rockTravel?: boolean;
+  /** Called every few steps of a tunnel cut by a rockTravel walk: the stone it brings in is thrown away here. */
+  tunnelTidy?: () => Promise<void>;
 }
 
 export interface GotoSafeResult {
@@ -146,6 +159,40 @@ export async function gotoSafe(
   let idleLegs = 0;
   /** Searches that gave up after the body had got on, asked again from where it stood. */
   let replans = 0;
+
+  // A far walk through rock: the ground as it is, a tunnel cut before, or a straight / 1:1 stair cut now. Run 21: seven far walks of
+  // 37-43 m over a hill took 58-82 s each in the route search's mix of digging and laying, and again on the way back.
+  for (let round = 0; opts.rockTravel && round < MAX_ROCK_ROUNDS && Date.now() < deadline; round++) {
+    assertActionActive(bot);
+    const choice = chooseRockTravel(bot, goal);
+    if (choice.mode === 'default') { if (round === 0 && logStuck) log.debug(`岩の移動: 従来の経路探索（${choice.why}）`); break; }
+    if (choice.mode === 'walk') {
+      log.info(`🥾 岩の多い遠い移動: 掘らず・置かずに地面を歩ける道があります（約${choice.seconds.toFixed(0)}秒）`);
+      reportActionProgress(bot, 'navigate', { rockTravel: 'walk', seconds: Math.round(choice.seconds) }, true);
+      const navigator = bot.pathfinder as unknown as { movements?: unknown; setMovements(movements: unknown): void };
+      const previous = navigator.movements;
+      navigator.setMovements(choice.movements);
+      let seg: SegmentResult;
+      try {
+        seg = await runGotoSegment(bot, goal, { checkIntervalMs, microStuckCount, stuckThreshold, macroCheckMs, macroMinProgress, timeoutMs: deadline - Date.now(), logStuck });
+      } finally {
+        if (previous) { try { navigator.setMovements(previous); } catch { /* the walk's profile stays */ } }
+      }
+      assertActionActive(bot);
+      if (seg.result === 'success') return { success: true };
+      if (seg.result === 'timeout') return { success: false, error: 'timeout', stuckBlock: seg.stuckBlock, activity: seg.activity };
+      break;
+    }
+    log.info(`⛏️ 岩の多い遠い移動: ${choice.source === 'trail' ? '掘ってきた道をたどります' : 'まっすぐ・斜めの階段で掘り進みます'}`
+      + `（${choice.cells.length}歩、約${choice.seconds.toFixed(0)}秒${choice.digs ? `、掘る所${choice.digs}か所` : ''}）`);
+    reportActionProgress(bot, 'navigate', { rockTravel: choice.source, steps: choice.cells.length, seconds: Math.round(choice.seconds) }, true);
+    const outcome = await walkCells(bot, choice.cells, { isEnd: feet => goal.isEnd(feet as never), deadline, tidy: opts.tunnelTidy });
+    log.info(`⛏️ トンネルの歩き: ${outcome.stopped}（${outcome.steps}歩、掘った${outcome.digs}か所${outcome.reason ? `、${outcome.reason}` : ''}）`);
+    if (outcome.stopped === 'reached') return { success: true };
+    if (outcome.stopped === 'timeout') return { success: false, error: 'timeout' };
+    // Not a single step: the same choice would stop in the same place; the route search takes over.
+    if (outcome.steps < 1) break;
+  }
 
   while (Date.now() < deadline) {
     assertActionActive(bot);
