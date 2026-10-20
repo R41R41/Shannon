@@ -1,6 +1,7 @@
 import { Vec3 } from 'vec3';
 import { createLogger } from '../../../utils/logger.js';
-import { actionLeaseStatus, activeActionCapabilities, createMotorPort, executeAction, hasActiveSafetyLease, physicalActionBusy, preemptLowerPriorityActions } from '../execution/ActionExecution.js';
+import { actionLeaseStatus, activeActionCapabilities, createMotorPort, executeAction, hasActiveSafetyLease, physicalActionBusy, physicalActionCapabilities, preemptLowerPriorityActions } from '../execution/ActionExecution.js';
+import { isHeadCombatActive } from './combatOwner.js';
 import { creeperLit } from './creeperFuse.js';
 import { FALLBACK_FOOD_POINTS, RAW_FOOD } from '../constantSkills/autoEat.js';
 import { edgeRisk, fallIsDangerous } from './edgeGuard.js';
@@ -102,6 +103,19 @@ const CREEPER_REACH = 4.5;
 const ARROW_REACH = 12;
 const HOSTILE_NEAR = 5;
 const RETRY_AFTER_MS = 3000;
+/**
+ * Short work at a bench or a chest: a craft takes 1 to 3 s, a withdrawal less. The armour reflex waits for these to end rather than cut
+ * them unless an enemy is this near (run 21: it cut craft-one iron_chestplate the moment the piece appeared in the pack, with a skeleton
+ * 12 m away, and the command came back failed although the piece had been made and worn).
+ */
+const BENCH_SKILLS: ReadonlySet<string> = new Set(['craft-one', 'withdraw-from-container', 'withdraw-from-furnace', 'deposit-to-container', 'use-stonecutter',
+  'enchant-item', 'repair-item']);
+const BENCH_THREAT_RANGE = 7;
+/** Every physical action running is bench work (and there is at least one). */
+function onlyBenchWork(bot: object): boolean {
+  const running = physicalActionCapabilities(bot);
+  return running.length > 0 && running.every(capability => BENCH_SKILLS.has(capability));
+}
 
 type Item = { name: string; type?: number; slot?: number };
 interface FloorEntity {
@@ -955,7 +969,16 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
     }
     if (outcome === 'released') { state.retreat.done = true; state.retreat.release?.(); return; }
     if (state.retreat.engaged || state.busy) return;
-    if (config.flee) {
+    // The planner's own fight (combat, combat-engage, attack-nearest, attack-continuously) holds the body: the floor neither runs from it
+    // nor walls the body in, whatever the health (down to the yield limit of combatOwner). Run 21: three fights chosen in a cave were
+    // each dropped by this flee, and for 140 s nobody attacked. A flee already under way is ended, not carried on.
+    const headFight = config.flee && isHeadCombatActive(bot);
+    if (headFight) {
+      state.shelterWanted = false;
+      const episode = state.fleeEpisode;
+      if (episode) { state.fleeEpisode = undefined; try { episode.end?.('cut'); } catch { /* a report must not change what the reflex did */ } }
+    }
+    if (config.flee && !headFight) {
       let threat: ReturnType<typeof fleeStart> = null;
       try { threat = fleeStart(bot, state, now()); } catch { threat = null; }
       if (threat) {
@@ -1029,7 +1052,9 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
         return { success: true, result: `${food!.name}を食べた` };
       }, 'eat').then(result => { if (!result?.success) failed(); })
         .catch(() => failed()).finally(() => { state.busy = null; });
-    } else if (armor && bot.equip && !hasActiveSafetyLease(bot) && (!physicalActionBusy(bot) || (hostileWithin(bot, 16, config.wideThreats) && !(config.wideThreats && escapeRunning(bot))))
+    } else if (armor && bot.equip && !hasActiveSafetyLease(bot) && (!physicalActionBusy(bot) || (hostileWithin(bot, 16, config.wideThreats) && !(config.wideThreats && escapeRunning(bot))
+        // A craft or a withdrawal is not cut for armour unless an enemy is close: the armour goes on when it ends (run 21).
+        && !(config.wideThreats && onlyBenchWork(bot) && !hostileWithin(bot, BENCH_THREAT_RANGE, true, true))))
       && (!budget || budget.allow('armor', bot.health ?? 20))) {
       state.busy = 'armor'; state.engagements.armor++;
       log.info(`🛡️ 防具を着ける: ${armor.item.name}`);

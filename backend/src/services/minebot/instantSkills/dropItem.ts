@@ -3,6 +3,8 @@ import { CustomBot, InstantSkill } from '../types.js';
 import { createLogger } from '../../../utils/logger.js';
 import { actionDelay } from '../execution/observedWait.js';
 import { planDumpPit, type DumpPitPlan } from '../utils/dumpPit.js';
+import { holdClutterTidy } from '../utils/inventoryRoom.js';
+import { newItemEntities, noteSelfDropped, type DroppedLike } from '../utils/selfDropped.js';
 
 const log = createLogger('Minebot:Skill:dropItem');
 
@@ -17,8 +19,15 @@ const AIR = new Set(['air', 'cave_air', 'void_air']);
 
 /** 捨てたあとに退く距離（ブロック）— 自動ピックアップ半径から外す */
 const RETREAT_AFTER_TOSS_BLOCKS = 6;
-/** A dropped item is picked up from within a block of the body, and not for its first two seconds on the ground. */
-const PICKUP_CLEARANCE_BLOCKS = 2.5;
+/**
+ * A dropped item is picked up from within a block of the body (1.3 with the item's own width), and not for its first two seconds on the
+ * ground. The body ends this far from where it threw: run 21 stood 2.5 off in a narrow place and took 401 of 400 cobblestone back.
+ */
+const PICKUP_CLEARANCE_BLOCKS = 3.5;
+/** A thrown item lying this close (blocks, level) to the body is within its pickup reach. */
+const PICKUP_REACH_BLOCKS = 1.8;
+/** How far from where it threw the body looks for a place to stand when the usual retreat spots all failed (steps of a walk). */
+const FAR_SPOT_STEPS = 12;
 const PICKUP_DELAY_MS = 2000;
 const PIT_SEARCH_RADIUS = 10;
 /** With nowhere to walk to, a throw needs this many open cells ahead to land out of reach. */
@@ -183,6 +192,67 @@ class DropItem extends InstantSkill {
     return clear();
   }
 
+  /**
+   * Places to stand at least `minDistance` blocks (level) from where something was thrown, found by a walk over standable cells from the
+   * body, fewest steps first. The usual retreat spots are eight points on a circle; in a winding tunnel none of them is standable, and the
+   * body stayed beside the heap (run 21: 401 of 400 picked up again).
+   */
+  private farSpots(fromX: number, fromZ: number, minDistance: number): Array<[number, number, number]> {
+    const start = this.bot.entity.position;
+    const sx = Math.floor(start.x), sy = Math.floor(start.y), sz = Math.floor(start.z);
+    const seen = new Set<string>([`${sx},${sy},${sz}`]);
+    let frontier: Array<[number, number, number]> = [[sx, sy, sz]];
+    const found: Array<[number, number, number]> = [];
+    for (let step = 0; step < FAR_SPOT_STEPS && frontier.length && found.length < 4; step++) {
+      const next: Array<[number, number, number]> = [];
+      for (const [x, y, z] of frontier) {
+        for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+          for (const dy of [0, 1, -1]) {
+            const nx = x + dx, ny = y + dy, nz = z + dz;
+            const key = `${nx},${ny},${nz}`;
+            if (seen.has(key) || !canStandAt(this.bot, nx, ny, nz)) continue;
+            seen.add(key);
+            next.push([nx, ny, nz]);
+            if (Math.hypot(nx + 0.5 - fromX, nz + 0.5 - fromZ) >= minDistance && found.length < 4) found.push([nx, ny, nz]);
+            break;
+          }
+        }
+      }
+      frontier = next;
+    }
+    return found;
+  }
+
+  /** Item entities of this kind that appeared since the throw, remembered as the body's own (no pickup goes back for them). */
+  private noteThrown(itemName: string, lyingBefore: Set<number>): DroppedLike[] {
+    const fresh = newItemEntities(this.bot as any, lyingBefore, itemName);
+    noteSelfDropped(this.bot, itemName, fresh);
+    return fresh;
+  }
+
+  /** Whether a thrown item lies within the body's pickup reach. */
+  private strayNearBody(fresh: DroppedLike[]): boolean {
+    const here = this.bot.entity.position;
+    return fresh.some((entity: any) => entity.position && Math.hypot(entity.position.x - here.x, entity.position.z - here.z) < PICKUP_REACH_BLOCKS
+      && entity.position.y > here.y - 1.2 && entity.position.y < here.y + 2.2);
+  }
+
+  /**
+   * Throws `count` of the kind. Tools do not stack, and bot.toss takes them in slot order: asked to throw three of five stone pickaxes it
+   * threw the first three, the good ones included. The most worn go first, the best are kept (run 21 carried five stone pickaxes).
+   */
+  private async tossItems(itemName: string, type: number, count: number): Promise<void> {
+    const bot = this.bot as any;
+    const stacks = this.bot.inventory.items().filter(entry => entry.name === itemName);
+    const single = Number(bot.registry?.itemsByName?.[itemName]?.stackSize) === 1 || /_(pickaxe|axe|shovel|hoe|sword)$/.test(itemName);
+    if (single && typeof bot.tossStack === 'function' && stacks.length > count) {
+      const left = (entry: any) => entry.maxDurability > 0 ? entry.maxDurability - (entry.durabilityUsed ?? 0) : Infinity;
+      for (const entry of [...stacks].sort((a, b) => left(a) - left(b)).slice(0, count)) await bot.tossStack(entry);
+      return;
+    }
+    await this.bot.toss(type, null, count);
+  }
+
   /** Free slots in the pack, or null when the pack cannot say. */
   private freeSlots(): number | null {
     const inventory = this.bot.inventory as { emptySlotCount?: () => number };
@@ -262,6 +332,8 @@ class DropItem extends InstantSkill {
   }
 
   async runImpl(itemName: string, count: number = 1) {
+    // The pit this digs goes through dig-block-at, whose cheap tidy check must not start a second throw inside this one.
+    const release = holdClutterTidy(this.bot);
     try {
       const stacks = this.bot.inventory.items().filter((i) => i.name === itemName);
       const item = stacks[0];
@@ -277,8 +349,6 @@ class DropItem extends InstantSkill {
       // 74 granite, it dropped the 10 of one stack).
       const dropCount = Math.min(count, stacks.reduce((sum, i) => sum + i.count, 0));
       const moveTo = this.bot.instantSkills?.getSkill('move-to');
-      const tossX = this.bot.entity.position.x;
-      const tossZ = this.bot.entity.position.z;
       const slotsBefore = this.freeSlots();
 
       // No pit to hand and the place shut in: one is dug (see digDumpPit), before the item is taken in hand.
@@ -347,8 +417,12 @@ class DropItem extends InstantSkill {
       }
       const lyingBefore = new Set<number>(Object.values((this.bot as any).entities ?? {}).filter((entity: any) => entity?.name === 'item' || entity?.displayName === 'Item')
         .map((entity: any) => entity.id));
-      await this.bot.toss(item.type, null, dropCount);
+      // Where the throw is made from (the rim of a pit, not the place the order began): the body must end this far from here.
+      const tossX = this.bot.entity.position.x;
+      const tossZ = this.bot.entity.position.z;
+      await this.tossItems(itemName, item.type, dropCount);
       await actionDelay(this.bot, 80);
+      let fresh = this.noteThrown(itemName, lyingBefore);
       log.info(`投げました: ${itemName}×${dropCount}（モード ${mode}${dugPit ? '・掘った穴' : ''}、いま所持 ${held()}、位置 ${this.bot.entity.position.toString()}）`);
 
       const tossedAt = Date.now();
@@ -360,9 +434,23 @@ class DropItem extends InstantSkill {
         // Seen at rest three blocks down and the floor put back over them: nothing can pick them up, the two seconds need not be waited.
         sealed = coverNote.includes('塞ぎました') && this.itemsInPit(dugPit, lyingBefore, itemName) > 0;
       }
-      const away = mode === 'pit' ? true : await this.retreatTo(this.bot, spots, tossX, tossZ);
+      fresh = this.noteThrown(itemName, lyingBefore);
+      let away = true;
+      if (mode === 'retreat') away = await this.retreatTo(this.bot, spots, tossX, tossZ);
+      // At the rim of a pit that is not sealed, an item that landed on the rim (not in the hole) is within reach: the body walks off before
+      // its two seconds are out, as it does without a pit. In the hole it is three blocks down, out of reach.
+      else if (!sealed && this.strayNearBody(fresh)) {
+        const strays = fresh as any[];
+        const apart = (spot: [number, number, number]) => Math.min(...strays.map(entity => entity.position ? Math.hypot(entity.position.x - spot[0] - 0.5, entity.position.z - spot[2] - 0.5) : Infinity));
+        spots = this.retreatSpots(this.bot).sort((a, b) => apart(b) - apart(a));
+        away = await this.retreatTo(this.bot, spots, tossX, tossZ);
+      }
+      // The usual spots all failed (a winding tunnel): any standable cell far enough from the heap will do.
+      if (!away && !sealed && !this.shouldInterrupt()) away = await this.retreatTo(this.bot, this.farSpots(tossX, tossZ, PICKUP_CLEARANCE_BLOCKS + 0.5), tossX, tossZ);
+      fresh = this.noteThrown(itemName, lyingBefore);
       // A thrown item can be picked up again after two seconds. What the pack holds after that is the result.
       if (!sealed) await actionDelay(this.bot, Math.max(0, PICKUP_DELAY_MS + 400 - (Date.now() - tossedAt)));
+      this.noteThrown(itemName, lyingBefore);
       const back = Math.max(0, held() - (before - dropCount));
       if (back > 0) log.info(`拾い直し: ${itemName} ${back}個（モード ${mode}、近くの落とし物: ${Object.values((this.bot as any).entities ?? {}).filter((entity: any) => entity?.name === 'item')
         .map((entity: any) => `${entity.getDroppedItem?.()?.name ?? '?'}@${entity.position.x.toFixed(1)},${entity.position.y.toFixed(1)},${entity.position.z.toFixed(1)}`).join(' ')}）`);
@@ -390,6 +478,8 @@ class DropItem extends InstantSkill {
         success: false,
         result: `ドロップエラー: ${error.message}`,
       };
+    } finally {
+      release();
     }
   }
 }

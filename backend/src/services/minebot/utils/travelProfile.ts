@@ -8,6 +8,29 @@ export const TRAVEL_DIG_COST = 3;
 export const TRAVEL_PLACE_COST = 5;
 
 /**
+ * The profile of a walk that neither digs nor lays a block (utils/rockTravel): the ground as it is, no towers, no parkour (a jump
+ * near a rim is what the cliff-edge stop of the body guards against), falls of four at most. Run 21's far walks over a hill were
+ * planned with digging at 3 and laying at 5 and came out as zigzags of both; where the ground can be walked, this is the walk.
+ */
+export function walkOnlyProfile(isInWater: boolean) {
+  return [
+    false, // allow1by1towers
+    true,  // allowSprinting
+    false, // allowParkour
+    true,  // canOpenDoors
+    false, // canDig
+    true,  // dontMineUnderFallingBlock
+    1,     // digCost (unused)
+    isInWater, // allowFreeMotion
+    true,  // canSwim
+    4,     // maxDropDown
+    isInWater ? 2 : 10, // liquidCost
+    false, // canPlace
+    1,     // placeCost (unused)
+  ] as const;
+}
+
+/**
  * The movement profile move-to travels with, as setMovements/buildMovements arguments after the bot.
  * check-path-to plans with the same one, so that its "reachable" means what a move would do (it used to compare
  * distances only and said "reachable" to a body no move could take anywhere: common run 7).

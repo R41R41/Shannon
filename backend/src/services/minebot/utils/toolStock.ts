@@ -14,6 +14,7 @@
 import { Vec3 } from 'vec3';
 import { currentAction, nativeActionHost } from '../execution/ActionExecution.js';
 import { isEngaged } from './engagement.js';
+import { pickaxeAllowance } from './inventoryTidy.js';
 import { canHarvest, chooseTool, NEARLY_BROKEN_USES, toolCost, usesLeft, wearCostSeconds, type BlockLike, type ToolLike } from './toolChoice.js';
 
 type Cell = number | null | undefined | { id?: number } | Cell[];
@@ -371,14 +372,22 @@ export async function ensureToolUses(bot: StockBody, blocks: Array<BlockLike & {
     const tableNear = tablesNear(bot, RESTOCK_TABLE_REACH).length > 0;
     const shortfall = need - now;
     const plans: Array<{ def: ItemDef; plan: CraftPlan }> = [];
+    let withheld = '';
     for (const def of defs) {
+      // At most one spare of a tier (two carried), and none beside a good pickaxe of a higher tier: run 21 made a "spare" stone pickaxe
+      // action after action (MAX_SPARE_CRAFTS is per action) and carried five of them beside an iron one, in a pack that was full.
+      const holds = carried.filter(entry => entry.name === def.name).reduce((sum, entry) => sum + entry.count, 0);
+      if (holds >= pickaxeAllowance(carried as never, def.name)) {
+        withheld = withheld || `${def.name}はすでに${holds}本持っています（同じ種類の予備は1本まで、より良いツルハシがあれば作りません）`;
+        continue;
+      }
       const outcome = planCraft(registry, carried, def.name, tableNear);
       if ('plan' in outcome) plans.push({ def, plan: outcome.plan }); else lastMissing = lastMissing || `${def.name}: ${outcome.missing}`;
     }
     // The first (cheapest) that covers what is short, else the one with the most uses.
     const chosen = plans.find(entry => entry.def.maxDurability! - NEARLY_BROKEN_USES >= shortfall)
       ?? [...plans].sort((a, b) => b.def.maxDurability! - a.def.maxDurability!)[0];
-    if (!chosen) break;
+    if (!chosen) { if (withheld) lastMissing = lastMissing ? `${lastMissing}。${withheld}` : withheld; break; }
     spareCrafts.set(root, (spareCrafts.get(root) ?? 0) + 1);
     const tablesBefore = tablesNear(bot, RESTOCK_TABLE_REACH + 2);
     let failed = '';

@@ -5,6 +5,7 @@ import { createLogger } from '../../../utils/logger.js';
 import { gotoSafe } from '../utils/gotoSafe.js';
 import { actionDelay } from '../execution/observedWait.js';
 import { BED_EXPLODES, bedExplodesHere, isBedName } from '../utils/bedRules.js';
+import { planBedSpot, walkableCells } from '../utils/bedSpot.js';
 import { hostileNear, PICKUP_SAFE_RANGE } from './craftOne.js';
 
 const { goals } = pathfinder;
@@ -13,7 +14,12 @@ const log = createLogger('Minebot:Skill:sleepInBed');
 /** Blocks a placed block takes the place of (a bed can be set down on grass, not only in air). */
 export const REPLACEABLE = new Set(['air', 'cave_air', 'void_air', 'short_grass', 'grass', 'tall_grass', 'fern', 'large_fern', 'dead_bush',
   'leaf_litter', 'snow', 'vine', 'glow_lichen', 'seagrass']);
-export const isFreeCell = (block: { name?: string } | null | undefined) => !!block && REPLACEABLE.has(String(block.name));
+/** The wider bed search: its radius, and the steps of walk a spot may be from the body (run 21). */
+const BED_WIDE_RADIUS = 8;
+const BED_WALK_STEPS = 10;
+/** Blocks put into a hole in the floor under a bed, in the order used (rock the body has to spare). */
+const BED_FILLERS = ['cobblestone', 'cobbled_deepslate', 'andesite', 'diorite', 'granite', 'tuff', 'dirt', 'stone', 'deepslate', 'netherrack'];
+export const isFreeCell =(block: { name?: string } | null | undefined) => !!block && REPLACEABLE.has(String(block.name));
 /** The cells the body's box (0.6 wide, 1.8 high) is in: a block placed there is refused by the server. */
 export function bodyCells(at: { x: number; y: number; z: number }): Vec3[] {
   const cells: Vec3[] = [];
@@ -56,12 +62,17 @@ class SleepInBed extends InstantSkill {
    * replaces) and on solid ground, neither in a cell the body itself fills. Nearest first, within reach. Run 17 failed three times
    * with "something may be standing in that cell" (its own body) and once on a grass cell (D54).
    */
-  findPlaceForBed(): Vec3 | null {
+  findPlaceForBed(radius: number = 3, reach: number = 4, walk?: Map<string, number>, levels: number[] = [0, -1, 1]): Vec3 | null {
     const at = this.bot.entity.position;
     const feet = new Vec3(Math.floor(at.x), Math.floor(at.y), Math.floor(at.z));
     const body = bodyCells(at);
     const spots: Array<{ pos: Vec3; distance: number }> = [];
-    for (let x = -3; x <= 3; x++) for (let z = -3; z <= 3; z++) for (const y of [0, -1, 1]) {
+    // With `walk` (cells the body can reach in a few steps) a spot counts only when one of them is beside it.
+    const walkable = (pos: Vec3) => !walk || [...walk.keys()].some(key => {
+      const [wx, wy, wz] = key.split(',').map(Number);
+      return Math.abs(wx - pos.x) <= 2 && Math.abs(wz - pos.z) <= 2 && Math.abs(wy - pos.y) <= 2;
+    });
+    for (let x = -radius; x <= radius; x++) for (let z = -radius; z <= radius; z++) for (const y of levels) {
       const pos = feet.offset(x, y, z);
       const dx = pos.x - feet.x, dz = pos.z - feet.z;
       if (!dx && !dz) continue;
@@ -72,10 +83,77 @@ class SleepInBed extends InstantSkill {
       const floor = (cell: Vec3) => this.bot.blockAt(cell.offset(0, -1, 0))?.boundingBox === 'block';
       if (!free(pos) || !free(head) || !floor(pos) || !floor(head)) continue;
       const distance = pos.offset(0.5, 0.5, 0.5).distanceTo(at.offset(0, 1.62, 0));
-      if (distance <= 4) spots.push({ pos, distance });
+      if (distance <= reach && walkable(pos)) spots.push({ pos, distance });
     }
     spots.sort((a, b) => a.distance - b.distance);
     return spots[0]?.pos ?? null;
+  }
+
+  /**
+   * The same search over eight blocks round, for a spot the body can walk to in BED_WALK_STEPS steps or fewer (a cheap walk over standable
+   * cells, not the path planner). Run 21 found nothing in a rock passage's three blocks while a wider cave was a few steps off.
+   */
+  findWiderPlaceForBed(): Vec3 | null {
+    let walk: Map<string, number>;
+    try { walk = walkableCells(this.bot as any, this.bot.entity.position, BED_WALK_STEPS); } catch { return null; }
+    // Up and down a few levels too: a cave below a stair is a short walk.
+    return this.findPlaceForBed(BED_WIDE_RADIUS, Infinity, walk, [0, -1, 1, -2, 2, -3, 3, -4]);
+  }
+
+  /** The foot cell and head cell of a spot being made, so the body faces the way the bed is to lie when it places it. */
+  private plannedHead: Vec3 | null = null;
+
+  /**
+   * Makes a spot where there is none: rock cells over and in the bed's two cells are dug out and a hole in the floor is filled (utils/bedSpot
+   * plans it, nearest and cheapest first). Returns the foot cell, or why not. Dangerous cells are never touched (liquid or fire beside a
+   * cell to dig, goods and workstations, obsidian); a dig that is refused ends it with what was refused.
+   */
+  private async prepareBedSpot(): Promise<{ pos: Vec3 } | { failure: string; failureType: string }> {
+    const items = this.bot.inventory.items();
+    const hasPickaxe = items.some(item => item.name.endsWith('_pickaxe'));
+    const fillers = items.filter(item => BED_FILLERS.includes(item.name)).reduce((sum, item) => sum + item.count, 0);
+    const plan = planBedSpot(this.bot as any, this.bot.entity.position, { isFree: isFreeCell, hasPickaxe, fillers, body: bodyCells(this.bot.entity.position) });
+    if (!plan) {
+      return { failureType: 'no_bed_spot', failure: 'ベッドを設置できる適切な場所が見つかりませんでした（周囲8マスの歩ける所を探し、岩を掘って2×1の床を作る方法も試しましたが、'
+        + `掘れる安全な場所がありません。${hasPickaxe ? '' : 'ツルハシを持っていません。'}${fillers > 0 ? '' : '床の穴を埋める石も持っていません。'}溶岩・水・設備のそばは掘りません）。開けた所へ移動してからもう一度試してください` };
+    }
+    for (const cell of plan.dig) {
+      let dug: { success?: boolean; result?: unknown } = { success: false };
+      try { dug = await this.callSkill('dig-block-at', cell.x, cell.y, cell.z, false); } catch (error) { if (this.shouldInterrupt()) throw error; }
+      if (!dug.success) {
+        return { failureType: 'bed_spot_prepare_failed', failure: `ベッドを置く場所を作ろうとして(${cell.x}, ${cell.y}, ${cell.z})を掘りましたが掘れませんでした（${String(dug.result ?? '').slice(0, 100)}）` };
+      }
+    }
+    for (const cell of plan.fill) {
+      const filler = this.bot.inventory.items().find(item => BED_FILLERS.includes(item.name));
+      let placed: { success?: boolean; result?: unknown } = { success: false };
+      if (filler) { try { placed = await this.callSkill('place-block-at', filler.name, cell.x, cell.y, cell.z); } catch (error) { if (this.shouldInterrupt()) throw error; } }
+      if (!placed.success) {
+        return { failureType: 'bed_spot_prepare_failed', failure: `ベッドの床になる穴(${cell.x}, ${cell.y}, ${cell.z})を埋められませんでした（${String(placed.result ?? '床を埋める石がありません').slice(0, 100)}）` };
+      }
+    }
+    // What stands there now has to be what the plan wanted: two free cells with a floor under, and the air over them.
+    const free = (cell: Vec3) => isFreeCell(this.bot.blockAt(cell));
+    const floor = (cell: Vec3) => this.bot.blockAt(cell.offset(0, -1, 0))?.boundingBox === 'block';
+    if (![plan.pos, plan.head].every(cell => free(cell) && floor(cell) && free(cell.offset(0, 1, 0)))) {
+      return { failureType: 'bed_spot_prepare_failed', failure: `ベッドを置く場所(${plan.pos.x}, ${plan.pos.y}, ${plan.pos.z})を掘って整えましたが、まだ2×1の床になっていません` };
+    }
+    this.plannedHead = plan.head;
+    log.info(`ベッドの置き場所を作りました: 掘る${plan.dig.length}・床を埋める${plan.fill.length}（${plan.pos.x}, ${plan.pos.y}, ${plan.pos.z}）`);
+    return { pos: plan.pos };
+  }
+
+  /** The nearest hostile mob within eight blocks, if any. */
+  private hostileWithinEight(): { name?: string; distance: number } | null {
+    const hostileMobs = ['zombie', 'skeleton', 'creeper', 'spider', 'enderman', 'witch', 'slime', 'phantom', 'blaze', 'ghast'];
+    for (const entity of Object.values(this.bot.entities)) {
+      if (!entity || !entity.position) continue;
+      const distance = entity.position.distanceTo(this.bot.entity.position);
+      if (distance > 8) continue;
+      const entityName = entity.name?.toLowerCase() || '';
+      if (hostileMobs.some(mob => entityName.includes(mob))) return { name: entity.name, distance };
+    }
+    return null;
   }
 
   async runImpl(wakeUp?: boolean, isTakeBed?: boolean) {
@@ -233,12 +311,17 @@ class SleepInBed extends InstantSkill {
       }
 
       // ベッドを設置できる場所を探す
+      this.plannedHead = null;
       let placePos = this.findPlaceForBed();
+      // Nothing within three blocks (run 21: a rock passage one block wide): a spot a few steps' walk off, then one made by digging.
+      if (!placePos) placePos = this.findWiderPlaceForBed();
       if (!placePos) {
-        return {
-          success: false,
-          result: 'ベッドを設置できる適切な場所が見つかりませんでした',
-        };
+        const prepared = await this.prepareBedSpot();
+        if ('failure' in prepared) return { success: false, result: prepared.failure, failureType: prepared.failureType, recoverable: true };
+        // The digging took a while: a mob that came meanwhile is still a reason not to lie down.
+        const mob = this.hostileWithinEight();
+        if (mob) return { success: false, result: `ベッドを置く場所を作りましたが、近くに敵がいるため寝られません（${mob.name}が${mob.distance.toFixed(1)}m先にいます）`, failureType: 'hostile_near', recoverable: true };
+        placePos = prepared.pos;
       }
 
       // 設置場所に移動
@@ -247,11 +330,17 @@ class SleepInBed extends InstantSkill {
         this.bot.pathfinder.stop();
         await gotoSafe(this.bot, new goals.GoalNear(placePos.x, placePos.y, placePos.z, 2), { timeoutMs: 15_000 });
         // From where it stands now the bed would lie another way (its head is away from the body): the spot is read again.
-        placePos = this.findPlaceForBed() ?? placePos;
+        // (A spot that was just made is kept: the cells were cleared for it.)
+        if (!this.plannedHead) placePos = this.findPlaceForBed() ?? placePos;
       }
 
       // ベッドを手に持つ
       await this.bot.equip(bedItem, 'hand');
+      // A spot that was made lies along the cells that were cleared: the body faces the head cell, so the bed is laid that way.
+      const plannedHead = this.plannedHead as Vec3 | null;
+      if (plannedHead && typeof this.bot.lookAt === 'function') {
+        try { await this.bot.lookAt(plannedHead.offset(0.5, 0.5, 0.5), true); } catch { /* placed as the body stands */ }
+      }
 
       // 設置場所の下のブロックを参照ブロックとして使用
       const referenceBlock = this.bot.blockAt(placePos.offset(0, -1, 0));

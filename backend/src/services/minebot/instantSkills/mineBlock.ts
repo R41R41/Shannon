@@ -18,7 +18,7 @@ import { dropBurnsIn } from '../utils/dropFate.js';
 import { digMsWithBestTool as bestToolDigMs } from '../utils/bestToolDigTime.js';
 import { descentFloor, nightGateRefusal } from '../utils/nightGate.js';
 import { axeAdviceNote, isWood, spareToolNote } from '../utils/toolWear.js';
-import { explainNoRoom, makeRoom, TIDY_TIME_MS, tidyPackNow } from '../utils/inventoryRoom.js';
+import { explainNoRoom, makeRoom, TIDY_TIME_MS, tidyIfCluttered, tidyPackNow } from '../utils/inventoryRoom.js';
 import { ensureToolUses, pickaxeUsesFor } from '../utils/toolStock.js';
 import { solidCellsBetween } from '../utils/blockApproachCost.js';
 import { hostileNear } from './craftOne.js';
@@ -384,6 +384,12 @@ class MineBlock extends InstantSkill {
       if (mined > 0) await assessPickaxe(false);
       if (mined >= durabilityCap) { stoppedForTool = true; break; }
       const remainingToMine = goal() - mined;
+      // The body's own limit on the rock its digging brings in (run 21: 545 cobblestone in a 34/36 pack, mine-block refused): a count
+      // over the items each time round, a throw only when a heap is past its limit.
+      toolWarning += await tidyIfCluttered(this.bot as any, (skill, ...args) => this.callSkill(skill, ...args), {
+        asked: keptKinds, timeLeftMs: timeLeftMs(), interrupted: () => this.shouldInterrupt(),
+        blocked: () => hostileNear(this.bot as any, TIDY_SAFE_RANGE) || String((this.bot as any).minebotControlState ?? '').startsWith('emergency'),
+      });
       // Short of room: what tidyPlan names (spare stone, dirt and the like) is thrown away first, and the room looked at again. A
       // ladder probe (2026-10-20) came to ten obsidian with five slots free, full of the rock its descent had dug, and was refused all
       // twenty times it asked. Tidied again when the last time was a while ago: run 20's second mine-block found the tidy "done" from

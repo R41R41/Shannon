@@ -1,6 +1,7 @@
 import { ConstantSkill, CustomBot } from '../types.js';
 import { gotoSafe } from '../utils/gotoSafe.js';
 import { abortable, actionDelay } from '../execution/observedWait.js';
+import { isSelfDropped } from '../utils/selfDropped.js';
 
 const COLLECT_LIMIT_MS = 6_000;
 
@@ -38,6 +39,8 @@ class AutoPickUpItem extends ConstantSkill {
     // 近くのアイテムを探す
     const items = Object.values(this.bot.entities).filter((e: any) => {
       if (e.displayName !== 'Item' && e.name !== 'item') return false;
+      // What the body threw away itself stays where it is (run 21: a tidy's heap was walked back to and taken in again).
+      if (isSelfDropped(this.bot, e)) return false;
 
       const distance = e.position.distanceTo(this.bot.entity.position);
       if (distance > this.pickupRadius) return false;
@@ -74,6 +77,7 @@ class AutoPickUpItem extends ConstantSkill {
     try {
       // エンティティが有効かチェック
       if (!entity || !entity.isValid) return;
+      if (isSelfDropped(this.bot, entity)) return;
 
       // アイテム情報を取得
       const droppedItem = entity.getDroppedItem?.();

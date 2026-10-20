@@ -76,6 +76,63 @@ export function spareRockToDrop(items: Stack[], keep: string[] = []): { name: st
   return best ?? null;
 }
 
+/**
+ * The body's own limit on rock it digs on the way (run 21: the pack was 34/36 with 545 cobblestone a minute after the head's tidy had
+ * thrown 423 of it; the head's procedure tidy keeps 128 and runs only inside procedures). Past CLUTTER_SOFT of one kind, with the pack
+ * short of room (CLUTTER_FEW_SLOTS free or fewer), or past CLUTTER_HARD at any time, the body throws the kind down to CLUTTER_KEEP
+ * (below the head's 128, so the two never fight over the same heap). Kinds the table keeps fewer of (andesite, tuff, dirt...) go down to
+ * their own KEEP. Only kinds this module already throws; a kind not listed is never touched.
+ */
+export const CLUTTER_SOFT = 160;
+export const CLUTTER_HARD = 192;
+export const CLUTTER_FEW_SLOTS = 6;
+const CLUTTER_KEEP: Record<string, number> = { cobblestone: 96, cobbled_deepslate: 96 };
+const CLUTTER_KINDS = ['cobblestone', 'cobbled_deepslate', 'tuff', 'andesite', 'diorite', 'granite', 'dirt', 'coarse_dirt', 'rooted_dirt', 'gravel',
+  'deepslate', 'netherrack', 'sand', 'mud', 'basalt', 'smooth_basalt', 'calcite'];
+
+/** What to throw to bring the rock heaps down: whole kinds over their limit, largest first. Empty when none is over. */
+export function clutterPlan(items: Stack[], freeSlots: number): Array<{ name: string; count: number }> {
+  const totals = new Map<string, number>();
+  for (const item of items) if (CLUTTER_KINDS.includes(item.name)) totals.set(item.name, (totals.get(item.name) ?? 0) + item.count);
+  const plan: Array<{ name: string; count: number }> = [];
+  for (const [name, total] of totals) {
+    const over = total > CLUTTER_HARD || (freeSlots <= CLUTTER_FEW_SLOTS && total > CLUTTER_SOFT);
+    if (!over) continue;
+    const keep = CLUTTER_KEEP[name] ?? KEEP[name] ?? 0;
+    if (total > keep) plan.push({ name, count: total - keep });
+  }
+  return plan.sort((a, b) => b.count - a.count);
+}
+
+/** Pickaxe tiers by worth (a spare of a lower tier is not made, nor kept, beside a good one of a higher). */
+const PICK_TIER: Record<string, number> = { wooden_pickaxe: 0, golden_pickaxe: 1, stone_pickaxe: 2, iron_pickaxe: 3, diamond_pickaxe: 4, netherite_pickaxe: 5 };
+/** Uses a higher-tier pickaxe must have left to count as one that makes a lower-tier spare unnecessary. */
+export const GOOD_PICKAXE_USES = 50;
+interface Tool extends Stack { maxDurability?: number; durabilityUsed?: number }
+const usesOf = (item: Tool) => item.maxDurability && item.maxDurability > 0 ? Math.max(0, item.maxDurability - (item.durabilityUsed ?? 0)) : Infinity;
+
+/**
+ * How many pickaxes of this kind may be carried: the one in use and one spare (two), and a single one when a pickaxe of a higher tier with
+ * at least GOOD_PICKAXE_USES left is carried too (run 21 carried five stone pickaxes beside an iron one, each made as a "spare").
+ */
+export function pickaxeAllowance(items: Tool[], name: string): number {
+  const tier = PICK_TIER[name];
+  if (tier === undefined) return Infinity;
+  const better = items.some(item => (PICK_TIER[item.name] ?? -1) > tier && usesOf(item) >= GOOD_PICKAXE_USES);
+  return better ? 1 : 2;
+}
+
+/** Spare pickaxes over the allowance: the count to throw, by kind. The most worn go first (drop-item chooses by durability). */
+export function surplusPickaxes(items: Tool[]): Array<{ name: string; count: number }> {
+  const plan: Array<{ name: string; count: number }> = [];
+  for (const name of Object.keys(PICK_TIER)) {
+    const carried = items.filter(item => item.name === name).reduce((sum, item) => sum + item.count, 0);
+    const over = carried - pickaxeAllowance(items, name);
+    if (over > 0) plan.push({ name, count: over });
+  }
+  return plan;
+}
+
 /** Whether a kind is one this module would ever throw away (listed in the tables above); everything else is kept. */
 export function isThrowable(name: string): boolean {
   // A kind kept to a whole stack or more (sticks, flint) is as good as never thrown: a stack goes only when what stays is the keep.
