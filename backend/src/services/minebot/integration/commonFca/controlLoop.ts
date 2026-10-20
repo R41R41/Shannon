@@ -3,6 +3,8 @@ import { createLogger } from '../../../../utils/logger.js';
 import { companionBaseUrl } from '../CompanionBodyClient.js';
 import type { BodyCandidateDraft, BodyObservation, BodyTaskContext } from './bodyControlContract.js';
 import type { BodyEventSource } from './bodyEvents.js';
+import { LiveSpeechCourier } from '../../../common/liveSpeech.js';
+import type { LiveRoom, LiveSpeechReceipt } from '../../../common/liveSpeech.js';
 import { MINECRAFT_CONTROL_PATH, type MinecraftControlCommand as Command, type MinecraftControlReceipt as Receipt,
   type MinecraftControlReply, type MinecraftSkillDefinition } from './minecraftControlContract.js';
 
@@ -32,6 +34,8 @@ export interface CommonFcaControlOptions {
   baseUrl: string; token: string; serverId: string; actuator: CommonFcaActuator;
   fetcher?: typeof fetch; now?: () => number; connectionId?: string; pollMilliseconds?: number;
   observer?: CommonFcaObserver;
+  /** Her live lines (session dc-live): taken from a reply, told in the next polls. Default: the Discord sink registered at start-up, if any. */
+  speech?: LiveSpeechCourier;
 }
 const log = createLogger('Minebot:CommonFcaControl');
 /** One poll's wait for the API; a slower reply is a failed poll, not lost contact. */
@@ -64,10 +68,12 @@ export class CommonFcaControlLoop {
   private contactAt = (this.options.now ?? Date.now)();
   /** Events are sent until an API answers without taking them; then again after EVENTS_RETRY_MS (it may have been updated). */
   private eventsRetryAt = 0;
+  private readonly speech: LiveSpeechCourier;
   constructor(private readonly options: CommonFcaControlOptions) {
     this.baseUrl = companionBaseUrl(options.baseUrl);
     this.connectionId = options.connectionId ?? randomUUID();
     this.observation = options.actuator.observe();
+    this.speech = options.speech ?? new LiveSpeechCourier();
   }
   /** A command, an owner or a held body is the loop's: idle work (a pickup walk) starts only when this is false. */
   get leaseHeld(): boolean { return this.owner !== null || this.held || this.active.size > 0; }
@@ -101,7 +107,7 @@ export class CommonFcaControlLoop {
         body: JSON.stringify({ schemaVersion: 1, serverId: this.options.serverId, connectionId: this.connectionId,
           observation: this.observation, candidates: this.options.actuator.candidates(this.observation),
           ...(this.catalogSent !== catalog ? { skills: catalog } : {}),
-          receipts: sent, activeOperationIds: [...this.active.keys()], ...(events.length ? { events } : {}) }),
+          receipts: sent, activeOperationIds: [...this.active.keys()], ...(events.length ? { events } : {}), ...this.liveFields() }),
       });
       if (!response.ok) throw Error('BODY_CONTROL_HTTP');
       const reply = await response.json() as MinecraftControlReply;
@@ -115,6 +121,7 @@ export class CommonFcaControlLoop {
       else if (events.length) this.eventsRetryAt = now + EVENTS_RETRY_MS;
       for (const id of reply.cancel) this.active.get(id)?.controller.abort('server_cancel');
       for (const command of reply.commands) this.accept(command);
+      this.speech.accept(reply.speech);
     } catch (error) {
       // No action replay after lost contact. Command IDs remain tombstoned for this connection.
       this.catalogSent = null;
@@ -128,6 +135,12 @@ export class CommonFcaControlLoop {
       }
       throw error;
     } finally { this.polling = false; }
+  }
+  /** The room and the receipts of her live lines, for a poll; nothing without a sink (the field is absent, as an older body's). */
+  private liveFields(): { liveRoom?: LiveRoom; speechReceipts?: LiveSpeechReceipt[] } {
+    if (!this.speech.active) return {};
+    const room = this.speech.room(), receipts = this.speech.takeReceipts();
+    return { ...(room ? { liveRoom: room } : {}), ...(receipts.length ? { speechReceipts: receipts } : {}) };
   }
   /**
    * How far ahead a command's deadline may lie: the skill's own time from the catalog plus delivery slack. A flat two
