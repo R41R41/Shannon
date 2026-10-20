@@ -33,14 +33,36 @@ export function emptySlotCountSafe(bot: CustomBot): number {
  * 採掘などを続けると溢れやすいとき true。
  * 空きが閾値以下かつ「まだ掘りたい個数」が空きスロット数より多いときに預けを促す。
  */
-export function shouldPauseMiningForDeposit(bot: CustomBot, remainingToMine: number): boolean {
+export function shouldPauseMiningForDeposit(bot: CustomBot, remainingToMine: number, dropNames: string[] = []): boolean {
   const empty = emptySlotCountSafe(bot);
   if (empty <= 0) return true;
   if (remainingToMine <= 0) return false;
-  if (empty <= DEPOSIT_BEFORE_EMPTY_SLOTS_FALLS_TO && remainingToMine > empty) {
-    return true;
+  if (empty > DEPOSIT_BEFORE_EMPTY_SLOTS_FALLS_TO) return false;
+  // What the drops fill, in slots, when their kinds are known: ten obsidian take one slot, not ten. Blocks against slots refused a
+  // ladder probe (2026-10-20) ten obsidian with five slots free, eleven times over.
+  if (dropNames.length) return empty < slotsForDrops(bot, remainingToMine, dropNames);
+  return remainingToMine > empty;
+}
+
+/** The most one block gives of the kinds that drop several (fortune aside). */
+const DROPS_PER_BLOCK: Record<string, number> = {
+  lapis_lazuli: 9, redstone: 5, raw_copper: 5, gold_nugget: 6, glowstone_dust: 4, clay_ball: 4, amethyst_shard: 4, melon_slice: 7,
+};
+
+/**
+ * Slots `blocks` more blocks can fill: each kind they drop as if all of them dropped it (gravel: gravel and flint), the room left in
+ * the stacks already held taken first, and one slot more for what the walk to them digs on the way.
+ */
+export function slotsForDrops(bot: CustomBot, blocks: number, dropNames: string[]): number {
+  const items = bot.inventory.items() as Array<{ name: string; count: number; stackSize?: number }>;
+  const registry = (bot as any).registry?.itemsByName ?? {};
+  let slots = 1;
+  for (const name of new Set(dropNames)) {
+    const stackSize = Math.max(1, Number(registry[name]?.stackSize ?? items.find(item => item.name === name)?.stackSize ?? 64));
+    const room = items.filter(item => item.name === name).reduce((sum, item) => sum + Math.max(0, stackSize - item.count), 0);
+    slots += Math.max(0, Math.ceil((blocks * (DROPS_PER_BLOCK[name] ?? 1) - room) / stackSize));
   }
-  return false;
+  return slots;
 }
 
 export function getItemNameFromEntity(entity: any, mcData: any): string | null {
