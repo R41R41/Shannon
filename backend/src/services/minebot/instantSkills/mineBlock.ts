@@ -28,6 +28,10 @@ const TIDY_SAFE_RANGE = 16;
 /** The room made just before a dig (roomForDig): this many free slots at most are asked for, and only with this much of the action left. */
 const DIG_ROOM_SLOTS = 3;
 const ROOM_TIME_MS = 8_000;
+/** Tries of setting down and digging again the gravel carried for a flint (one in ten each: 30 leave none 4% of the time). */
+const FLINT_CYCLES = 30;
+/** The action's time each try leaves for the result to be told. */
+const FLINT_RESERVE_MS = 8_000;
 /** Candidates ranked by the rock between (utils/blockApproachCost) on each pick; the rest by distance alone, behind them. */
 const REFINED_CANDIDATES = 48;
 /** A deferred drop falls at most this far, and comes to rest this near the body (see canDeferBatchCollection). */
@@ -712,6 +716,10 @@ class MineBlock extends InstantSkill {
       };
     }
 
+    // Gravel is dug for its flint: none came, so the gravel carried is set down and dug again until one does (flintFromGravel).
+    let flintNote = '';
+    if (knownNames.includes('gravel') && !this.bot.inventory.items().some(item => item.name === 'flint')) flintNote = await this.flintFromGravel(timeLeftMs());
+
     // 採掘後のインベントリ差分からドロップアイテムを検出
     const drops = this.detectDrops(beforeInventory).filter(drop => collectionPolicy === 'all'
       || expectedItems.length === 0 || expectedItems.includes(drop.item));
@@ -754,13 +762,13 @@ class MineBlock extends InstantSkill {
       ? `1回の行動の時間（${Math.round((this.maxDurationMs || 120_000) / 1000)}秒）を使い切る前に区切りました。掘った分は回収済みです。`
       : '';
     // Flint is a 10% gravel drop; without the hint a planner keeps searching for more gravel.
-    const flintNote = blockName === 'gravel' && !drops.some(drop => drop.item === 'flint')
-      ? '。flint（火打石）は砂利1個あたり約10%で落ちる。必要なら所持した砂利をplace-block-atで置き直してdig-block-atで掘り直せる'
-      : '';
+    if (!flintNote && blockName === 'gravel' && !this.bot.inventory.items().some(item => item.name === 'flint')) {
+      flintNote = '。flint（火打石）は砂利1個あたり約10%で落ちる。必要なら所持した砂利をplace-block-atで置き直してdig-block-atで掘り直せる';
+    }
     return {
       success: !isPartial,
       result: isPartial
-        ? `${blockName}を${count}個中${mined}個${timeNote ? '' : 'のみ'}採掘しました${dropsText}${totalsText}。${timeNote}残り${count - mined}個${timeNote ? 'は、' : 'が不足しています。'}再度 mine-block を実行してください${tightNote}${failures.length > 0 ? `（失敗詳細: ${failures.join(', ')}）` : ''}${toolWarning}`
+        ? `${blockName}を${count}個中${mined}個${timeNote ? '' : 'のみ'}採掘しました${dropsText}${totalsText}。${timeNote}残り${count - mined}個${timeNote ? 'は、' : 'が不足しています。'}再度 mine-block を実行してください${tightNote}${failures.length > 0 ? `（失敗詳細: ${failures.join(', ')}）` : ''}${toolWarning}${flintNote}`
         : `${blockName}を${mined}個採掘しました${dropsText}${totalsText}${failures.length > 0 ? `（一部失敗: ${failures.join(', ')}）` : ''}${toolWarning}${flintNote}`,
       ...(isPartial && { failureType: stoppedForInventoryTight ? 'inventory_full' : 'partial_completion', recoverable: true }),
     };
@@ -831,6 +839,38 @@ class MineBlock extends InstantSkill {
       gone.push(`${plan[0].name}×${plan[0].count}`);
     }
     return gone.length ? ` 掘る前に持ち物の空きを作るため、${gone.join('・')}を捨てました（空き${free()}マス）` : '';
+  }
+
+  /**
+   * Flint from the gravel carried: one set down beside the body (place-block-at chooses the spot), dug again, until a flint comes, the
+   * gravel runs out, FLINT_CYCLES are done or the action's time is short. A gravel gives flint one time in ten: ten dug left none in a
+   * lab copy of run 19's world, and run 15 took 232 s over ten (mb-body's lab, 2026-10-20); here each try is a second or two where
+   * the body stands. Says how many tries it took, or why it stopped.
+   */
+  private async flintFromGravel(timeLeftMs: number): Promise<string> {
+    const started = Date.now();
+    const has = (name: string) => this.bot.inventory.items().filter(item => item.name === name).reduce((sum, item) => sum + item.count, 0);
+    let tries = 0;
+    while (tries < FLINT_CYCLES && has('flint') === 0 && has('gravel') > 0 && !this.shouldInterrupt()
+      && timeLeftMs - (Date.now() - started) > FLINT_RESERVE_MS && !hostileNear(this.bot as any, TIDY_SAFE_RANGE)) {
+      let placed: { success?: boolean; result?: unknown } | null = null;
+      try { placed = await this.callSkill('place-block-at', 'gravel'); } catch (error) { if (this.shouldInterrupt()) throw error; break; }
+      const at = /\((-?\d+), (-?\d+), (-?\d+)\)に設置/.exec(String(placed?.result ?? ''));
+      if (!placed?.success || !at) break;
+      // Gravel set down over air falls: it is dug where it came to rest.
+      let spot = new Vec3(Number(at[1]), Number(at[2]), Number(at[3]));
+      for (let depth = 0; depth < 4 && this.bot.blockAt(spot)?.name !== 'gravel'; depth++) spot = spot.offset(0, -1, 0);
+      if (this.bot.blockAt(spot)?.name !== 'gravel') break;
+      let dug: { success?: boolean } | null = null;
+      try { dug = await this.callSkill('dig-block-at', spot.x, spot.y, spot.z, true, 'target'); } catch (error) { if (this.shouldInterrupt()) throw error; break; }
+      tries++;
+      if (!dug?.success) break;
+    }
+    if (!tries) return '';
+    const seconds = Math.round((Date.now() - started) / 1000);
+    return has('flint') > 0
+      ? `。flint（火打石）が出なかったので、持っている砂利を置いて掘り直し、${tries}回目で出ました（${seconds}秒）`
+      : `。flint（火打石）を砂利の置き直しで${tries}回試しましたが出ませんでした（${seconds}秒。砂利の残り${has('gravel')}個）`;
   }
 
   private async tidyPack(asked: string[], timeLeftMs: number): Promise<string> {

@@ -210,15 +210,40 @@ class BuildStructure extends InstantSkill {
       }
     }
 
+    // The inside again, after the frame: the route planner stacks blocks to reach the top row and leaves them there (a ladder
+    // probe, 2026-10-20: a dirt block inside a whole frame, and the flint and steel lit nothing).
+    const clearInside = async () => {
+      for (const inside of enclosed) {
+        const existing = this.bot.blockAt(inside);
+        if (existing && existing.boundingBox !== 'empty' && !['water', 'lava'].includes(existing.name)) {
+          log.info(`🧹 内側の除去（建てた後）: ${existing.name} @ ${inside}`);
+          await this.digBlock(inside);
+        }
+      }
+    };
+    const lit = () => enclosed.some(cell => this.bot.blockAt(cell)?.name === 'nether_portal');
+    let lightNote = '';
     if (placed === total && bp.afterBuild) {
-      for (const action of bp.afterBuild) {
-        await this.executeAfterBuild(action, bp, origin, dir);
+      for (let attempt = 0; attempt < 2 && !(enclosed.length && lit()); attempt++) {
+        if (this.shouldInterrupt()) break;
+        await clearInside();
+        for (const action of bp.afterBuild) {
+          await this.executeAfterBuild(action, bp, origin, dir);
+        }
+        if (!enclosed.length) break;
+        const by = Date.now() + 1500;
+        while (Date.now() < by && !lit()) await this.sleep(100);
+      }
+      if (enclosed.length) {
+        const blocking = enclosed.map(cell => this.bot.blockAt(cell)).find(block => block && !['air', 'cave_air', 'fire', 'nether_portal'].includes(block.name));
+        lightNote = lit() ? '。着火してゲートが開きました'
+          : `。⚠️ 着火してもゲートが開きませんでした${blocking ? `（内側の(${blocking.position.x}, ${blocking.position.y}, ${blocking.position.z})に${blocking.name}があります。取り除いてから flint_and_steel を内側の床に使ってください）` : '（flint_and_steel を内側の床に use-item-on-block で使ってください）'}`;
       }
     }
 
     const posStr = `(${origin.x}, ${origin.y}, ${origin.z})`;
     if (placed === total) {
-      return { success: true, result: `${bp.name} を ${posStr} に建築完了（${placed} ブロック設置）` };
+      return { success: true, result: `${bp.name} を ${posStr} に建築完了（${placed} ブロック設置）${lightNote}` };
     }
 
     const allBlocks = placements.map(p => {
@@ -384,6 +409,14 @@ class BuildStructure extends InstantSkill {
       const moved = await this.stepAside(pl.worldPos);
       if (!moved) { log.warn(`⚠ 退避失敗 → ${pl.worldPos}`); return false; }
     }
+    // Filled since the start by the route planner's own scaffolding (a dirt block in a portal's bottom row: "something may be
+    // standing in that cell", a ladder probe, 2026-10-20): dug again first.
+    const occupant = this.bot.blockAt(pl.worldPos);
+    if (occupant && occupant.boundingBox !== 'empty' && occupant.name !== pl.blockName) {
+      log.info(`🧹 障害物除去（置く前）: ${occupant.name} @ ${pl.worldPos}`);
+      await this.digBlock(pl.worldPos);
+      if (this.bot.blockAt(pl.worldPos)?.boundingBox !== 'empty') return false;
+    }
 
     const item = this.bot.inventory.items().find(i => i.name === pl.blockName);
     if (!item) { log.warn(`⚠ ${pl.blockName} が不足`); return false; }
@@ -501,9 +534,22 @@ class BuildStructure extends InstantSkill {
     const bx = Math.floor(this.bot.entity.position.x);
     const by = Math.floor(this.bot.entity.position.y);
     const bz = Math.floor(this.bot.entity.position.z);
-    if (target.x === bx && target.z === bz && target.y >= by - 1 && target.y <= by + 1) return true;
+    if (this.bodyIn(target)) return true;
     return [by - 1, by, by + 1].some(y => this.buildCells.some(cell => cell.x === bx && cell.y === y && cell.z === bz
       && (y !== by - 1 || this.bot.blockAt(cell)?.boundingBox !== 'block')));
+  }
+
+  /**
+   * The body's box (0.6 across, 1.8 high) reaches into the cell, or the body stands over it while it is empty (it would drop into it).
+   * The cell the feet are in is not enough: a body at x -55.7 is in the column of -56 and reaches 0.1 into -55, and the server will
+   * not put a block there ("something may be standing in that cell": a ladder probe, 2026-10-20, two cells of a portal's bottom row).
+   */
+  private bodyIn(cell: Vec3): boolean {
+    const p = this.bot.entity.position;
+    const across = p.x + 0.3 > cell.x && p.x - 0.3 < cell.x + 1 && p.z + 0.3 > cell.z && p.z - 0.3 < cell.z + 1;
+    if (!across) return false;
+    if (p.y < cell.y + 1 && p.y + 1.8 > cell.y) return true;
+    return p.y >= cell.y + 1 && p.y < cell.y + 1.5 && this.bot.blockAt(cell)?.boundingBox !== 'block';
   }
 
   /** The frame and its inside, for the build in hand (set by runImpl). */
@@ -518,7 +564,7 @@ class BuildStructure extends InstantSkill {
     const liquid = (block: any) => ['water', 'lava', 'flowing_water', 'flowing_lava'].includes(block?.name ?? '');
     const onFrame = (at: Vec3) => this.buildCells.some(cell => cell.x === at.x && cell.y === at.y && cell.z === at.z);
     const feetY = Math.floor(this.bot.entity.position.y);
-    const out = () => { const p = this.bot.entity.position; return Math.floor(p.x) !== target.x || Math.floor(p.z) !== target.z; };
+    const out = () => !this.bodyIn(target);
     const stands: Vec3[] = [];
     for (let dx = -2; dx <= 2; dx++) for (let dz = -2; dz <= 2; dz++) for (const dy of [0, -1, 1]) {
       if (!dx && !dz) continue;
@@ -529,7 +575,9 @@ class BuildStructure extends InstantSkill {
       stands.push(dest);
     }
     const from = this.bot.entity.position;
-    stands.sort((a, b) => a.offset(0.5, 0, 0.5).distanceTo(from) - b.offset(0.5, 0, 0.5).distanceTo(from));
+    // Two columns off first: a walk ends anywhere in the stand's cell, and from the next column the box can still reach in.
+    const beside = (stand: Vec3) => Math.max(Math.abs(stand.x - target.x), Math.abs(stand.z - target.z)) < 2 ? 1 : 0;
+    stands.sort((a, b) => beside(a) - beside(b) || a.offset(0.5, 0, 0.5).distanceTo(from) - b.offset(0.5, 0, 0.5).distanceTo(from));
     for (const dest of stands.slice(0, 4)) {
       try { await gotoSafe(this.bot, new goals.GoalBlock(dest.x, dest.y, dest.z), { timeoutMs: 4000, stuckAbortCount: 2 }); } catch { /* the next */ }
       await this.sleep(150);
