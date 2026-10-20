@@ -5,11 +5,17 @@
  */
 export const TIDY_ABOVE = 30;
 const TIDY_TO = 28;
-/** How much of each kind is kept: building blocks for a shelter and a pillar, a little dirt. Absent kinds are kept whole. */
+/**
+ * How much of each kind is kept: building blocks for a shelter and a pillar, a little dirt. Absent kinds are kept whole. This is the
+ * one table of what may be thrown away (run 20: a 99-level shaft and its tunnels filled the pack with tuff, andesite, diorite and
+ * deepslate): a kind not listed is never thrown (tools, weapons, armour, food, buckets, beds, wool, logs, planks, coal, ores, ingots,
+ * diamonds, obsidian, flint). Gravel keeps four, for the flint (mine-block's flintFromGravel).
+ */
 const KEEP: Record<string, number> = {
-  cobblestone: 64, cobbled_deepslate: 32, dirt: 16, andesite: 0, diorite: 0, granite: 0, tuff: 0, gravel: 0, sand: 0, netherrack: 32,
+  cobblestone: 64, cobbled_deepslate: 32, dirt: 16, andesite: 0, diorite: 0, granite: 0, tuff: 0, gravel: 4, sand: 0, netherrack: 32,
+  deepslate: 0, coarse_dirt: 0, rooted_dirt: 0, mud: 0, basalt: 0, smooth_basalt: 0,
   leaf_litter: 0, short_grass: 0, wheat_seeds: 0, rotten_flesh: 0, poisonous_potato: 0, spider_eye: 0, calcite: 0, dripstone_block: 0,
-  pointed_dripstone: 0, flint: 8, stick: 16,
+  pointed_dripstone: 0, flint: 64, stick: 64,
 };
 const isSapling = (name: string) => name.endsWith('_sapling') || name.endsWith('_propagule');
 
@@ -53,8 +59,10 @@ export function tidyPlan(items: Stack[]): Array<{ name: string; count: number }>
 }
 
 /** Rock a dig on the way brings in, spared when a pack is short of room even after tidyPlan (cobblestone kept to 32 for walls and steps). */
-const SPARE_ROCK = ['cobbled_deepslate', 'tuff', 'diorite', 'andesite', 'granite', 'dirt', 'gravel', 'calcite', 'netherrack', 'deepslate', 'stone', 'cobblestone'];
-const COBBLE_KEPT = 32;
+const SPARE_ROCK = ['cobbled_deepslate', 'tuff', 'diorite', 'andesite', 'granite', 'dirt', 'gravel', 'calcite', 'netherrack', 'deepslate', 'stone', 'cobblestone',
+  'coarse_dirt', 'rooted_dirt', 'mud', 'basalt', 'smooth_basalt'];
+/** What stays of a spare kind: cobblestone for walls and steps, four gravel for a flint, netherrack for bridging. */
+const SPARE_KEPT: Record<string, number> = { cobblestone: 32, gravel: 4, netherrack: 32 };
 
 /**
  * The largest heap of spare rock to throw away for room, or null: for a pack with nothing tidyPlan names (every kind under its KEEP),
@@ -63,7 +71,32 @@ const COBBLE_KEPT = 32;
 export function spareRockToDrop(items: Stack[], keep: string[] = []): { name: string; count: number } | null {
   const totals = new Map<string, number>();
   for (const item of items) if (SPARE_ROCK.includes(item.name) && !keep.includes(item.name)) totals.set(item.name, (totals.get(item.name) ?? 0) + item.count);
-  const best = [...totals].map(([name, count]) => ({ name, count: name === 'cobblestone' ? count - COBBLE_KEPT : count }))
+  const best = [...totals].map(([name, count]) => ({ name, count: count - (SPARE_KEPT[name] ?? 0) }))
     .filter(entry => entry.count > 0).sort((a, b) => b.count - a.count)[0];
   return best ?? null;
+}
+
+/** Whether a kind is one this module would ever throw away (listed in the tables above); everything else is kept. */
+export function isThrowable(name: string): boolean {
+  // A kind kept to a whole stack or more (sticks, flint) is as good as never thrown: a stack goes only when what stays is the keep.
+  return isSapling(name) || (name in KEEP && KEEP[name] < 64) || SPARE_ROCK.includes(name);
+}
+
+/**
+ * What fills a pack, said for a refusal: the biggest heaps by name, and how many slots hold something that may be thrown. The planner
+ * is told why no room can be made (run 20: "one free slot" with no word of what was in the way).
+ */
+export function describePack(items: Stack[], asked: string[] = []): string {
+  const totals = new Map<string, { count: number; slots: number }>();
+  for (const item of items) {
+    const entry = totals.get(item.name) ?? { count: 0, slots: 0 };
+    entry.count += item.count; entry.slots++;
+    totals.set(item.name, entry);
+  }
+  const heaps = [...totals].sort((a, b) => b[1].slots - a[1].slots || b[1].count - a[1].count).slice(0, 5)
+    .map(([name, entry]) => `${name}×${entry.count}`);
+  const throwable = [...totals].filter(([name]) => isThrowable(name) && !asked.includes(name)).reduce((sum, [, entry]) => sum + entry.slots, 0);
+  const kept = [...totals].filter(([name]) => !isThrowable(name) || asked.includes(name));
+  return `いま${items.length}/36マスが埋まっています（多い物: ${heaps.join('・')}）。捨てても良い石・土・ごみは${throwable}マス分`
+    + `、捨てられない物（道具・食料・鉱石・燃料・掘る物など）は${kept.reduce((sum, [, entry]) => sum + entry.slots, 0)}マス分です`;
 }

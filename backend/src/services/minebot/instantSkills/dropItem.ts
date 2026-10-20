@@ -2,8 +2,16 @@ import { Vec3 } from 'vec3';
 import { CustomBot, InstantSkill } from '../types.js';
 import { createLogger } from '../../../utils/logger.js';
 import { actionDelay } from '../execution/observedWait.js';
+import { planDumpPit, type DumpPitPlan } from '../utils/dumpPit.js';
 
 const log = createLogger('Minebot:Skill:dropItem');
+
+/** What covers a dump pit again, in the order tried (a kind that is spare anyway). */
+const CAP_BLOCKS = ['cobblestone', 'cobbled_deepslate', 'andesite', 'diorite', 'granite', 'tuff', 'dirt', 'netherrack', 'deepslate', 'stone'];
+/** The item thrown into a pit needs this long to fall before the floor is put back over it. */
+const PIT_FALL_MS = 800;
+/** ...and is waited for this much longer, at most, when a stack is still in the air. */
+const PIT_FALL_MAX_MS = 1500;
 
 const AIR = new Set(['air', 'cave_air', 'void_air']);
 
@@ -28,6 +36,17 @@ function canStandAt(bot: CustomBot, sx: number, sy: number, sz: number): boolean
   if (!feet || !head || !below) return false;
   if (!isAirBlock(feet) || !isAirBlock(head)) return false;
   return !isAirBlock(below);
+}
+
+/** For each of eight directions from the eyes, how many cells (five at most) are open along the line: where a throw can carry. */
+function openLines(bot: CustomBot): number[] {
+  const here = bot.entity.position;
+  return Array.from({ length: 8 }, (_, index) => {
+    const ux = Math.cos(index * Math.PI / 4), uz = Math.sin(index * Math.PI / 4);
+    let open = 0;
+    while (open < 5 && isAirBlock(bot.blockAt(new Vec3(Math.floor(here.x + ux * (open + 1)), Math.floor(here.y + 1.62), Math.floor(here.z + uz * (open + 1)))))) open++;
+    return open;
+  });
 }
 
 interface PitDropPlan {
@@ -90,7 +109,10 @@ function findAdjacentPitDropPlan(bot: CustomBot): PitDropPlan | null {
             standY: by,
             standZ: sz,
             lookX: px + 0.5,
-            lookY: topY - 1.2,
+            // A throw leaves the eyes with 0.3 of speed along the look and 0.1 up. Aimed 70 degrees down (the middle of the hole's depth) it
+            // came to rest on the rim, short of the hole, and was picked up again about half the time (lab, 2026-10-20); aimed 55 degrees
+            // down (1.4 down for the 1.0 across) it falls in the hole's middle whatever the random spread of the throw.
+            lookY: topY + 1.62 - 1.43,
             lookZ: pz + 0.5,
             distSq,
           };
@@ -161,6 +183,84 @@ class DropItem extends InstantSkill {
     return clear();
   }
 
+  /** Free slots in the pack, or null when the pack cannot say. */
+  private freeSlots(): number | null {
+    const inventory = this.bot.inventory as { emptySlotCount?: () => number };
+    return typeof inventory.emptySlotCount === 'function' ? inventory.emptySlotCount() : null;
+  }
+
+  /** What the throw did to the pack's free slots, for the result: a slot is freed only when a whole stack is gone. */
+  private slotsNote(before: number | null): string {
+    const after = this.freeSlots();
+    if (before === null || after === null) return '';
+    const freed = after - before;
+    return freed > 0 ? `${freed}スロット空いた（空き${before}→${after}マス）。` : `空きスロットは増えていません（空き${after}マスのまま。スタックが残っているため）。`;
+  }
+
+  /**
+   * In a tunnel, a stair or a shaft there is nowhere to walk away from a thrown item, and it lands within reach (run 20: "too narrow"
+   * for 49 tuff, the rest of the reply never run). A hole is dug beside the body instead (utils/dumpPit): three below the feet, so what
+   * is thrown in rests out of reach, and its floor cell is put back afterwards. Only where the open lines from the eyes say the place is
+   * shut in (at most two of the eight ways open three cells), with a pickaxe that is not itself being thrown, and when digging the hole
+   * is safe. Returns the plan once the hole is open, or null with nothing dug (or a part-dug hole left, harmless).
+   */
+  private async digDumpPit(itemName: string, dropCount: number): Promise<DumpPitPlan | null> {
+    if (openLines(this.bot).filter(open => open >= MIN_THROW_OPEN).length > 2) return null;
+    const items = this.bot.inventory.items();
+    const pickaxes = items.filter(entry => entry.name.endsWith('_pickaxe'));
+    const thrown = pickaxes.filter(entry => entry.name === itemName).reduce((sum, entry) => sum + entry.count, 0);
+    if (pickaxes.reduce((sum, entry) => sum + entry.count, 0) - Math.min(thrown, dropCount) < 1) return null;
+    if (!this.bot.instantSkills?.getSkill('dig-block-at')) return null;
+    const plan = planDumpPit(this.bot as any, this.bot.entity.position.floored());
+    if (!plan) return null;
+    for (const cell of plan.dig) {
+      if (this.shouldInterrupt()) return null;
+      let dug: { success?: boolean } = { success: false };
+      try { dug = await this.callSkill('dig-block-at', cell.x, cell.y, cell.z, false); } catch (error) { if (this.shouldInterrupt()) throw error; return null; }
+      if (!dug.success) { log.info(`投げ込み用の穴を掘れませんでした(${cell.x},${cell.y},${cell.z})`); return null; }
+    }
+    return plan;
+  }
+
+  /**
+   * Waits until no dropped item is left above the floor of the pit (they take about a second to arrive from the throw). A block put
+   * over the pit while a stack was still falling pushed it out on top, where the body took it back (lab, 2026-10-20).
+   */
+  private async itemsHaveFallen(plan: DumpPitPlan, lyingBefore: Set<number>): Promise<boolean> {
+    await actionDelay(this.bot, PIT_FALL_MS);
+    const deadline = Date.now() + PIT_FALL_MAX_MS;
+    for (;;) {
+      const above = Object.values((this.bot as any).entities ?? {}).some((entity: any) => entity?.position && (entity.name === 'item' || entity.displayName === 'Item')
+        && !lyingBefore.has(entity.id)
+        && Math.abs(entity.position.x - (plan.column.x + 0.5)) < 2 && Math.abs(entity.position.z - (plan.column.z + 0.5)) < 2
+        && entity.position.y > plan.column.feetY - 1.2);
+      if (!above) return true;
+      if (Date.now() >= deadline || this.shouldInterrupt()) return false;
+      await actionDelay(this.bot, 100);
+    }
+  }
+
+  /** New dropped items lying in the pit, below the floor level: what was thrown, seen at rest out of reach. */
+  private itemsInPit(plan: DumpPitPlan, lyingBefore: Set<number>, itemName: string): number {
+    return Object.values((this.bot as any).entities ?? {}).filter((entity: any) => entity?.position && (entity.name === 'item' || entity.displayName === 'Item')
+      && !lyingBefore.has(entity.id) && entity.getDroppedItem?.()?.name === itemName
+      && Math.abs(entity.position.x - (plan.column.x + 0.5)) < 0.9 && Math.abs(entity.position.z - (plan.column.z + 0.5)) < 0.9
+      && entity.position.y <= plan.column.feetY - 2).length;
+  }
+
+  /** Puts a spare block back in the floor cell of a dump pit once what was thrown has fallen (the tunnel keeps its floor). */
+  private async coverDumpPit(plan: DumpPitPlan, itemName: string, lyingBefore: Set<number>): Promise<string> {
+    if (!plan.cap) return '';
+    if (!(await this.itemsHaveFallen(plan, lyingBefore))) return '穴は開けたままです（投げた物がまだ落ち切っていない）。';
+    const held = (name: string) => this.bot.inventory.items().filter(entry => entry.name === name).reduce((sum, entry) => sum + entry.count, 0);
+    const block = CAP_BLOCKS.find(name => held(name) > 0 && (name !== itemName || held(name) > 1));
+    if (!block) return '穴の床は塞げませんでした（置ける石を持っていない）。';
+    try {
+      const placed = await this.callSkill('place-block-at', block, plan.cap.x, plan.cap.y, plan.cap.z);
+      return placed.success ? `穴の床に${block}を置いて塞ぎました。` : '穴の床は塞げませんでした（床は空いたままです）。';
+    } catch (error) { if (this.shouldInterrupt()) throw error; return ''; }
+  }
+
   async runImpl(itemName: string, count: number = 1) {
     try {
       const stacks = this.bot.inventory.items().filter((i) => i.name === itemName);
@@ -179,10 +279,20 @@ class DropItem extends InstantSkill {
       const moveTo = this.bot.instantSkills?.getSkill('move-to');
       const tossX = this.bot.entity.position.x;
       const tossZ = this.bot.entity.position.z;
+      const slotsBefore = this.freeSlots();
 
-      await this.bot.equip(item, 'hand').catch(() => {});
+      // No pit to hand and the place shut in: one is dug (see digDumpPit), before the item is taken in hand.
+      let pit = findAdjacentPitDropPlan(this.bot);
+      let dugPit: DumpPitPlan | null = null;
+      if (!pit) {
+        dugPit = await this.digDumpPit(itemName, dropCount);
+        if (dugPit) pit = findAdjacentPitDropPlan(this.bot);
+      }
 
-      const pit = findAdjacentPitDropPlan(this.bot);
+      // The stack in hand is looked up again: digging the pit may have moved things about in the pack.
+      const inHand = this.bot.inventory.items().find((entry) => entry.name === itemName) ?? item;
+      await this.bot.equip(inHand, 'hand').catch(() => {});
+
       let mode: 'pit' | 'retreat' = 'retreat';
 
       if (pit && moveTo) {
@@ -220,12 +330,9 @@ class DropItem extends InstantSkill {
           // up from within one). Thrown wherever the body happened to be looking, it fell at its feet.
           const here = this.bot.entity.position;
           let best: { x: number; z: number; open: number } | null = null;
-          for (let index = 0; index < 8; index++) {
-            const ux = Math.cos(index * Math.PI / 4), uz = Math.sin(index * Math.PI / 4);
-            let open = 0;
-            while (open < 5 && isAirBlock(this.bot.blockAt(new Vec3(Math.floor(here.x + ux * (open + 1)), Math.floor(here.y + 1.62), Math.floor(here.z + uz * (open + 1)))))) open++;
-            if (!best || open > best.open) best = { x: ux, z: uz, open };
-          }
+          openLines(this.bot).forEach((open, index) => {
+            if (!best || open > best.open) best = { x: Math.cos(index * Math.PI / 4), z: Math.sin(index * Math.PI / 4), open };
+          });
           // Shut in (a 1x1 shaft, a tunnel's end): whatever is thrown lands within reach and walks back into the pack two seconds
           // later. Said before throwing, not after (run 17 threw a stone pickaxe in its shaft and picked it up again).
           const line = best as { x: number; z: number; open: number } | null;
@@ -238,14 +345,27 @@ class DropItem extends InstantSkill {
           await this.bot.lookAt(new Vec3(here.x + line.x * 4, here.y + 1.62, here.z + line.z * 4), true);
         }
       }
+      const lyingBefore = new Set<number>(Object.values((this.bot as any).entities ?? {}).filter((entity: any) => entity?.name === 'item' || entity?.displayName === 'Item')
+        .map((entity: any) => entity.id));
       await this.bot.toss(item.type, null, dropCount);
       await actionDelay(this.bot, 80);
+      log.info(`投げました: ${itemName}×${dropCount}（モード ${mode}${dugPit ? '・掘った穴' : ''}、いま所持 ${held()}、位置 ${this.bot.entity.position.toString()}）`);
 
       const tossedAt = Date.now();
+      // A pit dug for the throw is covered once the item has fallen into it (before the pickup delay is out, so the wait is not longer).
+      let coverNote = '';
+      let sealed = false;
+      if (mode === 'pit' && dugPit) {
+        coverNote = await this.coverDumpPit(dugPit, itemName, lyingBefore);
+        // Seen at rest three blocks down and the floor put back over them: nothing can pick them up, the two seconds need not be waited.
+        sealed = coverNote.includes('塞ぎました') && this.itemsInPit(dugPit, lyingBefore, itemName) > 0;
+      }
       const away = mode === 'pit' ? true : await this.retreatTo(this.bot, spots, tossX, tossZ);
       // A thrown item can be picked up again after two seconds. What the pack holds after that is the result.
-      await actionDelay(this.bot, Math.max(0, PICKUP_DELAY_MS + 400 - (Date.now() - tossedAt)));
+      if (!sealed) await actionDelay(this.bot, Math.max(0, PICKUP_DELAY_MS + 400 - (Date.now() - tossedAt)));
       const back = Math.max(0, held() - (before - dropCount));
+      if (back > 0) log.info(`拾い直し: ${itemName} ${back}個（モード ${mode}、近くの落とし物: ${Object.values((this.bot as any).entities ?? {}).filter((entity: any) => entity?.name === 'item')
+        .map((entity: any) => `${entity.getDroppedItem?.()?.name ?? '?'}@${entity.position.x.toFixed(1)},${entity.position.y.toFixed(1)},${entity.position.z.toFixed(1)}`).join(' ')}）`);
       if (back > 0) {
         return {
           success: false,
@@ -254,14 +374,16 @@ class DropItem extends InstantSkill {
           result:
             `${itemName}を${dropCount}個捨てましたが、${back}個を拾い直しました（現在${held()}個）。` +
             (away ? '' : '捨てた場所から離れられませんでした（周りに立てる場所が見つからない）。') +
-            '落とし物は1ブロック以内にいると拾います。開けた場所へ出てから捨てるか、チェストに入れてください',
+            '落とし物は1ブロック以内にいると拾います。開けた場所へ出てから捨てるか、チェストに入れてください。' +
+            this.slotsNote(slotsBefore),
         };
       }
       return {
         success: true,
-        result: mode === 'pit'
-          ? `${itemName}を${dropCount}個、近くの穴へ捨てました（残り${held()}個）。`
-          : `${itemName}を${dropCount}個捨て、その場から離れました（残り${held()}個）。`,
+        result: (mode === 'pit'
+          ? (dugPit ? `${itemName}を${dropCount}個、狭い所だったので横に深さ3の穴を掘って捨てました（残り${held()}個）。${coverNote}`
+            : `${itemName}を${dropCount}個、近くの穴へ捨てました（残り${held()}個）。`)
+          : `${itemName}を${dropCount}個捨て、その場から離れました（残り${held()}個）。`) + this.slotsNote(slotsBefore),
       };
     } catch (error: any) {
       return {
