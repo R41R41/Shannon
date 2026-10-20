@@ -90,8 +90,17 @@ try {
 
   // ── 1. Down to the diamond band ──
   const directions = ['east', 'south', 'west', 'north'];
-  for (let attempt = 0; attempt < 12 && actor.entity.position.y > targetY + 4; attempt++)
+  // Four ways tried without a step down: 24 blocks off and down again from there, as a planner would.
+  for (let attempt = 0, still = 0, legs = 0; attempt < 16 && actor.entity.position.y > targetY + 4; attempt++) {
+    const fromY = Math.floor(actor.entity.position.y);
     await step('stair-mine', [targetY, directions[attempt % 4], 'cobblestone'], 600_000);
+    still = Math.floor(actor.entity.position.y) < fromY ? 0 : still + 1;
+    if (still >= 4 && legs < 3) {
+      const here = actor.entity.position.floored(), offset = [[24, 0], [0, 24], [-24, 0]][legs++];
+      await step('move-to', [here.x + offset[0], here.y, here.z + offset[1], 3, 'near'], 90_000);
+      still = 0;
+    }
+  }
   mark('descent', actor.entity.position.y <= targetY + 4, `y=${Math.round(actor.entity.position.y)}`);
 
   // ── 2. Diamonds (three), mine-block over the loaded chunks, a branch of 24 blocks between tries ──
@@ -114,7 +123,32 @@ try {
     // A pool poured on twice for nothing is left for another one, as a planner would after two refusals.
     const refused: Vec3[] = [];
     let lavaSearches = 0;
-    for (let attempt = 0; attempt < 24 && count('obsidian') < 10; attempt++) {
+    // MINECRAFT_LADDER_OBSIDIAN=steps: a pour and a mine-block asked for one by one (the planner's way before the bulk tool).
+    const bulk = process.env.MINECRAFT_LADDER_OBSIDIAN !== 'steps';
+    for (let attempt = 0; bulk && attempt < 6 && count('obsidian') < 10 && count('water_bucket') > 0; attempt++) {
+      const lava = nearest(block => block?.name === 'lava', 48, 256).find((at: Vec3) => actor.blockAt(at)?.metadata === 0
+        && /air$/.test(actor.blockAt(at.offset(0, 1, 0))?.name ?? '') && refused.filter(r => r.distanceTo(at) <= 10).length < 2);
+      if (!lava && lavaSearches < 3) {
+        lavaSearches++;
+        if (actor.entity.position.y > targetY + 6) await step('stair-mine', [targetY, directions[lavaSearches % 4], 'cobblestone'], 300_000);
+        else {
+          const here = actor.entity.position.floored(), offset = [[32, 0], [0, 32], [-32, 0]][lavaSearches - 1] ?? [0, -32];
+          await step('move-to', [here.x + offset[0], here.y, here.z + offset[1], 2, 'near'], 120_000);
+        }
+        continue;
+      }
+      if (!lava) { mark('lava', false, 'no lava source with air over it within 48 m'); break; }
+      const here = actor.entity.position;
+      if (here.y - lava.y > 5) {
+        const dx = lava.x - here.x, dz = lava.z - here.z;
+        await step('stair-mine', [lava.y + 1, Math.abs(dx) >= Math.abs(dz) ? (dx >= 0 ? 'east' : 'west') : (dz >= 0 ? 'south' : 'north'), 'cobblestone'], 180_000);
+      }
+      if (lava.distanceTo(actor.entity.position) > 6) await step('move-to', [lava.x, lava.y + 1, lava.z, 3, 'near'], 90_000);
+      // One call: pours, digs and the water taken back, in the body.
+      const made = await step('use-item-on-block', [lava.x, lava.y, lava.z, 'water_bucket', 10 - count('obsidian')], 300_000);
+      if (!made.success && /近くに水をかけられる溶岩/.test(String(made.result ?? ''))) refused.push(lava, lava);
+    }
+    for (let attempt = 0; !bulk && attempt < 24 && count('obsidian') < 10; attempt++) {
       // Only what can be taken straight away counts (obsidian over the rest of the pool burns its drop), as the pour's result says.
       const obsidianNear = nearest(block => block?.name === 'obsidian', 16).filter((at: Vec3) => !dropBurnsIn(actor as any, at)).length;
       if (count('obsidian') + obsidianNear < 10 && count('water_bucket') > 0) {
@@ -159,6 +193,13 @@ try {
   mark('flint', count('flint') >= 1, `flint=${count('flint')} gravel=${count('gravel')}`);
   if (count('flint') >= 1) await step('craft-one', ['flint_and_steel', 1], 60_000);
   mark('flint_and_steel', count('flint_and_steel') >= 1);
+
+  // The map as the head would read it before the gate (see placeMemory.map), and what reading the world has cost so far.
+  try {
+    const memory = (actor as any).placeMemory;
+    const map = String(memory?.map?.() ?? '');
+    console.log(`LADDER_MAP ${JSON.stringify({ at: Math.round((Date.now() - startedAt) / 1000), chars: map.length, places: memory?.state?.places?.length, stats: memory?.stats, map })}`);
+  } catch (error) { console.log(`LADDER_MAP ${JSON.stringify({ error: String(error) })}`); }
 
   // ── 5. The gate: built beside the body, lit, gone through ──
   if (count('obsidian') >= 10 && count('flint_and_steel') >= 1) {

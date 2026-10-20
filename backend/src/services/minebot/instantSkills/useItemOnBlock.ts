@@ -10,6 +10,9 @@ import { gotoSafe } from '../utils/gotoSafe.js';
 import { liquidAim, liquidAimPoints } from '../utils/liquidAim.js';
 import { facePoints, rayFace } from '../utils/rayFace.js';
 import { dropBurnsIn } from '../utils/dropFate.js';
+import { tidyPlan } from '../utils/inventoryTidy.js';
+/** Rock dug on the way that a full pack can spare, for the obsidian (see roomForDrops). */
+const SPARE_ROCK = ['cobbled_deepslate', 'tuff', 'diorite', 'andesite', 'granite', 'dirt', 'gravel', 'calcite', 'netherrack', 'cobblestone'];
 
 const { goals } = pathfinder;
 
@@ -55,12 +58,20 @@ class UseItemOnBlock extends InstantSkill {
         description: '使うアイテムの正確なID（例: bucket, water_bucket, flint_and_steel）。指定すると使用直前にメインハンドへ装備する。省略時は現在の手持ち',
         required: false,
       },
+      {
+        name: 'count',
+        type: 'number',
+        description: 'water_bucket で溶岩を指した時だけ：集める黒曜石の数。2以上なら、その溶岩の溜まりで「水をかける→固まった黒曜石を掘る→水を回収→次の溶岩」を体の中で繰り返し、指定数まで集める（溶岩まで自分で歩く。diamond_pickaxe が要る）。省略時は1か所に水をかけるだけ',
+        default: 1,
+      },
     ];
+    // Ten obsidian made and mined in one call: about twelve pours and ten digs of nine seconds (a ladder probe, 2026-10-20: 216 s).
+    this.maxDurationMs = 300_000;
   }
 
   private liquidAim(pos: Vec3): { point?: Vec3; reason?: string } { return liquidAim(this.bot, pos); }
 
-  async runImpl(x: number, y: number, z: number, itemName?: string) {
+  async runImpl(x: number, y: number, z: number, itemName?: string, count: number = 1) {
     try {
       if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
         return {
@@ -68,6 +79,8 @@ class UseItemOnBlock extends InstantSkill {
           result: '座標は有効な数値である必要があります',
         };
       }
+      const wanted = Math.floor(Number(count) || 1);
+      if (wanted >= 2 && (itemName ?? this.bot.heldItem?.name) === 'water_bucket') return await this.makeObsidian(new Vec3(x, y, z), wanted);
 
       if (itemName) {
         const wanted = this.bot.inventory.items().find(item => item.name === itemName);
@@ -402,6 +415,141 @@ class UseItemOnBlock extends InstantSkill {
   }
 
   /** The lava source asked for, then the other sources with air over them within POOL_REACH of it (the same pool, most likely), nearest first. */
+  /**
+   * Obsidian made from a lava pool and mined, `count` of it, in one call (count ≥ 2): water poured on the pool's top sources, the
+   * obsidian that can be taken at once (no lava under or beside it) dug with dig-block-at, the water back in the bucket, the next
+   * source. Pours come first while fewer can be taken than are still wanted: they are a second each, the digs nine. A planner asked
+   * for each of these steps itself, some twenty decisions for ten obsidian (mb-arch's estimate for run 19: 150 s of them).
+   * Ends with the water back in the bucket; stopped short (time, nothing left to pour on, the bucket's water lost), it says how
+   * far it got and why.
+   */
+  private async makeObsidian(start: Vec3, count: number) {
+    const items = () => this.bot.inventory.items();
+    const held = (name: string) => items().filter(item => item.name === name).reduce((sum, item) => sum + item.count, 0);
+    if (String(this.bot.game?.dimension ?? '').includes('nether')) {
+      return { success: false, failureType: 'invalid_input', recoverable: false, result: 'ネザーでは水が蒸発するため、溶岩に水を流して黒曜石を作ることはできません' };
+    }
+    if (!items().some(item => ['diamond_pickaxe', 'netherite_pickaxe'].includes(item.name))) {
+      return { success: false, failureType: 'missing_tool', recoverable: true, result: '黒曜石を掘るには diamond_pickaxe（か netherite_pickaxe）が要ります。先に craft-one diamond_pickaxe を作ってください' };
+    }
+    if (!held('water_bucket')) return { success: false, failureType: 'material_missing', recoverable: true, result: 'water_bucketを持っていません' };
+    const dig = this.bot.instantSkills.getSkill('dig-block-at');
+    if (!dig) return { success: false, failureType: 'missing_dependency', recoverable: false, result: 'dig-block-at が見つかりません' };
+
+    const startedAt = Date.now();
+    const timeLeft = () => (this.maxDurationMs || 300_000) - 12_000 - (Date.now() - startedAt);
+    const before = held('obsidian');
+    const want = before + count;
+    const key = (at: Vec3) => `${at.x},${at.y},${at.z}`;
+    const refusedLava = new Map<string, number>();
+    const skippedObsidian = new Set<string>();
+    let centre = start.clone();
+    let pours = 0, digFailures = 0;
+    let why = '', roomNote = '';
+    while (held('obsidian') < want && !this.shouldInterrupt()) {
+      if (timeLeft() < 15_000) { why = '1回の行動の時間を使い切る前に区切りました'; break; }
+      if (!held('water_bucket')) {
+        const water = held('bucket') ? [...this.waterSourcesNear(6).values()].sort((a, b) => a.distanceTo(this.bot.entity.position) - b.distanceTo(this.bot.entity.position))[0] : undefined;
+        if (water) {
+          const bucket = items().find(item => item.name === 'bucket');
+          if (bucket) await this.bot.equip(bucket, 'hand');
+          await this.scoop(water);
+        }
+        if (!held('water_bucket')) { why = '水をバケツに汲み直せませんでした（近くの水源を空バケツで汲んでください）'; break; }
+      }
+      const needed = want - held('obsidian');
+      const takeable = this.takeableObsidian(centre, skippedObsidian);
+      const lava = takeable.length >= needed ? null : this.pourableLava(centre, refusedLava);
+      if (lava) {
+        if (lava.distanceTo(this.bot.entity.position) > 4) {
+          try { await gotoSafe(this.bot, new goals.GoalNear(lava.x, lava.y + 1, lava.z, 3), { timeoutMs: 15_000 }); } catch (error) { if (this.shouldInterrupt()) throw error; }
+        }
+        const poured = lava.distanceTo(this.bot.entity.position) <= 5 ? await this.placeWaterNearLava(lava) : { success: false };
+        pours++;
+        if (poured.success) centre = lava; else refusedLava.set(key(lava), (refusedLava.get(key(lava)) ?? 0) + 1);
+        continue;
+      }
+      const target = takeable[0];
+      if (!target) { why = '近くに水をかけられる溶岩も、すぐ掘れる黒曜石も、もうありません'; break; }
+      if (target.offset(0.5, 0.5, 0.5).distanceTo(this.bot.entity.position.offset(0, 1.62, 0)) > 4.2) {
+        try { await gotoSafe(this.bot, new goals.GoalNear(target.x, target.y + 1, target.z, 2), { timeoutMs: 12_000 }); } catch (error) { if (this.shouldInterrupt()) throw error; }
+      }
+      // A full pack leaves the obsidian on the floor (ladder probe: five dug, none taken, the call given up).
+      roomNote += await this.roomForDrops();
+      const got = held('obsidian');
+      let dug: { success?: boolean; result?: unknown } = { success: false };
+      try { dug = await this.callSkill('dig-block-at', target.x, target.y, target.z, true, 'target'); } catch (error) { if (this.shouldInterrupt()) throw error; }
+      if (held('obsidian') <= got && dug.success) {
+        try { await this.callSkill('pickup-nearest-item', 'obsidian', 8); } catch (error) { if (this.shouldInterrupt()) throw error; }
+      }
+      if (held('obsidian') > got) { digFailures = 0; continue; }
+      skippedObsidian.add(key(target));
+      if (++digFailures >= 4) { why = `黒曜石の採掘が4回続けて失敗しました（最後: ${String(dug.result ?? '').slice(0, 80)}）`; break; }
+    }
+    // The bucket is left full: the water last poured is taken back if it was not.
+    if (!held('water_bucket') && held('bucket')) {
+      const water = [...this.waterSourcesNear(6).values()][0];
+      const bucket = items().find(item => item.name === 'bucket');
+      if (water && bucket) { await this.bot.equip(bucket, 'hand'); await this.scoop(water); }
+    }
+    const got = held('obsidian') - before;
+    const bucketNote = held('water_bucket') ? '水はwater_bucketへ回収済み' : '⚠️ water_bucketに水が戻っていません（近くの水源を空バケツで汲んでください）';
+    const summary = `黒曜石を${got}個作って掘りました（溶岩${pours}か所に水をかけ、所持 obsidian=${held('obsidian')}個）。${bucketNote}。${roomNote}`;
+    if (got >= count) return { success: true, result: summary };
+    return {
+      success: false, failureType: got > 0 ? 'partial_completion' : 'target_not_found', recoverable: true,
+      result: `${summary}${count}個のうち残り${count - got}個: ${why || '中断されました'}。`
+        + (why.startsWith('近くに') ? '別の溶岩の溜まりを find-blocks lava で探して、そこで続けてください' : `同じ溜まりで続けるなら use-item-on-block を count=${count - got} でもう一度呼んでください`),
+    };
+  }
+
+  /**
+   * Two free slots at least before a dig: what tidyPlan names (spare stone, dirt and the like) is thrown away; with nothing it names,
+   * the largest stack of plain rock (32 cobblestone kept for walls). Says what went; empty when nothing had to.
+   */
+  async roomForDrops(): Promise<string> {
+    const items = () => this.bot.inventory.items();
+    const free = () => typeof (this.bot.inventory as any).emptySlotCount === 'function' ? (this.bot.inventory as any).emptySlotCount() : 36 - items().length;
+    if (free() >= 2) return '';
+    let plan = tidyPlan(items() as any);
+    if (!plan.length) {
+      const totals = new Map<string, number>();
+      for (const item of items()) if (SPARE_ROCK.includes(item.name)) totals.set(item.name, (totals.get(item.name) ?? 0) + item.count);
+      const [name, count] = [...totals].sort((a, b) => b[1] - a[1])[0] ?? [];
+      if (name) plan = [{ name, count: name === 'cobblestone' ? count! - 32 : count! }];
+    }
+    const gone: string[] = [];
+    for (const { name, count } of plan.slice(0, 2)) {
+      if (count <= 0) continue;
+      try {
+        const dropped = await this.callSkill('drop-item', name, count);
+        if (dropped?.success) gone.push(`${name}×${count}`);
+      } catch (error) { if (this.shouldInterrupt()) throw error; }
+    }
+    return gone.length ? `持ち物の空きを作るため${gone.join('・')}を捨てました。` : '';
+  }
+
+  /** Obsidian within 10 blocks of `centre` whose drop does not burn, the nearest to the body first; not the block it stands on. */
+  takeableObsidian(centre: Vec3, skipped: Set<string>): Vec3[] {
+    const feet = this.bot.entity.position.floored().offset(0, -1, 0);
+    const found: Vec3[] = this.bot.findBlocks?.({ matching: (block: any) => block?.name === 'obsidian', point: centre, maxDistance: 10, count: 64 }) ?? [];
+    const here = this.bot.entity.position;
+    return found.filter(at => this.bot.blockAt(at)?.name === 'obsidian' && !at.equals(feet) && !skipped.has(`${at.x},${at.y},${at.z}`)
+      && !dropBurnsIn(this.bot as any, at))
+      .sort((a, b) => a.distanceTo(here) - b.distanceTo(here));
+  }
+
+  /** A lava source within 12 blocks of `centre` with nothing solid over it (the top of the pool), not refused twice, nearest first. */
+  pourableLava(centre: Vec3, refused: Map<string, number>): Vec3 | null {
+    const found: Vec3[] = this.bot.findBlocks?.({ matching: (block: any) => block?.name === 'lava', point: centre, maxDistance: 12, count: 256 }) ?? [];
+    const here = this.bot.entity.position;
+    return found.filter(at => {
+      const block = this.bot.blockAt(at), over = this.bot.blockAt(at.offset(0, 1, 0));
+      return block?.name === 'lava' && getWaterLevel(block) === 0 && over?.boundingBox === 'empty' && !['lava', 'water'].includes(over?.name ?? '')
+        && (refused.get(`${at.x},${at.y},${at.z}`) ?? 0) < 2;
+    }).sort((a, b) => a.distanceTo(here) - b.distanceTo(here))[0] ?? null;
+  }
+
   private poolSources(lavaPos: Vec3): Vec3[] {
     // The pool itself: lava cells reached from the one asked for through lava, within POOL_REACH (an unrelated pool nearby is not it).
     const key = (at: Vec3) => `${at.x},${at.y},${at.z}`;

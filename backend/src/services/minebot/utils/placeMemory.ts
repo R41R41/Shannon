@@ -4,7 +4,7 @@ import { Vec3 } from 'vec3';
 import { createLogger } from '../../../utils/logger.js';
 import {
   biomesAround, describeBiomes, noteBiome,
-  describeLastDeath, describeSeenReach, DRAGON_PLACES, DROP_LIFETIME_MS, emptyPlaceMemory, forgetPlaces, makeRoom, markSeen, mergeRadius, observedDeaths, parsePlaceMemory,
+  describeLastDeath, describeSeenReach, DRAGON_PLACES, DROP_LIFETIME_MS, emptyPlaceMemory, forgetPlaces, makeRoom, mapSummary, markSeen, mergeRadius, observedDeaths, parsePlaceMemory,
   type ObservedDeath,
   placesDigest, recallPlaces, recordDeath, rememberPlace, seenReach, type PlaceKeep, type PlaceMemoryState, type RecalledPlace, type Sighting,
 } from '../../../modules/minecraftLearning/places.js';
@@ -27,9 +27,19 @@ const log = createLogger('Minebot:PlaceMemory');
  * A place looked at again and found gone (ore mined, a furnace taken along) is dropped.
  */
 const EQUIPMENT = ['crafting_table', 'furnace', 'blast_furnace', 'smoker', 'chest', 'barrel', 'enchanting_table', 'brewing_stand',
-  'anvil', 'nether_portal', 'end_portal_frame', 'spawner'];
-/** Blocks only a built structure puts in the world, and the structure they give away (a whole one is one place). */
-const STRUCTURE_MARKS: Record<string, string> = { nether_bricks: 'fortress', nether_brick_fence: 'fortress', nether_brick_stairs: 'fortress' };
+  'anvil', 'nether_portal', 'end_portal_frame', 'spawner', 'grindstone', 'smithing_table', 'obsidian'];
+/**
+ * Blocks only a built structure puts in the world, and the structure they give away (a whole one is one place). A village's bell;
+ * a ruined portal's crying obsidian, and its netherrack, which the overworld has nowhere else (see OVERWORLD_ONLY); an igloo's
+ * white carpet (on snow blocks: see readSection). A shipwreck is a chest with water beside it (see readSection).
+ */
+const STRUCTURE_MARKS: Record<string, string> = { nether_bricks: 'fortress', nether_brick_fence: 'fortress', nether_brick_stairs: 'fortress',
+  bell: 'village', crying_obsidian: 'ruined_portal', netherrack: 'ruined_portal', white_carpet: 'igloo' };
+/** Marks that mean their structure only in the overworld (the Nether is made of netherrack). */
+const OVERWORLD_ONLY = new Set(['netherrack']);
+/** A section of the overworld below this height with this many open cells or more is noted as a cave (its middle, its size). */
+const CAVE_BELOW_Y = 40;
+const CAVE_MIN_CELLS = 400;
 const SECTION_VOLUME = 4096;
 /** Milliseconds of reading columns allowed in one physics tick (50ms): the body's own motion comes first. */
 const TICK_BUDGET_MS = 2;
@@ -89,6 +99,8 @@ export interface PlaceMemory {
   unseen(): string;
   /** The biomes seen in this dimension, each by its nearest column, as one line (see describeBiomes); empty when none. */
   biomes(): string;
+  /** The map: every kind of place known, by count and the nearest few, with the structures' chests (see mapSummary); 3,000 characters at most. */
+  map(): string;
   flush(): void;
   /** Keep the memory in this file from now on (what the file already holds is taken up). */
   persistTo(file: string): void;
@@ -98,16 +110,20 @@ export interface PlaceMemory {
   work(budgetMs: number): void;
 }
 
-interface Wanted { byState: Map<number, string>; air: Set<number>; liquidSource: Map<number, string>; kinds: Set<string> }
+interface Wanted { byState: Map<number, string>; air: Set<number>; liquidSource: Map<number, string>; kinds: Set<string>; snow: Set<number>; overworld: boolean }
 
-function wantedStates(bot: MemoryBot): Wanted {
+function wantedStates(bot: MemoryBot, dimension = 'overworld'): Wanted {
   const byState = new Map<number, string>();
   const liquidSource = new Map<number, string>();
   const air = new Set<number>();
+  const snow = new Set<number>();
   const kinds = new Set<string>();
+  const overworld = dimension.includes('overworld');
   for (const [name, block] of Object.entries(bot.registry.blocksByName)) {
     if (block?.minStateId === undefined || block.maxStateId === undefined) continue;
     if (name === 'air' || name === 'cave_air' || name === 'void_air') { for (let state = block.minStateId; state <= block.maxStateId; state++) air.add(state); continue; }
+    if (name === 'snow_block') for (let state = block.minStateId; state <= block.maxStateId; state++) snow.add(state);
+    if (OVERWORLD_ONLY.has(name) && !overworld) continue;
     // A source is the first state of a liquid (level 0); only a source fills a bucket.
     if (name === 'water' || name === 'lava') { liquidSource.set(block.minStateId, name); byState.set(block.minStateId, name); kinds.add(name); continue; }
     const kind = name.endsWith('_ore') ? name.replace(/^deepslate_/, '') : name === 'ancient_debris' ? name
@@ -116,7 +132,9 @@ function wantedStates(bot: MemoryBot): Wanted {
     kinds.add(kind);
     for (let state = block.minStateId; state <= block.maxStateId; state++) byState.set(state, kind);
   }
-  return { byState, air, liquidSource, kinds };
+  if (overworld) kinds.add('cave');
+  kinds.add('shipwreck');
+  return { byState, air, liquidSource, kinds, snow, overworld };
 }
 
 interface Cluster { kind: string; position: Vec3; count: number; note?: string }
@@ -147,9 +165,14 @@ function readSection(bot: MemoryBot, wanted: Wanted, job: ColumnJob): void {
   const data = column.sections[index]?.data;
   if (!data) return;
   const palette: number[] | undefined = data.palette;
-  if (palette ? !palette.some(state => wanted.byState.has(state)) : !(typeof data.value === 'number' && wanted.byState.has(data.value))) return;
-  const baseX = job.chunkX * 16, baseZ = job.chunkZ * 16;
   const minY = typeof column.minY === 'number' ? column.minY : 0;
+  // A cave: the open cells of a section of the overworld's underground, counted (a section of solid rock or of nothing but air is
+  // passed over by its palette).
+  const caveSection = wanted.overworld && minY + index * 16 + 15 < CAVE_BELOW_Y && !!palette && palette.some(state => wanted.air.has(state))
+    && palette.some(state => !wanted.air.has(state));
+  if (!caveSection && (palette ? !palette.some(state => wanted.byState.has(state)) : !(typeof data.value === 'number' && wanted.byState.has(data.value)))) return;
+  const baseX = job.chunkX * 16, baseZ = job.chunkZ * 16;
+  let open = 0, sumX = 0, sumY = 0, sumZ = 0;
   const local = new Vec3(0, 0, 0);
   // The state beside a cell, or null where it is not known. A column the server has not sent is not air:
   // read as air (what the world object answers), every ore on the edge of a column counted as showing.
@@ -169,9 +192,19 @@ function readSection(bot: MemoryBot, wanted: Wanted, job: ColumnJob): void {
   };
   for (let cell = 0; cell < SECTION_VOLUME; cell++) {
     const state = data.get(cell);
+    if (caveSection && wanted.air.has(state)) { open++; sumX += cell & 15; sumY += cell >> 8; sumZ += (cell >> 4) & 15; continue; }
     const kind = wanted.byState.get(state);
     if (!kind) continue;
     const x = baseX + (cell & 15), y = minY + index * 16 + (cell >> 8), z = baseZ + ((cell >> 4) & 15);
+    if (kind === 'igloo') {
+      // An igloo's floor: white carpet on snow blocks (a carpet elsewhere is a house's).
+      const under = stateAt(x, y - 1, z);
+      if (under !== null && wanted.snow.has(under)) note(kind, new Vec3(x, y, z));
+      continue;
+    }
+    if (kind === 'chest' && FACES.some(([dx, dy, dz]) => { const beside = stateAt(x + dx, y + dy, z + dz); return beside !== null && wanted.liquidSource.get(beside) === 'water'; })) {
+      note('shipwreck', new Vec3(x, y, z));
+    }
     if (wanted.liquidSource.has(state)) {
       // Reachable with a bucket: air over it. The cell above is in this section or the next one up.
       const above = (cell >> 8) < 15 ? data.get(cell + 256) : column.sections[index + 1]?.data?.get(cell & 255);
@@ -179,6 +212,12 @@ function readSection(bot: MemoryBot, wanted: Wanted, job: ColumnJob): void {
     } else if (kind.endsWith('_ore') || kind === 'ancient_debris') {
       if (FACES.some(([dx, dy, dz]) => { const beside = stateAt(x + dx, y + dy, z + dz); return beside !== null && wanted.air.has(beside); })) note(kind, new Vec3(x, y, z));
     } else note(kind, new Vec3(x, y, z), kind === 'spawner' ? spawnedBy(column, cell & 15, y, (cell >> 4) & 15) : undefined);
+  }
+  if (open >= CAVE_MIN_CELLS) {
+    // One cave across sections and columns: its open cells added up where the hollows meet (mergeRadius of a cave).
+    const middle = new Vec3(baseX + Math.floor(sumX / open), minY + index * 16 + Math.floor(sumY / open), baseZ + Math.floor(sumZ / open));
+    const known = job.clusters.find(cluster => cluster.kind === 'cave' && cluster.position.distanceTo(middle) <= mergeRadius('cave'));
+    if (known) known.count += open; else job.clusters.push({ kind: 'cave', position: middle, count: open });
   }
 }
 
@@ -235,6 +274,14 @@ export function installPlaceMemory(bot: MemoryBot, options: { file?: string } = 
       biomeLine = { at: now, from: at.clone(), text };
       return text;
     },
+    map() {
+      // Read again as the biome line is: the observation is taken far more often than the map changes.
+      const at = here(), now = Date.now();
+      if (mapLine && now - mapLine.at < BIOME_LINE_MS && mapLine.from.distanceTo(at) < BIOME_LINE_MOVE && mapLine.dimension === dimension()) return mapLine.text;
+      const text = mapSummary(memory.state, at, dimension());
+      mapLine = { at: now, from: at.clone(), text, dimension: dimension() };
+      return text;
+    },
     flush,
     persistTo(target) {
       const before = memory.state;
@@ -275,7 +322,10 @@ export function installPlaceMemory(bot: MemoryBot, options: { file?: string } = 
     } catch { return null; }
   };
   let biomeLine: { at: number; from: Vec3; text: string } | null = null;
+  let mapLine: { at: number; from: Vec3; text: string; dimension: string } | null = null;
 
+  // What is read for, per dimension (netherrack means a ruined portal only in the overworld; caves are counted only there).
+  const wantedByDimension = new Map<string, Wanted>();
   let wanted: Wanted | null = null;
   const queue = new Set<string>();
   const enqueue = (chunkX: number, chunkZ: number) => queue.add(`${chunkX},${chunkZ}`);
@@ -312,7 +362,8 @@ export function installPlaceMemory(bot: MemoryBot, options: { file?: string } = 
         const [chunkX, chunkZ] = key.split(',').map(Number);
         const column = bot.world?.getColumn?.(chunkX, chunkZ);
         if (!column?.sections) continue;
-        wanted ??= wantedStates(bot);
+        const where = dimension();
+        wanted = wantedByDimension.get(where) ?? wantedByDimension.set(where, wantedStates(bot, where)).get(where)!;
         job = { chunkX, chunkZ, column, index: 0, clusters: [], startedReadMs: 0 };
       }
       const stepStarted = performance.now();

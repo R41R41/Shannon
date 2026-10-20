@@ -75,7 +75,8 @@ export const MAX_PLACES = 1500;
  * Kinds that are never given up for room: the ones a long journey comes back to (portals, villages, structures, the
  * blaze spawner of a fortress). Only being found gone removes them.
  */
-export const KEPT_KINDS: ReadonlySet<string> = new Set(['nether_portal', 'end_portal_frame', 'village', 'fortress', 'bastion', 'stronghold', 'spawner']);
+export const KEPT_KINDS: ReadonlySet<string> = new Set(['nether_portal', 'end_portal_frame', 'village', 'fortress', 'bastion', 'stronghold', 'spawner',
+  'ruined_portal', 'igloo', 'shipwreck']);
 /** The newest deaths' places are kept too (the items lie there for a while). */
 export const KEPT_DEATHS = 5;
 /** Deaths kept as records. */
@@ -91,6 +92,11 @@ const distance = (a: PlacePosition, b: PlacePosition) => Math.hypot(a.x - b.x, a
  */
 export function mergeRadius(kind: string): number {
   if (kind === 'village' || kind === 'fortress' || kind === 'bastion' || kind === 'stronghold') return 96;
+  // A ruined portal (its netherrack, crying obsidian and scattered frame), a cave's hollow, a shipwreck, an igloo: one place each.
+  if (kind === 'ruined_portal' || kind === 'cave') return 24;
+  if (kind === 'shipwreck') return 16;
+  if (kind === 'igloo') return 12;
+  if (kind === 'obsidian') return 8;
   // One portal is one place: its cells (2×3 and up) and the twelve frames round an end portal.
   if (kind === 'nether_portal') return 4;
   if (kind === 'end_portal_frame') return 8;
@@ -344,6 +350,102 @@ export function placesDigest(state: PlaceMemoryState, from: PlacePosition, dimen
   const digest: Record<string, string> = {};
   for (const entry of chosen.sort((a, b) => a.place.distance - b.place.distance)) digest[entry.key] = line(entry.key, entry.place);
   return digest;
+}
+
+/** The map's names for the kinds, in the order its lines give them. */
+const ORE_NAMES: Array<[string, string]> = [['diamond_ore', 'ダイヤ'], ['iron_ore', '鉄'], ['coal_ore', '石炭'], ['gold_ore', '金'],
+  ['redstone_ore', 'レッドストーン'], ['lapis_ore', 'ラピス'], ['copper_ore', '銅'], ['emerald_ore', 'エメラルド'],
+  ['nether_gold_ore', 'ネザー金'], ['nether_quartz_ore', 'クォーツ'], ['ancient_debris', '古代の残骸']];
+const STRUCTURE_NAMES: Array<[string, string]> = [['village', '村'], ['ruined_portal', '荒廃したポータル'], ['igloo', 'イグルー'],
+  ['shipwreck', '難破船'], ['fortress', 'ネザー要塞'], ['bastion', '砦の遺跡'], ['stronghold', '要塞'], ['spawner', 'スポナー'],
+  ['nether_portal', 'ネザーポータル'], ['end_portal_frame', 'エンドポータル']];
+/** Of the map's lines, at most this many characters (the head gives its route planner 3,000). */
+export const MAP_CHARACTERS = 3000;
+/** A cave of this many open cells or more is "a large hollow". */
+const LARGE_CAVE = 2000;
+
+/**
+ * The map in the body's memory, as lines for a planner that lays out a whole route: each kind of place by how many are known and
+ * the nearest few (distance, direction, coordinates), and what the structures hold that the way to the Nether wants: a ruined
+ * portal's obsidian and its chest (flint and steel, obsidian), a village smith's chest (iron, obsidian). Within `maxCharacters`, the
+ * last lines (the farthest from what the route needs) are the ones cut.
+ */
+export function mapSummary(state: PlaceMemoryState, from: PlacePosition, dimension: string, options: { maxCharacters?: number } = {}): string {
+  const all = recallPlaces(state, { from, dimension, limit: Number.MAX_SAFE_INTEGER });
+  const of = (kind: string) => all.filter(place => place.kind === kind);
+  const at = (place: RecalledPlace) => `${place.distance}m ${place.direction} (${place.position.x},${place.position.y},${place.position.z})`;
+  const near = (place: RecalledPlace, kind: string, radius: number) => all.filter(other => other.kind === kind
+    && Math.hypot(other.position.x - place.position.x, other.position.y - place.position.y, other.position.z - place.position.z) <= radius);
+  const chestNote = (chest: RecalledPlace) => chest.note?.startsWith('中身:') ? ` ${chest.note.slice(0, CONTENTS_NOTE)}` : '';
+  const listed = (places: RecalledPlace[], describe: (place: RecalledPlace) => string, shown = 3) =>
+    places.slice(0, shown).map(describe).join('、') + (places.length > shown ? ` ほか${places.length - shown}` : '');
+  const lines: string[] = [];
+
+  const structures = STRUCTURE_NAMES.flatMap(([kind, name]) => {
+    const places = of(kind);
+    if (!places.length) return [];
+    return [`${name}: ${listed(places, place => {
+      let extra = '';
+      if (kind === 'village') {
+        // A smith's chest: one beside a grindstone (weaponsmith) or a smithing table (toolsmith) in the village.
+        const smith = [...near(place, 'grindstone', 96), ...near(place, 'smithing_table', 96)]
+          .flatMap(station => near(station, 'chest', 8)).filter((chest, index, list) => list.findIndex(other => other.id === chest.id) === index);
+        if (smith.length) extra = `（鍛冶屋の箱 ${smith.slice(0, 2).map(chest => `(${chest.position.x},${chest.position.y},${chest.position.z})${chestNote(chest)}`).join('・')}: 鉄・黒曜石が入ることがある）`;
+      } else if (kind === 'ruined_portal') {
+        const obsidian = near(place, 'obsidian', 20).reduce((sum, block) => sum + (block.count ?? 1), 0);
+        const chests = near(place, 'chest', 20);
+        extra = `（黒曜石${obsidian ? `${obsidian}個` : 'あり'}${chests.length ? `・箱 (${chests[0].position.x},${chests[0].position.y},${chests[0].position.z})${chestNote(chests[0])}: 火打石と打ち金・黒曜石が入ることがある` : ''}）`;
+      } else if (kind === 'shipwreck' || kind === 'igloo') {
+        const chests = near(place, 'chest', 16);
+        if (chests.length) extra = `（箱 (${chests[0].position.x},${chests[0].position.y},${chests[0].position.z})${chestNote(chests[0])}）`;
+      } else if (place.note) extra = shownNote(place.note);
+      return `${at(place)}${extra}`;
+    }, kind === 'village' || kind === 'ruined_portal' ? 2 : 1)}`];
+  });
+  if (structures.length) lines.push(`構造物: ${structures.join('／')}`);
+
+  const ores = ORE_NAMES.flatMap(([kind, name]) => {
+    const places = of(kind);
+    return places.length ? [`${name} ${places.length}か所（${listed(places, place => `${at(place)}${countShown(place)}`, kind === 'diamond_ore' || kind === 'iron_ore' ? 3 : 2)}）`] : [];
+  });
+  if (ores.length) lines.push(`鉱石: ${ores.join('／')}`);
+
+  const lava = of('lava');
+  if (lava.length) lines.push(`溶岩の溜まり ${lava.length}か所: ${listed(lava, place => `${at(place)} ${place.position.y >= 50 ? '地表' : '地下'}${countShown(place)}`)}`
+    + '（水バケツで黒曜石にできる: use-item-on-block water_bucket count=10）');
+  const obsidian = of('obsidian');
+  if (obsidian.length) lines.push(`黒曜石 ${obsidian.length}か所: ${listed(obsidian, place => `${at(place)}${countShown(place)}`)}`);
+  const caves = of('cave');
+  if (caves.length) {
+    const large = caves.filter(cave => (cave.count ?? 0) >= LARGE_CAVE);
+    lines.push(`洞窟 ${caves.length}か所（うち大きな空洞${large.length}）: ${listed(caves, cave => `${at(cave)} 約${cave.count ?? 0}マス${(cave.count ?? 0) >= LARGE_CAVE ? '（大きな空洞）' : ''}`)}`);
+  }
+  const water = of('water');
+  if (water.length) lines.push(`水源 ${water.length}か所: ${listed(water, at, 2)}`);
+
+  const kept = all.filter(place => place.keep === 'base' || place.keep === 'respawn');
+  const beds = of('bed').filter(place => !place.keep);
+  const chests = of('chest').filter(chest => chest.note?.startsWith('中身:'));
+  const own = [
+    ...kept.map(place => `${place.keep === 'respawn' ? 'リスポーン' : `拠点の${place.kind}`} ${at(place)}`),
+    ...(beds.length ? [`置かれたベッド ${listed(beds, at, 2)}（dig-block-at takeEquipment=true で持てる）`] : []),
+    ...(chests.length ? [`中身を見た箱 ${listed(chests, chest => `${at(chest)}${chestNote(chest)}`, 2)}`] : []),
+  ];
+  if (own.length) lines.push(`拠点と設備: ${own.join('／')}`);
+
+  const biomes = describeBiomes(biomesAround(state, from, dimension, 10));
+  if (biomes) lines.push(`バイオーム: ${biomes}`);
+  lines.push(`見た範囲: ${describeSeenReach(seenReach(state, from, dimension))}`);
+
+  const limit = options.maxCharacters ?? MAP_CHARACTERS;
+  const out: string[] = [];
+  let used = 0;
+  for (const line of lines) {
+    if (limit - used < 40) break;
+    const piece = line.length > limit - used - 1 ? `${line.slice(0, limit - used - 2)}…` : line;
+    out.push(piece); used += piece.length + 1;
+  }
+  return out.join('\n');
 }
 
 /** Columns kept as seen per dimension; the oldest go first (a body does not go back over all of a long journey). */

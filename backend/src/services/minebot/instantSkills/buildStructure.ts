@@ -493,11 +493,17 @@ class BuildStructure extends InstantSkill {
     return result.success;
   }
 
+  /**
+   * The body is in the way: in the cell, or standing over it (an empty cell under the feet is one it falls into), or anywhere in the
+   * frame and the inside it encloses (a ladder probe, 2026-10-20, stood in a portal's inside over the bottom cell: 9 of 10, twice).
+   */
   private needStepAside(target: Vec3): boolean {
     const bx = Math.floor(this.bot.entity.position.x);
     const by = Math.floor(this.bot.entity.position.y);
     const bz = Math.floor(this.bot.entity.position.z);
-    return target.x === bx && target.z === bz && (target.y === by || target.y === by + 1);
+    if (target.x === bx && target.z === bz && target.y >= by - 1 && target.y <= by + 1) return true;
+    return [by - 1, by, by + 1].some(y => this.buildCells.some(cell => cell.x === bx && cell.y === y && cell.z === bz
+      && (y !== by - 1 || this.bot.blockAt(cell)?.boundingBox !== 'block')));
   }
 
   /** The frame and its inside, for the build in hand (set by runImpl). */
