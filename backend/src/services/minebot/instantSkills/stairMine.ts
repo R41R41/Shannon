@@ -13,8 +13,26 @@ import { blocksAlong, keepCheapTool } from '../utils/toolStock.js';
 import { nightGateFor } from '../utils/nightGate.js';
 import pathfinder from 'mineflayer-pathfinder';
 import { gotoSafe } from '../utils/gotoSafe.js';
+import { rankByRoute } from '../utils/routeEstimate.js';
+import { waterLevelUnderBody } from '../utils/exitWater.js';
+import { holdsWater } from '../utils/waterBlocks.js';
+import { scanDryFootholds, spreadFootholds, type DryFoothold } from './findDryFootholds.js';
 const { goals } = pathfinder;
 const log = createLogger('Minebot:Skill:stairMine');
+
+/** The ice of a frozen sea: ground no stair starts from (water lies under it). */
+const SEA_ICE = new Set(['ice', 'packed_ice', 'blue_ice', 'frosted_ice']);
+/** Land is looked for this far (the loaded chunks), and a stair starts this far from the water at least. */
+const LAND_RADIUS = 64;
+const LAND_MARGIN = 3;
+/** With no land in sight, the body goes this far the way asked, and looks again. */
+const SEA_LEG = 48;
+/** Blocks carried to stand on or to shut water off with, after the one the caller named. */
+const SCAFFOLD_BLOCKS = ['cobblestone', 'cobbled_deepslate', 'stone', 'deepslate', 'dirt', 'andesite', 'diorite', 'granite', 'tuff', 'netherrack'];
+/** Cells of water shut off in one call at most. */
+const WATER_SEALS = 48;
+/** A seabed this much higher one way than the way swum turns the swim there (the sea shallows towards a shore). */
+const SEABED_RISE = 4;
 
 /**
  * 階段掘り/埋めスキル
@@ -23,6 +41,13 @@ const log = createLogger('Minebot:Skill:stairMine');
 class StairMine extends InstantSkill {
     /** Concrete cause of the last stopped step, reported to the planner. */
     private lastStopReason: string | null = null;
+    /** Why the last trip to land did not get there, and the trip that did in this call (said in the result). */
+    private landNote: string | null = null;
+    private landTrip: string | null = null;
+    /** The way swum at sea with no land in sight, kept from call to call until land is reached (see headingAtSea). */
+    private seaHeading: Vec3 | null = null;
+    /** Cells of water shut off in this call (see sealWater). */
+    private waterSeals = 0;
     private mcData: any;
 
     constructor(bot: CustomBot) {
@@ -58,7 +83,7 @@ class StairMine extends InstantSkill {
     }
 
     async runImpl(targetY: number, direction: string = '', placeBlock: string = 'cobblestone') {
-        this.lastStopReason = null;
+        this.lastStopReason = null; this.landTrip = null; this.landNote = null; this.waterSeals = 0;
         try {
             const currentY = Math.floor(this.bot.entity.position.y);
             const diff = targetY - currentY;
@@ -102,8 +127,19 @@ class StairMine extends InstantSkill {
                 }
             }
 
+            /** Trips to land from the sea in this call (here, and in the fallback below). */
+            let landWalks = 0;
+            const LAND_WALKS = 3;
+            // Down from the sea: to land before anything else. A pickaxe crafted afloat, the stair tried four ways in the water, the
+            // body sinking and its breath reflex cutting in, took 95 s of the call's 120 before the swim (ladder probe, frozen sea).
+            if (diff < 0 && !this.shouldInterrupt() && this.atSea([])) {
+                landWalks++;
+                const inland = await this.walkToLand(dir);
+                if (inland) dir = inland;
+            }
+            const fromY = Math.floor(this.bot.entity.position.y);
             const isDescending = diff < 0;
-            const steps = Math.abs(diff);
+            const steps = Math.max(0, isDescending ? fromY - targetY : targetY - fromY);
             let successSteps = 0;
             /** Directions given up on in this call, with why (the stair turns to another by itself), and the one it was asked for. */
             const triedDirections: string[] = [];
@@ -118,15 +154,16 @@ class StairMine extends InstantSkill {
             // Deepslate steps take several seconds each; a fixed 60s stopped a
             // 125-step descent to the diamond band after a fraction of it.
             const TIMEOUT_MS = Math.min(600_000, Math.max(60_000, steps * 4_000));
-            const startTime = Date.now();
+            let startTime = Date.now();
 
-            // Every step is dug: a dear pickaxe is not spent on it when a cheaper one can be made (utils/toolStock).
+            // Every step is dug: a dear pickaxe is not spent on it when a cheaper one can be made (utils/toolStock). Not while still at
+            // sea: the table cannot be set down on the water (ladder probe, deep sea: nine tries, each refused).
             const here = this.bot.entity.position;
-            await keepCheapTool(this.bot as any, blocksAlong(this.bot as any, here,
-                { x: here.x + dir.x * steps, y: here.y + diff, z: here.z + dir.z * steps }),
+            if (!(isDescending && this.atSea([]))) await keepCheapTool(this.bot as any, blocksAlong(this.bot as any, here,
+                { x: here.x + dir.x * steps, y: targetY, z: here.z + dir.z * steps }),
                 (skill, ...args) => this.callSkill(skill, ...args));
 
-            log.info(`⛏️ 階段${isDescending ? '下降' : '上昇'}開始: Y=${currentY} → Y=${targetY} (${steps}段, 最大${Math.round(TIMEOUT_MS / 1000)}秒)`, 'cyan');
+            log.info(`⛏️ 階段${isDescending ? '下降' : '上昇'}開始: Y=${fromY} → Y=${targetY} (${steps}段, 最大${Math.round(TIMEOUT_MS / 1000)}秒)`, 'cyan');
 
             for (let i = 0; i < steps; i++) {
                 // 中断チェック
@@ -146,7 +183,8 @@ class StairMine extends InstantSkill {
                         success: false,
                         failureType: 'timeout',
                         recoverable: true,
-                        result: `タイムアウト（${elapsed}秒）: ${successSteps}段${isDescending ? '下降' : '上昇'}しました（Y=${Math.floor(this.bot.entity.position.y)}）`,
+                        result: `タイムアウト（${elapsed}秒）: ${successSteps}段${isDescending ? '下降' : '上昇'}しました（Y=${Math.floor(this.bot.entity.position.y)}）`
+                            + (this.landTrip ? `。${this.landTrip}` : ''),
                     };
                 }
 
@@ -217,13 +255,32 @@ class StairMine extends InstantSkill {
                                 }
                             }
                         }
+                        // At sea (afloat, on the ice of a frozen sea, or every way stopped by the water beside the step under the open
+                        // sky): a stair cut into the seabed floods and digging under water is some 25 times slower, so the body goes
+                        // to land first (swims, or walks the ice), where the rock under it is dry, and the stair goes on from there
+                        // inland. Ladder probe (2026-10-20, runs 11 and 12): a frozen sea and a sea, "水です" every way, no step.
+                        if (landWalks < LAND_WALKS && !this.shouldInterrupt() && this.atSea([...triedDirections, this.lastStopReason ?? ''])) {
+                            landWalks++;
+                            const fromY = Math.floor(this.bot.entity.position.y), walkStart = Date.now();
+                            const inland = await this.walkToLand(firstDirection);
+                            // The stair's own time is for the stair: the swim to land is not taken from it.
+                            startTime += Date.now() - walkStart;
+                            if (inland) {
+                                const down = fromY - Math.floor(this.bot.entity.position.y);
+                                successSteps += Math.max(0, down); i += down - 1;
+                                firstDirection = inland; dir = inland.clone(); triedDirections.length = 0; this.lastStopReason = null;
+                                continue;
+                            }
+                            this.lastStopReason = `${this.lastStopReason ?? '水の上です。'}（陸へ向かいましたが着けませんでした: ${this.landNote ?? '理由不明'}）`;
+                        }
                         return {
                             success: false,
                             failureType: 'stair_progress_blocked',
                             recoverable: true,
                             result: `${successSteps}段下降しました（Y=${Math.floor(this.bot.entity.position.y)}）。`
                                 + (this.lastStopReason ?? '次の段で高さと位置を確認できず中断しました')
-                                + (triedDirections.length ? `（ほかに試した方向: ${triedDirections.join('、')}）` : ''),
+                                + (triedDirections.length ? `（ほかに試した方向: ${triedDirections.join('、')}）` : '')
+                                + (this.landTrip ? `。${this.landTrip}` : ''),
                         };
                     }
                 } else {
@@ -258,7 +315,8 @@ class StairMine extends InstantSkill {
                 recoverable: finalY === targetY ? undefined : true,
                 result: (finalY === targetY
                     ? `${successSteps}段${isDescending ? '下降' : '上昇'}してY=${finalY}に到達しました`
-                    : `${successSteps}段移動しましたが目標Y=${targetY}には到達していません（現在Y=${finalY}）`) + spareToolNote(this.bot),
+                    : `${successSteps}段移動しましたが目標Y=${targetY}には到達していません（現在Y=${finalY}）`)
+                    + (this.landTrip ? `（${this.landTrip}）` : '') + spareToolNote(this.bot),
             };
         } catch (error: any) {
             return {
@@ -292,7 +350,12 @@ class StairMine extends InstantSkill {
                     }
                     // Breaking into an aquifer floods the stair: mining underwater is ~25x
                     // slower and paid runs lost the bot in flooded caves. Stop dry instead.
-                    const water = this.adjacentWater(pos);
+                    // The water is shut off first with a carried block, as a player does (sealWater); the stop stays for water in
+                    // the stair's own cells, with nothing to shut it with, or when it will not shut.
+                    const path = [currentPos, currentPos.offset(0, 1, 0), ...clearTargets.map(([cell]) => cell)];
+                    let water = this.adjacentWater(pos);
+                    for (let seal = 0; water && seal < 6 && !path.some(cell => cell.equals(water!)) && await this.sealWater(water, blockName); seal++)
+                        water = this.adjacentWater(pos);
                     if (water) {
                         this.lastStopReason = `${label}の${block.name}(${pos.x}, ${pos.y}, ${pos.z})の隣(${water.x}, ${water.y}, ${water.z})が水です。`
                             + '掘ると浸水するため停止しました。別の方向で再実行するか、水の無い場所から降りてください';
@@ -311,8 +374,7 @@ class StairMine extends InstantSkill {
             // A cave edge: bridge the step with a carried block, as a player
             // does, instead of stopping at the first open floor.
             if (support && support.boundingBox === 'empty' && !['lava', 'water'].includes(support.name)) {
-                const scaffold = [blockName, 'cobblestone', 'cobbled_deepslate', 'stone', 'deepslate', 'dirt', 'andesite',
-                    'diorite', 'granite', 'tuff', 'netherrack'].find(name => this.bot.inventory.items().some(i => i.name === name));
+                const scaffold = [blockName, ...SCAFFOLD_BLOCKS].find(name => this.bot.inventory.items().some(i => i.name === name));
                 if (scaffold && await this.placeBlockSafe(scaffold, support.position)) {
                     const deadline = Date.now() + 1000;
                     while (Date.now() < deadline && this.bot.blockAt(support.position)?.boundingBox !== 'block') await this.sleep(100);
@@ -476,6 +538,153 @@ class StairMine extends InstantSkill {
         return best;
     }
 
+    private afloat(): boolean {
+        return (this.bot.entity as any)?.isInWater === true || waterLevelUnderBody(this.bot as any) !== null;
+    }
+
+    /** A cell of the sea: water (or what holds it) or the ice over it. */
+    private wetCell(at: Vec3): boolean {
+        const block = this.bot.blockAt(at);
+        return !!block && (holdsWater(block) || SEA_ICE.has(block.name));
+    }
+
+    /**
+     * The body is at sea, where no stair can start: afloat, on the ice of a frozen sea, or stopped by water (`reasons`) with the open
+     * sky over it (an aquifer underground is not the sea, and its own stop is said as it is).
+     */
+    atSea(reasons: string[]): boolean {
+        if (this.afloat()) return true;
+        const feet = this.bot.entity.position.floored();
+        if (SEA_ICE.has(this.bot.blockAt(feet.offset(0, -1, 0))?.name ?? '')) return true;
+        if (!reasons.some(reason => /水です|が(water|ice|packed_ice|blue_ice)で空いています/.test(reason))) return false;
+        for (let up = 2; up <= 24; up++) {
+            const block = this.bot.blockAt(feet.offset(0, up, 0));
+            if (block && block.boundingBox !== 'empty') return false;
+        }
+        return true;
+    }
+
+    /**
+     * Land a stair can start from: ground that is not ice, with no water or ice within LAND_MARGIN across and from the feet down
+     * five (the stair's first steps, and the shore it leaves behind).
+     */
+    inland(feet: Vec3): boolean {
+        if (SEA_ICE.has(this.bot.blockAt(feet.offset(0, -1, 0))?.name ?? '')) return false;
+        for (let dx = -LAND_MARGIN; dx <= LAND_MARGIN; dx++) for (let dz = -LAND_MARGIN; dz <= LAND_MARGIN; dz++)
+            for (let dy = 0; dy >= -5; dy--) if (this.wetCell(feet.offset(dx, dy, dz))) return false;
+        return true;
+    }
+
+    /** The footholds on land (see inland) in the loaded chunks within LAND_RADIUS, nearest first, at most two dozen. */
+    landSites(): DryFoothold[] {
+        const sites: DryFoothold[] = [];
+        for (const site of scanDryFootholds(this.bot as any, { radius: LAND_RADIUS, maxVertical: 12, wide: true }).candidates) {
+            if (sites.length >= 24) break;
+            if (this.inland(new Vec3(Math.floor(site.x), site.y, Math.floor(site.z)))) sites.push(site);
+        }
+        return sites;
+    }
+
+    /**
+     * The way from `feet` whose stair stays clear of the sea: the fewest cells of water or ice along its first twelve steps (three
+     * wide, floor to head), and of those the one leading on from where the body came (`from`), away from the shore.
+     */
+    inlandDirection(feet: Vec3, from: Vec3): Vec3 {
+        const wet = (way: Vec3) => {
+            let cells = 0;
+            for (let k = 1; k <= 12; k++) for (let side = -1; side <= 1; side++) for (let up = -1; up <= 1; up++)
+                if (this.wetCell(feet.offset(way.x * k - way.z * side, -k + up, way.z * k + way.x * side))) cells++;
+            return cells;
+        };
+        return [new Vec3(1, 0, 0), new Vec3(-1, 0, 0), new Vec3(0, 0, 1), new Vec3(0, 0, -1)]
+            .map(way => ({ way, wet: wet(way), on: way.x * (feet.x - from.x) + way.z * (feet.z - from.z) }))
+            .sort((a, b) => a.wet - b.wet || b.on - a.on)[0].way;
+    }
+
+    /**
+     * How high the seabed lies the way `way`, 16 to 64 blocks off (three lines 8 apart, the loaded columns only): the mean height of
+     * its first solid block under the sea level. Null with fewer than six columns read.
+     */
+    seabedHeight(way: Vec3): number | null {
+        const feet = this.bot.entity.position.floored();
+        let sum = 0, columns = 0;
+        for (let k = 16; k <= 64; k += 8) for (const side of [-8, 0, 8]) {
+            const x = feet.x + way.x * k - way.z * side, z = feet.z + way.z * k + way.x * side;
+            for (let y = 62; y >= -16; y--) {
+                const block = this.bot.blockAt(new Vec3(x, y, z));
+                if (!block) break;
+                if (block.boundingBox === 'block' && !SEA_ICE.has(block.name)) { sum += y; columns++; break; }
+            }
+        }
+        return columns >= 6 ? sum / columns : null;
+    }
+
+    /**
+     * The way to swim with no land in sight. The seabed rises towards a shore, so a way whose seabed lies SEABED_RISE blocks higher
+     * than the present heading's is taken; otherwise the heading is kept, across calls (`seaHeading`), and never turned straight
+     * back over the sea already seen. The way asked only starts it. Ladder probe (2026-10-20, a wide frozen sea): the way asked turned
+     * east, south, west and north call by call, and the body swam to and fro for ten minutes.
+     */
+    headingAtSea(asked: Vec3): Vec3 {
+        const current = this.seaHeading ?? asked;
+        let best = current, bestHeight = this.seabedHeight(current) ?? -Infinity;
+        for (const way of [new Vec3(current.z, 0, -current.x), new Vec3(-current.z, 0, current.x)]) {
+            const height = this.seabedHeight(way);
+            if (height !== null && height >= bestHeight + SEABED_RISE) { best = way; bestHeight = height; }
+        }
+        this.seaHeading = best;
+        return best;
+    }
+
+    /** A quarter turn from `way`, to the side whose seabed lies higher (the left one when neither can be read or they are level). */
+    sideOf(way: Vec3): Vec3 {
+        const left = new Vec3(way.z, 0, -way.x), right = new Vec3(-way.z, 0, way.x);
+        return (this.seabedHeight(right) ?? -Infinity) > (this.seabedHeight(left) ?? -Infinity) ? right : left;
+    }
+
+    /**
+     * To land from the sea, by move-to (it swims, walks the ice, and climbs the bank on arrival): the land the navigator reaches most
+     * cheaply of the nearest few; with none in sight, a swim of SEA_LEG blocks (headingAtSea) brings new chunks into view (twice at
+     * most). Returns the way inland from where the body landed, or null (why in `landNote`).
+     */
+    private async walkToLand(asked: Vec3): Promise<Vec3 | null> {
+        this.landNote = null;
+        const tried = new Set<string>();
+        const key = (site: DryFoothold) => `${Math.floor(site.x)},${site.y},${Math.floor(site.z)}`;
+        for (let leg = 0; leg < 3 && !this.shouldInterrupt(); leg++) {
+            const from = this.bot.entity.position.clone();
+            const sites = this.landSites().filter(site => !tried.has(key(site)));
+            if (!sites.length) {
+                if (leg === 2) break;
+                const heading = this.headingAtSea(asked);
+                const to = from.offset(heading.x * SEA_LEG, 0, heading.z * SEA_LEG);
+                log.info(`🌊 ${LAND_RADIUS}ブロック以内に陸が見えません。${this.directionName(heading)}へ${SEA_LEG}ブロック進んで探します`);
+                const swum = await this.callSkill('move-to', Math.floor(to.x), Math.floor(from.y), Math.floor(to.z), 4, 'nearxz');
+                const went = Math.hypot(this.bot.entity.position.x - from.x, this.bot.entity.position.z - from.z);
+                // Hardly anywhere (a wall under the water, an ocean monument; ladder probe, deep sea: 1,000 s against one): the
+                // heading turns a quarter, to the side whose seabed lies higher, never back.
+                if (went < SEA_LEG / 4) this.seaHeading = this.sideOf(heading);
+                this.landNote = `${LAND_RADIUS}ブロック以内に陸が見えず、${this.directionName(heading)}へ${Math.round(went)}ブロック進みました（${String(swum?.result ?? '').slice(0, 60)}）`;
+                continue;
+            }
+            const site = (await rankByRoute(this.bot as any, spreadFootholds(sites, 4, 6), { timeoutMs: 700,
+                goodEnough: (candidate, route) => route.cost <= 3 * candidate.distance + 10 }))[0];
+            tried.add(key(site));
+            const moved = await this.callSkill('move-to', site.x, site.y, site.z, 1.5, 'near');
+            const here = this.bot.entity.position;
+            if (Math.hypot(here.x - site.x, here.z - site.z) <= 2.5 && Math.abs(here.y - site.y) <= 1.5 && !this.afloat()) {
+                const feet = here.floored();
+                const way = this.inlandDirection(feet, from);
+                this.seaHeading = null;
+                this.landTrip = `海の上から陸(${feet.x}, ${feet.y}, ${feet.z})へ移り、${this.directionName(way)}へ掘り進めました`;
+                log.info(`🌊 ${this.landTrip}`);
+                return way;
+            }
+            this.landNote = `陸(${Math.floor(site.x)}, ${site.y}, ${Math.floor(site.z)})への移動: ${String(moved?.result ?? '失敗').slice(0, 80)}`;
+        }
+        return null;
+    }
+
     /**
      * How many blocks below the step (`nextPos`) a solid floor lies that the body can drop to unharmed: 1 or 2 (a fall of two or
      * three blocks in all), with nothing but air between and no lava or water in the landing cell or beside it. Null otherwise.
@@ -610,6 +819,24 @@ class StairMine extends InstantSkill {
             if (error instanceof ThreatExposedError || error instanceof LavaReleaseError) this.lastStopReason = error.message;
             return false;
         }
+    }
+
+    /**
+     * A cell of water beside a block the stair is about to dig, filled with a carried block (the scaffold blocks) so that the dig
+     * does not let the water in. Ladder probe (2026-10-20, a frozen sea's coast): 25 steps down, then water beside every way at
+     * y 38 under the ground, and eight calls of no step. Not afloat (the sea is left for land first, see walkToLand), at most
+     * WATER_SEALS a call.
+     */
+    async sealWater(at: Vec3, blockName = 'cobblestone'): Promise<boolean> {
+        if (this.waterSeals >= WATER_SEALS || this.afloat()) return false;
+        const block = [blockName, ...SCAFFOLD_BLOCKS].find(name => this.bot.inventory.items().some(item => item.name === name));
+        if (!block || !(await this.placeBlockSafe(block, at))) return false;
+        this.waterSeals++;
+        const deadline = Date.now() + 1000;
+        while (Date.now() < deadline && this.bot.blockAt(at)?.boundingBox !== 'block') await this.sleep(100);
+        const sealed = this.bot.blockAt(at)?.boundingBox === 'block';
+        if (sealed) log.info(`⛏️ 隣の水(${at.x}, ${at.y}, ${at.z})を${block}でふさぎました`);
+        return sealed;
     }
 
     private adjacentWater(pos: Vec3): Vec3 | null {
