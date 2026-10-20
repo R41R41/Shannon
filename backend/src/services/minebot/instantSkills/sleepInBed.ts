@@ -304,7 +304,11 @@ class SleepInBed extends InstantSkill {
       let taken: { success: boolean; result: string };
       try { taken = await this.callSkill('dig-block-at', at.x, at.y, at.z, true, 'target', true); }
       catch (error: any) { taken = { success: false, result: String(error?.message ?? error) }; }
-      return { success: true, result: `${slept.result}。${taken.success ? 'ベッドは拾い直しました' : `ベッド(${at.x}, ${at.y}, ${at.z})を拾えませんでした（dig-block-at takeEquipment=true で拾えます）`}` };
+      // Dug but not in the pack (drop_not_collected): it lies there, and digging the spot again finds air.
+      const notTaken = (taken as { failureType?: string }).failureType === 'drop_not_collected'
+        ? `ベッドは掘りましたが持ち物に入っていません（(${at.x}, ${at.y}, ${at.z}) の近くに落ちていれば pickup-nearest-item で拾えます）`
+        : `ベッド(${at.x}, ${at.y}, ${at.z})を拾えませんでした（dig-block-at takeEquipment=true で拾えます）`;
+      return { success: true, result: `${slept.result}。${taken.success ? 'ベッドは拾い直しました' : notTaken}` };
     } catch (error: any) {
       return { success: false, result: `${error.message}` };
     }

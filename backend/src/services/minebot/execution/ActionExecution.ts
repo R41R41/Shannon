@@ -72,6 +72,11 @@ export function physicalActionBusy(bot: object): boolean { return [...(active.ge
 export function hasActiveSafetyLease(bot: object): boolean {
   return [...(active.get(actionHost(bot)) ?? [])].some(context => context.physical && context.safetyLease && !context.settled);
 }
+/** The capabilities (skill names) of the safety reflexes holding the body now: auto-swim surfacing, the lava escape. */
+export function safetyLeaseCapabilities(bot: object): string[] {
+  return [...(active.get(actionHost(bot)) ?? [])].filter(context => context.physical && context.safetyLease && !context.settled)
+    .map(context => context.progress.capability);
+}
 export async function waitForActionQuiescence(bot: object): Promise<void> {
   while (physicalActionBusy(bot)) await new Promise(resolve => setTimeout(resolve, 10));
 }
