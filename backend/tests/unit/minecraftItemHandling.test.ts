@@ -58,12 +58,14 @@ describe('item handling for bucket and portal work', () => {
     expect(await new UseItem(shared).runImpl('cooked_beef')).toMatchObject({ success: true, result: expect.stringContaining('14→20') });
     const plain = eater(10, async bot => { bot.stack.count--; bot.food = 18; });
     expect(await new UseItem(plain).runImpl('cooked_beef')).toMatchObject({ success: true, result: expect.stringContaining('残り2個') });
-    // Full: nothing is eaten, and the answer says why.
+    // Full: nothing is eaten, and the answer says why. It is no failure (run 20: a procedure's upkeep that fails once is not tried again).
     const full = eater(20, async () => { throw new Error('Food is full'); });
-    expect(await new UseItem(full).runImpl('cooked_beef')).toMatchObject({ success: false, failureType: 'not_hungry' });
+    expect(await new UseItem(full).runImpl('cooked_beef')).toMatchObject({ success: true, result: expect.stringContaining('食べる必要はありません') });
     // Hungry and nothing changed: a failure, with what the library said.
     const stuck = eater(8, async () => { throw new Error('Promise timed out.'); });
-    const result = await new UseItem(stuck).runImpl('cooked_beef');
+    const stuckSkill: any = new UseItem(stuck);
+    stuckSkill.settleMs = 50;
+    const result = await stuckSkill.runImpl('cooked_beef');
     expect(result).toMatchObject({ success: false });
     expect(result.result).toContain('Promise timed out');
   });

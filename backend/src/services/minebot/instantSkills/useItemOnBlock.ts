@@ -11,6 +11,7 @@ import { liquidAim, liquidAimPoints } from '../utils/liquidAim.js';
 import { facePoints, rayFace } from '../utils/rayFace.js';
 import { dropBurnsIn } from '../utils/dropFate.js';
 import { tidyPlan } from '../utils/inventoryTidy.js';
+import { scoopWater } from '../utils/scoopWater.js';
 /** Rock dug on the way that a full pack can spare, for the obsidian (see roomForDrops). */
 const SPARE_ROCK = ['cobbled_deepslate', 'tuff', 'diorite', 'andesite', 'granite', 'dirt', 'gravel', 'calcite', 'netherrack', 'cobblestone'];
 
@@ -32,25 +33,27 @@ class UseItemOnBlock extends InstantSkill {
     this.description =
       '手に持っているアイテムを指定ブロックに対して使用します（右クリック）。'
       + '⚠️ 黒曜石を作るには water_bucket を持って lava ブロックの座標を指定してください。'
-      + 'スキル側が自動的にマグマ隣の固体ブロックに水を設置し、水流でマグマを黒曜石に変換します。';
+      + 'スキル側が自動的にマグマ隣の固体ブロックに水を設置し、水流でマグマを黒曜石に変換します。'
+      + '💧 水を汲むには itemName=bucket（空のバケツ）で呼びます。座標（x,y,z）は省略でき、省くと体が近く（既定48m以内、地上・開けた水面を優先）の水源を探して歩いて汲みます（記憶の水の場所も試す）。'
+      + '座標を付けた時は、その水（水流や水面の1つ上/下の座標でも、近くの水源）を汲みます。汲んだ水入りのバケツ(water_bucket)は地下へ持って下りてください（地下で水を探さない）。';
     this.params = [
       {
         name: 'x',
         type: 'number',
-        description: 'X座標',
-        required: true,
+        description: 'X座標（itemName=bucket で水を汲む時だけ省略できる）',
+        required: false,
       },
       {
         name: 'y',
         type: 'number',
-        description: 'Y座標',
-        required: true,
+        description: 'Y座標（itemName=bucket で水を汲む時だけ省略できる）',
+        required: false,
       },
       {
         name: 'z',
         type: 'number',
-        description: 'Z座標',
-        required: true,
+        description: 'Z座標（itemName=bucket で水を汲む時だけ省略できる）',
+        required: false,
       },
       {
         name: 'itemName',
@@ -64,6 +67,12 @@ class UseItemOnBlock extends InstantSkill {
         description: 'water_bucket で溶岩を指した時だけ：集める黒曜石の数。1以上なら、その溶岩の溜まりで「水をかける→固まった黒曜石を掘る→水を回収→次の溶岩」を体の中で繰り返し、指定数まで集める（溶岩まで自分で歩く。diamond_pickaxe が要る）。省略か0なら1か所に水をかけるだけ',
         default: 0,
       },
+      {
+        name: 'maxDistance',
+        type: 'number',
+        description: 'itemName=bucket で座標を省いた時だけ：水源を探す範囲（m）。既定48。見つからなければ記憶の水の場所へも向かう',
+        default: 48,
+      },
     ];
     // Ten obsidian made and mined in one call: about twelve pours and ten digs of nine seconds (a ladder probe, 2026-10-20: 216 s).
     this.maxDurationMs = 300_000;
@@ -71,13 +80,32 @@ class UseItemOnBlock extends InstantSkill {
 
   private liquidAim(pos: Vec3): { point?: Vec3; reason?: string } { return liquidAim(this.bot, pos); }
 
-  async runImpl(x: number, y: number, z: number, itemName?: string, count: number = 0) {
+  async runImpl(x?: number | null, y?: number | null, z?: number | null, itemName?: string | null, count: number = 0, maxDistance: number = 48) {
     try {
-      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
+      itemName = itemName ?? undefined;
+      const absent = [x, y, z].filter(value => value === undefined || value === null).length;
+      // An empty bucket needs no coordinates: the body finds the water itself (see utils/scoopWater).
+      if (absent === 3) {
+        if ((itemName ?? this.bot.heldItem?.name) === 'bucket') {
+          return await scoopWater(this.bot, { maxDistance: Number(maxDistance) || 48, shouldStop: () => this.shouldInterrupt() });
+        }
+        return { success: false, failureType: 'invalid_input', recoverable: true,
+          result: '座標（x, y, z）が必要です。座標を省けるのは itemName=bucket で水を汲む時だけです' };
+      }
+      if (absent > 0 || !Number.isFinite(Number(x)) || !Number.isFinite(Number(y)) || !Number.isFinite(Number(z))) {
         return {
           success: false,
           result: '座標は有効な数値である必要があります',
         };
+      }
+      x = Number(x); y = Number(y); z = Number(z);
+      // An empty bucket at a named cell: that water, or the nearest source (a flowing cell, or one a block above or below the surface),
+      // walked to if it is not at hand. Lava and powder snow keep the plain use below.
+      if ((itemName ?? this.bot.heldItem?.name) === 'bucket') {
+        const target = this.bot.blockAt(new Vec3(x, y, z));
+        if (target?.name !== 'lava' && target?.name !== 'powder_snow') {
+          return await scoopWater(this.bot, { near: new Vec3(x, y, z), maxDistance: Number(maxDistance) || 48, shouldStop: () => this.shouldInterrupt() });
+        }
       }
       // Any count asked for collects (the last one of ten as well: a count of 1 meaning "pour once" left a probe at nine).
       const wanted = Math.floor(Number(count) || 0);
@@ -86,7 +114,8 @@ class UseItemOnBlock extends InstantSkill {
       if (itemName) {
         const wanted = this.bot.inventory.items().find(item => item.name === itemName);
         if (!wanted && this.bot.heldItem?.name !== itemName) {
-          return { success: false, result: `${itemName}を持っていません`, failureType: 'material_missing', recoverable: true };
+          return { success: false, failureType: 'material_missing', recoverable: true,
+            result: itemName === 'bucket' ? 'バケツを持っていません（鉄 3 個で craft-one bucket）' : `${itemName}を持っていません` };
         }
         if (wanted && this.bot.heldItem?.name !== itemName) await this.bot.equip(wanted, 'hand');
       }
