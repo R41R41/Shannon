@@ -28,7 +28,7 @@ import { wasUnreachable } from './unreachableTargets.js';
  */
 const RANGE = 24;
 const PER_NEED = 2;
-const MAX_NEEDS = 10;
+const MAX_NEEDS = 12;
 const FOOD_ENOUGH = 6;
 const WOOD_ENOUGH = 12;
 /** A smelt of eight takes one coal: about thirty iron and a few meals. */
@@ -156,16 +156,20 @@ function logNames(registry: any): string[] {
 }
 
 /**
- * Beds standing within BED_RANGE, from the places seen (a respawn bed of her own is not one to take: it is set already), nearest
- * first; the block's own name when it is loaded.
+ * The nearest bed standing within BED_RANGE, from the places seen, and only one (it is the one to walk to): not a bed of her own (her
+ * respawn bed, or one she placed at her base: hers already), nor one whose block, loaded, is no longer a bed (taken or broken since).
+ * The block's own name when it is loaded.
  */
 function standingBeds(bot: NeedsBody, now: number): NearbyNeed[] {
   const places = (() => { try { return bot.placeMemory?.recall?.('bed', 4) ?? []; } catch { return []; } })();
-  return places.filter(place => place.keep !== 'respawn' && place.distance <= BED_RANGE).slice(0, PER_NEED).map(place => {
-    const position = { x: Math.floor(place.position.x), y: Math.floor(place.position.y), z: Math.floor(place.position.z) };
-    const name = (() => { try { return bot.blockAt?.(new Vec3(position.x, position.y, position.z))?.name; } catch { return undefined; } })();
-    const failed = wasUnreachable(bot, new Vec3(position.x, position.y, position.z), now);
-    return { id: `bed:b:${position.x},${position.y},${position.z}`, need: 'bed' as const, name: name?.endsWith('_bed') ? name : 'bed', position,
+  const cell = (place: { position: { x: number; y: number; z: number } }) => new Vec3(Math.floor(place.position.x), Math.floor(place.position.y), Math.floor(place.position.z));
+  const loaded = (at: Vec3) => { try { return bot.blockAt?.(at)?.name; } catch { return undefined; } };
+  const standing = places.filter(place => place.keep !== 'respawn' && place.keep !== 'base' && place.distance <= BED_RANGE)
+    .map(place => ({ place, at: cell(place), name: loaded(cell(place)) }))
+    .filter(entry => entry.name === undefined || entry.name === null || entry.name.endsWith('_bed'));
+  return standing.slice(0, 1).map(({ place, at, name }) => {
+    const failed = wasUnreachable(bot, at, now);
+    return { id: `bed:b:${at.x},${at.y},${at.z}`, need: 'bed' as const, name: name?.endsWith('_bed') ? name : 'bed', position: { x: at.x, y: at.y, z: at.z },
       distance: place.distance, canReach: !failed, ...(failed ? { why: 'failed_recently' as const } : {}) };
   });
 }

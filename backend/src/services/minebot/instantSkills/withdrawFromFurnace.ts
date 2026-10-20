@@ -272,6 +272,10 @@ class WithdrawFromFurnace extends InstantSkill {
                     // The raw food start-smelting queued behind the batch goes in now, the furnace being empty: cooked while the
                     // body goes on with its work, eaten cooked later (see start-smelting).
                     if (!remainingInput) queuedNote = await this.startQueued(x, y, z, queued);
+                } else if (remainingInput) {
+                    // A part taken out: the furnace now holds only what is left (nearbyNeeds counts it as iron at hand, mb-arch run 19).
+                    const entry = this.bot.activeFurnaces?.find(f => f.pos.x === x && f.pos.y === y && f.pos.z === z);
+                    if (entry) entry.count = remainingInput.count;
                 }
 
                 // An output-only request succeeds when it actually retrieved

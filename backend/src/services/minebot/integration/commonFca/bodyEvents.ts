@@ -90,7 +90,11 @@ export class BodyEventWatcher implements BodyEventSource {
   begin(command: Pick<Command, 'id' | 'skill' | 'arguments'>): void {
     const skill = String(command.skill ?? '').replace(/^mc\./u, '');
     const now = this.now();
-    this.running = { id: command.id, skill, measure: WATCHED[skill] ?? null, args: command.arguments ?? {}, startedAt: now,
+    const args = command.arguments ?? {};
+    // A chase is measured only on one kind it can find (not a group word such as hostile, nor a stand that waits for them to come).
+    const chaseable = WATCHED[skill] !== 'chase' || (/^[a-z_]+$/u.test(String(args.entityName ?? '').trim().toLowerCase())
+      && !['hostile', 'food_animals', 'animals', 'any'].includes(String(args.entityName).trim().toLowerCase()) && args.holdPosition !== true);
+    this.running = { id: command.id, skill, measure: chaseable ? WATCHED[skill] ?? null : null, args, startedAt: now,
       lastProgressAt: now, lastToldAt: now, stalledTold: false, best: null, trail: [], carried: this.carried(), gained: 0 };
     const at = this.position();
     if (at) this.running.trail.push({ at, time: now });
@@ -137,6 +141,8 @@ export class BodyEventWatcher implements BodyEventSource {
       if (run.best !== null) progressed = true;
       run.best = distance;
     }
+    // After a kill the next one is chased from wherever it is: closing in on it counts from there.
+    if (run.measure === 'chase' && gained > 0) run.best = distance;
     const at = this.position();
     // The last places it counted at, by number not by time: forgetting them after a while let pacing between two spots count again.
     if (run.trail.length > BODY_EVENTS.trail) run.trail = run.trail.slice(-BODY_EVENTS.trail);
@@ -144,7 +150,8 @@ export class BodyEventWatcher implements BodyEventSource {
     const away = run.measure === 'travel' ? BODY_EVENTS.travelBy : run.measure === 'target' ? BODY_EVENTS.detourBy : null;
     if (away !== null && at && run.trail.length && run.trail.every(mark => Math.hypot(at.x - mark.at.x, at.y - mark.at.y, at.z - mark.at.z) >= away)) progressed = true;
     if (progressed) { run.lastProgressAt = now; run.stalledTold = false; if (at) run.trail.push({ at, time: now }); }
-    const water = this.bot.entity?.isInWater === true;
+    // Sooner in water only for a chase or a move: a dig there is slow but still digging.
+    const water = this.bot.entity?.isInWater === true && (run.measure === 'chase' || run.measure === 'target');
     const facts = (): Record<string, Scalar> => ({ skill: run.skill, measure: run.measure, elapsedMs: now - run.startedAt,
       sinceProgressMs: now - run.lastProgressAt, gained: run.gained, ...(distance !== null ? { distance: round(distance) } : {}),
       ...(water ? { hazard: 'water' } : {}) });
@@ -160,7 +167,7 @@ export class BodyEventWatcher implements BodyEventSource {
     const at = this.position();
     if (!at) return null;
     if (run.measure === 'depth') { const y = number(run.args.targetY); return y === null ? null : Math.abs(at.y - y); }
-    if (run.measure === 'chase') return this.nearest(String(run.args.entityName ?? ''), at);
+    if (run.measure === 'chase') return this.nearest(String(run.args.entityName ?? '').trim().toLowerCase(), at);
     if (run.measure !== 'target') return null;
     const x = number(run.args.x), y = number(run.args.y), z = number(run.args.z);
     const goal = typeof run.args.goalType === 'string' ? run.args.goalType : 'nearxz';

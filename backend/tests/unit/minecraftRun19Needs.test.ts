@@ -47,6 +47,9 @@ describe('run 19: a standing bed and fuel are needs too', () => {
     const needs = nearbyNeeds(body(fed, [{ position: { x: 69, y: 66, z: 4 }, distance: 13 }, { position: { x: 300, y: 70, z: 0 }, distance: 240 }]), 1_000);
     expect(needs).toEqual([expect.objectContaining({ id: 'bed:b:69,66,4', need: 'bed', name: 'red_bed', distance: 13, canReach: true })]);
     expect(nearbyNeeds(body(fed, [{ position: { x: 69, y: 66, z: 4 }, distance: 13, keep: 'respawn' }]), 5_000)).toEqual([]);
+    // Her own bed at her base is hers already; a remembered bed whose loaded block is air now is gone.
+    expect(nearbyNeeds(body(fed, [{ position: { x: 69, y: 66, z: 4 }, distance: 13, keep: 'base' }]), 6_000)).toEqual([]);
+    expect(nearbyNeeds(body(fed, [{ position: { x: 70, y: 66, z: 4 }, distance: 14 }]), 7_000)).toEqual([]);
     expect(nearbyNeeds(body([...fed, { name: 'white_bed', count: 1 }], [{ position: { x: 69, y: 66, z: 4 }, distance: 13 }]), 9_000)).toEqual([]);
   });
 
@@ -79,6 +82,26 @@ describe('run 19: a chase is measured, and told sooner in water (a salmon chase 
     for (let i = 0; i < 4; i++) water.advance(2_000);
     expect(stalls(water.watcher)[0]?.data).toMatchObject({ measure: 'chase', hazard: 'water' });
     expect(BODY_EVENTS.waterStallMs).toBeLessThan(BODY_EVENTS.stallMs);
+  });
+
+  it('after a kill the next one is chased from wherever it is; a group word or a stand in place is not measured', () => {
+    const f = chase(false);
+    f.bot.entities[9]!.position.x = 2;
+    f.advance(2_000);
+    f.bot.items = [{ name: 'salmon', count: 1 }];
+    f.bot.entities[9]!.position.x = 12;
+    f.advance(2_000);
+    // 18 s of closing in on the next one from 12 m: measured from the kill, it gets somewhere; from the old best (2 m) it never would.
+    for (let i = 0; i < 9; i++) { f.bot.entities[9]!.position.x -= 1.2; f.advance(2_000); }
+    expect(stalls(f.watcher)).toHaveLength(0);
+    let clock = Date.parse('2026-10-20T10:00:00Z');
+    const bot = { entity: { position: { x: 0, y: 64, z: 0 } }, inventory: { items: () => [] }, entities: {} };
+    for (const args of [{ entityName: 'hostile' }, { entityName: 'zombie', holdPosition: true }]) {
+      const watcher = new BodyEventWatcher(bot, () => clock, () => []);
+      watcher.begin({ id: 'stand', skill: 'attack-continuously', arguments: args });
+      for (let i = 0; i < 12; i++) { clock += 2_000; watcher.tick(); }
+      expect(stalls(watcher)).toHaveLength(0);
+    }
   });
 
   it('closing in by 2 m or a kill (its drop) counts as getting somewhere', () => {
