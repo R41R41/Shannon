@@ -340,6 +340,24 @@ describe('the nether ladder\'s tools (lab probe 2026-10-20): where a poured buck
   });
 });
 
+describe('enter-portal hears the change of dimension that comes during the walk in, and walks to the portal\'s bottom cell (gate test)', () => {
+  it('a body carried over on the way is told it went, and the goal is the lowest portal cell of the column', async () => {
+    const { default: EnterPortal } = await import('../../src/services/minebot/instantSkills/enterPortal.js');
+    const { gotoSafe } = await import('../../src/services/minebot/utils/gotoSafe.js');
+    const bot: any = Object.assign(new EventEmitter(), { game: { dimension: 'overworld' }, entity: { position: new Vec3(3.5, 64, 0.5) },
+      blockAt: (p: Vec3) => ({ position: p, name: p.x === 0 && p.z === 0 && p.y >= 64 && p.y <= 66 ? 'nether_portal' : p.y < 64 ? 'obsidian' : 'air' }) });
+    const skill: any = new EnterPortal(bot);
+    let goalY = NaN;
+    vi.mocked(gotoSafe).mockImplementationOnce(async (_bot: any, goal: any) => {
+      goalY = goal.y; bot.game.dimension = 'the_nether'; bot.emit('spawn'); return { success: true };
+    });
+    const result = await skill.runImpl(0, 66, 0);
+    expect(result).toEqual({ success: true, result: 'オーバーワールドからネザーに移動しました' });
+    expect(goalY).toBe(64);
+    expect(bot.listenerCount('spawn')).toBe(0);
+  });
+});
+
 describe('the release after a command waits for auto-swim to reach the air (run 19: two FCA_BODY_OUTCOME_UNKNOWN)', () => {
   const fixture = () => {
     const bot: any = Object.assign(new EventEmitter(), { entity: { id: 1, position: new Vec3(0, 60, 0), yaw: 0, pitch: 0, onGround: false },
