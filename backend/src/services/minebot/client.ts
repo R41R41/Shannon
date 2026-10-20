@@ -117,6 +117,9 @@ export class MinebotClient extends BaseClient {
       checkTimeoutInterval: CONFIG.CHECK_TIMEOUT_INTERVAL,
       skipValidation: true,
     }) as CustomBot;
+    // Each bot gets its plugins' listeners (spawn, physicsTick: about a dozen each), above the emitter's default of ten: raised before
+    // the plugins load. The count is logged at each login, so a growth from one login to the next shows in the log.
+    this.bot.setMaxListeners(40);
     this.connectionEnded = false;
     this.explicitlyDisconnected = false;
     const connectedBot = this.bot;
@@ -168,9 +171,6 @@ export class MinebotClient extends BaseClient {
     // floor (rollback). The reflex ledger always counts what the resident reflexes do (P8).
     if (process.env.MINEBOT_COMMON_FCA === 'on') loadFloorLayer(this.bot);
 
-    // Each bot gets its plugins' listeners (spawn, physicsTick: about a dozen each), above the emitter's default of ten. The count is
-    // logged at each login, so a growth from one login to the next (a listener left on a shared emitter) shows in the log.
-    this.bot.setMaxListeners(40);
     this.bot.on('login', async () => {
       log.info(`✅ Bot has logged in. listeners spawn=${connectedBot.listenerCount('spawn')} physicsTick=${connectedBot.listenerCount('physicsTick')} `
         + `process.uncaughtException=${process.listenerCount('uncaughtException')}`);
