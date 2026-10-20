@@ -100,6 +100,26 @@ SHANNON_DC_VOICE_BACKCHANNEL=off
 - 戻し方は `SHANNON_DC_VOICE` を外して再起動。
 - 実装: `services/discord/voice/`（`dcVoiceGuild.ts`、`utteranceCollector.ts`、`turnQueue.ts`、`bargeIn.ts`、`speechPlayer.ts`、`voiceMouth*.ts`）、`services/llm/voice/dcVoiceTurn.ts`、`services/integration/shannonCoreVoiceClient.ts`。テスト: `tests/unit/dcVoice*.test.ts`、`voiceMouth.test.ts`、`shannonCoreVoiceClient.test.ts`。
 
+## 頭は 1 つ（one head、2026-10-20、既定は切）
+
+`SHANNON_ONE_HEAD=on` の時、この体は Discord の耳と口だけになる。文字のメッセージは全部（束縛の有無、持ち主かどうかに関係なく）、
+VC の発話も束縛に関係なく、心の `POST /v1/converse` に 1 つの形（誰が・どこで・文字か声か・人前か）で送る。誰がその場にいるか・
+何を覚えているか・何を言うかは心が決める。契約は shannon-ios の `docs/one-head-contract.md`。
+
+```dotenv
+SHANNON_ONE_HEAD=on
+# 声も心に通すには dc-voice も on（VC の受け方・口・相づちは dc-voice のもの）
+SHANNON_DC_VOICE=on
+```
+
+- 心の側にも `SHANNON_ONE_HEAD=on`（と `SHANNON_PLATFORM_REPLY=on`、`SHANNON_DC_VOICE=on`）が要る。心が 503・403・落ちている・時間切れの時だけ、
+  その 1 通・1 発話は旧の作り（invokeGraph、VOICEPEAK）が答える（ログ `[OneHead] fallback`）。
+- 心が「言うことは無い」と答えた文字（`done` の `reply` が空）は、何も投稿せず、旧の作りも答えない。
+- 体のタスクの追加確認への返事（`[追加要件への回答]`）は、今まで通りこの体が受ける。添付ファイル・画像の URL は「（画像）」に置き換えて送る。
+- 戻し方は `SHANNON_ONE_HEAD` を外して再起動（dc-voice・第5a段階の動きに戻る）。
+- 実装: `services/integration/oneHeadConverse.ts`、`shannonCoreBridge.ts`（`requestDiscordReply`）、`shannonCoreVoiceClient.ts`（`turn`）。
+  テスト: `tests/unit/oneHeadConverse.test.ts`。
+
 ## 検証
 
 - `backend/tests/unit/shannonCoreBridge.test.ts`

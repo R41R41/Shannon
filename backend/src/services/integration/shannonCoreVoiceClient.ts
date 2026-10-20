@@ -16,6 +16,7 @@ import {
   type ShannonCoreBridgeBinding,
   type ShannonCoreBridgeConfiguration,
 } from './shannonCoreBridge.js';
+import { ONE_HEAD_CONVERSE_PATH, type ConverseTurn } from './oneHeadConverse.js';
 
 // ── Wire types ──────────────────────────────────────────────────────────────
 
@@ -174,9 +175,17 @@ export function createShannonCoreVoiceClient(
   };
   const authHeaders = { authorization: `Bearer ${token}` };
   const jsonHeaders = { ...authHeaders, 'content-type': 'application/json' };
+  // One head: every utterance goes to `POST /v1/converse` in the one shape, bound or not; the head decides who is present.
+  const oneHead = bridgeConfig.oneHead === true;
+  const turnUrl = (): string => {
+    if (!oneHead) return endpoint('turn');
+    const u = new URL(base.toString());
+    u.pathname = ONE_HEAD_CONVERSE_PATH;
+    return u.toString();
+  };
 
   const isBound = (conversationId: string): boolean =>
-    bounded(conversationId, 240) && bindings.some(candidate => matchesConversation(candidate, conversationId));
+    bounded(conversationId, 240) && (oneHead || bindings.some(candidate => matchesConversation(candidate, conversationId)));
 
   /** A small JSON POST. 2xx -> ok (json may be undefined for 204); everything else -> unavailable. */
   async function postJson(
@@ -234,10 +243,10 @@ export function createShannonCoreVoiceClient(
 
       let response: Response;
       try {
-        response = await fetcher(endpoint('turn'), {
+        response = await fetcher(turnUrl(), {
           method: 'POST',
           headers: jsonHeaders,
-          body: JSON.stringify(turnBody(request)),
+          body: JSON.stringify(oneHead ? converseVoiceBody(request) : turnBody(request)),
           redirect: 'error',
           signal: controller.signal,
         });
@@ -473,6 +482,25 @@ function turnBody(request: VoiceTurnRequest) {
     ...(request.situation ? { situation: request.situation.slice(0, 300) } : {}),
     ...(request.sttMs === undefined ? {} : { sttMs: Math.max(0, Math.round(request.sttMs)) }),
     ...(request.utteranceMs === undefined ? {} : { utteranceMs: Math.max(0, Math.round(request.utteranceMs)) }),
+  };
+}
+
+/** One head: the same utterance in the one shape of `POST /v1/converse` (`oneHeadConverse.ts`). */
+export function converseVoiceBody(request: VoiceTurnRequest): ConverseTurn {
+  const body = turnBody(request);
+  return {
+    version: 1, requestId: body.requestId, observedAt: body.observedAt, modality: 'voice',
+    where: { platform: 'discord', conversationId: body.conversationId, conversationKind: 'channel', voiceChannelId: body.voiceChannelId },
+    who: { userId: body.sourceUserId, displayName: body.sourceDisplayName },
+    presence: {
+      participants: body.participants, heard: body.heard, followsShannonTurn: body.followsShannonTurn, speakingNow: body.speakingNow,
+      ...(body.situation ? { situation: body.situation } : {}),
+    },
+    words: body.userMessage,
+    voice: {
+      ...(body.fillerId ? { fillerId: body.fillerId } : {}), ...(body.sttMs === undefined ? {} : { sttMs: body.sttMs }),
+      ...(body.utteranceMs === undefined ? {} : { utteranceMs: body.utteranceMs }),
+    },
   };
 }
 

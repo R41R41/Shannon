@@ -263,6 +263,12 @@ export const config = {
     /** Also messages of people other than the bound owner. Default off. */
     replyPeopleEnabled: optional('SHANNON_CORE_PLATFORM_REPLY_PEOPLE', '') === 'true',
     replyTimeoutMs: Math.min(60_000, Math.max(5_000, parseInt(optional('SHANNON_CORE_PLATFORM_REPLY_TIMEOUT_MS', '55000'), 10) || 55_000)),
+    /**
+     * One head (owner 2026-10-20): every Discord message and every voice-channel utterance goes to the head's POST /v1/converse,
+     * bound or not, the owner's or anyone's; this runtime's own model (invokeGraph, VOICEPEAK) answers only when the head cannot.
+     * Default off (the paths above as they are).
+     */
+    oneHead: dcVoiceSwitch('SHANNON_ONE_HEAD', false),
   },
 
   /**

@@ -32,6 +32,9 @@ const configuredDependencies: DiscordCompanionReplyDependencies = {
  * conversations, switched off, voice, attachments, a companion failure) returns `fallback` and the legacy graph answers.
  * The reply goes out through the same request-bound conversation port as every Discord text reply, and the turn is not
  * mirrored again: the companion already kept it.
+ *
+ * One head (`SHANNON_ONE_HEAD=on`, owner 2026-10-20): every message goes to the head's `POST /v1/converse`, bound or not, the owner's
+ * or anyone's (the head decides who is present); `fallback` then means only that the head could not answer.
  */
 export async function answerDiscordFromCompanion(
   envelope: RequestEnvelope,
@@ -47,6 +50,8 @@ export async function answerDiscordFromCompanion(
     if (result.status === 'unavailable') logger.warn('companion reply unavailable; using legacy reply path');
     return 'fallback';
   }
+  // One head: she had nothing to say to it (the message was not for her). Nothing is posted, and the legacy path does not answer either.
+  if (!result.reply.trim()) return 'answered';
   const sent = await dependencies.conversation(envelope).reply({ message: result.reply });
   if (sent.status === 'sent') return 'answered';
   logger.warn(`companion reply not sent: ${sent.status}`);
