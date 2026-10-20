@@ -18,8 +18,10 @@ const properties = fs.readFileSync(path.join(worldDirectory, 'server.properties'
 if (!properties.includes('server-ip=127.0.0.1') || !properties.includes(`server-port=${port}`)) throw new Error('ISOLATED_PROBE_WORLD_CONFIGURATION_INVALID');
 
 const NAME = 'MinebotTrial';
-const actor = await createProbeBot(port, NAME);
-const operator = await createProbeBot(port);
+// A world just generated on a busy machine can take longer than one spawn wait: once more before giving up.
+const join = async (name?: string) => { try { return await createProbeBot(port, name); } catch { await new Promise(r => setTimeout(r, 15_000)); return createProbeBot(port, name); } };
+const actor = await join(NAME);
+const operator = await join();
 const oracle = new MinecraftCommandOracle(operator);
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 const scenarios = (process.env.MINECRAFT_SPEED_SCENARIOS ?? 'walk,logs,stone,stair,iron,coal,deep').split(',').map(s => s.trim()).filter(Boolean);
@@ -147,6 +149,17 @@ try {
       const y = Math.floor(actor.entity.position.y);
       record.calls.push(await call('deep', 'stair-mine', -40, 'west'));
       record.steps = y - Math.floor(actor.entity.position.y);
+    } else if (scenario === 'hunt') {
+      // Three sheep and three rabbits a few blocks off: the kills, and what each left lying.
+      await setup(spawnAt, [...TOOLS, 'minecraft:iron_sword 1']);
+      const p = actor.entity.position.floored();
+      for (const [mob, dx, dz] of [['sheep', 5, 0], ['sheep', 6, 3], ['sheep', 4, -4], ['rabbit', -5, 2], ['rabbit', -6, -3], ['rabbit', 3, 6]] as const) {
+        await oracle.executeSetupCommand(`summon minecraft:${mob} ${p.x + dx} ${p.y + 1} ${p.z + dz}`);
+      }
+      await sleep(1500);
+      record.calls.push(await call('sheep', 'attack-continuously', 'sheep', 3));
+      record.calls.push(await call('rabbit', 'attack-continuously', 'rabbit', 3));
+      record.got = { wool: count(n => n.endsWith('_wool')), mutton: count(n => n === 'mutton'), rabbit: count(n => n === 'rabbit' || n === 'rabbit_hide') };
     } else if (scenario === 'night') {
       // At midnight in iron armour, no bed: may the stair go down? Then with a bed carried: is the night slept through?
       await setup(spawnAt, [...TOOLS, 'minecraft:cooked_beef 4'], ['time set 18000',

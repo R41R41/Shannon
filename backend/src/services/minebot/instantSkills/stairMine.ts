@@ -160,6 +160,8 @@ class StairMine extends InstantSkill {
                 }
 
                 const currentPos = this.bot.entity.position.floored();
+                // A fall on the way (a step that gave onto a cave) can take the body past the height asked for: no further than that.
+                if (isDescending ? currentPos.y <= targetY : currentPos.y >= targetY) break;
 
                 if (isDescending) {
                     // Straight down where the rock allows (utils/shaftDown): one block dug for the level instead of a stair's three.

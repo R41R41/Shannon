@@ -23,6 +23,8 @@ describe('a descent straight down where the rock allows (lab: a stair 2.45 s a l
   it('never drops into a cave, onto magma, beside water or lava, or through bedrock', () => {
     expect(shaftStepRefusal(world({ '0,38,0': 'cave_air' }), feet)).toBe('no_rock_under');
     expect(shaftStepRefusal(world({ '0,38,0': 'magma_block' }), feet)).toBe('no_rock_under');
+    // Gravel under the floor falls into whatever is below it once the floor is gone, the body on top.
+    expect(shaftStepRefusal(world({ '0,38,0': 'gravel' }), feet)).toBe('falling_under');
     expect(shaftStepRefusal(world({ '1,39,0': 'lava' }), feet)).toBe('liquid_beside');
     expect(shaftStepRefusal(world({ '0,38,-1': 'water' }), feet)).toBe('liquid_beside');
     expect(shaftStepRefusal(world({ '0,39,0': 'bedrock' }), feet)).toBe('floor_not_diggable');

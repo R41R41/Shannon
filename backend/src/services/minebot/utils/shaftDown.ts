@@ -16,6 +16,8 @@ import { PROTECTED_UTILITY_BLOCKS } from '../constants.js';
 
 const LIQUIDS = new Set(['water', 'lava', 'flowing_water', 'flowing_lava', 'bubble_column']);
 const BAD_FLOORS = new Set(['magma_block', 'powder_snow', 'pointed_dripstone', 'campfire', 'soul_campfire']);
+/** Blocks that fall: the floor dug from over one sets it falling into whatever is under it, the body on top. */
+const FALLING = /^(gravel|sand|red_sand|suspicious_sand|suspicious_gravel|.*_concrete_powder)$/;
 const SIDES = [[1, 0], [-1, 0], [0, 1], [0, -1]] as const;
 
 interface ShaftBlock { name: string; boundingBox?: string; diggable?: boolean }
@@ -29,6 +31,7 @@ export function shaftStepRefusal(bot: ShaftBody, feet: Vec3): string | null {
   if (!floor || floor.boundingBox !== 'block' || floor.diggable === false) return 'floor_not_diggable';
   if (PROTECTED_UTILITY_BLOCKS.has(floor.name) || floor.name === 'bedrock') return 'floor_protected';
   if (!under || under.boundingBox !== 'block' || LIQUIDS.has(under.name) || BAD_FLOORS.has(under.name)) return 'no_rock_under';
+  if (FALLING.test(under.name)) return 'falling_under';
   for (const [dx, dz] of SIDES) {
     // The cell dropped into, and the rock under it (the next level): no liquid beside either.
     for (const dy of [-1, -2]) {

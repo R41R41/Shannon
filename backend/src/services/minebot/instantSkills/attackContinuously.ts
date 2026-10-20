@@ -4,6 +4,7 @@ import { CustomBot, InstantSkill } from '../types.js';
 import { shouldRefuseAggressiveCombat } from '../utils/minebotToolPolicy.js';
 import { reflexPromptText } from '../utils/floorConfig.js';
 import { gotoSafe } from '../utils/gotoSafe.js';
+import { pickupGoal } from '../execution/collectDrops.js';
 import { actionDelay } from '../execution/observedWait.js';
 import { visiblePointOn } from '../utils/sightLine.js';
 import { WOOL_COLORS, sheepWool, woolStatusLine } from '../utils/nightGate.js';
@@ -493,8 +494,15 @@ class AttackContinuously extends InstantSkill {
       const itemPos = item.position;
       if (itemPos.distanceTo(this.bot.entity.position) > 1) {
         try {
-          // Within a block: the body picks up what is within a block of it, and an exact cell on a slope or an edge often has no route.
-          await gotoSafe(this.bot, new goals.GoalNear(itemPos.x, itemPos.y, itemPos.z, 1), { timeoutMs: 4000, stuckAbortCount: 3, logStuck: false });
+          // A cell from which the drop is within pickup reach (collectDrops' own goal, judged against the item's real position): "within a
+          // block" of its cell let the walk stop up to 1.4 m off, out of reach, and the drop was given up (run 19: 6 of 9 kills left theirs).
+          // Where that cell has no route (a slope, an edge), within a block of it as before.
+          let goal: ReturnType<typeof pickupGoal> | null = null;
+          try { goal = pickupGoal(this.bot, itemPos); } catch { goal = null; }
+          const near = goal ? await gotoSafe(this.bot, goal as any, { timeoutMs: 4000, stuckAbortCount: 3, logStuck: false }) : { success: false };
+          if (!near.success && this.bot.entities[item.id]) {
+            await gotoSafe(this.bot, new goals.GoalNear(itemPos.x, itemPos.y, itemPos.z, 1), { timeoutMs: 3000, stuckAbortCount: 3, logStuck: false });
+          }
         } catch { /* ignore */ }
         this.stopMovement();
       }
