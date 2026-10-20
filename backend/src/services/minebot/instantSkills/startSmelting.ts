@@ -3,6 +3,7 @@ import { Vec3 } from 'vec3';
 import { CustomBot, InstantSkill } from '../types.js';
 import { ensureLineOfSight } from '../utils/blockLineOfSight.js';
 import { approachFurnace } from '../utils/furnaceReach.js';
+import { explainOpenFailure } from '../utils/workstationAccess.js';
 import { FALLBACK_FOOD_POINTS, RAW_FOOD } from '../constantSkills/autoEat.js';
 import { nearestOres, scanLoadedBlocks } from '../utils/loadedBlockScan.js';
 import type { SkillResult } from '../types/skillParams.js';
@@ -231,7 +232,11 @@ class StartSmelting extends InstantSkill {
       }
 
       // Out of reach: walk to a stand it can be opened from first (utils/furnaceReach).
-      const approach = await approachFurnace(this.bot, pos, (...args) => this.callSkill('move-to', ...args));
+      // Reach is the eyes' (not the feet's), the view is checked, and a stand beside the furnace is looked for before it is given up.
+      const approach = await approachFurnace(this.bot, pos, (...args) => this.callSkill('move-to', ...args), {
+        stopped: () => this.shouldInterrupt(), tryAnyway: true,
+        clearSight: async (target) => { const los = await ensureLineOfSight(this.bot, target); return { clear: los.clear, dug: !!los.dugBlocks?.length }; },
+      });
       if (approach) return approach;
 
       if (!this.isValidFuel(fuelItem)) {
@@ -252,6 +257,9 @@ class StartSmelting extends InstantSkill {
           const failType = los.dugBlocks?.length ? 'obstruction_cleared' : 'line_of_sight_blocked';
           return { success: false, result: los.message!, failureType: failType, recoverable: true };
         }
+        // The open failed with nothing dug: said from the body's own measure of reach and view when that is what it was.
+        const why = explainOpenFailure(this.bot, pos, 'かまど');
+        if (why) return why;
         throw actionError;
       }
       if (!furnace) {

@@ -3,6 +3,7 @@ import { Vec3 } from 'vec3';
 import { CustomBot, InstantSkill } from '../types.js';
 import { ensureLineOfSight } from '../utils/blockLineOfSight.js';
 import { approachFurnace } from '../utils/furnaceReach.js';
+import { explainOpenFailure } from '../utils/workstationAccess.js';
 import { assertActionActive, bindActionCallback, reportActionProgress } from '../execution/ActionExecution.js';
 import { waitForObservation, type ObservationSource } from '../execution/observedWait.js';
 import { backgroundJobs } from '../execution/backgroundJobs.js';
@@ -112,7 +113,10 @@ class WithdrawFromFurnace extends InstantSkill {
 
             // Out of reach: walk to where it can be opened first (a stand from which the block is in reach, whatever the height:
             // run 17 was told "too far" three times, once standing 14 blocks under the furnace after a move "already there" in XZ).
-            const approach = await approachFurnace(this.bot, pos, (...args) => this.callSkill('move-to', ...args));
+            const approach = await approachFurnace(this.bot, pos, (...args) => this.callSkill('move-to', ...args), {
+                stopped: () => this.shouldInterrupt(), tryAnyway: true,
+                clearSight: async (target) => { const los = await ensureLineOfSight(this.bot, target); return { clear: los.clear, dug: !!los.dugBlocks?.length }; },
+            });
             if (approach) return approach;
 
             // スロット名の正規化
@@ -133,6 +137,8 @@ class WithdrawFromFurnace extends InstantSkill {
                     const failType = los.dugBlocks?.length ? 'obstruction_cleared' : 'line_of_sight_blocked';
                     return { success: false, result: los.message!, failureType: failType, recoverable: true };
                 }
+                const why = explainOpenFailure(this.bot, pos, 'かまど');
+                if (why) return why;
                 throw actionError;
             }
             if (!furnace) {
