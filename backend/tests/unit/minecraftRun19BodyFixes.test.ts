@@ -326,6 +326,18 @@ describe('the nether ladder\'s tools (lab probe 2026-10-20): where a poured buck
     expect(await skill.stepAside(new Vec3(1, 64, 0))).toBe(true);
     expect(bot.entity.position.floored()).toEqual(new Vec3(3, 64, 0));
   });
+  it('the body is in the way when its box reaches into the cell, not only when its feet are in it, and when it stands over the empty cell', async () => {
+    const { default: BuildStructure } = await import('../../src/services/minebot/instantSkills/buildStructure.js');
+    const bot: any = { version: '1.21.11', entity: { position: new Vec3(0.75, 64, 0.5), yaw: 0 }, inventory: { items: () => [] },
+      blockAt: (p: Vec3) => ({ position: p, boundingBox: 'empty' }) };
+    const skill: any = new BuildStructure(bot);
+    expect(skill.bodyIn(new Vec3(1, 64, 0))).toBe(true);     // feet in column 0, the box 0.05 into column 1 (run 21: two cells refused)
+    bot.entity.position = new Vec3(0.65, 64, 0.5);
+    expect(skill.bodyIn(new Vec3(1, 64, 0))).toBe(false);
+    bot.entity.position = new Vec3(1.5, 65, 0.5);
+    expect(skill.bodyIn(new Vec3(1, 64, 0))).toBe(true);     // over the empty cell
+    expect(skill.bodyIn(new Vec3(1, 62, 0))).toBe(false);
+  });
 });
 
 describe('the release after a command waits for auto-swim to reach the air (run 19: two FCA_BODY_OUTCOME_UNKNOWN)', () => {
@@ -356,7 +368,7 @@ describe('the release after a command waits for auto-swim to reach the air (run 
   }, 10_000);
 });
 
-describe('use-item-on-block count≥2 makes and mines obsidian from a pool in one call (mb-arch: ten decisions for ten obsidian)', () => {
+describe('use-item-on-block with a count makes and mines obsidian from a pool in one call (mb-arch: ten decisions for ten obsidian)', () => {
   const pool = (length: number) => {
     // A row of lava sources at y 60 on stone, stone walls round it; the body stands on the bank at its west end.
     const cells = new Map<string, string>();
@@ -381,6 +393,7 @@ describe('use-item-on-block count≥2 makes and mines obsidian from a pool in on
     };
     return { cells, inventory, bot };
   };
+  const UseItemOnBlockClass = async () => (await import('../../src/services/minebot/instantSkills/useItemOnBlock.js')).default;
   const skillFor = async (world: ReturnType<typeof pool>) => {
     const { default: UseItemOnBlock } = await import('../../src/services/minebot/instantSkills/useItemOnBlock.js');
     const skill: any = new UseItemOnBlock(world.bot);
@@ -388,7 +401,9 @@ describe('use-item-on-block count≥2 makes and mines obsidian from a pool in on
     skill.placeWaterNearLava = async (lava: Vec3) => { world.cells.set(`${lava.x},${lava.y},${lava.z}`, 'obsidian'); poured.push(`${lava.x}`); return { success: true }; };
     skill.callSkill = async (name: string, x: any, y: number, z: number) => {
       if (name === 'drop-item') { for (const item of world.inventory) if (item.name === x) item.count = 0; return { success: true }; }
-      world.cells.set(`${x},${y},${z}`, 'air'); dug.push(`${x}`);
+      world.cells.set(`${x},${y},${z}`, 'air'); dug.push(`${x},${y}`);
+      // dig-block-at's water on top falls into the opening and turns the lava under it.
+      if (world.cells.get(`${x},${y - 1},${z}`) === 'lava') world.cells.set(`${x},${y - 1},${z}`, 'obsidian');
       const held = world.inventory.find(item => item.name === 'obsidian');
       if (held) held.count++; else world.inventory.push({ name: 'obsidian', count: 1 });
       return { success: true };
@@ -404,6 +419,19 @@ describe('use-item-on-block count≥2 makes and mines obsidian from a pool in on
     expect(poured).toEqual(['0', '1', '2', '3', '4']);
     expect(dug).toHaveLength(5);
   });
+  it('a count of 1 collects one too (the last of ten), while no count pours once as before', async () => {
+    const world = pool(3);
+    const { skill, poured } = await skillFor(world);
+    expect((await skill.runImpl(0, 60, 0, 'water_bucket', 1)).result).toContain('黒曜石を1個作って掘りました');
+    const single = await UseItemOnBlockClass();
+    const once: any = new single(world.bot);
+    once.placeWaterNearLava = async () => ({ success: true, result: 'poured once' });
+    world.bot.equip = async (item: any) => { world.bot.heldItem = item; };
+    world.cells.set('2,60,0', 'lava');
+    world.bot.entity.position = new Vec3(1.5, 61, 1.5);
+    expect((await once.runImpl(2, 60, 0, 'water_bucket')).result).toBe('poured once');
+    expect(poured.length).toBeGreaterThan(0);
+  });
   it('a pool too small says how many it got and why, with the water bucket kept', async () => {
     const world = pool(3);
     const { skill } = await skillFor(world);
@@ -413,6 +441,16 @@ describe('use-item-on-block count≥2 makes and mines obsidian from a pool in on
     expect(result.result).toContain('黒曜石を3個作って掘りました');
     expect(result.result).toContain('残り2個: 近くに水をかけられる溶岩も、すぐ掘れる黒曜石も、もうありません');
     expect(result.result).toContain('水はwater_bucketへ回収済み');
+  });
+  it('a pool two deep: its crust is dug with water on top (three at most), and the layer under it is taken too (ladder probe: none of five)', async () => {
+    const world = pool(3);
+    for (let x = 0; x < 3; x++) world.cells.set(`${x},59,0`, 'lava');
+    const { skill, dug } = await skillFor(world);
+    const result = await skill.runImpl(0, 60, 0, 'water_bucket', 6);
+    expect(result.success).toBe(true);
+    expect(result.result).toContain('黒曜石を6個作って掘りました（溶岩3か所に水をかけ');
+    expect(dug.filter(cell => cell.endsWith(',60'))).toHaveLength(3);
+    expect(dug.filter(cell => cell.endsWith(',59'))).toHaveLength(3);
   });
   it('a full pack is made room in first, so the obsidian is taken and not left on the floor (ladder probe: five dug, none taken)', async () => {
     const world = pool(2);
