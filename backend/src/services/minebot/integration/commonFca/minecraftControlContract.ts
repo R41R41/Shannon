@@ -1,5 +1,6 @@
 // Wire mirror of Shannon API contracts/minecraftControlContract.ts; update both sides together.
 interface ActionLease { id: string; generation: number; holder: string }
+import type { LiveRoom, LiveSpeechItem, LiveSpeechReceipt } from '../../../common/liveSpeech.js';
 import type { BodyActionReceipt, BodyCandidateDraft, BodyObservation, BodyOperation, BodyStopAcknowledgement, BodyStopRequest, BodyTaskContext } from './bodyControlContract.js';
 
 /** Separate from the legacy game-chat/body request contract: no planner executes on this device. */
@@ -45,10 +46,15 @@ export interface MinecraftControlPoll {
   receipts: readonly MinecraftControlReceipt[]; activeOperationIds: readonly string[];
   /** Oldest first, at most 32; absent while the API has not shown it reads them (an older API ignores the field). */
   events?: readonly MinecraftBodyEvent[];
+  /** What the body did with the live lines it was handed, and the room it plays in; only when a Discord sink is registered (session dc-live). */
+  speechReceipts?: readonly LiveSpeechReceipt[];
+  liveRoom?: LiveRoom;
 }
 export interface MinecraftControlReply {
   schemaVersion: 1; mode: 'common-fca';
   commands: readonly MinecraftControlCommand[]; cancel: readonly string[]; acknowledged: readonly string[];
   /** The highest event `seq` the API has taken; the body drops those. Absent from an API that does not read events. */
   eventsThrough?: number;
+  /** A line of hers for the room (at most one at a time), while the API's SHANNON_MINECRAFT_LIVE_SPEECH is on. An older body ignores it. */
+  speech?: readonly LiveSpeechItem[];
 }

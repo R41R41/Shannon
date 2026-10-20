@@ -127,6 +127,16 @@ export const config = {
     uiModBaseUrl: optional('MINEBOT_COMPANION_UI_MOD_BASE_URL', ''),
   },
 
+  /**
+   * Her live lines about what happens to her Minecraft body (session dc-live; the API's SHANNON_MINECRAFT_LIVE_SPEECH writes them).
+   * Off unless MINEBOT_LIVE_SPEECH=on. Voice goes to the voice channel she is in; text goes to MINEBOT_LIVE_DISCORD_CHANNEL
+   * (`<guild id>:<channel id>`), the one channel she may write in unasked. Without a channel, only voice.
+   */
+  minebotLive: {
+    speech: optional('MINEBOT_LIVE_SPEECH', '') === 'on',
+    discordChannel: optional('MINEBOT_LIVE_DISCORD_CHANNEL', ''),
+  },
+
   minecraftPlanner: {
     provider: ['anthropic', 'openai'].includes(optional('MINECRAFT_PLANNER_PROVIDER', 'auto'))
       ? optional('MINECRAFT_PLANNER_PROVIDER', 'auto') : 'auto',
