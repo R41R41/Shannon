@@ -18,10 +18,17 @@ import { createLogger } from '../../../utils/logger.js';
 import { getWaterLevel } from './waterLevel.js';
 import { actionSignal, assertActionActive, reportActionProgress } from '../execution/ActionExecution.js';
 import { actionDelay } from '../execution/observedWait.js';
+import { nextLeg, configuredLegM, LEG_ATTEMPTS } from './farLegs.js';
 
 const log = createLogger('Minebot:gotoSafe');
 
 export interface GotoSafeOptions {
+  /**
+   * A walk to ground further than 1.5 legs is planned a leg at a time (utils/farLegs): an intermediate point on the
+   * line no further than this many metres, the real goal only as the last leg. 0 plans the whole walk as one goal.
+   * Default 64 (MINEBOT_FAR_LEG_M).
+   */
+  legM?: number;
   /** 全体タイムアウト (ms)。デフォルト 30000 */
   timeoutMs?: number;
   /** ミクロスタック判定のチェック間隔 (ms)。デフォルト 500 */
@@ -53,6 +60,10 @@ export interface GotoSafeResult {
   /** What the path executor was doing when an unfinished move ended (digging which block, placing, walking, searching). */
   activity?: string;
 }
+
+/** A search that gave up is asked again when the body got this far (m) in the try, at most MAX_REPLANS times in a walk. */
+const REPLAN_PROGRESS_M = 3;
+const MAX_REPLANS = 8;
 
 /** Shortest stretch of digging or placing without a step before it counts as going nowhere. */
 const TERRAIN_WORK_MIN_MS = 8_000;
@@ -129,13 +140,27 @@ export async function gotoSafe(
   let recoveryAttempt = 0;
   let stuckBlock: GotoSafeResult['stuckBlock'] | undefined;
   let activity: string | undefined;
+  /** Legs of a far walk done, and the other lines tried at this leg's start after a "no path". */
+  let legsDone = 0;
+  let legAttempt = 0;
+  let idleLegs = 0;
+  /** Searches that gave up after the body had got on, asked again from where it stood. */
+  let replans = 0;
 
   while (Date.now() < deadline) {
     assertActionActive(bot);
     const remainMs = deadline - Date.now();
     if (remainMs <= 0) break;
 
-    const seg = await runGotoSegment(bot, goal, {
+    const leg = nextLeg(bot, goal, legAttempt, opts.legM ?? configuredLegM());
+    if (!leg.final && legAttempt === 0) {
+      const here = bot.entity.position;
+      log.info(`🧭 遠い移動を区間に分けます: 区間${legsDone + 1}（${leg.rock ? '岩の中・' : ''}中継点 ${leg.via!.x}${leg.via!.y === undefined ? '' : `, ${leg.via!.y}`}, ${leg.via!.z}／現在 ${here.x.toFixed(0)}, ${here.y.toFixed(0)}, ${here.z.toFixed(0)}）`);
+      reportActionProgress(bot, 'navigate', { leg: legsDone + 1, via: leg.via }, true);
+    }
+    const legStart = leg.final ? null : { x: bot.entity.position.x, y: bot.entity.position.y, z: bot.entity.position.z };
+    const attemptFrom = { x: bot.entity.position.x, y: bot.entity.position.y, z: bot.entity.position.z };
+    const seg = await runGotoSegment(bot, leg.goal, {
       checkIntervalMs,
       microStuckCount,
       stuckThreshold,
@@ -150,8 +175,30 @@ export async function gotoSafe(
 
     activity = seg.activity ?? activity;
 
-    if (seg.result === 'success') return { success: true };
-    if (seg.result === 'no_path') return { success: false, error: 'no_path' };
+    if (seg.result === 'success') {
+      if (leg.final) return { success: true };
+      // An intermediate point reached: the next leg starts from here, with the stuck counts fresh. Two "reached" legs in a row that
+      // did not move the body are a search handing back an empty route, not progress.
+      const now = bot.entity.position;
+      if (legStart && Math.hypot(now.x - legStart.x, now.y - legStart.y, now.z - legStart.z) < 1) { if (++idleLegs >= 2) return { success: false, error: 'stuck', stuckBlock, activity }; }
+      else idleLegs = 0;
+      legsDone++; legAttempt = 0; recoveryAttempt = 0;
+      continue;
+    }
+    if (seg.result === 'no_path') {
+      // A search that gives up ("no path", or "took too long to decide": the library's answer to any re-plan, and a walk through rock is
+      // re-planned at every block dug) after the body had walked or dug its way on is not the end of the way: it is asked again from
+      // where the body stands, as long as each try gets it three blocks further (run 20: moves ended "no path" after 73 s and 26 m).
+      const here = bot.entity.position;
+      if (Math.hypot(here.x - attemptFrom.x, here.y - attemptFrom.y, here.z - attemptFrom.z) >= REPLAN_PROGRESS_M && replans < MAX_REPLANS) {
+        replans++;
+        if (logStuck) log.info(`🧭 経路探索が諦めたが、${REPLAN_PROGRESS_M}m以上進んでいるので現在地から探し直します（${replans}/${MAX_REPLANS}）`);
+        continue;
+      }
+      // No way to the intermediate point (water, a wall, ground not loaded there): the same walk towards a point turned a little away.
+      if (!leg.final && legAttempt + 1 < LEG_ATTEMPTS) { legAttempt++; continue; }
+      return { success: false, error: 'no_path' };
+    }
     if (seg.result === 'timeout') return { success: false, error: 'timeout', stuckBlock, activity };
 
     if (!tryRecover) {

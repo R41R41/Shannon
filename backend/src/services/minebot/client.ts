@@ -45,6 +45,10 @@ import { gazeGuardPlugin } from './utils/gazeGuard.js';
 import { exposureDigGuardPlugin } from './utils/exposureGuard.js';
 import { promptPlacePlugin } from './utils/promptPlace.js';
 import { installCollisionTolerance } from './utils/collisionTolerance.js';
+import { cancelActiveActions } from './execution/ActionExecution.js';
+import { installBotLoopWatch } from './utils/eventLoopWatch.js';
+import { installRespawnTracker } from './utils/respawnSettle.js';
+import { ReconnectBudget, reconnectKindOfEnd, reconnectKindOfKick, type ReconnectKind } from './utils/reconnectPolicy.js';
 
 installCollisionTolerance();
 import { installMotionRecorder } from './utils/motionRecorder.js';
@@ -56,11 +60,8 @@ const log = createLogger('Minebot:Client');
 // 環境変数の検証
 CONFIG.validateEnvironment();
 
-/** chat_validation_failed で kick された場合に自動再接続するまでのディレイ（ms） */
-const AUTO_RECONNECT_DELAY_MS = 8_000;
 /** The process's own error handlers are installed by the first login only. */
 let processHandlersInstalled = false;
-const CHAT_VALIDATION_FAILED = 'chat_validation_failed';
 
 export class MinebotClient extends BaseClient {
   private bot: CustomBot | null = null;
@@ -71,6 +72,8 @@ export class MinebotClient extends BaseClient {
   /** 直前の接続パラメータ（自動再接続用） */
   private lastBotData: MinebotInput | null = null;
   private autoReconnecting = false;
+  /** How often the body goes back in by itself after the connection ended (utils/reconnectPolicy). */
+  private readonly reconnectBudget = new ReconnectBudget();
   private lifecycleBusy = false;
   private explicitlyDisconnected = false;
   private connectionEnded = true;
@@ -127,6 +130,11 @@ export class MinebotClient extends BaseClient {
     installTierToolMaterialRepair(connectedBot);
     installAirSupplyDefault(connectedBot);
     installMotionRecorder(connectedBot);
+    // Run 20: a connection dropped for silence with 70 s unaccounted for in the journal. The loop's lateness, the ticks, the chunks and the
+    // slow handlers are written when it is late, and a worker thread says where the main thread stands while it is stuck (utils/eventLoopWatch).
+    installBotLoopWatch(connectedBot as any);
+    installRespawnTracker(connectedBot);
+    connectedBot.on('spawn', () => this.reconnectBudget.noteSpawned(Date.now()));
     bindMinecraftMemory(connectedBot, memoryIdentity);
     connectedBot.once('end', () => revokeMinecraftMemory(connectedBot));
     connectedBot.once('kicked', () => revokeMinecraftMemory(connectedBot));
@@ -177,6 +185,8 @@ export class MinebotClient extends BaseClient {
       void logToWeb('minecraft', 'green', 'Bot has logged in.');
     });
 
+    /** The kick that ended this connection, if one did (its word decides whether the body goes back in; the `end` that follows does not). */
+    let kickReason: string | null = null;
     this.bot.on('kicked', (reason: any) => {
       let readableReason: string;
       if (typeof reason === 'string') {
@@ -189,20 +199,29 @@ export class MinebotClient extends BaseClient {
       } else {
         readableReason = String(reason);
       }
+      kickReason = readableReason;
       log.error(`🚫🚫🚫 BOT KICKED 🚫🚫🚫 reason: ${readableReason}`);
       void logToWeb('minecraft', 'red', `Bot was kicked: ${readableReason}`);
 
-      if (readableReason.includes(CHAT_VALIDATION_FAILED)) {
-        log.warn(`🔄 chat_validation_failed による kick → ${AUTO_RECONNECT_DELAY_MS / 1000}秒後に自動再接続します`);
-        this.scheduleAutoReconnect();
-      }
+      const kind = reconnectKindOfKick(readableReason);
+      if (kind && this.bot === connectedBot) this.scheduleAutoReconnect(kind, readableReason);
+      else if (!kind) log.warn(`🚫 この kick は自動で入り直す種類ではありません（${readableReason}）`);
     });
 
     this.bot.on('end', (reason: string) => {
-      if (this.bot === connectedBot) this.connectionEnded = true;
+      const current = this.bot === connectedBot;
+      if (current) this.connectionEnded = true;
+      // Nothing can be done on a closed connection: the actions still running on it end now, so that they do not hold the body's
+      // lease (a move that waited out its whole time left the release unconfirmed, and the next login could not start).
+      try { cancelActiveActions(connectedBot, 'disconnected'); } catch { /* the connection is gone anyway */ }
       const trace = new Error('disconnect trace').stack;
       log.error(`🔌🔌🔌 BOT DISCONNECTED 🔌🔌🔌 reason: "${reason ?? 'unknown'}" | trace: ${trace}`);
       void logToWeb('minecraft', 'red', `Bot disconnected: ${reason ?? 'unknown'}`);
+      // A connection that ended without a kick and without anyone's stop (the socket closed, was reset, timed out): back in, after a pause.
+      if (current && kickReason === null && !this.explicitlyDisconnected) {
+        const kind = reconnectKindOfEnd(reason);
+        if (kind) this.scheduleAutoReconnect(kind, String(reason));
+      }
     });
 
     this.bot.on('error', (err: Error) => {
@@ -376,24 +395,45 @@ export class MinebotClient extends BaseClient {
   }
 
   /**
-   * chat_validation_failed で kick された後、自動でボットを再接続する。
-   * mineflayer #3838: 累積21通でチャット署名チェーンが壊れるバグの回避策。
+   * 接続が終わった後、自動でボットを入り直させる。
+   * - chat_validation_failed の kick: mineflayer #3838（累積21通でチャット署名チェーンが壊れる）の回避策。
+   * - 沈黙の kick（disconnect.timeout）や、kick なしに閉じた接続: 実走20 で、復活直後の 400m の移動中に
+   *   サーバーに切られ、体は入り直さないまま実走が終わった。
+   * 間隔は広げ、窓の中の回数には上限がある（reconnectPolicy）。止められた時（stop・logout）は入り直さない。
    */
-  private scheduleAutoReconnect(): void {
+  private scheduleAutoReconnect(kind: ReconnectKind, why: string): void {
     if (this.autoReconnecting || !this.lastBotData) return;
+    const plan = this.reconnectBudget.next(Date.now(), kind);
+    if (!plan.allowed) {
+      log.error(`❌ 自動で入り直すのをやめます（短い間に${plan.attempt}回続けて切れました。理由: ${why}）`);
+      void logToWeb('minecraft', 'red', `Auto-reconnect given up after ${plan.attempt} tries: ${why}`);
+      return;
+    }
     this.autoReconnecting = true;
     const epoch = this.reconnectEpoch;
+    log.warn(`🔄 接続が切れました（${kind}: ${why}）→ ${Math.round(plan.delayMs / 1000)}秒後に自動で入り直します（${plan.attempt}回目）`);
     setTimeout(async () => {
       try {
         if (epoch !== this.reconnectEpoch || this.lifecycleBusy || this.explicitlyDisconnected || !this.lastBotData) return;
         log.info('🔄 自動再接続を開始します…');
-        try { await this.stopBot(this.lastBotData!); } catch { /* ignore */ }
+        let stopped = false;
+        try { stopped = await this.stopBot(this.lastBotData!); } catch { /* ignore */ }
+        if (!stopped) {
+          // The connection is dead: no input can still be held on it. A release that could not be confirmed (an action still winding down,
+          // the common-FCA body's own answer) must not keep the old agent's HTTP port, or the new login could not start.
+          log.warn('🔄 古い体の停止を確認できませんでした。接続は切れているので、強制的に片づけて入り直します');
+          try { await this.skillAgent?.getHttpServer().stop(); } catch { /* the port may already be free */ }
+          try { this.skillAgent?.getTaskRuntime()?.forceStop(); } catch { /* ignore */ }
+          this.skillAgent = null;
+          this.bot = null;
+          this.connectionEnded = true;
+        }
         await new Promise(r => setTimeout(r, 2_000));
         if (epoch !== this.reconnectEpoch || this.explicitlyDisconnected || !this.lastBotData) return;
         const ok = await this.startBot(this.lastBotData!);
         if (ok) {
           log.info('✅ 自動再接続に成功しました');
-          void logToWeb('minecraft', 'green', 'Auto-reconnected after chat_validation_failed');
+          void logToWeb('minecraft', 'green', `Auto-reconnected after ${kind}`);
         } else {
           log.error('❌ 自動再接続に失敗しました');
         }
@@ -402,7 +442,7 @@ export class MinebotClient extends BaseClient {
       } finally {
         this.autoReconnecting = false;
       }
-    }, AUTO_RECONNECT_DELAY_MS);
+    }, plan.delayMs);
   }
 
   private async startBot(data: MinebotInput) {
