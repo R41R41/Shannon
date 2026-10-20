@@ -12,6 +12,8 @@ import type { BodyCandidateDraft, BodyObservation, BodyValue } from './bodyContr
 import type { MinecraftControlCommand as Command, MinecraftControlReceipt as Receipt } from './minecraftControlContract.js';
 import type { CommonFcaActuator } from './controlLoop.js';
 import { BodyEventWatcher } from './bodyEvents.js';
+import { closeInAdvised, combatOwnerOf } from '../../utils/combatOwner.js';
+import { craftDoneDespiteCut, craftWitness, type CraftWitness } from '../../utils/cutCraftRecovery.js';
 
 const delay = (milliseconds: number) => new Promise(resolve => setTimeout(resolve, milliseconds));
 /** The floor's action names, as the planner reads them in a receipt. */
@@ -125,6 +127,11 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
       floorActive: floorActive(this.bot),
       // What the floor's budget is holding back right now (arrow, eat, armor, budget), or null: why no reflex came.
       floorSilenced: floorSilenced(this.bot),
+      // Who holds the body in a fight: `head` (the planner's fight skill runs, or began within 20 s with its target near: the floor does
+      // not run or wall in), `reflex` (a floor reflex is running the body away), or null. closeInAdvised: a lone skeleton, iron, a sword,
+      // health 10 or more: close in and fight rather than run (run 21).
+      combatOwner: combatOwnerOf(this.bot),
+      closeInAdvised: closeInAdvised(this.bot),
       stuck: !!moving && now - this.movedAt > 1500, visualRequired: false, imageAvailable: this.imageAvailable,
       rendererConfigured: this.options.rendererConfigured?.() ?? null,
     };
@@ -174,9 +181,10 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
         return this.receipt(command, 'completed', true, JSON.stringify(this.goalEvidence.snapshot()));
       }
       let capability: string, work: () => Promise<{ success: boolean; result: string; failureType?: string; recoverable?: boolean }>;
+      let args: unknown[] = [];
       if (command.kind === 'skill') {
         const resolved = this.catalog.resolve(command.skill ?? '', command.arguments ?? {});
-        capability = resolved.skill.skillName; work = () => resolved.skill.run(...resolved.args);
+        capability = resolved.skill.skillName; args = resolved.args; work = () => resolved.skill.run(...resolved.args);
       } else if (command.kind === 'reflex' && command.operation) {
         const operation = command.operation, candidate = operation.candidate;
         if (JSON.stringify(operation.context) !== JSON.stringify(command.context) || candidate.sessionId !== command.context.sessionId
@@ -200,8 +208,11 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
       // A read-only query (get-position and the like) does not need the body: it never cancels idle work.
       // The action's own id, so a reflex that cut off another action of the same name is not blamed for this one.
       let actionId: string | undefined;
+      // A craft is remembered by what the pack held when it began: a reflex that cuts it off after the piece is made (the armour
+      // reflex wears it at once) must not turn a made piece into a failure (run 21, below).
+      const crafted: { witness: CraftWitness | null } = { witness: null };
       const started = work;
-      work = () => { actionId = currentAction(this.bot)?.progress.actionId; return started(); };
+      work = () => { actionId = currentAction(this.bot)?.progress.actionId; crafted.witness = craftWitness(this.bot as never, capability, args); return started(); };
       const readOnly = command.kind === 'skill' && this.runnable.find(skill => skill.name === capability)?.readOnly === true;
       if (!readOnly) cancelIdleActions(this.bot, 'fca_command');
       if (command.kind === 'skill' && !readOnly) this.events?.begin(command);
@@ -209,14 +220,21 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
       const mark = ledger?.mark() ?? 0;
       const result = await withActionSignal(this.bot, signal, () => executeAction(this.bot, capability, milliseconds,
         work, { waitForQuiescence: true }));
-      const outcome = signal.aborted ? 'cancelled' : result.success ? 'completed' : 'failed';
+      let outcome: Receipt['outcome'] = signal.aborted ? 'cancelled' : result.success ? 'completed' : 'failed';
       const released = readOnly || await this.release(AbortSignal.timeout(300), Date.parse(command.deadlineAt) - RECEIPT_MARGIN_MS);
       let failure = outcome === 'failed' ? failureOf(result) : undefined;
       let text = result.result;
       // A body reflex that took the body (a meal, a step back from a creeper) is not the model's failure: say so, and let it
       // look at the world again. Never for an API cancel, an operator stop or a deadline (those are `cancelled` / `timeout`).
       const cut = ledger && outcome === 'failed' && !signal.aborted && result.failureType === 'interrupted' ? ledger.cutOff(mark, capability, actionId) : undefined;
-      if (cut) {
+      // Run 21: the armour reflex wears a piece the moment the craft has put it in the pack and cancels the craft with it. The piece
+      // exists (carried or worn): the command did what it was for, so it is a success, not an `interrupted_by_reflex` that makes the
+      // planner drop the rest of its response. Judged after the release, so the pack is what the reflex left it.
+      const made = cut && crafted.witness ? craftDoneDespiteCut(this.bot as never, crafted.witness) : null;
+      if (cut && made) {
+        outcome = 'completed'; failure = undefined;
+        text = `${made.text}。体の反射「${reflexLabel(cut.by)}」が先に動いたため中断の形になりましたが、クラフトは完了しています`;
+      } else if (cut) {
         failure = { failureType: 'interrupted_by_reflex', recoverable: true };
         text = `${text ?? capability}。体の反射「${reflexLabel(cut.by)}」が先に動いたため中断（反射が終わってから、観測を見て再開できる）`;
       }

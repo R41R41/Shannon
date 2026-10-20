@@ -68,6 +68,10 @@ export function actionLeaseStatus(bot: object): { activeLocks: string[]; waitQue
 export function activeActionCapabilities(bot: object): string[] {
   return [...(active.get(actionHost(bot)) ?? [])].filter(context => !context.settled).map(context => context.progress.capability);
 }
+/** Capabilities of the physical actions running now (a query holds nothing of the body and is not among them). */
+export function physicalActionCapabilities(bot: object): string[] {
+  return [...(active.get(actionHost(bot)) ?? [])].filter(context => context.physical && !context.settled).map(context => context.progress.capability);
+}
 export function physicalActionBusy(bot: object): boolean { return [...(active.get(actionHost(bot)) ?? [])].some(context => context.physical); }
 export function hasActiveSafetyLease(bot: object): boolean {
   return [...(active.get(actionHost(bot)) ?? [])].some(context => context.physical && context.safetyLease && !context.settled);
