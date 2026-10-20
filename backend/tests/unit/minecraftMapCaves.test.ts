@@ -118,6 +118,13 @@ describe('the map says the caves by their depth, and the armorer\'s chest as a s
     // The chests nearest the body first.
     expect(near(600, 1080)).toMatch(/難破船: \d+m \S+ \(615,37,1086\)（箱 \(605,37,1087\)・\(615,37,1086\)・\(621,39,1085\)）/);
   });
+  it('an entrance says what the depth of its bottom is good for (mb-arch\'s review: the word was never there)', () => {
+    const state = emptyPlaceMemory();
+    rememberPlace(state, { kind: 'cave_entrance', dimension: 'overworld', position: { x: 30, y: 64, z: 0 }, count: 800, note: '底 (40,20,5)' }, 1);
+    rememberPlace(state, { kind: 'cave_entrance', dimension: 'overworld', position: { x: -60, y: 70, z: 0 }, count: 1500, note: '底 (-70,-50,4)' }, 1);
+    expect(mapSummary(state, { x: 0, y: 64, z: 0 }, 'overworld'))
+      .toMatch(/^洞窟の入口 2か所（[^）]+）: 30m 東 \(30,64,0\) → 底 \(40,20,5\) 鉄の多い深さ、60m 西 \(-60,70,0\) → 底 \(-70,-50,4\) ダイヤの深さ$/m);
+  });
   it('the digest says what an entrance is for', () => {
     const state = emptyPlaceMemory();
     rememberPlace(state, { kind: 'cave_entrance', dimension: 'overworld', position: { x: 30, y: 64, z: 0 }, count: 800, note: '底 (40,20,5)' }, 1);

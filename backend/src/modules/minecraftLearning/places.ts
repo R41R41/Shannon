@@ -452,7 +452,7 @@ export function mapSummary(state: PlaceMemoryState, from: PlacePosition, dimensi
   const entrances = of('cave_entrance');
   if (entrances.length) {
     lines.push(`洞窟の入口 ${entrances.length}か所（地表から歩いて地下へ下りられる。鉄・ダイヤへの近道）: ${listed(entrances, place => {
-      const bottom = Number(place.note?.match(/(-?d+,(-?d+),-?d+)/)?.[1]);
+      const bottom = Number(place.note?.match(/\(-?\d+,(-?\d+),-?\d+\)/)?.[1]);
       const word = Number.isFinite(bottom) ? depthWord(bottom) : '';
       return `${at(place)}${place.note ? ` → ${place.note}` : ''}${word ? ` ${word}` : ''}`;
     })}`);
