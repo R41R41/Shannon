@@ -38,7 +38,23 @@ export function createCommonFcaBody(bot: any, settings: { url: string; serverId:
   bot.fcaLeaseHeld = () => loop.leaseHeld;
   const end = () => { void loop.stop(); };
   bot.once('end', end);
+  retirePrevious(settings.serverId, loop);
   return loop;
+}
+
+/**
+ * One control loop per server in a process. A body process kept from one run to the next (a practice ground on run 19's process,
+ * 2026-10-20) can be logged in again; a loop of the earlier connection that is still polling would send its frames and its catalog
+ * beside the new one, and the API would take each in turn (a step saw dig-block-at change under it: FCA_BODY_CATALOG_CHANGED). The
+ * earlier loop is stopped when a new one is made, whether or not its bot said 'end'.
+ */
+const liveLoops = new Map<string, Pick<CommonFcaControlLoop, 'stopped' | 'stop'>>();
+export function retirePrevious(serverId: string, loop: Pick<CommonFcaControlLoop, 'stopped' | 'stop'>): void {
+  const previous = liveLoops.get(serverId);
+  liveLoops.set(serverId, loop);
+  if (!previous || previous === loop || previous.stopped) return;
+  logger.warn(`common FCA: the control loop of an earlier connection to ${serverId} was still open; stopping it`);
+  void previous.stop().catch(() => false);
 }
 
 /** The place memory's file for a named server and world. */

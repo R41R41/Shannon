@@ -58,6 +58,8 @@ CONFIG.validateEnvironment();
 
 /** chat_validation_failed で kick された場合に自動再接続するまでのディレイ（ms） */
 const AUTO_RECONNECT_DELAY_MS = 8_000;
+/** The process's own error handlers are installed by the first login only. */
+let processHandlersInstalled = false;
 const CHAT_VALIDATION_FAILED = 'chat_validation_failed';
 
 export class MinebotClient extends BaseClient {
@@ -166,8 +168,12 @@ export class MinebotClient extends BaseClient {
     // floor (rollback). The reflex ledger always counts what the resident reflexes do (P8).
     if (process.env.MINEBOT_COMMON_FCA === 'on') loadFloorLayer(this.bot);
 
+    // Each bot gets its plugins' listeners (spawn, physicsTick: about a dozen each), above the emitter's default of ten. The count is
+    // logged at each login, so a growth from one login to the next (a listener left on a shared emitter) shows in the log.
+    this.bot.setMaxListeners(40);
     this.bot.on('login', async () => {
-      log.info('✅ Bot has logged in.');
+      log.info(`✅ Bot has logged in. listeners spawn=${connectedBot.listenerCount('spawn')} physicsTick=${connectedBot.listenerCount('physicsTick')} `
+        + `process.uncaughtException=${process.listenerCount('uncaughtException')}`);
       void logToWeb('minecraft', 'green', 'Bot has logged in.');
     });
 
@@ -279,23 +285,27 @@ export class MinebotClient extends BaseClient {
       throw new Error(`Skill agent failed to start: ${result.result}`);
     }
 
-    process.on('uncaughtException', (error) => {
-      void logToWeb(
-        'minecraft',
-        'red',
-        `未処理の例外が発生しました: ${error.message}`
-      );
-    });
+    // Once a process: each login used to add another pair, so a body kept from run to run piled them up.
+    if (!processHandlersInstalled) {
+      processHandlersInstalled = true;
+      process.on('uncaughtException', (error) => {
+        void logToWeb(
+          'minecraft',
+          'red',
+          `未処理の例外が発生しました: ${error.message}`
+        );
+      });
 
-    process.on('unhandledRejection', (reason: unknown, _promise) => {
-      const error =
-        reason instanceof Error ? reason : new Error(String(reason));
-      void logToWeb(
-        'minecraft',
-        'red',
-        `未処理のPromise拒否が発生しました: ${error.message}`
-      );
-    });
+      process.on('unhandledRejection', (reason: unknown, _promise) => {
+        const error =
+          reason instanceof Error ? reason : new Error(String(reason));
+        void logToWeb(
+          'minecraft',
+          'red',
+          `未処理のPromise拒否が発生しました: ${error.message}`
+        );
+      });
+    }
 
     this.bot.on('spawn', () => {
       void logToWeb('minecraft', 'green', 'Minecraft bot spawned');
