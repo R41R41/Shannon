@@ -53,6 +53,7 @@ import { deliverDiscordMessageToLlm, type DiscordInboundMessage } from '../../ru
 import { dispatchMinebotVoiceChat } from '../../runtime/minebotInboundRegistry.js';
 import { registerVoiceGateway, type VoiceGateway } from '../../runtime/voiceGateway.js';
 import { config } from '../../../config/env.js';
+import { notifyUiModVoiceTranscript } from '../../minebot/integration/uiModVoice.js';
 import { VoicepeakClient } from '../../voicepeak/client.js';
 import { getConfiguredShannonCoreVoiceClient } from '../../integration/configuredShannonCoreVoiceClient.js';
 import { createDcVoiceStt, type DcVoiceStt } from '../../llm/voice/dcVoiceStt.js';
@@ -378,8 +379,13 @@ export class VoiceManager implements VoiceGateway {
       this.audioPlayers.set(guildId, player);
       this.activeVoiceUsers.set(guildId, null);
 
+      const textChannelId = config.dcVoice.enabled ? this.textChannelForApiJoin(voiceChannel) : '';
+      if (textChannelId) this.voiceTextChannelIds.set(guildId, textChannelId);
+
       connection.on(VoiceConnectionStatus.Ready, () => {
         logger.success(`[Discord Voice] Connected to ${voiceChannel.name} (via API)`);
+        // dc-voice: an API join gets the same receiver (and so the same conversation and mouth) as a slash-command join.
+        if (config.dcVoice.enabled) this.setupVoiceReceiver(connection, guildId, textChannelId);
       });
 
       connection.on(VoiceConnectionStatus.Disconnected, () => {
@@ -395,6 +401,18 @@ export class VoiceManager implements VoiceGateway {
       logger.error('[Discord Voice] joinChannel failed:', error);
       return { ok: false, error: String(error) };
     }
+  }
+
+  /** The text channel of an API join: the one saved for this guild, else the voice channel's own text chat, else any the bot can write in. */
+  private textChannelForApiJoin(voiceChannel: import('discord.js').VoiceBasedChannel): string {
+    const saved = this.loadVoiceTextChannel(voiceChannel.guildId);
+    if (saved) return saved;
+    if (voiceChannel.isTextBased()) return voiceChannel.id;
+    const me = voiceChannel.guild.members.me;
+    const found = voiceChannel.guild.channels.cache.find(
+      ch => ch.isTextBased() && !ch.isThread() && !ch.isVoiceBased() && (me ? ch.permissionsFor(me)?.has('SendMessages') === true : false),
+    );
+    return found?.id ?? '';
   }
 
   /**
@@ -903,6 +921,8 @@ export class VoiceManager implements VoiceGateway {
     const guild = this.client.guilds.cache.get(guildId);
     const textChannel = this.client.channels.cache.get(textChannelId);
     const recentMessages = await this.helpers.getRecentMessages(textChannelId, 10);
+    // The old path hands over text it did not hear itself, so the Minecraft UI Mod is told here, as the old Whisper step would have.
+    void notifyUiModVoiceTranscript({ text: item.text, discordName: item.name, mode: this.getVoiceMode(guildId) });
     deliverDiscordMessageToLlm({
       type: 'voice',
       text: item.text,

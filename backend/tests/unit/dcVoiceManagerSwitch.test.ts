@@ -9,6 +9,8 @@ import { createShannonCoreVoiceClient } from '../../src/services/integration/sha
 import { FakeReceiver, fakeStt, sleep, waitFor } from '../helpers/dcVoiceFakes.js';
 
 const hoisted = vi.hoisted(() => ({
+  notifyUiMod: vi.fn(),
+  joined: { connection: null as unknown, ready: null as null | (() => void) },
   config: {
     dcVoice: { enabled: false, openMic: true, mouth: true, backchannel: false },
     shannonCoreBridge: {},
@@ -19,6 +21,12 @@ const hoisted = vi.hoisted(() => ({
 }));
 
 vi.mock('../../src/config/env.js', () => ({ config: hoisted.config }));
+vi.mock('../../src/services/minebot/integration/uiModVoice.js', () => ({ notifyUiModVoiceTranscript: hoisted.notifyUiMod }));
+vi.mock('@discordjs/voice', async importOriginal => ({
+  ...(await importOriginal<typeof import('@discordjs/voice')>()),
+  joinVoiceChannel: () => hoisted.joined.connection,
+  createAudioPlayer: () => ({ play: () => undefined, stop: () => true, on: () => undefined, off: () => undefined, once: () => undefined }),
+}));
 vi.mock('../../src/utils/logger.js', () => {
   const noop = () => undefined;
   const named = { info: noop, warn: noop, error: noop, debug: noop, success: noop };
@@ -212,5 +220,49 @@ describe('VoiceManager: served by the head', () => {
     expect(c.internals.dcSessions.has('111')).toBe(false);
     c.receiver.speak('u2');
     expect(c.receiver.subscriptions).toHaveLength(0);
+  });
+});
+
+describe('VoiceManager: the other ways in', () => {
+  it('an API join (joinChannel) gets the receiver too when the head serves the VC, and nothing new when the switch is off', async () => {
+    const join = async (guildId: string) => {
+      const receiver = new FakeReceiver();
+      const listeners = new Map<string, () => void>();
+      hoisted.joined.connection = {
+        receiver, joinConfig: { channelId: '301' }, state: { status: 'ready' }, subscribe: () => undefined, destroy: () => undefined,
+        on: (event: string, listener: () => void) => { listeners.set(event, listener); },
+      };
+      const voiceChannel = { id: '301', guildId, name: 'room', isVoiceBased: () => true, isTextBased: () => true, guild: { voiceAdapterCreator: {} } };
+      const bound = manager as unknown as { client: { channels: { cache: Map<string, unknown> } } };
+      bound.client.channels.cache.set('301', voiceChannel);
+      expect(await manager.joinChannel('301')).toEqual({ ok: true });
+      listeners.get('ready')?.();
+      return { receiver, internals: manager as unknown as { dcSessions: Map<string, unknown> } };
+    };
+    hoisted.config.dcVoice = { enabled: false, openMic: true, mouth: true, backchannel: false };
+    const off = await join('111');
+    await sleep(30);
+    expect(off.internals.dcSessions.has('111')).toBe(false);
+    expect(off.receiver.subscriptions).toHaveLength(0);
+    manager.cleanupVoiceConnection('111');
+    hoisted.config.dcVoice = { enabled: true, openMic: true, mouth: false, backchannel: false };
+    hoisted.configuredClient.value = createShannonCoreVoiceClient(configuration);
+    const on = await join('111');
+    await waitFor(() => on.internals.dcSessions.has('111'), 1_000, 'the new session');
+    on.receiver.speak('u2');
+    expect(on.receiver.subscriptions.map(s => s.userId)).toEqual(['u2']);
+    manager.cleanupVoiceConnection('111');
+  });
+
+  it('text handed to the old pipeline after the head failed also reaches the Minecraft UI Mod', async () => {
+    const internals = manager as unknown as {
+      voiceQueues: Map<string, unknown>;
+      deliverLegacyVoiceText(guildId: string, textChannelId: string, voiceChannelId: string, item: { text: string; name: string; userId: string }): Promise<void>;
+    };
+    internals.voiceQueues.set('111', {});
+    setTimeout(() => internals.voiceQueues.delete('111'), 30);
+    await internals.deliverLegacyVoiceText('111', '201', 'v1', { text: '鉄を探して', name: 'ライ', userId: 'u1' });
+    expect(hoisted.notifyUiMod).toHaveBeenCalledWith({ text: '鉄を探して', discordName: 'ライ', mode: 'chat' });
+    expect(hoisted.deliver.mock.calls.at(-1)![0]).toMatchObject({ type: 'voice', text: '鉄を探して', userId: 'u1' });
   });
 });
