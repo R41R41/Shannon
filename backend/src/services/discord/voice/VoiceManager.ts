@@ -52,6 +52,16 @@ import { sendLongMessage } from '../utils.js';
 import { deliverDiscordMessageToLlm, type DiscordInboundMessage } from '../../runtime/llmInboundDispatch.js';
 import { dispatchMinebotVoiceChat } from '../../runtime/minebotInboundRegistry.js';
 import { registerVoiceGateway, type VoiceGateway } from '../../runtime/voiceGateway.js';
+import { config } from '../../../config/env.js';
+import { VoicepeakClient } from '../../voicepeak/client.js';
+import { getConfiguredShannonCoreVoiceClient } from '../../integration/configuredShannonCoreVoiceClient.js';
+import { createDcVoiceStt, type DcVoiceStt } from '../../llm/voice/dcVoiceStt.js';
+import { DcVoiceGuildSession, type DcVoiceGuildDeps } from './dcVoiceGuild.js';
+import { EventLoopDelayLogger } from './dcVoiceMetrics.js';
+import { createDiscordSpeechPlayer } from './discordSpeechPlayer.js';
+import { getSpeechFillerStore } from './speechFillerStore.js';
+import type { TurnItem } from './turnQueue.js';
+import { getVoiceMouth } from './voiceMouth.js';
 
 export interface VoiceManagerHelpers {
   getUserNickname: (user: User, guildId?: string) => string;
@@ -88,6 +98,10 @@ export class VoiceManager implements VoiceGateway {
   private voicePttMessages: Map<string, { channelId: string; messageId: string }> = new Map(); // guildId -> PTT message
   private voiceStreamMessages: Map<string, { message: Message; accumulatedText: string }> = new Map(); // guildId -> streaming Discord message
   private voiceModeMap: Map<string, 'chat' | 'minebot'> = new Map(); // guildId -> voice mode
+  // dc-voice (SHANNON_DC_VOICE=on): per-guild conversation through the head. Absent => the legacy path below.
+  private dcSessions: Map<string, DcVoiceGuildSession> = new Map();
+  private dcGeneration: Map<string, number> = new Map();
+  private dcStt: DcVoiceStt | null = null;
 
   private static readonly VOICE_TEXT_CHANNELS_PATH = path.resolve(
     fileURLToPath(import.meta.url),
@@ -115,6 +129,11 @@ export class VoiceManager implements VoiceGateway {
   /** Call once after the Discord client is ready to load fillers */
   async onReady(): Promise<void> {
     loadFillers().catch(err => logger.warn(`[Discord] Filler loading failed: ${err}`));
+    if (config.dcVoice.enabled) {
+      void getConfiguredShannonCoreVoiceClient()
+        .then(client => (client ? getSpeechFillerStore().warmUp(client) : undefined))
+        .catch(err => logger.warn(`[DcVoice] filler warm-up failed: ${err}`));
+    }
     await this.autoRejoinVoice().catch(err =>
       logger.warn(`[Discord Voice] Auto-rejoin failed: ${err}`)
     );
@@ -626,6 +645,7 @@ export class VoiceManager implements VoiceGateway {
   // ── Cleanup ───────────────────────────────────────────────────────────
 
   cleanupVoiceConnection(guildId: string): void {
+    this.disposeDcVoice(guildId);
     this.voiceConnections.delete(guildId);
     this.audioPlayers.delete(guildId);
     this.activeVoiceUsers.delete(guildId);
@@ -721,7 +741,11 @@ export class VoiceManager implements VoiceGateway {
   setupVoiceReceiver(connection: VoiceConnection, guildId: string, textChannelId: string): void {
     const receiver = connection.receiver;
 
+    // dc-voice: when the head serves this VC, the per-person receiver (dcVoiceGuild) takes the input instead.
+    void this.startDcVoice(connection, guildId, textChannelId);
+
     receiver.speaking.on('start', (userId) => {
+      if (this.dcHandlesInput(guildId)) return;
       const activeUser = this.activeVoiceUsers.get(guildId);
       if (!activeUser || activeUser !== userId) return;
       if (this.voiceProcessingLock.get(guildId)) return;
@@ -775,6 +799,132 @@ export class VoiceManager implements VoiceGateway {
         this.userSpeakingTimers.set(bufferKey, timer);
       });
     });
+  }
+
+  // ── dc-voice: conversation through the head (SHANNON_DC_VOICE=on) ─────
+
+  private static readonly dcLoopMonitor = new EventLoopDelayLogger((line) => logger.info(line, 'cyan'));
+
+  /** True while the head-served receiver (not the legacy PTT one) owns this guild's voice input. */
+  private dcHandlesInput(guildId: string): boolean {
+    return this.dcSessions.has(guildId) && this.getVoiceMode(guildId) !== 'minebot';
+  }
+
+  /** Who is talking in the VC right now (empty when the head-served receiver is not running). */
+  getActiveSpeakers(guildId: string): string[] {
+    return this.dcSessions.get(guildId)?.tracker.speakingUsers() ?? [];
+  }
+
+  private disposeDcVoice(guildId: string): void {
+    this.dcGeneration.set(guildId, (this.dcGeneration.get(guildId) ?? 0) + 1);
+    const session = this.dcSessions.get(guildId);
+    if (!session) return;
+    this.dcSessions.delete(guildId);
+    session.dispose();
+  }
+
+  private resolveVoiceUser(userId: string, guildId: string): User | undefined {
+    return this.client.guilds.cache.get(guildId)?.members.cache.get(userId)?.user ?? this.client.users.cache.get(userId);
+  }
+
+  /**
+   * Start the head-served receiver for this guild when everything allows it: the parent switch is on, the head's
+   * URL/token are configured, and this conversation (discord:<guild>:<text channel>) is bound. Otherwise nothing
+   * changes and the legacy receiver below keeps the voice input. Never throws.
+   */
+  private async startDcVoice(connection: VoiceConnection, guildId: string, textChannelId: string): Promise<void> {
+    this.disposeDcVoice(guildId);
+    if (!config.dcVoice.enabled) return;
+    const generation = this.dcGeneration.get(guildId) ?? 0;
+    try {
+      if (!textChannelId) return;
+      const client = await getConfiguredShannonCoreVoiceClient();
+      if (!client) return;
+      const conversationId = `discord:${guildId}:${textChannelId}`;
+      if (!client.isBound(conversationId)) {
+        logger.info(`[DcVoice] ${conversationId} is not bound to the head; legacy voice path`, 'yellow');
+        return;
+      }
+      const audioPlayer = this.audioPlayers.get(guildId);
+      if (!audioPlayer || this.voiceConnections.get(guildId) !== connection) return;
+      if ((this.dcGeneration.get(guildId) ?? 0) !== generation) return; // left or re-joined meanwhile
+      const voiceChannelId = connection.joinConfig.channelId ?? '';
+      const openMic = config.dcVoice.openMic;
+      this.dcStt ??= createDcVoiceStt();
+      const voicepeak = VoicepeakClient.getInstance();
+      const session = new DcVoiceGuildSession({
+        guildId,
+        textChannelId,
+        voiceChannelId,
+        receiver: connection.receiver as unknown as DcVoiceGuildDeps['receiver'],
+        endBehaviorAfterSilence: EndBehaviorType.AfterSilence,
+        decodeOpus: (packets) => this.decodeOpusBuffers(packets),
+        isBot: (userId) => this.resolveVoiceUser(userId, guildId)?.bot === true,
+        displayName: (userId) => {
+          const user = this.resolveVoiceUser(userId, guildId);
+          return user ? this.helpers.getUserNickname(user, guildId) : 'Unknown';
+        },
+        humanIds: () => {
+          const channel = this.client.channels.cache.get(voiceChannelId);
+          if (!channel || !('members' in channel)) return [];
+          return [...(channel.members as Map<string, GuildMember>).values()]
+            .filter(member => !member.user.bot)
+            .map(member => member.id);
+        },
+        shouldListen: (userId) => this.getVoiceMode(guildId) !== 'minebot'
+          && (openMic || this.activeVoiceUsers.get(guildId) === userId),
+        player: createDiscordSpeechPlayer(audioPlayer),
+        client,
+        fillers: getSpeechFillerStore(),
+        stt: this.dcStt,
+        voicepeakWav: (text) => voicepeak.synthesize(text),
+        legacy: (item) => this.deliverLegacyVoiceText(guildId, textChannelId, voiceChannelId, item),
+        postText: (text) => { void this.postTranscriptMessage(textChannelId, text); },
+        mouth: config.dcVoice.mouth ? getVoiceMouth() : null,
+        backchannel: config.dcVoice.backchannel,
+        loopMonitor: VoiceManager.dcLoopMonitor,
+        log: (line) => logger.info(line, 'cyan'),
+        warn: (line) => logger.warn(line),
+      });
+      this.dcSessions.set(guildId, session);
+      session.start();
+      void getSpeechFillerStore().warmUp(client).catch(() => undefined);
+      logger.info(`[DcVoice] head-served voice started: ${conversationId} (openMic=${openMic}, mouth=${config.dcVoice.mouth})`, 'cyan');
+    } catch (error) {
+      logger.warn(`[DcVoice] could not start (legacy voice path stays): ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  /**
+   * The legacy answer (invokeGraph -> VOICEPEAK) for text that was already transcribed. Resolves when its playback
+   * is over, so the next turn (or a mouth line) does not talk over it.
+   */
+  private async deliverLegacyVoiceText(guildId: string, textChannelId: string, voiceChannelId: string, item: TurnItem): Promise<void> {
+    const guild = this.client.guilds.cache.get(guildId);
+    const textChannel = this.client.channels.cache.get(textChannelId);
+    const recentMessages = await this.helpers.getRecentMessages(textChannelId, 10);
+    deliverDiscordMessageToLlm({
+      type: 'voice',
+      text: item.text,
+      audioBuffer: Buffer.alloc(0),
+      guildId,
+      guildName: guild?.name ?? '',
+      channelId: textChannelId,
+      channelName: textChannel && 'name' in textChannel ? String(textChannel.name) : '',
+      voiceChannelId,
+      userId: item.userId,
+      userName: item.name,
+      recentMessages,
+    } as DiscordInboundMessage);
+    // The legacy queue appears after filler selection; wait for it to start (max 15 s) and then to finish (max 90 s).
+    const startedAt = Date.now();
+    let seen = false;
+    while (Date.now() - startedAt < 90_000) {
+      const active = this.voiceQueues.has(guildId);
+      if (active) seen = true;
+      else if (seen || Date.now() - startedAt > 15_000) break;
+      await new Promise<void>(resolve => setTimeout(resolve, 100));
+    }
   }
 
   // ── Audio encoding / decoding ─────────────────────────────────────────

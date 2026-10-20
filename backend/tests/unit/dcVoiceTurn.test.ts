@@ -9,6 +9,7 @@ import {
   type ScriptedLine, type SpeechPlan,
 } from '../helpers/dcVoiceFakes.js';
 
+type Impl = Parameters<typeof fakeVoiceClient>[0] extends infer P ? (P extends { turn?: infer T } ? T : never) : never;
 const audios: FakeAudio[] = [];
 afterEach(() => { for (const audio of audios.splice(0)) audio.dispose(); });
 
@@ -17,7 +18,7 @@ function sentence(index: number, text: string, voiceText?: string): VoiceTurnLin
 }
 const done = (reply: string): VoiceTurnLine => ({ type: 'done', reply, threadId: 't', duplicate: false });
 
-function setup(options: { speech?: SpeechPlan; fillers?: boolean; turn?: ReturnType<typeof scriptedTurn> | Parameters<typeof fakeVoiceClient>[0]['turn']; env?: Partial<DcVoiceTurnEnv> } = {}) {
+function setup(options: { speech?: SpeechPlan; fillers?: boolean; turn?: ReturnType<typeof scriptedTurn> | Impl; env?: Partial<DcVoiceTurnEnv> } = {}) {
   const audio = new FakeAudio().auto(2);
   audios.push(audio);
   const player = new SpeechPlayer({ port: audio.port, createResource: audio.createResource, pollMs: 2 });
@@ -202,7 +203,7 @@ describe('runDcVoiceTurn: what is sent to the head', () => {
       },
     });
     await runDcVoiceTurn(t.env, t.item);
-    const sent = t.client.turn.mock.calls[0]![0] as Record<string, unknown>;
+    const sent = t.client.turn.mock.calls[0]![0] as unknown as Record<string, unknown>;
     expect(sent).toMatchObject({
       conversationId: 'discord:1:2',
       voiceChannelId: '9',
@@ -246,7 +247,7 @@ describe('runDcVoiceTurn: being cut off', () => {
     expect(result.responded).toBe(true);
     await result.settled;
     expect(t.client.said).toHaveBeenCalledTimes(1);
-    const said = t.client.said.mock.calls[0]![0] as Record<string, unknown>;
+    const said = t.client.said.mock.calls[0]![0] as unknown as Record<string, unknown>;
     expect(said).toMatchObject({ conversationId: 'discord:1:2', source: 'reply', interrupted: true });
     expect(said.spokenText).toBe(report.spokenText);
     expect(String(said.spokenText).startsWith('うん。')).toBe(true);

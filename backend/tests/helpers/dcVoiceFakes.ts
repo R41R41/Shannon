@@ -155,18 +155,29 @@ export function fakeSpeech(plan: SpeechPlan = {}) {
   return { speech, stats };
 }
 
-export function fakeVoiceClient(parts: Partial<Pick<ShannonCoreVoiceClient, 'turn' | 'speech' | 'said' | 'wording' | 'mouthPoll' | 'mouthResult'>> = {}) {
+type Client = ShannonCoreVoiceClient;
+type Impl<K extends keyof Client> = (...args: Parameters<Client[K]>) => ReturnType<Client[K]>;
+
+export function fakeVoiceClient(parts: { [K in 'turn' | 'speech' | 'said' | 'wording' | 'mouthPoll' | 'mouthResult']?: Impl<K> } = {}) {
   return {
-    turn: vi.fn(async () => ({ status: 'unavailable', reason: 'http', httpStatus: 503 } as VoiceTurnOpenResult)),
-    speech: vi.fn(async () => ({ status: 'unavailable', reason: 'http' } as VoiceSpeechResult)),
-    said: vi.fn(async () => ({ status: 'ok' as const })),
-    wording: vi.fn(async () => ({ status: 'ok' as const, say: false })),
-    mouthPoll: vi.fn(async () => ({ status: 'ok' as const, items: [] })),
-    mouthResult: vi.fn(async () => ({ status: 'ok' as const })),
-    ...parts,
+    turn: vi.fn<Parameters<Client['turn']>, ReturnType<Client['turn']>>(
+      parts.turn ?? (async () => ({ status: 'unavailable', reason: 'http', httpStatus: 503 } as VoiceTurnOpenResult)),
+    ),
+    speech: vi.fn<Parameters<Client['speech']>, ReturnType<Client['speech']>>(
+      parts.speech ?? (async () => ({ status: 'unavailable', reason: 'http' } as VoiceSpeechResult)),
+    ),
+    said: vi.fn<Parameters<Client['said']>, ReturnType<Client['said']>>(parts.said ?? (async () => ({ status: 'ok' as const }))),
+    wording: vi.fn<Parameters<Client['wording']>, ReturnType<Client['wording']>>(
+      parts.wording ?? (async () => ({ status: 'ok' as const, say: false })),
+    ),
+    mouthPoll: vi.fn<Parameters<Client['mouthPoll']>, ReturnType<Client['mouthPoll']>>(
+      parts.mouthPoll ?? (async () => ({ status: 'ok' as const, items: [] })),
+    ),
+    mouthResult: vi.fn<Parameters<Client['mouthResult']>, ReturnType<Client['mouthResult']>>(
+      parts.mouthResult ?? (async () => ({ status: 'ok' as const })),
+    ),
   };
 }
-
 /** A voice receiver the test drives by hand: `speaking` events and one fake opus stream per subscription. */
 export class FakeReceiver {
   speaking = new EventEmitter();

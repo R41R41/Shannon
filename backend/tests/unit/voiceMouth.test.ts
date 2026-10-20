@@ -99,7 +99,7 @@ describe('VoiceMouth: switches and states never throw', () => {
     expect(await result.done).toBe('spoken');
     expect(t.client.said).toHaveBeenCalledTimes(1);
     expect(t.client.said.mock.calls[0]![0]).toMatchObject({ conversationId: 'discord:g1:t1', text: 'ダイヤ見つけた！', source: 'mouth' });
-    expect((t.client.said.mock.calls[0]![0] as Record<string, unknown>).interrupted).toBeUndefined();
+    expect((t.client.said.mock.calls[0]![0] as unknown as Record<string, unknown>).interrupted).toBeUndefined();
   });
 });
 
