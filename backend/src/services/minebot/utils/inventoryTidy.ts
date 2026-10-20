@@ -51,3 +51,19 @@ export function tidyPlan(items: Stack[]): Array<{ name: string; count: number }>
   }
   return plan;
 }
+
+/** Rock a dig on the way brings in, spared when a pack is short of room even after tidyPlan (cobblestone kept to 32 for walls and steps). */
+const SPARE_ROCK = ['cobbled_deepslate', 'tuff', 'diorite', 'andesite', 'granite', 'dirt', 'gravel', 'calcite', 'netherrack', 'deepslate', 'stone', 'cobblestone'];
+const COBBLE_KEPT = 32;
+
+/**
+ * The largest heap of spare rock to throw away for room, or null: for a pack with nothing tidyPlan names (every kind under its KEEP),
+ * as the obsidian tool does (mb-body's roomForDrops). Never one of `keep` (what is being mined and what it drops).
+ */
+export function spareRockToDrop(items: Stack[], keep: string[] = []): { name: string; count: number } | null {
+  const totals = new Map<string, number>();
+  for (const item of items) if (SPARE_ROCK.includes(item.name) && !keep.includes(item.name)) totals.set(item.name, (totals.get(item.name) ?? 0) + item.count);
+  const best = [...totals].map(([name, count]) => ({ name, count: name === 'cobblestone' ? count - COBBLE_KEPT : count }))
+    .filter(entry => entry.count > 0).sort((a, b) => b.count - a.count)[0];
+  return best ?? null;
+}

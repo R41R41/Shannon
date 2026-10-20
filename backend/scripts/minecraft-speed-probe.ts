@@ -149,6 +149,16 @@ try {
       const y = Math.floor(actor.entity.position.y);
       record.calls.push(await call('deep', 'stair-mine', -40, 'west'));
       record.steps = y - Math.floor(actor.entity.position.y);
+    } else if (scenario === 'full') {
+      // A pack all but full of the rock a long descent brings in (one slot free), and iron asked for: is each ore's drop taken?
+      const rock = ['andesite', 'diorite', 'granite', 'tuff', 'cobbled_deepslate', 'dirt'];
+      await setup(spawnAt, [...TOOLS, ...Array.from({ length: 30 }, (_, i) => `minecraft:${rock[i % rock.length]} 64`)]);
+      record.free = actor.inventory.emptySlotCount();
+      const y = Math.floor(actor.entity.position.y);
+      await call('descend', 'stair-mine', Math.max(16, y - 30), 'south');
+      record.calls.push(await call('full', 'mine-block', 'iron_ore', 6, 24));
+      record.got = count(n => n === 'raw_iron');
+      record.freeAfter = actor.inventory.emptySlotCount();
     } else if (scenario === 'sea') {
       // A pool of still water three deep, the body afloat in its middle, and a stair asked for down from there.
       await setup(spawnAt, TOOLS);
