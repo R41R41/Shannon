@@ -9,6 +9,7 @@ import { isExposedTo } from '../utils/threatExposure.js';
 import { escapeMayWork } from '../utils/escapeHeading.js';
 import { fleeKeys } from '../utils/floorReflexes.js';
 import { actionDelay } from '../execution/observedWait.js';
+import { applyFleeSearchLimits, filterSliced } from '../utils/fleeSearchLimits.js';
 const { goals } = pathfinder;
 /** Within this, the flee starts by running straight away rather than by planning a route to a point. */
 const DIRECT_RUN_RANGE = 10;
@@ -29,6 +30,15 @@ const RUN_SPEED = 5.6;
 /** The longest the search for each way out may take, and how many are looked at before it says there is none. */
 const ROUTE_CHECK_MS = 250;
 const MAX_ROUTE_CHECKS = 6;
+/**
+ * Run 21: the event loop froze four times inside flee-from, from route searches that walked a whole cave system for a point inside rock.
+ * The searches are limited (utils/fleeSearchLimits); and when the route search keeps coming back with nothing (this many in a row that
+ * moved the body less than MIN_PHYSICAL_PROGRESS, or this much time spent in them), the flee stops searching and takes a plain run
+ * straight away for FALLBACK_RUN_MS, which costs no search at all. It ends there: a flee that cannot find a way fast does not search longer.
+ */
+const MAX_SEARCH_FAILURES = 2;
+const SEARCH_BUDGET_MS = 3_000;
+const FALLBACK_RUN_MS = 2_500;
 
 /**
  * Where on a route a pursuer could be met: the first point it could reach before the body has run past it, with the
@@ -137,6 +147,17 @@ class FleeFrom extends InstantSkill {
     timeout: number = 10000,
     entityName?: string // 後方互換性のため
   ) {
+    // The search limits hold for this skill only (run 21: unbounded route searches froze the event loop).
+    const restoreSearchLimits = applyFleeSearchLimits(this.bot as { pathfinder?: unknown });
+    try { return await this.fleeImpl(target, minDistance, timeout, entityName); } finally { restoreSearchLimits(); }
+  }
+
+  private async fleeImpl(
+    target: string,
+    minDistance: number,
+    timeout: number,
+    entityName?: string
+  ) {
     // entityNameが渡された場合はtargetとして使用（後方互換性）
     const actualTarget = target || entityName;
     const hostileGroup = /^(hostile|all-hostiles)$/i.test(actualTarget?.trim() || '');
@@ -155,7 +176,7 @@ class FleeFrom extends InstantSkill {
       const everyTarget = this.resolveTargets(actualTarget, hostileGroup);
       // Only what can see or reach the body is fled from. With rock all round between them there is
       // nowhere to flee to and no need: six such orders in a row moved 0 m underground (paid run L33).
-      const targets = everyTarget.filter(target => !target.entity || isExposedTo(this.bot as any, target.entity));
+      const targets = await filterSliced(everyTarget, target => !target.entity || isExposedTo(this.bot as any, target.entity));
       const sealedNear = everyTarget.filter(target => !targets.includes(target)
         && this.bot.entity.position.distanceTo(target.position) < minDistance);
       if (sealedNear.length && !targets.some(target => this.bot.entity.position.distanceTo(target.position) < minDistance)) {
@@ -235,6 +256,8 @@ class FleeFrom extends InstantSkill {
         }
       }
       let routesChecked = 0;
+      let searchFailures = 0;
+      let searchMs = 0;
       const cutOff: string[] = [];
 
       for (let attempt = 0; attempt < MAX_ESCAPE_WAYPOINTS; attempt++) {
@@ -252,7 +275,7 @@ class FleeFrom extends InstantSkill {
         // The route itself, before a step is run along it: one that passes where a pursuer gets to first is no way out.
         // Every hostile counts here, not only the one named: fleeing a hoglin, the body ran into two piglins (L88b).
         const around = hostileGroup ? [] : this.resolveTargets('hostile', true).filter(other => !finalTargets.some(target => target.id === other.id));
-        const exposed = [...finalTargets, ...around].filter(target => !target.entity || isExposedTo(this.bot as any, target.entity));
+        const exposed = await filterSliced([...finalTargets, ...around], target => !target.entity || isExposedTo(this.bot as any, target.entity));
         if (typeof (this.bot.pathfinder as any).getPathTo === 'function' && exposed.length && routesChecked < MAX_ROUTE_CHECKS) {
           routesChecked++;
           let route: Array<{ x: number; y: number; z: number }> = [];
@@ -264,6 +287,7 @@ class FleeFrom extends InstantSkill {
             continue;
           }
         }
+        const searchStartedAt = Date.now();
         try {
           fleeResult = await gotoSafe(this.bot, fleeGoal, {
             timeoutMs: Math.min(remaining, MAX_WAYPOINT_TIME_MS),
@@ -278,12 +302,33 @@ class FleeFrom extends InstantSkill {
         // Mob は移動し、新しい敵も現れるため、現在の全対象で事後条件を確認する。
         finalTargets = this.resolveTargets(actualTarget, hostileGroup);
         finalDistance = this.nearestDistance(finalTargets);
-        traveled += beforeBotPosition.distanceTo(this.bot.entity.position);
+        const legMoved = beforeBotPosition.distanceTo(this.bot.entity.position);
+        traveled += legMoved;
         if (finalDistance >= minDistance) {
           return {
             success: true,
             result: `${name}から逃げました（最短距離: ${currentDistance.toFixed(1)}m → ${Number.isFinite(finalDistance) ? `${finalDistance.toFixed(1)}m` : '視界外'}、自分の移動: ${traveled.toFixed(0)}m）`,
           };
+        }
+        // A search that found no way (or ran out of time) and left the body where it was: counted, and when it keeps happening the flee
+        // runs straight away instead of searching on (run 21). A leg that got the body somewhere starts the count again.
+        if (!fleeResult.success && (fleeResult.error === 'no_path' || fleeResult.error === 'timeout') && legMoved < MIN_PHYSICAL_PROGRESS) {
+          searchFailures++;
+          searchMs += Date.now() - searchStartedAt;
+        } else if (legMoved >= MIN_PHYSICAL_PROGRESS) { searchFailures = 0; }
+        if (searchFailures >= MAX_SEARCH_FAILURES || searchMs >= SEARCH_BUDGET_MS) {
+          const left = Math.max(0, deadline - Date.now());
+          if (left > 0) {
+            const run = await this.runStraightAway(actualTarget, hostileGroup, minDistance, Math.min(left, FALLBACK_RUN_MS));
+            traveled += run.moved;
+            finalTargets = this.resolveTargets(actualTarget, hostileGroup);
+            finalDistance = this.nearestDistance(finalTargets);
+            if (finalDistance >= minDistance) {
+              return { success: true,
+                result: `${name}から走って離れました（最短距離: ${currentDistance.toFixed(1)}m → ${Number.isFinite(finalDistance) ? `${finalDistance.toFixed(1)}m` : '視界外'}、自分の移動: ${traveled.toFixed(0)}m、経路探索は見つからなかったため直進）` };
+            }
+          }
+          break;
         }
         // 有限の退避点でも到達不可や空経路があり得るので次の方向を試す。
       }

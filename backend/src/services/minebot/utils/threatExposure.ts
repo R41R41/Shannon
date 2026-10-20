@@ -25,6 +25,13 @@ const RAY_STEP = 0.25;
 /** Cells explored before the space counts as open: a sealed pocket is far smaller, open ground or a cave system larger. */
 const MAX_CELLS = 3000;
 const MARGIN = 6;
+/**
+ * The longest the flood fill may run in one go (run 21: the event loop froze 1 to 4 s inside flee-from, which asks this of every mob near).
+ * Past it the space is taken as open, the same answer as for "too much open space to tell": a mob is never wrongly taken for sealed away.
+ */
+const OPEN_WAY_BUDGET_MS = 15;
+/** The clock is read once in this many cells, not at every one. */
+const CLOCK_EVERY = 128;
 const cache = new WeakMap<object, { at: number; value: Exposure }>();
 const NEIGHBOURS = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
 
@@ -74,8 +81,10 @@ function openWay(bot: ExposureBot, self: Vec3, other: Vec3, otherHeight: number)
   const queue: number[][] = [];
   const seen = new Set<string>();
   for (const dy of [0, 1]) if (!closed(origin.x, origin.y + dy, origin.z)) { queue.push([origin.x, origin.y + dy, origin.z]); seen.add(key(origin.x, origin.y + dy, origin.z)); }
+  const startedAt = performance.now();
   for (let head = 0; head < queue.length; head++) {
     if (seen.size > MAX_CELLS) return 'reachable';
+    if (head % CLOCK_EVERY === CLOCK_EVERY - 1 && performance.now() - startedAt > OPEN_WAY_BUDGET_MS) return 'reachable';
     const [x, y, z] = queue[head];
     if (Math.abs(x - target.x) <= 1 && Math.abs(z - target.z) <= 1 && y >= target.y - 1 && y <= top + 1) return 'reachable';
     for (const [dx, dy, dz] of NEIGHBOURS) {
