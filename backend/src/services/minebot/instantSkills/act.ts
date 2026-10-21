@@ -4,8 +4,8 @@ import { actionSignal, nativeActionHost } from '../execution/ActionExecution.js'
 import { isThreat } from '../utils/floorReflexes.js';
 import { threatExposure } from '../utils/threatExposure.js';
 import { beginEngagement } from '../utils/engagement.js';
-import { cellKey, facingOfYaw, feetCell, noteMapStop, type Cell, type Facing } from '../utils/localMap.js';
-import { clip, closedWord, keepActReport, renderActReport, stoppedLine, type ActReport, type StoppedBy } from '../utils/actReport.js';
+import { bodyReader, cellKey, facingOfYaw, feetCell, noteMapStop, type Cell, type Facing } from '../utils/localMap.js';
+import { aroundText, clip, closedWord, keepActReport, renderActReport, stoppedLine, type ActReport, type StoppedBy } from '../utils/actReport.js';
 import { blockAt, cellNow, freeSlots, inventoryCount, resolvePosition, StepStopped, wait, type PositionSpec, type StepContext, type StepOutcome } from '../utils/primitives/common.js';
 import { walk } from '../utils/primitives/walk.js';
 import { dig } from '../utils/primitives/dig.js';
@@ -336,8 +336,10 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
           if (entry.count > 1) again = `（同じ所・同じ理由で${entry.count}回目）`;
         }
       } catch { /* the count is a help, not the result */ }
+      let around: string | undefined;
+      try { if (outcome.at) around = aroundText(bodyReader(bot), outcome.at, feetCell(bot)); } catch { /* the line stands without it */ }
       report.lines.push({ i: index + 1, do: hand.do, status: 'stopped', line: stoppedLine(outcome.reason, `${outcome.text}${again}`, outcome.at ? cellNow(bot, outcome.at) : undefined),
-        ...(outcome.at ? { where: outcome.at } : {}) });
+        ...(outcome.at ? { where: outcome.at } : {}), ...(around ? { around } : {}) });
       emit(index, 'error', outcome.text);
       skip(index + 1);
       break;

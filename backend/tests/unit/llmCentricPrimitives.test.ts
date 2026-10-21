@@ -17,13 +17,15 @@ vi.mock('../../src/services/minebot/utils/digBlockVerified.js', async importOrig
 const { dig, exposeAllows } = await import('../../src/services/minebot/utils/primitives/dig.js');
 const { place } = await import('../../src/services/minebot/utils/primitives/place.js');
 const { craft } = await import('../../src/services/minebot/utils/primitives/craft.js');
-const { whyBlocked } = await import('../../src/services/minebot/utils/primitives/walk.js');
+const { whyBlocked, reachFacts } = await import('../../src/services/minebot/utils/primitives/walk.js');
 const { aimPitch, bowSpeed } = await import('../../src/services/minebot/utils/primitives/shoot.js');
 const { eat } = await import('../../src/services/minebot/utils/primitives/body.js');
 const { furnace } = await import('../../src/services/minebot/utils/primitives/furnace.js');
 const { chest } = await import('../../src/services/minebot/utils/primitives/chest.js');
 const { pillarUp } = await import('../../src/services/minebot/utils/primitives/pillarUp.js');
-const { use } = await import('../../src/services/minebot/utils/primitives/use.js');
+const { use, lineBlocker } = await import('../../src/services/minebot/utils/primitives/use.js');
+const { aroundText } = await import('../../src/services/minebot/utils/actReport.js');
+const { bodyReader } = await import('../../src/services/minebot/utils/localMap.js');
 const { foodPointsOf } = await import('../../src/services/minebot/utils/foodPoints.js');
 
 function body(items: Array<{ name: string; count: number; type?: number }> = []) {
@@ -181,5 +183,61 @@ describe('the small parts', () => {
     expect(food.carried).toBe(64.2);
     expect(food.items).toBe('bread×3(33) cooked_mutton×2(31.2)');
     expect(food.hunger).toBe(14);
+  });
+});
+
+describe('r2: a stop says what is round it (scene replay 2026-10-21)', () => {
+  it('a walk to a cell up a shaft says how far up and how much air is under it', () => {
+    const bot = body();
+    expect(whyBlocked(bot, { x: 0, y: 64, z: 0 }, { x: 0, y: 67, z: 0 })).toBeNull();
+    expect(reachFacts(bot, { x: 0, y: 64, z: 0 }, { x: 0, y: 67, z: 0 })).toBe('着く所は足より3上（walk の段差は1まで）。着く所の下 3 マスが空気（立つ床が無い）');
+    expect(reachFacts(bot, { x: 0, y: 64, z: 0 }, { x: 2, y: 64, z: 0 })).toBe('');
+  });
+
+  it('a bucket that could not reach its water names the stone between', () => {
+    const bot = body();
+    bot.__blocks.set('3,64,0', { name: 'water', boundingBox: 'empty' });
+    bot.__blocks.set('2,65,0', { name: 'stone', boundingBox: 'block' });
+    bot.__blocks.set('2,64,0', { name: 'stone', boundingBox: 'block' });
+    expect(lineBlocker(bot, { x: 3, y: 64, z: 0 })).toEqual({ cell: { x: 2, y: 65, z: 0 }, name: 'stone' });
+    bot.__blocks.delete('2,65,0'); bot.__blocks.delete('2,64,0');
+    expect(lineBlocker(bot, { x: 3, y: 64, z: 0 })).toBeNull();
+  });
+
+  it('chest on a furnace says which hand opens it', async () => {
+    const bot = body();
+    bot.__blocks.set('1,64,0', { name: 'furnace', boundingBox: 'block' });
+    const out = await chest(ctx(bot), { at: { x: 1, y: 64, z: 0 } });
+    expect(out.ok).toBe(false);
+    expect(out.text).toContain('furnace（箱・樽ではない。かまどは furnace の手）');
+  });
+
+  it('the 3x3x3 round a stop in the map\'s symbols, top first, north up', () => {
+    const bot = body();
+    bot.__blocks.set('0,63,0', { name: 'air', boundingBox: 'empty' });
+    bot.__blocks.set('1,63,-1', { name: 'water', boundingBox: 'empty', metadata: 0, getProperties: () => ({ level: 0 }) });
+    expect(aroundText(bodyReader(bot), { x: 0, y: 64, z: 0 }, { x: 0, y: 64, z: 0 }))
+      .toBe('x=-1..1 z=-1..1 y=65: .../.../... y=64: .../.@./... y=63: ##w/#.#/###');
+  });
+});
+describe('r2: a dig down the column under the feet (run 27: fell 19 hearts into a cave)', () => {
+  it('refuses a cell under the feet a step below the footing when the fall past it is dangerous, and waits for the body to land first', async () => {
+    const bot = body();
+    // The cell under the feet already dug (the body not yet dropped into it), the next one stone, then air down to y=40.
+    bot.__blocks.set('0,63,0', { name: 'air', boundingBox: 'empty' });
+    for (let y = 40; y <= 61; y++) bot.__blocks.set(`0,${y},0`, { name: 'air', boundingBox: 'empty' });
+    let landed = false;
+    bot.entity.onGround = false;
+    setTimeout(() => { bot.entity.onGround = true; landed = true; }, 50);
+    const out = await dig(ctx(bot), { at: [{ x: 0, y: 62, z: 0 }] });
+    expect(landed).toBe(true);
+    expect(out.reason).toBe('footing');
+    expect(out.text).toContain('(0,62,0)');
+    expect(out.text).toContain('足の下の柱');
+    expect(bot.__dug).toEqual([]);
+    // A cell lower in the column with stone between is no danger.
+    const safe = body();
+    safe.entity.position = new Vec3(0.5, 64, 0.5);
+    expect((await dig(ctx(safe), { at: [{ x: 1, y: 63, z: 0 }] })).ok).toBe(true);
   });
 });

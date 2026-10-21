@@ -7,7 +7,7 @@ import { fallIsDangerous, stepOffDrop } from '../edgeGuard.js';
 import { chooseTool, canHarvest, usesLeft } from '../toolChoice.js';
 import { PROTECTED_UTILITY_BLOCKS } from '../../constants.js';
 import { cellKey, feetCell, relativeWords, type Cell } from '../localMap.js';
-import { blockAt, cellNow, cellText, DIG_REACH, eyeDistance, findItem, guard, isAirLike, letGo, placeText, stopped, StepStopped, wait,
+import { blockAt, cellNow, cellText, DIG_REACH, eyeDistance, findItem, guard, isAirLike, letGo, placeText, stopped, StepStopped, wait, waitUntil,
   type StepContext, type StepOutcome } from './common.js';
 import { pickup } from './pickup.js';
 
@@ -29,10 +29,15 @@ export function exposeAllows(exposeOk: boolean | string[] | undefined, kind: str
 const MAX_CELLS = 16;
 const UNBREAKABLE = new Set(['bedrock', 'barrier', 'end_portal_frame', 'end_portal', 'end_gateway', 'command_block', 'structure_block', 'reinforced_deepslate']);
 
-/** The fall the body takes if this cell, one it stands on, is gone (null: not under the body, or a fall it survives). */
-function footingDrop(bot: any, cell: Cell): number | null {
+/**
+ * The fall the body takes if this cell is gone (null: not in the body's column under its feet, or a fall it survives). Run 27 (2026-10-22):
+ * a dig straight down took the next cell while the body was still dropping into the one before, so "the cell under the feet" was not
+ * that cell and nothing was checked; the body fell 19 hearts into a cave. Any cell of the column under the feet now counts, as the
+ * fall to the first floor left without it (lava below: no landing).
+ */
+export function footingDrop(bot: any, cell: Cell): number | null {
   const position = bot.entity?.position;
-  if (!position || Math.floor(position.y - 0.01) !== cell.y) return null;
+  if (!position || cell.y > Math.floor(position.y - 0.01)) return null;
   const corners = [[-0.3, -0.3], [0.3, -0.3], [-0.3, 0.3], [0.3, 0.3]];
   if (!corners.some(([dx, dz]) => Math.floor(position.x + dx) === cell.x && Math.floor(position.z + dz) === cell.z)) return null;
   const without = { blockAt: (at: Vec3) => (Math.floor(at.x) === cell.x && Math.floor(at.y) === cell.y && Math.floor(at.z) === cell.z
@@ -85,8 +90,10 @@ export async function dig(ctx: StepContext, args: DigArgs): Promise<StepOutcome>
     if (PROTECTED_UTILITY_BLOCKS.has(block.name) && !args.take) {
       return result(stopped(bot, 'protected', `${placeText(bot, cell)} は ${block.name}（村や自分の設備かもしれない。中身・ベッドを持っていくなら take:true で掘る）`, cell));
     }
+    // The body still dropping into the cell dug before: wait until it stands (at most 1 s) so its column is read where it lands.
+    if (bot.entity && bot.entity.onGround === false) await waitUntil(ctx, () => bot.entity?.onGround !== false, 1000);
     const fall = footingDrop(bot, cell);
-    if (fall !== null) return result(stopped(bot, 'footing', `${placeText(bot, cell)} は足元の支え。掘ると${fall}段落ちる（先に横へ動くか、下を確かめる）`, cell));
+    if (fall !== null) return result(stopped(bot, 'footing', `${placeText(bot, cell)} は足の下の柱。掘ると${Number.isFinite(fall) ? `${fall}段落ちる` : '下に着く所が無いか溶岩'}（先に横へ動くか、下を確かめる）`, cell));
     const distance = eyeDistance(bot, cell);
     if (distance > DIG_REACH) return result(stopped(bot, 'out_of_reach', `${placeText(bot, cell)} の ${block.name} に届かない（目から${distance.toFixed(1)}m、${DIG_REACH}m まで）`, cell));
     const lava = lavaReleasedBy(bot, vecOf(cell));

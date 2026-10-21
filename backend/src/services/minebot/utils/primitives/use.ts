@@ -136,7 +136,11 @@ export async function use(ctx: StepContext, args: UseArgs): Promise<StepOutcome>
     await activateItemFacing(bot, new Vec3(cell.x + 0.5, cell.y + 0.5, cell.z + 0.5));
     const filled = `${block.name}_bucket`;
     const ok = await waitUntil(ctx, () => inventoryCount(bot, 'bucket') < before || bot.heldItem?.name === filled, 1500);
-    if (!ok) return stopped(bot, 'not_filled', `${placeText(bot, cell)} の ${block.name} を汲めなかった（視線が届かないか、手前に何かある。今 ${cellNow(bot, cell)}）`, cell);
+    if (!ok) {
+      const between = lineBlocker(bot, cell);
+      return stopped(bot, 'not_filled', `${placeText(bot, cell)} の ${block.name} を汲めなかった（${between
+        ? `目との間の ${cellText(between.cell)} が ${between.name}` : '視線が届かないか、手前に何かある'}。今 ${cellNow(bot, cell)}）`, cell);
+    }
     return { ok: true, text: `${cellText(cell)} の ${block.name} 源を汲んだ（${filled}）`, at: cell };
   }
   // A full bucket into the cell given.
@@ -207,6 +211,25 @@ export async function use(ctx: StepContext, args: UseArgs): Promise<StepOutcome>
   await wait(ctx, 300);
   const above = blockAt(bot, { x: cell.x, y: cell.y + 1, z: cell.z });
   return { ok: true, text: `${name ?? '素手'} を ${cellText(cell)} の ${before} に使った（今 ${cellNow(bot, cell)}、上 ${above?.name ?? '未ロード'}${name ? `、${name} 残り${inventoryCount(bot, name)}（前は${count}）` : ''}）`, at: cell };
+}
+
+/**
+ * The first solid block on the straight line from her eyes to the middle of `cell`, other than the cell itself and the one she stands
+ * in (scene replay 2026-10-21: a source behind one stone, "視線が届かないか、手前に何かある" seven times in twelve, the stone never named).
+ */
+export function lineBlocker(bot: any, cell: Cell): { cell: Cell; name: string } | null {
+  const eye = bot.entity?.position;
+  if (!eye) return null;
+  const from = { x: eye.x, y: eye.y + 1.62, z: eye.z }, to = { x: cell.x + 0.5, y: cell.y + 0.5, z: cell.z + 0.5 };
+  const length = Math.hypot(to.x - from.x, to.y - from.y, to.z - from.z), steps = Math.ceil(length / 0.1);
+  for (let i = 1; i < steps; i++) {
+    const t = i / steps;
+    const at = { x: Math.floor(from.x + (to.x - from.x) * t), y: Math.floor(from.y + (to.y - from.y) * t), z: Math.floor(from.z + (to.z - from.z) * t) };
+    if (at.x === cell.x && at.y === cell.y && at.z === cell.z) break;
+    const block = blockAt(bot, at);
+    if (block && block.boundingBox === 'block') return { cell: at, name: String(block.name) };
+  }
+  return null;
 }
 
 const oppositeOf = (side: string) => ({ down: 'up', up: 'down', north: 'south', south: 'north', east: 'west', west: 'east' } as Record<string, string>)[side];

@@ -1,5 +1,5 @@
 import { nativeActionHost } from '../execution/ActionExecution.js';
-import { feetCell, localMapFor, type Cell } from './localMap.js';
+import { feetCell, localMapFor, symbolFor, type BlockReader, type Cell } from './localMap.js';
 
 /**
  * What an `act` returns (the head's contract: minecraftActContract.ts `ActResult`, mb-llm-centric-contract.md 1.3): a JSON object in the
@@ -9,7 +9,29 @@ import { feetCell, localMapFor, type Cell } from './localMap.js';
  * (nativeBody renders it again then).
  */
 export type HandStatus = 'done' | 'stopped' | 'skipped';
-export interface HandLine { i: number; do: string; status: HandStatus; line: string; where?: Cell }
+/** `around` (the head's contract r2, 2026-10-22): a stopped hand's 3x3x3 round `where`, in the map's symbols. */
+export interface HandLine { i: number; do: string; status: HandStatus; line: string; where?: Cell; around?: string }
+
+/**
+ * The 3x3x3 round a cell in the map's symbols and its coordinates (r2, 2026-10-22: a stopped line said the cell's block, and the next
+ * decision still could not see the shaft above it or the stone beside the water): the top layer first, each layer three rows north to
+ * south of three cells west to east, `/` between rows; her feet `@`.
+ *
+ *   x=200..202 z=276..278 y=49: #.#/#.#/### y=48: #.#/#.#/#@# y=47: ###/###/###
+ */
+export function aroundText(read: BlockReader, at: Cell, feet?: Cell | null): string {
+  const layers: string[] = [];
+  for (let y = at.y + 1; y >= at.y - 1; y--) {
+    const rows: string[] = [];
+    for (let z = at.z - 1; z <= at.z + 1; z++) {
+      let row = '';
+      for (let x = at.x - 1; x <= at.x + 1; x++) row += feet && feet.x === x && feet.y === y && feet.z === z ? '@' : symbolFor(read(x, y, z));
+      rows.push(row);
+    }
+    layers.push(`y=${y}: ${rows.join('/')}`);
+  }
+  return `x=${at.x - 1}..${at.x + 1} z=${at.z - 1}..${at.z + 1} ${layers.join(' ')}`;
+}
 export type StoppedBy = 'failure' | 'reflex' | 'stopIf' | 'inventoryFull' | 'cancelled' | 'deadline';
 export interface ActReport {
   startedAt: number;

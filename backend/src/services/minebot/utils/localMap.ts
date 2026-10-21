@@ -55,8 +55,9 @@ export function symbolFor(block: MapBlock | null): string {
   if (!block) return '?';
   const name = block.name.replace(/^minecraft:/u, '');
   if (AIR.has(name)) return '.';
-  if (name === 'water') return (block.level ?? 0) === 0 ? '~' : '-';
-  if (name === 'bubble_column' || name === 'kelp' || name === 'kelp_plant' || name === 'seagrass' || name === 'tall_seagrass') return '~';
+  // r2 (2026-10-22, count_tokens): '~ ' was three tokens a cell and '; ' two, a letter one: water a source is 'w', sand and gravel 's'.
+  if (name === 'water') return (block.level ?? 0) === 0 ? 'w' : '-';
+  if (name === 'bubble_column' || name === 'kelp' || name === 'kelp_plant' || name === 'seagrass' || name === 'tall_seagrass') return 'w';
   if (name === 'lava') return (block.level ?? 0) === 0 ? 'L' : 'l';
   if (name === 'fire' || name === 'soul_fire' || name === 'campfire' || name === 'soul_campfire') return 'f';
   if (name === 'cobweb' || name === 'powder_snow') return 'x';
@@ -82,7 +83,7 @@ export function symbolFor(block: MapBlock | null): string {
   if (CONTAINERS.test(name)) return 'C';
   if (/_bed$/u.test(name)) return 'B';
   if (name === 'hay_block') return 'H';
-  if (CROPS.test(name)) return 'w';
+  if (CROPS.test(name)) return 'k';
   if (/_door$/u.test(name)) return 'D';
   if (NETHER_BRICK.test(name)) return 'N';
   if (name === 'ladder' || name === 'vine' || name === 'scaffolding') return 'h';
@@ -93,7 +94,7 @@ export function symbolFor(block: MapBlock | null): string {
   if (LEAVES.test(name)) return '%';
   if (WOODEN.test(name)) return 'P';
   if (ICE.test(name)) return 'I';
-  if (FALLING.test(name)) return ';';
+  if (FALLING.test(name)) return 's';
   if (SOFT.test(name)) return ':';
   if (STONE.test(name) || /(stone|deepslate|brick|terracotta|concrete|tuff|basalt|blackstone|prismarine|purpur)/u.test(name)) return '#';
   if (PASSABLE_PLANTS.test(name)) return ',';
@@ -111,14 +112,16 @@ export function isOpenBlock(block: MapBlock | null): boolean { return !!block &&
 export const MAP_LEGEND = [
   '地図の記号（1字。地図は上が北・左が西。行の頭は z、列の見出しは x の下 1 桁）:',
   '@ 自分の足 / ! 敵の足 / m 動物の足 / * 60秒以内に歩いた空気 / . 空気 / , 通れる草花・雪 / ? 未ロード / X 掘れない（岩盤・バリア）',
-  '# 石の類（石・深層岩・安山岩・閃緑岩・花崗岩・凝灰岩・丸石・石レンガ）/ : 土・草・雪・粘土 / ; 砂・砂利 / I 氷',
-  '~ 水源 / - 流れる水 / L 溶岩源 / l 流れる溶岩 / f 火 / x クモの巣',
+  '# 石の類（石・深層岩・安山岩・閃緑岩・花崗岩・凝灰岩・丸石・石レンガ）/ : 土・草・雪・粘土 / s 砂・砂利 / I 氷',
+  'w 水源 / - 流れる水 / L 溶岩源 / l 流れる溶岩 / f 火 / x クモの巣',
   'i 鉄 / c 石炭 / d ダイヤ / g 金 / r レッドストーン / o ほかの鉱石（銅・ラピス・エメラルド・石英・古代の残骸）',
   'W 原木（ネザーの幹も）/ % 葉・ネザーの葉ブロック / P 板・木の建物 / D 扉 / + 柵・壁・鉄格子・ガラス / h はしご・つた / t 松明 / = レール',
-  'F かまど（溶鉱炉・燻製器も）/ T 作業台 / C チェスト・樽 / B ベッド / H 干し草 / w 畑の作物（ネザーウォートも）/ S スポナー',
+  'F かまど（溶鉱炉・燻製器も）/ T 作業台 / C チェスト・樽 / B ベッド / H 干し草 / k 畑の作物（ネザーウォートも）/ S スポナー',
   'O 黒曜石（泣く黒曜石も）/ p ネザーポータル / n ネザーラック / u ソウルサンド・ソウルソイル / N ネザーレンガ（要塞）/ M マグマ / G グロウストーン',
   'E エンドストーン / Q エンドポータルの枠（空）/ R 枠（アイ入り）/ e エンドポータル・エンドゲートウェイ / $ ほかの固いブロック',
   '方式=surface のマスは「記号＋高さ」: 0〜9 は足より上、+ は10以上上、a〜i は1〜9下、v は10以上下。',
+  '方式=layers の層: 足 −1〜+1 は 15×15、足 ±2 は 11×11（「y=47 x=196..206 z=272..282」のように範囲を書く）。足の 3〜6 上に敵（!）かスポナー（S）があれば、その高さの層（11×11）を一番上に足す。',
+  '縦: 足の列の上（頭のマスから上へ）と下（足の下のマスから下へ）を、同じ記号の続きでまとめる。「上: y=46〜51 .×6 / y=52 #」は頭から空気が 6 段、その上が石。… はその先も続く。',
 ].join('\n');
 
 /** The height in a surface view: 0 level with the feet, 1-9 up, + ten or more up, a-i down 1-9, v ten or more down (or nothing). */
@@ -199,13 +202,16 @@ function columnHeader(minX: number, maxX: number, labelWidth: number, cellWidth:
   return `${corner.padEnd(labelWidth, ' ')} ${digits.join(' ')}`.trimEnd();
 }
 
-/** Layers seen from above, the top one first: `yTo` down to `yFrom`, x `minX..maxX` (west to east), z `minZ..maxZ` (north to south). */
-export function drawLayers(options: DrawOptions & { minX: number; maxX: number; minZ: number; maxZ: number; yFrom: number; yTo: number }): string {
+/**
+ * Layers seen from above, the top one first: `yTo` down to `yFrom`, x `minX..maxX` (west to east), z `minZ..maxZ` (north to south).
+ * `ranged`: each layer's line names its x and z range too (a layer narrower than the map's header).
+ */
+export function drawLayers(options: DrawOptions & { minX: number; maxX: number; minZ: number; maxZ: number; yFrom: number; yTo: number; ranged?: boolean }): string {
   const { minX, maxX, minZ, maxZ } = options;
   const labelWidth = labelWidthFor(minZ, maxZ);
   const lines: string[] = [];
   for (let y = options.yTo; y >= options.yFrom; y--) {
-    lines.push(`y=${y}`);
+    lines.push(options.ranged ? `y=${y} x=${minX}..${maxX} z=${minZ}..${maxZ}` : `y=${y}`);
     lines.push(columnHeader(minX, maxX, labelWidth, 1));
     for (let z = minZ; z <= maxZ; z++) {
       const row: string[] = [];
@@ -306,8 +312,10 @@ export interface LocalMapOptions {
 }
 
 /**
- * The decision's map (the contract's format, 3): one header line, then in rock five layers of 15 x 15 (feet -2..+2, the top first);
- * under the open sky the surface of 21 x 21 (symbol + height) and the three layers feet -1..+1 at 11 x 11. Pure but for `read`.
+ * The decision's map (the contract's format, 3): one header line, then in rock five layers (feet -2..+2, the top first): feet -1..+1
+ * at 15 x 15 and feet ±2 at 11 x 11, with up to two more 11 x 11 layers on top where a hostile or a spawner is 3-6 above; under the
+ * open sky the surface of 21 x 21 (symbol + height) and the three layers feet -1..+1 at 11 x 11. Last, the feet's column up and down
+ * (`縦`). Pure but for `read`.
  *
  *   地図 v1 足=(201,45,277) x=194..208 z=270..284 方式=layers 上=北
  */
@@ -317,17 +325,84 @@ export function drawLocalMap(input: { feet: Cell; read: BlockReader; trail?: Rea
   const surface = options.mode === 'surface' || (options.mode !== 'layers' && underOpenSky(read, feet));
   const draw: DrawOptions = { read, self: feet, trail: input.trail, creatures: input.creatures };
   const lines: string[] = [];
+  const near = Math.min(radius, NEAR_RADIUS);
+  const narrow = (yFrom: number, yTo: number) => drawLayers({ ...draw, minX: feet.x - near, maxX: feet.x + near, minZ: feet.z - near, maxZ: feet.z + near,
+    yFrom, yTo, ranged: near !== radius });
   if (surface) {
     lines.push(`地図 v1 足=(${feet.x},${feet.y},${feet.z}) x=${feet.x - topRadius}..${feet.x + topRadius} z=${feet.z - topRadius}..${feet.z + topRadius} 方式=surface 上=北`);
     lines.push(drawTop({ ...draw, minX: feet.x - topRadius, maxX: feet.x + topRadius, minZ: feet.z - topRadius, maxZ: feet.z + topRadius,
       feetY: feet.y, top: feet.y + 12, bottom: feet.y - 12 }));
-    const near = 5;
     lines.push(drawLayers({ ...draw, minX: feet.x - near, maxX: feet.x + near, minZ: feet.z - near, maxZ: feet.z + near, yFrom: feet.y - 1, yTo: feet.y + 1 }));
   } else {
     lines.push(`地図 v1 足=(${feet.x},${feet.y},${feet.z}) x=${feet.x - radius}..${feet.x + radius} z=${feet.z - radius}..${feet.z + radius} 方式=layers 上=北`);
-    lines.push(drawLayers({ ...draw, minX: feet.x - radius, maxX: feet.x + radius, minZ: feet.z - radius, maxZ: feet.z + radius, yFrom: feet.y - 2, yTo: feet.y + 2 }));
+    // Above the layers: the height of a hostile or a spawner 3–6 over the feet (run 26: the blazes and their spawner were 3–4 up, off the map).
+    const above = threatLayers(read, feet, near, input.creatures);
+    if (above) lines.push(narrow(above.from, above.to));
+    // Run 25/26 scene replay (2026-10-21): the map was about 2,000 tokens, twice the design; the outer layers (feet ±2) are 11 x 11.
+    lines.push(narrow(feet.y + 2, feet.y + 2));
+    lines.push(drawLayers({ ...draw, minX: feet.x - radius, maxX: feet.x + radius, minZ: feet.z - radius, maxZ: feet.z + radius, yFrom: feet.y - 1, yTo: feet.y + 1 }));
+    lines.push(narrow(feet.y - 2, feet.y - 2));
   }
+  lines.push(...columnLines(read, feet));
   return lines.join('\n');
+}
+
+/** The half width of the layers away from the feet (feet ±2, and the layers added above): 11 x 11. */
+const NEAR_RADIUS = 5;
+/** How far the feet's column is told up and down (`縦`), and in how many runs at most. */
+const COLUMN_SPAN = 16, COLUMN_RUNS = 4;
+
+/**
+ * The layers to add above the map: where a hostile's feet or a spawner is 3 to 6 over her feet within `near` across, the lowest such
+ * height and the one over it (at most two layers, at most feet + 6). Null when there is none.
+ */
+export function threatLayers(read: BlockReader, feet: Cell, near: number, creatures?: ReadonlyMap<string, string>): { from: number; to: number } | null {
+  let lowest = Infinity;
+  for (const [key, mark] of creatures ?? []) {
+    if (mark !== '!') continue;
+    const [x, y, z] = key.split(',').map(Number);
+    if (Math.abs(x - feet.x) <= near && Math.abs(z - feet.z) <= near && y - feet.y >= 3 && y - feet.y <= 6) lowest = Math.min(lowest, y);
+  }
+  for (let y = feet.y + 3; y <= feet.y + 6 && y < lowest; y++) {
+    for (let x = feet.x - near; x <= feet.x + near && y < lowest; x++) {
+      for (let z = feet.z - near; z <= feet.z + near; z++) {
+        if (symbolFor(read(x, y, z)) === 'S') { lowest = y; break; }
+      }
+    }
+  }
+  if (!Number.isFinite(lowest)) return null;
+  return { from: lowest, to: Math.min(lowest + 1, feet.y + 6) };
+}
+
+/**
+ * The feet's column told up and down (`縦`): from the head's cell up and from the cell under the feet down, runs of the same symbol,
+ * at most COLUMN_RUNS runs within COLUMN_SPAN cells (`…` when it goes on). Run 25: the furnace was seven up a shaft the map did not show.
+ *
+ *   縦 (201,277) 上: y=46〜51 .×6 / y=52 #
+ *   縦 (201,277) 下: y=44 # / y=43〜40 .×4 / y=39 w
+ */
+export function columnLines(read: BlockReader, feet: Cell): string[] {
+  const runs = (step: 1 | -1) => {
+    const out: Array<{ from: number; to: number; symbol: string }> = [];
+    let more = false;
+    for (let i = 1; i <= COLUMN_SPAN; i++) {
+      const y = step > 0 ? feet.y + i : feet.y - i;
+      if (y < -64 || y > 319) break;
+      const symbol = symbolFor(read(feet.x, y, feet.z));
+      const last = out[out.length - 1];
+      if (last && last.symbol === symbol) { last.to = y; continue; }
+      if (out.length >= COLUMN_RUNS) { more = true; break; }
+      out.push({ from: y, to: y, symbol });
+    }
+    if (!more && out.length) {
+      const next = step > 0 ? out[out.length - 1].to + 1 : out[out.length - 1].to - 1;
+      if (next >= -64 && next <= 319 && Math.abs(next - feet.y) > COLUMN_SPAN) more = true;
+    }
+    const text = out.map(run => run.from === run.to ? `y=${run.from} ${run.symbol}`
+      : `y=${run.from}〜${run.to} ${run.symbol}×${Math.abs(run.to - run.from) + 1}`).join(' / ');
+    return `${text}${more ? ' …' : ''}`;
+  };
+  return [`縦 (${feet.x},${feet.z}) 上: ${runs(1)}`, `縦 (${feet.x},${feet.z}) 下: ${runs(-1)}`];
 }
 
 // ===== The body's own map =====

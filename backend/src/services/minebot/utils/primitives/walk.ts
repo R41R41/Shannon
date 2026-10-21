@@ -67,6 +67,24 @@ export function whyBlocked(bot: any, from: Cell, to: Cell): { reason: string; te
   return null;
 }
 
+/**
+ * What the ground says of a target the walk could not reach when its straight line showed nothing in the way (scene replay 2026-10-21,
+ * run 25: "(201,48,277) is air" seven times, the shaft over her unseen): how far above her feet it is, and how many cells of air are
+ * under it (no floor to stand on). Exact facts only; the way up is the planner's.
+ */
+export function reachFacts(bot: any, from: Cell, to: Cell): string {
+  const facts: string[] = [];
+  const dy = to.y - from.y;
+  if (dy >= 2) facts.push(`着く所は足より${dy}上（walk の段差は1まで）`);
+  let air = 0;
+  for (; air < 5; air++) {
+    const below = read(bot, to.x, to.y - 1 - air, to.z);
+    if (!below || below.solid || below.name === 'water' || below.name === 'lava') break;
+  }
+  if (air > 0) facts.push(`着く所の下 ${air >= 5 ? '5以上' : air} マスが空気（立つ床が無い）`);
+  return facts.join('。');
+}
+
 function walkMovements(bot: any, sprint: boolean): any {
   // towers off, sprint as asked, parkour (the safe one), doors, no digging, the falling-block rule, dig cost, no free motion, swim,
   // a drop of three, water at its usual price, and no block laid.
@@ -105,9 +123,10 @@ async function walkTo(ctx: StepContext, target: Cell, range: number, sprint: boo
     const message = String((error as Error)?.message ?? (stuck ? 'stuck' : 'unknown'));
     const blocked = whyBlocked(bot, here, target);
     if (!leg.final && /no path/iu.test(message) && attempt < 2) { attempt++; continue; }
-    if (stuck) return stopped(bot, blocked?.reason ?? 'stuck', `${STUCK_MS / 1000}秒進めず止まった（今 ${placeText(bot, here)}）。${blocked ? blocked.text : '前に見える障害は無い（体が何かに引っかかっている）'}`, blocked?.at ?? here, here);
+    const reach = reachFacts(bot, here, target);
+    if (stuck) return stopped(bot, blocked?.reason ?? 'stuck', `${STUCK_MS / 1000}秒進めず止まった（今 ${placeText(bot, here)}）。${blocked ? blocked.text : reach || '前に見える障害は無い（体が何かに引っかかっている）'}`, blocked?.at ?? here, here);
     if (/no path|took to long|too long/iu.test(message)) {
-      return stopped(bot, blocked?.reason ?? 'no_path', `${cellText(target)} への掘らない道が無い（今 ${placeText(bot, here)}）。${blocked ? blocked.text : 'まっすぐの線は開いているが、遠回りの道も見つからない（未ロードか、囲まれている）'}`, blocked?.at ?? target, here);
+      return stopped(bot, blocked?.reason ?? 'no_path', `${cellText(target)} への掘らない道が無い（今 ${placeText(bot, here)}）。${blocked ? blocked.text : reach || 'まっすぐの線は開いているが、遠回りの道も見つからない（未ロードか、囲まれている）'}`, blocked?.at ?? target, here);
     }
     return stopped(bot, 'walk_failed', `${cellText(target)} へ歩けなかった: ${message.slice(0, 80)}（今 ${placeText(bot, here)}）`, here, here);
   }

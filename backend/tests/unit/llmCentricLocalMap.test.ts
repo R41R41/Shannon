@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { drawColumn, drawLocalMap, drawSlice, drawTop, facingOfYaw, heightCode, noteMapStop, recentStopLines, relativeCell, relativeWords,
+import { drawColumn, drawLocalMap, drawSlice, drawTop, facingOfYaw, heightCode, MAP_LEGEND, noteMapStop, recentStopLines, relativeCell, relativeWords,
   symbolFor, underOpenSky, type MapBlock } from '../../src/services/minebot/utils/localMap.js';
 import { describeArea } from '../../src/services/minebot/instantSkills/getBlocksInArea.js';
 import { readChunk, sectionBlock } from '../../src/services/minebot/utils/anvilWorld.js';
@@ -32,18 +32,19 @@ describe('the decision map (utils/localMap)', () => {
       'y=66', 'z\\x 8 9 0 1 2',
       ' 18 # # . . .', ' 19 # # . . .', ' 20 # # . . .', ' 21 # # . . .', ' 22 # # . . .',
       'y=65', 'z\\x 8 9 0 1 2',
-      ' 18 . . . . .', ' 19 . . . ; .', ' 20 . . . . .', ' 21 . . . . .', ' 22 . . . . .',
+      ' 18 . . . . .', ' 19 . . . s .', ' 20 . . . . .', ' 21 . . . . .', ' 22 . . . . .',
       'y=64', 'z\\x 8 9 0 1 2',
-      ' 18 m . F . .', ' 19 . . . . .', ' 20 . . @ * ~', ' 21 . ! . . .', ' 22 . . . . ?',
+      ' 18 m . F . .', ' 19 . . . . .', ' 20 . . @ * w', ' 21 . ! . . .', ' 22 . . . . ?',
       'y=63', 'z\\x 8 9 0 1 2',
       ' 18 # # # # #', ' 19 # # # # #', ' 20 # : # # #', ' 21 # # # # #', ' 22 # # # # #',
       'y=62', 'z\\x 8 9 0 1 2',
       ' 18 # # # # #', ' 19 # # # # #', ' 20 # # i # #', ' 21 # # # # #', ' 22 # # # # #',
+      '縦 (10,20) 上: y=65〜80 .×16 …', '縦 (10,20) 下: y=63 # / y=62 i / y=61〜48 #×14 …',
     ].join('\n'));
   });
   it('draws the ground from above with standing heights', () => {
     const text = drawTop({ read: world(), self: { x: 10, y: 64, z: 20 }, trail: new Set(['11,64,20']), minX: 8, maxX: 12, minZ: 18, maxZ: 20, feetY: 64, top: 70, bottom: 58 });
-    expect(text).toBe(['z\\x 8  9  0  1  2', ' 18 #3 #3 F1 #0 #0', ' 19 #3 #3 #0 ;2 #0', ' 20 #3 #3 @0 *0 ~1'].join('\n'));
+    expect(text).toBe(['z\\x 8  9  0  1  2', ' 18 #3 #3 F1 #0 #0', ' 19 #3 #3 #0 s2 #0', ' 20 #3 #3 @0 *0 w1'].join('\n'));
   });
 
   it('chooses the surface under the open sky and the layers under a roof', () => {
@@ -52,6 +53,39 @@ describe('the decision map (utils/localMap)', () => {
     expect(underOpenSky(read, { x: 8, y: 64, z: 20 })).toBe(false);
     expect(drawLocalMap({ feet: { x: 10, y: 64, z: 20 }, read }).split('\n')[0]).toBe('地図 v1 足=(10,64,20) x=0..20 z=10..30 方式=surface 上=北');
     expect(drawLocalMap({ feet: { x: 8, y: 64, z: 20 }, read }).split('\n')[0]).toBe('地図 v1 足=(8,64,20) x=1..15 z=13..27 方式=layers 上=北');
+  });
+
+  it('r2: the outer layers are 11 x 11 with their range, a hostile or a spawner 3-6 up adds its layers, and the column goes up and down', () => {
+    // A shaft over the feet (air to y=72), a spawner 4 up and a hostile 3 up to the north-east, water under the floor.
+    const read = (x: number, y: number, z: number): MapBlock | null => {
+      if (x === 0 && z === 0 && y >= 65 && y <= 72) return air;
+      if (x === 2 && y === 68 && z === -1) return { name: 'spawner', solid: true };
+      if (y === 67 && Math.abs(x - 2) <= 1 && Math.abs(z + 1) <= 1) return air;
+      if (y === 64 && Math.abs(x) <= 7 && Math.abs(z) <= 7) return air;
+      if (y === 65 && Math.abs(x) <= 7 && Math.abs(z) <= 7) return air;
+      if (y >= 60 && y <= 61) return { name: 'water', level: 0, solid: false };
+      return stone;
+    };
+    const text = drawLocalMap({ feet: { x: 0, y: 64, z: 0 }, read, creatures: new Map([['1,67,-1', '!']]) }, { mode: 'layers' });
+    const lines = text.split('\n');
+    expect(lines[0]).toBe('地図 v1 足=(0,64,0) x=-7..7 z=-7..7 方式=layers 上=北');
+    expect(lines.filter(line => line.startsWith('y='))).toEqual(['y=68 x=-5..5 z=-5..5', 'y=67 x=-5..5 z=-5..5', 'y=66 x=-5..5 z=-5..5', 'y=65', 'y=64', 'y=63', 'y=62 x=-5..5 z=-5..5']);
+    const y67 = lines.indexOf('y=67 x=-5..5 z=-5..5');
+    expect(lines[y67 + 1]).toBe('z\\x 5 4 3 2 1 0 1 2 3 4 5');
+    expect(lines[y67 + 1 + 5]).toBe(' -1 # # # # # # ! . . # #');
+    expect(lines.slice(-2)).toEqual(['縦 (0,0) 上: y=65〜72 .×8 / y=73〜80 #×8 …', '縦 (0,0) 下: y=63〜62 #×2 / y=61〜60 w×2 / y=59〜48 #×12 …']);
+    // Nothing above: no layers added.
+    expect(drawLocalMap({ feet: { x: 0, y: 64, z: 0 }, read: (x, y, z) => y === 68 ? stone : read(x, y, z) }, { mode: 'layers' })
+      .split('\n').filter(line => line.startsWith('y=')).length).toBe(5);
+  });
+
+  it('r2: water, sand and crops are one letter each (one token a cell, count_tokens)', () => {
+    expect(symbolFor({ name: 'water', level: 0 })).toBe('w');
+    expect(symbolFor({ name: 'kelp' })).toBe('w');
+    expect(symbolFor({ name: 'gravel' })).toBe('s');
+    expect(symbolFor({ name: 'wheat' })).toBe('k');
+    expect(MAP_LEGEND).toContain('w 水源');
+    expect(MAP_LEGEND).not.toContain('~');
   });
 
   it('gives each family one letter (the old clashes are gone) and every air is air', () => {
@@ -86,7 +120,7 @@ describe('the decision map (utils/localMap)', () => {
 
   it('draws a slice and a column', () => {
     const slice = drawSlice({ read: world(), self: { x: 10, y: 64, z: 20 }, center: { x: 10, y: 64, z: 20 }, radius: 2, yFrom: 63, yTo: 64, axis: 'ew' });
-    expect(slice.split('\n')).toEqual(['y\\x 8 9 0 1 2', ' 64 . . @ . ~', ' 63 # : # # #']);
+    expect(slice.split('\n')).toEqual(['y\\x 8 9 0 1 2', ' 64 . . @ . w', ' 63 # : # # #']);
     const column = drawColumn({ read: world(), x: 10, z: 18, yFrom: 62, yTo: 65 });
     expect(column.split('\n')).toEqual(['y=65 . air', 'y=64 F furnace', 'y=62..63 # stone']);
   });

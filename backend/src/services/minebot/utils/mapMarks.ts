@@ -132,7 +132,7 @@ function computeMarks(bot: MarkBody, feet: Cell, now: number): string[] {
   for (const fluid of ['water', 'lava']) {
     const hits = scan([fluid], RANGE, 64);
     const sources = hits.filter(hit => fluidLevel(bot, hit.position) === 0);
-    if (sources.length) add(fluid, cellOf(sources[0].position), fluid === 'water' ? '~' : 'L', LABEL[fluid], fluid === 'lava' ? `溜まりの源 ${sources.length}` : '', 1);
+    if (sources.length) add(fluid, cellOf(sources[0].position), fluid === 'water' ? 'w' : 'L', LABEL[fluid], fluid === 'lava' ? `溜まりの源 ${sources.length}` : '', 1);
   }
   const obsidian = scan(['obsidian', 'crying_obsidian'], RANGE, 32);
   if (obsidian.length) add('obsidian', cellOf(obsidian[0].position), 'O', '黒曜石', `×${obsidian.length}`, 2);

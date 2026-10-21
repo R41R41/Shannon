@@ -21,7 +21,8 @@ export async function chest(ctx: StepContext, args: ChestArgs): Promise<StepOutc
   const cell = args.at;
   const block = blockAt(bot, cell);
   if (!block) return stopped(bot, 'unloaded', `${placeText(bot, cell)} は未ロード`, cell);
-  if (!CONTAINERS.test(block.name)) return stopped(bot, 'not_container', `${placeText(bot, cell)} は ${block.name}（箱・樽ではない）`, cell);
+  // Scene replay 2026-10-21: a furnace was opened with chest three times in seven; the hand for it is furnace (op=take).
+  if (!CONTAINERS.test(block.name)) return stopped(bot, 'not_container', `${placeText(bot, cell)} は ${block.name}（箱・樽ではない${/furnace|smoker/u.test(block.name) ? '。かまどは furnace の手' : ''}）`, cell);
   const distance = eyeDistance(bot, cell);
   if (distance > USE_REACH) return stopped(bot, 'out_of_reach', `${placeText(bot, cell)} の ${block.name} に届かない（目から${distance.toFixed(1)}m、${USE_REACH}m まで）`, cell);
   if (bot.currentWindow) { try { bot.closeWindow(bot.currentWindow); } catch { /* closing */ } await wait(ctx, 100); }
