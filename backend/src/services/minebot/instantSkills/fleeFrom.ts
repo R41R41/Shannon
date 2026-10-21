@@ -6,6 +6,8 @@ import { setMovements } from '../utils/setMovements.js';
 import { gotoSafe } from '../utils/gotoSafe.js';
 import { isHostileEntity } from '../utils/hostileMobHints.js';
 import { isExposedTo } from '../utils/threatExposure.js';
+import { armourPoints, wellArmoured } from '../utils/armourCheck.js';
+import { creeperLit } from '../utils/creeperFuse.js';
 import { escapeMayWork } from '../utils/escapeHeading.js';
 import { fleeKeys } from '../utils/floorReflexes.js';
 import { actionDelay } from '../execution/observedWait.js';
@@ -39,6 +41,8 @@ const MAX_ROUTE_CHECKS = 6;
 const MAX_SEARCH_FAILURES = 2;
 const SEARCH_BUDGET_MS = 3_000;
 const FALLBACK_RUN_MS = 2_500;
+/** A creeper that is not lit and at least this far (m) is not fled from by a body in armour: the work goes on (run 24: iron all round, cut off three times). */
+const ARMOURED_CREEPER_M = 5;
 
 /**
  * Where on a route a pursuer could be met: the first point it could reach before the body has run past it, with the
@@ -192,6 +196,15 @@ class FleeFrom extends InstantSkill {
           success: false,
           result: `"${actualTarget}"が見つかりません`,
         };
+      }
+
+      // Only unlit creepers, none near, and a body in armour: nothing to run from (a lit one is stepped back from by the floor's own reflex,
+      // and the dig guard still keeps a lit or near one out). The order that was cut can go on.
+      if (targets.length && targets.every(entry => entry.name === 'creeper' && entry.entity && !creeperLit(entry.entity))
+        && this.nearestDistance(targets) >= ARMOURED_CREEPER_M && wellArmoured(this.bot as any)) {
+        return { success: true,
+          result: `逃げずに続けます: クリーパー${targets.length}体は点火しておらず、最も近いもので${this.nearestDistance(targets).toFixed(1)}m。`
+            + `防具${armourPoints(this.bot as any)}点を着ていて体力もあるので、爆発は耐えられます。点火したら離れる反射が働きます。止まった作業をそのまま続けてください` };
       }
 
       const name = hostileGroup ? '敵対Mob全体' : targets[0].name;

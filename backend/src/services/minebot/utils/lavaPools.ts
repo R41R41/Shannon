@@ -86,6 +86,8 @@ export function capRefusal(world: PoolWorld, cap: Vec3): string | null {
   const block = read(world, cap);
   if (!block) return 'unloaded';
   if (NEVER_DUG(block.name ?? '') || (block as { diggable?: boolean }).diggable === false) return `undiggable:${block.name}`;
+  // Obsidian over lava is the crust of a pool already turned: it is dug with water on top (dig-block-at keeps its drop), not opened as a cover.
+  if (block.name === 'obsidian') return 'obsidian_crust';
   for (const [dx, dy, dz] of [[0, 1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]]) {
     const next = read(world, cap.offset(dx, dy, dz));
     if (!next) return 'unloaded';
@@ -153,8 +155,9 @@ export function rankLavaSources(infos: LavaSourceInfo[], here: Vec3, count: numb
 
 /** The words for the search's list: the pool and how its top is opened. */
 export function describeLavaSource(info: LavaSourceInfo): string {
-  const pool = `溜まり${info.poolSize >= POOL_CAP ? `${POOL_CAP}個以上` : `${info.poolSize}個`}`;
-  if (info.top === 'open') return `${pool}・上が開いている（すぐ水をかけられる）`;
-  if (info.top === 'covered') return `${pool}・岩の覆いが1枚（${info.stand!.x},${info.stand!.y},${info.stand!.z}から掘って開けてから水をかける。use-item-on-block が自分で掘る）`;
-  return `${pool}・上が溶岩か水で、水をかけられない（同じ溜まりの上の層を先に使う）`;
+  // "（水源12個・岩に覆われている）": the mind reads the size ("水源N個") and the cover ("覆われている／覆われていない") from this.
+  const size = `水源${info.poolSize >= POOL_CAP ? `${POOL_CAP}個以上` : `${info.poolSize}個`}`;
+  if (info.top === 'open') return `（${size}・岩に覆われていない）［すぐ水をかけられる］`;
+  if (info.top === 'covered') return `（${size}・岩に覆われている）［覆い1枚を横の(${info.stand!.x},${info.stand!.y},${info.stand!.z})から掘って開けてから水をかける。use-item-on-block が自分で掘る］`;
+  return `（${size}・岩に覆われている）［上が溶岩か水で、水をかけられない（同じ溜まりの上の層を先に使う）］`;
 }

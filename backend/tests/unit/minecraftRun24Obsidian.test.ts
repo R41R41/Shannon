@@ -104,10 +104,10 @@ describe('lava seen the way the pourer sees it (run 24: "can be scooped" for a p
     bot.findBlocks = ({ matching, useExtraInfo }: any) => (matching === lavaId ? findAll((block: any) => block.name === 'lava' && (!useExtraInfo || useExtraInfo(block))) : []);
     const result: any = await new FindBlocks(bot).runImpl('lava', 16, 10);
     expect(result.success).toBe(true);
-    expect(result.result).toContain('溜まり16個');
-    expect(result.result).toContain('岩の覆いが1枚');
+    expect(result.result).toContain('（水源16個・岩に覆われている）');
+    expect(result.result).toContain('use-item-on-block が自分で掘る');
     expect(result.result).toContain('黒曜石を作るなら');
-    expect(describeLavaSource({ at: new Vec3(0, 0, 0), top: 'open', poolSize: 3, lavaNeighbours: 0 })).toContain('上が開いている');
+    expect(describeLavaSource({ at: new Vec3(0, 0, 0), top: 'open', poolSize: 3, lavaNeighbours: 0 })).toContain('（水源3個・岩に覆われていない）');
   });
 });
 

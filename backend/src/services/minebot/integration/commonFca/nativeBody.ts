@@ -4,6 +4,7 @@ import { primitiveState, primitiveCandidates, executePrimitive } from './primiti
 import { captureWorldObservation } from '../../cognition/worldFrame.js';
 import { floorActive, floorSilenced } from '../../utils/floorReflexes.js';
 import { floorConfig } from '../../utils/floorConfig.js';
+import { linkWatchOf } from '../../utils/linkWatch.js';
 import type { ReflexLedger } from '../../utils/reflexLedger.js';
 import { activeActionCapabilities, cancelIdleActions, currentAction, cancelNonSurvivalActions, createMotorPort, executeAction,
   hasActiveSafetyLease, physicalActionBusy, safetyLeaseCapabilities, withActionSignal } from '../../execution/ActionExecution.js';
@@ -119,8 +120,15 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
     }
     const moving = ['forward', 'back', 'left', 'right', 'jump'].some(name => this.bot.controlState?.[name]);
     const facts: Record<string, null | string | number | boolean> = {
-      connected: this.connected && !!this.bot.entity, alive: (this.bot.health ?? 0) > 0,
+      // alive is false only for a body known to be dead (health 0): a body just back in after a drop has no health yet and is not dead
+      // (run 24: a reconnect was taken for a respawn and a shelter was dug on magma); `connected` says whether it is there at all.
+      connected: this.connected && !!this.bot.entity, alive: typeof this.bot.health === 'number' ? this.bot.health > 0 : true,
       onGround: this.bot.entity?.onGround === true, dimension: String(this.bot.game?.dimension ?? ''),
+      // Seconds since the dimension last changed (a portal), null when it has not this connection.
+      dimensionSinceSec: this.bot.dimensionChange ? Math.round((now - this.bot.dimensionChange.at) / 1000) : null,
+      // Digs the server did not confirm (put back by utils/digConfirmation): in all, and in the last 30 s -- a streak is a server or a link that is behind.
+      digRestored: Number(this.bot.ghostBlocksRestored ?? 0), digRestoredRecent: Number(this.bot.digUnconfirmedRecent?.() ?? 0),
+      linkBehind: linkWatchOf(this.bot)?.behind() === true,
       yaw: Number(this.bot.entity?.yaw ?? 0), pitch: Number(this.bot.entity?.pitch ?? 0),
       equipped: this.bot.heldItem?.name ?? null, window: this.bot.currentWindow?.type ?? null,
       danger: (this.bot.health ?? 20) <= 8 || (this.bot.oxygenLevel ?? 20) <= 6 || (world.nearbyThreats ?? []).some(t => t.distance <= 5 && t.canReachMe !== false),

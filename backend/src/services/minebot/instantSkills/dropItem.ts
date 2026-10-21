@@ -59,6 +59,25 @@ const PIT_OFFSETS: Array<[number, number]> = (() => {
  */
 const dropsUnderWay = new WeakMap<object, number>();
 
+/**
+ * Several kinds in one throw (run 24: dirt, granite, diorite, andesite and cobblestone thrown away in five calls, 36 s, before the descent to
+ * the diamonds): `itemName` as a list, "dirt:35,granite:27,diorite" -- a kind with no count is all of it. Null for a single kind (the
+ * ordinary call, with `count`).
+ */
+export function parseDropList(itemName: string): Array<{ name: string; count: number | null }> | null {
+  if (!/[,:]/u.test(itemName)) return null;
+  const merged = new Map<string, number | null>();
+  for (const part of itemName.split(',')) {
+    const [rawName, rawCount] = part.split(':').map(piece => piece.trim());
+    if (!rawName) continue;
+    const count = rawCount === undefined || rawCount === '' ? null : Math.max(0, Math.floor(Number(rawCount)));
+    if (count !== null && !Number.isFinite(count)) continue;
+    const before = merged.get(rawName);
+    merged.set(rawName, before === undefined ? count : before === null || count === null ? null : before + count);
+  }
+  return [...merged].map(([name, count]) => ({ name, count }));
+}
+
 function isAirBlock(block: { name: string } | null): boolean {
   return !!block && AIR.has(block.name);
 }
@@ -171,12 +190,13 @@ class DropItem extends InstantSkill {
     super(bot);
     this.skillName = 'drop-item';
     this.description =
-      'インベントリから指定アイテムを指定数捨てます（複数スタックにまたがってもよい）。近くに穴があればそこへ、無ければ開けた向きへ投げてから反対側へ離れ、拾い直していないことを確かめて結果を返します。捨てた物は数分で消えます。残したい物は deposit-to-container でチェストに預けてください。';
+      'インベントリから指定アイテムを指定数捨てます（複数スタックにまたがってもよい）。近くに穴があればそこへ、無ければ開けた向きへ投げてから反対側へ離れ、拾い直していないことを確かめて結果を返します。捨てた物は数分で消えます。残したい物は deposit-to-container でチェストに預けてください。'
+      + '何種類も捨てる時は1回にまとめます（itemName に "dirt:35,granite:27,diorite" のように「名前:数」をコンマでつなぐ。数を省いた物は全部。穴を掘る・歩いて離れるのは1回だけ）。';
     this.params = [
       {
         name: 'itemName',
         type: 'string',
-        description: 'ドロップするアイテム名',
+        description: 'ドロップするアイテム名。複数をまとめて捨てる時は "dirt:35,granite:27,diorite"（数を省くと全部。このとき count は使わない）',
         required: true,
       },
       {
@@ -329,12 +349,14 @@ class DropItem extends InstantSkill {
    * shut in (at most two of the eight ways open three cells), with a pickaxe that is not itself being thrown, and when digging the hole
    * is safe. Returns the plan once the hole is open, or null with nothing dug (or a part-dug hole left, harmless).
    */
-  private async digDumpPit(itemName: string, dropCount: number): Promise<DumpPitPlan | null> {
+  private async digDumpPit(kinds: Array<{ name: string; count: number }>): Promise<DumpPitPlan | null> {
     if (openLines(this.bot).filter(open => open >= MIN_THROW_OPEN).length > 2) return null;
     const items = this.bot.inventory.items();
     const pickaxes = items.filter(entry => entry.name.endsWith('_pickaxe'));
-    const thrown = pickaxes.filter(entry => entry.name === itemName).reduce((sum, entry) => sum + entry.count, 0);
-    if (pickaxes.reduce((sum, entry) => sum + entry.count, 0) - Math.min(thrown, dropCount) < 1) return null;
+    // The pickaxes among what is thrown: one is always kept to dig the hole with.
+    const thrown = kinds.filter(kind => kind.name.endsWith('_pickaxe'))
+      .reduce((sum, kind) => sum + Math.min(kind.count, pickaxes.filter(entry => entry.name === kind.name).reduce((total, entry) => total + entry.count, 0)), 0);
+    if (pickaxes.reduce((sum, entry) => sum + entry.count, 0) - thrown < 1) return null;
     if (!this.bot.instantSkills?.getSkill('dig-block-at')) return null;
     const plan = planDumpPit(this.bot as any, this.bot.entity.position.floored());
     if (!plan) return null;
@@ -369,19 +391,19 @@ class DropItem extends InstantSkill {
   }
 
   /** New dropped items lying in the pit, below the floor level: what was thrown, seen at rest out of reach. */
-  private itemsInPit(plan: DumpPitPlan, lyingBefore: Set<number>, itemName: string): number {
+  private itemsInPit(plan: DumpPitPlan, lyingBefore: Set<number>, names: string[]): number {
     return Object.values((this.bot as any).entities ?? {}).filter((entity: any) => entity?.position && (entity.name === 'item' || entity.displayName === 'Item')
-      && !lyingBefore.has(entity.id) && entity.getDroppedItem?.()?.name === itemName
+      && !lyingBefore.has(entity.id) && names.includes(entity.getDroppedItem?.()?.name)
       && Math.abs(entity.position.x - (plan.column.x + 0.5)) < 0.9 && Math.abs(entity.position.z - (plan.column.z + 0.5)) < 0.9
       && entity.position.y <= plan.column.feetY - 2).length;
   }
 
   /** Puts a spare block back in the floor cell of a dump pit once what was thrown has fallen (the tunnel keeps its floor). */
-  private async coverDumpPit(plan: DumpPitPlan, itemName: string, lyingBefore: Set<number>): Promise<string> {
+  private async coverDumpPit(plan: DumpPitPlan, names: string[], lyingBefore: Set<number>): Promise<string> {
     if (!plan.cap) return '';
     if (!(await this.itemsHaveFallen(plan, lyingBefore))) return '穴は開けたままです（投げた物がまだ落ち切っていない）。';
     const held = (name: string) => this.bot.inventory.items().filter(entry => entry.name === name).reduce((sum, entry) => sum + entry.count, 0);
-    const block = CAP_BLOCKS.find(name => held(name) > 0 && (name !== itemName || held(name) > 1));
+    const block = CAP_BLOCKS.find(name => held(name) > 0 && (!names.includes(name) || held(name) > 1));
     if (!block) return '穴の床は塞げませんでした（置ける石を持っていない）。';
     try {
       const placed = await this.callSkill('place-block-at', block, plan.cap.x, plan.cap.y, plan.cap.z);
@@ -402,6 +424,22 @@ class DropItem extends InstantSkill {
     const release = holdClutterTidy(this.bot);
     try {
       await realTurn();
+      // Several kinds in one call ("dirt:35,granite:27"): the first is thrown as the ordinary call would, the others from the same place at
+      // once -- one pit, one walk away, one wait for the pickup delay.
+      const list = parseDropList(String(itemName));
+      let extras: Array<{ name: string; type: number; count: number }> = [];
+      if (list) {
+        const kinds: Array<{ name: string; type: number; count: number }> = [];
+        for (const entry of list) {
+          const have = this.bot.inventory.items().filter((i) => i.name === entry.name);
+          const total = have.reduce((sum, i) => sum + i.count, 0);
+          const wanted = entry.count === null ? total : Math.min(entry.count, total);
+          if (have.length && wanted > 0) kinds.push({ name: entry.name, type: have[0].type, count: wanted });
+        }
+        if (!kinds.length) return { success: false, result: `インベントリに${list.map(entry => entry.name).join('・')}がありません` };
+        itemName = kinds[0].name; count = kinds[0].count; extras = kinds.slice(1);
+      }
+      const allNames = [itemName, ...extras.map(extra => extra.name)];
       const stacks = this.bot.inventory.items().filter((i) => i.name === itemName);
       const item = stacks[0];
 
@@ -424,13 +462,13 @@ class DropItem extends InstantSkill {
       // Lava within a throw: what is thrown into it is gone, and cannot be picked up again (run 23: a heap of 176 thrown away and
       // fetched back after every obsidian dug, 4-6 s each). Only a spare kind that is thrown to be rid of (selfDropped's table).
       const eyes = this.bot.entity.position.offset(0, 1.62, 0);
-      const intoLava = liquid && isThrowable(itemName) ? lavaToThrowInto(this.bot as any, eyes) : null;
-      if (liquid && intoLava) log.info(`溶岩(${intoLava.x},${intoLava.y},${intoLava.z})が近いので、${itemName}は溶岩へ投げ込んで消します`);
+      const intoLava = liquid && allNames.every(name => isThrowable(name)) ? lavaToThrowInto(this.bot as any, eyes) : null;
+      if (liquid && intoLava) log.info(`溶岩(${intoLava.x},${intoLava.y},${intoLava.z})が近いので、${allNames.join('・')}は溶岩へ投げ込んで消します`);
       else if (liquid) log.info(`${liquid}が近いので穴には捨てず、離れて捨てます`);
       let pit = liquid ? null : findAdjacentPitDropPlan(this.bot);
       let dugPit: DumpPitPlan | null = null;
       if (!pit && !liquid) {
-        dugPit = await this.digDumpPit(itemName, dropCount);
+        dugPit = await this.digDumpPit([{ name: itemName, count: dropCount }, ...extras]);
         if (dugPit) pit = findAdjacentPitDropPlan(this.bot);
       }
 
@@ -456,8 +494,11 @@ class DropItem extends InstantSkill {
         }
       }
 
-      const held = () => this.bot.inventory.items().filter((i) => i.name === itemName).reduce((sum, i) => sum + i.count, 0);
+      const heldOf = (name: string) => this.bot.inventory.items().filter((i) => i.name === name).reduce((sum, i) => sum + i.count, 0);
+      const held = () => heldOf(itemName);
       const before = held();
+      const extrasBefore = extras.map(extra => heldOf(extra.name));
+      const noteAll = () => allNames.flatMap(name => this.noteThrown(name, lyingBefore));
       // With no pit: the item is thrown one way and the body walks the other. The way to walk is chosen first
       // (somewhere it can stand), the throw is level and straight away from it, and the walk keeps to that side.
       let spots: Array<[number, number, number]> = [];
@@ -499,26 +540,27 @@ class DropItem extends InstantSkill {
       const tossX = this.bot.entity.position.x;
       const tossZ = this.bot.entity.position.z;
       await this.tossItems(itemName, item.type, dropCount);
+      for (const extra of extras) { if (this.shouldInterrupt()) break; await this.tossItems(extra.name, extra.type, extra.count); }
       await actionDelay(this.bot, 80);
-      let fresh = this.noteThrown(itemName, lyingBefore);
-      log.info(`投げました: ${itemName}×${dropCount}（モード ${mode}${dugPit ? '・掘った穴' : ''}、いま所持 ${held()}、位置 ${this.bot.entity.position.toString()}）`);
+      let fresh = noteAll();
+      log.info(`投げました: ${[`${itemName}×${dropCount}`, ...extras.map(extra => `${extra.name}×${extra.count}`)].join('・')}（モード ${mode}${dugPit ? '・掘った穴' : ''}、いま所持 ${held()}、位置 ${this.bot.entity.position.toString()}）`);
 
       const tossedAt = Date.now();
       // A pit dug for the throw is covered once the item has fallen into it (before the pickup delay is out, so the wait is not longer).
       let coverNote = '';
       let sealed = false;
       if (mode === 'pit' && dugPit) {
-        coverNote = await this.coverDumpPit(dugPit, itemName, lyingBefore);
+        coverNote = await this.coverDumpPit(dugPit, allNames, lyingBefore);
         // Seen at rest three blocks down and the floor put back over them: nothing can pick them up, the two seconds need not be waited.
-        sealed = coverNote.includes('塞ぎました') && this.itemsInPit(dugPit, lyingBefore, itemName) > 0;
+        sealed = coverNote.includes('塞ぎました') && this.itemsInPit(dugPit, lyingBefore, allNames) > 0;
       }
       // Into lava: given a moment to burn. What is gone from the world cannot be picked up; what lies there still (it landed on the rim)
       // is dealt with as a stray at a pit's rim is, below.
       if (mode === 'lava') {
         await actionDelay(this.bot, LAVA_BURN_MS);
-        fresh = this.noteThrown(itemName, lyingBefore);
+        fresh = noteAll();
         sealed = fresh.length === 0;
-      } else fresh = this.noteThrown(itemName, lyingBefore);
+      } else fresh = noteAll();
       let away = true;
       if (mode === 'retreat') away = await this.retreatTo(this.bot, spots, tossX, tossZ);
       // At the rim of a pit that is not sealed, an item that landed on the rim (not in the hole) is within reach: the body walks off before
@@ -531,11 +573,15 @@ class DropItem extends InstantSkill {
       }
       // The usual spots all failed (a winding tunnel): any standable cell far enough from the heap will do.
       if (!away && !sealed && !this.shouldInterrupt()) away = await this.retreatTo(this.bot, this.farSpots(tossX, tossZ, PICKUP_CLEARANCE_BLOCKS + 0.5), tossX, tossZ);
-      fresh = this.noteThrown(itemName, lyingBefore);
+      fresh = noteAll();
       // A thrown item can be picked up again after two seconds. What the pack holds after that is the result.
       if (!sealed) await actionDelay(this.bot, Math.max(0, PICKUP_DELAY_MS + 400 - (Date.now() - tossedAt)));
-      this.noteThrown(itemName, lyingBefore);
-      const back = Math.max(0, held() - (before - dropCount));
+      noteAll();
+      const backs = [{ name: itemName, back: Math.max(0, held() - (before - dropCount)) },
+        ...extras.map((extra, index) => ({ name: extra.name, back: Math.max(0, heldOf(extra.name) - (extrasBefore[index] - extra.count)) }))].filter(entry => entry.back > 0);
+      const back = backs.reduce((sum, entry) => sum + entry.back, 0);
+      const thrownText = [`${itemName}を${dropCount}個`, ...extras.map(extra => `${extra.name}を${extra.count}個`)].join('・');
+      const leftText = extras.length ? [itemName, ...extras.map(extra => extra.name)].map(name => `${name}${heldOf(name)}`).join('・') : `${held()}個`;
       if (back > 0) log.info(`拾い直し: ${itemName} ${back}個（モード ${mode}、近くの落とし物: ${Object.values((this.bot as any).entities ?? {}).filter((entity: any) => entity?.name === 'item')
         .map((entity: any) => `${entity.getDroppedItem?.()?.name ?? '?'}@${entity.position.x.toFixed(1)},${entity.position.y.toFixed(1)},${entity.position.z.toFixed(1)}`).join(' ')}）`);
       if (back > 0) {
@@ -544,7 +590,8 @@ class DropItem extends InstantSkill {
           failureType: 'picked_up_again',
           recoverable: true,
           result:
-            `${itemName}を${dropCount}個捨てましたが、${back}個を拾い直しました（現在${held()}個）。` +
+            (extras.length ? `${thrownText}捨てましたが、${backs.map(entry => `${entry.name}${entry.back}個`).join('・')}を拾い直しました（現在${leftText}）。`
+              : `${itemName}を${dropCount}個捨てましたが、${back}個を拾い直しました（現在${held()}個）。`) +
             (away ? '' : '捨てた場所から離れられませんでした（周りに立てる場所が見つからない）。') +
             '落とし物は1ブロック以内にいると拾います。開けた場所へ出てから捨てるか、チェストに入れてください。' +
             this.slotsNote(slotsBefore),
@@ -553,10 +600,10 @@ class DropItem extends InstantSkill {
       return {
         success: true,
         result: (mode === 'pit'
-          ? (dugPit ? `${itemName}を${dropCount}個、狭い所だったので横に深さ3の穴を掘って捨てました（残り${held()}個）。${coverNote}`
-            : `${itemName}を${dropCount}個、近くの穴へ捨てました（残り${held()}個）。`)
-          : mode === 'lava' && sealed ? `${itemName}を${dropCount}個、近くの溶岩へ投げ込んで消しました（残り${held()}個）。拾い直す物は残っていません。`
-          : `${itemName}を${dropCount}個捨て、その場から離れました（残り${held()}個）。`) + this.slotsNote(slotsBefore),
+          ? (dugPit ? `${thrownText}、狭い所だったので横に深さ3の穴を掘って捨てました（残り${leftText}）。${coverNote}`
+            : `${thrownText}、近くの穴へ捨てました（残り${leftText}）。`)
+          : mode === 'lava' && sealed ? `${thrownText}、近くの溶岩へ投げ込んで消しました（残り${leftText}）。拾い直す物は残っていません。`
+          : `${thrownText}捨て、その場から離れました（残り${leftText}）。`) + this.slotsNote(slotsBefore),
       };
     } catch (error: any) {
       return {

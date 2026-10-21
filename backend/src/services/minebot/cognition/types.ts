@@ -196,6 +196,13 @@ export interface WorldObservation {
    */
   mapSummary?: string;
   /**
+   * How the body came to be where it is, said for two minutes after it: econnect (the connection dropped and the body went back in by
+   * itself; it did not die: died is false and the place is where it was), espawn (it died; died is true), portal (another
+   * dimension), login (the first arrival of the connection). Run 24: a reconnect in the Nether was taken for a respawn and a shelter was
+   * dug over magma. A respawn is a death only when died is true.
+   */
+  arrival?: { kind: 'login' | 'reconnect' | 'respawn' | 'portal'; secondsAgo: number; died: boolean };
+  /**
    * Said only when the task has been stopped for the same thing again and again lately: how often, for what,
    * what it cost, and what the body has measured of that kind. What to do about it is the planner's.
    */

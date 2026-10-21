@@ -53,6 +53,9 @@ import { ReconnectBudget, reconnectKindOfEnd, reconnectKindOfKick, type Reconnec
 installCollisionTolerance();
 import { installMotionRecorder } from './utils/motionRecorder.js';
 import { installTrailRecorder } from './utils/trailRecorder.js';
+import { installLinkWatch } from './utils/linkWatch.js';
+import { installArrivalNote } from './utils/arrivalNote.js';
+import { installDimensionKeeper } from './utils/dimensionKeeper.js';
 import { installToolChoice } from './utils/toolChoice.js';
 import { createLogger } from '../../utils/logger.js';
 
@@ -137,6 +140,12 @@ export class MinebotClient extends BaseClient {
     // slow handlers are written when it is late, and a worker thread says where the main thread stands while it is stuck (utils/eventLoopWatch).
     installBotLoopWatch(connectedBot as any);
     installRespawnTracker(connectedBot);
+    // The connection's own record (utils/linkWatch): keep-alives in and out, how late, the dimension changes; written when one is late and at the end.
+    installLinkWatch(connectedBot as any);
+    // The dimension as the server names it in the login and respawn packets, when mineflayer's own reading of its number leaves it wrong (a portal).
+    installDimensionKeeper(connectedBot as any);
+    // How the body came to be here, for the observation: a reconnect after a drop is not a respawn after a death (run 24: a shelter dug over magma).
+    installArrivalNote(connectedBot as any, this.autoReconnecting ? 'reconnect' : 'login');
     connectedBot.on('spawn', () => this.reconnectBudget.noteSpawned(Date.now()));
     bindMinecraftMemory(connectedBot, memoryIdentity);
     connectedBot.once('end', () => revokeMinecraftMemory(connectedBot));
@@ -479,6 +488,8 @@ export class MinebotClient extends BaseClient {
       }
       log.info('🛑 Bot.quit() を明示的に呼び出します（ユーザー操作による停止）');
       this.bot.quit();
+      // The keep-alive clock of this client is not left to ring after it is gone (run 24: 120 s after the drop, on a body that had gone back in).
+      try { (this.bot as any)._client?.removeAllListeners?.('keep_alive'); } catch { /* the client is gone anyway */ }
       if (this.skillAgent?.getTaskRuntime()) {
         this.skillAgent.getTaskRuntime()?.forceStop();
         await new Promise((resolve) => setTimeout(resolve, 1000));

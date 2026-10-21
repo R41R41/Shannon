@@ -242,7 +242,7 @@ class FindBlocks extends InstantSkill {
         const sourceList = listed
           .map((b) => {
             const info = lavaInfos.get(`${b.x},${b.y},${b.z}`);
-            return `(${b.x},${b.y},${b.z}) 距離${b.distance}m${info ? `［${describeLavaSource(info)}］` : ''}`;
+            return `(${b.x},${b.y},${b.z}) 距離${b.distance}m${info ? describeLavaSource(info) : ''}`;
           })
           .join(', ');
         const truncated = sortedBlocks.length > listCap;
@@ -251,8 +251,8 @@ class FindBlocks extends InstantSkill {
         const best = rankLavaSources(usable, botPos, 10)[0];
         const lavaAdvice = lavaInfos.size
           ? (best
-            ? `黒曜石を作るなら、溜まりが大きく手間の少ない(${best.at.x},${best.at.y},${best.at.z})（${describeLavaSource(best)}）が目安です（黒曜石10個には水源10個以上の溜まりを先に）。`
-            : '水をかけられる溶岩（上が開いている・岩の覆いを横から掘れる）は見つかりませんでした。別の場所の溶岩を探してください。')
+            ? `黒曜石を作るなら、溜まりが大きく手間の少ない(${best.at.x},${best.at.y},${best.at.z})${describeLavaSource(best)}が目安です（黒曜石10個には水源10個以上の溜まりを先に）。`
+            : '水をかけられる溶岩（上が開いている・岩の覆いを横から掘れる）は見つかりませんでした（水をかけられる溶岩も、黒曜石を0個も同じです）。別の場所の溶岩を探してください。')
           : '';
         return {
           success: true,

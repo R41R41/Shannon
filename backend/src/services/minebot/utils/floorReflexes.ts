@@ -950,10 +950,13 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
   // the command hands the body back standing in the archer's line while the next decision is made. A fight with a zombie is still
   // stepped out of for a skeleton's arrow (a kind not taken on is an emergency as before). The low-health flee and a lit creeper
   // still come first.
-  const retreatAllow = config.wideThreats || budget
+  const baseAllow = config.wideThreats || budget
     ? (kind: 'creeper' | 'arrow') => kind === 'creeper' ? !(config.wideThreats && (bot as { fleeStraightRun?: boolean }).fleeStraightRun === true)
       : ((!config.wideThreats || (!escapeRunning(bot) && !engagedWithAny(bot, ARCHERS))) && (!budget || budget.allow('arrow', bot.health ?? 20)))
     : undefined;
+  // A creeper fought on purpose (attack-continuously creeper, in iron with a sword: utils/creeperDuel) steps back from its own fuse; the
+  // floor's step back would end the fight a second after it began (run 24: the planner's order was cut three times by a creeper 13 m off).
+  const retreatAllow = (kind: 'creeper' | 'arrow') => (kind === 'creeper' && (bot as { creeperDuel?: boolean }).creeperDuel === true) ? false : (baseAllow ? baseAllow(kind) : true);
   bot.on('physicsTick', () => {
     let outcome: ReturnType<typeof floorRetreatTick> = null;
     try { outcome = config.retreat ? floorRetreatTick(bot, state.retreat, retreatAllow) : null; } catch { return; }

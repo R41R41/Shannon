@@ -76,7 +76,7 @@ export const MAX_PLACES = 1500;
  * blaze spawner of a fortress). Only being found gone removes them.
  */
 export const KEPT_KINDS: ReadonlySet<string> = new Set(['nether_portal', 'end_portal_frame', 'village', 'fortress', 'bastion', 'stronghold', 'spawner',
-  'ruined_portal', 'igloo', 'shipwreck']);
+  'ruined_portal', 'igloo', 'shipwreck', 'mineshaft', 'mansion', 'outpost']);
 /** The newest deaths' places are kept too (the items lie there for a while). */
 export const KEPT_DEATHS = 5;
 /** Deaths kept as records. */
@@ -93,7 +93,8 @@ const distance = (a: PlacePosition, b: PlacePosition) => Math.hypot(a.x - b.x, a
 export function mergeRadius(kind: string): number {
   if (kind === 'village' || kind === 'fortress' || kind === 'bastion' || kind === 'stronghold') return 96;
   // A ruined portal (its netherrack, crying obsidian and scattered frame), a cave's hollow, a shipwreck, an igloo: one place each.
-  if (kind === 'ruined_portal' || kind === 'cave') return 24;
+  if (kind === 'ruined_portal' || kind === 'cave' || kind === 'lava_covered') return 24;
+  if (kind === 'mineshaft' || kind === 'mansion' || kind === 'outpost') return 48;
   if (kind === 'shipwreck' || kind === 'cave_entrance') return 16;
   if (kind === 'igloo') return 12;
   if (kind === 'obsidian') return 8;
@@ -368,12 +369,14 @@ export function placesDigest(state: PlaceMemoryState, from: PlacePosition, dimen
   return digest;
 }
 
+/** Structures built of wood: what a body with no tree in sight can cut. */
+const WOODEN_STRUCTURES: ReadonlySet<string> = new Set(['shipwreck', 'mineshaft', 'mansion', 'outpost']);
 /** The map's names for the kinds, in the order its lines give them. */
 const ORE_NAMES: Array<[string, string]> = [['diamond_ore', 'ダイヤ'], ['iron_ore', '鉄'], ['coal_ore', '石炭'], ['gold_ore', '金'],
   ['redstone_ore', 'レッドストーン'], ['lapis_ore', 'ラピス'], ['copper_ore', '銅'], ['emerald_ore', 'エメラルド'],
   ['nether_gold_ore', 'ネザー金'], ['nether_quartz_ore', 'クォーツ'], ['ancient_debris', '古代の残骸']];
 const STRUCTURE_NAMES: Array<[string, string]> = [['village', '村'], ['ruined_portal', '荒廃したポータル'], ['igloo', 'イグルー'],
-  ['shipwreck', '難破船'], ['fortress', 'ネザー要塞'], ['bastion', '砦の遺跡'], ['stronghold', '要塞'], ['spawner', 'スポナー'],
+  ['shipwreck', '難破船'], ['mineshaft', '廃坑'], ['mansion', '森の洋館'], ['outpost', '前哨基地'], ['fortress', 'ネザー要塞'], ['bastion', '砦の遺跡'], ['stronghold', '要塞'], ['spawner', 'スポナー'],
   ['nether_portal', 'ネザーポータル'], ['end_portal_frame', 'エンドポータル']];
 /** Of the map's lines, at most this many characters (the head gives its route planner 3,000). */
 export const MAP_CHARACTERS = 3000;
@@ -434,6 +437,8 @@ export function mapSummary(state: PlaceMemoryState, from: PlacePosition, dimensi
             && other.position.y <= place.position.y && other.position.y >= place.position.y - 40);
         if (chests.length) extra = `（箱 ${chests.slice(0, 3).map(chest => `(${chest.position.x},${chest.position.y},${chest.position.z})${chestNote(chest)}`).join('・')}${kind === 'igloo' ? ': 地下室（床の下の梯子）' : ''}）`;
       } else if (place.note) extra = shownNote(place.note);
+      // Wood to be had where it is built of it: a ship's hull, an old mine's timbers, a mansion, an outpost's tower (run 24: no tree for 128 m).
+      if (WOODEN_STRUCTURES.has(kind)) extra += '［原木・板材あり］';
       return `${at(place)}${extra}`;
     }, kind === 'village' || kind === 'ruined_portal' ? 2 : 1)}`];
   });
@@ -445,9 +450,11 @@ export function mapSummary(state: PlaceMemoryState, from: PlacePosition, dimensi
   });
   if (ores.length) lines.push(`鉱石: ${ores.join('／')}`);
 
-  const lava = of('lava');
-  if (lava.length) lines.push(`溶岩の溜まり ${lava.length}か所: ${listed(lava, place => `${at(place)} ${place.position.y >= 50 ? '地表' : '地下'}${countShown(place)}`)}`
-    + '（水バケツで黒曜石にできる: use-item-on-block water_bucket count=10）');
+  // Each pool by its size and its top: "（水源12個・岩に覆われていない）". A covered one is opened by use-item-on-block itself (it digs the
+  // cover from beside); the bigger the pool, the fewer walks for ten obsidian.
+  const lava = [...of('lava'), ...of('lava_covered')].sort((a, b) => a.distance - b.distance);
+  if (lava.length) lines.push(`溶岩の溜まり ${lava.length}か所: ${listed(lava, place => `${at(place)} ${place.position.y >= 50 ? '地表' : '地下'}${countShown(place)}（水源${place.count ?? 1}個・岩に覆われ${place.kind === 'lava_covered' ? 'ている' : 'ていない'}）`)}`
+    + '（水バケツで黒曜石にできる: use-item-on-block water_bucket count=10。覆われている溜まりは自分で覆いを掘って開ける）');
   // The ways down that are walked: an entrance's mouth (where to stand) and the bottom its hollow was followed to.
   const entrances = of('cave_entrance');
   if (entrances.length) {

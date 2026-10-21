@@ -29,6 +29,8 @@ const WALK_MS_PER_M = 2_500;
 const WALK_MAX_MS = 75_000;
 /** How far from the lava asked for another source of the same pool is poured on instead, when none of its own faces can be seen. */
 const POOL_REACH = 6;
+/** The words the mind reads to drop a pool from its list ("this one has no lava to pour on, no obsidian to take"). */
+const NO_MORE_LAVA = '近くに水をかけられる溶岩も、すぐ掘れる黒曜石も、もうありません';
 /** Pours made ahead of a dig while some obsidian can be taken: past it the digging comes first (the pours make nothing to take, run 24: 55 for 9). */
 const POUR_AHEAD = 4;
 /** Pours in a row that make no obsidian: past it the call stops and says so, instead of going on for minutes. */
@@ -563,7 +565,7 @@ class UseItemOnBlock extends InstantSkill {
           covers++;
           if (!(await this.openCover(choice, timeLeft))) {
             refusedLava.set(key(lava), (refusedLava.get(key(lava)) ?? 0) + 2);
-            if (++wasted >= MAX_WASTED_POURS) { why = '覆われた溶岩を掘って開けられませんでした'; break; }
+            if (++wasted >= MAX_WASTED_POURS) { why = `${NO_MORE_LAVA}（覆われた溶岩を掘って開けられませんでした）`; break; }
             continue;
           }
         } else if (lava.distanceTo(this.bot.entity.position) > 4) {
@@ -573,22 +575,24 @@ class UseItemOnBlock extends InstantSkill {
         pours++; sincePour++;
         if (poured.success) {
           centre = lava;
-          if (poured.converted) { converted++; wasted = 0; } else {
+          // Turned to obsidian: the pour says so; a pour that does not say is judged by the cell.
+          const poured_at = poured.pouredAt ?? lava;
+          if (poured.converted ?? this.bot.blockAt(poured_at)?.name !== 'lava') { converted++; wasted = 0; } else {
             // Water went on and the lava did not turn: not this source again (the same pour is the same water, 3 s).
             wasted++;
-            refusedLava.set(key(poured.pouredAt ?? lava), 2);
+            refusedLava.set(key(poured_at), 2);
           }
         } else { wasted++; refusedLava.set(key(lava), (refusedLava.get(key(lava)) ?? 0) + 1); }
-        if (wasted >= MAX_WASTED_POURS) { why = `水を${wasted}回続けてかけても黒曜石になりません（水源でない溶岩・流れる溶岩・水が届かない面とみられます）`; break; }
+        if (wasted >= MAX_WASTED_POURS) { why = `${NO_MORE_LAVA}（水を${wasted}回続けてかけても黒曜石になりません。水源でない溶岩・流れる溶岩・水が届かない面とみられます）`; break; }
         continue;
       }
       // A pool deeper than one: every piece of its crust lies over lava. dig-block-at keeps such a drop by putting water on the block
       // first (it falls into the opening and turns the lava under it, the next layer, to obsidian too); slow, so three at most.
       // A ladder probe (2026-10-20) poured on five sources of such a pool and came away with none.
-      const overLava = !takeable.length && overLavaDigs < 3 ? this.takeableObsidian(centre, skippedObsidian, true) : [];
+      const overLava = !takeable.length && !crushable.length && overLavaDigs < 3 ? this.takeableObsidian(centre, skippedObsidian, true) : [];
       if (overLava.length) overLavaDigs++;
       const target = takeable[0] ?? crushable[0] ?? overLava[0];
-      if (!target) { why = '近くに水をかけられる溶岩も、すぐ掘れる黒曜石も、もうありません'; break; }
+      if (!target) { why = NO_MORE_LAVA; break; }
       if (target.offset(0.5, 0.5, 0.5).distanceTo(this.bot.entity.position.offset(0, 1.62, 0)) > 4.2) {
         try { await this.walk(new goals.GoalNear(target.x, target.y + 1, target.z, 2), 12_000, timeLeft()); } catch (error) { if (this.shouldInterrupt()) throw error; }
       }
@@ -620,13 +624,14 @@ class UseItemOnBlock extends InstantSkill {
     }
     const got = held('obsidian') - before;
     const bucketNote = held('water_bucket') ? '水はwater_bucketへ回収済み' : '⚠️ water_bucketに水が戻っていません（近くの水源を空バケツで汲んでください）';
-    const summary = `黒曜石を${got}個作って掘りました（溶岩${pours}か所に水をかけ、うち固まったのは${converted}か所${covers ? `、岩の覆いを${covers}か所掘って開けた` : ''}、所持 obsidian=${held('obsidian')}個）。${bucketNote}。${roomNote}`;
+    const poolNote = `${covers ? `岩の覆いを${covers}か所掘って開けた。` : ''}${pours > converted ? `水をかけて固まったのは${converted}か所。` : ''}`;
+    const summary = `黒曜石を${got}個作って掘りました（溶岩${pours}か所に水をかけ、所持 obsidian=${held('obsidian')}個）。${bucketNote}。${poolNote}${roomNote}`;
     if (got >= count) return { success: true, result: summary };
     // Some made: a partial (utils/partialProgress), told with the count; nothing made is a failure of its own kind.
     return {
       success: false, failureType: got > 0 ? PARTIAL_FAILURE : 'target_not_found', recoverable: true,
       result: `${summary}${count}個のうち残り${count - got}個: ${why || '中断されました'}。`
-        + (why.startsWith('近くに') ? '別の溶岩の溜まりを find-blocks lava で探して、そこで続けてください' : `同じ溜まりで続けるなら use-item-on-block を count=${count - got} でもう一度呼んでください`)
+        + (why.startsWith(NO_MORE_LAVA) ? '別の溶岩の溜まりを find-blocks lava で探して、そこで続けてください' : `同じ溜まりで続けるなら use-item-on-block を count=${count - got} でもう一度呼んでください`)
         + (got > 0 ? ` ${progressTrailer('obsidian', got, count)}` : ''),
     };
   }

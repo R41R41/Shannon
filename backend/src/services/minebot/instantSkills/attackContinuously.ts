@@ -9,6 +9,7 @@ import { actionDelay } from '../execution/observedWait.js';
 import { visiblePointOn } from '../utils/sightLine.js';
 import { WOOL_COLORS, sheepWool, woolStatusLine } from '../utils/nightGate.js';
 import { creeperMeleeRefusal } from '../utils/creeperFuse.js';
+import { creeperDuelRefusal, duelCreeper } from '../utils/creeperDuel.js';
 import { holdsWater } from '../utils/waterBlocks.js';
 import { explainUnreachable, type Unreachable } from '../utils/attackReach.js';
 import type { Vec3 } from 'vec3';
@@ -94,7 +95,31 @@ class AttackContinuously extends InstantSkill {
   protected preflight(entityName: string = '', _maxAttacks?: number, _maxDistance?: number, _maxKills?: number, holdPosition?: boolean) {
     // Holding position (in a shelter, at a slit), a creeper that comes up is struck: it is the one place a blow at it is safe.
     if (holdPosition === true) return null;
-    return creeperMeleeRefusal(String(entityName ?? '').split(','));
+    const refusal = creeperMeleeRefusal(String(entityName ?? '').split(','));
+    // A creeper alone, with a weapon, in iron or better (three pieces), the health to take a blast, and not lit: struck and stepped back from.
+    if (refusal && this.isCreeperOnly(entityName) && creeperDuelRefusal(this.bot as never) === null) return null;
+    return refusal && this.isCreeperOnly(entityName)
+      ? { ...refusal, result: `${refusal.result}。斬って下がる形で倒せる条件（剣か斧・鉄以上の防具3つ以上・体力14以上・点火していない1匹だけ）に合いません: ${creeperDuelRefusal(this.bot as never) ?? ''}` }
+      : refusal;
+  }
+
+  /** Only creepers are asked for (one name, "creeper"): the one case the fight with sword and armour (utils/creeperDuel) takes. */
+  private isCreeperOnly(entityName: string): boolean {
+    const names = String(entityName ?? '').split(',').map(name => name.trim().toLowerCase()).filter(Boolean);
+    return names.length > 0 && names.every(name => name === 'creeper');
+  }
+
+  /** The creeper fought: struck, stepped back from, struck, until it is gone (see utils/creeperDuel). */
+  private async fightCreeper() {
+    const why = creeperDuelRefusal(this.bot as never);
+    if (why) return { success: false, failureType: 'creeper_melee', recoverable: true, result: `クリーパーとは戦いません: ${why}。flee-from creeper で離れるか、回り道してください` };
+    const outcome = await duelCreeper(this.bot as never, { shouldStop: () => this.shouldInterrupt() });
+    const lost = Math.max(0, outcome.healthBefore - outcome.healthAfter);
+    const summary = `斬った${outcome.blows}回、下がった${outcome.backOffs}回、体力${outcome.healthBefore.toFixed(0)}→${outcome.healthAfter.toFixed(0)}（失った${lost.toFixed(0)}）`;
+    if (outcome.outcome === 'killed') return { success: true, result: `クリーパーを斬って下がる形で倒しました（${summary}）` };
+    if (outcome.outcome === 'gone') return { success: true, result: `クリーパーは見えなくなりました（斬る前に離れていきました。${summary}）` };
+    return { success: false, failureType: outcome.outcome === 'hurt' ? 'low_health' : 'timeout', recoverable: true,
+      result: `クリーパーとの戦いを止めました（${outcome.outcome === 'hurt' ? '体力が10を下回った' : outcome.outcome === 'interrupted' ? '中断された' : '時間切れ'}。${summary}）。flee-from creeper で離れてください` };
   }
 
   async runImpl(entityName: string = '', maxAttacks: number = 30, maxDistance: number = 24, maxKills: number = 0, holdPosition: boolean = false, color: string = '') {
@@ -112,6 +137,8 @@ class AttackContinuously extends InstantSkill {
       if (maxAttacks < 1 || maxAttacks > 200) {
         return { success: false, result: '攻撃回数は1～200の範囲で指定してください' };
       }
+      // A creeper asked for alone: the fight of the sword and the iron, struck and stepped back from (utils/creeperDuel).
+      if (this.isCreeperOnly(entityName) && !this.holding) return await this.fightCreeper();
 
       const hostileMobs = [
         'zombie', 'husk', 'drowned', 'skeleton', 'stray', 'creeper', 'spider',

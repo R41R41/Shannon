@@ -1,11 +1,32 @@
 import type { Vec3 } from 'vec3';
 import { createLogger } from '../../../utils/logger.js';
 import { matchingMultiBlockStateId } from './digBlockVerified.js';
+import { linkWatchOf } from './linkWatch.js';
 
 const log = createLogger('Minebot:DigConfirmation');
 
 /** How long the server gets to confirm a break after the client's own dig timer has run out. */
 const CONFIRM_MS = 2000;
+/**
+ * Digs the server did not confirm, one after another (run 24, in the Nether: twelve in sixteen seconds, the same two blocks dug and put
+ * back, 7 s a dig, and the connection dropped for silence at the end): from PAUSE_AFTER of them within STREAK_MS the next dig waits
+ * PAUSE_MS first (the server may be behind, or the link; a block dug again at once is dug into the same silence); from STOP_AFTER the dig
+ * is refused with the reason, and stays refused until the streak is STREAK_MS old or the server confirms a dig. A confirmed dig ends the streak.
+ */
+export const PAUSE_AFTER = 3;
+export const STOP_AFTER = 5;
+export const STREAK_MS = 30_000;
+export const PAUSE_MS = 3000;
+
+/** The error of a dig refused for a streak of digs the server did not confirm. */
+export class ServerNotConfirmingError extends Error {
+  readonly failureType = 'server_not_confirming';
+  constructor(readonly restored: number, detail: string) {
+    super(`掘削中止: サーバーが掘りを受け取っていません（直近${STREAK_MS / 1000}秒で${restored}回続けて「破壊が確認されず」元に戻しました）。${detail}`
+      + '少し待ってから（wait-time 5〜10 秒）やり直してください。続けて掘ると、同じブロックを掘っては戻すだけになります');
+    this.name = 'ServerNotConfirmingError';
+  }
+}
 
 interface PredictingBot {
   on?(event: string, listener: (...args: any[]) => void): unknown;
@@ -57,6 +78,7 @@ interface DigBot extends PredictingBot {
   supportFeature?(feature: string): boolean;
   registry?: { blocksByStateId?: Record<number, { id: number; name: string } | undefined> };
   ghostBlocksRestored?: number;
+  digUnconfirmedRecent?: () => number;
 }
 
 /**
@@ -77,9 +99,22 @@ export function installDigConfirmation(bot: DigBot): void {
   if (!native || bot.unconfirmedDig || !client?.on) return;
   bot.unconfirmedDig = native;
   bot.ghostBlocksRestored = 0;
+  /** When the server left a dig unconfirmed, newest last, over the last STREAK_MS. */
+  const unconfirmed: number[] = [];
+  const recent = () => { const cutoff = Date.now() - STREAK_MS; while (unconfirmed.length && unconfirmed[0] < cutoff) unconfirmed.shift(); return unconfirmed.length; };
+  // For the observation (facts.digRestoredRecent): how many digs in the last STREAK_MS the server did not confirm.
+  bot.digUnconfirmedRecent = recent;
   bot.dig = async (block: any, ...rest: any[]) => {
     // Nothing to confirm when the block is already gone (a route planned before something else broke it).
     if (block?.type === 0 || bot.blockAt?.(block.position)?.stateId === 0) return native(block, ...rest);
+    // A streak of digs the server did not confirm: wait, then refuse (see PAUSE_AFTER).
+    if (recent() >= STOP_AFTER) {
+      throw new ServerNotConfirmingError(unconfirmed.length, `${linkWatchOf(bot)?.snapshot() ?? ''}。`);
+    }
+    if (recent() >= PAUSE_AFTER) {
+      log.warn(`⛏ サーバーが掘りを確認しない回数が続いています（${unconfirmed.length}回）。${PAUSE_MS / 1000}秒待ってから掘ります`);
+      await new Promise<void>(resolve => setTimeout(resolve, PAUSE_MS));
+    }
     const position: Vec3 = block.position;
     const original: number = block.stateId;
     const type: number = block.type;
@@ -106,8 +141,11 @@ export function installDigConfirmation(bot: DigBot): void {
       if (!broken) {
         if (bot.blockAt?.(position)?.stateId !== original) bot._updateBlockState?.(position, original);
         bot.ghostBlocksRestored = (bot.ghostBlocksRestored ?? 0) + 1;
-        log.warn(`⛏ サーバーが破壊を確認していないブロックを元に戻した: ${block.name}(${position.x}, ${position.y}, ${position.z})（累計${bot.ghostBlocksRestored}件）`);
-      }
+        unconfirmed.push(Date.now());
+        // What the link was doing at that moment, once the streak is a streak: the lateness of the server's word is the first thing to read.
+        const link = recent() >= PAUSE_AFTER ? `。接続: ${linkWatchOf(bot)?.snapshot() ?? '記録なし'}` : '';
+        log.warn(`⛏ サーバーが破壊を確認していないブロックを元に戻した: ${block.name}(${position.x}, ${position.y}, ${position.z})（累計${bot.ghostBlocksRestored}件、直近${recent()}回続き）${link}`);
+      } else unconfirmed.length = 0;
       return result;
     } finally {
       release();

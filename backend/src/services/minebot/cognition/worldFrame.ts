@@ -1,5 +1,6 @@
 import { timedEngagement } from '../utils/engagement.js';
 import { potionIn } from '../utils/potionContents.js';
+import { woodLine } from '../utils/treeSearch.js';
 import type { WorldDelta, WorldFrame, WorldInventoryStack, WorldObservation, WorldVector } from './types.js';
 import { roundedExertion, type Exertion } from '../utils/exertionMeter.js';
 import { closingSpeed, secondsToContact } from '../utils/threatTracker.js';
@@ -333,7 +334,20 @@ export function captureWorldObservation(bot?: unknown): WorldObservation {
       // The map (see placeMemory.map): every kind of place known, for a planner laying out a whole route.
       try {
         const map = (observedBot as { placeMemory?: { map?(): string } } | undefined)?.placeMemory?.map?.();
-        return map ? { mapSummary: map } : {};
+        // Where wood is (trees in sight, or that there are none; a shipwreck's hull, a village's houses): the first line, for a planner that
+        // would otherwise take a river's bank for a wood (run 24: no log within 128 m, a village looked for, a shipwreck never named as wood).
+        let wood = '';
+        try { wood = woodLine(observedBot as never); } catch { wood = ''; }
+        const text = [wood, map].filter(Boolean).join('\n');
+        return text ? { mapSummary: wood && map ? `${wood}\n${map.slice(0, Math.max(0, 3000 - wood.length - 1))}` : text } : {};
+      } catch { return {}; }
+    })(),
+    ...(() => {
+      // How the body came to be here (client.ts): a reconnect is not a respawn.
+      try {
+        const arrival = (observedBot as { arrival?: { kind: 'login' | 'reconnect' | 'respawn' | 'portal'; at: number } } | undefined)?.arrival;
+        const secondsAgo = arrival ? Math.round((Date.now() - arrival.at) / 1000) : Infinity;
+        return arrival && secondsAgo <= 120 ? { arrival: { kind: arrival.kind, secondsAgo, died: arrival.kind === 'respawn' } } : {};
       } catch { return {}; }
     })(),
     ...(() => {

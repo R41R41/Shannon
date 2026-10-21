@@ -3,6 +3,8 @@ import { Vec3 } from 'vec3';
 import { createLogger } from '../../../utils/logger.js';
 import { isLikelyHostileMobName } from './hostileMobHints.js';
 import { exposedByOpening } from './threatExposure.js';
+import { wellArmoured } from './armourCheck.js';
+import { creeperLit } from './creeperFuse.js';
 
 const log = createLogger('Minebot:ExposureGuard');
 
@@ -11,7 +13,12 @@ const DEFAULT_RADIUS = 16;
 /** No more than this many of the nearest shut-out hostiles are looked at for one dig. */
 const NEAREST = 4;
 
+/** A creeper that is not lit and at least this far (m) is no reason to stop a dig for a body in armour (run 24: a walk of 76 m ran out of time on it). */
+const ARMOURED_CREEPER_M = 5;
+
 interface GuardBody {
+  inventory?: { slots?: Array<{ name?: string } | null | undefined> };
+  health?: number;
   entity?: { position: Vec3; id?: number; isInWater?: boolean };
   entities?: Record<string, any>;
   oxygenLevel?: number;
@@ -53,11 +60,15 @@ export function threatExposedBy(bot: GuardBody, target: Vec3): { name: string; d
   if (target.x === feet.x && target.z === feet.z && (target.y === feet.y || target.y === feet.y + 1)) return null;
   if (bot.entity?.isInWater === true && (bot.oxygenLevel ?? 20) < 20) return null;
   const radius = Math.max(1, bot.hostileThreatRadius?.() ?? DEFAULT_RADIUS);
+  // In armour (iron all round and the health to take a blast), a creeper that is not lit and not near does not hold the dig back.
+  let armoured = false;
+  try { armoured = wellArmoured(bot); } catch { armoured = false; }
   const near = Object.values(bot.entities ?? {})
     .filter((entity: any) => entity && entity !== bot.entity && entity.id !== bot.entity?.id && entity.position
       && isLikelyHostileMobName(String(entity.name ?? '')))
     .map((entity: any) => ({ entity, distance: self.distanceTo(entity.position) }))
     .filter(entry => entry.distance <= radius)
+    .filter(entry => !(armoured && entry.entity.name === 'creeper' && entry.distance >= ARMOURED_CREEPER_M && !creeperLit(entry.entity)))
     .sort((a, b) => a.distance - b.distance)
     .slice(0, NEAREST);
   if (!near.length) return null;

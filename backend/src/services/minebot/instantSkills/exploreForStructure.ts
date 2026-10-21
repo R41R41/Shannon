@@ -5,6 +5,7 @@ import { exploreHeading, exploreLegs, type Heading } from '../utils/explore.js';
 import { sheepWool, WOOL_COLORS } from '../utils/nightGate.js';
 import { prospectNote } from '../utils/biomeProspects.js';
 import { scanLoadedBlocks } from '../utils/loadedBlockScan.js';
+import { overWater, treeHeading, treesInSight, woodLine } from '../utils/treeSearch.js';
 import type { Vec3 } from 'vec3';
 
 const log = createLogger('Minebot:Skill:exploreForStructure');
@@ -21,9 +22,10 @@ class ExploreForStructure extends InstantSkill {
     this.description = '構造物（fortress=ネザー要塞、bastion=砦の遺跡、village=村、stronghold=要塞、bed=置かれたベッド・イグルー）か動物（sheep / cow / pig / chicken / rabbit / food_animals）を探して、指定の方角へ一区間（約48ブロック）ずつ進みます。'
       + '区間ごとに読み込み範囲の目印（動物なら見えている動物）を読み直し、見つかったら止まって座標を返します。道がなければ左右の方角へ切り替えます。'
       + 'ネザー要塞はネザーの中だけ。direction を省略すると、いま向いている方角へ進みます。羊は color で毛の色を指定できます（ベッドには同じ色が3個）。'
-      + '置かれたベッドは dig-block-at takeEquipment=true で掘れば持てる（作らなくてよい）。bed は場所の記憶にあれば歩かずに答えます。';
+      + '置かれたベッドは dig-block-at takeEquipment=true で掘れば持てる（作らなくてよい）。bed は場所の記憶にあれば歩かずに答えます。'
+      + '木（原木）が128m以内に無い時は structureType=tree: 木の生えるバイオームの方角（記憶から。direction を省くと自分で選ぶ）へ、海の上を避けて一区間ずつ進み、原木が見えたら止まって座標を返します（村を探しに行かない。maxDistance の既定は木だけ160）。';
     this.params = [
-      { name: 'structureType', type: 'string', description: 'fortress / bastion / village / stronghold / bed、または動物 sheep / cow / pig / chicken / rabbit / food_animals', required: true },
+      { name: 'structureType', type: 'string', description: 'fortress / bastion / village / stronghold / bed、動物 sheep / cow / pig / chicken / rabbit / food_animals、または木 tree（原木）', required: true },
       { name: 'direction', type: 'string', description: 'north / south / east / west（省略時は向いている方角）', required: false },
       { name: 'maxDistance', type: 'number', description: '進む距離の上限（ブロック、48〜400、既定240）', required: false },
       { name: 'color', type: 'string', description: '羊を探す時だけ: 毛の色（例 white、brown）。毛を刈られた羊は数えない', required: false },
@@ -32,10 +34,12 @@ class ExploreForStructure extends InstantSkill {
   }
 
   async runImpl(structureType: string, direction?: string, maxDistance?: number, color?: string) {
-    const type = String(structureType ?? '').toLowerCase();
+    const word = String(structureType ?? '').trim().toLowerCase();
+    if (TREE_WORDS.has(word)) return this.exploreForTrees(direction, maxDistance);
+    const type = word;
     const animals = ANIMAL_TARGETS[type];
     if (!STRUCTURE_MARKERS[type] && type !== 'village' && !animals) {
-      return { success: false, result: `探せるもの: fortress, bastion, village, stronghold, bed, ${Object.keys(ANIMAL_TARGETS).join(', ')}`, failureType: 'invalid_input', recoverable: false };
+      return { success: false, result: `探せるもの: fortress, bastion, village, stronghold, bed, tree, ${Object.keys(ANIMAL_TARGETS).join(', ')}`, failureType: 'invalid_input', recoverable: false };
     }
     const woolColor = String(color ?? '').trim().toLowerCase().replace(/_wool$/, '');
     if (woolColor && !(WOOL_COLORS as readonly string[]).includes(woolColor)) {
@@ -87,6 +91,64 @@ class ExploreForStructure extends InstantSkill {
     return { success: false, failureType: 'target_not_found', recoverable: true,
       result: `${type}は見つかりませんでした。探索 ${Math.round(travelled)}m（${tried.join(' → ') || 'なし'}）、出発点から${Math.round(end.distanceTo(start))}m。`
         + '別の方角で続けるか、距離を伸ばしてください' };
+  }
+
+  /**
+   * The search for trees (run 24: no log within 128 m of the start; the body looked for a village for 419 s, over desert and into the
+   * sea). The same legs as for a structure, each looked at after it for logs among the chunks sent; the way is the nearest biome that
+   * grows trees in the memory (`direction` overrides it), and a leg that would go out over the sea is turned to the side instead.
+   */
+  private async exploreForTrees(direction: string | undefined, maxDistance: number | undefined) {
+    if (!String(this.bot.game?.dimension ?? 'overworld').includes('overworld')) {
+      return { success: false, failureType: 'invalid_input', recoverable: false, result: 'ネザー・エンドに木（原木）はありません。ネザーには菌糸の木（crimson/warped の幹）があります' };
+    }
+    const said = (travelled: number, tried: string[]) => {
+      const trees = treesInSight(this.bot as any);
+      if (!trees.nearest) return null;
+      const at = trees.nearest.position.floored();
+      return { success: true, result: `木（${trees.nearest.name}）が見えます: 座標(${at.x}, ${at.y}, ${at.z})、ここから約${Math.round(trees.nearest.distance)}m、見える原木は${trees.count >= 64 ? '64本以上' : `${trees.count}本`}。`
+        + (travelled ? `探索 ${Math.round(travelled)}m（${tried.join(' → ')}）。` : '')
+        + 'move-to でそこへ行き、mine-block で切れる' };
+    };
+    const already = said(0, []);
+    if (already) return already;
+    const chosen = direction ? { heading: exploreHeading(direction, this.bot.entity.yaw), why: `指定の方角 ${direction}` } : treeHeading(this.bot as any);
+    const heading = chosen.heading;
+    if (!heading) return { success: false, result: 'direction は north / south / east / west で指定してください', failureType: 'invalid_input', recoverable: false };
+    const start = this.bot.entity.position.clone();
+    // 160 m by default (240 for a structure): trees are nearer than a fortress, and the mind plans a leg of the route on it.
+    const legs = exploreLegs(heading, Math.max(48, Math.min(400, Math.round(maxDistance ?? TREE_SEARCH_M))));
+    const sides = [heading.left, heading.right];
+    let current: Heading = heading, travelled = 0;
+    const tried: string[] = [];
+    const deadline = Date.now() + this.maxDurationMs - 10_000;
+    for (const leg of legs) {
+      if (this.shouldInterrupt() || Date.now() > deadline - 125_000) break;
+      const at = this.bot.entity.position;
+      // Not out over the sea: a walk there is a swim, slow and stuck at the first cliff or coral (run 24: two stalls in the water). The
+      // way on is the side that is not water; with water on all sides, a short leg along the shore.
+      let way: Heading = current, length = leg;
+      if (overWater(this.bot as any, at, way, length)) {
+        const dry = [current.left, current.right, heading, heading.left, heading.right].find(candidate => candidate !== current && !overWater(this.bot as any, at, candidate, length));
+        if (dry) way = dry; else length = Math.min(length, 16);
+      }
+      const x = Math.round(at.x + way.dx * length), z = Math.round(at.z + way.dz * length);
+      const moved = await this.callSkill('move-to', x, Math.round(at.y), z, 6, 'nearxz');
+      const step = Math.hypot(this.bot.entity.position.x - at.x, this.bot.entity.position.z - at.z);
+      travelled += step;
+      tried.push(`${way.name}${Math.round(step)}m`);
+      const seen = said(travelled, tried);
+      if (seen) { log.info(`🌲 木を発見（${tried.join(' → ')}）`); return seen; }
+      if (!moved.success && step < 8) {
+        const next = sides.shift();
+        if (!next) break;
+        current = next;
+      } else current = heading;
+    }
+    const end = this.bot.entity.position;
+    return { success: false, failureType: 'target_not_found', recoverable: true,
+      result: `木は見つかりませんでした。探索 ${Math.round(travelled)}m（${tried.join(' → ') || 'なし'}）、出発点から${Math.round(end.distanceTo(start))}m（最初の方角: ${chosen.why}）。`
+        + `${woodLine(this.bot as any)}。別の方角で続けるか、木材の出どころ（難破船・村の家）へ行ってください` };
   }
 
   /** The nearest bed in the place memory that is not the body's own (its base or respawn bed), or null. */
@@ -186,6 +248,11 @@ class ExploreForStructure extends InstantSkill {
         + '別の方角で続けるか、距離を伸ばしてください（羊・牛・豚・鶏は草地・平原・森・タイガ・サバンナに多い）' };
   }
 }
+
+/** How far a search for trees goes when it is not told (m). */
+const TREE_SEARCH_M = 160;
+/** The words that mean trees (logs) for explore-for-structure. */
+const TREE_WORDS = new Set(['tree', 'trees', 'log', 'logs', 'wood', '木', '原木']);
 
 /** How a placed bed is had (run 19: an igloo's bed was in mind for thirty minutes and never taken). */
 const BED_HOW = 'dig-block-at（その座標、takeEquipment=true）で掘れば持てる（作る必要は無い）';

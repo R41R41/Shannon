@@ -67,10 +67,13 @@ describe('the body\'s own limit on the rock it digs (run 21: 545 cobblestone in 
   it('throws from a cheap check, drops the largest heap first, at most two kinds, not what is being mined', async () => {
     const pack = [...stacks('cobblestone', 9), ...stacks('andesite', 4), ...stacks('dirt', 4), ...filler(10)];
     expect(clutterToThrow(room(pack)).map(entry => entry.name)).toEqual(['cobblestone', 'andesite', 'dirt']);
-    const thrown: Array<[string, number]> = [];
-    const call = vi.fn(async (_skill: string, name: string, count: number) => { thrown.push([name, count]); return { success: true }; });
+    const thrown: string[][] = [];
+    const call = vi.fn(async (...args: any[]) => { thrown.push(args.map(String)); return { success: true }; });
     const note = await tidyIfCluttered(room(pack), call, { now: () => 1000 });
-    expect(thrown).toEqual([['cobblestone', 480], ['andesite', 256]]);
+    // one throw for the kinds over their limits (run 24: one call, not one per kind): the list `name:count` comma-joined
+    expect(thrown).toHaveLength(1);
+    expect(thrown[0][0]).toBe('drop-item');
+    expect(thrown[0][1]).toMatch(/^cobblestone:480,andesite:256/);
     expect(note).toContain('掘り進みで石が溜まっていた');
     // The stone being mined is never named.
     const mined = vi.fn(async () => ({ success: true }));
@@ -111,11 +114,15 @@ describe('the body\'s own limit on the rock it digs (run 21: 545 cobblestone in 
     expect(quiet).not.toHaveBeenCalled();
   });
 
-  it('spare pickaxes are thrown through drop-item too (kept: the best one)', async () => {
+  it('a tool is not clutter: spare pickaxes are not thrown by the cheap check (run 24: a spare stone pickaxe and an iron one thrown into the hole, twice, and fetched back)', async () => {
     const pack = [item('iron_pickaxe', 1, 10), ...Array.from({ length: 4 }, () => item('stone_pickaxe')), ...filler(5)];
+    expect(clutterToThrow(room(pack))).toEqual([]);
     const call = vi.fn(async () => ({ success: true }));
-    await tidyIfCluttered(room(pack), call, { now: () => 1 });
-    expect(call).toHaveBeenCalledWith('drop-item', 'stone_pickaxe', 3);
+    expect(await tidyIfCluttered(room(pack), call, { now: () => 1 })).toBe('');
+    expect(call).not.toHaveBeenCalled();
+    // with rock piled up beside them, the rock goes and the tools stay
+    const heap = [...pack, ...stacks('cobblestone', 9)];
+    expect(clutterToThrow(room(heap)).map(entry => entry.name)).toEqual(['cobblestone']);
   });
 });
 

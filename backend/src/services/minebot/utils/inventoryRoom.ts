@@ -9,7 +9,7 @@
  */
 import { nativeActionHost } from '../execution/ActionExecution.js';
 import { emptySlotCountSafe } from './inventorySpillDetection.js';
-import { clutterPlan, describePack, slotsUsed, spareRockToDrop, surplusPickaxes, tidyPlan, TIDY_ABOVE } from './inventoryTidy.js';
+import { clutterPlan, describePack, slotsUsed, spareRockToDrop, tidyPlan, TIDY_ABOVE } from './inventoryTidy.js';
 import { realTurn } from './realTurn.js';
 
 export type RoomCall = (skill: string, ...args: any[]) => Promise<{ success?: boolean; result?: unknown; failureType?: string }>;
@@ -44,6 +44,15 @@ export interface RoomOutcome {
 
 const refusalOf = (name: string, count: number, result: { result?: unknown; failureType?: string }) =>
   `${name}×${count}（${result.failureType ?? '失敗'}: ${String(result.result ?? '').slice(0, 90)}）`;
+/**
+ * Most kinds thrown in one call. Run 24 threw dirt, granite, diorite, andesite and cobblestone in five calls (36 s, a pit or a walk away for
+ * each); drop-item takes them as one list ("dirt:35,granite:27") and digs one pit, or walks away once.
+ */
+export const MAX_KINDS_PER_THROW = 4;
+/** One drop-item for these kinds: the plain call for one kind, the list for several. */
+export function throwKinds(call: RoomCall, kinds: Array<{ name: string; count: number }>): ReturnType<RoomCall> {
+  return kinds.length === 1 ? call('drop-item', kinds[0].name, kinds[0].count) : call('drop-item', kinds.map(({ name, count }) => `${name}:${count}`).join(','));
+}
 /** Refusals that are the same for every kind: the next kind would be refused in the same place, so the tidy stops. */
 const STOPS_THE_TIDY = new Set(['no_room_to_drop', 'picked_up_again', 'already_dropping', 'nesting_too_deep']);
 
@@ -105,13 +114,11 @@ export async function tidyPackNow(bot: RoomBody, call: RoomCall, options: { aske
   const gone: string[] = [];
   const release = holdClutterTidy(bot);
   try {
-    for (const { name, count } of plan.slice(0, 2)) {
-      await realTurn();
-      let dropped: { success?: boolean; failureType?: string } = { success: false };
-      try { dropped = await call('drop-item', name, count); } catch { break; }
-      if (dropped.success) gone.push(`${name}×${count}`);
-      if (STOPS_THE_TIDY.has(dropped.failureType ?? '') || options.interrupted?.()) break;
-    }
+    await realTurn();
+    const batch = plan.slice(0, MAX_KINDS_PER_THROW);
+    let dropped: { success?: boolean; failureType?: string } = { success: false };
+    try { dropped = await throwKinds(call, batch); } catch { /* nothing thrown */ }
+    if (dropped.success) gone.push(...batch.map(({ name, count }) => `${name}×${count}`));
   } finally { release(); }
   return gone.length ? ` 持ち物が${before}/36マス埋まっていたため、${gone.join('・')}を捨てました（いま${slotsUsed(bot.inventory.items() as Stack[])}マス）` : '';
 }
@@ -149,12 +156,16 @@ export function clutterTidyHeld(bot: object): boolean {
   return (tidyHolds.get(tidyKey(bot)) ?? 0) > 0;
 }
 
-/** What the cheap check would throw, or empty: kinds over the limits (inventoryTidy clutterPlan), the pickaxes over their allowance, and tidyPlan when short of room. */
+/**
+ * What the cheap check would throw, or empty: kinds over the limits (inventoryTidy clutterPlan), and tidyPlan when short of room. Never a tool:
+ * run 24 threw a spare stone pickaxe, and an iron one, into the hole it dug for the throw, twice, and walked to pick them up again (a spare is
+ * made once per tier, utils/toolStock; a tool is not clutter).
+ */
 export function clutterToThrow(bot: RoomBody, asked: string[] = []): Array<{ name: string; count: number }> {
   let items: Stack[] = [];
   try { items = bot.inventory.items() as Stack[]; } catch { return []; }
   const free = emptySlotCountSafe(bot as any);
-  const plan = [...clutterPlan(items, free), ...surplusPickaxes(items as any)];
+  const plan = [...clutterPlan(items, free)];
   if (free <= CLUTTER_SLOT_TIDY_FREE) {
     // A nearly full pack: what the slot table names too (andesite, tuff... under the cobblestone limit, saplings, seeds).
     for (const entry of tidyPlan(items)) if (!plan.some(have => have.name === entry.name)) plan.push(entry);
@@ -167,8 +178,7 @@ export function clutterToThrow(bot: RoomBody, asked: string[] = []): Array<{ nam
  * head): a cheap look at the pack (a count over the items, no await) and, only when rock has piled up, a throw. Run 21 dug a lot on the
  * way and had 545 cobblestone in a 34/36 pack a minute after two tidies; mine-block then refused for a full pack.
  *
- * Acts when one kind is over CLUTTER_HARD (192), or over CLUTTER_SOFT (160) with CLUTTER_FEW_SLOTS (6) or fewer slots free, or when
- * spare pickaxes pile up (more than one spare of a tier). Throws down to 96 cobblestone (the head keeps 128 in its own tidy: no fight).
+ * Acts when one kind is over CLUTTER_HARD (192), or over CLUTTER_SOFT (160) with CLUTTER_FEW_SLOTS (6) or fewer slots free. Throws down to 96 cobblestone (the head keeps 128 in its own tidy: no fight).
  * At most two kinds a call, never `asked`, never twice within CLUTTER_GAP_MS (a refused throw is not retried at once), not while it is
  * already running (drop-item digs its pit through dig-block-at, which calls this), not with a hostile near, in an emergency
  * (`blocked`) or with under TIDY_TIME_MS of the action left. Returns a sentence for the result, empty when nothing was thrown.
@@ -189,15 +199,16 @@ export async function tidyIfCluttered(bot: RoomBody, call: RoomCall,
   const refused: string[] = [];
   try {
     const before = slotsUsed(bot.inventory.items() as Stack[]);
-    for (const { name, count } of plan.slice(0, 2)) {
-      // A real turn of the loop before each throw: timers (abort, time-out) can always fire between two.
+    {
+      // A real turn of the loop before the throw: timers (abort, time-out) can always fire before it.
       await realTurn();
-      if (options.interrupted?.()) break;
-      let dropped: { success?: boolean; result?: unknown; failureType?: string } = { success: false };
-      try { dropped = await call('drop-item', name, count); } catch (error) { if (options.interrupted?.()) throw error; break; }
-      if (dropped.success) gone.push(`${name}×${count}`); else refused.push(refusalOf(name, count, dropped));
-      // Nowhere to throw is the same for every kind (and a heap that came back is not thrown again in the same place).
-      if (STOPS_THE_TIDY.has(dropped.failureType ?? '')) break;
+      const batch = plan.slice(0, MAX_KINDS_PER_THROW);
+      if (!options.interrupted?.()) {
+        let dropped: { success?: boolean; result?: unknown; failureType?: string } = { success: false };
+        try { dropped = await throwKinds(call, batch); } catch (error) { if (options.interrupted?.()) throw error; dropped = { success: false, failureType: 'error' }; }
+        if (dropped.success) gone.push(...batch.map(({ name, count }) => `${name}×${count}`));
+        else refused.push(refusalOf(batch.map(entry => entry.name).join('・'), batch.reduce((sum, entry) => sum + entry.count, 0), dropped));
+      }
     }
     const used = slotsUsed(bot.inventory.items() as Stack[]);
     if (!gone.length) return refused.length ? ` 持ち物の石が溜まっていたので捨てようとしましたが断られました: ${refused.join('、')}` : '';

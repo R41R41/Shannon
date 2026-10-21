@@ -36,9 +36,11 @@ const EQUIPMENT = ['crafting_table', 'furnace', 'blast_furnace', 'smoker', 'ches
  * white carpet (on snow blocks: see noteCell). A shipwreck is a chest with water beside it (see noteCell).
  */
 const STRUCTURE_MARKS: Record<string, string> = { nether_bricks: 'fortress', nether_brick_fence: 'fortress', nether_brick_stairs: 'fortress',
-  bell: 'village', crying_obsidian: 'ruined_portal', netherrack: 'ruined_portal', white_carpet: 'igloo' };
+  bell: 'village', crying_obsidian: 'ruined_portal', netherrack: 'ruined_portal', white_carpet: 'igloo',
+  // Rails lie in the overworld only in an abandoned mine (its timbers and planks are wood to be had).
+  rail: 'mineshaft' };
 /** Marks that mean their structure only in the overworld (the Nether is made of netherrack). */
-const OVERWORLD_ONLY = new Set(['netherrack']);
+const OVERWORLD_ONLY = new Set(['netherrack', 'rail']);
 /** A section of the overworld below this height with this many open cells or more is noted as a cave (its middle, its size). */
 const CAVE_BELOW_Y = 40;
 const CAVE_MIN_CELLS = 400;
@@ -185,6 +187,8 @@ export function wantedStates(bot: MemoryBot, dimension = 'overworld'): Wanted {
   }
   if (overworld) { kinds.add('cave'); kinds.add('cave_entrance'); }
   kinds.add('shipwreck');
+  // Lava with rock over it: read beside the lava that has air over it, and told apart on the map (a source poured on once its cover is dug).
+  if (overworld) kinds.add('lava_covered');
   return { flags, kindOf, liquidSource, kinds, overworld };
 }
 const flagOf = (wanted: Wanted, state: number | null | undefined): number => (state === null || state === undefined ? 0 : wanted.flags[state] | 0);
@@ -341,6 +345,8 @@ function noteCell(bot: MemoryBot, wanted: Wanted, job: ColumnJob, section: Secti
     // Reachable with a bucket: air over it. The cell above is in this section or the next one up.
     const above = (cell >> 8) < 15 ? section.data.get(cell + 256) : job.column.sections[job.index + 1]?.data?.get(cell & 255);
     if (flagOf(wanted, above) & AIR) note(job, kind, new Vec3(x, y, z));
+    // Rock over it (not lava, not water, not an unloaded cell): a source that is poured on once its cover is dug (utils/lavaPools).
+    else if (kind === 'lava' && wanted.overworld && above !== undefined && above !== null && !wanted.liquidSource.has(above) && (flagOf(wanted, above) & GROUND)) note(job, 'lava_covered', new Vec3(x, y, z));
   } else if (kind.endsWith('_ore') || kind === 'ancient_debris') {
     if (FACES.some(([dx, dy, dz]) => flagOf(wanted, stateAt(bot, job, x + dx, y + dy, z + dz)) & AIR)) note(job, kind, new Vec3(x, y, z));
   } else note(job, kind, new Vec3(x, y, z), kind === 'spawner' ? spawnedBy(job.column, cell & 15, y, (cell >> 4) & 15) : undefined);
