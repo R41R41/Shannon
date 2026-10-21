@@ -76,6 +76,7 @@ const Hand = z.object({
   takeOk: z.boolean().optional(),
   rel: z.boolean().optional(),
   note: z.string().optional(),
+  onFail: z.enum(['continue', 'stop']).optional().describe('この手が自分で失敗したとき: continue=失敗と記録して次の手へ、stop=ここで止める（省略: equip・eat・look・sneak・jump は continue、他は stop）。反射・stopIf・取り消し・時間切れ・満杯は常に止める'),
 }).strict();
 export const ACT_HANDS = z.array(Hand).min(1).max(12);
 export const ACT_STOP_IF = z.object({
@@ -89,10 +90,20 @@ export const ACT_ACCEPT = z.array(z.string()).max(6);
 export type ActHand = z.infer<typeof Hand>;
 export type ActStopIf = z.infer<typeof ACT_STOP_IF>;
 
+/** The kinds whose failure does not stop the act unless the hand says `onFail: 'stop'` (a missing tool must not keep a walk away from running). */
+const CONTINUES_ON_FAIL = new Set(['equip', 'eat', 'look', 'sneak', 'jump']);
+/**
+ * Whether the act goes on to the next hand when this one fails by itself (its outcome is not ok): `onFail` when given, else by the kind.
+ * A reflex, stopIf, a cancel, the deadline, a lost connection or a full pack stop the whole act whatever this says.
+ */
+export function handContinuesOnFail(hand: Pick<ActHand, 'do' | 'onFail'>): boolean {
+  return hand.onFail ? hand.onFail === 'continue' : CONTINUES_ON_FAIL.has(hand.do);
+}
+
 /** Reflex kinds in the ledger that do not stop an act (the shield is part of a fight; the budget is a notice). */
 /** Reflex kinds in the ledger that do not stop an act: the shield and the fireball struck back are part of a fight (the contract's 1.4); the budget is a notice. */
 const LEDGER_QUIET = new Set(['shield', 'fireball', 'budget', 'pickup', 'armor']);
-const REFLEX_NAMES: Record<string, string> = { 'floor-eat': '食事（飢え・瀕死）', 'floor-retreat': '退避（点火したクリーパー・矢）', 'floor-flee': '低体力の逃走',
+const REFLEX_NAMES: Record<string, string> = { 'floor-eat': '食事（飢え・瀕死）', 'floor-retreat': '退避（点火したクリーパー・矢）', 'floor-flee': '低体力の逃走', 'floor-last-stand': '逃げ道が無い時の最後の手',
   'floor-shelter': '逃げ道が無い時の囲い', 'auto-swim': '泳ぎ（呼吸）', 'constant:auto-swim': '泳ぎ（呼吸）', 'lava-escape': '溶岩からの脱出', 'floor-armor': '防具' };
 const reflexName = (reason: unknown) => { const text = String(reason ?? ''); return REFLEX_NAMES[text] ?? REFLEX_NAMES[text.replace(/^constant:/u, '')] ?? text; };
 
@@ -325,8 +336,13 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
         emit(index, 'completed', outcome.text);
         continue;
       }
-      report.failureType = outcome.reason ?? 'failed';
-      report.stoppedBy = outcome.reason === 'inventory_full' ? 'inventoryFull' : 'failure';
+      // A hand that fails by itself may let the act go on (onFail); what stops the act from outside its hands (the signal aborted) and a full pack never do.
+      const goesOn = !control.signal.aborted && outcome.reason !== 'inventory_full' && handContinuesOnFail(hand);
+      if (goesOn) report.failureType ??= outcome.reason ?? 'failed';
+      else {
+        report.failureType = outcome.reason ?? 'failed';
+        report.stoppedBy = outcome.reason === 'inventory_full' ? 'inventoryFull' : 'failure';
+      }
       // The body counts where its hands stop (the observation's recentStops); whether to give up is the planner's.
       let again = '';
       try {
@@ -338,9 +354,10 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
       } catch { /* the count is a help, not the result */ }
       let around: string | undefined;
       try { if (outcome.at) around = aroundText(bodyReader(bot), outcome.at, feetCell(bot)); } catch { /* the line stands without it */ }
-      report.lines.push({ i: index + 1, do: hand.do, status: 'stopped', line: stoppedLine(outcome.reason, `${outcome.text}${again}`, outcome.at ? cellNow(bot, outcome.at) : undefined),
+      report.lines.push({ i: index + 1, do: hand.do, status: goesOn ? 'failed' : 'stopped', line: stoppedLine(outcome.reason, `${outcome.text}${again}`, outcome.at ? cellNow(bot, outcome.at) : undefined),
         ...(outcome.at ? { where: outcome.at } : {}), ...(around ? { around } : {}) });
       emit(index, 'error', outcome.text);
+      if (goesOn) continue;
       skip(index + 1);
       break;
     }

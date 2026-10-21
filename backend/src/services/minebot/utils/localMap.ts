@@ -26,6 +26,8 @@ export interface MapBlock {
   level?: number;
   /** An end portal frame with an eye in it. */
   eye?: boolean;
+  /** `symbolFor`'s answer, kept by the reader that shares one MapBlock per block state (it is a function of the fields above). */
+  symbol?: string;
 }
 export type BlockReader = (x: number, y: number, z: number) => MapBlock | null;
 export interface Cell { x: number; y: number; z: number }
@@ -53,6 +55,7 @@ const NETHER_BRICK = /^(nether_bricks|nether_brick_fence|nether_brick_stairs|net
  */
 export function symbolFor(block: MapBlock | null): string {
   if (!block) return '?';
+  if (block.symbol !== undefined) return block.symbol;
   const name = block.name.replace(/^minecraft:/u, '');
   if (AIR.has(name)) return '.';
   // r2 (2026-10-22, count_tokens): '~ ' was three tokens a cell and '; ' two, a letter one: water a source is 'w', sand and gravel 's'.
@@ -185,10 +188,12 @@ function cellSymbol(options: DrawOptions, x: number, y: number, z: number): stri
   const block = options.read(x, y, z);
   let symbol = symbolFor(block);
   if (block && options.only && !options.only(block.name, symbol)) symbol = isOpenSymbol(symbol) ? '.' : symbol === '?' ? '?' : '#';
-  if (isOpenSymbol(symbol)) {
-    const creature = options.creatures?.get(`${x},${y},${z}`);
+  // The key is built only where there is something to look for (a string per open cell was ~4,000 a draw).
+  if (isOpenSymbol(symbol) && ((options.creatures?.size ?? 0) > 0 || (options.trail?.size ?? 0) > 0)) {
+    const key = `${x},${y},${z}`;
+    const creature = options.creatures?.get(key);
     if (creature) return creature;
-    if (symbol === '.' && options.trail?.has(`${x},${y},${z}`)) return '*';
+    if (symbol === '.' && options.trail?.has(key)) return '*';
   }
   return symbol;
 }
@@ -414,7 +419,8 @@ interface MapMemory {
   stops: Map<string, MapStop>;
   /** A block changed near the body since the last drawing (a dig, a placement, a flow). */
   dirty: boolean;
-  cache?: { key: string; at: number; text: string };
+  /** `key`: the feet, the mode and the dimension; `crowd`: the creatures' cells. They are told apart because a creature alone may redraw the map only once a second. */
+  cache?: { key: string; crowd: string; at: number; text: string };
 }
 export interface MapStop {
   /** What stopped: the step's kind (walk, dig, place ...). */
@@ -501,8 +507,8 @@ export function recentStopLines(bot: MapBody, now = Date.now(), limit = STOPS_SH
     .map(stop => `${stop.from ? `(${cellKey(stop.from)})→` : ''}(${cellKey(stop.at)}) ${stop.reason}${stop.count > 1 ? ` ×${stop.count}` : ''} ${Math.round((now - stop.lastAt) / 1000)}秒前`);
 }
 
-/** A reader over a live body: null for a cell not loaded. */
-export function bodyReader(bot: MapBody): BlockReader {
+/** A cell through `bot.blockAt`, as the drawer needs it: null for a cell not loaded. One Block (with light, biome, shapes) is built per call. */
+function blockAtReader(bot: MapBody): BlockReader {
   return (x, y, z) => {
     let block: any;
     try { block = bot.blockAt?.(new Vec3(x, y, z), false); } catch { block = null; }
@@ -518,6 +524,53 @@ export function bodyReader(bot: MapBody): BlockReader {
     }
     return out;
   };
+}
+
+/** What the map knows of each block state, by state id (a state fixes the name, the box, a fluid's level, a frame's eye): one MapBlock shared by every cell of it. Per registry. */
+const stateBlocks = new WeakMap<object, Map<number, MapBlock>>();
+
+/**
+ * The same reader over the world's chunks directly (run 27: 110-685 GCs a minute, up to 2.2 s; `bot.blockAt` built a Block, its light, its
+ * biome and a Vec3 for each of ~1,000 to ~6,000 cells a draw, 7 MB). It asks the chunk column for the cell's state id with one reused
+ * Vec3, and shares one MapBlock (with its symbol) per state id. A fluid or an end portal frame, whose level and eye are in the state, is
+ * read through `blockAt` once per state id, as before. Null when the body has no world to read like this (a probe, a test).
+ */
+function stateIdReader(bot: MapBody, fallback: BlockReader): BlockReader | null {
+  const world = bot.world, registry = bot.registry;
+  if (!world || typeof world.getColumn !== 'function' || !registry?.blocksByStateId) return null;
+  let known = stateBlocks.get(registry);
+  if (!known) { known = new Map(); stateBlocks.set(registry, known); }
+  const states = known;
+  const inChunk = new Vec3(0, 0, 0);
+  let column: any = null, columnX = Number.NaN, columnZ = Number.NaN;
+  return (x, y, z) => {
+    const cx = x >> 4, cz = z >> 4;
+    if (cx !== columnX || cz !== columnZ) {
+      try { column = world.getColumn(cx, cz); } catch { column = null; }
+      columnX = cx; columnZ = cz;
+    }
+    if (!column) return null;
+    inChunk.x = x & 15; inChunk.y = y; inChunk.z = z & 15;
+    let stateId: number;
+    try { stateId = column.getBlockStateId(inChunk); } catch { return fallback(x, y, z); }
+    const hit = states.get(stateId);
+    if (hit) return hit;
+    const definition = registry.blocksByStateId[stateId];
+    if (!definition) return fallback(x, y, z);
+    const name = String(definition.name);
+    // The fluids and the frame carry their level / eye in the state: read the way it always was, once.
+    const made = name === 'water' || name === 'lava' || name === 'end_portal_frame' ? fallback(x, y, z) : { name, solid: definition.boundingBox === 'block' };
+    if (!made) return null;
+    made.symbol = symbolFor(made);
+    states.set(stateId, made);
+    return made;
+  };
+}
+
+/** A reader over a live body: null for a cell not loaded. */
+export function bodyReader(bot: MapBody): BlockReader {
+  const slow = blockAtReader(bot);
+  return stateIdReader(bot, slow) ?? slow;
 }
 
 const ANIMAL_TYPES = new Set(['animal', 'passive', 'water_creature', 'ambient', 'water_ambient', 'axolotls', 'underground_water_creature']);
@@ -547,22 +600,28 @@ export function feetCell(bot: MapBody): Cell | null {
 
 /** The shortest time between two drawings of the map (the contract: at most every 500 ms). */
 const MAP_MIN_MS = 500;
+/** ... and when only the creatures moved (the feet, the blocks and the dimension are as drawn), at most every second: they move all the time. */
+const CREATURE_MIN_MS = 1000;
 
 /**
  * The decision's map for a live body. Drawn again when the feet moved to another cell, a block changed near it, or the creatures
- * moved to other cells, and at most every MAP_MIN_MS; else the last drawing. Null without a body.
+ * moved to other cells, and at most every MAP_MIN_MS (every CREATURE_MIN_MS when only creatures moved); else the last drawing. Null
+ * without a body.
  */
 export function localMapFor(bot: MapBody, options: LocalMapOptions & { fresh?: boolean } = {}): string | null {
   const feet = feetCell(bot);
   if (!feet) return null;
   const memory = mapMemoryOf(bot);
   const now = options.now ?? Date.now();
-  const creatures = creatureCells(bot);
-  const key = `${cellKey(feet)}|${options.mode ?? 'auto'}|${String(bot.game?.dimension ?? '')}|${[...creatures].map(([cell, mark]) => `${cell}${mark}`).sort().join(';')}`;
   const cached = memory.cache;
-  if (!options.fresh && cached && (cached.key === key && !memory.dirty || now - cached.at < MAP_MIN_MS)) return cached.text;
+  // Inside MAP_MIN_MS nothing is looked at (the frame asks for the map several times a second).
+  if (!options.fresh && cached && now - cached.at < MAP_MIN_MS) return cached.text;
+  const creatures = creatureCells(bot);
+  const key = `${cellKey(feet)}|${options.mode ?? 'auto'}|${String(bot.game?.dimension ?? '')}`;
+  const crowd = [...creatures].map(([cell, mark]) => `${cell}${mark}`).sort().join(';');
+  if (!options.fresh && cached && cached.key === key && !memory.dirty && (cached.crowd === crowd || now - cached.at < CREATURE_MIN_MS)) return cached.text;
   const text = drawLocalMap({ feet, read: bodyReader(bot), trail: walkedCells(bot, now), creatures }, options);
-  memory.cache = { key, at: now, text };
+  memory.cache = { key, crowd, at: now, text };
   memory.dirty = false;
   return text;
 }

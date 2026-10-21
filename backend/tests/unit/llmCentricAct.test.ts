@@ -1,8 +1,14 @@
 import { EventEmitter } from 'node:events';
 import { Vec3 } from 'vec3';
-import { describe, expect, it } from 'vitest';
-import { runAct, ACT_HANDS } from '../../src/services/minebot/instantSkills/act.js';
+import { describe, expect, it, vi } from 'vitest';
+import { runAct, ACT_HANDS, handContinuesOnFail } from '../../src/services/minebot/instantSkills/act.js';
 import { takeActReport } from '../../src/services/minebot/utils/actReport.js';
+
+// A walk needs a pathfinder: the fake body has none, and what the walk does is not what these tests are about (the hands after a failed one).
+vi.mock('../../src/services/minebot/utils/primitives/walk.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../src/services/minebot/utils/primitives/walk.js')>();
+  return { ...actual, walk: vi.fn(async () => ({ ok: true, text: '(1,64,0) に着いた（1m、0.0秒）' })) };
+});
 
 // How act stops (design mb-llm-centric 4: "act の止まり方"), and its result as the head's contract has it (ActResult JSON): a hand that
 // fails, stopIf, a reflex, a watched cell, the dimension. A fake body: blocks from a map, no server, no pathfinder.
@@ -110,6 +116,80 @@ describe('act: the hands and where they stop', () => {
     setTimeout(() => { bot.entities[7] = { id: 7, name: 'zombie', type: 'hostile', position: new Vec3(3, 64, 0) }; }, 40);
     const json = parse(await runAct(bot, hands([{ do: 'wait', seconds: 5 }]), { hostileWithin: 6 }, undefined, { tickMs: 20 }));
     expect(json.stoppedWhy).toMatch(/^hostileWithin:zombie #7 2\.\dm/u);
+  });
+
+  // Run 27: [equip stone_sword, walk away] failed at the equip ("持っていない"), the walk away never ran and a creeper blew 13 s later.
+  describe('onFail: a hand that fails by itself may let the act go on', () => {
+    it('equip, eat, look, sneak and jump go on by default; every other kind stops; onFail says otherwise', () => {
+      for (const kind of ['equip', 'eat', 'look', 'sneak', 'jump'] as const) expect(handContinuesOnFail({ do: kind })).toBe(true);
+      for (const kind of ['walk', 'dig', 'place', 'pillarUp', 'use', 'craft', 'furnace', 'chest', 'attack', 'shoot', 'drop', 'pickup', 'wait'] as const) expect(handContinuesOnFail({ do: kind })).toBe(false);
+      expect(handContinuesOnFail({ do: 'dig', onFail: 'continue' })).toBe(true);
+      expect(handContinuesOnFail({ do: 'equip', onFail: 'stop' })).toBe(false);
+      expect(hands([{ do: 'walk', to: { x: 1, y: 64, z: 0 }, onFail: 'continue' }])[0].onFail).toBe('continue');
+      expect(() => hands([{ do: 'walk', onFail: 'retry' }])).toThrow();
+    });
+
+    it('[equip a tool not carried, walk]: the equip is a "failed" line, the walk runs, the act is not ok but is not stopped either', async () => {
+      const { bot } = body();
+      const events: any[] = [];
+      bot.on('minebotActStep', (event: any) => events.push(event));
+      const result = await runAct(bot, hands([{ do: 'equip', item: 'stone_sword' }, { do: 'walk', to: { x: 1, y: 64, z: 0 } }]));
+      const json = parse(result);
+      expect(json).toMatchObject({ ok: false, done: 1, of: 2, partial: true });
+      expect(json.stoppedBy).toBeUndefined();
+      expect(json.stoppedWhy).toBeUndefined();
+      expect(json.lines[0]).toMatchObject({ i: 1, do: 'equip', status: 'failed' });
+      expect(json.lines[0].line.startsWith('無い: stone_sword を持っていない')).toBe(true);
+      expect(json.lines[1]).toMatchObject({ i: 2, do: 'walk', status: 'done' });
+      expect(result.success).toBe(false);
+      expect(result.failureType).toBe('missing_item');
+      // The UI shows the failed step as an error and the next one as done.
+      expect(events.filter(event => event.status === 'error').map(event => event.index)).toEqual([0]);
+      expect(events.filter(event => event.status === 'completed').map(event => event.index)).toEqual([1]);
+    });
+
+    it('[a dig that cannot be done, walk]: stops at the dig (the default for a dig); with onFail continue it goes on', async () => {
+      const { bot } = body();
+      const stopped = parse(await runAct(bot, hands([{ do: 'dig', at: [{ x: 9, y: 63, z: 0 }] }, { do: 'walk', to: { x: 1, y: 64, z: 0 } }])));
+      expect(stopped).toMatchObject({ ok: false, done: 0, of: 2, stoppedBy: 'failure' });
+      expect(stopped.lines.map((line: any) => line.status)).toEqual(['stopped', 'skipped']);
+      const went = parse(await runAct(bot, hands([{ do: 'dig', at: [{ x: 9, y: 63, z: 0 }], onFail: 'continue' }, { do: 'walk', to: { x: 1, y: 64, z: 0 } }])));
+      expect(went).toMatchObject({ ok: false, done: 1, of: 2, partial: true });
+      expect(went.stoppedBy).toBeUndefined();
+      expect(went.lines.map((line: any) => line.status)).toEqual(['failed', 'done']);
+      expect(went.lines[0]).toMatchObject({ where: { x: 9, y: 63, z: 0 } });
+      expect(went.lines[0].line.startsWith('届かない: (9,63,0)（自分から東9・下1）')).toBe(true);
+      expect(went.lines[0].line.endsWith('そのマスは stone')).toBe(true);
+    });
+
+    it('an equip with onFail stop stops; an act of hands that all fail but go on says every line, and ok stays false', async () => {
+      const { bot } = body();
+      const stopped = parse(await runAct(bot, hands([{ do: 'equip', item: 'stone_sword', onFail: 'stop' }, { do: 'jump' }])));
+      expect(stopped).toMatchObject({ stoppedBy: 'failure', done: 0 });
+      expect(stopped.lines.map((line: any) => line.status)).toEqual(['stopped', 'skipped']);
+      const all = parse(await runAct(bot, hands([{ do: 'equip', item: 'stone_sword' }, { do: 'eat' }, { do: 'wait', seconds: 0.05 }])));
+      expect(all).toMatchObject({ ok: false, done: 1, of: 3 });
+      expect(all.stoppedBy).toBeUndefined();
+      expect(all.lines.map((line: any) => line.status)).toEqual(['failed', 'failed', 'done']);
+    });
+
+    it('a reflex, stopIf or the deadline still stop the whole act, whatever a hand says', async () => {
+      let entries: Array<{ kind: string; detail: string }> = [];
+      const { bot } = body({ reflexLedger: { mark: () => 0, entriesSince: () => entries } });
+      setTimeout(() => { entries = [{ kind: 'flee', detail: '低体力のため敵から離れた' }]; }, 40);
+      const reflex = parse(await runAct(bot, hands([{ do: 'wait', seconds: 5, onFail: 'continue' }, { do: 'jump' }]), undefined, undefined, { tickMs: 20 }));
+      expect(reflex.stoppedBy).toBe('reflex');
+      expect(reflex.lines.map((line: any) => line.status)).toEqual(['stopped', 'skipped']);
+      const { bot: other } = body();
+      setTimeout(() => { other.health = 4; }, 40);
+      const stopIf = parse(await runAct(other, hands([{ do: 'wait', seconds: 5, onFail: 'continue' }, { do: 'jump' }]), { hpBelow: 10 }, undefined, { tickMs: 20 }));
+      expect(stopIf.stoppedBy).toBe('stopIf');
+      expect(stopIf.lines[1].status).toBe('skipped');
+      const { bot: slow } = body();
+      const late = parse(await runAct(slow, hands([{ do: 'wait', seconds: 0.3, onFail: 'continue' }, { do: 'jump' }]), undefined, undefined, { maxMs: 100, tickMs: 20 }));
+      expect(late.lines[1].status).toBe('skipped');
+      expect(late.ok).toBe(false);
+    });
   });
 
   it('takes every field the head\'s schema takes, and refuses what it cannot read', async () => {

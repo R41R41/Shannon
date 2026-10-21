@@ -14,6 +14,7 @@ import { ensureReflexLedger, type ReflexKind, type ReflexOutcome } from './refle
 import { threatExposure } from './threatExposure.js';
 import { holdsWater } from './waterBlocks.js';
 import { engagedWithAny } from './engagement.js';
+import { PROTECTED_UTILITY_BLOCKS } from '../constants.js';
 
 const log = createLogger('Minebot:FloorReflexes');
 
@@ -99,6 +100,17 @@ export const ESCAPE_SKILLS: ReadonlySet<string> = new Set(['flee-from', 'dig-she
 const RETREAT_TICKS = 20;
 const RETREAT_BLOCKS = 3;
 const RETREAT_COOLDOWN_TICKS = 10;
+/**
+ * LLM-centric mode: a lit creeper's retreat runs until the body is this far from it (a creeper's blast reaches about 7 m; run 27: the
+ * step back lasted about a second and three blocks, the blast still took 16.4), or the creeper is gone or no longer lit, or
+ * CREEPER_RETREAT_TICKS ticks have passed. It runs along a heading the flee's look-ahead finds safe, checked every tick; no such heading,
+ * or less than CREEPER_HEADWAY blocks in CREEPER_STILL_TICKS ticks, is `cornered` (the last stand). The default mode and the arrow's
+ * side-step keep RETREAT_TICKS / RETREAT_BLOCKS, straight away.
+ */
+const CREEPER_SAFE_METERS = 7;
+const CREEPER_RETREAT_TICKS = 40;
+const CREEPER_STILL_TICKS = 8;
+const CREEPER_HEADWAY = 0.5;
 /** A creeper starts its fuse at three blocks and blows at about three; a lit one this close is stepped away from. */
 const CREEPER_REACH = 4.5;
 const ARROW_REACH = 12;
@@ -153,6 +165,14 @@ export interface RetreatState {
   done?: boolean;
   /** Last seen position of each arrow: one that did not move since the last tick is stuck, whatever velocity it reported. */
   arrows?: Map<number, Vec3>;
+  /**
+   * LLM-centric mode, a lit creeper: the retreat runs to CREEPER_SAFE_METERS along a heading the flee's look-ahead finds safe (`heading`,
+   * kept from tick to tick), and says `cornered` when there is none or the body makes no headway (`checkpoint`, `stillTicks`).
+   */
+  far?: boolean;
+  heading?: number;
+  checkpoint?: Vec3;
+  stillTicks?: number;
 }
 /** One run from danger, in segments (`fleeStart`). */
 export interface FleeEpisode {
@@ -180,6 +200,13 @@ export interface FloorState {
   shelterAt?: number;
   /** How far the nearest threat was when the flee was refused (`shelterChoice`). */
   shelterNearest?: number;
+  /** LLM-centric mode only: set by a refused flee, the tick makes the last stand (`lastStandChoice`) instead of the shelter; at most once in LAST_STAND_GAP_MS. */
+  lastStandWanted?: boolean;
+  lastStandAt?: number;
+  /** The kind of the last stand that failed: the next one tries another way. */
+  lastStandFailed?: LastStand['kind'];
+  /** When the retreat from a lit creeper found no way away (LLM-centric): the creeper's last stand is wanted until CORNERED_WAIT_MS after. */
+  creeperCornered?: number;
   /** Cooldowns, the allowance and the stuck latch of the arrow step-aside, the meal and the armour change (`floorBudget.ts`); absent when denied. */
   budget?: FloorBudget;
 }
@@ -246,6 +273,16 @@ export function retreatThreat(bot: FloorBody, arrows?: Map<number, Vec3>): { kin
   if (arrows) { arrows.clear(); for (const [id, at] of seen) arrows.set(id, at); }
   return found;
 }
+/** Where the nearest lit creeper within `reach` of `at` is now, or null. */
+function nearestLitCreeper(bot: FloorBody, at: Vec3, reach: number): Vec3 | null {
+  let best: Vec3 | null = null, bestDistance = reach;
+  for (const entity of others(bot)) {
+    if (entity.name !== 'creeper' || !creeperLit(entity)) continue;
+    const distance = entity.position.distanceTo(at);
+    if (distance < bestDistance) { best = entity.position; bestDistance = distance; }
+  }
+  return best;
+}
 function releaseKeys(bot: FloorBody) { for (const key of ['forward', 'sprint', 'left', 'right', 'jump']) bot.setControlState(key, false); }
 function steer(bot: FloorBody, state: RetreatState) {
   const at = bot.entity!.position, from = state.from!;
@@ -263,7 +300,7 @@ function steer(bot: FloorBody, state: RetreatState) {
  * One physics tick of the retreat. Keys are set every tick while engaged, after the other movers, like the lava reflex.
  * `allow` is the budget's say on starting one (a lit creeper's retreat is never asked about it).
  */
-export function floorRetreatTick(bot: FloorBody, state: RetreatState, allow?: (kind: 'creeper' | 'arrow') => boolean): 'engaged' | 'released' | null {
+export function floorRetreatTick(bot: FloorBody, state: RetreatState, allow?: (kind: 'creeper' | 'arrow') => boolean): 'engaged' | 'released' | 'cornered' | null {
   const body = bot.entity;
   // Lava and breath come first (400, 300): while either holds the keys, the retreat neither steers nor takes the body.
   const yielding = bot.lavaReflex?.engaged === true || bot.breathingReflex?.engaged === true;
@@ -271,23 +308,49 @@ export function floorRetreatTick(bot: FloorBody, state: RetreatState, allow?: (k
     if (!state.engaged) return null;
     state.engaged = false; releaseKeys(bot); return 'released';
   }
+  const letGo = (outcome: 'released' | 'cornered') => { state.engaged = false; state.cooldown = RETREAT_COOLDOWN_TICKS; releaseKeys(bot); return outcome; };
   if (state.engaged) {
     state.ticks++;
     const threat = retreatThreat(bot, state.arrows ??= new Map());
-    if (threat) state.from = threat.from;
-    if (!threat || state.ticks >= RETREAT_TICKS || body.position.distanceTo(state.origin!) >= RETREAT_BLOCKS) {
-      state.engaged = false; state.cooldown = RETREAT_COOLDOWN_TICKS; releaseKeys(bot); return 'released';
+    if (state.kind === 'creeper' && state.far) {
+      // The nearest lit creeper still inside the safe distance (it may be further than the start's CREEPER_REACH by now); none: out of
+      // its reach, gone, or no longer lit.
+      const lit = nearestLitCreeper(bot, body.position, CREEPER_SAFE_METERS);
+      if (!lit || state.ticks >= CREEPER_RETREAT_TICKS) return letGo('released');
+      state.from = lit;
+      // No headway (a wall the look-ahead did not see, a mob in the way, a block at the feet): cornered.
+      if (body.position.distanceTo(state.checkpoint ?? body.position) >= CREEPER_HEADWAY) { state.checkpoint = body.position.clone(); state.stillTicks = 0; }
+      else if ((state.stillTicks = (state.stillTicks ?? 0) + 1) >= CREEPER_STILL_TICKS) return letGo('cornered');
+      const plan = creeperHeading(bot, lit, state.heading);
+      if (!plan) return letGo('cornered');
+      steerAlong(bot, state, plan); return null;
     }
+    if (threat) state.from = threat.from;
+    if (!threat || state.ticks >= RETREAT_TICKS || body.position.distanceTo(state.origin!) >= RETREAT_BLOCKS) return letGo('released');
     steer(bot, state); return null;
   }
   const threat = retreatThreat(bot, state.arrows ??= new Map());
   if (state.cooldown > 0) { state.cooldown--; return null; }
   if (!threat) return null;
   if (allow && !allow(threat.kind)) return null;
-  Object.assign(state, { engaged: true, kind: threat.kind, from: threat.from, origin: body.position.clone(), ticks: 0, done: false });
+  // LLM-centric: a lit creeper with no safe way away is not run at (a cliff, lava, a wall): the body is cornered, and makes its last stand.
+  const far = threat.kind === 'creeper' && isLlmCentric(bot);
+  const plan = far ? creeperHeading(bot, threat.from) : null;
+  if (far && !plan) { state.cooldown = RETREAT_COOLDOWN_TICKS; return 'cornered'; }
+  Object.assign(state, { engaged: true, kind: threat.kind, from: threat.from, origin: body.position.clone(), ticks: 0, done: false,
+    far, heading: undefined, checkpoint: body.position.clone(), stillTicks: 0 });
   state.engagements++;
-  steer(bot, state);
+  if (plan) steerAlong(bot, state, plan); else steer(bot, state);
   return 'engaged';
+}
+/** The flee's look-ahead away from a lit creeper (`fleeHeadingPlan`: straight away when safe, else the nearest safe turn), or null. */
+function creeperHeading(bot: FloorBody, from: Vec3, previous?: number): { yaw: number; jump: boolean } | null {
+  try { return fleeHeadingPlan(bot, from, previous); } catch { return null; }
+}
+function steerAlong(bot: FloorBody, state: RetreatState, plan: { yaw: number; jump: boolean }) {
+  state.heading = plan.yaw;
+  bot.look?.(plan.yaw, 0, true);
+  bot.setControlState('forward', true); bot.setControlState('sprint', true); bot.setControlState('jump', plan.jump);
 }
 
 /** The LLM-centric body's own meals: starving, or nearly dead. */
@@ -800,6 +863,9 @@ export function fleeStart(bot: FloorBody, state: FloorState, now: number): FleeS
   let episode = state.fleeEpisode;
   if (episode) {
     if (now - episode.startedAt >= FLEE_EPISODE_MS || (at && at.distanceTo(episode.origin) >= FLEE_EPISODE_BLOCKS) || episode.stalls >= 2) {
+      // Two segments in a row without headway is a way out that is not there (a heading the look-ahead took, a body that does not move):
+      // in the LLM-centric mode the last stand follows, as for a refused flee.
+      if (episode.stalls >= 2 && isLlmCentric(bot)) state.lastStandWanted = true;
       endEpisode(); state.fleeRestUntil = now + FLEE_REST_MS; return null;
     }
   } else {
@@ -817,6 +883,8 @@ export function fleeStart(bot: FloorBody, state: FloorState, now: number): FleeS
     endEpisode();
     // Not standing there to be hit: the body walls itself in, or climbs out of reach, where it is (the tick's shelter, below).
     if (now - (state.shelterAt ?? -Infinity) >= SHELTER_GAP_MS) { state.shelterWanted = true; state.shelterNearest = threat.nearest; }
+    // The LLM-centric body builds no shelter; its last resort at low health is a blow, a step down or one block up (`lastStandChoice`).
+    if (isLlmCentric(bot)) state.lastStandWanted = true;
     if (now - (state.fleeRefusedNotedAt ?? -Infinity) >= FLEE_REFUSAL_NOTE_GAP_MS) {
       state.fleeRefusedNotedAt = now;
       try { bot.reflexLedger?.note('flee', '低体力だが安全な逃げ道が無く走れなかった', 'failed'); } catch { /* a report must not change what the reflex did */ }
@@ -919,6 +987,142 @@ async function runBodySkill(bot: FloorBody, name: string, args: unknown[]): Prom
   try { return await skill.runImpl(...args); } finally { if (skill.bot === port) skill.bot = host; }
 }
 
+// ===== The LLM-centric last stand =====
+
+/**
+ * What the LLM-centric body does at low health when the flee finds no way out (run 27: the automatic shelter is off in the mode, the body
+ * stood for 4 s and a spider killed it). One minimal hand, chosen in this order, and told in the ledger (so the act that was running stops
+ * as `reflex`): (a) a blow at a threat within LAST_STAND_RANGE that can reach the body, with the best melee weapon carried; (b) one block
+ * down, when the cell under the feet can be dug and the one under that is solid; (c) one block up, when a full block is carried and the
+ * two cells over the head are air. At most once in LAST_STAND_GAP_MS, and never over another safety lease.
+ */
+const LAST_STAND_RANGE = 3.2;
+const LAST_STAND_HITS = 2;
+const LAST_STAND_HIT_GAP_MS = 600;
+const LAST_STAND_GAP_MS = 1500;
+/** A creeper's fuse is a second and a half: a cornered body that cannot make its stand by then has no stand to make. */
+const CORNERED_WAIT_MS = 1500;
+/** The ledger keeps this much of the last stand's detail (the usual 40 cannot hold the place and the health). */
+const LAST_STAND_DETAIL_MAX = 90;
+const LAST_STAND_TIMEOUT_MS: Record<'hit' | 'dig' | 'pillar', number> = { hit: 3000, dig: 7000, pillar: 5000 };
+const TOOL_TIERS = ['netherite', 'diamond', 'iron', 'stone', 'golden', 'wooden'];
+/** A sword before an axe before any other tool; within a kind the better material first. 0: not a melee tool. */
+function meleeRank(name: string): number {
+  const kind = name.endsWith('_sword') ? 300 : name.endsWith('_axe') ? 200 : /_(pickaxe|shovel|hoe)$/u.test(name) ? 100 : 0;
+  if (!kind) return 0;
+  const tier = TOOL_TIERS.findIndex(material => name.startsWith(`${material}_`));
+  return kind + (tier < 0 ? 0 : TOOL_TIERS.length - tier);
+}
+/** The best melee weapon carried (sword, then axe, then another tool), or null. */
+export function bestMeleeWeapon(items: Item[]): Item | null {
+  let best: Item | null = null, bestRank = 0;
+  for (const item of items) { const rank = meleeRank(item.name); if (rank > bestRank) { best = item; bestRank = rank; } }
+  return best;
+}
+
+export type LastStand =
+  | { kind: 'hit'; target: FloorEntity; weapon: Item | null; detail: string }
+  | { kind: 'dig'; cell: { x: number; y: number; z: number }; detail: string }
+  | { kind: 'pillar'; block: string; detail: string };
+
+/** Whole blocks a last-stand pillar is made of: the shelter's walls and any planks. */
+const isPillarBlock = (name: string) => WALL_BLOCKS.has(name) || name.endsWith('_planks');
+const isFluid = (name: unknown) => name === 'water' || name === 'lava';
+
+/**
+ * The last stand for a lit creeper with no safe way away (`floorRetreatTick` says `cornered`): another order, for a blast in about a second
+ * and a half. (b) one block down first, only when the cell is dug in CREEPER_DIG_MS or less (the hole takes the blast off the lower half of
+ * the body); then (a) a blow at the lit creeper itself (the knock puts it further off; no other mob is hit); then (c) one block up.
+ */
+const CREEPER_DIG_MS = 1000;
+
+export function lastStandChoice(bot: FloorBody, skip?: LastStand['kind'], cause: 'low-health' | 'creeper' = 'low-health'): LastStand | null {
+  const body = bot.entity; if (!body) return null;
+  const at = body.position, health = Math.round((bot.health ?? 0) * 10) / 10;
+  const feet = { x: Math.floor(at.x), y: Math.floor(at.y + 1e-3), z: Math.floor(at.z) };
+  const where = `(${feet.x},${feet.y},${feet.z}) 体力${health}`;
+  const creeper = cause === 'creeper';
+  const lead = creeper ? '点火したクリーパーから逃げ道なし:' : '低体力で逃げ道なし:';
+  const items = bot.inventory?.items() ?? [];
+  const read = (dy: number) => (bot as unknown as TerrainBody).blockAt?.(new Vec3(feet.x, feet.y + dy, feet.z)) as (FleeBlock & { diggable?: boolean }) | null | undefined;
+  /** (b) One block down: the cell under the feet can be dug, and the cell under that holds the body (a step, not a drop; no water or lava). */
+  const stepDown = (): LastStand | null => {
+    const under = read(-1), below = read(-2);
+    if (!(under && below && under.boundingBox === 'block' && under.diggable !== false && !isFluid(under.name) && !isHazardousToStandOn(under.name)
+      && !['bedrock', 'barrier', 'end_portal_frame', 'reinforced_deepslate'].includes(String(under.name)) && !PROTECTED_UTILITY_BLOCKS.has(String(under.name))
+      && below.boundingBox === 'block' && !isHazardousToStandOn(below.name))) return null;
+    if (creeper) {
+      // Too slow to be a hole before the blast (stone by hand is seconds): not this way. Unknown (no digTime): taken.
+      let ms: number | null = null;
+      try { const time = (bot as { digTime?: (block: unknown) => number }).digTime?.(under); ms = typeof time === 'number' && Number.isFinite(time) ? time : null; } catch { ms = null; }
+      if (ms !== null && ms > CREEPER_DIG_MS) return null;
+    }
+    return { kind: 'dig', cell: { x: feet.x, y: feet.y - 1, z: feet.z }, detail: `${lead} 足元を掘って下がった ${where}` };
+  };
+  if (creeper) {
+    if (skip !== 'dig') { const down = stepDown(); if (down) return down; }
+    if (skip !== 'hit') {
+      const lit = others(bot).filter(entity => entity.name === 'creeper' && creeperLit(entity))
+        .map(entity => ({ entity, distance: entity.position.distanceTo(at) })).filter(entry => entry.distance <= LAST_STAND_RANGE)
+        .sort((a, b) => a.distance - b.distance)[0];
+      if (lit) return { kind: 'hit', target: lit.entity, weapon: bestMeleeWeapon(items), detail: `${lead} creeper #${lit.entity.id} を打って離した ${where}` };
+    }
+  }
+  // (a) A threat in arm's reach that can get at the body. A lit creeper is never hit (the blast is the danger); an unlit one may be (the knock helps).
+  if (!creeper && skip !== 'hit') {
+    const near = others(bot).filter(entity => isThreat(bot, entity) && !(entity.name === 'creeper' && creeperLit(entity)))
+      .map(entity => ({ entity, distance: entity.position.distanceTo(at) })).filter(entry => entry.distance <= LAST_STAND_RANGE)
+      .filter(entry => { try { return threatExposure(bot as any, entry.entity as any) !== 'sealed'; } catch { return true; } })
+      .sort((a, b) => a.distance - b.distance)[0];
+    if (near) {
+      const target = near.entity;
+      return { kind: 'hit', target, weapon: bestMeleeWeapon(items), detail: `${lead} ${target.name} #${target.id} を打ち返した ${where}` };
+    }
+  }
+  if (!creeper && skip !== 'dig') { const down = stepDown(); if (down) return down; }
+  // (c) One block up: a full block carried, and the two cells over the head are air.
+  if (skip !== 'pillar') {
+    const block = items.filter(item => isPillarBlock(item.name)).reduce<{ name: string; count: number } | null>((best, item) => {
+      const count = (item as { count?: number }).count ?? 1;
+      return !best || count > best.count ? { name: item.name, count } : best;
+    }, null);
+    const open = (dy: number) => { const cell = read(dy); return !!cell && cell.boundingBox !== 'block' && !isFluid(cell.name) && !isHazardousToStandOn(cell.name); };
+    if (block && open(2) && open(3)) return { kind: 'pillar', block: block.name, detail: `${lead} 1段積んで上がった ${where}` };
+  }
+  return null;
+}
+
+/** Runs a last stand as the work of a safety-lease action: `port` is the body's motor port, so a stronger reflex taking the body ends it. */
+export async function runLastStand(bot: FloorBody, port: FloorBody, stand: LastStand): Promise<{ success: boolean; result: string }> {
+  const motor = port as any;
+  if (stand.kind === 'hit') {
+    const weapon = stand.weapon;
+    if (weapon && bot.heldItem?.name !== weapon.name) {
+      try { await motor.equip(weapon, 'hand'); } catch (error) { if (/Action interrupted|Motor owner expired/u.test(String((error as Error)?.message))) throw error; }
+    }
+    let blows = 0;
+    for (let blow = 0; blow < LAST_STAND_HITS; blow++) {
+      const live = Object.values(bot.entities ?? {}).find(entity => entity === stand.target || (entity?.id !== undefined && entity.id === stand.target.id));
+      if (!live || !bot.entity || live.position.distanceTo(bot.entity.position) > LAST_STAND_RANGE + 1) break;
+      try { await motor.lookAt?.(live.position.offset(0, 1, 0), true); } catch (error) { if (/Action interrupted|Motor owner expired/u.test(String((error as Error)?.message))) throw error; }
+      motor.attack(live); blows++;
+      if (blow < LAST_STAND_HITS - 1) await new Promise(resolve => setTimeout(resolve, LAST_STAND_HIT_GAP_MS));
+    }
+    return { success: blows > 0, result: blows > 0 ? `${blows}回打った` : '打つ相手が離れた' };
+  }
+  const position = bot.entity!.position;
+  const base = { x: Math.floor(position.x), y: Math.floor(position.y + 1e-3), z: Math.floor(position.z) };
+  const ctx = { bot: port, stop: new AbortController().signal, deadline: Date.now() + LAST_STAND_TIMEOUT_MS[stand.kind], facing: 'north' as const, base };
+  if (stand.kind === 'dig') {
+    const { dig } = await import('./primitives/dig.js');
+    const outcome = await dig(ctx as never, { at: [stand.cell], collect: false, exposeOk: true });
+    return { success: outcome.ok, result: outcome.text };
+  }
+  const { pillarUp } = await import('./primitives/pillarUp.js');
+  const outcome = await pillarUp(ctx as never, { n: 1, block: stand.block });
+  return { success: outcome.ok, result: outcome.text };
+}
+
 export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floorConfig(), options: { fleeTickMs?: number; now?: () => number } = {}): void {
   if (bot.floorReflexes) return;
   const now = options.now ?? Date.now;
@@ -937,8 +1141,8 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
       { priority, safetyLease: true, waitForQuiescence: false, legacyExecutingSkill: true });
   };
   /** `take`, with the ledger told when it began and how it ended (done, cut off by a stronger reflex, or failed). */
-  const takeNoted = (kind: ReflexKind, detail: string, capability: string, priority: number, timeoutMs: number, work: Work, metered?: BudgetKind) => {
-    const handle = ledger.begin(kind, detail), startedAt = now();
+  const takeNoted = (kind: ReflexKind, detail: string, capability: string, priority: number, timeoutMs: number, work: Work, metered?: BudgetKind, detailMax?: number) => {
+    const handle = ledger.begin(kind, detail, detailMax), startedAt = now();
     return take(capability, priority, timeoutMs, work).then(result => {
       const outcome = result?.success ? 'done' : result?.failureType === 'interrupted' ? 'cut' : 'failed';
       ledger.end(handle, outcome); if (metered) budget?.end(metered, startedAt, outcome);
@@ -964,9 +1168,38 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
   // A creeper fought on purpose (attack-continuously creeper, in iron with a sword: utils/creeperDuel) steps back from its own fuse; the
   // floor's step back would end the fight a second after it began (run 24: the planner's order was cut three times by a creeper 13 m off).
   const retreatAllow = (kind: 'creeper' | 'arrow') => (kind === 'creeper' && (bot as { creeperDuel?: boolean }).creeperDuel === true) ? false : (baseAllow ? baseAllow(kind) : true);
+  /**
+   * The LLM-centric last stand (`lastStandChoice`): one minimal hand, told in the ledger so that the act running stops as a reflex. Once in
+   * LAST_STAND_GAP_MS, never over another safety lease or one of the API's escapes. False when nothing was started.
+   */
+  const lastStand = (cause: 'low-health' | 'creeper'): boolean => {
+    let stand: LastStand | null = null;
+    try {
+      stand = isLlmCentric(bot) && !hasActiveSafetyLease(bot) && !escapeRunning(bot) && (bot.health ?? 20) > 0 && now() - (state.lastStandAt ?? -Infinity) >= LAST_STAND_GAP_MS
+        ? lastStandChoice(bot, state.lastStandFailed, cause) : null;
+    } catch { stand = null; }
+    if (!stand) return false;
+    const chosen = stand;
+    state.lastStandAt = now(); state.busy = 'flee';
+    log.warn(`🧱 ${cause === 'creeper' ? '点火したクリーパーから' : '低体力で'}逃げ道なし、最後の手: ${chosen.kind}`);
+    void takeNoted(cause === 'creeper' ? 'retreat' : 'flee', chosen.detail, 'floor-last-stand', cause === 'creeper' ? FLOOR_RETREAT_PRIORITY : FLOOR_FLEE_PRIORITY,
+      LAST_STAND_TIMEOUT_MS[chosen.kind], () => runLastStand(bot, createMotorPort(bot), chosen), undefined, LAST_STAND_DETAIL_MAX)
+      .then(result => { state.lastStandFailed = result?.success ? undefined : chosen.kind; }, () => { state.lastStandFailed = chosen.kind; })
+      .catch(() => undefined).finally(() => { state.busy = null; });
+    return true;
+  };
   bot.on('physicsTick', () => {
     let outcome: ReturnType<typeof floorRetreatTick> = null;
     try { outcome = config.retreat ? floorRetreatTick(bot, state.retreat, retreatAllow) : null; } catch { return; }
+    // A lit creeper and no way away (LLM-centric only): the retreat let go (its action ends), and the last stand is made as soon as no
+    // safety lease holds the body (the retreat's own ends within a tick or two).
+    if (outcome === 'cornered') { state.retreat.done = true; state.retreat.release?.(); state.creeperCornered = now(); }
+    if (state.creeperCornered !== undefined) {
+      if (now() - state.creeperCornered > CORNERED_WAIT_MS) state.creeperCornered = undefined;
+      else if (!state.retreat.engaged && state.busy !== 'flee' && !hasActiveSafetyLease(bot)) {
+        if (lastStand('creeper')) { state.creeperCornered = undefined; return; }
+      }
+    }
     if (outcome === 'engaged') {
       log.warn(state.retreat.kind === 'creeper' ? '💥 火の付いたクリーパー: 離れる' : '🏹 矢が向かってくる: 横へよける');
       void takeNoted('retreat', state.retreat.kind === 'creeper' ? '火の付いたクリーパーから離れた' : '飛んでくる矢をよけた', 'floor-retreat', FLOOR_RETREAT_PRIORITY, 3000,
@@ -1014,6 +1247,12 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
           }, () => finish('failed'))
           .catch(() => undefined).finally(() => { state.busy = null; });
         return;
+      }
+      // The flee found no way out, LLM-centric mode: the last stand, one minimal hand (`lastStandChoice`), told in the ledger so that the
+      // act running stops as a reflex. Once in LAST_STAND_GAP_MS, never over another safety lease.
+      if (state.lastStandWanted) {
+        state.lastStandWanted = false;
+        if (lastStand('low-health')) return;
       }
       // The flee found no way out: a shelter where the body stands, if the blocks are there (once in 20 s). Not in the LLM-centric
       // mode: the walls are the planner's to build (run 26: the shelter closed the slit the fight was to be fought through).

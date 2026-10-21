@@ -15,7 +15,7 @@ vi.mock('../../src/services/minebot/utils/digBlockVerified.js', async importOrig
 });
 
 const { dig, exposeAllows } = await import('../../src/services/minebot/utils/primitives/dig.js');
-const { place } = await import('../../src/services/minebot/utils/primitives/place.js');
+const { place, nearbyPlaceable } = await import('../../src/services/minebot/utils/primitives/place.js');
 const { craft } = await import('../../src/services/minebot/utils/primitives/craft.js');
 const { whyBlocked, reachFacts } = await import('../../src/services/minebot/utils/primitives/walk.js');
 const { aimPitch, bowSpeed } = await import('../../src/services/minebot/utils/primitives/shoot.js');
@@ -91,6 +91,63 @@ describe('place', () => {
     expect((await place(ctx(bot), { block: 'cobblestone', at: [{ x: 2, y: 67, z: 0 }] })).reason).toBe('nothing_to_set_against');
     expect((await place(ctx(body()), { block: 'cobblestone', at: [{ x: 1, y: 64, z: 0 }] })).reason).toBe('missing_item');
     expect((await place(ctx(bot), { block: 'wheat_seeds', at: [{ x: 1, y: 64, z: 0 }] })).reason).toBe('invalid_block');
+  });
+
+  // Run 27: six places refused (on her own feet cell, on a rail, in the air) and nothing said why, or what would do.
+  it('says why in plain words (her feet, her head, a taken cell, nothing to set against) and names up to three cells nearby that would take it', async () => {
+    const bot = body([{ name: 'cobblestone', count: 3, type: 1 }]);
+    const feet = await place(ctx(bot), { block: 'cobblestone', at: [{ x: 0, y: 64, z: 0 }] });
+    expect(feet.reason).toBe('body_in_cell');
+    expect(feet.text).toContain('自分の足のマス');
+    expect(feet.text).toContain('近くの置ける所: (-1,64,0) 下の面に, (0,64,-1) 下の面に, (0,64,1) 下の面に');
+    const head = await place(ctx(bot), { block: 'cobblestone', at: [{ x: 0, y: 65, z: 0 }] });
+    expect(head.reason).toBe('body_in_cell');
+    expect(head.text).toContain('自分の頭のマス');
+    expect(head.text).toContain('近くの置ける所: ');
+    // A taken cell says what it holds; a rail is not air, and a solid neighbour is told from its side.
+    bot.__blocks.set('1,64,0', { name: 'rail', boundingBox: 'empty' });
+    const rail = await place(ctx(bot), { block: 'cobblestone', at: [{ x: 1, y: 64, z: 0 }] });
+    expect(rail.reason).toBe('occupied');
+    expect(rail.text).toContain('そのマスは rail');
+    expect(rail.text).toContain('近くの置ける所: ');
+    expect(rail.text).not.toContain('(1,64,0) 下の面に');
+    // The mid-air cell: nothing solid on six sides.
+    const air = await place(ctx(bot), { block: 'cobblestone', at: [{ x: 2, y: 67, z: 0 }] });
+    expect(air.reason).toBe('nothing_to_set_against');
+    expect(air.text).toContain('支えになる面が無い（6面とも空気）');
+    expect(air.text).toContain('近くの置ける所: ');
+    // The nearest to the asked cell first; none of the body's own cells, none that is not air, none without a solid face.
+    const near = nearbyPlaceable(bot, { x: 0, y: 64, z: 0 });
+    expect(near).toHaveLength(3);
+    expect(near.every(entry => /^\(-?\d+,-?\d+,-?\d+\) (下|北|南|西|東|上)の面に$/u.test(entry))).toBe(true);
+    expect(near.join(' ')).not.toContain('(0,64,0)');
+    expect(nearbyPlaceable(body(), { x: 0, y: 64, z: 0 }, 0)).toEqual([]);
+  });
+
+  it('keeps the act\'s line within 160 characters with the nearby cells, and says what the cell holds once', async () => {
+    const { runAct, ACT_HANDS } = await import('../../src/services/minebot/instantSkills/act.js');
+    const bot = body([{ name: 'cobblestone', count: 3, type: 1 }]);
+    bot.__blocks.set('1,64,0', { name: 'oak_pressure_plate', boundingBox: 'empty' });
+    const parse = (result: { result: string }) => JSON.parse(result.result);
+    const feet = parse(await runAct(bot, ACT_HANDS.parse([{ do: 'place', block: 'cobblestone', at: [{ x: 0, y: 64, z: 0 }] }])));
+    expect(feet.lines[0].line.startsWith('置けない: ')).toBe(true);
+    expect(feet.lines[0].line).toContain('自分の足のマス');
+    expect(feet.lines[0].line).toContain('近くの置ける所: (-1,64,0) 下の面に');
+    expect(feet.lines[0].line.length).toBeLessThanOrEqual(160);
+    const taken = parse(await runAct(bot, ACT_HANDS.parse([{ do: 'place', block: 'cobblestone', at: [{ x: 1, y: 64, z: 0 }] }])));
+    expect(taken.lines[0].line.match(/そのマスは/gu)).toHaveLength(1);
+    expect(taken.lines[0].line).toContain('そのマスは oak_pressure_plate');
+    expect(taken.lines[0].line.length).toBeLessThanOrEqual(160);
+    // Far from the origin (long coordinates): fewer cells are listed, and the line is still within 160.
+    const far = body([{ name: 'cobblestone', count: 3, type: 1 }]);
+    far.entity.position = new Vec3(-12345.5, 64, 23456.5);
+    far.blockAt = (p: Vec3) => {
+      const position = new Vec3(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z));
+      return position.y < 64 ? { name: 'stone', boundingBox: 'block', diggable: true, hardness: 1.5, position } : { name: 'air', boundingBox: 'empty', position };
+    };
+    const long = parse(await runAct(far, ACT_HANDS.parse([{ do: 'place', block: 'cobblestone', at: [{ x: -12346, y: 64, z: 23456 }] }])));
+    expect(long.lines[0].line.length).toBeLessThanOrEqual(160);
+    expect(long.lines[0].line).toContain('近くの置ける所: (-12347,64,23456) 下の面に');
   });
 });
 

@@ -1,6 +1,6 @@
 import { Vec3 } from 'vec3';
-import { scanLoadedBlocks, type LoadedBlockHit } from './loadedBlockScan.js';
-import { feetCell, isOpenSymbol, relativeWords, symbolFor, type Cell } from './localMap.js';
+import { scanLoadedBlocks, scanLoadedBlocksMany, type LoadedBlockHit, type LoadedBlockQuery } from './loadedBlockScan.js';
+import { bodyReader, feetCell, isOpenSymbol, relativeWords, symbolFor, type BlockReader, type Cell, type MapBlock } from './localMap.js';
 import { isAngry } from './hostileMobHints.js';
 
 /**
@@ -51,19 +51,25 @@ const cache = new WeakMap<object, { at: number; from: Cell; dimension: string; l
 const at = (cell: Cell) => `(${cell.x},${cell.y},${cell.z})`;
 const cellOf = (position: { x: number; y: number; z: number }): Cell => ({ x: Math.floor(position.x), y: Math.floor(position.y), z: Math.floor(position.z) });
 
-function exposed(bot: MarkBody, position: Vec3): boolean {
+/** Whether a face of the cell is open to air or water (an ore a person in the cave would see). */
+function exposed(read: BlockReader, position: Vec3): boolean {
   for (const [dx, dy, dz] of FACES) {
-    let block: any;
-    try { block = bot.blockAt?.(position.offset(dx, dy, dz), false); } catch { block = null; }
-    if (block && (isOpenSymbol(symbolFor({ name: String(block.name), solid: block.boundingBox === 'block' })) || block.name === 'water')) return true;
+    let block: MapBlock | null;
+    try { block = read(position.x + dx, position.y + dy, position.z + dz); } catch { block = null; }
+    if (block && (isOpenSymbol(symbolFor(block)) || block.name === 'water')) return true;
   }
   return false;
 }
-function fluidLevel(bot: MarkBody, position: Vec3): number {
-  try {
-    const block = bot.blockAt?.(position, false);
-    return Number(block?.getProperties?.().level ?? block?.metadata ?? 0);
-  } catch { return -1; }
+/** A fluid cell's level (0: a source); -1 when it cannot be read. */
+function fluidLevel(read: BlockReader, position: Vec3): number {
+  try { return Number(read(position.x, position.y, position.z)?.level ?? 0); } catch { return -1; }
+}
+/** The bed blocks of a registry (sixteen colours), listed once per registry. */
+const bedsOf = new WeakMap<object, string[]>();
+function bedNames(registry: any): string[] {
+  let names = bedsOf.get(registry);
+  if (!names) { names = Object.keys(registry.blocksByName).filter(name => name.endsWith('_bed')); bedsOf.set(registry, names); }
+  return names;
 }
 
 /** The marks for a body, as lines; cached for RESCAN_MS unless the body moved RESCAN_MOVE blocks. */
@@ -101,19 +107,39 @@ function computeMarks(bot: MarkBody, feet: Cell, now: number): string[] {
     const distance = Math.hypot(cell.x - feet.x, cell.y - feet.y, cell.z - feet.z);
     marks.push({ kind, distance, order, line: `${symbol} ${name} ${at(cell)} ${relativeWords(feet, cell)}${note ? ` ${note}` : ''}` });
   };
-  const scan = (names: string[], range = RANGE, maxHits = 64): LoadedBlockHit[] => {
-    if (!bot.registry || !bot.world) return [];
-    return scanLoadedBlocks(bot as never, names, { maxDistance: range, maxHits }).hits;
-  };
   const village = dimension.includes('overworld')
     ? (bot.landmarks ?? []).find(mark => mark.kind === 'village' && Math.hypot(mark.position.x - feet.x, mark.position.z - feet.z) <= 160) : undefined;
+  const beds = bot.registry?.blocksByName ? bedNames(bot.registry) : [];
+  // Every search below in one walk over the loaded chunks (scanLoadedBlocksMany: each gets what it would alone), asked for by its key.
+  const queries: Record<string, LoadedBlockQuery> = {
+    places: { names: ['furnace', 'blast_furnace', 'smoker', 'crafting_table', 'chest', 'barrel', 'trapped_chest', ...beds], maxDistance: RANGE, maxHits: 64 },
+    water: { names: ['water'], maxDistance: RANGE, maxHits: 64 }, lava: { names: ['lava'], maxDistance: RANGE, maxHits: 64 },
+    obsidian: { names: ['obsidian', 'crying_obsidian'], maxDistance: RANGE, maxHits: 32 },
+    ores: { names: ORE_NAMES, maxDistance: ORE_RANGE, maxHits: 128 },
+    ...(village ? { crops: { names: ['hay_block', 'wheat', 'carrots', 'potatoes', 'beetroots'], maxDistance: 96, maxHits: 128 } } : {}),
+    ...(dimension.includes('nether') ? {
+      bricks: { names: ['nether_bricks', 'nether_brick_fence'], maxDistance: 96, maxHits: 16 },
+      bastion: { names: ['gilded_blackstone', 'polished_blackstone_bricks', 'cracked_polished_blackstone_bricks', 'chiseled_polished_blackstone'], maxDistance: 96, maxHits: 16 },
+    } : {}),
+    spawner: { names: ['spawner'], maxDistance: 96, maxHits: 4 },
+    nether_portal: { names: ['nether_portal'], maxDistance: 96, maxHits: 8 }, end_portal: { names: ['end_portal'], maxDistance: 96, maxHits: 8 },
+    frames: { names: ['end_portal_frame'], maxDistance: 64, maxHits: 12 },
+  };
+  const found = new Map<string, LoadedBlockHit[]>();
+  if (bot.registry && bot.world) {
+    const keys = Object.keys(queries);
+    const results = scanLoadedBlocksMany(bot as never, keys.map(key => queries[key]));
+    keys.forEach((key, index) => found.set(key, results[index].hits));
+  }
+  const scan = (key: string): LoadedBlockHit[] => found.get(key) ?? [];
+  // The cells round an ore and a fluid's level, by the cell's state (one shared answer per state: no Block built per cell).
+  const read = bodyReader(bot as never);
   /** A bed, chest or field within the village's reach is the village's (said so: taking it is the planner's choice). */
   const villages = (cell: Cell) => !!village && Math.hypot(cell.x - village.position.x, cell.z - village.position.z) <= 64;
   // Working places, two or three of each kind; a furnace with its batch.
   const kept = new Map<string, number>();
   const keep = (kind: string, most: number) => { const n = kept.get(kind) ?? 0; if (n >= most) return false; kept.set(kind, n + 1); return true; };
-  const beds = bot.registry?.blocksByName ? Object.keys(bot.registry.blocksByName).filter(name => name.endsWith('_bed')) : [];
-  for (const hit of scan(['furnace', 'blast_furnace', 'smoker', 'crafting_table', 'chest', 'barrel', 'trapped_chest', ...beds])) {
+  for (const hit of scan('places')) {
     const kind = hit.name.endsWith('_bed') ? 'bed' : hit.name;
     if (!keep(kind, kind === 'bed' || kind === 'chest' ? 3 : 2)) continue;
     const cell = cellOf(hit.position);
@@ -130,16 +156,16 @@ function computeMarks(bot: MarkBody, feet: Cell, now: number): string[] {
   }
   // A source of water and of lava, the nearest of each (a bucket fills only at a source), with how many sources lie round it.
   for (const fluid of ['water', 'lava']) {
-    const hits = scan([fluid], RANGE, 64);
-    const sources = hits.filter(hit => fluidLevel(bot, hit.position) === 0);
+    const hits = scan(fluid);
+    const sources = hits.filter(hit => fluidLevel(read, hit.position) === 0);
     if (sources.length) add(fluid, cellOf(sources[0].position), fluid === 'water' ? 'w' : 'L', LABEL[fluid], fluid === 'lava' ? `溜まりの源 ${sources.length}` : '', 1);
   }
-  const obsidian = scan(['obsidian', 'crying_obsidian'], RANGE, 32);
+  const obsidian = scan('obsidian');
   if (obsidian.length) add('obsidian', cellOf(obsidian[0].position), 'O', '黒曜石', `×${obsidian.length}`, 2);
   // Ore that shows, nearest of each kind with how many are seen.
   const ores = new Map<string, { hit: LoadedBlockHit; n: number }>();
-  for (const hit of scan(ORE_NAMES, ORE_RANGE, 128)) {
-    if (!exposed(bot, hit.position)) continue;
+  for (const hit of scan('ores')) {
+    if (!exposed(read, hit.position)) continue;
     const kind = oreKind(hit.name);
     const entry = ores.get(kind);
     if (entry) entry.n++; else ores.set(kind, { hit, n: 1 });
@@ -148,24 +174,24 @@ function computeMarks(bot: MarkBody, feet: Cell, now: number): string[] {
   // A village near: the village, and its hay and fields.
   if (village) {
     add('village', cellOf(village.position), 'B', '村', village.evidence ?? '', 4);
-    const crops = scan(['hay_block', 'wheat', 'carrots', 'potatoes', 'beetroots'], 96, 128);
+    const crops = scan('crops');
     const byKind = new Map<string, { hit: LoadedBlockHit; n: number }>();
     for (const hit of crops) { const entry = byKind.get(hit.name); if (entry) entry.n++; else byKind.set(hit.name, { hit, n: 1 }); }
     for (const [name, { hit, n }] of byKind) add(name, cellOf(hit.position), symbolFor({ name }), `村の${LABEL[name] ?? name}`, `×${n}`, 4);
   }
   // The Nether and the End, and a stronghold anywhere.
   if (dimension.includes('nether')) {
-    const bricks = scan(['nether_bricks', 'nether_brick_fence'], 96, 16);
+    const bricks = scan('bricks');
     if (bricks.length) add('fortress', cellOf(bricks[0].position), 'N', 'ネザー要塞', `レンガ×${bricks.length}`, 1);
-    const bastion = scan(['gilded_blackstone', 'polished_blackstone_bricks', 'cracked_polished_blackstone_bricks', 'chiseled_polished_blackstone'], 96, 16);
+    const bastion = scan('bastion');
     if (bastion.length) add('bastion', cellOf(bastion[0].position), '#', '砦の遺跡（bastion）', bastion.some(hit => hit.name === 'gilded_blackstone') ? '金のブラックストーンあり' : '', 1);
   }
-  for (const hit of scan(['spawner'], 96, 4)) add('spawner', cellOf(hit.position), 'S', LABEL.spawner, spawnerKind(bot, hit.position), 1);
+  for (const hit of scan('spawner')) add('spawner', cellOf(hit.position), 'S', LABEL.spawner, spawnerKind(bot, hit.position), 1);
   for (const name of ['nether_portal', 'end_portal']) {
-    const hits = scan([name], 96, 8);
+    const hits = scan(name);
     if (hits.length) add(name, cellOf(hits[0].position), symbolFor({ name }), LABEL[name], '', 1);
   }
-  const frames = scan(['end_portal_frame'], 64, 12);
+  const frames = scan('frames');
   if (frames.length) {
     let eyes = 0;
     for (const frame of frames) { try { const p = bot.blockAt?.(frame.position, false)?.getProperties?.(); if (p?.eye === true || p?.eye === 'true') eyes++; } catch { /* unknown */ } }

@@ -68,8 +68,9 @@ export class ReflexLedger {
   /** Position in the ledger: what a command started now can later ask about (`since`). */
   mark(): number { return this.seq; }
 
-  begin(kind: ReflexKind, detail: string): ReflexHandle {
-    return { seq: ++this.seq, kind, detail: clip(detail, DETAIL_MAX), hp: number(this.bot.health), food: number(this.bot.food) };
+  /** `maxChars` lets a reflex that says where and at what health (the last stand) keep more than the usual DETAIL_MAX. */
+  begin(kind: ReflexKind, detail: string, maxChars = DETAIL_MAX): ReflexHandle {
+    return { seq: ++this.seq, kind, detail: clip(detail, maxChars), hp: number(this.bot.health), food: number(this.bot.food) };
   }
 
   end(handle: ReflexHandle, outcome: ReflexOutcome): ReflexEntry {

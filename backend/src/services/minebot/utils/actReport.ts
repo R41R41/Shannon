@@ -8,7 +8,8 @@ import { feetCell, localMapFor, symbolFor, type BlockReader, type Cell } from '.
  * so that the body still says which hands were done and what the reflex did, with the place and the map after the reflex let go
  * (nativeBody renders it again then).
  */
-export type HandStatus = 'done' | 'stopped' | 'skipped';
+/** `failed`: the hand failed by itself and the act went on to the next (its `onFail`); `stopped`: the hand where the act stopped. */
+export type HandStatus = 'done' | 'stopped' | 'failed' | 'skipped';
 /** `around` (the head's contract r2, 2026-10-22): a stopped hand's 3x3x3 round `where`, in the map's symbols. */
 export interface HandLine { i: number; do: string; status: HandStatus; line: string; where?: Cell; around?: string }
 
@@ -85,7 +86,8 @@ export const clip = (text: string, max = 160) => text.length <= max ? text : `${
 /** A stopped hand's line: the closed word first, then the place and what happened, then what the cell holds now. */
 export function stoppedLine(reason: string | undefined, text: string, cellNow?: string): string {
   const word = closedWord(reason);
-  const tail = cellNow ? `。そのマスは ${cellNow}` : '';
+  // A text that already says what the cell holds (place: "そのマスは stone") is not given the same again.
+  const tail = cellNow && !text.includes('そのマスは') ? `。そのマスは ${cellNow}` : '';
   return `${word}: ${clip(text, 160 - word.length - 2 - tail.length)}${tail}`;
 }
 
