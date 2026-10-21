@@ -53,6 +53,54 @@ export function climbableBank(bot: SwimmerBot, towardX: number, towardZ: number)
 }
 
 /**
+ * The nearest cell on dry land to stand on, for a body in the water that is to go on from land: a solid floor, two open cells above it,
+ * neither the water nor a cell beside lava. Looked for within `radius` cells flat and a few levels up and down from the swimmer; of equal
+ * distance, the one most in the direction of travel. Null when none is known (the route search then swims out as before).
+ */
+export function nearestDryStand(bot: SwimmerBot, towardX: number, towardZ: number, radius = 8): Vec3 | null {
+  const position = bot.entity.position;
+  const cell = position.floored();
+  const heading = Math.atan2(towardZ - position.z, towardX - position.x);
+  const candidates: Array<{ at: Vec3; feet: Vec3; score: number }> = [];
+  try {
+    for (let dx = -radius; dx <= radius; dx++) {
+      for (let dz = -radius; dz <= radius; dz++) {
+        const flat = Math.hypot(dx, dz);
+        if (flat > radius) continue;
+        for (let dy = -3; dy <= 3; dy++) {
+          const feet = new Vec3(cell.x + dx, cell.y + dy, cell.z + dz);
+          const floor = bot.blockAt(feet.offset(0, -1, 0), false);
+          if (!solid(floor) || !open(bot.blockAt(feet, false)) || !open(bot.blockAt(feet.offset(0, 1, 0), false))) continue;
+          const turn = flat === 0 ? 0 : Math.abs(Math.atan2(Math.sin(Math.atan2(dz, dx) - heading), Math.cos(Math.atan2(dz, dx) - heading)));
+          candidates.push({ at: feet.offset(0.5, 0, 0.5), feet, score: flat + Math.abs(dy) * 1.5 + turn });
+        }
+      }
+    }
+    candidates.sort((a, b) => a.score - b.score);
+    // A stand at the water's edge starts a tunnel beside the water, which a tunnel is not cut beside (liquid_beside): of the stands,
+    // one with no water within two cells is worth a few cells more walking (the lab: a stair begun at the shore was refused).
+    let best: { at: Vec3; score: number } | null = null;
+    for (const entry of candidates.slice(0, 250)) {
+      const score = entry.score + (liquidWithin(bot, entry.feet, 2) ? SHORE_PENALTY : 0);
+      if (!best || score < best.score) best = { at: entry.at, score };
+    }
+    return best?.at ?? null;
+  } catch { return null; }
+}
+
+/** Walking this much further (in cells) is preferred to a stand with water within two cells of it. */
+const SHORE_PENALTY = 6;
+
+/** Water or lava within `reach` cells of the feet cell, flat, and from two cells under to one over. */
+function liquidWithin(bot: SwimmerBot, feet: Vec3, reach: number): boolean {
+  for (let dx = -reach; dx <= reach; dx++) for (let dz = -reach; dz <= reach; dz++) for (let dy = -2; dy <= 1; dy++) {
+    const block = bot.blockAt(feet.offset(dx, dy, dz), false);
+    if (holdsWater(block) || block?.name === 'lava') return true;
+  }
+  return false;
+}
+
+/**
  * Out of the water onto a bank at the waterline, the way a player does it:
  * swim up and forward at the edge. The pathfinder plans no step up out of a
  * liquid, so a bot floating in a hole in the ice (or any pool with banks one

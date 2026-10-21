@@ -88,6 +88,11 @@ const ORES_WORTH_A_WAIT = ['iron_ore', 'deepslate_iron_ore', 'coal_ore', 'deepsl
  * leaves out what lies below it (the night gate's floor).
  */
 export function nearestOres(bot: ScanBot, range = 24, floor = -Infinity): string[] {
+  return nearestOreHits(bot, range, floor).map(({ kind, hit }) => `${kind} (${hit.position.x}, ${hit.position.y}, ${hit.position.z}) 約${Math.round(hit.distance)}m`);
+}
+
+/** The same ores as `nearestOres`, as the hits themselves (kind without "deepslate_", and where): for a suggestion a caller can act on. */
+export function nearestOreHits(bot: ScanBot, range = 24, floor = -Infinity): Array<{ kind: string; hit: LoadedBlockHit }> {
   try {
     const kinds = new Map<string, LoadedBlockHit>();
     // Enough hits that a coal seam does not hide the iron, and that what lies below the floor is not all there is.
@@ -96,7 +101,7 @@ export function nearestOres(bot: ScanBot, range = 24, floor = -Infinity): string
       const kind = hit.name.replace(/^deepslate_/, '');
       if (!kinds.has(kind)) kinds.set(kind, hit);
     }
-    return [...kinds.entries()].map(([kind, hit]) => `${kind} (${hit.position.x}, ${hit.position.y}, ${hit.position.z}) 約${Math.round(hit.distance)}m`);
+    return [...kinds.entries()].map(([kind, hit]) => ({ kind, hit }));
   } catch { return []; }
 }
 

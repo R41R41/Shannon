@@ -10,6 +10,7 @@ import { visiblePointOn } from '../utils/sightLine.js';
 import { WOOL_COLORS, sheepWool, woolStatusLine } from '../utils/nightGate.js';
 import { creeperMeleeRefusal } from '../utils/creeperFuse.js';
 import { holdsWater } from '../utils/waterBlocks.js';
+import { explainUnreachable, type Unreachable } from '../utils/attackReach.js';
 import type { Vec3 } from 'vec3';
 
 const { goals } = pathfinder;
@@ -33,6 +34,14 @@ const HOLD_REACH = 3;
 /** A target in the water is let go after this long without a blow; the whole call stops after WATER_TOTAL_MS in the water. */
 const WATER_TARGET_MS = 12_000;
 const WATER_TOTAL_MS = 40_000;
+/**
+ * A target that is not a hostile (it does not come to the body) and that the chase has not got a block nearer to, nor struck, for this long is
+ * given up, and the cause is looked for (utils/attackReach). Run 22: a chicken 48 m off was chased for the call's whole minute, a route search
+ * of 6 s at a time that never moved the body, and the answer was only "cannot attack".
+ */
+const STALL_GIVE_UP_MS = 10_000;
+/** With no blow struck, this many targets given up end the call (the next would be given up in the same way). */
+const MAX_UNREACHABLE = 2;
 
 class AttackContinuously extends InstantSkill {
   constructor(bot: CustomBot) {
@@ -187,6 +196,9 @@ class AttackContinuously extends InstantSkill {
       let waterSince: number | null = null, waterTotal = 0, waterTick = Date.now(), lastWet = false;
       const wetNames: string[] = [];
       let waterStopped = false;
+      // The chase of the current target: how near it has got, when it last got a block nearer or struck, and the targets given up.
+      let tracked: unknown = null, trackFirst = 0, trackBest = Infinity, trackSince = 0, trackProgressAt = 0;
+      const unreachable: Array<Unreachable & { name: string }> = [];
 
       // Until that many blows have been struck, not that many times round: a round that only closes the
       // distance, waits for the target to come down into reach, or counts a kill is no blow. Counting rounds,
@@ -288,11 +300,33 @@ class AttackContinuously extends InstantSkill {
         // Within a blow means a point of the target's body within three blocks of the eyes, as the server counts it. A blow
         // struck from 4.5 m (feet to feet) at a chicken missed: four chickens took nineteen blows (run 16).
         let aim = visiblePointOn(this.bot as any, target, HOLD_REACH);
+        // A target that does not come to the body (not a hostile) and is not got any nearer, nor struck, is given up with its cause.
+        const targetName = String(target.name ?? '').toLowerCase();
+        if (!hostileMobs.some(mob => targetName.includes(mob))) {
+          const now = Date.now();
+          if (tracked !== target) { tracked = target; trackFirst = trackBest = distance; trackSince = trackProgressAt = now; }
+          else if (distance < trackBest - 1) { trackBest = distance; trackProgressAt = now; }
+          // A chase in the water has its own limits above (WATER_TARGET_MS, WATER_TOTAL_MS): it is not counted here.
+          if ((this.bot.entity as { isInWater?: boolean } | undefined)?.isInWater === true || this.inWater(target)) trackProgressAt = now;
+          if (!aim && now - trackProgressAt > STALL_GIVE_UP_MS) {
+            this.stopMovement();
+            const why = explainUnreachable(this.bot as any, target as any, Math.max(0, trackFirst - distance), (now - trackSince) / 1000);
+            log.warn(`🚫 ${target.name}を諦めます: ${why.reason}`);
+            unreachable.push({ ...why, name: target.name || 'unknown' });
+            letGo.add(target);
+            if (attackCount === 0 && unreachable.length >= MAX_UNREACHABLE) break;
+            target = findTarget();
+            if (!target) break;
+            lastTargetName = target.name || 'unknown';
+            continue;
+          }
+        }
         if (!aim && distance > 2.5) {
           const tp = target.position;
           try {
             await gotoSafe(this.bot, new goals.GoalNear(tp.x, tp.y, tp.z, 2), {
-              timeoutMs: Math.min(6000, Math.max(2500, distance * 250)),
+              // A far target gets time to be walked towards (a 6 s search from 48 m never left the spot in run 22).
+              timeoutMs: Math.min(distance > 24 ? 12_000 : 6000, Math.max(2500, distance * 250)),
               stuckAbortCount: 3,
               logStuck: false,
             });
@@ -316,6 +350,7 @@ class AttackContinuously extends InstantSkill {
           this.noteBlow();
           await this.bot.attack(target);
           attackCount++;
+          trackProgressAt = Date.now();
           waterSince = null; // a blow struck: the chase in the water is getting somewhere
 
           const cooldown = weaponEquipped.includes('axe') ? 900 : weaponEquipped.includes('sword') ? 550 : 200;
@@ -360,6 +395,15 @@ class AttackContinuously extends InstantSkill {
       if (attackCount === 0 && waterNote) {
         return { success: false, failureType: 'target_not_found', recoverable: true, result: `${lastTargetName}に攻撃できませんでした。${waterNote}` };
       }
+      // Given up early, with the cause: a different animal or place, or the cause put right, is the next move (run 22: 62 s for "cannot attack").
+      const unreachableNote = unreachable.length
+        ? `届かなかった相手: ${unreachable.map(entry => `${entry.name}（${entry.reason}）`).join('、')}`
+        : '';
+      if (attackCount === 0 && unreachable.length) {
+        return { success: false, failureType: 'target_unreachable', recoverable: true,
+          result: `${unreachable[0].name}に攻撃できませんでした。理由: ${unreachable.map(entry => entry.reason).join('／')}。`
+            + `${unreachable.some(entry => entry.kind === 'height' || entry.kind === 'fence') ? '別の相手を探すか、場所を変えてから呼び直してください' : '近くの別の相手を探すか、少し動いてから呼び直してください'}` };
+      }
       if (attackCount === 0) {
         const near = this.holding ? Object.values(this.bot.entities).filter((entity: any) => entity?.position && entity !== this.bot.entity
           && matchesEntity(entity) && entity.position.distanceTo(this.bot.entity.position) <= maxDistance).length : 0;
@@ -390,7 +434,7 @@ class AttackContinuously extends InstantSkill {
 
       return {
         success: true,
-        result: [baseMsg, remainingInfo, woolLine, waterNote].filter(Boolean).join('。'),
+        result: [baseMsg, remainingInfo, woolLine, waterNote, unreachableNote].filter(Boolean).join('。'),
       };
     } catch (error: any) {
       this.stopMovement();

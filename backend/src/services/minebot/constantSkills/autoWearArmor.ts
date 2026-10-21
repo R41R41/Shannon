@@ -2,6 +2,7 @@ import { createLogger } from '../../../utils/logger.js';
 import { ConstantSkill, CustomBot } from '../types.js';
 import { activeActionCapabilities } from '../execution/ActionExecution.js';
 import { skillCategory } from '../execution/SkillExecutor.js';
+import { closeStaleWindow, equipWillClick } from '../utils/staleWindow.js';
 
 const log = createLogger('Minebot:Skill:autoWearArmor');
 
@@ -74,7 +75,11 @@ class AutoWearArmor extends ConstantSkill {
     const equip = bot.equip.bind(bot);
     let last: Promise<unknown> = Promise.resolve();
     bot.equip = (...args: unknown[]) => {
-      const run = last.then(() => equip(...args));
+      const run = last.then(async () => {
+        // An equip that clicks goes to the open window, in its numbering: a furnace's window has no slot 39-44 (utils/staleWindow).
+        if (equipWillClick(bot, args) && closeStaleWindow(bot)) await new Promise(resolve => setTimeout(resolve, 120));
+        return equip(...args);
+      });
       last = run.catch(() => undefined);
       return run;
     };

@@ -3,7 +3,7 @@ import { actionDelay } from '../execution/observedWait.js';
 import { backgroundJobs } from '../execution/backgroundJobs.js';
 import { isSealedIn } from '../utils/shelter.js';
 import { descentFloor, descentKit, bedWool, nightClock } from '../utils/nightGate.js';
-import { nearestOres } from '../utils/loadedBlockScan.js';
+import { nearestOreHits } from '../utils/loadedBlockScan.js';
 import { RAW_FOOD } from '../constantSkills/autoEat.js';
 
 /** A wait this short is never refused (a beat between two actions). */
@@ -27,35 +27,64 @@ export function guardAskedToWait(bot: object, now = Date.now()): boolean {
   return !!guard?.lastAt && now - guard.lastAt < GUARD_WAIT_MS;
 }
 
+/** A small job the body names for the time of a wait it refuses, in a form the planner (or a procedure) can run as it stands. */
+export interface SmallWork { tool: string; input: Record<string, unknown>; approxSeconds: number; why: string }
+
+/** Ores to dig for a wait: a few of the kind, as many as fit the wait (coal for the next batch, iron for the next piece). */
+const SMALL_ORE_COUNT = 3;
+
 /**
  * What the body could do instead of waiting, from what it carries: a few short suggestions, the most useful first. `concrete` when
- * one of them is definite (an ore in reach by name and place, armour the ingots carried make).
+ * one of them is definite (an ore in reach by name and place, armour the ingots carried make). `small` is the same, as tool calls that
+ * can be run at once (`smallWorkText` puts them in a result for a head that reads them).
  */
-export function meanwhileWork(bot: any): { work: string[]; concrete: boolean } {
+export function meanwhileWork(bot: any): { work: string[]; concrete: boolean; small: SmallWork[] } {
   const items: Array<{ name: string; count: number }> = (() => { try { return bot.inventory.items(); } catch { return []; } })();
   const count = (test: (name: string) => boolean) => items.filter(item => test(item.name)).reduce((sum, item) => sum + item.count, 0);
   const out: string[] = [];
+  const small: SmallWork[] = [];
   let concrete = false;
   try {
     const kit = descentKit(bot);
-    if (kit.missing.includes('armor') && count(name => name === 'iron_ingot') >= 8) out.push('craft-one で iron_chestplate を作る');
+    if (kit.missing.includes('armor') && count(name => name === 'iron_ingot') >= 8) {
+      out.push('craft-one で iron_chestplate を作る');
+      small.push({ tool: 'craft-one', input: { itemName: 'iron_chestplate', count: 1 }, approxSeconds: 4, why: '鉄のインゴットで胸当てを作る' });
+    }
     const wool = bedWool(bot);
     if (kit.missing.includes('bed') && (!wool || wool.have < 3)) out.push(`羊を狩って同じ色の羊毛を集める（attack-continuously の color）${wool ? `（いま ${wool.color} ${wool.have}/3）` : ''}`);
-    if (kit.missing.includes('cooked_food') && count(name => RAW_FOOD.has(name)) === 0) out.push('動物を狩って食料を集める');
+    if (kit.missing.includes('cooked_food') && count(name => RAW_FOOD.has(name)) === 0) {
+      out.push('動物を狩って食料を集める');
+      small.push({ tool: 'attack-continuously', input: { entityName: 'food_animals', maxKills: 2, maxDistance: 24 }, approxSeconds: 25, why: '動物を狩って食料を集める' });
+    }
   } catch { /* the kit unknown: the generic work below */ }
   if (count(name => name.endsWith('_pickaxe')) > 0) {
     // The nearest ores by name and place, above the night gate's floor when it is closed: the planner can mine them at once.
     let floor = -Infinity;
     try { floor = descentFloor(bot)?.floor ?? -Infinity; } catch { floor = -Infinity; }
-    const ores = nearestOres(bot, 32, floor);
+    const hits = nearestOreHits(bot, 32, floor);
+    const ores = hits.map(({ kind, hit }) => `${kind} (${hit.position.x}, ${hit.position.y}, ${hit.position.z}) 約${Math.round(hit.distance)}m`);
     out.unshift(ores.length ? `mine-block で近くの${ores.join('・')}を掘る` : 'mine-block で石炭・鉄などを掘る');
     if (ores.length) concrete = true;
+    // The nearest ore first; coal and iron are both worth a wait (a batch needs fuel, the next piece needs iron).
+    for (const { kind, hit } of [...hits].sort((a, b) => a.hit.distance - b.hit.distance)) {
+      small.unshift({ tool: 'mine-block', input: { blockName: kind, count: SMALL_ORE_COUNT, searchRadius: Math.min(32, Math.ceil(hit.distance) + 6) },
+        approxSeconds: Math.round(SMALL_ORE_COUNT * 4 + hit.distance * 0.8), why: `近くの${kind}（約${Math.round(hit.distance)}m）を掘る` });
+    }
+    small.sort((a, b) => a.approxSeconds - b.approxSeconds);
   }
   if (out.some(line => line.includes('iron_chestplate'))) concrete = true;
   if (count(name => name.endsWith('_log')) < 4) out.push('原木を集める');
-  return { work: out.slice(0, 3), concrete };
+  return { work: out.slice(0, 3), concrete, small: small.slice(0, 3) };
 }
 
+/**
+ * The small jobs of a refused wait, in one tag a head can read as it is: `<small_work>[{"tool":"mine-block","input":{...},"approxSeconds":14,
+ * "why":"…"}]</small_work>`. The tool names have no `mc.` prefix; the list is the nearest job first. Empty when there are none.
+ */
+export function smallWorkText(small: SmallWork[]): string {
+  if (!small.length) return '';
+  return `<small_work>${JSON.stringify(small)}</small_work>`;
+}
 /**
  * 原子的スキル: 指定時間待機
  */
@@ -104,17 +133,21 @@ class WaitTime extends InstantSkill {
     if (!furnaceWait && !sheltered && !night) return null;
     if (this.healing()) return null;
     if (guardAskedToWait(this.bot)) return null;
-    const { work: meanwhile, concrete } = this.otherWork();
+    const { work: meanwhile, concrete, small } = this.otherWork();
     if (!meanwhile.length) return null;
     // Out of a night or a shaft only for something definite to do (an ore in reach, a piece of the night's kit), not for "gather logs".
     if (!furnaceWait && !concrete) return null;
     const why: string[] = [];
     if (furnaceWait) why.push(`かまどの仕事 ${jobs.map(job => `(${job.position.x},${job.position.y},${job.position.z})の${job.input}×${job.count} 残り約${Math.ceil(job.remainingEstimateMs / 1000)}秒`).join('、')}`);
     if (sheltered || night) why.push(`${night ? `夜（明けるまで約${clock!.lightInSeconds ?? 0}秒）` : '縦穴の中'}を待って過ごすこと`);
+    // The small jobs in the tag a procedure of the head reads (it runs the first, as the wait it asked for was refused; run 22: a refused
+    // wait ended the whole procedure twice, 25 s of decisions each time).
+    const smallText = smallWorkText(small);
     return { success: false, failureType: 'wait_refused', recoverable: true,
       result: `待ちを断りました: ${why.join('、')}。その間にできること: ${meanwhile.join('、')}。`
         + (furnaceWait ? '終わった頃に withdraw-from-furnace で取り出す。' : '')
-        + (sheltered ? '縦穴からは横へ掘って進めば、塞いだまま作業できる' : '') };
+        + (sheltered ? '縦穴からは横へ掘って進めば、塞いだまま作業できる' : '')
+        + (smallText ? `おすすめの小さい仕事（速い順）: ${smallText}` : '') };
   }
 
   private sheltered(): boolean {
@@ -123,7 +156,7 @@ class WaitTime extends InstantSkill {
 
   private healing(): boolean { return healingNow(this.bot); }
 
-  private otherWork(): { work: string[]; concrete: boolean } { return meanwhileWork(this.bot); }
+  private otherWork(): { work: string[]; concrete: boolean; small: SmallWork[] } { return meanwhileWork(this.bot); }
 
   async runImpl(milliseconds: number) {
     try {

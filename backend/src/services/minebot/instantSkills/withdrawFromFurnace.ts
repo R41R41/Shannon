@@ -7,7 +7,7 @@ import { explainOpenFailure } from '../utils/workstationAccess.js';
 import { assertActionActive, bindActionCallback, reportActionProgress } from '../execution/ActionExecution.js';
 import { waitForObservation, type ObservationSource } from '../execution/observedWait.js';
 import { backgroundJobs } from '../execution/backgroundJobs.js';
-import { guardAskedToWait, healingNow, meanwhileWork } from './waitTime.js';
+import { guardAskedToWait, healingNow, meanwhileWork, smallWorkText } from './waitTime.js';
 import {
   hasNearbyDroppedItemNamed,
   inventoryNoEmptySlots,
@@ -74,11 +74,13 @@ class WithdrawFromFurnace extends InstantSkill {
         catch { return null; }
         if (!job || job.remainingEstimateMs <= SHORT_WAIT_MS) return null;
         if (healingNow(this.bot) || guardAskedToWait(this.bot)) return null;
-        const { work, concrete } = meanwhileWork(this.bot);
+        const { work, concrete, small } = meanwhileWork(this.bot);
         if (!concrete || !work.length) return null;
+        const smallText = smallWorkText(small);
         return { success: false, failureType: 'wait_refused', recoverable: true,
             result: `待ちを断りました: かまど(${x},${y},${z})の${job.input}×${job.count} は残り約${Math.ceil(job.remainingEstimateMs / 1000)}秒。`
-                + `その間にできること: ${work.join('、')}。終わった頃に withdraw-from-furnace で取り出す（waitForCompletion は付けない）。` };
+                + `その間にできること: ${work.join('、')}。終わった頃に withdraw-from-furnace で取り出す（waitForCompletion は付けない）。`
+                + (smallText ? `おすすめの小さい仕事（速い順）: ${smallText}` : '') };
     }
 
     async runImpl(
@@ -290,9 +292,13 @@ class WithdrawFromFurnace extends InstantSkill {
                 // completion while that input is still present.
                 if (remainingInput && (normalizedSlot === 'all'
                     || (normalizedSlot === 'output' && waitForCompletion === true && !stoppedForFuel))) {
+                    // Finished items taken out is a success whatever is left cooking (run 22: four times "failed" for a part taken, and the head
+                    // counted it as a failure of the step). The unfinished part is said in the text. A furnace out of fuel stays a failure to
+                    // see (the head has to add fuel), and so does a call that took nothing: that is still the wait it was.
+                    const tookSome = withdrawnItems.length > 0 && !stoppedForFuel;
                     return {
-                        success: false,
-                        failureType: stoppedForFuel ? 'material_missing' : 'waiting_external',
+                        success: tookSome,
+                        ...(tookSome ? {} : { failureType: stoppedForFuel ? 'material_missing' : 'waiting_external' }),
                         recoverable: true,
                         result: `${withdrawnItems.length ? `完成済みの${withdrawnItems.join(', ')}を回収しました。` : ''}`
                             + `材料${remainingInput.count}個の精錬は未完了です。材料と燃料はかまど内に残しました。`

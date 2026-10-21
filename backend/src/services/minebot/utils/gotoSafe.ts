@@ -18,11 +18,14 @@ import { createLogger } from '../../../utils/logger.js';
 import { getWaterLevel } from './waterLevel.js';
 import { actionSignal, assertActionActive, reportActionProgress } from '../execution/ActionExecution.js';
 import { actionDelay } from '../execution/observedWait.js';
-import { nextLeg, configuredLegM, LEG_ATTEMPTS } from './farLegs.js';
+import { nextLeg, configuredLegM, goalTarget, LEG_ATTEMPTS } from './farLegs.js';
 import { chooseRockTravel } from './rockTravel.js';
 import { walkCells } from './tunnelWalk.js';
+import { nearestDryStand, swimOntoBank } from './exitWater.js';
+import pathfinder from 'mineflayer-pathfinder';
 
 const log = createLogger('Minebot:gotoSafe');
+const { goals: pathGoals } = pathfinder;
 
 /** Rounds of "choose a way, take it, look again" a far walk through rock gets before the route search takes what is left (utils/rockTravel). */
 const MAX_ROCK_ROUNDS = 5;
@@ -161,6 +164,8 @@ export async function gotoSafe(
   let idleLegs = 0;
   /** Searches that gave up after the body had got on, asked again from where it stood. */
   let replans = 0;
+  /** The body was brought out of the water for the rock rounds (once per walk). */
+  let leftWater = false;
 
   // A far walk through rock: the ground as it is, a tunnel cut before, or a straight / 1:1 stair cut now. Run 21: seven far walks of
   // 37-43 m over a hill took 58-82 s each in the route search's mix of digging and laying, and again on the way back.
@@ -168,7 +173,15 @@ export async function gotoSafe(
     assertActionActive(bot);
     const choice = chooseRockTravel(bot, goal);
     if (choice.mode === 'default') {
-      if (round === 0 && logStuck) (choice.why.startsWith('nothing_fits') ? log.info : log.debug).call(log, `岩の移動: 従来の経路探索（${choice.why}）`);
+      // In the water (a bucket filled, a swim across a pond): the way on is chosen from land, so the body is first brought out of it,
+      // then the rock rounds look again. Run 22: a 56 m walk begun in the water went the route search's way, leg by leg, 74 s.
+      if (choice.why === 'in_water' && !leftWater && Date.now() < deadline) {
+        leftWater = true;
+        const out = await leaveWater(bot, goal, { deadline, checkIntervalMs, microStuckCount, stuckThreshold, macroCheckMs, macroMinProgress, logStuck });
+        assertActionActive(bot);
+        if (out) continue;
+      }
+      if ((round === 0 || leftWater) && logStuck) (choice.why.startsWith('nothing_fits') || choice.why === 'in_water' ? log.info : log.debug).call(log, `岩の移動: 従来の経路探索（${choice.why}）`);
       break;
     }
     if (choice.mode === 'walk') {
@@ -280,6 +293,33 @@ export async function gotoSafe(
   return { success: false, error: 'timeout', stuckBlock, activity };
 }
 
+/** How long a body in the water gets to come out of it before the walk goes on without (it swims up at a bank, else walks to dry ground). */
+const LEAVE_WATER_MS = 12_000;
+
+/**
+ * Out of the water onto dry land, towards where the walk goes: swimming up at a bank at the waterline, else a short route search to the
+ * nearest dry stand. True when the body is out of the water after it.
+ */
+async function leaveWater(bot: CustomBot, goal: Goal, opts: {
+  deadline: number; checkIntervalMs: number; microStuckCount: number; stuckThreshold: number; macroCheckMs: number; macroMinProgress: number; logStuck: boolean;
+}): Promise<boolean> {
+  const inWater = () => (bot.entity as { isInWater?: boolean }).isInWater === true;
+  if (!inWater()) return true;
+  const toward = goalTarget(goal);
+  const towardX = toward?.x ?? bot.entity.position.x, towardZ = toward?.z ?? bot.entity.position.z;
+  const started = Date.now();
+  try { if (await swimOntoBank(bot as never, towardX, towardZ)) { if (opts.logStuck) log.info('🏊 水から上がって、岩の移動を選び直します（岸へ泳ぎ上がった）'); return !inWater(); } } catch { /* the stand below */ }
+  const stand = nearestDryStand(bot as never, towardX, towardZ);
+  if (!stand) return false;
+  const seg = await runGotoSegment(bot, new pathGoals.GoalNear(stand.x, stand.y, stand.z, 1) as unknown as Goal, {
+    checkIntervalMs: opts.checkIntervalMs, microStuckCount: opts.microStuckCount, stuckThreshold: opts.stuckThreshold,
+    macroCheckMs: opts.macroCheckMs, macroMinProgress: opts.macroMinProgress,
+    timeoutMs: Math.max(1_000, Math.min(LEAVE_WATER_MS - (Date.now() - started), opts.deadline - Date.now())), logStuck: false,
+  });
+  if (seg.result !== 'success' && inWater()) return false;
+  if (opts.logStuck) log.info(`🏊 水から上がって、岩の移動を選び直します（乾いた足場へ${((Date.now() - started) / 1000).toFixed(0)}秒）`);
+  return !inWater();
+}
 // ─── Segment: pathfinder.goto + 監視 ───────────────────────────
 
 interface SegmentResult {

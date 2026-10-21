@@ -349,7 +349,9 @@ class MoveTo extends InstantSkill {
       const travelStartedAt = Date.now();
       // A far walk through rock is walked on the ground, along a tunnel cut before, or along a straight / 1:1 stair cut now
       // (utils/rockTravel); a walk that digs and lays blocks at the route search's whim zigzagged in run 21.
-      const rockTravel = !isInWater && !handDigging;
+      // Begun in the water, the walk is chosen after the body is out of it (gotoSafe brings it out first): run 22 turned the rock walk
+      // off for a move begun in the water and took the route search's legs, 74 s for 56 m.
+      const rockTravel = !handDigging;
       // The stone a tunnel brings in is thrown away every few steps (cobblestone piled to 545 in run 21 and the pack filled).
       const tunnelTidy = async () => {
         await tidyIfCluttered(this.bot as any, (skill, ...args) => this.callSkill(skill, ...args), {

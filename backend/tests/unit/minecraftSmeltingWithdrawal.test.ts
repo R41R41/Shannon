@@ -130,7 +130,10 @@ describe('withdraw-from-furnace active smelting', () => {
     });
     const result = await new WithdrawFromFurnace(bot).runImpl(0, 64, 0, 'all', false);
 
-    expect(result).toMatchObject({ success: false, failureType: 'waiting_external' });
+    // A part taken is a success (run 22: four times "failed" for finished ingots taken); the rest still cooking is said, not a failureType.
+    expect(result).toMatchObject({ success: true });
+    expect(result.failureType).toBeUndefined();
+    expect(result.result).toContain('回収しました');
     expect(result.result).toContain('材料2個の精錬は未完了');
     expect(inventoryCounts.get('iron_ingot')).toBe(1);
     expect(state).toMatchObject({ input: 2, fuel: 1 });
