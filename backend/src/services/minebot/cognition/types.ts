@@ -242,6 +242,13 @@ export interface WorldObservation {
   inside?: string;
   /** LLM-centric mode only (utils/foodPoints): food carried in points (hunger + saturation), the body's store, and what it spent lately. */
   foodPoints?: { carried: number; items: string; hunger: number | null; saturation: number | null; spentLast5Min?: number };
+  /**
+   * LLM-centric mode only (r4 contract 1, utils/worldScan): what the loaded chunks held at the last spawn (a login, a reconnect, a portal, a
+   * respawn): one sentence and at most 20 rows (what, how many, the nearest, its compass way and distance, up or down). Only while the body
+   * is in the dimension it was made in; nothing in it changes from one frame to the next.
+   */
+  scan?: { trigger: 'login' | 'reconnect' | 'respawn' | 'portal'; at: string; dimension: string; center: WorldVector; text: string; rows: string[];
+    chunks: number; reach: number; ms: number; partial?: boolean };
 }
 
 export interface WorldFrame extends WorldObservation {

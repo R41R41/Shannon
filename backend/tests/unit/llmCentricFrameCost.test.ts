@@ -232,4 +232,61 @@ describe.skipIf(!built)('one minute of the LLM-centric frame\'s extras (map, mar
       expect(chars).toBeGreaterThan(0);
     } finally { Date.now = realNow; }
   }, 120_000);
+
+  it('r4: the whole observation with world.scan kept, and what each probe costs on this world (printed as [gc] r4 / [probe]; skipped on a source before r4)', async () => {
+    let scanModule: typeof import('../../src/services/minebot/utils/worldScan.js');
+    let probeModule: typeof import('../../src/services/minebot/instantSkills/probe.js');
+    try {
+      scanModule = await import('../../src/services/minebot/utils/worldScan.js');
+      probeModule = await import('../../src/services/minebot/instantSkills/probe.js');
+    } catch { return; }
+    const { bot, mobs } = body(built!);
+    bot.llmCentric = true;
+    const summary = (await scanModule.scanWorld(bot))!;
+    const { longestSliceMs, ...kept } = summary;
+    bot.worldScan = { ...kept, trigger: 'login', at: '2026-10-22T04:00:00.000Z', dimension: 'overworld', center: { x: 0, y: 64, z: 0 } };
+    const { captureWorldObservation } = await import('../../src/services/minebot/cognition/worldFrame.js');
+    const realNow = Date.now;
+    let clock = 9_000_000;
+    Date.now = () => clock;
+    try {
+      const run = (minutes: number) => {
+        let chars = 0;
+        for (let i = 0; i < minutes * 240; i++) {
+          clock += 250;
+          const feet = feetAt(i * 250);
+          bot.entity.position = feet;
+          mobs[7].position = feet.offset(3 + Math.sin(i / 3) * 2, 0, 2);
+          mobs[8].position = feet.offset(-4, 0, Math.cos(i / 4) * 3);
+          chars += JSON.stringify(JSON.parse(JSON.stringify(captureWorldObservation(bot)))).length;
+        }
+        return chars;
+      };
+      run(0.5);
+      const collections: number[] = [];
+      const observer = new PerformanceObserver(list => { for (const entry of list.getEntries()) collections.push(entry.duration); });
+      observer.observe({ entryTypes: ['gc'] });
+      const MINUTES = 3;
+      const started = performance.now();
+      const chars = run(MINUTES);
+      const ms = performance.now() - started;
+      await new Promise(resolve => setTimeout(resolve, 50));
+      observer.disconnect();
+      // eslint-disable-next-line no-console
+      console.log(`[gc] r4 whole frame with world.scan (${summary.rows.length} rows, ${summary.chunks} chunks scanned in ${summary.ms} ms, longest hold ${longestSliceMs} ms) per simulated minute (mean of ${MINUTES}): `
+        + `GCs ${(collections.length / MINUTES).toFixed(1)} (${(collections.reduce((sum, value) => sum + value, 0) / MINUTES).toFixed(1)} ms); work ${(ms / MINUTES).toFixed(0)} ms; ${Math.round(chars / MINUTES / 240)} chars a frame`);
+    } finally { Date.now = realNow; }
+    // Each kind once on this world, from the start (the probe's own time: a decision asks at most two in a step).
+    bot.entity.position = new Vec3(0.5, 64, 0.5);
+    const times: string[] = [];
+    for (const input of [{ kind: 'path', to: { x: 40, y: 51, z: 0 } }, { kind: 'path', to: { x: -40, y: 64, z: 0 } }, { kind: 'sight', target: { x: 2, y: 64, z: 0 } },
+      { kind: 'column', yFrom: 40, yTo: 70 }, { kind: 'around', radius: 16 }, { kind: 'history' }, { kind: 'scan' }]) {
+      const started = performance.now();
+      const result = await probeModule.runProbe(bot, input);
+      times.push(`${input.kind}${input.kind === 'path' ? `→${(input as { to: { x: number } }).to.x}` : ''} ${(performance.now() - started).toFixed(1)} ms ${result.result.length} chars`);
+      expect(result.success).toBe(true);
+    }
+    // eslint-disable-next-line no-console
+    console.log(`[probe] ${times.join(' / ')}`);
+  }, 120_000);
 });

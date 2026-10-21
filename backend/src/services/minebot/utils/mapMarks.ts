@@ -88,7 +88,7 @@ export function mapMarkLines(bot: MarkBody, now = Date.now(), fresh = false): st
 }
 
 /** What a spawner spawns, from its block entity (SpawnData.entity.id), or the kind of mob seen beside it; empty when unknown. */
-function spawnerKind(bot: MarkBody, position: Vec3): string {
+export function spawnerKind(bot: MarkBody, position: Vec3): string {
   try {
     const entity: any = bot.blockAt?.(position, true)?.blockEntity;
     const id = entity?.SpawnData?.entity?.id ?? entity?.SpawnData?.value?.entity?.value?.id?.value ?? entity?.value?.SpawnData?.value?.entity?.value?.id?.value;

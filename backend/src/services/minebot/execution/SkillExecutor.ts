@@ -47,6 +47,8 @@ const SKILL_CATEGORIES: Record<string, SkillCategory> = {
   'get-background-jobs': 'query',
   // LLM-centric mode: view only reads the map; act moves the body ('other', every resource).
   'view': 'query',
+  // r4: probe reads the blocks, the creatures and the act's history (no hand, no look, no locomotion): it runs beside an act.
+  'probe': 'query',
 
   'move-to': 'movement', 'climb-down': 'movement', 'explore-for-structure': 'movement', 'follow-entity': 'movement', 'flee-from': 'movement', 'leave-water': 'movement',
   'jump': 'movement', 'stop-movement': 'movement', 'look-at': 'movement',

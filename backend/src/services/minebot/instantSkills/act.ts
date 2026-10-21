@@ -21,6 +21,7 @@ import { shoot } from '../utils/primitives/shoot.js';
 import { pillarUp } from '../utils/primitives/pillarUp.js';
 import { itemFoodPoints } from '../utils/foodPoints.js';
 import { stepLabel } from '../utils/actLabel.js';
+import { noteHand } from '../utils/handHistory.js';
 
 export { stepLabel };
 
@@ -303,6 +304,13 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
     try { bot.emit?.('minebotActStep', { startedAt, index, total: hands.length, label: hands[index].note ?? stepLabel(hands[index] as never), status, detail }); } catch { /* the UI is optional */ }
   };
   const skip = (from: number) => { for (let rest = from; rest < hands.length; rest++) report.lines.push({ i: rest + 1, do: hands[rest].do, status: 'skipped', line: '未実行' }); };
+  /** The hand as the probe's history keeps it (r4): its line, where it was about or stopped, and the feet it began from. */
+  const remember = (hand: ActHand, status: 'done' | 'failed' | 'stopped', line: string, at: Cell | null | undefined, from: Cell | null) => {
+    try {
+      const where = at ?? feetCell(bot);
+      if (where) noteHand(bot, { t: Date.now(), do: hand.do, status, line, at: where, ...(from ? { from } : {}) });
+    } catch { /* the history is a help, never the act's result */ }
+  };
   try {
     for (let index = 0; index < hands.length; index++) {
       const hand = hands[index];
@@ -320,7 +328,9 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
         if (error instanceof StepStopped || control.signal.aborted || /Action interrupted|Motor owner expired/u.test(String((error as Error)?.message))) {
           if (!control.signal.aborted && signal?.aborted) onCut();
           const word = closedWord(report.failureType ?? 'reflex');
-          report.lines.push({ i: index + 1, do: hand.do, status: 'stopped', line: clip(`${word}: ${report.stoppedWhy ?? '中断'}（手の途中）`), where: feetCell(bot) ?? undefined });
+          const line = clip(`${word}: ${report.stoppedWhy ?? '中断'}（手の途中）`), where = feetCell(bot) ?? undefined;
+          report.lines.push({ i: index + 1, do: hand.do, status: 'stopped', line, where });
+          remember(hand, 'stopped', line, where, base);
           emit(index, 'error', report.stoppedWhy ?? '中断');
           skip(index + 1);
           break;
@@ -332,7 +342,9 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
       if (typeof outcome.data?.arrowsLeft === 'number') report.arrowsLeft = outcome.data.arrowsLeft;
       if (outcome.ok) {
         report.done++;
-        report.lines.push({ i: index + 1, do: hand.do, status: 'done', line: clip(`${outcome.text}（${((Date.now() - began) / 1000).toFixed(1)}秒）`) });
+        const line = clip(`${outcome.text}（${((Date.now() - began) / 1000).toFixed(1)}秒）`);
+        report.lines.push({ i: index + 1, do: hand.do, status: 'done', line });
+        remember(hand, 'done', line, outcome.at, base);
         emit(index, 'completed', outcome.text);
         continue;
       }
@@ -354,8 +366,10 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
       } catch { /* the count is a help, not the result */ }
       let around: string | undefined;
       try { if (outcome.at) around = aroundText(bodyReader(bot), outcome.at, feetCell(bot)); } catch { /* the line stands without it */ }
-      report.lines.push({ i: index + 1, do: hand.do, status: goesOn ? 'failed' : 'stopped', line: stoppedLine(outcome.reason, `${outcome.text}${again}`, outcome.at ? cellNow(bot, outcome.at) : undefined),
+      const line = stoppedLine(outcome.reason, `${outcome.text}${again}`, outcome.at ? cellNow(bot, outcome.at) : undefined);
+      report.lines.push({ i: index + 1, do: hand.do, status: goesOn ? 'failed' : 'stopped', line,
         ...(outcome.at ? { where: outcome.at } : {}), ...(around ? { around } : {}) });
+      remember(hand, goesOn ? 'failed' : 'stopped', line, outcome.at, base);
       emit(index, 'error', outcome.text);
       if (goesOn) continue;
       skip(index + 1);

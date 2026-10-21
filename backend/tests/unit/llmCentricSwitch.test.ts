@@ -59,6 +59,15 @@ describe('the switch', () => {
       expect(resolved.args[1]).toEqual({ hpBelow: 8 });
       expect(() => on.resolve('act', { hands: [{ do: 'fly' }] })).toThrow();
       expect(on.resolve('view', { mode: 'slice', axis: 'ew', only: ['iron_ore', 'L'], center: { x: 1, y: 2, z: 3 }, radius: 8 }).args[6]).toEqual(['iron_ore', 'L']);
+      // r4: probe, read only, offered in the mode only, right after view; the head's inputs reach it.
+      expect(off.definitions.some(skill => skill.name === 'probe')).toBe(false);
+      expect(on.definitions.map(skill => skill.name).slice(0, 3)).toEqual(['act', 'view', 'probe']);
+      expect(on.definitions.find(skill => skill.name === 'probe')!.readOnly).toBe(true);
+      expect(on.resolve('probe', { kind: 'sight', target: '#12' }).args.slice(0, 4)).toEqual(['sight', undefined, undefined, '#12']);
+      expect(on.resolve('probe', { kind: 'sight', target: { x: 1, y: 2, z: 3 } }).args[3]).toEqual({ x: 1, y: 2, z: 3 });
+      expect(on.resolve('probe', { kind: 'column', x: 4, z: -2, yFrom: 40, yTo: 70 }).args.slice(4, 8)).toEqual([4, -2, 40, 70]);
+      expect(on.resolve('probe', { kind: 'history', at: { x: 1, y: 64, z: 2 }, radius: 4 }).args.slice(8, 10)).toEqual([4, { x: 1, y: 64, z: 2 }]);
+      expect(() => on.resolve('probe', { kind: 'look' })).toThrow();
       if (process.env.FCA_API_WIRE_ROOT) {
         const validation = await import(`${process.env.FCA_API_WIRE_ROOT}/src/surfaces/minecraft/minecraftControlValidation.ts`);
         expect(validation.validSkills(on.definitions)).toBe(true);

@@ -60,6 +60,7 @@ import { installTrailRecorder } from './utils/trailRecorder.js';
 import { installLinkWatch } from './utils/linkWatch.js';
 import { installArrivalNote } from './utils/arrivalNote.js';
 import { installDimensionKeeper } from './utils/dimensionKeeper.js';
+import { installSpawnScan } from './utils/worldScan.js';
 import { installToolChoice } from './utils/toolChoice.js';
 import { createLogger } from '../../utils/logger.js';
 
@@ -150,6 +151,9 @@ export class MinebotClient extends BaseClient {
     installDimensionKeeper(connectedBot as any);
     // How the body came to be here, for the observation: a reconnect after a drop is not a respawn after a death (run 24: a shelter dug over magma).
     installArrivalNote(connectedBot as any, this.autoReconnecting ? 'reconnect' : 'login');
+    // r4 (LLM-centric mode only): after each spawn, once the chunks have arrived, what the loaded area holds, for the observation's world.scan.
+    // After the arrival note, so the scan names how the body came (a login, a reconnect, a portal, a respawn).
+    installSpawnScan(connectedBot as any, { log: line => log.info(`🗺️ ${line}`) });
     connectedBot.on('spawn', () => this.reconnectBudget.noteSpawned(Date.now()));
     bindMinecraftMemory(connectedBot, memoryIdentity);
     connectedBot.once('end', () => revokeMinecraftMemory(connectedBot));

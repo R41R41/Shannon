@@ -134,6 +134,165 @@ export function scanLoadedBlocksMany(bot: ScanBot, queries: LoadedBlockQuery[]):
   return searches.map(search => search.result);
 }
 
+/**
+ * A slice of work that gives the event loop back (r4: the spawn's scan and the probe's searches must never stop the body's physics and
+ * keep-alive for long). `check()` is cheap; once `sliceMs` have passed since the slice began it waits one setImmediate. `longest` is the
+ * longest stretch the loop was held, `slices` how many there were.
+ */
+export class LoopSlicer {
+  private began = performance.now();
+  longest = 0;
+  slices = 1;
+  constructor(private readonly sliceMs = 8, private readonly yieldNow: () => Promise<void> = () => new Promise(resolve => setImmediate(resolve))) {}
+  /** True when the slice is spent (the caller then awaits `pause()`). */
+  due(): boolean { return performance.now() - this.began >= this.sliceMs; }
+  async pause(): Promise<void> {
+    this.longest = Math.max(this.longest, performance.now() - this.began);
+    await this.yieldNow();
+    this.slices++;
+    this.began = performance.now();
+  }
+  /** The slice that ends with the work (counted in `longest`). */
+  end(): void { this.longest = Math.max(this.longest, performance.now() - this.began); }
+}
+
+/** One kind of block a sliced scan counts: its states, the nearest `keep` hits, and a height band. */
+export interface ScanCategory {
+  key: string;
+  names: Iterable<string>;
+  /** Only these states of the names (a fluid's source is its first state: level 0). Default: every state. */
+  sourceOnly?: boolean;
+  /** How many of the nearest hits to keep (the count is of all). Default 16. */
+  keep?: number;
+  /** Only cells with yMin <= y <= yMax. */
+  yMin?: number; yMax?: number;
+}
+export interface ScanCellHit { name: string; x: number; y: number; z: number; distance: number }
+export interface SlicedScanResult {
+  /** Per category key: every cell counted, and the nearest kept. */
+  found: Map<string, { count: number; hits: ScanCellHit[] }>;
+  /** Columns read, and how far the furthest one's centre lies (m, across). */
+  chunks: number; reachMetres: number;
+  ms: number;
+  /** The longest the event loop was held, and how many slices. */
+  longestSliceMs: number; slices: number;
+  /** Stopped at `maxMs` (or by `stop`) before every column was read. */
+  partial: boolean;
+}
+
+/**
+ * Counts the categories' blocks in the loaded chunks within `radiusChunks` (chunk columns, square, from the body's), nearest columns first,
+ * giving the loop back every `sliceMs` (r4 contract 1: the scan at a spawn, about a second for 441 chunks). The same walk as
+ * `scanLoadedBlocksMany` (a section is read only when its palette holds a wanted state; a cell's object is made only for a hit kept),
+ * with a state-to-category table instead of a map and the palette's index read directly when the section has one.
+ */
+export async function scanLoadedCategories(bot: ScanBot, categories: ScanCategory[], options: { radiusChunks?: number; sliceMs?: number; maxMs?: number;
+  stop?: () => boolean; slicer?: LoopSlicer } = {}): Promise<SlicedScanResult> {
+  const started = performance.now();
+  const slicer = options.slicer ?? new LoopSlicer(options.sliceMs ?? 8);
+  const maxMs = options.maxMs ?? 5000;
+  const found = new Map(categories.map(category => [category.key, { count: 0, hits: [] as ScanCellHit[] }]));
+  const result: SlicedScanResult = { found, chunks: 0, reachMetres: 0, ms: 0, longestSliceMs: 0, slices: 1, partial: false };
+  const registry = bot.registry as { blocksByName: Record<string, { minStateId?: number; maxStateId?: number } | undefined>; blocksByStateId?: Record<number, { name?: string }> };
+  // The table of states: the category's index for each wanted state, -1 for the rest.
+  let top = 0;
+  for (const category of categories) for (const name of category.names) top = Math.max(top, registry.blocksByName[name]?.maxStateId ?? 0);
+  const table = new Int16Array(top + 1).fill(-1);
+  const stateName: string[] = [];
+  categories.forEach((category, index) => {
+    for (const name of category.names) {
+      const block = registry.blocksByName[name];
+      if (block?.minStateId === undefined || block.maxStateId === undefined) continue;
+      const last = category.sourceOnly ? block.minStateId : block.maxStateId;
+      for (let state = block.minStateId; state <= last; state++) { table[state] = index; stateName[state] = name; }
+    }
+  });
+  const keep = categories.map(category => Math.max(1, category.keep ?? 16));
+  const bands = categories.map(category => [category.yMin ?? -Infinity, category.yMax ?? Infinity] as const);
+  const lists = categories.map(category => found.get(category.key)!);
+  /** What a later hit of the category must be nearer than to be kept (the keep-th nearest so far). */
+  const threshold = categories.map(() => Infinity);
+  const trim = (index: number) => {
+    const hits = lists[index].hits;
+    hits.sort((a, b) => a.distance - b.distance);
+    if (hits.length > keep[index]) hits.length = keep[index];
+    if (hits.length >= keep[index]) threshold[index] = hits[keep[index] - 1].distance;
+  };
+  const origin = bot.entity?.position ?? new Vec3(0, 0, 0);
+  const ox = origin.x, oy = origin.y, oz = origin.z;
+  const cx0 = Math.floor(ox / 16), cz0 = Math.floor(oz / 16);
+  const radius = options.radiusChunks ?? Infinity;
+  const columns = (bot.world.getColumns?.() ?? []).filter(entry => entry.column?.sections
+    && Math.max(Math.abs(Number(entry.chunkX) - cx0), Math.abs(Number(entry.chunkZ) - cz0)) <= radius).map(entry => {
+    const baseX = Number(entry.chunkX) * 16, baseZ = Number(entry.chunkZ) * 16;
+    return { column: entry.column, baseX, baseZ, centre: Math.hypot(baseX + 8 - ox, baseZ + 8 - oz) };
+  }).sort((a, b) => a.centre - b.centre);
+  const count = (index: number, name: string, x: number, y: number, z: number) => {
+    const band = bands[index];
+    if (y < band[0] || y > band[1]) return;
+    lists[index].count++;
+    const dx = ox - x - 0.5, dy = oy - y, dz = oz - z - 0.5;
+    const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    if (distance >= threshold[index]) return;
+    lists[index].hits.push({ name, x, y, z, distance });
+    if (lists[index].hits.length >= 2 * keep[index]) trim(index);
+  };
+  for (const { column, baseX, baseZ, centre } of columns) {
+    if (options.stop?.() || performance.now() - started > maxMs) { result.partial = true; break; }
+    const minY = typeof column.minY === 'number' ? column.minY : 0;
+    for (let index = 0; index < column.sections.length; index++) {
+      const data = column.sections[index]?.data;
+      if (!data) continue;
+      const sectionY = minY + index * 16;
+      if (typeof data.value === 'number' && !data.palette) {
+        // One state for the whole section (a deep ocean's water).
+        const category = data.value < table.length ? table[data.value] : -1;
+        if (category < 0) continue;
+        for (let cell = 0; cell < SECTION_VOLUME; cell++) count(category, stateName[data.value], baseX + (cell & 15), sectionY + (cell >> 8), baseZ + ((cell >> 4) & 15));
+        continue;
+      }
+      const palette: number[] | undefined = data.palette;
+      if (palette) {
+        // The category of each palette entry; nothing wanted, nothing read (as before).
+        let any = false;
+        const byIndex = new Int16Array(palette.length);
+        for (let entry = 0; entry < palette.length; entry++) {
+          const state = palette[entry];
+          byIndex[entry] = state < table.length ? table[state] : -1;
+          if (byIndex[entry] >= 0) any = true;
+        }
+        if (!any) continue;
+        const bits = data.data;
+        const direct = bits && typeof bits.get === 'function';
+        for (let cell = 0; cell < SECTION_VOLUME; cell++) {
+          const entry = direct ? bits.get(cell) : palette.indexOf(data.get(cell));
+          const category = byIndex[entry];
+          if (category === undefined || category < 0) continue;
+          count(category, stateName[palette[entry]], baseX + (cell & 15), sectionY + (cell >> 8), baseZ + ((cell >> 4) & 15));
+        }
+      } else {
+        // The global palette (no list to skip by): every cell.
+        for (let cell = 0; cell < SECTION_VOLUME; cell++) {
+          const state = data.get(cell);
+          const category = state < table.length ? table[state] : -1;
+          if (category < 0) continue;
+          count(category, stateName[state], baseX + (cell & 15), sectionY + (cell >> 8), baseZ + ((cell >> 4) & 15));
+        }
+      }
+      if (slicer.due()) await slicer.pause();
+    }
+    result.chunks++;
+    result.reachMetres = Math.max(result.reachMetres, Math.round(centre));
+    if (slicer.due()) await slicer.pause();
+  }
+  categories.forEach((_category, index) => trim(index));
+  slicer.end();
+  result.ms = Math.round(performance.now() - started);
+  result.longestSliceMs = Math.round(slicer.longest * 10) / 10;
+  result.slices = slicer.slices;
+  return result;
+}
+
 /** Ores worth mining while something else waits (a furnace, the night). */
 const ORES_WORTH_A_WAIT = ['iron_ore', 'deepslate_iron_ore', 'coal_ore', 'deepslate_coal_ore'];
 

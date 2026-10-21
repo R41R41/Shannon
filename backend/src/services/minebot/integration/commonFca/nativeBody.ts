@@ -104,7 +104,7 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
   };
   constructor(private readonly bot: any, private readonly options: NativeBodyOptions) {
     this.reflexTag = options.reflexTag ?? floorConfig().ledgerTag;
-    // The LLM-centric mode (MINEBOT_LLM_CENTRIC) offers act, view and the readers; off, the catalog is the one it always was.
+    // The LLM-centric mode (MINEBOT_LLM_CENTRIC) offers act, view, probe (r4) and the readers; off, the catalog is the one it always was.
     this.catalog = bodySkillCatalog(bot.instantSkills.getSkills() as BodySkill[], bot, { llmCentric: isLlmCentric(bot) });
     if (this.catalog.runnable.some(skill => skill.name === GOAL_EVIDENCE_SKILL.name)) throw Error('BODY_RESERVED_SKILL');
     this.offered = [...this.catalog.definitions, GOAL_EVIDENCE_SKILL];

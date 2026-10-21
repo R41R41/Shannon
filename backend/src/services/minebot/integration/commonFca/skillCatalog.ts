@@ -102,14 +102,15 @@ export function isDragonGoal(goal: unknown): boolean {
   return typeof goal === 'string' && DRAGON_GOALS.has(goal.normalize('NFKC').trim().toLowerCase().replace(/[。.!！]+$/u, '').trim());
 }
 /** The LLM-centric mode's own tools: never offered while the mode is off (the catalog stays what it was). */
-export const LLM_CENTRIC_ONLY: ReadonlySet<string> = new Set(['act', 'view']);
+export const LLM_CENTRIC_ONLY: ReadonlySet<string> = new Set(['act', 'view', 'probe']);
 /**
- * What the LLM-centric mode offers (MINEBOT_LLM_CENTRIC=on, design mb-llm-centric 2.4 and 4): `act` and `view`, and the readers and the
+ * What the LLM-centric mode offers (MINEBOT_LLM_CENTRIC=on, design mb-llm-centric 2.4 and 4): `act`, `view` and `probe` (r4: the reading
+ * tools, path · sight · column · around · history · scan), and the readers and the
  * few interactions that are one exact thing each (a trade, an enchantment, a brew, a repair, a stonecutter). The skills that choose for
  * the planner (move-to, mine-block, stair-mine, the tidy, the shelters, the fights' own tactics) are not offered; they still run if
  * asked for, and the mode off offers them again. The goal evidence is added by the body as always.
  */
-export const LLM_CENTRIC_TOOLS: readonly string[] = ['act', 'view', 'find-blocks', 'check-recipe', 'recall-places', 'find-structure',
+export const LLM_CENTRIC_TOOLS: readonly string[] = ['act', 'view', 'probe', 'find-blocks', 'check-recipe', 'recall-places', 'find-structure',
   'list-nearby-entities', 'check-container', 'check-furnace', 'get-entity-look-direction', 'trade-with-villager', 'enchant-item',
   'brew-potion', 'repair-item', 'use-stonecutter', 'set-movement-pace', 'accept-threat', 'get-advancements'];
 export function bodySkillCatalog(skills: readonly BodySkill[], bot: object, options: { llmCentric?: boolean } = {}) {

@@ -16,6 +16,7 @@ import { isLlmCentric } from '../utils/llmCentric.js';
 import { localMapFor, recentStopLines } from '../utils/localMap.js';
 import { insideStructure, mapMarkLines, watchedEntityFacts } from '../utils/mapMarks.js';
 import { foodPointsOf } from '../utils/foodPoints.js';
+import { worldScanView } from '../utils/worldScanState.js';
 
 /** The shelter check, for whatever stands in for a body here (a cached self-state has no world to read). */
 function sealedIn(bot: unknown): boolean {
@@ -321,12 +322,14 @@ export function captureWorldObservation(bot?: unknown): WorldObservation {
     nearbyThreats,
     ...(landmarks?.length ? { landmarks: structuredClone(landmarks) } : {}),
     ...(llmCentric ? (() => {
-      const out: Pick<WorldObservation, 'localMap' | 'mapLandmarks' | 'recentStops' | 'foodPoints' | 'inside'> = {};
+      const out: Pick<WorldObservation, 'localMap' | 'mapLandmarks' | 'recentStops' | 'foodPoints' | 'inside' | 'scan'> = {};
       try { const inside = insideStructure(observedBot as never); if (inside) out.inside = inside; } catch { /* none */ }
       try { const map = localMapFor(observedBot as never); if (map) out.localMap = map; } catch { /* no map this time */ }
       try { const marks = mapMarkLines(observedBot as never); if (marks.length) out.mapLandmarks = marks; } catch { /* none */ }
       try { const stops = recentStopLines(observedBot as never); if (stops.length) out.recentStops = stops; } catch { /* none */ }
       try { out.foodPoints = foodPointsOf(observedBot as never); } catch { /* none */ }
+      // r4: the scan made at the last spawn (utils/worldScan), as it was made: the same object until the next spawn's scan replaces it.
+      try { const scan = worldScanView(observedBot); if (scan) out.scan = scan; } catch { /* none */ }
       return out;
     })() : {}),
     ...(() => {
