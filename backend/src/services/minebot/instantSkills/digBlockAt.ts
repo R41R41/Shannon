@@ -27,6 +27,10 @@ import { nightGateFor } from '../utils/nightGate.js';
 
 const log = createLogger('Minebot:Skill:digBlockAt');
 
+/** What is put in a lava cell to shut it (the pack's spare rock, plain first); and how far (m, from the eyes) a block can be placed into one. */
+const CRUSH_BLOCKS = ['cobblestone', 'cobbled_deepslate', 'stone', 'deepslate', 'dirt', 'andesite', 'diorite', 'granite', 'tuff', 'netherrack', 'blackstone'];
+const CRUSH_REACH = 4.8;
+
 /** A dig starts with this many uses between the pickaxes that can break the block, or a spare is made (a few digs of leeway, not a plan). */
 const DIG_PICKAXE_RESERVE = 6;
 
@@ -272,14 +276,22 @@ class DigBlockAt extends InstantSkill {
       if (airShort) return { success: false, result: airShort, failureType: 'air_short', recoverable: true };
 
       // マグマ隣接安全チェック: 掘削後の空洞にマグマが流入する危険がないか
-      const lavaDanger = this.checkLavaAdjacentDanger(pos);
+      let lavaDanger = this.checkLavaAdjacentDanger(pos);
       if (lavaDanger) {
-        return {
-          success: false,
-          result: lavaDanger,
-          failureType: 'lava_danger',
-          recoverable: true,
-        };
+        // Before refusing, the lava is put out: a carried block placed in its cell, else water poured on it (run 23, Rai: 溶岩を先に潰せばいい).
+        const handBefore = this.bot.heldItem;
+        const unableToCrush = await this.crushReleasingLava(pos);
+        assertActionActive(this.bot);
+        await this.takeUpAgain(handBefore);
+        lavaDanger = this.checkLavaAdjacentDanger(pos);
+        if (lavaDanger) {
+          return {
+            success: false,
+            result: `${lavaDanger}${unableToCrush ? ` 先に溶岩を潰そうとしましたができませんでした: ${unableToCrush}` : ''}`,
+            failureType: 'lava_danger',
+            recoverable: true,
+          };
+        }
       }
 
       const blockName = block.name;
@@ -508,10 +520,36 @@ class DigBlockAt extends InstantSkill {
     const over = pos.offset(0, 1, 0);
     const refuse = (why: string, failureType = 'drop_would_burn') => ({ refusal: { success: false as const, failureType, recoverable: true,
       result: `${block.name}(${pos.x}, ${pos.y}, ${pos.z})を掘ると、ドロップが溶岩(${burn.x}, ${burn.y}, ${burn.z})で焼けて手に入りません。${why}` } });
+    // Lava over or beside the block is put out first, before the water goes on it (run 23, Rai: 溶岩を先に潰せばいい): a carried block
+    // placed in its cell, else water poured on it. Refused only when that cannot be done, with why and what to do.
+    for (let tries = 0; tries < 4 && !this.shouldInterrupt(); tries++) {
+      const near = lavaBesideOrOver(this.bot as any, pos);
+      if (!near) break;
+      const why = await this.crushLava(near);
+      if (why) return refuse(`${near.y === pos.y + 1 ? '真上' : '横'}の溶岩(${near.x}, ${near.y}, ${near.z})を先に潰そうとしましたができませんでした: ${why}`);
+    }
+    // What is left to burn the drop once those are gone: nothing, or lava under the block or further down its fall.
+    const remaining = dropBurnsIn(this.bot as any, pos);
+    if (!remaining) return { water: null };
+    burn = remaining;
     const directlyUnder = burn.x === pos.x && burn.z === pos.z && burn.y === pos.y - 1;
-    if (burn.y === pos.y + 1) return refuse('溶岩がブロックの真上にあります。先にその溶岩を水で固めてください');
+    if (burn.y === pos.y + 1) return refuse('溶岩がブロックの真上にあり、潰せませんでした。置ける石（丸石など）か水バケツを持って、その溶岩に届く位置から呼んでください');
     if (burn.y < pos.y && !directlyUnder) {
-      return refuse('溶岩はブロックの真下ではなく、落ちた先にあります（水で受け止められません）。下に溶岩の無い同じブロックを選ぶか、ドロップが不要なら collect=false で掘ってください');
+      // Lava lower in the column the drop falls down: put out if it is within reach, else the opening under the block is filled so that the
+      // drop rests on it.
+      const reach = this.bot.entity.position.offset(0, 1.62, 0).distanceTo(burn.offset(0.5, 0.5, 0.5));
+      let why: string | null = reach <= CRUSH_REACH ? await this.crushLava(burn) : 'lava is out of reach';
+      if (why) {
+        const under = pos.offset(0, -1, 0);
+        why = await this.fillOpening(under);
+      }
+      const after = dropBurnsIn(this.bot as any, pos);
+      if (after && !(after.x === pos.x && after.z === pos.z && after.y === pos.y - 1)) {
+        return refuse(`溶岩は落ちた先(${burn.x}, ${burn.y}, ${burn.z})にあり、潰すことも、ブロックの下を塞ぐこともできませんでした${why ? `（${why}）` : ''}。`
+          + '置ける石（丸石など）を持って、そのブロックの下の穴に届く位置から呼ぶか、下に溶岩の無い同じブロックを選ぶか、ドロップが不要なら collect=false で掘ってください');
+      }
+      if (!after) return { water: null };
+      burn = after;
     }
     const top = this.bot.blockAt(over);
     const wet = holdsWater(top);
@@ -549,11 +587,84 @@ class DigBlockAt extends InstantSkill {
     // Lava beside the block is reached by the water spreading over it, a cell every quarter second.
     const spreadBy = Date.now() + 2500;
     while (Date.now() < spreadBy && lavaBesideOrOver(this.bot as any, pos)) await actionDelay(this.bot, 100);
-    if (lavaBesideOrOver(this.bot as any, pos)) {
+    // Lava the water did not reach is put out directly (a carried block in its cell), as it was before the water went on.
+    let stillThere = lavaBesideOrOver(this.bot as any, pos);
+    let crushFailed = '';
+    for (let tries = 0; stillThere && tries < 3 && !this.shouldInterrupt(); tries++) {
+      const why = await this.crushLava(stillThere);
+      if (why) { crushFailed = why; break; }
+      stillThere = lavaBesideOrOver(this.bot as any, pos);
+    }
+    if (stillThere) {
       await this.takeWaterBack(over);
-      return refuse('横の溶岩に水が届かず固まりませんでした。先に use-item-on-block（water_bucket）で横の溶岩を固めてください');
+      return refuse(`横の溶岩(${stillThere.x}, ${stillThere.y}, ${stillThere.z})に水が届かず固まらず、潰すこともできませんでした${crushFailed ? `（${crushFailed}）` : ''}。`
+        + '置ける石（丸石など）を持って、その溶岩に届く位置から呼んでください');
     }
     return { water: over };
+  }
+
+  /**
+   * One lava cell put out: a carried block placed in it (place-block-at), else water poured on it (use-item-on-block with the water bucket).
+   * Null when the lava is gone; otherwise why not, in words that say what to do (run 23: the dig refused beside lava that a block from
+   * the pack would have shut in a second).
+   */
+  private async crushLava(lava: Vec3): Promise<string | null> {
+    const isLava = () => ['lava', 'flowing_lava'].includes(this.bot.blockAt(lava)?.name ?? '');
+    if (!isLava()) return null;
+    const held = (name: string) => this.bot.inventory.items().some(item => item.name === name && item.count >= 1);
+    const eyes = this.bot.entity.position.offset(0, 1.62, 0);
+    if (eyes.distanceTo(lava.offset(0.5, 0.5, 0.5)) > CRUSH_REACH) return `溶岩(${lava.x}, ${lava.y}, ${lava.z})まで${eyes.distanceTo(lava).toFixed(1)}mあり、手が届きません。近づいてください`;
+    const reasons: string[] = [];
+    const filler = CRUSH_BLOCKS.find(held);
+    if (filler) {
+      let placed: { success?: boolean; result?: unknown } = { success: false };
+      try { placed = await this.callSkill('place-block-at', filler, lava.x, lava.y, lava.z); } catch (error) { if (this.shouldInterrupt()) throw error; placed = { success: false, result: (error as Error)?.message }; }
+      const deadline = Date.now() + 1000;
+      while (Date.now() < deadline && isLava()) await actionDelay(this.bot, 50);
+      if (!isLava()) { log.info(`🧱 溶岩(${lava.x},${lava.y},${lava.z})を${filler}で潰した`); return null; }
+      reasons.push(`${filler}を置けなかった（${String(placed.result ?? '').slice(0, 90)}）`);
+    }
+    if (held('water_bucket')) {
+      let poured: { success?: boolean; result?: unknown } = { success: false };
+      try { poured = await this.callSkill('use-item-on-block', lava.x, lava.y, lava.z, 'water_bucket', 0); } catch (error) { if (this.shouldInterrupt()) throw error; poured = { success: false, result: (error as Error)?.message }; }
+      const deadline = Date.now() + 2500;
+      while (Date.now() < deadline && isLava()) await actionDelay(this.bot, 100);
+      if (!isLava()) { log.info(`💧 溶岩(${lava.x},${lava.y},${lava.z})に水をかけて固めた`); return null; }
+      reasons.push(`水をかけても固まらなかった（${String(poured.result ?? '').slice(0, 90)}）`);
+    }
+    if (!filler && !held('water_bucket')) reasons.push('置ける石（丸石・深層岩の丸石など）も水バケツも持っていない。mine-block で丸石を集めてから呼ぶ');
+    return reasons.join('。');
+  }
+
+  /** The lava that breaking the block would let onto the body, put out one cell at a time (four at most). Null when none is left; else why not. */
+  private async crushReleasingLava(target: Vec3): Promise<string | null> {
+    for (let tries = 0; tries < 4 && !this.shouldInterrupt(); tries++) {
+      const lava = lavaReleasedBy(this.bot as any, target);
+      if (!lava) return null;
+      const why = await this.crushLava(lava);
+      if (why) return why;
+    }
+    return lavaReleasedBy(this.bot as any, target) ? '溶岩が何か所もあり、4か所潰してもまだ残っています' : null;
+  }
+
+  /** An open cell filled with a carried block (the opening under a block about to be dug, so that its drop rests on it). Null when filled. */
+  private async fillOpening(cell: Vec3): Promise<string | null> {
+    const open = () => this.bot.blockAt(cell)?.boundingBox === 'empty';
+    if (!open()) return null;
+    const filler = CRUSH_BLOCKS.find(name => this.bot.inventory.items().some(item => item.name === name && item.count >= 1));
+    if (!filler) return '置ける石（丸石など）を持っていない';
+    let placed: { success?: boolean; result?: unknown } = { success: false };
+    try { placed = await this.callSkill('place-block-at', filler, cell.x, cell.y, cell.z); } catch (error) { if (this.shouldInterrupt()) throw error; placed = { success: false, result: (error as Error)?.message }; }
+    const deadline = Date.now() + 1000;
+    while (Date.now() < deadline && open()) await actionDelay(this.bot, 50);
+    return open() ? `${filler}を(${cell.x}, ${cell.y}, ${cell.z})に置けなかった（${String(placed.result ?? '').slice(0, 90)}）` : null;
+  }
+
+  /** The tool that was in the hand taken up again after work that put other things there (a block placed, a bucket used). */
+  private async takeUpAgain(item: { type: number } | null | undefined): Promise<void> {
+    if (!item || this.bot.heldItem?.type === item.type) return;
+    const again = this.bot.inventory.items().find(entry => entry.type === item.type);
+    if (again) { try { await this.bot.equip(again, 'hand'); } catch { /* dug with what is held */ } }
   }
 
   /**

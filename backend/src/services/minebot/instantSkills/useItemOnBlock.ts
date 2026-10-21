@@ -1,5 +1,6 @@
 import { Vec3 } from 'vec3';
 import { CustomBot, InstantSkill } from '../types.js';
+import type { Goal } from '../types/CustomBot.js';
 import { ensureLineOfSight } from '../utils/blockLineOfSight.js';
 import { getWaterLevel } from '../utils/waterLevel.js';
 import { createLogger } from '../../../utils/logger.js';
@@ -7,6 +8,10 @@ import { activateItemFacing } from '../utils/activateItemFacing.js';
 import { actionDelay } from '../execution/observedWait.js';
 import pathfinder from 'mineflayer-pathfinder';
 import { gotoSafe } from '../utils/gotoSafe.js';
+import { goalTarget } from '../utils/farLegs.js';
+import { holdClutterTidy, tidyIfCluttered } from '../utils/inventoryRoom.js';
+import { PARTIAL_FAILURE, progressTrailer } from '../utils/partialProgress.js';
+import { hostileNear } from './craftOne.js';
 import { liquidAim, liquidAimPoints } from '../utils/liquidAim.js';
 import { facePoints, rayFace } from '../utils/rayFace.js';
 import { dropBurnsIn } from '../utils/dropFate.js';
@@ -18,6 +23,9 @@ const SPARE_ROCK = ['cobbled_deepslate', 'tuff', 'diorite', 'andesite', 'granite
 const { goals } = pathfinder;
 
 const log = createLogger('Minebot:Skill:useItemOnBlock');
+/** A walk of this skill through rock is given this long a metre (a straight tunnel cut at the pickaxe's time), at most WALK_MAX_MS. */
+const WALK_MS_PER_M = 2_500;
+const WALK_MAX_MS = 75_000;
 /** How far from the lava asked for another source of the same pool is poured on instead, when none of its own faces can be seen. */
 const POOL_REACH = 6;
 
@@ -80,6 +88,31 @@ class UseItemOnBlock extends InstantSkill {
 
   private liquidAim(pos: Vec3): { point?: Vec3; reason?: string } { return liquidAim(this.bot, pos); }
 
+  /**
+   * A walk of this skill's own to a pool, a shore or a block to dig. Through rock it is cut as a tunnel of straight runs (the walk of
+   * move-to, utils/rockTravel), not left to the route search: run 23's 30 m to a second pool took 186 s (the old legs "in the rock" six
+   * times, six digs undone by the server), and the walk to a shore of 15 m 41 s. The time is in proportion to the way, bounded by the
+   * time the call has left (`capMs`).
+   */
+  private async walk(goal: Goal, baseMs: number, capMs: number = Infinity): Promise<void> {
+    const handDigging = !this.bot.inventory.items().some(item => item.name.includes('pickaxe'));
+    const target = goalTarget(goal);
+    const here = this.bot.entity.position;
+    const distance = target ? Math.hypot(target.x - here.x, (target.y ?? here.y) - here.y, target.z - here.z) : 0;
+    const timeoutMs = Math.max(2_000, Math.min(Math.max(baseMs, Math.min(WALK_MAX_MS, distance * WALK_MS_PER_M)), capMs));
+    const startedAt = Date.now();
+    await gotoSafe(this.bot, goal, {
+      timeoutMs, rockTravel: !handDigging,
+      tunnelTidy: async () => {
+        await tidyIfCluttered(this.bot as any, (skill, ...args) => this.callSkill(skill, ...args), {
+          timeLeftMs: timeoutMs - (Date.now() - startedAt), interrupted: () => this.shouldInterrupt(),
+          blocked: () => hostileNear(this.bot as any, 16) || String((this.bot as any).minebotControlState ?? '').startsWith('emergency'),
+        });
+      },
+      tunnelPillar: (height: number) => this.callSkill('tower-up', height),
+    });
+  }
+
   async runImpl(x?: number | null, y?: number | null, z?: number | null, itemName?: string | null, count: number = 0, maxDistance: number = 48) {
     try {
       itemName = itemName ?? undefined;
@@ -109,7 +142,12 @@ class UseItemOnBlock extends InstantSkill {
       }
       // Any count asked for collects (the last one of ten as well: a count of 1 meaning "pour once" left a probe at nine).
       const wanted = Math.floor(Number(count) || 0);
-      if (wanted >= 1 && (itemName ?? this.bot.heldItem?.name) === 'water_bucket') return await this.makeObsidian(new Vec3(x, y, z), wanted);
+      if (wanted >= 1 && (itemName ?? this.bot.heldItem?.name) === 'water_bucket') {
+        // The pack is not tidied while the obsidian is made: run 23 threw 176 cobbled deepslate away beside the lava after every obsidian
+        // dug (4-6 s each, the heap fetched back and thrown again). Room is made when under two slots are free (roomForDrops), not before.
+        const release = holdClutterTidy(this.bot);
+        try { return await this.makeObsidian(new Vec3(x, y, z), wanted); } finally { release(); }
+      }
 
       if (itemName) {
         const wanted = this.bot.inventory.items().find(item => item.name === itemName);
@@ -179,7 +217,7 @@ class UseItemOnBlock extends InstantSkill {
           // with none, the body steps up to the source once.
           let aim = this.liquidAim(pos);
           if (!aim.point) {
-            try { await gotoSafe(this.bot, new goals.GoalNear(pos.x, pos.y, pos.z, 2), { timeoutMs: 8000 }); } catch { /* judged by the aim below */ }
+            try { await this.walk(new goals.GoalNear(pos.x, pos.y, pos.z, 2), 8000); } catch { /* judged by the aim below */ }
             aim = this.liquidAim(pos);
           }
           if (!aim.point) {
@@ -267,7 +305,7 @@ class UseItemOnBlock extends InstantSkill {
         .sort((a, b) => a.distanceTo(here) - b.distanceTo(here)).slice(0, 40)
         .filter(stand => pick(stand.offset(0.5, 1.62, 0.5)) !== null);
       for (const stand of stands.slice(0, 3)) {
-        try { await gotoSafe(this.bot, new goals.GoalBlock(stand.x, stand.y, stand.z), { timeoutMs: 8000 }); } catch { /* judged below */ }
+        try { await this.walk(new goals.GoalBlock(stand.x, stand.y, stand.z), 8000); } catch { /* judged below */ }
         chosen = pick();
         if (chosen) break;
       }
@@ -484,7 +522,7 @@ class UseItemOnBlock extends InstantSkill {
           if (bucket) await this.bot.equip(bucket, 'hand');
           // From where the body is, else from beside the water.
           if (!(await this.scoop(water))) {
-            try { await gotoSafe(this.bot, new goals.GoalNear(water.x, water.y + 1, water.z, 2), { timeoutMs: 10_000 }); } catch (error) { if (this.shouldInterrupt()) throw error; }
+            try { await this.walk(new goals.GoalNear(water.x, water.y + 1, water.z, 2), 10_000, timeLeft()); } catch (error) { if (this.shouldInterrupt()) throw error; }
             if (this.bot.heldItem?.name !== 'bucket') { const again = items().find(item => item.name === 'bucket'); if (again) await this.bot.equip(again, 'hand'); }
             await this.scoop(water);
           }
@@ -496,7 +534,7 @@ class UseItemOnBlock extends InstantSkill {
       const lava = takeable.length >= needed ? null : this.pourableLava(centre, refusedLava);
       if (lava) {
         if (lava.distanceTo(this.bot.entity.position) > 4) {
-          try { await gotoSafe(this.bot, new goals.GoalNear(lava.x, lava.y + 1, lava.z, 3), { timeoutMs: 15_000 }); } catch (error) { if (this.shouldInterrupt()) throw error; }
+          try { await this.walk(new goals.GoalNear(lava.x, lava.y + 1, lava.z, 3), 15_000, timeLeft()); } catch (error) { if (this.shouldInterrupt()) throw error; }
         }
         const poured = lava.distanceTo(this.bot.entity.position) <= 5 ? await this.placeWaterNearLava(lava) : { success: false };
         pours++;
@@ -511,7 +549,7 @@ class UseItemOnBlock extends InstantSkill {
       const target = takeable[0] ?? overLava[0];
       if (!target) { why = '近くに水をかけられる溶岩も、すぐ掘れる黒曜石も、もうありません'; break; }
       if (target.offset(0.5, 0.5, 0.5).distanceTo(this.bot.entity.position.offset(0, 1.62, 0)) > 4.2) {
-        try { await gotoSafe(this.bot, new goals.GoalNear(target.x, target.y + 1, target.z, 2), { timeoutMs: 12_000 }); } catch (error) { if (this.shouldInterrupt()) throw error; }
+        try { await this.walk(new goals.GoalNear(target.x, target.y + 1, target.z, 2), 12_000, timeLeft()); } catch (error) { if (this.shouldInterrupt()) throw error; }
       }
       // A full pack leaves the obsidian on the floor (ladder probe: five dug, none taken, the call given up).
       roomNote += await this.roomForDrops();
@@ -532,7 +570,7 @@ class UseItemOnBlock extends InstantSkill {
       if (water && bucket) {
         await this.bot.equip(bucket, 'hand');
         if (!(await this.scoop(water))) {
-          try { await gotoSafe(this.bot, new goals.GoalNear(water.x, water.y + 1, water.z, 2), { timeoutMs: 10_000 }); } catch (error) { if (this.shouldInterrupt()) throw error; }
+          try { await this.walk(new goals.GoalNear(water.x, water.y + 1, water.z, 2), 10_000); } catch (error) { if (this.shouldInterrupt()) throw error; }
           const again = items().find(item => item.name === 'bucket');
           if (again) { await this.bot.equip(again, 'hand'); await this.scoop(water); }
         }
@@ -542,10 +580,12 @@ class UseItemOnBlock extends InstantSkill {
     const bucketNote = held('water_bucket') ? '水はwater_bucketへ回収済み' : '⚠️ water_bucketに水が戻っていません（近くの水源を空バケツで汲んでください）';
     const summary = `黒曜石を${got}個作って掘りました（溶岩${pours}か所に水をかけ、所持 obsidian=${held('obsidian')}個）。${bucketNote}。${roomNote}`;
     if (got >= count) return { success: true, result: summary };
+    // Some made: a partial (utils/partialProgress), told with the count; nothing made is a failure of its own kind.
     return {
-      success: false, failureType: got > 0 ? 'partial_completion' : 'target_not_found', recoverable: true,
+      success: false, failureType: got > 0 ? PARTIAL_FAILURE : 'target_not_found', recoverable: true,
       result: `${summary}${count}個のうち残り${count - got}個: ${why || '中断されました'}。`
-        + (why.startsWith('近くに') ? '別の溶岩の溜まりを find-blocks lava で探して、そこで続けてください' : `同じ溜まりで続けるなら use-item-on-block を count=${count - got} でもう一度呼んでください`),
+        + (why.startsWith('近くに') ? '別の溶岩の溜まりを find-blocks lava で探して、そこで続けてください' : `同じ溜まりで続けるなら use-item-on-block を count=${count - got} でもう一度呼んでください`)
+        + (got > 0 ? ` ${progressTrailer('obsidian', got, count)}` : ''),
     };
   }
 

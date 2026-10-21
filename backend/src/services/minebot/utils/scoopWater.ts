@@ -5,6 +5,7 @@ import { createLogger } from '../../../utils/logger.js';
 import { actionDelay } from '../execution/observedWait.js';
 import { activateItemFacing } from './activateItemFacing.js';
 import { gotoSafe } from './gotoSafe.js';
+import { chooseRockTravel } from './rockTravel.js';
 import { LIQUID_REACH, liquidAimPoints } from './liquidAim.js';
 import { getWaterLevel } from './waterLevel.js';
 
@@ -116,6 +117,24 @@ function standsFor(bot: CustomBot, source: Vec3): Array<{ feet: Vec3; cost: numb
     out.push({ feet, cost: here.distanceTo(middle) + (wet ? 6 : 0) + source.distanceTo(middle) * 0.2 });
   }
   return out.sort((a, b) => a.cost - b.cost);
+}
+
+/** The nearest stands (by the straight line) that are priced by the way to them. */
+const STAND_PRICED = 4;
+/** What a stand no way fits is priced at (metres' worth), against a walk or a tunnel priced at three metres a second. */
+const NO_WAY_COST = 120;
+/** The way to a stand priced in metres' worth: a walk or a tunnel cut by its seconds, the route search's own (open ground) at nothing, no way that fits at NO_WAY_COST. */
+export function standTravelCost(bot: CustomBot, feet: Vec3): number {
+  try {
+    const choice = chooseRockTravel(bot, new goals.GoalBlock(feet.x, feet.y, feet.z) as never);
+    if (choice.mode === 'walk' || choice.mode === 'cells') return choice.seconds * 3;
+    return choice.why.startsWith('nothing_fits') ? NO_WAY_COST : 0;
+  } catch { return 0; }
+}
+/** A walk of the scoop's own goes through rock as a tunnel of straight runs, like move-to (utils/rockTravel). */
+function walkOptions(bot: CustomBot): { rockTravel: boolean; tunnelPillar: (height: number) => Promise<unknown> } {
+  const pickaxe = itemsOf(bot).some(item => item.name.includes('pickaxe'));
+  return { rockTravel: pickaxe, tunnelPillar: async (height: number) => (bot as any).instantSkills?.getSkill?.('tower-up')?.run?.(height) };
 }
 
 /** The source whose points the eyes can reach from where the body stands now. */
@@ -241,7 +260,7 @@ export async function scoopWater(bot: CustomBot, options: ScoopOptions = {}): Pr
           visitedMemory.add(keyOf(new Vec3(place.position.x, place.position.y, place.position.z)));
           reasons.push(`記憶の水(${place.position.x},${place.position.y},${place.position.z})${Math.round(place.distance)}mへ向かった`);
           const before = bot.entity.position.clone();
-          try { await gotoSafe(bot, new goals.GoalNear(place.position.x, place.position.y, place.position.z, 4), { timeoutMs: Math.min(deep ? 20_000 : 25_000, left() - 4_000) }); } catch { /* judged by the search */ }
+          try { await gotoSafe(bot, new goals.GoalNear(place.position.x, place.position.y, place.position.z, 4), { timeoutMs: Math.min(deep ? 20_000 : 25_000, left() - 4_000), ...walkOptions(bot) }); } catch { /* judged by the search */ }
           walked += before.distanceTo(bot.entity.position);
           ring = 0; attempts--;
           continue;
@@ -256,16 +275,22 @@ export async function scoopWater(bot: CustomBot, options: ScoopOptions = {}): Pr
       if ((failedAt.get(hereKey) ?? 0) >= 2) failedStands.add(hereKey);
       const plans: Array<{ source: Vec3; feet: Vec3; cost: number }> = [];
       // Water in the open is worth a longer walk than water in a cave (twenty blocks' worth).
+      // The stands already tried come off the list before the best three are taken: the fourth was never reached while the first three, which
+      // the body could not stand in, stayed on it (run 23: いまは地下・屋根の下, stands (32,49,-238) and (32,49,-239) tried and 水際の立ち位置なし).
       for (const source of sources.slice(0, 12)) {
         const cave = underSky(bot, source) ? 0 : 20;
-        for (const stand of standsFor(bot, source).slice(0, 3)) plans.push({ source, feet: stand.feet, cost: stand.cost + cave });
+        for (const stand of standsFor(bot, source).filter(entry => !failedStands.has(keyOf(entry.feet))).slice(0, 3)) plans.push({ source, feet: stand.feet, cost: stand.cost + cave });
       }
-      const plan = plans.filter(entry => !failedStands.has(keyOf(entry.feet))).sort((a, b) => a.cost - b.cost)[0];
+      // The nearest few are priced by the way to them (a walk, a tunnel cut, or none that fits), not by the straight line alone: a stand across
+      // a wall or a pond is dearer than one a few blocks further on the same side.
+      const nearest = plans.sort((a, b) => a.cost - b.cost).slice(0, STAND_PRICED);
+      for (const entry of nearest) entry.cost += standTravelCost(bot, entry.feet);
+      const plan = nearest.sort((a, b) => a.cost - b.cost)[0];
       const goal = plan ? new goals.GoalBlock(plan.feet.x, plan.feet.y, plan.feet.z) : new goals.GoalNear(sources[0].x, sources[0].y, sources[0].z, 2);
       if (plan) failedStands.add(keyOf(plan.feet));
       const before = bot.entity.position.clone();
       const distance = before.distanceTo((plan?.feet ?? sources[0]).offset(0.5, 0, 0.5));
-      try { await gotoSafe(bot, goal, { timeoutMs: Math.max(5_000, Math.min(left() - 3_000, 12_000 + distance * 700, 45_000)) }); }
+      try { await gotoSafe(bot, goal, { timeoutMs: Math.max(5_000, Math.min(left() - 3_000, 12_000 + distance * 700, 45_000)), ...walkOptions(bot) }); }
       catch { /* judged by the aim below */ }
       walked += before.distanceTo(bot.entity.position);
       hit = aimFromHere(bot, sources);

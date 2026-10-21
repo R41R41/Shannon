@@ -108,3 +108,44 @@ export function planDumpPit(bot: PitBody, feet: Vec3): DumpPitPlan | null {
   }
   return best?.plan ?? null;
 }
+
+/** A throw leaves the eyes with 0.3 of speed and falls about this far (m, level) before it lands from a body's height. */
+const THROW_CARRY_M = 3.2;
+const LAVA_THROW_MIN_M = 2;
+const LAVA_THROW_MAX_M = 4.8;
+
+/**
+ * A lava cell a throw can be made into, so that what is thrown is gone and cannot be picked up again: 2 to 4.8 blocks off (level), from
+ * four below the eyes to one above, open air over it and an open line from the eyes to its top. Nearest to where a throw lands first.
+ * Run 23: beside the lava it was turning to obsidian the body threw 176 cobbled deepslate away, walking five blocks off, after every
+ * obsidian it dug (4-6 s each, and the heap was picked up again). Null when there is none: the throw is made walking away.
+ */
+export function lavaToThrowInto(bot: PitBody, eyes: Vec3): Vec3 | null {
+  const base = eyes.floored();
+  let best: { cell: Vec3; cost: number } | null = null;
+  for (let dy = -4; dy <= 1; dy++) {
+    for (let dx = -5; dx <= 5; dx++) {
+      for (let dz = -5; dz <= 5; dz++) {
+        const cell = new Vec3(base.x + dx, base.y + dy, base.z + dz);
+        const reach = Math.hypot(cell.x + 0.5 - eyes.x, cell.z + 0.5 - eyes.z);
+        if (reach < LAVA_THROW_MIN_M || reach > LAVA_THROW_MAX_M) continue;
+        if (bot.blockAt(cell)?.name !== 'lava') continue;
+        const over = bot.blockAt(cell.offset(0, 1, 0));
+        if (!over || over.boundingBox !== 'empty') continue;
+        // The line from the eyes to the top of the lava is air all the way.
+        const top = new Vec3(cell.x + 0.5, cell.y + 1, cell.z + 0.5);
+        const length = eyes.distanceTo(top);
+        let clear = true;
+        for (let walked = 0.4; walked < length && clear; walked += 0.4) {
+          const point = eyes.plus(top.minus(eyes).scaled(walked / length));
+          const block = bot.blockAt(point.floored());
+          if (!block || (block.boundingBox === 'block' && !(block.name === 'lava'))) clear = false;
+        }
+        if (!clear) continue;
+        const cost = Math.abs(reach - THROW_CARRY_M) + Math.max(0, eyes.y - top.y) * 0.05;
+        if (!best || cost < best.cost) best = { cell, cost };
+      }
+    }
+  }
+  return best?.cell ?? null;
+}

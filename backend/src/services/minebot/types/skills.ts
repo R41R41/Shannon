@@ -7,7 +7,7 @@ import { SkillResultCache } from '../knowledge/SkillResultCache.js';
 import { skillMetrics } from '../knowledge/SkillMetrics.js';
 import { actionSignal, assertActionActive, executeAction, preemptLowerPriorityActions, cancelAction, cancelCapability, physicalActionBusy, waitForActionQuiescence, createMotorPort, currentAction, isCommandLevel } from '../execution/ActionExecution.js';
 import { skillCategory } from '../execution/SkillExecutor.js';
-import { describeRemainingTools } from '../utils/toolWear.js';
+import { describeRemainingTools, spareFor } from '../utils/toolWear.js';
 import { describeToolOptions, takeToolStockNotes } from '../utils/toolStock.js';
 import { NIGHT_SLEEP_SKILLS, sleepRefusal, sleepThroughNight } from '../utils/nightSleep.js';
 import { boundMinecraftServerId } from '../runtime/memoryContext.js';
@@ -185,8 +185,15 @@ export abstract class InstantSkill extends Skill {
     let mayStop = true;
     /** Armour or a shield that broke: said with the result, the command goes on (in a fight, stopping is standing there). */
     const wornOut: string[] = [];
+    /** Tools that broke with a spare of the same kind and tier (or better) in the pack: the work goes on with the spare (run 23). */
+    const swapped: string[] = [];
     const onBroke = (entry: { name: string; part?: string }) => {
       if (entry.part && entry.part !== 'hand') { wornOut.push(entry.name); return; }
+      // A hand tool that broke with a spare to take its place does not stop the command: the digging skills choose their tool from the pack
+      // at each block. Run 23 stopped a descent with iron_pickaxe が壊れた while a second iron pickaxe (249/250) was in the pack.
+      let spare: ReturnType<typeof spareFor> = null;
+      try { spare = spareFor(host, entry.name); } catch { spare = null; }
+      if (spare) { swapped.push(`${entry.name}→${spare.name}（残り${spare.usesLeft}回）`); return; }
       broken.push(entry.name);
       if (!mayStop) return;
       if (stopOwn) stopOwn();
@@ -208,7 +215,7 @@ export abstract class InstantSkill extends Skill {
         const own = currentAction(host);
         actionId = own?.progress.actionId ?? null;
         // A break while the call still waited for the body (another action's) was that action's, not this command's.
-        broken.length = 0; wornOut.length = 0;
+        broken.length = 0; wornOut.length = 0; swapped.length = 0;
         if (topLevel) {
           // The restock notes are kept on the root of the action (toolStock): nativeBody's, under common FCA.
           rootAction = own?.root ?? own ?? null;
@@ -246,6 +253,9 @@ export abstract class InstantSkill extends Skill {
           + `残っている道具: ${describeRemainingTools(host)}${options ? `。${options}` : ''}` };
     }
     if (sleepNote && typeof finalResult.result === 'string') finalResult = { ...finalResult, result: `${sleepNote}${finalResult.result}` };
+    if (swapped.length && typeof finalResult.result === 'string') {
+      finalResult = { ...finalResult, result: `${finalResult.result}（途中で道具が壊れましたが、予備に持ち替えて続けました: ${swapped.join('、')}）` };
+    }
     if (wornOut.length && typeof finalResult.result === 'string') {
       finalResult = { ...finalResult, result: `${finalResult.result}（途中で${[...new Set(wornOut)].join('、')}が壊れました）` };
     }

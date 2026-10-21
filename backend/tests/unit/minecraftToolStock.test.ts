@@ -175,7 +175,8 @@ describe('the body keeps a cheap tool for routine digging (paid run L111)', () =
   it('a tool break tells the planner what the carried materials can make', async () => {
     vi.useFakeTimers();
     try {
-      const items = [item('iron_pickaxe', 1, 80), item('stone_pickaxe', 1, 130), item('cobblestone', 64), item('stick', 3)];
+      // (A pickaxe of the same tier or better in the pack would take the work on (run 23): the planner is asked only when there is none.)
+      const items = [item('wooden_pickaxe', 1, 40), item('stone_pickaxe', 1, 130), item('cobblestone', 64), item('stick', 3)];
       const bot = body(items, { table: new Vec3(2, 50, 0) });
       bot.heldItem = { name: 'stone_pickaxe', maxDurability: 131 };
       installToolWearMonitor(bot);

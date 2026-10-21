@@ -22,6 +22,7 @@ import { explainNoRoom, makeRoom, TIDY_TIME_MS, tidyIfCluttered, tidyPackNow } f
 import { ensureToolUses, pickaxeUsesFor } from '../utils/toolStock.js';
 import { solidCellsBetween } from '../utils/blockApproachCost.js';
 import { hostileNear } from './craftOne.js';
+import { progressTrailer } from '../utils/partialProgress.js';
 import { noteUnreachable, recentlyUnreachable, THREAT_REFUSAL_MS } from '../utils/unreachableTargets.js';
 
 /** The pack is tidied only with this much of the action left (TIDY_TIME_MS), and with no hostile this near. */
@@ -800,7 +801,7 @@ class MineBlock extends InstantSkill {
     return {
       success: !isPartial,
       result: isPartial
-        ? `${blockName}を${count}個中${mined}個${timeNote ? '' : 'のみ'}採掘しました${dropsText}${totalsText}。${timeNote}残り${count - mined}個${timeNote ? 'は、' : 'が不足しています。'}再度 mine-block を実行してください${tightNote}${failures.length > 0 ? `（失敗詳細: ${failures.join(', ')}）` : ''}${toolWarning}${flintNote}`
+        ? `${blockName}を${count}個中${mined}個${timeNote ? '' : 'のみ'}採掘しました${dropsText}${totalsText}。${timeNote}残り${count - mined}個${timeNote ? 'は、' : 'が不足しています。'}再度 mine-block を実行してください${tightNote}${failures.length > 0 ? `（失敗詳細: ${failures.join(', ')}）` : ''}${toolWarning}${flintNote}${mined > 0 ? ` ${progressTrailer(blockName, mined, count)}` : ''}`
         : `${blockName}を${mined}個採掘しました${dropsText}${totalsText}${failures.length > 0 ? `（一部失敗: ${failures.join(', ')}）` : ''}${toolWarning}${flintNote}`,
       ...(isPartial && { failureType: stoppedForTool ? 'tool_durability_low' : stoppedForInventoryTight ? 'inventory_full' : 'partial_completion', recoverable: true }),
     };

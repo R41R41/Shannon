@@ -137,6 +137,27 @@ export function axeAdviceNote(bot: unknown, logsCut: number): string {
 /** From this many logs cut by hand, the axe is said. */
 const AXE_ADVICE_FROM = 3;
 
+/** The tiers of a tool kind, weakest first (a golden tool digs like a wooden one but wears out at 32). */
+const TOOL_TIERS = ['wooden', 'golden', 'stone', 'iron', 'diamond', 'netherite'];
+const tierOf = (name: string) => TOOL_TIERS.indexOf(name.split('_')[0]);
+/** A spare with fewer uses left than this is one that is about to break itself (the one that just broke may still be in the list). */
+const SPARE_MIN_USES = 10;
+
+/**
+ * A tool in the pack that can take the place of the one that broke in the hand: the same kind (pickaxe, axe, shovel, sword, hoe) of the same
+ * tier or better, with uses to spare. Run 23 stopped a stair "because the iron pickaxe broke" with a second iron pickaxe at 249/250 in the
+ * pack: the spare is taken up (the digging skills choose their tool from the pack at each block) and the work goes on. Null when none.
+ */
+export function spareFor(bot: unknown, brokenName: string): { name: string; usesLeft: number } | null {
+  const kind = brokenName.split('_').slice(1).join('_');
+  const rank = tierOf(brokenName);
+  if (!kind || rank < 0) return null;
+  const items = (bot as WearBot | undefined)?.inventory?.items?.() ?? [];
+  const spares = items.filter(item => item.name.endsWith(`_${kind}`) && tierOf(item.name) >= rank && usesLeft(item) >= SPARE_MIN_USES)
+    .sort((a, b) => usesLeft(b) - usesLeft(a));
+  const best = spares[0];
+  return best ? { name: best.name, usesLeft: Number.isFinite(usesLeft(best)) ? usesLeft(best) : 0 } : null;
+}
 export function installToolWearMonitor(bot: WearBot): void {
   if (bot.toolBreaks) return;
   const breaks: ToolBreak[] = [];

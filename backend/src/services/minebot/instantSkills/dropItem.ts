@@ -2,7 +2,8 @@ import { Vec3 } from 'vec3';
 import { CustomBot, InstantSkill } from '../types.js';
 import { createLogger } from '../../../utils/logger.js';
 import { actionDelay } from '../execution/observedWait.js';
-import { liquidNearPit, planDumpPit, type DumpPitPlan } from '../utils/dumpPit.js';
+import { lavaToThrowInto, liquidNearPit, planDumpPit, type DumpPitPlan } from '../utils/dumpPit.js';
+import { isThrowable } from '../utils/inventoryTidy.js';
 import { holdClutterTidy } from '../utils/inventoryRoom.js';
 import { nativeActionHost } from '../execution/ActionExecution.js';
 import { realTurn } from '../utils/realTurn.js';
@@ -31,6 +32,11 @@ const PICKUP_REACH_BLOCKS = 1.8;
 /** How far from where it threw the body looks for a place to stand when the usual retreat spots all failed (steps of a walk). */
 const FAR_SPOT_STEPS = 12;
 const PICKUP_DELAY_MS = 2000;
+/** The places the body walks back to after a throw, and how far (level) they are looked for. */
+const WORK_SITES = new Set(['furnace', 'blast_furnace', 'smoker', 'crafting_table', 'chest', 'barrel']);
+const WORK_SITE_RADIUS = 8;
+/** An item thrown into lava is given this long to burn before it is looked for. */
+const LAVA_BURN_MS = 900;
 const PIT_SEARCH_RADIUS = 10;
 /** With nowhere to walk to, a throw needs this many open cells ahead to land out of reach. */
 const MIN_THROW_OPEN = 3;
@@ -187,14 +193,39 @@ class DropItem extends InstantSkill {
     const from = bot.entity.position;
     const baseY = Math.floor(from.y);
     const spots: Array<[number, number, number]> = [];
+    // The heap lies on the far side of the throw from the way the body walks off. Walking off towards the furnace, table, chest or bed
+    // nearby keeps the way to it clear of the heap (run 23: 38 dirt thrown away at +639, fetched on the walk back to the furnace, and thrown
+    // again at +668, 14 s): within each distance the spots nearest to such a place come first.
+    const site = this.workSiteNear(bot);
     for (const distance of [RETREAT_AFTER_TOSS_BLOCKS, RETREAT_AFTER_TOSS_BLOCKS - 2]) {
+      const tier: Array<[number, number, number]> = [];
       for (const [ux, uz] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]] as const) {
         const scale = ux && uz ? Math.SQRT1_2 : 1;
         const tx = Math.floor(from.x + ux * distance * scale), tz = Math.floor(from.z + uz * distance * scale);
-        for (const dy of [0, 1, -1, 2, -2]) if (canStandAt(bot, tx, baseY + dy, tz)) { spots.push([tx, baseY + dy, tz]); break; }
+        for (const dy of [0, 1, -1, 2, -2]) if (canStandAt(bot, tx, baseY + dy, tz)) { tier.push([tx, baseY + dy, tz]); break; }
       }
+      if (site) tier.sort((a, b) => Math.hypot(a[0] + 0.5 - site.x, a[2] + 0.5 - site.z) - Math.hypot(b[0] + 0.5 - site.x, b[2] + 0.5 - site.z));
+      spots.push(...tier);
     }
     return spots;
+  }
+
+  /** The nearest furnace, table, chest or bed within eight blocks (level), or null: the places the body goes back to after a throw. */
+  private workSiteNear(bot: CustomBot): Vec3 | null {
+    const here = bot.entity.position.floored();
+    let best: { at: Vec3; distance: number } | null = null;
+    for (let dx = -WORK_SITE_RADIUS; dx <= WORK_SITE_RADIUS; dx++) {
+      for (let dz = -WORK_SITE_RADIUS; dz <= WORK_SITE_RADIUS; dz++) {
+        for (const dy of [-1, 0, 1]) {
+          const at = here.offset(dx, dy, dz);
+          const name = bot.blockAt(at)?.name ?? '';
+          if (!WORK_SITES.has(name) && !name.endsWith('_bed')) continue;
+          const distance = Math.hypot(dx, dz);
+          if (!best || distance < best.distance) best = { at, distance };
+        }
+      }
+    }
+    return best?.at ?? null;
   }
 
   /** Walks to one of the spots, away from where the item was thrown. True when it got clear of the place it threw from. */
@@ -390,7 +421,12 @@ class DropItem extends InstantSkill {
       // No pit to hand and the place shut in: one is dug (see digDumpPit), before the item is taken in hand. Beside lava or water no
       // hole is used or dug (utils/dumpPit liquidNearPit): the throw is made walking away (run 22 tidied beside the lava it worked).
       const liquid = liquidNearPit(this.bot as any, this.bot.entity.position.floored());
-      if (liquid) log.info(`${liquid}が近いので穴には捨てず、離れて捨てます`);
+      // Lava within a throw: what is thrown into it is gone, and cannot be picked up again (run 23: a heap of 176 thrown away and
+      // fetched back after every obsidian dug, 4-6 s each). Only a spare kind that is thrown to be rid of (selfDropped's table).
+      const eyes = this.bot.entity.position.offset(0, 1.62, 0);
+      const intoLava = liquid && isThrowable(itemName) ? lavaToThrowInto(this.bot as any, eyes) : null;
+      if (liquid && intoLava) log.info(`溶岩(${intoLava.x},${intoLava.y},${intoLava.z})が近いので、${itemName}は溶岩へ投げ込んで消します`);
+      else if (liquid) log.info(`${liquid}が近いので穴には捨てず、離れて捨てます`);
       let pit = liquid ? null : findAdjacentPitDropPlan(this.bot);
       let dugPit: DumpPitPlan | null = null;
       if (!pit && !liquid) {
@@ -402,7 +438,7 @@ class DropItem extends InstantSkill {
       const inHand = this.bot.inventory.items().find((entry) => entry.name === itemName) ?? item;
       await this.bot.equip(inHand, 'hand').catch(() => {});
 
-      let mode: 'pit' | 'retreat' = 'retreat';
+      let mode: 'pit' | 'retreat' | 'lava' = intoLava ? 'lava' : 'retreat';
 
       if (pit && moveTo) {
         try {
@@ -425,7 +461,10 @@ class DropItem extends InstantSkill {
       // With no pit: the item is thrown one way and the body walks the other. The way to walk is chosen first
       // (somewhere it can stand), the throw is level and straight away from it, and the walk keeps to that side.
       let spots: Array<[number, number, number]> = [];
-      if (mode === 'retreat') {
+      if (mode === 'lava' && intoLava) {
+        // Level with the lava's top, at the middle of the cell: the throw carries about three blocks and falls into it.
+        await this.bot.lookAt(new Vec3(intoLava.x + 0.5, intoLava.y + 1, intoLava.z + 0.5), true);
+      } else if (mode === 'retreat') {
         spots = this.retreatSpots(this.bot);
         if (spots.length) {
           const here = this.bot.entity.position;
@@ -473,7 +512,13 @@ class DropItem extends InstantSkill {
         // Seen at rest three blocks down and the floor put back over them: nothing can pick them up, the two seconds need not be waited.
         sealed = coverNote.includes('塞ぎました') && this.itemsInPit(dugPit, lyingBefore, itemName) > 0;
       }
-      fresh = this.noteThrown(itemName, lyingBefore);
+      // Into lava: given a moment to burn. What is gone from the world cannot be picked up; what lies there still (it landed on the rim)
+      // is dealt with as a stray at a pit's rim is, below.
+      if (mode === 'lava') {
+        await actionDelay(this.bot, LAVA_BURN_MS);
+        fresh = this.noteThrown(itemName, lyingBefore);
+        sealed = fresh.length === 0;
+      } else fresh = this.noteThrown(itemName, lyingBefore);
       let away = true;
       if (mode === 'retreat') away = await this.retreatTo(this.bot, spots, tossX, tossZ);
       // At the rim of a pit that is not sealed, an item that landed on the rim (not in the hole) is within reach: the body walks off before
@@ -510,6 +555,7 @@ class DropItem extends InstantSkill {
         result: (mode === 'pit'
           ? (dugPit ? `${itemName}を${dropCount}個、狭い所だったので横に深さ3の穴を掘って捨てました（残り${held()}個）。${coverNote}`
             : `${itemName}を${dropCount}個、近くの穴へ捨てました（残り${held()}個）。`)
+          : mode === 'lava' && sealed ? `${itemName}を${dropCount}個、近くの溶岩へ投げ込んで消しました（残り${held()}個）。拾い直す物は残っていません。`
           : `${itemName}を${dropCount}個捨て、その場から離れました（残り${held()}個）。`) + this.slotsNote(slotsBefore),
       };
     } catch (error: any) {

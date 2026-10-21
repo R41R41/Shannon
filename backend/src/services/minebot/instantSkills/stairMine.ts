@@ -436,9 +436,12 @@ class StairMine extends InstantSkill {
                     // slower and paid runs lost the bot in flooded caves. Stop dry instead.
                     // The water is shut off first with a carried block, as a player does (sealWater); the stop stays for water in
                     // the stair's own cells, with nothing to shut it with, or when it will not shut.
-                    const path = [currentPos, currentPos.offset(0, 1, 0), ...clearTargets.map(([cell]) => cell)];
+                    // The cells the body stands in are not filled; a cell the stair is about to take (the next foot among them) is: run 23
+                    // stopped at Y 36 for a lone source of an aquifer in the next foot cell with 128 cobblestone in the pack. The block put in
+                    // the water is dug in its turn (the loop reaches that cell next), and a lone source is gone with it.
+                    const standing = [currentPos, currentPos.offset(0, 1, 0)];
                     let water = this.adjacentWater(pos);
-                    for (let seal = 0; water && seal < 6 && !path.some(cell => cell.equals(water!)) && await this.sealWater(water, blockName); seal++)
+                    for (let seal = 0; water && seal < 6 && !standing.some(cell => cell.equals(water!)) && await this.sealWater(water, blockName); seal++)
                         water = this.adjacentWater(pos);
                     if (water) {
                         this.lastStopReason = `${label}の${block.name}(${pos.x}, ${pos.y}, ${pos.z})の隣(${water.x}, ${water.y}, ${water.z})が水です。`
@@ -648,7 +651,7 @@ class StairMine extends InstantSkill {
         const floor = this.caveFloorBelow(this.bot.entity.position.floored(), targetY);
         if (!floor) return false;
         const fromY = this.bot.entity.position.y;
-        try { await gotoSafe(this.bot, new goals.GoalBlock(floor.x, floor.y + 1, floor.z), { timeoutMs: 30_000 }); } catch (error) {
+        try { await gotoSafe(this.bot, new goals.GoalBlock(floor.x, floor.y + 1, floor.z), { rockTravel: true, timeoutMs: 30_000 }); } catch (error) {
             if (this.shouldInterrupt()) throw error;
         }
         const came = fromY - this.bot.entity.position.y >= 3;
