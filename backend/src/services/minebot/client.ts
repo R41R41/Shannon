@@ -45,12 +45,16 @@ import { gazeGuardPlugin } from './utils/gazeGuard.js';
 import { exposureDigGuardPlugin } from './utils/exposureGuard.js';
 import { promptPlacePlugin } from './utils/promptPlace.js';
 import { installCollisionTolerance } from './utils/collisionTolerance.js';
+import { installSyncInflate } from './utils/syncInflate.js';
 import { cancelActiveActions } from './execution/ActionExecution.js';
 import { installBotLoopWatch } from './utils/eventLoopWatch.js';
 import { installRespawnTracker } from './utils/respawnSettle.js';
 import { ReconnectBudget, reconnectKindOfEnd, reconnectKindOfKick, type ReconnectKind } from './utils/reconnectPolicy.js';
 
 installCollisionTolerance();
+// Run 24: the inflater waited for turns of a busy event loop, and the keep-alive waited behind the Nether's chunks until the server timed
+// the body out. Packets are inflated as they arrive (utils/syncInflate).
+installSyncInflate();
 import { installMotionRecorder } from './utils/motionRecorder.js';
 import { installTrailRecorder } from './utils/trailRecorder.js';
 import { installLinkWatch } from './utils/linkWatch.js';

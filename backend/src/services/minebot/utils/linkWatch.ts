@@ -14,6 +14,7 @@
  * same in a sentence for the lines that need it (the dig the server did not confirm).
  */
 import { createLogger } from '../../../utils/logger.js';
+import { inflateStats } from './syncInflate.js';
 
 const log = createLogger('Minebot:Link');
 
@@ -26,11 +27,16 @@ const CHECK_MS = 5_000;
 /** No more than one line of a kind in this long. */
 const SAY_GAP_MS = 10_000;
 
+interface Buffered { readableLength?: number; writableLength?: number }
 interface ClientLike {
   on(event: string, listener: (...args: any[]) => void): unknown;
   prependListener?(event: string, listener: (...args: any[]) => void): unknown;
   write(name: string, params?: unknown): unknown;
   socket?: { on?(event: string, listener: (...args: any[]) => void): unknown; readableLength?: number; writableLength?: number; bytesRead?: number; bytesWritten?: number };
+  /** The stages after the socket (minecraft-protocol): the frames cut from it, and the inflater. Piped, so the socket's own buffer stays
+   * near empty while these fill (lab 2026-10-21: socket 0 B, splitter 34 KB, inflater 20 KB and 240 frames). */
+  splitter?: Buffered | null;
+  decompressor?: Buffered | null;
   state?: string;
 }
 interface WatchedBot {
@@ -92,7 +98,9 @@ export function installLinkWatch(bot: WatchedBot, options: { now?: () => number;
   };
   let pendingIn: number[] = [];
   let lastId: { id: number; at: number } | null = null;
-  const unread = () => client.socket?.readableLength ?? 0;
+  const held = (stage: Buffered | null | undefined) => (stage?.readableLength ?? 0) + (stage?.writableLength ?? 0);
+  // Read from the socket and not yet handled: the socket's buffer, the splitter's and the inflater's.
+  const unread = () => (client.socket?.readableLength ?? 0) + held(client.splitter) + held(client.decompressor);
   const unsent = () => client.socket?.writableLength ?? 0;
 
   const describe = () => {
@@ -102,7 +110,8 @@ export function installLinkWatch(bot: WatchedBot, options: { now?: () => number;
       stats.lastKeepAliveInAt ? `keep-alive 受信 ${Math.round((at - stats.lastKeepAliveInAt) / 100) / 10}秒前（${stats.keepAlivesIn}回）` : 'keep-alive はまだ受信していない',
       stats.lastKeepAliveOutAt ? `返信 ${Math.round((at - stats.lastKeepAliveOutAt) / 100) / 10}秒前（${stats.keepAlivesOut}回、未返信${stats.unanswered}）` : '返信なし',
       `返信の最長 ${stats.maxAnswerMs}ms、サーバーの時計より遅れた最大 ${stats.maxLateMs}ms`,
-      `ソケットの未処理 受信${unread()}B・送信待ち${unsent()}B`,
+      `未処理 受信${unread()}B（ソケット${client.socket?.readableLength ?? 0}B・切り分け${held(client.splitter)}B・解凍待ち${held(client.decompressor)}B）・送信待ち${unsent()}B`,
+      `解凍 ${inflateStats.compressed}個・最長${Math.round(inflateStats.maxMs)}ms`,
       `状態 ${client.state ?? '?'}`,
     ];
     return parts.join('、');
