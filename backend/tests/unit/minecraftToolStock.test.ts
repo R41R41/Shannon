@@ -41,7 +41,7 @@ describe('making the cheap tool from what is carried (registry recipes)', () => 
 
   it('says what is missing when it cannot be made', () => {
     const outcome = planCraft(registry, [item('stick', 2)], 'stone_pickaxe', true);
-    expect(outcome).toEqual({ missing: expect.stringContaining('cobblestone×3') });
+    expect(outcome).toEqual({ missing: expect.stringContaining('cobblestone×3'), shortfall: 3 });
   });
 });
 

@@ -13,6 +13,11 @@ import { WORKSTATION_BLOCKS, findStances, planWorkstationSpot, stationAccess, wo
 const { goals } = pathfinder;
 
 /** Cells a block can be placed into, as in vanilla (fluids and non-solid plants are replaced). */
+type PlaceResult = { success: boolean; result: string; failureType?: string; recoverable?: boolean };
+
+/** Other cells tried, one after another, when the server takes none of the one the body chose. */
+const MAX_PLACE_RETRIES = 2;
+
 const REPLACEABLE_TARGETS = new Set(['air', 'cave_air', 'void_air', 'water', 'lava', 'bubble_column', 'short_grass',
   'tall_grass', 'fern', 'large_fern', 'dead_bush', 'seagrass', 'tall_seagrass', 'vine', 'glow_lichen', 'snow',
   'fire', 'soul_fire', 'light']);
@@ -136,7 +141,7 @@ class PlaceBlockAt extends InstantSkill {
             // The new placement's own answer stands (its position is the one the caller reads); the first is said after it.
             if (again.success) return { replaced: { ...again, result: `${again.result}。先に置いた(${placed.x}, ${placed.y}, ${placed.z})は他の設備を隠したので拾い直して置き直しました` } };
           }
-        } finally { this.replacing = false; this.avoidCells = []; }
+        } finally { this.replacing = false; }
       }
       return `。注意: ${hidden.map(item => `${label(item)}${item.obstruction ? `は${item.obstruction}に遮られて` : 'は'}今の立ち位置から使えません`).join('、')}`
         + '（使う時に自分で立ち位置を変えます）';
@@ -169,7 +174,18 @@ class PlaceBlockAt extends InstantSkill {
     };
   }
 
-  async runImpl(blockName: string, x?: number, y?: number, z?: number) {
+  /** How deep the calls of runImpl are (a re-placement or another cell tried calls it again): the cells to avoid are forgotten at the top. */
+  private depth = 0;
+  private placeRetries = 0;
+
+  async runImpl(blockName: string, x?: number, y?: number, z?: number): Promise<PlaceResult> {
+    if (this.depth === 0) { this.avoidCells = []; this.placeRetries = 0; }
+    this.depth++;
+    try { return await this.placeOnce(blockName, x, y, z); }
+    finally { if (--this.depth === 0) { this.avoidCells = []; this.placeRetries = 0; } }
+  }
+
+  private async placeOnce(blockName: string, x?: number, y?: number, z?: number): Promise<PlaceResult> {
     try {
       let note = '';
       // パラメータチェック（座標が無ければ、自分で選ぶ）
@@ -305,7 +321,8 @@ class PlaceBlockAt extends InstantSkill {
         };
       }
 
-      await this.bot.equip(item, 'hand');
+      const notHeld = await this.holdForPlacing(blockName);
+      if (notHeld) return notHeld;
       try {
         await this.bot.placeBlock(referenceBlock, faceVector);
       } catch (actionError: any) {
@@ -327,6 +344,14 @@ class PlaceBlockAt extends InstantSkill {
         }
         // Something stands in the cell (the body itself, a mob, a dropped block of sand): the server answers nothing.
         if (String(actionError?.message ?? '').includes('did not fire within timeout')) {
+          // A cell the body chose itself that the server would not take: the next cell that suits is tried (twice at most), the one that failed left out.
+          if (autoChosen && this.placeRetries < MAX_PLACE_RETRIES && !this.shouldInterrupt()) {
+            this.placeRetries++;
+            this.avoidCells.push(targetPos);
+            const again = await this.runImpl(blockName);
+            if (again.success) return { ...again, result: `${again.result}（先に選んだ(${x}, ${y}, ${z})は受け付けられなかったので別の場所に置き直しました）` };
+            return again;
+          }
           return { success: false, failureType: 'place_failed', recoverable: true,
             result: `${blockName}を(${x}, ${y}, ${z})に置けませんでした: サーバーが設置を受け付けませんでした（${blockName}は${hasNow}個持っています）。`
               + '置き先に身体やMobが重なっているか、支えにしたブロックに届いていません。立ち位置か置き先を変えてください' };
@@ -350,6 +375,8 @@ class PlaceBlockAt extends InstantSkill {
         errorDetail = 'ブロックを設置できません（空中、障害物など）';
       } else if (error.message.includes('equipped')) {
         errorDetail = 'アイテムを装備できませんでした';
+      } else if (/invalid operation/i.test(error.message)) {
+        errorDetail = `所持品の窓の操作が無効でした（開いている窓: ${(this.bot as any).currentWindow?.type ?? 'なし'}）。窓を閉じてからもう一度呼んでください`;
       }
 
       return {
@@ -359,15 +386,63 @@ class PlaceBlockAt extends InstantSkill {
           ? 'distance_too_far'
           : error.message.includes('cannot place')
             ? 'unsupported_target'
-            : error.message.includes('equipped')
+            : error.message.includes('equipped') || /invalid operation/i.test(error.message)
               ? 'equip_failed'
               : 'place_failed',
         recoverable:
           error.message.includes('far away') ||
           error.message.includes('cannot place') ||
-          error.message.includes('equipped'),
+          error.message.includes('equipped') ||
+          /invalid operation/i.test(error.message),
       };
     }
+  }
+  /**
+   * The block in hand for placing. A click on the pack goes to the window that is open, in that window's numbering, so a window left
+   * open (a crafting table's, a furnace's) turns "equip" into a click on a slot it does not have: "invalid operation", and in run 22 the
+   * third furnace was crafted and never set down. The window is closed first; on a failure the pack is made the server's again, the
+   * item looked for afresh, and a hotbar item taken by selecting its slot. What is still wrong is said, with what the body saw.
+   */
+  private async holdForPlacing(blockName: string): Promise<{ success: false; failureType: string; recoverable: boolean; result: string } | null> {
+    const bot = this.bot as any;
+    const find = () => this.bot.inventory.items().find(entry => entry.name === blockName);
+    const closeWindow = async () => {
+      if (!bot.currentWindow) return false;
+      try { bot.closeWindow(bot.currentWindow); } catch { /* the window may already be going */ }
+      await actionDelay(this.bot, 150);
+      return true;
+    };
+    const openedWindow = bot.currentWindow?.type ?? null;
+    await closeWindow();
+    let failure: any = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const item = find();
+      if (!item) break;
+      try {
+        if (bot.heldItem?.name === blockName) return null;
+        await this.bot.equip(item, 'hand');
+        return null;
+      } catch (error: any) {
+        failure = error;
+        if (this.shouldInterrupt()) throw error;
+        await closeWindow();
+        if (attempt === 0) { try { await resyncInventory(this.bot as any); } catch { /* tried again below */ } }
+        // A hotbar item needs no click: its slot is selected.
+        const fresh = find();
+        if (fresh && typeof fresh.slot === 'number' && fresh.slot >= 36 && fresh.slot <= 44 && typeof bot.setQuickBarSlot === 'function') {
+          try { bot.setQuickBarSlot(fresh.slot - 36); await actionDelay(this.bot, 100); if (bot.heldItem?.name === blockName) return null; } catch { /* said below */ }
+        }
+      }
+    }
+    if (!failure) {
+      return { success: false, failureType: 'missing_item', recoverable: true, result: `インベントリに${blockName}がありません` };
+    }
+    const item = find();
+    const message = String(failure?.message ?? failure);
+    return { success: false, failureType: 'equip_failed', recoverable: true,
+      result: `${blockName}を手に持てませんでした（${message}）。所持品の窓の操作がサーバーと合っていません`
+        + `（最初に開いていた窓: ${openedWindow ?? 'なし'}、${blockName}のスロット: ${item?.slot ?? '不明'}、手に持っているもの: ${bot.heldItem?.name ?? 'なし'}）。`
+        + '窓を閉じ、少し待ってからもう一度呼んでください（置く物が手に取れないだけで、置き場所の問題ではありません）' };
   }
   /**
    * 設置対象座標から1ブロック退避する。

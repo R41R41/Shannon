@@ -69,7 +69,6 @@ export function chooseRockTravel(bot: CustomBot, goal: Goal, env: NodeJS.Process
   const target = goalTarget(goal);
   if (!target || target.y === null) return { mode: 'default', why: 'no_height' };
   const here = bot.entity.position;
-  if ((bot.entity as unknown as { isInWater?: boolean }).isInWater) return { mode: 'default', why: 'in_water' };
   const feet = here.floored();
   const aim = new Vec3(Math.floor(target.x), Math.floor(target.y), Math.floor(target.z));
   const space = Math.hypot(aim.x - here.x, aim.y - here.y, aim.z - here.z);
@@ -87,6 +86,8 @@ export function chooseRockTravel(bot: CustomBot, goal: Goal, env: NodeJS.Process
   const probe = Math.min(PROBE_M, space);
   const end = { x: here.x + (aim.x - here.x) * probe / space, y: here.y + (aim.y - here.y) * probe / space, z: here.z + (aim.z - here.z) * probe / space };
   if (rockShare(bot as never, here, end) < ROCK_SHARE) return { mode: 'default', why: 'open_ground' };
+  // A far walk through rock begun in the water is chosen from land: gotoSafe brings the body out of the water first and asks again.
+  if ((bot.entity as unknown as { isInWater?: boolean }).isInWater) return { mode: 'default', why: 'in_water' };
 
   const walk = walkOnlyEstimate(bot, goal);
   const plan = planStairLine(feet, aim);

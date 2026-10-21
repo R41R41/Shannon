@@ -68,7 +68,8 @@ export interface CraftPlan {
   /** Where the crafting table comes from, when the recipe needs one. */
   table: 'near' | 'carried' | 'made' | null;
 }
-export type CraftOutcome = { plan: CraftPlan } | { missing: string };
+/** shortfall: how many items short of the nearest recipe the bag is (the smaller, the nearer to being made). */
+export type CraftOutcome = { plan: CraftPlan } | { missing: string; shortfall?: number };
 
 /** Intermediates made on the way (sticks, planks, a table) are at most this deep, and a plan this many crafts. */
 const MAX_DEPTH = 2;
@@ -157,7 +158,7 @@ export function planCraft(registry: StockRegistry, items: Array<{ type: number; 
   if (!shortages.length) return { missing: `${itemName}のクラフトレシピがありません` };
   const least = Math.min(...shortages.map(total));
   const lines = [...new Set(shortages.filter(missing => total(missing) === least).map(missing => describeMissing(registry, missing)))];
-  return { missing: lines.slice(0, 3).join(' または ') };
+  return { missing: lines.slice(0, 3).join(' または '), shortfall: least };
 }
 
 /** One line for a plan: "stone_pickaxe（cobblestone×3・stick×2を使う。作業台は所持品を置く）". */
@@ -172,6 +173,9 @@ export function describePlan(plan: CraftPlan): string {
 export type RestockDecision =
   | { kind: 'make'; block: string; current: string; plan: CraftPlan; saving: number }
   | { kind: 'short'; block: string; current: string; wanted: string; missing: string };
+
+/** Tools never made or named as a cheaper stand-in: gold is quick but breaks after 32 blocks. */
+const NOT_A_STAND_IN = /^golden_/;
 
 /** Less than this saved per block (seconds of time and wear) is not worth a craft. */
 const MIN_SAVING_S = 0.2;
@@ -196,20 +200,23 @@ export function decideRestock(registry: StockRegistry, items: CarriedItem[], blo
     for (const key of Object.keys(block.harvestTools)) {
       const def = registry.items[Number(key)];
       if (!def || !(Number(def.maxDurability) > 0) || carriedTypes.has(def.id)) continue;
+      // Gold wears out after 32 uses: it is not a tool to make for digging, nor to point at (nothing on the way to the Nether needs it).
+      if (NOT_A_STAND_IN.test(def.name)) continue;
       if (wearCostSeconds(def) >= currentWear) continue;
       const cost = toolCost(block, { type: def.id, name: def.name, maxDurability: def.maxDurability }, options.effects);
       if (cost <= currentCost - MIN_SAVING_S) cheaper.push({ def, cost });
     }
     cheaper.sort((a, b) => a.cost - b.cost);
+    // The one nearest to being made is the one named when none can be (the cheapest in time is often the dearest to get: run 22 named a
+    // golden pickaxe, three gold ingots away, on nearly every result, where a stone pickaxe was two sticks away).
+    let nearest: { wanted: string; missing: string; shortfall: number } | null = null;
     for (const { def, cost } of cheaper) {
       const outcome = planCraft(registry, items, def.name, options.tableNear);
       if ('plan' in outcome) return { kind: 'make', block: block.name, current: current.name, plan: outcome.plan, saving: currentCost - cost };
+      const shortfall = outcome.shortfall ?? Infinity;
+      if (!nearest || shortfall < nearest.shortfall) nearest = { wanted: def.name, missing: outcome.missing, shortfall };
     }
-    if (!short && cheaper.length) {
-      const wanted = cheaper[0].def.name;
-      const outcome = planCraft(registry, items, wanted, options.tableNear);
-      short = { kind: 'short', block: block.name, current: current.name, wanted, missing: 'missing' in outcome ? outcome.missing : '' };
-    }
+    if (!short && nearest) short = { kind: 'short', block: block.name, current: current.name, wanted: nearest.wanted, missing: nearest.missing };
   }
   return short;
 }
@@ -228,6 +235,8 @@ interface StockBody {
 /** A crafting table this close is used where it stands (craft-one walks no further for it); otherwise one is put down. */
 export const RESTOCK_TABLE_REACH = 4;
 const restocked = new WeakSet<object>();
+const shortagesSaid = new WeakMap<object, { text: string; at: number }>();
+const SHORTAGE_REPEAT_MS = 90_000;
 const notesByAction = new WeakMap<object, string[]>();
 
 function tablesNear(bot: StockBody, reach: number): Array<{ x: number; y: number; z: number }> {
@@ -274,7 +283,10 @@ export async function keepCheapTool(bot: StockBody, blocks: Array<BlockLike & { 
   const decision = decideRestock(registry, items, blocks, { tableNear, effects: bot.entity?.effects });
   if (!decision) return null;
   if (decision.kind === 'short') {
-    note(root, `道具の補充: ${decision.block}を${decision.current}で掘っています。より安く済む${decision.wanted}は材料が足りず作れません（不足: ${decision.missing}）。`);
+    // The same shortage is said once a minute and a half, not on every result of a long run (it was on nearly all of run 22's).
+    const text = `道具の補充: ${decision.block}を${decision.current}で掘っています。より安く済む${decision.wanted}は材料が足りず作れません（不足: ${decision.missing}）。`;
+    const said = shortagesSaid.get(host as object);
+    if (!said || said.text !== text || Date.now() - said.at > SHORTAGE_REPEAT_MS) { shortagesSaid.set(host as object, { text, at: Date.now() }); note(root, text); }
     return null;
   }
   restocked.add(root);
@@ -322,7 +334,7 @@ export function pickaxeUsesFor(items: CarriedItem[], blocks: Array<BlockLike & {
 const spareCrafts = new WeakMap<object, number>();
 const MAX_SPARE_CRAFTS = 2;
 /** Pickaxes in the order they are made as a spare: stone (131 uses, a few cobblestone), wood (59), then iron and the rest. */
-const SPARE_ORDER = ['stone_pickaxe', 'wooden_pickaxe', 'iron_pickaxe', 'golden_pickaxe', 'diamond_pickaxe', 'netherite_pickaxe'];
+const SPARE_ORDER = ['stone_pickaxe', 'wooden_pickaxe', 'iron_pickaxe', 'diamond_pickaxe', 'netherite_pickaxe'];
 
 export interface ToolUsesCheck {
   /** Uses the pickaxes carried have for these blocks (before any spare was made), or after, when one was. */
@@ -361,7 +373,7 @@ export async function ensureToolUses(bot: StockBody, blocks: Array<BlockLike & {
   }
   // The pickaxes that break every one of the blocks, in the order a spare is made.
   const defs = Object.values(registry.itemsByName)
-    .filter((def): def is ItemDef => !!def && def.name.endsWith('_pickaxe') && Number(def.maxDurability) > 0)
+    .filter((def): def is ItemDef => !!def && def.name.endsWith('_pickaxe') && Number(def.maxDurability) > 0 && !NOT_A_STAND_IN.test(def.name))
     .filter(def => blocks.every(block => !block.harvestTools || canHarvest(block, { type: def.id })))
     .sort((a, b) => (SPARE_ORDER.indexOf(a.name) + 1 || 99) - (SPARE_ORDER.indexOf(b.name) + 1 || 99));
   const made: string[] = [];

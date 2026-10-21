@@ -53,6 +53,35 @@ export function climbableBank(bot: SwimmerBot, towardX: number, towardZ: number)
 }
 
 /**
+ * The nearest cell on dry land to stand on, for a body in the water that is to go on from land: a solid floor, two open cells above it,
+ * neither the water nor a cell beside lava. Looked for within `radius` cells flat and a few levels up and down from the swimmer; of equal
+ * distance, the one most in the direction of travel. Null when none is known (the route search then swims out as before).
+ */
+export function nearestDryStand(bot: SwimmerBot, towardX: number, towardZ: number, radius = 8): Vec3 | null {
+  const position = bot.entity.position;
+  const cell = position.floored();
+  const heading = Math.atan2(towardZ - position.z, towardX - position.x);
+  let best: { at: Vec3; score: number } | null = null;
+  try {
+    for (let dx = -radius; dx <= radius; dx++) {
+      for (let dz = -radius; dz <= radius; dz++) {
+        const flat = Math.hypot(dx, dz);
+        if (flat > radius) continue;
+        for (let dy = -3; dy <= 3; dy++) {
+          const feet = new Vec3(cell.x + dx, cell.y + dy, cell.z + dz);
+          const floor = bot.blockAt(feet.offset(0, -1, 0), false);
+          if (!solid(floor) || !open(bot.blockAt(feet, false)) || !open(bot.blockAt(feet.offset(0, 1, 0), false))) continue;
+          const turn = flat === 0 ? 0 : Math.abs(Math.atan2(Math.sin(Math.atan2(dz, dx) - heading), Math.cos(Math.atan2(dz, dx) - heading)));
+          const score = flat + Math.abs(dy) * 1.5 + turn;
+          if (!best || score < best.score) best = { at: feet.offset(0.5, 0, 0.5), score };
+        }
+      }
+    }
+  } catch { return null; }
+  return best?.at ?? null;
+}
+
+/**
  * Out of the water onto a bank at the waterline, the way a player does it:
  * swim up and forward at the edge. The pathfinder plans no step up out of a
  * liquid, so a bot floating in a hole in the ice (or any pool with banks one
