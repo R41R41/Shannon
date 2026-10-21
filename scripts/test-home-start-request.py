@@ -64,6 +64,46 @@ class Requests(unittest.TestCase):
         def active(args, **kwargs):
             self.calls.append(args); return types.SimpleNamespace(stdout='ActiveState=active\nMainPID=123\n')
         self.assertFalse(self.consume(runner=active)); self.assertEqual(len(self.calls), 1)
+    def test_failed_unit_without_a_main_process_is_started_without_reset_failed(self):
+        # 2026-10-21: systemd SIGKILLed a shutdown that never ended (Result=timeout); ActiveState=failed, MainPID=0.
+        self.write()
+        def failed(args, **kwargs):
+            self.calls.append(args); return types.SimpleNamespace(stdout='ActiveState=failed\nMainPID=0\n')
+        self.assertTrue(self.consume(runner=failed))
+        self.assertEqual(self.calls[-1], ['/usr/bin/systemctl', '--no-ask-password', 'start', 'shannon-home.service'])
+        self.assertEqual([call[1] for call in self.calls], ['show', '--no-ask-password'])
+    def test_only_resting_units_are_admitted(self):
+        for output in ['ActiveState=failed\nMainPID=123\n', 'ActiveState=activating\nMainPID=0\n', 'ActiveState=deactivating\nMainPID=0\n',
+                       'ActiveState=active\nMainPID=0\n', 'ActiveState=failed\nMainPID=0\nResult=timeout\n', 'ActiveState=failed\n', 'MainPID=0\n',
+                       'ActiveState=failed\nActiveState=inactive\n', 'ActiveState=reloading\nMainPID=0\n', '']:
+            with self.subTest(output=output):
+                self.calls = []; self.write()
+                def runner(args, **kwargs):
+                    self.calls.append(args); return types.SimpleNamespace(stdout=output)
+                self.assertFalse(self.consume(runner=runner)); self.assertEqual(len(self.calls), 1)
+    def test_client_publishes_for_inactive_or_failed_without_a_main_process_only(self):
+        def show(load, active, pid):
+            return 'LoadState=%s\nActiveState=%s\nMainPID=%s\n' % (load, active, pid)
+        def attempt(output):
+            published = []
+            def read(args, timeout=3):
+                return '' if args[0] == '/usr/bin/ss' else output
+            with patch.object(client, 'command', side_effect=read), patch.object(client, 'process_tick', return_value='42'), \
+                 patch.object(client, 'publish', side_effect=lambda request, payload: published.append(payload) or ('d', 'i', payload['nonce'])), \
+                 patch.object(client, 'wait_ready') as ready:
+                try: client.main()
+                except RuntimeError as error: return str(error), published
+                self.assertEqual(ready.call_count, 1)
+                return None, published
+        for output in [show('loaded', 'inactive', 0), show('loaded', 'failed', 0)]:
+            with self.subTest(output=output):
+                error, published = attempt(output); self.assertIsNone(error); self.assertEqual(len(published), 1)
+        for output, expected in [(show('loaded', 'failed', 321), 'HOME_NOT_STOPPED'), (show('loaded', 'active', 321), 'HOME_NOT_STOPPED'),
+                                 (show('loaded', 'activating', 0), 'HOME_NOT_STOPPED'), (show('loaded', 'deactivating', 0), 'HOME_NOT_STOPPED'),
+                                 (show('not-found', 'inactive', 0), 'HOME_UNIT_NOT_LOADED'), (show('masked', 'failed', 0), 'HOME_UNIT_NOT_LOADED'),
+                                 ('LoadState=loaded\nActiveState=failed\n', 'HOME_UNIT_UNREADABLE'), ('LoadState=loaded\nLoadState=loaded\nActiveState=failed\nMainPID=0\n', 'HOME_UNIT_UNREADABLE')]:
+            with self.subTest(output=output):
+                error, published = attempt(output); self.assertEqual(error, expected); self.assertEqual(published, [])
     def test_actual_process_identity_requires_all_uids_and_same_starttick(self):
         proc = Path(self.temp.name) / 'proc'; directory = proc / '123'; directory.mkdir(parents=True)
         (directory / 'status').write_text('Uid: 1000 1000 1000 1000\n')

@@ -7,7 +7,10 @@ const exec = promisify(execFile);
 const run: ServerStatusCommand = async (file, args) => (await exec(file, [...args], { timeout: 2000, maxBuffer: 8192 })).stdout;
 const UNIT = 'shannon-home.service';
 
-/** A fixed home unit, with the old dedicated tmux still observed until its owner-controlled shutdown. No adoption or actuator. */
+/**
+ * A fixed home unit, with the old dedicated tmux still observed until its owner-controlled shutdown. No adoption or actuator.
+ * Stopped = (inactive/dead or failed/failed) with MainPID 0, and the old tmux session absent.
+ */
 export async function shannonHomeProcessStatus(command: ServerStatusCommand = run): Promise<ServerProcessStatus> {
   let unitStopped = false;
   try {
@@ -22,7 +25,11 @@ export async function shannonHomeProcessStatus(command: ServerStatusCommand = ru
     const loaded = fields.get('LoadState'), active = fields.get('ActiveState'), sub = fields.get('SubState'), pid = Number(fields.get('MainPID'));
     if (!Number.isSafeInteger(pid)) return 'unknown';
     if (loaded === 'loaded' && active === 'active' && sub === 'running' && pid > 0) return 'running';
-    unitStopped = (loaded === 'loaded' || loaded === 'not-found') && active === 'inactive' && sub === 'dead' && pid === 0;
+    // A unit that systemd had to SIGKILL after TimeoutStopSec (2026-10-21: Result=timeout) rests as failed/failed. With no main
+    // process left it is as stopped as inactive/dead, and `systemctl start` takes it from there without a reset-failed. A failed
+    // unit that still names a MainPID, and every transitional state (activating, deactivating, ...), stays unknown.
+    const rested = active === 'inactive' && sub === 'dead' || active === 'failed' && sub === 'failed';
+    unitStopped = (loaded === 'loaded' || loaded === 'not-found') && rested && pid === 0;
   } catch { return 'unknown'; } // A failed systemctl read cannot establish that the dedicated process is absent.
   try {
     await command('tmux', ['-L', 'shannon-home', 'has-session', '-t', '=shannon-home']);

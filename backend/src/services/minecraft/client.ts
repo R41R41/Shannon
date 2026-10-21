@@ -11,6 +11,7 @@ import { registerServiceCommandHandler } from '../runtime/serviceCommandRegistry
 import { emitWebServiceStatus } from '../web/webNotificationHub.js';
 import { logger } from '../../utils/logger.js';
 import { shannonHomeProcessStatus } from './serverProcessStatus.js';
+import { shannonHomeShutdown } from './shutdownWindow.js';
 
 const execAsync = promisify(exec);
 
@@ -112,6 +113,9 @@ export class MinecraftClient extends BaseClient {
     if (serverName === 'shannon-home' && currentStatus !== 'running') {
       return { success: false, message: 'サーバーの稼働状態を確認できないため停止しません' };
     }
+    // stop.sh sends RCON `stop`; a lifecycle poll that connected while the server stops itself can hang the shutdown for good
+    // (2026-10-21), so this body stays off RCON until the script has returned.
+    const releaseShutdown = serverName === 'shannon-home' ? shannonHomeShutdown.begin() : undefined;
     try {
       const serverPath = `${this.SERVER_BASE_PATH}/${serverName}`;
       // stop.shがあれば使用、なければtmuxでstopコマンド送信
@@ -134,6 +138,8 @@ export class MinecraftClient extends BaseClient {
         success: false,
         message: `サーバー停止エラー: ${error.message}`,
       };
+    } finally {
+      releaseShutdown?.();
     }
   }
 

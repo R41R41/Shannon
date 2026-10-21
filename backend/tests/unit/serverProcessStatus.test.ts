@@ -27,14 +27,28 @@ describe('fixed dedicated-home process ownership without adopting the running le
   it.each(['loaded', 'not-found'])('establishes stopped only when the %s unit and exact legacy session are absent', async load => {
     expect(await shannonHomeProcessStatus(commands(unit(load)))).toBe('stopped');
   });
+  // 2026-10-21: systemd SIGKILLed a shutdown that never ended (Result=timeout) and left ActiveState=failed, SubState=failed, MainPID=0.
+  // The body read that as unknown and refused every later start (state_unknown).
+  it.each(['loaded', 'not-found'])('establishes stopped for a %s unit that systemd killed after TimeoutStopSec (failed/failed, MainPID 0)', async load => {
+    const run = commands(unit(load, 'failed', 'failed', 0));
+    expect(await shannonHomeProcessStatus(run)).toBe('stopped');
+    expect(run.mock.calls[1]).toEqual(['tmux', ['-L', 'shannon-home', 'has-session', '-t', '=shannon-home']]);
+  });
   it.each([
-    unit('loaded', 'failed', 'failed'), unit('loaded', 'activating', 'start', 42),
-    unit('loaded', 'deactivating', 'stop', 42), unit('loaded', 'active', 'exited'), unit('masked'),
+    unit('loaded', 'failed', 'failed', 42), unit('loaded', 'failed', 'dead', 0), unit('loaded', 'inactive', 'failed', 0),
+    unit('loaded', 'activating', 'start', 42), unit('loaded', 'activating', 'start', 0),
+    unit('loaded', 'deactivating', 'stop-sigterm', 42), unit('loaded', 'deactivating', 'stop-sigterm', 0), unit('loaded', 'deactivating', 'final-sigkill', 0),
+    unit('loaded', 'active', 'exited'), unit('loaded', 'active', 'running', 0), unit('loaded', 'reloading', 'reload', 0), unit('masked'), unit('masked', 'failed', 'failed'),
   ])('retains an ambiguous unit state as unknown when legacy is absent (%s)', async state => {
     expect(await shannonHomeProcessStatus(commands(state))).toBe('unknown');
   });
   it('can still observe the original tmux world beside a failed unit without launching either', async () => {
     expect(await shannonHomeProcessStatus(commands(unit('loaded', 'failed', 'failed'), 'running'))).toBe('running');
+  });
+  it('does not call a failed unit stopped when the old tmux session cannot be proven absent', async () => {
+    const unreadable = Object.assign(Error('permission'), { code: 1, stderr: 'error connecting to /tmp/tmux-1000/shannon-home (Permission denied)\n' });
+    expect(await shannonHomeProcessStatus(commands(unit('loaded', 'failed', 'failed'), unreadable))).toBe('unknown');
+    expect(await shannonHomeProcessStatus(commands(unit('loaded', 'failed', 'failed'), Object.assign(absent(), { killed: true, signal: 'SIGTERM' })))).toBe('unknown');
   });
   it.each([
     Object.assign(Error('permission'), { code: 1, stderr: 'error connecting to /tmp/tmux-1000/shannon-home (Permission denied)\n' }),

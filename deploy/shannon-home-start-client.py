@@ -67,10 +67,23 @@ def wait_ready(request, payload, identity, read=command, monotonic=time.monotoni
     finally:
         remove_own_request(request, identity)
 
+def unit_fields(output):
+    fields = {}
+    for line in output.strip().splitlines():
+        key, separator, value = line.partition('=')
+        if not separator or key in fields:
+            raise RuntimeError('HOME_UNIT_UNREADABLE')
+        fields[key] = value
+    return fields
+
 def main():
-    if command(['/usr/bin/systemctl', 'show', UNIT, '--property=LoadState', '--value']) != 'loaded':
+    fields = unit_fields(command(['/usr/bin/systemctl', 'show', UNIT, '--property=LoadState', '--property=ActiveState', '--property=MainPID']))
+    if set(fields) != {'LoadState', 'ActiveState', 'MainPID'}:
+        raise RuntimeError('HOME_UNIT_UNREADABLE')
+    if fields['LoadState'] != 'loaded':
         raise RuntimeError('HOME_UNIT_NOT_LOADED')
-    if command(['/usr/bin/systemctl', 'show', UNIT, '--property=ActiveState', '--value']) != 'inactive':
+    # failed/MainPID=0 is a unit systemd had to SIGKILL after TimeoutStopSec (2026-10-21): as stopped as inactive, and start takes it.
+    if fields['MainPID'] != '0' or fields['ActiveState'] not in ('inactive', 'failed'):
         raise RuntimeError('HOME_NOT_STOPPED')
     if command(['/usr/bin/ss', '-H', '-ltn', 'sport = :25560']):
         raise RuntimeError('HOME_LISTENER_EXISTS')

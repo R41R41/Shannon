@@ -4,6 +4,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { prepareFreshWorld } from '../minecraft/freshWorld.js';
 import { shannonHomeProcessStatus } from '../minecraft/serverProcessStatus.js';
+import { shannonHomeShutdown } from '../minecraft/shutdownWindow.js';
 import { logger } from '../../utils/logger.js';
 import { MinecraftLifecycleNative, rconCommand } from './minecraftLifecycleNative.js';
 import { LifecycleOperationJournal, MinecraftLifecycleOperator } from './minecraftLifecycleOperator.js';
@@ -46,6 +47,8 @@ export async function startConfiguredMinecraftLifecycle(): Promise<void> {
       catch (error) { return (error as NodeJS.ErrnoException).code === 1; }
     },
     processState: () => shannonHomeProcessStatus(),
+    // Shared with MinecraftClient.stopServer (stop.sh): no RCON connection is opened while the server shuts itself down.
+    shutdown: shannonHomeShutdown,
     command: (text, signal) => rconCommand({ port: rconPort, password }, text, signal),
     async start(signal) {
       signal.throwIfAborted();

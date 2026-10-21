@@ -10,8 +10,9 @@ vi.mock('../../src/services/runtime/serviceCommandRegistry.js', () => ({ registe
 vi.mock('../../src/services/web/webNotificationHub.js', () => ({ emitWebServiceStatus: vi.fn() }));
 vi.mock('../../src/utils/logger.js', () => ({ logger: { info: vi.fn() } }));
 import { MinecraftClient } from '../../src/services/minecraft/client.js';
+import { shannonHomeShutdown } from '../../src/services/minecraft/shutdownWindow.js';
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => { vi.clearAllMocks(); mocks.shell.mockReset(); mocks.shell.mockReturnValue(''); shannonHomeShutdown.clear(); });
 describe('home-only management status with the existing desktop vocabulary', () => {
   it.each(['running', 'stopped'])('projects a confirmed %s home state', async state => {
     mocks.process.mockResolvedValue(state);
@@ -31,6 +32,24 @@ describe('home-only management status with the existing desktop vocabulary', () 
     mocks.shell.mockReturnValue('');
     expect(await new MinecraftClient('minecraft', true).startServer('shannon-home')).toMatchObject({ success: true });
     expect(mocks.shell).toHaveBeenCalledWith('cd /registered-worlds/shannon-home && ./start.sh ');
+  });
+  it('keeps this body off RCON while the registered stop script runs, and opens the window again afterwards (also on failure)', async () => {
+    mocks.process.mockResolvedValue('running');
+    const seen: boolean[] = [];
+    mocks.shell.mockImplementation(() => { seen.push(shannonHomeShutdown.active()); return ''; });
+    expect(await new MinecraftClient('minecraft', true).stopServer('shannon-home')).toMatchObject({ success: true });
+    expect(mocks.shell).toHaveBeenCalledWith('cd /registered-worlds/shannon-home && ./stop.sh');
+    expect(seen).toEqual([true]);
+    expect(shannonHomeShutdown.active()).toBe(false);
+    mocks.shell.mockImplementation(() => { throw new Error('stop.sh failed'); });
+    await new MinecraftClient('minecraft', true).stopServer('shannon-home');
+    expect(shannonHomeShutdown.active()).toBe(false);
+  });
+  it('does not touch the home window for other servers', async () => {
+    const seen: boolean[] = [];
+    mocks.shell.mockImplementation(() => { seen.push(shannonHomeShutdown.active()); return 'minecraft-test: 1 windows'; });
+    await new MinecraftClient('minecraft', true).stopServer('1.21.4-test');
+    expect(seen.length).toBeGreaterThan(0); expect(seen.every(open => !open)).toBe(true);
   });
   it('preserves other registered servers and their existing tmux lookup', async () => {
     mocks.shell.mockReturnValue('minecraft-test: 1 windows');

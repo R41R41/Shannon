@@ -2,6 +2,7 @@ import { createConnection } from 'node:net';
 import { setTimeout as delay } from 'node:timers/promises';
 import { LIFECYCLE_CAPABILITY_FRESH_WORLD, sendableReceipt, wantsFreshWorld, type MinecraftLifecycleCommand, type MinecraftLifecycleReceipt, type MinecraftLifecycleState } from './minecraftLifecycleContract.js';
 import { FreshWorldRefused, type FreshWorldGuard } from '../minecraft/freshWorld.js';
+import { ShutdownWindow } from '../minecraft/shutdownWindow.js';
 
 const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 /**
@@ -12,6 +13,12 @@ const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 const OBSERVE_THROUGH = new Set(['authority_revoked', 'operator_disconnected']);
 /** Observations of one command, bounded by its deadline (the API gives 120 s); a cold start took about 31 s. */
 const OBSERVATIONS = 480;
+/**
+ * RCON failures that prove the stop command was never delivered (no connection, wrong password, unusable configuration): the
+ * server keeps running and the shutdown window opened for it is closed again. Any other failure (timeout, closed or cut
+ * connection, abort, bad packet) may follow a stop that ran, so the window stays open (bounded, see ShutdownWindow).
+ */
+const STOP_NOT_DELIVERED = new Set(['LIFECYCLE_RCON_CONFIG', 'LIFECYCLE_RCON_UNAVAILABLE', 'LIFECYCLE_RCON_AUTH']);
 /**
  * One server-thread command that runs only while no one but the configured bot is in the world: Minecraft evaluates the
  * selector and runs the effect in the same tick. Uses a configured account UUID only. Offline servers exempt nobody, including
@@ -104,6 +111,12 @@ export interface LifecycleNativePorts {
   login(signal: AbortSignal): Promise<void>;
   logout(signal: AbortSignal): Promise<void>;
   now?(): number;
+  /**
+   * While open (this native's own accepted stop, or the registered stop script), `observe` opens no RCON connection: a client
+   * accepted while the server thread is stopping can never finish, and the server never exits (2026-10-21). Shared with the
+   * stop script's caller; absent, the native keeps its own window.
+   */
+  shutdown?: ShutdownWindow;
   /** Allows no replacement actions while a native operation remains unresolved. */
   operationHeld?(): boolean;
   /** Rechecks the original lease, sources and own-time pause/budget after fresh native reads, immediately before effect. */
@@ -115,8 +128,10 @@ export class MinecraftLifecycleNative {
   private busy = false;
   /** Command ids whose world reset was attempted in this process (the operator's journal already admits an id once, across restarts). */
   private readonly freshWorldAttempted = new Set<string>();
+  private readonly shutdown: ShutdownWindow;
   constructor(readonly ports: LifecycleNativePorts) {
     guardedStopCommand(ports.botUuid, ports.onlineMode);
+    this.shutdown = ports.shutdown ?? new ShutdownWindow(() => this.now());
   }
   private now(): number { return (this.ports.now ?? Date.now)(); }
   /** What this body can do beyond the base protocol, told to the API in every poll (it attaches an option only to a body that says so). */
@@ -126,8 +141,13 @@ export class MinecraftLifecycleNative {
     let running: MinecraftLifecycleState['running'] = 'unknown', players: readonly string[] | null = null;
     try {
       const process = await this.ports.processState();
-      if (process === 'running') { players = nativePlayers(await this.ports.command('list uuids')); if (players) running = 'running'; }
+      if (process === 'running') {
+        // Read after the process state, so a shutdown that began during that read is seen. While the server stops itself, nothing
+        // connects to RCON (see ShutdownWindow): the players and the running state stay unknown until the process is gone.
+        if (!this.shutdown.active()) { players = nativePlayers(await this.ports.command('list uuids')); if (players) running = 'running'; }
+      }
       else if (process === 'stopped') {
+        this.shutdown.clear();
         // A live RCON listener contradicts the process report; refusal proves stopped only for the configured port.
         try { await this.ports.command('list uuids'); }
         catch (error) { if ((error as NodeJS.ErrnoException).code === 'ECONNREFUSED') running = 'stopped'; }
@@ -172,8 +192,16 @@ export class MinecraftLifecycleNative {
       let stopAccepted = false;
       // One native server command evaluates @a and executes stop on the same server thread/tick. No API snapshot can grant stop.
       if (c.action === 'stop') {
-        try { stopAccepted = (await this.ports.command(guardedStopCommand(this.ports.botUuid, this.ports.onlineMode), signal)).trim() === 'Stopping the server'; }
-        catch (error) { stopAccepted = (error as { responseText?: string }).responseText?.trim() === 'Stopping the server'; }
+        // Opened before the command is sent, so no poll connects behind it; closed again only when the server provably keeps running.
+        const closeWindow = this.shutdown.begin();
+        try {
+          stopAccepted = (await this.ports.command(guardedStopCommand(this.ports.botUuid, this.ports.onlineMode), signal)).trim() === 'Stopping the server';
+          if (!stopAccepted) closeWindow();
+        }
+        catch (error) {
+          stopAccepted = (error as { responseText?: string }).responseText?.trim() === 'Stopping the server';
+          if (!stopAccepted && STOP_NOT_DELIVERED.has((error as Error).message)) closeWindow();
+        }
       }
       else if (c.action === 'set_day') {
         // The guard and the effect are one server-thread command; the reply names the new time only when it ran.

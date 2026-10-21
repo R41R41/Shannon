@@ -13,6 +13,15 @@ import time
 REQUEST = pathlib.Path('/run/shannon-home-start/request')
 UNIT = 'shannon-home.service'
 
+# inactive/MainPID=0 is a unit that ended on its own. failed/MainPID=0 is one systemd had to SIGKILL after TimeoutStopSec
+# (2026-10-21: Result=timeout); nothing of it is left, and `systemctl start` takes it from failed without a reset-failed.
+# A failed unit that still names a MainPID, and every transitional state (activating, deactivating, ...), is not admitted.
+STOPPED = ({'ActiveState=inactive', 'MainPID=0'}, {'ActiveState=failed', 'MainPID=0'})
+
+def stopped(output):
+    lines = output.strip().splitlines()
+    return len(lines) == 2 and set(lines) in STOPPED
+
 def alive_original(payload, uid, proc=pathlib.Path('/proc')):
     try:
         status = (proc / str(payload['pid']) / 'status').read_text()
@@ -61,7 +70,7 @@ def consume(request=REQUEST, runner=subprocess.run, original=alive_original, uid
     # Root-owned unit content is the authority. An ambiguous/active unit is never started here.
     result = runner(['/usr/bin/systemctl', 'show', UNIT, '--property=ActiveState', '--property=MainPID'],
                     capture_output=True, text=True, check=True, timeout=3)
-    if set(result.stdout.strip().splitlines()) != {'ActiveState=inactive', 'MainPID=0'}:
+    if not stopped(result.stdout):
         return False
     # Recheck the original wrapper and its finite deadline after the awaited manager read.
     if not valid(payload, info, uid, clock(), original):
