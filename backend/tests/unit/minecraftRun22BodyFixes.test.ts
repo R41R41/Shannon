@@ -22,6 +22,8 @@ const { default: WithdrawFromFurnace } = await import('../../src/services/minebo
 const { default: PlaceBlockAt } = await import('../../src/services/minebot/instantSkills/placeBlockAt.js');
 const { nearestDryStand } = await import('../../src/services/minebot/utils/exitWater.js');
 const { chooseRockTravel } = await import('../../src/services/minebot/utils/rockTravel.js');
+const { default: AutoWearArmor } = await import('../../src/services/minebot/constantSkills/autoWearArmor.js');
+const { equipWillClick, closeStaleWindow } = await import('../../src/services/minebot/utils/staleWindow.js');
 
 const require = createRequire(import.meta.url);
 const toolRegistry = require('prismarine-registry')('1.21.11');
@@ -284,6 +286,9 @@ describe('the dry stand for a body in the water (a far walk is chosen from land)
     expect(stand!.x).toBeGreaterThanOrEqual(3);
     expect(stand!.y).toBe(62);
     expect(nearestDryStand({ ...bot, blockAt: world(() => 'water') }, 50, 0)).toBeNull();
+    // water within two cells of the stand costs a few cells of walking: the stand is taken a little off the shore
+    const shore = nearestDryStand(bot, 50, 0)!;
+    expect(shore.x).toBeGreaterThanOrEqual(5);
   });
 
   it('the rock walk is chosen after the line is read: open ground in the water is the route search\'s, rock in the water waits for land', () => {
@@ -294,5 +299,31 @@ describe('the dry stand for a body in the water (a far walk is chosen from land)
     expect(chooseRockTravel(rockBot, goal)).toMatchObject({ mode: 'default', why: 'in_water' });
     const openBot: any = { entity: { ...entity }, blockAt: world(() => 'air'), inventory: { items: () => [] }, pathfinder: {} };
     expect(chooseRockTravel(openBot, goal)).toMatchObject({ mode: 'default', why: 'open_ground' });
+  });
+});
+
+describe('every equip of the body closes a window left open when it would click (the same fault, wherever the equip is called from)', () => {
+  it('equipWillClick: a hotbar item is taken by its slot, anything else by clicks', () => {
+    expect(equipWillClick({}, [{ slot: 38 }, 'hand'])).toBe(false);
+    expect(equipWillClick({}, [{ slot: 12 }, 'hand'])).toBe(true);
+    expect(equipWillClick({}, [{ slot: 38 }, 'head'])).toBe(true);
+    expect(equipWillClick({}, [{ name: 'no slot known' }])).toBe(true);
+  });
+
+  it('the queued equip of the body (autoWearArmor installs it) closes the window first, only when it would click', async () => {
+    const calls: string[] = [];
+    const bot: any = Object.assign(new EventEmitter(), {
+      entity: { id: 7, position: new Vec3(0, 64, 0) }, currentWindow: { type: 'minecraft:furnace' }, inventory: { slots: [], items: () => [] },
+      getEquipmentDestSlot: () => 5,
+      closeWindow: vi.fn(() => { calls.push('close'); bot.currentWindow = null; }),
+      equip: async (item: any) => { calls.push(`equip ${item.slot}`); },
+    });
+    const skill: any = new AutoWearArmor(bot);
+    skill.queueEquips();
+    await bot.equip({ slot: 38 }, 'hand');
+    expect(calls).toEqual(['equip 38']);                       // a hotbar item: no click, the window is left alone
+    await bot.equip({ slot: 12 }, 'hand');
+    expect(calls).toEqual(['equip 38', 'close', 'equip 12']);
+    expect(closeStaleWindow({})).toBe(false);
   });
 });
