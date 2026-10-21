@@ -174,8 +174,11 @@ export type RestockDecision =
   | { kind: 'make'; block: string; current: string; plan: CraftPlan; saving: number }
   | { kind: 'short'; block: string; current: string; wanted: string; missing: string };
 
-/** Tools never made or named as a cheaper stand-in: gold is quick but breaks after 32 blocks. */
-const NOT_A_STAND_IN = /^golden_/;
+/**
+ * Tools never made or named as a cheaper stand-in: gold is quick but breaks after 32 blocks; copper needs its own ore dug and smelted,
+ * which nothing on the way to the Nether asks for (run 23 named a copper pickaxe once gold was taken out).
+ */
+const NOT_A_STAND_IN = /^(golden|copper)_/;
 
 /** Less than this saved per block (seconds of time and wear) is not worth a craft. */
 const MIN_SAVING_S = 0.2;

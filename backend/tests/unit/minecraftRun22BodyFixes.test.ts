@@ -97,6 +97,13 @@ describe('the tool named when a cheaper one cannot be made (run 22: a golden pic
     expect(rich?.kind === 'make' ? rich.plan.item : '').not.toMatch(/golden/);
   });
 
+  it('never makes or names copper either (run 23 named a copper pickaxe once gold was taken out)', () => {
+    const decision = decideRestock(toolRegistry, bag(), [stoneBlock()], { tableNear: true });
+    expect((decision as any)?.wanted ?? '').not.toMatch(/copper/);
+    const rich = decideRestock(toolRegistry, [carried('iron_pickaxe', 1, 20), carried('copper_ingot', 6), carried('stick', 4)], [stoneBlock()], { tableNear: true });
+    expect(rich?.kind === 'make' ? rich.plan.item : (rich as any)?.wanted ?? '').not.toMatch(/copper/);
+  });
+
   it('names the one nearest to being made: the stone pickaxe, with the sticks it lacks', () => {
     const decision: any = decideRestock(toolRegistry, [carried('iron_pickaxe', 1, 20), carried('cobblestone', 8)], [stoneBlock()], { tableNear: true });
     expect(decision).toMatchObject({ kind: 'short', wanted: 'stone_pickaxe' });
