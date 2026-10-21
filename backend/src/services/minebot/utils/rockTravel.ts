@@ -1,27 +1,31 @@
 /**
- * How a far walk through rock is made: walked on the ground as it is, along a tunnel dug before, or along a tunnel cut now.
+ * How a walk that may need digging is made: walked on the ground as it is, along a tunnel dug before, or along a tunnel cut now.
  *
  * Run 21 (live, watched by Rai): the far walks across a hill (y 93 down to the water at y 58, y 57 up to the furnace at y 97, 37-43 m,
  * 58-82 s each, and the same again on the way back) went down and up in a zigzag, laying blocks here and there, with a stop at each
  * rim; every intermediate point of utils/farLegs fell inside the rock. "Dig straight, or a stair at 1:1, and come back up the same hole."
+ * Run 23 (Rai): "move by vertical, level or stair tunnels, or those together". The route search of the path library (a mix of digging and
+ * laying, priced by a rule of thumb) is left for the walk that needs no digging; anything that does is a plan of axis-aligned runs.
  *
- * For a walk of 10 m or more to a place with a height, whose first stretch of straight line is mostly rock, the three ways are priced
- * in seconds and the cheapest is taken:
+ * For a walk to a place with a height (any length from a block and a half) the ways are priced in seconds and the cheapest is taken:
  *   - a tunnel the body cut before that leads to the goal (TunnelTrail): nothing to dig, 0.35 s a step;
  *   - a walk on the ground that neither digs nor lays a block (a route search with a short think, travelProfile.walkOnlyProfile);
- *   - a tunnel cut now along a straight or 1:1 stair line (utils/stairLine, utils/tunnelWalk), priced block by block at the tool's time.
- * None of them fits (no tool, a liquid, an unloaded chunk): "default", the route search as before.
+ *   - a tunnel cut now: straight runs along x then z (either first), shafts and 1:1 stairs (utils/stairLine, utils/tunnelWalk), priced block
+ *     by block at the tool's time. A block in the way (a liquid beside it, equipment, bedrock, no floor) is gone round by a jog of one or
+ *     two cells to the side, in parallel with the run, at the start or just before the obstacle.
+ * The tunnel is taken when the ground cannot be walked: the walk-only search found no way at all, or the first stretch of the straight
+ * line is mostly rock. None of them fits (no tool, a liquid all round, an unloaded chunk): "default", the route search as before.
  */
 import { Vec3 } from 'vec3';
 import type { CustomBot, Goal } from '../types/CustomBot.js';
 import { goalTarget, rockShare } from './farLegs.js';
-import { planStairLine, trailOf } from './stairLine.js';
-import { estimateCells } from './tunnelWalk.js';
+import { planStairLine, trailOf, type LegOrder } from './stairLine.js';
+import { estimateCells, type PlanEstimate } from './tunnelWalk.js';
 import { buildMovements } from './setMovements.js';
 import { walkOnlyProfile } from './travelProfile.js';
 
-/** Walks shorter than this (m) are left to the route search. */
-export const ROCK_TRAVEL_MIN_M = 10;
+/** Walks shorter than this (m) are left to the route search: the body is all but there. */
+export const ROCK_TRAVEL_MIN_M = 1.5;
 /** The straight line is read for this many metres to tell rock from open ground. */
 const PROBE_M = 24;
 const ROCK_SHARE = 0.4;
@@ -36,6 +40,10 @@ const WALK_THINK_MS = 400;
 const MAX_SHORT_BY = 6;
 /** What a step of the plan that cannot be cut is priced at: the route search takes it over. */
 const UNCUT_MS_PER_CELL = 900;
+/** How far to the side a run is moved to get round what is in its way (cells), and the horizontal directions it is moved in. */
+const JOG_WIDTHS = [1, 2];
+const JOG_DIRECTIONS: Array<[number, number]> = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+const LEG_ORDERS: LegOrder[] = ['long', 'short'];
 
 export type RockTravelChoice =
   | { mode: 'default'; why: string }
@@ -52,16 +60,89 @@ interface Navigator {
     Iterator<{ result?: { status?: string; path?: unknown[] } }>;
 }
 
-/** The ground walk priced: null when no whole route that neither digs nor lays was found within the think. */
-function walkOnlyEstimate(bot: CustomBot, goal: Goal): { movements: unknown; seconds: number } | null {
+interface WalkEstimate { status: 'success' | 'noPath' | 'other'; movements?: unknown; seconds: number }
+
+/**
+ * The ground walk priced. `success` with the movements and the seconds when a whole route that neither digs nor lays was found within the
+ * think; `noPath` when the search ran out of ground to try (the way needs digging or laying, or there is none); null when it could not
+ * say (no navigator, a think that ran out, an error).
+ */
+function walkOnlyEstimate(bot: CustomBot, goal: Goal): WalkEstimate | null {
   const navigator = bot.pathfinder as unknown as Navigator | undefined;
   if (!navigator?.getPathFromTo) return null;
   try {
     const movements = buildMovements(bot, ...walkOnlyProfile(false));
     const result = navigator.getPathFromTo(movements, bot.entity.position, goal, { timeout: WALK_THINK_MS, tickTimeout: WALK_THINK_MS }).next().value?.result;
-    if (!result || result.status !== 'success' || !Array.isArray(result.path)) return null;
-    return { movements, seconds: result.path.length * WALK_MS_PER_MOVE / 1000 };
+    if (!result) return null;
+    if (result.status === 'noPath') return { status: 'noPath', seconds: Infinity };
+    if (result.status !== 'success' || !Array.isArray(result.path)) return null;
+    return { status: 'success', movements, seconds: result.path.length * WALK_MS_PER_MOVE / 1000 };
   } catch { return null; }
+}
+
+/** A tunnel plan priced: the cells, the estimate of walking them, and the seconds (the cells that cannot be cut priced as the route search's). */
+export interface TunnelPlan { cells: Vec3[]; estimate: PlanEstimate; seconds: number; complete: boolean; note: string }
+
+function priceCells(bot: CustomBot, feet: Vec3, cells: Vec3[], note: string): TunnelPlan {
+  const estimate = estimateCells(bot, feet, cells);
+  const uncut = cells.length - estimate.stoppedAt;
+  return { cells, estimate, seconds: (estimate.ms + uncut * UNCUT_MS_PER_CELL) / 1000, complete: estimate.feasible && uncut === 0, note };
+}
+
+/** Whether `a` is the better plan: a whole one over a part, the quicker of two whole ones, the one that gets further of two parts. */
+function betterPlan(a: TunnelPlan, b: TunnelPlan | null): boolean {
+  if (!b) return true;
+  if (a.complete !== b.complete) return a.complete;
+  if (a.complete) return a.seconds < b.seconds;
+  if (a.estimate.stoppedAt !== b.estimate.stoppedAt) return a.estimate.stoppedAt > b.estimate.stoppedAt;
+  return a.seconds < b.seconds;
+}
+
+/**
+ * The tunnel to cut from `feet` to `aim`: the straight runs of planStairLine in either order; and, when neither can be cut the whole way,
+ * the better of them moved aside by a jog (1 or 2 cells, any of the four directions) at the start, or one or two cells before the step
+ * that stopped it. Null when the plan has nothing to cut (no cells, or more levels short than a plan may leave).
+ */
+export function planTunnel(bot: CustomBot, feet: Vec3, aim: Vec3): TunnelPlan | null {
+  let best = null as TunnelPlan | null;
+  let base = null as TunnelPlan | null;
+  const seen = new Set<string>();
+  const keyOf = (cells: Vec3[]) => cells.map(cell => `${cell.x},${cell.y},${cell.z}`).join(';');
+  const consider = (cells: Vec3[], note: string): TunnelPlan | null => {
+    const key = keyOf(cells);
+    if (!cells.length || seen.has(key)) return null;
+    seen.add(key);
+    const plan = priceCells(bot, feet, cells, note);
+    if (betterPlan(plan, best)) best = plan;
+    return plan;
+  };
+  for (const order of LEG_ORDERS) {
+    const plan = planStairLine(feet, aim, order);
+    if (plan.cells.length === 0 || plan.shortBy > MAX_SHORT_BY) continue;
+    const priced = consider(plan.cells, `straight ${order}`);
+    if (priced && betterPlan(priced, base)) base = priced;
+  }
+  const first = base;
+  if (!first || first.complete) return best;
+  // Round the obstacle: the jog is made at the start, or a cell or two before the step that could not be cut.
+  const stopped = first.estimate.stoppedAt;
+  const at = [...new Set([-1, stopped - 2, stopped - 1])].filter(index => index >= -1 && index < first.cells.length);
+  for (const order of LEG_ORDERS) {
+    for (const index of at) {
+      const prefix = first.cells.slice(0, index + 1);
+      const from = prefix.length ? prefix[prefix.length - 1] : feet;
+      for (const [dx, dz] of JOG_DIRECTIONS) {
+        for (const width of JOG_WIDTHS) {
+          const jog: Vec3[] = [];
+          for (let step = 1; step <= width; step++) jog.push(new Vec3(from.x + dx * step, from.y, from.z + dz * step));
+          const after = planStairLine(jog[jog.length - 1], aim, order);
+          if (after.shortBy > MAX_SHORT_BY) continue;
+          consider([...prefix, ...jog, ...after.cells], `jog ${width} ${dx},${dz} at ${index}`);
+        }
+      }
+    }
+  }
+  return best;
 }
 
 export function chooseRockTravel(bot: CustomBot, goal: Goal, env: NodeJS.ProcessEnv = process.env): RockTravelChoice {
@@ -82,29 +163,31 @@ export function chooseRockTravel(bot: CustomBot, goal: Goal, env: NodeJS.Process
     ? { cells: known, seconds: known.length * TRAIL_MS_PER_STEP / 1000 } : null;
   if (trail && trail.seconds <= 30) return { mode: 'cells', cells: trail.cells, seconds: trail.seconds, source: 'trail', digs: 0 };
 
-  // Only a line that goes through rock is a case for this: open ground is walked by the route search as always.
+  // Rock on the straight line: the first stretch of it is mostly to be dug.
   const probe = Math.min(PROBE_M, space);
   const end = { x: here.x + (aim.x - here.x) * probe / space, y: here.y + (aim.y - here.y) * probe / space, z: here.z + (aim.z - here.z) * probe / space };
-  if (rockShare(bot as never, here, end) < ROCK_SHARE) return { mode: 'default', why: 'open_ground' };
-  // A far walk through rock begun in the water is chosen from land: gotoSafe brings the body out of the water first and asks again.
-  if ((bot.entity as unknown as { isInWater?: boolean }).isInWater) return { mode: 'default', why: 'in_water' };
+  const rocky = rockShare(bot as never, here, end) >= ROCK_SHARE;
+  // A walk begun in the water is chosen from land when it goes through rock: gotoSafe brings the body out of the water first and asks again.
+  if ((bot.entity as unknown as { isInWater?: boolean }).isInWater) return { mode: 'default', why: rocky ? 'in_water' : 'open_ground' };
 
   const walk = walkOnlyEstimate(bot, goal);
-  const plan = planStairLine(feet, aim);
-  let tunnel: { cells: Vec3[]; seconds: number; digs: number } | null = null;
-  let tunnelWhy = plan.cells.length === 0 ? 'no_plan' : `short_by_${plan.shortBy}`;
-  if (plan.cells.length > 0 && plan.shortBy <= MAX_SHORT_BY) {
-    const estimate = estimateCells(bot, feet, plan.cells);
-    tunnelWhy = estimate.why ?? 'ok';
-    if (estimate.feasible) {
-      const uncut = plan.cells.length - estimate.stoppedAt;
-      tunnel = { cells: plan.cells, seconds: (estimate.ms + uncut * UNCUT_MS_PER_CELL) / 1000, digs: estimate.digs };
-    }
+  const walkable = walk?.status === 'success' ? walk : null;
+  // Ground that can be walked is walked, whatever the line looks like. A way that cannot (the search ran out of ground to try) is
+  // dug, even for a few blocks; open ground the search could not settle in its think is left to the route search, as before.
+  // (Only within PROBE_M: a goal further off than the loaded ground is "no path" to the search for want of ground, not for want of a way.)
+  const needsDig = rocky || (walk?.status === 'noPath' && space <= PROBE_M);
+  if (!needsDig) {
+    if (walkable) return { mode: 'walk', movements: walkable.movements, seconds: walkable.seconds };
+    return { mode: 'default', why: 'open_ground' };
   }
-  if (trail && (!walk || trail.seconds <= walk.seconds + 5) && (!tunnel || trail.seconds <= tunnel.seconds)) {
+
+  const tunnel = planTunnel(bot, feet, aim);
+  const tunnelPlan = tunnel && tunnel.estimate.feasible ? tunnel : null;
+  const tunnelWhy = !tunnel ? 'no_plan' : tunnel.estimate.why ?? 'ok';
+  if (trail && (!walkable || trail.seconds <= walkable.seconds + 5) && (!tunnelPlan || trail.seconds <= tunnelPlan.seconds)) {
     return { mode: 'cells', cells: trail.cells, seconds: trail.seconds, source: 'trail', digs: 0 };
   }
-  if (walk && (!tunnel || walk.seconds <= tunnel.seconds + WALK_PREFERENCE_MS / 1000)) return { mode: 'walk', movements: walk.movements, seconds: walk.seconds };
-  if (tunnel) return { mode: 'cells', cells: tunnel.cells, seconds: tunnel.seconds, source: 'tunnel', digs: tunnel.digs };
-  return { mode: 'default', why: `nothing_fits（地面を歩く道: ${walk ? 'あり' : 'なし'}、掘る道: ${tunnelWhy}）` };
+  if (walkable && (!tunnelPlan || walkable.seconds <= tunnelPlan.seconds + WALK_PREFERENCE_MS / 1000)) return { mode: 'walk', movements: walkable.movements, seconds: walkable.seconds };
+  if (tunnelPlan) return { mode: 'cells', cells: tunnelPlan.cells, seconds: tunnelPlan.seconds, source: 'tunnel', digs: tunnelPlan.estimate.digs };
+  return { mode: 'default', why: `nothing_fits（地面を歩く道: ${walkable ? 'あり' : 'なし'}、掘る道: ${tunnelWhy}）` };
 }

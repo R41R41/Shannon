@@ -8,7 +8,8 @@
  * and walks back up the same hole.
  *
  * Here the line is a lattice of whole cells: each step moves one cell along x or z and, on some steps, one cell up or down. The cells of
- * the steps are a pure function of the two ends, so a plan can be tested without a world.
+ * the steps are a pure function of the two ends, so a plan can be tested without a world. A tunnel is a combination of three shapes only
+ * (run 23, Rai: "vertical, level or a stair, or those together"): a straight run along x or z, a shaft up or down, a stair at 1:1.
  */
 import { Vec3 } from 'vec3';
 import { nativeActionHost } from '../execution/ActionExecution.js';
@@ -24,6 +25,18 @@ export interface StairPlan {
 export const MAX_VERTICAL = 70;
 
 /**
+ * Which horizontal run comes first: the longer ('long', the default) or the shorter ('short') of the two, or x or z outright. The two
+ * orders of an L-shaped tunnel pass different ground; rockTravel prices both and takes the one that can be cut.
+ */
+export type LegOrder = 'long' | 'short' | 'xz' | 'zx';
+function firstAxisOf(order: LegOrder, ax: number, az: number): 'x' | 'z' {
+  if (order === 'xz') return 'x';
+  if (order === 'zx') return 'z';
+  const xLonger = Math.abs(ax) >= Math.abs(az);
+  return (order === 'long') === xLonger ? 'x' : 'z';
+}
+
+/**
  * Whole cells from `from` towards `to`: one step along the dominant axis at a time (a diagonal alternates x and z, an axis-aligned line
  * is straight) and a level changed on |dy| of the steps, spread evenly (a 1:1 stair when the height asked equals the way along).
  *
@@ -31,7 +44,7 @@ export const MAX_VERTICAL = 70;
  * stair at 1:1 cannot take it: the levels over are taken straight, a shaft down (dig the floor, drop) FIRST when going down, a pillar
  * up (tower-up) LAST when going up. They are the stair's own reverse: the way back up the shaft is a pillar, the way back down is a drop.
  */
-export function planStairLine(from: Vec3, to: { x: number; y: number; z: number }): StairPlan {
+export function planStairLine(from: Vec3, to: { x: number; y: number; z: number }, order: LegOrder = 'long'): StairPlan {
   const ax = Math.floor(to.x) - from.x, az = Math.floor(to.z) - from.z, dy = Math.floor(to.y) - from.y;
   const along = Math.abs(ax) + Math.abs(az);
   const cells: Vec3[] = [];
@@ -41,12 +54,14 @@ export function planStairLine(from: Vec3, to: { x: number; y: number; z: number 
   let x = from.x, y = from.y, z = from.z;
   // Down: the shaft first.
   if (sy < 0) for (let i = 0; i < straight; i++) cells.push(new Vec3(x, --y, z));
-  let doneX = 0, doneZ = 0, taken = 0;
+  // The tunnel runs along one axis to the end of it, then along the other: two straight runs, never a diagonal of alternating steps
+  // (a diagonal is twice the cells a person would dig for the same ground covered, and run 23's walks dug a zigzag of it).
+  const firstAxis = firstAxisOf(order, ax, az);
+  const firstLength = firstAxis === 'x' ? Math.abs(ax) : Math.abs(az);
+  let taken = 0;
   for (let i = 0; i < along; i++) {
-    // The axis with the larger share of its way still to go; the x axis on a tie.
-    const shareX = Math.abs(ax) === 0 ? -1 : (Math.abs(ax) - doneX) / Math.abs(ax);
-    const shareZ = Math.abs(az) === 0 ? -1 : (Math.abs(az) - doneZ) / Math.abs(az);
-    if (shareX >= shareZ) { x += sx; doneX++; } else { z += sz; doneZ++; }
+    const alongX = (i < firstLength) === (firstAxis === 'x');
+    if (alongX) x += sx; else z += sz;
     const wanted = Math.floor(((i + 1) * levels) / along);
     if (wanted > taken) { y += sy; taken++; }
     cells.push(new Vec3(x, y, z));

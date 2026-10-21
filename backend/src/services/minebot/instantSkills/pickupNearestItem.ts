@@ -133,7 +133,7 @@ class PickupNearestItem extends InstantSkill {
         // まずアイテムの近くに移動
         const goal = this.pickupGoal(itemEntity.position);
 
-        const moveResult = await gotoSafe(this.bot, goal, { timeoutMs: 10_000, stuckAbortCount: 5 });
+        const moveResult = await gotoSafe(this.bot, goal, { rockTravel: true, timeoutMs: 10_000, stuckAbortCount: 5 });
         if (!moveResult.success && (moveResult.error === 'timeout' || moveResult.error === 'stuck')) {
           return {
             success: false,

@@ -55,19 +55,21 @@ describe('the shape of a tunnel (utils/stairLine)', () => {
     }
   });
 
-  it('a diagonal alternates x and z, and the levels are spread along the way', () => {
-    const plan = planStairLine(new Vec3(0, 93, 0), { x: 10, y: 88, z: 10 });
-    const xs = plan.cells.map(c => c.x), zs = plan.cells.map(c => c.z);
-    // no run of more than two steps along one axis
-    let run = 1, longest = 1;
-    for (let i = 1; i < plan.cells.length; i++) {
-      const sameAxis = (xs[i] !== xs[i - 1]) === (xs[i - 1] !== (xs[i - 2] ?? xs[i - 1] - 1));
-      run = sameAxis ? run + 1 : 1; longest = Math.max(longest, run);
-    }
-    expect(longest).toBeLessThanOrEqual(3);
-    expect(plan.cells.at(-1)).toMatchObject({ x: 10, y: 88, z: 10 });
-    expect(zs.at(-1)).toBe(10);
+  it('a diagonal is two straight runs, one axis after the other (Rai, run 23: no diagonal staircase of alternating steps), the levels spread along them', () => {
+    const plan = planStairLine(new Vec3(0, 93, 0), { x: 10, y: 88, z: 6 });
+    const axes = plan.cells.map((cell, i) => { const before = plan.cells[i - 1] ?? new Vec3(0, 93, 0); return cell.x !== before.x ? 'x' : 'z'; });
+    // one turn at most: the longer run first (x: 10), then the other (z: 6)
+    expect(axes.filter((axis, i) => i > 0 && axis !== axes[i - 1])).toHaveLength(1);
+    expect(axes.slice(0, 10).every(axis => axis === 'x')).toBe(true);
+    expect(plan.cells.at(-1)).toMatchObject({ x: 10, y: 88, z: 6 });
+    expect(plan.cells).toHaveLength(16);
     expect(plan.shortBy).toBe(0);
+    // the other order: the shorter run first
+    const short = planStairLine(new Vec3(0, 93, 0), { x: 10, y: 88, z: 6 }, 'short');
+    expect(short.cells.slice(0, 6).every(cell => cell.x === 0)).toBe(true);
+    expect(short.cells.at(-1)).toMatchObject({ x: 10, y: 88, z: 6 });
+    // a named axis first
+    expect(planStairLine(new Vec3(0, 70, 0), { x: 3, y: 70, z: 3 }, 'zx').cells.slice(0, 3).every(cell => cell.x === 0)).toBe(true);
   });
 
   it('takes the levels over the stair straight: a shaft first going down, a pillar last going up (run 21: 32 m down in 19 m, 40 m up in 9 m)', () => {
@@ -209,11 +211,14 @@ describe('how a far walk through rock is made (utils/rockTravel)', () => {
     expect(travelProfile(false)[4]).toBe(true);
   });
 
-  it('leaves open ground, short walks, goals without a height and a body in water to the route search', () => {
+  it('walks open ground that can be walked, and leaves a body all but there, goals without a height and a body in water to the route search', () => {
     const open = world(() => 'air', new Vec3(0.5, 90, 0.5), navigatorOf('success', 40));
-    expect(chooseRockTravel(open, goal as any)).toMatchObject({ mode: 'default', why: 'open_ground' });
+    expect(chooseRockTravel(open, goal as any)).toMatchObject({ mode: 'walk' });
+    // open ground the short think could not settle is left to the route search
+    const unsettled = world(() => 'air', new Vec3(0.5, 90, 0.5), navigatorOf('timeout', 0));
+    expect(chooseRockTravel(unsettled, goal as any)).toMatchObject({ mode: 'default', why: 'open_ground' });
     const bot = world(rock, new Vec3(0.5, 90, 0.5), navigatorOf('noPath', 0));
-    expect(chooseRockTravel(bot, new goals.GoalNear(5, 88, 0, 2) as any)).toMatchObject({ mode: 'default', why: 'near' });
+    expect(chooseRockTravel(bot, new goals.GoalNear(1, 90, 0, 0) as any)).toMatchObject({ mode: 'default', why: 'near' });
     expect(chooseRockTravel(bot, new goals.GoalNearXZ(24, 0, 2) as any)).toMatchObject({ mode: 'default', why: 'no_height' });
     bot.entity.isInWater = true;
     expect(chooseRockTravel(bot, goal as any)).toMatchObject({ mode: 'default', why: 'in_water' });
@@ -232,5 +237,112 @@ describe('how a far walk through rock is made (utils/rockTravel)', () => {
     bot.entity.position = new Vec3(from.x + 0.5, from.y, from.z + 0.5);
     const back = chooseRockTravel(bot, new goals.GoalNear(0, 90, 0, 1) as any);
     expect(back).toMatchObject({ mode: 'cells', source: 'trail', digs: 0 });
+  });
+});
+
+describe('a walk that needs digging is a combination of straight runs, shafts and stairs, and goes round what is in the way (run 23)', () => {
+  const noPath = { getPathFromTo: () => ({ next: () => ({ value: { result: { status: 'noPath', path: [] } } }) }), movements: undefined };
+  const at = (cells: Vec3[]) => cells.map(c => `${c.x},${c.y},${c.z}`);
+  /** The axis of each horizontal step of a tunnel (vertical-only steps are not counted). */
+  const axesOf = (cells: Vec3[], start: Vec3) => {
+    const out: string[] = [];
+    let before = start;
+    for (const cell of cells) { if (cell.x !== before.x) out.push('x'); else if (cell.z !== before.z) out.push('z'); before = cell; }
+    return out;
+  };
+  const turns = (axes: string[]) => axes.filter((axis, i) => i > 0 && axis !== axes[i - 1]).length;
+  /** Open air over a stone floor (y 89), with `solid` and `special` cells on top of it. */
+  const hall = (solid: (x: number, y: number, z: number) => boolean, special: Rule = () => null): Rule =>
+    (x, y, z) => special(x, y, z) ?? (y <= 89 ? 'stone' : solid(x, y, z) ? 'stone' : 'air');
+  const feet = new Vec3(0, 90, 0);
+  const start = new Vec3(0.5, 90, 0.5);
+
+  it('a short walk through a wall that no ground leads round is cut straight through it, not left to the route search', () => {
+    // a wall two blocks thick across the hall at x 3-4; the goal is 8 m on, behind it
+    const bot = world(hall(x => x === 3 || x === 4), undefined, noPath);
+    const choice = chooseRockTravel(bot, new goals.GoalNear(8, 90, 0, 0) as any);
+    expect(choice.mode).toBe('cells');
+    if (choice.mode !== 'cells') return;
+    expect(choice.source).toBe('tunnel');
+    expect(choice.cells).toHaveLength(8);
+    expect(choice.cells.every(c => c.y === 90 && c.z === 0)).toBe(true);
+    expect(choice.digs).toBe(4);            // two blocks of wall, feet and head: four, not a diagonal's worth
+  });
+
+  it('a diagonal goal is one run along x and one along z (a single turn), never a zigzag', () => {
+    const bot = world(hall(() => true, (x, y, z) => (x === 0 && z === 0 && (y === 90 || y === 91) ? 'air' : null)), undefined, noPath);
+    const choice = chooseRockTravel(bot, new goals.GoalNear(9, 90, 5, 0) as any);
+    expect(choice.mode).toBe('cells');
+    if (choice.mode !== 'cells') return;
+    const axes = axesOf(choice.cells, feet);
+    expect(axes).toHaveLength(14);
+    expect(turns(axes)).toBe(1);
+    expect(choice.cells.at(-1)).toMatchObject({ x: 9, y: 90, z: 5 });
+  });
+
+  it('goes round a furnace at the first step (run 23: protected:furnace stopped the whole tunnel walk at step 0, and the route search took 41 s for 15 m)', () => {
+    const solid = (x: number, y: number, z: number) => x >= 1 && x <= 6 && y <= 92 && Math.abs(z) <= 3;
+    const rule = hall(solid, (x, y, z) => (x === 1 && y === 90 && z === 0 ? 'furnace' : null));
+    const bot = world(rule, undefined, noPath);
+    const straight = planStairLine(feet, { x: 9, y: 90, z: 0 });
+    expect(estimateCells(bot, feet, straight.cells).stoppedAt).toBe(0);
+    const choice = chooseRockTravel(bot, new goals.GoalNear(9, 90, 0, 0) as any);
+    expect(choice.mode).toBe('cells');
+    if (choice.mode !== 'cells') return;
+    expect(at(choice.cells)).not.toContain('1,90,0');
+    expect(choice.cells.at(-1)).toMatchObject({ x: 9, y: 90, z: 0 });
+    let from = feet;
+    for (const cell of choice.cells) { expect(isStep(from, cell)).toBe(true); from = cell; }
+    // a jog to the side, a run parallel to the straight one, back: at most three turns, and the plan can be cut all the way
+    expect(turns(axesOf(choice.cells, feet))).toBeLessThanOrEqual(3);
+    expect(estimateCells(bot, feet, choice.cells).stoppedAt).toBe(choice.cells.length);
+  });
+
+  it('goes round water beside the line, two cells out (liquid_beside refused the run at its first steps)', () => {
+    const solid = (x: number, y: number, z: number) => x >= 1 && x <= 6 && y <= 92 && Math.abs(z) <= 3;
+    const rule = hall(solid, (x, y, z) => (x === 3 && y === 90 && z === 1 ? 'water' : null));
+    const bot = world(rule, undefined, noPath);
+    const choice = chooseRockTravel(bot, new goals.GoalNear(9, 90, 0, 0) as any);
+    expect(choice.mode).toBe('cells');
+    if (choice.mode !== 'cells') return;
+    // no cell dug beside the water
+    expect(choice.cells.some(c => c.y === 90 && Math.abs(c.x - 3) + Math.abs(c.z - 1) <= 1 && !(c.x === 3 && c.z === 1))).toBe(false);
+    expect(choice.cells.at(-1)).toMatchObject({ x: 9, y: 90, z: 0 });
+    expect(estimateCells(bot, feet, choice.cells).stoppedAt).toBe(choice.cells.length);
+  });
+
+  it('goes round an obstacle in the middle of a run by a jog just before it, and comes back to the goal', () => {
+    const solid = (x: number, y: number, z: number) => x >= 1 && x <= 12 && y <= 92 && Math.abs(z) <= 4;
+    const rule = hall(solid, (x, y, z) => (x === 7 && y === 90 && z === 0 ? 'furnace' : null));
+    const bot = world(rule, undefined, noPath);
+    const choice = chooseRockTravel(bot, new goals.GoalNear(13, 90, 0, 0) as any);
+    expect(choice.mode).toBe('cells');
+    if (choice.mode !== 'cells') return;
+    expect(at(choice.cells)).not.toContain('7,90,0');
+    expect(choice.cells.at(-1)).toMatchObject({ x: 13, y: 90, z: 0 });
+    expect(turns(axesOf(choice.cells, feet))).toBeLessThanOrEqual(3);
+    // the plan is cut all the way, with no more cells than the straight run and its two jogs
+    expect(estimateCells(bot, feet, choice.cells).stoppedAt).toBe(choice.cells.length);
+    expect(choice.cells.length).toBeLessThanOrEqual(13 + 2);
+  });
+
+  it('a stair down is a shaft first and a straight run, and no cell of it is a diagonal step', () => {
+    const bot = world(hall(() => true, (x, y, z) => (x === 0 && z === 0 && (y === 90 || y === 91) ? 'air' : y < 90 ? 'stone' : null)), undefined, noPath);
+    const choice = chooseRockTravel(bot, new goals.GoalNear(4, 82, 3, 0) as any);
+    expect(choice.mode).toBe('cells');
+    if (choice.mode !== 'cells') return;
+    let from = feet;
+    for (const cell of choice.cells) { expect(isStep(from, cell)).toBe(true); from = cell; }
+    expect(turns(axesOf(choice.cells, feet))).toBeLessThanOrEqual(1);
+  });
+
+  it('open ground the search found no way over is dug through even when little of the line is rock', () => {
+    const bot = world(hall(x => x === 2), undefined, noPath);
+    expect(chooseRockTravel(bot, new goals.GoalNear(12, 90, 0, 0) as any)).toMatchObject({ mode: 'cells', source: 'tunnel' });
+  });
+
+  it('but a far goal the search could find no way to (ground not loaded that far) is left to the route search and its legs, not dug in a line across the open', () => {
+    const bot = world(hall(() => false), undefined, noPath);
+    expect(chooseRockTravel(bot, new goals.GoalNear(120, 90, 0, 0) as any)).toMatchObject({ mode: 'default', why: 'open_ground' });
   });
 });

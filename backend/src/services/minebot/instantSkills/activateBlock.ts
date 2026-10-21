@@ -92,7 +92,7 @@ class ActivateBlock extends InstantSkill {
         targetBlock.position.y,
         targetBlock.position.z,
         1,
-      ), { timeoutMs: 15_000 });
+      ), { rockTravel: true, timeoutMs: 15_000 });
 
       if (bed) return await this.useBed(targetBlock);
       await this.bot.activateBlock(targetBlock);

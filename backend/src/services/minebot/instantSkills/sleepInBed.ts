@@ -220,7 +220,7 @@ class SleepInBed extends InstantSkill {
           const distance = this.bot.entity.position.distanceTo(bed.position);
           if (distance > 3) {
             this.bot.pathfinder.stop();
-            await gotoSafe(this.bot, new goals.GoalNear(bed.position.x, bed.position.y, bed.position.z, 2), { timeoutMs: 15_000 });
+            await gotoSafe(this.bot, new goals.GoalNear(bed.position.x, bed.position.y, bed.position.z, 2), { rockTravel: true, timeoutMs: 15_000 });
           }
 
           // ベッドで寝ている村人を探す
@@ -328,7 +328,7 @@ class SleepInBed extends InstantSkill {
       const distToPlace = this.bot.entity.position.distanceTo(placePos);
       if (distToPlace > 3) {
         this.bot.pathfinder.stop();
-        await gotoSafe(this.bot, new goals.GoalNear(placePos.x, placePos.y, placePos.z, 2), { timeoutMs: 15_000 });
+        await gotoSafe(this.bot, new goals.GoalNear(placePos.x, placePos.y, placePos.z, 2), { rockTravel: true, timeoutMs: 15_000 });
         // From where it stands now the bed would lie another way (its head is away from the body): the spot is read again.
         // (A spot that was just made is kept: the cells were cleared for it.)
         if (!this.plannedHead) placePos = this.findPlaceForBed() ?? placePos;

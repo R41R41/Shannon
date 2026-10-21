@@ -52,7 +52,7 @@ class EnchantItem extends InstantSkill {
       // 距離チェック & 移動
       const distance = this.bot.entity.position.distanceTo(pos);
       if (distance > 4.5) {
-        const r = await gotoSafe(this.bot, new goals.GoalNear(x, y, z, 2), { timeoutMs: 15_000 });
+        const r = await gotoSafe(this.bot, new goals.GoalNear(x, y, z, 2), { rockTravel: true, timeoutMs: 15_000 });
         if (!r.success) {
           return {
             success: false,

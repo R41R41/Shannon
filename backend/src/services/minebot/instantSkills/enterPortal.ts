@@ -86,7 +86,7 @@ class EnterPortal extends InstantSkill {
         while (this.bot.blockAt(foot.offset(0, -1, 0))?.name === 'nether_portal') foot = foot.offset(0, -1, 0);
         const inPortal = () => { const at = this.bot.entity.position.floored(); return this.bot.blockAt(at)?.name === 'nether_portal' || this.bot.blockAt(at.offset(0, 1, 0))?.name === 'nether_portal'; };
         const walk = async () => {
-          try { return await gotoSafe(this.bot, new goals.GoalBlock(foot.x, foot.y, foot.z), { timeoutMs: 20_000 }); }
+          try { return await gotoSafe(this.bot, new goals.GoalBlock(foot.x, foot.y, foot.z), { rockTravel: true, timeoutMs: 20_000 }); }
           catch (error) { if (this.shouldInterrupt()) throw error; return { success: false, error: String(error) }; }
         };
         const moveResult = await walk();
