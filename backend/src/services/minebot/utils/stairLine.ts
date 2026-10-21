@@ -87,6 +87,10 @@ export class TunnelTrail {
   add(a: { x: number; y: number; z: number }, b: { x: number; y: number; z: number }): void {
     const from = key(a), to = key(b);
     if (from === to) return;
+    // Only a legal step is a way (one cell along x or z, a level up or down or none; or one level straight up or down). A fall of three
+    // written as a step was a way back that could not be climbed: seven "not one step" stops in a row (run 25).
+    const across = Math.abs(b.x - a.x) + Math.abs(b.z - a.z), up = Math.abs(b.y - a.y);
+    if (!((across === 1 && up <= 1) || (across === 0 && up === 1))) return;
     for (const [one, other] of [[from, to], [to, from]] as const) {
       let set = this.links.get(one);
       if (!set) this.links.set(one, set = new Set());

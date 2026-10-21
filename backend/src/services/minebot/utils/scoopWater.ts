@@ -284,17 +284,23 @@ export async function scoopWater(bot: CustomBot, options: ScoopOptions = {}): Pr
       // The nearest few are priced by the way to them (a walk, a tunnel cut, or none that fits), not by the straight line alone: a stand across
       // a wall or a pond is dearer than one a few blocks further on the same side.
       const nearest = plans.sort((a, b) => a.cost - b.cost).slice(0, STAND_PRICED);
-      for (const entry of nearest) entry.cost += standTravelCost(bot, entry.feet);
+      // One stand at a time with the thread given back between: each is a search of up to 0.4 s (run 25: stops of 1.8 s).
+      for (const entry of nearest) { entry.cost += standTravelCost(bot, entry.feet); await new Promise<void>(resolve => setImmediate(resolve)); }
       const plan = nearest.sort((a, b) => a.cost - b.cost)[0];
       const goal = plan ? new goals.GoalBlock(plan.feet.x, plan.feet.y, plan.feet.z) : new goals.GoalNear(sources[0].x, sources[0].y, sources[0].z, 2);
       if (plan) failedStands.add(keyOf(plan.feet));
       const before = bot.entity.position.clone();
       const distance = before.distanceTo((plan?.feet ?? sources[0]).offset(0.5, 0, 0.5));
-      try { await gotoSafe(bot, goal, { timeoutMs: Math.max(5_000, Math.min(left() - 3_000, 12_000 + distance * 700, 45_000)), ...walkOptions(bot) }); }
+      let walkNote = '';
+      try {
+        const walk = await gotoSafe(bot, goal, { timeoutMs: Math.max(5_000, Math.min(left() - 3_000, 12_000 + distance * 700, 45_000)), ...walkOptions(bot) });
+        // What stopped the walk, as the walk said it (the block, where it is, where it lies from the body), is passed on.
+        if (!walk.success) walkNote = `（${walk.error ?? '失敗'}${walk.activity ? `: ${walk.activity}` : ''}${walk.stuckBlock ? `。止まった所の${walk.stuckBlock.name}(${walk.stuckBlock.x},${walk.stuckBlock.y},${walk.stuckBlock.z})` : ''}）`;
+      }
       catch { /* judged by the aim below */ }
       walked += before.distanceTo(bot.entity.position);
       hit = aimFromHere(bot, sources);
-      if (!hit) { reasons.push(plan ? `(${plan.feet.x},${plan.feet.y},${plan.feet.z})の立ち位置まで行けなかった` : '水際の立ち位置が見つからなかった'); continue; }
+      if (!hit) { reasons.push(plan ? `(${plan.feet.x},${plan.feet.y},${plan.feet.z})の立ち位置まで行けなかった${walkNote}` : `水際の立ち位置が見つからなかった${walkNote}`); continue; }
     }
     // Ice over the water is broken first: the cell turns to water.
     if (iced.has(keyOf(hit.source))) {

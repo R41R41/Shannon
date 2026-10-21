@@ -153,11 +153,12 @@ describe('what a step needs and costs (utils/tunnelWalk)', () => {
     expect(estimateStep(bot, new Vec3(0, 90, 0), new Vec3(1, 90, 0))).toBeNull();
   });
 
-  it('refuses a cell with water or a falling block over it, lava anywhere beside it, an unloaded neighbour and bedrock', () => {
+  it('refuses a cell with a falling block over it, lava anywhere beside it, an unloaded neighbour and bedrock; water beside it is not a refusal (run 25)', () => {
     const cell = new Vec3(5, 80, 5);
     const only = (special: Rule): Rule => (x, y, z) => special(x, y, z) ?? 'stone';
     expect(digRefusal(world(() => 'stone'), cell, [])).toBeNull();
-    expect(digRefusal(world(only((x, y, z) => (x === 6 && y === 80 && z === 5 ? 'water' : null))), cell, [])).toMatch(/^liquid_beside/);
+    // A shore, the only place a bucket can be filled from, is always beside water: the body does not keep from digging there on its own.
+    expect(digRefusal(world(only((x, y, z) => (x === 6 && y === 80 && z === 5 ? 'water' : null))), cell, [])).toBeNull();
     expect(digRefusal(world(only((x, y, z) => (x === 5 && y === 81 && z === 5 ? 'gravel' : null))), cell, [])).toMatch(/^falling_above/);
     expect(digRefusal(world(only((x, y, z) => (x === 5 && y === 79 && z === 5 ? 'lava' : null))), cell, [])).toMatch(/^lava_beside/);
     expect(digRefusal(world((x) => (x === 4 ? null : 'stone')), cell, [])).toBe('unloaded');
@@ -301,15 +302,16 @@ describe('a walk that needs digging is a combination of straight runs, shafts an
     expect(estimateCells(bot, feet, choice.cells).stoppedAt).toBe(choice.cells.length);
   });
 
-  it('goes round water beside the line, two cells out (liquid_beside refused the run at its first steps)', () => {
+  it('goes straight on past water beside the line (run 25: the rule that kept the body from digging beside water is gone)', () => {
     const solid = (x: number, y: number, z: number) => x >= 1 && x <= 6 && y <= 92 && Math.abs(z) <= 3;
     const rule = hall(solid, (x, y, z) => (x === 3 && y === 90 && z === 1 ? 'water' : null));
     const bot = world(rule, undefined, noPath);
     const choice = chooseRockTravel(bot, new goals.GoalNear(9, 90, 0, 0) as any);
     expect(choice.mode).toBe('cells');
     if (choice.mode !== 'cells') return;
-    // no cell dug beside the water
-    expect(choice.cells.some(c => c.y === 90 && Math.abs(c.x - 3) + Math.abs(c.z - 1) <= 1 && !(c.x === 3 && c.z === 1))).toBe(false);
+    // the straight run: nine cells along x, none moved aside
+    expect(choice.cells).toHaveLength(9);
+    expect(choice.cells.every(c => c.z === 0 && c.y === 90)).toBe(true);
     expect(choice.cells.at(-1)).toMatchObject({ x: 9, y: 90, z: 0 });
     expect(estimateCells(bot, feet, choice.cells).stoppedAt).toBe(choice.cells.length);
   });

@@ -390,10 +390,21 @@ class SleepInBed extends InstantSkill {
       if (hostileNear(this.bot as any, PICKUP_SAFE_RANGE)) {
         return { success: true, result: `${slept.result}。敵が近いので、ベッド(${at.x}, ${at.y}, ${at.z})はそのままにしました（後で dig-block-at takeEquipment=true で拾えます）` };
       }
+      const bedName = this.bot.blockAt(at)?.name ?? placedBed.name;
+      const bedsHeld = () => this.bot.inventory.items().filter(item => item.name === bedName).reduce((sum, item) => sum + item.count, 0);
+      const bedsBefore = bedsHeld();
       let taken: { success: boolean; result: string };
       try { taken = await this.callSkill('dig-block-at', at.x, at.y, at.z, true, 'target', true); }
       catch (error: any) { taken = { success: false, result: String(error?.message ?? error) }; }
-      // Dug but not in the pack (drop_not_collected): it lies there, and digging the spot again finds air.
+      // Dug but not in the pack (drop_not_collected): it lies there, and digging the spot again finds air. The drop appears a moment after
+      // the block is gone, so it is looked for again once, here (run 25: the bed was left lying and the next night had none).
+      if ((taken as { failureType?: string }).failureType === 'drop_not_collected' && bedsHeld() <= bedsBefore) {
+        try {
+          await actionDelay(this.bot, 600);
+          await this.callSkill('pickup-nearest-item', bedName, 10);
+        } catch (error: any) { if (this.shouldInterrupt()) throw error; }
+        if (bedsHeld() > bedsBefore) taken = { success: true, result: 'ベッドを拾い直しました' };
+      }
       const notTaken = (taken as { failureType?: string }).failureType === 'drop_not_collected'
         ? `ベッドは掘りましたが持ち物に入っていません（(${at.x}, ${at.y}, ${at.z}) の近くに落ちていれば pickup-nearest-item で拾えます）`
         : `ベッド(${at.x}, ${at.y}, ${at.z})を拾えませんでした（dig-block-at takeEquipment=true で拾えます）`;

@@ -9,12 +9,22 @@
  * SELF_DROP_MS, then the item is just a drop on the ground again (it despawns after five minutes anyway).
  */
 import { isThrowable } from './inventoryTidy.js';
+import { nativeActionHost } from '../execution/ActionExecution.js';
 
-/** How long a thrown heap is left alone. */
-export const SELF_DROP_MS = 120_000;
+/**
+ * How long a thrown heap is left alone: as long as an item lies on the ground (it despawns after five minutes), a little less.
+ * (Run 25: two minutes, then the heap was fetched back.)
+ */
+export const SELF_DROP_MS = 290_000;
 
 interface Noted { at: number; name: string }
+/**
+ * Kept on the native body, not on the object the caller holds: every skill works through a motor port of its own (a new proxy for each
+ * action), so the port drop-item wrote through was never the one collectDrops, pickup-nearest-item and the auto pickup asked through,
+ * and the record was never found (run 25: the same dirt 40 and diorite 25 thrown and fetched back three times).
+ */
 const records = new WeakMap<object, Map<number, Noted>>();
+const hostOf = (bot: object): object => { try { return nativeActionHost(bot) ?? bot; } catch { return bot; } };
 
 export interface DroppedLike { id?: number; name?: string; displayName?: unknown; getDroppedItem?(): { name?: string } | null | undefined }
 
@@ -29,8 +39,9 @@ export function droppedKind(entity: DroppedLike): string | null {
 export function noteSelfDropped(bot: object, itemName: string, entities: DroppedLike[], now: number = Date.now()): number {
   // Junk kinds, and the spare pickaxes the tidy throws (inventoryTidy surplusPickaxes); other things may be fetched back on purpose.
   if (!isThrowable(itemName) && !itemName.endsWith('_pickaxe')) return 0;
-  let map = records.get(bot);
-  if (!map) { map = new Map(); records.set(bot, map); }
+  const host = hostOf(bot);
+  let map = records.get(host);
+  if (!map) { map = new Map(); records.set(host, map); }
   let noted = 0;
   for (const entity of entities) {
     if (entity.id === undefined || !isItemEntity(entity)) continue;
@@ -45,9 +56,10 @@ export function noteSelfDropped(bot: object, itemName: string, entities: Dropped
 /** Whether this item entity is one the body threw away itself a short while ago. */
 export function isSelfDropped(bot: object, entity: DroppedLike | null | undefined, now: number = Date.now()): boolean {
   if (!entity || entity.id === undefined) return false;
-  const record = records.get(bot)?.get(entity.id);
+  const host = hostOf(bot);
+  const record = records.get(host)?.get(entity.id);
   if (!record) return false;
-  if (now - record.at > SELF_DROP_MS) { records.get(bot)?.delete(entity.id); return false; }
+  if (now - record.at > SELF_DROP_MS) { records.get(host)?.delete(entity.id); return false; }
   return true;
 }
 

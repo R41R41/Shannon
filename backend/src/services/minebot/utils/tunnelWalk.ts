@@ -6,8 +6,8 @@
  * back was cut again). Here the cells are fixed beforehand, a step is dug as a whole (three cells for a stair step down, three for a step
  * up, two for a level one) and walked, and the cells walked are remembered (TunnelTrail) so that the way back digs nothing.
  *
- * Anything the walk is not sure of ends it with a reason (liquid beside a cell to be dug, a block that will not break, no floor, a block
- * that falls) and the route search takes over from where the body stands.
+ * Anything the walk is not sure of ends it with a reason (lava beside a cell to be dug, a block that will not break, no floor, a block
+ * that falls), told with the block, its coordinates and where it lies from the body and the route search takes over from where the body stands.
  */
 import { Vec3 } from 'vec3';
 import type { CustomBot } from '../types/CustomBot.js';
@@ -18,7 +18,7 @@ import { assertActionActive } from '../execution/ActionExecution.js';
 import { chooseTool } from './toolChoice.js';
 import { digBlockVerified } from './digBlockVerified.js';
 import { trailOf } from './stairLine.js';
-import { shaftStepRefusal } from './shaftDown.js';
+import { explainShaftRefusal, shaftStepRefusal } from './shaftDown.js';
 
 const log = createLogger('Minebot:tunnelWalk');
 
@@ -92,28 +92,84 @@ export function floorDrop(bot: WorldBot, floor: Cell, allowDrop: boolean): numbe
  * A cell already empty has nothing to ask but whether it is liquid.
  */
 export function digRefusal(bot: WorldBot, cell: Cell, others: Cell[], options: { allowFalling?: boolean } = {}): string | null {
+  return digRefusalAt(bot, cell, others, options)?.reason ?? null;
+}
+
+/** A refusal and the cell it is about (the cell itself, or the neighbour that is lava, unloaded, a falling block). */
+export interface Refusal { reason: string; at: Cell }
+
+/**
+ * digRefusal with the place of the thing that stopped it. Water beside a cell is not a refusal here: the body no longer keeps from
+ * digging beside water on its own (run 25: a shore, the only place a bucket can be filled from, is always beside water, and the rule
+ * kept the body in the rock at 7 shores, 280 cells dug on the way round). Whoever asks for a dig is told what is beside it instead
+ * (see explainRefusal and nearbyLiquid).
+ */
+export function digRefusalAt(bot: WorldBot, cell: Cell, others: Cell[], options: { allowFalling?: boolean } = {}): Refusal | null {
   const block = blockOf(bot, cell);
-  if (!block) return 'unloaded';
-  if (LIQUIDS.has(block.name)) return `liquid:${block.name}`;
+  if (!block) return { reason: 'unloaded', at: cell };
+  if (LIQUIDS.has(block.name)) return { reason: `liquid:${block.name}`, at: cell };
   const empty = block.boundingBox === 'empty';
   if (!empty) {
-    if (block.diggable === false || block.name === 'bedrock') return `undiggable:${block.name}`;
-    if (PROTECTED_UTILITY_BLOCKS.has(block.name)) return `protected:${block.name}`;
+    if (block.diggable === false || block.name === 'bedrock') return { reason: `undiggable:${block.name}`, at: cell };
+    if (PROTECTED_UTILITY_BLOCKS.has(block.name)) return { reason: `protected:${block.name}`, at: cell };
   }
   for (const [dx, dy, dz] of SIDES6) {
     const side = at(cell, dx, dy, dz);
     // The cells of the step itself are dealt with on their own (a neighbour of the same step is dug or empty by then).
     if (others.some(other => other.x === side.x && other.y === side.y && other.z === side.z)) continue;
     const next = blockOf(bot, side);
-    if (!next) return 'unloaded';
-    // Lava beside any cell the body will stand in or open; water only beside a cell that is dug (an open cell does not let it in).
-    if (next.name === 'lava' || next.name === 'flowing_lava') return `lava_beside:${next.name}`;
-    if (!empty && LIQUIDS.has(next.name)) return `liquid_beside:${next.name}`;
+    if (!next) return { reason: 'unloaded', at: side };
+    // Lava beside any cell the body will stand in or open.
+    if (next.name === 'lava' || next.name === 'flowing_lava') return { reason: `lava_beside:${next.name}`, at: side };
     // A block that falls is not a reason to stop for a walk that digs it out as it falls (settleFalling): the gravel over a cell comes
     // down into it, and is dug again (run 24: a tunnel walk planned the same stop at gravel nine times in a minute).
-    if (!empty && dy === 1 && FALLING.test(next.name) && !options.allowFalling) return `falling_above:${next.name}`;
+    if (!empty && dy === 1 && FALLING.test(next.name) && !options.allowFalling) return { reason: `falling_above:${next.name}`, at: side };
   }
   return null;
+}
+
+const DIRECTIONS: Array<[string, number, number, number]> = [['東', 1, 0, 0], ['西', -1, 0, 0], ['上', 0, 1, 0], ['下', 0, -1, 0], ['南', 0, 0, 1], ['北', 0, 0, -1]];
+/** Where `to` lies from `from`, in words: "東2・上1・南3（約3.7m）". */
+export function relativeTo(from: Cell, to: Cell): string {
+  const d = { x: to.x - from.x, y: to.y - from.y, z: to.z - from.z };
+  const parts = DIRECTIONS.map(([name, dx, dy, dz]) => ({ name, n: d.x * dx + d.y * dy + d.z * dz })).filter(entry => entry.n > 0).map(entry => `${entry.name}${entry.n}`);
+  const distance = Math.hypot(d.x, d.y, d.z);
+  return distance === 0 ? '自分の位置' : `${parts.join('・')}（約${distance.toFixed(1)}m）`;
+}
+
+/**
+ * What stopped a dig, said exactly: which block, at which coordinates, and where that is from the body (`from`, its feet). The planner
+ * is told this instead of a bare kind, so that it can choose the way round itself.
+ */
+export function explainRefusal(bot: WorldBot, refusal: Refusal, cell: Cell, from: Cell): string {
+  const kind = refusal.reason.split(':')[0];
+  const found = blockOf(bot, refusal.at)?.name;
+  const where = `(${refusal.at.x},${refusal.at.y},${refusal.at.z})`;
+  const rel = relativeTo(from, refusal.at);
+  const target = `掘る予定の(${cell.x},${cell.y},${cell.z})`;
+  switch (kind) {
+    case 'lava_beside': return `${target}の隣の${where}に${found ?? '溶岩'}がある（自分から${rel}）`;
+    case 'falling_above': return `${target}の真上の${where}に${found ?? '落ちるブロック'}がある（自分から${rel}）`;
+    case 'protected': return `${found ?? refusal.reason.split(':')[1]}${where}は壊さない決まりのブロック（自分から${rel}）`;
+    case 'undiggable': return `${found ?? refusal.reason.split(':')[1]}${where}は掘れないブロック（自分から${rel}）`;
+    case 'liquid': return `${where}は${found ?? '液体'}（自分から${rel}）`;
+    case 'unloaded': return `${where}はまだ読み込まれていない（自分から${rel}）`;
+    default: return `${where}（自分から${rel}）`;
+  }
+}
+
+/**
+ * The liquid cells beside a cell that is about to be dug (water and lava, the cell's six sides), each with its place and where it lies
+ * from the body: what a stop is told with, and what a dig that goes on beside water can be told with.
+ */
+export function nearbyLiquid(bot: WorldBot, cell: Cell, from: Cell): string[] {
+  const out: string[] = [];
+  for (const [dx, dy, dz] of SIDES6) {
+    const side = at(cell, dx, dy, dz);
+    const name = blockOf(bot, side)?.name;
+    if (name && LIQUIDS.has(name)) out.push(`${name}(${side.x},${side.y},${side.z})自分から${relativeTo(from, side)}`);
+  }
+  return out;
 }
 
 export interface StepEstimate { ms: number; digs: number; extraDrop: number }
@@ -182,7 +238,10 @@ export function explainStep(bot: WorldBot, from: Cell, to: Cell): string {
   const needs = stepNeeds(from, to);
   const vertical = to.x === from.x && to.z === from.z;
   if (vertical && to.y < from.y) return shaftStepRefusal(bot as never, new Vec3(from.x, from.y, from.z)) ?? digRefusal(bot, needs.clear[0], []) ?? 'ok';
-  for (const cell of needs.clear) { const refusal = digRefusal(bot, cell, vertical ? [] : needs.clear); if (refusal) return `${refusal}(${cell.x},${cell.y},${cell.z})`; }
+  for (const cell of needs.clear) {
+    const refusal = digRefusalAt(bot, cell, vertical ? [] : needs.clear);
+    if (refusal) return `${refusal.reason}(${cell.x},${cell.y},${cell.z}) ${explainRefusal(bot, refusal, cell, from)}`;
+  }
   if (vertical) return 'no_blocks_to_pillar';
   return `no_floor(${needs.floor.x},${needs.floor.y},${needs.floor.z}:${blockOf(bot, needs.floor)?.name ?? 'unloaded'})`;
 }
@@ -374,11 +433,11 @@ export async function walkCells(bot: CustomBot, cells: Vec3[], options: WalkOpti
     if (next.x === feet.x && next.z === feet.z) {
       // A level straight down (a shaft) or a run of levels straight up (a pillar).
       const cell = stepNeeds(feet, next).clear[0];
-      const refused = digRefusal(bot, cell, []);
-      if (refused) return { stopped: 'blocked', steps, digs, at: cell, reason: `${refused}(${cell.x},${cell.y},${cell.z})` };
+      const refused = digRefusalAt(bot, cell, []);
+      if (refused) return { stopped: 'blocked', steps, digs, at: cell, reason: `${refused.reason}(${cell.x},${cell.y},${cell.z}) ${explainRefusal(bot, refused, cell, feet)}` };
       if (next.y < feet.y) {
         const why = await shaftDownOne(bot, feet);
-        if (why) return { stopped: 'blocked', steps, digs, at: cell, reason: `縦穴で下りられません(${why})` };
+        if (why) return { stopped: 'blocked', steps, digs, at: cell, reason: `縦穴で下りられません(${why}) ${explainShaftRefusal(bot as never, feet, why)}` };
         digs++;
         trail.add(feet, bot.entity.position.floored());
         steps++;
@@ -400,19 +459,21 @@ export async function walkCells(bot: CustomBot, cells: Vec3[], options: WalkOpti
     }
     const needs = stepNeeds(feet, next);
     for (const cell of needs.clear) {
-      const refusal = digRefusal(bot, cell, needs.clear, { allowFalling: true });
-      if (refusal) return { stopped: 'blocked', steps, digs, at: cell, reason: `${refusal}(${cell.x},${cell.y},${cell.z})` };
+      const refusal = digRefusalAt(bot, cell, needs.clear, { allowFalling: true });
+      if (refusal) return { stopped: 'blocked', steps, digs, at: cell, reason: `${refusal.reason}(${cell.x},${cell.y},${cell.z}) ${explainRefusal(bot, refusal, cell, feet)}` };
     }
     for (const cell of needs.clear) {
       if (blockOf(bot, cell)?.boundingBox === 'empty') continue;
+      const liquids = nearbyLiquid(bot, cell, feet).filter(text => !text.startsWith('lava'));
+      if (liquids.length) log.info(`⛏️ 水の隣のブロックを掘ります: (${cell.x},${cell.y},${cell.z})の隣に ${liquids.slice(0, 3).join('、')}`);
       let dug = false;
       try { dug = await digCell(bot, cell); } catch (error) {
         if (/interrupt/i.test(String((error as Error)?.message))) throw error;
-        return { stopped: 'blocked', steps, digs, at: cell, reason: `掘れません(${cell.x},${cell.y},${cell.z}): ${String((error as Error)?.message ?? error).slice(0, 80)}` };
+        return { stopped: 'blocked', steps, digs, at: cell, reason: `掘れません(${cell.x},${cell.y},${cell.z}) ${blockOf(bot, cell)?.name ?? ''}（自分から${relativeTo(feet, cell)}）: ${String((error as Error)?.message ?? error).slice(0, 80)}` };
       }
       // What was dug and came down again is gravel from above (settled below), not a block that would not break.
       if (!dug && FALLING.test(blockOf(bot, cell)?.name ?? '')) dug = true;
-      if (!dug) return { stopped: 'blocked', steps, digs, at: cell, reason: `掘れません(${cell.x},${cell.y},${cell.z})` };
+      if (!dug) return { stopped: 'blocked', steps, digs, at: cell, reason: `掘れません(${cell.x},${cell.y},${cell.z}) ${blockOf(bot, cell)?.name ?? ''}（自分から${relativeTo(feet, cell)}）` };
       digs++;
     }
     // Gravel and sand over the cells came down into them: dug out again before the step.
@@ -420,7 +481,11 @@ export async function walkCells(bot: CustomBot, cells: Vec3[], options: WalkOpti
     const stillShut = needs.clear.find(cell => blockOf(bot, cell)?.boundingBox === 'block');
     if (stillShut) return { stopped: 'blocked', steps, digs, at: stillShut, reason: `落ちてくる物を掘り切れません(${stillShut.x},${stillShut.y},${stillShut.z})` };
     const drop = floorDrop(bot, needs.floor, next.y <= feet.y);
-    if (drop === null) return { stopped: 'blocked', steps, digs, at: needs.floor, reason: `足場がありません(${needs.floor.x},${needs.floor.y},${needs.floor.z})` };
+    if (drop === null) {
+      const under = blockOf(bot, needs.floor)?.name ?? '未読み込み';
+      return { stopped: 'blocked', steps, digs, at: needs.floor,
+        reason: `足場がありません(${needs.floor.x},${needs.floor.y},${needs.floor.z}) 足場になるはずの所は${under}（自分から${relativeTo(feet, needs.floor)}）。その下${MAX_EXTRA_DROP}マス以内にも立てる所がありません` };
+    }
     if (!(await moveOneCell(bot, feet, next, drop))) {
       return { stopped: 'step_failed', steps, digs, at: next, reason: `(${next.x},${next.y - drop},${next.z})へ踏み出せませんでした` };
     }

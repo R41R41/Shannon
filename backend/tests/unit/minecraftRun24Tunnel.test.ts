@@ -175,14 +175,14 @@ describe('the tunnel walk goes through gravel and goes on after a step down (run
   });
 
   it('a stop says which cell it could not pass, and a stop is the same stop when the cell and the reason are the same', async () => {
-    const { bot } = liveWorld(hall((x, y, z) => (x === 2 && z === 1 && y === 90 ? 'water' : x === 2 && z === 0 && (y === 90 || y === 91) ? 'stone' : null)));
+    const { bot } = liveWorld(hall((x, y, z) => (x === 2 && z === 1 && y === 90 ? 'lava' : x === 2 && z === 0 && (y === 90 || y === 91) ? 'stone' : null)));
     const outcome = await walkCells(bot, steps([1, 90, 0], [2, 90, 0], [3, 90, 0]), { isEnd: feet => feet.x === 3, deadline: Date.now() + 60_000 });
     expect(outcome.stopped).toBe('blocked');
-    expect(outcome.reason).toMatch(/^liquid_beside:water/);
+    expect(outcome.reason).toMatch(/^lava_beside:lava/);
     expect(outcome.at).toMatchObject({ x: 2, y: 90, z: 0 });
     const again = { ...outcome, steps: 9 };
     expect(stopKey(again, new Vec3(1, 90, 0))).toBe(stopKey(outcome, new Vec3(1, 90, 0)));
-    expect(stopKey({ ...outcome, reason: 'lava_beside:lava(2,90,0)' }, new Vec3(1, 90, 0))).not.toBe(stopKey(outcome, new Vec3(1, 90, 0)));
+    expect(stopKey({ ...outcome, reason: 'falling_above:gravel(2,90,0)' }, new Vec3(1, 90, 0))).not.toBe(stopKey(outcome, new Vec3(1, 90, 0)));
   });
 
   /** A level run along x at y 90 with the floor missing at x 3 (the ground is a block lower there). */

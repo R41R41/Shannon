@@ -15,6 +15,7 @@ import { emptySlotCountSafe } from '../utils/inventorySpillDetection.js';
 import { hostileNear } from './craftOne.js';
 import { nightGateFor } from '../utils/nightGate.js';
 import { shaftStepRefusal } from '../utils/shaftDown.js';
+import { relativeTo } from '../utils/tunnelWalk.js';
 import pathfinder from 'mineflayer-pathfinder';
 import { gotoSafe } from '../utils/gotoSafe.js';
 import { rankByRoute } from '../utils/routeEstimate.js';
@@ -60,6 +61,8 @@ class StairMine extends InstantSkill {
     private seaHeading: Vec3 | null = null;
     /** Cells of water shut off in this call (see sealWater). */
     private waterSeals = 0;
+    /** Why the last water could not be shut off (see sealWater), said when a step stops for it. */
+    private sealFailure: string | null = null;
     /** What this call did about the pickaxes and the pack (a spare made, stone thrown away), said at the end of its result. */
     private upkeepNotes: string[] = [];
     private mcData: any;
@@ -261,7 +264,7 @@ class StairMine extends InstantSkill {
                         // first, the sides before the way back. Run 17 was sent east and north by hand and lost two calls to it.
                         const next = this.otherDirection(firstDirection, triedDirections);
                         if (next && !this.shouldInterrupt()) {
-                            triedDirections.push(`${this.directionName(dir)}（${(this.lastStopReason ?? '進めず').slice(0, 56)}）`);
+                            triedDirections.push(`${this.directionName(dir)}（${(this.lastStopReason ?? '進めず').slice(0, 170)}）`);
                             dir = next; this.lastStopReason = null; i--;
                             continue;
                         }
@@ -444,8 +447,11 @@ class StairMine extends InstantSkill {
                     for (let seal = 0; water && seal < 6 && !standing.some(cell => cell.equals(water!)) && await this.sealWater(water, blockName); seal++)
                         water = this.adjacentWater(pos);
                     if (water) {
-                        this.lastStopReason = `${label}の${block.name}(${pos.x}, ${pos.y}, ${pos.z})の隣(${water.x}, ${water.y}, ${water.z})が水です。`
-                            + '塞ぐブロックが無いか塞げず、掘ると浸水するため停止しました。丸石などを持って再実行するか、水の無い場所から降りてください';
+                        const me = this.bot.entity.position.floored();
+                        const name = this.bot.blockAt(water)?.name ?? 'water';
+                        this.lastStopReason = `${label}の${block.name}(${pos.x}, ${pos.y}, ${pos.z})の隣(${water.x}, ${water.y}, ${water.z})が水です`
+                            + `（${name}、自分(${me.x}, ${me.y}, ${me.z})から${relativeTo(me, water)}）。`
+                            + `塞げませんでした: ${this.sealFailure ?? '塞いでも隣に水が残る（水が流れ込み続けている）か、水が自分の立つ高さにある'}。掘ると浸水するため停止しました`;
                         return false;
                     }
                     const dug = await this.digBlockSafe(block);
@@ -479,7 +485,8 @@ class StairMine extends InstantSkill {
                 }
                 const below = support?.position ?? nextPos.offset(0, -1, 0);
                 this.lastStopReason = `前方の足場(${below.x}, ${below.y}, ${below.z})が${support?.name ?? '未ロード'}で空いています`
-                    + '（木の上・崖・洞窟の縁など）。地面へ降りるか別の方向で再実行してください';
+                    + `（自分(${currentPos.x}, ${currentPos.y}, ${currentPos.z})から${relativeTo(currentPos, below)}）。${this.describeDropBelow(below)}`
+                    + this.describeBridgeStock(blockName);
                 return false;
             }
 
@@ -527,6 +534,26 @@ class StairMine extends InstantSkill {
         while (Date.now() < deadline && !this.shouldInterrupt()
             && (Math.floor(this.bot.entity.position.y) >= feet.y || (this.bot.entity as any).onGround === false)) await this.sleep(50);
         return Math.floor(this.bot.entity.position.y) === feet.y - 1;
+    }
+
+    /** What lies under an open step: how far the air goes down and what stops it, or the liquid or unloaded column that is there. */
+    private describeDropBelow(from: Vec3): string {
+        const FAR = 40;
+        for (let k = 0; k <= FAR; k++) {
+            const cell = from.offset(0, -k, 0);
+            const block = this.bot.blockAt(cell);
+            if (!block) return `その真下は(${cell.x}, ${cell.y}, ${cell.z})から先が未ロードで、床が分かりません。`;
+            if (block.name === 'lava' || block.name === 'water') return `その真下${k}マス先の(${cell.x}, ${cell.y}, ${cell.z})は${block.name}です（落ちると${block.name === 'lava' ? '燃える' : '水に入る'}）。`;
+            if (block.boundingBox === 'block') return k === 0 ? '' : `その真下は${k}マス先の(${cell.x}, ${cell.y}, ${cell.z})の${block.name}まで空いています（落差${k}マス${k > 3 ? '：3マスを超えるので飛び降りません' : ''}）。`;
+        }
+        return `その真下は${FAR}マス下まで空いています（洞窟・深い穴）。`;
+    }
+
+    /** What the pack has to bridge or pillar with, and what the step would need (a block put against the open step). */
+    private describeBridgeStock(blockName: string): string {
+        const have = [blockName, ...SCAFFOLD_BLOCKS].filter((name, index, all) => all.indexOf(name) === index)
+            .map(name => ({ name, count: this.bot.inventory.items().filter(item => item.name === name).reduce((sum, item) => sum + item.count, 0) })).filter(entry => entry.count > 0);
+        return `足場に使えるブロック: ${have.length ? have.map(entry => `${entry.name}×${entry.count}`).join('・') : '持っていない'}。足場は持っていれば置こうとしますが、置く場所の隣に固いブロックが無いと置けません（ここは置けませんでした）`;
     }
 
     /** The next way to try, from the one first asked for (`dir`): its sides, then back; null once all four have been tried. */
@@ -1044,9 +1071,12 @@ class StairMine extends InstantSkill {
      * WATER_SEALS a call.
      */
     async sealWater(at: Vec3, blockName = 'cobblestone'): Promise<boolean> {
-        if (this.waterSeals >= WATER_SEALS || this.afloat()) return false;
+        this.sealFailure = null;
+        if (this.waterSeals >= WATER_SEALS) { this.sealFailure = `この呼び出しでもう水を${this.waterSeals}か所塞いだ（上限${WATER_SEALS}）`; return false; }
+        if (this.afloat()) { this.sealFailure = '体が水に浮いている'; return false; }
         const block = [blockName, ...SCAFFOLD_BLOCKS].find(name => this.bot.inventory.items().some(item => item.name === name));
-        if (!block || !(await this.placeBlockSafe(block, at))) return false;
+        if (!block) { this.sealFailure = `塞ぐブロック（${SCAFFOLD_BLOCKS.join('・')}）を1つも持っていない`; return false; }
+        if (!(await this.placeBlockSafe(block, at))) { this.sealFailure = `${block}を水(${at.x},${at.y},${at.z})に置けなかった（置く足がかりのブロックが無い・届かない）`; return false; }
         this.waterSeals++;
         const deadline = Date.now() + 1000;
         while (Date.now() < deadline && this.bot.blockAt(at)?.boundingBox !== 'block') await this.sleep(100);

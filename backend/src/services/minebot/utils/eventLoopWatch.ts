@@ -48,7 +48,8 @@ export function loopWatchOptions(env: NodeJS.ProcessEnv = process.env): LoopWatc
   };
   return {
     warnMs: Math.max(100, number(env.MINEBOT_LOOP_LAG_WARN_MS, 1000)),
-    stallSampleMs: number(env.MINEBOT_LOOP_STALL_SAMPLE_MS, 2000),
+    // 1.2 s: run 25's stalls of 1.6-1.8 s (six of them) left no stack at the 2 s this was, and where they stood was not known.
+    stallSampleMs: number(env.MINEBOT_LOOP_STALL_SAMPLE_MS, 1200),
     // The worker's line goes to stderr (the journal) always; a file of JSON lines too only when asked for.
     stallFile: env.MINEBOT_LOOP_STALL_FILE ? path.resolve(env.MINEBOT_LOOP_STALL_FILE) : null,
   };

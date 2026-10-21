@@ -192,6 +192,11 @@ export async function gotoSafe(
   for (const entry of stops.values()) if (entry.n >= 2) avoid.add(entry.cell);
   for (let round = 0; opts.rockTravel && round < MAX_ROCK_ROUNDS && Date.now() < deadline; round++) {
     assertActionActive(bot);
+    // A round that ends at once (a walk refused at its first cell) comes round again with nothing awaited in between: the choosing of a
+    // way (a search, tens of priced plans) of up to five rounds ran as one block of the thread (run 25: stops of 1.8 s). The thread is
+    // given back between rounds.
+    if (round > 0) await new Promise<void>(resolve => setImmediate(resolve));
+    assertActionActive(bot);
     const choice = chooseRockTravel(bot, goal, process.env, { avoid });
     if (choice.mode === 'default') {
       // In the water (a bucket filled, a swim across a pond): the way on is chosen from land, so the body is first brought out of it,

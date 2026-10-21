@@ -45,6 +45,8 @@ const UNCUT_MS_PER_CELL = 900;
 const JOG_WIDTHS = [1, 2];
 const JOG_DIRECTIONS: Array<[number, number]> = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 const LEG_ORDERS: LegOrder[] = ['long', 'short'];
+/** The longest the jogged plans of planTunnel are priced for (ms). */
+const PLAN_BUDGET_MS = 200;
 
 export type RockTravelChoice =
   | { mode: 'default'; why: string }
@@ -71,15 +73,32 @@ interface WalkEstimate { status: 'success' | 'noPath' | 'other'; movements?: unk
 function walkOnlyEstimate(bot: CustomBot, goal: Goal): WalkEstimate | null {
   const navigator = bot.pathfinder as unknown as Navigator | undefined;
   if (!navigator?.getPathFromTo) return null;
+  // The same question from the same cell about the same goal, asked again within a few seconds (every round of a walk, and every caller
+  // that asks again after a stop), is answered from the first answer: the search blocks the thread for WALK_THINK_MS each time it is
+  // asked (run 25: three stops of 1.75-1.84 s, four searches of 0.4 s in a row).
+  const feet = bot.entity.position.floored();
+  const goalFields = goal as unknown as Record<string, unknown>;
+  const key = `${feet.x},${feet.y},${feet.z}|${goal.constructor?.name}|${['x', 'y', 'z', 'range', 'dx', 'dy', 'dz'].map(field => String(goalFields[field])).join(',')}`;
+  const now = Date.now();
+  let memory = walkMemory.get(navigator);
+  if (!memory) walkMemory.set(navigator, memory = new Map());
+  const known = memory.get(key);
+  if (known && now - known.at < WALK_MEMORY_MS) return known.value;
+  for (const [stale, entry] of memory) if (now - entry.at >= WALK_MEMORY_MS) memory.delete(stale);
+  let value: WalkEstimate | null = null;
   try {
     const movements = buildMovements(bot, ...walkOnlyProfile(false));
     const result = navigator.getPathFromTo(movements, bot.entity.position, goal, { timeout: WALK_THINK_MS, tickTimeout: WALK_THINK_MS }).next().value?.result;
-    if (!result) return null;
-    if (result.status === 'noPath') return { status: 'noPath', seconds: Infinity };
-    if (result.status !== 'success' || !Array.isArray(result.path)) return null;
-    return { status: 'success', movements, seconds: result.path.length * WALK_MS_PER_MOVE / 1000 };
-  } catch { return null; }
+    if (!result) value = null;
+    else if (result.status === 'noPath') value = { status: 'noPath', seconds: Infinity };
+    else if (result.status !== 'success' || !Array.isArray(result.path)) value = null;
+    else value = { status: 'success', movements, seconds: result.path.length * WALK_MS_PER_MOVE / 1000 };
+  } catch { value = null; }
+  memory.set(key, { at: now, value });
+  return value;
 }
+const WALK_MEMORY_MS = 4_000;
+const walkMemory = new WeakMap<object, Map<string, { at: number; value: WalkEstimate | null }>>();
 
 /** A tunnel plan priced: the cells, the estimate of walking them, and the seconds (the cells that cannot be cut priced as the route search's). */
 export interface TunnelPlan { cells: Vec3[]; estimate: PlanEstimate; seconds: number; complete: boolean; note: string }
@@ -128,12 +147,16 @@ export function planTunnel(bot: CustomBot, feet: Vec3, aim: Vec3, avoid?: Readon
   // Round the obstacle: the jog is made at the start, or a cell or two before the step that could not be cut.
   const stopped = first.estimate.stoppedAt;
   const at = [...new Set([-1, stopped - 2, stopped - 1])].filter(index => index >= -1 && index < first.cells.length);
+  // The jogs are priced one after another on the body's thread (up to 48 plans of tens of cells, each cell some block reads): past
+  // PLAN_BUDGET_MS the search ends with the best plan so far, as the walk-only search does with its think.
+  const startedAt = performance.now();
   for (const order of LEG_ORDERS) {
     for (const index of at) {
       const prefix = first.cells.slice(0, index + 1);
       const from = prefix.length ? prefix[prefix.length - 1] : feet;
       for (const [dx, dz] of JOG_DIRECTIONS) {
         for (const width of JOG_WIDTHS) {
+          if (best && performance.now() - startedAt > PLAN_BUDGET_MS) return best;
           const jog: Vec3[] = [];
           for (let step = 1; step <= width; step++) jog.push(new Vec3(from.x + dx * step, from.y, from.z + dz * step));
           const after = planStairLine(jog[jog.length - 1], aim, order);
@@ -194,7 +217,10 @@ export function chooseRockTravel(bot: CustomBot, goal: Goal, env: NodeJS.Process
   const along = Math.abs(aim.x - feet.x) + Math.abs(aim.z - feet.z) + Math.abs(aim.y - feet.y);
   const known = trailOf(bot).route(feet, cell => goal.isEnd(cell as never));
   // The trail is walked only while its cells are still open (a cell filled in since, or flooded, is not the way back any more).
+  // A trail through a cell a walk stopped at twice (options.avoid) is not taken either: the way back that stopped there stops there again
+  // (run 25: the same "not one step" seven times, the trail chosen first every time).
   const trail = known && known.length > 0 && known.length <= 3 * along + 12 && trailCellsOpen(bot, known)
+    && !(options.avoid?.size && known.some(cell => options.avoid!.has(`${cell.x},${cell.y},${cell.z}`)))
     ? { cells: known, seconds: known.length * TRAIL_MS_PER_STEP / 1000 } : null;
   if (trail && trail.seconds <= 30) return { mode: 'cells', cells: trail.cells, seconds: trail.seconds, source: 'trail', digs: 0 };
 

@@ -40,3 +40,23 @@ export function shaftStepRefusal(bot: ShaftBody, feet: Vec3): string | null {
   }
   return null;
 }
+
+/** shaftStepRefusal's answer said exactly: which block is where (coordinates, and how far under or beside the feet), for whoever is told why the shaft stopped. */
+export function explainShaftRefusal(bot: ShaftBody, feet: Vec3, why: string): string {
+  const name = (x: number, y: number, z: number) => bot.blockAt(new Vec3(x, y, z))?.name ?? '未読み込み';
+  const floor = { x: feet.x, y: feet.y - 1, z: feet.z }, under = { x: feet.x, y: feet.y - 2, z: feet.z };
+  const text = (cell: { x: number; y: number; z: number }, label: string) => `${label}(${cell.x},${cell.y},${cell.z})は${name(cell.x, cell.y, cell.z)}`;
+  switch (why) {
+    case 'floor_not_diggable': case 'floor_protected': return `${text(floor, '足元の')}（真下1マス。掘れない・壊さない決まりのブロック）`;
+    case 'no_rock_under': return `${text(under, '足元の2マス下の')}（真下2マス。岩でない・液体・立てない床）`;
+    case 'falling_under': return `${text(under, '足元の2マス下の')}（真下2マス。落ちるブロック）`;
+    case 'liquid_beside': {
+      for (const [dx, dz] of SIDES) {
+        const side = { x: feet.x + dx, y: feet.y - 1, z: feet.z + dz };
+        if (LIQUIDS.has(name(side.x, side.y, side.z))) return `${text(side, '下りる先の横の')}（足元の下の${dx > 0 ? '東' : dx < 0 ? '西' : dz > 0 ? '南' : '北'}隣。液体）`;
+      }
+      return '下りる先の横に液体があります';
+    }
+    default: return why;
+  }
+}

@@ -182,7 +182,7 @@ describe('run 20: a far walk is planned a leg at a time', () => {
 describe('run 20: the event loop is watched, and the worker that samples a stuck thread is valid', () => {
   it('reads the switches, and turns everything off with MINEBOT_LOOP_WATCH=off', () => {
     expect(loopWatchOptions({ MINEBOT_LOOP_WATCH: 'off' } as any)).toBeNull();
-    expect(loopWatchOptions({} as any)).toMatchObject({ warnMs: 1000, stallSampleMs: 2000, stallFile: null });
+    expect(loopWatchOptions({} as any)).toMatchObject({ warnMs: 1000, stallSampleMs: 1200, stallFile: null });
     expect(loopWatchOptions({ MINEBOT_LOOP_LAG_WARN_MS: '1500', MINEBOT_LOOP_STALL_SAMPLE_MS: '0' } as any)).toMatchObject({ warnMs: 1500, stallSampleMs: 0 });
   });
 

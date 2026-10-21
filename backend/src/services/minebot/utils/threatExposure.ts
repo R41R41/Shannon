@@ -20,7 +20,6 @@ interface ExposureBot {
 }
 interface ExposedEntity { position?: Vec3; height?: number }
 
-const CACHE_MS = 1000;
 const RAY_STEP = 0.25;
 /** Cells explored before the space counts as open: a sealed pocket is far smaller, open ground or a cave system larger. */
 const MAX_CELLS = 3000;
@@ -30,9 +29,22 @@ const MARGIN = 6;
  * Past it the space is taken as open, the same answer as for "too much open space to tell": a mob is never wrongly taken for sealed away.
  */
 const OPEN_WAY_BUDGET_MS = 15;
-/** The clock is read once in this many cells, not at every one. */
-const CLOCK_EVERY = 128;
+/**
+ * The longest the flood fills of all the mobs together may run in a window (run 25: six stops of 1.6-3.3 s, one of them 3.5 s inside openWay
+ * under captureWorldObservation: the 15 ms was per mob, and a cave with many hostiles asked for it of each, every observation). Past it a mob
+ * gets the answer it had (not 'sealed', which a mob that has moved since must not be taken for) or 'reachable', and is judged in the next window.
+ */
+const FRAME_WINDOW_MS = 1000;
+const FRAME_BUDGET_MS = 30;
+/** The clock is read once in this many cells, not at every one (a cell is up to a dozen block reads: 128 of them ran some 70 ms between two looks). */
+const CLOCK_EVERY = 16;
+/** A 'sealed' answer is kept this long (a mob moves); what says the mob can come is kept longer, it only makes the body more careful. */
+const SEALED_CACHE_MS = 1000;
+const OPEN_CACHE_MS = 3000;
 const cache = new WeakMap<object, { at: number; value: Exposure }>();
+const frame = { start: -Infinity, spent: 0 };
+/** For tests: the window's budget is full again. */
+export function resetExposureBudget(): void { frame.start = -Infinity; frame.spent = 0; }
 const NEIGHBOURS = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
 
 function solid(bot: ExposureBot, x: number, y: number, z: number): boolean {
@@ -57,7 +69,7 @@ function clearLine(bot: ExposureBot, from: Vec3, to: Vec3): boolean {
  * mob two cells tall. Counted as any free cell, a blaze shut in a corridor was "able to reach" a body it could
  * not get at through a gap under a slab, and a dig that widened nothing it could use was refused for it (lab).
  */
-function openWay(bot: ExposureBot, self: Vec3, other: Vec3, otherHeight: number): Exposure {
+function openWay(bot: ExposureBot, self: Vec3, other: Vec3, otherHeight: number, budgetMs = OPEN_WAY_BUDGET_MS): Exposure {
   const origin = self.floored();
   const radius = Math.ceil(self.distanceTo(other)) + MARGIN;
   const target = other.floored();
@@ -84,7 +96,7 @@ function openWay(bot: ExposureBot, self: Vec3, other: Vec3, otherHeight: number)
   const startedAt = performance.now();
   for (let head = 0; head < queue.length; head++) {
     if (seen.size > MAX_CELLS) return 'reachable';
-    if (head % CLOCK_EVERY === CLOCK_EVERY - 1 && performance.now() - startedAt > OPEN_WAY_BUDGET_MS) return 'reachable';
+    if (head % CLOCK_EVERY === CLOCK_EVERY - 1 && performance.now() - startedAt > budgetMs) return 'reachable';
     const [x, y, z] = queue[head];
     if (Math.abs(x - target.x) <= 1 && Math.abs(z - target.z) <= 1 && y >= target.y - 1 && y <= top + 1) return 'reachable';
     for (const [dx, dy, dz] of NEIGHBOURS) {
@@ -105,11 +117,17 @@ export function threatExposure(bot: ExposureBot, entity: ExposedEntity, now = Da
   if (!self || !entity.position || typeof bot.blockAt !== 'function'
     || typeof (self as Partial<Vec3>).offset !== 'function' || typeof (entity.position as Partial<Vec3>).offset !== 'function') return 'seen';
   const cached = cache.get(entity);
-  if (cached && now - cached.at < CACHE_MS) return cached.value;
+  if (cached && now - cached.at < (cached.value === 'sealed' ? SEALED_CACHE_MS : OPEN_CACHE_MS)) return cached.value;
+  // The window's budget (all mobs together): spent, the mob keeps its old answer if that one is safe to keep, else 'reachable'.
+  const clock = performance.now();
+  if (clock - frame.start > FRAME_WINDOW_MS) { frame.start = clock; frame.spent = 0; }
+  const left = FRAME_BUDGET_MS - frame.spent;
+  if (left <= 0) return cached && cached.value !== 'sealed' ? cached.value : 'reachable';
   const height = entity.height ?? 1.8;
   const eyes = entity.position.offset(0, height * 0.85, 0);
   const value: Exposure = clearLine(bot, eyes, self.offset(0, 1.62, 0)) || clearLine(bot, eyes, self.offset(0, 0.9, 0)) ? 'seen'
-    : openWay(bot, self, entity.position, height);
+    : openWay(bot, self, entity.position, height, Math.min(OPEN_WAY_BUDGET_MS, Math.max(1, left - (performance.now() - clock))));
+  frame.spent += performance.now() - clock;
   cache.set(entity, { at: now, value });
   return value;
 }

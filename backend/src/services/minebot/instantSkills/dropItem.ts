@@ -302,6 +302,14 @@ class DropItem extends InstantSkill {
   private noteThrown(itemName: string, lyingBefore: Set<number>): DroppedLike[] {
     const fresh = newItemEntities(this.bot as any, lyingBefore, itemName);
     noteSelfDropped(this.bot, itemName, fresh);
+    // A stack thrown onto one of the same kind lying beside it merges into it: the entity that is left is the older one, and it is the
+    // body's heap now. Those within a block and a half of what was thrown are noted too.
+    if (fresh.length) {
+      const near = Object.values((this.bot as any).entities ?? {}).filter((entity: any) => entity?.id !== undefined && !fresh.some(one => one.id === entity.id)
+        && (entity.name === 'item' || entity.displayName === 'Item') && entity.position && (entity.getDroppedItem?.()?.name ?? null) === itemName
+        && fresh.some((one: any) => one.position && Math.hypot(one.position.x - entity.position.x, one.position.y - entity.position.y, one.position.z - entity.position.z) <= 1.5));
+      noteSelfDropped(this.bot, itemName, near as DroppedLike[]);
+    }
     return fresh;
   }
 
