@@ -38,6 +38,28 @@ export interface DumpPitPlan {
 const isAir = (block: BlockLike) => !!block && AIR.has(block.name);
 const isLiquid = (block: BlockLike) => !!block && LIQUID.has(block.name);
 
+/** How far round the body (level) and how far down and up a liquid keeps throwing into a hole off (see liquidNearPit). */
+export const PIT_LIQUID_RADIUS = 3;
+const PIT_LIQUID_BELOW = 5;
+const PIT_LIQUID_ABOVE = 2;
+/**
+ * A liquid near enough that a hole here is not dug or used: lava or water within PIT_LIQUID_RADIUS (level) of the feet, from five
+ * below to two above. Run 22 tidied the pack beside the lava it was turning into obsidian; a hole opened there lets lava or water run
+ * in, and the walk to a rim goes along the pool. Near a liquid the throw is made walking away instead. Returns the liquid's name, or
+ * null. At most 7 x 7 x 8 cells are read.
+ */
+export function liquidNearPit(bot: PitBody, feet: Vec3): string | null {
+  for (let dy = -PIT_LIQUID_BELOW; dy <= PIT_LIQUID_ABOVE; dy++) {
+    for (let dx = -PIT_LIQUID_RADIUS; dx <= PIT_LIQUID_RADIUS; dx++) {
+      for (let dz = -PIT_LIQUID_RADIUS; dz <= PIT_LIQUID_RADIUS; dz++) {
+        const name = bot.blockAt(new Vec3(feet.x + dx, feet.y + dy, feet.z + dz))?.name ?? '';
+        if (name === 'lava' || name === 'flowing_lava' || name === 'water' || name === 'flowing_water') return name;
+      }
+    }
+  }
+  return null;
+}
+
 /**
  * The hole to dig from the cell the body stands in (`feet`, floored): of the four columns beside it, the one needing the fewest digs
  * (at most MAX_PIT_DIGS), none beside or under liquid, none under a falling block, none through bedrock or equipment. Null when none

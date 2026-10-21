@@ -7,8 +7,10 @@
  *
  * Skill-independent: the skill passes `call` (its own callSkill) and the checks that are its to make (a hostile near, an emergency).
  */
+import { nativeActionHost } from '../execution/ActionExecution.js';
 import { emptySlotCountSafe } from './inventorySpillDetection.js';
 import { clutterPlan, describePack, slotsUsed, spareRockToDrop, surplusPickaxes, tidyPlan, TIDY_ABOVE } from './inventoryTidy.js';
+import { realTurn } from './realTurn.js';
 
 export type RoomCall = (skill: string, ...args: any[]) => Promise<{ success?: boolean; result?: unknown; failureType?: string }>;
 interface Stack { name: string; count: number; stackSize?: number }
@@ -42,6 +44,8 @@ export interface RoomOutcome {
 
 const refusalOf = (name: string, count: number, result: { result?: unknown; failureType?: string }) =>
   `${name}×${count}（${result.failureType ?? '失敗'}: ${String(result.result ?? '').slice(0, 90)}）`;
+/** Refusals that are the same for every kind: the next kind would be refused in the same place, so the tidy stops. */
+const STOPS_THE_TIDY = new Set(['no_room_to_drop', 'picked_up_again', 'already_dropping', 'nesting_too_deep']);
 
 /**
  * With fewer than `slots` free (two at least), throws away what tidyPlan names, else the largest heap of spare rock (spareRockToDrop),
@@ -53,26 +57,32 @@ export async function makeRoom(bot: RoomBody, call: RoomCall, options: RoomOptio
   const need = Math.max(2, options.slots);
   const started = free();
   const none: RoomOutcome = { note: '', freed: 0, refused: [] };
+  // Not inside a throw or another tidy (drop-item digs its pit through dig-block-at, which calls this).
+  if (clutterTidyHeld(bot)) return none;
   if (started >= need || (options.timeLeftMs ?? Infinity) < ROOM_TIME_MS || options.blocked?.()) return none;
   const asked = options.asked ?? [];
   const gone: string[] = [];
   const refused: string[] = [];
   const skipped: string[] = [];
-  for (let round = 0; round < (options.rounds ?? 3) && free() < need && !options.interrupted?.(); round++) {
-    const items = bot.inventory.items() as Stack[];
-    let plan: Array<{ name: string; count: number }> = [];
-    try { plan = tidyPlan(items).filter(entry => !asked.includes(entry.name) && !skipped.includes(entry.name)).slice(0, 1); } catch { plan = []; }
-    if (!plan.length) { const rock = spareRockToDrop(items, [...asked, ...skipped]); if (rock) plan = [rock]; }
-    if (!plan.length) break;
-    const { name, count } = plan[0];
-    let dropped: { success?: boolean; result?: unknown; failureType?: string } = { success: false };
-    try { dropped = await call('drop-item', name, count); } catch (error) { if (options.interrupted?.()) throw error; break; }
-    if (dropped.success) { gone.push(`${name}×${count}`); continue; }
-    refused.push(refusalOf(name, count, dropped));
-    skipped.push(name);
-    // Nowhere to throw is the same for every kind: the next would be refused in the same place.
-    if (dropped.failureType === 'no_room_to_drop' || dropped.failureType === 'picked_up_again') break;
-  }
+  const release = holdClutterTidy(bot);
+  try {
+    for (let round = 0; round < Math.min(options.rounds ?? 3, 3) && free() < need && !options.interrupted?.(); round++) {
+      await realTurn();
+      const items = bot.inventory.items() as Stack[];
+      let plan: Array<{ name: string; count: number }> = [];
+      try { plan = tidyPlan(items).filter(entry => !asked.includes(entry.name) && !skipped.includes(entry.name)).slice(0, 1); } catch { plan = []; }
+      if (!plan.length) { const rock = spareRockToDrop(items, [...asked, ...skipped]); if (rock) plan = [rock]; }
+      if (!plan.length) break;
+      const { name, count } = plan[0];
+      let dropped: { success?: boolean; result?: unknown; failureType?: string } = { success: false };
+      try { dropped = await call('drop-item', name, count); } catch (error) { if (options.interrupted?.()) throw error; break; }
+      if (dropped.success) { gone.push(`${name}×${count}`); continue; }
+      refused.push(refusalOf(name, count, dropped));
+      skipped.push(name);
+      // Nowhere to throw is the same for every kind: the next would be refused in the same place.
+      if (STOPS_THE_TIDY.has(dropped.failureType ?? '')) break;
+    }
+  } finally { release(); }
   const freed = free() - started;
   return {
     note: gone.length ? ` 掘る前に持ち物の空きを作るため、${gone.join('・')}を捨てました（空き${free()}マス）` : '',
@@ -85,6 +95,7 @@ export async function makeRoom(bot: RoomBody, call: RoomCall, options: RoomOptio
  * `asked` names. Says what went; empty when nothing did. Not with a hostile near, in an emergency, or with under TIDY_TIME_MS left.
  */
 export async function tidyPackNow(bot: RoomBody, call: RoomCall, options: { asked?: string[]; timeLeftMs?: number; blocked?: () => boolean; interrupted?: () => boolean }): Promise<string> {
+  if (clutterTidyHeld(bot)) return '';
   if ((options.timeLeftMs ?? Infinity) < TIDY_TIME_MS || options.blocked?.()) return '';
   const asked = options.asked ?? [];
   let plan: ReturnType<typeof tidyPlan> = [];
@@ -92,12 +103,16 @@ export async function tidyPackNow(bot: RoomBody, call: RoomCall, options: { aske
   if (!plan.length || options.interrupted?.()) return '';
   const before = slotsUsed(bot.inventory.items() as Stack[]);
   const gone: string[] = [];
-  for (const { name, count } of plan.slice(0, 2)) {
-    let dropped: { success?: boolean; failureType?: string } = { success: false };
-    try { dropped = await call('drop-item', name, count); } catch { break; }
-    if (dropped.success) gone.push(`${name}×${count}`);
-    if (dropped.failureType === 'no_room_to_drop' || options.interrupted?.()) break;
-  }
+  const release = holdClutterTidy(bot);
+  try {
+    for (const { name, count } of plan.slice(0, 2)) {
+      await realTurn();
+      let dropped: { success?: boolean; failureType?: string } = { success: false };
+      try { dropped = await call('drop-item', name, count); } catch { break; }
+      if (dropped.success) gone.push(`${name}×${count}`);
+      if (STOPS_THE_TIDY.has(dropped.failureType ?? '') || options.interrupted?.()) break;
+    }
+  } finally { release(); }
   return gone.length ? ` 持ち物が${before}/36マス埋まっていたため、${gone.join('・')}を捨てました（いま${slotsUsed(bot.inventory.items() as Stack[])}マス）` : '';
 }
 
@@ -112,13 +127,26 @@ const lastClutterTidy = new WeakMap<object, { at: number; gap: number }>();
 const tidyHolds = new WeakMap<object, number>();
 
 /**
+ * The one object the holds and the gap are kept on: the native bot. Skills hand in their motor port (a Proxy, a new one for every
+ * call), and keyed on that the hold of drop-item was never seen by the dig-block-at it called: run 22 went round tidy, drop-item,
+ * dig-block-at, tidy... without end.
+ */
+const tidyKey = (bot: object): object => nativeActionHost(bot);
+
+/**
  * While a throw (drop-item) or a tidy is under way the cheap check stays quiet: drop-item digs its pit through dig-block-at, which
  * would otherwise start a second tidy inside the first. Returns the release; holds nest.
  */
 export function holdClutterTidy(bot: object): () => void {
-  tidyHolds.set(bot, (tidyHolds.get(bot) ?? 0) + 1);
+  const key = tidyKey(bot);
+  tidyHolds.set(key, (tidyHolds.get(key) ?? 0) + 1);
   let released = false;
-  return () => { if (!released) { released = true; tidyHolds.set(bot, Math.max(0, (tidyHolds.get(bot) ?? 1) - 1)); } };
+  return () => { if (!released) { released = true; tidyHolds.set(key, Math.max(0, (tidyHolds.get(key) ?? 1) - 1)); } };
+}
+
+/** Whether a throw or a tidy is under way on this body (through any of its ports). */
+export function clutterTidyHeld(bot: object): boolean {
+  return (tidyHolds.get(tidyKey(bot)) ?? 0) > 0;
 }
 
 /** What the cheap check would throw, or empty: kinds over the limits (inventoryTidy clutterPlan), the pickaxes over their allowance, and tidyPlan when short of room. */
@@ -147,30 +175,33 @@ export function clutterToThrow(bot: RoomBody, asked: string[] = []): Array<{ nam
  */
 export async function tidyIfCluttered(bot: RoomBody, call: RoomCall,
   options: { asked?: string[]; timeLeftMs?: number; blocked?: () => boolean; interrupted?: () => boolean; now?: () => number } = {}): Promise<string> {
-  if ((tidyHolds.get(bot) ?? 0) > 0) return '';
+  if (clutterTidyHeld(bot)) return '';
+  const key = tidyKey(bot);
   const now = (options.now ?? Date.now)();
-  const last = lastClutterTidy.get(bot);
+  const last = lastClutterTidy.get(key);
   if (last && now - last.at < last.gap) return '';
   const plan = clutterToThrow(bot, options.asked ?? []);
   if (!plan.length) return '';
   if ((options.timeLeftMs ?? Infinity) < TIDY_TIME_MS || options.blocked?.() || options.interrupted?.()) return '';
   const release = holdClutterTidy(bot);
-  lastClutterTidy.set(bot, { at: now, gap: CLUTTER_REFUSED_GAP_MS });
+  lastClutterTidy.set(key, { at: now, gap: CLUTTER_REFUSED_GAP_MS });
   const gone: string[] = [];
   const refused: string[] = [];
   try {
     const before = slotsUsed(bot.inventory.items() as Stack[]);
     for (const { name, count } of plan.slice(0, 2)) {
+      // A real turn of the loop before each throw: timers (abort, time-out) can always fire between two.
+      await realTurn();
       if (options.interrupted?.()) break;
       let dropped: { success?: boolean; result?: unknown; failureType?: string } = { success: false };
       try { dropped = await call('drop-item', name, count); } catch (error) { if (options.interrupted?.()) throw error; break; }
       if (dropped.success) gone.push(`${name}×${count}`); else refused.push(refusalOf(name, count, dropped));
       // Nowhere to throw is the same for every kind (and a heap that came back is not thrown again in the same place).
-      if (dropped.failureType === 'no_room_to_drop' || dropped.failureType === 'picked_up_again') break;
+      if (STOPS_THE_TIDY.has(dropped.failureType ?? '')) break;
     }
     const used = slotsUsed(bot.inventory.items() as Stack[]);
     if (!gone.length) return refused.length ? ` 持ち物の石が溜まっていたので捨てようとしましたが断られました: ${refused.join('、')}` : '';
-    lastClutterTidy.set(bot, { at: now, gap: CLUTTER_GAP_MS });
+    lastClutterTidy.set(key, { at: now, gap: CLUTTER_GAP_MS });
     return ` 掘り進みで石が溜まっていたため、${gone.join('・')}を捨てました（${before}→${used}マス）`;
   } finally { release(); }
 }

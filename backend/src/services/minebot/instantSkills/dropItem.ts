@@ -2,8 +2,10 @@ import { Vec3 } from 'vec3';
 import { CustomBot, InstantSkill } from '../types.js';
 import { createLogger } from '../../../utils/logger.js';
 import { actionDelay } from '../execution/observedWait.js';
-import { planDumpPit, type DumpPitPlan } from '../utils/dumpPit.js';
+import { liquidNearPit, planDumpPit, type DumpPitPlan } from '../utils/dumpPit.js';
 import { holdClutterTidy } from '../utils/inventoryRoom.js';
+import { nativeActionHost } from '../execution/ActionExecution.js';
+import { realTurn } from '../utils/realTurn.js';
 import { newItemEntities, noteSelfDropped, type DroppedLike } from '../utils/selfDropped.js';
 
 const log = createLogger('Minebot:Skill:dropItem');
@@ -33,6 +35,23 @@ const PIT_SEARCH_RADIUS = 10;
 /** With nowhere to walk to, a throw needs this many open cells ahead to land out of reach. */
 const MIN_THROW_OPEN = 3;
 const MIN_PIT_DEPTH = 3;
+/** Most cells the search for a pit reads (the whole circle of radius 10 reads about 9 000 at worst; nearer columns come first). */
+const PIT_SEARCH_MAX_READS = 6_000;
+/** The longest digging a hole for one throw may take, all its cells together. */
+const DUMP_PIT_DIG_MS = 30_000;
+/** Columns of the pit search, nearest first. */
+const PIT_OFFSETS: Array<[number, number]> = (() => {
+  const offsets: Array<[number, number]> = [];
+  for (let dx = -PIT_SEARCH_RADIUS; dx <= PIT_SEARCH_RADIUS; dx++) {
+    for (let dz = -PIT_SEARCH_RADIUS; dz <= PIT_SEARCH_RADIUS; dz++) if (dx * dx + dz * dz <= PIT_SEARCH_RADIUS * PIT_SEARCH_RADIUS) offsets.push([dx, dz]);
+  }
+  return offsets.sort((a, b) => (a[0] ** 2 + a[1] ** 2) - (b[0] ** 2 + b[1] ** 2));
+})();
+/**
+ * Throws under way on each native bot. drop-item is never run inside itself: run 22's tidy went drop-item, its pit through
+ * dig-block-at, that dig's tidy, drop-item again... without end.
+ */
+const dropsUnderWay = new WeakMap<object, number>();
 
 function isAirBlock(block: { name: string } | null): boolean {
   return !!block && AIR.has(block.name);
@@ -79,10 +98,15 @@ function findAdjacentPitDropPlan(bot: CustomBot): PitDropPlan | null {
 
   let best: PitDropPlan | null = null;
   let bestDist = Infinity;
+  // Bounded: at most PIT_SEARCH_MAX_READS cells, nearest columns first, and none once the columns are farther than the best rim found.
+  let reads = 0;
+  const blockAt = (at: Vec3) => { reads++; return bot.blockAt(at); };
 
-  for (let dx = -PIT_SEARCH_RADIUS; dx <= PIT_SEARCH_RADIUS; dx++) {
-    for (let dz = -PIT_SEARCH_RADIUS; dz <= PIT_SEARCH_RADIUS; dz++) {
-      if (dx * dx + dz * dz > PIT_SEARCH_RADIUS * PIT_SEARCH_RADIUS) continue;
+  for (const [dx, dz] of PIT_OFFSETS) {
+    {
+      if (reads > PIT_SEARCH_MAX_READS) break;
+      // A rim is one cell from its pit: a pit farther than the best rim found plus one cannot give a nearer rim.
+      if (best && Math.sqrt(dx * dx + dz * dz) - 2 > Math.sqrt(bestDist)) break;
       const px = bx + dx;
       const pz = bz + dz;
 
@@ -90,9 +114,9 @@ function findAdjacentPitDropPlan(bot: CustomBot): PitDropPlan | null {
       // beside the body (feet, head and one more cell) is three cells of air too, and so is a cave under a
       // solid floor; both were taken for pits. The item was "dropped into a pit" onto the ground one block
       // away and walked back into the pack two seconds later (paid run L64).
-      if (!isAirBlock(bot.blockAt(new Vec3(px, by + 1, pz)))) continue;
+      if (!isAirBlock(blockAt(new Vec3(px, by + 1, pz)))) continue;
       let depth = 0;
-      while (depth < 14 && isAirBlock(bot.blockAt(new Vec3(px, by - depth, pz)))) depth++;
+      while (depth < 14 && isAirBlock(blockAt(new Vec3(px, by - depth, pz)))) depth++;
       // `depth` counts the feet-level cell and those under it: the item comes to rest depth-1 below the feet.
       if (depth - 1 < MIN_PIT_DEPTH) continue;
       const topY = by;
@@ -283,8 +307,11 @@ class DropItem extends InstantSkill {
     if (!this.bot.instantSkills?.getSkill('dig-block-at')) return null;
     const plan = planDumpPit(this.bot as any, this.bot.entity.position.floored());
     if (!plan) return null;
+    // At most MAX_PIT_DIGS cells (planDumpPit) and DUMP_PIT_DIG_MS in all, with a real turn of the event loop before each dig.
+    const until = Date.now() + DUMP_PIT_DIG_MS;
     for (const cell of plan.dig) {
-      if (this.shouldInterrupt()) return null;
+      await realTurn();
+      if (this.shouldInterrupt() || Date.now() > until) return null;
       let dug: { success?: boolean } = { success: false };
       try { dug = await this.callSkill('dig-block-at', cell.x, cell.y, cell.z, false); } catch (error) { if (this.shouldInterrupt()) throw error; return null; }
       if (!dug.success) { log.info(`投げ込み用の穴を掘れませんでした(${cell.x},${cell.y},${cell.z})`); return null; }
@@ -332,9 +359,18 @@ class DropItem extends InstantSkill {
   }
 
   async runImpl(itemName: string, count: number = 1) {
+    // Never inside another throw (see dropsUnderWay): refused at once, and the tidy that asked stops there.
+    const native = nativeActionHost(this.bot as object);
+    if ((dropsUnderWay.get(native) ?? 0) > 0) {
+      log.warn(`drop-item ${itemName}×${count} は別の drop-item の途中なので断りました（片づけの入れ子）`);
+      return { success: false, failureType: 'already_dropping', recoverable: true,
+        result: `${itemName}は捨てませんでした（別の捨てる作業の途中です）` };
+    }
+    dropsUnderWay.set(native, (dropsUnderWay.get(native) ?? 0) + 1);
     // The pit this digs goes through dig-block-at, whose cheap tidy check must not start a second throw inside this one.
     const release = holdClutterTidy(this.bot);
     try {
+      await realTurn();
       const stacks = this.bot.inventory.items().filter((i) => i.name === itemName);
       const item = stacks[0];
 
@@ -351,10 +387,13 @@ class DropItem extends InstantSkill {
       const moveTo = this.bot.instantSkills?.getSkill('move-to');
       const slotsBefore = this.freeSlots();
 
-      // No pit to hand and the place shut in: one is dug (see digDumpPit), before the item is taken in hand.
-      let pit = findAdjacentPitDropPlan(this.bot);
+      // No pit to hand and the place shut in: one is dug (see digDumpPit), before the item is taken in hand. Beside lava or water no
+      // hole is used or dug (utils/dumpPit liquidNearPit): the throw is made walking away (run 22 tidied beside the lava it worked).
+      const liquid = liquidNearPit(this.bot as any, this.bot.entity.position.floored());
+      if (liquid) log.info(`${liquid}が近いので穴には捨てず、離れて捨てます`);
+      let pit = liquid ? null : findAdjacentPitDropPlan(this.bot);
       let dugPit: DumpPitPlan | null = null;
-      if (!pit) {
+      if (!pit && !liquid) {
         dugPit = await this.digDumpPit(itemName, dropCount);
         if (dugPit) pit = findAdjacentPitDropPlan(this.bot);
       }
@@ -480,6 +519,7 @@ class DropItem extends InstantSkill {
       };
     } finally {
       release();
+      dropsUnderWay.set(native, Math.max(0, (dropsUnderWay.get(native) ?? 1) - 1));
     }
   }
 }

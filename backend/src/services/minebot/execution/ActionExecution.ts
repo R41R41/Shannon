@@ -27,7 +27,15 @@ interface Context {
   priority: number;
   settled: boolean;
   root?: Context;
+  /** How many actions this one is nested in (0 for a root action). */
+  depth?: number;
 }
+/**
+ * The deepest a skill may call skills inside skills. Ordinary work goes four or five deep (mine-block, dig-block-at, drop-item,
+ * move-to); run 22 went on without end (dig-block-at's tidy, drop-item's pit dug through dig-block-at, its tidy again...) on
+ * microtasks only, and the process stopped answering for 200 s. A call past this is refused, never run.
+ */
+export const MAX_NESTED_ACTIONS = 12;
 const contextStorage = new AsyncLocalStorage<Context>();
 const executors = new WeakMap<object, SkillExecutor>();
 const generations = new WeakMap<object, number>();
@@ -87,8 +95,14 @@ export async function waitForActionQuiescence(bot: object): Promise<void> {
 
 /** Guard at each motor call, including after an awaited protocol operation.
  * Native methods retain their receiver. Queries and event subscriptions stay intact.
+ *
+ * Always one layer over the native bot, whatever is passed: a nested skill (callSkill) passed its parent's port, and each nesting
+ * wrapped one more Proxy round the last, so that every property read walked all the layers and anything keyed on the bot object
+ * (the tidy's hold) saw a new bot at every level (run 22). The parent's fence is not lost: a child action is aborted with its parent,
+ * and the child's own owner is checked here.
  */
-export function createMotorPort<T extends object>(bot: T): T {
+export function createMotorPort<T extends object>(given: T): T {
+  const bot = actionHost(given);
   const owner = currentAction(bot);
   const assertMotorActive = () => {
     if (owner && (owner.controller.signal.aborted || owner.settled || (owner.root ?? owner).trace.quiescent)) throw new Error('Motor owner expired');
@@ -106,7 +120,7 @@ export function createMotorPort<T extends object>(bot: T): T {
     if (key === 'pathfinder' && field) return path(field);
     return typeof field === 'function' ? (...args: unknown[]) => { if (writes.has(String(key))) assertMotorActive(); return field.apply(target, args); } : field;
   } });
-  motorHosts.set(port, actionHost(bot));
+  motorHosts.set(port, bot);
   return port;
 }
 
@@ -227,12 +241,18 @@ export async function executeAction(
   const parent = currentAction(bot);
   if (parent) {
     assertActionActive(bot);
+    const depth = (parent.depth ?? 0) + 1;
+    if (depth > MAX_NESTED_ACTIONS) {
+      logger.warn(`[Minebot:ActionExecution] ${capability} refused: ${depth} actions deep (more than ${MAX_NESTED_ACTIONS}; a skill calling itself round a loop)`);
+      return { success: false, failureType: 'nesting_too_deep', recoverable: true,
+        result: `${capability}: スキルの入れ子が${MAX_NESTED_ACTIONS}段を超えたため実行しませんでした（同じ手順が自分を呼び続けている）` };
+    }
     // One physical lease, immutable linked child signals. Preserve each child's
     // own deadline without resetting the parent's emergency cancellation.
     const controller = new AbortController();
     const abort = () => controller.abort(parent.controller.signal.reason);
     parent.controller.signal.addEventListener('abort', abort, { once: true });
-    const child: Context = { ...parent, controller, settled: false, root: parent.root ?? parent };
+    const child: Context = { ...parent, controller, settled: false, root: parent.root ?? parent, depth };
     const startedAt = Date.now();
     const stop = () => {
       if (parent.controller.signal.aborted || skillCategory(capability) === 'query') return; // root performs containment
