@@ -68,7 +68,9 @@ const CLOSED: Record<string, string> = {
   out_of_reach: '届かない', cannot_reach: '届かない', not_opened: '届かない',
   wall: '一歩ではない', low_ceiling: '一歩ではない', drop: '一歩ではない', lava: '一歩ではない', no_path: '一歩ではない', stuck: '一歩ではない',
   target_solid: '一歩ではない', walk_failed: '一歩ではない', ceiling: '一歩ではない', unloaded: '一歩ではない',
-  unbreakable: '掘れない', no_harvest_tool: '掘れない', dig_unconfirmed: '掘れない', dig_failed: '掘れない',
+  // r5 (2026-10-22): a walk that ended short of its target, a target no body stands in, a shut iron door in the way; a dig the eye cannot see.
+  not_arrived: '一歩ではない', target_unstandable: '一歩ではない', iron_door: '一歩ではない',
+  unbreakable: '掘れない', no_harvest_tool: '掘れない', dig_unconfirmed: '掘れない', dig_failed: '掘れない', not_visible: '掘れない',
   occupied: '置けない', body_in_cell: '置けない', creature_in_cell: '置けない', nothing_to_set_against: '置けない', not_placed: '置けない',
   not_set: '置けない', already_filled: '置けない', not_poured: '置けない', not_lit: '置けない', not_filled: '置けない', no_floor: '足場が無い',
   inventory_full: '満杯', threat_exposed: '見られる', protected: '守られた物', lava_behind: '溶岩が流れ込む', footing: '足場が無い',

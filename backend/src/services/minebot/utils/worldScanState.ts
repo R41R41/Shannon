@@ -25,6 +25,10 @@ export interface WorldScanState {
   reach: number;
   ms: number;
   partial?: boolean;
+  /** r5: the furthest ring of loaded chunks from the body's own (chunks, square), the view distance the server sends (when known), and how long the scan waited after the spawn. */
+  radiusChunks?: number;
+  viewDistance?: number;
+  waitedMs?: number;
 }
 
 /** The observation's `world.scan`: the last scan, while the body is in the dimension it was made in. */

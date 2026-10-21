@@ -10,6 +10,19 @@ export interface ChestArgs { at: Cell; take?: Array<{ item: string; count?: numb
 
 const CONTAINERS = /^(chest|trapped_chest|barrel|ender_chest|.*shulker_box)$/u;
 
+/**
+ * How many of an item the container holds, and how many the pack holds as the open window shows it. The pack (bot.inventory) is only
+ * brought up to date when the window closes (mineflayer copies the window's inventory slots then), so counting it while the window is open
+ * said "iron_pickaxe×0 を取った" for everything taken (run 28, 599 s, the smith's chest). The window's own slots are counted instead.
+ */
+function inContainer(window: any, name: string): number {
+  return (window.containerItems?.() ?? []).filter((item: any) => item.name === name).reduce((sum: number, item: any) => sum + item.count, 0);
+}
+function inPack(bot: any, window: any, name: string): number {
+  if (typeof window.items === 'function') return (window.items() ?? []).filter((item: any) => item.name === name).reduce((sum: number, item: any) => sum + item.count, 0);
+  return inventoryCount(bot, name);
+}
+
 function contents(window: any): string {
   const counts = new Map<string, number>();
   for (const item of window.containerItems?.() ?? []) counts.set(item.name, (counts.get(item.name) ?? 0) + item.count);
@@ -44,21 +57,26 @@ export async function chest(ctx: StepContext, args: ChestArgs): Promise<StepOutc
       const inside = (window.containerItems?.() ?? []).filter((item: any) => item.name === want.item);
       const available = inside.reduce((sum: number, item: any) => sum + item.count, 0);
       if (!available) { notes.push(`${want.item} は入っていない`); continue; }
-      if (freeSlots(bot) === 0 && inventoryCount(bot, want.item) === 0) { notes.push(`${want.item} を取る空きが持ち物に無い`); continue; }
+      if (freeSlots(bot) === 0 && inPack(bot, window, want.item) === 0) { notes.push(`${want.item} を取る空きが持ち物に無い`); continue; }
       const count = Math.min(available, Math.max(1, Math.round(want.count ?? available)));
-      const had = inventoryCount(bot, want.item);
+      const had = inPack(bot, window, want.item);
+      let failed = '';
       try { await guard(ctx, Promise.resolve(window.withdraw(inside[0].type, null, count)), 4000); }
-      catch (error) { if (error instanceof StepStopped || /Action interrupted/u.test(String((error as Error)?.message))) throw error; }
-      notes.push(`${want.item}×${inventoryCount(bot, want.item) - had} を取った${inventoryCount(bot, want.item) - had < count ? `（頼んだのは ${count}）` : ''}`);
+      catch (error) { if (error instanceof StepStopped || /Action interrupted/u.test(String((error as Error)?.message))) throw error; failed = String((error as Error)?.message ?? error).slice(0, 60); }
+      // Taken: what left the container, or what came into the pack's slots of the window (whichever the window shows more of).
+      const taken = Math.max(available - inContainer(window, want.item), inPack(bot, window, want.item) - had, 0);
+      notes.push(`${want.item}×${taken} を取った${taken < count ? `（頼んだのは ${count}${failed ? `。${failed}` : ''}）` : ''}`);
     }
     for (const give of args.put ?? []) {
-      const have = inventoryCount(bot, give.item);
+      const have = inPack(bot, window, give.item);
       if (!have) { notes.push(`${give.item} を持っていない`); continue; }
       const count = Math.min(have, Math.max(1, Math.round(give.count ?? have)));
-      const item = (bot.inventory?.items?.() ?? []).find((entry: any) => entry.name === give.item);
+      const item = (typeof window.items === 'function' ? window.items() : bot.inventory?.items?.() ?? []).find((entry: any) => entry.name === give.item);
+      const held = inContainer(window, give.item);
       try { await guard(ctx, Promise.resolve(window.deposit(item.type, null, count)), 4000); }
       catch (error) { if (error instanceof StepStopped || /Action interrupted/u.test(String((error as Error)?.message))) throw error; }
-      notes.push(`${give.item}×${have - inventoryCount(bot, give.item)} を入れた`);
+      const put = Math.max(inContainer(window, give.item) - held, have - inPack(bot, window, give.item), 0);
+      notes.push(`${give.item}×${put} を入れた`);
     }
     await wait(ctx, 150);
     const after = contents(window);

@@ -248,7 +248,7 @@ export interface WorldObservation {
    * is in the dimension it was made in; nothing in it changes from one frame to the next.
    */
   scan?: { trigger: 'login' | 'reconnect' | 'respawn' | 'portal'; at: string; dimension: string; center: WorldVector; text: string; rows: string[];
-    chunks: number; reach: number; ms: number; partial?: boolean };
+    chunks: number; reach: number; ms: number; partial?: boolean; radiusChunks?: number; viewDistance?: number; waitedMs?: number };
 }
 
 export interface WorldFrame extends WorldObservation {

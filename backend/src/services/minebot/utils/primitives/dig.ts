@@ -6,7 +6,8 @@ import { LavaReleaseError, lavaReleasedBy } from '../lavaSafety.js';
 import { fallIsDangerous, stepOffDrop } from '../edgeGuard.js';
 import { chooseTool, canHarvest, usesLeft } from '../toolChoice.js';
 import { PROTECTED_UTILITY_BLOCKS } from '../../constants.js';
-import { cellKey, feetCell, relativeWords, type Cell } from '../localMap.js';
+import { bodyReader, cellKey, feetCell, relativeWords, type Cell } from '../localMap.js';
+import { blockInSight, eyeOf } from '../probeTools.js';
 import { blockAt, cellNow, cellText, DIG_REACH, eyeDistance, findItem, guard, isAirLike, letGo, placeText, stopped, StepStopped, wait, waitUntil,
   type StepContext, type StepOutcome } from './common.js';
 import { pickup } from './pickup.js';
@@ -96,6 +97,13 @@ export async function dig(ctx: StepContext, args: DigArgs): Promise<StepOutcome>
     if (fall !== null) return result(stopped(bot, 'footing', `${placeText(bot, cell)} は足の下の柱。掘ると${Number.isFinite(fall) ? `${fall}段落ちる` : '下に着く所が無いか溶岩'}（先に横へ動くか、下を確かめる）`, cell));
     const distance = eyeDistance(bot, cell);
     if (distance > DIG_REACH) return result(stopped(bot, 'out_of_reach', `${placeText(bot, cell)} の ${block.name} に届かない（目から${distance.toFixed(1)}m、${DIG_REACH}m まで）`, cell));
+    // The eye has to see a face of it (run 28: 31 digs "Digging aborted" at cells behind stone, the reason never said). Cells dug before in
+    // this hand are air now, so a row dug from the near end opens its own way.
+    const position = bot.entity?.position;
+    const sight = position ? blockInSight(bodyReader(bot), eyeOf(position), cell) : { visible: true, between: [] };
+    if (!sight.visible) {
+      return result(stopped(bot, 'not_visible', `${placeText(bot, cell)} の ${block.name} が見えない：間に ${sight.between.map(b => `${cellText(b.at)} ${b.name}`).join('、') || '固いブロック'}（目から${distance.toFixed(1)}m）`, cell));
+    }
     const lava = lavaReleasedBy(bot, vecOf(cell));
     if (lava) return result(stopped(bot, 'lava_behind', `${placeText(bot, cell)} を掘ると、隣の溶岩 ${cellText({ x: lava.x, y: lava.y, z: lava.z })} が体の所へ流れ込む`, cell));
     let threats: ExposingThreat[] = [];

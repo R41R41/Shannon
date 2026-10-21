@@ -2,6 +2,9 @@ import { symbolFor, isOpenSymbol, type BlockReader, type Cell, type MapBlock } f
 import { LoopSlicer } from './loadedBlockScan.js';
 import { wayWords } from './worldScanState.js';
 import type { HandRecord } from './handHistory.js';
+import { BESIDE, blockedWords, cellWay, enterable, floorOf, isClimbable, isLava, isWater, MAX_FALL, passable, standable, whyNotStand } from './walkRules.js';
+
+export { enterable, isWater, MAX_FALL, passable, standable } from './walkRules.js';
 
 /**
  * The body's reading tools (r4 contract 1, `probe`): read only, fixed computations over the blocks the body has and the creatures it
@@ -10,34 +13,13 @@ import type { HandRecord } from './handHistory.js';
  * foothold" and the decision dropped seven blocks into a cave). The core is pure but for its reader, so tests give it fixed blocks.
  */
 
-// ===== Cells as a body meets them (the walk's rules: a step up of one, a drop of three, swimming, doors) =====
+// ===== Cells as a body meets them: the walk's own rules (utils/walkRules, r5) =====
 
-/** Blocks a body does not walk into whatever their box (they hurt, hold, or carry it off). */
-const NO_ENTER = new Set(['lava', 'fire', 'soul_fire', 'cobweb', 'powder_snow', 'nether_portal', 'end_portal', 'end_gateway', 'sweet_berry_bush',
-  'campfire', 'soul_campfire', 'wither_rose', 'magma_block', 'cactus']);
 const FALLING = /^(sand|red_sand|gravel|suspicious_sand|suspicious_gravel|.*_concrete_powder)$/u;
 const AIR = new Set(['air', 'cave_air', 'void_air']);
-export const MAX_FALL = 3;
 
 const solidOf = (block: MapBlock) => block.solid ?? !isOpenSymbol(symbolFor(block));
-export const isWater = (block: MapBlock | null) => !!block && (block.name === 'water' || symbolFor(block) === 'w' || symbolFor(block) === '-');
-const isLava = (block: MapBlock | null) => !!block && block.name === 'lava';
-const climbable = (block: MapBlock | null) => !!block && symbolFor(block) === 'h';
-/** A body's feet or head can be in it (air, a plant, water, a door, a ladder, a torch, a rail, a crop). */
-export function enterable(block: MapBlock | null): boolean {
-  if (!block || NO_ENTER.has(block.name)) return false;
-  const symbol = symbolFor(block);
-  if (symbol === 'D' || symbol === 'h' || symbol === 't' || symbol === '=' || symbol === 'k' || isWater(block)) return true;
-  return !solidOf(block);
-}
-/** Something to stand on (a full box, not lava or a hurting block). */
-function floorOf(block: MapBlock | null): boolean { return !!block && !NO_ENTER.has(block.name) && solidOf(block) && symbolFor(block) !== 'D'; }
-/** A body can be in this cell: feet and head enterable, and under the feet a floor, or the feet in water or on a ladder. */
-export function standable(read: BlockReader, x: number, y: number, z: number): boolean {
-  const feet = read(x, y, z);
-  if (!enterable(feet) || !enterable(read(x, y + 1, z))) return false;
-  return isWater(feet) || climbable(feet) || floorOf(read(x, y - 1, z));
-}
+const climbable = isClimbable;
 
 const key = (x: number, y: number, z: number) => `${x},${y},${z}`;
 const unkey = (k: string): Cell => { const [x, y, z] = k.split(',').map(Number); return { x, y, z }; };
@@ -52,6 +34,8 @@ export interface PathAnswer {
   v: 1; kind: 'path'; text: string; reachable: boolean;
   steps?: number; swim?: number; up?: number; down?: number; maxDrop?: number; maxWaterDepth?: number;
   points?: Cell[]; goal?: Cell; breaks?: PathBreak[]; nearest?: Cell; nearestGap?: number;
+  /** r5: whether a body can stand in the target cell itself (false: the text begins "的そのものには立てない（…）"). */
+  onTarget?: boolean;
   stands?: Array<{ at: Cell; eye: number; steps: number | null }>; searched: number; limited?: boolean; ms: number;
 }
 interface Search { dist: Map<string, number>; prev: Map<string, string>; limited: boolean }
@@ -88,9 +72,10 @@ async function walkSearch(read: BlockReader, from: Cell, goals: Set<string>, box
     for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
       const x = c.x + dx, z = c.z + dz;
       if (standable(read, x, c.y, z)) { push(c, x, c.y, z); continue; }
-      if (standable(read, x, c.y + 1, z) && enterable(read(c.x, c.y + 2, c.z))) { push(c, x, c.y + 1, z); continue; }
-      if (!enterable(read(x, c.y, z)) || !enterable(read(x, c.y + 1, z))) continue;
-      // Off the edge: the cell it lands in, within three (water too: the walk's movements keep infiniteLiquidDropdownDistance off).
+      if (standable(read, x, c.y + 1, z) && passable(read(c.x, c.y + 2, c.z))) { push(c, x, c.y + 1, z); continue; }
+      if (!passable(read(x, c.y, z)) || !passable(read(x, c.y + 1, z))) continue;
+      // Off the edge: the cell it lands in, within three (water too: the walk's movements keep infiniteLiquidDropdownDistance off). The
+      // cells fallen through are open ones (leaves and doors under the feet are not broken or opened: they are landed on, or no way).
       let fall = 0;
       for (let k = 1; k <= MAX_FALL + 1; k++) {
         const cell = read(x, c.y - k, z);
@@ -100,7 +85,7 @@ async function walkSearch(read: BlockReader, from: Cell, goals: Set<string>, box
       }
       // The walk's safe parkour (utils/setMovements): a gap of one to three jumped to the same height, only where falling into it would
       // be a drop of three at most (or water).
-      if (fall >= 1 && enterable(read(c.x, c.y + 2, c.z))) {
+      if (fall >= 1 && enterable(read(c.x, c.y + 2, c.z)) && enterable(read(x, c.y, z)) && enterable(read(x, c.y + 1, z))) {
         for (let gap = 1; gap <= 3; gap++) {
           const gx = c.x + dx * gap, gz = c.z + dz * gap;
           if (!enterable(read(gx, c.y, gz)) || !enterable(read(gx, c.y + 1, gz)) || !enterable(read(gx, c.y + 2, gz))) break;
@@ -173,16 +158,21 @@ function stepFact(read: BlockReader, c: Cell, n: Cell): PathBreak {
   const feet = read(n.x, n.y, n.z), head = read(n.x, n.y + 1, n.z);
   if (!feet || !head) return { at: n, reason: 'unloaded', text: `${at(n)} は読み込まれていない（未ロード）` };
   if (isLava(feet) || isLava(head)) return { at: n, reason: 'lava', block: 'lava', text: `${at(n)} は溶岩` };
-  if (!enterable(feet)) {
+  // A shut iron door (or another block not walked into) in the way: said by its name, as the walk says it.
+  for (const [cell, block] of [[n, feet], [{ ...n, y: n.y + 1 }, head]] as const) {
+    const way = cellWay(block);
+    if (way === 'iron_door' || way === 'harm') return { at: cell, reason: 'wall', n: 1, block: block.name, text: blockedWords(block, cell)! };
+  }
+  if (!passable(feet)) {
     let h = 0;
-    while (h < 8 && !enterable(read(n.x, n.y + h, n.z))) h++;
-    if (h === 1 && enterable(read(n.x, n.y + 1, n.z)) && enterable(read(n.x, n.y + 2, n.z)) && !enterable(read(c.x, c.y + 2, c.z))) {
+    while (h < 8 && !passable(read(n.x, n.y + h, n.z))) h++;
+    if (h === 1 && passable(read(n.x, n.y + 1, n.z)) && passable(read(n.x, n.y + 2, n.z)) && !passable(read(c.x, c.y + 2, c.z))) {
       const over = read(c.x, c.y + 2, c.z);
       return { at: { x: c.x, y: c.y + 2, z: c.z }, reason: 'low', block: nameOf(over), text: `${at(n)} の 1 段を上るには、頭の上 ${at({ x: c.x, y: c.y + 2, z: c.z })} の ${nameOf(over)} がつかえる（高さ 1 のすき間）` };
     }
     return { at: n, reason: 'wall', n: h, block: feet.name, text: `${at(n)} は ${feet.name} の壁（高さ ${h >= 8 ? '8 以上' : h}）` };
   }
-  if (!enterable(head)) return { at: { ...n, y: n.y + 1 }, reason: 'low', block: head.name, text: `${at(n)} は頭の高さ ${at({ ...n, y: n.y + 1 })} が ${head.name}（高さ 1 のすき間）` };
+  if (!passable(head)) return { at: { ...n, y: n.y + 1 }, reason: 'low', block: head.name, text: `${at(n)} は頭の高さ ${at({ ...n, y: n.y + 1 })} が ${head.name}（高さ 1 のすき間）` };
   if (isWater(feet)) {
     const depth = waterDepth(read, n);
     return { at: n, reason: 'water', n: depth, text: `${at(n)} から先は水深 ${depth >= 32 ? '32 以上' : depth}` };
@@ -231,12 +221,17 @@ export async function probePath(read: BlockReader, from: Cell, to: Cell, options
     return { v: 1, kind: 'path', reachable: false, searched: 0, ms: 0, limited: true, text: `${head}：遠すぎて調べない（${limits.farthest}m まで）。途中の点を的にして調べる` };
   }
   const goals = new Set<string>();
-  if (standable(read, to.x, to.y, to.z)) goals.add(key(to.x, to.y, to.z));
+  // The walk goes to the target cell itself; when no body can stand there (run 28 +1,100: "着くのは的の隣" while the walk stopped on "立つ床が
+  // 無い"), the text says so first, and the cells beside it are what is searched for.
+  const onTarget = standable(read, to.x, to.y, to.z);
+  const notStand = onTarget ? null : whyNotStand(read, to);
+  if (onTarget) goals.add(key(to.x, to.y, to.z));
   else {
-    for (const [dx, dy, dz] of [[0, 1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, -2, 0], [1, 1, 0], [-1, 1, 0], [0, 1, 1], [0, 1, -1], [1, -1, 0], [-1, -1, 0], [0, -1, 1], [0, -1, -1]] as const) {
+    for (const [dx, dy, dz] of BESIDE) {
       if (standable(read, to.x + dx, to.y + dy, to.z + dz)) goals.add(key(to.x + dx, to.y + dy, to.z + dz));
     }
   }
+  const standNote = (beside: Cell | null) => notStand ? `的そのものには立てない（${notStand.text}）。${beside ? `隣 ${at(beside)} まで。` : ''}` : '';
   const m = limits.margin;
   const box = { x0: Math.min(from.x, to.x) - m, x1: Math.max(from.x, to.x) + m, z0: Math.min(from.z, to.z) - m, z1: Math.max(from.z, to.z) + m,
     y0: Math.max(-64, Math.min(from.y, to.y) - limits.below), y1: Math.min(319, Math.max(from.y, to.y) + limits.above) };
@@ -257,9 +252,10 @@ export async function probePath(read: BlockReader, from: Cell, to: Cell, options
     if (maxDrop) facts.push(`落差 最大 ${maxDrop}`);
     slicer.end();
     const points = wayPoints(read, path);
-    return { v: 1, kind: 'path', reachable: true, steps: path.length - 1, swim, up, down, maxDrop, maxWaterDepth, points, goal, searched: search.dist.size,
+    const beside = goal.x !== to.x || goal.y !== to.y || goal.z !== to.z;
+    return { v: 1, kind: 'path', reachable: true, steps: path.length - 1, swim, up, down, maxDrop, maxWaterDepth, points, goal, onTarget, searched: search.dist.size,
       ms: Math.round(performance.now() - started),
-      text: `${head}：掘らず置かずに歩いて行ける${startNote}。${path.length - 1} マス（${facts.join('・')}）${goal.x !== to.x || goal.y !== to.y || goal.z !== to.z ? `。着くのは的の隣 ${at(goal)}` : ''}。道の点 ${points.length}` };
+      text: `${standNote(beside ? goal : null)}${head}：${beside ? `隣 ${at(goal)} まで` : ''}掘らず置かずに歩いて行ける${startNote}。${path.length - 1} マス（${facts.join('・')}）。道の点 ${points.length}` };
   }
   // Not reached: the reached cells nearest the target, and what stands between each and the next cell toward it.
   const reached = [...search.dist.keys()].map(unkey).map(cell => ({ cell, d: Math.hypot(cell.x - to.x, cell.y - to.y, cell.z - to.z) }))
@@ -298,12 +294,12 @@ export async function probePath(read: BlockReader, from: Cell, to: Cell, options
   }
   const stands = standSpots(read, to, search.dist, 3);
   slicer.end();
-  const lines = [`${head}：掘らず置かずには行けない${startNote}${search.limited ? `（上限 ${search.dist.size} マスまで調べた所では）` : ''}。`];
+  const lines = [`${standNote(null)}${head}：掘らず置かずには行けない${startNote}${search.limited ? `（上限 ${search.dist.size} マスまで調べた所では）` : ''}。`];
   if (nearest) lines.push(`行ける所で的に一番近いのは ${at(nearest)}（的まで ${round1(reached[0].d)}m）。`);
   if (breaks.length) lines.push(`切れ目：${breaks.map(b => b.text).join('／')}。`);
   lines.push(stands.length ? `的に届いて見える立つ所：${stands.map(s => `${at(s.at)} 目から${s.eye}m ${s.steps === null ? '行けない' : `道 ${s.steps} マス`}`).join('／')}`
     : '的に届いて見える立つ所は無い（4.5m 内に立てる所が無いか、間に固いブロック）');
-  return { v: 1, kind: 'path', reachable: false, ...(nearest ? { nearest, nearestGap: round1(reached[0].d) } : {}), breaks, stands, searched: search.dist.size,
+  return { v: 1, kind: 'path', reachable: false, onTarget, ...(nearest ? { nearest, nearestGap: round1(reached[0].d) } : {}), breaks, stands, searched: search.dist.size,
     ...(search.limited ? { limited: true } : {}), ms: Math.round(performance.now() - started), text: lines.join('') };
 }
 
@@ -324,6 +320,22 @@ export function solidBetween(read: BlockReader, a: [number, number, number], b: 
     if (!block || (solidOf(block) && !isWater(block))) out.push({ x, y, z });
   }
   return out;
+}
+
+/**
+ * Whether the eye sees some face of a block (r5, dig: run 28's "Digging aborted" ×31 were cells behind stone). The centre and each face
+ * open to the air are looked at; seen when one of them has nothing solid between. Not seen: the solid cells on the line to the centre.
+ */
+export function blockInSight(read: BlockReader, eye: [number, number, number], cell: Cell): { visible: boolean; between: Array<{ at: Cell; name: string }> } {
+  const centre: [number, number, number] = [cell.x + 0.5, cell.y + 0.5, cell.z + 0.5];
+  const points: Array<[number, number, number]> = [centre];
+  for (const [dx, dy, dz] of [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]] as const) {
+    const next = read(cell.x + dx, cell.y + dy, cell.z + dz);
+    if (next && solidOf(next) && !isWater(next)) continue;
+    points.push([centre[0] + dx * 0.45, centre[1] + dy * 0.45, centre[2] + dz * 0.45]);
+  }
+  for (const point of points) if (!solidBetween(read, eye, point).length) return { visible: true, between: [] };
+  return { visible: false, between: solidBetween(read, eye, centre).slice(0, 4).map(c => ({ at: c, name: nameOf(read(c.x, c.y, c.z)) })) };
 }
 
 export interface SightCreature { id: number; name: string; position: { x: number; y: number; z: number }; height?: number; width?: number }

@@ -26,6 +26,8 @@ export interface MapBlock {
   level?: number;
   /** An end portal frame with an eye in it. */
   eye?: boolean;
+  /** A door, fence gate or trapdoor standing open (r5: the walk's rules, utils/walkRules). Unknown: shut. */
+  open?: boolean;
   /** `symbolFor`'s answer, kept by the reader that shares one MapBlock per block state (it is a function of the fields above). */
   symbol?: string;
 }
@@ -47,6 +49,8 @@ const WOODEN = /^(oak|spruce|birch|jungle|acacia|dark_oak|mangrove|cherry|bamboo
 const FENCES = /(_fence|_fence_gate|_wall|_pane|^iron_bars|^glass|_glass|^chain)$/u;
 const CONTAINERS = /^(chest|trapped_chest|barrel|ender_chest|.*shulker_box)$/u;
 const CROPS = /^(wheat|carrots|potatoes|beetroots|nether_wart|melon_stem|pumpkin_stem|attached_melon_stem|attached_pumpkin_stem|torchflower_crop|pitcher_crop)$/u;
+/** A door, a fence gate or a trapdoor: whether it stands open is in its state (read once per state id, as a fluid's level). */
+const DOORLIKE = /(_door|_fence_gate|_trapdoor)$/u;
 const NETHER_BRICK = /^(nether_bricks|nether_brick_fence|nether_brick_stairs|nether_brick_slab|nether_brick_wall|red_nether_bricks|red_nether_brick_.*|cracked_nether_bricks|chiseled_nether_bricks)$/u;
 
 /**
@@ -515,6 +519,9 @@ function blockAtReader(bot: MapBody): BlockReader {
     if (!block) return null;
     const name = String(block.name);
     const out: MapBlock = { name, solid: block.boundingBox === 'block' };
+    if (DOORLIKE.test(name)) {
+      try { const open = block.getProperties?.()?.open; out.open = open === true || open === 'true'; } catch { out.open = false; }
+    }
     if (name === 'water' || name === 'lava' || name === 'end_portal_frame') {
       try {
         const properties = block.getProperties?.() ?? {};
@@ -559,7 +566,7 @@ function stateIdReader(bot: MapBody, fallback: BlockReader): BlockReader | null 
     if (!definition) return fallback(x, y, z);
     const name = String(definition.name);
     // The fluids and the frame carry their level / eye in the state: read the way it always was, once.
-    const made = name === 'water' || name === 'lava' || name === 'end_portal_frame' ? fallback(x, y, z) : { name, solid: definition.boundingBox === 'block' };
+    const made = name === 'water' || name === 'lava' || name === 'end_portal_frame' || DOORLIKE.test(name) ? fallback(x, y, z) : { name, solid: definition.boundingBox === 'block' };
     if (!made) return null;
     made.symbol = symbolFor(made);
     states.set(stateId, made);

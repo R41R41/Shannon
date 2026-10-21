@@ -223,14 +223,48 @@ interface SpawnScanBody extends ScanBody {
   worldScanCost?: { ms: number; longestSliceMs: number };
 }
 
+/** mineflayer's view distance words (settings.viewDistance) in chunks. */
+const VIEW_WORDS: Record<string, number> = { far: 12, normal: 10, short: 6, tiny: 2 };
+
+/** The view distance in chunks the server sends: its own (from the login), no more than the body asked for; null when the server's is unknown. */
+export function viewDistanceOf(bot: { game?: any; settings?: any }): number | null {
+  const server = Number(bot.game?.serverViewDistance);
+  if (!Number.isFinite(server) || server <= 0) return null;
+  const setting = bot.settings?.viewDistance;
+  const client = typeof setting === 'number' && setting > 0 ? setting : typeof setting === 'string' ? VIEW_WORDS[setting] : undefined;
+  return client ? Math.min(server, client) : server;
+}
+
+/** The loaded columns round the body: how many, and the furthest ring (chunks, square) from its own column. */
+export function loadedRing(bot: { world?: any; entity?: { position?: { x: number; z: number } } | null }): { count: number; radius: number } {
+  let columns: any[] = [];
+  try { columns = bot.world?.getColumns?.() ?? []; } catch { columns = []; }
+  const position = bot.entity?.position;
+  if (!position) return { count: columns.length, radius: 0 };
+  const cx = Math.floor(position.x / 16), cz = Math.floor(position.z / 16);
+  let radius = 0;
+  for (const entry of columns) {
+    const x = Number(entry?.chunkX), z = Number(entry?.chunkZ);
+    if (Number.isFinite(x) && Number.isFinite(z)) radius = Math.max(radius, Math.abs(x - cx), Math.abs(z - cz));
+  }
+  return { count: columns.length, radius };
+}
+
+/** The share of the view distance's chunks loaded before the scan at a spawn runs (run 28: it ran at 25 of 441, 2.6 s after the login). */
+export const SPAWN_SCAN_SHARE = 0.8;
+
 /**
- * After every spawn (a login, a reconnect, a portal, a respawn after a death), while the LLM-centric mode is on: wait until the chunks
- * stop arriving (the count of loaded columns unchanged for `settleMs`, at least `minWaitMs` after the spawn, at most `maxWaitMs`), then
- * scan once and keep it as `bot.worldScan` for the observation. A newer spawn cancels the scan of the one before. Mode off: nothing.
+ * After every spawn (a login, a reconnect, a portal, a respawn after a death), while the LLM-centric mode is on: wait until most of the
+ * chunks have come (SPAWN_SCAN_SHARE of the view distance's square, at least `minWaitMs` after the spawn, at most `maxWaitMs`), then scan
+ * once and keep it as `bot.worldScan` for the observation. When the server's view distance is not known, until the count of loaded columns
+ * has not changed for `settleMs`. Run 28: a count steady for one second came at 25 chunks of 441 (the server sends them in bursts). The
+ * scan says how many chunks were loaded, out to which ring, and how long it waited. A newer spawn cancels the scan of the one before.
+ * Mode off: nothing.
  */
 export function installSpawnScan(bot: SpawnScanBody, options: { minWaitMs?: number; settleMs?: number; maxWaitMs?: number; pollMs?: number; sliceMs?: number; now?: () => number;
-  log?: (line: string) => void } = {}): () => void {
-  const minWait = options.minWaitMs ?? 2000, settle = options.settleMs ?? 1000, maxWait = options.maxWaitMs ?? 15_000, poll = options.pollMs ?? 250;
+  share?: number; log?: (line: string) => void } = {}): () => void {
+  const minWait = options.minWaitMs ?? 2000, settle = options.settleMs ?? 3000, maxWait = options.maxWaitMs ?? 15_000, poll = options.pollMs ?? 250;
+  const share = options.share ?? SPAWN_SCAN_SHARE;
   const now = options.now ?? Date.now;
   let generation = 0;
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -243,29 +277,34 @@ export function installSpawnScan(bot: SpawnScanBody, options: { minWaitMs?: numb
     const tick = () => {
       timer = null;
       if (mine !== generation) return;
-      let count = 0;
-      try { count = bot.world?.getColumns?.()?.length ?? 0; } catch { count = 0; }
+      const { count } = loadedRing(bot);
       const t = now();
       if (count !== lastCount) { lastCount = count; steadySince = t; }
-      const ready = count > 0 && t - began >= minWait && t - steadySince >= settle;
+      const view = viewDistanceOf(bot as never);
+      const enough = view !== null ? count >= Math.ceil(share * (2 * view + 1) ** 2) : count > 0 && t - steadySince >= settle;
+      const ready = t - began >= minWait && enough;
       if (!ready && t - began < maxWait) { timer = setTimeout(tick, poll); return; }
-      void run(mine);
+      void run(mine, t - began, view);
     };
     timer = setTimeout(tick, poll);
   };
-  const run = async (mine: number) => {
+  const run = async (mine: number, waitedMs: number, view: number | null) => {
     const trigger: ScanTrigger = bot.arrival?.kind ?? 'login';
     const dimension = String(bot.game?.dimension ?? '');
     const position = bot.entity?.position;
     if (!position) return;
     const center = { x: Math.floor(position.x), y: Math.floor(position.y + 1e-3), z: Math.floor(position.z) };
     try {
+      const ring = loadedRing(bot);
       const summary = await scanWorld(bot, { sliceMs: options.sliceMs, stop: () => mine !== generation });
       if (!summary || mine !== generation) return;
       const { longestSliceMs, ...kept } = summary;
-      bot.worldScan = { ...kept, trigger, at: new Date(now()).toISOString(), dimension, center };
+      const expected = view !== null ? (2 * view + 1) ** 2 : null;
+      const loaded = `読み込み ${summary.chunks} チャンク・半径 ${ring.radius} チャンク（約 ${summary.reach}m）${expected ? `・描画の距離 ${view}（${expected} チャンクの ${Math.round((100 * summary.chunks) / expected)}%）` : '・描画の距離は不明'}・待ち ${(waitedMs / 1000).toFixed(1)} 秒`;
+      bot.worldScan = { ...kept, text: `${kept.text}（${loaded}）`, rows: [`範囲 ${loaded}`, ...kept.rows].slice(0, MAX_ROWS), radiusChunks: ring.radius,
+        ...(view !== null ? { viewDistance: view } : {}), waitedMs: Math.round(waitedMs), trigger, at: new Date(now()).toISOString(), dimension, center };
       bot.worldScanCost = { ms: summary.ms, longestSliceMs };
-      options.log?.(`world scan (${trigger}) ${summary.chunks} chunks ${summary.ms} ms, longest slice ${longestSliceMs} ms, ${summary.rows.length} rows`);
+      options.log?.(`world scan (${trigger}) ${summary.chunks} chunks radius ${ring.radius} view ${view ?? '?'} waited ${Math.round(waitedMs)} ms, ${summary.ms} ms, longest slice ${longestSliceMs} ms, ${summary.rows.length} rows`);
     } catch (error) {
       options.log?.(`world scan failed: ${String((error as Error)?.message ?? error).slice(0, 120)}`);
     }

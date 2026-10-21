@@ -1,20 +1,26 @@
 import pathfinder from 'mineflayer-pathfinder';
-import { buildMovements } from '../setMovements.js';
-import { feetCell } from '../localMap.js';
+import { bodyReader, feetCell, relativeWords, type Cell } from '../localMap.js';
 import { isSelfDropped } from '../selfDropped.js';
-import { freeSlots, guard, letGo, packLine, stopped, StepStopped, wait, type StepContext, type StepOutcome } from './common.js';
+import { solidBetween } from '../probeTools.js';
+import { cellText, freeSlots, letGo, packLine, stopped, wait, type StepContext, type StepOutcome } from './common.js';
+import { goWith, walkMovements, wayWords, whyBlocked, type WayNotes } from './walk.js';
 
 const { goals } = pathfinder;
 
 /**
- * pickup: walk to dropped items and take them (design mb-llm-centric 2.3). By id, or every item within a radius, nearest first. The walk
- * neither digs nor lays (as walk). What is gained is counted from the pack, not assumed.
+ * pickup: walk to dropped items and take them (design mb-llm-centric 2.3). By id, or every item within a radius, nearest first. The walk is
+ * the walk's (no dig, no block laid; doors opened, leaves broken). What is gained is counted from the pack, not assumed. An item not taken
+ * is said with where it lies, where it is from the body, how far, and what stands between (r5: run 28's 19 "拾えなかった" said none of it).
  */
 export interface PickupArgs { radius?: number; ids?: number[] }
 
 const DEFAULT_RADIUS = 6;
 const MAX_RADIUS = 16;
 const ITEM_WAIT_MS = 2500;
+/** A body takes an item its box, grown by 1 across and 0.5 up and down, touches (the item's own box is 0.25 wide). */
+const TAKE_ACROSS = 1.3 + 0.125;
+const TAKE_BELOW = 0.5 + 0.25;
+const TAKE_ABOVE = 1.8 + 0.5;
 
 function droppedName(bot: any, entity: any): string {
   try {
@@ -33,6 +39,32 @@ export function itemEntitiesNear(bot: any, radius: number): any[] {
     && entity.position.distanceTo(at) <= radius).sort((a: any, b: any) => a.position.distanceTo(at) - b.position.distanceTo(at));
 }
 
+/** Whether the body's box would take an item at `item` now. */
+export function withinTake(body: { x: number; y: number; z: number }, item: { x: number; y: number; z: number }): boolean {
+  return Math.abs(item.x - body.x) <= TAKE_ACROSS && Math.abs(item.z - body.z) <= TAKE_ACROSS && item.y >= body.y - TAKE_BELOW && item.y <= body.y + TAKE_ABOVE;
+}
+
+/**
+ * Where an item lies from the body, as facts: its cell, the way from the feet, the distance, whether the body's box takes it, and the solid
+ * cells between the body's middle and it.
+ */
+export function itemFacts(bot: any, position: { x: number; y: number; z: number }): string {
+  const body = bot.entity?.position;
+  const cell: Cell = { x: Math.floor(position.x), y: Math.floor(position.y + 1e-3), z: Math.floor(position.z) };
+  const feet = feetCell(bot);
+  if (!body || !feet) return cellText(cell);
+  const distance = Math.hypot(position.x - body.x, position.y - body.y, position.z - body.z);
+  const facts = [`${cellText(cell)} 自分から${relativeWords(feet, cell)}・${distance.toFixed(1)}m`];
+  if (!withinTake(body, position)) facts.push('拾える所（体から横 1.4m・上 2.3m・下 0.7m）に無い');
+  let between: Cell[] = [];
+  try { between = solidBetween(bodyReader(bot), [body.x, body.y + 0.9, body.z], [position.x, position.y + 0.125, position.z]); } catch { between = [];}
+  if (between.length) {
+    const read = bodyReader(bot);
+    facts.push(`間に ${between.slice(0, 2).map(c => `${cellText(c)} ${read(c.x, c.y, c.z)?.name ?? '未ロード'}`).join('、')}${between.length > 2 ? ' ほか' : ''}`);
+  }
+  return facts.join('、');
+}
+
 export async function pickup(ctx: StepContext, args: PickupArgs): Promise<StepOutcome> {
   const bot = ctx.bot;
   const radius = Math.min(MAX_RADIUS, Math.max(1, args.radius ?? DEFAULT_RADIUS));
@@ -45,32 +77,41 @@ export async function pickup(ctx: StepContext, args: PickupArgs): Promise<StepOu
   for (const item of bot.inventory?.items?.() ?? []) before.set(item.name, (before.get(item.name) ?? 0) + item.count);
   const navigator = bot.pathfinder;
   const previous = navigator?.movements;
-  navigator?.setMovements(buildMovements(bot, false, true, true, true, false, true, 1, false, true, 3, 10, false));
+  navigator?.setMovements(walkMovements(bot, true));
   const missed: string[] = [];
+  const notes: WayNotes = { opened: [], leaves: 0 };
   try {
     for (const entity of targets.slice(0, 16)) {
       if (!bot.entities?.[entity.id]) continue;
       if (freeSlots(bot) === 0) { missed.push(`${droppedName(bot, entity)}（持ち物が満杯）`); break; }
       const name = droppedName(bot, entity);
-      const goal = new goals.GoalNear(entity.position.x, entity.position.y, entity.position.z, 0.5);
-      try {
-        const done = await guard(ctx, Promise.resolve(navigator.goto(goal)), Math.min(10_000, Math.max(500, ctx.deadline - Date.now())));
-        if (!done) { letGo(bot); missed.push(`${name}（時間切れ）`); continue; }
-      } catch (error) {
-        if (error instanceof StepStopped || /Action interrupted/u.test(String((error as Error)?.message))) { letGo(bot); throw error; }
+      const where = () => ({ x: entity.position.x, y: entity.position.y, z: entity.position.z });
+      if (!withinTake(bot.entity.position, where())) {
+        const goal = new goals.GoalNear(entity.position.x, entity.position.y, entity.position.z, 0.5);
+        const gone = await goWith(ctx, goal, Math.min(10_000, Math.max(500, ctx.deadline - Date.now())), notes);
         if (!bot.entities?.[entity.id]) continue; // taken on the way
-        missed.push(`${name} (${Math.floor(entity.position.x)},${Math.floor(entity.position.y)},${Math.floor(entity.position.z)})（掘らない道が無い）`);
-        continue;
+        if (gone.timedOut || gone.stuck || gone.error || !gone.reached) {
+          letGo(bot);
+          const item = where(), cell = { x: Math.floor(item.x), y: Math.floor(item.y + 1e-3), z: Math.floor(item.z) };
+          const here = feetCell(bot)!;
+          const blocked = whyBlocked(bot, here, cell);
+          const why = gone.timedOut ? '時間切れ' : gone.stuck ? '4秒進めず' : /no path/iu.test(String((gone.error as Error)?.message)) ? '掘らない道が無い' : 'そこまで着けない';
+          if (!withinTake(bot.entity.position, item)) { missed.push(`${name}（${why}。${itemFacts(bot, item)}${blocked ? `。${blocked.text}` : ''}）`); continue; }
+        }
       }
       for (const until = Date.now() + ITEM_WAIT_MS; Date.now() < until && bot.entities?.[entity.id];) await wait(ctx, 100);
-      if (bot.entities?.[entity.id]) missed.push(`${name}（拾えなかった）`);
+      if (bot.entities?.[entity.id]) {
+        const item = where();
+        missed.push(`${name}（${withinTake(bot.entity.position, item) ? `拾える所にあるのに ${ITEM_WAIT_MS / 1000} 秒で入らなかった。` : ''}${itemFacts(bot, item)}）`);
+      }
     }
   } finally { try { if (previous) navigator.setMovements(previous); } catch { /* kept */ } }
   const gained: string[] = [];
   const after = new Map<string, number>();
   for (const item of bot.inventory?.items?.() ?? []) after.set(item.name, (after.get(item.name) ?? 0) + item.count);
   for (const [name, count] of after) { const diff = count - (before.get(name) ?? 0); if (diff > 0) gained.push(`${name}+${diff}`); }
-  const text = `拾った: ${gained.join(' ') || 'なし'}${missed.length ? `。拾えなかった: ${missed.join('、')}` : ''}`;
+  const way = wayWords(notes);
+  const text = `拾った: ${gained.join(' ') || 'なし'}${missed.length ? `。拾えなかった: ${missed.join('、')}` : ''}${way ? `（途中で${way}）` : ''}`;
   if (!gained.length && missed.length) return stopped(bot, freeSlots(bot) === 0 ? 'inventory_full' : 'not_picked', `${text}（持ち物 ${packLine(bot).length > 200 ? `空き${freeSlots(bot)}枠` : packLine(bot)}）`, feetCell(bot)!);
   return { ok: true, text };
 }
