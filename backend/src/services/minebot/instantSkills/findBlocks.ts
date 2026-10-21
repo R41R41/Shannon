@@ -4,6 +4,7 @@ import { CustomBot, InstantSkill } from '../types.js';
 import { getWaterLevel } from '../utils/waterLevel.js';
 import { createLogger } from '../../../utils/logger.js';
 import { estimateBlockApproachCost } from '../utils/blockApproachCost.js';
+import { describeLavaSource, lavaSourceInfo, rankLavaSources, type LavaSourceInfo } from '../utils/lavaPools.js';
 
 import { findLoadedBlocks } from '../utils/loadedBlockScan.js';
 const log = createLogger('Minebot:Skill:findBlocks');
@@ -230,16 +231,33 @@ class FindBlocks extends InstantSkill {
             : ''),
         );
 
-        const sourceList = sortedBlocks
-          .slice(0, listCap)
-          .map((b) => `(${b.x},${b.y},${b.z}) 距離${b.distance}m`)
+        // Lava is told as the tool that pours on it sees it (utils/lavaPools): the pool's size and whether its top is open, under rock that
+        // is dug from beside it, or under lava or water (run 24: "can be scooped" for a pool the pourer then called one with no lava to pour on).
+        const lavaPools = new Map<string, number>();
+        const lavaInfos = new Map<string, LavaSourceInfo | null>();
+        const listed = sortedBlocks.slice(0, listCap);
+        for (const b of listed) {
+          if (b.blockName === 'lava') lavaInfos.set(`${b.x},${b.y},${b.z}`, lavaSourceInfo(this.bot as any, new Vec3(b.x, b.y, b.z), lavaPools));
+        }
+        const sourceList = listed
+          .map((b) => {
+            const info = lavaInfos.get(`${b.x},${b.y},${b.z}`);
+            return `(${b.x},${b.y},${b.z}) 距離${b.distance}m${info ? `［${describeLavaSource(info)}］` : ''}`;
+          })
           .join(', ');
         const truncated = sortedBlocks.length > listCap;
         const nearest = sortedBlocks[0];
+        const usable = [...lavaInfos.values()].filter((info): info is LavaSourceInfo => info !== null);
+        const best = rankLavaSources(usable, botPos, 10)[0];
+        const lavaAdvice = lavaInfos.size
+          ? (best
+            ? `黒曜石を作るなら、溜まりが大きく手間の少ない(${best.at.x},${best.at.y},${best.at.z})（${describeLavaSource(best)}）が目安です（黒曜石10個には水源10個以上の溜まりを先に）。`
+            : '水をかけられる溶岩（上が開いている・岩の覆いを横から掘れる）は見つかりませんでした。別の場所の溶岩を探してください。')
+          : '';
         return {
           success: true,
           result: `${displayName}の水源ブロック（level=0, バケツで汲める）を${sortedBlocks.length}個発見: ${sourceList}${truncated ? '...' : ''}。` +
-            `最も近い水源は(${nearest.x},${nearest.y},${nearest.z})で距離${nearest.distance}m。` +
+            `最も近い水源は(${nearest.x},${nearest.y},${nearest.z})で距離${nearest.distance}m。${lavaAdvice}` +
             '遠くに行く必要はなく、最寄りの水源に向かってそこでバケツを使ってください（use-item-on-blockは5m以内なら使用可能）。',
         };
       }

@@ -36,6 +36,7 @@ const MAX_EXTRA_DROP = 2;
 
 type Cell = { x: number; y: number; z: number };
 const at = (cell: Cell, dx = 0, dy = 0, dz = 0) => new Vec3(cell.x + dx, cell.y + dy, cell.z + dz);
+export const cellKey = (cell: Cell) => `${cell.x},${cell.y},${cell.z}`;
 
 export interface StepNeeds {
   /** The cells the body has to be able to pass: dug when solid. */
@@ -90,7 +91,7 @@ export function floorDrop(bot: WorldBot, floor: Cell, allowDrop: boolean): numbe
  * Why a cell may not be dug (null when it may): protected, will not break, liquid in it or touching it, or a block that falls over it.
  * A cell already empty has nothing to ask but whether it is liquid.
  */
-export function digRefusal(bot: WorldBot, cell: Cell, others: Cell[]): string | null {
+export function digRefusal(bot: WorldBot, cell: Cell, others: Cell[], options: { allowFalling?: boolean } = {}): string | null {
   const block = blockOf(bot, cell);
   if (!block) return 'unloaded';
   if (LIQUIDS.has(block.name)) return `liquid:${block.name}`;
@@ -108,7 +109,9 @@ export function digRefusal(bot: WorldBot, cell: Cell, others: Cell[]): string | 
     // Lava beside any cell the body will stand in or open; water only beside a cell that is dug (an open cell does not let it in).
     if (next.name === 'lava' || next.name === 'flowing_lava') return `lava_beside:${next.name}`;
     if (!empty && LIQUIDS.has(next.name)) return `liquid_beside:${next.name}`;
-    if (!empty && dy === 1 && FALLING.test(next.name)) return `falling_above:${next.name}`;
+    // A block that falls is not a reason to stop for a walk that digs it out as it falls (settleFalling): the gravel over a cell comes
+    // down into it, and is dug again (run 24: a tunnel walk planned the same stop at gravel nine times in a minute).
+    if (!empty && dy === 1 && FALLING.test(next.name) && !options.allowFalling) return `falling_above:${next.name}`;
   }
   return null;
 }
@@ -136,8 +139,10 @@ function digMs(bot: WorldBot, cell: Cell): number {
 }
 
 /** What one step costs: null when it cannot be taken (a cell that must not be dug, no floor). `ctx.blocks`: what the pillars still have to lay. */
-export function estimateStep(bot: WorldBot, from: Cell, to: Cell, ctx: { blocks: number } = { blocks: pillarBlocks(bot) }): StepEstimate | null {
+export function estimateStep(bot: WorldBot, from: Cell, to: Cell, ctx: { blocks: number; avoid?: ReadonlySet<string> } = { blocks: pillarBlocks(bot) }): StepEstimate | null {
   const needs = stepNeeds(from, to);
+  // A cell a walk stopped at twice for the same reason (see avoidKey): no plan passes through it, so the planner goes round.
+  if (ctx.avoid?.size && [...needs.clear, needs.floor].some(cell => ctx.avoid!.has(cellKey(cell)))) return null;
   if (to.x === from.x && to.z === from.z) {
     // Straight down: the floor under the feet dug and dropped onto, only where the rock under it is whole (utils/shaftDown). Straight up: a pillar.
     if (to.y < from.y) {
@@ -152,7 +157,7 @@ export function estimateStep(bot: WorldBot, from: Cell, to: Cell, ctx: { blocks:
   const effects = (bot.entity as unknown as { effects?: unknown })?.effects ?? {};
   let ms = STEP_MOVE_MS, digs = 0;
   for (const cell of needs.clear) {
-    if (digRefusal(bot, cell, needs.clear)) return null;
+    if (digRefusal(bot, cell, needs.clear, { allowFalling: true })) return null;
     const block = blockOf(bot, cell);
     if (!block || block.boundingBox === 'empty') continue;
     let dig = 1500;
@@ -186,9 +191,9 @@ export function explainStep(bot: WorldBot, from: Cell, to: Cell): string {
  * The time of walking `cells` from `start`: the steps up to the first that cannot be taken (`stoppedAt` is its index, or the length).
  * Feasible when at least `minSteps` steps can be taken.
  */
-export function estimateCells(bot: WorldBot, start: Cell, cells: Vec3[], minSteps = 3): PlanEstimate {
+export function estimateCells(bot: WorldBot, start: Cell, cells: Vec3[], minSteps = 3, avoid?: ReadonlySet<string>): PlanEstimate {
   let ms = 0, digs = 0, from: Cell = start, index = 0;
-  const ctx = { blocks: pillarBlocks(bot) };
+  const ctx = { blocks: pillarBlocks(bot), avoid };
   for (; index < cells.length; index++) {
     const step = estimateStep(bot, from, cells[index], ctx);
     if (!step) break;
@@ -204,6 +209,17 @@ export interface TunnelOutcome {
   steps: number;
   digs: number;
   reason?: string;
+  /** The cell the walk could not pass (a cell refused, or the one a step failed to reach): what a repeated stop is told by (avoidKey). */
+  at?: { x: number; y: number; z: number };
+}
+
+/**
+ * What a stop of the tunnel walk is called when it is asked whether the same thing happened before: the way it ended and the kind of
+ * reason without the coordinates ("falling_above:gravel", "lava_beside:lava", "liquid_beside:water"), and the cell it was at.
+ */
+export function stopKey(outcome: TunnelOutcome, feet: Cell): string {
+  const reason = (outcome.reason ?? '').replace(/\(.*$/u, '');
+  return `${outcome.stopped}|${reason}|${cellKey(outcome.at ?? feet)}`;
 }
 
 export interface WalkOptions {
@@ -214,6 +230,12 @@ export interface WalkOptions {
   tidy?: () => Promise<void>;
   /** Straight up by `height` levels (the tower-up skill): the pillar of a plan that climbs more than its stair can. */
   pillar?: (height: number) => Promise<unknown>;
+  /**
+   * What a step that took the body lower than the cell asked for does. `replan` (the default, a tunnel cut now): the plan is of no use from
+   * here, the walk ends and is planned again. `continue` (a tunnel cut before, the trail): the cells are the places the body has stood, so the
+   * walk goes on from the cell it landed in, to the next cell of the plan it can step to (run 24: "off_line (drop)" five times a second).
+   */
+  onDrop?: 'replan' | 'continue';
 }
 
 const sleep = (bot: CustomBot, ms: number) => actionDelay(bot, ms);
@@ -303,6 +325,31 @@ async function shaftDownOne(bot: CustomBot, feet: Vec3): Promise<string | null> 
   return Math.floor(bot.entity.position.y) === feet.y - 1 ? null : 'did_not_drop';
 }
 
+/**
+ * The blocks that fall into the cells just dug are dug again as they come down (a column of gravel over a dug cell falls into it, one
+ * block at a time): up to SETTLE_ROUNDS looks, a short wait before each. Returns how many blocks it dug.
+ */
+const SETTLE_ROUNDS = 6;
+async function settleFalling(bot: CustomBot, clear: Vec3[]): Promise<number> {
+  let dug = 0;
+  for (let round = 0; round < SETTLE_ROUNDS; round++) {
+    const pendingAbove = clear.some(cell => FALLING.test(blockOf(bot, at(cell, 0, 1))?.name ?? '') || FALLING.test(blockOf(bot, at(cell, 0, 2))?.name ?? ''));
+    const landed = clear.filter(cell => blockOf(bot, cell)?.boundingBox === 'block');
+    if (!pendingAbove && !landed.length) break;
+    await sleep(bot, 350);
+    for (const cell of clear) {
+      if (blockOf(bot, cell)?.boundingBox !== 'block') continue;
+      assertActionActive(bot);
+      try { if (await digCell(bot, cell)) dug++; } catch (error) { if (/interrupt/i.test(String((error as Error)?.message))) throw error; return dug; }
+    }
+  }
+  return dug;
+}
+
+const sameCell = (a: Cell, b: Cell) => a.x === b.x && a.y === b.y && a.z === b.z;
+/** How many cells further on a trail walk looks for one it can step to from where a drop left the body. */
+const SKIP_AHEAD = 6;
+
 /** Walks the cells, one step at a time. Returns why it stopped and how far it got; the body stands where it stopped. */
 export async function walkCells(bot: CustomBot, cells: Vec3[], options: WalkOptions): Promise<TunnelOutcome> {
   const trail = trailOf(bot);
@@ -314,15 +361,24 @@ export async function walkCells(bot: CustomBot, cells: Vec3[], options: WalkOpti
     if (Date.now() > options.deadline) return { stopped: 'timeout', steps, digs };
     const next = cells[index];
     if (feet.x === next.x && feet.y === next.y && feet.z === next.z) continue;
-    if (!isStep(feet, next)) return { stopped: 'off_line', steps, digs, reason: `(${feet.x},${feet.y},${feet.z})から(${next.x},${next.y},${next.z})は一歩ではありません` };
+    if (!isStep(feet, next)) {
+      // A trail is the places the body has stood: after a step down it did not plan, the way goes on at the first cell further along that
+      // the body can step to (or is standing in), not from the start again.
+      if (options.onDrop === 'continue') {
+        let ahead = -1;
+        for (let j = index + 1; j < cells.length && j <= index + SKIP_AHEAD; j++) if (sameCell(cells[j], feet) || isStep(feet, cells[j])) { ahead = j; break; }
+        if (ahead > index) { index = sameCell(cells[ahead], feet) ? ahead : ahead - 1; continue; }
+      }
+      return { stopped: 'off_line', steps, digs, at: feet, reason: `(${feet.x},${feet.y},${feet.z})から(${next.x},${next.y},${next.z})は一歩ではありません` };
+    }
     if (next.x === feet.x && next.z === feet.z) {
       // A level straight down (a shaft) or a run of levels straight up (a pillar).
       const cell = stepNeeds(feet, next).clear[0];
       const refused = digRefusal(bot, cell, []);
-      if (refused) return { stopped: 'blocked', steps, digs, reason: `${refused}(${cell.x},${cell.y},${cell.z})` };
+      if (refused) return { stopped: 'blocked', steps, digs, at: cell, reason: `${refused}(${cell.x},${cell.y},${cell.z})` };
       if (next.y < feet.y) {
         const why = await shaftDownOne(bot, feet);
-        if (why) return { stopped: 'blocked', steps, digs, reason: `縦穴で下りられません(${why})` };
+        if (why) return { stopped: 'blocked', steps, digs, at: cell, reason: `縦穴で下りられません(${why})` };
         digs++;
         trail.add(feet, bot.entity.position.floored());
         steps++;
@@ -330,43 +386,54 @@ export async function walkCells(bot: CustomBot, cells: Vec3[], options: WalkOpti
       }
       let run = 1;
       while (cells[index + run] && cells[index + run].x === next.x && cells[index + run].z === next.z && cells[index + run].y === next.y + run) run++;
-      if (!options.pillar) return { stopped: 'blocked', steps, digs, reason: '直上登りの手段がありません' };
+      if (!options.pillar) return { stopped: 'blocked', steps, digs, at: cell, reason: '直上登りの手段がありません' };
       try { await options.pillar(run); } catch (error) {
         if (/interrupt/i.test(String((error as Error)?.message))) throw error;
-        return { stopped: 'blocked', steps, digs, reason: `直上登りに失敗: ${String((error as Error)?.message ?? error).slice(0, 60)}` };
+        return { stopped: 'blocked', steps, digs, at: cell, reason: `直上登りに失敗: ${String((error as Error)?.message ?? error).slice(0, 60)}` };
       }
       const gained = Math.floor(bot.entity.position.y) - feet.y;
       for (let level = 0; level < gained; level++) trail.add(at(feet, 0, level), at(feet, 0, level + 1));
       steps += Math.max(0, gained);
-      if (gained < run) return { stopped: 'blocked', steps, digs, reason: `直上登りが${Math.max(0, gained)}/${run}段で止まりました` };
+      if (gained < run) return { stopped: 'blocked', steps, digs, at: cell, reason: `直上登りが${Math.max(0, gained)}/${run}段で止まりました` };
       index += run - 1;
       continue;
     }
     const needs = stepNeeds(feet, next);
     for (const cell of needs.clear) {
-      const refusal = digRefusal(bot, cell, needs.clear);
-      if (refusal) return { stopped: 'blocked', steps, digs, reason: `${refusal}(${cell.x},${cell.y},${cell.z})` };
+      const refusal = digRefusal(bot, cell, needs.clear, { allowFalling: true });
+      if (refusal) return { stopped: 'blocked', steps, digs, at: cell, reason: `${refusal}(${cell.x},${cell.y},${cell.z})` };
     }
     for (const cell of needs.clear) {
       if (blockOf(bot, cell)?.boundingBox === 'empty') continue;
       let dug = false;
       try { dug = await digCell(bot, cell); } catch (error) {
         if (/interrupt/i.test(String((error as Error)?.message))) throw error;
-        return { stopped: 'blocked', steps, digs, reason: `掘れません(${cell.x},${cell.y},${cell.z}): ${String((error as Error)?.message ?? error).slice(0, 80)}` };
+        return { stopped: 'blocked', steps, digs, at: cell, reason: `掘れません(${cell.x},${cell.y},${cell.z}): ${String((error as Error)?.message ?? error).slice(0, 80)}` };
       }
-      if (!dug) return { stopped: 'blocked', steps, digs, reason: `掘れません(${cell.x},${cell.y},${cell.z})` };
+      // What was dug and came down again is gravel from above (settled below), not a block that would not break.
+      if (!dug && FALLING.test(blockOf(bot, cell)?.name ?? '')) dug = true;
+      if (!dug) return { stopped: 'blocked', steps, digs, at: cell, reason: `掘れません(${cell.x},${cell.y},${cell.z})` };
       digs++;
     }
+    // Gravel and sand over the cells came down into them: dug out again before the step.
+    if (needs.clear.some(cell => FALLING.test(blockOf(bot, at(cell, 0, 1))?.name ?? '') || blockOf(bot, cell)?.boundingBox === 'block')) digs += await settleFalling(bot, needs.clear);
+    const stillShut = needs.clear.find(cell => blockOf(bot, cell)?.boundingBox === 'block');
+    if (stillShut) return { stopped: 'blocked', steps, digs, at: stillShut, reason: `落ちてくる物を掘り切れません(${stillShut.x},${stillShut.y},${stillShut.z})` };
     const drop = floorDrop(bot, needs.floor, next.y <= feet.y);
-    if (drop === null) return { stopped: 'blocked', steps, digs, reason: `足場がありません(${needs.floor.x},${needs.floor.y},${needs.floor.z})` };
+    if (drop === null) return { stopped: 'blocked', steps, digs, at: needs.floor, reason: `足場がありません(${needs.floor.x},${needs.floor.y},${needs.floor.z})` };
     if (!(await moveOneCell(bot, feet, next, drop))) {
-      return { stopped: 'step_failed', steps, digs, reason: `(${next.x},${next.y - drop},${next.z})へ踏み出せませんでした` };
+      return { stopped: 'step_failed', steps, digs, at: next, reason: `(${next.x},${next.y - drop},${next.z})へ踏み出せませんでした` };
     }
-    trail.add(feet, bot.entity.position.floored());
+    const landed = bot.entity.position.floored();
+    if (isStep(feet, landed)) trail.add(feet, landed);
+    else if (drop === 1) { trail.add(feet, next); trail.add(next, landed); }
     steps++;
     if (options.tidy && steps % 12 === 0) { try { await options.tidy(); } catch (error) { if (/interrupt/i.test(String((error as Error)?.message))) throw error; } }
-    // A drop that took the body lower than the plan: the plan is of no use from here.
-    if (drop) { log.info(`⛏️ トンネル: 足場が${drop}ブロック下だったので降りました`); return { stopped: 'off_line', steps, digs, reason: 'drop' }; }
+    // A drop that took the body lower than the plan: the plan is of no use from here (a trail goes on from where the body landed).
+    if (drop) {
+      log.info(`⛏️ トンネル: 足場が${drop}ブロック下だったので降りました`);
+      if (options.onDrop !== 'continue') return { stopped: 'off_line', steps, digs, at: landed, reason: 'drop' };
+    }
   }
   return { stopped: options.isEnd(bot.entity.position.floored()) ? 'reached' : 'plan_end', steps, digs };
 }

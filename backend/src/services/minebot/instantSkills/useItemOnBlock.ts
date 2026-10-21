@@ -14,7 +14,8 @@ import { PARTIAL_FAILURE, progressTrailer } from '../utils/partialProgress.js';
 import { hostileNear } from './craftOne.js';
 import { liquidAim, liquidAimPoints } from '../utils/liquidAim.js';
 import { facePoints, rayFace } from '../utils/rayFace.js';
-import { dropBurnsIn } from '../utils/dropFate.js';
+import { dropBurnsIn, lavaAroundCount, lavaBelowDrop } from '../utils/dropFate.js';
+import { lavaSourceInfo, rankLavaSources, type LavaSourceInfo } from '../utils/lavaPools.js';
 import { tidyPlan } from '../utils/inventoryTidy.js';
 import { scoopWater } from '../utils/scoopWater.js';
 /** Rock dug on the way that a full pack can spare, for the obsidian (see roomForDrops). */
@@ -28,6 +29,12 @@ const WALK_MS_PER_M = 2_500;
 const WALK_MAX_MS = 75_000;
 /** How far from the lava asked for another source of the same pool is poured on instead, when none of its own faces can be seen. */
 const POOL_REACH = 6;
+/** Pours made ahead of a dig while some obsidian can be taken: past it the digging comes first (the pours make nothing to take, run 24: 55 for 9). */
+const POUR_AHEAD = 4;
+/** Pours in a row that make no obsidian: past it the call stops and says so, instead of going on for minutes. */
+const MAX_WASTED_POURS = 6;
+/** Obsidian with at most this many lava cells over or beside it is dug (the lava put out first) rather than left. */
+const MAX_CRUSHED = 2;
 
 /**
  * 原子的スキル: 指定座標のブロックにアイテムを使用（右クリック）
@@ -185,6 +192,12 @@ class UseItemOnBlock extends InstantSkill {
 
       // ── water_bucket × lava → 自動リダイレクトで黒曜石生成 ──
       if (heldItem.name === 'water_bucket' && block.name === 'lava') {
+        // Rock over the source (run 24: 0 obsidian twice at a pool the search had called one to scoop): the cover is dug from beside it first.
+        const info = lavaSourceInfo(this.bot as any, pos);
+        if (info?.top === 'covered' && !(await this.openCover(info, () => this.maxDurationMs || 60_000))) {
+          return { success: false, failureType: 'line_of_sight_blocked', recoverable: true,
+            result: `マグマ(${pos.x},${pos.y},${pos.z})の上は岩で覆われていて、横の立ち位置(${info.stand!.x},${info.stand!.y},${info.stand!.z})から覆い(${info.cap!.x},${info.cap!.y},${info.cap!.z})を掘って開けられませんでした。別の溶岩を find-blocks lava で探してください` };
+        }
         return await this.placeWaterNearLava(pos);
       }
 
@@ -397,6 +410,9 @@ class UseItemOnBlock extends InstantSkill {
 
     return {
       success: true,
+      // For makeObsidian: whether the lava poured on became obsidian, and which source it was (the pool's other source when this one had no face to see).
+      converted: !!converted,
+      pouredAt: lavaPos,
       result: converted
         ? `✅ マグマ(${lavaPos.x},${lavaPos.y},${lavaPos.z})が黒曜石に変換されました（周囲8m内の黒曜石${obsidianNearby}）。`
           + (recovered ? '水はwater_bucketへ回収済み。残りの溶岩には別の縁から同様に水を流せます。diamond_pickaxeで黒曜石を採掘できます。'
@@ -511,7 +527,8 @@ class UseItemOnBlock extends InstantSkill {
     const refusedLava = new Map<string, number>();
     const skippedObsidian = new Set<string>();
     let centre = start.clone();
-    let pours = 0, digFailures = 0, overLavaDigs = 0;
+    // pours: poured on; converted: of those, turned to obsidian; wasted: in a row, not; sincePour: pours since the last dig.
+    let pours = 0, converted = 0, wasted = 0, sincePour = 0, digFailures = 0, overLavaDigs = 0, covers = 0;
     let why = '', roomNote = '';
     while (held('obsidian') < want && !this.shouldInterrupt()) {
       if (timeLeft() < 15_000) { why = '1回の行動の時間を使い切る前に区切りました'; break; }
@@ -531,14 +548,38 @@ class UseItemOnBlock extends InstantSkill {
       }
       const needed = want - held('obsidian');
       const takeable = this.takeableObsidian(centre, skippedObsidian);
-      const lava = takeable.length >= needed ? null : this.pourableLava(centre, refusedLava);
-      if (lava) {
-        if (lava.distanceTo(this.bot.entity.position) > 4) {
+      // Obsidian with a lava cell or two beside it: dig-block-at puts that lava out (a block in its cell) before it breaks it, a second or two
+      // each. Taken in place of pouring on when the pours stop making obsidian that can be taken (run 24: 55 pours for 9 obsidian).
+      const crushable = takeable.length ? [] : this.takeableObsidian(centre, skippedObsidian, false, true);
+      // Pouring ahead of the digging has a limit: a pour is three seconds, a dig nine, but a pool whose pours leave obsidian with lava beside
+      // it makes nothing to dig however many are poured.
+      const dueToDig = takeable.length >= 1 && sincePour >= POUR_AHEAD;
+      const stalled = wasted >= 2 && crushable.length > 0;
+      const choice = takeable.length >= needed || dueToDig || stalled ? null : this.pourableLava(centre, refusedLava, needed);
+      if (choice) {
+        const lava = choice.at;
+        if (choice.top === 'covered') {
+          // Rock over the source: the cover is dug from beside it, then the water is poured into the opening.
+          covers++;
+          if (!(await this.openCover(choice, timeLeft))) {
+            refusedLava.set(key(lava), (refusedLava.get(key(lava)) ?? 0) + 2);
+            if (++wasted >= MAX_WASTED_POURS) { why = '覆われた溶岩を掘って開けられませんでした'; break; }
+            continue;
+          }
+        } else if (lava.distanceTo(this.bot.entity.position) > 4) {
           try { await this.walk(new goals.GoalNear(lava.x, lava.y + 1, lava.z, 3), 15_000, timeLeft()); } catch (error) { if (this.shouldInterrupt()) throw error; }
         }
-        const poured = lava.distanceTo(this.bot.entity.position) <= 5 ? await this.placeWaterNearLava(lava) : { success: false };
-        pours++;
-        if (poured.success) centre = lava; else refusedLava.set(key(lava), (refusedLava.get(key(lava)) ?? 0) + 1);
+        const poured: { success?: boolean; converted?: boolean; pouredAt?: Vec3 } = lava.distanceTo(this.bot.entity.position) <= 5 ? await this.placeWaterNearLava(lava) : { success: false };
+        pours++; sincePour++;
+        if (poured.success) {
+          centre = lava;
+          if (poured.converted) { converted++; wasted = 0; } else {
+            // Water went on and the lava did not turn: not this source again (the same pour is the same water, 3 s).
+            wasted++;
+            refusedLava.set(key(poured.pouredAt ?? lava), 2);
+          }
+        } else { wasted++; refusedLava.set(key(lava), (refusedLava.get(key(lava)) ?? 0) + 1); }
+        if (wasted >= MAX_WASTED_POURS) { why = `水を${wasted}回続けてかけても黒曜石になりません（水源でない溶岩・流れる溶岩・水が届かない面とみられます）`; break; }
         continue;
       }
       // A pool deeper than one: every piece of its crust lies over lava. dig-block-at keeps such a drop by putting water on the block
@@ -546,7 +587,7 @@ class UseItemOnBlock extends InstantSkill {
       // A ladder probe (2026-10-20) poured on five sources of such a pool and came away with none.
       const overLava = !takeable.length && overLavaDigs < 3 ? this.takeableObsidian(centre, skippedObsidian, true) : [];
       if (overLava.length) overLavaDigs++;
-      const target = takeable[0] ?? overLava[0];
+      const target = takeable[0] ?? crushable[0] ?? overLava[0];
       if (!target) { why = '近くに水をかけられる溶岩も、すぐ掘れる黒曜石も、もうありません'; break; }
       if (target.offset(0.5, 0.5, 0.5).distanceTo(this.bot.entity.position.offset(0, 1.62, 0)) > 4.2) {
         try { await this.walk(new goals.GoalNear(target.x, target.y + 1, target.z, 2), 12_000, timeLeft()); } catch (error) { if (this.shouldInterrupt()) throw error; }
@@ -559,6 +600,7 @@ class UseItemOnBlock extends InstantSkill {
       if (held('obsidian') <= got && dug.success) {
         try { await this.callSkill('pickup-nearest-item', 'obsidian', 8); } catch (error) { if (this.shouldInterrupt()) throw error; }
       }
+      sincePour = 0;
       if (held('obsidian') > got) { digFailures = 0; continue; }
       skippedObsidian.add(key(target));
       if (++digFailures >= 4) { why = `黒曜石の採掘が4回続けて失敗しました（最後: ${String(dug.result ?? '').slice(0, 80)}）`; break; }
@@ -578,7 +620,7 @@ class UseItemOnBlock extends InstantSkill {
     }
     const got = held('obsidian') - before;
     const bucketNote = held('water_bucket') ? '水はwater_bucketへ回収済み' : '⚠️ water_bucketに水が戻っていません（近くの水源を空バケツで汲んでください）';
-    const summary = `黒曜石を${got}個作って掘りました（溶岩${pours}か所に水をかけ、所持 obsidian=${held('obsidian')}個）。${bucketNote}。${roomNote}`;
+    const summary = `黒曜石を${got}個作って掘りました（溶岩${pours}か所に水をかけ、うち固まったのは${converted}か所${covers ? `、岩の覆いを${covers}か所掘って開けた` : ''}、所持 obsidian=${held('obsidian')}個）。${bucketNote}。${roomNote}`;
     if (got >= count) return { success: true, result: summary };
     // Some made: a partial (utils/partialProgress), told with the count; nothing made is a failure of its own kind.
     return {
@@ -619,26 +661,60 @@ class UseItemOnBlock extends InstantSkill {
    * Obsidian within 10 blocks of `centre` whose drop does not burn, the nearest to the body first; not the block it stands on. With
    * `overLava`, instead those whose only lava is straight under them (what dig-block-at can keep with water on top).
    */
-  takeableObsidian(centre: Vec3, skipped: Set<string>, overLava = false): Vec3[] {
+  takeableObsidian(centre: Vec3, skipped: Set<string>, overLava = false, crushable = false): Vec3[] {
     const feet = this.bot.entity.position.floored().offset(0, -1, 0);
     const found: Vec3[] = this.bot.findBlocks?.({ matching: (block: any) => block?.name === 'obsidian', point: centre, maxDistance: 10, count: 64 }) ?? [];
     const here = this.bot.entity.position;
     return found.filter(at => {
       if (this.bot.blockAt(at)?.name !== 'obsidian' || at.equals(feet) || skipped.has(`${at.x},${at.y},${at.z}`)) return false;
+      // With lava over it or beside it (one cell or two), and none in the fall under it: dig-block-at puts that lava out first.
+      if (crushable) {
+        const around = lavaAroundCount(this.bot as any, at);
+        return around >= 1 && around <= MAX_CRUSHED && !lavaBelowDrop(this.bot as any, at);
+      }
       const burn = dropBurnsIn(this.bot as any, at);
       return overLava ? !!burn && burn.x === at.x && burn.z === at.z && burn.y === at.y - 1 && this.bot.blockAt(at.offset(0, 1, 0))?.boundingBox === 'empty' : !burn;
     }).sort((a, b) => a.distanceTo(here) - b.distanceTo(here));
   }
 
-  /** A lava source within 12 blocks of `centre` with nothing solid over it (the top of the pool), not refused twice, nearest first. */
-  pourableLava(centre: Vec3, refused: Map<string, number>): Vec3 | null {
+  /**
+   * The lava source to pour on next, within 12 blocks of `centre` (utils/lavaPools): one with air over it, or with rock over it that can
+   * be dug from beside (a source under lava or water, or under a cover no side reaches, is not poured on). The pool as big as `count`
+   * needs and the least work to open come first; a source not refused twice.
+   */
+  pourableLava(centre: Vec3, refused: Map<string, number>, count = 1): LavaSourceInfo | null {
     const found: Vec3[] = this.bot.findBlocks?.({ matching: (block: any) => block?.name === 'lava', point: centre, maxDistance: 12, count: 256 }) ?? [];
-    const here = this.bot.entity.position;
-    return found.filter(at => {
-      const block = this.bot.blockAt(at), over = this.bot.blockAt(at.offset(0, 1, 0));
-      return block?.name === 'lava' && getWaterLevel(block) === 0 && over?.boundingBox === 'empty' && !['lava', 'water'].includes(over?.name ?? '')
-        && (refused.get(`${at.x},${at.y},${at.z}`) ?? 0) < 2;
-    }).sort((a, b) => a.distanceTo(here) - b.distanceTo(here))[0] ?? null;
+    const pools = new Map<string, number>();
+    const infos = found.map(at => lavaSourceInfo(this.bot as any, at, pools)).filter((info): info is LavaSourceInfo => info !== null);
+    return rankLavaSources(infos, this.bot.entity.position, count, refused)[0] ?? null;
+  }
+
+  /**
+   * Opens the rock over a lava source: walks to the cell beside it (a tunnel through rock when that is the way), digs the one cell over
+   * the source from there, and says whether the source is open now. The dig is held to the rules of every dig (dig-block-at, the lava
+   * guard); the cell is chosen so that no lava lies over or beside it (utils/lavaPools).
+   */
+  private async openCover(info: LavaSourceInfo, timeLeft: () => number): Promise<boolean> {
+    const { cap, stand } = info;
+    if (!cap || !stand) return false;
+    const atStand = () => {
+      const p = this.bot.entity.position;
+      return Math.abs(p.x - (stand.x + 0.5)) <= 1.2 && Math.abs(p.z - (stand.z + 0.5)) <= 1.2 && Math.abs(p.y - stand.y) < 1.5;
+    };
+    const capOpen = () => this.bot.blockAt(cap)?.boundingBox === 'empty';
+    if (!atStand() && !capOpen()) {
+      try { await this.walk(new goals.GoalBlock(stand.x, stand.y, stand.z), 15_000, timeLeft()); } catch (error) { if (this.shouldInterrupt()) throw error; }
+    }
+    if (capOpen()) return this.bot.blockAt(info.at)?.name === 'lava';
+    if (!atStand()) return false;
+    // Gravel over the cover comes down into the opening: dug again (twice at most).
+    for (let tries = 0; tries < 3 && !this.shouldInterrupt(); tries++) {
+      let dug: { success?: boolean } = { success: false };
+      try { dug = await this.callSkill('dig-block-at', cap.x, cap.y, cap.z, false); } catch (error) { if (this.shouldInterrupt()) throw error; }
+      if (capOpen()) { log.info(`⛏️ 溶岩(${info.at.x},${info.at.y},${info.at.z})の上の岩(${cap.x},${cap.y},${cap.z})を掘って開けた`); return this.bot.blockAt(info.at)?.name === 'lava'; }
+      if (!dug.success) return false;
+    }
+    return false;
   }
 
   private poolSources(lavaPos: Vec3): Vec3[] {

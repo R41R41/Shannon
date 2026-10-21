@@ -21,6 +21,7 @@ import type { CustomBot, Goal } from '../types/CustomBot.js';
 import { goalTarget, rockShare } from './farLegs.js';
 import { planStairLine, trailOf, type LegOrder } from './stairLine.js';
 import { estimateCells, type PlanEstimate } from './tunnelWalk.js';
+import { trailCellsOpen } from './trailRecorder.js';
 import { buildMovements } from './setMovements.js';
 import { walkOnlyProfile } from './travelProfile.js';
 
@@ -83,8 +84,8 @@ function walkOnlyEstimate(bot: CustomBot, goal: Goal): WalkEstimate | null {
 /** A tunnel plan priced: the cells, the estimate of walking them, and the seconds (the cells that cannot be cut priced as the route search's). */
 export interface TunnelPlan { cells: Vec3[]; estimate: PlanEstimate; seconds: number; complete: boolean; note: string }
 
-function priceCells(bot: CustomBot, feet: Vec3, cells: Vec3[], note: string): TunnelPlan {
-  const estimate = estimateCells(bot, feet, cells);
+function priceCells(bot: CustomBot, feet: Vec3, cells: Vec3[], note: string, avoid?: ReadonlySet<string>): TunnelPlan {
+  const estimate = estimateCells(bot, feet, cells, 3, avoid);
   const uncut = cells.length - estimate.stoppedAt;
   return { cells, estimate, seconds: (estimate.ms + uncut * UNCUT_MS_PER_CELL) / 1000, complete: estimate.feasible && uncut === 0, note };
 }
@@ -103,7 +104,7 @@ function betterPlan(a: TunnelPlan, b: TunnelPlan | null): boolean {
  * the better of them moved aside by a jog (1 or 2 cells, any of the four directions) at the start, or one or two cells before the step
  * that stopped it. Null when the plan has nothing to cut (no cells, or more levels short than a plan may leave).
  */
-export function planTunnel(bot: CustomBot, feet: Vec3, aim: Vec3): TunnelPlan | null {
+export function planTunnel(bot: CustomBot, feet: Vec3, aim: Vec3, avoid?: ReadonlySet<string>): TunnelPlan | null {
   let best = null as TunnelPlan | null;
   let base = null as TunnelPlan | null;
   const seen = new Set<string>();
@@ -112,7 +113,7 @@ export function planTunnel(bot: CustomBot, feet: Vec3, aim: Vec3): TunnelPlan | 
     const key = keyOf(cells);
     if (!cells.length || seen.has(key)) return null;
     seen.add(key);
-    const plan = priceCells(bot, feet, cells, note);
+    const plan = priceCells(bot, feet, cells, note, avoid);
     if (betterPlan(plan, best)) best = plan;
     return plan;
   };
@@ -145,13 +146,46 @@ export function planTunnel(bot: CustomBot, feet: Vec3, aim: Vec3): TunnelPlan | 
   return best;
 }
 
-export function chooseRockTravel(bot: CustomBot, goal: Goal, env: NodeJS.ProcessEnv = process.env): RockTravelChoice {
+const LIQUID_NAMES = new Set(['water', 'lava', 'flowing_water', 'flowing_lava', 'bubble_column']);
+/** How far above and below the body's level the ground of a column with no height is looked for. */
+const GROUND_SEARCH = 40;
+
+/**
+ * The level a body stands at in the column (x, z), nearest to `aroundY` (the higher of two equally near): a solid block that is not a
+ * liquid with two empty cells over it. Null when the column is not loaded or has no such place (water, solid rock all through).
+ */
+export function standingHeightAt(bot: Pick<CustomBot, 'blockAt'>, x: number, z: number, aroundY: number): number | null {
+  const read = (y: number) => { try { return bot.blockAt(new Vec3(x, y, z), false) as { name?: string; boundingBox?: string } | null; } catch { return null; } };
+  for (let distance = 0; distance <= GROUND_SEARCH; distance++) {
+    for (const y of distance === 0 ? [aroundY] : [aroundY + distance, aroundY - distance]) {
+      const floor = read(y - 1), feet = read(y), head = read(y + 1);
+      if (!floor || !feet || !head) continue;
+      if (floor.boundingBox === 'block' && !LIQUID_NAMES.has(floor.name ?? '') && feet.boundingBox === 'empty' && head.boundingBox === 'empty'
+        && !LIQUID_NAMES.has(feet.name ?? '') && !LIQUID_NAMES.has(head.name ?? '')) return y;
+    }
+  }
+  return null;
+}
+
+export interface RockTravelOptions {
+  /** Cells (`x,y,z`) no plan may pass through: where a tunnel walk stopped twice for the same reason (utils/gotoSafe). */
+  avoid?: ReadonlySet<string>;
+}
+
+export function chooseRockTravel(bot: CustomBot, goal: Goal, env: NodeJS.ProcessEnv = process.env, options: RockTravelOptions = {}): RockTravelChoice {
   if (!rockTravelEnabled(env)) return { mode: 'default', why: 'off' };
   const target = goalTarget(goal);
-  if (!target || target.y === null) return { mode: 'default', why: 'no_height' };
+  if (!target) return { mode: 'default', why: 'no_height' };
   const here = bot.entity.position;
   const feet = here.floored();
-  const aim = new Vec3(Math.floor(target.x), Math.floor(target.y), Math.floor(target.z));
+  // A goal with no height (a sheep to within six blocks, a column in the XZ plane) is walked to the ground of its column when that is loaded
+  // (run 24: 36 m to a sheep went the old legs, four times "in the rock" and three stuck, 24 s, for want of a height).
+  let targetY = target.y;
+  if (targetY === null) {
+    targetY = standingHeightAt(bot, Math.floor(target.x), Math.floor(target.z), feet.y);
+    if (targetY === null) return { mode: 'default', why: 'no_height' };
+  }
+  const aim = new Vec3(Math.floor(target.x), Math.floor(targetY), Math.floor(target.z));
   const space = Math.hypot(aim.x - here.x, aim.y - here.y, aim.z - here.z);
   if (goal.isEnd(feet as never)) return { mode: 'default', why: 'there' };
   if (space < ROCK_TRAVEL_MIN_M) return { mode: 'default', why: 'near' };
@@ -159,7 +193,8 @@ export function chooseRockTravel(bot: CustomBot, goal: Goal, env: NodeJS.Process
   // A tunnel cut before that leads to the goal: the way back is the way there, and nothing is dug.
   const along = Math.abs(aim.x - feet.x) + Math.abs(aim.z - feet.z) + Math.abs(aim.y - feet.y);
   const known = trailOf(bot).route(feet, cell => goal.isEnd(cell as never));
-  const trail = known && known.length > 0 && known.length <= 3 * along + 12
+  // The trail is walked only while its cells are still open (a cell filled in since, or flooded, is not the way back any more).
+  const trail = known && known.length > 0 && known.length <= 3 * along + 12 && trailCellsOpen(bot, known)
     ? { cells: known, seconds: known.length * TRAIL_MS_PER_STEP / 1000 } : null;
   if (trail && trail.seconds <= 30) return { mode: 'cells', cells: trail.cells, seconds: trail.seconds, source: 'trail', digs: 0 };
 
@@ -181,7 +216,7 @@ export function chooseRockTravel(bot: CustomBot, goal: Goal, env: NodeJS.Process
     return { mode: 'default', why: 'open_ground' };
   }
 
-  const tunnel = planTunnel(bot, feet, aim);
+  const tunnel = planTunnel(bot, feet, aim, options.avoid);
   const tunnelPlan = tunnel && tunnel.estimate.feasible ? tunnel : null;
   const tunnelWhy = !tunnel ? 'no_plan' : tunnel.estimate.why ?? 'ok';
   if (trail && (!walkable || trail.seconds <= walkable.seconds + 5) && (!tunnelPlan || trail.seconds <= tunnelPlan.seconds)) {

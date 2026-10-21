@@ -25,6 +25,12 @@ export function dropBurnsIn(world: DropWorld, target: Vec3): Vec3 | null {
     const cell = target.offset(dx, dy, dz);
     if (isLava(at(cell))) return cell;
   }
+  return lavaBelowDrop(world, target);
+}
+
+/** Where the drop of the block would burn in its fall straight down (lava or fire before something holds it), or null. */
+export function lavaBelowDrop(world: DropWorld, target: Vec3): Vec3 | null {
+  const at = (cell: Vec3) => { try { return world.blockAt(cell); } catch { return null; } };
   for (let down = 1; down <= MAX_FALL; down++) {
     const cell = target.offset(0, -down, 0);
     const block = at(cell);
@@ -32,6 +38,15 @@ export function dropBurnsIn(world: DropWorld, target: Vec3): Vec3 | null {
     if (holds(block)) return null;
   }
   return null;
+}
+
+/** How many of the cells over the block and at its four sides are lava (what a person puts out with a block before breaking it). */
+export function lavaAroundCount(world: DropWorld, target: Vec3): number {
+  let count = 0;
+  for (const [dx, dy, dz] of [[0, 1, 0], ...SIDES] as Array<[number, number, number]>) {
+    try { if (isLava(world.blockAt(target.offset(dx, dy, dz)))) count++; } catch { /* unloaded: not counted */ }
+  }
+  return count;
 }
 
 /** Lava the opening would let in from the side or from above (what water over the block has to reach first). */

@@ -231,11 +231,14 @@ describe('how a far walk through rock is made (utils/rockTravel)', () => {
     const out = chooseRockTravel(bot, goal as any);
     expect(out.mode).toBe('cells');
     if (out.mode !== 'cells') return;
-    const trail = trailOf(bot);
+    // the tunnel is cut: its cells are open (the trail is walked only while they are, run 24)
+    const open = new Set(out.cells.flatMap(c => [`${c.x},${c.y},${c.z}`, `${c.x},${c.y + 1},${c.z}`]));
+    const cut = world((x, y, z) => (open.has(`${x},${y},${z}`) ? 'air' : rock(x, y, z)), new Vec3(0.5, 90, 0.5), navigatorOf('noPath', 0));
+    const trail = trailOf(cut);
     let from = new Vec3(0, 90, 0);
     for (const cell of out.cells) { trail.add(from, cell); from = cell; }
-    bot.entity.position = new Vec3(from.x + 0.5, from.y, from.z + 0.5);
-    const back = chooseRockTravel(bot, new goals.GoalNear(0, 90, 0, 1) as any);
+    cut.entity.position = new Vec3(from.x + 0.5, from.y, from.z + 0.5);
+    const back = chooseRockTravel(cut, new goals.GoalNear(0, 90, 0, 1) as any);
     expect(back).toMatchObject({ mode: 'cells', source: 'trail', digs: 0 });
   });
 });

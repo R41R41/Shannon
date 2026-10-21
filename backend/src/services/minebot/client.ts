@@ -52,6 +52,7 @@ import { ReconnectBudget, reconnectKindOfEnd, reconnectKindOfKick, type Reconnec
 
 installCollisionTolerance();
 import { installMotionRecorder } from './utils/motionRecorder.js';
+import { installTrailRecorder } from './utils/trailRecorder.js';
 import { installToolChoice } from './utils/toolChoice.js';
 import { createLogger } from '../../utils/logger.js';
 
@@ -130,6 +131,8 @@ export class MinebotClient extends BaseClient {
     installTierToolMaterialRepair(connectedBot);
     installAirSupplyDefault(connectedBot);
     installMotionRecorder(connectedBot);
+    // The cells the body walks through rock are kept for the way back whatever dug them (stair-mine, mine-block, the route search), not only the tunnel walk.
+    installTrailRecorder(connectedBot as any);
     // Run 20: a connection dropped for silence with 70 s unaccounted for in the journal. The loop's lateness, the ticks, the chunks and the
     // slow handlers are written when it is late, and a worker thread says where the main thread stands while it is stuck (utils/eventLoopWatch).
     installBotLoopWatch(connectedBot as any);

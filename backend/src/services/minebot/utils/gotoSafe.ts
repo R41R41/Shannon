@@ -16,11 +16,11 @@ import type { CustomBot } from '../types/CustomBot.js';
 import type { Goal } from '../types/CustomBot.js';
 import { createLogger } from '../../../utils/logger.js';
 import { getWaterLevel } from './waterLevel.js';
-import { actionSignal, assertActionActive, reportActionProgress } from '../execution/ActionExecution.js';
+import { actionSignal, assertActionActive, nativeActionHost, reportActionProgress } from '../execution/ActionExecution.js';
 import { actionDelay } from '../execution/observedWait.js';
 import { nextLeg, configuredLegM, goalTarget, LEG_ATTEMPTS } from './farLegs.js';
 import { chooseRockTravel } from './rockTravel.js';
-import { walkCells } from './tunnelWalk.js';
+import { cellKey, stopKey, walkCells } from './tunnelWalk.js';
 import { nearestDryStand, swimOntoBank } from './exitWater.js';
 import pathfinder from 'mineflayer-pathfinder';
 
@@ -29,6 +29,23 @@ const { goals: pathGoals } = pathfinder;
 
 /** Rounds of "choose a way, take it, look again" a far walk through rock gets before the route search takes what is left (utils/rockTravel). */
 const MAX_ROCK_ROUNDS = 5;
+
+/**
+ * Where a tunnel walk has stopped, and for what, over the last minutes, on this body: a skill that asks for the walk again (use-item-on-block
+ * walks to a shore, a stand, a block) would otherwise start from nothing every time and make the same plan to the same stop (run 24: the same
+ * stop at gravel nine times, at lava six, at a bank of water eight, a second apart, 70 s in all with nothing dug). Twice at one place for
+ * one reason and that cell is left out of the next plans; a third time the walk says so and ends instead of trying again.
+ */
+const STOP_MEMORY_MS = 90_000;
+const stopMemory = new WeakMap<object, Map<string, { n: number; at: number; cell: string }>>();
+export function stopsOf(bot: object): Map<string, { n: number; at: number; cell: string }> {
+  const key = nativeActionHost(bot);
+  let memory = stopMemory.get(key);
+  if (!memory) stopMemory.set(key, memory = new Map());
+  const now = Date.now();
+  for (const [stop, entry] of memory) if (now - entry.at > STOP_MEMORY_MS) memory.delete(stop);
+  return memory;
+}
 
 export interface GotoSafeOptions {
   /**
@@ -169,9 +186,13 @@ export async function gotoSafe(
 
   // A far walk through rock: the ground as it is, a tunnel cut before, or a straight / 1:1 stair cut now. Run 21: seven far walks of
   // 37-43 m over a hill took 58-82 s each in the route search's mix of digging and laying, and again on the way back.
+  // Cells a tunnel walk stopped at twice, for the same reason, within the last minutes (this walk's or an earlier one's): left out of the plans.
+  const stops = stopsOf(bot);
+  const avoid = new Set<string>();
+  for (const entry of stops.values()) if (entry.n >= 2) avoid.add(entry.cell);
   for (let round = 0; opts.rockTravel && round < MAX_ROCK_ROUNDS && Date.now() < deadline; round++) {
     assertActionActive(bot);
-    const choice = chooseRockTravel(bot, goal);
+    const choice = chooseRockTravel(bot, goal, process.env, { avoid });
     if (choice.mode === 'default') {
       // In the water (a bucket filled, a swim across a pond): the way on is chosen from land, so the body is first brought out of it,
       // then the rock rounds look again. Run 22: a 56 m walk begun in the water went the route search's way, leg by leg, 74 s.
@@ -204,12 +225,26 @@ export async function gotoSafe(
     log.info(`⛏️ 岩の多い遠い移動: ${choice.source === 'trail' ? '掘ってきた道をたどります' : 'まっすぐ・斜めの階段で掘り進みます'}`
       + `（${choice.cells.length}歩、約${choice.seconds.toFixed(0)}秒${choice.digs ? `、掘る所${choice.digs}か所` : ''}）`);
     reportActionProgress(bot, 'navigate', { rockTravel: choice.source, steps: choice.cells.length, seconds: Math.round(choice.seconds) }, true);
-    const outcome = await walkCells(bot, choice.cells, { isEnd: feet => goal.isEnd(feet as never), deadline, tidy: opts.tunnelTidy, pillar: opts.tunnelPillar });
+    const outcome = await walkCells(bot, choice.cells, { isEnd: feet => goal.isEnd(feet as never), deadline, tidy: opts.tunnelTidy, pillar: opts.tunnelPillar,
+      onDrop: choice.source === 'trail' ? 'continue' : 'replan' });
     log.info(`⛏️ トンネルの歩き: ${outcome.stopped}（${outcome.steps}歩、掘った${outcome.digs}か所${outcome.reason ? `、${outcome.reason}` : ''}）`);
     if (outcome.stopped === 'reached') return { success: true };
     if (outcome.stopped === 'timeout') return { success: false, error: 'timeout' };
-    // Not a single step: the same choice would stop in the same place; the route search takes over.
-    if (outcome.steps < 1) break;
+    if (outcome.stopped === 'plan_end') { if (outcome.steps < 1) break; continue; }
+    // The same stop at the same place for the same reason is not new: asked again with nothing dug, the same plan stops in the same place
+    // (run 24: steps >= 1 because the cells already dug were walked, so it was planned again a second later, five times, and again at the
+    // next call). Twice: that cell is left out of the plans (a jog round it, or the route search). Three times: said, and the walk ends.
+    const key = stopKey(outcome, bot.entity.position.floored());
+    const entry = stops.get(key) ?? { n: 0, at: 0, cell: cellKey(outcome.at ?? bot.entity.position.floored()) };
+    entry.n++; entry.at = Date.now(); stops.set(key, entry);
+    if (entry.n >= 3) {
+      const reason = outcome.reason ?? outcome.stopped;
+      if (logStuck) log.warn(`⛏️ トンネルの歩き: 同じ所で同じ理由（${reason}）で${entry.n}回止まったので、この移動は諦めます`);
+      const block = outcome.at ? bot.blockAt(new Vec3(outcome.at.x, outcome.at.y, outcome.at.z), false) : null;
+      return { success: false, error: 'stuck', stuckBlock: block ? { x: outcome.at!.x, y: outcome.at!.y, z: outcome.at!.z, name: block.name } : undefined,
+        activity: `トンネルの歩きが同じ所で${entry.n}回止まりました（${reason}）。ほかの道か別の立ち位置を選んでください` };
+    }
+    if (entry.n >= 2 || outcome.steps < 1) { avoid.add(entry.cell); if (outcome.steps < 1 && entry.n < 2) continue; }
   }
 
   while (Date.now() < deadline) {
