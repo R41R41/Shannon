@@ -15,6 +15,8 @@ import type { CommonFcaActuator } from './controlLoop.js';
 import { BodyEventWatcher } from './bodyEvents.js';
 import { closeInAdvised, combatOwnerOf } from '../../utils/combatOwner.js';
 import { craftDoneDespiteCut, craftWitness, type CraftWitness } from '../../utils/cutCraftRecovery.js';
+import { isLlmCentric } from '../../utils/llmCentric.js';
+import { renderActReport, takeActReport } from '../../utils/actReport.js';
 
 const delay = (milliseconds: number) => new Promise(resolve => setTimeout(resolve, milliseconds));
 /** The floor's action names, as the planner reads them in a receipt. */
@@ -102,7 +104,8 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
   };
   constructor(private readonly bot: any, private readonly options: NativeBodyOptions) {
     this.reflexTag = options.reflexTag ?? floorConfig().ledgerTag;
-    this.catalog = bodySkillCatalog(bot.instantSkills.getSkills() as BodySkill[], bot);
+    // The LLM-centric mode (MINEBOT_LLM_CENTRIC) offers act, view and the readers; off, the catalog is the one it always was.
+    this.catalog = bodySkillCatalog(bot.instantSkills.getSkills() as BodySkill[], bot, { llmCentric: isLlmCentric(bot) });
     if (this.catalog.runnable.some(skill => skill.name === GOAL_EVIDENCE_SKILL.name)) throw Error('BODY_RESERVED_SKILL');
     this.offered = [...this.catalog.definitions, GOAL_EVIDENCE_SKILL];
     this.offeredForDragon = [...this.catalog.dragonDefinitions, GOAL_EVIDENCE_SKILL];
@@ -226,6 +229,7 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
       if (command.kind === 'skill' && !readOnly) this.events?.begin(command);
       const ledger: ReflexLedger | undefined = this.reflexTag ? this.bot.reflexLedger : undefined;
       const mark = ledger?.mark() ?? 0;
+      const actStartedAt = Date.now();
       const result = await withActionSignal(this.bot, signal, () => executeAction(this.bot, capability, milliseconds,
         work, { waitForQuiescence: true }));
       let outcome: Receipt['outcome'] = signal.aborted ? 'cancelled' : result.success ? 'completed' : 'failed';
@@ -247,6 +251,15 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
         text = `${text ?? capability}。体の反射「${reflexLabel(cut.by)}」が先に動いたため中断（反射が終わってから、観測を見て再開できる）`;
       }
       const note = ledger?.noteSince(mark);
+      // An act says its own steps (utils/actReport): when a reflex or a cancel cut it, the action layer's answer is a bare
+      // "interrupted", so the act's report is told instead, with the reflex's note and the map as it is after the reflex let go.
+      const act = capability === 'act' ? takeActReport(this.bot, actStartedAt) : null;
+      if (act) {
+        text = renderActReport(this.bot, act, note);
+        if (outcome === 'failed' && !failure) failure = { failureType: act.failureType ?? 'failed', recoverable: true };
+        if (outcome === 'failed' && act.stoppedBy === 'reflex') failure = { failureType: 'interrupted_by_reflex', recoverable: true };
+        return this.receipt(command, outcome, released, text, undefined, failure);
+      }
       if (note) text = `${(text ?? '').slice(0, 16_000 - note.length - 1)}${text ? ' ' : ''}${note}`;
       return this.receipt(command, outcome, released, text, undefined, failure);
     } finally { signal.removeEventListener('abort', cancelled); this.events?.end(command.id); }

@@ -1,3 +1,4 @@
+import { isLlmCentric } from './llmCentric.js';
 import { Vec3 } from 'vec3';
 import { createLogger } from '../../../utils/logger.js';
 import { actionSignal, createMotorPort, executeAction, hasActiveSafetyLease, physicalActionBusy } from '../execution/ActionExecution.js';
@@ -113,6 +114,8 @@ export function installIdlePickup(bot: PickupBody, config: FloorConfig = floorCo
   let ticks = 0, running = false;
   bot.on('physicsTick', () => {
     if (running || ++ticks % CHECK_EVERY_TICKS !== 0) return;
+    // The LLM-centric body picks nothing up by itself: pickup is a step of act (MINEBOT_LLM_CENTRIC).
+    if (isLlmCentric(bot)) return;
     let target: ReturnType<typeof pickupTarget> = null;
     try { target = pickupTarget(bot, now()); } catch { target = null; }
     if (!target) return;

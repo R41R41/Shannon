@@ -101,7 +101,18 @@ export const DRAGON_GOALS: ReadonlySet<string> = new Set([
 export function isDragonGoal(goal: unknown): boolean {
   return typeof goal === 'string' && DRAGON_GOALS.has(goal.normalize('NFKC').trim().toLowerCase().replace(/[。.!！]+$/u, '').trim());
 }
-export function bodySkillCatalog(skills: readonly BodySkill[], bot: object) {
+/** The LLM-centric mode's own tools: never offered while the mode is off (the catalog stays what it was). */
+export const LLM_CENTRIC_ONLY: ReadonlySet<string> = new Set(['act', 'view']);
+/**
+ * What the LLM-centric mode offers (MINEBOT_LLM_CENTRIC=on, design mb-llm-centric 2.4 and 4): `act` and `view`, and the readers and the
+ * few interactions that are one exact thing each (a trade, an enchantment, a brew, a repair, a stonecutter). The skills that choose for
+ * the planner (move-to, mine-block, stair-mine, the tidy, the shelters, the fights' own tactics) are not offered; they still run if
+ * asked for, and the mode off offers them again. The goal evidence is added by the body as always.
+ */
+export const LLM_CENTRIC_TOOLS: readonly string[] = ['act', 'view', 'find-blocks', 'check-recipe', 'recall-places', 'find-structure',
+  'list-nearby-entities', 'check-container', 'check-furnace', 'get-entity-look-direction', 'trade-with-villager', 'enchant-item',
+  'brew-potion', 'repair-item', 'use-stonecutter', 'set-movement-pace', 'accept-threat', 'get-advancements'];
+export function bodySkillCatalog(skills: readonly BodySkill[], bot: object, options: { llmCentric?: boolean } = {}) {
   const entries = skills.filter(skill => skill.isToolForLLM && /^[a-z][a-z0-9-]{0,58}$/.test(skill.skillName)
     && !forbidden.test(skill.skillName) && Number.isFinite(skill.maxDurationMs) && skill.maxDurationMs > 0)
     .map(skill => {
@@ -113,12 +124,15 @@ export function bodySkillCatalog(skills: readonly BodySkill[], bot: object) {
     });
   if (entries.length > 128 || JSON.stringify(entries.map(e => e.definition)).length > 250_000
     || new Set(entries.map(e => e.definition.name)).size !== entries.length) throw Error('BODY_SKILL_CATALOG_SIZE');
-  const definitions = entries.map(e => e.definition).filter(definition => !OFFERED_ELSEWHERE.has(definition.name));
+  const all = entries.map(e => e.definition);
+  const definitions = options.llmCentric
+    ? LLM_CENTRIC_TOOLS.map(name => all.find(definition => definition.name === name)).filter((definition): definition is MinecraftSkillDefinition => !!definition)
+    : all.filter(definition => !OFFERED_ELSEWHERE.has(definition.name) && !LLM_CENTRIC_ONLY.has(definition.name));
   return {
     /** What the planner is offered. */
     definitions,
-    /** What it is offered while the task is the dragon. */
-    dragonDefinitions: definitions.filter(definition => !HIDDEN_FOR_DRAGON.has(definition.name)),
+    /** What it is offered while the task is the dragon (the LLM-centric list is the same for every task). */
+    dragonDefinitions: options.llmCentric ? definitions : definitions.filter(definition => !HIDDEN_FOR_DRAGON.has(definition.name)),
     /** Everything that can run: a skill no longer offered is still carried out if it is asked for. */
     runnable: entries.map(e => e.definition),
     resolve(name: string, input: unknown): { skill: BodySkill; args: unknown[] } {

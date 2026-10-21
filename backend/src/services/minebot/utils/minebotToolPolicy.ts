@@ -1,3 +1,4 @@
+import { isLlmCentric } from './llmCentric.js';
 import type Anthropic from '@anthropic-ai/sdk';
 import type { RequestEnvelope } from '@shannon/common';
 import type { CustomBot } from '../types/CustomBot.js';
@@ -106,6 +107,8 @@ export function shouldRefuseAggressiveCombat(bot: CustomBot, targetName?: string
   // goes nowhere. That is how a body fights from a place the other cannot get at it (a pillar three blocks up,
   // a cage with a slit), and an emergency is when it has most reason to.
   if (standing) return null;
+  // The LLM-centric body refuses no fight: whether to fight is the planner's (MINEBOT_LLM_CENTRIC).
+  if (isLlmCentric(bot)) return null;
   const st = bot.minebotControlState;
   const hunting = typeof targetName === 'string' && targetName.trim() !== '' && !isLikelyHostileMobName(targetName.trim().toLowerCase());
   if ((st === 'emergency_llm' || st === 'emergency_reflect') && !hunting) {

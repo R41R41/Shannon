@@ -19,8 +19,22 @@ export interface BodyTaskContext {
   /** The interrupted process is context only; it is never an instruction to replay that operation. */
   taskState?: { phase: string; progress: string; activeAction?: { name: string; operationId: string; input: BodyValue };
     recentResults: readonly { name: string; ok: boolean; summary: string }[] };
+  /**
+   * The task's plan tree (`@shannon/mind` planTree, design mb-llm-centric 2.7), for display only: the body shows it (ShannonUI mod v2's
+   * nested task tree) and never acts on it. Present only on a task that holds a plan (SHANNON_MINECRAFT_LLM_CENTRIC); absent, the body
+   * shows what it showed before. A body that does not know it ignores it.
+   */
+  plan?: BodyPlanView;
 }
-export interface BodyPrecondition { key: string; value: BodyFact }
+/** A plan node as the body shows it. `state`: done → completed, the current node → in_progress, continue and wait → pending, blocked → error. */
+export interface BodyPlanNode {
+  id: string; parentId: string | null; title: string;
+  state: 'done' | 'continue' | 'wait' | 'blocked';
+  /** Why a blocked node is blocked (at most 80 characters). */
+  reason?: string;
+}
+/** At most 64 nodes, parents before their children, siblings in order; at most 4 deep. `current` is a node's id or null. */
+export interface BodyPlanView { revision: number; current: string | null; nodes: readonly BodyPlanNode[] }export interface BodyPrecondition { key: string; value: BodyFact }
 export interface BodyCandidateDraft {
   kind: 'action' | 'observe' | 'return' | 'stop'; label: string;
   /** Registered adapter operation with fully resolved arguments. Selection never supplies free arguments. */

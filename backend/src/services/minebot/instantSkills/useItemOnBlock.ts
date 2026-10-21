@@ -17,6 +17,7 @@ import { facePoints, rayFace } from '../utils/rayFace.js';
 import { dropBurnsIn, lavaAroundCount, lavaBelowDrop } from '../utils/dropFate.js';
 import { lavaSourceInfo, rankLavaSources, type LavaSourceInfo } from '../utils/lavaPools.js';
 import { tidyPlan } from '../utils/inventoryTidy.js';
+import { isLlmCentric } from '../utils/llmCentric.js';
 import { scoopWater } from '../utils/scoopWater.js';
 /** Rock dug on the way that a full pack can spare, for the obsidian (see roomForDrops). */
 const SPARE_ROCK = ['cobbled_deepslate', 'tuff', 'diorite', 'andesite', 'granite', 'dirt', 'gravel', 'calcite', 'netherrack', 'cobblestone'];
@@ -643,7 +644,8 @@ class UseItemOnBlock extends InstantSkill {
   async roomForDrops(): Promise<string> {
     const items = () => this.bot.inventory.items();
     const free = () => typeof (this.bot.inventory as any).emptySlotCount === 'function' ? (this.bot.inventory as any).emptySlotCount() : 36 - items().length;
-    if (free() >= 2) return '';
+    // The LLM-centric body throws nothing away by itself (MINEBOT_LLM_CENTRIC).
+    if (free() >= 2 || isLlmCentric(this.bot)) return '';
     let plan = tidyPlan(items() as any);
     if (!plan.length) {
       const totals = new Map<string, number>();

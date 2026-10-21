@@ -1,3 +1,4 @@
+import { isLlmCentric } from '../utils/llmCentric.js';
 import { beginEngagement, engagementOf } from '../utils/engagement.js';
 import { markHeadCombat } from '../utils/combatOwner.js';
 import { createLogger } from '../../../utils/logger.js';
@@ -225,7 +226,8 @@ export abstract class InstantSkill extends Skill {
           if (mayStop) headCombat.end = markHeadCombat(host, this.skillName, engagementOf(this.skillName, args));
           if (own?.root) stopOwn = () => own.controller.abort('tool_broke');
           // At night with a bed, the night is slept through before the work (utils/nightSleep), once a night.
-          if (NIGHT_SLEEP_SKILLS.has(this.skillName)) {
+          // The LLM-centric body does not sleep by itself before the work: the night is the planner's (MINEBOT_LLM_CENTRIC).
+          if (NIGHT_SLEEP_SKILLS.has(this.skillName) && !isLlmCentric(host)) {
             try { sleepNote = await sleepThroughNight(host as any, (name, ...rest) => this.callSkill(name, ...rest)); }
             catch (error) { if (this.shouldInterrupt()) throw error; sleepNote = ''; }
             if (gateAfterSleep) {

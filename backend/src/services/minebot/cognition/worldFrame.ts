@@ -12,6 +12,10 @@ import { backgroundJobs } from '../execution/backgroundJobs.js';
 import { bedWool, cookRawNotice, descentKitNotice, type GateBody } from '../utils/nightGate.js';
 import { toolKitNotice } from '../utils/toolWear.js';
 import { nearbyNeeds } from '../utils/nearbyNeeds.js';
+import { isLlmCentric } from '../utils/llmCentric.js';
+import { localMapFor, recentStopLines } from '../utils/localMap.js';
+import { insideStructure, mapMarkLines, watchedEntityFacts } from '../utils/mapMarks.js';
+import { foodPointsOf } from '../utils/foodPoints.js';
 
 /** The shelter check, for whatever stands in for a body here (a cached self-state has no world to read). */
 function sealedIn(bot: unknown): boolean {
@@ -204,6 +208,9 @@ function distance(a: WorldVector, b: WorldVector): number {
 
 export function captureWorldObservation(bot?: unknown): WorldObservation {
   const observedBot = bot as WorldFrameBotLike | undefined;
+  // The LLM-centric body's observation (design mb-llm-centric 2.2, 2.6): the map, the marks beside it, food in points, and the ids and
+  // health of creatures. A live body only (something that can read blocks); the mode off observes exactly as before.
+  const llmCentric = !!observedBot?.entity && typeof (observedBot as { blockAt?: unknown }).blockAt === 'function' && isLlmCentric(observedBot);
   const position = vector(observedBot?.entity?.position ?? observedBot?.selfState?.botPosition);
   const window = observedBot?.currentWindow;
   const windowKnown = window && Number.isInteger(window.inventoryStart) && Number.isInteger(window.inventoryEnd)
@@ -251,6 +258,8 @@ export function captureWorldObservation(bot?: unknown): WorldObservation {
           ...(contact !== null ? { secondsToContact: Math.round(contact * 10) / 10 } : {}),
           ...(entity.name === 'creeper' ? { ignited: creeperLit(entity) } : {}),
           ...reach,
+          // LLM-centric mode: the id to name it by in act, and for the kinds of the way to the dragon their health and mood.
+          ...(llmCentric ? { id: entity.id, ...watchedEntityFacts(observedBot as never, entity) } : {}),
         };
       })
       .filter((entity): entity is NonNullable<typeof entity> => entity !== null)
@@ -311,6 +320,15 @@ export function captureWorldObservation(bot?: unknown): WorldObservation {
     nearbyEntities,
     nearbyThreats,
     ...(landmarks?.length ? { landmarks: structuredClone(landmarks) } : {}),
+    ...(llmCentric ? (() => {
+      const out: Pick<WorldObservation, 'localMap' | 'mapLandmarks' | 'recentStops' | 'foodPoints' | 'inside'> = {};
+      try { const inside = insideStructure(observedBot as never); if (inside) out.inside = inside; } catch { /* none */ }
+      try { const map = localMapFor(observedBot as never); if (map) out.localMap = map; } catch { /* no map this time */ }
+      try { const marks = mapMarkLines(observedBot as never); if (marks.length) out.mapLandmarks = marks; } catch { /* none */ }
+      try { const stops = recentStopLines(observedBot as never); if (stops.length) out.recentStops = stops; } catch { /* none */ }
+      try { out.foodPoints = foodPointsOf(observedBot as never); } catch { /* none */ }
+      return out;
+    })() : {}),
     ...(() => {
       try {
         const needs = observedBot?.entity ? nearbyNeeds(observedBot as any) : [];

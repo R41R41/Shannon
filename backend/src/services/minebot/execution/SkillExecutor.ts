@@ -45,6 +45,8 @@ const SKILL_CATEGORIES: Record<string, SkillCategory> = {
   // These reads open a real container window and move the bot's look/hand.
   'check-container': 'interaction', 'check-furnace': 'interaction',
   'get-background-jobs': 'query',
+  // LLM-centric mode: view only reads the map; act moves the body ('other', every resource).
+  'view': 'query',
 
   'move-to': 'movement', 'climb-down': 'movement', 'explore-for-structure': 'movement', 'follow-entity': 'movement', 'flee-from': 'movement', 'leave-water': 'movement',
   'jump': 'movement', 'stop-movement': 'movement', 'look-at': 'movement',

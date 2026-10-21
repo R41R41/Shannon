@@ -11,6 +11,7 @@
  * of one point of wear) and the block's own harvest tools, not from a list of items. Once per action at most,
  * never in an emergency or a fight, never with materials missing (that is only said).
  */
+import { isLlmCentric } from './llmCentric.js';
 import { Vec3 } from 'vec3';
 import { currentAction, nativeActionHost } from '../execution/ActionExecution.js';
 import { isEngaged } from './engagement.js';
@@ -269,6 +270,8 @@ export function takeToolStockNotes(action: object | null | undefined): string[] 
  * so). Returns what was made, or null.
  */
 export async function keepCheapTool(bot: StockBody, blocks: Array<BlockLike & { name: string }>, call: SkillCall): Promise<string | null> {
+  // The LLM-centric body makes no tool by itself: what to make is the planner's (MINEBOT_LLM_CENTRIC).
+  if (isLlmCentric(bot)) return null;
   const context = currentAction(bot) as unknown as { root?: object; priority?: number; safetyLease?: boolean } | undefined;
   if (!context || !blocks.length) return null;
   const root = context.root ?? context;
@@ -364,6 +367,8 @@ export async function ensureToolUses(bot: StockBody, blocks: Array<BlockLike & {
   const fine: ToolUsesCheck = { have, need, made: null, enough: true, note: '' };
   if (have >= need) return fine;
   const short = (note: string, now = have): ToolUsesCheck => ({ have: now, need, made: null, enough: false, note });
+  // The LLM-centric body makes no spare by itself: the shortfall is said, the making is the planner's (MINEBOT_LLM_CENTRIC).
+  if (isLlmCentric(bot)) return short(`ツルハシの残り耐久は合計${have}で、これから掘る見込み${need}ブロックに足りません`);
   const context = currentAction(bot) as unknown as { root?: object; priority?: number; safetyLease?: boolean } | undefined;
   const root = context ? (context.root ?? context) : null;
   const registry = bot.registry;

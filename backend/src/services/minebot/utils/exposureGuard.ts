@@ -5,6 +5,8 @@ import { isLikelyHostileMobName } from './hostileMobHints.js';
 import { exposedByOpening } from './threatExposure.js';
 import { wellArmoured } from './armourCheck.js';
 import { creeperLit } from './creeperFuse.js';
+import { isLlmCentric } from './llmCentric.js';
+import { engagedWithAny } from './engagement.js';
 
 const log = createLogger('Minebot:ExposureGuard');
 
@@ -26,7 +28,9 @@ interface GuardBody {
   dig?: (block: any, ...rest: any[]) => Promise<unknown>;
   /** Set by the emergency layer: how near a hostile has to be to be a threat (farther for kinds that have hit from afar). */
   hostileThreatRadius?: () => number;
-  exposureDigGuard?: { enabled: boolean; refused: number; last?: string; /** When the last dig was refused (wait-time lets a wait be then). */ lastAt?: number };
+  exposureDigGuard?: { enabled: boolean; refused: number; last?: string; /** When the last dig was refused (wait-time lets a wait be then). */ lastAt?: number;
+    /** One cell ("x,y,z") the planner has let open knowing who it lets in (act's dig with exposeOk, LLM-centric mode). */
+    allowAt?: string };
 }
 
 /** A dig refused because it would open a way to the body for a hostile that has none. */
@@ -54,33 +58,48 @@ export class ThreatExposedError extends Error {
  * of air: getting out to breathe comes first.
  */
 export function threatExposedBy(bot: GuardBody, target: Vec3): { name: string; distance: number } | null {
+  const all = threatsExposedBy(bot, target);
+  return all.length ? { name: all[0].name, distance: all[0].distance } : null;
+}
+
+/** One hostile a dig would let at the body: its kind, id, where it is and how far. */
+export interface ExposingThreat { name: string; id?: number; distance: number; position: { x: number; y: number; z: number } }
+
+/**
+ * Every hostile (of the NEAREST looked at) that breaking the block at `target` would let at the body, nearest first. In the LLM-centric
+ * mode a kind the planner has taken on (accept-threat, or a fight it runs) is not one: it chose to face it (run 26: blazes at a spawner
+ * refused every dig for over a minute while accept-threat named them).
+ */
+export function threatsExposedBy(bot: GuardBody, target: Vec3): ExposingThreat[] {
   const self = bot.entity?.position;
-  if (!self || typeof bot.blockAt !== 'function') return null;
+  if (!self || typeof bot.blockAt !== 'function') return [];
   const feet = self.floored();
-  if (target.x === feet.x && target.z === feet.z && (target.y === feet.y || target.y === feet.y + 1)) return null;
-  if (bot.entity?.isInWater === true && (bot.oxygenLevel ?? 20) < 20) return null;
+  if (target.x === feet.x && target.z === feet.z && (target.y === feet.y || target.y === feet.y + 1)) return [];
+  if (bot.entity?.isInWater === true && (bot.oxygenLevel ?? 20) < 20) return [];
+  const accepted = (name: string) => isLlmCentric(bot) && engagedWithAny(bot, [name]);
   const radius = Math.max(1, bot.hostileThreatRadius?.() ?? DEFAULT_RADIUS);
   // In armour (iron all round and the health to take a blast), a creeper that is not lit and not near does not hold the dig back.
   let armoured = false;
   try { armoured = wellArmoured(bot); } catch { armoured = false; }
   const near = Object.values(bot.entities ?? {})
     .filter((entity: any) => entity && entity !== bot.entity && entity.id !== bot.entity?.id && entity.position
-      && isLikelyHostileMobName(String(entity.name ?? '')))
+      && isLikelyHostileMobName(String(entity.name ?? '')) && !accepted(String(entity.name ?? '')))
     .map((entity: any) => ({ entity, distance: self.distanceTo(entity.position) }))
     .filter(entry => entry.distance <= radius)
     .filter(entry => !(armoured && entry.entity.name === 'creeper' && entry.distance >= ARMOURED_CREEPER_M && !creeperLit(entry.entity)))
     .sort((a, b) => a.distance - b.distance)
     .slice(0, NEAREST);
-  if (!near.length) return null;
+  if (!near.length) return [];
   const let_in = exposedByOpening(bot as any, near.map(entry => entry.entity), target);
-  if (!let_in.length) return null;
-  const first = near.find(entry => let_in.includes(entry.entity))!;
-  return { name: String(first.entity.name), distance: first.distance };
+  if (!let_in.length) return [];
+  return near.filter(entry => let_in.includes(entry.entity)).map(entry => ({ name: String(entry.entity.name), id: entry.entity.id, distance: entry.distance,
+    position: { x: Math.floor(entry.entity.position.x), y: Math.floor(entry.entity.position.y), z: Math.floor(entry.entity.position.z) } }));
 }
 
 /** Throws when breaking `block` would let a shut-out hostile at the body; counts the refusal on the body. */
 export function assertNoThreatExposure(bot: GuardBody, block: { name?: string; position: Vec3 } | null | undefined): void {
   if (!block?.position || bot.exposureDigGuard?.enabled === false) return;
+  if (bot.exposureDigGuard?.allowAt === `${block.position.x},${block.position.y},${block.position.z}`) return;
   let threat: { name: string; distance: number } | null = null;
   try { threat = threatExposedBy(bot, block.position); } catch { threat = null; }
   if (!threat) return;

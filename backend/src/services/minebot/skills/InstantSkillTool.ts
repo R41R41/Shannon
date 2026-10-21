@@ -31,7 +31,8 @@ export class InstantSkillTool extends StructuredTool {
         return z.object(
             Object.fromEntries(
                 params.map((param: any) => {
-                    let zodType = this.getZodType(param.type);
+                    // A structured param brings its own schema (act's steps): checked and shown as it is.
+                    let zodType = param.type === 'json' && param.schema instanceof z.ZodType ? param.schema as z.ZodTypeAny : this.getZodType(param.type);
 
                     // optionalまたはdefaultありの場合
                     if (!param.required || param.default !== undefined) {

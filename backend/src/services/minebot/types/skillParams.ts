@@ -10,7 +10,8 @@ const log = createLogger('Minebot:Types');
 /**
  * サポートされるパラメータ型
  */
-export type SkillParamType = 'string' | 'number' | 'boolean' | 'Vec3';
+/** 'json': a structured value checked by the param's own Zod `schema` (act's steps, LLM-centric mode). */
+export type SkillParamType = 'string' | 'number' | 'boolean' | 'Vec3' | 'json';
 
 /**
  * スキルパラメータの定義
@@ -21,6 +22,8 @@ export interface SkillParam {
     description: string;
     required?: boolean;
     default?: string | number | boolean | null;
+    /** For type 'json': the Zod schema the value is checked by (and the planner is shown). */
+    schema?: unknown;
 }
 
 /**
@@ -77,7 +80,7 @@ export class SkillParamValidator {
             return false;
         }
 
-        const validTypes: SkillParamType[] = ['string', 'number', 'boolean', 'Vec3'];
+        const validTypes: SkillParamType[] = ['string', 'number', 'boolean', 'Vec3', 'json'];
         if (!validTypes.includes(param.type)) {
             log.error(`Invalid param type: ${param.type}`);
             return false;
@@ -110,6 +113,8 @@ export class SkillParamValidator {
                 return typeof value === 'number' && !isNaN(value);
             case 'boolean':
                 return typeof value === 'boolean';
+            case 'json':
+                return true;
             case 'Vec3':
                 return (
                     typeof value === 'object' &&

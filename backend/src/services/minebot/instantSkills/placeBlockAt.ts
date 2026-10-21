@@ -1,3 +1,4 @@
+import { isLlmCentric } from '../utils/llmCentric.js';
 import { resyncInventory } from '../utils/inventorySync.js';
 import minecraftData from 'minecraft-data';
 import pathfinder from 'mineflayer-pathfinder';
@@ -190,6 +191,10 @@ class PlaceBlockAt extends InstantSkill {
       let note = '';
       // パラメータチェック（座標が無ければ、自分で選ぶ）
       let autoChosen = false;
+      if (x == null && y == null && z == null && isLlmCentric(this.bot)) {
+        // The LLM-centric body chooses no place (MINEBOT_LLM_CENTRIC): the planner names the cell from the map.
+        return { success: false, failureType: 'invalid_input', recoverable: false, result: '置く場所（x・y・z）を指定してください（この体は置き場所を自分で選びません）' };
+      }
       if (x == null && y == null && z == null) {
         let spot: Vec3 | null = null;
         // A crafting table or a furnace: where it hides no other workstation from here and does not close the way out (a wall cell

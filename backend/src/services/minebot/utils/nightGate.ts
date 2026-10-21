@@ -1,3 +1,4 @@
+import { isLlmCentric } from './llmCentric.js';
 /**
  * The night gate: no going down into the deep (below y 16) at nightfall or at night without the kit to live through it.
  *
@@ -134,6 +135,8 @@ export function gateShutBy(kit: DescentKit): boolean {
  * Measured from the feet alone, two blocks at a time would have gone all the way down, one call after another.
  */
 export function descentFloor(bot: GateBody): { floor: number; kit: DescentKit; clock: NightClock; underground: boolean } | null {
+  // The LLM-centric body refuses no descent by the clock: the time and the kit are in the observation, the choice is the planner's.
+  if (isLlmCentric(bot)) return null;
   const clock = nightClock(bot);
   if (!gateHours(clock)) return null;
   const kit = descentKit(bot);

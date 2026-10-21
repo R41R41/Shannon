@@ -11,6 +11,7 @@ import { nativeActionHost } from '../execution/ActionExecution.js';
 import { emptySlotCountSafe } from './inventorySpillDetection.js';
 import { clutterPlan, describePack, slotsUsed, spareRockToDrop, tidyPlan, TIDY_ABOVE } from './inventoryTidy.js';
 import { realTurn } from './realTurn.js';
+import { isLlmCentric } from './llmCentric.js';
 
 export type RoomCall = (skill: string, ...args: any[]) => Promise<{ success?: boolean; result?: unknown; failureType?: string }>;
 interface Stack { name: string; count: number; stackSize?: number }
@@ -66,6 +67,8 @@ export async function makeRoom(bot: RoomBody, call: RoomCall, options: RoomOptio
   const need = Math.max(2, options.slots);
   const started = free();
   const none: RoomOutcome = { note: '', freed: 0, refused: [] };
+  // The LLM-centric body throws nothing away by itself: what goes, and where, is the planner's (a full pack is told in the observation).
+  if (isLlmCentric(bot)) return none;
   // Not inside a throw or another tidy (drop-item digs its pit through dig-block-at, which calls this).
   if (clutterTidyHeld(bot)) return none;
   if (started >= need || (options.timeLeftMs ?? Infinity) < ROOM_TIME_MS || options.blocked?.()) return none;
@@ -104,7 +107,7 @@ export async function makeRoom(bot: RoomBody, call: RoomCall, options: RoomOptio
  * `asked` names. Says what went; empty when nothing did. Not with a hostile near, in an emergency, or with under TIDY_TIME_MS left.
  */
 export async function tidyPackNow(bot: RoomBody, call: RoomCall, options: { asked?: string[]; timeLeftMs?: number; blocked?: () => boolean; interrupted?: () => boolean }): Promise<string> {
-  if (clutterTidyHeld(bot)) return '';
+  if (isLlmCentric(bot) || clutterTidyHeld(bot)) return '';
   if ((options.timeLeftMs ?? Infinity) < TIDY_TIME_MS || options.blocked?.()) return '';
   const asked = options.asked ?? [];
   let plan: ReturnType<typeof tidyPlan> = [];
@@ -185,7 +188,7 @@ export function clutterToThrow(bot: RoomBody, asked: string[] = []): Array<{ nam
  */
 export async function tidyIfCluttered(bot: RoomBody, call: RoomCall,
   options: { asked?: string[]; timeLeftMs?: number; blocked?: () => boolean; interrupted?: () => boolean; now?: () => number } = {}): Promise<string> {
-  if (clutterTidyHeld(bot)) return '';
+  if (isLlmCentric(bot) || clutterTidyHeld(bot)) return '';
   const key = tidyKey(bot);
   const now = (options.now ?? Date.now)();
   const last = lastClutterTidy.get(key);

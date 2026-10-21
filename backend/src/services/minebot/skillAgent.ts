@@ -344,7 +344,7 @@ export class SkillAgent {
     }
     if (this.commonFca) {
       // The task lives in the API: the mod's task tab, status card and log are drawn from the commands the body receives.
-      this.fcaUiBridge = new CommonFcaUiModBridge({ baseUrl: () => CONFIG.UI_MOD_BASE_URL, log: line => log.info(line) });
+      this.fcaUiBridge = new CommonFcaUiModBridge({ baseUrl: () => CONFIG.UI_MOD_BASE_URL, log: line => log.info(line), source: this.bot as any });
       this.commonFcaBody = createCommonFcaBody(this.bot, settings, token, process.env.MINEBOT_COMMON_FCA_RENDERER_DIR, this.fcaUiBridge);
     }
     const client = new CompanionBodyClient({ baseUrl: settings.url, token, serverId: settings.serverId,

@@ -128,6 +128,12 @@ export interface NearbyEntityObservation {
   canSee?: boolean;
   /** Creepers only: true while its fuse is lit or swelling (entity metadata). */
   ignited?: boolean;
+  /** LLM-centric mode only: the entity's id (act names a creature by it). */
+  id?: number;
+  /** LLM-centric mode, the kinds of the way to the dragon (blaze, ghast, piglin, enderman, the dragon ...): health from its data. */
+  health?: number;
+  /** LLM-centric mode, an enderman: whether it is angry (after the body). */
+  angry?: boolean;
 }
 
 export interface WorldObservation {
@@ -222,6 +228,20 @@ export interface WorldObservation {
   acceptedThreats?: string;
   facts?: Record<string, ObservedFact<unknown>>;
   container?: { type: string; items: WorldInventoryStack[]; fuel: number | null; progress: number | null } | null;
+  /**
+   * LLM-centric mode only (MINEBOT_LLM_CENTRIC=on, utils/localMap): the blocks round the body as text, north up. In rock five layers of
+   * 15 x 15 (feet -2..+2); under the open sky the ground of 21 x 21 from above with heights, and the three layers round the feet (the
+   * head's contract, minecraftActContract.ts).
+   */
+  localMap?: string;
+  /** LLM-centric mode only (utils/mapMarks): what lies near beyond the map, one line each (記号 名前 (x,y,z) 方角距離・上下 注記, at most 12). */
+  mapLandmarks?: string[];
+  /** LLM-centric mode only: the steps that stopped lately, newest first ((x,y,z)→(x,y,z) 理由 ×回数 N秒前, at most 5). Counted, never acted on. */
+  recentStops?: string[];
+  /** LLM-centric mode only: the structure the body is in or beside (ネザー要塞の中, 砦の遺跡（bastion）の脇, ストロングホールドの中, 村の中, エンドシティ). */
+  inside?: string;
+  /** LLM-centric mode only (utils/foodPoints): food carried in points (hunger + saturation), the body's store, and what it spent lately. */
+  foodPoints?: { carried: number; items: string; hunger: number | null; saturation: number | null; spentLast5Min?: number };
 }
 
 export interface WorldFrame extends WorldObservation {

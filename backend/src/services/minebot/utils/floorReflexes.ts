@@ -1,3 +1,4 @@
+import { isLlmCentric } from './llmCentric.js';
 import { Vec3 } from 'vec3';
 import { createLogger } from '../../../utils/logger.js';
 import { actionLeaseStatus, activeActionCapabilities, createMotorPort, executeAction, hasActiveSafetyLease, physicalActionBusy, physicalActionCapabilities, preemptLowerPriorityActions } from '../execution/ActionExecution.js';
@@ -289,6 +290,9 @@ export function floorRetreatTick(bot: FloorBody, state: RetreatState, allow?: (k
   return 'engaged';
 }
 
+/** The LLM-centric body's own meals: starving, or nearly dead. */
+export const LLM_CENTRIC_EAT_FOOD = 3;
+export const LLM_CENTRIC_EAT_HEALTH = 6;
 const NEVER_EAT = new Set(['pufferfish', 'chorus_fruit', 'suspicious_stew', 'spider_eye', 'poisonous_potato', 'enchanted_golden_apple']);
 /**
  * A top-up at food 14 or less, or at health 10 or less with food below 18 (to get back to the 18 that regenerates). It was the old
@@ -320,6 +324,9 @@ const VALUABLE_FOOD = new Set(['golden_apple', 'golden_carrot', 'honey_bottle'])
  */
 export function floorEatChoice(bot: FloorBody, wide = true): Item | null {
   const health = bot.health ?? 20, food = bot.food ?? 20;
+  // The LLM-centric body eats by itself only starving (food 3 or less) or nearly dead (health 6 or less): every other meal is the
+  // planner's (design mb-llm-centric 2.4, MINEBOT_LLM_CENTRIC).
+  if (isLlmCentric(bot) && !(food <= LLM_CENTRIC_EAT_FOOD || health <= LLM_CENTRIC_EAT_HEALTH)) return null;
   let topUp = false;
   if (wide) {
     if (!(food < TOPUP_FOOD || (health < TOPUP_HEALTH && food < TOPUP_FOOD_HURT))) return null;
@@ -1008,7 +1015,9 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
           .catch(() => undefined).finally(() => { state.busy = null; });
         return;
       }
-      // The flee found no way out: a shelter where the body stands, if the blocks are there (once in 20 s).
+      // The flee found no way out: a shelter where the body stands, if the blocks are there (once in 20 s). Not in the LLM-centric
+      // mode: the walls are the planner's to build (run 26: the shelter closed the slit the fight was to be fought through).
+      if (state.shelterWanted && isLlmCentric(bot)) state.shelterWanted = false;
       if (state.shelterWanted) {
         state.shelterWanted = false;
         let choice: ReturnType<typeof shelterChoice> = null;
@@ -1025,7 +1034,8 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
     }
     if (!budget && Date.now() < state.retryAt) return;
     let food: Item | null = null, armor: ReturnType<typeof floorArmorChoice> = null;
-    try { food = config.eat ? floorEatChoice(bot, config.wideThreats) : null; armor = food || !config.armor ? null : floorArmorChoice(bot); } catch { return; }
+    // The LLM-centric body puts on no armour by itself (equip is a step of act).
+    try { food = config.eat ? floorEatChoice(bot, config.wideThreats) : null; armor = food || !config.armor || isLlmCentric(bot) ? null : floorArmorChoice(bot); } catch { return; }
     if (food && bot.equip && bot.consume) {
       // Never over another safety reflex (breath, lava). Over a model's action or a reflex session only when it cannot wait
       // (starving or nearly dead); otherwise between actions, so the work it would cut is not cut for a meal. (In the default mode a

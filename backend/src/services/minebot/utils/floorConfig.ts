@@ -1,3 +1,4 @@
+import { isLlmCentric } from './llmCentric.js';
 import { headCombatOwnerEnabled } from './combatOwner.js';
 /**
  * The body's reflex switch, read in one place (P8, 2026-10-17; defaults changed by the owner 2026-10-19).
@@ -105,11 +106,12 @@ export function describeFloorConfig(config: FloorConfig): string {
 export function reflexPromptText(config: FloorConfig = floorConfig()): string {
   const parts: string[] = [];
   if (config.retreat) parts.push('点火したクリーパーや飛んでくる矢から下がる');
-  if (config.eat) parts.push(config.wideThreats
+  if (config.eat && isLlmCentric()) parts.push('飢え（満腹度3以下）か瀕死（体力6以下）の時だけ、実行中の命令を切ってでも食べる（ほかの食事は act の eat で）');
+  else if (config.eat) parts.push(config.wideThreats
     ? '満腹度14以下（体力10以下なら満腹度18未満）で手が空いている間に、焼いた物から食べる（生肉は、ほかに食べ物が無く、満腹度6以下か体力8以下の時だけ。体力6以下か満腹度3以下では実行中の命令を切ってでも食べる。ただし flee-from・dig-shelter・build-around-self は満腹度3以下でしか切らない。壁越しでない敵が5m内なら食べない）'
     : '飢え・低体力で食べる');
-  if (config.armor) parts.push('空いた防具の枠に防具を着ける');
+  if (config.armor && !isLlmCentric()) parts.push('空いた防具の枠に防具を着ける');
   if (config.flee) parts.push('体力8以下で敵が近いと走って離れる（走っている間は実行中の戦闘・作業を中断する。20秒に2回まで。逃げ道が無ければ、その場を囲う（建築用ブロック10個とハーフブロック4個、敵が隣にいない時）か、3段の柱に登る（ブロック3個）' + (headCombatOwnerEnabled() ? '。ただしあなたが選んだ戦闘（combat・combat-engage・attack-nearest・attack-continuously）の実行中と開始後20秒（相手が生きて近くにいる間）は、体力が5を超える限り逃げも囲いもしない' : '') + '）');
-  if (config.pickup) parts.push('手が空いている間だけ近くの落とし物を拾いに歩く');
+  if (config.pickup && !isLlmCentric()) parts.push('手が空いている間だけ近くの落とし物を拾いに歩く');
   return parts.length ? `床の反射は動く: ${parts.join('、')}。反射に命令を切られることがある` : '床の反射は動いていない';
 }

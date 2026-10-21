@@ -1,3 +1,4 @@
+import { isLlmCentric } from '../utils/llmCentric.js';
 import minecraftData from 'minecraft-data';
 import { Vec3 } from 'vec3';
 import { CustomBot, InstantSkill } from '../types.js';
@@ -366,6 +367,12 @@ class CraftOne extends InstantSkill {
 
       // A table out of reach is not walked to when one can be set down here: further than a few blocks, or at night, or from inside
       // a shelter. Run 17 walked 17 s up to a table on the surface at night, stayed there 76 s and was shot dead by a skeleton (D6).
+      // The LLM-centric body neither sets a table down nor walks to one by itself: where to craft is the planner's (MINEBOT_LLM_CENTRIC).
+      if (requiresCraftingTable && isLlmCentric(this.bot) && (!craftingTable || !this.tableAccess(craftingTable).inReach)) {
+        const p = craftingTable?.position;
+        return { success: false, failureType: 'table_out_of_reach', recoverable: true,
+          result: `${itemName}には作業台が要りますが、手の届く所にありません${p ? `（いちばん近い作業台 (${p.x}, ${p.y}, ${p.z})）` : ''}。作業台を置くか、近づいてから作る` };
+      }
       if (requiresCraftingTable && craftingTable && !this.tableAccess(craftingTable).inReach) {
         const why = this.preferOwnTable(craftingTable);
         // Far by day: only a table carried is set down (making one would spend planks the recipe may need). Night or a shelter: one
