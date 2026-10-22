@@ -134,7 +134,7 @@ export async function runProbe(bot: any, input: ProbeInput): Promise<{ success: 
       const radiusChunks = typeof input.radius === 'number' ? clampRadius(input.radius, 1, 16, 16) : undefined;
       const summary = await scanWorld(bot, { radiusChunks });
       if (!summary) return { success: false, result: '読み込み済みのチャンクを読めない（体が無いか、世界がまだ無い）', failureType: 'unavailable' };
-      const { longestSliceMs: _longest, ...rest } = summary;
+      const { longestSliceMs: _longest, longestSliceWords: _words, ...rest } = summary;
       return answer({ v: 1, kind: 'scan', ...rest });
     }
     default:

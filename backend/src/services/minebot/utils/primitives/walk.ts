@@ -4,7 +4,7 @@ import { buildMovements } from '../setMovements.js';
 import { nextLeg, FAR_LEG_M } from '../farLegs.js';
 import { bodyReader, feetCell, type Cell, type MapBlock } from '../localMap.js';
 import { probePath } from '../probeTools.js';
-import { cellWay, doorOpen, installWalkRules, isDoorlike, isLeaves, mapBlockOf, MAX_FALL, passable, standableBeside, whyNotStand } from '../walkRules.js';
+import { cellWay, climbRise, doorOpen, installWalkRules, isDoorlike, isLeaves, isTall, mapBlockOf, MAX_CLIMB, MAX_FALL, passable, standableBeside, whyNotStand } from '../walkRules.js';
 import { cellText, guard, letGo, placeText, stopped, StepStopped, wait, type StepContext, type StepOutcome } from './common.js';
 
 const { goals } = pathfinder;
@@ -72,7 +72,15 @@ export function whyBlocked(bot: any, from: Cell, to: Cell): { reason: string; te
       let rise = 1;
       while (rise < 4 && !passable(readCell(bot, nx, y + rise, nz))) rise++;
       const over = readCell(bot, nx, y + 2, nz), above = readCell(bot, x, y + 2, z);
-      if (rise === 1 && passable(head) && passable(over) && passable(above)) { x = nx; z = nz; y = y + 1; continue; }
+      if (rise === 1 && passable(head) && passable(over) && passable(above)) {
+        // r7: a fence or a wall is not climbed; nor a block a cell up from a low floor (a slab: 1.5) — the route search's own limits.
+        if (isTall(feet)) return { reason: 'wall', text: `壁: (${nx},${y},${nz}) ${feet.name} は高さ 1.5（柵・塀は上れない）（一歩ではない）`, at: { x: nx, y, z: nz } };
+        const climb = climbRise(reader(bot), x, y, z, nx, nz);
+        if (climb > MAX_CLIMB + 1e-9) {
+          return { reason: 'wall', text: `壁: 上り ${climb.toFixed(1)}（今の床 (${x},${y - 1},${z}) ${readCell(bot, x, y - 1, z)?.name ?? '?'} の上から (${nx},${y},${nz}) ${feet.name} の上まで。walk の上りは ${MAX_CLIMB} まで）（一歩ではない）`, at: { x: nx, y, z: nz } };
+        }
+        x = nx; z = nz; y = y + 1; continue;
+      }
       const why = rise >= 2 ? `段差 ${rise >= 4 ? '4 以上' : rise}（(${nx},${y},${nz}) ${feet.name}${rise >= 2 ? ` と (${nx},${y + 1},${nz}) ${head.name}` : ''}。walk の上りは 1 まで）`
         : !passable(over) ? `段の上 (${nx},${y + 2},${nz}) が ${over?.name ?? '未ロード'} で頭がつかえる` : `跳ぶ所の頭上 (${x},${y + 2},${z}) が ${above?.name ?? '未ロード'}`;
       return { reason: 'wall', text: `壁: ${why}（一歩ではない）`, at: { x: nx, y, z: nz } };
@@ -87,6 +95,9 @@ export function whyBlocked(bot: any, from: Cell, to: Cell): { reason: string; te
       if (cellWay(below) !== 'open' || below.name === 'water') break;
     }
     if (drop > MAX_DROP) return { reason: 'drop', text: `(${nx},${y},${nz}) の先が${drop}段以上の落差（降りられない）`, at: { x: nx, y, z: nz } };
+    // r7: what the fall ends on must be a floor (a fence or a wall is not: the route search never stands on one).
+    const landing = readCell(bot, nx, y - 1 - drop, nz);
+    if (landing && isTall(landing)) return { reason: 'wall', text: `(${nx},${y - 1 - drop},${nz}) ${landing.name} の上には立てない（柵・塀は床にならない）`, at: { x: nx, y: y - 1 - drop, z: nz } };
     x = nx; z = nz; y -= drop;
   }
   return null;
@@ -196,17 +207,15 @@ export async function goWith(ctx: StepContext, goal: any, timeoutMs: number, not
 }
 
 /**
- * Whether the feet are where a goal wants them: the feet cell, or (on a block lower than a full one: farmland, a path, soul sand, the body
- * more than half up its cell) the cell above, as the route search itself reads a goal reached.
+ * Whether the feet are where a goal wants them: the feet cell (r7: on a block lower than a full one, a slab or a stair's step too, the cell
+ * above it, as the route search reads a goal reached; utils/localMap feetCell). Before, a body on a slab (half up its cell, not "more than
+ * half") was "not arrived" where it stood.
  */
 export function atGoal(bot: any, goal: any): boolean {
   const position = bot.entity?.position;
   if (!position || typeof goal?.isEnd !== 'function') return false;
   const here = feetCell(bot)!;
-  try {
-    if (goal.isEnd(new Vec3(here.x, here.y, here.z))) return true;
-    return position.y - Math.floor(position.y) > 0.5 && !!goal.isEnd(new Vec3(here.x, here.y + 1, here.z));
-  } catch { return false; }
+  try { return !!goal.isEnd(new Vec3(here.x, here.y, here.z)); } catch { return false; }
 }
 
 /** The facts of what stands between the feet and a target not reached: the straight line's first stop, else probe path's break. */

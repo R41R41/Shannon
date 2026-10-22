@@ -34,6 +34,41 @@ export const isClimbable = (block: MapBlock | null) => !!block && symbolFor(bloc
 const solidOf = (block: MapBlock) => block.solid ?? !isOpenSymbol(symbolFor(block));
 
 /**
+ * r7 (runs 30, 31: walks in the fortress stopped "一歩ではない" 45-50 s a run; lab, the route search against probe path): the heights the
+ * route search (mineflayer-pathfinder's movements) reads, and the rules had not.
+ * - A block taller than a full one (a fence, a wall; top 1.5) is no floor and no step: the search never stands on one nor climbs it (its
+ *   `fences`), and the rules took it for a block to step up on.
+ * - A block under a tenth of a block (a carpet) is walked through and stood on (its `carpets`); the rules took it for a wall.
+ * - A climb is at most 1.2 from the floor stood on (its "too high to jump"): from a slab (0.5) a full block a cell up is 1.5, no climb.
+ * The heights come from the block's collision box (MapBlock.top); a reader that does not give them is read by the name.
+ */
+const TALL_NAME = /(_fence|_wall)$/u;
+const THIN_NAME = /_carpet$/u;
+/** The top of a solid block's box in its cell (1 when not known: a full block). 0 for a block a body walks through. */
+export function topOf(block: MapBlock | null): number {
+  if (!block || !solidOf(block)) return 0;
+  if (typeof block.top === 'number') return block.top;
+  const name = block.name.replace(/^minecraft:/u, '');
+  return TALL_NAME.test(name) ? 1.5 : THIN_NAME.test(name) ? 0.0625 : 1;
+}
+/** A fence or a wall (taller than a full block): no floor, no step. */
+export const isTall = (block: MapBlock | null) => !!block && !isDoorlike(block.name) && solidOf(block) && topOf(block) > 1;
+/** A carpet (under a tenth of a block): walked through, and a floor. */
+export const isThin = (block: MapBlock | null) => !!block && solidOf(block) && topOf(block) < 0.1;
+/** The most the feet rise in one climb (mineflayer-pathfinder: "too high to jump" over 1.2). */
+export const MAX_CLIMB = 1.2;
+/**
+ * How far the feet rise to stand in (x, fromY + 1, z) from the cell (fromX, fromY, fromZ): from the top of the floor stood on to the top of
+ * the block climbed. In water or on a ladder the floor is the feet's own level.
+ */
+export function climbRise(read: BlockReader, fromX: number, fromY: number, fromZ: number, x: number, z: number): number {
+  const feet = read(fromX, fromY, fromZ);
+  const floor = read(fromX, fromY - 1, fromZ);
+  const base = isWater(feet) || isClimbable(feet) || !floorOf(floor) ? fromY : fromY - 1 + topOf(floor);
+  return fromY + topOf(read(x, fromY, z)) - base;
+}
+
+/**
  * What a walking body meets in a feet or head cell:
  *   open       walked through as it is (air, a plant, water, a ladder, a torch, a rail, a crop, an open door, gate or trapdoor);
  *   door       a shut wooden door, fence gate or trapdoor: opened on the way;
@@ -55,6 +90,7 @@ export function cellWay(block: MapBlock | null): CellWay {
   if (isLeaves(block.name)) return 'leaves';
   const symbol = symbolFor(block);
   if (symbol === 'h' || symbol === 't' || symbol === '=' || symbol === 'k' || isWater(block)) return 'open';
+  if (isThin(block)) return 'open';
   return solidOf(block) ? 'solid' : 'open';
 }
 
@@ -65,8 +101,8 @@ export function passable(block: MapBlock | null): boolean {
 }
 /** Open as it is: a fall goes through it, and nothing has to be opened or broken. */
 export function enterable(block: MapBlock | null): boolean { return cellWay(block) === 'open'; }
-/** Something to stand on: a full box, not lava or a hurting block, not a door, gate or trapdoor. Leaves are a floor. */
-export function floorOf(block: MapBlock | null): boolean { return !!block && !NO_ENTER.has(block.name) && solidOf(block) && !isDoorlike(block.name); }
+/** Something to stand on: a box, not lava or a hurting block, not a door, gate or trapdoor, not a fence or a wall (r7). Leaves are a floor. */
+export function floorOf(block: MapBlock | null): boolean { return !!block && !NO_ENTER.has(block.name) && solidOf(block) && !isDoorlike(block.name) && !isTall(block); }
 /** A body can be in this cell: feet and head passable, and under the feet a floor, or the feet in water or on a ladder. */
 export function standable(read: BlockReader, x: number, y: number, z: number): boolean {
   const feet = read(x, y, z);
@@ -167,6 +203,10 @@ export function installWalkRules(movements: any): void {
 /** A prismarine block as the rules read it (its name, its box, and for a door, gate or trapdoor whether it is open). */
 export function mapBlockOf(block: any): MapBlock {
   const out: MapBlock = { name: String(block.name), solid: block.boundingBox === 'block' };
+  if (out.solid && Array.isArray(block.shapes) && block.shapes.length) {
+    const top = Math.max(...block.shapes.map((shape: number[]) => shape[4]));
+    if (Number.isFinite(top) && top !== 1) out.top = top;
+  }
   if (isDoorlike(out.name)) out.open = doorOpen(block);
   return out;
 }

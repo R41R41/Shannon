@@ -2,7 +2,7 @@ import { symbolFor, isOpenSymbol, type BlockReader, type Cell, type MapBlock } f
 import { LoopSlicer } from './loadedBlockScan.js';
 import { wayWords } from './worldScanState.js';
 import type { HandRecord } from './handHistory.js';
-import { BESIDE, blockedWords, cellWay, enterable, floorOf, isClimbable, isLava, isWater, MAX_FALL, passable, standable, whyNotStand } from './walkRules.js';
+import { BESIDE, blockedWords, cellWay, climbRise, enterable, floorOf, isClimbable, isLava, isTall, isWater, MAX_CLIMB, MAX_FALL, passable, standable, whyNotStand } from './walkRules.js';
 
 export { enterable, isWater, MAX_FALL, passable, standable } from './walkRules.js';
 
@@ -72,7 +72,8 @@ async function walkSearch(read: BlockReader, from: Cell, goals: Set<string>, box
     for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
       const x = c.x + dx, z = c.z + dz;
       if (standable(read, x, c.y, z)) { push(c, x, c.y, z); continue; }
-      if (standable(read, x, c.y + 1, z) && passable(read(c.x, c.y + 2, c.z))) { push(c, x, c.y + 1, z); continue; }
+      // A climb of one: room over the head, and no more than the route search climbs (r7: 1.2 from the floor stood on; a fence is no step).
+      if (standable(read, x, c.y + 1, z) && passable(read(c.x, c.y + 2, c.z)) && climbRise(read, c.x, c.y, c.z, x, z) <= MAX_CLIMB + 1e-9) { push(c, x, c.y + 1, z); continue; }
       if (!passable(read(x, c.y, z)) || !passable(read(x, c.y + 1, z))) continue;
       // Off the edge: the cell it lands in, within three (water too: the walk's movements keep infiniteLiquidDropdownDistance off). The
       // cells fallen through are open ones (leaves and doors under the feet are not broken or opened: they are landed on, or no way).
@@ -166,6 +167,12 @@ function stepFact(read: BlockReader, c: Cell, n: Cell): PathBreak {
   if (!passable(feet)) {
     let h = 0;
     while (h < 8 && !passable(read(n.x, n.y + h, n.z))) h++;
+    // r7: a fence or a wall is neither climbed nor stood on; a block a cell up from a low floor (a slab) is more than the climb.
+    if (h === 1 && isTall(feet)) return { at: n, reason: 'wall', n: 1, block: feet.name, text: `${at(n)} は ${feet.name}（高さ 1.5。柵・塀は上れず、上にも立てない）` };
+    if (h === 1 && passable(read(n.x, n.y + 2, n.z)) && passable(read(c.x, c.y + 2, c.z))) {
+      const rise = climbRise(read, c.x, c.y, c.z, n.x, n.z);
+      if (rise > MAX_CLIMB + 1e-9) return { at: n, reason: 'wall', n: 1, block: feet.name, text: `${at(n)} の ${feet.name} へは上り ${round1(rise)}（今の床 ${at({ ...c, y: c.y - 1 })} が低い。walk の上りは ${MAX_CLIMB} まで）` };
+    }
     if (h === 1 && passable(read(n.x, n.y + 1, n.z)) && passable(read(n.x, n.y + 2, n.z)) && !passable(read(c.x, c.y + 2, c.z))) {
       const over = read(c.x, c.y + 2, c.z);
       return { at: { x: c.x, y: c.y + 2, z: c.z }, reason: 'low', block: nameOf(over), text: `${at(n)} の 1 段を上るには、頭の上 ${at({ x: c.x, y: c.y + 2, z: c.z })} の ${nameOf(over)} がつかえる（高さ 1 のすき間）` };

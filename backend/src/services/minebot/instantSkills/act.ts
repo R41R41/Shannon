@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { CustomBot, InstantSkill } from '../types.js';
 import { actionSignal, nativeActionHost } from '../execution/ActionExecution.js';
-import { isThreat, LAYING_HANDS } from '../utils/floorReflexes.js';
+import { isThreat, LAYING_HANDS, shooterWords, shootersInReach, shootersSeeing } from '../utils/floorReflexes.js';
 import { threatExposure } from '../utils/threatExposure.js';
 import { beginEngagement } from '../utils/engagement.js';
 import { bodyReader, cellKey, facingOfYaw, feetCell, noteMapStop, type Cell, type Facing } from '../utils/localMap.js';
@@ -103,8 +103,8 @@ export function handContinuesOnFail(hand: Pick<ActHand, 'do' | 'onFail'>): boole
 
 /** Reflex kinds in the ledger that do not stop an act (the shield is part of a fight; the budget is a notice). */
 /** Reflex kinds in the ledger that do not stop an act: the shield and the fireball struck back are part of a fight (the contract's 1.4); the budget is a notice. */
-const LEDGER_QUIET = new Set(['shield', 'fireball', 'budget', 'pickup', 'armor']);
-const REFLEX_NAMES: Record<string, string> = { 'floor-eat': '食事（飢え・瀕死）', 'floor-retreat': '退避（点火したクリーパー・矢）', 'floor-flee': '低体力の逃走', 'floor-last-stand': '逃げ道が無い時の最後の手',
+const LEDGER_QUIET = new Set(['shield', 'fireball', 'budget', 'pickup', 'armor', 'cover_none']);
+const REFLEX_NAMES: Record<string, string> = { 'floor-eat': '食事（飢え・瀕死）', 'floor-retreat': '退避（点火したクリーパー・矢）', 'floor-flee': '低体力の逃走', 'floor-last-stand': '逃げ道が無い時の最後の手', 'floor-cover': '燃えて射手から見えている時に射線を切る',
   'floor-shelter': '逃げ道が無い時の囲い', 'auto-swim': '泳ぎ（呼吸）', 'constant:auto-swim': '泳ぎ（呼吸）', 'lava-escape': '溶岩からの脱出', 'floor-armor': '防具' };
 const reflexName = (reason: unknown) => { const text = String(reason ?? ''); return REFLEX_NAMES[text] ?? REFLEX_NAMES[text.replace(/^constant:/u, '')] ?? text; };
 
@@ -265,6 +265,20 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
       if (cell) watched.set(cellKey(cell), String(blockAt(bot, cell)?.name ?? '未ロード'));
     }
   }
+  /**
+   * r7 (run 31: stopped by hpBelow in the middle of a corridor in the blazes' line, and burned there): where a stopIf stops, the shooters in
+   * reach and whether they see the body ("射線の中: blaze #12 上5・9.1m から見えている"), or nothing when none is in reach. Facts only.
+   */
+  const lineFacts = () => {
+    try {
+      const at = bot.entity?.position;
+      if (!at) return '';
+      const inReach = shootersInReach(bot, at);
+      if (!inReach.length) return '';
+      const seeing = shootersSeeing(bot, inReach, at);
+      return seeing.length ? `。射線の中: ${shooterWords(at, seeing)} から見えている` : `。射線の外: ${shooterWords(at, inReach)} からは見えない`;
+    } catch { return ''; }
+  };
   const watch = () => {
     try {
       if ((bot.health ?? 20) <= 0) return stopWith('体が死んだ', 'died');
@@ -280,9 +294,9 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
         const listed = near
           .sort((a, b) => a.position.distanceTo(bot.entity.position) - b.position.distanceTo(bot.entity.position))
           .map(entity => `${entity.name} #${entity.id} ${entity.position.distanceTo(bot.entity.position).toFixed(1)}m`).slice(0, 3);
-        return stopWith(`hostileWithin:${listed.join('、')}`, 'stop_if_hostile');
+        return stopWith(`hostileWithin:${listed.join('、')}${lineFacts()}`, 'stop_if_hostile');
       }
-      if (typeof stopIf?.hpBelow === 'number' && (bot.health ?? 20) < stopIf.hpBelow) return stopWith(`hpBelow:${Math.round(bot.health * 10) / 10}`, 'stop_if_hp');
+      if (typeof stopIf?.hpBelow === 'number' && (bot.health ?? 20) < stopIf.hpBelow) return stopWith(`hpBelow:${Math.round(bot.health * 10) / 10}${lineFacts()}`, 'stop_if_hp');
       if (typeof stopIf?.hungerBelow === 'number' && (bot.food ?? 20) < stopIf.hungerBelow) return stopWith(`hungerBelow:${bot.food}`, 'stop_if_hunger');
       for (const [key, was] of watched) {
         const [x, y, z] = key.split(',').map(Number);

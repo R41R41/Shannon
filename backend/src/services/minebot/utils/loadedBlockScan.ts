@@ -1,3 +1,4 @@
+import { PerformanceObserver } from 'node:perf_hooks';
 import { Vec3 } from 'vec3';
 
 /**
@@ -141,19 +142,83 @@ export function scanLoadedBlocksMany(bot: ScanBot, queries: LoadedBlockQuery[]):
  */
 export class LoopSlicer {
   private began = performance.now();
+  private cpuBegan = threadCpuMs();
   longest = 0;
   slices = 1;
+  /**
+   * r7 (runs 30, 31: one hold of 19.4 and 27.6 ms in production, 4 ms in every lab world, the heavy one too): what the longest slice was
+   * doing (`phase`, set by the caller), its window on the clock (for the garbage collections inside it, `gcWithin`) and the main thread's
+   * own CPU time in it. A slice whose wall time is far above its CPU time was not the scan's work: the thread was off the CPU or collecting.
+   */
+  phase = '';
+  longestPhase = '';
+  longestCpuMs: number | null = null;
+  longestStart = 0;
+  longestEnd = 0;
   constructor(private readonly sliceMs = 8, private readonly yieldNow: () => Promise<void> = () => new Promise(resolve => setImmediate(resolve))) {}
   /** True when the slice is spent (the caller then awaits `pause()`). */
   due(): boolean { return performance.now() - this.began >= this.sliceMs; }
+  private close(): void {
+    const now = performance.now(), wall = now - this.began;
+    if (wall <= this.longest) return;
+    this.longest = wall; this.longestStart = this.began; this.longestEnd = now; this.longestPhase = this.phase;
+    const cpu = threadCpuMs();
+    this.longestCpuMs = cpu !== null && this.cpuBegan !== null ? cpu - this.cpuBegan : null;
+  }
   async pause(): Promise<void> {
-    this.longest = Math.max(this.longest, performance.now() - this.began);
+    this.close();
     await this.yieldNow();
     this.slices++;
     this.began = performance.now();
+    this.cpuBegan = threadCpuMs();
   }
   /** The slice that ends with the work (counted in `longest`). */
-  end(): void { this.longest = Math.max(this.longest, performance.now() - this.began); }
+  end(): void { this.close(); }
+  /** The longest slice in words for the log: its phase, the main thread's CPU in it and the collections inside it (r7). */
+  longestWords(): string {
+    const gc = gcWithin(this.longestStart, this.longestEnd);
+    const cpu = this.longestCpuMs === null ? '' : `CPU ${round1(this.longestCpuMs)} ms`;
+    return [this.longestPhase || '?', cpu, gc.count ? `GC ${gc.count} 回 ${round1(gc.ms)} ms` : 'GC 0'].filter(Boolean).join('・');
+  }
+}
+
+const round1 = (value: number) => Math.round(value * 10) / 10;
+
+/** The main thread's own CPU time (ms), or null where the runtime cannot say (process.threadCpuUsage: Node 23.9 and later). */
+function threadCpuMs(): number | null {
+  try {
+    const usage = (process as unknown as { threadCpuUsage?: () => { user: number; system: number } }).threadCpuUsage?.();
+    return usage ? (usage.user + usage.system) / 1000 : null;
+  } catch { return null; }
+}
+
+/**
+ * The garbage collections of the last minute (start and duration, ms on performance.now()'s clock), kept by one observer started the first
+ * time a scan asks (r7: to tell the scan's own work from a collection that lands inside a slice).
+ */
+const gcSeen: Array<{ start: number; ms: number }> = [];
+let gcObserving = false;
+export function watchGc(): void {
+  if (gcObserving) return;
+  gcObserving = true;
+  try {
+    const observer = new PerformanceObserver(list => {
+      for (const entry of list.getEntries()) gcSeen.push({ start: entry.startTime, ms: entry.duration });
+      const cut = performance.now() - 60_000;
+      while (gcSeen.length && (gcSeen[0].start < cut || gcSeen.length > 2000)) gcSeen.shift();
+    });
+    observer.observe({ entryTypes: ['gc'] });
+    (observer as unknown as { unref?: () => void }).unref?.();
+  } catch { gcObserving = false; }
+}
+/** How many collections overlapped [start, end], and their time inside it. */
+export function gcWithin(start: number, end: number): { count: number; ms: number } {
+  let count = 0, ms = 0;
+  for (const gc of gcSeen) {
+    const overlap = Math.min(end, gc.start + gc.ms) - Math.max(start, gc.start);
+    if (overlap > 0) { count++; ms += overlap; }
+  }
+  return { count, ms };
 }
 
 /** One kind of block a sliced scan counts: its states, the nearest `keep` hits, and a height band. */
@@ -196,7 +261,9 @@ const CELLS_PER_LOOK = 512;
 export async function scanLoadedCategories(bot: ScanBot, categories: ScanCategory[], options: { radiusChunks?: number; sliceMs?: number; maxMs?: number;
   stop?: () => boolean; slicer?: LoopSlicer } = {}): Promise<SlicedScanResult> {
   const started = performance.now();
+  watchGc();
   const slicer = options.slicer ?? new LoopSlicer(options.sliceMs ?? SCAN_SLICE_MS);
+  slicer.phase = '状態の表とチャンクの一覧';
   const maxMs = options.maxMs ?? 5000;
   const found = new Map(categories.map(category => [category.key, { count: 0, hits: [] as ScanCellHit[] }]));
   const result: SlicedScanResult = { found, chunks: 0, reachMetres: 0, ms: 0, longestSliceMs: 0, slices: 1, partial: false };
@@ -244,6 +311,9 @@ export async function scanLoadedCategories(bot: ScanBot, categories: ScanCategor
     lists[index].hits.push({ name, x, y, z, distance });
     if (lists[index].hits.length >= 2 * keep[index]) trim(index);
   };
+  if (slicer.due()) await slicer.pause();
+  slicer.phase = 'ブロック読み';
+  let byIndex = new Int16Array(256);
   for (const { column, baseX, baseZ, centre } of columns) {
     if (options.stop?.() || performance.now() - started > maxMs) { result.partial = true; break; }
     const minY = typeof column.minY === 'number' ? column.minY : 0;
@@ -263,9 +333,10 @@ export async function scanLoadedCategories(bot: ScanBot, categories: ScanCategor
       }
       const palette: number[] | undefined = data.palette;
       if (palette) {
-        // The category of each palette entry; nothing wanted, nothing read (as before).
+        // The category of each palette entry; nothing wanted, nothing read (as before). One table for the whole scan (r7: nothing made
+        // in the loop, so no collection is started from inside a slice; a section's palette is 256 entries at most).
         let any = false;
-        const byIndex = new Int16Array(palette.length);
+        if (byIndex.length < palette.length) byIndex = new Int16Array(palette.length);
         for (let entry = 0; entry < palette.length; entry++) {
           const state = palette[entry];
           byIndex[entry] = state < table.length ? table[state] : -1;

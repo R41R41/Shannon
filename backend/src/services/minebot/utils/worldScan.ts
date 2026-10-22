@@ -1,6 +1,6 @@
 import { Vec3 } from 'vec3';
 import { LoopSlicer, SCAN_SLICE_MS, scanLoadedCategories, type ScanCategory, type ScanCellHit, type SlicedScanResult } from './loadedBlockScan.js';
-import { lavaSourceInfo, POOL_CAP, type PoolWorld } from './lavaPools.js';
+import { lavaSourceInfo, POOL_CAP, type LavaSourceInfo, type PoolWorld } from './lavaPools.js';
 import { spawnerKind } from './mapMarks.js';
 import { bodyReader, type BlockReader } from './localMap.js';
 import { isLlmCentric } from './llmCentric.js';
@@ -73,12 +73,17 @@ export interface WorldScanSummary {
   partial?: boolean;
   /** The longest the loop was held and the slices (for the measure; not for the head). */
   longestSliceMs: number;
+  /** r7: what the longest hold was doing, the main thread's CPU and the collections in it (for the log; not for the head). */
+  longestSliceWords?: string;
 }
 
 const at =(hit: { x: number; y: number; z: number }) => `(${hit.x},${hit.y},${hit.z})`;
 
-/** The rows and the sentence for one scan's counts (pure but for the few block reads of a lava pool's cover, a chest's hull, a spawner). */
-export function summarizeScan(bot: ScanBody, scan: SlicedScanResult, centre: { x: number; y: number; z: number }, read: BlockReader): WorldScanSummary {
+/**
+ * The rows and the sentence for one scan's counts. The block reads (a lava pool's size and cover, the frames' eyes, a chest's hull, a
+ * spawner) are `reads`, made beforehand in steps (`readScanSliced`); without them they are made here at once (`readScanNow`).
+ */
+export function summarizeScan(bot: ScanBody, scan: SlicedScanResult, centre: { x: number; y: number; z: number }, read: BlockReader, reads: ScanReads = readScanNow(bot, scan, read)): WorldScanSummary {
   const dimension = String(bot.game?.dimension ?? 'overworld');
   const nether = dimension.includes('nether'), end = dimension.includes('end');
   const get = (key: string) => scan.found.get(key) ?? { count: 0, hits: [] as ScanCellHit[] };
@@ -105,7 +110,7 @@ export function summarizeScan(bot: ScanBody, scan: SlicedScanResult, centre: { x
   if (water.count) { row(2, '水源', water.count, water.hits[0]); facts.push(`水源は ${wayWords(centre, water.hits[0])}`); }
   else if (!nether) absent.push('水源');
   // Lava: the sources joined into pools (the nearest three pools), each with its size and what lies over it.
-  const pools = lavaPoolRows(bot, get('lava').hits, centre);
+  const pools = lavaPoolRows(reads.pools, centre);
   for (const pool of pools) rows.push({ order: 3, line: pool.line });
   if (pools.length) facts.push(`溶岩の溜まり ${pools.length >= 3 ? '3 つ以上' : `${pools.length} つ`}（最寄り ${pools[0].way}・${pools[0].size}）`);
   // Structures, by the blocks only they are built of.
@@ -117,25 +122,19 @@ export function summarizeScan(bot: ScanBody, scan: SlicedScanResult, centre: { x
   if (bastion.count >= 8) { row(4, '砦の遺跡（bastion）', bastion.count, bastion.hits[0], bastion.hits.some(hit => hit.name === 'gilded_blackstone') ? '金のブラックストーンあり' : ''); structures.push(`砦の遺跡 ${wayWords(centre, bastion.hits[0])}`); }
   const frames = get('end_frame'), stronghold = get('stronghold');
   if (frames.count) {
-    let eyes = 0;
-    for (const hit of frames.hits) { try { const p = bot.blockAt?.(new Vec3(hit.x, hit.y, hit.z), false)?.getProperties?.(); if (p?.eye === true || p?.eye === 'true') eyes++; } catch { /* unknown */ } }
-    row(4, 'エンドポータルの枠（要塞）', frames.count, frames.hits[0], `アイ入り ${eyes}${frames.count > frames.hits.length ? '（近い 12 のうち）' : ''}`);
+    row(4, 'エンドポータルの枠（要塞）', frames.count, frames.hits[0], `アイ入り ${reads.eyes}${frames.count > frames.hits.length ? '（近い 12 のうち）' : ''}`);
     structures.push(`要塞（エンドポータルの枠） ${wayWords(centre, frames.hits[0])}`);
   } else if (stronghold.count >= 24) { row(4, '要塞の石レンガ（y≤40）', stronghold.count, stronghold.hits[0]); structures.push(`要塞らしい石レンガ ${wayWords(centre, stronghold.hits[0])}`); }
   const rails = get('rail');
   if (!nether && !end && rails.count >= 8) { row(4, '廃坑のレール（y≤60）', rails.count, rails.hits[0], get('cobweb').count ? `クモの巣 ×${get('cobweb').count}` : ''); structures.push(`廃坑 ${wayWords(centre, rails.hits[0])}`); }
-  const wreck = !nether && !end ? shipwreckChest(read, get('chest').hits) : null;
+  const wreck = !nether && !end ? reads.wreck : null;
   if (wreck) { row(4, '難破船らしい箱', '', wreck, '箱の周りに木の板と水'); structures.push(`難破船らしい箱 ${wayWords(centre, wreck)}`); }
   const crying = get('crying');
   if (!nether && crying.count) { row(4, '壊れたポータル（泣く黒曜石）', crying.count, crying.hits[0]); structures.push(`壊れたポータル ${wayWords(centre, crying.hits[0])}`); }
   if (structures.length) facts.push(`構造物：${structures.join('、')}`);
   // Spawners (what they spawn), portals.
   const spawners = get('spawner');
-  for (const hit of spawners.hits.slice(0, 2)) {
-    let kind = '';
-    try { kind = spawnerKind(bot as never, new Vec3(hit.x, hit.y, hit.z)); } catch { kind = ''; }
-    row(5, 'スポナー', '', hit, kind || '種類は見えない');
-  }
+  spawners.hits.slice(0, 2).forEach((hit, index) => row(5, 'スポナー', '', hit, reads.spawnerKinds[index] || '種類は見えない'));
   if (spawners.count) facts.push(`スポナー ${spawners.count}（最寄り ${wayWords(centre, spawners.hits[0])}）`);
   const portal = get('nether_portal');
   if (portal.count) { row(5, 'ネザーポータル', portal.count, portal.hits[0]); facts.push(`ネザーポータルが ${wayWords(centre, portal.hits[0])}`); }
@@ -149,58 +148,113 @@ export function summarizeScan(bot: ScanBody, scan: SlicedScanResult, centre: { x
   return { text, rows: lines, chunks: scan.chunks, reach: scan.reachMetres, ms: scan.ms, ...(scan.partial ? { partial: true } : {}), longestSliceMs: scan.longestSliceMs };
 }
 
-/** The nearest three lava pools among the kept sources: each with its size (lavaPools' count of joined sources) and its top. */
-function lavaPoolRows(bot: ScanBody, sources: ScanCellHit[], centre: { x: number; y: number; z: number }): Array<{ line: string; way: string; size: string }> {
-  if (!sources.length) return [];
+/**
+ * The block reads the summary needs beyond the counts (r7): each lava pool's size and cover (lavaPools: up to some hundreds of reads a
+ * pool), the eyes in the end portal frames, a chest's hull, what a spawner spawns. Read as steps, so that the scan gives the loop back
+ * between them (`readsFor` yields after each); the summary itself then reads nothing.
+ */
+export interface ScanReads {
+  pools: Array<{ hit: ScanCellHit; joined: number; info: LavaSourceInfo | null; cap: string }>;
+  eyes: number;
+  wreck: ScanCellHit | null;
+  spawnerKinds: string[];
+}
+
+/** The kept lava sources joined into pools (a pool listed once): the nearest three pools' nearest source and how many kept sources it joins. */
+function poolHeads(sources: ScanCellHit[]): Array<{ hit: ScanCellHit; joined: number }> {
   const key = (x: number, y: number, z: number) => `${x},${y},${z}`;
   const kept = new Map(sources.map(hit => [key(hit.x, hit.y, hit.z), hit]));
   const seen = new Set<string>();
-  const out: Array<{ line: string; way: string; size: string }> = [];
-  const world = typeof bot.blockAt === 'function' ? bot as unknown as PoolWorld : null;
-  const poolCache = new Map<string, number>();
+  const heads: Array<{ hit: ScanCellHit; joined: number }> = [];
   for (const hit of sources) {
-    if (out.length >= 3) break;
+    if (heads.length >= 3) break;
     if (seen.has(key(hit.x, hit.y, hit.z))) continue;
-    // The kept sources joined to this one (so a pool is listed once).
     const queue = [hit];
     seen.add(key(hit.x, hit.y, hit.z));
     for (let head = 0; head < queue.length; head++) {
       const cell = queue[head];
-      for (const [dx, dy, dz] of [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]) {
+      for (const [dx, dy, dz] of SIX) {
         const next = key(cell.x + dx, cell.y + dy, cell.z + dz);
         const other = kept.get(next);
         if (other && !seen.has(next)) { seen.add(next); queue.push(other); }
       }
     }
-    let info = null;
-    try { info = world ? lavaSourceInfo(world, new Vec3(hit.x, hit.y, hit.z), poolCache) : null; } catch { info = null; }
-    const sizeCount = info ? info.poolSize : queue.length;
-    const size = `源 ${sizeCount >= POOL_CAP ? `${POOL_CAP} 以上` : sizeCount}`;
-    const top = !info ? '' : info.top === 'open' ? '上は空気（覆い無し）' : info.top === 'covered' ? `上は ${blockName(bot, info.cap)} 1 枚（覆い）` : '上は溶岩か水か、掘れない覆い';
-    const way = wayWords(centre, hit);
-    out.push({ way, size, line: `溶岩の溜まり ${size} 最寄り ${at(hit)} ${way}${top ? ` ${top}` : ''}` });
+    heads.push({ hit, joined: queue.length });
   }
+  return heads;
+}
+const SIX: ReadonlyArray<readonly [number, number, number]> = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+
+/** The summary's reads, one step at a time (a `yield` after each pool, each frame batch, each chest, each spawner). */
+function* readsFor(bot: ScanBody, scan: SlicedScanResult, read: BlockReader, out: ScanReads): Generator<void, void, void> {
+  const dimension = String(bot.game?.dimension ?? 'overworld');
+  const nether = dimension.includes('nether'), end = dimension.includes('end');
+  const get = (key: string) => scan.found.get(key) ?? { count: 0, hits: [] as ScanCellHit[] };
+  const world = typeof bot.blockAt === 'function' ? bot as unknown as PoolWorld : null;
+  const poolCache = new Map<string, number>();
+  for (const head of poolHeads(get('lava').hits)) {
+    let info: LavaSourceInfo | null = null;
+    try { info = world ? lavaSourceInfo(world, new Vec3(head.hit.x, head.hit.y, head.hit.z), poolCache) : null; } catch { info = null; }
+    out.pools.push({ ...head, info, cap: info?.top === 'covered' ? blockName(bot, info.cap) : '' });
+    yield;
+  }
+  const frames = get('end_frame');
+  for (const hit of frames.hits) { try { const p = bot.blockAt?.(new Vec3(hit.x, hit.y, hit.z), false)?.getProperties?.(); if (p?.eye === true || p?.eye === 'true') out.eyes++; } catch { /* unknown */ } }
+  if (frames.hits.length) yield;
+  if (!nether && !end) {
+    for (const chest of get('chest').hits.slice(0, 8)) {
+      if (chest.name !== 'chest' || chest.y < 30 || chest.y > 75) continue;
+      const hull = hullAround(read, chest);
+      yield;
+      if (hull) { out.wreck = chest; break; }
+    }
+  }
+  for (const hit of get('spawner').hits.slice(0, 2)) {
+    let kind = '';
+    try { kind = spawnerKind(bot as never, new Vec3(hit.x, hit.y, hit.z)); } catch { kind = ''; }
+    out.spawnerKinds.push(kind);
+    yield;
+  }
+}
+const noReads = (): ScanReads => ({ pools: [], eyes: 0, wreck: null, spawnerKinds: [] });
+/** The summary's reads in one go (no loop to give back: a test, a caller that is not sliced). */
+export function readScanNow(bot: ScanBody, scan: SlicedScanResult, read: BlockReader): ScanReads {
+  const out = noReads();
+  for (const _step of readsFor(bot, scan, read, out)) { /* every step at once */ }
   return out;
+}
+/** The summary's reads with the loop given back between steps (the slice's clock decides when). */
+export async function readScanSliced(bot: ScanBody, scan: SlicedScanResult, read: BlockReader, slicer: LoopSlicer): Promise<ScanReads> {
+  const out = noReads();
+  for (const _step of readsFor(bot, scan, read, out)) if (slicer.due()) await slicer.pause();
+  return out;
+}
+
+/** The pools' rows from the reads: each with its size (lavaPools' count of joined sources) and its top. */
+function lavaPoolRows(pools: ScanReads['pools'], centre: { x: number; y: number; z: number }): Array<{ line: string; way: string; size: string }> {
+  return pools.map(({ hit, joined, info, cap }) => {
+    const sizeCount = info ? info.poolSize : joined;
+    const size = `源 ${sizeCount >= POOL_CAP ? `${POOL_CAP} 以上` : sizeCount}`;
+    const top = !info ? '' : info.top === 'open' ? '上は空気（覆い無し）' : info.top === 'covered' ? `上は ${cap} 1 枚（覆い）` : '上は溶岩か水か、掘れない覆い';
+    const way = wayWords(centre, hit);
+    return { way, size, line: `溶岩の溜まり ${size} 最寄り ${at(hit)} ${way}${top ? ` ${top}` : ''}` };
+  });
 }
 function blockName(bot: ScanBody, position: Vec3 | undefined): string {
   if (!position) return '?';
   try { return String(bot.blockAt?.(position, false)?.name ?? '?'); } catch { return '?'; }
 }
 
-/** The nearest chest with a hull round it: ten or more wooden hull blocks and ten or more water cells within 3 (a shipwreck's). */
-function shipwreckChest(read: BlockReader, chests: ScanCellHit[]): ScanCellHit | null {
-  for (const chest of chests.slice(0, 8)) {
-    if (chest.name !== 'chest' || chest.y < 30 || chest.y > 75) continue;
-    let wood = 0, water = 0;
-    for (let dx = -3; dx <= 3; dx++) for (let dy = -3; dy <= 3; dy++) for (let dz = -3; dz <= 3; dz++) {
-      const block = read(chest.x + dx, chest.y + dy, chest.z + dz);
-      if (!block) continue;
-      if (WOOD_HULL.test(block.name)) wood++;
-      else if (block.name === 'water') water++;
-    }
-    if (wood >= 10 && water >= 10) return chest;
+/** A chest with a hull round it: ten or more wooden hull blocks and ten or more water cells within 3 (a shipwreck's). */
+function hullAround(read: BlockReader, chest: ScanCellHit): boolean {
+  let wood = 0, water = 0;
+  for (let dx = -3; dx <= 3; dx++) for (let dy = -3; dy <= 3; dy++) for (let dz = -3; dz <= 3; dz++) {
+    const block = read(chest.x + dx, chest.y + dy, chest.z + dz);
+    if (!block) continue;
+    if (WOOD_HULL.test(block.name)) wood++;
+    else if (block.name === 'water') water++;
   }
-  return null;
+  return wood >= 10 && water >= 10;
 }
 
 /** One scan of the loaded chunks round the body (sliced), summed up. */
@@ -210,13 +264,19 @@ export async function scanWorld(bot: ScanBody, options: { radiusChunks?: number;
   const centre = { x: position.x, y: position.y, z: position.z };
   const slicer = options.slicer ?? new LoopSlicer(options.sliceMs ?? SCAN_SLICE_MS);
   const scan = await scanLoadedCategories(bot as never, categoriesFor(bot.registry), { ...options, slicer });
-  // The summary (a few hundred block reads: lava pools, a hull, spawners) is one hold of its own, after the loop is given back (r6: it is
-  // counted in the longest hold too).
+  // The summary's block reads (lava pools, frames, a hull, spawners) in steps with the loop given back between them (r7: runs 30 and 31 held
+  // the loop 19.4 and 27.6 ms once, and the reads were one hold); the rows and the sentence after them read nothing.
   await slicer.pause();
-  const began = performance.now();
-  const summary = summarizeScan(bot, scan, centre, bodyReader(bot as never));
-  slicer.longest = Math.max(slicer.longest, performance.now() - began);
-  return { ...summary, longestSliceMs: Math.round(slicer.longest * 10) / 10 };
+  slicer.phase = '要約の読み';
+  const read = bodyReader(bot as never);
+  const reads = await readScanSliced(bot, scan, read, slicer);
+  if (slicer.due()) await slicer.pause();
+  slicer.phase = '要約の文';
+  const summary = summarizeScan(bot, scan, centre, read, reads);
+  slicer.end();
+  // The collections of the last slices are told to the observer after the work: one turn of the loop before the words are read.
+  await new Promise(resolve => setImmediate(resolve));
+  return { ...summary, longestSliceMs: Math.round(slicer.longest * 10) / 10, longestSliceWords: slicer.longestWords() };
 }
 
 // ===== The scan at a spawn (world.scan) =====
@@ -227,7 +287,7 @@ interface SpawnScanBody extends ScanBody {
   arrival?: { kind: ScanTrigger; at: number };
   worldScan?: WorldScanState;
   /** The time of the last scan's slices, for the log and the measure. */
-  worldScanCost?: { ms: number; longestSliceMs: number };
+  worldScanCost?: { ms: number; longestSliceMs: number; longestSliceWords?: string };
 }
 
 /** mineflayer's view distance words (settings.viewDistance) in chunks. */
@@ -305,13 +365,13 @@ export function installSpawnScan(bot: SpawnScanBody, options: { minWaitMs?: numb
       const ring = loadedRing(bot);
       const summary = await scanWorld(bot, { sliceMs: options.sliceMs, stop: () => mine !== generation });
       if (!summary || mine !== generation) return;
-      const { longestSliceMs, ...kept } = summary;
+      const { longestSliceMs, longestSliceWords, ...kept } = summary;
       const expected = view !== null ? (2 * view + 1) ** 2 : null;
       const loaded = `読み込み ${summary.chunks} チャンク・半径 ${ring.radius} チャンク（約 ${summary.reach}m）${expected ? `・描画の距離 ${view}（${expected} チャンクの ${Math.round((100 * summary.chunks) / expected)}%）` : '・描画の距離は不明'}・待ち ${(waitedMs / 1000).toFixed(1)} 秒`;
       bot.worldScan = { ...kept, text: `${kept.text}（${loaded}）`, rows: [`範囲 ${loaded}`, ...kept.rows].slice(0, MAX_ROWS), radiusChunks: ring.radius,
         ...(view !== null ? { viewDistance: view } : {}), waitedMs: Math.round(waitedMs), trigger, at: new Date(now()).toISOString(), dimension, center };
-      bot.worldScanCost = { ms: summary.ms, longestSliceMs };
-      options.log?.(`world scan (${trigger}) ${summary.chunks} chunks radius ${ring.radius} view ${view ?? '?'} waited ${Math.round(waitedMs)} ms, ${summary.ms} ms, longest slice ${longestSliceMs} ms, ${summary.rows.length} rows`);
+      bot.worldScanCost = { ms: summary.ms, longestSliceMs, ...(longestSliceWords ? { longestSliceWords } : {}) };
+      options.log?.(`world scan (${trigger}) ${summary.chunks} chunks radius ${ring.radius} view ${view ?? '?'} waited ${Math.round(waitedMs)} ms, ${summary.ms} ms, longest slice ${longestSliceMs} ms (${longestSliceWords ?? '?'}), ${summary.rows.length} rows`);
     } catch (error) {
       options.log?.(`world scan failed: ${String((error as Error)?.message ?? error).slice(0, 120)}`);
     }

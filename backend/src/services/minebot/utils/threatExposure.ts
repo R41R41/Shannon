@@ -158,6 +158,32 @@ export function exposedByOpening<T extends ExposedEntity>(bot: ExposureBot, enti
   });
 }
 
+/**
+ * r7: whether `entity` sees a body standing at `feet` (the centre of its feet): a line from its eyes to the body's eye or chest with nothing
+ * solid between, read from the blocks now. The cover reflex's test for a shooter's line of fire (where the body is, and where it could go).
+ */
+export function seesBodyAt(bot: ExposureBot, entity: ExposedEntity, feet: Vec3, solidAt?: (x: number, y: number, z: number) => boolean): boolean {
+  if (!entity.position || typeof (entity.position as Partial<Vec3>).offset !== 'function') return false;
+  const eyes = entity.position.offset(0, (entity.height ?? 1.8) * 0.85, 0);
+  // `solidAt` (a reader over the chunks' states, no Block made per cell) when the caller has one; else the body's blockAt.
+  const closed = solidAt ?? (typeof bot.blockAt === 'function' ? (x: number, y: number, z: number) => solid(bot, x, y, z) : null);
+  if (!closed) return false;
+  return lineOpen(closed, eyes, feet.offset(0, 1.62, 0)) || lineOpen(closed, eyes, feet.offset(0, 0.9, 0));
+}
+/** clearLine over a `closed` test, each cell read once along the line. */
+function lineOpen(closed: (x: number, y: number, z: number) => boolean, from: Vec3, to: Vec3): boolean {
+  const steps = Math.max(1, Math.ceil(from.distanceTo(to) / RAY_STEP));
+  let lastX = NaN, lastY = NaN, lastZ = NaN;
+  for (let i = 1; i < steps; i++) {
+    const t = i / steps;
+    const x = Math.floor(from.x + (to.x - from.x) * t), y = Math.floor(from.y + (to.y - from.y) * t), z = Math.floor(from.z + (to.z - from.z) * t);
+    if (x === lastX && y === lastY && z === lastZ) continue;
+    lastX = x; lastY = y; lastZ = z;
+    if (closed(x, y, z)) return false;
+  }
+  return true;
+}
+
 /** A hostile that can neither see nor reach the body is not a threat for now. */
 export function isExposedTo(bot: ExposureBot, entity: ExposedEntity, now = Date.now()): boolean {
   return threatExposure(bot, entity, now) !== 'sealed';

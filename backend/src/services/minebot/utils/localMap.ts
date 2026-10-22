@@ -30,6 +30,11 @@ export interface MapBlock {
   open?: boolean;
   /** `symbolFor`'s answer, kept by the reader that shares one MapBlock per block state (it is a function of the fields above). */
   symbol?: string;
+  /**
+   * r7: the top of the block's collision box in its cell, when it is not a full one (a slab 0.5, soul sand 0.875, a carpet 0.0625, a fence
+   * or a wall 1.5). Absent: 1 for a solid block. The walk's rules (utils/walkRules) read it as the route search does.
+   */
+  top?: number;
 }
 export type BlockReader = (x: number, y: number, z: number) => MapBlock | null;
 export interface Cell { x: number; y: number; z: number }
@@ -519,6 +524,7 @@ function blockAtReader(bot: MapBody): BlockReader {
     if (!block) return null;
     const name = String(block.name);
     const out: MapBlock = { name, solid: block.boundingBox === 'block' };
+    if (out.solid) { const top = topOfShapes(block.shapes); if (top !== undefined && top !== 1) out.top = top; }
     if (DOORLIKE.test(name)) {
       try { const open = block.getProperties?.()?.open; out.open = open === true || open === 'true'; } catch { out.open = false; }
     }
@@ -531,6 +537,24 @@ function blockAtReader(bot: MapBody): BlockReader {
     }
     return out;
   };
+}
+
+/** The top of a collision box's shapes (their highest y), or undefined when there are none. */
+function topOfShapes(shapes: unknown): number | undefined {
+  if (!Array.isArray(shapes) || !shapes.length) return undefined;
+  let top = -Infinity;
+  for (const shape of shapes) if (Array.isArray(shape) && Number.isFinite(shape[4])) top = Math.max(top, shape[4]);
+  return Number.isFinite(top) ? top : undefined;
+}
+/** The same for a block state from the registry's collision shapes (what prismarine-block reads for a Block), without making a Block. */
+function stateTop(registry: any, definition: any, stateId: number): number | undefined {
+  try {
+    const table = registry?.blockCollisionShapes;
+    const id = table?.blocks?.[definition.name];
+    if (id === undefined) return undefined;
+    const shapeId = Array.isArray(id) ? id[stateId - (definition.minStateId ?? stateId)] ?? id[0] : id;
+    return topOfShapes(table.shapes?.[shapeId]);
+  } catch { return undefined; }
 }
 
 /** What the map knows of each block state, by state id (a state fixes the name, the box, a fluid's level, a frame's eye): one MapBlock shared by every cell of it. Per registry. */
@@ -566,8 +590,9 @@ function stateIdReader(bot: MapBody, fallback: BlockReader): BlockReader | null 
     if (!definition) return fallback(x, y, z);
     const name = String(definition.name);
     // The fluids and the frame carry their level / eye in the state: read the way it always was, once.
-    const made = name === 'water' || name === 'lava' || name === 'end_portal_frame' || DOORLIKE.test(name) ? fallback(x, y, z) : { name, solid: definition.boundingBox === 'block' };
+    const made: MapBlock | null = name === 'water' || name === 'lava' || name === 'end_portal_frame' || DOORLIKE.test(name) ? fallback(x, y, z) : { name, solid: definition.boundingBox === 'block' };
     if (!made) return null;
+    if (made.solid && made.top === undefined) { const top = stateTop(registry, definition, stateId); if (top !== undefined && top !== 1) made.top = top; }
     made.symbol = symbolFor(made);
     states.set(stateId, made);
     return made;
@@ -598,11 +623,24 @@ export function creatureCells(bot: MapBody, range = 12): Map<string, string> {
   return cells;
 }
 
-/** The feet cell of a body. */
+/**
+ * The feet cell of a body: the cell it stands in. r7 (runs 30, 31: walks in the fortress): on a block lower than a full one (a slab, a
+ * stair's step, soul sand, farmland, a path, a chest, a carpet) the position is inside that block's own cell (y 64.5 on a slab at 64), and
+ * the feet cell was taken as the slab's: the walk's start, probe path's start and "under the feet" were a cell too low, and a walk to the
+ * cell on the slab was "not arrived" while the body stood there. The route search (mineflayer-pathfinder) takes the cell above such a block
+ * for a body on the ground; so does this. In the air nothing changes.
+ */
 export function feetCell(bot: MapBody): Cell | null {
   const position = bot.entity?.position;
   if (!position) return null;
-  return { x: Math.floor(position.x), y: Math.floor(position.y + 1e-3), z: Math.floor(position.z) };
+  const x = Math.floor(position.x), z = Math.floor(position.z);
+  let y = Math.floor(position.y + 1e-3);
+  if (position.y - y > 1e-3 && bot.entity?.onGround !== false && typeof bot.blockAt === 'function') {
+    let block: any = null;
+    try { block = bot.blockAt(new Vec3(x, y, z), false); } catch { block = null; }
+    if (block?.boundingBox === 'block') y++;
+  }
+  return { x, y, z };
 }
 
 /** The shortest time between two drawings of the map (the contract: at most every 500 ms). */

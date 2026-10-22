@@ -11,7 +11,11 @@ const log = createLogger('Minebot:ReflexLedger');
  * It only reports. It never starts a reflex and never issues a command.
  */
 /** budget: not a reflex but the floor saying it has stopped trying for a while (the allowance is used up, or a reflex keeps failing). */
-export type ReflexKind = 'retreat' | 'eat' | 'armor' | 'flee' | 'pickup' | 'budget' | 'shield' | 'fireball' | 'knock' | 'lava' | 'breath';
+/**
+ * cover (r7): a hand that cut a shooter's line while burning (floorReflexes `coverChoice`); cover_none: burning in the line with no such hand
+ * to make (a fact only: it does not stop an act, which may be what takes the body out).
+ */
+export type ReflexKind = 'retreat' | 'eat' | 'armor' | 'flee' | 'pickup' | 'budget' | 'shield' | 'fireball' | 'knock' | 'lava' | 'breath' | 'cover' | 'cover_none';
 export type ReflexOutcome = 'done' | 'cut' | 'failed';
 export interface ReflexEntry {
   seq: number; at: number; kind: ReflexKind; detail: string; outcome: ReflexOutcome;
