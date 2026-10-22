@@ -38,6 +38,17 @@ export interface CommonFcaControlOptions {
   speech?: LiveSpeechCourier;
 }
 const log = createLogger('Minebot:CommonFcaControl');
+/**
+ * r10 (run 34): the API hands the body one command in a reply, and a receipt reaches it with the next poll, one poll period (200 ms) after the
+ * command ended. A step's four or five probes (sight, around, column, path ...) therefore took 200 to 400 ms each, one after the other, and the
+ * fifth passed the one second the head waits for them: the head cancelled the ones unanswered and closed the step with their commands unsettled
+ * (FCA_BODY_OUTCOME_UNKNOWN, seven times, then a stop). A command that ends has its receipt sent at once (the next poll is made now, not in
+ * 200 ms), and for HOT_WINDOW_MS after a command came or ended the polls come every HOT_POLL_MS (a probe asked for just after an act ended was
+ * picked up up to 200 ms late). A hot poll reuses an observation made less than OBSERVATION_REUSE_MS ago (the loop makes one every 100 ms).
+ */
+const HOT_POLL_MS = 50;
+const HOT_WINDOW_MS = 1200;
+const OBSERVATION_REUSE_MS = 100;
 /** One poll's wait for the API; a slower reply is a failed poll, not lost contact. */
 const POLL_TIMEOUT_MS = 5000;
 /** How long the API may stay silent before running commands are stopped (an API restart takes about this long). */
@@ -61,6 +72,10 @@ export class CommonFcaControlLoop {
   private observation: BodyObservation;
   private polling = false;
   private closed = false;
+  /** r10: the next poll is made at once (a receipt is ready); polls are hot (every HOT_POLL_MS) until this wall-clock time; when the observation was made. */
+  private quick = false;
+  private hotUntil = 0;
+  private observedAt = 0;
   /** The catalog the API last acknowledged; a different one (the task changed kind) is sent again, whole. */
   private catalogSent: readonly MinecraftSkillDefinition[] | null = null;
   private readonly lifetime = new AbortController();
@@ -85,18 +100,42 @@ export class CommonFcaControlLoop {
     // Independent of a provider/skill/HTTP wait: the body keeps observing.
     this.observationTimer = setInterval(() => {
       this.observation = this.options.actuator.observe();
+      this.observedAt = performance.now();
       try { this.options.actuator.events?.tick(); } catch { /* events never stop the body observing */ }
     }, 100);
     this.observationTimer.unref();
-    const tick = async () => { try { await this.poll(); } catch { /* pending receipts remain until acknowledged */ }
-      finally { if (!this.closed) { this.timer = setTimeout(tick, this.options.pollMilliseconds ?? 200); this.timer.unref(); } } };
-    void tick();
+    void this.tick();
   }
-  async poll(): Promise<void> {
+  private readonly tick = async (): Promise<void> => {
+    // A poll made at once or in a hot window reuses a fresh observation (the observation is not what the poll is for).
+    const reuse = this.quick || performance.now() < this.hotUntil;
+    this.quick = false;
+    let answered = false;
+    try { await this.poll(reuse); answered = true; } catch { /* pending receipts remain until acknowledged */ }
+    finally {
+      if (!this.closed) {
+        const base = this.options.pollMilliseconds ?? 200;
+        this.schedule(!answered ? base : this.quick ? 0 : performance.now() < this.hotUntil ? Math.min(base, HOT_POLL_MS) : base);
+      }
+    }
+  };
+  private schedule(delay: number): void {
+    clearTimeout(this.timer);
+    this.timer = setTimeout(this.tick, delay);
+    this.timer.unref();
+  }
+  /** A command came or ended: polls are hot for a while; with `receipt`, the next poll is now (the receipt goes out and the next command may come in). */
+  private hurry(receipt: boolean): void {
+    this.hotUntil = performance.now() + HOT_WINDOW_MS;
+    if (!receipt || this.closed || !this.timer) return;
+    this.quick = true;
+    if (!this.polling) this.schedule(0);
+  }
+  async poll(reuse = false): Promise<void> {
     if (this.closed || this.polling) return;
     this.polling = true;
     try {
-      this.observation = this.options.actuator.observe();
+      if (!(reuse && performance.now() - this.observedAt < OBSERVATION_REUSE_MS)) { this.observation = this.options.actuator.observe(); this.observedAt = performance.now(); }
       const sent = [...this.receipts.values()].slice(0, 16);
       const catalog = this.options.actuator.skills;
       const now = (this.options.now ?? Date.now)();
@@ -168,7 +207,11 @@ export class CommonFcaControlLoop {
     const key = valid ? identity(command) : '';
     const sessionKey = `${key}:${context?.sessionId}`;
     const historicalCleanup = cleanup && this.closedSessions.has(sessionKey);
-    if (!valid || (!cleanup && (this.closedSessions.has(sessionKey) || this.held || this.active.size > 0 || this.owner !== null && this.owner !== key
+    // r10: a read-only command (a probe) holds nothing of the body: it runs beside what its own owner has running, and with others like it
+    // (the API may send several in one reply). Never beside another owner's, a held body or a cleanup.
+    const readOnly = valid && command.kind === 'skill' && this.options.actuator.skills.find(skill => skill.name === command.skill)?.readOnly === true;
+    const beside = readOnly && this.owner === key;
+    if (!valid || (!cleanup && (this.closedSessions.has(sessionKey) || this.held || (this.active.size > 0 && !beside) || this.owner !== null && this.owner !== key
         || command.lease.generation < (this.leaseGenerations.get(command.lease.id) ?? -1)))
       || cleanup && this.owner !== null && this.owner !== key && !this.closedSessions.has(sessionKey)) {
       // A command refused for its own shape (stale connection, a deadline out of reach) never took the body: say so, so the
@@ -176,9 +219,11 @@ export class CommonFcaControlLoop {
       const refused: Receipt = { id: command.id, connectionId: this.connectionId, outcome: 'failed',
         inputsReleased: !cleanup && !valid && !this.held && this.active.size === 0, observedAt: new Date(now).toISOString(), result: 'BODY_COMMAND_REFUSED' };
       this.receipts.set(command.id, refused);
+      this.hurry(true);
       if (valid) this.watch(() => this.options.observer?.commandEnded?.(command, refused));
       return;
     }
+    this.hurry(false);
     if (!cleanup) { this.owner = key; this.leaseGenerations.set(command.lease.id, command.lease.generation); }
     else if (!this.closedSessions.has(sessionKey)) for (const item of this.active.values()) item.controller.abort('owner_release');
     const controller = new AbortController();
@@ -202,9 +247,11 @@ export class CommonFcaControlLoop {
         // remains unknown until a fresh cleanup confirms the whole body is quiescent.
         if (!receipt.inputsReleased) this.held = true;
         else if (cleanup) this.held = false;
-        if (!this.held && receipt.inputsReleased && this.owner === key) this.owner = null;
+        // (Not while another command of this owner still runs beside it: the last one to end gives the owner back.)
+        if (!this.held && receipt.inputsReleased && this.owner === key && ![...this.active.keys()].some(id => id !== command.id)) this.owner = null;
       }
       this.receipts.set(command.id, receipt);
+      this.hurry(true);
       this.watch(() => this.options.observer?.commandEnded?.(command, receipt));
     }).finally(() => { clearTimeout(timeout); this.active.delete(command.id); });
     this.active.set(command.id, { controller, running });

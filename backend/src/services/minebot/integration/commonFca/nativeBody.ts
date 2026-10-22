@@ -2,7 +2,7 @@ import { Vec3 } from 'vec3';
 import { NativeGoalEvidence, GOAL_EVIDENCE_SKILL } from './goalEvidence.js';
 import { primitiveState, primitiveCandidates, executePrimitive } from './primitives.js';
 import { captureWorldObservation } from '../../cognition/worldFrame.js';
-import { floorActive, floorSilenced } from '../../utils/floorReflexes.js';
+import { floorActive, floorSilenced, reflexHeld } from '../../utils/floorReflexes.js';
 import { floorConfig } from '../../utils/floorConfig.js';
 import { linkWatchOf } from '../../utils/linkWatch.js';
 import type { ReflexLedger } from '../../utils/reflexLedger.js';
@@ -53,6 +53,10 @@ const SAFETY_RELEASE_WAIT_MS = 3000;
 const BREATH_RELEASE_WAIT_MS = 12_000;
 /** The wait for auto-swim ends at least this long before the command's deadline: the cleanup (300 ms) and the receipt follow it. */
 const RECEIPT_MARGIN_MS = 1500;
+/** r10: a command waits for a reflex that holds the body, polling this often; the reflex must stay let go this long (the flee's next segment); a command with less than REFLEX_MIN_RUN_MS left is not started. */
+const REFLEX_POLL_MS = 20;
+const REFLEX_GRACE_MS = 80;
+const REFLEX_MIN_RUN_MS = 1000;
 /** No command for this long, the dragon catalog goes back to the ordinary one (decisions between commands take seconds). */
 const DRAGON_CATALOG_IDLE_MS = 90_000;
 /**
@@ -136,6 +140,9 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
       equipped: this.bot.heldItem?.name ?? null, window: this.bot.currentWindow?.type ?? null,
       danger: (this.bot.health ?? 20) <= 8 || (this.bot.oxygenLevel ?? 20) <= 6 || (world.nearbyThreats ?? []).some(t => t.distance <= 5 && t.canReachMe !== false),
       floorActive: floorActive(this.bot),
+      // r10: the reflex that holds the body now (`floor-flee`, `floor-last-stand`, `floor-cover` ...), also in the gap between two of its hands, or
+      // null. An act that comes now waits for it (see `afterReflex`); the head need not send one until this is null.
+      reflexHeld: reflexHeld(this.bot),
       // What the floor's budget is holding back right now (arrow, eat, armor, budget), or null: why no reflex came.
       floorSilenced: floorSilenced(this.bot),
       // Who holds the body in a fight: `head` (the planner's fight skill runs, or began within 20 s with its target near: the floor does
@@ -183,8 +190,11 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
     const limit = command.kind === 'skill' ? this.runnable.find(skill => skill.name === command.skill)?.maxDurationMs ?? 120_000 : 120_000;
     const milliseconds = Math.min(limit, Date.parse(command.deadlineAt) - this.now());
     if (!Number.isFinite(milliseconds) || milliseconds <= 0) throw Error('BODY_DEADLINE');
-    this.goalEvidence.begin(command);
-    const cancelled = () => this.goalEvidence.cancel(command.context);
+    // r10: a read-only command that runs beside another (a probe beside an act) is no part of the goal's evidence: its start would stamp
+    // the evidence with its id, and its cancel would clear the attacks the act made.
+    const beside = this.running > 1 && command.kind === 'skill' && this.runnable.find(skill => skill.name === command.skill)?.readOnly === true;
+    if (!beside) this.goalEvidence.begin(command);
+    const cancelled = () => { if (!beside) this.goalEvidence.cancel(command.context); };
     signal.addEventListener('abort', cancelled, { once: true });
     try {
       if (command.kind === 'skill' && command.skill === GOAL_EVIDENCE_SKILL.name) {
@@ -229,8 +239,28 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
       if (command.kind === 'skill' && !readOnly) this.events?.begin(command);
       const ledger: ReflexLedger | undefined = this.reflexTag ? this.bot.reflexLedger : undefined;
       const mark = ledger?.mark() ?? 0;
+      // r10 (run 34, +576: an urgent act met a flee that was digging down; it waited for the lock behind the reflex, was handed the lock in
+      // the moment between two of the flee's segments and cut by the next, and its receipt came 4 s later, at its deadline, bare): a command
+      // that moves the body and comes while a reflex holds it waits for the reflex to let go, and starts then (the time left of its deadline
+      // is its time); the receipt says it did. If the reflex does not let go in time the command is not started, and that is said.
+      let lead = '';
+      let runMs = milliseconds;
+      if (!readOnly && command.kind === 'skill') {
+        const held = await this.afterReflex(signal, Date.parse(command.deadlineAt));
+        if (held) {
+          const short = held.by.replace(/^constant:/u, '').replace(/^(floor|auto)-/u, '');
+          const who = `反射 ${short}（${reflexLabel(held.by)}）`, waited = `${(held.ms / 1000).toFixed(1)}秒`;
+          if (held.outcome === 'aborted') return this.receipt(command, 'cancelled', true, `${who}の最中に取り消された（始める前。${waited}待った。体は何も動かしていない）`);
+          if (held.outcome === 'late') {
+            return this.receipt(command, 'failed', true, `${who}の最中で、時間内に放されなかったため始められなかった（${waited}待った。体は何も動かしていない）。放された後に頼み直す`,
+              undefined, { failureType: 'interrupted_by_reflex', recoverable: true });
+          }
+          lead = `${who}の最中のため、放された後に始めた（待ち ${waited}）`;
+          runMs = Math.min(limit, Date.parse(command.deadlineAt) - this.now());
+        }
+      }
       const actStartedAt = Date.now();
-      const result = await withActionSignal(this.bot, signal, () => executeAction(this.bot, capability, milliseconds,
+      const result = await withActionSignal(this.bot, signal, () => executeAction(this.bot, capability, runMs,
         work, { waitForQuiescence: true }));
       let outcome: Receipt['outcome'] = signal.aborted ? 'cancelled' : result.success ? 'completed' : 'failed';
       const released = readOnly || await this.release(AbortSignal.timeout(300), Date.parse(command.deadlineAt) - RECEIPT_MARGIN_MS);
@@ -255,14 +285,37 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
       // "interrupted", so the act's report is told instead, with the reflex's note and the map as it is after the reflex let go.
       const act = capability === 'act' ? takeActReport(this.bot, actStartedAt) : null;
       if (act) {
-        text = renderActReport(this.bot, act, note);
+        text = renderActReport(this.bot, act, note, lead || undefined);
         if (outcome === 'failed' && !failure) failure = { failureType: act.failureType ?? 'failed', recoverable: true };
         if (outcome === 'failed' && act.stoppedBy === 'reflex') failure = { failureType: 'interrupted_by_reflex', recoverable: true };
         return this.receipt(command, outcome, released, text, undefined, failure);
       }
+      if (lead) text = text ? `${lead}。${text}` : lead;
       if (note) text = `${(text ?? '').slice(0, 16_000 - note.length - 1)}${text ? ' ' : ''}${note}`;
       return this.receipt(command, outcome, released, text, undefined, failure);
     } finally { signal.removeEventListener('abort', cancelled); this.events?.end(command.id); }
+  }
+  /**
+   * r10: waits while a reflex holds the body (`reflexHeld`), until it lets go and stays let go for REFLEX_GRACE_MS (the flee's next segment
+   * follows its last within a tick), the command's deadline is within REFLEX_MIN_RUN_MS (`late`), or the command is cancelled (`aborted`).
+   * Null when no reflex held the body to begin with; `free` otherwise, with the reflex first met (or last seen) and how long it was waited for.
+   */
+  private async afterReflex(signal: AbortSignal, deadline: number): Promise<{ by: string; ms: number; outcome: 'free' | 'late' | 'aborted' } | null> {
+    let by = reflexHeld(this.bot);
+    if (!by) return null;
+    const began = Date.now(), until = deadline - REFLEX_MIN_RUN_MS;
+    for (;;) {
+      if (signal.aborted) return { by, ms: Date.now() - began, outcome: 'aborted' };
+      if (this.now() >= until) return { by, ms: Date.now() - began, outcome: 'late' };
+      const held = reflexHeld(this.bot);
+      if (held) by = held;
+      else {
+        await delay(REFLEX_GRACE_MS);
+        if (!reflexHeld(this.bot)) return { by, ms: Date.now() - began, outcome: 'free' };
+        continue;
+      }
+      await delay(REFLEX_POLL_MS);
+    }
   }
   private receipt(command: Command, outcome: Receipt['outcome'], inputsReleased: boolean, result?: string, image?: Receipt['image'],
     failure?: Pick<Receipt, 'failureType' | 'recoverable'>): Receipt {

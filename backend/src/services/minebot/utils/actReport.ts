@@ -97,12 +97,14 @@ export function stoppedLine(reason: string | undefined, text: string, cellNow?: 
  * The receipt's text: the contract's ActResult as JSON (16,000 characters at most: the map is left out when it would not fit). `note` is
  * what the reflexes did meanwhile (the reflex ledger's), added to `stoppedWhy` when a reflex stopped the act.
  */
-export function renderActReport(bot: any, report: ActReport, note?: string | null): string {
+export function renderActReport(bot: any, report: ActReport, note?: string | null, afterReflex?: string): string {
   const at = feetCell(bot) ?? { x: 0, y: 0, z: 0 };
   let stoppedWhy = report.stoppedWhy;
   if (report.stoppedBy === 'reflex') stoppedWhy = clip(`${note ? note.replace(/^［体の反射: |］$/gu, '') : stoppedWhy ?? '反射'} 今 (${at.x},${at.y},${at.z})`, 200);
   const result: Record<string, unknown> = {
     v: 1, ok: report.ok, done: report.done, of: report.of,
+    // r10: the act came while a reflex held the body and began when it let go ("反射 flee（低体力の逃走）の最中のため、放された後に始めた（待ち 2.3秒）").
+    ...(afterReflex ? { afterReflex: clip(afterReflex, 200) } : {}),
     ...(report.ok ? {} : { partial: report.done > 0 }),
     ...(report.stoppedBy ? { stoppedBy: report.stoppedBy } : {}), ...(stoppedWhy ? { stoppedWhy } : {}),
     lines: report.lines, at, hp: Math.round((bot.health ?? 0) * 10) / 10, food: bot.food ?? 0,

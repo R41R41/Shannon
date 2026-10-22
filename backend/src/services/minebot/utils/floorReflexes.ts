@@ -1,7 +1,7 @@
 import { isLlmCentric } from './llmCentric.js';
 import { Vec3 } from 'vec3';
 import { createLogger } from '../../../utils/logger.js';
-import { actionLeaseStatus, activeActionCapabilities, createMotorPort, executeAction, hasActiveSafetyLease, physicalActionBusy, physicalActionCapabilities, preemptLowerPriorityActions } from '../execution/ActionExecution.js';
+import { actionLeaseStatus, activeActionCapabilities, createMotorPort, executeAction, hasActiveSafetyLease, physicalActionBusy, physicalActionCapabilities, preemptLowerPriorityActions, safetyLeaseCapabilities } from '../execution/ActionExecution.js';
 import { isHeadCombatActive } from './combatOwner.js';
 import { creeperLit } from './creeperFuse.js';
 import { FALLBACK_FOOD_POINTS, RAW_FOOD } from '../constantSkills/autoEat.js';
@@ -11,7 +11,7 @@ import { floorConfig, type FloorConfig } from './floorConfig.js';
 import { EAT_CRITICAL_FOOD, eatIsCritical, FloorBudget, type BudgetKind } from './floorBudget.js';
 import { isThreatEntity, type ThreatBody } from './hostileMobHints.js';
 import { ensureReflexLedger, type ReflexKind, type ReflexOutcome } from './reflexLedger.js';
-import { seesBodyAt, threatExposure } from './threatExposure.js';
+import { openSightLines, seesBodyAt, threatExposure } from './threatExposure.js';
 import { holdsWater } from './waterBlocks.js';
 import { bodyReader, feetCell } from './localMap.js';
 import { climbRise, enterable, MAX_CLIMB, passable, standable } from './walkRules.js';
@@ -163,6 +163,8 @@ export interface FloorBody {
   reflexLedger?: { note(kind: ReflexKind, detail: string, outcome?: ReflexOutcome): unknown };
   /** The body's skills: the shelter a refused flee falls back on (build-around-self, tower-up). Absent in most tests. */
   instantSkills?: { getSkill(name: string): unknown };
+  /** r10: the protocol client, for the server's `damage_event` (who shot, and with what); absent in tests that send none. */
+  _client?: { on?(event: string, listener: (packet: any) => void): unknown };
 }
 export interface RetreatState {
   engaged: boolean; kind?: 'creeper' | 'arrow'; from?: Vec3; origin?: Vec3; ticks: number; cooldown: number; engagements: number;
@@ -209,6 +211,8 @@ export interface FloorState {
   /** LLM-centric mode only: set by a refused flee, the tick makes the last stand (`lastStandChoice`) instead of the shelter; at most once in LAST_STAND_GAP_MS. */
   lastStandWanted?: boolean;
   lastStandAt?: number;
+  /** r10: the clock the floor runs on (a test's), for `reflexHeld`. */
+  clock?: () => number;
   /** The kind of the last stand that failed: the next one tries another way. */
   lastStandFailed?: LastStand['kind'];
   /** When the retreat from a lit creeper found no way away (LLM-centric): the creeper's last stand is wanted until CORNERED_WAIT_MS after. */
@@ -216,10 +220,18 @@ export interface FloorState {
   /** Cooldowns, the allowance and the stuck latch of the arrow step-aside, the meal and the armour change (`floorBudget.ts`); absent when denied. */
   budget?: FloorBudget;
   /** r7, the cover (LLM-centric): the episode (its digs, when its last hand ended), the next look, the last "no hand" note, and the health seen. */
-  cover?: { since: number; digs: number; lastEnd: number };
+  cover?: { since: number; digs: number; lastEnd: number; /** r10: the blocks put on a shooter's line in this episode. */ lines?: number };
   coverNextAt?: number;
   coverNotedAt?: number;
   healthSeen?: { last: number; fellAt: number };
+  /**
+   * r10, the shots that landed (run 34: a piglin's crossbow, 6 times in 14 s, no reflex): a hit the server names as a projectile with a
+   * shooter behind it (`damage_event`: cause and direct entity differ), newest last; `damageAt` is when the server named any hit, `falls`
+   * when health fell. A fall the server named nothing for is a shot only when a shooter that sees the body stands out of a blow's reach.
+   */
+  shots?: Array<{ at: number; shooter: number }>;
+  damageAt?: number[];
+  falls?: number[];
   /** r8, the melee hand (LLM-centric): the episode (hands made, when the last ended), the next look, the last "no hand" note. */
   melee?: { since: number; hands: number; lastEnd: number; /** r9: the hands that were blows (their own allowance). */ hits?: number };
   meleeNextAt?: number;
@@ -452,6 +464,30 @@ export function floorActive(bot: object): boolean {
   const b = bot as { floorReflexes?: FloorState; lavaReflex?: { engaged?: boolean }; breathingReflex?: { engaged?: boolean } };
   return b.floorReflexes?.retreat.engaged === true || !!b.floorReflexes?.busy || b.lavaReflex?.engaged === true
     || b.breathingReflex?.engaged === true || hasActiveSafetyLease(bot);
+}
+
+/**
+ * r10 (run 34, +576): the reflex that holds the body now, as its action's name (`floor-flee`, `floor-cover`, `auto-swim` ...), or null. A safety
+ * lease; a floor reflex that has begun and not ended (its hands are one lease each, the flee's segments follow one another with a tick
+ * between, so the lease alone lets go for a moment between two); the lava and breathing reflexes. An act that comes while this holds waits
+ * for it (`NativeCommonFcaBody`), rather than take the lock in the moment between two segments and be cut by the next.
+ */
+export function reflexHeld(bot: object): string | null {
+  const caps = safetyLeaseCapabilities(bot);
+  if (caps.length) return caps[0];
+  const b = bot as { floorReflexes?: FloorState; lavaReflex?: { engaged?: boolean }; breathingReflex?: { engaged?: boolean } };
+  const state = b.floorReflexes;
+  if (state?.retreat.engaged) return 'floor-retreat';
+  if (state?.fleeEpisode) return 'floor-flee';
+  if (state?.busy) return state.busy === 'eat' ? 'floor-eat' : state.busy === 'armor' ? 'floor-armor' : 'floor-flee';
+  // The last stand at low health repeats once in LAST_STAND_GAP_MS (run 34 +576: eleven hands in 12 s, a hand each second): the gap between two
+  // hands is the same reflex, as long as the health is low. An act that began in the gap was never handed the body (the next hand came first).
+  const stood = state?.lastStandAt;
+  if (state && stood !== undefined && ((bot as { health?: number }).health ?? 20) <= FLEE_HEALTH
+    && (state.clock ?? Date.now)() - stood < LAST_STAND_GAP_MS + LAST_STAND_HOLD_MARGIN_MS) return 'floor-last-stand';
+  if (b.lavaReflex?.engaged === true) return 'lava-escape';
+  if (b.breathingReflex?.engaged === true) return 'auto-swim';
+  return null;
 }
 
 /**
@@ -1015,6 +1051,8 @@ const LAST_STAND_RANGE = 3.2;
 const LAST_STAND_HITS = 2;
 const LAST_STAND_HIT_GAP_MS = 600;
 const LAST_STAND_GAP_MS = 1500;
+/** r10: `reflexHeld` holds this long past the gap (the next hand comes on the first tick after it). */
+const LAST_STAND_HOLD_MARGIN_MS = 150;
 /** A creeper's fuse is a second and a half: a cornered body that cannot make its stand by then has no stand to make. */
 const CORNERED_WAIT_MS = 1500;
 /** The ledger keeps this much of the last stand's detail (the usual 40 cannot hold the place, the health and, r6, the threat that reaches). */
@@ -1208,14 +1246,33 @@ const COVER_EPISODE_MS = 4000;
 const COVER_MAX_DIGS = 3;
 /** "No hand to make" is told at most this often. */
 const COVER_NOTE_GAP_MS = 5000;
-const COVER_TIMEOUT_MS: Record<Cover['kind'], number> = { step: 3000, seal: 3000, dig: 5000 };
+const COVER_TIMEOUT_MS: Record<Cover['kind'], number> = { step: 3000, seal: 3000, line: 3000, dig: 5000 };
 const COVER_DETAIL_MAX = 160;
+/**
+ * r10 (run 34, +488 to +502): a piglin with a crossbow stood 5.9 to 7 m off, in sight of a body in a rock tunnel, and hit it six times in 14 s
+ * (health 20 to 11.3). The cover moved only for a burning body, the melee hand only for an enemy within 4 m; the line was cut 29 s after the
+ * first hit, by the planner's third try. The cover now also starts when the body was shot twice in SHOT_WINDOW_MS (the server's damage event
+ * names a projectile and who shot it) and a shooter that sees it stands in reach: the same one minimal hand, and (only then) one more, a
+ * block put on the line a cell or two from the body (`line`), counted by the sight lines it closes.
+ */
+const SHOT_WINDOW_MS = 5000;
+const SHOT_HITS = 2;
+/** A hit the server named nothing for is a shot only when it lands within this of the fall in health. */
+const SHOT_NAMED_WITHIN_MS = 400;
+const SHOT_NAMED_WAIT_MS = 150;
+/** Beside COVER_SHOOTERS: kinds that shoot from afar with a crossbow; their reach is that of a bolt in the air. */
+const SHOT_EXTRA_KINDS: Readonly<Record<string, number>> = { piglin: 32, pillager: 32 };
+/** A block on the line is put at most this far from the body's eye, and at most this many in an episode. */
+const LINE_REACH = 2.5;
+const COVER_MAX_LINES = 4;
 const COVER_STEP_DIRS: ReadonlyArray<readonly [number, number]> = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
 
 export interface CoverShooter { entity: FloorEntity; distance: number }
 export type Cover =
   | { kind: 'step'; to: { x: number; y: number; z: number }; detail: string }
   | { kind: 'seal'; cell: { x: number; y: number; z: number }; block: string; detail: string }
+  /** r10: a block in a cell on the shooters' line, a cell or two from the body (shot at from afar). */
+  | { kind: 'line'; cell: { x: number; y: number; z: number }; block: string; detail: string }
   | { kind: 'dig'; cell: { x: number; y: number; z: number }; detail: string };
 
 const centreOf = (cell: { x: number; y: number; z: number }) => new Vec3(cell.x + 0.5, cell.y, cell.z + 0.5);
@@ -1249,11 +1306,55 @@ export function shooterWords(feet: Vec3, shooters: CoverShooter[]): string {
   }).join('、');
 }
 
+/** r10: the shooter behind a hit the server names as a projectile's (`damage_event`: the cause and the direct entity differ), or null. Ids are the server's plus one. */
+export function projectileShooter(packet: { sourceCauseId?: number; sourceDirectId?: number } | null | undefined): number | null {
+  const cause = Number(packet?.sourceCauseId ?? 0), direct = Number(packet?.sourceDirectId ?? 0);
+  return cause > 0 && direct > 0 && direct !== cause ? cause - 1 : null;
+}
 /**
- * The cover's hand now (`(a)` a step, `(b)` a block over the head, `(c)` a step down), or null with the facts of why none: the cells round
- * it all seen or not to be stood in, the hole not sealable, the cell under the feet not to be dug. `digs` is how many the episode has made.
+ * r10: the shots that landed in the last SHOT_WINDOW_MS and the shooters to cover from. A hit the server named (a projectile with a shooter)
+ * counts with that shooter. A fall in health the server named nothing for (no packet, an older server) counts only when a shooter (the
+ * cover's kinds, a piglin or a pillager) that sees the body stands out of a blow's reach and no melee enemy is within it.
  */
-export function coverChoice(bot: FloorBody, shooters: CoverShooter[], digs = 0): { cover: Cover | null; why: string } {
+export function recentShots(bot: FloorBody, state: FloorState, feet: Vec3, t: number, fought?: (name: string) => boolean): { hits: number; shooters: CoverShooter[] } {
+  const shots = (state.shots ?? []).filter(shot => t - shot.at <= SHOT_WINDOW_MS);
+  // (A fall younger than the wait may still have its packet on the way.)
+  const unnamed = (state.falls ?? []).filter(at => t - at <= SHOT_WINDOW_MS && t - at >= SHOT_NAMED_WAIT_MS && !(state.damageAt ?? []).some(named => Math.abs(named - at) <= SHOT_NAMED_WITHIN_MS));
+  if (!shots.length && !unnamed.length) return { hits: 0, shooters: [] };
+  const found = new Map<number, CoverShooter>();
+  const keep = (entity: FloorEntity | undefined) => {
+    if (!entity?.position || entity === bot.entity || entity.id === undefined) return;
+    const name = String(entity.name ?? '').toLowerCase();
+    if (fought && fought(name)) return;
+    found.set(entity.id, { entity, distance: entity.position.distanceTo(feet) });
+  };
+  for (const shot of shots) keep(bot.entities?.[shot.shooter]);
+  let hits = shots.length;
+  if (unnamed.length) {
+    const near = others(bot).some(entity => entity.position.distanceTo(feet) <= MELEE_RANGE && isThreat(bot, entity) && COVER_SHOOTERS[String(entity.name ?? '').toLowerCase()] === undefined
+      && SHOT_EXTRA_KINDS[String(entity.name ?? '').toLowerCase()] === undefined);
+    const watchers: CoverShooter[] = [];
+    if (!near) {
+      for (const entity of others(bot)) {
+        const name = String(entity.name ?? '').toLowerCase(), reach = COVER_SHOOTERS[name] ?? SHOT_EXTRA_KINDS[name];
+        if (reach === undefined || (fought && fought(name))) continue;
+        const distance = entity.position.distanceTo(feet);
+        if (distance > MELEE_RANGE && distance <= reach) watchers.push({ entity, distance });
+      }
+    }
+    const seeing = watchers.length ? shootersSeeing(bot, watchers, feet) : [];
+    if (seeing.length) { hits += unnamed.length; for (const { entity } of seeing) keep(entity); }
+  }
+  return { hits, shooters: [...found.values()].sort((a, b) => a.distance - b.distance) };
+}
+
+/**
+ * The cover's hand now (`(a)` a step, `(b)` a block over the head, `(b')` r10, when shot at: a block on the shooters' line, `(c)` a step
+ * down), or null with the facts of why none: the cells round it all seen or not to be stood in, the hole not sealable, the cell under the
+ * feet not to be dug. `digs` is how many the episode has made. With `options.line` (the body is being shot at from afar), a block on the
+ * line that closes every open sight line is taken before the dig; one that closes some, only when no dig can be made.
+ */
+export function coverChoice(bot: FloorBody, shooters: CoverShooter[], digs = 0, options: { line?: boolean; lines?: number } = {}): { cover: Cover | null; why: string } {
   const feet = feetCell(bot as never);
   if (!feet || !shooters.length) return { cover: null, why: '射手がいない' };
   const read = bodyReader(bot as never);
@@ -1309,6 +1410,20 @@ export function coverChoice(bot: FloorBody, shooters: CoverShooter[], digs = 0):
     if (unseen(feet, sealed)) return { cover: { kind: 'seal', cell: over, block: block.name, detail: `頭の上 ${cellWords(over)} を ${block.name} で塞いだ` }, why: '' };
     sealWhy = '頭の上を塞いでも横から見える';
   }
+  // (b') r10, shot at from afar: one block on the shooters' line, a cell or two from the body, in the cell that closes the most sight lines.
+  let lineWhy = '', partial: { cell: { x: number; y: number; z: number }; before: number; left: number } | null = null;
+  if (options.line) {
+    if (!block) lineWhy = '置くブロックを持っていない';
+    else if ((options.lines ?? 0) >= COVER_MAX_LINES) lineWhy = `線上にはもう ${options.lines} 個置いた`;
+    else {
+      const found = lineChoice(bot, read, closed, watching, feet);
+      if (found && found.left === 0) {
+        return { cover: { kind: 'line', cell: found.cell, block: block.name, detail: `線上の ${cellWords(found.cell)} を ${block.name} で塞いだ` }, why: '' };
+      }
+      partial = found;
+      if (!found) lineWhy = '線上の 1 マスでは見える線が減らない（当てる面が無いか、すでに塞がっている）';
+    }
+  }
   // (c) The cell under the feet dug: the body goes down one, onto the cell under it (solid, not lava or magma); no lava beside or under
   // the dug cell (it would run in onto the body); at most COVER_MAX_DIGS in an episode.
   const terrain = bot as unknown as TerrainBody;
@@ -1326,7 +1441,54 @@ export function coverChoice(bot: FloorBody, shooters: CoverShooter[], digs = 0):
     if (lava) digWhy = `足元の隣 ${cellWords(lava)} が溶岩`;
     else return { cover: { kind: 'dig', cell: { x: feet.x, y: feet.y - 1, z: feet.z }, detail: `足元を掘って下がった ${cellWords(feet)}` }, why: '' };
   }
-  return { cover: null, why: `周り 2 マスに見えない立つ所が無い・${sealWhy}・${digWhy}` };
+  if (partial && block) {
+    return { cover: { kind: 'line', cell: partial.cell, block: block.name, detail: `線上の ${cellWords(partial.cell)} を ${block.name} で塞いだ（見える線 ${partial.before}→${partial.left}）` }, why: '' };
+  }
+  return { cover: null, why: `周り 2 マスに見えない立つ所が無い・${sealWhy}${lineWhy && lineWhy !== sealWhy ? `・${lineWhy}` : ''}・${digWhy}` };
+}
+
+/**
+ * r10: of the cells on the lines from the shooters' eyes to the body's eye and chest, within LINE_REACH of the body (air, not the body's own,
+ * with a solid face to set a block against), the one that leaves the fewest sight lines open when it is a block (nearest first among equals).
+ * Null when no cell closes any. The sight lines are counted (`openSightLines`): one block rarely closes both the eye's and the chest's.
+ */
+function lineChoice(bot: FloorBody, read: ReturnType<typeof bodyReader>, closed: (x: number, y: number, z: number) => boolean, watching: CoverShooter[],
+  feet: { x: number; y: number; z: number }): { cell: { x: number; y: number; z: number }; before: number; left: number } | null {
+  const at = centreOf(feet);
+  const origins = [at.offset(0, 1.62, 0), at.offset(0, 0.9, 0)];
+  const cells = new Map<string, { cell: { x: number; y: number; z: number }; near: number }>();
+  for (const { entity } of watching) {
+    const eyes = entity.position.offset(0, (entity.height ?? 1.8) * 0.85, 0);
+    for (const from of origins) {
+      const span = from.distanceTo(eyes);
+      if (span < 0.75) continue;
+      const step = eyes.minus(from).scaled(1 / span);
+      for (let s = 0.25; s <= LINE_REACH && s < span; s += 0.25) {
+        const p = from.plus(step.scaled(s));
+        const cell = { x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) };
+        if (cell.x === feet.x && cell.z === feet.z && (cell.y === feet.y || cell.y === feet.y + 1)) continue;
+        const key = `${cell.x},${cell.y},${cell.z}`, old = cells.get(key);
+        if (!old || s < old.near) cells.set(key, { cell, near: s });
+      }
+    }
+  }
+  const count = (solidAt: (x: number, y: number, z: number) => boolean) => watching.reduce((sum, { entity }) => {
+    try { return sum + openSightLines(bot as any, entity as any, at, solidAt); } catch { return sum; }
+  }, 0);
+  const before = count(closed);
+  if (before === 0) return null;
+  const placeable = [...cells.values()].filter(({ cell }) => {
+    const here = read(cell.x, cell.y, cell.z);
+    if (!here || !enterable(here) || isFluid(here.name)) return false;
+    return [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]].some(([dx, dy, dz]) => read(cell.x + dx, cell.y + dy, cell.z + dz)?.solid === true);
+  }).sort((a, b) => a.near - b.near).slice(0, 10);
+  let best: { cell: { x: number; y: number; z: number }; before: number; left: number } | null = null;
+  for (const { cell } of placeable) {
+    const left = count((x, y, z) => (x === cell.x && y === cell.y && z === cell.z) || closed(x, y, z));
+    if (left < before && (!best || left < best.left)) best = { cell, before, left };
+    if (left === 0) break;
+  }
+  return best;
 }
 
 /** Runs one hand of the cover as the work of a safety-lease action (`port` is the body's motor port). */
@@ -1338,7 +1500,7 @@ export async function runCover(bot: FloorBody, port: FloorBody, cover: Cover, ti
     const outcome = await walk(ctx as never, { to: cover.to, range: 0, sprint: true });
     return { success: outcome.ok, result: outcome.text };
   }
-  if (cover.kind === 'seal') {
+  if (cover.kind === 'seal' || cover.kind === 'line') {
     const { place } = await import('./primitives/place.js');
     const outcome = await place(ctx as never, { block: cover.block, at: [cover.cell] });
     return { success: outcome.ok, result: outcome.text };
@@ -1633,8 +1795,19 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
   if (bot.floorReflexes) return;
   const now = options.now ?? Date.now;
   const state: FloorState = bot.floorReflexes = { retreat: { engaged: false, ticks: 0, cooldown: 0, engagements: 0 }, busy: null, retryAt: 0,
-    engagements: { eat: 0, armor: 0, flee: 0 }, fleeStarts: [] };
+    engagements: { eat: 0, armor: 0, flee: 0 }, fleeStarts: [], clock: now };
   const ledger = ensureReflexLedger(bot as any);
+  // r10: what the server says hit the body. A projectile with a shooter behind it (the cause and the direct entity differ) is a shot: the
+  // cover starts on the second in SHOT_WINDOW_MS. Every named hit is kept, so that a fall in health nothing named is told from these.
+  try {
+    bot._client?.on?.('damage_event', (packet: { entityId?: number; sourceCauseId?: number; sourceDirectId?: number }) => {
+      if (!bot.entity || packet?.entityId !== bot.entity.id) return;
+      const at = now(), keepFor = 2 * SHOT_WINDOW_MS;
+      state.damageAt = [...(state.damageAt ?? []).filter(when => at - when <= keepFor), at];
+      const shooter = projectileShooter(packet);
+      if (shooter !== null) state.shots = [...(state.shots ?? []).filter(shot => at - shot.at <= keepFor), { at, shooter }];
+    });
+  } catch { /* the packet is a help */ }
   // Said to the mind (ledger -> state.world.reflexes) when the allowance runs out or a latch closes; the facts say what is held.
   const budget = config.budget ? state.budget = new FloorBudget(now, detail => {
     log.warn(`🚦 ${detail}`);
@@ -1711,19 +1884,31 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
     const falling = t - (state.healthSeen?.fellAt ?? -Infinity) <= COVER_FALL_MS;
     const episode = state.cover && t - state.cover.lastEnd <= COVER_EPISODE_MS ? state.cover : undefined;
     if (!episode) state.cover = undefined;
-    if (!burning && !(episode && falling)) return false;
+    // r10: shot at from afar (twice in SHOT_WINDOW_MS) also starts it, whether the body burns or not.
+    const mayBeShot = !!state.shots?.length || !!state.falls?.length;
+    if (!burning && !(episode && falling) && !mayBeShot) return false;
     if (t < (state.coverNextAt ?? 0)) return false;
     if (hasActiveSafetyLease(bot) || escapeRunning(bot) || bot.lavaReflex?.engaged === true || bot.breathingReflex?.engaged === true) return false;
     if (LAYING_HANDS.has(String((bot as { actHandNow?: string }).actHandNow ?? ''))) return false;
-    state.coverNextAt = t + COVER_GAP_MS;
     const body = bot.entity; if (!body) return false;
     const fought = health > FLEE_HEALTH ? (name: string) => engagedWithAny(bot, [name]) : undefined;
+    let shot: { hits: number; shooters: CoverShooter[] } | null = null;
+    if (mayBeShot) {
+      try { const found = recentShots(bot, state, body.position, t, fought); if (found.hits >= SHOT_HITS && found.shooters.length) shot = found; } catch { shot = null; }
+    }
+    if (!burning && !(episode && falling) && !shot) return false;
+    state.coverNextAt = t + COVER_GAP_MS;
     let shooters: CoverShooter[] = [], seeing: CoverShooter[] = [];
-    try { shooters = shootersInReach(bot, body.position, fought); seeing = shootersSeeing(bot, shooters, body.position); } catch { return false; }
+    try {
+      shooters = shootersInReach(bot, body.position, fought);
+      if (shot) for (const extra of shot.shooters) if (!shooters.some(known => known.entity === extra.entity)) shooters.push(extra);
+      shooters.sort((a, b) => a.distance - b.distance);
+      seeing = shootersSeeing(bot, shooters, body.position);
+    } catch { return false; }
     if (!seeing.length) return false;
     let choice: ReturnType<typeof coverChoice>;
-    try { choice = coverChoice(bot, shooters, episode?.digs ?? 0); } catch { return false; }
-    const lead = burning ? '燃えて射手から見えている:' : '体力が減り続け射手から見えている:';
+    try { choice = coverChoice(bot, shooters, episode?.digs ?? 0, shot ? { line: true, lines: episode?.lines ?? 0 } : {}); } catch { return false; }
+    const lead = burning ? '燃えて射手から見えている:' : shot ? `${shooterWords(body.position, seeing)} に${SHOT_WINDOW_MS / 1000}秒で${shot.hits}回撃たれた:` : '体力が減り続け射手から見えている:';
     if (!choice.cover) {
       if (t - (state.coverNotedAt ?? -Infinity) >= COVER_NOTE_GAP_MS) {
         state.coverNotedAt = t;
@@ -1732,8 +1917,10 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
       return false;
     }
     const cover = choice.cover;
+    const shotShooters: CoverShooter[] = shot ? shot.shooters : [];
     const run = state.cover = episode ?? { since: t, digs: 0, lastEnd: t };
     if (cover.kind === 'dig') run.digs++;
+    if (cover.kind === 'line') run.lines = (run.lines ?? 0) + 1;
     state.busy = 'flee';
     log.warn(`🔥 ${lead} ${cover.kind}（${shooterWords(body.position, seeing)}）`);
     const handle = ledger.begin('cover', `${lead} ${cover.detail}`, COVER_DETAIL_MAX);
@@ -1742,7 +1929,13 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
         // What it did, and whether the line is cut now (read after the hand: the shooters move too).
         const after = bot.entity?.position;
         let still: CoverShooter[] = [];
-        try { if (after) still = shootersSeeing(bot, shootersInReach(bot, after, fought), after); } catch { still = []; }
+        try {
+          if (after) {
+            const known = shootersInReach(bot, after, fought);
+            for (const extra of shotShooters) if (extra.entity.position && !known.some(other => other.entity === extra.entity)) known.push({ entity: extra.entity, distance: extra.entity.position.distanceTo(after) });
+            still = shootersSeeing(bot, known, after);
+          }
+        } catch { still = []; }
         const done = !!(result as { success?: boolean } | undefined)?.success;
         const failed = done ? '' : `（できなかった: ${String((result as { result?: string } | undefined)?.result ?? '').slice(0, 50)}）`;
         handle.detail = `${lead} ${cover.detail}${failed}。${still.length ? `まだ見えている: ${shooterWords(after!, still)}` : '射線が切れた'} 体力${Math.round((bot.health ?? 0) * 10) / 10}`.slice(0, COVER_DETAIL_MAX);
@@ -1840,7 +2033,13 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
     // r7: the health seen tick by tick (the cover goes on while it falls).
     const health = bot.health ?? 20, seen = state.healthSeen;
     if (!seen) state.healthSeen = { last: health, fellAt: -Infinity };
-    else { if (health < seen.last - 1e-6) seen.fellAt = now(); seen.last = health; }
+    else {
+      if (health < seen.last - 1e-6) {
+        const at = seen.fellAt = now();
+        state.falls = [...(state.falls ?? []).filter(when => at - when <= 2 * SHOT_WINDOW_MS), at];
+      }
+      seen.last = health;
+    }
     let outcome: ReturnType<typeof floorRetreatTick> = null;
     try { outcome = config.retreat ? floorRetreatTick(bot, state.retreat, retreatAllow) : null; } catch { return; }
     // A lit creeper and no way away (LLM-centric only): the retreat let go (its action ends), and the last stand is made as soon as no

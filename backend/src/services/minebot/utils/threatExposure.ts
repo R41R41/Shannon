@@ -170,6 +170,17 @@ export function seesBodyAt(bot: ExposureBot, entity: ExposedEntity, feet: Vec3, 
   if (!closed) return false;
   return lineOpen(closed, eyes, feet.offset(0, 1.62, 0)) || lineOpen(closed, eyes, feet.offset(0, 0.9, 0));
 }
+/**
+ * r10: how many of the two sight lines (to the body's eye, to its chest) from `entity` to a body standing at `feet` are open now: 0, 1 or 2.
+ * `seesBodyAt` is "at least one"; a single block put on the line often cuts one of the two and not the other (the cover's line hand counts).
+ */
+export function openSightLines(bot: ExposureBot, entity: ExposedEntity, feet: Vec3, solidAt?: (x: number, y: number, z: number) => boolean): number {
+  if (!entity.position || typeof (entity.position as Partial<Vec3>).offset !== 'function') return 0;
+  const eyes = entity.position.offset(0, (entity.height ?? 1.8) * 0.85, 0);
+  const closed = solidAt ?? (typeof bot.blockAt === 'function' ? (x: number, y: number, z: number) => solid(bot, x, y, z) : null);
+  if (!closed) return 0;
+  return (lineOpen(closed, eyes, feet.offset(0, 1.62, 0)) ? 1 : 0) + (lineOpen(closed, eyes, feet.offset(0, 0.9, 0)) ? 1 : 0);
+}
 /** clearLine over a `closed` test, each cell read once along the line. */
 function lineOpen(closed: (x: number, y: number, z: number) => boolean, from: Vec3, to: Vec3): boolean {
   const steps = Math.max(1, Math.ceil(from.distanceTo(to) / RAY_STEP));
