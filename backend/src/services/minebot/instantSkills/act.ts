@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { CustomBot, InstantSkill } from '../types.js';
 import { actionSignal, nativeActionHost } from '../execution/ActionExecution.js';
-import { isThreat } from '../utils/floorReflexes.js';
+import { isThreat, LAYING_HANDS } from '../utils/floorReflexes.js';
 import { threatExposure } from '../utils/threatExposure.js';
 import { beginEngagement } from '../utils/engagement.js';
 import { bodyReader, cellKey, facingOfYaw, feetCell, noteMapStop, type Cell, type Facing } from '../utils/localMap.js';
@@ -250,6 +250,8 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
     report.stoppedBy = stoppedByOf(code); report.stoppedWhy = clip(why, 200); report.failureType = code; control.abort(code);
   };
   const startDimension = String(bot.game?.dimension ?? '');
+  /** The body (not the motor port): the hand running now is told on it, for the floor's last stand (floorReflexes LAYING_HANDS). */
+  const host = nativeActionHost(bot) as { actHandNow?: string };
   const accepted = new Set((options.accept ?? []).map(kind => kind.replace(/^minecraft:/u, '').toLowerCase()).filter(Boolean));
   const sealed = (entity: any) => { try { return threatExposure(bot, entity) === 'sealed'; } catch { return false; } };
   const ledger = bot.reflexLedger as { mark(): number; entriesSince(mark: number): Array<{ kind: string; detail: string }> } | undefined;
@@ -268,7 +270,9 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
       if ((bot.health ?? 20) <= 0) return stopWith('体が死んだ', 'died');
       if (String(bot.game?.dimension ?? '') !== startDimension) return stopWith(`次元が変わった（${startDimension} → ${String(bot.game?.dimension ?? '')}）`, 'dimension_changed');
       const entries = ledger?.entriesSince(mark).filter(entry => !LEDGER_QUIET.has(entry.kind)) ?? [];
-      if (entries.length) return stopWith(entries.map(entry => entry.detail).join('、'), 'reflex');
+      // r6 (run 29): a reflex's note does not stop a hand that is laying blocks (it may be what walls the threat off); the act stops when
+      // that hand is over. A reflex that takes the body still cuts it at once (its lease aborts the action: onCut).
+      if (entries.length && !LAYING_HANDS.has(String(host.actHandNow ?? ''))) return stopWith(entries.map(entry => entry.detail).join('、'), 'reflex');
       // An accepted kind is not counted (the contract's 1.4): the act is there to fight it.
       const near = typeof stopIf?.hostileWithin === 'number' ? (Object.values(bot.entities ?? {}) as any[]).filter(entity => entity?.position && entity !== bot.entity
         && !accepted.has(String(entity.name ?? '').toLowerCase()) && entity.position.distanceTo(bot.entity.position) <= stopIf.hostileWithin! && isThreat(bot, entity) && !sealed(entity)) : [];
@@ -323,8 +327,10 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
       emit(index, 'in_progress');
       const began = Date.now();
       let outcome: StepOutcome;
+      host.actHandNow = hand.do;
       try { outcome = await runHand(ctx, hand); }
       catch (error) {
+        host.actHandNow = undefined;
         if (error instanceof StepStopped || control.signal.aborted || /Action interrupted|Motor owner expired/u.test(String((error as Error)?.message))) {
           if (!control.signal.aborted && signal?.aborted) onCut();
           const word = closedWord(report.failureType ?? 'reflex');
@@ -337,6 +343,8 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
         }
         outcome = { ok: false, reason: 'error', text: `思わぬ失敗: ${String((error as Error)?.message ?? error).slice(0, 120)}` };
       }
+      // A reflex's note held back while the hand laid blocks stops the act at the next hand's watch.
+      host.actHandNow = undefined;
       if (outcome.data?.eye) report.eye = outcome.data.eye;
       if (outcome.data?.container) report.container = outcome.data.container;
       if (typeof outcome.data?.arrowsLeft === 'number') report.arrowsLeft = outcome.data.arrowsLeft;
@@ -376,6 +384,7 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
       break;
     }
   } finally {
+    host.actHandNow = undefined;
     clearInterval(timer);
     endAccepted();
     signal?.removeEventListener('abort', onCut);

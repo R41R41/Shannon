@@ -96,7 +96,8 @@ describe('the LLM-centric last stand at low health with no way out', () => {
     await vi.waitFor(() => expect(bot.floorReflexes.busy).toBeNull(), { timeout: 4000, interval: 5 });
     expect(bot.__dug).toEqual(['0,64,0']);
     expect(bot.attack).not.toHaveBeenCalled();
-    expect(stands(ledger)).toMatchObject([{ kind: 'flee', outcome: 'done', detail: '低体力で逃げ道なし: 足元を掘って下がった (0,65,0) 体力3' }]);
+    // r6: the threat that reached the body is said with it.
+    expect(stands(ledger)).toMatchObject([{ kind: 'flee', outcome: 'done', detail: '低体力で逃げ道なし: 足元を掘って下がった (0,65,0) 体力3。届く: zombie #2 6.0m 見える' }]);
   });
 
   it('else, with a full block carried and two free cells over the head, it puts one block under the feet and goes up', async () => {
@@ -107,7 +108,7 @@ describe('the LLM-centric last stand at low health with no way out', () => {
     await vi.waitFor(() => expect(bot.floorReflexes.busy).toBeNull(), { timeout: 5000, interval: 5 });
     expect(bot.__dug).toEqual([]);
     expect(bot.placeBlock).toHaveBeenCalledTimes(1);
-    expect(stands(ledger)).toMatchObject([{ kind: 'flee', detail: '低体力で逃げ道なし: 1段積んで上がった (0,65,0) 体力3' }]);
+    expect(stands(ledger)).toMatchObject([{ kind: 'flee', detail: '低体力で逃げ道なし: 1段積んで上がった (0,65,0) 体力3。届く: zombie #2 6.0m 見える' }]);
   });
 
   it('chooses in order and by the rules: a lit creeper is never hit, an unlit one may be; the dig needs a solid cell under the dug one; the pillar needs air over the head', () => {

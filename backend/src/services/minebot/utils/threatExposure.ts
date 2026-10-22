@@ -111,17 +111,22 @@ function openWay(bot: ExposureBot, self: Vec3, other: Vec3, otherHeight: number,
   return 'sealed';
 }
 
-export function threatExposure(bot: ExposureBot, entity: ExposedEntity, now = Date.now()): Exposure {
+/**
+ * `fresh` (r6): read the blocks now, not the cached answer and not the window's budget (one flood fill of at most OPEN_WAY_BUDGET_MS). For a
+ * reflex that moves the body on this answer (the last stand): run 29 dug down twelve times while the planner's blocks went in over the head,
+ * on answers up to three seconds old.
+ */
+export function threatExposure(bot: ExposureBot, entity: ExposedEntity, now = Date.now(), options: { fresh?: boolean } = {}): Exposure {
   const self = bot.entity?.position;
   // Nothing to judge with: treat as exposed, as before.
   if (!self || !entity.position || typeof bot.blockAt !== 'function'
     || typeof (self as Partial<Vec3>).offset !== 'function' || typeof (entity.position as Partial<Vec3>).offset !== 'function') return 'seen';
-  const cached = cache.get(entity);
+  const cached = options.fresh ? undefined : cache.get(entity);
   if (cached && now - cached.at < (cached.value === 'sealed' ? SEALED_CACHE_MS : OPEN_CACHE_MS)) return cached.value;
   // The window's budget (all mobs together): spent, the mob keeps its old answer if that one is safe to keep, else 'reachable'.
   const clock = performance.now();
   if (clock - frame.start > FRAME_WINDOW_MS) { frame.start = clock; frame.spent = 0; }
-  const left = FRAME_BUDGET_MS - frame.spent;
+  const left = options.fresh ? OPEN_WAY_BUDGET_MS + 1 : FRAME_BUDGET_MS - frame.spent;
   if (left <= 0) return cached && cached.value !== 'sealed' ? cached.value : 'reachable';
   const height = entity.height ?? 1.8;
   const eyes = entity.position.offset(0, height * 0.85, 0);

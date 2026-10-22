@@ -1,5 +1,5 @@
 import { Vec3 } from 'vec3';
-import { LoopSlicer, scanLoadedCategories, type ScanCategory, type ScanCellHit, type SlicedScanResult } from './loadedBlockScan.js';
+import { LoopSlicer, SCAN_SLICE_MS, scanLoadedCategories, type ScanCategory, type ScanCellHit, type SlicedScanResult } from './loadedBlockScan.js';
 import { lavaSourceInfo, POOL_CAP, type PoolWorld } from './lavaPools.js';
 import { spawnerKind } from './mapMarks.js';
 import { bodyReader, type BlockReader } from './localMap.js';
@@ -208,8 +208,15 @@ export async function scanWorld(bot: ScanBody, options: { radiusChunks?: number;
   const position = bot.entity?.position;
   if (!position || !bot.registry?.blocksByName || typeof bot.world?.getColumns !== 'function') return null;
   const centre = { x: position.x, y: position.y, z: position.z };
-  const scan = await scanLoadedCategories(bot as never, categoriesFor(bot.registry), options);
-  return summarizeScan(bot, scan, centre, bodyReader(bot as never));
+  const slicer = options.slicer ?? new LoopSlicer(options.sliceMs ?? SCAN_SLICE_MS);
+  const scan = await scanLoadedCategories(bot as never, categoriesFor(bot.registry), { ...options, slicer });
+  // The summary (a few hundred block reads: lava pools, a hull, spawners) is one hold of its own, after the loop is given back (r6: it is
+  // counted in the longest hold too).
+  await slicer.pause();
+  const began = performance.now();
+  const summary = summarizeScan(bot, scan, centre, bodyReader(bot as never));
+  slicer.longest = Math.max(slicer.longest, performance.now() - began);
+  return { ...summary, longestSliceMs: Math.round(slicer.longest * 10) / 10 };
 }
 
 // ===== The scan at a spawn (world.scan) =====

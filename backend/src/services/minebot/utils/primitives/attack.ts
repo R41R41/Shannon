@@ -6,6 +6,8 @@ import { findEntity } from './use.js';
 import { beginEngagement } from '../engagement.js';
 import { nativeActionHost } from '../../execution/ActionExecution.js';
 import { isLikelyHostileMobName } from '../hostileMobHints.js';
+import { bodyReader, feetCell, relativeWords } from '../localMap.js';
+import { eyeOf, probeSight } from '../probeTools.js';
 
 const { goals } = pathfinder;
 
@@ -95,10 +97,26 @@ export async function attack(ctx: StepContext, args: AttackArgs): Promise<StepOu
 }
 
 /**
+ * A hold with nothing to strike for this long stops as 届かない (r6, run 29: three holds of 15-60 s under a shaft's roof struck 0 times and
+ * came back done, while the blaze was 6 up behind stone; 207-267 s cost 6.5 health and no blow).
+ */
+export const HOLD_UNREACHED_MS = 8000;
+/** A blow counts as landed when the creature is hurt within this long of the swing at it. */
+const LANDED_WITHIN_MS = 600;
+
+/** What the eye sees of a creature: in sight (nothing solid on the line to its middle), the distance to its box, the solid cells between. */
+function creatureSight(bot: any, entity: any) {
+  const eye = eyeOf(bot.entity.position);
+  return probeSight(bodyReader(bot), eye, { creature: { id: entity.id, name: String(entity.name ?? 'entity'), position: entity.position, height: entity.height, width: entity.width } });
+}
+
+/**
  * attack mode=hold (the owner's run-26 notes, 2026-10-21): stand where the body is, shield up when one is carried in the off hand, and
- * strike only what comes within reach (about 3 m): the target's kind, or any hostile without one. It never moves and never digs: the
- * waiting place (a gap to strike through) is the planner's to build with place and dig. Ends after the seconds (default 20, at most
- * 60). Says how many were killed, the health lost, and what dropped near.
+ * strike only what is within reach (3 m from the eye to its box) and in sight (nothing solid between): the target's kind, or any hostile
+ * without one. It never moves and never digs: the waiting place (a gap to strike through) is the planner's to build with place and dig.
+ * Ends after the seconds (default 20, at most 60), or, r6, as 届かない when nothing to strike has been in reach and sight for
+ * HOLD_UNREACHED_MS: then it says the nearest one's place, how far up or down, whether the eye sees it and the blocks between. Both say
+ * the blows swung, the blows landed, the kills, the health lost, and (done) what dropped near.
  */
 async function holdAndStrike(ctx: StepContext, args: AttackArgs): Promise<StepOutcome> {
   const bot = ctx.bot;
@@ -106,34 +124,46 @@ async function holdAndStrike(ctx: StepContext, args: AttackArgs): Promise<StepOu
   const wanted = args.target === undefined || args.target === '*' ? null : args.target;
   const wantedId = typeof wanted === 'number' ? wanted : null;
   const wantedName = typeof wanted === 'string' ? wanted.replace(/^minecraft:/u, '').toLowerCase() : null;
+  const label = wantedId !== null ? `#${wantedId}` : wantedName ?? '敵';
   const isHostile = (entity: any) => String(bot.registry?.entitiesByName?.[entity.name]?.type ?? entity.type) === 'hostile' || isLikelyHostileMobName(String(entity.name ?? ''));
   const fits = (entity: any) => entity && entity !== bot.entity && entity.position && entity.type !== 'player' && entity.name !== 'item'
     && (wantedId !== null ? entity.id === wantedId : wantedName ? String(entity.name).toLowerCase() === wantedName : isHostile(entity));
   const shield = bot.inventory?.slots?.[45]?.name === 'shield';
   const healthBefore = Number(bot.health ?? 20);
   const before = new Set(Object.keys(bot.entities ?? {}).map(Number));
-  const struck = new Set<number>(), killed: string[] = [];
-  let blows = 0, lastSwing = 0, hurtTaken = 0, raised = false;
+  const struck = new Set<number>(), killed: string[] = [], swungAt = new Map<number, number>();
+  let blows = 0, landed = 0, lastSwing = 0, hurtTaken = 0, raised = false;
   const onDead = (entity: any) => { if (struck.has(entity?.id)) killed.push(String(entity.name)); };
-  const onHurt = (entity: any) => { if (entity === bot.entity || entity?.id === bot.entity?.id) hurtTaken++; };
+  const onHurt = (entity: any) => {
+    if (entity === bot.entity || entity?.id === bot.entity?.id) { hurtTaken++; return; }
+    const swung = swungAt.get(entity?.id);
+    if (swung !== undefined && Date.now() - swung <= LANDED_WITHIN_MS) { landed++; swungAt.delete(entity.id); }
+  };
   bot.on('entityDead', onDead); bot.on('entityHurt', onHurt);
   const host = nativeActionHost(bot);
   const endEngagement = beginEngagement(host, [wantedName ?? '*']);
   const raise = () => { if (shield && !raised) { try { bot.activateItem(true); raised = true; } catch { /* no shield */ } } };
   const lower = () => { if (raised) { try { bot.deactivateItem(); } catch { /* lowered */ } raised = false; } };
+  const started = Date.now();
+  let lastInReach = started, unreached = false;
   try {
     try { bot.clearControlStates?.(); bot.pathfinder?.setGoal?.(null); } catch { /* standing */ }
     raise();
-    for (const until = Date.now() + seconds * 1000; Date.now() < until;) {
+    for (const until = started + seconds * 1000; Date.now() < until;) {
       const eyes = bot.entity.position.offset(0, 1.62, 0);
+      // Within reach by the cheap distance first; then the eye's line (the sight probe's own computation).
       const near = (Object.values(bot.entities ?? {}) as any[]).filter(fits)
-        .map(entity => ({ entity, distance: entity.position.offset(0, (entity.height ?? 1.8) / 2, 0).distanceTo(eyes) }))
-        .filter(entry => entry.distance <= REACH + 0.3).sort((a, b) => a.distance - b.distance)[0];
+        .filter(entity => entity.position.offset(0, (entity.height ?? 1.8) / 2, 0).distanceTo(eyes) <= REACH + 1.5)
+        .map(entity => ({ entity, sight: creatureSight(bot, entity) }))
+        .filter(entry => entry.sight.visible && entry.sight.distance <= REACH).sort((a, b) => a.sight.distance - b.sight.distance)[0];
+      if (near) lastInReach = Date.now();
+      else if (Date.now() - lastInReach >= HOLD_UNREACHED_MS) { unreached = true; break; }
       if (near && Date.now() - lastSwing >= cooldownMs(bot.heldItem?.name)) {
         lower();
         try { await bot.lookAt(near.entity.position.offset(0, (near.entity.height ?? 1.8) * 0.6, 0), true); } catch { /* looked */ }
+        // Marked before the swing: the hurt that answers it may come at once.
+        struck.add(near.entity.id); swungAt.set(near.entity.id, Date.now()); blows++; lastSwing = Date.now();
         bot.attack(near.entity);
-        struck.add(near.entity.id); blows++; lastSwing = Date.now();
         await wait(ctx, 100);
         raise();
       }
@@ -144,10 +174,37 @@ async function holdAndStrike(ctx: StepContext, args: AttackArgs): Promise<StepOu
     bot.removeListener('entityDead', onDead); bot.removeListener('entityHurt', onHurt);
     endEngagement();
   }
+  const lost = Math.max(0, Math.round((healthBefore - Number(bot.health ?? healthBefore)) * 10) / 10);
+  const counts = `${blows}回打った・${landed}回当たった・倒した ${killed.length}${killed.length ? `（${killed.join('・')}）` : ''}・受けた傷 ${lost}`;
+  if (unreached) {
+    // The act's line is 160 characters with the closed word and what the cell holds: the counts first, then the nearest one.
+    const held = ((Date.now() - started) / 1000).toFixed(0);
+    const nearest = nearestFact(bot, fits, label);
+    return stopped(bot, 'out_of_reach', `${held}秒、打てる所（目から${REACH}m・見える）に${label}がいない。${counts}。${nearest.text}`, nearest.at);
+  }
   const drops = (Object.values(bot.entities ?? {}) as any[]).filter(entity => entity?.name === 'item' && !before.has(entity.id)
     && entity.position.distanceTo(bot.entity.position) <= 8);
   const dropNames = drops.map(entity => { try { const item = entity.getDroppedItem?.(); return item ? `${item.name}×${item.count}` : `#${entity.id}`; } catch { return `#${entity.id}`; } });
-  const lost = Math.max(0, Math.round((healthBefore - Number(bot.health ?? healthBefore)) * 10) / 10);
-  return { ok: true, text: `${seconds}秒その場で構えた${shield ? '（盾）' : ''}: ${blows}回打った、倒した ${killed.length}${killed.length ? `（${killed.join('・')}）` : ''}、受けた傷 ${lost}（当たり ${hurtTaken}回）`
-    + `、落とし物 ${dropNames.length ? `${dropNames.join(' ')}（pickup で拾う）` : 'なし'}` };
+  // A hold that struck nothing says where the nearest one was, as the stop does.
+  const none = blows === 0 ? `。${nearestFact(bot, fits, label).text}` : '';
+  return { ok: true, text: `${seconds}秒その場で構えた${shield ? '（盾）' : ''}: ${counts}（被弾 ${hurtTaken}回）`
+    + `、落とし物 ${dropNames.length ? `${dropNames.join(' ')}（pickup で拾う）` : 'なし'}${none}` };
+}
+
+/** The nearest creature the hold waits for: its id and place, where from the feet (up/down), the distance from the eye, seen or the blocks between. */
+function nearestFact(bot: any, fits: (entity: any) => boolean, label: string): { text: string; at?: { x: number; y: number; z: number } } {
+  const eyes = bot.entity.position.offset(0, 1.62, 0);
+  const nearest = (Object.values(bot.entities ?? {}) as any[]).filter(fits)
+    .map(entity => ({ entity, distance: entity.position.distanceTo(eyes) })).sort((a, b) => a.distance - b.distance)[0];
+  if (!nearest) return { text: `最寄りの${label}は見えている範囲にいない` };
+  const entity = nearest.entity;
+  const cell = { x: Math.floor(entity.position.x), y: Math.floor(entity.position.y + 1e-3), z: Math.floor(entity.position.z) };
+  const feet = feetCell(bot);
+  const sight = creatureSight(bot, entity);
+  const way = feet ? relativeWords(feet, cell) : '';
+  // The first solid cell on the line (the nearest the eye) and how many more: the line has room for one.
+  const first = sight.between[0];
+  const more = sight.between.length - 1;
+  const seen = sight.visible || !first ? '見える' : `見えない：間に (${first.at.x},${first.at.y},${first.at.z}) ${first.name}${more > 0 ? ` ほか ${more}${sight.between.length >= 8 ? ' 以上' : ''}` : ''}`;
+  return { text: `最寄り ${entity.name} #${entity.id} (${cell.x},${cell.y},${cell.z}) ${way}・目から${sight.distance}m・${seen}`, at: cell };
 }

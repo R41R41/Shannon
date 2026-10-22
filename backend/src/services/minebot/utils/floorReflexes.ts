@@ -1002,9 +1002,11 @@ const LAST_STAND_HIT_GAP_MS = 600;
 const LAST_STAND_GAP_MS = 1500;
 /** A creeper's fuse is a second and a half: a cornered body that cannot make its stand by then has no stand to make. */
 const CORNERED_WAIT_MS = 1500;
-/** The ledger keeps this much of the last stand's detail (the usual 40 cannot hold the place and the health). */
-const LAST_STAND_DETAIL_MAX = 90;
+/** The ledger keeps this much of the last stand's detail (the usual 40 cannot hold the place, the health and, r6, the threat that reaches). */
+const LAST_STAND_DETAIL_MAX = 130;
 const LAST_STAND_TIMEOUT_MS: Record<'hit' | 'dig' | 'pillar', number> = { hit: 3000, dig: 7000, pillar: 5000 };
+/** The act's hands that lay blocks (the act sets `actHandNow` on the body while a hand runs). */
+export const LAYING_HANDS = new Set(['place', 'pillarUp']);
 const TOOL_TIERS = ['netherite', 'diamond', 'iron', 'stone', 'golden', 'wooden'];
 /** A sword before an axe before any other tool; within a kind the better material first. 0: not a melee tool. */
 function meleeRank(name: string): number {
@@ -1036,12 +1038,37 @@ const isFluid = (name: unknown) => name === 'water' || name === 'lava';
  */
 const CREEPER_DIG_MS = 1000;
 
+/**
+ * The threats that can get at the body now (r6): every threat within the flee's range (wider for a kind that shoots) whose exposure, read
+ * from the blocks this moment (`threatExposure` fresh, not the cached answer), is not sealed. Nearest first, with how it reaches.
+ */
+export function reachingThreats(bot: FloorBody): Array<{ entity: FloorEntity; distance: number; exposure: 'seen' | 'reachable' }> {
+  const at = bot.entity?.position; if (!at) return [];
+  const out: Array<{ entity: FloorEntity; distance: number; exposure: 'seen' | 'reachable' }> = [];
+  for (const entity of others(bot)) {
+    if (!isThreat(bot, entity)) continue;
+    const name = String(entity.name).toLowerCase(), shooter = SHOOTERS.has(name) || bot.shootsAtBody?.(name) === true;
+    const distance = entity.position.distanceTo(at);
+    if (distance > (shooter ? FLEE_RANGE_SHOOTER : FLEE_RANGE)) continue;
+    let exposure: ReturnType<typeof threatExposure>;
+    try { exposure = threatExposure(bot as any, entity as any, Date.now(), { fresh: true }); } catch { exposure = 'reachable'; }
+    if (exposure !== 'sealed') out.push({ entity, distance, exposure });
+  }
+  return out.sort((a, b) => a.distance - b.distance);
+}
+
 export function lastStandChoice(bot: FloorBody, skip?: LastStand['kind'], cause: 'low-health' | 'creeper' = 'low-health'): LastStand | null {
   const body = bot.entity; if (!body) return null;
   const at = body.position, health = Math.round((bot.health ?? 0) * 10) / 10;
   const feet = { x: Math.floor(at.x), y: Math.floor(at.y + 1e-3), z: Math.floor(at.z) };
-  const where = `(${feet.x},${feet.y},${feet.z}) 体力${health}`;
   const creeper = cause === 'creeper';
+  // r6 (run 29): the low-health stand only while a threat can get at the body now. Twelve steps down were made after the planner's blocks
+  // had gone in over the head; once walled off (sealed, read now), there is nothing to make a stand against.
+  const reaching = creeper ? [] : reachingThreats(bot);
+  if (!creeper && !reaching.length) return null;
+  const reach = reaching[0];
+  const fact = reach ? `。届く: ${reach.entity.name} #${reach.entity.id} ${reach.distance.toFixed(1)}m ${reach.exposure === 'seen' ? '見える' : '道がある'}` : '';
+  const where = `(${feet.x},${feet.y},${feet.z}) 体力${health}`;
   const lead = creeper ? '点火したクリーパーから逃げ道なし:' : '低体力で逃げ道なし:';
   const items = bot.inventory?.items() ?? [];
   const read = (dy: number) => (bot as unknown as TerrainBody).blockAt?.(new Vec3(feet.x, feet.y + dy, feet.z)) as (FleeBlock & { diggable?: boolean }) | null | undefined;
@@ -1057,7 +1084,7 @@ export function lastStandChoice(bot: FloorBody, skip?: LastStand['kind'], cause:
       try { const time = (bot as { digTime?: (block: unknown) => number }).digTime?.(under); ms = typeof time === 'number' && Number.isFinite(time) ? time : null; } catch { ms = null; }
       if (ms !== null && ms > CREEPER_DIG_MS) return null;
     }
-    return { kind: 'dig', cell: { x: feet.x, y: feet.y - 1, z: feet.z }, detail: `${lead} 足元を掘って下がった ${where}` };
+    return { kind: 'dig', cell: { x: feet.x, y: feet.y - 1, z: feet.z }, detail: `${lead} 足元を掘って下がった ${where}${fact}` };
   };
   if (creeper) {
     if (skip !== 'dig') { const down = stepDown(); if (down) return down; }
@@ -1070,10 +1097,7 @@ export function lastStandChoice(bot: FloorBody, skip?: LastStand['kind'], cause:
   }
   // (a) A threat in arm's reach that can get at the body. A lit creeper is never hit (the blast is the danger); an unlit one may be (the knock helps).
   if (!creeper && skip !== 'hit') {
-    const near = others(bot).filter(entity => isThreat(bot, entity) && !(entity.name === 'creeper' && creeperLit(entity)))
-      .map(entity => ({ entity, distance: entity.position.distanceTo(at) })).filter(entry => entry.distance <= LAST_STAND_RANGE)
-      .filter(entry => { try { return threatExposure(bot as any, entry.entity as any) !== 'sealed'; } catch { return true; } })
-      .sort((a, b) => a.distance - b.distance)[0];
+    const near = reaching.filter(entry => !(entry.entity.name === 'creeper' && creeperLit(entry.entity)) && entry.distance <= LAST_STAND_RANGE)[0];
     if (near) {
       const target = near.entity;
       return { kind: 'hit', target, weapon: bestMeleeWeapon(items), detail: `${lead} ${target.name} #${target.id} を打ち返した ${where}` };
@@ -1087,7 +1111,7 @@ export function lastStandChoice(bot: FloorBody, skip?: LastStand['kind'], cause:
       return !best || count > best.count ? { name: item.name, count } : best;
     }, null);
     const open = (dy: number) => { const cell = read(dy); return !!cell && cell.boundingBox !== 'block' && !isFluid(cell.name) && !isHazardousToStandOn(cell.name); };
-    if (block && open(2) && open(3)) return { kind: 'pillar', block: block.name, detail: `${lead} 1段積んで上がった ${where}` };
+    if (block && open(2) && open(3)) return { kind: 'pillar', block: block.name, detail: `${lead} 1段積んで上がった ${where}${fact}` };
   }
   return null;
 }
@@ -1173,6 +1197,9 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
    * LAST_STAND_GAP_MS, never over another safety lease or one of the API's escapes. False when nothing was started.
    */
   const lastStand = (cause: 'low-health' | 'creeper'): boolean => {
+    // r6 (run 29): the planner's act is laying blocks (place, pillarUp): the low-health stand does not cut it. Three hands that closed the
+    // shaft over the head were cut by steps down; the facts are read again when the hand is over (the next refused flee).
+    if (cause === 'low-health' && LAYING_HANDS.has(String((bot as { actHandNow?: string }).actHandNow ?? ''))) return false;
     let stand: LastStand | null = null;
     try {
       stand = isLlmCentric(bot) && !hasActiveSafetyLease(bot) && !escapeRunning(bot) && (bot.health ?? 20) > 0 && now() - (state.lastStandAt ?? -Infinity) >= LAST_STAND_GAP_MS

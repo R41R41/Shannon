@@ -186,10 +186,17 @@ export interface SlicedScanResult {
  * `scanLoadedBlocksMany` (a section is read only when its palette holds a wanted state; a cell's object is made only for a hit kept),
  * with a state-to-category table instead of a map and the palette's index read directly when the section has one.
  */
+/**
+ * The slice of the scan (r6, run 29: 353 Nether chunks held the loop 48.7 ms at once with a slice of 8 ms looked at only between sections and
+ * columns). The clock is now also looked at inside a section, every CELLS_PER_LOOK cells.
+ */
+export const SCAN_SLICE_MS = 4;
+const CELLS_PER_LOOK = 512;
+
 export async function scanLoadedCategories(bot: ScanBot, categories: ScanCategory[], options: { radiusChunks?: number; sliceMs?: number; maxMs?: number;
   stop?: () => boolean; slicer?: LoopSlicer } = {}): Promise<SlicedScanResult> {
   const started = performance.now();
-  const slicer = options.slicer ?? new LoopSlicer(options.sliceMs ?? 8);
+  const slicer = options.slicer ?? new LoopSlicer(options.sliceMs ?? SCAN_SLICE_MS);
   const maxMs = options.maxMs ?? 5000;
   const found = new Map(categories.map(category => [category.key, { count: 0, hits: [] as ScanCellHit[] }]));
   const result: SlicedScanResult = { found, chunks: 0, reachMetres: 0, ms: 0, longestSliceMs: 0, slices: 1, partial: false };
@@ -248,7 +255,10 @@ export async function scanLoadedCategories(bot: ScanBot, categories: ScanCategor
         // One state for the whole section (a deep ocean's water).
         const category = data.value < table.length ? table[data.value] : -1;
         if (category < 0) continue;
-        for (let cell = 0; cell < SECTION_VOLUME; cell++) count(category, stateName[data.value], baseX + (cell & 15), sectionY + (cell >> 8), baseZ + ((cell >> 4) & 15));
+        for (let cell = 0; cell < SECTION_VOLUME; cell++) {
+          count(category, stateName[data.value], baseX + (cell & 15), sectionY + (cell >> 8), baseZ + ((cell >> 4) & 15));
+          if ((cell & (CELLS_PER_LOOK - 1)) === CELLS_PER_LOOK - 1 && slicer.due()) await slicer.pause();
+        }
         continue;
       }
       const palette: number[] | undefined = data.palette;
@@ -265,6 +275,7 @@ export async function scanLoadedCategories(bot: ScanBot, categories: ScanCategor
         const bits = data.data;
         const direct = bits && typeof bits.get === 'function';
         for (let cell = 0; cell < SECTION_VOLUME; cell++) {
+          if ((cell & (CELLS_PER_LOOK - 1)) === CELLS_PER_LOOK - 1 && slicer.due()) await slicer.pause();
           const entry = direct ? bits.get(cell) : palette.indexOf(data.get(cell));
           const category = byIndex[entry];
           if (category === undefined || category < 0) continue;
@@ -273,6 +284,7 @@ export async function scanLoadedCategories(bot: ScanBot, categories: ScanCategor
       } else {
         // The global palette (no list to skip by): every cell.
         for (let cell = 0; cell < SECTION_VOLUME; cell++) {
+          if ((cell & (CELLS_PER_LOOK - 1)) === CELLS_PER_LOOK - 1 && slicer.due()) await slicer.pause();
           const state = data.get(cell);
           const category = state < table.length ? table[state] : -1;
           if (category < 0) continue;
