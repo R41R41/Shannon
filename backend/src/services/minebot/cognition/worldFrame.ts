@@ -249,8 +249,8 @@ export function captureWorldObservation(bot?: unknown): WorldObservation {
     })
     .filter(item => item.name && Number.isFinite(item.count) && item.count > 0)
     .sort((a, b) => a.name.localeCompare(b.name));
-  // LLM-centric mode: one line a kind (mb-llmc-cand). The stacks of a kind are the slots' business (64 and 30 cobbled_deepslate are
-  // 94, and were two lines in 42 of 45 scenes); a tool with wear and a potion with its contents say what sets it apart, so they stay apart.
+  // LLM-centric mode: one line a kind (mb-llmc-cand). The stacks of a kind are the slots' business (53 and 30 cobbled_deepslate are
+  // 83, and were two lines in 42 of 45 scenes); a tool with wear and a potion with its contents say what sets it apart, so they stay apart.
   const inventory = llmCentric ? mergeStacks(slotted) : slotted;
 
   const allEntities = position
