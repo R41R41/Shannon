@@ -8,6 +8,7 @@ import {
   type ObservedDeath,
   placesDigest, recallPlaces, recordDeath, rememberPlace, seenReach, type PlaceKeep, type PlaceMemoryState, type RecalledPlace, type Sighting,
 } from '../../../modules/minecraftLearning/places.js';
+import { biomeFitsDimension } from './biomeNames.js';
 
 const log = createLogger('Minebot:PlaceMemory');
 
@@ -681,7 +682,8 @@ export function installPlaceMemory(bot: MemoryBot, options: { file?: string } = 
       if (Array.isArray(sections) && !sections[(y - minY) >> 4]) return null;
       const id = column.getBiome(new Vec3(8, y, 8));
       const name = typeof id === 'number' ? (bot.registry as { biomes?: Record<number, { name?: string }> }).biomes?.[id]?.name : undefined;
-      return name && /^[a-z_]+$/.test(name) ? name : null;
+      // Not a name the dimension cannot have (an unsent section of the Nether reads 0, badlands: utils/biomeNames).
+      return biomeFitsDimension(dimension(), name) ? name : null;
     } catch { return null; }
   };
   let biomeLine: { at: number; from: Vec3; text: string } | null = null;

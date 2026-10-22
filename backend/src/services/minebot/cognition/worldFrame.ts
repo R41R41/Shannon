@@ -17,6 +17,7 @@ import { localMapFor, recentStopLines } from '../utils/localMap.js';
 import { insideStructure, mapMarkLines, watchedEntityFacts } from '../utils/mapMarks.js';
 import { foodPointsOf } from '../utils/foodPoints.js';
 import { worldScanView } from '../utils/worldScanState.js';
+import { biomeFitsDimension } from '../utils/biomeNames.js';
 
 /** The shelter check, for whatever stands in for a body here (a cached self-state has no world to read). */
 function sealedIn(bot: unknown): boolean {
@@ -99,6 +100,22 @@ function wornLine(bot: unknown): Pick<WorldObservation, 'worn'> {
   }).join('、') };
 }
 
+/**
+ * The stacks of one kind added up: the slots' count of a name, in the order of the first slot (the list is sorted by name). What sets a
+ * stack apart is said by the stack itself, and such a stack is not added: a tool with its wear (`durability`), a potion with what it
+ * is a potion of (`contents`) are kept as they are, one line a stack.
+ */
+export function mergeStacks<T extends { name: string; count: number; durability?: unknown; contents?: unknown }>(stacks: T[]): T[] {
+  const merged: T[] = [];
+  const at = new Map<string, number>();
+  for (const stack of stacks) {
+    if (stack.durability !== undefined || stack.contents !== undefined) { merged.push(stack); continue; }
+    const seen = at.get(stack.name);
+    if (seen === undefined) { at.set(stack.name, merged.length); merged.push({ ...stack }); } else merged[seen] = { ...merged[seen], count: merged[seen].count + stack.count };
+  }
+  return merged;
+}
+
 const NIGHTFALL_TICK = 13000;
 const MORNING_TICK = 23000;
 const HIT_RANGE = 24;
@@ -153,20 +170,22 @@ const biomeCache = new WeakMap<object, { key: string; name: string }>();
 /**
  * The biome under the body, read from the world itself. `environmentState.biome` is filled by `auto-update-state`, which the
  * common-FCA body never runs, so it stayed empty. Cached per 2-block cell (a biome does not change inside one) so the 100 ms
- * observation does not look it up each time; an unloaded cell is null, never an empty string.
+ * observation does not look it up each time; an unloaded cell is null, never an empty string. A name the body's dimension cannot have
+ * (a section the server did not send answers 0, `badlands`, even in the Nether) is null too (utils/biomeNames).
  */
 function biomeAt(bot: WorldFrameBotLike | undefined): string | null {
   const world = bot?.world, position = bot?.entity?.position as { x?: number; y?: number; z?: number } | undefined;
   if (!bot || typeof world?.getBiome !== 'function' || !position) return null;
   const x = finiteNumber(position.x), y = finiteNumber(position.y), z = finiteNumber(position.z);
   if (x === null || y === null || z === null) return null;
-  const key = `${Math.floor(x / 2)},${Math.floor(y / 2)},${Math.floor(z / 2)}`;
+  const dimension = bot.game?.dimension ?? bot.environmentState?.dimension;
+  const key = `${String(dimension ?? '')}|${Math.floor(x / 2)},${Math.floor(y / 2)},${Math.floor(z / 2)}`;
   const cached = biomeCache.get(bot);
   if (cached?.key === key) return cached.name;
   try {
     const id = world.getBiome(bot.entity!.position);
     const name = typeof id === 'number' ? bot.registry?.biomes?.[id]?.name : undefined;
-    if (!name) return null;
+    if (!biomeFitsDimension(dimension, name)) return null;
     biomeCache.set(bot, { key, name });
     return name;
   } catch { return null; }
@@ -216,7 +235,7 @@ export function captureWorldObservation(bot?: unknown): WorldObservation {
   const window = observedBot?.currentWindow;
   const windowKnown = window && Number.isInteger(window.inventoryStart) && Number.isInteger(window.inventoryEnd)
     && window.inventoryStart >= 0 && window.inventoryEnd > window.inventoryStart && window.inventoryEnd <= window.slots.length;
-  const inventory = (windowKnown ? window.slots.slice(window.inventoryStart, window.inventoryEnd).filter(item => item !== null)
+  const slotted = (windowKnown ? window.slots.slice(window.inventoryStart, window.inventoryEnd).filter(item => item !== null)
     : observedBot?.inventory?.items?.() ?? observedBot?.selfState?.inventory ?? [])
     // A planner told not to re-query the inventory saw only names, so a worn
     // pickaxe broke unannounced and left a paid run (L13) stranded underground.
@@ -230,6 +249,9 @@ export function captureWorldObservation(bot?: unknown): WorldObservation {
     })
     .filter(item => item.name && Number.isFinite(item.count) && item.count > 0)
     .sort((a, b) => a.name.localeCompare(b.name));
+  // LLM-centric mode: one line a kind (mb-llmc-cand). The stacks of a kind are the slots' business (64 and 30 cobbled_deepslate are
+  // 94, and were two lines in 42 of 45 scenes); a tool with wear and a potion with its contents say what sets it apart, so they stay apart.
+  const inventory = llmCentric ? mergeStacks(slotted) : slotted;
 
   const allEntities = position
     ? Object.values(observedBot?.entities ?? {})
@@ -313,7 +335,9 @@ export function captureWorldObservation(bot?: unknown): WorldObservation {
     ...(sealedIn(observedBot) ? { sealedInShelter: true as const } : {}),
     weather,
     time,
-    biome: biomeAt(observedBot) ?? (observedBot?.environmentState?.biome || null),
+    // The fallback (auto-update-state's) is judged by the dimension too.
+    biome: biomeAt(observedBot) ?? (biomeFitsDimension(observedBot?.game?.dimension ?? observedBot?.environmentState?.dimension, observedBot?.environmentState?.biome)
+      ? observedBot!.environmentState!.biome! : null),
     heldItem: observedBot?.heldItem?.name ?? observedBot?.selfState?.botHeldItem ?? null,
     ...wornLine(observedBot),
     inventory,

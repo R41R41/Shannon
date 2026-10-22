@@ -145,7 +145,7 @@ describe.skipIf(!built)('the map drawer on a real prismarine world: the same tex
   }
 });
 
-// ---- the redraw trigger (the contract: the feet cell changed, a block within 12 changed, or a creature's cell changed; at most every 500 ms) ----
+// ---- the redraw trigger (the contract: the feet cell changed [at once, mb-llmc-cand], a block within 12 changed, or a creature's cell changed; the last two at most every 500 ms) ----
 describe('localMapFor: when it draws again', () => {
   function fake() {
     const calls = { blockAt: 0 };
@@ -156,7 +156,7 @@ describe('localMapFor: when it draws again', () => {
     });
     return { bot, calls, mobs };
   }
-  it('a creature moving to another cell redraws at most once a second; the feet or a block change keep the 500 ms', () => {
+  it('a creature moving to another cell redraws at most once a second; a block change keeps the 500 ms; the feet on another cell draw at once', () => {
     const { bot, calls, mobs } = fake();
     mobs[7] = { id: 7, name: 'zombie', type: 'hostile', position: new Vec3(3.5, 64, 0.5) };
     const first = localMapFor(bot, { now: 10_000 })!;
@@ -171,12 +171,13 @@ describe('localMapFor: when it draws again', () => {
     const second = localMapFor(bot, { now: 11_000 })!;
     expect(second).not.toBe(first);
     expect(calls.blockAt).toBeGreaterThan(drawn);
-    // The feet moving to another cell: drawn again after 500 ms, not a second.
+    // The feet on the same cell: kept for 500 ms. On another cell: drawn at once (the `@` is where `position` is).
     const afterSecond = calls.blockAt;
-    bot.entity.position = new Vec3(1.5, 64, 0.5);
     expect(localMapFor(bot, { now: 11_300 })).toBe(second);
     expect(calls.blockAt).toBe(afterSecond);
-    expect(localMapFor(bot, { now: 11_500 })).not.toBe(second);
+    bot.entity.position = new Vec3(1.5, 64, 0.5);
+    expect(localMapFor(bot, { now: 11_350 })).not.toBe(second);
+    expect(calls.blockAt).toBeGreaterThan(afterSecond);
     // A block changed within 12: also 500 ms.
     const afterFeet = calls.blockAt;
     bot.emit('blockUpdate', null, { position: new Vec3(2, 64, 0) });

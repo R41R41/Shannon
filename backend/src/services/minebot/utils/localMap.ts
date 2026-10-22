@@ -643,15 +643,19 @@ export function feetCell(bot: MapBody): Cell | null {
   return { x, y, z };
 }
 
-/** The shortest time between two drawings of the map (the contract: at most every 500 ms). */
+/**
+ * The shortest time between two drawings of the map when only the blocks or the creatures changed (the contract: at most every 500 ms).
+ * mb-llmc-cand: the feet moving to another cell draws it at once: a map kept for 500 ms put `@` up to two cells (sprinting) behind the
+ * `position` and the marks' ways of the same frame, which are told from the feet of the moment.
+ */
 const MAP_MIN_MS = 500;
 /** ... and when only the creatures moved (the feet, the blocks and the dimension are as drawn), at most every second: they move all the time. */
 const CREATURE_MIN_MS = 1000;
 
 /**
- * The decision's map for a live body. Drawn again when the feet moved to another cell, a block changed near it, or the creatures
- * moved to other cells, and at most every MAP_MIN_MS (every CREATURE_MIN_MS when only creatures moved); else the last drawing. Null
- * without a body.
+ * The decision's map for a live body. Drawn again at once when the feet moved to another cell; when a block changed near it, or the
+ * creatures moved to other cells, at most every MAP_MIN_MS (every CREATURE_MIN_MS when only creatures moved); else the last drawing.
+ * Null without a body.
  */
 export function localMapFor(bot: MapBody, options: LocalMapOptions & { fresh?: boolean } = {}): string | null {
   const feet = feetCell(bot);
@@ -659,10 +663,10 @@ export function localMapFor(bot: MapBody, options: LocalMapOptions & { fresh?: b
   const memory = mapMemoryOf(bot);
   const now = options.now ?? Date.now();
   const cached = memory.cache;
-  // Inside MAP_MIN_MS nothing is looked at (the frame asks for the map several times a second).
-  if (!options.fresh && cached && now - cached.at < MAP_MIN_MS) return cached.text;
-  const creatures = creatureCells(bot);
   const key = `${cellKey(feet)}|${options.mode ?? 'auto'}|${String(bot.game?.dimension ?? '')}`;
+  // Inside MAP_MIN_MS nothing else is looked at (the frame asks for the map several times a second): the feet on the cell drawn, the same mode.
+  if (!options.fresh && cached && cached.key === key && now - cached.at < MAP_MIN_MS) return cached.text;
+  const creatures = creatureCells(bot);
   const crowd = [...creatures].map(([cell, mark]) => `${cell}${mark}`).sort().join(';');
   if (!options.fresh && cached && cached.key === key && !memory.dirty && (cached.crowd === crowd || now - cached.at < CREATURE_MIN_MS)) return cached.text;
   const text = drawLocalMap({ feet, read: bodyReader(bot), trail: walkedCells(bot, now), creatures }, options);

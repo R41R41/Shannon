@@ -572,7 +572,8 @@ export function probeAround(read: BlockReader, position: { x: number; y: number;
     footing ? `${footing.text}。` : '',
     dangers.some(d => d.kind !== 'water') ? `危ない：${dangers.filter(d => d.kind !== 'water').map(words).join('／')}。` : '',
     creatures.length ? `${r}m 内の生き物 ${creatures.length}（敵 ${hostile.length}）：${creatures.slice(0, 8).map(creatureWords).join('／')}。` : `${r}m 内に生き物は無い。`,
-    nearest.water ? words(nearest.water) : '',
+    // `nearest.water` has no count (the copy with `n` is the one pushed to `found`): its words ended "（undefined マス）" (inspection s44).
+    nearest.water ? words({ ...nearest.water, n: water }) : '',
   ].join('');
   return { v: 1, kind: 'around', text, radius: r, creatures, dangers, ...(footing ? { footing } : {}) };
 }

@@ -45,8 +45,13 @@ const ORE_NAMES = ['iron_ore', 'deepslate_iron_ore', 'coal_ore', 'deepslate_coal
 const oreKind = (name: string) => name === 'ancient_debris' ? 'ancient_debris' : name.replace(/^(deepslate|nether)_/u, '').replace(/_ore$/u, '');
 const FACES: Array<[number, number, number]> = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
 
-interface Mark { kind: string; line: string; distance: number; order: number }
-const cache = new WeakMap<object, { at: number; from: Cell; dimension: string; lines: string[] }>();
+/**
+ * A mark as the scan found it, with no way from the feet in it: the way (`relativeWords`) and the distance are made again at every
+ * call from the feet of that moment (mb-llmc-cand: the cache used to keep the lines, so for up to 3 s or 3 blocks a mark was told
+ * from the cell the body had left; 70 of the 175 mark lines of the 45 decision scenes were wrong that way).
+ */
+interface Mark { kind: string; cell: Cell; symbol: string; name: string; note: string | ((now: number) => string); order: number }
+const cache = new WeakMap<object, { at: number; from: Cell; dimension: string; marks: Mark[] }>();
 
 const at = (cell: Cell) => `(${cell.x},${cell.y},${cell.z})`;
 const cellOf = (position: { x: number; y: number; z: number }): Cell => ({ x: Math.floor(position.x), y: Math.floor(position.y), z: Math.floor(position.z) });
@@ -72,7 +77,10 @@ function bedNames(registry: any): string[] {
   return names;
 }
 
-/** The marks for a body, as lines; cached for RESCAN_MS unless the body moved RESCAN_MOVE blocks. */
+/**
+ * The marks for a body, as lines. What is found is scanned again every RESCAN_MS or when the body moved RESCAN_MOVE blocks; the lines
+ * themselves are made at every call, from the feet of that call (the way and the distance, the order, the furnace's seconds left).
+ */
 export function mapMarkLines(bot: MarkBody, now = Date.now(), fresh = false): string[] {
   const feet = feetCell(bot as any);
   if (!feet) return [];
@@ -80,11 +88,22 @@ export function mapMarkLines(bot: MarkBody, now = Date.now(), fresh = false): st
   // The marks are of the dimension the body is in (a portal crossed reads them afresh: run 26 was shown an overworld table in the Nether).
   const dimension = String(bot.game?.dimension ?? '');
   if (!fresh && cached && cached.dimension === dimension && now - cached.at < RESCAN_MS
-    && Math.hypot(cached.from.x - feet.x, cached.from.y - feet.y, cached.from.z - feet.z) < RESCAN_MOVE) return cached.lines;
-  let lines: string[] = [];
-  try { lines = computeMarks(bot, feet, now); } catch { lines = []; }
-  cache.set(bot as object, { at: now, from: feet, dimension, lines });
-  return lines;
+    && Math.hypot(cached.from.x - feet.x, cached.from.y - feet.y, cached.from.z - feet.z) < RESCAN_MOVE) return renderMarks(cached.marks, feet, now);
+  let marks: Mark[] = [];
+  try { marks = computeMarks(bot, feet, now); } catch { marks = []; }
+  cache.set(bot as object, { at: now, from: feet, dimension, marks });
+  return renderMarks(marks, feet, now);
+}
+
+/** The lines of the marks seen from `feet`: nearest first within each order, at most MAX_LINES, the four nearest crystals. */
+function renderMarks(marks: Mark[], feet: Cell, now: number): string[] {
+  const seen = marks.map(mark => ({ mark, distance: Math.hypot(mark.cell.x - feet.x, mark.cell.y - feet.y, mark.cell.z - feet.z) }));
+  // Crystals are many: the four nearest are enough.
+  const drop = new Set(seen.filter(entry => entry.mark.kind === 'crystal').sort((a, b) => a.distance - b.distance).slice(4));
+  return seen.filter(entry => !drop.has(entry)).sort((a, b) => a.mark.order - b.mark.order || a.distance - b.distance).slice(0, MAX_LINES).map(({ mark }) => {
+    const note = typeof mark.note === 'function' ? mark.note(now) : mark.note;
+    return `${mark.symbol} ${mark.name} ${at(mark.cell)} ${relativeWords(feet, mark.cell)}${note ? ` ${note}` : ''}`;
+  });
 }
 
 /** What a spawner spawns, from its block entity (SpawnData.entity.id), or the kind of mob seen beside it; empty when unknown. */
@@ -99,13 +118,12 @@ export function spawnerKind(bot: MarkBody, position: Vec3): string {
   return near.length ? `近くに ${[...new Set(near.map((entity: any) => entity.name))].join('・')}` : '';
 }
 
-function computeMarks(bot: MarkBody, feet: Cell, now: number): string[] {
+function computeMarks(bot: MarkBody, feet: Cell, now: number): Mark[] {
   const dimension = String(bot.game?.dimension ?? 'overworld');
   const marks: Mark[] = [];
-  /** One line in the contract's form: `記号 名前 (x,y,z) 方角距離・上下 注記`. */
-  const add = (kind: string, cell: Cell, symbol: string, name: string, note: string, order: number) => {
-    const distance = Math.hypot(cell.x - feet.x, cell.y - feet.y, cell.z - feet.z);
-    marks.push({ kind, distance, order, line: `${symbol} ${name} ${at(cell)} ${relativeWords(feet, cell)}${note ? ` ${note}` : ''}` });
+  /** One mark; its line, in the contract's form `記号 名前 (x,y,z) 方角距離・上下 注記`, is made by renderMarks from the feet of each call. */
+  const add = (kind: string, cell: Cell, symbol: string, name: string, note: string | ((now: number) => string), order: number) => {
+    marks.push({ kind, cell, symbol, name, note, order });
   };
   const village = dimension.includes('overworld')
     ? (bot.landmarks ?? []).find(mark => mark.kind === 'village' && Math.hypot(mark.position.x - feet.x, mark.position.z - feet.z) <= 160) : undefined;
@@ -143,12 +161,15 @@ function computeMarks(bot: MarkBody, feet: Cell, now: number): string[] {
     const kind = hit.name.endsWith('_bed') ? 'bed' : hit.name;
     if (!keep(kind, kind === 'bed' || kind === 'chest' ? 3 : 2)) continue;
     const cell = cellOf(hit.position);
-    let note = '';
+    let note: string | ((now: number) => string) = '';
     if (kind === 'furnace' || kind === 'blast_furnace' || kind === 'smoker') {
       const job = (bot.activeFurnaces ?? []).find(f => f.pos.x === cell.x && f.pos.y === cell.y && f.pos.z === cell.z && (!f.dimension || f.dimension === dimension));
       if (job) {
-        const left = Math.max(0, Math.round((job.readyAt - now) / 1000));
-        note = left > 0 ? `${job.item}×${job.count} 焼き上がり ${left}秒後` : `${job.item}×${job.count} 焼き上がり済みの見込み（取り出して確かめる）`;
+        // The seconds left are of the moment the line is made, not of the scan.
+        note = (atMs: number) => {
+          const left = Math.max(0, Math.round((job.readyAt - atMs) / 1000));
+          return left > 0 ? `${job.item}×${job.count} 焼き上がり ${left}秒後` : `${job.item}×${job.count} 焼き上がり済みの見込み（取り出して確かめる）`;
+        };
       }
     }
     if (kind === 'bed') note = hit.name;
@@ -213,10 +234,7 @@ function computeMarks(bot: MarkBody, feet: Cell, now: number): string[] {
       if (block?.name === 'bedrock') { add('perch', { x: 0, y: y + 1, z: 0 }, 'X', '止まり木', '出口ポータルの柱の上', 0); break; }
     }
   }
-  // Crystals are many: the four nearest are enough.
-  const crystals = marks.filter(mark => mark.kind === 'crystal').sort((a, b) => a.distance - b.distance);
-  const drop = new Set(crystals.slice(4));
-  return marks.filter(mark => !drop.has(mark)).sort((a, b) => a.order - b.order || a.distance - b.distance).slice(0, MAX_LINES).map(mark => mark.line);
+  return marks;
 }
 /**
  * The structure the body is in or right beside (the contract's `inside`, from run 26): a Nether fortress, a bastion, a stronghold, a
