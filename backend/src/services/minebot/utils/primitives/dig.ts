@@ -6,6 +6,7 @@ import { LavaReleaseError, lavaReleasedBy } from '../lavaSafety.js';
 import { fallIsDangerous, stepOffDrop } from '../edgeGuard.js';
 import { chooseTool, canHarvest, usesLeft } from '../toolChoice.js';
 import { PROTECTED_UTILITY_BLOCKS } from '../../constants.js';
+import { ownedAt, ownerWords } from '../ownedBlocks.js';
 import { bodyReader, cellKey, feetCell, relativeWords, type Cell } from '../localMap.js';
 import { blockInSight, eyeOf } from '../probeTools.js';
 import { blockAt, cellNow, cellText, DIG_REACH, eyeDistance, findItem, guard, isAirLike, letGo, placeText, stopped, StepStopped, wait, waitUntil,
@@ -88,8 +89,16 @@ export async function dig(ctx: StepContext, args: DigArgs): Promise<StepOutcome>
     if (UNBREAKABLE.has(block.name) || block.diggable === false || block.hardness === null || block.hardness < 0) {
       return result(stopped(bot, 'unbreakable', `${placeText(bot, cell)} の ${block.name} は壊せない`, cell));
     }
+    // r8 (run 32: the body's own bed, placed 200 s before, stopped its dig): a protected block the body put there itself (its ledger, utils/
+    // ownedBlocks) or the bed it sleeps in is dug without a word from the planner; any other may be a village's or another player's, and the
+    // stop says whose it is not known to be.
+    let own: ReturnType<typeof ownedAt> = null;
     if (PROTECTED_UTILITY_BLOCKS.has(block.name) && !args.take) {
-      return result(stopped(bot, 'protected', `${placeText(bot, cell)} は ${block.name}（村や自分の設備かもしれない。中身・ベッドを持っていくなら take:true で掘る）`, cell));
+      own = ownedAt(bot, cell, block.name);
+      if (!own) {
+        return result(stopped(bot, 'protected', `${placeText(bot, cell)} は ${block.name}（誰の物か分からない: 自分で置いた記録もスポーン地点のベッドでもない。村や他人の物かもしれない。`
+          + `壊すなら takeOk:true）`, cell));
+      }
     }
     // The body still dropping into the cell dug before: wait until it stands (at most 1 s) so its column is read where it lands.
     if (bot.entity && bot.entity.onGround === false) await waitUntil(ctx, () => bot.entity?.onGround !== false, 1000);
@@ -136,7 +145,7 @@ export async function dig(ctx: StepContext, args: DigArgs): Promise<StepOutcome>
     const now = blockAt(bot, cell);
     const refilled = now && !isAirLike(now) && now.name !== 'water' && now.name !== 'lava' ? `（掘った後、今は ${now.name}: 上から落ちてきた）` : now && (now.name === 'water' || now.name === 'lava') ? `（掘った後、${now.name} が流れ込んだ）` : '';
     const left = usesLeft(bot.heldItem);
-    done.push(`${cellText(cell)} ${block.name} を掘った（${tool.held}、${((Date.now() - started) / 1000).toFixed(1)}秒${left !== null && left <= 10 ? `、${bot.heldItem?.name} 残り${left}回` : ''}）${refilled}`);
+    done.push(`${cellText(cell)} ${block.name} を掘った（${tool.held}、${((Date.now() - started) / 1000).toFixed(1)}秒${left !== null && left <= 10 ? `、${bot.heldItem?.name} 残り${left}回` : ''}${own ? `。${ownerWords(own)}` : ''}）${refilled}`);
     ctx.progress?.(`${done.length}/${cells.length}`);
   }
   if (args.collect !== false && dugCells.length) {

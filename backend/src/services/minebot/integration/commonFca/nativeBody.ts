@@ -20,7 +20,7 @@ import { renderActReport, takeActReport } from '../../utils/actReport.js';
 
 const delay = (milliseconds: number) => new Promise(resolve => setTimeout(resolve, milliseconds));
 /** The floor's action names, as the planner reads them in a receipt. */
-const REFLEX_LABELS: Record<string, string> = { 'floor-eat': '食事', 'floor-armor': '防具の装着', 'floor-retreat': '退避', 'floor-flee': '低体力の逃走', 'floor-last-stand': '逃げ道が無い時の最後の手', 'floor-cover': '燃えて射手から見えている時に射線を切る',
+const REFLEX_LABELS: Record<string, string> = { 'floor-eat': '食事', 'floor-armor': '防具の装着', 'floor-retreat': '退避', 'floor-flee': '低体力の逃走', 'floor-last-stand': '逃げ道が無い時の最後の手', 'floor-cover': '燃えて射手から見えている時に射線を切る', 'floor-melee': '近接の敵が近い時の最小の 1 手（空所の縁から離れる・間にブロック）',
   'auto-swim': '泳ぎ（呼吸の確保）' };
 /** A reflex's action name as the planner reads it: the table, else the name without its `floor-` / `constant:` / `auto-` prefix. */
 function reflexLabel(by: string): string {

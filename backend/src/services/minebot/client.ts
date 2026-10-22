@@ -34,6 +34,7 @@ import { threatTrackerPlugin } from './utils/threatTracker.js';
 import { toolWearPlugin } from './utils/toolWear.js';
 import { landmarkWatcherPlugin } from './utils/landmarks.js';
 import { placeMemoryPlugin } from './utils/placeMemory.js';
+import { ownedBlocksPlugin } from './utils/ownedBlocks.js';
 import { loadFloorLayer } from './utils/floorLayer.js';
 import { fireballDeflectPlugin } from './utils/fireballDeflect.js';
 import { shieldBlockPlugin } from './utils/shieldBlock.js';
@@ -182,6 +183,7 @@ export class MinebotClient extends BaseClient {
     this.bot.loadPlugin(toolWearPlugin);
     this.bot.loadPlugin(landmarkWatcherPlugin);
     this.bot.loadPlugin(placeMemoryPlugin);
+    this.bot.loadPlugin(ownedBlocksPlugin);
     this.bot.loadPlugin(digConfirmationPlugin);
     this.bot.loadPlugin(serverRefusalPlugin);
     this.bot.loadPlugin(lavaDigGuardPlugin);

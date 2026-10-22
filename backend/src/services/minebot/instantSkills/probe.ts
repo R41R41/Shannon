@@ -1,5 +1,7 @@
 import { z } from 'zod';
+import { Vec3 } from 'vec3';
 import { CustomBot, InstantSkill } from '../types.js';
+import { digMsWithBestTool } from '../utils/bestToolDigTime.js';
 import { bodyReader, feetCell, type Cell } from '../utils/localMap.js';
 import { eyeOf, probeAround, probeColumn, probePath, probeHistory, probeSight, type AroundEntity, type SightCreature } from '../utils/probeTools.js';
 import { handsNear } from '../utils/handHistory.js';
@@ -121,7 +123,9 @@ export async function runProbe(bot: any, input: ProbeInput): Promise<{ success: 
     case 'column': {
       const cx = typeof input.x === 'number' ? Math.floor(input.x) : feet.x, cz = typeof input.z === 'number' ? Math.floor(input.z) : feet.z;
       const low = typeof input.yFrom === 'number' ? Math.floor(input.yFrom) : feet.y - 16, high = typeof input.yTo === 'number' ? Math.floor(input.yTo) : feet.y + 16;
-      return answer(probeColumn(read, cx, cz, low, high, feet));
+      // r8: the seconds one block over her head takes with the best tool she carries (a bare hand is 7.7 s for stone), read from the block itself.
+      const digMs = (x: number, y: number, z: number) => { const block = bot.blockAt?.(new Vec3(x, y, z), false); return block ? digMsWithBestTool(bot, block) : null; };
+      return answer(probeColumn(read, cx, cz, low, high, feet, digMs));
     }
     case 'around':
       return answer(probeAround(read, bot.entity.position, aroundEntities(bot), clampRadius(input.radius, 1, 16, 8)));

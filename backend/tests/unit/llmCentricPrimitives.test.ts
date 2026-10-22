@@ -57,7 +57,9 @@ describe('dig', () => {
     const chestOut = await dig(ctx(bot), { at: [{ x: 1, y: 65, z: 0 }, { x: 1, y: 64, z: 0 }] });
     expect(chestOut.reason).toBe('protected');
     expect(chestOut.text).toContain('(1,65,0) は既に air（掘らずに次へ）');
-    expect(chestOut.text).toContain('take:true');
+    // r8: the stop says whose it is not known to be, and names the hand's real field (takeOk; it said "take:true", which no hand has).
+    expect(chestOut.text).toContain('誰の物か分からない');
+    expect(chestOut.text).toContain('takeOk:true');
     expect((await dig(ctx(bot), { at: [{ x: 0, y: 62, z: 1 }] })).reason).toBe('unbreakable');
     expect((await dig(ctx(bot), { at: [{ x: 0, y: 63, z: 9 }] })).reason).toBe('out_of_reach');
   });

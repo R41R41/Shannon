@@ -15,7 +15,11 @@ const log = createLogger('Minebot:ReflexLedger');
  * cover (r7): a hand that cut a shooter's line while burning (floorReflexes `coverChoice`); cover_none: burning in the line with no such hand
  * to make (a fact only: it does not stop an act, which may be what takes the body out).
  */
-export type ReflexKind = 'retreat' | 'eat' | 'armor' | 'flee' | 'pickup' | 'budget' | 'shield' | 'fireball' | 'knock' | 'lava' | 'breath' | 'cover' | 'cover_none';
+/**
+ * melee (r8): a hand toward a melee enemy near (a step off a drop's rim, a block between, a step away: floorReflexes `meleeChoice`);
+ * melee_none: such an enemy near with no hand to make, or the episode's hands used up (a fact only: it does not stop an act).
+ */
+export type ReflexKind = 'retreat' | 'eat' | 'armor' | 'flee' | 'pickup' | 'budget' | 'shield' | 'fireball' | 'knock' | 'lava' | 'breath' | 'cover' | 'cover_none' | 'melee' | 'melee_none';
 export type ReflexOutcome = 'done' | 'cut' | 'failed';
 export interface ReflexEntry {
   seq: number; at: number; kind: ReflexKind; detail: string; outcome: ReflexOutcome;

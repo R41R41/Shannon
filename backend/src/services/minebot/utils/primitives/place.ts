@@ -1,8 +1,10 @@
 import { Vec3 } from 'vec3';
+import { bedHalves, isBedName } from '../bedRules.js';
 import { equipToHandVerified } from '../equipVerified.js';
 import { type Cell } from '../localMap.js';
+import { noteOwned } from '../ownedBlocks.js';
 import { blockAt, cellNow, cellText, DIRECTION_JA, DIRECTIONS, eyeDistance, findItem, guard, inventoryCount, isAirLike, placeText, stopped,
-  StepStopped, USE_REACH, wait, type StepContext, type StepOutcome } from './common.js';
+  StepStopped, USE_REACH, wait, waitUntil, type StepContext, type StepOutcome } from './common.js';
 
 /**
  * place: a block into each cell in order (design mb-llm-centric 2.3). The cell is the planner's: no place is chosen for it, the body
@@ -99,6 +101,29 @@ function ownCellWord(bot: any, cell: Cell): string {
   return '自分の体のマス';
 }
 
+/** How long a placed bed's other half is waited for (the server's next block update is a tick, 50 ms, behind the first). */
+export const BED_HALF_WAIT_MS = 1500;
+
+/**
+ * The two halves of the bed just placed at `cell`: waits for the other one, notes both as the body's own, and says where each lies.
+ * `failed` is the fact when the other half did not come ("ベッドの頭のマス (x,y,z) は air のまま").
+ */
+export async function bedBothHalves(ctx: StepContext, cell: Cell, waitMs = BED_HALF_WAIT_MS): Promise<{ failed?: string; words: string }> {
+  const bot = ctx.bot;
+  const halves = bedHalves(blockAt(bot, cell), cell);
+  if (!halves) return { words: '' };
+  const waitedFrom = Date.now();
+  const ready = await waitUntil(ctx, () => isBedName(blockAt(bot, halves.other)?.name), waitMs);
+  const late = Date.now() - waitedFrom;
+  if (!ready) {
+    return { words: '', failed: `${placeText(bot, cell)} に置いた ${blockAt(bot, cell)?.name ?? 'ベッド'} は半分しか無い: ベッドの${halves.part === 'foot' ? '頭' : '足'}のマス ${cellText(halves.other)} は`
+      + ` ${cellNow(bot, halves.other)} のまま（向き ${halves.facing}。置く時の体の向きで頭の側が決まる）` };
+  }
+  try { noteOwned(bot, halves.other, String(blockAt(bot, halves.other)?.name ?? 'bed')); } catch { /* the ledger is a help */ }
+  // The wait is said when there was one: the next run's log shows how late the head comes (it is the cause of "there's only half bed").
+  return { words: `。ベッドは足 ${cellText(halves.foot)}・頭 ${cellText(halves.head)}（向き ${halves.facing}${late >= 20 ? `。頭は足より ${late}ms 遅れて届いた` : ''}）` };
+}
+
 export async function place(ctx: StepContext, args: PlaceArgs): Promise<StepOutcome> {
   const bot = ctx.bot;
   const cells = args.at ?? [];
@@ -162,7 +187,16 @@ export async function place(ctx: StepContext, args: PlaceArgs): Promise<StepOutc
       await wait(ctx, 300);
       if (blockAt(bot, cell)?.name !== args.block) return result(stopped(bot, 'not_placed', `${placeText(bot, cell)} は置いた後も ${cellNow(bot, cell)}（サーバーが受け付けない）`, cell));
     }
-    done.push(`${cellText(cell)} に ${args.block} を置いた（${DIRECTION_JA[side]}の ${reference.name} に当てて。残り${Math.max(0, countBefore - 1)}）`);
+    try { noteOwned(bot, cell, args.block); } catch { /* the ledger is a help */ }
+    // r8 (runs 28 and 32): a bed is two blocks and the server sends the foot first and the head a moment later; the hand is over when both are
+    // in the body's world, and says where each lies (the head lies where the body faced, which the planner did not choose).
+    let bedWords = '';
+    if (isBedName(args.block)) {
+      const halves = await bedBothHalves(ctx, cell);
+      if (halves.failed) return result(stopped(bot, 'not_placed', halves.failed, cell));
+      bedWords = halves.words;
+    }
+    done.push(`${cellText(cell)} に ${args.block} を置いた（${DIRECTION_JA[side]}の ${reference.name} に当てて。残り${Math.max(0, countBefore - 1)}）${bedWords}`);
     ctx.progress?.(`${done.length}/${cells.length}`);
   }
   return { ok: true, text: done.join('、'), at: cells[cells.length - 1] };

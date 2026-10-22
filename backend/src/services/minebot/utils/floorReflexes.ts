@@ -15,6 +15,7 @@ import { seesBodyAt, threatExposure } from './threatExposure.js';
 import { holdsWater } from './waterBlocks.js';
 import { bodyReader, feetCell } from './localMap.js';
 import { climbRise, MAX_CLIMB, passable, standable } from './walkRules.js';
+import { footingAt, footingWords, type Footing } from './voidFooting.js';
 import { isBurning, lavaReleasedBy } from './lavaSafety.js';
 import { engagedWithAny } from './engagement.js';
 import { PROTECTED_UTILITY_BLOCKS } from '../constants.js';
@@ -217,6 +218,10 @@ export interface FloorState {
   coverNextAt?: number;
   coverNotedAt?: number;
   healthSeen?: { last: number; fellAt: number };
+  /** r8, the melee hand (LLM-centric): the episode (hands made, when the last ended), the next look, the last "no hand" note. */
+  melee?: { since: number; hands: number; lastEnd: number };
+  meleeNextAt?: number;
+  meleeNotedAt?: number;
 }
 
 export { creeperLit };
@@ -1011,8 +1016,8 @@ const LAST_STAND_GAP_MS = 1500;
 /** A creeper's fuse is a second and a half: a cornered body that cannot make its stand by then has no stand to make. */
 const CORNERED_WAIT_MS = 1500;
 /** The ledger keeps this much of the last stand's detail (the usual 40 cannot hold the place, the health and, r6, the threat that reaches). */
-const LAST_STAND_DETAIL_MAX = 130;
-const LAST_STAND_TIMEOUT_MS: Record<'hit' | 'dig' | 'pillar', number> = { hit: 3000, dig: 7000, pillar: 5000 };
+const LAST_STAND_DETAIL_MAX = 160;
+const LAST_STAND_TIMEOUT_MS: Record<LastStand['kind'], number> = { hit: 3000, dig: 7000, pillar: 5000, melee: 3000 };
 /** The act's hands that lay blocks (the act sets `actHandNow` on the body while a hand runs). */
 export const LAYING_HANDS = new Set(['place', 'pillarUp']);
 const TOOL_TIERS = ['netherite', 'diamond', 'iron', 'stone', 'golden', 'wooden'];
@@ -1033,7 +1038,9 @@ export function bestMeleeWeapon(items: Item[]): Item | null {
 export type LastStand =
   | { kind: 'hit'; target: FloorEntity; weapon: Item | null; detail: string }
   | { kind: 'dig'; cell: { x: number; y: number; z: number }; detail: string }
-  | { kind: 'pillar'; block: string; detail: string };
+  | { kind: 'pillar'; block: string; detail: string }
+  /** r8: at the rim of a drop, where a jump is a body in the air that a blow throws: the melee hand (a step off the rim, a block between). */
+  | { kind: 'melee'; hand: MeleeHand; detail: string };
 
 /** Whole blocks a last-stand pillar is made of: the shelter's walls and any planks. */
 const isPillarBlock = (name: string) => WALL_BLOCKS.has(name) || name.endsWith('_planks');
@@ -1113,6 +1120,21 @@ export function lastStandChoice(bot: FloorBody, skip?: LastStand['kind'], cause:
     }
   }
   if (!creeper && skip !== 'dig') { const down = stepDown(); if (down) return down; }
+  // r8 (run 32): at the rim of a drop (a cell round the feet that falls three or more, or into lava) no jump is made: the pillar is a body in
+  // the air for a third of a second, and a blow there threw it off a bridge into the lava. The melee hand instead (a step off the rim, a block
+  // between the body and the enemy), when a melee enemy is near; else nothing, and the planner decides from the fact.
+  let rim: Footing | null = null;
+  try { rim = footingAt(bodyReader(bot as never), feet); } catch { rim = null; }
+  if (rim && rim.count > 0) {
+    if (!creeper && skip !== 'melee') {
+      try {
+        const threats = meleeThreatsNear(bot);
+        const choice = threats.length ? meleeChoice(bot, threats, { hands: 0, beingHit: true }) : null;
+        if (choice?.hand) return { kind: 'melee', hand: choice.hand, detail: `${lead} ${choice.hand.detail}。足場: ${footingWords(choice.footing)} ${where}${fact}` };
+      } catch { /* no hand */ }
+    }
+    return null;
+  }
   // (c) One block up: a full block carried, and the two cells over the head are air.
   if (skip !== 'pillar') {
     const block = items.filter(item => isPillarBlock(item.name)).reduce<{ name: string; count: number } | null>((best, item) => {
@@ -1143,6 +1165,7 @@ export async function runLastStand(bot: FloorBody, port: FloorBody, stand: LastS
     }
     return { success: blows > 0, result: blows > 0 ? `${blows}回打った` : '打つ相手が離れた' };
   }
+  if (stand.kind === 'melee') return runMelee(bot, port, stand.hand);
   const position = bot.entity!.position;
   const base = { x: Math.floor(position.x), y: Math.floor(position.y + 1e-3), z: Math.floor(position.z) };
   const ctx = { bot: port, stop: new AbortController().signal, deadline: Date.now() + LAST_STAND_TIMEOUT_MS[stand.kind], facing: 'north' as const, base };
@@ -1323,6 +1346,163 @@ export async function runCover(bot: FloorBody, port: FloorBody, cover: Cover, ti
   return { success: outcome.ok, result: outcome.text };
 }
 
+// ===== r8: a melee enemy near, and the rim of a drop at the feet =====
+
+/**
+ * Run 32 (2026-10-22, +321 to +330 s): on a bridge one block wide over a lava sea (24 to 30 cells of air on both sides) a wither skeleton
+ * from the fortress above came to 6 m, the planner's next decision took 10.3 s, and in 2.3 s it struck three times. The flee found no way
+ * (every cell round was air), the last stand struck back once and then jumped to lay a block under the feet (pillarUp); a blow in the air
+ * threw the body off the bridge, and it fell 30 cells into the lava. The cover (r7) is for shooters only.
+ *
+ * The melee hand (LLM-centric only): one minimal hand, told as a fact, never a plan. A melee enemy (a threat that is not a shooter or a
+ * creeper) within MELEE_RANGE that can get at the body (its exposure is not `sealed`, read now), and either
+ *   - the body stands at the rim of a drop (a cell round the feet that is open and falls VOID_DROP cells or more, or ends in lava:
+ *     utils/voidFooting): (a) one step to a cell with fewer such cells round it; else (b) a block put in the cell toward the enemy (a second
+ *     one over it, in the same episode); else (c) one step that gets farther from it;
+ *   - or the body is on a floor and was hurt in the last two seconds (and is above the flee's health): one step away, never to a rim.
+ * At most MELEE_MAX_HANDS in an episode (hands less than MELEE_EPISODE_MS apart); then it says so and leaves the decision to the planner. The
+ * act running stops (the lease is taken); the ledger says what was done, the footing and how near the enemy is now. A kind the planner fights
+ * by choice is left alone above the flee's health. No pillar is ever made at a rim: a jump there is a body in the air that a blow throws.
+ */
+const MELEE_RANGE = 4;
+const MELEE_GAP_MS = 250;
+const MELEE_EPISODE_MS = 4000;
+const MELEE_MAX_HANDS = 3;
+const MELEE_NOTE_GAP_MS = 5000;
+/** A step must get this much farther from the nearest melee enemy (a step that does not is no step away). */
+const MELEE_STEP_GAIN = 0.6;
+const MELEE_DETAIL_MAX = 150;
+/** How many of the nearest enemies have their exposure read at a look. */
+const MELEE_LOOKED_AT = 3;
+const MELEE_TIMEOUT_MS: Record<MeleeHand['kind'], number> = { step: 3000, block: 3000 };
+const AIR_BLOCKS = new Set(['air', 'cave_air', 'void_air']);
+
+export interface MeleeThreat { entity: FloorEntity; distance: number }
+export type MeleeHand =
+  | { kind: 'step'; to: { x: number; y: number; z: number }; detail: string }
+  | { kind: 'block'; cell: { x: number; y: number; z: number }; block: string; detail: string };
+
+/** The melee enemies within MELEE_RANGE, the nearest first, without a look at whether they can get at the body (cheap: the tick's first test). */
+export function meleeCandidates(bot: FloorBody, fought?: (name: string) => boolean): MeleeThreat[] {
+  const at = bot.entity?.position; if (!at) return [];
+  const near: MeleeThreat[] = [];
+  for (const entity of others(bot)) {
+    const name = String(entity.name ?? '').toLowerCase();
+    if (!name || name === 'creeper' || SHOOTERS.has(name) || COVER_SHOOTERS[name] !== undefined || bot.shootsAtBody?.(name) === true || (fought && fought(name))) continue;
+    const distance = entity.position.distanceTo(at);
+    if (distance <= MELEE_RANGE && isThreat(bot, entity)) near.push({ entity, distance });
+  }
+  return near.sort((a, b) => a.distance - b.distance);
+}
+
+/** The melee enemies within MELEE_RANGE that can get at the body now, the nearest first (`fought`: kinds the planner fights by choice, left out). */
+export function meleeThreatsNear(bot: FloorBody, fought?: (name: string) => boolean): MeleeThreat[] {
+  const near = meleeCandidates(bot, fought);
+  // The exposure is a flood fill of up to 15 ms each, read fresh: for the nearest few only (a crowd is told by the nearest).
+  const out: MeleeThreat[] = [];
+  for (const threat of near.slice(0, MELEE_LOOKED_AT)) {
+    let exposure: ReturnType<typeof threatExposure>;
+    try { exposure = threatExposure(bot as any, threat.entity as any, Date.now(), { fresh: true }); } catch { exposure = 'reachable'; }
+    if (exposure !== 'sealed') out.push(threat);
+  }
+  return out;
+}
+
+/** "wither_skeleton #12 上3・3.1m" (and "ほか 1 体"): the nearest melee enemy as the reflex's line names it. */
+function meleeWho(body: Vec3, threats: MeleeThreat[]): string {
+  const first = threats[0], dy = Math.round(first.entity.position.y - body.y);
+  return `近接の ${first.entity.name} #${first.entity.id} ${dy > 0 ? `上${dy}・` : dy < 0 ? `下${-dy}・` : ''}${first.distance.toFixed(1)}m${threats.length > 1 ? `ほか${threats.length - 1}体` : ''}`;
+}
+
+function wayWordsOf(from: { x: number; z: number }, to: { x: number; z: number }): string {
+  return `${to.x > from.x ? `東${to.x - from.x}` : to.x < from.x ? `西${from.x - to.x}` : ''}${to.z > from.z ? `南${to.z - from.z}` : to.z < from.z ? `北${from.z - to.z}` : ''}`;
+}
+
+/**
+ * The melee hand now, or null with the facts of why none: `quiet` is true when there is nothing to do (not at a rim, not being hurt).
+ * `hands` is how many the episode has made (the second block goes over the first); `beingHit` is a body on a floor that was hurt just now.
+ */
+export function meleeChoice(bot: FloorBody, threats: MeleeThreat[], options: { hands?: number; beingHit?: boolean } = {}): { hand: MeleeHand | null; why: string; footing: Footing; quiet: boolean } {
+  const feet = feetCell(bot as never), body = bot.entity?.position;
+  const nothing: Footing = { sides: [], count: 0, deepest: 0, lava: false, bridge: false, pillar: false };
+  if (!feet || !body || !threats.length) return { hand: null, why: '', footing: nothing, quiet: true };
+  const read = bodyReader(bot as never);
+  const here = footingAt(read, feet);
+  const rim = here.count > 0;
+  if (!rim && !options.beingHit) return { hand: null, why: '', footing: here, quiet: true };
+  const open = (x: number, y: number, z: number) => passable(read(x, y, z)) && passable(read(x, y + 1, z));
+  const apart = (x: number, y: number, z: number) => Math.min(...threats.map(({ entity }) => Math.hypot(entity.position.x - x, (entity.position.y - y) * 0.5, entity.position.z - z)));
+  const now = apart(body.x, body.y, body.z);
+  // One step across (or one up or down) to a cell a body can stand in, not into a creature, with the rim round the cell it comes to.
+  const steps: Array<{ cell: { x: number; y: number; z: number }; footing: Footing; gain: number }> = [];
+  for (const [dx, dz] of COVER_STEP_DIRS) {
+    if (dx !== 0 && dz !== 0 && !(open(feet.x + dx, feet.y, feet.z) && open(feet.x, feet.y, feet.z + dz))) continue;
+    const x = feet.x + dx, z = feet.z + dz;
+    for (const dy of [0, 1, -1]) {
+      if (dy === 1 && (!passable(read(feet.x, feet.y + 2, feet.z)) || climbRise(read, feet.x, feet.y, feet.z, x, z) > MAX_CLIMB + 1e-9)) continue;
+      if (dy === -1 && !open(x, feet.y, z)) continue;
+      const cell = { x, y: feet.y + dy, z };
+      if (!standable(read, cell.x, cell.y, cell.z)) continue;
+      if (threats.some(({ entity }) => Math.abs(entity.position.x - (cell.x + 0.5)) < 0.9 && Math.abs(entity.position.z - (cell.z + 0.5)) < 0.9 && Math.abs(entity.position.y - cell.y) < 2)) continue;
+      steps.push({ cell, footing: footingAt(read, cell), gain: apart(cell.x + 0.5, cell.y, cell.z + 0.5) - now });
+    }
+  }
+  const stepHand = (step: typeof steps[number], lead: string): MeleeHand => ({ kind: 'step', to: step.cell,
+    detail: `${lead}${wayWordsOf(feet, step.cell)}へ動いた ${cellWords(feet)}→${cellWords(step.cell)}` });
+  const order = (a: typeof steps[number], b: typeof steps[number]) => a.footing.count - b.footing.count || b.gain - a.gain;
+  const why: string[] = [];
+  if (rim) {
+    // (a) away from the drop: a cell with fewer open-over-air cells round it.
+    const fewer = steps.filter(step => step.footing.count < here.count && step.gain >= -0.5).sort(order)[0];
+    if (fewer) return { hand: stepHand(fewer, '空所から離れる向きへ'), why: '', footing: here, quiet: false };
+    // (b) a block in the cell toward the enemy (over the first one when it is in).
+    const items = bot.inventory?.items() ?? [];
+    const block = items.filter(item => isPillarBlock(item.name)).sort((a, b) => ((b as { count?: number }).count ?? 1) - ((a as { count?: number }).count ?? 1))[0];
+    if (!block) why.push('置くブロックを持っていない');
+    else {
+      const ex = threats[0].entity.position.x - (feet.x + 0.5), ez = threats[0].entity.position.z - (feet.z + 0.5);
+      if (Math.abs(ex) < 0.5 && Math.abs(ez) < 0.5) why.push('敵が真上か真下で、間のマスが無い');
+      else {
+        const sx = Math.abs(ex) >= Math.abs(ez) ? Math.sign(ex) : 0, sz = sx === 0 ? Math.sign(ez) : 0;
+        const x = feet.x + sx, z = feet.z + sz;
+        const own = bodyCellsOf(body);
+        const placeable = (y: number) => {
+          const cell = read(x, y, z);
+          if (!cell || !AIR_BLOCKS.has(cell.name) || own.some(c => c.x === x && c.y === y && c.z === z)) return false;
+          if (threats.some(({ entity }) => Math.abs(entity.position.x - (x + 0.5)) < 1 && Math.abs(entity.position.z - (z + 0.5)) < 1 && Math.abs(entity.position.y - y) < 2.5)) return false;
+          return [[0, -1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, 1, 0]].some(([ax, ay, az]) => read(x + ax, y + ay, z + az)?.solid === true);
+        };
+        const low = feet.y, high = feet.y + 1;
+        const lowSolid = read(x, low, z)?.solid === true;
+        const target = placeable(low) ? low : ((options.hands ?? 0) > 0 && lowSolid && placeable(high)) ? high : null;
+        if (target !== null) return { hand: { kind: 'block', cell: { x, y: target, z }, block: block.name, detail: `間 ${cellWords({ x, y: target, z })} に ${block.name} を置いた` }, why: '', footing: here, quiet: false };
+        why.push(lowSolid ? '敵との間は既に塞がっている' : `敵との間の ${cellWords({ x, y: low, z })} に置けない`);
+      }
+    }
+  }
+  // (c) a step that gets away (on a floor: never to a rim; at a rim: to one no worse).
+  const away = steps.filter(step => step.footing.count <= here.count && step.gain >= MELEE_STEP_GAIN).sort(order)[0];
+  if (away) return { hand: stepHand(away, '敵から離れる向きへ'), why: '', footing: here, quiet: false };
+  why.push('下がる所が無い');
+  return { hand: null, why: why.join('・'), footing: here, quiet: false };
+}
+
+/** The cells the body's box fills at `position` (0.6 wide, 1.8 tall; as the `place` hand counts them). */
+function bodyCellsOf(position: { x: number; y: number; z: number }): Array<{ x: number; y: number; z: number }> {
+  const cells: Array<{ x: number; y: number; z: number }> = [];
+  for (const dx of [-0.3, 0.3]) for (const dz of [-0.3, 0.3]) for (const dy of [0, 0.9, 1.79]) {
+    const cell = { x: Math.floor(position.x + dx), y: Math.floor(position.y + dy), z: Math.floor(position.z + dz) };
+    if (!cells.some(other => other.x === cell.x && other.y === cell.y && other.z === cell.z)) cells.push(cell);
+  }
+  return cells;
+}
+
+/** Runs one melee hand as the work of a safety-lease action (`port` is the body's motor port): a step is walked, a block is placed. */
+export function runMelee(bot: FloorBody, port: FloorBody, hand: MeleeHand): Promise<{ success: boolean; result: string }> {
+  return runCover(bot, port, hand.kind === 'step' ? { kind: 'step', to: hand.to, detail: hand.detail } : { kind: 'seal', cell: hand.cell, block: hand.block, detail: hand.detail },
+    MELEE_TIMEOUT_MS[hand.kind]);
+}
+
 export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floorConfig(), options: { fleeTickMs?: number; now?: () => number } = {}): void {
   if (bot.floorReflexes) return;
   const now = options.now ?? Date.now;
@@ -1451,6 +1631,76 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
       });
     return true;
   };
+  /**
+   * r8, the melee hand (`meleeChoice`): a melee enemy near and the body at the rim of a drop (or hurt just now on a floor): one minimal hand,
+   * told in the ledger with the footing and how near the enemy is now. Never over another safety lease, an escape, or the planner's blocks going
+   * in. True when a hand was started.
+   */
+  const meleeTick = (): boolean => {
+    if (!config.flee || !isLlmCentric(bot)) return false;
+    const t = now(), health = bot.health ?? 20;
+    if (health <= 0) return false;
+    if (t < (state.meleeNextAt ?? 0)) return false;
+    if (hasActiveSafetyLease(bot) || escapeRunning(bot) || bot.lavaReflex?.engaged === true || bot.breathingReflex?.engaged === true) return false;
+    if (LAYING_HANDS.has(String((bot as { actHandNow?: string }).actHandNow ?? ''))) return false;
+    state.meleeNextAt = t + MELEE_GAP_MS;
+    const body = bot.entity; if (!body) return false;
+    // The cheap looks first: an enemy within reach of a blow, then a rim or a hurt just now on a floor (the enemies' exposure is read after).
+    const fought = health > FLEE_HEALTH ? (name: string) => engagedWithAny(bot, [name]) : undefined;
+    try { if (!meleeCandidates(bot, fought).length) return false; } catch { return false; }
+    const beingHurt = health > FLEE_HEALTH && t - (state.healthSeen?.fellAt ?? -Infinity) <= COVER_FALL_MS;
+    if (!beingHurt) {
+      try { const feetNow = feetCell(bot as never); if (!feetNow || footingAt(bodyReader(bot as never), feetNow).count === 0) return false; } catch { return false; }
+    }
+    let threats: MeleeThreat[] = [];
+    try { threats = meleeThreatsNear(bot, fought); } catch { return false; }
+    if (!threats.length) return false;
+    const episode = state.melee && t - state.melee.lastEnd <= MELEE_EPISODE_MS ? state.melee : undefined;
+    if (!episode) state.melee = undefined;
+    const hands = episode?.hands ?? 0;
+    // Hurt just now on a floor: a step away, above the flee's health (below it the flee runs).
+    const beingHit = beingHurt;
+    let choice: ReturnType<typeof meleeChoice>;
+    try { choice = meleeChoice(bot, threats, { hands, beingHit }); } catch { return false; }
+    if (choice.quiet) return false;
+    const who = meleeWho(body.position, threats);
+    const told = (text: string) => {
+      if (t - (state.meleeNotedAt ?? -Infinity) < MELEE_NOTE_GAP_MS) return;
+      state.meleeNotedAt = t;
+      const footing = footingWords(choice.footing);
+      try { ledger.end(Object.assign(ledger.begin('melee_none', '', MELEE_DETAIL_MAX), { detail: `${who}: ${text}${footing ? `。足場: ${footing}` : ''}`.slice(0, MELEE_DETAIL_MAX) }), 'failed'); } catch { /* a report */ }
+    };
+    if (hands >= MELEE_MAX_HANDS) { told(`この間に${hands}手を打ったがまだ近い。これ以上は反射でしない`); return false; }
+    if (!choice.hand) { told(`動ける手が無い（${choice.why}）`); return false; }
+    const hand = choice.hand;
+    const run = state.melee = episode ?? { since: t, hands: 0, lastEnd: t };
+    run.hands++;
+    state.busy = 'flee';
+    log.warn(`🗡️ ${who}、${choice.footing.count ? '空所の縁' : '打たれている'}: ${hand.kind}`);
+    const handle = ledger.begin('melee', `${who}: ${hand.detail}`, MELEE_DETAIL_MAX);
+    void take('floor-melee', FLOOR_FLEE_PRIORITY, MELEE_TIMEOUT_MS[hand.kind] + 500, () => runMelee(bot, createMotorPort(bot), hand))
+      .then(result => {
+        const done = !!(result as { success?: boolean } | undefined)?.success;
+        const failed = done ? '' : `（できなかった: ${String((result as { result?: string } | undefined)?.result ?? '').slice(0, 50)}）`;
+        // What the ground and the enemy are now (read after the hand: it moves too).
+        let footing = '', nearest = '';
+        try {
+          const feetNow = feetCell(bot as never);
+          if (feetNow) footing = footingWords(footingAt(bodyReader(bot as never), feetNow));
+          const still = meleeThreatsNear(bot);
+          nearest = still.length ? ` 今${still[0].distance.toFixed(1)}m` : ' 4m内に居ない';
+        } catch { /* the line stands without it */ }
+        handle.detail = `${who}: ${hand.detail}${failed}。足場: ${footing || '空所なし'}${nearest} 体力${Math.round((bot.health ?? 0) * 10) / 10}`.slice(0, MELEE_DETAIL_MAX);
+        ledger.end(handle, done ? 'done' : (result as { failureType?: string } | undefined)?.failureType === 'interrupted' ? 'cut' : 'failed');
+      }, () => { ledger.end(handle, 'failed'); })
+      .catch(() => undefined)
+      .finally(() => {
+        state.busy = null;
+        run.lastEnd = now();
+        state.meleeNextAt = now();
+      });
+    return true;
+  };
   bot.on('physicsTick', () => {
     // r7: the health seen tick by tick (the cover goes on while it falls).
     const health = bot.health ?? 20, seen = state.healthSeen;
@@ -1490,6 +1740,8 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
     }
     // r7: burning in a shooter's line, the cover first (before the low-health flee and the last stand, which read the threats in reach).
     if (!headFight && coverTick()) return;
+    // r8: a melee enemy near, at the rim of a drop (or hurting the body on a floor): one minimal hand, before the flee and the last stand.
+    if (!headFight && meleeTick()) return;
     if (config.flee && !headFight) {
       let threat: ReturnType<typeof fleeStart> = null;
       try { threat = fleeStart(bot, state, now()); } catch { threat = null; }

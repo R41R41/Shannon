@@ -1,9 +1,12 @@
 import { Vec3 } from 'vec3';
 import { activateItemFacing } from '../activateItemFacing.js';
+import { bedHalves, isBedName } from '../bedRules.js';
 import { equipToHandVerified } from '../equipVerified.js';
 import { feetCell, type Cell } from '../localMap.js';
+import { noteSpawnBed } from '../ownedBlocks.js';
 import { blockAt, cellNow, cellText, DIRECTION_JA, DIRECTIONS, eyeDistance, findItem, guard, inventoryCount, isAirLike, placeText, stopped,
   StepStopped, USE_REACH, wait, waitUntil, type StepContext, type StepOutcome } from './common.js';
+import { BED_HALF_WAIT_MS } from './place.js';
 
 /**
  * use: the right hand on a block, a creature, or the air (design mb-llm-centric 2.3 and the owner's dragon list, 2026-10-21).
@@ -98,10 +101,48 @@ function framesAround(bot: any, cell: Cell): { frames: number; eyes: number } {
   return { frames, eyes };
 }
 
+/**
+ * A bed at `cell`: slept in. r8 (runs 28 and 32, "there's only half bed" after a bed was placed, 4 seconds of a night lost each time and
+ * 110 seconds of waiting for the morning): the server sends a placed bed's foot at once and its head in the next block update, and
+ * mineflayer's sleep reads the foot's partner at the moment it is called. So the other half is waited for (the same 1.5 s as `place`), the
+ * HEAD is what is clicked (mineflayer's half-bed check is only for the foot), and when a half is really missing the line says which cell
+ * is missing and what it holds. The held item does not matter (a planner that wrote item:"black_bed" was told it did not have one).
+ */
+async function sleepInBed(ctx: StepContext, cell: Cell, asked: any): Promise<StepOutcome> {
+  const bot = ctx.bot;
+  let block = asked;
+  const halves = bedHalves(asked, cell);
+  const where = halves ? `足 ${cellText(halves.foot)}・頭 ${cellText(halves.head)}` : cellText(cell);
+  let late = 0;
+  if (halves) {
+    const waitedFrom = Date.now();
+    const ready = await waitUntil(ctx, () => isBedName(blockAt(bot, halves.other)?.name), BED_HALF_WAIT_MS);
+    late = Date.now() - waitedFrom;
+    if (!ready) {
+      return stopped(bot, 'not_slept', `${placeText(bot, cell)} のベッドで寝られなかった: ベッドの${halves.part === 'foot' ? '頭' : '足'}のマス ${cellText(halves.other)} が`
+        + ` ${cellNow(bot, halves.other)}（半分しか無い。向き ${halves.facing}）。ベッドは壊して置き直す`, cell);
+    }
+    block = blockAt(bot, halves.head) ?? asked;
+  }
+  try {
+    const slept = await guard(ctx, Promise.resolve(bot.sleep(block)), 4000);
+    if (!slept) return stopped(bot, 'not_slept', `${placeText(bot, cell)} のベッドで寝られなかった（時間切れ。${where}）`, cell);
+  } catch (error) {
+    if (error instanceof StepStopped || /Action interrupted/u.test(String((error as Error)?.message))) throw error;
+    return stopped(bot, 'not_slept', `${placeText(bot, cell)} のベッドで寝られなかった: ${String((error as Error)?.message ?? error).slice(0, 80)}（${where}。ベッドはリスポーン地点にはなる）`, cell);
+  }
+  try { noteSpawnBed(bot, halves ? [halves.foot, halves.head] : [cell], String(asked.name)); } catch { /* the ledger is a help */ }
+  const woke = await waitUntil(ctx, () => !bot.isSleeping, 15_000, 200);
+  if (!woke) { try { await bot.wake(); } catch { /* up */ } }
+  return { ok: true, text: `${cellText(cell)} のベッドで寝た${woke ? '（朝になって起きた）' : '（15秒で起きた。夜はまだ）'}。リスポーン地点はこのベッド${late >= 20 ? `（頭のブロックが来るまで ${late}ms 待った）` : ''}`, at: cell };
+}
+
 export async function use(ctx: StepContext, args: UseArgs): Promise<StepOutcome> {
   const bot = ctx.bot;
   const name = args.item ?? bot.heldItem?.name ?? null;
-  if (args.item) { const fail = await hold(ctx, args.item); if (fail) return fail; }
+  // A bed at `at` needs no item in the hand (its branch is below); every other use takes the item asked for.
+  const aimed = args.at && !args.entity ? blockAt(bot, args.at) : null;
+  if (args.item && !(aimed && BEDS.test(aimed.name))) { const fail = await hold(ctx, args.item); if (fail) return fail; }
   // A creature.
   if (args.entity) {
     const target = findEntity(bot, args.entity);
@@ -127,6 +168,8 @@ export async function use(ctx: StepContext, args: UseArgs): Promise<StepOutcome>
   if (!block) return stopped(bot, 'unloaded', `${placeText(bot, cell)} は未ロード`, cell);
   const distance = eyeDistance(bot, cell);
   if (distance > USE_REACH + 0.5) return stopped(bot, 'out_of_reach', `${placeText(bot, cell)} に届かない（目から${distance.toFixed(1)}m、${USE_REACH}m まで）`, cell);
+  // A bed (r8: before any item is looked at; the bed is slept in with an empty hand).
+  if (BEDS.test(block.name)) return sleepInBed(ctx, cell, block);
   // A bucket on a source.
   if (name === 'bucket') {
     if (block.name !== 'water' && block.name !== 'lava') return stopped(bot, 'not_liquid', `${placeText(bot, cell)} は ${cellNow(bot, cell)}（水や溶岩ではない）`, cell);
@@ -182,19 +225,6 @@ export async function use(ctx: StepContext, args: UseArgs): Promise<StepOutcome>
     await wait(ctx, 200);
     const portal = [...Array(5).keys()].some(dx => [...Array(5).keys()].some(dz => blockAt(bot, { x: cell.x + dx - 2, y: cell.y, z: cell.z + dz - 2 })?.name === 'end_portal'));
     return { ok: true, text: `${cellText(cell)} の枠に目をはめた（はまっている ${count.eyes}/${count.frames}${portal ? '。エンドポータルが開いた' : ''}）`, at: cell };
-  }
-  // A bed.
-  if (BEDS.test(block.name)) {
-    try {
-      const slept = await guard(ctx, Promise.resolve(bot.sleep(block)), 4000);
-      if (!slept) return stopped(bot, 'not_slept', `${placeText(bot, cell)} のベッドで寝られなかった（時間切れ）`, cell);
-    } catch (error) {
-      if (error instanceof StepStopped || /Action interrupted/u.test(String((error as Error)?.message))) throw error;
-      return stopped(bot, 'not_slept', `${placeText(bot, cell)} のベッドで寝られなかった: ${String((error as Error)?.message ?? error).slice(0, 80)}（ベッドはリスポーン地点にはなる）`, cell);
-    }
-    const woke = await waitUntil(ctx, () => !bot.isSleeping, 15_000, 200);
-    if (!woke) { try { await bot.wake(); } catch { /* up */ } }
-    return { ok: true, text: `${cellText(cell)} のベッドで寝た${woke ? '（朝になって起きた）' : '（15秒で起きた。夜はまだ）'}。リスポーン地点はこのベッド`, at: cell };
   }
   // A door and the like.
   if (WORKED.test(block.name) && (!name || !bot.registry?.blocksByName?.[name] || WORKED.test(name))) {

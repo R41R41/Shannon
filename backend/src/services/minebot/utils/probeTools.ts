@@ -2,6 +2,7 @@ import { symbolFor, isOpenSymbol, type BlockReader, type Cell, type MapBlock } f
 import { LoopSlicer } from './loadedBlockScan.js';
 import { wayWords } from './worldScanState.js';
 import type { HandRecord } from './handHistory.js';
+import { footingAt, footingWords } from './voidFooting.js';
 import { BESIDE, blockedWords, cellWay, climbRise, enterable, floorOf, isClimbable, isLava, isTall, isWater, MAX_CLIMB, MAX_FALL, passable, standable, whyNotStand } from './walkRules.js';
 
 export { enterable, isWater, MAX_FALL, passable, standable } from './walkRules.js';
@@ -383,8 +384,16 @@ export function probeSight(read: BlockReader, eye: [number, number, number], tar
 // ===== column =====
 
 export interface ColumnRun { top: number; bottom: number; name: string; n: number }
-export interface ColumnAnswer { v: 1; kind: 'column'; text: string; x: number; z: number; runs: ColumnRun[]; dangers: string[] }
+/**
+ * r8 (run 32: respawned in stone at y=48, 860 s of bare-handed stairs up): in her own column, what is over her head up to the first open
+ * cell: `solid` cells to dig, `openAt` the first y that is open (null: not within 64 or not loaded), `runs` the blocks in order with the
+ * seconds one of each takes with the best tool carried (`each`, null when not known), `seconds` the sum. Facts only: the way is the planner's.
+ */
+export interface ColumnAbove { solid: number; openAt: number | null; opensTo: string; runs: Array<{ name: string; n: number; each: number | null }>; seconds: number | null; text: string }
+export interface ColumnAnswer { v: 1; kind: 'column'; text: string; x: number; z: number; runs: ColumnRun[]; dangers: string[]; above?: ColumnAbove }
 export const COLUMN_MAX = 96;
+/** How far over the head the column is read for what has to be dug (the first open cell ends it). */
+const ABOVE_SPAN = 64;
 
 const columnLabel = (block: MapBlock | null) => {
   if (!block) return '未ロード';
@@ -400,7 +409,8 @@ const isAirLabel = (label: string) => label === '空気';
  * three (air over a floor, said from her feet when it is her column: "足の下 8 段は空気（落差 8）"), water and its depth, lava, and sand or
  * gravel (it falls when what is under it opens).
  */
-export function probeColumn(read: BlockReader, x: number, z: number, yFrom: number, yTo: number, feet?: Cell | null): ColumnAnswer {
+export function probeColumn(read: BlockReader, x: number, z: number, yFrom: number, yTo: number, feet?: Cell | null,
+  /** The milliseconds one block at (x, y, z) takes to break with the best tool carried (null: not known). */ digMs?: (x: number, y: number, z: number) => number | null): ColumnAnswer {
   let top = Math.max(yFrom, yTo), bottom = Math.min(yFrom, yTo);
   top = Math.min(319, top); bottom = Math.max(-64, bottom);
   if (top - bottom + 1 > COLUMN_MAX) bottom = top - COLUMN_MAX + 1;
@@ -445,15 +455,50 @@ export function probeColumn(read: BlockReader, x: number, z: number, yFrom: numb
     return run.n > MAX_FALL && isDrop(index) ? `（落差 ${run.n}）` : '';
   };
   const runText = runs.slice(0, 24).map((run, index) => `${span(run)} ${run.name}${run.n > 1 ? `×${run.n}` : ''}${runDrop(run, index)}`).join(' / ');
-  const text = `${dangers.length ? `危ない：${dangers.join('／')}。` : ''}列 (${x},${z}) y=${top}〜${bottom}${mine ? `（足 y=${feet!.y}）` : ''}：${runText}${runs.length > 24 ? ' …' : ''}`;
-  return { v: 1, kind: 'column', text, x, z, runs, dangers };
+  const above = mine ? columnAbove(read, x, z, feet!.y + 2, digMs) : undefined;
+  const text = `${dangers.length ? `危ない：${dangers.join('／')}。` : ''}${above ? `${above.text}。` : ''}列 (${x},${z}) y=${top}〜${bottom}${mine ? `（足 y=${feet!.y}）` : ''}：${runText}${runs.length > 24 ? ' …' : ''}`;
+  return { v: 1, kind: 'column', text, x, z, runs, dangers, ...(above ? { above } : {}) };
+}
+
+/** What is over the head from `fromY` (the cell over the head) up to the first open cell, as exact numbers; undefined when the head is clear. */
+function columnAbove(read: BlockReader, x: number, z: number, fromY: number, digMs?: (x: number, y: number, z: number) => number | null): ColumnAbove | undefined {
+  const runs: Array<{ name: string; n: number; each: number | null }> = [];
+  let solid = 0, openAt: number | null = null, opensTo = '', unloaded = false;
+  for (let y = fromY; y < fromY + ABOVE_SPAN && y <= 319; y++) {
+    const block = read(x, y, z);
+    if (!block) { unloaded = true; break; }
+    if (enterable(block)) { openAt = y; opensTo = AIR.has(block.name) ? '空気' : isWater(block) ? '水' : block.name; break; }
+    const last = runs[runs.length - 1];
+    if (last && last.name === block.name) last.n++;
+    else {
+      let each: number | null = null;
+      try { const ms = digMs?.(x, y, z); each = typeof ms === 'number' && Number.isFinite(ms) && ms > 0 ? Math.round(ms / 100) / 10 : null; } catch { each = null; }
+      runs.push({ name: block.name, n: 1, each });
+    }
+    solid++;
+  }
+  if (!solid) return undefined;
+  const known = runs.every(run => run.each !== null);
+  const seconds = known ? Math.round(runs.reduce((sum, run) => sum + run.n * run.each!, 0)) : null;
+  const eachWords = runs.some(run => run.each !== null) ? `。今の持ち物で 1 段 ${runs.filter(run => run.each !== null).map(run => `${run.name} 約 ${run.each} 秒`).join('・')}${seconds !== null ? `（合わせて約 ${seconds} 秒）` : ''}` : '';
+  const ends = openAt !== null ? `、y=${openAt} から${opensTo}` : unloaded ? '、その先は未ロード' : `、${ABOVE_SPAN} 段の先まで固い`;
+  const text = `真上: 頭の上 y=${fromY}〜${fromY + solid - 1} の ${solid} 段が固い（${runs.map(run => `${run.name}×${run.n}`).join('・')}）${ends}${eachWords}`;
+  return { solid, openAt, opensTo, runs, seconds, text };
 }
 
 // ===== around =====
 
 export interface AroundCreature { id: number; name: string; at: Cell; dy: number; distance: number; hostile: boolean; visible: boolean; facing: boolean; closing: number | null }
-export interface AroundDanger { kind: 'lava' | 'water' | 'drop' | 'fire'; at: Cell; distance: number; n?: number }
-export interface AroundAnswer { v: 1; kind: 'around'; text: string; radius: number; creatures: AroundCreature[]; dangers: AroundDanger[] }
+/** `bottom` (r8): what a drop ends on: `lava`, `water`, or the floor's block name. */
+export interface AroundDanger { kind: 'lava' | 'water' | 'drop' | 'fire'; at: Cell; distance: number; n?: number; bottom?: string }
+export interface AroundAnswer {
+  v: 1; kind: 'around'; text: string; radius: number; creatures: AroundCreature[]; dangers: AroundDanger[];
+  /**
+   * r8 (run 32): the cells round the feet that fall three or more or end in lava (utils/voidFooting). Absent when there is none. `text` is the
+   * line the answer's text begins with ("足場: 幅 1 の橋・左右とも空所（落差 28、下は溶岩）。押されたら落ちる"): the map shows no fall deeper than five.
+   */
+  footing?: { voids: number; deepest: number; lava: boolean; bridge: boolean; pillar: boolean; text: string };
+}
 export interface AroundEntity { id: number; name: string; position: { x: number; y: number; z: number }; yaw?: number; headYaw?: number; height?: number; hostile: boolean; closing?: number | null }
 
 /** Whether a creature's face points at `to` within 30 degrees (mineflayer's yaw: 0 looks north, -z; turning left grows it). */
@@ -505,7 +550,8 @@ export function probeAround(read: BlockReader, position: { x: number; y: number;
     if (![[1, 0], [-1, 0], [0, 1], [0, -1]].some(([ax, az]) => standable(read, x + ax, feet.y, z + az))) continue;
     const fall = airBelow(read, x, feet.y, z);
     if (fall.n <= MAX_FALL || isWater(fall.bottom)) continue;
-    drops.push({ kind: 'drop', at: { x, y: feet.y, z }, distance: round1(Math.hypot(x + 0.5 - position.x, z + 0.5 - position.z)), n: fall.n });
+    drops.push({ kind: 'drop', at: { x, y: feet.y, z }, distance: round1(Math.hypot(x + 0.5 - position.x, z + 0.5 - position.z)), n: fall.n,
+      bottom: fall.bottom ? (isLava(fall.bottom) ? 'lava' : isWater(fall.bottom) ? 'water' : fall.bottom.name) : '未ロード' });
   }
   drops.sort((a, b) => a.distance - b.distance);
   found.push(...drops.slice(0, 3));
@@ -514,17 +560,21 @@ export function probeAround(read: BlockReader, position: { x: number; y: number;
   const dangers = found.slice(0, 8);
   const words = (danger: AroundDanger) => danger.kind === 'lava' ? `溶岩 ${at(danger.at)} ${wayWords(position, danger.at)}（${danger.n} マス）`
     : danger.kind === 'fire' ? `火 ${at(danger.at)} ${wayWords(position, danger.at)}`
-    : danger.kind === 'drop' ? `${at(danger.at)} ${wayWords(position, danger.at)} は下 ${danger.n} 段が空気（落差 ${danger.n}）`
+    : danger.kind === 'drop' ? `${at(danger.at)} ${wayWords(position, danger.at)} は下 ${danger.n} 段が空気（落差 ${danger.n}${danger.bottom === 'lava' ? '、底は溶岩' : ''}）`
     : `水 ${at(danger.at)} ${wayWords(position, danger.at)}（${danger.n} マス）`;
   const creatureWords = (c: AroundCreature) => `${c.name} #${c.id}${c.hostile ? '（敵）' : ''} ${wayWords(position, c.at)} ${c.visible ? '見える' : '間に壁'}`
     + `${c.facing ? (c.closing !== null && c.closing >= 0.3 ? `・こちらを向いて近づく ${c.closing}m/s` : '・こちらを向いている') : c.closing !== null && c.closing >= 0.3 ? `・近づく ${c.closing}m/s` : ''}`;
   const hostile = creatures.filter(c => c.hostile);
+  // r8: the footing under her, first: what a push from a creature beside her would drop her from (the map shows no fall deeper than five).
+  const rim = footingAt(read, feet);
+  const footing = rim.count ? { voids: rim.count, deepest: rim.deepest, lava: rim.lava, bridge: rim.bridge, pillar: rim.pillar, text: `足場: ${footingWords(rim)}。押されたら落ちる` } : undefined;
   const text = [
+    footing ? `${footing.text}。` : '',
     dangers.some(d => d.kind !== 'water') ? `危ない：${dangers.filter(d => d.kind !== 'water').map(words).join('／')}。` : '',
     creatures.length ? `${r}m 内の生き物 ${creatures.length}（敵 ${hostile.length}）：${creatures.slice(0, 8).map(creatureWords).join('／')}。` : `${r}m 内に生き物は無い。`,
     nearest.water ? words(nearest.water) : '',
   ].join('');
-  return { v: 1, kind: 'around', text, radius: r, creatures, dangers };
+  return { v: 1, kind: 'around', text, radius: r, creatures, dangers, ...(footing ? { footing } : {}) };
 }
 
 // ===== history =====

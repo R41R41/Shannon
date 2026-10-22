@@ -25,8 +25,12 @@ const STONE: Cell = { name: 'stone', boundingBox: 'block', diggable: true, hardn
 const SWORD = { name: 'iron_sword', type: 20, count: 1 }, AXE = { name: 'stone_axe', type: 21, count: 1 }, STICK = { name: 'stick', type: 22, count: 4 };
 const COBBLE = { name: 'cobblestone', type: 1, count: 5 };
 
-/** A pillar: stone at x 0, z 0 up to y 64 only, air everywhere else; `__blocks` overrides single cells. The body stands on it at y 65. */
-function fixture(options: { health?: number; llm?: boolean; items?: any[]; mobs?: Record<string, any>; blocks?: Record<string, Cell>; now?: () => number } = {}) {
+/**
+ * A pillar: stone at x 0, z 0 up to y 64 only, air everywhere else; `__blocks` overrides single cells. The body stands on it at y 65.
+ * `floor` (r8): stone at and under that y everywhere, so a pillar with a drop of two round it (no rim: a drop of three or more is one,
+ * utils/voidFooting), where the last stand's pillar is still made.
+ */
+function fixture(options: { health?: number; llm?: boolean; items?: any[]; mobs?: Record<string, any>; blocks?: Record<string, Cell>; now?: () => number; floor?: number } = {}) {
   const blocks = new Map<string, Cell>(Object.entries(options.blocks ?? {}));
   const calls: Array<[string, unknown]> = [];
   const bot: any = Object.assign(new EventEmitter(), {
@@ -46,7 +50,7 @@ function fixture(options: { health?: number; llm?: boolean; items?: any[]; mobs?
     }),
     blockAt: (position: Vec3) => {
       const x = Math.floor(position.x), y = Math.floor(position.y), z = Math.floor(position.z);
-      const made = blocks.get(`${x},${y},${z}`) ?? (y <= 64 && x === 0 && z === 0 ? STONE : AIR);
+      const made = blocks.get(`${x},${y},${z}`) ?? ((y <= 64 && x === 0 && z === 0) || y <= (options.floor ?? -Infinity) ? STONE : AIR);
       return { ...made, position: new Vec3(x, y, z) };
     },
   });
@@ -100,21 +104,29 @@ describe('the LLM-centric last stand at low health with no way out', () => {
     expect(stands(ledger)).toMatchObject([{ kind: 'flee', outcome: 'done', detail: '低体力で逃げ道なし: 足元を掘って下がった (0,65,0) 体力3。届く: zombie #2 6.0m 見える' }]);
   });
 
-  it('else, with a full block carried and two free cells over the head, it puts one block under the feet and goes up', async () => {
+  it('r8: at the rim of a drop (a pillar with air round it) no block is laid and no jump is made: a jump there is a body a blow throws (run 32)', async () => {
     const far = { 2: { id: 2, name: 'zombie', position: new Vec3(6.5, 65, 0.5), height: 1.95 } };
-    // Bedrock under the feet: nothing to dig.
-    const { bot, ledger } = fixture({ mobs: far, items: [COBBLE], blocks: { '0,64,0': { name: 'bedrock', boundingBox: 'block', diggable: false } } });
-    tick(bot);
-    await vi.waitFor(() => expect(bot.floorReflexes.busy).toBeNull(), { timeout: 5000, interval: 5 });
+    // Bedrock under the feet: nothing to dig. (Before r8 this laid a block and jumped: "1段積んで上がった".)
+    const { bot, ledger, calls } = fixture({ mobs: far, items: [COBBLE], blocks: { '0,64,0': { name: 'bedrock', boundingBox: 'block', diggable: false } } });
+    for (let i = 0; i < 4; i++) { tick(bot); await settle(15); }
     expect(bot.__dug).toEqual([]);
-    expect(bot.placeBlock).toHaveBeenCalledTimes(1);
-    expect(stands(ledger)).toMatchObject([{ kind: 'flee', detail: '低体力で逃げ道なし: 1段積んで上がった (0,65,0) 体力3。届く: zombie #2 6.0m 見える' }]);
+    expect(bot.placeBlock).not.toHaveBeenCalled();
+    expect(calls.some(([key, value]) => key === 'jump' && value)).toBe(false);
+    expect(stands(ledger)).toHaveLength(0);
+  });
+
+  it('else, with a full block carried and two free cells over the head, on a floor with no rim, it puts one block under the feet and goes up', () => {
+    const far = { 2: { id: 2, name: 'zombie', position: new Vec3(6.5, 65, 0.5), height: 1.95 } };
+    // A pillar two high over a floor (a drop of two round it: no rim). Bedrock under the feet: nothing to dig.
+    const { bot } = fixture({ mobs: far, items: [COBBLE], floor: 62, blocks: { '0,64,0': { name: 'bedrock', boundingBox: 'block', diggable: false } } });
+    expect(lastStandChoice(bot)).toMatchObject({ kind: 'pillar', block: 'cobblestone' });
   });
 
   it('chooses in order and by the rules: a lit creeper is never hit, an unlit one may be; the dig needs a solid cell under the dug one; the pillar needs air over the head', () => {
     const lit: unknown[] = []; lit[16] = 1;
     const mob = (id: number, name: string, at: Vec3, extra: Record<string, unknown> = {}) => ({ id, name, position: at, height: 1.8, ...extra });
-    const pick = (mobs: Record<string, any>, items: any[] = [], blocks: Record<string, Cell> = {}) => lastStandChoice(fixture({ mobs, items, blocks }).bot);
+    // r8: the world is a pillar over a floor two down (no rim): where the pillar is still made. The rim's own case is the test above and llmcR8Body.
+    const pick = (mobs: Record<string, any>, items: any[] = [], blocks: Record<string, Cell> = {}) => lastStandChoice(fixture({ mobs, items, blocks, floor: 62 }).bot);
     // A zombie at 2 m beside a lit creeper at 1 m: the zombie.
     expect(pick({ 2: mob(2, 'zombie', new Vec3(2.5, 65, 0.5)), 3: mob(3, 'creeper', new Vec3(1.5, 65, 0.5), { metadata: lit }) })).toMatchObject({ kind: 'hit', target: { id: 2 } });
     // The lit creeper alone: not hit, the step down.
