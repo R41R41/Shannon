@@ -2,9 +2,9 @@ import pathfinder from 'mineflayer-pathfinder';
 import { Vec3 } from 'vec3';
 import { buildMovements } from '../setMovements.js';
 import { nextLeg, FAR_LEG_M } from '../farLegs.js';
-import { bodyReader, feetCell, type Cell, type MapBlock } from '../localMap.js';
+import { bodyReader, feetCell, relativeWords, type Cell, type MapBlock } from '../localMap.js';
 import { probePath } from '../probeTools.js';
-import { cellWay, climbRise, doorOpen, installWalkRules, isDoorlike, isLeaves, isTall, mapBlockOf, MAX_CLIMB, MAX_FALL, passable, standableBeside, whyNotStand } from '../walkRules.js';
+import { cellWay, climbRise, doorOpen, installWalkRules, isDoorlike, isLeaves, isTall, mapBlockOf, MAX_CLIMB, MAX_FALL, passable, standable, standableBeside, whyNotStand } from '../walkRules.js';
 import { cellText, guard, letGo, placeText, stopped, StepStopped, wait, type StepContext, type StepOutcome } from './common.js';
 
 const { goals } = pathfinder;
@@ -126,6 +126,11 @@ export function walkMovements(bot: any, sprint = true): any {
   // towers off, sprint as asked, parkour (the safe one), doors (by the walk's rules below), no digging (but leaves, below), the
   // falling-block rule, dig cost, no free motion, swim, a drop of three, water at its usual price, and no block laid.
   const movements = buildMovements(bot, false, sprint, true, false, false, true, 1, false, true, MAX_DROP, 10, false);
+  // r9 (run 33, +1093 and +1111: "(-37,46,190) に着いていない … probe path の決まりでは歩いて行ける"): the route search counts a drop from the
+  // feet cell down to the FLOOR block that is landed on (movements.js getLandingBlock: `node.y - floor.y <= maxDropDown`), so a fall of
+  // three cells is 4 and `maxDropDown = 3` allows two. The walk's rules (and probe path) allow a fall of three (no damage), as the text of
+  // this file says; the search is given the same. The safe-parkour bound (a gap's drop) stays at MAX_DROP: it was set above, in its closure.
+  movements.maxDropDown = MAX_DROP + 1;
   installWalkRules(movements);
   return movements;
 }
@@ -218,14 +223,54 @@ export function atGoal(bot: any, goal: any): boolean {
   try { return !!goal.isEnd(new Vec3(here.x, here.y, here.z)); } catch { return false; }
 }
 
-/** The facts of what stands between the feet and a target not reached: the straight line's first stop, else probe path's break. */
+/** A cell as a short word for the stop's line: the block it holds ("air", "basalt", "未ロード"). */
+const holds = (block: MapBlock | null) => block ? block.name : '未ロード';
+
+/**
+ * r9 (run 33: "(198,60,60) に着いていない … probe path の決まりでは歩いて行ける（1 マス）が、体はそこまで進まなかった" five times): the words for a
+ * walk that probe path says can be walked and the body did not walk: the feet cell and what is under it, the next cell the route turns to
+ * (what its feet, head and floor hold, and which way from the feet), and any creature standing in it. Facts only.
+ */
+function notArrivedFacts(bot: any, here: Cell, points: Cell[] | undefined): string {
+  try {
+    const facts: string[] = [`足のマス ${cellText(here)} の下は ${holds(readCell(bot, here.x, here.y - 1, here.z))}`];
+    const toward = points?.[0];
+    if (toward && (toward.x !== here.x || toward.z !== here.z || toward.y !== here.y)) {
+      // The next cell: one step toward the first point of the route, at the level a body stands there (the point's own when it is one step away).
+      const nx = here.x + Math.sign(toward.x - here.x), nz = here.z + Math.sign(toward.z - here.z);
+      const read = reader(bot);
+      const level = Math.max(Math.abs(toward.x - here.x), Math.abs(toward.z - here.z)) <= 1 ? toward.y : [here.y, here.y + 1, here.y - 1, here.y - 2, here.y - 3].find(y => standable(read, nx, y, nz)) ?? here.y;
+      const next: Cell = { x: nx, y: level, z: nz };
+      const way = relativeWords(here, next);
+      facts.push(`次のマス ${cellText(next)}（${way || '同じマス'}）は 足 ${holds(readCell(bot, next.x, next.y, next.z))}・頭 ${holds(readCell(bot, next.x, next.y + 1, next.z))}・下 ${holds(readCell(bot, next.x, next.y - 1, next.z))}`);
+      const inTheWay = Object.values(bot.entities ?? {}).filter((entity: any) => entity && entity !== bot.entity && entity.position && entity.name !== 'item'
+        && Math.abs(entity.position.x - (next.x + 0.5)) < 0.9 && Math.abs(entity.position.z - (next.z + 0.5)) < 0.9 && entity.position.y > next.y - 1 && entity.position.y < next.y + 2)
+        .slice(0, 2).map((entity: any) => `${entity.name ?? entity.type} #${entity.id}`);
+      if (inTheWay.length) facts.push(`そのマスに ${inTheWay.join('・')} がいる`);
+    }
+    return facts.join('。');
+  } catch { return ''; }
+}
+
+/**
+ * The facts of what stands between the feet and a target not reached: the straight line's first stop, else probe path's break. r9: when probe
+ * path's answer is a cell BESIDE the target (the target itself cannot be stood in: it said "reachable" for the neighbour, and the walk quoted
+ * that as the target's), the target's own fact is told; and a "reachable" that the body did not walk comes with the cells (`notArrivedFacts`).
+ */
 async function shortFacts(bot: any, here: Cell, target: Cell): Promise<{ reason: string; text: string; at: Cell } | null> {
   const blocked = whyBlocked(bot, here, target);
   if (blocked) return blocked;
   try {
     const answer = await probePath(bodyReader(bot), here, target, { limits: { ms: 300, cells: 20_000 } });
     if (!answer.reachable && answer.breaks?.length) return { reason: answer.breaks[0].reason === 'low' ? 'low_ceiling' : answer.breaks[0].reason, text: answer.breaks.slice(0, 2).map(b => b.text).join('／'), at: answer.breaks[0].at };
-    if (answer.reachable) return { reason: 'not_arrived', text: `probe path の決まりでは歩いて行ける（${answer.steps} マス）が、体はそこまで進まなかった`, at: here };
+    if (answer.reachable && answer.onTarget === false) {
+      const read = reader(bot);
+      const why = whyNotStand(read, target);
+      const beside = standableBeside(read, target, 3);
+      return { reason: why?.solidFeet ? 'target_solid' : 'target_unstandable',
+        text: `${cellText(target)} そのものには立てない（${why?.text ?? '立つ床が無い'}）。${beside.length ? `立てる隣: ${beside.map(cellText).join('・')}` : '隣にも立てる所は無い'}`, at: target };
+    }
+    if (answer.reachable) return { reason: 'not_arrived', text: `probe path の決まりでは歩いて行ける（${answer.steps} マス）が、体はそこまで進まなかった。${notArrivedFacts(bot, here, answer.points)}`, at: here };
   } catch { /* the plain facts below */ }
   return null;
 }
@@ -294,7 +339,10 @@ export async function walk(ctx: StepContext, args: WalkArgs): Promise<StepOutcom
     for (let i = 0; i < targets.length; i++) {
       const target = targets[i], final = i === targets.length - 1;
       const range = final ? Math.max(0, args.range ?? 0) : 0;
-      if (range === 0) {
+      // r9: a range under one is the cell itself (the route search floors the goal; act's default is 0.5): a cell no body can stand in is refused
+      // at the start with its fact. It was only `range === 0`, and act walks with 0.5, so five walks in run 33 went to the cell below it and
+      // stopped, and the stop quoted probe path's answer for a neighbour.
+      if (range < 1) {
         const cannot = unstandable(bot, target);
         if (cannot) return { ...cannot, text: withNotes(targets.length > 1 ? `道の${i + 1}/${targets.length}番目で: ${cannot.text}` : cannot.text) };
       }

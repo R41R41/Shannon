@@ -14,11 +14,13 @@ import { ensureReflexLedger, type ReflexKind, type ReflexOutcome } from './refle
 import { seesBodyAt, threatExposure } from './threatExposure.js';
 import { holdsWater } from './waterBlocks.js';
 import { bodyReader, feetCell } from './localMap.js';
-import { climbRise, MAX_CLIMB, passable, standable } from './walkRules.js';
+import { climbRise, enterable, MAX_CLIMB, passable, standable } from './walkRules.js';
 import { footingAt, footingWords, type Footing } from './voidFooting.js';
 import { isBurning, lavaReleasedBy } from './lavaSafety.js';
 import { engagedWithAny } from './engagement.js';
 import { PROTECTED_UTILITY_BLOCKS } from '../constants.js';
+import { entityHealth } from './mapMarks.js';
+import { eyeOf, probeSight } from './probeTools.js';
 
 const log = createLogger('Minebot:FloorReflexes');
 
@@ -137,7 +139,7 @@ function onlyBenchWork(bot: object): boolean {
 type Item = { name: string; type?: number; slot?: number };
 interface FloorEntity {
   id?: number; name?: string; type?: string; position: Vec3; velocity?: Vec3; metadata?: unknown[];
-  isInLava?: boolean; isInWater?: boolean; onGround?: boolean;
+  isInLava?: boolean; isInWater?: boolean; onGround?: boolean; height?: number; width?: number; health?: number;
 }
 export interface FloorBody {
   entity?: FloorEntity; entities?: Record<string, FloorEntity>;
@@ -219,7 +221,7 @@ export interface FloorState {
   coverNotedAt?: number;
   healthSeen?: { last: number; fellAt: number };
   /** r8, the melee hand (LLM-centric): the episode (hands made, when the last ended), the next look, the last "no hand" note. */
-  melee?: { since: number; hands: number; lastEnd: number };
+  melee?: { since: number; hands: number; lastEnd: number; /** r9: the hands that were blows (their own allowance). */ hits?: number };
   meleeNextAt?: number;
   meleeNotedAt?: number;
 }
@@ -1371,16 +1373,51 @@ const MELEE_MAX_HANDS = 3;
 const MELEE_NOTE_GAP_MS = 5000;
 /** A step must get this much farther from the nearest melee enemy (a step that does not is no step away). */
 const MELEE_STEP_GAIN = 0.6;
-const MELEE_DETAIL_MAX = 150;
+const MELEE_DETAIL_MAX = 160;
 /** How many of the nearest enemies have their exposure read at a look. */
 const MELEE_LOOKED_AT = 3;
-const MELEE_TIMEOUT_MS: Record<MeleeHand['kind'], number> = { step: 3000, block: 3000 };
+const MELEE_TIMEOUT_MS: Record<MeleeHand['kind'], number> = { step: 3000, block: 3000, hit: 3500, pillar: 5000 };
 const AIR_BLOCKS = new Set(['air', 'cave_air', 'void_air']);
+
+/**
+ * r9 (run 33, +992 to +999 s): on a floor (no rim) a normal piglin with a golden sword chased the body at its own speed: three "one step away"
+ * hands, a flee of 8 m that did not shake it, five blows taken in 6.5 s, dead; the iron sword was in the hand. A step away from an enemy that
+ * is as fast as the body is no answer, and neither is the flee. On a floor, when a melee enemy is on the body (it hurt the body in the last two
+ * seconds, or it is still within MELEE_CHASED_RANGE after a hand of this episode):
+ *   - a blade (sword or axe) carried and health above MELEE_HIT_HEALTH: a blow back, at the nearest enemy that is within reach of the eye
+ *     (MELEE_HIT_REACH to its box) and in sight (nothing solid on the line), MELEE_BLOWS_PER_HAND blows to a hand with the weapon's own wait
+ *     between; the hand says the blows swung, those that landed and what is left of the enemy. Never a chase: an enemy out of reach or out of
+ *     sight is left (it comes, or it does not);
+ *   - no blade, or health at or below MELEE_HIT_HEALTH: a block put in the cell between (r8's block), else two blocks up (when the three cells
+ *     over the head are clear), else, above the flee's health, a step away (r8's).
+ * At a rim the r8 hands stand as they were: no blow, no jump. The hands of an episode: MELEE_MAX_HANDS of a block, a step or a pillar, and
+ * MELEE_MAX_HITS of a blow; then it says so and the decision is the planner's.
+ */
+const MELEE_HIT_REACH = 3;
+const MELEE_HIT_HEALTH = 6;
+const MELEE_CHASED_RANGE = 3;
+const MELEE_BLOWS_PER_HAND = 2;
+const MELEE_MAX_HITS = 5;
+const MELEE_PILLAR_N = 2;
+/** The wait between two blows of a weapon (the game's attack speed), as primitives/attack reads it. */
+function bladeWaitMs(name: string): number {
+  if (name.endsWith('_sword')) return 650;
+  return name.startsWith('wooden_') || name.startsWith('stone_') ? 1270 : name.startsWith('iron_') ? 1130 : 1020;
+}
+/** A sword or an axe (a pickaxe, a shovel or a hoe is a tool, not a blade), the better first; null when none is carried. */
+export function bestBlade(items: Item[]): Item | null {
+  const blade = bestMeleeWeapon(items.filter(item => item.name.endsWith('_sword') || item.name.endsWith('_axe')));
+  return blade;
+}
 
 export interface MeleeThreat { entity: FloorEntity; distance: number }
 export type MeleeHand =
   | { kind: 'step'; to: { x: number; y: number; z: number }; detail: string }
-  | { kind: 'block'; cell: { x: number; y: number; z: number }; block: string; detail: string };
+  | { kind: 'block'; cell: { x: number; y: number; z: number }; block: string; detail: string }
+  /** r9, on a floor: a blow back at an enemy on the body, with a blade carried. */
+  | { kind: 'hit'; target: FloorEntity; weapon: Item; detail: string }
+  /** r9, on a floor: `n` blocks up under the feet, out of a melee enemy's reach. */
+  | { kind: 'pillar'; block: string; n: number; detail: string };
 
 /** The melee enemies within MELEE_RANGE, the nearest first, without a look at whether they can get at the body (cheap: the tick's first test). */
 export function meleeCandidates(bot: FloorBody, fought?: (name: string) => boolean): MeleeThreat[] {
@@ -1422,14 +1459,14 @@ function wayWordsOf(from: { x: number; z: number }, to: { x: number; z: number }
  * The melee hand now, or null with the facts of why none: `quiet` is true when there is nothing to do (not at a rim, not being hurt).
  * `hands` is how many the episode has made (the second block goes over the first); `beingHit` is a body on a floor that was hurt just now.
  */
-export function meleeChoice(bot: FloorBody, threats: MeleeThreat[], options: { hands?: number; beingHit?: boolean } = {}): { hand: MeleeHand | null; why: string; footing: Footing; quiet: boolean } {
+export function meleeChoice(bot: FloorBody, threats: MeleeThreat[], options: { hands?: number; beingHit?: boolean; chased?: boolean } = {}): { hand: MeleeHand | null; why: string; footing: Footing; quiet: boolean } {
   const feet = feetCell(bot as never), body = bot.entity?.position;
   const nothing: Footing = { sides: [], count: 0, deepest: 0, lava: false, bridge: false, pillar: false };
   if (!feet || !body || !threats.length) return { hand: null, why: '', footing: nothing, quiet: true };
   const read = bodyReader(bot as never);
   const here = footingAt(read, feet);
   const rim = here.count > 0;
-  if (!rim && !options.beingHit) return { hand: null, why: '', footing: here, quiet: true };
+  if (!rim && !options.beingHit && !options.chased) return { hand: null, why: '', footing: here, quiet: true };
   const open = (x: number, y: number, z: number) => passable(read(x, y, z)) && passable(read(x, y + 1, z));
   const apart = (x: number, y: number, z: number) => Math.min(...threats.map(({ entity }) => Math.hypot(entity.position.x - x, (entity.position.y - y) * 0.5, entity.position.z - z)));
   const now = apart(body.x, body.y, body.z);
@@ -1451,40 +1488,79 @@ export function meleeChoice(bot: FloorBody, threats: MeleeThreat[], options: { h
     detail: `${lead}${wayWordsOf(feet, step.cell)}へ動いた ${cellWords(feet)}→${cellWords(step.cell)}` });
   const order = (a: typeof steps[number], b: typeof steps[number]) => a.footing.count - b.footing.count || b.gain - a.gain;
   const why: string[] = [];
+  const items = bot.inventory?.items() ?? [];
+  /** A block in the cell toward the enemy (over the first one when it is in): the hand, or null with the why pushed. */
+  const blockBetween = (): MeleeHand | null => {
+    const block = items.filter(item => isPillarBlock(item.name)).sort((a, b) => ((b as { count?: number }).count ?? 1) - ((a as { count?: number }).count ?? 1))[0];
+    if (!block) { why.push('置くブロックを持っていない'); return null; }
+    const ex = threats[0].entity.position.x - (feet.x + 0.5), ez = threats[0].entity.position.z - (feet.z + 0.5);
+    if (Math.abs(ex) < 0.5 && Math.abs(ez) < 0.5) { why.push('敵が真上か真下で、間のマスが無い'); return null; }
+    const sx = Math.abs(ex) >= Math.abs(ez) ? Math.sign(ex) : 0, sz = sx === 0 ? Math.sign(ez) : 0;
+    const x = feet.x + sx, z = feet.z + sz;
+    const own = bodyCellsOf(body);
+    const placeable = (y: number) => {
+      const cell = read(x, y, z);
+      if (!cell || !AIR_BLOCKS.has(cell.name) || own.some(c => c.x === x && c.y === y && c.z === z)) return false;
+      if (threats.some(({ entity }) => Math.abs(entity.position.x - (x + 0.5)) < 1 && Math.abs(entity.position.z - (z + 0.5)) < 1 && Math.abs(entity.position.y - y) < 2.5)) return false;
+      return [[0, -1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, 1, 0]].some(([ax, ay, az]) => read(x + ax, y + ay, z + az)?.solid === true);
+    };
+    const low = feet.y, high = feet.y + 1;
+    const lowSolid = read(x, low, z)?.solid === true;
+    const target = placeable(low) ? low : ((options.hands ?? 0) > 0 && lowSolid && placeable(high)) ? high : null;
+    if (target !== null) return { kind: 'block', cell: { x, y: target, z }, block: block.name, detail: `間 ${cellWords({ x, y: target, z })} に ${block.name} を置いた` };
+    why.push(lowSolid ? '敵との間は既に塞がっている' : `敵との間の ${cellWords({ x, y: low, z })} に置けない`);
+    return null;
+  };
   if (rim) {
     // (a) away from the drop: a cell with fewer open-over-air cells round it.
     const fewer = steps.filter(step => step.footing.count < here.count && step.gain >= -0.5).sort(order)[0];
     if (fewer) return { hand: stepHand(fewer, '空所から離れる向きへ'), why: '', footing: here, quiet: false };
     // (b) a block in the cell toward the enemy (over the first one when it is in).
-    const items = bot.inventory?.items() ?? [];
-    const block = items.filter(item => isPillarBlock(item.name)).sort((a, b) => ((b as { count?: number }).count ?? 1) - ((a as { count?: number }).count ?? 1))[0];
-    if (!block) why.push('置くブロックを持っていない');
-    else {
-      const ex = threats[0].entity.position.x - (feet.x + 0.5), ez = threats[0].entity.position.z - (feet.z + 0.5);
-      if (Math.abs(ex) < 0.5 && Math.abs(ez) < 0.5) why.push('敵が真上か真下で、間のマスが無い');
-      else {
-        const sx = Math.abs(ex) >= Math.abs(ez) ? Math.sign(ex) : 0, sz = sx === 0 ? Math.sign(ez) : 0;
-        const x = feet.x + sx, z = feet.z + sz;
-        const own = bodyCellsOf(body);
-        const placeable = (y: number) => {
-          const cell = read(x, y, z);
-          if (!cell || !AIR_BLOCKS.has(cell.name) || own.some(c => c.x === x && c.y === y && c.z === z)) return false;
-          if (threats.some(({ entity }) => Math.abs(entity.position.x - (x + 0.5)) < 1 && Math.abs(entity.position.z - (z + 0.5)) < 1 && Math.abs(entity.position.y - y) < 2.5)) return false;
-          return [[0, -1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, 1, 0]].some(([ax, ay, az]) => read(x + ax, y + ay, z + az)?.solid === true);
-        };
-        const low = feet.y, high = feet.y + 1;
-        const lowSolid = read(x, low, z)?.solid === true;
-        const target = placeable(low) ? low : ((options.hands ?? 0) > 0 && lowSolid && placeable(high)) ? high : null;
-        if (target !== null) return { hand: { kind: 'block', cell: { x, y: target, z }, block: block.name, detail: `間 ${cellWords({ x, y: target, z })} に ${block.name} を置いた` }, why: '', footing: here, quiet: false };
-        why.push(lowSolid ? '敵との間は既に塞がっている' : `敵との間の ${cellWords({ x, y: low, z })} に置けない`);
-      }
+    const placed = blockBetween();
+    if (placed) return { hand: placed, why: '', footing: here, quiet: false };
+  } else {
+    // r9, on a floor with an enemy on the body: a blow back with a blade carried and health above MELEE_HIT_HEALTH; else a block between, else
+    // two blocks up. A blow is struck only at what is within reach of the eye and in sight; an enemy that is not yet is left (no chase).
+    const health = bot.health ?? 20;
+    const blade = bestBlade(items);
+    if (blade && health > MELEE_HIT_HEALTH) {
+      const reached = threats.find(({ entity }) => { try { return inReachOfBlow(bot, entity); } catch { return false; } });
+      if (!reached) return { hand: null, why: '', footing: here, quiet: true };
+      return { hand: { kind: 'hit', target: reached.entity, weapon: blade, detail: `${blade.name} で打ち返す` }, why: '', footing: here, quiet: false };
     }
+    const placed = blockBetween();
+    if (placed) return { hand: placed, why: '', footing: here, quiet: false };
+    const up = pillarOver(read, feet, items, why);
+    if (up) return { hand: up, why: '', footing: here, quiet: false };
+    // Nothing to put: at the flee's health the flee is the one that runs; above it a step away (r8's) is the last of the hands.
+    if ((bot.health ?? 20) <= FLEE_HEALTH) return { hand: null, why: why.join('・'), footing: here, quiet: true };
   }
   // (c) a step that gets away (on a floor: never to a rim; at a rim: to one no worse).
   const away = steps.filter(step => step.footing.count <= here.count && step.gain >= MELEE_STEP_GAIN).sort(order)[0];
   if (away) return { hand: stepHand(away, '敵から離れる向きへ'), why: '', footing: here, quiet: false };
   why.push('下がる所が無い');
   return { hand: null, why: why.join('・'), footing: here, quiet: false };
+}
+
+/** An enemy within reach of a blow (the eye to its box, MELEE_HIT_REACH) and in sight (nothing solid on the line), as `attack mode=hold` reads it. */
+function inReachOfBlow(bot: FloorBody, entity: FloorEntity): boolean {
+  const body = bot.entity?.position; if (!body) return false;
+  const answer = probeSight(bodyReader(bot as never), eyeOf(body), { creature: { id: Number(entity.id), name: String(entity.name ?? 'entity'), position: entity.position, height: entity.height, width: entity.width } });
+  return answer.visible && answer.reach;
+}
+
+/** r9: MELEE_PILLAR_N blocks up under the feet, when a full block is carried (that many) and the cells over the head are clear for the jumps. */
+function pillarOver(read: ReturnType<typeof bodyReader>, feet: { x: number; y: number; z: number }, items: Item[], why: string[]): MeleeHand | null {
+  const totals = new Map<string, number>();
+  for (const item of items) if (isPillarBlock(item.name)) totals.set(item.name, (totals.get(item.name) ?? 0) + ((item as { count?: number }).count ?? 1));
+  const best = [...totals.entries()].sort((a, b) => b[1] - a[1])[0];
+  if (!best) { why.push('積むブロックを持っていない'); return null; }
+  if (best[1] < MELEE_PILLAR_N) { why.push(`積むブロックが${MELEE_PILLAR_N}個に足りない`); return null; }
+  for (let dy = 2; dy <= MELEE_PILLAR_N + 2; dy++) {
+    const cell = read(feet.x, feet.y + dy, feet.z);
+    if (!cell || !enterable(cell) || isFluid(cell.name)) { why.push(`頭の上 ${cellWords({ x: feet.x, y: feet.y + dy, z: feet.z })} が${cell ? cell.name : '未ロード'}で積めない`); return null; }
+  }
+  return { kind: 'pillar', block: best[0], n: MELEE_PILLAR_N, detail: `${MELEE_PILLAR_N}段積んで上がった` };
 }
 
 /** The cells the body's box fills at `position` (0.6 wide, 1.8 tall; as the `place` hand counts them). */
@@ -1499,8 +1575,58 @@ function bodyCellsOf(position: { x: number; y: number; z: number }): Array<{ x: 
 
 /** Runs one melee hand as the work of a safety-lease action (`port` is the body's motor port): a step is walked, a block is placed. */
 export function runMelee(bot: FloorBody, port: FloorBody, hand: MeleeHand): Promise<{ success: boolean; result: string }> {
+  if (hand.kind === 'hit') return runHit(bot, port, hand);
+  if (hand.kind === 'pillar') return runPillarHand(bot, port, hand);
   return runCover(bot, port, hand.kind === 'step' ? { kind: 'step', to: hand.to, detail: hand.detail } : { kind: 'seal', cell: hand.cell, block: hand.block, detail: hand.detail },
     MELEE_TIMEOUT_MS[hand.kind]);
+}
+
+const rethrowIfTaken = (error: unknown) => { if (/Action interrupted|Motor owner expired/u.test(String((error as Error)?.message))) throw error; };
+
+/**
+ * r9: the blows of a hit hand. The blade is put in the hand, then up to MELEE_BLOWS_PER_HAND blows at the enemy while it is within reach of the
+ * eye and in sight and the health is above MELEE_HIT_HEALTH, with the weapon's own wait between. Says the blows swung, those that landed (the
+ * enemy's hurt after a swing) and what is left of it; a hand that struck nothing says why.
+ */
+async function runHit(bot: FloorBody, port: FloorBody, hand: Extract<MeleeHand, { kind: 'hit' }>): Promise<{ success: boolean; result: string }> {
+  const motor = port as any, raw = bot as any, target = hand.target, weapon = hand.weapon;
+  if (bot.heldItem?.name !== weapon.name) {
+    try { await motor.equip(weapon, 'hand'); } catch (error) { rethrowIfTaken(error); }
+  }
+  let swung = 0, landed = 0, dead = false, stopped = '';
+  const onHurt = (entity: any) => { if (entity?.id === target.id) landed++; };
+  const onDead = (entity: any) => { if (entity?.id === target.id) dead = true; };
+  raw.on?.('entityHurt', onHurt); raw.on?.('entityDead', onDead);
+  const find = () => Object.values(bot.entities ?? {}).find(entity => entity === target || (entity?.id !== undefined && entity.id === target.id));
+  try {
+    for (let blow = 0; blow < MELEE_BLOWS_PER_HAND && !dead; blow++) {
+      const live = find();
+      if (!live || !bot.entity) { stopped = '相手が見えなくなった'; break; }
+      if ((bot.health ?? 0) <= MELEE_HIT_HEALTH) { stopped = `体力が${MELEE_HIT_HEALTH}以下になった`; break; }
+      let reachable = false;
+      try { reachable = inReachOfBlow(bot, live); } catch { reachable = false; }
+      if (!reachable) { stopped = '届かない所へ離れた'; break; }
+      try { await motor.lookAt?.(live.position.offset(0, (live.height ?? 1.8) * 0.6, 0), true); } catch (error) { rethrowIfTaken(error); }
+      motor.attack(live); swung++;
+      // The wait before the next blow; after the last, a moment for the hurt that answers it.
+      await new Promise(resolve => setTimeout(resolve, blow < MELEE_BLOWS_PER_HAND - 1 ? bladeWaitMs(weapon.name) : 120));
+    }
+  } finally { raw.removeListener?.('entityHurt', onHurt); raw.removeListener?.('entityDead', onDead); }
+  if (!swung) return { success: false, result: `打てなかった: ${stopped || '届かない'}` };
+  const left = find();
+  let health: number | null = null;
+  try { health = left ? entityHealth(bot as never, left as never) : null; } catch { health = null; }
+  return { success: true, result: `打ち返した ${swung} 回（${weapon.name}）・当たった ${Math.min(landed, swung)}${health !== null ? `・相手の残り体力 ${health}` : ''}${dead ? '（倒した）' : ''}${stopped ? `（${stopped}）` : ''}` };
+}
+
+/** r9: MELEE_PILLAR_N blocks up under the feet (pillarUp), through the safety lease's motor port. */
+async function runPillarHand(bot: FloorBody, port: FloorBody, hand: Extract<MeleeHand, { kind: 'pillar' }>): Promise<{ success: boolean; result: string }> {
+  const position = bot.entity!.position;
+  const base = { x: Math.floor(position.x), y: Math.floor(position.y + 1e-3), z: Math.floor(position.z) };
+  const ctx = { bot: port, stop: new AbortController().signal, deadline: Date.now() + MELEE_TIMEOUT_MS.pillar, facing: 'north' as const, base };
+  const { pillarUp } = await import('./primitives/pillarUp.js');
+  const outcome = await pillarUp(ctx as never, { n: hand.n, block: hand.block });
+  return { success: outcome.ok, result: outcome.text };
 }
 
 export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floorConfig(), options: { fleeTickMs?: number; now?: () => number } = {}): void {
@@ -1647,21 +1773,24 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
     const body = bot.entity; if (!body) return false;
     // The cheap looks first: an enemy within reach of a blow, then a rim or a hurt just now on a floor (the enemies' exposure is read after).
     const fought = health > FLEE_HEALTH ? (name: string) => engagedWithAny(bot, [name]) : undefined;
-    try { if (!meleeCandidates(bot, fought).length) return false; } catch { return false; }
-    const beingHurt = health > FLEE_HEALTH && t - (state.healthSeen?.fellAt ?? -Infinity) <= COVER_FALL_MS;
-    if (!beingHurt) {
+    let candidates: MeleeThreat[] = [];
+    try { candidates = meleeCandidates(bot, fought); } catch { return false; }
+    if (!candidates.length) return false;
+    // r9: hurt just now, or still near after a hand of this episode (chased): the body is on a floor with an enemy on it, whatever the health
+    // (the choice says what to do at which; a hand-less low health is quiet and leaves the body to the flee).
+    const beingHurt = t - (state.healthSeen?.fellAt ?? -Infinity) <= COVER_FALL_MS;
+    const episode = state.melee && t - state.melee.lastEnd <= MELEE_EPISODE_MS ? state.melee : undefined;
+    const chased = !!episode && candidates[0].distance <= MELEE_CHASED_RANGE;
+    if (!beingHurt && !chased) {
       try { const feetNow = feetCell(bot as never); if (!feetNow || footingAt(bodyReader(bot as never), feetNow).count === 0) return false; } catch { return false; }
     }
     let threats: MeleeThreat[] = [];
     try { threats = meleeThreatsNear(bot, fought); } catch { return false; }
     if (!threats.length) return false;
-    const episode = state.melee && t - state.melee.lastEnd <= MELEE_EPISODE_MS ? state.melee : undefined;
     if (!episode) state.melee = undefined;
-    const hands = episode?.hands ?? 0;
-    // Hurt just now on a floor: a step away, above the flee's health (below it the flee runs).
-    const beingHit = beingHurt;
+    const hands = episode?.hands ?? 0, hits = episode?.hits ?? 0;
     let choice: ReturnType<typeof meleeChoice>;
-    try { choice = meleeChoice(bot, threats, { hands, beingHit }); } catch { return false; }
+    try { choice = meleeChoice(bot, threats, { hands, beingHit: beingHurt, chased }); } catch { return false; }
     if (choice.quiet) return false;
     const who = meleeWho(body.position, threats);
     const told = (text: string) => {
@@ -1670,18 +1799,24 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
       const footing = footingWords(choice.footing);
       try { ledger.end(Object.assign(ledger.begin('melee_none', '', MELEE_DETAIL_MAX), { detail: `${who}: ${text}${footing ? `。足場: ${footing}` : ''}`.slice(0, MELEE_DETAIL_MAX) }), 'failed'); } catch { /* a report */ }
     };
-    if (hands >= MELEE_MAX_HANDS) { told(`この間に${hands}手を打ったがまだ近い。これ以上は反射でしない`); return false; }
+    const striking = choice.hand?.kind === 'hit';
+    if (striking ? hits >= MELEE_MAX_HITS : hands >= MELEE_MAX_HANDS) {
+      told(striking ? `この間に打ち返しを${hits}手続けたがまだ近い。これ以上は反射でしない` : `この間に${hands}手を打ったがまだ近い。これ以上は反射でしない`);
+      return false;
+    }
     if (!choice.hand) { told(`動ける手が無い（${choice.why}）`); return false; }
     const hand = choice.hand;
     const run = state.melee = episode ?? { since: t, hands: 0, lastEnd: t };
-    run.hands++;
+    if (hand.kind === 'hit') run.hits = (run.hits ?? 0) + 1; else run.hands++;
     state.busy = 'flee';
     log.warn(`🗡️ ${who}、${choice.footing.count ? '空所の縁' : '打たれている'}: ${hand.kind}`);
     const handle = ledger.begin('melee', `${who}: ${hand.detail}`, MELEE_DETAIL_MAX);
     void take('floor-melee', FLOOR_FLEE_PRIORITY, MELEE_TIMEOUT_MS[hand.kind] + 500, () => runMelee(bot, createMotorPort(bot), hand))
       .then(result => {
         const done = !!(result as { success?: boolean } | undefined)?.success;
-        const failed = done ? '' : `（できなかった: ${String((result as { result?: string } | undefined)?.result ?? '').slice(0, 50)}）`;
+        // A blow's own words are what it did (the blows, those that landed, what is left of the enemy); the others say the hand and what failed.
+        const said = hand.kind === 'hit' ? String((result as { result?: string } | undefined)?.result ?? hand.detail) : hand.detail;
+        const failed = done || hand.kind === 'hit' ? '' : `（できなかった: ${String((result as { result?: string } | undefined)?.result ?? '').slice(0, 50)}）`;
         // What the ground and the enemy are now (read after the hand: it moves too).
         let footing = '', nearest = '';
         try {
@@ -1690,7 +1825,7 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
           const still = meleeThreatsNear(bot);
           nearest = still.length ? ` 今${still[0].distance.toFixed(1)}m` : ' 4m内に居ない';
         } catch { /* the line stands without it */ }
-        handle.detail = `${who}: ${hand.detail}${failed}。足場: ${footing || '空所なし'}${nearest} 体力${Math.round((bot.health ?? 0) * 10) / 10}`.slice(0, MELEE_DETAIL_MAX);
+        handle.detail = `${who}: ${said}${failed}。足場: ${footing || '空所なし'}${nearest} 体力${Math.round((bot.health ?? 0) * 10) / 10}`.slice(0, MELEE_DETAIL_MAX);
         ledger.end(handle, done ? 'done' : (result as { failureType?: string } | undefined)?.failureType === 'interrupted' ? 'cut' : 'failed');
       }, () => { ledger.end(handle, 'failed'); })
       .catch(() => undefined)
