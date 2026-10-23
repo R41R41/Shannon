@@ -388,7 +388,7 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
       } catch { /* the count is a help, not the result */ }
       let around: string | undefined;
       try { if (outcome.at) around = aroundText(bodyReader(bot), outcome.at, feetCell(bot)); } catch { /* the line stands without it */ }
-      const line = stoppedLine(outcome.reason, `${outcome.text}${again}`, outcome.at ? cellNow(bot, outcome.at) : undefined);
+      const line = stoppedLine(outcome.reason, outcome.text, outcome.at ? cellNow(bot, outcome.at) : undefined, outcome.cause, again);
       report.lines.push({ i: index + 1, do: hand.do, status: goesOn ? 'failed' : 'stopped', line,
         ...(outcome.at ? { where: outcome.at } : {}), ...(around ? { around } : {}) });
       remember(hand, goesOn ? 'failed' : 'stopped', line, outcome.at, base);

@@ -85,12 +85,23 @@ export function closedWord(reason: string | undefined): string {
 /** At most `max` characters (the contract's 160 a line). */
 export const clip = (text: string, max = 160) => text.length <= max ? text : `${text.slice(0, max - 1)}…`;
 
-/** A stopped hand's line: the closed word first, then the place and what happened, then what the cell holds now. */
-export function stoppedLine(reason: string | undefined, text: string, cellNow?: string): string {
+/** The most a stopped hand's line holds: the contract's 160; with a root cause (below) 260, the cause itself never cut (at most CAUSE_MAX). */
+export const LINE_MAX = 160;
+export const LINE_MAX_WITH_CAUSE = 260;
+export const CAUSE_MAX = 110;
+
+/**
+ * A stopped hand's line: the closed word first, then (mb-llmc-cand 3, run 37) the root of the stop when the hand knows it — `一歩ではない（元: 経路探索は
+ * 道を見つけたが体は進まなかった・水の流れ 5）` —, then the place and what happened, then (what is cut first, from the back) what the cell holds
+ * now and the count of the same stop. Run 37 put the root at the back of a long text and 4 of 6 "4 秒進めず" lines were cut before it.
+ */
+export function stoppedLine(reason: string | undefined, text: string, cellNow?: string, cause?: string, again = ''): string {
   const word = closedWord(reason);
+  const root = cause ? `（元: ${clip(cause, CAUSE_MAX)}）` : '';
   // A text that already says what the cell holds (place: "そのマスは stone") is not given the same again.
-  const tail = cellNow && !text.includes('そのマスは') ? `。そのマスは ${cellNow}` : '';
-  return `${word}: ${clip(text, 160 - word.length - 2 - tail.length)}${tail}`;
+  const tail = `${again}${cellNow && !text.includes('そのマスは') ? `。そのマスは ${cellNow}` : ''}`;
+  const max = cause ? LINE_MAX_WITH_CAUSE : LINE_MAX;
+  return `${word}${root}: ${clip(text, max - word.length - root.length - 2 - tail.length)}${tail}`;
 }
 
 /**

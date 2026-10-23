@@ -290,21 +290,62 @@ function bodyState(bot: any): string {
  * walk that probe path says can be walked and the body did not walk: the feet cell and what is under it, the next cell the route turns to
  * (what its feet, head and floor hold, and which way from the feet), and any creature standing in it. Facts only.
  */
+/** The next cell: one step toward the first point of the route, at the level a body stands there (the point's own when it is one step away). */
+function nextCellToward(bot: any, here: Cell, toward: Cell | undefined): Cell | null {
+  if (!toward || (toward.x === here.x && toward.z === here.z && toward.y === here.y)) return null;
+  const nx = here.x + Math.sign(toward.x - here.x), nz = here.z + Math.sign(toward.z - here.z);
+  const read = reader(bot);
+  const level = Math.max(Math.abs(toward.x - here.x), Math.abs(toward.z - here.z)) <= 1 ? toward.y : [here.y, here.y + 1, here.y - 1, here.y - 2, here.y - 3].find(y => standable(read, nx, y, nz)) ?? here.y;
+  return { x: nx, y: level, z: nz };
+}
+
+/**
+ * The root of a walk that did not move, in a few words, for the front of the line (mb-llmc-cand 3, run 37: the facts at the back of the text
+ * were cut in 4 of 6 lines): what the route search said, how the body stands, and the first cell of the feet's and the next cell's (feet and
+ * head) that holds it — a flow of water, a shut door, a gate or a trapdoor, a solid block — and a door that did not open.
+ */
+function stuckCause(bot: any, here: Cell, toward: Cell | undefined, search: SearchSaid | null | undefined, opens: string[]): string {
+  const parts: string[] = [];
+  if (search) parts.push(search.status === 'noPath' ? '経路探索は道が見つからないと答えた' : search.status === 'timeout' ? '経路探索は時間切れ'
+    : search.status === 'success' || search.status === 'partial' ? '経路探索は道を見つけたが体は進まなかった' : `経路探索の答え ${search.status}`);
+  const body = bodyState(bot).replace(/^体: /u, '');
+  if (body) parts.push(body);
+  const next = nextCellToward(bot, here, toward);
+  const trouble = (cell: Cell, label: string): string => {
+    let block: any;
+    try { block = bot.blockAt?.(new Vec3(cell.x, cell.y, cell.z), false); } catch { block = null; }
+    if (!block?.name) return '';
+    const name = String(block.name);
+    let props: Record<string, unknown> = {};
+    try { props = block.getProperties?.() ?? {}; } catch { props = {}; }
+    if (name === 'water' || name === 'lava') {
+      const level = Number(props.level ?? 0);
+      return level === 0 ? '' : `${label}が${name === 'water' ? '水' : '溶岩'}の${level >= 8 ? '下へ落ちる流れ' : `流れ ${level}`}`;
+    }
+    const way = cellWay(mapBlockOf(block));
+    if (way === 'door') return `${label}が閉じた ${name}`;
+    if (way === 'iron_door') return `${label}が ${name}（手では開かない）`;
+    if (way === 'harm') return `${label}が ${name}`;
+    if (way === 'solid') return `${label}が ${name}`;
+    return '';
+  };
+  const cells: Array<[Cell, string]> = [[here, '今のマス'], [{ ...here, y: here.y + 1 }, '今の頭'], ...(next ? [[next, '次のマス'], [{ ...next, y: next.y + 1 }, '次の頭']] as Array<[Cell, string]> : [])];
+  for (const [cell, label] of cells) { const said = trouble(cell, label); if (said) { parts.push(said); break; } }
+  const failed = opens.find(line => line.includes('失敗'));
+  if (failed) parts.push('扉を開けようとして失敗');
+  return parts.join('・');
+}
+
 function notArrivedFacts(bot: any, here: Cell, points: Cell[] | undefined, search?: SearchSaid | null): string {
   try {
-    const facts: string[] = [`足のマス ${cellText(here)} は 足 ${cellWords(bot, here)}・頭 ${cellWords(bot, { ...here, y: here.y + 1 })}・下 ${cellWords(bot, { ...here, y: here.y - 1 }, false)}`];
+    const facts: string[] = [];
+    const next = nextCellToward(bot, here, points?.[0]);
+    if (next) facts.push(`次のマス ${cellText(next)}（${relativeWords(here, next) || '同じマス'}）は 足 ${cellWords(bot, next)}・頭 ${cellWords(bot, { ...next, y: next.y + 1 })}・下 ${cellWords(bot, { ...next, y: next.y - 1 }, false)}`);
+    facts.push(`足のマス ${cellText(here)} は 足 ${cellWords(bot, here)}・頭 ${cellWords(bot, { ...here, y: here.y + 1 })}・下 ${cellWords(bot, { ...here, y: here.y - 1 }, false)}`);
     const body = bodyState(bot);
     if (body) facts.push(body);
     if (search) facts.push(searchWords(search));
-    const toward = points?.[0];
-    if (toward && (toward.x !== here.x || toward.z !== here.z || toward.y !== here.y)) {
-      // The next cell: one step toward the first point of the route, at the level a body stands there (the point's own when it is one step away).
-      const nx = here.x + Math.sign(toward.x - here.x), nz = here.z + Math.sign(toward.z - here.z);
-      const read = reader(bot);
-      const level = Math.max(Math.abs(toward.x - here.x), Math.abs(toward.z - here.z)) <= 1 ? toward.y : [here.y, here.y + 1, here.y - 1, here.y - 2, here.y - 3].find(y => standable(read, nx, y, nz)) ?? here.y;
-      const next: Cell = { x: nx, y: level, z: nz };
-      const way = relativeWords(here, next);
-      facts.push(`次のマス ${cellText(next)}（${way || '同じマス'}）は 足 ${cellWords(bot, next)}・頭 ${cellWords(bot, { ...next, y: next.y + 1 })}・下 ${cellWords(bot, { ...next, y: next.y - 1 }, false)}`);
+    if (next) {
       const inTheWay = Object.values(bot.entities ?? {}).filter((entity: any) => entity && entity !== bot.entity && entity.position && entity.name !== 'item'
         && Math.abs(entity.position.x - (next.x + 0.5)) < 0.9 && Math.abs(entity.position.z - (next.z + 0.5)) < 0.9 && entity.position.y > next.y - 1 && entity.position.y < next.y + 2)
         .slice(0, 2).map((entity: any) => `${entity.name ?? entity.type} #${entity.id}`);
@@ -365,14 +406,16 @@ async function walkTo(ctx: StepContext, target: Cell, range: number, notes: WayN
     if (gone.stuck) {
       // The facts of the cells the body is in and goes to, whatever stopped it (notArrivedFacts has them already when probe path walked it).
       const own = (blocked?.reason === 'not_arrived' ? '' : `。${notArrivedFacts(bot, here, [target], gone.search)}`) + (gone.opens.length ? `。扉の試し: ${gone.opens.join('、')}` : '');
-      return stopped(bot, blocked?.reason ?? 'stuck', `${STUCK_MS / 1000}秒進めず止まった（今 ${placeText(bot, here)}、${remains}）。${blocked ? blocked.text : reach || '前に見える障害は無い（体が何かに引っかかっている）'}${own}`, blocked?.at ?? here, here);
+      const cause = stuckCause(bot, here, target, gone.search, gone.opens);
+      return stopped(bot, blocked?.reason ?? 'stuck', `${STUCK_MS / 1000}秒進めず止まった（今 ${placeText(bot, here)}、${remains}）。${blocked ? blocked.text : reach || '前に見える障害は無い（体が何かに引っかかっている）'}${own}`, blocked?.at ?? here, here, cause);
     }
     if (/no path|took to long|too long/iu.test(message)) {
       return stopped(bot, blocked?.reason ?? 'no_path', `${cellText(target)} への掘らない道が無い（今 ${placeText(bot, here)}、${remains}）。${blocked ? blocked.text : reach || 'まっすぐの線は開いているが、遠回りの道も見つからない（未ロードか、囲まれている）'}`, blocked?.at ?? target, here);
     }
     if (!gone.error) {
       // The route search gave up without a word (no step it could take): the feet are not at the target, and that is the stop.
-      return stopped(bot, 'not_arrived', `${cellText(target)} に着いていない（今 ${placeText(bot, here)}、${remains}）。${blocked ? blocked.text : reach || '通れない所は見えない'}`, blocked?.at ?? here, here);
+      return stopped(bot, 'not_arrived', `${cellText(target)} に着いていない（今 ${placeText(bot, here)}、${remains}）。${blocked ? blocked.text : reach || '通れない所は見えない'}`, blocked?.at ?? here, here,
+        stuckCause(bot, here, target, gone.search, gone.opens));
     }
     return stopped(bot, 'walk_failed', `${cellText(target)} へ歩けなかった: ${message.slice(0, 80)}（今 ${placeText(bot, here)}、${remains}）`, here, here);
   }

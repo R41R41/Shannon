@@ -31,6 +31,8 @@ export interface StepOutcome {
   text: string;
   /** Why it stopped, as a short code (not_reachable, occupied, missing_item, no_path ...). */
   reason?: string;
+  /** The root of the stop in a few words (what held the body: the search, the water, the shut door), put first in the line (utils/actReport stoppedLine). */
+  cause?: string;
   /** The cell it is about (the target, or where it stopped). */
   at?: Cell;
   /** Where the body stood or walked from (a walk's stop). */
@@ -178,8 +180,8 @@ export function letGo(bot: any): void {
 }
 
 /** A failed step's outcome, with the cell's place and what it holds now. */
-export function stopped(bot: any, reason: string, text: string, at?: Cell, from?: Cell): StepOutcome {
-  return { ok: false, reason, text, ...(at ? { at } : {}), ...(from ? { from } : {}) };
+export function stopped(bot: any, reason: string, text: string, at?: Cell, from?: Cell, cause?: string): StepOutcome {
+  return { ok: false, reason, text, ...(at ? { at } : {}), ...(from ? { from } : {}), ...(cause ? { cause } : {}) };
 }
 
 export const DIRECTIONS: Record<string, [number, number, number]> = {

@@ -1,8 +1,8 @@
 import { Vec3 } from 'vec3';
 import { equipToHandVerified } from '../equipVerified.js';
 import { itemFoodPoints } from '../foodPoints.js';
-import { feetCell, type Cell } from '../localMap.js';
-import { cellText, findItem, guard, inventoryCount, stopped, StepStopped, wait, waitUntil, type StepContext, type StepOutcome } from './common.js';
+import { facingOfYaw, feetCell, type Cell } from '../localMap.js';
+import { cellText, DIRECTIONS, DIRECTION_JA, findItem, guard, inventoryCount, stopped, StepStopped, wait, waitUntil, type StepContext, type StepOutcome } from './common.js';
 import { findEntity } from './use.js';
 
 /** The small parts of act (design mb-llm-centric 2.3): look, jump, sneak, equip, eat, drop. Each does what it says and reads back what came of it. */
@@ -92,13 +92,55 @@ export async function eat(ctx: StepContext, args: { item: string }): Promise<Ste
 }
 
 export interface DropArgs { items: Array<{ item: string; count?: number }>; toward?: string | Cell }
+
+/** How many cells ahead (at the height of the head, where a thrown item leaves) a throw wants free, and how far it looks. */
+const TOSS_WANTS = 4, TOSS_LOOKS = 6;
+/** Items nearer than this to the feet are picked up again by a body that stays or walks over them (the pick-up reach is a block; a thrown item waits 2 s). */
+const TOSS_AWAY = 3;
+const solidAt = (bot: any, x: number, y: number, z: number): boolean => {
+  try { return bot.blockAt?.(new Vec3(x, y, z), false)?.boundingBox === 'block'; } catch { return false; }
+};
+
+/**
+ * The way to throw when none was asked (mb-llmc-cand 3, run 37: eight stops on a full pack, about 150 s: the stones thrown at the feet while she
+ * looked down a stair were picked up again by standing there): the one of the four compass ways with the most free cells at the head's height
+ * (up to TOSS_LOOKS), the way she faces first among equals. The throw is level, so the items fly several blocks and do not fall at the feet.
+ */
+function tossWay(bot: any, feet: Cell): { name: string; dx: number; dz: number; free: number } {
+  type Way = { name: string; dx: number; dz: number; free: number };
+  const facing = facingOfYaw(Number(bot.entity?.yaw ?? 0));
+  let best: Way = { name: facing, dx: 0, dz: 0, free: -1 };
+  for (const name of ['north', 'east', 'south', 'west']) {
+    const [dx, , dz] = DIRECTIONS[name];
+    let free = 0;
+    for (let i = 1; i <= TOSS_LOOKS; i++) { if (solidAt(bot, feet.x + dx * i, feet.y + 1, feet.z + dz * i)) break; free = i; }
+    const score = free + (name === facing ? 0.5 : 0);
+    if (best.free < 0 || score > best.free + (best.name === facing ? 0.5 : 0)) best = { name, dx, dz, free };
+  }
+  return best;
+}
+
 /**
  * drop: throw these from the pack the way the body faces, or toward a creature (a piglin, to trade gold) or a cell first. Only
- * thrown: what lands where is the game's; a trade's goods are taken up with pickup.
+ * thrown: what lands where is the game's; a trade's goods are taken up with pickup. With no way asked, the throw is level toward the freest
+ * of the four ways (`tossWay`), and the line says where the items lay (read from the item entities) and whether they are far enough not to be
+ * picked up again.
  */
 export async function drop(ctx: StepContext, args: DropArgs): Promise<StepOutcome> {
   const bot = ctx.bot;
   if (!args.items?.length) return stopped(bot, 'invalid_input', 'drop には items（物と数の列）が要る');
+  // A cell given as the text "229,-52,194" is the cell, not the name of a creature.
+  const cellText3 = typeof args.toward === 'string' ? /^\s*\(?(-?\d+)\s*,\s*(-?\d+)\s*,\s*(-?\d+)\)?\s*$/u.exec(args.toward) : null;
+  if (cellText3) args = { ...args, toward: { x: Number(cellText3[1]), y: Number(cellText3[2]), z: Number(cellText3[3]) } };
+  const feet = feetCell(bot);
+  let way: ReturnType<typeof tossWay> | null = null;
+  if (args.toward === undefined && feet && bot.entity?.position) {
+    way = tossWay(bot, feet);
+    const eyeY = bot.entity.position.y + 1.62;
+    try { await guard(ctx, Promise.resolve(bot.lookAt(new Vec3(feet.x + 0.5 + way.dx * 8, eyeY, feet.z + 0.5 + way.dz * 8), true)), 1000); } catch (error) { if (error instanceof StepStopped) throw error; }
+  }
+  const itemIds = () => new Set(Object.values(bot.entities ?? {}).filter((e: any) => e?.name === 'item').map((e: any) => e.id));
+  const before = itemIds();
   if (args.toward !== undefined) {
     if (typeof args.toward === 'object') await guard(ctx, Promise.resolve(bot.lookAt(new Vec3(args.toward.x + 0.5, args.toward.y + 0.5, args.toward.z + 0.5), true)), 1000);
     else {
@@ -117,5 +159,22 @@ export async function drop(ctx: StepContext, args: DropArgs): Promise<StepOutcom
     catch (error) { if (error instanceof StepStopped || /Action interrupted/u.test(String((error as Error)?.message))) throw error; }
     done.push(`${want.item}×${have - inventoryCount(bot, want.item)} を投げた（残り${inventoryCount(bot, want.item)}）`);
   }
-  return { ok: true, text: done.join('、') };
+  // Where the items lay: the item entities that were not there before, read after a moment (the server spawns them a tick on).
+  let where = '';
+  if (bot.entity?.position) {
+    try {
+      await wait(ctx, 350);
+      const origin = bot.entity.position;
+      const landed = Object.values(bot.entities ?? {}).filter((e: any) => e?.name === 'item' && e.position && !before.has(e.id) && origin.distanceTo(e.position) <= 16)
+        .map((e: any) => ({ at: { x: Math.floor(e.position.x), y: Math.floor(e.position.y), z: Math.floor(e.position.z) }, d: Math.hypot(e.position.x - origin.x, e.position.z - origin.z) }))
+        .sort((a, b) => a.d - b.d);
+      const aim = way ? `${DIRECTION_JA[way.name]}へ水平に投げた（その向きの空きは頭の高さで ${way.free >= TOSS_LOOKS ? `${TOSS_LOOKS} マス以上` : `${way.free} マス`}）。` : '';
+      if (landed.length) {
+        const near = landed[0];
+        where = `。${aim}落ちた先 ${cellText(near.at)}（足から横 ${near.d.toFixed(1)}m）`
+          + (near.d >= TOSS_AWAY ? `。${TOSS_AWAY}m 以上離れたので、そこへ歩いて戻らない限り拾い直さない` : `。近い（${TOSS_AWAY}m 未満）: ここに立ち続ける・近くを歩くと拾い直す。離れてから続ける`);
+      } else if (aim) where = `。${aim.replace(/。$/u, '')}（落ちた先は読めなかった）`;
+    } catch (error) { if (error instanceof StepStopped) throw error; }
+  }
+  return { ok: true, text: `${done.join('、')}${where}` };
 }
