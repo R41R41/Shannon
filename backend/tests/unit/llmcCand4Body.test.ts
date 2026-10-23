@@ -13,6 +13,7 @@ vi.mock('../../src/services/minebot/utils/setMovements.js', async importOriginal
   return { ...actual, buildMovements: (bot: any, ...rest: any[]) => bot.__fakeMovements ? { getBlock: () => null, getNeighbors: () => [], exclusionAreasBreak: [] } : (actual.buildMovements as any)(bot, ...rest) };
 });
 
+const { runAct, ACT_HANDS } = await import('../../src/services/minebot/instantSkills/act.js');
 const walkModule: any = await import('../../src/services/minebot/utils/primitives/walk.js');
 const rules: any = await import('../../src/services/minebot/utils/walkRules.js');
 const localMap: any = await import('../../src/services/minebot/utils/localMap.js');
@@ -26,9 +27,13 @@ const AIR: Cell = { name: 'air', boundingBox: 'empty' };
 const OBSIDIAN: Cell = { name: 'obsidian', boundingBox: 'block' };
 const PORTAL: Cell = { name: 'nether_portal', boundingBox: 'empty' };
 
-/** Run 37's portal: obsidian at y -55 (and the frame), the lit portal in the column (5, -54..-52, 0); air elsewhere over a stone floor. */
+/**
+ * Run 37's portal as a real frame (4 wide, 5 tall: obsidian at x 4 and 7, y -55 and -51), the lit portal inside it (x 5 and 6, y -54..-52, z 0);
+ * air elsewhere over a floor of obsidian at y -55. The top row of the portal (y -52) has the frame's top edge over its head.
+ */
 const portalWorld = (portal: Cell = PORTAL) => (x: number, y: number, z: number): Cell => {
-  if (x === 5 && z === 0 && y >= -54 && y <= -52) return portal;
+  if (z === 0 && (x === 5 || x === 6) && y >= -54 && y <= -52) return portal;
+  if (z === 0 && x >= 4 && x <= 7 && (y === -51 || x === 4 || x === 7) && y >= -55 && y <= -51) return OBSIDIAN;
   if (y === -55) return OBSIDIAN;
   if (y < -55) return { name: 'stone', boundingBox: 'block' };
   return AIR;
@@ -69,7 +74,8 @@ describe('walk into a nether portal (run 37: "一歩ではない: (229,-54,196)�
     expect(rules.passable({ name: 'nether_portal', solid: false })).toBe(false);
     expect(rules.standable(read, 5, -54, 0)).toBe(false);
     expect(rules.portalEntry(read, { x: 5, y: -54, z: 0 })).toBe('nether_portal');
-    expect(rules.portalEntry(read, { x: 5, y: -52, z: 0 })).toBe('nether_portal');
+    expect(rules.portalEntry(read, { x: 5, y: -53, z: 0 })).toBe('nether_portal');
+    expect(rules.portalEntry(read, { x: 5, y: -52, z: 0 })).toBeNull();
     expect(rules.portalEntry(read, { x: 5, y: -54, z: 1 })).toBeNull();
     const words = rules.whyNotStand(read, { x: 5, y: -54, z: 0 }).text as string;
     expect(words).toContain('ポータル');
@@ -148,6 +154,69 @@ describe('walk into a nether portal (run 37: "一歩ではない: (229,-54,196)�
     expect(localMap.symbolFor({ name: 'end_portal' })).toBe('e');
     expect(localMap.MAP_LEGEND).toContain('p ネザーポータル');
     expect(localMap.MAP_LEGEND).toContain('e エンドポータル・エンドゲートウェイ');
+  });
+});
+
+describe('review: a real frame, the end portal, the end gateway, the last point only, the act ends where the dimension changed', () => {
+  const read = (shape: (x: number, y: number, z: number) => Cell) => localMap.bodyReader(portalBody(shape));
+  it('the aim: the bottom row is entered, a middle cell is entered at the bottom one, the top row (head on the frame) is refused with the cell to aim at', () => {
+    const r = read(portalWorld());
+    expect(rules.portalAim(r, { x: 5, y: -54, z: 0 })).toMatchObject({ kind: 'enter', cell: { x: 5, y: -54, z: 0 }, redirected: false });
+    expect(rules.portalAim(r, { x: 6, y: -53, z: 0 })).toMatchObject({ kind: 'enter', cell: { x: 6, y: -54, z: 0 }, redirected: true });
+    const top = rules.portalAim(r, { x: 5, y: -52, z: 0 });
+    expect(top.kind).toBe('refuse');
+    expect(top.text).toBe('(5,-52,0) は nether_portal の最上段: 頭が obsidian（枠）に当たって入れない。1 段下のポータルのマス (5,-53,0) へ');
+    expect(rules.portalAim(r, { x: 5, y: -54, z: 1 })).toBeNull();
+  });
+  it('walk to the top row: refused before any step, with that line; to a middle cell: the body goes to the bottom cell and says so', async () => {
+    const bot = portalBody(portalWorld());
+    walksInto(bot, { x: 5, y: -54, z: 0 });
+    const refused = await walkModule.walk(ctxOf(bot), { to: { x: 5, y: -52, z: 0 }, range: 0.5 });
+    expect(refused).toMatchObject({ ok: false, reason: 'target_unstandable' });
+    expect(refused.text).toContain('最上段: 頭が obsidian（枠）に当たって入れない。1 段下のポータルのマス (5,-53,0) へ');
+    expect(bot.pathfinder.goto).not.toHaveBeenCalled();
+    walksInto(bot, { x: 5, y: -54, z: 0 }, () => { carriedOff(bot, 'the_nether', new Vec3(1.5, 70, 1.5)); });
+    const middle = await walkModule.walk(ctxOf(bot), { to: { x: 5, y: -53, z: 0 }, range: 0.5 });
+    expect(bot.pathfinder.goto.mock.calls[0][0]).toMatchObject({ x: 5, y: -54, z: 0 });
+    expect(middle.ok).toBe(true);
+    expect(middle.text).toContain('ネザーへ移った (1,70,1)');
+    expect(middle.text).toContain('指された (5,-53,0) は柱の途中なので一番下のポータルのマスから');
+  });
+  it('an end portal over lava (a stronghold): no floor asked, lava under it is not a harm; the walk goes in', async () => {
+    const world = (x: number, y: number, z: number): Cell => (x === 5 && z === 0 && y === -54 ? { name: 'end_portal', boundingBox: 'empty' }
+      : x === 5 && z === 0 && y === -55 ? { name: 'lava', boundingBox: 'empty' } : y < -55 ? { name: 'stone', boundingBox: 'block' } : y === -55 ? OBSIDIAN : AIR);
+    const bot = portalBody(world);
+    expect(rules.portalAim(localMap.bodyReader(bot), { x: 5, y: -54, z: 0 })).toMatchObject({ kind: 'enter', name: 'end_portal', redirected: false });
+    walksInto(bot, { x: 5, y: -54, z: 0 }, () => { carriedOff(bot, 'the_end', new Vec3(100.5, 49, 0.5)); });
+    const outcome = await walkModule.walk(ctxOf(bot), { to: { x: 5, y: -54, z: 0 }, range: 0.5 });
+    expect(outcome.ok).toBe(true);
+    expect(outcome.text).toContain('エンドへ移った (100,49,0)');
+  });
+  it('an end gateway is entered like an end portal; the frame of an end portal is not', () => {
+    const gate = read((x, y, z) => (x === 5 && z === 0 && y === -54 ? { name: 'end_gateway', boundingBox: 'empty' } : y <= -55 ? OBSIDIAN : AIR));
+    expect(rules.cellWay({ name: 'end_gateway', solid: false })).toBe('portal');
+    expect(rules.portalAim(gate, { x: 5, y: -54, z: 0 })).toMatchObject({ kind: 'enter', name: 'end_gateway' });
+    const frame = read((x, y, z) => (x === 5 && z === 0 && y === -54 ? { name: 'end_portal_frame', boundingBox: 'block' } : y <= -55 ? OBSIDIAN : AIR));
+    expect(rules.portalAim(frame, { x: 5, y: -54, z: 0 })).toBeNull();
+  });
+  it('a portal in the middle of a path is not entered: refused before any step, "ポータルは walk の最後の点にだけ"', async () => {
+    const bot = portalBody(portalWorld());
+    walksInto(bot, { x: 9, y: -54, z: 9 });
+    const outcome = await walkModule.walk(ctxOf(bot), { path: [{ x: 5, y: -54, z: 0 }, { x: 5, y: -54, z: 1 }], range: 0.5 });
+    expect(outcome).toMatchObject({ ok: false, reason: 'target_unstandable' });
+    expect(outcome.text).toBe('道の1/2番目で: (5,-54,0) は nether_portal（ポータルは walk の最後の点にだけ。途中の点にはしない）');
+    expect(bot.pathfinder.goto).not.toHaveBeenCalled();
+  });
+  it('an act ends where the dimension changed: the hands after it are 未実行 with the reason, and the act is ok as far as it went', async () => {
+    const bot = portalBody(portalWorld());
+    walksInto(bot, { x: 5, y: -54, z: 0 }, () => { carriedOff(bot, 'the_nether', new Vec3(40.5, 70, 40.5)); });
+    const result: any = await runAct(bot, ACT_HANDS.parse([{ do: 'walk', to: { x: 5, y: -54, z: 0 } }, { do: 'walk', to: { x: 229, y: -54, z: 190 } }, { do: 'walk', to: { x: 1, y: 64, z: 1 } }]), undefined, undefined, { tickMs: 20 });
+    expect(result.success).toBe(true);
+    const json = JSON.parse(result.result);
+    expect(json.lines[0].line).toContain('ネザーへ移った (40,70,40)');
+    expect(json.lines[1]).toMatchObject({ status: 'skipped', line: '未実行: 次元が変わった（前の次元の座標の手は送らない）' });
+    expect(json.lines[2]).toMatchObject({ status: 'skipped', line: '未実行: 次元が変わった（前の次元の座標の手は送らない）' });
+    expect(bot.pathfinder.goto).toHaveBeenCalledTimes(1);
   });
 });
 

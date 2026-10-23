@@ -4,7 +4,7 @@ import { buildMovements } from '../setMovements.js';
 import { nextLeg, FAR_LEG_M } from '../farLegs.js';
 import { bodyReader, feetCell, relativeWords, type Cell, type MapBlock } from '../localMap.js';
 import { probePath } from '../probeTools.js';
-import { cellWay, climbRise, doorOpen, installWalkRules, isDoorlike, isLeaves, isPortal, isTall, mapBlockOf, MAX_CLIMB, MAX_FALL, passable, PORTAL_WORDS, portalEntry, standable, standableBeside, whyNotStand } from '../walkRules.js';
+import { cellWay, climbRise, doorOpen, installWalkRules, isDoorlike, isLeaves, isPortal, isTall, mapBlockOf, MAX_CLIMB, MAX_FALL, passable, PORTAL_WORDS, portalAim, standable, standableBeside, whyNotStand } from '../walkRules.js';
 import { cellText, guard, letGo, placeText, stopped, StepStopped, wait, waitUntil, type StepContext, type StepOutcome } from './common.js';
 
 const { goals } = pathfinder;
@@ -169,7 +169,7 @@ export function walkMovements(bot: any, sprint = true): any {
 }
 
 /** What a stretch of walking did on the way: the doors it opened, the leaves it broke. */
-export interface WayNotes { opened: Cell[]; leaves: number; /** Where the walk began: the dimension and the feet cell (a dimension change on the way is said against it). */ from?: { dimension: string; cell: Cell } }
+export interface WayNotes { opened: Cell[]; leaves: number; /** Where the walk began: the dimension and the feet cell (a dimension change on the way is said against it). */ from?: { dimension: string; cell: Cell }; /** The portal cell the walk was pointed at, when it entered the bottom cell of its column instead. */ pointedAt?: Cell }
 export function wayWords(notes: WayNotes): string {
   const words: string[] = [];
   if (notes.opened.length) words.push(`扉を開けた ${notes.opened.slice(0, 3).map(cellText).join('・')}${notes.opened.length > 3 ? ` ほか${notes.opened.length - 3}` : ''}`);
@@ -451,7 +451,7 @@ async function crossedOutcome(ctx: StepContext, notes: WayNotes): Promise<StepOu
   try { await wait(ctx, 600); } catch (caught) { if (caught instanceof StepStopped) throw caught; }
   const end = (() => { try { return feetCell(bot); } catch { return null; } })();
   const there = dimensionWords(dimensionOf(bot));
-  const from = notes.from ? `（${dimensionWords(notes.from.dimension)}の ${cellText(notes.from.cell)} から歩いて入った）` : '';
+  const from = notes.from ? `（${dimensionWords(notes.from.dimension)}の ${cellText(notes.from.cell)} から歩いて入った${notes.pointedAt ? `。指された ${cellText(notes.pointedAt)} は柱の途中なので一番下のポータルのマスから` : ''}）` : '';
   return { ok: true, text: `${there}へ移った${end ? ` ${cellText(end)}` : ''}${from}`, ...(end ? { at: end } : {}) };
 }
 
@@ -474,20 +474,32 @@ export async function walk(ctx: StepContext, args: WalkArgs): Promise<StepOutcom
   const sprint = args.sprint !== false;
   const navigator = bot.pathfinder as { movements?: unknown; setMovements(movements: unknown): void } | undefined;
   if (!navigator) return stopped(bot, 'no_pathfinder', '経路探索が無い体');
+  // A portal is entered only as the LAST point (mb-llmc-cand 4, review): a middle point that is one is refused before any step; the top row of a
+  // frame (the head meets the obsidian) is refused with the cell to aim at; a middle cell of the column is entered at the bottom one.
+  const read = reader(bot);
+  const lastRange = Math.max(0, args.range ?? 0);
+  for (let i = 0; i < targets.length - 1; i++) {
+    const aimed = portalAim(read, targets[i]);
+    if (aimed) return stopped(bot, 'target_unstandable', `道の${i + 1}/${targets.length}番目で: ${cellText(targets[i])} は ${aimed.name}（ポータルは walk の最後の点にだけ。途中の点にはしない）`, targets[i]);
+  }
+  const lastAim = lastRange < 1 ? portalAim(read, targets[targets.length - 1]) : null;
+  if (lastAim?.kind === 'refuse') return stopped(bot, 'target_unstandable', lastAim.text, targets[targets.length - 1]);
   const previous = navigator.movements;
   navigator.setMovements(walkMovements(bot, sprint));
   const notes: WayNotes = { opened: [], leaves: 0, from: { dimension: dimensionOf(bot), cell: start } };
-  // The last target is a portal (nether or end): the walk goes into it, and its end is the dimension changed (mb-llmc-cand 4).
-  const portal = portalEntry(reader(bot), targets[targets.length - 1]);
+  // The last target is a portal: the walk goes into it, and its end is the dimension changed.
+  const portal = lastAim?.kind === 'enter' ? lastAim.name : null;
+  if (lastAim?.kind === 'enter' && lastAim.redirected) notes.pointedAt = targets[targets.length - 1];
   const withNotes = (text: string) => { const words = wayWords(notes); return words ? `${text}（途中で${words}）` : text; };
   try {
     for (let i = 0; i < targets.length; i++) {
-      const target = targets[i], final = i === targets.length - 1;
+      const final = i === targets.length - 1;
+      const target = final && lastAim?.kind === 'enter' ? lastAim.cell : targets[i];
       const range = final ? Math.max(0, args.range ?? 0) : 0;
       // r9: a range under one is the cell itself (the route search floors the goal; act's default is 0.5): a cell no body can stand in is refused
       // at the start with its fact. It was only `range === 0`, and act walks with 0.5, so five walks in run 33 went to the cell below it and
       // stopped, and the stop quoted probe path's answer for a neighbour.
-      if (range < 1 && !portalEntry(reader(bot), target)) {
+      if (range < 1 && !(final && lastAim?.kind === 'enter')) {
         const cannot = unstandable(bot, target);
         if (cannot) return { ...cannot, text: withNotes(targets.length > 1 ? `道の${i + 1}/${targets.length}番目で: ${cannot.text}` : cannot.text) };
       }

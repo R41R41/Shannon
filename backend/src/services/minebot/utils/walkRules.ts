@@ -18,14 +18,17 @@ import { symbolFor, isOpenSymbol, type BlockReader, type Cell, type MapBlock } f
  */
 
 /** Blocks a body does not walk into whatever their box (they hurt, hold, or carry it off). */
-export const NO_ENTER = new Set(['lava', 'fire', 'soul_fire', 'cobweb', 'powder_snow', 'end_gateway', 'sweet_berry_bush',
+export const NO_ENTER = new Set(['lava', 'fire', 'soul_fire', 'cobweb', 'powder_snow', 'sweet_berry_bush',
   'campfire', 'soul_campfire', 'wither_rose', 'magma_block', 'cactus']);
 /** A step up is one block; a drop (also into water) is three at most. */
 export const MAX_STEP_UP = 1;
 export const MAX_FALL = 3;
 
-/** A portal a body walks into (no collision box): a nether portal, or an end portal (a body falls through it). An end portal frame is a block, not this. */
-export const isPortalName = (name: string) => { const bare = name.replace(/^minecraft:/u, ''); return bare === 'nether_portal' || bare === 'end_portal'; };
+/**
+ * A portal a body walks into (no collision box): a nether portal, an end portal (a body falls through it) or an end gateway (walking into its
+ * beam carries it off). An end portal frame is a block, not this. The map's `p` and `e` are these: enterable.
+ */
+export const isPortalName = (name: string) => { const bare = name.replace(/^minecraft:/u, ''); return bare === 'nether_portal' || bare === 'end_portal' || bare === 'end_gateway'; };
 export const isPortal = (block: MapBlock | null) => !!block && isPortalName(block.name);
 /** What a portal cell is, in a few words: said where a stop names one. */
 export const PORTAL_WORDS = 'ポータル: 壁でも害でもない、的にして walk で入ると次元が変わる、通り道には使わない';
@@ -165,14 +168,36 @@ export function whyNotStand(read: BlockReader, cell: Cell): { text: string; soli
 }
 
 /**
- * A target cell a body walks into to change dimension: the feet cell is a portal (nether or end) and the head cell is a portal or clear (a
- * nether portal's column is three cells; an end portal is a sheet a body falls through). Gives the portal's name, else null.
+ * A target cell a body walks into to change dimension: the feet cell is a portal and the head cell is a portal or passable (a nether portal's
+ * column is three cells; an end portal is a sheet a body falls through, over lava in a stronghold: no floor is asked of it). Gives the
+ * portal's name, else null. Entered only as the last point of a walk.
  */
 export function portalEntry(read: BlockReader, cell: Cell): string | null {
   const feet = read(cell.x, cell.y, cell.z);
   if (!feet || !isPortal(feet)) return null;
   const head = read(cell.x, cell.y + 1, cell.z);
   return head && (isPortal(head) || passable(head)) ? feet.name : null;
+}
+
+/**
+ * What a walk's target that is a portal cell comes to (mb-llmc-cand 4, review): enter (the cell to aim at: the bottom cell of the portal's
+ * column, where the feet go: the cell the walk is pointed at when it is a middle one), or refuse with the words (the top row of a frame:
+ * the head meets the obsidian). null: the cell is no portal.
+ */
+export type PortalAim = { kind: 'enter'; name: string; cell: Cell; redirected: boolean } | { kind: 'refuse'; name: string; text: string };
+export function portalAim(read: BlockReader, cell: Cell): PortalAim | null {
+  const feet = read(cell.x, cell.y, cell.z);
+  if (!feet || !isPortal(feet)) return null;
+  const head = read(cell.x, cell.y + 1, cell.z);
+  const under = read(cell.x, cell.y - 1, cell.z);
+  if (head && !isPortal(head) && !passable(head)) {
+    return { kind: 'refuse', name: feet.name, text: isPortal(under)
+      ? `${at(cell)} は ${feet.name} の最上段: 頭が ${head.name}（枠）に当たって入れない。1 段下のポータルのマス ${at({ ...cell, y: cell.y - 1 })} へ`
+      : `${at(cell)} は ${feet.name} だが頭の高さ ${at({ ...cell, y: cell.y + 1 })} が ${head.name} で入れない` };
+  }
+  let bottom = cell;
+  for (let n = 0; n < 8 && isPortal(read(bottom.x, bottom.y - 1, bottom.z)); n++) bottom = { ...bottom, y: bottom.y - 1 };
+  return { kind: 'enter', name: feet.name, cell: bottom, redirected: bottom.y !== cell.y };
 }
 
 /** The cells round a target a body stands in "beside it" (above, the four sides, below, and those a step up or down), in this order. */

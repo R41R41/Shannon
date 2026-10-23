@@ -7,7 +7,7 @@ import { beginEngagement } from '../utils/engagement.js';
 import { bodyReader, cellKey, facingOfYaw, feetCell, noteMapStop, type Cell, type Facing } from '../utils/localMap.js';
 import { aroundText, clip, closedWord, keepActReport, renderActReport, stoppedLine, type ActReport, type StoppedBy } from '../utils/actReport.js';
 import { blockAt, cellNow, freeSlots, inventoryCount, resolvePosition, StepStopped, wait, type PositionSpec, type StepContext, type StepOutcome } from '../utils/primitives/common.js';
-import { walk } from '../utils/primitives/walk.js';
+import { dimensionOf, walk } from '../utils/primitives/walk.js';
 import { dig } from '../utils/primitives/dig.js';
 import { place } from '../utils/primitives/place.js';
 import { use } from '../utils/primitives/use.js';
@@ -279,10 +279,12 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
       return seeing.length ? `。射線の中: ${shooterWords(at, seeing)} から見えている` : `。射線の外: ${shooterWords(at, inReach)} からは見えない`;
     } catch { return ''; }
   };
+  let crossedByWalk = false;
   const watch = () => {
     try {
       if ((bot.health ?? 20) <= 0) return stopWith('体が死んだ', 'died');
-      if (String(bot.game?.dimension ?? '') !== startDimension) return stopWith(`次元が変わった（${startDimension} → ${String(bot.game?.dimension ?? '')}）`, 'dimension_changed');
+      // A walk into a portal says the crossing itself (its arrival) and the act ends after it (below): not a stop in the middle of the hand.
+      if (String(bot.game?.dimension ?? '') !== startDimension && host.actHandNow !== 'walk' && !crossedByWalk) return stopWith(`次元が変わった（${startDimension} → ${String(bot.game?.dimension ?? '')}）`, 'dimension_changed');
       const entries = ledger?.entriesSince(mark).filter(entry => !LEDGER_QUIET.has(entry.kind)) ?? [];
       // r6 (run 29): a reflex's note does not stop a hand that is laying blocks (it may be what walls the threat off); the act stops when
       // that hand is over. A reflex that takes the body still cuts it at once (its lease aborts the action: onCut).
@@ -321,7 +323,10 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
   const emit = (index: number, status: 'in_progress' | 'completed' | 'error', detail = '') => {
     try { bot.emit?.('minebotActStep', { startedAt, index, total: hands.length, label: hands[index].note ?? stepLabel(hands[index] as never), status, detail }); } catch { /* the UI is optional */ }
   };
-  const skip = (from: number) => { for (let rest = from; rest < hands.length; rest++) report.lines.push({ i: rest + 1, do: hands[rest].do, status: 'skipped', line: '未実行' }); };
+  const skip = (from: number, why = '') => { for (let rest = from; rest < hands.length; rest++) report.lines.push({ i: rest + 1, do: hands[rest].do, status: 'skipped', line: why ? `未実行: ${why}` : '未実行' }); };
+  // A dimension crossed (a portal walked into) ends the act there: the cells of the hands after it are the other dimension's (mb-llmc-cand 4).
+  const dimension0 = dimensionOf(bot);
+  let crossed = false;
   /** The hand as the probe's history keeps it (r4): its line, where it was about or stopped, and the feet it began from. */
   const remember = (hand: ActHand, status: 'done' | 'failed' | 'stopped', line: string, at: Cell | null | undefined, from: Cell | null) => {
     try {
@@ -333,6 +338,7 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
     for (let index = 0; index < hands.length; index++) {
       const hand = hands[index];
       watch();
+      if (index > 0 && dimensionOf(bot) !== dimension0) { crossed = true; skip(index, '次元が変わった（前の次元の座標の手は送らない）'); break; }
       if (control.signal.aborted) { skip(index); break; }
       if (Date.now() >= deadline) { stopWith('act の時間が尽きた', 'timeout'); skip(index); break; }
       const base = feetCell(bot);
@@ -363,6 +369,7 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
       if (outcome.data?.container) report.container = outcome.data.container;
       if (typeof outcome.data?.arrowsLeft === 'number') report.arrowsLeft = outcome.data.arrowsLeft;
       if (outcome.ok) {
+        if (hand.do === 'walk' && dimensionOf(bot) !== dimension0) crossedByWalk = true;
         report.done++;
         const line = clip(`${outcome.text}（${((Date.now() - began) / 1000).toFixed(1)}秒）`);
         report.lines.push({ i: index + 1, do: hand.do, status: 'done', line });
@@ -404,7 +411,8 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
     signal?.removeEventListener('abort', onCut);
     try { bot.setControlState?.('sneak', false); } catch { /* released */ }
   }
-  report.ok = report.done === hands.length && !report.stoppedBy;
+  // Crossed: the hands before it were all done (a failure would have stopped the act earlier), so it is ok as far as it went.
+  report.ok = (report.done === hands.length || (crossed && report.done === report.lines.filter(line => line.status !== 'skipped').length)) && !report.stoppedBy;
   keepActReport(bot, report);
   const text = renderActReport(bot, report);
   return report.ok ? { success: true, result: text } : { success: false, result: text, failureType: report.failureType ?? 'failed', recoverable: true };
