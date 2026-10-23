@@ -355,6 +355,6 @@ describe('a walk to a cell with no floor under it (run 33 +504, +726, +754: act 
     bot.pathfinder.goto = vi.fn(async () => undefined);
     const outcome = await walkModule.walk(ctxOf(bot), { to: { x: 3, y: 64, z: 0 }, range: 0.5 });
     expect(outcome).toMatchObject({ ok: false, reason: 'not_arrived' });
-    expect(outcome.text).toMatch(/probe path の決まりでは歩いて行ける（3 マス）が、体はそこまで進まなかった。足のマス \(0,64,0\) は 足 air・頭 air・下 stone。次のマス \(1,64,0\)（東1）は 足 air・頭 air・下 stone。そのマスに zombie #9 がいる$/u);
+    expect(outcome.text).toMatch(/probe path の決まりでは歩いて行ける（3 マス）が、体はそこまで進まなかった。次のマス \(1,64,0\)（東1）は 足 air・頭 air・下 stone。足のマス \(0,64,0\) は 足 air・頭 air・下 stone。そのマスに zombie #9 がいる$/u);
   });
 });
