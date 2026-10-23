@@ -126,6 +126,25 @@ export interface NearbyEntityObservation {
   canReachMe?: boolean;
   /** Hostiles within 16 m: whether nothing solid lies between its eyes and the body (a blow or a shot can come at once). */
   canSee?: boolean;
+  /**
+   * LLM-centric mode, hostiles within 24 m (the nearest 8; absent beyond, or when the frame's 24 ms budget was spent, or no world to read):
+   *  lineOfSight  true when a line from its eyes to the body's eye or chest has no solid block (what a shot or a glance needs); false = blocked.
+   *  pathToMe     'yes' a way a mob of its kind could take (ground mob: steps up 1, down 3 over solid floor, room for its height, a closed door is a
+   *               wall; flyer: an open way through the air), 'no' none was found, 'unknown' the search ran out of budget (never read as 'no').
+   *  dy           metres above (+) or below (-) the body's feet, 0.1.
+   *  shooter      true for kinds that hurt from afar (skeleton, stray, bogged, blaze, ghast, pillager, witch, breeze, shulker).
+   *  reach        one word from the above: 'in_sight' (lineOfSight), 'path_no_sight' (no sight, pathToMe yes), 'walled' (no sight, pathToMe no), 'unknown'.
+   */
+  lineOfSight?: boolean;
+  pathToMe?: 'yes' | 'no' | 'unknown';
+  dy?: number;
+  shooter?: boolean;
+  reach?: 'in_sight' | 'path_no_sight' | 'walled' | 'unknown';
+  /** LLM-centric mode, item entities: the kind and the stack's count (absent while the entity's data has not arrived). */
+  itemName?: string;
+  itemCount?: number;
+  /** LLM-centric mode, item entities: true when drop-item threw it itself (recorded for 290 s; only the kinds the tidy may throw). Absent = not known to be ours. */
+  droppedByMe?: true;
   /** Creepers only: true while its fuse is lit or swelling (entity metadata). */
   ignited?: boolean;
   /** LLM-centric mode only: the entity's id (act names a creature by it). */

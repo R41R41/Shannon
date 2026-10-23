@@ -2,10 +2,13 @@ import { timedEngagement } from '../utils/engagement.js';
 import { airLevel } from '../utils/airSupplyDefault.js';
 import { potionIn } from '../utils/potionContents.js';
 import { woodLine } from '../utils/treeSearch.js';
-import type { WorldDelta, WorldFrame, WorldInventoryStack, WorldObservation, WorldVector } from './types.js';
+import type { Vec3 } from 'vec3';
+import type { NearbyEntityObservation, WorldDelta, WorldFrame, WorldInventoryStack, WorldObservation, WorldVector } from './types.js';
 import { roundedExertion, type Exertion } from '../utils/exertionMeter.js';
 import { closingSpeed, secondsToContact } from '../utils/threatTracker.js';
-import { threatExposure } from '../utils/threatExposure.js';
+import { seesBodyAt, threatExposure } from '../utils/threatExposure.js';
+import { REACH_MAX_MOBS, REACH_RANGE, reachBudgets, threatReachOf } from '../utils/threatReach.js';
+import { isSelfDropped } from '../utils/selfDropped.js';
 import { isSealedIn } from '../utils/shelter.js';
 import { builtAroundStatus } from '../utils/builtAround.js';
 import { creeperLit } from '../utils/creeperFuse.js';
@@ -210,6 +213,49 @@ function jobsFrame(bot: unknown): { jobs: NonNullable<WorldObservation['jobs']>;
   return jobs.length ? { jobs, omitted: total - jobs.length } : undefined;
 }
 
+/** The entities by id, for the facts that need the live object (its height, its position as a vector). */
+function entitiesById(bot: WorldFrameBotLike | undefined): Map<number, WorldFrameEntityLike> {
+  const map = new Map<number, WorldFrameEntityLike>();
+  for (const entity of Object.values(bot?.entities ?? {})) if (entity && typeof entity.id === 'number') map.set(entity.id, entity);
+  return map;
+}
+
+/**
+ * What an item entity says of itself (mb-llmc-cand 5, run 37: "#6545 item 0.7m" gave no name): its kind and count, and whether the body
+ * threw it itself (drop-item's record; only the kinds that the tidy may throw are recorded, so absence is "not known to be ours").
+ */
+function droppedItemFacts(bot: unknown, entity: WorldFrameEntityLike): { itemName?: string; itemCount?: number; droppedByMe?: true } {
+  if (entity.name !== 'item' && String(entity.displayName ?? '') !== 'Item') return {};
+  let stack: { name?: string; count?: number } | null | undefined;
+  try { stack = (entity as { getDroppedItem?(): { name?: string; count?: number } | null }).getDroppedItem?.(); } catch { stack = null; }
+  const name = typeof stack?.name === 'string' && stack.name ? stack.name : undefined;
+  const count = typeof stack?.count === 'number' && Number.isFinite(stack.count) && stack.count > 0 ? stack.count : undefined;
+  return { ...(name ? { itemName: name } : {}), ...(count ? { itemCount: count } : {}),
+    ...(isSelfDropped(bot as object, entity as never) ? { droppedByMe: true as const } : {}) };
+}
+
+/** Within REACH_RANGE, for the nearest REACH_MAX_MOBS hostiles (already sorted by distance): lineOfSight, pathToMe, dy, shooter, reach. */
+function addThreatReach(bot: WorldFrameBotLike, position: WorldVector, sorted: Array<NearbyEntityObservation & { id?: number }>, live: Map<number, WorldFrameEntityLike>): void {
+  let budget = reachBudgets.frameMs;
+  let judged = 0;
+  for (const threat of sorted) {
+    if (threat.distance > REACH_RANGE) break;
+    if (threat.kind !== 'hostile' || judged >= REACH_MAX_MOBS) continue;
+    const entity = typeof threat.id === 'number' ? live.get(threat.id) : undefined;
+    if (!entity || typeof (entity.position as { offset?: unknown } | undefined)?.offset !== 'function') continue;
+    const exposure = threat.canReachMe === false ? 'sealed' as const : threat.canSee === true ? 'seen' as const : threat.canReachMe === true ? 'reachable' as const : null;
+    const { reach, spentMs } = threatReachOf({ bot: bot as never, entity: entity as never, kind: threat.name, exposure, budgetMs: budget });
+    budget -= spentMs;
+    judged++;
+    if (!reach) continue;
+    const feet = (bot.entity as { position: Vec3 }).position;
+    let sees = false;
+    try { sees = seesBodyAt(bot as never, entity as never, feet); } catch { sees = false; }
+    Object.assign(threat, { lineOfSight: sees, pathToMe: reach.pathToMe, dy: reach.dy, shooter: reach.shooter,
+      reach: sees ? 'in_sight' : reach.pathToMe === 'yes' ? 'path_no_sight' : reach.pathToMe === 'no' ? 'walled' : 'unknown' });
+  }
+}
+
 function finiteNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
@@ -283,12 +329,14 @@ export function captureWorldObservation(bot?: unknown): WorldObservation {
           ...(entity.name === 'creeper' ? { ignited: creeperLit(entity) } : {}),
           ...reach,
           // LLM-centric mode: the id to name it by in act, and for the kinds of the way to the dragon their health and mood.
-          ...(llmCentric ? { id: entity.id, ...watchedEntityFacts(observedBot as never, entity) } : {}),
+          ...(llmCentric ? { id: entity.id, ...watchedEntityFacts(observedBot as never, entity), ...droppedItemFacts(observedBot as never, entity) } : {}),
         };
       })
       .filter((entity): entity is NonNullable<typeof entity> => entity !== null)
       .sort((a, b) => a.distance - b.distance)
     : [];
+  // LLM-centric mode: how each of the nearest hostiles stands to the body (sight, a way, height, a shooter), within a time budget for the frame.
+  if (llmCentric && position) addThreatReach(observedBot as never, position, allEntities as never, entitiesById(observedBot));
   const nearbyEntities = allEntities.slice(0, MAX_NEARBY_ENTITIES);
   const landmarks = (observedBot as { landmarks?: WorldObservation['landmarks'] } | undefined)?.landmarks;
   // Separate budget: item crowds must not erase an observed hostile.
