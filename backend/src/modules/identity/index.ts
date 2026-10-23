@@ -13,7 +13,6 @@ import {
   type IdentityProfileRecord,
   type IdentityProfileRepository,
   IdentityInputError,
-  type WritableChannelKind,
 } from './bindingWrite.js';
 import type {
   BindingManifestPlanSummary,

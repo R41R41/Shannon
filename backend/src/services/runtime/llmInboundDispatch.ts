@@ -4,7 +4,6 @@ import type {
   DiscordVoiceMessageOutput,
   MemberTweetInput,
   MinebotVoiceResponseOutput,
-  OpenAIMessageOutput,
   TwitterAutoTweetInput,
   TwitterClientInput,
   TwitterQuoteRTOutput,

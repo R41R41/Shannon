@@ -1,9 +1,5 @@
 import {
   OpenAIMessageOutput,
-  OpenAITextInput,
-  OpenAIRealTimeTextInput,
-  OpenAIRealTimeAudioInput,
-  OpenAICommandInput,
 } from '@shannon/common';
 import {
   WebSocketServiceBase,

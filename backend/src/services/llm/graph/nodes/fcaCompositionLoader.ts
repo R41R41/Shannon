@@ -1,4 +1,4 @@
-import type { RequestEnvelope, TaskContext } from '@shannon/common';
+import type { RequestEnvelope } from '@shannon/common';
 import { WorldKnowledgeService } from '../../../minebot/knowledge/WorldKnowledgeService.js';
 import type { ScopedRecallResult } from '../../../memory/scopedMemoryService.js';
 import { TaskEpisodeMemory } from '../cognitive/TaskEpisodeMemory.js';

@@ -16,7 +16,6 @@
 
 import type { Express, Request, Response } from 'express';
 import type { LLMService } from '../services/llm/client.js';
-import type { TaskTreeState } from '@shannon/common';
 import { HumanMessage, AIMessage } from '@langchain/core/messages';
 import { webAdapter } from '../services/common/adapters/index.js';
 import { getWebNotificationHub } from '../services/web/webNotificationHub.js';

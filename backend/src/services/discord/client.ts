@@ -1,7 +1,5 @@
 import { AIMessage, BaseMessage, HumanMessage } from '@langchain/core/messages';
 import {
-  DiscordClientInput,
-  DiscordClarificationInput,
   DiscordGetServerEmojiInput,
   DiscordGetServerEmojiOutput,
   DiscordPlanningInput,

@@ -4,7 +4,6 @@ import type { HierarchicalSubTask, TaskTreeState } from '@shannon/common';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { config } from '../../../config/env.js';
 import { logger } from '../../../utils/logger.js';
-import { getEventBus } from '../../eventBus/index.js';
 import type { FunctionCallingAgentState } from '../graph/nodes/FunctionCallingAgent.js';
 import { TaskTreePublisher } from '../graph/nodes/execution/TaskTreePublisher.js';
 import { ToolExecutor } from '../graph/nodes/execution/ToolExecutor.js';
@@ -41,7 +40,7 @@ export interface DiscordArtifactResponsesResult {
  * Shannon's existing tool policy, progress UI, renderers, and delivery queue.
  */
 export class DiscordArtifactResponsesExecutor {
-  private readonly taskTreePublisher = new TaskTreePublisher(getEventBus());
+  private readonly taskTreePublisher = new TaskTreePublisher();
   private readonly toolExecutor = new ToolExecutor(this.taskTreePublisher);
 
   constructor(private readonly allTools: StructuredTool[]) {}

@@ -8,11 +8,10 @@ import {
     BaseMessage,
     HumanMessage,
     SystemMessage,
-    ToolMessage,
 } from '@langchain/core/messages';
 import { StructuredTool } from '@langchain/core/tools';
 import { ChatOpenAI } from '@langchain/openai';
-import { HierarchicalSubTask, TaskContext, TaskTreeState } from '@shannon/common';
+import { HierarchicalSubTask, TaskTreeState } from '@shannon/common';
 import { setMaxListeners } from 'node:events';
 import { config } from '../../../../config/env.js';
 import { modelManager } from '../../../../config/modelManager.js';

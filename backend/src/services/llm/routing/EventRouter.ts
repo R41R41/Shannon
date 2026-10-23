@@ -1,10 +1,9 @@
-import { BaseMessage, HumanMessage } from '@langchain/core/messages';
+import { HumanMessage } from '@langchain/core/messages';
 import {
   DiscordSendTextMessageOutput,
   DiscordVoiceMessageOutput,
   MemberTweetInput,
   MinebotVoiceResponseOutput,
-  OpenAIMessageOutput,
   TwitterAutoTweetInput,
   TwitterClientInput,
   TwitterQuoteRTOutput,
@@ -12,7 +11,6 @@ import {
   YoutubeCommentOutput,
   YoutubeLiveChatMessageOutput,
 } from '@shannon/common';
-import type { RequestEnvelope, ShannonGraphState } from '@shannon/common';
 import { getWebNotificationHub, type WebPostMessagePayload } from '../../web/webNotificationHub.js';
 import { acquireWebRealtimeInput } from '../../web/webRealtimeInputLock.js';
 import { RealtimeAPIService } from '../agents/realtimeApiAgent.js';

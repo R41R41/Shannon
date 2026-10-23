@@ -1,6 +1,5 @@
 import { BaseMessage } from '@langchain/core/messages';
 import {
-  DiscordClientInput,
   DiscordVoiceEnqueueInput,
   DiscordVoiceFillerInput,
   DiscordVoiceQueueEndInput,
