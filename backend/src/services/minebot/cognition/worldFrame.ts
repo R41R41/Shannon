@@ -244,14 +244,14 @@ function addThreatReach(bot: WorldFrameBotLike, position: WorldVector, sorted: A
     const entity = typeof threat.id === 'number' ? live.get(threat.id) : undefined;
     if (!entity || typeof (entity.position as { offset?: unknown } | undefined)?.offset !== 'function') continue;
     const exposure = threat.canReachMe === false ? 'sealed' as const : threat.canSee === true ? 'seen' as const : threat.canReachMe === true ? 'reachable' as const : null;
-    const { reach, spentMs } = threatReachOf({ bot: bot as never, entity: entity as never, kind: threat.name, exposure, budgetMs: budget });
-    budget -= spentMs;
-    judged++;
-    if (!reach) continue;
     const feet = (bot.entity as { position: Vec3 }).position;
     let sees = false;
     try { sees = seesBodyAt(bot as never, entity as never, feet); } catch { sees = false; }
-    Object.assign(threat, { lineOfSight: sees, pathToMe: reach.pathToMe, dy: reach.dy, shooter: reach.shooter,
+    const { reach, spentMs } = threatReachOf({ bot: bot as never, entity: entity as never, kind: threat.name, exposure, sees, budgetMs: budget });
+    budget -= spentMs;
+    judged++;
+    if (!reach) continue;
+    Object.assign(threat, { lineOfSight: sees, ...(reach.pathToMe ? { pathToMe: reach.pathToMe } : {}), dy: reach.dy, shooter: reach.shooter,
       reach: sees ? 'in_sight' : reach.pathToMe === 'yes' ? 'path_no_sight' : reach.pathToMe === 'no' ? 'walled' : 'unknown' });
   }
 }
@@ -273,7 +273,8 @@ function distance(a: WorldVector, b: WorldVector): number {
   return Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2 + (a.z - b.z) ** 2);
 }
 
-export function captureWorldObservation(bot?: unknown): WorldObservation {
+/** `threatReach`: also say how each near hostile stands to the body (the LLM-centric frame only; the reflex loops leave it out: it costs blocks read). */
+export function captureWorldObservation(bot?: unknown, options: { threatReach?: boolean } = {}): WorldObservation {
   const observedBot = bot as WorldFrameBotLike | undefined;
   // The LLM-centric body's observation (design mb-llm-centric 2.2, 2.6): the map, the marks beside it, food in points, and the ids and
   // health of creatures. A live body only (something that can read blocks); the mode off observes exactly as before.
@@ -336,7 +337,7 @@ export function captureWorldObservation(bot?: unknown): WorldObservation {
       .sort((a, b) => a.distance - b.distance)
     : [];
   // LLM-centric mode: how each of the nearest hostiles stands to the body (sight, a way, height, a shooter), within a time budget for the frame.
-  if (llmCentric && position) addThreatReach(observedBot as never, position, allEntities as never, entitiesById(observedBot));
+  if (llmCentric && options.threatReach && position) addThreatReach(observedBot as never, position, allEntities as never, entitiesById(observedBot));
   const nearbyEntities = allEntities.slice(0, MAX_NEARBY_ENTITIES);
   const landmarks = (observedBot as { landmarks?: WorldObservation['landmarks'] } | undefined)?.landmarks;
   // Separate budget: item crowds must not erase an observed hostile.

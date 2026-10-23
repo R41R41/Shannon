@@ -120,7 +120,7 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
   }
   private now() { return (this.options.now ?? Date.now)(); }
   observe(): BodyObservation {
-    const world = captureWorldObservation(this.bot), now = this.now();
+    const world = captureWorldObservation(this.bot, { threatReach: true }), now = this.now();
     const position = this.bot.entity?.position;
     if (position && (!this.lastPosition || position.distanceTo(this.lastPosition) > 0.1)) {
       this.movedAt = now; this.lastPosition = position.clone();

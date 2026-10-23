@@ -1,12 +1,16 @@
 import { Vec3 } from 'vec3';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 
 // mb-llmc-cand 5 (2026-10-24, run 37 late): the frame's creature rows say what they are.
 //   1. "#6545 item 0.7m (229,-55,197)": an item entity says its kind and count, and whether the body threw it itself;
 //   2. a hostile within 24 m says lineOfSight, pathToMe, dy, shooter and one word (reach) for the three states the planner names.
 const { captureWorldObservation: observeWorld } = await import('../../src/services/minebot/cognition/worldFrame.js');
 const { walkableWayTo, SHOOTER_KINDS } = await import('../../src/services/minebot/utils/threatReach.js');
+const { resetExposureBudget } = await import('../../src/services/minebot/utils/threatExposure.js');
 const { noteSelfDropped } = await import('../../src/services/minebot/utils/selfDropped.js');
+
+// The flood fills of all mobs share a window's budget (threatExposure): each test starts with it full.
+beforeEach(() => resetExposureBudget());
 
 type Cell = { name: string; boundingBox: 'block' | 'empty' };
 const STONE: Cell = { name: 'stone', boundingBox: 'block' };
@@ -22,8 +26,9 @@ function body(shape: (x: number, y: number, z: number) => Cell | null, entities:
     entities, ...extra,
   } as any;
 }
+const REACH = { threatReach: true };
 const flat = (x: number, y: number, z: number): Cell => (y <= 63 ? STONE : AIR);
-const mob = (id: number, name: string, at: [number, number, number]) => ({ id, name, position: new Vec3(...at), height: name === 'zombie' || name === 'skeleton' ? 1.95 : 1.8 });
+const mob = (id: number, name: string, at: [number, number, number]) => ({ id, name, position: new Vec3(...at), height: name === 'blaze' ? 1.8 : name.includes('spider') ? 0.9 : 1.95 });
 const row = (frame: any, id: number) => [...frame.nearbyEntities, ...(frame.nearbyThreats ?? [])].find((e: any) => e.id === id);
 
 describe('item entities say what they are', () => {
@@ -45,25 +50,26 @@ describe('item entities say what they are', () => {
     expect(row(frame, 2).droppedByMe).toBeUndefined();
   });
   it('a creature has none of these fields', () => {
-    const frame = observeWorld(body(flat, { 5: mob(5, 'zombie', [6.5, 64, 0.5]) })) as any;
+    const frame = observeWorld(body(flat, { 5: mob(5, 'zombie', [6.5, 64, 0.5]) }), REACH) as any;
     expect(row(frame, 5).itemName).toBeUndefined();
   });
 });
 
 describe('a hostile says how it stands to the body', () => {
   it('open ground: in sight, a way, dy, not a shooter', () => {
-    const frame = observeWorld(body(flat, { 5: mob(5, 'zombie', [8.5, 64, 0.5]) })) as any;
-    expect(row(frame, 5)).toMatchObject({ lineOfSight: true, pathToMe: 'yes', dy: 0, shooter: false, reach: 'in_sight' });
+    const frame = observeWorld(body(flat, { 5: mob(5, 'zombie', [8.5, 64, 0.5]) }), REACH) as any;
+    expect(row(frame, 5)).toMatchObject({ lineOfSight: true, dy: 0, shooter: false, reach: 'in_sight' });
+    expect(row(frame, 5).pathToMe).toBeUndefined(); // in sight: the way is not searched
   });
   it('a skeleton is a shooter; a mob 3 m above says dy 3', () => {
-    const frame = observeWorld(body(flat, { 6: mob(6, 'skeleton', [8.5, 67, 0.5]) })) as any;
+    const frame = observeWorld(body(flat, { 6: mob(6, 'skeleton', [8.5, 67, 0.5]) }), REACH) as any;
     expect(row(frame, 6)).toMatchObject({ shooter: true, dy: 3 });
     expect(SHOOTER_KINDS.has('zombie')).toBe(false);
   });
   it('behind a wall with a way round: no sight, a path', () => {
     // A wall at x=4, two blocks high, z from -3 to 3: the zombie walks round the end.
     const shape = (x: number, y: number, z: number): Cell => (y <= 63 || (x === 4 && y <= 65 && z >= -3 && z <= 3) ? STONE : AIR);
-    const frame = observeWorld(body(shape, { 7: mob(7, 'zombie', [8.5, 64, 0.5]) })) as any;
+    const frame = observeWorld(body(shape, { 7: mob(7, 'zombie', [8.5, 64, 0.5]) }), REACH) as any;
     expect(row(frame, 7)).toMatchObject({ lineOfSight: false, pathToMe: 'yes', reach: 'path_no_sight' });
   });
   it('shut in by rock: no sight, no path, walled', () => {
@@ -73,24 +79,81 @@ describe('a hostile says how it stands to the body', () => {
       const pocket = x === 8 && z === 0 && y >= 64 && y <= 65;
       return !pocket && x >= 7 && x <= 9 && z >= -1 && z <= 1 && y <= 66 ? STONE : AIR;
     };
-    const frame = observeWorld(body(shape, { 8: mob(8, 'zombie', [8.5, 64, 0.5]) })) as any;
+    const frame = observeWorld(body(shape, { 8: mob(8, 'zombie', [8.5, 64, 0.5]) }), REACH) as any;
     expect(row(frame, 8)).toMatchObject({ lineOfSight: false, pathToMe: 'no', reach: 'walled' });
   });
   it('beyond 24 m nothing is added', () => {
-    const frame = observeWorld(body(flat, { 9: mob(9, 'zombie', [30.5, 64, 0.5]) })) as any;
+    const frame = observeWorld(body(flat, { 9: mob(9, 'zombie', [30.5, 64, 0.5]) }), REACH) as any;
     expect(row(frame, 9).pathToMe).toBeUndefined();
     expect(row(frame, 9).reach).toBeUndefined();
   });
   it('a blaze (a flyer) over a pit: its way is the air, not the floor', () => {
     const shape = (x: number, y: number, z: number): Cell => (y <= 63 && !(x >= 3 && x <= 6) ? STONE : AIR);
-    const frame = observeWorld(body(shape, { 10: mob(10, 'blaze', [5.5, 66, 0.5]) })) as any;
-    expect(row(frame, 10)).toMatchObject({ shooter: true, pathToMe: 'yes' });
+    const frame = observeWorld(body(shape, { 10: mob(10, 'blaze', [5.5, 66, 0.5]) }), REACH) as any;
+    expect(row(frame, 10)).toMatchObject({ shooter: true, lineOfSight: true, reach: 'in_sight' });
   });
   it('only the nearest 8 are judged', () => {
     const entities: Record<string, any> = {};
     for (let i = 0; i < 10; i++) entities[100 + i] = mob(100 + i, 'zombie', [3.5 + i, 64, 0.5]);
-    const frame = observeWorld(body(flat, entities)) as any;
+    const frame = observeWorld(body(flat, entities), REACH) as any;
     expect(frame.nearbyThreats.filter((t: any) => t.reach !== undefined).length).toBe(8);
+  });
+});
+
+describe('review: climbers, doors, swimmers, unloaded cells, the reflex frame', () => {
+  const wall = (x: number, y: number, z: number): Cell => (y <= 63 || (x === 4 && y <= 70) ? STONE : AIR);
+  // A bounded cavity (the exposure test calls a space of over 3000 cells open): rock outside x -3..14, z -3..3, y 64..69.
+  const shut = (x: number, y: number, z: number): Cell => {
+    if (y <= 63 || y >= 70 || x < -3 || x > 14 || z < -3 || z > 3) return STONE;
+    const pocket = x === 8 && z === 0 && y >= 64 && y <= 65;
+    return !pocket && x >= 7 && x <= 9 && z >= -1 && z <= 1 && y <= 66 ? STONE : AIR;
+  };
+  it('a spider behind a wall that has a way over or round: never walled', () => {
+    const frame = observeWorld(body(wall, { 1: mob(1, 'spider', [8.5, 64, 0.5]) }, { registry: { entitiesByName: { spider: { type: 'hostile' } } } }), REACH) as any;
+    expect(row(frame, 1).pathToMe).toBe('yes');
+    expect(row(frame, 1).reach).toBe('path_no_sight');
+  });
+  it('a spider sealed in a pocket: unknown, not walled; a zombie there is walled', () => {
+    const spider = observeWorld(body(shut, { 2: mob(2, 'cave_spider', [8.5, 64, 0.5]) }, { registry: { entitiesByName: { cave_spider: { type: 'hostile' } } } }), REACH) as any;
+    expect(row(spider, 2)).toMatchObject({ pathToMe: 'unknown', reach: 'unknown' });
+    const zombie = observeWorld(body(shut, { 3: mob(3, 'zombie', [8.5, 64, 0.5]) }), REACH) as any;
+    expect(row(zombie, 3).reach).toBe('walled');
+  });
+  it('a closed wooden door: open for a zombie, a wall for a creeper-like kind that cannot break it', () => {
+    // A room round the body's side: x from 3 to 5, the only gap is a door at x=4, z=0 (y 64..65); the rest of x=4 is wall far in z.
+    const room = (door: string) => (x: number, y: number, z: number) => {
+      if (y <= 63) return { name: 'stone', boundingBox: 'block' } as const;
+      if (x === 4 && y <= 66) return (z === 0 && y <= 65) ? { name: door, boundingBox: 'block' } as const : STONE;
+      return AIR;
+    };
+    // The wall is infinite in z so there is no way round: only the door could let the mob through.
+    const zombie = walkableWayTo({ blockAt: (p: Vec3) => ({ ...room('oak_door')(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)) }) } as any,
+      new Vec3(8.5, 64, 0.5), 1.95, new Vec3(0.5, 64, 0.5), 6, { doorsBreakable: true });
+    expect(zombie).toBe('yes');
+    const other = walkableWayTo({ blockAt: (p: Vec3) => ({ ...room('oak_door')(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)) }) } as any,
+      new Vec3(8.5, 64, 0.5), 1.95, new Vec3(0.5, 64, 0.5), 6, {});
+    expect(other).not.toBe('yes');
+    const iron = walkableWayTo({ blockAt: (p: Vec3) => ({ ...room('iron_door')(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)) }) } as any,
+      new Vec3(8.5, 64, 0.5), 1.95, new Vec3(0.5, 64, 0.5), 6, { doorsBreakable: true });
+    expect(iron).not.toBe('yes');
+  });
+  it('a search that touched an unloaded cell and found no way says unknown, not no', () => {
+    // A closed pocket whose one neighbour is not loaded.
+    const edge = (x: number, y: number, z: number): Cell | null => (x === 9 && z === 0 ? null : shut(x, y, z));
+    const read = (p: Vec3) => { const c = edge(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)); return c ? { ...c } : null; };
+    expect(walkableWayTo({ blockAt: read } as any, new Vec3(8.5, 64, 0.5), 1.8, new Vec3(0.5, 64, 0.5))).toBe('unknown');
+  });
+  it('guardians shoot; a drowned shut in a pocket is unknown, never walled', () => {
+    expect(SHOOTER_KINDS.has('guardian')).toBe(true);
+    expect(SHOOTER_KINDS.has('elder_guardian')).toBe(true);
+    const frame = observeWorld(body(shut, { 4: mob(4, 'drowned', [8.5, 64, 0.5]) }, { registry: { entitiesByName: { drowned: { type: 'hostile' } } } }), REACH) as any;
+    expect(row(frame, 4).pathToMe).toBe('unknown'); // never 'no' for a swimmer
+  });
+  it('the default frame (the reflex loops) carries none of the reach fields', () => {
+    const frame = observeWorld(body(flat, { 5: mob(5, 'zombie', [8.5, 64, 0.5]) })) as any;
+    expect(row(frame, 5).reach).toBeUndefined();
+    expect(row(frame, 5).lineOfSight).toBeUndefined();
+    expect(row(frame, 5).shooter).toBeUndefined();
   });
 });
 

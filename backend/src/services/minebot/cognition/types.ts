@@ -127,10 +127,10 @@ export interface NearbyEntityObservation {
   /** Hostiles within 16 m: whether nothing solid lies between its eyes and the body (a blow or a shot can come at once). */
   canSee?: boolean;
   /**
-   * LLM-centric mode, hostiles within 24 m (the nearest 8; absent beyond, or when the frame's 24 ms budget was spent, or no world to read):
+   * LLM-centric mode, the head's frame only (not the reflex loops'), hostiles within 24 m (the nearest 8; absent beyond or with no world to read):
    *  lineOfSight  true when a line from its eyes to the body's eye or chest has no solid block (what a shot or a glance needs); false = blocked.
-   *  pathToMe     'yes' a way a mob of its kind could take (ground mob: steps up 1, down 3 over solid floor, room for its height, a closed door is a
-   *               wall; flyer: an open way through the air), 'no' none was found, 'unknown' the search ran out of budget (never read as 'no').
+   *  pathToMe     absent while lineOfSight is true (not searched). Else 'yes' a way a mob of its kind could take (ground mob: steps up 1, down 3 over solid floor, room for its height, a closed wooden door is open
+   *               for zombie/husk/vindicator, a wall for others; spiders (climbers) are never 'no'; swimmers 'unknown' instead of 'no'; flyer: an open way through the air), 'no' none was found, 'unknown' the search ran out of budget, the frame's 24 ms was spent, or it met a block not loaded (never read as 'no').
    *  dy           metres above (+) or below (-) the body's feet, 0.1.
    *  shooter      true for kinds that hurt from afar (skeleton, stray, bogged, blaze, ghast, pillager, witch, breeze, shulker).
    *  reach        one word from the above: 'in_sight' (lineOfSight), 'path_no_sight' (no sight, pathToMe yes), 'walled' (no sight, pathToMe no), 'unknown'.
