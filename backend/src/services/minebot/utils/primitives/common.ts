@@ -42,6 +42,8 @@ export interface StepOutcome {
     eye?: { from: Cell; bearingDeg: number; flew: number; to: Cell; broke: boolean };
     container?: { at: Cell; kind: string; items: string[] };
     arrowsLeft?: number;
+    /** A walk that entered a portal and ended in the other dimension (the act ends there). */
+    crossedDimension?: true;
   };
 }
 

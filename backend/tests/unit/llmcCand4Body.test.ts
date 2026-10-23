@@ -207,6 +207,24 @@ describe('review: a real frame, the end portal, the end gateway, the last point 
     expect(outcome.text).toBe('道の1/2番目で: (5,-54,0) は nether_portal（ポータルは walk の最後の点にだけ。途中の点にはしない）');
     expect(bot.pathfinder.goto).not.toHaveBeenCalled();
   });
+  it('a change of dimension in a walk to a point that is no portal (a death and a respawn elsewhere) is not an arrival: the act stops with dimension_changed, ok false', async () => {
+    const bot = portalBody(portalWorld());
+    walksInto(bot, { x: 9, y: -54, z: 9 }, () => { carriedOff(bot, 'the_nether', new Vec3(40.5, 70, 40.5)); }, true);
+    const result: any = await runAct(bot, ACT_HANDS.parse([{ do: 'walk', to: { x: 9, y: -54, z: 9 } }, { do: 'walk', to: { x: 1, y: -54, z: 1 } }]), undefined, undefined, { tickMs: 20 });
+    expect(result.success).toBe(false);
+    expect(result.failureType).toBe('dimension_changed');
+    const json = JSON.parse(result.result);
+    expect(json.stoppedBy).toBe('failure');
+    expect(json.stoppedWhy).toContain('次元が変わった（overworld → the_nether）');
+    expect(json.lines[0].line).not.toContain('歩いて入った');
+    expect(json.lines[1].line).toBe('未実行');
+    // The walk itself, with no act over it: not an arrival either.
+    const alone = portalBody(portalWorld());
+    walksInto(alone, { x: 9, y: -54, z: 9 }, () => { carriedOff(alone, 'the_nether', new Vec3(40.5, 70, 40.5)); }, true);
+    const outcome = await walkModule.walk(ctxOf(alone, 1500), { to: { x: 9, y: -54, z: 9 }, range: 0.5 });
+    expect(outcome.text ?? '').not.toContain('歩いて入った');
+    expect(outcome.data?.crossedDimension).toBeUndefined();
+  });
   it('an act ends where the dimension changed: the hands after it are 未実行 with the reason, and the act is ok as far as it went', async () => {
     const bot = portalBody(portalWorld());
     walksInto(bot, { x: 5, y: -54, z: 0 }, () => { carriedOff(bot, 'the_nether', new Vec3(40.5, 70, 40.5)); });

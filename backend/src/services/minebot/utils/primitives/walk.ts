@@ -179,6 +179,11 @@ export function wayWords(notes: WayNotes): string {
 
 /** What the route search last said of this walk (mineflayer-pathfinder's `path_update`): its status and the nodes of the way it found. */
 export interface SearchSaid { status: string; nodes: number }
+/**
+ * The bodies whose walk ends in a portal entry (its last point is a cell portalAim accepts): only there is a change of dimension the arrival.
+ * Any other change of dimension during a walk (a death and a respawn elsewhere) is not: the act's watch stops with `dimension_changed`.
+ */
+export const portalWalks = new WeakSet<object>();
 export interface GoOutcome { reached: boolean; timedOut: boolean; stuck: boolean; error: unknown; search: SearchSaid | null; opens: string[]; /** The body came into another dimension while it walked (a portal: arrival, not a failure). */ crossed?: boolean }
 
 /**
@@ -239,7 +244,7 @@ export async function goWith(ctx: StepContext, goal: any, timeoutMs: number, not
   const dimension0 = dimensionOf(bot);
   const watch = setInterval(() => {
     // A portal entered on the way carries the body off: the walk is over there (mb-llmc-cand 4), not stuck nor failed.
-    if (!crossed && dimensionOf(bot) !== dimension0) { crossed = true; try { bot.pathfinder.stop(); bot.pathfinder.setGoal(null); } catch { /* over */ } return; }
+    if (!crossed && portalWalks.has(bot) && dimensionOf(bot) !== dimension0) { crossed = true; try { bot.pathfinder.stop(); bot.pathfinder.setGoal(null); } catch { /* over */ } return; }
     if (crossed) return;
     try { openAhead(); } catch { /* the walk goes on; a shut door stops it below */ }
     const now = bot.entity?.position;
@@ -256,7 +261,7 @@ export async function goWith(ctx: StepContext, goal: any, timeoutMs: number, not
     error = caught;
   } finally { clearInterval(watch); detach(); }
   function detach() { bot.removeListener?.('path_update', onRoute); bot.removeListener?.('diggingCompleted', onDug); }
-  if (!crossed && dimensionOf(bot) !== dimension0) crossed = true;
+  if (!crossed && portalWalks.has(bot) && dimensionOf(bot) !== dimension0) crossed = true;
   return { reached: !crossed && atGoal(bot, goal), timedOut: timedOut && !crossed, stuck: stuck && !crossed, error: crossed ? null : error, search, opens, crossed };
 }
 
@@ -452,7 +457,7 @@ async function crossedOutcome(ctx: StepContext, notes: WayNotes): Promise<StepOu
   const end = (() => { try { return feetCell(bot); } catch { return null; } })();
   const there = dimensionWords(dimensionOf(bot));
   const from = notes.from ? `（${dimensionWords(notes.from.dimension)}の ${cellText(notes.from.cell)} から歩いて入った${notes.pointedAt ? `。指された ${cellText(notes.pointedAt)} は柱の途中なので一番下のポータルのマスから` : ''}）` : '';
-  return { ok: true, text: `${there}へ移った${end ? ` ${cellText(end)}` : ''}${from}`, ...(end ? { at: end } : {}) };
+  return { ok: true, text: `${there}へ移った${end ? ` ${cellText(end)}` : ''}${from}`, ...(end ? { at: end } : {}), data: { crossedDimension: true } };
 }
 
 /** Why the walk stops before it starts at a target no body can stand in: the fact, and the cells beside it a body can (none is chosen). */
@@ -466,6 +471,10 @@ function unstandable(bot: any, target: Cell): StepOutcome | null {
 }
 
 export async function walk(ctx: StepContext, args: WalkArgs): Promise<StepOutcome> {
+  try { return await walkInner(ctx, args); } finally { portalWalks.delete(ctx.bot); }
+}
+
+async function walkInner(ctx: StepContext, args: WalkArgs): Promise<StepOutcome> {
   const bot = ctx.bot;
   const targets = args.path?.length ? args.path : args.to ? [args.to] : [];
   if (!targets.length) return stopped(bot, 'invalid_input', 'walk には to か path が要る');
@@ -489,6 +498,7 @@ export async function walk(ctx: StepContext, args: WalkArgs): Promise<StepOutcom
   const notes: WayNotes = { opened: [], leaves: 0, from: { dimension: dimensionOf(bot), cell: start } };
   // The last target is a portal: the walk goes into it, and its end is the dimension changed.
   const portal = lastAim?.kind === 'enter' ? lastAim.name : null;
+  if (lastAim?.kind === 'enter') portalWalks.add(bot);
   if (lastAim?.kind === 'enter' && lastAim.redirected) notes.pointedAt = targets[targets.length - 1];
   const withNotes = (text: string) => { const words = wayWords(notes); return words ? `${text}（途中で${words}）` : text; };
   try {

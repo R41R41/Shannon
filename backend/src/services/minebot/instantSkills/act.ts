@@ -7,7 +7,7 @@ import { beginEngagement } from '../utils/engagement.js';
 import { bodyReader, cellKey, facingOfYaw, feetCell, noteMapStop, type Cell, type Facing } from '../utils/localMap.js';
 import { aroundText, clip, closedWord, keepActReport, renderActReport, stoppedLine, type ActReport, type StoppedBy } from '../utils/actReport.js';
 import { blockAt, cellNow, freeSlots, inventoryCount, resolvePosition, StepStopped, wait, type PositionSpec, type StepContext, type StepOutcome } from '../utils/primitives/common.js';
-import { dimensionOf, walk } from '../utils/primitives/walk.js';
+import { dimensionOf, portalWalks, walk } from '../utils/primitives/walk.js';
 import { dig } from '../utils/primitives/dig.js';
 import { place } from '../utils/primitives/place.js';
 import { use } from '../utils/primitives/use.js';
@@ -284,7 +284,7 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
     try {
       if ((bot.health ?? 20) <= 0) return stopWith('体が死んだ', 'died');
       // A walk into a portal says the crossing itself (its arrival) and the act ends after it (below): not a stop in the middle of the hand.
-      if (String(bot.game?.dimension ?? '') !== startDimension && host.actHandNow !== 'walk' && !crossedByWalk) return stopWith(`次元が変わった（${startDimension} → ${String(bot.game?.dimension ?? '')}）`, 'dimension_changed');
+      if (String(bot.game?.dimension ?? '') !== startDimension && !(host.actHandNow === 'walk' && portalWalks.has(bot)) && !crossedByWalk) return stopWith(`次元が変わった（${startDimension} → ${String(bot.game?.dimension ?? '')}）`, 'dimension_changed');
       const entries = ledger?.entriesSince(mark).filter(entry => !LEDGER_QUIET.has(entry.kind)) ?? [];
       // r6 (run 29): a reflex's note does not stop a hand that is laying blocks (it may be what walls the threat off); the act stops when
       // that hand is over. A reflex that takes the body still cuts it at once (its lease aborts the action: onCut).
@@ -338,7 +338,7 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
     for (let index = 0; index < hands.length; index++) {
       const hand = hands[index];
       watch();
-      if (index > 0 && dimensionOf(bot) !== dimension0) { crossed = true; skip(index, '次元が変わった（前の次元の座標の手は送らない）'); break; }
+      if (index > 0 && crossedByWalk && dimensionOf(bot) !== dimension0) { crossed = true; skip(index, '次元が変わった（前の次元の座標の手は送らない）'); break; }
       if (control.signal.aborted) { skip(index); break; }
       if (Date.now() >= deadline) { stopWith('act の時間が尽きた', 'timeout'); skip(index); break; }
       const base = feetCell(bot);
@@ -369,7 +369,7 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
       if (outcome.data?.container) report.container = outcome.data.container;
       if (typeof outcome.data?.arrowsLeft === 'number') report.arrowsLeft = outcome.data.arrowsLeft;
       if (outcome.ok) {
-        if (hand.do === 'walk' && dimensionOf(bot) !== dimension0) crossedByWalk = true;
+        if (hand.do === 'walk' && outcome.data?.crossedDimension) crossedByWalk = true;
         report.done++;
         const line = clip(`${outcome.text}（${((Date.now() - began) / 1000).toFixed(1)}秒）`);
         report.lines.push({ i: index + 1, do: hand.do, status: 'done', line });
