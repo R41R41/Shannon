@@ -42,7 +42,7 @@ const reader = (bot: any) => (x: number, y: number, z: number) => readCell(bot, 
  * "同じマスで 4 秒進めず" and the line did not say what held them): a fluid's source or its flow (level), a door, gate or trapdoor shut or
  * open, a slab's half, a stair, and, after a dash, the walk's own verdict on the cell (opened on the way, broken, a wall, ...).
  */
-export function cellWords(bot: any, cell: Cell): string {
+export function cellWords(bot: any, cell: Cell, verdict = true): string {
   let block: any;
   try { block = bot.blockAt?.(new Vec3(cell.x, cell.y, cell.z), false); } catch { block = null; }
   if (!block) return '未ロード';
@@ -63,8 +63,8 @@ export function cellWords(bot: any, cell: Cell): string {
   }
   if (props.waterlogged === true || props.waterlogged === 'true') state.push('水つき');
   const way = cellWay(mapBlockOf(block));
-  const verdict = way === 'door' ? '歩きで開ける' : way === 'leaves' ? '歩きで壊す' : way === 'iron_door' ? '手では開かない' : way === 'harm' ? '入らない' : way === 'solid' ? '壁' : '';
-  return `${name}${state.length ? `（${state.join('・')}）` : ''}${verdict && way !== 'open' ? `［${verdict}］` : ''}`;
+  const said = !verdict ? '' : way === 'door' ? '歩きで開ける' : way === 'leaves' ? '歩きで壊す' : way === 'iron_door' ? '手では開かない' : way === 'harm' ? '入らない' : way === 'solid' ? '壁' : '';
+  return `${name}${state.length ? `（${state.join('・')}）` : ''}${said ? `［${said}］` : ''}`;
 }
 
 /** The words for a feet or head cell the walk does not pass, by the walk's rules (null: it passes). */
@@ -292,7 +292,7 @@ function bodyState(bot: any): string {
  */
 function notArrivedFacts(bot: any, here: Cell, points: Cell[] | undefined, search?: SearchSaid | null): string {
   try {
-    const facts: string[] = [`足のマス ${cellText(here)} は 足 ${cellWords(bot, here)}・頭 ${cellWords(bot, { ...here, y: here.y + 1 })}・下 ${cellWords(bot, { ...here, y: here.y - 1 })}`];
+    const facts: string[] = [`足のマス ${cellText(here)} は 足 ${cellWords(bot, here)}・頭 ${cellWords(bot, { ...here, y: here.y + 1 })}・下 ${cellWords(bot, { ...here, y: here.y - 1 }, false)}`];
     const body = bodyState(bot);
     if (body) facts.push(body);
     if (search) facts.push(searchWords(search));
@@ -304,7 +304,7 @@ function notArrivedFacts(bot: any, here: Cell, points: Cell[] | undefined, searc
       const level = Math.max(Math.abs(toward.x - here.x), Math.abs(toward.z - here.z)) <= 1 ? toward.y : [here.y, here.y + 1, here.y - 1, here.y - 2, here.y - 3].find(y => standable(read, nx, y, nz)) ?? here.y;
       const next: Cell = { x: nx, y: level, z: nz };
       const way = relativeWords(here, next);
-      facts.push(`次のマス ${cellText(next)}（${way || '同じマス'}）は 足 ${cellWords(bot, next)}・頭 ${cellWords(bot, { ...next, y: next.y + 1 })}・下 ${cellWords(bot, { ...next, y: next.y - 1 })}`);
+      facts.push(`次のマス ${cellText(next)}（${way || '同じマス'}）は 足 ${cellWords(bot, next)}・頭 ${cellWords(bot, { ...next, y: next.y + 1 })}・下 ${cellWords(bot, { ...next, y: next.y - 1 }, false)}`);
       const inTheWay = Object.values(bot.entities ?? {}).filter((entity: any) => entity && entity !== bot.entity && entity.position && entity.name !== 'item'
         && Math.abs(entity.position.x - (next.x + 0.5)) < 0.9 && Math.abs(entity.position.z - (next.z + 0.5)) < 0.9 && entity.position.y > next.y - 1 && entity.position.y < next.y + 2)
         .slice(0, 2).map((entity: any) => `${entity.name ?? entity.type} #${entity.id}`);

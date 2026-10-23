@@ -92,7 +92,7 @@ describe('the decision map (utils/localMap)', () => {
     expect(symbolFor({ name: 'deepslate' })).toBe('#');
     expect(symbolFor({ name: 'dirt' })).toBe(':');
     expect(symbolFor({ name: 'gold_ore' })).toBe('g');
-    expect(symbolFor({ name: 'glass', solid: true })).toBe('+');
+    expect(symbolFor({ name: 'glass', solid: true })).toBe('b');
     expect(symbolFor({ name: 'amethyst_cluster', solid: true })).toBe('$');
     expect(symbolFor({ name: 'poppy', solid: false })).toBe(',');
     expect(symbolFor({ name: 'netherrack' })).toBe('n');
