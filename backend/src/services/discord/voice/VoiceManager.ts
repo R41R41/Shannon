@@ -411,9 +411,11 @@ export class VoiceManager implements VoiceGateway {
   private textChannelForApiJoin(voiceChannel: import('discord.js').VoiceBasedChannel): string {
     const saved = this.loadVoiceTextChannel(voiceChannel.guildId);
     if (saved) return saved;
+    // Read guild before the isTextBased() guard: after it TypeScript narrows voiceChannel to never.
+    const guild = voiceChannel.guild;
     if (voiceChannel.isTextBased()) return voiceChannel.id;
-    const me = voiceChannel.guild.members.me;
-    const found = voiceChannel.guild.channels.cache.find(
+    const me = guild.members.me;
+    const found = guild.channels.cache.find(
       ch => ch.isTextBased() && !ch.isThread() && !ch.isVoiceBased() && (me ? ch.permissionsFor(me)?.has('SendMessages') === true : false),
     );
     return found?.id ?? '';
