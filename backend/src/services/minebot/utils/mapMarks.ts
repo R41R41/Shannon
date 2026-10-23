@@ -240,6 +240,9 @@ function computeMarks(bot: MarkBody, feet: Cell, now: number): Mark[] {
  * The structure the body is in or right beside (the contract's `inside`, from run 26): a Nether fortress, a bastion, a stronghold, a
  * village, an end city, by the blocks only they are built of round the body. Null when none. Read with the marks' cache period.
  */
+/** A village mark makes the body "inside" within this far across (m) and this far up or down (blocks; a village's ground is not flat, but not a cave away). */
+export const VILLAGE_INSIDE_M = 48;
+export const VILLAGE_INSIDE_Y = 16;
 const insideCache = new WeakMap<object, { at: number; from: Cell; dimension: string; text: string | null }>();
 export function insideStructure(bot: MarkBody, now = Date.now()): string | null {
   const feet = feetCell(bot as any);
@@ -263,7 +266,9 @@ export function insideStructure(bot: MarkBody, now = Date.now()): string | null 
       if (count(['purpur_block', 'purpur_pillar', 'end_stone_bricks', 'purpur_stairs'], 12) >= 8) text = 'エンドシティ';
     } else {
       if (count(['end_portal_frame'], 16) > 0 || (feet.y < 50 && count(['stone_bricks', 'mossy_stone_bricks', 'cracked_stone_bricks', 'infested_stone_bricks'], 8) >= 12)) text = 'ストロングホールドの中';
-      else if ((bot.landmarks ?? []).some(mark => mark.kind === 'village' && Math.hypot(mark.position.x - feet.x, mark.position.z - feet.z) <= 48)) text = '村の中';
+      // A village is a place on the ground: its mark counts only within its own height too (run 37: "村の中" at y=-54, 118 below a village).
+      else if ((bot.landmarks ?? []).some(mark => mark.kind === 'village' && Math.hypot(mark.position.x - feet.x, mark.position.z - feet.z) <= VILLAGE_INSIDE_M
+        && Math.abs(mark.position.y - feet.y) <= VILLAGE_INSIDE_Y)) text = '村の中';
     }
   } catch { text = null; }
   insideCache.set(bot as object, { at: now, from: feet, dimension, text });

@@ -14,3 +14,15 @@ export function installAirSupplyDefault(bot: { oxygenLevel?: number; on(event: '
     died = false;
   });
 }
+
+/** The air the head reads is on one scale: 0 (out of breath) to 20 (full, the bubbles). */
+export const AIR_MAX = 20;
+/**
+ * The air supply as the one 0-20 scale (mb-llmc-cand 4, run 37: the observation said `oxygen: 400` on the surface and 20 later). Mineflayer
+ * keeps `bot.oxygenLevel` as the server's air supply over 15, and a body on dry land can be sent a supply above the 300-tick maximum (1.21:
+ * 6000 ticks, 400 here): that is full air, 20. Not a number, or not finite: null (unknown, never a made-up 20).
+ */
+export function airLevel(raw: unknown): number | null {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return null;
+  return Math.max(0, Math.min(AIR_MAX, Math.round(raw)));
+}

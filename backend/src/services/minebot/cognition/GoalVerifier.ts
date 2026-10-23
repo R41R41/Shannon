@@ -22,7 +22,9 @@ const dimensionKey = (value: string | null) => value?.replace(/^minecraft:/, '')
 /** Mineflayer usually divides air_supply by 15, but dry land can report 400 in 1.21.11. */
 export function verifyNativeBreathingSafety(bot: any): { status: 'verified' | 'mismatch' | 'unknown'; actual: unknown } {
   const world = captureWorldObservation(bot);
-  const oxygenRaw = world.oxygen;
+  // The raw reading is kept as evidence (world.oxygen is on the one 0-20 scale since mb-llmc-cand 4: a dry-land 400 reads 20 there).
+  const rawLevel = bot?.oxygenLevel;
+  const oxygenRaw = typeof rawLevel === 'number' && Number.isFinite(rawLevel) ? rawLevel : null;
   // Preserve the low-air 0–20 range while treating above-range native values
   // as full air. A high value alone never proves safety: water, body blocks,
   // health, and block coverage are checked independently below.

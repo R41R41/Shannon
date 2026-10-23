@@ -4,8 +4,8 @@ import { buildMovements } from '../setMovements.js';
 import { nextLeg, FAR_LEG_M } from '../farLegs.js';
 import { bodyReader, feetCell, relativeWords, type Cell, type MapBlock } from '../localMap.js';
 import { probePath } from '../probeTools.js';
-import { cellWay, climbRise, doorOpen, installWalkRules, isDoorlike, isLeaves, isTall, mapBlockOf, MAX_CLIMB, MAX_FALL, passable, standable, standableBeside, whyNotStand } from '../walkRules.js';
-import { cellText, guard, letGo, placeText, stopped, StepStopped, wait, type StepContext, type StepOutcome } from './common.js';
+import { cellWay, climbRise, doorOpen, installWalkRules, isDoorlike, isLeaves, isPortal, isTall, mapBlockOf, MAX_CLIMB, MAX_FALL, passable, PORTAL_WORDS, portalEntry, standable, standableBeside, whyNotStand } from '../walkRules.js';
+import { cellText, guard, letGo, placeText, stopped, StepStopped, wait, waitUntil, type StepContext, type StepOutcome } from './common.js';
 
 const { goals } = pathfinder;
 
@@ -63,7 +63,7 @@ export function cellWords(bot: any, cell: Cell, verdict = true): string {
   }
   if (props.waterlogged === true || props.waterlogged === 'true') state.push('水つき');
   const way = cellWay(mapBlockOf(block));
-  const said = !verdict ? '' : way === 'door' ? '歩きで開ける' : way === 'leaves' ? '歩きで壊す' : way === 'iron_door' ? '手では開かない' : way === 'harm' ? '入らない' : way === 'solid' ? '壁' : '';
+  const said = !verdict ? '' : way === 'door' ? '歩きで開ける' : way === 'leaves' ? '歩きで壊す' : way === 'iron_door' ? '手では開かない' : way === 'harm' ? '入らない' : way === 'portal' ? 'ポータル。入ると次元が変わる' : way === 'solid' ? '壁' : '';
   return `${name}${state.length ? `（${state.join('・')}）` : ''}${said ? `［${said}］` : ''}`;
 }
 
@@ -74,6 +74,7 @@ function cellStop(block: MapBlock | null, cell: Cell, head: boolean): { reason: 
   if (block?.name === 'lava') return { reason: 'lava', text: `${cellText(cell)} が溶岩` };
   if (way === 'iron_door') return { reason: 'iron_door', text: `${cellText(cell)} は ${block!.name}（閉じた鉄の扉は手では開かない）` };
   if (way === 'harm') return { reason: 'wall', text: `${cellText(cell)} は ${block!.name}（入らない）` };
+  if (way === 'portal') return { reason: 'wall', text: `${cellText(cell)} は ${block!.name}（${PORTAL_WORDS}）` };
   if (way === 'solid' && head) return { reason: 'low_ceiling', text: `頭の高さ ${cellText(cell)} が ${block!.name} で通れない` };
   return null;
 }
@@ -93,9 +94,11 @@ export function whyBlocked(bot: any, from: Cell, to: Cell): { reason: string; te
     const feet = readCell(bot, nx, y, nz), head = readCell(bot, nx, y + 1, nz);
     if (!feet || !head) return { reason: 'unloaded', text: `(${nx},${y},${nz}) は未ロード`, at: { x: nx, y, z: nz } };
     if (feet.name === 'lava' || head.name === 'lava') return { reason: 'lava', text: `(${nx},${feet.name === 'lava' ? y : y + 1},${nz}) が溶岩`, at: { x: nx, y, z: nz } };
+    // The target is a portal cell (walked into on purpose): the line ends there.
+    if (nx === to.x && nz === to.z && isPortal(feet)) { x = nx; z = nz; continue; }
     for (const [block, cell] of [[feet, { x: nx, y, z: nz }], [head, { x: nx, y: y + 1, z: nz }]] as const) {
       const way = cellWay(block);
-      if (way === 'iron_door' || way === 'harm') return { ...cellStop(block, cell, false)!, at: cell };
+      if (way === 'iron_door' || way === 'harm' || way === 'portal') return { ...cellStop(block, cell, false)!, at: cell };
     }
     if (!passable(feet)) {
       // The height of the step: the cells that stop the feet, up from the walking level.
@@ -166,7 +169,7 @@ export function walkMovements(bot: any, sprint = true): any {
 }
 
 /** What a stretch of walking did on the way: the doors it opened, the leaves it broke. */
-export interface WayNotes { opened: Cell[]; leaves: number }
+export interface WayNotes { opened: Cell[]; leaves: number; /** Where the walk began: the dimension and the feet cell (a dimension change on the way is said against it). */ from?: { dimension: string; cell: Cell } }
 export function wayWords(notes: WayNotes): string {
   const words: string[] = [];
   if (notes.opened.length) words.push(`扉を開けた ${notes.opened.slice(0, 3).map(cellText).join('・')}${notes.opened.length > 3 ? ` ほか${notes.opened.length - 3}` : ''}`);
@@ -176,7 +179,7 @@ export function wayWords(notes: WayNotes): string {
 
 /** What the route search last said of this walk (mineflayer-pathfinder's `path_update`): its status and the nodes of the way it found. */
 export interface SearchSaid { status: string; nodes: number }
-export interface GoOutcome { reached: boolean; timedOut: boolean; stuck: boolean; error: unknown; search: SearchSaid | null; opens: string[] }
+export interface GoOutcome { reached: boolean; timedOut: boolean; stuck: boolean; error: unknown; search: SearchSaid | null; opens: string[]; /** The body came into another dimension while it walked (a portal: arrival, not a failure). */ crossed?: boolean }
 
 /**
  * One goal walked with the route search: the goal reached (its own test on the feet, never the search's word: mineflayer-pathfinder's goto
@@ -232,8 +235,12 @@ export async function goWith(ctx: StepContext, goal: any, timeoutMs: number, not
   };
   bot.on?.('path_update', onRoute);
   bot.on?.('diggingCompleted', onDug);
-  let last = bot.entity.position.clone(), lastMoveAt = Date.now(), stuck = false;
+  let last = bot.entity.position.clone(), lastMoveAt = Date.now(), stuck = false, crossed = false;
+  const dimension0 = dimensionOf(bot);
   const watch = setInterval(() => {
+    // A portal entered on the way carries the body off: the walk is over there (mb-llmc-cand 4), not stuck nor failed.
+    if (!crossed && dimensionOf(bot) !== dimension0) { crossed = true; try { bot.pathfinder.stop(); bot.pathfinder.setGoal(null); } catch { /* over */ } return; }
+    if (crossed) return;
     try { openAhead(); } catch { /* the walk goes on; a shut door stops it below */ }
     const now = bot.entity?.position;
     if (!now) return;
@@ -249,7 +256,16 @@ export async function goWith(ctx: StepContext, goal: any, timeoutMs: number, not
     error = caught;
   } finally { clearInterval(watch); detach(); }
   function detach() { bot.removeListener?.('path_update', onRoute); bot.removeListener?.('diggingCompleted', onDug); }
-  return { reached: atGoal(bot, goal), timedOut, stuck, error, search, opens };
+  if (!crossed && dimensionOf(bot) !== dimension0) crossed = true;
+  return { reached: !crossed && atGoal(bot, goal), timedOut: timedOut && !crossed, stuck: stuck && !crossed, error: crossed ? null : error, search, opens, crossed };
+}
+
+/** The dimension the body is in, as the server names it (`overworld`, `the_nether`, `the_end`, with or without `minecraft:`); '' when not known. */
+export function dimensionOf(bot: any): string {
+  try { return String(bot.game?.dimension ?? '').replace(/^minecraft:/u, ''); } catch { return ''; }
+}
+export function dimensionWords(dimension: string): string {
+  return dimension.includes('nether') ? 'ネザー' : dimension.includes('end') ? 'エンド' : dimension.includes('overworld') ? 'オーバーワールド' : dimension || '不明な次元';
 }
 
 /**
@@ -326,6 +342,7 @@ function stuckCause(bot: any, here: Cell, toward: Cell | undefined, search: Sear
     if (way === 'door') return `${label}が閉じた ${name}`;
     if (way === 'iron_door') return `${label}が ${name}（手では開かない）`;
     if (way === 'harm') return `${label}が ${name}`;
+    if (way === 'portal') return `${label}が ${name}（ポータル）`;
     if (way === 'solid') return `${label}が ${name}`;
     return '';
   };
@@ -387,6 +404,7 @@ async function walkTo(ctx: StepContext, target: Cell, range: number, notes: WayN
     const started = feetCell(bot)!;
     const startedAt = bot.entity.position.clone();
     const gone = await goWith(ctx, leg.goal, ctx.deadline - Date.now(), notes);
+    if (gone.crossed) return crossedOutcome(ctx, notes);
     const here = feetCell(bot)!;
     if (gone.timedOut) { letGo(bot); return stopped(bot, 'timeout', `${cellText(target)} へ歩く途中で時間切れ（今 ${placeText(bot, here)}）`, here, started); }
     if (gone.reached) {
@@ -421,6 +439,22 @@ async function walkTo(ctx: StepContext, target: Cell, range: number, notes: WayN
   }
 }
 
+/** How long a body stands in a portal for the dimension to change (a nether portal takes 4 s; a busy server more) before the walk says it did not. */
+const PORTAL_WAIT_MS = 10_000;
+
+/**
+ * The walk ended in another dimension (a portal entered, as the target or on the way): that is the arrival (mb-llmc-cand 4, run 37: walking
+ * into a lit portal is the way over). The cell is the one the body stands in there, after the position packet of the new dimension.
+ */
+async function crossedOutcome(ctx: StepContext, notes: WayNotes): Promise<StepOutcome> {
+  const bot = ctx.bot;
+  try { await wait(ctx, 600); } catch (caught) { if (caught instanceof StepStopped) throw caught; }
+  const end = (() => { try { return feetCell(bot); } catch { return null; } })();
+  const there = dimensionWords(dimensionOf(bot));
+  const from = notes.from ? `（${dimensionWords(notes.from.dimension)}の ${cellText(notes.from.cell)} から歩いて入った）` : '';
+  return { ok: true, text: `${there}へ移った${end ? ` ${cellText(end)}` : ''}${from}`, ...(end ? { at: end } : {}) };
+}
+
 /** Why the walk stops before it starts at a target no body can stand in: the fact, and the cells beside it a body can (none is chosen). */
 function unstandable(bot: any, target: Cell): StepOutcome | null {
   const read = reader(bot);
@@ -442,7 +476,9 @@ export async function walk(ctx: StepContext, args: WalkArgs): Promise<StepOutcom
   if (!navigator) return stopped(bot, 'no_pathfinder', '経路探索が無い体');
   const previous = navigator.movements;
   navigator.setMovements(walkMovements(bot, sprint));
-  const notes: WayNotes = { opened: [], leaves: 0 };
+  const notes: WayNotes = { opened: [], leaves: 0, from: { dimension: dimensionOf(bot), cell: start } };
+  // The last target is a portal (nether or end): the walk goes into it, and its end is the dimension changed (mb-llmc-cand 4).
+  const portal = portalEntry(reader(bot), targets[targets.length - 1]);
   const withNotes = (text: string) => { const words = wayWords(notes); return words ? `${text}（途中で${words}）` : text; };
   try {
     for (let i = 0; i < targets.length; i++) {
@@ -451,7 +487,7 @@ export async function walk(ctx: StepContext, args: WalkArgs): Promise<StepOutcom
       // r9: a range under one is the cell itself (the route search floors the goal; act's default is 0.5): a cell no body can stand in is refused
       // at the start with its fact. It was only `range === 0`, and act walks with 0.5, so five walks in run 33 went to the cell below it and
       // stopped, and the stop quoted probe path's answer for a neighbour.
-      if (range < 1) {
+      if (range < 1 && !portalEntry(reader(bot), target)) {
         const cannot = unstandable(bot, target);
         if (cannot) return { ...cannot, text: withNotes(targets.length > 1 ? `道の${i + 1}/${targets.length}番目で: ${cannot.text}` : cannot.text) };
       }
@@ -462,6 +498,13 @@ export async function walk(ctx: StepContext, args: WalkArgs): Promise<StepOutcom
     }
   } finally {
     try { if (previous) navigator.setMovements(previous); } catch { /* the walk's profile stays */ }
+  }
+  if (portal) {
+    const left = Math.max(1000, Math.min(PORTAL_WAIT_MS, ctx.deadline - Date.now()));
+    const changed = await waitUntil(ctx, () => dimensionOf(bot) !== notes.from!.dimension, left, 250);
+    if (changed) return crossedOutcome(ctx, notes);
+    const inside = feetCell(bot)!;
+    return { ok: true, text: `${cellText(inside)} の ${portal}（ポータル）の中に着いた。${Math.round(left / 1000)}秒立っていたが、まだ次元は変わっていない（ネザーポータルは中に 4 秒ほど立つと移る。続けて立つか、読み込みを待つ）`, at: inside };
   }
   const end = feetCell(bot)!;
   const metres = Math.hypot(end.x - start.x, end.y - start.y, end.z - start.z);

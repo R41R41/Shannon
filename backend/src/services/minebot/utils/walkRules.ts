@@ -10,16 +10,25 @@ import { symbolFor, isOpenSymbol, type BlockReader, type Cell, type MapBlock } f
  * - A wooden door, fence gate or trapdoor that is shut is opened on the way (Lai, 2026-10-22: "歩きの中で通る"). An iron one is not
  *   opened by a hand: a closed iron door is a wall, said as one.
  * - Leaves in the feet or head cell of the way are broken on the way. Leaves under the feet are a floor (never broken to go down).
- * - Lava, fire, cobweb, powder snow, a portal, a berry bush, a wither rose, magma and a cactus are not walked into.
+ * - Lava, fire, cobweb, powder snow, a berry bush, a wither rose, magma and a cactus are not walked into.
+ * - A nether portal or an end portal has no box: it is entered when it is the walk's target (the way to change dimension; mb-llmc-cand 4,
+ *   run 37: "そのものには立てない（足のマスが nether_portal）"), and is not a cell of a route (a body is carried off in it). It is neither
+ *   a wall nor a harm.
  * Exact facts only: no way round is chosen here.
  */
 
 /** Blocks a body does not walk into whatever their box (they hurt, hold, or carry it off). */
-export const NO_ENTER = new Set(['lava', 'fire', 'soul_fire', 'cobweb', 'powder_snow', 'nether_portal', 'end_portal', 'end_gateway', 'sweet_berry_bush',
+export const NO_ENTER = new Set(['lava', 'fire', 'soul_fire', 'cobweb', 'powder_snow', 'end_gateway', 'sweet_berry_bush',
   'campfire', 'soul_campfire', 'wither_rose', 'magma_block', 'cactus']);
 /** A step up is one block; a drop (also into water) is three at most. */
 export const MAX_STEP_UP = 1;
 export const MAX_FALL = 3;
+
+/** A portal a body walks into (no collision box): a nether portal, or an end portal (a body falls through it). An end portal frame is a block, not this. */
+export const isPortalName = (name: string) => { const bare = name.replace(/^minecraft:/u, ''); return bare === 'nether_portal' || bare === 'end_portal'; };
+export const isPortal = (block: MapBlock | null) => !!block && isPortalName(block.name);
+/** What a portal cell is, in a few words: said where a stop names one. */
+export const PORTAL_WORDS = 'ポータル: 壁でも害でもない、的にして walk で入ると次元が変わる、通り道には使わない';
 
 const DOORLIKE = /(_door|_fence_gate|_trapdoor)$/u;
 const IRON = /^iron_(door|trapdoor)$/u;
@@ -76,12 +85,14 @@ export function climbRise(read: BlockReader, fromX: number, fromY: number, fromZ
  *   iron_door  a shut iron door or trapdoor: a hand does not open it;
  *   solid      a wall;
  *   harm       lava, fire and the like: not walked into;
+ *   portal     a nether portal or an end portal: entered as the walk's target, not a cell of a route (no wall, no harm);
  *   unloaded   nothing known.
  */
-export type CellWay = 'open' | 'door' | 'leaves' | 'iron_door' | 'solid' | 'harm' | 'unloaded';
+export type CellWay = 'open' | 'door' | 'leaves' | 'iron_door' | 'solid' | 'harm' | 'portal' | 'unloaded';
 
 export function cellWay(block: MapBlock | null): CellWay {
   if (!block) return 'unloaded';
+  if (isPortal(block)) return 'portal';
   if (NO_ENTER.has(block.name)) return 'harm';
   // The route search (mineflayer-pathfinder) finds no way through scaffolding (the lab of mb-llmc-cand: noPath with it in the feet or head
   // cell, where probe path said "歩いて行ける"): a wall for the walk, as for the search.
@@ -121,6 +132,7 @@ export function blockedWords(block: MapBlock | null, cell: Cell): string | null 
   if (way === 'unloaded') return `${at(cell)} は未ロード`;
   if (way === 'iron_door') return `${at(cell)} は ${block!.name}（閉じた鉄の扉は手では開かない）`;
   if (way === 'harm') return `${at(cell)} は ${block!.name}（入らない）`;
+  if (way === 'portal') return `${at(cell)} は ${block!.name}（${PORTAL_WORDS}）`;
   if (way === 'solid') return `${at(cell)} は ${block!.name}`;
   return null;
 }
@@ -134,6 +146,7 @@ export function whyNotStand(read: BlockReader, cell: Cell): { text: string; soli
   if (!feet || !head) return null;
   if (!passable(feet)) {
     const way = cellWay(feet);
+    if (way === 'portal') return { text: `足のマスが ${feet.name}（${PORTAL_WORDS}）`, solidFeet: false };
     return { text: way === 'iron_door' ? `足のマスが ${feet.name}（閉じた鉄の扉は手では開かない）` : way === 'harm' ? `足のマスが ${feet.name}` : `足のマスが ${feet.name} で埋まっている`, solidFeet: true };
   }
   if (!passable(head)) return { text: `頭の高さ ${at({ ...cell, y: cell.y + 1 })} が ${head.name}`, solidFeet: false };
@@ -149,6 +162,17 @@ export function whyNotStand(read: BlockReader, cell: Cell): { text: string; soli
   }
   if (air === 0) return { text: `下 ${at({ ...cell, y: cell.y - 1 })} が ${under.name}（立つ床にならない）`, solidFeet: false };
   return { text: `下 ${air >= 8 ? '8 以上' : air} マスが空気（立つ床が無い）`, solidFeet: false };
+}
+
+/**
+ * A target cell a body walks into to change dimension: the feet cell is a portal (nether or end) and the head cell is a portal or clear (a
+ * nether portal's column is three cells; an end portal is a sheet a body falls through). Gives the portal's name, else null.
+ */
+export function portalEntry(read: BlockReader, cell: Cell): string | null {
+  const feet = read(cell.x, cell.y, cell.z);
+  if (!feet || !isPortal(feet)) return null;
+  const head = read(cell.x, cell.y + 1, cell.z);
+  return head && (isPortal(head) || passable(head)) ? feet.name : null;
 }
 
 /** The cells round a target a body stands in "beside it" (above, the four sides, below, and those a step up or down), in this order. */

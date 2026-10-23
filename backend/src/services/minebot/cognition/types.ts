@@ -173,6 +173,10 @@ export interface WorldObservation {
   sealedInShelter?: true;
   weather: string | null;
   time: string | null;
+  /** The tick of the day, 0-23999 (the number `time` is the decimal string of); absent when the clock is not known. */
+  timeOfDay?: number;
+  /** Overworld only: true while the sky is light (ticks 23000-12999), false from 13000 to 22999 (monsters spawn under the sky). */
+  isDay?: boolean;
   biome: string | null;
   heldItem: string | null;
   /** What is worn and in the off hand, with wear (live body only): the inventory lists the pack's slots, not these. */

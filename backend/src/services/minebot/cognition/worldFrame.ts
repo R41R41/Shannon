@@ -1,4 +1,5 @@
 import { timedEngagement } from '../utils/engagement.js';
+import { airLevel } from '../utils/airSupplyDefault.js';
 import { potionIn } from '../utils/potionContents.js';
 import { woodLine } from '../utils/treeSearch.js';
 import type { WorldDelta, WorldFrame, WorldInventoryStack, WorldObservation, WorldVector } from './types.js';
@@ -313,7 +314,11 @@ export function captureWorldObservation(bot?: unknown): WorldObservation {
   const observedAt = new Date().toISOString();
   const isInWater = observedBot?.entity?.isInWater ?? observedBot?.isInWater;
   const timeOfDay = finiteNumber(observedBot?.time?.timeOfDay);
-  const time = timeOfDay !== null ? String(timeOfDay) : observedBot?.environmentState?.time || null;
+  // The world clock as the tick of the day, 0-23999 (0 = 6:00, 6000 noon, 12000 sunset, 18000 midnight; mb-llmc-cand 4): `time` is its decimal
+  // string (as before), `timeOfDay` the number; `isDay` (overworld only) is the sky's: false from 13000 to 22999, where monsters spawn under it.
+  const tick = timeOfDay !== null ? ((Math.floor(timeOfDay) % 24000) + 24000) % 24000 : null;
+  const time = tick !== null ? String(tick) : observedBot?.environmentState?.time || null;
+  const inOverworld = String(observedBot?.game?.dimension ?? 'overworld').includes('overworld');
   // A thunderstorm is said apart from rain: the body may sleep in it by day (get-time-and-weather said so, and is no longer offered).
   const thunder = observedBot?.isRaining === true && Number((observedBot as { thunderState?: unknown }).thunderState) > 0;
   const weather = typeof observedBot?.isRaining === 'boolean' ? thunder ? 'thunder' : observedBot.isRaining ? 'rain' : 'clear' : observedBot?.environmentState?.weather || null;
@@ -324,7 +329,8 @@ export function captureWorldObservation(bot?: unknown): WorldObservation {
     position,
     health: finiteNumber(observedBot?.health),
     food: finiteNumber(observedBot?.food),
-    oxygen: finiteNumber((observedBot as unknown as { oxygenLevel?: unknown })?.oxygenLevel),
+    // One 0-20 scale (utils/airSupplyDefault airLevel): a body on dry land can read 400.
+    oxygen: airLevel((observedBot as unknown as { oxygenLevel?: unknown })?.oxygenLevel),
     ...bodyEconomy(observedBot),
     ...(observedBot?.entity ? (() => { const margin = survivalMargin(observedBot, finiteNumber(observedBot?.health), finiteNumber(observedBot?.food),
       // Dark and light are the overworld's (see describeSituation): elsewhere the clock says nothing of safety.
@@ -335,6 +341,7 @@ export function captureWorldObservation(bot?: unknown): WorldObservation {
     ...(sealedIn(observedBot) ? { sealedInShelter: true as const } : {}),
     weather,
     time,
+    ...(tick !== null ? { timeOfDay: tick, ...(inOverworld ? { isDay: tick < 13000 || tick >= 23000 } : {}) } : {}),
     // The fallback (auto-update-state's) is judged by the dimension too.
     biome: biomeAt(observedBot) ?? (biomeFitsDimension(observedBot?.game?.dimension ?? observedBot?.environmentState?.dimension, observedBot?.environmentState?.biome)
       ? observedBot!.environmentState!.biome! : null),

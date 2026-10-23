@@ -164,7 +164,7 @@ function stepFact(read: BlockReader, c: Cell, n: Cell): PathBreak {
   // A shut iron door (or another block not walked into) in the way: said by its name, as the walk says it.
   for (const [cell, block] of [[n, feet], [{ ...n, y: n.y + 1 }, head]] as const) {
     const way = cellWay(block);
-    if (way === 'iron_door' || way === 'harm') return { at: cell, reason: 'wall', n: 1, block: block.name, text: blockedWords(block, cell)! };
+    if (way === 'iron_door' || way === 'harm' || way === 'portal') return { at: cell, reason: 'wall', n: 1, block: block.name, text: blockedWords(block, cell)! };
   }
   if (!passable(feet)) {
     let h = 0;
