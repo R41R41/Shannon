@@ -1,4 +1,5 @@
 import { symbolFor, isOpenSymbol, type BlockReader, type Cell, type MapBlock } from './localMap.js';
+import { BLOCK_REACH } from './blockReach.js';
 import { LoopSlicer } from './loadedBlockScan.js';
 import { wayWords } from './worldScanState.js';
 import type { HandRecord } from './handHistory.js';
@@ -197,16 +198,16 @@ function stepFact(read: BlockReader, c: Cell, n: Cell): PathBreak {
   return { at: n, reason: 'drop', n: fall.n, depth: fall.n, text: `${at(n)} の${depthWords}` };
 }
 
-/** Cells round a target a body could stand in to reach it (eye within 4.5 of its centre) with nothing solid between. */
+/** Cells round a target a body could stand in to reach it (eye within BLOCK_REACH of its centre) with nothing solid between. */
 function standSpots(read: BlockReader, target: Cell, dist: Map<string, number>, most: number): Array<{ at: Cell; eye: number; steps: number | null }> {
   const spots: Array<{ at: Cell; eye: number; steps: number | null }> = [];
   const centre: [number, number, number] = [target.x + 0.5, target.y + 0.5, target.z + 0.5];
-  for (let dx = -4; dx <= 4; dx++) for (let dy = -5; dy <= 3; dy++) for (let dz = -4; dz <= 4; dz++) {
+  for (let dx = -5; dx <= 5; dx++) for (let dy = -6; dy <= 3; dy++) for (let dz = -5; dz <= 5; dz++) {
     const c = { x: target.x + dx, y: target.y + dy, z: target.z + dz };
     if (c.x === target.x && c.z === target.z && (c.y === target.y || c.y + 1 === target.y)) continue;
     const eye: [number, number, number] = [c.x + 0.5, c.y + 1.62, c.z + 0.5];
     const d = Math.hypot(eye[0] - centre[0], eye[1] - centre[1], eye[2] - centre[2]);
-    if (d > 4.5 || !standable(read, c.x, c.y, c.z)) continue;
+    if (d > BLOCK_REACH || !standable(read, c.x, c.y, c.z)) continue;
     if (solidBetween(read, eye, centre).length) continue;
     spots.push({ at: c, eye: round1(d), steps: dist.get(key(c.x, c.y, c.z)) ?? null });
   }
@@ -306,7 +307,7 @@ export async function probePath(read: BlockReader, from: Cell, to: Cell, options
   if (nearest) lines.push(`行ける所で的に一番近いのは ${at(nearest)}（的まで ${round1(reached[0].d)}m）。`);
   if (breaks.length) lines.push(`切れ目：${breaks.map(b => b.text).join('／')}。`);
   lines.push(stands.length ? `的に届いて見える立つ所：${stands.map(s => `${at(s.at)} 目から${s.eye}m ${s.steps === null ? '行けない' : `道 ${s.steps} マス`}`).join('／')}`
-    : '的に届いて見える立つ所は無い（4.5m 内に立てる所が無いか、間に固いブロック）');
+    : `的に届いて見える立つ所は無い（${BLOCK_REACH}m 内に立てる所が無いか、間に固いブロック）`);
   return { v: 1, kind: 'path', reachable: false, onTarget, ...(nearest ? { nearest, nearestGap: round1(reached[0].d) } : {}), breaks, stands, searched: search.dist.size,
     ...(search.limited ? { limited: true } : {}), ms: Math.round(performance.now() - started), text: lines.join('') };
 }
@@ -349,7 +350,8 @@ export function blockInSight(read: BlockReader, eye: [number, number, number], c
 export interface SightCreature { id: number; name: string; position: { x: number; y: number; z: number }; height?: number; width?: number }
 export interface SightAnswer { v: 1; kind: 'sight'; text: string; visible: boolean; reach: boolean; reachLimit: number; distance: number;
   between: Array<{ at: Cell; name: string }>; target: { at: Cell; name: string } }
-export const BLOCK_REACH = 4.5, HIT_REACH = 3;
+export { BLOCK_REACH };
+export const HIT_REACH = 3;
 
 /** The eye of a body standing at a feet position (a cell's centre when `cell`). */
 export function eyeOf(position: { x: number; y: number; z: number }, cell = false): [number, number, number] {
@@ -377,7 +379,7 @@ export function probeSight(read: BlockReader, eye: [number, number, number], tar
   const visible = between.length === 0, reach = distance <= reachLimit;
   const what = 'block' in target ? `${at(cell)} ${name}` : `${name} ${at(cell)}`;
   const text = `${what}：${visible ? '見える（間に固いブロックは無い）' : `見えない。間に固いブロック ${between.length}${between.length >= 8 ? ' 以上' : ''}：${between.slice(0, 4).map(b => `${at(b.at)} ${b.name}`).join('、')}${between.length > 4 ? ' ほか' : ''}`}。`
-    + `目から ${round1(distance)}m（${reach ? '届く' : '届かない'}、${'block' in target ? '掘る・使う・置くは 4.5m まで' : '打てるのは 3m まで'}）`;
+    + `目から ${round1(distance)}m（${reach ? '届く' : '届かない'}、${'block' in target ? `掘る・使う・置くは ${BLOCK_REACH}m まで` : '打てるのは 3m まで'}）`;
   return { v: 1, kind: 'sight', text, visible, reach, reachLimit, distance: round1(distance), between, target: { at: cell, name } };
 }
 
@@ -491,8 +493,18 @@ function columnAbove(read: BlockReader, x: number, z: number, fromY: number, dig
 export interface AroundCreature { id: number; name: string; at: Cell; dy: number; distance: number; hostile: boolean; visible: boolean; facing: boolean; closing: number | null }
 /** `bottom` (r8): what a drop ends on: `lava`, `water`, or the floor's block name. */
 export interface AroundDanger { kind: 'lava' | 'water' | 'drop' | 'fire'; at: Cell; distance: number; n?: number; bottom?: string }
+/**
+ * mb-llmc-cand (run 36: a placed water ran into the body's own passage and could not be taken back): the water round her, the sources
+ * (level 0: a bucket fills at one, and only at one) apart from the flow (level 1-7, 8 and over: falling), the nearest three of each with
+ * the facts of using it: the distance from the eye, whether it is within the hand's reach (BLOCK_REACH) and whether nothing solid lies on
+ * the line from the eye (`visible`; `reach && visible` is a source she can fill a bucket at, or take her own water back from, now).
+ */
+export interface AroundWaterCell { at: Cell; distance: number; eye: number; level: number; reach: boolean; visible: boolean }
+export interface AroundWater { sources: number; flowing: number; nearestSources: AroundWaterCell[]; nearestFlowing: AroundWaterCell[] }
 export interface AroundAnswer {
   v: 1; kind: 'around'; text: string; radius: number; creatures: AroundCreature[]; dangers: AroundDanger[];
+  /** Absent when no water lies within the radius. */
+  water?: AroundWater;
   /**
    * r8 (run 32): the cells round the feet that fall three or more or end in lava (utils/voidFooting). Absent when there is none. `text` is the
    * line the answer's text begins with ("足場: 幅 1 の橋・左右とも空所（落差 28、下は溶岩）。押されたら落ちる"): the map shows no fall deeper than five.
@@ -527,6 +539,8 @@ export function probeAround(read: BlockReader, position: { x: number; y: number;
   const found: AroundDanger[] = [];
   let lava = 0, water = 0, fire = 0;
   const nearest: Partial<Record<'lava' | 'water' | 'fire', AroundDanger>> = {};
+  const waterCells: AroundWaterCell[] = [];
+  let sourceCount = 0, flowCount = 0;
   for (let dx = -r; dx <= r; dx++) for (let dz = -r; dz <= r; dz++) for (let dy = -4; dy <= 4; dy++) {
     const x = feet.x + dx, y = feet.y + dy, z = feet.z + dz;
     const block = read(x, y, z);
@@ -535,6 +549,12 @@ export function probeAround(read: BlockReader, position: { x: number; y: number;
     if (!kind) continue;
     const distance = round1(Math.hypot(x + 0.5 - position.x, y - position.y, z + 0.5 - position.z));
     if (distance > r) continue;
+    if (kind === 'water') {
+      const level = Number(block.level ?? 0);
+      const eyeDistance = Math.hypot(x + 0.5 - eye[0], y + 0.5 - eye[1], z + 0.5 - eye[2]);
+      if (level === 0) sourceCount++; else flowCount++;
+      waterCells.push({ at: { x, y, z }, distance, eye: round1(eyeDistance), level, reach: eyeDistance <= BLOCK_REACH, visible: true });
+    }
     if (kind === 'lava') lava++; else if (kind === 'water') water++; else fire++;
     if (!nearest[kind] || nearest[kind]!.distance > distance) nearest[kind] = { kind, at: { x, y, z }, distance };
   }
@@ -558,6 +578,14 @@ export function probeAround(read: BlockReader, position: { x: number; y: number;
   if (nearest.water) found.push({ ...nearest.water, n: water });
   found.sort((a, b) => (a.kind === 'water' ? 1 : 0) - (b.kind === 'water' ? 1 : 0) || a.distance - b.distance);
   const dangers = found.slice(0, 8);
+  const nearestWater = (cells: AroundWaterCell[]): AroundWaterCell[] => cells.sort((a, b) => a.eye - b.eye).slice(0, 3)
+    .map(cell => ({ ...cell, visible: solidBetween(read, eye, [cell.at.x + 0.5, cell.at.y + 0.5, cell.at.z + 0.5]).length === 0 }));
+  const waterFacts: AroundWater | undefined = waterCells.length ? { sources: sourceCount, flowing: flowCount,
+    nearestSources: nearestWater(waterCells.filter(cell => cell.level === 0)), nearestFlowing: nearestWater(waterCells.filter(cell => cell.level !== 0)) } : undefined;
+  const waterItem = (cell: AroundWaterCell) => `${at(cell.at)} ${wayWords(position, cell.at)} 目から ${cell.eye}m${cell.reach ? '・届く' : '・届かない'}${cell.visible ? '・見える' : '・間に壁'}`
+    + (cell.level === 0 ? '' : cell.level >= 8 ? '・下へ落ちる流れ' : `・流れ ${cell.level}`);
+  const waterBreakdown = waterFacts
+    ? `水の内訳：源 ${waterFacts.sources} マス${waterFacts.nearestSources.length ? `（近い順 ${waterFacts.nearestSources.map(waterItem).join('／')}）` : ''}、流れ ${waterFacts.flowing} マス${waterFacts.nearestFlowing.length ? `（近い順 ${waterFacts.nearestFlowing.map(waterItem).join('／')}）` : ''}。` : '';
   const words = (danger: AroundDanger) => danger.kind === 'lava' ? `溶岩 ${at(danger.at)} ${wayWords(position, danger.at)}（${danger.n} マス）`
     : danger.kind === 'fire' ? `火 ${at(danger.at)} ${wayWords(position, danger.at)}`
     : danger.kind === 'drop' ? `${at(danger.at)} ${wayWords(position, danger.at)} は下 ${danger.n} 段が空気（落差 ${danger.n}${danger.bottom === 'lava' ? '、底は溶岩' : ''}）`
@@ -573,9 +601,10 @@ export function probeAround(read: BlockReader, position: { x: number; y: number;
     dangers.some(d => d.kind !== 'water') ? `危ない：${dangers.filter(d => d.kind !== 'water').map(words).join('／')}。` : '',
     creatures.length ? `${r}m 内の生き物 ${creatures.length}（敵 ${hostile.length}）：${creatures.slice(0, 8).map(creatureWords).join('／')}。` : `${r}m 内に生き物は無い。`,
     // `nearest.water` has no count (the copy with `n` is the one pushed to `found`): its words ended "（undefined マス）" (inspection s44).
-    nearest.water ? words({ ...nearest.water, n: water }) : '',
+    nearest.water ? words({ ...nearest.water, n: water }) + (waterBreakdown ? '。' : '') : '',
+    waterBreakdown,
   ].join('');
-  return { v: 1, kind: 'around', text, radius: r, creatures, dangers, ...(footing ? { footing } : {}) };
+  return { v: 1, kind: 'around', text, radius: r, creatures, dangers, ...(footing ? { footing } : {}), ...(waterFacts ? { water: waterFacts } : {}) };
 }
 
 // ===== history =====

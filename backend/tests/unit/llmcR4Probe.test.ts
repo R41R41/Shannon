@@ -87,7 +87,7 @@ describe('probe path: walked without digging or laying a block, the walk\'s rule
     const answer = await probePath(wall, { x: 0, y: 64, z: 0 }, { x: 7, y: 63, z: 0 });
     expect(answer.stands!.length).toBeGreaterThan(0);
     expect(answer.stands!.length).toBeLessThanOrEqual(3);
-    for (const stand of answer.stands!) expect(stand.eye).toBeLessThanOrEqual(4.5);
+    for (const stand of answer.stands!) expect(stand.eye).toBeLessThanOrEqual(5);
     // The near side of the wall is reached (a number of steps); the far side is not (null).
     expect(answer.stands!.some(stand => stand.at.x > 5 && stand.steps === null)).toBe(true);
   });
@@ -105,16 +105,16 @@ describe('probe path: walked without digging or laying a block, the walk\'s rule
 });
 
 describe('probe sight, column, around', () => {
-  it('sight: a block behind a wall is not seen, the cells between named, the distance against 4.5', () => {
+  it('sight: a block behind a wall is not seen, the cells between named, the distance against 5', () => {
     const read = world((x, y) => x === 3 && y >= 64 && y <= 66 ? STONE : flat(y));
     const answer = probeSight(read, eyeOf({ x: 0, y: 64, z: 0 }, true), { block: { x: 5, y: 64, z: 0 } });
     expect(answer.visible).toBe(false);
     expect(answer.between.some(cell => cell.at.x === 3 && cell.name === 'stone')).toBe(true);
     expect(answer.reach).toBe(false);
     expect(answer.text).toContain('見えない。間に固いブロック');
-    expect(answer.text).toContain('届かない、掘る・使う・置くは 4.5m まで');
+    expect(answer.text).toContain('届かない、掘る・使う・置くは 5m まで');
     const near = probeSight(read, eyeOf({ x: 0, y: 64, z: 0 }, true), { block: { x: 1, y: 64, z: 0 } });
-    expect(near).toMatchObject({ visible: true, reach: true, reachLimit: 4.5 });
+    expect(near).toMatchObject({ visible: true, reach: true, reachLimit: 5 });
   });
 
   it('sight: a creature in reach is told against the 3 m of a blow, to the nearest point of its box', () => {

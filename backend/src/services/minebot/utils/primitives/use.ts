@@ -167,7 +167,7 @@ export async function use(ctx: StepContext, args: UseArgs): Promise<StepOutcome>
   const block = blockAt(bot, cell);
   if (!block) return stopped(bot, 'unloaded', `${placeText(bot, cell)} は未ロード`, cell);
   const distance = eyeDistance(bot, cell);
-  if (distance > USE_REACH + 0.5) return stopped(bot, 'out_of_reach', `${placeText(bot, cell)} に届かない（目から${distance.toFixed(1)}m、${USE_REACH}m まで）`, cell);
+  if (distance > USE_REACH) return stopped(bot, 'out_of_reach', `${placeText(bot, cell)} に届かない（目から${distance.toFixed(1)}m、${USE_REACH}m まで）`, cell);
   // A bed (r8: before any item is looked at; the bed is slept in with an empty hand).
   if (BEDS.test(block.name)) return sleepInBed(ctx, cell, block);
   // A bucket on a source.

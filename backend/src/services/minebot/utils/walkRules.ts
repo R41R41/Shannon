@@ -83,6 +83,9 @@ export type CellWay = 'open' | 'door' | 'leaves' | 'iron_door' | 'solid' | 'harm
 export function cellWay(block: MapBlock | null): CellWay {
   if (!block) return 'unloaded';
   if (NO_ENTER.has(block.name)) return 'harm';
+  // The route search (mineflayer-pathfinder) finds no way through scaffolding (the lab of mb-llmc-cand: noPath with it in the feet or head
+  // cell, where probe path said "歩いて行ける"): a wall for the walk, as for the search.
+  if (block.name === 'scaffolding') return 'solid';
   if (isDoorlike(block.name)) {
     if (block.open === true) return 'open';
     return IRON.test(block.name) ? 'iron_door' : 'door';

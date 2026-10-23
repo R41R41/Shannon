@@ -1,6 +1,7 @@
 import { Vec3 } from 'vec3';
 import { actionSignal } from '../../execution/ActionExecution.js';
 import { feetCell, isOpenBlock, relativeCell, relativeWords, type Cell, type Facing } from '../localMap.js';
+import { BLOCK_REACH } from '../blockReach.js';
 
 /**
  * What every part of `act` shares (design mb-llm-centric 2.3, 4: utils/primitives). A part does what its arguments say and nothing
@@ -100,9 +101,9 @@ export function eyeDistance(bot: any, cell: Cell): number {
   if (!at) return Infinity;
   return Math.hypot(at.x - (cell.x + 0.5), at.y + EYE_HEIGHT - (cell.y + 0.5), at.z - (cell.z + 0.5));
 }
-/** How far the hand reaches for using a block (a chest, a furnace, placing) and for digging (the server allows a little more). */
-export const USE_REACH = 4.5;
-export const DIG_REACH = 5.0;
+/** How far the hand reaches for digging, placing and using a block (a chest, a furnace, a bucket): one number (utils/blockReach). */
+export const USE_REACH = BLOCK_REACH;
+export const DIG_REACH = BLOCK_REACH;
 
 /** Sleeps `ms`, ended early (StepStopped) by the act's stop or the action's own abort. */
 export function wait(ctx: Pick<StepContext, 'stop' | 'bot'>, ms: number): Promise<void> {

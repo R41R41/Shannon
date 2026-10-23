@@ -163,7 +163,7 @@ export async function place(ctx: StepContext, args: PlaceArgs): Promise<StepOutc
       return result(stopped(bot, 'nothing_to_set_against', withNearby(bot, cell, why, room), cell));
     }
     const distance = eyeDistance(bot, cell);
-    if (distance > USE_REACH + 0.5) return result(stopped(bot, 'out_of_reach', `${placeText(bot, cell)} に届かない（目から${distance.toFixed(1)}m、${USE_REACH}m まで）`, cell));
+    if (distance > USE_REACH) return result(stopped(bot, 'out_of_reach', `${placeText(bot, cell)} に届かない（目から${distance.toFixed(1)}m、${USE_REACH}m まで）`, cell));
     if (bot.currentWindow) { try { bot.closeWindow(bot.currentWindow); } catch { /* closing */ } await wait(ctx, 100); }
     if (bot.heldItem?.name !== args.block) {
       const held = await guard(ctx, equipToHandVerified(bot, findItem(bot, args.block)), 5000);

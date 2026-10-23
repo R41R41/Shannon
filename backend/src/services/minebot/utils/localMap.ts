@@ -49,9 +49,17 @@ const SOFT = /^(dirt|grass_block|coarse_dirt|podzol|mycelium|rooted_dirt|mud|mud
 const FALLING = /^(sand|red_sand|gravel|suspicious_sand|suspicious_gravel)$/u;
 const ICE = /^(ice|packed_ice|blue_ice|frosted_ice)$/u;
 const LOGS = /(_log|_wood|_stem|_hyphae)$/u;
-const LEAVES = /(_leaves|^nether_wart_block|^warped_wart_block|^shroomlight)$/u;
-const WOODEN = /^(oak|spruce|birch|jungle|acacia|dark_oak|mangrove|cherry|bamboo|crimson|warped|pale_oak)_(planks|slab|stairs|pressure_plate|button|sign|wall_sign|hanging_sign|wall_hanging_sign|trapdoor)$|^bamboo_(block|mosaic.*)$|^bookshelf$|^chiseled_bookshelf$/u;
-const FENCES = /(_fence|_fence_gate|_wall|_pane|^iron_bars|^glass|_glass|^chain)$/u;
+// mb-llmc-cand (run 36): one symbol was several kinds the walk treats differently, and the head read them as one. Split by the walk's rules
+// (utils/walkRules): leaves are broken on the way (`%`); the nether's wart blocks and shroomlight are walls (`Y`); planks, slabs and
+// stairs are walls (`P`); a wooden door (`D`), trapdoor (`A`) and fence gate (`J`) are opened on the way; an iron door or trapdoor is not
+// (`K`); a sign, a pressure plate, a button and a lever are walked through and take no block (`q`); a fence and a wall are 1.5 high
+// (`+`); glass, panes, bars and chains are thin walls (`b`).
+const LEAVES = /_leaves$/u;
+const FUNGAL = /^(nether_wart_block|warped_wart_block|shroomlight)$/u;
+const WOODEN = /^(oak|spruce|birch|jungle|acacia|dark_oak|mangrove|cherry|bamboo|crimson|warped|pale_oak)_(planks|slab|stairs)$|^bamboo_(block|mosaic.*)$|^bookshelf$|^chiseled_bookshelf$/u;
+const TOUCH = /(_pressure_plate|_button|_sign|_wall_sign|_hanging_sign|_wall_hanging_sign)$|^lever$/u;
+const FENCES = /(_fence|_wall)$/u;
+const PANES = /(_pane|^iron_bars|^glass|_glass|^chain)$/u;
 const CONTAINERS = /^(chest|trapped_chest|barrel|ender_chest|.*shulker_box)$/u;
 const CROPS = /^(wheat|carrots|potatoes|beetroots|nether_wart|melon_stem|pumpkin_stem|attached_melon_stem|attached_pumpkin_stem|torchflower_crop|pitcher_crop)$/u;
 /** A door, a fence gate or a trapdoor: whether it stands open is in its state (read once per state id, as a fluid's level). */
@@ -96,14 +104,20 @@ export function symbolFor(block: MapBlock | null): string {
   if (/_bed$/u.test(name)) return 'B';
   if (name === 'hay_block') return 'H';
   if (CROPS.test(name)) return 'k';
+  if (/^iron_(door|trapdoor)$/u.test(name)) return 'K';
   if (/_door$/u.test(name)) return 'D';
+  if (/_trapdoor$/u.test(name)) return 'A';
+  if (/_fence_gate$/u.test(name)) return 'J';
   if (NETHER_BRICK.test(name)) return 'N';
   if (name === 'ladder' || name === 'vine' || name === 'scaffolding') return 'h';
   if (/(^|_)torch$/u.test(name) || /_wall_torch$/u.test(name)) return 't';
   if (/(^|_)rail$/u.test(name)) return '=';
   if (FENCES.test(name)) return '+';
+  if (PANES.test(name)) return 'b';
+  if (TOUCH.test(name)) return 'q';
   if (LOGS.test(name)) return 'W';
   if (LEAVES.test(name)) return '%';
+  if (FUNGAL.test(name)) return 'Y';
   if (WOODEN.test(name)) return 'P';
   if (ICE.test(name)) return 'I';
   if (FALLING.test(name)) return 's';
@@ -127,7 +141,8 @@ export const MAP_LEGEND = [
   '# 石の類（石・深層岩・安山岩・閃緑岩・花崗岩・凝灰岩・丸石・石レンガ）/ : 土・草・雪・粘土 / s 砂・砂利 / I 氷',
   'w 水源 / - 流れる水 / L 溶岩源 / l 流れる溶岩 / f 火 / x クモの巣',
   'i 鉄 / c 石炭 / d ダイヤ / g 金 / r レッドストーン / o ほかの鉱石（銅・ラピス・エメラルド・石英・古代の残骸）',
-  'W 原木（ネザーの幹も）/ % 葉・ネザーの葉ブロック / P 板・木の建物 / D 扉 / + 柵・壁・鉄格子・ガラス / h はしご・つた / t 松明 / = レール',
+  'W 原木（ネザーの幹も）/ % 葉（歩きの中で壊して通る）/ Y ネザーのウォートブロック・シュルームライト（固い）/ P 板・階段・ハーフブロック・本棚（固い）/ h はしご・つた / t 松明 / = レール',
+  'D 木の扉 / A 木のトラップドア / J 木のフェンスゲート（D・A・J は閉じていても歩きの中で開けて通る）/ K 鉄の扉・鉄のトラップドア（手では開かない＝壁）/ + 柵・壁（高さ1.5で上れない）/ b ガラス・板ガラス・鉄格子・鎖（通れない）/ q 看板・感圧板・ボタン・レバー（通れる。ブロックは置けない）',
   'F かまど（溶鉱炉・燻製器も）/ T 作業台 / C チェスト・樽 / B ベッド / H 干し草 / k 畑の作物（ネザーウォートも）/ S スポナー',
   'O 黒曜石（泣く黒曜石も）/ p ネザーポータル / n ネザーラック / u ソウルサンド・ソウルソイル / N ネザーレンガ（要塞）/ M マグマ / G グロウストーン',
   'E エンドストーン / Q エンドポータルの枠（空）/ R 枠（アイ入り）/ e エンドポータル・エンドゲートウェイ / $ ほかの固いブロック',
