@@ -13,7 +13,7 @@
  *   const tools = await loadToolsFromDirectory(join(__dirname, '../tools'));
  */
 import { readdirSync, statSync } from 'fs';
-import { join, basename } from 'path';
+import { join } from 'path';
 import { pathToFileURL } from 'node:url';
 import { StructuredTool } from '@langchain/core/tools';
 import { logger } from './logger.js';

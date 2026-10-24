@@ -1,6 +1,6 @@
 import path from 'path';
 import type { Express } from 'express';
-import { AutoTweetMode, TwitterReplyOutput } from '@shannon/common';
+import { AutoTweetMode } from '@shannon/common';
 import { config } from '../config/env.js';
 import { getTwitterToolPort } from '../services/runtime/platformToolGateway.js';
 import { logger } from '../utils/logger.js';

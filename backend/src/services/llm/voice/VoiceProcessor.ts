@@ -11,7 +11,6 @@ import {
 } from '@shannon/common';
 import OpenAI from 'openai';
 import { randomUUID } from 'node:crypto';
-import type { RequestEnvelope, ShannonGraphState } from '@shannon/common';
 import { classifyError, formatErrorForLog } from '../../../errors/index.js';
 import { getDiscordMemoryZone } from '../../../utils/discord.js';
 import { getVoiceGateway } from '../../runtime/voiceGateway.js';
@@ -28,7 +27,6 @@ import {
   type FillerSelection,
 } from '../../discord/voiceFiller.js';
 import { VoicepeakClient } from '../../voicepeak/client.js';
-import type { VoicepeakEmotion } from '../../voicepeak/client.js';
 import {
   discordAdapter,
   type DiscordNativeEvent,

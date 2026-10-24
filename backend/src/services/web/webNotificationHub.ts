@@ -2,7 +2,6 @@ import type {
   Color,
   ILog,
   MemoryZone,
-  OpenAIMessageOutput,
   SchedulerOutput,
   ServiceOutput,
   SkillInfo,

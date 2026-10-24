@@ -7,7 +7,7 @@
  *  - langfuseEnabled       — whether Langfuse credentials are configured
  *  - shutdownLangfuse()    — flush pending events (call on graceful shutdown)
  */
-import { ChatOpenAI, type ChatOpenAICallOptions } from '@langchain/openai';
+import { ChatOpenAI } from '@langchain/openai';
 import OpenAI from 'openai';
 import { config } from '../../../config/env.js';
 import { logger } from '../../../utils/logger.js';

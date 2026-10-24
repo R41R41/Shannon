@@ -9,7 +9,6 @@ import {
   YoutubeLiveChatMessageOutput,
 } from '@shannon/common';
 import { HumanMessage } from '@langchain/core/messages';
-import type { RequestEnvelope, ShannonGraphState } from '@shannon/common';
 import { getDiscordOutboundPort } from '../../runtime/discordOutboundGateway.js';
 import { logToWeb } from '../../runtime/logging.js';
 import { getTwitterToolPort } from '../../runtime/platformToolGateway.js';

@@ -42,7 +42,6 @@ import { ScopeDeriver } from './recall/ScopeDeriver.js';
 import { WritebackProcessor } from './writeback/WritebackProcessor.js';
 import type { ScopedWritebackInput } from './writeback/WritebackProcessor.js';
 import { MemoryFormatter } from './formatting/MemoryFormatter.js';
-import type { IExchange } from '../../models/PersonMemory.js';
 
 // ---------------------------------------------------------------------------
 // Re-export types for consumers

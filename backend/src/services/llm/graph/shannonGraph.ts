@@ -38,7 +38,7 @@ import type { ScopedMemoryService } from '../../memory/scopedMemoryService.js';
 import { ScopedMemoryService as ScopedMemoryServiceImpl } from '../../memory/scopedMemoryService.js';
 import { ModelSelector } from './cognitive/ModelSelector.js';
 import { TaskEpisodeMemory } from './cognitive/TaskEpisodeMemory.js';
-import type { ExecutionResult, MinecraftTaskCheckpoint, MinecraftToolFinishedEvent } from './types.js';
+import type { MinecraftTaskCheckpoint, MinecraftToolFinishedEvent } from './types.js';
 import { isDiscordArtifactTask } from './policies/taskToolPolicy.js';
 
 // ---------------------------------------------------------------------------

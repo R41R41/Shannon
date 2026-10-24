@@ -22,5 +22,8 @@ jobs:
       - run: npm run check:backend-strict -w backend
       - run: npm run check:dead-code
       - run: npm run test:offline -w backend
+        env:
+          OPENAI_API_KEY: offline-test-not-used
+          MONGODB_URI: mongodb://127.0.0.1:27017/shannon-offline-not-used
       - run: npm run test:auth -w frontend
       - run: npm run build:dev -w frontend
