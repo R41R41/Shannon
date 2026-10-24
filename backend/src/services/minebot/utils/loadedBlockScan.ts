@@ -381,20 +381,18 @@ const ORES_WORTH_A_WAIT = ['iron_ore', 'deepslate_iron_ore', 'coal_ore', 'deepsl
 
 /**
  * The nearest iron and coal ore in the loaded chunks, one of each kind (deepslate counted as the same kind), as
- * "iron_ore (8, 60, 3) 約9m": what start-smelting and a refused wait offer the planner to do instead of standing still. `floor`
- * leaves out what lies below it (the night gate's floor).
+ * "iron_ore (8, 60, 3) 約9m": what start-smelting and a refused wait offer the planner to do instead of standing still.
  */
-export function nearestOres(bot: ScanBot, range = 24, floor = -Infinity): string[] {
-  return nearestOreHits(bot, range, floor).map(({ kind, hit }) => `${kind} (${hit.position.x}, ${hit.position.y}, ${hit.position.z}) 約${Math.round(hit.distance)}m`);
+export function nearestOres(bot: ScanBot, range = 24): string[] {
+  return nearestOreHits(bot, range).map(({ kind, hit }) => `${kind} (${hit.position.x}, ${hit.position.y}, ${hit.position.z}) 約${Math.round(hit.distance)}m`);
 }
 
 /** The same ores as `nearestOres`, as the hits themselves (kind without "deepslate_", and where): for a suggestion a caller can act on. */
-export function nearestOreHits(bot: ScanBot, range = 24, floor = -Infinity): Array<{ kind: string; hit: LoadedBlockHit }> {
+export function nearestOreHits(bot: ScanBot, range = 24): Array<{ kind: string; hit: LoadedBlockHit }> {
   try {
     const kinds = new Map<string, LoadedBlockHit>();
-    // Enough hits that a coal seam does not hide the iron, and that what lies below the floor is not all there is.
+    // Enough hits that a coal seam does not hide the iron.
     for (const hit of scanLoadedBlocks(bot, ORES_WORTH_A_WAIT, { maxDistance: range, maxHits: 64 }).hits) {
-      if (hit.position.y < floor) continue;
       const kind = hit.name.replace(/^deepslate_/, '');
       if (!kinds.has(kind)) kinds.set(kind, hit);
     }

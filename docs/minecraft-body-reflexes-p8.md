@@ -2,13 +2,14 @@
 
 共通 FCA の体（`MINEBOT_COMMON_FCA=on`）に、旧 Minebot が持っていた反射と知識を戻す P8 の、スイッチ・既定・巻き戻しの一覧。設計は `Syzygy/notes/cloud-handoff-2026-10-19/design-p8-body-reflexes.md`。API 側の相手は `codex/shannon/reflex-aware-api`。**本番の env 変更と再起動は、そのつどオーナーに確認する。**
 
+> 2026-10-24: 体の LLM 中心の作り（旧 `MINEBOT_LLM_CENTRIC=on`）が唯一の作りになった。切り替えは無い。床は自分で防具を着けず（`armor` の反射は無い）、手が空いても拾い物に歩かず（`pickup` は無い）、食べるのは飢え（満腹度 3 以下）か瀕死（体力 6 以下）の時だけ。逃げ道が無い時は囲わずに最後の一手（殴る・1 段下りる・1 段上がる）をする。下の表のうち防具・拾い物・つまみ食いの記述は過去の記録。
+
 ## 何が入っているか
 
 | 部品 | 既定 | 中身 | 場所 |
 | --- | --- | --- | --- |
-| 床（retreat / eat / armor） | on | 火の付いたクリーパーと飛んでくる矢から下がる（350）、空腹・低体力で食べる（200）、空きスロットに防具と盾（150）。2026-10-16 から本番にある | `utils/floorReflexes.ts` |
+| 床（retreat / eat） | on | 火の付いたクリーパーと飛んでくる矢から下がる（350）、飢え・瀕死で食べる（200）。2026-10-16 から本番にある（防具の反射は 2026-10-24 に無くなった） | `utils/floorReflexes.ts` |
 | 低体力の逃走（flee） | **on** | 体力 6 以下で、到達できる敵（旧 `isThreatEntity` の判定。固定の名前表ではない）が 8m 内（弓を撃つ種類は 16m）にいれば走り始め、**全部の敵からの斥力の向き**へ、敵が 12m（弓は 20m）より遠くなるまで 1.2 秒ごとの区切りで走り続ける（最大 32 ブロック・6 秒、止まったら 2 秒休み、新しい逃走は 20 秒に 2 回まで）。崖・溶岩・火・クモの巣・壁（半ブロックの床・階段・ハーフブロックの段差は壁にしない）・深い水に向かう向きは取らず、安全な向きが無ければ始めず、台帳に「走れなかった」と残す。詳細は下の「逃走」 | `floorReflexes.ts` |
-| 手が空いている時の拾い物（pickup） | **on** | 4m 内で止まっている落とし物へ歩く（10 秒に 1 回、敵 16m 内・体力 10 未満・満杯では歩かない）。掘らない・置かない・泳がない専用の経路設定で歩き、命令が来たら即座に止まって経路設定を戻す | `utils/idlePickup.ts` |
 | 戦闘知識（combat） | **on** | 盾が撃ってくる種類を学ぶ（`shotAtBy` / `shootsAtBody`）、掘りの脅威半径（`hostileThreatRadius`）、観測の `margin.hitsLeft`、被弾した Mob を 5 分間敵として扱う（`noteAttackedBy`） | `utils/combatKnowledge.ts`、`utils/threatRadius.ts` |
 | 床の予算（budget） | on | クールダウン・60 秒あたりの割り当て・失敗の止め（下記） | `utils/floorBudget.ts` |
 | 反射台帳（ledger） | 常に on | 反射が何をしたかを 16 件残し、観測の `world.reflexes` と受信票の末尾に出す | `utils/reflexLedger.ts` |
@@ -29,9 +30,8 @@
 
 | `MINEBOT_FCA_REFLEX_OFF` の名前 | 外れるもの |
 | --- | --- |
-| `retreat` / `eat` / `armor` | 床のそれぞれ |
+| `retreat` / `eat` | 床のそれぞれ |
 | `flee` | 低体力の逃走 |
-| `pickup` | 拾い物 |
 | `combat` | 戦闘知識の部品すべて（盾の学習、掘りの脅威半径、`hitsLeft`、`noteAttackedBy`） |
 | `budget` | 床の予算（反射は無制限に戻る。失敗の再試行は 3 秒固定の旧挙動）。`floor` モードには初めから無い |
 | `ledger-tag` | 受信票の反射メモと `interrupted_by_reflex`（旧来の `interrupted` に戻る） |
@@ -41,7 +41,7 @@
 起動ログの 1 行で、いま何が動いているか分かる:
 
 ```
-🧱 床の反射: default（retreat,eat,armor,flee,pickup） 台帳=on タグ=on 戦闘知識=on 予算=on 拒否=[]
+🧱 床の反射: default（retreat,eat,flee） 台帳=on タグ=on 戦闘知識=on 予算=on 拒否=[]
 ```
 
 ### 部品ごとの巻き戻し
@@ -49,7 +49,6 @@
 | 戻したいもの | 設定 | 戻り方 |
 | --- | --- | --- |
 | 低体力の逃走だけ | `MINEBOT_FCA_REFLEX_OFF=flee` | API の fast judgment（flee-from・避難所）だけになる |
-| 拾い物だけ | `MINEBOT_FCA_REFLEX_OFF=pickup` | 命令の合間は立っているだけ |
 | 戦闘知識 | `MINEBOT_FCA_REFLEX_OFF=combat` | 盾は撃つ種類を学ばない、掘りの敵の半径は既定 16、`hitsLeft` は出ない、被弾した Mob を敵にしない |
 | 床の予算 | `MINEBOT_FCA_REFLEX_OFF=budget` | 反射が無制限に戻る |
 | 受信票の印 | `MINEBOT_FCA_REFLEX_OFF=ledger-tag` | API は `interrupted` を受け取る（`retry_same`） |
@@ -159,7 +158,7 @@ env を戻して `shannon.service` を再起動する。`MINEBOT_FCA_REFLEXES=of
 
 ### 反映後に見るもの（`journalctl -u shannon.service`、API 側の台帳）
 
-1. 体のログインの後、起動の 1 行: `🧱 床の反射: default（retreat,eat,armor,flee,pickup） 台帳=on タグ=on 戦闘知識=on 予算=on 拒否=[]`。`‼` 付きの行が出ていたら設定の打ち間違い。
+1. 体のログインの後、起動の 1 行: `🧱 床の反射: default（retreat,eat,flee） 台帳=on タグ=on 戦闘知識=on 予算=on 拒否=[]`。`‼` 付きの行が出ていたら設定の打ち間違い。
 2. `🏃 低体力（N）で敵が近い…`: flee が始まった印。始まった後に **溶岩の反射が出た、または 3 秒以内に体力が急に落ちた**ら、走った向きが悪かった可能性がある（要調査）。
 3. 台帳（観測の `world.reflexes`）の `flee ... failed`: 「安全な逃げ道が無く走れなかった」。flee が断った印で、体は動かず、API の判断に渡される（失敗ではなく仕様。多発するなら地形や敵の判定を見る）。
 4. `🚦`: 床の予算が反射を黙らせた。連続して出るなら予算の値を見直す（`MINEBOT_FCA_REFLEX_OFF=budget` で外せる）。

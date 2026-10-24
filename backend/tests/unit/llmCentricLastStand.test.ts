@@ -30,13 +30,13 @@ const COBBLE = { name: 'cobblestone', type: 1, count: 5 };
  * `floor` (r8): stone at and under that y everywhere, so a pillar with a drop of two round it (no rim: a drop of three or more is one,
  * utils/voidFooting), where the last stand's pillar is still made.
  */
-function fixture(options: { health?: number; llm?: boolean; items?: any[]; mobs?: Record<string, any>; blocks?: Record<string, Cell>; now?: () => number; floor?: number } = {}) {
+function fixture(options: { health?: number; items?: any[]; mobs?: Record<string, any>; blocks?: Record<string, Cell>; now?: () => number; floor?: number } = {}) {
   const blocks = new Map<string, Cell>(Object.entries(options.blocks ?? {}));
   const calls: Array<[string, unknown]> = [];
   const bot: any = Object.assign(new EventEmitter(), {
     __blocks: blocks, __dug: [] as string[],
     entity: { id: 1, name: 'player', position: new Vec3(0.5, 65, 0.5), yaw: 0, pitch: 0, onGround: true },
-    health: options.health ?? 3, food: 20, game: { dimension: 'overworld' }, llmCentric: options.llm ?? true,
+    health: options.health ?? 3, food: 20, game: { dimension: 'overworld' },
     entities: options.mobs ?? { 2: { id: 2, name: 'zombie', position: new Vec3(2.5, 65, 0.5), height: 1.95 } } as Record<string, any>,
     registry: { blocksByName: { cobblestone: { id: 1 } } }, heldItem: null,
     inventory: { items: () => options.items ?? [], slots: new Array(46).fill(null) }, controlState: {} as Record<string, boolean>,
@@ -189,14 +189,14 @@ describe('the LLM-centric last stand at low health with no way out', () => {
     release(); await lease;
   }, 20_000);
 
-  it('a flee that makes no headway twice in a row is a way out that is not there: the last stand is wanted (LLM-centric only)', () => {
-    for (const llm of [true, false]) {
-      const { bot } = fixture({ llm, health: 5 });
+  it('a flee that makes no headway twice in a row is a way out that is not there: the last stand is wanted ', () => {
+    {
+      const { bot } = fixture({ health: 5 });
       const state = bot.floorReflexes;
       state.fleeEpisode = { startedAt: Date.now(), origin: bot.entity.position.clone(), segments: 2, stalls: 2, outcome: 'done' };
       expect(fleeStart(bot, state, Date.now())).toBeNull();
       expect(state.fleeEpisode).toBeUndefined();
-      expect(!!state.lastStandWanted, `llm ${llm}`).toBe(llm);
+      expect(state.lastStandWanted).toBe(true);
     }
   });
 
@@ -228,7 +228,7 @@ describe('the LLM-centric last stand at low health with no way out', () => {
       expect(creeperStands(ledger)).toMatchObject([{ kind: 'retreat', detail: '点火したクリーパーから逃げ道なし: creeper #3 を打って離した (0,65,0) 体力20' }]);
     });
 
-    it('an act running stops as a reflex and says what the body did; the default mode only steps back, as before', async () => {
+    it('an act running stops as a reflex and says what the body did', async () => {
       const { bot } = fixture({ health: 20, mobs: creeper });
       const acting = runAct(bot, ACT_HANDS.parse([{ do: 'wait', seconds: 5 }, { do: 'jump' }]), undefined, undefined, { tickMs: 20 });
       await settle(60);
@@ -236,26 +236,7 @@ describe('the LLM-centric last stand at low health with no way out', () => {
       const json = JSON.parse((await acting).result);
       expect(json).toMatchObject({ ok: false, stoppedBy: 'reflex' });
       expect(json.stoppedWhy).toContain('点火したクリーパーから逃げ道なし: 足元を掘って下がった');
-      const old = fixture({ llm: false, health: 20, mobs: creeper });
-      tick(old.bot);
-      expect(old.bot.floorReflexes.retreat.engaged).toBe(true);
-      await settle(40);
-      expect(old.bot.__dug).toEqual([]);
-      expect(creeperStands(old.ledger)).toHaveLength(0);
     });
   });
 
-  it('the old mode is unchanged: no blow, no dig, no pillar, no ledger line of the stand (the shelter is its own, as before)', async () => {
-    const { bot, ledger } = fixture({ llm: false, items: [SWORD, COBBLE] });
-    for (let i = 0; i < 6; i++) { tick(bot); await settle(10); }
-    expect(bot.attack).not.toHaveBeenCalled();
-    expect(bot.equip).not.toHaveBeenCalled();
-    expect(bot.placeBlock).not.toHaveBeenCalled();
-    expect(bot.__dug).toEqual([]);
-    expect(bot.floorReflexes.busy).toBeNull();
-    expect(bot.floorReflexes.lastStandWanted).toBeFalsy();
-    expect(stands(ledger)).toHaveLength(0);
-    // Its refusal note is the one entry, as before.
-    expect(ledger.entriesSince(-1).map(entry => entry.detail)).toEqual(['低体力だが安全な逃げ道が無く走れなかった']);
-  });
 });

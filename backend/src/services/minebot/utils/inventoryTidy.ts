@@ -1,15 +1,9 @@
 /**
- * What to throw away when the pack fills. Run 17 ended with 33 of its 36 slots taken (six stacks of cobblestone, 73 dirt, 38 andesite
- * and the like) and nothing done about it; a full pack drops what is mined next. From TIDY_ABOVE slots used, the plain stone kinds and
- * clutter go first, keeping enough of the building blocks to wall in and to pillar up (KEEP), until TIDY_TO slots are used.
- */
-export const TIDY_ABOVE = 30;
-const TIDY_TO = 28;
-/**
- * How much of each kind is kept: building blocks for a shelter and a pillar, a little dirt. Absent kinds are kept whole. This is the
- * one table of what may be thrown away (run 20: a 99-level shaft and its tunnels filled the pack with tuff, andesite, diorite and
- * deepslate): a kind not listed is never thrown (tools, weapons, armour, food, buckets, beds, wool, logs, planks, coal, ores, ingots,
- * diamonds, obsidian, flint). Gravel keeps four, for the flint (mine-block's flintFromGravel).
+ * What may be thrown away, said when the pack is full (the body throws nothing away by itself, design mb-llm-centric: what goes is the
+ * planner's). Run 20: a 99-level shaft and its tunnels filled the pack with tuff, andesite, diorite and deepslate.
+ *
+ * How much of each kind is worth keeping: building blocks for a shelter and a pillar, a little dirt. A kind not listed is never counted as
+ * throwable (tools, weapons, armour, food, buckets, beds, wool, logs, planks, coal, ores, ingots, diamonds, obsidian, flint).
  */
 const KEEP: Record<string, number> = {
   cobblestone: 64, cobbled_deepslate: 32, dirt: 16, andesite: 0, diorite: 0, granite: 0, tuff: 0, gravel: 4, sand: 0, netherrack: 32,
@@ -21,93 +15,13 @@ const isSapling = (name: string) => name.endsWith('_sapling') || name.endsWith('
 
 interface Stack { name: string; count: number; stackSize?: number }
 
-/** Slots the pack's items fill (the 36 of the pack proper: the armour and the off hand are not in `items`). */
-export function slotsUsed(items: Stack[]): number { return items.length; }
-
-/**
- * What to drop, by kind and count, to bring the pack down to TIDY_TO slots: empty when it is at TIDY_ABOVE or fewer. Whole stacks over
- * what is kept, the junk first, then the largest surplus.
- */
-export function tidyPlan(items: Stack[]): Array<{ name: string; count: number }> {
-  let used = slotsUsed(items);
-  if (used <= TIDY_ABOVE) return [];
-  const totals = new Map<string, { count: number; stacks: number[] }>();
-  for (const item of items) {
-    const entry = totals.get(item.name) ?? { count: 0, stacks: [] };
-    entry.count += item.count; entry.stacks.push(item.count);
-    totals.set(item.name, entry);
-  }
-  const keepOf = (name: string) => isSapling(name) ? 0 : KEEP[name];
-  const surplus = [...totals.entries()]
-    .filter(([name]) => keepOf(name) !== undefined)
-    .map(([name, entry]) => ({ name, entry, keep: keepOf(name)! }))
-    .filter(({ entry, keep }) => entry.count > keep)
-    .sort((a, b) => a.keep - b.keep || (b.entry.count - b.keep) - (a.entry.count - a.keep));
-  const plan: Array<{ name: string; count: number }> = [];
-  for (const { name, entry, keep } of surplus) {
-    if (used <= TIDY_TO) break;
-    // Whole stacks, smallest first, while what stays is at least `keep`: a slot is freed only by a whole stack going.
-    const stacks = [...entry.stacks].sort((a, b) => a - b);
-    let left = entry.count, dropped = 0;
-    for (const size of stacks) {
-      if (used <= TIDY_TO || left - size < keep) break;
-      left -= size; dropped += size; used--;
-    }
-    if (dropped > 0) plan.push({ name, count: dropped });
-  }
-  return plan;
-}
-
-/** Rock a dig on the way brings in, spared when a pack is short of room even after tidyPlan (cobblestone kept to 32 for walls and steps). */
+/** Rock a dig on the way brings in (counted as throwable). */
 const SPARE_ROCK = ['cobbled_deepslate', 'tuff', 'diorite', 'andesite', 'granite', 'dirt', 'gravel', 'calcite', 'netherrack', 'deepslate', 'stone', 'cobblestone',
   'coarse_dirt', 'rooted_dirt', 'mud', 'basalt', 'smooth_basalt'];
-/** What stays of a spare kind: cobblestone for walls and steps, four gravel for a flint, netherrack for bridging. */
-const SPARE_KEPT: Record<string, number> = { cobblestone: 32, gravel: 4, netherrack: 32 };
-
-/**
- * The largest heap of spare rock to throw away for room, or null: for a pack with nothing tidyPlan names (every kind under its KEEP),
- * as the obsidian tool does (mb-body's roomForDrops). Never one of `keep` (what is being mined and what it drops).
- */
-export function spareRockToDrop(items: Stack[], keep: string[] = []): { name: string; count: number } | null {
-  const totals = new Map<string, number>();
-  for (const item of items) if (SPARE_ROCK.includes(item.name) && !keep.includes(item.name)) totals.set(item.name, (totals.get(item.name) ?? 0) + item.count);
-  const best = [...totals].map(([name, count]) => ({ name, count: count - (SPARE_KEPT[name] ?? 0) }))
-    .filter(entry => entry.count > 0).sort((a, b) => b.count - a.count)[0];
-  return best ?? null;
-}
-
-/**
- * The body's own limit on rock it digs on the way (run 21: the pack was 34/36 with 545 cobblestone a minute after the head's tidy had
- * thrown 423 of it; the head's procedure tidy keeps 128 and runs only inside procedures). Past CLUTTER_SOFT of one kind, with the pack
- * short of room (CLUTTER_FEW_SLOTS free or fewer), or past CLUTTER_HARD at any time, the body throws the kind down to CLUTTER_KEEP
- * (below the head's 128, so the two never fight over the same heap). Kinds the table keeps fewer of (andesite, tuff, dirt...) go down to
- * their own KEEP. Only kinds this module already throws; a kind not listed is never touched.
- */
-export const CLUTTER_SOFT = 160;
-export const CLUTTER_HARD = 192;
-export const CLUTTER_FEW_SLOTS = 6;
-const CLUTTER_KEEP: Record<string, number> = { cobblestone: 96, cobbled_deepslate: 96 };
-const CLUTTER_KINDS = ['cobblestone', 'cobbled_deepslate', 'tuff', 'andesite', 'diorite', 'granite', 'dirt', 'coarse_dirt', 'rooted_dirt', 'gravel',
-  'deepslate', 'netherrack', 'sand', 'mud', 'basalt', 'smooth_basalt', 'calcite'];
-
-/** What to throw to bring the rock heaps down: whole kinds over their limit, largest first. Empty when none is over. */
-export function clutterPlan(items: Stack[], freeSlots: number): Array<{ name: string; count: number }> {
-  const totals = new Map<string, number>();
-  for (const item of items) if (CLUTTER_KINDS.includes(item.name)) totals.set(item.name, (totals.get(item.name) ?? 0) + item.count);
-  const plan: Array<{ name: string; count: number }> = [];
-  for (const [name, total] of totals) {
-    const over = total > CLUTTER_HARD || (freeSlots <= CLUTTER_FEW_SLOTS && total > CLUTTER_SOFT);
-    if (!over) continue;
-    const keep = CLUTTER_KEEP[name] ?? KEEP[name] ?? 0;
-    if (total > keep) plan.push({ name, count: total - keep });
-  }
-  return plan.sort((a, b) => b.count - a.count);
-}
-
 /** Pickaxe tiers by worth (a spare of a lower tier is not made, nor kept, beside a good one of a higher). */
 const PICK_TIER: Record<string, number> = { wooden_pickaxe: 0, golden_pickaxe: 1, stone_pickaxe: 2, iron_pickaxe: 3, diamond_pickaxe: 4, netherite_pickaxe: 5 };
 /** Uses a higher-tier pickaxe must have left to count as one that makes a lower-tier spare unnecessary. */
-export const GOOD_PICKAXE_USES = 50;
+const GOOD_PICKAXE_USES = 50;
 interface Tool extends Stack { maxDurability?: number; durabilityUsed?: number }
 const usesOf = (item: Tool) => item.maxDurability && item.maxDurability > 0 ? Math.max(0, item.maxDurability - (item.durabilityUsed ?? 0)) : Infinity;
 

@@ -1,7 +1,6 @@
 import pathfinder from 'mineflayer-pathfinder';
 import { createLogger } from '../../../utils/logger.js';
 import { CustomBot, InstantSkill } from '../types.js';
-import { shouldRefuseAggressiveCombat } from '../utils/minebotToolPolicy.js';
 import { reflexPromptText } from '../utils/floorConfig.js';
 import { gotoSafe } from '../utils/gotoSafe.js';
 import { pickupGoal } from '../execution/collectDrops.js';
@@ -129,10 +128,6 @@ class AttackContinuously extends InstantSkill {
       const woolColor = String(color ?? '').trim().toLowerCase().replace(/_wool$/, '');
       if (woolColor && !(WOOL_COLORS as readonly string[]).includes(woolColor)) {
         return { success: false, failureType: 'invalid_input', recoverable: false, result: `羊の色 ${woolColor} はありません（使える色: ${WOOL_COLORS.join(', ')}）` };
-      }
-      const refuse = shouldRefuseAggressiveCombat(this.bot, entityName, this.holding);
-      if (refuse) {
-        return { success: false, result: refuse };
       }
       if (maxAttacks < 1 || maxAttacks > 200) {
         return { success: false, result: '攻撃回数は1～200の範囲で指定してください' };

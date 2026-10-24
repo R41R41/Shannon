@@ -60,53 +60,6 @@ function fixture(options: { make?: boolean; skeletonAt?: number } = {}) {
   return { bot, body, skill, state, ledger, slots, carried };
 }
 
-describe('run 21: the armour reflex and a craft', () => {
-  it('does not cut a craft for armour while the enemy is not close; the armour goes on when the craft ends', async () => {
-    const { bot, body, state, slots } = fixture({ skeletonAt: 12 });
-    installFloorReflexes(bot, floorConfig({}));
-    const pending = body.execute(command(), new AbortController().signal);
-    await settle();
-    expect(activeActionCapabilities(bot)).toEqual(['craft-one']);
-    tick(bot); await settle();
-    expect(bot.equip).not.toHaveBeenCalled();
-    expect(activeActionCapabilities(bot)).toEqual(['craft-one']);
-    state.finish();
-    const receipt = await pending;
-    expect(receipt).toMatchObject({ outcome: 'completed' });
-    expect(receipt).not.toHaveProperty('failureType');
-    await settle();
-    tick(bot); await settle();
-    expect(bot.equip).toHaveBeenCalledTimes(1);
-    expect(slots[6]?.name).toBe('iron_chestplate');
-    await body.dispose();
-  });
-
-  it('still cuts the craft for armour when an enemy is close', async () => {
-    const { bot, body } = fixture({ skeletonAt: 4 });
-    installFloorReflexes(bot, floorConfig({}));
-    const pending = body.execute(command(), new AbortController().signal);
-    await settle();
-    tick(bot);
-    const receipt = await pending;
-    expect(bot.equip).toHaveBeenCalledTimes(1);
-    // The piece had been made and is worn by the reflex: the command did what it was for.
-    expect(receipt).toMatchObject({ outcome: 'completed' });
-    await body.dispose();
-  });
-
-  it('floor mode (the production floor) is unchanged: the craft is cut with an enemy within 16', async () => {
-    const { bot, body } = fixture({ skeletonAt: 12, make: false });
-    installFloorReflexes(bot, floorConfig({ MINEBOT_FCA_REFLEXES: 'floor' }));
-    bot.inventory.add('iron_chestplate');
-    const pending = body.execute(command(), new AbortController().signal);
-    await settle();
-    tick(bot);
-    await pending;
-    expect(bot.equip).toHaveBeenCalledTimes(1);
-    await body.dispose();
-  });
-});
-
 describe('run 21: a craft cut off after the piece was made is a success', () => {
   it('craft-one cut by the armour reflex, the piece worn: completed, and says so', async () => {
     const { bot, body, slots } = fixture();

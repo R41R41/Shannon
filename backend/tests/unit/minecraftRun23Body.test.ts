@@ -19,7 +19,6 @@ vi.mock('../../src/services/minebot/utils/gotoSafe.js', () => ({ gotoSafe: vi.fn
 
 const { goals } = pathfinder;
 const { executeAction } = await import('../../src/services/minebot/execution/ActionExecution.js');
-const { clutterTidyHeld } = await import('../../src/services/minebot/utils/inventoryRoom.js');
 const { lavaToThrowInto } = await import('../../src/services/minebot/utils/dumpPit.js');
 const { repairTierToolMaterials } = await import('../../src/services/minebot/utils/registryRepairs.js');
 const { gotoSafe } = await import('../../src/services/minebot/utils/gotoSafe.js');
@@ -138,18 +137,6 @@ describe('nothing is tidied while obsidian is made, and a walk of use-item-on-bl
     instantSkills: { getSkill: () => undefined },
   }) as any;
 
-  it('holds the pack tidy for the whole call (the pickaxe digs through dig-block-at, whose tidy would throw the heap away after every obsidian)', async () => {
-    const bot = miningBot([{ name: 'water_bucket', count: 1 }, { name: 'diamond_pickaxe', count: 1 }]);
-    bot.heldItem = bot.inventory.items()[0];
-    const skill: any = new UseItemOnBlock(bot);
-    let heldInside = false;
-    skill.makeObsidian = vi.fn(async () => { heldInside = clutterTidyHeld(bot); return { success: true, result: 'made' }; });
-    const result = await skill.runImpl(10, 60, 10, 'water_bucket', 3);
-    expect(result).toMatchObject({ success: true, result: 'made' });
-    expect(heldInside).toBe(true);
-    expect(clutterTidyHeld(bot)).toBe(false);
-  });
-
   it('walks with the rock walk of move-to (rockTravel, a pillar for the climb), in proportion to the way, bounded by the time left', async () => {
     const bot = miningBot([{ name: 'diamond_pickaxe', count: 1 }]);
     const skill: any = new UseItemOnBlock(bot);
@@ -159,7 +146,6 @@ describe('nothing is tidied while obsidian is made, and a walk of use-item-on-bl
     expect(goal.rangeSq).toBe(9);
     expect(options.rockTravel).toBe(true);
     expect(typeof options.tunnelPillar).toBe('function');
-    expect(typeof options.tunnelTidy).toBe('function');
     expect(options.timeoutMs).toBeGreaterThan(60_000);            // 30 m at 2.5 s a metre, not the 15 s of the route search
     await skill.walk(new goals.GoalNear(30.5, 64, 0.5, 3), 15_000, 20_000);
     expect((vi.mocked(gotoSafe).mock.calls[1] as any[])[2].timeoutMs).toBe(20_000);

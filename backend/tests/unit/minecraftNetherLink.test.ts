@@ -46,7 +46,7 @@ describe('packets are inflated as they arrive (utils/syncInflate)', () => {
   });
 
   it('installed, all of them are out in order, unchanged, with no turn of the loop', async () => {
-    expect(installSyncInflate({ env: {} })).toBe('sync');
+    expect(installSyncInflate()).toBe('sync');
     const payloads = Array.from({ length: 50 }, (_, i) => chunkLike(i + 3));
     const before = inflateStats.compressed;
     const out = await outAfterOneTick(payloads.map(p => frame(p)));
@@ -56,7 +56,7 @@ describe('packets are inflated as they arrive (utils/syncInflate)', () => {
   });
 
   it('passes small packets on as they are, and drops one that does not inflate without stopping the rest', async () => {
-    installSyncInflate({ env: {} });
+    installSyncInflate();
     const small = Buffer.from('keep-alive-ish');
     const broken = Buffer.concat([frame(Buffer.alloc(300, 1)).subarray(0, 3), Buffer.from('not zlib at all')]);
     const after = chunkLike(9);
@@ -66,10 +66,9 @@ describe('packets are inflated as they arrive (utils/syncInflate)', () => {
     expect(out[1].equals(after)).toBe(true);
   });
 
-  it('is installed once, and MINEBOT_SYNC_INFLATE=off leaves the library as it is', () => {
-    expect(installSyncInflate({ env: { MINEBOT_SYNC_INFLATE: 'off' } })).toBe('off');
-    expect(installSyncInflate({ env: {} })).toBe('sync');
-    expect(installSyncInflate({ env: {} })).toBe('sync');
+  it('is installed once', () => {
+    expect(installSyncInflate()).toBe('sync');
+    expect(installSyncInflate()).toBe('sync');
   });
 });
 

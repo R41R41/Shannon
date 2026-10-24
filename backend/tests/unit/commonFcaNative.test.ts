@@ -65,10 +65,10 @@ describe('common FCA native body', () => {
     const vec = skill('move-to', [{ name: 'target', type: 'Vec3', required: true, description: 'coordinate' }]);
     const observed = skill('get-health');
     const catalog = bodySkillCatalog([query, unknown, planner, code, vec, { ...skill('forever'), maxDurationMs: 0 }, observed], {});
-    expect(catalog.definitions.map(d => [d.name, d.readOnly])).toEqual([['wait-time', true], ['new-physical-skill', false], ['move-to', false]]);
-    // What the observation already says is not offered, but still runs when asked for.
-    expect(catalog.runnable.map(d => d.name)).toContain('get-health');
-    const schema: any = catalog.definitions[2].inputSchema;
+    expect(catalog.runnable.map(d => [d.name, d.readOnly])).toEqual([['wait-time', true], ['new-physical-skill', false], ['move-to', false], ['get-health', true]]);
+    // None of these is offered to the planner (act, view and the readers are), but each still runs when asked for.
+    expect(catalog.definitions).toEqual([]);
+    const schema: any = catalog.runnable[2].inputSchema;
     expect(schema.additionalProperties).toBe(false); expect(schema.properties.target.additionalProperties).toBe(false);
     expect(catalog.resolve('move-to', { target: { x: 1, y: 2, z: 3 } }).args[0]).toBeInstanceOf(Vec3);
     expect(() => catalog.resolve('get-health', { arbitrary: 1 })).toThrow();
@@ -90,7 +90,7 @@ describe('common FCA native body', () => {
     expect(failed).toMatchObject({ outcome: 'failed', failureType: 'no_path', recoverable: true });
     const done = await body.execute(command({ id: 'skill:two' }), new AbortController().signal);
     expect(done).not.toHaveProperty('failureType');
-    expect(bodySkillCatalog([{ ...skill('build-around-self'), maxDurationMs: 300_000 }, { ...skill('huge'), maxDurationMs: 9e9 }], {}).definitions
+    expect(bodySkillCatalog([{ ...skill('build-around-self'), maxDurationMs: 300_000 }, { ...skill('huge'), maxDurationMs: 9e9 }], {}).runnable
       .map(d => d.maxDurationMs)).toEqual([300_000, 600_000]);
     expect(bot).toBeTruthy(); await body.dispose();
   });

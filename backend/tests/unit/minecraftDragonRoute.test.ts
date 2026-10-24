@@ -6,7 +6,7 @@ import UseItem from '../../src/services/minebot/instantSkills/useItem.js';
 import ActivateBlock from '../../src/services/minebot/instantSkills/activateBlock.js';
 import SleepInBed from '../../src/services/minebot/instantSkills/sleepInBed.js';
 import AutoAvoidDragonBreath from '../../src/services/minebot/constantSkills/autoAvoidDragonBreath.js';
-import { DRAGON_GOALS, HIDDEN_FOR_DRAGON, OFFERED_ELSEWHERE, bodySkillCatalog, isDragonGoal, offeredSchema } from '../../src/services/minebot/integration/commonFca/skillCatalog.js';
+import { DRAGON_GOALS, bodySkillCatalog, isDragonGoal, offeredSchema } from '../../src/services/minebot/integration/commonFca/skillCatalog.js';
 import { captureWorldObservation } from '../../src/services/minebot/cognition/worldFrame.js';
 import { isBedName } from '../../src/services/minebot/utils/bedRules.js';
 
@@ -195,16 +195,13 @@ describe('the catalog offered to the planner', () => {
   const skill = (name: string, params: any[] = []) => ({ skillName: name, description: 'test', isToolForLLM: true, maxDurationMs: 1000, params,
     run: vi.fn(async () => ({ success: true, result: 'ok' })) });
 
-  it('leaves out what the observation says and the toggles the body undoes, and the life tools only while the task is the dragon', () => {
+  it('offers only the planner tools, and still carries out any skill asked for', () => {
     const names = ['move-to', 'get-position', 'set-sneak', 'fish', 'brew-potion', 'harvest-crop'];
     const catalog = bodySkillCatalog(names.map(name => skill(name)), {});
-    expect(catalog.definitions.map(d => d.name)).toEqual(['move-to', 'fish', 'brew-potion', 'harvest-crop']);
-    // Brewing (fire resistance for a fortress) stays on the way to the dragon; fishing does not.
-    expect(catalog.dragonDefinitions.map(d => d.name)).toEqual(['move-to', 'brew-potion', 'harvest-crop']);
+    expect(catalog.definitions.map(d => d.name)).toEqual(['brew-potion']);
     expect(catalog.runnable.map(d => d.name)).toEqual(names);
     // Still carried out when asked for.
     expect(catalog.resolve('get-position', {}).skill.skillName).toBe('get-position');
-    expect([...OFFERED_ELSEWHERE].some(name => HIDDEN_FOR_DRAGON.has(name))).toBe(false);
   });
 
   it('knows the dragon by the same closed set of requests the API binds to the evidence', () => {
@@ -224,7 +221,7 @@ describe('the catalog offered to the planner', () => {
   it('shows an optional value by its own type: null and leaving it out are read alike', () => {
     const catalog = bodySkillCatalog([skill('use-item', [{ name: 'itemName', type: 'string', default: null, description: 'name' },
       { name: 'count', type: 'number', default: 2, description: 'how many' }, { name: 'target', type: 'string', required: true, description: 't' }])], {});
-    const schema: any = catalog.definitions[0].inputSchema;
+    const schema: any = catalog.runnable[0].inputSchema;
     expect(schema.properties.itemName).toEqual({ type: 'string', description: 'name' });
     expect(schema.properties.count).toMatchObject({ type: 'number', default: 2 });
     expect(schema.properties.target).toMatchObject({ type: 'string' });
@@ -234,14 +231,14 @@ describe('the catalog offered to the planner', () => {
   });
 });
 
-describe('the native body offers the catalog of the latest task', () => {
-  it('switches to the dragon catalog when a command carries the dragon request, and back for any other task', async () => {
+describe('the native body offers one catalog for every task', () => {
+  it('offers the same tools for the dragon and for any other task, and still runs a skill not offered', async () => {
     const { NativeCommonFcaBody } = await import('../../src/services/minebot/integration/commonFca/nativeBody.js');
     const skill = (name: string) => ({ skillName: name, description: 'test', isToolForLLM: true, maxDurationMs: 1000, params: [],
       run: vi.fn(async () => ({ success: true, result: 'ok' })) });
     const bot: any = Object.assign(new EventEmitter(), { entity: { id: 1, position: new Vec3(0, 65, 0), yaw: 0, pitch: 0, onGround: true },
       health: 20, food: 20, game: { dimension: 'overworld' }, entities: {}, inventory: { items: () => [] }, controlState: {},
-      instantSkills: { getSkills: () => [skill('wait-time'), skill('fish')] }, clearControlStates: vi.fn(), attack: vi.fn() });
+      instantSkills: { getSkills: () => [skill('wait-time'), skill('fish'), skill('brew-potion')] }, clearControlStates: vi.fn(), attack: vi.fn() });
     let clock = Date.now();
     const body = new NativeCommonFcaBody(bot, { serverId: 'home', now: () => clock, capture: async () => ({ dataUrl: 'data:image/jpeg;base64,YQ==', capturedAt: new Date().toISOString() }) });
     const run = (goal: string) => body.execute({ schemaVersion: 1, id: `c-${goal}`, serverId: 'home', connectionId: 'connection1', kind: 'skill',
@@ -249,15 +246,11 @@ describe('the native body offers the catalog of the latest task', () => {
       lease: { id: 'l', generation: 1, holder: 't' }, deadlineAt: new Date(Date.now() + 2000).toISOString(), skill: 'wait-time', arguments: {} } as any,
     new AbortController().signal);
     const ordinary = body.skills;
-    expect(ordinary.map(s => s.name)).toEqual(['wait-time', 'fish', 'goal-evidence']);
-    await run('エンドラを討伐して');
-    expect(body.skills.map(s => s.name)).toEqual(['wait-time', 'goal-evidence']);
-    const dragon = body.skills; await run('エンドラを討伐して'); expect(body.skills).toBe(dragon);
+    expect(ordinary.map(s => s.name)).toEqual(['brew-potion', 'goal-evidence']);
+    expect(await run('エンドラを討伐して')).toMatchObject({ outcome: 'completed' });
+    expect(body.skills).toBe(ordinary);
     await run('木を集めて');
     expect(body.skills).toBe(ordinary);
-    // No command for a minute and a half after the dragon: the next request, whatever it is, sees every tool.
-    await run('エンドラを討伐して'); clock += 60_000; expect(body.skills).toBe(dragon);
-    clock += 31_000; expect(body.skills).toBe(ordinary);
     await body.dispose();
   });
 });

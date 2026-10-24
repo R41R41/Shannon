@@ -73,27 +73,13 @@ describe('M1: a meal does not cut the API\'s own escape and shelter commands (de
     expect(await run('default', 'mine-block', 5, 17, 30)).toMatchObject({ cut: true, ate: true });
   });
   it('starving (food 3 or less): the meal cuts even an escape skill, the one documented exception', async () => {
-    for (const skill of ESCAPE_SKILLS) expect(await run('default', skill, 5, 3), skill).toMatchObject({ cut: true, ate: true });
+    for (const skill of ESCAPE_SKILLS) expect(await run('default', skill, 20, 3, 30), skill).toMatchObject({ cut: true, ate: true });
     expect(await run('default', 'flee-from', 20, 3, 30)).toMatchObject({ cut: true, ate: true });
     // Food 4: not yet.
     expect(await run('default', 'flee-from', 20, 4, 30)).toMatchObject({ cut: false, ate: false });
   });
   it('`floor` mode is the production floor: it still cuts flee-from at health 5 and food 10', async () => {
     expect(await run('floor', 'flee-from', 5, 10)).toMatchObject({ cut: true, ate: true });
-  });
-  it('an armour change does not cut an escape skill in default (floor keeps the production rule)', async () => {
-    const trial = async (mode: 'default' | 'floor', skill: string) => {
-      const { bot } = fixture(heights(() => 64), { health: 20, inventory: { items: () => [{ name: 'iron_helmet' }], slots: new Array(46).fill(null) } });
-      bot.entities[2].position = new Vec3(10, 65, 0.5);
-      installFloorReflexes(bot, floorConfig(mode === 'floor' ? { MINEBOT_FCA_REFLEXES: 'floor' } : {}));
-      const command = executeAction(bot, skill, 5000, () => new Promise(resolve => setTimeout(() => resolve({ success: true, result: 'ok' }), 150)), { priority: 0 });
-      await running(bot, skill); tick(bot);
-      const result: any = await command;
-      return { cut: result.success === false, equipped: await within(800, () => bot.equip.mock.calls.length > 0) };
-    };
-    expect(await trial('default', 'dig-shelter')).toEqual({ cut: false, equipped: false });
-    expect(await trial('default', 'attack-continuously')).toEqual({ cut: true, equipped: true });
-    expect(await trial('floor', 'dig-shelter')).toEqual({ cut: true, equipped: true });
   });
   it('an arrow step-aside does not cut an escape skill in default; a lit creeper\'s retreat still cuts one, except flee-from (run 17)', async () => {
     const arrow = async (mode: 'default' | 'floor') => {
@@ -169,36 +155,6 @@ describe('eating: a walled-off enemy does not stop a meal (L1), valuable food is
     const open = fixture(flat(), { health: 20, food: 3, inventory: { items: () => [bread], slots: new Array(46).fill(null) } }).bot;
     open.entities = { 2: { id: 2, name: 'zombie', position: new Vec3(3.5, 65, 0.5) } };
     expect(floorEatChoice(open)).toBeNull();
-  });
-  it('L2: a top-up leaves a golden apple, a golden carrot and honey alone while there is ordinary food; with only those it does not eat', () => {
-    expect(floorEatChoice(eater([{ name: 'golden_apple' }, { name: 'bread' }]))?.name).toBe('bread');
-    expect(floorEatChoice(eater([{ name: 'golden_carrot' }, { name: 'honey_bottle' }, { name: 'apple' }]))?.name).toBe('apple');
-    expect(floorEatChoice(eater([{ name: 'golden_apple' }]))).toBeNull();
-    expect(floorEatChoice(eater([{ name: 'golden_carrot' }, { name: 'honey_bottle' }]))).toBeNull();
-    // Critical (starving, or low health with hunger): anything goes, the best first.
-    expect(floorEatChoice(eater([{ name: 'golden_apple' }], { food: 5 }))?.name).toBe('golden_apple');
-    expect(floorEatChoice(eater([{ name: 'golden_apple' }], { health: 5, food: 12 }))?.name).toBe('golden_apple');
-    expect(floorEatChoice(eater([{ name: 'enchanted_golden_apple' }], { food: 2 }))).toBeNull();
-    // `floor` is the production choice: nothing is held back.
-    expect(floorEatChoice(eater([{ name: 'golden_apple' }], { food: 5 }), false)?.name).toBe('golden_apple');
-  });
-  it('L6: a top-up waits while the control loop holds the lease (a command, an owner, the model thinking); a critical meal does not; absent, nothing changes', () => {
-    const held = eater([bread], { food: 12, fcaLeaseHeld: () => true });
-    expect(floorEatChoice(held)).toBeNull();
-    held.food = 5; expect(floorEatChoice(held)?.name).toBe('bread');
-    held.food = 12; held.health = 5; expect(floorEatChoice(held)?.name).toBe('bread');   // food 12 at health 5: critical
-    const free = eater([bread], { food: 12, fcaLeaseHeld: () => false });
-    expect(floorEatChoice(free)?.name).toBe('bread');
-    expect(floorEatChoice(eater([bread], { food: 12 }))?.name).toBe('bread');
-    // floor mode never looks at the lease.
-    expect(floorEatChoice(eater([bread], { food: 5, health: 12, fcaLeaseHeld: () => true }), false)?.name).toBe('bread');
-  });
-  it('L6: through the reflex, a held lease means no top-up starts', async () => {
-    const bot = eater([bread], { food: 12, fcaLeaseHeld: () => true });
-    installFloorReflexes(bot, floorConfig({})); tick(bot); await settle(10);
-    expect(bot.consume).not.toHaveBeenCalled();
-    bot.fcaLeaseHeld = () => false; tick(bot); await settle(10);
-    expect(bot.consume).toHaveBeenCalledTimes(1);
   });
 });
 

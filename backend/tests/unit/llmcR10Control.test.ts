@@ -128,7 +128,7 @@ describe('B2: four probes asked at once (the head hands the body one command in 
 const flag = { priority: 250, safetyLease: true, waitForQuiescence: false, legacyExecutingSkill: true };
 function actBody() {
   const bot: any = Object.assign(new EventEmitter(), caveBot(), {
-    llmCentric: true, food: 20, oxygenLevel: 20, inventory: { items: () => [], slots: new Array(46).fill(null) }, controlState: {} as Record<string, boolean>,
+    food: 20, oxygenLevel: 20, inventory: { items: () => [], slots: new Array(46).fill(null) }, controlState: {} as Record<string, boolean>,
     executingSkill: false, interruptExecution: false, clearControlStates: vi.fn(), setControlState: vi.fn(), look: vi.fn(async () => undefined),
     stopDigging: () => undefined, pathfinder: { stop: () => undefined, setGoal: () => undefined },
   });

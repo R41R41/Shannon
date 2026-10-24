@@ -127,7 +127,7 @@ export interface NearbyEntityObservation {
   /** Hostiles within 16 m: whether nothing solid lies between its eyes and the body (a blow or a shot can come at once). */
   canSee?: boolean;
   /**
-   * LLM-centric mode, the head's frame only (not the reflex loops'), hostiles within 24 m (the nearest 8; absent beyond or with no world to read):
+   * A live body, the head's frame only (not the reflex loops'), hostiles within 24 m (the nearest 8; absent beyond or with no world to read):
    *  lineOfSight  true when a line from its eyes to the body's eye or chest has no solid block (what a shot or a glance needs); false = blocked.
    *  pathToMe     absent while lineOfSight is true (not searched). Else 'yes' a way a mob of its kind could take (ground mob: steps up 1, down 3 over solid floor, room for its height, a closed wooden door is open
    *               for zombie/husk/vindicator, a wall for others; spiders (climbers) are never 'no'; swimmers 'unknown' instead of 'no'; flyer: an open way through the air), 'no' none was found, 'unknown' the search ran out of budget, the frame's 24 ms was spent, or it met a block not loaded (never read as 'no').
@@ -140,18 +140,18 @@ export interface NearbyEntityObservation {
   dy?: number;
   shooter?: boolean;
   reach?: 'in_sight' | 'path_no_sight' | 'walled' | 'unknown';
-  /** LLM-centric mode, item entities: the kind and the stack's count (absent while the entity's data has not arrived). */
+  /** A live body, item entities: the kind and the stack's count (absent while the entity's data has not arrived). */
   itemName?: string;
   itemCount?: number;
-  /** LLM-centric mode, item entities: true when drop-item threw it itself (recorded for 290 s; only the kinds the tidy may throw). Absent = not known to be ours. */
+  /** A live body, item entities: true when drop-item threw it itself (recorded for 290 s; only the kinds the tidy may throw). Absent = not known to be ours. */
   droppedByMe?: true;
   /** Creepers only: true while its fuse is lit or swelling (entity metadata). */
   ignited?: boolean;
-  /** LLM-centric mode only: the entity's id (act names a creature by it). */
+  /** A live body only: the entity's id (act names a creature by it). */
   id?: number;
-  /** LLM-centric mode, the kinds of the way to the dragon (blaze, ghast, piglin, enderman, the dragon ...): health from its data. */
+  /** A live body, the kinds of the way to the dragon (blaze, ghast, piglin, enderman, the dragon ...): health from its data. */
   health?: number;
-  /** LLM-centric mode, an enderman: whether it is angry (after the body). */
+  /** A live body, an enderman: whether it is angry (after the body). */
   angry?: boolean;
 }
 
@@ -252,21 +252,21 @@ export interface WorldObservation {
   facts?: Record<string, ObservedFact<unknown>>;
   container?: { type: string; items: WorldInventoryStack[]; fuel: number | null; progress: number | null } | null;
   /**
-   * LLM-centric mode only (MINEBOT_LLM_CENTRIC=on, utils/localMap): the blocks round the body as text, north up. In rock five layers of
+   * A live body only (utils/localMap): the blocks round the body as text, north up. In rock five layers of
    * 15 x 15 (feet -2..+2); under the open sky the ground of 21 x 21 from above with heights, and the three layers round the feet (the
    * head's contract, minecraftActContract.ts).
    */
   localMap?: string;
-  /** LLM-centric mode only (utils/mapMarks): what lies near beyond the map, one line each (記号 名前 (x,y,z) 方角距離・上下 注記, at most 12). */
+  /** A live body only (utils/mapMarks): what lies near beyond the map, one line each (記号 名前 (x,y,z) 方角距離・上下 注記, at most 12). */
   mapLandmarks?: string[];
-  /** LLM-centric mode only: the steps that stopped lately, newest first ((x,y,z)→(x,y,z) 理由 ×回数 N秒前, at most 5). Counted, never acted on. */
+  /** A live body only: the steps that stopped lately, newest first ((x,y,z)→(x,y,z) 理由 ×回数 N秒前, at most 5). Counted, never acted on. */
   recentStops?: string[];
-  /** LLM-centric mode only: the structure the body is in or beside (ネザー要塞の中, 砦の遺跡（bastion）の脇, ストロングホールドの中, 村の中, エンドシティ). */
+  /** A live body only: the structure the body is in or beside (ネザー要塞の中, 砦の遺跡（bastion）の脇, ストロングホールドの中, 村の中, エンドシティ). */
   inside?: string;
-  /** LLM-centric mode only (utils/foodPoints): food carried in points (hunger + saturation), the body's store, and what it spent lately. */
+  /** A live body only (utils/foodPoints): food carried in points (hunger + saturation), the body's store, and what it spent lately. */
   foodPoints?: { carried: number; items: string; hunger: number | null; saturation: number | null; spentLast5Min?: number };
   /**
-   * LLM-centric mode only (r4 contract 1, utils/worldScan): what the loaded chunks held at the last spawn (a login, a reconnect, a portal, a
+   * A live body only (r4 contract 1, utils/worldScan): what the loaded chunks held at the last spawn (a login, a reconnect, a portal, a
    * respawn): one sentence and at most 20 rows (what, how many, the nearest, its compass way and distance, up or down). Only while the body
    * is in the dimension it was made in; nothing in it changes from one frame to the next.
    */

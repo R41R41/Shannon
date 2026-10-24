@@ -184,37 +184,6 @@ describe('place-block-at puts a workstation where it hides no other', () => {
     return { bot, placed };
   };
 
-  it('a furnace beside an existing table is not set between the body and it', async () => {
-    const world = makeWorld();
-    world.set(3, 64, 0, 'crafting_table');
-    const { bot, placed } = placedBot(world, 'furnace');
-    const result: any = await new PlaceBlockAt(bot).runImpl('furnace');
-    expect(result.success).toBe(true);
-    expect(result.result).toContain('自分で選びました');
-    expect(result.result).not.toContain('注意');
-    expect(placed).toHaveLength(1);
-    expect(placed[0].equals(new Vec3(2, 64, 0))).toBe(false);
-    expect(stationAccess(bot, new Vec3(3, 64, 0)).ready).toBe(true);
-    expect(stationAccess(bot, placed[0]).ready).toBe(true);
-  });
-
-  it('three in a row (table, furnace, furnace) are all usable from the one spot, without moving', async () => {
-    const world = makeWorld();
-    const placed: Vec3[] = [];
-    const bot: any = { version: '1.21.11', entity: { position: stand(), height: 1.8 }, entities: {},
-      inventory: { items: () => [{ name: 'crafting_table', count: 1, type: registry.itemsByName.crafting_table.id },
-        { name: 'furnace', count: 2, type: registry.itemsByName.furnace.id }] }, heldItem: null,
-      blockAt: world.blockAt,
-      equip: async () => {}, lookAt: async () => {}, look: async () => {}, setControlState: () => {}, clearControlStates: () => {},
-      placeBlock: async (ref: any, face: Vec3) => { const at = ref.position.plus(face); placed.push(at); world.set(at.x, at.y, at.z, world.nameAt(at.x, at.y, at.z) === 'air' ? (placed.length === 1 ? 'crafting_table' : 'furnace') : 'furnace'); },
-      world: { raycast: () => null }, pathfinder: { stop: () => {} }, _client: { on: () => {} } };
-    const skill: any = new PlaceBlockAt(bot);
-    for (const name of ['crafting_table', 'furnace', 'furnace']) expect((await skill.runImpl(name)).success).toBe(true);
-    expect(placed).toHaveLength(3);
-    for (const cell of placed) expect(stationAccess(bot, cell).ready).toBe(true);
-    expect(bot.entity.position.equals(stand())).toBe(true);
-  });
-
   it('a block put (by coordinates) in front of another is answered with a step to where both are in sight', async () => {
     const world = makeWorld();
     world.set(3, 64, 0, 'crafting_table');
@@ -228,53 +197,6 @@ describe('place-block-at puts a workstation where it hides no other', () => {
     expect(result.result).toContain('立ち位置を');
     expect(stationAccess(bot, new Vec3(3, 64, 0)).ready).toBe(true);
     expect(stationAccess(bot, new Vec3(2, 64, 0)).ready).toBe(true);
-  });
-
-  it('a block it chose that hides another, with no stand that sees both, is taken up and put elsewhere once', async () => {
-    // A corridor: the table at (3,64,0), the body at the west end; a furnace chosen at (2,64,0) would hide the table from everywhere.
-    const world = makeWorld(() => 'stone');
-    for (let x = 0; x <= 6; x++) for (const y of [64, 65]) world.set(x, y, 0, 'air');
-    world.set(3, 64, 0, 'crafting_table');
-    const { bot, placed } = placedBot(world, 'furnace');
-    const skill: any = new PlaceBlockAt(bot);
-    const choose = vi.spyOn(skill, 'chooseWorkstationSpot');
-    choose.mockResolvedValueOnce({ cell: new Vec3(2, 64, 0), note: '' });
-    const calls: string[] = [];
-    vi.spyOn(skill, 'callSkill').mockImplementation(async (name: string, x: number, y: number, z: number) => {
-      calls.push(`${name}:${x},${y},${z}`);
-      if (name === 'dig-block-at') world.set(x, y, z, 'air');
-      return { success: true, result: 'ok' };
-    });
-    const result: any = await skill.runImpl('furnace');
-    expect(result.success).toBe(true);
-    expect(calls[0]).toBe('dig-block-at:2,64,0');
-    expect(result.result).toContain('拾い直し');
-    // The answer's own position (the first "に設置しました") is the final placement, not the one taken up.
-    const stated = /\((-?\d+), (-?\d+), (-?\d+)\)に設置しました/.exec(result.result)!;
-    expect([+stated[1], +stated[2], +stated[3]]).toEqual(placed[placed.length - 1].toArray());
-    expect(placed.length).toBeGreaterThanOrEqual(2);
-    const last = placed[placed.length - 1];
-    expect(last.equals(new Vec3(2, 64, 0))).toBe(false);
-    expect(stationAccess(bot, new Vec3(3, 64, 0)).ready).toBe(true);
-    expect(stationAccess(bot, last).ready).toBe(true);
-  });
-
-  it('in a tunnel the block goes into a wall cell dug out beside the body', async () => {
-    const world = makeWorld(() => 'stone');
-    for (let x = 0; x <= 6; x++) for (const y of [64, 65]) world.set(x, y, 0, 'air');
-    const { bot, placed } = placedBot(world, 'crafting_table');
-    const skill: any = new PlaceBlockAt(bot);
-    const dig = vi.spyOn(skill, 'callSkill').mockImplementation(async (name: string, x: number, y: number, z: number) => {
-      if (name === 'dig-block-at') world.set(x, y, z, 'air');
-      return { success: true, result: 'ok' };
-    });
-    const result: any = await skill.runImpl('crafting_table');
-    expect(result.success).toBe(true);
-    expect(result.result).toContain('壁を1マス掘って');
-    expect(dig).toHaveBeenCalledWith('dig-block-at', expect.any(Number), expect.any(Number), expect.any(Number), false);
-    // Into the dug-out wall cell, not along the tunnel (x 1..6 at z 0 on the floor and head rows).
-    const tunnel = (cell: Vec3) => cell.z === 0 && cell.x >= 1 && cell.x <= 6 && (cell.y === 64 || cell.y === 65);
-    expect(tunnel(placed[0])).toBe(false);
   });
 });
 

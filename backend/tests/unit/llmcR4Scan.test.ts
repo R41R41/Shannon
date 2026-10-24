@@ -179,24 +179,19 @@ describe.skipIf(!L)('the scan of the loaded chunks', () => {
 describe.skipIf(!L)('the scan at a spawn, kept as world.scan', () => {
   const quick = { minWaitMs: 20, settleMs: 20, pollMs: 5 };
 
-  it('after a spawn, once the chunks have come, one scan kept with how she came; mode off, none', async () => {
+  it('after a spawn, once the chunks have come, one scan kept with how she came', async () => {
     const world = build(2);
-    const bot = body(world, { llmCentric: true, arrival: { kind: 'portal', at: Date.now() } });
+    const bot = body(world, { arrival: { kind: 'portal', at: Date.now() } });
     installSpawnScan(bot, quick);
     bot.emit('spawn');
     await vi.waitFor(() => expect(bot.worldScan).toBeDefined(), { timeout: 5000, interval: 10 });
     expect(bot.worldScan).toMatchObject({ trigger: 'portal', dimension: 'overworld', center: { x: 8, y: 64, z: 8 }, chunks: 25 });
     expect(bot.worldScan.rows.length).toBeGreaterThan(0);
     expect(typeof bot.worldScan.at).toBe('string');
-    const off = body(world, { llmCentric: false, arrival: { kind: 'login', at: Date.now() } });
-    installSpawnScan(off, quick);
-    off.emit('spawn');
-    await new Promise(resolve => setTimeout(resolve, 200));
-    expect(off.worldScan).toBeUndefined();
   });
 
   it('a newer spawn replaces the one before: only its scan is kept', async () => {
-    const bot = body(build(2), { llmCentric: true, arrival: { kind: 'login', at: Date.now() } });
+    const bot = body(build(2), { arrival: { kind: 'login', at: Date.now() } });
     const stop = installSpawnScan(bot, quick);
     bot.emit('spawn');
     bot.arrival = { kind: 'respawn', at: Date.now() };
@@ -206,22 +201,20 @@ describe.skipIf(!L)('the scan at a spawn, kept as world.scan', () => {
     stop();
   });
 
-  it('the observation carries it only in the mode, and only in the dimension it was made in; the probe scans on asking', async () => {
-    const bot = body(build(1), { llmCentric: true });
+  it('the observation carries it only in the dimension it was made in; the probe scans on asking', async () => {
+    const bot = body(build(1), {});
     bot.worldScan = { trigger: 'login', at: '2026-10-22T04:00:00.000Z', dimension: 'overworld', center: { x: 8, y: 64, z: 8 }, text: '読み込み済みの…', rows: ['水源 ×1'], chunks: 9, reach: 23, ms: 5 };
     expect(captureWorldObservation(bot).scan).toEqual(bot.worldScan);
     bot.game.dimension = 'the_nether';
     expect(captureWorldObservation(bot).scan).toBeUndefined();
     bot.game.dimension = 'overworld';
-    bot.llmCentric = false;
-    expect(captureWorldObservation(bot).scan).toBeUndefined();
     const json = JSON.parse((await runProbe(bot, { kind: 'scan', radius: 1 })).result);
     expect(json).toMatchObject({ v: 1, kind: 'scan', chunks: 9 });
     expect(Object.keys(json).slice(0, 3)).toEqual(['v', 'kind', 'text']);
   });
 
   it('the whole observation for a minute with a scan kept and a hand noted every 5 s: GCs and ms (printed as [gc] r4)', () => {
-    const bot = body(build(7), { llmCentric: true });
+    const bot = body(build(7), {});
     bot.worldScan = { trigger: 'login', at: '2026-10-22T04:00:00.000Z', dimension: 'overworld', center: { x: 8, y: 64, z: 8 }, text: 'x'.repeat(400),
       rows: new Array(20).fill('原木 oak ×425 最寄り (150,70,195) 北東 6m・上 2'), chunks: 225, reach: 112, ms: 400 };
     const realNow = Date.now;

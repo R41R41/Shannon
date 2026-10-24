@@ -15,7 +15,6 @@ vi.mock('../../src/services/minebot/execution/observedWait.js', async (original)
 
 const { executeAction } = await import('../../src/services/minebot/execution/ActionExecution.js');
 const { default: DropItem, parseDropList } = await import('../../src/services/minebot/instantSkills/dropItem.js');
-const { clutterToThrow, tidyIfCluttered, tidyPackNow, throwKinds, MAX_KINDS_PER_THROW } = await import('../../src/services/minebot/utils/inventoryRoom.js');
 const { repairTierToolMaterials } = await import('../../src/services/minebot/utils/registryRepairs.js');
 
 const require = createRequire(import.meta.url);
@@ -104,46 +103,5 @@ describe('drop-item throws several kinds from one place (run 24: five calls, 36 
     expect(bot.toss).toHaveBeenCalledTimes(1);
     expect(pack[0].count).toBe(70);
     void inAction;
-  });
-});
-
-describe('the body\'s own tidy asks for one throw of several kinds, and never throws a tool', () => {
-  const item = (name: string, count = 1) => ({ name, count, type: registry.itemsByName[name]?.id ?? 1, maxDurability: name.endsWith('_pickaxe') ? 250 : undefined, durabilityUsed: 0 });
-  const room = (items: any[]) => ({ inventory: { items: () => items, emptySlotCount: () => 36 - items.length } }) as any;
-  const filler = (n: number) => Array.from({ length: n }, (_, i) => ({ name: ['coal', 'bread', 'iron_ingot', 'sand_x', 'bone', 'string'][i % 6] + (i >= 6 ? i : ''), count: 1, type: 1 }));
-
-  it('one drop-item with the list for the kinds over their limits', async () => {
-    const pack = [...Array.from({ length: 9 }, () => stack('cobblestone', 64)), ...Array.from({ length: 4 }, () => stack('andesite', 64)), ...Array.from({ length: 4 }, () => stack('dirt', 64)), ...filler(10)];
-    const call = vi.fn(async () => ({ success: true }));
-    const note = await tidyIfCluttered(room(pack), call, { now: () => 1000 });
-    expect(call).toHaveBeenCalledTimes(1);
-    const args = call.mock.calls[0] as unknown as string[];
-    expect(args[0]).toBe('drop-item');
-    expect(args[1]).toMatch(/^cobblestone:480,andesite:256/);
-    expect(args).toHaveLength(2);
-    expect(note).toContain('cobblestone×480');
-    expect(note).toContain('andesite×256');
-  });
-
-  it('a single kind keeps the plain call', async () => {
-    const pack = [...Array.from({ length: 9 }, () => stack('cobblestone', 64)), ...filler(10)];
-    const call = vi.fn(async () => ({ success: true }));
-    await tidyIfCluttered(room(pack), call, { now: () => 1000 });
-    expect(call).toHaveBeenCalledWith('drop-item', 'cobblestone', 480);
-    expect(throwKinds(call as any, [{ name: 'dirt', count: 3 }])).toBeDefined();
-    expect(MAX_KINDS_PER_THROW).toBeGreaterThanOrEqual(3);
-  });
-
-  it('the plan of a nearly full pack is thrown in one call too (tidyPackNow)', async () => {
-    const pack = [stack('andesite', 64), stack('diorite', 64), stack('granite', 64), stack('tuff', 64), stack('dirt', 64), stack('gravel', 64), ...filler(26)];
-    const call = vi.fn(async () => ({ success: true }));
-    await tidyPackNow(room(pack), call, {});
-    expect(call.mock.calls.filter(args => (args as unknown as string[])[0] === 'drop-item')).toHaveLength(1);
-  });
-
-  it('a spare pickaxe, an iron one, a sword are never named', () => {
-    const pack = [item('iron_pickaxe'), item('stone_pickaxe'), item('stone_pickaxe'), item('stone_pickaxe'), item('iron_sword'), ...filler(5)];
-    expect(clutterToThrow(room(pack))).toEqual([]);
-    expect(clutterToThrow(room([...pack, ...Array.from({ length: 9 }, () => stack('cobblestone', 64))])).map(entry => entry.name)).toEqual(['cobblestone']);
   });
 });

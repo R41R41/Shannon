@@ -285,8 +285,6 @@ export interface WalkOptions {
   /** The goal's own end test, asked of the feet cell before each step. */
   isEnd: (feet: Vec3) => boolean;
   deadline: number;
-  /** Called every few steps: the stone the tunnel brings in is thrown away here. */
-  tidy?: () => Promise<void>;
   /** Straight up by `height` levels (the tower-up skill): the pillar of a plan that climbs more than its stair can. */
   pillar?: (height: number) => Promise<unknown>;
   /**
@@ -493,7 +491,6 @@ export async function walkCells(bot: CustomBot, cells: Vec3[], options: WalkOpti
     if (isStep(feet, landed)) trail.add(feet, landed);
     else if (drop === 1) { trail.add(feet, next); trail.add(next, landed); }
     steps++;
-    if (options.tidy && steps % 12 === 0) { try { await options.tidy(); } catch (error) { if (/interrupt/i.test(String((error as Error)?.message))) throw error; } }
     // A drop that took the body lower than the plan: the plan is of no use from here (a trail goes on from where the body landed).
     if (drop) {
       log.info(`⛏️ トンネル: 足場が${drop}ブロック下だったので降りました`);

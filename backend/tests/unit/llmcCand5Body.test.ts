@@ -19,7 +19,6 @@ const AIR: Cell = { name: 'air', boundingBox: 'empty' };
 /** Floor at y=63 (feet at 64); `shape` overrides. */
 function body(shape: (x: number, y: number, z: number) => Cell | null, entities: Record<string, any>, extra: Record<string, unknown> = {}) {
   return {
-    llmCentric: true,
     entity: { position: new Vec3(0.5, 64, 0.5), height: 1.8 }, health: 20, food: 20, game: { dimension: 'overworld' }, inventory: { items: () => [] },
     registry: { entitiesByName: { zombie: { type: 'hostile' }, skeleton: { type: 'hostile' }, blaze: { type: 'hostile' }, item: { type: 'other' } } },
     blockAt: (p: Vec3) => { const c = shape(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)); return c ? { ...c, position: p } : null; },

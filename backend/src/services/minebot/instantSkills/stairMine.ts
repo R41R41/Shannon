@@ -9,11 +9,7 @@ import { ThreatExposedError } from '../utils/exposureGuard.js';
 import { actionDelay } from '../execution/observedWait.js';
 import { chooseTool, usesLeft } from '../utils/toolChoice.js';
 import { spareToolNote } from '../utils/toolWear.js';
-import { blocksAlong, ensureToolUses, keepCheapTool, pickaxeUsesFor } from '../utils/toolStock.js';
-import { packNeedsTidy, tidyPackNow } from '../utils/inventoryRoom.js';
-import { emptySlotCountSafe } from '../utils/inventorySpillDetection.js';
-import { hostileNear } from './craftOne.js';
-import { nightGateFor } from '../utils/nightGate.js';
+import { blocksAlong, pickaxeUsesCheck, pickaxeUsesFor } from '../utils/toolStock.js';
 import { shaftStepRefusal } from '../utils/shaftDown.js';
 import { relativeTo } from '../utils/tunnelWalk.js';
 import pathfinder from 'mineflayer-pathfinder';
@@ -42,10 +38,8 @@ const WATER_SEALS = 48;
 const SEABED_RISE = 4;
 /** Uses of a pickaxe a level is counted to take (a shaft level digs one block, a stair level up to three; most of a descent is shaft). */
 const USES_PER_LEVEL = 1.3;
-/** The pickaxes' uses and the pack's room are looked at every this many levels. */
+/** The pickaxes' uses are looked at every this many levels. */
 const UPKEEP_EVERY = 8;
-/** On the way down the pack is tidied only when it is nearly full (this few free slots); at the end it is tidied from 30 slots taken. */
-const TIDY_ON_THE_WAY_FREE = 2;
 
 /**
  * 階段掘り/埋めスキル
@@ -97,14 +91,8 @@ class StairMine extends InstantSkill {
         ];
     }
 
-    /** The night gate (utils/nightGate): a stair below y 16 at night without the kit is refused before the body is asked for. */
-    protected preflight(targetY: number) {
-        return nightGateFor(this.bot, Number(targetY), `stair-mine（目標 y${Math.floor(Number(targetY))}）`);
-    }
-
     async runImpl(targetY: number, direction: string = '', placeBlock: string = 'cobblestone') {
         this.lastStopReason = null; this.landTrip = null; this.landNote = null; this.waterSeals = 0; this.upkeepNotes = [];
-        const actionStartedAt = Date.now();
         try {
             const currentY = Math.floor(this.bot.entity.position.y);
             const diff = targetY - currentY;
@@ -183,15 +171,10 @@ class StairMine extends InstantSkill {
             let startTime = Date.now();
             let lastUpkeepAt = -1;
 
-            // Every step is dug: a dear pickaxe is not spent on it when a cheaper one can be made (utils/toolStock). Not while still at
-            // sea: the table cannot be set down on the water (ladder probe, deep sea: nine tries, each refused).
+            // The pickaxes carried have to see the levels out: what is short is said at the end (no spare is made: that is the planner's).
             const here = this.bot.entity.position;
             const alongBlocks = blocksAlong(this.bot as any, here, { x: here.x + dir.x * steps, y: targetY, z: here.z + dir.z * steps });
-            if (!(isDescending && this.atSea([]))) {
-                await keepCheapTool(this.bot as any, alongBlocks, (skill, ...args) => this.callSkill(skill, ...args));
-                // The pickaxes carried have to see the levels out: a spare is made now, with the table, rather than a break in the shaft.
-                await this.checkPickaxeUses(alongBlocks, steps);
-            }
+            this.checkPickaxeUses(alongBlocks, steps);
 
             log.info(`⛏️ 階段${isDescending ? '下降' : '上昇'}開始: Y=${fromY} → Y=${targetY} (${steps}段, 最大${Math.round(TIMEOUT_MS / 1000)}秒)`, 'cyan');
 
@@ -199,7 +182,7 @@ class StairMine extends InstantSkill {
             // and steps aside for every level: lab, deepslate, diamond pickaxe, 1.27 s a level against 2.43. The stair is the way when the
             // pillar cannot be made (too few blocks, something overhead that will not be dug, water or lava above): it goes on from there.
             let pillared = 0;
-            if (!isDescending && steps >= 3 && process.env.MINEBOT_STAIR_UP_PILLAR !== 'off') {
+            if (!isDescending && steps >= 3) {
                 const before = Math.floor(this.bot.entity.position.y);
                 pillared = await this.pillarUp(targetY, startTime, TIMEOUT_MS);
                 successSteps += pillared;
@@ -240,14 +223,10 @@ class StairMine extends InstantSkill {
                     };
                 }
 
-                // Every few levels: the pickaxes against the levels left (a spare is made if they fall short), and a pack that is nearly
-                // full is tidied. The time spent is not taken from the stair's own bound, as with the swim to land.
+                // Every few levels: the pickaxes against the levels left.
                 if (i > 0 && i % UPKEEP_EVERY === 0 && lastUpkeepAt !== i) {
                     lastUpkeepAt = i;
-                    const upkeepStart = Date.now();
-                    await this.checkPickaxeUses(alongBlocks, steps - i);
-                    if (isDescending && emptySlotCountSafe(this.bot) <= TIDY_ON_THE_WAY_FREE) await this.tidyPack(actionStartedAt);
-                    startTime += Date.now() - upkeepStart;
+                    this.checkPickaxeUses(alongBlocks, steps - i);
                 }
 
                 const currentPos = this.bot.entity.position.floored();
@@ -367,8 +346,6 @@ class StairMine extends InstantSkill {
 
             }
 
-            // The stone the stair brought in goes before the next order is refused for a full pack (run 20: the obsidian mine-block).
-            if (isDescending && packNeedsTidy(this.bot as any)) await this.tidyPack(actionStartedAt);
             const finalY = Math.floor(this.bot.entity.position.y);
             return {
                 success: finalY === targetY,
@@ -390,27 +367,15 @@ class StairMine extends InstantSkill {
     }
 
     /**
-     * The pickaxes carried against the levels still to dig (USES_PER_LEVEL each): with fewer uses between them, a spare is made when the
-     * bag allows (utils/toolStock ensureToolUses), and what was or could not be done is said at the end of the result. The stone pickaxe
+     * The pickaxes carried against the levels still to dig (USES_PER_LEVEL each): with fewer uses between them, the shortfall is said at
+     * the end of the result (utils/toolStock pickaxeUsesCheck). The stone pickaxe
      * of run 20 broke on a dig of the same kind with 75 cobblestone in the pack.
      */
-    private async checkPickaxeUses(blocks: ReturnType<typeof blocksAlong>, levels: number): Promise<void> {
+    private checkPickaxeUses(blocks: ReturnType<typeof blocksAlong>, levels: number): void {
         const need = Math.ceil(Math.max(0, levels) * USES_PER_LEVEL);
         if (need <= 0 || pickaxeUsesFor(this.bot.inventory.items() as any, blocks) >= need) return;
-        try {
-            const check = await ensureToolUses(this.bot as any, blocks, need, (skill, ...args) => this.callSkill(skill, ...args));
-            if (check.note && !this.upkeepNotes.includes(check.note)) this.upkeepNotes.push(check.note);
-        } catch (error) { if (this.shouldInterrupt()) throw error; }
-    }
-
-    /** Throws away the stone and clutter the stair has brought in (utils/inventoryRoom tidyPackNow), and says what went. */
-    private async tidyPack(actionStartedAt: number): Promise<void> {
-        const note = await tidyPackNow(this.bot as any, (skill, ...args) => this.callSkill(skill, ...args), {
-            timeLeftMs: (this.maxDurationMs || 120_000) - (Date.now() - actionStartedAt),
-            interrupted: () => this.shouldInterrupt(),
-            blocked: () => hostileNear(this.bot as any, 16) || String((this.bot as any).minebotControlState ?? '').startsWith('emergency'),
-        });
-        if (note) this.upkeepNotes.push(note.trim());
+        const check = pickaxeUsesCheck(this.bot as any, blocks, need);
+        if (check.note && !this.upkeepNotes.includes(check.note)) this.upkeepNotes.push(check.note);
     }
 
     /**

@@ -4,7 +4,6 @@ import { createLogger } from '../../../utils/logger.js';
 import { actionDelay } from '../execution/observedWait.js';
 import { lavaToThrowInto, liquidNearPit, planDumpPit, type DumpPitPlan } from '../utils/dumpPit.js';
 import { isThrowable } from '../utils/inventoryTidy.js';
-import { holdClutterTidy } from '../utils/inventoryRoom.js';
 import { nativeActionHost } from '../execution/ActionExecution.js';
 import { realTurn } from '../utils/realTurn.js';
 import { newItemEntities, noteSelfDropped, type DroppedLike } from '../utils/selfDropped.js';
@@ -428,8 +427,6 @@ class DropItem extends InstantSkill {
         result: `${itemName}は捨てませんでした（別の捨てる作業の途中です）` };
     }
     dropsUnderWay.set(native, (dropsUnderWay.get(native) ?? 0) + 1);
-    // The pit this digs goes through dig-block-at, whose cheap tidy check must not start a second throw inside this one.
-    const release = holdClutterTidy(this.bot);
     try {
       await realTurn();
       // Several kinds in one call ("dirt:35,granite:27"): the first is thrown as the ordinary call would, the others from the same place at
@@ -619,7 +616,6 @@ class DropItem extends InstantSkill {
         result: `ドロップエラー: ${error.message}`,
       };
     } finally {
-      release();
       dropsUnderWay.set(native, Math.max(0, (dropsUnderWay.get(native) ?? 1) - 1));
     }
   }

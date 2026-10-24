@@ -5,7 +5,7 @@ import minecraftData from 'minecraft-data';
 
 vi.mock('../../src/services/minebot/utils/gotoSafe.js', () => ({ gotoSafe: vi.fn(async () => ({ success: true })) }));
 
-const { bedWool, cookRawNotice, descentFloor, descentKit, descentKitNotice, nightGateFor, isPreparedFood, woolStatusLine } = await import('../../src/services/minebot/utils/nightGate.js');
+const { bedWool, cookRawNotice, descentKit, descentKitNotice, isPreparedFood, woolStatusLine } = await import('../../src/services/minebot/utils/nightGate.js');
 const { bedFromWool } = await import('../../src/services/minebot/instantSkills/craftOne.js');
 const { default: MoveTo } = await import('../../src/services/minebot/instantSkills/moveTo.js');
 const { default: StairMine } = await import('../../src/services/minebot/instantSkills/stairMine.js');
@@ -14,7 +14,6 @@ const { default: MineBlock } = await import('../../src/services/minebot/instantS
 const { default: WaitTime } = await import('../../src/services/minebot/instantSkills/waitTime.js');
 const { default: AttackContinuously, sheepWool } = await import('../../src/services/minebot/instantSkills/attackContinuously.js');
 const { default: WithdrawFromFurnace } = await import('../../src/services/minebot/instantSkills/withdrawFromFurnace.js');
-const { shelterChoice } = await import('../../src/services/minebot/utils/floorReflexes.js');
 const { tunnelDigMs } = await import('../../src/services/minebot/utils/routeEstimate.js');
 
 const registry = minecraftData('1.21.11');
@@ -45,86 +44,6 @@ describe('the night gate: no going below y 16 at dusk or night without armour, c
     expect(descentKit(remembered).missing).not.toContain('bed');
     expect(isPreparedFood('cooked_chicken')).toBe(true);
     expect(isPreparedFood('chicken')).toBe(false);
-  });
-
-  it('is closed only at night or within five minutes of dark (run 17 went down 260 s before it), in the overworld, while something is missing', () => {
-    expect(descentFloor(gateBody(70, NOON))).toBeNull();             // 350 s to dark
-    expect(descentFloor(gateBody(70, 6_900))).toBeNull();            // 305 s
-    expect(descentFloor(gateBody(70, 7_100))?.floor).toBe(16);       // 295 s
-    expect(descentFloor(gateBody(70, DUSK))?.floor).toBe(16);
-    expect(descentFloor(gateBody(70, NIGHT))?.floor).toBe(16);
-    expect(descentFloor(gateBody(70, 23_500))).toBeNull();           // dawn
-    const nether = gateBody(70, NIGHT); nether.game.dimension = 'the_nether';
-    expect(descentFloor(nether)).toBeNull();
-    const kitted = gateBody(70, NIGHT, [{ name: 'iron_chestplate' }, { name: 'cooked_beef', count: 4 }, { name: 'red_bed' }]);
-    expect(descentFloor(kitted)).toBeNull();
-  });
-
-  it('refuses a goal below y 16 from the surface, and only going deeper from underground (the way up is never shut)', () => {
-    const surface = gateBody(70, NIGHT);
-    expect(nightGateFor(surface, 20, 'move-to')).toBeNull();
-    const refused = nightGateFor(surface, 11, 'move-to（目標 y11）')!;
-    expect(refused).toMatchObject({ success: false, failureType: 'night_unprepared', recoverable: true });
-    // The form agreed with the API: the first sentence, and the missing parts as words at the very end.
-    expect(refused.result).toMatch(/^夜の深い所は備えがそろうまで断る（夜の門）。夜（明けるまで約\d+秒）/);
-    expect(refused.result).toContain('備え: 防具（胸当てか、鉄以上の部位2つ）、焼いた食料（2個以上。いま0個）、ベッドが無い');
-    expect(refused.result).toContain('次の手:');
-    expect(refused.result).toMatch(/足りない: armor, cooked_food, bed$/);
-    // Armour on: the gate is open, though the food and the bed are still missing (run 19's stair at 1,790 s; the owner, 2026-10-20).
-    expect(nightGateFor(gateBody(70, NIGHT, [{ name: 'red_bed' }, { name: 'iron_chestplate' }]), 10, 'x')).toBeNull();
-    expect(nightGateFor(gateBody(70, NIGHT, [{ name: 'red_bed' }, { name: 'cooked_beef', count: 4 }]), 10, 'x')!.result).toMatch(/足りない: armor$/);
-    const cave = gateBody(-7, NIGHT);
-    expect(nightGateFor(cave, -8, 'stair-mine')).toBeNull();          // a step down
-    expect(nightGateFor(cave, 30, 'move-to')).toBeNull();             // up
-    expect(nightGateFor(cave, -7, 'move-to')).toBeNull();             // along
-    expect(nightGateFor(cave, -20, 'move-to')?.result).toContain('今の高さで横へ掘るか、上へ戻る');
-    // Two blocks at a time do not add up: the floor is two under where the gate first closed on the body this night.
-    cave.entity.position = new Vec3(0.5, -9, 0.5);
-    expect(nightGateFor(cave, -11, 'stair-mine')).not.toBeNull();
-    expect(nightGateFor(cave, -9, 'move-to')).toBeNull();               // along, where it stands now
-    // Fallen lower than that: along and up from there, never further down.
-    cave.entity.position = new Vec3(0.5, -30, 0.5);
-    expect(nightGateFor(cave, -30, 'move-to')).toBeNull();
-    expect(nightGateFor(cave, -32, 'move-to')).not.toBeNull();
-    // The next night starts again from where the body stands.
-    cave.time = { timeOfDay: NIGHT, day: 1 };
-    expect(nightGateFor(cave, -32, 'move-to')).toBeNull();
-  });
-
-  it('is applied before the body is asked for by move-to (goal heights only), stair-mine and dig-block-at', () => {
-    const body = gateBody(70, DUSK);
-    const move: any = new MoveTo(body);
-    expect(move.preflight(10, 11, 10, 2, 'near')).toMatchObject({ failureType: 'night_unprepared' });
-    expect(move.preflight(10, 11, 10, 2, 'nearxz')).toBeNull();     // no goal height: not a descent
-    expect(move.preflight(10, 11, 10, 2, 'NEAR')).toMatchObject({ failureType: 'night_unprepared' });   // an unknown name is GoalNear
-    expect(move.preflight(10, 64, 10, 2, 'block')).toBeNull();
-    const stair: any = new StairMine(body);
-    expect(stair.preflight(12)).toMatchObject({ failureType: 'night_unprepared' });
-    expect(stair.preflight(40)).toBeNull();
-    const low = gateBody(18, NIGHT);
-    const dig: any = new DigBlockAt(low);
-    expect(dig.preflight(0, 14, 0)).toMatchObject({ failureType: 'night_unprepared' });
-    expect(dig.preflight(0, 19, 0)).toBeNull();                       // above the feet: never a descent
-  });
-
-  it('mine-block leaves the targets below the floor and says so; refuses when they are all down there', async () => {
-    const deep = new Vec3(4, 11, 0), shallow = new Vec3(6, 40, 0);
-    const pick = { name: 'iron_pickaxe', type: registry.itemsByName.iron_pickaxe.id, count: 1, maxDurability: 250, durabilityUsed: 0 };
-    const body = (ores: Vec3[]) => Object.assign(new EventEmitter(), gateBody(70, NIGHT, [pick]), {
-      entities: {}, interruptExecution: false, findBlocks: () => ores,
-      blockAt: (pos: Vec3) => ores.some(ore => ore.equals(pos.floored())) ? { name: 'diamond_ore', position: pos, diggable: true } : { name: 'air' },
-    });
-    const bot: any = body([deep, shallow]);
-    const move = { run: vi.fn().mockResolvedValue({ success: false, failureType: 'path_not_found', recoverable: true, result: 'fixture' }) };
-    bot.instantSkills = { getSkill: (name: string) => name === 'move-to' ? move : name === 'stair-mine' ? null : { run: vi.fn() } };
-    await new MineBlock(bot).runImpl('diamond_ore', 1, 32);
-    expect(move.run.mock.calls.length).toBeGreaterThan(0);
-    expect(move.run.mock.calls.every(call => call[0] === 6 && call[1] === 40)).toBe(true);   // never the one at y 11
-    const only: any = body([deep]);
-    only.instantSkills = bot.instantSkills;
-    const refused: any = await new MineBlock(only).runImpl('diamond_ore', 1, 32);
-    expect(refused).toMatchObject({ success: false, failureType: 'night_unprepared' });
-    expect(refused.result).toContain('どれも y16 より下');
   });
 
   it('the observation says the kit from five minutes before dark, and the wool towards a bed', () => {
@@ -341,19 +260,6 @@ describe('the owner\'s second round (2026-10-20): wool to a bed, raw meat to a f
     const lone = new Chunk({ minY: -64, worldHeight: 384 });
     lone.setBlockStateId(new Vec3(3, 70, 4), registry.blocksByName.white_bed.defaultState);
     expect(detectVillage(world(lone))).toBeNull();
-  });
-});
-
-describe('the flee with no way out falls back on a shelter where the body stands', () => {
-  it('chooses the one-cell shelter with 10 blocks and 4 slabs and no enemy at arm\'s length, else a pillar with 3 blocks, else nothing', () => {
-    const body = (count: number, slabs = 0) => ({ inventory: { items: () => [{ name: 'cobblestone', count }, ...(slabs ? [{ name: 'cobblestone_slab', count: slabs }] : [])] },
-      instantSkills: { getSkill: () => ({}) } }) as any;
-    expect(shelterChoice(body(20, 4), 4)).toEqual({ skill: 'build-around-self', args: ['slit_shelter'] });
-    expect(shelterChoice(body(20, 4), 1.3)).toEqual({ skill: 'tower-up', args: [3] });   // the zombie's cell cannot take a block
-    expect(shelterChoice(body(20), 4)).toEqual({ skill: 'build-around-self', args: ['slit_shelter'] });   // no slabs: whole blocks shut the slit
-    expect(shelterChoice(body(12), 4)).toEqual({ skill: 'tower-up', args: [3] });        // no slabs, too few for that
-    expect(shelterChoice(body(5))).toEqual({ skill: 'tower-up', args: [3] });
-    expect(shelterChoice(body(2))).toBeNull();
   });
 });
 

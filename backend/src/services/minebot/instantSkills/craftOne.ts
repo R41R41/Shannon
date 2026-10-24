@@ -1,4 +1,3 @@
-import { isLlmCentric } from '../utils/llmCentric.js';
 import minecraftData from 'minecraft-data';
 import { Vec3 } from 'vec3';
 import { CustomBot, InstantSkill } from '../types.js';
@@ -19,11 +18,7 @@ import { placeableSpots } from './findPlaceableSpot.js';
 import { PLAUSIBLE_REACH, explainOpenFailure, findStances, planWorkstationSpot, stationAccess } from '../utils/workstationAccess.js';
 import { woolByColor } from '../utils/nightGate.js';
 import type { SkillResult } from '../types/skillParams.js';
-import { nightClock } from '../utils/nightGate.js';
-import { isSealedIn } from '../utils/shelter.js';
 
-/** A table further than this (eyes to block) is replaced by one set down here, if the pack has or makes one. */
-const OWN_TABLE_BEYOND = 6;
 /** How long the drop of a table just dug is waited for before it is looked for by name. */
 const TABLE_PICKUP_WAIT_MS = 1_500;
 /** A table or bed set down is not taken back up with a hostile this near: it is left and said. */
@@ -365,73 +360,19 @@ class CraftOne extends InstantSkill {
           : this.bot.findBlock({ matching, maxDistance: tableRadius });
       }
 
-      // A table out of reach is not walked to when one can be set down here: further than a few blocks, or at night, or from inside
-      // a shelter. Run 17 walked 17 s up to a table on the surface at night, stayed there 76 s and was shot dead by a skeleton (D6).
-      // The LLM-centric body neither sets a table down nor walks to one by itself: where to craft is the planner's (MINEBOT_LLM_CENTRIC).
-      if (requiresCraftingTable && isLlmCentric(this.bot) && (!craftingTable || !this.tableAccess(craftingTable).inReach)) {
+      // The body neither sets a table down nor walks to one by itself when none is in reach: where to craft is the planner's
+      // (design mb-llm-centric). Run 17 walked 17 s up to a table on the surface at night and was shot dead there by a skeleton (D6).
+      if (requiresCraftingTable && (!craftingTable || !this.tableAccess(craftingTable).inReach)) {
         const p = craftingTable?.position;
         return { success: false, failureType: 'table_out_of_reach', recoverable: true,
           result: `${itemName}には作業台が要りますが、手の届く所にありません${p ? `（いちばん近い作業台 (${p.x}, ${p.y}, ${p.z})）` : ''}。作業台を置くか、近づいてから作る` };
       }
-      if (requiresCraftingTable && craftingTable && !this.tableAccess(craftingTable).inReach) {
-        const why = this.preferOwnTable(craftingTable);
-        // Far by day: only a table carried is set down (making one would spend planks the recipe may need). Night or a shelter: one
-        // is made if need be, and if none can be set down here the far one is not walked to either (out of the shaft, into the dark).
-        const own = why === 'safety' || (why === 'far' && this.bot.inventory.items().some(i => i.name === 'crafting_table')) ? await this.ownTable() : null;
-        if (own) craftingTable = own;
-        else if (why === 'safety') {
-          const p = craftingTable.position;
-          return { success: false, failureType: 'table_out_of_reach', recoverable: true,
-            result: `${itemName}には作業台が要りますが、夜か縦穴の中なので、離れた作業台(${p.x}, ${p.y}, ${p.z})へは歩きません。ここに置ける場所もありません`
-              + `（${this.bot.inventory.items().some(i => i.name === 'crafting_table') ? '作業台は持っています' : '作業台も、作る板材もありません'}）。`
-              + '壁を1マス掘って空きを作ってから craft-one を呼び直すか、place-block-at crafting_table で置いてください' };
-        }
-      }
-
-      if (requiresCraftingTable && !craftingTable) {
-        // インベントリにcrafting_tableがあれば自動設置を試みる（無ければ、材料から作って置く）
-        if (!this.bot.inventory.items().some(i => i.name === 'crafting_table')) await this.makeTable();
-        const tableInInventory = this.bot.inventory.items().find(i => i.name === 'crafting_table');
-        if (tableInInventory) {
-          craftingTable = await this.tryPlaceCraftingTable();
-          if (!craftingTable) {
-            return {
-              success: false,
-              result: `${itemName}のクラフトにはクラフトテーブルが必要です。crafting_tableをインベントリに持っていますが、設置に失敗しました。place-block-atで手動設置してください`,
-              failureType: 'crafting_table_placement_failed',
-              recoverable: true,
-            };
-          }
-          log.info(`🔧 crafting_tableを自動設置しました`);
-        } else {
-          return {
-            success: false,
-            result: `${itemName}のクラフトにはクラフトテーブルが必要です。crafting_tableをクラフトして設置してください`,
-            failureType: 'crafting_table_missing',
-            recoverable: true,
-          };
-        }
-      }
-
       // A table several blocks above/below may be within use reach, but an
       // intervening furnace or wall can still prevent the crafting window from
       // opening. Check both reach and line of sight *before* bot.craft: that
       // method waits for windowOpen when the server rejects activation.
       if (craftingTable) {
         let access = this.tableAccess(craftingTable);
-        let movementFailure = '';
-
-        if (!access.inReach) {
-          const moveTo = this.bot.instantSkills?.getSkill('move-to');
-          if (moveTo) {
-            const moved = await moveTo.run(
-              craftingTable.position.x, craftingTable.position.y, craftingTable.position.z, 2, 'near',
-            );
-            if (!moved.success) movementFailure = moved.result;
-          }
-          access = this.tableAccess(craftingTable);
-        }
-
         if (!access.ready && !this.shouldInterrupt()) {
           // A protected utility block must never be dug for a view. A nearby
           // safe ascent column can give a view above it without touching it.
@@ -469,7 +410,6 @@ class CraftOne extends InstantSkill {
             return {
               success: false,
               result: `crafting_table(${pos.x},${pos.y},${pos.z})を現在位置から安全に操作できません${obstruction}` +
-                (movementFailure ? `。移動結果: ${movementFailure}` : '') +
                 (carriedTable ? '。所持する作業台の近くへの設置も失敗しました' :
                   '。安全な別の立ち位置・上方への経路を作るか、材料があれば近くに別の作業台を製作・設置してください'),
               failureType: access.inReach ? 'line_of_sight_blocked' : 'distance_too_far',
@@ -870,18 +810,6 @@ class CraftOne extends InstantSkill {
     if (this.shouldInterrupt()) return false;
     await tower.run(rise);
     return this.tableAccess(table).ready;
-  }
-
-  /**
-   * Why a table out of reach should be replaced by one set down here, or null: `safety` at night or from inside a shelter (walking to
-   * it goes out into the dark or through the shaft's wall), `far` further than OWN_TABLE_BEYOND by day.
-   */
-  private preferOwnTable(table: { position: Vec3 }): 'safety' | 'far' | null {
-    const clock = nightClock(this.bot as any);
-    if (clock && clock.darkInSeconds === 0) return 'safety';
-    try { if (isSealedIn(this.bot as any)) return 'safety'; } catch { /* not known: by distance */ }
-    const distance = table.position.offset(0.5, 0.5, 0.5).distanceTo(this.bot.entity.position);
-    return distance > OWN_TABLE_BEYOND ? 'far' : null;
   }
 
   /** Whether a table can be made from what is carried: four planks, or a log to make them from. */

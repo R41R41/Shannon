@@ -36,7 +36,7 @@ function scene() {
   const bot: any = Object.assign(new EventEmitter(), {
     __blocks: blocks, __dug: [] as string[],
     entity: { id: 1, name: 'player', position: new Vec3(0.5, 65, 0.5), yaw: 0, pitch: 0, onGround: true },
-    health: 7.5, food: 17, oxygenLevel: 20, game: { dimension: 'the_nether' }, llmCentric: true,
+    health: 7.5, food: 17, oxygenLevel: 20, game: { dimension: 'the_nether' },
     entities: { 848: piglin } as Record<string, any>,
     registry: { blocksByName: { cobblestone: { id: 1 } }, entitiesByName: { piglin: { type: 'hostile' } } }, heldItem: null,
     inventory: { items: () => [], slots: new Array(46).fill(null) }, controlState: {} as Record<string, boolean>,

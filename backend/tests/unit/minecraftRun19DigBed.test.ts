@@ -12,7 +12,7 @@ vi.mock('../../src/services/minebot/execution/collectDrops.js', async (original)
   ...(await original() as object),
   collectDrops: vi.fn(async (bot: any) => { if (world.pickedBy === 'collect') { bot.items.push({ name: 'white_bed', count: 1 }); return ['white_bedx1']; } return []; }),
 }));
-vi.mock('../../src/services/minebot/utils/toolStock.js', async (original) => ({ ...(await original() as object), keepCheapTool: vi.fn(async () => {}) }));
+vi.mock('../../src/services/minebot/utils/toolStock.js', async (original) => ({ ...(await original() as object) }));
 
 const { default: DigBlockAt } = await import('../../src/services/minebot/instantSkills/digBlockAt.js');
 const registry = minecraftData('1.21.11');

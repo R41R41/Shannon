@@ -1,14 +1,13 @@
-import { isLlmCentric } from './llmCentric.js';
 import { Vec3 } from 'vec3';
 import { createLogger } from '../../../utils/logger.js';
-import { actionLeaseStatus, activeActionCapabilities, createMotorPort, executeAction, hasActiveSafetyLease, physicalActionBusy, physicalActionCapabilities, preemptLowerPriorityActions, safetyLeaseCapabilities } from '../execution/ActionExecution.js';
+import { actionLeaseStatus, activeActionCapabilities, createMotorPort, executeAction, hasActiveSafetyLease, physicalActionBusy, preemptLowerPriorityActions, safetyLeaseCapabilities } from '../execution/ActionExecution.js';
 import { isHeadCombatActive } from './combatOwner.js';
 import { creeperLit } from './creeperFuse.js';
 import { FALLBACK_FOOD_POINTS, RAW_FOOD } from '../constantSkills/autoEat.js';
 import { edgeRisk, fallIsDangerous } from './edgeGuard.js';
 import { escapeHeading } from './escapeHeading.js';
 import { floorConfig, type FloorConfig } from './floorConfig.js';
-import { EAT_CRITICAL_FOOD, eatIsCritical, FloorBudget, type BudgetKind } from './floorBudget.js';
+import { eatIsCritical, FloorBudget, type BudgetKind } from './floorBudget.js';
 import { isThreatEntity, type ThreatBody } from './hostileMobHints.js';
 import { ensureReflexLedger, type ReflexKind, type ReflexOutcome } from './reflexLedger.js';
 import { openSightLines, seesBodyAt, threatExposure } from './threatExposure.js';
@@ -28,13 +27,12 @@ const log = createLogger('Minebot:FloorReflexes');
  * The floor (Syzygy ADR-0010 D8, ADR-0011 §4.6, owner answer "defence only", 2026-10-14): what cannot wait for a network
  * decision, done in the body on its physics tick, with no model and no attack. The breathing, lava, shield, knock and edge
  * reflexes already run here; this adds the three that common-FCA mode had switched off with the constant skills: stepping
- * back from a lit creeper or an arrow on its way, eating when short, and wearing armour into an empty slot. Each takes the
+ * back from a lit creeper or an arrow on its way, eating when short. Each takes the
  * body through ActionExecution with a safety lease, so a model's action or a reflex session underneath gives way, and gives
  * it back by ending; the one above decides again from a fresh observation.
  */
 export const FLOOR_RETREAT_PRIORITY = 350;
 export const FLOOR_EAT_PRIORITY = 200;
-export const FLOOR_ARMOR_PRIORITY = 150;
 /** Between the retreat (350) and the meal (200): the low-health flee (default mode, P8). */
 export const FLOOR_FLEE_PRIORITY = 250;
 /**
@@ -50,27 +48,6 @@ export const FLOOR_FLEE_PRIORITY = 250;
 // Was 6 (the API's lowHealth). Run 16 died to zombies in a cave: the flee began at 3.7 with one hit left, found no way out, and that was
 // the end. At 8 the body still has two zombie hits in hand when it starts (owner's change, 2026-10-19).
 export const FLEE_HEALTH = 8;
-/**
- * When the flee finds no safe way out (a cave, a cliff): the body walls itself in where it stands (build-around-self's one-cell
- * slit_shelter, about 16 blocks, a few seconds) or, short of blocks for that, stands on a pillar (tower-up, out of a zombie's reach).
- * Once in this many milliseconds, and only with the blocks for it.
- */
-const SHELTER_GAP_MS = 20_000;
-const SHELTER_PLAN = 'slit_shelter';
-/** What slit_shelter takes (its plan: ten whole blocks and four slabs), and how near an enemy may be for it still to be built. */
-const SHELTER_BLOCKS = 10;
-const SHELTER_SLABS = 4;
-/** A cell with an enemy in it cannot take a block (the plan says so): with one this close, the pillar instead. */
-const SHELTER_CLEAR = 2.5;
-const PILLAR_BLOCKS = 3;
-/**
- * How long the shelter may hold the body. An API stop or release waits three seconds for a safety lease (nativeBody); a pillar of
- * three is about that, the one-cell shelter a few seconds more. Longer than this and the shelter is not what saves the body.
- */
-const SHELTER_TIMEOUT_MS: Record<'build-around-self' | 'tower-up', number> = { 'build-around-self': 7_000, 'tower-up': 4_000 };
-/** Whole blocks a wall or a pillar can be made of (build-around-self's BUILDING_BLOCKS, without importing the skill here). */
-const WALL_BLOCKS = new Set(['cobblestone', 'cobbled_deepslate', 'stone', 'deepslate', 'andesite', 'diorite', 'granite', 'blackstone',
-  'tuff', 'basalt', 'nether_bricks', 'stone_bricks', 'end_stone', 'dirt', 'netherrack']);
 const FLEE_RANGE = 8;
 const FLEE_RANGE_SHOOTER = 16;
 const FLEE_KEEP_RANGE = 12;
@@ -107,7 +84,7 @@ const RETREAT_TICKS = 20;
 const RETREAT_BLOCKS = 3;
 const RETREAT_COOLDOWN_TICKS = 10;
 /**
- * LLM-centric mode: a lit creeper's retreat runs until the body is this far from it (a creeper's blast reaches about 7 m; run 27: the
+ * A lit creeper's retreat runs until the body is this far from it (a creeper's blast reaches about 7 m; run 27: the
  * step back lasted about a second and three blocks, the blast still took 16.4), or the creeper is gone or no longer lit, or
  * CREEPER_RETREAT_TICKS ticks have passed. It runs along a heading the flee's look-ahead finds safe, checked every tick; no such heading,
  * or less than CREEPER_HEADWAY blocks in CREEPER_STILL_TICKS ticks, is `cornered` (the last stand). The default mode and the arrow's
@@ -122,19 +99,6 @@ const CREEPER_REACH = 4.5;
 const ARROW_REACH = 12;
 const HOSTILE_NEAR = 5;
 const RETRY_AFTER_MS = 3000;
-/**
- * Short work at a bench or a chest: a craft takes 1 to 3 s, a withdrawal less. The armour reflex waits for these to end rather than cut
- * them unless an enemy is this near (run 21: it cut craft-one iron_chestplate the moment the piece appeared in the pack, with a skeleton
- * 12 m away, and the command came back failed although the piece had been made and worn).
- */
-const BENCH_SKILLS: ReadonlySet<string> = new Set(['craft-one', 'withdraw-from-container', 'withdraw-from-furnace', 'deposit-to-container', 'use-stonecutter',
-  'enchant-item', 'repair-item']);
-const BENCH_THREAT_RANGE = 7;
-/** Every physical action running is bench work (and there is at least one). */
-function onlyBenchWork(bot: object): boolean {
-  const running = physicalActionCapabilities(bot);
-  return running.length > 0 && running.every(capability => BENCH_SKILLS.has(capability));
-}
 
 type Item = { name: string; type?: number; slot?: number };
 interface FloorEntity {
@@ -174,7 +138,7 @@ export interface RetreatState {
   /** Last seen position of each arrow: one that did not move since the last tick is stuck, whatever velocity it reported. */
   arrows?: Map<number, Vec3>;
   /**
-   * LLM-centric mode, a lit creeper: the retreat runs to CREEPER_SAFE_METERS along a heading the flee's look-ahead finds safe (`heading`,
+   * A lit creeper: the retreat runs to CREEPER_SAFE_METERS along a heading the flee's look-ahead finds safe (`heading`,
    * kept from tick to tick), and says `cornered` when there is none or the body makes no headway (`checkpoint`, `stillTicks`).
    */
   far?: boolean;
@@ -203,23 +167,18 @@ export interface FloorState {
   fleeRestUntil?: number;
   fleeRefusedUntil?: number;
   fleeRefusedNotedAt?: number;
-  /** Set by a refused flee: the tick builds a shelter instead (`shelterChoice`), at most once in SHELTER_GAP_MS. */
-  shelterWanted?: boolean;
-  shelterAt?: number;
-  /** How far the nearest threat was when the flee was refused (`shelterChoice`). */
-  shelterNearest?: number;
-  /** LLM-centric mode only: set by a refused flee, the tick makes the last stand (`lastStandChoice`) instead of the shelter; at most once in LAST_STAND_GAP_MS. */
+  /** Set by a refused flee: the tick makes the last stand (`lastStandChoice`); at most once in LAST_STAND_GAP_MS. */
   lastStandWanted?: boolean;
   lastStandAt?: number;
   /** r10: the clock the floor runs on (a test's), for `reflexHeld`. */
   clock?: () => number;
   /** The kind of the last stand that failed: the next one tries another way. */
   lastStandFailed?: LastStand['kind'];
-  /** When the retreat from a lit creeper found no way away (LLM-centric): the creeper's last stand is wanted until CORNERED_WAIT_MS after. */
+  /** When the retreat from a lit creeper found no way away: the creeper's last stand is wanted until CORNERED_WAIT_MS after. */
   creeperCornered?: number;
   /** Cooldowns, the allowance and the stuck latch of the arrow step-aside, the meal and the armour change (`floorBudget.ts`); absent when denied. */
   budget?: FloorBudget;
-  /** r7, the cover (LLM-centric): the episode (its digs, when its last hand ended), the next look, the last "no hand" note, and the health seen. */
+  /** r7, the cover: the episode (its digs, when its last hand ended), the next look, the last "no hand" note, and the health seen. */
   cover?: { since: number; digs: number; lastEnd: number; /** r10: the blocks put on a shooter's line in this episode. */ lines?: number };
   coverNextAt?: number;
   coverNotedAt?: number;
@@ -232,7 +191,7 @@ export interface FloorState {
   shots?: Array<{ at: number; shooter: number }>;
   damageAt?: number[];
   falls?: number[];
-  /** r8, the melee hand (LLM-centric): the episode (hands made, when the last ended), the next look, the last "no hand" note. */
+  /** r8, the melee hand: the episode (hands made, when the last ended), the next look, the last "no hand" note. */
   melee?: { since: number; hands: number; lastEnd: number; /** r9: the hands that were blows (their own allowance). */ hits?: number };
   meleeNextAt?: number;
   meleeNotedAt?: number;
@@ -360,8 +319,8 @@ export function floorRetreatTick(bot: FloorBody, state: RetreatState, allow?: (k
   if (state.cooldown > 0) { state.cooldown--; return null; }
   if (!threat) return null;
   if (allow && !allow(threat.kind)) return null;
-  // LLM-centric: a lit creeper with no safe way away is not run at (a cliff, lava, a wall): the body is cornered, and makes its last stand.
-  const far = threat.kind === 'creeper' && isLlmCentric(bot);
+  // A lit creeper with no safe way away is not run at (a cliff, lava, a wall): the body is cornered, and makes its last stand.
+  const far = threat.kind === 'creeper';
   const plan = far ? creeperHeading(bot, threat.from) : null;
   if (far && !plan) { state.cooldown = RETREAT_COOLDOWN_TICKS; return 'cornered'; }
   Object.assign(state, { engaged: true, kind: threat.kind, from: threat.from, origin: body.position.clone(), ticks: 0, done: false,
@@ -380,80 +339,40 @@ function steerAlong(bot: FloorBody, state: RetreatState, plan: { yaw: number; ju
   bot.setControlState('forward', true); bot.setControlState('sprint', true); bot.setControlState('jump', plan.jump);
 }
 
-/** The LLM-centric body's own meals: starving, or nearly dead. */
-export const LLM_CENTRIC_EAT_FOOD = 3;
-export const LLM_CENTRIC_EAT_HEALTH = 6;
+/** The body's own meals: starving, or nearly dead (every other meal is the planner's, act's eat). */
+const SELF_EAT_FOOD = 3;
+const SELF_EAT_HEALTH = 6;
 const NEVER_EAT = new Set(['pufferfish', 'chorus_fruit', 'suspicious_stew', 'spider_eye', 'poisonous_potato', 'enchanted_golden_apple']);
-/**
- * A top-up at food 14 or less, or at health 10 or less with food below 18 (to get back to the 18 that regenerates). It was the old
- * auto-eat's food below 18 (health below 18 and food below 20): run 16 ate four times at food 16 and 17 with full health and once at
- * health 15 and food 19, raw meat each time, the meal worth a third of what it would be cooked. A scratch in daylight is not a
- * reason to eat (owner's change, 2026-10-19/20).
- */
-const TOPUP_FOOD = 15, TOPUP_FOOD_HURT = 18, TOPUP_HEALTH = 11;
-/** Raw meat (RAW_FOOD) is eaten only when nothing else is carried and the meal cannot wait: critical, or health this low. */
-const RAW_OK_HEALTH = 8;
-/** While the pathfinder is walking the legacy auto-eat ate only at health 8 or less, or food 6 or less. */
-const MOVING_EAT_HEALTH = 8;
-/** Food that is worth more than its hunger points (a regeneration potion, a poison cure, a brewing ingredient): a top-up leaves it alone while it can. */
-const VALUABLE_FOOD = new Set(['golden_apple', 'golden_carrot', 'honey_bottle']);
 // (Whether a meal is critical, `eatIsCritical`, is floorBudget.ts's one definition: this choice, the tick's cut rule and the budget's exemption share it.)
 /**
  * Food to eat now, or null; never with an enemy at arm's length (standing to eat there killed the body, L18).
  *
- * `wide` is the default mode (`FloorConfig.wideThreats`): food 14 or less, or health 10 or less and food below 18 (TOPUP_*; cooked before
- * raw, raw only when nothing else is carried and the meal is critical or health is 8 or less), with
- * the production floor's safety kept on top. A meal at food 6 or less, or at health 6 or less with food 17 or less, is critical (exempt
- * from the budget, and the idle rule below does not apply to it; the tick cuts a running command for it only at health 6 or less or food
- * 3 or less, and never the API's own escape skills unless food is 3 or less); any other meal is a top-up and happens only when the body
- * is idle (no physical action running, no command waiting for the body, no command accepted by the control loop: `fcaLeaseHeld`, so that
- * a top-up never delays the next command while the model thinks), and it leaves valuable food (golden apple and the like) alone. "An
- * enemy within 5 m" does not count one that is walled off (`threatExposure`, as in the flee). While the pathfinder is walking a top-up
- * waits unless health is 8 or less or food 6 or less (the legacy rule). `wide = false` is `floor` mode: exactly the production floor
- * (food <= 6, or health <= 12 and food < 18), unchanged.
+ * The body eats by itself only starving (food 3 or less) or nearly dead (health 6 or less, with hunger to fill: `eatIsCritical`); every
+ * other meal is the planner's (design mb-llm-centric 2.4). `wide` is the default mode (`FloorConfig.wideThreats`): cooked before raw, raw
+ * meat and rotten flesh only when nothing else is carried; "an enemy within 5 m" does not count one that is walled off (`threatExposure`,
+ * as in the flee). `wide = false` is `floor` mode: the production floor's own test (food <= 6, or health <= 12 and food < 18) on top.
  */
 export function floorEatChoice(bot: FloorBody, wide = true): Item | null {
   const health = bot.health ?? 20, food = bot.food ?? 20;
-  // The LLM-centric body eats by itself only starving (food 3 or less) or nearly dead (health 6 or less): every other meal is the
-  // planner's (design mb-llm-centric 2.4, MINEBOT_LLM_CENTRIC).
-  if (isLlmCentric(bot) && !(food <= LLM_CENTRIC_EAT_FOOD || health <= LLM_CENTRIC_EAT_HEALTH)) return null;
-  let topUp = false;
+  if (!(food <= SELF_EAT_FOOD || health <= SELF_EAT_HEALTH)) return null;
   if (wide) {
-    if (!(food < TOPUP_FOOD || (health < TOPUP_HEALTH && food < TOPUP_FOOD_HURT))) return null;
-    topUp = !eatIsCritical(health, food);
-    if (topUp && (physicalActionBusy(bot) || hasActiveSafetyLease(bot) || commandWaiting(bot) || bot.fcaLeaseHeld?.() === true)) return null;
-    if (health > MOVING_EAT_HEALTH && food > EAT_CRITICAL_FOOD && (bot as { pathfinder?: { isMoving?(): boolean } }).pathfinder?.isMoving?.() === true) return null;
+    // Nearly dead with food 18 or more: a meal gains next to nothing.
+    if (!eatIsCritical(health, food)) return null;
   } else if (!(food <= 6 || (health <= 12 && food < 18))) return null;
   if (bot.entity?.isInLava || hostileWithin(bot, HOSTILE_NEAR, wide, wide)) return null;
   let items = (bot.inventory?.items() ?? []).filter(item => (FALLBACK_FOOD_POINTS[item.name] ?? 0) > 0 && !NEVER_EAT.has(item.name)
-    && (item.name !== 'rotten_flesh' || food <= 6) && !(topUp && VALUABLE_FOOD.has(item.name)));
+    && (item.name !== 'rotten_flesh' || food <= 6));
   if (wide) {
-    // Cooked (or anything not raw) first; raw meat only when that is all there is and the meal cannot wait. Left raw, it is cooked
-    // with the next smelting (start-smelting queues it).
+    // Cooked (or anything not raw) first; raw meat only when that is all there is.
     // Rotten flesh (hunger) comes after raw meat, though it fills more: it is the last resort, not something ready to eat.
     const rank = (name: string) => name === 'rotten_flesh' ? 2 : RAW_FOOD.has(name) ? 1 : 0;
     const ready = items.filter(item => rank(item.name) === 0);
-    items = ready.length ? ready : eatIsCritical(health, food) || health <= RAW_OK_HEALTH ? items : [];
+    if (ready.length) items = ready;
     items.sort((a, b) => rank(a.name) - rank(b.name) || (FALLBACK_FOOD_POINTS[b.name] ?? 0) - (FALLBACK_FOOD_POINTS[a.name] ?? 0));
     return items[0] ?? null;
   }
   items.sort((a, b) => (FALLBACK_FOOD_POINTS[b.name] ?? 0) - (FALLBACK_FOOD_POINTS[a.name] ?? 0));
   return items[0] ?? null;
-}
-// The off-hand takes a shield: the shield reflex blocks with an off-hand shield only (a blaze's fireballs, a skeleton's arrows).
-const ARMOR = [['head', '_helmet', 5], ['torso', '_chestplate', 6], ['legs', '_leggings', 7], ['feet', '_boots', 8], ['off-hand', 'shield', 45]] as const;
-const MATERIAL = ['netherite', 'diamond', 'iron', 'chainmail', 'turtle', 'golden', 'leather'];
-/** Armour or a shield for an empty slot, best material first; what is worn or held is never swapped (that choice is the model's). */
-export function floorArmorChoice(bot: FloorBody): { item: Item; destination: string } | null {
-  const slots = bot.inventory?.slots; if (!slots) return null;
-  for (const [destination, suffix, slot] of ARMOR) {
-    if (slots[slot]) continue;
-    // A shield the planner holds in the main hand is its choice: only a stowed one goes to the off-hand.
-    const pieces = (bot.inventory?.items() ?? []).filter(item => item.name.endsWith(suffix) && !(slot === 45 && item === bot.heldItem));
-    pieces.sort((a, b) => MATERIAL.findIndex(m => a.name.startsWith(m)) - MATERIAL.findIndex(m => b.name.startsWith(m)));
-    if (pieces[0]) return { item: pieces[0], destination };
-  }
-  return null;
 }
 
 /**
@@ -915,8 +834,8 @@ export function fleeStart(bot: FloorBody, state: FloorState, now: number): FleeS
   if (episode) {
     if (now - episode.startedAt >= FLEE_EPISODE_MS || (at && at.distanceTo(episode.origin) >= FLEE_EPISODE_BLOCKS) || episode.stalls >= 2) {
       // Two segments in a row without headway is a way out that is not there (a heading the look-ahead took, a body that does not move):
-      // in the LLM-centric mode the last stand follows, as for a refused flee.
-      if (episode.stalls >= 2 && isLlmCentric(bot)) state.lastStandWanted = true;
+      // the last stand follows, as for a refused flee.
+      if (episode.stalls >= 2) state.lastStandWanted = true;
       endEpisode(); state.fleeRestUntil = now + FLEE_REST_MS; return null;
     }
   } else {
@@ -932,10 +851,9 @@ export function fleeStart(bot: FloorBody, state: FloorState, now: number): FleeS
     state.engagements.fleeRefused = (state.engagements.fleeRefused ?? 0) + 1;
     state.fleeRefusedUntil = now + FLEE_REFUSAL_CACHE_MS;
     endEpisode();
-    // Not standing there to be hit: the body walls itself in, or climbs out of reach, where it is (the tick's shelter, below).
-    if (now - (state.shelterAt ?? -Infinity) >= SHELTER_GAP_MS) { state.shelterWanted = true; state.shelterNearest = threat.nearest; }
-    // The LLM-centric body builds no shelter; its last resort at low health is a blow, a step down or one block up (`lastStandChoice`).
-    if (isLlmCentric(bot)) state.lastStandWanted = true;
+    // The body builds no shelter (the walls are the planner's); its last resort at low health is a blow, a step down or one block up
+    // (`lastStandChoice`).
+    state.lastStandWanted = true;
     if (now - (state.fleeRefusedNotedAt ?? -Infinity) >= FLEE_REFUSAL_NOTE_GAP_MS) {
       state.fleeRefusedNotedAt = now;
       try { bot.reflexLedger?.note('flee', '低体力だが安全な逃げ道が無く走れなかった', 'failed'); } catch { /* a report must not change what the reflex did */ }
@@ -1009,39 +927,10 @@ export async function runLowHealthFlee(bot: FloorBody, port: FloorBody, tickMs =
   return { success: true, result: ticks > 0 ? '低体力のため敵から離れた' : '離れる必要がなくなった（または安全な逃げ道がない）', moved, ended };
 }
 
-/**
- * What a refused flee falls back on: a one-cell shelter built round the body where it stands (slit_shelter: SHELTER_BLOCKS whole blocks
- * and SHELTER_SLABS slabs, and no enemy within SHELTER_CLEAR, whose cell could not take a block), else a pillar to stand on out of a
- * melee mob's reach (PILLAR_BLOCKS), else nothing. `nearest` is how far the nearest threat is.
- */
-export function shelterChoice(bot: FloorBody, nearest = Infinity): { skill: 'build-around-self'; args: [string] } | { skill: 'tower-up'; args: [number] } | null {
-  const items = bot.inventory?.items() ?? [];
-  const count = (test: (name: string) => boolean) => items.filter(item => test(item.name)).reduce((sum, item) => sum + ((item as { count?: number }).count ?? 1), 0);
-  const blocks = count(name => WALL_BLOCKS.has(name)), slabs = count(name => name.endsWith('_slab'));
-  const has = (name: string) => { try { return !!bot.instantSkills?.getSkill(name); } catch { return false; } };
-  // Without slabs the shelter closes its slit with whole blocks too (build-around-self): ten and four of them.
-  const enough = (blocks >= SHELTER_BLOCKS && slabs >= SHELTER_SLABS) || blocks >= SHELTER_BLOCKS + SHELTER_SLABS;
-  if (enough && nearest > SHELTER_CLEAR && has('build-around-self')) return { skill: 'build-around-self', args: [SHELTER_PLAN] };
-  if (blocks >= PILLAR_BLOCKS && has('tower-up')) return { skill: 'tower-up', args: [PILLAR_BLOCKS] };
-  return null;
-}
+// ===== The last stand =====
 
 /**
- * Runs a body skill as the work of the floor's own action (a safety lease): the skill moves the body through a motor port of it,
- * and is handed its own body back at the end, as `callSkill` does for a nested skill.
- */
-async function runBodySkill(bot: FloorBody, name: string, args: unknown[]): Promise<{ success: boolean; result: string }> {
-  const skill = bot.instantSkills?.getSkill(name) as { bot: unknown; rootBot?: unknown; runImpl(...args: unknown[]): Promise<{ success: boolean; result: string }> } | undefined;
-  if (!skill) return { success: false, result: `${name}が無い` };
-  const host = skill.rootBot ?? skill.bot, port = createMotorPort(bot as any);
-  skill.bot = port;
-  try { return await skill.runImpl(...args); } finally { if (skill.bot === port) skill.bot = host; }
-}
-
-// ===== The LLM-centric last stand =====
-
-/**
- * What the LLM-centric body does at low health when the flee finds no way out (run 27: the automatic shelter is off in the mode, the body
+ * What the body does at low health when the flee finds no way out (run 27: with no automatic shelter, the body
  * stood for 4 s and a spider killed it). One minimal hand, chosen in this order, and told in the ledger (so the act that was running stops
  * as `reflex`): (a) a blow at a threat within LAST_STAND_RANGE that can reach the body, with the best melee weapon carried; (b) one block
  * down, when the cell under the feet can be dug and the one under that is solid; (c) one block up, when a full block is carried and the
@@ -1082,7 +971,10 @@ export type LastStand =
   /** r8: at the rim of a drop, where a jump is a body in the air that a blow throws: the melee hand (a step off the rim, a block between). */
   | { kind: 'melee'; hand: MeleeHand; detail: string };
 
-/** Whole blocks a last-stand pillar is made of: the shelter's walls and any planks. */
+/** Whole blocks a wall or a pillar can be made of (build-around-self's BUILDING_BLOCKS, without importing the skill here). */
+const WALL_BLOCKS = new Set(['cobblestone', 'cobbled_deepslate', 'stone', 'deepslate', 'andesite', 'diorite', 'granite', 'blackstone',
+  'tuff', 'basalt', 'nether_bricks', 'stone_bricks', 'end_stone', 'dirt', 'netherrack']);
+/** Whole blocks a last-stand pillar is made of: those and any planks. */
 const isPillarBlock = (name: string) => WALL_BLOCKS.has(name) || name.endsWith('_planks');
 const isFluid = (name: unknown) => name === 'water' || name === 'lava';
 
@@ -1227,7 +1119,7 @@ export async function runLastStand(bot: FloorBody, port: FloorBody, stand: LastS
  * line (the stand is made only once in 1.5 s, and only against a threat in reach). In the Nether no water puts the fire out; an eight
  * second decision does not come in time for a point a second.
  *
- * The cover (LLM-centric only): while the body burns and a shooter (blaze, ghast, a skeleton's kind) within its reach sees it (its eyes to
+ * The cover: while the body burns and a shooter (blaze, ghast, a skeleton's kind) within its reach sees it (its eyes to
  * the body's eye or chest, nothing solid between), one minimal hand that cuts the line, and again after it while the body still burns or
  * keeps losing health and is still seen:
  *   (a) a step of one or two cells (walked as the walk walks) to a cell no shooter in reach sees;
@@ -1518,7 +1410,7 @@ export async function runCover(bot: FloorBody, port: FloorBody, cover: Cover, ti
  * (every cell round was air), the last stand struck back once and then jumped to lay a block under the feet (pillarUp); a blow in the air
  * threw the body off the bridge, and it fell 30 cells into the lava. The cover (r7) is for shooters only.
  *
- * The melee hand (LLM-centric only): one minimal hand, told as a fact, never a plan. A melee enemy (a threat that is not a shooter or a
+ * The melee hand: one minimal hand, told as a fact, never a plan. A melee enemy (a threat that is not a shooter or a
  * creeper) within MELEE_RANGE that can get at the body (its exposure is not `sealed`, read now), and either
  *   - the body stands at the rim of a drop (a cell round the feet that is open and falls VOID_DROP cells or more, or ends in lava:
  *     utils/voidFooting): (a) one step to a cell with fewer such cells round it; else (b) a block put in the cell toward the enemy (a second
@@ -1848,7 +1740,7 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
   // floor's step back would end the fight a second after it began (run 24: the planner's order was cut three times by a creeper 13 m off).
   const retreatAllow = (kind: 'creeper' | 'arrow') => (kind === 'creeper' && (bot as { creeperDuel?: boolean }).creeperDuel === true) ? false : (baseAllow ? baseAllow(kind) : true);
   /**
-   * The LLM-centric last stand (`lastStandChoice`): one minimal hand, told in the ledger so that the act running stops as a reflex. Once in
+   * The last stand (`lastStandChoice`): one minimal hand, told in the ledger so that the act running stops as a reflex. Once in
    * LAST_STAND_GAP_MS, never over another safety lease or one of the API's escapes. False when nothing was started.
    */
   const lastStand = (cause: 'low-health' | 'creeper'): boolean => {
@@ -1857,7 +1749,7 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
     if (cause === 'low-health' && LAYING_HANDS.has(String((bot as { actHandNow?: string }).actHandNow ?? ''))) return false;
     let stand: LastStand | null = null;
     try {
-      stand = isLlmCentric(bot) && !hasActiveSafetyLease(bot) && !escapeRunning(bot) && (bot.health ?? 20) > 0 && now() - (state.lastStandAt ?? -Infinity) >= LAST_STAND_GAP_MS
+      stand = !hasActiveSafetyLease(bot) && !escapeRunning(bot) && (bot.health ?? 20) > 0 && now() - (state.lastStandAt ?? -Infinity) >= LAST_STAND_GAP_MS
         ? lastStandChoice(bot, state.lastStandFailed, cause) : null;
     } catch { stand = null; }
     if (!stand) return false;
@@ -1876,7 +1768,7 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
    * a kind the planner fights by choice (accept, attack) is left out while health is above the flee's. True when a hand was started.
    */
   const coverTick = (): boolean => {
-    if (!config.flee || !isLlmCentric(bot)) return false;
+    if (!config.flee) return false;
     const t = now(), health = bot.health ?? 20;
     if (health <= 0) return false;
     let burning = false;
@@ -1956,7 +1848,7 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
    * in. True when a hand was started.
    */
   const meleeTick = (): boolean => {
-    if (!config.flee || !isLlmCentric(bot)) return false;
+    if (!config.flee) return false;
     const t = now(), health = bot.health ?? 20;
     if (health <= 0) return false;
     if (t < (state.meleeNextAt ?? 0)) return false;
@@ -2042,7 +1934,7 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
     }
     let outcome: ReturnType<typeof floorRetreatTick> = null;
     try { outcome = config.retreat ? floorRetreatTick(bot, state.retreat, retreatAllow) : null; } catch { return; }
-    // A lit creeper and no way away (LLM-centric only): the retreat let go (its action ends), and the last stand is made as soon as no
+    // A lit creeper and no way away: the retreat let go (its action ends), and the last stand is made as soon as no
     // safety lease holds the body (the retreat's own ends within a tick or two).
     if (outcome === 'cornered') { state.retreat.done = true; state.retreat.release?.(); state.creeperCornered = now(); }
     if (state.creeperCornered !== undefined) {
@@ -2068,7 +1960,6 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
     // each dropped by this flee, and for 140 s nobody attacked. A flee already under way is ended, not carried on.
     const headFight = config.flee && isHeadCombatActive(bot);
     if (headFight) {
-      state.shelterWanted = false;
       const episode = state.fleeEpisode;
       if (episode) { state.fleeEpisode = undefined; try { episode.end?.('cut'); } catch { /* a report must not change what the reflex did */ } }
     }
@@ -2103,37 +1994,21 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
           .catch(() => undefined).finally(() => { state.busy = null; });
         return;
       }
-      // The flee found no way out, LLM-centric mode: the last stand, one minimal hand (`lastStandChoice`), told in the ledger so that the
+      // The flee found no way out: the last stand, one minimal hand (`lastStandChoice`), told in the ledger so that the
       // act running stops as a reflex. Once in LAST_STAND_GAP_MS, never over another safety lease.
       if (state.lastStandWanted) {
         state.lastStandWanted = false;
         if (lastStand('low-health')) return;
       }
-      // The flee found no way out: a shelter where the body stands, if the blocks are there (once in 20 s). Not in the LLM-centric
-      // mode: the walls are the planner's to build (run 26: the shelter closed the slit the fight was to be fought through).
-      if (state.shelterWanted && isLlmCentric(bot)) state.shelterWanted = false;
-      if (state.shelterWanted) {
-        state.shelterWanted = false;
-        let choice: ReturnType<typeof shelterChoice> = null;
-        try { choice = !hasActiveSafetyLease(bot) && !escapeRunning(bot) && (bot.health ?? 20) > 0 ? shelterChoice(bot, state.shelterNearest) : null; } catch { choice = null; }
-        if (choice) {
-          state.shelterAt = now(); state.busy = 'flee';
-          const detail = choice.skill === 'build-around-self' ? '逃げ道が無いため、その場を囲った（build-around-self）' : '逃げ道が無いため、柱に登った（tower-up）';
-          log.warn(`🧱 低体力で逃げ道なし: ${choice.skill}`);
-          void takeNoted('flee', detail, 'floor-shelter', FLOOR_FLEE_PRIORITY, SHELTER_TIMEOUT_MS[choice.skill], () => runBodySkill(bot, choice!.skill, choice!.args))
-            .catch(() => undefined).finally(() => { state.busy = null; });
-          return;
-        }
-      }
     }
     if (!budget && Date.now() < state.retryAt) return;
-    let food: Item | null = null, armor: ReturnType<typeof floorArmorChoice> = null;
-    // The LLM-centric body puts on no armour by itself (equip is a step of act).
-    try { food = config.eat ? floorEatChoice(bot, config.wideThreats) : null; armor = food || !config.armor || isLlmCentric(bot) ? null : floorArmorChoice(bot); } catch { return; }
+    // The body puts on no armour by itself (equip is a step of act).
+    let food: Item | null = null;
+    try { food = config.eat ? floorEatChoice(bot, config.wideThreats) : null; } catch { return; }
     if (food && bot.equip && bot.consume) {
       // Never over another safety reflex (breath, lava). Over a model's action or a reflex session only when it cannot wait
-      // (starving or nearly dead); otherwise between actions, so the work it would cut is not cut for a meal. (In the default mode a
-      // top-up, a meal above health 6 and food 6, is already refused by `floorEatChoice` while anything physical runs or waits.)
+      // (starving or nearly dead); otherwise between actions, so the work it would cut is not cut for a meal. (`floorEatChoice`
+      // offers no meal above health 6 and food 3.)
       if (hasActiveSafetyLease(bot)) return;
       if (physicalActionBusy(bot)) {
         // Default mode: the API's own escape and shelter commands (flee-from, dig-shelter, build-around-self) are never cut for a meal;
@@ -2158,17 +2033,6 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
         }
         return { success: true, result: `${food!.name}を食べた` };
       }, 'eat').then(result => { if (!result?.success) failed(); })
-        .catch(() => failed()).finally(() => { state.busy = null; });
-    } else if (armor && bot.equip && !hasActiveSafetyLease(bot) && (!physicalActionBusy(bot) || (hostileWithin(bot, 16, config.wideThreats) && !(config.wideThreats && escapeRunning(bot))
-        // A craft or a withdrawal is not cut for armour unless an enemy is close: the armour goes on when it ends (run 21).
-        && !(config.wideThreats && onlyBenchWork(bot) && !hostileWithin(bot, BENCH_THREAT_RANGE, true, true))))
-      && (!budget || budget.allow('armor', bot.health ?? 20))) {
-      state.busy = 'armor'; state.engagements.armor++;
-      log.info(`🛡️ 防具を着ける: ${armor.item.name}`);
-      void takeNoted('armor', `防具（${armor.item.name}）を着けた`, 'floor-armor', FLOOR_ARMOR_PRIORITY, 3000, async () => {
-        await bot.equip!(armor!.item, armor!.destination);
-        return { success: true, result: `${armor!.item.name}を着けた` };
-      }, 'armor').then(result => { if (!result?.success) failed(); })
         .catch(() => failed()).finally(() => { state.busy = null; });
     }
   });

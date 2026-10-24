@@ -1,46 +1,32 @@
-import { isLlmCentric } from './llmCentric.js';
 /**
- * The night gate: no going down into the deep (below y 16) at nightfall or at night without the kit to live through it.
+ * The night's kit and clock, for the observation: whether the body has what a night in the deep wants, and how long until dark.
  *
- * Run 16 (2026-10-19) went down for diamonds at dusk with no armour, no cooked food and no bed, met a zombie at y -7 in a
- * cave and died there. The planner had been told everything (the clock, the inventory); it went anyway. So the body says
- * no at the tool, as a person would stop at the top of the stairs: what is missing, and what to do instead.
+ * Run 16 (2026-10-19) went down for diamonds at dusk with no armour, no cooked food and no bed, met a zombie at y -7 in a cave and
+ * died there. The body refuses no descent by the clock (design mb-llm-centric): the time and the kit are in the observation
+ * (descentKitNotice), and the choice is the planner's.
  *
- * What it refuses: a move whose goal is below y 16 (move-to with a goal height, stair-mine, dig-block-at, and mine-block's
- * targets down there). Already below y 16, only going further down is refused (a goal more than two blocks below the feet):
- * the way back up, or along, is never shut. Escapes and shelters (dig-shelter, build-around-self, tower-up, climb-down,
- * flee-from) are never gated. Only in the overworld: elsewhere the clock says nothing of mobs.
- *
- * The kit: armour (a chestplate of any kind, or two pieces of iron or better), two portions of cooked food (or bread and
- * the like), and a bed (carried, or a respawn bed already set). Worn and carried both count: carried armour is put on by
- * the floor's armour reflex.
- *
- * Only the armour shuts the gate. With it on, the stone round a stair is the safer place to spend a night than the surface:
- * run 19 had the whole iron suit and no bed, was refused its stair at 1,790 s and spent the end of the run building a shelter
- * on a frozen shore (the owner, 2026-10-20: "防具を着ていて地下にいる・地下へ向かう時は断らない。地上で待たない"). The food
- * and the bed are still told (descentKit, the observation's notice) as what the night wants, not as what bars the way down.
+ * The kit: armour (a chestplate of any kind, or two pieces of iron or better), two portions of cooked food (or bread and the like), and
+ * a bed (carried, or a respawn bed already set). Worn and carried both count. Only the missing armour counts as `gated` in the notice:
+ * with it on, the stone round a stair is the safer place to spend a night than the surface (the owner, 2026-10-20).
  */
 
-export const NIGHT_GATE_Y = 16;
 /** Nightfall (monsters spawn under the sky) and morning, in ticks of the day. */
 const NIGHTFALL_TICK = 13000;
 const MORNING_TICK = 23000;
 /**
- * The gate closes this many seconds before dark: a descent started then is still under way when the night begins. It was 60; run 17
- * went down to y 4 with no bed 260 and 168 seconds before dark, and was still down there at nightfall (the owner, 2026-10-20).
+ * The night's hours begin this many seconds before dark: a descent started then is still under way when the night begins (run 17 went
+ * down to y 4 with no bed 260 and 168 seconds before dark, and was still down there at nightfall).
  */
 export const DUSK_LEAD_SECONDS = 300;
 /** The observation tells of the missing kit this long before dark, so that the planner can get it in daylight. */
 export const KIT_NOTICE_SECONDS = 600;
-/** Further down than this below the feet counts as going deeper (a block dug at the feet, a step down, is not). */
-const DEEPER_MARGIN = 2;
 
 export type KitPart = 'armor' | 'cooked_food' | 'bed';
 
 /**
  * Food that the fire makes several times better (raw mutton 2, cooked 6): eaten only when there is nothing else and it cannot wait.
  * Run 16 ate raw mutton four times and raw chicken twice with a furnace and eleven coal in hand (rotten flesh and pufferfish have
- * their own rules where food is chosen). Kept here, beside the cooked food the night gate counts, so the observation can read it
+ * their own rules where food is chosen). Kept here, beside the cooked food the kit counts, so the observation can read it
  * without the skills (constantSkills/autoEat re-exports it).
  */
 export const RAW_FOOD: ReadonlySet<string> = new Set(['beef', 'porkchop', 'mutton', 'chicken', 'rabbit', 'cod', 'salmon', 'potato']);
@@ -63,8 +49,6 @@ export interface GateBody {
   inventory?: { items?(): GateItem[]; slots?: Array<GateItem | null | undefined> };
   placeMemory?: { state?: { places?: Array<{ keep?: string; dimension?: string }> };
     recall?(kind?: string, limit?: number): Array<{ position: { x: number; y: number; z: number }; distance: number }> };
-  /** The lowest the body has stood below y 16 since the gate closed this night (see descentFloor). */
-  nightGateAnchor?: { night: number; y: number };
   /** Furnaces at work on a batch the body put in (start-smelting). */
   activeFurnaces?: Array<{ pos: { x: number; y: number; z: number }; item: string; readyAt: number }>;
 }
@@ -118,90 +102,19 @@ export function nightClock(bot: GateBody): NightClock | null {
   return { darkInSeconds: Math.round((24000 - tick + NIGHTFALL_TICK) / 20) };
 }
 
-/** True while the gate is closed by the clock (night, or dark within DUSK_LEAD_SECONDS). */
+/** True in the night's hours (night, or dark within DUSK_LEAD_SECONDS). */
 export function gateHours(clock: NightClock | null): boolean {
   return !!clock && clock.darkInSeconds <= DUSK_LEAD_SECONDS;
 }
 
-/** What shuts the gate: no armour. Cooked food and a bed are wanted for the night, but an armoured body goes down without them. */
+/** What the notice calls `gated`: no armour. Cooked food and a bed are wanted for the night, but an armoured body is ready to go down. */
 export function gateShutBy(kit: DescentKit): boolean {
   return kit.missing.includes('armor');
 }
 
 /**
- * The lowest goal height allowed now, with what is missing, or null when nothing is gated (day, armour on, not the overworld).
- * On the surface the floor is y 16; below it, two blocks under where the body stood when the gate first closed on it underground
- * this night (`nightGateAnchor`, kept on the body), or the feet if they are lower now: no deeper, but along and up are free.
- * Measured from the feet alone, two blocks at a time would have gone all the way down, one call after another.
- */
-export function descentFloor(bot: GateBody): { floor: number; kit: DescentKit; clock: NightClock; underground: boolean } | null {
-  // The LLM-centric body refuses no descent by the clock: the time and the kit are in the observation, the choice is the planner's.
-  if (isLlmCentric(bot)) return null;
-  const clock = nightClock(bot);
-  if (!gateHours(clock)) return null;
-  const kit = descentKit(bot);
-  if (!gateShutBy(kit)) return null;
-  const feet = bot.entity?.position?.y;
-  if (typeof feet !== 'number' || !Number.isFinite(feet)) return null;
-  const feetY = Math.floor(feet);
-  const underground = feetY < NIGHT_GATE_Y;
-  if (!underground) return { floor: NIGHT_GATE_Y, kit, clock: clock!, underground };
-  const night = nightNumber(bot);
-  let anchor = bot.nightGateAnchor;
-  if (!anchor || anchor.night !== night) anchor = bot.nightGateAnchor = { night, y: feetY };
-  // Below that already (a fall, a cave floor walked down to): along and up from where it stands, never further down.
-  return { floor: Math.min(anchor.y - DEEPER_MARGIN, feetY), kit, clock: clock!, underground };
-}
-
-/** Which night this is: the day count (a night lies within one day of the clock, which turns at sunrise). */
-function nightNumber(bot: GateBody): number {
-  const day = Number(bot.time?.day);
-  if (Number.isFinite(day)) return day;
-  const age = Number(bot.time?.age);
-  return Number.isFinite(age) ? Math.floor(age / 24000) : 0;
-}
-
-function clockText(clock: NightClock): string {
-  return clock.darkInSeconds > 0 ? `暗くなるまで約${clock.darkInSeconds}秒` : `夜（明けるまで約${clock.lightInSeconds ?? 0}秒）`;
-}
-function missingText(kit: DescentKit): string {
-  return kit.missing.map(part => part === 'armor' ? '防具（胸当てか、鉄以上の部位2つ）'
-    : part === 'cooked_food' ? `焼いた食料（2個以上。いま${kit.cookedFood}個）` : 'ベッド').join('、');
-}
-function nextText(kit: DescentKit, underground: boolean): string {
-  const how = kit.missing.map(part => part === 'armor' ? '鉄インゴット8個で iron_chestplate'
-    : part === 'cooked_food' ? '生肉は start-smelting で焼ける' : '同じ色の羊毛3個と板材3個で bed');
-  // Never "wait on the surface": the stone above y 16 holds iron and coal, and the armour they make opens the way down.
-  return (underground
-    ? '今の高さで横へ掘るか、上へ戻る（stair-mine で上へ、move-to で y16 以上）。'
-    : 'y16 より上の地下で鉄・石炭を掘って防具を作る（地上で待たない）。')
-    + `用意: ${how.join('、')}。敵が近い時は build-around-self か dig-shelter（この断りは防具を着るまで続く。着れば夜でも降りられる）`;
-}
-
-/**
- * What the gate says when it refuses `what` (a tool, with its goal). The form agreed with the API (mb-head, 2026-10-19):
- * `failureType` night_unprepared (the API's retry class prepare_first), and the text ends in "足りない: " with the missing parts as
- * the words armor, cooked_food, bed, comma-separated: the API adds its own fixed next step for each word.
- */
-export function nightGateRefusal(gate: NonNullable<ReturnType<typeof descentFloor>>, what: string): { success: false; failureType: 'night_unprepared'; recoverable: true; result: string } {
-  const where = gate.underground ? `y${gate.floor}より下（今より深く）` : 'y16より下（地下深く）';
-  return { success: false, failureType: 'night_unprepared', recoverable: true,
-    result: `夜の深い所は備えがそろうまで断る（夜の門）。${clockText(gate.clock)}で、${where}へ降りる${what}を断りました。`
-      + `備え: ${missingText(gate.kit)}が無い。次の手: ${nextText(gate.kit, gate.underground)}。足りない: ${gate.kit.missing.join(', ')}` };
-}
-
-/** The refusal for a goal at `targetY`, or null when that goal is allowed. */
-export function nightGateFor(bot: GateBody, targetY: number, what: string): ReturnType<typeof nightGateRefusal> | null {
-  if (!Number.isFinite(targetY)) return null;
-  let gate: ReturnType<typeof descentFloor> = null;
-  try { gate = descentFloor(bot); } catch { return null; }
-  if (!gate || targetY >= gate.floor) return null;
-  return nightGateRefusal(gate, what);
-}
-
-/**
  * The observation's word on the kit (`state.world.margin.descentKit`): said only in the overworld, when something is missing and
- * the night is near (KIT_NOTICE_SECONDS) or here, with whether the gate is closed now.
+ * the night is near (KIT_NOTICE_SECONDS) or here, with whether it is the night's hours without armour (`gated`).
  */
 export function descentKitNotice(bot: GateBody): { missing: KitPart[]; gated: boolean } | undefined {
   const clock = nightClock(bot);

@@ -21,11 +21,11 @@ describe('actual installed instant-skill catalog', () => {
       }
       const catalog = bodySkillCatalog(skills, bot);
       expect(skills.length).toBeGreaterThan(70);
-      expect(catalog.definitions.length).toBeGreaterThan(50);
-      expect(catalog.definitions.some(skill => skill.name === 'move-to')).toBe(true);
-      expect(catalog.definitions.some(skill => skill.name === 'mine-block')).toBe(true);
-      expect(catalog.definitions.some(skill => skill.name === 'switch-constant-skill' || skill.name === 'chat')).toBe(false);
-      expect(catalog.definitions.every(skill => skill.inputSchema.type === 'object')).toBe(true);
+      expect(catalog.runnable.length).toBeGreaterThan(50);
+      expect(catalog.runnable.some(skill => skill.name === 'move-to')).toBe(true);
+      expect(catalog.runnable.some(skill => skill.name === 'mine-block')).toBe(true);
+      expect(catalog.runnable.some(skill => skill.name === 'switch-constant-skill' || skill.name === 'chat')).toBe(false);
+      expect(catalog.runnable.every(skill => skill.inputSchema.type === 'object')).toBe(true);
       if (process.env.FCA_API_WIRE_ROOT) {
         const validation = await import(`${process.env.FCA_API_WIRE_ROOT}/src/surfaces/minecraft/minecraftControlValidation.ts`);
         expect(validation.validSkills(catalog.definitions)).toBe(true);

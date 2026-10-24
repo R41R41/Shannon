@@ -5,7 +5,6 @@ import { isLikelyHostileMobName } from './hostileMobHints.js';
 import { exposedByOpening } from './threatExposure.js';
 import { wellArmoured } from './armourCheck.js';
 import { creeperLit } from './creeperFuse.js';
-import { isLlmCentric } from './llmCentric.js';
 import { engagedWithAny } from './engagement.js';
 
 const log = createLogger('Minebot:ExposureGuard');
@@ -29,7 +28,7 @@ interface GuardBody {
   /** Set by the emergency layer: how near a hostile has to be to be a threat (farther for kinds that have hit from afar). */
   hostileThreatRadius?: () => number;
   exposureDigGuard?: { enabled: boolean; refused: number; last?: string; /** When the last dig was refused (wait-time lets a wait be then). */ lastAt?: number;
-    /** One cell ("x,y,z") the planner has let open knowing who it lets in (act's dig with exposeOk, LLM-centric mode). */
+    /** One cell ("x,y,z") the planner has let open knowing who it lets in (act's dig with exposeOk). */
     allowAt?: string };
 }
 
@@ -66,8 +65,8 @@ export function threatExposedBy(bot: GuardBody, target: Vec3): { name: string; d
 export interface ExposingThreat { name: string; id?: number; distance: number; position: { x: number; y: number; z: number } }
 
 /**
- * Every hostile (of the NEAREST looked at) that breaking the block at `target` would let at the body, nearest first. In the LLM-centric
- * mode a kind the planner has taken on (accept-threat, or a fight it runs) is not one: it chose to face it (run 26: blazes at a spawner
+ * Every hostile (of the NEAREST looked at) that breaking the block at `target` would let at the body, nearest first. A kind the planner has
+ * taken on (accept-threat, or a fight it runs) is not one: it chose to face it (run 26: blazes at a spawner
  * refused every dig for over a minute while accept-threat named them).
  */
 export function threatsExposedBy(bot: GuardBody, target: Vec3): ExposingThreat[] {
@@ -76,7 +75,7 @@ export function threatsExposedBy(bot: GuardBody, target: Vec3): ExposingThreat[]
   const feet = self.floored();
   if (target.x === feet.x && target.z === feet.z && (target.y === feet.y || target.y === feet.y + 1)) return [];
   if (bot.entity?.isInWater === true && (bot.oxygenLevel ?? 20) < 20) return [];
-  const accepted = (name: string) => isLlmCentric(bot) && engagedWithAny(bot, [name]);
+  const accepted = (name: string) => engagedWithAny(bot, [name]);
   const radius = Math.max(1, bot.hostileThreatRadius?.() ?? DEFAULT_RADIUS);
   // In armour (iron all round and the health to take a blast), a creeper that is not lit and not near does not hold the dig back.
   let armoured = false;

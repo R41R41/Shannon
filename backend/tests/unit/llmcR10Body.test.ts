@@ -57,7 +57,7 @@ function shotBody(shape: (x: number, y: number, z: number) => Cell, options: { f
   const bot: any = Object.assign(new EventEmitter(), {
     __blocks: blocks, __dug: [] as string[], __fakeMovements: true, __placed: [] as string[],
     entity: { id: 1, name: 'player', position: options.feet ?? new Vec3(0.5, 56, 0.5), yaw: 0, pitch: 0, onGround: true, metadata: [0] },
-    health: options.health ?? 20, food: 17, game: { dimension: 'the_nether' }, llmCentric: true,
+    health: options.health ?? 20, food: 17, game: { dimension: 'the_nether' },
     entities: options.mobs ?? {},
     registry: { blocksByName: { cobblestone: { id: 1 }, stone: { id: 2 } }, entitiesByName: { piglin: { type: 'hostile' }, zombie: { type: 'hostile' } }, itemsByName: {}, items: {} },
     heldItem: null, inventory: { items: () => options.items ?? [], slots: new Array(46).fill(null) }, controlState: {} as Record<string, boolean>,

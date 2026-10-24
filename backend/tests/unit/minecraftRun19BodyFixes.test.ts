@@ -470,14 +470,6 @@ describe('use-item-on-block with a count makes and mines obsidian from a pool in
     expect(dug.filter(cell => cell.endsWith(',60'))).toHaveLength(3);
     expect(dug.filter(cell => cell.endsWith(',59'))).toHaveLength(3);
   });
-  it('a full pack is made room in first, so the obsidian is taken and not left on the floor (ladder probe: five dug, none taken)', async () => {
-    const world = pool(2);
-    for (let i = 0; i < 34; i++) world.inventory.push({ name: 'cobbled_deepslate', count: 64 });
-    const { skill } = await skillFor(world);
-    const result = await skill.runImpl(0, 60, 0, 'water_bucket', 2);
-    expect(result.success).toBe(true);
-    expect(result.result).toContain('持ち物の空きを作るためcobbled_deepslate×');
-  });
   it('without a diamond pickaxe, or in the Nether, nothing is poured', async () => {
     const world = pool(3);
     world.inventory.splice(0, 1);

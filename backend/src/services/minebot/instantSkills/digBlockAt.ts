@@ -1,9 +1,6 @@
 import { Vec3 } from 'vec3';
 import { chooseTool } from '../utils/toolChoice.js';
-import { ensureToolUses, keepCheapTool } from '../utils/toolStock.js';
-import { makeRoom, tidyIfCluttered } from '../utils/inventoryRoom.js';
-import { emptySlotCountSafe } from '../utils/inventorySpillDetection.js';
-import { hostileNear } from './craftOne.js';
+import { pickaxeUsesCheck } from '../utils/toolStock.js';
 import { equipToHandVerified } from '../utils/equipVerified.js';
 import { CustomBot, InstantSkill } from '../types.js';
 import { createLogger } from '../../../utils/logger.js';
@@ -23,7 +20,6 @@ import { liquidAimPoints } from '../utils/liquidAim.js';
 import { holdsWater } from '../utils/waterBlocks.js';
 import { fallIsDangerous, stepOffDrop } from '../utils/edgeGuard.js';
 import { actionDelay } from '../execution/observedWait.js';
-import { nightGateFor } from '../utils/nightGate.js';
 
 const log = createLogger('Minebot:Skill:digBlockAt');
 
@@ -96,13 +92,6 @@ class DigBlockAt extends InstantSkill {
     return fallIsDangerous(drop, this.bot.health ?? 20) ? drop : null;
   }
 
-  /** The night gate (utils/nightGate): a block below the feet and below y 16, at night without the kit, is not dug. */
-  protected preflight(_x: number, y: number) {
-    const feet = this.bot.entity?.position?.y;
-    if (typeof feet !== 'number' || !(Number(y) < Math.floor(feet))) return null;
-    return nightGateFor(this.bot, Number(y), `dig-block-at（y${Math.floor(Number(y))}）`);
-  }
-
   async runImpl(x: number, y: number, z: number, collect: boolean = true, collectionPolicy: CollectionPolicy = 'target', takeEquipment: boolean = false, keepDrop: boolean = collect) {
     try {
       assertActionActive(this.bot);
@@ -156,45 +145,13 @@ class DigBlockAt extends InstantSkill {
         };
       }
 
-      // A dear tool about to go on a block a cheaper one would take: the cheaper one is made first when the bag
-      // allows (utils/toolStock). Before the reach check, since putting down a table may move the body.
-      await keepCheapTool(this.bot as any, [block as any], (skill, ...args) => this.callSkill(skill, ...args));
-      assertActionActive(this.bot);
-
-      // A pickaxe with a few uses left is not the only one the dig goes on: a spare is made when the bag allows (the stone pickaxe of run
-      // 20 broke on the twelfth iron ore). And a dig that collects its drop makes room first when the pack is nearly full, instead of
-      // leaving the drop lying (run 20's full pack). Both before the reach check: throwing and crafting move the body.
+      // A pickaxe with a few uses left is said, before the dig goes on it (the stone pickaxe of run 20 broke on the twelfth iron ore). The
+      // body makes no spare and throws nothing away by itself: both are the planner's (design mb-llm-centric).
       let prepNote = '';
       const pickaxeBlock = !!block.harvestTools && Object.keys(block.harvestTools).some(id => (this.bot.registry as any)?.items?.[Number(id)]?.name?.endsWith('_pickaxe'));
       if (pickaxeBlock) {
-        const check = await ensureToolUses(this.bot as any, [block as any], DIG_PICKAXE_RESERVE, (skill, ...args) => this.callSkill(skill, ...args));
+        const check = pickaxeUsesCheck(this.bot as any, [block as any], DIG_PICKAXE_RESERVE);
         if (check.note) prepNote += ` ${check.note}`;
-        assertActionActive(this.bot);
-      }
-      if (collect && emptySlotCountSafe(this.bot) < 2) {
-        const room = await makeRoom(this.bot as any, (skill, ...args) => this.callSkill(skill, ...args), {
-          asked: [block.name, ...expectedBlockDrops(this.bot, block)], slots: 2, interrupted: () => this.shouldInterrupt(),
-          blocked: () => hostileNear(this.bot as any, 16) || String((this.bot as any).minebotControlState ?? '').startsWith('emergency'),
-        });
-        prepNote += room.note;
-        assertActionActive(this.bot);
-      }
-      // The body's own limit on the rock it digs (run 21: 545 cobblestone, 34/36): a count over the items, a throw only past the limit. The
-      // throw walks the body off, so when it did, the way back to the block is walked before the reach check.
-      const beforeTidy = this.bot.entity.position.clone();
-      let askedKinds: string[] = [block.name];
-      try { askedKinds = [block.name, ...expectedBlockDrops(this.bot, block)]; } catch { /* a body that cannot say what the block drops */ }
-      const tidied = await tidyIfCluttered(this.bot as any, (skill, ...args) => this.callSkill(skill, ...args), {
-        asked: askedKinds, interrupted: () => this.shouldInterrupt(),
-        blocked: () => hostileNear(this.bot as any, 16) || String((this.bot as any).minebotControlState ?? '').startsWith('emergency'),
-      });
-      if (tidied) {
-        prepNote += tidied;
-        assertActionActive(this.bot);
-        if (this.bot.entity.position.distanceTo(beforeTidy) > 1.5 && !canDigFromHere(this.bot, block, pos)) {
-          try { await this.callSkill('move-to', beforeTidy.x, beforeTidy.y, beforeTidy.z, 1, 'near'); } catch (error) { if (this.shouldInterrupt()) throw error; }
-          assertActionActive(this.bot);
-        }
       }
 
       if (!canDigFromHere(this.bot, block, pos)) {

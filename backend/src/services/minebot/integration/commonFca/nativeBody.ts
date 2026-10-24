@@ -15,7 +15,6 @@ import type { CommonFcaActuator } from './controlLoop.js';
 import { BodyEventWatcher } from './bodyEvents.js';
 import { closeInAdvised, combatOwnerOf } from '../../utils/combatOwner.js';
 import { craftDoneDespiteCut, craftWitness, type CraftWitness } from '../../utils/cutCraftRecovery.js';
-import { isLlmCentric } from '../../utils/llmCentric.js';
 import { renderActReport, takeActReport } from '../../utils/actReport.js';
 
 const delay = (milliseconds: number) => new Promise(resolve => setTimeout(resolve, milliseconds));
@@ -57,7 +56,7 @@ const RECEIPT_MARGIN_MS = 1500;
 const REFLEX_POLL_MS = 20;
 const REFLEX_GRACE_MS = 80;
 const REFLEX_MIN_RUN_MS = 1000;
-/** No command for this long, the dragon catalog goes back to the ordinary one (decisions between commands take seconds). */
+/** No command for this long, the dragon's focus goes back to the ordinary one (decisions between commands take seconds). */
 const DRAGON_CATALOG_IDLE_MS = 90_000;
 /**
  * The skill's own failure kind for the API to sort retries by (agreed 2026-10-14: retry the same, change the situation,
@@ -71,21 +70,19 @@ function failureOf(result: { failureType?: string; recoverable?: boolean }): Pic
 }
 export class NativeCommonFcaBody implements CommonFcaActuator {
   private readonly catalog;
-  /** The catalog for an ordinary task, and for the dragon (fewer life tools); `skills` is the one for the latest task. */
+  /** What the planner is offered (the same for every task). */
   private readonly offered;
-  private readonly offeredForDragon;
   private readonly runnable;
   private dragonTask = false;
   private running = 0;
   private idleSince = 0;
   /**
-   * What the planner is offered now. A new array only when the task changes kind, which is when the loop sends it again.
-   * The body learns the task only from a command, so a dragon catalog with no command for a while goes back to the
-   * ordinary one: the next request may be anything (fishing after the dragon), and its first decision sees every tool.
+   * What the planner is offered. The body learns the task only from a command, so the dragon's focus of the remembered places with no
+   * command for a while goes back to the ordinary one: the next request may be anything (fishing after the dragon).
    */
   get skills() {
     if (this.dragonTask && this.running === 0 && this.now() - this.idleSince > DRAGON_CATALOG_IDLE_MS) this.setDragonTask(false);
-    return this.dragonTask ? this.offeredForDragon : this.offered;
+    return this.offered;
   }
   /** The task's kind also says which remembered places the observation puts first (the dragon's: base, portals, structures). */
   private setDragonTask(dragon: boolean) {
@@ -108,11 +105,10 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
   };
   constructor(private readonly bot: any, private readonly options: NativeBodyOptions) {
     this.reflexTag = options.reflexTag ?? floorConfig().ledgerTag;
-    // The LLM-centric mode (MINEBOT_LLM_CENTRIC) offers act, view, probe (r4) and the readers; off, the catalog is the one it always was.
-    this.catalog = bodySkillCatalog(bot.instantSkills.getSkills() as BodySkill[], bot, { llmCentric: isLlmCentric(bot) });
+    // The planner is offered act, view, probe (r4) and the readers (design mb-llm-centric).
+    this.catalog = bodySkillCatalog(bot.instantSkills.getSkills() as BodySkill[], bot);
     if (this.catalog.runnable.some(skill => skill.name === GOAL_EVIDENCE_SKILL.name)) throw Error('BODY_RESERVED_SKILL');
     this.offered = [...this.catalog.definitions, GOAL_EVIDENCE_SKILL];
-    this.offeredForDragon = [...this.catalog.dragonDefinitions, GOAL_EVIDENCE_SKILL];
     this.runnable = [...this.catalog.runnable, GOAL_EVIDENCE_SKILL];
     this.goalEvidence = new NativeGoalEvidence(bot, () => this.now());
     if (options.events ?? process.env.MINEBOT_BODY_EVENTS !== 'off') this.events = new BodyEventWatcher(bot, () => this.now());
@@ -162,7 +158,7 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
     return primitiveCandidates(observation, this.now());
   }
   async execute(command: Command, signal: AbortSignal): Promise<Receipt> {
-    // The task each command carries says which catalog the next decisions are offered.
+    // The task each command carries says which remembered places the observation puts first.
     if (typeof command.context?.goal === 'string') this.setDragonTask(isDragonGoal(command.context.goal));
     this.running++;
     try { return await this.executeCommand(command, signal); }

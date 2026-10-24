@@ -56,13 +56,13 @@ const mob = (id: number, name: string, x: number, y: number, z: number, extra: R
   ({ id, name, type: 'hostile', height: name === 'wither_skeleton' ? 2.4 : 1.95, width: name === 'wither_skeleton' ? 0.7 : 0.6, position: new Vec3(x, y, z), ...extra });
 
 /** A fake body in the Nether at `at` (feet), a physics tick, a ledger, the floor installed. A jump key pressed is recorded (`__jumped`): a body in the air that a blow throws. */
-function scene(shape: (x: number, y: number, z: number) => Cell, at: Vec3, options: { health?: number; items?: any[]; mobs?: Record<string, any>; now?: () => number; llm?: boolean; dimension?: string } = {}) {
+function scene(shape: (x: number, y: number, z: number) => Cell, at: Vec3, options: { health?: number; items?: any[]; mobs?: Record<string, any>; now?: () => number; dimension?: string } = {}) {
   const blocks = new Map<string, Cell>();
   const calls: Array<[string, unknown]> = [];
   const bot: any = Object.assign(new EventEmitter(), {
     __blocks: blocks, __dug: [] as string[], __placed: [] as string[], __jumped: false, __fakeMovements: true,
     entity: { id: 1, name: 'player', position: at.clone(), yaw: 0, pitch: 0, onGround: true, metadata: [0] },
-    health: options.health ?? 20, food: 17, game: { dimension: options.dimension ?? 'the_nether' }, llmCentric: options.llm ?? true,
+    health: options.health ?? 20, food: 17, game: { dimension: options.dimension ?? 'the_nether' },
     entities: options.mobs ?? {},
     registry: { blocksByName: { cobblestone: { id: 1 }, stone: { id: 2 }, netherrack: { id: 3 }, nether_bricks: { id: 4 } },
       entitiesByName: { wither_skeleton: { type: 'hostile' }, zombie: { type: 'hostile' }, blaze: { type: 'hostile' }, skeleton: { type: 'hostile' }, creeper: { type: 'hostile' } }, itemsByName: {}, items: {} },
@@ -189,7 +189,7 @@ describe('the melee hand\'s conditions', () => {
     expect(meleeLines(low.ledger)).toHaveLength(0);
   });
 
-  it('no melee hand for a shooter, a creeper, a walled-off enemy, the old mode, or a kind the planner fights by choice above the flee\'s health', async () => {
+  it('no melee hand for a shooter, a creeper, a walled-off enemy, or a kind the planner fights by choice above the flee\'s health', async () => {
     const clock = { at: 44_000_000 };
     const tipAt = new Vec3(225.5, 55, 0.5);
     for (const name of ['blaze', 'skeleton', 'creeper']) {
@@ -204,10 +204,6 @@ describe('the melee hand\'s conditions', () => {
       expect(meleeLines(cave.ledger).filter(entry => entry.kind === 'melee'), `opened ${opened}`).toHaveLength(expected);
       if (opened) expect(cave.bot.entity.position.x).toBe(-0.5);
     }
-    const old = scene(bridge, tipAt, { health: 15.5, llm: false, items: [NETHERRACK], mobs: { 3: mob(3, 'wither_skeleton', 229.1, 55, 0.5) }, now: () => clock.at });
-    await rounds(old.bot, clock, 2);
-    expect(old.bot.__placed).toEqual([]);
-    expect(meleeLines(old.ledger)).toHaveLength(0);
     // A fight of the planner's choosing: left alone at 15.5, acted on at 7.
     for (const [health, expected] of [[15.5, 0], [7, 1]] as const) {
       const fight = scene(bridge, tipAt, { health, items: [NETHERRACK], mobs: { 3: mob(3, 'wither_skeleton', 229.1, 55, 0.5) }, now: () => clock.at });

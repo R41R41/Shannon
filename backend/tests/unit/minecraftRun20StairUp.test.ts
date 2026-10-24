@@ -51,16 +51,4 @@ describe('run 20: the way up from underground', () => {
     expect(result.success).toBe(false);
     expect(result.result).toContain('直上登りが途中で止まりました');
   });
-
-  it('MINEBOT_STAIR_UP_PILLAR=off keeps the stair', async () => {
-    process.env.MINEBOT_STAIR_UP_PILLAR = 'off';
-    try {
-      const bot = upBot();
-      const skill: any = new StairMine(bot);
-      skill.callSkill = vi.fn();
-      skill.sleep = async () => {};
-      await skill.runImpl(-40, 'east');
-      expect(skill.callSkill).not.toHaveBeenCalled();
-    } finally { delete process.env.MINEBOT_STAIR_UP_PILLAR; }
-  });
 });

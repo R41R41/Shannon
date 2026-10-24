@@ -9,18 +9,12 @@ import { actionDelay } from '../execution/observedWait.js';
 import pathfinder from 'mineflayer-pathfinder';
 import { gotoSafe } from '../utils/gotoSafe.js';
 import { goalTarget } from '../utils/farLegs.js';
-import { holdClutterTidy, tidyIfCluttered } from '../utils/inventoryRoom.js';
 import { PARTIAL_FAILURE, progressTrailer } from '../utils/partialProgress.js';
-import { hostileNear } from './craftOne.js';
 import { liquidAim, liquidAimPoints } from '../utils/liquidAim.js';
 import { facePoints, rayFace } from '../utils/rayFace.js';
 import { dropBurnsIn, lavaAroundCount, lavaBelowDrop } from '../utils/dropFate.js';
 import { lavaSourceInfo, rankLavaSources, type LavaSourceInfo } from '../utils/lavaPools.js';
-import { tidyPlan } from '../utils/inventoryTidy.js';
-import { isLlmCentric } from '../utils/llmCentric.js';
 import { scoopWater } from '../utils/scoopWater.js';
-/** Rock dug on the way that a full pack can spare, for the obsidian (see roomForDrops). */
-const SPARE_ROCK = ['cobbled_deepslate', 'tuff', 'diorite', 'andesite', 'granite', 'dirt', 'gravel', 'calcite', 'netherrack', 'cobblestone'];
 
 const { goals } = pathfinder;
 
@@ -110,15 +104,8 @@ class UseItemOnBlock extends InstantSkill {
     const here = this.bot.entity.position;
     const distance = target ? Math.hypot(target.x - here.x, (target.y ?? here.y) - here.y, target.z - here.z) : 0;
     const timeoutMs = Math.max(2_000, Math.min(Math.max(baseMs, Math.min(WALK_MAX_MS, distance * WALK_MS_PER_M)), capMs));
-    const startedAt = Date.now();
     await gotoSafe(this.bot, goal, {
       timeoutMs, rockTravel: !handDigging,
-      tunnelTidy: async () => {
-        await tidyIfCluttered(this.bot as any, (skill, ...args) => this.callSkill(skill, ...args), {
-          timeLeftMs: timeoutMs - (Date.now() - startedAt), interrupted: () => this.shouldInterrupt(),
-          blocked: () => hostileNear(this.bot as any, 16) || String((this.bot as any).minebotControlState ?? '').startsWith('emergency'),
-        });
-      },
       tunnelPillar: (height: number) => this.callSkill('tower-up', height),
     });
   }
@@ -153,10 +140,7 @@ class UseItemOnBlock extends InstantSkill {
       // Any count asked for collects (the last one of ten as well: a count of 1 meaning "pour once" left a probe at nine).
       const wanted = Math.floor(Number(count) || 0);
       if (wanted >= 1 && (itemName ?? this.bot.heldItem?.name) === 'water_bucket') {
-        // The pack is not tidied while the obsidian is made: run 23 threw 176 cobbled deepslate away beside the lava after every obsidian
-        // dug (4-6 s each, the heap fetched back and thrown again). Room is made when under two slots are free (roomForDrops), not before.
-        const release = holdClutterTidy(this.bot);
-        try { return await this.makeObsidian(new Vec3(x, y, z), wanted); } finally { release(); }
+        return await this.makeObsidian(new Vec3(x, y, z), wanted);
       }
 
       if (itemName) {
@@ -532,7 +516,7 @@ class UseItemOnBlock extends InstantSkill {
     let centre = start.clone();
     // pours: poured on; converted: of those, turned to obsidian; wasted: in a row, not; sincePour: pours since the last dig.
     let pours = 0, converted = 0, wasted = 0, sincePour = 0, digFailures = 0, overLavaDigs = 0, covers = 0;
-    let why = '', roomNote = '';
+    let why = '';
     while (held('obsidian') < want && !this.shouldInterrupt()) {
       if (timeLeft() < 15_000) { why = '1回の行動の時間を使い切る前に区切りました'; break; }
       if (!held('water_bucket')) {
@@ -597,8 +581,6 @@ class UseItemOnBlock extends InstantSkill {
       if (target.offset(0.5, 0.5, 0.5).distanceTo(this.bot.entity.position.offset(0, 1.62, 0)) > 4.2) {
         try { await this.walk(new goals.GoalNear(target.x, target.y + 1, target.z, 2), 12_000, timeLeft()); } catch (error) { if (this.shouldInterrupt()) throw error; }
       }
-      // A full pack leaves the obsidian on the floor (ladder probe: five dug, none taken, the call given up).
-      roomNote += await this.roomForDrops();
       const got = held('obsidian');
       let dug: { success?: boolean; result?: unknown } = { success: false };
       try { dug = await this.callSkill('dig-block-at', target.x, target.y, target.z, true, 'target'); } catch (error) { if (this.shouldInterrupt()) throw error; }
@@ -626,7 +608,7 @@ class UseItemOnBlock extends InstantSkill {
     const got = held('obsidian') - before;
     const bucketNote = held('water_bucket') ? '水はwater_bucketへ回収済み' : '⚠️ water_bucketに水が戻っていません（近くの水源を空バケツで汲んでください）';
     const poolNote = `${covers ? `岩の覆いを${covers}か所掘って開けた。` : ''}${pours > converted ? `水をかけて固まったのは${converted}か所。` : ''}`;
-    const summary = `黒曜石を${got}個作って掘りました（溶岩${pours}か所に水をかけ、所持 obsidian=${held('obsidian')}個）。${bucketNote}。${poolNote}${roomNote}`;
+    const summary = `黒曜石を${got}個作って掘りました（溶岩${pours}か所に水をかけ、所持 obsidian=${held('obsidian')}個）。${bucketNote}。${poolNote}`;
     if (got >= count) return { success: true, result: summary };
     // Some made: a partial (utils/partialProgress), told with the count; nothing made is a failure of its own kind.
     return {
@@ -635,33 +617,6 @@ class UseItemOnBlock extends InstantSkill {
         + (why.startsWith(NO_MORE_LAVA) ? '別の溶岩の溜まりを find-blocks lava で探して、そこで続けてください' : `同じ溜まりで続けるなら use-item-on-block を count=${count - got} でもう一度呼んでください`)
         + (got > 0 ? ` ${progressTrailer('obsidian', got, count)}` : ''),
     };
-  }
-
-  /**
-   * Two free slots at least before a dig: what tidyPlan names (spare stone, dirt and the like) is thrown away; with nothing it names,
-   * the largest stack of plain rock (32 cobblestone kept for walls). Says what went; empty when nothing had to.
-   */
-  async roomForDrops(): Promise<string> {
-    const items = () => this.bot.inventory.items();
-    const free = () => typeof (this.bot.inventory as any).emptySlotCount === 'function' ? (this.bot.inventory as any).emptySlotCount() : 36 - items().length;
-    // The LLM-centric body throws nothing away by itself (MINEBOT_LLM_CENTRIC).
-    if (free() >= 2 || isLlmCentric(this.bot)) return '';
-    let plan = tidyPlan(items() as any);
-    if (!plan.length) {
-      const totals = new Map<string, number>();
-      for (const item of items()) if (SPARE_ROCK.includes(item.name)) totals.set(item.name, (totals.get(item.name) ?? 0) + item.count);
-      const [name, count] = [...totals].sort((a, b) => b[1] - a[1])[0] ?? [];
-      if (name) plan = [{ name, count: name === 'cobblestone' ? count! - 32 : count! }];
-    }
-    const gone: string[] = [];
-    for (const { name, count } of plan.slice(0, 2)) {
-      if (count <= 0) continue;
-      try {
-        const dropped = await this.callSkill('drop-item', name, count);
-        if (dropped?.success) gone.push(`${name}×${count}`);
-      } catch (error) { if (this.shouldInterrupt()) throw error; }
-    }
-    return gone.length ? `持ち物の空きを作るため${gone.join('・')}を捨てました。` : '';
   }
 
   /**

@@ -36,7 +36,7 @@ export function canHarvest(block: BlockLike, item: { type: number } | null | und
 }
 
 /** Time in seconds plus wear, for breaking the block with this item (null: the bare hand). */
-export function toolCost(block: BlockLike, item: ToolLike | null | undefined, effects: unknown = {}, enchants: unknown[] = []): number {
+function toolCost(block: BlockLike, item: ToolLike | null | undefined, effects: unknown = {}, enchants: unknown[] = []): number {
   let ms: number;
   try { ms = Number(block.digTime(item ? item.type : null, false, false, false, enchants, effects)); } catch { return Infinity; }
   if (!Number.isFinite(ms)) return Infinity;

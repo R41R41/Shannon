@@ -7,43 +7,42 @@ import { loadFloorLayer } from '../../src/services/minebot/utils/floorLayer.js';
 import { LEDGER_SIZE, ReflexLedger, SUMMARY_MAX_CHARS, ensureReflexLedger } from '../../src/services/minebot/utils/reflexLedger.js';
 
 describe('floorConfig (the reflex switch, P8; defaults changed 2026-10-19)', () => {
-  it('runs everything P8 built when nothing is set: the floor, the flee, the pickup, the combat knowledge, the tag and the budget', () => {
+  it('runs everything P8 built when nothing is set: the floor, the flee, the combat knowledge, the tag and the budget', () => {
     const config = floorConfig({});
-    expect(config).toMatchObject({ mode: 'default', floor: true, retreat: true, eat: true, armor: true, flee: true, pickup: true, ledgerTag: true, combatKnowledge: true, budget: true, wideThreats: true });
+    expect(config).toMatchObject({ mode: 'default', floor: true, retreat: true, eat: true, flee: true, ledgerTag: true, combatKnowledge: true, budget: true, wideThreats: true });
     expect(config.warnings).toEqual([]); expect(config.denied).toEqual([]);
     expect(floorConfig({ MINEBOT_FCA_REFLEXES: 'default' })).toEqual(config);
     expect(floorConfig({ MINEBOT_FCA_REFLEXES: '  DEFAULT ' }).mode).toBe('default');
   });
-  it('`floor` is exactly the 2026-10-16 production floor (65b4bd1): retreat, eat and armour only, with no flee, no pickup, no combat knowledge, no budget and its own list of enemy names (P8 third review, M3)', () => {
+  it('`floor` is exactly the 2026-10-16 production floor (65b4bd1): retreat and eat only, with no flee, no combat knowledge, no budget and its own list of enemy names (P8 third review, M3)', () => {
     const config = floorConfig({ MINEBOT_FCA_REFLEXES: 'floor' });
-    expect(config).toMatchObject({ mode: 'floor', floor: true, retreat: true, eat: true, armor: true, flee: false, pickup: false, combatKnowledge: false, budget: false, wideThreats: false });
+    expect(config).toMatchObject({ mode: 'floor', floor: true, retreat: true, eat: true, flee: false, combatKnowledge: false, budget: false, wideThreats: false });
     // Asking for the budget by name does not bring it back: it is not part of that floor.
     expect(floorConfig({ MINEBOT_FCA_REFLEXES: 'floor', MINEBOT_FCA_REFLEX_OFF: 'ledger-tag' })).toMatchObject({ budget: false, wideThreats: false });
     expect(floorConfig({ MINEBOT_FCA_REFLEXES: ' Floor ' })).toEqual(config);
     // The receipt's tag is the one thing of P8's reporting that can be taken away from it.
     expect(floorConfig({ MINEBOT_FCA_REFLEXES: 'floor', MINEBOT_FCA_REFLEX_OFF: 'ledger-tag' })).toMatchObject({ ledgerTag: false, flee: false });
   });
-  it('off is rollback only: no floor, no flee, no pickup, no combat-knowledge providers; the receipt tag is still its own switch', () => {
+  it('off is rollback only: no floor, no flee, no combat-knowledge providers; the receipt tag is still its own switch', () => {
     const config = floorConfig({ MINEBOT_FCA_REFLEXES: 'off' });
-    expect(config).toMatchObject({ mode: 'off', floor: false, retreat: false, eat: false, armor: false, flee: false, pickup: false, combatKnowledge: false, budget: false, wideThreats: false, ledgerTag: true });
+    expect(config).toMatchObject({ mode: 'off', floor: false, retreat: false, eat: false, flee: false, combatKnowledge: false, budget: false, wideThreats: false, ledgerTag: true });
   });
-  it('the deny list removes flee, pickup, combat, budget, ledger-tag and the floor\'s three one by one, whatever the mode', () => {
+  it('the deny list removes flee, combat, budget, ledger-tag and the floor\'s three one by one, whatever the mode', () => {
     const only = (name: string) => floorConfig({ MINEBOT_FCA_REFLEX_OFF: name });
-    expect(only('flee')).toMatchObject({ flee: false, pickup: true, combatKnowledge: true, retreat: true, eat: true, armor: true, budget: true, ledgerTag: true });
-    expect(only('pickup')).toMatchObject({ pickup: false, flee: true, combatKnowledge: true });
-    expect(only('combat')).toMatchObject({ combatKnowledge: false, flee: true, pickup: true, retreat: true, ledgerTag: true });
+    expect(only('flee')).toMatchObject({ flee: false, combatKnowledge: true, retreat: true, eat: true, budget: true, ledgerTag: true });
+    expect(only('combat')).toMatchObject({ combatKnowledge: false, flee: true, retreat: true, ledgerTag: true });
     expect(only('budget')).toMatchObject({ budget: false, flee: true, eat: true });
     expect(only('ledger-tag')).toMatchObject({ ledgerTag: false, flee: true, combatKnowledge: true });
-    for (const name of ['retreat', 'eat', 'armor'] as const) expect(only(name)).toMatchObject({ [name]: false, floor: true, flee: true });
+    for (const name of ['retreat', 'eat'] as const) expect(only(name)).toMatchObject({ [name]: false, floor: true, flee: true });
   });
   it('reads the deny list once, normalised, and ignores what it does not know with a warning', () => {
-    const config = floorConfig({ MINEBOT_FCA_REFLEX_OFF: ' Eat, pickup,,ledger-tag,bogus ,eat' });
-    expect(config).toMatchObject({ eat: false, retreat: true, armor: true, flee: true, pickup: false, ledgerTag: false });
-    expect(config.denied).toEqual(['eat', 'pickup', 'ledger-tag']);
+    const config = floorConfig({ MINEBOT_FCA_REFLEX_OFF: ' Eat, flee,,ledger-tag,bogus ,eat' });
+    expect(config).toMatchObject({ eat: false, retreat: true, flee: false, ledgerTag: false });
+    expect(config.denied).toEqual(['eat', 'flee', 'ledger-tag']);
     expect(config.warnings.join(' ')).toContain('bogus');
     // Denying something that was off anyway changes nothing.
-    expect(floorConfig({ MINEBOT_FCA_REFLEXES: 'floor', MINEBOT_FCA_REFLEX_OFF: 'flee,pickup' })).toMatchObject({ flee: false, pickup: false, retreat: true });
-    expect(floorConfig({ MINEBOT_FCA_REFLEX_OFF: 'retreat,armor' })).toMatchObject({ retreat: false, armor: false, eat: true, floor: true });
+    expect(floorConfig({ MINEBOT_FCA_REFLEXES: 'floor', MINEBOT_FCA_REFLEX_OFF: 'flee,combat' })).toMatchObject({ flee: false, combatKnowledge: false, retreat: true });
+    expect(floorConfig({ MINEBOT_FCA_REFLEX_OFF: 'retreat' })).toMatchObject({ retreat: false, eat: true, floor: true });
   });
   it('reads `extended` (the old name) as default, with a warning', () => {
     const config = floorConfig({ MINEBOT_FCA_REFLEXES: 'extended' });
@@ -54,7 +53,7 @@ describe('floorConfig (the reflex switch, P8; defaults changed 2026-10-19)', () 
     for (const value of ['on', 'flor', 'deafult', 'true', '1', 'Extnded']) {
       const config = floorConfig({ MINEBOT_FCA_REFLEXES: value });
       expect(config.mode, value).toBe('floor'); expect(config.floor, value).toBe(true);
-      expect(config).toMatchObject({ retreat: true, eat: true, armor: true, flee: false, pickup: false, combatKnowledge: false, budget: false, wideThreats: false });
+      expect(config).toMatchObject({ retreat: true, eat: true, flee: false, combatKnowledge: false, budget: false, wideThreats: false });
       expect(config.warnings, value).toHaveLength(1); expect(config.warnings[0].startsWith('‼'), value).toBe(true); expect(config.warnings[0]).toContain(value.toLowerCase());
       expect(config.warnings[0]).toContain('floor');
     }
@@ -64,23 +63,23 @@ describe('floorConfig (the reflex switch, P8; defaults changed 2026-10-19)', () 
     expect(floorConfig({ MINEBOT_FCA_REFLEXES: '   ' }).warnings).toEqual([]);
   });
   it('splits the deny list at commas, spaces, semicolons, tabs and newlines, and says loudly which name it did not know (M4)', () => {
-    for (const list of ['flee,pickup', 'flee pickup', 'flee;pickup', ' flee ; pickup ', 'flee, pickup', 'FLEE\tPickup', 'flee\npickup', 'flee,;  pickup,']) {
+    for (const list of ['flee,combat', 'flee combat', 'flee;combat', ' flee ; combat ', 'flee, combat', 'FLEE\tCombat', 'flee\ncombat', 'flee,;  combat,']) {
       const config = floorConfig({ MINEBOT_FCA_REFLEX_OFF: list });
-      expect(config.denied, JSON.stringify(list)).toEqual(['flee', 'pickup']); expect(config.warnings, JSON.stringify(list)).toEqual([]);
-      expect(config).toMatchObject({ flee: false, pickup: false, eat: true });
+      expect(config.denied, JSON.stringify(list)).toEqual(['flee', 'combat']); expect(config.warnings, JSON.stringify(list)).toEqual([]);
+      expect(config).toMatchObject({ flee: false, combatKnowledge: false, eat: true });
     }
     const config = floorConfig({ MINEBOT_FCA_REFLEX_OFF: 'flee;pickpu eat,Armour' });
     expect(config.denied).toEqual(['eat', 'flee']);
     expect(config.warnings).toHaveLength(2);
     expect(config.warnings.every(warning => warning.startsWith('‼'))).toBe(true);
     expect(config.warnings.join(' ')).toContain('pickpu'); expect(config.warnings.join(' ')).toContain('armour');
-    expect(config.pickup).toBe(true); // the typo did not switch the pickup off, and it says so
+    expect(config.flee).toBe(false); // the typo stopped nothing else, and it says so
   });
   it('says what is on in one start-up line', () => {
-    expect(describeFloorConfig(floorConfig({}))).toBe('🧱 床の反射: default（retreat,eat,armor,flee,pickup） 台帳=on タグ=on 戦闘知識=on 予算=on 拒否=[]');
-    expect(describeFloorConfig(floorConfig({ MINEBOT_FCA_REFLEXES: 'floor' }))).toBe('🧱 床の反射: floor（retreat,eat,armor） 台帳=on タグ=on 戦闘知識=off 予算=off 拒否=[]');
+    expect(describeFloorConfig(floorConfig({}))).toBe('🧱 床の反射: default（retreat,eat,flee） 台帳=on タグ=on 戦闘知識=on 予算=on 拒否=[]');
+    expect(describeFloorConfig(floorConfig({ MINEBOT_FCA_REFLEXES: 'floor' }))).toBe('🧱 床の反射: floor（retreat,eat） 台帳=on タグ=on 戦闘知識=off 予算=off 拒否=[]');
     expect(describeFloorConfig(floorConfig({ MINEBOT_FCA_REFLEX_OFF: 'ledger-tag,flee' })))
-      .toBe('🧱 床の反射: default（retreat,eat,armor,pickup） 台帳=on タグ=off 戦闘知識=on 予算=on 拒否=[flee,ledger-tag]');
+      .toBe('🧱 床の反射: default（retreat,eat） 台帳=on タグ=off 戦闘知識=on 予算=on 拒否=[flee,ledger-tag]');
     expect(describeFloorConfig(floorConfig({ MINEBOT_FCA_REFLEXES: 'off' }))).toContain('off（なし）');
     expect(describeFloorConfig(floorConfig({ MINEBOT_FCA_REFLEX_OFF: 'combat,budget' }))).toContain('戦闘知識=off 予算=off 拒否=[combat,budget]');
   });
@@ -93,19 +92,18 @@ describe('what the client loads for each setting (loadFloorLayer, run against a 
       inventory: { items: () => [], slots: [] }, setControlState: () => undefined, loadPlugin(plugin: (bot: unknown) => void) { plugin(this); } });
     const config = loadFloorLayer(bot, env);
     bot.emit('end');
-    return { bot, config, installed: { ledger: !!bot.reflexLedger, floor: !!bot.floorReflexes, pickup: !!bot.idlePickup, combat: !!bot.combatStats, budget: !!bot.floorReflexes?.budget } };
+    return { bot, config, installed: { ledger: !!bot.reflexLedger, floor: !!bot.floorReflexes, combat: !!bot.combatStats, budget: !!bot.floorReflexes?.budget } };
   }
   it('installs the whole layer by default', () => {
-    expect(loaded({}).installed).toEqual({ ledger: true, floor: true, pickup: true, combat: true, budget: true });
+    expect(loaded({}).installed).toEqual({ ledger: true, floor: true, combat: true, budget: true });
   });
   it('installs the production floor alone for `floor`, and no floor at all for `off` (the ledger stays)', () => {
-    expect(loaded({ MINEBOT_FCA_REFLEXES: 'floor' }).installed).toEqual({ ledger: true, floor: true, pickup: false, combat: false, budget: false });
-    expect(loaded({ MINEBOT_FCA_REFLEXES: 'off' }).installed).toEqual({ ledger: true, floor: false, pickup: false, combat: false, budget: false });
+    expect(loaded({ MINEBOT_FCA_REFLEXES: 'floor' }).installed).toEqual({ ledger: true, floor: true, combat: false, budget: false });
+    expect(loaded({ MINEBOT_FCA_REFLEXES: 'off' }).installed).toEqual({ ledger: true, floor: false, combat: false, budget: false });
   });
   it('removes exactly what the deny list names', () => {
-    expect(loaded({ MINEBOT_FCA_REFLEX_OFF: 'pickup' }).installed).toEqual({ ledger: true, floor: true, pickup: false, combat: true, budget: true });
-    expect(loaded({ MINEBOT_FCA_REFLEX_OFF: 'combat' }).installed).toEqual({ ledger: true, floor: true, pickup: true, combat: false, budget: true });
-    expect(loaded({ MINEBOT_FCA_REFLEX_OFF: 'budget' }).installed).toEqual({ ledger: true, floor: true, pickup: true, combat: true, budget: false });
+    expect(loaded({ MINEBOT_FCA_REFLEX_OFF: 'combat' }).installed).toEqual({ ledger: true, floor: true, combat: false, budget: true });
+    expect(loaded({ MINEBOT_FCA_REFLEX_OFF: 'budget' }).installed).toEqual({ ledger: true, floor: true, combat: true, budget: false });
   });
   it('the floor takes the config read here, so a denied flee is denied in the reflex itself and an allowed one runs', () => {
     const scared = (env: Record<string, string>) => {

@@ -1,4 +1,3 @@
-import { isLlmCentric } from '../utils/llmCentric.js';
 import { resyncInventory } from '../utils/inventorySync.js';
 import minecraftData from 'minecraft-data';
 import pathfinder from 'mineflayer-pathfinder';
@@ -7,17 +6,13 @@ import { CustomBot, InstantSkill } from '../types.js';
 import { gotoSafe } from '../utils/gotoSafe.js';
 import { ensureLineOfSight } from '../utils/blockLineOfSight.js';
 import { actionDelay } from '../execution/observedWait.js';
-import { placeableSpots } from './findPlaceableSpot.js';
 import { bodyCells, isFreeCell } from './sleepInBed.js';
-import { WORKSTATION_BLOCKS, findStances, planWorkstationSpot, stationAccess, worksiteState } from '../utils/workstationAccess.js';
+import { WORKSTATION_BLOCKS, findStances, stationAccess, worksiteState } from '../utils/workstationAccess.js';
 
 const { goals } = pathfinder;
 
 /** Cells a block can be placed into, as in vanilla (fluids and non-solid plants are replaced). */
 type PlaceResult = { success: boolean; result: string; failureType?: string; recoverable?: boolean };
-
-/** Other cells tried, one after another, when the server takes none of the one the body chose. */
-const MAX_PLACE_RETRIES = 2;
 
 const REPLACEABLE_TARGETS = new Set(['air', 'cave_air', 'void_air', 'water', 'lava', 'bubble_column', 'short_grass',
   'tall_grass', 'fern', 'large_fern', 'dead_bush', 'seagrass', 'tall_seagrass', 'vine', 'glow_lichen', 'snow',
@@ -44,7 +39,7 @@ class PlaceBlockAt extends InstantSkill {
       {
         name: 'x',
         type: 'number',
-        description: 'X座標（整数）。x・y・z を省略すると、手の届く置ける場所（床の上、自分の体と重ならない所）を自分で選ぶ',
+        description: 'X座標（整数）',
         required: false,
       },
       {
@@ -63,55 +58,10 @@ class PlaceBlockAt extends InstantSkill {
   }
 
   /**
-   * Where to put it when no place was given: the nearest cell within reach that can take it (find-placeable-spot's search), on a
-   * floor first, out of the cells the body fills, with the head cell free too for a bed. Run 17 called find-placeable-spot and then
-   * place-block-at five times over; three of its placements were refused for a cell its own body stood in.
-   */
-  private chooseSpot(blockName: string): Vec3 | null {
-    const body = bodyCells(this.bot.entity.position);
-    const eyes = this.bot.entity.position.offset(0, 1.62, 0);
-    const bed = blockName.endsWith('_bed');
-    const spots = placeableSpots(this.bot as any, 4, 32)
-      .filter(spot => !body.some(cell => cell.x === spot.x && cell.y === spot.y && cell.z === spot.z))
-      .filter(spot => !this.avoidCells.some(cell => cell.x === spot.x && cell.y === spot.y && cell.z === spot.z))
-      .filter(spot => new Vec3(spot.x + 0.5, spot.y + 0.5, spot.z + 0.5).distanceTo(eyes) <= 4.5)
-      // A bed stands on floor under both its halves; the head cell has to be free as well.
-      .filter(spot => !bed || (this.bot.blockAt(new Vec3(spot.x, spot.y - 1, spot.z))?.boundingBox === 'block'
-        && this.bedHeadFree(new Vec3(spot.x, spot.y, spot.z), body)))
-      .sort((a, b) => Number(b.ref === '下') - Number(a.ref === '下') || a.dist - b.dist);
-    return spots[0] ? new Vec3(spots[0].x, spots[0].y, spots[0].z) : null;
-  }
-
-  /** Cells not to choose again: a workstation just taken up because it hid another (one re-placement only). */
-  private avoidCells: Vec3[] = [];
-  private replacing = false;
-
-  /**
-   * A cell for a crafting table or a furnace (utils/workstationAccess): in use reach and in sight from where the body stands, hiding
-   * no workstation that can be used from here, leaving a way out. In a corridor with no such cell, a wall cell beside the body is
-   * dug out and the block goes into it. Null: nothing better than the plain search is known.
-   */
-  private async chooseWorkstationSpot(blockName: string): Promise<{ cell: Vec3; note: string } | null> {
-    try {
-      const plan = planWorkstationSpot(this.bot as any, blockName, placeableSpots(this.bot as any, 4, 48), { exclude: this.avoidCells });
-      for (const entry of plan.slice(0, 4)) {
-        if (entry.score >= 1000) break;
-        if (!entry.niche) return { cell: entry.cell, note: '' };
-        if (this.shouldInterrupt()) return null;
-        // collect=false: the drop stays in the niche (the body would otherwise walk into the hole after it, and out of its place).
-        const dug = await this.callSkill('dig-block-at', entry.cell.x, entry.cell.y, entry.cell.z, false);
-        if (dug.success && isFreeCell(this.bot.blockAt(entry.cell))) return { cell: entry.cell, note: '狭い所なので、壁を1マス掘って置き場所にしました。' };
-      }
-    } catch (error) { if (this.shouldInterrupt()) throw error; }
-    return null;
-  }
-
-  /**
    * After a workstation is down: every workstation of the worksite is checked to be usable from here. Hidden ones (the new block in
-   * front of a table, a furnace behind it) are put right by a step to a spot from which all are in sight; failing that, a block this
-   * call chose itself is taken up and put elsewhere, once. Said when something stays hidden. Empty when all is well.
+   * front of a table, a furnace behind it) are put right by a step to a spot from which all are in sight. Said when something stays hidden. Empty when all is well.
    */
-  private async settleWorksite(blockName: string, placed: Vec3, autoChosen: boolean): Promise<string | { replaced: { success: boolean; result: string; failureType?: string; recoverable?: boolean } }> {
+  private async settleWorksite(placed: Vec3): Promise<string> {
     try {
       const bot = this.bot as any;
       const eyes = this.bot.entity.position.offset(0, 1.62, 0);
@@ -130,35 +80,12 @@ class PlaceBlockAt extends InstantSkill {
           return `。${hidden.map(label).join('、')}が見えるよう、立ち位置を(${Math.floor(stance.feet.x)}, ${Math.floor(stance.feet.y)}, ${Math.floor(stance.feet.z)})に変えました`;
         }
       }
-      // The new block hides another one and no spot sees both: taken up and put elsewhere (once).
-      const hiddenByNew = hidden.some(item => !(item.position.x === placed.x && item.position.y === placed.y && item.position.z === placed.z));
-      if (autoChosen && hiddenByNew && !this.replacing && !this.shouldInterrupt()) {
-        this.replacing = true;
-        this.avoidCells.push(placed);
-        try {
-          const taken = await this.callSkill('dig-block-at', placed.x, placed.y, placed.z, true, 'target', true);
-          if (taken.success) {
-            const again = await this.runImpl(blockName);
-            // The new placement's own answer stands (its position is the one the caller reads); the first is said after it.
-            if (again.success) return { replaced: { ...again, result: `${again.result}。先に置いた(${placed.x}, ${placed.y}, ${placed.z})は他の設備を隠したので拾い直して置き直しました` } };
-          }
-        } finally { this.replacing = false; }
-      }
       return `。注意: ${hidden.map(item => `${label(item)}${item.obstruction ? `は${item.obstruction}に遮られて` : 'は'}今の立ち位置から使えません`).join('、')}`
         + '（使う時に自分で立ち位置を変えます）';
     } catch (error) {
       if (this.shouldInterrupt()) throw error;
       return '';
     }
-  }
-
-  /** A bed lies the way the body faces as it places it: its head is the cell past the foot, away from the body. */
-  private bedHeadFree(foot: Vec3, body: Vec3[]): boolean {
-    const at = this.bot.entity.position;
-    const dx = foot.x + 0.5 - at.x, dz = foot.z + 0.5 - at.z;
-    const head = Math.abs(dx) >= Math.abs(dz) ? foot.offset(Math.sign(dx), 0, 0) : foot.offset(0, 0, Math.sign(dz));
-    return isFreeCell(this.bot.blockAt(head)) && this.bot.blockAt(head.offset(0, -1, 0))?.boundingBox === 'block'
-      && !body.some(cell => cell.equals(head));
   }
 
   /** Too far to place from where the body is now: said without waiting for the body, with where the body is. */
@@ -175,45 +102,17 @@ class PlaceBlockAt extends InstantSkill {
     };
   }
 
-  /** How deep the calls of runImpl are (a re-placement or another cell tried calls it again): the cells to avoid are forgotten at the top. */
-  private depth = 0;
-  private placeRetries = 0;
-
   async runImpl(blockName: string, x?: number, y?: number, z?: number): Promise<PlaceResult> {
-    if (this.depth === 0) { this.avoidCells = []; this.placeRetries = 0; }
-    this.depth++;
-    try { return await this.placeOnce(blockName, x, y, z); }
-    finally { if (--this.depth === 0) { this.avoidCells = []; this.placeRetries = 0; } }
-  }
-
-  private async placeOnce(blockName: string, x?: number, y?: number, z?: number): Promise<PlaceResult> {
     try {
       let note = '';
-      // パラメータチェック（座標が無ければ、自分で選ぶ）
-      let autoChosen = false;
-      if (x == null && y == null && z == null && isLlmCentric(this.bot)) {
-        // The LLM-centric body chooses no place (MINEBOT_LLM_CENTRIC): the planner names the cell from the map.
-        return { success: false, failureType: 'invalid_input', recoverable: false, result: '置く場所（x・y・z）を指定してください（この体は置き場所を自分で選びません）' };
-      }
       if (x == null && y == null && z == null) {
-        let spot: Vec3 | null = null;
-        // A crafting table or a furnace: where it hides no other workstation from here and does not close the way out (a wall cell
-        // is dug out for it in a tunnel). Run 20: the second furnace's table stood behind the first furnace.
-        if (WORKSTATION_BLOCKS.has(blockName)) {
-          const picked = await this.chooseWorkstationSpot(blockName);
-          if (picked) { spot = picked.cell; note += picked.note; }
-        }
-        spot ??= this.chooseSpot(blockName);
-        if (!spot) return { success: false, failureType: 'target_not_found', recoverable: true,
-          result: `手の届く所に${blockName}を置ける場所がありません（床があり、自分の体と重ならない空きマス）。少し動いてから呼んでください` };
-        ({ x, y, z } = spot);
-        note += `置き場所(${x}, ${y}, ${z})は自分で選びました。`;
-        autoChosen = true;
+        // The body chooses no place (design mb-llm-centric): the planner names the cell from the map.
+        return { success: false, failureType: 'invalid_input', recoverable: false, result: '置く場所（x・y・z）を指定してください（この体は置き場所を自分で選びません）' };
       }
       if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
         return {
           success: false,
-          result: '座標は有効な数値である必要があります（x・y・z を全部省略すると自分で選びます）',
+          result: '座標は有効な数値である必要があります',
           failureType: 'invalid_input',
           recoverable: false,
         };
@@ -349,14 +248,6 @@ class PlaceBlockAt extends InstantSkill {
         }
         // Something stands in the cell (the body itself, a mob, a dropped block of sand): the server answers nothing.
         if (String(actionError?.message ?? '').includes('did not fire within timeout')) {
-          // A cell the body chose itself that the server would not take: the next cell that suits is tried (twice at most), the one that failed left out.
-          if (autoChosen && this.placeRetries < MAX_PLACE_RETRIES && !this.shouldInterrupt()) {
-            this.placeRetries++;
-            this.avoidCells.push(targetPos);
-            const again = await this.runImpl(blockName);
-            if (again.success) return { ...again, result: `${again.result}（先に選んだ(${x}, ${y}, ${z})は受け付けられなかったので別の場所に置き直しました）` };
-            return again;
-          }
           return { success: false, failureType: 'place_failed', recoverable: true,
             result: `${blockName}を(${x}, ${y}, ${z})に置けませんでした: サーバーが設置を受け付けませんでした（${blockName}は${hasNow}個持っています）。`
               + '置き先に身体やMobが重なっているか、支えにしたブロックに届いていません。立ち位置か置き先を変えてください' };
@@ -365,8 +256,7 @@ class PlaceBlockAt extends InstantSkill {
       }
 
       // A workstation is used from the spot it was set down from: that nothing else of the worksite is now hidden is checked here.
-      const worksite = WORKSTATION_BLOCKS.has(blockName) ? await this.settleWorksite(blockName, targetPos, autoChosen) : '';
-      if (typeof worksite !== 'string') return worksite.replaced;
+      const worksite = WORKSTATION_BLOCKS.has(blockName) ? await this.settleWorksite(targetPos) : '';
       return {
         success: true,
         result: `${note}${blockName}を(${x}, ${y}, ${z})に設置しました${worksite}`,

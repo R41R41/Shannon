@@ -197,7 +197,6 @@ describe.skipIf(!built)('one minute of the LLM-centric frame\'s extras (map, mar
 
   it('the whole observation as the body sends it (captureWorldObservation and its JSON copy, four a second): GCs per simulated minute', async () => {
     const { bot, mobs } = body(built!);
-    bot.llmCentric = true;
     const { captureWorldObservation } = await import('../../src/services/minebot/cognition/worldFrame.js');
     const realNow = Date.now;
     let clock = 9_000_000;
@@ -241,7 +240,6 @@ describe.skipIf(!built)('one minute of the LLM-centric frame\'s extras (map, mar
       probeModule = await import('../../src/services/minebot/instantSkills/probe.js');
     } catch { return; }
     const { bot, mobs } = body(built!);
-    bot.llmCentric = true;
     const summary = (await scanModule.scanWorld(bot))!;
     const { longestSliceMs, ...kept } = summary;
     bot.worldScan = { ...kept, trigger: 'login', at: '2026-10-22T04:00:00.000Z', dimension: 'overworld', center: { x: 0, y: 64, z: 0 } };

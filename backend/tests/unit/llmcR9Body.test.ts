@@ -62,7 +62,7 @@ function scene(shape: (x: number, y: number, z: number) => Cell, at: Vec3, optio
   const bot: any = Object.assign(new EventEmitter(), {
     __blocks: blocks, __dug: [] as string[], __placed: [] as string[], __jumped: false, __fakeMovements: true, __swings: [] as number[],
     entity: { id: 1, name: 'player', position: at.clone(), yaw: 0, pitch: 0, onGround: true, metadata: [0] },
-    health: options.health ?? 20, food: 17, game: { dimension: 'the_nether' }, llmCentric: true,
+    health: options.health ?? 20, food: 17, game: { dimension: 'the_nether' },
     entities: options.mobs ?? {},
     registry: { blocksByName: { cobblestone: { id: 1 }, stone: { id: 2 } }, entitiesByName: { piglin: { type: 'hostile' }, zombie: { type: 'hostile' } }, itemsByName: {}, items: {} },
     heldItem: null, inventory: { items: () => options.items ?? [], slots: new Array(46).fill(null) }, controlState: {} as Record<string, boolean>,
@@ -190,7 +190,7 @@ describe('run 33\'s piglin: a normal piglin with a golden sword, level ground, h
     expect(wall.bot.__swings).toEqual([]);
   }, 20_000);
 
-  it('a hurt that nothing melee is near for, a shooter, a creeper, a kind the planner fights by choice (above the flee\'s health), and the old mode: no blow', async () => {
+  it('a hurt that nothing melee is near for, a shooter, a creeper, a kind the planner fights by choice (above the flee\'s health): no blow', async () => {
     const clock = { at: 54_000_000 };
     const fight = scene(field, new Vec3(0.5, 64, 0.5), { health: 15.5, items: [IRON_SWORD], mobs: { 1677: piglin(1677, 2.6, 64, 0.5) }, now: () => clock.at });
     fight.bot.engagements = [{ kinds: ['piglin'] }];
@@ -205,11 +205,6 @@ describe('run 33\'s piglin: a normal piglin with a golden sword, level ground, h
       expect(bot.__swings, name).toEqual([]);
       expect(meleeLines(ledger), name).toHaveLength(0);
     }
-    const old = scene(field, new Vec3(0.5, 64, 0.5), { health: 15.5, items: [IRON_SWORD], mobs: { 1677: piglin(1677, 2.6, 64, 0.5) }, now: () => clock.at });
-    old.bot.llmCentric = false;
-    await hurtTo(old.bot, clock, 11);
-    await rounds(old.bot, clock, 1);
-    expect(old.bot.__swings).toEqual([]);
   }, 20_000);
 
   it('five blow-hands in an episode at most; then it says so, and leaves the decision to the planner', async () => {

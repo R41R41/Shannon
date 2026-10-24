@@ -68,23 +68,6 @@ export function skillRunLimit(maxDurationMs: number): number {
   return Number.isFinite(maxDurationMs) && maxDurationMs > 0 ? Math.min(600_000, Math.max(1_000, Math.round(maxDurationMs))) : 120_000;
 }
 /**
- * Installed and runnable, but not offered to the planner. Every one was a whole tool definition on every decision for
- * something the planner already has, or for nothing:
- * - what `minecraft.observe` and each decision's observation already say (position, health and food, the pack, what is
- *   worn (`world.worn`), the time and weather);
- * - control toggles whose effect the body undoes as the command ends (`release` clears the control states and lowers
- *   the held item), so nothing of them was left for the next step. The pace that lasts is set-movement-pace.
- */
-export const OFFERED_ELSEWHERE: ReadonlySet<string> = new Set(['get-position', 'get-health', 'get-equipment', 'list-inventory-items',
-  'get-bot-status', 'get-time-and-weather', 'set-sprint', 'set-sneak', 'set-shield']);
-/**
- * Life in the Overworld that the way to the dragon does not pass through: hidden only while the task is the dragon
- * (see isDragonGoal), and offered again as soon as a task is anything else. Food on the way is hunted
- * (attack-continuously) or harvested (harvest-crop), both still offered. What the way may use stays: brewing (fire
- * resistance for a fortress), trading (a cleric's pearls), enchanting and repairing.
- */
-export const HIDDEN_FOR_DRAGON: ReadonlySet<string> = new Set(['breed-animal', 'plant-crop', 'use-bone-meal', 'fish', 'use-stonecutter']);
-/**
  * The requests the API binds to the dragon's native evidence (mc.goal-evidence): a mirror of the closed set in Shannon API
  * wiring/fcaMinecraftGoalBinding.ts (update both together). Closed on purpose: "farm before the dragon" is not one of them,
  * so an ordinary request never loses a tool.
@@ -101,19 +84,16 @@ export const DRAGON_GOALS: ReadonlySet<string> = new Set([
 export function isDragonGoal(goal: unknown): boolean {
   return typeof goal === 'string' && DRAGON_GOALS.has(goal.normalize('NFKC').trim().toLowerCase().replace(/[。.!！]+$/u, '').trim());
 }
-/** The LLM-centric mode's own tools: never offered while the mode is off (the catalog stays what it was). */
-export const LLM_CENTRIC_ONLY: ReadonlySet<string> = new Set(['act', 'view', 'probe']);
 /**
- * What the LLM-centric mode offers (MINEBOT_LLM_CENTRIC=on, design mb-llm-centric 2.4 and 4): `act`, `view` and `probe` (r4: the reading
- * tools, path · sight · column · around · history · scan), and the readers and the
- * few interactions that are one exact thing each (a trade, an enchantment, a brew, a repair, a stonecutter). The skills that choose for
- * the planner (move-to, mine-block, stair-mine, the tidy, the shelters, the fights' own tactics) are not offered; they still run if
- * asked for, and the mode off offers them again. The goal evidence is added by the body as always.
+ * What the planner is offered (design mb-llm-centric 2.4 and 4): `act`, `view` and `probe` (r4: the reading tools, path · sight · column ·
+ * around · history · scan), and the readers and the few interactions that are one exact thing each (a trade, an enchantment, a brew, a
+ * repair, a stonecutter). The skills that choose for the planner (move-to, mine-block, stair-mine, the shelters, the fights' own tactics)
+ * are not offered; they still run if asked for. The same list for every task. The goal evidence is added by the body.
  */
-export const LLM_CENTRIC_TOOLS: readonly string[] = ['act', 'view', 'probe', 'find-blocks', 'check-recipe', 'recall-places', 'find-structure',
+export const OFFERED_TOOLS: readonly string[] = ['act', 'view', 'probe', 'find-blocks', 'check-recipe', 'recall-places', 'find-structure',
   'list-nearby-entities', 'check-container', 'check-furnace', 'get-entity-look-direction', 'trade-with-villager', 'enchant-item',
   'brew-potion', 'repair-item', 'use-stonecutter', 'set-movement-pace', 'accept-threat', 'get-advancements'];
-export function bodySkillCatalog(skills: readonly BodySkill[], bot: object, options: { llmCentric?: boolean } = {}) {
+export function bodySkillCatalog(skills: readonly BodySkill[], bot: object) {
   const entries = skills.filter(skill => skill.isToolForLLM && /^[a-z][a-z0-9-]{0,58}$/.test(skill.skillName)
     && !forbidden.test(skill.skillName) && Number.isFinite(skill.maxDurationMs) && skill.maxDurationMs > 0)
     .map(skill => {
@@ -126,14 +106,10 @@ export function bodySkillCatalog(skills: readonly BodySkill[], bot: object, opti
   if (entries.length > 128 || JSON.stringify(entries.map(e => e.definition)).length > 250_000
     || new Set(entries.map(e => e.definition.name)).size !== entries.length) throw Error('BODY_SKILL_CATALOG_SIZE');
   const all = entries.map(e => e.definition);
-  const definitions = options.llmCentric
-    ? LLM_CENTRIC_TOOLS.map(name => all.find(definition => definition.name === name)).filter((definition): definition is MinecraftSkillDefinition => !!definition)
-    : all.filter(definition => !OFFERED_ELSEWHERE.has(definition.name) && !LLM_CENTRIC_ONLY.has(definition.name));
+  const definitions = OFFERED_TOOLS.map(name => all.find(definition => definition.name === name)).filter((definition): definition is MinecraftSkillDefinition => !!definition);
   return {
     /** What the planner is offered. */
     definitions,
-    /** What it is offered while the task is the dragon (the LLM-centric list is the same for every task). */
-    dragonDefinitions: options.llmCentric ? definitions : definitions.filter(definition => !HIDDEN_FOR_DRAGON.has(definition.name)),
     /** Everything that can run: a skill no longer offered is still carried out if it is asked for. */
     runnable: entries.map(e => e.definition),
     resolve(name: string, input: unknown): { skill: BodySkill; args: unknown[] } {

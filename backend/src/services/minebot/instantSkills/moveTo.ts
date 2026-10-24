@@ -10,13 +10,9 @@ import { forcedMoves } from '../utils/motionRecorder.js';
 import { nativeActionHost } from '../execution/ActionExecution.js';
 import { gotoSafe } from '../utils/gotoSafe.js';
 import { GoalReachBlock, DIG_REACH } from '../utils/blockInteractionReach.js';
-import { blocksAlong, keepCheapTool } from '../utils/toolStock.js';
-import { nightGateFor } from '../utils/nightGate.js';
 import { tunnelDigMs } from '../utils/routeEstimate.js';
 import { chooseTool } from '../utils/toolChoice.js';
 import { settleAfterRespawn } from '../utils/respawnSettle.js';
-import { tidyIfCluttered } from '../utils/inventoryRoom.js';
-import { hostileNear } from './craftOne.js';
 const { goals } = pathfinder;
 const log = createLogger('Minebot:Skill:moveTo');
 
@@ -104,13 +100,6 @@ class MoveTo extends InstantSkill {
         default: 'nearxz',
       },
     ];
-  }
-
-  /** The night gate (utils/nightGate): a goal height below y 16 at night without the kit is refused before the body is asked for. */
-  protected preflight(_x: number, y: number, _z: number, _range?: number, goalType: string = 'nearxz') {
-    // Only the goals that ignore the height pass: any other (an unknown name falls through to GoalNear below) goes to its y.
-    if (goalType === 'nearxz' || goalType === 'xz') return null;
-    return nightGateFor(this.bot, y, `move-to（目標 y${Math.floor(y)}）`);
   }
 
   /**
@@ -245,15 +234,6 @@ class MoveTo extends InstantSkill {
         if (settled) log.info(`⏳ 復活直後なので、周りの区画が届き終わるのを待ってから歩き始めます（${settled.waitedMs}ms、${settled.chunks}区画）`);
       }
 
-      // A walk that will tunnel takes, for each block it breaks, the cheapest tool carried; if that is a dear one
-      // and a cheaper one can be made from the bag, it is made first (utils/toolStock; the iron pickaxe of L111).
-      if (distance > range) {
-        const toward = goalType === 'y' ? { x: currentPos.x, y, z: currentPos.z }
-          : goalType === 'xz' || goalType === 'nearxz' ? { x, y: currentPos.y, z } : { x, y, z };
-        await keepCheapTool(this.bot as any, blocksAlong(this.bot as any, startedFrom, toward),
-          (skill, ...args) => this.callSkill(skill, ...args));
-      }
-
       // pathfinderの移動設定を最適化
       // 水中にいる場合はallowFreeMotionとcanSwimを有効化
       const isInWater = (this.bot.entity as any)?.isInWater || false;
@@ -352,22 +332,15 @@ class MoveTo extends InstantSkill {
       // Begun in the water, the walk is chosen after the body is out of it (gotoSafe brings it out first): run 22 turned the rock walk
       // off for a move begun in the water and took the route search's legs, 74 s for 56 m.
       const rockTravel = !handDigging;
-      // The stone a tunnel brings in is thrown away every few steps (cobblestone piled to 545 in run 21 and the pack filled).
-      const tunnelTidy = async () => {
-        await tidyIfCluttered(this.bot as any, (skill, ...args) => this.callSkill(skill, ...args), {
-          timeLeftMs: travelBudgetMs - (Date.now() - travelStartedAt), interrupted: () => this.shouldInterrupt(),
-          blocked: () => hostileNear(this.bot as any, 16) || String((this.bot as any).minebotControlState ?? '').startsWith('emergency'),
-        });
-      };
       const tunnelPillar = (height: number) => this.callSkill('tower-up', height);
-      let gotoResult = await gotoSafe(this.bot, goal, { timeoutMs: travelBudgetMs, rockTravel, tunnelTidy, tunnelPillar });
+      let gotoResult = await gotoSafe(this.bot, goal, { timeoutMs: travelBudgetMs, rockTravel, tunnelPillar });
       // Still in the water and not there: the pathfinder plans no step up out
       // of a liquid. Climb the bank at the waterline, then travel on from land.
       if (waterLevelUnderBody(this.bot as any) !== null && !this.shouldInterrupt()
         && (!gotoResult.success || !goal.isEnd(this.bot.entity.position.floored() as unknown as Move))
         && await swimOntoBank(this.bot as any, x, z)) {
         log.info('🏊 水際の岸へ泳ぎ上がった。陸から移動を続ける');
-        gotoResult = await gotoSafe(this.bot, goal, { timeoutMs: Math.max(5_000, travelBudgetMs - (Date.now() - travelStartedAt)), rockTravel, tunnelTidy, tunnelPillar });
+        gotoResult = await gotoSafe(this.bot, goal, { timeoutMs: Math.max(5_000, travelBudgetMs - (Date.now() - travelStartedAt)), rockTravel, tunnelPillar });
       }
       if (gotoResult.stuckBlock) stuckBlockRef.info = gotoResult.stuckBlock;
       if (!gotoResult.success) executorActivity = gotoResult.activity ?? null;

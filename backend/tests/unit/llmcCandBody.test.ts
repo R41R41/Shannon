@@ -119,10 +119,10 @@ describe('the inventory, one line a kind in the LLM-centric mode', () => {
     { name: 'splash_potion', count: 1, components: [{ type: 'potion_contents', data: { potionId: 'minecraft:fire_resistance' } }] },
     { name: 'splash_potion', count: 2, components: [{ type: 'potion_contents', data: { potionId: 'minecraft:fire_resistance' } }] },
   ];
-  const bot = (llmCentric: boolean) => ({ llmCentric, blockAt: () => null, entity: { position: new Vec3(0.5, 64, 0.5) }, inventory: { items: () => items }, game: { dimension: 'overworld' } });
+  const bot = () => ({ blockAt: () => null, entity: { position: new Vec3(0.5, 64, 0.5) }, inventory: { items: () => items }, game: { dimension: 'overworld' } });
 
   it('cobbled_deepslate ×53 and ×30 are one line ×83; tools with different wear and potions of different kinds stay apart, each saying what it is', () => {
-    const inventory = captureWorldObservation(bot(true)).inventory;
+    const inventory = captureWorldObservation(bot()).inventory;
     expect(inventory.filter(item => item.name === 'cobbled_deepslate')).toEqual([{ name: 'cobbled_deepslate', count: 83 }]);
     expect(inventory.filter(item => item.name === 'cobblestone')).toEqual([{ name: 'cobblestone', count: 140 }]);
     expect(inventory.filter(item => item.name === 'iron_pickaxe')).toEqual([
@@ -130,10 +130,6 @@ describe('the inventory, one line a kind in the LLM-centric mode', () => {
     const potions = inventory.filter(item => item.name === 'splash_potion');
     expect(potions.map(item => (item as { contents?: string }).contents)).toEqual(['strong_healing', 'fire_resistance', 'fire_resistance']);
     expect(new Set(inventory.map(item => item.name)).size).toBe(5);
-  });
-
-  it('the other mode is as it was (one entry a slot)', () => {
-    expect(captureWorldObservation(bot(false)).inventory.filter(item => item.name === 'cobbled_deepslate')).toHaveLength(2);
   });
 
   it('mergeStacks keeps the order of the first slot of a kind', () => {

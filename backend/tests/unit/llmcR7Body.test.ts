@@ -51,7 +51,7 @@ function burning(shape: (x: number, y: number, z: number) => Cell, options: { he
   const bot: any = Object.assign(new EventEmitter(), {
     __blocks: blocks, __dug: [] as string[], __fakeMovements: true,
     entity: { id: 1, name: 'player', position: new Vec3(0.5, 64, 0.5), yaw: 0, pitch: 0, onGround: true, metadata: [1] },
-    health: options.health ?? 18, food: 17, game: { dimension: 'the_nether' }, llmCentric: true,
+    health: options.health ?? 18, food: 17, game: { dimension: 'the_nether' },
     entities: options.mobs ?? {},
     registry: { blocksByName: { cobblestone: { id: 1 }, stone: { id: 2 } }, entitiesByName: { blaze: { type: 'hostile' } }, itemsByName: {}, items: {} },
     heldItem: null, inventory: { items: () => options.items ?? [], slots: new Array(46).fill(null) }, controlState: {} as Record<string, boolean>,
@@ -392,7 +392,7 @@ describe.skipIf(!L)('the scan gives the loop back inside its summary too, and sa
     const lines: string[] = [];
     const bot = Object.assign(new EventEmitter(), {
       entity: { id: 1, position: new Vec3(40.5, 66, 40.5), yaw: 0, onGround: true }, entities: {}, game: { dimension: 'the_nether', serverViewDistance: 10 },
-      registry: L!.registry, world: world.sync, health: 20, food: 20, inventory: { items: () => [] }, llmCentric: true, settings: { viewDistance: 10 },
+      registry: L!.registry, world: world.sync, health: 20, food: 20, inventory: { items: () => [] }, settings: { viewDistance: 10 },
       blockAt: (position: Vec3, extraInfos?: boolean) => world.sync.getBlock(position, extraInfos),
     }) as any;
     worldScan.installSpawnScan(bot, { minWaitMs: 0, pollMs: 5, log: (line: string) => lines.push(line) });

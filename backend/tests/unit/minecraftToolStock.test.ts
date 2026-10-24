@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { Vec3 } from 'vec3';
 import { repairTierToolMaterials } from '../../src/services/minebot/utils/registryRepairs.js';
 import { chooseTool } from '../../src/services/minebot/utils/toolChoice.js';
-import { blocksAlong, decideRestock, describeToolOptions, keepCheapTool, planCraft } from '../../src/services/minebot/utils/toolStock.js';
+import { blocksAlong, describeToolOptions, planCraft } from '../../src/services/minebot/utils/toolStock.js';
 import { installToolWearMonitor } from '../../src/services/minebot/utils/toolWear.js';
 import { executeAction } from '../../src/services/minebot/execution/ActionExecution.js';
 import { beginEngagement } from '../../src/services/minebot/utils/engagement.js';
@@ -47,24 +47,6 @@ describe('making the cheap tool from what is carried (registry recipes)', () => 
 
 describe('deciding to restock (cost model, not item lists)', () => {
   const stone = block('stone');
-
-  it('L111: only the iron pickaxe left for stone, materials carried → make a stone pickaxe', () => {
-    const decision = decideRestock(registry, l111Bag(), [stone], { tableNear: false });
-    expect(decision).toMatchObject({ kind: 'make', block: 'stone', current: 'iron_pickaxe', plan: { item: 'stone_pickaxe' } });
-    expect((decision as any).saving).toBeGreaterThan(1);
-  });
-
-  it('nothing is spent that need not be: a stone pickaxe on stone, or iron where only iron harvests', () => {
-    expect(decideRestock(registry, [item('stone_pickaxe'), item('cobblestone', 64), item('stick', 8)], [stone], { tableNear: true })).toBeNull();
-    expect(decideRestock(registry, [item('iron_pickaxe'), item('cobblestone', 64), item('stick', 8)], [block('diamond_ore')], { tableNear: true })).toBeNull();
-    // A wooden pickaxe is not upgraded: the dearer material is never what is made.
-    expect(decideRestock(registry, [item('wooden_pickaxe'), item('cobblestone', 64), item('stick', 8)], [stone], { tableNear: true })).toBeNull();
-  });
-
-  it('no materials → a shortage, nothing to craft', () => {
-    const decision = decideRestock(registry, [item('iron_pickaxe'), item('dirt', 10)], [stone], { tableNear: true });
-    expect(decision).toMatchObject({ kind: 'short', current: 'iron_pickaxe', wanted: 'stone_pickaxe' });
-  });
 
   it('samples the blocks a tunnel would meet, one of each kind', () => {
     const world = new Map<string, any>([['3,64,0', block('stone')], ['3,65,0', block('stone')], ['5,64,0', block('andesite')], ['6,65,0', block('dirt')]]);
@@ -113,64 +95,9 @@ function fakeCrafting(bot: any, calls: string[]) {
   };
 }
 
-describe('the body keeps a cheap tool for routine digging (paid run L111)', () => {
+describe('what a tool break tells the planner (paid run L111)', () => {
   const inAction = (bot: any, work: () => Promise<any>, capability = 'mine-block') =>
     executeAction(bot, capability, 0, async () => ({ success: true, result: String(await work()) }));
-
-  it('only an iron pickaxe, cobblestone and sticks, a table in reach: a stone pickaxe is made before stone is dug', async () => {
-    const bot = body([item('iron_pickaxe', 1, 80), item('cobblestone', 64), item('stick', 3)], { table: new Vec3(2, 50, 0) });
-    const calls: string[] = [];
-    let dugWith = '';
-    await inAction(bot, async () => {
-      await keepCheapTool(bot, [block('stone')], fakeCrafting(bot, calls));
-      dugWith = chooseTool(block('stone'), bot.items, { requireHarvest: true })!.name;
-      // Once per action: a second dig in the same action does not craft again.
-      await keepCheapTool(bot, [block('stone')], fakeCrafting(bot, calls));
-    });
-    expect(calls).toEqual(['craft-one:stone_pickaxe']);
-    expect(dugWith).toBe('stone_pickaxe');
-  });
-
-  it('L111 as it was: no table near, planks carried → a table is made, used and taken back', async () => {
-    const bot = body(l111Bag());
-    const calls: string[] = [];
-    await inAction(bot, () => keepCheapTool(bot, [block('stone'), block('andesite')], fakeCrafting(bot, calls)));
-    expect(calls[0]).toBe('craft-one:crafting_table');
-    expect(calls).toContain('craft-one:stone_pickaxe');
-    expect(calls.at(-1)).toBe('dig-block-at:1');
-    expect(bot.items.some((c: any) => c.name === 'stone_pickaxe')).toBe(true);
-    expect(bot.items.some((c: any) => c.name === 'crafting_table')).toBe(true);
-    expect(chooseTool(block('stone'), bot.items, { requireHarvest: true })!.name).toBe('stone_pickaxe');
-  });
-
-  it('no materials: nothing is crafted, and the action result says what is missing', async () => {
-    const bot = body([item('iron_pickaxe'), item('dirt', 10)], { table: new Vec3(2, 50, 0) });
-    const calls: string[] = [];
-    class Digging extends InstantSkill {
-      constructor(host: any) { super(host); this.skillName = 'dig-block-at'; }
-      async runImpl() { await keepCheapTool(this.bot as any, [block('stone')], fakeCrafting(bot, calls)); return { success: true, result: 'dug' }; }
-    }
-    const result = await new Digging(bot).run();
-    expect(calls).toEqual([]);
-    expect(result.result).toContain('stone_pickaxeは材料が足りず作れません');
-    expect(result.result).toContain('cobblestone×3');
-  });
-
-  it('never while an emergency or a chosen fight runs, nor in a reflex', async () => {
-    const calls: string[] = [];
-    const emergency = body([item('iron_pickaxe'), item('cobblestone', 64), item('stick', 4)], { table: new Vec3(2, 50, 0) });
-    emergency.minebotControlState = 'emergency_llm';
-    await inAction(emergency, () => keepCheapTool(emergency, [block('stone')], fakeCrafting(emergency, calls)), 'dig-shelter');
-    const fighting = body([item('iron_pickaxe'), item('cobblestone', 64), item('stick', 4)], { table: new Vec3(2, 50, 0) });
-    const end = beginEngagement(fighting, ['zombie']);
-    await inAction(fighting, () => keepCheapTool(fighting, [block('stone')], fakeCrafting(fighting, calls)));
-    end();
-    const reflex = body([item('iron_pickaxe'), item('cobblestone', 64), item('stick', 4)], { table: new Vec3(2, 50, 0) });
-    await executeAction(reflex, 'flee-from', 0, async () => {
-      await keepCheapTool(reflex, [block('stone')], fakeCrafting(reflex, calls)); return { success: true, result: '' };
-    }, { priority: 200 });
-    expect(calls).toEqual([]);
-  });
 
   it('a tool break tells the planner what the carried materials can make', async () => {
     vi.useFakeTimers();

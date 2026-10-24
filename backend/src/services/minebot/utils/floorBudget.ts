@@ -35,7 +35,7 @@ export const LATCH_MAX_MS = 240_000;
 /** At or below this health the allowance does not apply (the API's own `lowHealth`). */
 export const BUDGET_EXEMPT_HEALTH = 6;
 /** At or below this food level (starving) the meal is exempt from the allowance and the latch, as at low health. */
-export const EAT_CRITICAL_FOOD = 6;
+const EAT_CRITICAL_FOOD = 6;
 /** The only wait after a meal that failed or was cut off, when it is critical. */
 export const CRITICAL_EAT_RETRY_MS = 3_000;
 /** Low health makes a meal critical only while there is hunger to fill: at food 18 or 19 a meal gains next to nothing (P8 fifth review, M1). */

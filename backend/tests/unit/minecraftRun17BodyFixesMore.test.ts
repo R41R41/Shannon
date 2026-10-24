@@ -7,7 +7,6 @@ vi.mock('../../src/services/minebot/execution/observedWait.js', async (original)
   ...(await original() as object), actionDelay: vi.fn(async () => {}),
 }));
 
-const { tidyPlan } = await import('../../src/services/minebot/utils/inventoryTidy.js');
 const { default: StairMine } = await import('../../src/services/minebot/instantSkills/stairMine.js');
 const { default: DropItem } = await import('../../src/services/minebot/instantSkills/dropItem.js');
 const { default: SleepInBed, bodyCells } = await import('../../src/services/minebot/instantSkills/sleepInBed.js');
@@ -18,25 +17,6 @@ const { default: DigShelter } = await import('../../src/services/minebot/instant
 const registry = minecraftData('1.21.11');
 const solid = (name = 'stone') => ({ name, boundingBox: 'block', diggable: true, shapes: [[0, 0, 0, 1, 1, 1]] });
 const air = { name: 'air', boundingBox: 'empty', shapes: [] };
-
-describe('the pack is tidied past 30 slots (run 17 ended with 33 of 36 taken)', () => {
-  const stacks = (name: string, n: number, size = 64) => Array.from({ length: n }, () => ({ name, count: size }));
-  it('drops the plain stone and clutter first, keeps a stack of cobblestone and some dirt, down to 28', () => {
-    const items = [...stacks('cobblestone', 6), ...stacks('dirt', 2), { name: 'dirt', count: 9 }, { name: 'andesite', count: 38 }, { name: 'granite', count: 12 },
-      { name: 'oak_sapling', count: 3 }, ...stacks('iron_ingot', 1, 20), ...Array.from({ length: 20 }, (_, i) => ({ name: `thing_${i}`, count: 1 }))];
-    expect(items.length).toBe(33);
-    const plan = tidyPlan(items);
-    const names = plan.map(entry => entry.name);
-    expect(names.slice(0, 3)).toEqual(expect.arrayContaining(['andesite', 'granite', 'oak_sapling']));
-    const freed = plan.reduce((sum, entry) => sum + items.filter(item => item.name === entry.name).length, 0);
-    expect(freed).toBeGreaterThanOrEqual(3);
-    expect(plan.find(entry => entry.name === 'cobblestone')?.count ?? 0).toBeLessThanOrEqual(6 * 64 - 64);
-    expect(plan.some(entry => entry.name === 'iron_ingot')).toBe(false);
-  });
-  it('does nothing at 30 slots or fewer', () => {
-    expect(tidyPlan([...stacks('cobblestone', 10), ...stacks('andesite', 20)])).toEqual([]);
-  });
-});
 
 describe('drop-item does not throw what it would pick straight back up (run 17: a stone pickaxe in its shaft)', () => {
   it('in a 1x1 shaft says so before throwing', async () => {
@@ -87,22 +67,6 @@ describe('beds and blocks are not put where the body stands, nor on a grass bloc
     const spot = new SleepInBed(bot).findPlaceForBed()!;
     expect(spot).not.toBeNull();
     expect(bodyCells(bot.entity.position).some(cell => cell.equals(spot))).toBe(false);
-  });
-  it('place-block-at chooses a spot itself when no place is given, and puts a block given as the ground one up', async () => {
-    const placed: Vec3[] = [];
-    const world = new Map<string, any>();
-    const bot: any = { version: '1.21.11', entity: { position: new Vec3(0.5, 64, 0.5), height: 1.8 }, entities: {},
-      inventory: { items: () => [{ name: 'furnace', count: 1, type: registry.itemsByName.furnace.id }] }, heldItem: null,
-      blockAt: (pos: Vec3) => { const p = pos.floored(); return world.get(`${p.x},${p.y},${p.z}`) ?? { ...(p.y < 64 ? solid('grass_block') : air), position: p }; },
-      equip: async () => {}, lookAt: async () => {}, look: async () => {}, setControlState: () => {}, clearControlStates: () => {},
-      placeBlock: async (ref: any, face: Vec3) => { const at = ref.position.plus(face); placed.push(at); world.set(`${at.x},${at.y},${at.z}`, { ...solid('furnace'), position: at }); },
-      world: { raycast: () => null }, pathfinder: { stop: () => {} }, _client: { on: () => {} } };
-    const skill: any = new PlaceBlockAt(bot);
-    const chosen: any = await skill.runImpl('furnace');
-    expect(chosen.result).toContain('自分で選びました');
-    expect(bodyCells(bot.entity.position).some(cell => placed[0] && cell.equals(placed[0]))).toBe(false);
-    const up: any = await skill.runImpl('furnace', 3, 63, 0);
-    expect(up.result).toContain('その上(3, 64, 0)に置きます');
   });
 });
 

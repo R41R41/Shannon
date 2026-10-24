@@ -271,7 +271,7 @@ describe.skipIf(!L)('the scan at a spawn waits for the chunks (run 28: 25 of 441
     sync.getColumns = () => (Date.now() - began < 300 ? near : all);
     const bot: any = Object.assign(new EventEmitter(), {
       entity: { id: 1, position: new Vec3(8.5, 64, 8.5), yaw: 0, onGround: true }, entities: {}, game: { dimension: 'overworld', serverViewDistance: 10 },
-      registry, world: sync, inventory: { items: () => [] }, llmCentric: true, arrival: { kind: 'login', at: Date.now() },
+      registry, world: sync, inventory: { items: () => [] }, arrival: { kind: 'login', at: Date.now() },
       blockAt: (position: Vec3, extra?: boolean) => world.sync.getBlock(position, extra),
     });
     installSpawnScan(bot, { minWaitMs: 20, settleMs: 20, pollMs: 5 });

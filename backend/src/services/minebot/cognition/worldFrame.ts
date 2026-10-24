@@ -16,7 +16,6 @@ import { backgroundJobs } from '../execution/backgroundJobs.js';
 import { bedWool, cookRawNotice, descentKitNotice, type GateBody } from '../utils/nightGate.js';
 import { toolKitNotice } from '../utils/toolWear.js';
 import { nearbyNeeds } from '../utils/nearbyNeeds.js';
-import { isLlmCentric } from '../utils/llmCentric.js';
 import { localMapFor, recentStopLines } from '../utils/localMap.js';
 import { insideStructure, mapMarkLines, watchedEntityFacts } from '../utils/mapMarks.js';
 import { foodPointsOf } from '../utils/foodPoints.js';
@@ -273,12 +272,12 @@ function distance(a: WorldVector, b: WorldVector): number {
   return Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2 + (a.z - b.z) ** 2);
 }
 
-/** `threatReach`: also say how each near hostile stands to the body (the LLM-centric frame only; the reflex loops leave it out: it costs blocks read). */
+/** `threatReach`: also say how each near hostile stands to the body (a live body only; the reflex loops leave it out: it costs blocks read). */
 export function captureWorldObservation(bot?: unknown, options: { threatReach?: boolean } = {}): WorldObservation {
   const observedBot = bot as WorldFrameBotLike | undefined;
-  // The LLM-centric body's observation (design mb-llm-centric 2.2, 2.6): the map, the marks beside it, food in points, and the ids and
-  // health of creatures. A live body only (something that can read blocks); the mode off observes exactly as before.
-  const llmCentric = !!observedBot?.entity && typeof (observedBot as { blockAt?: unknown }).blockAt === 'function' && isLlmCentric(observedBot);
+  // A live body's observation (design mb-llm-centric 2.2, 2.6): the map, the marks beside it, food in points, and the ids and
+  // health of creatures. Only for something that can read blocks; a stand-in with no world is observed without them.
+  const live = !!observedBot?.entity && typeof (observedBot as { blockAt?: unknown }).blockAt === 'function';
   const position = vector(observedBot?.entity?.position ?? observedBot?.selfState?.botPosition);
   const window = observedBot?.currentWindow;
   const windowKnown = window && Number.isInteger(window.inventoryStart) && Number.isInteger(window.inventoryEnd)
@@ -297,9 +296,9 @@ export function captureWorldObservation(bot?: unknown, options: { threatReach?: 
     })
     .filter(item => item.name && Number.isFinite(item.count) && item.count > 0)
     .sort((a, b) => a.name.localeCompare(b.name));
-  // LLM-centric mode: one line a kind (mb-llmc-cand). The stacks of a kind are the slots' business (53 and 30 cobbled_deepslate are
+  // One line a kind (mb-llmc-cand). The stacks of a kind are the slots' business (53 and 30 cobbled_deepslate are
   // 83, and were two lines in 42 of 45 scenes); a tool with wear and a potion with its contents say what sets it apart, so they stay apart.
-  const inventory = llmCentric ? mergeStacks(slotted) : slotted;
+  const inventory = live ? mergeStacks(slotted) : slotted;
 
   const allEntities = position
     ? Object.values(observedBot?.entities ?? {})
@@ -329,15 +328,15 @@ export function captureWorldObservation(bot?: unknown, options: { threatReach?: 
           ...(contact !== null ? { secondsToContact: Math.round(contact * 10) / 10 } : {}),
           ...(entity.name === 'creeper' ? { ignited: creeperLit(entity) } : {}),
           ...reach,
-          // LLM-centric mode: the id to name it by in act, and for the kinds of the way to the dragon their health and mood.
-          ...(llmCentric ? { id: entity.id, ...watchedEntityFacts(observedBot as never, entity), ...droppedItemFacts(observedBot as never, entity) } : {}),
+          // A live body: the id to name it by in act, and for the kinds of the way to the dragon their health and mood.
+          ...(live ? { id: entity.id, ...watchedEntityFacts(observedBot as never, entity), ...droppedItemFacts(observedBot as never, entity) } : {}),
         };
       })
       .filter((entity): entity is NonNullable<typeof entity> => entity !== null)
       .sort((a, b) => a.distance - b.distance)
     : [];
-  // LLM-centric mode: how each of the nearest hostiles stands to the body (sight, a way, height, a shooter), within a time budget for the frame.
-  if (llmCentric && options.threatReach && position) addThreatReach(observedBot as never, position, allEntities as never, entitiesById(observedBot));
+  // How each of the nearest hostiles stands to the body (sight, a way, height, a shooter), within a time budget for the frame.
+  if (live && options.threatReach && position) addThreatReach(observedBot as never, position, allEntities as never, entitiesById(observedBot));
   const nearbyEntities = allEntities.slice(0, MAX_NEARBY_ENTITIES);
   const landmarks = (observedBot as { landmarks?: WorldObservation['landmarks'] } | undefined)?.landmarks;
   // Separate budget: item crowds must not erase an observed hostile.
@@ -401,7 +400,7 @@ export function captureWorldObservation(bot?: unknown, options: { threatReach?: 
     nearbyEntities,
     nearbyThreats,
     ...(landmarks?.length ? { landmarks: structuredClone(landmarks) } : {}),
-    ...(llmCentric ? (() => {
+    ...(live ? (() => {
       const out: Pick<WorldObservation, 'localMap' | 'mapLandmarks' | 'recentStops' | 'foodPoints' | 'inside' | 'scan'> = {};
       try { const inside = insideStructure(observedBot as never); if (inside) out.inside = inside; } catch { /* none */ }
       try { const map = localMapFor(observedBot as never); if (map) out.localMap = map; } catch { /* no map this time */ }

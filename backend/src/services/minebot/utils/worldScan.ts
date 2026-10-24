@@ -3,7 +3,6 @@ import { LoopSlicer, SCAN_SLICE_MS, scanLoadedCategories, type ScanCategory, typ
 import { lavaSourceInfo, POOL_CAP, type LavaSourceInfo, type PoolWorld } from './lavaPools.js';
 import { spawnerKind } from './mapMarks.js';
 import { bodyReader, type BlockReader } from './localMap.js';
-import { isLlmCentric } from './llmCentric.js';
 import { wayWords, type ScanTrigger, type WorldScanState } from './worldScanState.js';
 
 export { wayWords, worldScanView, type ScanTrigger, type WorldScanState } from './worldScanState.js';
@@ -321,12 +320,11 @@ export function loadedRing(bot: { world?: any; entity?: { position?: { x: number
 export const SPAWN_SCAN_SHARE = 0.8;
 
 /**
- * After every spawn (a login, a reconnect, a portal, a respawn after a death), while the LLM-centric mode is on: wait until most of the
+ * After every spawn (a login, a reconnect, a portal, a respawn after a death): wait until most of the
  * chunks have come (SPAWN_SCAN_SHARE of the view distance's square, at least `minWaitMs` after the spawn, at most `maxWaitMs`), then scan
  * once and keep it as `bot.worldScan` for the observation. When the server's view distance is not known, until the count of loaded columns
  * has not changed for `settleMs`. Run 28: a count steady for one second came at 25 chunks of 441 (the server sends them in bursts). The
  * scan says how many chunks were loaded, out to which ring, and how long it waited. A newer spawn cancels the scan of the one before.
- * Mode off: nothing.
  */
 export function installSpawnScan(bot: SpawnScanBody, options: { minWaitMs?: number; settleMs?: number; maxWaitMs?: number; pollMs?: number; sliceMs?: number; now?: () => number;
   share?: number; log?: (line: string) => void } = {}): () => void {
@@ -336,7 +334,6 @@ export function installSpawnScan(bot: SpawnScanBody, options: { minWaitMs?: numb
   let generation = 0;
   let timer: ReturnType<typeof setTimeout> | null = null;
   const onSpawn = () => {
-    if (!isLlmCentric(bot)) return;
     const mine = ++generation;
     if (timer) clearTimeout(timer);
     const began = now();

@@ -14,7 +14,7 @@ import { stepLabel, type StepLike } from '../../utils/actLabel.js';
  * posted: `/task` (the task and its steps), `/task_list` (the queue, here at most the one task), `/task_logs`. It
  * only reads what the body already receives and sends best effort; the mod being absent or slow never reaches the body.
  *
- * With a plan (LLM-centric mode, design mb-llm-centric 2.7: `BodyTaskContext.plan`) the task tab shows the plan tree nested
+ * With a plan (design mb-llm-centric 2.7: `BodyTaskContext.plan`) the task tab shows the plan tree nested
  * (`hierarchicalSubTasks` with `children`, as the mod v2 draws it), the node worked on now as `currentSubTaskId`, and the running
  * act's steps as that node's children ("the next moves"). Without one, the commands as a flat list, as before.
  */

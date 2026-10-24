@@ -1,4 +1,3 @@
-import { isLlmCentric } from '../utils/llmCentric.js';
 import { beginEngagement, engagementOf } from '../utils/engagement.js';
 import { markHeadCombat } from '../utils/combatOwner.js';
 import { createLogger } from '../../../utils/logger.js';
@@ -9,8 +8,7 @@ import { skillMetrics } from '../knowledge/SkillMetrics.js';
 import { actionSignal, assertActionActive, executeAction, preemptLowerPriorityActions, cancelAction, cancelCapability, physicalActionBusy, waitForActionQuiescence, createMotorPort, currentAction, isCommandLevel } from '../execution/ActionExecution.js';
 import { skillCategory } from '../execution/SkillExecutor.js';
 import { describeRemainingTools, spareFor } from '../utils/toolWear.js';
-import { describeToolOptions, takeToolStockNotes } from '../utils/toolStock.js';
-import { NIGHT_SLEEP_SKILLS, sleepRefusal, sleepThroughNight } from '../utils/nightSleep.js';
+import { describeToolOptions } from '../utils/toolStock.js';
 import { boundMinecraftServerId } from '../runtime/memoryContext.js';
 import type { CustomBot } from './CustomBot.js';
 import type { SkillParam, SkillResult } from './skillParams.js';
@@ -156,14 +154,9 @@ export abstract class InstantSkill extends Skill {
     const host = this.rootBot;
     // What needs no body is said before the body is asked for (see preflight): for the command itself, never for a skill called
     // inside another (mine-block's own walk is not refused by move-to's gate: mine-block chose its targets above it).
-    /** The night gate's refusal put off: a bed is at hand, and the night is slept through first (then asked again). */
-    let gateAfterSleep = false;
     if (isCommandLevel(host, this.skillName)) {
       let refused: SkillResult | null = null;
       try { refused = this.preflight(...args); } catch { refused = null; }
-      if (refused?.failureType === 'night_unprepared' && NIGHT_SLEEP_SKILLS.has(this.skillName) && !sleepRefusal(host as any)) {
-        gateAfterSleep = true; refused = null;
-      }
       if (refused) return { ...refused, duration: 0 };
     }
     // A tool breaking is the body's news, not the skill's: hand the decision
@@ -172,11 +165,10 @@ export abstract class InstantSkill extends Skill {
     // planner called is stopped; nested skills end with it.
     const broken: string[] = [];
     // The command the planner called, also under common FCA, where nativeBody has opened an action of this skill's name around the
-    // call: `!currentAction(host)` was never true there, so no tool break stopped a command, no fight was told to the body's layers,
-    // and no restock note reached a result (run 17; see isCommandLevel).
+    // call: `!currentAction(host)` was never true there, so no tool break stopped a command, and no fight was told to the body's
+    // layers (run 17; see isCommandLevel).
     const topLevel = isCommandLevel(host, this.skillName);
     let actionId: string | null = null;
-    let rootAction: object | null = null;
     /**
      * Stops this command on a tool break. Its own action when it runs inside nativeBody's: that one is aborted, not nativeBody's,
      * whose abort would make its own return throw and lose the tool_broke result. The legacy command is the root itself.
@@ -204,7 +196,6 @@ export abstract class InstantSkill extends Skill {
     /** The planner's fight as the floor's reflexes read it (utils/combatOwner): marked while its action runs. */
     const headCombat: { end: (() => void) | null } = { end: null };
     let finalResult: SkillResult;
-    let sleepNote = '';
     try {
       if (topLevel) host.on?.('minebotToolBroke' as any, onBroke as any);
       // A fight the planner called is said to the layer that keeps the body alive for as long as it runs (see engagement).
@@ -218,24 +209,11 @@ export abstract class InstantSkill extends Skill {
         // A break while the call still waited for the body (another action's) was that action's, not this command's.
         broken.length = 0; wornOut.length = 0; swapped.length = 0;
         if (topLevel) {
-          // The restock notes are kept on the root of the action (toolStock): nativeBody's, under common FCA.
-          rootAction = own?.root ?? own ?? null;
           mayStop = !(own?.root ?? own)?.safetyLease;
           // Run 21: a fight the planner chose was dropped again and again by the floor's flee and shelter. While it runs the floor
           // leaves it alone (a fight run by a reflex's own lease is not the planner's).
           if (mayStop) headCombat.end = markHeadCombat(host, this.skillName, engagementOf(this.skillName, args));
           if (own?.root) stopOwn = () => own.controller.abort('tool_broke');
-          // At night with a bed, the night is slept through before the work (utils/nightSleep), once a night.
-          // The LLM-centric body does not sleep by itself before the work: the night is the planner's (MINEBOT_LLM_CENTRIC).
-          if (NIGHT_SLEEP_SKILLS.has(this.skillName) && !isLlmCentric(host)) {
-            try { sleepNote = await sleepThroughNight(host as any, (name, ...rest) => this.callSkill(name, ...rest)); }
-            catch (error) { if (this.shouldInterrupt()) throw error; sleepNote = ''; }
-            if (gateAfterSleep) {
-              let still: SkillResult | null = null;
-              try { still = this.preflight(...args); } catch { still = null; }
-              if (still) return still;
-            }
-          }
         }
         try { return await this.runImpl(...args); }
         // Only this run's own port is handed back: a later run may already have put its own in place.
@@ -254,16 +232,12 @@ export abstract class InstantSkill extends Skill {
         result: `${this.skillName}の途中で${[...new Set(broken)].join('、')}が壊れたため、行動を止めました（実行済みの効果は残っています）。`
           + `残っている道具: ${describeRemainingTools(host)}${options ? `。${options}` : ''}` };
     }
-    if (sleepNote && typeof finalResult.result === 'string') finalResult = { ...finalResult, result: `${sleepNote}${finalResult.result}` };
     if (swapped.length && typeof finalResult.result === 'string') {
       finalResult = { ...finalResult, result: `${finalResult.result}（途中で道具が壊れましたが、予備に持ち替えて続けました: ${swapped.join('、')}）` };
     }
     if (wornOut.length && typeof finalResult.result === 'string') {
       finalResult = { ...finalResult, result: `${finalResult.result}（途中で${[...new Set(wornOut)].join('、')}が壊れました）` };
     }
-    // A cheap tool the action made (or could not make) on the way is said in its result (see utils/toolStock).
-    const stockNotes = takeToolStockNotes(rootAction);
-    if (stockNotes.length && typeof finalResult.result === 'string') finalResult = { ...finalResult, result: `${finalResult.result} ${stockNotes.join(' ')}` };
     if (serverId) {
       extractAndSaveKnowledge(this.skillName, args, finalResult, serverId).catch(() => {});
       skillMetrics.record(serverId, this.skillName, args, finalResult.success,

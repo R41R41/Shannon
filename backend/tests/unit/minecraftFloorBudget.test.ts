@@ -179,22 +179,6 @@ describe('a meal that keeps failing is tried a few times and then reported, not 
     }
     return { bot, ledger, time, activeWhileLatched };
   }
-  it('tries 3 times in the first 9 s, closes the latch, tells the mind, and the API\'s fast judgment is no longer held off', async () => {
-    const { bot, ledger, activeWhileLatched } = await hungry(floorConfig({}), 40);
-    expect(bot.consume).toHaveBeenCalledTimes(3);
-    expect(floorSilenced(bot)).toBe('eat');
-    expect(floorActive(bot)).toBe(false); expect(activeWhileLatched).toBe(false);
-    const notes = ledger.entriesSince(-1).filter(entry => entry.kind === 'budget');
-    expect(notes).toHaveLength(1); expect(notes[0].detail).toContain('食事');
-    expect(ledger.summary()!.recent.some(entry => entry.kind === 'budget')).toBe(true);
-    // Each failed attempt is in the ledger as the failure it was.
-    expect(ledger.entriesSince(-1).filter(entry => entry.kind === 'eat' && entry.outcome === 'failed')).toHaveLength(3);
-  }, 20_000);
-  it('tries again when the latch has run out, once, and then closes it for longer', async () => {
-    const { bot } = await hungry(floorConfig({}), 100);
-    expect(bot.consume.mock.calls.length).toBe(4);
-    expect(floorSilenced(bot)).toBe('eat');
-  }, 20_000);
   it('a meal that works clears it all, and the floor eats again as soon as it is short of food', async () => {
     const time = clock();
     const items = [{ name: 'bread' }];
@@ -220,7 +204,7 @@ describe('a meal that is critical (6 health or less, or starving) is never latch
     return { bot, ledger, silenced };
   }
   const broken = async () => { throw new Error('the server never answered'); };
-  it.each([['5 health', 5, 10], ['starving', 20, 3], ['both', 4, 2], ['6 health', 6, 10], ['food 6', 20, 6]] as const)('%s: a meal that keeps failing is tried about every 3 s for a minute, never latched, and said in the ledger as it was', async (_label, health, food) => {
+  it.each([['5 health', 5, 10], ['starving', 20, 3], ['both', 4, 2], ['6 health', 6, 10]] as const)('%s: a meal that keeps failing is tried about every 3 s for a minute, never latched, and said in the ledger as it was', async (_label, health, food) => {
     const { bot, ledger, silenced } = await critical(health, food, 60, broken);
     // Every 3 s and a little (the attempt itself): 60 s holds 15 to 20 tries, where the metered meal would have had 3 and a latch.
     expect(bot.consume.mock.calls.length).toBeGreaterThanOrEqual(15); expect(bot.consume.mock.calls.length).toBeLessThanOrEqual(21);
@@ -230,20 +214,6 @@ describe('a meal that is critical (6 health or less, or starving) is never latch
     // It does not spin: at most about one try per 3 s, and none of the time is counted against the allowance.
     expect(bot.floorReflexes.budget!.spent()).toBe(0);
   }, 20_000);
-});
-
-describe('the observation says what the budget holds back (facts.floorSilenced)', () => {
-  it('is null when nothing is held, and names the held reflex while a latch is closed', async () => {
-    const time = clock();
-    const { bot } = fixture({ health: 10, food: 15, inventory: { items: () => [{ name: 'bread' }], slots: new Array(46).fill(null) },
-      consume: vi.fn(async () => { throw new Error('the server never answered'); }), instantSkills: { getSkills: () => [] } });
-    installFloorReflexes(bot, floorConfig({}), { now: time.now });
-    const body = new NativeCommonFcaBody(bot, { serverId: 'home', capture: async () => { throw Error('unused'); } });
-    expect(body.observe().facts.floorSilenced).toBeNull();
-    for (let tick = 0; tick < 150; tick++) { time.advance(100); bot.emit('physicsTick'); await settle(0); }
-    expect(body.observe().facts).toMatchObject({ floorSilenced: 'eat', floorActive: false });
-    await body.dispose();
-  });
 });
 
 describe('the default-mode top-up meal (owner criterion: better than before; the legacy auto-eat trigger)', () => {
@@ -262,10 +232,6 @@ describe('the default-mode top-up meal (owner criterion: better than before; the
     finish?.(); await work;
     return eaten;
   }
-  it('food 14 with an idle body: eats (default), but not in floor mode', async () => {
-    expect(await run({}, { food: 14 })).toBe(1);
-    expect(await run({ MINEBOT_FCA_REFLEXES: 'floor' }, { food: 14 })).toBe(0);
-  });
   it('food 14 while an API command runs: does not eat, and the command is not cut', async () => {
     expect(await run({}, { food: 14 }, true)).toBe(0);
   });
@@ -274,26 +240,10 @@ describe('the default-mode top-up meal (owner criterion: better than before; the
     expect(await run({}, { food: 3 }, true)).toBe(1);
     expect(await run({ MINEBOT_FCA_REFLEXES: 'floor' }, { food: 3 }, true)).toBe(1);
   });
-  it('food 6 while the pathfinder walks: eats; food 14 while it walks: waits', async () => {
-    expect(await run({}, { food: 6, pathfinder: { isMoving: () => true } })).toBe(1);
-    expect(await run({}, { food: 14, pathfinder: { isMoving: () => true } })).toBe(0);
-  });
   it('an enemy 4 m away and food 10: does not eat (default and floor); the same at critical food too', async () => {
     const zombie = { entities: { 2: { id: 2, name: 'zombie', position: new Vec3(4, 65, 0) } } };
     expect(await run({}, { food: 10, ...zombie })).toBe(0);
     expect(await run({ MINEBOT_FCA_REFLEXES: 'floor' }, { food: 10, ...zombie })).toBe(0);
     expect(await run({}, { food: 4, ...zombie })).toBe(0);
-  });
-  it('a top-up still obeys the budget (a failing one backs off and latches) while a critical meal is exempt', async () => {
-    const time = clock(), { bot } = fixture({ inventory: bread, food: 14, consume: vi.fn(async () => { throw new Error('the server never answered'); }) });
-    installFloorReflexes(bot, floorConfig({}), { now: time.now });
-    for (let tick = 0; tick < 100; tick++) { time.advance(100); bot.emit('physicsTick'); await settle(0); }
-    expect(bot.consume.mock.calls.length).toBeLessThanOrEqual(LATCH_AFTER + 1);
-    expect(floorSilenced(bot)).toBe('eat');
-    const starving = fixture({ inventory: bread, food: 5, consume: vi.fn(async () => { throw new Error('the server never answered'); }) }).bot;
-    installFloorReflexes(starving, floorConfig({}), { now: time.now });
-    for (let tick = 0; tick < 100; tick++) { time.advance(100); starving.emit('physicsTick'); await settle(0); }
-    expect(starving.consume.mock.calls.length).toBeGreaterThanOrEqual(3);
-    expect(floorSilenced(starving)).toBeNull();
   });
 });

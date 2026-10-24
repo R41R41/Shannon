@@ -14,7 +14,6 @@ vi.mock('../../src/services/minebot/utils/loadedBlockScan.js', async (original) 
 }));
 
 const { explainUnreachable } = await import('../../src/services/minebot/utils/attackReach.js');
-const { decideRestock, planCraft, keepCheapTool, ensureToolUses } = await import('../../src/services/minebot/utils/toolStock.js');
 const { repairTierToolMaterials } = await import('../../src/services/minebot/utils/registryRepairs.js');
 const { executeAction } = await import('../../src/services/minebot/execution/ActionExecution.js');
 const { default: WaitTime, meanwhileWork, smallWorkText } = await import('../../src/services/minebot/instantSkills/waitTime.js');
@@ -82,58 +81,6 @@ describe('why a blow cannot land (attack-continuously gave up after 62 s with on
     expect(result.kind).toBe('path');
     expect(result.reason).toContain('14秒');
     expect(result.reason).toContain('近づけなかった');
-  });
-});
-
-describe('the tool named when a cheaper one cannot be made (run 22: a golden pickaxe, three gold ingots away, on nearly every result)', () => {
-  const bag = () => [carried('iron_pickaxe', 1, 20), carried('dirt', 10), carried('oak_planks', 0)].filter(entry => entry.count > 0);
-
-  it('never makes or names gold: it wears out after 32 blocks and nothing on the way to the Nether needs it', () => {
-    const decision = decideRestock(toolRegistry, bag(), [stoneBlock()], { tableNear: true });
-    expect(decision).toMatchObject({ kind: 'short', current: 'iron_pickaxe' });
-    expect((decision as any).wanted).not.toMatch(/golden/);
-    // with the gold in the bag: still not made
-    const rich = decideRestock(toolRegistry, [carried('iron_pickaxe', 1, 20), carried('gold_ingot', 6), carried('stick', 4)], [stoneBlock()], { tableNear: true });
-    expect(rich?.kind === 'make' ? rich.plan.item : '').not.toMatch(/golden/);
-  });
-
-  it('never makes or names copper either (run 23 named a copper pickaxe once gold was taken out)', () => {
-    const decision = decideRestock(toolRegistry, bag(), [stoneBlock()], { tableNear: true });
-    expect((decision as any)?.wanted ?? '').not.toMatch(/copper/);
-    const rich = decideRestock(toolRegistry, [carried('iron_pickaxe', 1, 20), carried('copper_ingot', 6), carried('stick', 4)], [stoneBlock()], { tableNear: true });
-    expect(rich?.kind === 'make' ? rich.plan.item : (rich as any)?.wanted ?? '').not.toMatch(/copper/);
-  });
-
-  it('names the one nearest to being made: the stone pickaxe, with the sticks it lacks', () => {
-    const decision: any = decideRestock(toolRegistry, [carried('iron_pickaxe', 1, 20), carried('cobblestone', 8)], [stoneBlock()], { tableNear: true });
-    expect(decision).toMatchObject({ kind: 'short', wanted: 'stone_pickaxe' });
-    expect(decision.missing).toContain('stick');
-    const outcome: any = planCraft(toolRegistry, [carried('stick', 2)], 'stone_pickaxe', true);
-    expect(outcome.shortfall).toBe(3);
-  });
-
-  it('a shortage is said once a minute and a half, not on every result of a long run', async () => {
-    const items = [carried('iron_pickaxe', 1, 20), carried('cobblestone', 8)];
-    const host: any = Object.assign(new EventEmitter(), {
-      registry: toolRegistry, version: '1.21.11', entity: { id: 7, position: new Vec3(0.5, 50, 0.5), effects: {} }, _client: new EventEmitter(),
-      inventory: { slots: [], items: () => items }, executingSkill: false, interruptExecution: false, health: 20, food: 20,
-      clearControlStates: vi.fn(), stopDigging: vi.fn(), deactivateItem: vi.fn(), pathfinder: { stop: vi.fn(), setGoal: vi.fn() },
-      findBlocks: () => [],
-    });
-    const { takeToolStockNotes } = await import('../../src/services/minebot/utils/toolStock.js');
-    const notes: string[][] = [];
-    for (let i = 0; i < 3; i++) {
-      await executeAction(host, 'mine-block', 0, async (context: any) => {
-        await keepCheapTool(host, [stoneBlock()], async () => ({ success: true, result: '' }));
-        notes.push(takeToolStockNotes((await import('../../src/services/minebot/execution/ActionExecution.js')).currentAction(host) as any));
-        return { success: true, result: 'ok' };
-      });
-    }
-    expect(notes[0].join('')).toContain('stone_pickaxe');
-    expect(notes[0].join('')).not.toContain('golden');
-    expect(notes[1]).toEqual([]);
-    expect(notes[2]).toEqual([]);
-    void ensureToolUses;
   });
 });
 
@@ -252,14 +199,6 @@ describe('place-block-at: the block in hand for placing (run 22: the third furna
     return { bot, placed };
   }
 
-  it('a window left open is closed before the block is taken in hand, and the furnace is set down', async () => {
-    const { bot, placed } = placing({ stale: true });
-    const result: any = await new PlaceBlockAt(bot).runImpl('furnace');
-    expect(result.success).toBe(true);
-    expect(bot.closeWindow).toHaveBeenCalled();
-    expect(placed).toHaveLength(1);
-  });
-
   it('a block that cannot be taken in hand is said as that, with what the body saw (not "設置エラー: invalid operation")', async () => {
     const { bot, placed } = placing({ equipAlwaysFails: true, stale: true });
     const result: any = await new PlaceBlockAt(bot).runImpl('furnace', 1, 64, 0);
@@ -272,15 +211,6 @@ describe('place-block-at: the block in hand for placing (run 22: the third furna
     expect(placed).toHaveLength(0);
     // a hotbar item (slot 38) is tried by selecting its slot, which needs no click
     expect(bot.setQuickBarSlot).toHaveBeenCalledWith(2);
-  });
-
-  it('a cell the server would not take is given up for another one, once or twice, and said', async () => {
-    const { bot, placed } = placing({ placeFailsFirst: true });
-    const result: any = await new PlaceBlockAt(bot).runImpl('furnace');
-    expect(result.success).toBe(true);
-    expect(placed).toHaveLength(1);
-    expect(result.result).toContain('別の場所に置き直しました');
-    expect(bot.placeBlock).toHaveBeenCalledTimes(2);
   });
 });
 

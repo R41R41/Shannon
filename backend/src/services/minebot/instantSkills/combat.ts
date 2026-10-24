@@ -1,7 +1,6 @@
 import pathfinder from 'mineflayer-pathfinder';
 import { CustomBot, InstantSkill } from '../types.js';
 import { createLogger } from '../../../utils/logger.js';
-import { shouldRefuseAggressiveCombat } from '../utils/minebotToolPolicy.js';
 import { setMovements } from '../utils/setMovements.js';
 import { actionDelay } from '../execution/observedWait.js';
 import { creeperMeleeRefusal } from '../utils/creeperFuse.js';
@@ -182,10 +181,6 @@ class Combat extends InstantSkill {
 
     async runImpl(target?: string, timeout: number = 30) {
         try {
-            const refuse = shouldRefuseAggressiveCombat(this.bot);
-            if (refuse) {
-                return { success: false, result: refuse };
-            }
             // 武器チェック
             let { hasWeapon, weaponName } = this.hasWeapon();
             if (!hasWeapon) {

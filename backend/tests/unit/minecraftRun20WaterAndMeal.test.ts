@@ -6,7 +6,6 @@ vi.mock('../../src/services/minebot/utils/gotoSafe.js', () => ({ gotoSafe: vi.fn
 const { default: UseItemOnBlock } = await import('../../src/services/minebot/instantSkills/useItemOnBlock.js');
 const { default: UseItem } = await import('../../src/services/minebot/instantSkills/useItem.js');
 const { gotoSafe } = await import('../../src/services/minebot/utils/gotoSafe.js');
-const { tidyPlan } = await import('../../src/services/minebot/utils/inventoryTidy.js');
 
 // ── a small world: stone below y 64, air above, water cells listed by hand ──────────────────────────────────────────────────────────────
 interface Pond { cells: Array<[number, number, number]>; level?: number }
@@ -250,20 +249,12 @@ describe('an empty bucket finds, reaches and scoops water by itself (run 20: the
     const { bodySkillCatalog } = await import('../../src/services/minebot/integration/commonFca/skillCatalog.js');
     const skill: any = new UseItemOnBlock({ version: '1.21.4', inventory: { items: () => [] } } as any);
     const catalog = bodySkillCatalog([skill], {});
-    const schema: any = catalog.definitions[0].inputSchema;
+    const schema: any = catalog.runnable.find(skill => skill.name === 'use-item-on-block')!.inputSchema;
     expect(schema.required).toEqual([]);
     expect(Object.keys(schema.properties)).toEqual(['x', 'y', 'z', 'itemName', 'count', 'maxDistance']);
     expect(catalog.resolve('use-item-on-block', { itemName: 'bucket' }).args).toEqual([undefined, undefined, undefined, 'bucket', 0, 48]);
     expect(catalog.resolve('use-item-on-block', { x: 1, y: 2, z: 3, itemName: 'water_bucket', count: 10 }).args).toEqual([1, 2, 3, 'water_bucket', 10, 48]);
     expect(catalog.resolve('use-item-on-block', { x: null, y: null, z: null, itemName: 'bucket' }).args).toEqual([undefined, undefined, undefined, 'bucket', 0, 48]);
-  });
-
-  it('the water bucket and the bucket are not among what the pack tidy throws away (a full-pack tidy must keep them for the way down)', () => {
-    const pack = [...Array.from({ length: 33 }, (_, i) => ({ name: i < 3 ? 'cobblestone' : `item_${i}`, count: i < 3 ? 64 : 1 })),
-      { name: 'water_bucket', count: 1 }, { name: 'bucket', count: 1 }];
-    const dropped = tidyPlan(pack).map(entry => entry.name);
-    expect(dropped).not.toContain('water_bucket');
-    expect(dropped).not.toContain('bucket');
   });
 });
 

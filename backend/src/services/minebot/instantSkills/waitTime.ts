@@ -2,7 +2,7 @@ import { CustomBot, InstantSkill } from '../types.js';
 import { actionDelay } from '../execution/observedWait.js';
 import { backgroundJobs } from '../execution/backgroundJobs.js';
 import { isSealedIn } from '../utils/shelter.js';
-import { descentFloor, descentKit, bedWool, nightClock } from '../utils/nightGate.js';
+import { descentKit, bedWool, nightClock } from '../utils/nightGate.js';
 import { nearestOreHits } from '../utils/loadedBlockScan.js';
 import { RAW_FOOD } from '../constantSkills/autoEat.js';
 
@@ -58,10 +58,8 @@ export function meanwhileWork(bot: any): { work: string[]; concrete: boolean; sm
     }
   } catch { /* the kit unknown: the generic work below */ }
   if (count(name => name.endsWith('_pickaxe')) > 0) {
-    // The nearest ores by name and place, above the night gate's floor when it is closed: the planner can mine them at once.
-    let floor = -Infinity;
-    try { floor = descentFloor(bot)?.floor ?? -Infinity; } catch { floor = -Infinity; }
-    const hits = nearestOreHits(bot, 32, floor);
+    // The nearest ores by name and place: the planner can mine them at once.
+    const hits = nearestOreHits(bot, 32);
     const ores = hits.map(({ kind, hit }) => `${kind} (${hit.position.x}, ${hit.position.y}, ${hit.position.z}) 約${Math.round(hit.distance)}m`);
     out.unshift(ores.length ? `mine-block で近くの${ores.join('・')}を掘る` : 'mine-block で石炭・鉄などを掘る');
     if (ores.length) concrete = true;
@@ -117,7 +115,7 @@ class WaitTime extends InstantSkill {
    * its night shaft, a fifth of the run (the refusal, written then, never ran: see isCommandLevel). Not refused: a short wait, a
    * furnace done within ten seconds (and no night to wait out), a hurt body that is regenerating (health 10 or less and food 18 or
    * more: the wait heals it), or nothing else to do. What is said: what the wait was for, and what could be done instead (the
-   * nearest ores, above the night gate's floor).
+   * nearest ores).
    */
   protected preflight(milliseconds: number) {
     const asked = Number(milliseconds);

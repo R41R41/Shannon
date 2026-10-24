@@ -10,7 +10,7 @@ const log = createLogger('Minebot:Types');
 /**
  * サポートされるパラメータ型
  */
-/** 'json': a structured value checked by the param's own Zod `schema` (act's steps, LLM-centric mode). */
+/** 'json': a structured value checked by the param's own Zod `schema` (act's steps). */
 export type SkillParamType = 'string' | 'number' | 'boolean' | 'Vec3' | 'json';
 
 /**

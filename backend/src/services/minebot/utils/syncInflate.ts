@@ -18,8 +18,6 @@ import { createLogger } from '../../../utils/logger.js';
  * the loop: the socket's data is handled in the callback it arrives in, at the speed of the CPU (a chunk packet is well under a
  * millisecond). Everything else is as the library does it: an uncompressed frame is passed on, a frame that does not inflate is dropped
  * with a line, a length that does not match is said.
- *
- * MINEBOT_SYNC_INFLATE=off leaves the library's own inflater (the way back).
  */
 
 const log = createLogger('Minebot:Inflate');
@@ -83,9 +81,8 @@ function decompressorPrototype(from: NodeRequire): { prototype: TransformPrototy
  * Puts the in-place inflater on minecraft-protocol's Decompressor (every client made after, and the ones whose compression is set after).
  * Once a process; returns what it did.
  */
-export function installSyncInflate(options: { env?: NodeJS.ProcessEnv; require?: NodeRequire } = {}): 'sync' | 'off' | 'unavailable' {
+export function installSyncInflate(options: { require?: NodeRequire } = {}): 'sync' | 'unavailable' {
   if (installed) return 'sync';
-  if ((options.env ?? process.env).MINEBOT_SYNC_INFLATE === 'off') return 'off';
   try {
     const { prototype, readVarInt } = decompressorPrototype(options.require ?? createRequire(import.meta.url));
     installed = { prototype, original: prototype._transform };

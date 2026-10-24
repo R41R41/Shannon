@@ -176,39 +176,12 @@ describe('combat owner: the floor leaves the planner\'s fight alone', () => {
     expect(bot.floorReflexes.busy).toBeNull();
   });
 
-  it('with no way out, the floor walls the body in (build-around-self) as before, and does not while the planner fights', async () => {
-    const pillar = ground((x, z) => x === 0 && z === 0);
-    const wall = { name: 'cobblestone', count: 16 };
-    const build = vi.fn(async () => ({ success: true, result: 'walled' }));
-    const make = () => {
-      const made = fixture({ world: pillar, zombieAt: 6, items: [wall] });
-      made.bot.instantSkills = { getSkill: (name: string) => name === 'build-around-self' ? { bot: made.bot, runImpl: build } : undefined };
-      installFloorReflexes(made.bot, floorConfig({}), { fleeTickMs: 1 });
-      return made.bot;
-    };
-    const free = make();
-    tick(free); await settle(20);
-    expect(build).toHaveBeenCalledTimes(1);
-    build.mockClear();
-    const fighting = make();
-    markHeadCombat(fighting, 'attack-nearest', ['*']);
-    for (let i = 0; i < 5; i++) { tick(fighting); await settle(5); }
-    expect(build).not.toHaveBeenCalled();
-    expect(fighting.floorReflexes.shelterWanted).toBeFalsy();
-  });
-
-  it('eating at health 6 or less and putting armour on still happen while the planner fights', async () => {
+  it('eating at health 6 or less still happens while the planner fights', async () => {
     const eat = fixture({ health: 6, food: 10, zombieAt: 9, items: [{ name: 'bread', count: 3 }] });
     installFloorReflexes(eat.bot, floorConfig({}));
     markHeadCombat(eat.bot, 'attack-nearest', ['*']);
     tick(eat.bot); await settle(10);
     expect(eat.bot.consume).toHaveBeenCalledTimes(1);
-
-    const wear = fixture({ health: 20, zombieAt: 9, items: [{ name: 'iron_chestplate', count: 1 }] });
-    installFloorReflexes(wear.bot, floorConfig({}));
-    markHeadCombat(wear.bot, 'attack-nearest', ['*']);
-    tick(wear.bot); await settle(10);
-    expect(wear.bot.equip).toHaveBeenCalledTimes(1);
   });
 
   it('the observation says who owns the fight: head, reflex (while the floor runs the body away), or null', async () => {

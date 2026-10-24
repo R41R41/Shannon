@@ -13,7 +13,6 @@ vi.mock('../../src/services/minebot/execution/observedWait.js', async (original)
 }));
 
 const { createMotorPort, executeAction, nativeActionHost, MAX_NESTED_ACTIONS } = await import('../../src/services/minebot/execution/ActionExecution.js');
-const { clutterTidyHeld, holdClutterTidy, makeRoom, tidyIfCluttered, tidyPackNow } = await import('../../src/services/minebot/utils/inventoryRoom.js');
 const { liquidNearPit } = await import('../../src/services/minebot/utils/dumpPit.js');
 const { repairTierToolMaterials } = await import('../../src/services/minebot/utils/registryRepairs.js');
 const { default: DropItem } = await import('../../src/services/minebot/instantSkills/dropItem.js');
@@ -92,34 +91,6 @@ describe('run 22: a tidy that called itself without end (dig-block-at -> drop-it
     expect(() => first.dig()).toThrow('Motor owner expired');
   });
 
-  it('the hold and the gap are kept on the native bot: a hold through one port quiets the tidy through another', async () => {
-    const native = room([...stacks('cobblestone', 9), ...Array.from({ length: 20 }, (_, i) => ({ name: `thing_${i}`, count: 1 }))]);
-    const call = vi.fn(async () => ({ success: true }));
-    const release = holdClutterTidy(createMotorPort(native));
-    expect(clutterTidyHeld(createMotorPort(native))).toBe(true);
-    expect(await tidyIfCluttered(createMotorPort(native), call, { now: () => 1 })).toBe('');
-    expect((await makeRoom(createMotorPort(native), call, { slots: 30 })).freed).toBe(0);
-    expect(await tidyPackNow(createMotorPort(native), call, {})).toBe('');
-    release();
-    expect(call).not.toHaveBeenCalled();
-    // ...and the gap after a tidy through one port holds through the next port too.
-    await tidyIfCluttered(createMotorPort(native), call, { now: () => 10 });
-    expect(call).toHaveBeenCalled();
-    const after = call.mock.calls.length;
-    await tidyIfCluttered(createMotorPort(native), call, { now: () => 20 });
-    expect(call.mock.calls.length).toBe(after);
-  });
-
-  it('a tidy takes a real turn of the event loop before each throw, so timers can fire', async () => {
-    let turned = false;
-    setImmediate(() => { turned = true; });
-    const seen: boolean[] = [];
-    const call = vi.fn(async () => { seen.push(turned); return { success: true }; });
-    await tidyIfCluttered(room([...stacks('cobblestone', 9), ...stacks('andesite', 4), ...stacks('dirt', 20)]), call, { now: () => 1 });
-    expect(seen.length).toBeGreaterThan(0);
-    expect(seen[0]).toBe(true);
-  });
-
   it('a skill called inside skills past the limit is refused, not run', async () => {
     const native: any = new EventEmitter();
     let deepest = 0;
@@ -130,44 +101,5 @@ describe('run 22: a tidy that called itself without end (dig-block-at -> drop-it
     const result = await nest(0);
     expect(result.failureType).toBe('nesting_too_deep');
     expect(deepest).toBe(MAX_NESTED_ACTIONS);
-  });
-
-  it('dig-block-at with a pack full of cobblestone and tuff in a tunnel: one tidy, drop-item never inside drop-item, no hang', async () => {
-    const { bot, dig, drops, digs } = tunnelBody();
-    const started = Date.now();
-    const result: any = await dig.run(3, 64, 1, true);
-    expect(Date.now() - started).toBeLessThan(10_000);
-    // One tidy: at most its two kinds were thrown, one after the other.
-    expect(drops.calls).toBeGreaterThanOrEqual(1);
-    expect(drops.calls).toBeLessThanOrEqual(2);
-    expect(drops.most).toBe(1);
-    // The top dig, and the pit drop-item tried to dig (it never gets past the first cell: the pickaxe does not dig here).
-    expect(digs.calls).toBeLessThanOrEqual(1 + drops.calls);
-    expect(typeof result.result).toBe('string');
-    expect(clutterTidyHeld(bot)).toBe(false);
-  });
-
-  it('beside lava no hole is dug or used: drop-item throws walking away and dig-block-at runs once', async () => {
-    const { bot, dig, drops, digs } = tunnelBody([new Vec3(1, 62, 0), new Vec3(2, 63, 1)]);
-    expect(liquidNearPit(bot, new Vec3(0, 64, 0))).toBe('lava');
-    await dig.run(3, 64, 1, true);
-    expect(drops.calls).toBeGreaterThanOrEqual(1);
-    expect(drops.most).toBe(1);
-    expect(digs.calls).toBe(1);
-  });
-
-  it('drop-item entered while another runs on the same body (through any port) refuses at once, and a tidy stops on that', async () => {
-    const { bot, drop } = tunnelBody();
-    const first = (drop as any).runImpl('cobblestone', 64);
-    const second = await new DropItem(createMotorPort(bot) as any).runImpl('tuff', 64);
-    expect(second.failureType).toBe('already_dropping');
-    await first;
-    // Once the first is over, a throw is taken again.
-    const third: any = await (drop as any).runImpl('tuff', 64);
-    expect(third.failureType).not.toBe('already_dropping');
-    // A tidy that is told already_dropping does not go on to the next kind.
-    const call = vi.fn(async () => ({ success: false, failureType: 'already_dropping', result: 'busy' }));
-    await tidyIfCluttered(room([...stacks('cobblestone', 9), ...stacks('andesite', 4), ...stacks('dirt', 20)]), call, { now: () => 1 });
-    expect(call).toHaveBeenCalledTimes(1);
   });
 });

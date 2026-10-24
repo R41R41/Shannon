@@ -135,7 +135,7 @@ function shaft(options: { now?: () => number; items?: any[] } = {}) {
   const bot: any = Object.assign(new EventEmitter(), {
     __blocks: blocks, __dug: [] as string[],
     entity: { id: 1, name: 'player', position: new Vec3(0.5, 65, 0.5), yaw: 0, pitch: 0, onGround: true },
-    health: 3.7, food: 17, game: { dimension: 'the_nether' }, llmCentric: true,
+    health: 3.7, food: 17, game: { dimension: 'the_nether' },
     entities: { 9: { id: 9, name: 'blaze', type: 'hostile', position: new Vec3(0.5, 70, 0.5), height: 1.8 } } as Record<string, any>,
     registry: { blocksByName: { cobblestone: { id: 1 } }, entitiesByName: { blaze: { type: 'hostile' } } }, heldItem: null,
     inventory: { items: () => options.items ?? [], slots: new Array(46).fill(null) }, controlState: {} as Record<string, boolean>,

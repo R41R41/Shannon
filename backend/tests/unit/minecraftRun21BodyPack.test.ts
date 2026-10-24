@@ -11,10 +11,8 @@ vi.mock('../../src/services/minebot/execution/observedWait.js', async (original)
 }));
 
 const { repairTierToolMaterials } = await import('../../src/services/minebot/utils/registryRepairs.js');
-const { clutterPlan, pickaxeAllowance, surplusPickaxes } = await import('../../src/services/minebot/utils/inventoryTidy.js');
-const { clutterToThrow, CLUTTER_GAP_MS, CLUTTER_REFUSED_GAP_MS, holdClutterTidy, tidyIfCluttered } = await import('../../src/services/minebot/utils/inventoryRoom.js');
+const { pickaxeAllowance, surplusPickaxes } = await import('../../src/services/minebot/utils/inventoryTidy.js');
 const { isSelfDropped, noteSelfDropped, SELF_DROP_MS } = await import('../../src/services/minebot/utils/selfDropped.js');
-const { ensureToolUses } = await import('../../src/services/minebot/utils/toolStock.js');
 const { executeAction } = await import('../../src/services/minebot/execution/ActionExecution.js');
 const { equipToHandVerified } = await import('../../src/services/minebot/utils/equipVerified.js');
 const { planBedSpot, walkableCells } = await import('../../src/services/minebot/utils/bedSpot.js');
@@ -32,24 +30,7 @@ const heap = (name: string, count: number) => [{ name, count }];
 const stacks = (name: string, n: number, size = 64) => Array.from({ length: n }, () => ({ name, count: size }));
 const filler = (n: number) => Array.from({ length: n }, (_, i) => ({ name: `thing_${i}`, count: 1 }));
 
-describe('the body\'s own limit on the rock it digs (run 21: 545 cobblestone in a 34/36 pack)', () => {
-  it('throws cobblestone down to 96 past 192 at any time, and past 160 only when the pack is short of room', () => {
-    expect(clutterPlan(heap('cobblestone', 545), 20)).toEqual([{ name: 'cobblestone', count: 449 }]);
-    expect(clutterPlan(heap('cobblestone', 193), 20)).toEqual([{ name: 'cobblestone', count: 97 }]);
-    expect(clutterPlan(heap('cobblestone', 192), 20)).toEqual([]);
-    expect(clutterPlan(heap('cobblestone', 170), 20)).toEqual([]);
-    expect(clutterPlan(heap('cobblestone', 170), 6)).toEqual([{ name: 'cobblestone', count: 74 }]);
-    expect(clutterPlan(heap('cobblestone', 160), 2)).toEqual([]);
-  });
-
-  it('counts a kind over all its stacks, goes by the table for other rock, and never names a kind that is kept', () => {
-    expect(clutterPlan([...stacks('cobblestone', 3), ...stacks('andesite', 4), { name: 'andesite', count: 1 }], 3))
-      .toEqual([{ name: 'andesite', count: 257 }, { name: 'cobblestone', count: 96 }]);
-    const kept = [...stacks('coal', 10, 64), ...stacks('iron_ingot', 5, 64), ...stacks('stone_pickaxe', 1, 1), ...stacks('bread', 4, 64)];
-    expect(clutterPlan(kept, 0)).toEqual([]);
-    // Below the head's own keep of 128 the body leaves it alone: the two never fight over one heap.
-    expect(clutterPlan(heap('cobblestone', 128), 0)).toEqual([]);
-  });
+describe('spare pickaxes carried (run 21: five stone pickaxes beside an iron one)', () => {
 
   it('keeps at most two stone pickaxes, one beside a good iron one, and never the last pickaxe', () => {
     const five = [item('iron_pickaxe', 1, 10), ...Array.from({ length: 5 }, () => item('stone_pickaxe'))];
@@ -63,110 +44,6 @@ describe('the body\'s own limit on the rock it digs (run 21: 545 cobblestone in 
   });
 
   function room(items: any[]) { return { inventory: { items: () => items, emptySlotCount: () => 36 - items.length } } as any; }
-
-  it('throws from a cheap check, drops the largest heap first, at most two kinds, not what is being mined', async () => {
-    const pack = [...stacks('cobblestone', 9), ...stacks('andesite', 4), ...stacks('dirt', 4), ...filler(10)];
-    expect(clutterToThrow(room(pack)).map(entry => entry.name)).toEqual(['cobblestone', 'andesite', 'dirt']);
-    const thrown: string[][] = [];
-    const call = vi.fn(async (...args: any[]) => { thrown.push(args.map(String)); return { success: true }; });
-    const note = await tidyIfCluttered(room(pack), call, { now: () => 1000 });
-    // one throw for the kinds over their limits (run 24: one call, not one per kind): the list `name:count` comma-joined
-    expect(thrown).toHaveLength(1);
-    expect(thrown[0][0]).toBe('drop-item');
-    expect(thrown[0][1]).toMatch(/^cobblestone:480,andesite:256/);
-    expect(note).toContain('掘り進みで石が溜まっていた');
-    // The stone being mined is never named.
-    const mined = vi.fn(async () => ({ success: true }));
-    await tidyIfCluttered(room([...stacks('cobblestone', 9), ...filler(10)]), mined, { asked: ['cobblestone'], now: () => 5000 });
-    expect(mined).not.toHaveBeenCalled();
-  });
-
-  it('does nothing for a tidy pack, so the check can run at every dig', async () => {
-    const call = vi.fn();
-    expect(await tidyIfCluttered(room([...stacks('cobblestone', 2), ...filler(12)]), call, {})).toBe('');
-    expect(call).not.toHaveBeenCalled();
-  });
-
-  it('waits a short while after a throw that went, long after one that was refused, and is quiet while a throw is under way', async () => {
-    const pack = () => [...stacks('cobblestone', 9), ...filler(10)];
-    const bot = room(pack());
-    let clock = 10_000;
-    const refuse = vi.fn(async () => ({ success: false, failureType: 'picked_up_again', result: 'came back' }));
-    const first = await tidyIfCluttered(bot, refuse, { now: () => clock });
-    expect(first).toContain('断られました');
-    expect(first).toContain('picked_up_again');
-    clock += CLUTTER_GAP_MS + 1;
-    await tidyIfCluttered(bot, refuse, { now: () => clock });
-    expect(refuse).toHaveBeenCalledTimes(1);
-    clock += CLUTTER_REFUSED_GAP_MS;
-    await tidyIfCluttered(bot, refuse, { now: () => clock });
-    expect(refuse).toHaveBeenCalledTimes(2);
-
-    const held = room(pack());
-    const quiet = vi.fn(async () => ({ success: true }));
-    const release = holdClutterTidy(held);
-    expect(await tidyIfCluttered(held, quiet, { now: () => 1 })).toBe('');
-    release();
-    expect(quiet).not.toHaveBeenCalled();
-    // Not with a hostile near, in an emergency, or with the action nearly out of time.
-    expect(await tidyIfCluttered(room(pack()), quiet, { blocked: () => true })).toBe('');
-    expect(await tidyIfCluttered(room(pack()), quiet, { timeLeftMs: 5000 })).toBe('');
-    expect(quiet).not.toHaveBeenCalled();
-  });
-
-  it('a tool is not clutter: spare pickaxes are not thrown by the cheap check (run 24: a spare stone pickaxe and an iron one thrown into the hole, twice, and fetched back)', async () => {
-    const pack = [item('iron_pickaxe', 1, 10), ...Array.from({ length: 4 }, () => item('stone_pickaxe')), ...filler(5)];
-    expect(clutterToThrow(room(pack))).toEqual([]);
-    const call = vi.fn(async () => ({ success: true }));
-    expect(await tidyIfCluttered(room(pack), call, { now: () => 1 })).toBe('');
-    expect(call).not.toHaveBeenCalled();
-    // with rock piled up beside them, the rock goes and the tools stay
-    const heap = [...pack, ...stacks('cobblestone', 9)];
-    expect(clutterToThrow(room(heap)).map(entry => entry.name)).toEqual(['cobblestone']);
-  });
-});
-
-describe('a spare pickaxe is made at most once per tier (run 21: five stone pickaxes beside an iron one)', () => {
-  const inAction = (bot: any, work: () => Promise<any>) => executeAction(bot, 'mine-block', 0, async () => ({ success: true, result: String(await work()) }));
-  function body(items: any[]) {
-    return Object.assign(new EventEmitter(), {
-      registry, version: '1.21.11', entity: { id: 7, position: new Vec3(0.5, 50, 0.5), effects: {} }, _client: new EventEmitter(),
-      inventory: { slots: [], items: () => items, emptySlotCount: () => 20 }, executingSkill: false, interruptExecution: false, health: 20, food: 20,
-      clearControlStates: vi.fn(), stopDigging: vi.fn(), deactivateItem: vi.fn(), pathfinder: { stop: vi.fn(), setGoal: vi.fn() },
-      findBlocks: () => [], items,
-    }) as any;
-  }
-  const crafting = (bot: any, calls: string[]) => async (skill: string, ...args: any[]) => {
-    calls.push(`${skill}:${args[0]}`);
-    bot.items.push(item('stone_pickaxe'));
-    return { success: true, result: 'crafted' };
-  };
-
-  it('with two stone pickaxes carried, a third is not made however short the uses are', async () => {
-    const bot = body([item('stone_pickaxe', 1, 125), item('stone_pickaxe', 1, 125), item('cobblestone', 75), item('stick', 4), item('crafting_table')]);
-    const calls: string[] = [];
-    let check: any;
-    await inAction(bot, async () => { check = await ensureToolUses(bot, [block('iron_ore')], 40, crafting(bot, calls)); });
-    expect(calls).toEqual([]);
-    expect(check.enough).toBe(false);
-    expect(check.note).toContain('stone_pickaxeはすでに2本持っています');
-  });
-
-  it('with an iron pickaxe of enough uses and one stone pickaxe carried, no stone spare is made', async () => {
-    const bot = body([item('iron_pickaxe', 1, 20), item('stone_pickaxe', 1, 120), item('cobblestone', 75), item('stick', 4), item('crafting_table')]);
-    const calls: string[] = [];
-    let check: any;
-    await inAction(bot, async () => { check = await ensureToolUses(bot, [block('iron_ore')], 300, crafting(bot, calls)); });
-    expect(calls).toEqual([]);
-    expect(check.note).toContain('stone_pickaxeはすでに1本持っています');
-  });
-
-  it('with one stone pickaxe and no better one, the second is still made', async () => {
-    const bot = body([item('stone_pickaxe', 1, 120), item('cobblestone', 75), item('stick', 4), item('crafting_table')]);
-    const calls: string[] = [];
-    await inAction(bot, async () => { await ensureToolUses(bot, [block('iron_ore')], 16, crafting(bot, calls)); });
-    expect(calls).toEqual(['craft-one:stone_pickaxe']);
-  });
 });
 
 describe('what the body threw away is not picked up again', () => {

@@ -429,20 +429,20 @@ describe('a flee that is refused is told to the mind and does not cost a search 
     installFloorReflexes(bot, floorConfig({}), { fleeTickMs: 1 });
     for (let i = 0; i < 20; i++) { tick(bot); await settle(2); }
     expect(calls).toEqual([]); expect(bot.floorReflexes.busy).toBeNull();
-    expect(ledger.summary()!.recent.filter(entry => entry.kind === 'flee')).toHaveLength(1);
+    expect(ledger.summary()!.recent.filter(entry => entry.kind === 'flee').some(entry => entry.detail.includes('逃げ道が無く'))).toBe(true);
     expect(bot.floorReflexes.engagements.flee).toBe(0);
   });
 });
 
 // ---- words ---------------------------------------------------------------------------------------------------------------------------
 describe('the prompts say what the default floor really does', () => {
-  it('reflexPromptText names retreat, eating, armour, the flee (and that it cuts the fight) and the pickup by default, and only the production floor in `floor` mode', () => {
+  it('reflexPromptText names retreat, eating and the flee (and that it cuts the fight) by default, and only the production floor in `floor` mode', () => {
     const all = reflexPromptText(floorConfig({}));
-    for (const word of ['クリーパー', '矢', '食べる', '防具', '走って離れる', '実行中の戦闘・作業を中断', '20秒に2回', '落とし物']) expect(all).toContain(word);
+    for (const word of ['クリーパー', '矢', '食べる', '走って離れる', '実行中の戦闘・作業を中断', '20秒に2回']) expect(all).toContain(word);
     const production = reflexPromptText(floorConfig({ MINEBOT_FCA_REFLEXES: 'floor' }));
-    expect(production).toContain('クリーパー'); expect(production).not.toContain('走って離れる'); expect(production).not.toContain('落とし物');
+    expect(production).toContain('クリーパー'); expect(production).not.toContain('走って離れる');
     expect(reflexPromptText(floorConfig({ MINEBOT_FCA_REFLEXES: 'off' }))).toBe('床の反射は動いていない');
-    expect(reflexPromptText(floorConfig({ MINEBOT_FCA_REFLEX_OFF: 'flee;pickup' }))).not.toContain('走って離れる');
+    expect(reflexPromptText(floorConfig({ MINEBOT_FCA_REFLEX_OFF: 'flee' }))).not.toContain('走って離れる');
   });
   it('both skills build their common-FCA sentence from it', () => {
     for (const file of ['acceptThreat.ts', 'attackContinuously.ts']) {

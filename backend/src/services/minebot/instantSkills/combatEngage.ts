@@ -1,6 +1,5 @@
 import { CustomBot, InstantSkill } from '../types.js';
 import { CombatController } from '../combat/CombatController.js';
-import { shouldRefuseAggressiveCombat } from '../utils/minebotToolPolicy.js';
 import { createLogger } from '../../../utils/logger.js';
 
 const log = createLogger('Minebot:Skill:combatEngage');
@@ -34,10 +33,6 @@ class CombatEngage extends InstantSkill {
     }
 
     async runImpl(target?: string, maxDuration: number = 60): Promise<{ success: boolean; result: string }> {
-        const refuse = shouldRefuseAggressiveCombat(this.bot);
-        if (refuse) {
-            return { success: false, result: refuse };
-        }
         // 敵がいるか事前チェック
         const hasHostiles = Object.values(this.bot.entities).some(e =>
             e && e.position && e.type === 'hostile' &&
