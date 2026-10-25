@@ -1,5 +1,6 @@
 import { companionPrimaryModel, type CompanionPrimaryModel } from './companionPrimaryModel.js';
 import { randomUUID } from 'node:crypto';
+import type { GameMomentDetail, GameMomentType } from './companionGameMoments.js';
 
 /**
  * Minebot as Shannon's Minecraft body (shannon-ios docs/minecraft-body-contract.md). Her one mind is the
@@ -111,6 +112,19 @@ export class CompanionBodyClient {
     const event = { id: `${this.options.serverId}-death-${at.getTime()}-${randomUUID().slice(0, 8)}`, type: 'game.died',
       audience: othersPresent ? 'others' : 'owner', occurredAt: at.toISOString(),
       cause: CAUSE.test(cause) ? cause : 'minecraft:generic' };
+    const response = await this.post('/v1/body/events', { scopeKey: 'owner', events: [event] }, EVENT_TIMEOUT_MS).catch(() => null);
+    return !!response?.ok;
+  }
+
+  /**
+   * A closed game event of phase 2 (`game.hurt`, `game.danger`, `game.milestone`, `game.night_survived`, `game.owner_near`): her mind
+   * feels it. Sent once and never retried (a lost one is a feeling missed, not a fact lost). False when it was not stored.
+   */
+  async gameEvent(type: GameMomentType, detail: GameMomentDetail, othersPresent: boolean, at = new Date()): Promise<boolean> {
+    const cause = detail.cause && CAUSE.test(detail.cause) ? { cause: detail.cause } : {};
+    const strength = type === 'game.hurt' ? { strength: Math.max(0, Math.min(1, Math.round((detail.strength ?? 0) * 100) / 100)) } : {};
+    const event = { id: `${this.options.serverId}-${type.slice(5)}-${at.getTime()}-${randomUUID().slice(0, 8)}`, type,
+      audience: othersPresent ? 'others' : 'owner', occurredAt: at.toISOString(), ...(type === 'game.night_survived' || type === 'game.owner_near' ? {} : cause), ...strength };
     const response = await this.post('/v1/body/events', { scopeKey: 'owner', events: [event] }, EVENT_TIMEOUT_MS).catch(() => null);
     return !!response?.ok;
   }

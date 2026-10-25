@@ -5,6 +5,8 @@ import {
   companionBodyNow, othersOnline, speakCompanionReply, takeCompanionTurn, watchCompanionBodyEvents,
   type CompanionBodyBot,
 } from './companionBodyParts.js';
+import { watchGameMoments, type GameMomentBot, type GameMomentDetail, type GameMomentType } from './companionGameMoments.js';
+import type { ExpressionBridge } from './expressionBridge.js';
 
 /**
  * The production Minebot as Shannon's Minecraft body (docs/minebot-companion-body.md, shannon-ios
@@ -32,6 +34,13 @@ export interface MinebotCompanionBodyOptions {
   /** Common FCA owns requests; this object keeps only chat/death transport. */
   commonFca?: boolean;
   commonFcaBusy?: () => boolean;
+  /**
+   * Her face on her Minecraft skin (ExpressionMod): her mind's face from presence, a reflex face at a game moment, and the listening /
+   * speaking activity of a chat turn. Absent: no face is sent.
+   */
+  expressionBridge?: ExpressionBridge;
+  /** The owner's player name in this world, for `game.owner_near`; absent or unknown, that moment is never sent. */
+  ownerName?: () => string | undefined;
   /** Where her reply goes in the UI mod's chat tab (the current server's UI mod). */
   uiModBaseUrl: () => string;
   /** Game chat line length (the bot's MINECRAFT_CHAT_MAX_CHARS) and the most lines one reply may take. */
@@ -62,6 +71,7 @@ export class MinebotCompanionBody {
   private readonly companionTaskIds = new Set<string>();
   private readonly lastTool = new Map<string, string>();
   private events: ReturnType<typeof watchCompanionBodyEvents> | null = null;
+  private moments: ReturnType<typeof watchGameMoments> | null = null;
   private deaths = 0;
   private started = false;
   private stopped = false;
@@ -70,7 +80,7 @@ export class MinebotCompanionBody {
   private readonly onSpawn = () => { this.startLoop(); };
 
   constructor(private readonly bot: MinebotCompanionBodyBot, private readonly runtime: MinebotCompanionBodyRuntime,
-    private readonly client: Pick<CompanionBodyClient, 'turn' | 'died' | 'claim' | 'progress' | 'report'>,
+    private readonly client: Pick<CompanionBodyClient, 'turn' | 'died' | 'claim' | 'progress' | 'report'> & Partial<Pick<CompanionBodyClient, 'gameEvent'>>,
     private readonly options: MinebotCompanionBodyOptions) {
     this.log = options.log ?? (() => {});
     this.tasks = new CompanionRuntimeTasks(runtime, {
@@ -91,6 +101,10 @@ export class MinebotCompanionBody {
     if (this.started || this.stopped) return;
     this.started = true;
     this.events = watchCompanionBodyEvents(this.bot, { name: () => this.bot.username, onDeath: cause => this.died(cause) });
+    // Phase 2 (owner 2026-10-26): what happens to her body, for her mind to feel; read beside everything else, nothing waits on it.
+    if (this.client.gameEvent) this.moments = watchGameMoments(this.bot as unknown as GameMomentBot, { send: (type, detail) => this.moment(type, detail),
+      reflex: (expression, milliseconds) => this.options.expressionBridge?.flash(expression, milliseconds), ownerName: () => this.options.ownerName?.() });
+    this.options.expressionBridge?.start();
     this.bot.on('death', this.onDeathEvent);
     this.bot.once('end', this.onEnd);
     if (this.bot.entity) this.startLoop();
@@ -103,6 +117,8 @@ export class MinebotCompanionBody {
     if (this.stopped) return;
     this.stopped = true;
     this.events?.dispose();
+    this.moments?.dispose();
+    this.options.expressionBridge?.stop();
     this.bot.removeListener('death', this.onDeathEvent);
     this.bot.removeListener('end', this.onEnd);
     this.bot.removeListener('spawn', this.onSpawn);
@@ -116,20 +132,24 @@ export class MinebotCompanionBody {
    */
   async answer(speaker: { uuid: string; name: string }, message: string): Promise<boolean> {
     if (this.stopped) return false;
-    const outcome = await takeCompanionTurn(this.client,
-      { speakerUuid: speaker.uuid, speakerName: speaker.name, message, body: this.bodyNow() },
-      reply => speakCompanionReply(this.bot, reply, { uiModBaseUrl: this.options.uiModBaseUrl(),
-        lineLimit: this.options.lineLimit, maxLines: this.options.maxLines, fetcher: this.options.fetcher }));
-    if (outcome.kind === 'unavailable') {
-      this.log(`MINEBOT_COMPANION_UNAVAILABLE ${JSON.stringify({ player: speaker.name })}`);
-      return false;
-    }
-    this.log(`MINEBOT_COMPANION_REPLY ${JSON.stringify({ player: speaker.name, action: outcome.action, requestId: outcome.requestId })}`);
-    if (this.options.commonFca) return true;
-    if (outcome.action === 'task') this.queueAnswered(speaker.name, outcome.goal);
-    else if (outcome.action === 'stop') this.stopCurrent();
-    // `request`: queued on her mind; the claim loop takes it (one path for progress, stop and result).
-    return true;
+    // Her face listens while her mind answers, and speaks with the reply (ExpressionMod's dialogue activity).
+    const face = this.options.expressionBridge?.beginTurn(speaker.uuid);
+    try {
+      const outcome = await takeCompanionTurn(this.client,
+        { speakerUuid: speaker.uuid, speakerName: speaker.name, message, body: this.bodyNow() },
+        reply => { face?.speaking(); speakCompanionReply(this.bot, reply, { uiModBaseUrl: this.options.uiModBaseUrl(),
+          lineLimit: this.options.lineLimit, maxLines: this.options.maxLines, fetcher: this.options.fetcher }); });
+      if (outcome.kind === 'unavailable') {
+        this.log(`MINEBOT_COMPANION_UNAVAILABLE ${JSON.stringify({ player: speaker.name })}`);
+        return false;
+      }
+      this.log(`MINEBOT_COMPANION_REPLY ${JSON.stringify({ player: speaker.name, action: outcome.action, requestId: outcome.requestId })}`);
+      if (this.options.commonFca) return true;
+      if (outcome.action === 'task') this.queueAnswered(speaker.name, outcome.goal);
+      else if (outcome.action === 'stop') this.stopCurrent();
+      // `request`: queued on her mind; the claim loop takes it (one path for progress, stop and result).
+      return true;
+    } finally { face?.finish(); }
   }
 
   /** The runtime's executor tells how a run ended; a request's result is reported from it. */
@@ -161,7 +181,16 @@ export class MinebotCompanionBody {
 
   private died(cause: string): void {
     void this.client.died(cause, othersOnline(this.bot))
-      .then(stored => this.log(`MINEBOT_COMPANION_DIED ${JSON.stringify({ cause, stored })}`));
+      .then(stored => { this.log(`MINEBOT_COMPANION_DIED ${JSON.stringify({ cause, stored })}`); if (stored) this.options.expressionBridge?.refresh(); });
+  }
+
+  /** A game moment goes to her mind without waiting; once stored, her face is read again at once (her mind may feel it now). */
+  private moment(type: GameMomentType, detail?: GameMomentDetail): void {
+    if (this.stopped || !this.client.gameEvent) return;
+    void this.client.gameEvent(type, detail ?? {}, othersOnline(this.bot))
+      .then(stored => { this.log(`MINEBOT_COMPANION_MOMENT ${JSON.stringify({ type, ...(detail?.cause ? { cause: detail.cause } : {}), stored })}`);
+        if (stored) this.options.expressionBridge?.refresh(); })
+      .catch(() => {});
   }
 
   private envelope(meta: CompanionTaskMetadata): { tags: string[]; metadata: Record<string, unknown> } {

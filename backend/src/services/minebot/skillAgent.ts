@@ -30,6 +30,7 @@ import { CompanionBodyClient } from './integration/CompanionBodyClient.js';
 import { readCompanionBodyToken } from './integration/companionBodyConfig.js';
 import { isAddressedToShannon, listenToPlayerChat, playerUuidByName } from './integration/gameChat.js';
 import { MinebotCompanionBody } from './integration/MinebotCompanionBody.js';
+import { MinebotExpressionBridge } from './integration/expressionBridge.js';
 import { createCommonFcaBody } from './integration/commonFca/createCommonFcaBody.js';
 import { CommonFcaUiModBridge } from './integration/commonFca/uiModBridge.js';
 import { createFcaUiControls } from './integration/commonFca/uiModControls.js';
@@ -352,6 +353,9 @@ export class SkillAgent {
     log.info(`🫀 Companion body mode on ${settings.serverName} (serverId ${settings.serverId})`, 'cyan');
     return new MinebotCompanionBody(this.bot as any, this.taskRuntime, client, {
       serverId: settings.serverId, commonFca: this.commonFca, commonFcaBusy: () => this.commonFcaBody?.busy ?? false,
+      // Owner 2026-10-26: her mind's face on her skin (ExpressionMod), and the owner's name for 「ライ氏がそばに来た」.
+      expressionBridge: new MinebotExpressionBridge(this.bot as any, { baseUrl: settings.url, token }),
+      ownerName: () => CONFIG.resolveMinecraftName('ライ'),
       uiModBaseUrl: () => CONFIG.UI_MOD_BASE_URL,
       lineLimit: CONFIG.MINECRAFT_CHAT_MAX_CHARS,
       maxLines: 3,
