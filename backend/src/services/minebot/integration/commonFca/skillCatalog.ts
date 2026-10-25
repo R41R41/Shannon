@@ -70,19 +70,26 @@ export function skillRunLimit(maxDurationMs: number): number {
 /**
  * The requests the API binds to the dragon's native evidence (mc.goal-evidence): a mirror of the closed set in Shannon API
  * wiring/fcaMinecraftGoalBinding.ts (update both together). Closed on purpose: "farm before the dragon" is not one of them,
- * so an ordinary request never loses a tool.
+ * so an ordinary request never loses a tool. Only dragon requests are in it; the verbs and the short forms owners say in the game chat
+ * (「エンドラ倒して」, 「エンドラを討伐してきて」, 「エンドラ討伐」) are there too (mc-chat-stale-frame, 2026-10-26).
  */
 export const DRAGON_GOALS: ReadonlySet<string> = new Set([
   'エンダードラゴンを倒して', 'エンダードラゴンを倒してきて', 'エンダードラゴンを倒す',
   'エンダードラゴンを倒してください', 'エンダードラゴンを倒してきてください',
   'エンダードラゴンを討伐して', 'エンダードラゴンを討伐してください', 'エンダードラゴン討伐して',
+  'エンダードラゴン倒して', 'エンダードラゴン倒してきて', 'エンダードラゴンを討伐してきて', 'エンダードラゴン討伐してきて', 'エンダードラゴン討伐',
   'エンドラを倒して', 'エンドラを倒してきて', 'エンドラを倒す', 'エンドラを倒してください', 'エンドラを倒してきてください',
   'エンドラを討伐して', 'エンドラを討伐してください', 'エンドラ討伐して',
+  'エンドラ倒して', 'エンドラ倒してきて', 'エンドラを討伐してきて', 'エンドラ討伐してきて', 'エンドラ討伐',
   'kill the ender dragon', 'defeat the ender dragon', 'kill the enderdragon', 'defeat the enderdragon',
   'please kill the ender dragon', 'please defeat the ender dragon',
 ]);
+/** The game's name before a request says where, not what (「マイクラでエンドラを討伐して」): dropped once, at the front. Never a goal. */
+const GAME_PLACE = /^(?:マイクラ|マインクラフト|minecraft)で/u;
 export function isDragonGoal(goal: unknown): boolean {
-  return typeof goal === 'string' && DRAGON_GOALS.has(goal.normalize('NFKC').trim().toLowerCase().replace(/[。.!！]+$/u, '').trim());
+  if (typeof goal !== 'string') return false;
+  const said = goal.normalize('NFKC').trim().toLowerCase().replace(/[。.!！]+$/u, '').trim();
+  return DRAGON_GOALS.has(said.replace(GAME_PLACE, '').trim());
 }
 /**
  * What the planner is offered (design mb-llm-centric 2.4 and 4): `act`, `view` and `probe` (r4: the reading tools, path · sight · column ·

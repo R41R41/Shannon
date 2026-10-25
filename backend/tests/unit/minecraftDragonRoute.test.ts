@@ -212,10 +212,21 @@ describe('the catalog offered to the planner', () => {
     expect(isDragonGoal(undefined)).toBe(false);
   });
 
+  // The words he typed in the game chat on 2026-10-25, and the short forms owners say; the game's name is dropped once at the front.
+  it.each(['エンドラを討伐して', 'マイクラでエンドラを討伐して', 'エンドラ討伐して', 'マインクラフトでエンドラを倒して。', 'Minecraftでエンダードラゴン討伐して',
+    'エンドラ倒して', 'エンドラ倒してきて', 'エンドラを討伐してきて', 'エンドラ討伐', 'エンダードラゴン討伐'])('knows the everyday dragon request %s', goal => {
+    expect(isDragonGoal(goal)).toBe(true);
+  });
+  it.each(['マイクラでマイクラでエンドラを倒して', 'マイクラで鉄を集めて', 'マイクラでエンドラを倒す前に畑を作って', 'マイクラでエンドラを見に行って',
+    'エンドラ', 'マイクラで', '羊毛を集めてエンドラを討伐して'])('still leaves %s as an ordinary goal', goal => {
+    expect(isDragonGoal(goal)).toBe(false);
+  });
+
   it.skipIf(!process.env.FCA_API_WIRE_ROOT)('agrees with the API on every dragon request (FCA_API_WIRE_ROOT set)', async () => {
     const binding = await import(`${process.env.FCA_API_WIRE_ROOT}/src/wiring/fcaMinecraftGoalBinding.ts`);
     for (const goal of DRAGON_GOALS) expect(binding.isNativeDragonGoal(goal)).toBe(true);
-    for (const goal of ['エンドラを倒す前に畑を作って', '木を集めて']) expect(binding.isNativeDragonGoal(goal)).toBe(isDragonGoal(goal));
+    for (const goal of ['エンドラを倒す前に畑を作って', '木を集めて', 'マイクラでエンドラを討伐して', 'マイクラで鉄を集めて', 'マイクラでマイクラでエンドラを倒して', 'エンドラ討伐'])
+      expect(binding.isNativeDragonGoal(goal)).toBe(isDragonGoal(goal));
   });
 
   it('shows an optional value by its own type: null and leaving it out are read alike', () => {
