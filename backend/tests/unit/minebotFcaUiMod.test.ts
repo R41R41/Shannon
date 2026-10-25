@@ -176,6 +176,22 @@ describe('what the mod buttons mean for the FCA body', () => {
     expect(await crowded.controls.giveItem('stone', 1)).toMatchObject({ success: false, status: 409 });
   });
 
+  it('acts for the player the mod names, even with several players on the server; a bad name falls back to the one player', async () => {
+    const crowded = setup({ humans: () => ['Rai1241', 'Other'], uuidOf: name => `uuid-${name}` });
+    expect(await crowded.controls.giveItem('minecraft:stone', 3, 'Other')).toMatchObject({ success: true });
+    expect(crowded.said.at(-1)).toEqual(['Other', 'stoneを3個ちょうだい']);
+    expect(await crowded.controls.switchSkill('auto-follow', false, 'Rai1241')).toMatchObject({ success: true });
+    expect(crowded.said.at(-1)).toEqual(['Rai1241', '止まって']);
+    expect(await crowded.controls.taskAction('delete', 'task1', 'Other')).toMatchObject({ success: true });
+    expect(crowded.said.at(-1)).toEqual(['Other', '今の作業をやめて']);
+    // Not a player name: ignored, and with two players there is no one to say it for.
+    expect(await crowded.controls.giveItem('stone', 1, 'bad name!')).toMatchObject({ success: false, status: 409 });
+    expect(await crowded.controls.taskAction('delete', 'task1', '')).toMatchObject({ success: false, status: 409 });
+    const alone = setup();
+    expect(await alone.controls.giveItem('stone', 1, 'bad name!')).toMatchObject({ success: true });
+    expect(alone.said.at(-1)).toEqual(['Rai1241', 'stoneを1個ちょうだい']);
+  });
+
   it('cancels only the task the mod is showing, and leaves ordering to her mind', async () => {
     const { controls, said } = setup();
     expect(await controls.taskAction('delete', 'other')).toMatchObject({ status: 404 });
@@ -189,9 +205,10 @@ describe('the HTTP routes the mod calls on the FCA body', () => {
   let server: MinebotHttpServer | null = null;
   afterEach(async () => { server?.getServer()?.closeAllConnections(); await server?.stop(); server = null; });
 
-  async function start(chat: (sender: string, message: string) => Promise<void> = async () => {}, fca = true) {
+  async function start(chat: (sender: string, message: string) => Promise<void> = async () => {}, fca = true, humans = ['Rai1241']) {
     const sent: string[] = [];
-    const controls = createFcaUiControls({ say: async (_s, message) => { sent.push(message); return true; }, uuidOf: () => 'uuid', humans: () => ['Rai1241'],
+    const speakers: string[] = [];
+    const controls = createFcaUiControls({ say: async (speaker, message) => { speakers.push(speaker.name); sent.push(message); return true; }, uuidOf: () => 'uuid', humans: () => humans,
       abortActive: () => 0, currentTaskId: () => 'task1', taskList: () => ({ tasks: [], emergencyTask: null, currentTaskId: null }), tell: () => {} });
     server = new MinebotHttpServer({} as any, async () => {}, async () => {}, { machineToken: () => 'm'.repeat(32) });
     if (fca) server.setFcaControls(controls);
@@ -202,7 +219,7 @@ describe('the HTTP routes the mod calls on the FCA body', () => {
     const port = (http.address() as any).port;
     const call = (path: string, body?: unknown, method = body === undefined ? 'GET' : 'POST') => fetch(`http://127.0.0.1:${port}${path}`, {
       method, headers: { authorization: `Bearer ${'m'.repeat(32)}`, 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
-    return { call, sent };
+    return { call, sent, speakers };
   }
 
   it('answers /chat_message at once with 202 and validates it', async () => {
@@ -215,6 +232,18 @@ describe('the HTTP routes the mod calls on the FCA body', () => {
     release();
     expect((await call('/chat_message', { sender: 'bad name!', message: 'x' })).status).toBe(400);
     expect((await call('/chat_message', { sender: 'Rai1241', message: '' })).status).toBe(400);
+  });
+
+  it('says it for the player the mod names in `sender`, and needs no one-player guess then', async () => {
+    const { call, sent, speakers } = await start(async () => {}, true, ['Rai1241', 'Other']);
+    expect((await call('/throw_item', { itemName: 'minecraft:stick', count: 2 })).status).toBe(409);
+    expect((await call('/throw_item', { itemName: 'minecraft:stick', count: 2, sender: 'Other' })).status).toBe(200);
+    expect((await call('/constant_skill_switch', { skillName: 'auto-follow', status: 'true', sender: 'Rai1241' })).status).toBe(200);
+    expect((await call('/task_delete', { taskId: 'task1', sender: 'Other' })).status).toBe(200);
+    expect((await call('/task_prioritize', { taskId: 'task1', sender: 'Other' })).status).toBe(409);
+    expect((await call('/task_delete', { taskId: 'task1', sender: 'bad name!' })).status).toBe(409);
+    expect(speakers).toEqual(['Other', 'Rai1241', 'Other']);
+    expect(sent).toEqual(['stickを2個ちょうだい', 'ついてきて', '今の作業をやめて']);
   });
 
   it('routes the orders to her mind, refuses the old runtime settings, and answers 404 to /bot_command on the old body', async () => {

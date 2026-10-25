@@ -28,6 +28,10 @@ const MAX_PENDING_LOGS = 200;
 /** What the mod is given of a plan: 64 nodes, 4 deep (the planner's own limits). */
 const MAX_PLAN_NODES = 64;
 const MAX_PLAN_DEPTH = 4;
+/** The longest a node's where / doneWhen / note, and each of its forbid / caution lines, shown in the mod; how many lines. */
+const MAX_NODE_TEXT = 120;
+const MAX_RULE_TEXT = 80;
+const MAX_RULES = 4;
 
 type StepStatus = 'in_progress' | 'completed' | 'error';
 type TreeStatus = StepStatus | 'pending';
@@ -42,7 +46,11 @@ interface Task {
   act?: { commandId: string; startedAt: number; steps: ActStep[] };
 }
 interface LogEntry { timestamp: string; phase: 'tool_call' | 'tool_result' | 'reflection'; level: 'info' | 'success' | 'warning' | 'error'; source: string; content: string }
-export interface TreeNode { id: string; goal: string; status: TreeStatus; result: string; failureReason: string; depth: number; children: TreeNode[] }
+export interface TreeNode {
+  id: string; goal: string; status: TreeStatus; result: string; failureReason: string; depth: number; children: TreeNode[];
+  /** A plan node's own words for the mod's tooltips (not on an act's steps), each only when the node has it. */
+  where?: string; doneWhen?: string; note?: string; forbid?: string[]; caution?: string[];
+}
 
 export interface UiModBridgeOptions {
   /** The UI mod's origin (it differs per world, so it is read on every push). */
@@ -89,6 +97,21 @@ function planStatus(node: BodyPlanNode, current: string | null): TreeStatus {
   return node.state === 'done' ? 'completed' : node.state === 'blocked' ? 'error' : 'pending';
 }
 
+/** A plan node's text field, or nothing: a string with something in it. */
+const nodeText = (value: unknown): string | undefined => (typeof value === 'string' ? clip(value, MAX_NODE_TEXT) || undefined : undefined);
+/** A plan node's forbid / caution lines: the strings of the list with something in them, at most four. */
+const nodeRules = (value: unknown): string[] | undefined => {
+  if (!Array.isArray(value)) return undefined;
+  const lines = value.filter((line): line is string => typeof line === 'string').map(line => clip(line, MAX_RULE_TEXT)).filter(Boolean).slice(0, MAX_RULES);
+  return lines.length ? lines : undefined;
+};
+/** The words of a plan node the mod's tooltips show, only those it has. */
+function nodeWords(node: Pick<BodyPlanNode, 'where' | 'doneWhen' | 'note' | 'forbid' | 'caution'>)
+  : Pick<TreeNode, 'where' | 'doneWhen' | 'note' | 'forbid' | 'caution'> {
+  const where = nodeText(node.where), doneWhen = nodeText(node.doneWhen), note = nodeText(node.note), forbid = nodeRules(node.forbid), caution = nodeRules(node.caution);
+  return { ...(where ? { where } : {}), ...(doneWhen ? { doneWhen } : {}), ...(note ? { note } : {}), ...(forbid ? { forbid } : {}), ...(caution ? { caution } : {}) };
+}
+
 /** A plan from the wire, kept only as far as it is well formed (ids, titles, parents that exist, no loop, the limits). */
 export function sanitizePlan(raw: unknown): BodyPlanTree | undefined {
   if (!raw || typeof raw !== 'object' || !Array.isArray((raw as BodyPlanTree).nodes)) return undefined;
@@ -101,7 +124,7 @@ export function sanitizePlan(raw: unknown): BodyPlanTree | undefined {
     ids.add(value.id);
     nodes.push({ id: clip(value.id, 64), parentId: typeof value.parentId === 'string' && value.parentId ? value.parentId : null,
       title: clip(value.title, 120) || value.id, state: states.has(value.state) ? value.state : 'continue',
-      ...(typeof value.reason === 'string' && value.reason ? { reason: clip(value.reason, 120) } : {}) });
+      ...(typeof value.reason === 'string' && value.reason ? { reason: clip(value.reason, 120) } : {}), ...nodeWords(value) });
   }
   for (const node of nodes) if (node.parentId && !ids.has(node.parentId)) node.parentId = null;
   const current = typeof (raw as BodyPlanTree).current === 'string' && ids.has((raw as BodyPlanTree).current!) ? (raw as BodyPlanTree).current : null;
@@ -128,13 +151,15 @@ export function planTree(plan: BodyPlanTree, act?: { steps: ActStep[] }): TreeNo
         result: step.status === 'completed' ? clip(step.detail, 120) : '', failureReason: step.status === 'error' ? clip(step.detail, 120) : '', depth: depth + 1, children: [] })));
     }
     return { id: node.id, goal: node.title, status: planStatus(node, plan.current), result: node.state === 'done' ? '済み' : '',
-      failureReason: node.state === 'blocked' ? node.reason ?? '止まっている' : '', depth, children };
+      failureReason: node.state === 'blocked' ? node.reason ?? '止まっている' : '', depth, children, ...nodeWords(node) };
   };
   return (byParent.get(null) ?? []).map(root => build(root, 0));
 }
 
 export class CommonFcaUiModBridge implements CommonFcaObserver {
   private task: Task | null = null;
+  /** The reflex holding the body now (its command's id and label), or null. */
+  private reflex: { id: string; label: string } | null = null;
   private logs: LogEntry[] = [];
   private logTimer?: ReturnType<typeof setTimeout>;
   private logChain: Promise<void> = Promise.resolve();
@@ -184,6 +209,7 @@ export class CommonFcaUiModBridge implements CommonFcaObserver {
       const steps = actHands(command.arguments) ?? [];
       task.act = { commandId: command.id, startedAt: this.now(), steps: steps.slice(0, 12).map(item => ({ label: clip(item.note ?? stepLabel(item), 60), status: 'pending' as TreeStatus, detail: '' })) };
     }
+    if (command.kind === 'reflex') this.reflex = { id: command.id, label: clip(command.operation?.candidate.label ?? 'reflex', 60) };
     this.addLog('tool_call', 'info', step.goal);
     this.publish();
   }
@@ -199,6 +225,7 @@ export class CommonFcaUiModBridge implements CommonFcaObserver {
       this.publish();
       return;
     }
+    if (this.reflex?.id === command.id) this.reflex = null;
     const step = task?.running.get(command.id);
     if (task && step) {
       task.running.delete(command.id);
@@ -252,6 +279,7 @@ export class CommonFcaUiModBridge implements CommonFcaObserver {
       for (const result of context.taskState?.recentResults ?? []) {
         task.steps.push({ id: `s${++task.counter}`, goal: clip(result.name, 60), status: result.ok ? 'completed' : 'error', result: clip(result.summary) });
       }
+      this.reflex = null;
       this.task = task;
     }
     task.goal = clip(context.goal) || task.goal;
@@ -267,6 +295,7 @@ export class CommonFcaUiModBridge implements CommonFcaObserver {
   private finish(task: Task, status: Task['status']): void {
     for (const step of task.running.values()) step.status = 'error';
     task.running.clear();
+    this.reflex = null;
     task.status = status; task.current = false; task.touchedAt = this.now();
   }
 
@@ -292,7 +321,9 @@ export class CommonFcaUiModBridge implements CommonFcaObserver {
       return {
         goal: task.goal, strategy: task.condition, status: task.status, currentThinking: task.progress,
         currentSubTaskId: task.plan.current,
+        ...(typeof task.plan.revision === 'number' ? { planRevision: task.plan.revision } : {}),
         hierarchicalSubTasks: planTree(task.plan, task.act),
+        activeReflex: this.reflex?.label ?? null,
       };
     }
     const running = [...task.running.values()].at(-1);
@@ -301,6 +332,7 @@ export class CommonFcaUiModBridge implements CommonFcaObserver {
       currentSubTaskId: running?.id ?? null,
       hierarchicalSubTasks: task.steps.map(step => ({ id: step.id, goal: step.goal, status: step.status, result: step.result ?? '',
         failureReason: step.failureReason ?? '', depth: 0, children: [] })),
+      activeReflex: this.reflex?.label ?? null,
     };
   }
 

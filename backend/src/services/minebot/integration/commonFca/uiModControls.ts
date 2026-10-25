@@ -27,12 +27,12 @@ export interface UiControlResult { success: boolean; result: string; status?: nu
 
 export interface FcaUiControls {
   command(command: BotCommand, sender: string): Promise<UiControlResult>;
-  /** The inventory tab's "give": the owner asks her to hand the item over. */
-  giveItem(item: string, count: number): Promise<UiControlResult>;
+  /** The inventory tab's "give": the owner asks her to hand the item over. `sender`: the player the mod says it is. */
+  giveItem(item: string, count: number, sender?: string): Promise<UiControlResult>;
   /** The skills tab's switch. Only the follow switch has a meaning for this body. */
-  switchSkill(skillName: string, enabled: boolean): Promise<UiControlResult>;
+  switchSkill(skillName: string, enabled: boolean, sender?: string): Promise<UiControlResult>;
   /** Delete/prioritize on a task in the queue. */
-  taskAction(action: 'delete' | 'prioritize', taskId: string): Promise<UiControlResult>;
+  taskAction(action: 'delete' | 'prioritize', taskId: string, sender?: string): Promise<UiControlResult>;
   /** The task list the mod can read (`GET /task_list`). */
   taskList(): unknown;
 }
@@ -63,8 +63,9 @@ export function createFcaUiControls(options: FcaUiControlsOptions): FcaUiControl
     try { answered = await options.say({ uuid, name }, message); } catch { /* reported below */ }
     return answered ? null : { success: false, result: NO_MIND, status: 503 };
   };
-  /** The mod sends no name with these; with exactly one other player on the server it is that player. */
+  /** The mod sends the player's name with these; without a proper one, with exactly one other player on the server it is that player. */
   const onlyHuman = (): string | null => { const humans = options.humans(); return humans.length === 1 ? humans[0] : null; };
+  const senderOr = (sender?: string): string | null => (isPlayerName(sender) ? sender : onlyHuman());
 
   const command = async (cmd: BotCommand, sender: string): Promise<UiControlResult> => {
     const stands = cmd === 'STOP' || cmd === 'CANCEL';
@@ -77,23 +78,23 @@ export function createFcaUiControls(options: FcaUiControlsOptions): FcaUiControl
   };
   return {
     command,
-    async giveItem(item, count) {
-      const name = onlyHuman();
+    async giveItem(item, count, sender) {
+      const name = senderOr(sender);
       if (!name) return { success: false, result: UNKNOWN_PLAYER, status: 409 };
       const clean = item.includes(':') ? item.split(':')[1] : item;
       return (await speak(name, `${clean}を${Math.max(1, Math.floor(count))}個ちょうだい`)) ?? { success: true, result: 'sent to her mind' };
     },
-    async switchSkill(skillName, enabled) {
+    async switchSkill(skillName, enabled, sender) {
       if (skillName !== 'auto-follow') return { success: false, result: 'this body has no always-on skills to switch', status: 409 };
-      const name = onlyHuman();
+      const name = senderOr(sender);
       if (!name) return { success: false, result: UNKNOWN_PLAYER, status: 409 };
       return command(enabled ? 'FOLLOW' : 'STOP', name);
     },
-    async taskAction(action, taskId) {
+    async taskAction(action, taskId, sender) {
       if (action === 'prioritize') return { success: false, result: 'her mind decides the order of work', status: 409 };
       const current = options.currentTaskId();
       if (!current || current !== taskId) return { success: false, result: 'task not found', status: 404 };
-      const name = onlyHuman();
+      const name = senderOr(sender);
       if (!name) return { success: false, result: UNKNOWN_PLAYER, status: 409 };
       return command('CANCEL', name);
     },
