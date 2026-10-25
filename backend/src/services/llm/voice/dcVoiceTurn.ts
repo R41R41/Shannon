@@ -7,6 +7,10 @@
  * as one continuous stream); a sentence whose voice request fails is said by VOICEPEAK. An `error` line after the
  * decision ends the turn quietly: what was already said stays said, the old path is NOT used to say it again.
  * A person talking over the reply (barge-in) stops playback; the head is told with `said` (interrupted + spokenText).
+ *
+ * The channel shows `🎤 name: text` only for an utterance she answers: it is posted once, the moment the head's decision says
+ * respond (or, when the head cannot be reached, as the old path takes the utterance), before anything of the reply is posted.
+ * A `respond: false` decision, a rate limit and an abort post nothing (what she did not answer stays only in the queue's "heard").
  */
 import { randomUUID } from 'node:crypto';
 import type {
@@ -42,7 +46,7 @@ export interface DcVoiceTurnEnv {
   voicepeakWav(text: string): Promise<Buffer>;
   /** The old path (invokeGraph -> VOICEPEAK) for this utterance; resolves when its playback is over. */
   legacy(item: TurnItem): Promise<void>;
-  /** Post to the VC's text channel. */
+  /** Post to the VC's text channel (`🎤` for what was heard and answered, `🔊` for the reply). */
   postText(text: string): void;
   now?: () => number;
   /** Metric line sink. */
@@ -97,6 +101,13 @@ export async function runDcVoiceTurn(env: DcVoiceTurnEnv, item: TurnItem): Promi
     inChars: item.text.length,
   };
   const finishLog = () => env.log?.(formatTurnLog(metrics));
+  let heardPosted = false;
+  /** What she heard, once, when it is known she answers. The old path reads the channel's latest messages, so this comes first there too. */
+  const postHeard = () => {
+    if (heardPosted) return;
+    heardPosted = true;
+    env.postText(`🎤 ${item.name}: ${item.text}`);
+  };
   const spokeAgo = env.shannonSpokeMsAgo?.(item.startedAt);
   const request: VoiceTurnRequest = {
     requestId,
@@ -187,6 +198,7 @@ export async function runDcVoiceTurn(env: DcVoiceTurnEnv, item: TurnItem): Promi
     metrics.path = 'legacy';
     metrics.respond = true;
     metrics.note = `head_${open.reason}${open.httpStatus ? `_${open.httpStatus}` : ''}`;
+    postHeard(); // the old path always answers
     await settleEarlyPlayback(); // the legacy path plays through the same player: let the backchannel end first
     env.signal?.removeEventListener('abort', onTurnAbort);
     try {
@@ -225,6 +237,7 @@ export async function runDcVoiceTurn(env: DcVoiceTurnEnv, item: TurnItem): Promi
   }
 
   metrics.respond = true;
+  postHeard(); // she answers: show what she heard, ahead of the reply's own post
   const { session: playback, stoppedPromise } = ensurePlayback();
   if (open.decision.filler && !fillerQueued) {
     const stored = env.fillers.get(open.decision.filler.id);

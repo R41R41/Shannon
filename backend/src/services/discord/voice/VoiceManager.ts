@@ -104,7 +104,6 @@ export class VoiceManager implements VoiceGateway {
   // dc-voice (SHANNON_DC_VOICE=on): per-guild conversation through the head. Absent => the legacy path below.
   private dcSessions: Map<string, DcVoiceGuildSession> = new Map();
   private dcGeneration: Map<string, number> = new Map();
-  private dcStt: DcVoiceStt | null = null;
 
   private static readonly VOICE_TEXT_CHANNELS_PATH = path.resolve(
     fileURLToPath(import.meta.url),
@@ -873,7 +872,7 @@ export class VoiceManager implements VoiceGateway {
       if ((this.dcGeneration.get(guildId) ?? 0) !== generation) return; // left or re-joined meanwhile
       const voiceChannelId = connection.joinConfig.channelId ?? '';
       const openMic = config.dcVoice.openMic;
-      this.dcStt ??= createDcVoiceStt();
+      const dcStt: DcVoiceStt = createDcVoiceStt({ client }); // the head transcribes (Groq); an older head (404) falls back to Whisper in the body
       const voicepeak = VoicepeakClient.getInstance();
       const session = new DcVoiceGuildSession({
         guildId,
@@ -903,7 +902,7 @@ export class VoiceManager implements VoiceGateway {
         player: createDiscordSpeechPlayer(audioPlayer),
         client,
         fillers: config.dcVoice.filler ? getSpeechFillerStore() : NO_FILLERS,
-        stt: this.dcStt,
+        stt: dcStt,
         voicepeakWav: (text) => voicepeak.synthesize(text),
         legacy: (item) => this.deliverLegacyVoiceText(guildId, textChannelId, voiceChannelId, item),
         postText: (text) => { void this.postTranscriptMessage(textChannelId, text); },

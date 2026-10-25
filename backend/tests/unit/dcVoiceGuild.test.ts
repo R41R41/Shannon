@@ -99,7 +99,7 @@ function makeSession(options: {
 }
 
 describe('DcVoiceGuildSession: one person talks to Shannon', () => {
-  it('hears the utterance, shows the transcript, asks the head, plays the reply, posts it', async () => {
+  it('hears the utterance, asks the head, shows the transcript once she answers, plays the reply, posts it', async () => {
     const t = makeSession({ scenarios: { こんにちは: respond([say(0, 'やあ。'), say(1, 'どうしたの？'), finished('やあ。どうしたの？')], { id: 'un', text: 'うん。' }) } });
     t.speak('u1', 1);
     await waitFor(() => t.sessions.length > 0, 2_000, 'a reply to start');
@@ -125,7 +125,7 @@ describe('DcVoiceGuildSession: one person talks to Shannon', () => {
     t.speak('u1', 1);
     await waitFor(() => t.legacy.mock.calls.length > 0, 2_000, 'the old path');
     expect(t.legacy.mock.calls[0]![0]).toMatchObject({ userId: 'u1', name: 'name-u1', text: 'こんにちは' });
-    expect(t.posts).toEqual(['🎤 name-u1: こんにちは']); // the old path posts only the reply it makes
+    expect(t.posts).toEqual(['🎤 name-u1: こんにちは']); // the old path always answers, so the transcript is posted as it takes the utterance; the reply it makes is its own
     expect(t.sessions).toHaveLength(0);
   });
 
@@ -143,6 +143,7 @@ describe('DcVoiceGuildSession: one person talks to Shannon', () => {
     t.speak('u1', 1);
     await waitFor(() => t.requests.length === 2, 2_000, 'second request');
     expect(t.requests[1]!.heard).toMatchObject([{ userId: 'u2', name: 'name-u2', text: 'ねえ' }]);
+    expect(t.posts.some(post => post.includes('ねえ'))).toBe(false); // what she did not answer is not left in the channel
   });
 
   it('marks a follow-up that comes soon after Shannon spoke', async () => {

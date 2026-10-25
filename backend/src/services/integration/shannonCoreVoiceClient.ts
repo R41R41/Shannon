@@ -3,6 +3,7 @@
  *
  * - turn:   one utterance in, NDJSON out (decision first, then sentences). Read line by line, abortable.
  * - speech: one sentence in, raw PCM (s16le, 24 kHz, mono) out, chunked.
+ * - transcribe: one utterance's WAV in, its text out (the head holds the Groq key and the shared daily/minute limit).
  * - fillers / mouth (say, poll, result, wording) / said: small JSON calls.
  *
  * Nothing here throws: every call returns a result whose `status` says what happened. The fetch is injectable
@@ -95,6 +96,19 @@ export type VoiceSpeechResult =
   | { status: 'ok'; chunks: AsyncIterable<Buffer>; firstChunkHeaderMs?: number }
   | VoiceUnavailable;
 
+/**
+ * `POST /v1/platform/voice/transcribe`. `empty` / `hallucination` (the head drops Whisper's set phrases for silence and
+ * noise) / `limited` (the day's or the minute's cap, shared with Windows) / `error` (Groq failed) all mean: drop this
+ * utterance. `not_configured` is the head's 503 `LISTEN_NOT_CONFIGURED` (no Groq key there): drop it too, and do NOT
+ * switch to another paid transcription. A `VoiceUnavailable` with `httpStatus: 404` is a head that does not know the
+ * window yet (an older head); anything else of that kind is the head being unreachable or disabled.
+ */
+export type VoiceTranscribeResult =
+  | { status: 'ok'; text: string; sttMs: number }
+  | { status: 'empty' | 'hallucination' | 'limited' | 'error'; sttMs: number }
+  | { status: 'not_configured' }
+  | VoiceUnavailable;
+
 export interface VoiceFillerItem { id: string; text: string; style: string }
 
 export type MouthPriority = 'low' | 'normal' | 'high';
@@ -137,6 +151,8 @@ export interface ShannonCoreVoiceClient {
   isBound(conversationId: string): boolean;
   turn(request: VoiceTurnRequest, options?: { signal?: AbortSignal; decisionTimeoutMs?: number; lineIdleTimeoutMs?: number }): Promise<VoiceTurnOpenResult>;
   speech(text: string, options?: { style?: string; signal?: AbortSignal; firstByteTimeoutMs?: number; idleTimeoutMs?: number }): Promise<VoiceSpeechResult>;
+  /** `wav`: 16 kHz, mono, 16 bit; up to 30 s. `durationMs` is the utterance's length; `speakerId` the Discord user id. */
+  transcribe(wav: Buffer, durationMs: number, speakerId?: string, options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<VoiceTranscribeResult>;
   fillers(options?: { signal?: AbortSignal }): Promise<{ status: 'ok'; items: VoiceFillerItem[] } | VoiceUnavailable>;
   say(body: { text?: string; facts?: string[]; source: string; key?: string; priority?: MouthPriority; maxWaitMs?: number; tags?: string }, options?: { signal?: AbortSignal }): Promise<{ status: 'ok'; id: string; accepted: boolean } | VoiceUnavailable>;
   mouthPoll(waitMs: number, options?: { signal?: AbortSignal }): Promise<{ status: 'ok'; items: MouthQueueItem[] } | VoiceUnavailable>;
@@ -150,6 +166,8 @@ const LINE_IDLE_TIMEOUT_MS = 30_000;
 const SPEECH_FIRST_BYTE_TIMEOUT_MS = 6_000;
 const SPEECH_IDLE_TIMEOUT_MS = 6_000;
 const WORDING_TIMEOUT_MS = 4_000;
+/** The WAV goes up as base64 (up to ~1.3 MB) and Groq answers in ~0.3 s; this is only the ceiling. */
+const TRANSCRIBE_TIMEOUT_MS = 15_000;
 
 // ── Factory ─────────────────────────────────────────────────────────────────
 
@@ -382,6 +400,57 @@ export function createShannonCoreVoiceClient(
         chunks: { [Symbol.asyncIterator]: () => chunks() },
         ...(Number.isFinite(headerMs) && response.headers.has('x-shannon-first-chunk-ms') ? { firstChunkHeaderMs: headerMs } : {}),
       };
+    },
+
+    async transcribe(wav, durationMs, speakerId, options = {}): Promise<VoiceTranscribeResult> {
+      const link = linkAbort(options.signal, options.timeoutMs ?? TRANSCRIBE_TIMEOUT_MS);
+      try {
+        const response = await fetcher(endpoint('transcribe'), {
+          method: 'POST',
+          headers: jsonHeaders,
+          body: JSON.stringify({
+            audio: wav.toString('base64'),
+            durationMs: Math.max(0, Math.round(durationMs)),
+            ...(speakerId ? { speakerId: speakerId.slice(0, 80) } : {}),
+          }),
+          redirect: 'error',
+          signal: link.signal,
+        });
+        if (response.status !== 200) {
+          // 503 LISTEN_NOT_CONFIGURED is told apart from 503 PLATFORM_VOICE_DISABLED by its body.
+          let error: unknown;
+          if (response.status === 503) {
+            try { error = (await response.json() as { error?: unknown } | null)?.error; } catch { /* no body */ }
+          } else {
+            void response.body?.cancel().catch(() => undefined);
+          }
+          if (error === 'LISTEN_NOT_CONFIGURED') return { status: 'not_configured' };
+          return { status: 'unavailable', reason: 'http', httpStatus: response.status };
+        }
+        let decoded: unknown;
+        try {
+          decoded = await response.json() as unknown;
+        } catch {
+          return { status: 'unavailable', reason: 'protocol', httpStatus: 200 };
+        }
+        if (!isRecord(decoded)) return { status: 'unavailable', reason: 'protocol', httpStatus: 200 };
+        const sttMs = Number.isFinite(decoded.sttMs) ? Math.max(0, Math.round(decoded.sttMs as number)) : 0;
+        const status = decoded.status;
+        switch (status) {
+          case 'ok': {
+            const text = typeof decoded.text === 'string' ? decoded.text.trim() : '';
+            return text ? { status: 'ok', text, sttMs } : { status: 'empty', sttMs };
+          }
+          case 'empty': case 'hallucination': case 'limited': case 'error':
+            return { status, sttMs };
+          default:
+            return { status: 'unavailable', reason: 'protocol', httpStatus: 200 };
+        }
+      } catch {
+        return { status: 'unavailable', reason: link.reason() };
+      } finally {
+        link.dispose();
+      }
     },
 
     async fillers(options = {}) {

@@ -327,3 +327,38 @@ describe('fillers, mouth and said', () => {
     expect(await client.turn(request)).toMatchObject({ status: 'unavailable' });
   });
 });
+
+describe('transcribe (the head holds Groq)', () => {
+  const wav = Buffer.from([1, 2, 3, 4]);
+  const reply = (body: unknown, status = 200) => (async () => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })) as unknown as typeof fetch;
+
+  it('posts the WAV as base64 with the length and the speaker, and reads each status', async () => {
+    const fetcher = vi.fn(reply({ status: 'ok', text: ' こんにちは ', sttMs: 123 }));
+    const client = createShannonCoreVoiceClient(configuration, fetcher as unknown as typeof fetch)!;
+    expect(await client.transcribe(wav, 1499.6, '333')).toEqual({ status: 'ok', text: 'こんにちは', sttMs: 123 });
+    const [url, init] = fetcher.mock.calls[0]! as unknown as [string, RequestInit];
+    expect(url).toBe('http://127.0.0.1:4319/v1/platform/voice/transcribe');
+    expect((init.headers as Record<string, string>).authorization).toBe(`Bearer ${token}`);
+    expect(JSON.parse(String(init.body))).toEqual({ audio: wav.toString('base64'), durationMs: 1500, speakerId: '333' });
+
+    for (const status of ['empty', 'hallucination', 'limited', 'error'] as const) {
+      const other = createShannonCoreVoiceClient(configuration, reply({ status, sttMs: 7 }))!;
+      expect(await other.transcribe(wav, 800)).toEqual({ status, sttMs: 7 });
+    }
+    const blank = createShannonCoreVoiceClient(configuration, reply({ status: 'ok', text: '  ', sttMs: 7 }))!;
+    expect(await blank.transcribe(wav, 800)).toEqual({ status: 'empty', sttMs: 7 });
+  });
+
+  it('tells a head without a Groq key, an old head and a disabled window apart', async () => {
+    const noKey = createShannonCoreVoiceClient(configuration, reply({ error: 'LISTEN_NOT_CONFIGURED' }, 503))!;
+    expect(await noKey.transcribe(wav, 800)).toEqual({ status: 'not_configured' });
+    const disabled = createShannonCoreVoiceClient(configuration, reply({ error: 'PLATFORM_VOICE_DISABLED' }, 503))!;
+    expect(await disabled.transcribe(wav, 800)).toEqual({ status: 'unavailable', reason: 'http', httpStatus: 503 });
+    const old = createShannonCoreVoiceClient(configuration, reply({ error: 'NOT_FOUND' }, 404))!;
+    expect(await old.transcribe(wav, 800)).toEqual({ status: 'unavailable', reason: 'http', httpStatus: 404 });
+    const odd = createShannonCoreVoiceClient(configuration, reply({ status: 'maybe' }))!;
+    expect(await odd.transcribe(wav, 800)).toMatchObject({ status: 'unavailable', reason: 'protocol' });
+    const down = createShannonCoreVoiceClient(configuration, (async () => { throw new Error('ECONNREFUSED'); }) as unknown as typeof fetch)!;
+    expect(await down.transcribe(wav, 800)).toMatchObject({ status: 'unavailable', reason: 'network' });
+  });
+});

@@ -82,7 +82,7 @@ describe('runDcVoiceTurn: through the head', () => {
     expect(report.spokenText).toBe('うん。一文目。二文目。');
     expect(t.played().map(([value]) => value)).toEqual([5, 1, 2]); // filler, sentence one, sentence two: no interleaving
     expect(t.stats.calls.map(call => call.text)).toEqual(['一文目。', '[softly] 二文目。']);
-    expect(t.posts).toEqual(['🔊 シャノン: 一文目。二文目。']);
+    expect(t.posts).toEqual(['🎤 ライ: こんにちは', '🔊 シャノン: 一文目。二文目。']); // what she heard is shown once she answers, before her reply
     expect(t.legacy).not.toHaveBeenCalled();
     expect(t.logs).toHaveLength(1);
     expect(t.logs[0]).toMatch(/^\[DcVoice\] turn id=\S+ user=7 endpointMs=610 sttMs=300 decisionMs=100 fillerStartMs=\d+ firstSentenceMs=\d+ firstAudioMs=\d+ totalMs=\d+ path=head respond=true inChars=5 outChars=8/);
@@ -150,7 +150,7 @@ describe('runDcVoiceTurn: through the head', () => {
     expect(result.responded).toBe(true);
     expect(t.legacy).not.toHaveBeenCalled();
     expect((await t.sessions[0]!.whenDone()).spokenText).toBe('うん。言えた分。');
-    expect(t.posts).toEqual(['🔊 シャノン: 言えた分。']);
+    expect(t.posts).toEqual(['🎤 ライ: こんにちは', '🔊 シャノン: 言えた分。']); // the transcript stays posted when the reply breaks off
     expect(t.logs[0]).toContain('note=error:MODEL_UNAVAILABLE');
   });
 
@@ -176,6 +176,7 @@ describe('runDcVoiceTurn: falling back to the old path', () => {
     expect(t.legacy).toHaveBeenCalledTimes(1);
     expect(t.legacy.mock.calls[0]![0]).toMatchObject({ userId: '7', text: 'こんにちは' });
     expect(t.sessions).toHaveLength(0);
+    expect(t.posts).toEqual(['🎤 ライ: こんにちは']); // the old path always answers: the transcript is posted as it takes over
     expect(t.logs[0]).toMatch(/path=legacy respond=true/);
   });
 
@@ -184,6 +185,7 @@ describe('runDcVoiceTurn: falling back to the old path', () => {
     const result = await runDcVoiceTurn(t.env, t.item);
     expect(result).toMatchObject({ responded: false });
     expect(t.legacy).not.toHaveBeenCalled();
+    expect(t.posts).toEqual([]);
     expect(t.logs[0]).toContain('note=rate_limited');
   });
 
@@ -191,6 +193,7 @@ describe('runDcVoiceTurn: falling back to the old path', () => {
     const t = setup({ turn: { status: 'unavailable', reason: 'aborted' } as never });
     await runDcVoiceTurn(t.env, t.item);
     expect(t.legacy).not.toHaveBeenCalled();
+    expect(t.posts).toEqual([]);
   });
 
   it('passes the decision timeout on to the client (4 s by default is the client\'s; tests may shorten it)', async () => {
@@ -264,8 +267,9 @@ describe('runDcVoiceTurn: being cut off', () => {
     expect(String(said.spokenText).length).toBeLessThan('うん。あいうえおかきくけこ。'.length);
     // the full intended reply travels with it, including sentences that arrived after the cut
     expect(said.text).toBe('あいうえおかきくけこ。まだ言ってない。これも言わない。');
-    expect(t.posts[0]).toMatch(/^🔊 シャノン: あ/);
-    expect(t.posts[0]).not.toContain('まだ言ってない');
+    expect(t.posts[0]).toBe('🎤 ライ: こんにちは');
+    expect(t.posts[1]).toMatch(/^🔊 シャノン: あ/);
+    expect(t.posts[1]).not.toContain('まだ言ってない');
     expect(t.logs[0]).toContain('note=interrupted:barge_in');
     expect(t.legacy).not.toHaveBeenCalled();
   });

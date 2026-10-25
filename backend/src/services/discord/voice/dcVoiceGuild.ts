@@ -1,7 +1,7 @@
 /**
  * dc-voice: everything for one guild's VC conversation through the head, wired together:
  *
- *   receiver -> UtteranceCollector (per person) -> Whisper -> TurnQueue (one turn at a time) -> runDcVoiceTurn
+ *   receiver -> UtteranceCollector (per person) -> STT (the head, Groq) -> TurnQueue (one turn at a time) -> runDcVoiceTurn
  *                  |                                                           |
  *             SpeakerTracker  <-  BargeInMonitor / BackchannelMonitor      SpeechPlayer (one continuous raw stream)
  *                  ^
@@ -222,14 +222,14 @@ export class DcVoiceGuildSession implements MouthHost {
     const release = this.queue.reserve();
     try {
       const wav = makeWav(pcm48kStereoTo16kMono(utterance.pcm), 16_000, 1);
-      const result = await this.deps.stt(wav);
+      const result = await this.deps.stt(wav, { durationMs: utterance.durationMs, speakerId: utterance.userId });
       if (this.disposed) return;
       if (result.status !== 'ok') {
         this.deps.log(`[DcVoice] stt user=${utterance.userId} status=${result.status} ms=${result.sttMs}`);
         return;
       }
+      // The `🎤 name: text` post is not made here: runDcVoiceTurn makes it once she has decided to answer (an utterance she does not answer stays out of the channel).
       const name = this.deps.displayName(utterance.userId);
-      this.deps.postText(`🎤 ${name}: ${result.text}`);
       this.lastConversationAt = this.now();
       this.queue.submit({
         userId: utterance.userId,

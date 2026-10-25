@@ -101,10 +101,15 @@ SHANNON_DC_VOICE_FILLER=off
   「シャノンが最後に話し終えてから何 ms か」（`shannonSpokeMsAgo`、話している間は 0）を添えて送り、心の `decision` が `respond: false` なら黙る
   （フィラーも鳴らさない）。心と通信できない時の旧経路は、これまでどおり全部に答える。
 
+- 聴き流しの文字起こし（2026-10-26）: 発話の WAV（16 kHz・モノラル・16bit、30 秒まで）は体が Groq を呼ばず、心の `POST /v1/platform/voice/transcribe`
+  に送る（Groq whisper-large-v3-turbo。鍵と 1 日・1 分の上限は心にだけあり、Windows と共有。無音・ノイズ由来の定型文も心が除く）。心が `limited`・`error`・
+  503 `LISTEN_NOT_CONFIGURED` と答えた発話は捨てる（別の有料の文字起こしへは切り替えない）。404（窓口を知らない古い心）の時だけ、体の Whisper に落とす。
+- 🎤 の投稿（`🎤 名前: 本文`）は、彼女が返事をすると決まった発話だけ（心の `decision` が `respond: true`、または心に通じず旧の作りが答える時）。
+  返事をしない発話はチャンネルに残らず、次の依頼の文脈（`heard`、90 秒・8 件）にだけ載る。投稿は `🔊` の返事より先に出る。
 - 会話は `discord:<guildId>:<声の文字チャンネル>` で、`SHANNON_CORE_PLATFORM_BINDINGS_JSON` に結ばれたものだけ。束縛が無い・voiceMode が minebot・URL/token 未設定の時は旧の作り（PTT、Whisper、invokeGraph、VOICEPEAK）のまま。
 - 心の最初の行（decision）が 4 秒以内に来なければ、その発話は旧の作りに任せる。decision のあとの失敗では旧に落とさない（言った分は言ってある）。
 - 戻し方は `SHANNON_DC_VOICE` を外して再起動。
-- 実装: `services/discord/voice/`（`dcVoiceGuild.ts`、`utteranceCollector.ts`、`turnQueue.ts`、`bargeIn.ts`、`speechPlayer.ts`、`voiceMouth*.ts`）、`services/llm/voice/dcVoiceTurn.ts`、`services/integration/shannonCoreVoiceClient.ts`。テスト: `tests/unit/dcVoice*.test.ts`、`voiceMouth.test.ts`、`shannonCoreVoiceClient.test.ts`。
+- 実装: `services/discord/voice/`（`dcVoiceGuild.ts`、`utteranceCollector.ts`、`turnQueue.ts`、`bargeIn.ts`、`speechPlayer.ts`、`voiceMouth*.ts`）、`services/llm/voice/dcVoiceTurn.ts`、`services/llm/voice/dcVoiceStt.ts`、`services/integration/shannonCoreVoiceClient.ts`。テスト: `tests/unit/dcVoice*.test.ts`、`voiceMouth.test.ts`、`shannonCoreVoiceClient.test.ts`。
 
 ## 頭は 1 つ（one head、2026-10-20、既定は切）
 
