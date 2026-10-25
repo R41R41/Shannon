@@ -61,6 +61,48 @@ describe('the plan as the mod\'s nested tree', () => {
     bridge.stop();
   });
 
+  it('carries the words of a node: where, doneWhen, note, forbid and caution to the mod, only the ones it has, clipped', () => {
+    const clean = sanitizePlan({ revision: 5, current: 'a', nodes: [
+      { id: 'a', parentId: null, title: 'A', state: 'continue', where: '(196,69,237) 村の北', doneWhen: 'iron_ingot×24 を持つ', note: 'x'.repeat(200),
+        forbid: ['夜に外へ出ない', '', 7, 'y'.repeat(200), 'c', 'd', 'e'], caution: [] },
+      { id: 'b', parentId: 'a', title: 'B', state: 'wait', where: '', note: 5, forbid: 'not a list' }] })!;
+    expect(clean.nodes[0]).toEqual({ id: 'a', parentId: null, title: 'A', state: 'continue', where: '(196,69,237) 村の北', doneWhen: 'iron_ingot×24 を持つ',
+      note: 'x'.repeat(120), forbid: ['夜に外へ出ない', 'y'.repeat(80), 'c', 'd'] });
+    expect(clean.nodes[1]).toEqual({ id: 'b', parentId: 'a', title: 'B', state: 'wait' });
+    const [root] = planTree(clean, { steps: [{ label: 'dig', status: 'in_progress', detail: '' }] });
+    expect(root).toMatchObject({ where: '(196,69,237) 村の北', doneWhen: 'iron_ingot×24 を持つ', forbid: ['夜に外へ出ない', 'y'.repeat(80), 'c', 'd'] });
+    expect(root.children[0]).not.toHaveProperty('where');
+    expect(root.children[0]).not.toHaveProperty('forbid');
+    // The act's step under the current node has none of these.
+    expect(root.children[1]).not.toHaveProperty('doneWhen');
+    expect(planTree(plan)[0]).not.toHaveProperty('note');
+  });
+
+  it('posts the plan revision, and the reflex that holds the body from its start to its end', async () => {
+    const posts: Array<{ url: string; body: any }> = [];
+    const fetcher = (async (url: string, init: any) => { posts.push({ url, body: JSON.parse(init.body) }); return new Response('{}'); }) as unknown as typeof fetch;
+    const bridge = new CommonFcaUiModBridge({ baseUrl: () => 'http://127.0.0.1:1', fetcher, timeoutMs: 500 });
+    const context = { scopeKey: 's', taskId: 't3', taskRevision: 1, bodyId: 'b', sessionId: 'x', generation: 1, goal: 'g', completionCondition: 'c', plan };
+    const base = { schemaVersion: 1, serverId: 's', connectionId: 'k', context, lease: { id: 'l', generation: 1, holder: 'h' },
+      deadlineAt: new Date(Date.now() + 60_000).toISOString() };
+    const tasks = () => posts.filter(post => post.url.endsWith('/task')).map(post => post.body);
+    const done = { connectionId: 'k', outcome: 'completed' as const, inputsReleased: true, observedAt: new Date().toISOString(), result: 'ok' };
+    const reflex: any = { ...base, id: 'r1', kind: 'reflex', operation: { candidate: { label: '右へ避ける'.padEnd(80, '！') } } };
+    bridge.commandStarted(reflex);
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(tasks().at(-1)).toMatchObject({ planRevision: 3, activeReflex: '右へ避ける'.padEnd(60, '！') });
+    expect((bridge.taskList().currentTaskTree as any).activeReflex).toBe('右へ避ける'.padEnd(60, '！'));
+    // Another command ending does not end the reflex; its own end does.
+    const skill: any = { ...base, id: 'c3', kind: 'skill', skill: 'move-to', arguments: { x: 1 } };
+    bridge.commandStarted(skill);
+    bridge.commandEnded(skill, { ...done, id: 'c3' });
+    expect((bridge.taskList().currentTaskTree as any).activeReflex).toBe('右へ避ける'.padEnd(60, '！'));
+    bridge.commandEnded(reflex, { ...done, id: 'r1' });
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(tasks().at(-1)).toMatchObject({ planRevision: 3, activeReflex: null });
+    bridge.stop();
+  });
+
   it('without a plan, shows the commands as a flat list as before', () => {
     const bridge = new CommonFcaUiModBridge({ baseUrl: () => 'http://127.0.0.1:1', fetcher: (async () => new Response('{}')) as unknown as typeof fetch });
     const context = { scopeKey: 's', taskId: 't2', taskRevision: 1, bodyId: 'b', sessionId: 'x', generation: 1, goal: 'g', completionCondition: 'c' };
@@ -69,6 +111,8 @@ describe('the plan as the mod\'s nested tree', () => {
     const tree = bridge.taskList().currentTaskTree as any;
     expect(tree.hierarchicalSubTasks).toEqual([{ id: 's1', goal: 'move-to {"x":1}', status: 'in_progress', result: '', failureReason: '', depth: 0, children: [] }]);
     expect(tree.currentSubTaskId).toBe('s1');
+    expect(tree.activeReflex).toBeNull();
+    expect(tree).not.toHaveProperty('planRevision');
     bridge.stop();
   });
 });

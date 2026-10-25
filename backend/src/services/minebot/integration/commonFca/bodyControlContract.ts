@@ -32,6 +32,12 @@ export interface BodyPlanNode {
   state: 'done' | 'continue' | 'wait' | 'blocked';
   /** Why a blocked node is blocked (at most 80 characters). */
   reason?: string;
+  /**
+   * Display only (ShannonUIMod's tooltips on the plan section; the head sends them when the node has them). Where it is done, what shows it
+   * done, a note, and what not to do / what to mind (at most 4 lines each).
+   */
+  where?: string; doneWhen?: string; note?: string;
+  forbid?: readonly string[]; caution?: readonly string[];
 }
 /** At most 64 nodes, parents before their children, siblings in order; at most 4 deep. `current` is a node's id or null. */
 export interface BodyPlanView { revision: number; current: string | null; nodes: readonly BodyPlanNode[] }export interface BodyPrecondition { key: string; value: BodyFact }

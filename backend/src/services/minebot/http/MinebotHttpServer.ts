@@ -131,9 +131,9 @@ export class MinebotHttpServer {
     }
 
     private async fcaTaskAction(req: any, res: any, action: 'delete' | 'prioritize'): Promise<void> {
-        const taskId = (req.body ?? {}).taskId;
+        const { taskId, sender } = req.body ?? {};
         if (typeof taskId !== 'string' || !taskId) { res.status(400).json({ success: false, result: 'taskId is required' }); return; }
-        this.fcaReply(res, await this.fca!.taskAction(action, taskId));
+        this.fcaReply(res, await this.fca!.taskAction(action, taskId, isPlayerName(sender) ? sender : undefined));
     }
 
     private fcaReply(res: any, result: UiControlResult): void {
@@ -167,11 +167,11 @@ export class MinebotHttpServer {
         // アイテム投げ捨てエンドポイント
         this.app.post('/throw_item', async (req: any, res: any) => {
             if (this.fca) {
-                const { itemName, count = 1 } = (req.body ?? {}) as Partial<ThrowItemRequest>;
+                const { itemName, count = 1, sender } = (req.body ?? {}) as Partial<ThrowItemRequest> & { sender?: unknown };
                 if (typeof itemName !== 'string' || !itemName.trim() || itemName.length > 80 || !Number.isFinite(Number(count))) {
                     return res.status(400).json({ success: false, result: 'itemName and count are required' });
                 }
-                return this.fcaReply(res, await this.fca.giveItem(itemName.trim(), Number(count)));
+                return this.fcaReply(res, await this.fca.giveItem(itemName.trim(), Number(count), isPlayerName(sender) ? sender : undefined));
             }
             try {
                 const { itemName, count = 1 } = req.body as ThrowItemRequest;
@@ -203,9 +203,9 @@ export class MinebotHttpServer {
         // コンスタントスキル切り替えエンドポイント
         this.app.post('/constant_skill_switch', async (req: any, res: any) => {
             if (this.fca) {
-                const { skillName, status } = (req.body ?? {}) as Partial<ConstantSkillSwitchRequest>;
+                const { skillName, status, sender } = (req.body ?? {}) as Partial<ConstantSkillSwitchRequest> & { sender?: unknown };
                 if (typeof skillName !== 'string') return res.status(400).json({ success: false, result: 'skillName is required' });
-                const result = await this.fca.switchSkill(skillName, String(status) === 'true');
+                const result = await this.fca.switchSkill(skillName, String(status) === 'true', isPlayerName(sender) ? sender : undefined);
                 void this.sendConstantSkillsCallback();
                 return this.fcaReply(res, result);
             }
