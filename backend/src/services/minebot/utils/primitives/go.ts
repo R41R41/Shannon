@@ -43,6 +43,11 @@ export interface GoArgs {
   maxDig?: number;
   maxPlace?: number;
   sprint?: boolean;
+  /**
+   * The longest one drawing of the way may search, in the pathfinder's own milliseconds (default 5 s; the search that says why the way is shut, 2.5 s). The tests that
+   * run on a faked clock give a search no time limit of its own (a slow machine would run it out and the line would say dead_end instead of the reason).
+   */
+  searchMs?: number;
 }
 
 export const GO_DEFAULTS = { range: 0.5, maxDrop: 3, seconds: 60, maxDig: 40, maxPlace: 24 } as const;
@@ -261,6 +266,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   const startedAt = Date.now();
   const deadline = Math.min(ctx.deadline, startedAt + (args.seconds ?? GO_DEFAULTS.seconds) * 1000);
   const rule = digRuleOf(bot.registry, args.canDig);
+  const searchCap = args.searchMs ?? 5000;
   const place = placeNamesOf(bot, args.canPlace);
   const state: State = { steps: 0, dug: 0, placed: 0, redraws: 0, veto: null, refused: 0 };
   const start = feetCell(bot)!;
@@ -393,7 +399,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
 
   /** The route found without walking it: its status and the cells it breaks and fills. */
   const plan = async (movements: any, goal: any, ms: number): Promise<Plan> => {
-    const generator = nav.getPathFromTo(movements, bot.entity.position, goal, { timeout: Math.max(300, Math.min(ms, 5000)) });
+    const generator = nav.getPathFromTo(movements, bot.entity.position, goal, { timeout: Math.max(300, Math.min(ms, searchCap)) });
     let result = generator.next().value?.result ?? { status: 'noPath', path: [] };
     // The search answers a tick (40 ms) at a time while it is still going; here it is let finish (its own time bounds it), the body's other work
     // (its packets, its physics, the act's watch) getting its turn between the ticks.
@@ -409,7 +415,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
 
   /** The way is shut: look again with each rule lifted in turn, and name the first whose lifting opens it. */
   const explain = async (goal: any): Promise<StepOutcome> => {
-    const ms = Math.min(2500, Math.max(300, timeLeft() - 500));
+    const ms = Math.min(args.searchMs ?? 2500, Math.max(300, timeLeft() - 500));
     const shown = (map: Map<string, number>) => [...map.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([name, count]) => `${name}×${count}`).join('・');
     const ignored = rule.ignored.length ? `（無視した canDig: ${rule.ignored.slice(0, 3).join('・')}）` : '';
     const lifts: Array<[Relax, (found: Plan) => StepOutcome]> = [
@@ -509,7 +515,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
       const from = bot.entity.position.clone();
       // The way is drawn before the body moves: a way that is not found is not walked half (the executor walks the closest it found), and a way
       // that breaks or fills more than the limits is not begun.
-      const drawn = await plan(movements, legGoal, Math.min(5000, timeLeft()));
+      const drawn = await plan(movements, legGoal, Math.min(searchCap, timeLeft()));
       let out: GoOutcome = nowhere;
       if (drawn.status === 'success') {
         const over = budgetOf(countOf(drawn), drawn.places);
@@ -552,7 +558,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
       // The way is not found. The first time may be the ground still arriving: a new drawing. Then a climb, then the reason.
       noway++;
       if (noway === 1) { state.redraws++; await wait(ctx, 300); continue; }
-      const found = leg.final ? drawn : await plan(movements, finalGoal, Math.min(5000, timeLeft()));
+      const found = leg.final ? drawn : await plan(movements, finalGoal, Math.min(searchCap, timeLeft()));
       const end = found.path.length ? found.path[found.path.length - 1] : null;
       const lowest = Math.min(...targets.map(cell => cell.y));
       const closestY = end ? Math.floor(end.y) : (feetCell(bot)?.y ?? lowest);

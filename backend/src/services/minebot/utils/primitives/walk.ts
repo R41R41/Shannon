@@ -270,7 +270,12 @@ export async function goWith(ctx: StepContext, goal: any, timeoutMs: number, not
   } catch (caught) {
     if (caught instanceof StepStopped || /Action interrupted/u.test(String((caught as Error)?.message))) { clearInterval(watch); detach(); letGo(bot); throw caught; }
     error = caught;
-  } finally { clearInterval(watch); detach(); }
+  } finally {
+    clearInterval(watch); detach();
+    // The goal this walk set goes with it. A goal left standing is walked on by whatever movements are put back next (the body's own profile,
+    // which digs): a pick-up that restored it dug a vein cell the mine hand was digging, a dig twice, found by a unit test that failed 1 in 2 under load.
+    try { bot.pathfinder.setGoal(null); } catch { /* the walk's result stands */ }
+  }
   function detach() { bot.removeListener?.('path_update', onRoute); bot.removeListener?.('diggingCompleted', onDug); }
   if (!crossed && portalWalks.has(bot) && dimensionOf(bot) !== dimension0) crossed = true;
   return { reached: !crossed && atGoal(bot, goal), timedOut: timedOut && !crossed, stuck: stuck && !crossed, error: crossed ? null : error, search, opens, crossed };

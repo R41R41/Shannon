@@ -96,7 +96,7 @@ export function mapMarkLines(bot: MarkBody, now = Date.now(), fresh = false): st
   if (!fresh && cached && cached.dimension === dimension && now - cached.at < RESCAN_MS
     && Math.hypot(cached.from.x - feet.x, cached.from.y - feet.y, cached.from.z - feet.z) < RESCAN_MOVE) return renderMarks(cached.marks, feet, now);
   let marks: Mark[] = [];
-  try { marks = computeMarks(bot, feet, now); } catch { marks = []; }
+  try { marks = computeMarks(bot, feet); } catch { marks = []; }
   cache.set(bot as object, { at: now, from: feet, dimension, marks });
   return renderMarks(marks, feet, now);
 }
@@ -124,7 +124,7 @@ export function spawnerKind(bot: MarkBody, position: Vec3): string {
   return near.length ? `近くに ${[...new Set(near.map((entity: any) => entity.name))].join('・')}` : '';
 }
 
-function computeMarks(bot: MarkBody, feet: Cell, now: number): Mark[] {
+function computeMarks(bot: MarkBody, feet: Cell): Mark[] {
   const dimension = String(bot.game?.dimension ?? 'overworld');
   const marks: Mark[] = [];
   /** One mark; its line, in the contract's form `記号 名前 (x,y,z) 方角距離・上下 注記`, is made by renderMarks from the feet of each call. */

@@ -1,7 +1,6 @@
-import { Vec3 } from 'vec3';
 import { canHarvest } from '../toolChoice.js';
 import { feetCell, type Cell } from '../localMap.js';
-import { blockAt, cellNow, cellText, DIG_REACH, eyeDistance, findItem, freeSlots, letGo, placeText, stopped, wait,
+import { blockAt, cellNow, cellText, eyeDistance, findItem, freeSlots, placeText, stopped, wait,
   type StepContext, type StepOutcome } from './common.js';
 import { dig } from './dig.js';
 import { pickup } from './pickup.js';
@@ -39,7 +38,6 @@ const FACES: Array<[number, number, number]> = [[1, 0, 0], [-1, 0, 0], [0, 1, 0]
 const keyOf = (cell: Cell) => `${cell.x},${cell.y},${cell.z}`;
 const clamp = (value: number, least: number, most: number) => Math.max(least, Math.min(most, value));
 const isLiquid = (name: string | undefined) => name === 'water' || name === 'lava';
-const vec = (cell: Cell) => new Vec3(cell.x, cell.y, cell.z);
 
 function packCounts(bot: any): Map<string, number> {
   const out = new Map<string, number>();

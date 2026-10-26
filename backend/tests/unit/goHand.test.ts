@@ -184,11 +184,13 @@ describe('go: through a wall (canDig)', () => {
 
   it('says no_tool when the kind may be dug and the tool that breaks it is not held', async () => {
     const sim = makeSim(wall);
-    const outcome = await drive(sim, run(sim, { canDig: ['stone'] }));
+    // The explanation draws the way again with each rule lifted; its search is given no time limit of its own (the faked clock runs on while it searches, so a slow
+    // machine would run a 2.5 s search out and the line would say dead_end).
+    const outcome = await drive(sim, run(sim, { canDig: ['stone'], seconds: 120, searchMs: 600_000 }));
     expect(outcome.reason).toBe('no_tool');
     expect(outcome.text).toContain('go 止まった no_tool:');
     expect(sim.bot.dugBlocks).toEqual([]);
-  }, { retry: 3 });   // the explanation draws the way again under a real-time search budget: on a loaded machine it can run out and say dead_end
+  });
 
   it('stops at its limit of digs before it digs (limit_dig)', async () => {
     const sim = makeSim(wall, { items: stacks(PICK) });
