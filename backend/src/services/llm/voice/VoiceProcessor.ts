@@ -11,6 +11,7 @@ import {
 } from '@shannon/common';
 import OpenAI from 'openai';
 import { randomUUID } from 'node:crypto';
+import type { RequestEnvelope, ShannonGraphState } from '@shannon/common';
 import { classifyError, formatErrorForLog } from '../../../errors/index.js';
 import { getDiscordMemoryZone } from '../../../utils/discord.js';
 import { getVoiceGateway } from '../../runtime/voiceGateway.js';
@@ -27,6 +28,7 @@ import {
   type FillerSelection,
 } from '../../discord/voiceFiller.js';
 import { VoicepeakClient } from '../../voicepeak/client.js';
+import type { VoicepeakEmotion } from '../../voicepeak/client.js';
 import {
   discordAdapter,
   type DiscordNativeEvent,
@@ -34,7 +36,6 @@ import {
 import { logger } from '../../../utils/logger.js';
 import { config as appConfig } from '../../../config/env.js';
 import { isWhisperHallucination, transcribeWavWithWhisper } from './voiceStt.js';
-import { notifyUiModVoiceTranscript } from '../../minebot/integration/uiModVoice.js';
 
 const VOICE_ALLOWED_TOOLS = [
   'google-search', 'fetch-url', 'chat-on-discord',
@@ -156,10 +157,6 @@ export class VoiceProcessor {
         message.guildId,
         `🎤 ${message.userName}: ${transcribedText}`,
       );
-      // And to the speaker in Minecraft, in ShannonUIMod's push-to-talk box.
-      const heard = transcribedText;
-      void this.getVoiceMode(message.guildId).then((mode) =>
-        notifyUiModVoiceTranscript({ text: heard, discordName: message.userName, mode }));
     }
 
     // 2. Filler selection (fast ~300ms with mini)
