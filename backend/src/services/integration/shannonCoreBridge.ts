@@ -1,5 +1,5 @@
 import type { RequestEnvelope } from '@shannon/common';
-import { ONE_HEAD_CONVERSE_PATH, converseAnswer, converseTextTurn } from './oneHeadConverse.js';
+import { ONE_HEAD_CONVERSE_PATH, ONE_HEAD_REACTIONS_PATH, converseAnswer, converseReactionBody, converseTextTurn, type DiscordReactionInput } from './oneHeadConverse.js';
 import { createLogger } from '../../utils/logger.js';
 
 const logger = createLogger('OneHead', 'discord');
@@ -37,10 +37,12 @@ export interface ShannonCoreBridge {
   readDiscordContext(envelope: RequestEnvelope): Promise<ShannonCoreContextResult>;
   /** Her reply from the companion, or why this runtime answers with its own path. Never throws. */
   requestDiscordReply(envelope: RequestEnvelope): Promise<ShannonCoreReplyResult>;
+  /** One head only: tells the head someone put an emoji on a message, or took it off. Best effort; never throws. */
+  sendDiscordReaction(input: DiscordReactionInput): Promise<'sent' | 'ineligible' | 'unavailable'>;
 }
 
 export type ShannonCoreReplyResult =
-  | { status: 'available'; reply: string; threadId: string; duplicate: boolean }
+  | { status: 'available'; reply: string; threadId: string; duplicate: boolean; reaction?: string }
   | { status: 'ineligible' | 'unavailable' };
 
 export type ShannonCoreContextResult =
@@ -81,6 +83,8 @@ export function createShannonCoreBridge(
   replyUrl.pathname = '/v1/platform/reply';
   const converseUrl = new URL(url);
   converseUrl.pathname = ONE_HEAD_CONVERSE_PATH;
+  const reactionsUrl = new URL(url);
+  reactionsUrl.pathname = ONE_HEAD_REACTIONS_PATH;
   /** One head: the message in the one shape to `POST /v1/converse`, whoever wrote it, bound or not; the head decides who is present. */
   const converse = async (envelope: RequestEnvelope): Promise<ShannonCoreReplyResult> => {
     const turn = converseTextTurn(envelope);
@@ -170,6 +174,22 @@ export function createShannonCoreBridge(
         };
       } catch {
         return { status: 'unavailable' };
+      }
+    },
+    async sendDiscordReaction(input: DiscordReactionInput): Promise<'sent' | 'ineligible' | 'unavailable'> {
+      if (bridgeConfig.oneHead !== true) return 'ineligible';
+      const body = converseReactionBody(input);
+      if (!body) return 'ineligible';
+      try {
+        const response = await fetcher(reactionsUrl.toString(), {
+          method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+          body: JSON.stringify(body), redirect: 'error', signal: AbortSignal.timeout(bridgeConfig.timeoutMs),
+        });
+        void response.body?.cancel().catch(() => undefined);
+        // 202 kept (or deliberately not kept); a refusal or an older head (404) is no failure of anything.
+        return response.status === 202 ? 'sent' : 'unavailable';
+      } catch {
+        return 'unavailable';
       }
     },
     async requestDiscordReply(envelope: RequestEnvelope): Promise<ShannonCoreReplyResult> {

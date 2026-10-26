@@ -70,6 +70,8 @@ import { registerDiscordConversationTransport } from '../common/discordConversat
 import { registerLiveSpeechSink } from '../common/liveSpeech.js';
 import { createDiscordLiveSpeechSink, liveTextTarget } from './liveSpeechSink.js';
 import { acceptsDiscordMessage } from './messageAcceptance.js';
+import { relayDiscordReactions } from './reactionRelay.js';
+import { sendShannonCoreDiscordReaction } from '../integration/configuredShannonCoreBridge.js';
 import { commandGuildIds, skipsDiscordGuild, type DiscordGuildPolicy } from './guildPolicy.js';
 import {
   buildAcceptedClarificationAnswers,
@@ -138,11 +140,15 @@ export class DiscordBot extends BaseClient {
         GatewayIntentBits.MessageContent,
         GatewayIntentBits.GuildIntegrations,
         GatewayIntentBits.GuildModeration,
+        // Reactions on messages, for her one mind (the head's rich chat §4, `reactionRelay.ts`).
+        GatewayIntentBits.GuildMessageReactions,
       ],
       partials: [
         Partials.Channel,
         Partials.Message,
         Partials.ThreadMember,
+        Partials.Reaction,
+        Partials.User,
       ],
     });
     registerDiscordConversationTransport(createDiscordConversationTransport(this.client, () => this.status === 'running'));
@@ -1104,6 +1110,27 @@ export class DiscordBot extends BaseClient {
   }
 
   private setupEventHandlers() {
+    // Someone put an emoji on a message, or took it off: to the head (one head only), by the same rules a message is read.
+    relayDiscordReactions(this.client, {
+      isRunning: () => this.status === 'running',
+      skipGuild: guildId => this.shouldSkipGuild(guildId),
+      accepts: ({ guildId, channelId, onHerMessage }) => {
+        if (channelId === this.aiminelabUpdateChannelId) return false;
+        if (guildId === this.aiminelabGuildId && !onHerMessage) return false;
+        const channel = this.client.channels.cache.get(channelId);
+        const parentChannelId = channel instanceof ThreadChannel ? channel.parentId ?? channelId : channelId;
+        return acceptsDiscordMessage({
+          guildId, parentChannelId, isBotMentioned: onHerMessage,
+          designatedChannels: [
+            { guildId: this.toyamaGuildId, channelId: this.toyamaChannelId },
+            { guildId: this.doukiGuildId, channelId: this.doukiChannelId },
+            { guildId: this.colabGuildId, channelId: this.colabChannelId },
+          ],
+        });
+      },
+      nickname: (user, guildId) => this.getUserNickname(user, guildId),
+      send: input => sendShannonCoreDiscordReaction(input),
+    });
     // スレッドが作成されたら自動参加（メッセージ受信のため）
     this.client.on('threadCreate', async (thread) => {
       if (!thread.joinable) return;

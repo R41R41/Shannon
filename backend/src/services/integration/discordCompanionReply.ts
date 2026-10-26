@@ -17,7 +17,7 @@ export type DiscordCompanionReplyOutcome =
 
 export interface DiscordCompanionReplyDependencies {
   requestReply(envelope: RequestEnvelope): Promise<ShannonCoreReplyResult>;
-  conversation(envelope: RequestEnvelope): Pick<DiscordConversationPort, 'reply'>;
+  conversation(envelope: RequestEnvelope): Pick<DiscordConversationPort, 'reply' | 'react'>;
 }
 
 const configuredDependencies: DiscordCompanionReplyDependencies = {
@@ -52,7 +52,13 @@ export async function answerDiscordFromCompanion(
   }
   // One head: she had nothing to say to it (the message was not for her). Nothing is posted, and the legacy path does not answer either.
   if (!result.reply.trim()) return 'answered';
-  const sent = await dependencies.conversation(envelope).reply({ message: result.reply });
+  const conversation = dependencies.conversation(envelope);
+  const sent = await conversation.reply({ message: result.reply });
+  // Her reaction (the head's rich chat §4): a real one, on the message she answered, after her reply is out. Best effort.
+  if (sent.status === 'sent' && result.reaction) {
+    const reacted = await conversation.react({ emojiId: result.reaction }).catch(() => ({ status: 'unknown' as const }));
+    if (reacted.status !== 'sent') logger.warn(`companion reaction not added: ${reacted.status}`);
+  }
   if (sent.status === 'sent') return 'answered';
   logger.warn(`companion reply not sent: ${sent.status}`);
   return 'send_failed';

@@ -65,8 +65,11 @@ export function converseTextTurn(envelope: RequestEnvelope): ConverseTurn | null
   };
 }
 
-/** The answer's last lines read from an NDJSON body: the reply ('' when she had nothing to say), or null without a `done` line. */
-export function converseAnswer(body: string): { reply: string; threadId: string; duplicate: boolean } | null {
+/**
+ * The answer's last lines read from an NDJSON body: the reply ('' when she had nothing to say), or null without a `done` line. `reaction`
+ * (the head's rich chat §4) is the emoji she puts on the message she answered; anything but a short string is none.
+ */
+export function converseAnswer(body: string): { reply: string; threadId: string; duplicate: boolean; reaction?: string } | null {
   for (const line of body.split('\n')) {
     let parsed: unknown;
     try {
@@ -81,7 +84,73 @@ export function converseAnswer(body: string): { reply: string; threadId: string;
       reply: typeof row.reply === 'string' ? row.reply.trim() : '',
       threadId: typeof row.threadId === 'string' ? row.threadId : '',
       duplicate: row.duplicate === true,
+      ...withReaction(row.reaction),
     };
   }
   return null;
+}
+
+/** Her reaction as the head sent it: one emoji (at most 32 code units, no whitespace or markup), or nothing. */
+export function converseReaction(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const emoji = value.trim();
+  return emoji && emoji.length <= 32 && !/[\s<>:@#`]/u.test(emoji) ? emoji : null;
+}
+
+function withReaction(value: unknown): { reaction?: string } {
+  const reaction = converseReaction(value);
+  return reaction ? { reaction } : {};
+}
+
+/** `POST /v1/platform/reactions` (the head's one-head contract, "Reactions"): someone put an emoji on a message, or took it off. */
+export const ONE_HEAD_REACTIONS_PATH = '/v1/platform/reactions';
+
+export interface ConverseReaction {
+  version: 1;
+  platform: 'discord';
+  conversationId: string;
+  messageId: string;
+  author: { userId: string; displayName?: string; shannon: boolean };
+  excerpt?: string;
+  actor: { userId: string; displayName: string };
+  emoji: string;
+  on: boolean;
+  observedAt: string;
+}
+
+/** A reaction event in Discord, as this runtime reads it (`client.ts`). */
+export interface DiscordReactionInput {
+  guildId: string | null;
+  channelId: string;
+  messageId: string;
+  authorId: string;
+  authorName?: string;
+  authorIsShannon: boolean;
+  content?: string;
+  actorId: string;
+  actorName: string;
+  /** A Unicode emoji (`name`), or a server's own emoji (`id` and its `name`, sent as `:name:`). */
+  emoji: { name: string | null; id: string | null };
+  on: boolean;
+  at: Date;
+}
+
+/**
+ * A reaction in the one shape, or null for what the head does not take: a DM (not delivered to the head today) or a malformed event.
+ * Her own reactions are filtered out before this (`client.ts`). The message's words go cut to 200 characters, so the head can say
+ * which message it was; a file or image link is said to be there.
+ */
+export function converseReactionBody(input: DiscordReactionInput): ConverseReaction | null {
+  if (!input.guildId || !text(input.channelId, 160) || !text(input.messageId, 160) || !text(input.authorId, 160) || !text(input.actorId, 160)) return null;
+  const emoji = input.emoji.id ? (input.emoji.name ? `:${input.emoji.name}:` : null) : input.emoji.name?.trim() || null;
+  if (!emoji || emoji.length > 40 || !Number.isFinite(input.at.getTime())) return null;
+  const words = (input.content ?? '').replace(DISCORD_FILE, '（画像）').replace(/\s+/gu, ' ').trim().slice(0, 200);
+  const authorName = (input.authorName ?? '').trim().slice(0, 80);
+  return {
+    version: 1, platform: 'discord', conversationId: `discord:${input.guildId}:${input.channelId}`, messageId: input.messageId,
+    author: { userId: input.authorId, ...(authorName ? { displayName: authorName } : {}), shannon: input.authorIsShannon },
+    ...(words ? { excerpt: words } : {}),
+    actor: { userId: input.actorId, displayName: input.actorName.trim().slice(0, 80) || 'Discordの人' },
+    emoji, on: input.on, observedAt: input.at.toISOString(),
+  };
 }
