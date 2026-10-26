@@ -1,4 +1,5 @@
 import { nativeActionHost } from '../execution/ActionExecution.js';
+import { MINE_MAKE_SMELT_WORDS } from './handCodes.js';
 import { feetCell, localMapFor, symbolFor, type BlockReader, type Cell } from './localMap.js';
 
 /**
@@ -84,6 +85,7 @@ const CLOSED: Record<string, string> = {
   no_progress: '進まない', damage_taken: '被弾', fell: '落下',
   // go (2026-10-26): its stops carry the contract's own code in the line; these words only count where it stopped.
   no_tool: '掘れない', limit_dig: '掘れない', no_blocks: '置けない', limit_place: '置けない', limit_time: '時間切れ', dead_end: '一歩ではない', unsafe: '一歩ではない', not_loaded: '一歩ではない',
+  ...MINE_MAKE_SMELT_WORDS,
 };
 export function closedWord(reason: string | undefined): string {
   if (!reason) return '無い';

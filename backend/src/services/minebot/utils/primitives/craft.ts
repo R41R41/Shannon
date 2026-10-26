@@ -9,7 +9,7 @@ import { cellText, eyeDistance, guard, inventoryCount, stopped, StepStopped, USE
  */
 export interface CraftArgs { item: string; count?: number }
 
-function tableInReach(bot: any): any {
+export function tableInReach(bot: any): any {
   let hits: Array<{ position: any }> = [];
   try { hits = scanLoadedBlocks(bot, ['crafting_table'], { maxDistance: 8, maxHits: 4 }).hits; } catch { hits = []; }
   for (const hit of hits) {
@@ -18,7 +18,7 @@ function tableInReach(bot: any): any {
   }
   return null;
 }
-function nearestTable(bot: any): Cell | null {
+export function nearestTable(bot: any): Cell | null {
   try {
     const hit = scanLoadedBlocks(bot, ['crafting_table'], { maxDistance: 48, maxHits: 1 }).hits[0];
     return hit ? { x: hit.position.x, y: hit.position.y, z: hit.position.z } : null;

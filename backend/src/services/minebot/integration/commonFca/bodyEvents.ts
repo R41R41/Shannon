@@ -1,5 +1,6 @@
 import { nearbyNeeds } from '../../utils/nearbyNeeds.js';
 import type { NearbyNeed } from '../../cognition/types.js';
+import { dueFurnaces, type FurnaceBatch } from '../../utils/furnaceDone.js';
 import type { MinecraftBodyEvent, MinecraftControlCommand as Command } from './minecraftControlContract.js';
 
 /**
@@ -9,6 +10,7 @@ import type { MinecraftBodyEvent, MinecraftControlCommand as Command } from './m
  *
  * - `need.appeared` / `need.gone`: the list of nearby needs (utils/nearbyNeeds) changed. Gone only after two readings without it,
  *   so a sheep at the edge of the range does not flicker.
+ * - `furnace.done`: a batch put in a furnace (smelt, furnace, start-smelting: `bot.activeFurnaces`) has come due, told once (utils/furnaceDone).
  * - `action.progress`: every PROGRESS_EVERY_MS, how the running skill goes: time, time since it last got anywhere, its measure.
  * - `action.stalled`: once, when a skill that has a measure (WATCHED) has not got better for STALL_MS; again only after progress.
  *
@@ -58,6 +60,8 @@ interface EventsBody {
   entity?: { position?: Point & { distanceTo?(other: Point): number }; isInWater?: boolean };
   entities?: Record<string, { name?: string; position?: Point } | undefined>;
   inventory?: { items?(): Array<{ name: string; count: number }> };
+  activeFurnaces?: FurnaceBatch[];
+  game?: { dimension?: unknown };
 }
 interface Running {
   id: string; skill: string; measure: Measure | null; args: Readonly<Record<string, unknown>>;
@@ -82,6 +86,8 @@ export class BodyEventWatcher implements BodyEventSource {
   private running: Running | null = null;
   private needs = new Map<string, { need: NearbyNeed; missing: number }>();
   private needsReadAt = -Infinity;
+  /** The furnace batches already told as done (utils/furnaceDone). */
+  private readonly furnacesTold = new Set<string>();
 
   constructor(private readonly bot: EventsBody, private readonly now: () => number = Date.now,
     private readonly readNeeds: (bot: EventsBody, now: number) => NearbyNeed[] = (bot, now) => nearbyNeeds(bot as never, now)) {}
@@ -106,6 +112,7 @@ export class BodyEventWatcher implements BodyEventSource {
   tick(): void {
     const now = this.now();
     try { this.follow(now); } catch { /* a body without a world yet */ }
+    try { for (const done of dueFurnaces(this.bot, this.furnacesTold, now)) this.push('furnace.done', done.subject, done.data, now); } catch { /* the same */ }
     if (now - this.needsReadAt >= BODY_EVENTS.needsEveryMs) {
       this.needsReadAt = now;
       try { this.diffNeeds(now); } catch { /* the same */ }
