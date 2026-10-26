@@ -19,6 +19,8 @@ import { drop, eat, equip, jump, look, sneak } from '../utils/primitives/body.js
 import { pickup } from '../utils/primitives/pickup.js';
 import { shoot } from '../utils/primitives/shoot.js';
 import { pillarUp } from '../utils/primitives/pillarUp.js';
+import { obsidian, obsidianProblem } from '../utils/primitives/obsidian.js';
+import { portal, portalProblem } from '../utils/primitives/portal.js';
 import { itemFoodPoints } from '../utils/foodPoints.js';
 import { stepLabel } from '../utils/actLabel.js';
 import { ACT_CONDITION, conditionHolds, conditionMetText, type ActCondition } from '../utils/actConditions.js';
@@ -44,7 +46,7 @@ const Pos = z.object({ x: z.number().optional(), y: z.number().optional(), z: z.
   front: z.number().optional(), right: z.number().optional(), up: z.number().optional() }).strict();
 const ItemCount = z.object({ item: z.string(), count: z.number().optional() }).strict();
 export const HAND_KINDS = ['walk', 'dig', 'place', 'pillarUp', 'use', 'look', 'jump', 'sneak', 'equip', 'craft', 'furnace', 'chest',
-  'attack', 'shoot', 'eat', 'drop', 'pickup', 'wait'] as const;
+  'attack', 'shoot', 'eat', 'drop', 'pickup', 'wait', 'obsidian', 'portal'] as const;
 const Face = z.enum(['up', 'down', 'north', 'south', 'east', 'west']);
 /** One hand: every field of the head's ActHand (the body takes whatever the head's schema takes), and a few more it can read. */
 const Hand = z.object({
@@ -63,6 +65,11 @@ const Hand = z.object({
   target: z.union([z.string(), z.number()]).optional().describe('#id か名前'),
   untilDead: z.boolean().optional(),
   hold: z.boolean().optional().describe('attack: その場で待ち、手の届く所に来たら打つ（追わない）'),
+  // No `pattern` here: the skill catalog's schema subset (integration/commonFca/skillCatalog allowedKeys) has none; the ids are checked by obsidianProblem / portalProblem.
+  canPlace: z.array(z.string()).min(1).max(6).optional().describe('go・obsidian・portal: 置いてよい物（持っている物だけ使う）'),
+  maxPlace: z.number().int().min(0).max(100).optional().describe('go・obsidian・portal: 置く数の上限'),
+  axis: z.enum(['x', 'z']).optional().describe('portal: 枠が広がる向き（x: 枠は x 方向に広がる、z: z 方向）'),
+  enter: z.boolean().optional().describe('portal: 点けたら入る（既定 true）'),
   seconds: z.number().optional(),
   charge: z.number().optional(),
   n: z.number().optional(),
@@ -115,7 +122,9 @@ const reflexName = (reason: unknown) => { const text = String(reason ?? ''); ret
 const DESCRIPTION = '体に小さな手を最大12個まとめて頼む。体は順に動かし、手ごとに思ったとおりか確かめ、外れたら（失敗・反射・stopIf・満杯）そこで止めて、'
   + '手ごとの1行（止まりは閉じた語・場所・そのマスの今の中身）と新しい地図を JSON で返す。体は回り道・置き場所・道具作り・片づけ・夜の睡眠・戦うかどうかを決めない。'
   + '手: walk / dig / place / pillarUp / use / look / jump / sneak / equip / craft / furnace / chest / attack / shoot / eat / drop / pickup / wait。'
-  + '座標は {x,y,z}（rel:true で足からの差）か {front,right,up}（facing の向き）。stopIf: hostileWithin・hpBelow・hungerBelow・blockChanged。';
+  + '座標は {x,y,z}（rel:true で足からの差）か {front,right,up}（facing の向き）。stopIf: hostileWithin・hpBelow・hungerBelow・blockChanged。'
+  + 'obsidian: 挙げた溶岩の源（at、8 まで）に水を注いで黒曜石にして掘り、水を汲み戻す（立ち位置・注ぐ所・待ちは体。count・seconds・canPlace・maxPlace）。'
+  + 'portal: at（枠の内側の左下）と axis（x か z）の枠 10 個を組み、火打ち金で点け、enter なら入る（足場は canPlace の物）。止まる時は「<手> 止まった <code>」の行で理由を返す。';
 
 class Act extends InstantSkill {
   constructor(bot: CustomBot) {
@@ -176,6 +185,18 @@ async function runHand(ctx: StepContext, hand: ActHand): Promise<StepOutcome> {
       return walk(ctx, { to: to ?? undefined, path: path ?? undefined, range: hand.range ?? 0.5, sprint: hand.sprint ?? false });
     }
     case 'dig': return dig(ctx, { at: cells, tool: hand.tool, collect: hand.collect, take: hand.takeOk, exposeOk: hand.exposeOk });
+    case 'obsidian': {
+      // The lava sources are the planner's, as cells; where to stand, where to pour, the wait, the dig and the water back are the body's (utils/primitives/obsidian).
+      const problem = obsidianProblem(hand as Record<string, unknown>, spec => cellOf(ctx, hand, spec) !== null);
+      if (problem) return { ok: false, reason: 'invalid_input', text: `obsidian 止まった invalid_input: ${problem}` };
+      return obsidian(ctx, { at: cells, count: hand.count, seconds: hand.seconds, canPlace: hand.canPlace, maxPlace: hand.maxPlace });
+    }
+    case 'portal': {
+      // The frame's place and plane are the planner's; the building, the scaffolds, the fire and the walk in are the body's (utils/primitives/portal).
+      const problem = portalProblem(hand as Record<string, unknown>, spec => cellOf(ctx, hand, spec) !== null);
+      if (problem) return { ok: false, reason: 'invalid_input', text: `portal 止まった invalid_input: ${problem}` };
+      return portal(ctx, { at: one, axis: hand.axis!, block: hand.block, enter: hand.enter, canPlace: hand.canPlace, maxPlace: hand.maxPlace, seconds: hand.seconds });
+    }
     case 'place': return place(ctx, { block: hand.block ?? '', at: cells, against: hand.face });
     case 'pillarUp': {
       const block = hand.block ?? [...PILLAR_BLOCKS].sort((a, b) => inventoryCount(bot, b) - inventoryCount(bot, a))[0];
@@ -331,7 +352,7 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
       if ((bot.health ?? 20) <= 0) return stopWith('体が死んだ', 'died');
       if (doneWhen && !doneMet && holdsDone()) return finishDone();
       // A walk into a portal says the crossing itself (its arrival) and the act ends after it (below): not a stop in the middle of the hand.
-      if (String(bot.game?.dimension ?? '') !== startDimension && !(host.actHandNow === 'walk' && portalWalks.has(bot)) && !crossedByWalk) return stopWith(`次元が変わった（${startDimension} → ${String(bot.game?.dimension ?? '')}）`, 'dimension_changed');
+      if (String(bot.game?.dimension ?? '') !== startDimension && !((host.actHandNow === 'walk' || host.actHandNow === 'portal') && portalWalks.has(bot)) && !crossedByWalk) return stopWith(`次元が変わった（${startDimension} → ${String(bot.game?.dimension ?? '')}）`, 'dimension_changed');
       const entries = ledger?.entriesSince(mark).filter(entry => !LEDGER_QUIET.has(entry.kind)) ?? [];
       // r6 (run 29): a reflex's note does not stop a hand that is laying blocks (it may be what walls the threat off); the act stops when
       // that hand is over. A reflex that takes the body still cuts it at once (its lease aborts the action: onCut).
@@ -429,7 +450,7 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
       if (outcome.data?.container) report.container = outcome.data.container;
       if (typeof outcome.data?.arrowsLeft === 'number') report.arrowsLeft = outcome.data.arrowsLeft;
       if (outcome.ok) {
-        if (hand.do === 'walk' && outcome.data?.crossedDimension) crossedByWalk = true;
+        if ((hand.do === 'walk' || hand.do === 'portal') && outcome.data?.crossedDimension) crossedByWalk = true;
         report.done++;
         const line = clip(`${outcome.text}（${((Date.now() - began) / 1000).toFixed(1)}秒）`);
         report.lines.push({ i: index + 1, do: hand.do, status: 'done', line });
@@ -455,7 +476,9 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
       } catch { /* the count is a help, not the result */ }
       let around: string | undefined;
       try { if (outcome.at) around = aroundText(bodyReader(bot), outcome.at, feetCell(bot)); } catch { /* the line stands without it */ }
-      const line = stoppedLine(outcome.reason, outcome.text, outcome.at ? cellNow(bot, outcome.at) : undefined, outcome.cause, again);
+      // obsidian's and portal's lines are the contract's own ("<手> 止まった <code>: ...", the counts in it): the code is the closed word.
+      const own = hand.do === 'obsidian' || hand.do === 'portal';
+      const line = own ? clip(outcome.text.startsWith(`${hand.do} 止まった`) ? outcome.text : `${hand.do} 止まった ${outcome.reason ?? 'failed'}: ${outcome.text}`) : stoppedLine(outcome.reason, outcome.text, outcome.at ? cellNow(bot, outcome.at) : undefined, outcome.cause, again);
       report.lines.push({ i: index + 1, do: hand.do, status: goesOn ? 'failed' : 'stopped', line,
         ...(outcome.at ? { where: outcome.at } : {}), ...(around ? { around } : {}) });
       remember(hand, goesOn ? 'failed' : 'stopped', line, outcome.at, base);
