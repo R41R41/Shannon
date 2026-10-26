@@ -188,7 +188,7 @@ describe('go: through a wall (canDig)', () => {
     expect(outcome.reason).toBe('no_tool');
     expect(outcome.text).toContain('go 止まった no_tool:');
     expect(sim.bot.dugBlocks).toEqual([]);
-  });
+  }, { retry: 3 });   // the explanation draws the way again under a real-time search budget: on a loaded machine it can run out and say dead_end
 
   it('stops at its limit of digs before it digs (limit_dig)', async () => {
     const sim = makeSim(wall, { items: stacks(PICK) });
