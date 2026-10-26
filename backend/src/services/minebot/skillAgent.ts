@@ -389,6 +389,8 @@ export class SkillAgent {
       abortActive: () => this.commonFcaBody?.abortActive() ?? 0,
       currentTaskId: () => bridge.currentTaskId(),
       taskList: () => bridge.taskList(),
+      stopTask: taskId => body.stopTask(taskId),
+      log: line => log.info(line),
       tell: message => { speakCompanionReply(this.bot as any, message, { uiModBaseUrl: CONFIG.UI_MOD_BASE_URL, lineLimit: CONFIG.MINECRAFT_CHAT_MAX_CHARS, maxLines: 1 }); },
     }));
   }

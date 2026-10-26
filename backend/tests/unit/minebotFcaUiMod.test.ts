@@ -199,6 +199,47 @@ describe('what the mod buttons mean for the FCA body', () => {
     expect(said.at(-1)?.[1]).toBe('今の作業をやめて');
     expect(await controls.taskAction('prioritize', 'task1')).toMatchObject({ status: 409 });
   });
+
+  it('sends the mod\'s cancel straight to her mind\'s stop, with no message to her and no player name, after aborting the commands (dragon26)', async () => {
+    const lines: string[] = [];
+    const order: string[] = [];
+    const { controls, said, told } = setup({ humans: () => [], log: line => lines.push(line), abortActive: () => { order.push('abort'); return 1; },
+      stopTask: async id => { order.push(`stop:${id}`); return { stopped: [id], open: 1 }; } });
+    expect(await controls.taskAction('delete', 'task1')).toEqual({ success: true, result: 'stopped' });
+    expect(order).toEqual(['abort', 'stop:task1']);
+    expect(said).toEqual([]);
+    expect(told).toEqual(['止めたよ。']);
+    expect(lines).toEqual([
+      'UI_MOD task_delete received task=task1 current=task1 matched=1',
+      'UI_MOD cancel direct task=task1 reached=1 stopped=1 open=1',
+      'UI_MOD task_delete result success=1 path=direct status=200',
+    ]);
+  });
+
+  it('says a cancel to her as before when her mind\'s stop is not reached, and still stands still', async () => {
+    const lines: string[] = [];
+    const reached = setup({ log: line => lines.push(line), stopTask: async () => null });
+    expect(await reached.controls.taskAction('delete', 'task1')).toMatchObject({ success: true, result: 'sent to her mind' });
+    expect(reached.said.at(-1)?.[1]).toBe('今の作業をやめて');
+    expect(reached.options.abortActive).toHaveBeenCalledTimes(1);
+    expect(lines.at(-1)).toBe('UI_MOD command CANCEL result success=1 path=mind status=200');
+    const down = setup({ say: async () => false, stopTask: async () => { throw new Error('down'); } });
+    expect(await down.controls.taskAction('delete', 'task1')).toMatchObject({ success: true, result: 'stopped locally' });
+    expect(down.told).toEqual(['止まったよ。']);
+  });
+
+  it('sends the cancel of /bot_command to the same stop, but not stop or the other orders, and records a task that is not the one shown', async () => {
+    const lines: string[] = [];
+    const stopped: string[] = [];
+    const { controls, said } = setup({ log: line => lines.push(line), stopTask: async id => { stopped.push(id); return { stopped: [], open: 0 }; } });
+    expect(await controls.command('CANCEL', 'Rai1241')).toEqual({ success: true, result: 'nothing was running' });
+    expect(await controls.command('STOP', 'Rai1241')).toMatchObject({ result: 'sent to her mind' });
+    expect(stopped).toEqual(['task1']);
+    expect(said).toEqual([['Rai1241', '止まって']]);
+    expect(await controls.taskAction('delete', 'other')).toMatchObject({ status: 404 });
+    expect(lines).toContain('UI_MOD task_delete received task=other current=task1 matched=0');
+    expect(lines.at(-1)).toBe('UI_MOD task_delete result success=0 path=none status=404');
+  });
 });
 
 describe('the HTTP routes the mod calls on the FCA body', () => {

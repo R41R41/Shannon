@@ -103,6 +103,29 @@ describe('the plan as the mod\'s nested tree', () => {
     bridge.stop();
   });
 
+  it('logs one line when the plan revision, its current node or the mod\'s answer changes, and no plan text (dragon26)', async () => {
+    const lines: string[] = [];
+    let status = 200;
+    const fetcher = (async (url: string) => (url.endsWith('/task') ? new Response('{}', { status }) : new Response('{}'))) as unknown as typeof fetch;
+    const bridge = new CommonFcaUiModBridge({ baseUrl: () => 'http://127.0.0.1:1', fetcher, timeoutMs: 500, log: line => lines.push(line) });
+    const context = (revision: number, current: string) => ({ scopeKey: 's', taskId: 'task-abcdef-123456', taskRevision: 1, bodyId: 'b', sessionId: 'x', generation: 1,
+      goal: 'g', completionCondition: 'c', plan: { ...plan, revision, current } });
+    const command = (id: string, revision: number, current: string): any => ({ schemaVersion: 1, serverId: 's', connectionId: 'k', id, kind: 'skill', skill: 'move-to',
+      arguments: { x: 1 }, context: context(revision, current), lease: { id: 'l', generation: 1, holder: 'h' }, deadlineAt: new Date(Date.now() + 60_000).toISOString() });
+    const wait = () => new Promise(resolve => setTimeout(resolve, 40));
+    bridge.commandStarted(command('c1', 3, 'iron')); await wait();
+    bridge.commandStarted(command('c2', 3, 'iron')); await wait();
+    bridge.commandStarted(command('c3', 4, 'food')); await wait();
+    status = 500;
+    bridge.commandStarted(command('c4', 4, 'food')); await wait();
+    expect(lines).toEqual([
+      'UI_MOD push /task ok=1 status=200 revision=3 current=iron task=task-abcdef-',
+      'UI_MOD push /task ok=1 status=200 revision=4 current=food task=task-abcdef-',
+      'UI_MOD push /task ok=0 status=500 revision=4 current=food task=task-abcdef-',
+    ]);
+    bridge.stop();
+  });
+
   it('without a plan, shows the commands as a flat list as before', () => {
     const bridge = new CommonFcaUiModBridge({ baseUrl: () => 'http://127.0.0.1:1', fetcher: (async () => new Response('{}')) as unknown as typeof fetch });
     const context = { scopeKey: 's', taskId: 't2', taskRevision: 1, bodyId: 'b', sessionId: 'x', generation: 1, goal: 'g', completionCondition: 'c' };

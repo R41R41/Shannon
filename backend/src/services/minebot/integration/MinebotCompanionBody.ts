@@ -80,7 +80,7 @@ export class MinebotCompanionBody {
   private readonly onSpawn = () => { this.startLoop(); };
 
   constructor(private readonly bot: MinebotCompanionBodyBot, private readonly runtime: MinebotCompanionBodyRuntime,
-    private readonly client: Pick<CompanionBodyClient, 'turn' | 'died' | 'claim' | 'progress' | 'report'> & Partial<Pick<CompanionBodyClient, 'gameEvent'>>,
+    private readonly client: Pick<CompanionBodyClient, 'turn' | 'died' | 'claim' | 'progress' | 'report'> & Partial<Pick<CompanionBodyClient, 'gameEvent' | 'stopTasks'>>,
     private readonly options: MinebotCompanionBodyOptions) {
     this.log = options.log ?? (() => {});
     this.tasks = new CompanionRuntimeTasks(runtime, {
@@ -150,6 +150,18 @@ export class MinebotCompanionBody {
       // `request`: queued on her mind; the claim loop takes it (one path for progress, stop and result).
       return true;
     } finally { face?.finish(); }
+  }
+
+  /**
+   * The UI mod's 「やめる」 for the task it shows, straight to her mind's stop (no message to her). Null when her mind could not be reached or
+   * the client cannot (the caller says it to her as a message then).
+   */
+  async stopTask(taskId: string): Promise<{ stopped: string[]; open: number } | null> {
+    if (this.stopped || !this.client.stopTasks) return null;
+    let result: { stopped: string[]; open: number } | null = null;
+    try { result = await this.client.stopTasks(taskId); } catch { result = null; }
+    this.log(`MINEBOT_COMPANION_STOP ${JSON.stringify({ task: taskId.slice(0, 12), reached: result !== null, stopped: result?.stopped.length ?? 0, open: result?.open ?? 0 })}`);
+    return result;
   }
 
   /** The runtime's executor tells how a run ended; a request's result is reported from it. */

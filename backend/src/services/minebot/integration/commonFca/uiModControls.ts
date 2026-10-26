@@ -5,6 +5,10 @@
  * body does. So a button is something the owner says to her: it goes to her mind as the same words a player would
  * write, and her mind acts (and answers in her own voice, in game chat and in the mod). The one thing the body does at
  * once on its own is stand still: stop and cancel abort the running commands first, then tell her mind.
+ *
+ * dragon26: 「やめる」 (cancel) is not a conversation. Said to her as 「今の作業をやめて」 the button was refused twice as `turn_not_visible` by her
+ * mind and the task ran on. A cancel of the task the mod shows now goes straight to her mind's stop of that task (`stopTask`), with the running
+ * commands aborted first; only when her mind cannot be reached is it said to her as before. Every control the mod sends, and how it ended, is one log line.
  */
 export const BOT_COMMANDS = ['STOP', 'FOLLOW', 'COME', 'RESUME', 'CANCEL'] as const;
 export type BotCommand = (typeof BOT_COMMANDS)[number];
@@ -50,6 +54,13 @@ export interface FcaUiControlsOptions {
   taskList(): unknown;
   /** Says a short line in game chat and in the mod. */
   tell(message: string): void;
+  /**
+   * The owner's cancel of this task, straight to her mind's stop (no message to her): what it stopped, or null when her mind could not be
+   * reached (or this body cannot). Absent: a cancel is said to her as a message, as before.
+   */
+  stopTask?(taskId: string): Promise<{ stopped: string[]; open: number } | null>;
+  /** One content-free line per control received and per result (the task ids cut to 12 characters, no text of hers or his). */
+  log?(line: string): void;
 }
 
 const NO_MIND = 'いま心と話せないよ。';
@@ -67,14 +78,37 @@ export function createFcaUiControls(options: FcaUiControlsOptions): FcaUiControl
   const onlyHuman = (): string | null => { const humans = options.humans(); return humans.length === 1 ? humans[0] : null; };
   const senderOr = (sender?: string): string | null => (isPlayerName(sender) ? sender : onlyHuman());
 
-  const command = async (cmd: BotCommand, sender: string): Promise<UiControlResult> => {
+  const say = (line: string) => { try { options.log?.(line); } catch { /* a log never fails a control */ } };
+  const short = (id: string | null | undefined) => (id ?? '-').slice(0, 12);
+  const ended = (what: string, path: string, result: UiControlResult): UiControlResult => {
+    say(`UI_MOD ${what} result success=${result.success ? 1 : 0} path=${path} status=${result.status ?? (result.success ? 200 : 400)}`);
+    return result;
+  };
+  /** A cancel of the task the mod shows, straight to her mind's stop; null when her mind did not take it (then it is said to her). */
+  const direct = async (taskId: string): Promise<UiControlResult | null> => {
+    let reply: { stopped: string[]; open: number } | null = null;
+    try { reply = options.stopTask ? await options.stopTask(taskId) : null; } catch { reply = null; }
+    say(`UI_MOD cancel direct task=${short(taskId)} reached=${reply ? 1 : 0} stopped=${reply?.stopped.length ?? 0} open=${reply?.open ?? 0}`);
+    if (!reply) return null;
+    options.tell('止めたよ。');
+    return { success: true, result: reply.stopped.length ? 'stopped' : 'nothing was running' };
+  };
+
+  /** `tried`: a cancel whose commands were aborted and whose direct stop was asked already (it was not taken), with the number aborted. */
+  const command = async (cmd: BotCommand, sender: string, tried?: { aborted: number }): Promise<UiControlResult> => {
     const stands = cmd === 'STOP' || cmd === 'CANCEL';
-    const aborted = stands ? options.abortActive() : 0;
+    const current = options.currentTaskId();
+    say(`UI_MOD command ${cmd} received task=${short(current)}`);
+    const aborted = tried ? tried.aborted : stands ? options.abortActive() : 0;
+    if (cmd === 'CANCEL' && current && !tried) {
+      const stopped = await direct(current);
+      if (stopped) return ended(`command ${cmd}`, 'direct', stopped);
+    }
     const refused = await speak(sender || onlyHuman() || '', COMMAND_WORDS[cmd]);
-    if (!refused) return { success: true, result: 'sent to her mind' };
+    if (!refused) return ended(`command ${cmd}`, 'mind', { success: true, result: 'sent to her mind' });
     // Standing still does not need her mind; the rest does.
-    if (stands) { options.tell('止まったよ。'); return { success: true, result: aborted ? 'stopped locally' : 'nothing was running' }; }
-    return refused;
+    if (stands) { options.tell('止まったよ。'); return ended(`command ${cmd}`, 'local', { success: true, result: aborted ? 'stopped locally' : 'nothing was running' }); }
+    return ended(`command ${cmd}`, 'refused', refused);
   };
   return {
     command,
@@ -93,10 +127,15 @@ export function createFcaUiControls(options: FcaUiControlsOptions): FcaUiControl
     async taskAction(action, taskId, sender) {
       if (action === 'prioritize') return { success: false, result: 'her mind decides the order of work', status: 409 };
       const current = options.currentTaskId();
-      if (!current || current !== taskId) return { success: false, result: 'task not found', status: 404 };
+      say(`UI_MOD task_delete received task=${short(taskId)} current=${short(current)} matched=${current === taskId ? 1 : 0}`);
+      if (!current || current !== taskId) return ended('task_delete', 'none', { success: false, result: 'task not found', status: 404 });
+      // The commands stop first; her mind's stop of the task needs no player's name, only the words said to her do.
+      const aborted = options.abortActive();
+      const stopped = await direct(taskId);
+      if (stopped) return ended('task_delete', 'direct', stopped);
       const name = senderOr(sender);
-      if (!name) return { success: false, result: UNKNOWN_PLAYER, status: 409 };
-      return command('CANCEL', name);
+      if (!name) return ended('task_delete', 'none', { success: false, result: UNKNOWN_PLAYER, status: 409 });
+      return command('CANCEL', name, { aborted });
     },
     taskList: () => options.taskList(),
   };

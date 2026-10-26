@@ -9,6 +9,22 @@ const request = (id = ID, goal = 'オークの原木を16個集める'): Compani
   ({ id, goal, surface: 'text', createdAt: '2026-10-05T12:00:00.000Z', leaseExpiresAt: '2026-10-05T12:01:30.000Z' });
 
 describe('CompanionBodyClient requests (phase 4)', () => {
+  it('sends the mod\'s cancel to the stop route with the token, reads only the stopped ids, and answers null when it is not taken', async () => {
+    const sent: any[] = [];
+    let status = 200;
+    const fetcher = (async (url: string, init: any) => {
+      sent.push({ url, body: JSON.parse(init.body), auth: init.headers.authorization });
+      return new Response(JSON.stringify({ stopped: [ID, 7], open: 2 }), { status });
+    }) as unknown as typeof fetch;
+    const client = new CompanionBodyClient({ baseUrl: 'http://127.0.0.1:4329', token, serverId: 'lab-0i4Tdi', fetcher });
+    expect(await client.stopTasks(ID)).toEqual({ stopped: [ID], open: 2 });
+    expect(sent[0]).toEqual({ url: 'http://127.0.0.1:4329/v1/body/minecraft/stop', body: { taskId: ID }, auth: `Bearer ${token}` });
+    status = 503;
+    expect(await client.stopTasks(ID)).toBeNull();
+    const down = new CompanionBodyClient({ baseUrl: 'http://127.0.0.1:4329', token, serverId: 'lab-0i4Tdi', fetcher: (async () => { throw new Error('down'); }) as unknown as typeof fetch });
+    expect(await down.stopTasks()).toBeNull();
+  });
+
   it('claims with what it holds, and reads only a well-formed request and cancel ids', async () => {
     const sent: any[] = [];
     const fetcher = (async (url: string, init: any) => {

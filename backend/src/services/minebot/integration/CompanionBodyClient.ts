@@ -56,6 +56,8 @@ export interface CompanionBodyOptions {
 
 const TURN_TIMEOUT_MS = 30_000;
 const EVENT_TIMEOUT_MS = 5_000;
+/** The head answers the stop once the body's acknowledgement came or after about 3 s. */
+const STOP_TIMEOUT_MS = 8_000;
 const SERVER_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
 const CAUSE = /^[a-z0-9_.-]{1,32}:[a-z0-9_./-]{1,64}$/;
 const REQUEST_ID = /^[0-9a-f-]{36}$/;
@@ -177,6 +179,19 @@ export class CompanionBodyClient {
     if (!response.ok) return null;
     const data = await response.json().catch(() => null) as { state?: unknown; recorded?: unknown } | null;
     return data && typeof data.state === 'string' ? { state: data.state, recorded: data.recorded === true } : null;
+  }
+
+  /**
+   * The owner's 「やめる」 in the UI mod, straight to the head's stop of the body task(s) (dragon26: said to her as a message it was refused as
+   * `turn_not_visible` and the task ran on). `taskId` narrows it to the task the mod shows. Null when the head could not be reached or did
+   * not take it (the caller then says it to her as before).
+   */
+  async stopTasks(taskId?: string): Promise<{ stopped: string[]; open: number } | null> {
+    const response = await this.post('/v1/body/minecraft/stop', taskId ? { taskId } : {}, STOP_TIMEOUT_MS).catch(() => null);
+    if (!response?.ok) return null;
+    const data = await response.json().catch(() => null) as { stopped?: unknown; open?: unknown } | null;
+    if (!data || !Array.isArray(data.stopped)) return null;
+    return { stopped: data.stopped.filter((id): id is string => typeof id === 'string').slice(0, 8), open: typeof data.open === 'number' ? data.open : 0 };
   }
 
   private post(path: string, body: unknown, timeoutMs: number, signal?: AbortSignal): Promise<Response> {

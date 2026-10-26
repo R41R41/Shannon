@@ -171,7 +171,7 @@ export class CommonFcaUiModBridge implements CommonFcaObserver {
 
   constructor(private readonly options: UiModBridgeOptions) {
     this.now = options.now ?? Date.now;
-    this.push = createUiModPusher(options.baseUrl, options.timeoutMs ?? 2000, options.fetcher);
+    this.push = createUiModPusher(options.baseUrl, options.timeoutMs ?? 2000, options.fetcher, (route, status, value) => this.pushed(route, status, value));
   }
 
   /** Clears whatever the mod still shows from an earlier run and starts watching for an idle task. */
@@ -339,6 +339,25 @@ export class CommonFcaUiModBridge implements CommonFcaObserver {
   private publish(): void {
     if (this.closed) return;
     void this.pushState();
+  }
+
+  /**
+   * dragon26: what was sent to the mod and whether it arrived, in one line (the mod's display was said to lag the plan and nothing recorded what
+   * the body had sent). `/task` only (the tree and list change many times a second): a line when the plan revision, its current node or the
+   * mod's answer changed, and at most one failure line every 10 seconds. No text of the plan, only its revision and current node's id.
+   */
+  private lastPush = { key: '', failedAt: 0 };
+  private pushed(route: string, status: number | null, value: unknown): void {
+    if (route !== '/task' || !this.options.log) return;
+    const tree = value as { planRevision?: unknown; currentSubTaskId?: unknown; status?: unknown } | null;
+    const ok = typeof status === 'number' && status >= 200 && status < 300;
+    const revision = typeof tree?.planRevision === 'number' ? tree.planRevision : '-';
+    const current = typeof tree?.currentSubTaskId === 'string' ? clip(tree.currentSubTaskId, 40) : '-';
+    const key = `${ok}|${status}|${revision}|${current}`;
+    const now = this.now();
+    if (key === this.lastPush.key || (!ok && now - this.lastPush.failedAt < 10_000)) return;
+    this.lastPush = { key, failedAt: ok ? this.lastPush.failedAt : now };
+    try { this.options.log(`UI_MOD push /task ok=${ok ? 1 : 0} status=${status ?? 'none'} revision=${revision} current=${current} task=${clip(this.task?.id ?? '-', 12)}`); } catch { /* a log never fails a push */ }
   }
 
   private async pushState(): Promise<void> {
