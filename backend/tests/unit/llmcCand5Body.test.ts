@@ -1,13 +1,18 @@
 import { Vec3 } from 'vec3';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 // mb-llmc-cand 5 (2026-10-24, run 37 late): the frame's creature rows say what they are.
 //   1. "#6545 item 0.7m (229,-55,197)": an item entity says its kind and count, and whether the body threw it itself;
 //   2. a hostile within 24 m says lineOfSight, pathToMe, dy, shooter and one word (reach) for the three states the planner names.
 const { captureWorldObservation: observeWorld } = await import('../../src/services/minebot/cognition/worldFrame.js');
-const { walkableWayTo, SHOOTER_KINDS } = await import('../../src/services/minebot/utils/threatReach.js');
+const { walkableWayTo, SHOOTER_KINDS, reachBudgets } = await import('../../src/services/minebot/utils/threatReach.js');
 const { resetExposureBudget } = await import('../../src/services/minebot/utils/threatExposure.js');
 const { noteSelfDropped } = await import('../../src/services/minebot/utils/selfDropped.js');
+
+// The way search is bounded by the real clock (6 ms a mob): these tests read what it finds, not how fast, so it is given room (a cold runner ran it out: unknown).
+const realBudgets = { ...reachBudgets };
+beforeAll(() => { reachBudgets.frameMs = 60_000; reachBudgets.mobMs = 60_000; });
+afterAll(() => { Object.assign(reachBudgets, realBudgets); });
 
 // The flood fills of all mobs share a window's budget (threatExposure): each test starts with it full.
 beforeEach(() => resetExposureBudget());

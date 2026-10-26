@@ -145,7 +145,7 @@ export function threatReachOf(request: ThreatReachRequest): { reach: ThreatReach
     if (cached && cached.target === target && now - cached.at < CACHE_MS) pathToMe = cached.value;
     else if (request.budgetMs <= 0) pathToMe = cached && cached.target === target ? cached.value : 'unknown';
     else {
-      pathToMe = walkableWayTo(bot, position, entity.height ?? 1.8, self, Math.min(MOB_BUDGET_MS, request.budgetMs), { doorsBreakable: DOOR_BREAKER_KINDS.has(name) });
+      pathToMe = walkableWayTo(bot, position, entity.height ?? 1.8, self, Math.min(reachBudgets.mobMs, request.budgetMs), { doorsBreakable: DOOR_BREAKER_KINDS.has(name) });
       cache.set(entity as object, { at: now, target, value: pathToMe });
     }
   }
@@ -154,4 +154,5 @@ export function threatReachOf(request: ThreatReachRequest): { reach: ThreatReach
   return { reach: { dy, shooter, ...(pathToMe ? { pathToMe } : {}) }, spentMs: performance.now() - startedAt };
 }
 
-export const reachBudgets = { frameMs: FRAME_BUDGET_MS };
+/** The time one frame and one mob may spend on the way search (the tests that read an answer give it room: a cold or slow machine would run the real clock out and say unknown). */
+export const reachBudgets = { frameMs: FRAME_BUDGET_MS, mobMs: MOB_BUDGET_MS };
