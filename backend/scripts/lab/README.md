@@ -108,4 +108,6 @@ act の手（place・make・pillarUp・go・mine・smelt・obsidian・portal・f
    - `--search` を付けると、act の後に同じ探索を長い持ち時間で出し直します。道が無いのか、時間が無いのかが分かります。
    - `--variants` を付けると、同じ探索から 1 つずつ費用を外して、1 秒あたりのノード数を比べます（act の port、道具選び、ブロックの読み、素の pathfinder）。
 
+実走 41 の場面は `cases/run41.json`（c135・c1220・c1472・c1472x・c1805・c1311・c1716・c1518）。
+
 送り方の例（PowerShell から。VM へは LF のファイルで）：`tar.exe -cf code.tar --exclude='*.test.ts' --exclude=node_modules -C <worktree> backend/src backend/scripts backend/package.json backend/tsconfig.json package.json` を作り、`scp code.tar run-replay.sh cases.json azure-constant-server:.cache/minebot-lab/why41-in/` で送ってから `ssh azure-constant-server bash .cache/minebot-lab/why41-in/run-replay.sh t2 ~/.cache/minebot-lab/why41-in/code.tar ~/.cache/minebot-lab/why41-in/cases.json` を実行します。

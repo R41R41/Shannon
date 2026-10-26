@@ -1,0 +1,5033 @@
+[
+ {
+  "name": "c135",
+  "title": "+135.7 1x1 の縦穴の底から鉄の層へ go（dead_end 0 歩 42.9 秒）",
+  "forceload": [
+   116,
+   176,
+   188,
+   238
+  ],
+  "restore": [
+   [
+    140,
+    27,
+    203,
+    "stone"
+   ],
+   [
+    140,
+    28,
+    203,
+    "stone"
+   ],
+   [
+    140,
+    29,
+    203,
+    "stone"
+   ],
+   [
+    140,
+    30,
+    203,
+    "stone"
+   ],
+   [
+    140,
+    31,
+    203,
+    "stone"
+   ],
+   [
+    140,
+    32,
+    203,
+    "stone"
+   ],
+   [
+    140,
+    33,
+    203,
+    "stone"
+   ],
+   [
+    140,
+    34,
+    203,
+    "stone"
+   ],
+   [
+    140,
+    35,
+    203,
+    "granite"
+   ],
+   [
+    140,
+    36,
+    203,
+    "granite"
+   ],
+   [
+    140,
+    37,
+    203,
+    "stone"
+   ],
+   [
+    140,
+    38,
+    203,
+    "stone"
+   ],
+   [
+    140,
+    39,
+    203,
+    "stone"
+   ],
+   [
+    140,
+    40,
+    203,
+    "copper_ore"
+   ],
+   [
+    140,
+    41,
+    203,
+    "stone"
+   ],
+   [
+    140,
+    42,
+    203,
+    "stone"
+   ],
+   [
+    140,
+    43,
+    203,
+    "stone"
+   ],
+   [
+    140,
+    44,
+    203,
+    "stone"
+   ],
+   [
+    140,
+    45,
+    203,
+    "andesite"
+   ],
+   [
+    140,
+    46,
+    203,
+    "andesite"
+   ],
+   [
+    140,
+    47,
+    203,
+    "andesite"
+   ],
+   [
+    140,
+    48,
+    203,
+    "dirt"
+   ],
+   [
+    140,
+    49,
+    203,
+    "dirt"
+   ],
+   [
+    140,
+    50,
+    203,
+    "stone"
+   ],
+   [
+    140,
+    51,
+    203,
+    "stone"
+   ],
+   [
+    140,
+    52,
+    203,
+    "stone"
+   ],
+   [
+    140,
+    53,
+    203,
+    "stone"
+   ],
+   [
+    140,
+    54,
+    203,
+    "stone"
+   ],
+   [
+    140,
+    55,
+    203,
+    "stone"
+   ],
+   [
+    140,
+    56,
+    203,
+    "stone"
+   ],
+   [
+    140,
+    57,
+    203,
+    "stone"
+   ],
+   [
+    140,
+    58,
+    203,
+    "stone"
+   ],
+   [
+    140,
+    59,
+    203,
+    "stone"
+   ],
+   [
+    140,
+    60,
+    203,
+    "stone"
+   ],
+   [
+    140,
+    61,
+    203,
+    "stone"
+   ],
+   [
+    140,
+    73,
+    203,
+    "dirt"
+   ],
+   [
+    140,
+    74,
+    203,
+    "dirt"
+   ],
+   [
+    140,
+    75,
+    203,
+    "cobblestone"
+   ],
+   [
+    140,
+    76,
+    203,
+    "cobblestone"
+   ],
+   [
+    141,
+    28,
+    202,
+    "stone"
+   ],
+   [
+    141,
+    29,
+    202,
+    "stone"
+   ],
+   [
+    141,
+    30,
+    202,
+    "stone"
+   ],
+   [
+    141,
+    61,
+    202,
+    "coal_ore"
+   ],
+   [
+    141,
+    28,
+    203,
+    "stone"
+   ],
+   [
+    141,
+    29,
+    203,
+    "stone"
+   ],
+   [
+    141,
+    61,
+    203,
+    "coal_ore"
+   ],
+   [
+    141,
+    62,
+    203,
+    "stone"
+   ],
+   [
+    141,
+    63,
+    203,
+    "stone"
+   ],
+   [
+    141,
+    64,
+    203,
+    "stone"
+   ],
+   [
+    141,
+    65,
+    203,
+    "stone"
+   ],
+   [
+    141,
+    66,
+    203,
+    "stone"
+   ],
+   [
+    141,
+    61,
+    204,
+    "coal_ore"
+   ],
+   [
+    142,
+    29,
+    201,
+    "stone"
+   ],
+   [
+    142,
+    30,
+    201,
+    "stone"
+   ],
+   [
+    142,
+    31,
+    201,
+    "stone"
+   ],
+   [
+    142,
+    29,
+    202,
+    "stone"
+   ],
+   [
+    142,
+    30,
+    202,
+    "stone"
+   ],
+   [
+    142,
+    61,
+    203,
+    "coal_ore"
+   ],
+   [
+    143,
+    29,
+    201,
+    "stone"
+   ],
+   [
+    143,
+    30,
+    201,
+    "stone"
+   ],
+   [
+    143,
+    31,
+    201,
+    "stone"
+   ],
+   [
+    144,
+    29,
+    201,
+    "iron_ore"
+   ],
+   [
+    144,
+    30,
+    201,
+    "iron_ore"
+   ],
+   [
+    144,
+    31,
+    201,
+    "stone"
+   ],
+   [
+    145,
+    19,
+    201,
+    "stone"
+   ],
+   [
+    145,
+    20,
+    201,
+    "stone"
+   ],
+   [
+    145,
+    21,
+    201,
+    "stone"
+   ],
+   [
+    145,
+    22,
+    201,
+    "stone"
+   ],
+   [
+    145,
+    23,
+    201,
+    "stone"
+   ],
+   [
+    145,
+    24,
+    201,
+    "stone"
+   ],
+   [
+    145,
+    25,
+    201,
+    "stone"
+   ],
+   [
+    145,
+    26,
+    201,
+    "stone"
+   ],
+   [
+    145,
+    27,
+    201,
+    "stone"
+   ],
+   [
+    145,
+    28,
+    201,
+    "stone"
+   ],
+   [
+    145,
+    29,
+    201,
+    "stone"
+   ],
+   [
+    145,
+    30,
+    201,
+    "stone"
+   ],
+   [
+    145,
+    29,
+    202,
+    "iron_ore"
+   ],
+   [
+    145,
+    30,
+    202,
+    "iron_ore"
+   ],
+   [
+    146,
+    19,
+    201,
+    "stone"
+   ],
+   [
+    146,
+    20,
+    201,
+    "stone"
+   ],
+   [
+    146,
+    19,
+    202,
+    "stone"
+   ],
+   [
+    146,
+    20,
+    202,
+    "stone"
+   ],
+   [
+    146,
+    18,
+    203,
+    "stone"
+   ],
+   [
+    146,
+    19,
+    203,
+    "stone"
+   ],
+   [
+    146,
+    20,
+    203,
+    "stone"
+   ],
+   [
+    146,
+    18,
+    204,
+    "stone"
+   ],
+   [
+    146,
+    19,
+    204,
+    "stone"
+   ],
+   [
+    146,
+    18,
+    205,
+    "stone"
+   ],
+   [
+    146,
+    19,
+    205,
+    "stone"
+   ],
+   [
+    147,
+    17,
+    205,
+    "iron_ore"
+   ],
+   [
+    147,
+    18,
+    205,
+    "stone"
+   ],
+   [
+    147,
+    19,
+    205,
+    "stone"
+   ],
+   [
+    148,
+    17,
+    205,
+    "iron_ore"
+   ],
+   [
+    148,
+    18,
+    205,
+    "iron_ore"
+   ],
+   [
+    148,
+    17,
+    206,
+    "iron_ore"
+   ],
+   [
+    148,
+    18,
+    206,
+    "stone"
+   ],
+   [
+    149,
+    16,
+    197,
+    "iron_ore"
+   ],
+   [
+    149,
+    14,
+    198,
+    "iron_ore"
+   ],
+   [
+    149,
+    15,
+    198,
+    "iron_ore"
+   ],
+   [
+    149,
+    16,
+    198,
+    "iron_ore"
+   ],
+   [
+    149,
+    17,
+    198,
+    "diorite"
+   ],
+   [
+    149,
+    15,
+    199,
+    "granite"
+   ],
+   [
+    149,
+    16,
+    199,
+    "granite"
+   ],
+   [
+    149,
+    17,
+    199,
+    "stone"
+   ],
+   [
+    149,
+    17,
+    205,
+    "iron_ore"
+   ],
+   [
+    149,
+    17,
+    206,
+    "iron_ore"
+   ],
+   [
+    149,
+    18,
+    206,
+    "stone"
+   ],
+   [
+    150,
+    15,
+    197,
+    "iron_ore"
+   ],
+   [
+    150,
+    16,
+    197,
+    "iron_ore"
+   ],
+   [
+    150,
+    17,
+    197,
+    "iron_ore"
+   ],
+   [
+    150,
+    15,
+    198,
+    "iron_ore"
+   ],
+   [
+    150,
+    16,
+    198,
+    "iron_ore"
+   ],
+   [
+    150,
+    17,
+    198,
+    "diorite"
+   ],
+   [
+    150,
+    16,
+    199,
+    "diorite"
+   ],
+   [
+    150,
+    17,
+    199,
+    "diorite"
+   ],
+   [
+    150,
+    16,
+    200,
+    "diorite"
+   ],
+   [
+    150,
+    17,
+    200,
+    "diorite"
+   ],
+   [
+    150,
+    13,
+    201,
+    "granite"
+   ],
+   [
+    150,
+    14,
+    201,
+    "granite"
+   ],
+   [
+    150,
+    15,
+    201,
+    "granite"
+   ],
+   [
+    150,
+    16,
+    201,
+    "stone"
+   ],
+   [
+    150,
+    17,
+    201,
+    "stone"
+   ],
+   [
+    150,
+    16,
+    202,
+    "stone"
+   ],
+   [
+    150,
+    17,
+    202,
+    "stone"
+   ],
+   [
+    150,
+    16,
+    203,
+    "stone"
+   ],
+   [
+    150,
+    17,
+    203,
+    "stone"
+   ],
+   [
+    150,
+    16,
+    204,
+    "stone"
+   ],
+   [
+    150,
+    17,
+    204,
+    "stone"
+   ],
+   [
+    150,
+    16,
+    205,
+    "stone"
+   ],
+   [
+    150,
+    17,
+    205,
+    "stone"
+   ],
+   [
+    150,
+    16,
+    206,
+    "iron_ore"
+   ],
+   [
+    150,
+    17,
+    206,
+    "iron_ore"
+   ],
+   [
+    150,
+    18,
+    206,
+    "stone"
+   ],
+   [
+    151,
+    16,
+    197,
+    "iron_ore"
+   ],
+   [
+    151,
+    16,
+    199,
+    "diorite"
+   ],
+   [
+    151,
+    17,
+    199,
+    "diorite"
+   ],
+   [
+    151,
+    14,
+    200,
+    "diorite"
+   ],
+   [
+    151,
+    15,
+    200,
+    "diorite"
+   ],
+   [
+    151,
+    16,
+    200,
+    "diorite"
+   ],
+   [
+    151,
+    17,
+    200,
+    "diorite"
+   ],
+   [
+    151,
+    12,
+    201,
+    "granite"
+   ],
+   [
+    151,
+    13,
+    201,
+    "granite"
+   ],
+   [
+    151,
+    14,
+    201,
+    "granite"
+   ],
+   [
+    151,
+    15,
+    201,
+    "diorite"
+   ],
+   [
+    151,
+    16,
+    201,
+    "diorite"
+   ],
+   [
+    151,
+    11,
+    202,
+    "granite"
+   ],
+   [
+    151,
+    12,
+    202,
+    "granite"
+   ],
+   [
+    151,
+    13,
+    202,
+    "granite"
+   ],
+   [
+    151,
+    14,
+    202,
+    "granite"
+   ],
+   [
+    152,
+    16,
+    200,
+    "diorite"
+   ],
+   [
+    152,
+    17,
+    200,
+    "diorite"
+   ],
+   [
+    152,
+    13,
+    201,
+    "granite"
+   ],
+   [
+    152,
+    14,
+    201,
+    "diorite"
+   ],
+   [
+    152,
+    15,
+    201,
+    "diorite"
+   ],
+   [
+    152,
+    16,
+    201,
+    "diorite"
+   ],
+   [
+    152,
+    17,
+    201,
+    "diorite"
+   ],
+   [
+    153,
+    8,
+    204,
+    "stone"
+   ],
+   [
+    153,
+    9,
+    204,
+    "stone"
+   ],
+   [
+    153,
+    10,
+    204,
+    "stone"
+   ],
+   [
+    154,
+    10,
+    203,
+    "stone"
+   ],
+   [
+    154,
+    8,
+    204,
+    "stone"
+   ],
+   [
+    154,
+    9,
+    204,
+    "stone"
+   ],
+   [
+    156,
+    70,
+    198,
+    "spruce_log[axis=z]"
+   ],
+   [
+    156,
+    68,
+    199,
+    "spruce_log[axis=y]"
+   ],
+   [
+    156,
+    69,
+    199,
+    "spruce_log[axis=y]"
+   ],
+   [
+    156,
+    70,
+    199,
+    "spruce_log[axis=z]"
+   ],
+   [
+    156,
+    70,
+    200,
+    "spruce_log[axis=z]"
+   ],
+   [
+    156,
+    70,
+    201,
+    "spruce_log[axis=z]"
+   ],
+   [
+    157,
+    71,
+    200,
+    "spruce_log[axis=z]"
+   ],
+   [
+    167,
+    15,
+    218,
+    "cave_vines[age=23,berries=false]"
+   ],
+   [
+    168,
+    15,
+    219,
+    "cave_vines[age=25,berries=false]"
+   ],
+   [
+    168,
+    14,
+    221,
+    "cave_vines[age=23,berries=true]"
+   ],
+   [
+    168,
+    15,
+    221,
+    "cave_vines_plant[berries=false]"
+   ],
+   [
+    171,
+    13,
+    220,
+    "cave_vines[age=23,berries=false]"
+   ],
+   [
+    171,
+    14,
+    220,
+    "cave_vines_plant[berries=false]"
+   ],
+   [
+    171,
+    15,
+    220,
+    "cave_vines_plant[berries=false]"
+   ],
+   [
+    172,
+    13,
+    219,
+    "air"
+   ],
+   [
+    172,
+    14,
+    219,
+    "air"
+   ],
+   [
+    172,
+    12,
+    220,
+    "cave_vines[age=24,berries=false]"
+   ],
+   [
+    172,
+    13,
+    220,
+    "cave_vines_plant[berries=true]"
+   ],
+   [
+    172,
+    14,
+    220,
+    "cave_vines_plant[berries=false]"
+   ],
+   [
+    172,
+    15,
+    220,
+    "cave_vines_plant[berries=false]"
+   ]
+  ],
+  "actor": {
+   "pos": [
+    141.5,
+    67.0,
+    203.5
+   ],
+   "health": 20.0,
+   "food": 20,
+   "items": [
+    {
+     "slot": "0",
+     "id": "dirt",
+     "count": 10
+    },
+    {
+     "slot": "1",
+     "id": "wooden_pickaxe",
+     "count": 1,
+     "damage": 13
+    },
+    {
+     "slot": "2",
+     "id": "purple_bed",
+     "count": 1
+    },
+    {
+     "slot": "3",
+     "id": "purple_bed",
+     "count": 1
+    },
+    {
+     "slot": "5",
+     "id": "crafting_table",
+     "count": 1
+    },
+    {
+     "slot": "9",
+     "id": "spruce_log",
+     "count": 2
+    },
+    {
+     "slot": "10",
+     "id": "spruce_planks",
+     "count": 2
+    },
+    {
+     "slot": "11",
+     "id": "stick",
+     "count": 2
+    },
+    {
+     "slot": "12",
+     "id": "wooden_axe",
+     "count": 1
+    },
+    {
+     "slot": "14",
+     "id": "stone_pickaxe",
+     "count": 1
+    }
+   ],
+   "sampleAt": 130.8
+  },
+  "time": 6000,
+  "difficulty": "normal",
+  "acts": [
+   {
+    "label": "q15",
+    "arguments": {
+     "hands": [
+      {
+       "do": "go",
+       "maxDig": 80,
+       "seconds": 120,
+       "canDig": [
+        "stone",
+        "dirt"
+       ],
+       "to": {
+        "x": 165,
+        "y": 16,
+        "z": 215
+       }
+      }
+     ],
+     "why": "[p4.1] 鉄へ下りる",
+     "stopIf": {
+      "hostileWithin": 8
+     }
+    },
+    "seconds": 127,
+    "startedAt": 135.9,
+    "expect": {
+     "line": "go 止まった dead_end: 掘っても置いても道が無い（行き止まり） (141,67,203) 道 0 歩・掘 0・置 0・引き直し 5 回。別の行き先を",
+     "ms": 42863,
+     "outcome": "failed",
+     "failureType": "dead_end"
+    }
+   }
+  ],
+  "watch": [
+   [
+    141,
+    66,
+    203
+   ],
+   [
+    165,
+    16,
+    215
+   ]
+  ],
+  "groundCheck": 2502,
+  "groundMarks": 2,
+  "search": {
+   "timeouts": [
+    5000,
+    30000,
+    90000
+   ],
+   "variants": 5000
+  }
+ },
+ {
+  "name": "c1220",
+  "title": "+1,220 洞窟の小部屋から下の晶洞へ go を 3 回（dead_end 20.3 秒 x3）",
+  "forceload": [
+   140,
+   174,
+   194,
+   240
+  ],
+  "restore": [
+   [
+    156,
+    -25,
+    208,
+    "deepslate_diamond_ore"
+   ],
+   [
+    156,
+    -20,
+    212,
+    "deepslate[axis=y]"
+   ],
+   [
+    158,
+    -21,
+    202,
+    "deepslate[axis=y]"
+   ],
+   [
+    161,
+    -23,
+    200,
+    "deepslate[axis=y]"
+   ],
+   [
+    166,
+    -30,
+    207,
+    "calcite"
+   ],
+   [
+    166,
+    -29,
+    207,
+    "smooth_basalt"
+   ],
+   [
+    166,
+    -30,
+    208,
+    "calcite"
+   ],
+   [
+    166,
+    -29,
+    208,
+    "calcite"
+   ],
+   [
+    166,
+    -30,
+    209,
+    "calcite"
+   ],
+   [
+    166,
+    -30,
+    210,
+    "calcite"
+   ],
+   [
+    166,
+    -29,
+    210,
+    "calcite"
+   ],
+   [
+    167,
+    -26,
+    198,
+    "deepslate[axis=y]"
+   ],
+   [
+    167,
+    -26,
+    199,
+    "deepslate[axis=y]"
+   ],
+   [
+    167,
+    -27,
+    200,
+    "deepslate[axis=y]"
+   ],
+   [
+    167,
+    -26,
+    200,
+    "deepslate[axis=y]"
+   ],
+   [
+    167,
+    -27,
+    201,
+    "deepslate[axis=y]"
+   ],
+   [
+    167,
+    -26,
+    201,
+    "deepslate[axis=y]"
+   ],
+   [
+    167,
+    -29,
+    202,
+    "deepslate[axis=y]"
+   ],
+   [
+    167,
+    -27,
+    202,
+    "deepslate[axis=y]"
+   ],
+   [
+    167,
+    -30,
+    203,
+    "smooth_basalt"
+   ],
+   [
+    167,
+    -29,
+    203,
+    "smooth_basalt"
+   ],
+   [
+    167,
+    -28,
+    203,
+    "deepslate[axis=y]"
+   ],
+   [
+    167,
+    -30,
+    204,
+    "smooth_basalt"
+   ],
+   [
+    167,
+    -29,
+    204,
+    "smooth_basalt"
+   ],
+   [
+    167,
+    -30,
+    205,
+    "calcite"
+   ],
+   [
+    167,
+    -29,
+    205,
+    "calcite"
+   ],
+   [
+    167,
+    -30,
+    206,
+    "calcite"
+   ],
+   [
+    167,
+    -29,
+    206,
+    "calcite"
+   ],
+   [
+    167,
+    -28,
+    206,
+    "calcite"
+   ],
+   [
+    167,
+    -30,
+    207,
+    "calcite"
+   ],
+   [
+    167,
+    -29,
+    207,
+    "calcite"
+   ],
+   [
+    169,
+    -35,
+    215,
+    "water[level=1]"
+   ],
+   [
+    169,
+    -32,
+    216,
+    "oak_planks"
+   ],
+   [
+    169,
+    -32,
+    217,
+    "oak_planks"
+   ],
+   [
+    169,
+    -32,
+    218,
+    "oak_planks"
+   ],
+   [
+    169,
+    -31,
+    218,
+    "oak_fence[east=false,north=false,south=false,waterlogged=false,west=false]"
+   ],
+   [
+    170,
+    -35,
+    215,
+    "air"
+   ],
+   [
+    170,
+    -32,
+    216,
+    "oak_planks"
+   ],
+   [
+    170,
+    -31,
+    216,
+    "rail[shape=north_south,waterlogged=false]"
+   ],
+   [
+    170,
+    -32,
+    217,
+    "oak_planks"
+   ],
+   [
+    170,
+    -31,
+    217,
+    "rail[shape=north_south,waterlogged=false]"
+   ],
+   [
+    170,
+    -32,
+    218,
+    "oak_planks"
+   ],
+   [
+    170,
+    -31,
+    218,
+    "rail[shape=north_south,waterlogged=false]"
+   ],
+   [
+    171,
+    -34,
+    214,
+    "air"
+   ],
+   [
+    171,
+    -34,
+    215,
+    "air"
+   ],
+   [
+    171,
+    -32,
+    216,
+    "oak_planks"
+   ],
+   [
+    171,
+    -32,
+    217,
+    "oak_planks"
+   ],
+   [
+    171,
+    -31,
+    218,
+    "oak_fence[east=true,north=false,south=false,waterlogged=false,west=false]"
+   ],
+   [
+    172,
+    -33,
+    217,
+    "calcite"
+   ],
+   [
+    172,
+    -32,
+    217,
+    "amethyst_block"
+   ],
+   [
+    172,
+    -31,
+    217,
+    "amethyst_block"
+   ],
+   [
+    173,
+    -32,
+    217,
+    "amethyst_block"
+   ],
+   [
+    173,
+    -31,
+    217,
+    "amethyst_block"
+   ],
+   [
+    173,
+    -30,
+    217,
+    "amethyst_block"
+   ],
+   [
+    174,
+    -31,
+    217,
+    "amethyst_block"
+   ],
+   [
+    174,
+    -30,
+    217,
+    "amethyst_block"
+   ],
+   [
+    174,
+    -29,
+    217,
+    "amethyst_block"
+   ],
+   [
+    175,
+    -30,
+    217,
+    "budding_amethyst"
+   ],
+   [
+    175,
+    -29,
+    217,
+    "amethyst_block"
+   ],
+   [
+    175,
+    -28,
+    217,
+    "calcite"
+   ],
+   [
+    176,
+    -29,
+    217,
+    "calcite"
+   ],
+   [
+    176,
+    -28,
+    217,
+    "calcite"
+   ],
+   [
+    176,
+    -27,
+    217,
+    "calcite"
+   ],
+   [
+    177,
+    -28,
+    217,
+    "calcite"
+   ],
+   [
+    177,
+    -27,
+    217,
+    "smooth_basalt"
+   ],
+   [
+    177,
+    -26,
+    217,
+    "deepslate[axis=y]"
+   ],
+   [
+    178,
+    -27,
+    217,
+    "smooth_basalt"
+   ],
+   [
+    178,
+    -26,
+    217,
+    "deepslate[axis=y]"
+   ],
+   [
+    178,
+    -25,
+    217,
+    "deepslate[axis=y]"
+   ]
+  ],
+  "actor": {
+   "pos": [
+    167.5,
+    -25.0,
+    198.5
+   ],
+   "health": 20.0,
+   "food": 20,
+   "items": [
+    {
+     "slot": "0",
+     "id": "diamond",
+     "count": 3
+    },
+    {
+     "slot": "1",
+     "id": "iron_pickaxe",
+     "count": 1,
+     "damage": 6
+    },
+    {
+     "slot": "2",
+     "id": "raw_iron",
+     "count": 10
+    },
+    {
+     "slot": "3",
+     "id": "stone_axe",
+     "count": 1,
+     "damage": 4
+    },
+    {
+     "slot": "4",
+     "id": "stone_pickaxe",
+     "count": 1,
+     "damage": 129
+    },
+    {
+     "slot": "5",
+     "id": "stone_pickaxe",
+     "count": 1,
+     "damage": 58
+    },
+    {
+     "slot": "6",
+     "id": "cobblestone",
+     "count": 61
+    },
+    {
+     "slot": "7",
+     "id": "clay_ball",
+     "count": 8
+    },
+    {
+     "slot": "8",
+     "id": "andesite",
+     "count": 3
+    },
+    {
+     "slot": "9",
+     "id": "spruce_planks",
+     "count": 2
+    },
+    {
+     "slot": "10",
+     "id": "dirt",
+     "count": 12
+    },
+    {
+     "slot": "11",
+     "id": "purple_bed",
+     "count": 1
+    },
+    {
+     "slot": "12",
+     "id": "wooden_axe",
+     "count": 1
+    },
+    {
+     "slot": "13",
+     "id": "raw_copper",
+     "count": 3
+    },
+    {
+     "slot": "14",
+     "id": "granite",
+     "count": 14
+    },
+    {
+     "slot": "15",
+     "id": "wooden_pickaxe",
+     "count": 1,
+     "damage": 13
+    },
+    {
+     "slot": "16",
+     "id": "cobbled_deepslate",
+     "count": 24
+    },
+    {
+     "slot": "17",
+     "id": "diorite",
+     "count": 20
+    },
+    {
+     "slot": "18",
+     "id": "bucket",
+     "count": 1
+    },
+    {
+     "slot": "19",
+     "id": "string",
+     "count": 1
+    },
+    {
+     "slot": "20",
+     "id": "purple_bed",
+     "count": 1
+    },
+    {
+     "slot": "armor.head",
+     "id": "iron_helmet",
+     "count": 1,
+     "damage": 1
+    },
+    {
+     "slot": "armor.chest",
+     "id": "iron_chestplate",
+     "count": 1,
+     "damage": 1
+    },
+    {
+     "slot": "weapon.offhand",
+     "id": "shield",
+     "count": 1
+    }
+   ],
+   "sampleAt": 1219.8
+  },
+  "time": 6000,
+  "difficulty": "normal",
+  "acts": [
+   {
+    "label": "q114",
+    "arguments": {
+     "hands": [
+      {
+       "do": "go",
+       "maxDig": 40,
+       "maxPlace": 10,
+       "maxDrop": 3,
+       "seconds": 60,
+       "canDig": [
+        "stone",
+        "deepslate",
+        "andesite",
+        "diorite",
+        "granite"
+       ],
+       "canPlace": [
+        "cobblestone"
+       ],
+       "to": {
+        "x": 169,
+        "y": -32,
+        "z": 215
+       }
+      }
+     ],
+     "why": "[p6.3] 近い板を取りに行く",
+     "stopIf": {
+      "hostileWithin": 5,
+      "hpBelow": 14
+     }
+    },
+    "seconds": 67,
+    "startedAt": 1220.0,
+    "expect": {
+     "line": "go 止まった dead_end: 掘っても置いても道が無い（行き止まり） (167,-25,198) 道 0 歩・掘 0・置 0・引き直し 1 回。別の行き先を",
+     "ms": 20347,
+     "outcome": "failed",
+     "failureType": "dead_end"
+    }
+   },
+   {
+    "label": "q115",
+    "arguments": {
+     "hands": [
+      {
+       "do": "go",
+       "maxDig": 50,
+       "maxPlace": 15,
+       "maxDrop": 3,
+       "range": 3,
+       "seconds": 90,
+       "canDig": [
+        "stone",
+        "deepslate",
+        "andesite",
+        "diorite",
+        "granite",
+        "dirt",
+        "gravel"
+       ],
+       "canPlace": [
+        "cobblestone"
+       ],
+       "to": {
+        "x": 169,
+        "y": -32,
+        "z": 216
+       }
+      }
+     ],
+     "why": "[p6.3] 板を取りに行く",
+     "stopIf": {
+      "hostileWithin": 5,
+      "hpBelow": 14
+     }
+    },
+    "seconds": 97,
+    "startedAt": 1245.2,
+    "expect": {
+     "line": "go 止まった dead_end: 掘っても置いても道が無い（行き止まり） (167,-25,198) 道 0 歩・掘 0・置 0・引き直し 1 回。別の行き先を",
+     "ms": 20356,
+     "outcome": "failed",
+     "failureType": "dead_end"
+    },
+    "delayMs": 4800
+   },
+   {
+    "label": "q117",
+    "arguments": {
+     "hands": [
+      {
+       "do": "go",
+       "maxDig": 60,
+       "maxPlace": 15,
+       "maxDrop": 3,
+       "seconds": 100,
+       "canDig": [
+        "stone",
+        "deepslate",
+        "andesite",
+        "diorite",
+        "granite",
+        "dirt",
+        "gravel"
+       ],
+       "canPlace": [
+        "cobblestone"
+       ],
+       "goals": [
+        {
+         "x": 169,
+         "y": -31,
+         "z": 216
+        },
+        {
+         "x": 169,
+         "y": -31,
+         "z": 215
+        },
+        {
+         "x": 168,
+         "y": -32,
+         "z": 216
+        }
+       ]
+      }
+     ],
+     "why": "[p6.3] 板の近くへ掘り進む",
+     "stopIf": {
+      "hostileWithin": 5,
+      "hpBelow": 14
+     }
+    },
+    "seconds": 107,
+    "startedAt": 1269.7,
+    "expect": {
+     "line": "go 止まった dead_end: 掘っても置いても道が無い（行き止まり） (167,-25,198) 道 0 歩・掘 0・置 0・引き直し 1 回。別の行き先を",
+     "ms": 20346,
+     "outcome": "failed",
+     "failureType": "dead_end"
+    },
+    "delayMs": 4100
+   }
+  ],
+  "watch": [
+   [
+    167,
+    -26,
+    198
+   ],
+   [
+    169,
+    -32,
+    215
+   ]
+  ],
+  "groundCheck": 2704,
+  "groundMarks": 15,
+  "search": {
+   "timeouts": [
+    5000,
+    30000,
+    90000
+   ],
+   "variants": 5000
+  }
+ },
+ {
+  "name": "c1472",
+  "title": "+1,472 晶洞の底から地上へ go（stuck: 跳びの最高が足の高さ）",
+  "forceload": [
+   142,
+   180,
+   200,
+   242
+  ],
+  "restore": [
+   [
+    158,
+    -21,
+    202,
+    "deepslate[axis=y]"
+   ],
+   [
+    161,
+    -23,
+    200,
+    "deepslate[axis=y]"
+   ],
+   [
+    167,
+    -29,
+    202,
+    "deepslate[axis=y]"
+   ],
+   [
+    167,
+    -28,
+    202,
+    "deepslate[axis=y]"
+   ],
+   [
+    167,
+    -27,
+    202,
+    "deepslate[axis=y]"
+   ],
+   [
+    167,
+    -28,
+    203,
+    "deepslate[axis=y]"
+   ],
+   [
+    171,
+    -34,
+    215,
+    "air"
+   ],
+   [
+    172,
+    -33,
+    217,
+    "calcite"
+   ],
+   [
+    172,
+    -32,
+    217,
+    "amethyst_block"
+   ],
+   [
+    172,
+    -31,
+    217,
+    "amethyst_block"
+   ],
+   [
+    173,
+    -32,
+    217,
+    "amethyst_block"
+   ],
+   [
+    173,
+    -31,
+    217,
+    "amethyst_block"
+   ],
+   [
+    173,
+    -30,
+    217,
+    "amethyst_block"
+   ],
+   [
+    175,
+    -29,
+    217,
+    "amethyst_block"
+   ],
+   [
+    175,
+    -28,
+    217,
+    "calcite"
+   ],
+   [
+    176,
+    -29,
+    217,
+    "calcite"
+   ],
+   [
+    176,
+    -28,
+    217,
+    "calcite"
+   ],
+   [
+    176,
+    -27,
+    217,
+    "calcite"
+   ],
+   [
+    177,
+    -28,
+    217,
+    "calcite"
+   ],
+   [
+    177,
+    -27,
+    217,
+    "smooth_basalt"
+   ],
+   [
+    177,
+    -26,
+    217,
+    "deepslate[axis=y]"
+   ],
+   [
+    178,
+    -27,
+    217,
+    "smooth_basalt"
+   ],
+   [
+    178,
+    -26,
+    217,
+    "deepslate[axis=y]"
+   ],
+   [
+    178,
+    -25,
+    217,
+    "deepslate[axis=y]"
+   ],
+   [
+    179,
+    -26,
+    217,
+    "deepslate[axis=y]"
+   ],
+   [
+    179,
+    -25,
+    217,
+    "deepslate[axis=y]"
+   ],
+   [
+    179,
+    -24,
+    217,
+    "deepslate[axis=y]"
+   ],
+   [
+    180,
+    -22,
+    215,
+    "deepslate[axis=y]"
+   ],
+   [
+    180,
+    -24,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    180,
+    -23,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    180,
+    -22,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    180,
+    -21,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    180,
+    -20,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    180,
+    -19,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    180,
+    -18,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    180,
+    -25,
+    217,
+    "deepslate[axis=y]"
+   ],
+   [
+    180,
+    -24,
+    217,
+    "deepslate[axis=y]"
+   ],
+   [
+    180,
+    -23,
+    217,
+    "deepslate[axis=y]"
+   ],
+   [
+    181,
+    -19,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    181,
+    -18,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    181,
+    -17,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    182,
+    -18,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    182,
+    -17,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    182,
+    -16,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    183,
+    -15,
+    215,
+    "deepslate[axis=y]"
+   ],
+   [
+    183,
+    -17,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    183,
+    -16,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    183,
+    -15,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    183,
+    -14,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    183,
+    -13,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    183,
+    -12,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    183,
+    -11,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    183,
+    -9,
+    216,
+    "gravel"
+   ],
+   [
+    183,
+    -8,
+    216,
+    "gravel"
+   ],
+   [
+    184,
+    -16,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    184,
+    -16,
+    217,
+    "glow_lichen[down=false,east=false,north=true,south=false,up=false,waterlogged=false,west=false]"
+   ]
+  ],
+  "actor": {
+   "pos": [
+    171.5,
+    -34.0,
+    216.5
+   ],
+   "health": 20.0,
+   "food": 19,
+   "items": [
+    {
+     "slot": "0",
+     "id": "diamond_pickaxe",
+     "count": 1
+    },
+    {
+     "slot": "1",
+     "id": "iron_pickaxe",
+     "count": 1,
+     "damage": 6
+    },
+    {
+     "slot": "2",
+     "id": "raw_iron",
+     "count": 10
+    },
+    {
+     "slot": "3",
+     "id": "stone_axe",
+     "count": 1,
+     "damage": 12
+    },
+    {
+     "slot": "5",
+     "id": "stone_pickaxe",
+     "count": 1,
+     "damage": 88
+    },
+    {
+     "slot": "6",
+     "id": "cobblestone",
+     "count": 59
+    },
+    {
+     "slot": "7",
+     "id": "clay_ball",
+     "count": 8
+    },
+    {
+     "slot": "8",
+     "id": "andesite",
+     "count": 3
+    },
+    {
+     "slot": "9",
+     "id": "stick",
+     "count": 2
+    },
+    {
+     "slot": "10",
+     "id": "dirt",
+     "count": 12
+    },
+    {
+     "slot": "11",
+     "id": "purple_bed",
+     "count": 1
+    },
+    {
+     "slot": "12",
+     "id": "wooden_axe",
+     "count": 1
+    },
+    {
+     "slot": "13",
+     "id": "raw_copper",
+     "count": 3
+    },
+    {
+     "slot": "14",
+     "id": "granite",
+     "count": 14
+    },
+    {
+     "slot": "15",
+     "id": "wooden_pickaxe",
+     "count": 1,
+     "damage": 13
+    },
+    {
+     "slot": "16",
+     "id": "cobbled_deepslate",
+     "count": 35
+    },
+    {
+     "slot": "17",
+     "id": "diorite",
+     "count": 20
+    },
+    {
+     "slot": "18",
+     "id": "bucket",
+     "count": 1
+    },
+    {
+     "slot": "19",
+     "id": "string",
+     "count": 1
+    },
+    {
+     "slot": "20",
+     "id": "purple_bed",
+     "count": 1
+    },
+    {
+     "slot": "21",
+     "id": "smooth_basalt",
+     "count": 5
+    },
+    {
+     "slot": "22",
+     "id": "calcite",
+     "count": 14
+    },
+    {
+     "slot": "23",
+     "id": "oak_planks",
+     "count": 4
+    },
+    {
+     "slot": "24",
+     "id": "rail",
+     "count": 3
+    },
+    {
+     "slot": "25",
+     "id": "stone_pickaxe",
+     "count": 1,
+     "damage": 129
+    },
+    {
+     "slot": "armor.head",
+     "id": "iron_helmet",
+     "count": 1,
+     "damage": 1
+    },
+    {
+     "slot": "armor.chest",
+     "id": "iron_chestplate",
+     "count": 1,
+     "damage": 1
+    },
+    {
+     "slot": "weapon.offhand",
+     "id": "shield",
+     "count": 1
+    }
+   ],
+   "sampleAt": 1463.9
+  },
+  "time": 6000,
+  "difficulty": "normal",
+  "acts": [
+   {
+    "label": "q137",
+    "arguments": {
+     "hands": [
+      {
+       "do": "go",
+       "maxDig": 200,
+       "maxPlace": 40,
+       "maxDrop": 3,
+       "range": 4,
+       "seconds": 120,
+       "canDig": [
+        "stone",
+        "dirt",
+        "deepslate",
+        "andesite",
+        "diorite",
+        "granite",
+        "gravel",
+        "calcite"
+       ],
+       "canPlace": [
+        "cobblestone"
+       ],
+       "to": {
+        "x": 167,
+        "y": 66,
+        "z": 200
+       }
+      }
+     ],
+     "why": "[p6.3] 地上へ上り木と食料を探す",
+     "stopIf": {
+      "hostileWithin": 4,
+      "hpBelow": 14
+     }
+    },
+    "seconds": 127,
+    "startedAt": 1472.0,
+    "expect": {
+     "line": "go 止まった stuck: 1段目が積めなかった: 置ける高さ（足が y=-32.95 以上、上向きの速さ 0.14 以下）に跳びの最高 y=-33.00 で届かず、置く処理に入れなかった（足元 (171,-34,215) は今 (171,-34,215) 道 27 歩・掘 0・置 0・引き直し 7 回",
+     "ms": 41829,
+     "outcome": "failed",
+     "failureType": "stuck"
+    }
+   }
+  ],
+  "watch": [
+   [
+    171,
+    -35,
+    216
+   ],
+   [
+    167,
+    66,
+    200
+   ]
+  ],
+  "groundCheck": 5152,
+  "groundMarks": 11
+ },
+ {
+  "name": "c1805",
+  "title": "+1,805 掘って柱で上る x8 → 砂利が落ちて窒息",
+  "forceload": [
+   158,
+   190,
+   208,
+   242
+  ],
+  "restore": [
+   [
+    175,
+    4,
+    223,
+    "short_grass"
+   ],
+   [
+    180,
+    -24,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    180,
+    -23,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    180,
+    -22,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    180,
+    -21,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    180,
+    -23,
+    217,
+    "deepslate[axis=y]"
+   ],
+   [
+    183,
+    -17,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    183,
+    -16,
+    216,
+    "air"
+   ],
+   [
+    183,
+    -15,
+    216,
+    "air"
+   ],
+   [
+    183,
+    -14,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    183,
+    -13,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    183,
+    -12,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    183,
+    -11,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    183,
+    -9,
+    216,
+    "gravel"
+   ],
+   [
+    183,
+    -8,
+    216,
+    "gravel"
+   ]
+  ],
+  "actor": {
+   "pos": [
+    183.5,
+    -16.0,
+    216.5300850518392
+   ],
+   "health": 20.0,
+   "food": 18,
+   "items": [
+    {
+     "slot": "0",
+     "id": "diamond_pickaxe",
+     "count": 1
+    },
+    {
+     "slot": "1",
+     "id": "iron_pickaxe",
+     "count": 1,
+     "damage": 11
+    },
+    {
+     "slot": "2",
+     "id": "stone_pickaxe",
+     "count": 1,
+     "damage": 129
+    },
+    {
+     "slot": "3",
+     "id": "stone_axe",
+     "count": 1,
+     "damage": 14
+    },
+    {
+     "slot": "4",
+     "id": "oak_fence",
+     "count": 2
+    },
+    {
+     "slot": "5",
+     "id": "amethyst_block",
+     "count": 9
+    },
+    {
+     "slot": "6",
+     "id": "cobblestone",
+     "count": 54
+    },
+    {
+     "slot": "7",
+     "id": "clay_ball",
+     "count": 8
+    },
+    {
+     "slot": "8",
+     "id": "andesite",
+     "count": 3
+    },
+    {
+     "slot": "9",
+     "id": "stick",
+     "count": 2
+    },
+    {
+     "slot": "10",
+     "id": "dirt",
+     "count": 12
+    },
+    {
+     "slot": "11",
+     "id": "purple_bed",
+     "count": 1
+    },
+    {
+     "slot": "12",
+     "id": "wooden_axe",
+     "count": 1
+    },
+    {
+     "slot": "13",
+     "id": "raw_copper",
+     "count": 3
+    },
+    {
+     "slot": "14",
+     "id": "granite",
+     "count": 14
+    },
+    {
+     "slot": "16",
+     "id": "cobbled_deepslate",
+     "count": 55
+    },
+    {
+     "slot": "17",
+     "id": "diorite",
+     "count": 20
+    },
+    {
+     "slot": "18",
+     "id": "bucket",
+     "count": 1
+    },
+    {
+     "slot": "19",
+     "id": "string",
+     "count": 1
+    },
+    {
+     "slot": "20",
+     "id": "purple_bed",
+     "count": 1
+    },
+    {
+     "slot": "21",
+     "id": "smooth_basalt",
+     "count": 7
+    },
+    {
+     "slot": "22",
+     "id": "calcite",
+     "count": 20
+    },
+    {
+     "slot": "24",
+     "id": "rail",
+     "count": 3
+    },
+    {
+     "slot": "25",
+     "id": "stone_pickaxe",
+     "count": 1,
+     "damage": 129
+    },
+    {
+     "slot": "armor.head",
+     "id": "iron_helmet",
+     "count": 1,
+     "damage": 1
+    },
+    {
+     "slot": "armor.chest",
+     "id": "iron_chestplate",
+     "count": 1,
+     "damage": 1
+    },
+    {
+     "slot": "armor.legs",
+     "id": "iron_leggings",
+     "count": 1
+    },
+    {
+     "slot": "weapon.offhand",
+     "id": "shield",
+     "count": 1
+    }
+   ],
+   "sampleAt": 1804.1
+  },
+  "time": 6000,
+  "difficulty": "normal",
+  "acts": [
+   {
+    "label": "q160",
+    "arguments": {
+     "hands": [
+      {
+       "do": "dig",
+       "rel": true,
+       "collect": false,
+       "at": [
+        {
+         "x": 0,
+         "y": 2,
+         "z": 0
+        }
+       ]
+      },
+      {
+       "do": "pillarUp",
+       "n": 1,
+       "block": "cobblestone"
+      }
+     ],
+     "why": "[p7] 掘って柱で上る",
+     "stopIf": {
+      "hostileWithin": 5,
+      "hpBelow": 14
+     },
+     "repeat": 8
+    },
+    "seconds": 95,
+    "startedAt": 1805.4,
+    "expect": {
+     "line": "置けない: 1段目が積めなかった: 跳んでいる間に足元が gravel になった（積む前）（足元 (183,-12,216) は今 gravel、足は y=-11.00、跳びの最高 y=-10.41、置こうとした 0 回）。0段登った。そのマスは gravel",
+     "ms": 6342,
+     "outcome": "failed",
+     "failureType": "not_placed"
+    }
+   },
+   {
+    "label": "q161",
+    "arguments": {
+     "hands": [
+      {
+       "do": "go",
+       "maxDig": 200,
+       "maxPlace": 40,
+       "maxDrop": 3,
+       "range": 4,
+       "seconds": 120,
+       "canDig": [
+        "stone",
+        "deepslate",
+        "andesite",
+        "diorite",
+        "granite",
+        "calcite",
+        "dirt",
+        "gravel",
+        "sand"
+       ],
+       "canPlace": [
+        "cobblestone"
+       ],
+       "to": {
+        "x": 187,
+        "y": 64,
+        "z": 199
+       }
+      }
+     ],
+     "why": "[p7] 村へ上る",
+     "stopIf": {
+      "hostileWithin": 4
+     }
+    },
+    "seconds": 127,
+    "startedAt": 1816.7,
+    "expect": {
+     "line": "被弾: 被弾: 体力 10 → 6（手の途中）",
+     "ms": 6372,
+     "outcome": "failed",
+     "failureType": "damage_taken"
+    },
+    "delayMs": 4900
+   }
+  ],
+  "watch": [
+   [
+    183,
+    -17,
+    216
+   ]
+  ],
+  "groundCheck": 2154,
+  "groundMarks": 4
+ },
+ {
+  "name": "c1311",
+  "title": "+1,311 地上へ go（stuck: 置きを断られた）",
+  "forceload": [
+   140,
+   174,
+   194,
+   240
+  ],
+  "restore": [
+   [
+    156,
+    -25,
+    208,
+    "deepslate_diamond_ore"
+   ],
+   [
+    156,
+    -20,
+    212,
+    "deepslate[axis=y]"
+   ],
+   [
+    158,
+    -21,
+    202,
+    "deepslate[axis=y]"
+   ],
+   [
+    161,
+    -23,
+    200,
+    "deepslate[axis=y]"
+   ],
+   [
+    166,
+    -30,
+    207,
+    "calcite"
+   ],
+   [
+    166,
+    -29,
+    207,
+    "smooth_basalt"
+   ],
+   [
+    166,
+    -30,
+    208,
+    "calcite"
+   ],
+   [
+    166,
+    -29,
+    208,
+    "calcite"
+   ],
+   [
+    166,
+    -30,
+    209,
+    "calcite"
+   ],
+   [
+    166,
+    -30,
+    210,
+    "calcite"
+   ],
+   [
+    166,
+    -29,
+    210,
+    "calcite"
+   ],
+   [
+    167,
+    -26,
+    198,
+    "deepslate[axis=y]"
+   ],
+   [
+    167,
+    -29,
+    202,
+    "deepslate[axis=y]"
+   ],
+   [
+    167,
+    -28,
+    202,
+    "deepslate[axis=y]"
+   ],
+   [
+    167,
+    -27,
+    202,
+    "deepslate[axis=y]"
+   ],
+   [
+    167,
+    -29,
+    203,
+    "smooth_basalt"
+   ],
+   [
+    167,
+    -28,
+    203,
+    "deepslate[axis=y]"
+   ],
+   [
+    167,
+    -29,
+    204,
+    "smooth_basalt"
+   ],
+   [
+    167,
+    -30,
+    205,
+    "calcite"
+   ],
+   [
+    167,
+    -29,
+    205,
+    "calcite"
+   ],
+   [
+    167,
+    -30,
+    206,
+    "calcite"
+   ],
+   [
+    167,
+    -29,
+    206,
+    "calcite"
+   ],
+   [
+    167,
+    -28,
+    206,
+    "calcite"
+   ],
+   [
+    167,
+    -30,
+    207,
+    "calcite"
+   ],
+   [
+    167,
+    -29,
+    207,
+    "calcite"
+   ],
+   [
+    169,
+    -35,
+    215,
+    "water[level=1]"
+   ],
+   [
+    169,
+    -32,
+    216,
+    "oak_planks"
+   ],
+   [
+    169,
+    -32,
+    217,
+    "oak_planks"
+   ],
+   [
+    169,
+    -32,
+    218,
+    "oak_planks"
+   ],
+   [
+    169,
+    -31,
+    218,
+    "oak_fence[east=false,north=false,south=false,waterlogged=false,west=false]"
+   ],
+   [
+    170,
+    -35,
+    215,
+    "air"
+   ],
+   [
+    170,
+    -32,
+    216,
+    "oak_planks"
+   ],
+   [
+    170,
+    -31,
+    216,
+    "rail[shape=north_south,waterlogged=false]"
+   ],
+   [
+    170,
+    -32,
+    217,
+    "oak_planks"
+   ],
+   [
+    170,
+    -31,
+    217,
+    "rail[shape=north_south,waterlogged=false]"
+   ],
+   [
+    170,
+    -32,
+    218,
+    "oak_planks"
+   ],
+   [
+    170,
+    -31,
+    218,
+    "rail[shape=north_south,waterlogged=false]"
+   ],
+   [
+    171,
+    -34,
+    214,
+    "air"
+   ],
+   [
+    171,
+    -34,
+    215,
+    "air"
+   ],
+   [
+    171,
+    -32,
+    216,
+    "oak_planks"
+   ],
+   [
+    171,
+    -32,
+    217,
+    "oak_planks"
+   ],
+   [
+    171,
+    -31,
+    218,
+    "oak_fence[east=true,north=false,south=false,waterlogged=false,west=false]"
+   ],
+   [
+    172,
+    -33,
+    217,
+    "calcite"
+   ],
+   [
+    172,
+    -32,
+    217,
+    "amethyst_block"
+   ],
+   [
+    172,
+    -31,
+    217,
+    "amethyst_block"
+   ],
+   [
+    173,
+    -32,
+    217,
+    "amethyst_block"
+   ],
+   [
+    173,
+    -31,
+    217,
+    "amethyst_block"
+   ],
+   [
+    173,
+    -30,
+    217,
+    "amethyst_block"
+   ],
+   [
+    174,
+    -31,
+    217,
+    "amethyst_block"
+   ],
+   [
+    174,
+    -30,
+    217,
+    "amethyst_block"
+   ],
+   [
+    174,
+    -29,
+    217,
+    "amethyst_block"
+   ],
+   [
+    175,
+    -30,
+    217,
+    "budding_amethyst"
+   ],
+   [
+    175,
+    -29,
+    217,
+    "amethyst_block"
+   ],
+   [
+    175,
+    -28,
+    217,
+    "calcite"
+   ],
+   [
+    176,
+    -29,
+    217,
+    "calcite"
+   ],
+   [
+    176,
+    -28,
+    217,
+    "calcite"
+   ],
+   [
+    176,
+    -27,
+    217,
+    "calcite"
+   ],
+   [
+    177,
+    -28,
+    217,
+    "calcite"
+   ],
+   [
+    177,
+    -27,
+    217,
+    "smooth_basalt"
+   ],
+   [
+    177,
+    -26,
+    217,
+    "deepslate[axis=y]"
+   ],
+   [
+    178,
+    -27,
+    217,
+    "smooth_basalt"
+   ],
+   [
+    178,
+    -26,
+    217,
+    "deepslate[axis=y]"
+   ],
+   [
+    178,
+    -25,
+    217,
+    "deepslate[axis=y]"
+   ]
+  ],
+  "actor": {
+   "pos": [
+    167.5,
+    -27.0,
+    200.5
+   ],
+   "health": 20.0,
+   "food": 20,
+   "items": [
+    {
+     "slot": "0",
+     "id": "diamond",
+     "count": 3
+    },
+    {
+     "slot": "1",
+     "id": "iron_pickaxe",
+     "count": 1,
+     "damage": 6
+    },
+    {
+     "slot": "2",
+     "id": "raw_iron",
+     "count": 10
+    },
+    {
+     "slot": "3",
+     "id": "stone_axe",
+     "count": 1,
+     "damage": 4
+    },
+    {
+     "slot": "4",
+     "id": "stone_pickaxe",
+     "count": 1,
+     "damage": 129
+    },
+    {
+     "slot": "5",
+     "id": "stone_pickaxe",
+     "count": 1,
+     "damage": 63
+    },
+    {
+     "slot": "6",
+     "id": "cobblestone",
+     "count": 61
+    },
+    {
+     "slot": "7",
+     "id": "clay_ball",
+     "count": 8
+    },
+    {
+     "slot": "8",
+     "id": "andesite",
+     "count": 3
+    },
+    {
+     "slot": "9",
+     "id": "spruce_planks",
+     "count": 2
+    },
+    {
+     "slot": "10",
+     "id": "dirt",
+     "count": 12
+    },
+    {
+     "slot": "11",
+     "id": "purple_bed",
+     "count": 1
+    },
+    {
+     "slot": "12",
+     "id": "wooden_axe",
+     "count": 1
+    },
+    {
+     "slot": "13",
+     "id": "raw_copper",
+     "count": 3
+    },
+    {
+     "slot": "14",
+     "id": "granite",
+     "count": 14
+    },
+    {
+     "slot": "15",
+     "id": "wooden_pickaxe",
+     "count": 1,
+     "damage": 13
+    },
+    {
+     "slot": "16",
+     "id": "cobbled_deepslate",
+     "count": 28
+    },
+    {
+     "slot": "17",
+     "id": "diorite",
+     "count": 20
+    },
+    {
+     "slot": "18",
+     "id": "bucket",
+     "count": 1
+    },
+    {
+     "slot": "19",
+     "id": "string",
+     "count": 1
+    },
+    {
+     "slot": "20",
+     "id": "purple_bed",
+     "count": 1
+    },
+    {
+     "slot": "armor.head",
+     "id": "iron_helmet",
+     "count": 1,
+     "damage": 1
+    },
+    {
+     "slot": "armor.chest",
+     "id": "iron_chestplate",
+     "count": 1,
+     "damage": 1
+    },
+    {
+     "slot": "weapon.offhand",
+     "id": "shield",
+     "count": 1
+    }
+   ],
+   "sampleAt": 1308.1
+  },
+  "time": 6000,
+  "difficulty": "normal",
+  "acts": [
+   {
+    "label": "q121",
+    "arguments": {
+     "hands": [
+      {
+       "do": "equip",
+       "item": "iron_pickaxe"
+      },
+      {
+       "do": "go",
+       "maxDig": 150,
+       "maxPlace": 40,
+       "maxDrop": 3,
+       "range": 4,
+       "seconds": 120,
+       "canDig": [
+        "stone",
+        "dirt",
+        "deepslate",
+        "andesite",
+        "diorite",
+        "granite",
+        "gravel",
+        "cobblestone"
+       ],
+       "canPlace": [
+        "cobblestone"
+       ],
+       "to": {
+        "x": 167,
+        "y": 66,
+        "z": 200
+       }
+      }
+     ],
+     "why": "[p6.3] 地上へ上り木と食料を探す",
+     "stopIf": {
+      "hostileWithin": 4,
+      "hpBelow": 14
+     }
+    },
+    "seconds": 129,
+    "startedAt": 1311.8,
+    "expect": {
+     "line": "go 止まった stuck: 1段目が積めなかった: 置こうとして 1 回とも断られた（No block has been placed : the server did not answer within ）（足元 (167,- (167,-27,200) 道 6 歩・掘 0・置 0・引き直し 5 回",
+     "ms": 38103,
+     "outcome": "failed",
+     "failureType": "stuck"
+    }
+   }
+  ],
+  "watch": [
+   [
+    167,
+    -28,
+    200
+   ],
+   [
+    167,
+    66,
+    200
+   ]
+  ],
+  "groundCheck": 3294,
+  "groundMarks": 15
+ },
+ {
+  "name": "c1716",
+  "title": "+1,716 村へ go（stuck: 置いたブロックが現れない）",
+  "forceload": [
+   154,
+   184,
+   206,
+   242
+  ],
+  "restore": [
+   [
+    173,
+    -30,
+    217,
+    "amethyst_block"
+   ],
+   [
+    180,
+    -24,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    180,
+    -23,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    180,
+    -20,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    180,
+    -19,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    180,
+    -18,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    180,
+    -23,
+    217,
+    "deepslate[axis=y]"
+   ],
+   [
+    181,
+    -19,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    181,
+    -18,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    181,
+    -17,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    182,
+    -18,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    182,
+    -17,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    182,
+    -16,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    183,
+    -15,
+    215,
+    "deepslate[axis=y]"
+   ],
+   [
+    183,
+    -17,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    183,
+    -16,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    183,
+    -15,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    183,
+    -14,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    183,
+    -13,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    183,
+    -12,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    183,
+    -11,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    183,
+    -9,
+    216,
+    "gravel"
+   ],
+   [
+    183,
+    -8,
+    216,
+    "gravel"
+   ],
+   [
+    184,
+    -16,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    184,
+    -16,
+    217,
+    "glow_lichen[down=false,east=false,north=true,south=false,up=false,waterlogged=false,west=false]"
+   ]
+  ],
+  "actor": {
+   "pos": [
+    180.5,
+    -25.0,
+    217.5
+   ],
+   "health": 20.0,
+   "food": 18,
+   "items": [
+    {
+     "slot": "0",
+     "id": "diamond_pickaxe",
+     "count": 1
+    },
+    {
+     "slot": "1",
+     "id": "iron_pickaxe",
+     "count": 1,
+     "damage": 6
+    },
+    {
+     "slot": "2",
+     "id": "stone_pickaxe",
+     "count": 1,
+     "damage": 111
+    },
+    {
+     "slot": "3",
+     "id": "stone_axe",
+     "count": 1,
+     "damage": 14
+    },
+    {
+     "slot": "4",
+     "id": "oak_fence",
+     "count": 2
+    },
+    {
+     "slot": "5",
+     "id": "amethyst_block",
+     "count": 9
+    },
+    {
+     "slot": "6",
+     "id": "cobblestone",
+     "count": 59
+    },
+    {
+     "slot": "7",
+     "id": "clay_ball",
+     "count": 8
+    },
+    {
+     "slot": "8",
+     "id": "andesite",
+     "count": 3
+    },
+    {
+     "slot": "9",
+     "id": "stick",
+     "count": 2
+    },
+    {
+     "slot": "10",
+     "id": "dirt",
+     "count": 12
+    },
+    {
+     "slot": "11",
+     "id": "purple_bed",
+     "count": 1
+    },
+    {
+     "slot": "12",
+     "id": "wooden_axe",
+     "count": 1
+    },
+    {
+     "slot": "13",
+     "id": "raw_copper",
+     "count": 3
+    },
+    {
+     "slot": "14",
+     "id": "granite",
+     "count": 14
+    },
+    {
+     "slot": "16",
+     "id": "cobbled_deepslate",
+     "count": 32
+    },
+    {
+     "slot": "17",
+     "id": "diorite",
+     "count": 20
+    },
+    {
+     "slot": "18",
+     "id": "bucket",
+     "count": 1
+    },
+    {
+     "slot": "19",
+     "id": "string",
+     "count": 1
+    },
+    {
+     "slot": "20",
+     "id": "purple_bed",
+     "count": 1
+    },
+    {
+     "slot": "21",
+     "id": "smooth_basalt",
+     "count": 7
+    },
+    {
+     "slot": "22",
+     "id": "calcite",
+     "count": 20
+    },
+    {
+     "slot": "24",
+     "id": "rail",
+     "count": 3
+    },
+    {
+     "slot": "25",
+     "id": "stone_pickaxe",
+     "count": 1,
+     "damage": 129
+    },
+    {
+     "slot": "armor.head",
+     "id": "iron_helmet",
+     "count": 1,
+     "damage": 1
+    },
+    {
+     "slot": "armor.chest",
+     "id": "iron_chestplate",
+     "count": 1,
+     "damage": 1
+    },
+    {
+     "slot": "armor.legs",
+     "id": "iron_leggings",
+     "count": 1
+    },
+    {
+     "slot": "weapon.offhand",
+     "id": "shield",
+     "count": 1
+    }
+   ],
+   "sampleAt": 1710.1
+  },
+  "time": 6000,
+  "difficulty": "normal",
+  "acts": [
+   {
+    "label": "q154",
+    "arguments": {
+     "hands": [
+      {
+       "do": "go",
+       "maxDig": 200,
+       "maxPlace": 40,
+       "maxDrop": 3,
+       "range": 4,
+       "seconds": 120,
+       "canDig": [
+        "stone",
+        "deepslate",
+        "andesite",
+        "diorite",
+        "granite",
+        "calcite",
+        "dirt",
+        "gravel",
+        "sand"
+       ],
+       "canPlace": [
+        "cobblestone"
+       ],
+       "to": {
+        "x": 187,
+        "y": 64,
+        "z": 199
+       }
+      }
+     ],
+     "why": "[p7] 村へ上る",
+     "stopIf": {
+      "hostileWithin": 4,
+      "hpBelow": 14
+     }
+    },
+    "seconds": 127,
+    "startedAt": 1716.2,
+    "expect": {
+     "line": "go 止まった stuck: 置いたブロックが世界に現れない（サーバーが置きを断った。1 回） (180,-20,216) 道 16 歩・掘 5・置 4・引き直し 7 回。別の道か別の行き先を（同じ手の繰り返しは同じ所で止まる）",
+     "ms": 52969,
+     "outcome": "failed",
+     "failureType": "stuck"
+    }
+   }
+  ],
+  "watch": [
+   [
+    180,
+    -26,
+    217
+   ],
+   [
+    187,
+    64,
+    199
+   ]
+  ],
+  "groundCheck": 1323,
+  "groundMarks": 4
+ },
+ {
+  "name": "c1518",
+  "title": "+1,518 アメジストの芽（高さ 0.75）の上から：pillarUp 1 段と、実走の go q139",
+  "forceload": [
+   142,
+   180,
+   200,
+   242
+  ],
+  "restore": [
+   [
+    158,
+    -21,
+    202,
+    "deepslate[axis=y]"
+   ],
+   [
+    161,
+    -23,
+    200,
+    "deepslate[axis=y]"
+   ],
+   [
+    167,
+    -29,
+    202,
+    "deepslate[axis=y]"
+   ],
+   [
+    167,
+    -28,
+    202,
+    "deepslate[axis=y]"
+   ],
+   [
+    167,
+    -27,
+    202,
+    "deepslate[axis=y]"
+   ],
+   [
+    167,
+    -28,
+    203,
+    "deepslate[axis=y]"
+   ],
+   [
+    171,
+    -34,
+    215,
+    "air"
+   ],
+   [
+    172,
+    -33,
+    217,
+    "calcite"
+   ],
+   [
+    172,
+    -32,
+    217,
+    "amethyst_block"
+   ],
+   [
+    172,
+    -31,
+    217,
+    "amethyst_block"
+   ],
+   [
+    173,
+    -32,
+    217,
+    "amethyst_block"
+   ],
+   [
+    173,
+    -31,
+    217,
+    "amethyst_block"
+   ],
+   [
+    173,
+    -30,
+    217,
+    "amethyst_block"
+   ],
+   [
+    175,
+    -29,
+    217,
+    "amethyst_block"
+   ],
+   [
+    175,
+    -28,
+    217,
+    "calcite"
+   ],
+   [
+    176,
+    -29,
+    217,
+    "calcite"
+   ],
+   [
+    176,
+    -28,
+    217,
+    "calcite"
+   ],
+   [
+    176,
+    -27,
+    217,
+    "calcite"
+   ],
+   [
+    177,
+    -28,
+    217,
+    "calcite"
+   ],
+   [
+    177,
+    -27,
+    217,
+    "smooth_basalt"
+   ],
+   [
+    177,
+    -26,
+    217,
+    "deepslate[axis=y]"
+   ],
+   [
+    178,
+    -27,
+    217,
+    "smooth_basalt"
+   ],
+   [
+    178,
+    -26,
+    217,
+    "deepslate[axis=y]"
+   ],
+   [
+    178,
+    -25,
+    217,
+    "deepslate[axis=y]"
+   ],
+   [
+    179,
+    -26,
+    217,
+    "deepslate[axis=y]"
+   ],
+   [
+    179,
+    -25,
+    217,
+    "deepslate[axis=y]"
+   ],
+   [
+    179,
+    -24,
+    217,
+    "deepslate[axis=y]"
+   ],
+   [
+    180,
+    -22,
+    215,
+    "deepslate[axis=y]"
+   ],
+   [
+    180,
+    -24,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    180,
+    -23,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    180,
+    -22,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    180,
+    -21,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    180,
+    -20,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    180,
+    -19,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    180,
+    -18,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    180,
+    -25,
+    217,
+    "deepslate[axis=y]"
+   ],
+   [
+    180,
+    -24,
+    217,
+    "deepslate[axis=y]"
+   ],
+   [
+    180,
+    -23,
+    217,
+    "deepslate[axis=y]"
+   ],
+   [
+    181,
+    -19,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    181,
+    -18,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    181,
+    -17,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    182,
+    -18,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    182,
+    -17,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    182,
+    -16,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    183,
+    -15,
+    215,
+    "deepslate[axis=y]"
+   ],
+   [
+    183,
+    -17,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    183,
+    -16,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    183,
+    -15,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    183,
+    -14,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    183,
+    -13,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    183,
+    -12,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    183,
+    -11,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    183,
+    -9,
+    216,
+    "gravel"
+   ],
+   [
+    183,
+    -8,
+    216,
+    "gravel"
+   ],
+   [
+    184,
+    -16,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    184,
+    -16,
+    217,
+    "glow_lichen[down=false,east=false,north=true,south=false,up=false,waterlogged=false,west=false]"
+   ]
+  ],
+  "actor": {
+   "pos": [
+    171.7,
+    -34.25,
+    215.4
+   ],
+   "health": 20.0,
+   "food": 18,
+   "items": [
+    {
+     "slot": "0",
+     "id": "diamond_pickaxe",
+     "count": 1
+    },
+    {
+     "slot": "1",
+     "id": "iron_pickaxe",
+     "count": 1,
+     "damage": 6
+    },
+    {
+     "slot": "2",
+     "id": "raw_iron",
+     "count": 10
+    },
+    {
+     "slot": "3",
+     "id": "stone_axe",
+     "count": 1,
+     "damage": 12
+    },
+    {
+     "slot": "5",
+     "id": "stone_pickaxe",
+     "count": 1,
+     "damage": 88
+    },
+    {
+     "slot": "6",
+     "id": "cobblestone",
+     "count": 59
+    },
+    {
+     "slot": "7",
+     "id": "clay_ball",
+     "count": 8
+    },
+    {
+     "slot": "8",
+     "id": "andesite",
+     "count": 3
+    },
+    {
+     "slot": "9",
+     "id": "stick",
+     "count": 2
+    },
+    {
+     "slot": "10",
+     "id": "dirt",
+     "count": 12
+    },
+    {
+     "slot": "11",
+     "id": "purple_bed",
+     "count": 1
+    },
+    {
+     "slot": "12",
+     "id": "wooden_axe",
+     "count": 1
+    },
+    {
+     "slot": "13",
+     "id": "raw_copper",
+     "count": 3
+    },
+    {
+     "slot": "14",
+     "id": "granite",
+     "count": 14
+    },
+    {
+     "slot": "15",
+     "id": "wooden_pickaxe",
+     "count": 1,
+     "damage": 13
+    },
+    {
+     "slot": "16",
+     "id": "cobbled_deepslate",
+     "count": 35
+    },
+    {
+     "slot": "17",
+     "id": "diorite",
+     "count": 20
+    },
+    {
+     "slot": "18",
+     "id": "bucket",
+     "count": 1
+    },
+    {
+     "slot": "19",
+     "id": "string",
+     "count": 1
+    },
+    {
+     "slot": "20",
+     "id": "purple_bed",
+     "count": 1
+    },
+    {
+     "slot": "21",
+     "id": "smooth_basalt",
+     "count": 5
+    },
+    {
+     "slot": "22",
+     "id": "calcite",
+     "count": 14
+    },
+    {
+     "slot": "23",
+     "id": "oak_planks",
+     "count": 4
+    },
+    {
+     "slot": "24",
+     "id": "rail",
+     "count": 3
+    },
+    {
+     "slot": "25",
+     "id": "stone_pickaxe",
+     "count": 1,
+     "damage": 129
+    },
+    {
+     "slot": "armor.head",
+     "id": "iron_helmet",
+     "count": 1,
+     "damage": 1
+    },
+    {
+     "slot": "armor.chest",
+     "id": "iron_chestplate",
+     "count": 1,
+     "damage": 1
+    },
+    {
+     "slot": "weapon.offhand",
+     "id": "shield",
+     "count": 1
+    }
+   ],
+   "sampleAt": 1513.8
+  },
+  "time": 6000,
+  "difficulty": "normal",
+  "acts": [
+   {
+    "label": "pillarUp1",
+    "arguments": {
+     "hands": [
+      {
+       "do": "pillarUp",
+       "n": 1,
+       "block": "cobblestone"
+      }
+     ],
+     "why": "replay: the climb of go, alone"
+    },
+    "seconds": 20,
+    "expect": {
+     "line": "1段目が積めなかった: 置ける高さ（足が y=-32.95 以上、上向きの速さ 0.14 以下）に跳びの最高 y=-33.00 で届かず",
+     "ms": null
+    }
+   },
+   {
+    "label": "q139",
+    "arguments": {
+     "hands": [
+      {
+       "do": "go",
+       "maxDig": 40,
+       "maxPlace": 20,
+       "maxDrop": 3,
+       "seconds": 60,
+       "canDig": [
+        "stone",
+        "deepslate",
+        "andesite",
+        "diorite",
+        "granite",
+        "calcite"
+       ],
+       "canPlace": [
+        "cobblestone"
+       ],
+       "to": {
+        "x": 171,
+        "y": -18,
+        "z": 215
+       }
+      }
+     ],
+     "why": "[p6.3] 上へ掘り進む",
+     "stopIf": {
+      "hostileWithin": 5,
+      "hpBelow": 14
+     }
+    },
+    "seconds": 67,
+    "startedAt": 1518.5,
+    "expect": {
+     "line": "go 止まった stuck: 1段目が積めなかった: 置ける高さ（足が y=-32.95 以上、上向きの速さ 0.14 以下）に跳びの最高 y=-33.00 で届かず、置く処理に入れなかった（足元 (171,-34,215) は今 (171,-34,215) 道 8 歩・掘 0・置 0・引き直し 1 回",
+     "ms": 11612,
+     "outcome": "failed",
+     "failureType": "stuck"
+    },
+    "replaceActor": true
+   }
+  ],
+  "watch": [
+   [
+    171,
+    -35,
+    215
+   ],
+   [
+    171,
+    -18,
+    215
+   ]
+  ],
+  "groundCheck": 5152,
+  "groundMarks": 11
+ },
+ {
+  "name": "c1472x",
+  "title": "+1,472 晶洞の底から地上へ go（見本の位置そのまま：(171.497,-34.0,216.785)）",
+  "forceload": [
+   142,
+   180,
+   200,
+   242
+  ],
+  "restore": [
+   [
+    158,
+    -21,
+    202,
+    "deepslate[axis=y]"
+   ],
+   [
+    161,
+    -23,
+    200,
+    "deepslate[axis=y]"
+   ],
+   [
+    167,
+    -29,
+    202,
+    "deepslate[axis=y]"
+   ],
+   [
+    167,
+    -28,
+    202,
+    "deepslate[axis=y]"
+   ],
+   [
+    167,
+    -27,
+    202,
+    "deepslate[axis=y]"
+   ],
+   [
+    167,
+    -28,
+    203,
+    "deepslate[axis=y]"
+   ],
+   [
+    171,
+    -34,
+    215,
+    "air"
+   ],
+   [
+    172,
+    -33,
+    217,
+    "calcite"
+   ],
+   [
+    172,
+    -32,
+    217,
+    "amethyst_block"
+   ],
+   [
+    172,
+    -31,
+    217,
+    "amethyst_block"
+   ],
+   [
+    173,
+    -32,
+    217,
+    "amethyst_block"
+   ],
+   [
+    173,
+    -31,
+    217,
+    "amethyst_block"
+   ],
+   [
+    173,
+    -30,
+    217,
+    "amethyst_block"
+   ],
+   [
+    175,
+    -29,
+    217,
+    "amethyst_block"
+   ],
+   [
+    175,
+    -28,
+    217,
+    "calcite"
+   ],
+   [
+    176,
+    -29,
+    217,
+    "calcite"
+   ],
+   [
+    176,
+    -28,
+    217,
+    "calcite"
+   ],
+   [
+    176,
+    -27,
+    217,
+    "calcite"
+   ],
+   [
+    177,
+    -28,
+    217,
+    "calcite"
+   ],
+   [
+    177,
+    -27,
+    217,
+    "smooth_basalt"
+   ],
+   [
+    177,
+    -26,
+    217,
+    "deepslate[axis=y]"
+   ],
+   [
+    178,
+    -27,
+    217,
+    "smooth_basalt"
+   ],
+   [
+    178,
+    -26,
+    217,
+    "deepslate[axis=y]"
+   ],
+   [
+    178,
+    -25,
+    217,
+    "deepslate[axis=y]"
+   ],
+   [
+    179,
+    -26,
+    217,
+    "deepslate[axis=y]"
+   ],
+   [
+    179,
+    -25,
+    217,
+    "deepslate[axis=y]"
+   ],
+   [
+    179,
+    -24,
+    217,
+    "deepslate[axis=y]"
+   ],
+   [
+    180,
+    -22,
+    215,
+    "deepslate[axis=y]"
+   ],
+   [
+    180,
+    -24,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    180,
+    -23,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    180,
+    -22,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    180,
+    -21,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    180,
+    -20,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    180,
+    -19,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    180,
+    -18,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    180,
+    -25,
+    217,
+    "deepslate[axis=y]"
+   ],
+   [
+    180,
+    -24,
+    217,
+    "deepslate[axis=y]"
+   ],
+   [
+    180,
+    -23,
+    217,
+    "deepslate[axis=y]"
+   ],
+   [
+    181,
+    -19,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    181,
+    -18,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    181,
+    -17,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    182,
+    -18,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    182,
+    -17,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    182,
+    -16,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    183,
+    -15,
+    215,
+    "deepslate[axis=y]"
+   ],
+   [
+    183,
+    -17,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    183,
+    -16,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    183,
+    -15,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    183,
+    -14,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    183,
+    -13,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    183,
+    -12,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    183,
+    -11,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    183,
+    -9,
+    216,
+    "gravel"
+   ],
+   [
+    183,
+    -8,
+    216,
+    "gravel"
+   ],
+   [
+    184,
+    -16,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    184,
+    -16,
+    217,
+    "glow_lichen[down=false,east=false,north=true,south=false,up=false,waterlogged=false,west=false]"
+   ]
+  ],
+  "actor": {
+   "pos": [
+    171.4973306498899,
+    -34.0,
+    216.78511903620344
+   ],
+   "health": 20.0,
+   "food": 19,
+   "items": [
+    {
+     "slot": "0",
+     "id": "diamond_pickaxe",
+     "count": 1
+    },
+    {
+     "slot": "1",
+     "id": "iron_pickaxe",
+     "count": 1,
+     "damage": 6
+    },
+    {
+     "slot": "2",
+     "id": "raw_iron",
+     "count": 10
+    },
+    {
+     "slot": "3",
+     "id": "stone_axe",
+     "count": 1,
+     "damage": 12
+    },
+    {
+     "slot": "5",
+     "id": "stone_pickaxe",
+     "count": 1,
+     "damage": 88
+    },
+    {
+     "slot": "6",
+     "id": "cobblestone",
+     "count": 59
+    },
+    {
+     "slot": "7",
+     "id": "clay_ball",
+     "count": 8
+    },
+    {
+     "slot": "8",
+     "id": "andesite",
+     "count": 3
+    },
+    {
+     "slot": "9",
+     "id": "stick",
+     "count": 2
+    },
+    {
+     "slot": "10",
+     "id": "dirt",
+     "count": 12
+    },
+    {
+     "slot": "11",
+     "id": "purple_bed",
+     "count": 1
+    },
+    {
+     "slot": "12",
+     "id": "wooden_axe",
+     "count": 1
+    },
+    {
+     "slot": "13",
+     "id": "raw_copper",
+     "count": 3
+    },
+    {
+     "slot": "14",
+     "id": "granite",
+     "count": 14
+    },
+    {
+     "slot": "15",
+     "id": "wooden_pickaxe",
+     "count": 1,
+     "damage": 13
+    },
+    {
+     "slot": "16",
+     "id": "cobbled_deepslate",
+     "count": 35
+    },
+    {
+     "slot": "17",
+     "id": "diorite",
+     "count": 20
+    },
+    {
+     "slot": "18",
+     "id": "bucket",
+     "count": 1
+    },
+    {
+     "slot": "19",
+     "id": "string",
+     "count": 1
+    },
+    {
+     "slot": "20",
+     "id": "purple_bed",
+     "count": 1
+    },
+    {
+     "slot": "21",
+     "id": "smooth_basalt",
+     "count": 5
+    },
+    {
+     "slot": "22",
+     "id": "calcite",
+     "count": 14
+    },
+    {
+     "slot": "23",
+     "id": "oak_planks",
+     "count": 4
+    },
+    {
+     "slot": "24",
+     "id": "rail",
+     "count": 3
+    },
+    {
+     "slot": "25",
+     "id": "stone_pickaxe",
+     "count": 1,
+     "damage": 129
+    },
+    {
+     "slot": "armor.head",
+     "id": "iron_helmet",
+     "count": 1,
+     "damage": 1
+    },
+    {
+     "slot": "armor.chest",
+     "id": "iron_chestplate",
+     "count": 1,
+     "damage": 1
+    },
+    {
+     "slot": "weapon.offhand",
+     "id": "shield",
+     "count": 1
+    }
+   ],
+   "sampleAt": 1463.9
+  },
+  "time": 6000,
+  "difficulty": "normal",
+  "acts": [
+   {
+    "label": "q137",
+    "arguments": {
+     "hands": [
+      {
+       "do": "go",
+       "maxDig": 200,
+       "maxPlace": 40,
+       "maxDrop": 3,
+       "range": 4,
+       "seconds": 120,
+       "canDig": [
+        "stone",
+        "dirt",
+        "deepslate",
+        "andesite",
+        "diorite",
+        "granite",
+        "gravel",
+        "calcite"
+       ],
+       "canPlace": [
+        "cobblestone"
+       ],
+       "to": {
+        "x": 167,
+        "y": 66,
+        "z": 200
+       }
+      }
+     ],
+     "why": "[p6.3] 地上へ上り木と食料を探す",
+     "stopIf": {
+      "hostileWithin": 4,
+      "hpBelow": 14
+     }
+    },
+    "seconds": 127,
+    "startedAt": 1472.0,
+    "expect": {
+     "line": "go 止まった stuck: 1段目が積めなかった: 置ける高さ（足が y=-32.95 以上、上向きの速さ 0.14 以下）に跳びの最高 y=-33.00 で届かず、置く処理に入れなかった（足元 (171,-34,215) は今 (171,-34,215) 道 27 歩・掘 0・置 0・引き直し 7 回",
+     "ms": 41829,
+     "outcome": "failed",
+     "failureType": "stuck"
+    }
+   }
+  ],
+  "watch": [
+   [
+    171,
+    -35,
+    216
+   ],
+   [
+    167,
+    66,
+    200
+   ]
+  ],
+  "groundCheck": 5152,
+  "groundMarks": 11
+ }
+]
