@@ -21,6 +21,8 @@ export function stepLabel(step: StepLike): string {
     case 'attack': case 'shoot': return `${step.do} ${step.target ?? at}`;
     case 'wait': return `wait ${step.seconds ?? 1}秒`;
     case 'pillarUp': return `pillarUp ${step.n ?? 1}段 ${step.block ?? ''}`.trim();
+    case 'obsidian': return `obsidian ${step.count ?? 1}個 ${at}`.trim();
+    case 'portal': return `portal ${at} ${(step as { axis?: string }).axis ?? ''}`.trim();
     default: return `${step.do ?? '?'}${step.item ? ` ${step.item}` : ''}${at ? ` ${at}` : ''}`;
   }
 }
