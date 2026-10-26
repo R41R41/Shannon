@@ -24,7 +24,7 @@ const MAX_SECONDS = 30;
 const NO_GAIN_MS = 5000;
 
 /** The time a swing needs to be at full strength, by what is held (the game's attack speed). */
-function cooldownMs(held: string | undefined): number {
+export function cooldownMs(held: string | undefined): number {
   if (!held) return 250;
   if (held.endsWith('_sword')) return 625;
   if (held.endsWith('_axe')) return held.startsWith('wooden_') || held.startsWith('stone_') ? 1250 : held.startsWith('iron_') ? 1110 : 1000;

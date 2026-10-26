@@ -31,7 +31,8 @@ describe('the LLM-centric body', () => {
       const act = on.definitions.find(skill => skill.name === 'act')!;
       expect(JSON.stringify(act.inputSchema).length).toBeLessThan(16_000);
       expect((act.inputSchema as any).properties.hands.maxItems).toBe(12);
-      expect(Object.keys((act.inputSchema as any).properties.hands.items.properties).length).toBeLessThanOrEqual(32);
+      // Run 39: the hands that take a range (fight, go, mine ...) add fields; the cap of 32 predates them (the head's own hand schema has 43 fields). The size above is the other bound.
+      expect(Object.keys((act.inputSchema as any).properties.hands.items.properties).length).toBeLessThanOrEqual(48);
       // The planner's call (the head's ActInput) reaches the skill as parsed hands.
       const resolved = on.resolve('act', { hands: [{ do: 'dig', at: [{ x: 1, y: 2, z: 3 }, { front: 1 }], exposeOk: ['blaze'] }], stopIf: { hpBelow: 8 }, why: '棒を取る' });
       expect(resolved.args[0]).toEqual([{ do: 'dig', at: [{ x: 1, y: 2, z: 3 }, { front: 1 }], exposeOk: ['blaze'] }]);

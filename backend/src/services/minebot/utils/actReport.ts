@@ -80,6 +80,8 @@ const CLOSED: Record<string, string> = {
   inventory_full: '満杯', threat_exposed: '見られる', protected: '守られた物', lava_behind: '溶岩が流れ込む', footing: '足場が無い',
   timeout: '時間切れ', time_up: '時間切れ', reflex: '反射', interrupted_by_reflex: '反射', stop_if: 'stopIf',
   no_progress: '進まない', damage_taken: '被弾', fell: '落下',
+  // run 39 (fight): the codes of a hand that names its own (the line's text starts with it). `lost`, `retreat` and `no_weapon` have no closed word: 無い.
+  unreachable: '届かない', limit_time: '時間切れ',
 };
 export function closedWord(reason: string | undefined): string {
   if (!reason) return '無い';

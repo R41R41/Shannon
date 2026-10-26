@@ -18,6 +18,7 @@ export function stepLabel(step: StepLike): string {
     case 'use': return `use ${step.item ?? '手の物'}${at ? ` ${at}` : ''}${step.target !== undefined ? ` → ${step.target}` : ''}`;
     case 'craft': return `craft ${step.item}×${step.count ?? 1}`;
     case 'attack': case 'shoot': return `${step.do} ${step.target ?? at}`;
+    case 'fight': return `fight ${step.target ?? ''}${(step as { stance?: string }).stance === 'flee' ? ' 逃げ' : ''}`.trim();
     case 'wait': return `wait ${step.seconds ?? 1}秒`;
     case 'pillarUp': return `pillarUp ${step.n ?? 1}段 ${step.block ?? ''}`.trim();
     default: return `${step.do ?? '?'}${step.item ? ` ${step.item}` : ''}${at ? ` ${at}` : ''}`;
