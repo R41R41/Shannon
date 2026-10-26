@@ -258,9 +258,10 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     const room = 160 - head.length - fixed.length;
     const withHint = hint ? `。${hint}` : '';
     const text = why.length + withHint.length <= room ? `${head}${why}${fixed}${withHint}` : `${head}${clip(why, Math.max(24, room))}${fixed}`;
-    return stopped(bot, code, text, at, start);
+    return { ...stopped(bot, code, text, at, start), data: { work: { dug: state.dug, placed: state.placed, steps: state.steps, redraws: state.redraws } } };
   };
-  const arrived = (): StepOutcome => ({ ok: true, text: `go 着いた ${tail()}`, at: feetCell(bot) ?? start });
+  const arrived = (): StepOutcome => ({ ok: true, text: `go 着いた ${tail()}`, at: feetCell(bot) ?? start,
+    data: { work: { dug: state.dug, placed: state.placed, steps: state.steps, redraws: state.redraws } } });
 
   // ---- the places: the ones nobody may stand in are dropped; none left is `unsafe` ----
   const standable = cells.filter(cell => !hazardAtFeet(bot, cell.x, cell.y, cell.z));

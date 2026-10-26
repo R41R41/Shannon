@@ -1,24 +1,20 @@
-import pathfinder from 'mineflayer-pathfinder';
 import { Vec3 } from 'vec3';
-import { buildMovements } from '../setMovements.js';
-import { roadDiggable } from '../digWords.js';
 import { canHarvest } from '../toolChoice.js';
 import { feetCell, type Cell } from '../localMap.js';
 import { blockAt, cellNow, cellText, DIG_REACH, eyeDistance, findItem, freeSlots, letGo, placeText, stopped, wait,
   type StepContext, type StepOutcome } from './common.js';
 import { dig } from './dig.js';
 import { pickup } from './pickup.js';
-import { canWorkOn, getNear } from './getNear.js';
-import { goWith, type WayNotes } from './walk.js';
-
-const { goals } = pathfinder;
+import { canWorkOn } from './getNear.js';
+import { go } from './go.js';
 
 /**
  * mine: a vein, cell by cell (hands-contract.md 3). The planner names the block (`iron_ore`; `deepslate_iron_ore` is another kind) and
  * the cells it starts from (`at`, one to four of that block), and how many to take. The body follows the cells of that same block that
  * touch the ones it has (a face, an edge or a corner), nearest first, digs each with the quickest tool that makes it drop, and picks
  * what falls. It looks for no other ore and no other block: the vein is what the planner's cells are joined to. A cell it cannot stand
- * near is gone to by a way that digs only what `canDig` names, at most `maxDig` blocks (without them it digs no way at all). It makes
+ * near is gone to by the hand `go` (a way that digs only what `canDig` names, at most `maxDig` blocks; without them it digs no way at all), at most
+ * `APPROACH_SECONDS` a cell, and the hand gives up when `UNREACHABLE_CELLS` cells have not been reached (run 40: 8 stops of 5 to 51 s, 194 s in all). It makes
  * no tunnel and no stair (those are repeat and go), and never digs a cell with water or lava beside it.
  */
 export interface MineArgs {
@@ -32,6 +28,9 @@ const DEFAULT_SECONDS = 60;
 const DEFAULT_MAX_DIG = 16;
 /** A dig that fails this many times in a row stops the hand (something is wrong that another cell will not mend). */
 const FAILS_IN_A_ROW = 3;
+/** The longest the way to one cell may take, and how many cells that cannot be reached end the hand (the cells behind the same rock will not be reached either). */
+const APPROACH_SECONDS = 15;
+const UNREACHABLE_CELLS = 2;
 const PICK_EVERY = 3;
 const NEIGHBOURS: Array<[number, number, number]> = [];
 for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) if (dx || dy || dz) NEIGHBOURS.push([dx, dy, dz]);
@@ -100,7 +99,6 @@ export async function mine(ctx0: StepContext, args: MineArgs): Promise<StepOutco
   const open = new Map<string, Cell>(starts.map(cell => [keyOf(cell), cell]));
   const attempts = new Map<string, number>();
   let sincePick = 0, failsInARow = 0, missedNote = '', capped = false;
-  const notes: WayNotes = { opened: [], leaves: 0 };
 
   /** Picks up what the dug cells dropped. 'full' when the pack has no room for it. */
   const collectDrops = async (): Promise<'ok' | 'full'> => {
@@ -156,6 +154,7 @@ export async function mine(ctx0: StepContext, args: MineArgs): Promise<StepOutco
       if (gone) {
         if (gone.fatal) return problem(gone.reason, gone.text, cell);
         skipped.push({ cell, kind: 'unreachable', why: gone.text });
+        if (skipped.filter(entry => entry.kind === 'unreachable').length >= UNREACHABLE_CELLS) break;
         continue;
       }
     }
@@ -213,38 +212,27 @@ export async function mine(ctx0: StepContext, args: MineArgs): Promise<StepOutco
   // The vein ran out before the count: that is an end, not a failure.
   return { ok: true, at: last, text: `mine 済 ${block} ${result.dug} 個（${got ? `${got} を得た` : '拾っていない'}）・たどった ${result.visited} マス・${capped ? `${MAX_TRACE} マスたどって止めた（つながりがまだ続く）` : 'つながりが尽きた'}（ほしい ${count} 個に足りない）${road}${lost}${aside}` };
 
-  /** Gets the body to where it can dig the cell: by the way with no digging, else (with canDig) one that digs only what is named, to the budget. */
+  /**
+   * Gets the body to where it can dig the cell: the hand `go` to a cell beside it (any of its six faces), digging only what `canDig` names and no more than what is left
+   * of `maxDig`; without `canDig` it digs nothing. The way is drawn first and not walked half, and a way that makes no headway is given up after a few redraws
+   * (go's own rules), so a cell that cannot be reached is told at once.
+   */
   async function approach(cell: Cell): Promise<{ fatal: boolean; reason: string; text: string } | null> {
-    const navigator = bot.pathfinder as { movements?: unknown; setMovements(movements: unknown): void } | undefined;
-    if (!navigator) return { fatal: false, reason: 'unreachable', text: `${cellText(cell)} へ行く経路探索が無い体` };
-    // The way that digs stands the body near the cell (the look-at goal needs the sight a wall of stone still takes away).
-    const goal = new goals.GoalNear(cell.x, cell.y, cell.z, 1);
-    const previous = navigator.movements;
-    const left = () => Math.max(1000, Math.min(20_000, ctx.deadline - Date.now()));
-    try {
-      const first = await getNear(ctx, cell, notes);
-      if (first.near) return null;
-      if (!roadWords.length || roadBudget <= 0) return { fatal: false, reason: 'unreachable', text: `${placeText(bot, cell)} へ掘らずに行く道が無い${first.timedOut ? '（時間切れ）' : ''}` };
-      if (Date.now() >= ctx.deadline) return { fatal: true, reason: 'limit_time', text: `${seconds} 秒の上限に着いた` };
-      // The way that digs: only the blocks canDig names, no more than the budget (the planner's price over the budget is a wall).
-      const roadMovements = buildMovements(bot, false, true, true, false, true, true, 2, false, true, 3, 10, false);
-      const cantBreak = new Set<number>();
-      for (const [name, entry] of Object.entries(bot.registry.blocksByName as Record<string, { id: number }>)) if (!roadDiggable(name, roadWords)) cantBreak.add(entry.id);
-      roadMovements.blocksCantBreak = cantBreak;
-      let dugOnRoad = 0, overBudget = false;
-      (roadMovements as any).exclusionAreasBreak.push(() => (dugOnRoad >= roadBudget ? 1000 : 0));
-      const onDug = () => {
-        dugOnRoad++; result.road++;
-        if (dugOnRoad >= roadBudget && !reachable(cell)) { overBudget = true; letGo(bot); }
-      };
-      navigator.setMovements(roadMovements);
-      bot.on?.('diggingCompleted', onDug);
-      try { await goWith(ctx, goal, left(), notes); } finally { bot.removeListener?.('diggingCompleted', onDug); }
-      await wait(ctx, 100);
-      if (reachable(cell)) return null;
-      if (overBudget) return { fatal: true, reason: 'limit_dig', text: `道を掘る上限 ${roadBudget} マスに着いた（${placeText(bot, cell)} にまだ届かない）` };
-      return { fatal: false, reason: 'unreachable', text: `${placeText(bot, cell)} へ許された物（${roadWords.join('・')}）だけを掘っても届く道が無い` };
-    } finally { try { if (previous) navigator.setMovements(previous); } catch { /* kept */ } }
+    if (Date.now() >= ctx.deadline) return { fatal: true, reason: 'limit_time', text: `${seconds} 秒の上限に着いた` };
+    const beside = FACES.map(([dx, dy, dz]) => ({ x: cell.x + dx, y: cell.y + dy, z: cell.z + dz }))
+      .filter(at => { const name = blockAt(bot, at)?.name; return name !== undefined && !isLiquid(name); });
+    if (!beside.length) return { fatal: false, reason: 'unreachable', text: `${placeText(bot, cell)} のまわりに立てる所が無い` };
+    const roadLeft = roadWords.length ? Math.max(0, roadBudget - result.road) : 0;
+    const gone = await go(ctx, { goals: beside, range: 0, canDig: roadLeft > 0 ? roadWords : undefined, maxDig: roadLeft, canPlace: undefined,
+      seconds: Math.max(5, Math.min(APPROACH_SECONDS, (ctx.deadline - Date.now()) / 1000)) });
+    result.road += Number(gone.data?.work?.dug ?? 0);
+    await wait(ctx, 100);
+    if (reachable(cell)) return null;
+    const why = gone.ok ? `${placeText(bot, cell)} の隣まで行ったが、手が届かない・見えない` : gone.text.replace(/^go 止まった [a-z_]+: /u, '');
+    if (!gone.ok && gone.reason === 'limit_dig') return { fatal: true, reason: 'limit_dig', text: `道を掘る上限 ${roadBudget} マスに着いた（${placeText(bot, cell)} にまだ届かない）` };
+    if (!gone.ok && gone.reason === 'limit_time') return { fatal: true, reason: 'limit_time', text: `${seconds} 秒の上限に着いた` };
+    const allowed = roadLeft > 0 ? `許された物（${roadWords.join('・')}）だけを掘っても` : '掘らずに（canDig が無い）';
+    return { fatal: false, reason: 'unreachable', text: `${placeText(bot, cell)} へ${allowed}届く道が無い（${why.slice(0, 70)}）` };
   }
 }
 

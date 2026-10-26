@@ -44,6 +44,8 @@ export interface StepOutcome {
     arrowsLeft?: number;
     /** A walk that entered a portal and ended in the other dimension (the act ends there). */
     crossedDimension?: true;
+    /** A go: what it dug and laid and how far it walked (the hands that use go for the way, `mine`, count on it). */
+    work?: { dug: number; placed: number; steps: number; redraws: number };
   };
 }
 
