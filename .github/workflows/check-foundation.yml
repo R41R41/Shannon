@@ -1,8 +1,11 @@
 name: Check foundation boundaries
+# The full body suite. Since 2026-10-27 production takes main by `git pull` (Syzygy tools/shannon-release): this run is the
+# after-the-push check of every commit, and it does not hold a deploy (the deploy is held by the PC's local-gate.sh and the VM's
+# gates). Every check runs even when an earlier one failed, so one run reports them all.
 on:
   pull_request:
   push:
-    branches: ['codex/**']
+    branches: ['main', 'codex/**']
 permissions:
   contents: read
 jobs:
@@ -20,10 +23,15 @@ jobs:
       - run: npm ci --ignore-scripts --legacy-peer-deps --no-audit --no-fund
       - run: npm run build -w common
       - run: npm run check:backend-strict -w backend
+        if: ${{ !cancelled() }}
       - run: npm run check:dead-code
+        if: ${{ !cancelled() }}
       - run: npm run test:offline -w backend
+        if: ${{ !cancelled() }}
         env:
           OPENAI_API_KEY: offline-test-not-used
           MONGODB_URI: mongodb://127.0.0.1:27017/shannon-offline-not-used
       - run: npm run test:auth -w frontend
+        if: ${{ !cancelled() }}
       - run: npm run build:dev -w frontend
+        if: ${{ !cancelled() }}
