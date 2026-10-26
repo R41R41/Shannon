@@ -74,7 +74,7 @@ export type VoiceTurnLine =
   | { type: 'error'; status: number; error: string };
 
 export type VoiceUnavailableReason =
-  | 'not_bound' | 'timeout' | 'http' | 'network' | 'protocol' | 'aborted';
+  | 'not_bound' | 'timeout' | 'http' | 'network' | 'protocol' | 'aborted' | 'groq';
 
 export type VoiceUnavailable = { status: 'unavailable'; reason: VoiceUnavailableReason; httpStatus?: number };
 
@@ -443,6 +443,9 @@ export function createShannonCoreVoiceClient(
           }
           case 'empty': case 'hallucination': case 'limited': case 'error':
             return { status, sttMs };
+          // Groq's free tier or limit is used up, or it does not answer (the head pauses it for `retryAfterSeconds`).
+          case 'unavailable':
+            return { status: 'unavailable', reason: 'groq', httpStatus: 200 };
           default:
             return { status: 'unavailable', reason: 'protocol', httpStatus: 200 };
         }
