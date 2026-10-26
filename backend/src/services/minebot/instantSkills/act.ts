@@ -10,7 +10,7 @@ import { blockAt, cellNow, freeSlots, inventoryCount, resolvePosition, StepStopp
 import { dimensionOf, portalWalks, walk } from '../utils/primitives/walk.js';
 import { dig } from '../utils/primitives/dig.js';
 import { place } from '../utils/primitives/place.js';
-import { use } from '../utils/primitives/use.js';
+import { findEntity, use } from '../utils/primitives/use.js';
 import { craft } from '../utils/primitives/craft.js';
 import { furnace } from '../utils/primitives/furnace.js';
 import { chest } from '../utils/primitives/chest.js';
@@ -22,6 +22,8 @@ import { pillarUp } from '../utils/primitives/pillarUp.js';
 import { go, goProblem } from '../utils/primitives/go.js';
 import { obsidian, obsidianProblem } from '../utils/primitives/obsidian.js';
 import { portal, portalProblem } from '../utils/primitives/portal.js';
+import { fight, HandCut } from '../utils/primitives/fight.js';
+import { LINE_MAX, LINE_MAX_WITH_CAUSE } from '../utils/actReport.js';
 import { itemFoodPoints } from '../utils/foodPoints.js';
 import { stepLabel } from '../utils/actLabel.js';
 import { ACT_CONDITION, conditionHolds, conditionMetText, type ActCondition } from '../utils/actConditions.js';
@@ -47,7 +49,7 @@ const Pos = z.object({ x: z.number().optional(), y: z.number().optional(), z: z.
   front: z.number().optional(), right: z.number().optional(), up: z.number().optional() }).strict();
 const ItemCount = z.object({ item: z.string(), count: z.number().optional() }).strict();
 export const HAND_KINDS = ['walk', 'go', 'dig', 'place', 'pillarUp', 'use', 'look', 'jump', 'sneak', 'equip', 'craft', 'furnace', 'chest',
-  'attack', 'shoot', 'eat', 'drop', 'pickup', 'wait', 'obsidian', 'portal'] as const;
+  'attack', 'shoot', 'eat', 'drop', 'pickup', 'wait', 'obsidian', 'portal', 'fight'] as const;
 const Face = z.enum(['up', 'down', 'north', 'south', 'east', 'west']);
 /** One hand: every field of the head's ActHand (the body takes whatever the head's schema takes), and a few more it can read. */
 const Hand = z.object({
@@ -90,6 +92,8 @@ const Hand = z.object({
   takeOk: z.boolean().optional(),
   rel: z.boolean().optional(),
   note: z.string().optional(),
+  stance: z.enum(['fight', 'flee']).optional().describe('fight: 戦う（既定）、flee: 相手から range m 以上離れるまで逃げる'),
+  retreatHp: z.number().optional().describe('fight: この体力未満で戦いをやめて、食べるか退く（1〜19の整数）'),
   onFail: z.enum(['continue', 'stop']).optional().describe('この手が自分で失敗したとき: continue=失敗と記録して次の手へ、stop=ここで止める（省略: equip・eat・look・sneak・jump は continue、他は stop）。反射・stopIf・取り消し・時間切れ・満杯は常に止める'),
 }).strict();
 export const ACT_HANDS = z.array(Hand).min(1).max(12);
@@ -126,10 +130,11 @@ const reflexName = (reason: unknown) => { const text = String(reason ?? ''); ret
 /** The body's own words for the tool (the head shows its own definition: minecraftActContract.ts ACT_DESCRIPTION). */
 const DESCRIPTION = '体に小さな手を最大12個まとめて頼む。体は順に動かし、手ごとに思ったとおりか確かめ、外れたら（失敗・反射・stopIf・満杯）そこで止めて、'
   + '手ごとの1行（止まりは閉じた語・場所・そのマスの今の中身）と新しい地図を JSON で返す。体は回り道・置き場所・道具作り・片づけ・夜の睡眠・戦うかどうかを決めない。'
-  + '手: walk / go / dig / place / pillarUp / use / look / jump / sneak / equip / craft / furnace / chest / attack / shoot / eat / drop / pickup / wait / obsidian / portal。'
+  + '手: walk / go / dig / place / pillarUp / use / look / jump / sneak / equip / craft / furnace / chest / attack / shoot / eat / drop / pickup / wait / obsidian / portal / fight。'
   + 'go: 行き先（to か goals）へ体が道を引いて着くまで行く。canDig の物だけ掘り・canPlace の物（持っている物）だけ置き、溶岩・火・マグマ・サボテンは避ける。止まる時は「go 止まった <code>」の行で理由を返す。'
   + 'obsidian: 挙げた溶岩の源（at、8 まで）に水を注いで黒曜石にして掘り、水を汲み戻す（立ち位置・注ぐ所・待ちは体。count・seconds・canPlace・maxPlace）。'
   + 'portal: at（枠の内側の左下）と axis（x か z）の枠 10 個を組み、火打ち金で点け、enter なら入る（足場は canPlace の物）。止まる時は「<手> 止まった <code>」の行で理由を返す。'
+  + 'fight: 挙げた相手 target を戦い（stance=flee なら range m 離れるまで逃げ）、狙い・間合い・盾・クリティカル・低体力で食べる/退くは体がこなす。反射が優先。'
   + '座標は {x,y,z}（rel:true で足からの差）か {front,right,up}（facing の向き）。stopIf: hostileWithin・hpBelow・hungerBelow・blockChanged。';
 
 class Act extends InstantSkill {
@@ -175,6 +180,8 @@ const bad = (text: string): StepOutcome => ({ ok: false, reason: 'invalid_input'
 const targetOf = (value: string | number | undefined) => value === undefined ? undefined : typeof value === 'number' ? value
   : /^#\d+$/u.test(value.trim()) ? Number(value.trim().slice(1)) : value;
 const PILLAR_BLOCKS = ['cobblestone', 'cobbled_deepslate', 'dirt', 'netherrack'];
+/** The fields a fight hand takes (with `do`): the head's rules, minecraftActHandRules.ts. */
+const FIGHT_FIELDS = new Set(['do', 'target', 'stance', 'item', 'retreatHp', 'range', 'seconds', 'rel', 'note', 'onFail']);
 const SLOTS: Record<string, string> = { hand: 'hand', offhand: 'off-hand', 'off-hand': 'off-hand', head: 'head', chest: 'torso', torso: 'torso', legs: 'legs', feet: 'feet' };
 
 async function runHand(ctx: StepContext, hand: ActHand): Promise<StepOutcome> {
@@ -245,6 +252,16 @@ async function runHand(ctx: StepContext, hand: ActHand): Promise<StepOutcome> {
       if (target === undefined) return bad('attack には target（#id か名前）が要る');
       const untilDead = hand.untilDead !== false;
       return attack(ctx, { target, until: untilDead ? 'dead' : hand.seconds ?? 20, maxSeconds: hand.seconds ?? 20 });
+    }
+    case 'fight': {
+      // The hand's own fields and ranges (the head's minecraftActHandRules.ts HAND_FIELDS / KIND_CHECKS for fight).
+      if (target === undefined) return bad('fight には target（#id か名前）が要る');
+      const extra = Object.keys(hand).filter(key => !FIGHT_FIELDS.has(key));
+      if (extra.length) return bad(`${extra.join('・')} は fight では使えない（fight の欄: target・stance・item・retreatHp・range・seconds・rel・note・onFail）`);
+      if (hand.seconds !== undefined && (hand.seconds < 5 || hand.seconds > 60)) return bad('fight の seconds は 5〜60');
+      if (hand.range !== undefined && (hand.range < 0 || hand.range > 16)) return bad('fight の range は 0〜16');
+      if (hand.retreatHp !== undefined && (!Number.isInteger(hand.retreatHp) || hand.retreatHp < 1 || hand.retreatHp > 19)) return bad('fight の retreatHp は 1〜19 の整数');
+      return fight(ctx, { target, stance: hand.stance, item: hand.item, retreatHp: hand.retreatHp, range: hand.range, seconds: hand.seconds });
     }
     case 'shoot': return shoot(ctx, { target, at: one, charge: hand.charge, weapon: hand.item === 'crossbow' ? 'crossbow' : hand.item === 'bow' ? 'bow' : undefined, shots: hand.n });
     case 'eat': {
@@ -436,8 +453,15 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
       host.actHandNow = hand.do;
       fallStops = hand.do === 'go' ? Math.max(4, (hand.maxDrop ?? 3) + 1) : 4;
       const dugBefore = hand.do === 'dig' ? (cellsOf(ctx, hand, hand.at) ?? []).map(cell => ({ cell, name: String(blockAt(bot, cell)?.name ?? '') })) : [];
+      // A fight hand is a fight the planner chose against its target's kind, in either stance: for the length of the hand the kind counts as accepted
+      // (the hurt stop and stopIf's hostileWithin leave it alone), and the blows it cost are not held against the next hand.
+      const fightKind = hand.do === 'fight' && hand.target !== undefined ? String(findEntity(bot, targetOf(hand.target) ?? '', 32)?.name ?? '').toLowerCase() : '';
+      const fightAccepted = fightKind !== '' && !accepted.has(fightKind);
+      if (fightAccepted) accepted.add(fightKind);
+      const endFight = () => { if (fightAccepted) accepted.delete(fightKind); if (hand.do === 'fight') { highWater = Number(bot.health ?? 20); hurtAt = null; } };
       try { outcome = await runHand(ctx, hand); }
       catch (error) {
+        endFight();
         host.actHandNow = undefined;
         dug += dugCountOf(bot, dugBefore);
         if (doneMet) {
@@ -451,7 +475,9 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
         if (error instanceof StepStopped || control.signal.aborted || /Action interrupted|Motor owner expired/u.test(String((error as Error)?.message))) {
           if (!control.signal.aborted && signal?.aborted) onCut();
           const word = closedWord(report.failureType ?? 'reflex');
-          const line = clip(`${word}: ${report.stoppedWhy ?? '中断'}（手の途中）`), where = feetCell(bot) ?? undefined;
+          // A hand that was cut tells what it had done (fight: the blows, the health lost, who held the body).
+          const told = error instanceof HandCut ? `。${error.summary}` : '';
+          const line = clip(`${word}: ${report.stoppedWhy ?? '中断'}（手の途中）${told}`, told ? LINE_MAX_WITH_CAUSE : LINE_MAX), where = feetCell(bot) ?? undefined;
           report.lines.push({ i: index + 1, do: hand.do, status: 'stopped', line, where });
           remember(hand, 'stopped', line, where, base);
           emit(index, 'error', report.stoppedWhy ?? '中断');
@@ -461,6 +487,7 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
         outcome = { ok: false, reason: 'error', text: `思わぬ失敗: ${String((error as Error)?.message ?? error).slice(0, 120)}` };
       }
       // A reflex's note held back while the hand laid blocks stops the act at the next hand's watch.
+      endFight();
       host.actHandNow = undefined;
       dug += dugCountOf(bot, dugBefore);
       if (outcome.data?.eye) report.eye = outcome.data.eye;
