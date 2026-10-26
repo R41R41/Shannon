@@ -17,6 +17,9 @@ import { stepLabel, type StepLike } from '../../utils/actLabel.js';
  * With a plan (design mb-llm-centric 2.7: `BodyTaskContext.plan`) the task tab shows the plan tree nested
  * (`hierarchicalSubTasks` with `children`, as the mod v2 draws it), the node worked on now as `currentSubTaskId`, and the running
  * act's steps as that node's children ("the next moves"). Without one, the commands as a flat list, as before.
+ *
+ * Task queue: a running item shows its hands under the plan node the item is for (`queue.node`), not under whatever the plan's current node
+ * is; the items that wait show under their own nodes as pending. The log line of a `/task` push also says how many items run and wait.
  */
 
 /** A task with no command for this long is no longer shown as the current one (its steps stay on screen). */
@@ -43,7 +46,11 @@ interface Task {
   steps: Step[]; running: Map<string, Step>; counter: number; current: boolean;
   plan?: BodyPlanTree;
   /** The latest act's steps (shown under the plan's current node), and the command it belongs to. */
-  act?: { commandId: string; startedAt: number; steps: ActStep[] };
+  act?: { commandId: string; startedAt: number; steps: ActStep[]; node: string | null };
+  /** The queue items that wait (command id), with the plan node each is for. */
+  waiting: Map<string, { node: string | null; label: string }>;
+  /** A queue item has been seen for this task (the items line of the push log is written only then). */
+  queued: boolean;
 }
 interface LogEntry { timestamp: string; phase: 'tool_call' | 'tool_result' | 'reflection'; level: 'info' | 'success' | 'warning' | 'error'; source: string; content: string }
 export interface TreeNode {
@@ -77,12 +84,13 @@ function actHands(args: unknown): Array<StepLike & { note?: string }> | null {
 }
 
 /** The skill and its arguments in a few words, as a step of the task. */
-export function describeCommand(command: Pick<Command, 'kind' | 'skill' | 'arguments' | 'operation'>): string {
+export function describeCommand(command: Pick<Command, 'kind' | 'skill' | 'arguments' | 'operation'> & { queue?: { item?: string } }): string {
   if (command.kind === 'skill') {
     const handsOf = actHands(command.arguments);
     if (command.skill === 'act' && handsOf) {
       const steps = handsOf;
-      return clip(`act ${steps.length}手: ${steps.slice(0, 3).map(step => stepLabel(step)).join(' / ')}${steps.length > 3 ? ' …' : ''}`);
+      const repeat = Number((command.arguments as { repeat?: unknown } | undefined)?.repeat);
+      return clip(`${command.queue?.item ? `${command.queue.item} ` : ''}act ${steps.length}手${repeat >= 2 ? `×${repeat}回まで` : ''}: ${steps.slice(0, 3).map(step => stepLabel(step)).join(' / ')}${steps.length > 3 ? ' …' : ''}`);
     }
     const args = Object.keys(command.arguments ?? {}).length ? ` ${compact(command.arguments as BodyValue)}` : '';
     return `${command.skill ?? 'skill'}${args}`;
@@ -136,7 +144,9 @@ export function sanitizePlan(raw: unknown): BodyPlanTree | undefined {
  * The plan as the mod's nested tree: roots in order, each node's children under it (4 deep at most; a node deeper or in a loop is
  * left out), the act's steps as children of the current node. Pure, for the bridge and its tests.
  */
-export function planTree(plan: BodyPlanTree, act?: { steps: ActStep[] }): TreeNode[] {
+export function planTree(plan: BodyPlanTree, act?: { steps: ActStep[]; node?: string | null }, waiting: ReadonlyArray<{ node: string | null; label: string }> = []): TreeNode[] {
+  // The running item's hands go under its own node when the plan has it, else under the current one.
+  const shown = act?.node && plan.nodes.some(node => node.id === act.node) ? act.node : plan.current;
   const byParent = new Map<string | null, BodyPlanNode[]>();
   for (const node of plan.nodes) {
     const list = byParent.get(node.parentId) ?? [];
@@ -146,10 +156,13 @@ export function planTree(plan: BodyPlanTree, act?: { steps: ActStep[] }): TreeNo
   const build = (node: BodyPlanNode, depth: number): TreeNode => {
     seen.add(node.id);
     const children = depth + 1 < MAX_PLAN_DEPTH ? (byParent.get(node.id) ?? []).filter(child => !seen.has(child.id)).map(child => build(child, depth + 1)) : [];
-    if (node.id === plan.current && act?.steps.length) {
+    if (node.id === shown && act?.steps.length) {
       children.push(...act.steps.map((step, index) => ({ id: `${node.id}/act-${index + 1}`, goal: clip(`手${index + 1}: ${step.label}`, 100), status: step.status,
         result: step.status === 'completed' ? clip(step.detail, 120) : '', failureReason: step.status === 'error' ? clip(step.detail, 120) : '', depth: depth + 1, children: [] })));
     }
+    const queued = waiting.filter(item => item.node === node.id);
+    children.push(...queued.map((item, index) => ({ id: `${node.id}/wait-${index + 1}`, goal: clip(`待ち: ${item.label}`, 100), status: 'pending' as TreeStatus,
+      result: '', failureReason: '', depth: depth + 1, children: [] })));
     return { id: node.id, goal: node.title, status: planStatus(node, plan.current), result: node.state === 'done' ? '済み' : '',
       failureReason: node.state === 'blocked' ? node.reason ?? '止まっている' : '', depth, children, ...nodeWords(node) };
   };
@@ -192,6 +205,16 @@ export class CommonFcaUiModBridge implements CommonFcaObserver {
 
   // ===== The control loop's view =====
 
+  /** A queue item was accepted and waits: shown under its plan node as pending. */
+  commandQueued(command: Command): void {
+    if (this.closed || command.kind !== 'skill') return;
+    const task = this.taskFor(command);
+    task.queued = true;
+    task.waiting.set(command.id, { node: command.queue?.node ?? null, label: describeCommand(command) });
+    this.addLog('tool_call', 'info', `待ち: ${describeCommand(command)}`);
+    this.publish();
+  }
+
   commandStarted(command: Command): void {
     if (this.closed) return;
     const context = command.context;
@@ -201,13 +224,16 @@ export class CommonFcaUiModBridge implements CommonFcaObserver {
     }
     if (command.kind === 'capture') return;
     const task = this.taskFor(command);
+    task.waiting.delete(command.id);
+    if (command.queue) task.queued = true;
     const step: Step = { id: `s${++task.counter}`, goal: describeCommand(command), status: 'in_progress' };
     task.running.set(command.id, step);
     task.steps.push(step);
     this.trim(task);
     if (command.kind === 'skill' && command.skill === 'act') {
       const steps = actHands(command.arguments) ?? [];
-      task.act = { commandId: command.id, startedAt: this.now(), steps: steps.slice(0, 12).map(item => ({ label: clip(item.note ?? stepLabel(item), 60), status: 'pending' as TreeStatus, detail: '' })) };
+      task.act = { commandId: command.id, startedAt: this.now(), node: command.queue?.node ?? null,
+        steps: steps.slice(0, 12).map(item => ({ label: clip(item.note ?? stepLabel(item), 60), status: 'pending' as TreeStatus, detail: '' })) };
     }
     if (command.kind === 'reflex') this.reflex = { id: command.id, label: clip(command.operation?.candidate.label ?? 'reflex', 60) };
     this.addLog('tool_call', 'info', step.goal);
@@ -226,7 +252,15 @@ export class CommonFcaUiModBridge implements CommonFcaObserver {
       return;
     }
     if (this.reflex?.id === command.id) this.reflex = null;
-    const step = task?.running.get(command.id);
+    task?.waiting.delete(command.id);
+    let step = task?.running.get(command.id);
+    // A queue item that never started (dropped, refused, its condition unmet) still leaves its line among the steps.
+    if (task && !step && command.queue && command.context.taskId === task.id) {
+      task.steps.push({ id: `s${++task.counter}`, goal: describeCommand(command), status: 'error' });
+      step = task.steps.at(-1);
+      task.running.set(command.id, step!);
+      this.trim(task);
+    }
     if (task && step) {
       task.running.delete(command.id);
       step.status = ok ? 'completed' : 'error';
@@ -274,7 +308,7 @@ export class CommonFcaUiModBridge implements CommonFcaObserver {
     let task = this.task;
     if (!task || task.id !== context.taskId) {
       task = { id: context.taskId, goal: clip(context.goal), condition: clip(context.completionCondition), startedAt: this.now(), touchedAt: this.now(),
-        status: 'in_progress', progress: '', steps: [], running: new Map(), counter: 0, current: true };
+        status: 'in_progress', progress: '', steps: [], running: new Map(), counter: 0, current: true, waiting: new Map(), queued: false };
       // After a reconnect the API tells how far the task is; show it rather than an empty list.
       for (const result of context.taskState?.recentResults ?? []) {
         task.steps.push({ id: `s${++task.counter}`, goal: clip(result.name, 60), status: result.ok ? 'completed' : 'error', result: clip(result.summary) });
@@ -320,9 +354,9 @@ export class CommonFcaUiModBridge implements CommonFcaObserver {
     if (task.plan && task.plan.nodes.length) {
       return {
         goal: task.goal, strategy: task.condition, status: task.status, currentThinking: task.progress,
-        currentSubTaskId: task.plan.current,
+        currentSubTaskId: this.shownNode(task),
         ...(typeof task.plan.revision === 'number' ? { planRevision: task.plan.revision } : {}),
-        hierarchicalSubTasks: planTree(task.plan, task.act),
+        hierarchicalSubTasks: planTree(task.plan, task.act, [...task.waiting.values()]),
         activeReflex: this.reflex?.label ?? null,
       };
     }
@@ -336,6 +370,12 @@ export class CommonFcaUiModBridge implements CommonFcaObserver {
     };
   }
 
+  /** The plan node the mod shows as current: the running item's own node when the plan has it, else the plan's current. */
+  private shownNode(task: Task): string | null {
+    const node = task.act && task.running.has(task.act.commandId) ? task.act.node : null;
+    return node && task.plan?.nodes.some(item => item.id === node) ? node : task.plan?.current ?? null;
+  }
+
   private publish(): void {
     if (this.closed) return;
     void this.pushState();
@@ -346,7 +386,7 @@ export class CommonFcaUiModBridge implements CommonFcaObserver {
    * the body had sent). `/task` only (the tree and list change many times a second): a line when the plan revision, its current node or the
    * mod's answer changed, and at most one failure line every 10 seconds. No text of the plan, only its revision and current node's id.
    */
-  private lastPush = { key: '', failedAt: 0 };
+  private lastPush = { key: '', failedAt: 0, items: '' };
   private pushed(route: string, status: number | null, value: unknown): void {
     if (route !== '/task' || !this.options.log) return;
     const tree = value as { planRevision?: unknown; currentSubTaskId?: unknown; status?: unknown } | null;
@@ -355,8 +395,14 @@ export class CommonFcaUiModBridge implements CommonFcaObserver {
     const current = typeof tree?.currentSubTaskId === 'string' ? clip(tree.currentSubTaskId, 40) : '-';
     const key = `${ok}|${status}|${revision}|${current}`;
     const now = this.now();
+    // Task queue: the items that run and wait, in a line of their own when they change (the line above is the rel52 one and stays as it was).
+    const items = `${this.task?.running.size ?? 0}+${this.task?.waiting.size ?? 0}`;
+    if (this.task?.queued && items !== this.lastPush.items) {
+      this.lastPush.items = items;
+      try { this.options.log(`UI_MOD push /task items=${items} current=${current} ok=${ok ? 1 : 0} task=${clip(this.task?.id ?? '-', 12)}`); } catch { /* a log never fails a push */ }
+    }
     if (key === this.lastPush.key || (!ok && now - this.lastPush.failedAt < 10_000)) return;
-    this.lastPush = { key, failedAt: ok ? this.lastPush.failedAt : now };
+    this.lastPush = { ...this.lastPush, key, failedAt: ok ? this.lastPush.failedAt : now };
     try { this.options.log(`UI_MOD push /task ok=${ok ? 1 : 0} status=${status ?? 'none'} revision=${revision} current=${current} task=${clip(this.task?.id ?? '-', 12)}`); } catch { /* a log never fails a push */ }
   }
 

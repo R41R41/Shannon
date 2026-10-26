@@ -6,7 +6,9 @@ import type { BodyEventSource } from './bodyEvents.js';
 import { LiveSpeechCourier } from '../../../common/liveSpeech.js';
 import type { LiveRoom, LiveSpeechReceipt } from '../../../common/liveSpeech.js';
 import { MINECRAFT_CONTROL_PATH, type MinecraftControlCommand as Command, type MinecraftControlReceipt as Receipt,
-  type MinecraftControlReply, type MinecraftSkillDefinition } from './minecraftControlContract.js';
+  type MinecraftControlReply, type MinecraftQueueProgress, type MinecraftSkillDefinition } from './minecraftControlContract.js';
+import { BodyQueue, droppedBecause, EXPIRED_TEXT, notStarted, QUEUE_ACCEPT_WINDOW_MS, readEnvelope, type QueueEnvelope } from './bodyQueue.js';
+import type { ActCondition } from '../../utils/actConditions.js';
 
 export interface CommonFcaActuator {
   observe(): BodyObservation;
@@ -19,12 +21,18 @@ export interface CommonFcaActuator {
   closeEvidence?(context: BodyTaskContext): void;
   /** What changed while a command runs (needs, progress, a stall), sent with each poll until the API takes it (mb-arch stage 1). */
   events?: BodyEventSource;
+  /** Task queue: whether a condition (an item's `pre`) holds now, and in words what is lacking when it does not. Absent: a `pre` cannot be checked. */
+  check?(condition: ActCondition): { ok: boolean; words: string };
+  /** Task queue: how far the running act is (its hand, its pass), without the command's id. */
+  progress?(): Omit<MinecraftQueueProgress, 'id'> | null;
 }
 /**
  * What the loop tells a watcher (the UI mod's view of the task). Read only: a watcher cannot change what the loop does,
  * and one that throws is ignored.
  */
 export interface CommonFcaObserver {
+  /** A queue item was accepted and waits behind the one running. */
+  commandQueued?(command: Command): void;
   /** The API's command was accepted and starts now. */
   commandStarted?(command: Command): void;
   /** The command ended (or was refused) with this receipt. */
@@ -63,6 +71,9 @@ export class CommonFcaControlLoop {
   private readonly seen = new Set<string>();
   private readonly receipts = new Map<string, Receipt>();
   private readonly active = new Map<string, { controller: AbortController; running: Promise<void> }>();
+  /** The task queue's items (one runs, up to two wait), and the read-only commands running beside the owner's (they are no part of the queue). */
+  private readonly queue = new BodyQueue();
+  private readonly beside = new Set<string>();
   private owner: string | null = null;
   private held = false;
   private closedSessions = new Set<string>();
@@ -91,10 +102,10 @@ export class CommonFcaControlLoop {
     this.speech = options.speech ?? new LiveSpeechCourier();
   }
   /** A command, an owner or a held body is the loop's: idle work (a pickup walk) starts only when this is false. */
-  get leaseHeld(): boolean { return this.owner !== null || this.held || this.active.size > 0; }
+  get leaseHeld(): boolean { return this.owner !== null || this.held || this.active.size > 0 || this.queue.busy; }
   /** Stopped: its bot ended, or a newer connection's loop replaced it (`createCommonFcaBody`). */
   get stopped(): boolean { return this.closed; }
-  get busy(): boolean { return this.held || this.active.size > 0 || (Array.isArray(this.observation.state.activeCapabilities) && this.observation.state.activeCapabilities.length > 0); }
+  get busy(): boolean { return this.held || this.active.size > 0 || this.queue.busy || (Array.isArray(this.observation.state.activeCapabilities) && this.observation.state.activeCapabilities.length > 0); }
   start(): void {
     if (this.timer || this.observationTimer || this.closed) return;
     // Independent of a provider/skill/HTTP wait: the body keeps observing.
@@ -136,6 +147,7 @@ export class CommonFcaControlLoop {
     this.polling = true;
     try {
       if (!(reuse && performance.now() - this.observedAt < OBSERVATION_REUSE_MS)) { this.observation = this.options.actuator.observe(); this.observedAt = performance.now(); }
+      this.dropExpired();
       const sent = [...this.receipts.values()].slice(0, 16);
       const catalog = this.options.actuator.skills;
       const now = (this.options.now ?? Date.now)();
@@ -146,7 +158,8 @@ export class CommonFcaControlLoop {
         body: JSON.stringify({ schemaVersion: 1, serverId: this.options.serverId, connectionId: this.connectionId,
           observation: this.observation, candidates: this.options.actuator.candidates(this.observation),
           ...(this.catalogSent !== catalog ? { skills: catalog } : {}),
-          receipts: sent, activeOperationIds: [...this.active.keys()], ...(events.length ? { events } : {}), ...this.liveFields() }),
+          receipts: sent, activeOperationIds: [...this.active.keys()], queuedOperationIds: this.queue.ids(), ...this.queueFields(),
+          ...(events.length ? { events } : {}), ...this.liveFields() }),
       });
       if (!response.ok) throw Error('BODY_CONTROL_HTTP');
       const reply = await response.json() as MinecraftControlReply;
@@ -158,7 +171,7 @@ export class CommonFcaControlLoop {
       for (const id of reply.acknowledged) if (sent.some(receipt => receipt.id === id)) this.receipts.delete(id);
       if (typeof reply.eventsThrough === 'number') this.options.actuator.events?.acknowledge(reply.eventsThrough);
       else if (events.length) this.eventsRetryAt = now + EVENTS_RETRY_MS;
-      for (const id of reply.cancel) this.active.get(id)?.controller.abort('server_cancel');
+      for (const id of reply.cancel) this.cancelOne(id);
       for (const command of reply.commands) this.accept(command);
       this.speech.accept(reply.speech);
     } catch (error) {
@@ -168,8 +181,9 @@ export class CommonFcaControlLoop {
       // running move (common run 9, 2026-10-14 20:40). Running commands keep their own deadlines; they are stopped
       // only once the API has not answered for CONTACT_LOSS_MS (an API restart, a dead network).
       const silent = (this.options.now ?? Date.now)() - this.contactAt;
-      if (silent >= CONTACT_LOSS_MS && this.active.size) {
-        log.warn(`API と ${Math.round(silent / 1000)} 秒話せないので、実行中の命令を止める（${this.active.size}件）`);
+      if (silent >= CONTACT_LOSS_MS && (this.active.size || this.queue.waiting.length)) {
+        log.warn(`API と ${Math.round(silent / 1000)} 秒話せないので、実行中の命令を止める（${this.active.size}件、待ち ${this.queue.waiting.length}件）`);
+        this.dropWaiting('捨てた: API と話せなくなった。手は動いていない');
         for (const value of this.active.values()) value.controller.abort('control_disconnected');
       }
       throw error;
@@ -197,13 +211,15 @@ export class CommonFcaControlLoop {
     const now = (this.options.now ?? Date.now)();
     const context = command.context;
     const cleanup = command.kind === 'stop' || command.kind === 'release';
-    const valid = command.schemaVersion === 1 && command.serverId === this.options.serverId
+    // Task queue: an `act` carrying an envelope is an item (null: it carries one that is not well formed, so it is refused as a shape).
+    const envelope = readEnvelope(command);
+    const valid = command.schemaVersion === 1 && command.serverId === this.options.serverId && envelope !== null && !(cleanup && envelope)
       && command.connectionId === this.connectionId && context?.bodyId === this.observation.bodyId
       && ID.test(context.sessionId) && ID.test(context.taskId) && Number.isSafeInteger(context.generation)
       && context.generation >= 0 && Number.isSafeInteger(context.taskRevision) && context.taskRevision >= 0
       && command.lease && ID.test(command.lease.id) && typeof command.lease.holder === 'string'
       && Number.isSafeInteger(command.lease.generation) && Number.isFinite(Date.parse(command.deadlineAt))
-      && (cleanup || Date.parse(command.deadlineAt) > now && Date.parse(command.deadlineAt) - now <= this.acceptWindow(command));
+      && (cleanup || Date.parse(command.deadlineAt) > now && Date.parse(command.deadlineAt) - now <= (envelope ? QUEUE_ACCEPT_WINDOW_MS : this.acceptWindow(command)));
     const key = valid ? identity(command) : '';
     const sessionKey = `${key}:${context?.sessionId}`;
     const historicalCleanup = cleanup && this.closedSessions.has(sessionKey);
@@ -211,24 +227,106 @@ export class CommonFcaControlLoop {
     // (the API may send several in one reply). Never beside another owner's, a held body or a cleanup.
     const readOnly = valid && command.kind === 'skill' && this.options.actuator.skills.find(skill => skill.name === command.skill)?.readOnly === true;
     const beside = readOnly && this.owner === key;
-    if (!valid || (!cleanup && (this.closedSessions.has(sessionKey) || this.held || (this.active.size > 0 && !beside) || this.owner !== null && this.owner !== key
+    // An item may come while its owner's item runs or waits (the queue judges that); anything else running (a probe is no part of it) refuses it.
+    const otherActive = [...this.active.keys()].some(id => id !== this.queue.runningId && !this.beside.has(id));
+    const busy = envelope ? otherActive : (this.active.size > 0 || this.queue.busy) && !beside;
+    if (!valid || (!cleanup && (this.closedSessions.has(sessionKey) || this.held || busy || this.owner !== null && this.owner !== key
         || command.lease.generation < (this.leaseGenerations.get(command.lease.id) ?? -1)))
       || cleanup && this.owner !== null && this.owner !== key && !this.closedSessions.has(sessionKey)) {
       // A command refused for its own shape (stale connection, a deadline out of reach) never took the body: say so, so the
       // API can treat it as a known failure. One refused because the body is held or another owner has it says not released.
       const refused: Receipt = { id: command.id, connectionId: this.connectionId, outcome: 'failed',
-        inputsReleased: !cleanup && !valid && !this.held && this.active.size === 0, observedAt: new Date(now).toISOString(), result: 'BODY_COMMAND_REFUSED' };
+        inputsReleased: !cleanup && !valid && !this.held && this.active.size === 0 && !this.queue.busy, observedAt: new Date(now).toISOString(), result: 'BODY_COMMAND_REFUSED' };
       this.receipts.set(command.id, refused);
       this.hurry(true);
       if (valid) this.watch(() => this.options.observer?.commandEnded?.(command, refused));
       return;
     }
+    if (envelope) {
+      const admission = this.queue.admit(envelope);
+      if (typeof admission === 'object') {
+        // No hand moved and the body is not held (checked above): a known refusal, the queue unchanged.
+        this.closeUnstarted(command, 'failed', admission.failureType, admission.result);
+        return;
+      }
+      this.owner = key; this.leaseGenerations.set(command.lease.id, command.lease.generation);
+      if (admission === 'wait') {
+        this.queue.waiting.push(command);
+        this.hurry(false);
+        this.watch(() => this.options.observer?.commandQueued?.(command));
+        return;
+      }
+      this.begin(command, key);
+      return;
+    }
+    this.launch(command, key, cleanup, historicalCleanup);
+  }
+  /** An item about to start: its start-by time and its condition are checked once, now; if either fails it is not started and what waits is dropped. */
+  private begin(command: Command, key: string): void {
+    const envelope = readEnvelope(command) as QueueEnvelope;
+    const verdict = notStarted(envelope, (this.options.now ?? Date.now)(), this.options.actuator.check?.bind(this.options.actuator));
+    if (!verdict) { this.launch(command, key, false, false); return; }
+    this.closeUnstarted(command, verdict.outcome, verdict.failureType, verdict.result);
+    this.dropWaiting(droppedBecause(envelope.item, verdict.failureType));
+    this.settleOwner(key);
+  }
+  /** A receipt for a command that never started: nothing moved, so the inputs are released unless the body is held. */
+  private closeUnstarted(command: Command, outcome: Receipt['outcome'], failureType: string, result: string): void {
+    const now = (this.options.now ?? Date.now)();
+    const receipt: Receipt = { id: command.id, connectionId: this.connectionId, outcome, inputsReleased: !this.held, observedAt: new Date(now).toISOString(),
+      failureType, recoverable: true, result };
+    if (command.queue) this.queue.note(command.queue.item, false);
+    this.receipts.set(command.id, receipt);
+    this.hurry(true);
+    this.watch(() => this.options.observer?.commandEnded?.(command, receipt));
+  }
+  /** Every waiting item is dropped, each with a receipt that says its hands did not move. */
+  private dropWaiting(result: string): void {
+    for (const command of this.queue.clear()) this.closeUnstarted(command, 'cancelled', 'queue_dropped', result);
+  }
+  /** An item still waiting past its start-by time is dropped now, with the ones behind it (the receipt need not wait for the item ahead to end). */
+  private dropExpired(): void {
+    const late = this.queue.firstExpired((this.options.now ?? Date.now)());
+    if (!late) return;
+    this.queue.removeFrom(late.id).forEach((command, index) => this.closeUnstarted(command, 'cancelled', index === 0 ? 'queue_expired' : 'queue_dropped',
+      index === 0 ? EXPIRED_TEXT : droppedBecause(late.queue?.item ?? '-', 'queue_expired')));
+  }
+  /** The head cancelled this id: a running command is aborted; a waiting item goes, and so does every one behind it (they follow it). */
+  private cancelOne(id: string): void {
+    const running = this.active.get(id);
+    if (running) { running.controller.abort('server_cancel'); return; }
+    const gone = this.queue.removeFrom(id);
+    gone.forEach((command, index) => this.closeUnstarted(command, 'cancelled', 'queue_dropped',
+      index === 0 ? '捨てた: 取り消された。手は動いていない' : droppedBecause(gone[0]!.queue?.item ?? '-', '取り消された')));
+  }
+  /** The owner is given back when nothing runs and nothing waits (the loop is not held). */
+  private settleOwner(key: string): void {
+    if (!this.held && this.owner === key && this.active.size === 0 && !this.queue.busy) this.owner = null;
+  }
+  /** The running item's progress for the poll: its command id and how far it has got. */
+  private queueFields(): { queue?: MinecraftQueueProgress } {
+    const id = this.queue.runningId;
+    const progress = id ? this.options.actuator.progress?.() : null;
+    return id && progress ? { queue: { id, ...progress } } : {};
+  }
+  private launch(command: Command, key: string, cleanup: boolean, historicalCleanup: boolean): void {
+    const now = (this.options.now ?? Date.now)();
+    const context = command.context;
+    const sessionKey = `${key}:${context?.sessionId}`;
+    const envelope = readEnvelope(command) ?? null;
     this.hurry(false);
     if (!cleanup) { this.owner = key; this.leaseGenerations.set(command.lease.id, command.lease.generation); }
-    else if (!this.closedSessions.has(sessionKey)) for (const item of this.active.values()) item.controller.abort('owner_release');
+    else if (!this.closedSessions.has(sessionKey)) {
+      this.dropWaiting('捨てた: 止める命令が来た。手は動いていない');
+      for (const item of this.active.values()) item.controller.abort('owner_release');
+    }
+    const readOnly = command.kind === 'skill' && this.options.actuator.skills.find(skill => skill.name === command.skill)?.readOnly === true;
+    if (readOnly && !envelope && this.owner === key) this.beside.add(command.id);
+    if (envelope) this.queue.begin(command);
     const controller = new AbortController();
     this.watch(() => this.options.observer?.commandStarted?.(command));
-    const timeout = setTimeout(() => controller.abort('deadline'), cleanup ? 3000 : Math.max(1, Date.parse(command.deadlineAt) - now));
+    // An item's limit counts from its start (it may have waited); any other command's deadline is the one the API set.
+    const timeout = setTimeout(() => controller.abort('deadline'), cleanup ? 3000 : envelope ? envelope.maxMs : Math.max(1, Date.parse(command.deadlineAt) - now));
     const running = Promise.resolve().then(async () => {
       let receipt: Receipt;
       try {
@@ -247,13 +345,24 @@ export class CommonFcaControlLoop {
         // remains unknown until a fresh cleanup confirms the whole body is quiescent.
         if (!receipt.inputsReleased) this.held = true;
         else if (cleanup) this.held = false;
-        // (Not while another command of this owner still runs beside it: the last one to end gives the owner back.)
-        if (!this.held && receipt.inputsReleased && this.owner === key && ![...this.active.keys()].some(id => id !== command.id)) this.owner = null;
       }
+      if (envelope) this.queue.end(envelope.item, receipt.outcome === 'completed' && receipt.inputsReleased);
       this.receipts.set(command.id, receipt);
       this.hurry(true);
       this.watch(() => this.options.observer?.commandEnded?.(command, receipt));
-    }).finally(() => { clearTimeout(timeout); this.active.delete(command.id); });
+      // An item that ended well lets the next one start now; any other end drops what waits (it was never started).
+      if (envelope) {
+        const next = receipt.outcome === 'completed' && receipt.inputsReleased && !this.held ? this.queue.next() : undefined;
+        if (next) this.begin(next, key);
+        else this.dropWaiting(droppedBecause(envelope.item, receipt.failureType ?? receipt.outcome));
+      }
+      // (Not while another command of this owner still runs or waits beside it: the last one to end gives the owner back.)
+      if (!historicalCleanup && !this.held && receipt.inputsReleased && this.owner === key && ![...this.active.keys()].some(id => id !== command.id) && !this.queue.busy) this.owner = null;
+    }).finally(() => {
+      clearTimeout(timeout); this.active.delete(command.id); this.beside.delete(command.id);
+      // Two commands of the owner that end together: the one that ends last gives the owner back (the other was still in `active` when the first ended).
+      if (!cleanup && !historicalCleanup) this.settleOwner(key);
+    });
     this.active.set(command.id, { controller, running });
   }
   /** A watcher never changes what the loop does: its failure is dropped. */
@@ -264,6 +373,7 @@ export class CommonFcaControlLoop {
    * mind's turn; this only lets the body stand still without waiting for them.
    */
   abortActive(reason = 'operator_stop'): number {
+    this.dropWaiting('捨てた: 操作者が止めた。手は動いていない');
     for (const item of this.active.values()) item.controller.abort(reason);
     return this.active.size;
   }
@@ -282,6 +392,7 @@ export class CommonFcaControlLoop {
     if (this.closed) return !this.held;
     this.closed = true; this.lifetime.abort('body_disconnected');
     clearTimeout(this.timer); clearInterval(this.observationTimer);
+    this.dropWaiting('捨てた: 体が切れた。手は動いていない');
     for (const value of this.active.values()) value.controller.abort('body_disconnected');
     const released = await this.options.actuator.release(AbortSignal.timeout(3000)).catch(() => false);
     this.held = !released;

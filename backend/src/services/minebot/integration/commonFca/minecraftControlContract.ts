@@ -10,12 +10,21 @@ export interface MinecraftSkillDefinition {
   /** How long one run of the skill may take; the body runs it for min(this, the command's deadline). */
   maxDurationMs?: number;
 }
+/**
+ * The task queue's envelope of an `act` command (the head's `tq/contract.md` section 2): the item's id, the item that must precede it, the plan node
+ * it is for, the condition checked once right before it starts (`ActCondition`, `utils/actConditions.ts`), its own run limit counted from its
+ * start, and the time it must have started by. A command without it runs as before.
+ */
+export interface MinecraftQueueEnvelope {
+  item: string; after: string | null; node: string | null; pre?: unknown; maxMs: number; startBy: string;
+}
 export interface MinecraftControlCommand {
   schemaVersion: 1; id: string; serverId: string; connectionId: string;
   kind: 'skill' | 'reflex' | 'stop' | 'release' | 'capture';
   context: BodyTaskContext; lease: ActionLease; deadlineAt: string;
   skill?: string; arguments?: Readonly<Record<string, unknown>>;
   operation?: BodyOperation; stop?: BodyStopRequest;
+  queue?: MinecraftQueueEnvelope;
 }
 export interface MinecraftControlReceipt {
   id: string; connectionId: string; outcome: 'completed' | 'failed' | 'cancelled' | 'unknown';
@@ -38,12 +47,17 @@ export interface MinecraftBodyEvent {
   subject: string;
   data: Readonly<Record<string, string | number | boolean | null>>;
 }
+export interface MinecraftQueueProgress { id: string; hand: number; of: number; iteration: number; repeat: number }
 export interface MinecraftControlPoll {
   schemaVersion: 1; serverId: string; connectionId: string;
   observation: BodyObservation; candidates: readonly BodyCandidateDraft[];
   /** Whole catalog on initial connection and changes. Not selected by a second game planner. */
   skills?: readonly MinecraftSkillDefinition[];
   receipts: readonly MinecraftControlReceipt[]; activeOperationIds: readonly string[];
+  /** The ids of the queue's waiting items, in order (task queue); absent from an older body. */
+  queuedOperationIds?: readonly string[];
+  /** How far the running queue item is: the hand of its pass, the pass of its repeat (task queue). */
+  queue?: MinecraftQueueProgress;
   /** Oldest first, at most 32; absent while the API has not shown it reads them (an older API ignores the field). */
   events?: readonly MinecraftBodyEvent[];
   /** What the body did with the live lines it was handed, and the room it plays in; only when a Discord sink is registered (session dc-live). */

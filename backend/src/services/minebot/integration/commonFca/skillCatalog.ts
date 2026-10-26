@@ -13,8 +13,9 @@ const forbidden = /(?:campaign|planner|agent|command|chat|constant|script|code|b
 const allowedKeys = new Set(['type', 'properties', 'required', 'additionalProperties', 'items', 'enum', 'description',
   'minimum', 'maximum', 'minLength', 'maxLength', 'minItems', 'maxItems', 'anyOf', 'default']);
 /** No references or permissive objects cross the wire; native Zod validation still runs before dispatch. */
+// Eight deep, not six: act's `done` (a list of lists of clauses, optional and nullable) is two levels deeper than any other param.
 export function normalizeSkillSchema(raw: any, depth = 0): Record<string, any> {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw) || depth > 6 || raw.$ref || raw.definitions || raw.$defs) throw Error('BODY_SKILL_SCHEMA');
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw) || depth > 8 || raw.$ref || raw.definitions || raw.$defs) throw Error('BODY_SKILL_SCHEMA');
   const output: Record<string, any> = {};
   for (const [key, value] of Object.entries(raw)) {
     if (key === '$schema') continue;

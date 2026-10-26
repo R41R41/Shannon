@@ -33,7 +33,7 @@ export function aroundText(read: BlockReader, at: Cell, feet?: Cell | null): str
   }
   return `x=${at.x - 1}..${at.x + 1} z=${at.z - 1}..${at.z + 1} ${layers.join(' ')}`;
 }
-export type StoppedBy = 'failure' | 'reflex' | 'stopIf' | 'inventoryFull' | 'cancelled' | 'deadline';
+export type StoppedBy = 'failure' | 'reflex' | 'stopIf' | 'inventoryFull' | 'cancelled' | 'deadline' | 'noProgress' | 'damage' | 'fall';
 export interface ActReport {
   startedAt: number;
   lines: HandLine[];
@@ -47,6 +47,10 @@ export interface ActReport {
   eye?: { from: Cell; bearingDeg: number; flew: number; to: Cell; broke: boolean };
   container?: { at: Cell; kind: string; items: string[] };
   arrowsLeft?: number;
+  /** With `repeat`: the passes finished and the most asked. */
+  repeat?: { done: number; of: number };
+  /** With `done`: the satisfied alternative with its values (`have:log 10/10`). */
+  doneMet?: string;
 }
 const reports = new WeakMap<object, ActReport>();
 
@@ -75,6 +79,7 @@ const CLOSED: Record<string, string> = {
   not_set: '置けない', already_filled: '置けない', not_poured: '置けない', not_lit: '置けない', not_filled: '置けない', no_floor: '足場が無い',
   inventory_full: '満杯', threat_exposed: '見られる', protected: '守られた物', lava_behind: '溶岩が流れ込む', footing: '足場が無い',
   timeout: '時間切れ', time_up: '時間切れ', reflex: '反射', interrupted_by_reflex: '反射', stop_if: 'stopIf',
+  no_progress: '進まない', damage_taken: '被弾', fell: '落下',
 };
 export function closedWord(reason: string | undefined): string {
   if (!reason) return '無い';
@@ -121,6 +126,7 @@ export function renderActReport(bot: any, report: ActReport, note?: string | nul
     lines: report.lines, at, hp: Math.round((bot.health ?? 0) * 10) / 10, food: bot.food ?? 0,
     ...(report.eye ? { eye: report.eye } : {}), ...(report.container ? { container: report.container } : {}),
     ...(typeof report.arrowsLeft === 'number' ? { arrowsLeft: report.arrowsLeft } : {}),
+    ...(report.repeat ? { repeat: report.repeat } : {}), ...(report.doneMet ? { doneMet: clip(report.doneMet, 200) } : {}),
     ms: Date.now() - report.startedAt,
   };
   let map = '';

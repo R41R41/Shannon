@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { CustomBot, InstantSkill } from '../types.js';
 import { actionSignal, nativeActionHost } from '../execution/ActionExecution.js';
-import { isThreat, LAYING_HANDS, shooterWords, shootersInReach, shootersSeeing } from '../utils/floorReflexes.js';
+import { isThreat, LAYING_HANDS, reflexHeld, shooterWords, shootersInReach, shootersSeeing } from '../utils/floorReflexes.js';
 import { threatExposure } from '../utils/threatExposure.js';
 import { beginEngagement } from '../utils/engagement.js';
 import { bodyReader, cellKey, facingOfYaw, feetCell, noteMapStop, type Cell, type Facing } from '../utils/localMap.js';
@@ -21,6 +21,7 @@ import { shoot } from '../utils/primitives/shoot.js';
 import { pillarUp } from '../utils/primitives/pillarUp.js';
 import { itemFoodPoints } from '../utils/foodPoints.js';
 import { stepLabel } from '../utils/actLabel.js';
+import { ACT_CONDITION, conditionHolds, conditionMetText, type ActCondition } from '../utils/actConditions.js';
 import { noteHand } from '../utils/handHistory.js';
 
 export { stepLabel };
@@ -88,6 +89,8 @@ export const ACT_STOP_IF = z.object({
 }).strict();
 /** The kinds of hostile this act has chosen to fight (the contract's ccept, 1.4). */
 export const ACT_ACCEPT = z.array(z.string()).max(6);
+/** `repeat` (task queue): the most passes of the hand list; `done` (an `ActCondition`) ends the act ok where it holds, mid-hand too. */
+export const ACT_REPEAT = z.number().int().min(2).max(8);
 export type ActHand = z.infer<typeof Hand>;
 export type ActStopIf = z.infer<typeof ACT_STOP_IF>;
 
@@ -126,11 +129,14 @@ class Act extends InstantSkill {
       { name: 'why', type: 'string', description: 'この手の組のねらい（短く、記録だけ）' },
       { name: 'accept', type: 'json', schema: ACT_ACCEPT, description: 'この act で戦うと決めた敵の種類（6まで）' },
       { name: 'facing', type: 'string', description: '{front,right,up} を読む向き: north・east・south・west（省略は act の始めの体の向き）' },
+      { name: 'repeat', type: 'json', schema: ACT_REPEAT, description: '手の組を最大何回まわすか（2〜8。rel の手の組向き）' },
+      { name: 'done', type: 'json', schema: ACT_CONDITION, description: '済む条件（満たした所で、手の途中でも済にする）' },
     ];
   }
 
-  async runImpl(hands: ActHand[], stopIf?: ActStopIf | null, _why?: string | null, accept?: string[] | null, facing?: string | null) {
-    return runAct(this.bot, hands, stopIf ?? undefined, facing ?? undefined, { accept: accept ?? undefined });
+  async runImpl(hands: ActHand[], stopIf?: ActStopIf | null, _why?: string | null, accept?: string[] | null, facing?: string | null,
+    repeat?: number | null, done?: ActCondition | null) {
+    return runAct(this.bot, hands, stopIf ?? undefined, facing ?? undefined, { accept: accept ?? undefined, repeat: repeat ?? undefined, done: done ?? undefined });
   }
 }
 
@@ -231,23 +237,44 @@ function stoppedByOf(code: string): StoppedBy {
   if (code === 'inventory_full') return 'inventoryFull';
   if (code === 'timeout' || code === 'deadline') return 'deadline';
   if (code === 'cancelled') return 'cancelled';
+  if (code === 'no_progress') return 'noProgress';
+  if (code === 'damage_taken') return 'damage';
+  if (code === 'fell') return 'fall';
   return 'failure';
+}
+
+/** The cells of a dig hand that held a block before and hold something else now (what the hand dug). */
+function dugCountOf(bot: any, before: Array<{ cell: Cell; name: string }>): number {
+  const AIR = new Set(['', 'air', 'cave_air', 'void_air']);
+  return before.filter(item => !AIR.has(item.name) && String(blockAt(bot, item.cell)?.name ?? '') !== item.name).length;
 }
 
 /**
  * Runs the hands (also from tests, with a fake body). `bot` is the act's motor port: everything it moves stops when the action is
  * cut. The report is kept for the command's receipt (utils/actReport) and returned as the skill's result (JSON).
  */
-export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, facingName?: string, options: { maxMs?: number; tickMs?: number; accept?: string[] } = {}) {
+export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, facingName?: string,
+  options: { maxMs?: number; tickMs?: number; accept?: string[]; repeat?: number; done?: ActCondition } = {}) {
   const startedAt = Date.now();
   const deadline = startedAt + (options.maxMs ?? 180_000);
   const facing: Facing = (['north', 'east', 'south', 'west'] as const).find(name => name === facingName) ?? facingOfYaw(Number(bot.entity?.yaw ?? 0));
-  const report: ActReport = { startedAt, lines: [], ok: false, done: 0, of: hands.length };
+  // Task queue: the hand list may be run up to `repeat` times, and `done` ends the act ok where it holds (the head's contract; both optional).
+  const passes = Math.max(1, Math.min(8, Math.floor(options.repeat ?? 1)));
+  const report: ActReport = { startedAt, lines: [], ok: false, done: 0, of: hands.length * passes };
+  const doneWhen = options.done ?? null;
+  const holdsDone = () => { try { return !!doneWhen && conditionHolds(bot, doneWhen); } catch { return false; } };
+  let doneMet = false, pass = 1, completedPasses = 0, dug = 0;
   const control = new AbortController();
   /** Stops the act from outside its hands: the contract's stoppedBy and stoppedWhy, and the code for the receipt. */
   const stopWith = (why: string, code: string) => {
     if (control.signal.aborted) return;
     report.stoppedBy = stoppedByOf(code); report.stoppedWhy = clip(why, 200); report.failureType = code; control.abort(code);
+  };
+  /** The act's own end: the `done` condition holds (ok, not a stop): what holds is told with its values. */
+  const finishDone = () => {
+    if (doneMet || control.signal.aborted) return;
+    doneMet = true; report.doneMet = conditionMetText(bot, doneWhen!);
+    control.abort('done_met');
   };
   const startDimension = String(bot.game?.dimension ?? '');
   /** The body (not the motor port): the hand running now is told on it, for the floor's last stand (floorReflexes LAYING_HANDS). */
@@ -280,9 +307,29 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
     } catch { return ''; }
   };
   let crossedByWalk = false;
+  // Hurt: health lost from the highest it was in this act (loss while a kind she accepted is within 6 m is not counted); fall: the drop of one airborne spell.
+  let highWater = Number(bot.health ?? 20);
+  let peakY: number | null = null, hurtAt: number | null = null;
+  /** A reflex gets the first word on a blow: the stop for hurt waits this long for one to act (the ledger's stop and the lease's cut come first). */
+  const HURT_GRACE_MS = 250;
+  const acceptedNear = () => accepted.size > 0 && (Object.values(bot.entities ?? {}) as any[]).some(entity => entity?.position && entity !== bot.entity
+    && accepted.has(String(entity.name ?? '').toLowerCase()) && entity.position.distanceTo(bot.entity.position) <= 6);
+  const hurtOrFall = () => {
+    const health = Number(bot.health ?? 20);
+    highWater = acceptedNear() ? health : Math.max(highWater, health);
+    if (highWater - health >= 4) {
+      hurtAt ??= Date.now();
+      if (Date.now() - hurtAt >= HURT_GRACE_MS && !reflexHeld(bot)) return stopWith(`被弾: 体力 ${Math.round(highWater)} → ${Math.round(health)}`, 'damage_taken');
+    } else hurtAt = null;
+    const entity = bot.entity;
+    if (!entity?.position || entity.onGround !== false || entity.isInWater || entity.isInLava || entity.isOnLadder) { peakY = null; return; }
+    peakY = Math.max(peakY ?? entity.position.y, entity.position.y);
+    if (peakY - entity.position.y >= 4) return stopWith(`落下: ${Math.round(peakY - entity.position.y)} 段`, 'fell');
+  };
   const watch = () => {
     try {
       if ((bot.health ?? 20) <= 0) return stopWith('体が死んだ', 'died');
+      if (doneWhen && !doneMet && holdsDone()) return finishDone();
       // A walk into a portal says the crossing itself (its arrival) and the act ends after it (below): not a stop in the middle of the hand.
       if (String(bot.game?.dimension ?? '') !== startDimension && !(host.actHandNow === 'walk' && portalWalks.has(bot)) && !crossedByWalk) return stopWith(`次元が変わった（${startDimension} → ${String(bot.game?.dimension ?? '')}）`, 'dimension_changed');
       const entries = ledger?.entriesSince(mark).filter(entry => !LEDGER_QUIET.has(entry.kind)) ?? [];
@@ -305,6 +352,7 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
         const now = String(blockAt(bot, { x, y, z })?.name ?? '未ロード');
         if (now !== was) return stopWith(`blockChanged:(${key}) ${was}→${now}`, 'stop_if_block');
       }
+      hurtOrFall();
       if (startFree > 0 && freeSlots(bot) === 0) return stopWith('持ち物が満杯になった', 'inventory_full');
     } catch { /* a watch must not stop the body */ }
   };
@@ -321,7 +369,7 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
   };
   signal?.addEventListener('abort', onCut, { once: true });
   const emit = (index: number, status: 'in_progress' | 'completed' | 'error', detail = '') => {
-    try { bot.emit?.('minebotActStep', { startedAt, index, total: hands.length, label: hands[index].note ?? stepLabel(hands[index] as never), status, detail }); } catch { /* the UI is optional */ }
+    try { bot.emit?.('minebotActStep', { startedAt, index, total: hands.length, label: hands[index].note ?? stepLabel(hands[index] as never), status, detail, iteration: pass, repeat: passes }); } catch { /* the UI is optional */ }
   };
   const skip = (from: number, why = '') => { for (let rest = from; rest < hands.length; rest++) report.lines.push({ i: rest + 1, do: hands[rest].do, status: 'skipped', line: why ? `未実行: ${why}` : '未実行' }); };
   // A dimension crossed (a portal walked into) ends the act there: the cells of the hands after it are the other dimension's (mb-llmc-cand 4).
@@ -334,23 +382,34 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
       if (where) noteHand(bot, { t: Date.now(), do: hand.do, status, line, at: where, ...(from ? { from } : {}) });
     } catch { /* the history is a help, never the act's result */ }
   };
-  try {
+  /** One pass of the hand list; false when the act ends there (a stop, an abort, the deadline, a crossed dimension), true when every hand has had its turn. */
+  const runPass = async (): Promise<boolean> => {
     for (let index = 0; index < hands.length; index++) {
       const hand = hands[index];
       watch();
-      if (index > 0 && crossedByWalk && dimensionOf(bot) !== dimension0) { crossed = true; skip(index, '次元が変わった（前の次元の座標の手は送らない）'); break; }
-      if (control.signal.aborted) { skip(index); break; }
-      if (Date.now() >= deadline) { stopWith('act の時間が尽きた', 'timeout'); skip(index); break; }
+      if (index > 0 && crossedByWalk && dimensionOf(bot) !== dimension0) { crossed = true; skip(index, '次元が変わった（前の次元の座標の手は送らない）'); return false; }
+      if (control.signal.aborted) { skip(index, doneMet ? '済む条件を満たした' : ''); return false; }
+      if (Date.now() >= deadline) { stopWith('act の時間が尽きた', 'timeout'); skip(index); return false; }
       const base = feetCell(bot);
-      if (!base) { stopWith('体が無い（接続が切れた）', 'disconnected'); skip(index); break; }
+      if (!base) { stopWith('体が無い（接続が切れた）', 'disconnected'); skip(index); return false; }
       const ctx: StepContext = { bot, stop: control.signal, deadline, facing, base, progress: detail => emit(index, 'in_progress', detail) };
       emit(index, 'in_progress');
       const began = Date.now();
       let outcome: StepOutcome;
       host.actHandNow = hand.do;
+      const dugBefore = hand.do === 'dig' ? (cellsOf(ctx, hand, hand.at) ?? []).map(cell => ({ cell, name: String(blockAt(bot, cell)?.name ?? '') })) : [];
       try { outcome = await runHand(ctx, hand); }
       catch (error) {
         host.actHandNow = undefined;
+        dug += dugCountOf(bot, dugBefore);
+        if (doneMet) {
+          // The act's `done` held in the middle of this hand: the hand is cut there, and that is the act's end, ok.
+          report.done++;
+          report.lines.push({ i: index + 1, do: hand.do, status: 'done', line: '済む条件を満たしたので、ここで止めた' });
+          emit(index, 'completed', '済む条件を満たした');
+          skip(index + 1, '済む条件を満たした');
+          return false;
+        }
         if (error instanceof StepStopped || control.signal.aborted || /Action interrupted|Motor owner expired/u.test(String((error as Error)?.message))) {
           if (!control.signal.aborted && signal?.aborted) onCut();
           const word = closedWord(report.failureType ?? 'reflex');
@@ -359,12 +418,13 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
           remember(hand, 'stopped', line, where, base);
           emit(index, 'error', report.stoppedWhy ?? '中断');
           skip(index + 1);
-          break;
+          return false;
         }
         outcome = { ok: false, reason: 'error', text: `思わぬ失敗: ${String((error as Error)?.message ?? error).slice(0, 120)}` };
       }
       // A reflex's note held back while the hand laid blocks stops the act at the next hand's watch.
       host.actHandNow = undefined;
+      dug += dugCountOf(bot, dugBefore);
       if (outcome.data?.eye) report.eye = outcome.data.eye;
       if (outcome.data?.container) report.container = outcome.data.container;
       if (typeof outcome.data?.arrowsLeft === 'number') report.arrowsLeft = outcome.data.arrowsLeft;
@@ -402,7 +462,27 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
       emit(index, 'error', outcome.text);
       if (goesOn) continue;
       skip(index + 1);
-      break;
+      return false;
+    }
+    return true;
+  };
+  /** What a pass changed, to tell a pass that did nothing: her cell, the pack, the blocks dug. */
+  const signature = () => {
+    const feet = feetCell(bot), pack = ((bot.inventory?.items?.() ?? []) as Array<{ name: string; count: number }>).map(item => `${item.name}:${item.count}`).sort().join(',');
+    return `${feet ? `${feet.x},${feet.y},${feet.z}` : '-'}|${pack}|${dug}`;
+  };
+  try {
+    if (holdsDone()) finishDone();
+    for (pass = 1; pass <= passes; pass++) {
+      if (pass > 1) report.lines = [];
+      const before = signature();
+      if (!await runPass()) break;
+      completedPasses = pass;
+      if (holdsDone()) { finishDone(); break; }
+      if (pass < passes && signature() === before) {
+        stopWith(`進まない: ${pass} 回目が${pass > 1 ? ` ${pass - 1} 回目と同じ所で` : ''}何も変えなかった`, 'no_progress');
+        break;
+      }
     }
   } finally {
     host.actHandNow = undefined;
@@ -412,7 +492,8 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
     try { bot.setControlState?.('sneak', false); } catch { /* released */ }
   }
   // Crossed: the hands before it were all done (a failure would have stopped the act earlier), so it is ok as far as it went.
-  report.ok = (report.done === hands.length || (crossed && report.done === report.lines.filter(line => line.status !== 'skipped').length)) && !report.stoppedBy;
+  if (passes > 1) report.repeat = { done: completedPasses, of: passes };
+  report.ok = doneMet || ((report.done === hands.length * passes || (passes === 1 && crossed && report.done === report.lines.filter(line => line.status !== 'skipped').length)) && !report.stoppedBy);
   keepActReport(bot, report);
   const text = renderActReport(bot, report);
   return report.ok ? { success: true, result: text } : { success: false, result: text, failureType: report.failureType ?? 'failed', recoverable: true };

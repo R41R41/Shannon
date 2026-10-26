@@ -10,7 +10,8 @@ import { activeActionCapabilities, cancelIdleActions, currentAction, cancelNonSu
   hasActiveSafetyLease, physicalActionBusy, safetyLeaseCapabilities, withActionSignal } from '../../execution/ActionExecution.js';
 import { bodySkillCatalog, isDragonGoal, type BodySkill } from './skillCatalog.js';
 import type { BodyCandidateDraft, BodyObservation, BodyValue } from './bodyControlContract.js';
-import type { MinecraftControlCommand as Command, MinecraftControlReceipt as Receipt } from './minecraftControlContract.js';
+import type { MinecraftControlCommand as Command, MinecraftControlReceipt as Receipt, MinecraftQueueProgress } from './minecraftControlContract.js';
+import { conditionHolds, conditionWords, type ActCondition } from '../../utils/actConditions.js';
 import type { CommonFcaActuator } from './controlLoop.js';
 import { BodyEventWatcher } from './bodyEvents.js';
 import { closeInAdvised, combatOwnerOf } from '../../utils/combatOwner.js';
@@ -99,6 +100,12 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
   private lastSafety: Record<string, BodyValue> | null = null;
   private readonly reflexTag: boolean;
   private readonly onEnd = () => { this.connected = false; };
+  /** The running act's hand and pass, from its `minebotActStep` events (the task queue's progress in the poll); cleared when a command begins. */
+  private stepProgress: Omit<MinecraftQueueProgress, 'id'> | null = null;
+  private readonly onStep = (event: { index?: number; total?: number; iteration?: number; repeat?: number; status?: string }) => {
+    if (event.status !== 'in_progress' || typeof event.index !== 'number' || typeof event.total !== 'number') return;
+    this.stepProgress = { hand: event.index + 1, of: event.total, iteration: event.iteration ?? 1, repeat: event.repeat ?? 1 };
+  };
   private readonly onProgress = (progress: any) => {
     if (progress.capability === 'auto-swim') this.lastSafety = { capability: 'auto-swim', status: String(progress.status),
       actionId: String(progress.actionId), observedAt: new Date(this.now()).toISOString() };
@@ -112,8 +119,15 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
     this.runnable = [...this.catalog.runnable, GOAL_EVIDENCE_SKILL];
     this.goalEvidence = new NativeGoalEvidence(bot, () => this.now());
     if (options.events ?? process.env.MINEBOT_BODY_EVENTS !== 'off') this.events = new BodyEventWatcher(bot, () => this.now());
-    bot.on('end', this.onEnd); bot.on('minebotActionProgress', this.onProgress);
+    bot.on('end', this.onEnd); bot.on('minebotActionProgress', this.onProgress); bot.on('minebotActStep', this.onStep);
   }
+  /** Task queue: whether an item's condition holds now, and in words what is lacking when it does not. */
+  check(condition: ActCondition): { ok: boolean; words: string } {
+    try { return conditionHolds(this.bot, condition) ? { ok: true, words: '' } : { ok: false, words: conditionWords(this.bot, condition) }; }
+    catch { return { ok: false, words: '前提を確かめられなかった' }; }
+  }
+  /** Task queue: how far the running act is, or null when none has begun a hand. */
+  progress(): Omit<MinecraftQueueProgress, 'id'> | null { return this.running > 0 ? this.stepProgress : null; }
   private now() { return (this.options.now ?? Date.now)(); }
   observe(): BodyObservation {
     const world = captureWorldObservation(this.bot, { threatReach: true }), now = this.now();
@@ -161,6 +175,7 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
     // The task each command carries says which remembered places the observation puts first.
     if (typeof command.context?.goal === 'string') this.setDragonTask(isDragonGoal(command.context.goal));
     this.running++;
+    if (command.kind === 'skill' && command.skill === 'act') this.stepProgress = null;
     try { return await this.executeCommand(command, signal); }
     finally { this.running--; this.idleSince = this.now(); }
   }
@@ -184,7 +199,9 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
     // Each skill runs for its own time (build-around-self five minutes, mine-block three), never past the command's deadline
     // (the API sets that deadline from the catalog's maxDurationMs; until it does, its two minutes still bound every skill).
     const limit = command.kind === 'skill' ? this.runnable.find(skill => skill.name === command.skill)?.maxDurationMs ?? 120_000 : 120_000;
-    const milliseconds = Math.min(limit, Date.parse(command.deadlineAt) - this.now());
+    // A queue item's time is its own, from its start (it may have waited); any other command's is the deadline the API set.
+    const deadline = command.queue ? this.now() + Number(command.queue.maxMs) : Date.parse(command.deadlineAt);
+    const milliseconds = Math.min(limit, deadline - this.now());
     if (!Number.isFinite(milliseconds) || milliseconds <= 0) throw Error('BODY_DEADLINE');
     // r10: a read-only command that runs beside another (a probe beside an act) is no part of the goal's evidence: its start would stamp
     // the evidence with its id, and its cancel would clear the attacks the act made.
@@ -242,7 +259,7 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
       let lead = '';
       let runMs = milliseconds;
       if (!readOnly && command.kind === 'skill') {
-        const held = await this.afterReflex(signal, Date.parse(command.deadlineAt));
+        const held = await this.afterReflex(signal, deadline);
         if (held) {
           const short = held.by.replace(/^constant:/u, '').replace(/^(floor|auto)-/u, '');
           const who = `反射 ${short}（${reflexLabel(held.by)}）`, waited = `${(held.ms / 1000).toFixed(1)}秒`;
@@ -252,14 +269,14 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
               undefined, { failureType: 'interrupted_by_reflex', recoverable: true });
           }
           lead = `${who}の最中のため、放された後に始めた（待ち ${waited}）`;
-          runMs = Math.min(limit, Date.parse(command.deadlineAt) - this.now());
+          runMs = Math.min(limit, deadline - this.now());
         }
       }
       const actStartedAt = Date.now();
       const result = await withActionSignal(this.bot, signal, () => executeAction(this.bot, capability, runMs,
         work, { waitForQuiescence: true }));
       let outcome: Receipt['outcome'] = signal.aborted ? 'cancelled' : result.success ? 'completed' : 'failed';
-      const released = readOnly || await this.release(AbortSignal.timeout(300), Date.parse(command.deadlineAt) - RECEIPT_MARGIN_MS);
+      const released = readOnly || await this.release(AbortSignal.timeout(300), deadline - RECEIPT_MARGIN_MS);
       let failure = outcome === 'failed' ? failureOf(result) : undefined;
       let text = result.result;
       // A body reflex that took the body (a meal, a step back from a creeper) is not the model's failure: say so, and let it
@@ -367,7 +384,7 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
   closeEvidence(context: Command['context']): void { this.goalEvidence.cancel(context); }
   async dispose(): Promise<void> {
     this.goalEvidence.dispose();
-    this.bot.removeListener('end', this.onEnd); this.bot.removeListener('minebotActionProgress', this.onProgress);
+    this.bot.removeListener('end', this.onEnd); this.bot.removeListener('minebotActionProgress', this.onProgress); this.bot.removeListener('minebotActStep', this.onStep);
     await this.options.disposeCapture?.();
   }
 }
