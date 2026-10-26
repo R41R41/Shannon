@@ -1,6 +1,7 @@
 import pathfinder from 'mineflayer-pathfinder';
 import { Vec3 } from 'vec3';
 import { PROTECTED_UTILITY_BLOCKS } from '../../constants.js';
+import { nativeActionHost } from '../../execution/ActionExecution.js';
 import { buildMovements } from '../setMovements.js';
 import { FAR_LEG_M, nextLeg } from '../farLegs.js';
 import { feetCell, type Cell } from '../localMap.js';
@@ -281,18 +282,33 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   // Digs and blocks laid are counted at the body's own calls (by whoever makes them: the route executor, or this hand). The 'diggingCompleted'
   // event is not used: the route executor, once it has reset a path while digging, removes every listener of it (removeAllListeners).
   let lastWork = Date.now();
-  const originalDig = bot.dig, originalPlace = bot.placeBlock;
-  const countingDig = async function (this: unknown, ...rest: unknown[]) { const result = await originalDig.apply(bot, rest); state.dug++; lastWork = Date.now(); return result; };
-  const countingPlace = async function (this: unknown, ...rest: unknown[]) { const result = await originalPlace.apply(bot, rest); state.placed++; lastWork = Date.now(); return result; };
-  if (typeof originalDig === 'function') bot.dig = countingDig;
-  if (typeof originalPlace === 'function') bot.placeBlock = countingPlace;
+  // Run 40 (2026-10-27, the place that was refused 65 times of 68 with "Motor owner expired"): the counting is put on the HOST body, never on the act's motor port.
+  // `bot` is a Proxy that hands out a fresh wrapper for every function it is asked for, so what was read from it was the port's wrapper (checking THIS act's owner),
+  // assigned back onto the host, and never put back (`bot.dig === countingDig` is false for a Proxy): every later place and dig of the body ran through a
+  // port whose act was long over. The host's own functions are read, counted and put back by identity.
+  const host = nativeActionHost(bot) as any;
+  const originalDig = host.dig, originalPlace = host.placeBlock;
+  let counting = true;
+  const countingDig = async function (this: unknown, ...rest: unknown[]) {
+    const result = await originalDig.apply(host, rest);
+    if (counting) { state.dug++; lastWork = Date.now(); }
+    return result;
+  };
+  const countingPlace = async function (this: unknown, ...rest: unknown[]) {
+    const result = await originalPlace.apply(host, rest);
+    if (counting) { state.placed++; lastWork = Date.now(); }
+    return result;
+  };
+  if (typeof originalDig === 'function') host.dig = countingDig;
+  if (typeof originalPlace === 'function') host.placeBlock = countingPlace;
   // A drawing again: the path was reset because something went wrong with it (not for the block it dug itself, nor a chunk arriving).
   const onReset = (reason: unknown) => { if (!/^(?:goal_updated|movements_updated|block_updated|chunk_loaded)$/u.test(String(reason))) state.redraws++; };
   bot.on?.('path_reset', onReset);
   const previousMovements = nav.movements;
-  const previousTool = nav.bestHarvestTool;
+  const hostNav = host.pathfinder as any;
+  const previousTool = hostNav.bestHarvestTool;
   // The cheapest tool in time and wear (utils/toolChoice), not the fastest in the bag; one that is nearly broken is kept for when nothing else will do.
-  nav.bestHarvestTool = (block: any) => {
+  hostNav.bestHarvestTool = (block: any) => {
     const tools = ((bot.inventory?.items?.() ?? []) as any[]);
     const sound = tools.filter(item => !nearlyBroken(item));
     return chooseTool(block, sound.length || !tools.length ? sound : tools, { effects: bot.entity?.effects }) ?? null;
@@ -514,10 +530,12 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     throw error;
   } finally {
     bot.removeListener?.('physicsTick', onTick);
-    if (bot.dig === countingDig) bot.dig = originalDig;
-    if (bot.placeBlock === countingPlace) bot.placeBlock = originalPlace;
+    // Put back by identity on the host; a wrapper another module put over ours meanwhile stays (it reaches ours, which then counts nothing).
+    counting = false;
+    if (host.dig === countingDig) host.dig = originalDig;
+    if (host.placeBlock === countingPlace) host.placeBlock = originalPlace;
     bot.removeListener?.('path_reset', onReset);
-    nav.bestHarvestTool = previousTool;
+    hostNav.bestHarvestTool = previousTool;
     try { if (previousMovements) nav.setMovements(previousMovements); } catch { /* the profile stays */ }
     try { bot.setControlState?.('jump', false); bot.setControlState?.('sneak', false); } catch { /* released */ }
   }
