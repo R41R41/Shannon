@@ -31,6 +31,8 @@ interface MarkBody {
   activeFurnaces?: Array<{ pos: { x: number; y: number; z: number }; item: string; count: number; readyAt: number; startedAt?: number; dimension?: string }>;
 }
 
+/** The name of the wood mark: the head reads it by this word. */
+export const WOOD_MARK = '木材（板・柵）';
 const LABEL: Record<string, string> = {
   furnace: 'かまど', blast_furnace: '溶鉱炉', smoker: '燻製器', crafting_table: '作業台', chest: '箱', barrel: '樽', trapped_chest: '罠の箱',
   water: '水源', lava: '溶岩源', obsidian: '黒曜石', hay_block: '干し草', farmland: '畑', wheat: '小麦', carrots: 'にんじん', potatoes: 'じゃがいも',
@@ -43,6 +45,10 @@ const ORE_NAMES = ['iron_ore', 'deepslate_iron_ore', 'coal_ore', 'deepslate_coal
   'deepslate_gold_ore', 'nether_gold_ore', 'redstone_ore', 'deepslate_redstone_ore', 'lapis_ore', 'deepslate_lapis_ore', 'copper_ore',
   'deepslate_copper_ore', 'emerald_ore', 'deepslate_emerald_ore', 'nether_quartz_ore', 'ancient_debris'];
 const oreKind = (name: string) => name === 'ancient_debris' ? 'ancient_debris' : name.replace(/^(deepslate|nether)_/u, '').replace(/_ore$/u, '');
+/** The planks and fences of a mineshaft's supports, a hut or a house (run 39: no table below, 400 s, and the mine's planks lay 30 m off unsaid). */
+const WOOD_KINDS = ['oak', 'spruce', 'birch', 'jungle', 'acacia', 'dark_oak', 'mangrove', 'cherry', 'pale_oak'];
+const WOOD_NAMES = WOOD_KINDS.flatMap(kind => [`${kind}_planks`, `${kind}_fence`]);
+const WOOD_RANGE = 24;
 const FACES: Array<[number, number, number]> = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
 
 /**
@@ -134,6 +140,7 @@ function computeMarks(bot: MarkBody, feet: Cell, now: number): Mark[] {
     water: { names: ['water'], maxDistance: RANGE, maxHits: 64 }, lava: { names: ['lava'], maxDistance: RANGE, maxHits: 64 },
     obsidian: { names: ['obsidian', 'crying_obsidian'], maxDistance: RANGE, maxHits: 32 },
     ores: { names: ORE_NAMES, maxDistance: ORE_RANGE, maxHits: 128 },
+    wood: { names: WOOD_NAMES, maxDistance: WOOD_RANGE, maxHits: 64 },
     ...(village ? { crops: { names: ['hay_block', 'wheat', 'carrots', 'potatoes', 'beetroots'], maxDistance: 96, maxHits: 128 } } : {}),
     ...(dimension.includes('nether') ? {
       bricks: { names: ['nether_bricks', 'nether_brick_fence'], maxDistance: 96, maxHits: 16 },
@@ -192,6 +199,12 @@ function computeMarks(bot: MarkBody, feet: Cell, now: number): Mark[] {
     if (entry) entry.n++; else ores.set(kind, { hit, n: 1 });
   }
   for (const [kind, { hit, n }] of ores) add(kind, cellOf(hit.position), symbolFor({ name: hit.name }), LABEL[kind] ?? kind, `×${n} 見えている`, 3);
+  // Planks and fences within reach: the nearest, and how many of each (the head tells them only while she is short of wood).
+  const wood = scan('wood');
+  if (wood.length) {
+    const planks = wood.filter(hit => hit.name.endsWith('_planks')).length, fences = wood.length - planks;
+    add('wood', cellOf(wood[0].position), symbolFor({ name: wood[0].name }), WOOD_MARK, [planks ? `板×${planks}` : '', fences ? `柵×${fences}` : ''].filter(Boolean).join(' '), 5);
+  }
   // A village near: the village, and its hay and fields.
   if (village) {
     add('village', cellOf(village.position), 'B', '村', village.evidence ?? '', 4);
