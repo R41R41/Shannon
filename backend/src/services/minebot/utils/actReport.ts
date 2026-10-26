@@ -1,4 +1,5 @@
 import { nativeActionHost } from '../execution/ActionExecution.js';
+import { MINE_MAKE_SMELT_WORDS } from './handCodes.js';
 import { feetCell, localMapFor, symbolFor, type BlockReader, type Cell } from './localMap.js';
 
 /**
@@ -80,6 +81,7 @@ const CLOSED: Record<string, string> = {
   inventory_full: '満杯', threat_exposed: '見られる', protected: '守られた物', lava_behind: '溶岩が流れ込む', footing: '足場が無い',
   timeout: '時間切れ', time_up: '時間切れ', reflex: '反射', interrupted_by_reflex: '反射', stop_if: 'stopIf',
   no_progress: '進まない', damage_taken: '被弾', fell: '落下',
+  ...MINE_MAKE_SMELT_WORDS,
 };
 export function closedWord(reason: string | undefined): string {
   if (!reason) return '無い';

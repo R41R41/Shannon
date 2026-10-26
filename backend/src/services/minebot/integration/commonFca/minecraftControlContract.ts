@@ -43,7 +43,7 @@ export interface MinecraftControlReceipt {
  */
 export interface MinecraftBodyEvent {
   seq: number; at: string;
-  kind: 'need.appeared' | 'need.gone' | 'action.progress' | 'action.stalled';
+  kind: 'need.appeared' | 'need.gone' | 'action.progress' | 'action.stalled' | 'furnace.done';
   subject: string;
   data: Readonly<Record<string, string | number | boolean | null>>;
 }

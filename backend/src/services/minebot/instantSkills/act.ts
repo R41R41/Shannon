@@ -19,6 +19,10 @@ import { drop, eat, equip, jump, look, sneak } from '../utils/primitives/body.js
 import { pickup } from '../utils/primitives/pickup.js';
 import { shoot } from '../utils/primitives/shoot.js';
 import { pillarUp } from '../utils/primitives/pillarUp.js';
+import { mine } from '../utils/primitives/mine.js';
+import { make } from '../utils/primitives/make.js';
+import { smelt } from '../utils/primitives/smelt.js';
+import { handProblem } from '../utils/actHandRules.js';
 import { itemFoodPoints } from '../utils/foodPoints.js';
 import { stepLabel } from '../utils/actLabel.js';
 import { ACT_CONDITION, conditionHolds, conditionMetText, type ActCondition } from '../utils/actConditions.js';
@@ -44,14 +48,14 @@ const Pos = z.object({ x: z.number().optional(), y: z.number().optional(), z: z.
   front: z.number().optional(), right: z.number().optional(), up: z.number().optional() }).strict();
 const ItemCount = z.object({ item: z.string(), count: z.number().optional() }).strict();
 export const HAND_KINDS = ['walk', 'dig', 'place', 'pillarUp', 'use', 'look', 'jump', 'sneak', 'equip', 'craft', 'furnace', 'chest',
-  'attack', 'shoot', 'eat', 'drop', 'pickup', 'wait'] as const;
+  'attack', 'shoot', 'eat', 'drop', 'pickup', 'wait', 'mine', 'make', 'smelt'] as const;
 const Face = z.enum(['up', 'down', 'north', 'south', 'east', 'west']);
 /** One hand: every field of the head's ActHand (the body takes whatever the head's schema takes), and a few more it can read. */
 const Hand = z.object({
   do: z.enum(HAND_KINDS),
   to: Pos.optional().describe('walk の着く所、look の向く点'),
   path: z.array(Pos).max(64).optional().describe('walk の道（点の列）'),
-  at: z.array(Pos).max(16).optional().describe('dig・place は順に全部、use・furnace・chest・shoot・drop は 1 つ'),
+  at: z.array(Pos).max(16).optional().describe('dig・place は順に全部、use・furnace・chest・shoot・drop は 1 つ、mine は鉱脈のマス（1〜4）、smelt は使うかまど（最大4）'),
   face: Face.optional().describe('place・use: 当てる面'),
   block: z.string().optional(),
   item: z.string().optional(),
@@ -59,6 +63,9 @@ const Hand = z.object({
   items: z.array(ItemCount).max(16).optional(),
   fuel: z.string().optional(),
   fuelCount: z.number().optional(),
+  furnaces: z.number().int().min(1).max(4).optional().describe('smelt: 何基に分けるか（1〜4）'),
+  canDig: z.array(z.string().max(40)).min(1).max(12).optional().describe('mine: 道を掘ってよい物（id か stone・dirt・sand・wood）'),
+  maxDig: z.number().int().min(0).max(200).optional().describe('mine: 道を掘る数の上限'),
   op: z.enum(['put', 'take', 'look', 'takeAll']).optional(),
   target: z.union([z.string(), z.number()]).optional().describe('#id か名前'),
   untilDead: z.boolean().optional(),
@@ -114,7 +121,10 @@ const reflexName = (reason: unknown) => { const text = String(reason ?? ''); ret
 /** The body's own words for the tool (the head shows its own definition: minecraftActContract.ts ACT_DESCRIPTION). */
 const DESCRIPTION = '体に小さな手を最大12個まとめて頼む。体は順に動かし、手ごとに思ったとおりか確かめ、外れたら（失敗・反射・stopIf・満杯）そこで止めて、'
   + '手ごとの1行（止まりは閉じた語・場所・そのマスの今の中身）と新しい地図を JSON で返す。体は回り道・置き場所・道具作り・片づけ・夜の睡眠・戦うかどうかを決めない。'
-  + '手: walk / dig / place / pillarUp / use / look / jump / sneak / equip / craft / furnace / chest / attack / shoot / eat / drop / pickup / wait。'
+  + '手: walk / dig / place / pillarUp / use / look / jump / sneak / equip / craft / furnace / chest / attack / shoot / eat / drop / pickup / wait / mine / make / smelt。'
+  + 'mine(block: 掘る種類 id, at: その鉱脈のマス1〜4, count, tool, collect, seconds, canDig・maxDig: 鉱脈へ行く道を掘ってよい物) は at のマスにつながった同じ種類だけを近い順に掘って拾う（ほかの鉱石は探さない）。'
+  + 'make(item, count) は途中の物（板・棒など）を持ち物から順に作る（足りなければ何も作らず足りない物の一覧を返す。3x3 は近くの作業台、無ければ持っている物を置く）。'
+  + 'smelt(items: [{item,count}], fuel, fuelCount, furnaces: 何基に分けるか, at: かまど, seconds) はかまどに分けて入れて燃料を足すまで（焼き上がりは待たず、取り出しは furnace op=take）。'
   + '座標は {x,y,z}（rel:true で足からの差）か {front,right,up}（facing の向き）。stopIf: hostileWithin・hpBelow・hungerBelow・blockChanged。';
 
 class Act extends InstantSkill {
@@ -168,6 +178,9 @@ async function runHand(ctx: StepContext, hand: ActHand): Promise<StepOutcome> {
   if (cells === null) return bad('at のマスが読めない（{x,y,z} か {front,right,up}）');
   const one = cells[0];
   const target = targetOf(hand.target);
+  // The hands with a field table of the head's (utils/actHandRules): a field the kind does not take, a missing one, a range, is refused before the hand moves.
+  const wrong = handProblem(hand);
+  if (wrong) return bad(`${hand.do} 止まった invalid_input: ${wrong}`);
   switch (hand.do) {
     case 'walk': {
       const to = hand.to ? cellOf(ctx, hand, hand.to) : null;
@@ -221,6 +234,9 @@ async function runHand(ctx: StepContext, hand: ActHand): Promise<StepOutcome> {
     }
     case 'drop': return drop(ctx, { items: (hand.items ?? []) as Array<{ item: string; count?: number }>, toward: target !== undefined ? String(target) : one });
     case 'pickup': return pickup(ctx, { radius: hand.range, ids: typeof target === 'number' ? [target] : undefined });
+    case 'mine': return mine(ctx, { block: hand.block ?? '', at: cells, count: hand.count, tool: hand.tool, collect: hand.collect, seconds: hand.seconds, canDig: hand.canDig, maxDig: hand.maxDig });
+    case 'make': return make(ctx, { item: hand.item ?? '', count: hand.count });
+    case 'smelt': return smelt(ctx, { items: (hand.items ?? []) as Array<{ item: string; count?: number }>, fuel: hand.fuel, fuelCount: hand.fuelCount, furnaces: hand.furnaces, at: hand.at ? cells : undefined, seconds: hand.seconds });
     case 'wait': {
       const seconds = Math.max(0, Math.min(30, hand.seconds ?? 1));
       await wait(ctx, seconds * 1000);

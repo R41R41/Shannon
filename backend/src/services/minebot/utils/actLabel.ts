@@ -1,7 +1,7 @@
 /** One act step in a few words, for the result's lines and the UI mod's task tab ("dig (12,40,7)", "walk → (3,64,9)"). */
 export interface StepLike {
   do?: string; to?: unknown; path?: unknown[]; at?: unknown; block?: string; item?: string; count?: number; target?: string | number;
-  seconds?: number; n?: number;
+  seconds?: number; n?: number; items?: Array<{ item?: string; count?: number }>;
 }
 
 const pos = (spec: unknown): string => {
@@ -19,6 +19,9 @@ export function stepLabel(step: StepLike): string {
     case 'craft': return `craft ${step.item}×${step.count ?? 1}`;
     case 'attack': case 'shoot': return `${step.do} ${step.target ?? at}`;
     case 'wait': return `wait ${step.seconds ?? 1}秒`;
+    case 'mine': return `mine ${step.block ?? ''}${step.count ? `×${step.count}` : ''} ${at}`.trim();
+    case 'make': return `make ${step.item}×${step.count ?? 1}`;
+    case 'smelt': return `smelt ${(step.items ?? []).map(entry => `${entry.item}×${entry.count ?? '?'}`).join(' ')}${at ? ` ${at}` : ''}`.trim();
     case 'pillarUp': return `pillarUp ${step.n ?? 1}段 ${step.block ?? ''}`.trim();
     default: return `${step.do ?? '?'}${step.item ? ` ${step.item}` : ''}${at ? ` ${at}` : ''}`;
   }
