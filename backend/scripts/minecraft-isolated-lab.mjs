@@ -19,6 +19,14 @@ const viewDistance = Math.max(5, Math.min(12, Number(process.env.MINECRAFT_LAB_V
 const chosenSeed = process.env.MINECRAFT_LAB_SEED ?? '';
 if (chosenSeed && !/^-?\d{1,20}$/.test(chosenSeed)) throw new Error('MINECRAFT_LAB_SEED must be a number');
 if (!['flat', 'natural'].includes(terrain)) throw new Error('Invalid terrain profile');
+// MINECRAFT_LAB_WORLD_FROM: a world to start from (a staged COPY under ~/.cache/minebot-lab: level.dat and region/), copied into the new
+// directory before the server starts (lab/run-replay.sh: the ground of a paid run, put back to the moment of a stop). Never a live world.
+const worldFrom = process.env.MINECRAFT_LAB_WORLD_FROM ?? '';
+if (worldFrom) {
+  if (terrain !== 'natural') throw new Error('MINECRAFT_LAB_WORLD_FROM needs MINECRAFT_LAB_TERRAIN=natural');
+  if (!/^\/home\/azureuser\/\.cache\/minebot-lab\/[A-Za-z0-9._/-]+$/.test(worldFrom) || worldFrom.includes('..')) throw new Error('MINECRAFT_LAB_WORLD_FROM must be a staged copy under ~/.cache/minebot-lab');
+  if (!fs.existsSync(path.join(worldFrom, 'level.dat')) || !fs.existsSync(path.join(worldFrom, 'region'))) throw new Error('MINECRAFT_LAB_WORLD_FROM has no level.dat or region/');
+}
 if (unassisted && terrain !== 'natural') throw new Error('Unassisted campaign requires natural terrain');
 if (!Number.isInteger(port) || port < 1 || port > 65535 || (port >= 25565 && port <= 25569)) {
   throw new Error('Invalid isolated lab port');
@@ -79,6 +87,10 @@ if (uiModConfig) {
   fs.writeFileSync(path.join(directory, 'config', 'shannonuimod.json'), JSON.stringify(uiModConfig, null, 2) + '\n', { mode: 0o600 });
 }
 fs.writeFileSync(path.join(directory, 'eula.txt'), 'eula=true\n');
+if (worldFrom) {
+  fs.cpSync(worldFrom, path.join(directory, 'progressive_world'), { recursive: true });
+  fs.rmSync(path.join(directory, 'progressive_world', 'session.lock'), { force: true });
+}
 const digest = createHash('md5').update(`OfflinePlayer:${username}`).digest();
 digest[6] = (digest[6] & 0x0f) | 0x30;
 digest[8] = (digest[8] & 0x3f) | 0x80;
@@ -117,6 +129,6 @@ fs.writeFileSync(path.join(directory, 'server.properties'), [
 const started = spawnSync('tmux', ['-L', tmuxSocket, 'new-session', '-d', '-s', session, '-c', directory,
   'java -Xms512M -Xmx2G -jar fabric-server-launch.jar nogui']);
 if (started.status !== 0) throw new Error('Failed to start isolated server');
-process.stdout.write(JSON.stringify({ directory, session, tmuxSocket, port, uuid, terrain,
+process.stdout.write(JSON.stringify({ directory, session, tmuxSocket, port, uuid, terrain, ...(worldFrom ? { worldFrom } : {}),
   seed: chosenSeed || (unassisted ? 'random-hidden-from-bot' : 9272026), unassisted, public: publicServer,
   ...(publicServer ? { whitelist: whitelistNames } : {}), ...(uiModPorts ? { uiMod: { ...uiModPorts, jars: uiModJars } } : {}) }) + '\n');

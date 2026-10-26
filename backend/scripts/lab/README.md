@@ -86,3 +86,26 @@ act の手（place・make・pillarUp・go・mine・smelt・obsidian・portal・f
 - 測った値（2026-10-27、72fb975、VM は本番の体が動いたまま）: 17 場面すべて PASS、プローブ 4 分 20 秒前後（起動と片付けを入れて 約 5 分 30 秒）、2 回続けて同じ結果。`-GoFrom a9b7d18`（go の直し前）では 17 場面中 11 が落ち、`place_table_after_go`・`pillar3_after_go`・`portal` などが実サーバーで「Motor owner expired」になり、go の後に `bot.dig`・`bot.placeBlock` が別の関数のまま残る（`hostDigRestored`・`hostPlaceRestored` が偽）ことも出る。
 - 後から足した場面（2026-10-27）: `go_series`（1 つの体で go を 4 回: 平地・壁を掘る・穴を橋で渡る・崖を回る。2 回目以降も掘 n・置 n が 0 でないこと）、`mine_behind_rock`（石 3 枚の奥の鉱脈 4 個を canDig で近づいて取る）、`mine_unreachable`（石に囲まれた鉱脈・canDig なし → 15 秒以内に unreachable）、`mine_over_lava`（溶岩の向こう）、`mine_after_go`（壁を掘る go の後の mine）、`go_boxed_in`（石の箱の中から canDig・canPlace なしで出る → dead_end が数秒以内）、`go_dig_refused`・`go_place_refused`（冒険モードにして、サーバーが掘り・置きを断る → 経路はあるのに実行されない。stuck の打ち切りが効くか。引き直し数と秒を出す）、`flow_chain`（15 本の act を 1 つの体で。go・make・go・mine・smelt・pillarUp・place・go・place・dig・go・make・go・pillarUp・place。持ち物は引き継ぎ、地形は act の間に作り直す）。表の「act ごとの秒」と、`report.json` の `goRedraws`（引き直し数）・`failLine` で測る。
 - 退行の再現（`-GoFrom a9b7d18`）: go の 2 回目以降が「掘 0・置 0・引き直し 488 回・40 秒」で着く（`go_series` の `go_dig_wall_after`、`flow_chain` の 03・13）、`go_dig_refused` は 363 回・32 秒、橋は落下、その後の place・pillarUp・make は Motor owner expired。直した版は同じ並びで 掘 6・置 3・引き直し 0 回・7 秒、`go_dig_refused` は stuck を 15 回・8 秒で返す。
+
+## 実走の場面をその地形でそっくり再現する（`run-replay`）
+
+実走の act を、その時の地形・位置・持ち物で、同じ引数のまま隔離ラボで出し直します。止まり方（理由・秒・歩数）が実走と同じになるかを確かめ、その間の経路探索（状態・ノード数・時間）と体の動き（毎 tick の足の高さ・上向きの速さ・接地）を記録します。モデルも有料の鍵も使わず、費用は 0 です。2026-10-27 に実走 41 の go の失敗を調べるために作りました（共有メモ run41-why.md）。
+
+手順（PC で 1〜3、VM で 4）：
+1. **生成し直した地形**：`world-pristine.sh <label> <code.tar> <seed> <x0> <z0> <x1> <z1>`（VM）。同じシードの新しい隔離ワールドで、その範囲を forceload して保存します。region は `$MINEBOT_LAB_SCRATCH/pristine-<label>/region` に出ます。
+2. **その時刻の地形**：`run-ground.py --current <実走後の region> --pristine <1 の region> --ops ops.jsonl --samples samples.jsonl --t0 <開始の ISO> --at <秒> --box x0 y0 z0 x1 y1 z1 [--own-map] --out g.json --section x141,z203`（PC、python3 -I）。
+   - 体だけが起こす違い（掘って air、空気の所に丸石・作業台・かまど・水）を拾い、体が初めてそのマスに 5m 以内に来た時刻で前後を分けます。
+   - 体が見ていた地図（act の結果の `map`）があれば、それを優先します。
+   - `--own-map` は、何も変えなかった act（掘 0・置 0 の go）の自分の地図も使う時に付けます。
+   - 出力は `restore`（/setblock するマス）、`marks`（砂利の落下・水の流れなど、戻せない所）、`check`（地図との照合）です。
+3. **場面**：`replay-case.py --ops --samples --equip --t0 --ground g.json --acts q114,q115 --name c1220 --title … [--search 5000,30000,90000 --variants 5000] [--delay q115=4800] --into cases.json > cases.json`（PC）。
+   - 体の位置・体力・持ち物（スロットと傷み）・防具・盾は、見本と act の `at` から入れます。
+   - act の引数と期限は ops から、期待する止まり方は実走の結果の行から入れます。
+4. **再現**：`run-replay.sh <label> <code.tar> <cases.json> [REPLAY_ONLY=c1220] [REPLAY_SOURCE=<world>] [REPLAY_TIMEOUT=1800]`（VM）。
+   - 実走後のワールド（既定は shannon-home の world を読むだけ。shannon-home が動いている時は断ります）を写し、写しから隔離ラボを起動します（`MINECRAFT_LAB_WORLD_FROM`、描画距離 10）。
+   - 場面ごとに `/setblock` で地形を戻し、体を置き、`scripts/minecraft-replay-probe.ts` が `NativeCommonFcaBody.execute` で act を送ります。
+   - 出力は `$MINEBOT_LAB_SCRATCH/replay-<label>/`（`probe.log`・`report.json`・`server-latest.log`）です。
+   - `--search` を付けると、act の後に同じ探索を長い持ち時間で出し直します。道が無いのか、時間が無いのかが分かります。
+   - `--variants` を付けると、同じ探索から 1 つずつ費用を外して、1 秒あたりのノード数を比べます（act の port、道具選び、ブロックの読み、素の pathfinder）。
+
+送り方の例（PowerShell から。VM へは LF のファイルで）：`tar.exe -cf code.tar --exclude='*.test.ts' --exclude=node_modules -C <worktree> backend/src backend/scripts backend/package.json backend/tsconfig.json package.json` を作り、`scp code.tar run-replay.sh cases.json azure-constant-server:.cache/minebot-lab/why41-in/` で送ってから `ssh azure-constant-server bash .cache/minebot-lab/why41-in/run-replay.sh t2 ~/.cache/minebot-lab/why41-in/code.tar ~/.cache/minebot-lab/why41-in/cases.json` を実行します。
