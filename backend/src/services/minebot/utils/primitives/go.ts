@@ -317,17 +317,26 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     if (counting) { state.dug++; lastWork = Date.now(); }
     return result;
   };
-  const countingPlace = async function (this: unknown, ...rest: unknown[]) {
-    const result = await originalPlace.apply(host, rest);
-    if (!counting) return result;
-    // A block the server did not take is not a floor: the route executor is not let walk on (run 40 bench: go went on over a refused place and fell four cells).
-    if (await laidAt(host, rest[0], rest[1])) { state.placed++; lastWork = Date.now(); state.refused = 0; return result; }
+  /** A block the server did not take is not a floor: the route executor is not let walk on (run 40 bench: go went on over a refused place and fell four cells). */
+  const refusedPlace = () => {
     if (++state.refused >= GO_REFUSED_PLACES && !state.veto) {
       state.veto = { code: 'stuck', text: `置いたブロックが世界に現れない（サーバーが置きを断った。${state.refused} 回）` };
       try { nav.setGoal?.(null); } catch { /* stopped below */ }
     }
     // The body is stopped where it stands at once: the next step of the route would be onto the block that is not there.
     letGo(bot);
+  };
+  const countingPlace = async function (this: unknown, ...rest: unknown[]) {
+    let result: unknown;
+    try { result = await originalPlace.apply(host, rest); }
+    catch (error) {
+      // The library gives up when the server's update does not come: that too is a place the server did not take (an interruption is not).
+      if (counting && !/Action interrupted|Motor owner expired/u.test(String((error as Error)?.message))) refusedPlace();
+      throw error;
+    }
+    if (!counting) return result;
+    if (await laidAt(host, rest[0], rest[1])) { state.placed++; lastWork = Date.now(); state.refused = 0; return result; }
+    refusedPlace();
     throw new Error('The place was not taken');
   };
   if (typeof originalDig === 'function') host.dig = countingDig;

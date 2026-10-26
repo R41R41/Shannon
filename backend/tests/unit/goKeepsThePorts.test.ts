@@ -74,3 +74,15 @@ describe('a place the server refused is no floor (run 40 bench: go went on over 
     expect(sim.bot.entity.position.y).toBeGreaterThanOrEqual(63.9);
   });
 });
+
+describe('a place that the library gives up on (the server\'s update never comes) is a refused place as well', () => {
+  it('stops stuck at the first, with the body held where it stands', async () => {
+    const ground: Ground = (x, y, z) => (Math.abs(x) > R || Math.abs(z) > R ? null : x >= 2 && x <= 5 && y >= 58 && y < 64 ? 'air' : y < 64 ? 'stone' : 'air');
+    const sim = makeSim(ground, { items: [{ name: 'cobblestone', count: 16 }] });
+    (sim.bot as any).placeBlock = async () => { throw new Error('Event blockUpdate did not fire within timeout of 5000ms'); };
+    const result = await act(sim, [{ do: 'go', to: { x: 8, y: 64, z: 0 }, canPlace: ['cobblestone'], seconds: 60 }]);
+    expect(json(result).lines[0].line).toContain('go 止まった stuck');
+    expect(json(result).lines[0].line).toContain('置いたブロックが');
+    expect(sim.bot.entity.position.y).toBeGreaterThanOrEqual(63.9);
+  });
+});
