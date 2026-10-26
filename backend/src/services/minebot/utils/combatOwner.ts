@@ -15,8 +15,11 @@ import { isThreatEntity } from './hostileMobHints.js';
  * MINEBOT_HEAD_COMBAT_OWNER=off puts the old behaviour back (the floor flees and walls in whatever the planner chose).
  */
 
-/** The skills that are the planner's fight (engagement.ts's FIGHT_SKILLS without build-around-self, which is a wall, not a fight). */
-export const HEAD_COMBAT_SKILLS: ReadonlySet<string> = new Set(['combat', 'combat-engage', 'attack-nearest', 'attack-continuously', 'shoot-bow']);
+/**
+ * The skills that are the planner's fight (engagement.ts's FIGHT_SKILLS without build-around-self, which is a wall, not a fight). Run 39: the act's `fight`
+ * hand is one (it marks itself, `primitives/fight.ts`): its `retreatHp` is the planner's own limit, so above `HEAD_COMBAT_YIELD_HEALTH` the floor does not flee for it.
+ */
+export const HEAD_COMBAT_SKILLS: ReadonlySet<string> = new Set(['combat', 'combat-engage', 'attack-nearest', 'attack-continuously', 'shoot-bow', 'fight']);
 /** A fight that has ended (or been cut off) is still the planner's for this long after it began, while its target lives and is near. */
 export const HEAD_COMBAT_GRACE_MS = 20_000;
 /** How near the target must be for the grace to hold. */

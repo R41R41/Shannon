@@ -315,6 +315,34 @@ describe('fight on the practice field: stance flee', () => {
   }, 60_000);
 });
 
+describe('fight is the planners fight for the floor (combatOwner)', () => {
+  const scene = () => makeField({ held: 'iron_sword', health: 7, mobs: [{ at: new Vec3(2.5, 64, 0.5), damage: 0.5, health: 12 }] });
+  it('above the floors own limit (health 6 to 8) the floor does not run for it: the hand marks itself, kills the zombie and lets the mark go', async () => {
+    const field = scene();
+    ensureReflexLedger(field.bot);
+    installFloorReflexes(field.bot, floorConfig({}));
+    const { json } = await act(field, [{ do: 'fight', target: '#100', seconds: 30 }]);
+    field.stop();
+    const marks = (field.bot as any).headCombat as Array<{ skill: string; endedAt?: number }>;
+    console.log('[fight owner]', json.stoppedBy, lineOf(json), JSON.stringify(marks));
+    expect(marks.map(mark => mark.skill)).toEqual(['fight']);
+    expect(marks[0]!.endedAt).toBeDefined();
+    expect(json.stoppedBy).not.toBe('reflex');
+  }, 60_000);
+  it('with the switch off the floor runs as before and takes the body (the contrast)', async () => {
+    process.env.MINEBOT_HEAD_COMBAT_OWNER = 'off';
+    try {
+      const field = scene();
+      ensureReflexLedger(field.bot);
+      installFloorReflexes(field.bot, floorConfig({}));
+      const { json } = await act(field, [{ do: 'fight', target: '#100', seconds: 30 }]);
+      field.stop();
+      expect((field.bot as any).headCombat).toBeUndefined();
+      expect(json.stoppedBy).toBe('reflex');
+    } finally { delete process.env.MINEBOT_HEAD_COMBAT_OWNER; }
+  }, 60_000);
+});
+
 describe('fight on the practice field: who holds the body', () => {
   it('a floor reflex takes the body in the fight (health 8 or less, a zombie in reach): the hand ends as `reflex` with its counts, names the reflex, and is not started again', async () => {
     const field = makeField({ held: 'iron_sword', health: 10, mobs: [{ at: new Vec3(2.5, 64, 0.5), damage: 3, health: 60 }] });

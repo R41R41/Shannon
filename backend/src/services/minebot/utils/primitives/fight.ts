@@ -1,6 +1,7 @@
 import pathfinder from 'mineflayer-pathfinder';
 import { buildMovements } from '../setMovements.js';
 import { beginEngagement } from '../engagement.js';
+import { markHeadCombat } from '../combatOwner.js';
 import { nativeActionHost } from '../../execution/ActionExecution.js';
 import { bodyReader, feetCell, type Cell } from '../localMap.js';
 import { eyeOf, probeSight } from '../probeTools.js';
@@ -134,6 +135,8 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
 
   // A fight is an engagement the shield reflex and the floor's melee/flee reflexes read; a flight is none (it runs, and a shield on the arm slows it).
   const endEngagement = stance === 'fight' ? beginEngagement(host, [String(target.name ?? '*')]) : () => undefined;
+  // The planner's fight (combatOwner): above the floor's own limit health the floor does not run for it or wall her in; the hand's retreatHp is the limit that counts.
+  const endOwner = stance === 'fight' ? markHeadCombat(host, 'fight', [String(target.name ?? '*')]) : () => undefined;
   const navigator = bot.pathfinder;
   const previousMovements = navigator?.movements;
   let following = false;
@@ -362,6 +365,7 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
   } finally {
     bot.removeListener?.('entityHurt', onHurt); bot.removeListener?.('entityDead', onDead); bot.removeListener?.('health', sample);
     endEngagement();
+    endOwner();
     unfollow();
     letGo(bot);
     try { if (previousMovements && navigator) navigator.setMovements(previousMovements); } catch { /* kept */ }
