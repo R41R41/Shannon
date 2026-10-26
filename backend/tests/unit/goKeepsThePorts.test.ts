@@ -59,3 +59,18 @@ describe('a go leaves the body\'s dig and placeBlock as it found them', () => {
     expect(host.placeBlock).toBe(place0);
   });
 });
+
+describe('a place the server refused is no floor (run 40 bench: go went on over it and fell four cells)', () => {
+  it('stops stuck after two blocks laid that the world does not show, and walks nowhere on them', async () => {
+    const ground: Ground = (x, y, z) => (Math.abs(x) > R || Math.abs(z) > R ? null : x >= 2 && x <= 5 && y >= 58 && y < 64 ? 'air' : y < 64 ? 'stone' : 'air');
+    const sim = makeSim(ground, { items: [{ name: 'cobblestone', count: 16 }] });
+    // The server takes no block: the call returns, the world is as it was.
+    (sim.bot as any).placeBlock = async () => undefined;
+    const result = await act(sim, [{ do: 'go', to: { x: 8, y: 64, z: 0 }, canPlace: ['cobblestone'], seconds: 60 }]);
+    const line = json(result).lines[0].line as string;
+    expect(json(result).ok).toBe(false);
+    expect(line).toContain('go 止まった stuck');
+    expect(line).toContain('置いたブロックが');
+    expect(sim.bot.entity.position.y).toBeGreaterThanOrEqual(63.9);
+  });
+});

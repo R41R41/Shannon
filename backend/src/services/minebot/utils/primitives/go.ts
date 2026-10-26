@@ -53,6 +53,8 @@ export const GO_STUCK_MS = 3000;
  * long as it is given. The most redraws with no headway between them (no new cell entered, nothing dug, nothing laid) before the stop `stuck`.
  */
 export const GO_STALLED_REDRAWS = 12;
+/** The blocks laid that the world does not show before the stop `stuck` (the server refuses the place: one is enough, the next step would be onto it). */
+export const GO_REFUSED_PLACES = 1;
 /** The most mendings of a stuck body, without any headway between them, before the stop `stuck`. */
 export const GO_REPAIRS = 5;
 /** The most levels a climb makes before the way is drawn again. */
@@ -164,6 +166,8 @@ interface Relax { hazards?: boolean; tool?: boolean; blocks?: boolean; permissio
 interface State {
   steps: number; dug: number; placed: number; redraws: number;
   veto: { code: string; text: string } | null;
+  /** The blocks laid in a row that the world did not show. */
+  refused: number;
 }
 
 // ---- the movements ---------------------------------------------------------------------------------------------------------------------
@@ -231,6 +235,19 @@ const goalOf = (cell: Cell, range: number) => range > 0 ? new goals.GoalNear(cel
 const compositeOf = (cells: Cell[], range: number) => cells.length === 1 ? goalOf(cells[0], range) : new goals.GoalCompositeAny(cells.map(cell => goalOf(cell, range)));
 const keyOf = (cell: Cell) => `${cell.x},${cell.y},${cell.z}`;
 
+/** Whether the block just laid against `reference` on `face` shows in the world (the cell beside it is no longer air), looked at for a moment as the update may come late. */
+async function laidAt(host: any, reference: any, face: any): Promise<boolean> {
+  const base = reference?.position, dir = face;
+  if (!base || !dir) return true;
+  const at = new Vec3(Math.floor(base.x + dir.x), Math.floor(base.y + dir.y), Math.floor(base.z + dir.z));
+  for (let tries = 0; tries < 4; tries++) {
+    const block = host.blockAt?.(at, false);
+    if (!block || !isAirLike(block)) return true;
+    await new Promise(resolve => setTimeout(resolve, 75));
+  }
+  return false;
+}
+
 export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   const bot = ctx.bot;
   const nav = bot.pathfinder as any;
@@ -245,7 +262,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   const deadline = Math.min(ctx.deadline, startedAt + (args.seconds ?? GO_DEFAULTS.seconds) * 1000);
   const rule = digRuleOf(bot.registry, args.canDig);
   const place = placeNamesOf(bot, args.canPlace);
-  const state: State = { steps: 0, dug: 0, placed: 0, redraws: 0, veto: null };
+  const state: State = { steps: 0, dug: 0, placed: 0, redraws: 0, veto: null, refused: 0 };
   const start = feetCell(bot)!;
 
   // ---- how a line ends (the contract's result lines) ----
@@ -302,8 +319,16 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   };
   const countingPlace = async function (this: unknown, ...rest: unknown[]) {
     const result = await originalPlace.apply(host, rest);
-    if (counting) { state.placed++; lastWork = Date.now(); }
-    return result;
+    if (!counting) return result;
+    // A block the server did not take is not a floor: the route executor is not let walk on (run 40 bench: go went on over a refused place and fell four cells).
+    if (await laidAt(host, rest[0], rest[1])) { state.placed++; lastWork = Date.now(); state.refused = 0; return result; }
+    if (++state.refused >= GO_REFUSED_PLACES && !state.veto) {
+      state.veto = { code: 'stuck', text: `置いたブロックが世界に現れない（サーバーが置きを断った。${state.refused} 回）` };
+      try { nav.setGoal?.(null); } catch { /* stopped below */ }
+    }
+    // The body is stopped where it stands at once: the next step of the route would be onto the block that is not there.
+    letGo(bot);
+    throw new Error('The place was not taken');
   };
   if (typeof originalDig === 'function') host.dig = countingDig;
   if (typeof originalPlace === 'function') host.placeBlock = countingPlace;

@@ -230,7 +230,9 @@ export async function mine(ctx0: StepContext, args: MineArgs): Promise<StepOutco
     if (reachable(cell)) return null;
     const why = gone.ok ? `${placeText(bot, cell)} の隣まで行ったが、手が届かない・見えない` : gone.text.replace(/^go 止まった [a-z_]+: /u, '');
     if (!gone.ok && gone.reason === 'limit_dig') return { fatal: true, reason: 'limit_dig', text: `道を掘る上限 ${roadBudget} マスに着いた（${placeText(bot, cell)} にまだ届かない）` };
-    if (!gone.ok && gone.reason === 'limit_time') return { fatal: true, reason: 'limit_time', text: `${seconds} 秒の上限に着いた` };
+    // The hand's own seconds are the hand's limit; the approach's cap is only that this cell was not reached in that time.
+    if (!gone.ok && gone.reason === 'limit_time' && Date.now() >= ctx.deadline) return { fatal: true, reason: 'limit_time', text: `${seconds} 秒の上限に着いた` };
+    if (!gone.ok && gone.reason === 'limit_time') return { fatal: false, reason: 'unreachable', text: `${placeText(bot, cell)} へ ${APPROACH_SECONDS} 秒近づいても届かない` };
     const allowed = roadLeft > 0 ? `許された物（${roadWords.join('・')}）だけを掘っても` : '掘らずに（canDig が無い）';
     return { fatal: false, reason: 'unreachable', text: `${placeText(bot, cell)} へ${allowed}届く道が無い（${why.slice(0, 70)}）` };
   }
