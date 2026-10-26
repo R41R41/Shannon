@@ -394,6 +394,23 @@ describe('go: a body that stands still', () => {
   });
 });
 
+describe('go: a route the executor cannot carry out (run 40: 217 to 436 redraws in 34 to 54 s)', () => {
+  it('gives the way up after a few redraws that made no headway, and says stuck at once with the count', async () => {
+    // A wall to dig through, and a body whose every dig is refused (as a stale motor port refused it): the executor draws the way again and again.
+    const sim = makeSim(over(flat, box('stone', 3, 3, FLOOR, FLOOR + 3, -30, 30)), { items: stacks(PICK) });
+    (sim.bot as any).dig = async () => { throw new Error('Motor owner expired'); };
+    const began = Date.now();
+    const outcome = await drive(sim, run(sim, { canDig: ['stone'], seconds: 120 }));
+    const seconds = (Date.now() - began) / 1000;
+    expect(outcome.ok).toBe(false);
+    expect(outcome.reason).toBe('stuck');
+    expect(outcome.text).toContain('引き直しても');
+    expect(counts(outcome)!.redraws).toBeLessThanOrEqual(30);
+    expect(seconds).toBeLessThan(25);
+    expect(Object.values(sim.bot.controlState).some(Boolean)).toBe(false);
+  });
+});
+
 describe('go: the arguments and the estimate', () => {
   it('checks the fields as the head does', () => {
     const ok = { do: 'go', to: goal(1, 2, 3) };

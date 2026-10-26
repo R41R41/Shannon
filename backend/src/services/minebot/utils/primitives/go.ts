@@ -48,6 +48,11 @@ export interface GoArgs {
 export const GO_DEFAULTS = { range: 0.5, maxDrop: 3, seconds: 60, maxDig: 40, maxPlace: 24 } as const;
 /** Stuck: the position unchanged for this long while nothing is being dug or laid. */
 export const GO_STUCK_MS = 3000;
+/**
+ * Run 40 (2026-10-27: 7 stuck stops of 34 to 54 s and 217 to 436 redraws each): the route executor draws the path again every time a step of it fails, and does so for as
+ * long as it is given. The most redraws with no headway between them (no new cell entered, nothing dug, nothing laid) before the stop `stuck`.
+ */
+export const GO_STALLED_REDRAWS = 12;
 /** The most mendings of a stuck body, without any headway between them, before the stop `stuck`. */
 export const GO_REPAIRS = 5;
 /** The most levels a climb makes before the way is drawn again. */
@@ -302,7 +307,18 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   if (typeof originalDig === 'function') host.dig = countingDig;
   if (typeof originalPlace === 'function') host.placeBlock = countingPlace;
   // A drawing again: the path was reset because something went wrong with it (not for the block it dug itself, nor a chunk arriving).
-  const onReset = (reason: unknown) => { if (!/^(?:goal_updated|movements_updated|block_updated|chunk_loaded)$/u.test(String(reason))) state.redraws++; };
+  let stalledKey = '', stalledResets = 0;
+  const onReset = (reason: unknown) => {
+    if (/^(?:goal_updated|movements_updated|block_updated|chunk_loaded)$/u.test(String(reason))) return;
+    state.redraws++;
+    // A redraw with no headway since the last one is counted; past the most the way is given up (the stop comes at the next look, `vetoed`).
+    const key = `${state.steps}/${state.dug}/${state.placed}`;
+    if (key !== stalledKey) { stalledKey = key; stalledResets = 0; return; }
+    if (++stalledResets >= GO_STALLED_REDRAWS && !state.veto) {
+      state.veto = { code: 'stuck', text: `道を ${stalledResets} 回引き直しても 1 歩も・1 マスも進まない（経路の実行が断られている）` };
+      try { nav.setGoal?.(null); } catch { /* stopped below */ }
+    }
+  };
   bot.on?.('path_reset', onReset);
   const previousMovements = nav.movements;
   const hostNav = host.pathfinder as any;
@@ -333,11 +349,12 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     state.veto = budgetOf(digs, places);
     if (state.veto) { try { nav.setGoal?.(null); } catch { /* stopped below */ } }
   };
-  const vetoed = (): StepOutcome | null => state.veto ? fail(state.veto.code, state.veto.text, state.veto.code === 'limit_dig' ? 'maxDig を増やすか、別の道を' : 'maxPlace を増やすか、別の道を') : null;
+  const VETO_HINTS: Record<string, string> = { limit_dig: 'maxDig を増やすか、別の道を', limit_place: 'maxPlace を増やすか、別の道を', stuck: '別の道か別の行き先を（同じ手の繰り返しは同じ所で止まる）' };
+  const vetoed = (): StepOutcome | null => state.veto ? fail(state.veto.code, state.veto.text, VETO_HINTS[state.veto.code] ?? '別の道を') : null;
 
   const notes: WayNotes = { opened: [], leaves: 0 };
-  // Work that holds the body still on purpose: its own dig or climb, or the executor digging or laying, as long as something has been dug or laid in the last 8 s.
-  const busy = () => manualBusy || ((!!nav.isMining?.() || !!nav.isBuilding?.()) && Date.now() - lastWork < 8000);
+  // Work that holds the body still on purpose: its own dig or climb, or the executor digging or laying, as long as something has been dug or laid in the last 5 s.
+  const busy = () => manualBusy || ((!!nav.isMining?.() || !!nav.isBuilding?.()) && Date.now() - lastWork < 5000);
 
   /** The route found without walking it: its status and the cells it breaks and fills. */
   const plan = async (movements: any, goal: any, ms: number): Promise<Plan> => {
