@@ -19,6 +19,7 @@ import { drop, eat, equip, jump, look, sneak } from '../utils/primitives/body.js
 import { pickup } from '../utils/primitives/pickup.js';
 import { shoot } from '../utils/primitives/shoot.js';
 import { pillarUp } from '../utils/primitives/pillarUp.js';
+import { go, goProblem } from '../utils/primitives/go.js';
 import { itemFoodPoints } from '../utils/foodPoints.js';
 import { stepLabel } from '../utils/actLabel.js';
 import { ACT_CONDITION, conditionHolds, conditionMetText, type ActCondition } from '../utils/actConditions.js';
@@ -43,7 +44,7 @@ export { stepLabel };
 const Pos = z.object({ x: z.number().optional(), y: z.number().optional(), z: z.number().optional(),
   front: z.number().optional(), right: z.number().optional(), up: z.number().optional() }).strict();
 const ItemCount = z.object({ item: z.string(), count: z.number().optional() }).strict();
-export const HAND_KINDS = ['walk', 'dig', 'place', 'pillarUp', 'use', 'look', 'jump', 'sneak', 'equip', 'craft', 'furnace', 'chest',
+export const HAND_KINDS = ['walk', 'go', 'dig', 'place', 'pillarUp', 'use', 'look', 'jump', 'sneak', 'equip', 'craft', 'furnace', 'chest',
   'attack', 'shoot', 'eat', 'drop', 'pickup', 'wait'] as const;
 const Face = z.enum(['up', 'down', 'north', 'south', 'east', 'west']);
 /** One hand: every field of the head's ActHand (the body takes whatever the head's schema takes), and a few more it can read. */
@@ -63,6 +64,13 @@ const Hand = z.object({
   target: z.union([z.string(), z.number()]).optional().describe('#id か名前'),
   untilDead: z.boolean().optional(),
   hold: z.boolean().optional().describe('attack: その場で待ち、手の届く所に来たら打つ（追わない）'),
+  goals: z.array(Pos).min(2).max(8).optional().describe('go: 行き先の候補（どれか1つに着けば済み）'),
+  canDig: z.array(z.string().max(40)).min(1).max(12).optional().describe('go: 掘ってよい物（stone・dirt・sand・wood か ブロック id）'),
+  canPlace: z.array(z.string().max(40)).min(1).max(6).optional().describe('go: 置いてよい物（持っている物だけ使う）'),
+  maxDrop: z.number().int().min(0).max(10).optional().describe('go: 一度に落ちてよい段'),
+  waterOk: z.boolean().optional().describe('go: 水に入ってよい'),
+  maxDig: z.number().int().min(0).max(200).optional().describe('go: 掘る数の上限'),
+  maxPlace: z.number().int().min(0).max(100).optional().describe('go: 置く数の上限'),
   seconds: z.number().optional(),
   charge: z.number().optional(),
   n: z.number().optional(),
@@ -114,7 +122,8 @@ const reflexName = (reason: unknown) => { const text = String(reason ?? ''); ret
 /** The body's own words for the tool (the head shows its own definition: minecraftActContract.ts ACT_DESCRIPTION). */
 const DESCRIPTION = '体に小さな手を最大12個まとめて頼む。体は順に動かし、手ごとに思ったとおりか確かめ、外れたら（失敗・反射・stopIf・満杯）そこで止めて、'
   + '手ごとの1行（止まりは閉じた語・場所・そのマスの今の中身）と新しい地図を JSON で返す。体は回り道・置き場所・道具作り・片づけ・夜の睡眠・戦うかどうかを決めない。'
-  + '手: walk / dig / place / pillarUp / use / look / jump / sneak / equip / craft / furnace / chest / attack / shoot / eat / drop / pickup / wait。'
+  + '手: walk / go / dig / place / pillarUp / use / look / jump / sneak / equip / craft / furnace / chest / attack / shoot / eat / drop / pickup / wait。'
+  + 'go: 行き先（to か goals）へ体が道を引いて着くまで行く。canDig の物だけ掘り・canPlace の物（持っている物）だけ置き、溶岩・火・マグマ・サボテンは避ける。止まる時は「go 止まった <code>」の行で理由を返す。'
   + '座標は {x,y,z}（rel:true で足からの差）か {front,right,up}（facing の向き）。stopIf: hostileWithin・hpBelow・hungerBelow・blockChanged。';
 
 class Act extends InstantSkill {
@@ -174,6 +183,14 @@ async function runHand(ctx: StepContext, hand: ActHand): Promise<StepOutcome> {
       const path = hand.path ? cellsOf(ctx, hand, hand.path) : null;
       if ((hand.to && !to) || (hand.path && !path)) return bad('walk のマスが読めない');
       return walk(ctx, { to: to ?? undefined, path: path ?? undefined, range: hand.range ?? 0.5, sprint: hand.sprint ?? false });
+    }
+    case 'go': {
+      // Where to go is the planner's, as cells; the way (what to tread, dig, lay, and drawing it again) is the body's (utils/primitives/go).
+      const problem = goProblem(hand as Record<string, unknown>, spec => cellOf(ctx, hand, spec) !== null);
+      if (problem) return bad(`go: ${problem}`);
+      const goals = (hand.goals ?? [hand.to]).map(spec => cellOf(ctx, hand, spec)!);
+      return go(ctx, { goals, range: hand.range, canDig: hand.canDig, canPlace: hand.canPlace, maxDrop: hand.maxDrop, waterOk: hand.waterOk, seconds: hand.seconds,
+        maxDig: hand.maxDig, maxPlace: hand.maxPlace, sprint: hand.sprint });
     }
     case 'dig': return dig(ctx, { at: cells, tool: hand.tool, collect: hand.collect, take: hand.takeOk, exposeOk: hand.exposeOk });
     case 'place': return place(ctx, { block: hand.block ?? '', at: cells, against: hand.face });
@@ -310,6 +327,8 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
   // Hurt: health lost from the highest it was in this act (loss while a kind she accepted is within 6 m is not counted); fall: the drop of one airborne spell.
   let highWater = Number(bot.health ?? 20);
   let peakY: number | null = null, hurtAt: number | null = null;
+  /** The fall that stops the act (4 cells); a go hand that may drop further (`maxDrop`) is let fall what it may. */
+  let fallStops = 4;
   /** A reflex gets the first word on a blow: the stop for hurt waits this long for one to act (the ledger's stop and the lease's cut come first). */
   const HURT_GRACE_MS = 250;
   const acceptedNear = () => accepted.size > 0 && (Object.values(bot.entities ?? {}) as any[]).some(entity => entity?.position && entity !== bot.entity
@@ -324,7 +343,7 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
     const entity = bot.entity;
     if (!entity?.position || entity.onGround !== false || entity.isInWater || entity.isInLava || entity.isOnLadder) { peakY = null; return; }
     peakY = Math.max(peakY ?? entity.position.y, entity.position.y);
-    if (peakY - entity.position.y >= 4) return stopWith(`落下: ${Math.round(peakY - entity.position.y)} 段`, 'fell');
+    if (peakY - entity.position.y >= fallStops) return stopWith(`落下: ${Math.round(peakY - entity.position.y)} 段`, 'fell');
   };
   const watch = () => {
     try {
@@ -397,6 +416,7 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
       const began = Date.now();
       let outcome: StepOutcome;
       host.actHandNow = hand.do;
+      fallStops = hand.do === 'go' ? Math.max(4, (hand.maxDrop ?? 3) + 1) : 4;
       const dugBefore = hand.do === 'dig' ? (cellsOf(ctx, hand, hand.at) ?? []).map(cell => ({ cell, name: String(blockAt(bot, cell)?.name ?? '') })) : [];
       try { outcome = await runHand(ctx, hand); }
       catch (error) {
@@ -455,7 +475,8 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
       } catch { /* the count is a help, not the result */ }
       let around: string | undefined;
       try { if (outcome.at) around = aroundText(bodyReader(bot), outcome.at, feetCell(bot)); } catch { /* the line stands without it */ }
-      const line = stoppedLine(outcome.reason, outcome.text, outcome.at ? cellNow(bot, outcome.at) : undefined, outcome.cause, again);
+      // go's line is the contract's own ("go 止まった <code>: ...", the counts and the hint): its code is the closed word.
+      const line = hand.do === 'go' ? clip(outcome.text) : stoppedLine(outcome.reason, outcome.text, outcome.at ? cellNow(bot, outcome.at) : undefined, outcome.cause, again);
       report.lines.push({ i: index + 1, do: hand.do, status: goesOn ? 'failed' : 'stopped', line,
         ...(outcome.at ? { where: outcome.at } : {}), ...(around ? { around } : {}) });
       remember(hand, goesOn ? 'failed' : 'stopped', line, outcome.at, base);

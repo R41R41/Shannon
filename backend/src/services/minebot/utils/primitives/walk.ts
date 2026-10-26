@@ -186,18 +186,26 @@ export interface SearchSaid { status: string; nodes: number }
 export const portalWalks = new WeakSet<object>();
 export interface GoOutcome { reached: boolean; timedOut: boolean; stuck: boolean; error: unknown; search: SearchSaid | null; opens: string[]; /** The body came into another dimension while it walked (a portal: arrival, not a failure). */ crossed?: boolean }
 
+/** go's way of using goWith: its own stuck time, a test of work that holds the body still on purpose (a dig, a block laid), and a look at each route found. */
+export interface GoWithOptions {
+  stuckMs?: number; busy?: () => boolean; onRoute?: (route: any[], status: string) => void;
+  /** Headway is a move along the ground (or a rise or fall that ends on the ground), not the jumping up and down of a body held by a wall. */
+  onGround?: boolean;
+}
+
 /**
  * One goal walked with the route search: the goal reached (its own test on the feet, never the search's word: mineflayer-pathfinder's goto
  * resolves when a search finds no step at all), out of time, stuck (no headway for STUCK_MS), or the search's error. A shut wooden door,
  * gate or trapdoor in the next cells of the route is opened when the eye is near; the leaves the route breaks are counted.
  */
-export async function goWith(ctx: StepContext, goal: any, timeoutMs: number, notes: WayNotes): Promise<GoOutcome> {
+export async function goWith(ctx: StepContext, goal: any, timeoutMs: number, notes: WayNotes, options: GoWithOptions = {}): Promise<GoOutcome> {
   const bot = ctx.bot;
   let route: any[] = [];
   let search: SearchSaid | null = null;
   const onRoute = (results: any) => {
     route = Array.isArray(results?.path) ? results.path : [];
     search = { status: String(results?.status ?? '?'), nodes: route.length };
+    try { options.onRoute?.(route, search.status); } catch { /* a look at the route never stops the walk */ }
   };
   const onDug = (block: any) => { if (block?.name && isLeaves(String(block.name))) notes.leaves++; };
   const opening = new Map<string, number>();
@@ -249,8 +257,11 @@ export async function goWith(ctx: StepContext, goal: any, timeoutMs: number, not
     try { openAhead(); } catch { /* the walk goes on; a shut door stops it below */ }
     const now = bot.entity?.position;
     if (!now) return;
-    if (now.distanceTo(last) >= NO_PROGRESS_M) { last = now.clone(); lastMoveAt = Date.now(); return; }
-    if (Date.now() - lastMoveAt >= STUCK_MS) { stuck = true; try { bot.pathfinder.stop(); bot.pathfinder.setGoal(null); } catch { /* stopped below */ } }
+    const headway = options.onGround
+      ? Math.hypot(now.x - last.x, now.z - last.z) >= NO_PROGRESS_M || (bot.entity?.onGround !== false && Math.abs(now.y - last.y) >= NO_PROGRESS_M)
+      : now.distanceTo(last) >= NO_PROGRESS_M;
+    if (headway || options.busy?.()) { last = now.clone(); lastMoveAt = Date.now(); return; }
+    if (Date.now() - lastMoveAt >= (options.stuckMs ?? STUCK_MS)) { stuck = true; try { bot.pathfinder.stop(); bot.pathfinder.setGoal(null); } catch { /* stopped below */ } }
   }, 150);
   let error: unknown = null, timedOut = false;
   try {

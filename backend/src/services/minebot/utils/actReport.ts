@@ -80,6 +80,8 @@ const CLOSED: Record<string, string> = {
   inventory_full: '満杯', threat_exposed: '見られる', protected: '守られた物', lava_behind: '溶岩が流れ込む', footing: '足場が無い',
   timeout: '時間切れ', time_up: '時間切れ', reflex: '反射', interrupted_by_reflex: '反射', stop_if: 'stopIf',
   no_progress: '進まない', damage_taken: '被弾', fell: '落下',
+  // go (2026-10-26): its stops carry the contract's own code in the line; these words only count where it stopped.
+  no_tool: '掘れない', limit_dig: '掘れない', no_blocks: '置けない', limit_place: '置けない', limit_time: '時間切れ', dead_end: '一歩ではない', unsafe: '一歩ではない', not_loaded: '一歩ではない',
 };
 export function closedWord(reason: string | undefined): string {
   if (!reason) return '無い';

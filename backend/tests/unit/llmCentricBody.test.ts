@@ -31,7 +31,8 @@ describe('the LLM-centric body', () => {
       const act = on.definitions.find(skill => skill.name === 'act')!;
       expect(JSON.stringify(act.inputSchema).length).toBeLessThan(16_000);
       expect((act.inputSchema as any).properties.hands.maxItems).toBe(12);
-      expect(Object.keys((act.inputSchema as any).properties.hands.items.properties).length).toBeLessThanOrEqual(32);
+      // The wire allows 32 properties to an object; with go (7 fields more, 38) the head raises it to 48 (run 39, 2026-10-26): this follows the head.
+      expect(Object.keys((act.inputSchema as any).properties.hands.items.properties).length).toBeLessThanOrEqual(48);
       // The planner's call (the head's ActInput) reaches the skill as parsed hands.
       const resolved = on.resolve('act', { hands: [{ do: 'dig', at: [{ x: 1, y: 2, z: 3 }, { front: 1 }], exposeOk: ['blaze'] }], stopIf: { hpBelow: 8 }, why: '棒を取る' });
       expect(resolved.args[0]).toEqual([{ do: 'dig', at: [{ x: 1, y: 2, z: 3 }, { front: 1 }], exposeOk: ['blaze'] }]);

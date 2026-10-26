@@ -223,6 +223,20 @@ export function standableBeside(read: BlockReader, cell: Cell, most = 3): Cell[]
 export function installWalkRules(movements: any): void {
   if (!movements || movements.__walkRules) return;
   movements.__walkRules = true;
+  installDoorRules(movements);
+  movements.canDig = true;
+  movements.exclusionAreasBreak.push((block: any) => (block?.name && isLeaves(String(block.name)) ? 0 : 100));
+  const getNeighbors = movements.getNeighbors.bind(movements);
+  movements.getNeighbors = (node: any) => (getNeighbors(node) as any[]).filter(move => !(move.toBreak ?? []).some((cell: any) => cell.y < node.y));
+}
+
+/**
+ * Only the door rules of the above (go uses these and digs by its own rules): a door, gate or trapdoor is open ground to the search, a
+ * shut iron one is neither ground nor floor, and a jump over a gap never passes a shut door.
+ */
+export function installDoorRules(movements: any): void {
+  if (!movements || movements.__doorRules) return;
+  movements.__doorRules = true;
   movements.canOpenDoors = false;
   const getBlock = movements.getBlock.bind(movements);
   movements.getBlock = (pos: any, dx: number, dy: number, dz: number) => {
@@ -234,11 +248,8 @@ export function installWalkRules(movements: any): void {
     else { block.safe = false; block.physical = false; }
     return block;
   };
-  movements.canDig = true;
-  movements.exclusionAreasBreak.push((block: any) => (block?.name && isLeaves(String(block.name)) ? 0 : 100));
   const getNeighbors = movements.getNeighbors.bind(movements);
   movements.getNeighbors = (node: any) => (getNeighbors(node) as any[]).filter(move => {
-    if ((move.toBreak ?? []).some((cell: any) => cell.y < node.y)) return false;
     // A jump over a gap passes cells that are not nodes: a shut door there would not be opened.
     if (move.parkour) {
       const sx = Math.sign(move.x - node.x), sz = Math.sign(move.z - node.z);

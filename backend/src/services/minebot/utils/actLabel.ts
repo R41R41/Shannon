@@ -1,7 +1,7 @@
 /** One act step in a few words, for the result's lines and the UI mod's task tab ("dig (12,40,7)", "walk → (3,64,9)"). */
 export interface StepLike {
   do?: string; to?: unknown; path?: unknown[]; at?: unknown; block?: string; item?: string; count?: number; target?: string | number;
-  seconds?: number; n?: number;
+  seconds?: number; n?: number; goals?: unknown[];
 }
 
 const pos = (spec: unknown): string => {
@@ -14,6 +14,7 @@ export function stepLabel(step: StepLike): string {
   const at = Array.isArray(step.at) ? step.at.map(pos).join(' ') : pos(step.at);
   switch (step.do) {
     case 'walk': return `walk → ${step.path?.length ? `${step.path.length}マスの道` : pos(step.to)}`;
+    case 'go': return `go → ${step.goals?.length ? `${step.goals.length}か所のどれか` : pos(step.to)}`;
     case 'dig': case 'place': return `${step.do}${step.block ? ` ${step.block}` : ''} ${at}`.trim();
     case 'use': return `use ${step.item ?? '手の物'}${at ? ` ${at}` : ''}${step.target !== undefined ? ` → ${step.target}` : ''}`;
     case 'craft': return `craft ${step.item}×${step.count ?? 1}`;
