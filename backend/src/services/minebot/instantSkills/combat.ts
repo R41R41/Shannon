@@ -67,7 +67,7 @@ class Combat extends InstantSkill {
                 try {
                     await this.bot.equip(weapon, 'hand');
                     return { success: true, weaponName: weapon.name };
-                } catch (e) {
+                } catch {
                     continue;
                 }
             }
@@ -279,7 +279,7 @@ class Combat extends InstantSkill {
                     try {
                         await this.bot.attack(enemy);
                         attackCount++;
-                    } catch (e) {
+                    } catch {
                         // 攻撃失敗は無視
                     }
 
