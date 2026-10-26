@@ -49,8 +49,8 @@ interface Check { name: string; passed: boolean; detail?: string }
 interface ActRun {
   label: string; hands: string[]; outcome: string; ok: boolean; wallMs: number; actMs: number | null; failureType?: string; stoppedBy?: string; stoppedWhy?: string;
   lines: string[]; at?: unknown; from: number[] | null; to: number[] | null; dimension: string; hp: number | null;
-  packDelta: Record<string, number>; packDeltaClient: Record<string, number>; goDug: number | null; goPlaced: number | null; hostDigRestored: boolean; hostPlaceRestored: boolean;
-  motorExpired: boolean; error?: string; receipt?: string;
+  packDelta: Record<string, number>; packDeltaClient: Record<string, number>; goDug: number | null; goPlaced: number | null; goRedraws: number | null; hostDigRestored: boolean; hostPlaceRestored: boolean;
+  motorExpired: boolean; failLine?: string; error?: string; receipt?: string;
 }
 interface SceneReport { name: string; title: string; passed: boolean; startedAt: string; ms: number; acts: ActRun[]; checks: Check[]; notes: string[]; deaths: number; setupWarnings: string[] }
 
@@ -149,6 +149,15 @@ class Scene {
     if ((SOFT_COMMANDS.test(command) ? MALFORMED : ERROR_WORDS).test(answer) || answer.includes('[timeout]')) this.setupWarnings.push(`${command.slice(0, 80)} => ${answer.replace(/\s+/gu, ' ').slice(0, 160)}`);
     return answer;
   }
+  /** The slab and the sky rebuilt (what the last act built or dug is gone), with these extra commands; the pack is kept. The actor goes home unless `home` is false. */
+  async arena(extra: string[] = [], home = true, expect: Array<[number, number, number, string]> = []): Promise<void> {
+    await this.cmd('kill @e[type=!minecraft:player]');
+    await this.cmd(`fill ${-HALF} ${BOTTOM} ${-HALF} ${HALF} ${FLOOR} ${HALF} minecraft:stone`);
+    await this.cmd(`fill ${-HALF} ${FLOOR + 1} ${-HALF} ${HALF} ${SKY} ${HALF} minecraft:air`);
+    for (const command of extra) await this.cmd(command);
+    if (home) { await this.cmd(`execute in minecraft:overworld run tp ${ACTOR} 0.5 ${FLOOR + 1} 0.5 -90 0`); actor.pathfinder?.stop(); actor.clearControlStates?.(); }
+    if (home) await this.settle(expect); else await sleep(1200);
+  }
   /** The arena back to a clean slab, the actor on it with an empty pack. */
   async reset(options: { difficulty?: string; time?: string } = {}): Promise<void> {
     await this.cmd(`difficulty ${options.difficulty ?? 'peaceful'}`);
@@ -212,16 +221,24 @@ class Scene {
     const lines: string[] = Array.isArray(parsed?.lines) ? parsed.lines.map((line: any) => `${line.i}.${line.do} ${line.status}: ${String(line.line).slice(0, 330)}`) : [];
     const goLine = (Array.isArray(parsed?.lines) ? parsed.lines : []).filter((line: any) => line.do === 'go').map((line: any) => String(line.line)).join(' ');
     const counted = /掘\s*(\d+)・置\s*(\d+)/u.exec(goLine);
+    const redraws = /引き直し\s*(\d+)\s*回/u.exec(goLine);
     const run: ActRun = { label, hands, outcome: receipt?.outcome ?? 'threw', ok: parsed ? parsed.ok === true : receipt?.outcome === 'completed',
       wallMs, actMs: typeof parsed?.ms === 'number' ? parsed.ms : null, failureType: receipt?.failureType, stoppedBy: parsed?.stoppedBy, stoppedWhy: parsed?.stoppedWhy,
       lines, at: parsed?.at, from: before.server, to: after.server, dimension: dimensionOf(), hp: Number.isFinite(Number(actor.health)) ? Math.round(Number(actor.health) * 10) / 10 : null,
       packDelta: delta(before.pack, after.pack), packDeltaClient: delta(before.client, after.client), goDug: counted ? Number(counted[1]) : null, goPlaced: counted ? Number(counted[2]) : null,
+      goRedraws: redraws ? Number(redraws[1]) : null, failLine: lines.find(line => /stopped|止まった/u.test(line)) ?? lines.at(-1) ?? '',
       hostDigRestored: actor.dig === before.dig, hostPlaceRestored: actor.placeBlock === before.place,
       motorExpired: /Motor owner expired/u.test(`${receipt?.result ?? ''} ${error ?? ''}`), ...(error ? { error } : {}),
       ...(parsed ? {} : { receipt: String(receipt?.result ?? '').slice(0, 400) }) };
     this.acts.push(run);
     log(`ACT ${this.name}/${label} ${run.ok ? 'ok' : 'FAILED'} ${(wallMs / 1000).toFixed(1)}s ${lines.map(line => line.slice(0, 120)).join(' | ')}${error ? ` ERROR ${error}` : ''}`);
     return run;
+  }
+  /** The act stopped, as the scene meant it to: not ok, one of these failure words, within `withinMs` of the act's own time. */
+  expectStop(run: ActRun, words: RegExp, withinMs: number): void {
+    const word = `${run.failureType ?? ''} ${run.failLine ?? ''}`;
+    this.check(`${run.label}: stopped with ${words.source}`, !run.ok && words.test(word), `ok=${run.ok} ${word.slice(0, 200)}`);
+    this.check(`${run.label}: stopped within ${withinMs / 1000}s`, (run.actMs ?? run.wallMs) <= withinMs, `${((run.actMs ?? run.wallMs) / 1000).toFixed(1)}s, 引き直し ${run.goRedraws}`);
   }
   /** The act did what was asked: ok, and no "Motor owner expired" anywhere. */
   expectOk(run: ActRun, name = `${run.label}: act ok`): void {
@@ -409,6 +426,126 @@ scene('regress_one_act', 'the same chain as ONE act (hands share the act\'s one 
   s.check('server: two levels up at the end', (run.to?.[1] ?? 0) >= FLOOR + 2.9, `y=${run.to?.[1]}`);
 });
 scene('place_after_chain', 'place: a crafting table once more, after the chains', 60, placeTableScene('after'));
+
+// ---- go after go (run 40: a go after a first go dug 0 and laid 0 and ended dead_end), mine that has to come near, the stuck cut ---------------
+const WALL = (x0: number, x1: number) => fill(x0, FLOOR + 1, -HALF, x1, SKY, HALF, 'stone');
+const GAP = (x0: number, x1: number) => fill(x0, 95, -HALF, x1, FLOOR, HALF, 'air');
+const VEIN = (x0: number, x1: number, y = FLOOR + 1) => Array.from({ length: x1 - x0 + 1 }, (_, i) => `setblock ${x0 + i} ${y} 0 minecraft:iron_ore`);
+scene('go_series', 'go four times in a row on one body: flat, through a wall, over a gap, round a cliff (run 40: the later gos dug 0 and laid 0)', 300, async s => {
+  s.watch = ['cobblestone'];
+  await s.reset(); await s.give({ stone_pickaxe: 1, cobblestone: 24 }); await s.settle();
+  const a = await s.act('go_a flat', { hands: [{ do: 'go', to: cellAt(5, FLOOR + 1, 0), seconds: 30 }] }, 60);
+  s.expectOk(a); s.expectHostRestored(a);
+  await s.arena([WALL(4, 6)], true, [[5, FLOOR + 1, 0, 'stone']]);
+  const b = await s.act('go_dig_wall_after', { hands: [{ do: 'go', to: cellAt(10, FLOOR + 1, 0), canDig: ['stone'], maxDig: 20, seconds: 60 }] }, 90);
+  s.expectOk(b); s.expectHostRestored(b);
+  s.check('go_dig_wall_after: dug (掘 > 0)', (b.goDug ?? 0) > 0, `掘 ${b.goDug} 置 ${b.goPlaced}`);
+  await s.arena([GAP(3, 5)], true, [[4, FLOOR, 0, 'air']]);
+  const c = await s.act('go_bridge_after', { hands: [{ do: 'go', to: cellAt(9, FLOOR + 1, 0), canPlace: ['cobblestone'], maxPlace: 10, seconds: 60 }] }, 90);
+  s.expectOk(c); s.expectHostRestored(c);
+  s.check('go_bridge_after: laid (置 > 0)', (c.goPlaced ?? 0) > 0, `掘 ${c.goDug} 置 ${c.goPlaced}`);
+  await s.arena([fill(3, FLOOR + 1, -HALF, 8, FLOOR + 6, 8, 'stone')], true, [[5, FLOOR + 2, 0, 'stone']]);
+  const d = await s.act('go_cliff_after', { hands: [{ do: 'go', to: cellAt(12, FLOOR + 1, 0), seconds: 60 }] }, 90);
+  s.expectOk(d); s.expectHostRestored(d);
+  s.check('go_cliff_after: arrived', Math.hypot((d.to?.[0] ?? 0) - 12.5, (d.to?.[2] ?? 0) - 0.5) <= 1.5, `at ${d.to?.map(n => Math.round(n * 10) / 10)}`);
+});
+scene('mine_behind_rock', 'mine: four joined iron_ore behind three stones (canDig stone, maxDig 10): come near by digging, take four', 120, async s => {
+  s.watch = ['raw_iron'];
+  await s.reset(); await s.cmd(WALL(3, 5)); for (const command of VEIN(6, 9)) await s.cmd(command);
+  await s.give({ stone_pickaxe: 1 }); await s.settle([[4, FLOOR + 1, 0, 'stone'], [9, FLOOR + 1, 0, 'iron_ore']]);
+  const run = await s.act('mine', { hands: [{ do: 'mine', block: 'iron_ore', at: [cellAt(6, FLOOR + 1, 0)], count: 4, canDig: ['stone'], maxDig: 10, seconds: 60 }] }, 100);
+  s.expectOk(run);
+  s.check('server: 4 raw_iron in the pack', (run.packDelta.raw_iron ?? 0) >= 4, JSON.stringify(run.packDelta));
+  s.notes.push(`took ${((run.actMs ?? run.wallMs) / 1000).toFixed(1)} s`);
+});
+scene('mine_unreachable', 'mine: a vein shut in stone, no canDig: gives up as unreachable within 15 s', 60, async s => {
+  s.watch = ['raw_iron'];
+  await s.reset(); await s.cmd(fill(4, FLOOR + 1, -4, 13, FLOOR + 5, 4, 'stone')); for (const command of VEIN(7, 10)) await s.cmd(command);
+  await s.give({ stone_pickaxe: 1 }); await s.settle([[8, FLOOR + 1, 0, 'iron_ore']]);
+  const run = await s.act('mine', { hands: [{ do: 'mine', block: 'iron_ore', at: [cellAt(7, FLOOR + 1, 0)], count: 4, seconds: 60 }] }, 60);
+  s.expectStop(run, /unreachable/u, 15_000);
+  s.check('nothing was taken', (run.packDelta.raw_iron ?? 0) === 0, JSON.stringify(run.packDelta));
+});
+scene('mine_over_lava', 'mine: a vein beyond a lava field, no canDig and no canPlace: unreachable within 15 s', 60, async s => {
+  s.watch = ['raw_iron'];
+  await s.reset(); await s.cmd(fill(3, FLOOR, -HALF, 7, FLOOR, HALF, 'lava')); for (const command of VEIN(9, 12)) await s.cmd(command);
+  await s.give({ stone_pickaxe: 1 }); await s.settle([[5, FLOOR, 0, 'lava'], [10, FLOOR + 1, 0, 'iron_ore']]);
+  const run = await s.act('mine', { hands: [{ do: 'mine', block: 'iron_ore', at: [cellAt(9, FLOOR + 1, 0)], count: 4, seconds: 60 }] }, 60);
+  s.expectStop(run, /unreachable/u, 15_000);
+  s.check('the body did not burn', (run.hp ?? 0) >= 12, `hp ${run.hp}`);
+});
+scene('mine_after_go', 'mine after a go that dug through a wall (the stale port would have refused the mine\'s digs too)', 150, async s => {
+  s.watch = ['raw_iron'];
+  await s.reset(); await s.cmd(WALL(4, 6)); for (const command of VEIN(10, 13)) await s.cmd(command);
+  await s.give({ stone_pickaxe: 1 }); await s.settle([[5, FLOOR + 1, 0, 'stone'], [12, FLOOR + 1, 0, 'iron_ore']]);
+  const go = await s.act('1 go', { hands: [{ do: 'go', to: cellAt(8, FLOOR + 1, 0), canDig: ['stone'], maxDig: 20, seconds: 60 }] }, 90);
+  s.expectOk(go); s.expectHostRestored(go);
+  const run = await s.act('2 mine', { hands: [{ do: 'mine', block: 'iron_ore', at: [cellAt(10, FLOOR + 1, 0)], count: 4 }] }, 90);
+  s.expectOk(run);
+  s.check('server: 4 raw_iron in the pack', (run.packDelta.raw_iron ?? 0) >= 4, JSON.stringify(run.packDelta));
+});
+scene('go_boxed_in', 'go: out of a stone box with no canDig and no canPlace: dead_end or stuck fast (run 40: 34 to 54 s, 200 to 400 redraws)', 90, async s => {
+  await s.reset(); await s.cmd(fill(-5, FLOOR + 1, -5, 5, FLOOR + 5, 5, 'stone')); await s.cmd(fill(-2, FLOOR + 1, -2, 2, FLOOR + 3, 2, 'air'));
+  await s.give({ stone_pickaxe: 1, cobblestone: 8 }); await s.settle([[4, FLOOR + 1, 0, 'stone']]);
+  // The body is inside (home 0.5,100,0.5), the goal outside the wall, and nothing may be dug or laid.
+  const run = await s.act('go', { hands: [{ do: 'go', to: cellAt(9, FLOOR + 1, 0), seconds: 60 }] }, 90);
+  s.expectStop(run, /dead_end|stuck/u, 20_000);
+  s.notes.push(`stopped after ${((run.actMs ?? run.wallMs) / 1000).toFixed(1)} s, 引き直し ${run.goRedraws}: ${run.failLine ?? ''}`);
+});
+// A route that exists for the pathfinder but that the server will not carry out (adventure mode refuses every dig and every block laid): the draw is
+// made again and again without headway. This is the stuck cut (12 redraws without headway) on the real server.
+scene('go_dig_refused', 'go: through a wall the server will not let the body dig (adventure mode): stuck fast, not at the 60 s limit', 90, async s => {
+  await s.reset(); await s.cmd(WALL(4, 6)); await s.give({ stone_pickaxe: 1 }); await s.settle([[5, FLOOR + 1, 0, 'stone']]);
+  await s.cmd(`gamemode adventure ${ACTOR}`); await sleep(800);
+  const run = await s.act('go', { hands: [{ do: 'go', to: cellAt(10, FLOOR + 1, 0), canDig: ['stone'], maxDig: 20, seconds: 60 }] }, 90);
+  s.expectStop(run, /stuck|dead_end|limit_dig/u, 25_000);
+  s.notes.push(`stopped after ${((run.actMs ?? run.wallMs) / 1000).toFixed(1)} s, 引き直し ${run.goRedraws}: ${run.failLine ?? ''}`);
+});
+scene('go_place_refused', 'go: over a gap with blocks the server will not let the body lay (adventure mode): stuck fast, not at the 60 s limit', 90, async s => {
+  await s.reset(); await s.cmd(GAP(3, 5)); await s.give({ cobblestone: 16 }); await s.settle([[4, FLOOR, 0, 'air']]);
+  await s.cmd(`gamemode adventure ${ACTOR}`); await sleep(800);
+  const run = await s.act('go', { hands: [{ do: 'go', to: cellAt(9, FLOOR + 1, 0), canPlace: ['cobblestone'], maxPlace: 10, seconds: 60 }] }, 90);
+  s.expectStop(run, /stuck|dead_end|limit_place|fell/u, 25_000);
+  s.notes.push(`stopped after ${((run.actMs ?? run.wallMs) / 1000).toFixed(1)} s, 引き直し ${run.goRedraws}: ${run.failLine ?? ''}`);
+});
+scene('flow_chain','one body, fifteen acts in a row (go, make, go, mine, smelt, pillarUp, place, go, place, dig, go, make, go, pillarUp, place), the pack carried on', 400, async s => {
+  s.watch = ['cobblestone', 'raw_iron', 'iron_ingot', 'coal', 'wooden_pickaxe', 'wooden_sword', 'crafting_table', 'oak_planks'];
+  await s.reset(); await s.give({ stone_pickaxe: 1, cobblestone: 24, crafting_table: 1, oak_planks: 8, coal: 4 }); await s.settle();
+  const step = async (label: string, hands: Array<Record<string, unknown>>, seconds = 90) => { const run = await s.act(label, { hands }, seconds); s.expectOk(run); return run; };
+  const home = (x: number, y: number, z: number) => cellAt(x, y, z);
+  await step('01 go flat', [{ do: 'go', to: home(6, FLOOR + 1, 0), seconds: 30 }]);
+  const make1 = await step('02 make wooden_pickaxe', [{ do: 'make', item: 'wooden_pickaxe' }], 60);
+  s.check('02: wooden_pickaxe made', (make1.packDelta.wooden_pickaxe ?? 0) >= 1, JSON.stringify(make1.packDelta));
+  await s.arena([WALL(4, 6)], true, [[5, FLOOR + 1, 0, 'stone']]);
+  const wall = await step('03 go through the wall', [{ do: 'go', to: home(10, FLOOR + 1, 0), canDig: ['stone'], maxDig: 20, seconds: 60 }]);
+  s.check('03: dug (掘 > 0)', (wall.goDug ?? 0) > 0, `掘 ${wall.goDug}`);
+  await s.arena(VEIN(6, 9), true, [[9, FLOOR + 1, 0, 'iron_ore']]);
+  const mined = await step('04 mine iron', [{ do: 'mine', block: 'iron_ore', at: [home(6, FLOOR + 1, 0)], count: 4 }]);
+  s.check('04: 4 raw_iron', (mined.packDelta.raw_iron ?? 0) >= 4, JSON.stringify(mined.packDelta));
+  await s.arena([`setblock 3 ${FLOOR + 1} 0 minecraft:furnace`], true, [[3, FLOOR + 1, 0, 'furnace']]);
+  const smelt = await step('05 smelt the iron', [{ do: 'smelt', items: [{ item: 'raw_iron', count: 4 }], fuel: 'coal', fuelCount: 1, at: [home(3, FLOOR + 1, 0)] }], 60);
+  s.check('05: raw_iron went into the furnace', (smelt.packDelta.raw_iron ?? 0) <= -1, JSON.stringify(smelt.packDelta));
+  await step('06 pillarUp 3', [{ do: 'pillarUp', n: 3, block: 'cobblestone' }], 60);
+  await s.arena([], true);
+  await step('07 place cobblestone', [{ do: 'place', block: 'cobblestone', at: [home(1, FLOOR + 1, 0)] }], 40);
+  await s.arena([GAP(3, 5)], true, [[4, FLOOR, 0, 'air']]);
+  const bridge = await step('08 go over the gap', [{ do: 'go', to: home(9, FLOOR + 1, 0), canPlace: ['cobblestone'], maxPlace: 10, seconds: 60 }]);
+  s.check('08: laid (置 > 0)', (bridge.goPlaced ?? 0) > 0, `置 ${bridge.goPlaced}`);
+  await step('09 place cobblestone ahead', [{ do: 'place', block: 'cobblestone', at: [home(10, FLOOR + 1, 0)] }], 40);
+  await step('10 dig it again', [{ do: 'dig', at: [home(10, FLOOR + 1, 0)] }], 40);
+  await s.arena([fill(3, FLOOR + 1, -HALF, 8, FLOOR + 6, 8, 'stone')], true, [[5, FLOOR + 2, 0, 'stone']]);
+  await step('11 go round the cliff', [{ do: 'go', to: home(12, FLOOR + 1, 0), seconds: 60 }]);
+  await s.give({ crafting_table: 1 });
+  const make2 = await step('12 make wooden_sword', [{ do: 'make', item: 'wooden_sword' }], 60);
+  s.check('12: wooden_sword made', (make2.packDelta.wooden_sword ?? 0) >= 1, JSON.stringify(make2.packDelta));
+  await s.arena([WALL(4, 6)], true, [[5, FLOOR + 1, 0, 'stone']]);
+  const wall2 = await step('13 go through the wall again', [{ do: 'go', to: home(10, FLOOR + 1, 0), canDig: ['stone'], maxDig: 20, seconds: 60 }]);
+  s.check('13: dug (掘 > 0)', (wall2.goDug ?? 0) > 0, `掘 ${wall2.goDug}`);
+  await step('14 pillarUp 2', [{ do: 'pillarUp', n: 2, block: 'cobblestone' }], 60);
+  await s.arena([], true);
+  await step('15 place cobblestone', [{ do: 'place', block: 'cobblestone', at: [home(1, FLOOR + 1, 0)] }], 40);
+  s.notes.push(`acts: ${s.acts.map(run => `${run.label.slice(0, 2)}:${((run.actMs ?? run.wallMs) / 1000).toFixed(1)}s`).join(' ')}`);
+});
 
 scene('fight_zombie', 'fight: one zombie with an iron sword', 90, async s => {
   await s.reset({ difficulty: 'normal', time: 'midnight' });
