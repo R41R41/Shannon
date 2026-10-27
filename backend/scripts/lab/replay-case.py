@@ -14,6 +14,9 @@ Prints the cases file (a JSON list) with this case added to the list read from -
 """
 import argparse, datetime as dt, json, re, sys
 
+# A sample's position (a sample may carry the server's error text after it).
+POS = re.compile(r'\[(-?[\d.Ee+-]+)d, (-?[\d.Ee+-]+)d, (-?[\d.Ee+-]+)d\]')
+
 def main():
     ap = argparse.ArgumentParser()
     for k in ('ops', 'samples', 'equip', 't0', 'ground', 'acts', 'name', 'title'): ap.add_argument('--' + k, required=True)
@@ -48,9 +51,10 @@ def main():
     best = None
     for line in open(a.samples, encoding='utf8'):
         s = json.loads(line); t = sec(s['t'])
-        if t <= at + 1 and (best is None or t > best[0]): best = (t, s)
+        if t <= at + 1 and POS.search(str(s.get('Pos', ''))) and (best is None or t > best[0]): best = (t, s)
     t, s = best
-    pos = [float(v.rstrip('d')) for v in s['Pos'].strip('[]').split(', ')]
+    m = POS.search(str(s.get('Pos', '')))
+    pos = [float(v) for v in m.groups()] if m else [0.0, 0.0, 0.0]
     # an act that ended after the sample and before the first act says where the feet were more lately
     for line in open(a.ops, encoding='utf8'):
         o = json.loads(line); rc = o.get('rc') or {}

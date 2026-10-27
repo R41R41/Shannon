@@ -18,6 +18,13 @@ const log = createLogger('Minebot:WallReflex');
  */
 export const WALL_ESCAPE_PRIORITY = 420;
 const EYE = 1.62;
+/**
+ * Run 42 (+711): lying in a bed at y=-5 in a cave, the server put the body at y=-4.31; the eye taken 1.62 above that was in the tuff of the ceiling,
+ * and the reflex dug it out of the bed and cut the sleep. A body lying in a bed has its eye 0.2 above its place (the game's sleeping pose), and it
+ * does not choke there: while it sleeps, or stands at a bed's place, the reflex does not take it.
+ */
+const LYING_EYE = 0.2;
+const BED = /_bed$/u;
 /** The eye in a whole block this long with no hurt seen is taken as true too (a client that missed the health packet). */
 const TICKS_BEFORE = 20;
 /** A hurt this recent, with the eye in a whole block, is the wall's (the server's suffocation is a point every half second). */
@@ -37,11 +44,23 @@ interface WallBody {
   equip?(item: unknown, destination: string): Promise<unknown>;
   on(event: 'physicsTick', listener: () => void): unknown;
   game?: { gameMode?: string };
+  isSleeping?: boolean;
   wallReflex?: WallState;
 }
 export interface WallState { ticks: number; working: boolean; lastAt: number; escapes: number; health: number; hurtAt: number }
 
 const cellOf = (x: number, y: number, z: number) => new Vec3(Math.floor(x), Math.floor(y), Math.floor(z));
+/**
+ * Lying in a bed: asleep, or at a sleeper's place (the server puts one 0.69 above the bed's cell, maybe before the client hears it sleeps; one standing
+ * on the bed is 0.56 above it and is not lying).
+ */
+export function lying(bot: WallBody): boolean {
+  if (bot.isSleeping) return true;
+  const p = bot.entity?.position;
+  if (!p || p.y - Math.floor(p.y) < 0.6) return false;
+  try { return BED.test(String(bot.blockAt(cellOf(p.x, p.y, p.z), false)?.name ?? '')); } catch { return false; }
+}
+const eyeOf = (bot: WallBody): number => lying(bot) ? LYING_EYE : EYE;
 /** A block a body chokes in: a whole cube that is not one of those it breathes in. */
 export function chokes(block: any): boolean {
   if (!block || block.boundingBox !== 'block') return false;
@@ -54,7 +73,7 @@ export function wallCells(bot: WallBody): Array<{ at: Vec3; block: any }> {
   const p = bot.entity?.position;
   if (!p) return [];
   const out: Array<{ at: Vec3; block: any }> = [];
-  for (const at of [cellOf(p.x, p.y + EYE, p.z), cellOf(p.x, p.y + 0.2, p.z)]) {
+  for (const at of [cellOf(p.x, p.y + eyeOf(bot), p.z), cellOf(p.x, p.y + 0.2, p.z)]) {
     if (out.some(entry => entry.at.equals(at))) continue;
     let block: any = null;
     try { block = bot.blockAt(at, false); } catch { block = null; }
@@ -66,7 +85,7 @@ export function inWall(bot: WallBody): boolean {
   const p = bot.entity?.position;
   if (!p) return false;
   let block: any = null;
-  try { block = bot.blockAt(cellOf(p.x, p.y + EYE, p.z), false); } catch { block = null; }
+  try { block = bot.blockAt(cellOf(p.x, p.y + eyeOf(bot), p.z), false); } catch { block = null; }
   return chokes(block);
 }
 
@@ -95,7 +114,7 @@ export function installWallReflex(bot: WallBody): void {
     // Only a body that can choke: not a spectator or one in creative (a lab's own moves put those inside blocks).
     const mode = String(bot.game?.gameMode ?? 'survival');
     let walled = false;
-    try { walled = health > 0 && (mode === 'survival' || mode === 'adventure') && inWall(bot); } catch { walled = false; }
+    try { walled = health > 0 && (mode === 'survival' || mode === 'adventure') && !bot.isSleeping && inWall(bot); } catch { walled = false; }
     state.ticks = walled ? state.ticks + 1 : 0;
     // The hurt says the server has the head in the block too (a client a tick off the server's place is not dug out of a wall it is not in).
     const confirmed = state.ticks >= 2 && Date.now() - state.hurtAt < HURT_FRESH_MS;

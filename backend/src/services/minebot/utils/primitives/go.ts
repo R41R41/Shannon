@@ -514,7 +514,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
 
   /** Climbs where the body stands: dig the roof if it may be, lay a block under the feet at the top of the jump, a level at a time. */
   const climb = async (toY: number): Promise<{ levels: number; stop?: StepOutcome }> => {
-    let levels = 0;
+    let levels = 0, floorDigs = 0;
     while (levels < CLIMB_CHUNK && (feetCell(bot)?.y ?? toY) < toY) {
       if (timeLeft() <= 0) break;
       if (state.placed >= limits.maxPlace) return { levels, stop: fail('limit_place', `置く数の上限 ${limits.maxPlace} に着いた`, 'maxPlace を増やすか、別の道を') };
@@ -541,12 +541,17 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
         }
         const floorBlock = blockAt(bot, short.cell);
         const quick = floorBlock && floorBlock.boundingBox === 'block' && !NEVER_DIG.test(String(floorBlock.name)) && !PROTECTED_UTILITY_BLOCKS.has(String(floorBlock.name)) && Number(floorBlock.hardness ?? 99) <= 1.5;
-        if (quick && state.dug < limits.maxDig) {
+        // Run 42 (+820 q64, replayed on its own ground): the body stood on a moss carpet (0.06 up its cell). The dig called the carpet "already
+        // open" (the walk passes through it), dug nothing and said ok, and the climb tried again every 0.3 s for 115 s until the go's time ran
+        // out: 3 steps in 120 s. The carpet is dug as the floor it is (`thin`), and a floor that is still there after its dig stops the climb.
+        if (quick && state.dug < limits.maxDig && floorDigs < 2) {
+          floorDigs++;
           manualBusy = true;
           let dug: StepOutcome;
-          try { dug = await dig(ctx, { at: [short.cell], collect: false }); } finally { manualBusy = false; }
+          try { dug = await dig(ctx, { at: [short.cell], collect: false, thin: true }); } finally { manualBusy = false; }
           // The body drops onto the floor under the one dug: it is let land (the ground under it is read again) before the next level.
-          if (dug.ok) { await wait(ctx, 250); await waitUntil(ctx, () => bot.entity?.onGround === true && Math.abs(bot.entity?.velocity?.y ?? 0) < 0.1, 2500); continue; }
+          const gone = dug.ok && blockAt(bot, short.cell)?.name !== floorBlock.name;
+          if (gone) { await wait(ctx, 250); await waitUntil(ctx, () => bot.entity?.onGround === true && Math.abs(bot.entity?.velocity?.y ?? 0) < 0.1, 2500); continue; }
         }
         return { levels, stop: fail('low_floor', short.top > 0 ? `足元 ${cellText(short.cell)} の ${short.name} は高さ ${short.top.toFixed(2)} で、跳んでも積む高さに届かない`
           : `足元 ${cellText(short.cell)} が ${short.name} で、跳んでも積む土台が無い（隣の丸ごとの床も無い）`, '丸ごとの床の所へ動いてから登る') };

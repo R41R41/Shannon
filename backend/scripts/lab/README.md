@@ -109,5 +109,6 @@ act の手（place・make・pillarUp・go・mine・smelt・obsidian・portal・f
    - `--variants` を付けると、同じ探索から 1 つずつ費用を外して、1 秒あたりのノード数を比べます（act の port、道具選び、ブロックの読み、素の pathfinder）。
 
 実走 41 の場面は `cases/run41.json`（c135・c1220・c1472・c1472x・c1805・c1311・c1716・c1518）。
+実走 42 の場面は `cases/run42.json`（c42_707 地下で寝る・c42_820 q64 の 120 秒で 3 歩・c42_2254・c42_2374・c42_2416・c42_2569 最後の下りの go）。実走 42 の samples は Pos の後に別の文が続く行があるため、`run-ground.py` と `replay-case.py` は Pos を正規表現で読みます。
 
 送り方の例（PowerShell から。VM へは LF のファイルで）：`tar.exe -cf code.tar --exclude='*.test.ts' --exclude=node_modules -C <worktree> backend/src backend/scripts backend/package.json backend/tsconfig.json package.json` を作り、`scp code.tar run-replay.sh cases.json azure-constant-server:.cache/minebot-lab/why41-in/` で送ってから `ssh azure-constant-server bash .cache/minebot-lab/why41-in/run-replay.sh t2 ~/.cache/minebot-lab/why41-in/code.tar ~/.cache/minebot-lab/why41-in/cases.json` を実行します。

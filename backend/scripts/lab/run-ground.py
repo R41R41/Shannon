@@ -18,9 +18,12 @@ What it does:
   * The result: `restore` (cells to /setblock to the pristine state), `marks` (what could not be put back), `check` (the maps of the
     failing act and the act before, against the ground put back: cells that agree / disagree), and a cross-section as text.
 """
-import argparse, datetime as dt, gzip, json, math, os, struct, sys, zlib
+import re, argparse, datetime as dt, gzip, json, math, os, struct, sys, zlib
 
 # ---- the region files ---------------------------------------------------------------------------------------------------------------
+# A sample's position (a sample may carry the server's error text after it).
+POS = re.compile(r'\[(-?[\d.Ee+-]+)d, (-?[\d.Ee+-]+)d, (-?[\d.Ee+-]+)d\]')
+
 def _nbt(buf, pos, tag):
     if tag == 1: return struct.unpack_from('>b', buf, pos)[0], pos + 1
     if tag == 2: return struct.unpack_from('>h', buf, pos)[0], pos + 2
@@ -140,8 +143,8 @@ def load_record(ops_path, samples_path, t0):
     if samples_path and os.path.exists(samples_path):
         for line in open(samples_path, encoding='utf8'):
             s = json.loads(line)
-            p = [float(v.rstrip('d')) for v in s['Pos'].strip('[]').split(', ')]
-            track.append((sec(s['t']), tuple(p)))
+            m = POS.search(str(s.get('Pos', '')))
+            if m: track.append((sec(s['t']), tuple(float(v) for v in m.groups())))
     track.sort()
     return track, maps
 

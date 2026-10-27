@@ -21,7 +21,14 @@ import { pickup } from './pickup.js';
  * shut-out hostile at the body (`exposeOk` digs it), and (the safety rules that stay) one that would let lava onto the body or drop the
  * body a dangerous height. A cell already empty is said and passed.
  */
-export interface DigArgs { at: Cell[]; tool?: string; collect?: boolean; take?: boolean; exposeOk?: boolean | string[] }
+export interface DigArgs {
+  at: Cell[]; tool?: string; collect?: boolean; take?: boolean; exposeOk?: boolean | string[];
+  /**
+   * Run 42 (+820, replayed): dig a thin block the walk passes through but that holds the body up (a carpet, a snow layer: open to the walk, a
+   * collision box to the feet). Without it such a cell is "already open" and nothing is dug. Not a hand's field: go's climb sets it for its floor.
+   */
+  thin?: boolean;
+}
 
 /** Whether the planner has let this kind in: every kind (true), or the kinds it named. */
 export function exposeAllows(exposeOk: boolean | string[] | undefined, kind: string): boolean {
@@ -86,7 +93,7 @@ export async function dig(ctx: StepContext, args: DigArgs): Promise<StepOutcome>
   for (const cell of cells) {
     const block = blockAt(bot, cell);
     if (!block) return result(stopped(bot, 'unloaded', `${placeText(bot, cell)} は未ロード`, cell));
-    if (isAirLike(block) || block.name === 'water' || block.name === 'lava') { done.push(`${cellText(cell)} は既に ${cellNow(bot, cell)}（掘らずに次へ）`); continue; }
+    if ((isAirLike(block) && !(args.thin && block.boundingBox === 'block')) || block.name === 'water' || block.name === 'lava') { done.push(`${cellText(cell)} は既に ${cellNow(bot, cell)}（掘らずに次へ）`); continue; }
     if (UNBREAKABLE.has(block.name) || block.diggable === false || block.hardness === null || block.hardness < 0) {
       return result(stopped(bot, 'unbreakable', `${placeText(bot, cell)} の ${block.name} は壊せない`, cell));
     }
