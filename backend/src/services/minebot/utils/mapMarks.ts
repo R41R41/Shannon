@@ -198,7 +198,9 @@ function computeMarks(bot: MarkBody, feet: Cell): Mark[] {
     const entry = ores.get(kind);
     if (entry) entry.n++; else ores.set(kind, { hit, n: 1 });
   }
-  for (const [kind, { hit, n }] of ores) add(kind, cellOf(hit.position), symbolFor({ name: hit.name }), LABEL[kind] ?? kind, `×${n} 見えている`, 3);
+  // The block's own id beside the word (run 41: the line said 鉄鉱石 for deepslate_iron_ore, and mine, which takes the id, stopped six times on
+  // `iron_ore` / `diamond_ore` / `gold_ore` deep down): `鉄鉱石[deepslate_iron_ore]`, the id the nearest one has.
+  for (const [kind, { hit, n }] of ores) add(kind, cellOf(hit.position), symbolFor({ name: hit.name }), `${LABEL[kind] ?? kind}[${hit.name}]`, `×${n} 見えている`, 3);
   // Planks and fences within reach: the nearest, and how many of each (the head tells them only while she is short of wood).
   const wood = scan('wood');
   if (wood.length) {

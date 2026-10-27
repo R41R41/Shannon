@@ -1,6 +1,6 @@
 import { Vec3 } from 'vec3';
 import { equipToHandVerified } from '../equipVerified.js';
-import { feetCell } from '../localMap.js';
+import { feetCell, type Cell } from '../localMap.js';
 import { blockAt, cellNow, cellText, findItem, guard, inventoryCount, isAirLike, placeText, stopped, StepStopped, wait, waitUntil,
   type StepContext, type StepOutcome } from './common.js';
 
@@ -32,6 +32,39 @@ const TRY_TICKS = 28;
 export const PILLAR_FEET_OVER_FLOOR = 1.05;
 const EMPTY = (block: any) => !block || isAirLike(block) || block.name === 'water' || block.name === 'lava';
 
+/** The top of a block's collision shapes over its own cell (1 for a whole block, 0.75 for a small amethyst bud, 0.5 for a bottom slab). */
+export function shapeTop(block: any): number {
+  const shapes = Array.isArray(block?.shapes) ? block.shapes as number[][] : [];
+  if (!shapes.length) return block?.boundingBox === 'block' ? 1 : 0;
+  return Math.max(...shapes.map(shape => Number(shape[4] ?? 0)));
+}
+/**
+ * Run 41 (+1,472 and +1,518, replayed on its own ground): the body stood on a small amethyst bud, whose top is 0.75 up its cell, so its feet
+ * were at -34.25 while the feet cell was -34. A jump from there tops out at -33.00, short of the -32.95 the block is laid at: every jump of
+ * both climbs fell short and the go said stuck. A floor lower than the feet cell's bottom is said before the jump, with the whole floor beside it.
+ */
+export function shortFloor(bot: any, feet: Cell): { cell: Cell; name: string; top: number; lowBy: number } | null {
+  const y = Number(bot.entity?.position?.y);
+  const cell = { x: feet.x, y: feet.y - 1, z: feet.z };
+  const floor = blockAt(bot, cell);
+  if (!floor || !Number.isFinite(y)) return null;
+  const lowBy = feet.y - y;
+  if (lowBy <= 0.01) return null;
+  return { cell, name: String(floor.name), top: shapeTop(floor), lowBy };
+}
+/** A cell beside the feet where the body stands on a whole block with room to jump (feet, head and the cell over the head empty), or null. */
+export function wholeFloorBeside(bot: any, feet: Cell, unsafe: (cell: Cell) => boolean = () => false): Cell | null {
+  for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    const cell = { x: feet.x + dx, y: feet.y, z: feet.z + dz };
+    const floor = blockAt(bot, { x: cell.x, y: cell.y - 1, z: cell.z });
+    if (!floor || floor.boundingBox !== 'block' || shapeTop(floor) < 0.99) continue;
+    if (![0, 1, 2].every(up => EMPTY(blockAt(bot, { x: cell.x, y: cell.y + up, z: cell.z })) && blockAt(bot, { x: cell.x, y: cell.y + up, z: cell.z }))) continue;
+    if (unsafe(cell)) continue;
+    return cell;
+  }
+  return null;
+}
+
 export async function pillarUp(ctx: StepContext, args: PillarArgs): Promise<StepOutcome> {
   const bot = ctx.bot;
   const feetOver = args.feetOver ?? PILLAR_FEET_OVER_FLOOR;
@@ -47,6 +80,12 @@ export async function pillarUp(ctx: StepContext, args: PillarArgs): Promise<Step
       if (!EMPTY(blockAt(bot, over))) return stopped(bot, 'ceiling', `頭の上 ${placeText(bot, over)} が ${cellNow(bot, over)} で登れない（${done}段登った）`, over);
       const floor = blockAt(bot, { x: feet.x, y: feet.y - 1, z: feet.z });
       if (!floor || floor.boundingBox !== 'block') return stopped(bot, 'no_floor', `足元 ${cellText({ x: feet.x, y: feet.y - 1, z: feet.z })} が ${floor?.name ?? '未ロード'} で、跳んでも積む土台が無い（${done}段登った）`, feet);
+      const short = shortFloor(bot, feet);
+      if (short) {
+        const aside = wholeFloorBeside(bot, feet);
+        return stopped(bot, 'low_floor', `足元 ${cellText(short.cell)} の ${short.name} は高さ ${short.top.toFixed(2)} で、足が ${short.lowBy.toFixed(2)} 低い。跳んでも積む高さに届かない（${done}段登った）。`
+          + (aside ? `隣の丸ごとの床 ${cellText(aside)} へずれてから登る` : `${short.name} を掘って下の床から登るか、丸ごとの床の所へ動く`), feet);
+      }
       if (bot.heldItem?.name !== args.block) {
         const held = await guard(ctx, equipToHandVerified(bot, findItem(bot, args.block)), 5000);
         if (!held?.value.held) return stopped(bot, 'equip_failed', `${args.block} を手に持てなかった`, feet);

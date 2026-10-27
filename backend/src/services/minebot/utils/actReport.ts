@@ -67,7 +67,7 @@ export function takeActReport(bot: object, since: number): ActReport | null {
 
 /**
  * The contract's closed words for a stop, from a part's reason code: the first word of a stopped line (`届かない`, `一歩ではない`,
- * `掘れない`, `置けない`, `無い`, `満杯`, `見られる`, `守られた物`, `溶岩が流れ込む`, `足場が無い`, `時間切れ`, `反射`, `stopIf`).
+ * `掘れない`, `置けない`, `無い`, `満杯`, `見られる`, `守られた物`, `溶岩が流れ込む`, `足場が無い`, `時間切れ`, `反射`, `stopIf`, `上から落ちる`).
  */
 const CLOSED: Record<string, string> = {
   out_of_reach: '届かない', cannot_reach: '届かない', not_opened: '届かない',
@@ -85,6 +85,8 @@ const CLOSED: Record<string, string> = {
   no_progress: '進まない', damage_taken: '被弾', fell: '落下',
   // go (2026-10-26): its stops carry the contract's own code in the line; these words only count where it stopped.
   no_tool: '掘れない', limit_dig: '掘れない', no_blocks: '置けない', limit_place: '置けない', limit_time: '時間切れ', dead_end: '一歩ではない', unsafe: '一歩ではない', not_loaded: '一歩ではない',
+  // run 41 fixes (2026-10-27): the search ran out of its time (no way known, nor none); a floor lower than the feet cell; a dig under a block that falls.
+  search_timeout: '時間切れ', low_floor: '足場が無い', falling_above: '上から落ちる',
   ...MINE_MAKE_SMELT_WORDS,
 };
 export function closedWord(reason: string | undefined): string {

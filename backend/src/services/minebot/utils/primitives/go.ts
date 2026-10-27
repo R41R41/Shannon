@@ -8,10 +8,10 @@ import { feetCell, type Cell } from '../localMap.js';
 import { chooseTool, canHarvest, nearlyBroken } from '../toolChoice.js';
 import { installDoorRules, NO_ENTER } from '../walkRules.js';
 import { clip } from '../actReport.js';
-import { blockAt, cellText, inventoryCount, isAirLike, letGo, stopped, StepStopped, wait, type StepContext, type StepOutcome } from './common.js';
+import { blockAt, cellText, inventoryCount, isAirLike, letGo, stopped, StepStopped, wait, waitUntil, type StepContext, type StepOutcome } from './common.js';
 import { atGoal, goWith, type GoOutcome, type WayNotes } from './walk.js';
 import { dig } from './dig.js';
-import { pillarUp } from './pillarUp.js';
+import { pillarUp, shortFloor, wholeFloorBeside } from './pillarUp.js';
 
 const { goals } = pathfinder;
 
@@ -60,6 +60,8 @@ export const GO_STUCK_MS = 3000;
 export const GO_STALLED_REDRAWS = 12;
 /** The blocks laid that the world does not show before the stop `stuck` (the server refuses the place: one is enough, the next step would be onto it). */
 export const GO_REFUSED_PLACES = 1;
+/** The most times one go walks the part of a way a search found before its time ran out (each must come 2 m nearer). */
+export const GO_PARTIAL_WALKS = 6;
 /** The most mendings of a stuck body, without any headway between them, before the stop `stuck`. */
 export const GO_REPAIRS = 5;
 /** The most levels a climb makes before the way is drawn again. */
@@ -152,19 +154,73 @@ const isWaterName = (name: string | null) => name === 'water' || name === 'bubbl
 
 /** Why a body must not stand with its feet at this cell (the contract's hazards that cannot be lifted), or null. */
 export function hazardAtFeet(bot: any, x: number, y: number, z: number): string | null {
-  const feet = nameAt(bot, x, y, z), head = nameAt(bot, x, y + 1, z), floor = nameAt(bot, x, y - 1, z);
+  return hazardAtFeetWith((cx, cy, cz) => nameAt(bot, cx, cy, cz), x, y, z);
+}
+/** The same, reading the cells through `read` (the route search's own reader, which keeps what it has read during a search). */
+export function hazardAtFeetWith(read: (x: number, y: number, z: number) => string | null, x: number, y: number, z: number): string | null {
+  const feet = read(x, y, z), head = read(x, y + 1, z), floor = read(x, y - 1, z);
   for (const name of [feet, head]) if (name && NO_ENTER.has(name)) return `${name} の中`;
   if (floor === 'magma_block') return '足元が magma_block';
-  if (nameAt(bot, x, y + 2, z) === 'lava') return '頭の上が溶岩';
+  if (read(x, y + 2, z) === 'lava') return '頭の上が溶岩';
   for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) for (const dy of [0, 1]) {
-    const beside = nameAt(bot, x + dx, y + dy, z + dz);
+    const beside = read(x + dx, y + dy, z + dz);
     if (beside && BESIDE_HAZARD.has(beside)) return `${beside} の隣`;
   }
   return null;
 }
 
+// ---- what the route search has read (run 41) -------------------------------------------------------------------------------------------
+
+/**
+ * Run 41 (2026-10-27, replayed on its own ground in the lab): 8 of 13 "no way" stops were the search running out of its 5 s, not a shut way
+ * (given 30 s it found the way: 8,326 and 18,232 nodes). A node cost about 1.5 ms, 96 % of it making the moves round it, most of that reading
+ * the same cells again and again (`bot.blockAt` builds a new Block at every call, and the hazard and water rules read twelve more cells per move).
+ * Keeping what was read for as long as the world does not change there made the same search 3.4 times quicker (662 -> 2,653 nodes a second).
+ * A cell is read again once the server has changed it (`blockUpdate`), and everything is read again when chunks come or go.
+ */
+interface WorldWatch { epoch: number; tick: number; changed: Map<string, number> }
+const worldWatches = new WeakMap<object, WorldWatch>();
+const WATCH_MAX_CHANGED = 20_000;
+const READ_CACHE_MAX = 250_000;
+export function worldWatchOf(host: any): WorldWatch {
+  let watch = worldWatches.get(host);
+  if (!watch) {
+    const made: WorldWatch = { epoch: 0, tick: 0, changed: new Map() };
+    worldWatches.set(host, made);
+    host.on?.('blockUpdate', (before: any, after: any) => {
+      const p = after?.position ?? before?.position;
+      if (!p) return;
+      made.tick++;
+      made.changed.set(`${p.x},${p.y},${p.z}`, made.tick);
+      if (made.changed.size > WATCH_MAX_CHANGED) { made.changed.clear(); made.epoch++; }
+    });
+    for (const event of ['chunkColumnLoad', 'chunkColumnUnload']) host.on?.(event, () => { made.epoch++; made.changed.clear(); });
+    watch = made;
+  }
+  return watch;
+}
+/** Makes a movement profile keep the blocks it reads (its own `getBlock`) until the world changes at that cell. Returns a name reader over the same keep. */
+export function keepReads(movements: any, watch: WorldWatch): (x: number, y: number, z: number) => string | null {
+  const read = movements.getBlock.bind(movements);
+  const kept = new Map<string, { block: any; tick: number }>();
+  let epoch = watch.epoch;
+  const get = (pos: any, dx: number, dy: number, dz: number) => {
+    if (!pos) return read(pos, dx, dy, dz);
+    if (watch.epoch !== epoch || kept.size > READ_CACHE_MAX) { kept.clear(); epoch = watch.epoch; }
+    const x = pos.x + dx, y = pos.y + dy, z = pos.z + dz, key = `${x},${y},${z}`;
+    const hit = kept.get(key);
+    if (hit && (watch.changed.get(key) ?? 0) <= hit.tick) return hit.block;
+    const block = read(pos, dx, dy, dz);
+    // A cell not loaded (no position) is not kept: it may arrive at any moment.
+    if (block?.position) kept.set(key, { block, tick: watch.tick });
+    return block;
+  };
+  movements.getBlock = get;
+  return (x, y, z) => { const block = get({ x, y, z }, 0, 0, 0); return block?.position ? (block.name ?? null) : null; };
+}
+
 /** A route drawn without walking it: the search's status, its nodes, and the cells it breaks (by block name) and fills. */
-interface Plan { status: string; path: any[]; digs: Map<string, number>; places: number }
+interface Plan { status: string; path: any[]; digs: Map<string, number>; places: number; visited: number }
 const yieldNow = () => new Promise<void>(resolve => setImmediate(resolve));
 
 interface Relax { hazards?: boolean; tool?: boolean; blocks?: boolean; permissions?: boolean; limits?: boolean }
@@ -214,20 +270,14 @@ function goMovements(bot: any, args: Required<Pick<GoArgs, 'maxDrop' | 'waterOk'
     const ids = placeHeld.map(name => registry.itemsByName?.[name]?.id).filter((id): id is number => typeof id === 'number');
     movements.scafoldingBlocks = state.placed >= args.maxPlace && !relax.limits ? [] : ids;
   }
+  // Every read of the search, the movements' own and the rules' below, goes through one keep (run 41: 3.4 times the nodes a second).
+  const read = keepReads(movements, worldWatchOf(nativeActionHost(bot)));
   // Moves that end in a hazard (beside lava, on magma...), or in water when it is not allowed, are not moves.
   const getNeighbors = movements.getNeighbors.bind(movements);
-  const hazards = new Map<string, string | null>();
-  let hazardsAt = 0;
-  const hazardOf = (x: number, y: number, z: number) => {
-    if (Date.now() - hazardsAt > 1500) { hazards.clear(); hazardsAt = Date.now(); }
-    const key = `${x},${y},${z}`;
-    if (!hazards.has(key)) hazards.set(key, hazardAtFeet(bot, x, y, z));
-    return hazards.get(key)!;
-  };
   const inWater = isWaterName(nameAt(bot, Math.floor(bot.entity.position.x), Math.floor(bot.entity.position.y), Math.floor(bot.entity.position.z)));
   movements.getNeighbors = (node: any) => (getNeighbors(node) as any[]).filter(move => {
-    if (!relax.hazards && hazardOf(move.x, move.y, move.z)) return false;
-    if (!args.waterOk && !inWater && (isWaterName(nameAt(bot, move.x, move.y, move.z)) || isWaterName(nameAt(bot, move.x, move.y + 1, move.z)))) return false;
+    if (!relax.hazards && hazardAtFeetWith(read, move.x, move.y, move.z)) return false;
+    if (!args.waterOk && !inWater && (isWaterName(read(move.x, move.y, move.z)) || isWaterName(read(move.x, move.y + 1, move.z)))) return false;
     return true;
   });
   return movements;
@@ -365,10 +415,18 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   const hostNav = host.pathfinder as any;
   const previousTool = hostNav.bestHarvestTool;
   // The cheapest tool in time and wear (utils/toolChoice), not the fastest in the bag; one that is nearly broken is kept for when nothing else will do.
+  // Kept by the block's state for one drawing of the way (run 41: the search asks for every block it may break), and forgotten when the pack changes.
+  const toolKept = new Map<string, any>();
+  const forgetTools = () => toolKept.clear();
+  host.inventory?.on?.('updateSlot', forgetTools);
   hostNav.bestHarvestTool = (block: any) => {
+    const key = String(block?.stateId ?? block?.type ?? block?.name);
+    if (toolKept.has(key)) return toolKept.get(key);
     const tools = ((bot.inventory?.items?.() ?? []) as any[]);
     const sound = tools.filter(item => !nearlyBroken(item));
-    return chooseTool(block, sound.length || !tools.length ? sound : tools, { effects: bot.entity?.effects }) ?? null;
+    const chosen = chooseTool(block, sound.length || !tools.length ? sound : tools, { effects: bot.entity?.effects }) ?? null;
+    toolKept.set(key, chosen);
+    return chosen;
   };
 
   const movementsFor = (relax: Relax = {}) => goMovements(bot, limits, rule, place.held, state, relax);
@@ -399,6 +457,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
 
   /** The route found without walking it: its status and the cells it breaks and fills. */
   const plan = async (movements: any, goal: any, ms: number): Promise<Plan> => {
+    toolKept.clear();
     const generator = nav.getPathFromTo(movements, bot.entity.position, goal, { timeout: Math.max(300, Math.min(ms, searchCap)) });
     let result = generator.next().value?.result ?? { status: 'noPath', path: [] };
     // The search answers a tick (40 ms) at a time while it is still going; here it is let finish (its own time bounds it), the body's other work
@@ -410,11 +469,20 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
       for (const cell of node?.toBreak ?? []) { const name = nameAt(bot, cell.x, cell.y, cell.z) ?? '?'; digs.set(name, (digs.get(name) ?? 0) + 1); }
       places += node?.toPlace?.length ?? 0;
     }
-    return { status: String(result.status), path: result.path ?? [], digs, places };
+    return { status: String(result.status), path: result.path ?? [], digs, places, visited: Number(result.visitedNodes ?? 0) };
   };
 
   /** The way is shut: look again with each rule lifted in turn, and name the first whose lifting opens it. */
-  const explain = async (goal: any): Promise<StepOutcome> => {
+  /** The search ran out of its time: no way is known, nor that there is none. What it saw, and the next hands that do not need the search. */
+  const searchedOutStop = (found: Plan, aim: Cell): StepOutcome => {
+    const tip = found.path.length ? found.path[found.path.length - 1] : null;
+    const tipCell = tip ? { x: Math.floor(tip.x), y: Math.floor(tip.y), z: Math.floor(tip.z) } : null;
+    const reach = tipCell ? `、${cellText(tipCell)} まで・あと ${Math.hypot(tipCell.x - aim.x, tipCell.y - aim.y, tipCell.z - aim.z).toFixed(0)}m` : '';
+    return fail('search_timeout', `道探しが ${(searchCap / 1000).toFixed(searchCap < 1000 ? 2 : 0)} 秒で終わらない（道の有無は不明。${found.visited.toLocaleString('en-US')} マス調べた${reach}）`,
+      '10m 以内の中継点へ go か、dig と walk の階段・縦穴で');
+  };
+
+  const explain = async (goal: any, base?: Plan): Promise<StepOutcome> => {
     const ms = Math.min(args.searchMs ?? 2500, Math.max(300, timeLeft() - 500));
     const shown = (map: Map<string, number>) => [...map.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([name, count]) => `${name}×${count}`).join('・');
     const ignored = rule.ignored.length ? `（無視した canDig: ${rule.ignored.slice(0, 3).join('・')}）` : '';
@@ -429,12 +497,16 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
         '置ける物を集めるか、canPlace を足す')] as [Relax, (found: Plan) => StepOutcome]] : []),
       [{ permissions: true }, found => fail('dead_end', `許した手では道が無い。${found.digs.size ? `canDig に ${[...found.digs.keys()].slice(0, 3).join('・')} を許せば掘 ${[...found.digs.values()].reduce((a, b) => a + b, 0)} で` : ''}${found.places ? `canPlace を許せば置 ${found.places} で` : ''}道がある${ignored}`, '許すか、別の行き先を')],
     ];
+    let ranOut: Plan | null = null;
     for (const [relax, outcome] of lifts) {
       if (timeLeft() < 800) break;
       let found: Plan | null = null;
       try { found = await plan(movementsFor(relax), goal, ms); } catch { found = null; }
       if (found && found.status === 'success') return outcome(found);
+      if (found && found.status === 'timeout' && !ranOut) ranOut = found;
     }
+    // A lifted search that ran out of time did not show the way shut: not a dead end.
+    if (ranOut) return searchedOutStop(base && base.path.length ? base : ranOut, near());
     return fail('dead_end', `掘っても置いても道が無い（行き止まり）${ignored}`, '別の行き先を');
   };
 
@@ -446,7 +518,33 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
       if (state.placed >= limits.maxPlace) return { levels, stop: fail('limit_place', `置く数の上限 ${limits.maxPlace} に着いた`, 'maxPlace を増やすか、別の道を') };
       const block = place.held.find(name => inventoryCount(bot, name) > 0);
       if (!block) return { levels, stop: fail('no_blocks', `登るのに置く物が無い（${place.missing.length ? `持っていない ${place.missing.join('・')}` : 'canPlace に置ける物が無い'}）`, '置ける物を集めるか、canPlace を足す') };
-      const feet = feetCell(bot)!;
+      let feet = feetCell(bot)!;
+      // Run 41 (+1,472, +1,518): a floor lower than the feet cell (a small amethyst bud, a slab) leaves every jump 0.05 short of the laying
+      // height. The body moves onto a whole floor beside it, or digs a floor that breaks at once and climbs from the one under it.
+      const short = shortFloor(bot, feet);
+      if (short) {
+        const aside = wholeFloorBeside(bot, feet, cell => !!hazardAtFeet(bot, cell.x, cell.y, cell.z));
+        if (aside) {
+          manualBusy = true;
+          try { await goWith(ctx, new goals.GoalBlock(aside.x, aside.y, aside.z), Math.min(6000, Math.max(500, timeLeft())), notes, { stuckMs: GO_STUCK_MS, onGround: true }); }
+          finally { manualBusy = false; letGo(bot); }
+          const now = feetCell(bot)!;
+          if (now.x !== aside.x || now.z !== aside.z || shortFloor(bot, now)) {
+            return { levels, stop: fail('low_floor', `足元の ${short.name} は高さ ${short.top.toFixed(2)} で跳びが届かず、隣の丸ごとの床 ${cellText(aside)} へも移れなかった`, '別の所から登る') };
+          }
+          continue;
+        }
+        const floorBlock = blockAt(bot, short.cell);
+        const quick = floorBlock && !NEVER_DIG.test(String(floorBlock.name)) && !PROTECTED_UTILITY_BLOCKS.has(String(floorBlock.name)) && Number(floorBlock.hardness ?? 99) <= 1.5;
+        if (quick && state.dug < limits.maxDig) {
+          manualBusy = true;
+          let dug: StepOutcome;
+          try { dug = await dig(ctx, { at: [short.cell], collect: false }); } finally { manualBusy = false; }
+          if (dug.ok) { await waitUntil(ctx, () => bot.entity?.onGround !== false, 1500); continue; }
+        }
+        return { levels, stop: fail('low_floor', `足元 ${cellText(short.cell)} の ${short.name} は高さ ${short.top.toFixed(2)} で、跳んでも積む高さに届かない`, '丸ごとの床の所へ動いてから登る') };
+      }
+      feet = feetCell(bot)!;
       const roof = { x: feet.x, y: feet.y + 2, z: feet.z };
       const roofBlock = blockAt(bot, roof);
       if (roofBlock && !isAirLike(roofBlock) && roofBlock.name !== 'water' && roofBlock.name !== 'lava') {
@@ -491,7 +589,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     }
   };
 
-  let attempt = 0, noway = 0, mends = 0;
+  let attempt = 0, noway = 0, mends = 0, partialWalks = 0;
   // Headway is the nearest the body has come to a place; a body that is mended and walks back to the same wall has made none.
   let nearest = distanceTo(bot, near());
   const nowhere: GoOutcome = { reached: false, timedOut: false, stuck: false, error: new Error('NoPath'), search: { status: 'noPath', nodes: 0 }, opens: [], crossed: false };
@@ -544,7 +642,10 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
       const left = distanceTo(bot, near());
       if (left < nearest - 1.5) { nearest = left; mends = 0; noway = 0; attempt = 0; }
       if (moved >= 1.5 && !out.stuck) { mends = 0; noway = 0; attempt = 0; state.redraws++; continue; }
-      if (!leg.final && !out.stuck && attempt < 4) { attempt++; state.redraws++; continue; }
+      // A search that ran out of its time (run 41: 8 of 13 "no way" stops) says nothing about the way: turning the leg, drawing again at once
+      // and the explaining searches would each run out the same (5 + 5 + 4 x 2.5 s). What it found is walked when it comes nearer; else it is said.
+      const searchedOut = drawn.status === 'timeout';
+      if (!leg.final && !out.stuck && attempt < 4 && !searchedOut) { attempt++; state.redraws++; continue; }
       if (out.stuck) {
         mends++;
         if (mends > GO_REPAIRS) {
@@ -557,8 +658,8 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
       }
       // The way is not found. The first time may be the ground still arriving: a new drawing. Then a climb, then the reason.
       noway++;
-      if (noway === 1) { state.redraws++; await wait(ctx, 300); continue; }
-      const found = leg.final ? drawn : await plan(movements, finalGoal, Math.min(searchCap, timeLeft()));
+      if (noway === 1 && !searchedOut) { state.redraws++; await wait(ctx, 300); continue; }
+      const found = leg.final || searchedOut ? drawn : await plan(movements, finalGoal, Math.min(searchCap, timeLeft()));
       const end = found.path.length ? found.path[found.path.length - 1] : null;
       const lowest = Math.min(...targets.map(cell => cell.y));
       const closestY = end ? Math.floor(end.y) : (feetCell(bot)?.y ?? lowest);
@@ -580,7 +681,25 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
         if (climbed.levels > 0) { noway = 0; state.redraws++; continue; }
         if (climbed.stop) return climbed.stop;
       }
-      return await explain(finalGoal);
+      if (found.status === 'timeout') {
+        // The part of the way the search had found when its time ran out: walked when its end is nearer the place by 2 m or more.
+        const tip = found.path.length ? found.path[found.path.length - 1] : null;
+        if (tip && partialWalks < GO_PARTIAL_WALKS && !budgetOf(countOf(found), found.places)) {
+          const cell = { x: Math.floor(tip.x), y: Math.floor(tip.y), z: Math.floor(tip.z) };
+          const gain = distanceTo(bot, aim) - Math.hypot(cell.x - aim.x, cell.y - aim.y, cell.z - aim.z);
+          if (gain >= 2) {
+            partialWalks++; state.redraws++;
+            await goWith(ctx, new goals.GoalBlock(cell.x, cell.y, cell.z), timeLeft(), notes, { stuckMs: GO_STUCK_MS, busy, onRoute: watchRoute, onGround: true });
+            letGo(bot);
+            const again = vetoed();
+            if (again) return again;
+            noway = 0;
+            continue;
+          }
+        }
+        return searchedOutStop(found, aim);
+      }
+      return await explain(finalGoal, found);
     }
   } catch (error) {
     // The act's stop, the action's abort, a reflex: the body lets go of everything and the stop goes on.
@@ -594,6 +713,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     if (host.placeBlock === countingPlace) host.placeBlock = originalPlace;
     bot.removeListener?.('path_reset', onReset);
     hostNav.bestHarvestTool = previousTool;
+    host.inventory?.removeListener?.('updateSlot', forgetTools);
     try { if (previousMovements) nav.setMovements(previousMovements); } catch { /* the profile stays */ }
     try { bot.setControlState?.('jump', false); bot.setControlState?.('sneak', false); } catch { /* released */ }
   }

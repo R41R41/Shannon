@@ -42,6 +42,7 @@ import { knockBracePlugin } from './utils/knockBrace.js';
 import { digConfirmationPlugin } from './utils/digConfirmation.js';
 import { serverRefusalPlugin } from './utils/serverRefusals.js';
 import { lavaDigGuardPlugin, lavaReflexPlugin } from './utils/lavaSafety.js';
+import { wallReflexPlugin } from './utils/wallReflex.js';
 import { gazeGuardPlugin } from './utils/gazeGuard.js';
 import { exposureDigGuardPlugin } from './utils/exposureGuard.js';
 import { promptPlacePlugin } from './utils/promptPlace.js';
@@ -190,6 +191,7 @@ export class MinebotClient extends BaseClient {
     this.bot.loadPlugin(exposureDigGuardPlugin);
     this.bot.loadPlugin(promptPlacePlugin);
     this.bot.loadPlugin(lavaReflexPlugin);
+    this.bot.loadPlugin(wallReflexPlugin);
     this.bot.loadPlugin(gazeGuardPlugin);
     this.bot.loadPlugin(fireballDeflectPlugin);
     this.bot.loadPlugin(shieldBlockPlugin);

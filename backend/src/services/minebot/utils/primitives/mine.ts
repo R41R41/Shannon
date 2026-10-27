@@ -79,7 +79,10 @@ export async function mine(ctx0: StepContext, args: MineArgs): Promise<StepOutco
   if (!bot.registry?.blocksByName?.[block]) return stopped(bot, 'no_block', `mine 止まった no_block: ${block} はブロックの名前ではない`);
   const cells = args.at ?? [];
   if (!cells.length) return stopped(bot, 'no_block', 'mine 止まった no_block: at（鉱脈のマス）が要る');
-  const starts = cells.filter(cell => blockAt(bot, cell)?.name === block);
+  // The ore and its deep twin are one vein (run 41: six stops at "(155,-24,209) は deepslate_diamond_ore" for `diamond_ore`).
+  const kinds = oreTwins(bot, block);
+  const isKind = (name: string | undefined) => !!name && kinds.has(name);
+  const starts = cells.filter(cell => isKind(blockAt(bot, cell)?.name));
   if (!starts.length) {
     return stopped(bot, 'no_block', `mine 止まった no_block: at のマスは ${block} ではない: ${cells.map(cell => `${placeText(bot, cell)} は ${cellNow(bot, cell)}`).join('、')}`, cells[0]);
   }
@@ -121,7 +124,7 @@ export async function mine(ctx0: StepContext, args: MineArgs): Promise<StepOutco
     // The next cell: one that is within reach and seen first, then the nearest. A cell that is no longer the block (dug by something else) is dropped.
     let pick: { cell: Cell; near: boolean; dist: number } | null = null;
     for (const [key, cell] of open) {
-      if (blockAt(bot, cell)?.name !== block) { open.delete(key); continue; }
+      if (!isKind(blockAt(bot, cell)?.name)) { open.delete(key); continue; }
       const near = reachable(cell), dist = eyeDistance(bot, cell);
       if (!pick || (near && !pick.near) || (near === pick.near && dist < pick.dist)) pick = { cell, near, dist };
     }
@@ -134,7 +137,7 @@ export async function mine(ctx0: StepContext, args: MineArgs): Promise<StepOutco
     for (const [dx, dy, dz] of NEIGHBOURS) {
       const next = { x: cell.x + dx, y: cell.y + dy, z: cell.z + dz }, nextKey = keyOf(next);
       if (seen.has(nextKey)) continue;
-      if (blockAt(bot, next)?.name === block) { seen.add(nextKey); open.set(nextKey, next); }
+      if (isKind(blockAt(bot, next)?.name)) { seen.add(nextKey); open.set(nextKey, next); }
     }
     // Water or lava beside the cell would run into the hole (and onto the body): the cell is left.
     const wet = FACES.map(([dx, dy, dz]) => ({ at: { x: cell.x + dx, y: cell.y + dy, z: cell.z + dz } })).find(face => isLiquid(blockAt(bot, face.at)?.name));
@@ -175,7 +178,7 @@ export async function mine(ctx0: StepContext, args: MineArgs): Promise<StepOutco
         continue;
       }
       case 'lava_behind': skipped.push({ cell, kind: 'liquid', why: outcome.text }); continue;
-      case 'footing': skipped.push({ cell, kind: 'footing', why: outcome.text }); continue;
+      case 'footing': case 'falling_above': skipped.push({ cell, kind: 'footing', why: outcome.text }); continue;
       case 'threat_exposed': return problem('danger', outcome.text, cell);
       case 'no_harvest_tool': return result.dug ? problem('tool_broke', `道具が壊れて次の道具が無い（${outcome.text}）`, cell) : problem('no_tool', outcome.text, cell);
       case 'equip_failed': return problem('no_tool', outcome.text, cell);
@@ -234,6 +237,15 @@ export async function mine(ctx0: StepContext, args: MineArgs): Promise<StepOutco
     const allowed = roadLeft > 0 ? `許された物（${roadWords.join('・')}）だけを掘っても` : '掘らずに（canDig が無い）';
     return { fatal: false, reason: 'unreachable', text: `${placeText(bot, cell)} へ${allowed}届く道が無い（${why.slice(0, 70)}）` };
   }
+}
+
+/** An ore and its deepslate twin (`iron_ore` and `deepslate_iron_ore`), as far as the registry knows both; any other block is itself alone. */
+export function oreTwins(bot: any, block: string): Set<string> {
+  const kinds = new Set([block]);
+  if (!/_ore$/u.test(block)) return kinds;
+  const twin = block.startsWith('deepslate_') ? block.slice('deepslate_'.length) : `deepslate_${block}`;
+  if (bot.registry?.blocksByName?.[twin]) kinds.add(twin);
+  return kinds;
 }
 
 /** The tools that make this block drop, from its harvest table: "stone_pickaxe・iron_pickaxe・…". */

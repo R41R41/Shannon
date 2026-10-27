@@ -4,6 +4,7 @@ import { equipToHandVerified } from '../equipVerified.js';
 import { threatsExposedBy, ThreatExposedError, type ExposingThreat } from '../exposureGuard.js';
 import { LavaReleaseError, lavaReleasedBy } from '../lavaSafety.js';
 import { fallIsDangerous, stepOffDrop } from '../edgeGuard.js';
+import { fallsOntoBody } from '../fallingAbove.js';
 import { chooseTool, canHarvest, usesLeft } from '../toolChoice.js';
 import { PROTECTED_UTILITY_BLOCKS } from '../../constants.js';
 import { ownedAt, ownerWords } from '../ownedBlocks.js';
@@ -102,6 +103,11 @@ export async function dig(ctx: StepContext, args: DigArgs): Promise<StepOutcome>
     }
     // The body still dropping into the cell dug before: wait until it stands (at most 1 s) so its column is read where it lands.
     if (bot.entity && bot.entity.onGround === false) await waitUntil(ctx, () => bot.entity?.onGround !== false, 1000);
+    const falls = fallsOntoBody(bot, cell, at => blockAt(bot, at));
+    if (falls) {
+      return result(stopped(bot, 'falling_above', `${placeText(bot, cell)} の上 ${cellText(falls.at)} が ${falls.name}。掘ると落ちてきて足と頭を埋める（窒息する）。`
+        + `横へ 1 マスずれてから掘るか、先に横から ${falls.name} を掘り落とす`, cell));
+    }
     const fall = footingDrop(bot, cell);
     if (fall !== null) return result(stopped(bot, 'footing', `${placeText(bot, cell)} は足の下の柱。掘ると${Number.isFinite(fall) ? `${fall}段落ちる` : '下に着く所が無いか溶岩'}（先に横へ動くか、下を確かめる）`, cell));
     const distance = eyeDistance(bot, cell);

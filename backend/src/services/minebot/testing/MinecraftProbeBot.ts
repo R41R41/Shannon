@@ -27,6 +27,7 @@ import { installFloorReflexes, type FloorBody } from '../utils/floorReflexes.js'
 import { digConfirmationPlugin } from '../utils/digConfirmation.js';
 import { serverRefusalPlugin } from '../utils/serverRefusals.js';
 import { lavaDigGuardPlugin, lavaReflexPlugin } from '../utils/lavaSafety.js';
+import { wallReflexPlugin } from '../utils/wallReflex.js';
 import { gazeGuardPlugin } from '../utils/gazeGuard.js';
 import { exposureDigGuardPlugin } from '../utils/exposureGuard.js';
 import { promptPlacePlugin } from '../utils/promptPlace.js';
@@ -86,6 +87,7 @@ export async function createProbeBot(port: number, username = 'ShannonProbe', ac
   bot.loadPlugin(exposureDigGuardPlugin);
   bot.loadPlugin(promptPlacePlugin);
   bot.loadPlugin(lavaReflexPlugin);
+  bot.loadPlugin(wallReflexPlugin);
   bot.loadPlugin(gazeGuardPlugin);
   bot.loadPlugin(fireballDeflectPlugin);
   bot.loadPlugin(shieldBlockPlugin);
