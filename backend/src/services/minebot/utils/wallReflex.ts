@@ -18,7 +18,10 @@ const log = createLogger('Minebot:WallReflex');
  */
 export const WALL_ESCAPE_PRIORITY = 420;
 const EYE = 1.62;
-const TICKS_BEFORE = 2;
+/** The eye in a whole block this long with no hurt seen is taken as true too (a client that missed the health packet). */
+const TICKS_BEFORE = 20;
+/** A hurt this recent, with the eye in a whole block, is the wall's (the server's suffocation is a point every half second). */
+const HURT_FRESH_MS = 1200;
 const MAX_DIGS = 8;
 const RETRY_MS = 1500;
 /** Whole blocks that do not choke (the game lets a body breathe in them). */
@@ -33,9 +36,10 @@ interface WallBody {
   dig?(block: any, forceLook?: boolean | 'ignore'): Promise<unknown>;
   equip?(item: unknown, destination: string): Promise<unknown>;
   on(event: 'physicsTick', listener: () => void): unknown;
+  game?: { gameMode?: string };
   wallReflex?: WallState;
 }
-export interface WallState { ticks: number; working: boolean; lastAt: number; escapes: number }
+export interface WallState { ticks: number; working: boolean; lastAt: number; escapes: number; health: number; hurtAt: number }
 
 const cellOf = (x: number, y: number, z: number) => new Vec3(Math.floor(x), Math.floor(y), Math.floor(z));
 /** A block a body chokes in: a whole cube that is not one of those it breathes in. */
@@ -83,12 +87,19 @@ async function digOut(bot: WallBody): Promise<{ success: boolean; result: string
 
 export function installWallReflex(bot: WallBody): void {
   if (bot.wallReflex) return;
-  const state: WallState = bot.wallReflex = { ticks: 0, working: false, lastAt: 0, escapes: 0 };
+  const state: WallState = bot.wallReflex = { ticks: 0, working: false, lastAt: 0, escapes: 0, health: bot.health ?? 20, hurtAt: 0 };
   bot.on('physicsTick', () => {
+    const health = bot.health ?? 20;
+    if (health < state.health) state.hurtAt = Date.now();
+    state.health = health;
+    // Only a body that can choke: not a spectator or one in creative (a lab's own moves put those inside blocks).
+    const mode = String(bot.game?.gameMode ?? 'survival');
     let walled = false;
-    try { walled = (bot.health ?? 20) > 0 && inWall(bot); } catch { walled = false; }
+    try { walled = health > 0 && (mode === 'survival' || mode === 'adventure') && inWall(bot); } catch { walled = false; }
     state.ticks = walled ? state.ticks + 1 : 0;
-    if (!walled || state.working || state.ticks < TICKS_BEFORE || Date.now() - state.lastAt < RETRY_MS) return;
+    // The hurt says the server has the head in the block too (a client a tick off the server's place is not dug out of a wall it is not in).
+    const confirmed = state.ticks >= 2 && Date.now() - state.hurtAt < HURT_FRESH_MS;
+    if (!walled || state.working || !(confirmed || state.ticks >= TICKS_BEFORE) || Date.now() - state.lastAt < RETRY_MS) return;
     state.working = true; state.lastAt = Date.now(); state.escapes++;
     const p = bot.entity!.position;
     const first = wallCells(bot)[0];

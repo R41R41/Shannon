@@ -542,7 +542,8 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
           manualBusy = true;
           let dug: StepOutcome;
           try { dug = await dig(ctx, { at: [short.cell], collect: false }); } finally { manualBusy = false; }
-          if (dug.ok) { await waitUntil(ctx, () => bot.entity?.onGround !== false, 1500); continue; }
+          // The body drops onto the floor under the one dug: it is let land (the ground under it is read again) before the next level.
+          if (dug.ok) { await wait(ctx, 250); await waitUntil(ctx, () => bot.entity?.onGround === true && Math.abs(bot.entity?.velocity?.y ?? 0) < 0.1, 2500); continue; }
         }
         return { levels, stop: fail('low_floor', `足元 ${cellText(short.cell)} の ${short.name} は高さ ${short.top.toFixed(2)} で、跳んでも積む高さに届かない`, '丸ごとの床の所へ動いてから登る') };
       }
@@ -672,7 +673,10 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
             ? fail('no_blocks', `行き先は ${lowest - closestY} 段上で、登るのに置く物が無い（${place.missing.length ? `持っていない ${place.missing.join('・')}` : '置ける物が無い'}${place.refused.length ? `、置かない ${place.refused.join('・')}` : ''}）`, '置ける物を集めるか、canPlace を足す')
             : fail('dead_end', `行き先は ${lowest - closestY} 段上で、道は途中までしか無い。登るには canPlace が要る`, 'canPlace に置ける物を足す');
         }
-        if (end && Math.hypot(end.x - bot.entity.position.x, end.z - bot.entity.position.z) > 1.2) {
+        // To the foot of the climb along the level: an end the way found high up (a search cut by its time ends where it got to) is not walked to,
+        // the executor has no towers (run 41 replay: 12 redraws at a goal 17 up, stuck in 10 s); the climb starts here.
+        const here = feetCell(bot);
+        if (end && Math.hypot(end.x - bot.entity.position.x, end.z - bot.entity.position.z) > 1.2 && (!here || Math.floor(end.y) <= here.y + 1)) {
           state.redraws++;
           await goWith(ctx, new goals.GoalBlock(Math.floor(end.x), Math.floor(end.y), Math.floor(end.z)), timeLeft(), notes, { stuckMs: GO_STUCK_MS, busy, onRoute: watchRoute, onGround: true });
           letGo(bot);
