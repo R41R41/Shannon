@@ -91,7 +91,7 @@ export async function furnaceWork(ctx: StepContext, args: FurnaceArgs): Promise<
       // wood burnt with no table carried and fewer than 4 planks left is said.
       const left = (bot.inventory?.items?.() ?? []).filter((entry: any) => /_planks$/u.test(String(entry?.name))).reduce((sum: number, entry: any) => sum + Number(entry.count ?? 0), 0);
       if (done && /_planks$|_log$|_wood$|_stem$|^crafting_table$/u.test(args.fuel.item) && !findItem(bot, 'crafting_table') && left < 4) {
-        notes.push(`作業台を持たず、板は残り ${left}（作業台は板 4。地下で作業台が要る時に作れない。燃料は石炭・木炭を先に）`);
+        notes.push(`作業台なしで板は残り ${left}（作業台は板 4。燃料は石炭・木炭を先に）`);
       }
     }
   };
@@ -150,7 +150,8 @@ export async function furnaceWork(ctx: StepContext, args: FurnaceArgs): Promise<
     const items = [input, fuel, output].filter(Boolean).map((item: any) => `${item.name}×${item.count}`);
     const look: FurnaceLook = { kind: block.name, input: stackOf(input), fuel: stackOf(fuel), output: stackOf(output), burning, remainingSec: input ? remaining : null };
     return { moved, look, ...(occupiedBy ? { occupiedBy } : {}), outcome: { ok: true, at: cell, data: { container: { at: cell, kind: block.name, items } },
-      text: `${notes.length ? `${notes.join('、')}。` : ''}${cellText(cell)} の ${block.name}: 材料 ${slotText(input)}・燃料 ${slotText(fuel)}・出来上がり ${slotText(output)}${burning ? '（燃えている）' : ''}${timing}` } };
+      // Run 43: the time and what the fuel will not smelt first (the hand's line is 160 characters), then what was moved and the slots.
+      text: `${timing ? `${timing.replace(/^。/u, '')}。` : ''}${notes.length ? `${notes.join('、')}。` : ''}${cellText(cell)} の ${block.name}: 材料 ${slotText(input)}・燃料 ${slotText(fuel)}・出来上がり ${slotText(output)}${burning ? '（燃えている）' : ''}` } };
   } finally { try { window.close(); } catch { /* closed */ } }
 }
 

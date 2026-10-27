@@ -593,7 +593,9 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
       try { up = await pillarUp(ctx, { n: 1, block }); } finally { manualBusy = false; }
       if (!up.ok) {
         if (up.reason === 'missing_item') return { levels, stop: fail('no_blocks', up.text.slice(0, 90), '置ける物を集める') };
-        return { levels, stop: fail(up.reason === 'ceiling' ? 'dead_end' : up.reason === 'low_floor' || up.reason === 'no_floor' ? 'low_floor' : 'stuck', up.text.slice(0, 100), '') };
+        // Run 43: a level not laid says what it met first (`placeFacts`), within the line.
+        return { levels, stop: fail(up.reason === 'ceiling' ? 'dead_end' : up.reason === 'low_floor' || up.reason === 'no_floor' ? 'low_floor' : 'stuck',
+          up.text.slice(0, up.reason === 'not_placed' ? Math.max(100, up.text.indexOf('）: ') + 1) : 100), '') };
       }
       levels++;
     }

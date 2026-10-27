@@ -247,7 +247,9 @@ try {
       for (const timer of timers) clearTimeout(timer);
       actor.removeListener('health', onHealth);
       const reflexes = ledger.entriesSince(ledgerMark).map(entry => ({ atMs: entry.at - actStarted, kind: entry.kind, outcome: entry.outcome, detail: entry.detail.slice(0, 160) }));
-      if (reflexes.length || healths.length) log(`BODY ${c.name}/${act.label}: health ${healths.map(([t, h]) => `${(t / 1000).toFixed(1)}s:${h}`).join(' ')} reflexes ${reflexes.map(r => `${(r.atMs / 1000).toFixed(1)}s ${r.kind}/${r.outcome}`).join(' ') || 'none'}`);
+      const near = (Object.values(actor.entities ?? {}) as any[]).filter(e => e !== actor.entity && e?.position && e.type !== 'player' && e.name !== 'item' && actor.entity?.position && e.position.distanceTo(actor.entity.position) <= 16)
+        .map(e => `${e.name}#${e.id}@${e.position.distanceTo(actor.entity.position).toFixed(1)}m`);
+      if (reflexes.length || healths.length || act.before || act.during) log(`BODY ${c.name}/${act.label}: health ${healths.map(([t, h]) => `${(t / 1000).toFixed(1)}s:${h}`).join(' ')} reflexes ${reflexes.map(r => `${(r.atMs / 1000).toFixed(1)}s ${r.kind}/${r.outcome}`).join(' ') || 'none'} near ${near.join(' ') || 'none'}`);
       await sleep(800);
       actStarted = 0;
       let parsed: any = null; try { parsed = JSON.parse(receipt?.result ?? ''); } catch { parsed = null; }

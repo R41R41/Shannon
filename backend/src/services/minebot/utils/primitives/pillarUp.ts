@@ -133,7 +133,8 @@ export async function pillarUp(ctx: StepContext, args: PillarArgs): Promise<Step
                 ? `置けたと返ったが足元は ${cellNow(bot, feet)} のまま`
                 : `${args.block} は置けたが足がその上に乗らなかった`;
         // Run 43: with the cell over the head and how much of the body was in the cell (the server refuses a place into the body).
-        return stopped(bot, 'not_placed', `${done + 1}段目が積めなかった: ${what}（足元 ${cellText(feet)} は今 ${cellNow(bot, feet)}、置こうとした ${attempts} 回。${placeFacts(bot, feet, maxY, placedFrom ?? undefined)}）。${done}段登った`, feet);
+        const short = !placed && attempts ? `断られた ${attempts} 回` : !placed ? '跳びが届かない' : !laid ? '置けたと返ったが無い' : '乗れなかった';
+        return stopped(bot, 'not_placed', `${done + 1}段目が積めなかった（${short}。${placeFacts(bot, feet, maxY, placedFrom ?? undefined)}）: ${what}（足元 ${cellText(feet)} は今 ${cellNow(bot, feet)}、置こうとした ${attempts} 回）。${done}段登った`, feet);
       }
       done++;
       ctx.progress?.(`${done}/${levels}`);

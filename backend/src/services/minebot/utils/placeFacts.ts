@@ -17,11 +17,12 @@ export function bodyOverlap(position: { x: number; y: number; z: number }, cell:
 export function placeFacts(bot: any, cell: Cell, top: number | null, at?: { x: number; y: number; z: number }): string {
   const p = at ?? bot.entity?.position;
   if (!p) return `置こうとしたマス ${cellText(cell)}`;
-  const feet = { x: Math.floor(p.x), y: Math.floor(p.y + 1e-3), z: Math.floor(p.z) };
-  const over = { x: feet.x, y: feet.y + 2, z: feet.z };
+  // Two over the cell laid in: for a pillar's level (the feet cell) the cell over the head, where a jump meets a ceiling.
+  const over = { x: cell.x, y: cell.y + 2, z: cell.z };
   let name = '未ロード';
   try { name = String(blockAt(bot, over)?.name ?? '未ロード'); } catch { /* unread */ }
   const overlap = bodyOverlap(p, cell);
-  return `置こうとしたマス ${cellText(cell)}・足 y=${p.y.toFixed(2)}${top !== null ? `・跳びの最高 y=${top.toFixed(2)}` : ''}`
-    + `・体との重なり ${overlap > 0 ? `高さ ${overlap.toFixed(2)}` : '無し'}・頭の上 ${cellText(over)} は ${name}`;
+  // Short (a go's stop line is 160 characters with its counts): the cell, the feet, the top of the jump, the body in the cell, over the head.
+  return `置くマス ${cellText(cell)}・足 y=${p.y.toFixed(2)}${top !== null ? `・跳び最高 ${top.toFixed(2)}` : ''}`
+    + `・体と重なり ${overlap > 0 ? overlap.toFixed(2) : '無し'}・頭の上 ${cellText(over)} ${name}`;
 }

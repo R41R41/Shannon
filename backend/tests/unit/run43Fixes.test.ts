@@ -36,7 +36,7 @@ describe('run 43: the furnace says what its fuel smelts', () => {
     g.set(10, 64, 8, 'furnace');
     g.give('raw_iron', 4); g.give('oak_planks', 3);
     const outcome = await furnace(stepContext(g.bot), { at: cell(10, 64, 8), put: { item: 'raw_iron', count: 4 }, fuel: { item: 'oak_planks', count: 3 } });
-    expect(outcome.text).toContain('作業台を持たず、板は残り 0（作業台は板 4。地下で作業台が要る時に作れない。燃料は石炭・木炭を先に）');
+    expect(outcome.text).toContain('作業台なしで板は残り 0（作業台は板 4。燃料は石炭・木炭を先に）');
   }, 30_000);
 
   it('a batch out of fuel is said as stopped with how many smelted, at its time and after a wait', () => {
@@ -78,7 +78,7 @@ describe('run 43: a refused place says what it met', () => {
     expect(bodyOverlap({ x: 196.5, y: 41.1, z: 209.5 }, cell(196, 40, 209))).toBe(0);
     expect(bodyOverlap({ x: 196.5, y: 40.9, z: 209.5 }, cell(196, 40, 209))).toBeCloseTo(0.1, 5);
     const bot = { entity: { position: new Vec3(196.5, 40.9, 209.5) }, blockAt: (p: Vec3) => ({ name: p.y === 42 ? 'stone' : 'air' }) };
-    expect(placeFacts(bot, cell(196, 40, 209), 41.15)).toBe('置こうとしたマス (196,40,209)・足 y=40.90・跳びの最高 y=41.15・体との重なり 高さ 0.10・頭の上 (196,42,209) は stone');
+    expect(placeFacts(bot, cell(196, 40, 209), 41.15)).toBe('置くマス (196,40,209)・足 y=40.90・跳び最高 41.15・体と重なり 0.10・頭の上 (196,42,209) stone');
   });
 });
 
