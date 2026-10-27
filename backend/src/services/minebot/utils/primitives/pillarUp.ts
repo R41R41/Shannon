@@ -1,6 +1,7 @@
 import { Vec3 } from 'vec3';
 import { equipToHandVerified } from '../equipVerified.js';
 import { feetCell, type Cell } from '../localMap.js';
+import { isDoorlike } from '../walkRules.js';
 import { placeFacts } from '../placeFacts.js';
 import { blockAt, cellNow, cellText, findItem, guard, inventoryCount, isAirLike, placeText, stopped, StepStopped, wait, waitUntil,
   type StepContext, type StepOutcome } from './common.js';
@@ -62,7 +63,7 @@ export function wholeFloorBeside(bot: any, feet: Cell, unsafe: (cell: Cell) => b
   for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
     const cell = { x: feet.x + dx, y: feet.y, z: feet.z + dz };
     const floor = blockAt(bot, { x: cell.x, y: cell.y - 1, z: cell.z });
-    if (!floor || floor.boundingBox !== 'block' || shapeTop(floor) < 0.99) continue;
+    if (!floor || floor.boundingBox !== 'block' || shapeTop(floor) < 0.99 || isDoorlike(String(floor.name))) continue;
     if (![0, 1, 2].every(up => EMPTY(blockAt(bot, { x: cell.x, y: cell.y + up, z: cell.z })) && blockAt(bot, { x: cell.x, y: cell.y + up, z: cell.z }))) continue;
     if (unsafe(cell)) continue;
     return cell;
@@ -84,7 +85,8 @@ export async function pillarUp(ctx: StepContext, args: PillarArgs): Promise<Step
       const over = { x: feet.x, y: feet.y + 2, z: feet.z };
       if (!EMPTY(blockAt(bot, over))) return stopped(bot, 'ceiling', `頭の上 ${placeText(bot, over)} が ${cellNow(bot, over)} で登れない（${done}段登った）`, over);
       const floor = blockAt(bot, { x: feet.x, y: feet.y - 1, z: feet.z });
-      if (!floor || floor.boundingBox !== 'block') return stopped(bot, 'no_floor', `足元 ${cellText({ x: feet.x, y: feet.y - 1, z: feet.z })} が ${floor?.name ?? '未ロード'} で、跳んでも積む土台が無い（${done}段登った）`, feet);
+      // Run 44 (hold 1): an open trapdoor's box is a panel at the side of its cell: nothing to lay a block on from inside the cell.
+      if (!floor || floor.boundingBox !== 'block' || isDoorlike(String(floor.name))) return stopped(bot, 'no_floor', `足元 ${cellText({ x: feet.x, y: feet.y - 1, z: feet.z })} が ${floor?.name ?? '未ロード'} で、跳んでも積む土台が無い（${done}段登った）`, feet);
       const short = shortFloor(bot, feet);
       if (short) {
         const aside = wholeFloorBeside(bot, feet);

@@ -6,7 +6,7 @@ import { buildMovements } from '../setMovements.js';
 import { FAR_LEG_M, nextLeg } from '../farLegs.js';
 import { feetCell, type Cell } from '../localMap.js';
 import { chooseTool, canHarvest, nearlyBroken } from '../toolChoice.js';
-import { installDoorRules, NO_ENTER } from '../walkRules.js';
+import { installDoorRules, isDoorlike, nodeCell, NO_ENTER } from '../walkRules.js';
 import { clip } from '../actReport.js';
 import { blockAt, cellText, inventoryCount, isAirLike, letGo, stopped, StepStopped, wait, waitUntil, type StepContext, type StepOutcome } from './common.js';
 import { atGoal, goWith, type GoOutcome, type WayNotes } from './walk.js';
@@ -295,6 +295,26 @@ const distanceTo = (bot: any, cell: Cell) => Math.hypot(bot.entity.position.x - 
 const goalOf = (cell: Cell, range: number) => range > 0 ? new goals.GoalNear(cell.x + 0.5, cell.y, cell.z + 0.5, range) : new goals.GoalBlock(cell.x, cell.y, cell.z);
 const compositeOf = (cells: Cell[], range: number) => cells.length === 1 ? goalOf(cells[0], range) : new goals.GoalCompositeAny(cells.map(cell => goalOf(cell, range)));
 const keyOf = (cell: Cell) => `${cell.x},${cell.y},${cell.z}`;
+/** The plain no-collision blocks a body is in, not on: a floor is never one, and the walk goes through them (air, liquids, climbing plants). */
+const THROUGH = /^(air|cave_air|void_air|water|lava|bubble_column|ladder|vine|scaffolding|cave_vines(_plant)?|twisting_vines(_plant)?|weeping_vines(_plant)?)$/u;
+/**
+ * Run 44 (hold 1, q51 「畑へ上る」 go to (216,66,206)): a place whose floor is a plant with no box (a pumpkin stem on farmland, a crop, a flower,
+ * grass) that the go may not dig: nobody stands on it and no block goes into its cell. The search ran its 5 s out on it, the walk went for a cell
+ * one too low (the farmland's own), jumped 5 s in a trapdoor's cell, and the stop blamed a pillar's level. Said at once instead, with the cell
+ * under it when that one is where a body stands. Null when the floor is a block, air (a bridge or a pillar lays it), a liquid or a climbable, or
+ * may be dug.
+ */
+export function floorlessAt(bot: any, cell: Cell, rule: Pick<DigRule, 'names'>): string | null {
+  const under = { x: cell.x, y: cell.y - 1, z: cell.z };
+  const floor = blockAt(bot, under);
+  if (!floor || floor.boundingBox !== 'empty') return null;
+  const name = String(floor.name).replace(/^minecraft:/u, '');
+  if (THROUGH.test(name) || rule.names.has(name)) return null;
+  const lower = blockAt(bot, { x: cell.x, y: cell.y - 2, z: cell.z });
+  const stand = lower && lower.boundingBox === 'block' && !isDoorlike(String(lower.name));
+  return `行き先 ${cellText(cell)} の足元 ${cellText(under)} は ${name} で床にならない（立てない・置けない）`
+    + (stand ? `。${cellText(under)} なら ${String(lower.name).replace(/^minecraft:/u, '')} の上に立てる` : '');
+}
 
 /** Whether the block just laid against `reference` on `face` shows in the world (the cell beside it is no longer air), looked at for a moment as the update may come late. */
 /** The cell a place of `reference` on `face` fills. */
@@ -354,7 +374,13 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     const why = hazardAtFeet(bot, cells[0].x, cells[0].y, cells[0].z) ?? '危ない';
     return fail('unsafe', `行き先 ${cellText(cells[0])} は${why}（溶岩・火・マグマ・サボテン・ベリー・ウィザーローズとその隣には行かない）`, '別の行き先を');
   }
-  const targets = standable;
+  // Run 44 (hold 1): a place over a plant nobody stands on is said at once (`floorlessAt`); one place of several that is such is dropped.
+  const grounded = limits.range < 1 ? standable.filter(cell => !floorlessAt(bot, cell, rule)) : standable;
+  if (!grounded.length) {
+    const why = floorlessAt(bot, standable[0], rule)!;
+    return fail('no_floor', why, /なら .* の上に立てる$/u.test(why) ? 'その 1 つ下を行き先に' : '別の行き先を');
+  }
+  const targets = grounded;
   const near = (): Cell => targets.reduce((best, cell) => (distanceTo(bot, cell) < distanceTo(bot, best) ? cell : best), targets[0]);
   const reached = () => atGoal(bot, compositeOf(targets, limits.range));
   if (reached()) return arrived();
@@ -500,7 +526,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   /** The search ran out of its time: no way is known, nor that there is none. What it saw, and the next hands that do not need the search. */
   const searchedOutStop = (found: Plan, aim: Cell): StepOutcome => {
     const tip = found.path.length ? found.path[found.path.length - 1] : null;
-    const tipCell = tip ? { x: Math.floor(tip.x), y: Math.floor(tip.y), z: Math.floor(tip.z) } : null;
+    const tipCell = tip ? nodeCell(tip) : null;
     const reach = tipCell ? `、${cellText(tipCell)} まで・あと ${Math.hypot(tipCell.x - aim.x, tipCell.y - aim.y, tipCell.z - aim.z).toFixed(0)}m` : '';
     return fail('search_timeout', `道探しが ${(searchCap / 1000).toFixed(searchCap < 1000 ? 2 : 0)} 秒で終わらない（道の有無は不明。${found.visited.toLocaleString('en-US')} マス調べた${reach}）`,
       '10m 以内の中継点へ go か、dig と walk の階段・縦穴で');
@@ -540,13 +566,16 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
       if (state.placed >= limits.maxPlace) return { levels, stop: fail('limit_place', `置く数の上限 ${limits.maxPlace} に着いた`, 'maxPlace を増やすか、別の道を') };
       const block = place.held.find(name => inventoryCount(bot, name) > 0);
       if (!block) return { levels, stop: fail('no_blocks', `登るのに置く物が無い（${place.missing.length ? `持っていない ${place.missing.join('・')}` : 'canPlace に置ける物が無い'}）`, '置ける物を集めるか、canPlace を足す') };
+      // Run 44 (hold 1): the feet are read standing. The climb began while the walk before it still jumped (its last point was lifted onto a
+      // trapdoor), the feet read a cell up at y 65.17, and the level was laid for a cell the body was half in (0.80) and no jump reaches.
+      if (bot.entity?.onGround === false) await waitUntil(ctx, () => bot.entity?.onGround !== false, 1500);
       let feet = feetCell(bot)!;
       // Run 41 (+1,472, +1,518): a floor lower than the feet cell (a small amethyst bud, a slab) leaves every jump 0.05 short of the laying
       // height. The body moves onto a whole floor beside it, or digs a floor that breaks at once and climbs from the one under it.
       // A body held up at the edge of the cell beside it (its feet cell's floor is air) has nothing under it to lay on: the same move aside.
       const under = blockAt(bot, { x: feet.x, y: feet.y - 1, z: feet.z });
       const short = shortFloor(bot, feet)
-        ?? (!under || under.boundingBox !== 'block' ? { cell: { x: feet.x, y: feet.y - 1, z: feet.z }, name: String(under?.name ?? '未ロード'), top: 0, lowBy: 0 } : null);
+        ?? (!under || under.boundingBox !== 'block' || isDoorlike(String(under.name)) ? { cell: { x: feet.x, y: feet.y - 1, z: feet.z }, name: String(under?.name ?? '未ロード'), top: 0, lowBy: 0 } : null);
       if (short) {
         const aside = wholeFloorBeside(bot, feet, cell => !!hazardAtFeet(bot, cell.x, cell.y, cell.z));
         if (aside) {
@@ -667,7 +696,8 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
         const end = drawn.path.length ? drawn.path[drawn.path.length - 1] : null;
         if (end && Math.hypot(end.x - bot.entity.position.x, end.z - bot.entity.position.z) > 1.5) {
           state.redraws++;
-          await goWith(ctx, new goals.GoalBlock(Math.floor(end.x), Math.floor(end.y), Math.floor(end.z)), timeLeft(), notes, { stuckMs: GO_STUCK_MS, busy, onRoute: watchRoute, onGround: true });
+          const cell = nodeCell(end);
+          await goWith(ctx, new goals.GoalBlock(cell.x, cell.y, cell.z), timeLeft(), notes, { stuckMs: GO_STUCK_MS, busy, onRoute: watchRoute, onGround: true });
           letGo(bot);
           continue;
         }
@@ -696,7 +726,9 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
       const found = leg.final || searchedOut ? drawn : await plan(movements, finalGoal, Math.min(searchCap, timeLeft()));
       const end = found.path.length ? found.path[found.path.length - 1] : null;
       const lowest = Math.min(...targets.map(cell => cell.y));
-      const closestY = end ? Math.floor(end.y) : (feetCell(bot)?.y ?? lowest);
+      // Run 44 (hold 1): the search's cell, not the point the pathfinder put on the top of the floor (64.94 on farmland is the cell 65, not 64).
+      const endCell = end ? nodeCell(end) : null;
+      const closestY = endCell ? endCell.y : (feetCell(bot)?.y ?? lowest);
       if (lowest > closestY) {
         // The place is higher than the nearest the way goes: a climb. The route search's own towers are off; a block is laid at the top of each jump.
         if (!place.held.length) {
@@ -707,9 +739,9 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
         // To the foot of the climb along the level: an end the way found high up (a search cut by its time ends where it got to) is not walked to,
         // the executor has no towers (run 41 replay: 12 redraws at a goal 17 up, stuck in 10 s); the climb starts here.
         const here = feetCell(bot);
-        if (end && Math.hypot(end.x - bot.entity.position.x, end.z - bot.entity.position.z) > 1.2 && (!here || Math.floor(end.y) <= here.y + 1)) {
+        if (end && endCell && Math.hypot(end.x - bot.entity.position.x, end.z - bot.entity.position.z) > 1.2 && (!here || endCell.y <= here.y + 1)) {
           state.redraws++;
-          await goWith(ctx, new goals.GoalBlock(Math.floor(end.x), Math.floor(end.y), Math.floor(end.z)), timeLeft(), notes, { stuckMs: GO_STUCK_MS, busy, onRoute: watchRoute, onGround: true });
+          await goWith(ctx, new goals.GoalBlock(endCell.x, endCell.y, endCell.z), timeLeft(), notes, { stuckMs: GO_STUCK_MS, busy, onRoute: watchRoute, onGround: true });
           letGo(bot);
           const again = vetoed();
           if (again) return again;
@@ -722,7 +754,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
         // The part of the way the search had found when its time ran out: walked when its end is nearer the place by 2 m or more.
         const tip = found.path.length ? found.path[found.path.length - 1] : null;
         if (tip && partialWalks < GO_PARTIAL_WALKS && !budgetOf(countOf(found), found.places)) {
-          const cell = { x: Math.floor(tip.x), y: Math.floor(tip.y), z: Math.floor(tip.z) };
+          const cell = nodeCell(tip);
           const gain = distanceTo(bot, aim) - Math.hypot(cell.x - aim.x, cell.y - aim.y, cell.z - aim.z);
           if (gain >= 2) {
             partialWalks++; state.redraws++;

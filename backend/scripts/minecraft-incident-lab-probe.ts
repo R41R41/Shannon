@@ -6,7 +6,11 @@
 //   3. the body is restarted (the bot leaves and a new one logs in, a new NativeCommonFcaBody): it is still held (the hold file), the world still
 //      stopped, and it stands where it stood;
 //   4. the cause is fixed (survival again) and the same act is sent with `context.incident.resume`: the world moves, the act passes;
-//   5. the next act goes on.
+//   5. the next act goes on;
+//   6. (run 44, hold 1) someone else joins: a heavy failure of a held task is not held (the world cannot be stopped), its box and scene are
+//      taken, the receipt says why, and the next act runs; then held again and cancelled.
+// The body's own names are read at the freeze, as in production (the scene saver is made before the body logs in): the world is frozen with only
+// the body (and the lab's operator, a spectator) on.
 // The probe plays the head's part (it sends the commands the head would). Env (scripts/lab/run-incident-lab.sh): MINECRAFT_INCIDENT_NO_LLM=true,
 // MINECRAFT_INCIDENT_PORT, MINECRAFT_INCIDENT_WORLD_DIRECTORY, MINECRAFT_INCIDENT_OUT (the box, the scene and the hold file go there), and
 // MINECRAFT_INCIDENT_REPORT.
@@ -17,7 +21,7 @@ import { createProbeBot, closeProbeBot } from '../src/services/minebot/testing/M
 import { NativeCommonFcaBody } from '../src/services/minebot/integration/commonFca/nativeBody.js';
 import { blackBoxOf } from '../src/services/minebot/utils/blackbox.js';
 import { installIncidents } from '../src/services/minebot/utils/incidents.js';
-import { SceneSaver } from '../src/services/minebot/utils/sceneSave.js';
+import { SceneSaver, selfNames } from '../src/services/minebot/utils/sceneSave.js';
 
 const port = Number(process.env.MINECRAFT_INCIDENT_PORT);
 const worldDirectory = process.env.MINECRAFT_INCIDENT_WORLD_DIRECTORY ?? '';
@@ -51,10 +55,15 @@ async function ask(command: string, timeoutMs = 10_000): Promise<string> {
 }
 const holdFile = path.join(out, 'hold.json');
 const sceneRoot = path.join(out, 'scenes');
-const scene = new SceneSaver({ command: (text, timeoutMs) => ask(text, timeoutMs), serverDir: worldDirectory, root: sceneRoot, ignore: [ACTOR, operator.username] });
+// Made before the body logs in, as production makes it (utils/incidents' incidentOptions): its own name is read at each freeze. The operator (the
+// lab's hand, a spectator) is the only name it is told to pass over.
+let current: any = null;
+const scene = new SceneSaver({ command: (text, timeoutMs) => ask(text, timeoutMs), serverDir: worldDirectory, root: sceneRoot, self: () => selfNames(current),
+  ignore: [operator.username] });
 
 async function connect(): Promise<{ actor: any; body: NativeCommonFcaBody }> {
   const actor: any = await createProbeBot(port, ACTOR);
+  current = actor;
   installIncidents(actor, { holdFile, scene });
   const body = new NativeCommonFcaBody(actor, { serverId: 'incident-lab', capture: async () => { throw new Error('no picture'); }, rendererConfigured: () => false });
   return { actor, body };
@@ -95,6 +104,7 @@ try {
   report.first = { lines: first.lines, incident, ms: first.ms };
   check('the go stops stuck (a heavy failure)', /go 止まった stuck/u.test(first.lines.join(' ')), first.lines.at(-1) ?? '');
   check('the receipt carries the incident, held and frozen', incident?.held === true && incident?.frozen === true && incident?.heavy === true, JSON.stringify(incident));
+  check('with only the body on, the body is not counted as someone else (run 44)', incident?.frozen === true && !/others_present/u.test(String(incident?.freeze ?? '')), String(incident?.freeze ?? ''));
   const boxes = fs.existsSync(path.join(process.env.MINEBOT_BLACKBOX_DIR ?? '', TASK)) ? fs.readdirSync(path.join(process.env.MINEBOT_BLACKBOX_DIR ?? '', TASK)) : [];
   check('the black box was written under the task, with the incident id', boxes.some(file => file.startsWith(String(incident?.id))), boxes.join(','));
   const sceneDir = path.join(sceneRoot, String(incident?.id));
@@ -131,8 +141,22 @@ try {
   // 5: the next act goes on.
   const fifth = await act(body, { hands: [{ do: 'go', to: { x: 11, y: FLOOR + 1, z: 2 }, seconds: 30 }], why: '[lab] 続き' }, null);
   check('the next act goes on', fifth.receipt.outcome === 'completed', fifth.lines.at(-1) ?? '');
-  // 6: held again, then the operator cancels the task (the head's release names the hold): the world moves again.
+  // 6 (run 44): someone else on the server: the same heavy failure is not held. The box and the scene are taken, the world moves, and the task goes on.
   await ask(`fill 12 95 -16 14 ${FLOOR} 16 minecraft:air`); await ask(`gamemode adventure ${ACTOR}`); await sleep(1500);
+  const visitor: any = await createProbeBot(port, 'LabVisitor'); await sleep(1500);
+  const crowded = await act(body, { hands: [{ do: 'go', to: { x: 16, y: FLOOR + 1, z: 2 }, canPlace: ['cobblestone'], maxPlace: 10, seconds: 60 }], why: '[lab] ほかの人がいる時の穴' }, { hold: true });
+  const notHeld = crowded.parsed?.incident;
+  report.notHeld = notHeld ?? null;
+  check('with someone else on, a heavy failure is not held: the receipt says why', notHeld?.heavy === true && notHeld?.held === false && notHeld?.frozen === false
+    && /others_present:LabVisitor/u.test(String(notHeld?.notHeld ?? '')), JSON.stringify(notHeld ?? null));
+  const crowdedScene = path.join(sceneRoot, String(notHeld?.id));
+  check('with someone else on, the box and the scene are still taken', notHeld?.box === true && fs.existsSync(path.join(crowdedScene, 'scene.json')), crowdedScene);
+  const crowdedTick = await tickState();
+  check('with someone else on, the world is not frozen and no hold file is written', (!/frozen/iu.test(crowdedTick) || /running normally/iu.test(crowdedTick)) && !fs.existsSync(holdFile), crowdedTick);
+  const goesOn = await act(body, { hands: [{ do: 'go', to: { x: 11, y: FLOOR + 1, z: 0 }, seconds: 30 }], why: '[lab] ほかの人がいても続く' }, { hold: true });
+  check('with someone else on, the next act of the task runs (not refused)', goesOn.receipt.failureType !== 'held' && goesOn.receipt.outcome === 'completed', goesOn.lines.at(-1) ?? String(goesOn.receipt.result ?? '').slice(0, 200));
+  closeProbeBot(visitor); await sleep(2500);
+  // 7: alone again, held again, then the operator cancels the task (the head's release names the hold): the world moves again.
   const sixth = await act(body, { hands: [{ do: 'go', to: { x: 16, y: FLOOR + 1, z: 2 }, canPlace: ['cobblestone'], maxPlace: 10, seconds: 60 }], why: '[lab] 二つ目の穴' }, { hold: true });
   check('held again on the second gap', sixth.parsed?.incident?.held === true && /frozen/iu.test(await tickState()), JSON.stringify(sixth.parsed?.incident ?? null));
   check('the incident says where the act began and ended', Array.isArray(sixth.parsed?.incident?.start) && Array.isArray(sixth.parsed?.incident?.end), JSON.stringify([sixth.parsed?.incident?.start, sixth.parsed?.incident?.end]));

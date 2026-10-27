@@ -1,3 +1,4 @@
+import { Vec3 } from 'vec3';
 import { symbolFor, isOpenSymbol, type BlockReader, type Cell, type MapBlock } from './localMap.js';
 
 /**
@@ -238,6 +239,7 @@ export function installDoorRules(movements: any): void {
   if (!movements || movements.__doorRules) return;
   movements.__doorRules = true;
   movements.canOpenDoors = false;
+  keepDoorPointsLow(movements.bot);
   const getBlock = movements.getBlock.bind(movements);
   movements.getBlock = (pos: any, dx: number, dy: number, dz: number) => {
     const block = getBlock(pos, dx, dy, dz);
@@ -261,6 +263,57 @@ export function installDoorRules(movements: any): void {
     }
     return true;
   });
+}
+
+/**
+ * The cell of a route search's point: the node it was found as (its `hash`, "x,y,z"), not the point the pathfinder then put on the top of the
+ * block there (run 44, hold 1: a node standing on farmland is (216,65,206); its point is at y 64.94, whose floor is the cell 64, inside the
+ * farmland: a goal there is never reached, and its search ran 5 s). A point without a hash (a test's) is read as before.
+ */
+export function nodeCell(point: { x: number; y: number; z: number; hash?: unknown }): Cell {
+  if (typeof point.hash === 'string') {
+    const [x, y, z] = point.hash.split(',').map(Number);
+    if ([x, y, z].every(n => Number.isInteger(n))) return { x: x!, y: y!, z: z! };
+  }
+  return { x: Math.floor(point.x), y: Math.floor(point.y), z: Math.floor(point.z) };
+}
+
+/**
+ * Run 44 (hold 1, a taiga village's field fenced with open spruce trapdoors): the door rules let the search go through a door, gate or trapdoor
+ * cell, but the pathfinder then puts each point of its path on the top of the block in that cell (`postProcessPath`): an open trapdoor's panel is
+ * a box a whole block high, so the point went a cell up, onto the panel's edge. The body walked into the cell, stood beside the panel and jumped
+ * for it 5 s (the point is 0.19 away across and 1 up: never reached). The points of such cells are put back down on their own floor as the path
+ * comes (`path_update` comes before the executor takes the path, and its points are the executor's own). Only while the movements in use have
+ * the door rules.
+ */
+export function keepDoorPointsLow(bot: any): void {
+  if (!bot || typeof bot.on !== 'function' || bot.__doorPointsLow) return;
+  bot.__doorPointsLow = true;
+  bot.on('path_update', (result: any) => {
+    if (!bot.pathfinder?.movements?.__doorRules) return;
+    lowerDoorPoints(bot, Array.isArray(result?.path) ? result.path : []);
+  });
+}
+/** The points of `path` (the pathfinder's moves, after its post-processing) in a door, gate or trapdoor cell, put on that cell's floor. */
+export function lowerDoorPoints(bot: any, path: any[]): number {
+  let lowered = 0;
+  for (const point of path) {
+    // The pathfinder lifts nothing after a move that digs or lays (it stops there): neither is lowered.
+    if ((point?.toBreak?.length ?? 0) > 0 || (point?.toPlace?.length ?? 0) > 0) break;
+    if (typeof point?.hash !== 'string') continue;
+    const cell = nodeCell(point);
+    if (point.y < cell.y + 0.5) continue;
+    let block: any = null;
+    try { block = bot.blockAt?.(new Vec3(cell.x, cell.y, cell.z), false); } catch { block = null; }
+    if (!block?.name || !isDoorlike(String(block.name))) continue;
+    let floor: any = null;
+    try { floor = bot.blockAt?.(new Vec3(cell.x, cell.y - 1, cell.z), false); } catch { floor = null; }
+    const shapes: number[][] = Array.isArray(floor?.shapes) ? floor.shapes : [];
+    const top = shapes.length && !isDoorlike(String(floor?.name ?? '')) ? Math.max(...shapes.map(shape => Number(shape[4] ?? 0))) : 1;
+    point.x = cell.x + 0.5; point.y = cell.y - 1 + Math.min(1, top); point.z = cell.z + 0.5;
+    lowered++;
+  }
+  return lowered;
 }
 
 /** A prismarine block as the rules read it (its name, its box, and for a door, gate or trapdoor whether it is open). */

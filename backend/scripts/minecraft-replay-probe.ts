@@ -65,7 +65,7 @@ const actor: any = await createProbeBot(port, ACTOR);
 // also saves the scene of the lab's world (to start a replay from it, `scene-case.py`).
 installIncidents(actor, { holdFile: path.join(process.env.MINECRAFT_REPLAY_OUT ?? '/tmp', 'replay-hold.json'),
   scene: process.env.MINECRAFT_REPLAY_SCENES === 'on' ? new SceneSaver({ command: (text, timeoutMs) => ask(text, timeoutMs), serverDir: worldDirectory,
-    root: path.join(process.env.MINECRAFT_REPLAY_OUT ?? '/tmp', 'scenes'), ignore: [ACTOR, 'ShannonProbe'] }) : null });
+    root: path.join(process.env.MINECRAFT_REPLAY_OUT ?? '/tmp', 'scenes'), self: () => [ACTOR], ignore: ['ShannonProbe'] }) : null });
 const body = new NativeCommonFcaBody(actor, { serverId: 'replay-probe', capture: async () => { throw new Error('no picture in the lab'); }, rendererConfigured: () => false });
 let deaths = 0, disconnected: string | null = null;
 const chat: Array<{ t: number; text: string }> = [];

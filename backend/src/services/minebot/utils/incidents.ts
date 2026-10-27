@@ -4,7 +4,7 @@ import path from 'node:path';
 import { createLogger } from '../../../utils/logger.js';
 import type { ActReport } from './actReport.js';
 import { blackBoxOf, type BlackBox } from './blackbox.js';
-import { SceneSaver, type SceneResult } from './sceneSave.js';
+import { SceneSaver, selfNames, type SceneResult } from './sceneSave.js';
 import { rconCommand } from '../../integration/minecraftLifecycleNative.js';
 import { serverDirectory } from '../../minecraft/freshWorld.js';
 
@@ -16,6 +16,11 @@ const log = createLogger('Minebot:Incident');
  * failure (`context.incident.hold`, the operator's `request --hold-on-failure`) stops the world (`/tick freeze`, never with anyone else on the
  * server) and holds the task's next acts until one comes with `context.incident.resume` naming the hold: that one unfreezes the world and runs.
  * The hold is kept in a file, so a body restarted in between (a deploy) is still held when it comes back.
+ *
+ * Run 44 (hold 1, the coordinator's choice of 2026-10-28): a world that cannot be stopped (someone else on the server, the players not known, the
+ * freeze refused) is not held: a hold in a moving world left the body standing at night with no act allowed, and it died. The box and the scene
+ * are taken, the act's receipt says why there was no hold (`notHeld`), and the task goes on. A resume, a cancel and a stale hold always send
+ * `tick unfreeze` (the world may have been stopped by hand, as for hold 1).
  *
  * Heavy (box and scene): a go stopped `stuck`, `search_timeout`, or `limit_time` with fewer than LOW_STEPS steps; an act that failed after 60 s or
  * more; health at NEAR_DEATH or under, or a death, during the act; the first failure of a kind (hand and code) in the task. A hold stops for all
@@ -29,6 +34,8 @@ export const NEAR_DEATH = 4;
 const SHARP_HP = 6, SHARP_MS = 5_000;
 
 export interface Incident { id: string; kind: 'act' | 'health' | 'death'; heavy: boolean; why: string; box: string | null; scene: string | null; held: boolean; frozen: boolean | null; freeze?: string;
+  /** A hold that was asked for and not made: the world could not be stopped (the freeze's words). */
+  notHeld?: string;
   /** The feet when the act began, and when it ended (the hold's place): a resume reads how far the body is from where the act began. */
   start?: [number, number, number] | null; end?: [number, number, number] | null }
 export interface Hold { id: string; task: string; at: string; frozen: boolean; freeze: string; command: string; why: string; start?: [number, number, number] | null }
@@ -107,7 +114,7 @@ export class Incidents {
     const hold = this.hold;
     if (!hold) return null;
     if (context?.incident?.resume === hold.id) {
-      const said = hold.frozen ? await (this.options.scene?.unfreeze() ?? Promise.resolve('no_scene_port')) : 'not_frozen';
+      const said = await this.unfreeze();
       log.warn(`▶ 保留を解いた ${hold.id}: ${said}`);
       box?.note('resume', { hold: hold.id, unfreeze: said });
       this.clearHold();
@@ -115,7 +122,7 @@ export class Incidents {
     }
     if (context?.taskId && context.taskId !== hold.task) {
       // Another task's act: the hold was left by a task that is gone (cancelled while held). The world moves again.
-      const said = hold.frozen ? await (this.options.scene?.unfreeze() ?? Promise.resolve('no_scene_port')) : 'not_frozen';
+      const said = await this.unfreeze();
       log.warn(`▶ 別のタスクの act が来たので、前のタスクの保留 ${hold.id} を解いた: ${said}`);
       this.clearHold();
       return null;
@@ -136,9 +143,15 @@ export class Incidents {
     const freeze = holding ? (this.options.scene ? await this.options.scene.freeze() : { frozen: false, why: 'no_scene_port' }) : null;
     const incident = await this.write('act', heavy, why, act);
     if (!incident || !holding || !freeze) return incident;
+    if (!freeze.frozen) {
+      // Not held: the world goes on, and so does the task (the head reads `notHeld` and writes it down).
+      log.warn(`⏵ 保留しなかった ${incident.id}（${why}）: 世界を止められない（${freeze.why}）。黒箱と現場は取った`);
+      this.box()?.note('hold_skipped', { id: incident.id, freeze: freeze.why });
+      return { ...incident, held: false, frozen: false, freeze: freeze.why, notHeld: freeze.why };
+    }
     this.hold = { id: incident.id, task, at: new Date(this.now()).toISOString(), frozen: freeze.frozen, freeze: freeze.why, command: command.id, why, start: this.startFeet };
     try { await fs.promises.mkdir(path.dirname(this.options.holdFile), { recursive: true }); await fs.promises.writeFile(this.options.holdFile, JSON.stringify(this.hold)); } catch { /* held in memory */ }
-    log.warn(`⏸ 保留した ${incident.id}（${why}）。世界: ${freeze.frozen ? '止めた' : `止めていない（${freeze.why}）`}`);
+    log.warn(`⏸ 保留した ${incident.id}（${why}）。世界を止めた`);
     this.box()?.note('hold', { id: incident.id, frozen: freeze.frozen, freeze: freeze.why });
     return { ...incident, held: true, frozen: freeze.frozen, freeze: freeze.why };
   }
@@ -150,11 +163,19 @@ export class Incidents {
   async cancel(id: string): Promise<boolean> {
     const hold = this.hold;
     if (!hold || hold.id !== id) return false;
-    const said = hold.frozen ? await (this.options.scene?.unfreeze() ?? Promise.resolve('no_scene_port')) : 'not_frozen';
+    const said = await this.unfreeze();
     log.warn(`⏹ 保留していたタスクが止められたので、保留 ${hold.id} を解いた: ${said}`);
     this.box()?.note('hold_cancelled', { hold: hold.id, unfreeze: said });
     this.clearHold();
     return true;
+  }
+
+  /**
+   * `tick unfreeze` whatever the hold says of the world: a hold written as not frozen may stand in a world stopped by hand (run 44, hold 1: the
+   * coordinator froze it over RCON after the body died), and an unfreeze of a running world does nothing.
+   */
+  private async unfreeze(): Promise<string> {
+    return this.options.scene ? await this.options.scene.unfreeze() : 'no_scene_port';
   }
 
   private clearHold(): void {
@@ -191,7 +212,8 @@ export function installIncidents(bot: any, options: ConstructorParameters<typeof
 /**
  * The production options: the hold file beside the body's other saves, and the scene through the lifecycle's RCON (MINEBOT_LIFECYCLE_RCON_PORT and
  * its password file) on the dedicated server's directory (MINEBOT_SCENE_SERVER_DIR, else SERVER_BASE_PATH/shannon-home, else ~/minecraft/shannon-home). Without RCON there is no
- * scene and no freeze: the box is still written, and a hold still holds the task (the world is not stopped, which the hold says).
+ * scene and no freeze: the box is still written, and a hold asked for is not made (the world cannot be stopped; the receipt says so).
+ * The body's own names are read at each freeze (`selfNames`): this is called before the login, when the body has no name yet.
  */
 export function incidentOptions(bot: any): ConstructorParameters<typeof Incidents>[1] {
   const holdFile = path.resolve(process.env.MINEBOT_INCIDENT_HOLD_FILE ?? 'saves/minecraft/incident-hold.json');
@@ -203,6 +225,6 @@ export function incidentOptions(bot: any): ConstructorParameters<typeof Incident
   try { password = passwordFile ? fs.readFileSync(passwordFile, 'utf8').trim() : ''; } catch { password = ''; }
   if (!Number.isInteger(port) || !password || !serverDir) return { holdFile, scene: null };
   const scene = new SceneSaver({ command: (text, timeoutMs) => rconCommand({ port, password }, text, undefined, timeoutMs), serverDir,
-    root: path.resolve(process.env.MINEBOT_SCENE_DIR ?? 'saves/minecraft/scenes'), ignore: [String(bot.username ?? '')] });
+    root: path.resolve(process.env.MINEBOT_SCENE_DIR ?? 'saves/minecraft/scenes'), self: () => selfNames(bot) });
   return { holdFile, scene };
 }

@@ -136,19 +136,23 @@ act の手（place・make・pillarUp・go・mine・smelt・obsidian・portal・f
   - 止める重い失敗：go の stuck・search_timeout・10 歩未満の limit_time、60 秒以上の損、act の中の瀕死、死亡。そのタスクで初めて見る種類の失敗では止めません（黒箱と現場は取ります）。
   - 保留中に運用者が cancel すると、頭が保留の id を付けた release を送り、体は保留を解いて `tick unfreeze` します。
   - 体は act の始まりの位置へ自分で戻りません。始まりと保留した時の位置は incident に載り、運用者の status と resume に出ます。
-  - 世界を止める（`/tick freeze`。ほかの人がいる時は止めず、その旨を残す）
+  - 世界を止める（`/tick freeze`）。体自身の名前は止める時に読み、ほかの人に数えない（実走 44 の保留 1 では、ログイン前に読んだ空の名前のせいで自分を数え、止まらなかった）
+  - 止められない時（ほかの人がいる・人数が分からない・freeze が断られた）は保留しない。黒箱と現場は取り、受け取りの `incident.notHeld` に理由を書き、走りは続ける（頭は `hold_skipped` の行を監査に残す）
+  - resume・cancel・別のタスクの act の時は、保留のファイルが何と言っていても `tick unfreeze` を送る（手で止めた世界も動く）
   - 現場と黒箱を取る
   - そのタスクの次の act を `held` で断る
   - 保留は `saves/minecraft/incident-hold.json` に残すので、体を再起動しても続きます。
   - `context.incident.resume` に保留の id が来たら、世界を動かして act を走らせます。
   - 頭の側の作りは shannon-ios の `docs/operator-minecraft-contract.md`（Hold on a heavy failure and resume）にあります。
-- **隔離ラボの通し**：`run-incident-lab.sh <label> <code.tar>`（`scripts/minecraft-incident-lab-probe.ts`）を VM で走らせます。モデルも有料の鍵も使いません。次を確かめます（14 の確かめ）。
+- **隔離ラボの通し**：`run-incident-lab.sh <label> <code.tar>`（`scripts/minecraft-incident-lab-probe.ts`）を VM で走らせます。モデルも有料の鍵も使いません。次を確かめます（22 の確かめ）。
   1. わざと go を止まらせる（冒険モードで置けない）
   2. 黒箱と現場が取れる
   3. 世界が止まる
   4. 次の act が断られる
   5. 体を入れ替えても保留のまま、同じ場所に立っている
   6. 直してから resume で同じ act が通り、次の act へ進む
+  7. 体だけの時に止まる（体を「ほかの人」に数えない。現場の保存器は、本番と同じく体のログイン前に作る）
+  8. ほかの人（LabVisitor）がいる時は保留しない：受け取りに理由、黒箱と現場は取る、世界は動いたまま、次の act は走る
 - **現場から再生**：
   1. `REPLAY_SCENES=on` で再生すると、重い失敗の現場がラボのワールドから取れます。本番の現場はそのまま使えます。
   2. `scene-case.py --scene <現場> --box <黒箱> --name s1 > cases.json` で場面を作ります。生き物は残します（`keepEntities`）。体と act は黒箱から入れます。

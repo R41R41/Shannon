@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { Vec3 } from 'vec3';
 import { BLACKBOX_WINDOW_MS, installBlackBox } from '../../src/services/minebot/utils/blackbox.js';
 import { heavyReason, holdsFor, Incidents } from '../../src/services/minebot/utils/incidents.js';
-import { regionsAround, SceneSaver } from '../../src/services/minebot/utils/sceneSave.js';
+import { regionsAround, SceneSaver, selfNames } from '../../src/services/minebot/utils/sceneSave.js';
 
 // 2026-10-28 (owner: 「黒箱・現場の保存・止めて直す実走」): the body's black box, the scene of a heavy failure, and the hold of a fix run.
 const dirs: string[] = [];
@@ -116,7 +116,7 @@ describe('the scene and the hold', () => {
     for (const file of regionsAround(10, -3)) { fs.writeFileSync(path.join(world, 'region', file), 'R'); fs.writeFileSync(path.join(world, 'entities', file), 'E'); }
     fs.writeFileSync(path.join(serverDir, 'logs', 'latest.log'), "[10:00:00] [Server thread/INFO]: Done\n");
     const said: string[] = [];
-    const saver = new SceneSaver({ serverDir, root: path.join(serverDir, 'scenes'), ignore: ['MinebotTrial', 'ShannonProbe'],
+    const saver = new SceneSaver({ serverDir, root: path.join(serverDir, 'scenes'), self: () => ['MinebotTrial'], ignore: ['ShannonProbe'],
       command: async text => { said.push(text); return text === 'list' ? `There are 2 of a max of 20 players online: ${players}` : text.startsWith('save-all') ? 'Saved the game' : 'ok'; } });
     return { saver, said, serverDir };
   }
@@ -172,5 +172,73 @@ describe('the scene and the hold', () => {
     expect(said.at(-1)).toBe('tick unfreeze');
     expect(fs.existsSync(holdFile)).toBe(false);
     expect(await second.beforeAct({ taskId: 'task-9' })).toBeNull();
+  });
+});
+
+describe('run 44, hold 1: the body counted itself as someone else, held in a moving world, and died', () => {
+  const HOLD1 = { id: '20261027T184214-act-vpvqh', task: 'ca51baee-7f08-4c6c-83fa-ae5eb1a2460a', at: '2026-10-27T18:42:15.255Z', frozen: false,
+    freeze: 'others_present:I_am_Shannon', command: 'skill:ff8884d2', why: 'go_stuck', start: [222.5, 66, 206.5] };
+  function lab(players: string, self: () => ReadonlyArray<string | null | undefined>) {
+    const serverDir = temp();
+    fs.mkdirSync(path.join(serverDir, 'world', 'region'), { recursive: true }); fs.mkdirSync(path.join(serverDir, 'logs'), { recursive: true });
+    fs.writeFileSync(path.join(serverDir, 'world', 'level.dat'), 'L');
+    for (const file of regionsAround(10, -3)) fs.writeFileSync(path.join(serverDir, 'world', 'region', file), 'R');
+    fs.writeFileSync(path.join(serverDir, 'logs', 'latest.log'), '');
+    const said: string[] = [];
+    const saver = new SceneSaver({ serverDir, root: path.join(serverDir, 'scenes'), self,
+      command: async text => { said.push(text); return text === 'list' ? `There are 1 of a max of 20 players online: ${players}` : text.startsWith('save-all') ? 'Saved the game' : 'ok'; } });
+    return { saver, said };
+  }
+
+  it('reads the body\'s own name at the freeze, not when the body was made (before its login gave it one), and without case', async () => {
+    const bot: any = { username: undefined, _client: {} };
+    const { saver, said } = lab('I_am_Shannon', () => selfNames(bot));
+    // Made before the login, as client.ts makes it: the old ports read [''] here and called the body someone else.
+    bot.username = 'I_am_Shannon'; bot._client.username = 'i_am_shannon';
+    expect(await saver.freeze()).toMatchObject({ frozen: true });
+    expect(said).toEqual(['list', 'tick freeze']);
+    expect(selfNames({ username: 'A', _client: { username: 'b' } })).toEqual(['A', 'b']);
+    expect(await lab('I_am_Shannon, Rai1241', () => selfNames(bot)).saver.freeze()).toEqual({ frozen: false, why: 'others_present:Rai1241' });
+  });
+
+  it('does not hold when the world cannot be stopped: the box and the scene are taken, the receipt says why, and the task goes on', async () => {
+    const clock = { t: 5_000_000 };
+    const { saver, said } = lab('MinebotTrial, Rai1241', () => ['MinebotTrial']);
+    const holdFile = path.join(temp(), 'hold.json');
+    const bot = fakeBot(clock);
+    installBlackBox(bot, temp(), () => clock.t);
+    const incidents = new Incidents(bot, { holdFile, scene: saver, now: () => clock.t });
+    const context = { taskId: 'task-44', incident: { hold: true } };
+    expect(await incidents.beforeAct(context)).toBeNull();
+    const report = { ok: false, startedAt: clock.t, done: 0, of: 1, lines: [{ i: 1, do: 'go' as const, status: 'stopped' as const, line: 'go 止まった stuck: …' }] };
+    const incident = (await incidents.afterAct({ id: 'cmd-1', context, arguments: { hands: [] } }, report as never, 8000))!;
+    expect(incident).toMatchObject({ heavy: true, held: false, frozen: false, freeze: 'others_present:Rai1241', notHeld: 'others_present:Rai1241' });
+    expect(incident.box).toMatch(/task-44/u);
+    expect(incident.scene).not.toBeNull();
+    expect(said).not.toContain('tick freeze');
+    expect(fs.existsSync(holdFile)).toBe(false);
+    expect(incidents.hold).toBeNull();
+    expect(await incidents.beforeAct(context)).toBeNull();
+  });
+
+  it('reads hold 1\'s own file (written as not frozen) after a new body, holds its acts, and moves the world on the resume (stopped by hand)', async () => {
+    const clock = { t: 6_000_000 };
+    const { saver, said } = lab('I_am_Shannon', () => ['I_am_Shannon']);
+    const holdFile = path.join(temp(), 'incident-hold.json');
+    fs.writeFileSync(holdFile, JSON.stringify(HOLD1));
+    const incidents = new Incidents(fakeBot(clock), { holdFile, scene: saver, now: () => clock.t });
+    expect(await incidents.beforeAct({ taskId: HOLD1.task })).toMatch(/^保留中（20261027T184214-act-vpvqh: go_stuck）/u);
+    expect(said).toEqual([]);
+    expect(await incidents.beforeAct({ taskId: HOLD1.task, incident: { resume: HOLD1.id } })).toBeNull();
+    expect(said).toEqual(['tick unfreeze']);
+    expect(fs.existsSync(holdFile)).toBe(false);
+    // The cancel and a stale hold move the world too, whatever the file says.
+    fs.writeFileSync(holdFile, JSON.stringify(HOLD1));
+    const cancelled = new Incidents(fakeBot(clock), { holdFile, scene: saver, now: () => clock.t });
+    expect(await cancelled.cancel(HOLD1.id)).toBe(true);
+    fs.writeFileSync(holdFile, JSON.stringify(HOLD1));
+    const stale = new Incidents(fakeBot(clock), { holdFile, scene: saver, now: () => clock.t });
+    expect(await stale.beforeAct({ taskId: 'another-task' })).toBeNull();
+    expect(said).toEqual(['tick unfreeze', 'tick unfreeze', 'tick unfreeze']);
   });
 });

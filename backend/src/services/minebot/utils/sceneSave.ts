@@ -27,8 +27,17 @@ export interface ScenePorts {
   serverDir: string;
   /** Where the scenes go. */
   root: string;
-  /** The names in `list` that are not someone else (the body's own; in the lab also its operator): anyone more and the world is not frozen. */
-  ignore: readonly string[];
+  /**
+   * The body's own names, read at the moment of each `list` (run 44, hold 1: the names were read when the body was made, before its login gave it
+   * one, so its own name counted as someone else's and the world was never frozen). Compared without case.
+   */
+  self(): ReadonlyArray<string | null | undefined>;
+  /** Other names in `list` that are not someone else (the lab's operator); anyone more and the world is not frozen. */
+  ignore?: readonly string[];
+}
+/** The names a mineflayer body goes by: its own (set at login), and its client's (the profile's name with a Microsoft login). */
+export function selfNames(bot: any): string[] {
+  return [bot?.username, bot?._client?.username, bot?.player?.username].filter((name): name is string => typeof name === 'string' && name.length > 0);
 }
 export interface SceneResult {
   id: string; dir: string | null; ok: boolean; why: string; saveMs: number; copyMs: number; bytes: number; files: string[];
@@ -71,7 +80,8 @@ export class SceneSaver {
     try {
       const answer = await this.ports.command('list', 4000);
       const names = /:\s*(.*)$/u.exec(answer.trim())?.[1] ?? '';
-      return names.split(',').map(name => name.trim()).filter(name => name && !this.ports.ignore.includes(name));
+      const own = new Set([...this.ports.self(), ...(this.ports.ignore ?? [])].filter((name): name is string => !!name).map(name => name.toLowerCase()));
+      return names.split(',').map(name => name.trim()).filter(name => name && !own.has(name.toLowerCase()));
     } catch { return null; }
   }
   /** `/tick freeze` unless anyone else is on the server (then it is not frozen, and that is said). */

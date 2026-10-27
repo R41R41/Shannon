@@ -311,7 +311,8 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
         const incident = incidents ? await incidents.afterAct(command, act, Date.now() - actStartedAt).catch(() => null) : null;
         if (incident) {
           try { text = JSON.stringify({ ...JSON.parse(text), incident: { id: incident.id, heavy: incident.heavy, why: incident.why, held: incident.held,
-            frozen: incident.frozen, ...(incident.freeze ? { freeze: incident.freeze } : {}), box: incident.box !== null, scene: incident.scene !== null,
+            frozen: incident.frozen, ...(incident.freeze ? { freeze: incident.freeze } : {}), ...(incident.notHeld ? { notHeld: incident.notHeld } : {}),
+            box: incident.box !== null, scene: incident.scene !== null,
             ...(incident.start ? { start: incident.start } : {}), ...(incident.end ? { end: incident.end } : {}) } }); }
           catch { /* the report as it was */ }
         }
