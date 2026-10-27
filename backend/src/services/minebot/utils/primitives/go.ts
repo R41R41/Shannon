@@ -223,6 +223,18 @@ export function keepReads(movements: any, watch: WorldWatch): (x: number, y: num
   return (x, y, z) => blockAt(new Vec3(x, y, z), false)?.name ?? null;
 }
 
+/** A route drawn without walking it: the search's status, its nodes, and the cells it breaks (by block name) and fills. */
+interface Plan { status: string; path: any[]; digs: Map<string, number>; places: number; visited: number }
+const yieldNow = () => new Promise<void>(resolve => setImmediate(resolve));
+
+interface Relax { hazards?: boolean; tool?: boolean; blocks?: boolean; permissions?: boolean; limits?: boolean }
+interface State {
+  steps: number; dug: number; placed: number; redraws: number;
+  veto: { code: string; text: string } | null;
+  /** The blocks laid in a row that the world did not show. */
+  refused: number;
+}
+
 // ---- the movements ---------------------------------------------------------------------------------------------------------------------
 
 function goMovements(bot: any, args: Required<Pick<GoArgs, 'maxDrop' | 'waterOk' | 'maxDig' | 'maxPlace'>> & { sprint: boolean }, rule: DigRule, placeHeld: string[], state: State, relax: Relax = {}): any {
