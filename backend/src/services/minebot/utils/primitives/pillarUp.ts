@@ -32,6 +32,8 @@ const TRY_TICKS = 28;
 export const PILLAR_FEET_OVER_FLOOR = 1.05;
 const EMPTY = (block: any) => !block || isAirLike(block) || block.name === 'water' || block.name === 'lava';
 
+/** How much lower than its cell's bottom a floor may be and a jump from it still reach the laying height (1.252 - 1.05). */
+export const SHORT_FLOOR = 0.19;
 /** The top of a block's collision shapes over its own cell (1 for a whole block, 0.75 for a small amethyst bud, 0.5 for a bottom slab). */
 export function shapeTop(block: any): number {
   const shapes = Array.isArray(block?.shapes) ? block.shapes as number[][] : [];
@@ -49,7 +51,9 @@ export function shortFloor(bot: any, feet: Cell): { cell: Cell; name: string; to
   const floor = blockAt(bot, cell);
   if (!floor || !Number.isFinite(y)) return null;
   const lowBy = feet.y - y;
-  if (lowBy <= 0.01) return null;
+  // A jump tops out 1.252 over where it began; the block is laid at 1.05 over the feet cell's floor: a floor up to 0.2 low still takes it
+  // (soul sand, mud, farmland), one lower does not (a slab 0.5, a bud 0.25, an enchanting table 0.25).
+  if (lowBy <= SHORT_FLOOR) return null;
   return { cell, name: String(floor.name), top: shapeTop(floor), lowBy };
 }
 /** A cell beside the feet where the body stands on a whole block with room to jump (feet, head and the cell over the head empty), or null. */

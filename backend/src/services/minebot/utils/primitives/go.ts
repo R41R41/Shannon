@@ -565,7 +565,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
       try { up = await pillarUp(ctx, { n: 1, block }); } finally { manualBusy = false; }
       if (!up.ok) {
         if (up.reason === 'missing_item') return { levels, stop: fail('no_blocks', up.text.slice(0, 90), '置ける物を集める') };
-        return { levels, stop: fail(up.reason === 'ceiling' ? 'dead_end' : 'stuck', up.text.slice(0, 100), '') };
+        return { levels, stop: fail(up.reason === 'ceiling' ? 'dead_end' : up.reason === 'low_floor' ? 'low_floor' : 'stuck', up.text.slice(0, 100), '') };
       }
       levels++;
     }

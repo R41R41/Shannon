@@ -83,21 +83,21 @@ describe('run 41: a search that runs out of its time is not a dead end', () => {
 describe('run 41: a floor lower than the feet cell', () => {
   beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date', 'performance'] }); });
   afterEach(() => { vi.useRealTimers(); });
-  // The ground's top is y=64 (stone up to it); a bottom slab is the top at (0,64,0) (its top 0.5 up its cell): the feet stand at 64.5, half
-  // a block under the feet cell's (y=65) floor.
+  // The ground's top is y=64 (stone up to it); an enchanting table is the top at (0,64,0) (its top 0.75 up its cell, as the small amethyst
+  // bud of run 41 stood 0.75): the feet stand at 64.75, a quarter under the feet cell's (y=65) floor.
   const high: Ground = (x, y, z) => (Math.abs(x) > R || Math.abs(z) > R ? null : y <= FLOOR ? 'stone' : 'air');
-  const slab = (base: Ground): Ground => (x, y, z) => (x === 0 && z === 0 && y === FLOOR ? 'smooth_stone_slab' : base(x, y, z));
+  const slab = (base: Ground): Ground => (x, y, z) => (x === 0 && z === 0 && y === FLOOR ? 'enchanting_table' : base(x, y, z));
 
   it('pillarUp says low_floor before the jump, with the whole floor beside it', async () => {
-    const sim = makeSim(slab(high), { start: [0.5, FLOOR + 0.5, 0.5], items: [{ name: 'cobblestone', count: 8 }] });
+    const sim = makeSim(slab(high), { start: [0.5, FLOOR + 0.75, 0.5], items: [{ name: 'cobblestone', count: 8 }] });
     for (let i = 0; i < 20; i++) { sim.tick(); await vi.advanceTimersByTimeAsync(50); }
-    expect(sim.bot.entity.position.y).toBeCloseTo(FLOOR + 0.5, 2);
+    expect(sim.bot.entity.position.y).toBeCloseTo(FLOOR + 0.75, 2);
     const feet = feetCell(sim.bot)!;
-    expect(shortFloor(sim.bot, feet)).toMatchObject({ name: 'smooth_stone_slab', top: 0.5 });
+    expect(shortFloor(sim.bot, feet)).toMatchObject({ name: 'enchanting_table', top: 0.75 });
     const outcome = await drive(sim, pillarUp(ctxOf(sim), { n: 1, block: 'cobblestone' }));
     expect(outcome.ok).toBe(false);
     expect(outcome.reason).toBe('low_floor');
-    expect(outcome.text).toMatch(/足元 \(0,64,0\) の smooth_stone_slab は高さ 0\.50 で、足が 0\.50 低い。.*隣の丸ごとの床 \(-?\d,65,-?\d\) へずれてから登る/u);
+    expect(outcome.text).toMatch(/足元 \(0,64,0\) の enchanting_table は高さ 0\.75 で、足が 0\.25 低い。.*隣の丸ごとの床 \(-?\d,65,-?\d\) へずれてから登る/u);
     expect(closedWord('low_floor')).toBe('足場が無い');
     expect(sim.bot.placedBlocks).toEqual([]);
   });
@@ -105,7 +105,7 @@ describe('run 41: a floor lower than the feet cell', () => {
   it('go climbs from beside it: it steps onto a whole floor first, then pillars up', async () => {
     // A cliff 3 high at x>=2; the place is on top. The body starts on the slab.
     const cliff: Ground = (x, y, z) => (Math.abs(x) > R || Math.abs(z) > R ? null : y <= FLOOR ? 'stone' : x >= 2 && y <= FLOOR + 3 ? 'stone' : 'air');
-    const sim = makeSim(slab(cliff), { start: [0.5, FLOOR + 0.5, 0.5], items: [{ name: 'cobblestone', count: 16 }] });
+    const sim = makeSim(slab(cliff), { start: [0.5, FLOOR + 0.75, 0.5], items: [{ name: 'cobblestone', count: 16 }] });
     for (let i = 0; i < 20; i++) { sim.tick(); await vi.advanceTimersByTimeAsync(50); }
     const outcome: StepOutcome = await drive(sim, go(ctxOf(sim), { goals: [{ x: 3, y: FLOOR + 4, z: 0 }], canPlace: ['cobblestone'], range: 1, seconds: 60 }));
     expect(outcome.text).not.toMatch(/跳びの最高|low_floor/u);
