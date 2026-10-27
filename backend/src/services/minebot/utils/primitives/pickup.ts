@@ -17,6 +17,8 @@ export interface PickupArgs { radius?: number; ids?: number[] }
 const DEFAULT_RADIUS = 6;
 const MAX_RADIUS = 16;
 const ITEM_WAIT_MS = 2500;
+/** The longest a drop still in the air is waited for to come to rest before the hand walks to it or waits for it. */
+const SETTLE_MS = 1500;
 /** A body takes an item its box, grown by 1 across and 0.5 up and down, touches (the item's own box is 0.25 wide). */
 const TAKE_ACROSS = 1.3 + 0.125;
 const TAKE_BELOW = 0.5 + 0.25;
@@ -86,20 +88,34 @@ export async function pickup(ctx: StepContext, args: PickupArgs): Promise<StepOu
       if (freeSlots(bot) === 0) { missed.push(`${droppedName(bot, entity)}（持ち物が満杯）`); break; }
       const name = droppedName(bot, entity);
       const where = () => ({ x: entity.position.x, y: entity.position.y, z: entity.position.z });
-      if (!withinTake(bot.entity.position, where())) {
-        const goal = new goals.GoalNear(entity.position.x, entity.position.y, entity.position.z, 0.5);
-        const gone = await goWith(ctx, goal, Math.min(10_000, Math.max(500, ctx.deadline - Date.now())), notes);
-        if (!bot.entities?.[entity.id]) continue; // taken on the way
-        if (gone.timedOut || gone.stuck || gone.error || !gone.reached) {
-          letGo(bot);
-          const item = where(), cell = { x: Math.floor(item.x), y: Math.floor(item.y + 1e-3), z: Math.floor(item.z) };
-          const here = feetCell(bot)!;
-          const blocked = whyBlocked(bot, here, cell);
-          const why = gone.timedOut ? '時間切れ' : gone.stuck ? '4秒進めず' : /no path/iu.test(String((gone.error as Error)?.message)) ? '掘らない道が無い' : 'そこまで着けない';
-          if (!withinTake(bot.entity.position, item)) { missed.push(`${name}（${why}。${itemFacts(bot, item)}${blocked ? `。${blocked.text}` : ''}）`); continue; }
-        }
+      // A drop just thrown out is still in the air (the last drop of a mine: it showed beside the body and bounced 1.3-2 m off while the hand
+      // waited for it where it first showed, 1 run in 4 of the hands check): it is let come to rest before the hand decides to walk or wait.
+      for (let still = 0, until = Date.now() + SETTLE_MS, last = where(); Date.now() < until && still < 2 && bot.entities?.[entity.id];) {
+        await wait(ctx, 100);
+        const now = where();
+        still = Math.hypot(now.x - last.x, now.y - last.y, now.z - last.z) < 0.03 ? still + 1 : 0;
+        last = now;
       }
-      for (const until = Date.now() + ITEM_WAIT_MS; Date.now() < until && bot.entities?.[entity.id];) await wait(ctx, 100);
+      if (!bot.entities?.[entity.id]) continue; // taken while it fell
+      let unreachable = false;
+      // Walked to where it lies and waited for it; once more where it lies then, if it rolled on meanwhile.
+      for (let attempt = 0; attempt < 2 && bot.entities?.[entity.id] && !unreachable; attempt++) {
+        if (!withinTake(bot.entity.position, where())) {
+          const goal = new goals.GoalNear(entity.position.x, entity.position.y, entity.position.z, 0.5);
+          const gone = await goWith(ctx, goal, Math.min(10_000, Math.max(500, ctx.deadline - Date.now())), notes);
+          if (!bot.entities?.[entity.id]) break; // taken on the way
+          if (gone.timedOut || gone.stuck || gone.error || !gone.reached) {
+            letGo(bot);
+            const item = where(), cell = { x: Math.floor(item.x), y: Math.floor(item.y + 1e-3), z: Math.floor(item.z) };
+            const here = feetCell(bot)!;
+            const blocked = whyBlocked(bot, here, cell);
+            const why = gone.timedOut ? '時間切れ' : gone.stuck ? '4秒進めず' : /no path/iu.test(String((gone.error as Error)?.message)) ? '掘らない道が無い' : 'そこまで着けない';
+            if (!withinTake(bot.entity.position, item)) { missed.push(`${name}（${why}。${itemFacts(bot, item)}${blocked ? `。${blocked.text}` : ''}）`); unreachable = true; break; }
+          }
+        }
+        for (const until = Date.now() + ITEM_WAIT_MS; Date.now() < until && bot.entities?.[entity.id];) await wait(ctx, 100);
+      }
+      if (unreachable) continue;
       if (bot.entities?.[entity.id]) {
         const item = where();
         missed.push(`${name}（${withinTake(bot.entity.position, item) ? `拾える所にあるのに ${ITEM_WAIT_MS / 1000} 秒で入らなかった。` : ''}${itemFacts(bot, item)}）`);
