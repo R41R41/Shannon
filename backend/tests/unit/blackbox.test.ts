@@ -6,7 +6,7 @@ import { gunzipSync } from 'node:zlib';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Vec3 } from 'vec3';
 import { BLACKBOX_WINDOW_MS, installBlackBox } from '../../src/services/minebot/utils/blackbox.js';
-import { heavyReason, Incidents } from '../../src/services/minebot/utils/incidents.js';
+import { heavyReason, holdsFor, Incidents } from '../../src/services/minebot/utils/incidents.js';
 import { regionsAround, SceneSaver } from '../../src/services/minebot/utils/sceneSave.js';
 
 // 2026-10-28 (owner: 「黒箱・現場の保存・止めて直す実走」): the body's black box, the scene of a heavy failure, and the hold of a fix run.
@@ -100,6 +100,10 @@ describe('heavy or light', () => {
     expect(heavyReason(lines('無い: mine 止まった no_block: …', 'mine') as never, 3000, 18, false, seen, 't')).toBeNull();
     expect(heavyReason({ ok: true, lines: [] } as never, 125_000, 2, true, seen, 't')).toBeNull();
   });
+  it('holds only for a go stuck, out of search time or at its time with few steps, a minute lost, near death and a death (not the first of a kind)', () => {
+    for (const reason of ['go_stuck', 'go_search_timeout', 'go_limit_time_low:3', 'long:61s', 'near_death:3.5', 'death']) expect(holdsFor(reason), reason).toBe(true);
+    for (const reason of ['first:mine/no_block', null]) expect(holdsFor(reason)).toBe(false);
+  });
 });
 
 describe('the scene and the hold', () => {
@@ -152,11 +156,21 @@ describe('the scene and the hold', () => {
     expect(await second.beforeAct({ taskId: 'task-9', incident: { resume: incident.id } })).toBeNull();
     expect(said.at(-1)).toBe('tick unfreeze');
     expect(fs.existsSync(holdFile)).toBe(false);
-    // A light failure: the box only, no scene, no hold.
+    expect(incident.start).toEqual([10.5, 64, -3.5]);
+    // The first of a kind: the box and the scene, no hold (the coordinator's choice of 2026-10-28).
     const light = await second.afterAct({ id: 'cmd-2', context: { taskId: 'task-9', incident: { hold: true } } },
       { ...report, lines: [{ i: 1, do: 'mine', status: 'stopped', line: '無い: mine 止まった no_block' }] } as never, 2000);
-    expect(light).toMatchObject({ heavy: true, why: 'first:mine/no_block' });
+    expect(light).toMatchObject({ heavy: true, why: 'first:mine/no_block', held: false });
+    expect(await second.beforeAct({ taskId: 'task-9' })).toBeNull();
     const again = await second.afterAct({ id: 'cmd-3', context: { taskId: 'task-9' } }, { ...report, lines: [{ i: 1, do: 'mine', status: 'stopped', line: '無い: mine 止まった no_block' }] } as never, 2000);
     expect(again).toMatchObject({ heavy: false, held: false, scene: null });
+    // Held again, then cancelled by the operator: the world moves and the hold ends.
+    const held = (await second.afterAct({ id: 'cmd-4', context: { taskId: 'task-9', incident: { hold: true } } }, report as never, 8000))!;
+    expect(held.held).toBe(true);
+    expect(await second.cancel('not-this')).toBe(false);
+    expect(await second.cancel(held.id)).toBe(true);
+    expect(said.at(-1)).toBe('tick unfreeze');
+    expect(fs.existsSync(holdFile)).toBe(false);
+    expect(await second.beforeAct({ taskId: 'task-9' })).toBeNull();
   });
 });

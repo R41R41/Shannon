@@ -17,8 +17,10 @@ const log = createLogger('Minebot:Incident');
  * server) and holds the task's next acts until one comes with `context.incident.resume` naming the hold: that one unfreezes the world and runs.
  * The hold is kept in a file, so a body restarted in between (a deploy) is still held when it comes back.
  *
- * Heavy: a go stopped `stuck`, `search_timeout`, or `limit_time` with fewer than LOW_STEPS steps; an act that failed after 60 s or more; health at
- * NEAR_DEATH or under, or a death, during the act; the first failure of a kind (hand and code) in the task.
+ * Heavy (box and scene): a go stopped `stuck`, `search_timeout`, or `limit_time` with fewer than LOW_STEPS steps; an act that failed after 60 s or
+ * more; health at NEAR_DEATH or under, or a death, during the act; the first failure of a kind (hand and code) in the task. A hold stops for all
+ * of them but the first of a kind (`holdsFor`, the coordinator's choice of 2026-10-28). The operator's cancel of a held task ends the hold and
+ * moves the world again (`cancel`); the body never moves itself back to where the act began.
  */
 export const LOW_STEPS = 10;
 export const LONG_MS = 60_000;
@@ -26,9 +28,19 @@ export const NEAR_DEATH = 4;
 /** A fall of health this big within SHARP_MS writes the box (and at NEAR_DEATH or a death, the scene). */
 const SHARP_HP = 6, SHARP_MS = 5_000;
 
-export interface Incident { id: string; kind: 'act' | 'health' | 'death'; heavy: boolean; why: string; box: string | null; scene: string | null; held: boolean; frozen: boolean | null; freeze?: string }
-export interface Hold { id: string; task: string; at: string; frozen: boolean; freeze: string; command: string; why: string }
-interface Context { taskId?: string; incident?: { hold?: boolean; resume?: string } }
+export interface Incident { id: string; kind: 'act' | 'health' | 'death'; heavy: boolean; why: string; box: string | null; scene: string | null; held: boolean; frozen: boolean | null; freeze?: string;
+  /** The feet when the act began, and when it ended (the hold's place): a resume reads how far the body is from where the act began. */
+  start?: [number, number, number] | null; end?: [number, number, number] | null }
+export interface Hold { id: string; task: string; at: string; frozen: boolean; freeze: string; command: string; why: string; start?: [number, number, number] | null }
+interface Context { taskId?: string; incident?: { hold?: boolean; resume?: string; cancel?: string } }
+
+/**
+ * The heavy failures a hold stops for (2026-10-28, the coordinator's choice): a go stuck, out of search time or at its time with few steps, 60 s or
+ * more lost in any hand, near death in the act, a death. The first failure of a kind writes its box and scene but does not hold.
+ */
+export function holdsFor(reason: string | null): boolean {
+  return !!reason && /^(?:go_stuck|go_search_timeout|go_limit_time_low|long:|near_death|death)/u.test(reason);
+}
 
 /** The heavy-failure reason of an act's report, or null (light: the box only). */
 export function heavyReason(report: Pick<ActReport, 'ok' | 'lines' | 'stoppedBy'>, ms: number, lowestHp: number | null, died: boolean, seen: Set<string>, task: string): string | null {
@@ -59,6 +71,7 @@ export class Incidents {
   private died = false;
   private readonly falls: Array<[number, number]> = [];
   private lastHealthDump = 0;
+  private startFeet: [number, number, number] | null = null;
 
   constructor(private readonly bot: any, private readonly options: { holdFile: string; scene?: SceneSaver | null; now?: () => number }) {
     try { this.hold = JSON.parse(fs.readFileSync(options.holdFile, 'utf8')) as Hold; } catch { this.hold = null; }
@@ -86,6 +99,8 @@ export class Incidents {
   async beforeAct(context: Context | undefined): Promise<string | null> {
     this.lowestHp = typeof this.bot.health === 'number' ? this.bot.health : null;
     this.died = false;
+    const feet = this.bot.entity?.position;
+    this.startFeet = feet ? [Math.round(feet.x * 100) / 100, Math.round(feet.y * 100) / 100, Math.round(feet.z * 100) / 100] : null;
     const box = this.box();
     if (box && context?.taskId) box.task = context.taskId;
     box?.ensureWrapped();
@@ -117,15 +132,29 @@ export class Incidents {
     const why = reason ?? `${report.stoppedBy ?? 'failed'}:${(report.lines.find(line => line.status !== 'done')?.line ?? '').slice(0, 80)}`;
     const act = { command: command.id, arguments: command.arguments, ms, ok: report.ok, stoppedBy: report.stoppedBy ?? null, lines: report.lines.map(line => ({ do: line.do, status: line.status, line: line.line })) };
     // A hold stops the world first, so that the scene saved next is the moment of the failure (nothing falls or flows in between).
-    const holding = heavy && command.context?.incident?.hold === true;
+    const holding = holdsFor(reason) && command.context?.incident?.hold === true;
     const freeze = holding ? (this.options.scene ? await this.options.scene.freeze() : { frozen: false, why: 'no_scene_port' }) : null;
     const incident = await this.write('act', heavy, why, act);
     if (!incident || !holding || !freeze) return incident;
-    this.hold = { id: incident.id, task, at: new Date(this.now()).toISOString(), frozen: freeze.frozen, freeze: freeze.why, command: command.id, why };
+    this.hold = { id: incident.id, task, at: new Date(this.now()).toISOString(), frozen: freeze.frozen, freeze: freeze.why, command: command.id, why, start: this.startFeet };
     try { await fs.promises.mkdir(path.dirname(this.options.holdFile), { recursive: true }); await fs.promises.writeFile(this.options.holdFile, JSON.stringify(this.hold)); } catch { /* held in memory */ }
     log.warn(`⏸ 保留した ${incident.id}（${why}）。世界: ${freeze.frozen ? '止めた' : `止めていない（${freeze.why}）`}`);
     this.box()?.note('hold', { id: incident.id, frozen: freeze.frozen, freeze: freeze.why });
     return { ...incident, held: true, frozen: freeze.frozen, freeze: freeze.why };
+  }
+
+  /**
+   * A held task cancelled by the operator (the head sends a release with `context.incident.cancel`): the world moves again and the hold ends. True
+   * when it was this hold.
+   */
+  async cancel(id: string): Promise<boolean> {
+    const hold = this.hold;
+    if (!hold || hold.id !== id) return false;
+    const said = hold.frozen ? await (this.options.scene?.unfreeze() ?? Promise.resolve('no_scene_port')) : 'not_frozen';
+    log.warn(`⏹ 保留していたタスクが止められたので、保留 ${hold.id} を解いた: ${said}`);
+    this.box()?.note('hold_cancelled', { hold: hold.id, unfreeze: said });
+    this.clearHold();
+    return true;
   }
 
   private clearHold(): void {
@@ -144,7 +173,8 @@ export class Incidents {
       catch (error) { log.warn(`現場を保存できなかった ${id}: ${String((error as Error)?.message ?? error).slice(0, 100)}`); }
     }
     const written = box ? await box.dump(kind, why, { id, ...(act !== undefined ? { act } : {}), scene: scene?.ok ? scene.id : null }) : null;
-    return { id, kind, heavy, why, box: written?.file ?? null, scene: scene?.ok ? scene.dir : null, held: false, frozen: null };
+    const end: [number, number, number] | null = p ? [Math.round(p.x * 100) / 100, Math.round(p.y * 100) / 100, Math.round(p.z * 100) / 100] : null;
+    return { id, kind, heavy, why, box: written?.file ?? null, scene: scene?.ok ? scene.dir : null, held: false, frozen: null, start: kind === 'act' ? this.startFeet : null, end };
   }
 }
 

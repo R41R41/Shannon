@@ -127,6 +127,8 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
     try { return conditionHolds(this.bot, condition) ? { ok: true, words: '' } : { ok: false, words: conditionWords(this.bot, condition) }; }
     catch { return { ok: false, words: '前提を確かめられなかった' }; }
   }
+  /** The operator cancelled a held task (2026-10-28): its hold ends and the world moves again (`utils/incidents`). */
+  async cancelIncident(id: string): Promise<boolean> { return (await incidentsOf(this.bot)?.cancel(id)) ?? false; }
   /** Task queue: how far the running act is, or null when none has begun a hand. */
   progress(): Omit<MinecraftQueueProgress, 'id'> | null { return this.running > 0 ? this.stepProgress : null; }
   private now() { return (this.options.now ?? Date.now)(); }
@@ -309,7 +311,8 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
         const incident = incidents ? await incidents.afterAct(command, act, Date.now() - actStartedAt).catch(() => null) : null;
         if (incident) {
           try { text = JSON.stringify({ ...JSON.parse(text), incident: { id: incident.id, heavy: incident.heavy, why: incident.why, held: incident.held,
-            frozen: incident.frozen, ...(incident.freeze ? { freeze: incident.freeze } : {}), box: incident.box !== null, scene: incident.scene !== null } }); }
+            frozen: incident.frozen, ...(incident.freeze ? { freeze: incident.freeze } : {}), box: incident.box !== null, scene: incident.scene !== null,
+            ...(incident.start ? { start: incident.start } : {}), ...(incident.end ? { end: incident.end } : {}) } }); }
           catch { /* the report as it was */ }
         }
         if (outcome === 'failed' && !failure) failure = { failureType: act.failureType ?? 'failed', recoverable: true };

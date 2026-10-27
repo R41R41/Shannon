@@ -30,7 +30,7 @@ export interface BodyTaskContext {
    * the world and holds the task's next acts, `utils/incidents`); `resume`, the hold's id that the act sent again after the operator's resume names
    * (the body moves the world again and runs it). An API that does not know it never sends it.
    */
-  incident?: { hold?: boolean; resume?: string };
+  incident?: { hold?: boolean; resume?: string; cancel?: string };
 }
 /** A plan node as the body shows it. `state`: done → completed, the current node → in_progress, continue and wait → pending, blocked → error. */
 export interface BodyPlanNode {

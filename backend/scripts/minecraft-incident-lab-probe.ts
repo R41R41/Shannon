@@ -131,6 +131,14 @@ try {
   // 5: the next act goes on.
   const fifth = await act(body, { hands: [{ do: 'go', to: { x: 11, y: FLOOR + 1, z: 2 }, seconds: 30 }], why: '[lab] 続き' }, null);
   check('the next act goes on', fifth.receipt.outcome === 'completed', fifth.lines.at(-1) ?? '');
+  // 6: held again, then the operator cancels the task (the head's release names the hold): the world moves again.
+  await ask(`fill 12 95 -16 14 ${FLOOR} 16 minecraft:air`); await ask(`gamemode adventure ${ACTOR}`); await sleep(1500);
+  const sixth = await act(body, { hands: [{ do: 'go', to: { x: 16, y: FLOOR + 1, z: 2 }, canPlace: ['cobblestone'], maxPlace: 10, seconds: 60 }], why: '[lab] 二つ目の穴' }, { hold: true });
+  check('held again on the second gap', sixth.parsed?.incident?.held === true && /frozen/iu.test(await tickState()), JSON.stringify(sixth.parsed?.incident ?? null));
+  check('the incident says where the act began and ended', Array.isArray(sixth.parsed?.incident?.start) && Array.isArray(sixth.parsed?.incident?.end), JSON.stringify([sixth.parsed?.incident?.start, sixth.parsed?.incident?.end]));
+  const cancelled = await body.cancelIncident(String(sixth.parsed?.incident?.id));
+  const afterCancel = await tickState();
+  check('a cancel of the held task moves the world again and ends the hold', cancelled && !fs.existsSync(holdFile) && (!/frozen/iu.test(afterCancel) || /running normally/iu.test(afterCancel)), afterCancel);
   report.stats = blackBoxOf(actor)?.stats() ?? null;
   closeProbeBot(actor);
 } catch (error) {

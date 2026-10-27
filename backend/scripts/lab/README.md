@@ -132,7 +132,10 @@ act の手（place・make・pillarUp・go・mine・smelt・obsidian・portal・f
   - サーバーのログの前後と、「Can't keep up」の行
   - 写し先は `saves/minecraft/scenes/<id>/`。上限は 40 個・4 GB です。
   - 本番では lifecycle の RCON（`MINEBOT_LIFECYCLE_RCON_PORT` とパスワードのファイル）と `SERVER_BASE_PATH/shannon-home` を使います。RCON が無い時は現場を取りません（黒箱は書きます）。
-- **保留**（`utils/incidents.ts`）：act の `context.incident.hold` がある時、重い失敗で次のことをします。
+- **保留**（`utils/incidents.ts`）：act の `context.incident.hold` がある時、次の重い失敗で次のことをします。
+  - 止める重い失敗：go の stuck・search_timeout・10 歩未満の limit_time、60 秒以上の損、act の中の瀕死、死亡。そのタスクで初めて見る種類の失敗では止めません（黒箱と現場は取ります）。
+  - 保留中に運用者が cancel すると、頭が保留の id を付けた release を送り、体は保留を解いて `tick unfreeze` します。
+  - 体は act の始まりの位置へ自分で戻りません。始まりと保留した時の位置は incident に載り、運用者の status と resume に出ます。
   - 世界を止める（`/tick freeze`。ほかの人がいる時は止めず、その旨を残す）
   - 現場と黒箱を取る
   - そのタスクの次の act を `held` で断る

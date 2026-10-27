@@ -25,6 +25,8 @@ export interface CommonFcaActuator {
   check?(condition: ActCondition): { ok: boolean; words: string };
   /** Task queue: how far the running act is (its hand, its pass), without the command's id. */
   progress?(): Omit<MinecraftQueueProgress, 'id'> | null;
+  /** The fix run (2026-10-28): a release that names a hold (`context.incident.cancel`) ends it and moves the world again. */
+  cancelIncident?(id: string): Promise<boolean>;
 }
 /**
  * What the loop tells a watcher (the UI mod's view of the task). Read only: a watcher cannot change what the loop does,
@@ -259,6 +261,9 @@ export class CommonFcaControlLoop {
       this.begin(command, key);
       return;
     }
+    // The fix run: the operator's cancel of a held task comes as a release naming the hold; the world moves again (the release goes on as ever).
+    const cancelled = cleanup ? (context as { incident?: { cancel?: unknown } }).incident?.cancel : undefined;
+    if (typeof cancelled === 'string' && cancelled) void this.options.actuator.cancelIncident?.(cancelled).catch(() => false);
     this.launch(command, key, cleanup, historicalCleanup);
   }
   /** An item about to start: its start-by time and its condition are checked once, now; if either fails it is not started and what waits is dropped. */
