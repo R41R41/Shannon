@@ -484,7 +484,8 @@ describe('the furnace.done event', () => {
     await furnace(stepContext(g.bot), { at: cell(10, 64, 10), put: { item: 'iron_ore', count: 2 } });
     clock = Date.now() + 100_000; watcher.tick();
     expect(events()).toHaveLength(1);
-    expect(Number((g.bot.activeFurnaces as Array<{ count: number }>)[0].count)).toBe(10);
+    // Run 43: the batch is what the fuel smelts (one coal, 8) and keeps the 2 it will not.
+    expect((g.bot.activeFurnaces as Array<{ count: number; unfueledCount?: number }>)[0]).toMatchObject({ count: 8, unfueledCount: 2 });
   }, 40_000);
 
   it('is the pure reading a body without the watcher can make too: due batches, told once, the told forgotten when the batch is gone', () => {
