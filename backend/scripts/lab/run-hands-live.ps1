@@ -22,6 +22,7 @@ param(
   [string]$Scenes = '',
   [string]$GoFrom = '',
   [int]$SceneSeconds = 0,
+  [int]$Repeat = 0,
   [int]$TimeoutSeconds = 1500,
   [string]$OutDir = '',
   [string]$VmHost = 'azure-constant-server',
@@ -78,6 +79,7 @@ if ($LASTEXITCODE -ne 0) { throw 'scp failed' }
 $words = @("HANDS_TIMEOUT=$TimeoutSeconds")
 if ($Scenes) { $words += "HANDS_SCENES=$Scenes" }
 if ($SceneSeconds -gt 0) { $words += "HANDS_SCENE_SECONDS=$SceneSeconds" }
+if ($Repeat -gt 1) { $words += "HANDS_REPEAT=$Repeat" }
 if ($overlayArg) { $words += $overlayArg }
 if ($KeepLab) { $words += 'HANDS_KEEP=1' }
 $remote = "bash /home/azureuser/$inbox/run-hands-live.sh $Label /home/azureuser/$inbox/code.tar " + ($words -join ' ')

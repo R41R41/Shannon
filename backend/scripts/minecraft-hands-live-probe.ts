@@ -16,6 +16,7 @@
 //   MINECRAFT_HANDS_SCENES=place_table,go_dig_wall   (names or prefixes; default: all)
 //   MINECRAFT_HANDS_REPORT=<file>   (the whole report as JSON)
 //   MINECRAFT_HANDS_SCENE_SECONDS=<n>   (overrides each scene's act deadline)
+//   MINECRAFT_HANDS_REPEAT=<n>   (the chosen scenes n times over, to count how often one fails)
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -51,6 +52,10 @@ interface ActRun {
   lines: string[]; at?: unknown; from: number[] | null; to: number[] | null; dimension: string; hp: number | null;
   packDelta: Record<string, number>; packDeltaClient: Record<string, number>; goDug: number | null; goPlaced: number | null; goRedraws: number | null; hostDigRestored: boolean; hostPlaceRestored: boolean;
   motorExpired: boolean; failLine?: string; error?: string; receipt?: string;
+  /** The drops seen during the act: where each came, where it was last, and how it went (collected by the actor, or still there). */
+  drops?: Array<{ id: number; ms: number; at: number[]; last: number[]; lastMs: number; gone: string | null; goneMs: number | null }>;
+  /** The actor's feet every 250 ms of the act. */
+  trail?: number[][];
 }
 interface SceneReport { name: string; title: string; passed: boolean; startedAt: string; ms: number; acts: ActRun[]; checks: Check[]; notes: string[]; deaths: number; setupWarnings: string[] }
 
@@ -209,11 +214,22 @@ class Scene {
     const controller = new AbortController();
     const watchdog = setTimeout(() => controller.abort('probe_watchdog'), (seconds + 20) * 1000);
     const started = Date.now();
+    const drops = new Map<number, { id: number; ms: number; at: number[]; last: number[]; lastMs: number; gone: string | null; goneMs: number | null }>();
+    const round = (v: any) => [v.x, v.y, v.z].map((n: number) => Math.round(n * 100) / 100);
+    const onSpawn = (entity: any) => { if (entity?.name === 'item' && entity.position) drops.set(entity.id, { id: entity.id, ms: Date.now() - started, at: round(entity.position), last: round(entity.position), lastMs: Date.now() - started, gone: null, goneMs: null }); };
+    const onMoved = (entity: any) => { const d = drops.get(entity?.id); if (d && entity.position) { d.last = round(entity.position); d.lastMs = Date.now() - started; } };
+    const onCollect = (collector: any, collected: any) => { const d = drops.get(collected?.id); if (d && !d.gone) { d.gone = collector?.username === ACTOR || collector === actor.entity ? 'actor' : String(collector?.username ?? collector?.name ?? '?'); d.goneMs = Date.now() - started; } };
+    const onGone = (entity: any) => { const d = drops.get(entity?.id); if (d && !d.gone) { d.gone = 'gone'; d.goneMs = Date.now() - started; } };
+    const trail: number[][] = [];
+    const trailTimer = setInterval(() => { const p = actor.entity?.position; if (p) trail.push([Date.now() - started, ...round(p)]); }, 250);
+    actor.on('entitySpawn', onSpawn); actor.on('entityMoved', onMoved); actor.on('playerCollect', onCollect); actor.on('entityGone', onGone);
     let receipt: any = null, error: string | undefined;
     try { receipt = await body.execute(command, controller.signal); }
     catch (thrown) { error = String((thrown as Error)?.message ?? thrown); }
     clearTimeout(watchdog);
     const wallMs = Date.now() - started;
+    clearInterval(trailTimer);
+    actor.removeListener('entitySpawn', onSpawn); actor.removeListener('entityMoved', onMoved); actor.removeListener('playerCollect', onCollect); actor.removeListener('entityGone', onGone);
     await sleep(700); // the server's last packets (a drop picked up, a block placed) reach the client
     let parsed: any = null;
     try { parsed = JSON.parse(receipt?.result ?? ''); } catch { parsed = null; }
@@ -229,6 +245,7 @@ class Scene {
       goRedraws: redraws ? Number(redraws[1]) : null, failLine: lines.find(line => /stopped|止まった/u.test(line)) ?? lines.at(-1) ?? '',
       hostDigRestored: actor.dig === before.dig, hostPlaceRestored: actor.placeBlock === before.place,
       motorExpired: /Motor owner expired/u.test(`${receipt?.result ?? ''} ${error ?? ''}`), ...(error ? { error } : {}),
+      ...(drops.size ? { drops: [...drops.values()] } : {}), ...(drops.size ? { trail } : {}),
       ...(parsed ? {} : { receipt: String(receipt?.result ?? '').slice(0, 400) }) };
     this.acts.push(run);
     log(`ACT ${this.name}/${label} ${run.ok ? 'ok' : 'FAILED'} ${(wallMs / 1000).toFixed(1)}s ${lines.map(line => line.slice(0, 120)).join(' | ')}${error ? ` ERROR ${error}` : ''}`);
@@ -581,7 +598,10 @@ scene('portal', 'portal: ten obsidian, flint and steel, into the Nether', 150, a
 
 // ---- run -----------------------------------------------------------------------------------------------------------------------------------
 const wanted = (process.env.MINECRAFT_HANDS_SCENES ?? '').split(',').map(name => name.trim()).filter(Boolean);
-const chosen = scenes.filter(entry => !wanted.length || wanted.some(name => entry.name === name || entry.name.startsWith(name)));
+// MINECRAFT_HANDS_REPEAT=<n>: the chosen scenes n times over, in turn (to count how often one fails; run 41 fixes: mine's lost drop).
+const repeat = Math.max(1, Math.min(50, Number(process.env.MINECRAFT_HANDS_REPEAT ?? 1) || 1));
+const picked = scenes.filter(entry => !wanted.length || wanted.some(name => entry.name === name || entry.name.startsWith(name)));
+const chosen = Array.from({ length: repeat }, (_, round) => picked.map(entry => (repeat > 1 ? { ...entry, name: `${entry.name}#${round + 1}` } : entry))).flat();
 const reports: SceneReport[] = [];
 const startedAll = Date.now();
 let fatal: string | undefined;

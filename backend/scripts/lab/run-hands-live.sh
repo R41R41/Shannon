@@ -12,7 +12,7 @@
 #   (d) stop the server, remove the world directory, the tmux session and the code directory.
 # Never touches the production services, their env files or their ports (25565-25569 are never used). One run at a time (flock).
 #
-# KEY=VALUE: HANDS_SCENES=a,b (scene names or prefixes), HANDS_SCENE_SECONDS=<n>, HANDS_TIMEOUT=<seconds, default 1500>,
+# KEY=VALUE: HANDS_SCENES=a,b (scene names or prefixes), HANDS_SCENE_SECONDS=<n>, HANDS_REPEAT=<n> (the scenes n times over), HANDS_TIMEOUT=<seconds, default 1500>,
 #            HANDS_OVERLAY=<tar extracted over the code>, HANDS_KEEP=1 (keep the code directory), HANDS_PORT=<port>.
 set -u
 LABEL=${1:?label}; CODE_TAR=${2:?code tar}; shift 2
@@ -90,11 +90,12 @@ log "server is up: $(grep -o 'Done ([0-9.]*s)' "$DIR/logs/latest.log" | head -1)
 # (c) the probe
 SCENES_ENV=""; [ -n "${HANDS_SCENES:-}" ] && SCENES_ENV="MINECRAFT_HANDS_SCENES=$HANDS_SCENES"
 SECONDS_ENV=""; [ -n "${HANDS_SCENE_SECONDS:-}" ] && SECONDS_ENV="MINECRAFT_HANDS_SCENE_SECONDS=$HANDS_SCENE_SECONDS"
+REPEAT_ENV=""; [ -n "${HANDS_REPEAT:-}" ] && REPEAT_ENV="MINECRAFT_HANDS_REPEAT=$HANDS_REPEAT"
 log "running the probe (limit ${HANDS_TIMEOUT:-1500} s); full log: $OUT/probe.log"
 START=$(date +%s)
 ( cd "$CODE/backend" && env -i HOME="$HOME" PATH="$NODEBIN:/usr/bin:/bin" OPENAI_API_KEY=offline-test-not-used MONGODB_URI=mongodb://127.0.0.1:1/shannon-offline-not-used \
   SHANNON_ISOLATED_MINEBOT_PROBE=true MINECRAFT_COGNITION_MODE=off MINECRAFT_OUTAGE_NO_LLM=true MINECRAFT_HANDS_NO_LLM=true \
-  MINECRAFT_HANDS_PORT=$PORT MINECRAFT_HANDS_WORLD_DIRECTORY="$DIR" MINECRAFT_HANDS_REPORT="$OUT/report.json" $SCENES_ENV $SECONDS_ENV \
+  MINECRAFT_HANDS_PORT=$PORT MINECRAFT_HANDS_WORLD_DIRECTORY="$DIR" MINECRAFT_HANDS_REPORT="$OUT/report.json" $SCENES_ENV $SECONDS_ENV $REPEAT_ENV \
   TS_NODE_TRANSPILE_ONLY=true nice -n 5 timeout "${HANDS_TIMEOUT:-1500}" node --loader ts-node/esm scripts/minecraft-hands-live-probe.ts ) > "$OUT/probe.log" 2>&1
 CODE_STATUS=$?
 log "probe exit $CODE_STATUS after $(( $(date +%s) - START )) s"
