@@ -12,6 +12,7 @@ import { blockAt, cellText, inventoryCount, isAirLike, letGo, stopped, StepStopp
 import { atGoal, goWith, type GoOutcome, type WayNotes } from './walk.js';
 import { dig } from './dig.js';
 import { pillarUp, shortFloor, wholeFloorBeside } from './pillarUp.js';
+import { placeFacts } from '../placeFacts.js';
 
 const { goals } = pathfinder;
 
@@ -295,6 +296,12 @@ const compositeOf = (cells: Cell[], range: number) => cells.length === 1 ? goalO
 const keyOf = (cell: Cell) => `${cell.x},${cell.y},${cell.z}`;
 
 /** Whether the block just laid against `reference` on `face` shows in the world (the cell beside it is no longer air), looked at for a moment as the update may come late. */
+/** The cell a place of `reference` on `face` fills. */
+function placedCell(reference: any, face: any): Cell | null {
+  const base = reference?.position;
+  if (!base || !face) return null;
+  return { x: Math.floor(base.x + face.x), y: Math.floor(base.y + face.y), z: Math.floor(base.z + face.z) };
+}
 async function laidAt(host: any, reference: any, face: any): Promise<boolean> {
   const base = reference?.position, dir = face;
   if (!base || !dir) return true;
@@ -353,8 +360,17 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
 
   // ---- the watchers: cells entered, blocks dug, blocks laid ----
   let lastCell = keyOf(start), manualBusy = false;
+  // Run 43: the feet's heights of the last 1.5 s, for the top of a jump said with a refused place.
+  const heights: Array<[number, number]> = [];
+  const topOfJump = (): number | null => {
+    const since = Date.now() - 1500;
+    const recent = heights.filter(([at]) => at >= since).map(([, y]) => y);
+    return recent.length ? Math.max(...recent) : null;
+  };
   const onTick = () => {
     try {
+      const y = Number(bot.entity?.position?.y);
+      if (Number.isFinite(y)) { heights.push([Date.now(), y]); if (heights.length > 40) heights.shift(); }
       const feet = feetCell(bot);
       if (!feet) return;
       const key = keyOf(feet);
@@ -378,9 +394,9 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     return result;
   };
   /** A block the server did not take is not a floor: the route executor is not let walk on (run 40 bench: go went on over a refused place and fell four cells). */
-  const refusedPlace = () => {
+  const refusedPlace = (facts = '') => {
     if (++state.refused >= GO_REFUSED_PLACES && !state.veto) {
-      state.veto = { code: 'stuck', text: `置いたブロックが世界に現れない（サーバーが置きを断った。${state.refused} 回）` };
+      state.veto = { code: 'stuck', text: `置いたブロックが世界に現れない（サーバーが置きを断った。${state.refused} 回${facts ? `。${facts}` : ''}）` };
       try { nav.setGoal?.(null); } catch { /* stopped below */ }
     }
     // The body is stopped where it stands at once: the next step of the route would be onto the block that is not there.
@@ -388,15 +404,17 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   };
   const countingPlace = async function (this: unknown, ...rest: unknown[]) {
     let result: unknown;
+    const at = host.entity?.position?.clone?.() ?? null;
+    const facts = () => { const cell = placedCell(rest[0], rest[1]); return cell ? placeFacts(host, cell, topOfJump(), at ?? undefined) : ''; };
     try { result = await originalPlace.apply(host, rest); }
     catch (error) {
       // The library gives up when the server's update does not come: that too is a place the server did not take (an interruption is not).
-      if (counting && !/Action interrupted|Motor owner expired/u.test(String((error as Error)?.message))) refusedPlace();
+      if (counting && !/Action interrupted|Motor owner expired/u.test(String((error as Error)?.message))) refusedPlace(facts());
       throw error;
     }
     if (!counting) return result;
     if (await laidAt(host, rest[0], rest[1])) { state.placed++; lastWork = Date.now(); state.refused = 0; return result; }
-    refusedPlace();
+    refusedPlace(facts());
     throw new Error('The place was not taken');
   };
   if (typeof originalDig === 'function') host.dig = countingDig;

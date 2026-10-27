@@ -136,7 +136,8 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
   // A fight is an engagement the shield reflex and the floor's melee/flee reflexes read; a flight is none (it runs, and a shield on the arm slows it).
   const endEngagement = stance === 'fight' ? beginEngagement(host, [String(target.name ?? '*')]) : () => undefined;
   // The planner's fight (combatOwner): above the floor's own limit health the floor does not run for it or wall her in; the hand's retreatHp is the limit that counts.
-  const endOwner = stance === 'fight' ? markHeadCombat(host, 'fight', [String(target.name ?? '*')]) : () => undefined;
+  // Run 43: the grace after it is this creature's (its id), not any of its kind.
+  const endOwner = stance === 'fight' ? markHeadCombat(host, 'fight', [String(target.name ?? '*')], Date.now(), typeof target.id === 'number' ? target.id : undefined) : () => undefined;
   const navigator = bot.pathfinder;
   const previousMovements = navigator?.movements;
   let following = false;

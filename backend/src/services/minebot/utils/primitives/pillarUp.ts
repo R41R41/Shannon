@@ -1,6 +1,7 @@
 import { Vec3 } from 'vec3';
 import { equipToHandVerified } from '../equipVerified.js';
 import { feetCell, type Cell } from '../localMap.js';
+import { placeFacts } from '../placeFacts.js';
 import { blockAt, cellNow, cellText, findItem, guard, inventoryCount, isAirLike, placeText, stopped, StepStopped, wait, waitUntil,
   type StepContext, type StepOutcome } from './common.js';
 
@@ -97,6 +98,7 @@ export async function pillarUp(ctx: StepContext, args: PillarArgs): Promise<Step
       await guard(ctx, Promise.resolve(bot.look(bot.entity.yaw, -Math.PI / 2, true)), 1000);
       bot.setControlState('jump', true);
       let placed = false, lastError = '', attempts = 0, maxY = bot.entity.position.y, filledBy = '';
+      let placedFrom: { x: number; y: number; z: number } | null = null;
       for (let tick = 0; tick < TRY_TICKS && !placed; tick++) {
         await wait(ctx, 35);
         const y = bot.entity.position.y, vy = bot.entity.velocity?.y ?? 0;
@@ -104,6 +106,7 @@ export async function pillarUp(ctx: StepContext, args: PillarArgs): Promise<Step
         if (y < feet.y + feetOver || vy > 0.14 || vy < -0.45) continue;
         if (!EMPTY(blockAt(bot, feet))) { filledBy = cellNow(bot, feet); break; }
         attempts++;
+        placedFrom = bot.entity.position.clone?.() ?? { ...bot.entity.position };
         try {
           await guard(ctx, Promise.resolve(bot.placeBlock(floor, new Vec3(0, 1, 0))), 1500);
           placed = true;
@@ -129,7 +132,8 @@ export async function pillarUp(ctx: StepContext, args: PillarArgs): Promise<Step
               : !laid
                 ? `置けたと返ったが足元は ${cellNow(bot, feet)} のまま`
                 : `${args.block} は置けたが足がその上に乗らなかった`;
-        return stopped(bot, 'not_placed', `${done + 1}段目が積めなかった: ${what}（足元 ${cellText(feet)} は今 ${cellNow(bot, feet)}、足は y=${bot.entity.position.y.toFixed(2)}、跳びの最高 y=${maxY.toFixed(2)}、置こうとした ${attempts} 回）。${done}段登った`, feet);
+        // Run 43: with the cell over the head and how much of the body was in the cell (the server refuses a place into the body).
+        return stopped(bot, 'not_placed', `${done + 1}段目が積めなかった: ${what}（足元 ${cellText(feet)} は今 ${cellNow(bot, feet)}、置こうとした ${attempts} 回。${placeFacts(bot, feet, maxY, placedFrom ?? undefined)}）。${done}段登った`, feet);
       }
       done++;
       ctx.progress?.(`${done}/${levels}`);

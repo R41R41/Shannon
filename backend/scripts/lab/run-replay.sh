@@ -14,7 +14,8 @@
 #   (e) the server stopped, the lab world, the staged copy and the code directory removed. The logs stay in $MINEBOT_LAB_SCRATCH/replay-<label>/.
 # Never touches the production services, their env files or their ports (25565-25569, shannon-home's 25560). One lab run at a time (flock).
 #
-# KEY=VALUE: REPLAY_SOURCE=<world dir>, REPLAY_SEED=<seed>, REPLAY_ONLY=c1220,c135, REPLAY_TIMEOUT=<seconds, default 1800>, REPLAY_KEEP=1.
+# KEY=VALUE: REPLAY_SOURCE=<world dir>, REPLAY_SEED=<seed>, REPLAY_ONLY=c1220,c135, REPLAY_TIMEOUT=<seconds, default 1800>, REPLAY_KEEP=1,
+#   REPLAY_FLOOR=default (the body's floor reflexes as production loads them, melee and flee too; default: floor, the probe's retreat/eat/armor).
 # The cases file is made on the PC with lab/run-ground.py and lab/replay-case.py from the run's dump (ops.jsonl, samples, equip).
 set -u
 LABEL=${1:?label}; CODE_TAR=${2:?code tar}; CASES=${3:?cases.json}; shift 3
@@ -86,10 +87,10 @@ START=$(date +%s)
 ( cd "$CODE/backend" && env -i HOME="$HOME" PATH="$NODEBIN:/usr/bin:/bin" OPENAI_API_KEY=offline-test-not-used MONGODB_URI=mongodb://127.0.0.1:1/shannon-offline-not-used \
   SHANNON_ISOLATED_MINEBOT_PROBE=true MINECRAFT_COGNITION_MODE=off MINECRAFT_OUTAGE_NO_LLM=true MINECRAFT_REPLAY_NO_LLM=true \
   MINECRAFT_REPLAY_PORT=$PORT MINECRAFT_REPLAY_WORLD_DIRECTORY="$DIR" MINECRAFT_REPLAY_CASES="$OUT/cases.json" MINECRAFT_REPLAY_REPORT="$OUT/report.json" \
-  MINECRAFT_REPLAY_ONLY="${REPLAY_ONLY:-}" TS_NODE_TRANSPILE_ONLY=true nice -n 5 timeout "${REPLAY_TIMEOUT:-1800}" node --loader ts-node/esm scripts/minecraft-replay-probe.ts ) > "$OUT/probe.log" 2>&1
+  MINECRAFT_REPLAY_ONLY="${REPLAY_ONLY:-}" MINECRAFT_PROBE_FLOOR="${REPLAY_FLOOR:-floor}" TS_NODE_TRANSPILE_ONLY=true nice -n 5 timeout "${REPLAY_TIMEOUT:-1800}" node --loader ts-node/esm scripts/minecraft-replay-probe.ts ) > "$OUT/probe.log" 2>&1
 STATUS=$?
 log "probe exit $STATUS after $(( $(date +%s) - START )) s"
-grep -a -E '^\[..:..:..\] (CASE|GROUND|ACT|SEARCHES|SEARCH_AGAIN|ACTOR_DEATH|FATAL)' "$OUT/probe.log" | cut -c1-400
+grep -a -E '^\[..:..:..\] (CASE|GROUND|ACT|BODY|SEARCHES|SEARCH_AGAIN|ACTOR_DEATH|FATAL)' "$OUT/probe.log" | cut -c1-400
 grep -a '^REPLAY_RESULT ' "$OUT/probe.log" | tail -1
 grep -a -E 'WARN|ERROR|Exception|moved wrongly|moved too quickly|Can.t keep up|I_am_Shannon (was|fell|drowned|hit|burned|tried|died|starved|suffocated)' "$DIR/logs/latest.log" \
   | grep -a -v 'issued server command' > "$OUT/server-notable.txt" 2>/dev/null

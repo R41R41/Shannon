@@ -1,7 +1,7 @@
 import { Vec3 } from 'vec3';
 import { createLogger } from '../../../utils/logger.js';
 import { actionLeaseStatus, activeActionCapabilities, createMotorPort, executeAction, hasActiveSafetyLease, physicalActionBusy, preemptLowerPriorityActions, safetyLeaseCapabilities } from '../execution/ActionExecution.js';
-import { isHeadCombatActive } from './combatOwner.js';
+import { isHeadCombatActive, isHeadCombatRunning } from './combatOwner.js';
 import { creeperLit } from './creeperFuse.js';
 import { FALLBACK_FOOD_POINTS, RAW_FOOD } from '../constantSkills/autoEat.js';
 import { edgeRisk, fallIsDangerous } from './edgeGuard.js';
@@ -1966,7 +1966,8 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
     // r7: burning in a shooter's line, the cover first (before the low-health flee and the last stand, which read the threats in reach).
     if (!headFight && coverTick()) return;
     // r8: a melee enemy near, at the rim of a drop (or hurting the body on a floor): one minimal hand, before the flee and the last stand.
-    if (!headFight && meleeTick()) return;
+    // Run 43: the melee hand waits only for a fight that runs (`isHeadCombatRunning`), not for the grace after one ended.
+    if (!isHeadCombatRunning(bot) && meleeTick()) return;
     if (config.flee && !headFight) {
       let threat: ReturnType<typeof fleeStart> = null;
       try { threat = fleeStart(bot, state, now()); } catch { threat = null; }

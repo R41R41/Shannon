@@ -110,5 +110,6 @@ act の手（place・make・pillarUp・go・mine・smelt・obsidian・portal・f
 
 実走 41 の場面は `cases/run41.json`（c135・c1220・c1472・c1472x・c1805・c1311・c1716・c1518）。
 実走 42 の場面は `cases/run42.json`（c42_707 地下で寝る・c42_820 q64 の 120 秒で 3 歩・c42_2254・c42_2374・c42_2416・c42_2569 最後の下りの go）。実走 42 の samples は Pos の後に別の文が続く行があるため、`run-ground.py` と `replay-case.py` は Pos を正規表現で読みます。
+実走 43 の場面は `cases/run43.json`（c43_720 かまどの燃料と焼き待ち・c43_1291 ダイヤの層への下り・c43_1765 縦穴の柱で置きの断り・c43_2099 ドラウンド）。c43_2099 はラボ用に組んだ場面で、act の `before`（act の前のサーバーの命令。ここでは drowned 2 体の summon）と `during`（act を送ってからの ms と命令。ここでは狙った 1 体を kill）を使います。体の反射（melee・flee）を本番どおりに載せるため、`REPLAY_FLOOR=default` で走らせます。各 act の体力の変化と反射の台帳は、probe.log の `BODY` 行と report.json の `healths`・`reflexes` に出ます。
 
 送り方の例（PowerShell から。VM へは LF のファイルで）：`tar.exe -cf code.tar --exclude='*.test.ts' --exclude=node_modules -C <worktree> backend/src backend/scripts backend/package.json backend/tsconfig.json package.json` を作り、`scp code.tar run-replay.sh cases.json azure-constant-server:.cache/minebot-lab/why41-in/` で送ってから `ssh azure-constant-server bash .cache/minebot-lab/why41-in/run-replay.sh t2 ~/.cache/minebot-lab/why41-in/code.tar ~/.cache/minebot-lab/why41-in/cases.json` を実行します。

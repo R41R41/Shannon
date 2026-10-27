@@ -27,7 +27,8 @@ export const HEAD_COMBAT_NEAR = 16;
 /** At or below this health the floor runs and walls in as before, fight or no fight (combat skills end themselves at 6). */
 export const HEAD_COMBAT_YIELD_HEALTH = 5;
 
-interface Mark { skill: string; kinds: string[]; startedAt: number; endedAt?: number }
+/** `target`: the one creature a fight hand set out after (its grace is that creature's, not its kind's). */
+interface Mark { skill: string; kinds: string[]; startedAt: number; endedAt?: number; target?: number }
 interface CombatBody {
   health?: number;
   entity?: { id?: number; position?: { distanceTo(other: unknown): number } };
@@ -45,11 +46,12 @@ export function headCombatOwnerEnabled(): boolean {
  * The planner's fight `skillName` begins (kinds: what it sets out to fight, `*` for whatever is hostile, as engagement.ts reads
  * them). The returned call ends it, once; the mark then lives on as the grace.
  */
-export function markHeadCombat(bot: object, skillName: string, kinds: string[] | null, now = Date.now()): () => void {
+export function markHeadCombat(bot: object, skillName: string, kinds: string[] | null, now = Date.now(), target?: number): () => void {
   if (!HEAD_COMBAT_SKILLS.has(skillName) || !headCombatOwnerEnabled()) return () => undefined;
   const marks = ((bot as CombatBody).headCombat ??= []);
   prune(marks, now);
-  const mark: Mark = { skill: skillName, kinds: (kinds?.length ? kinds : ['*']).map(kind => kind.toLowerCase()), startedAt: now };
+  const mark: Mark = { skill: skillName, kinds: (kinds?.length ? kinds : ['*']).map(kind => kind.toLowerCase()), startedAt: now,
+    ...(typeof target === 'number' ? { target } : {}) };
   marks.push(mark);
   return () => { mark.endedAt ??= Date.now(); };
 }
@@ -62,11 +64,12 @@ function prune(marks: Mark[], now: number): void {
 }
 
 /** A creature the fight is after: alive, within HEAD_COMBAT_NEAR, and of one of these kinds (`*`: anything that threatens the body). */
-function targetNear(bot: CombatBody, kinds: string[]): boolean {
+function targetNear(bot: CombatBody, kinds: string[], target?: number): boolean {
   const at = bot.entity?.position;
   if (!at) return false;
   for (const entity of Object.values(bot.entities ?? {})) {
     if (!entity?.position || entity === bot.entity || (entity.id !== undefined && entity.id === bot.entity?.id)) continue;
+    if (target !== undefined && entity.id !== target) continue;
     if (entity.isValid === false || (typeof entity.health === 'number' && entity.health <= 0)) continue;
     const name = String(entity.name ?? '').toLowerCase();
     if (!name) continue;
@@ -88,7 +91,22 @@ export function isHeadCombatActive(bot: object, now = Date.now()): boolean {
   if (!marks?.length) return false;
   if (typeof body.health === 'number' && body.health <= HEAD_COMBAT_YIELD_HEALTH) return false;
   prune(marks, now);
-  return marks.some(mark => mark.endedAt === undefined || (now - mark.startedAt <= HEAD_COMBAT_GRACE_MS && targetNear(body, mark.kinds)));
+  return marks.some(mark => mark.endedAt === undefined || (now - mark.startedAt <= HEAD_COMBAT_GRACE_MS && targetNear(body, mark.kinds, mark.target)));
+}
+
+/**
+ * Run 43 (+2,100 to +2,117, 18:36:38 to 18:36:52): the fight hand at drowned #5502 ended at once (lost: out of sight), and its grace held the floor for any
+ * drowned within 16 m. Drowned #5493 hit her nine times from health 12.7 to 4.4 while the melee reflex, which had struck back at #5471 and #5502 a minute before,
+ * stood still (the floor gives way to the planner's fight), and nobody fought. A fight hand that is running holds the melee reflex; one that has ended does not:
+ * a blow back is the fight's own aim (the flee and the wall still wait out the grace).
+ */
+export function isHeadCombatRunning(bot: object, now = Date.now()): boolean {
+  if (!headCombatOwnerEnabled()) return false;
+  const body = bot as CombatBody, marks = body.headCombat;
+  if (!marks?.length) return false;
+  if (typeof body.health === 'number' && body.health <= HEAD_COMBAT_YIELD_HEALTH) return false;
+  prune(marks, now);
+  return marks.some(mark => mark.endedAt === undefined);
 }
 
 /**

@@ -27,6 +27,7 @@ import { LINE_MAX, LINE_MAX_WITH_CAUSE } from '../utils/actReport.js';
 import { mine } from '../utils/primitives/mine.js';
 import { make } from '../utils/primitives/make.js';
 import { smelt } from '../utils/primitives/smelt.js';
+import { furnacesDueByNow } from '../utils/furnaceDone.js';
 import { handProblem } from '../utils/actHandRules.js';
 import { itemFoodPoints } from '../utils/foodPoints.js';
 import { stepLabel } from '../utils/actLabel.js';
@@ -290,7 +291,9 @@ async function runHand(ctx: StepContext, hand: ActHand): Promise<StepOutcome> {
     case 'wait': {
       const seconds = Math.max(0, Math.min(30, hand.seconds ?? 1));
       await wait(ctx, seconds * 1000);
-      return { ok: true, text: `${seconds}秒待った` };
+      // Run 43: a wait says what the furnaces did by now (done, or out of fuel with how many smelted), once each.
+      const furnaces = furnacesDueByNow(bot as any, Date.now());
+      return { ok: true, text: `${seconds}秒待った${furnaces.length ? `。${furnaces.join('。')}` : ''}` };
     }
   }
   return bad(`知らない手 ${String((hand as { do?: unknown }).do)}`);

@@ -38,6 +38,10 @@ const KINDS = new Set(['furnace', 'blast_furnace', 'smoker']);
 const slotText = (item: any) => item ? `${item.name}×${item.count}` : '空';
 const stackOf = (item: any) => item ? { name: String(item.name), count: Number(item.count) } : null;
 
+/** The fuel that smelts `items` more: coal or charcoal (8 each) or planks (1.5 each). */
+export function fuelNeedWords(items: number): string {
+  return `石炭か木炭 ${Math.ceil(items / 8 - 1e-9)} か板 ${Math.ceil(items / 1.5 - 1e-9)}`;
+}
 /** How many inputs the fuel in a furnace will smelt: its slot at the fuel's worth, and the piece burning now as one more. */
 function fuelCoverage(window: any): number {
   const fuel = window.fuelItem();
@@ -83,6 +87,12 @@ export async function furnaceWork(ctx: StepContext, args: FurnaceArgs): Promise<
       const done = await guard(ctx, Promise.resolve(window.putFuel(item.type, null, count)), 3000);
       if (done) moved.fuel += count;
       notes.push(done ? `燃料 ${args.fuel.item}×${count} を入れた` : `燃料を入れられなかった（時間切れ）`);
+      // Run 43 (+720, +944, +1,091: the planks and the wood went into the furnace; at the diamonds there was no table and no planks, 270 s back up):
+      // wood burnt with no table carried and fewer than 4 planks left is said.
+      const left = (bot.inventory?.items?.() ?? []).filter((entry: any) => /_planks$/u.test(String(entry?.name))).reduce((sum: number, entry: any) => sum + Number(entry.count ?? 0), 0);
+      if (done && /_planks$|_log$|_wood$|_stem$|^crafting_table$/u.test(args.fuel.item) && !findItem(bot, 'crafting_table') && left < 4) {
+        notes.push(`作業台を持たず、板は残り ${left}（作業台は板 4。地下で作業台が要る時に作れない。燃料は石炭・木炭を先に）`);
+      }
     }
   };
   const putInput = async () => {
@@ -122,14 +132,21 @@ export async function furnaceWork(ctx: StepContext, args: FurnaceArgs): Promise<
     const burning = Number(window.fuel ?? 0) > 0;
     const secondsEach = block.name === 'furnace' ? 10 : 5;
     const progress = Number(window.progress ?? 0);
-    const remaining = input ? Math.max(0, input.count * secondsEach - progress * secondsEach) : 0;
+    // Run 43 (+720 q69: raw_iron ×15 with one plank, 「焼き上がり 約150秒後」; the plank smelts 1.5, and five waits before a furnace out of fuel
+    // came to about 420 s): the time is the fuel's, not the input's, and what the fuel will not smelt is said with what it takes.
+    const coverage = fuelCoverage(window);
+    const fueled = input ? Math.min(input.count, Math.max(burning ? 1 : 0, Math.floor(coverage + 1e-9))) : 0;
+    const unfueled = input ? input.count - fueled : 0;
+    const remaining = input ? Math.max(0, fueled * secondsEach - progress * secondsEach) : 0;
     const host = bot as { activeFurnaces?: any[] };
     host.activeFurnaces = (host.activeFurnaces ?? []).filter(f => !(f.pos.x === cell.x && f.pos.y === cell.y && f.pos.z === cell.z));
     if (input && (fuel || burning)) {
-      host.activeFurnaces.push({ pos: { ...cell }, item: input.name, count: input.count, startedAt: Date.now(), readyAt: Date.now() + Math.round(remaining * 1000),
-        dimension: String(bot.game?.dimension ?? '') });
+      host.activeFurnaces.push({ pos: { ...cell }, item: input.name, count: fueled, startedAt: Date.now(), readyAt: Date.now() + Math.round(remaining * 1000),
+        dimension: String(bot.game?.dimension ?? ''), ...(unfueled > 0 ? { unfueledCount: unfueled } : {}) });
     }
-    const timing = input ? (fuel || burning ? `。焼き上がり 約${Math.round(remaining)}秒後` : '。燃料が無く、燃えてもいない（このままでは焼けない）') : '';
+    const timing = !input ? '' : !(fuel || burning) ? '。燃料が無く、燃えてもいない（このままでは焼けない）'
+      : unfueled > 0 ? `。燃料で焼けるのは約 ${fueled} 個まで（材料 ${input.count}）。あと ${unfueled} 個分の燃料が要る（${fuelNeedWords(unfueled)}）。約${Math.round(remaining)}秒で止まる`
+        : `。焼き上がり 約${Math.round(remaining)}秒後`;
     const items = [input, fuel, output].filter(Boolean).map((item: any) => `${item.name}×${item.count}`);
     const look: FurnaceLook = { kind: block.name, input: stackOf(input), fuel: stackOf(fuel), output: stackOf(output), burning, remainingSec: input ? remaining : null };
     return { moved, look, ...(occupiedBy ? { occupiedBy } : {}), outcome: { ok: true, at: cell, data: { container: { at: cell, kind: block.name, items } },

@@ -19,6 +19,7 @@ import { randomUUID } from 'node:crypto';
 import { Vec3 } from 'vec3';
 import { createProbeBot, closeProbeBot } from '../src/services/minebot/testing/MinecraftProbeBot.js';
 import { NativeCommonFcaBody } from '../src/services/minebot/integration/commonFca/nativeBody.js';
+import { ensureReflexLedger } from '../src/services/minebot/utils/reflexLedger.js';
 
 const port = Number(process.env.MINECRAFT_REPLAY_PORT);
 const worldDirectory = process.env.MINECRAFT_REPLAY_WORLD_DIRECTORY ?? '';
@@ -32,7 +33,12 @@ const properties = fs.readFileSync(path.join(worldDirectory, 'server.properties'
 if (!properties.includes('server-ip=127.0.0.1') || !properties.includes(`server-port=${port}`) || !properties.includes('online-mode=false')) throw new Error('ISOLATED_REPLAY_WORLD_CONFIGURATION_INVALID');
 
 interface Item { slot: string; id: string; count: number; damage?: number }
-interface CaseAct { label: string; arguments: Record<string, unknown>; seconds: number; delayMs?: number; replaceActor?: boolean; expect?: { line?: string; ms?: number; code?: string; outcome?: string } }
+/**
+ * `before`: server commands just before the act is sent (run 43's drowned: a creature summoned beside the body); `during`: commands at ms after it is sent
+ * (one killed, as the run's target went out of sight). The act's health and the body's reflexes (its ledger) are kept for these.
+ */
+interface CaseAct { label: string; arguments: Record<string, unknown>; seconds: number; delayMs?: number; replaceActor?: boolean; expect?: { line?: string; ms?: number; code?: string; outcome?: string };
+  before?: string[]; during?: Array<{ ms: number; cmd: string }> }
 interface Case {
   name: string; title: string; forceload: [number, number, number, number]; restore: Array<[number, number, number, string]>;
   actor: { pos: [number, number, number]; yaw?: number; pitch?: number; health?: number; food?: number; items: Item[] };
@@ -223,6 +229,13 @@ try {
       const command: any = { schemaVersion: 1, id, serverId: 'replay-probe', connectionId: 'replay', kind: 'skill', skill: 'act', arguments: act.arguments,
         context: { scopeKey: 'replay', taskId: 'replay-task', taskRevision: 1, bodyId: 'minecraft:replay-probe', sessionId: 'replay-session', generation: 1, goal: 'replay', completionCondition: 'none' },
         lease: { id: 'replay-lease', generation: 1, holder: 'replay-task' }, deadlineAt: new Date(Date.now() + act.seconds * 1000).toISOString() };
+      for (const command of act.before ?? []) { const answer = await ask(command); if (BAD.test(answer)) warnings.push(`${command} => ${answer.slice(0, 100)}`); }
+      const ledger = ensureReflexLedger(actor);
+      const ledgerMark = ledger.entriesSince(-1).at(-1)?.seq ?? -1;
+      const healths: Array<[number, number]> = [];
+      const onHealth = () => { if (actStarted) healths.push([Date.now() - actStarted, Math.round(Number(actor.health ?? 0) * 10) / 10]); };
+      actor.on('health', onHealth);
+      const timers = (act.during ?? []).map(({ ms, cmd }) => setTimeout(() => { void ask(cmd); }, ms));
       const from = actor.entity?.position?.clone();
       const controller = new AbortController();
       const watchdog = setTimeout(() => controller.abort('probe_watchdog'), (act.seconds + 30) * 1000);
@@ -231,6 +244,10 @@ try {
       try { receipt = await body.execute(command, controller.signal); } catch (thrown) { error = String((thrown as Error)?.message ?? thrown); }
       const wallMs = Date.now() - actStarted;
       clearTimeout(watchdog);
+      for (const timer of timers) clearTimeout(timer);
+      actor.removeListener('health', onHealth);
+      const reflexes = ledger.entriesSince(ledgerMark).map(entry => ({ atMs: entry.at - actStarted, kind: entry.kind, outcome: entry.outcome, detail: entry.detail.slice(0, 160) }));
+      if (reflexes.length || healths.length) log(`BODY ${c.name}/${act.label}: health ${healths.map(([t, h]) => `${(t / 1000).toFixed(1)}s:${h}`).join(' ')} reflexes ${reflexes.map(r => `${(r.atMs / 1000).toFixed(1)}s ${r.kind}/${r.outcome}`).join(' ') || 'none'}`);
       await sleep(800);
       actStarted = 0;
       let parsed: any = null; try { parsed = JSON.parse(receipt?.result ?? ''); } catch { parsed = null; }
@@ -245,7 +262,7 @@ try {
       const plans = searches.filter(s => s.via === 'getPathFromTo');
       log(`SEARCHES ${c.name}/${act.label}: ${plans.length} drawn; ${plans.map(s => `${s.status}/${s.visited}n/${s.ms}ms/t${s.timeout}`).join(' ')}`);
       acts.push({ label: act.label, from: from ? [from.x, from.y, from.z] : null, to: actor.entity?.position ? [actor.entity.position.x, actor.entity.position.y, actor.entity.position.z] : null,
-        hp: actor.health, food: actor.food, wallMs, got, want, same: { code: sameCode, ms: sameMs, counts: sameCounts }, lines, error, searches, motion: motion.filter((_, i) => i % 2 === 0 || i === motion.length - 1) });
+        hp: actor.health, food: actor.food, wallMs, healths, reflexes, got, want, same: { code: sameCode, ms: sameMs, counts: sameCounts }, lines, error, searches, motion: motion.filter((_, i) => i % 2 === 0 || i === motion.length - 1) });
     }
     // the same search again, from the same place, with longer limits: no way, or no time?
     const extra: any[] = [];
