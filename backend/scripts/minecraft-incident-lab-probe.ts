@@ -162,7 +162,7 @@ try {
   check('the incident says where the act began and ended', Array.isArray(sixth.parsed?.incident?.start) && Array.isArray(sixth.parsed?.incident?.end), JSON.stringify([sixth.parsed?.incident?.start, sixth.parsed?.incident?.end]));
   const cancelled = await body.cancelIncident(String(sixth.parsed?.incident?.id));
   const afterCancel = await tickState();
-  check('a cancel of the held task moves the world again and ends the hold', cancelled && !fs.existsSync(holdFile) && (!/frozen/iu.test(afterCancel) || /running normally/iu.test(afterCancel)), afterCancel);
+  check('a cancel of the held task moves the world again and ends the hold', cancelled.done && !fs.existsSync(holdFile) && (!/frozen/iu.test(afterCancel) || /running normally/iu.test(afterCancel)), afterCancel);
   report.stats = blackBoxOf(actor)?.stats() ?? null;
   closeProbeBot(actor);
 } catch (error) {

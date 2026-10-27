@@ -10,6 +10,8 @@ import { MINECRAFT_CONTROL_PATH, type MinecraftControlCommand as Command, type M
 import { BodyQueue, droppedBecause, EXPIRED_TEXT, notStarted, QUEUE_ACCEPT_WINDOW_MS, readEnvelope, type QueueEnvelope } from './bodyQueue.js';
 import type { ActCondition } from '../../utils/actConditions.js';
 
+/** What a release naming a hold did (`utils/incidents` HoldRelease): said in the release's receipt as `{"incident": {...}}`. */
+export interface IncidentRelease { done: boolean; hold: string | null; unfreeze: string | null }
 export interface CommonFcaActuator {
   observe(): BodyObservation;
   candidates(observation: BodyObservation): readonly BodyCandidateDraft[];
@@ -26,7 +28,9 @@ export interface CommonFcaActuator {
   /** Task queue: how far the running act is (its hand, its pass), without the command's id. */
   progress?(): Omit<MinecraftQueueProgress, 'id'> | null;
   /** The fix run (2026-10-28): a release that names a hold (`context.incident.cancel`) ends it and moves the world again. */
-  cancelIncident?(id: string): Promise<boolean>;
+  cancelIncident?(id: string): Promise<IncidentRelease>;
+  /** Run 44, resume 1: a release that names a hold to resume (`context.incident.resume`), sent by the head before the held act goes again. */
+  resumeIncident?(id: string): Promise<IncidentRelease>;
 }
 /**
  * What the loop tells a watcher (the UI mod's view of the task). Read only: a watcher cannot change what the loop does,
@@ -261,9 +265,6 @@ export class CommonFcaControlLoop {
       this.begin(command, key);
       return;
     }
-    // The fix run: the operator's cancel of a held task comes as a release naming the hold; the world moves again (the release goes on as ever).
-    const cancelled = cleanup ? (context as { incident?: { cancel?: unknown } }).incident?.cancel : undefined;
-    if (typeof cancelled === 'string' && cancelled) void this.options.actuator.cancelIncident?.(cancelled).catch(() => false);
     this.launch(command, key, cleanup, historicalCleanup);
   }
   /** An item about to start: its start-by time and its condition are checked once, now; if either fails it is not started and what waits is dropped. */
@@ -388,10 +389,24 @@ export class CommonFcaControlLoop {
     const released = this.closedSessions.has(sessionKey) ? true : await this.options.actuator.release(signal);
     if (released) this.options.actuator.closeEvidence?.(command.context);
     if (released && command.kind === 'release') this.closedSessions.add(sessionKey);
+    // The fix run: the operator's cancel or resume of a held task comes as a release naming the hold (run 44: the resume first, then the act):
+    // the hold ends and the world moves; what was done is the receipt's result, so the head keeps its own hold when the body kept its.
+    const incident = command.kind === 'release' ? await this.incidentRelease(command.context) : null;
     const observedAt = new Date((this.options.now ?? Date.now)()).toISOString();
     return { id: command.id, connectionId: this.connectionId, outcome: released ? 'completed' : 'unknown', inputsReleased: released, observedAt,
+      ...(incident ? { result: JSON.stringify({ incident }) } : {}),
       ...(command.stop ? { stop: { bodyId: command.context.bodyId, sessionId: command.context.sessionId,
         generation: command.context.generation, requestId: command.stop.requestId, state: released ? 'stopped' : 'unknown', inputsReleased: released, observedAt } } : {}) };
+  }
+  private async incidentRelease(context: BodyTaskContext | undefined): Promise<(IncidentRelease & { op: 'cancel' | 'resume'; id: string }) | null> {
+    const named = (context as { incident?: { cancel?: unknown; resume?: unknown } } | undefined)?.incident;
+    const op = typeof named?.resume === 'string' && named.resume ? 'resume' : typeof named?.cancel === 'string' && named.cancel ? 'cancel' : null;
+    if (!op) return null;
+    const id = String(named![op]);
+    const run = op === 'resume' ? this.options.actuator.resumeIncident : this.options.actuator.cancelIncident;
+    if (!run) return { op, id, done: false, hold: null, unfreeze: 'no_incidents' };
+    try { return { op, id, ...(await run.call(this.options.actuator, id)) }; }
+    catch (error) { return { op, id, done: false, hold: null, unfreeze: `failed:${String((error as Error)?.message ?? error).slice(0, 60)}` }; }
   }
   async stop(): Promise<boolean> {
     if (this.closed) return !this.held;

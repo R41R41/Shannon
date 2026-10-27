@@ -165,3 +165,34 @@ describe('common FCA body transport', () => {
     done(); await tick(); await f.loop.stop();
   });
 });
+
+describe('run 44, resume 1: a release naming a hold', () => {
+  it('ends the hold before anything else is sent and says in its receipt what it did; a release without one says nothing of holds', async () => {
+    const f = fixture();
+    f.actuator.resumeIncident = vi.fn(async (id: string) => (id === 'h1' ? { done: true, hold: null, unfreeze: 'The game is running normally' } : { done: false, hold: 'h1', unfreeze: null }));
+    f.actuator.cancelIncident = vi.fn(async () => ({ done: true, hold: null, unfreeze: 'ok' }));
+    // An old lease's release (the held act's), on a body with no owner (restarted): accepted.
+    const old = { ...context, sessionId: 'session-old', incident: { resume: 'h1' } };
+    f.responses.push({ commands: [command('resume-1', { kind: 'release', context: old, lease: { id: 'lease-old', generation: 3, holder: 'task1' },
+      stop: { context: old, requestId: 'resume-1', reason: 'cancel' } })] });
+    await f.loop.poll(); await tick(); await tick();
+    f.responses.push({}); await f.loop.poll();
+    const receipt = f.requests.at(-1).receipts.find((r: any) => r.id === 'resume-1');
+    expect(receipt).toMatchObject({ outcome: 'completed', inputsReleased: true });
+    expect(JSON.parse(receipt.result)).toEqual({ incident: { op: 'resume', id: 'h1', done: true, hold: null, unfreeze: 'The game is running normally' } });
+    expect(f.actuator.resumeIncident).toHaveBeenCalledWith('h1');
+    const other = { ...context, sessionId: 'session-2', incident: { resume: 'h2' } };
+    f.responses.push({ commands: [command('resume-2', { kind: 'release', context: other, stop: { context: other, requestId: 'resume-2', reason: 'cancel' } })] });
+    await f.loop.poll(); await tick(); await tick(); f.responses.push({}); await f.loop.poll();
+    expect(JSON.parse(f.requests.at(-1).receipts.find((r: any) => r.id === 'resume-2').result).incident).toMatchObject({ op: 'resume', id: 'h2', done: false, hold: 'h1' });
+    const cancel = { ...context, sessionId: 'session-3', incident: { cancel: 'h1' } };
+    f.responses.push({ commands: [command('cancel-1', { kind: 'release', context: cancel, stop: { context: cancel, requestId: 'cancel-1', reason: 'cancel' } })] });
+    await f.loop.poll(); await tick(); await tick(); f.responses.push({}); await f.loop.poll();
+    expect(JSON.parse(f.requests.at(-1).receipts.find((r: any) => r.id === 'cancel-1').result).incident).toMatchObject({ op: 'cancel', id: 'h1', done: true });
+    const plain = { ...context, sessionId: 'session-4' };
+    f.responses.push({ commands: [command('plain', { kind: 'release', context: plain, stop: { context: plain, requestId: 'plain', reason: 'cancel' } })] });
+    await f.loop.poll(); await tick(); await tick(); f.responses.push({}); await f.loop.poll();
+    expect(f.requests.at(-1).receipts.find((r: any) => r.id === 'plain').result).toBeUndefined();
+    await f.loop.stop();
+  });
+});

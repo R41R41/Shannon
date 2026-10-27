@@ -167,8 +167,8 @@ describe('the scene and the hold', () => {
     // Held again, then cancelled by the operator: the world moves and the hold ends.
     const held = (await second.afterAct({ id: 'cmd-4', context: { taskId: 'task-9', incident: { hold: true } } }, report as never, 8000))!;
     expect(held.held).toBe(true);
-    expect(await second.cancel('not-this')).toBe(false);
-    expect(await second.cancel(held.id)).toBe(true);
+    expect(await second.cancel('not-this')).toEqual({ done: false, hold: held.id, unfreeze: null });
+    expect(await second.cancel(held.id)).toMatchObject({ done: true, hold: null });
     expect(said.at(-1)).toBe('tick unfreeze');
     expect(fs.existsSync(holdFile)).toBe(false);
     expect(await second.beforeAct({ taskId: 'task-9' })).toBeNull();
@@ -235,7 +235,7 @@ describe('run 44, hold 1: the body counted itself as someone else, held in a mov
     // The cancel and a stale hold move the world too, whatever the file says.
     fs.writeFileSync(holdFile, JSON.stringify(HOLD1));
     const cancelled = new Incidents(fakeBot(clock), { holdFile, scene: saver, now: () => clock.t });
-    expect(await cancelled.cancel(HOLD1.id)).toBe(true);
+    expect(await cancelled.cancel(HOLD1.id)).toMatchObject({ done: true });
     fs.writeFileSync(holdFile, JSON.stringify(HOLD1));
     const stale = new Incidents(fakeBot(clock), { holdFile, scene: saver, now: () => clock.t });
     expect(await stale.beforeAct({ taskId: 'another-task' })).toBeNull();

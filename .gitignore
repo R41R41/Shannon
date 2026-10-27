@@ -1,6 +1,7 @@
 /backend/node_modules
 /frontend/node_modules
 /backend/dist
+/backend/lab-bundle
 /frontend/dist
 /frontend/dist-radar
 /common/dist/

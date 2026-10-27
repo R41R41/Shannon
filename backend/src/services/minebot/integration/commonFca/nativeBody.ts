@@ -17,7 +17,10 @@ import { BodyEventWatcher } from './bodyEvents.js';
 import { closeInAdvised, combatOwnerOf } from '../../utils/combatOwner.js';
 import { craftDoneDespiteCut, craftWitness, type CraftWitness } from '../../utils/cutCraftRecovery.js';
 import { renderActReport, takeActReport } from '../../utils/actReport.js';
-import { incidentsOf } from '../../utils/incidents.js';
+import { incidentsOf, withIncidentText, type HoldRelease } from '../../utils/incidents.js';
+
+/** A body without the incidents (a test's): nothing is held, and no world is moved. */
+const NO_INCIDENTS: HoldRelease = { done: true, hold: null, unfreeze: null };
 
 const delay = (milliseconds: number) => new Promise(resolve => setTimeout(resolve, milliseconds));
 /** The floor's action names, as the planner reads them in a receipt. */
@@ -128,7 +131,9 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
     catch { return { ok: false, words: '前提を確かめられなかった' }; }
   }
   /** The operator cancelled a held task (2026-10-28): its hold ends and the world moves again (`utils/incidents`). */
-  async cancelIncident(id: string): Promise<boolean> { return (await incidentsOf(this.bot)?.cancel(id)) ?? false; }
+  async cancelIncident(id: string): Promise<HoldRelease> { return (await incidentsOf(this.bot)?.cancel(id)) ?? NO_INCIDENTS; }
+  /** Run 44, resume 1: the operator resumed a held task: the head's release ends the hold and moves the world before the act is sent again. */
+  async resumeIncident(id: string): Promise<HoldRelease> { return (await incidentsOf(this.bot)?.resume(id)) ?? NO_INCIDENTS; }
   /** Task queue: how far the running act is, or null when none has begun a hand. */
   progress(): Omit<MinecraftQueueProgress, 'id'> | null { return this.running > 0 ? this.stepProgress : null; }
   private now() { return (this.options.now ?? Date.now)(); }
@@ -169,7 +174,9 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
     const primitives = primitiveState(this.bot); Object.assign(facts, primitives.facts);
     return { schemaVersion: 1, bodyId: `minecraft:${this.options.serverId}`, sequence: ++this.sequence,
       stateAt: new Date(now).toISOString(), receivedAt: new Date(now).toISOString(), connected: facts.connected === true,
-      state: JSON.parse(JSON.stringify({ world, primitives: primitives.state, activeCapabilities: activeActionCapabilities(this.bot), localSafety: this.lastSafety })), facts };
+      // Run 44: the hold the body keeps (its file survives a restart), for the head to compare with its own (a hold of a task that is gone is ended).
+      state: JSON.parse(JSON.stringify({ world, primitives: primitives.state, activeCapabilities: activeActionCapabilities(this.bot), localSafety: this.lastSafety,
+        incidentHold: incidentsOf(this.bot)?.held() ?? null })), facts };
   }
   candidates(observation: BodyObservation): BodyCandidateDraft[] {
     return primitiveCandidates(observation, this.now());
@@ -309,13 +316,7 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
         // 2026-10-28: an act that did not succeed writes the black box (a heavy one also the scene, and holds a task that asked for it); the
         // receipt says which (`incident`), so that the head can hold the task and the operator can find the files.
         const incident = incidents ? await incidents.afterAct(command, act, Date.now() - actStartedAt).catch(() => null) : null;
-        if (incident) {
-          try { text = JSON.stringify({ ...JSON.parse(text), incident: { id: incident.id, heavy: incident.heavy, why: incident.why, held: incident.held,
-            frozen: incident.frozen, ...(incident.freeze ? { freeze: incident.freeze } : {}), ...(incident.notHeld ? { notHeld: incident.notHeld } : {}),
-            box: incident.box !== null, scene: incident.scene !== null,
-            ...(incident.start ? { start: incident.start } : {}), ...(incident.end ? { end: incident.end } : {}) } }); }
-          catch { /* the report as it was */ }
-        }
+        text = withIncidentText(text, incident);
         if (outcome === 'failed' && !failure) failure = { failureType: act.failureType ?? 'failed', recoverable: true };
         if (outcome === 'failed' && act.stoppedBy === 'reflex') failure = { failureType: 'interrupted_by_reflex', recoverable: true };
         return this.receipt(command, outcome, released, text, undefined, failure);

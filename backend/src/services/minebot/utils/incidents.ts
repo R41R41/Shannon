@@ -39,6 +39,12 @@ export interface Incident { id: string; kind: 'act' | 'health' | 'death'; heavy:
   /** The feet when the act began, and when it ended (the hold's place): a resume reads how far the body is from where the act began. */
   start?: [number, number, number] | null; end?: [number, number, number] | null }
 export interface Hold { id: string; task: string; at: string; frozen: boolean; freeze: string; command: string; why: string; start?: [number, number, number] | null }
+/**
+ * What a release naming a hold did (run 44, resume 1: the head's resume and cancel come as a release before anything else is sent): `done` when the
+ * body holds nothing of it any more (this hold ended now, or there was none), `hold` the id of a hold it still keeps (another one), `unfreeze` the
+ * server's words for `tick unfreeze` (sent unless another hold is kept).
+ */
+export interface HoldRelease { done: boolean; hold: string | null; unfreeze: string | null }
 interface Context { taskId?: string; incident?: { hold?: boolean; resume?: string; cancel?: string } }
 
 /**
@@ -157,17 +163,32 @@ export class Incidents {
   }
 
   /**
-   * A held task cancelled by the operator (the head sends a release with `context.incident.cancel`): the world moves again and the hold ends. True
-   * when it was this hold.
+   * A held task cancelled by the operator (the head sends a release with `context.incident.cancel`): the world moves again and the hold ends.
+   * `done` when it was this hold, or when there was none (the world is moved anyway: it may have been stopped by hand).
    */
-  async cancel(id: string): Promise<boolean> {
+  async cancel(id: string): Promise<HoldRelease> { return this.release(id, 'cancel'); }
+  /**
+   * Run 44, resume 1: the head's resume comes as a release naming the hold before the held act is sent again (the act once carried the resume, and
+   * a body restarted in between kept refusing every act when that act never reached it). The hold ends and the world moves.
+   */
+  async resume(id: string): Promise<HoldRelease> { return this.release(id, 'resume'); }
+  /** The hold as the observation says it (the head compares it with its own), or null. */
+  held(): { id: string; task: string; why: string } | null {
+    return this.hold ? { id: this.hold.id, task: this.hold.task, why: this.hold.why } : null;
+  }
+  private async release(id: string, how: 'cancel' | 'resume'): Promise<HoldRelease> {
     const hold = this.hold;
-    if (!hold || hold.id !== id) return false;
+    if (hold && hold.id !== id) {
+      log.warn(`保留 ${id} を解く命令（${how}）が来たが、体の保留は ${hold.id}: そのまま`);
+      return { done: false, hold: hold.id, unfreeze: null };
+    }
     const said = await this.unfreeze();
-    log.warn(`⏹ 保留していたタスクが止められたので、保留 ${hold.id} を解いた: ${said}`);
-    this.box()?.note('hold_cancelled', { hold: hold.id, unfreeze: said });
-    this.clearHold();
-    return true;
+    if (hold) {
+      log.warn(`${how === 'cancel' ? '⏹ 保留していたタスクが止められたので' : '▶ 再開の命令で'}、保留 ${hold.id} を解いた: ${said}`);
+      this.box()?.note(how === 'cancel' ? 'hold_cancelled' : 'resume', { hold: hold.id, unfreeze: said });
+      this.clearHold();
+    } else log.warn(`保留 ${id} を解く命令（${how}）が来たが、体は保留していない: 世界だけ動かした（${said}）`);
+    return { done: true, hold: null, unfreeze: said };
   }
 
   /**
@@ -197,6 +218,17 @@ export class Incidents {
     const end: [number, number, number] | null = p ? [Math.round(p.x * 100) / 100, Math.round(p.y * 100) / 100, Math.round(p.z * 100) / 100] : null;
     return { id, kind, heavy, why, box: written?.file ?? null, scene: scene?.ok ? scene.dir : null, held: false, frozen: null, start: kind === 'act' ? this.startFeet : null, end };
   }
+}
+
+/** An act's result JSON with the incident the receipt carries (`incident`: what the head reads to hold the task); the text as it was without one. */
+export function withIncidentText(text: string, incident: Incident | null): string {
+  if (!incident) return text;
+  try {
+    return JSON.stringify({ ...JSON.parse(text), incident: { id: incident.id, heavy: incident.heavy, why: incident.why, held: incident.held,
+      frozen: incident.frozen, ...(incident.freeze ? { freeze: incident.freeze } : {}), ...(incident.notHeld ? { notHeld: incident.notHeld } : {}),
+      box: incident.box !== null, scene: incident.scene !== null,
+      ...(incident.start ? { start: incident.start } : {}), ...(incident.end ? { end: incident.end } : {}) } });
+  } catch { return text; }
 }
 
 const incidents = new WeakMap<object, Incidents>();

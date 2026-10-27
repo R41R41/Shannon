@@ -139,6 +139,8 @@ act の手（place・make・pillarUp・go・mine・smelt・obsidian・portal・f
   - 世界を止める（`/tick freeze`）。体自身の名前は止める時に読み、ほかの人に数えない（実走 44 の保留 1 では、ログイン前に読んだ空の名前のせいで自分を数え、止まらなかった）
   - 止められない時（ほかの人がいる・人数が分からない・freeze が断られた）は保留しない。黒箱と現場は取り、受け取りの `incident.notHeld` に理由を書き、走りは続ける（頭は `hold_skipped` の行を監査に残す）
   - resume・cancel・別のタスクの act の時は、保留のファイルが何と言っていても `tick unfreeze` を送る（手で止めた世界も動く）
+  - 再開と cancel は、頭が act の前に送る release（`context.incident.resume`／`cancel`）で保留を解く。体は解いたかどうかを受け取りの `{"incident": {...}}` に書き、頭は体が解いた時だけ再開する（実走 44 の再開 1）
+  - 体の保留は観測の `state.incidentHold` に出る。頭はこれを自分の保留と比べ、終わったタスクの保留は解き、走っているタスクの保留は頭も保留に戻す
   - 現場と黒箱を取る
   - そのタスクの次の act を `held` で断る
   - 保留は `saves/minecraft/incident-hold.json` に残すので、体を再起動しても続きます。
@@ -153,6 +155,9 @@ act の手（place・make・pillarUp・go・mine・smelt・obsidian・portal・f
   6. 直してから resume で同じ act が通り、次の act へ進む
   7. 体だけの時に止まる（体を「ほかの人」に数えない。現場の保存器は、本番と同じく体のログイン前に作る）
   8. ほかの人（LabVisitor）がいる時は保留しない：受け取りに理由、黒箱と現場は取る、世界は動いたまま、次の act は走る
+- **本物の頭での保留と再開の通し**（実走 44 の再開 1 の後）：上の隔離ラボは probe が頭の代わりをしていたので、頭の側の穴（出し直しが頭の control で断られた）を見逃しました。頭のリポジトリの `services/api/tests/minecraftHoldResumeLab.ts` が、本物の頭（運用者の CLI とソケット、監査、タスクの実行、FCA の段、LLM 中心の段と列、resume、体の道具、control と lease の決まり）と、体の保留の部分（control loop・Incidents・SceneSaver）を 1 つのプロセスでつなぎます。モデルは台本です。
+  - 体の部分は `scripts/lab/hold-lab-body.ts` を esbuild でこのパッケージの tsconfig のまま束ねて渡します（手順は頭の lab の先頭）。
+  - 通すこと：わざと止まる → 保留 → 体の再起動 → login → resume（体へ「保留を解く」→ 世界が動く → 頭が再開）→ 同じ act の出し直し → 続きの判断。cancel、体だけが保留している食い違い、終わったタスクの古い保留ファイルも。
 - **現場から再生**：
   1. `REPLAY_SCENES=on` で再生すると、重い失敗の現場がラボのワールドから取れます。本番の現場はそのまま使えます。
   2. `scene-case.py --scene <現場> --box <黒箱> --name s1 > cases.json` で場面を作ります。生き物は残します（`keepEntities`）。体と act は黒箱から入れます。
