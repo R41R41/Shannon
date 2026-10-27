@@ -523,7 +523,10 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
       let feet = feetCell(bot)!;
       // Run 41 (+1,472, +1,518): a floor lower than the feet cell (a small amethyst bud, a slab) leaves every jump 0.05 short of the laying
       // height. The body moves onto a whole floor beside it, or digs a floor that breaks at once and climbs from the one under it.
-      const short = shortFloor(bot, feet);
+      // A body held up at the edge of the cell beside it (its feet cell's floor is air) has nothing under it to lay on: the same move aside.
+      const under = blockAt(bot, { x: feet.x, y: feet.y - 1, z: feet.z });
+      const short = shortFloor(bot, feet)
+        ?? (!under || under.boundingBox !== 'block' ? { cell: { x: feet.x, y: feet.y - 1, z: feet.z }, name: String(under?.name ?? '未ロード'), top: 0, lowBy: 0 } : null);
       if (short) {
         const aside = wholeFloorBeside(bot, feet, cell => !!hazardAtFeet(bot, cell.x, cell.y, cell.z));
         if (aside) {
@@ -537,7 +540,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
           continue;
         }
         const floorBlock = blockAt(bot, short.cell);
-        const quick = floorBlock && !NEVER_DIG.test(String(floorBlock.name)) && !PROTECTED_UTILITY_BLOCKS.has(String(floorBlock.name)) && Number(floorBlock.hardness ?? 99) <= 1.5;
+        const quick = floorBlock && floorBlock.boundingBox === 'block' && !NEVER_DIG.test(String(floorBlock.name)) && !PROTECTED_UTILITY_BLOCKS.has(String(floorBlock.name)) && Number(floorBlock.hardness ?? 99) <= 1.5;
         if (quick && state.dug < limits.maxDig) {
           manualBusy = true;
           let dug: StepOutcome;
@@ -545,7 +548,8 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
           // The body drops onto the floor under the one dug: it is let land (the ground under it is read again) before the next level.
           if (dug.ok) { await wait(ctx, 250); await waitUntil(ctx, () => bot.entity?.onGround === true && Math.abs(bot.entity?.velocity?.y ?? 0) < 0.1, 2500); continue; }
         }
-        return { levels, stop: fail('low_floor', `足元 ${cellText(short.cell)} の ${short.name} は高さ ${short.top.toFixed(2)} で、跳んでも積む高さに届かない`, '丸ごとの床の所へ動いてから登る') };
+        return { levels, stop: fail('low_floor', short.top > 0 ? `足元 ${cellText(short.cell)} の ${short.name} は高さ ${short.top.toFixed(2)} で、跳んでも積む高さに届かない`
+          : `足元 ${cellText(short.cell)} が ${short.name} で、跳んでも積む土台が無い（隣の丸ごとの床も無い）`, '丸ごとの床の所へ動いてから登る') };
       }
       feet = feetCell(bot)!;
       const roof = { x: feet.x, y: feet.y + 2, z: feet.z };
@@ -566,7 +570,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
       try { up = await pillarUp(ctx, { n: 1, block }); } finally { manualBusy = false; }
       if (!up.ok) {
         if (up.reason === 'missing_item') return { levels, stop: fail('no_blocks', up.text.slice(0, 90), '置ける物を集める') };
-        return { levels, stop: fail(up.reason === 'ceiling' ? 'dead_end' : up.reason === 'low_floor' ? 'low_floor' : 'stuck', up.text.slice(0, 100), '') };
+        return { levels, stop: fail(up.reason === 'ceiling' ? 'dead_end' : up.reason === 'low_floor' || up.reason === 'no_floor' ? 'low_floor' : 'stuck', up.text.slice(0, 100), '') };
       }
       levels++;
     }
