@@ -199,36 +199,28 @@ export function worldWatchOf(host: any): WorldWatch {
   }
   return watch;
 }
-/** Makes a movement profile keep the blocks it reads (its own `getBlock`) until the world changes at that cell. Returns a name reader over the same keep. */
+/**
+ * Makes a movement profile keep the blocks it reads (its body's `blockAt`) until the world changes at that cell. The profile's own `getBlock`
+ * still runs at every read: it sets the block's walking properties afresh each time (and a move may change them for its own sum, as the jump up
+ * does to the height), so only the reading of the world is kept, never what was made of it. Returns a name reader over the same keep.
+ */
 export function keepReads(movements: any, watch: WorldWatch): (x: number, y: number, z: number) => string | null {
-  const read = movements.getBlock.bind(movements);
+  const body = movements.bot;
   const kept = new Map<string, { block: any; tick: number }>();
   let epoch = watch.epoch;
-  const get = (pos: any, dx: number, dy: number, dz: number) => {
-    if (!pos) return read(pos, dx, dy, dz);
+  const blockAt = (position: any, extraInfos?: boolean) => {
+    if (!position) return body.blockAt(position, extraInfos);
     if (watch.epoch !== epoch || kept.size > READ_CACHE_MAX) { kept.clear(); epoch = watch.epoch; }
-    const x = pos.x + dx, y = pos.y + dy, z = pos.z + dz, key = `${x},${y},${z}`;
+    const x = Math.floor(position.x), y = Math.floor(position.y), z = Math.floor(position.z), key = `${x},${y},${z}`;
     const hit = kept.get(key);
     if (hit && (watch.changed.get(key) ?? 0) <= hit.tick) return hit.block;
-    const block = read(pos, dx, dy, dz);
-    // A cell not loaded (no position) is not kept: it may arrive at any moment.
-    if (block?.position) kept.set(key, { block, tick: watch.tick });
+    const block = body.blockAt(position, extraInfos);
+    // A cell not loaded is not kept: it may arrive at any moment.
+    if (block) kept.set(key, { block, tick: watch.tick });
     return block;
   };
-  movements.getBlock = get;
-  return (x, y, z) => { const block = get({ x, y, z }, 0, 0, 0); return block?.position ? (block.name ?? null) : null; };
-}
-
-/** A route drawn without walking it: the search's status, its nodes, and the cells it breaks (by block name) and fills. */
-interface Plan { status: string; path: any[]; digs: Map<string, number>; places: number; visited: number }
-const yieldNow = () => new Promise<void>(resolve => setImmediate(resolve));
-
-interface Relax { hazards?: boolean; tool?: boolean; blocks?: boolean; permissions?: boolean; limits?: boolean }
-interface State {
-  steps: number; dug: number; placed: number; redraws: number;
-  veto: { code: string; text: string } | null;
-  /** The blocks laid in a row that the world did not show. */
-  refused: number;
+  movements.bot = new Proxy(body, { get: (target, key) => (key === 'blockAt' ? blockAt : Reflect.get(target, key)) });
+  return (x, y, z) => blockAt(new Vec3(x, y, z), false)?.name ?? null;
 }
 
 // ---- the movements ---------------------------------------------------------------------------------------------------------------------
@@ -482,7 +474,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
       '10m 以内の中継点へ go か、dig と walk の階段・縦穴で');
   };
 
-  const explain = async (goal: any, base?: Plan): Promise<StepOutcome> => {
+  const explain = async (goal: any): Promise<StepOutcome> => {
     const ms = Math.min(args.searchMs ?? 2500, Math.max(300, timeLeft() - 500));
     const shown = (map: Map<string, number>) => [...map.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([name, count]) => `${name}×${count}`).join('・');
     const ignored = rule.ignored.length ? `（無視した canDig: ${rule.ignored.slice(0, 3).join('・')}）` : '';
@@ -497,16 +489,14 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
         '置ける物を集めるか、canPlace を足す')] as [Relax, (found: Plan) => StepOutcome]] : []),
       [{ permissions: true }, found => fail('dead_end', `許した手では道が無い。${found.digs.size ? `canDig に ${[...found.digs.keys()].slice(0, 3).join('・')} を許せば掘 ${[...found.digs.values()].reduce((a, b) => a + b, 0)} で` : ''}${found.places ? `canPlace を許せば置 ${found.places} で` : ''}道がある${ignored}`, '許すか、別の行き先を')],
     ];
-    let ranOut: Plan | null = null;
+    // The way with the rules as given was searched to its end and is shut (a search that ran out of time never comes here); a lifted search
+    // that runs out only leaves the reason unnamed.
     for (const [relax, outcome] of lifts) {
       if (timeLeft() < 800) break;
       let found: Plan | null = null;
       try { found = await plan(movementsFor(relax), goal, ms); } catch { found = null; }
       if (found && found.status === 'success') return outcome(found);
-      if (found && found.status === 'timeout' && !ranOut) ranOut = found;
     }
-    // A lifted search that ran out of time did not show the way shut: not a dead end.
-    if (ranOut) return searchedOutStop(base && base.path.length ? base : ranOut, near());
     return fail('dead_end', `掘っても置いても道が無い（行き止まり）${ignored}`, '別の行き先を');
   };
 
@@ -699,7 +689,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
         }
         return searchedOutStop(found, aim);
       }
-      return await explain(finalGoal, found);
+      return await explain(finalGoal);
     }
   } catch (error) {
     // The act's stop, the action's abort, a reflex: the body lets go of everything and the stop goes on.

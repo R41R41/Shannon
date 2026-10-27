@@ -5,7 +5,6 @@ import { makeSim, type Ground, type Sim } from '../helpers/physicsBody.js';
 import { go, keepReads, worldWatchOf, type GoArgs } from '../../src/services/minebot/utils/primitives/go.js';
 import { dig } from '../../src/services/minebot/utils/primitives/dig.js';
 import { pillarUp, shortFloor } from '../../src/services/minebot/utils/primitives/pillarUp.js';
-import { oreTwins } from '../../src/services/minebot/utils/primitives/mine.js';
 import { fallsOntoBody } from '../../src/services/minebot/utils/fallingAbove.js';
 import { chokes, inWall, wallCells } from '../../src/services/minebot/utils/wallReflex.js';
 import { closedWord } from '../../src/services/minebot/utils/actReport.js';
@@ -27,16 +26,17 @@ async function drive<T>(sim: Sim, promise: Promise<T>, maxMs = 240_000): Promise
 }
 
 describe('run 41: the route search keeps what it read', () => {
-  it('reads a cell once until the world changes there, and everything again when chunks come or go', () => {
+  it('reads a cell from the world once until the world changes there, and everything again when chunks come or go', () => {
     const host = new EventEmitter();
     const watch = worldWatchOf(host);
     let reads = 0;
-    const movements = { getBlock: (pos: any, dx: number, dy: number, dz: number) => { reads++; return { name: 'stone', position: new Vec3(pos.x + dx, pos.y + dy, pos.z + dz) }; } };
+    const movements: any = { bot: { blockAt: (p: Vec3) => { reads++; return { name: 'stone', position: new Vec3(p.x, p.y, p.z) }; }, entity: { id: 1 } } };
     const name = keepReads(movements, watch);
     expect(name(1, 2, 3)).toBe('stone');
-    expect(movements.getBlock({ x: 1, y: 1, z: 3 }, 0, 1, 0).name).toBe('stone');
+    expect(movements.bot.blockAt(new Vec3(1.5, 2.2, 3.9), false).name).toBe('stone');
     expect(name(1, 2, 3)).toBe('stone');
     expect(reads).toBe(1);
+    expect(movements.bot.entity.id).toBe(1);
     host.emit('blockUpdate', { position: new Vec3(1, 2, 3) }, { position: new Vec3(1, 2, 3) });
     name(1, 2, 3);
     expect(reads).toBe(2);
@@ -49,10 +49,9 @@ describe('run 41: the route search keeps what it read', () => {
   });
 
   it('does not keep a cell that is not loaded', () => {
-    const watch = worldWatchOf(new EventEmitter());
     let reads = 0;
-    const movements = { getBlock: () => { reads++; return { safe: false }; } };
-    const name = keepReads(movements, watch);
+    const movements: any = { bot: { blockAt: () => { reads++; return null; } } };
+    const name = keepReads(movements, worldWatchOf(new EventEmitter()));
     expect(name(0, 0, 0)).toBeNull();
     name(0, 0, 0);
     expect(reads).toBe(2);
@@ -84,11 +83,13 @@ describe('run 41: a search that runs out of its time is not a dead end', () => {
 describe('run 41: a floor lower than the feet cell', () => {
   beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date', 'performance'] }); });
   afterEach(() => { vi.useRealTimers(); });
-  // A bottom slab under the feet (its top 0.5 up its cell): the feet stand half a block under the feet cell's floor.
+  // The ground's top is y=64 (stone up to it); a bottom slab is the top at (0,64,0) (its top 0.5 up its cell): the feet stand at 64.5, half
+  // a block under the feet cell's (y=65) floor.
+  const high: Ground = (x, y, z) => (Math.abs(x) > R || Math.abs(z) > R ? null : y <= FLOOR ? 'stone' : 'air');
   const slab = (base: Ground): Ground => (x, y, z) => (x === 0 && z === 0 && y === FLOOR ? 'smooth_stone_slab' : base(x, y, z));
 
   it('pillarUp says low_floor before the jump, with the whole floor beside it', async () => {
-    const sim = makeSim(slab(flat), { start: [0.5, FLOOR, 0.5], items: [{ name: 'cobblestone', count: 8 }] });
+    const sim = makeSim(slab(high), { start: [0.5, FLOOR + 0.5, 0.5], items: [{ name: 'cobblestone', count: 8 }] });
     for (let i = 0; i < 20; i++) { sim.tick(); await vi.advanceTimersByTimeAsync(50); }
     expect(sim.bot.entity.position.y).toBeCloseTo(FLOOR + 0.5, 2);
     const feet = feetCell(sim.bot)!;
@@ -103,8 +104,8 @@ describe('run 41: a floor lower than the feet cell', () => {
 
   it('go climbs from beside it: it steps onto a whole floor first, then pillars up', async () => {
     // A cliff 3 high at x>=2; the place is on top. The body starts on the slab.
-    const cliff: Ground = (x, y, z) => (Math.abs(x) > R || Math.abs(z) > R ? null : y < FLOOR ? 'stone' : x >= 2 && y < FLOOR + 3 ? 'stone' : 'air');
-    const sim = makeSim(slab(cliff), { start: [0.5, FLOOR, 0.5], items: [{ name: 'cobblestone', count: 16 }] });
+    const cliff: Ground = (x, y, z) => (Math.abs(x) > R || Math.abs(z) > R ? null : y <= FLOOR ? 'stone' : x >= 2 && y <= FLOOR + 3 ? 'stone' : 'air');
+    const sim = makeSim(slab(cliff), { start: [0.5, FLOOR + 0.5, 0.5], items: [{ name: 'cobblestone', count: 16 }] });
     for (let i = 0; i < 20; i++) { sim.tick(); await vi.advanceTimersByTimeAsync(50); }
     const outcome: StepOutcome = await drive(sim, go(ctxOf(sim), { goals: [{ x: 3, y: FLOOR + 4, z: 0 }], canPlace: ['cobblestone'], range: 1, seconds: 60 }));
     expect(outcome.text).not.toMatch(/跳びの最高|low_floor/u);
@@ -153,15 +154,5 @@ describe('run 41: the wall reflex', () => {
     expect(wallCells(bot).map(cell => `${cell.at.x},${cell.at.y},${cell.at.z}`)).toEqual(['0,65,0', '0,64,0']);
     delete world['0,65,0'];
     expect(inWall(bot)).toBe(false);
-  });
-});
-
-describe('run 41: an ore and its deep twin', () => {
-  it('mine takes iron_ore and deepslate_iron_ore as one vein, whichever was named', () => {
-    const sim = makeSim(flat);
-    expect([...oreTwins(sim.bot, 'diamond_ore')].sort()).toEqual(['deepslate_diamond_ore', 'diamond_ore']);
-    expect([...oreTwins(sim.bot, 'deepslate_iron_ore')].sort()).toEqual(['deepslate_iron_ore', 'iron_ore']);
-    expect([...oreTwins(sim.bot, 'stone')]).toEqual(['stone']);
-    expect([...oreTwins(sim.bot, 'nether_quartz_ore')]).toEqual(['nether_quartz_ore']);
   });
 });

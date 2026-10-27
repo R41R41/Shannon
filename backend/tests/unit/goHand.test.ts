@@ -166,7 +166,9 @@ describe('go: through a wall (canDig)', () => {
     // A small world (12 round, nothing under y=56) so that the search over everything it might dig is short.
     const small: Ground = (x, y, z) => (Math.abs(x) > 12 || Math.abs(z) > 12 || y < 56 ? null : x >= 3 && x <= 5 && y <= FLOOR + 6 ? 'obsidian' : y < FLOOR ? 'stone' : 'air');
     const sim = makeSim(small, { items: stacks({ name: 'diamond_pickaxe', count: 1 }) });
-    const outcome = await drive(sim, run(sim, { canDig: ['obsidian', 'stone', 'diamond_ore', 'chest'] }));
+    // The search is let run to its end (searchMs): over everything it may dig it is a few seconds, and a search cut by its time is
+    // search_timeout (run 41), not this test's dead end.
+    const outcome = await drive(sim, run(sim, { canDig: ['obsidian', 'stone', 'diamond_ore', 'chest'], searchMs: 600_000 }));
     expect(outcome.reason).toBe('dead_end');
     expect(outcome.text).toContain('go 止まった dead_end:');
     expect(sim.bot.dugBlocks).toEqual([]);
