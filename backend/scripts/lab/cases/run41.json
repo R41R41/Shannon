@@ -5029,5 +5029,307 @@
   ],
   "groundCheck": 5152,
   "groundMarks": 11
+ },
+ {
+  "name": "c1805w",
+  "title": "+1,821 の直前：足と頭のマスが砂利（落ちてきた後）。窒息の反射を見る（12 秒待つ）",
+  "forceload": [
+   158,
+   190,
+   208,
+   242
+  ],
+  "restore": [
+   [
+    175,
+    4,
+    223,
+    "short_grass"
+   ],
+   [
+    180,
+    -24,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    180,
+    -23,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    180,
+    -22,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    180,
+    -21,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    180,
+    -23,
+    217,
+    "deepslate[axis=y]"
+   ],
+   [
+    183,
+    -17,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    183,
+    -16,
+    216,
+    "air"
+   ],
+   [
+    183,
+    -15,
+    216,
+    "air"
+   ],
+   [
+    183,
+    -14,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    183,
+    -13,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    183,
+    -12,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    183,
+    -11,
+    216,
+    "deepslate[axis=y]"
+   ],
+   [
+    183,
+    -9,
+    216,
+    "gravel"
+   ],
+   [
+    183,
+    -8,
+    216,
+    "gravel"
+   ],
+   [
+    183,
+    -12,
+    216,
+    "gravel"
+   ],
+   [
+    183,
+    -11,
+    216,
+    "gravel"
+   ],
+   [
+    183,
+    -10,
+    216,
+    "gravel"
+   ]
+  ],
+  "actor": {
+   "pos": [
+    183.5,
+    -11.0,
+    216.5
+   ],
+   "health": 20.0,
+   "food": 18,
+   "items": [
+    {
+     "slot": "0",
+     "id": "diamond_pickaxe",
+     "count": 1
+    },
+    {
+     "slot": "1",
+     "id": "iron_pickaxe",
+     "count": 1,
+     "damage": 11
+    },
+    {
+     "slot": "2",
+     "id": "stone_pickaxe",
+     "count": 1,
+     "damage": 129
+    },
+    {
+     "slot": "3",
+     "id": "stone_axe",
+     "count": 1,
+     "damage": 14
+    },
+    {
+     "slot": "4",
+     "id": "oak_fence",
+     "count": 2
+    },
+    {
+     "slot": "5",
+     "id": "amethyst_block",
+     "count": 9
+    },
+    {
+     "slot": "6",
+     "id": "cobblestone",
+     "count": 54
+    },
+    {
+     "slot": "7",
+     "id": "clay_ball",
+     "count": 8
+    },
+    {
+     "slot": "8",
+     "id": "andesite",
+     "count": 3
+    },
+    {
+     "slot": "9",
+     "id": "stick",
+     "count": 2
+    },
+    {
+     "slot": "10",
+     "id": "dirt",
+     "count": 12
+    },
+    {
+     "slot": "11",
+     "id": "purple_bed",
+     "count": 1
+    },
+    {
+     "slot": "12",
+     "id": "wooden_axe",
+     "count": 1
+    },
+    {
+     "slot": "13",
+     "id": "raw_copper",
+     "count": 3
+    },
+    {
+     "slot": "14",
+     "id": "granite",
+     "count": 14
+    },
+    {
+     "slot": "16",
+     "id": "cobbled_deepslate",
+     "count": 55
+    },
+    {
+     "slot": "17",
+     "id": "diorite",
+     "count": 20
+    },
+    {
+     "slot": "18",
+     "id": "bucket",
+     "count": 1
+    },
+    {
+     "slot": "19",
+     "id": "string",
+     "count": 1
+    },
+    {
+     "slot": "20",
+     "id": "purple_bed",
+     "count": 1
+    },
+    {
+     "slot": "21",
+     "id": "smooth_basalt",
+     "count": 7
+    },
+    {
+     "slot": "22",
+     "id": "calcite",
+     "count": 20
+    },
+    {
+     "slot": "24",
+     "id": "rail",
+     "count": 3
+    },
+    {
+     "slot": "25",
+     "id": "stone_pickaxe",
+     "count": 1,
+     "damage": 129
+    },
+    {
+     "slot": "armor.head",
+     "id": "iron_helmet",
+     "count": 1,
+     "damage": 1
+    },
+    {
+     "slot": "armor.chest",
+     "id": "iron_chestplate",
+     "count": 1,
+     "damage": 1
+    },
+    {
+     "slot": "armor.legs",
+     "id": "iron_leggings",
+     "count": 1
+    },
+    {
+     "slot": "weapon.offhand",
+     "id": "shield",
+     "count": 1
+    }
+   ],
+   "sampleAt": 1804.1
+  },
+  "time": 6000,
+  "difficulty": "normal",
+  "acts": [
+   {
+    "label": "wait12",
+    "arguments": {
+     "hands": [
+      {
+       "do": "wait",
+       "seconds": 12
+      }
+     ],
+     "why": "replay: buried in gravel, nothing asked"
+    },
+    "seconds": 20,
+    "expect": {
+     "line": "",
+     "ms": null
+    }
+   }
+  ],
+  "watch": [],
+  "groundCheck": 2154,
+  "groundMarks": 4
  }
 ]
