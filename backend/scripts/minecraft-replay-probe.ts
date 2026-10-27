@@ -20,6 +20,8 @@ import { Vec3 } from 'vec3';
 import { createProbeBot, closeProbeBot } from '../src/services/minebot/testing/MinecraftProbeBot.js';
 import { NativeCommonFcaBody } from '../src/services/minebot/integration/commonFca/nativeBody.js';
 import { ensureReflexLedger } from '../src/services/minebot/utils/reflexLedger.js';
+import { installIncidents } from '../src/services/minebot/utils/incidents.js';
+import { SceneSaver } from '../src/services/minebot/utils/sceneSave.js';
 
 const port = Number(process.env.MINECRAFT_REPLAY_PORT);
 const worldDirectory = process.env.MINECRAFT_REPLAY_WORLD_DIRECTORY ?? '';
@@ -43,6 +45,8 @@ interface Case {
   name: string; title: string; forceload: [number, number, number, number]; restore: Array<[number, number, number, string]>;
   actor: { pos: [number, number, number]; yaw?: number; pitch?: number; health?: number; food?: number; items: Item[] };
   time?: number; difficulty?: string; acts: CaseAct[]; watch?: Array<[number, number, number]>;
+  /** A case started from a scene (scripts/lab/scene-case.py): the creatures and items of the world are the scene's, so nothing is killed first. */
+  keepEntities?: boolean;
   search?: { timeouts: number[]; variants?: number };
 }
 const cases: Case[] = JSON.parse(fs.readFileSync(process.env.MINECRAFT_REPLAY_CASES ?? '', 'utf8'));
@@ -57,6 +61,11 @@ const log = (text: string) => console.log(`[${stamp()}] ${text}`);
 
 const operator: any = await createProbeBot(port);
 const actor: any = await createProbeBot(port, ACTOR);
+// 2026-10-28: the replayed acts write the black box as production does (MINEBOT_BLACKBOX_DIR), and with MINECRAFT_REPLAY_SCENES=on a heavy failure
+// also saves the scene of the lab's world (to start a replay from it, `scene-case.py`).
+installIncidents(actor, { holdFile: path.join(process.env.MINECRAFT_REPLAY_OUT ?? '/tmp', 'replay-hold.json'),
+  scene: process.env.MINECRAFT_REPLAY_SCENES === 'on' ? new SceneSaver({ command: (text, timeoutMs) => ask(text, timeoutMs), serverDir: worldDirectory,
+    root: path.join(process.env.MINECRAFT_REPLAY_OUT ?? '/tmp', 'scenes'), ignore: [ACTOR, 'ShannonProbe'] }) : null });
 const body = new NativeCommonFcaBody(actor, { serverId: 'replay-probe', capture: async () => { throw new Error('no picture in the lab'); }, rendererConfigured: () => false });
 let deaths = 0, disconnected: string | null = null;
 const chat: Array<{ t: number; text: string }> = [];
@@ -197,7 +206,7 @@ try {
     const [fx0, fz0, fx1, fz1] = c.forceload;
     const fl = await ask(`forceload add ${fx0} ${fz0} ${fx1} ${fz1}`); if (BAD.test(fl)) warnings.push(`forceload => ${fl.slice(0, 120)}`);
     await ask(`tp ShannonProbe ${c.actor.pos[0]} ${c.actor.pos[1] + 3} ${c.actor.pos[2]}`);
-    await ask('kill @e[type=!minecraft:player]');
+    if (!c.keepEntities) await ask('kill @e[type=!minecraft:player]');
     await sleep(3000);
     // Every block the case changes (its own /setblock of the ground, then the body's digs and lays) is noted as it was, and put back after the case:
     // the next case meets the ground as staged.
@@ -213,7 +222,7 @@ try {
       if (/Could not set the block/u.test(answer)) restored++; // already that block
       else if (BAD.test(answer)) warnings.push(`setblock ${x} ${y} ${z} ${state} => ${answer.slice(0, 100)}`); else restored++;
     }
-    await ask('kill @e[type=minecraft:item]');
+    if (!c.keepEntities) await ask('kill @e[type=minecraft:item]');
     await sleep(1500);
     const mismatch = restore.filter(([x, y, z, state]) => operator.blockAt(new Vec3(x, y, z))?.name !== state.split('[')[0]).map(cell => cell.join(' ')).slice(0, 20);
     log(`GROUND ${c.name}: ${restored}/${restore.length} cells set, ${mismatch.length} not as asked ${mismatch.slice(0, 5).join(' | ')}`);

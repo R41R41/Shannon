@@ -44,14 +44,14 @@ export function nativePlayers(text: string): readonly string[] | null {
 }
 
 /** Small bounded RCON transport. Every command is supplied by this module, never by a model or API caller. */
-export function rconCommand(config: { port: number; password: string }, command: string, signal?: AbortSignal): Promise<string> {
+export function rconCommand(config: { port: number; password: string }, command: string, signal?: AbortSignal, timeoutMs = 2500): Promise<string> {
   return new Promise((resolve, reject) => {
     if (!Number.isInteger(config.port) || config.port < 1024 || config.port > 65535 || !config.password || command.length > 512) return reject(Error('LIFECYCLE_RCON_CONFIG'));
     const socket = createConnection({ host: '127.0.0.1', port: config.port });
     let pending = Buffer.alloc(0), output = '', outputBytes = 0, authorized = false, markerSent = false, finished = false;
     const finish = (error?: Error) => { if (finished) return; finished = true; clearTimeout(timeout); signal?.removeEventListener('abort', aborted); socket.destroy(); error ? reject(Object.assign(error, { responseText: output })) : resolve(output); };
     const aborted = () => finish(Error('LIFECYCLE_RCON_ABORTED'));
-    const timeout = setTimeout(() => finish(Error('LIFECYCLE_RCON_TIMEOUT')), 2500);
+    const timeout = setTimeout(() => finish(Error('LIFECYCLE_RCON_TIMEOUT')), timeoutMs);
     const packet = (id: number, type: number, body: string) => {
       const payload = Buffer.from(body, 'utf8'), message = Buffer.alloc(payload.length + 14);
       message.writeInt32LE(payload.length + 10, 0); message.writeInt32LE(id, 4); message.writeInt32LE(type, 8); payload.copy(message, 12); return message;

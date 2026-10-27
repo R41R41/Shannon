@@ -15,7 +15,9 @@
 # Never touches the production services, their env files or their ports (25565-25569, shannon-home's 25560). One lab run at a time (flock).
 #
 # KEY=VALUE: REPLAY_SOURCE=<world dir>, REPLAY_SEED=<seed>, REPLAY_ONLY=c1220,c135, REPLAY_TIMEOUT=<seconds, default 1800>, REPLAY_KEEP=1,
-#   REPLAY_FLOOR=default (the body's floor reflexes as production loads them, melee and flee too; default: floor, the probe's retreat/eat/armor).
+#   REPLAY_FLOOR=default (the body's floor reflexes as production loads them, melee and flee too; default: floor, the probe's retreat/eat/armor),
+#   REPLAY_SCENES=on (a heavy failure of a replayed act also saves the scene of the lab's world under $OUT/scenes; the black box is always under $OUT/blackbox).
+#   A scene as REPLAY_SOURCE (<scene>/world): its region, entities and poi are staged, and its case (scene-case.py) keeps the creatures.
 # The cases file is made on the PC with lab/run-ground.py and lab/replay-case.py from the run's dump (ops.jsonl, samples, equip).
 set -u
 LABEL=${1:?label}; CODE_TAR=${2:?code tar}; CASES=${3:?cases.json}; shift 3
@@ -51,10 +53,12 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # (a) the staged copy of the world the run left
-case "$SOURCE" in "$HOME"/minecraft/shannon-home/shannon_home|"$HOME"/minecraft/shannon-home/shannon_home.before-regen-*|"$SCRATCH"/*) ;; *) log "REPLAY_SOURCE must be shannon-home's world, one of its backups, or a copy under $SCRATCH"; exit 2;; esac
+case "$SOURCE" in "$HOME"/minecraft/shannon-home/shannon_home|"$HOME"/minecraft/shannon-home/shannon_home.before-regen-*|"$SCRATCH"/*|"$HOME"/Shannon/backend/saves/minecraft/scenes/*/world) ;; *) log "REPLAY_SOURCE must be shannon-home's world, one of its backups, a scene (saves/minecraft/scenes/<id>/world), or a copy under $SCRATCH"; exit 2;; esac
 if [ "$SOURCE" = "$HOME/minecraft/shannon-home/shannon_home" ] && systemctl is-active --quiet shannon-home; then log "shannon-home is running: its world is not copied while a server writes it"; exit 2; fi
 rm -rf "$STAGE"; mkdir -p "$STAGE"
 cp "$SOURCE/level.dat" "$STAGE/" && cp -r "$SOURCE/region" "$STAGE/region" || { log "staging failed"; exit 1; }
+# A scene (2026-10-28) also has the creatures and items (entities/) and the points of interest (poi/): the replay starts with them.
+for kind in entities poi; do [ -d "$SOURCE/$kind" ] && cp -r "$SOURCE/$kind" "$STAGE/$kind"; done
 log "staged $(ls "$STAGE/region" | wc -l) region files of $SOURCE"
 SEED=${REPLAY_SEED:-$(python3 -I -c "import gzip,struct;d=gzip.open('$STAGE/level.dat').read();i=d.find(b'\x04\x00\x04seed');print(struct.unpack('>q',d[i+7:i+15])[0] if i>=0 else '')")}
 
@@ -87,7 +91,8 @@ START=$(date +%s)
 ( cd "$CODE/backend" && env -i HOME="$HOME" PATH="$NODEBIN:/usr/bin:/bin" OPENAI_API_KEY=offline-test-not-used MONGODB_URI=mongodb://127.0.0.1:1/shannon-offline-not-used \
   SHANNON_ISOLATED_MINEBOT_PROBE=true MINECRAFT_COGNITION_MODE=off MINECRAFT_OUTAGE_NO_LLM=true MINECRAFT_REPLAY_NO_LLM=true \
   MINECRAFT_REPLAY_PORT=$PORT MINECRAFT_REPLAY_WORLD_DIRECTORY="$DIR" MINECRAFT_REPLAY_CASES="$OUT/cases.json" MINECRAFT_REPLAY_REPORT="$OUT/report.json" \
-  MINECRAFT_REPLAY_ONLY="${REPLAY_ONLY:-}" MINECRAFT_PROBE_FLOOR="${REPLAY_FLOOR:-floor}" TS_NODE_TRANSPILE_ONLY=true nice -n 5 timeout "${REPLAY_TIMEOUT:-1800}" node --loader ts-node/esm scripts/minecraft-replay-probe.ts ) > "$OUT/probe.log" 2>&1
+  MINECRAFT_REPLAY_ONLY="${REPLAY_ONLY:-}" MINECRAFT_PROBE_FLOOR="${REPLAY_FLOOR:-floor}" MINEBOT_BLACKBOX_DIR="$OUT/blackbox" MINECRAFT_REPLAY_OUT="$OUT" \
+  MINECRAFT_REPLAY_SCENES="${REPLAY_SCENES:-off}" TS_NODE_TRANSPILE_ONLY=true nice -n 5 timeout "${REPLAY_TIMEOUT:-1800}" node --loader ts-node/esm scripts/minecraft-replay-probe.ts ) > "$OUT/probe.log" 2>&1
 STATUS=$?
 log "probe exit $STATUS after $(( $(date +%s) - START )) s"
 grep -a -E '^\[..:..:..\] (CASE|GROUND|ACT|BODY|SEARCHES|SEARCH_AGAIN|ACTOR_DEATH|FATAL)' "$OUT/probe.log" | cut -c1-400

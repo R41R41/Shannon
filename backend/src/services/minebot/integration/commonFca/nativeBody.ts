@@ -17,6 +17,7 @@ import { BodyEventWatcher } from './bodyEvents.js';
 import { closeInAdvised, combatOwnerOf } from '../../utils/combatOwner.js';
 import { craftDoneDespiteCut, craftWitness, type CraftWitness } from '../../utils/cutCraftRecovery.js';
 import { renderActReport, takeActReport } from '../../utils/actReport.js';
+import { incidentsOf } from '../../utils/incidents.js';
 
 const delay = (milliseconds: number) => new Promise(resolve => setTimeout(resolve, milliseconds));
 /** The floor's action names, as the planner reads them in a receipt. */
@@ -272,6 +273,10 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
           runMs = Math.min(limit, deadline - this.now());
         }
       }
+      // 2026-10-28: a task held on a heavy failure runs no act until the resume that names the hold (utils/incidents).
+      const incidents = command.kind === 'skill' && capability === 'act' ? incidentsOf(this.bot) : null;
+      const heldWords = incidents ? await incidents.beforeAct(command.context as never) : null;
+      if (heldWords) return this.receipt(command, 'failed', true, heldWords, undefined, { failureType: 'held', recoverable: false });
       const actStartedAt = Date.now();
       const result = await withActionSignal(this.bot, signal, () => executeAction(this.bot, capability, runMs,
         work, { waitForQuiescence: true }));
@@ -299,6 +304,14 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
       const act = capability === 'act' ? takeActReport(this.bot, actStartedAt) : null;
       if (act) {
         text = renderActReport(this.bot, act, note, lead || undefined);
+        // 2026-10-28: an act that did not succeed writes the black box (a heavy one also the scene, and holds a task that asked for it); the
+        // receipt says which (`incident`), so that the head can hold the task and the operator can find the files.
+        const incident = incidents ? await incidents.afterAct(command, act, Date.now() - actStartedAt).catch(() => null) : null;
+        if (incident) {
+          try { text = JSON.stringify({ ...JSON.parse(text), incident: { id: incident.id, heavy: incident.heavy, why: incident.why, held: incident.held,
+            frozen: incident.frozen, ...(incident.freeze ? { freeze: incident.freeze } : {}), box: incident.box !== null, scene: incident.scene !== null } }); }
+          catch { /* the report as it was */ }
+        }
         if (outcome === 'failed' && !failure) failure = { failureType: act.failureType ?? 'failed', recoverable: true };
         if (outcome === 'failed' && act.stoppedBy === 'reflex') failure = { failureType: 'interrupted_by_reflex', recoverable: true };
         return this.receipt(command, outcome, released, text, undefined, failure);

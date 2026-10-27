@@ -113,3 +113,41 @@ act の手（place・make・pillarUp・go・mine・smelt・obsidian・portal・f
 実走 43 の場面は `cases/run43.json`（c43_720 かまどの燃料と焼き待ち・c43_1291 ダイヤの層への下り・c43_1765 縦穴の柱で置きの断り・c43_2099 ドラウンド）。c43_2099 はラボ用に組んだ場面で、act の `before`（act の前のサーバーの命令。ここでは drowned 2 体の summon）と `during`（act を送ってからの ms と命令。ここでは狙った 1 体を kill）を使います。体の反射（melee・flee）を本番どおりに載せるため、`REPLAY_FLOOR=default` で走らせます。各 act の体力の変化と反射の台帳は、probe.log の `BODY` 行と report.json の `healths`・`reflexes` に出ます。
 
 送り方の例（PowerShell から。VM へは LF のファイルで）：`tar.exe -cf code.tar --exclude='*.test.ts' --exclude=node_modules -C <worktree> backend/src backend/scripts backend/package.json backend/tsconfig.json package.json` を作り、`scp code.tar run-replay.sh cases.json azure-constant-server:.cache/minebot-lab/why41-in/` で送ってから `ssh azure-constant-server bash .cache/minebot-lab/why41-in/run-replay.sh t2 ~/.cache/minebot-lab/why41-in/code.tar ~/.cache/minebot-lab/why41-in/cases.json` を実行します。
+
+## 黒箱・現場・止めて直す実走（2026-10-28）
+
+失敗を、推し量りではなく確かめるための仕組みです（ライ氏の承認：「黒箱・現場の保存・止めて直す実走を 1 つの版で作って」）。
+
+- **黒箱**（`src/services/minebot/utils/blackbox.ts`）：常に有効で、スイッチはありません。直近 90 秒をメモリの輪に持ちます。
+  - tick ごと：足の位置・速さ・接地・操作・体力
+  - 起きたこと：サーバーの位置の訂正（forcedMove）、道探しの毎回（起点・行き先・状態・ノード数・ms・道の終わり）、道の更新と引き直しの理由、掘る・置くとその答え、体の近くのブロックの変化、体力・被弾と近い敵、自分の打撃、act の手の始まりと終わり、go が受けた置きの断り
+  - 0.5 秒ごと：16m 内の生き物（種類・id・位置・体力）
+  - 書き出す時：反射の台帳も一緒に書きます。
+  - 書き出し先：`saves/minecraft/blackbox/<タスク>/<id>.json.gz`（`MINEBOT_BLACKBOX_DIR` で変えられる）。
+  - 上限：1 実走 400 個・150 MB、全体 1.5 GB（古い順に消す）。
+  - tick の重さは毎回測り、ファイルの `stats` に入れます。
+- **現場**（`utils/sceneSave.ts`）：重い失敗の時に、次を写します。
+  - `save-all flush` の後に、体の周り 3 チャンクを含む region・entities・poi のファイル
+  - `level.dat`
+  - サーバーのログの前後と、「Can't keep up」の行
+  - 写し先は `saves/minecraft/scenes/<id>/`。上限は 40 個・4 GB です。
+  - 本番では lifecycle の RCON（`MINEBOT_LIFECYCLE_RCON_PORT` とパスワードのファイル）と `SERVER_BASE_PATH/shannon-home` を使います。RCON が無い時は現場を取りません（黒箱は書きます）。
+- **保留**（`utils/incidents.ts`）：act の `context.incident.hold` がある時、重い失敗で次のことをします。
+  - 世界を止める（`/tick freeze`。ほかの人がいる時は止めず、その旨を残す）
+  - 現場と黒箱を取る
+  - そのタスクの次の act を `held` で断る
+  - 保留は `saves/minecraft/incident-hold.json` に残すので、体を再起動しても続きます。
+  - `context.incident.resume` に保留の id が来たら、世界を動かして act を走らせます。
+  - 頭の側の作りは shannon-ios の `docs/operator-minecraft-contract.md`（Hold on a heavy failure and resume）にあります。
+- **隔離ラボの通し**：`run-incident-lab.sh <label> <code.tar>`（`scripts/minecraft-incident-lab-probe.ts`）を VM で走らせます。モデルも有料の鍵も使いません。次を確かめます（14 の確かめ）。
+  1. わざと go を止まらせる（冒険モードで置けない）
+  2. 黒箱と現場が取れる
+  3. 世界が止まる
+  4. 次の act が断られる
+  5. 体を入れ替えても保留のまま、同じ場所に立っている
+  6. 直してから resume で同じ act が通り、次の act へ進む
+- **現場から再生**：
+  1. `REPLAY_SCENES=on` で再生すると、重い失敗の現場がラボのワールドから取れます。本番の現場はそのまま使えます。
+  2. `scene-case.py --scene <現場> --box <黒箱> --name s1 > cases.json` で場面を作ります。生き物は残します（`keepEntities`）。体と act は黒箱から入れます。
+  3. `run-replay.sh <label> <code.tar> cases.json REPLAY_SOURCE=<現場>/world REPLAY_FLOOR=default` で出し直します。
+  4. `compare-boxes.py <黒箱A> <黒箱B>` で、2 つの黒箱を並べて比べます。

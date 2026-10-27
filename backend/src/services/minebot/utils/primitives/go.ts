@@ -13,6 +13,7 @@ import { atGoal, goWith, type GoOutcome, type WayNotes } from './walk.js';
 import { dig } from './dig.js';
 import { pillarUp, shortFloor, wholeFloorBeside } from './pillarUp.js';
 import { placeFacts } from '../placeFacts.js';
+import { blackBoxOf } from '../blackbox.js';
 
 const { goals } = pathfinder;
 
@@ -395,6 +396,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   };
   /** A block the server did not take is not a floor: the route executor is not let walk on (run 40 bench: go went on over a refused place and fell four cells). */
   const refusedPlace = (facts = '') => {
+    blackBoxOf(host)?.note('refused_place', { n: state.refused + 1, facts: facts.slice(0, 200) });
     if (++state.refused >= GO_REFUSED_PLACES && !state.veto) {
       state.veto = { code: 'stuck', text: `置いたブロックが世界に現れない（サーバーが置きを断った。${state.refused} 回${facts ? `。${facts}` : ''}）` };
       try { nav.setGoal?.(null); } catch { /* stopped below */ }

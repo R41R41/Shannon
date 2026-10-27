@@ -58,6 +58,8 @@ installCollisionTolerance();
 // the body out. Packets are inflated as they arrive (utils/syncInflate).
 installSyncInflate();
 import { installMotionRecorder } from './utils/motionRecorder.js';
+import { installBlackBox } from './utils/blackbox.js';
+import { incidentOptions, installIncidents } from './utils/incidents.js';
 import { installTrailRecorder } from './utils/trailRecorder.js';
 import { installLinkWatch } from './utils/linkWatch.js';
 import { installArrivalNote } from './utils/arrivalNote.js';
@@ -141,6 +143,10 @@ export class MinebotClient extends BaseClient {
     installTierToolMaterialRepair(connectedBot);
     installAirSupplyDefault(connectedBot);
     installMotionRecorder(connectedBot);
+    // 2026-10-28: the black box (always on) and the failures written down where they happen: the box, the scene of a heavy one, and the hold a
+    // task may ask for (utils/blackbox, utils/incidents, utils/sceneSave).
+    installBlackBox(connectedBot);
+    installIncidents(connectedBot, incidentOptions(connectedBot));
     // The cells the body walks through rock are kept for the way back whatever dug them (stair-mine, mine-block, the route search), not only the tunnel walk.
     installTrailRecorder(connectedBot as any);
     // Run 20: a connection dropped for silence with 70 s unaccounted for in the journal. The loop's lateness, the ticks, the chunks and the

@@ -25,6 +25,12 @@ export interface BodyTaskContext {
    * shows what it showed before. A body that does not know it ignores it.
    */
   plan?: BodyPlanView;
+  /**
+   * The fix run (2026-10-28): `hold`, an operator's request asked to be held on a heavy failure (the body then writes its box and the scene, stops
+   * the world and holds the task's next acts, `utils/incidents`); `resume`, the hold's id that the act sent again after the operator's resume names
+   * (the body moves the world again and runs it). An API that does not know it never sends it.
+   */
+  incident?: { hold?: boolean; resume?: string };
 }
 /** A plan node as the body shows it. `state`: done → completed, the current node → in_progress, continue and wait → pending, blocked → error. */
 export interface BodyPlanNode {

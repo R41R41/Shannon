@@ -37,6 +37,7 @@ import { installBotLoopWatch } from '../utils/eventLoopWatch.js';
 
 installCollisionTolerance();
 import { installMotionRecorder } from '../utils/motionRecorder.js';
+import { installBlackBox } from '../utils/blackbox.js';
 
 /**
  * A real Minecraft account, for a lab server that checks logins (one people join from outside). The tokens are
@@ -60,6 +61,8 @@ export async function createProbeBot(port: number, username = 'ShannonProbe', ac
   installTierToolMaterialRepair(bot);
   installAirSupplyDefault(bot);
   installMotionRecorder(bot);
+  // 2026-10-28: the black box, as production has it (MINEBOT_BLACKBOX_DIR says where a lab writes it).
+  installBlackBox(bot);
   // A probe that hangs says where (utils/eventLoopWatch: the main thread's stack, written by a worker while it is stuck).
   if (process.env.MINECRAFT_PROBE_LOOP_WATCH !== 'off') installBotLoopWatch(bot as any);
   await new Promise<void>((resolve, reject) => {
