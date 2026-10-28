@@ -260,7 +260,7 @@ try {
         const n: any = entry.notes, shield = (entry.handover as any).shield;
         if (!n.reserve) return false;
         const unbroken = n.reserve.shield === true && n.claim?.shield === true && n.claim?.loweredSince === 0 && n.claim?.deactivatedSince === 0 && (!n.first_op || n.first_op.shield === true);
-        return n.reserve.shield === true ? shield === (unbroken ? 'kept' : 'dropped') : shield === 'none';
+        return n.reserve.reserved === true ? shield === (unbroken ? 'kept' : 'dropped') : shield === 'none';
       }), JSON.stringify(confirmed.map(entry => ({ shield: (entry.handover as any).shield, notes: entry.notes }))).slice(0, 480));
     measures.handoverShield = trials.map(entry => ({ trial: entry.trial, reflex: (entry.reflex as any)?.capability ?? null, shield: (entry.handover as any)?.shield ?? null, confirmed: (entry.handover as any)?.confirmed ?? null,
       up: ['reserve', 'stop', 'claim', 'first_op'].map(name => (entry.notes as any)?.[name]?.shield ?? null), loweredSince: (entry.notes as any)?.claim?.loweredSince ?? null, deactivatedSince: (entry.notes as any)?.claim?.deactivatedSince ?? null }));
