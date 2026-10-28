@@ -1,8 +1,8 @@
 {
  "producedBy": "backend/scripts/lab/continue-produce.ts",
  "bench": "offline",
- "bodyRevision": "471050348259",
- "madeAt": "2026-10-28T12:42:13.863Z",
+ "bodyRevision": "e30443dc2ca2",
+ "madeAt": "2026-10-28T13:52:48.943Z",
  "answers": "promise/events-split-delivery",
  "fixtureSha256": "e97b0fda40be26fd2944c77642d0a7cfd62259b6e5de49def9aadd6cb8bcc51f",
  "output": {
