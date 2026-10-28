@@ -68,6 +68,14 @@ export const GO_REFUSED_PLACES = 1;
  * when there is one. (A refused place still stops the go at once: drawn again past it, the run 40 bench's body fell five cells.)
  */
 export const GO_AVOID_COST = 20;
+/**
+ * Run 45 (hold 3, q12 go 40 down from y=60): the executor walks each part of a way while its search is still going, and the parts turned from the
+ * way down (dig the floor) to the way round over the top (lay a floor) and back: it dug (191,59,188), laid a cobblestone there, dug it again,
+ * fell into the cell, and laid there again with the body in it (refused, the go stopped). A cell this go dug costs this much more to lay again,
+ * and one it laid this much more to dig again, for the rest of the go: the way goes on as it began, not back over its own work. (Under the 100 at
+ * which the route search never breaks a block: still the way when there is no other.)
+ */
+export const GO_REDO_COST = 60;
 /** The most times one go walks the part of a way a search found before its time ran out (each must come 2 m nearer). */
 export const GO_PARTIAL_WALKS = 6;
 /** The most mendings of a stuck body, without any headway between them, before the stop `stuck`. */
@@ -236,18 +244,21 @@ interface Plan { status: string; path: any[]; digs: Map<string, number>; places:
 const yieldNow = () => new Promise<void>(resolve => setImmediate(resolve));
 
 interface Relax { hazards?: boolean; tool?: boolean; blocks?: boolean; permissions?: boolean; limits?: boolean }
-interface State {
+export interface GoState {
   steps: number; dug: number; placed: number; redraws: number;
   veto: { code: string; text: string } | null;
   /** The blocks laid in a row that the world did not show. */
   refused: number;
   /** Run 45: the cells this go could not get into or lay in ("x,y,z"), avoided by the next drawings (`GO_AVOID_COST`). */
   avoid: Set<string>;
+  /** Run 45 (hold 3): the cells this go dug, and those it laid ("x,y,z"): not laid again, not dug again (`GO_REDO_COST`). */
+  dugCells: Set<string>;
+  laidCells: Set<string>;
 }
 
 // ---- the movements ---------------------------------------------------------------------------------------------------------------------
 
-function goMovements(bot: any, args: Required<Pick<GoArgs, 'maxDrop' | 'waterOk' | 'maxDig' | 'maxPlace'>> & { sprint: boolean }, rule: DigRule, placeHeld: string[], state: State, relax: Relax = {}): any {
+export function goMovements(bot: any, args: Required<Pick<GoArgs, 'maxDrop' | 'waterOk' | 'maxDig' | 'maxPlace'>> & { sprint: boolean }, rule: DigRule, placeHeld: string[], state: GoState, relax: Relax = {}): any {
   const mayDigAny = rule.names.size > 0 || !!relax.permissions;
   const mayPlaceAny = placeHeld.length > 0 || !!relax.blocks || !!relax.permissions;
   const movements = buildMovements(bot, false, args.sprint, true, true, mayDigAny, true, 1, false, args.waterOk, args.maxDrop, args.waterOk ? 4 : 10, mayPlaceAny, 2);
@@ -292,6 +303,10 @@ function goMovements(bot: any, args: Required<Pick<GoArgs, 'maxDrop' | 'waterOk'
     movements.exclusionAreasStep = [...(movements.exclusionAreasStep ?? []), avoided];
     movements.exclusionAreasPlace = [...(movements.exclusionAreasPlace ?? []), avoided];
   }
+  // Run 45 (hold 3): what this go dug is not laid again, what it laid is not dug again (the way does not undo its own work).
+  movements.exclusionAreasBreak = [...(movements.exclusionAreasBreak ?? []), (block: any) => redoCost(state.laidCells, block)];
+  // (mineflayer-pathfinder's walk forward onto a laid floor asks the place's exclusion of the cell above the one it lays: both are asked.)
+  movements.exclusionAreasPlace = [...(movements.exclusionAreasPlace ?? []), (block: any) => redoCost(state.dugCells, block, true)];
   // Moves that end in a hazard (beside lava, on magma...), or in water when it is not allowed, are not moves.
   const getNeighbors = movements.getNeighbors.bind(movements);
   const inWater = isWaterName(nameAt(bot, Math.floor(bot.entity.position.x), Math.floor(bot.entity.position.y), Math.floor(bot.entity.position.z)));
@@ -309,6 +324,12 @@ const distanceTo = (bot: any, cell: Cell) => Math.hypot(bot.entity.position.x - 
 const goalOf = (cell: Cell, range: number) => range > 0 ? new goals.GoalNear(cell.x + 0.5, cell.y, cell.z + 0.5, range) : new goals.GoalBlock(cell.x, cell.y, cell.z);
 const compositeOf = (cells: Cell[], range: number) => cells.length === 1 ? goalOf(cells[0], range) : new goals.GoalCompositeAny(cells.map(cell => goalOf(cell, range)));
 const keyOf = (cell: Cell) => `${cell.x},${cell.y},${cell.z}`;
+/** GO_REDO_COST for a block in `cells` (the cells this go dug, or laid), or with `below` for the one under it too, else 0. */
+export function redoCost(cells: ReadonlySet<string>, block: any, below = false): number {
+  const p = block?.position;
+  if (!p || !cells.size) return 0;
+  return cells.has(`${p.x},${p.y},${p.z}`) || (below && cells.has(`${p.x},${p.y - 1},${p.z}`)) ? GO_REDO_COST : 0;
+}
 /** How far a body steps back out of a cell a block is to be laid in (it never steps back more: a body far in is not moved). */
 const CLEAR_MAX_M = 0.35;
 /**
@@ -441,7 +462,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   const rule = digRuleOf(bot.registry, args.canDig);
   const searchCap = args.searchMs ?? 5000;
   const place = placeNamesOf(bot, args.canPlace);
-  const state: State = { steps: 0, dug: 0, placed: 0, redraws: 0, veto: null, refused: 0, avoid: new Set() };
+  const state: GoState = { steps: 0, dug: 0, placed: 0, redraws: 0, veto: null, refused: 0, avoid: new Set(), dugCells: new Set(), laidCells: new Set() };
   const start = feetCell(bot)!;
 
   // ---- how a line ends (the contract's result lines) ----
@@ -509,8 +530,9 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   const originalDig = host.dig, originalPlace = host.placeBlock;
   let counting = true;
   const countingDig = async function (this: unknown, ...rest: unknown[]) {
+    const at = (rest[0] as { position?: { x: number; y: number; z: number } } | undefined)?.position;
     const result = await originalDig.apply(host, rest);
-    if (counting) { state.dug++; lastWork = Date.now(); }
+    if (counting) { state.dug++; lastWork = Date.now(); if (at) state.dugCells.add(`${at.x},${at.y},${at.z}`); }
     return result;
   };
   /** A block the server did not take is not a floor: the route executor is not let walk on (run 40 bench: go went on over a refused place and fell four cells). */
@@ -539,7 +561,12 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
       throw error;
     }
     if (!counting) return result;
-    if (await laidAt(host, rest[0], rest[1])) { state.placed++; lastWork = Date.now(); state.refused = 0; return result; }
+    if (await laidAt(host, rest[0], rest[1])) {
+      state.placed++; lastWork = Date.now(); state.refused = 0;
+      const laid = placedCell(rest[0], rest[1]);
+      if (laid) state.laidCells.add(keyOf(laid));
+      return result;
+    }
     refusedPlace(facts(), placedCell(rest[0], rest[1]));
     throw new Error('The place was not taken');
   };
