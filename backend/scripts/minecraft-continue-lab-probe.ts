@@ -153,7 +153,7 @@ try {
       await ask(`give ${ACTOR} minecraft:iron_sword 1`); await ask(`item replace entity ${ACTOR} weapon.offhand with minecraft:shield`);
       await ask(`effect give ${ACTOR} minecraft:resistance 600 1 true`);
       await sleep(800);
-      await ask('summon minecraft:zombie 2.5 100 0.5 {PersistenceRequired:1b,Tags:["lab_enemy"]}');
+      await ask('summon minecraft:zombie 2.5 100 0.5 {PersistenceRequired:1b,Tags:["lab_enemy"],equipment:{head:{id:"minecraft:leather_helmet",count:1}}}');
       // wait for the melee reflex to hold the body with the zombie as its enemy
       const began = Date.now();
       let reflexSeen: any = null;
@@ -188,7 +188,7 @@ try {
   if (runs('handover_not_taken')) {
     await reset(actor);
     await ask(`give ${ACTOR} minecraft:iron_sword 1`); await ask(`effect give ${ACTOR} minecraft:resistance 600 1 true`);
-    await ask('summon minecraft:zombie 2.5 100 0.5 {PersistenceRequired:1b,Tags:["lab_enemy"]}'); await ask('summon minecraft:zombie -2.5 100 0.5 {PersistenceRequired:1b,Tags:["lab_enemy"]}');
+    await ask('summon minecraft:zombie 2.5 100 0.5 {PersistenceRequired:1b,Tags:["lab_enemy"],equipment:{head:{id:"minecraft:leather_helmet",count:1}}}'); await ask('summon minecraft:zombie -2.5 100 0.5 {PersistenceRequired:1b,Tags:["lab_enemy"],equipment:{head:{id:"minecraft:leather_helmet",count:1}}}');
     let seen: any = null; const began = Date.now();
     while (Date.now() - began < 12_000) { const mark = actor.floorReflexes?.handTarget; if (physicalRoots(actor).some(root => root.capability === 'floor-melee') && mark && Date.now() - mark.at < 1500) { seen = mark; break; } await sleep(15); }
     const others = Object.values(actor.entities as Record<string, any>).filter((entity: any) => entity?.name === 'zombie' && entity.id !== seen?.target).map((entity: any) => entity.id);

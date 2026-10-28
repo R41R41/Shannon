@@ -403,7 +403,7 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
       if (!readOnly) cancelIdleActions(this.bot, 'fca_command');
       if (command.kind === 'skill' && !readOnly) this.events?.begin(command);
       const ledger: ReflexLedger | undefined = this.reflexTag ? this.bot.reflexLedger : undefined;
-      const mark = ledger?.mark() ?? 0;
+      let mark = ledger?.mark() ?? 0;
       // r10 (run 34, +576: an urgent act met a flee that was digging down; it waited for the lock behind the reflex, was handed the lock in
       // the moment between two of the flee's segments and cut by the next, and its receipt came 4 s later, at its deadline, bare): a command
       // that moves the body and comes while a reflex holds it waits for the reflex to let go, and starts then (the time left of its deadline
@@ -432,6 +432,8 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
             while (Date.now() - handoverAt < 300 && !signal.aborted && (physicalActionBusy(this.bot) || reflexHeld(this.bot))) await delay(2);
             this.waits.delete(command.id);
             timing.reflexWaitMs = Date.now() - handoverAt;
+            // The reflex was stopped by us: the note of its cut is not a reflex that took the body from this act.
+            mark = ledger?.mark() ?? 0;
           }
         }
         let held: { by: string; ms: number; outcome: 'free' | 'late' | 'aborted' } | null;
