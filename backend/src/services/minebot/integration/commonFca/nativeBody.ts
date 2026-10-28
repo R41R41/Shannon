@@ -147,6 +147,7 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
   private lastSafety: Record<string, BodyValue> | null = null;
   private readonly reflexTag: boolean;
   private readonly onEnd = () => { this.connected = false; };
+  private readonly onVerticalEvidence = (evidence: { kind?: string } & Record<string, unknown>) => { try { this.opLog.note(String(evidence.kind ?? 'vertical_evidence'), evidence); } catch { /* the record is a help */ } };
   /** The running act's hand and pass, from its `minebotActStep` events (the task queue's progress in the poll); cleared when a command begins. */
   private stepProgress: Omit<MinecraftQueueProgress, 'id'> | null = null;
   private readonly onStep = (event: { index?: number; total?: number; iteration?: number; repeat?: number; status?: string }) => {
@@ -172,6 +173,8 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
     this.opLog = opLogOf(bot) ?? installOpLog(bot, new OpLog(opLogDirectory()));
     setMotorOpSink(bot, op => this.opLog.op(op));
     installPackTap(bot);
+    // The block updates and pushbacks that corrected a vertical hand's counts go into the continuous record (the boundary-2 check reads them with the operations).
+    bot.on('minebotVerticalEvidence', this.onVerticalEvidence);
     installHitRecord(bot, () => this.now());
     deathLedgerOf(bot);   // the deaths this connection sees, from the start (an attack on a creature seen to die a moment ago is "already")
     setReflexEventPrefix(bot, () => `reflex:${this.connectionId}`);
@@ -630,6 +633,7 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
   closeEvidence(context: Command['context']): void { this.goalEvidence.cancel(context); }
   async dispose(): Promise<void> {
     clearInterval(this.tickTimer);
+    this.bot.removeListener('minebotVerticalEvidence', this.onVerticalEvidence);
     setMotorOpSink(this.bot, null);
     this.goalEvidence.dispose();
     this.bot.removeListener('end', this.onEnd); this.bot.removeListener('minebotActionProgress', this.onProgress); this.bot.removeListener('minebotActStep', this.onStep);

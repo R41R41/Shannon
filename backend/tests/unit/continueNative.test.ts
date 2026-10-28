@@ -247,3 +247,13 @@ describe('the blows the body took (amendment A-4)', () => {
     await body.dispose();
   });
 });
+
+describe('the reasons of a hand\'s pack changes (amendment A-5)', () => {
+  it('an equip into an armour slot or the off hand is told as armour put on; an equip to the hand changes nothing', async () => {
+    const { handReasons } = await import('../../src/services/minebot/utils/packEvents.js');
+    expect(handReasons({ do: 'equip', item: 'iron_helmet', slot: 'head' })).toEqual({ loss: 'reflex_armor' });
+    expect(handReasons({ do: 'equip', item: 'shield', slot: 'offhand' })).toEqual({ loss: 'reflex_armor' });
+    expect(handReasons({ do: 'equip', item: 'iron_sword', slot: 'hand' })).toBeNull();
+    expect(handReasons({ do: 'equip', item: 'iron_sword' })).toBeNull();
+  });
+});

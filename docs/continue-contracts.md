@@ -1201,3 +1201,47 @@ interface ActResultOverflow {
 - `unit.code`（ItemOutcome）は、その項目の終わりを決めた手の code（行の `code`）か、列で捨てた時はその理由（`cleanup_stop`・`precondition`・`queue_dropped` など）。
 - 観測の `state.combat.recentHits` は `{ at: ISO, attackerId: number | null, attackerType: string, damage: number, life: number }[]`（直近 10 秒・最大 20 件・古い順）。`damage` はその 1 打の後の体力の落ちを、同じ更新を待っていた打ちの数で割った値（鎧や盾で落ちなければ 0）。
 - 操作の連続記録（`oplog`）の 1 行は `{ kind: 'hand_start', ...HandStart }` か `{ kind: 'op', at, command, hand, pass, life, op, detail?, by, action }`（`at` は ISO）。
+
+#### A-4 の 8 の型（頭の実装の形。頭が書き、体は読み物として同じ文を入れる）
+```ts
+/** 3 章の PromiseEvent への足し。 */
+interface PromiseEvent {
+  kind: 'made' | 'revised' | 'consumed' | 'gained' | 'moved' | 'lost_death' | 'unexplained' | 'released' | 'closed';
+  /** moved：持ち物の場所が変わった（箱へ入れた stored・箱から出した retrieved・防具の装着）。消費ではない。count は動いた量（いつも正。unexplained だけ符号つきで、負は「出来事が説明する量より少ない」）。 */
+  item?: string;                // 帰属先の定義（送った時の写し）の item
+}
+/** 3 章の PlanPromise への足し。 */
+interface PlanPromise { have?: number }   // 前の観測の値（have を足し引きせず数え直すための物。item が変わる改訂では捨てる）
+/** 3 章の LedgerSeen（頭が計画のチェックポイントの `fcaPlanLedgerSeen` に保存）。eventIds・lastObs が契約の 2 欄で、残りは任意。 */
+interface LedgerSeen {
+  eventIds: string[]; lastObs: { bodyBoot: string; connectionId: string; obsSeq: number } | null;
+  death?: { deathEpoch: string; deathSeq: number } | null;   // 前に読んだ死の数え方（deathBetween に渡す）
+  connections?: string[];                                    // 置き換わった接続（遅れて届いた古い接続の観測で have を戻さない）
+  ahead?: { promise: number; delta: number; connection: string; obsSeq: number | null }[];   // 観測より先に届いた出来事の効き（次の観測で「説明できない差」にしない）
+}
+```
+
+### A-5（10/28、頭の最終報告から）
+
+1. **docs の末尾**：頭が足した「A-4 の 8 の型」の文を、体の docs にも同じ字で入れる。両側の docs を同じにする。
+2. **受け取りの無いまま体が再起動した命令（境界 8 の `b8-body-restart`）**：頭は、その命令の結果を `settled_unknown` のまま、出来事について `lost: true` を記録し、LLM に「体が再起動したため、この命令の結果と出来事は分からない。観測で確かめる」と 1 度出す。
+   - 体が再起動すると出来事の記録は残らないので、events を取りに行っても返らない。取りに行かずに lost と書くのが正しい。
+   - 境界 8 の 7 場面がすべて通ることを確かめる。
+3. **置きが ok の後で世界が違っていた時の訂正**（`result/r45-hold3-place-ok-then-world-differs`）：体が実際に何を載せているか（欄と形）を 14 章に書く。頭はそれを `offerOnce` につなぐ。
+4. **`V2_ALWAYS` の PLAN 節**：「準備の必須は、reason を書いても省けない」は契約 7 章（`prep: skipped` と理由を書ける）と食い違う。契約が正。同じトークン数以内で「準備を省く時は skipped と理由を書く」の形に直す（8,800 以内を守る）。
+5. **体の `handReasons` に `equip`**：act の `equip` で防具を着けた時の理由が `unexplained` になる。体が `equip` を足し、帳簿は A-2 の 3（身に着けた）で出す。
+6. **local-gate の段 5**：頭のパッチ（`tools/continue-verify/local-gate-stage5.patch`）を体の担当が読み、OK なら取りまとめ役が Syzygy に当てる（main への合流の時に一緒に）。
+
+#### A-5 の 3 の型（体の実装の形。体が書く）
+```ts
+/** 6 章の Progress への足し（vertical）。置きが ok の後で世界が違っていた時の訂正の事実。 */
+interface Progress {
+  /** 数えた後で「もう無い」と分かった段（ブロックの更新・押し戻し・手の終わりの見直しで見つけた物。最大 8 件）。`done`（stepsValid）はこれで減る。 */
+  corrected?: { at: ActPos; was?: string; now: string; step: number }[];
+}
+```
+- 載る所は、vertical の手の行の `progress.corrected` と、成功の行の文（「置いた (191,59,188) が無くなった（今 air）（有効な段数を直した）」。失敗で止まった行は構造だけ。160 字を越えるため）。
+- 訂正で減るのは `progress.done`（stepsValid）だけで、`work.placeAttempts`・`placedConfirmed`・`stockUsed`・予算は戻らない。
+- 同じ訂正の元の証拠（block の更新・押し戻し）は、操作の連続記録に `{ kind: 'block_update' | 'forced_move', at, command, hand, life, ... }` の行で残る（境界 2 の照らし方）。
+- 手が終わった後で起きた訂正（手の途中でも終わりの見直しでも見ていない変化）は、体は載せない（観測の持ち物・地図で LLM が見る）。
+- act の `equip`（防具の欄・オフハンド）で持ち物から減った分は、理由 `reflex_armor` の出来事で出す（頭は「身に着けた」として扱う。名前に反射と付いているが、手の equip でも同じ）。

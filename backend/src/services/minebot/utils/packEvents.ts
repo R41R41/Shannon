@@ -111,7 +111,7 @@ export function trackPack(bot: PackBody): { finish(reasons: HandReasons, record:
  * The reasons by the hand's kind. Kinds that say their own (craft, make) are not here. A kind that is not here has none: whatever it changes is told as
  * `unexplained` (the body does not guess).
  */
-export function handReasons(hand: { do: string; fuel?: string; item?: string; op?: string }): HandReasons | null {
+export function handReasons(hand: { do: string; fuel?: string; item?: string; op?: string; slot?: string }): HandReasons | null {
   switch (hand.do) {
     case 'place': case 'pillarUp': return { loss: 'placed' };
     case 'dig': return { gain: 'picked' };
@@ -125,6 +125,8 @@ export function handReasons(hand: { do: string; fuel?: string; item?: string; op
     case 'smelt': return { gain: 'smelted', loss: name => (hand.fuel && name === hand.fuel) ? 'fuel' : 'ingredient' };
     // Amendment A-1: a chest's put and take are told as stored and retrieved (the ledger shows a change of place, not a use).
     case 'chest': return hand.op === 'put' ? { loss: 'stored' } : hand.op === 'take' || hand.op === 'takeAll' ? { gain: 'retrieved' } : null;
+    // Amendment A-5: an equip into an armour slot (or the off hand) moves the piece from the pack to the body: told as the same reason the reflex's armour carries (reflex_armor), which the ledger shows as worn, not used.
+    case 'equip': return hand.slot && hand.slot !== 'hand' ? { loss: 'reflex_armor' } : null;
     case 'obsidian': case 'portal': return { gain: 'picked', loss: 'placed' };
     default: return null;
   }

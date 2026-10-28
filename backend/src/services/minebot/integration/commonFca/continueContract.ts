@@ -23,6 +23,8 @@ export interface Progress {
   work?: { dug: number; placed?: number; placeAttempts?: number; stockUsed?: number; placedConfirmed?: number };
   /** vertical: the ore the hand saw on the way (told, never followed; 8 at most). */
   seen?: { block: string; at: ActPos }[];
+  /** vertical (amendment A-5): the steps found no longer there after they were counted (a block update, a look again); done (stepsValid) was lowered by them, the counts of what was sent and confirmed were not. */
+  corrected?: { at: ActPos; was?: string; now: string; step: number }[];
   fromStopM?: number; searchEndM?: number;
   lastSearch?: { status: 'success' | 'partial' | 'timeout' | 'no_path'; len: number; nodes: number; ms: number; endM?: number;
     blockedAround?: { at: ActPos; block: string; diggable: boolean }[] };

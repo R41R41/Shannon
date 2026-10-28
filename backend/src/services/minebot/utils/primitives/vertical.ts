@@ -151,6 +151,8 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
     moved++;
   };
   /** A block update at a cell a level stands on: the level stops being (or becomes again) a level. Only what is observed counts. */
+  /** Amendment A-5: the steps that were found no longer there (a block update or a look again), told once in the progress and the line. */
+  const corrections: Array<{ at: { x: number; y: number; z: number }; was?: string; now: string; step: number }> = [];
   const onBlockUpdate = (_old: any, next: any) => {
     const position = next?.position ?? _old?.position;
     if (!position) return;
@@ -165,6 +167,7 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
       if (holds !== level.valid) {
         level.valid = holds;
         evidence({ kind: 'block_update', at: { x: position.x, y: position.y, z: position.z }, from: nameOf(_old), to: nameOf(next), usedFor: 'steps_valid', step: level.index });
+        if (!holds && corrections.length < 8) corrections.push({ at: { x: position.x, y: position.y, z: position.z }, was: nameOf(_old), now: nameOf(next), step: level.index });
       }
     }
   };
@@ -180,7 +183,10 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
       if (holds !== level.valid) {
         level.valid = holds;
         const bad = level.needs.find(need => { const block = blockAt(bot, need.cell); return block && !satisfies(need, block); });
-        if (!holds && bad) evidence({ kind: 'block_update', at: bad.cell, to: nameOf(blockAt(bot, bad.cell)), usedFor: 'steps_valid', step: level.index });
+        if (!holds && bad) {
+          evidence({ kind: 'block_update', at: bad.cell, to: nameOf(blockAt(bot, bad.cell)), usedFor: 'steps_valid', step: level.index });
+          if (corrections.length < 8) corrections.push({ at: { x: bad.cell.x, y: bad.cell.y, z: bad.cell.z }, now: nameOf(blockAt(bot, bad.cell)), step: level.index });
+        }
       }
     }
   };
@@ -190,7 +196,7 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
     // A fall of the count that arrived after the last place was read is the last place's.
     for (const [block, mark] of stockMark) { const now1 = inventoryCount(bot, block); if (now1 < mark) { work.stockUsed += mark - now1; stockMark.set(block, now1); } }
     const here = feetCell(bot) ?? at;
-    return { unit: 'step', done: valid(), left: leftFrom(here), at: here, ...(moved > 0 ? { msPerUnit: Math.round((Date.now() - startedAt) / moved) } : {}), work: { ...work }, ...(seen.length ? { seen: seen.map(entry => ({ block: entry.block, at: { ...entry.at } })) } : {}) };
+    return { unit: 'step', done: valid(), left: leftFrom(here), at: here, ...(moved > 0 ? { msPerUnit: Math.round((Date.now() - startedAt) / moved) } : {}), work: { ...work }, ...(corrections.length ? { corrected: corrections.map(entry => ({ ...entry, at: { ...entry.at } })) } : {}), ...(seen.length ? { seen: seen.map(entry => ({ block: entry.block, at: { ...entry.at } })) } : {}) };
   };
 
   // ---- the clock, the stop, the body ----
@@ -591,6 +597,7 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
 
   // ---- the run ----
   const tail = () => `${cellText(feetCell(bot) ?? at)} 段 ${valid()}・掘 ${work.dug}・置 ${work.placeAttempts}${work.placedConfirmed !== work.placeAttempts ? `（確 ${work.placedConfirmed}）` : ''}`;
+  const correctedText = () => (corrections.length ? `。置いた ${corrections.slice(0, 3).map(entry => `${cellText(entry.at)} が無くなった（今 ${entry.now}）`).join('・')}（有効な段数を直した）` : '');
   const seenText = () => (seen.length ? `。鉱石 ${seen.slice(0, 3).map(entry => `${entry.block}${cellText(entry.at)}`).join(' ')}${seen.length > 3 ? ` ほか${seen.length - 3}` : ''}` : '');
 
   bot.on?.('blockUpdate', onBlockUpdate);
@@ -615,7 +622,7 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
     }
     lookAgain();
     const here = feetCell(bot) ?? at;
-    return { ok: true, text: `vertical 着いた ${tail()}${seenText()}`, at: here, from: start, progress: progress() };
+    return { ok: true, text: `vertical 着いた ${tail()}${seenText()}${correctedText()}`, at: here, from: start, progress: progress() };
   } catch (error) {
     if (error instanceof VStop) {
       // A stop in the air (a jump that laid nothing): the position told is where the body lands, not where it was at that instant.

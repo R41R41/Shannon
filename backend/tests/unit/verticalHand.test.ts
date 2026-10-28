@@ -258,6 +258,9 @@ describe('vertical: what happened to the levels afterwards (stepsValid) and the 
     expect(outcome.ok).toBe(true);
     expect(feetCell(sim.bot)).toEqual(at(0, 54, 10));
     expect(outcome.progress!.done).toBe(9);
+    // Amendment A-5: the step that was found gone is named in the structure and in the line; the counts of what was sent and confirmed are not lowered.
+    expect(outcome.progress!.corrected).toEqual([{ at: at(0, 60, 3), was: 'andesite', now: 'air', step: 3 }]);
+    expect(outcome.text).toContain('が無くなった');
     expect(workOf(outcome).dug).toBe(sim.bot.dugBlocks.length);
     expect(workOf(outcome).placeAttempts).toBe(0);
     expect(events.filter(event => event.usedFor === 'steps_valid')).toEqual([expect.objectContaining({ kind: 'block_update', at: at(0, 60, 3), from: 'andesite', to: 'air', step: 3 })]);
