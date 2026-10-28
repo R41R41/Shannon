@@ -1,6 +1,6 @@
 {
  "contract": "measure",
- "version": 2,
+ "version": 3,
  "scene": "列の今と、手の予定の効果を最後の入力へ。同じ目的の go を二重に出さない書き方の試し（コードで断らない）",
  "source": "実走 45（run45-live.md 137 行）: 同じ why・同じ行き先の go を 4 秒後にもう一度列に出した",
  "known": [

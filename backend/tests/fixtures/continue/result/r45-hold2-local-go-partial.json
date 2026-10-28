@@ -1,14 +1,14 @@
 {
  "contract": "result",
- "version": 2,
- "scene": "近い go の時間切れ（4 段上の畑、道が見つかった直後に 60 秒）: 止まった位置からの残り・見込み・使った秒を出し、続けるかは LLM",
+ "version": 3,
+ "scene": "近い go の時間切れ（4 段上の畑、道が見つかった直後に 60 秒）: 止まった位置からの残り・最後の道探し（lastSearch）・使った秒を出し、続けるかは LLM",
  "source": "実走 45 保留 2（run45-live.md 45〜47 行）",
  "known": [
   "確か: 「limit_time: 60 秒の上限に着いた（行き先まで あと 6m） (212,61,201) 道 50 歩・掘 16」",
   "確か: 最後に success（(211,65,205) まで len 5）が出た直後に 60 秒"
  ],
  "decided": [
-  "決め: go の結果に、最後の道探しの結果（見つかった・長さ）を出す"
+  "決め: Progress.lastSearch（型は 1 章）"
  ],
  "hypothesis": [],
  "input": {
@@ -45,11 +45,13 @@
     "work": {
      "dug": 16,
      "placed": 0
+    },
+    "lastSearch": {
+     "status": "success",
+     "len": 5,
+     "nodes": "n",
+     "ms": "n"
     }
-   },
-   "lastSearch": {
-    "status": "success",
-    "len": 5
    }
   }
  },

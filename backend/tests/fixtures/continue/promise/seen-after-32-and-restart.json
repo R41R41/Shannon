@@ -1,0 +1,31 @@
+{
+ "contract": "promise",
+ "version": 3,
+ "scene": "出来事 e を反映 → 後の 32 件で e が表示から落ちる → 頭を再起動 → e が再び届く: 重複除去の記録（LedgerSeen）で 2 度反映しない",
+ "source": "Codex CONTRACTS-v2.md（2）10",
+ "known": [],
+ "decided": [
+  "決め: LedgerSeen は表示とは別に保存し続ける"
+ ],
+ "hypothesis": [],
+ "input": {
+  "applied": [
+   "skill:q69:1:1:2"
+  ],
+  "then": [
+   "32 more events",
+   "head restart",
+   "skill:q69:1:1:2 again"
+  ]
+ },
+ "expected": {
+  "appliedCount": {
+   "skill:q69:1:1:2": 1
+  },
+  "displayLedgerHas": false,
+  "seenHas": true
+ },
+ "checks": [
+  "頭"
+ ]
+}

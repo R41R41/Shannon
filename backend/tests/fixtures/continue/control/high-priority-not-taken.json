@@ -1,6 +1,6 @@
 {
  "contract": "control",
- "version": 2,
+ "version": 3,
  "scene": "溶岩・息・食事・低体力の逃げの間に頭の fight が来ても奪わない",
  "source": "floorReflexes.ts・lavaSafety.ts の優先度",
  "known": [],

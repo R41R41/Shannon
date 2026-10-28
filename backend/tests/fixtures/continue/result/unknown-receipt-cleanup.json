@@ -1,6 +1,6 @@
 {
  "contract": "result",
- "version": 2,
+ "version": 3,
  "scene": "受け取りが unknown。頭は LLM に届け（delivered）、すぐ期限つきの片付けを送る。解放を確かめる（released）まで動かす命令を送らない。遅れた本物の結果は訂正",
  "source": "Codex CONTRACTS.md（1）8、minecraftControl.ts receiptOf()、minecraftLlmcQueue.ts settleFlag()",
  "known": [

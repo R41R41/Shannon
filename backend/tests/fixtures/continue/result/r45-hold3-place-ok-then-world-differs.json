@@ -1,18 +1,19 @@
 {
  "contract": "result",
- "version": 2,
- "scene": "置きが ok の後に、そのマスが消えて体が下がった: 段数と置いた数を訂正し、事実を 1 度出す",
- "source": "実走 45 保留 3（run45-live.md 69〜70 行）",
+ "version": 3,
+ "scene": "【人の作った場面】置きが ok の後に、そのマスが消えて体が下がった: 有効な段数を訂正し、事実を 1 度出す。実走の保留 3 では、丸石が消えた理由は仮説のまま",
+ "source": "実走 45 保留 3（run45-live.md 69〜70 行）。この見本は block→air と forcedMove を人が入れた場面で、実走で確かめた事実ではない",
  "known": [
   "確か: (191,59,188) へ置いて ok → 約 3 秒後に同じマスへまた置こうとして断られた（体はそのマスの中）"
  ],
  "decided": [
-  "決め: 置いた後の block の更新・押し戻し（forcedMove）で、確かめた数を直す"
+  "決め: 訂正で減るのは stepsValid だけ。placedConfirmed（その時に確かめた事実）と予算は戻さない"
  ],
  "hypothesis": [
-  "仮説: 丸石が消えた理由（サーバーの取り消しか、別の掘り）は確かめていない"
+  "仮説: 実走で丸石が消えた理由（サーバーの取り消しか、別の掘り）は確かめていない"
  ],
  "input": {
+  "artificial": true,
   "events": [
    {
     "t": 0,
@@ -21,7 +22,8 @@
      59,
      188
     ],
-    "ok": true
+    "ok": true,
+    "confirmed": true
    },
    {
     "t": 1.5,
@@ -42,8 +44,10 @@
  },
  "expected": {
   "work": {
-   "placed": 0
+   "placeAttempts": 1,
+   "placedConfirmed": 1
   },
+  "stepsValidDelta": -1,
   "fact": {
    "mustContain": [
     "置いた (191,59,188) が無くなった"
@@ -51,7 +55,7 @@
   }
  },
  "checks": [
-  "体: 確かめた置きの数",
+  "体: 4 つの数",
   "頭: 訂正の 1 行"
  ]
 }

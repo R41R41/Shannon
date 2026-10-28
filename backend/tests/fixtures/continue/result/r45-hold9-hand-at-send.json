@@ -1,0 +1,50 @@
+{
+ "contract": "result",
+ "version": 3,
+ "scene": "保留 9: 置きを送る時の手と、終わった時の手を分けて記録する。送る前に許されたブロックを手に持たせる",
+ "source": "実走 45 保留 9。黒箱の held は、1.6 秒待って終わった時の手（その 0.3 秒前に始まった掘りがツルハシに持ち替えた）",
+ "known": [
+  "確か: 旧の黒箱は held を終わった時に記録した",
+  "確か: rel70 の持ち替えは、送る時に丸石を持っていれば何もしない"
+ ],
+ "decided": [
+  "決め: 黒箱の place に held（送った時）・heldAfter（終わった時）・ref・face・inCell"
+ ],
+ "hypothesis": [
+  "仮説: 実走の保留 9 で送った時に丸石を持っていたか（旧の黒箱では分からない）"
+ ],
+ "input": {
+  "cases": [
+   {
+    "handAtSend": "cobblestone",
+    "digDuringWait": true,
+    "handAtEnd": "diamond_pickaxe"
+   },
+   {
+    "handAtSend": "iron_pickaxe",
+    "allowed": [
+     "cobblestone"
+    ]
+   }
+  ]
+ },
+ "expected": {
+  "cases": [
+   {
+    "box": {
+     "held": "cobblestone",
+     "heldAfter": "diamond_pickaxe"
+    }
+   },
+   {
+    "equipBeforeSend": "cobblestone",
+    "box": {
+     "k": "place_hand_fixed"
+    }
+   }
+  ]
+ },
+ "checks": [
+  "体"
+ ]
+}

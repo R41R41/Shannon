@@ -1,6 +1,6 @@
 {
  "contract": "promise",
- "version": 2,
+ "version": 3,
  "scene": "同じ受け取りが 2 度届く（poll の重複）。出来事の id で 1 度だけ反映",
  "source": "境界 8",
  "known": [],

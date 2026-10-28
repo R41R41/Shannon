@@ -1,6 +1,6 @@
 {
  "contract": "control",
- "version": 2,
+ "version": 3,
  "scene": "melee の episode が打ちの上限に着いた。急ぎの知らせを 1 度出し、既に構えていた盾を 3 秒まで続ける（延ばさない）",
  "source": "floorReflexes.ts（MELEE_MAX_HITS・MELEE_MAX_HANDS）。FloorBudget は arrow・eat・armor の時間の予算で別物",
  "known": [

@@ -1,0 +1,49 @@
+{
+ "contract": "control",
+ "version": 3,
+ "scene": "盾の使用権は根の文脈が持ち、常駐の盾はその委譲の下で動く。fight の中で打つ時に下げ、次の tick で上げ直す（今の守りを落とさない）",
+ "source": "Codex CONTRACTS-v2.md（2）6、fight.ts（盾は常駐の盾に任せる）・shieldBlock.ts（attack の包みが下げ、上げ直す）",
+ "known": [
+  "確か: 今の fight は盾を自分で上げず、常駐の盾に任せている"
+ ],
+ "decided": [
+  "決め: 「一度も下がらない」は引き渡しの区間だけ"
+ ],
+ "hypothesis": [],
+ "input": {
+  "holder": {
+   "kind": "command",
+   "hand": "fight",
+   "shieldDelegated": true
+  },
+  "ticks": [
+   {
+    "t": 0,
+    "blow": true
+   },
+   {
+    "t": 1
+   },
+   {
+    "t": 2,
+    "blow": true
+   },
+   {
+    "t": 3
+   }
+  ]
+ },
+ "expected": {
+  "shieldBy": "resident_under_holder",
+  "shieldUpAt": [
+   false,
+   true,
+   false,
+   true
+  ],
+  "idleOnly": false
+ },
+ "checks": [
+  "体（B）"
+ ]
+}

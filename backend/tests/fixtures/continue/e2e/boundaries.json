@@ -1,6 +1,6 @@
 {
  "contract": "e2e",
- "version": 2,
+ "version": 3,
  "benches": {
   "A": "再生の台（VM、run-replay.sh・scene-case.py、本物の体と写したワールド）",
   "B": "隔離ラボ（VM、本物のサーバー・bot・反射・盾・道探し）。D4 はここ",
@@ -96,7 +96,8 @@
    "pass": [
     "死の時刻より後に、古い life の命令の motorOps が 0",
     "待っていた古い命令は 1 つも始まらない",
-    "awaiting_model の返事は discarded life_changed"
+    "awaiting_model の返事は discarded life_changed",
+    "操作の記録は輪ではなく、台の始めから続けて取った物で判定する"
    ]
   },
   {
@@ -137,13 +138,12 @@
    ],
    "fixtures": [
     "result/unknown-receipt-cleanup.json",
-    "promise/same-receipt-twice.json"
+    "result/unknown-state-machine.json",
+    "promise/same-receipt-twice.json",
+    "promise/seen-after-32-and-restart.json"
    ],
    "pass": [
-    "台本: 受け取りの取りこぼし・同じ poll の重複・体のつなぎ直し・頭の再起動・体の再起動・lease の交代を、それぞれ起こす",
-    "同じ命令の motorOps が 2 回の実行に分かれない",
-    "不明の項目が自動で出し直されない",
-    "帳簿に同じ出来事が 2 度入らない"
+    "boundary8Scenes の 6 場面それぞれで: 同じ命令の操作が 2 回の実行に分かれない・不明の項目が自動で出し直されない・帳簿に同じ出来事が 2 度入らない・訂正の回数が表どおり"
    ]
   },
   {
@@ -173,10 +173,12 @@
    "fixtures": [
     "measure/urgent-max-input.json",
     "measure/live-before-after-fish.json",
-    "control/fight-damage-facts.json"
+    "control/fight-damage-facts.json",
+    "measure/one-time-fact-delivery.json"
    ],
    "pass": [
-    "最大の長さの入力で、8 章の規範の表の物が最後の要求のバイトに残る"
+    "最大の長さの入力の普通・急ぎ・圧縮後のそれぞれで、規範の表の物が具体的な値と id で最後の要求のバイトに残る",
+    "1 度出す事実は届いたと記録されるまで持ち越される"
    ]
   }
  ],
@@ -189,5 +191,75 @@
   "引き継ぎの判定の間に、死・低体力・別の安全の反射が取る",
   "同じ life でポータルを移った後に、前の次元の別の項目が待っている",
   "最大の長さの結果・帳簿・急ぎの live を、本物の受信の検査と最後の要求のバイトまで通す"
- ]
+ ],
+ "boundary8Scenes": [
+  {
+   "id": "b8-lost-receipt",
+   "inject": "q1 の受け取りを頭が受ける直前に 1 度捨てる",
+   "command": "q1",
+   "corrections": 1,
+   "deadline": "cleanup 5 s",
+   "records": [
+    "receipt",
+    "cleanup receipt",
+    "corrected row"
+   ]
+  },
+  {
+   "id": "b8-dup-poll",
+   "inject": "q1 の受け取りを載せた poll を 2 度送る",
+   "command": "q1",
+   "corrections": 0,
+   "deadline": null,
+   "records": [
+    "one applied receipt",
+    "ledger event once"
+   ]
+  },
+  {
+   "id": "b8-reconnect",
+   "inject": "q2 の実行中に体の接続を切ってつなぎ直す",
+   "command": "q2,q3",
+   "corrections": 0,
+   "deadline": "first poll of the new connection",
+   "records": [
+    "first poll",
+    "q3 connection_changed"
+   ]
+  },
+  {
+   "id": "b8-head-restart",
+   "inject": "q2 の実行中に頭を再起動",
+   "command": "q2",
+   "corrections": "0|1",
+   "deadline": "cleanup 5 s after start",
+   "records": [
+    "cleanup at start",
+    "headBoot registration",
+    "q2 state"
+   ]
+  },
+  {
+   "id": "b8-body-restart",
+   "inject": "q2 の実行中に体を再起動",
+   "command": "q2",
+   "corrections": 0,
+   "deadline": "first poll",
+   "records": [
+    "released",
+    "unexplained diff"
+   ]
+  },
+  {
+   "id": "b8-lease-swap",
+   "inject": "q2 の待ちの間に lease を新しくする",
+   "command": "q2",
+   "corrections": 0,
+   "deadline": null,
+   "records": [
+    "q2 lease_expired"
+   ]
+  }
+ ],
+ "note": "実走 45 は直しの実走で途中で版が変わったので、版の効き目の比べには使わない"
 }

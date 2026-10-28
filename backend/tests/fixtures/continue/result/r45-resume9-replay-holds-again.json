@@ -1,0 +1,50 @@
+{
+ "contract": "result",
+ "version": 3,
+ "scene": "再開 9 → 保留 10: 出し直しが別の理由（search_timeout）でまた保留になった。その間に列に入っていた判断の項目は捨てた。次の再開の後の最初の判断へ、両方を先に届ける",
+ "source": "実走 45 再開 9・保留 10（run45-live.md 186〜193 行）",
+ "known": [
+  "確か: 出し直しは search_timeout（6,016 マス、len 0）で、理由が go_stuck と違うので再び保留",
+  "確か: 「[p5] 近い鉄を掘る（鉄3・脚に不足）」（08:59:31Z）が列に入っていたが捨てられた"
+ ],
+ "decided": [
+  "決め: 出し直しの結果と捨てた項目を保留の記録に残し、次の再開の後の最初の判断へ先に届ける"
+ ],
+ "hypothesis": [],
+ "input": {
+  "resume": "replay",
+  "held": {
+   "item": "q60",
+   "code": "go_stuck"
+  },
+  "replay": {
+   "code": "search_timeout",
+   "heldAgain": true
+  },
+  "droppedMeanwhile": [
+   {
+    "item": "q65",
+    "why": "[p5] 近い鉄を掘る（鉄3・脚に不足）"
+   }
+  ],
+  "nextResume": "skip"
+ },
+ "expected": {
+  "holdRecord": {
+   "replayResult": "search_timeout",
+   "dropped": [
+    "q65"
+   ]
+  },
+  "firstLineAfterNextResume": {
+   "mustContain": [
+    "出し直しは search_timeout で再び保留",
+    "q65",
+    "近い鉄を掘る"
+   ]
+  }
+ },
+ "checks": [
+  "頭（台 C）"
+ ]
+}

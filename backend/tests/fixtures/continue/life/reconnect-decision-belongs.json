@@ -1,0 +1,27 @@
+{
+ "contract": "life",
+ "version": 3,
+ "scene": "つなぎ直し: 判断の入力は、読んだ観測の bodyBoot・connectionId に属する。返事が来た時に接続が替わっていれば捨てる",
+ "source": "Codex CONTRACTS-v2.md（2）1",
+ "known": [],
+ "decided": [
+  "決め: 2 章のつなぎ直しの帰属"
+ ],
+ "hypothesis": [],
+ "input": {
+  "decisionReadObs": {
+   "bodyBoot": "bb-1",
+   "connectionId": "c-1"
+  },
+  "now": {
+   "bodyBoot": "bb-1",
+   "connectionId": "c-2"
+  }
+ },
+ "expected": {
+  "discarded": "connection_changed"
+ },
+ "checks": [
+  "頭"
+ ]
+}

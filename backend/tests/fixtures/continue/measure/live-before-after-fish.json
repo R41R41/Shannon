@@ -1,13 +1,13 @@
 {
  "contract": "measure",
- "version": 2,
- "scene": "live の加工の前後。鱈・鮭が「最後の要求に届いた」かで確かめる",
- "source": "Codex DESIGN.md（1）D6",
+ "version": 3,
+ "scene": "live の加工の前後。24 m 以内に鱈・鮭の 2 件しかない: 3 件に足りないので 2 件とも出す（無い分を作らない）。普通・急ぎの両方",
+ "source": "Codex DESIGN.md（1）D6、Codex CONTRACTS-v2.md（2）12",
  "known": [
   "確か: 今は魚が無関係の扱いで、外しても 16m の枠"
  ],
  "decided": [
-  "決め: 食べ物の候補は 24 m、食料 40 点未満で 3 件以上"
+  "決め: 候補が 3 件より少ない時は全部"
  ],
  "hypothesis": [],
  "input": {
@@ -39,14 +39,15 @@
  "expected": {
   "shownMustContain": {
    "normal": [
-    "cod",
-    "salmon"
+    "cod #501 18.2m",
+    "salmon #502 21.0m"
    ],
    "urgent": [
-    "cod",
-    "salmon"
+    "cod #501",
+    "salmon #502"
    ]
-  }
+  },
+  "invented": 0
  },
  "checks": [
   "頭（台 D）"

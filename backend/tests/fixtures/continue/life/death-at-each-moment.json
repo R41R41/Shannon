@@ -1,6 +1,6 @@
 {
  "contract": "life",
- "version": 2,
+ "version": 3,
  "scene": "実行中・反射待ち・列待ち・LLM の返事待ちの 4 つの瞬間に死ぬ。死の時刻より後に、古い命の命令の操作が 0 件。待っていた古い命令は始まらない",
  "source": "Codex CONTRACTS.md（3）life",
  "known": [],

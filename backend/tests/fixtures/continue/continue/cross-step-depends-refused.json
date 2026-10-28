@@ -1,0 +1,37 @@
+{
+ "contract": "continue",
+ "version": 3,
+ "scene": "段をまたぐ dependsOn: 前の段の q9 に頼る act は、送る前に明示のエラーで返す（使える印を示す）",
+ "source": "12 章の決め 1（v3）",
+ "known": [],
+ "decided": [
+  "決め: 実行の時の depends_unknown まで遅らせない"
+ ],
+ "hypothesis": [],
+ "input": {
+  "queueNow": {
+   "queue": "t-run:hb-1:41",
+   "items": [
+    "q12",
+    "q13"
+   ]
+  },
+  "act": {
+   "dependsOn": [
+    "q9"
+   ]
+  }
+ },
+ "expected": {
+  "sent": false,
+  "textMustContain": [
+   "q9",
+   "前の段",
+   "q12",
+   "q13"
+  ]
+ },
+ "checks": [
+  "頭"
+ ]
+}

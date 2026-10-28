@@ -1,6 +1,6 @@
 {
  "contract": "plan",
- "version": 2,
+ "version": 3,
  "scene": "準備の節を満たさないまま下りた: 頭は skipped を書かず、事実を 1 度出す。skipped にするかは LLM の plan.update",
  "source": "Codex CONTRACTS.md（4）方針、実走 43 の meter「地下の準備 … 1,801 秒遅れ」",
  "known": [

@@ -1,12 +1,11 @@
 {
  "contract": "life",
- "version": 2,
- "scene": "命の番号のファイルが読めない時は、黙って 1 へ戻さない。時刻から作る大きな番号で始め、黒箱に書く",
- "source": "12 章の決め 2",
+ "version": 3,
+ "scene": "命の番号のファイルが読めない時は、黙って 1 へ戻さない。時刻から作る番号で始め、advancedBy file_unreadable。死ではない（deathSeq は増えない）",
+ "source": "12 章の決め 2、Codex CONTRACTS-v2.md（2）2",
  "known": [],
  "decided": [
-  "決め: 読めない → 時刻（ms）で始める",
-  "決め: ファイルが無い（初めて）→ 1"
+  "決め: 失効の識別と死の証拠を分ける"
  ],
  "hypothesis": [],
  "input": {
@@ -16,11 +15,16 @@
    },
    {
     "file": "corrupt",
-    "nowMs": 1793164759174
+    "nowMs": 1793164759174,
+    "before": {
+     "life": 7,
+     "deathSeq": 3
+    }
    },
    {
     "file": {
-     "life": 7
+     "life": 7,
+     "deathSeq": 3
     }
    }
   ]
@@ -28,18 +32,28 @@
  "expected": {
   "cases": [
    {
-    "life": 1
+    "life": 1,
+    "deathSeq": 0
    },
    {
     "life": 1793164759174,
-    "boxNote": "life_file_unreadable"
+    "advancedBy": "file_unreadable",
+    "deathSeq": "unknown_kept_as_is_or_0",
+    "boxNote": "life_file_unreadable",
+    "head": {
+     "oldCommandsInvalid": true,
+     "arrival": "not_death",
+     "lostDeath": false
+    }
    },
    {
-    "life": 7
+    "life": 7,
+    "deathSeq": 3
    }
   ]
  },
  "checks": [
-  "体"
+  "体",
+  "頭: arrivalOf は deathSeq で"
  ]
 }

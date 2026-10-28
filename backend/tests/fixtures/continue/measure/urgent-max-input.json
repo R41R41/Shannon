@@ -1,38 +1,112 @@
 {
  "contract": "measure",
- "version": 2,
- "scene": "最大の長さの急ぎの入力でも、規範の表の物が最後の要求のバイトに残る（境界 10）",
- "source": "Codex CONTRACTS.md（3）境界 10、minecraftControlValidation.ts（結果 16,000 字）",
+ "version": 3,
+ "scene": "最大の長さの入力でも、規範の表の物が最後の要求のバイトに残る。見出しの語ではなく、具体的な値と id で照らす。普通・急ぎ・圧縮後をそれぞれ",
+ "source": "Codex CONTRACTS-v2.md（3）、minecraftControlValidation.ts（結果 16,000 字）",
  "known": [
-  "確か: 結果の JSON は 16,000 字が上限、地図を落としても上限内になる保証が無い"
+  "確か: 結果の JSON は 16,000 字が上限"
  ],
  "decided": [
   "決め: 8 章の規範の表"
  ],
  "hypothesis": [],
  "input": {
-  "build": {
-   "urgent": true,
-   "liveLines": "max",
-   "resultChars": 16000,
-   "promises": 4,
-   "queueItems": 3,
-   "nearMobs": 20,
-   "hitsLast10s": 5
-  }
+  "state": {
+   "hp": 6.4,
+   "food": 11,
+   "saturation": 0.0,
+   "foods": [
+    {
+     "item": "bread",
+     "count": 1
+    }
+   ],
+   "hits": [
+    {
+     "t": -9,
+     "amount": 5.3,
+     "by": "zombie #2601"
+    },
+    {
+     "t": -4,
+     "amount": 4.9,
+     "by": "zombie #2601"
+    }
+   ],
+   "holder": {
+    "kind": "reflex",
+    "reflex": "floor-melee",
+    "target": 2601
+   },
+   "life": 3,
+   "promises": [
+    {
+     "id": 3,
+     "line": "約束 #3 作業台用の板 4: 今 2"
+    },
+    {
+     "id": 4,
+     "line": "約束 #4 地下で食べる分の食料 20 点: 今 11 点"
+    },
+    {
+     "id": 5,
+     "line": "約束 #5 はしご用の板 2: 今 0"
+    },
+    {
+     "id": 6,
+     "line": "約束 #6 黒曜石 10: 今 7"
+    }
+   ],
+   "queue": [
+    {
+     "item": "q52",
+     "state": "running",
+     "effect": "attack #2601"
+    },
+    {
+     "item": "q53",
+     "state": "waiting",
+     "effect": "go (172,-19,236)"
+    }
+   ],
+   "free": 0,
+   "foodCandidates": [
+    {
+     "name": "cod",
+     "id": 501,
+     "distance": 18.2
+    }
+   ],
+   "filler": {
+    "resultChars": 16000,
+    "liveLines": 400,
+    "nearMobs": 20
+   }
+  },
+  "versions": [
+   "normal",
+   "urgent",
+   "compressed"
+  ]
  },
  "expected": {
-  "lastRequestMustContain": [
-   "体力",
-   "満腹",
-   "食べられる物",
-   "打たれた",
-   "持ち主",
-   "命",
-   "約束 #",
-   "列",
-   "空き",
-   "食べ物の候補"
+  "eachVersionMustContain": [
+   "6.4",
+   "bread×1",
+   "zombie #2601",
+   "5.3",
+   "4.9",
+   "floor-melee",
+   "命 3",
+   "約束 #3",
+   "約束 #4",
+   "約束 #5",
+   "約束 #6",
+   "q52",
+   "q53",
+   "(172,-19,236)",
+   "空き 0",
+   "cod #501"
   ]
  },
  "checks": [

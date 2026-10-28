@@ -1,0 +1,48 @@
+{
+ "contract": "life",
+ "version": 3,
+ "scene": "頭の起動の登録: 体は 1 つの接続の中で最後に受けた返事の headBoot を今の頭とする。変わったら前の headBoot の待ちを捨て、その命令を断る",
+ "source": "Codex CONTRACTS-v2.md（2）1",
+ "known": [],
+ "decided": [
+  "決め: MinecraftControlReply.headBoot"
+ ],
+ "hypothesis": [],
+ "input": {
+  "replies": [
+   {
+    "headBoot": "hb-1",
+    "commands": [
+     "q1"
+    ]
+   },
+   {
+    "headBoot": "hb-2",
+    "commands": []
+   },
+   {
+    "headBoot": "hb-2",
+    "commands": [
+     "q9 (context.headBoot hb-1)"
+    ]
+   }
+  ],
+  "waitingBefore": [
+   "q2 (hb-1)"
+  ]
+ },
+ "expected": {
+  "currentHeadBoot": "hb-2",
+  "q2": {
+   "droppedBecause": {
+    "code": "connection_changed"
+   }
+  },
+  "q9": {
+   "refused": "connection_changed"
+  }
+ },
+ "checks": [
+  "体"
+ ]
+}

@@ -1,13 +1,14 @@
 {
  "contract": "promise",
- "version": 2,
+ "version": 3,
  "scene": "板 4 で作業台を作る（uses [3]）→ 置く → 拾う。代わりの条件（have か、体の観測の utilities の near）",
  "source": "Codex CONTRACTS.md（2）約束（near は今の頭では判定できない）",
  "known": [
   "確か: 頭の条件は near・furnace を常に判定できない"
  ],
  "decided": [
-  "決め: 体が観測に state.world.utilities を足し、near はそれで判定する"
+  "決め: 体が観測に state.world.utilities を足し、near はそれで判定する",
+  "決め: near は scanned が真で、条件の半径が radius 以内の時だけ判定する"
  ],
  "hypothesis": [],
  "input": {
@@ -68,7 +69,13 @@
     "observed": {
      "planks": 0,
      "crafting_table": 1,
-     "utilities": []
+     "utilities": {
+      "radius": 8,
+      "dim": "overworld",
+      "obsSeq": 700,
+      "scanned": true,
+      "found": []
+     }
     }
    },
    {
@@ -98,17 +105,23 @@
     "observed": {
      "planks": 0,
      "crafting_table": 0,
-     "utilities": [
-      {
-       "block": "crafting_table",
-       "at": {
-        "x": 157,
-        "y": 23,
-        "z": 213
-       },
-       "distance": 2
-      }
-     ]
+     "utilities": {
+      "radius": 8,
+      "dim": "overworld",
+      "obsSeq": 701,
+      "scanned": true,
+      "found": [
+       {
+        "block": "crafting_table",
+        "at": {
+         "x": 157,
+         "y": 23,
+         "z": 213
+        },
+        "distance": 2
+       }
+      ]
+     }
     }
    },
    {
@@ -137,7 +150,13 @@
     "observed": {
      "planks": 0,
      "crafting_table": 1,
-     "utilities": []
+     "utilities": {
+      "radius": 8,
+      "dim": "overworld",
+      "obsSeq": 702,
+      "scanned": true,
+      "found": []
+     }
     }
    }
   ]

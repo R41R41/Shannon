@@ -1,6 +1,6 @@
 {
  "contract": "result",
- "version": 2,
+ "version": 3,
  "scene": "make・craft・mine の count は追加の数のまま。持っていても already にしない",
  "source": "Codex CONTRACTS.md（2）、make.ts（今の数 + count を目標）",
  "known": [

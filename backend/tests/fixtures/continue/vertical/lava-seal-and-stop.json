@@ -1,6 +1,6 @@
 {
  "contract": "vertical",
- "version": 2,
+ "version": 3,
  "scene": "液体の扱い: stop・seal・seal_water。seal は候補の順・使うブロックの順・予算が決まった機械的な処理。どの場面も、先に 4 段進んだ後で見える",
  "source": "Codex CONTRACTS.md（4）seal",
  "known": [],

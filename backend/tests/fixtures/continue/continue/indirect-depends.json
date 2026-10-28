@@ -1,6 +1,6 @@
 {
  "contract": "continue",
- "version": 2,
+ "version": 3,
  "scene": "間接の依存: 1 が失敗 → 2（[1]）は動かない → 3（[2]）も動かない。列でも同じ（q1 → q2 → q3）",
  "source": "Codex CONTRACTS.md（3）継ぎ目の場面",
  "known": [],

@@ -1,6 +1,6 @@
 {
  "contract": "result",
- "version": 2,
+ "version": 3,
  "scene": "反射が時間内に放さず始められなかった act は not_started・not_run",
  "source": "nativeBody.ts afterReflex() の late",
  "known": [

@@ -1,13 +1,13 @@
 {
  "contract": "continue",
- "version": 2,
- "scene": "replace [q13]: q13 と、q13 に明示で頼る q15 を取り消す。独立の q14 は残し、順番だけ付け替える",
- "source": "bodyQueue.ts removeFrom()・minecraftLlmcQueue.ts replace()（今は後ろを全部取る）",
+ "version": 3,
+ "scene": "replace [q13]: q13 を取り消し、取り消しを後ろへ失敗と同じに伝える。dependsOn を書いていない q14 も取り消す。明示で独立の q16（[]）だけ残す",
+ "source": "Codex CONTRACTS-v2.md（2）8",
  "known": [
   "確か: 今は後ろを全部取る"
  ],
  "decided": [
-  "決め: 判定表 item.replace"
+  "決め: 依存を書いていない事を独立の証拠にしない"
  ],
  "hypothesis": [],
  "input": {
@@ -19,8 +19,7 @@
    },
    {
     "item": "q14",
-    "after": "q13",
-    "dependsOn": []
+    "after": "q13"
    },
    {
     "item": "q15",
@@ -28,6 +27,11 @@
     "dependsOn": [
      "q13"
     ]
+   },
+   {
+    "item": "q16",
+    "after": "q15",
+    "dependsOn": []
    }
   ],
   "replace": [
@@ -37,11 +41,12 @@
  "expected": {
   "removed": [
    "q13",
+   "q14",
    "q15"
   ],
   "kept": [
    {
-    "item": "q14",
+    "item": "q16",
     "after": "q12"
    }
   ]

@@ -1,6 +1,6 @@
 {
  "contract": "control",
- "version": 2,
+ "version": 3,
  "scene": "引き継ぎの片付けでは盾を下げない（handover の理由）。ほかの理由の片付けでは今どおり下げる",
  "source": "ActionExecution.ts physicalStops()（deactivateItem）、shieldBlock.ts の直接の操作",
  "known": [

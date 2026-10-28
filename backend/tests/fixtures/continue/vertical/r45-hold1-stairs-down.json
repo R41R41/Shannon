@@ -1,6 +1,6 @@
 {
  "contract": "vertical",
- "version": 2,
+ "version": 3,
  "scene": "保留 1 の深い下りを vertical の階段で。y=33 から y=10 へ、南へ。溶岩が見えたら止める（12 段進んだ後に見える場面）",
  "source": "実走 45 保留 1（run45-live.md 11〜17 行）",
  "known": [

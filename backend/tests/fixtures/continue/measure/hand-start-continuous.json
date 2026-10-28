@@ -1,0 +1,43 @@
+{
+ "contract": "measure",
+ "version": 3,
+ "scene": "手の始まりと操作の記録は、通しの台の始めから終わりまで、輪とは別のファイルに続けて取る（成功した手・120 秒を越えた手も）",
+ "source": "Codex CONTRACTS-v2.md（3）、blackbox.ts（90 秒の輪）",
+ "known": [
+  "確か: 黒箱は 90 秒の輪で、成功した act には書かないことがある"
+ ],
+ "decided": [
+  "決め: 8 章"
+ ],
+ "hypothesis": [],
+ "input": {
+  "acts": [
+   {
+    "command": "skill:q20",
+    "ok": true,
+    "ms": 12000
+   },
+   {
+    "command": "skill:q21",
+    "ok": false,
+    "ms": 125000
+   }
+  ]
+ },
+ "expected": {
+  "records": {
+   "skill:q20": {
+    "hand_start": "all hands",
+    "motorOps": "all"
+   },
+   "skill:q21": {
+    "hand_start": "all hands",
+    "motorOpsFromStart": true
+   }
+  },
+  "relyOnRing": false
+ },
+ "checks": [
+  "体"
+ ]
+}

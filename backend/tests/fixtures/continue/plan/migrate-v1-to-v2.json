@@ -1,6 +1,6 @@
 {
  "contract": "plan",
- "version": 2,
+ "version": 3,
  "scene": "保存されている v1 のツリーを、1 回だけ v2 に読み替える（正規表現はこの読み替えだけに残る）",
  "source": "7 章の移し方",
  "known": [],

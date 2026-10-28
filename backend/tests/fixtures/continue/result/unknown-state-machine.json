@@ -1,0 +1,123 @@
+{
+ "contract": "result",
+ "version": 3,
+ "scene": "不明の移り変わり（ストアに保存）: settled_unknown → 片付け → released → 遅れた結果で corrected。片付けで捨てた q2・q3 は q1 の訂正で戻らない。頭・体の再起動",
+ "source": "Codex CONTRACTS-v2.md（2）3・4、minecraftControlStore.ts settle()・lateReceipt()・safe()、controlLoop.ts（stop は待ちを捨て実行中を止める）",
+ "known": [
+  "確か: ストアは内容の違う受け取りを受けず、reconciledReceipt の後だけ置き換える",
+  "確か: safe は unknown を未解決にする"
+ ],
+ "decided": [
+  "決め: 1 章の状態の表",
+  "決め: 片付けで捨てた・止めた項目は cleanup_stop が確定した結果"
+ ],
+ "hypothesis": [],
+ "input": {
+  "cases": [
+   {
+    "name": "cleanup_scope",
+    "queue": {
+     "q1": "done_but_receipt_lost",
+     "q2": "running_independent",
+     "q3": "waiting"
+    },
+    "sequence": [
+     "q1 settled_unknown",
+     "head sends stop",
+     "body cancels q2 and drops q3",
+     "cleanup receipt released",
+     "late q1 receipt completed"
+    ]
+   },
+   {
+    "name": "head_restart",
+    "store": {
+     "q5": "settled_unknown"
+    },
+    "sequence": [
+     "head restarts",
+     "first poll"
+    ]
+   },
+   {
+    "name": "body_restart",
+    "store": {
+     "q6": "sent"
+    },
+    "sequence": [
+     "body restarts",
+     "new connection first poll: activeOperationIds [] held false"
+    ]
+   },
+   {
+    "name": "cleanup_timeout",
+    "store": {
+     "q7": "settled_unknown"
+    },
+    "sequence": [
+     "stop sent",
+     "no answer for 5 s"
+    ]
+   }
+  ]
+ },
+ "expected": {
+  "cases": [
+   {
+    "name": "cleanup_scope",
+    "states": {
+     "q1": [
+      "settled_unknown",
+      "released",
+      "corrected"
+     ],
+     "q2": [
+      "settled_known"
+     ],
+     "q3": [
+      "settled_known"
+     ]
+    },
+    "q2": {
+     "cutBy": "cancelled",
+     "code": "cleanup_stop"
+    },
+    "q3": {
+     "end": "not_run",
+     "code": "cleanup_stop"
+    },
+    "q3Revived": false,
+    "safeAfterRelease": true
+   },
+   {
+    "name": "head_restart",
+    "beforeAnyPhysical": "stop",
+    "statesKept": true
+   },
+   {
+    "name": "body_restart",
+    "states": {
+     "q6": [
+      "released"
+     ]
+    },
+    "goal": "unknown",
+    "ledger": "unexplained diff only"
+   },
+   {
+    "name": "cleanup_timeout",
+    "states": {
+     "q7": [
+      "held"
+     ]
+    },
+    "incident": true,
+    "physicalSent": 0
+   }
+  ]
+ },
+ "checks": [
+  "頭: ストア・safe・列・帳簿が同じ状態を読む",
+  "体: stop の受け取りに捨てた項目の cleanup_stop"
+ ]
+}

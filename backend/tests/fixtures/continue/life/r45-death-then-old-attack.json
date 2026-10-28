@@ -1,6 +1,6 @@
 {
  "contract": "life",
- "version": 2,
+ "version": 3,
  "scene": "死の前の判断の act（life 2）が、死んだ後（life 3）に届いた。体は stale_life で断る。頭は返事を破棄",
  "source": "実走 45 +929（run45-live.md 38 行）",
  "known": [

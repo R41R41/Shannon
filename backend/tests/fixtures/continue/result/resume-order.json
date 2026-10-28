@@ -1,6 +1,6 @@
 {
  "contract": "result",
- "version": 2,
+ "version": 3,
  "scene": "再開の契約: 前の結果を先に届け、その後で判断。出し直しは前の命令の印（resumeOf）を持つ",
  "source": "実走 45 再開 5（run45-live.md 103〜113 行）: skip-replay の後、Sonnet が行き先を変えた。出し直しのくり返しでは判断に届かなかった",
  "known": [

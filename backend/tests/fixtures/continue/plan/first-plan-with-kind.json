@@ -1,6 +1,6 @@
 {
  "contract": "plan",
- "version": 2,
+ "version": 3,
  "scene": "最初の計画の答えに kind と promises が付き、seedFields と保存と meter で同じ意味。parent は string（根は ''）",
  "source": "Codex CONTRACTS.md（3）plan、minecraftFirstPlan.ts FIRST_PLAN_SCHEMA_R4（parent は string）",
  "known": [

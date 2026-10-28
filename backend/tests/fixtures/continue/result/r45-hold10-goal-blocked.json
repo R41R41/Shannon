@@ -1,0 +1,77 @@
+{
+ "contract": "result",
+ "version": 3,
+ "scene": "保留 10: 2 m 先の同じ高さの行き先の周りが塞がり、道探しが道 0 マスのまま 5 秒で時間切れ。着いた所・残り・塞いでいる物を出す",
+ "source": "実走 45 保留 10（run45-live.md 189〜193 行）",
+ "known": [
+  "確か: 最後の探索 GoalNear(174,14,197)（2 m 先、同じ高さ）が len 0・6,016 ノード・5,000 ms で timeout"
+ ],
+ "decided": [
+  "決め: lastSearch.blockedAround（行き先の周り 1 マスの通れない・掘れないマス）"
+ ],
+ "hypothesis": [
+  "仮説: 塞いでいた物（台では moss_block で行き止まりになった回がある）"
+ ],
+ "input": {
+  "hand": {
+   "do": "go",
+   "to": {
+    "x": 174,
+    "y": 14,
+    "z": 197
+   },
+   "maxDig": 40,
+   "maxPlace": 30,
+   "canDig": [
+    "stone",
+    "dirt",
+    "gravel"
+   ],
+   "canPlace": [
+    "cobblestone"
+   ]
+  },
+  "at": {
+   "x": 176,
+   "y": 14,
+   "z": 197
+  }
+ },
+ "expected": {
+  "line": {
+   "goal": "partial",
+   "code": "search_timeout",
+   "progress": {
+    "unit": "meter",
+    "fromStopM": 2,
+    "at": {
+     "x": 176,
+     "y": 14,
+     "z": 197
+    },
+    "lastSearch": {
+     "status": "timeout",
+     "len": 0,
+     "nodes": 6016,
+     "ms": 5000,
+     "blockedAround": [
+      {
+       "at": "cell",
+       "block": "moss_block",
+       "diggable": false
+      }
+     ]
+    }
+   }
+  },
+  "textMustContain": [
+   "道 0 マス",
+   "行き先の周り",
+   "moss_block"
+  ]
+ },
+ "checks": [
+  "体",
+  "頭"
+ ]
+}

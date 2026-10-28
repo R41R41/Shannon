@@ -1,0 +1,64 @@
+{
+ "contract": "continue",
+ "version": 3,
+ "scene": "保持と開始を分ける: q1 が失敗。q2（[]）は待ちのまま（pending）。q3（[q2]）は q2 が pending の間は残して待ち、q2 が succeeded になったら始める",
+ "source": "Codex CONTRACTS-v2.md（2）7",
+ "known": [],
+ "decided": [
+  "決め: keep と start の判定（判定表 item）"
+ ],
+ "hypothesis": [],
+ "input": {
+  "queue": "t-run:hb-1:40",
+  "events": [
+   {
+    "q1": {
+     "unit": {
+      "goal": "failed",
+      "end": "finished",
+      "released": true
+     }
+    }
+   },
+   {
+    "q2": "starts"
+   },
+   {
+    "q2": {
+     "unit": {
+      "goal": "done",
+      "end": "finished",
+      "released": true
+     }
+    }
+   }
+  ],
+  "waiting": [
+   {
+    "item": "q2",
+    "after": "q1",
+    "dependsOn": []
+   },
+   {
+    "item": "q3",
+    "after": "q2",
+    "dependsOn": [
+     "q2"
+    ]
+   }
+  ]
+ },
+ "expected": {
+  "afterQ1": {
+   "q2": "start",
+   "q3": "keep_waiting"
+  },
+  "afterQ2": {
+   "q3": "start"
+  }
+ },
+ "checks": [
+  "体",
+  "頭"
+ ]
+}

@@ -1,11 +1,11 @@
 {
  "contract": "measure",
- "version": 2,
- "scene": "失敗した命令（q11）と、それを読んだ判断（d0153）が出した次の命令（q12）を、番号の組でつなぐ。command だけではつながらない",
- "source": "Codex CONTRACTS.md（3）measure",
+ "version": 3,
+ "scene": "失敗した命令（q11）と、それを読んだ判断（d0153）が出した次の命令（q12）を、番号の組でつなぐ。reads は request の行に、入力に入れた受け取りの command を入れた順で",
+ "source": "Codex CONTRACTS-v2.md（3）measure",
  "known": [],
  "decided": [
-  "決め: run・life・判断の番号の組でつなぐ"
+  "決め: decision.reads の作り方（8 章）"
  ],
  "hypothesis": [],
  "input": {
@@ -90,7 +90,8 @@
    "life",
    "decision.reads",
    "decision → sent.command"
-  ]
+  ],
+  "readsRule": "request 行の reads = 判断の入力に入れた受け取りの command（入れた順、圧縮で落とした物は入れない）"
  },
  "checks": [
   "頭: judge.ts"

@@ -1,6 +1,6 @@
 {
  "contract": "continue",
- "version": 2,
+ "version": 3,
  "scene": "依存の判定表（頭と体が同じ物を読む。正本）",
  "invalidationFirst": [
   "connection_changed",
@@ -22,93 +22,157 @@
   {
    "goal": "done",
    "end": "finished",
-   "reliable": true,
+   "released": true,
+   "dependState": "succeeded",
    "old": {
     "ok": true,
-    "outcome": "completed"
+    "outcome": "completed",
+    "inputsReleased": true
    }
   },
   {
    "goal": "already",
    "end": "finished",
-   "reliable": true,
-   "old": {
-    "ok": true,
-    "outcome": "completed"
-   }
-  },
-  {
-   "goal": "partial",
-   "end": "finished",
-   "reliable": false,
-   "old": {
-    "ok": false,
-    "outcome": "failed"
-   }
-  },
-  {
-   "goal": "partial",
-   "end": "cut",
-   "reliable": false,
-   "old": {
-    "ok": false,
-    "outcome": "failed|cancelled"
-   }
-  },
-  {
-   "goal": "failed",
-   "end": "finished",
-   "reliable": false,
-   "old": {
-    "ok": false,
-    "outcome": "failed"
-   }
-  },
-  {
-   "goal": "failed",
-   "end": "cut",
-   "reliable": false,
-   "old": {
-    "ok": false,
-    "outcome": "failed|cancelled"
-   }
-  },
-  {
-   "goal": "not_started",
-   "end": "not_run",
-   "reliable": false,
-   "old": {
-    "ok": false,
-    "outcome": "failed|cancelled"
-   }
-  },
-  {
-   "goal": "unknown",
-   "end": "finished",
-   "reliable": false,
+   "released": true,
+   "dependState": "succeeded",
    "old": {
     "ok": true,
     "outcome": "completed",
-    "note": "attack の target_lost"
+    "inputsReleased": true
    }
   },
   {
-   "goal": "unknown",
-   "end": "unknown",
-   "reliable": false,
+   "goal": "done",
+   "end": "finished",
+   "released": false,
+   "dependState": "unknown",
    "old": {
-    "outcome": "unknown"
+    "ok": true,
+    "outcome": "completed",
+    "inputsReleased": false
+   }
+  },
+  {
+   "goal": "partial",
+   "end": "finished",
+   "released": true,
+   "dependState": "failed",
+   "old": {
+    "ok": false,
+    "outcome": "failed",
+    "inputsReleased": true
+   }
+  },
+  {
+   "goal": "partial",
+   "end": "cut",
+   "released": true,
+   "dependState": "failed",
+   "old": {
+    "ok": false,
+    "outcome": "failed",
+    "inputsReleased": true
+   }
+  },
+  {
+   "goal": "partial",
+   "end": "cut",
+   "released": true,
+   "dependState": "failed",
+   "old": {
+    "ok": false,
+    "outcome": "cancelled",
+    "inputsReleased": true
+   }
+  },
+  {
+   "goal": "failed",
+   "end": "finished",
+   "released": true,
+   "dependState": "failed",
+   "old": {
+    "ok": false,
+    "outcome": "failed",
+    "inputsReleased": true
+   }
+  },
+  {
+   "goal": "failed",
+   "end": "cut",
+   "released": true,
+   "dependState": "failed",
+   "old": {
+    "ok": false,
+    "outcome": "cancelled",
+    "inputsReleased": true
    }
   },
   {
    "goal": "done",
    "end": "cut",
-   "reliable": false,
+   "released": true,
+   "dependState": "failed",
    "old": {
     "ok": false,
-    "outcome": "cancelled"
+    "outcome": "cancelled",
+    "inputsReleased": true
+   }
+  },
+  {
+   "goal": "not_started",
+   "end": "not_run",
+   "released": true,
+   "dependState": "failed",
+   "old": {
+    "ok": false,
+    "outcome": "failed",
+    "inputsReleased": true
+   }
+  },
+  {
+   "goal": "not_started",
+   "end": "not_run",
+   "released": true,
+   "dependState": "failed",
+   "old": {
+    "ok": false,
+    "outcome": "cancelled",
+    "inputsReleased": true
+   }
+  },
+  {
+   "goal": "not_started",
+   "end": "finished",
+   "released": true,
+   "dependState": "failed",
+   "old": {
+    "ok": false,
+    "outcome": "failed",
+    "inputsReleased": true
    },
-   "note": "ねらいは満たしたが外から止められた: 解放を確かめるまで頼らない"
+   "note": "手を呼んだが操作 0（再開 1 の go）"
+  },
+  {
+   "goal": "unknown",
+   "end": "finished",
+   "released": true,
+   "dependState": "failed",
+   "old": {
+    "ok": true,
+    "outcome": "completed",
+    "inputsReleased": true
+   },
+   "note": "attack の target_lost"
+  },
+  {
+   "goal": "unknown",
+   "end": "unknown",
+   "released": false,
+   "dependState": "unknown",
+   "old": {
+    "outcome": "unknown",
+    "inputsReleased": false
+   }
   }
  ],
  "notAllowed": [
@@ -117,15 +181,15 @@
    "end": "cut"
   },
   {
-   "goal": "not_started",
-   "end": "finished"
-  },
-  {
    "goal": "done",
    "end": "not_run"
   },
   {
    "goal": "partial",
+   "end": "not_run"
+  },
+  {
+   "goal": "failed",
    "end": "not_run"
   }
  ],
@@ -186,25 +250,40 @@
    "later_hand",
    "out_of_range",
    "duplicate"
-  ]
+  ],
+  "released": "a hand is reliable when its goal is done|already and end finished (the act is released as a whole)"
  },
  "item": {
   "undefined": "drop_as_now",
-  "empty": "keep",
-  "listed": "keep_if_all_succeeded",
-  "dependState": [
-   "succeeded",
-   "failed",
-   "pending",
-   "unknown"
-  ],
-  "unknownRef": "depends_unknown_not_started",
-  "pre": {
-   "true": "start",
-   "false": "precondition_not_started",
-   "unknown": "not_started"
+  "empty": "relies_on_nothing",
+  "keep": {
+   "succeeded": "keep",
+   "pending": "keep",
+   "failed": "drop:depends_failed",
+   "unknown": "drop:depends_unknown"
+  },
+  "start": {
+   "allSucceeded_preTrue_bodyNotHeld": "start",
+   "anyPending": "wait",
+   "preFalse": "not_started:precondition",
+   "preUnknown": "not_started:precondition_unknown"
   },
   "admitAfterStopped": "admit_if_not_in_dependsOn_but_never_skip_tail",
-  "replace": "listed_and_explicit_dependents_only"
- }
+  "replace": "listed removed; removal propagates as failure; kept only dependsOn arrays without a removed item",
+  "crossStep": "refused_before_send_with_usable_refs"
+ },
+ "dependState": {
+  "succeeded": "goal done|already AND end finished AND released",
+  "pending": "not ended (running or waiting)",
+  "failed": "ended AND released AND not succeeded",
+  "unknown": "end unknown OR released not confirmed OR reference not remembered"
+ },
+ "aggregate": [
+  "doneMet → done",
+  "all done|already with ≥1 done → done; all already → already",
+  "any unknown → unknown",
+  "any done|partial → partial",
+  "any motorOps > 0 → failed",
+  "else → not_started"
+ ]
 }

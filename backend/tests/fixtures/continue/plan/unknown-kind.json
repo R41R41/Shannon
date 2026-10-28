@@ -1,6 +1,6 @@
 {
  "contract": "plan",
- "version": 2,
+ "version": 3,
  "scene": "LLM が列に無い kind（\"farm\"）を書いた: other として受け、元の値を kindRaw と判断の記録に残す",
  "source": "12 章の決め 10",
  "known": [],

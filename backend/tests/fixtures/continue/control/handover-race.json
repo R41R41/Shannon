@@ -1,6 +1,6 @@
 {
  "contract": "control",
- "version": 2,
+ "version": 3,
  "scene": "引き継ぎを決めた後、取る前に（a）死、（b）低体力で逃げの反射、（c）溶岩の反射が取った: どれも引き継がない",
  "source": "Codex CONTRACTS.md（1）6",
  "known": [],

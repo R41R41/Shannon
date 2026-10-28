@@ -1,13 +1,14 @@
 {
  "contract": "result",
- "version": 2,
- "scene": "再開 1 の出し直し: dig は既に空気で already、go は 22 ms で no_floor（動いていない）",
+ "version": 3,
+ "scene": "再開 1 の出し直し: dig は既に空気で already、go は 22 ms で no_floor（体を動かす操作は 0）。go は not_started、act も not_started",
  "source": "実走 45 再開 1（run45-live.md 30 行）",
  "known": [
   "確か: dig「(159,67,200) は既に air（掘らずに次へ）」、go「no_floor … 道 0 歩」22 ms"
  ],
  "decided": [
-  "決め: 動いていない go は goal failed（not_started ではない。手は始まった）"
+  "決め: not_started と failed の境目は「体を動かす操作を始めたか」（手を呼んだかではない）",
+  "決め: まとめ方の規則 6（どの手も操作を始めていない → not_started）"
  ],
  "hypothesis": [],
  "input": {
@@ -27,15 +28,17 @@
     "do": "dig",
     "status": "done",
     "goal": "already",
-    "end": "finished"
+    "end": "finished",
+    "motorOps": 0
    },
    {
     "i": 2,
     "do": "go",
     "status": "stopped",
-    "goal": "failed",
+    "goal": "not_started",
     "end": "finished",
     "code": "no_floor",
+    "motorOps": 0,
     "progress": {
      "unit": "meter",
      "done": 0,
@@ -45,12 +48,12 @@
    }
   ],
   "outcome": {
-   "goal": "failed",
+   "goal": "not_started",
    "end": "finished"
   }
  },
  "checks": [
-  "体: dig の already",
-  "頭: already と failed の組の act は failed"
+  "体: 手の motorOps",
+  "頭: まとめ方"
  ]
 }

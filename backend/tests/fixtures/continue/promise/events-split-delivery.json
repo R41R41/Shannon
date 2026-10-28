@@ -1,0 +1,44 @@
+{
+ "contract": "promise",
+ "version": 3,
+ "scene": "repeat で多くの出来事が出て受け取りの 16,000 字に入らない: 先頭だけ載せ、残りは events の命令で取りに行く。件数だけに潰さない",
+ "source": "Codex CONTRACTS-v2.md（2）10、12 章の決め 4（v3）",
+ "known": [],
+ "decided": [
+  "決め: eventsMore と events の命令、acknowledged まで体が記録を持つ"
+ ],
+ "hypothesis": [],
+ "input": {
+  "receipt": {
+   "id": "skill:q70",
+   "eventsShown": 120,
+   "eventsMore": {
+    "command": "skill:q70",
+    "nextSeq": 121,
+    "total": 340
+   }
+  }
+ },
+ "expected": {
+  "headReads": [
+   {
+    "events": {
+     "command": "skill:q70",
+     "fromSeq": 121
+    }
+   },
+   {
+    "events": {
+     "command": "skill:q70",
+     "fromSeq": "next"
+    }
+   }
+  ],
+  "appliedTotal": 340,
+  "bodyKeepsUntil": "acknowledged"
+ },
+ "checks": [
+  "頭",
+  "体"
+ ]
+}

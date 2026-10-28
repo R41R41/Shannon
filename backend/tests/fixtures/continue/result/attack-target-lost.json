@@ -1,20 +1,22 @@
 {
  "contract": "result",
- "version": 2,
- "scene": "attack の相手が実行中に見えなくなった: 成功とせず goal unknown・code target_lost。死を観測した時だけ done・already",
+ "version": 3,
+ "scene": "attack の相手が実行中に見えなくなった: 手も act も goal unknown・code target_lost（failed にしない）。死を観測した時だけ done・already",
  "source": "attack.ts（「倒れたか、離れて消えた」で ok）、実走 45 +929 の #1954",
  "known": [
   "確か: 今の attack は見えなくなった相手で ok を返す"
  ],
  "decided": [
-  "決め: 観測した死だけ already。記憶はワールド・次元・接続と個体 id で区切り、30 秒は仮の上限"
+  "決め: 観測した死だけ already。記憶はワールド・次元・接続と個体 id で区切り、30 秒は仮の上限",
+  "決め: まとめ方の規則 3（unknown は failed より先）"
  ],
  "hypothesis": [],
  "input": {
   "cases": [
    {
     "target": 2601,
-    "during": "lost_from_sight"
+    "during": "lost_from_sight",
+    "blowsLanded": 1
    },
    {
     "target": 2601,
@@ -33,23 +35,35 @@
  "expected": {
   "cases": [
    {
-    "goal": "unknown",
-    "code": "target_lost"
+    "hand": {
+     "goal": "unknown",
+     "code": "target_lost"
+    },
+    "act": {
+     "goal": "unknown"
+    }
    },
    {
-    "goal": "done"
+    "hand": {
+     "goal": "done"
+    }
    },
    {
-    "goal": "already",
-    "code": "target_dead"
+    "hand": {
+     "goal": "already",
+     "code": "target_dead"
+    }
    },
    {
-    "goal": "failed",
-    "code": "target_not_found"
+    "hand": {
+     "goal": "not_started",
+     "code": "target_not_found"
+    }
    }
   ]
  },
  "checks": [
-  "体: attack・fight の終わりの判定"
+  "体: attack・fight の終わりの判定",
+  "頭: act のまとめ方"
  ]
 }

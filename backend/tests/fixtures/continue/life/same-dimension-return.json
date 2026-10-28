@@ -1,0 +1,40 @@
+{
+ "contract": "life",
+ "version": 3,
+ "scene": "地上の観測で判断を始め、別の命令がネザーへ行き、地上へ戻ってから返事が来た: dim は同じでも次元の世代（dimSince）が違うので捨てる",
+ "source": "Codex CONTRACTS-v2.md（2）1",
+ "known": [],
+ "decided": [
+  "決め: madeIn.dimSince で比べる"
+ ],
+ "hypothesis": [],
+ "input": {
+  "decisionReadObs": {
+   "dim": "overworld",
+   "dimSince": "2026-10-28T06:40:00.000Z",
+   "life": 2
+  },
+  "events": [
+   {
+    "portal": "the_nether",
+    "dimSince": "2026-10-28T06:41:10.000Z"
+   },
+   {
+    "portal": "overworld",
+    "dimSince": "2026-10-28T06:42:30.000Z"
+   }
+  ],
+  "reply": {
+   "decision": "d0201",
+   "command": "go (200,64,50)"
+  }
+ },
+ "expected": {
+  "discarded": "dimension_changed",
+  "sent": false
+ },
+ "checks": [
+  "頭",
+  "体: 列の項目の madeIn.dimSince"
+ ]
+}

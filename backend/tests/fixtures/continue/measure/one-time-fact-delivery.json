@@ -1,0 +1,38 @@
+{
+ "contract": "measure",
+ "version": 3,
+ "scene": "「1 度出す」事実は、最後の要求のバイトに入った時に届けたものとし、それまで持っておく。圧縮で落ちたら次の判断にまた入れる",
+ "source": "Codex CONTRACTS-v2.md（2）12",
+ "known": [],
+ "decided": [
+  "決め: 8 章"
+ ],
+ "hypothesis": [],
+ "input": {
+  "fact": "約束 #3 の代わりの条件が成り立たなくなった",
+  "decisions": [
+   {
+    "d": "d0300",
+    "compressedOut": true
+   },
+   {
+    "d": "d0301",
+    "compressedOut": false
+   },
+   {
+    "d": "d0302"
+   }
+  ]
+ },
+ "expected": {
+  "inLastRequest": {
+   "d0300": false,
+   "d0301": true,
+   "d0302": false
+  },
+  "deliveredAt": "d0301"
+ },
+ "checks": [
+  "頭（台 D）"
+ ]
+}

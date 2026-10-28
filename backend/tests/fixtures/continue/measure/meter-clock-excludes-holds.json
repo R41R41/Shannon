@@ -1,0 +1,32 @@
+{
+ "contract": "measure",
+ "version": 3,
+ "scene": "meter の時計は保留を除いた秒。実走 45 では acc +944 なのに「今 5,693 秒・鉄のツルハシ 5,343 秒遅れ」と出ていた",
+ "source": "実走 45 の報告（取りまとめ役の追記）",
+ "known": [
+  "確か: meter の「今」と節目の t が、保留を含む壁時計の秒だった"
+ ],
+ "decided": [
+  "決め: 保留を除いた秒（時間の上限と同じ数え方）"
+ ],
+ "hypothesis": [],
+ "input": {
+  "wallSinceStart": 5693,
+  "heldSeconds": 4749,
+  "milestone": {
+   "name": "鉄のツルハシ",
+   "targetSec": 350
+  }
+ },
+ "expected": {
+  "meterNowSec": 944,
+  "lateness": 594,
+  "mustNotContain": [
+   "5,693",
+   "5,343"
+  ]
+ },
+ "checks": [
+  "頭"
+ ]
+}

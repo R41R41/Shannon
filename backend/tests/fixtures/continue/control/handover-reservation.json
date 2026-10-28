@@ -1,0 +1,71 @@
+{
+ "contract": "control",
+ "version": 3,
+ "scene": "引き継ぎの予約: 止めた反射の actionId から予約を作り、取得と 1 つにして確かめる。期限切れ・別の持ち主の取得では予約を消し、予約が持つ盾は予約を消す処理が下ろす",
+ "source": "Codex CONTRACTS-v2.md（2）5、ActionExecution.ts（settled で文脈を消してロックを放す）",
+ "known": [
+  "確か: 今の実行層は settled の時に文脈を active から消し、ロックを放す"
+ ],
+ "decided": [
+  "決め: HandoverReservation と holderSeq"
+ ],
+ "hypothesis": [
+  "仮説: 300 ms"
+ ],
+ "input": {
+  "cases": [
+   {
+    "name": "ok",
+    "reservation": {
+     "holderSeq": 41,
+     "shield": true
+    },
+    "acquire": {
+     "holderSeqNow": 41,
+     "withinMs": 120
+    }
+   },
+   {
+    "name": "timeout",
+    "reservation": {
+     "holderSeq": 41,
+     "shield": true
+    },
+    "acquire": {
+     "withinMs": 350
+    }
+   },
+   {
+    "name": "other_holder",
+    "reservation": {
+     "holderSeq": 41,
+     "shield": true
+    },
+    "between": "floor-eat acquired (holderSeq 42)"
+   }
+  ]
+ },
+ "expected": {
+  "cases": [
+   {
+    "confirmed": true,
+    "shieldOwner": "act_root",
+    "shieldLowered": false
+   },
+   {
+    "confirmed": false,
+    "reservationRemoved": true,
+    "shieldLoweredBy": "reservation_expiry"
+   },
+   {
+    "confirmed": false,
+    "reservationRemoved": true,
+    "shieldLoweredBy": "reservation_expiry",
+    "waitsForReflex": true
+   }
+  ]
+ },
+ "checks": [
+  "体（B）"
+ ]
+}

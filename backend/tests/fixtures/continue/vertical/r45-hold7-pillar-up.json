@@ -1,6 +1,6 @@
 {
  "contract": "vertical",
- "version": 2,
+ "version": 3,
  "scene": "保留 7 の上りを柱で。y=7 から地上の y=63 へ（56 段）。canDig は必須",
  "source": "実走 45 保留 7（run45-live.md 127〜131 行）",
  "known": [

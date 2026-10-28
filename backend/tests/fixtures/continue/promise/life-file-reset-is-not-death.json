@@ -1,0 +1,39 @@
+{
+ "contract": "promise",
+ "version": 3,
+ "scene": "命の番号がファイルの作り直しで進んだ（advancedBy file_unreadable）: lost_death を書かない（持ち物は残っている）",
+ "source": "Codex CONTRACTS-v2.md（2）2",
+ "known": [],
+ "decided": [
+  "決め: 死の証拠は deathSeq だけ"
+ ],
+ "hypothesis": [],
+ "input": {
+  "promises": [
+   {
+    "id": 3,
+    "rev": 1,
+    "item": "planks",
+    "count": 4,
+    "use": "作業台",
+    "state": "open",
+    "ledger": []
+   }
+  ],
+  "event": {
+   "life": {
+    "from": 7,
+    "to": 1793164759174,
+    "advancedBy": "file_unreadable"
+   },
+   "observedPlanks": 5
+  }
+ },
+ "expected": {
+  "ledgerAdded": [],
+  "have": 5
+ },
+ "checks": [
+  "頭"
+ ]
+}

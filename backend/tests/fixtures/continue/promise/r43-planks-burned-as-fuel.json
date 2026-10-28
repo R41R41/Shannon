@@ -1,6 +1,6 @@
 {
  "contract": "promise",
- "version": 2,
+ "version": 3,
  "scene": "作業台用の板 4 の約束があるのに、板を燃料にした。帳簿は consumed（理由 smelt_fuel・申告無し）、live に足りない量",
  "source": "実走 43 +720 q69（run43-report.md 130 行）と p3「作業台か板 4」",
  "known": [

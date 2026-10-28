@@ -1,0 +1,52 @@
+{
+ "contract": "result",
+ "version": 3,
+ "scene": "保留 9: 道を跳んでいる途中に引き直し、空気 (178,7,199) に当てて (177,7,199) を置こうとした。置きを送らず（place_held_back no_face:air）、道を引き直す",
+ "source": "実走 45 保留 9（box 20261028T065719-act-jgr1d）、fixrun45-6（体 4e8c3df）の台の前後: 前 3/6、後 0/6",
+ "known": [
+  "確か: 黒箱の place の against は air",
+  "確か: 引き直しの search の from は (178.7,8.2,199.8)（跳んでいる途中）"
+ ],
+ "decided": [
+  "決め: 当てる面にブロックが無い置きは送らない（送る時に確かめる。道を引く時には確かめない）"
+ ],
+ "hypothesis": [],
+ "input": {
+  "place": {
+   "ref": [
+    178,
+    7,
+    199
+   ],
+   "refBlock": "air",
+   "face": [
+    -1,
+    0,
+    0
+   ],
+   "target": [
+    177,
+    7,
+    199
+   ]
+  },
+  "feet": [
+   178.7,
+   8.2,
+   199.8
+  ],
+  "onGround": false
+ },
+ "expected": {
+  "sent": false,
+  "box": {
+   "k": "place_held_back",
+   "why": "no_face:air"
+  },
+  "then": "path_redrawn",
+  "refusedPlaceCount": 0
+ },
+ "checks": [
+  "体（台 A）"
+ ]
+}

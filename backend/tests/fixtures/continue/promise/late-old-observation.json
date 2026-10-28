@@ -1,0 +1,39 @@
+{
+ "contract": "promise",
+ "version": 3,
+ "scene": "新しい観測で板 2 を反映した後に、古い受け取り（当時の板 6）が遅れて届く: have を 6 に戻さない",
+ "source": "Codex CONTRACTS-v2.md（2）10",
+ "known": [],
+ "decided": [
+  "決め: 観測の番号（同じ接続の obsSeq）で、新しい物だけ have を書き換える"
+ ],
+ "hypothesis": [],
+ "input": {
+  "lastObs": {
+   "bodyBoot": "bb-1",
+   "connectionId": "c-1",
+   "obsSeq": 900,
+   "planks": 2
+  },
+  "lateReceipt": {
+   "events": [
+    {
+     "id": "skill:q60:1:1:1",
+     "obsSeq": 850,
+     "item": "oak_planks",
+     "count": 3,
+     "reason": "crafted"
+    }
+   ],
+   "observedPlanks": 6
+  }
+ },
+ "expected": {
+  "have": 2,
+  "eventApplied": true,
+  "haveRewound": false
+ },
+ "checks": [
+  "頭"
+ ]
+}

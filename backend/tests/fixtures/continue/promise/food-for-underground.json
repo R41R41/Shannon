@@ -1,6 +1,6 @@
 {
  "contract": "promise",
- "version": 2,
+ "version": 3,
  "scene": "地下で食べる分の食料 20 点。uses [4] の eat は申告どおり、反射が食べた分は reflex_eat。パンは 11 点（満腹 5 ＋ 隠れた満腹 6）",
  "source": "foodPoints.ts（bread [5, 6]）",
  "known": [

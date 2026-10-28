@@ -1,6 +1,6 @@
 {
  "contract": "continue",
- "version": 2,
+ "version": 3,
  "scene": "失効が先: q1 の実行中に死んだ。q2 は dependsOn [] でも death で捨てる（依存の判定まで行かない）。q1 の終わりの処理が後から走っても q2 は戻らない",
  "source": "Codex CONTRACTS.md（1）1",
  "known": [

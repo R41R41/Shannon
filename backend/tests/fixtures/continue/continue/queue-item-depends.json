@@ -1,8 +1,8 @@
 {
  "contract": "continue",
- "version": 2,
- "scene": "列: q12 が失敗。q13（[]・pre 真）は始まる、q13b（[]・pre 偽）と q13c（[]・pre 不明）は始まらない、q14（無し）と q15（[q12]）は捨てる",
- "source": "設計 D1、Codex CONTRACTS.md（3）continue",
+ "version": 3,
+ "scene": "列: q12 が失敗。q13（[]・pre 真）は始まる、q13b（[]・pre 偽）と q13c（[]・pre 判定できない）は始まらない、q14（無し）と q15（[q12]）は捨てる。pre の真偽は観測から算出する",
+ "source": "設計 D1、Codex CONTRACTS-v2.md（3）continue",
  "known": [
   "確か: 今は completed && inputsReleased 以外で待ちを全部捨てる"
  ],
@@ -16,15 +16,19 @@
   "running": {
    "item": "q12",
    "ends": {
-    "outcome": "failed",
-    "failureType": "stuck",
-    "inputsReleased": true,
     "unit": {
      "goal": "failed",
      "end": "finished",
      "released": true
     }
    }
+  },
+  "observation": {
+   "have": {
+    "raw_iron": 2
+   },
+   "foodPoints": 30,
+   "furnace": "not_judgeable"
   },
   "waiting": [
    {
@@ -39,8 +43,7 @@
        "n": 1
       }
      ]
-    ],
-    "preValue": true
+    ]
    },
    {
     "item": "q13b",
@@ -53,8 +56,7 @@
        "n": 40
       }
      ]
-    ],
-    "preValue": false
+    ]
    },
    {
     "item": "q13c",
@@ -69,8 +71,7 @@
        "z": 213
       }
      ]
-    ],
-    "preValue": null
+    ]
    },
    {
     "item": "q14",
@@ -86,6 +87,11 @@
   ]
  },
  "expected": {
+  "preComputed": {
+   "q13": true,
+   "q13b": false,
+   "q13c": null
+  },
   "q13": {
    "starts": true,
    "keptDespite": {
@@ -93,7 +99,7 @@
      "queue": "t-run:hb-1:40",
      "item": "q12"
     },
-    "code": "stuck"
+    "code": "failed"
    }
   },
   "q13b": {
@@ -126,7 +132,7 @@
   }
  },
  "checks": [
-  "体: launch の終わりと begin",
-  "頭: 体の startedAt・droppedBecause を読む（自分で取り消さない）"
+  "体: pre を観測から（actConditions）",
+  "頭: 体の startedAt・droppedBecause を読む"
  ]
 }

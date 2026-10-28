@@ -1,6 +1,6 @@
 {
  "contract": "result",
- "version": 2,
+ "version": 3,
  "scene": "反射が先に食べた後の eat は「既に済」。act は done（pillarUp が done、eat が already）",
  "source": "実走 43 +2,123（run43-report.md 105 行）: [急ぎ] 柱で逃げて食べる（pillarUp・eat bread×2）",
  "known": [
