@@ -1,0 +1,54 @@
+{
+ "contract": "measure",
+ "version": 1,
+ "scene": "手の始まりの記録（黒箱の hand_start）。失敗の後の現場だけでは消える「至る順」を残す",
+ "source": "Codex DESIGN.md（3）失敗前の状態・操作順の保存",
+ "known": [
+  "黒箱は 90 秒の輪で、持ち物は書き出しの時点"
+ ],
+ "decided": [
+  "手ごとに観測・持ち物・持ち主・直前の操作 16 件"
+ ],
+ "input": {
+  "at": "hand 2 of q34",
+  "body": {
+   "pos": {
+    "x": 178.5,
+    "y": 56,
+    "z": 198.5
+   },
+   "hp": 20,
+   "food": 17,
+   "saturation": 3.2
+  }
+ },
+ "expected": {
+  "record": {
+   "ids": {
+    "command": "skill:q34",
+    "item": "q34",
+    "hand": 1,
+    "life": 1
+   },
+   "pos": {
+    "x": 178,
+    "y": 56,
+    "z": 198
+   },
+   "hp": 20,
+   "food": 17,
+   "saturation": 3.2,
+   "inventory": "bread×4,cobbled_deepslate×63,cobblestone×54,diamond×2,diamond_pickaxe×1,dirt×35",
+   "holder": {
+    "kind": "command",
+    "command": "skill:q34",
+    "item": "q34",
+    "life": 1
+   },
+   "lastOpsMax": 16
+  }
+ },
+ "checks": [
+  "体: blackbox の hand_start の形"
+ ]
+}

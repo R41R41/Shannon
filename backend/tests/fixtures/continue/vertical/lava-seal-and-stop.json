@@ -1,0 +1,62 @@
+{
+ "contract": "vertical",
+ "version": 1,
+ "scene": "液体の扱い 3 つ: stop・seal・seal_water",
+ "source": "設計 D3（溶岩・水の扱いは LLM が選ぶ）、Codex DESIGN.md（2）D3（溶岩の扱いの矛盾）",
+ "known": [],
+ "decided": [
+  "seal は canPlace の物を range まで、maxPlace まで。尽きたら limit_place"
+ ],
+ "input": {
+  "cases": [
+   {
+    "liquid": "stop",
+    "seen": "lava"
+   },
+   {
+    "liquid": "seal",
+    "seen": "lava",
+    "canPlace": [
+     "cobblestone"
+    ],
+    "have": 3,
+    "needed": 2
+   },
+   {
+    "liquid": "seal",
+    "seen": "water",
+    "canPlace": [
+     "cobblestone"
+    ],
+    "have": 1,
+    "needed": 3
+   },
+   {
+    "liquid": "seal_water",
+    "seen": "lava"
+   }
+  ]
+ },
+ "expected": {
+  "cases": [
+   {
+    "code": "lava",
+    "goal": "partial"
+   },
+   {
+    "continues": true,
+    "placed": 2
+   },
+   {
+    "code": "limit_place",
+    "placed": 1
+   },
+   {
+    "code": "lava"
+   }
+  ]
+ },
+ "checks": [
+  "体: descend の部品の試験"
+ ]
+}

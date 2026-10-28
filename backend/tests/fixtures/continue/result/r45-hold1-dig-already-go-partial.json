@@ -1,0 +1,101 @@
+{
+ "contract": "result",
+ "version": 1,
+ "scene": "1 手目の dig は既に空気で already、2 手目の go は 61 歩進んで残り 10m で止まった（partial）",
+ "source": "実走 45 保留 1・再開 1（run45-live.md 14・30 行）",
+ "known": [
+  "再開 1 の出し直しで dig は「(159,67,200) は既に air（掘らずに次へ）」",
+  "元の go は「go 止まった search_timeout … (161,33,214) 道 61 歩・掘 61 … あと 10m」"
+ ],
+ "decided": [
+  "go の progress は unit meter（行き先までの残り）",
+  "進んだ量がある失敗は partial、act の goal も partial"
+ ],
+ "input": {
+  "act": {
+   "hands": [
+    {
+     "do": "dig",
+     "at": [
+      {
+       "x": 159,
+       "y": 67,
+       "z": 200
+      }
+     ],
+     "takeOk": true
+    },
+    {
+     "do": "go",
+     "to": {
+      "x": 163,
+      "y": 10,
+      "z": 229
+     },
+     "seconds": 120,
+     "maxDig": 80,
+     "canDig": [
+      "stone",
+      "dirt",
+      "cobblestone",
+      "gravel"
+     ]
+    }
+   ],
+   "stopIf": {
+    "hostileWithin": 8,
+    "hpBelow": 12
+   },
+   "why": "[p4.1] 作業台を持ち鉄へ下りる（食料17/40・板5）"
+  }
+ },
+ "expected": {
+  "actResult": {
+   "ok": false,
+   "done": 1,
+   "of": 2,
+   "stoppedBy": "failure",
+   "lines": [
+    {
+     "i": 1,
+     "do": "dig",
+     "status": "done",
+     "goal": "already",
+     "end": "finished"
+    },
+    {
+     "i": 2,
+     "do": "go",
+     "status": "stopped",
+     "goal": "partial",
+     "end": "finished",
+     "code": "search_timeout",
+     "progress": {
+      "unit": "meter",
+      "done": 36,
+      "left": 10,
+      "at": {
+       "x": 161,
+       "y": 33,
+       "z": 214
+      }
+     }
+    }
+   ],
+   "outcome": {
+    "goal": "partial",
+    "end": "finished",
+    "life": 1
+   }
+  },
+  "receiptUnit": {
+   "goal": "partial",
+   "end": "finished",
+   "released": true
+  }
+ },
+ "checks": [
+  "体: dig の already と go の progress（meter）",
+  "頭: partial の文に残り 10m と止まった所を出す"
+ ]
+}

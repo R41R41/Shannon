@@ -1,0 +1,94 @@
+{
+ "contract": "vertical",
+ "version": 1,
+ "scene": "頭の短い書き方と JSON の往復",
+ "source": "minecraftActShortHands.ts の書き方（往復が同じにならない手は json の行）",
+ "known": [],
+ "decided": [
+  "shape は stairs・shaft・pillar（shaft は下りだけ、pillar は上りだけ）"
+ ],
+ "input": {
+  "lines": [
+   "vertical stairs south y=10 dig=stone,dirt maxDig=80 liquid=stop seconds=120",
+   "vertical shaft y=-50 dig=stone,deepslate place=cobblestone maxPlace=30 liquid=seal range=1",
+   "vertical pillar y=63 place=cobblestone maxPlace=60 liquid=seal_water",
+   "vertical stairs north y=70 dig=stone,dirt liquid=stop dependsOn=1"
+  ]
+ },
+ "expected": {
+  "hands": [
+   {
+    "do": "vertical",
+    "shape": "stairs",
+    "toward": "south",
+    "toY": 10,
+    "canDig": [
+     "stone",
+     "dirt"
+    ],
+    "maxDig": 80,
+    "liquid": "stop",
+    "seconds": 120
+   },
+   {
+    "do": "vertical",
+    "shape": "shaft",
+    "toY": -50,
+    "canDig": [
+     "stone",
+     "deepslate"
+    ],
+    "canPlace": [
+     "cobblestone"
+    ],
+    "maxPlace": 30,
+    "liquid": "seal",
+    "range": 1
+   },
+   {
+    "do": "vertical",
+    "shape": "pillar",
+    "toY": 63,
+    "canPlace": [
+     "cobblestone"
+    ],
+    "maxPlace": 60,
+    "liquid": "seal_water"
+   },
+   {
+    "do": "vertical",
+    "shape": "stairs",
+    "toward": "north",
+    "toY": 70,
+    "canDig": [
+     "stone",
+     "dirt"
+    ],
+    "liquid": "stop",
+    "dependsOn": [
+     1
+    ]
+   }
+  ],
+  "refused": [
+   {
+    "line": "vertical stairs y=10 dig=stone liquid=stop",
+    "why": "stairs には toward が要る"
+   },
+   {
+    "line": "vertical shaft y=80 dig=stone liquid=stop",
+    "why": "shaft は下りだけ（toY が今より上）",
+    "needsNowY": 60
+   },
+   {
+    "line": "vertical pillar y=40 place=cobblestone liquid=stop",
+    "why": "pillar は上りだけ",
+    "needsNowY": 60
+   }
+  ]
+ },
+ "checks": [
+  "頭: 読み書きの往復と断り",
+  "体: zod の形が同じ（catalog の produced で確かめる）"
+ ]
+}

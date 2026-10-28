@@ -1,0 +1,41 @@
+{
+ "contract": "control",
+ "version": 1,
+ "scene": "反射 melee が上限に着いた。急ぎの知らせを出し、盾で 3 秒までつなぐ",
+ "source": "設計 D4（反射の上限の後）",
+ "known": [],
+ "decided": [
+  "つなぎは盾か一歩下がるだけ、3 秒まで、終わりの条件 4 つ"
+ ],
+ "input": {
+  "reflex": "floor-melee",
+  "budget": {
+   "count": 6,
+   "windowMs": 10000
+  },
+  "hp": 9,
+  "hasShield": true
+ },
+ "expected": {
+  "event": {
+   "kind": "reflex.capped",
+   "subject": "floor-melee",
+   "data": {
+    "count": 6,
+    "windowMs": 10000,
+    "bridge": "shield"
+   }
+  },
+  "holder": {
+   "kind": "bridge",
+   "after": "floor-melee",
+   "hold": "shield",
+   "untilMsAtMost": 3000
+  },
+  "headUrgent": true
+ },
+ "checks": [
+  "体（B）: 出来事とつなぎ",
+  "頭: reflex.capped で急ぎの判断"
+ ]
+}

@@ -1,0 +1,56 @@
+{
+ "contract": "measure",
+ "version": 1,
+ "scene": "live の加工の前後。鱈・鮭が「判断に届いた」かを shown で確かめる（消さなかった、ではない）",
+ "source": "Codex DESIGN.md（1）D6（nearWorthy の 16m 枠・foodLeads・件数の上限・急ぎの版に near が無い）",
+ "known": [
+  "今は魚が無関係の扱いで、外しても 16m の枠"
+ ],
+ "decided": [
+  "live の行に raw と shown と dropped"
+ ],
+ "input": {
+  "raw": {
+   "near": [
+    {
+     "name": "cod",
+     "id": 501,
+     "distance": 18.2
+    },
+    {
+     "name": "salmon",
+     "id": 502,
+     "distance": 21.0
+    },
+    {
+     "name": "zombie",
+     "id": 9,
+     "distance": 30
+    }
+   ]
+  },
+  "kind": [
+   "normal",
+   "urgent"
+  ],
+  "foodPoints": 12
+ },
+ "expected": {
+  "liveRow": {
+   "ev": "live",
+   "droppedHasNoFoodAnimal": true
+  },
+  "shownMustContain": {
+   "normal": [
+    "cod",
+    "salmon"
+   ],
+   "urgent": [
+    "cod"
+   ]
+  }
+ },
+ "checks": [
+  "頭: 入力の取り出し（台 D）で shown を確かめる（境界 10）"
+ ]
+}

@@ -1,0 +1,89 @@
+{
+ "contract": "continue",
+ "version": 1,
+ "scene": "act の中で go が止まった後、dependsOn [] の eat は動き、dependsOn [1] の craft は動かない",
+ "source": "設計 D1（後ろの手をどこまで捨てるか）",
+ "known": [
+  "今は onFail stop の手が止まると後ろは全部 skipped"
+ ],
+ "decided": [
+  "dependsOn が配列で、止まった手を含まない手だけ動く",
+  "無い手は今どおり動かない"
+ ],
+ "input": {
+  "act": {
+   "hands": [
+    {
+     "do": "go",
+     "to": {
+      "x": 40,
+      "y": 64,
+      "z": 0
+     },
+     "seconds": 30
+    },
+    {
+     "do": "eat",
+     "item": "bread",
+     "dependsOn": []
+    },
+    {
+     "do": "craft",
+     "item": "crafting_table",
+     "dependsOn": [
+      1
+     ]
+    },
+    {
+     "do": "equip",
+     "item": "stone_sword"
+    }
+   ]
+  },
+  "world": {
+   "goStops": "stuck"
+  }
+ },
+ "expected": {
+  "lines": [
+   {
+    "i": 1,
+    "do": "go",
+    "status": "stopped",
+    "goal": "partial",
+    "end": "finished",
+    "code": "stuck"
+   },
+   {
+    "i": 2,
+    "do": "eat",
+    "status": "done",
+    "goal": "done",
+    "end": "finished"
+   },
+   {
+    "i": 3,
+    "do": "craft",
+    "status": "skipped",
+    "goal": "not_started",
+    "end": "not_run",
+    "code": "depends_on_stopped:1"
+   },
+   {
+    "i": 4,
+    "do": "equip",
+    "status": "skipped",
+    "goal": "not_started",
+    "end": "not_run"
+   }
+  ],
+  "outcome": {
+   "goal": "partial",
+   "end": "finished"
+  }
+ },
+ "checks": [
+  "体: runAct の止まりの後の続け",
+  "頭: 短い書き方 `eat bread dependsOn=` と `craft crafting_table dependsOn=1` の往復"
+ ]
+}

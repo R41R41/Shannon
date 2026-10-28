@@ -1,0 +1,30 @@
+{
+ "contract": "life",
+ "version": 1,
+ "scene": "実行中・反射待ち・列待ち・LLM の返事待ちの 4 つの瞬間に死ぬ。生き返った後、古い命の命令が一度も動かない",
+ "source": "Codex DESIGN.md（6）境界「死亡と非同期」",
+ "known": [],
+ "decided": [
+  "死の出来事で、待ち・実行中・ロック待ちを止める。頭は返事を破棄"
+ ],
+ "input": {
+  "moments": [
+   "running_hand",
+   "waiting_for_reflex",
+   "queued",
+   "awaiting_model"
+  ]
+ },
+ "expected": {
+  "each": {
+   "oldLifeFirstMotor": 0,
+   "headDecisionDiscarded": {
+    "awaiting_model": "life_changed"
+   },
+   "droppedCode": "death"
+  }
+ },
+ "checks": [
+  "通し（B＋C）: 同じ command の記録で firstMotorAt が無い"
+ ]
+}

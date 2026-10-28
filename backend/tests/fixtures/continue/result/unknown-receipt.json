@@ -1,0 +1,45 @@
+{
+ "contract": "result",
+ "version": 1,
+ "scene": "受け取りが unknown（解放を確かめていない）。頭は投げずに「不明」を LLM へ。自動で出し直さない",
+ "source": "Codex DESIGN.md（1）D1: receiptOf() が FCA_BODY_OUTCOME_UNKNOWN を投げる。今の minecraftControl.ts の receiptOf()",
+ "known": [
+  "今の頭は outcome unknown か inputsReleased false で例外にする"
+ ],
+ "decided": [
+  "receiptOf は受け取りを返す",
+  "体の報告が無い unknown は頭が goal unknown を作る",
+  "同じ項目は自動で送り直さない（境界 8）"
+ ],
+ "input": {
+  "receipt": {
+   "id": "skill:abc",
+   "connectionId": "c-1",
+   "outcome": "unknown",
+   "inputsReleased": false,
+   "observedAt": "2026-10-28T05:00:00.000Z",
+   "result": "BODY_EXECUTION_UNKNOWN"
+  },
+  "item": "q40"
+ },
+ "expected": {
+  "itemOutcome": {
+   "goal": "unknown",
+   "end": "unknown",
+   "released": false
+  },
+  "headResultText": {
+   "mustContain": [
+    "不明",
+    "出し直さない"
+   ]
+  },
+  "resent": false,
+  "queueAfter": "held_until_cleanup"
+ },
+ "checks": [
+  "頭: receiptOf が投げない",
+  "頭: settle が unknown を作り、後ろを始めない",
+  "頭: 片付けの後まで新しい項目を送らない"
+ ]
+}

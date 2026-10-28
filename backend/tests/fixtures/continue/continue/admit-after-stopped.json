@@ -1,0 +1,29 @@
+{
+ "contract": "continue",
+ "version": 1,
+ "scene": "after の項目が止まっていても、dependsOn に含まない新しい項目は受ける",
+ "source": "bodyQueue.ts admit()（今は queue_after_gone で断る）",
+ "known": [
+  "今の admit: after が recent で false なら gone"
+ ],
+ "decided": [
+  "dependsOn が配列で after を含まない → start（列が空）か wait"
+ ],
+ "input": {
+  "recent": {
+   "q20": false
+  },
+  "busy": false,
+  "new": {
+   "item": "q21",
+   "after": "q20",
+   "dependsOn": []
+  }
+ },
+ "expected": {
+  "admission": "start"
+ },
+ "checks": [
+  "体: admit の表の試験"
+ ]
+}

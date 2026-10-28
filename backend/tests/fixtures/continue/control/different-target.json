@@ -1,0 +1,39 @@
+{
+ "contract": "control",
+ "version": 1,
+ "scene": "反射 melee が #2601、頭の fight は別の #3000。反射は今の 1 手（2 打まで）を終えて次を始めず、その後に act",
+ "source": "実走 45 +929 の直し（holdMeleeForHead）を attack にも広げる",
+ "known": [],
+ "decided": [
+  "相手が違う時は奪わない。待ちは 1 手分"
+ ],
+ "input": {
+  "holder": {
+   "kind": "reflex",
+   "reflex": "floor-melee",
+   "priority": 250,
+   "target": 2601
+  },
+  "act": {
+   "hands": [
+    {
+     "do": "fight",
+     "target": "#3000"
+    }
+   ]
+  }
+ },
+ "expected": {
+  "meleeStartsNoNextHand": true,
+  "handover": null,
+  "afterReflex": {
+   "mustContain": [
+    "melee"
+   ]
+  },
+  "waitedMsAtMost": 1500
+ },
+ "checks": [
+  "体（B）: 反射の台帳に次の手が無い"
+ ]
+}

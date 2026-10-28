@@ -1,0 +1,169 @@
+{
+ "contract": "e2e",
+ "version": 1,
+ "benches": {
+  "A": "再生の台（VM、run-replay.sh・scene-case.py、本物の体と写したワールド）",
+  "B": "隔離ラボ（VM、本物のサーバー・bot・反射・盾・道探し。run-incident-lab.sh と run-hands-live を広げる）。D4 はここ",
+  "C": "本物の頭の通し（minecraftHoldResumeLab.ts を広げる。頭は本物、モデルは台本）",
+  "D": "入力の取り出し（recordedClient を送らずに要求のバイトを返す形で。API は呼ばない）"
+ },
+ "join": "TraceIds.command で、判断の記録（events.jsonl）・受け取り（BodyTimes）・黒箱（hand_start と出来事）を突き合わせる。つながらない command が 1 つでもあれば不合格",
+ "boundaries": [
+  {
+   "n": 1,
+   "name": "結果と列",
+   "benches": [
+    "B",
+    "C"
+   ],
+   "fixtures": [
+    "result/r43-reflex-ate-first.json",
+    "continue/queue-item-depends.json"
+   ],
+   "pass": [
+    "eat の手の goal が already",
+    "dependsOn [] の項目に startedAt がある",
+    "頼る項目だけ droppedBecause"
+   ]
+  },
+  {
+   "n": 2,
+   "name": "途中の成果",
+   "benches": [
+    "A"
+   ],
+   "fixtures": [
+    "vertical/r45-hold5-shaft-down-to-diamond.json",
+    "vertical/r45-hold7-pillar-up.json"
+   ],
+   "pass": [
+    "progress.done と黒箱の掘り・置きの数が合う",
+    "2 本目が progress.at から始まり、掘った段を掘り直さない"
+   ]
+  },
+  {
+   "n": 3,
+   "name": "約束と消費",
+   "benches": [
+    "A",
+    "C"
+   ],
+   "fixtures": [
+    "promise/r43-planks-burned-as-fuel.json",
+    "promise/table-crafted-placed-picked.json",
+    "promise/food-for-underground.json"
+   ],
+   "pass": [
+    "受け取りのたびに帳簿の have と観測の持ち物が合う（ずれ 0）"
+   ]
+  },
+  {
+   "n": 4,
+   "name": "すぐの引き継ぎ",
+   "benches": [
+    "B",
+    "C"
+   ],
+   "fixtures": [
+    "control/r45-attack-waited-6-4s.json",
+    "control/different-target.json",
+    "control/high-priority-not-taken.json"
+   ],
+   "pass": [
+    "同じ相手: lockAt − acceptedAt ≤ 300 ms かつ handover.confirmed",
+    "別の相手: melee が次の手を始めない",
+    "溶岩・息: 奪わない",
+    "盾の構えが引き継ぎの間に外れない"
+   ]
+  },
+  {
+   "n": 5,
+   "name": "死と非同期",
+   "benches": [
+    "B",
+    "C"
+   ],
+   "fixtures": [
+    "life/death-at-each-moment.json",
+    "life/r45-death-then-old-attack.json"
+   ],
+   "pass": [
+    "4 つの瞬間のどれでも、古い life の command に firstMotorAt が無い",
+    "awaiting_model の判断は discarded（life_changed）"
+   ]
+  },
+  {
+   "n": 6,
+   "name": "古い持ち主",
+   "benches": [
+    "B"
+   ],
+   "fixtures": [
+    "control/stale-owner-cleanup.json"
+   ],
+   "pass": [
+    "新しい token の後の古い片付けの操作が 0 件効いた"
+   ]
+  },
+  {
+   "n": 7,
+   "name": "次元と復活",
+   "benches": [
+    "B"
+   ],
+   "fixtures": [
+    "life/portal-is-not-death.json"
+   ],
+   "pass": [
+    "ポータルで life が変わらない",
+    "死んで生き返った後、前の次元の座標の act が始まらない"
+   ]
+  },
+  {
+   "n": 8,
+   "name": "通信と再起動",
+   "benches": [
+    "B",
+    "C"
+   ],
+   "fixtures": [
+    "result/unknown-receipt.json"
+   ],
+   "pass": [
+    "同じ command の firstMotorAt が 2 回無い",
+    "unknown の項目が自動で出し直されない",
+    "帳簿に同じ消費が 2 回無い"
+   ]
+  },
+  {
+   "n": 9,
+   "name": "計画",
+   "benches": [
+    "C"
+   ],
+   "fixtures": [
+    "plan/first-plan-with-kind.json",
+    "plan/title-renamed-same-knowledge.json",
+    "plan/descent-closed-skipped.json",
+    "plan/migrate-v1-to-v2.json"
+   ],
+   "pass": [
+    "kind と prep が保存・頭の再起動・読み戻しで残る",
+    "題名の言い換えの前後で知識・不足・meter・近くの候補の文が同じ"
+   ]
+  },
+  {
+   "n": 10,
+   "name": "実際の LLM の入力",
+   "benches": [
+    "D"
+   ],
+   "fixtures": [
+    "measure/live-before-after-fish.json"
+   ],
+   "pass": [
+    "急ぎの版の最後の要求のバイトに、食料・体力・持ち主・命の番号・約束の 1 行がある"
+   ]
+  }
+ ]
+}

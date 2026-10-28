@@ -1,0 +1,70 @@
+{
+ "contract": "continue",
+ "version": 1,
+ "scene": "列: q12 が止まった。q13（dependsOn []）は始まる、q14（無し）と q15（dependsOn q12）は捨てる",
+ "source": "設計 D1、Codex DESIGN.md（1）D1（BodyQueue.admit・dropWaiting）",
+ "known": [
+  "今は completed && inputsReleased 以外で待っている物を全部捨てる（controlLoop.ts launch）"
+ ],
+ "decided": [
+  "残すのは dependsOn が配列で、止まった項目も捨てた項目も含まない物だけ",
+  "残した項目は始める直前に pre を確かめる"
+ ],
+ "input": {
+  "running": {
+   "item": "q12",
+   "ends": {
+    "outcome": "failed",
+    "failureType": "stuck",
+    "inputsReleased": true
+   }
+  },
+  "waiting": [
+   {
+    "item": "q13",
+    "after": "q12",
+    "dependsOn": [],
+    "pre": [
+     [
+      {
+       "k": "furnace",
+       "x": 157,
+       "y": 23,
+       "z": 213
+      }
+     ]
+    ]
+   },
+   {
+    "item": "q14",
+    "after": "q13"
+   }
+  ]
+ },
+ "expected": {
+  "q12": {
+   "goal": "failed",
+   "end": "finished"
+  },
+  "q13": {
+   "starts": true,
+   "keptDespite": {
+    "item": "q12",
+    "code": "stuck"
+   }
+  },
+  "q14": {
+   "starts": false,
+   "droppedBecause": {
+    "item": "q12",
+    "code": "stuck"
+   },
+   "goal": "not_started",
+   "end": "not_run"
+  }
+ },
+ "checks": [
+  "体: launch の終わりの選り分け、begin の pre",
+  "頭: drop が q13 を取り消さない、列の知らせ"
+ ]
+}

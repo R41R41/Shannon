@@ -1,0 +1,68 @@
+{
+ "contract": "plan",
+ "version": 1,
+ "scene": "最初の計画の答えに kind が付き、seedFields と保存と meter で同じ意味",
+ "source": "Codex DESIGN.md（1）D5（seedFields・PlanNodeDraft・draftNode）",
+ "known": [
+  "今の seedFields は where・doneWhen・note・forbid・caution だけを読み、kind は落ちる"
+ ],
+ "decided": [
+  "kind は LLM が付ける。無い節は other"
+ ],
+ "input": {
+  "firstPlanAnswer": {
+   "nodes": [
+    {
+     "id": "p1",
+     "parent": null,
+     "title": "木と石の道具",
+     "kind": "stone_tools",
+     "where": "",
+     "doneWhen": "have:stone_pickaxe>=1"
+    },
+    {
+     "id": "p3",
+     "parent": null,
+     "title": "食料40点と下る準備",
+     "kind": "prep_descent",
+     "where": "",
+     "doneWhen": "food>=40&作業台か板 4"
+    },
+    {
+     "id": "p5",
+     "parent": null,
+     "title": "ダイヤ（y=-58）",
+     "kind": "diamond",
+     "where": "y=-58",
+     "doneWhen": "have:diamond>=3"
+    },
+    {
+     "id": "p9",
+     "parent": null,
+     "title": "村を見る",
+     "where": "",
+     "doneWhen": ""
+    }
+   ]
+  }
+ },
+ "expected": {
+  "saved": {
+   "schema": "shannon.plan-tree.v2",
+   "kinds": {
+    "p1": "stone_tools",
+    "p3": "prep_descent",
+    "p5": "diamond",
+    "p9": "other"
+   },
+   "promises": []
+  },
+  "preparationStageWhenCurrent": {
+   "p5": "diamonds",
+   "p3": null
+  }
+ },
+ "checks": [
+  "頭: seedFields・planFromAnswer・保存・preparationStage"
+ ]
+}

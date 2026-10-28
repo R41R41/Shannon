@@ -1,0 +1,38 @@
+{
+ "contract": "continue",
+ "version": 1,
+ "scene": "dependsOn を書いていない時は、今どおり捨てる（前提を書いていない事を、頼らない証拠にしない）",
+ "source": "設計 D1",
+ "known": [],
+ "decided": [
+  "pre が無いことも、dependsOn が無いことも、頼らない証拠ではない"
+ ],
+ "input": {
+  "running": {
+   "item": "q30",
+   "ends": {
+    "outcome": "failed",
+    "failureType": "search_timeout",
+    "inputsReleased": true
+   }
+  },
+  "waiting": [
+   {
+    "item": "q31",
+    "after": "q30"
+   }
+  ]
+ },
+ "expected": {
+  "q31": {
+   "starts": false,
+   "droppedBecause": {
+    "item": "q30",
+    "code": "search_timeout"
+   }
+  }
+ },
+ "checks": [
+  "体・頭: 今の動きが変わらないこと"
+ ]
+}

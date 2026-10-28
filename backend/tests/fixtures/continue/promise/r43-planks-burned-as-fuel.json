@@ -1,0 +1,103 @@
+{
+ "contract": "promise",
+ "version": 1,
+ "scene": "作業台用の板 4 の約束があるのに、板を燃料にした。帳簿は consumed_other、live に足りない量",
+ "source": "実走 43 +720 q69「raw_iron×15 を入れた、燃料 spruce_planks×1」と p3「作業台か板 4」（run43-report.md 83・130 行）",
+ "known": [
+  "p3 の節の doneWhen は「food>=40&作業台か板 4」",
+  "+720 に板を燃料に入れた。その後、燃料と作業台のために地上へ上った"
+ ],
+ "decided": [
+  "約束 #3（板 4・用途 作業台・代わり 作業台を持つか近くにある）",
+  "smelt の燃料は uses に約束が無いので consumed_other",
+  "断らない"
+ ],
+ "input": {
+  "promises": [
+   {
+    "id": 3,
+    "rev": 1,
+    "item": "planks",
+    "count": 4,
+    "use": "作業台",
+    "instead": [
+     [
+      {
+       "k": "have",
+       "item": "crafting_table",
+       "n": 1
+      }
+     ],
+     [
+      {
+       "k": "near",
+       "block": "crafting_table",
+       "r": 8
+      }
+     ]
+    ],
+    "state": "open",
+    "ledger": [
+     {
+      "at": "2026-10-28T18:12:00.000Z",
+      "kind": "made",
+      "count": 4,
+      "have": 4
+     }
+    ]
+   }
+  ],
+  "act": {
+   "hands": [
+    {
+     "do": "smelt",
+     "items": [
+      {
+       "item": "raw_iron",
+       "count": 15
+      }
+     ],
+     "fuel": "spruce_planks",
+     "fuelCount": 2
+    }
+   ],
+   "why": "[p4.1] 鉄を取り残りを焼く"
+  },
+  "handDelta": {
+   "spent": [
+    {
+     "item": "raw_iron",
+     "count": 15,
+     "as": "ingredient"
+    },
+    {
+     "item": "spruce_planks",
+     "count": 2,
+     "as": "fuel"
+    }
+   ],
+   "gained": []
+  },
+  "haveAfter": {
+   "planks": 2
+  }
+ },
+ "expected": {
+  "ledgerAdded": [
+   {
+    "kind": "consumed_other",
+    "count": 2,
+    "have": 2,
+    "by": {
+     "kind": "smelt_fuel"
+    }
+   }
+  ],
+  "state": "open",
+  "liveLine": "約束 #3 作業台用の板 4: 今 2・直前に燃料で 2 消費（足りない 2）"
+ },
+ "checks": [
+  "体: smelt の delta（as fuel）",
+  "頭: 帳簿の行と live の 1 行（文字どおり）"
+ ]
+}

@@ -1,0 +1,32 @@
+{
+ "contract": "control",
+ "version": 1,
+ "scene": "溶岩からの脱出（priority 400）の間に頭の fight が来ても奪わない",
+ "source": "lavaSafety.ts LAVA_ESCAPE_PRIORITY 400",
+ "known": [],
+ "decided": [
+  "溶岩・壁・退避・掘り出し・息・食事・防具は奪わない"
+ ],
+ "input": {
+  "holder": {
+   "kind": "reflex",
+   "reflex": "lava-escape",
+   "priority": 400
+  },
+  "act": {
+   "hands": [
+    {
+     "do": "fight",
+     "target": "#77"
+    }
+   ]
+  }
+ },
+ "expected": {
+  "handover": null,
+  "waitsForReflex": true
+ },
+ "checks": [
+  "体（B）"
+ ]
+}

@@ -1,0 +1,77 @@
+{
+ "contract": "plan",
+ "version": 1,
+ "scene": "保存されている v1 のツリーを、1 回だけ v2 に読み替える（正規表現はこの読み替えだけに残る）",
+ "source": "7 章の移し方",
+ "known": [],
+ "decided": [
+  "kind は今の題名の正規表現で推す。「準備を省いた」の注記は prep skipped、準備の節の done は met"
+ ],
+ "input": {
+  "v1": {
+   "schema": "shannon.plan-tree.v1",
+   "revision": 30,
+   "current": "p4",
+   "nodes": [
+    {
+     "id": "p1",
+     "parentId": null,
+     "order": 0,
+     "title": "食料40点と地下の準備",
+     "state": "done",
+     "doneWhen": "food>=40",
+     "note": "準備を省いた（地下で鉄を掘り始めた）"
+    },
+    {
+     "id": "p2",
+     "parentId": null,
+     "order": 1,
+     "title": "鉄（24〜36）",
+     "state": "done",
+     "doneWhen": "have:iron_ingot>=6"
+    },
+    {
+     "id": "p3",
+     "parentId": null,
+     "order": 2,
+     "title": "ダイヤ（y=-58）",
+     "state": "continue"
+    },
+    {
+     "id": "p4",
+     "parentId": null,
+     "order": 3,
+     "title": "ネザーへのゲート",
+     "state": "wait"
+    },
+    {
+     "id": "p5",
+     "parentId": null,
+     "order": 4,
+     "title": "黒曜石を作る",
+     "state": "wait"
+    }
+   ]
+  }
+ },
+ "expected": {
+  "v2": {
+   "schema": "shannon.plan-tree.v2",
+   "revision": 31,
+   "kinds": {
+    "p1": "prep_descent",
+    "p2": "iron",
+    "p3": "diamond",
+    "p4": "portal",
+    "p5": "obsidian"
+   },
+   "prep": {
+    "p1": "skipped"
+   },
+   "promises": []
+  }
+ },
+ "checks": [
+  "頭: v1 を読み戻す試験"
+ ]
+}

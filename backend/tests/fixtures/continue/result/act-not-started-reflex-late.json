@@ -1,0 +1,47 @@
+{
+ "contract": "result",
+ "version": 1,
+ "scene": "反射が時間内に放さず始められなかった act は not_started（今の interrupted_by_reflex）",
+ "source": "nativeBody.ts の afterReflex() の late（r10）",
+ "known": [
+  "今は「…時間内に放されなかったため始められなかった（…体は何も動かしていない）」で failed・interrupted_by_reflex"
+ ],
+ "decided": [
+  "goal not_started・end not_run（手は 1 つも動いていない）"
+ ],
+ "input": {
+  "reflex": {
+   "name": "floor-eat",
+   "heldMs": 9000
+  },
+  "act": {
+   "hands": [
+    {
+     "do": "go",
+     "to": {
+      "x": 10,
+      "y": 64,
+      "z": 0
+     }
+    }
+   ]
+  },
+  "deadlineMs": 8000
+ },
+ "expected": {
+  "receipt": {
+   "outcome": "failed",
+   "failureType": "interrupted_by_reflex",
+   "inputsReleased": true
+  },
+  "receiptUnit": {
+   "goal": "not_started",
+   "end": "not_run",
+   "released": true
+  }
+ },
+ "checks": [
+  "体: execute の late の受け取りに unit",
+  "頭: not_started の項目の後ろは dependsOn で決める"
+ ]
+}

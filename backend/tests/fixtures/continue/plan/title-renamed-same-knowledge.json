@@ -1,0 +1,94 @@
+{
+ "contract": "plan",
+ "version": 1,
+ "scene": "題名を言い換えても、段の知識・不足・meter・近くの候補が同じ",
+ "source": "境界 9（Codex DESIGN.md（6））",
+ "known": [
+  "今は題名「ダイヤ（y=-58）」を「深い所の青い石」にすると preparationStage が diamonds でなくなる"
+ ],
+ "decided": [
+  "kind で決める"
+ ],
+ "input": {
+  "tree": {
+   "schema": "shannon.plan-tree.v2",
+   "revision": 12,
+   "current": "p5",
+   "nodes": [
+    {
+     "id": "p1",
+     "parentId": null,
+     "order": 0,
+     "title": "木と石の道具",
+     "state": "done",
+     "kind": "stone_tools"
+    },
+    {
+     "id": "p3",
+     "parentId": null,
+     "order": 1,
+     "title": "食料40点と下る準備",
+     "state": "done",
+     "kind": "prep_descent",
+     "doneWhen": "food>=40&作業台か板 4",
+     "prep": {
+      "state": "skipped",
+      "why": "地下で準備の前に下りた",
+      "at": "2026-10-28T18:20:00.000Z"
+     }
+    },
+    {
+     "id": "p4",
+     "parentId": null,
+     "order": 2,
+     "title": "鉄（24〜36）",
+     "state": "continue",
+     "kind": "iron",
+     "where": "y=16"
+    },
+    {
+     "id": "p5",
+     "parentId": null,
+     "order": 3,
+     "title": "ダイヤ（y=-58）",
+     "state": "wait",
+     "kind": "diamond"
+    },
+    {
+     "id": "p6",
+     "parentId": null,
+     "order": 4,
+     "title": "黒曜石10",
+     "state": "wait",
+     "kind": "obsidian"
+    },
+    {
+     "id": "p7",
+     "parentId": null,
+     "order": 5,
+     "title": "ネザーへのゲート",
+     "state": "wait",
+     "kind": "portal"
+    }
+   ],
+   "promises": []
+  },
+  "rename": {
+   "p5": "深い所の青い石を掘る",
+   "p7": "赤い世界への門"
+  }
+ },
+ "expected": {
+  "sameBeforeAndAfter": [
+   "preparationStage",
+   "stagesFor",
+   "obsidianWays",
+   "meterLine",
+   "nearNeeds",
+   "gateBack"
+  ]
+ },
+ "checks": [
+  "頭: 7 章の表の関数を題名の言い換えの前後で比べる"
+ ]
+}

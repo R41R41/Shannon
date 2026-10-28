@@ -1,0 +1,48 @@
+{
+ "contract": "control",
+ "version": 1,
+ "scene": "新しい持ち主（命令 B）が始めた後に、古い命令 A の片付けが走っても、B のキー・盾・道は消えない",
+ "source": "Codex DESIGN.md（6）境界「古い制御者」",
+ "known": [],
+ "decided": [
+  "操作は今の token を持つ文脈からだけ効く"
+ ],
+ "input": {
+  "sequence": [
+   {
+    "t": 0,
+    "holder": "A",
+    "token": 11
+   },
+   {
+    "t": 100,
+    "holder": "B",
+    "token": 12,
+    "controls": {
+     "forward": true,
+     "shield": true
+    }
+   },
+   {
+    "t": 150,
+    "lateCleanupOf": "A",
+    "calls": [
+     "clearControlStates",
+     "deactivateItem",
+     "pathfinder.setGoal(null)"
+    ]
+   }
+  ]
+ },
+ "expected": {
+  "afterT150": {
+   "forward": true,
+   "shield": true,
+   "pathGoal": "kept"
+  },
+  "droppedCalls": 3
+ },
+ "checks": [
+  "体（B）: token の記録"
+ ]
+}

@@ -1,0 +1,26 @@
+{
+ "contract": "measure",
+ "version": 1,
+ "scene": "先読み: 列の残りで起きた時の見積もりと実際の終わりの差",
+ "source": "Codex DESIGN.md（3）先読み時機と残り時間の誤差",
+ "known": [
+  "今の先読みは直近の中央値を 2〜8 秒に収めた物"
+ ],
+ "decided": [
+  "woke の行に predictedRemainingMs"
+ ],
+ "input": {
+  "woke": {
+   "why": "remaining",
+   "at": "2026-10-28T05:00:00.000Z",
+   "predictedRemainingMs": 4000
+  },
+  "itemEndedAt": "2026-10-28T05:00:09.500Z"
+ },
+ "expected": {
+  "errorMs": 5500
+ },
+ "checks": [
+  "頭: woke の行と judge.ts"
+ ]
+}

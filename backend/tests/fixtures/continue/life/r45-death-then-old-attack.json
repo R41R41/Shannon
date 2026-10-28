@@ -1,0 +1,49 @@
+{
+ "contract": "life",
+ "version": 1,
+ "scene": "死の前の判断の act（life 2）が、死んだ後（life 3）に届いた。体は stale_life で断り、手は動かない",
+ "source": "実走 45 +929（run45-live.md 38 行）: q52 はリスポーンの後に始まり target_not_found",
+ "known": [
+  "今は死をまたいで古い act が始まった"
+ ],
+ "decided": [
+  "体は accept で context.life を照らす"
+ ],
+ "input": {
+  "lifeNow": 3,
+  "command": {
+   "id": "skill:q52",
+   "context": {
+    "scopeKey": "owner",
+    "taskId": "t-run",
+    "taskRevision": 3,
+    "bodyId": "minecraft:shannon-home",
+    "sessionId": "s-1",
+    "generation": 7,
+    "goal": "エンドラを討伐して",
+    "completionCondition": "",
+    "life": 2
+   },
+   "queue": {
+    "item": "q52"
+   }
+  }
+ },
+ "expected": {
+  "receipt": {
+   "outcome": "failed",
+   "failureType": "stale_life",
+   "inputsReleased": true
+  },
+  "receiptUnit": {
+   "goal": "not_started",
+   "end": "not_run",
+   "released": true
+  },
+  "firstMotorAt": null
+ },
+ "checks": [
+  "体: accept の照らし",
+  "頭: 判断の返事が life 2 なら破棄（life_changed）"
+ ]
+}

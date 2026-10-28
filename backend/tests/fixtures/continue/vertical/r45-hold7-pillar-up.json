@@ -1,0 +1,63 @@
+{
+ "contract": "vertical",
+ "version": 1,
+ "scene": "保留 7 の上りを柱で。y=7 から地上の y=63 へ（56 段）。置く上限と時間の上限、止まったら残り",
+ "source": "実走 45 保留 7（run45-live.md 127〜131 行）: go が 120 秒で着かず「(178,56,198) 道 52 歩・掘 6・置 48・引き直し 12 回」",
+ "known": [
+  "go は柱を積んで y=7 → 56 を上ったが、最後はブロックの変化で引き直しを続けた"
+ ],
+ "decided": [
+  "上りも同じ手（toY が今より上）。shape pillar は足の下に置いて上る、stairs は上へ階段を掘る",
+  "頭の上の掘れない物・落ちてくる物の扱いは体の細部（掘り直す）。掘れない物は止める"
+ ],
+ "input": {
+  "from": {
+   "x": 179,
+   "y": 7,
+   "z": 198
+  },
+  "hand": {
+   "do": "vertical",
+   "shape": "pillar",
+   "toY": 63,
+   "canDig": [
+    "stone",
+    "dirt",
+    "tuff",
+    "andesite",
+    "diorite",
+    "granite",
+    "gravel"
+   ],
+   "canPlace": [
+    "cobbled_deepslate",
+    "cobblestone",
+    "dirt"
+   ],
+   "maxPlace": 60,
+   "liquid": "seal_water",
+   "seconds": 120
+  },
+  "short": "vertical pillar y=63 dig=stone,dirt,tuff,andesite,diorite,granite,gravel place=cobbled_deepslate,cobblestone,dirt maxPlace=60 liquid=seal_water seconds=120"
+ },
+ "expected": {
+  "ifTimeRunsOut": {
+   "goal": "partial",
+   "code": "limit_time",
+   "progress": {
+    "unit": "step",
+    "done": 49,
+    "left": 7,
+    "at": {
+     "x": 179,
+     "y": 56,
+     "z": 198
+    }
+   }
+  },
+  "redrawsCounted": 0
+ },
+ "checks": [
+  "体（A）: pillar の段数・置いた数と黒箱が合う。道探しをしない（引き直しが無い）"
+ ]
+}

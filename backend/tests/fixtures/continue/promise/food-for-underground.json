@@ -1,0 +1,105 @@
+{
+ "contract": "promise",
+ "version": 1,
+ "scene": "地下で食べる分の食料 20 点。uses [4] の eat は用途どおりの消費、反射が食べた分は consumed_other（reflex_eat）",
+ "source": "設計 D2（地下で食べる分の食料は、食べると減って正しい）",
+ "known": [],
+ "decided": [
+  "item food は食料の点（ActCondition の food と同じ数え方）"
+ ],
+ "input": {
+  "promises": [
+   {
+    "id": 4,
+    "rev": 1,
+    "item": "food",
+    "count": 20,
+    "use": "地下で食べる分",
+    "until": {
+     "condition": [
+      [
+       {
+        "k": "dim",
+        "dim": "the_nether"
+       }
+      ]
+     ]
+    },
+    "state": "open",
+    "ledger": []
+   }
+  ],
+  "steps": [
+   {
+    "act": {
+     "hands": [
+      {
+       "do": "eat",
+       "item": "bread"
+      }
+     ],
+     "uses": [
+      4
+     ]
+    },
+    "delta": {
+     "spent": [
+      {
+       "item": "bread",
+       "count": 1,
+       "as": "food"
+      }
+     ],
+     "gained": []
+    },
+    "foodPointsAfter": 21
+   },
+   {
+    "reflexDelta": {
+     "reflex": "floor-eat",
+     "delta": {
+      "spent": [
+       {
+        "item": "bread",
+        "count": 1,
+        "as": "food"
+       }
+      ],
+      "gained": []
+     }
+    },
+    "foodPointsAfter": 16
+   }
+  ]
+ },
+ "expected": {
+  "afterEach": [
+   {
+    "ledgerAdded": [
+     {
+      "kind": "consumed_for_use",
+      "count": 5,
+      "have": 21
+     }
+    ],
+    "liveLine": "約束 #4 地下で食べる分の食料 20 点: 今 21 点"
+   },
+   {
+    "ledgerAdded": [
+     {
+      "kind": "consumed_other",
+      "count": 5,
+      "have": 16,
+      "by": {
+       "kind": "reflex_eat"
+      }
+     }
+    ],
+    "liveLine": "約束 #4 地下で食べる分の食料 20 点: 今 16 点・直前に反射の食事で 5 点（足りない 4）"
+   }
+  ]
+ },
+ "checks": [
+  "頭: 食料の点の数え方と行"
+ ]
+}

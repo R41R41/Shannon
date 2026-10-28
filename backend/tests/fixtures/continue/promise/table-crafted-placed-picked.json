@@ -1,0 +1,172 @@
+{
+ "contract": "promise",
+ "version": 1,
+ "scene": "板 4 で作業台を作る（uses [3]）→ 置く → 拾う。代わりの条件で約束を果たしている間は量が 0 でもよい",
+ "source": "Codex DESIGN.md（1）D2（作業台を作る途中・置いて使う間・回収まで）",
+ "known": [],
+ "decided": [
+  "用途どおりの消費は consumed_for_use",
+  "置いた作業台は near で代わりの条件を満たす"
+ ],
+ "input": {
+  "promises": [
+   {
+    "id": 3,
+    "rev": 1,
+    "item": "planks",
+    "count": 4,
+    "use": "作業台",
+    "instead": [
+     [
+      {
+       "k": "have",
+       "item": "crafting_table",
+       "n": 1
+      }
+     ],
+     [
+      {
+       "k": "near",
+       "block": "crafting_table",
+       "r": 8
+      }
+     ]
+    ],
+    "state": "open",
+    "ledger": []
+   }
+  ],
+  "steps": [
+   {
+    "act": {
+     "hands": [
+      {
+       "do": "craft",
+       "item": "crafting_table"
+      }
+     ],
+     "uses": [
+      3
+     ]
+    },
+    "delta": {
+     "spent": [
+      {
+       "item": "oak_planks",
+       "count": 4,
+       "as": "ingredient"
+      }
+     ],
+     "gained": [
+      {
+       "item": "crafting_table",
+       "count": 1
+      }
+     ]
+    },
+    "world": {
+     "have": {
+      "planks": 0,
+      "crafting_table": 1
+     }
+    }
+   },
+   {
+    "act": {
+     "hands": [
+      {
+       "do": "place",
+       "block": "crafting_table",
+       "at": [
+        {
+         "x": 157,
+         "y": 23,
+         "z": 213
+        }
+       ]
+      }
+     ]
+    },
+    "delta": {
+     "spent": [
+      {
+       "item": "crafting_table",
+       "count": 1,
+       "as": "placed"
+      }
+     ],
+     "gained": []
+    },
+    "world": {
+     "have": {
+      "planks": 0,
+      "crafting_table": 0
+     },
+     "near": {
+      "crafting_table": 2
+     }
+    }
+   },
+   {
+    "act": {
+     "hands": [
+      {
+       "do": "dig",
+       "at": [
+        {
+         "x": 157,
+         "y": 23,
+         "z": 213
+        }
+       ]
+      }
+     ]
+    },
+    "delta": {
+     "spent": [],
+     "gained": [
+      {
+       "item": "crafting_table",
+       "count": 1
+      }
+     ]
+    },
+    "world": {
+     "have": {
+      "planks": 0,
+      "crafting_table": 1
+     }
+    }
+   }
+  ]
+ },
+ "expected": {
+  "afterEach": [
+   {
+    "ledgerAdded": [
+     {
+      "kind": "consumed_for_use",
+      "count": 4,
+      "have": 0
+     }
+    ],
+    "state": "kept_by_instead",
+    "liveLine": "約束 #3 作業台用の板 4: 今 0・代わりの条件を満たす（作業台 1）"
+   },
+   {
+    "ledgerAdded": [],
+    "state": "kept_by_instead",
+    "liveLine": "約束 #3 作業台用の板 4: 今 0・代わりの条件を満たす（近くに作業台）"
+   },
+   {
+    "ledgerAdded": [],
+    "state": "kept_by_instead",
+    "liveLine": "約束 #3 作業台用の板 4: 今 0・代わりの条件を満たす（作業台 1）"
+   }
+  ]
+ },
+ "checks": [
+  "頭: 帳簿と代わりの条件（境界 3: 帳簿の have と観測の持ち物がずれない）",
+  "体: craft・place・dig の delta"
+ ]
+}
