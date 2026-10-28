@@ -291,15 +291,14 @@ try {
       produce(`vertical/r45-${spec.name === 'stairs' ? 'hold1-stairs-down' : spec.name === 'shaft' ? 'hold5-shaft-down' : 'hold7-pillar-up'}`, `vertical/r45-${spec.name === 'stairs' ? 'hold1-stairs-down' : spec.name === 'shaft' ? 'hold5-shaft-down' : 'hold7-pillar-up'}`,
         { substitute: 'an arena of stone, not the real run\'s ground', input: { hand: spec.hand }, output: { result: result.parsed, receiptUnit: result.receipt.unit, bodyTimes: result.receipt.bodyTimes, opCounts: { dig: count('dig'), placeBlock: count('placeBlock') } } });
     }
-    // the same ground, a go that the server will not let lay its blocks: the real go's progress with the search and the two distances
+    // a go to a cell walled in rock with nothing it may dig: the search finds no way, and the hand says how far it got and what the search saw
     await reset(actor);
-    await ask('fill 3 95 -16 5 99 16 minecraft:air'); await ask(`give ${ACTOR} minecraft:cobblestone 16`);
-    await ask(`tp ${ACTOR} 0.5 ${FLOOR + 1} 0.5`); await ask(`gamemode adventure ${ACTOR}`); await sleep(2000);
-    const go = await act(body, { hands: [{ do: 'go', to: { x: 9, y: FLOOR + 1, z: 0 }, canPlace: ['cobblestone'], maxPlace: 10, seconds: 40 }] }, { seconds: 90 });
+    await ask('fill 5 100 -2 7 103 2 minecraft:stone'); await ask('fill 6 100 0 6 101 0 minecraft:air');
+    await ask(`tp ${ACTOR} 0.5 ${FLOOR + 1} 0.5`); await sleep(1500);
+    const go = await act(body, { hands: [{ do: 'go', to: { x: 6, y: FLOOR + 1, z: 0 }, canDig: ['dirt'], seconds: 20 }] }, { seconds: 60 });
     const line = go.parsed?.lines?.[0];
     check('a go that stops reports its progress in metres with the two distances and the last search', !!line?.progress && line.progress.unit === 'meter' && typeof line.progress.fromStopM === 'number', JSON.stringify(line ?? null).slice(0, 400));
-    produce('result/r45-hold1-go-partial', 'result/r45-hold1-go-partial', { substitute: 'adventure mode makes the go stop, as the incident lab does', output: { result: go.parsed, receiptUnit: go.receipt.unit } });
-    await ask(`gamemode survival ${ACTOR}`);
+    produce('result/r45-hold1-go-partial', 'result/r45-hold1-go-partial', { substitute: 'a cell walled in rock with nothing to dig stands for the blocked search of the real run', output: { result: go.parsed, receiptUnit: go.receipt.unit } });
   }
 
   // ---- the events a receipt carries and the internal reader of the rest

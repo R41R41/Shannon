@@ -13,6 +13,7 @@
 | `monitor-runs.sh <label>...` | 実走ログから3分ごとに1行の状況（道具回数・死亡・反射・予算の精算額）を出す | なし |
 | `run-outage.sh <scenario> <label> <port> <worldDir> [ENV=VAL...]` | 計画器を止めた状態で反射だけを試す（`scripts/minecraft-planner-outage-flee-probe.ts`）。シナリオ例: `ravine-rim` `seagrass-pool` `reflex-only` `drowned-pool` `shelter-water` `under-ice`、`cornered`＋`MINECRAFT_OUTAGE_WOUNDED=true` | なし |
 | `run-lab-probe.sh <script.ts> <label> <port> <worldDir> [ENV=VAL...]` | 上の「経路・掘削の無課金プローブ」を隔離条件の環境変数つきで1本実行し、結果の行を出す | なし |
+| `run-continue-lab.sh <label> <code.tar> [SHANNON_BODY_REV=<rev>] [CONTINUE_SCENES=a,b]` | 「続ける力」の体の側を隔離ワールドで確かめる（`scripts/minecraft-continue-lab-probe.ts`。`run-incident-lab.sh` と同じ隔離・片付け）。場面：basics（観測の新しい欄・手の始まりの記録・サーバーの tick）・handover（反射から同じ相手への引き継ぎと 300 ms の実測）・handover_not_taken・death（動いている最中・反射待ちの死）・stale_owner・dimension・vertical（4 つの数と操作の記録）・events・laying。出力は `$MINEBOT_LAB_SCRATCH/continue-<label>/`（`probe.log`・`report.json`・`produced/`）。反射を使うので `MINECRAFT_PROBE_FLOOR=default` で走る | なし |
 | `run-unit.sh <出力ファイル> [vitestの引数]` | 単体テストを実キーなしの環境で実行（既定は `tests/unit`。引数なしで全体を回すと統合テストが外部APIへ出ようとするため） | なし |
 | `run-flee-trace.sh <label> <port> <worldDir> <x,z> [ENV=VAL...]` | 逃走の動きの記録、避難穴と敵の到達見込み（`MINECRAFT_FLEE_TRACE_SHELTER=true`）、道具の破損（`MINECRAFT_FLEE_TRACE_TOOLBREAK=true`）、氷の穴から上がる（`MINECRAFT_FLEE_TRACE_ICEHOLE=true`） | なし |
 

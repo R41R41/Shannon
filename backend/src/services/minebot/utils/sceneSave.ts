@@ -100,7 +100,7 @@ export class SceneSaver {
     const at = new Date(now()).toISOString();
     try {
       const raw = (await this.ports.command('tick query', 3000)).slice(0, 300);
-      const mspt = /Average time per tick:s*([0-9]+(?:.[0-9]+)?)s*ms/iu.exec(raw);
+      const mspt = /Average time per tick:\s*([0-9]+(?:\.[0-9]+)?)\s*ms/iu.exec(raw);
       const frozen = /frozen/iu.test(raw) ? true : /running normally|sprinting|stepping/iu.test(raw) ? false : null;
       return { raw, parsedMspt: mspt ? Number(mspt[1]) : null, frozen, at, error: null };
     } catch (error) { return { raw: null, parsedMspt: null, frozen: null, at, error: String((error as Error)?.message ?? error).slice(0, 100) }; }

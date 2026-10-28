@@ -409,6 +409,13 @@ describe('attack: a creature that went out of sight is not a dead one (attack-ta
     lost.entity.height = 1.8;
     const out = await fight(ctx(lost), { target: 9, retreatHp: 5, seconds: 5 });
     expect(out).toMatchObject({ ok: false, goal: 'unknown', reason: 'lost', code: 'target_lost' });
+    // Amendment A-2: a death that was seen is told in the structure (target_killed), beside the success the hand keeps.
+    const killed = body([{ name: 'iron_sword', count: 1, type: 9 }]);
+    deathLedgerOf(killed);
+    killed.entities[9] = { id: 9, name: 'zombie', type: 'hostile', height: 1.95, width: 0.6, position: new Vec3(2.5, 64, 0.5), isValid: true, velocity: new Vec3(0, 0, 0) };
+    Object.assign(killed, { heldItem: { name: 'iron_sword' }, lookAt: async () => undefined, attack: () => { killed.emit('entityDead', killed.entities[9]); delete killed.entities[9]; }, look: async () => undefined });
+    killed.entity.height = 1.8;
+    expect(await fight(ctx(killed), { target: 9, retreatHp: 5, seconds: 5 })).toMatchObject({ ok: true, code: 'target_killed' });
     const none = await fight(ctx(body([])), { target: 12 });
     expect(none).toMatchObject({ ok: false, reason: 'lost', code: 'target_not_found' });
     const seen = body([]);

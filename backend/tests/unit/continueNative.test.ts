@@ -206,3 +206,16 @@ describe('the pieces the isolated lab measures (contracts 3, 4, 8)', () => {
     expect(none).toMatchObject({ radius: 8, dim: 'overworld', obsSeq: 12, scanned: false, found: [] });
   });
 });
+
+describe('the server\'s tick (contract 8)', () => {
+  it('reads the average time per tick and the frozen state from the raw answer, and keeps nulls when it cannot', async () => {
+    const { SceneSaver } = await import('../../src/services/minebot/utils/sceneSave.js');
+    const make = (answer: string | Error) => new SceneSaver({ command: async () => { if (answer instanceof Error) throw answer; return answer; }, serverDir: '/x', root: '/y', self: () => [] });
+    const running = await make('The game is running normally\nTarget tick rate: 20.0 per second.\nAverage time per tick: 1.2ms (Target: 50.0ms)').tickQuery(() => 1_700_000_000_000);
+    expect(running).toMatchObject({ parsedMspt: 1.2, frozen: false, error: null });
+    const frozen = await make('The game is frozen\nTarget tick rate: 20.0 per second.').tickQuery();
+    expect(frozen).toMatchObject({ parsedMspt: null, frozen: true });
+    const failed = await make(new Error('rcon closed')).tickQuery();
+    expect(failed).toMatchObject({ raw: null, parsedMspt: null, frozen: null, error: expect.stringContaining('rcon') });
+  });
+});
