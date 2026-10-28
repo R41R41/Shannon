@@ -1,8 +1,8 @@
 {
  "producedBy": "backend/scripts/lab/continue-produce.ts",
  "bench": "offline",
- "bodyRevision": "bc82c747df82",
- "madeAt": "2026-10-28T15:08:49.333Z",
+ "bodyRevision": "b59a6b481043",
+ "madeAt": "2026-10-28T15:39:27.581Z",
  "answers": "promise/events-split-delivery",
  "fixtureSha256": "e97b0fda40be26fd2944c77642d0a7cfd62259b6e5de49def9aadd6cb8bcc51f",
  "output": {
@@ -15,7 +15,969 @@
     "nextSeq": 240,
     "done": false,
     "lost": false,
-    "events": 120
+    "events": [
+     {
+      "id": "skill:q70:2:1:20",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 120
+     },
+     {
+      "id": "skill:q70:2:1:21",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 121
+     },
+     {
+      "id": "skill:q70:2:1:22",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 122
+     },
+     {
+      "id": "skill:q70:2:1:23",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 123
+     },
+     {
+      "id": "skill:q70:2:1:24",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 124
+     },
+     {
+      "id": "skill:q70:2:1:25",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 125
+     },
+     {
+      "id": "skill:q70:2:1:26",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 126
+     },
+     {
+      "id": "skill:q70:2:1:27",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 127
+     },
+     {
+      "id": "skill:q70:2:1:28",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 128
+     },
+     {
+      "id": "skill:q70:2:1:29",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 129
+     },
+     {
+      "id": "skill:q70:2:1:30",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 130
+     },
+     {
+      "id": "skill:q70:2:1:31",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 131
+     },
+     {
+      "id": "skill:q70:2:1:32",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 132
+     },
+     {
+      "id": "skill:q70:2:1:33",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 133
+     },
+     {
+      "id": "skill:q70:2:1:34",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 134
+     },
+     {
+      "id": "skill:q70:2:1:35",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 135
+     },
+     {
+      "id": "skill:q70:2:1:36",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 136
+     },
+     {
+      "id": "skill:q70:2:1:37",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 137
+     },
+     {
+      "id": "skill:q70:2:1:38",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 138
+     },
+     {
+      "id": "skill:q70:2:1:39",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 139
+     },
+     {
+      "id": "skill:q70:2:1:40",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 140
+     },
+     {
+      "id": "skill:q70:2:1:41",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 141
+     },
+     {
+      "id": "skill:q70:2:1:42",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 142
+     },
+     {
+      "id": "skill:q70:2:1:43",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 143
+     },
+     {
+      "id": "skill:q70:2:1:44",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 144
+     },
+     {
+      "id": "skill:q70:2:1:45",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 145
+     },
+     {
+      "id": "skill:q70:2:1:46",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 146
+     },
+     {
+      "id": "skill:q70:2:1:47",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 147
+     },
+     {
+      "id": "skill:q70:2:1:48",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 148
+     },
+     {
+      "id": "skill:q70:2:1:49",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 149
+     },
+     {
+      "id": "skill:q70:2:1:50",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 150
+     },
+     {
+      "id": "skill:q70:2:1:51",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 151
+     },
+     {
+      "id": "skill:q70:2:1:52",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 152
+     },
+     {
+      "id": "skill:q70:2:1:53",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 153
+     },
+     {
+      "id": "skill:q70:2:1:54",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 154
+     },
+     {
+      "id": "skill:q70:2:1:55",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 155
+     },
+     {
+      "id": "skill:q70:2:1:56",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 156
+     },
+     {
+      "id": "skill:q70:2:1:57",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 157
+     },
+     {
+      "id": "skill:q70:2:1:58",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 158
+     },
+     {
+      "id": "skill:q70:2:1:59",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 159
+     },
+     {
+      "id": "skill:q70:2:1:60",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 160
+     },
+     {
+      "id": "skill:q70:2:1:61",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 161
+     },
+     {
+      "id": "skill:q70:2:1:62",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 162
+     },
+     {
+      "id": "skill:q70:2:1:63",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 163
+     },
+     {
+      "id": "skill:q70:2:1:64",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 164
+     },
+     {
+      "id": "skill:q70:2:1:65",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 165
+     },
+     {
+      "id": "skill:q70:2:1:66",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 166
+     },
+     {
+      "id": "skill:q70:2:1:67",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 167
+     },
+     {
+      "id": "skill:q70:2:1:68",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 168
+     },
+     {
+      "id": "skill:q70:2:1:69",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 169
+     },
+     {
+      "id": "skill:q70:2:1:70",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 170
+     },
+     {
+      "id": "skill:q70:2:1:71",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 171
+     },
+     {
+      "id": "skill:q70:2:1:72",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 172
+     },
+     {
+      "id": "skill:q70:2:1:73",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 173
+     },
+     {
+      "id": "skill:q70:2:1:74",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 174
+     },
+     {
+      "id": "skill:q70:2:1:75",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 175
+     },
+     {
+      "id": "skill:q70:2:1:76",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 176
+     },
+     {
+      "id": "skill:q70:2:1:77",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 177
+     },
+     {
+      "id": "skill:q70:2:1:78",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 178
+     },
+     {
+      "id": "skill:q70:2:1:79",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 179
+     },
+     {
+      "id": "skill:q70:2:1:80",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 180
+     },
+     {
+      "id": "skill:q70:2:1:81",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 181
+     },
+     {
+      "id": "skill:q70:2:1:82",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 182
+     },
+     {
+      "id": "skill:q70:2:1:83",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 183
+     },
+     {
+      "id": "skill:q70:2:1:84",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 184
+     },
+     {
+      "id": "skill:q70:2:1:85",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 185
+     },
+     {
+      "id": "skill:q70:2:1:86",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 186
+     },
+     {
+      "id": "skill:q70:2:1:87",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 187
+     },
+     {
+      "id": "skill:q70:2:1:88",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 188
+     },
+     {
+      "id": "skill:q70:2:1:89",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 189
+     },
+     {
+      "id": "skill:q70:2:1:90",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 190
+     },
+     {
+      "id": "skill:q70:2:1:91",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 191
+     },
+     {
+      "id": "skill:q70:2:1:92",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 192
+     },
+     {
+      "id": "skill:q70:2:1:93",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 193
+     },
+     {
+      "id": "skill:q70:2:1:94",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 194
+     },
+     {
+      "id": "skill:q70:2:1:95",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 195
+     },
+     {
+      "id": "skill:q70:2:1:96",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 196
+     },
+     {
+      "id": "skill:q70:2:1:97",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 197
+     },
+     {
+      "id": "skill:q70:2:1:98",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 198
+     },
+     {
+      "id": "skill:q70:2:1:99",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 199
+     },
+     {
+      "id": "skill:q70:3:1:0",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 200
+     },
+     {
+      "id": "skill:q70:3:1:1",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 201
+     },
+     {
+      "id": "skill:q70:3:1:2",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 202
+     },
+     {
+      "id": "skill:q70:3:1:3",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 203
+     },
+     {
+      "id": "skill:q70:3:1:4",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 204
+     },
+     {
+      "id": "skill:q70:3:1:5",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 205
+     },
+     {
+      "id": "skill:q70:3:1:6",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 206
+     },
+     {
+      "id": "skill:q70:3:1:7",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 207
+     },
+     {
+      "id": "skill:q70:3:1:8",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 208
+     },
+     {
+      "id": "skill:q70:3:1:9",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 209
+     },
+     {
+      "id": "skill:q70:3:1:10",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 210
+     },
+     {
+      "id": "skill:q70:3:1:11",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 211
+     },
+     {
+      "id": "skill:q70:3:1:12",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 212
+     },
+     {
+      "id": "skill:q70:3:1:13",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 213
+     },
+     {
+      "id": "skill:q70:3:1:14",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 214
+     },
+     {
+      "id": "skill:q70:3:1:15",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 215
+     },
+     {
+      "id": "skill:q70:3:1:16",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 216
+     },
+     {
+      "id": "skill:q70:3:1:17",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 217
+     },
+     {
+      "id": "skill:q70:3:1:18",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 218
+     },
+     {
+      "id": "skill:q70:3:1:19",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 219
+     },
+     {
+      "id": "skill:q70:3:1:20",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 220
+     },
+     {
+      "id": "skill:q70:3:1:21",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 221
+     },
+     {
+      "id": "skill:q70:3:1:22",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 222
+     },
+     {
+      "id": "skill:q70:3:1:23",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 223
+     },
+     {
+      "id": "skill:q70:3:1:24",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 224
+     },
+     {
+      "id": "skill:q70:3:1:25",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 225
+     },
+     {
+      "id": "skill:q70:3:1:26",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 226
+     },
+     {
+      "id": "skill:q70:3:1:27",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 227
+     },
+     {
+      "id": "skill:q70:3:1:28",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 228
+     },
+     {
+      "id": "skill:q70:3:1:29",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 229
+     },
+     {
+      "id": "skill:q70:3:1:30",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 230
+     },
+     {
+      "id": "skill:q70:3:1:31",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 231
+     },
+     {
+      "id": "skill:q70:3:1:32",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 232
+     },
+     {
+      "id": "skill:q70:3:1:33",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 233
+     },
+     {
+      "id": "skill:q70:3:1:34",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 234
+     },
+     {
+      "id": "skill:q70:3:1:35",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 235
+     },
+     {
+      "id": "skill:q70:3:1:36",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 236
+     },
+     {
+      "id": "skill:q70:3:1:37",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 237
+     },
+     {
+      "id": "skill:q70:3:1:38",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 238
+     },
+     {
+      "id": "skill:q70:3:1:39",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 239
+     }
+    ],
+    "eventCount": 120
    },
    {
     "command": "skill:q70",
@@ -25,7 +987,809 @@
     "nextSeq": 340,
     "done": true,
     "lost": false,
-    "events": 100
+    "events": [
+     {
+      "id": "skill:q70:3:1:40",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 240
+     },
+     {
+      "id": "skill:q70:3:1:41",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 241
+     },
+     {
+      "id": "skill:q70:3:1:42",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 242
+     },
+     {
+      "id": "skill:q70:3:1:43",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 243
+     },
+     {
+      "id": "skill:q70:3:1:44",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 244
+     },
+     {
+      "id": "skill:q70:3:1:45",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 245
+     },
+     {
+      "id": "skill:q70:3:1:46",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 246
+     },
+     {
+      "id": "skill:q70:3:1:47",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 247
+     },
+     {
+      "id": "skill:q70:3:1:48",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 248
+     },
+     {
+      "id": "skill:q70:3:1:49",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 249
+     },
+     {
+      "id": "skill:q70:3:1:50",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 250
+     },
+     {
+      "id": "skill:q70:3:1:51",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 251
+     },
+     {
+      "id": "skill:q70:3:1:52",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 252
+     },
+     {
+      "id": "skill:q70:3:1:53",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 253
+     },
+     {
+      "id": "skill:q70:3:1:54",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 254
+     },
+     {
+      "id": "skill:q70:3:1:55",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 255
+     },
+     {
+      "id": "skill:q70:3:1:56",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 256
+     },
+     {
+      "id": "skill:q70:3:1:57",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 257
+     },
+     {
+      "id": "skill:q70:3:1:58",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 258
+     },
+     {
+      "id": "skill:q70:3:1:59",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 259
+     },
+     {
+      "id": "skill:q70:3:1:60",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 260
+     },
+     {
+      "id": "skill:q70:3:1:61",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 261
+     },
+     {
+      "id": "skill:q70:3:1:62",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 262
+     },
+     {
+      "id": "skill:q70:3:1:63",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 263
+     },
+     {
+      "id": "skill:q70:3:1:64",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 264
+     },
+     {
+      "id": "skill:q70:3:1:65",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 265
+     },
+     {
+      "id": "skill:q70:3:1:66",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 266
+     },
+     {
+      "id": "skill:q70:3:1:67",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 267
+     },
+     {
+      "id": "skill:q70:3:1:68",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 268
+     },
+     {
+      "id": "skill:q70:3:1:69",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 269
+     },
+     {
+      "id": "skill:q70:3:1:70",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 270
+     },
+     {
+      "id": "skill:q70:3:1:71",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 271
+     },
+     {
+      "id": "skill:q70:3:1:72",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 272
+     },
+     {
+      "id": "skill:q70:3:1:73",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 273
+     },
+     {
+      "id": "skill:q70:3:1:74",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 274
+     },
+     {
+      "id": "skill:q70:3:1:75",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 275
+     },
+     {
+      "id": "skill:q70:3:1:76",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 276
+     },
+     {
+      "id": "skill:q70:3:1:77",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 277
+     },
+     {
+      "id": "skill:q70:3:1:78",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 278
+     },
+     {
+      "id": "skill:q70:3:1:79",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 279
+     },
+     {
+      "id": "skill:q70:3:1:80",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 280
+     },
+     {
+      "id": "skill:q70:3:1:81",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 281
+     },
+     {
+      "id": "skill:q70:3:1:82",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 282
+     },
+     {
+      "id": "skill:q70:3:1:83",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 283
+     },
+     {
+      "id": "skill:q70:3:1:84",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 284
+     },
+     {
+      "id": "skill:q70:3:1:85",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 285
+     },
+     {
+      "id": "skill:q70:3:1:86",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 286
+     },
+     {
+      "id": "skill:q70:3:1:87",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 287
+     },
+     {
+      "id": "skill:q70:3:1:88",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 288
+     },
+     {
+      "id": "skill:q70:3:1:89",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 289
+     },
+     {
+      "id": "skill:q70:3:1:90",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 290
+     },
+     {
+      "id": "skill:q70:3:1:91",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 291
+     },
+     {
+      "id": "skill:q70:3:1:92",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 292
+     },
+     {
+      "id": "skill:q70:3:1:93",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 293
+     },
+     {
+      "id": "skill:q70:3:1:94",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 294
+     },
+     {
+      "id": "skill:q70:3:1:95",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 295
+     },
+     {
+      "id": "skill:q70:3:1:96",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 296
+     },
+     {
+      "id": "skill:q70:3:1:97",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 297
+     },
+     {
+      "id": "skill:q70:3:1:98",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 298
+     },
+     {
+      "id": "skill:q70:3:1:99",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 299
+     },
+     {
+      "id": "skill:q70:4:1:0",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 300
+     },
+     {
+      "id": "skill:q70:4:1:1",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 301
+     },
+     {
+      "id": "skill:q70:4:1:2",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 302
+     },
+     {
+      "id": "skill:q70:4:1:3",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 303
+     },
+     {
+      "id": "skill:q70:4:1:4",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 304
+     },
+     {
+      "id": "skill:q70:4:1:5",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 305
+     },
+     {
+      "id": "skill:q70:4:1:6",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 306
+     },
+     {
+      "id": "skill:q70:4:1:7",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 307
+     },
+     {
+      "id": "skill:q70:4:1:8",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 308
+     },
+     {
+      "id": "skill:q70:4:1:9",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 309
+     },
+     {
+      "id": "skill:q70:4:1:10",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 310
+     },
+     {
+      "id": "skill:q70:4:1:11",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 311
+     },
+     {
+      "id": "skill:q70:4:1:12",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 312
+     },
+     {
+      "id": "skill:q70:4:1:13",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 313
+     },
+     {
+      "id": "skill:q70:4:1:14",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 314
+     },
+     {
+      "id": "skill:q70:4:1:15",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 315
+     },
+     {
+      "id": "skill:q70:4:1:16",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 316
+     },
+     {
+      "id": "skill:q70:4:1:17",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 317
+     },
+     {
+      "id": "skill:q70:4:1:18",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 318
+     },
+     {
+      "id": "skill:q70:4:1:19",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 319
+     },
+     {
+      "id": "skill:q70:4:1:20",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 320
+     },
+     {
+      "id": "skill:q70:4:1:21",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 321
+     },
+     {
+      "id": "skill:q70:4:1:22",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 322
+     },
+     {
+      "id": "skill:q70:4:1:23",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 323
+     },
+     {
+      "id": "skill:q70:4:1:24",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 324
+     },
+     {
+      "id": "skill:q70:4:1:25",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 325
+     },
+     {
+      "id": "skill:q70:4:1:26",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 326
+     },
+     {
+      "id": "skill:q70:4:1:27",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 327
+     },
+     {
+      "id": "skill:q70:4:1:28",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 328
+     },
+     {
+      "id": "skill:q70:4:1:29",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 329
+     },
+     {
+      "id": "skill:q70:4:1:30",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 330
+     },
+     {
+      "id": "skill:q70:4:1:31",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 331
+     },
+     {
+      "id": "skill:q70:4:1:32",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 332
+     },
+     {
+      "id": "skill:q70:4:1:33",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 333
+     },
+     {
+      "id": "skill:q70:4:1:34",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 334
+     },
+     {
+      "id": "skill:q70:4:1:35",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 335
+     },
+     {
+      "id": "skill:q70:4:1:36",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 336
+     },
+     {
+      "id": "skill:q70:4:1:37",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 337
+     },
+     {
+      "id": "skill:q70:4:1:38",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 338
+     },
+     {
+      "id": "skill:q70:4:1:39",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 339
+     }
+    ],
+    "eventCount": 100
    },
    {
     "command": "skill:q70",
@@ -35,7 +1799,969 @@
     "nextSeq": 240,
     "done": false,
     "lost": false,
-    "events": 120
+    "events": [
+     {
+      "id": "skill:q70:2:1:20",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 120
+     },
+     {
+      "id": "skill:q70:2:1:21",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 121
+     },
+     {
+      "id": "skill:q70:2:1:22",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 122
+     },
+     {
+      "id": "skill:q70:2:1:23",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 123
+     },
+     {
+      "id": "skill:q70:2:1:24",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 124
+     },
+     {
+      "id": "skill:q70:2:1:25",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 125
+     },
+     {
+      "id": "skill:q70:2:1:26",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 126
+     },
+     {
+      "id": "skill:q70:2:1:27",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 127
+     },
+     {
+      "id": "skill:q70:2:1:28",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 128
+     },
+     {
+      "id": "skill:q70:2:1:29",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 129
+     },
+     {
+      "id": "skill:q70:2:1:30",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 130
+     },
+     {
+      "id": "skill:q70:2:1:31",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 131
+     },
+     {
+      "id": "skill:q70:2:1:32",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 132
+     },
+     {
+      "id": "skill:q70:2:1:33",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 133
+     },
+     {
+      "id": "skill:q70:2:1:34",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 134
+     },
+     {
+      "id": "skill:q70:2:1:35",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 135
+     },
+     {
+      "id": "skill:q70:2:1:36",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 136
+     },
+     {
+      "id": "skill:q70:2:1:37",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 137
+     },
+     {
+      "id": "skill:q70:2:1:38",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 138
+     },
+     {
+      "id": "skill:q70:2:1:39",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 139
+     },
+     {
+      "id": "skill:q70:2:1:40",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 140
+     },
+     {
+      "id": "skill:q70:2:1:41",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 141
+     },
+     {
+      "id": "skill:q70:2:1:42",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 142
+     },
+     {
+      "id": "skill:q70:2:1:43",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 143
+     },
+     {
+      "id": "skill:q70:2:1:44",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 144
+     },
+     {
+      "id": "skill:q70:2:1:45",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 145
+     },
+     {
+      "id": "skill:q70:2:1:46",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 146
+     },
+     {
+      "id": "skill:q70:2:1:47",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 147
+     },
+     {
+      "id": "skill:q70:2:1:48",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 148
+     },
+     {
+      "id": "skill:q70:2:1:49",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 149
+     },
+     {
+      "id": "skill:q70:2:1:50",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 150
+     },
+     {
+      "id": "skill:q70:2:1:51",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 151
+     },
+     {
+      "id": "skill:q70:2:1:52",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 152
+     },
+     {
+      "id": "skill:q70:2:1:53",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 153
+     },
+     {
+      "id": "skill:q70:2:1:54",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 154
+     },
+     {
+      "id": "skill:q70:2:1:55",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 155
+     },
+     {
+      "id": "skill:q70:2:1:56",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 156
+     },
+     {
+      "id": "skill:q70:2:1:57",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 157
+     },
+     {
+      "id": "skill:q70:2:1:58",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 158
+     },
+     {
+      "id": "skill:q70:2:1:59",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 159
+     },
+     {
+      "id": "skill:q70:2:1:60",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 160
+     },
+     {
+      "id": "skill:q70:2:1:61",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 161
+     },
+     {
+      "id": "skill:q70:2:1:62",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 162
+     },
+     {
+      "id": "skill:q70:2:1:63",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 163
+     },
+     {
+      "id": "skill:q70:2:1:64",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 164
+     },
+     {
+      "id": "skill:q70:2:1:65",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 165
+     },
+     {
+      "id": "skill:q70:2:1:66",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 166
+     },
+     {
+      "id": "skill:q70:2:1:67",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 167
+     },
+     {
+      "id": "skill:q70:2:1:68",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 168
+     },
+     {
+      "id": "skill:q70:2:1:69",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 169
+     },
+     {
+      "id": "skill:q70:2:1:70",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 170
+     },
+     {
+      "id": "skill:q70:2:1:71",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 171
+     },
+     {
+      "id": "skill:q70:2:1:72",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 172
+     },
+     {
+      "id": "skill:q70:2:1:73",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 173
+     },
+     {
+      "id": "skill:q70:2:1:74",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 174
+     },
+     {
+      "id": "skill:q70:2:1:75",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 175
+     },
+     {
+      "id": "skill:q70:2:1:76",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 176
+     },
+     {
+      "id": "skill:q70:2:1:77",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 177
+     },
+     {
+      "id": "skill:q70:2:1:78",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 178
+     },
+     {
+      "id": "skill:q70:2:1:79",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 179
+     },
+     {
+      "id": "skill:q70:2:1:80",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 180
+     },
+     {
+      "id": "skill:q70:2:1:81",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 181
+     },
+     {
+      "id": "skill:q70:2:1:82",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 182
+     },
+     {
+      "id": "skill:q70:2:1:83",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 183
+     },
+     {
+      "id": "skill:q70:2:1:84",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 184
+     },
+     {
+      "id": "skill:q70:2:1:85",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 185
+     },
+     {
+      "id": "skill:q70:2:1:86",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 186
+     },
+     {
+      "id": "skill:q70:2:1:87",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 187
+     },
+     {
+      "id": "skill:q70:2:1:88",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 188
+     },
+     {
+      "id": "skill:q70:2:1:89",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 189
+     },
+     {
+      "id": "skill:q70:2:1:90",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 190
+     },
+     {
+      "id": "skill:q70:2:1:91",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 191
+     },
+     {
+      "id": "skill:q70:2:1:92",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 192
+     },
+     {
+      "id": "skill:q70:2:1:93",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 193
+     },
+     {
+      "id": "skill:q70:2:1:94",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 194
+     },
+     {
+      "id": "skill:q70:2:1:95",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 195
+     },
+     {
+      "id": "skill:q70:2:1:96",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 196
+     },
+     {
+      "id": "skill:q70:2:1:97",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 197
+     },
+     {
+      "id": "skill:q70:2:1:98",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 198
+     },
+     {
+      "id": "skill:q70:2:1:99",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 199
+     },
+     {
+      "id": "skill:q70:3:1:0",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 200
+     },
+     {
+      "id": "skill:q70:3:1:1",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 201
+     },
+     {
+      "id": "skill:q70:3:1:2",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 202
+     },
+     {
+      "id": "skill:q70:3:1:3",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 203
+     },
+     {
+      "id": "skill:q70:3:1:4",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 204
+     },
+     {
+      "id": "skill:q70:3:1:5",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 205
+     },
+     {
+      "id": "skill:q70:3:1:6",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 206
+     },
+     {
+      "id": "skill:q70:3:1:7",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 207
+     },
+     {
+      "id": "skill:q70:3:1:8",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 208
+     },
+     {
+      "id": "skill:q70:3:1:9",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 209
+     },
+     {
+      "id": "skill:q70:3:1:10",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 210
+     },
+     {
+      "id": "skill:q70:3:1:11",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 211
+     },
+     {
+      "id": "skill:q70:3:1:12",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 212
+     },
+     {
+      "id": "skill:q70:3:1:13",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 213
+     },
+     {
+      "id": "skill:q70:3:1:14",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 214
+     },
+     {
+      "id": "skill:q70:3:1:15",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 215
+     },
+     {
+      "id": "skill:q70:3:1:16",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 216
+     },
+     {
+      "id": "skill:q70:3:1:17",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 217
+     },
+     {
+      "id": "skill:q70:3:1:18",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 218
+     },
+     {
+      "id": "skill:q70:3:1:19",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 219
+     },
+     {
+      "id": "skill:q70:3:1:20",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 220
+     },
+     {
+      "id": "skill:q70:3:1:21",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 221
+     },
+     {
+      "id": "skill:q70:3:1:22",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 222
+     },
+     {
+      "id": "skill:q70:3:1:23",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 223
+     },
+     {
+      "id": "skill:q70:3:1:24",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 224
+     },
+     {
+      "id": "skill:q70:3:1:25",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 225
+     },
+     {
+      "id": "skill:q70:3:1:26",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 226
+     },
+     {
+      "id": "skill:q70:3:1:27",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 227
+     },
+     {
+      "id": "skill:q70:3:1:28",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 228
+     },
+     {
+      "id": "skill:q70:3:1:29",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 229
+     },
+     {
+      "id": "skill:q70:3:1:30",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 230
+     },
+     {
+      "id": "skill:q70:3:1:31",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 231
+     },
+     {
+      "id": "skill:q70:3:1:32",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 232
+     },
+     {
+      "id": "skill:q70:3:1:33",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 233
+     },
+     {
+      "id": "skill:q70:3:1:34",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 234
+     },
+     {
+      "id": "skill:q70:3:1:35",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 235
+     },
+     {
+      "id": "skill:q70:3:1:36",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 236
+     },
+     {
+      "id": "skill:q70:3:1:37",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 237
+     },
+     {
+      "id": "skill:q70:3:1:38",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 238
+     },
+     {
+      "id": "skill:q70:3:1:39",
+      "obsSeq": 1,
+      "item": "cobblestone",
+      "count": -1,
+      "reason": "placed",
+      "deliverySeq": 239
+     }
+    ],
+    "eventCount": 120
    }
   ],
   "sameEventsAsFirst": true,
