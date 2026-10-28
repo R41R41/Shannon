@@ -1,0 +1,60 @@
+{
+ "contract": "continue",
+ "version": 2,
+ "scene": "手 1 の craft が失敗（onFail continue）。手 2 は dependsOn [1] で動かない。手 3 は依存無しで onFail continue により今どおり動く",
+ "source": "Codex CONTRACTS.md（1）3",
+ "known": [],
+ "decided": [
+  "決め: onFail continue は依存の確かめを免除しない"
+ ],
+ "hypothesis": [],
+ "input": {
+  "act": {
+   "hands": [
+    {
+     "do": "craft",
+     "item": "stone_pickaxe",
+     "onFail": "continue"
+    },
+    {
+     "do": "mine",
+     "block": "iron_ore",
+     "count": 2,
+     "dependsOn": [
+      1
+     ]
+    },
+    {
+     "do": "eat",
+     "item": "bread"
+    }
+   ]
+  },
+  "world": {
+   "craftFails": "no_material"
+  }
+ },
+ "expected": {
+  "lines": [
+   {
+    "i": 1,
+    "status": "failed",
+    "goal": "failed"
+   },
+   {
+    "i": 2,
+    "goal": "not_started",
+    "end": "not_run",
+    "code": "depends_failed:1"
+   },
+   {
+    "i": 3,
+    "goal": "done"
+   }
+  ]
+ },
+ "checks": [
+  "体",
+  "頭"
+ ]
+}

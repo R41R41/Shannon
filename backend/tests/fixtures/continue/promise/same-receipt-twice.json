@@ -1,0 +1,31 @@
+{
+ "contract": "promise",
+ "version": 2,
+ "scene": "同じ受け取りが 2 度届く（poll の重複）。出来事の id で 1 度だけ反映",
+ "source": "境界 8",
+ "known": [],
+ "decided": [
+  "決め: id で 1 度だけ"
+ ],
+ "hypothesis": [],
+ "input": {
+  "receipts": [
+   "q69",
+   "q69"
+  ],
+  "events": [
+   {
+    "id": "skill:q69:1:1:2",
+    "item": "spruce_planks",
+    "count": -2,
+    "reason": "fuel"
+   }
+  ]
+ },
+ "expected": {
+  "ledgerAddedCount": 1
+ },
+ "checks": [
+  "頭"
+ ]
+}

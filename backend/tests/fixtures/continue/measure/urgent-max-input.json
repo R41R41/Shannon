@@ -1,0 +1,41 @@
+{
+ "contract": "measure",
+ "version": 2,
+ "scene": "最大の長さの急ぎの入力でも、規範の表の物が最後の要求のバイトに残る（境界 10）",
+ "source": "Codex CONTRACTS.md（3）境界 10、minecraftControlValidation.ts（結果 16,000 字）",
+ "known": [
+  "確か: 結果の JSON は 16,000 字が上限、地図を落としても上限内になる保証が無い"
+ ],
+ "decided": [
+  "決め: 8 章の規範の表"
+ ],
+ "hypothesis": [],
+ "input": {
+  "build": {
+   "urgent": true,
+   "liveLines": "max",
+   "resultChars": 16000,
+   "promises": 4,
+   "queueItems": 3,
+   "nearMobs": 20,
+   "hitsLast10s": 5
+  }
+ },
+ "expected": {
+  "lastRequestMustContain": [
+   "体力",
+   "満腹",
+   "食べられる物",
+   "打たれた",
+   "持ち主",
+   "命",
+   "約束 #",
+   "列",
+   "空き",
+   "食べ物の候補"
+  ]
+ },
+ "checks": [
+  "頭（台 D）"
+ ]
+}

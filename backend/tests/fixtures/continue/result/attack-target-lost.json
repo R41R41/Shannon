@@ -1,0 +1,55 @@
+{
+ "contract": "result",
+ "version": 2,
+ "scene": "attack の相手が実行中に見えなくなった: 成功とせず goal unknown・code target_lost。死を観測した時だけ done・already",
+ "source": "attack.ts（「倒れたか、離れて消えた」で ok）、実走 45 +929 の #1954",
+ "known": [
+  "確か: 今の attack は見えなくなった相手で ok を返す"
+ ],
+ "decided": [
+  "決め: 観測した死だけ already。記憶はワールド・次元・接続と個体 id で区切り、30 秒は仮の上限"
+ ],
+ "hypothesis": [],
+ "input": {
+  "cases": [
+   {
+    "target": 2601,
+    "during": "lost_from_sight"
+   },
+   {
+    "target": 2601,
+    "during": "death_seen"
+   },
+   {
+    "target": 1954,
+    "before": "death_seen_3s_ago_same_connection"
+   },
+   {
+    "target": 1954,
+    "before": "death_seen_on_old_connection"
+   }
+  ]
+ },
+ "expected": {
+  "cases": [
+   {
+    "goal": "unknown",
+    "code": "target_lost"
+   },
+   {
+    "goal": "done"
+   },
+   {
+    "goal": "already",
+    "code": "target_dead"
+   },
+   {
+    "goal": "failed",
+    "code": "target_not_found"
+   }
+  ]
+ },
+ "checks": [
+  "体: attack・fight の終わりの判定"
+ ]
+}

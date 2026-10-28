@@ -1,22 +1,28 @@
 {
  "contract": "control",
- "version": 1,
- "scene": "反射 melee が #2601 を打っている所へ、頭の attack #1954・#2601。#1954 は死んだのを見ていたので already、#2601 は反射の相手なので待たずに引き継ぐ",
- "source": "実走 45 +929（run45-live.md 37〜38 行）: q52 は「反射 melee の最中のため、放された後に始めた（待ち 6.4秒）」で、始まったのは死んだ後",
+ "version": 2,
+ "scene": "反射 melee が #2601 を打っている所へ、頭の attack #1954・#2601。#1954 は死を観測していたので already、#2601 は同じ相手なので引き継ぐ",
+ "source": "実走 45 +929（run45-live.md 37〜38 行）: q52 は「反射 melee の最中のため、放された後に始めた（待ち 6.4秒）」",
  "known": [
-  "待ちは NativeCommonFcaBody.afterReflex() にあった（fight() の外）",
-  "ゾンビ #2601 は 1 回 −5.3 で 4 回打った"
+  "確か: 待ちは afterReflex() にあった（fight() の外）"
  ],
  "decided": [
-  "同じ相手の fight・attack は 300 ms 以内に引き継ぐ（handover.confirmed）",
-  "引き継げるのは floor-melee と体力 5 より上の floor-last-stand だけ"
+  "決め: 引き継ぐのは同じ相手の melee と限った last-stand",
+  "決め: 300 ms は settled を待つ上限（合格の条件ではない）"
  ],
+ "hypothesis": [],
  "input": {
   "holder": {
    "kind": "reflex",
    "reflex": "floor-melee",
    "priority": 250,
    "target": 2601
+  },
+  "reflexEpisode": {
+   "reflex": "floor-melee",
+   "target": 2601,
+   "hands": 3,
+   "hits": 4
   },
   "act": {
    "hands": [
@@ -28,8 +34,7 @@
      "do": "attack",
      "target": "#2601"
     }
-   ],
-   "why": "[急ぎ] 近い敵を倒す"
+   ]
   },
   "seenDeaths": [
    {
@@ -37,19 +42,18 @@
     "secondsAgo": 3
    }
   ],
-  "hp": 11.3
+  "hp": 11.3,
+  "life": 2
  },
  "expected": {
   "lines": [
    {
     "i": 1,
-    "do": "attack",
     "goal": "already",
     "code": "target_dead"
    },
    {
     "i": 2,
-    "do": "attack",
     "goal": "done"
    }
   ],
@@ -57,14 +61,15 @@
    "from": "floor-melee",
    "target": 2601,
    "confirmed": true,
-   "waitedMsAtMost": 300
+   "shield": "kept"
   },
-  "bodyTimes": {
-   "lockAfterAcceptMsAtMost": 300
-  }
+  "recheckedAtAcquire": [
+   "target",
+   "life",
+   "holder"
+  ]
  },
  "checks": [
-  "体（隔離ラボ B）: lockAt − acceptedAt ≤ 300 ms",
-  "頭: 結果の文に引き継いだ事"
+  "体（隔離ラボ B）"
  ]
 }

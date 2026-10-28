@@ -1,15 +1,15 @@
 {
  "contract": "promise",
- "version": 1,
+ "version": 2,
  "scene": "死んで約束の物を失った。lost_death を記録し、約束は開いたまま（解くのは LLM）",
- "source": "実走 45 +929 の死（run45-live.md 36 行。板 1 を持っていた）",
+ "source": "実走 45 +929 の死（run45-live.md 36 行。板 1）",
  "known": [
-  "死んだ時に持ち物を全部落とした"
+  "確か: 死んだ時に持ち物を全部落とした"
  ],
  "decided": [
-  "命の番号が進んだら lost_death",
-  "約束は開いたまま"
+  "決め: 命の番号が進んだら lost_death"
  ],
+ "hypothesis": [],
  "input": {
   "promises": [
    {
@@ -27,8 +27,11 @@
     "from": 2,
     "to": 3
    },
-   "haveBefore": {
+   "observedBefore": {
     "planks": 1
+   },
+   "observedAfter": {
+    "planks": 0
    }
   }
  },
@@ -37,13 +40,14 @@
    {
     "kind": "lost_death",
     "count": 1,
-    "have": 0
+    "have": 0,
+    "reason": "death"
    }
   ],
   "state": "open",
   "liveLine": "約束 #3 作業台用の板 4: 今 0・死んで 1 失った"
  },
  "checks": [
-  "頭: 命の番号の増えで lost_death"
+  "頭"
  ]
 }

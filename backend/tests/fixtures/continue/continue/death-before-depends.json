@@ -1,0 +1,57 @@
+{
+ "contract": "continue",
+ "version": 2,
+ "scene": "失効が先: q1 の実行中に死んだ。q2 は dependsOn [] でも death で捨てる（依存の判定まで行かない）。q1 の終わりの処理が後から走っても q2 は戻らない",
+ "source": "Codex CONTRACTS.md（1）1",
+ "known": [
+  "確か: v1 では死の時に全部捨てる設計と dependsOn [] の残しが矛盾していた"
+ ],
+ "decided": [
+  "決め: 失効の順（invalidationFirst）"
+ ],
+ "hypothesis": [],
+ "input": {
+  "events": [
+   {
+    "t": 0,
+    "q1": "running"
+   },
+   {
+    "t": 1,
+    "death": true,
+    "lifeTo": 5
+   },
+   {
+    "t": 1.1,
+    "q1Ends": {
+     "goal": "partial",
+     "end": "cut",
+     "cutBy": "death"
+    }
+   }
+  ],
+  "waiting": [
+   {
+    "item": "q2",
+    "dependsOn": [],
+    "madeIn": {
+     "life": 4,
+     "dim": "overworld"
+    }
+   }
+  ]
+ },
+ "expected": {
+  "q2": {
+   "starts": false,
+   "droppedBecause": {
+    "code": "death"
+   }
+  },
+  "headCancelsOnItsOwn": false
+ },
+ "checks": [
+  "体: 死の出来事で dropWaiting、launch の終わりでは何もしない",
+  "頭: 体の droppedBecause を読む"
+ ]
+}

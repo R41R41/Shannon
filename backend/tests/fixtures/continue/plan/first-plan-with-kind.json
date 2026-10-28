@@ -1,20 +1,22 @@
 {
  "contract": "plan",
- "version": 1,
- "scene": "最初の計画の答えに kind が付き、seedFields と保存と meter で同じ意味",
- "source": "Codex DESIGN.md（1）D5（seedFields・PlanNodeDraft・draftNode）",
+ "version": 2,
+ "scene": "最初の計画の答えに kind と promises が付き、seedFields と保存と meter で同じ意味。parent は string（根は ''）",
+ "source": "Codex CONTRACTS.md（3）plan、minecraftFirstPlan.ts FIRST_PLAN_SCHEMA_R4（parent は string）",
  "known": [
-  "今の seedFields は where・doneWhen・note・forbid・caution だけを読み、kind は落ちる"
+  "確か: 今の seedFields は kind を落とす",
+  "確か: parent は string"
  ],
  "decided": [
-  "kind は LLM が付ける。無い節は other"
+  "決め: kind は LLM。無い節は other"
  ],
+ "hypothesis": [],
  "input": {
   "firstPlanAnswer": {
    "nodes": [
     {
      "id": "p1",
-     "parent": null,
+     "parent": "",
      "title": "木と石の道具",
      "kind": "stone_tools",
      "where": "",
@@ -22,7 +24,7 @@
     },
     {
      "id": "p3",
-     "parent": null,
+     "parent": "",
      "title": "食料40点と下る準備",
      "kind": "prep_descent",
      "where": "",
@@ -30,7 +32,7 @@
     },
     {
      "id": "p5",
-     "parent": null,
+     "parent": "",
      "title": "ダイヤ（y=-58）",
      "kind": "diamond",
      "where": "y=-58",
@@ -38,10 +40,17 @@
     },
     {
      "id": "p9",
-     "parent": null,
+     "parent": "",
      "title": "村を見る",
      "where": "",
      "doneWhen": ""
+    }
+   ],
+   "promises": [
+    {
+     "item": "planks",
+     "count": 4,
+     "use": "作業台"
     }
    ]
   }
@@ -55,7 +64,16 @@
     "p5": "diamond",
     "p9": "other"
    },
-   "promises": []
+   "promises": [
+    {
+     "id": 1,
+     "rev": 1,
+     "item": "planks",
+     "count": 4,
+     "use": "作業台",
+     "state": "open"
+    }
+   ]
   },
   "preparationStageWhenCurrent": {
    "p5": "diamonds",
@@ -63,6 +81,6 @@
   }
  },
  "checks": [
-  "頭: seedFields・planFromAnswer・保存・preparationStage"
+  "頭"
  ]
 }

@@ -1,29 +1,67 @@
 {
  "contract": "continue",
- "version": 1,
- "scene": "after の項目が止まっていても、dependsOn に含まない新しい項目は受ける",
- "source": "bodyQueue.ts admit()（今は queue_after_gone で断る）",
+ "version": 2,
+ "scene": "after の項目が止まっていても、dependsOn に含まない新しい項目は受ける。ただし今の tail を飛ばさない",
+ "source": "bodyQueue.ts admit()",
  "known": [
-  "今の admit: after が recent で false なら gone"
+  "確か: 今の admit は after が recent で false なら gone"
  ],
  "decided": [
-  "dependsOn が配列で after を含まない → start（列が空）か wait"
+  "決め: 判定表 item.admitAfterStopped"
  ],
+ "hypothesis": [],
  "input": {
-  "recent": {
-   "q20": false
-  },
-  "busy": false,
-  "new": {
-   "item": "q21",
-   "after": "q20",
-   "dependsOn": []
-  }
+  "cases": [
+   {
+    "recent": {
+     "q20": "failed"
+    },
+    "busy": false,
+    "new": {
+     "item": "q21",
+     "after": "q20",
+     "dependsOn": []
+    }
+   },
+   {
+    "recent": {
+     "q20": "failed"
+    },
+    "busy": false,
+    "new": {
+     "item": "q21",
+     "after": "q20"
+    }
+   },
+   {
+    "recent": {
+     "q20": "failed"
+    },
+    "busy": true,
+    "tail": "q22",
+    "new": {
+     "item": "q23",
+     "after": "q20",
+     "dependsOn": []
+    }
+   }
+  ]
  },
  "expected": {
-  "admission": "start"
+  "cases": [
+   {
+    "admission": "start"
+   },
+   {
+    "admission": "queue_after_gone"
+   },
+   {
+    "admission": "queue_after_gone",
+    "note": "tail は q22"
+   }
+  ]
  },
  "checks": [
-  "体: admit の表の試験"
+  "体"
  ]
 }

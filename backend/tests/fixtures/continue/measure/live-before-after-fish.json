@@ -1,14 +1,15 @@
 {
  "contract": "measure",
- "version": 1,
- "scene": "live の加工の前後。鱈・鮭が「判断に届いた」かを shown で確かめる（消さなかった、ではない）",
- "source": "Codex DESIGN.md（1）D6（nearWorthy の 16m 枠・foodLeads・件数の上限・急ぎの版に near が無い）",
+ "version": 2,
+ "scene": "live の加工の前後。鱈・鮭が「最後の要求に届いた」かで確かめる",
+ "source": "Codex DESIGN.md（1）D6",
  "known": [
-  "今は魚が無関係の扱いで、外しても 16m の枠"
+  "確か: 今は魚が無関係の扱いで、外しても 16m の枠"
  ],
  "decided": [
-  "live の行に raw と shown と dropped"
+  "決め: 食べ物の候補は 24 m、食料 40 点未満で 3 件以上"
  ],
+ "hypothesis": [],
  "input": {
   "raw": {
    "near": [
@@ -36,21 +37,18 @@
   "foodPoints": 12
  },
  "expected": {
-  "liveRow": {
-   "ev": "live",
-   "droppedHasNoFoodAnimal": true
-  },
   "shownMustContain": {
    "normal": [
     "cod",
     "salmon"
    ],
    "urgent": [
-    "cod"
+    "cod",
+    "salmon"
    ]
   }
  },
  "checks": [
-  "頭: 入力の取り出し（台 D）で shown を確かめる（境界 10）"
+  "頭（台 D）"
  ]
 }

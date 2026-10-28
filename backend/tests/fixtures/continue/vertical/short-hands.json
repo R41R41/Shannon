@@ -1,24 +1,26 @@
 {
  "contract": "vertical",
- "version": 1,
- "scene": "頭の短い書き方と JSON の往復",
- "source": "minecraftActShortHands.ts の書き方（往復が同じにならない手は json の行）",
+ "version": 2,
+ "scene": "頭の短い書き方と JSON の往復、送る前の断り",
+ "source": "minecraftActShortHands.ts",
  "known": [],
  "decided": [
-  "shape は stairs・shaft・pillar（shaft は下りだけ、pillar は上りだけ）"
+  "決め: dir は書く。shaft は down だけ、pillar は up だけ、canDig は必須"
  ],
+ "hypothesis": [],
  "input": {
   "lines": [
-   "vertical stairs south y=10 dig=stone,dirt maxDig=80 liquid=stop seconds=120",
-   "vertical shaft y=-50 dig=stone,deepslate place=cobblestone maxPlace=30 liquid=seal range=1",
-   "vertical pillar y=63 place=cobblestone maxPlace=60 liquid=seal_water",
-   "vertical stairs north y=70 dig=stone,dirt liquid=stop dependsOn=1"
+   "vertical down stairs south y=10 dig=stone,dirt maxDig=80 liquid=stop seconds=120",
+   "vertical down shaft y=-50 dig=stone,deepslate place=cobblestone maxPlace=30 liquid=seal range=1",
+   "vertical up pillar y=63 dig=stone,dirt place=cobblestone maxPlace=60 liquid=seal_water",
+   "vertical up stairs north y=70 dig=stone,dirt place=cobblestone liquid=stop dependsOn=1"
   ]
  },
  "expected": {
   "hands": [
    {
     "do": "vertical",
+    "dir": "down",
     "shape": "stairs",
     "toward": "south",
     "toY": 10,
@@ -32,6 +34,7 @@
    },
    {
     "do": "vertical",
+    "dir": "down",
     "shape": "shaft",
     "toY": -50,
     "canDig": [
@@ -47,8 +50,13 @@
    },
    {
     "do": "vertical",
+    "dir": "up",
     "shape": "pillar",
     "toY": 63,
+    "canDig": [
+     "stone",
+     "dirt"
+    ],
     "canPlace": [
      "cobblestone"
     ],
@@ -57,12 +65,16 @@
    },
    {
     "do": "vertical",
+    "dir": "up",
     "shape": "stairs",
     "toward": "north",
     "toY": 70,
     "canDig": [
      "stone",
      "dirt"
+    ],
+    "canPlace": [
+     "cobblestone"
     ],
     "liquid": "stop",
     "dependsOn": [
@@ -72,23 +84,29 @@
   ],
   "refused": [
    {
-    "line": "vertical stairs y=10 dig=stone liquid=stop",
+    "line": "vertical down stairs y=10 dig=stone liquid=stop",
     "why": "stairs には toward が要る"
    },
    {
-    "line": "vertical shaft y=80 dig=stone liquid=stop",
-    "why": "shaft は下りだけ（toY が今より上）",
-    "needsNowY": 60
+    "line": "vertical up shaft y=80 dig=stone liquid=stop",
+    "why": "shaft は down だけ"
    },
    {
-    "line": "vertical pillar y=40 place=cobblestone liquid=stop",
-    "why": "pillar は上りだけ",
-    "needsNowY": 60
+    "line": "vertical down pillar y=40 dig=stone place=cobblestone liquid=stop",
+    "why": "pillar は up だけ"
+   },
+   {
+    "line": "vertical up pillar y=63 place=cobblestone liquid=stop",
+    "why": "canDig が要る"
+   },
+   {
+    "line": "vertical stairs south y=10 dig=stone liquid=stop",
+    "why": "dir が要る"
    }
   ]
  },
  "checks": [
-  "頭: 読み書きの往復と断り",
-  "体: zod の形が同じ（catalog の produced で確かめる）"
+  "頭",
+  "体: zod の形（catalog の produced）"
  ]
 }

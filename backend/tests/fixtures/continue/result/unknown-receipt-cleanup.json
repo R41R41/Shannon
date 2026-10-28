@@ -1,0 +1,120 @@
+{
+ "contract": "result",
+ "version": 2,
+ "scene": "受け取りが unknown。頭は LLM に届け（delivered）、すぐ期限つきの片付けを送る。解放を確かめる（released）まで動かす命令を送らない。遅れた本物の結果は訂正",
+ "source": "Codex CONTRACTS.md（1）8、minecraftControl.ts receiptOf()、minecraftLlmcQueue.ts settleFlag()",
+ "known": [
+  "確か: 今は unknown で例外、settle は ended と acknowledged へ流れる"
+ ],
+ "decided": [
+  "決め: delivered と released を分ける",
+  "決め: 片付けの期限 5 秒（仮）",
+  "決め: 出し直さない"
+ ],
+ "hypothesis": [],
+ "input": {
+  "cases": [
+   {
+    "name": "cleanup_ok",
+    "receipt": {
+     "id": "skill:q40",
+     "outcome": "unknown",
+     "inputsReleased": false
+    },
+    "cleanup": {
+     "outcome": "completed",
+     "inputsReleased": true
+    }
+   },
+   {
+    "name": "cleanup_failed",
+    "receipt": {
+     "id": "skill:q40",
+     "outcome": "unknown",
+     "inputsReleased": false
+    },
+    "cleanup": {
+     "outcome": "unknown",
+     "inputsReleased": false
+    }
+   },
+   {
+    "name": "late_real_result",
+    "receipt": {
+     "id": "skill:q40",
+     "outcome": "unknown",
+     "inputsReleased": false
+    },
+    "cleanup": {
+     "outcome": "completed",
+     "inputsReleased": true
+    },
+    "late": {
+     "id": "skill:q40",
+     "outcome": "completed",
+     "inputsReleased": true,
+     "unit": {
+      "goal": "done",
+      "end": "finished",
+      "released": true
+     }
+    }
+   },
+   {
+    "name": "same_result_twice",
+    "receipt": {
+     "id": "skill:q41",
+     "outcome": "completed",
+     "inputsReleased": true
+    },
+    "again": true
+   }
+  ]
+ },
+ "expected": {
+  "cases": [
+   {
+    "name": "cleanup_ok",
+    "states": [
+     "delivered",
+     "released"
+    ],
+    "stepAcknowledged": true,
+    "physicalSentBeforeReleased": 0,
+    "resent": false
+   },
+   {
+    "name": "cleanup_failed",
+    "states": [
+     "delivered"
+    ],
+    "held": true,
+    "incident": true,
+    "resent": false
+   },
+   {
+    "name": "late_real_result",
+    "correctionText": {
+     "mustContain": [
+      "訂正"
+     ]
+    },
+    "ledgerAppliedOnce": true
+   },
+   {
+    "name": "same_result_twice",
+    "appliedOnce": true
+   }
+  ],
+  "headResultText": {
+   "mustContain": [
+    "不明",
+    "出し直さない"
+   ]
+  }
+ },
+ "checks": [
+  "頭: 項目の 2 つの状態・片付け・訂正",
+  "体: 片付けの受け取りの inputsReleased"
+ ]
+}

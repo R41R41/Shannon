@@ -1,0 +1,55 @@
+{
+ "contract": "control",
+ "version": 2,
+ "scene": "melee の episode が打ちの上限に着いた。急ぎの知らせを 1 度出し、既に構えていた盾を 3 秒まで続ける（延ばさない）",
+ "source": "floorReflexes.ts（MELEE_MAX_HITS・MELEE_MAX_HANDS）。FloorBudget は arrow・eat・armor の時間の予算で別物",
+ "known": [
+  "確か: melee の上限は episode の手数と打ちの数"
+ ],
+ "decided": [
+  "決め: bridge は既に選んだ動きの継続だけ",
+  "決め: 続く知らせで until を延ばさない"
+ ],
+ "hypothesis": [
+  "仮説: 3 秒"
+ ],
+ "input": {
+  "reflexEpisode": {
+   "reflex": "floor-melee",
+   "hits": "MELEE_MAX_HITS",
+   "shieldUp": true
+  },
+  "hp": 9,
+  "notices": [
+   {
+    "t": 0
+   },
+   {
+    "t": 1.5
+   }
+  ]
+ },
+ "expected": {
+  "event": {
+   "kind": "reflex.capped",
+   "subject": "floor-melee",
+   "data": {
+    "limit": "melee_hits",
+    "bridge": "shield"
+   }
+  },
+  "eventsSent": 1,
+  "holder": {
+   "kind": "bridge",
+   "after": "floor-melee",
+   "hold": "shield"
+  },
+  "untilFromFirstNoticeS": 3,
+  "extendedBySecondNotice": false,
+  "headUrgent": true
+ },
+ "checks": [
+  "体（B）",
+  "頭: WORKING_EVENT_KINDS に reflex.capped"
+ ]
+}

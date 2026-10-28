@@ -1,12 +1,13 @@
 {
  "contract": "life",
- "version": 1,
- "scene": "実行中・反射待ち・列待ち・LLM の返事待ちの 4 つの瞬間に死ぬ。生き返った後、古い命の命令が一度も動かない",
- "source": "Codex DESIGN.md（6）境界「死亡と非同期」",
+ "version": 2,
+ "scene": "実行中・反射待ち・列待ち・LLM の返事待ちの 4 つの瞬間に死ぬ。死の時刻より後に、古い命の命令の操作が 0 件。待っていた古い命令は始まらない",
+ "source": "Codex CONTRACTS.md（3）life",
  "known": [],
  "decided": [
-  "死の出来事で、待ち・実行中・ロック待ちを止める。頭は返事を破棄"
+  "決め: 死の前の操作は数えない（判定は死の時刻との比較）"
  ],
+ "hypothesis": [],
  "input": {
   "moments": [
    "running_hand",
@@ -17,14 +18,17 @@
  },
  "expected": {
   "each": {
-   "oldLifeFirstMotor": 0,
-   "headDecisionDiscarded": {
-    "awaiting_model": "life_changed"
-   },
-   "droppedCode": "death"
+   "oldLifeMotorOpsAfterDeath": 0,
+   "oldWaitingStarted": 0
+  },
+  "awaiting_model": {
+   "discarded": "life_changed"
+  },
+  "queued": {
+   "droppedBecause": "death"
   }
  },
  "checks": [
-  "通し（B＋C）: 同じ command の記録で firstMotorAt が無い"
+  "通し（B＋C）"
  ]
 }

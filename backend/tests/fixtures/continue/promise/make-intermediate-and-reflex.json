@@ -1,0 +1,101 @@
+{
+ "contract": "promise",
+ "version": 2,
+ "scene": "make が原木 → 板 → 棒 → 道具を一手で作る（途中材の板）。手の途中で反射が食べた分は反射の出来事 1 回だけ",
+ "source": "Codex CONTRACTS.md（1）9、make.ts（途中材を作る）",
+ "known": [
+  "確か: 手の前後の持ち物の差だけでは、板の作りと消費が消える"
+ ],
+ "decided": [
+  "決め: 途中材は intermediate の出来事",
+  "決め: 反射の分は手の出来事に入れない"
+ ],
+ "hypothesis": [],
+ "input": {
+  "promises": [
+   {
+    "id": 5,
+    "rev": 1,
+    "item": "planks",
+    "count": 2,
+    "use": "はしご",
+    "state": "open",
+    "ledger": []
+   }
+  ],
+  "act": {
+   "hands": [
+    {
+     "do": "make",
+     "item": "wooden_pickaxe",
+     "count": 1
+    }
+   ]
+  },
+  "events": [
+   {
+    "id": "skill:q91:1:1:1",
+    "item": "oak_log",
+    "count": -2,
+    "reason": "ingredient"
+   },
+   {
+    "id": "skill:q91:1:1:2",
+    "item": "oak_planks",
+    "count": 8,
+    "reason": "crafted",
+    "intermediate": true
+   },
+   {
+    "id": "skill:q91:1:1:3",
+    "item": "oak_planks",
+    "count": -5,
+    "reason": "ingredient",
+    "intermediate": true
+   },
+   {
+    "id": "skill:q91:1:1:4",
+    "item": "stick",
+    "count": 4,
+    "reason": "crafted",
+    "intermediate": true
+   },
+   {
+    "id": "skill:q91:1:1:5",
+    "item": "stick",
+    "count": -2,
+    "reason": "ingredient",
+    "intermediate": true
+   },
+   {
+    "id": "skill:q91:1:1:6",
+    "item": "wooden_pickaxe",
+    "count": 1,
+    "reason": "crafted"
+   }
+  ],
+  "reflexDuringHand": {
+   "id": "reflex:c-1:20",
+   "item": "bread",
+   "count": -1,
+   "reason": "reflex_eat"
+  },
+  "observedBefore": {
+   "planks": 0,
+   "bread": 2
+  },
+  "observedAfter": {
+   "planks": 3,
+   "bread": 1
+  }
+ },
+ "expected": {
+  "promiseHave": 3,
+  "breadCountedOnce": true,
+  "unexplained": 0
+ },
+ "checks": [
+  "体: make の途中材の出来事",
+  "頭: 出来事の id で 1 度だけ"
+ ]
+}

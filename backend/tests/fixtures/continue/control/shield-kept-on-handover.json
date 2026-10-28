@@ -1,0 +1,41 @@
+{
+ "contract": "control",
+ "version": 2,
+ "scene": "引き継ぎの片付けでは盾を下げない（handover の理由）。ほかの理由の片付けでは今どおり下げる",
+ "source": "ActionExecution.ts physicalStops()（deactivateItem）、shieldBlock.ts の直接の操作",
+ "known": [
+  "確か: 片付けは native の bot へ直接 deactivateItem する",
+  "確か: 常駐の盾も直接 activateItem・deactivateItem する"
+ ],
+ "decided": [
+  "決め: physicalStops に理由を渡す",
+  "決め: 常駐の盾も持ち主の確かめを通す"
+ ],
+ "hypothesis": [],
+ "input": {
+  "cases": [
+   {
+    "reason": "handover",
+    "shieldUp": true
+   },
+   {
+    "reason": "interrupted",
+    "shieldUp": true
+   }
+  ]
+ },
+ "expected": {
+  "cases": [
+   {
+    "shieldAfter": true,
+    "forwardAfter": false
+   },
+   {
+    "shieldAfter": false
+   }
+  ]
+ },
+ "checks": [
+  "体（B）"
+ ]
+}

@@ -1,12 +1,13 @@
 {
  "contract": "plan",
- "version": 1,
+ "version": 2,
  "scene": "保存されている v1 のツリーを、1 回だけ v2 に読み替える（正規表現はこの読み替えだけに残る）",
  "source": "7 章の移し方",
  "known": [],
  "decided": [
-  "kind は今の題名の正規表現で推す。「準備を省いた」の注記は prep skipped、準備の節の done は met"
+  "決め: v1 の頭が書いた「準備を省いた」の注記だけを skipped に読み替える"
  ],
+ "hypothesis": [],
  "input": {
   "v1": {
    "schema": "shannon.plan-tree.v1",
@@ -72,6 +73,6 @@
   }
  },
  "checks": [
-  "頭: v1 を読み戻す試験"
+  "頭"
  ]
 }

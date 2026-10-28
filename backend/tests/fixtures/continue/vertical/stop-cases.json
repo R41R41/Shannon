@@ -1,0 +1,59 @@
+{
+ "contract": "vertical",
+ "version": 2,
+ "scene": "止める場面: unloaded・world_limit・displaced・cannot_dig・no_floor・no_place・place_unconfirmed・limit_dig（砂利の掘り直しを含む）",
+ "source": "Codex CONTRACTS.md（1）10",
+ "known": [],
+ "decided": [
+  "決め: 6 章の止める場面"
+ ],
+ "hypothesis": [],
+ "input": {
+  "cases": [
+   {
+    "next": "unloaded"
+   },
+   {
+    "toY": -70,
+    "dir": "down"
+   },
+   {
+    "during": "knocked_back_2"
+   },
+   {
+    "next": "bedrock"
+   },
+   {
+    "below": "cave_6_deep",
+    "dir": "down"
+   },
+   {
+    "dir": "up",
+    "shape": "stairs",
+    "canPlace": []
+   },
+   {
+    "placeNotSeen": 2
+   },
+   {
+    "gravelFalls": 5,
+    "maxDig": 4
+   }
+  ]
+ },
+ "expected": {
+  "codes": [
+   "unloaded",
+   "world_limit",
+   "displaced",
+   "cannot_dig",
+   "no_floor",
+   "no_place",
+   "place_unconfirmed",
+   "limit_dig"
+  ]
+ },
+ "checks": [
+  "体"
+ ]
+}

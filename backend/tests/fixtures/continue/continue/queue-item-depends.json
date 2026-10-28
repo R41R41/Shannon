@@ -1,22 +1,29 @@
 {
  "contract": "continue",
- "version": 1,
- "scene": "列: q12 が止まった。q13（dependsOn []）は始まる、q14（無し）と q15（dependsOn q12）は捨てる",
- "source": "設計 D1、Codex DESIGN.md（1）D1（BodyQueue.admit・dropWaiting）",
+ "version": 2,
+ "scene": "列: q12 が失敗。q13（[]・pre 真）は始まる、q13b（[]・pre 偽）と q13c（[]・pre 不明）は始まらない、q14（無し）と q15（[q12]）は捨てる",
+ "source": "設計 D1、Codex CONTRACTS.md（3）continue",
  "known": [
-  "今は completed && inputsReleased 以外で待っている物を全部捨てる（controlLoop.ts launch）"
+  "確か: 今は completed && inputsReleased 以外で待ちを全部捨てる"
  ],
  "decided": [
-  "残すのは dependsOn が配列で、止まった項目も捨てた項目も含まない物だけ",
-  "残した項目は始める直前に pre を確かめる"
+  "決め: 判定表 item",
+  "決め: pre が判定できない時は始めない"
  ],
+ "hypothesis": [],
  "input": {
+  "queue": "t-run:hb-1:40",
   "running": {
    "item": "q12",
    "ends": {
     "outcome": "failed",
     "failureType": "stuck",
-    "inputsReleased": true
+    "inputsReleased": true,
+    "unit": {
+     "goal": "failed",
+     "end": "finished",
+     "released": true
+    }
    }
   },
   "waiting": [
@@ -27,44 +34,99 @@
     "pre": [
      [
       {
+       "k": "have",
+       "item": "raw_iron",
+       "n": 1
+      }
+     ]
+    ],
+    "preValue": true
+   },
+   {
+    "item": "q13b",
+    "after": "q13",
+    "dependsOn": [],
+    "pre": [
+     [
+      {
+       "k": "food",
+       "n": 40
+      }
+     ]
+    ],
+    "preValue": false
+   },
+   {
+    "item": "q13c",
+    "after": "q13b",
+    "dependsOn": [],
+    "pre": [
+     [
+      {
        "k": "furnace",
        "x": 157,
        "y": 23,
        "z": 213
       }
      ]
-    ]
+    ],
+    "preValue": null
    },
    {
     "item": "q14",
-    "after": "q13"
+    "after": "q13c"
+   },
+   {
+    "item": "q15",
+    "after": "q14",
+    "dependsOn": [
+     "q12"
+    ]
    }
   ]
  },
  "expected": {
-  "q12": {
-   "goal": "failed",
-   "end": "finished"
-  },
   "q13": {
    "starts": true,
    "keptDespite": {
-    "item": "q12",
+    "item": {
+     "queue": "t-run:hb-1:40",
+     "item": "q12"
+    },
     "code": "stuck"
    }
+  },
+  "q13b": {
+   "starts": false,
+   "failureType": "precondition"
+  },
+  "q13c": {
+   "starts": false,
+   "failureType": "precondition_unknown"
   },
   "q14": {
    "starts": false,
    "droppedBecause": {
-    "item": "q12",
-    "code": "stuck"
-   },
-   "goal": "not_started",
-   "end": "not_run"
+    "code": "depends_failed",
+    "item": {
+     "queue": "t-run:hb-1:40",
+     "item": "q12"
+    }
+   }
+  },
+  "q15": {
+   "starts": false,
+   "droppedBecause": {
+    "code": "depends_failed",
+    "item": {
+     "queue": "t-run:hb-1:40",
+     "item": "q12"
+    }
+   }
   }
  },
  "checks": [
-  "体: launch の終わりの選り分け、begin の pre",
-  "頭: drop が q13 を取り消さない、列の知らせ"
+  "体: launch の終わりと begin",
+  "頭: 体の startedAt・droppedBecause を読む（自分で取り消さない）"
  ]
 }

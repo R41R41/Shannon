@@ -1,12 +1,15 @@
 {
  "contract": "promise",
- "version": 1,
- "scene": "地下で食べる分の食料 20 点。uses [4] の eat は用途どおりの消費、反射が食べた分は consumed_other（reflex_eat）",
- "source": "設計 D2（地下で食べる分の食料は、食べると減って正しい）",
- "known": [],
- "decided": [
-  "item food は食料の点（ActCondition の food と同じ数え方）"
+ "version": 2,
+ "scene": "地下で食べる分の食料 20 点。uses [4] の eat は申告どおり、反射が食べた分は reflex_eat。パンは 11 点（満腹 5 ＋ 隠れた満腹 6）",
+ "source": "foodPoints.ts（bread [5, 6]）",
+ "known": [
+  "確か: パンは 11 点"
  ],
+ "decided": [
+  "決め: item food は食料の点（ActCondition の food と同じ数え方）"
+ ],
+ "hypothesis": [],
  "input": {
   "promises": [
    {
@@ -29,6 +32,10 @@
     "ledger": []
    }
   ],
+  "observedBefore": {
+   "bread": 3,
+   "foodPoints": 33
+  },
   "steps": [
    {
     "act": {
@@ -42,33 +49,27 @@
       4
      ]
     },
-    "delta": {
-     "spent": [
-      {
-       "item": "bread",
-       "count": 1,
-       "as": "food"
-      }
-     ],
-     "gained": []
-    },
-    "foodPointsAfter": 21
+    "events": [
+     {
+      "id": "skill:q80:1:1:1",
+      "item": "bread",
+      "count": -1,
+      "reason": "food"
+     }
+    ],
+    "observedFoodPoints": 22
    },
    {
-    "reflexDelta": {
-     "reflex": "floor-eat",
-     "delta": {
-      "spent": [
-       {
-        "item": "bread",
-        "count": 1,
-        "as": "food"
-       }
-      ],
-      "gained": []
+    "workingEvent": {
+     "kind": "inventory.changed",
+     "data": {
+      "id": "reflex:c-1:17",
+      "item": "bread",
+      "count": -1,
+      "reason": "reflex_eat"
      }
     },
-    "foodPointsAfter": 16
+    "observedFoodPoints": 11
    }
   ]
  },
@@ -77,29 +78,31 @@
    {
     "ledgerAdded": [
      {
-      "kind": "consumed_for_use",
-      "count": 5,
-      "have": 21
+      "kind": "consumed",
+      "count": 11,
+      "have": 22,
+      "declared": true,
+      "reason": "eat"
      }
     ],
-    "liveLine": "約束 #4 地下で食べる分の食料 20 点: 今 21 点"
+    "liveLine": "約束 #4 地下で食べる分の食料 20 点: 今 22 点・直前に 11 点減った（理由: 食事。申告の用途）"
    },
    {
     "ledgerAdded": [
      {
-      "kind": "consumed_other",
-      "count": 5,
-      "have": 16,
-      "by": {
-       "kind": "reflex_eat"
-      }
+      "kind": "consumed",
+      "count": 11,
+      "have": 11,
+      "declared": false,
+      "reason": "reflex_eat"
      }
     ],
-    "liveLine": "約束 #4 地下で食べる分の食料 20 点: 今 16 点・直前に反射の食事で 5 点（足りない 4）"
+    "liveLine": "約束 #4 地下で食べる分の食料 20 点: 今 11 点・直前に 11 点減った（理由: 反射の食事）（足りない 9）"
    }
   ]
  },
  "checks": [
-  "頭: 食料の点の数え方と行"
+  "頭: 食料の点と行",
+  "体: act の外の反射の出来事"
  ]
 }

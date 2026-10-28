@@ -1,13 +1,15 @@
 {
  "contract": "e2e",
- "version": 1,
+ "version": 2,
  "benches": {
   "A": "再生の台（VM、run-replay.sh・scene-case.py、本物の体と写したワールド）",
-  "B": "隔離ラボ（VM、本物のサーバー・bot・反射・盾・道探し。run-incident-lab.sh と run-hands-live を広げる）。D4 はここ",
+  "B": "隔離ラボ（VM、本物のサーバー・bot・反射・盾・道探し）。D4 はここ",
   "C": "本物の頭の通し（minecraftHoldResumeLab.ts を広げる。頭は本物、モデルは台本）",
   "D": "入力の取り出し（recordedClient を送らずに要求のバイトを返す形で。API は呼ばない）"
  },
- "join": "TraceIds.command で、判断の記録（events.jsonl）・受け取り（BodyTimes）・黒箱（hand_start と出来事）を突き合わせる。つながらない command が 1 つでもあれば不合格",
+ "join": "TraceIds の組（run・life・判断の番号・command・列の印）でつなぐ。つながらない命令が 1 つでもあれば不合格",
+ "evidence": "measure/evidence-by-command-kind.json",
+ "producedVersionMismatch": "fail",
  "boundaries": [
   {
    "n": 1,
@@ -23,7 +25,8 @@
    "pass": [
     "eat の手の goal が already",
     "dependsOn [] の項目に startedAt がある",
-    "頼る項目だけ droppedBecause"
+    "頼る項目だけ droppedBecause depends_failed",
+    "頭が体の始めた項目を取り消さない"
    ]
   },
   {
@@ -33,12 +36,13 @@
     "A"
    ],
    "fixtures": [
-    "vertical/r45-hold5-shaft-down-to-diamond.json",
+    "vertical/r45-hold5-shaft-down.json",
     "vertical/r45-hold7-pillar-up.json"
    ],
    "pass": [
-    "progress.done と黒箱の掘り・置きの数が合う",
-    "2 本目が progress.at から始まり、掘った段を掘り直さない"
+    "progress.done（確かめた段数）と黒箱の移動の段数が合う",
+    "work.dug と黒箱の dig、work.placed と確かめた place を別々に照らす",
+    "次の手が progress.at から始まり、掘った段を掘り直さない"
    ]
   },
   {
@@ -51,10 +55,12 @@
    "fixtures": [
     "promise/r43-planks-burned-as-fuel.json",
     "promise/table-crafted-placed-picked.json",
-    "promise/food-for-underground.json"
+    "promise/food-for-underground.json",
+    "promise/make-intermediate-and-reflex.json"
    ],
    "pass": [
-    "受け取りのたびに帳簿の have と観測の持ち物が合う（ずれ 0）"
+    "受け取りのたびに帳簿の have と観測の持ち物が合う",
+    "同じ出来事の id が 2 度反映されない"
    ]
   },
   {
@@ -67,13 +73,13 @@
    "fixtures": [
     "control/r45-attack-waited-6-4s.json",
     "control/different-target.json",
-    "control/high-priority-not-taken.json"
+    "control/high-priority-not-taken.json",
+    "control/shield-kept-on-handover.json"
    ],
    "pass": [
-    "同じ相手: lockAt − acceptedAt ≤ 300 ms かつ handover.confirmed",
+    "同じ相手: handover.confirmed かつ shield kept",
     "別の相手: melee が次の手を始めない",
-    "溶岩・息: 奪わない",
-    "盾の構えが引き継ぎの間に外れない"
+    "溶岩・息・食事・低体力の逃げ: 奪わない"
    ]
   },
   {
@@ -88,8 +94,9 @@
     "life/r45-death-then-old-attack.json"
    ],
    "pass": [
-    "4 つの瞬間のどれでも、古い life の command に firstMotorAt が無い",
-    "awaiting_model の判断は discarded（life_changed）"
+    "死の時刻より後に、古い life の命令の motorOps が 0",
+    "待っていた古い命令は 1 つも始まらない",
+    "awaiting_model の返事は discarded life_changed"
    ]
   },
   {
@@ -102,7 +109,7 @@
     "control/stale-owner-cleanup.json"
    ],
    "pass": [
-    "新しい token の後の古い片付けの操作が 0 件効いた"
+    "新しい持ち主の後の古い片付けの操作は motor port が断る（効いた操作 0）"
    ]
   },
   {
@@ -112,11 +119,13 @@
     "B"
    ],
    "fixtures": [
-    "life/portal-is-not-death.json"
+    "life/portal-is-not-death.json",
+    "life/portal-pending-other-dimension.json"
    ],
    "pass": [
     "ポータルで life が変わらない",
-    "死んで生き返った後、前の次元の座標の act が始まらない"
+    "移る前の観測で作った待ちの項目は dimension_changed",
+    "死んで生き返った後は life が 1 増える"
    ]
   },
   {
@@ -127,12 +136,14 @@
     "C"
    ],
    "fixtures": [
-    "result/unknown-receipt.json"
+    "result/unknown-receipt-cleanup.json",
+    "promise/same-receipt-twice.json"
    ],
    "pass": [
-    "同じ command の firstMotorAt が 2 回無い",
-    "unknown の項目が自動で出し直されない",
-    "帳簿に同じ消費が 2 回無い"
+    "台本: 受け取りの取りこぼし・同じ poll の重複・体のつなぎ直し・頭の再起動・体の再起動・lease の交代を、それぞれ起こす",
+    "同じ命令の motorOps が 2 回の実行に分かれない",
+    "不明の項目が自動で出し直されない",
+    "帳簿に同じ出来事が 2 度入らない"
    ]
   },
   {
@@ -143,13 +154,14 @@
    ],
    "fixtures": [
     "plan/first-plan-with-kind.json",
-    "plan/title-renamed-same-knowledge.json",
-    "plan/descent-closed-skipped.json",
+    "plan/title-renamed-same-decisions.json",
+    "plan/descended-without-prep-fact.json",
     "plan/migrate-v1-to-v2.json"
    ],
    "pass": [
     "kind と prep が保存・頭の再起動・読み戻しで残る",
-    "題名の言い換えの前後で知識・不足・meter・近くの候補の文が同じ"
+    "題名の言い換えの前後で判定の値が同じ（表示の文は別に照らす）",
+    "頭が prep を書かない"
    ]
   },
   {
@@ -159,11 +171,23 @@
     "D"
    ],
    "fixtures": [
-    "measure/live-before-after-fish.json"
+    "measure/urgent-max-input.json",
+    "measure/live-before-after-fish.json",
+    "control/fight-damage-facts.json"
    ],
    "pass": [
-    "急ぎの版の最後の要求のバイトに、食料・体力・持ち主・命の番号・約束の 1 行がある"
+    "最大の長さの入力で、8 章の規範の表の物が最後の要求のバイトに残る"
    ]
   }
+ ],
+ "seams": [
+  "体が独立な q2 を始めた後に、頭へ q1 の失敗が届く（頭が q2 を取り消さない）",
+  "onFail continue の失敗へ後続が明示で頼る。3 つの項目の間接の依存",
+  "不明を LLM へ見せた後に、片付けの成功・失敗、遅れた結果、同じ結果の再受信",
+  "約束の改訂・解除と、古い rev で送った act の結果が前後する",
+  "act の外の食事、途中材の作りと消費、手の中断と反射の食事、repeat の複数の周回",
+  "引き継ぎの判定の間に、死・低体力・別の安全の反射が取る",
+  "同じ life でポータルを移った後に、前の次元の別の項目が待っている",
+  "最大の長さの結果・帳簿・急ぎの live を、本物の受信の検査と最後の要求のバイトまで通す"
  ]
 }

@@ -1,0 +1,45 @@
+{
+ "contract": "life",
+ "version": 2,
+ "scene": "命の番号のファイルが読めない時は、黙って 1 へ戻さない。時刻から作る大きな番号で始め、黒箱に書く",
+ "source": "12 章の決め 2",
+ "known": [],
+ "decided": [
+  "決め: 読めない → 時刻（ms）で始める",
+  "決め: ファイルが無い（初めて）→ 1"
+ ],
+ "hypothesis": [],
+ "input": {
+  "cases": [
+   {
+    "file": "missing"
+   },
+   {
+    "file": "corrupt",
+    "nowMs": 1793164759174
+   },
+   {
+    "file": {
+     "life": 7
+    }
+   }
+  ]
+ },
+ "expected": {
+  "cases": [
+   {
+    "life": 1
+   },
+   {
+    "life": 1793164759174,
+    "boxNote": "life_file_unreadable"
+   },
+   {
+    "life": 7
+   }
+  ]
+ },
+ "checks": [
+  "体"
+ ]
+}

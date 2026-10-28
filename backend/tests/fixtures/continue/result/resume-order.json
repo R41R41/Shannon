@@ -1,0 +1,61 @@
+{
+ "contract": "result",
+ "version": 2,
+ "scene": "再開の契約: 前の結果を先に届け、その後で判断。出し直しは前の命令の印（resumeOf）を持つ",
+ "source": "実走 45 再開 5（run45-live.md 103〜113 行）: skip-replay の後、Sonnet が行き先を変えた。出し直しのくり返しでは判断に届かなかった",
+ "known": [
+  "確か: 保留 3 の出し直しの失敗がそのまま保留 5 になり、Sonnet の判断は 1 回も走らなかった"
+ ],
+ "decided": [
+  "決め: 再開の時の届ける順と、新旧の命令の関係を結果の文に書く"
+ ],
+ "hypothesis": [],
+ "input": {
+  "cases": [
+   {
+    "resume": "skip",
+    "held": {
+     "item": "q3",
+     "hand": "go (159,20,220)",
+     "code": "search_timeout"
+    }
+   },
+   {
+    "resume": "replay",
+    "held": {
+     "item": "q12",
+     "command": "skill:617993e2"
+    },
+    "replayResult": {
+     "goal": "failed",
+     "code": "search_timeout"
+    }
+   }
+  ]
+ },
+ "expected": {
+  "cases": [
+   {
+    "firstLine": {
+     "mustContain": [
+      "出し直さなかった",
+      "search_timeout"
+     ]
+    },
+    "then": "decision"
+   },
+   {
+    "firstLine": {
+     "mustContain": [
+      "保留した q12 の出し直し"
+     ]
+    },
+    "resumeOf": "skill:617993e2",
+    "then": "decision"
+   }
+  ]
+ },
+ "checks": [
+  "頭: 再開の後の最初の判断の入力"
+ ]
+}

@@ -1,12 +1,13 @@
 {
  "contract": "life",
- "version": 1,
+ "version": 2,
  "scene": "ポータルで次元が変わっても命の番号は変わらない。死んで別の次元に生き返った時は、死の時に 1 増える",
- "source": "設計 D4（次元の移りを死と取り違えない）",
+ "source": "設計 D4",
  "known": [],
  "decided": [
-  "番号は death の出来事で進む。spawn・game では進まない"
+  "決め: 番号は death の出来事で進む"
  ],
+ "hypothesis": [],
  "input": {
   "events": [
    {
@@ -41,7 +42,7 @@
   ]
  },
  "checks": [
-  "体: utils/life の試験",
-  "頭: arrivalOf が facts.life の増えで death"
+  "体: utils/life",
+  "頭: arrivalOf"
  ]
 }

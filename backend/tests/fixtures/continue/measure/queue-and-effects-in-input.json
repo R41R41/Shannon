@@ -1,0 +1,35 @@
+{
+ "contract": "measure",
+ "version": 2,
+ "scene": "列の今と、手の予定の効果を最後の入力へ。同じ目的の go を二重に出さない書き方の試し（コードで断らない）",
+ "source": "実走 45（run45-live.md 137 行）: 同じ why・同じ行き先の go を 4 秒後にもう一度列に出した",
+ "known": [
+  "確か: 今の重複の確かめは hands 全体の一致なので、seconds が違えば通る"
+ ],
+ "decided": [
+  "決め: 目的をコードで推して断らない"
+ ],
+ "hypothesis": [],
+ "input": {
+  "queue": [
+   {
+    "item": "q33",
+    "state": "running",
+    "hands": "go (183,63,198) seconds=90",
+    "leftMs": 60000
+   }
+  ],
+  "newDecision": "go (183,63,198) seconds=120 maxDig=100"
+ },
+ "expected": {
+  "liveMustContain": [
+   "q33",
+   "(183,63,198)",
+   "実行中"
+  ],
+  "headRefuses": false
+ },
+ "checks": [
+  "頭"
+ ]
+}

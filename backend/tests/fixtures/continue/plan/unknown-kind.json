@@ -1,0 +1,37 @@
+{
+ "contract": "plan",
+ "version": 2,
+ "scene": "LLM が列に無い kind（\"farm\"）を書いた: other として受け、元の値を kindRaw と判断の記録に残す",
+ "source": "12 章の決め 10",
+ "known": [],
+ "decided": [
+  "決め: 断らない"
+ ],
+ "hypothesis": [],
+ "input": {
+  "planUpdate": {
+   "ops": [
+    {
+     "op": "add",
+     "title": "小麦の畑",
+     "kind": "farm"
+    }
+   ]
+  }
+ },
+ "expected": {
+  "node": {
+   "kind": "other",
+   "kindRaw": "farm"
+  },
+  "decisionRecord": {
+   "mustContain": [
+    "kindRaw",
+    "farm"
+   ]
+  }
+ },
+ "checks": [
+  "頭"
+ ]
+}

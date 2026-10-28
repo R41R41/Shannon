@@ -1,14 +1,15 @@
 {
  "contract": "life",
- "version": 1,
- "scene": "死の前の判断の act（life 2）が、死んだ後（life 3）に届いた。体は stale_life で断り、手は動かない",
- "source": "実走 45 +929（run45-live.md 38 行）: q52 はリスポーンの後に始まり target_not_found",
+ "version": 2,
+ "scene": "死の前の判断の act（life 2）が、死んだ後（life 3）に届いた。体は stale_life で断る。頭は返事を破棄",
+ "source": "実走 45 +929（run45-live.md 38 行）",
  "known": [
-  "今は死をまたいで古い act が始まった"
+  "確か: q52 はリスポーンの後に始まり target_not_found"
  ],
  "decided": [
-  "体は accept で context.life を照らす"
+  "決め: 照らす時機は受け取り・待ちから起きた時・ロックの後・操作の前"
  ],
+ "hypothesis": [],
  "input": {
   "lifeNow": 3,
   "command": {
@@ -22,10 +23,16 @@
     "generation": 7,
     "goal": "エンドラを討伐して",
     "completionCondition": "",
-    "life": 2
+    "life": 2,
+    "headBoot": "hb-1"
    },
    "queue": {
-    "item": "q52"
+    "item": "q52",
+    "queue": "t-run:hb-1:40",
+    "madeIn": {
+     "life": 2,
+     "dim": "overworld"
+    }
    }
   }
  },
@@ -40,10 +47,10 @@
    "end": "not_run",
    "released": true
   },
-  "firstMotorAt": null
+  "motorOps": 0
  },
  "checks": [
-  "体: accept の照らし",
-  "頭: 判断の返事が life 2 なら破棄（life_changed）"
+  "体",
+  "頭: context.life は判断の入力の life"
  ]
 }

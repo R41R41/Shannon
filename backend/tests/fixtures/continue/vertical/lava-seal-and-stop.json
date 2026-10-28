@@ -1,13 +1,15 @@
 {
  "contract": "vertical",
- "version": 1,
- "scene": "液体の扱い 3 つ: stop・seal・seal_water",
- "source": "設計 D3（溶岩・水の扱いは LLM が選ぶ）、Codex DESIGN.md（2）D3（溶岩の扱いの矛盾）",
+ "version": 2,
+ "scene": "液体の扱い: stop・seal・seal_water。seal は候補の順・使うブロックの順・予算が決まった機械的な処理。どの場面も、先に 4 段進んだ後で見える",
+ "source": "Codex CONTRACTS.md（4）seal",
  "known": [],
  "decided": [
-  "seal は canPlace の物を range まで、maxPlace まで。尽きたら limit_place"
+  "決め: 候補は液体のマス → 次に入るマスに面した液体の隣の空き（近い順）、ブロックは canPlace の順"
  ],
+ "hypothesis": [],
  "input": {
+  "stepsBefore": 4,
   "cases": [
    {
     "liquid": "stop",
@@ -17,9 +19,13 @@
     "liquid": "seal",
     "seen": "lava",
     "canPlace": [
-     "cobblestone"
+     "cobblestone",
+     "dirt"
     ],
-    "have": 3,
+    "have": {
+     "cobblestone": 1,
+     "dirt": 5
+    },
     "needed": 2
    },
    {
@@ -28,7 +34,9 @@
     "canPlace": [
      "cobblestone"
     ],
-    "have": 1,
+    "have": {
+     "cobblestone": 1
+    },
     "needed": 3
    },
    {
@@ -41,22 +49,31 @@
   "cases": [
    {
     "code": "lava",
-    "goal": "partial"
+    "goal": "partial",
+    "progress": {
+     "done": 4
+    }
    },
    {
     "continues": true,
-    "placed": 2
+    "placedOrder": [
+     "cobblestone",
+     "dirt"
+    ]
    },
    {
-    "code": "limit_place",
-    "placed": 1
+    "code": "seal_failed",
+    "why": "no_block",
+    "placed": 1,
+    "goal": "partial"
    },
    {
-    "code": "lava"
+    "code": "lava",
+    "goal": "partial"
    }
   ]
  },
  "checks": [
-  "体: descend の部品の試験"
+  "体"
  ]
 }

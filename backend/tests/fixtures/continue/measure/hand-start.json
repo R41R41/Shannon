@@ -1,16 +1,19 @@
 {
  "contract": "measure",
- "version": 1,
- "scene": "手の始まりの記録（黒箱の hand_start）。失敗の後の現場だけでは消える「至る順」を残す",
- "source": "Codex DESIGN.md（3）失敗前の状態・操作順の保存",
- "known": [
-  "黒箱は 90 秒の輪で、持ち物は書き出しの時点"
- ],
+ "version": 2,
+ "scene": "手の始まりの記録（黒箱の hand_start）。q34 の 1 手目（i=1）",
+ "source": "Codex CONTRACTS.md（3）measure（v1 は入力が hand 2 で期待が 1 だった）",
+ "known": [],
  "decided": [
-  "手ごとに観測・持ち物・持ち主・直前の操作 16 件"
+  "決め: hand は ActHandLine.i と同じ 1 からの数"
  ],
+ "hypothesis": [],
  "input": {
-  "at": "hand 2 of q34",
+  "at": {
+   "command": "skill:q34",
+   "item": "q34",
+   "hand": 1
+  },
   "body": {
    "pos": {
     "x": 178.5,
@@ -49,6 +52,6 @@
   }
  },
  "checks": [
-  "体: blackbox の hand_start の形"
+  "体"
  ]
 }

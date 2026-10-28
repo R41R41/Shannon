@@ -1,0 +1,37 @@
+{
+ "contract": "measure",
+ "version": 2,
+ "scene": "前後を比べる時に混ぜない物: プロンプトの変更・thinking の破棄・再開による履歴の変化",
+ "source": "実走 45（run45-live.md 84・106・134 行）: prefix_binding_mismatch 16 回（12 回続けて）",
+ "known": [
+  "確か: 再開の後に thinking の破棄が続いた"
+ ],
+ "decided": [
+  "決め: input_change の行"
+ ],
+ "hypothesis": [],
+ "input": {
+  "events": [
+   {
+    "promptHash": "a1",
+    "thinkingDropped": {
+     "reason": "prefix_binding_mismatch",
+     "count": 17
+    },
+    "historyChanged": "resume"
+   }
+  ]
+ },
+ "expected": {
+  "row": {
+   "ev": "input_change",
+   "thinkingDropped": {
+    "reason": "prefix_binding_mismatch"
+   },
+   "historyChanged": "resume"
+  }
+ },
+ "checks": [
+  "頭"
+ ]
+}

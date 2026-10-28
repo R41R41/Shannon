@@ -1,18 +1,39 @@
 {
  "contract": "control",
- "version": 1,
- "scene": "溶岩からの脱出（priority 400）の間に頭の fight が来ても奪わない",
- "source": "lavaSafety.ts LAVA_ESCAPE_PRIORITY 400",
+ "version": 2,
+ "scene": "溶岩・息・食事・低体力の逃げの間に頭の fight が来ても奪わない",
+ "source": "floorReflexes.ts・lavaSafety.ts の優先度",
  "known": [],
  "decided": [
-  "溶岩・壁・退避・掘り出し・息・食事・防具は奪わない"
+  "決め: 普通の act の優先度を一律に上げない"
  ],
+ "hypothesis": [],
  "input": {
-  "holder": {
-   "kind": "reflex",
-   "reflex": "lava-escape",
-   "priority": 400
-  },
+  "cases": [
+   {
+    "holder": {
+     "reflex": "lava-escape",
+     "priority": 400
+    }
+   },
+   {
+    "holder": {
+     "reflex": "auto-swim"
+    }
+   },
+   {
+    "holder": {
+     "reflex": "floor-eat",
+     "priority": 200
+    }
+   },
+   {
+    "holder": {
+     "reflex": "floor-flee",
+     "priority": 250
+    }
+   }
+  ],
   "act": {
    "hands": [
     {
@@ -23,8 +44,10 @@
   }
  },
  "expected": {
-  "handover": null,
-  "waitsForReflex": true
+  "each": {
+   "handover": null,
+   "waitsForReflex": true
+  }
  },
  "checks": [
   "体（B）"

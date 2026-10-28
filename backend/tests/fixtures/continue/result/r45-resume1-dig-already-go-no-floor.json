@@ -1,0 +1,56 @@
+{
+ "contract": "result",
+ "version": 2,
+ "scene": "再開 1 の出し直し: dig は既に空気で already、go は 22 ms で no_floor（動いていない）",
+ "source": "実走 45 再開 1（run45-live.md 30 行）",
+ "known": [
+  "確か: dig「(159,67,200) は既に air（掘らずに次へ）」、go「no_floor … 道 0 歩」22 ms"
+ ],
+ "decided": [
+  "決め: 動いていない go は goal failed（not_started ではない。手は始まった）"
+ ],
+ "hypothesis": [],
+ "input": {
+  "act": "r45-hold1-go-partial と同じ",
+  "body": {
+   "at": {
+    "x": 161.5,
+    "y": 33,
+    "z": 214.3
+   }
+  }
+ },
+ "expected": {
+  "lines": [
+   {
+    "i": 1,
+    "do": "dig",
+    "status": "done",
+    "goal": "already",
+    "end": "finished"
+   },
+   {
+    "i": 2,
+    "do": "go",
+    "status": "stopped",
+    "goal": "failed",
+    "end": "finished",
+    "code": "no_floor",
+    "progress": {
+     "unit": "meter",
+     "done": 0,
+     "left": 27.5,
+     "fromStopM": 27.5
+    }
+   }
+  ],
+  "outcome": {
+   "goal": "failed",
+   "end": "finished"
+  }
+ },
+ "checks": [
+  "体: dig の already",
+  "頭: already と failed の組の act は failed"
+ ]
+}

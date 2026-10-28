@@ -1,0 +1,64 @@
+{
+ "contract": "vertical",
+ "version": 2,
+ "scene": "保留 5〜6 の真下への下りを縦穴で。止まったら、その位置から新しい手で続ける",
+ "source": "実走 45 再開 5 の後（run45-live.md 113〜116 行）",
+ "known": [
+  "確か: 旧 go は真下へ 95 段（y=63 → -32）を 120 秒で掘り下がった"
+ ],
+ "decided": [
+  "決め: 95 段は新しい手の期待にしない（形だけを決める）"
+ ],
+ "hypothesis": [],
+ "input": {
+  "from": {
+   "x": 183,
+   "y": 63,
+   "z": 195
+  },
+  "hand": {
+   "do": "vertical",
+   "dir": "down",
+   "shape": "shaft",
+   "toY": -50,
+   "canDig": [
+    "stone",
+    "andesite",
+    "diorite",
+    "granite",
+    "deepslate",
+    "tuff",
+    "dirt"
+   ],
+   "canPlace": [
+    "cobblestone"
+   ],
+   "maxPlace": 30,
+   "liquid": "seal",
+   "range": 1,
+   "seconds": 120
+  },
+  "short": "vertical down shaft y=-50 dig=stone,andesite,diorite,granite,deepslate,tuff,dirt place=cobblestone maxPlace=30 liquid=seal seconds=120"
+ },
+ "expected": {
+  "whenTimeRunsOut": {
+   "goal": "partial",
+   "code": "limit_time",
+   "progress": {
+    "unit": "step",
+    "done": "N",
+    "left": "113-N",
+    "at": {
+     "x": 183,
+     "y": "63-N",
+     "z": 195
+    }
+   }
+  },
+  "nextHandStartsAt": "progress.at",
+  "digsAgainCellsAbove": 0
+ },
+ "checks": [
+  "通し（A、境界 2）"
+ ]
+}

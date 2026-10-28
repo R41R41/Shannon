@@ -1,0 +1,210 @@
+{
+ "contract": "continue",
+ "version": 2,
+ "scene": "依存の判定表（頭と体が同じ物を読む。正本）",
+ "invalidationFirst": [
+  "connection_changed",
+  "death",
+  "stale_life",
+  "dimension_changed",
+  "operator_stop",
+  "cancelled",
+  "lease_expired"
+ ],
+ "checkAt": [
+  "accept",
+  "wake_from_queue",
+  "after_lock",
+  "before_motor",
+  "each_hand"
+ ],
+ "outcomes": [
+  {
+   "goal": "done",
+   "end": "finished",
+   "reliable": true,
+   "old": {
+    "ok": true,
+    "outcome": "completed"
+   }
+  },
+  {
+   "goal": "already",
+   "end": "finished",
+   "reliable": true,
+   "old": {
+    "ok": true,
+    "outcome": "completed"
+   }
+  },
+  {
+   "goal": "partial",
+   "end": "finished",
+   "reliable": false,
+   "old": {
+    "ok": false,
+    "outcome": "failed"
+   }
+  },
+  {
+   "goal": "partial",
+   "end": "cut",
+   "reliable": false,
+   "old": {
+    "ok": false,
+    "outcome": "failed|cancelled"
+   }
+  },
+  {
+   "goal": "failed",
+   "end": "finished",
+   "reliable": false,
+   "old": {
+    "ok": false,
+    "outcome": "failed"
+   }
+  },
+  {
+   "goal": "failed",
+   "end": "cut",
+   "reliable": false,
+   "old": {
+    "ok": false,
+    "outcome": "failed|cancelled"
+   }
+  },
+  {
+   "goal": "not_started",
+   "end": "not_run",
+   "reliable": false,
+   "old": {
+    "ok": false,
+    "outcome": "failed|cancelled"
+   }
+  },
+  {
+   "goal": "unknown",
+   "end": "finished",
+   "reliable": false,
+   "old": {
+    "ok": true,
+    "outcome": "completed",
+    "note": "attack の target_lost"
+   }
+  },
+  {
+   "goal": "unknown",
+   "end": "unknown",
+   "reliable": false,
+   "old": {
+    "outcome": "unknown"
+   }
+  },
+  {
+   "goal": "done",
+   "end": "cut",
+   "reliable": false,
+   "old": {
+    "ok": false,
+    "outcome": "cancelled"
+   },
+   "note": "ねらいは満たしたが外から止められた: 解放を確かめるまで頼らない"
+  }
+ ],
+ "notAllowed": [
+  {
+   "goal": "already",
+   "end": "cut"
+  },
+  {
+   "goal": "not_started",
+   "end": "finished"
+  },
+  {
+   "goal": "done",
+   "end": "not_run"
+  },
+  {
+   "goal": "partial",
+   "end": "not_run"
+  }
+ ],
+ "statusMap": [
+  {
+   "status": "done",
+   "end": "finished",
+   "goals": [
+    "done",
+    "already"
+   ]
+  },
+  {
+   "status": "failed",
+   "end": "finished",
+   "goals": [
+    "failed",
+    "partial",
+    "unknown"
+   ],
+   "note": "onFail continue で次へ進んだ"
+  },
+  {
+   "status": "stopped",
+   "end": "finished",
+   "goals": [
+    "failed",
+    "partial",
+    "unknown"
+   ]
+  },
+  {
+   "status": "stopped",
+   "end": "cut",
+   "goals": [
+    "partial",
+    "failed",
+    "done"
+   ]
+  },
+  {
+   "status": "skipped",
+   "end": "not_run",
+   "goals": [
+    "not_started"
+   ]
+  }
+ ],
+ "hand": {
+  "undefined": "as_now",
+  "empty": "relies_on_nothing",
+  "listed": "all_listed_reliable",
+  "onFailContinueExempts": false,
+  "indirect": "a_not_run_hand_is_not_reliable",
+  "repeat": "same_pass_only",
+  "refusedShapes": [
+   "self",
+   "later_hand",
+   "out_of_range",
+   "duplicate"
+  ]
+ },
+ "item": {
+  "undefined": "drop_as_now",
+  "empty": "keep",
+  "listed": "keep_if_all_succeeded",
+  "dependState": [
+   "succeeded",
+   "failed",
+   "pending",
+   "unknown"
+  ],
+  "unknownRef": "depends_unknown_not_started",
+  "pre": {
+   "true": "start",
+   "false": "precondition_not_started",
+   "unknown": "not_started"
+  },
+  "admitAfterStopped": "admit_if_not_in_dependsOn_but_never_skip_tail",
+  "replace": "listed_and_explicit_dependents_only"
+ }
+}

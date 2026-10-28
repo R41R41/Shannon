@@ -1,0 +1,110 @@
+{
+ "contract": "continue",
+ "version": 2,
+ "scene": "間接の依存: 1 が失敗 → 2（[1]）は動かない → 3（[2]）も動かない。列でも同じ（q1 → q2 → q3）",
+ "source": "Codex CONTRACTS.md（3）継ぎ目の場面",
+ "known": [],
+ "decided": [
+  "決め: 動かなかった手・捨てた項目は頼れる成果ではない"
+ ],
+ "hypothesis": [],
+ "input": {
+  "act": {
+   "hands": [
+    {
+     "do": "go",
+     "to": {
+      "x": 9,
+      "y": 64,
+      "z": 0
+     }
+    },
+    {
+     "do": "dig",
+     "at": [
+      {
+       "x": 10,
+       "y": 64,
+       "z": 0
+      }
+     ],
+     "dependsOn": [
+      1
+     ]
+    },
+    {
+     "do": "place",
+     "block": "torch",
+     "at": [
+      {
+       "x": 10,
+       "y": 64,
+       "z": 0
+      }
+     ],
+     "dependsOn": [
+      2
+     ]
+    }
+   ]
+  },
+  "queue": {
+   "running": "q1",
+   "ends": "failed",
+   "waiting": [
+    {
+     "item": "q2",
+     "dependsOn": [
+      "q1"
+     ]
+    },
+    {
+     "item": "q3",
+     "dependsOn": [
+      "q2"
+     ]
+    }
+   ]
+  }
+ },
+ "expected": {
+  "act": [
+   {
+    "i": 1,
+    "goal": "failed"
+   },
+   {
+    "i": 2,
+    "end": "not_run"
+   },
+   {
+    "i": 3,
+    "end": "not_run"
+   }
+  ],
+  "queue": {
+   "q2": {
+    "droppedBecause": {
+     "code": "depends_failed",
+     "item": {
+      "queue": "t-run:hb-1:40",
+      "item": "q1"
+     }
+    }
+   },
+   "q3": {
+    "droppedBecause": {
+     "code": "depends_failed",
+     "item": {
+      "queue": "t-run:hb-1:40",
+      "item": "q2"
+     }
+    }
+   }
+  }
+ },
+ "checks": [
+  "体",
+  "頭"
+ ]
+}

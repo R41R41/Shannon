@@ -1,14 +1,15 @@
 {
  "contract": "plan",
- "version": 1,
- "scene": "題名を言い換えても、段の知識・不足・meter・近くの候補が同じ",
- "source": "境界 9（Codex DESIGN.md（6））",
+ "version": 2,
+ "scene": "題名を言い換えても、判定の値（段・不足・選ばれる知識・近くの候補）は同じ。表示の文は題名を使うので変わってよい",
+ "source": "境界 9、Codex CONTRACTS.md（3）plan",
  "known": [
-  "今は題名「ダイヤ（y=-58）」を「深い所の青い石」にすると preparationStage が diamonds でなくなる"
+  "確か: 今は題名を変えると preparationStage が変わる"
  ],
  "decided": [
-  "kind で決める"
+  "決め: 判定の値と表示の文を分けて照らす"
  ],
+ "hypothesis": [],
  "input": {
   "tree": {
    "schema": "shannon.plan-tree.v2",
@@ -28,14 +29,9 @@
      "parentId": null,
      "order": 1,
      "title": "食料40点と下る準備",
-     "state": "done",
+     "state": "continue",
      "kind": "prep_descent",
-     "doneWhen": "food>=40&作業台か板 4",
-     "prep": {
-      "state": "skipped",
-      "why": "地下で準備の前に下りた",
-      "at": "2026-10-28T18:20:00.000Z"
-     }
+     "doneWhen": "food>=40&作業台か板 4"
     },
     {
      "id": "p4",
@@ -68,7 +64,8 @@
      "order": 5,
      "title": "ネザーへのゲート",
      "state": "wait",
-     "kind": "portal"
+     "kind": "portal",
+     "where": "@ (150,64,210)"
     }
    ],
    "promises": []
@@ -79,16 +76,23 @@
   }
  },
  "expected": {
-  "sameBeforeAndAfter": [
+  "sameDecisions": [
    "preparationStage",
+   "preparationShortage",
    "stagesFor",
    "obsidianWays",
-   "meterLine",
    "nearNeeds",
-   "gateBack"
+   "gateBack",
+   "meterLine.next",
+   "meterLine.lateness"
+  ],
+  "displayMayDiffer": [
+   "meterLine.text",
+   "roadLine.label",
+   "planNowTitle"
   ]
  },
  "checks": [
-  "頭: 7 章の表の関数を題名の言い換えの前後で比べる"
+  "頭"
  ]
 }

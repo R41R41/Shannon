@@ -1,0 +1,83 @@
+{
+ "contract": "promise",
+ "version": 2,
+ "scene": "作業台を地上に置いたまま 95 段下りた: 代わりの条件（近くに作業台）が成り立たなくなった事を 1 度出す",
+ "source": "実走 45（run45-live.md 116 行）: 作業台は (183,63,197) に置いて持たずに下りた（板 7）。地下で作り直した",
+ "known": [
+  "確か: 作業台を置いたまま下り、地下で作り直した"
+ ],
+ "decided": [
+  "決め: 代わりの条件は観測のたびに評価し直す"
+ ],
+ "hypothesis": [],
+ "input": {
+  "promises": [
+   {
+    "id": 3,
+    "rev": 1,
+    "item": "planks",
+    "count": 4,
+    "use": "作業台",
+    "instead": [
+     [
+      {
+       "k": "near",
+       "block": "crafting_table",
+       "r": 8
+      }
+     ]
+    ],
+    "state": "kept_by_instead",
+    "ledger": []
+   }
+  ],
+  "observations": [
+   {
+    "at": {
+     "x": 183,
+     "y": 63,
+     "z": 195
+    },
+    "utilities": [
+     {
+      "block": "crafting_table",
+      "at": {
+       "x": 183,
+       "y": 63,
+       "z": 197
+      },
+      "distance": 2
+     }
+    ],
+    "planks": 7
+   },
+   {
+    "at": {
+     "x": 183,
+     "y": -32,
+     "z": 195
+    },
+    "utilities": [],
+    "planks": 7
+   }
+  ]
+ },
+ "expected": {
+  "afterEach": [
+   {
+    "state": "kept_by_instead"
+   },
+   {
+    "state": "open",
+    "oneTimeLine": {
+     "mustContain": [
+      "代わりの条件が成り立たなくなった"
+     ]
+    }
+   }
+  ]
+ },
+ "checks": [
+  "頭"
+ ]
+}

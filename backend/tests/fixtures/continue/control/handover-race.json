@@ -1,0 +1,47 @@
+{
+ "contract": "control",
+ "version": 2,
+ "scene": "引き継ぎを決めた後、取る前に（a）死、（b）低体力で逃げの反射、（c）溶岩の反射が取った: どれも引き継がない",
+ "source": "Codex CONTRACTS.md（1）6",
+ "known": [],
+ "decided": [
+  "決め: 取る時に相手・life・持ち主を確かめ直す"
+ ],
+ "hypothesis": [],
+ "input": {
+  "cases": [
+   {
+    "between": "death"
+   },
+   {
+    "between": "floor-flee_took"
+   },
+   {
+    "between": "lava-escape_took"
+   }
+  ]
+ },
+ "expected": {
+  "cases": [
+   {
+    "handover": null,
+    "cutBy": "death"
+   },
+   {
+    "handover": {
+     "confirmed": false
+    },
+    "waitsForReflex": true
+   },
+   {
+    "handover": {
+     "confirmed": false
+    },
+    "waitsForReflex": true
+   }
+  ]
+ },
+ "checks": [
+  "体（B）"
+ ]
+}

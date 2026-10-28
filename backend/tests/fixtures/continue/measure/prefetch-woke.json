@@ -1,14 +1,13 @@
 {
  "contract": "measure",
- "version": 1,
+ "version": 2,
  "scene": "先読み: 列の残りで起きた時の見積もりと実際の終わりの差",
- "source": "Codex DESIGN.md（3）先読み時機と残り時間の誤差",
- "known": [
-  "今の先読みは直近の中央値を 2〜8 秒に収めた物"
- ],
+ "source": "Codex DESIGN.md（3）",
+ "known": [],
  "decided": [
-  "woke の行に predictedRemainingMs"
+  "決め: woke の行"
  ],
+ "hypothesis": [],
  "input": {
   "woke": {
    "why": "remaining",
@@ -21,6 +20,6 @@
   "errorMs": 5500
  },
  "checks": [
-  "頭: woke の行と judge.ts"
+  "頭"
  ]
 }

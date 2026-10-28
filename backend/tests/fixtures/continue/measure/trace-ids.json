@@ -1,0 +1,98 @@
+{
+ "contract": "measure",
+ "version": 2,
+ "scene": "失敗した命令（q11）と、それを読んだ判断（d0153）が出した次の命令（q12）を、番号の組でつなぐ。command だけではつながらない",
+ "source": "Codex CONTRACTS.md（3）measure",
+ "known": [],
+ "decided": [
+  "決め: run・life・判断の番号の組でつなぐ"
+ ],
+ "hypothesis": [],
+ "input": {
+  "records": [
+   {
+    "ev": "received",
+    "ids": {
+     "run": "d468250d",
+     "command": "skill:q11",
+     "queue": "t-run:hb-1:40",
+     "item": "q11",
+     "life": 1
+    },
+    "bodyTimes": {
+     "failedAt": "2026-10-28T04:10:50.000Z"
+    },
+    "at": "2026-10-28T04:10:50.150Z"
+   },
+   {
+    "ev": "request",
+    "ids": {
+     "run": "d468250d",
+     "decision": "d0153",
+     "life": 1
+    },
+    "reads": [
+     "skill:q11"
+    ],
+    "at": "2026-10-28T04:10:50.400Z"
+   },
+   {
+    "ev": "response",
+    "ids": {
+     "run": "d468250d",
+     "decision": "d0153",
+     "life": 1
+    },
+    "at": "2026-10-28T04:10:56.900Z"
+   },
+   {
+    "ev": "sent",
+    "ids": {
+     "run": "d468250d",
+     "decision": "d0153",
+     "command": "skill:q12",
+     "queue": "t-run:hb-1:40",
+     "item": "q12",
+     "life": 1
+    },
+    "at": "2026-10-28T04:10:56.950Z"
+   },
+   {
+    "ev": "received",
+    "ids": {
+     "run": "d468250d",
+     "command": "skill:q12",
+     "item": "q12",
+     "life": 1
+    },
+    "bodyTimes": {
+     "acceptedAt": "2026-10-28T04:10:57.000Z",
+     "lockAt": "2026-10-28T04:10:57.020Z",
+     "firstMotorAt": "2026-10-28T04:10:57.070Z",
+     "motorOps": 31
+    }
+   }
+  ]
+ },
+ "expected": {
+  "stagesMs": {
+   "1_failed_to_notice": 150,
+   "2_notice_to_decision": 250,
+   "3_decision": 6500,
+   "4_reply_to_send": 50,
+   "5_send_to_accept": 50,
+   "6_accept_to_lock": 20,
+   "7_lock_to_first_motor": 50
+  },
+  "totalMs": 7070,
+  "joinedBy": [
+   "run",
+   "life",
+   "decision.reads",
+   "decision → sent.command"
+  ]
+ },
+ "checks": [
+  "頭: judge.ts"
+ ]
+}

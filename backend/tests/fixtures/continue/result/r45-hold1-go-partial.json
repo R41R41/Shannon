@@ -1,0 +1,95 @@
+{
+ "contract": "result",
+ "version": 2,
+ "scene": "保留 1 の元の act: dig は掘った（done）、go は 61 歩進んで search_timeout（partial）。止まった位置からの残りと、道探しの先端からの残りを分ける",
+ "source": "実走 45 保留 1（run45-live.md 14〜16 行）",
+ "known": [
+  "確か: 1 手目は済（作業台を掘って拾った）",
+  "確か: go は「(161,17,222) まで・あと 10m」「(161,33,214) 道 61 歩・掘 61」で止まった",
+  "確か: 止まった位置 (161,33,214) から行き先 (163,10,229) までは約 27.5 m（「あと 10m」は道探しの先端からの距離）"
+ ],
+ "decided": [
+  "決め: go の progress は fromStopM と searchEndM を分ける"
+ ],
+ "hypothesis": [],
+ "input": {
+  "act": {
+   "hands": [
+    {
+     "do": "dig",
+     "at": [
+      {
+       "x": 159,
+       "y": 67,
+       "z": 200
+      }
+     ],
+     "takeOk": true
+    },
+    {
+     "do": "go",
+     "to": {
+      "x": 163,
+      "y": 10,
+      "z": 229
+     },
+     "seconds": 120,
+     "maxDig": 80,
+     "canDig": [
+      "stone",
+      "dirt",
+      "cobblestone",
+      "gravel"
+     ]
+    }
+   ],
+   "stopIf": {
+    "hostileWithin": 8,
+    "hpBelow": 12
+   }
+  }
+ },
+ "expected": {
+  "lines": [
+   {
+    "i": 1,
+    "do": "dig",
+    "status": "done",
+    "goal": "done",
+    "end": "finished"
+   },
+   {
+    "i": 2,
+    "do": "go",
+    "status": "stopped",
+    "goal": "partial",
+    "end": "finished",
+    "code": "search_timeout",
+    "progress": {
+     "unit": "meter",
+     "done": 35.9,
+     "left": 27.5,
+     "fromStopM": 27.5,
+     "searchEndM": 10,
+     "at": {
+      "x": 161,
+      "y": 33,
+      "z": 214
+     },
+     "work": {
+      "dug": 61,
+      "placed": 0
+     }
+    }
+   }
+  ],
+  "outcome": {
+   "goal": "partial",
+   "end": "finished"
+  }
+ },
+ "checks": [
+  "体: go の progress の 2 つの距離",
+  "頭: 文に止まった位置からの残り 27.5 m を出す"
+ ]
+}

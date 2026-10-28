@@ -1,0 +1,85 @@
+{
+ "contract": "result",
+ "version": 2,
+ "scene": "make・craft・mine の count は追加の数のまま。持っていても already にしない",
+ "source": "Codex CONTRACTS.md（2）、make.ts（今の数 + count を目標）",
+ "known": [
+  "確か: make は before + count を目標にする"
+ ],
+ "decided": [
+  "決め: make・craft・mine に already は無い。持っている数で止めたい時は LLM が done を書く"
+ ],
+ "hypothesis": [],
+ "input": {
+  "cases": [
+   {
+    "hand": {
+     "do": "make",
+     "item": "stick",
+     "count": 4
+    },
+    "have": {
+     "stick": 8
+    }
+   },
+   {
+    "hand": {
+     "do": "mine",
+     "block": "iron_ore",
+     "count": 3,
+     "at": [
+      {
+       "x": 159,
+       "y": 20,
+       "z": 221
+      }
+     ]
+    },
+    "have": {
+     "raw_iron": 5
+    }
+   },
+   {
+    "hand": {
+     "do": "make",
+     "item": "stick",
+     "count": 4
+    },
+    "actDone": [
+     [
+      {
+       "k": "have",
+       "item": "stick",
+       "n": 8
+      }
+     ]
+    ],
+    "have": {
+     "stick": 8
+    }
+   }
+  ]
+ },
+ "expected": {
+  "cases": [
+   {
+    "goal": "done",
+    "haveAfter": {
+     "stick": 12
+    }
+   },
+   {
+    "goal": "done",
+    "note": "3 個掘る（raw_iron は 8 になる）"
+   },
+   {
+    "actGoal": "done",
+    "doneMet": "have:stick 8/8",
+    "madeNone": true
+   }
+  ]
+ },
+ "checks": [
+  "体: make・mine に already の判定を足さない"
+ ]
+}

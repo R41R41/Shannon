@@ -1,0 +1,74 @@
+{
+ "contract": "promise",
+ "version": 2,
+ "scene": "uses [3] の act を rev 1 で送った後に約束 #3 を rev 2 に改訂。その act の消費は rev 1 に帰属する",
+ "source": "Codex CONTRACTS.md（1）9",
+ "known": [],
+ "decided": [
+  "決め: 帰属は送った時の rev"
+ ],
+ "hypothesis": [],
+ "input": {
+  "promises": [
+   {
+    "id": 3,
+    "rev": 1,
+    "item": "planks",
+    "count": 4,
+    "use": "作業台",
+    "state": "open",
+    "ledger": []
+   }
+  ],
+  "sequence": [
+   {
+    "send": "q90",
+    "uses": [
+     3
+    ],
+    "promiseRev": 1
+   },
+   {
+    "planUpdate": {
+     "op": "promise",
+     "id": 3,
+     "item": "planks",
+     "count": 6,
+     "use": "作業台と棒"
+    }
+   },
+   {
+    "receipt": "q90",
+    "events": [
+     {
+      "id": "skill:q90:1:1:1",
+      "item": "oak_planks",
+      "count": -4,
+      "reason": "ingredient"
+     }
+    ]
+   }
+  ]
+ },
+ "expected": {
+  "promise": {
+   "rev": 2,
+   "count": 6
+  },
+  "ledgerAdded": [
+   {
+    "kind": "revised",
+    "count": 6
+   },
+   {
+    "kind": "consumed",
+    "count": 4,
+    "declared": true,
+    "promiseRev": 1
+   }
+  ]
+ },
+ "checks": [
+  "頭"
+ ]
+}

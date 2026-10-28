@@ -1,0 +1,64 @@
+{
+ "contract": "life",
+ "version": 2,
+ "scene": "同じ life のまま q1 がポータルへ入った。overworld で作った待ちの q2 は dimension_changed で始めない（q1 そのものは妨げない）",
+ "source": "Codex CONTRACTS.md（1）4、act.ts（今は同じ act の中だけ止める）",
+ "known": [
+  "確か: 今の次元の止めは同じ act の中だけ"
+ ],
+ "decided": [
+  "決め: 失効の 3 番"
+ ],
+ "hypothesis": [],
+ "input": {
+  "running": {
+   "item": "q1",
+   "hands": [
+    {
+     "do": "portal",
+     "at": {
+      "x": 10,
+      "y": 64,
+      "z": 0
+     },
+     "axis": "x"
+    }
+   ]
+  },
+  "waiting": [
+   {
+    "item": "q2",
+    "dependsOn": [],
+    "madeIn": {
+     "life": 4,
+     "dim": "overworld"
+    },
+    "hands": [
+     {
+      "do": "go",
+      "to": {
+       "x": 200,
+       "y": 64,
+       "z": 50
+      }
+     }
+    ]
+   }
+  ]
+ },
+ "expected": {
+  "q1": {
+   "goal": "done"
+  },
+  "q2": {
+   "starts": false,
+   "droppedBecause": {
+    "code": "dimension_changed"
+   }
+  }
+ },
+ "checks": [
+  "体",
+  "頭: 考え中の返事も dimension_changed で破棄"
+ ]
+}

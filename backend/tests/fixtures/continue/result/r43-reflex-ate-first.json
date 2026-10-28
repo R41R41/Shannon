@@ -1,16 +1,17 @@
 {
  "contract": "result",
- "version": 1,
+ "version": 2,
  "scene": "反射が先に食べた後の eat は「既に済」。act は done（pillarUp が done、eat が already）",
- "source": "実走 43 +2,123（run43-report.md 105 行）: [急ぎ] 柱で逃げて食べる（pillarUp・eat bread×2）。反射が先にパンを食べ、「満腹（20/20）なので bread は食べられない」",
+ "source": "実走 43 +2,123（run43-report.md 105 行）: [急ぎ] 柱で逃げて食べる（pillarUp・eat bread×2）",
  "known": [
-  "+2,117 に体の反射 floor-eat がパンを食べた（満腹 16→20）",
-  "+2,123 の act の eat は「満腹（20/20）なので bread は食べられない」で failed（onFail の既定 continue）"
+  "確か: +2,117 に体の反射 floor-eat がパンを食べた（満腹 16→20）",
+  "確か: +2,123 の eat は「満腹（20/20）なので bread は食べられない」"
  ],
  "decided": [
-  "満腹 20 で食べられない eat は goal already（失敗ではない）",
-  "act の goal は手の goal から: done が 1 つ、残りが already → done"
+  "決め: 満腹 20 で食べられない eat は goal already",
+  "決め: act の goal は手の goal から（done 1・already 1 → done）"
  ],
+ "hypothesis": [],
  "input": {
   "act": {
    "hands": [
@@ -28,60 +29,42 @@
   },
   "body": {
    "food": 20,
-   "hp": 6.2,
-   "reflexBefore": {
-    "reflex": "floor-eat",
-    "ate": "bread",
-    "food": [
-     16,
-     20
-    ]
-   }
+   "hp": 6.2
   }
  },
  "expected": {
-  "actResult": {
-   "ok": true,
-   "done": 2,
-   "of": 2,
-   "lines": [
-    {
-     "i": 1,
-     "do": "pillarUp",
-     "status": "done",
-     "goal": "done",
-     "end": "finished",
-     "progress": {
-      "unit": "block",
-      "done": 2,
-      "left": 0
-     },
-     "delta": {
-      "spent": [
-       {
-        "item": "cobblestone",
-        "count": 2,
-        "as": "placed"
-       }
-      ],
-      "gained": []
-     }
-    },
-    {
-     "i": 2,
-     "do": "eat",
-     "status": "done",
-     "goal": "already",
-     "end": "finished",
-     "code": "food_full",
-     "line": "既に済: 満腹 20/20（bread は食べていない）"
-    }
-   ],
-   "outcome": {
+  "lines": [
+   {
+    "i": 1,
+    "do": "pillarUp",
+    "status": "done",
     "goal": "done",
     "end": "finished",
-    "life": 4
+    "progress": {
+     "unit": "block",
+     "done": 2,
+     "left": 0
+    },
+    "delta": [
+     {
+      "item": "cobblestone",
+      "count": -2,
+      "reason": "placed"
+     }
+    ]
+   },
+   {
+    "i": 2,
+    "do": "eat",
+    "status": "done",
+    "goal": "already",
+    "end": "finished",
+    "code": "food_full"
    }
+  ],
+  "outcome": {
+   "goal": "done",
+   "end": "finished"
   },
   "receiptUnit": {
    "goal": "done",
@@ -95,8 +78,7 @@
   }
  },
  "checks": [
-  "体: runAct が eat を満腹 20 で already・status done にする",
-  "頭: readActResult が goal を読み、結果の文に「既に済」を入れる",
-  "頭: settle が後ろの項目を落とさない（ok）"
+  "体: eat の already（満腹 20）",
+  "頭: 結果の文に「既に済」"
  ]
 }

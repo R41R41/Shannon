@@ -1,13 +1,15 @@
 {
  "contract": "promise",
- "version": 1,
- "scene": "板 4 で作業台を作る（uses [3]）→ 置く → 拾う。代わりの条件で約束を果たしている間は量が 0 でもよい",
- "source": "Codex DESIGN.md（1）D2（作業台を作る途中・置いて使う間・回収まで）",
- "known": [],
- "decided": [
-  "用途どおりの消費は consumed_for_use",
-  "置いた作業台は near で代わりの条件を満たす"
+ "version": 2,
+ "scene": "板 4 で作業台を作る（uses [3]）→ 置く → 拾う。代わりの条件（have か、体の観測の utilities の near）",
+ "source": "Codex CONTRACTS.md（2）約束（near は今の頭では判定できない）",
+ "known": [
+  "確か: 頭の条件は near・furnace を常に判定できない"
  ],
+ "decided": [
+  "決め: 体が観測に state.world.utilities を足し、near はそれで判定する"
+ ],
+ "hypothesis": [],
  "input": {
   "promises": [
    {
@@ -49,26 +51,24 @@
       3
      ]
     },
-    "delta": {
-     "spent": [
-      {
-       "item": "oak_planks",
-       "count": 4,
-       "as": "ingredient"
-      }
-     ],
-     "gained": [
-      {
-       "item": "crafting_table",
-       "count": 1
-      }
-     ]
-    },
-    "world": {
-     "have": {
-      "planks": 0,
-      "crafting_table": 1
+    "events": [
+     {
+      "id": "skill:q70:1:1:1",
+      "item": "oak_planks",
+      "count": -4,
+      "reason": "ingredient"
+     },
+     {
+      "id": "skill:q70:1:1:2",
+      "item": "crafting_table",
+      "count": 1,
+      "reason": "crafted"
      }
+    ],
+    "observed": {
+     "planks": 0,
+     "crafting_table": 1,
+     "utilities": []
     }
    },
    {
@@ -87,24 +87,28 @@
       }
      ]
     },
-    "delta": {
-     "spent": [
-      {
-       "item": "crafting_table",
-       "count": 1,
-       "as": "placed"
-      }
-     ],
-     "gained": []
-    },
-    "world": {
-     "have": {
-      "planks": 0,
-      "crafting_table": 0
-     },
-     "near": {
-      "crafting_table": 2
+    "events": [
+     {
+      "id": "skill:q71:1:1:1",
+      "item": "crafting_table",
+      "count": -1,
+      "reason": "placed"
      }
+    ],
+    "observed": {
+     "planks": 0,
+     "crafting_table": 0,
+     "utilities": [
+      {
+       "block": "crafting_table",
+       "at": {
+        "x": 157,
+        "y": 23,
+        "z": 213
+       },
+       "distance": 2
+      }
+     ]
     }
    },
    {
@@ -122,20 +126,18 @@
       }
      ]
     },
-    "delta": {
-     "spent": [],
-     "gained": [
-      {
-       "item": "crafting_table",
-       "count": 1
-      }
-     ]
-    },
-    "world": {
-     "have": {
-      "planks": 0,
-      "crafting_table": 1
+    "events": [
+     {
+      "id": "skill:q72:1:1:1",
+      "item": "crafting_table",
+      "count": 1,
+      "reason": "picked"
      }
+    ],
+    "observed": {
+     "planks": 0,
+     "crafting_table": 1,
+     "utilities": []
     }
    }
   ]
@@ -145,9 +147,11 @@
    {
     "ledgerAdded": [
      {
-      "kind": "consumed_for_use",
+      "kind": "consumed",
       "count": 4,
-      "have": 0
+      "have": 0,
+      "declared": true,
+      "reason": "craft_ingredient"
      }
     ],
     "state": "kept_by_instead",
@@ -156,7 +160,7 @@
    {
     "ledgerAdded": [],
     "state": "kept_by_instead",
-    "liveLine": "約束 #3 作業台用の板 4: 今 0・代わりの条件を満たす（近くに作業台）"
+    "liveLine": "約束 #3 作業台用の板 4: 今 0・代わりの条件を満たす（近くに作業台 2m）"
    },
    {
     "ledgerAdded": [],
@@ -166,7 +170,7 @@
   ]
  },
  "checks": [
-  "頭: 帳簿と代わりの条件（境界 3: 帳簿の have と観測の持ち物がずれない）",
-  "体: craft・place・dig の delta"
+  "頭: 境界 3（帳簿の have と観測がずれない）",
+  "体: utilities"
  ]
 }

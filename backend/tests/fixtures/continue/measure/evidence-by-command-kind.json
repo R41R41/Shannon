@@ -1,0 +1,42 @@
+{
+ "contract": "measure",
+ "version": 2,
+ "scene": "命令の種類ごとに、境界の判定に要る証拠の組",
+ "source": "Codex CONTRACTS.md（3）boundaries",
+ "known": [],
+ "decided": [
+  "決め: 8 章"
+ ],
+ "hypothesis": [],
+ "input": {
+  "kinds": [
+   "refused_before_start",
+   "already",
+   "normal",
+   "unknown"
+  ]
+ },
+ "expected": {
+  "refused_before_start": [
+   "receipt.unit(not_run)"
+  ],
+  "already": [
+   "receipt",
+   "handLine"
+  ],
+  "normal": [
+   "receipt",
+   "bodyTimes.lockAt",
+   "bodyTimes.firstMotorAt",
+   "bodyTimes.motorOps",
+   "hand_start"
+  ],
+  "unknown": [
+   "receipt",
+   "released(cleanup)"
+  ]
+ },
+ "checks": [
+  "頭: judge.ts"
+ ]
+}

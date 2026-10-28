@@ -1,29 +1,47 @@
-# 「続ける力」の契約（2026-10-28、契約の版 1）
+# 「続ける力」の契約（2026-10-28、契約の版 2）
 
 次の大きな版「続ける力」（設計は共有メモ `next-version-design-20261028.md` の案 2）を、体の担当と頭の担当の 2 人で作るための契約です。
 同じ文書が、頭（`shannon-ios` の `docs/continue-contracts.md`）、体（`Shannon` の `docs/continue-contracts.md`）、共有メモ（`continue-contracts.md`）にあります。
 **変える時は 3 つを同時に変え、見本（fixture）の manifest の版を上げます。**
 
 - 書いたのは契約・見本・通しの確かめの骨組みだけです。実装はまだ無く、ここに書いた型はまだどこにもありません。
-- 分かっている所（今のコードを読んで確かめた）と、決めた所（この契約で決めた）を分けて書きます。数字の見込みは、確かめていない物です。
-- 基にした版：頭 `e4e1174`、体 `288839c`（どちらも `codex/shannon/continue-contracts` の元）。
+- 「確か」は今のコードや記録で確かめた事、「決め」はこの契約で決めた事、「仮説」は確かめていない見込みです。数字の見込みは、どれも確かめていません。合格の条件・仮説・観測の結果を混ぜません。
+- 基にした版：頭 `e4e1174`、体 `4e8c3df`（どちらも main。体は v1 の後に保留 8・9 の直しが main に入ったので、その上に付け直した）。
 - 方針（00-README の 1〜7）：判断は LLM、細部は体。LLM が従わない時は書き方で直し、コードで強制しない。スイッチは付けない。段階に分けず、1 つの版で入れる。
+
+## 版 2 で変えた事（v1 → v2）
+Codex（gpt-6.1-sol）の見直し（`scratchpad\codex-contracts-answers\CONTRACTS.md`）と、取りまとめ役の決め（共有メモ `continue-contracts-review-decisions.md`、直す物 11 個と 13 の点）に沿って直しました。
+Codex の指摘は、今のコードで確かめてから直しました。確かめた所は各章に「確か」で書いています。確かめて違っていた所は、12 章の終わりにまとめています。
+
+| 直す物 | 主に変えた所 |
+|---|---|
+| 1 失効の優先の順 | 2 章の「失効を先に当てる」、5 章（life を必須に・照らす時機・次元・つなぎ直しの識別子） |
+| 2 不明の扱い | 1 章の「不明の結果」（届け終えた・解放を確かめた を分ける、すぐの片付け、遅れた結果の訂正） |
+| 3 制御の引き継ぎ | 4 章（token を作らず motor port の失効に統合、盾の引き渡し、bridge は延ばさない） |
+| 4 依存の判定表を 1 枚に | 2 章の判定表と見本 `continue/dependency-table.json`、列の印の寿命 |
+| 5 約束の帳簿 | 3 章（観測が正本、一意な出来事、送った時の rev、途中材・act の外の反射、不明の差、書く入口を 1 つ） |
+| 6 count の意味 | 1 章の「既に済」の表（make・craft・mine を外す、attack は観測した死だけ） |
+| 7 見本と境界の誤り | 見本の作り直し（パン 11 点、保留 1 を 2 つに、ほか）、10 章の判定 |
+| 8 vertical | 6 章（`dir` を入力に、canDig を必須、未知・高さ・落下・置きの確かめ・砂利、段数と掘り・置きの数を分ける、seal の順） |
+| 9 担当の抜け | 8 章（共有の WorkingEvent の種類）、9 章（版の合わない実物は不合格）、11 章の表 |
+| 10 準備の skipped は LLM | 7 章（頭は事実だけ出す）、8 章の D6 の規範 |
+| 11 実走 45 の失敗の型を入力に | 8 章の「判断に届ける事実」 |
 
 ## 目次
 
 0. 共通の決まり（名前・単位・番号・見本の置き場）
 1. 結果（目的の結果 × 実行の終わり方）
-2. 続け方（dependsOn・pre が無い時・`BodyQueue.admit`）
+2. 続け方（失効が先、その後に依存の判定表）
 3. 約束（帳簿）
 4. 制御（持ち主の集め方と引き継ぎ）
-5. 命の番号（life）
+5. 命の番号（life）と、つなぎ直しの識別子
 6. vertical（縦の長い移動の手。下りも上りも）
 7. 計画（kind と準備の状態）
-8. 計測（共通の番号と時間の段）
+8. 計測と、判断に届ける事実（D6 の規範を含む）
 9. 見本（fixture）と、体の実物を頭の試験へ渡す仕組み
-10. 通しの確かめの骨組み（10 の境界）
+10. 通しの確かめの骨組み（10 の境界と、継ぎ目の場面）
 11. 担当の分け方と作る順
-12. 決めきれなかった所
+12. 決めた事・決めきれなかった所・直さなかった指摘
 
 ---
 
@@ -33,8 +51,9 @@
 - 時刻はすべて ISO 8601 の UTC 文字列（`observedAt` と同じ）。長さはミリ秒の整数（`ms`）。
 - 座標は `{x,y,z}` の整数のマス（`ActPos`）。
 - 文（LLM が読む物）は日本語。コード（閉じた語・理由の番号）は英小文字とアンダースコア。
-- **互換は要りません**（頭と体は同時に反映します）。古い形を読み続ける分岐は作りません。読み替えが要るのは、保存されている物（計画ツリー・保留のファイル・場所の記憶・判断の記録）だけで、各契約の「移し方」に書きます。
+- **互換は要りません**（頭と体は同時に反映します）。古い形を読み続ける分岐は作りません。読み替えが要るのは、保存されている物（計画ツリー・保留のファイル・命の番号のファイル・場所の記憶・判断の記録）だけで、各契約の「移し方」に書きます。
 - 見本の置き場：頭は `services/api/tests/fixtures/continue/`、体は `backend/tests/fixtures/continue/`。中身は同じで、`manifest.json` に各ファイルの sha256 があります（9 章）。
+- **表が見本になっている物**（依存の判定表 `continue/dependency-table.json`）は、両側の実装がその表を読んで試験します。文書の表と見本の表が食い違ったら、見本の表が正本です。
 
 ---
 
@@ -53,36 +72,40 @@ export type GoalOutcome =
   | 'partial'      // 進んだが、ねらいまでは届いていない（progress に量と残り）
   | 'not_started'  // 体は何も動かしていない
   | 'failed'       // 動いたが、ねらいへは何も進んでいない
-  | 'unknown';     // 実行の終わり方が unknown で、体の報告も無い（頭だけが作る値）
+  | 'unknown';     // ねらいの成否を観測できない（受け取りが無い、相手を見失った、など）
 
 /** 実行の終わり方: その単位の実行が、どう終わったか。 */
 export type RunEnd =
   | 'finished'   // 自分で終わった（成功でも失敗でも）
-  | 'cut'        // 外から止められた（反射・stopIf・取り消し・期限・満杯・死・命の番号の食い違い）
-  | 'not_run'    // 始まらなかった（前の手で止まった・列で捨てた・前提を満たさない・保留中）
+  | 'cut'        // 外から止められた（反射・stopIf・取り消し・期限・満杯・死・失効・引き継ぎ）
+  | 'not_run'    // 始まらなかった（前の手で止まった・列で捨てた・前提を満たさない・保留中・失効）
   | 'unknown';   // 終わり方が分からない（受け取りの outcome が unknown、または解放を確かめていない。列の項目の単位だけ）
 
-/** 外から止めた物（RunEnd が cut の時）。今の ActResult.stoppedBy に 'death' と 'stale_life' と 'handover' を足した物。 */
+/** 外から止めた物・始めなかった理由（RunEnd が cut か not_run の時）。 */
 export type CutBy = 'reflex' | 'stopIf' | 'inventoryFull' | 'cancelled' | 'deadline' | 'noProgress' | 'damage' | 'fall'
-  | 'death' | 'stale_life' | 'handover';
+  | 'death' | 'stale_life' | 'dimension_changed' | 'lease_expired' | 'connection_changed' | 'operator_stop' | 'handover';
 
 /** 進んだ量と残り。単位は手の種類で決まる（下の表）。 */
 export interface Progress {
   unit: 'step' | 'block' | 'item' | 'meter' | 'blow' | 'second';
-  done: number;
+  done: number;                 // 確かめた量（vertical なら確かめた移動の段数。置きの確かめが無い段は数えない）
   left: number | null;          // 分からない時は null
   at?: ActPos;                  // 止まった時の足の位置
   msPerUnit?: number;           // 実際にかかった 1 単位の平均（頭の残り時間の見積もりの直しに使う）
+  work?: { dug: number; placed: number };   // 掘った数・置いた数（段数とは別に数える）
+  /** go: 止まった位置から行き先までの距離（m）と、道探しの先端から行き先までの距離（m）は別の物。 */
+  fromStopM?: number; searchEndM?: number;
 }
 
 /** 1 つの手の結果（今の ActHandLine に足す欄）。 */
 export interface HandOutcome {
   goal: GoalOutcome;
   end: RunEnd;
-  cutBy?: CutBy;                // end が cut の時だけ
-  code?: string;                // 閉じた理由の番号（'stuck'・'search_timeout'・'full'・'target_not_found' など。今の「go 止まった <code>」の code）
+  cutBy?: CutBy;                // end が cut か not_run の時
+  code?: string;                // 閉じた理由の番号（'stuck'・'search_timeout'・'target_lost' など。今の「go 止まった <code>」の code）
   progress?: Progress;
-  delta?: InventoryDelta;       // 約束の帳簿のため（3 章）
+  delta?: InventoryEvent[];     // 約束の帳簿のための持ち物の出来事（3 章）
+  pass?: number;                // repeat の何周目か（1 から）
 }
 
 /** act の結果（今の ActResult に足す欄）。 */
@@ -98,77 +121,80 @@ export interface ItemOutcome {
   goal: GoalOutcome;
   end: RunEnd;
   released: boolean;            // = 今の inputsReleased（同じ値を入れる。読み手が 2 軸を 1 か所で読めるように）
-  /** 列で捨てられた時: どの項目が止まったせいか（今の droppedBecause の文の構造版）。 */
-  droppedBecause?: { item: string; code: string };
-  /** 頼りが外れなかったので、前の項目が止まっても動かした時（2 章）。 */
-  keptDespite?: { item: string; code: string };
+  /** 列で捨てられた時: 何のせいか（失効か、どの項目が止まったせいか）。 */
+  droppedBecause?: { code: CutBy | 'depends_failed' | 'depends_unknown'; item?: QueueRef };
+  /** 依存先が止まったが、この項目は頼っていないので動かした時（2 章）。 */
+  keptDespite?: { item: QueueRef; code: string };
+  startedAt?: string;           // 体が始めた（始めなかった項目には無い）
 }
 ```
 
 - `MinecraftControlReceipt` は今の欄をすべて残し、`unit?: ItemOutcome` を足します（act でない命令には付けない）。
-- `ActResult`（`result` の JSON）は今の欄をすべて残し、`outcome: ActOutcome` を足します。`ActHandLine` には `HandOutcome` の欄を平らに足します（`goal`・`end`・`cutBy`・`code`・`progress`・`delta`）。
-- `status`（done・stopped・skipped・failed）は表示のため残します。対応は次のとおりで、両側のテストで確かめます。
-
-| status（今） | end | goal の取り得る値 |
-|---|---|---|
-| done | finished | done・already |
-| failed（onFail continue で次へ進んだ） | finished | failed・partial |
-| stopped（自分の失敗で act が止まった） | finished | failed・partial |
-| stopped（外から止められた） | cut | partial・failed・not_started |
-| skipped | not_run | not_started |
+- `ActResult`（`result` の JSON）は今の欄をすべて残し、`outcome: ActOutcome` を足します。`ActHandLine` には `HandOutcome` の欄を平らに足します。
+- **`status` と新旧の対応、許される組み合わせ**は、2 章の判定表（見本 `continue/dependency-table.json` の `outcomes`）に 1 枚でまとめます。ここに別の表は置きません。
+- **progress は primitive が構造で返します**（確か：今の `StepOutcome`（`utils/primitives/common.ts`）は ok・理由・文が中心で、量を持たない）。`runAct()` が文を読んで progress を作る形にはしません。`StepOutcome` に `progress?: Progress` と `events?: InventoryEvent[]` を足します。
+- **repeat の周回**：今は 2 周目に `report.lines` を消します（確か：`act.ts` の `if (pass > 1) report.lines = []`）。新しい形では、行は `pass` を付けて周回ごとに残します（受け取りの大きさの上限は 8 章）。持ち物の出来事は周回ごとに数えます。
 
 ### 意味：手の種類ごとの「既に済」「進み」
-「既に済」は、体が事実を見て決めます（選ぶのではない）。手の種類ごとに、次のとおりです。
+「既に済」は、体が事実を見て決めます（選ぶのではない）。**今ある手の意味は変えません**。
+- `make`・`craft` の `count` は「あと何個作るか」、`mine` の `count` は「何個掘るか」です（確か：`make.ts` は今の数 + count を目標にする）。「既に count 以上持っていれば already」は採りません。持っている数を目標にして止めたい時は、LLM が `done` 条件を書きます。
 
 | 手 | already になる時 | progress の unit |
 |---|---|---|
 | eat | 満腹が 20（食べられない）。今の「満腹（20/20）なので … は食べられない」 | — |
 | dig | そのマスが既に空気・水（今の「既に air（掘らずに次へ）」） | block |
 | place | そのマスに既に同じ物がある | block |
-| go・walk | 始めた時に行き先の range 内にいる | meter（行き先までの残り） |
-| make・craft | 持ち物に既に count 以上ある | item |
+| go・walk | 始めた時に行き先の range 内にいる | meter（`fromStopM` と `searchEndM` を分ける） |
 | equip | 既にその物を着けている・持っている | — |
-| mine | count 以上を既に持っている | item |
-| smelt | 何も入れなかった（入れる物が持ち物に無い）は failed。already は無い | item |
-| attack・fight | 相手が見えた所で死んだのを体が見ていた（30 秒以内）。見ていなければ failed（target_not_found） | blow |
+| make・craft・mine | 無し（count は追加の数） | item |
+| smelt | 無し。入れる物が持ち物に無い時は failed | item |
+| attack・fight | 体が相手の死を観測していた時だけ（12 章の決め 4）。実行中に見えなくなった相手は、成功とせず goal `unknown`・code `target_lost`（今の attack は「倒れたか、離れて消えた」で ok を返す。確か：`attack.ts`） | blow |
 | pillarUp・jump | 無し | block |
-| vertical | 下りで既に toY 以下、上りで既に toY 以上 | step（6 章） |
+| vertical | `dir: down` で既に toY 以下、`dir: up` で既に toY 以上（6 章） | step |
 | wait | 無し（いつも done） | second |
 
 act と列の項目の `goal` は、手の goal から機械的に決めます。
 - すべての手が done か already で、少なくとも 1 つ done → `done`。すべて already → `already`。`done` 条件（`doneMet`）で済んだ → `done`。
 - 1 つでも done（または partial）があり、ねらいの全部には届かない → `partial`。
-- どの手も動いていない（act が始まらなかった・保留中・反射が放さず期限・命の番号の食い違い） → `not_started`。
+- どの手も動いていない → `not_started`。
 - 手は動いたが done も partial も無い → `failed`。
-- 頭の `receiptOf()` が受け取りを得られず、体の報告も無い → 頭が `unknown` を作る。
+- 手の goal に `unknown` があり、ほかで決まらない → `unknown`。
 
 ### 不明の結果
-- 今は、頭の `receiptOf()` が `outcome === 'unknown' || !inputsReleased` で `FCA_BODY_OUTCOME_UNKNOWN` を投げ、段が丸ごと不明になります（確か：`minecraftControl.ts` の `receiptOf()`）。
-- **新しい形**：`receiptOf()` は投げずに受け取りを返します。列（`settle()`）は `end: 'unknown'` の結果を LLM に「不明」として届けます（「結果は不明（体の操作の解放を確かめていない）。同じ手を自動では出し直さない」）。
+- 今は、頭の `receiptOf()` が `outcome === 'unknown' || !inputsReleased` で `FCA_BODY_OUTCOME_UNKNOWN` を投げ、段が丸ごと不明になります（確か：`minecraftControl.ts` の `receiptOf()`）。一方、列の `settle()` は項目を `ended` にし、開いた項目が無ければ段を `acknowledged` にします（確か：`minecraftLlmcQueue.ts` の `settleFlag()`）。例外を受け取りに置き換えるだけでは、解放が不明でも段が片付いた扱いになります。
+- **新しい形**：項目の状態を 2 つに分けます。
+  - `delivered`：結果を LLM に届け終えた（不明なら「結果は不明（体の操作の解放を確かめていない）。同じ手を自動では出し直さない」）。
+  - `released`：操作の解放を確かめた（受け取りの `inputsReleased` か、片付けの受け取り）。
+  - 段の `acknowledged` は、開いた項目がすべて `released` の時だけです。
+- **不明を受けたら、すぐに期限つきの片付けへ進みます**（12 章の決め 7）。頭は stop（今の片付けの命令）を 5 秒の期限で送ります。
+  - 片付けが解放を確かめたら `released`。
+  - 片付けに失敗したら、体は今どおり `held` のままにし、頭は保留（incident と同じ扱い）にします。元の手は出し直しません。
+  - 解放を確かめるまで、頭は新しく体を動かす命令を送りません（観測だけの命令は送ってよい）。
+- **遅れて届いた本物の結果**：同じ command の受け取りが後から届いたら、頭は「訂正: q12 の結果は不明ではなく … だった」を次の判断に届けます。帳簿へは、出来事の一意な番号（3 章）で 1 度だけ反映します。
 - **不明の項目は、頭も体も自動で出し直しません**（境界 8）。保留の出し直し（`resume`）は、体が理由を言った失敗にだけ使います。
-- 体は今どおり、解放を確かめるまで `held` で新しい命令を断ります。頭は今どおり、段の片付け（stop・release）で解放を確かめます。
 
 ### 誰が書き、誰が読むか
-- 体が書く：`HandOutcome`（`runAct()`）、`ActOutcome`（`runAct()` と `NativeCommonFcaBody.execute()`）、`ItemOutcome`（`CommonFcaControlLoop.launch()`・`closeUnstarted()`・`begin()`）。
+- 体が書く：`HandOutcome`（`runAct()` と各 primitive の `StepOutcome`）、`ActOutcome`（`runAct()` と `NativeCommonFcaBody.execute()`）、`ItemOutcome`（`CommonFcaControlLoop.launch()`・`closeUnstarted()`・`begin()`）。
 - 頭が読む：`readActResult()`、`createLlmcQueue()` の `settle()`・`drop()`・`itemResult()`、結果の文（LLM へ）、判断の記録。
-- 頭が書く：`goal: 'unknown'`（受け取りが無い時だけ）。
+- 頭が書く：`goal: 'unknown'`（受け取りが無い時だけ）、`delivered`・`released` の状態、訂正の文。
 
 ### 今のコードのどこが変わるか
-- 体：`instantSkills/act.ts` の `runAct()`（手の結果に goal・end・code・progress・delta）、`utils/actReport.ts`（`HandLine`・`ActReport`・`renderActReport()`）、各 primitive の already の判定（`utils/primitives/*.ts`）、`integration/commonFca/nativeBody.ts` の `execute()`（`afterReflex` の late・aborted、保留の断り、死を `ActOutcome` に）、`controlLoop.ts` の `launch()`・`closeUnstarted()`・`begin()`（`ItemOutcome`）、`minecraftControlContract.ts`（写し）。
-- 頭：`contracts/minecraftActContract.ts`（`ActHandLine`・`ActResult`・`readActResult()`）、`contracts/minecraftControlContract.ts`（`MinecraftControlReceipt.unit`）、`surfaces/minecraft/minecraftControl.ts` の `receiptOf()`、`surfaces/minecraft/minecraftLlmcQueue.ts` の `settle()`・`drop()`・`itemResult()`・`neverRan()`、結果の文を作る所（`minecraftLlmcResult*.ts` など）。
+- 体：`instantSkills/act.ts` の `runAct()`（手の結果・周回の行）、`utils/primitives/common.ts`（`StepOutcome` に `progress`・`events`）、各 primitive（progress と出来事、already の判定、attack の `target_lost`）、`utils/actReport.ts`（`HandLine`・`ActReport`・`renderActReport()`）、`integration/commonFca/nativeBody.ts` の `execute()`、`controlLoop.ts` の `launch()`・`closeUnstarted()`・`begin()`、`minecraftControlContract.ts`（写し）。
+- 頭：`contracts/minecraftActContract.ts`（`ActHandLine`・`ActResult`・`readActResult()`）、`contracts/minecraftControlContract.ts`（`MinecraftControlReceipt.unit`）、`surfaces/minecraft/minecraftControl.ts` の `receiptOf()`、`surfaces/minecraft/minecraftLlmcQueue.ts` の `settle()`・`settleFlag()`・`drop()`・`itemResult()`・`neverRan()`、片付けを送る所、結果の文を作る所。
 
 ### 移し方
-保存されている物は無し（受け取りは保存しない）。判断の記録（`decision-records`）の古い行は、`unit` が無い物として読みます。
+保存されている物は無し（受け取りは保存しない）。判断の記録の古い行は、`unit` が無い物として読みます。
 
 ### 見本
-`result/r43-reflex-ate-first.json`、`result/r45-hold1-dig-already-go-partial.json`、`result/unknown-receipt.json`、`result/act-not-started-reflex-late.json`。
+`result/r43-reflex-ate-first.json`、`result/r45-hold1-go-partial.json`、`result/r45-resume1-dig-already-go-no-floor.json`、`result/unknown-receipt-cleanup.json`、`result/act-not-started-reflex-late.json`、`result/count-keeps-its-meaning.json`、`result/attack-target-lost.json`、`result/resume-order.json`、`result/r45-hold2-local-go-partial.json`、`result/r45-hold3-place-ok-then-world-differs.json`。
 
 ---
 
-## 2. 続け方（dependsOn・pre が無い時・`BodyQueue.admit`）
+## 2. 続け方（失効が先、その後に依存の判定表）
 
 ### ねらい
-失敗の時に「後ろの手をどこまで捨てるか」を、**LLM が明示した頼り（`dependsOn`）と始まりの条件（`pre`）**で決めます。前提を書いていない事は、頼らない証拠にしません。**頼りが明示されていない後ろの手は、今どおり捨てます。** 手の単位（act の中の手）と列の項目の単位で、別々に決めます。
+失敗の時に「後ろの手をどこまで捨てるか」を、**LLM が明示した頼り（`dependsOn`）と始まりの条件（`pre`）**で決めます。前提を書いていない事は、頼らない証拠にしません。**頼りが明示されていない後ろの手は、今どおり捨てます。**
+その前に、**列全体を失効させる事（死・次元・止め・lease・つなぎ直し）を必ず先に当てます**。依存の判定は、失効の対象外の項目だけに当てます（Codex の指摘 1。確か：死の時は待ちを全部捨てる設計なのに、v1 では `dependsOn: []` が残る、という矛盾があった）。
 
 ### 形
 ```ts
@@ -176,50 +202,71 @@ act と列の項目の `goal` は、手の goal から機械的に決めます�
 interface ActHand {
   // …今の欄…
   /**
-   * この手が頼る、同じ act の前の手の番号（1 から。ActHandLine.i と同じ数）。
+   * この手が頼る、同じ act の同じ周回の前の手の番号（1 から。ActHandLine.i と同じ数）。
    * 無い（undefined）: 今どおり。前の手が止まれば、この手も動かない。
    * []: どの手にも頼らない。前の手が失敗しても動く。
-   * [1,3]: 手 1 と手 3 が done か already の時だけ動く。
+   * [1,3]: 手 1 と手 3 が「頼れる成果」（判定表）の時だけ動く。
    */
   dependsOn?: number[];
 }
 
-// 列の項目（ActInput と、体へ送る封筒 MinecraftQueueEnvelope に 1 欄足す）
-interface ActInput { /* … */ dependsOn?: string[] }            // 頼る項目の印（'q12'）。[] は「どれにも頼らない」
-interface MinecraftQueueEnvelope { /* item, after, node, pre, maxMs, startBy */ dependsOn?: string[] }
+/** 列の印。task と列の世代で名前を分ける（12 章の決め）。 */
+export interface QueueRef { queue: string; item: string }   // queue = `${taskId}:${headBoot}:${step}`、item = 'q12'
+
+// 列の項目（ActInput と、体へ送る封筒 MinecraftQueueEnvelope に欄を足す）
+interface ActInput { /* … */ dependsOn?: string[] }            // 頼る項目の印（'q12'。同じ列の中）。[] は「どれにも頼らない」
+interface MinecraftQueueEnvelope { /* item, after, node, pre, maxMs, startBy */ queue: string; dependsOn?: string[]; madeIn: { life: number; dim: Dim } }
+
+/** 依存先の状態（体の recent の作り替え。今は真偽を 16 件だけ持つ）。 */
+export type DependState = 'succeeded' | 'failed' | 'pending' | 'unknown';
 ```
 
-### 意味
-- **`after` は順番だけ**です（今の意味のまま）。頼るかどうかは `dependsOn` が言います。
-- **手の単位**（`runAct()`）：手 k が自分で失敗して act を止める時（`onFail` が stop）、後ろの手 j は次の時だけ動きます。
-  - j の `dependsOn` が配列で、そこに書かれた手がすべて done か already であること。
-  - 止まった手・動かなかった手を含む `dependsOn` の手は、動かさずに `not_run` にします。
-  - `dependsOn` が無い手は、今どおり動かしません。
-  - `onFail: 'continue'` は今どおりです（失敗した手の側の言い方。その手の後ろを止めない）。
-- **外から止められた時は、続けません**：反射・stopIf・取り消し・期限・満杯・死・命の番号の食い違い・引き継ぎ（`end: 'cut'`）。今と同じで、act の実行そのものが終わったからです。
-- **列の単位**（体 `controlLoop.ts` と頭 `minecraftLlmcQueue.ts`）：項目 q が `completed && inputsReleased` 以外で終わった時、待っている項目 w ごとに次のとおりにします。
-  - `w.dependsOn` が配列で、q も、捨てられた項目も含まない → 残して、順番が来たら始める。始める直前に `pre` を今どおり確かめる。
-  - それ以外（無い・q を含む・捨てた項目を含む） → 今どおり捨てる（`droppedBecause`）。
-  - **体が held（解放を確かめていない）の時は、何も始めません**（今どおり）。`end: 'unknown'` の後は、片付けが済むまで続けません。
-- **`BodyQueue.admit()`**：今は、`after` の項目が止まっていると新しい項目を `queue_after_gone` で断ります。新しい形では、`after` が止まっていても、新しい項目の `dependsOn` が配列でそれを含まなければ受けます（`'start'` か `'wait'`）。
-- **`pre` が無い時**：前提を書いていない事を、頼らない証拠にしません。`pre` は「始める直前に確かめる条件」で、頼りの有無とは別です。`dependsOn: []` かつ `pre` が無い項目は、「何にも頼らず、条件も無い」と LLM が言った物として始めます。
-- 頭は、`dependsOn` に列に無い印を書いた項目を、送らずに断ります（「送らなかった: dependsOn の q9 は列に無い」）。
-- 項目を残した時は、`ItemOutcome.keptDespite` に、止まった前の項目と理由を入れます。LLM は列の知らせで読みます。
+### 意味：失効を先に当てる
+次の失効は、依存の判定より先に当てます。当たった項目は、`dependsOn` が何であっても始めません（`end: not_run`、`cutBy` にその理由）。
+
+| 順 | 失効 | 当たる物 | 理由の語 |
+|---:|---|---|---|
+| 1 | 体のつなぎ直し・頭の再起動 | つなぎ直しの前の接続・頭の起動で作った命令すべて | `connection_changed` |
+| 2 | 死（命の番号が進んだ） | 前の命で作った命令すべて（実行中・待ち・ロック待ち・考え中の判断の返事） | `death` / `stale_life` |
+| 3 | 次元が変わった | 移る前の観測で作った、ほかの命令（待ち・考え中の返事）。**次元を変えている最中の命令そのものは妨げない**（今の act は、その中で次元が変われば後の手を止める。確か：`act.ts`） | `dimension_changed` |
+| 4 | 止め（stop・release・操作者の止め） | 待ちすべて | `operator_stop` / `cancelled` |
+| 5 | lease の失効（世代が古い） | その lease の命令すべて | `lease_expired` |
+
+- **照らす時機**：受け取った時（`accept()`）、列の待ちから起きた時（`begin()`）、ロックを取った後（`executeAction()` の acquire の後）、体を動かす最初の操作の前（act の手ごと）。受け取った時だけでは足りません（待っている間に死ぬ・次元が変わる）。
+- 動かす命令（`kind: skill` で readOnly でない物と `reflex`）では、`context.life` と `envelope.madeIn` を**必須**にします。無い命令は `life_missing` で断ります（5 章）。
+- **頭は、届いた結果の順から自分で取り消し直しません**。体が確定した「始めた（`startedAt`）・捨てた（`droppedBecause`）」を受け取りから読みます（Codex の競合例：体が独立な q2 を始めた後に、頭が q1 の失敗を読んで q2 を取り消す、を起こさない）。頭の `drop()` は、LLM が `replace` で書いた時と、失効を頭が先に知った時（考え中の返事）だけ使います。
+
+### 意味：依存の判定表（失効の対象外の項目と手だけ）
+**表は見本 `continue/dependency-table.json` が正本**で、頭と体の両方がその表で試験します。要点は次のとおりです。
+- **頼れる成果**：依存先の goal が `done` か `already`、かつ end が `finished`。`partial`・`failed`・`not_started`・`unknown`、end が `cut`・`not_run`・`unknown` の時は頼れません。旧の `ok`・`outcome`・`inputsReleased` は判定に使いません（対応は表の `outcomes` にある）。
+- **明示の依存は、手を始めるたびに必ず確かめます**。`onFail: 'continue'` は「失敗した手の後ろを止めない」という意味だけで、依存の確かめを免除しません（Codex の指摘 3）。
+  - 例：手 1 の craft が失敗（onFail continue）、手 2 が `dependsOn: [1]` → 手 2 は動かない。手 3 が依存無し（undefined）→ onFail continue なので今どおり動く。
+- **間接の依存**：手 2 が手 1 に頼り、手 3 が手 2 に頼る。手 1 が失敗 → 手 2 は not_run → 手 3 も not_run（手 2 が頼れる成果でないため）。
+- **書き方の誤り**（送る前に頭が断り、体も形の誤りとして断る）：自分への依存、まだ先の手への依存、範囲外の番号、重複。
+- **repeat**：`dependsOn` は同じ周回の手を指します。前の周回の結果は見ません。
+- **列の項目**：項目 q が頼れる成果で終わらなかった時、待っている項目 w ごとに次のとおりにします。
+  - `w.dependsOn` が配列で、q も、q のせいで捨てられた項目も含まない → 残して、順番が来たら始める（`keptDespite`）。始める直前に `pre` を確かめる（真なら始める・偽なら `precondition` で始めない・判定できない（不明）なら始めない）。
+  - それ以外（無い・q を含む・捨てた項目を含む） → 今どおり捨てる（`droppedBecause: depends_failed`）。
+  - 依存先の状態が `unknown`（別の列の印・覚えていない印）→ 始めない（`depends_unknown`）。
+- **`after` は順番だけ**です。`BodyQueue.admit()` は、`after` の項目が止まっていても、新しい項目の `dependsOn` が配列でそれを含まなければ受けます。ただし、今の列の最後（tail）を飛ばして後ろに付けることはしません。
+- **`replace`**：頭の `replace` は、書かれた項目と、それに明示で頼る項目だけを取り消します。後ろの独立な項目は残し、順番（after）だけを付け替えます。体の `removeFrom()` も同じです（今は後ろを全部取る。確か：`bodyQueue.ts`、頭 `minecraftLlmcQueue.ts` の `replace()`）。
+- **列の印の寿命**：印は `QueueRef`（task・頭の起動・段の番号で名前を分けた列と、q 番号）です。頭の q 番号は今メモリ上のタスク別の数で、体の recent は裸の q 番号と真偽の 16 件だけです（確か）。体は recent を `QueueRef` → `DependState` に作り替え、少なくとも今の列の印はすべて覚えます。覚えていない印は `unknown` です。
+- 体が held（解放を確かめていない）の時は、何も始めません（今どおり）。
 
 ### 誰が書き、誰が読むか
 - LLM が書く（act の入力。短い書き方は `dependsOn=1,3`、項目は `dependsOn=q12`）。
-- 頭は、読み取り・検査をして、封筒へ写します。体は、それに従って続けるか捨てるかだけを決めます（何を頼るかは決めない）。
+- 頭は、読み取り・形の検査をして、封筒へ写します（列の名前・作った時の life と次元も入れる）。体は、失効と判定表に従って、始めるか捨てるかだけを決めます（何を頼るかは決めない）。
 
 ### 今のコードのどこが変わるか
-- 体：`instantSkills/act.ts`（Hand の zod に `dependsOn`、`runAct()` の止まりの後の続け）、`integration/commonFca/bodyQueue.ts`（`ENVELOPE` に `dependsOn`、`admit()`、残す・捨てるの選り分け。今の `removeFrom()` は後ろを全部取る）、`controlLoop.ts` の `launch()` の終わり（今の `dropWaiting(droppedBecause(…))`）と `begin()`・`dropExpired()`・`cancelOne()`。
-- 頭：`contracts/minecraftActContract.ts`（`ActHand.dependsOn`、`ActInput.dependsOn`、`ACT_INPUT_SCHEMA`、`actProblem()`）、`contracts/minecraftActShortHands.ts`（`dependsOn=` の読み書き）、`contracts/minecraftControlContract.ts`（封筒）、`surfaces/minecraft/minecraftLlmcQueue.ts`（`drop()` は頼る物だけ、`add()` で封筒へ）、`surfaces/minecraft/minecraftControlValidation.ts`（下の欄の数）。
-- **欄の数**：体の Hand は今 43 欄で、頭の `SKILL_SCHEMA_PROPERTIES` は 48 です。この版で足す欄は `dependsOn`（2 章）と、vertical の `toward`・`toY`・`shape`・`liquid`（6 章）の 5 つで、ちょうど 48 になります。余裕が無いので、頭の上限を 56 に上げます（頭の担当。12 章の 1）。
+- 体：`instantSkills/act.ts`（Hand の zod に `dependsOn`、手ごとの失効と依存の確かめ）、`integration/commonFca/bodyQueue.ts`（`ENVELOPE`、`admit()`、recent の作り替え、`removeFrom()`）、`controlLoop.ts`（`accept()`・`begin()`・`launch()` の終わり・`dropWaiting()`・`dropExpired()`・`cancelOne()`）、`execution/ActionExecution.ts`（acquire の後の照らし）。
+- 頭：`contracts/minecraftActContract.ts`（`ActHand.dependsOn`、`ActInput.dependsOn`、`ACT_INPUT_SCHEMA`、`actProblem()`）、`contracts/minecraftActShortHands.ts`、`contracts/minecraftControlContract.ts`（封筒）、`surfaces/minecraft/minecraftLlmcQueue.ts`（`drop()`・`replace()`・`add()`・印の名前）、`surfaces/minecraft/minecraftControlValidation.ts`（欄の数の上限を 56 に。12 章の決め 1）。
+- **欄の数**：体の Hand は今 43 欄です。この版で足す欄は `dependsOn`（2 章）と、vertical の `dir`・`shape`・`toward`・`toY`・`liquid`（6 章）の 6 つで、49 になります。頭の上限を 48 から 56 に上げます。受け入れの条件は「数の余裕」ではなく、体が作った catalog を頭の本物の検査に通すこと（今の local-gate の段 4）です。
 
 ### 移し方
 保存されている物は無し。
 
 ### 見本
-`continue/act-hand-depends.json`、`continue/queue-item-depends.json`、`continue/admit-after-stopped.json`、`continue/no-depends-as-now.json`。
+`continue/dependency-table.json`（判定表の正本）、`continue/act-hand-depends.json`、`continue/onfail-continue-does-not-exempt.json`、`continue/indirect-depends.json`、`continue/queue-item-depends.json`、`continue/admit-after-stopped.json`、`continue/no-depends-as-now.json`、`continue/death-before-depends.json`、`continue/replace-keeps-independent.json`。
 
 ---
 
@@ -234,11 +281,11 @@ interface MinecraftQueueEnvelope { /* item, after, node, pre, maxMs, startBy */ 
 export interface PlanPromise {
   id: number;                   // #3。計画ツリーの中で 1 から増える。消しても使い回さない
   rev: number;                  // 改訂の番号（作った時 1）
-  item: string;                 // ActCondition の have と同じ読み方（'planks' は *_planks も数える）。特別な語 'food' は食料の点
+  item: string;                 // 具体的な物の名前（'oak_planks'。ActCondition の have と同じ読み方で 'planks' は *_planks も数える）か、食料の点の 'food'。用途の語（fuel など）は無し
   count: number;                // 残す量
   use: string;                  // 用途（LLM の言葉、40 字まで。例 '作業台'・'地下で食べる分'）
-  until?: { node?: string; condition?: ActCondition };  // 期間: その節が done になるまで／その条件を満たすまで。無ければ解くまで
-  instead?: ActCondition;       // 代わりの条件: 満たす間は、物が足りなくても約束を果たしているとみなす（例 作業台を持つ・近くにある）
+  until?: { node?: string; condition?: ActCondition };  // 期間
+  instead?: ActCondition;       // 代わりの条件（頭が判定できる語だけ。下の「代わりの条件」）
   state: 'open' | 'kept_by_instead' | 'closed';
   closedBy?: 'until' | 'released';
   ledger: PromiseEvent[];       // 古い順。32 件まで（古い物から落とし、落とした数を残す）
@@ -246,72 +293,70 @@ export interface PlanPromise {
 }
 
 export interface PromiseEvent {
+  id: string;                   // 一意な番号（下の InventoryEvent.id をそのまま。made・revised などは `plan:<rev>`）
   at: string;
-  kind: 'made' | 'revised' | 'consumed_for_use' | 'consumed_other' | 'gained' | 'lost_death' | 'released' | 'closed';
-  count: number;                // 動いた量（made・revised は新しい count）
-  have: number;                 // その後に持っている量
-  by?: { command: string; item?: string; hand?: number; kind?: string };  // どの命令・項目・手で（kind は 'smelt_fuel'・'craft'・'eat'・'place'・'reflex_eat' など）
-  note?: string;
+  kind: 'made' | 'revised' | 'consumed' | 'gained' | 'lost_death' | 'unexplained' | 'released' | 'closed';
+  count: number;                // 動いた量
+  have: number;                 // その後に観測した量（正本は観測）
+  declared?: boolean;           // その act の uses にこの約束があった（LLM の申告。用途どおりに使ったとは言い切らない）
+  reason?: string;              // 実際の理由（'smelt_fuel'・'craft_ingredient'・'eat'・'place'・'reflex_eat'・'death' など。体の出来事から）
+  promiseRev?: number;          // 帰属させた約束の rev（その命令を送った時の rev）
+  by?: { command?: string; item?: string; pass?: number; hand?: number };
 }
 
-/** 手ごとの持ち物の増減（体が書く。1 章の HandOutcome.delta）。 */
-export interface InventoryDelta {
-  spent: { item: string; count: number; as?: 'fuel' | 'ingredient' | 'food' | 'placed' | 'thrown' | 'tool_broke' }[];
-  gained: { item: string; count: number }[];
+/** 体が書く持ち物の出来事（手の結果の delta、act の外の反射は WorkingEvent `inventory.changed`）。 */
+export interface InventoryEvent {
+  id: string;                   // 一意: `${command}:${pass}:${hand}:${seq}`、act の外は `reflex:${connection}:${seq}`
+  item: string; count: number; // count は増えた量（+）か減った量（-）
+  reason: 'ingredient' | 'fuel' | 'food' | 'placed' | 'thrown' | 'tool_broke' | 'crafted' | 'picked' | 'mined' | 'smelted' | 'reflex_eat' | 'reflex_armor' | 'death' | 'unexplained';
+  intermediate?: boolean;       // make の途中で作ってすぐ使った物（板 → 棒 など）
 }
-/** act の間に反射が動かした分（反射が食べた・防具を着た）。ActResult に足す。 */
-export interface ReflexDelta { reflex: string; delta: InventoryDelta }
 
-// plan.update の ops に 2 種を足す（実行器は ops・current 以外を今どおり断る）
+// plan.update の ops に 2 種を足す（実行器は ops・current 以外を今どおり断る）。最初の計画の答えにも promises を書ける（12 章の決め 6。書かなければ空）
 type PlanOp =
-  | /* 今の add・split・set・move・drop・forbid・caution・lift */ never
   | { op: 'promise'; id?: number; item: string; count: number; use: string; until?: { node?: string; condition?: string }; instead?: string }
   | { op: 'release'; id: number; why?: string };
 
-// act の入力に 1 欄（頭だけが読む。体へは送らない。replace と同じ扱い）
-interface ActInput { /* … */ uses?: number[] }   // この act が「用途どおりに」使ってよい約束の番号
+// act の入力に 1 欄（頭だけが読む。体へは送らない。replace と同じ扱い）。頭は送った時の rev を項目に覚える
+interface ActInput { /* … */ uses?: number[] }
 ```
 
 ### 意味
 - **約束を書くのは LLM だけ**です（最初の計画か `plan.update` の `op: 'promise'`）。`id` を書けば改訂（`rev` を 1 上げ、`revised`）、無ければ新しい番号です。
-- **帳簿を持つのは頭**です。体は持ち物の増減（`delta`）を手ごとに書くだけで、約束を知りません。
-- **消費の記録**（頭が受け取りを読むたび）：開いている約束ごとに、同じ物の `spent` を次のように記録します。
-  - その act の `uses` に約束の番号があれば `consumed_for_use`（地下で食べる分の食料は、食べると減って正しい）。
-  - 無ければ `consumed_other`。
-  - `gained` は `gained` として記録します。
-  - 反射が使った分（`ReflexDelta`）は `consumed_other`、`by.kind = 'reflex_eat'` です。
-- **死**（5 章の命の番号が進んだ）：開いている約束ごとに `lost_death`（持っていた量）を記録します。約束は開いたまま残し、解くのは LLM です。
-- **期間**：`until.node` の節が done になった時、または `until.condition` を満たした時に `closed`（`closedBy: 'until'`）にします。`release` は `closed`（`released`）にします。
-- **代わりの条件**：`instead` を満たす間は、`state = 'kept_by_instead'` にします。量が足りなくても、live では「代わりの条件を満たす」と書きます。
-- **live の 1 行**（事実だけ。並びは番号順、開いている物だけ、4 つまで）：
-  - `約束 #3 作業台用の板 4: 今 2・直前に燃料で 2 消費（足りない 2）`
-  - `約束 #4 地下で食べる分の食料 20 点: 今 26 点`
+- **残りの量の正本は観測の値**です。帳簿の `have` は、出来事を足し引きした数ではなく、受け取り・観測ごとに持ち物から数え直した値です。
+- **消費の説明は、体の一意な出来事で付けます**。頭は出来事の `id` で 1 度だけ反映します（同じ受け取りが 2 度来ても、遅れて来ても 2 重にならない）。
+  - make の途中材（原木 → 板 → 棒 → 道具）は、`intermediate: true` の出来事で出します（確か：今の `make.ts` は途中材を作る。手の前後の持ち物の差だけでは、板の作りと消費が消える）。
+  - 手の途中で反射が食べた分は、反射の出来事（`reflex_eat`）として 1 度だけ出し、手の出来事には入れません（2 重を防ぐ）。体は反射の台帳（`ReflexLedger`）で、どちらの物かを分けます。
+  - act の外の反射の消費は、WorkingEvent `inventory.changed`（8 章）で出します（act が無いので、受け取りには乗らない）。
+  - 出来事で説明できない持ち物の差は `unexplained` のまま残します（推して割り振らない）。
+- **帰属**：約束への帰属は、その act を送った時の rev で決めます（送った後に約束を改訂しても、前の act の消費は前の rev のまま）。`uses` は LLM の申告で、`declared: true` として見せます。「用途どおりに消費した」とは書きません。申告と実際の理由（`reason`）を並べて見せます。
+- **死**（5 章の命の番号が進んだ）：開いている約束ごとに `lost_death` を記録します。約束は開いたまま残し、解くのは LLM です。
+- **期間**：`until.node` の節が done になった時、または `until.condition` を満たした時に `closed`（`closedBy: 'until'`）。`release` は `closed`（`released`）。
+- **代わりの条件**：頭が観測から判定できる語（have・food・hunger・hp・dim・at・free・time）と、体が観測に足す `near` だけを使えます。今の頭は `near`・`furnace` を常に「判定できない」にしています（確か：`minecraftConditions.ts`）。体は観測に、作業台・かまど・チェスト・ベッドの近くの位置（`state.world.utilities`、8 マス以内）を足し、頭の `near` の判定はそれを読みます。`furnace` は今どおり判定できない語です。
+  - 代わりの条件は**観測のたびに評価し直します**。成り立たなくなったら、live に「約束 #3 の代わりの条件が成り立たなくなった（作業台から 95 段離れた）」を 1 度出します（実走 45 の、作業台を地上に置いて 95 段下りた件）。
+- **live の 1 行**（事実だけ。番号順、開いている物だけ、4 つまで）：
+  - `約束 #3 作業台用の板 4: 今 2・直前に 2 減った（理由: かまどの燃料。申告の用途ではない）（足りない 2）`
+  - `約束 #4 地下で食べる分の食料 20 点: 今 22 点・直前に 11 点減った（理由: 食事。申告の用途）`
   - `約束 #3 作業台用の板 4: 今 0・代わりの条件を満たす（作業台 1）`
-  - `約束 #3 作業台用の板 4: 今 0・死んで 5 失った`
-  - 「直前に」は、前の判断から後の記録だけです。急ぎの版にも同じ行を入れます（10 章の境界 10）。
-- **断らない**：頭も体も、約束を理由に手を断りません。下りる・燃やす・置くは、LLM の判断です。
+  - `約束 #3 作業台用の板 4: 今 0・死んで 1 失った`
+  - 「直前に」は、前の判断から後の出来事だけです。急ぎの版にも同じ行を入れます（境界 10）。
+- **断らない**：頭も体も、約束を理由に手を断りません。
+- **書く入口は 1 つ**：計画ツリーへの書き込み（約束・解除・帳簿の反映）は、計画の道具の持ち主（`fcaPlanTools.ts` の tree と checkpoint）を通す 1 つの入口にします（確か：今の計画の道具は内部の tree を更新し、checkpoint で保存する。列の settle から別の帳簿を書くだけでは、その tree に入らない）。頭の担当は、`planPort.applyLedger(events)` のような入口を作り、settle はそこを呼びます。
 - **再起動**：頭の再起動の後も、計画ツリーと一緒に読み戻します。体の再起動は帳簿に影響しません（体は帳簿を持たない）。
 
 ### 誰が書き、誰が読むか
-LLM が書きます（約束・解除・`uses`）。頭が帳簿を書き、live の 1 行を作ります。体は `delta` を書きます。読むのは LLM（live）と計測（判断の記録）です。
+LLM が書きます（約束・解除・`uses`）。頭が帳簿を書き、live の 1 行を作ります。体は持ち物の出来事を書きます。読むのは LLM（live）と計測（判断の記録）です。
 
 ### 今のコードのどこが変わるか
-- 頭：
-  - `packages/mind/src/planTree.ts`（`PlanTree.promises`、`applyPlanUpdate()` に `promise`・`release`、保存の形 v2）
-  - `mind/action/fca/fcaPlanTools.ts`（`PLAN_UPDATE_DEFINITION`・`PLAN_UPDATE_RULES_DEFINITION` の op の enum と欄、実行器は ops・current のまま）
-  - `surfaces/minecraft/minecraftFirstPlan.ts`（`FIRST_PLAN_SCHEMA_R4` に `promises` を足すか。12 章の 6）
-  - 帳簿を書く所（新しい `surfaces/minecraft/minecraftLlmcPromises.ts`。`settle()` の受け取りの後に呼ぶ）
-  - live への 1 行（`minecraftLlmcLive.ts`・`minecraftLlmcUrgent.ts`）
-  - `ActInput.uses`（`minecraftActContract.ts`、`minecraftLlmcQueue.ts` の項目に持つ）
-  - 表示（`BodyPlanView`）
-- 体：`instantSkills/act.ts`（手の前後の持ち物を数えて `delta`、`as` は手の種類と primitive の報告から）、`utils/actReport.ts`、`nativeBody.ts`（反射の台帳 `ReflexLedger` から `ReflexDelta`）。
+- 頭：`packages/mind/src/planTree.ts`（`PlanTree.promises`、`applyPlanUpdate()` に `promise`・`release`、保存の形 v2）、`mind/action/fca/fcaPlanTools.ts`（op の enum と欄、帳簿を反映する入口）、`surfaces/minecraft/minecraftFirstPlan.ts`（`FIRST_PLAN_SCHEMA_R4` に `promises`）、帳簿（新しい `surfaces/minecraft/minecraftLlmcPromises.ts`）、`surfaces/minecraft/minecraftConditions.ts`（`near` を観測から）、live への 1 行（`minecraftLlmcLive.ts`・`minecraftLlmcUrgent.ts`）、`ActInput.uses` と送った時の rev（`minecraftActContract.ts`、`minecraftLlmcQueue.ts`）、表示（`BodyPlanView`）。
+- 体：各 primitive の出来事（`make.ts`・`craft.ts`・`smelt.ts`・`place.ts`・`body.ts` の eat ほか）、`instantSkills/act.ts`（手の出来事を集める）、`utils/actReport.ts`、`integration/commonFca/nativeBody.ts`（反射の台帳から反射の出来事、観測の `state.world.utilities`）、`integration/commonFca/bodyEvents.ts`（`inventory.changed`）。
 
 ### 移し方
 - 計画ツリー v1 は `promises: []` として読みます（7 章の移し方と同じ時に）。
 - 保留のファイル・場所の記憶は変わりません。
 
 ### 見本
-`promise/r43-planks-burned-as-fuel.json`、`promise/table-crafted-placed-picked.json`、`promise/food-for-underground.json`、`promise/death-loses-promised.json`。
+`promise/r43-planks-burned-as-fuel.json`、`promise/table-crafted-placed-picked.json`、`promise/food-for-underground.json`、`promise/death-loses-promised.json`、`promise/revised-after-send.json`、`promise/make-intermediate-and-reflex.json`、`promise/instead-lost-after-descent.json`、`promise/same-receipt-twice.json`。
 
 ---
 
@@ -324,206 +369,195 @@ LLM が書きます（約束・解除・`uses`）。頭が帳簿を書き、live
 3. 戦いの `markHeadCombat()` と `holdMeleeForHead()`
 4. 反射の状態（`floorReflexes.busy`・`fleeEpisode`・`melee`・`lavaReflex.engaged`・`breathingReflex.engaged`。読むのは `reflexHeld()`）
 
-新しい持ち主の欄（5 つ目の本当の事）は作りません。**取得・解放を 2 の実行層に集め、ほかはその写しにします。** 実走 45 の 6.4 秒は `fight()` の外、`NativeCommonFcaBody.afterReflex()` の待ちで、待ったのは `attack` の列でした（確か：run45-live、`nativeBody.ts`）。
+新しい持ち主の欄（5 つ目の本当の事）は作りません。実走 45 の 6.4 秒は `fight()` の外、`NativeCommonFcaBody.afterReflex()` の待ちで、待ったのは `attack` の列でした（確か：run45-live、`nativeBody.ts`）。
 
 ### 形
 ```ts
-/** 体の制御の持ち主（観測の state.control。実行層のロックの写し）。 */
+/** 体の制御の持ち主（観測の state.control）。持ち主の正本は実行層の「体を動かす根の文脈」。 */
 export type ControlHolder =
   | { kind: 'idle' }
-  | { kind: 'command'; command: string; item?: string; life: number; since: string }
-  | { kind: 'reflex'; reflex: string; priority: number; target?: number; since: string; until?: string }
-  | { kind: 'bridge'; after: string; hold: 'shield' | 'step_back'; target?: number; since: string; until: string }  // 反射の上限の後のつなぎ
+  | { kind: 'command'; actionId: string; command: string; item?: string; life: number; since: string }
+  | { kind: 'reflex'; actionId: string; reflex: string; priority: number; target?: number; since: string; episode?: boolean }
+  | { kind: 'bridge'; after: string; hold: 'shield' | 'step_back'; target?: number; since: string; until: string }
   | { kind: 'cleanup'; command: string; since: string };
 
 export interface ControlView {
   holder: ControlHolder;
-  waiting: { command: string; since: string; behind: string }[];   // 反射の後を待っている命令（behind は反射の名）
-  token: number;                                                   // 持ち主が替わるたびに 1 増える（古い処理の禁止に使う）
+  /** 反射の episode が続いている（ロックを一瞬放した間も）。戦いの印が残っている。どちらもロックの写しではない別の事実。 */
+  reflexEpisode?: { reflex: string; target?: number; hands: number; hits: number; since: string };
+  combatMark?: { skill: string; target?: number; until: string };
+  waiting: { command: string; since: string; behind: string }[];   // 反射の後を待っている命令
 }
 
 /** act の結果に足す欄: 反射から引き継いだ時。 */
-export interface Handover { from: string; target: number; waitedMs: number; reflexStoppedAt: string; confirmed: boolean }
+export interface Handover { from: string; target: number; waitedMs: number; reflexSettledAt: string; confirmed: boolean; shield: 'kept' | 'lowered' | 'none' }
 
-/** 体から頭への出来事に 1 種足す（MinecraftBodyEvent.kind）。 */
-type ReflexCapped = { kind: 'reflex.capped'; subject: string /* reflex */; data: { count: number; windowMs: number; bridge: 'shield' | 'step_back' | 'none'; until: string } };
+/** 体から頭への出来事（MinecraftBodyEvent.kind。頭の共有の WORKING_EVENT_KINDS にも足す。8 章）。 */
+type ReflexCapped = { kind: 'reflex.capped'; subject: string /* reflex */; data: { limit: 'melee_hands' | 'melee_hits' | 'budget_arrow' | 'budget_eat' | 'budget_armor'; count: number; bridge: 'shield' | 'step_back' | 'none'; until: string | null } };
 ```
 
 ### 意味
-- **持ち主の決め方**は 1 つだけです。実行層の取得（`executeAction()` の `acquire`）が持ち主を替え、`token` を 1 上げます。`CommonFcaControlLoop.owner` は通信の持ち主（どの lease の命令を受けるか）のままです。`state.control` は実行層の写しで、live の「今の持ち主」はこれを読みます。
-- **古い処理の禁止**：体の操作（キー・道探しの行き先・盾の構え・手の物の使用）は、`token` を持つ文脈からだけ効きます。持ち主が替わった後の古い処理の片付け（`clearControlStates()`・`pathfinder.setGoal(null)`・`deactivateItem()`）は、何もしません。今の `createMotorPort()` を、作った時の `token` を覚える形にします（境界 6）。
-- **すぐの引き継ぎ**（`afterReflex()` を直す）：act の最初の体を動かす手（already になる手は飛ばす）が `fight` か `attack` で、その相手が、今体を持つ反射の `target` と同じ時は、待たずに次のとおり引き継ぎます。
-  - 引き継げる反射は `floor-melee` と、体力が `HEAD_COMBAT_YIELD_HEALTH`（5）より上の時の `floor-last-stand`（hit の手）だけです。
-  - 反射を `handover` の理由で止め（実行層の `preemptLowerPriorityActions` と同じ道）、反射の台帳に `handed_over` を書いてから、act を始めます。
-  - 結果の `handover` に `confirmed: true` を入れます。反射が止まったのを実行層で確かめた（その反射の文脈が settled）という意味です。
-  - 確かめられない時（300 ms 以内に settled にならない）は、今どおり待ちます。その時は `confirmed: false` で、待った秒も書きます。
+- **token は作りません**。今ある motor port の失効の確かめ（`createMotorPort()` の `Motor owner expired`：持ち主の文脈が止められた・片付いた・静まった時に操作を断る。確か）を、持ち主の正本にします。失効の仕組みを 2 つにしません（Codex の指摘 6・直す物 3）。
+  - **持ち主が替わるのは、体を動かす根の文脈を取った時だけ**です。観測だけの呼び出し（query）と入れ子の呼び出しでは替わりません（確か：今の `executeAction()` は query でも世代を上げ、入れ子は親の文脈を使う。持ち主の数え方は query を除く）。
+  - 体の操作（キー・道探しの行き先・盾・手の物の使用）は、今の持ち主の根の文脈からだけ効きます。持ち主が替わった後の古い処理の操作は、motor port が断ります。
+  - **今の穴**：止める時の片付け（`physicalStops()` の `deactivateItem()`・`clearControlStates()`）は native の bot へ直接行うので、持ち主が替わる前に盾が下がります（確か：`ActionExecution.ts`）。常駐の盾（`shieldBlock.ts`）も直接 `activateItem`・`deactivateItem` します（確か）。次のとおり直します。
+- **引き継ぎの手順**（`afterReflex()` を直す）：
+  1. 受け取った act の、最初の体を動かす手（already になる手は飛ばす）が `fight` か `attack` で、相手が今の反射の episode の `target` と同じか確かめる。
+  2. 引き継げる反射は `floor-melee` と、体力が 5 より上の時の `floor-last-stand`（hit の手）だけです（12 章の決め 3）。低体力の逃げ（`floor-flee`）・溶岩・壁・退避・掘り出し・息・食事・防具は奪いません。普通の act の優先度は一律には上げません（食事を止めないため）。
+  3. 反射を `handover` の理由で止めます。片付けは、`handover` の時だけ盾を下げません（`physicalStops()` に理由を渡す。盾は資源として新しい持ち主へ渡す）。前へ進むキーなど、それ以外の操作は片付けます。
+  4. 反射の根の文脈が settled になったのを確かめます（300 ms まで待つ。300 ms は合格の条件ではなく、待つ上限）。
+  5. **取る時に確かめ直します**：相手がまだいる・命の番号が同じ・今の持ち主がその反射のまま（間に溶岩・低体力の逃げなどが取っていない）。どれか違えば引き継がず、今どおり待ちます（`confirmed: false`）。
+  6. act を始め、結果の `handover` に、待った秒・盾をどうしたかを入れます。
 - **相手が違う時**：反射は今の 1 手（melee は 2 打まで）を終え、次の手を始めません（今の `holdMeleeForHead()` を attack にも広げる）。act はその後に始めます。
-- **優先の高い反射は奪いません**：溶岩・壁・creeper/矢の退避・掘り出し・息（泳ぎ）・食事・防具。act は今どおり待ちます。待った秒と反射の名は `afterReflex` に入れます。
-- **反射の上限の後**：反射が回数の上限（`FloorBudget`）に着いた時、体は `reflex.capped` の出来事をすぐ出します（頭はこれを急ぎの理由にする）。
-  - 頭の命令が来るまでのつなぎは、今ある反射の範囲だけです。盾を構える（`shield`）か、一歩下がる（`step_back`）のどちらかで、`until` は 3 秒まで。
-  - 終わりの条件は、命令が始まった・相手がいなくなった・体力が 5 以下（その時は低体力の反射へ戻す）・期限の 4 つです。
-  - 新しい長い戦い方は作りません。
-- **急ぎの live**（頭）：体力・満腹・食べられる物・直近の被弾・今の持ち主（`state.control.holder` の 1 行）・命の番号を、急ぎの版にも必ず残します（境界 10）。
+- **常駐の盾**も、持ち主の確かめを通します（持ち主のいない時だけ自分で上げ下げする）。
+- **反射の上限の後**：
+  - melee の上限は、episode の手数と打ちの数（`MELEE_MAX_HANDS`・`MELEE_MAX_HITS`）です（確か：`floorReflexes.ts`）。`FloorBudget` は arrow・eat・armor の時間の予算で、別の物です（確か：`floorBudget.ts`）。知らせは `limit` で、どちらの上限かを分けます。
+  - 上限に着いた時、体は `reflex.capped` を 1 度出します（頭はこれを急ぎの理由にする）。
+  - つなぎ（bridge）は、**反射が既に選んでいた動き（盾を構えている・一歩下がっている最中）を短く続けるだけ**です。新しい動きは選びません。`until` は最初の知らせから 3 秒まで（仮の数）で、続く知らせで延ばしません。終わりの条件は、命令が始まった・相手がいなくなった・体力が 5 以下（低体力の反射へ戻す）・期限の 4 つです。
+- **戦いの間の事実を判断へ**（実走 45 の、約 5.3 の打ちを続けて受けても「軽微」とした件）：直近 10 秒に受けた打ちの数と量、今の体力、すぐ食べられる物と回復の見込みを、急ぎの版にも残します（8 章）。引き継ぎの速さだけを D4 の成功の物差しにしません。
 
 ### 誰が書き、誰が読むか
 体が `state.control`・`handover`・`reflex.capped` を書きます。頭が live と急ぎの理由に読み、判断の記録に残します。
 
 ### 今のコードのどこが変わるか
-- 体：
-  - `execution/ActionExecution.ts`（取得の時に `token`、`createMotorPort()` の古い操作の禁止、文脈に `target`）
-  - `execution/SkillExecutor.ts`
-  - `integration/commonFca/nativeBody.ts`（`afterReflex()` の引き継ぎ、`observe()` に `state.control`）
-  - `utils/floorReflexes.ts`（melee・last-stand の `target` を状態に、`handover` で止まる、上限で `reflex.capped` とつなぎ）
-  - `utils/combatOwner.ts`（`holdMeleeForHead()` を attack にも）
-  - `integration/commonFca/bodyEvents.ts`（出来事の種類）
-  - `minecraftControlContract.ts`（写し）
-- 頭：
-  - `contracts/minecraftControlContract.ts`（出来事の種類）
-  - `surfaces/minecraft/minecraftLlmcLive.ts`・`minecraftLlmcUrgent.ts`（持ち主の 1 行、`reflex.capped` を急ぎに）
-  - `surfaces/minecraft/minecraftControlValidation.ts`（`state.control` の形）
+- 体：`execution/ActionExecution.ts`（持ち主の数え方、`physicalStops()` に理由、取る時の確かめ直し）、`execution/SkillExecutor.ts`、`integration/commonFca/nativeBody.ts`（`afterReflex()` の引き継ぎ、`observe()` に `state.control`）、`utils/floorReflexes.ts`（episode の target、`handover` で止まる、上限で `reflex.capped` とつなぎ）、`utils/combatOwner.ts`（`holdMeleeForHead()` を attack にも）、`utils/shieldBlock.ts`（持ち主の確かめ）、`integration/commonFca/bodyEvents.ts`、`minecraftControlContract.ts`（写し）。
+- 頭：`packages/mind/src/workingEvents.ts`（`WORKING_EVENT_KINDS` に `reflex.capped`。8 章）、`contracts/minecraftControlContract.ts`、`surfaces/minecraft/minecraftLlmcLive.ts`・`minecraftLlmcUrgent.ts`、`surfaces/minecraft/minecraftControlValidation.ts`（`state.control` の形）。
 
 ### 移し方
 保存されている物は無し。
 
 ### 見本
-`control/r45-attack-waited-6-4s.json`、`control/different-target.json`、`control/high-priority-not-taken.json`、`control/reflex-capped-bridge.json`、`control/stale-owner-cleanup.json`。
+`control/r45-attack-waited-6-4s.json`、`control/different-target.json`、`control/high-priority-not-taken.json`、`control/melee-capped-bridge.json`、`control/stale-owner-cleanup.json`、`control/handover-race.json`、`control/shield-kept-on-handover.json`、`control/fight-damage-facts.json`。
 
 ---
 
-## 5. 命の番号（life）
+## 5. 命の番号（life）と、つなぎ直しの識別子
 
 ### ねらい
-実走 45 の +929 で、死んだ後に、死ぬ前の判断の act（q52 attack）が始まりました（確か：run45-live「始まったのは死んだ後（リスポーンの後に target_not_found）」）。今の頭の死の判定は「前の観測が死亡・次が生存」の移りで、ポーリングがその間を飛ばすと分かりません（確か：`minecraftControl.ts` の `arrivalOf()`）。
+実走 45 の +929 で、死んだ後に、死ぬ前の判断の act（q52 attack）が始まりました（確か：run45-live）。今の頭の死の判定は「前の観測が死亡・次が生存」の移りで、ポーリングがその間を飛ばすと分かりません（確か：`minecraftControl.ts` の `arrivalOf()`）。
 
 ### 形
 ```ts
 export interface LifeView {
   life: number;          // 1 から。体が死の出来事で 1 増やす
   since: string;         // その命が始まった時（ログインか、死の出来事の時）
-  alive: boolean;        // 死んでからリスポーンまでは false
-  diedAt?: string;       // 前の命が終わった時
-  deathCause?: string;   // 'minecraft:mob_attack' など（体が知っていれば）
-  dimension: 'overworld' | 'the_nether' | 'the_end';
+  alive: boolean;        // 死んでからリスポーンまでは false（新しい番号でも alive:false の間がある）
+  diedAt?: string;
+  deathCause?: string;
+  dimension: Dim;
   dimensionSince: string;
 }
-// 観測: facts.life（number）と state.life（LifeView）
-// 命令: BodyTaskContext に life?: number（その命令を作った判断が読んだ観測の life）
+/** 体の起動とつなぎの識別子（life とは別。頭の再起動・体のつなぎ直しをまたぐ物を見分ける）。 */
+export interface BodyRun { bodyBoot: string; connectionId: string }   // bodyBoot は体のプロセスの起動ごとの乱数
+// 観測: facts.life（number）と state.life（LifeView）と state.bodyRun（BodyRun）
+// 命令: BodyTaskContext に life: number と headBoot: string（動かす命令では必須）。life は「その命令を作った判断が読んだ観測の life」
 ```
 
 ### 意味
-- **体が番号を進めます**。`bot.on('death')` の時に 1 増やし、ファイル（保留のファイルと同じ所の `life.json`、ワールドの id ごと）に書きます。体を再起動しても、番号は戻りません。
-- **次元の移りは死ではありません**。ポータル・エンドの門での `spawn`・`game` の出来事（死の出来事が無い）では、番号は変わらず、`dimension`・`dimensionSince` だけが変わります。リスポーンで次元が変わる時は、番号は死の時に既に進んでいます。
-- **古い番号の物は全部無効**です。体は次のとおりにします。
-  - 命令の受け取り（`accept()`）で、`context.life` が今の番号と違えば、`failureType: 'stale_life'`・`not_started` で断ります（手は動いていない）。
-  - 待っている項目は、死の出来事で全部捨てます（`droppedBecause` の code は `death`）。
-  - 実行中の手は、死の出来事で止めます（`cutBy: 'death'`）。
-  - 次の手を始める直前（`runAct()` の手ごと）にも、番号を照らします。違えば `cutBy: 'stale_life'` です。
-  - ロック待ち（`SkillExecutor.acquire` を待つ物・`afterReflex` で待つ物）は、死の出来事で `aborted` にします。
-- **頭は次のとおりにします**。
-  - 判断の入力に読んだ観測の `life` を、判断の記録と命令の `context.life` に入れます。
-  - 考え中の判断の返事は、使う直前に最新の観測の `life` と比べます。違えば `discarded`（理由 `life_changed`。今の `queue_changed` と同じ扱い）にして、新しい観測で判断し直します。
-  - 列の項目（頭の `QueueItem`）は、`life` が違う物を送りません。
-- **lease・タスクの世代（`generation`）とは別**です。命の番号が進んでも、lease は替わりません。lease が替わっても、命の番号は変わりません。保留（incident）は、命の番号を照らしません（`release` は手ではない）。
-- `arrivalOf()` は `facts.life` の増えで `death` を決めます（移りを見落とさない）。
+- **体が番号を進めます**。`bot.on('death')` の時に 1 増やし、ワールドとボットごとのファイル（保留のファイルと同じ所の `life.json`）に書きます（12 章の決め 2）。
+  - ファイルが無い時（初めてのワールド）は 1 から始めます。
+  - **ファイルがあるのに読めない時は、黙って 1 へ戻しません**。その時刻から作る大きな番号（ミリ秒の時刻）で始め、黒箱に書きます。頭から見ると番号が大きく跳ぶので、古い命令は必ず失効します。
+- **次元の移りは死ではありません**。番号は変わらず、`dimension`・`dimensionSince` だけが変わります。ただし次元の移りは、2 章の失効の 3 番で、移る前の観測で作ったほかの命令を失効させます。
+- **照らす時機**（2 章の失効の 2 番）：受け取った時・待ちから起きた時・ロックを取った後・体を動かす操作の前。`alive: false` の間に動かす命令は始めません（`not_alive`）。
+- **体がする事**：
+  - 動かす命令で `context.life` が無ければ `life_missing` で断ります。
+  - `context.life` が今の番号と違えば `stale_life`・`not_run` で断ります（手は動いていない）。
+  - 死の出来事で、待っている項目を全部捨て（`droppedBecause: death`）、実行中の手を止め（`cutBy: death`）、ロック待ちと反射の後の待ちを `aborted` にします。
+- **頭がする事**：
+  - 命令の `context.life` は、**判断の入力に読んだ観測の life** を入れます（送る時の最新ではない）。今の context は送る時に `minecraftReflexAdapter.ts` で作っています（確か）。判断の入力の life を、項目に持たせて渡します。
+  - 考え中の判断の返事は、使う直前に最新の観測の life・次元・`bodyRun` と比べます。違えば `discarded`（理由 `life_changed`・`dimension_changed`・`connection_changed`）にして、新しい観測で判断し直します。
+  - `arrivalOf()` は `facts.life` の増えで `death` を決めます。
+  - 頭の起動ごとの `headBoot` を命令に入れます。体は、つなぎ直しの前の `headBoot` の命令を断ります（2 章の失効の 1 番）。
+- **lease・タスクの世代（`generation`）とは別**です。保留（incident）は命の番号を照らしません（`release` は手ではない）。
 
 ### 誰が書き、誰が読むか
-体が番号を書きます（`life.json`・観測）。頭が読み、命令に写します。体は命令の番号を照らします。
+体が番号と `bodyRun` を書きます。頭が読み、命令に写します。体は命令の番号を照らします。
 
 ### 今のコードのどこが変わるか
-- 体：
-  - `integration/commonFca/nativeBody.ts`（`observe()` に `facts.life`・`state.life`、`execute()` の照らし）
-  - `controlLoop.ts`（`accept()` の照らし、死の時の `dropWaiting`）
-  - `instantSkills/act.ts`（手ごとの照らし）
-  - `execution/ActionExecution.ts`・`SkillExecutor.ts`（ロック待ちを止める）
-  - 番号を持つ新しい部品（`utils/life.ts`）
-  - `utils/incidents.ts`（保留のファイルに `life` を足す。読むだけ）
-- 頭：
-  - `contracts/bodyControlContract.ts`（`BodyTaskContext.life`）
-  - `surfaces/minecraft/minecraftControl.ts`（`arrivalOf()`）
-  - `surfaces/minecraft/minecraftTaskContext*`（`context.life` を入れる）
-  - `mind/action/fca/fcaRunner.ts`（`life_changed` の破棄）
-  - `surfaces/minecraft/minecraftLlmcQueue.ts`
-  - 判断の記録（`request` と `sent` に `life`）
+- 体：`integration/commonFca/nativeBody.ts`（`observe()`、`execute()` の照らし）、`controlLoop.ts`（`accept()`・`begin()` の照らし、死の時の `dropWaiting`）、`instantSkills/act.ts`（手ごとの照らし）、`execution/ActionExecution.ts`・`SkillExecutor.ts`（ロック待ちを止める、取った後の照らし）、新しい `utils/life.ts`、`utils/incidents.ts`（保留のファイルに life。読むだけ）。
+- 頭：`contracts/bodyControlContract.ts`（`BodyTaskContext.life`・`headBoot`）、`surfaces/minecraft/minecraftControl.ts`（`arrivalOf()`）、`surfaces/minecraft/minecraftReflexAdapter.ts`（context に判断の入力の life）、`mind/action/fca/fcaRunner.ts`（破棄）、`surfaces/minecraft/minecraftLlmcQueue.ts`、判断の記録（`request` と `sent` に life）。
 
 ### 移し方
-`life.json` が無い時は 1 から始めます。保留のファイルに `life` が無い時は、読むだけなので何もしません。
+`life.json` が無い時は 1 から。読めない時は上のとおり。保留のファイルに life が無い時は、読むだけなので何もしません。
 
 ### 見本
-`life/r45-death-then-old-attack.json`、`life/portal-is-not-death.json`、`life/death-at-each-moment.json`。
+`life/r45-death-then-old-attack.json`、`life/portal-is-not-death.json`、`life/portal-pending-other-dimension.json`、`life/death-at-each-moment.json`、`life/life-file-unreadable.json`。
 
 ---
 
 ## 6. vertical（縦の長い移動の手。下りも上りも）
 
 ### ねらい
-実走 45 の保留 1・4〜6 は、岩の中を深く下りる `go` の道探しの時間切れ（`search_timeout`・`limit_time`）でした。保留 7 は、柱を積んで y=7 から 56 へ上る `go` が 120 秒で着かなかった件で、掘 6・置 48・引き直し 12 回、最後はブロックの変化で引き直しを続けました（確か：run45-live）。
-縦の長い移動の形と危険の扱いを LLM が決め、体は一段ずつ機械的に掘る・置く・歩く手を、**`mc.act` の中の手の 1 種 `vertical`** として足します。下りも上りも同じ手です（向きは `toY` と今の y から決まる）。独立のスキルにはしません（列は `skill === 'act'` だけを受けるため）。名前は、案 2 の `descend` から変えました（取りまとめ役の追記 2026-10-28）。
+実走 45 の保留 1・4〜6 は、岩の中を深く下りる `go` の道探しの時間切れでした。保留 7 は、柱を積んで y=7 から 56 へ上る `go` が 120 秒で着かなかった件で、最後はブロックの変化で引き直しを続けました（確か：run45-live）。
+縦の長い移動の形と危険の扱いを LLM が決め、体は一段ずつ機械的に掘る・置く・歩く手を、**`mc.act` の中の手の 1 種 `vertical`** として足します（列は `skill === 'act'` だけを受けるため）。
 
 ### 形
 ```ts
 interface ActHand {
   do: 'vertical';
-  /**
-   * stairs: 階段（1 歩ごとに 1 段。下りは掘り下げ、上りは前の上を掘って上がる）
-   * shaft: 縦穴で真下へ（下りだけ）
-   * pillar: 足の下に置いて真上へ（上りだけ。頭の上は掘る）
-   * 体は形を勝手に変えない。
-   */
+  dir: 'down' | 'up';                     // 向き。入力に書く（今の y から推さない。12 章の決め 12）
+  /** stairs: 階段 / shaft: 縦穴で真下（dir down だけ） / pillar: 足の下に置いて真上（dir up だけ）。体は形を変えない */
   shape: 'stairs' | 'shaft' | 'pillar';
   toward?: 'north' | 'east' | 'south' | 'west';  // stairs では必須。shaft・pillar では使わない
-  toY: number;                            // どの y まで（足の y）。今より下なら下り、上なら上り
-  canDig: string[];                       // 掘ってよい物（go と同じ読み方）。pillar でも頭の上を掘るのに使う
-  maxDig?: number;                        // 掘る数の上限（go と同じ）
-  canPlace?: string[];                    // 置いてよい物（pillar の足場、liquid が seal の時の塞ぎ）
+  toY: number;                            // どの y まで（足の y）
+  canDig: string[];                       // 掘ってよい物（必須。pillar でも頭の上を掘るのに使う）
+  maxDig?: number;                        // 掘る数の上限（砂利・砂の掘り直しも数える）
+  canPlace?: string[];                    // 置いてよい物（pillar の足場、stairs の上りの足場、seal の塞ぎ。書いた順に使う）
   maxPlace?: number;                      // 置く数の上限
   liquid: 'stop' | 'seal' | 'seal_water'; // 溶岩・水が見えた時: 止める／塞いで続ける／水だけ塞ぎ溶岩で止める
-  range?: number;                         // 塞ぐ範囲（掘るマスから何マスまでの液体を塞ぐか。既定 1、最大 2）
-  seconds?: number;                       // 上限の秒（go と同じ）
-  // dependsOn・onFail・note・rel は、どの手とも同じ
+  range?: number;                         // 塞ぐ範囲（既定 1、最大 2）
+  seconds?: number;
 }
-// 短い書き方（頭の minecraftActShortHands.ts）:
-//   vertical stairs south y=10 dig=stone,dirt,gravel [maxDig=80] [place=cobblestone] [maxPlace=20] [liquid=stop|seal|seal_water] [range=1] [seconds=120]
-//   vertical shaft y=-50 dig=stone,deepslate,tuff place=cobblestone [maxPlace=30] liquid=seal
-//   vertical pillar y=63 place=cobblestone [maxPlace=60] [dig=stone,dirt] liquid=seal_water [seconds=120]
+// 短い書き方:
+//   vertical down stairs south y=10 dig=stone,dirt,gravel [maxDig=80] [place=cobblestone] [maxPlace=20] [liquid=stop|seal|seal_water] [range=1] [seconds=120]
+//   vertical down shaft y=-50 dig=stone,deepslate,tuff place=cobblestone [maxPlace=30] liquid=seal
+//   vertical up pillar y=63 dig=stone,dirt place=cobblestone [maxPlace=60] liquid=seal_water [seconds=120]
 ```
-- 頭は、形と向きの食い違いを送る前に断ります（`shaft` で上り、`pillar` で下り、`stairs` に `toward` が無い。断りの文は見本 `vertical/short-hands.json`）。
+- 頭は、形と向きの食い違いを送る前に断ります（`shaft` で up、`pillar` で down、`stairs` に `toward` が無い、`canDig` が無い）。
 
 ### 意味
-- **LLM が決める物**：形・向き・どの y まで・掘る/置くの許し・溶岩と水の扱い・上限の秒。
-- **体がする物**：一段ずつ掘る・置く・歩くだけです。道探し（pathfinder）は使いません。保留 7 の「ブロックの変化で引き直しを続けた」は起きない形にします。
-  - `stairs` の下り：向きへ 1・下へ 1 のマスと頭の上の 2 マスを掘って歩きます（`tunnelWalk.ts` の段ごとの掘りと歩き）。
-  - `stairs` の上り：向きへ 1・上へ 1 の 2 マスと、今の頭の上の 1 マスを掘って上がります。足場が無ければ、`canPlace` の物を置きます。
+- **LLM が決める物**：向き・形・どの y まで・掘る/置くの許し・溶岩と水の扱い・上限の秒。
+- **体がする物**：一段ずつ掘る・置く・歩くだけです。道探しは使いません。回り道・形の変更・向きの変更・鉱石を追うことはしません。
+  - `stairs` の down：向きへ 1・下へ 1 のマスと頭の上の 2 マスを掘って歩きます。`stairs` の up：向きへ 1・上へ 1 の 2 マスと今の頭の上の 1 マスを掘って上がり、足場が無ければ `canPlace` の物を置きます。
   - `shaft`：足の下を掘って 1 段落ちます（`shaftDown.ts` の `shaftStepRefusal()` で確かめる）。
-  - `pillar`：頭の上 2 マスが空いていなければ掘り（`canDig` に無ければ止める）、跳んで足の下に置きます。置くのは、足がそのマスの上端より 0.2 以上高い、跳びの頂点の近くだけです。保留 8 の調べで、足がマスの上端の 0.1 上の置きはサーバーに断られました（サーバーの見る体の位置が 1 tick 遅れる、という仮説）。
-  - `planStairLine()` は呼びません（高低差が大きいと縦穴を混ぜるため）。`StairMine.runImpl()` の、海なら陸へ・向きを変える部分も使いません。
-- **砂・砂利**：落ちてくる物は、そのマスを掘り直します（体の細部）。`canDig` に無い物（岩盤・守られた物を含む）では止めます（`code: 'cannot_dig'`）。
-- **液体**：次に掘る・入るマスの周り（`range` まで）に溶岩・水が見えた時の扱いです。
+  - `pillar`：頭の上 2 マスが空いていなければ掘り（`canDig` に無ければ止める）、跳んで足の下に置きます。
+  - 使い回す部品は `tunnelWalk.ts` の段ごとの掘りと歩き・`shaftDown.ts` の確かめです。ただし `walkCells()` をそのまま使うと、液体・床・落下の今の方針を持ち込みます（確か：`tunnelWalk.ts`）。vertical の許可と上限を通す形に部品を分けます。`planStairLine()` と `StairMine.runImpl()` は使いません。
+- **置きの送る条件と確かめは分けます**（12 章の決め 13）：
+  - 送る条件：体がそのマスに重なっていない（保留 8 の `mayLayAt`）、当てる面にブロックがある（保留 9 の `hasFace`）、pillar では足がマスの上端より上にある（margin は仮説で 0.2。実物の試験で決める）。
+  - 確かめ：置いた後に、そのマスのブロックの更新を見ます。確かめられない置きは段数に足さず、`work.placed` にも数えません。続けて 2 回確かめられなければ `code: 'place_unconfirmed'` で止めます。
+- **止める場面**（どれも `progress` と止まった位置を返す）：
+  - 次に掘る・入るマスが未知・読み込まれていない → `unloaded`
+  - 世界の高さの端（下は y=-64、上は y=320 の手前） → `world_limit`
+  - 途中で体が落ちた・押し戻された（予定の段から 1 マス以上ずれた） → `displaced`（`where` は今の位置）
+  - `canDig` に無い物（岩盤・守られた物を含む） → `cannot_dig`
+  - 落ちる段が 1 を超える穴・空洞（down） → `no_floor`。足場を置けない（up の stairs） → `no_place`
+  - 掘る数・置く数の上限 → `limit_dig`・`limit_place`。砂利・砂の掘り直しも掘る数に数え、上限に着けば止めます
+  - 上限の秒 → `limit_time`
+- **液体**（`liquid`）：
   - `stop` → `code: 'lava'` か `'water'` で止めます（`where` はその液体のマス）。
-  - `seal` → `canPlace` の物を液体のマスか、液体に面した空きに置いてから続けます。`maxPlace` か、持ち物が尽きたら `code: 'limit_place'` で止めます。
-  - `seal_water` → 水は塞ぎ、溶岩なら止めます。上りで頭の上に液体がある時も同じ扱いです。
-- **足元**：下りで落ちる段が 1 を超える穴・空洞に出たら止めます（`code: 'no_floor'`。今の go の `no_floor` と同じ語）。上りの `stairs` で足場を置けない時は `code: 'no_place'` です。途中で体が勝手に回り道はしません。
+  - `seal`・`seal_water` は、**LLM が許した範囲での機械的な処理**です。候補の順は「液体のマスそのもの → 次に入るマスに面した液体の隣の空き（近い順）」、使うブロックは `canPlace` の書いた順、予算は `maxPlace` と `range` です。塞げなければ `code: 'seal_failed'` と位置・理由（物が無い・届かない・予算）を返します。`seal_water` は溶岩なら止めます。
 - **鉱石**：見えた鉱石は `seen`（種類と座標、8 件まで）で知らせるだけで、追いません。
-- **止まった時**：`progress: { unit: 'step', done, left, at, msPerUnit }` を返します。LLM は、その `at` からもう一度 `vertical`（か別の手）を出して続けます。体は前の手を覚えません（指示し直しは、今の位置からの新しい手）。
-- **既に済**：下りで始めた時に既に `toY` 以下、上りで既に `toY` 以上なら `already` です。
-- **頭の見積もり**：所要時間と残りは、1 段あたりの見積もり × 段数から始めます（stairs 約 1.6 秒、shaft 約 1.0 秒、pillar 約 0.9 秒。確かめていない）。体が返す `msPerUnit` で直します（`minecraftActTime.ts`）。
-- **下りる前の警告**（頭の今の準備の警告）は、下りの `vertical` にも go と同じように出します。
+- **止まった時**：`progress: { unit: 'step', done, left, at, msPerUnit, work: { dug, placed } }` を返します。`done` は確かめた移動の段数で、掘った数・置いた数とは別に数えます（階段の 1 段は 2〜3 マスを掘る）。LLM は、その `at` から新しい手を出して続けます。体は前の手を覚えません。
+- **既に済**：`dir: down` で既に toY 以下、`dir: up` で既に toY 以上なら `already` です。
+- **頭の見積もり**：1 段あたりの見積もり × 段数から始め、体が返す `msPerUnit` で直します（`minecraftActTime.ts`）。見積もりの初めの値（stairs 約 1.6 秒・shaft 約 1.0 秒・pillar 約 0.9 秒）は仮説で、旧 go の段数（保留 5 の 95 段・保留 7 の 49 段）も新しい手の保証にはしません。
+- **下りる前の警告**（頭の今の準備の警告）は、`dir: down` の vertical にも go と同じように出します。
 
 ### 今のコードのどこが変わるか
-- 体：`instantSkills/act.ts`（`HAND_KINDS`・Hand の zod・`runHand()`）、新しい `utils/primitives/vertical.ts`（`tunnelWalk.ts`・`shaftDown.ts` の部品と、保留 8 の調べ（`go.ts` の `mayLayAt()` が go の中では体の真下への置きを送らない理由）を踏まえた置きの時機だけを足す）、`utils/actHandRules.ts`（許可の欄）、`utils/actLabel.ts`、`utils/actReport.ts`（閉じた語に `cannot_dig`・`lava`・`water`・`limit_place`・`no_floor`・`no_place`）。
-- 頭：`contracts/minecraftActContract.ts`（`HAND_KINDS`・`ActHand`・`ACT_INPUT_SCHEMA`・`ACT_DESCRIPTION`）、`contracts/minecraftActHandRules.ts`（手ごとの欄）、`contracts/minecraftActShortHands.ts`（読み書きと断り）、`contracts/minecraftActTime.ts`（見積もり）、下りる前の警告（`minecraftLlmcReadiness.ts` ほか）。
+- 体：`instantSkills/act.ts`（`HAND_KINDS`・Hand の zod・`runHand()`）、新しい `utils/primitives/vertical.ts`、`utils/tunnelWalk.ts`・`utils/shaftDown.ts`（許可と上限を受ける部品に分ける）、`utils/actHandRules.ts`、`utils/actLabel.ts`、`utils/actReport.ts`（閉じた語）。
+- 頭：`contracts/minecraftActContract.ts`、`contracts/minecraftActHandRules.ts`、`contracts/minecraftActShortHands.ts`（読み書きと断り）、`contracts/minecraftActTime.ts`、下りる前の警告（`minecraftLlmcReadiness.ts` ほか）。
 
 ### 移し方
 保存されている物は無し。
 
 ### 見本
-`vertical/r45-hold1-stairs-down-to-iron.json`、`vertical/r45-hold5-shaft-down-to-diamond.json`、`vertical/r45-hold7-pillar-up.json`、`vertical/lava-seal-and-stop.json`、`vertical/short-hands.json`。
+`vertical/r45-hold1-stairs-down.json`、`vertical/r45-hold5-shaft-down.json`、`vertical/r45-hold7-pillar-up.json`、`vertical/lava-seal-and-stop.json`、`vertical/stop-cases.json`、`vertical/short-hands.json`。
 
 ---
 
 ## 7. 計画（kind と準備の状態）
 
 ### ねらい
-今の節の種類は、題名の正規表現で決まっています（21 か所。下の表）。題名を言い換えると知識・不足・meter が変わります。準備の「省いた」は、`done` と注記「準備を省いた…」で表しています（`descentClosed()`、`prepSkipped()`）。**札（`kind`）と準備の状態（`prep`）を、計画ツリーの本当の欄にします。**
+今の節の種類は、題名の正規表現で決まっています（21 か所。下の表）。題名を言い換えると知識・不足・meter が変わります。準備の「省いた」は、`done` と注記「準備を省いた…」で表しています（`descentClosed()`、`prepSkipped()`）。**札（`kind`）と準備の状態（`prep`）を、計画ツリーの本当の欄にします。** 準備を省くかどうかは LLM が決めます。
 
 ### 形
 ```ts
@@ -533,31 +567,30 @@ export type PlanKind =
   | 'nether' | 'fortress' | 'blaze' | 'pearl' | 'stronghold' | 'end' | 'dragon'
   | 'chest' | 'other';
 
-/** 準備の節の状態（作業の状態 state とは別）。 */
+/** 準備の節の状態（作業の状態 state とは別）。書くのは LLM だけ。 */
 export type PrepState = 'met' | 'skipped' | 'unmet_now';   // 済み・省いた・今は満たせない
 
 export interface PlanNode {        // packages/mind/src/planTree.ts
-  // id, parentId, order, title, state, where?, doneWhen?, note?, reason?, forbid?, caution? は今のまま
+  // id, parentId, order, title, state, where?, doneWhen?, note?, reason?, forbid?, caution? は今のまま（where は今どおり文字列）
   kind?: PlanKind;
-  prep?: { state: PrepState; why?: string; at?: string };   // kind が prep_descent・food など準備の節の時だけ
+  kindRaw?: string;                 // LLM が列に無い kind を書いた時の元の値（kind は other）
+  prep?: { state: PrepState; why?: string; at?: string };
 }
 export interface PlanTree {
   schema: 'shannon.plan-tree.v2';
   revision: number; current: string | null; nodes: readonly PlanNode[];
   promises: readonly PlanPromise[];   // 3 章
 }
-// PlanNodeDraft・plan.update の add/split/set と最初の計画の答え（FIRST_PLAN_SCHEMA_R4 の節）に kind と prep を足す
+// PlanNodeDraft・plan.update の add/split/set・最初の計画の答え（FIRST_PLAN_SCHEMA_R4 の節）に kind と prep を足す。
+// 最初の計画の parent は今どおり string（根は ''）。
 ```
 
 ### 意味
-- **`kind` を付けるのは LLM**です（最初の計画と `plan.update`）。頭は付けません（題名から推しません）。付いていない節は `other` として読みます。
-- **`prep` は準備の節の状態**で、作業の状態（`state`：done・blocked・continue・wait）とは別です。
-  - `met`：準備の条件（`doneWhen`）を満たした。
-  - `skipped`：LLM が省くと決めた、または体がもう地下にいて、準備の前に下りたと分かった（今の `descentClosed()` の場合）。
-  - `unmet_now`：今は満たせない（例：食料の動物がいない。`why` に理由）。
-  - `prep` を書くのは LLM（`plan.update` の set）と、頭の `descentClosed()`（`skipped` だけ）です。
-- **最初の計画・`plan.update`・保存・meter で同じ意味**です。meter（`meterLine()`）は、`prep.state` が `skipped` の節を「省いた」と書き、達成とは数えません。`descentClosed()` は注記ではなく `prep: { state: 'skipped' }` を書きます。
-- **題名で決めていた所は、全部 `kind` で選ぶ形に替えます**。題名を言い換えても、知識・不足・meter・近くの候補が変わらないことを、境界 9 で確かめます。
+- **`kind` を付けるのは LLM**です（最初の計画と `plan.update`）。頭は付けません（題名から推しません。推すのは v1 の読み替えの時だけ）。付いていない節は `other`。列に無い値は `other` として受け、元の値を `kindRaw` と判断の記録に残します（知識が届かない事実として数えられるように）。
+- **`prep` は準備の節の状態**で、作業の状態（`state`）とは別です。**書くのは LLM だけ**です（`plan.update` の set）。頭のコードは `skipped` を書きません（直す物 10。方針 1・2 に合わせる）。
+  - 頭は、準備の条件を満たさないまま下りた時（今の `descentClosed()` が見ている場面）に、**事実を出します**：「準備の節 p3（食料 40・作業台か板 4）は満たしていない（食料 17.6 点）が、y=16 まで下りている」。`skipped` にするか、準備を続けるかは、LLM が plan.update で書きます。
+- **meter**（`meterLine()`）：`skipped` の節は「省いた」と書き、達成とは数えません。`unmet_now` も遅れに数え、満たせない理由を見せます（12 章の決め 9）。
+- **題名で決めていた所は、全部 `kind` で選ぶ形に替えます**。判定の値（段・不足・選ばれる知識・近くの候補）は題名を言い換えても変わりません。表示の文（meter の名前など）は題名を使ってよいので、言い換えると変わります。境界 9 は、この 2 つを分けて確かめます。
 
 | # | 今の所（頭 `services/api/src/surfaces/minecraft/`） | 今の決め方（題名・文） | 新しい形 |
 |---|---|---|---|
@@ -567,139 +600,157 @@ export interface PlanTree {
 | 4 | `minecraftLlmcNode.ts` `isPrepNode()`（`planNowOf`・`followNode`・`openPreparation`・`heldByPreparation`） | `PREP_TITLE` か `food>=` | `kind` が `prep_descent` か `food` |
 | 5 | `minecraftLlmcNode.ts` `chestNodesDone()` | `CHEST_NODE` | `kind === 'chest'` |
 | 6 | `minecraftPlanDone.ts` `isPrepMilestoneNode()` | `/地下の準備/` か `food>=40〜99` | `kind === 'prep_descent'` |
-| 7 | `minecraftPlanDone.ts` `descentClosed()` | doneWhen の `UNDERGROUND_WORK`、#6、`/確かめられない/` | 地下の仕事は `kind` が iron・iron_armor・diamond・obsidian・nether。閉じる時は `prep.state = 'skipped'` |
-| 8 | `minecraftPlanDone.ts` `prepSkipped()` | 注記が「準備を省いた」で始まる | `prep.state === 'skipped'` |
+| 7 | `minecraftPlanDone.ts` `descentClosed()` | doneWhen の `UNDERGROUND_WORK`、#6、`/確かめられない/` | 地下の仕事は `kind` が iron・iron_armor・diamond・obsidian・nether。**閉じずに事実を出す**（上） |
+| 8 | `minecraftPlanDone.ts` `prepSkipped()` | 注記が「準備を省いた」で始まる | `prep.state === 'skipped'`（LLM が書いた物） |
 | 9 | `minecraftLlmcRoad.ts` `isDragonPlan()` | `/ドラゴン\|エンドラ/` | いずれかの節が `kind === 'dragon'`（か最初の計画の種類） |
-| 10 | `minecraftLlmcRoad.ts` `meterLine()`（`doneInPlan`・`prepEnd`・`names`） | #6・#8・#9 | `kind` と `prep` |
-| 11 | `minecraftLlmcRoad.ts` `label`（表示だけ） | 題名の括弧の前 | そのまま（表示だけなので題名でよい） |
-| 12 | `minecraftLlmcV2Knowledge.ts` `stagesFor()`・`STAGE_WHEN` | planNow と plan.next の文を 5 つの正規表現 | 今の節と次の節の `kind` から段（prep・nether・blaze・pearl・end）を引く表 |
+| 10 | `minecraftLlmcRoad.ts` `meterLine()`（`doneInPlan`・`prepEnd`・`names`） | #6・#8・#9 | `kind` と `prep`（表示の名前は題名のまま） |
+| 11 | `minecraftLlmcRoad.ts` `label`（表示だけ） | 題名の括弧の前 | そのまま |
+| 12 | `minecraftLlmcV2Knowledge.ts` `stagesFor()`・`STAGE_WHEN` | planNow と plan.next の文を 5 つの正規表現 | 今の節と次の節の `kind` から段を引く表 |
 | 13 | `minecraftLlmcObsidianWays.ts` `obsidianWays()` | planNow に `/黒曜石/` | 今の節か次の節の `kind` が obsidian・portal |
 | 14 | `minecraftLlmcLiveRewrite.ts` `addPack()` | planNow に `/エンド\|ストロング\|ドラゴン\|アイ/` | `kind` が end・stronghold・pearl・dragon |
 | 15 | `minecraftLlmcReachWords.ts` `nearNeeds()` | plan.next と planNow に FOOD/BED/TRADE の正規表現 | `kind` が food・bed・village |
-| 16 | `minecraftLlmcRoute.ts` `goalOf()` | 表示した planNow の文から座標を切り出す | 節の `where`（構造）を直接読む |
+| 16 | `minecraftLlmcRoute.ts` `goalOf()` | 表示した planNow の文から座標を切り出す | 節の `where` の文字列を、1 つの位置の読み手（`readWhere()`、新しく 1 か所に置く）で読む。表示の文からは読まない（`where` は今も文字列。構造の位置は作らない） |
 | 17 | `minecraftLlmcLiveRewrite.ts` `rewritePlan()` | 表示した文の `p1.2` の形 | 節の id を直接比べる |
 | 18 | `minecraftLlmcUrgent.ts` `planNowTitle()`（表示だけ） | 表示した文の切り出し | 節の題名を直接読む |
 | 19 | `minecraftFirstPlan.ts` `carryDone()` | 題名の同じさ | `kind` と `doneWhen` が同じ（題名は見ない） |
 | 20 | `minecraftFirstPlan.ts` `gateFirst`・`ironFirst`・`DROPPED_BEFORE_GATE` | 種の定数の題名の同じさ | 種の節に `kind` を付け、`kind` で選ぶ |
-| 21 | `minecraftFirstPlan.ts` `planGoal()` | タスクの目的の文（節ではない） | そのまま（節の札の話ではない） |
+| 21 | `minecraftFirstPlan.ts` `planGoal()` | タスクの目的の文（節ではない） | そのまま |
 
 （表は 2026-10-28 に頭 `e4e1174` を調べた物。作る時に、題名・`planNow` の文を正規表現で読む所が残っていないか、もう一度 grep で確かめる。）
 
 ### 誰が書き、誰が読むか
-LLM が `kind`・`prep` を書きます。頭の `descentClosed()` は `prep: skipped` だけを書きます。読むのは頭（上の表の所）と、表示（体の UI MOD は `BodyPlanView` で `kind` を表示に使ってよい。動きには使わない）です。
+LLM が `kind`・`prep` を書きます。頭は書きません（事実の 1 行を出すだけ）。読むのは頭（上の表の所）と、表示（体の UI MOD は `BodyPlanView` で `kind` を表示に使ってよい。動きには使わない）です。
 
 ### 今のコードのどこが変わるか
-- 頭：`packages/mind/src/planTree.ts`（型・`PlanNodeDraft`・`draftNode()`・`applyPlanUpdate()`・`validPlanTree()`・`PLAN_TREE_SCHEMA`）、`mind/action/fca/fcaPlanTools.ts`（op の欄に `kind`・`prep`）、`surfaces/minecraft/minecraftFirstPlan.ts`（`FIRST_PLAN_SCHEMA_R4`・`seedFields()`・`planFromAnswer()`・種の節）、上の表の所、`contracts/bodyControlContract.ts`（`BodyPlanView` に `kind`）。
+- 頭：`packages/mind/src/planTree.ts`、`mind/action/fca/fcaPlanTools.ts`、`surfaces/minecraft/minecraftFirstPlan.ts`、上の表の所、新しい `readWhere()`、`contracts/bodyControlContract.ts`（`BodyPlanView` に `kind`）。
 - 体：`BodyPlanView` の写し（表示だけ）。
 
 ### 移し方（保存されている計画ツリー）
 - v1 のツリーを読んだ時、1 回だけ v2 に読み替えます。
   - `kind` は、今の題名の正規表現（上の表の 1〜15 の物）で推して付けます。正規表現が残るのは、この読み替えの関数 1 つだけです。
-  - 注記が「準備を省いた」で始まる節は `prep: { state: 'skipped' }`、準備の節で `state: done` の物は `prep: { state: 'met' }` です。
+  - 注記が「準備を省いた」で始まる節は `prep: { state: 'skipped' }` にします（v1 の頭が書いた物をそのまま読み替える。新しい頭は書かない）。準備の節で `state: done` の物は `prep: { state: 'met' }` です。
   - `promises: []` を足します。
 - 読み替えた事は、計画の改訂の記録に 1 行残します。
 
 ### 見本
-`plan/first-plan-with-kind.json`、`plan/title-renamed-same-knowledge.json`、`plan/descent-closed-skipped.json`、`plan/migrate-v1-to-v2.json`。
+`plan/first-plan-with-kind.json`、`plan/title-renamed-same-decisions.json`、`plan/descended-without-prep-fact.json`、`plan/migrate-v1-to-v2.json`、`plan/unknown-kind.json`。
 
 ---
 
-## 8. 計測（共通の番号と時間の段）
+## 8. 計測と、判断に届ける事実
 
 ### ねらい
-D1（結果と続け方）と D4（制御）の効きを分けて測ります。そのため、止まってから次の有効な操作までの時間を段に分け、すべての記録を同じ番号でつなぎます。判断の記録（`docs/decision-records-2026-10.md`）を土台にして広げます。
+D1（結果と続け方）と D4（制御）の効きを分けて測ります。止まってから次の有効な操作までを段に分け、記録を同じ番号の組でつなぎます。判断の記録（`docs/decision-records-2026-10.md`）を土台にして広げます。
+あわせて、**判断に届けなければならない事実**（D6 の規範と、実走 45 の失敗の型）を決めます。
 
 ### 形
 ```ts
-/** すべての記録に付ける番号。 */
+/** 記録をつなぐ番号の組。1 つの欄だけではつながらない（失敗した命令と、次に動いた命令は別）。 */
 export interface TraceIds {
   run: string;              // 実走の番号（頭の task id。判断の記録のフォルダ名と同じ）
-  decision?: string;        // 判断の番号（判断の記録の request id、'd0015'）
-  command?: string;         // 命令の番号（MinecraftControlCommand.id）
-  item?: string;            // 列の印（'q15'）
-  hand?: number;            // act の中の手の番号（ActHandLine.i）
-  life: number;             // 命の番号（5 章）
-  obsSeq: number;           // 観測の番号（BodyObservation.sequence）
-  obsAt: string;            // 観測の時刻（BodyObservation.stateAt）
+  decision?: string;        // 判断の番号（'d0015'）
+  command?: string;         // 命令の番号
+  queue?: string; item?: string;   // 列の名前と印（QueueRef）
+  hand?: number;            // act の中の手の番号（ActHandLine.i、1 から）
+  pass?: number;            // repeat の周回
+  life: number;
+  bodyBoot?: string; headBoot?: string;
+  obsSeq: number; obsAt: string;
 }
 
 /** 体が受け取りに付ける時刻（MinecraftControlReceipt に足す）。 */
 export interface BodyTimes {
-  acceptedAt: string;       // 体が命令を受けた
-  startedAt?: string;       // 列から始めた（待った物）
-  lockAt?: string;          // 実行層のロックを取った
-  firstMotorAt?: string;    // 最初の有効な操作（キー・掘り・置き・使うの最初）
-  failedAt?: string;        // 失敗が決まった（止まった手の終わり）
-  endedAt: string;
-  reflexWaitMs?: number;    // afterReflex で待った
+  acceptedAt: string; startedAt?: string; lockAt?: string; firstMotorAt?: string;
+  failedAt?: string; endedAt: string; reflexWaitMs?: number;
+  motorOps?: number;        // この命令が実際に効かせた操作の数（「一度も動かない」の判定に使う）
 }
 
 /** 頭が判断の記録に足す行（events.jsonl）。 */
 type StageRow =
   | { ev: 'received'; at: string; ids: TraceIds; receipt: { outcome: string; unit?: ItemOutcome }; bodyTimes: BodyTimes }
-  | { ev: 'woke'; at: string; ids: TraceIds; why: 'failure' | 'remaining' | 'message' | 'alert' | 'furnace'; predictedRemainingMs?: number }
-  | { ev: 'live'; at: string; ids: TraceIds; raw: string /* 部品の参照 */; shown: string /* 部品の参照 */; dropped: { field: string; count: number; why: string }[] };
+  | { ev: 'released'; at: string; ids: TraceIds; by: 'receipt' | 'cleanup'; ok: boolean }
+  | { ev: 'corrected'; at: string; ids: TraceIds; was: 'unknown'; now: ItemOutcome }
+  | { ev: 'woke'; at: string; ids: TraceIds; why: 'failure' | 'remaining' | 'message' | 'alert' | 'furnace' | 'reflex_capped'; predictedRemainingMs?: number }
+  | { ev: 'live'; at: string; ids: TraceIds; raw: string; shown: string; dropped: { field: string; count: number; why: string }[]; bytes: number }
+  | { ev: 'input_change'; at: string; ids: TraceIds; promptHash: string; thinkingDropped?: { reason: string; count: number }; historyChanged?: 'resume' | 'summary' | 'none' };
 
 /** 手の始まりの記録（体の黒箱に足す種類 'hand_start'）。 */
 export interface HandStart {
-  ids: TraceIds;
-  at: string;
+  ids: TraceIds; at: string;
   pos: ActPos; hp: number; food: number; saturation: number;
-  inventory: string;        // 'cobblestone×20,oak_planks×5,…'（並びは名前順）
-  holder: ControlHolder;    // 4 章
-  lastOps: { at: string; op: string; detail?: string }[];   // 直前の操作 16 件（掘り・置き・道の引き直し・反射）
+  inventory: string;        // 'cobblestone×20,oak_planks×5,…'（名前順）
+  holder: ControlHolder;
+  lastOps: { at: string; op: string; detail?: string }[];   // 直前の操作 16 件
 }
 
-/** サーバーの tick（体が出す出来事 'server.tick'）。 */
-type ServerTick = { kind: 'server.tick'; data: { msptAvg: number; source: 'rcon_tick_query'; sampleSec: 10 } };
+/** サーバーの tick（体の出来事 'server.tick'）。仮の案（12 章の決め 8）。 */
+type ServerTick = { kind: 'server.tick'; data: { raw: string | null; parsedMspt: number | null; frozen: boolean | null; at: string; error: string | null } };
 
-/** 体の版（ポールに足す）。今は観測から推している（minecraftBodyVersion.ts）。 */
+/** 体の版（ポールに足す）。 */
 interface BodyVersion { revision: string; catalogHash: string }
+
+/** 頭の共有の WorkingEvent の種類に足す物（packages/mind/src/workingEvents.ts の WORKING_EVENT_KINDS）。 */
+// 'reflex.capped' | 'server.tick' | 'inventory.changed' | 'utility.near'
 ```
 
-### 意味：時間の段
-止まってから次に動くまでを、次の段に分けます。
+### 意味：共有の WorkingEvent
+- **新しい出来事の種類は、頭の共有の `WORKING_EVENT_KINDS` に先に足します**（確か：`packages/mind/src/workingEvents.ts`。知らない種類は捨てられるのに、その seq は受け取り済みに進むので、体は送り直しを止める。黙って消える）。頭の担当が足し、体の担当はその版の後で送ります（同時に反映するので、反映の時には必ずそろう）。
 
-| 段 | 始まり | 終わり | 誰の時計 |
+### 意味：時間の段
+
+| 段 | 始まり | 終わり | 時計 |
 |---|---|---|---|
-| 1 失敗 → 知らせ | `BodyTimes.failedAt` | 頭の `received.at` | 体・頭（同じ VM なので時計は同じ） |
+| 1 失敗 → 知らせ | `BodyTimes.failedAt` | 頭の `received.at` | 体・頭（同じ VM） |
 | 2 知らせ → 判断の始まり | `received.at` | 判断の記録の `request.at` | 頭 |
 | 3 判断 | `request.at` | `response.at` | 頭 |
 | 4 返事 → 送信 | `response.at` | `sent.at` | 頭 |
-| 5 送信 → 体の受け取り | `sent.at` | `BodyTimes.acceptedAt` | 体 |
-| 6 受け取り → ロック | `acceptedAt`（列で待った物は `startedAt`） | `lockAt` | 体 |
+| 5 送信 → 体の受け取り | `sent.at` | 次の命令の `acceptedAt` | 体 |
+| 6 受け取り → ロック | `acceptedAt`（待った物は `startedAt`） | `lockAt` | 体 |
 | 7 ロック → 最初の有効な操作 | `lockAt` | `firstMotorAt` | 体 |
 
-- 段の和を、止まってから次に動くまでの秒とします。重なる手戻り（列で先読みして送った物）は、壁時計で 1 度だけ数えます。
-- **先読み**：頭が列の残りで起きた時（`woke` の `remaining`）は、見積もった残り（`predictedRemainingMs`）と、実際の終わり（受け取りの `endedAt`）との差を測ります。
-- **live の加工の前後**（D6）：頭は、体の生の観測（部品）と、LLM に見せた live（部品）の両方を記録します。切った項目は `dropped` に、何件・なぜを残します。食べ物の候補は「消さなかった」ではなく「判断に届いた」で確かめます（`shown` に有るか）。
-- **手の始まりの記録**：黒箱の 90 秒の輪とは別に、手ごとの始まりを残します。失敗した act の分は、保留の現場と一緒にファイルに書きます。
-- **サーバーの tick**：体の physics tick とは別です。体は、今ある RCON（`SceneSaver` の command）で 10 秒ごとに `tick query` を送り、平均の mspt を出来事で出します。RCON が無い時は出しません（無いと分かる）。
-- **判断の記録との結び付け**：`request`・`sent` に `TraceIds` を足します。`received`・`woke`・`live` の行を足します。`decision-record show --item q15` で、その項目の受け取りと段の秒まで出るようにします。
-- **大きさ**：判断の記録の上限（1 本 256 MB）の中です。手の始まりの記録は 1 件 1 KB 前後で、45 分で 2,000 件なら約 2 MB（見込み）です。
+- 段 1 は失敗した命令、段 5〜7 は次の命令の物です。**つなぐのは `run`・`life`・判断の番号（失敗を読んだ判断 → その判断が出した命令）の組**で、`command` だけではつながりません。
+- 重なる手戻り（先読みで送った物）は、壁時計で 1 度だけ数えます。
+- **先読み**：`woke` の `remaining` の時は、見積もった残りと実際の終わりの差を測ります。
+- **命令の種類ごとの証拠の組**（境界の判定で使う）：
+  - 始める前に断った：受け取り（`not_run` と理由）だけ。`hand_start` は無くてよい。
+  - already：受け取りと手の行。
+  - 普通の操作：受け取り・`BodyTimes`（`lockAt`・`firstMotorAt`・`motorOps`）・`hand_start`。
+  - unknown：受け取りと、片付けの受け取り（`released` の行）。
+- **入力の変化を分けて記録します**（`input_change`）：プロンプトのハッシュ、thinking の破棄（実走 45 の `prefix_binding_mismatch` 16 回）、再開による履歴の変化。前後を比べる時は、これらを D1・D4 の効果と混ぜません。
+- **サーバーの tick**：体は、今ある RCON（`SceneSaver` の command）で `tick query` を送り、生の応答・取った時刻・失敗をそのまま残します。止まっている時（frozen）や読めない時を 0 ms にしません。間隔は 10 秒の仮の案で、負荷を測って決めます。
+- **大きさ**：受け取りの結果の JSON は今 16,000 字が上限です（確か：`minecraftControlValidation.ts`、`actReport.ts` は地図を落としても上限内になる保証が無い）。出来事・周回の行が増えるので、体は上限の手前で「古い周回の行・出来事を数だけ残して落とす」を決まった順で行い、落とした数を書きます。境界 10 は最大の長さで試します。
+
+### 意味：判断に届ける事実（D6 の規範と、実走 45 の失敗の型）
+規範は「どの入力の版（普通・急ぎ・圧縮の後）でも、最後の要求に残す物」です。頭はこれを満たすように live を作り、`live` の行で確かめます。
+
+| 事実 | 普通 | 急ぎ | 圧縮の後 | 元の件 |
+|---|---|---|---|---|
+| 体力・満腹・食べられる物と回復の見込み | 残す | 残す | 残す | 実走 43 の瀕死 |
+| 直近 10 秒に受けた打ちの数と量 | 残す | 残す | 残す | 実走 45 の +929 |
+| 今の持ち主（`state.control.holder`）と命の番号 | 残す | 残す | 残す | D4・D5 |
+| 約束の 1 行（4 つまで） | 残す | 残す | 残す | 3 章 |
+| 列の今（項目・状態・残りの見込み）と、手の予定の効果（行き先・置く・掘る・作る物） | 残す | 残す | 残す | 実走 45 の、同じ行き先の go を 4 秒後に二重に出した件。目的をコードで推して重複を断ることはしない |
+| 持ち物の空き・次の手で増える見込み・満杯の理由 | 残す | 残す | 1 行 | 実走 45 の、満杯でダイヤのツルハシが作れず拾えなかった件。何を捨てるかは LLM が決める |
+| 近くの食べ物の候補（動物と魚。24 m 以内。食料が 40 点未満の時は少なくとも 3 件） | 残す | 3 件 | 3 件 | D6（鱈・鮭が判断に届かなかった） |
+| 代わりの条件が成り立たなくなった事 | 1 度出す | 1 度出す | — | 3 章 |
+| 準備の節を満たさないまま下りた事 | 1 度出す | — | — | 7 章 |
+| go・vertical の止まった位置からの残りと、道探しの先端までの残り | 残す | 残す | 残す | 保留 1 |
+| 置きが ok の後で世界が違っていた事の訂正（block の更新・押し戻し・確かめた段数の直し） | 1 度出す | 1 度出す | — | 保留 3 |
+| 再開の時の、前の結果・出し直したか・新旧の命令の関係 | 1 度出す | 1 度出す | — | 保留 1〜9 の再開 |
+
+- 距離・件数の数（24 m・3 件など）は決めた値で、効き目は確かめていません。「消さなかった」ではなく「最後の要求に届いた」で確かめます（境界 10）。
+- **再開の契約**：再開した時、頭は前の結果（`skipped` か、出し直した結果）を先に届け、その後で新しい判断を求めます。出し直した命令は前の命令の印（`resumeOf`）を持ち、結果の文に「保留した q12 の出し直し」と書きます。
+- **近い go の時間切れ**（保留 2：4 段上の畑への go が、道が見つかった直後に 60 秒に着いた）は vertical の外に残ります。go の結果に、止まった位置からの残り・道探しの見込み・使った秒を出し、続けるかは LLM が決めます。
 
 ### 今のコードのどこが変わるか
-- 頭：
-  - `infra/decisionRecords/*`（行の種類・`TraceIds`）
-  - `surfaces/minecraft/minecraftControl.ts`（`received` の行、受け取りの `bodyTimes`）
-  - `surfaces/minecraft/minecraftLlmcQueue.ts`（`woke` の行、先読みの見積もり）
-  - live を作る所（`minecraftLlmcLive.ts`・`minecraftLlmcLiveRewrite.ts`：`live` の行）
-  - `minecraftBodyVersion.ts`（ポールの `bodyVersion` を読む）
-  - `scripts/decision-record.ts`（show に段）
-- 体：
-  - `controlLoop.ts`（`acceptedAt`・`startedAt`）
-  - `nativeBody.ts`（`lockAt`・`reflexWaitMs`）
-  - `execution/ActionExecution.ts`（`firstMotorAt` をモーターの最初の操作で）
-  - `instantSkills/act.ts`（`failedAt`・手の始まり）
-  - `utils/blackbox.ts`（`hand_start` の種類）
-  - `utils/sceneSave.ts`（`tick query`）
-  - ポールの `bodyVersion`
+- 頭：`packages/mind/src/workingEvents.ts`（種類）、`infra/decisionRecords/*`（行の種類・`TraceIds`）、`surfaces/minecraft/minecraftControl.ts`（`received`・`released`・`corrected`）、`surfaces/minecraft/minecraftLlmcQueue.ts`（`woke`、先読み）、live を作る所（`minecraftLlmcLive.ts`・`minecraftLlmcLiveRewrite.ts`・`minecraftLlmcUrgent.ts`・`minecraftLlmcReachWords.ts`・`minecraftLlmcReadiness.ts`・`minecraftLlmcPack.ts`）、`minecraftBodyVersion.ts`、`scripts/decision-record.ts`。
+- 体：`controlLoop.ts`（`acceptedAt`・`startedAt`）、`nativeBody.ts`（`lockAt`・`reflexWaitMs`）、`execution/ActionExecution.ts`（`firstMotorAt`・`motorOps`）、`instantSkills/act.ts`（`failedAt`・手の始まり）、`utils/blackbox.ts`（`hand_start`）、`utils/sceneSave.ts`（`tick query`）、`utils/actReport.ts`（大きさの上限の落とし方）、ポールの `bodyVersion`。
 
 ### 移し方
-判断の記録の古い本は、新しい行が無い物として読みます（`decision-record` は無い段を「無し」と出す）。
+判断の記録の古い本は、新しい行が無い物として読みます。
 
 ### 見本
-`measure/trace-one-command.json`、`measure/hand-start.json`、`measure/live-before-after-fish.json`、`measure/prefetch-woke.json`。
+`measure/trace-ids.json`、`measure/hand-start.json`、`measure/evidence-by-command-kind.json`、`measure/live-before-after-fish.json`、`measure/urgent-max-input.json`、`measure/prefetch-woke.json`、`measure/inventory-full-facts.json`、`measure/queue-and-effects-in-input.json`、`measure/input-change.json`。
 
 ---
 
@@ -707,142 +758,163 @@ interface BodyVersion { revision: string; catalogHash: string }
 
 ### 2 種類の見本
 1. **契約の見本**（手書き。この branch で作った物）
-   - 契約ごとの入出力の実物を、実走の場面から作りました。
-   - 頭と体に同じ物を置きます。頭は `services/api/tests/fixtures/continue/`、体は `backend/tests/fixtures/continue/` です。
-   - `manifest.json` に、各ファイルの sha256 と契約の版があります。
-   - 両側のテストは、まず自分の写しが manifest と合うかを確かめます。local-gate は、体と頭の両方の木を持っているので、2 つの写しが同じかを確かめます（違えば落とす）。
-   - 見本は「何を入れたら何が出るべきか」の約束です。各担当は、自分の側の関数をこの見本で試します。
+   - 契約ごとの入出力の実物を、実走の場面から作りました。頭と体に同じ物を置き、`manifest.json` に各ファイルの sha256 と契約の版があります。
+   - 両側のテストは、まず自分の写しが manifest と合うかを確かめます。local-gate は、体と頭の 2 つの写しが同じかを確かめます（違えば落とす）。
+   - 見本は「何を入れたら何が出るべきか」の約束です。各担当は、自分の側の関数をこの見本で試します。判定表（`continue/dependency-table.json`）は、両側の実装がそのまま読んで試験します。
 2. **体が作った実物**（作る物。実装の時）
-   - 実走 39 の教訓（体の本当の 11 択の形と、頭の受け入れが食い違った）から、**手書きの見本同士を合わせるだけにしません**。
+   - 実走 39 の教訓（体の本当の形と、頭の受け入れが食い違った）から、**手書きの見本同士を合わせるだけにしません**。
    - 体の担当は、体のビルドから次を作る台本 `backend/scripts/lab/continue-produce.ts` を書きます。
-     - **catalog**：今の `catalog-contract.mjs --json` と同じ作り方（`bodySkillCatalog(...)` の `definitions`）。
-     - **受け取り**：契約の見本の `input`（act・封筒・場面）を、体の本物のコード（`runAct()`・`NativeCommonFcaBody.execute()`・`CommonFcaControlLoop`）に通して出た受け取りと観測。場面が要る物（vertical・制御・死）は、再生の台か隔離ラボで本物のサーバーに通します（10 章）。
+     - **catalog**：今の `catalog-contract.mjs --json` と同じ作り方。
+     - **受け取り**：契約の見本の `input` を、体の本物のコードに通して出た受け取りと観測。場面が要る物は、再生の台か隔離ラボで本物のサーバーに通します（10 章）。
    - 出力は `backend/contracts/continue/produced/<見本の名>.json` です。各ファイルに、体の版（git の rev）・作った台本と台・入力の見本の sha256 を書きます。
-   - 頭の担当は、`scripts/sync-body-produced.sh <体の rev>` で、それを `services/api/tests/fixtures/continue/produced/` へ写します（版つき）。頭のテスト `continueProduced.test.ts` は、その実物を、頭の本物の読み手（`readActResult()`・`settle()`・live の 1 行・帳簿）に通します。
-   - local-gate の head の段に（5）を足します。指定の体の rev から、オフラインで作れる物（catalog と、偽の bot で通せる部品の出力）をその場で作り、頭に写してある実物と同じか（古くないか）を確かめます。場面が要る物は、作った時の rev と台を書いた写しを使い、体の rev が進んだら作り直しを求めます（gate は「体の rev と写しの rev が離れている」を警告します）。
+   - 頭の担当は、`scripts/sync-body-produced.sh <体の rev>` で、それを `services/api/tests/fixtures/continue/produced/` へ写します。頭のテスト `continueProduced.test.ts` は、その実物を、頭の本物の読み手に通します。
+   - **版の合わない実物は、通しの合格に使いません**（直す物 9。警告ではなく不合格）。local-gate の head の段に（5）を足し、指定の体の rev から作れる物はその場で作り直して比べ、場面が要る物は作った rev が指定の rev と同じかを確かめます。違えば不合格です。
 
-### 見本の一覧（この branch の物）
-`services/api/tests/fixtures/continue/manifest.json` を見てください。契約ごとに 3〜5 個、計 33 個と、通しの確かめの表 `e2e/boundaries.json`（10 章を機械で読める形にした物）です。どれも次の形です。
+### 見本の一覧
+`services/api/tests/fixtures/continue/manifest.json` を見てください。版 2 で作り直し、契約ごとに 5〜10 個です。どれも次の形です。
 ```json
-{ "contract": "result", "version": 1, "scene": "…", "source": "実走 43 +2,123（run43-report.md 105 行）",
-  "known": ["分かっている事"], "decided": ["この契約で決めた事"],
+{ "contract": "result", "version": 2, "scene": "…", "source": "実走 43 +2,123（run43-report.md 105 行）",
+  "known": ["確か: 記録から確かめた事"], "decided": ["決め: この契約で決めた事"], "hypothesis": ["仮説: 確かめていない事"],
   "input": { }, "expected": { }, "checks": ["頭の試験で確かめる事", "体の試験で確かめる事"] }
 ```
-- `known` は記録から確かめた事、`decided` は契約で決めた事です。
 - `expected` の文（LLM が読む文）は、意味が同じなら言い回しを変えてよい物です。`checks` に「この語を含む」と書いた物だけを、テストで決まった文字として確かめます。
 
 ---
 
-## 10. 通しの確かめの骨組み（10 の境界）
+## 10. 通しの確かめの骨組み（10 の境界と、継ぎ目の場面）
 
-各担当の関数の合格数では判定しません。**同じ命令の番号（`TraceIds.command`）で、受け取り → 実際の操作 → 中断 → 解放 → 頭での結果の読みまでつながった記録**で判定します。
-記録は、判断の記録（頭）・受け取り（`BodyTimes`）・黒箱（`hand_start` と出来事）です。判定は、1 本の台本 `tools/continue-verify/judge.ts`（頭のリポジトリ。作るのは頭の担当）が、3 つを `command` で突き合わせて行います。
+各担当の関数の合格数では判定しません。**記録を番号の組（`TraceIds`）でつなぎ、受け取り → 実際の操作 → 中断 → 解放 → 頭での結果の読みまでつながった証拠**で判定します。命令の種類ごとに要る証拠の組は 8 章のとおりです（始めなかった命令に `hand_start` を求めない）。
+記録は、判断の記録（頭）・受け取り（`BodyTimes`）・黒箱（`hand_start` と出来事）です。判定は、台本 `tools/continue-verify/judge.ts`（頭のリポジトリ。作るのは頭の担当）が行います。
 
 ### 台
-- **A 再生の台**（VM、`run-replay.sh` と `scene-case.py`）：本物の体（`runAct()`・道探し）と、写したワールド。頭は台本の代役。vertical・続け方・約束の消費を見ます。
-- **B 隔離ラボ**（VM、本物のサーバー・本物の bot・本物の反射・盾・道探し。`run-incident-lab.sh` と `run-hands-live.ps1` を広げる）：**D4 はここで確かめます。** 今の保留の通し（`minecraftHoldResumeLab.ts`）は、act とサーバーが代役なので、D4 の合格には使いません。敵は `summon` で置き、`/kill` で死なせ、`/tp` と `/execute in` で次元を移ります。
-- **C 本物の頭の通し**（PC か VM、`minecraftHoldResumeLab.ts` を広げた物。頭は本物、モデルは台本）：B の体と組み、頭の読み・帳簿・判断の破棄（life_changed）・不明の扱いを見ます。
+- **A 再生の台**（VM、`run-replay.sh` と `scene-case.py`）：本物の体（`runAct()`・道探し）と、写したワールド。vertical・続け方・約束の消費を見ます。
+- **B 隔離ラボ**（VM、本物のサーバー・本物の bot・本物の反射・盾・道探し。`run-incident-lab.sh` と `run-hands-live` を広げる）：**D4 はここで確かめます。** 今の保留の通し（`minecraftHoldResumeLab.ts`）は act とサーバーが代役なので、D4 の合格には使いません。敵は `summon`、死は `/kill`、次元は `/execute in` で作ります。
+- **C 本物の頭の通し**（`minecraftHoldResumeLab.ts` を広げた物。頭は本物、モデルは台本）：B の体と組み、頭の読み・帳簿・判断の破棄・不明の扱いを見ます。
 - **D 入力の取り出し**（API を呼ばない）：頭の `recordedClient` を、送らずに要求のバイトを返す形で使い、最後の要求に必要な物が残るかを見ます。
-- **E Sonnet の試験**（上限 ¥500。この骨組みの外。測りの実走の前に）。
+- **E Sonnet の試験**（上限 ¥500。この骨組みの外）。
 
 ### 10 の境界
 
-| # | 境界 | 台 | 場面（見本） | 判定（同じ command の記録で） |
-|---|---|---|---|---|
-| 1 | 結果と列 | B＋C | `result/r43-reflex-ate-first`、`continue/queue-item-depends` | 反射が先に食べた後、eat は `already`。`dependsOn: []` の後ろの項目は始まり（`startedAt` 有り）、頼る項目だけ `droppedBecause` |
-| 2 | 途中の成果 | A | `vertical/r45-hold5-shaft-down-to-diamond`、`vertical/r45-hold7-pillar-up` | 途中まで掘った vertical を `seconds` で止め、`progress.done` と黒箱の dig の数が合う。次の vertical が `progress.at` から始まり、掘った段を掘り直さない |
-| 3 | 約束と消費 | A＋C | `promise/*` | 作る途中の材料・燃料・作業台の設置と回収・食事をまたいで、帳簿の `have` と観測の持ち物が毎回合う（ずれ 0） |
-| 4 | すぐの引き継ぎ | B＋C | `control/r45-attack-waited-6-4s`、`control/different-target`、`control/high-priority-not-taken` | 同じ相手：act の `lockAt − acceptedAt` が 300 ms 以下、`handover.confirmed`。別の敵：melee が次の手を始めない。溶岩・息：奪わない。盾：引き継ぎの間に構えが外れない（古い処理の禁止） |
-| 5 | 死と非同期 | B＋C | `life/death-at-each-moment` | 実行中・反射待ち・列待ち・LLM の返事待ちの 4 つの瞬間に `/kill` し、生き返った後に、古い life の command の `firstMotorAt` が 1 つも無い |
-| 6 | 古い持ち主 | B | `control/stale-owner-cleanup` | 新しい持ち主が始めた後に、古い処理の片付けが走っても、新しい持ち主のキー・盾・道探しの行き先が消えない（`token` の記録） |
-| 7 | 次元と復活 | B | `life/portal-is-not-death` | ポータルの移りで life が変わらない。死んで別の次元に生き返った時は life が 1 増え、前の次元の座標の act は使われない |
-| 8 | 通信と再起動 | B＋C | `result/unknown-receipt` | 受け取りの紛失・重複のポール・接続の交代・lease の交代で、同じ command の `firstMotorAt` が 2 回無い。`unknown` の項目が自動で出し直されない。約束の帳簿に同じ消費が 2 回無い |
-| 9 | 計画 | C | `plan/*` | `kind`・`prep` が、最初の計画 → `plan.update` → 保存 → 頭の再起動 → 読み戻しで残る。題名を言い換えても、段の知識・不足・meter・近くの候補の文が同じ |
-| 10 | 実際の LLM の入力 | D | `measure/live-before-after-fish`、急ぎの版の見本 | 情報の多い急ぎの live でも、食料・体力・持ち主・命の番号・約束の 1 行が、最後の要求のバイトに残る |
+| # | 境界 | 台 | 判定（番号の組でつないだ記録で） |
+|---|---|---|---|
+| 1 | 結果と列 | B＋C | 反射が先に食べた後、eat は `already`。`dependsOn: []` の項目に `startedAt` があり、頼る項目だけ `droppedBecause: depends_failed` |
+| 2 | 途中の成果 | A | 途中で止めた vertical の `progress.done`（確かめた段数）と、黒箱の移動の段数が合う。掘った数・置いた数は、それぞれ黒箱の dig・place の数と照らす（段数と掘りの数を等しいとは見ない）。次の手が `progress.at` から始まり、掘った段を掘り直さない |
+| 3 | 約束と消費 | A＋C | 作る途中の材料・燃料・作業台の設置と回収・食事をまたいで、帳簿の `have` と観測の持ち物が毎回合う。同じ出来事の id が 2 度反映されない |
+| 4 | すぐの引き継ぎ | B＋C | 同じ相手：引き継いだ act の `handover.confirmed` と、盾が下がらない（`shield: kept`）。別の敵：melee が次の手を始めない。溶岩・息・食事：奪わない |
+| 5 | 死と非同期 | B＋C | 実行中・反射待ち・列待ち・LLM の返事待ちの各瞬間に `/kill` し、**死の時刻より後に、古い life の命令が効かせた操作が 0 件**。待っていた古い命令は 1 つも始まらない（死の前の操作は数えない） |
+| 6 | 古い持ち主 | B | 新しい持ち主が始めた後に、古い処理の片付けが走っても、新しい持ち主のキー・盾・道探しの行き先が消えない（motor port の断りの記録） |
+| 7 | 次元と復活 | B | ポータルで life が変わらない。移る前の観測で作った待ちの項目は `dimension_changed` で始まらない。死んで別の次元に生き返った時は life が 1 増える |
+| 8 | 通信と再起動 | B＋C | 次の台本をそれぞれ起こす：受け取りの取りこぼし、同じ poll の重複、体のつなぎ直し、頭の再起動、体の再起動、lease の交代。どれでも、同じ命令の `motorOps` が 2 回の実行に分かれない、不明の項目が自動で出し直されない、帳簿に同じ出来事が 2 度入らない |
+| 9 | 計画 | C | `kind`・`prep` が、最初の計画 → `plan.update` → 保存 → 頭の再起動 → 読み戻しで残る。題名の言い換えの前後で、判定の値（段・不足・選ばれる知識・近くの候補）が同じ。表示の文は別に照らす |
+| 10 | 実際の LLM の入力 | D | **最大の長さの入力**（急ぎの版・情報の多い live・長い結果と帳簿）でも、8 章の規範の表の物が最後の要求のバイトに残る |
+
+### 継ぎ目の場面（体と頭の担当の継ぎ目。Codex の推し）
+- 体が独立な q2 を始めた後に、頭へ q1 の失敗が届く（頭が q2 を取り消さない）。
+- `onFail: continue` の失敗へ後続が明示で頼る。3 つの項目の間接の依存。
+- 不明を LLM へ見せた後に、片付けの成功・失敗、遅れた結果、同じ結果の再受信が続く。
+- 約束の改訂・解除と、古い rev で送った act の結果が前後する。
+- act の外の食事、途中材の作りと消費、手の中断と反射の食事、repeat の複数の周回。
+- 引き継ぎの判定の間に、死・低体力・別の安全の反射が取る。
+- 同じ life でポータルを移った後に、前の次元の別の項目が待っている。
+- 最大の長さの結果・帳簿・急ぎの live を、本物の受信の検査と最後の要求のバイトまで通す。
 
 ### 台本の骨組み（`tools/continue-verify/`、頭の担当が作る）
 ```
 continue-verify/
-  scenes/            境界ごとの台本（B の lab の手順: summon・kill・tp、C の頭の台本のモデル）
+  scenes/            境界と継ぎ目の場面ごとの台本（B の lab の手順: summon・kill・tp・つなぎ直し、C の頭の台本のモデル）
   run-boundary.sh    1 つの境界を、指定の頭・体の rev で回す（VM）
   collect.sh         判断の記録・受け取り・黒箱を 1 つのフォルダに集める
-  judge.ts           command でつないで、上の表の判定をする。合否と、つながらなかった command の一覧を出す
+  judge.ts           番号の組でつないで判定する。合否と、つながらなかった命令の一覧を出す
   report.md          境界ごとの結果（rev・台・合否・つながった数）
 ```
-- 境界・台・使う見本・合格の条件は、見本の `e2e/boundaries.json` にも同じ物があります（`judge.ts` はこれを読む）。
-- 合格は「10 の境界すべてで、判定に使った command が全部つながり、条件を満たす」です。
-- つながらない command が 1 つでもあれば不合格です（計測の穴なので）。
+- 境界・台・使う見本・合格の条件・証拠の組は、見本の `e2e/boundaries.json` にも同じ物があります（`judge.ts` はこれを読む）。
+- 合格は「10 の境界と継ぎ目の場面すべてで、判定に使った命令が全部つながり、条件を満たす」です。つながらない命令が 1 つでもあれば不合格です。
 
 ---
 
 ## 11. 担当の分け方と作る順
 
 ### 体の担当（`Shannon` リポジトリ）
-- `backend/src/services/minebot/instantSkills/act.ts`（結果の 2 軸・続け方・delta・命の照らし・vertical の配線・手の始まり）
-- `backend/src/services/minebot/utils/actReport.ts`、`utils/actHandRules.ts`、`utils/actLabel.ts`
-- `backend/src/services/minebot/utils/primitives/vertical.ts`（新）、`tunnelWalk.ts`・`shaftDown.ts`（部品を使うだけ。変えるなら最小）
-- `backend/src/services/minebot/utils/primitives/*.ts`（already の判定）
-- `backend/src/services/minebot/integration/commonFca/nativeBody.ts`、`controlLoop.ts`、`bodyQueue.ts`、`bodyEvents.ts`、`minecraftControlContract.ts`（写し）、`continueContract.ts`（新、写し）
-- `backend/src/services/minebot/execution/ActionExecution.ts`、`SkillExecutor.ts`
-- `backend/src/services/minebot/utils/floorReflexes.ts`、`combatOwner.ts`、`blackbox.ts`、`sceneSave.ts`、`incidents.ts`（読むだけの足し）、`utils/life.ts`（新）
+- `instantSkills/act.ts`（結果・続け方・失効の照らし・持ち物の出来事・vertical の配線・手の始まり）
+- `utils/actReport.ts`、`utils/actHandRules.ts`、`utils/actLabel.ts`
+- `utils/primitives/common.ts`（`StepOutcome`）と各 primitive（progress・出来事・already・attack の target_lost）
+- `utils/primitives/vertical.ts`（新）、`utils/tunnelWalk.ts`・`utils/shaftDown.ts`（部品に分ける）
+- `integration/commonFca/nativeBody.ts`、`controlLoop.ts`、`bodyQueue.ts`、`bodyEvents.ts`、`minecraftControlContract.ts`（写し）、`continueContract.ts`（新、写し）
+- `execution/ActionExecution.ts`、`SkillExecutor.ts`（持ち主の数え方・片付けの理由・取る時の確かめ・ロック待ちの失効）
+- `utils/floorReflexes.ts`、`utils/combatOwner.ts`、`utils/shieldBlock.ts`、`ReflexLedger`（反射の出来事）
+- `utils/blackbox.ts`、`utils/sceneSave.ts`、`utils/incidents.ts`（読むだけの足し）、`utils/life.ts`（新）
+- 観測の `state.world.utilities`（条件の `near` の材料）
 - `backend/scripts/lab/continue-produce.ts`（新）、隔離ラボの場面（`backend/scripts/lab/`）
-- 体のテストと見本の写し（`backend/tests/fixtures/continue/`）
+- 体のテストと見本の写し
 
 ### 頭の担当（`shannon-ios` リポジトリ）
-- `services/api/src/contracts/minecraftActContract.ts`、`minecraftActShortHands.ts`、`minecraftActHandRules.ts`、`minecraftActTime.ts`、`minecraftControlContract.ts`、`bodyControlContract.ts`、`continueContract.ts`（新）
-- `services/api/src/surfaces/minecraft/minecraftControl.ts`、`minecraftControlValidation.ts`、`minecraftLlmcQueue.ts`、結果の文の所
-- `services/api/src/surfaces/minecraft/minecraftLlmcLive.ts`、`minecraftLlmcLiveRewrite.ts`、`minecraftLlmcUrgent.ts`、`minecraftLlmcReadiness.ts`、`minecraftLlmcNode.ts`、`minecraftPlanDone.ts`、`minecraftLlmcRoad.ts`、`minecraftLlmcV2Knowledge.ts`、`minecraftLlmcObsidianWays.ts`、`minecraftLlmcReachWords.ts`、`minecraftLlmcRoute.ts`、`minecraftFirstPlan.ts`、`minecraftLlmcPromises.ts`（新）
-- `services/api/src/mind/action/fca/fcaPlanTools.ts`、`fcaRunner.ts`
-- `services/api/src/infra/decisionRecords/*`、`scripts/decision-record.ts`、`minecraftBodyVersion.ts`
-- **共有の `packages/mind/src/planTree.ts`**：頭の担当が持ちます（頭のリポジトリの中にあり、体は表示の写し `BodyPlanView` しか読まないため）。
-- `tools/continue-verify/`（新）、`scripts/sync-body-produced.sh`（新）、`continueProduced.test.ts`（新）
-- 頭のテストと見本の写し（`services/api/tests/fixtures/continue/`）
+- `contracts/minecraftActContract.ts`、`minecraftActShortHands.ts`、`minecraftActHandRules.ts`、`minecraftActTime.ts`、`minecraftControlContract.ts`、`bodyControlContract.ts`、`continueContract.ts`（新）
+- `surfaces/minecraft/minecraftControl.ts`（受け取り・片付け・訂正）、`minecraftControlValidation.ts`（上限 56）、`minecraftLlmcQueue.ts`（項目の状態・印の名前・依存・replace）、`minecraftReflexAdapter.ts`（context の life）、`minecraftConditions.ts`（near）
+- live の各ファイル（`minecraftLlmcLive.ts`・`minecraftLlmcLiveRewrite.ts`・`minecraftLlmcUrgent.ts`・`minecraftLlmcReachWords.ts`・`minecraftLlmcReadiness.ts`・`minecraftLlmcPack.ts`）
+- 計画（`minecraftLlmcNode.ts`・`minecraftPlanDone.ts`・`minecraftLlmcRoad.ts`・`minecraftLlmcV2Knowledge.ts`・`minecraftLlmcObsidianWays.ts`・`minecraftLlmcRoute.ts`・`minecraftFirstPlan.ts`、新しい `readWhere()`）、帳簿（`minecraftLlmcPromises.ts`、新）
+- `mind/action/fca/fcaPlanTools.ts`（帳簿の入口）、`fcaRunner.ts`（破棄）
+- `infra/decisionRecords/*`、`scripts/decision-record.ts`、`minecraftBodyVersion.ts`
+- **共有の `packages/mind/src/planTree.ts` と `packages/mind/src/workingEvents.ts`**：頭の担当が持ちます（頭のリポジトリの中にあるため）。
+- `tools/continue-verify/`（新）、`scripts/sync-body-produced.sh`（新）、`continueProduced.test.ts`（新）、local-gate の段（5）
+- 頭のテストと見本の写し
 
 ### 共有の物と持ち主
 | 物 | 持ち主 | 変え方 |
 |---|---|---|
-| この契約の文書（3 か所） | 契約の担当（この文書を書いた者）。担当が決まっていなければ取りまとめ役 | 3 か所を同時に。版を上げる |
-| 契約の見本（両側の写しと manifest） | 同上 | 両側を同時に。gate が違いを落とす |
-| 体が作った実物（`produced/`） | 体の担当が作り、頭の担当が写す | 体の rev ごとに作り直す |
-| `packages/mind/src/planTree.ts` | 頭の担当 | 体は表示の写しだけを追う |
-| `minecraftControlContract.ts` の写し | 頭の担当が元、体の担当が写し | 今と同じ（両側を同時に） |
+| この契約の文書（3 か所） | 契約の担当。決まっていなければ取りまとめ役 | 3 か所を同時に。版を上げる |
+| 契約の見本と判定表（両側の写しと manifest） | 同上 | 両側を同時に。gate が違いを落とす |
+| 体が作った実物（`produced/`） | 体の担当が作り、頭の担当が写す | 体の rev ごとに作り直す。版が合わなければ不合格 |
+| `packages/mind/src/planTree.ts`・`workingEvents.ts` | 頭の担当 | 体は表示の写しと、出来事の種類の表を追う |
+| `minecraftControlContract.ts` の写し | 頭の担当が元、体の担当が写し | 今と同じ |
 | local-gate の（5）（`Syzygy/tools/shannon-release/`） | 頭の担当 | 体の担当に見せてから |
 
 ### 作る順と受け渡し
-1. **契約と見本**（この branch）。Codex に見せて直す。
-2. **計測・D4・計画の状態**（同時に進める）
-   - 体：`TraceIds`・`BodyTimes`・`hand_start`・`server.tick`・`bodyVersion`、`state.control` と `token`、引き継ぎ・上限のつなぎ、命の番号。
-   - 頭：判断の記録の行、`kind`・`prep`・v2 の読み替え、題名の正規表現の置き換え（7 章の表）、`life_changed` の破棄、急ぎの live の欄。
-   - **受け渡し**：体は、命の番号と `state.control` が入った観測の実物（`produced/`）を頭へ。頭は、`context.life` を入れた命令の実物を体へ（体の試験の入力に）。
-3. **D1 を両側でつなぐ**
-   - 体：`HandOutcome`・`ActOutcome`・`ItemOutcome`・already の判定・`dependsOn`・`admit`。
-   - 頭：`readActResult()`・`settle()`/`drop()`・`receiptOf()` の不明・`dependsOn` の読み書き・結果の文。
+1. **契約と見本**（この branch）。版 2 をもう一度 Codex に見せる。
+2. **計測・D4・計画の状態・失効**（同時に進める）
+   - 体：`TraceIds`・`BodyTimes`・`hand_start`・`server.tick`・`bodyVersion`、`state.control`、持ち主の数え方と片付けの理由、引き継ぎ・上限のつなぎ、命の番号と失効の照らし。
+   - 頭：共有の出来事の種類、判断の記録の行、`kind`・`prep`・v2 の読み替え、題名の正規表現の置き換え、破棄（life・次元・つなぎ直し）、急ぎの live の規範の欄。
+   - **受け渡し**：体は、命の番号と `state.control` が入った観測の実物を頭へ。頭は、`context.life`・`headBoot`・`madeIn` を入れた命令の実物を体へ。
+3. **D1 と続け方を両側でつなぐ**
+   - 体：結果の 2 軸・判定表・列の印・admit・replace。頭：受け取りの読み・項目の 2 つの状態・片付け・訂正・判定表・replace。
    - **受け渡し**：体は `result/*`・`continue/*` の見本を本物の `runAct()` に通した受け取りを `produced/` に出す。頭はそれで `continueProduced.test.ts` を通す。
 4. **D2・D3・D6**
-   - 体：`delta`・`ReflexDelta`、vertical。
-   - 頭：帳簿・live の 1 行・`uses`・`plan.update` の op、vertical の短い書き方と見積もり、live の加工の前後の記録（D6）。
+   - 体：持ち物の出来事・反射の出来事・`utilities`、vertical。頭：帳簿・live の 1 行・`uses` と rev・入口、vertical の読み書きと見積もり、判断に届ける事実の規範。
    - D8（精錬の並べ方）は作らず、Sonnet の試験で確かめる。
-   - **受け渡し**：catalog（vertical の欄が入った物）を `produced/` へ。gate の（4）（catalog と頭の検査）と（5）が通ること。
+   - **受け渡し**：catalog（vertical の欄が入った物）を `produced/` へ。gate の（4）と（5）が通ること。
 5. **通しの確かめ**（10 章）と **Sonnet の試験**。合格の後に、1 つの版として反映する（スイッチは付けない）。
 
 各段の終わりに、両側の local-gate と、その段で使える境界の通しを回します。段は作る順のための物で、反映は最後に 1 回だけです。
 
 ---
 
-## 12. 決めきれなかった所（取りまとめ役か Codex に判断してほしい所）
+## 12. 決めた事・決めきれなかった所・直さなかった指摘
 
-1. **手の欄の数**：足す 5 欄で体の Hand が 48 欄になり、頭の上限 48 にちょうど当たります。上限を 56 に上げる案にしました。48 という上限は、私たちが決めた数（実走 39 の時に「余裕を見て 48」）です。モデル側の上限から来た物かは、確かめていません。
-2. **命の番号の置き場**：体のファイル（`life.json`、ワールドの id ごと）にしました。案は 2 つあります。
-   - サーバーの統計（`minecraft:deaths`）を読めば、体を作り直しても狂いません。ただし mineflayer で読むには要求が要ります。
-   - 接続ごとに 0 から数える形は、体の再起動の直後に古い命令と取り違えるおそれがあり、やめました。
-3. **引き継げる反射の範囲**：`floor-melee` と、体力 5 より上の `floor-last-stand`（hit）だけにしました。低体力の逃げ（`floor-flee`）を、同じ相手の fight が奪ってよいかは決めていません（今は奪わない）。
-4. **attack・fight の「既に済」**：相手が死んだのを体が 30 秒以内に見ていた時だけ `already` にしました。見えない所で死んだ・消えた相手は `failed`（`target_not_found`）のままです。
-5. **約束の物の語**：`have` と同じ読み方（`planks` は `*_planks` も数える）と、食料の点の `food` だけにしました。「燃料」のような用途でまとめた語（石炭・木炭・板・原木のどれでも）は入れていません。
-6. **最初の計画で約束を書かせるか**：最初の計画の形（`FIRST_PLAN_SCHEMA_R4`）に `promises` を足すと、強いモデルの最初の計画が長くなります。`plan.update` だけで書かせる案もあります。
-7. **不明の結果の後の片付け**：今どおり、頭の段の片付け（stop・release）に任せました。頭が不明を受けた時に、すぐ片付けを送るかは決めていません。
-8. **サーバーの tick の取り方**：RCON の `tick query` を 10 秒ごとにしました。shannon-home の重さへの影響は測っていません。
-9. **`unmet_now` の扱い**：meter で「今は満たせない」の節を、遅れに数えるかどうか。今の案は「数えない。理由を出す」です。
-10. **`PlanKind` を閉じた列にするか**：閉じた列（22 種）にしました。LLM が列に無い物を書いた時は `other` として受けます（断らない）。開いた文字列にする案もあります。
-11. **D6・D8 の契約**：D6（live の加工の見直し）は、計測の `live` の行（8 章）と境界 10 で扱い、別の契約は立てませんでした。D8（精錬の並べ方）は、新しい手を作らないので契約は無しです。これでよいか。
-12. **縦の移動の手の名前と形**：取りまとめ役の追記で、下りも上りも 1 つの手にしました。名前は `vertical`、向きは `toY` と今の y から決まり、形は `stairs`・`shaft`（下りだけ）・`pillar`（上りだけ）です。下りと上りを別の手（`descend`・`climb`）に分ける案もあります（LLM にとって読みやすいのはどちらか、Sonnet の試験で見る）。
-13. **柱の置きの時機**：`pillar` は「足がマスの上端より 0.2 以上高い時」に置くとしました。保留 8 の台で、0.1 上では断られた事からの見込みで、0.2 で足りるかは確かめていません。
+### v1 の 13 の点の決め（取りまとめ役、`continue-contracts-review-decisions.md`）
+1. 手の欄の上限を 56 にする。受け入れの条件は、体が作った catalog を頭の本物の検査に通すこと（2 章）。
+2. 命の番号は、ワールドとボットごとのファイル。つなぎ直しの識別子は別に持つ。読めない時に黙って 1 へ戻さない（5 章）。
+3. 引き継ぐのは、同じ相手の melee と、限った last-stand だけ。floor-flee は奪わない（4 章）。
+4. attack の already は、観測した死だけ。30 秒は仮の上限。記憶はワールド・次元・接続と個体の id で区切る（1 章）。
+5. 約束の物の語は、具体的な物の名前と food だけ（3 章）。
+6. 最初の計画にも promises を書ける。書かなければ空（3 章）。
+7. 不明を受けたら、すぐに期限つきの片付け（1 章）。
+8. tick は 10 秒の仮の案。生の応答・時刻・失敗を残し、負荷を測って決める（8 章）。
+9. `unmet_now` も遅れに数え、理由を見せる（7 章）。
+10. kind は閉じた列＋other。未知の値は元の値を残す（7 章）。
+11. D6 は別の契約番号を作らず、規範を書く。D8 は今の手のまま Sonnet の試験で見る（8 章）。
+12. 名前は vertical のまま、向きを明示する（6 章）。
+13. 0.2 は仮説。置きを送る条件と、置けたことの確かめを分け、実物の試験で決める（6 章）。
+
+### 版 2 で新しく決めきれなかった所
+1. **列の名前の作り方**：`queue = ${taskId}:${headBoot}:${step}` にしました。段（step）が替わるたびに列の名前が変わるので、段をまたいで前の段の項目に `dependsOn` を書くことはできません（`depends_unknown`）。段をまたぐ依存が要るかは、Sonnet の試験で見たいです。
+2. **不明の後の片付けの期限**：5 秒にしました。根拠は今の stop の待ち（`cancelWaitMilliseconds` の既定 5 秒）だけです。
+3. **`utilities` の範囲**：作業台・かまど・チェスト・ベッドの 8 マス以内にしました。かまどの中身（焼き上がり）は今どおり `furnace.done` の出来事で、条件の `furnace` は判定できないままです。
+4. **受け取りの大きさの上限**：16,000 字のまま、落とす順を決めました（古い周回の行・出来事を数だけ残す）。上限を上げる案もあります。
+5. **規範の表の数**（24 m・3 件・10 秒）：決めた値で、確かめていません。境界 10 と Sonnet の試験で見ます。
+6. **引き継ぎで盾を渡す**：`handover` の時だけ片付けで盾を下げない形にしました。fight 以外の手（attack に盾を使わない）でも盾を上げたまま始めてよいかは、隔離ラボで確かめます。
+
+### 直さなかった指摘と理由
+Codex の指摘は、今のコードで確かめた上でほぼすべて直しました。次の 2 つは、指摘そのものではなく直し方を変えました。
+- **「token を上げる対象」（指摘 6）**：Codex は token を足す前提で対象を絞る案でした。今のコードには motor port の失効の確かめが既にあるので、token は作らず、そこに統合しました（取りまとめ役の決めの直す物 3 と同じ）。
+- **「`where`（構造）を直接読む」が成立しない（(2) の計画）**：指摘のとおり、`where` は今も文字列です。構造の位置は作らず、位置の読み手を 1 か所に置く形にしました（7 章の表の 16）。
+
+確かめて違っていた指摘はありません。確かめた物は、act の中だけの次元の止め、パン 11 点、`FloorBudget` が arrow・eat・armor の予算であること、melee の上限が episode の手数と打ちの数であること、query でも世代が上がること、片付けで盾が下がること、常駐の盾の直接の操作、`near`・`furnace` が常に判定できないこと、知らない WorkingEvent の seq が進むこと、最初の計画の `parent` が string であること、attack が見えなくなった相手で ok を返すこと、make の count が追加の数であること、repeat の 2 周目で行が消えること、などです。
