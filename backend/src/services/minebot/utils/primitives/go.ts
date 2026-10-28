@@ -324,6 +324,20 @@ const distanceTo = (bot: any, cell: Cell) => Math.hypot(bot.entity.position.x - 
 const goalOf = (cell: Cell, range: number) => range > 0 ? new goals.GoalNear(cell.x + 0.5, cell.y, cell.z + 0.5, range) : new goals.GoalBlock(cell.x, cell.y, cell.z);
 const compositeOf = (cells: Cell[], range: number) => cells.length === 1 ? goalOf(cells[0], range) : new goals.GoalCompositeAny(cells.map(cell => goalOf(cell, range)));
 const keyOf = (cell: Cell) => `${cell.x},${cell.y},${cell.z}`;
+/**
+ * Run 45 (hold 9, go 12 up to the gravel: the box 20261028T065719-act-jgr1d): the route was drawn again while the body was in the middle of a jump
+ * (feet 8.2 over its floor at 7); the search started as if the body stood in the cell its feet were in, on the air it was jumping through, and the
+ * first move laid (177,7,199) against that air. The server laid nothing there (the cobblestone came out in the clicked air cell 1.1 s later) and the
+ * go stopped as refused. Whether the block clicked for a place is one a block can be laid against: a block of the world with a box (not air, not a
+ * liquid, not a plant). Asked when the place is sent, not when the route is drawn: a bridge's next block is laid against the one before it, which
+ * is not there yet when the route is drawn.
+ */
+export function hasFace(block: any): boolean {
+  if (!block) return false;
+  const name = String(block.name ?? '');
+  if (/^(?:air|cave_air|void_air|water|lava)$/u.test(name)) return false;
+  return block.boundingBox === undefined ? true : block.boundingBox === 'block';
+}
 /** GO_REDO_COST for a block in `cells` (the cells this go dug, or laid), or with `below` for the one under it too, else 0. */
 export function redoCost(cells: ReadonlySet<string>, block: any, below = false): number {
   const p = block?.position;
@@ -585,9 +599,12 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     // straight above it (in the run 0.25 in it; in the lab 0.1 over its top, and refused all the same): the go stopped. Such a place is not sent
     // (it lays the block under the body, which no route of a go plans), and the route is drawn again from where the body really is. The go's
     // own climb (`pillarUp`, the manual work) lays under the body on purpose, at the top of its jump: it is not held back.
-    if (target && !manualBusy && !mayLayAt(host, target)) {
+    // Run 45 (hold 9): a place against a block that is not there (the route drawn from the middle of a jump) is not sent either.
+    const noFace = target && !hasFace(rest[0]);
+    if (target && (noFace || !manualBusy && !mayLayAt(host, target))) {
       const p = host.entity?.position;
-      blackBoxOf(host)?.note('place_held_back', { at: [target.x, target.y, target.z], overlap: p ? Number(bodyOverlap(p, target).toFixed(2)) : null,
+      blackBoxOf(host)?.note('place_held_back', { at: [target.x, target.y, target.z], why: noFace ? `no_face:${String((rest[0] as any)?.name ?? 'none')}` : 'body',
+        overlap: p ? Number(bodyOverlap(p, target).toFixed(2)) : null,
         feet: p ? [Number(p.x.toFixed(2)), Number(p.y.toFixed(2)), Number(p.z.toFixed(2))] : null });
       throw new Error('The place was not sent: the body is in the cell');
     }

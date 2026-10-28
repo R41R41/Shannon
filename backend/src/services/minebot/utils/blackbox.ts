@@ -254,20 +254,30 @@ export function installBlackBox(bot: any, root = blackBoxRoot(), now: () => numb
   const wrapBody = () => {
     if (typeof bot.dig !== 'function' || typeof bot.placeBlock !== 'function') return;
     bot.__blackBoxBody = true;
-    const wrap = (name: string, record: (args: unknown[], ok: boolean, ms: number, error?: string) => void) => {
+    // Run 45 (hold 9): what the hand held when the call went out (the place's own record was taken after its 1.6 s wait, when a dig had taken the hand).
+    const wrap = (name: string, record: (args: unknown[], ok: boolean, ms: number, error: string | undefined, sent: { held: string | null; inCell?: string | null }) => void) => {
       const original = bot[name];
       if (typeof original !== 'function' || original.__blackBox) return;
       bot[name] = Object.assign(async function (this: unknown, ...args: unknown[]) {
-        const started = performance.now();
-        try { const result = await original.apply(bot, args); record(args, true, performance.now() - started); return result; }
-        catch (error) { record(args, false, performance.now() - started, String((error as Error)?.message ?? error).slice(0, 120)); throw error; }
+        const started = performance.now(), sent: { held: string | null; inCell?: string | null } = { held: (bot.heldItem?.name as string | undefined) ?? null };
+        // A place: what is in the cell it lays into when it goes out (a plant, a carpet, water, an item: the server may refuse a block there).
+        if (name === 'placeBlock') {
+          const ref = args[0] as any, face = args[1] as any;
+          try { sent.inCell = ref?.position && face ? (bot.blockAt?.(ref.position.plus ? ref.position.plus(face) : { x: ref.position.x + face.x, y: ref.position.y + face.y, z: ref.position.z + face.z })?.name ?? null) : null; }
+          catch { sent.inCell = null; }
+        }
+        try { const result = await original.apply(bot, args); record(args, true, performance.now() - started, undefined, sent); return result; }
+        catch (error) { record(args, false, performance.now() - started, String((error as Error)?.message ?? error).slice(0, 120), sent); throw error; }
       }, { __blackBox: true });
     };
     wrap('dig', (args, ok, ms, error) => { const block = args[0] as any; box.note('dig', { at: block?.position ? cell(block.position) : null, block: block?.name ?? null, ok, ms: Math.round(ms), ...(error ? { error } : {}) }); });
-    wrap('placeBlock', (args, ok, ms, error) => {
+    wrap('placeBlock', (args, ok, ms, error, sent) => {
       const ref = args[0] as any, face = args[1] as any, p = bot.entity?.position;
       const at = ref?.position && face ? [Math.floor(ref.position.x + face.x), Math.floor(ref.position.y + face.y), Math.floor(ref.position.z + face.z)] : null;
-      box.note('place', { at, against: ref?.name ?? null, held: bot.heldItem?.name ?? null, ok, ms: Math.round(ms), feet: p ? [r3(p.x), r3(p.y), r3(p.z)] : null, ...(error ? { error } : {}) });
+      // `held` is the hand when the place went out; `heldAfter` when it ended (they differ when something took the hand meanwhile). `ref`/`face`: the
+      // block clicked and its face, so that a place against nothing (air) or the wrong side can be told.
+      box.note('place', { at, against: ref?.name ?? null, ref: ref?.position ? cell(ref.position) : null, face: face ? [face.x, face.y, face.z] : null,
+        held: sent.held, heldAfter: bot.heldItem?.name ?? null, inCell: sent.inCell ?? null, ok, ms: Math.round(ms), feet: p ? [r3(p.x), r3(p.y), r3(p.z)] : null, ...(error ? { error } : {}) });
     });
     const attack = bot.attack;
     if (typeof attack === 'function' && !attack.__blackBox) {
