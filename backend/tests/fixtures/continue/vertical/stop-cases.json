@@ -1,7 +1,7 @@
 {
  "contract": "vertical",
  "version": "3.1",
- "scene": "止める場面: unloaded・world_limit・displaced・cannot_dig・no_floor・no_place・place_unconfirmed・limit_dig（砂利の掘り直しを含む）",
+ "scene": "止める場面: unloaded・world_limit・displaced・no_foothold・cannot_dig・no_floor・no_place・place_unconfirmed・limit_dig（砂利の掘り直しを含む）",
  "source": "Codex CONTRACTS.md（1）10",
  "known": [],
  "decided": [
@@ -46,6 +46,7 @@
    "unloaded",
    "world_limit",
    "displaced",
+   "no_foothold",
    "cannot_dig",
    "no_floor",
    "no_place",

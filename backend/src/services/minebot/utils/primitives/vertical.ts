@@ -575,7 +575,6 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
   // ---- the run ----
   const tail = () => `${cellText(feetCell(bot) ?? at)} 段 ${valid()}・掘 ${work.dug}・置 ${work.placeAttempts}${work.placedConfirmed !== work.placeAttempts ? `（確 ${work.placedConfirmed}）` : ''}`;
   const seenText = () => (seen.length ? `。鉱石 ${seen.slice(0, 3).map(entry => `${entry.block}${cellText(entry.at)}`).join(' ')}${seen.length > 3 ? ` ほか${seen.length - 3}` : ''}` : '');
-  const data = () => (seen.length ? { seen: seen.map(entry => ({ ...entry })) } : undefined);
 
   bot.on?.('blockUpdate', onBlockUpdate);
   bot.on?.('forcedMove', onForcedMove);
@@ -599,7 +598,7 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
     }
     lookAgain();
     const here = feetCell(bot) ?? at;
-    return { ok: true, text: `vertical 着いた ${tail()}${seenText()}`, at: here, from: start, progress: progress(), ...(data() ? { data: data() } : {}) };
+    return { ok: true, text: `vertical 着いた ${tail()}${seenText()}`, at: here, from: start, progress: progress() };
   } catch (error) {
     if (error instanceof VStop) {
       // A stop in the air (a jump that laid nothing): the position told is where the body lands, not where it was at that instant.
@@ -611,7 +610,7 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
       const room = 160 - head.length - fixed.length;
       const hint = error.hint ? `。${error.hint}` : '';
       const why = error.why.length + hint.length <= room ? `${error.why}${fixed}${hint}` : `${error.why.slice(0, Math.max(24, room - 1))}…${fixed}`;
-      return { ok: false, reason: error.code, code: error.code, text: `${head}${why}`, at: where, from: start, progress: progress(), ...(data() ? { data: data() } : {}) };
+      return { ok: false, reason: error.code, code: error.code, text: `${head}${why}`, at: where, from: start, progress: progress() };
     }
     // Cut from outside (a reflex, a stopIf, the clock of the whole act) or an unexpected error: the act answers it; what the hand had done goes with it.
     cut = true;

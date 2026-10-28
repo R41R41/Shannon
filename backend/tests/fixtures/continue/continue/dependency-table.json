@@ -142,6 +142,18 @@
   },
   {
    "goal": "not_started",
+   "end": "cut",
+   "released": true,
+   "dependState": "failed",
+   "old": {
+    "ok": false,
+    "outcome": "cancelled",
+    "inputsReleased": true
+   },
+   "note": "外から止められ、操作が 0 の手（A-1 の 2）"
+  },
+  {
+   "goal": "not_started",
    "end": "finished",
    "released": true,
    "dependState": "failed",

@@ -385,7 +385,7 @@ describe('vertical: stops of the stairs (stop-cases)', () => {
     const sim = sim0(world('andesite', 64, [cell('iron_ore', 1, 62, 2)]));
     const outcome = await drive(sim, run(sim, hand({ dir: 'down', shape: 'stairs', toward: 'south', toY: 60 })));
     expect(outcome.ok).toBe(true);
-    expect(outcome.data?.seen).toEqual([{ block: 'iron_ore', at: at(1, 62, 2) }]);
+    expect(outcome.progress?.seen).toEqual([{ block: 'iron_ore', at: at(1, 62, 2) }]);
     expect(outcome.text).toContain('iron_ore(1,62,2)');
     expect(sim.bot.dugBlocks.some((entry: string) => entry.startsWith('iron_ore'))).toBe(false);
   });

@@ -65,7 +65,6 @@ export interface StepOutcome {
     /** A go: what it dug and laid and how far it walked (the hands that use go for the way, `mine`, count on it). */
     work?: { dug: number; placed: number; steps: number; redraws: number };
     /** A vertical: the ores that showed on its way (told, never followed), 8 at most. */
-    seen?: { block: string; at: Cell }[];
   };
 }
 

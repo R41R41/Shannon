@@ -1096,3 +1096,40 @@ Codex の 3 回目の見直しで「実装の途中で直してよい」とさ�
 | 持ち物を確かめてから置きを送るまでを、同じ motor の持ち主で通す試験（保留 9） | 体 | `result/r45-hold9-hand-at-send.json` を、本物の motor port の下で通す試験にする |
 | meter の時計を、保留・再開・再起動をまたいで試す | 頭 | `measure/meter-clock-excludes-holds.json` を、再開と頭の再起動を挟む場面へ広げる |
 | README（Codex の材料の `00-README.md`）の古い説明（実走 45「進行中」） | 取りまとめ役 | 実走 45 は終わった（45 分・黒曜石 7・ネザー無し） |
+
+---
+
+## 14. 追記（実装の途中で、取りまとめ役が決めた物）
+体と頭の担当は、ここを正本として読む。それぞれ自分のリポジトリの本文と見本へ同じ文で入れた。番号は「A-n」。本文の該当の所（1 章の `ActHandLine`・判定表・3 章の `InventoryEvent`・6 章の `Progress`）は、この追記で読み替える。
+
+### A-1（10/28、体の担当の質問 1〜7 から）
+
+1. **手の行の `motorOps`**：`ActHandLine` に `motorOps`（その手が効かせた操作の数）を足す。
+   - skipped の手には付けない。
+   - 頭の読み手も、この欄を読む。not_started と failed の境目は、この数で決める。
+2. **(goal `not_started`, end `cut`)**：外から止められ、操作が 0 の手。依存の判定表の `outcomes` に、この 1 行を足す。
+   - 扱いは、既にある not_started の行と同じ（成功ではないので、頼る項目は始めない。操作 0 なので failed にはしない）。
+   - released は、ふつうの決まりのとおり。
+3. **欄の名前**：体の担当の名前で決める。頭も同じ名前を使う。
+   - 受け取り（`MinecraftControlReceipt`）：`unit`、`bodyTimes`
+   - `ActResult`：
+     - `outcome`（ActOutcome）
+     - `handover`
+     - `eventsMore`：受け取りに載らなかった出来事を取りに行く先
+     - `earlierPasses`・`earlierEvents`：古い周回の行を数にまとめた時でも、出来事は落とさず、この欄で運ぶ
+   - poll：`bodyVersion`
+   - 返事：`headBoot`
+   - 観測：`facts.life`・`state.life`・`state.bodyRun`・`state.control`・`state.world.utilities`
+4. **箱の出し入れ**：`InventoryEvent.reason` に `stored`（箱へ入れた）と `retrieved`（箱から出した）を足す。
+   - chest の手も、持ち物の出来事を作る。
+   - 約束の帳簿では、`stored` は消費ではなく「置き場所が変わった」として出す（残りの量の正本は持ち物の観測なので、手元の残りは減る）。
+5. **`fightsFirst` の直し**（既にある不具合）：args は配列なので、0 番を読む。今までは、fight で始まる act が melee を止める経路が一度も効いていなかった。
+   - 直すと、実走 45 の +929 の形で、ふるまいが変わる。最後の報告に書き、測りの実走で見る。
+6. **vertical**
+   - `range` は、塞ぐ半径。
+   - 既定：`maxDig` 200・`maxPlace` 100・`seconds` 60。`seconds` の範囲は 5〜120（go と同じ上限）。
+   - LLM への短い書き方では、この既定と範囲を見せる。頭は同じ範囲で検査する。
+   - `seen`（途中で見た物）は、`StepOutcome.data` ではなく、構造の `Progress.seen` に載せる。頭はそこを読む。
+   - 予定の足場へ踏み出せない時は、止まりの code に `no_foothold` を足して返す（`displaced` とは分ける。押し戻しと、足場が無いのとでは、LLM の次の手が違うため）。止まりの code は 14 個になる。
+   - pillar の置きの時機は、`bodyOverlap`＋余白 0.2 にする（mayLayAt は同じ柱の真上の空中では必ず false になるため）。0.2 は仮説のまま。隔離ラボで確かめる。
+7. **引き継ぎ**：`SkillExecutor.acquire` の `onGranted` で、ロックを取った瞬間に予約を確かめる形でよい。300 ms は初めの値のまま、隔離ラボで測る。

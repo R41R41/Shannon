@@ -10,7 +10,7 @@
   "continue/admit-after-stopped.json": "e6b55458b7ef495f3f06f1b96b1fb8e7eeacab709148fe56ca625fbdd5a5d70c",
   "continue/cross-step-depends-refused.json": "1db8915e666eb3c89b0ddb975ce04f3ea372e4573fca3310097a3a3a37e064c9",
   "continue/death-before-depends.json": "4747947e458eeb1f8438982af8896484b2011456fcffddb020b698584cf0c745",
-  "continue/dependency-table.json": "1e2e4d26cc9c5ad5e1cd38816553a1cd0f17568bb6d06d0a1bd0f45990301bf4",
+  "continue/dependency-table.json": "9c0bb173c8d67a30dda5bd7d7c79cb7df3ee21f6f977b142faf57acddfcafece",
   "continue/indirect-depends.json": "6c7ac36d638048e59eb75fdee0d1359f9c17f1ea4fe34a97b8d2e47c778cc806",
   "continue/keep-vs-start-pending.json": "eba20152bb500b8b21485bdd3a34241f769862d38788070c76b09adf0d1388cb",
   "continue/no-depends-as-now.json": "7d6b037855aa237e27015148a30f2716cf2be6aed694bc99d0653af935034fdc",
@@ -91,6 +91,6 @@
   "vertical/r45-hold5-shaft-down.json": "58116db5f0dd7ea1575827808ef31baa6ed29c1a215590b8626b730a90831463",
   "vertical/r45-hold7-pillar-up.json": "7e63b36cc22555fae0d6015b1576e3166a73bb6a85b8245da13b953af6bb8c7a",
   "vertical/short-hands.json": "f91ea4d13780cf176ad2af45c5958062855dd8453571a02769b8edc71fb39eca",
-  "vertical/stop-cases.json": "e03ab098fab745c42884a5f6c901203bca9e87475ff1b17505340a41f8cb98bd"
+  "vertical/stop-cases.json": "b6629f0066f08fbd39ebc2834ecc6ff99cd7624610db027dad74872fabedc80f"
  }
 }
