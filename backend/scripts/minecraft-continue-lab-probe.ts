@@ -344,6 +344,7 @@ try {
     const first = await act(body, { hands: [pillar] }, { seconds: 90 });
     const line = first.parsed?.lines?.[0];
     check('a pillar with an enemy beside it is not stopped by a reflex note in the middle of its placing (stoppedBy is not reflex)', first.parsed?.stoppedBy !== 'reflex', JSON.stringify([first.parsed?.stoppedBy, line?.goal, line?.code, line?.progress?.done]));
+    await ask('fill -3 100 -3 3 120 3 minecraft:air');   // the first pillar's column stays: the body is put back in clear air
     await reset(actor);
     await ask(`give ${ACTOR} minecraft:cobblestone 32`);
     const second = act(body, { hands: [{ ...pillar, toY: 112, maxPlace: 20 }] }, { seconds: 90 });
