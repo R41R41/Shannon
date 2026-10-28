@@ -298,6 +298,8 @@ try {
       await ask(`give ${ACTOR} minecraft:cobblestone 32`); await ask(`give ${ACTOR} minecraft:diamond_pickaxe 1`);
       await ask(`tp ${ACTOR} 0.5 ${spec.name === 'pillar' ? 100 : 100} 0.5`); await sleep(1500);
       const stockBefore = (actor.inventory.items() as any[]).filter(item => item.name === 'cobblestone').reduce((sum, item) => sum + item.count, 0);
+      // Boundary 2: for the stairs, the floor of the first level is taken away while the hand goes on (the server's block update is what corrects the count).
+      if (spec.name === 'stairs') setTimeout(() => { void ask('setblock 0 98 1 minecraft:air'); }, 5500);
       const result = await act(body, { hands: [spec.hand] }, { seconds: 120 });
       await sleep(1500);
       const stockAfter = (actor.inventory.items() as any[]).filter(item => item.name === 'cobblestone').reduce((sum, item) => sum + item.count, 0);
@@ -308,6 +310,11 @@ try {
       check(`vertical ${spec.name}: the hand ends with a progress in steps and the four counts`, !!progress && progress.unit === 'step' && typeof progress.done === 'number' && !!progress.work, JSON.stringify(progress ?? null));
       check(`vertical ${spec.name}: work.dug equals the digs sent, placeAttempts the places sent (the record of operations)`, !!progress?.work && progress.work.dug === (count('dig') + count('unconfirmedDig')) && (progress.work.placeAttempts ?? 0) === count('placeBlock'),
         JSON.stringify({ work: progress?.work, dig: (count('dig') + count('unconfirmedDig')), place: count('placeBlock') }));
+      if (spec.name === 'stairs') {
+        const updates = opLines().filter(entry => entry.kind === 'block_update' && entry.command === result.command.id);
+        check('boundary 2: a step that was taken away is found by the block update: progress.corrected names it, the record has the row with the ISO time in `at` and the block in `pos`', (progress?.corrected?.length ?? 0) >= 1 && updates.length >= 1 && Number.isFinite(Date.parse(updates[0].at)) && typeof updates[0].pos?.x === 'number', JSON.stringify({ corrected: progress?.corrected, update: updates[0] ?? null }));
+        produce('vertical/boundary2-evidence', 'vertical/boundary2-evidence', { substitute: 'one floor taken away with /setblock while the stairs go on', output: { corrected: progress?.corrected ?? null, done: progress?.done, work: progress?.work, evidenceRows: updates.slice(0, 4), opCounts: { dig: (count('dig') + count('unconfirmedDig')), placeBlock: count('placeBlock') } } });
+      }
       if (spec.name === 'pillar') check('vertical pillar: stockUsed equals the fall of the pack and the places sent that were confirmed (the four counts keep their meaning)', progress?.work?.stockUsed === stockBefore - stockAfter && progress.work.stockUsed === progress.work.placedConfirmed,
         JSON.stringify({ work: progress?.work, packFall: stockBefore - stockAfter }));
       produce(`vertical/r45-${spec.name === 'stairs' ? 'hold1-stairs-down' : spec.name === 'shaft' ? 'hold5-shaft-down' : 'hold7-pillar-up'}`, `vertical/r45-${spec.name === 'stairs' ? 'hold1-stairs-down' : spec.name === 'shaft' ? 'hold5-shaft-down' : 'hold7-pillar-up'}`,

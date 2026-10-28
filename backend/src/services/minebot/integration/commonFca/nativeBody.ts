@@ -147,7 +147,11 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
   private lastSafety: Record<string, BodyValue> | null = null;
   private readonly reflexTag: boolean;
   private readonly onEnd = () => { this.connected = false; };
-  private readonly onVerticalEvidence = (evidence: { kind?: string } & Record<string, unknown>) => { try { this.opLog.note(String(evidence.kind ?? 'vertical_evidence'), evidence); } catch { /* the record is a help */ } };
+  private readonly onVerticalEvidence = (evidence: { kind?: string } & Record<string, unknown>) => { try {
+    // The evidence's own `at` is a block's coordinates: it goes in the line as `pos`; the line's `at` stays the ISO time (the contract's form).
+    const { at: cell, ...rest } = evidence as { at?: unknown } & Record<string, unknown>;
+    this.opLog.note(String(evidence.kind ?? 'vertical_evidence'), { ...rest, ...(cell !== undefined ? { pos: cell } : {}) });
+  } catch { /* the record is a help */ } };
   /** The running act's hand and pass, from its `minebotActStep` events (the task queue's progress in the poll); cleared when a command begins. */
   private stepProgress: Omit<MinecraftQueueProgress, 'id'> | null = null;
   private readonly onStep = (event: { index?: number; total?: number; iteration?: number; repeat?: number; status?: string }) => {

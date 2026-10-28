@@ -257,3 +257,25 @@ describe('the reasons of a hand\'s pack changes (amendment A-5)', () => {
     expect(handReasons({ do: 'equip', item: 'iron_sword' })).toBeNull();
   });
 });
+
+describe('the operation record keeps its own fields (amendment A-5 follow-up)', () => {
+  it('a vertical evidence line has the ISO time in `at` and the block\'s coordinates in `pos`; a forced move keeps its `pos`', async () => {
+    const { OpLog } = await import('../../src/services/minebot/utils/opLog.js');
+    const { mkdtempSync, readFileSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const path = await import('node:path');
+    const { bot, body } = fixture();
+    const dir = mkdtempSync(path.join(tmpdir(), 'oplog-ev-'));
+    const log = new OpLog(dir, 'ev');
+    (body as any).opLog = log;
+    bot.emit('minebotVerticalEvidence', { kind: 'block_update', t: 1, at: { x: 1, y: 60, z: 3 }, from: 'andesite', to: 'air', usedFor: 'steps_valid', step: 3 });
+    bot.emit('minebotVerticalEvidence', { kind: 'forced_move', t: 2, pos: { x: 0, y: 60, z: 1 }, step: 4 });
+    log.close();
+    const lines = readFileSync(path.join(dir, 'ev.jsonl'), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line));
+    expect(lines[0]).toMatchObject({ kind: 'block_update', pos: { x: 1, y: 60, z: 3 }, from: 'andesite', to: 'air', step: 3 });
+    expect(Number.isFinite(Date.parse(lines[0].at))).toBe(true);
+    expect(lines[1]).toMatchObject({ kind: 'forced_move', pos: { x: 0, y: 60, z: 1 } });
+    expect(Number.isFinite(Date.parse(lines[1].at))).toBe(true);
+    await body.dispose();
+  });
+});

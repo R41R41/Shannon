@@ -36,7 +36,11 @@ export class OpLog {
       op: op.op, ...(op.detail ? { detail: op.detail } : {}), by: op.capability, action: op.actionId });
   }
   /** Any other thing the judge reads with the operations (a forced move, a block update that corrected a count). */
-  note(kind: string, data: Record<string, unknown>): void { this.append({ kind, at: new Date().toISOString(), ...(this.scope ? { command: this.scope.command, hand: this.scope.hand, life: this.scope.life } : {}), ...data }); }
+  /** The line's own fields (kind, at: the ISO time, the scope) are never overwritten by the data: a field of the data with one of those names is dropped. */
+  note(kind: string, data: Record<string, unknown>): void {
+    const { kind: _kind, at: _at, ...rest } = data;
+    this.append({ ...rest, kind, at: new Date().toISOString(), ...(this.scope ? { command: this.scope.command, hand: this.scope.hand, life: this.scope.life } : {}) });
+  }
 
   private open(): void {
     if (this.fd !== null || this.failed) return;

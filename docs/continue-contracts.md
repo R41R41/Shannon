@@ -1230,6 +1230,7 @@ interface LedgerSeen {
 3. **置きが ok の後で世界が違っていた時の訂正**（`result/r45-hold3-place-ok-then-world-differs`）：体が実際に何を載せているか（欄と形）を 14 章に書く。頭はそれを `offerOnce` につなぐ。
 4. **`V2_ALWAYS` の PLAN 節**：「準備の必須は、reason を書いても省けない」は契約 7 章（`prep: skipped` と理由を書ける）と食い違う。契約が正。同じトークン数以内で「準備を省く時は skipped と理由を書く」の形に直す（8,800 以内を守る）。
 5. **体の `handReasons` に `equip`**：act の `equip` で防具を着けた時の理由が `unexplained` になる。体が `equip` を足し、帳簿は A-2 の 3（身に着けた）で出す。
+7. **`PREP_DESCENT_RULE` の「未達の必須は、reason や why に書いても省けない」**：4 と同じ食い違い（契約 7 章：`skipped` は LLM が書く。頭は事実だけ出す）。同じ形で「省く時は prep に skipped と理由を書く。省いた節は達成に数えない」に直す。トークン数は増やさない。
 6. **local-gate の段 5**：頭のパッチ（`tools/continue-verify/local-gate-stage5.patch`）を体の担当が読み、OK なら取りまとめ役が Syzygy に当てる（main への合流の時に一緒に）。
 
 #### A-5 の 3 の型（体の実装の形。体が書く）
