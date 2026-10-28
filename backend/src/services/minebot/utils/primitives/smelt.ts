@@ -4,6 +4,7 @@ import { blockAt, cellText, findItem, inventoryCount, placeText, stopped, type S
 import { furnaceWork, type FurnaceLook } from './furnace.js';
 import { canWorkOn, getNear } from './getNear.js';
 import { placeNearby } from './placeSpot.js';
+import { withProgress } from './progressUnits.js';
 import type { WayNotes } from './walk.js';
 
 /**
@@ -39,9 +40,19 @@ function split(items: Load[], furnaces: number): Load[] {
   return loads;
 }
 
-const fail = (bot: any, reason: string, text: string, at?: Cell): StepOutcome => stopped(bot, reason, `smelt 止まった ${reason}: ${text}`, at);
+const fail = (bot: any, reason: string, text: string, at?: Cell, code?: string): StepOutcome => ({ ...stopped(bot, reason, `smelt 止まった ${reason}: ${text}`, at), ...(code ? { code } : {}) });
 
+/**
+ * Continue contracts (1): progress in items (`done` the input put into furnaces, `left` what was asked and not put). There is no "already": the input is not in the pack, or a
+ * furnace holds another kind, or it is put (an input the pack lacks stops as failed with the code `missing_item`, nothing put).
+ */
 export async function smelt(ctx0: StepContext, args: SmeltArgs): Promise<StepOutcome> {
+  const tally = { put: 0 };
+  const asked = (args.items ?? []).reduce((sum, entry) => sum + (Number.isFinite(Math.round(Number(entry.count))) ? Math.max(0, Math.round(Number(entry.count))) : 0), 0);
+  return withProgress(() => smeltInto(ctx0, args, tally), () => ({ unit: 'item', done: tally.put, left: Math.max(0, asked - tally.put) }));
+}
+
+async function smeltInto(ctx0: StepContext, args: SmeltArgs, tally: { put: number }): Promise<StepOutcome> {
   const bot = ctx0.bot;
   const seconds = clamp(Number(args.seconds ?? DEFAULT_SECONDS), 5, 60);
   const ctx: StepContext = { ...ctx0, deadline: Math.min(ctx0.deadline, Date.now() + seconds * 1000) };
@@ -55,7 +66,7 @@ export async function smelt(ctx0: StepContext, args: SmeltArgs): Promise<StepOut
   if (!wanted.size || wanted.size > 4) return fail(bot, 'missing', 'items は 1〜4 種類');
   const items: Load[] = [...wanted.entries()].map(([item, count]) => ({ item, count }));
   const lacking = items.filter(entry => inventoryCount(bot, entry.item) < entry.count);
-  if (lacking.length) return fail(bot, 'missing', `入れる物が足りない: ${lacking.map(entry => `${entry.item}×${entry.count - inventoryCount(bot, entry.item)}（持っている ${inventoryCount(bot, entry.item)}／入れたい ${entry.count}）`).join('・')}（何も入れていない）`);
+  if (lacking.length) return fail(bot, 'missing', `入れる物が足りない: ${lacking.map(entry => `${entry.item}×${entry.count - inventoryCount(bot, entry.item)}（持っている ${inventoryCount(bot, entry.item)}／入れたい ${entry.count}）`).join('・')}（何も入れていない）`, undefined, 'missing_item');
 
   // How many furnaces, and the share of each.
   const asked = clamp(Math.round(Number(args.furnaces ?? 1)), 1, 4);
@@ -120,6 +131,7 @@ export async function smelt(ctx0: StepContext, args: SmeltArgs): Promise<StepOut
     }
     if (worked.occupiedBy) { blocked.push(`${cellText(cell)} には既に ${worked.occupiedBy} が入っていて ${load.item} は入らない`); continue; }
     if (worked.moved.heldBack > 0) heldBack.push({ cell, item: load.item, count: worked.moved.heldBack });
+    tally.put += worked.moved.input;
     done.push({ cell, load, moved: worked.moved.input, fuel: worked.moved.fuel, look: worked.look });
   }
 

@@ -13,6 +13,7 @@ import { blockInSight, eyeOf } from '../probeTools.js';
 import { blockAt, cellNow, cellText, DIG_REACH, eyeDistance, findItem, guard, isAirLike, letGo, placeText, stopped, StepStopped, wait, waitUntil,
   type StepContext, type StepOutcome } from './common.js';
 import { pickup } from './pickup.js';
+import { withProgress } from './progressUnits.js';
 
 /**
  * dig: the cells in order (design mb-llm-centric 2.3). The tool is the one asked for, else the quickest carried that makes the block
@@ -81,7 +82,25 @@ async function holdTool(ctx: StepContext, block: any, asked: string | undefined)
   return { held: item.name };
 }
 
+/**
+ * Continue contracts (1): progress in blocks (`done` the cells dug, `left` those not dug and not already open); every cell already open (air, water, lava: nothing to
+ * dig) is the aim already held, `goal: 'already'` (one dug is `done`, as before).
+ */
 export async function dig(ctx: StepContext, args: DigArgs): Promise<StepOutcome> {
+  const tally: DigTally = { dug: 0, open: 0, current: null };
+  const total = (args.at ?? []).length;
+  return withProgress(() => digCells(ctx, args, tally), outcome => {
+    if (!total) return undefined;
+    // A hand cut in the middle of a cell (the act's stop came while the dig was being confirmed) counts that cell when the world already shows it open.
+    const cutOpen = outcome === null && tally.current && isAirLike(blockAt(ctx.bot, tally.current)) ? 1 : 0;
+    const dug = tally.dug + cutOpen;
+    return { unit: 'block', done: dug, left: Math.max(0, total - dug - tally.open) };
+  });
+}
+
+interface DigTally { dug: number; open: number; /** The cell being dug now (cleared once it is counted). */ current: Cell | null }
+
+async function digCells(ctx: StepContext, args: DigArgs, tally: DigTally): Promise<StepOutcome> {
   const bot = ctx.bot;
   const cells = args.at ?? [];
   if (!cells.length) return stopped(bot, 'invalid_input', 'dig には at（掘るマスの列）が要る');
@@ -93,7 +112,7 @@ export async function dig(ctx: StepContext, args: DigArgs): Promise<StepOutcome>
   for (const cell of cells) {
     const block = blockAt(bot, cell);
     if (!block) return result(stopped(bot, 'unloaded', `${placeText(bot, cell)} は未ロード`, cell));
-    if ((isAirLike(block) && !(args.thin && block.boundingBox === 'block')) || block.name === 'water' || block.name === 'lava') { done.push(`${cellText(cell)} は既に ${cellNow(bot, cell)}（掘らずに次へ）`); continue; }
+    if ((isAirLike(block) && !(args.thin && block.boundingBox === 'block')) || block.name === 'water' || block.name === 'lava') { done.push(`${cellText(cell)} は既に ${cellNow(bot, cell)}（掘らずに次へ）`); tally.open++; continue; }
     if (UNBREAKABLE.has(block.name) || block.diggable === false || block.hardness === null || block.hardness < 0) {
       return result(stopped(bot, 'unbreakable', `${placeText(bot, cell)} の ${block.name} は壊せない`, cell));
     }
@@ -142,6 +161,7 @@ export async function dig(ctx: StepContext, args: DigArgs): Promise<StepOutcome>
     const guardState = bot.exposureDigGuard as { allowAt?: string } | undefined;
     if (exposing && guardState) guardState.allowAt = cellKey(cell);
     const started = Date.now();
+    tally.current = cell;
     try {
       const expected = typeof bot.digTime === 'function' ? Number(bot.digTime(block)) || 0 : 0;
       const dug = await guard(ctx, digBlockVerified(bot, block), expected * 2 + 12_000);
@@ -154,6 +174,8 @@ export async function dig(ctx: StepContext, args: DigArgs): Promise<StepOutcome>
       return result(stopped(bot, 'dig_failed', `${placeText(bot, cell)} の ${block.name} を掘れなかった: ${String((error as Error)?.message ?? error).slice(0, 100)}（今 ${cellNow(bot, cell)}）`, cell));
     } finally { if (guardState && guardState.allowAt === cellKey(cell)) guardState.allowAt = undefined; }
     dugCells.push(cell);
+    tally.dug++;
+    tally.current = null;
     await wait(ctx, 150);
     const now = blockAt(bot, cell);
     const refilled = now && !isAirLike(now) && now.name !== 'water' && now.name !== 'lava' ? `（掘った後、今は ${now.name}: 上から落ちてきた）` : now && (now.name === 'water' || now.name === 'lava') ? `（掘った後、${now.name} が流れ込んだ）` : '';
@@ -170,7 +192,8 @@ export async function dig(ctx: StepContext, args: DigArgs): Promise<StepOutcome>
       done.push(picked.text);
     }
   }
-  return { ok: true, text: done.join('、'), at: cells[cells.length - 1] };
+  const allOpen = tally.dug === 0 && tally.open === cells.length;
+  return { ok: true, text: done.join('、'), at: cells[cells.length - 1], ...(allOpen ? { goal: 'already' as const, code: 'already_open' } : {}) };
 }
 
 const vecOf = (cell: Cell) => new Vec3(cell.x, cell.y, cell.z);

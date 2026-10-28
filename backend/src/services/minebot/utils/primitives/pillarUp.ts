@@ -5,6 +5,7 @@ import { isDoorlike } from '../walkRules.js';
 import { placeFacts } from '../placeFacts.js';
 import { blockAt, cellNow, cellText, findItem, guard, inventoryCount, isAirLike, placeText, stopped, StepStopped, wait, waitUntil,
   type StepContext, type StepOutcome } from './common.js';
+import { withProgress } from './progressUnits.js';
 
 /**
  * pillarUp n: jump and set a block under the feet, one level at a time (the owner's dragon list, 2026-10-21: the End's pillars, a
@@ -71,7 +72,17 @@ export function wholeFloorBeside(bot: any, feet: Cell, unsafe: (cell: Cell) => b
   return null;
 }
 
+/** Continue contracts (1): progress in blocks (`done` the levels climbed, `left` those not). */
 export async function pillarUp(ctx: StepContext, args: PillarArgs): Promise<StepOutcome> {
+  const tally = { climbed: 0 };
+  const levels = Math.max(1, Math.min(32, Math.round(args.n ?? 1)));
+  return withProgress(() => pillarLevels(ctx, args, tally), () => {
+    const feet = feetCell(ctx.bot);
+    return { unit: 'block', done: tally.climbed, left: Math.max(0, levels - tally.climbed), ...(feet ? { at: { x: feet.x, y: feet.y, z: feet.z } } : {}) };
+  });
+}
+
+async function pillarLevels(ctx: StepContext, args: PillarArgs, tally: { climbed: number }): Promise<StepOutcome> {
   const bot = ctx.bot;
   const feetOver = args.feetOver ?? PILLAR_FEET_OVER_FLOOR;
   const levels = Math.max(1, Math.min(32, Math.round(args.n ?? 1)));
@@ -139,6 +150,7 @@ export async function pillarUp(ctx: StepContext, args: PillarArgs): Promise<Step
         return stopped(bot, 'not_placed', `${done + 1}段目が積めなかった（${short}。${placeFacts(bot, feet, maxY, placedFrom ?? undefined)}）: ${what}（足元 ${cellText(feet)} は今 ${cellNow(bot, feet)}、置こうとした ${attempts} 回）。${done}段登った`, feet);
       }
       done++;
+      tally.climbed = done;
       ctx.progress?.(`${done}/${levels}`);
     }
   } finally { try { bot.setControlState('jump', false); } catch { /* released */ } }

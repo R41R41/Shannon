@@ -1,6 +1,7 @@
 import { scanLoadedBlocks } from '../loadedBlockScan.js';
 import { feetCell, relativeWords, type Cell } from '../localMap.js';
 import { cellText, eyeDistance, guard, inventoryCount, stopped, StepStopped, USE_REACH, wait, type StepContext, type StepOutcome } from './common.js';
+import { withProgress } from './progressUnits.js';
 
 /**
  * craft: `count` of an item (design mb-llm-centric 2.3). A recipe of the 2x2 grid is made in the hand; one that needs the 3x3 uses a
@@ -38,7 +39,21 @@ function shortfall(bot: any, recipe: any, times: number): Array<{ name: string; 
   return out;
 }
 
+/**
+ * Continue contracts (1): progress in items (`done` what the pack gained of the item, `left` the count not yet made). `count` is how many MORE to make: a pack that
+ * holds that many already is not "already".
+ */
 export async function craft(ctx: StepContext, args: CraftArgs): Promise<StepOutcome> {
+  const bot = ctx.bot;
+  const wanted = Math.max(1, Math.min(64 * 9, Math.round(args.count ?? 1)));
+  const had = inventoryCount(bot, args.item);
+  return withProgress(() => craftItem(ctx, args), () => {
+    const gained = Math.max(0, inventoryCount(bot, args.item) - had);
+    return { unit: 'item', done: gained, left: Math.max(0, wanted - gained) };
+  });
+}
+
+async function craftItem(ctx: StepContext, args: CraftArgs): Promise<StepOutcome> {
   const bot = ctx.bot;
   const item = bot.registry?.itemsByName?.[args.item];
   if (!item) return stopped(bot, 'invalid_item', `${args.item} は物の名前ではない`);

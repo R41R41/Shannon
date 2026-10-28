@@ -29,7 +29,7 @@ export interface FurnaceWork {
   outcome: StepOutcome;
   look?: FurnaceLook;
   /** What this call moved: input and fuel put in, and input left in the pack for want of fuel (limitByFuel). */
-  moved: { input: number; fuel: number; heldBack: number };
+  moved: { input: number; fuel: number; heldBack: number; /** Items taken out of a slot (op take). */ took?: number };
   /** The input slot already held another item (or the furnace could not take the item): the name it holds. */
   occupiedBy?: string;
 }
@@ -71,7 +71,7 @@ export async function furnaceWork(ctx: StepContext, args: FurnaceArgs): Promise<
     return fail(stopped(bot, 'not_opened', `${placeText(bot, cell)} の ${block.name} が開かなかった: ${String((error as Error)?.message ?? error).slice(0, 80)}`, cell));
   }
   const notes: string[] = [];
-  const moved = { input: 0, fuel: 0, heldBack: 0 };
+  const moved = { input: 0, fuel: 0, heldBack: 0, took: 0 };
   let occupiedBy: string | undefined;
   const putFuel = async () => {
     if (!args.fuel) return;
@@ -123,6 +123,7 @@ export async function furnaceWork(ctx: StepContext, args: FurnaceArgs): Promise<
         const item = slot === 'output' ? window.outputItem() : slot === 'input' ? window.inputItem() : window.fuelItem();
         if (!item) continue;
         const taken = await guard(ctx, Promise.resolve(slot === 'output' ? window.takeOutput() : slot === 'input' ? window.takeInput() : window.takeFuel()), 3000);
+        if (taken) moved.took += Number(item.count ?? 0);
         notes.push(taken ? `${slot === 'output' ? '出来上がり' : slot === 'input' ? '材料' : '燃料'}の ${item.name}×${item.count} を取った` : `${slot} を取れなかった（時間切れ）`);
       }
     }
@@ -156,5 +157,8 @@ export async function furnaceWork(ctx: StepContext, args: FurnaceArgs): Promise<
 }
 
 export async function furnace(ctx: StepContext, args: FurnaceArgs): Promise<StepOutcome> {
-  return (await furnaceWork(ctx, args)).outcome;
+  const worked = await furnaceWork(ctx, args);
+  // Continue contracts (1): progress in items (what was put into the slots and what was taken out of them).
+  const moved = worked.moved.input + worked.moved.fuel + (worked.moved.took ?? 0);
+  return worked.outcome.progress ? worked.outcome : { ...worked.outcome, progress: { unit: 'item', done: moved, left: null } };
 }

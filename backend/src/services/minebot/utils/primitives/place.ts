@@ -5,6 +5,7 @@ import { type Cell } from '../localMap.js';
 import { noteOwned } from '../ownedBlocks.js';
 import { blockAt, cellNow, cellText, DIRECTION_JA, DIRECTIONS, eyeDistance, findItem, guard, inventoryCount, isAirLike, placeText, stopped,
   StepStopped, USE_REACH, wait, waitUntil, type StepContext, type StepOutcome } from './common.js';
+import { withProgress } from './progressUnits.js';
 
 /**
  * place: a block into each cell in order (design mb-llm-centric 2.3). The cell is the planner's: no place is chosen for it, the body
@@ -124,7 +125,17 @@ export async function bedBothHalves(ctx: StepContext, cell: Cell, waitMs = BED_H
   return { words: `。ベッドは足 ${cellText(halves.foot)}・頭 ${cellText(halves.head)}（向き ${halves.facing}${late >= 20 ? `。頭は足より ${late}ms 遅れて届いた` : ''}）` };
 }
 
+/**
+ * Continue contracts (1): progress in blocks (`done` the cells laid, `left` those neither laid nor already holding the block); every cell already holding the
+ * block asked for is the aim already held, `goal: 'already'` (one laid is `done`, as before).
+ */
 export async function place(ctx: StepContext, args: PlaceArgs): Promise<StepOutcome> {
+  const tally = { laid: 0, same: 0 };
+  const total = (args.at ?? []).length;
+  return withProgress(() => placeCells(ctx, args, tally), () => total ? { unit: 'block', done: tally.laid, left: Math.max(0, total - tally.laid - tally.same) } : undefined);
+}
+
+async function placeCells(ctx: StepContext, args: PlaceArgs, tally: { laid: number; same: number }): Promise<StepOutcome> {
   const bot = ctx.bot;
   const cells = args.at ?? [];
   if (!args.block) return stopped(bot, 'invalid_input', 'place には block（置くブロックの名前）が要る');
@@ -135,8 +146,10 @@ export async function place(ctx: StepContext, args: PlaceArgs): Promise<StepOutc
   const done: string[] = [];
   const result = (outcome: StepOutcome) => ({ ...outcome, text: `${done.length ? `${done.join('、')}。` : ''}${outcome.text}` });
   for (const cell of cells) {
-    if (!findItem(bot, args.block)) return result(stopped(bot, 'missing_item', `${args.block} を持っていない（残り0）`, cell));
     const there = blockAt(bot, cell);
+    // The cell holds the block already (the hand's aim held before it began; nothing is laid, so none is needed in the pack).
+    if (there?.name === args.block) { done.push(`${cellText(cell)} は既に ${args.block}（置かずに次へ）`); tally.same++; continue; }
+    if (!findItem(bot, args.block)) return result(stopped(bot, 'missing_item', `${args.block} を持っていない（残り0）`, cell));
     if (!there) return result(stopped(bot, 'unloaded', `${placeText(bot, cell)} は未ロード`, cell));
     // What the line may run to: the act's line is clipped, and the cells done before this one are in front of it.
     const room = FAIL_TEXT_ROOM - (done.length ? done.join('、').length + 1 : 0);
@@ -196,10 +209,12 @@ export async function place(ctx: StepContext, args: PlaceArgs): Promise<StepOutc
       if (halves.failed) return result(stopped(bot, 'not_placed', halves.failed, cell));
       bedWords = halves.words;
     }
+    tally.laid++;
     done.push(`${cellText(cell)} に ${args.block} を置いた（${DIRECTION_JA[side]}の ${reference.name} に当てて。残り${Math.max(0, countBefore - 1)}）${bedWords}`);
     ctx.progress?.(`${done.length}/${cells.length}`);
   }
-  return { ok: true, text: done.join('、'), at: cells[cells.length - 1] };
+  const allSame = tally.laid === 0 && tally.same === cells.length;
+  return { ok: true, text: done.join('、'), at: cells[cells.length - 1], ...(allSame ? { goal: 'already' as const, code: 'already_placed' } : {}) };
 }
 
 export { REPLACEABLE as PLACE_REPLACEABLE, isAirLike };

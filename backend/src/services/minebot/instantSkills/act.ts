@@ -310,7 +310,8 @@ async function runHand(ctx: StepContext, hand: ActHand): Promise<StepOutcome> {
       await wait(ctx, seconds * 1000);
       // Run 43: a wait says what the furnaces did by now (done, or out of fuel with how many smelted), once each.
       const furnaces = furnacesDueByNow(bot as any, Date.now());
-      return { ok: true, text: `${seconds}秒待った${furnaces.length ? `。${furnaces.join('。')}` : ''}` };
+      // Continue contracts (1): a wait is always done, and its progress is the seconds waited (the hand's whole aim).
+      return { ok: true, text: `${seconds}秒待った${furnaces.length ? `。${furnaces.join('。')}` : ''}`, progress: { unit: 'second', done: seconds, left: 0 } };
     }
   }
   return bad(`知らない手 ${String((hand as { do?: unknown }).do)}`);

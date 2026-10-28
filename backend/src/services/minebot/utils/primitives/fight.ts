@@ -9,7 +9,9 @@ import { equipToHandVerified } from '../equipVerified.js';
 import { itemFoodPoints } from '../foodPoints.js';
 import { creeperLit } from '../creeperFuse.js';
 import { bestBlade, fleeKeys, isThreat, reflexHeld } from '../floorReflexes.js';
-import { cooldownMs } from './attack.js';
+import { alreadyDead, cooldownMs, creatureIdOf } from './attack.js';
+import { deathLedgerOf } from '../deathLedger.js';
+import type { Progress } from '../../integration/commonFca/continueContract.js';
 import { eat } from './body.js';
 import { findEntity } from './use.js';
 import { findItem, guard, letGo, stopped, StepStopped, wait, type StepContext, type StepOutcome } from './common.js';
@@ -101,8 +103,12 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
   const none = (code: string, text: string) => stopped(bot, code, `fight 止まった ${code}: ${text}`);
 
   const wanted = typeof args.target === 'number' ? args.target : /^#\d+$/u.test(String(args.target).trim()) ? Number(String(args.target).trim().slice(1)) : args.target;
+  deathLedgerOf(bot);
   const target = findEntity(bot, wanted, 32);
-  if (!target || !target.position) return none('lost', `${args.target} が 32m 内に見えない`);
+  // Continue contracts (1, decision 4): a creature named by its id that the body saw die a moment ago is already dead; one that is not there and was not seen to die is not found.
+  const askedId = creatureIdOf(wanted);
+  if (askedId !== null) { const dead = alreadyDead(bot, askedId, target); if (dead) return dead; }
+  if (!target || !target.position) return { ...none('lost', `${args.target} が 32m 内に見えない（死ぬのを見た記録も無い）`), code: 'target_not_found' };
   if (target.type === 'player' || target.username) return none('invalid_input', `${labelOf(target)} は人。fight は生き物（敵）にだけ使う`);
   const label = labelOf(target);
   const held0 = reflexHeld(bot);
@@ -131,6 +137,8 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
   const sample = () => { const now = Number(bot.health ?? lastHealth); if (now < lastHealth) lost += lastHealth - now; lastHealth = now; };
   bot.on?.('entityHurt', onHurt); bot.on?.('entityDead', onDead); bot.on?.('health', sample);
   const counts = () => `与えた打撃 ${landed}（振り ${blows}）・受けた体力 ${r1(lost)}・食べた ${meals}`;
+  /** Continue contracts (1): the blows that landed (the target was hurt within the swing's time), of the blows swung. */
+  const struck = (): Progress => ({ unit: 'blow', done: landed, left: null });
   const holder = (reflex?: string | null) => reflex ? `体: 反射 ${reflex}` : '体: fight（反射なし）';
 
   // A fight is an engagement the shield reflex and the floor's melee/flee reflexes read; a flight is none (it runs, and a shield on the arm slows it).
@@ -212,9 +220,13 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
       .sort((a, b) => itemFoodPoints(bot, b.name) - itemFoodPoints(bot, a.name))[0]?.name ?? null;
   };
 
-  const finish = (verdict: string, extra = ''): StepOutcome => ({ ok: true, text: `fight 済 ${label} ${verdict}・${counts()}${extra}・${holder()}` });
+  const finish = (verdict: string, extra = ''): StepOutcome => ({ ok: true, progress: struck(), text: `fight 済 ${label} ${verdict}・${counts()}${extra}・${holder()}` });
   /** `at`: the creature's cell, only where the place is what the line is about (it cannot be reached). */
-  const fail = (code: string, text: string, at?: Cell): StepOutcome => stopped(bot, code, `fight 止まった ${code}: ${label} ${text}。${counts()}・${holder(code === 'reflex' ? reflexHeld(bot) : null)}`, at);
+  const fail = (code: string, text: string, at?: Cell): StepOutcome => {
+    const out = { ...stopped(bot, code, `fight 止まった ${code}: ${label} ${text}。${counts()}・${holder(code === 'reflex' ? reflexHeld(bot) : null)}`, at), progress: struck() };
+    // The creature went out of the body's sight with no death seen: the aim's outcome is not seen (goal unknown, code target_lost), not a failure and not a success.
+    return code === 'lost' ? { ...out, goal: 'unknown' as const, code: 'target_lost' } : out;
+  };
 
   /** Below retreatHp: gets out of reach; eats what helps, with a gap, and goes back in when the health is back; else leaves for good. Null: fight on. */
   async function retreat(): Promise<StepOutcome | null> {
@@ -360,7 +372,9 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
     if (error instanceof StepStopped || CUT.test(String((error as Error)?.message ?? error))) {
       // The act's stop, or a reflex's lease: the keys written after it would fail (the port refuses a body it no longer owns), so only the counts are told.
       const code = cutCode(error instanceof StepStopped ? error.why : 'reflex');
-      throw new HandCut(error instanceof StepStopped ? error.why : String((error as Error).message), `fight 止まった ${code}: ${label}。${counts()}・${holder(code === 'reflex' ? reflexHeld(bot) ?? 'lease' : null)}`);
+      const cut = new HandCut(error instanceof StepStopped ? error.why : String((error as Error).message), `fight 止まった ${code}: ${label}。${counts()}・${holder(code === 'reflex' ? reflexHeld(bot) ?? 'lease' : null)}`);
+      (cut as { progress?: Progress }).progress = struck();
+      throw cut;
     }
     throw error;
   } finally {

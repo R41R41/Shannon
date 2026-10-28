@@ -200,7 +200,8 @@ describe('shoot: the arrow\'s fall', () => {
 describe('the small parts', () => {
   it('eat refuses at a full bar; furnace and chest refuse what is not one; pillarUp stops at a ceiling; a bucket only fills at a source', async () => {
     const bot = body([{ name: 'bread', count: 2, type: 5 }]);
-    expect((await eat(ctx(bot), { item: 'bread' })).reason).toBe('full');
+    // Continue contracts (1): a fed body that cannot eat holds the aim already (ok, goal already, code food_full), not a failure.
+    expect(await eat(ctx(bot), { item: 'bread' })).toMatchObject({ ok: true, goal: 'already', code: 'food_full' });
     expect((await furnace(ctx(bot), { at: { x: 1, y: 63, z: 0 } })).reason).toBe('not_furnace');
     expect((await chest(ctx(bot), { at: { x: 1, y: 63, z: 0 } })).reason).toBe('not_container');
     bot.__blocks.set('0,66,0', { name: 'stone', boundingBox: 'block' });

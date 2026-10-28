@@ -27,6 +27,7 @@ import { renderActReport, takeActReport } from '../../utils/actReport.js';
 import { incidentsOf, withIncidentText, type HoldRelease } from '../../utils/incidents.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { installLife, type LifeKeeper } from '../../utils/life.js';
+import { deathLedgerOf } from '../../utils/deathLedger.js';
 import { lapseOf, madenessOf, type BodyNow, type Lapse } from './lapse.js';
 import type { BodyTimes, BodyVersion, HandStart, ItemOutcome } from './continueContract.js';
 import { EventStore, EVENTS_SKILL } from './eventStore.js';
@@ -170,6 +171,7 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
     this.opLog = opLogOf(bot) ?? installOpLog(bot, new OpLog(opLogDirectory()));
     setMotorOpSink(bot, op => this.opLog.op(op));
     installPackTap(bot);
+    deathLedgerOf(bot);   // the deaths this connection sees, from the start (an attack on a creature seen to die a moment ago is "already")
     setReflexEventPrefix(bot, () => `reflex:${this.connectionId}`);
     this.tickTimer = setInterval(() => { void this.askTick(); }, TICK_EVERY_MS);
     this.tickTimer.unref?.();

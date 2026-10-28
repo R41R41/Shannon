@@ -123,11 +123,14 @@ export async function pickup(ctx: StepContext, args: PickupArgs): Promise<StepOu
     }
   } finally { try { if (previous) navigator.setMovements(previous); } catch { /* kept */ } }
   const gained: string[] = [];
+  let gotCount = 0;
   const after = new Map<string, number>();
   for (const item of bot.inventory?.items?.() ?? []) after.set(item.name, (after.get(item.name) ?? 0) + item.count);
-  for (const [name, count] of after) { const diff = count - (before.get(name) ?? 0); if (diff > 0) gained.push(`${name}+${diff}`); }
+  for (const [name, count] of after) { const diff = count - (before.get(name) ?? 0); if (diff > 0) { gained.push(`${name}+${diff}`); gotCount += diff; } }
   const way = wayWords(notes);
   const text = `拾った: ${gained.join(' ') || 'なし'}${missed.length ? `。拾えなかった: ${missed.join('、')}` : ''}${way ? `（途中で${way}）` : ''}`;
-  if (!gained.length && missed.length) return stopped(bot, freeSlots(bot) === 0 ? 'inventory_full' : 'not_picked', `${text}（持ち物 ${packLine(bot).length > 200 ? `空き${freeSlots(bot)}枠` : packLine(bot)}）`, feetCell(bot)!);
-  return { ok: true, text };
+  // Continue contracts (1): progress in items (the items the pack gained, counted from the pack; what was left lying is in the text).
+  const progress = { unit: 'item' as const, done: gotCount, left: null };
+  if (!gained.length && missed.length) return { ...stopped(bot, freeSlots(bot) === 0 ? 'inventory_full' : 'not_picked', `${text}（持ち物 ${packLine(bot).length > 200 ? `空き${freeSlots(bot)}枠` : packLine(bot)}）`, feetCell(bot)!), progress };
+  return { ok: true, text, progress };
 }

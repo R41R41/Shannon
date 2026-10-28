@@ -3,6 +3,7 @@ import { feetCell, relativeWords, type Cell } from '../localMap.js';
 import { cellText, freeSlots, guard, inventoryCount, stopped, StepStopped, wait, type StepContext, type StepOutcome } from './common.js';
 import { nearestTable, tableInReach } from './craft.js';
 import { placeNearby } from './placeSpot.js';
+import { withProgress } from './progressUnits.js';
 
 /**
  * make: one item, and the parts it is made of, in a chain of crafts (hands-contract.md 4). The planner says what and how many; the body
@@ -90,7 +91,21 @@ function obtain(bot: any, name: string, qty: number, state: State, path: readonl
 
 const stacksOut = (made: Map<string, number>) => [...made.entries()].map(([name, count]) => `${name}×${count}`);
 
+/**
+ * Continue contracts (1): progress in items (`done` what the pack gained of the item, `left` the count not yet made). `count` is how many MORE to make (the target is the
+ * number held now plus count): a pack that holds that many already is not "already".
+ */
 export async function make(ctx: StepContext, args: MakeArgs): Promise<StepOutcome> {
+  const bot = ctx.bot;
+  const wanted = Math.max(1, Math.min(64, Math.round(args.count ?? 1)));
+  const had = inventoryCount(bot, String(args.item ?? ''));
+  return withProgress(() => makeItem(ctx, args), () => {
+    const gained = Math.max(0, inventoryCount(bot, String(args.item ?? '')) - had);
+    return { unit: 'item', done: gained, left: Math.max(0, wanted - gained) };
+  });
+}
+
+async function makeItem(ctx: StepContext, args: MakeArgs): Promise<StepOutcome> {
   const bot = ctx.bot;
   const name = String(args.item ?? '');
   const item = bot.registry?.itemsByName?.[name];

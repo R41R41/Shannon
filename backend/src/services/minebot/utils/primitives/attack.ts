@@ -8,6 +8,8 @@ import { nativeActionHost } from '../../execution/ActionExecution.js';
 import { isLikelyHostileMobName } from '../hostileMobHints.js';
 import { bodyReader, feetCell, relativeWords } from '../localMap.js';
 import { eyeOf, probeSight } from '../probeTools.js';
+import { deathLedgerOf } from '../deathLedger.js';
+import type { Progress } from '../../integration/commonFca/continueContract.js';
 
 const { goals } = pathfinder;
 
@@ -33,18 +35,42 @@ export function cooldownMs(held: string | undefined): number {
   return 250;
 }
 
+/** The id a hand names a creature by ("#41" or 41), or null when it names a kind (a kind does not name one creature, so a death seen is not its answer). */
+export function creatureIdOf(target: string | number | undefined): number | null {
+  if (typeof target === 'number') return Number.isSafeInteger(target) ? target : null;
+  const match = /^#?(\d+)$/u.exec(String(target ?? '').trim());
+  return match ? Number(match[1]) : null;
+}
+
+/**
+ * Continue contracts (1, decision 4): the hand's aim, a dead creature, already holds when the body SAW it die (the connection's `entityDead`, in this dimension, within the death memory:
+ * utils/deathLedger). A creature that is not there and was not seen to die is not found (`target_not_found`, nothing was moved), never taken for dead.
+ */
+export function alreadyDead(bot: any, id: number, who?: any): StepOutcome | null {
+  const seen = deathLedgerOf(bot).seenDead(id, undefined, who);
+  if (!seen) return null;
+  return { ok: true, goal: 'already', code: 'target_dead', text: `#${id}${seen.name ? `（${seen.name}）` : ''} は ${(seen.agoMs / 1000).toFixed(0)}秒前に死ぬのを見た（既に済）`,
+    progress: { unit: 'blow', done: 0, left: 0 } };
+}
+
 export async function attack(ctx: StepContext, args: AttackArgs): Promise<StepOutcome> {
   const bot = ctx.bot;
   if (args.mode === 'hold') return holdAndStrike(ctx, args);
   if (args.target === undefined) return stopped(bot, 'invalid_input', 'attack には target（#id か名前）が要る');
+  deathLedgerOf(bot);
+  const asked = creatureIdOf(args.target);
   const target = findEntity(bot, args.target, 32);
-  if (!target) return stopped(bot, 'target_not_found', `${args.target} が 32m 内にいない`);
+  // A creature named by its id that the body saw die a moment ago (it may still be listed, its death animation on) is already dead.
+  if (asked !== null) { const dead = alreadyDead(bot, asked, target); if (dead) return dead; }
+  if (!target) return stopped(bot, 'target_not_found', `${args.target} が 32m 内にいない（死ぬのを見た記録も無い）`);
   const label = `${target.name ?? target.username ?? 'entity'}（id ${target.id}）`;
   const limitMs = Math.min(MAX_SECONDS, typeof args.until === 'number' && args.until > 0 ? args.until : args.maxSeconds && args.maxSeconds > 0 ? args.maxSeconds : MAX_SECONDS) * 1000;
   const untilDead = args.until === undefined || args.until === 'dead';
   const chase = args.chase !== false;
   const started = Date.now();
   let blows = 0, hurt = 0, dead = false;
+  /** Continue contracts (1): the blows that landed (the target was hurt), of the blows swung. */
+  const landed = (): Progress => ({ unit: 'blow', done: hurt, left: null });
   const onHurt = (entity: any) => { if (entity?.id === target.id) hurt++; };
   const onDead = (entity: any) => { if (entity?.id === target.id) dead = true; };
   bot.on('entityHurt', onHurt); bot.on('entityDead', onDead);
@@ -68,8 +94,8 @@ export async function attack(ctx: StepContext, args: AttackArgs): Promise<StepOu
       if (distance < best - 0.3) { best = distance; bestAt = Date.now(); }
       if (distance > REACH && (!chase || Date.now() - bestAt > NO_GAIN_MS)) {
         letGo(bot);
-        return stopped(bot, chase ? 'cannot_reach' : 'out_of_reach', `${label} に届かない（${distance.toFixed(1)}m${chase ? `、${NO_GAIN_MS / 1000}秒近づけない` : ''}）。当てた ${blows}回`,
-          { x: Math.floor(live.position.x), y: Math.floor(live.position.y), z: Math.floor(live.position.z) });
+        return { ...stopped(bot, chase ? 'cannot_reach' : 'out_of_reach', `${label} に届かない（${distance.toFixed(1)}m${chase ? `、${NO_GAIN_MS / 1000}秒近づけない` : ''}）。当てた ${blows}回`,
+          { x: Math.floor(live.position.x), y: Math.floor(live.position.y), z: Math.floor(live.position.z) }), progress: landed() };
       }
       if (distance <= REACH && Date.now() - lastSwing >= cooldownMs(bot.heldItem?.name)) {
         try { await bot.lookAt(live.position.offset(0, (live.height ?? 1.8) * 0.6, 0), true); } catch { /* looked */ }
@@ -79,6 +105,7 @@ export async function attack(ctx: StepContext, args: AttackArgs): Promise<StepOu
       await wait(ctx, 50);
     }
   } catch (error) {
+    if (error && typeof error === 'object' && !(error as { progress?: unknown }).progress) (error as { progress?: Progress }).progress = landed();
     if (error instanceof StepStopped || /Action interrupted/u.test(String((error as Error)?.message))) { letGo(bot); throw error; }
     throw error;
   } finally {
@@ -90,10 +117,15 @@ export async function attack(ctx: StepContext, args: AttackArgs): Promise<StepOu
   const live = bot.entities?.[target.id];
   const health = live ? entityHealth(bot, live) : null;
   const seconds = ((Date.now() - started) / 1000).toFixed(1);
-  if (dead) return { ok: true, text: `${label} を倒した（${blows}回振って ${hurt}回当たった、${seconds}秒）` };
-  if (!live) return { ok: true, text: `${label} が見えなくなった（倒れたか、離れて消えた。${blows}回振って ${hurt}回当たった、${seconds}秒）` };
-  if (untilDead) return stopped(bot, 'time_up', `${label} は${Math.round(limitMs / 1000)}秒で倒れなかった（${blows}回振って ${hurt}回当たった${health !== null ? `、残り体力 ${health}` : ''}）`);
-  return { ok: true, text: `${label} を ${seconds}秒攻撃した（${blows}回振って ${hurt}回当たった${health !== null ? `、残り体力 ${health}` : ''}）` };
+  // The death is the one the body saw (`entityDead` of this creature while the hand ran): done. A creature that is no longer listed with no death seen (it went out of sight, out of range, into
+  // another dimension) is not known dead and not known alive: the aim's outcome is not seen (goal unknown, code target_lost), never a success.
+  if (dead) return { ok: true, text: `${label} を倒した（${blows}回振って ${hurt}回当たった、${seconds}秒）`, progress: landed() };
+  if (!live) {
+    return { ok: false, goal: 'unknown', reason: 'target_lost', code: 'target_lost', progress: landed(),
+      text: `${label} が見えなくなった（死ぬのは見ていない。倒れたか、離れて消えたかは分からない。${blows}回振って ${hurt}回当たった、${seconds}秒）` };
+  }
+  if (untilDead) return { ...stopped(bot, 'time_up', `${label} は${Math.round(limitMs / 1000)}秒で倒れなかった（${blows}回振って ${hurt}回当たった${health !== null ? `、残り体力 ${health}` : ''}）`), progress: landed() };
+  return { ok: true, text: `${label} を ${seconds}秒攻撃した（${blows}回振って ${hurt}回当たった${health !== null ? `、残り体力 ${health}` : ''}）`, progress: landed() };
 }
 
 /**
@@ -146,6 +178,7 @@ async function holdAndStrike(ctx: StepContext, args: AttackArgs): Promise<StepOu
   const lower = () => { if (raised) { try { bot.deactivateItem(); } catch { /* lowered */ } raised = false; } };
   const started = Date.now();
   let lastInReach = started, unreached = false;
+  const struckProgress = (): Progress => ({ unit: 'blow', done: landed, left: null });
   try {
     try { bot.clearControlStates?.(); bot.pathfinder?.setGoal?.(null); } catch { /* standing */ }
     raise();
@@ -169,6 +202,9 @@ async function holdAndStrike(ctx: StepContext, args: AttackArgs): Promise<StepOu
       }
       await wait(ctx, 50);
     }
+  } catch (error) {
+    if (error && typeof error === 'object' && !(error as { progress?: unknown }).progress) (error as { progress?: Progress }).progress = struckProgress();
+    throw error;
   } finally {
     lower();
     bot.removeListener('entityDead', onDead); bot.removeListener('entityHurt', onHurt);
@@ -180,14 +216,14 @@ async function holdAndStrike(ctx: StepContext, args: AttackArgs): Promise<StepOu
     // The act's line is 160 characters with the closed word and what the cell holds: the counts first, then the nearest one.
     const held = ((Date.now() - started) / 1000).toFixed(0);
     const nearest = nearestFact(bot, fits, label);
-    return stopped(bot, 'out_of_reach', `${held}秒、打てる所（目から${REACH}m・見える）に${label}がいない。${counts}。${nearest.text}`, nearest.at);
+    return { ...stopped(bot, 'out_of_reach', `${held}秒、打てる所（目から${REACH}m・見える）に${label}がいない。${counts}。${nearest.text}`, nearest.at), progress: struckProgress() };
   }
   const drops = (Object.values(bot.entities ?? {}) as any[]).filter(entity => entity?.name === 'item' && !before.has(entity.id)
     && entity.position.distanceTo(bot.entity.position) <= 8);
   const dropNames = drops.map(entity => { try { const item = entity.getDroppedItem?.(); return item ? `${item.name}×${item.count}` : `#${entity.id}`; } catch { return `#${entity.id}`; } });
   // A hold that struck nothing says where the nearest one was, as the stop does.
   const none = blows === 0 ? `。${nearestFact(bot, fits, label).text}` : '';
-  return { ok: true, text: `${seconds}秒その場で構えた${shield ? '（盾）' : ''}: ${counts}（被弾 ${hurtTaken}回）`
+  return { ok: true, progress: struckProgress(), text: `${seconds}秒その場で構えた${shield ? '（盾）' : ''}: ${counts}（被弾 ${hurtTaken}回）`
     + `、落とし物 ${dropNames.length ? `${dropNames.join(' ')}（pickup で拾う）` : 'なし'}${none}` };
 }
 

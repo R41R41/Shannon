@@ -14,6 +14,8 @@ import { dig } from './dig.js';
 import { pillarUp, shortFloor, wholeFloorBeside } from './pillarUp.js';
 import { bodyOverlap, placeFacts } from '../placeFacts.js';
 import { blackBoxOf } from '../blackbox.js';
+import type { Progress } from '../../integration/commonFca/continueContract.js';
+import { meterProgress, round1 } from './progressUnits.js';
 
 const { goals } = pathfinder;
 
@@ -490,6 +492,25 @@ async function laidAt(host: any, reference: any, face: any): Promise<boolean> {
   return false;
 }
 
+/**
+ * Continue contracts (1, 12 decision on go): the cells round a place that shut the way, for the stop's `lastSearch.blockedAround`. The cells the body would stand in or pass
+ * (the place's feet cell and the one over it, and the eight round each: 18), those that are solid and not on the list of what may be dug (`canDig`), nearest the place first, 8 at most.
+ * A fact read from the world, never a choice: nothing is dug or laid for it.
+ */
+export function blockedAroundPlace(bot: any, aim: Cell, rule: Pick<DigRule, 'names'>): NonNullable<NonNullable<Progress['lastSearch']>['blockedAround']> {
+  const found: Array<{ at: Cell; block: string; diggable: boolean; order: number }> = [];
+  for (let dy = 0; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+    const at = { x: aim.x + dx, y: aim.y + dy, z: aim.z + dz };
+    const block = blockAt(bot, at);
+    if (!block || block.boundingBox !== 'block') continue;
+    const name = String(block.name);
+    const diggable = rule.names.has(name);
+    if (diggable) continue;
+    found.push({ at, block: name, diggable, order: Math.abs(dx) + Math.abs(dz) + dy * 0.5 });
+  }
+  return found.sort((a, b) => a.order - b.order).slice(0, 8).map(({ at, block, diggable }) => ({ at, block, diggable }));
+}
+
 export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   const bot = ctx.bot;
   const nav = bot.pathfinder as any;
@@ -507,6 +528,24 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   const place = placeNamesOf(bot, args.canPlace);
   const state: GoState = { steps: 0, dug: 0, placed: 0, redraws: 0, veto: null, refused: 0, avoid: new Set(), dugCells: new Set(), laidCells: new Set() };
   const start = feetCell(bot)!;
+  // Continue contracts (1): the stop's progress in metres, from where the body began to where it stopped, and the last route search the go made.
+  const startPosition = bot.entity?.position ? { x: bot.entity.position.x, y: bot.entity.position.y, z: bot.entity.position.z } : null;
+  let aims: Cell[] = cells;
+  let lastSearch: NonNullable<Progress['lastSearch']> | undefined;
+  const progressNow = (arrived = false): Progress => {
+    const meters = meterProgress(bot, startPosition, aims);
+    const search = lastSearch ? { ...lastSearch } : undefined;
+    // A search that found no cell of a way and gave up: what shuts the place in, when it can be read (the place itself, not a guess).
+    if (search && search.len === 0 && (search.status === 'timeout' || search.status === 'no_path') && bot.entity?.position) {
+      try {
+        const near = aims.reduce((best, cell) => (distanceTo(bot, cell) < distanceTo(bot, best) ? cell : best), aims[0]);
+        const blocked = blockedAroundPlace(bot, near, rule);
+        if (blocked.length) search.blockedAround = blocked;
+      } catch { /* the stop stands without it */ }
+    }
+    return { ...meters, ...(arrived ? { left: 0 } : {}), work: { dug: state.dug, placed: state.placed },
+      ...(search?.endM !== undefined ? { searchEndM: search.endM } : {}), ...(search ? { lastSearch: search } : {}) };
+  };
 
   // ---- how a line ends (the contract's result lines) ----
   const tail = () => `${cellText(feetCell(bot) ?? start)} 道 ${state.steps} 歩・掘 ${state.dug}・置 ${state.placed}・引き直し ${state.redraws} 回`;
@@ -518,9 +557,9 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     const room = 160 - head.length - fixed.length;
     const withHint = hint ? `。${hint}` : '';
     const text = why.length + withHint.length <= room ? `${head}${why}${fixed}${withHint}` : `${head}${clip(why, Math.max(24, room))}${fixed}`;
-    return { ...stopped(bot, code, text, at, start), data: { work: { dug: state.dug, placed: state.placed, steps: state.steps, redraws: state.redraws } } };
+    return { ...stopped(bot, code, text, at, start), progress: progressNow(), data: { work: { dug: state.dug, placed: state.placed, steps: state.steps, redraws: state.redraws } } };
   };
-  const arrived = (): StepOutcome => ({ ok: true, text: `go 着いた ${tail()}`, at: feetCell(bot) ?? start,
+  const arrived = (): StepOutcome => ({ ok: true, text: `go 着いた ${tail()}`, at: feetCell(bot) ?? start, progress: progressNow(true),
     data: { work: { dug: state.dug, placed: state.placed, steps: state.steps, redraws: state.redraws } } });
 
   // ---- the places: the ones nobody may stand in are dropped; none left is `unsafe` ----
@@ -538,9 +577,11 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     return fail('no_floor', why, /なら .* の上に立てる$/u.test(why) ? 'その 1 つ下を行き先に' : /^行き先 .* は宙/u.test(why) ? '立てる所を行き先に（宙へ渡るなら canPlace）' : '別の行き先を');
   }
   const targets = grounded;
+  aims = targets;
   const near = (): Cell => targets.reduce((best, cell) => (distanceTo(bot, cell) < distanceTo(bot, best) ? cell : best), targets[0]);
   const reached = () => atGoal(bot, compositeOf(targets, limits.range));
-  if (reached()) return arrived();
+  // Continue contracts (1): within range of a place when the go began is the aim already held (nothing was moved, dug or laid).
+  if (reached()) return { ...arrived(), goal: 'already', code: 'already_there' };
 
   // ---- the watchers: cells entered, blocks dug, blocks laid ----
   let lastCell = keyOf(start), manualBusy = false;
@@ -692,8 +733,9 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   const busy = () => manualBusy || ((!!nav.isMining?.() || !!nav.isBuilding?.()) && Date.now() - lastWork < 5000);
 
   /** The route found without walking it: its status and the cells it breaks and fills. */
-  const plan = async (movements: any, goal: any, ms: number): Promise<Plan> => {
+  const plan = async (movements: any, goal: any, ms: number, track = true): Promise<Plan> => {
     toolKept.clear();
+    const searchStarted = Date.now();
     const generator = nav.getPathFromTo(movements, bot.entity.position, goal, { timeout: Math.max(300, Math.min(ms, searchCap)) });
     let result = generator.next().value?.result ?? { status: 'noPath', path: [] };
     // The search answers a tick (40 ms) at a time while it is still going; here it is let finish (its own time bounds it), the body's other work
@@ -705,7 +747,16 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
       for (const cell of node?.toBreak ?? []) { const name = nameAt(bot, cell.x, cell.y, cell.z) ?? '?'; digs.set(name, (digs.get(name) ?? 0) + 1); }
       places += node?.toPlace?.length ?? 0;
     }
-    return { status: String(result.status), path: result.path ?? [], digs, places, visited: Number(result.visitedNodes ?? 0) };
+    const found: Plan = { status: String(result.status), path: result.path ?? [], digs, places, visited: Number(result.visitedNodes ?? 0) };
+    // The route searches that decide the stop are kept (the lifted-rule searches that only name a reason are not): its status, the cells of the way, the nodes, the time, and
+    // how far from the places the way's end was (the "あと 10m" of a search that ran out).
+    if (track) {
+      const tip = found.path.length ? nodeCell(found.path[found.path.length - 1]) : null;
+      const endM = tip ? Math.min(...targets.map(cell => Math.hypot(tip.x - cell.x, tip.y - cell.y, tip.z - cell.z))) : undefined;
+      lastSearch = { status: found.status === 'success' ? 'success' : found.status === 'partial' ? 'partial' : found.status === 'timeout' ? 'timeout' : 'no_path',
+        len: found.path.length, nodes: found.visited, ms: Date.now() - searchStarted, ...(endM !== undefined ? { endM: round1(endM) } : {}) };
+    }
+    return found;
   };
 
   /** The way is shut: look again with each rule lifted in turn, and name the first whose lifting opens it. */
@@ -738,7 +789,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     for (const [relax, outcome] of lifts) {
       if (timeLeft() < 800) break;
       let found: Plan | null = null;
-      try { found = await plan(movementsFor(relax), goal, ms); } catch { found = null; }
+      try { found = await plan(movementsFor(relax), goal, ms, false); } catch { found = null; }
       if (found && found.status === 'success') return outcome(found);
     }
     return fail('dead_end', `掘っても置いても道が無い（行き止まり）${ignored}`, '別の行き先を');
@@ -972,6 +1023,8 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   } catch (error) {
     // The act's stop, the action's abort, a reflex: the body lets go of everything and the stop goes on.
     if (error instanceof StepStopped || /Action interrupted/u.test(String((error as Error)?.message))) letGo(bot);
+    // Continue contracts (1): a go that was cut tells how far it had got (the act reads `error.progress`).
+    if (error && typeof error === 'object' && !(error as { progress?: unknown }).progress) { try { (error as { progress?: Progress }).progress = progressNow(); } catch { /* the cut stands without it */ } }
     throw error;
   } finally {
     bot.removeListener?.('physicsTick', onTick);

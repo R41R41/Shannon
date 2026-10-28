@@ -57,12 +57,17 @@ export async function sneak(ctx: StepContext, args: { on?: boolean; seconds?: nu
 }
 
 const SLOTS: Record<string, string> = { hand: 'hand', 'off-hand': 'off-hand', head: 'head', torso: 'torso', legs: 'legs', feet: 'feet' };
+/** The inventory window's slot of each place an item is worn in (armour 5 to 8, the off hand 45). */
+const EQUIP_SLOT_INDEX: Record<string, number> = { head: 5, torso: 6, legs: 7, feet: 8, 'off-hand': 45 };
 export async function equip(ctx: StepContext, args: { item: string; slot?: string }): Promise<StepOutcome> {
   const bot = ctx.bot;
   const slot = SLOTS[args.slot ?? 'hand'];
   if (!slot) return stopped(bot, 'invalid_input', `slot は ${Object.keys(SLOTS).join('・')} のどれか`);
   const item = findItem(bot, args.item);
   if (!item) return stopped(bot, 'missing_item', `${args.item} を持っていない`);
+  // Continue contracts (1): the item is already where it was to be put (in the hand, or in the armour or off-hand slot asked): the aim held when the hand began.
+  const nowThere = slot === 'hand' ? bot.heldItem : bot.inventory?.slots?.[EQUIP_SLOT_INDEX[slot] ?? -1];
+  if (nowThere?.name === args.item) return { ok: true, goal: 'already', code: 'already_equipped', text: `${args.item} は既に${slot === 'hand' ? '手に持っている' : ` ${slot} に着けている`}（既に済）` };
   if (slot === 'hand') {
     const held = await guard(ctx, equipToHandVerified(bot, item), 5000);
     return held?.value.held ? { ok: true, text: `${args.item} を手に持った` } : stopped(bot, 'equip_failed', `${args.item} を手に持てなかった（${held?.value.detail ?? '時間切れ'}）`);
@@ -80,7 +85,8 @@ export async function eat(ctx: StepContext, args: { item: string }): Promise<Ste
   const bot = ctx.bot;
   const item = findItem(bot, args.item);
   if (!item) return stopped(bot, 'missing_item', `${args.item} を持っていない`);
-  if ((bot.food ?? 0) >= 20 && !ALWAYS_EDIBLE.has(args.item)) return stopped(bot, 'full', `満腹（20/20）なので ${args.item} は食べられない`);
+  // Continue contracts (1): a fed body that cannot eat holds the aim already (nothing is changed): ok, goal 'already', code food_full (a reflex that ate first makes this the usual case).
+  if ((bot.food ?? 0) >= 20 && !ALWAYS_EDIBLE.has(args.item)) return { ok: true, goal: 'already', code: 'food_full', text: `満腹（20/20）なので ${args.item} は食べられない（既に済）` };
   const before = { count: inventoryCount(bot, args.item), food: bot.food as number, saturation: Number(bot.foodSaturation ?? 0) };
   const held = await guard(ctx, equipToHandVerified(bot, item), 5000);
   if (!held?.value.held) return stopped(bot, 'equip_failed', `${args.item} を手に持てなかった`);
@@ -150,13 +156,16 @@ export async function drop(ctx: StepContext, args: DropArgs): Promise<StepOutcom
     }
   }
   const done: string[] = [];
+  let thrown = 0, asked = 0;
   for (const want of args.items) {
     const have = inventoryCount(bot, want.item);
     if (!have) { done.push(`${want.item} を持っていない`); continue; }
     const count = Math.min(have, Math.max(1, Math.round(want.count ?? have)));
+    asked += Math.max(1, Math.round(want.count ?? have));
     const item = findItem(bot, want.item);
     try { await guard(ctx, Promise.resolve(bot.toss(item.type, null, count)), 3000); }
     catch (error) { if (error instanceof StepStopped || /Action interrupted/u.test(String((error as Error)?.message))) throw error; }
+    thrown += Math.max(0, have - inventoryCount(bot, want.item));
     done.push(`${want.item}×${have - inventoryCount(bot, want.item)} を投げた（残り${inventoryCount(bot, want.item)}）`);
   }
   // Where the items lay: the item entities that were not there before, read after a moment (the server spawns them a tick on).
@@ -176,5 +185,6 @@ export async function drop(ctx: StepContext, args: DropArgs): Promise<StepOutcom
       } else if (aim) where = `。${aim.replace(/。$/u, '')}（落ちた先は読めなかった）`;
     } catch (error) { if (error instanceof StepStopped) throw error; }
   }
-  return { ok: true, text: `${done.join('、')}${where}` };
+  // Continue contracts (1): the items thrown (counted from the pack), of the items asked.
+  return { ok: true, text: `${done.join('、')}${where}`, progress: { unit: 'item', done: thrown, left: Math.max(0, asked - thrown) } };
 }

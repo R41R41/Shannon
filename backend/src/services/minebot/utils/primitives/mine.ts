@@ -6,6 +6,7 @@ import { dig } from './dig.js';
 import { pickup } from './pickup.js';
 import { canWorkOn } from './getNear.js';
 import { go } from './go.js';
+import { withProgress } from './progressUnits.js';
 
 /**
  * mine: a vein, cell by cell (hands-contract.md 3). The planner names the block (`iron_ore`; `deepslate_iron_ore` is another kind) and
@@ -58,7 +59,17 @@ function roomForDrops(bot: any, block: string): boolean {
   return drops.some((drop: any) => ((bot.inventory?.items?.() ?? []) as any[]).some(held => held.name === drop.name && held.count < Number(drop.stackSize ?? 64)));
 }
 
+/**
+ * Continue contracts (1): progress in items (`done` the cells of the vein dug, `left` the count not yet reached). `count` keeps its meaning (how many to take, from
+ * the pack as it is: a pack that holds some already is not "already"); a vein that ran out is ok with `left` above 0.
+ */
 export async function mine(ctx0: StepContext, args: MineArgs): Promise<StepOutcome> {
+  const result = { dug: 0, visited: 0, road: 0 };
+  const count = clamp(Math.round(Number(args.count ?? DEFAULT_COUNT)), 1, 64);
+  return withProgress(() => mineVein(ctx0, args, result), () => ({ unit: 'item', done: result.dug, left: Math.max(0, count - result.dug) }));
+}
+
+async function mineVein(ctx0: StepContext, args: MineArgs, result: { dug: number; visited: number; road: number }): Promise<StepOutcome> {
   const bot = ctx0.bot;
   const startedAt = Date.now();
   const block = String(args.block ?? '');
@@ -70,7 +81,6 @@ export async function mine(ctx0: StepContext, args: MineArgs): Promise<StepOutco
   const roadBudget = roadWords.length ? clamp(Math.round(Number(args.maxDig ?? DEFAULT_MAX_DIG)), 0, 200) : 0;
   const packBefore = packCounts(bot);
   const idsBefore = new Set(Object.keys(bot.entities ?? {}).map(Number));
-  const result = { dug: 0, visited: 0, road: 0 };
   const dugCells: Cell[] = [];
   const skipped: Array<{ cell: Cell; why: string; kind: 'liquid' | 'unreachable' | 'footing' | 'other' }> = [];
   const problem = (reason: string, text: string, at?: Cell): StepOutcome => stopped(bot, reason,

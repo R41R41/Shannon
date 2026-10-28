@@ -49,6 +49,7 @@ export async function chest(ctx: StepContext, args: ChestArgs): Promise<StepOutc
     return stopped(bot, 'not_opened', `${placeText(bot, cell)} の ${block.name} が開かなかった: ${String((error as Error)?.message ?? error).slice(0, 80)}`, cell);
   }
   const notes: string[] = [];
+  let moved = 0;
   try {
     const before = contents(window);
     // takeAll: every kind inside, as far as the pack has room.
@@ -65,6 +66,7 @@ export async function chest(ctx: StepContext, args: ChestArgs): Promise<StepOutc
       catch (error) { if (error instanceof StepStopped || /Action interrupted/u.test(String((error as Error)?.message))) throw error; failed = String((error as Error)?.message ?? error).slice(0, 60); }
       // Taken: what left the container, or what came into the pack's slots of the window (whichever the window shows more of).
       const taken = Math.max(available - inContainer(window, want.item), inPack(bot, window, want.item) - had, 0);
+      moved += taken;
       notes.push(`${want.item}×${taken} を取った${taken < count ? `（頼んだのは ${count}${failed ? `。${failed}` : ''}）` : ''}`);
     }
     for (const give of args.put ?? []) {
@@ -76,11 +78,13 @@ export async function chest(ctx: StepContext, args: ChestArgs): Promise<StepOutc
       try { await guard(ctx, Promise.resolve(window.deposit(item.type, null, count)), 4000); }
       catch (error) { if (error instanceof StepStopped || /Action interrupted/u.test(String((error as Error)?.message))) throw error; }
       const put = Math.max(inContainer(window, give.item) - held, have - inPack(bot, window, give.item), 0);
+      moved += put;
       notes.push(`${give.item}×${put} を入れた`);
     }
     await wait(ctx, 150);
     const after = contents(window);
     const items = after === '空' ? [] : after.split(' ').slice(0, 27);
-    return { ok: true, at: cell, data: { container: { at: cell, kind: block.name, items } }, text: `${notes.length ? `${notes.join('、')}。` : ''}${cellText(cell)} の ${block.name} の中身: ${after}${notes.length && before !== after ? `（前は ${before}）` : ''}` };
+    // Continue contracts (1): progress in items (taken out of the container plus put into it).
+    return { ok: true, at: cell, progress: { unit: 'item', done: moved, left: null }, data: { container: { at: cell, kind: block.name, items } }, text: `${notes.length ? `${notes.join('、')}。` : ''}${cellText(cell)} の ${block.name} の中身: ${after}${notes.length && before !== after ? `（前は ${before}）` : ''}` };
   } finally { try { window.close(); } catch { /* closed */ } }
 }

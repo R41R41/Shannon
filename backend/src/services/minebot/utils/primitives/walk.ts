@@ -6,6 +6,7 @@ import { bodyReader, feetCell, relativeWords, type Cell, type MapBlock } from '.
 import { probePath } from '../probeTools.js';
 import { cellWay, climbRise, doorOpen, installWalkRules, isDoorlike, isLeaves, isPortal, isTall, mapBlockOf, MAX_CLIMB, MAX_FALL, passable, PORTAL_WORDS, portalAim, standable, standableBeside, whyNotStand } from '../walkRules.js';
 import { cellText, guard, letGo, placeText, stopped, StepStopped, wait, waitUntil, type StepContext, type StepOutcome } from './common.js';
+import { meterProgress, withProgress } from './progressUnits.js';
 
 const { goals } = pathfinder;
 
@@ -486,8 +487,21 @@ function unstandable(bot: any, target: Cell): StepOutcome | null {
     `${placeText(bot, target)}そのものには立てない（${why.text}）。${beside.length ? `立てる隣: ${beside.map(cellText).join('・')}` : '隣にも立てる所は無い'}`, target);
 }
 
+/**
+ * Continue contracts (1): progress in metres (`done` how much nearer the last point the body came, `left` and `fromStopM` the metres still to it from where it stopped; the
+ * body's place is `at`). A walk that begins within range of its only point holds the aim already.
+ */
 export async function walk(ctx: StepContext, args: WalkArgs): Promise<StepOutcome> {
-  try { return await walkInner(ctx, args); } finally { portalWalks.delete(ctx.bot); }
+  const targets = args.path?.length ? args.path : args.to ? [args.to] : [];
+  const p = ctx.bot.entity?.position;
+  const from = p ? { x: p.x, y: p.y, z: p.z } : null;
+  try {
+    return await withProgress(() => walkInner(ctx, args), outcome => {
+      if (!targets.length || outcome?.data?.crossedDimension) return undefined;
+      const meters = meterProgress(ctx.bot, from, [targets[targets.length - 1]]);
+      return outcome?.ok ? { ...meters, left: 0 } : meters;
+    });
+  } finally { portalWalks.delete(ctx.bot); }
 }
 
 async function walkInner(ctx: StepContext, args: WalkArgs): Promise<StepOutcome> {
@@ -509,6 +523,12 @@ async function walkInner(ctx: StepContext, args: WalkArgs): Promise<StepOutcome>
   }
   const lastAim = lastRange < 1 ? portalAim(read, targets[targets.length - 1]) : null;
   if (lastAim?.kind === 'refuse') return stopped(bot, 'target_unstandable', lastAim.text, targets[targets.length - 1]);
+  // The body is within range of the only point already (a portal is not "there": the aim of entering it is the crossing).
+  if (targets.length === 1 && lastAim?.kind !== 'enter') {
+    const only = targets[0];
+    const goal = lastRange > 0 ? new goals.GoalNear(only.x + 0.5, only.y, only.z + 0.5, lastRange) : new goals.GoalBlock(only.x, only.y, only.z);
+    if (atGoal(bot, goal)) return { ok: true, goal: 'already', code: 'already_there', text: `${cellText(start)} は既に行き先 ${cellText(only)} ${lastRange > 0 ? `の range ${lastRange} 内` : 'そのもの'}（既に済）`, at: start };
+  }
   const previous = navigator.movements;
   navigator.setMovements(walkMovements(bot, sprint));
   const notes: WayNotes = { opened: [], leaves: 0, from: { dimension: dimensionOf(bot), cell: start } };
