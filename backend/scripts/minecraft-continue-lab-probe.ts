@@ -87,6 +87,8 @@ const outbox: any[] = [], cancels: string[] = [];
 const receipts = new Map<string, any>();
 let currentLoop: CommonFcaControlLoop | null = null;
 let commandNumber = 0;
+/** A release closes its session in the control loop (the head opens a new one for what follows): the lab's acts after a release use the next. */
+let sessionNumber = 0;
 /** What the head would put on a command: the life and what its decision read, from the body's observation. */
 function made(body: NativeCommonFcaBody, over: Record<string, unknown> = {}) {
   const observation = body.observe(); const s = observation.state as any;
@@ -96,7 +98,7 @@ function made(body: NativeCommonFcaBody, over: Record<string, unknown> = {}) {
 function commandOf(body: NativeCommonFcaBody, args: Record<string, unknown>, options: { stamp?: ReturnType<typeof made>; seconds?: number; skill?: string; id?: string; incident?: Record<string, unknown> } = {}): any {
   const id = options.id ?? `lab:q${++commandNumber}`;
   return { schemaVersion: 1, id, serverId: 'continue-lab', connectionId: 'lab-connection-1', kind: 'skill', skill: options.skill ?? 'act', arguments: args,
-    context: { scopeKey: 'lab', taskId: 'continue-lab-task', taskRevision: 1, bodyId: 'minecraft:continue-lab', sessionId: 'continue-session', generation: 1, goal: 'lab', completionCondition: 'none',
+    context: { scopeKey: 'lab', taskId: 'continue-lab-task', taskRevision: 1, bodyId: 'minecraft:continue-lab', sessionId: 'continue-session' + (sessionNumber ? '-' + sessionNumber : ''), generation: 1, goal: 'lab', completionCondition: 'none',
       ...(options.stamp ?? made(body)), ...(options.incident ? { incident: options.incident } : {}) },
     lease: { id: 'continue-lease', generation: 1, holder: 'continue-lab-task' }, deadlineAt: new Date(Date.now() + (options.seconds ?? 90) * 1000).toISOString() };
 }
@@ -331,13 +333,14 @@ try {
     const gameTime = async (): Promise<number | null> => { const text = await ask('time query gametime'); const m = /(\d+)/u.exec(text.replace(/§./gu, '')); return m ? Number(m[1]) : null; };
     const releaseWith = async (incident: Record<string, unknown>) => {
       const id = 'lab:release' + (++commandNumber);
-      const context = { scopeKey: 'lab', taskId: 'continue-lab-task', taskRevision: 1, bodyId: 'minecraft:continue-lab', sessionId: 'continue-session', generation: 1, goal: 'lab', completionCondition: 'none', incident };
+      const context = { scopeKey: 'lab', taskId: 'continue-lab-task', taskRevision: 1, bodyId: 'minecraft:continue-lab', sessionId: 'continue-session' + (sessionNumber ? '-' + sessionNumber : ''), generation: 1, goal: 'lab', completionCondition: 'none', incident };
       outbox.push({ schemaVersion: 1, id, serverId: 'continue-lab', connectionId: 'lab-connection-1', kind: 'release', context, stop: { context, requestId: id, reason: 'cancel' },
         lease: { id: 'continue-lease', generation: 1, holder: 'continue-lab-task' }, deadlineAt: new Date(Date.now() + 30_000).toISOString() });
       const until = Date.now() + 20_000;
       while (!receipts.has(id) && Date.now() < until) await sleep(15);
       const receipt = receipts.get(id);
       let parsed: any = null; try { parsed = JSON.parse(receipt?.result ?? ''); } catch { parsed = null; }
+      sessionNumber++;
       return { receipt, incident: parsed?.incident ?? null };
     };
     const headId = 'head:node_stalled:lab:' + Date.now();

@@ -1,8 +1,8 @@
 {
  "producedBy": "backend/scripts/lab/continue-produce.ts",
  "bench": "offline",
- "bodyRevision": "dbb8770b4b01",
- "madeAt": "2026-10-28T16:58:06.066Z",
+ "bodyRevision": "4a65d46a37e4",
+ "madeAt": "2026-10-28T19:01:25.240Z",
  "answers": "control/handover-reservation",
  "fixtureSha256": "147e639a7fe1895acf0f667dfb9a88bc9ab66d0d6ffa67883e3938d6c8aba712",
  "note": "the execution layer only; the reflex and the enemy are the lab's",
@@ -15,8 +15,8 @@
     "handover": {
      "from": "floor-melee",
      "target": 7,
-     "waitedMs": 25,
-     "reflexSettledAt": "2026-10-28T16:58:06.003Z",
+     "waitedMs": 27,
+     "reflexSettledAt": "2026-10-28T19:01:25.175Z",
      "confirmed": true,
      "shield": "kept"
     }
@@ -28,8 +28,8 @@
     "handover": {
      "from": "floor-melee",
      "target": 7,
-     "waitedMs": 25,
-     "reflexSettledAt": "2026-10-28T16:58:06.034Z",
+     "waitedMs": 26,
+     "reflexSettledAt": "2026-10-28T19:01:25.207Z",
      "confirmed": false,
      "shield": "lowered"
     }
