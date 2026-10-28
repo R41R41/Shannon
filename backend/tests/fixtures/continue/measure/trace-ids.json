@@ -17,7 +17,9 @@
      "command": "skill:q11",
      "queue": "t-run:hb-1:40",
      "item": "q11",
-     "life": 1
+     "life": 1,
+     "obsSeq": 100,
+     "obsAt": "2026-10-28T04:10:50.000Z"
     },
     "bodyTimes": {
      "failedAt": "2026-10-28T04:10:50.000Z"
@@ -29,7 +31,9 @@
     "ids": {
      "run": "d468250d",
      "decision": "d0153",
-     "life": 1
+     "life": 1,
+     "obsSeq": 102,
+     "obsAt": "2026-10-28T04:10:50.000Z"
     },
     "reads": [
      "skill:q11"
@@ -41,7 +45,9 @@
     "ids": {
      "run": "d468250d",
      "decision": "d0153",
-     "life": 1
+     "life": 1,
+     "obsSeq": 104,
+     "obsAt": "2026-10-28T04:10:56.000Z"
     },
     "at": "2026-10-28T04:10:56.900Z"
    },
@@ -53,7 +59,9 @@
      "command": "skill:q12",
      "queue": "t-run:hb-1:40",
      "item": "q12",
-     "life": 1
+     "life": 1,
+     "obsSeq": 106,
+     "obsAt": "2026-10-28T04:10:56.000Z"
     },
     "at": "2026-10-28T04:10:56.950Z"
    },
@@ -63,7 +71,9 @@
      "run": "d468250d",
      "command": "skill:q12",
      "item": "q12",
-     "life": 1
+     "life": 1,
+     "obsSeq": 108,
+     "obsAt": "2026-10-28T04:10:57.000Z"
     },
     "bodyTimes": {
      "acceptedAt": "2026-10-28T04:10:57.000Z",

@@ -11,6 +11,7 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { createProbeBot, closeProbeBot } from '../src/services/minebot/testing/MinecraftProbeBot.js';
 import { NativeCommonFcaBody } from '../src/services/minebot/integration/commonFca/nativeBody.js';
+import { CommonFcaControlLoop } from '../src/services/minebot/integration/commonFca/controlLoop.js';
 import { installIncidents } from '../src/services/minebot/utils/incidents.js';
 import { SceneSaver, selfNames } from '../src/services/minebot/utils/sceneSave.js';
 import { bodyRevision } from '../src/services/minebot/utils/bodyRevision.js';
@@ -68,10 +69,22 @@ async function connect(): Promise<{ actor: any; body: NativeCommonFcaBody }> {
   current = actor;
   installIncidents(actor, { holdFile, scene });
   const body = new NativeCommonFcaBody(actor, { serverId: 'continue-lab', capture: async () => { throw new Error('no picture'); }, rendererConfigured: () => false });
-  body.bindConnection('lab-connection-1');
-  body.noteHead('hb-lab');
+  // The commands go through the body's control loop (accept, begin, the end: what a receipt really carries), with a head that is only a script: its replies hold
+  // the next commands and the acknowledgements, and its start-up id.
+  const loop = new CommonFcaControlLoop({ baseUrl: 'http://lab.invalid', token: 'lab', serverId: 'continue-lab', actuator: body, connectionId: 'lab-connection-1', pollMilliseconds: 40,
+    fetcher: (async (_url: unknown, init: { body: string }) => {
+      const poll = JSON.parse(init.body);
+      for (const receipt of poll.receipts ?? []) { receipts.set(receipt.id, receipt); }
+      const commands = outbox.splice(0, 8);
+      return { ok: true, json: async () => ({ schemaVersion: 1, mode: 'common-fca', headBoot: 'hb-lab', commands, cancel: cancels.splice(0), acknowledged: (poll.receipts ?? []).map((r: any) => r.id) }) };
+    }) as never });
+  loop.start();
+  currentLoop = loop;
   return { actor, body };
 }
+const outbox: any[] = [], cancels: string[] = [];
+const receipts = new Map<string, any>();
+let currentLoop: CommonFcaControlLoop | null = null;
 let commandNumber = 0;
 /** What the head would put on a command: the life and what its decision read, from the body's observation. */
 function made(body: NativeCommonFcaBody, over: Record<string, unknown> = {}) {
@@ -89,7 +102,12 @@ function commandOf(body: NativeCommonFcaBody, args: Record<string, unknown>, opt
 async function act(body: NativeCommonFcaBody, args: Record<string, unknown>, options: { stamp?: ReturnType<typeof made>; seconds?: number; signal?: AbortSignal; id?: string; skill?: string } = {}) {
   const command = commandOf(body, args, options);
   const started = Date.now();
-  const receipt: any = await body.execute(command, options.signal ?? new AbortController().signal);
+  outbox.push(command);
+  const waitUntil = Date.now() + (options.seconds ?? 90) * 1000 + 20_000;
+  if (options.signal) options.signal.addEventListener('abort', () => cancels.push(command.id), { once: true });
+  while (!receipts.has(command.id) && Date.now() < waitUntil) await sleep(15);
+  const receipt: any = receipts.get(command.id);
+  if (!receipt) throw new Error(`no receipt for ${command.id}`);
   let parsed: any = null; try { parsed = JSON.parse(receipt.result ?? ''); } catch { parsed = null; }
   const lines = (parsed?.lines ?? []).map((line: any) => `${line.i}.${line.do} ${line.status}/${line.goal}/${line.end}${line.code ? `/${line.code}` : ''}`);
   log(`ACT ${command.id} ${((Date.now() - started) / 1000).toFixed(1)}s ${receipt.outcome} ${receipt.failureType ?? ''} ${lines.join(' | ').slice(0, 200)}`);
@@ -133,7 +151,7 @@ try {
     const wait = await act(body, { hands: [{ do: 'wait', seconds: 0.3 }, { do: 'jump' }] });
     check('an act carries unit and bodyTimes with the lock, and the lines carry both axes', wait.receipt.unit?.goal === 'done' && wait.receipt.unit?.end === 'finished' && !!wait.receipt.bodyTimes?.lockAt
       && wait.parsed?.lines?.every((line: any) => line.goal && line.end), JSON.stringify([wait.receipt.unit, wait.receipt.bodyTimes]));
-    const starts = opLines().filter(entry => entry.k === 'hand_start' && entry.ids?.command === wait.command.id);
+    const starts = opLines().filter(entry => entry.kind === 'hand_start' && entry.ids?.command === wait.command.id);
     check('the record of hand starts is written for every hand, apart from the black box ring', starts.length === 2 && starts[0].ids.hand === 1 && starts[0].pos && typeof starts[0].inventory === 'string' && Array.isArray(starts[0].lastOps), JSON.stringify(starts[0] ?? null).slice(0, 300));
     produce('measure/hand-start', 'measure/hand-start', { output: { handStart: starts[0] ?? null, bodyTimes: wait.receipt.bodyTimes, unit: wait.receipt.unit } });
     await sleep(11_000);
@@ -215,7 +233,7 @@ try {
       const result = await act(body, { hands: [{ do: 'wait', seconds: 6 }, { do: 'jump' }] }, { stamp, seconds: 30 });
       await sleep(4000);
       const after = body.observe();
-      const oldOps = opLines().filter(entry => entry.k === 'op' && entry.command === result.command.id && Date.parse(entry.t) > killedAt + 50);
+      const oldOps = opLines().filter(entry => entry.kind === 'op' && entry.command === result.command.id && Date.parse(entry.at) > killedAt + 50);
       check(`death while ${moment}: the old command ends cut or not run, with a death reason, and sent no operation after the death`, oldOps.length === 0 && /death|stale_life|cancelled/u.test(`${result.parsed?.outcome?.cutBy ?? ''}${result.receipt.failureType ?? ''}`),
         JSON.stringify({ cutBy: result.parsed?.outcome?.cutBy, failure: result.receipt.failureType, unit: result.receipt.unit, oldOps: oldOps.length }));
       check(`death while ${moment}: the life number went up by one and the death count with it`, (after.facts.life as number) === before + 1 && (after.state as any).life.advancedBy === 'death', JSON.stringify((after.state as any).life));
@@ -284,7 +302,7 @@ try {
       await sleep(1500);
       const stockAfter = (actor.inventory.items() as any[]).filter(item => item.name === 'cobblestone').reduce((sum, item) => sum + item.count, 0);
       const progress = result.parsed?.lines?.[0]?.progress;
-      const ops = opLines().filter(entry => entry.k === 'op' && entry.command === result.command.id);
+      const ops = opLines().filter(entry => entry.kind === 'op' && entry.command === result.command.id);
       const count = (name: string) => ops.filter(entry => entry.op === name).length;
       report[`vertical_${spec.name}`] = { line: result.parsed?.lines?.[0], ops: { dig: (count('dig') + count('unconfirmedDig')), placeBlock: count('placeBlock') }, receipt: result.receipt.unit };
       check(`vertical ${spec.name}: the hand ends with a progress in steps and the four counts`, !!progress && progress.unit === 'step' && typeof progress.done === 'number' && !!progress.work, JSON.stringify(progress ?? null));
@@ -357,6 +375,7 @@ try {
     await ask('kill @e[type=!player]');
   }
   report.stats = null;
+  await (currentLoop as CommonFcaControlLoop | null)?.stop();
   closeProbeBot(actor);
 } catch (error) {
   check('the probe ran to its end', false, String((error as Error)?.stack ?? error).slice(0, 500));

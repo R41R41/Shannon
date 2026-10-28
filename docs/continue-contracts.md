@@ -1160,3 +1160,44 @@ Codex の 3 回目の見直しで「実装の途中で直してよい」とさ�
    - ラボで「掘りの途中に敵が来たら melee が始まる」「柱の置きの途中は note で止まらない」を 1 回ずつ確かめる。
 2. **pillar の `stockUsed`**：置いた 8・確かめた 8 なのに `stockUsed` 4。4 つの数の意味（契約 6 章）が崩れているので、原因を調べて直す。
    - 拾い直し・同じ種類の別の積み・数え始めの時機のどれかの見込み（仮説）。直した後、ラボで置いた数と在庫の減りが合うことを確かめる。
+
+### A-4（10/28、頭の担当の途中報告から）
+
+1. **`bodyTimes.acceptedAt`**：必須のまま。produced の受け取りは、制御ループ（accept→begin→afterEnd）を通した物で作る（ラボの probe が直に手を呼ぶ形では作らない）。`failedAt` は失敗した時だけ付く。
+2. **操作の連続記録の行の形**：契約どおり `kind`（`hand_start`・`op`）と `at` にする。体の `opLog.ts` の `k`・`t` を直す。頭は契約の形だけを読む（両方を読む形にしない。形が 2 つあると、後で読み手が増えた時にまた割れるため）。
+3. **produced の各ファイルの先頭**：体の形（`bodyRevision`・`answers`・`fixtureSha256`・`bench`）を正とする。頭の sync はこれに合わせる。
+4. **打たれた記録**：体が観測に `state.combat.recentHits` を足す。
+   - 1 件は `{at, attackerId, attackerType, damage, life}`。直近 10 秒・最大 20 件。
+   - 体力の落ちから作ると、1 フレームの間に 2 回打たれた時に 1 回と数え、戦いの事実がずれるため。頭はこれが来たら、体力の落ちからの推定をやめて置き換える。
+5. **境界 8 の場面の数**：7 つ（表と `boundaries.json` が正）。8 章の本文の「6 つ」は書き誤り。
+6. **vertical の `liquid`**：型のとおり必須。短い書き方も必須として見せる。
+7. **`TraceIds` の `obsSeq`・`obsAt`**：必須のまま。見本 `measure/trace-ids.json` の ids に 2 つを足す。両側で同じに直し、sha256 を合わせる。判定の台本は必須の形だけを読む。
+8. **約束の型に足す物**（頭の帳簿で要った物を契約に入れる）：
+   - `PromiseEvent.kind` に `moved`（体の `stored`・`retrieved`・防具の装着）と `item` を足す。
+   - `PlanPromise.have`。
+   - `LedgerSeen` に死・接続・ahead。
+   - 名前と形は頭の実装のとおり。頭が型の写しを 14 章に書く。
+9. **produced の rev**：コードの rev で比べる。`backend/src` と `package.json` に差が無い rev は同じとみなす（produced を入れる commit は、自分の rev を書けないため）。
+10. **形の決まっていない物**：
+    - `ActResult.earlierPasses`・`earlierEvents` の形と、`events` 命令の返事の置き場：体の実装の形を正とする。体が 14 章に型を書き、頭はそれに合わせる。
+    - `ItemOutcome` に `code` を足す。その項目の終わりを決めた手の code を写す（`cleanup_stop` など）。頭は手の code から読むのをやめ、ここを読む。
+
+#### A-4 の 10 の型（体の実装の形。体が書き、頭はこれに合わせる）
+```ts
+/** ActResult の欄。受け取りの 16,000 字に収まらない時の逃がし先（実装：utils/actReport.ts fitReceipt）。 */
+interface ActResultOverflow {
+  /** 古い周回の行を数にまとめた物（新しい 2 周の行だけが lines に残る）。 */
+  earlierPasses?: { pass: number; lines: number; done: number; stopped: number }[];
+  /** その古い周回の行が持っていた持ち物の出来事。落とさずここで運ぶ（deliverySeq の小さい順）。 */
+  earlierEvents?: InventoryEvent[];
+  /** 受け取りに載らなかった出来事の取りに行く先。載った物は deliverySeq の小さい順の先頭で、nextSeq 以降を events 命令で取る。 */
+  eventsMore?: { command: string; nextSeq: number; total: number };
+}
+/**
+ * events 命令（内部の読み取り。skill 名 `events`、arguments は { command, fromSeq, max? }）の返事は、その命令の受け取りの `result`（文字列）に入った JSON 1 つ：
+ * EventsReply = { command, from, to, total, nextSeq, done, lost, events: InventoryEvent[] }（continueContract.ts）。ActResult の中ではない。
+ */
+```
+- `unit.code`（ItemOutcome）は、その項目の終わりを決めた手の code（行の `code`）か、列で捨てた時はその理由（`cleanup_stop`・`precondition`・`queue_dropped` など）。
+- 観測の `state.combat.recentHits` は `{ at: ISO, attackerId: number | null, attackerType: string, damage: number, life: number }[]`（直近 10 秒・最大 20 件・古い順）。`damage` はその 1 打の後の体力の落ちを、同じ更新を待っていた打ちの数で割った値（鎧や盾で落ちなければ 0）。
+- 操作の連続記録（`oplog`）の 1 行は `{ kind: 'hand_start', ...HandStart }` か `{ kind: 'op', at, command, hand, pass, life, op, detail?, by, action }`（`at` は ISO）。

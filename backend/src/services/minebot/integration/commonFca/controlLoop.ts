@@ -399,16 +399,16 @@ export class CommonFcaControlLoop {
     else this.settleOwner(key);
   }
   /** A receipt for a command that never started: nothing moved, so the inputs are released unless the body is held. */
-  private closeUnstarted(command: Command, outcome: Receipt['outcome'], failureType: string, result: string, dropped?: { code: DropCode; item?: QueueRef }): void {
+  private closeUnstarted(command: Command, outcome: Receipt['outcome'], failureType: string, result: string, dropped?: { code: DropCode; item?: QueueRef; unitCode?: string }): void {
     const now = (this.options.now ?? Date.now)();
     const receipt: Receipt = { id: command.id, connectionId: this.connectionId, outcome, inputsReleased: !this.held, observedAt: new Date(now).toISOString(),
       failureType, recoverable: true, result };
     if (command.kind === 'skill' && command.skill === 'act') {
-      receipt.unit = { goal: 'not_started', end: 'not_run', released: receipt.inputsReleased,
+      receipt.unit = { goal: 'not_started', end: 'not_run', released: receipt.inputsReleased, code: dropped?.unitCode ?? failureType,
         ...(dropped ? { droppedBecause: { code: dropped.code, ...(dropped.item ? { item: dropped.item } : {}) } } : {}) };
     }
     const acceptedAt = this.acceptedAt.get(command.id) ?? now;
-    receipt.bodyTimes = { acceptedAt: new Date(acceptedAt).toISOString(), endedAt: new Date(now).toISOString(), failedAt: new Date(now).toISOString() };
+    receipt.bodyTimes = { acceptedAt: new Date(acceptedAt).toISOString(), endedAt: new Date(now).toISOString(), ...(outcome !== 'completed' ? { failedAt: new Date(now).toISOString() } : {}) };
     const envelope = command.queue ? readEnvelope(command) : null;
     if (envelope && !this.queue.endOf(envelope.queue, envelope.item)) this.queue.note(envelope.queue, envelope.item, { goal: 'not_started', end: 'not_run', released: receipt.inputsReleased, code: failureType });
     this.keptDespite.delete(command.id);
@@ -417,7 +417,7 @@ export class CommonFcaControlLoop {
     this.watch(() => this.options.observer?.commandEnded?.(command, receipt));
   }
   /** Every waiting item is dropped, each with a receipt that says its hands did not move. */
-  private dropWaiting(result: string, dropped?: { code: DropCode; item?: QueueRef }): void {
+  private dropWaiting(result: string, dropped?: { code: DropCode; item?: QueueRef; unitCode?: string }): void {
     for (const command of this.queue.clear()) this.closeUnstarted(command, 'cancelled', 'queue_dropped', result, dropped);
   }
   /** An item still waiting past its start-by time is dropped now, with the ones that depend on it (the receipt need not wait for the item ahead to end). */
@@ -456,7 +456,7 @@ export class CommonFcaControlLoop {
     this.hurry(false);
     if (!cleanup) { this.owner = key; this.leaseGenerations.set(command.lease.id, command.lease.generation); }
     else if (!this.closedSessions.has(sessionKey)) {
-      this.dropWaiting('捨てた: 止める命令が来た。手は動いていない', { code: 'operator_stop' });
+      this.dropWaiting('捨てた: 止める命令が来た。手は動いていない', { code: 'operator_stop', unitCode: 'cleanup_stop' });
       for (const item of this.active.values()) item.controller.abort('owner_release');
     }
     const readOnly = command.kind === 'skill' && this.isReadOnly(command.skill);

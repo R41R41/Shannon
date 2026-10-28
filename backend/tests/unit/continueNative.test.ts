@@ -187,7 +187,7 @@ describe('the pieces the isolated lab measures (contracts 3, 4, 8)', () => {
     expect(files[0]).toBe('test.jsonl');
     expect(files.length).toBeGreaterThan(1);
     const line = JSON.parse(readFileSync(path.join(dir, 'test.jsonl'), 'utf8').split('\n')[0]);
-    expect(line).toMatchObject({ k: 'op', command: 'skill:q1', hand: 1, life: 3, op: 'dig' });
+    expect(line).toMatchObject({ kind: 'op', command: 'skill:q1', hand: 1, life: 3, op: 'dig' });
   });
   it('reads the revision from the environment, a REVISION file or the git head, else says unknown', async () => {
     const { readRevision } = await import('../../src/services/minebot/utils/bodyRevision.js');
@@ -217,5 +217,33 @@ describe('the server\'s tick (contract 8)', () => {
     expect(frozen).toMatchObject({ parsedMspt: null, frozen: true });
     const failed = await make(new Error('rcon closed')).tickQuery();
     expect(failed).toMatchObject({ raw: null, parsedMspt: null, frozen: null, error: expect.stringContaining('rcon') });
+  });
+});
+
+describe('the blows the body took (amendment A-4)', () => {
+  it('records each damage_event aimed at the body, two in one frame as two, with the fall of health shared between them, and keeps 10 seconds and 20 entries', async () => {
+    const { installHitRecord } = await import('../../src/services/minebot/utils/hitRecord.js');
+    let at = 1_700_000_000_000;
+    const client = new EventEmitter();
+    const bot: any = Object.assign(new EventEmitter(), { entity: { id: 7 }, health: 20, _client: client, entities: { 41: { name: 'zombie' } } });
+    const record = installHitRecord(bot, () => at);
+    client.emit('damage_event', { entityId: 7, sourceCauseId: 42, sourceDirectId: 42 });
+    client.emit('damage_event', { entityId: 7, sourceCauseId: 42, sourceDirectId: 42 });
+    client.emit('damage_event', { entityId: 99, sourceCauseId: 1 });   // someone else
+    bot.health = 14; bot.emit('health');
+    const hits = record.recent();
+    expect(hits).toHaveLength(2);
+    expect(hits[0]).toMatchObject({ attackerId: 41, attackerType: 'zombie', damage: 3, life: 0 });
+    expect(hits[1].damage).toBe(3);
+    at += 11_000;
+    expect(record.recent()).toHaveLength(0);
+    for (let index = 0; index < 30; index++) client.emit('damage_event', { entityId: 7, sourceCauseId: 0, sourceDirectId: 0 });
+    expect(record.recent()).toHaveLength(20);
+    expect(record.recent()[0].attackerId).toBeNull();
+  });
+  it('the observation carries state.combat.recentHits', async () => {
+    const { body } = fixture();
+    expect((body.observe().state as any).combat).toEqual({ recentHits: [] });
+    await body.dispose();
   });
 });

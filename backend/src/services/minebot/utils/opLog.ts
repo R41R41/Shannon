@@ -9,7 +9,7 @@ import type { MotorOp } from '../execution/ActionExecution.js';
  * "no operation after the death by an old command" and "the next hand begins where the last stopped" from this, not from the ring. Production uses
  * the same entrance (the ring is for the failure; this is for the measurement).
  *
- * One JSON line each: `{ k: 'hand_start', ...HandStart }` or `{ k: 'op', t, command, hand, pass, life, op, detail, by }`. The file is rotated by size
+ * One JSON line each: `{ kind: 'hand_start', ...HandStart }` or `{ kind: 'op', at, command, hand, pass, life, op, detail, by }` (the contract's form; `at` is ISO). The file is rotated by size
  * (OPLOG_MAX_BYTES, a few files kept): the same thought as the decision records, a limit that never stops the body. The limit is a first value; the benches
  * measure the size and the load of a 45-minute run (contract 13).
  */
@@ -30,13 +30,13 @@ export class OpLog {
   setScope(scope: OpScope | null): void { this.scope = scope; }
   get currentScope(): OpScope | null { return this.scope; }
 
-  handStart(record: HandStart): void { this.append({ k: 'hand_start', ...record }); }
+  handStart(record: HandStart): void { this.append({ kind: 'hand_start', ...record }); }
   op(op: MotorOp): void {
-    this.append({ k: 'op', t: new Date(op.at).toISOString(), ...(this.scope ? { command: this.scope.command, hand: this.scope.hand, pass: this.scope.pass, life: this.scope.life } : {}),
+    this.append({ kind: 'op', at: new Date(op.at).toISOString(), ...(this.scope ? { command: this.scope.command, hand: this.scope.hand, pass: this.scope.pass, life: this.scope.life } : {}),
       op: op.op, ...(op.detail ? { detail: op.detail } : {}), by: op.capability, action: op.actionId });
   }
   /** Any other thing the judge reads with the operations (a forced move, a block update that corrected a count). */
-  note(kind: string, data: Record<string, unknown>): void { this.append({ k: kind, t: new Date().toISOString(), ...(this.scope ? { command: this.scope.command, hand: this.scope.hand, life: this.scope.life } : {}), ...data }); }
+  note(kind: string, data: Record<string, unknown>): void { this.append({ kind, at: new Date().toISOString(), ...(this.scope ? { command: this.scope.command, hand: this.scope.hand, life: this.scope.life } : {}), ...data }); }
 
   private open(): void {
     if (this.fd !== null || this.failed) return;

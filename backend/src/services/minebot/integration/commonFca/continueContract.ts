@@ -34,6 +34,8 @@ export interface ActOutcome { goal: GoalOutcome; end: RunEnd; cutBy?: CutBy; lif
 export interface QueueRef { queue: string; item: string }
 export interface ItemOutcome {
   goal: GoalOutcome; end: RunEnd; released: boolean;
+  /** Amendment A-4: the code of the hand (or the stop) that decided how the item ended: stuck, search_timeout, target_lost, cleanup_stop, precondition ... */
+  code?: string;
   droppedBecause?: { code: CutBy | 'depends_failed' | 'depends_unknown'; item?: QueueRef };
   keptDespite?: { item: QueueRef; code: string };
   startedAt?: string;

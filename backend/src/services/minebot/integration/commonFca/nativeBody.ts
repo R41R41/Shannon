@@ -41,6 +41,7 @@ import { bodyRevision } from '../../utils/bodyRevision.js';
 import { feetCell } from '../../utils/localMap.js';
 import { installPackTap, setReflexEventPrefix } from '../../utils/packEvents.js';
 import { utilitiesOf } from '../../utils/utilitiesScan.js';
+import { installHitRecord, recentHitsOf } from '../../utils/hitRecord.js';
 
 /** The body process's start-up id: a new one at each start. A command made for another start is not run (continue contracts, 2). */
 const BODY_BOOT = `bb-${randomUUID().slice(0, 8)}`;
@@ -171,6 +172,7 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
     this.opLog = opLogOf(bot) ?? installOpLog(bot, new OpLog(opLogDirectory()));
     setMotorOpSink(bot, op => this.opLog.op(op));
     installPackTap(bot);
+    installHitRecord(bot, () => this.now());
     deathLedgerOf(bot);   // the deaths this connection sees, from the start (an attack on a creature seen to die a moment ago is "already")
     setReflexEventPrefix(bot, () => `reflex:${this.connectionId}`);
     this.tickTimer = setInterval(() => { void this.askTick(); }, TICK_EVERY_MS);
@@ -276,6 +278,7 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
       state: JSON.parse(JSON.stringify({ world: { ...world, utilities: utilitiesOf(this.bot, this.sequence, now) }, primitives: primitives.state, activeCapabilities: activeActionCapabilities(this.bot), localSafety: this.lastSafety,
         incidentHold: incidentsOf(this.bot)?.held() ?? null,
         // Continue contracts: the life (5), the start-up and connection ids (5), who holds the body (4).
+        combat: { recentHits: recentHitsOf(this.bot) },
         life: this.life.view(), bodyRun: { bodyBoot: BODY_BOOT, connectionId: this.connectionId }, control: this.controlView() })), facts };
   }
   candidates(observation: BodyObservation): BodyCandidateDraft[] {
@@ -299,7 +302,7 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
   private finish(command: Command, receipt: Receipt, timing: Partial<BodyTimes>): Receipt {
     const endedAt = new Date(this.now()).toISOString();
     const unit = this.units.get(command.id);
-    return { ...receipt, ...(unit ? { unit: { ...unit, released: receipt.inputsReleased } } : {}),
+    return { ...receipt, ...(unit ? { unit: { ...unit, released: receipt.inputsReleased, ...(unit.code ? {} : receipt.failureType ? { code: receipt.failureType } : {}) } } : {}),
       bodyTimes: { ...timing, ...(receipt.outcome !== 'completed' ? { failedAt: endedAt } : {}), endedAt } as BodyTimes };
   }
   /** An act that never moved the body: not started, not run (the table's `not_started` and `not_run`). */
@@ -521,7 +524,9 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
         text = withIncidentText(text, incident);
         if (outcome === 'failed' && !failure) failure = { failureType: act.failureType ?? 'failed', recoverable: true };
         if (outcome === 'failed' && act.stoppedBy === 'reflex') failure = { failureType: 'interrupted_by_reflex', recoverable: true };
-        this.units.set(command.id, { goal: act.outcome?.goal ?? 'unknown', end: act.outcome?.end ?? 'finished', released });
+        const deciding = act.lines.find(line => (line.status === 'stopped' || line.status === 'failed') && line.code) ?? act.lines.find(line => line.status === 'stopped');
+        const unitCode = deciding?.code ?? act.failureType;
+        this.units.set(command.id, { goal: act.outcome?.goal ?? 'unknown', end: act.outcome?.end ?? 'finished', released, ...(unitCode ? { code: unitCode } : {}) });
         return this.receipt(command, outcome, released, text, undefined, failure);
       }
       if (capability === 'act') this.units.set(command.id, { goal: outcome === 'completed' ? 'done' : 'unknown', end: signal.aborted ? 'cut' : 'finished', released });
