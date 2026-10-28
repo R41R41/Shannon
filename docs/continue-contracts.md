@@ -1389,6 +1389,7 @@ interface IncidentTakeResult {
   again?: boolean;
 }
 ```
+- 頭が見つけた保留の id は `[A-Za-z0-9_.:-]` の文字だけ（頭が作る。体はこの外の文字が来ても受けるが、黒箱のファイル名と現場の場所の名前では `_` にする）。
 - 順序：世界を止める（`/tick freeze`。他の人が居れば止めない）→ 現場の保存 → 黒箱（kind は `head`。`reason` は `why`、`head: { id, why, notes }`）→ 保留の記録（`incident-hold.json`、`id` は頭の id、`task` は context の taskId、`why` は `why`）。黒箱のファイル名と現場の場所の名前は、id の英数字と `._-` 以外を `_` にしたもの（保留そのものは頭の id のまま）。
 - act に付いた時：体はまず take をし、保留した場合その act は「保留中」で断る（`failureType: held`。result は `{"held": "...", "incident": {...}}`。`incident` の欄は重い失敗の保留と同じ：`id・heavy・why・held・frozen・freeze・notHeld・box・scene`）。保留しなかった場合は act をそのまま走らせ、その受け取りに `incident`（`held: false`・`notHeld`）を付ける。release に付いた時は上の `IncidentTakeResult`。
 - 再開：頭の保留の `resume`（release に `incident.resume = <頭の id>`）で、体は世界を戻し（`/tick unfreeze`）、保留の記録を消す（`done: true`）。別の id の resume は何もしない（`done: false`・`hold` に今の保留）。体が何も保留していない時の resume・cancel は、世界だけ動かして `done: true`。
