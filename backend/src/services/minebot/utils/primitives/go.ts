@@ -360,6 +360,35 @@ export async function clearOfCell(bot: any, cell: Cell): Promise<boolean> {
   }
   return !bot.entity?.position || bodyOverlap(bot.entity.position, cell) <= 0;
 }
+/**
+ * Run 45 (hold 8): whether a block may be laid in `cell` with the body where it is. Not when the body is in the air with its middle over the
+ * cell's own column and the cell at or under its feet: that lays the block under the body, which a go's route never plans (it builds no tower), and which the server
+ * refused in the run and in the lab with the body in the air over the cell, its feet 63.1 over a cell whose top is 63 (its own view of the body
+ * is a tick behind). Nor when the body is in the cell (the box overlaps it): the server never takes a block in the body.
+ */
+export function mayLayAt(bot: any, cell: Cell): boolean {
+  const p = bot.entity?.position;
+  if (!p) return true;
+  // In the air over the cell's own column (a body on the ground at the edge of a bridge leans its middle over the gap and lays the floor there,
+  // which the server takes: the body is on its own floor, above the cell).
+  const airborne = bot.entity?.onGround === false;
+  if (airborne && Math.floor(p.x) === cell.x && Math.floor(p.z) === cell.z && cell.y <= Math.floor(p.y + 1e-3)) return false;
+  return bodyOverlap(p, cell) <= 0;
+}
+/**
+ * Run 45 (hold 8, the lab): a block of `allowed` in the hand before a place is sent, when what the hand holds is not one (a dig's tool took it).
+ * True when one is held (or was put there); the place goes on either way, and a hand that cannot be filled says so in the box.
+ */
+export async function blockInHand(bot: any, allowed: readonly string[]): Promise<boolean> {
+  const held = String(bot.heldItem?.name ?? '');
+  if (!allowed.length || allowed.includes(held)) return true;
+  const item = ((bot.inventory?.items?.() ?? []) as any[]).find(stack => allowed.includes(String(stack?.name ?? '')));
+  if (!item) return false;
+  try { await bot.equip(item, 'hand'); } catch { /* the place goes on, and is refused as before */ }
+  const now = String(bot.heldItem?.name ?? '');
+  blackBoxOf(bot)?.note('place_hand_fixed', { from: held || 'empty', to: now || 'empty' });
+  return allowed.includes(now);
+}
 /** The cell of a route after the one nearest the body (where it was going), or null. */
 export function aheadOf(route: readonly Cell[], at: { x: number; y: number; z: number } | undefined): Cell | null {
   if (!route.length || !at) return null;
@@ -552,6 +581,19 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     // stood 0.1 into that cell (overlap 0.91): the server refused it and the go stopped. The body steps back out of the cell first.
     const target = counting ? placedCell(rest[0], rest[1]) : null;
     if (target) await clearOfCell(host, target);
+    // Run 45 (hold 8, q34 go 2 up to the surface): the route laid the floor of its next cell while the body, jumping over that very cell, was
+    // straight above it (in the run 0.25 in it; in the lab 0.1 over its top, and refused all the same): the go stopped. Such a place is not sent
+    // (it lays the block under the body, which no route of a go plans), and the route is drawn again from where the body really is. The go's
+    // own climb (`pillarUp`, the manual work) lays under the body on purpose, at the top of its jump: it is not held back.
+    if (target && !manualBusy && !mayLayAt(host, target)) {
+      const p = host.entity?.position;
+      blackBoxOf(host)?.note('place_held_back', { at: [target.x, target.y, target.z], overlap: p ? Number(bodyOverlap(p, target).toFixed(2)) : null,
+        feet: p ? [Number(p.x.toFixed(2)), Number(p.y.toFixed(2)), Number(p.z.toFixed(2))] : null });
+      throw new Error('The place was not sent: the body is in the cell');
+    }
+    // Run 45 (hold 8, the lab: 3 of 8 runs of the act): the place went out with the iron pickaxe in the hand, a dig of the route having taken the
+    // hand for its tool between the route's equip and its place; the server laid nothing and the go stopped as refused. The block goes in first.
+    if (target) await blockInHand(host, place.held);
     const at = host.entity?.position?.clone?.() ?? null;
     const facts = () => { const cell = placedCell(rest[0], rest[1]); return cell ? placeFacts(host, cell, topOfJump(), at ?? undefined) : ''; };
     try { result = await originalPlace.apply(host, rest); }
