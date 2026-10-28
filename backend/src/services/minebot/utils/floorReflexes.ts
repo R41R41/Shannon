@@ -391,6 +391,11 @@ export function floorActive(bot: object): boolean {
  * between, so the lease alone lets go for a moment between two); the lava and breathing reflexes. An act that comes while this holds waits
  * for it (`NativeCommonFcaBody`), rather than take the lock in the moment between two segments and be cut by the next.
  */
+/** Run 45: the melee reflex is in an episode now (a hand runs, or the last ended less than MELEE_EPISODE_MS ago). */
+export function meleeEpisode(bot: object, now = Date.now()): boolean {
+  const state = (bot as { floorReflexes?: FloorState }).floorReflexes;
+  return !!state?.melee && (state.busy === 'flee' || now - state.melee.lastEnd <= MELEE_EPISODE_MS);
+}
 export function reflexHeld(bot: object): string | null {
   const caps = safetyLeaseCapabilities(bot);
   if (caps.length) return caps[0];
@@ -1654,6 +1659,10 @@ async function runHit(bot: FloorBody, port: FloorBody, hand: Extract<MeleeHand, 
   const find = () => Object.values(bot.entities ?? {}).find(entity => entity === target || (entity?.id !== undefined && entity.id === target.id));
   try {
     for (let blow = 0; blow < MELEE_BLOWS_PER_HAND && !dead; blow++) {
+      // Run 45 (+929: seven blows at a zombie, every other one 0.14 to 0.2 s after the one before, the first of the next hand; a blow before the
+      // weapon is ready deals a fifth of its damage): the weapon's own wait is kept from the last blow, whichever hand struck it.
+      const ready = (raw.meleeBlowAt ?? 0) + bladeWaitMs(weapon.name) - Date.now();
+      if (ready > 0) await new Promise(resolve => setTimeout(resolve, Math.min(ready, 1_000)));
       const live = find();
       if (!live || !bot.entity) { stopped = '相手が見えなくなった'; break; }
       if ((bot.health ?? 0) <= MELEE_HIT_HEALTH) { stopped = `体力が${MELEE_HIT_HEALTH}以下になった`; break; }
@@ -1661,9 +1670,9 @@ async function runHit(bot: FloorBody, port: FloorBody, hand: Extract<MeleeHand, 
       try { reachable = inReachOfBlow(bot, live); } catch { reachable = false; }
       if (!reachable) { stopped = '届かない所へ離れた'; break; }
       try { await motor.lookAt?.(live.position.offset(0, (live.height ?? 1.8) * 0.6, 0), true); } catch (error) { rethrowIfTaken(error); }
-      motor.attack(live); swung++;
-      // The wait before the next blow; after the last, a moment for the hurt that answers it.
-      await new Promise(resolve => setTimeout(resolve, blow < MELEE_BLOWS_PER_HAND - 1 ? bladeWaitMs(weapon.name) : 120));
+      motor.attack(live); swung++; raw.meleeBlowAt = Date.now();
+      // A moment for the hurt that answers it (the wait for the weapon is at the next blow).
+      await new Promise(resolve => setTimeout(resolve, 120));
     }
   } finally { raw.removeListener?.('entityHurt', onHurt); raw.removeListener?.('entityDead', onDead); }
   if (!swung) return { success: false, result: `打てなかった: ${stopped || '届かない'}` };

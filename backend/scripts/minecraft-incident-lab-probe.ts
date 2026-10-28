@@ -163,6 +163,19 @@ try {
   const cancelled = await body.cancelIncident(String(sixth.parsed?.incident?.id));
   const afterCancel = await tickState();
   check('a cancel of the held task moves the world again and ends the hold', cancelled.done && !fs.existsSync(holdFile) && (!/frozen/iu.test(afterCancel) || /running normally/iu.test(afterCancel)), afterCancel);
+  // 8 (run 45, +929): a death between two acts of a task that asked to be held: the body holds it and stops the world; the resume moves it again.
+  await ask(`gamemode survival ${ACTOR}`);
+  const before8 = await act(body, { hands: [{ do: 'go', to: { x: 11, y: FLOOR + 1, z: 0 }, seconds: 30 }], why: '[lab] 死ぬ前の手' }, { hold: true });
+  check('an act before the death passes', before8.receipt.outcome === 'completed', before8.lines.at(-1) ?? '');
+  await ask(`kill ${ACTOR}`); await sleep(3000);
+  const deathHold = fs.existsSync(holdFile) ? JSON.parse(fs.readFileSync(holdFile, 'utf8')) : null;
+  check('a death outside an act holds the task and stops the world', deathHold?.why === 'death' && deathHold?.task === TASK && /frozen/iu.test(await tickState()) && !/running normally/iu.test(await tickState()),
+    JSON.stringify(deathHold));
+  const refused8 = await act(body, { hands: [{ do: 'go', to: { x: 2, y: FLOOR + 1, z: 2 }, seconds: 20 }], why: '[lab] 死んだ後の手' }, null);
+  check('after the death the next act is refused (held)', refused8.receipt.failureType === 'held', String(refused8.receipt.result ?? '').slice(0, 160));
+  const resumed8 = await body.resumeIncident(String(deathHold?.id));
+  const after8 = await tickState();
+  check('the resume ends the death hold and moves the world', resumed8.done && !fs.existsSync(holdFile) && (!/frozen/iu.test(after8) || /running normally/iu.test(after8)), after8);
   report.stats = blackBoxOf(actor)?.stats() ?? null;
   closeProbeBot(actor);
 } catch (error) {

@@ -146,7 +146,7 @@ act の手（place・make・pillarUp・go・mine・smelt・obsidian・portal・f
   - 保留は `saves/minecraft/incident-hold.json` に残すので、体を再起動しても続きます。
   - `context.incident.resume` に保留の id が来たら、世界を動かして act を走らせます。
   - 頭の側の作りは shannon-ios の `docs/operator-minecraft-contract.md`（Hold on a heavy failure and resume）にあります。
-- **隔離ラボの通し**：`run-incident-lab.sh <label> <code.tar>`（`scripts/minecraft-incident-lab-probe.ts`）を VM で走らせます。モデルも有料の鍵も使いません。次を確かめます（22 の確かめ）。
+- **隔離ラボの通し**：`run-incident-lab.sh <label> <code.tar>`（`scripts/minecraft-incident-lab-probe.ts`）を VM で走らせます。モデルも有料の鍵も使いません。次を確かめます（26 の確かめ）。
   1. わざと go を止まらせる（冒険モードで置けない）
   2. 黒箱と現場が取れる
   3. 世界が止まる
@@ -155,6 +155,7 @@ act の手（place・make・pillarUp・go・mine・smelt・obsidian・portal・f
   6. 直してから resume で同じ act が通り、次の act へ進む
   7. 体だけの時に止まる（体を「ほかの人」に数えない。現場の保存器は、本番と同じく体のログイン前に作る）
   8. ほかの人（LabVisitor）がいる時は保留しない：受け取りに理由、黒箱と現場は取る、世界は動いたまま、次の act は走る
+  9. act の外の死亡（実走 45 の +929）：保留を頼んだタスクの act の後で死ぬと、体が保留して世界を止め、次の act を断る。resume で解けて世界が動く
 - **本物の頭での保留と再開の通し**（実走 44 の再開 1 の後）：上の隔離ラボは probe が頭の代わりをしていたので、頭の側の穴（出し直しが頭の control で断られた）を見逃しました。頭のリポジトリの `services/api/tests/minecraftHoldResumeLab.ts` が、本物の頭（運用者の CLI とソケット、監査、タスクの実行、FCA の段、LLM 中心の段と列、resume、体の道具、control と lease の決まり）と、体の保留の部分（control loop・Incidents・SceneSaver）を 1 つのプロセスでつなぎます。モデルは台本です。
   - 体の部分は `scripts/lab/hold-lab-body.ts` を esbuild でこのパッケージの tsconfig のまま束ねて渡します（手順は頭の lab の先頭）。
   - 通すこと：わざと止まる → 保留 → 体の再起動 → login → resume（体へ「保留を解く」→ 世界が動く → 頭が再開）→ 同じ act の出し直し → 続きの判断。cancel、体だけが保留している食い違い、終わったタスクの古い保留ファイルも。

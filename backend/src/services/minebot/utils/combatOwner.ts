@@ -56,6 +56,19 @@ export function markHeadCombat(bot: object, skillName: string, kinds: string[] |
   return () => { mark.endedAt ??= Date.now(); };
 }
 
+/**
+ * Run 45 (+929): a fight act came while the melee reflex was at it; the act waited for the reflex, the reflex started hand after hand, and the act began
+ * after she died. While the act waits for the hand that runs, a mark of the planner's fight holds the melee from a next hand. The returned call takes the
+ * mark away whole (no grace: the act's own fight puts its own mark when it begins).
+ */
+export function holdMeleeForHead(bot: object, now = Date.now()): () => void {
+  if (!headCombatOwnerEnabled()) return () => undefined;
+  const marks = ((bot as CombatBody).headCombat ??= []);
+  const mark: Mark = { skill: 'fight', kinds: ['*'], startedAt: now };
+  marks.push(mark);
+  return () => { const index = marks.indexOf(mark); if (index >= 0) marks.splice(index, 1); };
+}
+
 function prune(marks: Mark[], now: number): void {
   for (let index = marks.length - 1; index >= 0; index--) {
     const mark = marks[index];

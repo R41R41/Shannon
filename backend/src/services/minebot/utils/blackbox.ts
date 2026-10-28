@@ -226,8 +226,10 @@ export function installBlackBox(bot: any, root = blackBoxRoot(), now: () => numb
     if (entity !== bot.entity) return;
     const p = bot.entity?.position;
     const near = p ? (Object.values(bot.entities ?? {}) as any[]).filter(e => e && e !== bot.entity && e.position && e.type === 'hostile' && e.position.distanceTo(p) <= 6)
-      .map(e => ({ id: e.id, name: e.name, d: r2(e.position.distanceTo(p)) })).sort((a, b) => a.d - b.d).slice(0, 3) : [];
-    box.note('hurt', { hp: typeof bot.health === 'number' ? r2(bot.health) : null, near });
+      .map(e => ({ id: e.id, name: e.name, d: r2(e.position.distanceTo(p)), held: e.equipment?.[0]?.name ?? e.heldItem?.name ?? null })).sort((a, b) => a.d - b.d).slice(0, 3) : [];
+    // Run 45 (+929: four hits of 5.27 each through iron): what she wore and the difficulty, to tell an armed creature from armour not worn.
+    const worn = [5, 6, 7, 8].map(slot => bot.inventory?.slots?.[slot]?.name ?? null).filter(Boolean);
+    box.note('hurt', { hp: typeof bot.health === 'number' ? r2(bot.health) : null, near, worn, difficulty: bot.game?.difficulty ?? null });
   });
   bot.on?.('blockUpdate', (before: any, after: any) => {
     const at = after?.position ?? before?.position, p = bot.entity?.position;

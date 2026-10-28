@@ -136,6 +136,20 @@ describe('run 33\'s piglin: a normal piglin with a golden sword, level ground, h
     expect(bot.__swings).toHaveLength(3);
   }, 20_000);
 
+  it('run 45 (+929): the first blow of the next hand waits for the weapon too (it came 0.14 to 0.2 s after the last one, for a fifth of the damage)', async () => {
+    const clock = { at: 50_500_000 };
+    const { bot } = scene(field, new Vec3(0.5, 64, 0.5), { health: 15.5, items: [IRON_SWORD, COBBLE], mobs: { 1677: piglin(1677, 2.6, 64, 0.5) }, now: () => clock.at });
+    const times: number[] = [];
+    const attack = bot.attack;
+    bot.attack = (...rest: unknown[]) => { times.push(Date.now()); return attack.apply(bot, rest); };
+    await hurtTo(bot, clock, 11);
+    await rounds(bot, clock, 1);
+    await rounds(bot, clock, 1);
+    expect(times).toHaveLength(3);
+    // An iron sword is ready again 625 ms after a blow (1.6 a second): every blow, the first of the second hand too.
+    for (let i = 1; i < times.length; i++) expect(times[i]! - times[i - 1]!).toBeGreaterThanOrEqual(600);
+  }, 20_000);
+
   it('an act running stops as a reflex and says the blows (the receipt the planner reads)', async () => {
     const clock = { at: 51_000_000 };
     const { bot } = scene(field, new Vec3(0.5, 64, 0.5), { health: 15.5, items: [IRON_SWORD], mobs: { 1677: piglin(1677, 2.6, 64, 0.5) }, now: () => clock.at });

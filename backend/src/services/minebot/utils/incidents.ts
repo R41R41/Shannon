@@ -30,6 +30,8 @@ const log = createLogger('Minebot:Incident');
 export const LOW_STEPS = 10;
 export const LONG_MS = 60_000;
 export const NEAR_DEATH = 4;
+/** How long after the last act a death outside an act still holds that act's task (the task that asked to be held). */
+const ASKED_FOR_MS = 10 * 60_000;
 /** A fall of health this big within SHARP_MS writes the box (and at NEAR_DEATH or a death, the scene). */
 const SHARP_HP = 6, SHARP_MS = 5_000;
 
@@ -85,6 +87,10 @@ export class Incidents {
   private readonly falls: Array<[number, number]> = [];
   private lastHealthDump = 0;
   private startFeet: [number, number, number] | null = null;
+  /** Run 45: an act runs (between its beforeAct and its end): a death or near death in it is the act's (afterAct holds for it). */
+  private inAct = false;
+  /** Run 45: the task of the last act, whether it asked to be held, and when (a death outside an act holds for it within ASKED_FOR_MS). */
+  private asked: { task: string; hold: boolean; at: number } | null = null;
 
   constructor(private readonly bot: any, private readonly options: { holdFile: string; scene?: SceneSaver | null; now?: () => number }) {
     try { this.hold = JSON.parse(fs.readFileSync(options.holdFile, 'utf8')) as Hold; } catch { this.hold = null; }
@@ -100,10 +106,16 @@ export class Incidents {
       last = hp;
       if ((fell >= SHARP_HP || hp <= NEAR_DEATH) && hp > 0 && now - this.lastHealthDump > 15_000) {
         this.lastHealthDump = now;
-        void this.write('health', hp <= NEAR_DEATH, `health ${hp.toFixed(1)} (fell ${fell.toFixed(1)} in ${SHARP_MS / 1000}s)`);
+        const outside = !this.inAct && hp <= NEAR_DEATH;
+        void this.write('health', hp <= NEAR_DEATH, `health ${hp.toFixed(1)} (fell ${fell.toFixed(1)} in ${SHARP_MS / 1000}s)`)
+          .then(incident => (outside ? this.holdOutside(incident, `near_death:${hp.toFixed(1)}`) : undefined)).catch(() => undefined);
       }
     });
-    bot.on?.('death', () => { this.died = true; void this.write('death', true, 'death'); });
+    bot.on?.('death', () => {
+      this.died = true;
+      const outside = !this.inAct;
+      void this.write('death', true, 'death').then(incident => (outside ? this.holdOutside(incident, 'death') : undefined)).catch(() => undefined);
+    });
   }
   private now(): number { return (this.options.now ?? Date.now)(); }
   private box(): BlackBox | null { return blackBoxOf(this.bot); }
@@ -112,18 +124,20 @@ export class Incidents {
   async beforeAct(context: Context | undefined): Promise<string | null> {
     this.lowestHp = typeof this.bot.health === 'number' ? this.bot.health : null;
     this.died = false;
+    if (context?.taskId) this.asked = { task: context.taskId, hold: context.incident?.hold === true, at: this.now() };
     const feet = this.bot.entity?.position;
     this.startFeet = feet ? [Math.round(feet.x * 100) / 100, Math.round(feet.y * 100) / 100, Math.round(feet.z * 100) / 100] : null;
     const box = this.box();
     if (box && context?.taskId) box.task = context.taskId;
     box?.ensureWrapped();
     const hold = this.hold;
-    if (!hold) return null;
+    if (!hold) { this.inAct = true; return null; }
     if (context?.incident?.resume === hold.id) {
       const said = await this.unfreeze();
       log.warn(`▶ 保留を解いた ${hold.id}: ${said}`);
       box?.note('resume', { hold: hold.id, unfreeze: said });
       this.clearHold();
+      this.inAct = true;
       return null;
     }
     if (context?.taskId && context.taskId !== hold.task) {
@@ -131,6 +145,7 @@ export class Incidents {
       const said = await this.unfreeze();
       log.warn(`▶ 別のタスクの act が来たので、前のタスクの保留 ${hold.id} を解いた: ${said}`);
       this.clearHold();
+      this.inAct = true;
       return null;
     }
     return `保留中（${hold.id}: ${hold.why}）。再開の命令（resume）が来るまで動かない`;
@@ -138,6 +153,7 @@ export class Incidents {
 
   /** After an act: the box (when it did not succeed), the scene (when heavy), and the hold (when the task asked for it). The incident, or null. */
   async afterAct(command: { id: string; context?: Context; arguments?: unknown }, report: ActReport, ms: number): Promise<Incident | null> {
+    this.inAct = false;
     if (report.ok) return null;
     const task = command.context?.taskId ?? 'no-task';
     const reason = heavyReason(report, ms, this.lowestHp, this.died, this.seen, task);
@@ -172,6 +188,27 @@ export class Incidents {
    * a body restarted in between kept refusing every act when that act never reached it). The hold ends and the world moves.
    */
   async resume(id: string): Promise<HoldRelease> { return this.release(id, 'resume'); }
+  /** An act ended however it ended (its afterAct may not come: a throw, a refusal before its hands). */
+  endAct(): void { this.inAct = false; }
+  /**
+   * Run 45 (+929: she died between two acts, the reflexes alone at a zombie, and nothing was held): a death, or health at NEAR_DEATH or under,
+   * outside an act holds the task of the last act when it asked to be held (within ASKED_FOR_MS) and the world can be stopped; when it cannot,
+   * nothing is held (as in an act). The head learns of it from the frame (`incidentHold`) or the next act's refusal, and holds the task too.
+   */
+  private async holdOutside(incident: Incident | null, why: string): Promise<void> {
+    const asked = this.asked;
+    if (!incident || this.hold || !asked?.hold || this.now() - asked.at > ASKED_FOR_MS) return;
+    const freeze = this.options.scene ? await this.options.scene.freeze() : { frozen: false, why: 'no_scene_port' };
+    if (!freeze.frozen) {
+      log.warn(`⏵ act の外の ${why} を保留しなかった ${incident.id}: 世界を止められない（${freeze.why}）`);
+      this.box()?.note('hold_skipped', { id: incident.id, freeze: freeze.why, outside: true });
+      return;
+    }
+    this.hold = { id: incident.id, task: asked.task, at: new Date(this.now()).toISOString(), frozen: true, freeze: freeze.why, command: '', why, start: null };
+    try { await fs.promises.mkdir(path.dirname(this.options.holdFile), { recursive: true }); await fs.promises.writeFile(this.options.holdFile, JSON.stringify(this.hold)); } catch { /* held in memory */ }
+    log.warn(`⏸ act の外の ${why} で保留した ${incident.id}（タスク ${asked.task}）。世界を止めた`);
+    this.box()?.note('hold', { id: incident.id, frozen: true, freeze: freeze.why, outside: true });
+  }
   /** The hold as the observation says it (the head compares it with its own), or null. */
   held(): { id: string; task: string; why: string } | null {
     return this.hold ? { id: this.hold.id, task: this.hold.task, why: this.hold.why } : null;

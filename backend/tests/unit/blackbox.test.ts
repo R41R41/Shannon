@@ -242,3 +242,71 @@ describe('run 44, hold 1: the body counted itself as someone else, held in a mov
     expect(said).toEqual(['tick unfreeze', 'tick unfreeze', 'tick unfreeze']);
   });
 });
+
+describe('run 45 (+929): a death outside an act', () => {
+  function server(players: string) {
+    const serverDir = temp();
+    fs.mkdirSync(path.join(serverDir, 'world', 'region'), { recursive: true }); fs.mkdirSync(path.join(serverDir, 'logs'), { recursive: true });
+    fs.writeFileSync(path.join(serverDir, 'world', 'level.dat'), 'L');
+    for (const file of regionsAround(10, -3)) fs.writeFileSync(path.join(serverDir, 'world', 'region', file), 'R');
+    fs.writeFileSync(path.join(serverDir, 'logs', 'latest.log'), '');
+    const said: string[] = [];
+    const saver = new SceneSaver({ serverDir, root: path.join(serverDir, 'scenes'), self: () => ['MinebotTrial'],
+      command: async text => { said.push(text); return text === 'list' ? `There are 1 of a max of 20 players online: ${players}` : text.startsWith('save-all') ? 'Saved the game' : 'ok'; } });
+    return { saver, said };
+  }
+  const settle = () => new Promise(resolve => setTimeout(resolve, 30));
+  const done = { ok: true, startedAt: 0, done: 1, of: 1, lines: [{ i: 1, do: 'fight' as const, status: 'done' as const, line: 'fight 済' }] };
+
+  it('holds the task of the last act when it asked to be held and the world stops; the head reads it in the frame', async () => {
+    const clock = { t: 7_000_000 };
+    const { saver, said } = server('MinebotTrial');
+    const holdFile = path.join(temp(), 'hold.json');
+    const bot = fakeBot(clock);
+    installBlackBox(bot, temp(), () => clock.t);
+    const incidents = new Incidents(bot, { holdFile, scene: saver, now: () => clock.t });
+    const context = { taskId: 'task-45', incident: { hold: true } };
+    expect(await incidents.beforeAct(context)).toBeNull();
+    expect(await incidents.afterAct({ id: 'cmd-1', context }, done as never, 5000)).toBeNull();
+    bot.emit('death');
+    await settle();
+    expect(said).toEqual(expect.arrayContaining(['save-all flush', 'list', 'tick freeze']));
+    expect(incidents.held()).toMatchObject({ task: 'task-45', why: 'death' });
+    expect(JSON.parse(fs.readFileSync(holdFile, 'utf8'))).toMatchObject({ task: 'task-45', frozen: true, why: 'death', command: '' });
+    expect(await incidents.beforeAct({ taskId: 'task-45' })).toMatch(/^保留中/u);
+  });
+
+  it('near death outside an act holds too; a death in an act is the act\'s; nothing without the ask or a world that stops', async () => {
+    const clock = { t: 8_000_000 };
+    const near = server('MinebotTrial');
+    const bot = fakeBot(clock);
+    const incidents = new Incidents(bot, { holdFile: path.join(temp(), 'hold.json'), scene: near.saver, now: () => clock.t });
+    await incidents.beforeAct({ taskId: 'task-n', incident: { hold: true } });
+    incidents.endAct();
+    bot.health = 3; bot.emit('health');
+    await settle();
+    expect(incidents.held()).toMatchObject({ task: 'task-n', why: 'near_death:3.0' });
+    // In an act: the act's afterAct holds for it (not the event).
+    const inAct = server('MinebotTrial');
+    const second = new Incidents(fakeBot(clock), { holdFile: path.join(temp(), 'hold.json'), scene: inAct.saver, now: () => clock.t });
+    const bot2 = (second as any).bot;
+    await second.beforeAct({ taskId: 'task-a', incident: { hold: true } });
+    bot2.emit('death');
+    await settle();
+    expect(second.held()).toBeNull();
+    expect(inAct.said).not.toContain('tick freeze');
+    // Not asked to be held: nothing.
+    const none = server('MinebotTrial');
+    const third = new Incidents(fakeBot(clock), { holdFile: path.join(temp(), 'hold.json'), scene: none.saver, now: () => clock.t });
+    await third.beforeAct({ taskId: 'task-b' }); third.endAct();
+    (third as any).bot.emit('death'); await settle();
+    expect(third.held()).toBeNull();
+    // Someone else on: not held (as in an act).
+    const busy = server('MinebotTrial, Rai1241');
+    const fourth = new Incidents(fakeBot(clock), { holdFile: path.join(temp(), 'hold.json'), scene: busy.saver, now: () => clock.t });
+    await fourth.beforeAct({ taskId: 'task-c', incident: { hold: true } }); fourth.endAct();
+    (fourth as any).bot.emit('death'); await settle();
+    expect(fourth.held()).toBeNull();
+    expect(busy.said).not.toContain('tick freeze');
+  });
+});

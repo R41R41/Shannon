@@ -2,7 +2,7 @@ import { Vec3 } from 'vec3';
 import { NativeGoalEvidence, GOAL_EVIDENCE_SKILL } from './goalEvidence.js';
 import { primitiveState, primitiveCandidates, executePrimitive } from './primitives.js';
 import { captureWorldObservation } from '../../cognition/worldFrame.js';
-import { floorActive, floorSilenced, reflexHeld } from '../../utils/floorReflexes.js';
+import { floorActive, floorSilenced, meleeEpisode, reflexHeld } from '../../utils/floorReflexes.js';
 import { floorConfig } from '../../utils/floorConfig.js';
 import { linkWatchOf } from '../../utils/linkWatch.js';
 import type { ReflexLedger } from '../../utils/reflexLedger.js';
@@ -14,7 +14,14 @@ import type { MinecraftControlCommand as Command, MinecraftControlReceipt as Rec
 import { conditionHolds, conditionWords, type ActCondition } from '../../utils/actConditions.js';
 import type { CommonFcaActuator } from './controlLoop.js';
 import { BodyEventWatcher } from './bodyEvents.js';
-import { closeInAdvised, combatOwnerOf } from '../../utils/combatOwner.js';
+import { closeInAdvised, combatOwnerOf, holdMeleeForHead } from '../../utils/combatOwner.js';
+
+/** Whether an act's first hand is a fight (`fight` or `attack`): the planner's fight, which the melee reflex gives way to. */
+function fightsFirst(args: unknown): boolean {
+  const hands = (args as { hands?: Array<{ do?: unknown }> } | undefined)?.hands;
+  const first = Array.isArray(hands) ? hands[0]?.do : undefined;
+  return first === 'fight' || first === 'attack';
+}
 import { craftDoneDespiteCut, craftWitness, type CraftWitness } from '../../utils/cutCraftRecovery.js';
 import { renderActReport, takeActReport } from '../../utils/actReport.js';
 import { incidentsOf, withIncidentText, type HoldRelease } from '../../utils/incidents.js';
@@ -269,7 +276,12 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
       let lead = '';
       let runMs = milliseconds;
       if (!readOnly && command.kind === 'skill') {
-        const held = await this.afterReflex(signal, deadline);
+        // Run 45 (+929): the planner's fight at a zombie waited 6.4 s for the melee reflex (a hand, then the next, each 2 blows) and began after
+        // she died. A fight act that comes while the melee reflex is at it takes the fight over: the melee starts no next hand (a fight of the
+        // planner's holds it), and the act waits only for the hand that runs.
+        const yieldMelee = capability === 'act' && fightsFirst(args) && meleeEpisode(this.bot) ? holdMeleeForHead(this.bot) : null;
+        let held: { by: string; ms: number; outcome: 'free' | 'late' | 'aborted' } | null;
+        try { held = await this.afterReflex(signal, deadline); } finally { yieldMelee?.(); }
         if (held) {
           const short = held.by.replace(/^constant:/u, '').replace(/^(floor|auto)-/u, '');
           const who = `反射 ${short}（${reflexLabel(held.by)}）`, waited = `${(held.ms / 1000).toFixed(1)}秒`;
@@ -286,6 +298,7 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
       const incidents = command.kind === 'skill' && capability === 'act' ? incidentsOf(this.bot) : null;
       const heldWords = incidents ? await incidents.beforeAct(command.context as never) : null;
       if (heldWords) return this.receipt(command, 'failed', true, heldWords, undefined, { failureType: 'held', recoverable: false });
+      try {
       const actStartedAt = Date.now();
       const result = await withActionSignal(this.bot, signal, () => executeAction(this.bot, capability, runMs,
         work, { waitForQuiescence: true }));
@@ -324,6 +337,7 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
       if (lead) text = text ? `${lead}。${text}` : lead;
       if (note) text = `${(text ?? '').slice(0, 16_000 - note.length - 1)}${text ? ' ' : ''}${note}`;
       return this.receipt(command, outcome, released, text, undefined, failure);
+      } finally { incidents?.endAct(); }
     } finally { signal.removeEventListener('abort', cancelled); this.events?.end(command.id); }
   }
   /**

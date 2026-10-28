@@ -12,7 +12,7 @@ import { blockAt, cellText, inventoryCount, isAirLike, letGo, stopped, StepStopp
 import { atGoal, goWith, type GoOutcome, type WayNotes } from './walk.js';
 import { dig } from './dig.js';
 import { pillarUp, shortFloor, wholeFloorBeside } from './pillarUp.js';
-import { placeFacts } from '../placeFacts.js';
+import { bodyOverlap, placeFacts } from '../placeFacts.js';
 import { blackBoxOf } from '../blackbox.js';
 
 const { goals } = pathfinder;
@@ -62,6 +62,12 @@ export const GO_STUCK_MS = 3000;
 export const GO_STALLED_REDRAWS = 12;
 /** The blocks laid that the world does not show before the stop `stuck` (the server refuses the place: one is enough, the next step would be onto it). */
 export const GO_REFUSED_PLACES = 1;
+/**
+ * Run 45 (hold 2, q78 go 9 up out of a dip: 34 s pushed back by flowing water at the same step, five drawings of the same way): a cell the body
+ * could not get into (stuck before it) costs this much more to step into or lay in for the rest of the go, so the next drawing goes another way
+ * when there is one. (A refused place still stops the go at once: drawn again past it, the run 40 bench's body fell five cells.)
+ */
+export const GO_AVOID_COST = 20;
 /** The most times one go walks the part of a way a search found before its time ran out (each must come 2 m nearer). */
 export const GO_PARTIAL_WALKS = 6;
 /** The most mendings of a stuck body, without any headway between them, before the stop `stuck`. */
@@ -235,6 +241,8 @@ interface State {
   veto: { code: string; text: string } | null;
   /** The blocks laid in a row that the world did not show. */
   refused: number;
+  /** Run 45: the cells this go could not get into or lay in ("x,y,z"), avoided by the next drawings (`GO_AVOID_COST`). */
+  avoid: Set<string>;
 }
 
 // ---- the movements ---------------------------------------------------------------------------------------------------------------------
@@ -278,6 +286,12 @@ function goMovements(bot: any, args: Required<Pick<GoArgs, 'maxDrop' | 'waterOk'
   }
   // Every read of the search, the movements' own and the rules' below, goes through one keep (run 41: 3.4 times the nodes a second).
   const read = keepReads(movements, worldWatchOf(nativeActionHost(bot)));
+  // Run 45 (hold 2): the cells this go could not get into or lay in cost more (another way first, this one still when there is no other).
+  if (state.avoid.size) {
+    const avoided = (block: any) => (block?.position && state.avoid.has(`${block.position.x},${block.position.y},${block.position.z}`) ? GO_AVOID_COST : 0);
+    movements.exclusionAreasStep = [...(movements.exclusionAreasStep ?? []), avoided];
+    movements.exclusionAreasPlace = [...(movements.exclusionAreasPlace ?? []), avoided];
+  }
   // Moves that end in a hazard (beside lava, on magma...), or in water when it is not allowed, are not moves.
   const getNeighbors = movements.getNeighbors.bind(movements);
   const inWater = isWaterName(nameAt(bot, Math.floor(bot.entity.position.x), Math.floor(bot.entity.position.y), Math.floor(bot.entity.position.z)));
@@ -295,6 +309,48 @@ const distanceTo = (bot: any, cell: Cell) => Math.hypot(bot.entity.position.x - 
 const goalOf = (cell: Cell, range: number) => range > 0 ? new goals.GoalNear(cell.x + 0.5, cell.y, cell.z + 0.5, range) : new goals.GoalBlock(cell.x, cell.y, cell.z);
 const compositeOf = (cells: Cell[], range: number) => cells.length === 1 ? goalOf(cells[0], range) : new goals.GoalCompositeAny(cells.map(cell => goalOf(cell, range)));
 const keyOf = (cell: Cell) => `${cell.x},${cell.y},${cell.z}`;
+/** How far a body steps back out of a cell a block is to be laid in (it never steps back more: a body far in is not moved). */
+const CLEAR_MAX_M = 0.35;
+/**
+ * The body moved out of `cell` (it stands a little into it across: a block laid there is refused), straight away from the cell's middle, for at
+ * most 300 ms, and only when that is at most CLEAR_MAX_M; the walk's own keys are left as they were. True when it is clear (or was).
+ */
+export async function clearOfCell(bot: any, cell: Cell): Promise<boolean> {
+  const p = bot.entity?.position;
+  if (!p || bodyOverlap(p, cell) <= 0) return true;
+  const dx = p.x - (cell.x + 0.5), dz = p.z - (cell.z + 0.5);
+  // The box is 0.6 across: out of the cell along x when |dx| >= 0.8, or along z when |dz| >= 0.8; the shorter way.
+  const needX = Math.max(0, 0.8 - Math.abs(dx)), needZ = Math.max(0, 0.8 - Math.abs(dz));
+  const alongX = needX <= needZ;
+  if (Math.min(needX, needZ) > CLEAR_MAX_M) return false;
+  const away = alongX ? { x: Math.sign(dx) || 1, z: 0 } : { x: 0, z: Math.sign(dz) || 1 };
+  const keys = ['forward', 'back', 'left', 'right', 'jump', 'sprint', 'sneak'];
+  const before = Object.fromEntries(keys.map(key => [key, !!bot.controlState?.[key]]));
+  try {
+    for (const key of keys) bot.setControlState?.(key, false);
+    await bot.look?.(Math.atan2(-away.x, -away.z), 0, true);
+    bot.setControlState?.('sneak', true);
+    bot.setControlState?.('forward', true);
+    const until = Date.now() + 300;
+    while (Date.now() < until && bot.entity?.position && bodyOverlap(bot.entity.position, cell) > 0) await new Promise(resolve => setTimeout(resolve, 25));
+  } catch { /* the place goes on as it was */ }
+  finally {
+    for (const key of keys) { try { bot.setControlState?.(key, before[key]); } catch { /* released */ } }
+  }
+  return !bot.entity?.position || bodyOverlap(bot.entity.position, cell) <= 0;
+}
+/** The cell of a route after the one nearest the body (where it was going), or null. */
+export function aheadOf(route: readonly Cell[], at: { x: number; y: number; z: number } | undefined): Cell | null {
+  if (!route.length || !at) return null;
+  let nearest = 0, best = Infinity;
+  route.forEach((cell, index) => {
+    const d = Math.hypot(cell.x + 0.5 - at.x, cell.y - at.y, cell.z + 0.5 - at.z);
+    if (d < best) { best = d; nearest = index; }
+  });
+  const here = { x: Math.floor(at.x), y: Math.floor(at.y + 1e-3), z: Math.floor(at.z) };
+  const next = route[nearest]!.x === here.x && route[nearest]!.y === here.y && route[nearest]!.z === here.z ? route[nearest + 1] : route[nearest];
+  return next ?? null;
+}
 /** The plain no-collision blocks a body is in, not on: a floor is never one, and the walk goes through them (air, liquids, climbing plants). */
 const THROUGH = /^(air|cave_air|void_air|water|lava|bubble_column|ladder|vine|scaffolding|cave_vines(_plant)?|twisting_vines(_plant)?|weeping_vines(_plant)?)$/u;
 /**
@@ -385,7 +441,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   const rule = digRuleOf(bot.registry, args.canDig);
   const searchCap = args.searchMs ?? 5000;
   const place = placeNamesOf(bot, args.canPlace);
-  const state: State = { steps: 0, dug: 0, placed: 0, redraws: 0, veto: null, refused: 0 };
+  const state: State = { steps: 0, dug: 0, placed: 0, redraws: 0, veto: null, refused: 0, avoid: new Set() };
   const start = feetCell(bot)!;
 
   // ---- how a line ends (the contract's result lines) ----
@@ -458,8 +514,9 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     return result;
   };
   /** A block the server did not take is not a floor: the route executor is not let walk on (run 40 bench: go went on over a refused place and fell four cells). */
-  const refusedPlace = (facts = '') => {
-    blackBoxOf(host)?.note('refused_place', { n: state.refused + 1, facts: facts.slice(0, 200) });
+  const refusedPlace = (facts = '', cell: Cell | null = null) => {
+    blackBoxOf(host)?.note('refused_place', { n: state.refused + 1, facts: facts.slice(0, 200), ...(cell ? { avoid: [cell.x, cell.y, cell.z] } : {}) });
+    if (cell) state.avoid.add(keyOf(cell));
     if (++state.refused >= GO_REFUSED_PLACES && !state.veto) {
       state.veto = { code: 'stuck', text: `置いたブロックが世界に現れない（サーバーが置きを断った。${state.refused} 回${facts ? `。${facts}` : ''}）` };
       try { nav.setGoal?.(null); } catch { /* stopped below */ }
@@ -469,17 +526,21 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   };
   const countingPlace = async function (this: unknown, ...rest: unknown[]) {
     let result: unknown;
+    // Run 45 (hold 2, the lab, three times out of three): the route laid a block to step up onto in the cell before the feet while the body
+    // stood 0.1 into that cell (overlap 0.91): the server refused it and the go stopped. The body steps back out of the cell first.
+    const target = counting ? placedCell(rest[0], rest[1]) : null;
+    if (target) await clearOfCell(host, target);
     const at = host.entity?.position?.clone?.() ?? null;
     const facts = () => { const cell = placedCell(rest[0], rest[1]); return cell ? placeFacts(host, cell, topOfJump(), at ?? undefined) : ''; };
     try { result = await originalPlace.apply(host, rest); }
     catch (error) {
       // The library gives up when the server's update does not come: that too is a place the server did not take (an interruption is not).
-      if (counting && !/Action interrupted|Motor owner expired/u.test(String((error as Error)?.message))) refusedPlace(facts());
+      if (counting && !/Action interrupted|Motor owner expired/u.test(String((error as Error)?.message))) refusedPlace(facts(), placedCell(rest[0], rest[1]));
       throw error;
     }
     if (!counting) return result;
     if (await laidAt(host, rest[0], rest[1])) { state.placed++; lastWork = Date.now(); state.refused = 0; return result; }
-    refusedPlace(facts());
+    refusedPlace(facts(), placedCell(rest[0], rest[1]));
     throw new Error('The place was not taken');
   };
   if (typeof originalDig === 'function') host.dig = countingDig;
@@ -529,7 +590,9 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     return null;
   };
   /** A look at the route the executor is given (its own drawing, not ours): over the limit, it is stopped before it digs. */
+  let lastRoute: Cell[] = [];
   const watchRoute = (route: any[]) => {
+    lastRoute = route.slice(0, 32).map(node => nodeCell(node));
     let digs = 0, places = 0;
     for (const node of route) { digs += node?.toBreak?.length ?? 0; places += node?.toPlace?.length ?? 0; }
     state.veto = budgetOf(digs, places);
@@ -748,6 +811,12 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
       const searchedOut = drawn.status === 'timeout';
       if (!leg.final && !out.stuck && attempt < 4 && !searchedOut) { attempt++; state.redraws++; continue; }
       if (out.stuck) {
+        // Run 45 (hold 2): the cell of the route the body was held before is avoided by the next drawings.
+        const ahead = aheadOf(lastRoute, bot.entity?.position);
+        if (ahead && !state.avoid.has(keyOf(ahead))) {
+          state.avoid.add(keyOf(ahead));
+          blackBoxOf(host)?.note('avoid', { at: [ahead.x, ahead.y, ahead.z], why: 'stuck' });
+        }
         mends++;
         if (mends > GO_REPAIRS) {
           const feet = feetCell(bot)!;
