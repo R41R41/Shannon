@@ -183,3 +183,32 @@ describe('A-6 (8): a last stand\'s wait between blows ends when the action is st
     expect(result).toMatchObject({ success: true });
   });
 });
+
+describe('A-6 (5): the act\'s own life, read from the native body behind the motor port', () => {
+  it('the outcome carries the life the act began in (1), also when the body dies during it and when the hands are refused before they start', async () => {
+    const { installLife } = await import('../../src/services/minebot/utils/life.js');
+    const { runAct } = await import('../../src/services/minebot/instantSkills/act.js');
+    const fs = await import('node:fs'), os = await import('node:os'), path = await import('node:path');
+    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'life-a6-')), 'life.json');
+    const bot: any = Object.assign(new EventEmitter(), {
+      entity: { id: 1, position: new Vec3(0.5, 64, 0.5), yaw: 0, pitch: 0, onGround: true }, username: 'a6', health: 20, food: 20, game: { dimension: 'overworld' }, entities: {},
+      inventory: { items: () => [], slots: new Array(46).fill(null) }, controlState: {}, executingSkill: false, interruptExecution: false,
+      clearControlStates: () => undefined, setControlState: () => undefined, look: async () => undefined, stopDigging: () => undefined,
+    });
+    const keeper = installLife(bot, { file });
+    expect(keeper.number).toBe(1);
+    // died during the act: the life number goes up, the outcome stays the life it ran in
+    const running = executeAction(bot, 'act', 5000, async () => {
+      const result = await runAct(createMotorPort(bot), [{ do: 'wait', seconds: 0.4 } as never, { do: 'jump' } as never]);
+      return { success: result.success, result: result.result };
+    }, { waitForQuiescence: true });
+    await delay(120);
+    bot.health = 0; bot.emit('death');
+    const done: any = await running;
+    expect(keeper.number).toBe(2);
+    expect(JSON.parse(done.result).outcome.life).toBe(1);
+    // refused before it starts (a wrong hand list): the life it was made in, not 0
+    const bad = await runAct(createMotorPort(bot), [{ do: 'wait' } as never, { do: 'vertical', dir: 'sideways' } as never]);
+    expect(JSON.parse(bad.result).outcome).toMatchObject({ goal: 'not_started', end: 'not_run', life: 2 });
+  });
+});

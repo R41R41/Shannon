@@ -21,7 +21,7 @@ import { bodyRevision } from '../../src/services/minebot/utils/bodyRevision.js';
 import { bodySkillCatalog } from '../../src/services/minebot/integration/commonFca/skillCatalog.js';
 import { GOAL_EVIDENCE_SKILL } from '../../src/services/minebot/integration/commonFca/goalEvidence.js';
 import { EVENTS_SKILL, EventStore } from '../../src/services/minebot/integration/commonFca/eventStore.js';
-import { LifeKeeper } from '../../src/services/minebot/utils/life.js';
+import { installLife, LifeKeeper } from '../../src/services/minebot/utils/life.js';
 import { BodyQueue, readEnvelope } from '../../src/services/minebot/integration/commonFca/bodyQueue.js';
 import { dependStateOf } from '../../src/services/minebot/integration/commonFca/continueContract.js';
 import { ACT_HANDS, runAct } from '../../src/services/minebot/instantSkills/act.js';
@@ -104,12 +104,15 @@ async function queueCase(): Promise<void> {
 
 // ---- the act's result on a small fake world: the closed words, the two axes, the hands that depend on each other
 function fakeBody(): any {
-  return Object.assign(new EventEmitter(), {
+  const bot: any = Object.assign(new EventEmitter(), {
     entity: { position: new Vec3(0.5, 64, 0.5), yaw: 0, onGround: true, height: 1.8 }, health: 20, food: 20, game: { dimension: 'overworld' }, entities: {},
     inventory: { items: () => [{ name: 'bread', count: 4 }], slots: new Array(46).fill(null) },
     blockAt: (p: Vec3) => Math.floor(p.y) < 64 ? { name: 'stone', boundingBox: 'block', diggable: true, hardness: 1.5, position: p.floored() } : { name: 'air', boundingBox: 'empty', position: p.floored() },
     setControlState: () => undefined, clearControlStates: () => undefined,
   });
+  // A-6 (5): the body has its life keeper (life 1), as the native body does: the act's outcome carries the life it ran in.
+  installLife(bot, { file: path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'produce-life-')), 'life.json') });
+  return bot;
 }
 async function actCases(): Promise<void> {
   const far = { x: 9, y: 63, z: 0 };

@@ -343,6 +343,7 @@ try {
       check(`death while ${moment}: the old command ends cut or not run, with a death reason, and sent no operation after the death`, oldOps.length === 0 && (/death|stale_life|cancelled/u.test(`${result.parsed?.outcome?.cutBy ?? ''}${result.receipt.failureType ?? ''}`) || (result.receipt.outcome === 'cancelled' && result.receipt.unit?.end === 'not_run')),
         JSON.stringify({ cutBy: result.parsed?.outcome?.cutBy, failure: result.receipt.failureType, unit: result.receipt.unit, oldOps: oldOps.length }));
       check(`death while ${moment}: the life number went up by one and the death count with it`, (after.facts.life as number) === before + 1 && (after.state as any).life.advancedBy === 'death', JSON.stringify((after.state as any).life));
+      check(`death while ${moment}: the outcome carries the life the act ran in (A-6 5), not the life after the death`, (result.parsed?.outcome === undefined && moment === 'waiting_for_reflex') || result.parsed?.outcome?.life === before, JSON.stringify({ outcomeLife: result.parsed?.outcome?.life, before }));
       if (moment === 'running_hand') produce('life/r45-death-then-old-attack', 'life/r45-death-then-old-attack', { output: { receipt: { outcome: result.receipt.outcome, unit: result.receipt.unit, bodyTimes: result.receipt.bodyTimes, failureType: result.receipt.failureType }, result: result.parsed, lifeBefore: before, lifeAfter: (after.state as any).life } });
       await sleep(2500);
       const stale = await act(body, { hands: [{ do: 'wait', seconds: 0.2 }] }, { stamp });

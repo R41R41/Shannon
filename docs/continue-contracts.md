@@ -1297,3 +1297,17 @@ interface Handover { shield: 'kept' | 'lowered' | 'dropped' | 'none' }
 - 操作の連続記録の行（盾の実際の状態。頭の判定器 `tools/continue-verify/judge.ts` の `motor_state` の形に合わせた）：`{ kind: 'motor_state', at, command, point: 'reservation' | 'stop' | 'acquire' | 'first_op', shield: boolean, deactivateItem: boolean, ... }`。`shield` はその時点で盾が上がっているか、`deactivateItem` は予約を作ってから `deactivateItem` が呼ばれたか。足してある欄：`using`（盾を使い続けているか）、`hasDeactivate`、`loweredSince`・`deactivatedSince`（予約からの回数）、`reserved`・`reflex`（reservation の行）、`result`・`confirmed`（acquire の行。`result` は上の Handover.shield の値）、`op`（first_op の行）。`command` は引き継ぎの相手の命令（まだ操作の範囲に入っていない時でも付く）。
 - `EventsReply.lost` は、記録が無い時のほかに、体が 5,000 件の上限を超えて未 ACK の命令の出来事を捨てた時も `true`（`total` はその命令の件数、`events` は空）。頭は `lost` を「出来事が分からない」と扱う。ACK 済みの記録は時間（30 分）と件数で消えてよいが、未 ACK のものは時間・件数では消えない。
 - `outcome.life` は act を走らせた命（開始時の番号）。死の後の命で付け直さない。
+
+### A-7（10/29、Sonnet の短い通しから。頭だけ）
+
+通しの結果（17 場面 × 2、USD 0.91）：vertical 6/6（下りの別場面も 6/6、go 0）・精錬の後の別の仕事と取り出し 4/4・戦いの後の回復 4/4。dependsOn 0/8、約束 0/6（1 節足しても 0）。準備を省く時の prep skipped は 1/2。送る前の確認で断られた答え：vertical の liquid 無し 2・maxDig 250 が 1・stopIf の引用符の二重 3（45 回中）。
+
+1. **約束を act に載せる**：LLM は 1 判断に act だけを出し、plan_update を別に呼ばない（1 節足しても 0）。書き方の入口を、LLM が必ず書く act に移す。
+   - act に `keep` を足す（例 `keep=spruce_planks:4:作業台`、複数可）。頭は、送る時に計画の道具の 1 つの入口（`op: 'promise'` と同じ処理）で約束を作る。既に同じ item・use の開いた約束があれば改訂（count を変える）。
+   - `plan.update` の `op: 'promise'` も残す（最初の計画の `promises` も今どおり）。
+   - 道具の説明に 1 例、system の優先の行に「後で使う物は act の keep で残す（帳簿に載る）」を足す。トークンは 8,800 以内。
+   - 体には何も足さない（頭だけで約束に変える）。
+2. **vertical の liquid と範囲**：道具の説明の vertical の例に必ず `liquid=` を書き、既定と範囲（maxDig 200・maxPlace 100・seconds 5〜120）を見せる。断る時の文に、直し方（「liquid=stop|seal_water|… を足す」「maxDig は 200 まで」）を書く。
+3. **stopIf の引用符**：外側に余分な引用符が 1 重付いた物（`"\"hostileWithin=8 hpBelow=10\""`）は、1 重はがして読む。読めない時の断りの文に正しい書き方の例を出す。
+4. **dependsOn**：変えない。1 つの act の中で手を順に並べる使い方で足りている。実走で、別の項目に分けた時に書くかを見る。
+5. **確かめ**：直した後、同じ台で p1〜p3・v3・k2 と、keep を狙う場面を 2 回ずつ回す（残りの予算の内）。最初の計画（Opus）が `promises` を書くかも 1 場面見る。

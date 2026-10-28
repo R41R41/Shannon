@@ -358,6 +358,15 @@ function dugCountOf(bot: any, before: Array<{ cell: Cell; name: string }>): numb
 }
 
 /**
+ * A-6 (5): the life the act is run in, read when it begins. `bot` is the act's motor port, a view of the native body, and the life keeper is the native body's:
+ * read from the port it was 0 (the lab's produced life--r45-death-then-old-attack). Unknown (no keeper): nothing is set and the receipt reads the life when it is rendered.
+ */
+function lifeAtStart(bot: object): { life?: number } {
+  const number = lifeOf(nativeActionHost(bot))?.number ?? lifeOf(bot)?.number;
+  return typeof number === 'number' ? { life: number } : {};
+}
+
+/**
  * Runs the hands (also from tests, with a fake body). `bot` is the act's motor port: everything it moves stops when the action is
  * cut. The report is kept for the command's receipt (utils/actReport) and returned as the skill's result (JSON).
  */
@@ -368,7 +377,7 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
   if (shape) {
     const lines: HandLine[] = hands.map((hand, index) => ({ i: index + 1, do: hand.do, status: 'skipped', line: `未実行: ${shape}`, goal: 'not_started', end: 'not_run', code: 'invalid_input' }));
     const bad: ActReport = { startedAt, lines, ok: false, done: 0, of: hands.length, stoppedBy: 'failure', stoppedWhy: shape, failureType: 'invalid_input',
-      outcome: { goal: 'not_started', end: 'not_run' } };
+      outcome: { goal: 'not_started', end: 'not_run' }, ...lifeAtStart(bot) };
     keepActReport(bot, bad);
     return { success: false, result: renderActReport(bot, bad), failureType: 'invalid_input', recoverable: true };
   }
@@ -376,7 +385,7 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
   const facing: Facing = (['north', 'east', 'south', 'west'] as const).find(name => name === facingName) ?? facingOfYaw(Number(bot.entity?.yaw ?? 0));
   // Task queue: the hand list may be run up to `repeat` times, and `done` ends the act ok where it holds (the head's contract; both optional).
   const passes = Math.max(1, Math.min(8, Math.floor(options.repeat ?? 1)));
-  const report: ActReport = { startedAt, lines: [], ok: false, done: 0, of: hands.length * passes, life: lifeOf(bot)?.number ?? 0 };
+  const report: ActReport = { startedAt, lines: [], ok: false, done: 0, of: hands.length * passes, ...lifeAtStart(bot) };
   const doneWhen = options.done ?? null;
   const holdsDone = () => { try { return !!doneWhen && conditionHolds(bot, doneWhen); } catch { return false; } };
   let doneMet = false, pass = 1, completedPasses = 0, dug = 0;
