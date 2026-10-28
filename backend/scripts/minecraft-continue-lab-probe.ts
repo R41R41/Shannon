@@ -307,17 +307,18 @@ try {
     await sleep(500);
     await ask('summon minecraft:zombie 2.5 100 0.5 {PersistenceRequired:1b,Tags:["lab_enemy"],equipment:{head:{id:"minecraft:leather_helmet",count:1}},attributes:[{id:"minecraft:max_health",base:1000d}],Health:1000f}');
     const began = Date.now();
-    let cappedAt = 0;   // (an episode of an earlier scene keeps its cappedAt: only one told in this scene counts)
-    while (Date.now() - began < 40_000) { const at = actor.floorReflexes?.melee?.cappedAt; if (typeof at === 'number' && at >= began) { cappedAt = at; break; } await sleep(50); }
+    let cappedAt = 0, lastEnd = 0;   // (an episode of an earlier scene keeps its cappedAt: only one told in this scene counts)
+    while (Date.now() - began < 40_000) { const at = actor.floorReflexes?.melee?.cappedAt; if (typeof at === 'number' && at >= began) { cappedAt = at; lastEnd = Number(actor.floorReflexes.melee.lastEnd ?? at); break; } await sleep(50); }
     const capturedEvents = ((body.events as any)?.pending?.(64) ?? []).filter((event: any) => event.kind === 'reflex.capped' && Date.parse(event.at ?? '') >= began);
     if (cappedAt) {
       // the sword goes: what the choice would now be is a hand of another kind (a block between, a step), and it must not be made until the episode ends
       await ask('clear ' + ACTOR + ' minecraft:iron_sword'); await sleep(200);
-      // the episode lasts 4 s from its last hand, which ended before the cap was told: the window is the 3.5 s after the cap
-      await sleep(Math.max(0, cappedAt + 3600 - Date.now()));
-      const after = opLines().filter(entry => entry.kind === 'op' && entry.by === 'floor-melee' && Date.parse(entry.at) > cappedAt + 400 && Date.parse(entry.at) < cappedAt + 3500);
-      const placed = opLines().filter(entry => entry.kind === 'op' && entry.op === 'placeBlock' && Date.parse(entry.at) > cappedAt + 400 && Date.parse(entry.at) < cappedAt + 3500);
-      report.capThenKind = { cappedAt: new Date(cappedAt).toISOString(), afterOps: after.slice(0, 6), placed: placed.length, capped: capturedEvents.map((event: any) => event.data) };
+      // the episode lasts 4 s from its last hand (its lastEnd, before the cap was told): after that a new episode may choose any hand, so the window ends 200 ms before it
+      const windowEnd = Math.min(cappedAt + 3500, lastEnd + 3800);
+      await sleep(Math.max(0, windowEnd + 100 - Date.now()));
+      const after = opLines().filter(entry => entry.kind === 'op' && entry.by === 'floor-melee' && Date.parse(entry.at) > cappedAt + 400 && Date.parse(entry.at) < windowEnd);
+      const placed = opLines().filter(entry => entry.kind === 'op' && entry.op === 'placeBlock' && Date.parse(entry.at) > cappedAt + 400 && Date.parse(entry.at) < windowEnd);
+      report.capThenKind = { cappedAt: new Date(cappedAt).toISOString(), lastEnd: new Date(lastEnd).toISOString(), windowMs: windowEnd - cappedAt, afterOps: after.slice(0, 6), placed: placed.length, capped: capturedEvents.map((event: any) => event.data) };
       check('A-6 (10) cap: the melee reflex said reflex.capped once for the episode', capturedEvents.length >= 1, JSON.stringify(capturedEvents.map((event: any) => event.data)).slice(0, 300));
       check('A-6 (10) cap: after the cap, with the hand kind that would be chosen changed (the sword gone), the reflex sends no new operation until the episode ends', after.length === 0 && placed.length === 0, JSON.stringify({ after: after.length, placed: placed.length }));
     } else {
