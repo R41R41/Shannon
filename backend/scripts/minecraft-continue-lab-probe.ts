@@ -71,7 +71,7 @@ async function connect(): Promise<{ actor: any; body: NativeCommonFcaBody }> {
   const body = new NativeCommonFcaBody(actor, { serverId: 'continue-lab', capture: async () => { throw new Error('no picture'); }, rendererConfigured: () => false });
   // The commands go through the body's control loop (accept, begin, the end: what a receipt really carries), with a head that is only a script: its replies hold
   // the next commands and the acknowledgements, and its start-up id.
-  const loop = new CommonFcaControlLoop({ baseUrl: 'http://lab.invalid', token: 'lab', serverId: 'continue-lab', actuator: body, connectionId: 'lab-connection-1', pollMilliseconds: 40,
+  const loop = new CommonFcaControlLoop({ baseUrl: 'http://127.0.0.1:9', token: 'lab', serverId: 'continue-lab', actuator: body, connectionId: 'lab-connection-1', pollMilliseconds: 40,
     fetcher: (async (_url: unknown, init: { body: string }) => {
       const poll = JSON.parse(init.body);
       for (const receipt of poll.receipts ?? []) { receipts.set(receipt.id, receipt); }
