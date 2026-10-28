@@ -1,6 +1,6 @@
 {
  "contract": "promise",
- "version": 3,
+ "version": "3.1",
  "scene": "死んで約束の物を失った。lost_death を記録し、約束は開いたまま（解くのは LLM）",
  "source": "実走 45 +929 の死（run45-live.md 36 行。板 1）",
  "known": [

@@ -1,6 +1,6 @@
 {
  "contract": "promise",
- "version": 3,
+ "version": "3.1",
  "scene": "新しい観測で板 2 を反映した後に、古い受け取り（当時の板 6）が遅れて届く: have を 6 に戻さない",
  "source": "Codex CONTRACTS-v2.md（2）10",
  "known": [],

@@ -1,6 +1,6 @@
 {
  "contract": "continue",
- "version": 3,
+ "version": "3.1",
  "scene": "列: q12 が失敗。q13（[]・pre 真）は始まる、q13b（[]・pre 偽）と q13c（[]・pre 判定できない）は始まらない、q14（無し）と q15（[q12]）は捨てる。pre の真偽は観測から算出する",
  "source": "設計 D1、Codex CONTRACTS-v2.md（3）continue",
  "known": [

@@ -1,6 +1,6 @@
 {
  "contract": "promise",
- "version": 3,
+ "version": "3.1",
  "scene": "uses [3] の act を送った後に約束 #3 を改訂（item まで planks → logs に変わる）。前の act の消費は、送った時の定義の写し（planks・4）で帰属",
  "source": "Codex CONTRACTS-v2.md（2）10",
  "known": [],

@@ -1,6 +1,6 @@
 {
  "contract": "control",
- "version": 3,
+ "version": "3.1",
  "scene": "反射 melee が #2601、頭の fight は #3000。反射は今の 1 手を終えて次を始めず、その後に act",
  "source": "holdMeleeForHead() を attack にも広げる",
  "known": [],

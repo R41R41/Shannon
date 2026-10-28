@@ -1,6 +1,6 @@
 {
  "contract": "result",
- "version": 3,
+ "version": "3.1",
  "scene": "attack の相手が実行中に見えなくなった: 手も act も goal unknown・code target_lost（failed にしない）。死を観測した時だけ done・already",
  "source": "attack.ts（「倒れたか、離れて消えた」で ok）、実走 45 +929 の #1954",
  "known": [

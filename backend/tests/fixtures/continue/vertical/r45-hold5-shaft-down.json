@@ -1,6 +1,6 @@
 {
  "contract": "vertical",
- "version": 3,
+ "version": "3.1",
  "scene": "保留 5〜6 の真下への下りを縦穴で。止まったら、その位置から新しい手で続ける",
  "source": "実走 45 再開 5 の後（run45-live.md 113〜116 行）",
  "known": [

@@ -1,6 +1,6 @@
 {
  "contract": "measure",
- "version": 3,
+ "version": "3.1",
  "scene": "「1 度出す」事実は、最後の要求のバイトに入った時に届けたものとし、それまで持っておく。圧縮で落ちたら次の判断にまた入れる",
  "source": "Codex CONTRACTS-v2.md（2）12",
  "known": [],

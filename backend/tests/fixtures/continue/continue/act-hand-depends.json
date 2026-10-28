@@ -1,6 +1,6 @@
 {
  "contract": "continue",
- "version": 3,
+ "version": "3.1",
  "scene": "act の中で go が止まった後、dependsOn [] の eat は動き、dependsOn [1] の craft は動かない、無い equip は今どおり動かない",
  "source": "設計 D1",
  "known": [],

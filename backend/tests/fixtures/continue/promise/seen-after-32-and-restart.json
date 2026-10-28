@@ -1,6 +1,6 @@
 {
  "contract": "promise",
- "version": 3,
+ "version": "3.1",
  "scene": "出来事 e を反映 → 後の 32 件で e が表示から落ちる → 頭を再起動 → e が再び届く: 重複除去の記録（LedgerSeen）で 2 度反映しない",
  "source": "Codex CONTRACTS-v2.md（2）10",
  "known": [],

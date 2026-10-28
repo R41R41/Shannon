@@ -1,41 +1,82 @@
 {
  "contract": "promise",
- "version": 3,
- "scene": "repeat で多くの出来事が出て受け取りの 16,000 字に入らない: 先頭だけ載せ、残りは events の命令で取りに行く。件数だけに潰さない",
- "source": "Codex CONTRACTS-v2.md（2）10、12 章の決め 4（v3）",
+ "version": "3.1",
+ "scene": "repeat で 340 件の出来事が出て受け取りに入らない: 配送の番号 deliverySeq（command の中で一意）の小さい順に受け取りへ 120 件、残りは内部の命令 events でページごとに取る。件数だけに潰さない・切り捨てない",
+ "source": "Codex CONTRACTS-v3.md（2）2、12 章の v3.1 の決め 1",
  "known": [],
  "decided": [
-  "決め: eventsMore と events の命令、acknowledged まで体が記録を持つ"
+  "決め: events の返事の形",
+  "決め: 同じ範囲は同じ出来事"
  ],
  "hypothesis": [],
  "input": {
   "receipt": {
    "id": "skill:q70",
-   "eventsShown": 120,
+   "eventsShown": {
+    "fromSeq": 0,
+    "toSeq": 119
+   },
    "eventsMore": {
     "command": "skill:q70",
-    "nextSeq": 121,
+    "nextSeq": 120,
     "total": 340
    }
-  }
- },
- "expected": {
-  "headReads": [
+  },
+  "requests": [
    {
     "events": {
      "command": "skill:q70",
-     "fromSeq": 121
+     "fromSeq": 120,
+     "max": 120
     }
    },
    {
     "events": {
      "command": "skill:q70",
-     "fromSeq": "next"
+     "fromSeq": 240,
+     "max": 120
     }
+   },
+   {
+    "events": {
+     "command": "skill:q70",
+     "fromSeq": 120,
+     "max": 120
+    },
+    "note": "同じ範囲をもう一度"
+   }
+  ]
+ },
+ "expected": {
+  "replies": [
+   {
+    "from": 120,
+    "to": 239,
+    "total": 340,
+    "nextSeq": 240,
+    "done": false,
+    "lost": false
+   },
+   {
+    "from": 240,
+    "to": 339,
+    "total": 340,
+    "nextSeq": 340,
+    "done": true,
+    "lost": false
+   },
+   {
+    "from": 120,
+    "to": 239,
+    "sameEventsAsFirst": true
    }
   ],
   "appliedTotal": 340,
-  "bodyKeepsUntil": "acknowledged"
+  "bodyKeepsUntil": "receipt and all pages acknowledged",
+  "afterBodyRestart": {
+   "lost": true,
+   "ledger": "unexplained"
+  }
  },
  "checks": [
   "頭",

@@ -1,6 +1,6 @@
 {
  "contract": "measure",
- "version": 3,
+ "version": "3.1",
  "scene": "手の始まりの記録（黒箱の hand_start）。q34 の 1 手目（i=1）",
  "source": "Codex CONTRACTS.md（3）measure（v1 は入力が hand 2 で期待が 1 だった）",
  "known": [],

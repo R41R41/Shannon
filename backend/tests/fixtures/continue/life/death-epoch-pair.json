@@ -1,0 +1,48 @@
+{
+ "contract": "life",
+ "version": "3.1",
+ "scene": "頭が deathSeq 3（世代 de-1）を持つ。ファイルの作り直しで世代 de-2・0 になり、その観測を頭が取り逃した。次の死で de-2・1: 世代が変わっても死を取りこぼさない",
+ "source": "Codex CONTRACTS-v3.md（2）3",
+ "known": [],
+ "decided": [
+  "決め: 体は新しい世代を必ず 0 から数える。頭は新しい世代の基準を 0 とし、それより大きい番号で死とする。世代の変わり自体は死にしない"
+ ],
+ "hypothesis": [],
+ "input": {
+  "headKnows": {
+   "deathEpoch": "de-1",
+   "deathSeq": 3
+  },
+  "missed": {
+   "deathEpoch": "de-2",
+   "deathSeq": 0
+  },
+  "observations": [
+   {
+    "deathEpoch": "de-2",
+    "deathSeq": 1
+   },
+   {
+    "deathEpoch": "de-3",
+    "deathSeq": 0
+   }
+  ]
+ },
+ "expected": {
+  "judgements": [
+   {
+    "obs": "de-2・1",
+    "death": true,
+    "why": "new epoch baseline 0, 1 > 0"
+   },
+   {
+    "obs": "de-3・0",
+    "death": false,
+    "why": "epoch change only"
+   }
+  ]
+ },
+ "checks": [
+  "頭"
+ ]
+}

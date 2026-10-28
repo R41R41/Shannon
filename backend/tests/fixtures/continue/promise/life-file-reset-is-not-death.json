@@ -1,6 +1,6 @@
 {
  "contract": "promise",
- "version": 3,
+ "version": "3.1",
  "scene": "命の番号がファイルの作り直しで進んだ（advancedBy file_unreadable）: lost_death を書かない（持ち物は残っている）",
  "source": "Codex CONTRACTS-v2.md（2）2",
  "known": [],

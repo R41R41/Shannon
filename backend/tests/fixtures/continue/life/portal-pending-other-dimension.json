@@ -1,6 +1,6 @@
 {
  "contract": "life",
- "version": 3,
+ "version": "3.1",
  "scene": "同じ life のまま q1 がポータルへ入った。overworld で作った待ちの q2 は dimension_changed で始めない（q1 そのものは妨げない）",
  "source": "Codex CONTRACTS.md（1）4、act.ts（今は同じ act の中だけ止める）",
  "known": [

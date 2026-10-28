@@ -1,6 +1,6 @@
 {
  "contract": "life",
- "version": 3,
+ "version": "3.1",
  "scene": "地上の観測で判断を始め、別の命令がネザーへ行き、地上へ戻ってから返事が来た: dim は同じでも次元の世代（dimSince）が違うので捨てる",
  "source": "Codex CONTRACTS-v2.md（2）1",
  "known": [],

@@ -1,6 +1,6 @@
 {
  "contract": "promise",
- "version": 3,
+ "version": "3.1",
  "scene": "make が原木 → 板 → 棒 → 道具を一手で作る（途中材の板）。手の途中で反射が食べた分は反射の出来事 1 回だけ",
  "source": "Codex CONTRACTS.md（1）9、make.ts（途中材を作る）",
  "known": [

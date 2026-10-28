@@ -1,6 +1,6 @@
 {
  "contract": "result",
- "version": 3,
+ "version": "3.1",
  "scene": "再開 1 の出し直し: dig は既に空気で already、go は 22 ms で no_floor（体を動かす操作は 0）。go は not_started、act も not_started",
  "source": "実走 45 再開 1（run45-live.md 30 行）",
  "known": [

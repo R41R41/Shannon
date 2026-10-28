@@ -1,6 +1,6 @@
 {
  "contract": "measure",
- "version": 3,
+ "version": "3.1",
  "scene": "持ち物の空き・次の手で増える見込み・満杯の理由を判断へ。何を捨てるかは LLM",
  "source": "実走 45（run45-live.md 123 行）: 満杯で diamond_pickaxe を入れる所が無い（3 回）、残りのダイヤを拾えない",
  "known": [

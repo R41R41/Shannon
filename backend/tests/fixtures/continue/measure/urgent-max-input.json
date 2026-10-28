@@ -1,6 +1,6 @@
 {
  "contract": "measure",
- "version": 3,
+ "version": "3.1",
  "scene": "最大の長さの入力でも、規範の表の物が最後の要求のバイトに残る。見出しの語ではなく、具体的な値と id で照らす。普通・急ぎ・圧縮後をそれぞれ",
  "source": "Codex CONTRACTS-v2.md（3）、minecraftControlValidation.ts（結果 16,000 字）",
  "known": [
@@ -61,7 +61,8 @@
     {
      "item": "q52",
      "state": "running",
-     "effect": "attack #2601"
+     "effect": "attack #2601",
+     "leftS": 20
     },
     {
      "item": "q53",
@@ -81,7 +82,8 @@
     "resultChars": 16000,
     "liveLines": 400,
     "nearMobs": 20
-   }
+   },
+   "recovery": "bread 1 で +11 点"
   },
   "versions": [
    "normal",
@@ -106,7 +108,13 @@
    "q53",
    "(172,-19,236)",
    "空き 0",
-   "cod #501"
+   "cod #501",
+   "満腹 11",
+   "今 2",
+   "今 11 点",
+   "+11",
+   "残り 20 秒",
+   "待ち"
   ]
  },
  "checks": [

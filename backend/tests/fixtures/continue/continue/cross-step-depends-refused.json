@@ -1,6 +1,6 @@
 {
  "contract": "continue",
- "version": 3,
+ "version": "3.1",
  "scene": "段をまたぐ dependsOn: 前の段の q9 に頼る act は、送る前に明示のエラーで返す（使える印を示す）",
  "source": "12 章の決め 1（v3）",
  "known": [],

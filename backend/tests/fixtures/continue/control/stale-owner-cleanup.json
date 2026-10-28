@@ -1,6 +1,6 @@
 {
  "contract": "control",
- "version": 3,
+ "version": "3.1",
  "scene": "新しい持ち主（命令 B）が始めた後に、古い命令 A の遅い片付けが走っても、B のキー・盾・道は消えない（motor port の断り）",
  "source": "ActionExecution.ts createMotorPort()（Motor owner expired）",
  "known": [

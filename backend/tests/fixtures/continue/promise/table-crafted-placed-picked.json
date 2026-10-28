@@ -1,6 +1,6 @@
 {
  "contract": "promise",
- "version": 3,
+ "version": "3.1",
  "scene": "板 4 で作業台を作る（uses [3]）→ 置く → 拾う。代わりの条件（have か、体の観測の utilities の near）",
  "source": "Codex CONTRACTS.md（2）約束（near は今の頭では判定できない）",
  "known": [

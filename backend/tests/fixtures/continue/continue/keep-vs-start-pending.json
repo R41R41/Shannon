@@ -1,6 +1,6 @@
 {
  "contract": "continue",
- "version": 3,
+ "version": "3.1",
  "scene": "保持と開始を分ける: q1 が失敗。q2（[]）は待ちのまま（pending）。q3（[q2]）は q2 が pending の間は残して待ち、q2 が succeeded になったら始める",
  "source": "Codex CONTRACTS-v2.md（2）7",
  "known": [],

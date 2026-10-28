@@ -1,6 +1,6 @@
 {
  "contract": "measure",
- "version": 3,
+ "version": "3.1",
  "scene": "命令の種類ごとに、境界の判定に要る証拠の組",
  "source": "Codex CONTRACTS.md（3）boundaries",
  "known": [],

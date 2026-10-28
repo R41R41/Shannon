@@ -1,6 +1,6 @@
 {
  "contract": "measure",
- "version": 3,
+ "version": "3.1",
  "scene": "live の加工の前後。24 m 以内に鱈・鮭の 2 件しかない: 3 件に足りないので 2 件とも出す（無い分を作らない）。普通・急ぎの両方",
  "source": "Codex DESIGN.md（1）D6、Codex CONTRACTS-v2.md（2）12",
  "known": [

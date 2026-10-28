@@ -1,6 +1,6 @@
 {
  "contract": "life",
- "version": 3,
+ "version": "3.1",
  "scene": "頭の起動の登録: 体は 1 つの接続の中で最後に受けた返事の headBoot を今の頭とする。変わったら前の headBoot の待ちを捨て、その命令を断る",
  "source": "Codex CONTRACTS-v2.md（2）1",
  "known": [],

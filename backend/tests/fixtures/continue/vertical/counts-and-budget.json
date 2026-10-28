@@ -1,6 +1,6 @@
 {
  "contract": "vertical",
- "version": 3,
+ "version": "3.1",
  "scene": "4 つの数を分ける: maxPlace 1 で 1 個置いて確かめた → 後でそのブロックが消えた → stepsValid は減るが、placeAttempts と予算は戻らない（もう置けない）",
  "source": "Codex CONTRACTS-v2.md（2）11",
  "known": [],

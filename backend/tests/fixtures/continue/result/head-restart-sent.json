@@ -1,0 +1,54 @@
+{
+ "contract": "result",
+ "version": "3.1",
+ "scene": "頭の再起動の時に q2 が sent（実行中）: 新しい headBoot を登録すると体は前の headBoot の実行中の q2 を止める。頭は起きた時に片付けを送り、q2 は送り直された受け取りか解放の証しで状態が決まるまで、動かす命令を送らない",
+ "source": "Codex CONTRACTS-v3.md（2）1",
+ "known": [],
+ "decided": [
+  "決め: 1 章の頭の再起動"
+ ],
+ "hypothesis": [],
+ "input": {
+  "store": {
+   "q2": "sent",
+   "headBoot": "hb-1"
+  },
+  "restart": {
+   "headBoot": "hb-2"
+  },
+  "cases": [
+   {
+    "name": "receipt_resent",
+    "body": "q2 cut connection_changed, receipt resent until ack"
+   },
+   {
+    "name": "no_receipt",
+    "body": "receipt lost, cleanup proves released"
+   }
+  ]
+ },
+ "expected": {
+  "bodyOnNewHeadBoot": {
+   "q2": {
+    "cutBy": "connection_changed"
+   },
+   "waitingOldHeadBoot": "dropped"
+  },
+  "headFirst": "stop",
+  "cases": [
+   {
+    "q2": "settled_known",
+    "corrections": 0
+   },
+   {
+    "q2": "released",
+    "goal": "unknown"
+   }
+  ],
+  "physicalBeforeSettled": 0
+ },
+ "checks": [
+  "体",
+  "頭"
+ ]
+}

@@ -1,6 +1,6 @@
 {
  "contract": "result",
- "version": 3,
+ "version": "3.1",
  "scene": "保留 1 の元の act: dig は掘った（done）、go は 61 歩進んで search_timeout（partial）。止まった位置からの残りと、道探しの先端からの残りを分ける",
  "source": "実走 45 保留 1（run45-live.md 14〜16 行）",
  "known": [

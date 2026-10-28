@@ -1,11 +1,12 @@
 {
  "contract": "life",
- "version": 3,
- "scene": "命の番号のファイルが読めない時は、黙って 1 へ戻さない。時刻から作る番号で始め、advancedBy file_unreadable。死ではない（deathSeq は増えない）",
- "source": "12 章の決め 2、Codex CONTRACTS-v2.md（2）2",
+ "version": "3.1",
+ "scene": "命の番号のファイルが読めない時は、黙って 1 へ戻さない。時刻から作る番号で始め、advancedBy file_unreadable。死の数え方は新しい世代で 0 から（死ではない）",
+ "source": "12 章の決め 2、Codex CONTRACTS-v3.md（2）3",
  "known": [],
  "decided": [
-  "決め: 失効の識別と死の証拠を分ける"
+  "決め: 失効の識別と死の証拠を分ける",
+  "決め: deathEpoch と deathSeq の組"
  ],
  "hypothesis": [],
  "input": {
@@ -18,12 +19,14 @@
     "nowMs": 1793164759174,
     "before": {
      "life": 7,
+     "deathEpoch": "de-1",
      "deathSeq": 3
     }
    },
    {
     "file": {
      "life": 7,
+     "deathEpoch": "de-1",
      "deathSeq": 3
     }
    }
@@ -33,12 +36,14 @@
   "cases": [
    {
     "life": 1,
+    "deathEpoch": "new",
     "deathSeq": 0
    },
    {
     "life": 1793164759174,
     "advancedBy": "file_unreadable",
-    "deathSeq": "unknown_kept_as_is_or_0",
+    "deathEpoch": "new (not de-1)",
+    "deathSeq": 0,
     "boxNote": "life_file_unreadable",
     "head": {
      "oldCommandsInvalid": true,
@@ -48,12 +53,13 @@
    },
    {
     "life": 7,
+    "deathEpoch": "de-1",
     "deathSeq": 3
    }
   ]
  },
  "checks": [
   "体",
-  "頭: arrivalOf は deathSeq で"
+  "頭: arrivalOf は同じ deathEpoch の中の deathSeq の増えで"
  ]
 }

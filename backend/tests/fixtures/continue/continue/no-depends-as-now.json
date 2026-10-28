@@ -1,6 +1,6 @@
 {
  "contract": "continue",
- "version": 3,
+ "version": "3.1",
  "scene": "dependsOn を書いていない時は、今どおり捨てる（前提を書いていない事を、頼らない証拠にしない）",
  "source": "設計 D1",
  "known": [],

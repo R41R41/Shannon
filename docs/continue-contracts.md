@@ -1,4 +1,4 @@
-# 「続ける力」の契約（2026-10-28、契約の版 3）
+# 「続ける力」の契約（2026-10-28、契約の版 3.1）
 
 次の大きな版「続ける力」（設計は共有メモ `next-version-design-20261028.md` の案 2）を、体の担当と頭の担当の 2 人で作るための契約です。
 同じ文書が、頭（`shannon-ios` の `docs/continue-contracts.md`）、体（`Shannon` の `docs/continue-contracts.md`）、共有メモ（`continue-contracts.md`）にあります。
@@ -9,6 +9,17 @@
 - 基にした版：頭 `06f5e55`、体 `4e8c3df`（どちらも main。頭は v2 の後にミニシャノンの 2 commit が main に入ったので、その上に付け直した。契約の範囲のファイルには触れていない）。
 - 実走 45 は終わりました（45 分、黒曜石 7、ネザー無し。保留 1〜11）。直しの実走で、途中で版が変わったので、版の効き目の比べには使いません。この契約では、失敗の型の題材としてだけ使います。
 - 方針（00-README の 1〜7）：判断は LLM、細部は体。LLM が従わない時は書き方で直し、コードで強制しない。スイッチは付けない。段階に分けず、1 つの版で入れる。
+
+## 版 3.1 で変えた事（v3 → v3.1）
+Codex の 3 回目の見直し（`scratchpad\codex-contracts-answers\CONTRACTS-v3.md`、判定は「条件つき」。制御と盾は閉じた）の「入る前に直す物」5 つと、決めきれなかった 5 つの決め（共有メモ `continue-contracts-review-decisions.md` の末尾）を入れました。v3.1 は Codex にかけ直さず、そのまま実装に入ります。「実装の途中で直してよい物」は 13 章「実装の担当へ」に並べました。
+
+| 直す物 | 主に変えた所 |
+|---|---|
+| 1 再起動と held の移り変わり | 1 章（結果の状態と保留の状態を 2 つの軸に、頭の再起動の時の `sent` と旧 headBoot の実行中の命令） |
+| 2 出来事を切り捨てない | 3 章（配送の番号・ページ・`events` の命令の返事、受け取り箱からの処理し直し）、8 章（落とす規則を削った） |
+| 3 deathSeq の比べ方 | 5 章（死の数え方の世代と番号の組） |
+| 4 依存表の抜け | 2 章（依存先の状態を決める優先の順）、見本の表（解放後の unknown、操作 0 で終わった手）、10 章の境界 2 の照らし方 |
+| 5 境界 8 の見本 | 10 章（unknown が決まるまで届けるのを止める注入、頭の再起動を配送の順で 2 場面に） |
 
 ## 版 3 で変えた事（v2 → v3）
 Codex の 2 回目の見直し（`scratchpad\codex-contracts-answers\CONTRACTS-v2.md`、判定は「条件つきで実装に入ってよい」）と、取りまとめ役の v3 の決め（共有メモ `continue-contracts-review-decisions.md` の末尾）に沿って直しました。指摘は今のコードで確かめてから直しました。
@@ -55,6 +66,7 @@ Codex の指摘は、今のコードで確かめてから直しました。確�
 10. 通しの確かめの骨組み（10 の境界と、継ぎ目の場面）
 11. 担当の分け方と作る順
 12. 決めた事・決めきれなかった所・直さなかった指摘
+13. 実装の担当へ（実装の途中で直してよい物）
 
 ---
 
@@ -192,12 +204,24 @@ act と列の項目の `goal` は、手の goal から**上から順に当てて
 | `corrected` | `settled_unknown` か `released` の後に、同じ command の本当の受け取り（known・inputsReleased 真）が届いた | 解決 | 訂正 | 「訂正: q12 の結果は … だった」 |
 | `held` | 片付けが期限内に解放を確かめられなかった | 未解決 | — | 保留（incident と同じ扱い。操作者が resume か cancel） |
 
+- **結果の状態と保留の状態は別の軸です**（v3.1）。上の表の `sent`〜`corrected` は結果の状態、`held` は保留の状態（`none`・`held`・`resumed`・`cancelled`）に分けて保存します。`held` になった後の 4 つの出来事は、次のとおりに組み合わせます。
+
+| `held` の後に来た物 | 結果の状態 | 保留の状態 |
+|---|---|---|
+| 遅れた片付けの成功（解放の証し） | `released`（safe は解決） | `held` のまま（操作者を待つ） |
+| 同じ command の本当の受け取り | `corrected`（訂正を LLM へ。帳簿へ 1 度） | `held` のまま |
+| 操作者の resume | 変えない（不明なら不明のまま。出し直さない） | `resumed`（体の保留を解く。解放がまだなら、解放を確かめるまで動かす命令を送らない） |
+| 操作者の cancel | 変えない | `cancelled`（タスクを止める） |
+
+  - 結果の訂正と保留の解除は、どの順で来ても別々に当てます（訂正しても保留は解けず、resume しても結果は訂正されない）。
+
 - **片付けの手順**：`settled_unknown` になったら、頭はすぐ stop（今の片付けの命令）を送ります。期限は stop を入れた時から 5 秒の上限（仮。成功の保証ではない）で、体側の片付けの中断の期限 3 秒（確か：`controlLoop.ts`）を内に含みます。5 秒で解放が確かめられなければ `held`。通信できない時も `held` です。
 - **片付けの範囲は正式な結果です**：今の stop は待ちを全部捨て、実行中を止めます（確か：`controlLoop.ts`）。その時に捨てた・止めた項目は、受け取りの `cutBy: cancelled`・code `cleanup_stop` が確定した結果です。後から q1（不明だった物）の本当の成功が届いて q1 が `corrected` になっても、片付けで捨てた q3 は戻しません（頭が結果の順から列を作り直さない、2 章と同じ）。
 - **解放を確かめるまで**、頭は体を動かす新しい命令を送りません（観測だけの命令は送ってよい）。
 - **帳簿**：受け取りの持ち物の出来事は、`settled_known` か `corrected` で反映します。出来事の id で 1 度だけです（3 章）。
 - **再起動**：
-  - 頭の再起動：状態はストアにあるので残ります。起きた時に `settled_unknown` の操作があれば、体を動かす命令より先に片付けを送ります（5 章の頭の起動の登録の後）。
+  - 頭の再起動：状態はストアにあるので残ります。起きた後、新しい `headBoot` を返事で登録すると、体は前の `headBoot` の待ちを捨て、**実行中の前の `headBoot` の命令も止めます**（`cutBy: connection_changed`。受け取りは今どおり ACK まで送り直す）。頭は、起きた時に `sent` か `settled_unknown` の操作があれば、体を動かす命令より先に片付けを送ります。`sent` の操作は、送り直されてきた受け取りで `settled_known`・`settled_unknown` に、受け取りが来ないまま片付けが解放を証したら `released`（結果は unknown）に移ります。前の操作がすべて `settled_known`・`released`・`corrected` になるまで、体を動かす命令を送りません。
+  - 頭の再起動の後に送り直されてきた受け取り：ストアが ACK していなかった物は、ふつうに `settled` にします。訂正（`corrected`）になるのは、再起動の前に既に unknown を LLM へ知らせていた時だけです（12 章の決め 5、v3.1）。
   - 体の再起動：前の接続の操作は、新しい接続の最初の poll の証し（上の表）で `released` になります。結果は分からないまま（`corrected` にはならない）です。届けていなかった持ち物の出来事は失われ、観測との差は `unexplained` になります（3 章。仮説：失われる量はふつう小さい）。
 - **不明の項目は、頭も体も自動で出し直しません**（境界 8）。保留の出し直し（`resume`）は、体が理由を言った失敗にだけ使います。
 
@@ -214,7 +238,7 @@ act と列の項目の `goal` は、手の goal から**上から順に当てて
 保存されている物は無し（受け取りは保存しない）。判断の記録の古い行は、`unit` が無い物として読みます。
 
 ### 見本
-`result/r43-reflex-ate-first.json`、`result/r45-hold1-go-partial.json`、`result/r45-resume1-dig-already-go-no-floor.json`、`result/unknown-receipt-cleanup.json`、`result/unknown-state-machine.json`、`result/act-not-started-reflex-late.json`、`result/count-keeps-its-meaning.json`、`result/attack-target-lost.json`、`result/resume-order.json`、`result/r45-resume9-replay-holds-again.json`、`result/r45-hold2-local-go-partial.json`、`result/r45-hold10-goal-blocked.json`、`result/r45-hold3-place-ok-then-world-differs.json`、`result/r45-hold9-face-air.json`、`result/r45-hold9-hand-at-send.json`。
+`result/r43-reflex-ate-first.json`、`result/r45-hold1-go-partial.json`、`result/r45-resume1-dig-already-go-no-floor.json`、`result/unknown-receipt-cleanup.json`、`result/unknown-state-machine.json`、`result/act-not-started-reflex-late.json`、`result/count-keeps-its-meaning.json`、`result/attack-target-lost.json`、`result/resume-order.json`、`result/r45-resume9-replay-holds-again.json`、`result/r45-hold2-local-go-partial.json`、`result/r45-hold10-goal-blocked.json`、`result/r45-hold3-place-ok-then-world-differs.json`、`result/r45-hold9-face-air.json`、`result/r45-hold9-hand-at-send.json`、`result/held-two-axes.json`、`result/head-restart-sent.json`。
 
 ---
 
@@ -271,11 +295,13 @@ export type DependState = 'succeeded' | 'failed' | 'pending' | 'unknown';
 
 ### 意味：依存の判定表（失効の対象外の項目と手だけ）
 **表は見本 `continue/dependency-table.json` が正本**で、頭と体の両方がその表で試験します。要点は次のとおりです。
-- **依存先の状態**（`DependState`、実際の値で決める）：
-  - `succeeded`：goal が `done` か `already`、end が `finished`、かつ `released: true`。
-  - `pending`：まだ終わっていない（走っている・待っている）。
-  - `failed`：終わったが `succeeded` でない（`released: true` で、goal・end がそれ以外。`done` でも end が `cut` なら failed）。
-  - `unknown`：end が `unknown`、`released` が確かめられていない、または覚えていない印。
+- **依存先の状態**（`DependState`、実際の値で決める）は、**上から順に当てて最初に当たった物**です（重なりを残さない。v3.1）。
+  1. 覚えていない印 → `unknown`
+  2. まだ終わっていない（走っている・待っている） → `pending`
+  3. `released` が確かめられていない → `unknown`
+  4. end が `unknown`（解放の後も結果が不明のまま。片付けで `released` になった項目） → `unknown`
+  5. goal が `done` か `already`、かつ end が `finished` → `succeeded`
+  6. それ以外（goal が `unknown` で end が `finished` の target_lost、操作 0 で手が終わった `not_started`・`finished` も含む） → `failed`
   - 旧の `ok`・`outcome`・`inputsReleased` は判定に使いません（表の `outcomes` に 1 行ずつの対応がある）。
 - **保持の判定と開始の判定は別です**：
   - 保持（待ちに残すか）：依存先がすべて `succeeded` か `pending` → 残す。どれかが `failed` → 捨てる（`depends_failed`）。どれかが `unknown` → 捨てる（`depends_unknown`）。
@@ -378,7 +404,13 @@ interface ActInput { /* … */ uses?: number[] }
   - 手の途中で反射が食べた分は、反射の出来事（`reflex_eat`）として 1 度だけ出し、手の出来事には入れません（2 重を防ぐ）。体は反射の台帳（`ReflexLedger`）で、どちらの物かを分けます。
   - act の外の反射の消費は、WorkingEvent `inventory.changed`（8 章）で出します（act が無いので、受け取りには乗らない）。
   - 出来事で説明できない持ち物の差は `unexplained` のまま残します（推して割り振らない）。
-  - **出来事は件数だけに潰しません**。受け取りの 16,000 字に入りきらない時、体は受け取りに先頭から入るだけの出来事と `eventsMore: { command, nextSeq, total }` を載せ、残りは命令ごとの出来事の記録に持っておきます。頭は観測だけの命令 `events`（`{ command, fromSeq }`）で残りを取り、取り終えたら poll の `acknowledged` で知らせます。体はそれまで記録を消しません。
+  - **出来事は件数だけに潰さず、切り捨てもしません**（v3.1。8 章の「落とす」規則は削った）。
+    - 体は、1 つの command の中の出来事に、出した順の**配送の番号** `deliverySeq`（0 から。周回・手をまたいで command の中で一意）を付けます。出来事の `id` は今のまま（`${command}:${pass}:${hand}:${seq}`）で、`deliverySeq` は配送と回収のための番号です。
+    - 受け取りには、`deliverySeq` の小さい順に入るだけの出来事と `eventsMore: { command, nextSeq, total }` を載せます。
+    - 残りは観測だけの**内部の命令** `events`（`{ command, fromSeq, max }`。LLM には見せない、runnable で offered でない読み取り）で、ページごとに取ります。返事は `{ command, from, to, total, nextSeq, done, lost, events }` です。同じ範囲をもう一度頼んだら、同じ出来事を返します。体が記録を失っていたら（体の再起動など）`lost: true` を返し、頭はその差を `unexplained` にします。
+    - 体は、受け取りと全部のページを頭が ACK するまで、その command の出来事の記録を消しません。
+  - **保存と ACK の順**（v3.1）：頭は、受け取りと取ったページを**先にストア（永続の受け取り箱）へ保存してから ACK** します（今のストアの `settle()` は ACK の前に受け取りを保存している。確か：`minecraftControl.ts`）。帳簿と `LedgerSeen` への反映は、段の commit の時に、ストアの受け取り箱から行います（今の計画の保存は段の commit の時。確か：`fcaPlanTools.ts`）。反映の前に頭が止まっても、起きた後に受け取り箱から処理し直し、`LedgerSeen` が 2 重を防ぎます。
+  - **再起動の後も残す物**：`UsesSnapshot` は、送った命令の行（ストアの操作の行）に一緒に保存します。回収の位置（次に取る `deliverySeq`）もその行に保存します。
 - **帰属**：約束への帰属は、その act を送った時の定義の写し（`UsesSnapshot`。id・rev・item・count・use）で決めます。送った後に約束を改訂して item まで変わっても、前の act の消費は前の定義のままです。`uses` は LLM の申告で、`declared: true` として見せます。「用途どおりに消費した」とは書きません。申告と実際の理由（`reason`）を並べて見せます。
 - **死**（5 章の命の番号が進んだ）：開いている約束ごとに `lost_death` を記録します。約束は開いたまま残し、解くのは LLM です。
 - **期間**：`until.node` の節が done になった時、または `until.condition` を満たした時に `closed`（`closedBy: 'until'`）。`release` は `closed`（`released`）。
@@ -406,7 +438,7 @@ LLM が書きます（約束・解除・`uses`）。頭が帳簿を書き、live
 - 保留のファイル・場所の記憶は変わりません。
 
 ### 見本
-`promise/r43-planks-burned-as-fuel.json`、`promise/table-crafted-placed-picked.json`、`promise/food-for-underground.json`、`promise/death-loses-promised.json`、`promise/revised-after-send.json`、`promise/make-intermediate-and-reflex.json`、`promise/instead-lost-after-descent.json`、`promise/same-receipt-twice.json`、`promise/seen-after-32-and-restart.json`、`promise/late-old-observation.json`、`promise/events-split-delivery.json`、`promise/life-file-reset-is-not-death.json`。
+`promise/r43-planks-burned-as-fuel.json`、`promise/table-crafted-placed-picked.json`、`promise/food-for-underground.json`、`promise/death-loses-promised.json`、`promise/revised-after-send.json`、`promise/make-intermediate-and-reflex.json`、`promise/instead-lost-after-descent.json`、`promise/same-receipt-twice.json`、`promise/seen-after-32-and-restart.json`、`promise/late-old-observation.json`、`promise/events-split-delivery.json`、`promise/receipt-box-then-ack.json`、`promise/life-file-reset-is-not-death.json`。
 
 ---
 
@@ -501,7 +533,9 @@ export interface LifeView {
   life: number;          // 1 から。体が死の出来事で 1 増やす（ファイルが読めない時の作り直しでも増える。下の resetBy）
   /** 番号が前より進んだ理由。死の証拠は 'death' だけ（帳簿の lost_death・頭の arrival の death はこれで決める）。 */
   advancedBy?: 'death' | 'file_unreadable';
-  deathSeq?: number;     // 死の出来事の通し番号（死んだ時だけ増える。ファイルに一緒に保存する）
+  /** 死の数え方の世代と番号の組（v3.1）。世代はファイルを作り直した時に新しくなる（乱数）。番号は死んだ時だけ 1 増え、世代が新しくなると 0 から。 */
+  deathEpoch?: string;
+  deathSeq?: number;
   since: string;         // その命が始まった時（ログインか、死の出来事の時）
   alive: boolean;        // 死んでからリスポーンまでは false（新しい番号でも alive:false の間がある）
   diedAt?: string;
@@ -520,7 +554,7 @@ export interface BodyRun { bodyBoot: string; connectionId: string }   // bodyBoo
 - **体が番号を進めます**。`bot.on('death')` の時に 1 増やし、ワールドとボットごとのファイル（保留のファイルと同じ所の `life.json`）に書きます（12 章の決め 2）。
   - ファイルが無い時（初めてのワールド）は 1 から始めます。
   - **ファイルがあるのに読めない時は、黙って 1 へ戻しません**。その時刻から作る大きな番号（ミリ秒の時刻）で始め、`advancedBy: 'file_unreadable'` を付けて黒箱に書きます。頭から見ると番号が大きく跳ぶので、古い命令は必ず失効します。
-  - **失効の識別と死の証拠は分けます**：番号が進んだら古い命令は失効します（理由を問わない）。しかし死として扱う（帳簿の `lost_death`、頭の arrival の `death`）のは、`advancedBy: 'death'`（`deathSeq` が増えた）時だけです。ファイルの作り直しでは、持ち物は残っているので死にしません。
+  - **失効の識別と死の証拠は分けます**：番号が進んだら古い命令は失効します（理由を問わない）。しかし死として扱う（帳簿の `lost_death`、頭の arrival の `death`）のは、**同じ `deathEpoch` の中で `deathSeq` が増えた時**だけです。`deathEpoch` が変わったこと自体は死に数えません（ファイルの作り直しでは持ち物は残っている）。体は新しい世代を必ず 0 から数えるので、頭は新しい世代の基準を 0 とし、それより大きい番号を見たら（その世代の最初の観測でも）死とします。世代が変わって番号が小さくなっても、取りこぼしません。
 - **次元の移りは死ではありません**。番号は変わらず、`dimension`・`dimensionSince` だけが変わります。ただし次元の移りは、2 章の失効の 3 番で、移る前の観測で作ったほかの命令を失効させます。
 - **照らす時機**（2 章の失効の 2 番）：受け取った時・待ちから起きた時・ロックを取った後・体を動かす操作の前。`alive: false` の間に動かす命令は始めません（`not_alive`）。
 - **体がする事**：
@@ -530,7 +564,7 @@ export interface BodyRun { bodyBoot: string; connectionId: string }   // bodyBoo
 - **頭がする事**：
   - 命令の `context.life` は、**判断の入力に読んだ観測の life** を入れます（送る時の最新ではない）。今の context は送る時に `minecraftReflexAdapter.ts` で作っています（確か）。判断の入力の life を、項目に持たせて渡します。
   - 考え中の判断の返事は、使う直前に最新の観測の life・次元・`bodyRun` と比べます。違えば `discarded`（理由 `life_changed`・`dimension_changed`・`connection_changed`）にして、新しい観測で判断し直します。
-  - `arrivalOf()` は `deathSeq` の増えで `death` を決めます（`facts.life` の増えだけでは決めない）。
+  - `arrivalOf()` は、同じ `deathEpoch` の中の `deathSeq` の増えで `death` を決めます（`facts.life` の増えだけでは決めない）。
   - 頭の起動ごとの `headBoot` を命令に入れます。体は、つなぎ直しの前の `headBoot` の命令を断ります（2 章の失効の 1 番）。
 - **lease・タスクの世代（`generation`）とは別**です。保留（incident）は命の番号を照らしません（`release` は手ではない）。
 
@@ -545,7 +579,7 @@ export interface BodyRun { bodyBoot: string; connectionId: string }   // bodyBoo
 `life.json` が無い時は 1 から。読めない時は上のとおり。保留のファイルに life が無い時は、読むだけなので何もしません。
 
 ### 見本
-`life/r45-death-then-old-attack.json`、`life/portal-is-not-death.json`、`life/portal-pending-other-dimension.json`、`life/same-dimension-return.json`、`life/head-boot-registration.json`、`life/reconnect-decision-belongs.json`、`life/death-at-each-moment.json`、`life/life-file-unreadable.json`。
+`life/r45-death-then-old-attack.json`、`life/portal-is-not-death.json`、`life/portal-pending-other-dimension.json`、`life/same-dimension-return.json`、`life/head-boot-registration.json`、`life/reconnect-decision-belongs.json`、`life/death-at-each-moment.json`、`life/life-file-unreadable.json`、`life/death-epoch-pair.json`。
 
 ---
 
@@ -611,6 +645,8 @@ interface ActHand {
 | `stepsValid` | 今も有効な段数（下った・上った段で、足場や段が今も世界にある物） | — | 減る（block の更新・押し戻しで、無くなった段を引く） |
 
   - 掘る予算 `maxDig` は、掘りを送った数（砂利・砂の掘り直しも 1 回ずつ）で数えます。後の訂正で予算は戻りません。
+  - `stepsValid` を訂正するのは、**今回の手で通った段と、その段が成り立つのに要るマス（足場・頭の上）だけ**です。その範囲でブロックの更新を観測し、段が成り立たなくなったら引きます。まだ読み込まれていない所・観測していない所を、消えたことにしません（12 章の決め 4、v3.1）。残りの距離は今の位置と `toY` から求め、移動の実績との照らしは別にします。
+  - 訂正に使ったブロックの更新と押し戻し（forcedMove）は、8 章の操作の連続記録にも入れます（境界 2 の証拠）。
 - **止まった時**：`progress: { unit: 'step', done: stepsValid, left, at, msPerUnit, work: { dug, placeAttempts, stockUsed, placedConfirmed } }` を返します。`done` は今も有効な段数です（階段の 1 段は 2〜3 マスを掘るので、掘った数とは別）。LLM は、その `at` から新しい手を出して続けます。体は前の手を覚えません。
 - **既に済**：`dir: down` で既に toY 以下、`dir: up` で既に toY 以上なら `already` です。
 - **頭の見積もり**：1 段あたりの見積もり × 段数から始め、体が返す `msPerUnit` で直します（`minecraftActTime.ts`）。見積もりの初めの値（stairs 約 1.6 秒・shaft 約 1.0 秒・pillar 約 0.9 秒）は仮説で、旧 go の段数（保留 5 の 95 段・保留 7 の 49 段）も新しい手の保証にはしません。
@@ -624,7 +660,7 @@ interface ActHand {
 保存されている物は無し。
 
 ### 見本
-`vertical/r45-hold1-stairs-down.json`、`vertical/r45-hold5-shaft-down.json`、`vertical/r45-hold7-pillar-up.json`、`vertical/lava-seal-and-stop.json`、`vertical/stop-cases.json`、`vertical/counts-and-budget.json`、`vertical/short-hands.json`。
+`vertical/r45-hold1-stairs-down.json`、`vertical/r45-hold5-shaft-down.json`、`vertical/r45-hold7-pillar-up.json`、`vertical/lava-seal-and-stop.json`、`vertical/stop-cases.json`、`vertical/counts-and-budget.json`、`vertical/boundary2-evidence.json`、`vertical/short-hands.json`。
 
 ---
 
@@ -795,7 +831,7 @@ interface BodyVersion { revision: string; catalogHash: string }
 - 段 1 は失敗した命令、段 5〜7 は次の命令の物です。**つなぐのは `run`・`life`・判断の番号（失敗を読んだ判断 → その判断が出した命令）の組**で、`command` だけではつながりません。
 - 重なる手戻り（先読みで送った物）は、壁時計で 1 度だけ数えます。
 - **先読み**：`woke` の `remaining` の時は、見積もった残りと実際の終わりの差を測ります。
-- **手の始まりと操作の記録は、続けて取ります**：黒箱は直近 90 秒の輪で、成功した act には書かないことがあります（確か：`blackbox.ts`、実走 45 の記録）。120 秒の手では最初の 30 秒が消えます。通しの台（A・B・C）では、体は始めから終わりまで、`hand_start` と体を動かす操作の 1 件ずつ（時刻・命令・手・life・操作の種類）を、輪とは別のファイルに追記し続けます（成功した手・120 秒を越えた手も含む）。本番でも同じ入口を使い、大きさの上限は判断の記録と同じ考えで決めます。
+- **手の始まりと操作の記録は、続けて取ります**（訂正に使ったブロックの更新と押し戻しも入れる）：黒箱は直近 90 秒の輪で、成功した act には書かないことがあります（確か：`blackbox.ts`、実走 45 の記録）。120 秒の手では最初の 30 秒が消えます。通しの台（A・B・C）では、体は始めから終わりまで、`hand_start` と体を動かす操作の 1 件ずつ（時刻・命令・手・life・操作の種類）を、輪とは別のファイルに追記し続けます（成功した手・120 秒を越えた手も含む）。本番でも同じ入口を使い、大きさの上限は判断の記録と同じ考えで決めます。
 - **命令の種類ごとの証拠の組**（境界の判定で使う）：
   - 始める前に断った：受け取り（`not_run` と理由）だけ。`hand_start` は無くてよい。
   - already：受け取りと手の行。
@@ -803,7 +839,7 @@ interface BodyVersion { revision: string; catalogHash: string }
   - unknown：受け取りと、片付けの受け取り（`released` の行）。
 - **入力の変化を分けて記録します**（`input_change`）：プロンプトのハッシュ、thinking の破棄（実走 45 の `prefix_binding_mismatch` 16 回）、再開による履歴の変化。前後を比べる時は、これらを D1・D4 の効果と混ぜません。
 - **サーバーの tick**：体は、今ある RCON（`SceneSaver` の command）で `tick query` を送り、生の応答・取った時刻・失敗をそのまま残します。止まっている時（frozen）や読めない時を 0 ms にしません。間隔は 10 秒の仮の案で、負荷を測って決めます。
-- **大きさ**：受け取りの結果の JSON は今 16,000 字が上限です（確か：`minecraftControlValidation.ts`、`actReport.ts` は地図を落としても上限内になる保証が無い）。出来事・周回の行が増えるので、体は上限の手前で「古い周回の行・出来事を数だけ残して落とす」を決まった順で行い、落とした数を書きます。境界 10 は最大の長さで試します。
+- **大きさ**：受け取りの結果の JSON は今 16,000 字が上限です（確か：`minecraftControlValidation.ts`、`actReport.ts` は地図を落としても上限内になる保証が無い）。上限は変えません。周回の行が多い時は、受け取りには新しい周回の行を入れ、古い周回の行は数と要約にしてよい（表示のため。結果の判定は `outcome` で決まる）。**持ち物の出来事は落とさず、3 章の配送の番号とページで届けます**（v3.1）。境界 10 は最大の長さで試します。
 
 ### 意味：判断に届ける事実（D6 の規範と、実走 45 の失敗の型）
 規範は「どの入力の版（普通・急ぎ・圧縮の後）でも、最後の要求に残す物」です。頭はこれを満たすように live を作り、`live` の行で確かめます。
@@ -858,9 +894,9 @@ interface BodyVersion { revision: string; catalogHash: string }
    - **版の合わない実物は、通しの合格に使いません**（直す物 9。警告ではなく不合格）。local-gate の head の段に（5）を足し、指定の体の rev から作れる物はその場で作り直して比べ、場面が要る物は作った rev が指定の rev と同じかを確かめます。違えば不合格です。
 
 ### 見本の一覧
-`services/api/tests/fixtures/continue/manifest.json` を見てください。版 3 で足し・直し、契約ごとに 5〜15 個です。どれも次の形です。
+`services/api/tests/fixtures/continue/manifest.json` を見てください。版 3.1 で足し・直し、契約ごとに 5〜15 個です。どれも次の形です。
 ```json
-{ "contract": "result", "version": 3, "scene": "…", "source": "実走 43 +2,123（run43-report.md 105 行）",
+{ "contract": "result", "version": "3.1", "scene": "…", "source": "実走 43 +2,123（run43-report.md 105 行）",
   "known": ["確か: 記録から確かめた事"], "decided": ["決め: この契約で決めた事"], "hypothesis": ["仮説: 確かめていない事"],
   "input": { }, "expected": { }, "checks": ["頭の試験で確かめる事", "体の試験で確かめる事"] }
 ```
@@ -885,7 +921,7 @@ interface BodyVersion { revision: string; catalogHash: string }
 | # | 境界 | 台 | 判定（番号の組でつないだ記録で） |
 |---|---|---|---|
 | 1 | 結果と列 | B＋C | 反射が先に食べた後、eat は `already`。`dependsOn: []` の項目に `startedAt` があり、頼る項目だけ `droppedBecause: depends_failed` |
-| 2 | 途中の成果 | A | 途中で止めた vertical の `progress.done`（確かめた段数）と、黒箱の移動の段数が合う。掘った数・置いた数は、それぞれ黒箱の dig・place の数と照らす（段数と掘りの数を等しいとは見ない）。次の手が `progress.at` から始まり、掘った段を掘り直さない |
+| 2 | 途中の成果 | A | 下の「境界 2 の照らし方」の表のとおり、4 つの数をそれぞれに合う証拠で照らす。次の手が `progress.at` から始まり、掘った段を掘り直さない |
 | 3 | 約束と消費 | A＋C | 作る途中の材料・燃料・作業台の設置と回収・食事をまたいで、帳簿の `have` と観測の持ち物が毎回合う。同じ出来事の id が 2 度反映されない |
 | 4 | すぐの引き継ぎ | B＋C | 同じ相手：引き継いだ act の `handover.confirmed` と、盾が下がらない（`shield: kept`）。別の敵：melee が次の手を始めない。溶岩・息・食事：奪わない |
 | 5 | 死と非同期 | B＋C | 実行中・反射待ち・列待ち・LLM の返事待ちの各瞬間に `/kill` し、**死の時刻より後に、古い life の命令が効かせた操作が 0 件**。待っていた古い命令は 1 つも始まらない（死の前の操作は数えない） |
@@ -895,14 +931,24 @@ interface BodyVersion { revision: string; catalogHash: string }
 | 9 | 計画 | C | `kind`・`prep` が、最初の計画 → `plan.update` → 保存 → 頭の再起動 → 読み戻しで残る。題名の言い換えの前後で、判定の値（段・不足・選ばれる知識・近くの候補）が同じ。表示の文は別に照らす |
 | 10 | 実際の LLM の入力 | D | **最大の長さの入力**（急ぎの版・情報の多い live・長い結果と帳簿）でも、8 章の規範の表の物が最後の要求のバイトに残る |
 
+### 境界 2 の照らし方（v3.1）
+| 数 | 照らす証拠 |
+|---|---|
+| 移動の実績（通った段の数） | 操作の連続記録の、足の位置の変わり（段の高さが 1 変わった回数） |
+| `stepsValid`（`progress.done`） | 手の終わりの観測で、今回通った段とその足場・頭の上のマスが今も成り立っている数。訂正があれば、連続記録のブロックの更新・押し戻しと照らす。移動の実績と等しいとは見ない |
+| `placeAttempts` | 連続記録の置きの送り（`place` の出来事の数。送らずに止めた `place_held_back` は数えない） |
+| `placedConfirmed` | 連続記録の、置いたマスのブロックの更新（置いた物になった）の数 |
+| `work.dug` | 連続記録の掘りの送り（掘り直しも 1 回ずつ） |
+
 ### 境界 8 の場面の表（`e2e/boundaries.json` の `boundary8Scenes` が正本）
 | ID | 注入する時 | 対象の命令 | 期待する訂正の回数 | 期限 | 要る記録 |
 |---|---|---|---|---|---|
-| b8-lost-receipt | q1 の受け取りを頭が受ける直前に 1 度捨てる | q1 | 1（`settled_unknown` → `released` → `corrected`） | 片付け 5 秒 | 受け取り・片付けの受け取り・訂正の行 |
+| b8-lost-receipt | q1 の受け取りを、頭が q1 を `settled_unknown` にする（受け取りの期限切れ）まで届けるのを止め、その後に本当の受け取りを放す（v3.1） | q1 | 1（`settled_unknown` → 片付け → `released` → `corrected`） | 片付け 5 秒 | 受け取り・片付けの受け取り・訂正の行 |
 | b8-dup-poll | q1 の受け取りを載せた poll を 2 度送る | q1 | 0 | — | 受け取り 1 件の反映・帳簿の出来事 1 度 |
 | b8-reconnect | q2 の実行中に体の接続を切ってつなぎ直す | q2 と待ちの q3 | 0（q2 は `released`、結果は unknown のまま） | つなぎ直しの最初の poll | 新しい接続の最初の poll・q3 の `connection_changed` |
-| b8-head-restart | q2 の実行中に頭を再起動 | q2 | 0 か 1（体が受け取りを送り直せば 1） | 起きてからの片付け 5 秒 | 起きた時の片付け・`headBoot` の登録・q2 の状態 |
-| b8-body-restart | q2 の実行中に体を再起動 | q2 | 0 | つなぎ直しの最初の poll | `released`・`unexplained` の差 |
+| b8-head-restart-unacked | q2 の実行中に頭を止め、q2 の受け取りがまだ ACK されていないうちに起こす（unknown は LLM へ知らせていない） | q2 | 0（送り直された受け取りがふつうに `settled` になる） | 起きてからの片付け 5 秒 | 起きた時の片付け・`headBoot` の登録・q2 の受け取り |
+| b8-head-restart-notified | q2 を `settled_unknown` にして LLM へ知らせた後に頭を止め、その後に本当の受け取りを放してから起こす | q2 | 1（`corrected`） | 起きてからの片付け 5 秒 | 知らせた記録・起きた後の訂正の行 |
+| b8-body-restart | q2 の実行中に体を再起動 | q2 | 0 | つなぎ直しの最初の poll | `released`・`events` の `lost`・`unexplained` の差 |
 | b8-lease-swap | q2 の待ちの間に lease を新しくする | q2 | 0 | — | q2 の `lease_expired` |
 
 ### 継ぎ目の場面（体と頭の担当の継ぎ目。Codex の推し）
@@ -1009,12 +1055,22 @@ continue-verify/
 5. 規範の数（24 m・最大 3 件・打ちの 10 秒の窓）は初めの値（推測）。3 件より少ない時は全部出す（8 章）。
 6. attack にも盾を渡す。根の文脈へ盾の使用権を渡し、常駐の盾はその委譲の下で動く（4 章）。
 
-### 版 3 で新しく決めきれなかった所
+### 版 3 の 5 つの点の決め（取りまとめ役、v3.1 の決め。Codex の推しどおり）
+1. `events` は、観測だけの内部の命令（LLM に見せない）。command 全体の配送の番号・ページの上限・次の番号・終わり・記録が失われたことを返す。同じ範囲をもう一度頼んだら、同じ出来事を返す（3 章）。
+2. 重複除去の記録は、タスクの終わりまで持つ。件数の上限で捨てない。計画のチェックポイントの配列が大きすぎる時は、タスクと出来事の id を一意のキーにした保存表に移す（3 章。保存の仕方は実装の担当が測って決める。13 章）。
+3. 引き継ぎの予約の 300 ms は初めの値。隔離ラボで、止める・settled・取得の時間を分けて測る（4 章）。
+4. `stepsValid` を訂正するのは、今回の手で通った段と、その段が成り立つのに要るマスだけ。読み込まれていない所・観測していない所を、消えたことにしない（6 章）。
+5. 頭の再起動の後は、ストアが ACK していない受け取りを体が送り直す（今どおり）。訂正が 1 回になるのは、既に unknown を LLM へ知らせていた時だけ。境界 8 の頭の再起動は、配送の順で 2 場面に分けた（1 章・10 章）。
+
+### 版 3 で新しく決めきれなかった所（v3.1 で上のとおり決めた）
 1. **出来事を取りに行く命令の形**：観測だけの命令 `events`（`{ command, fromSeq }`）にしました。今の catalog に読み取りのスキルを 1 つ足すことになります（欄の数には影響しない）。poll の欄で返す案もあります。
 2. **重複除去の記録の大きさ**：タスクの終わりまで出来事の id を全部持ちます。45 分で数千件（推測）で、計画のチェックポイントが大きくなります。上限を決めるかは、実物で測ってから決めたいです。
 3. **引き継ぎの予約の期限 300 ms**：待つ上限で、合格の条件ではありません。実走 45 の反射の手（2 打で約 1.5 秒）の中で足りるかは、隔離ラボで確かめます。
 4. **`stepsValid` の訂正の範囲**：下った段の足場が後で無くなった時（下の段を誰かが掘った等）にも引くか。今は「体の通った段のブロックの更新」だけを見る案にしました。
 5. **頭の再起動の後に体が受け取りを送り直すか**：今の体は受け取りを頭が受け取ったと知らせるまで送り続けます（確か：`acknowledged`）。頭の再起動でそれが 1 度届くので、b8-head-restart の訂正の回数は 0 か 1 としました。
+
+### 直さなかった指摘と理由（版 3.1）
+Codex の 3 回目の「入る前に直す物」5 つは、今のコードで確かめた上ですべて直しました。確かめた物は、体が受け取りを ACK まで送り直すこと（poll は ふつう 200 ms ごと）、頭の ACK がストアの `settle()` の直後であること、計画の保存が段の commit の時であることです。違っていた指摘はありません。
 
 ### 直さなかった指摘と理由（版 3）
 Codex の 2 回目の指摘は、今のコードで確かめた上ですべて直しました。確かめた物は、ストアの `settle()` が内容の違う受け取りを受けず `reconciledReceipt` の後だけ置き換えること、`safe()` が unknown を未解決にすること、実行層が settled の時に文脈を消してロックを放すこと、fight が盾を常駐の盾に任せていること、黒箱が 90 秒の輪であること、体の片付けの中断が 3 秒であること、などです。違っていた指摘はありません。
@@ -1025,3 +1081,18 @@ Codex の指摘は、今のコードで確かめた上でほぼすべて直し�
 - **「`where`（構造）を直接読む」が成立しない（(2) の計画）**：指摘のとおり、`where` は今も文字列です。構造の位置は作らず、位置の読み手を 1 か所に置く形にしました（7 章の表の 16）。
 
 確かめて違っていた指摘はありません。確かめた物は、act の中だけの次元の止め、パン 11 点、`FloorBudget` が arrow・eat・armor の予算であること、melee の上限が episode の手数と打ちの数であること、query でも世代が上がること、片付けで盾が下がること、常駐の盾の直接の操作、`near`・`furnace` が常に判定できないこと、知らない WorkingEvent の seq が進むこと、最初の計画の `parent` が string であること、attack が見えなくなった相手で ok を返すこと、make の count が追加の数であること、repeat の 2 周目で行が消えること、などです。
+
+---
+
+## 13. 実装の担当へ（実装の途中で直してよい物）
+Codex の 3 回目の見直しで「実装の途中で直してよい」とされた物です（決まった規則を実装して確かめる事。担当の間で解釈が変わる物ではない）。担当がここから拾い、直したら見本と、この節を更新します。
+
+| 物 | 担当 | 決め方 |
+|---|---|---|
+| 初めの値の調整（引き継ぎの予約 300 ms、片付けの 5 秒、規範の 24 m・3 件・10 秒、vertical の段あたりの秒、pillar の margin 0.2） | 体（300 ms・0.2・段の秒）、頭（5 秒・規範の数） | 隔離ラボと台で測る。止める・settled・取得の時間は分けて測る |
+| 重複除去の記録の保存の仕方（チェックポイントの配列か、保存表か） | 頭 | 45 分の通しで、件数・大きさ・保存の時間を測って決める |
+| 操作の連続記録のファイルの容量と負荷 | 体 | 台の 45 分の通しで測る。上限は判断の記録と同じ考えで |
+| 最大の入力の見本に足りない具体的な値：満腹 11、約束の残りの量、回復の見込み、列の状態と残りの時間 | 頭 | `measure/urgent-max-input.json` に足す（v3.1 で一部を足した。残りは実物の live の形が決まってから） |
+| 持ち物を確かめてから置きを送るまでを、同じ motor の持ち主で通す試験（保留 9） | 体 | `result/r45-hold9-hand-at-send.json` を、本物の motor port の下で通す試験にする |
+| meter の時計を、保留・再開・再起動をまたいで試す | 頭 | `measure/meter-clock-excludes-holds.json` を、再開と頭の再起動を挟む場面へ広げる |
+| README（Codex の材料の `00-README.md`）の古い説明（実走 45「進行中」） | 取りまとめ役 | 実走 45 は終わった（45 分・黒曜石 7・ネザー無し） |

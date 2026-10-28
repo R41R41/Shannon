@@ -1,6 +1,6 @@
 {
  "contract": "result",
- "version": 3,
+ "version": "3.1",
  "scene": "近い go の時間切れ（4 段上の畑、道が見つかった直後に 60 秒）: 止まった位置からの残り・最後の道探し（lastSearch）・使った秒を出し、続けるかは LLM",
  "source": "実走 45 保留 2（run45-live.md 45〜47 行）",
  "known": [

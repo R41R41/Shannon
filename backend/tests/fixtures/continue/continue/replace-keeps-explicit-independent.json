@@ -1,6 +1,6 @@
 {
  "contract": "continue",
- "version": 3,
+ "version": "3.1",
  "scene": "replace [q13]: q13 を取り消し、取り消しを後ろへ失敗と同じに伝える。dependsOn を書いていない q14 も取り消す。明示で独立の q16（[]）だけ残す",
  "source": "Codex CONTRACTS-v2.md（2）8",
  "known": [

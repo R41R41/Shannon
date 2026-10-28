@@ -1,0 +1,69 @@
+{
+ "contract": "vertical",
+ "version": "3.1",
+ "scene": "境界 2 の照らし方: 10 段下りた後に通った 1 段が後から無くなった。移動の実績 10・stepsValid 9。それぞれ合う証拠で照らす",
+ "source": "Codex CONTRACTS-v3.md（2）5",
+ "known": [],
+ "decided": [
+  "決め: 10 章の境界 2 の照らし方",
+  "決め: 訂正に使ったブロックの更新・押し戻しは連続記録に入れる"
+ ],
+ "hypothesis": [],
+ "input": {
+  "log": {
+   "stepChanges": 10,
+   "placeSends": 2,
+   "placeHeldBack": 1,
+   "placeConfirmedUpdates": 2,
+   "digSends": 27,
+   "blockUpdatesUsedForCorrection": [
+    {
+     "at": [
+      161,
+      26,
+      220
+     ],
+     "to": "air"
+    }
+   ]
+  },
+  "result": {
+   "progress": {
+    "done": 9,
+    "work": {
+     "dug": 27,
+     "placeAttempts": 2,
+     "placedConfirmed": 2
+    }
+   }
+  }
+ },
+ "expected": {
+  "checks": {
+   "movedSteps": {
+    "value": 10,
+    "evidence": "log.stepChanges"
+   },
+   "stepsValid": {
+    "value": 9,
+    "evidence": "final observation + log.blockUpdatesUsedForCorrection"
+   },
+   "placeAttempts": {
+    "value": 2,
+    "evidence": "log.placeSends (place_held_back not counted)"
+   },
+   "placedConfirmed": {
+    "value": 2,
+    "evidence": "log.placeConfirmedUpdates"
+   },
+   "dug": {
+    "value": 27,
+    "evidence": "log.digSends"
+   }
+  },
+  "movedEqualsValid": false
+ },
+ "checks": [
+  "通し（A）"
+ ]
+}

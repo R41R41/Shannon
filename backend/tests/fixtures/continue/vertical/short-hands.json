@@ -1,6 +1,6 @@
 {
  "contract": "vertical",
- "version": 3,
+ "version": "3.1",
  "scene": "頭の短い書き方と JSON の往復、送る前の断り",
  "source": "minecraftActShortHands.ts",
  "known": [],

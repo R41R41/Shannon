@@ -1,0 +1,36 @@
+{
+ "contract": "promise",
+ "version": "3.1",
+ "scene": "保存と ACK の順: 受け取りとページを先にストア（受け取り箱）へ保存 → ACK。帳簿と Seen は段の commit の時に受け取り箱から反映。反映の前に頭が止まったら、起きた後に処理し直す",
+ "source": "Codex CONTRACTS-v3.md（2）2、minecraftControl.ts（settle の直後に ACK）、fcaPlanTools.ts（計画は段の commit で保存）",
+ "known": [
+  "確か: 今のストアの settle は ACK の前に受け取りを保存する",
+  "確か: 計画の保存は段の commit の時"
+ ],
+ "decided": [
+  "決め: 受け取り箱からの処理し直し。UsesSnapshot と回収の位置は操作の行に保存"
+ ],
+ "hypothesis": [],
+ "input": {
+  "sequence": [
+   "receipt q70 stored",
+   "ack q70",
+   "pages fetched and stored",
+   "ack pages",
+   "head stops before step commit",
+   "head restarts"
+  ]
+ },
+ "expected": {
+  "afterRestart": {
+   "reprocessFromStore": true,
+   "ledgerApplied": "all events once (LedgerSeen)",
+   "usesSnapshot": "read from the operation row",
+   "fetchPosition": "read from the operation row"
+  },
+  "lostEvents": 0
+ },
+ "checks": [
+  "頭"
+ ]
+}

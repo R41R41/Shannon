@@ -1,6 +1,6 @@
 {
  "contract": "result",
- "version": 3,
+ "version": "3.1",
  "scene": "再開 9 → 保留 10: 出し直しが別の理由（search_timeout）でまた保留になった。その間に列に入っていた判断の項目は捨てた。次の再開の後の最初の判断へ、両方を先に届ける",
  "source": "実走 45 再開 9・保留 10（run45-live.md 186〜193 行）",
  "known": [

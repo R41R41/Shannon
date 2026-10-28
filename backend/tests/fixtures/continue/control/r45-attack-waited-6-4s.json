@@ -1,6 +1,6 @@
 {
  "contract": "control",
- "version": 3,
+ "version": "3.1",
  "scene": "反射 melee が #2601 を打っている所へ、頭の attack #1954・#2601。#1954 は死を観測していたので already、#2601 は同じ相手なので引き継ぐ",
  "source": "実走 45 +929（run45-live.md 37〜38 行）: q52 は「反射 melee の最中のため、放された後に始めた（待ち 6.4秒）」",
  "known": [

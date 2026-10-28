@@ -1,6 +1,6 @@
 {
  "contract": "control",
- "version": 3,
+ "version": "3.1",
  "scene": "引き継ぎの予約: 止めた反射の actionId から予約を作り、取得と 1 つにして確かめる。期限切れ・別の持ち主の取得では予約を消し、予約が持つ盾は予約を消す処理が下ろす",
  "source": "Codex CONTRACTS-v2.md（2）5、ActionExecution.ts（settled で文脈を消してロックを放す）",
  "known": [

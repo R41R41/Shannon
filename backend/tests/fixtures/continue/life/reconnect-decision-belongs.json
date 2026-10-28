@@ -1,6 +1,6 @@
 {
  "contract": "life",
- "version": 3,
+ "version": "3.1",
  "scene": "つなぎ直し: 判断の入力は、読んだ観測の bodyBoot・connectionId に属する。返事が来た時に接続が替わっていれば捨てる",
  "source": "Codex CONTRACTS-v2.md（2）1",
  "known": [],

@@ -1,6 +1,6 @@
 {
  "contract": "result",
- "version": 3,
+ "version": "3.1",
  "scene": "不明の移り変わり（ストアに保存）: settled_unknown → 片付け → released → 遅れた結果で corrected。片付けで捨てた q2・q3 は q1 の訂正で戻らない。頭・体の再起動",
  "source": "Codex CONTRACTS-v2.md（2）3・4、minecraftControlStore.ts settle()・lateReceipt()・safe()、controlLoop.ts（stop は待ちを捨て実行中を止める）",
  "known": [

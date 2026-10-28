@@ -1,6 +1,6 @@
 {
  "contract": "measure",
- "version": 3,
+ "version": "3.1",
  "scene": "前後を比べる時に混ぜない物: プロンプトの変更・thinking の破棄・再開による履歴の変化",
  "source": "実走 45（run45-live.md 84・106・134 行）: prefix_binding_mismatch 16 回（12 回続けて）",
  "known": [

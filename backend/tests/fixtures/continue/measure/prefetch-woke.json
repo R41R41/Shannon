@@ -1,6 +1,6 @@
 {
  "contract": "measure",
- "version": 3,
+ "version": "3.1",
  "scene": "先読み: 列の残りで起きた時の見積もりと実際の終わりの差",
  "source": "Codex DESIGN.md（3）",
  "known": [],

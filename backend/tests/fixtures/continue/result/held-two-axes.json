@@ -1,0 +1,62 @@
+{
+ "contract": "result",
+ "version": "3.1",
+ "scene": "結果の状態と保留の状態は別の軸: held の後に、遅れた片付けの成功・本当の受け取り・操作者の resume・cancel が、どの順で来ても別々に当てる",
+ "source": "Codex CONTRACTS-v3.md（2）1",
+ "known": [],
+ "decided": [
+  "決め: 1 章の held の後の表"
+ ],
+ "hypothesis": [],
+ "input": {
+  "start": {
+   "result": "settled_unknown",
+   "hold": "held"
+  },
+  "orders": [
+   [
+    "late_cleanup_released",
+    "operator_resume"
+   ],
+   [
+    "real_receipt",
+    "operator_resume"
+   ],
+   [
+    "operator_resume",
+    "real_receipt"
+   ],
+   [
+    "operator_cancel",
+    "late_cleanup_released"
+   ]
+  ]
+ },
+ "expected": {
+  "orders": [
+   {
+    "result": "released",
+    "hold": "resumed",
+    "replayed": false
+   },
+   {
+    "result": "corrected",
+    "hold": "resumed",
+    "replayed": false
+   },
+   {
+    "result": "corrected",
+    "hold": "resumed",
+    "physicalBeforeRelease": 0
+   },
+   {
+    "result": "released",
+    "hold": "cancelled"
+   }
+  ],
+  "rule": "訂正しても保留は解けない。resume しても結果は訂正されない"
+ },
+ "checks": [
+  "頭"
+ ]
+}

@@ -1,6 +1,6 @@
 {
  "contract": "e2e",
- "version": 3,
+ "version": "3.1",
  "benches": {
   "A": "再生の台（VM、run-replay.sh・scene-case.py、本物の体と写したワールド）",
   "B": "隔離ラボ（VM、本物のサーバー・bot・反射・盾・道探し）。D4 はここ",
@@ -37,11 +37,11 @@
    ],
    "fixtures": [
     "vertical/r45-hold5-shaft-down.json",
-    "vertical/r45-hold7-pillar-up.json"
+    "vertical/r45-hold7-pillar-up.json",
+    "vertical/boundary2-evidence.json"
    ],
    "pass": [
-    "progress.done（確かめた段数）と黒箱の移動の段数が合う",
-    "work.dug と黒箱の dig、work.placed と確かめた place を別々に照らす",
+    "4 つの数と掘りの数を、vertical/boundary2-evidence.json の証拠の表のとおりに別々に照らす（移動の実績と stepsValid を等しいと見ない）",
     "次の手が progress.at から始まり、掘った段を掘り直さない"
    ]
   },
@@ -139,8 +139,11 @@
    "fixtures": [
     "result/unknown-receipt-cleanup.json",
     "result/unknown-state-machine.json",
+    "result/held-two-axes.json",
+    "result/head-restart-sent.json",
     "promise/same-receipt-twice.json",
-    "promise/seen-after-32-and-restart.json"
+    "promise/seen-after-32-and-restart.json",
+    "promise/receipt-box-then-ack.json"
    ],
    "pass": [
     "boundary8Scenes の 6 場面それぞれで: 同じ命令の操作が 2 回の実行に分かれない・不明の項目が自動で出し直されない・帳簿に同じ出来事が 2 度入らない・訂正の回数が表どおり"
@@ -195,7 +198,7 @@
  "boundary8Scenes": [
   {
    "id": "b8-lost-receipt",
-   "inject": "q1 の受け取りを頭が受ける直前に 1 度捨てる",
+   "inject": "q1 の受け取りを、頭が q1 を settled_unknown にするまで届けるのを止め、その後に本当の受け取りを放す",
    "command": "q1",
    "corrections": 1,
    "deadline": "cleanup 5 s",
@@ -228,15 +231,26 @@
    ]
   },
   {
-   "id": "b8-head-restart",
-   "inject": "q2 の実行中に頭を再起動",
+   "id": "b8-head-restart-unacked",
+   "inject": "q2 の実行中に頭を止め、q2 の受け取りがまだ ACK されていないうちに起こす（unknown は知らせていない）",
    "command": "q2",
-   "corrections": "0|1",
+   "corrections": 0,
    "deadline": "cleanup 5 s after start",
    "records": [
     "cleanup at start",
     "headBoot registration",
-    "q2 state"
+    "q2 receipt settled"
+   ]
+  },
+  {
+   "id": "b8-head-restart-notified",
+   "inject": "q2 を settled_unknown にして LLM へ知らせた後に頭を止め、本当の受け取りを放してから起こす",
+   "command": "q2",
+   "corrections": 1,
+   "deadline": "cleanup 5 s after start",
+   "records": [
+    "notified row",
+    "corrected row after start"
    ]
   },
   {
@@ -247,6 +261,7 @@
    "deadline": "first poll",
    "records": [
     "released",
+    "events lost",
     "unexplained diff"
    ]
   },

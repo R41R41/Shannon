@@ -1,6 +1,6 @@
 {
  "contract": "continue",
- "version": 3,
+ "version": "3.1",
  "scene": "依存の判定表（頭と体が同じ物を読む。正本）",
  "invalidationFirst": [
   "connection_changed",
@@ -173,6 +173,17 @@
     "outcome": "unknown",
     "inputsReleased": false
    }
+  },
+  {
+   "goal": "unknown",
+   "end": "unknown",
+   "released": true,
+   "dependState": "unknown",
+   "old": {
+    "outcome": "unknown",
+    "inputsReleased": false
+   },
+   "note": "片付けで released になった後も結果は不明（v3.1）"
   }
  ],
  "notAllowed": [
@@ -236,6 +247,14 @@
    "goals": [
     "not_started"
    ]
+  },
+  {
+   "status": "stopped",
+   "end": "finished",
+   "goals": [
+    "not_started"
+   ],
+   "note": "手を呼んだが操作 0 で止まった（再開 1 の go）"
   }
  ],
  "hand": {
@@ -276,7 +295,8 @@
   "succeeded": "goal done|already AND end finished AND released",
   "pending": "not ended (running or waiting)",
   "failed": "ended AND released AND not succeeded",
-  "unknown": "end unknown OR released not confirmed OR reference not remembered"
+  "unknown": "end unknown OR released not confirmed OR reference not remembered",
+  "note": "重なりは dependStatePriority の順で解く（上から最初に当たった物）"
  },
  "aggregate": [
   "doneMet → done",
@@ -285,5 +305,13 @@
   "any done|partial → partial",
   "any motorOps > 0 → failed",
   "else → not_started"
+ ],
+ "dependStatePriority": [
+  "reference not remembered → unknown",
+  "not ended → pending",
+  "released not confirmed → unknown",
+  "end unknown → unknown",
+  "goal done|already AND end finished → succeeded",
+  "else → failed"
  ]
 }
