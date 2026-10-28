@@ -2,6 +2,7 @@ import { Vec3 } from 'vec3';
 import { actionSignal } from '../../execution/ActionExecution.js';
 import { feetCell, isOpenBlock, relativeCell, relativeWords, type Cell, type Facing } from '../localMap.js';
 import { BLOCK_REACH } from '../blockReach.js';
+import type { GoalOutcome, InventoryEvent, Progress } from '../../integration/commonFca/continueContract.js';
 
 /**
  * What every part of `act` shares (design mb-llm-centric 2.3, 4: utils/primitives). A part does what its arguments say and nothing
@@ -37,6 +38,21 @@ export interface StepOutcome {
   at?: Cell;
   /** Where the body stood or walked from (a walk's stop). */
   from?: Cell;
+  /**
+   * Continue contracts (1): how far the part got, by the part's own measure (a unit and a count, never read back out of the line's words).
+   * The act puts it in the hand's result (HandOutcome.progress).
+   */
+  progress?: Progress;
+  /**
+   * Continue contracts (1): the part's own verdict where the ok flag cannot say it: 'already' (ok, nothing was changed: the aim held when the
+   * hand began) or 'unknown' (the part could not see whether its aim was met: an attack whose target went out of sight). Without it an ok
+   * hand is 'done' and a failed one 'failed' (or 'partial' when it has progress).
+   */
+  goal?: Extract<GoalOutcome, 'already' | 'unknown'>;
+  /** The closed code of the hand's stop (HandOutcome.code); the part's `reason` when it has none of its own. */
+  code?: string;
+  /** Continue contracts (3): the inventory changes this part made (an ingredient used, a thing made), one event each; intermediate ones marked. */
+  events?: InventoryEvent[];
   /** What the act's result carries beside the line (the contract's ActResult): a thrown eye, a container's contents, arrows left. */
   data?: {
     eye?: { from: Cell; bearingDeg: number; flew: number; to: Cell; broke: boolean };
