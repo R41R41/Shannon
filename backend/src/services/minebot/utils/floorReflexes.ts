@@ -1134,7 +1134,8 @@ export async function runLastStand(bot: FloorBody, port: FloorBody, stand: LastS
       if (!live || !bot.entity || live.position.distanceTo(bot.entity.position) > LAST_STAND_RANGE + 1) break;
       try { await motor.lookAt?.(live.position.offset(0, 1, 0), true); } catch (error) { if (/Action interrupted|Motor owner expired/u.test(String((error as Error)?.message))) throw error; }
       motor.attack(live); blows++;
-      if (blow < LAST_STAND_HITS - 1) await new Promise(resolve => setTimeout(resolve, LAST_STAND_HIT_GAP_MS));
+      if (blow < LAST_STAND_HITS - 1) await abortableDelay(port, LAST_STAND_HIT_GAP_MS);
+      if (actionSignal(port as never)?.aborted) break;
     }
     return { success: blows > 0, result: blows > 0 ? `${blows}回打った` : '打つ相手が離れた' };
   }
@@ -1926,6 +1927,8 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
     // (the choice says what to do at which; a hand-less low health is quiet and leaves the body to the flee).
     const beingHurt = t - (state.healthSeen?.fellAt ?? -Infinity) <= COVER_FALL_MS;
     const episode = state.melee && t - state.melee.lastEnd <= MELEE_EPISODE_MS ? state.melee : undefined;
+    // A-6 (7): once the cap was told for this episode, no new reflex hand of any kind (a different kind of hand included) until the episode ends.
+    if (episode && episode.cappedAt !== undefined) return false;
     const chased = !!episode && candidates[0].distance <= MELEE_CHASED_RANGE;
     if (!beingHurt && !chased) {
       try { const feetNow = feetCell(bot as never); if (!feetNow || footingAt(bodyReader(bot as never), feetNow).count === 0) return false; } catch { return false; }

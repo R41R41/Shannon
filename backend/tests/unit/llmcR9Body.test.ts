@@ -233,6 +233,24 @@ describe('run 33\'s piglin: a normal piglin with a golden sword, level ground, h
     expect(bot.__swings).toHaveLength(10);
   }, 30_000);
 
+  it('A-6 (7): after the cap was told, no new hand of any kind (a block between included) until the episode ends', async () => {
+    const clock = { at: 57_000_000 };
+    const { bot, ledger } = scene(field, new Vec3(0.5, 64, 0.5), { health: 15.5, items: [IRON_SWORD, COBBLE], mobs: { 1677: piglin(1677, 2.6, 64, 0.5, 1000) }, now: () => clock.at, damage: 1 });
+    await hurtTo(bot, clock, 11);
+    await rounds(bot, clock, 6);
+    expect(meleeLines(ledger).filter(entry => entry.kind === 'melee')).toHaveLength(5);
+    expect(bot.floorReflexes.melee.cappedAt).toBeDefined();
+    const swings = bot.__swings.length, placed = bot.__placed.length, equips = bot.equip.mock.calls.length;
+    // The sword is gone from the pack (broken, dropped, taken): the choice would be two blocks up, a hand of another kind than the capped blows, and it is not made.
+    bot.entities[1677].position = new Vec3(1.9, 64, 0.5);
+    bot.inventory.items = () => [COBBLE]; bot.heldItem = null;
+    await rounds(bot, clock, 3);
+    expect(meleeLines(ledger).filter(entry => entry.kind === 'melee')).toHaveLength(5);
+    expect(bot.__swings).toHaveLength(swings);
+    expect(bot.__placed).toHaveLength(placed);
+    expect(bot.equip.mock.calls).toHaveLength(equips);
+  }, 40_000);
+
   it('a blow back stops when the health falls to 6 in the hand (the next hand is a block between)', async () => {
     const clock = { at: 56_000_000 };
     const { bot, ledger } = scene(field, new Vec3(0.5, 64, 0.5), { health: 15.5, items: [IRON_SWORD, COBBLE], mobs: { 1677: piglin(1677, 2.6, 64, 0.5, 1000) }, now: () => clock.at, damage: 1 });

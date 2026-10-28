@@ -199,6 +199,21 @@ describe('vertical: pillar up (run 45 hold 7, scaled) and the four numbers', () 
     expect(outcome.progress!.done).toBe(2);
   });
 
+  it('A-6 (3): the hand is a laying hand while it lays a block, and not while it digs the cells over the head', async () => {
+    const sim = sim0(world('stone', 64, [column('stone', 0, 66, 67, 0)]), [0, 64, 0], [PICK, { name: 'cobblestone', count: 20 }]);
+    const host = sim.bot as { actHandNow?: string };
+    const whileDigging: Array<string | undefined> = [], whilePlacing: Array<string | undefined> = [];
+    const dig = sim.bot.dig, place = sim.bot.placeBlock;
+    sim.bot.dig = async (...args: any[]) => { whileDigging.push(host.actHandNow); return dig(...args); };
+    sim.bot.placeBlock = async (...args: any[]) => { whilePlacing.push(host.actHandNow); return place(...args); };
+    const outcome = await drive(sim, run(sim, hand({ dir: 'up', shape: 'pillar', toY: 66, canPlace: ['cobblestone'] })));
+    expect(outcome.ok).toBe(true);
+    expect(whileDigging.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(whileDigging)).toEqual(new Set(['vertical']));
+    expect(whilePlacing.length).toBeGreaterThanOrEqual(1);
+    expect(new Set(whilePlacing)).toEqual(new Set(['vertical-place']));
+  });
+
   it('stops at a roof canDig does not allow (cannot_dig) before it digs the cell beside it', async () => {
     const sim = sim0(world('stone', 64, [column('obsidian', 0, 66, 67, 0)]), [0, 64, 0], [PICK, { name: 'cobblestone', count: 20 }]);
     const outcome = await drive(sim, run(sim, hand({ dir: 'up', shape: 'pillar', toY: 70, canPlace: ['cobblestone'] })));

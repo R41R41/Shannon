@@ -552,7 +552,9 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
     if (short) throw new VStop('no_floor', `足元 ${cellText(short.cell)} の ${short.name} は高さ ${short.top.toFixed(2)} で、足が ${short.lowBy.toFixed(2)} 低く、跳んでも積む高さに届かない`, short.cell);
     if (feetBlock && feetBlock.boundingBox === 'block') throw new VStop('displaced', `足のマス ${cellText(plan.from)} が ${nameOf(feetBlock)} で埋まっている`, plan.from);
     precheckDig(plan.clear);
-    await openAll(plan.clear);
+    // A-6 (3): digging the cells over the head is not placing: the hand is not a laying hand for it (a reflex's note may stop it then), and is again for the climb.
+    laying(false);
+    try { await openAll(plan.clear); } finally { laying(true); }
     await handleLiquid(plan);
     for (let tries = 0; tries < JUMP_TRIES; tries++) {
       checkClock();

@@ -218,6 +218,112 @@ try {
     await reset(actor);
   }
 
+  // ---- A-6 (10): the handover with the shield really up (arrows keep the resident shield raised), a last stand's hit taken over, and no new reflex hand after the cap
+  const shieldNotes = (since: number): any[] => opLines().filter(entry => entry.kind === 'shield_state' && Date.parse(entry.at) >= since);
+  if (runs('handover_shield')) {
+    const trials: Array<Record<string, unknown>> = [];
+    for (let trial = 1; trial <= 6; trial++) {
+      await reset(actor);
+      await ask('give ' + ACTOR + ' minecraft:iron_sword 1'); await ask('item replace entity ' + ACTOR + ' weapon.offhand with minecraft:shield');
+      await ask('effect give ' + ACTOR + ' minecraft:resistance 600 1 true');
+      await sleep(800);
+      await ask('summon minecraft:zombie 2.5 100 0.5 {PersistenceRequired:1b,Tags:["lab_enemy"],equipment:{head:{id:"minecraft:leather_helmet",count:1}}}');
+      // arrows from the east keep coming at the body: the resident shield goes up for them
+      let streaming = true;
+      void (async () => { while (streaming) { await ask('summon minecraft:arrow 7.5 101.6 0.5 {Motion:[-2.5d,0d,0d],pickup:0b,damage:0.5d}'); await sleep(250); } })();
+      const began = Date.now();
+      let seen: any = null;
+      while (Date.now() - began < 14_000) {
+        const roots = physicalRoots(actor).filter(root => root.capability === 'floor-melee' || root.capability === 'floor-last-stand');
+        const mark = actor.floorReflexes?.handTarget;
+        if (roots.length && mark && Date.now() - mark.at < 1500 && actor.shieldBlock?.up === true) { seen = { capability: roots[0].capability, target: mark.target, shieldUp: true }; break; }
+        await sleep(10);
+      }
+      if (!seen) { streaming = false; trials.push({ trial, reflex: null, shieldUpSeen: actor.shieldBlock?.up === true }); continue; }
+      const sentAt = Date.now();
+      const result = await act(body, { hands: [{ do: 'fight', target: '#' + seen.target, stance: 'fight', seconds: 6 }] }, { seconds: 30 });
+      streaming = false;
+      const handover = result.parsed?.handover ?? null;
+      const notes = shieldNotes(sentAt - 50);
+      const phase = (name: string) => notes.find(entry => entry.phase === name) ?? null;
+      trials.push({ trial, reflex: seen, handover, sentToLockMs: Date.parse(result.receipt.bodyTimes?.lockAt ?? '') - sentAt,
+        notes: { reserve: phase('reserve'), stop: phase('stop'), claim: phase('claim'), first_op: phase('first_op') }, outcome: result.receipt.outcome, unit: result.receipt.unit,
+        hitsTaken: ((body.observe().state as any).combat?.recentHits ?? []).length });
+      await sleep(500);
+    }
+    report.handoverShieldTrials = trials;
+    const withReflex = trials.filter(entry => entry.reflex);
+    const confirmed = withReflex.filter(entry => (entry.handover as any)?.confirmed === true);
+    check('A-6 (10) shield: in at least one trial the melee reflex held the body with the resident shield really up (the case the shield question needs)', withReflex.length >= 1, withReflex.length + '/' + trials.length);
+    check('A-6 (10) shield: of the confirmed handovers made with the shield up at the reservation, the record of the actual state agrees with what the receipt says (kept only when it was up at the reservation, the claim and the first operation, with nothing lowered or deactivated; else dropped)',
+      confirmed.every(entry => {
+        const n: any = entry.notes, shield = (entry.handover as any).shield;
+        if (!n.reserve) return false;
+        const unbroken = n.reserve.up === true && n.claim?.up === true && n.claim?.loweredSince === 0 && n.claim?.deactivatedSince === 0 && (!n.first_op || n.first_op.up === true);
+        return n.reserve.up === true ? shield === (unbroken ? 'kept' : 'dropped') : shield === 'none';
+      }), JSON.stringify(confirmed.map(entry => ({ shield: (entry.handover as any).shield, notes: entry.notes }))).slice(0, 480));
+    measures.handoverShield = trials.map(entry => ({ trial: entry.trial, reflex: (entry.reflex as any)?.capability ?? null, shield: (entry.handover as any)?.shield ?? null, confirmed: (entry.handover as any)?.confirmed ?? null,
+      up: ['reserve', 'stop', 'claim', 'first_op'].map(name => (entry.notes as any)?.[name]?.up ?? null), loweredSince: (entry.notes as any)?.claim?.loweredSince ?? null, deactivatedSince: (entry.notes as any)?.claim?.deactivatedSince ?? null }));
+    produce('measure/handover-shield-up', null, { output: { trials } });
+    await reset(actor);
+  }
+
+  if (runs('handover_last_stand')) {
+    await reset(actor);
+    // a closed room, three cells long, with a floor that cannot be dug: no way away from a lit creeper (the creeper's blast is made harmless, and the body is not hurt by it)
+    await ask('fill -1 99 -1 3 103 1 minecraft:obsidian'); await ask('fill 0 100 0 2 101 0 minecraft:air'); await ask('fill 0 99 0 2 99 0 minecraft:bedrock');
+    await ask('give ' + ACTOR + ' minecraft:iron_sword 1'); await ask('effect give ' + ACTOR + ' minecraft:resistance 600 4 true');
+    await ask('tp ' + ACTOR + ' 0.5 100 0.5'); await sleep(1200);
+    await ask('summon minecraft:creeper 2.5 100 0.5 {PersistenceRequired:1b,Tags:["lab_enemy"],Fuse:200,ignited:1b,ExplosionRadius:0b}');
+    const began = Date.now();
+    let seen: any = null;
+    while (Date.now() - began < 12_000) {
+      const roots = physicalRoots(actor).filter(root => root.capability === 'floor-last-stand' || root.capability === 'floor-melee');
+      const mark = actor.floorReflexes?.handTarget;
+      if (roots.length && mark && Date.now() - mark.at < 1500) { seen = { capability: roots[0].capability, target: mark.target }; break; }
+      await sleep(10);
+    }
+    let result: any = null;
+    if (seen) {
+      const sentAt = Date.now();
+      result = await act(body, { hands: [{ do: 'fight', target: '#' + seen.target, stance: 'fight', seconds: 5 }] }, { seconds: 30 });
+      const notes = shieldNotes(sentAt - 50);
+      report.handoverLastStand = { seen, handover: result.parsed?.handover ?? null, notes, outcome: result.receipt.outcome, unit: result.receipt.unit, sentToLockMs: Date.parse(result.receipt.bodyTimes?.lockAt ?? '') - sentAt };
+    } else report.handoverLastStand = { seen: null, health: actor.health };
+    check('A-6 (10) last stand: the last stand\'s hit at the creeper held the body with the creeper as its enemy', !!seen && seen.capability === 'floor-last-stand', JSON.stringify(seen ?? report.handoverLastStand).slice(0, 300));
+    check('A-6 (10) last stand: an act for the same enemy takes the body over from the last stand (confirmed, from floor-last-stand), waiting far less than the hit\'s own end', !!result && result.parsed?.handover?.confirmed === true && result.parsed.handover.from === 'floor-last-stand' && Date.parse(result.receipt.bodyTimes?.lockAt ?? '') - result.startedAt < 2500,
+      JSON.stringify(result ? { handover: result.parsed?.handover, bodyTimes: result.receipt.bodyTimes } : null).slice(0, 400));
+    produce('measure/handover-last-stand', null, { output: report.handoverLastStand as Record<string, unknown> });
+    await ask('fill -1 99 -1 3 103 1 minecraft:air'); await ask('fill -1 90 -1 3 99 1 minecraft:stone');
+    await reset(actor);
+  }
+
+  if (runs('cap_then_kind')) {
+    await reset(actor);
+    await ask('give ' + ACTOR + ' minecraft:iron_sword 1'); await ask('give ' + ACTOR + ' minecraft:cobblestone 16'); await ask('effect give ' + ACTOR + ' minecraft:resistance 600 1 true');
+    await sleep(500);
+    await ask('summon minecraft:zombie 2.5 100 0.5 {PersistenceRequired:1b,Tags:["lab_enemy"],equipment:{head:{id:"minecraft:leather_helmet",count:1}},attributes:[{id:"minecraft:max_health",base:1000d}],Health:1000f}');
+    const began = Date.now();
+    let cappedAt = 0;
+    while (Date.now() - began < 40_000) { const at = actor.floorReflexes?.melee?.cappedAt; if (typeof at === 'number') { cappedAt = at; break; } await sleep(50); }
+    const capturedEvents = ((body.events as any)?.pending?.(64) ?? []).filter((event: any) => event.kind === 'reflex.capped');
+    if (cappedAt) {
+      // the sword goes: what the choice would now be is a hand of another kind (a block between, a step), and it must not be made until the episode ends
+      await ask('clear ' + ACTOR + ' minecraft:iron_sword'); await sleep(200);
+      const from = Date.now();
+      await sleep(3200);
+      const after = opLines().filter(entry => entry.kind === 'op' && entry.by === 'floor-melee' && Date.parse(entry.at) > cappedAt + 400 && Date.parse(entry.at) < from + 3300);
+      const placed = opLines().filter(entry => entry.kind === 'op' && entry.op === 'placeBlock' && Date.parse(entry.at) > cappedAt + 400);
+      report.capThenKind = { cappedAt: new Date(cappedAt).toISOString(), afterOps: after.slice(0, 6), placed: placed.length, capped: capturedEvents.map((event: any) => event.data) };
+      check('A-6 (10) cap: the melee reflex said reflex.capped once for the episode', capturedEvents.length >= 1, JSON.stringify(capturedEvents.map((event: any) => event.data)).slice(0, 300));
+      check('A-6 (10) cap: after the cap, with the hand kind that would be chosen changed (the sword gone), the reflex sends no new operation until the episode ends', after.length === 0 && placed.length === 0, JSON.stringify({ after: after.length, placed: placed.length }));
+    } else {
+      report.capThenKind = { cappedAt: null, health: actor.health };
+      check('A-6 (10) cap: the melee reflex reached its cap against an enemy with a thousand health', false, JSON.stringify(report.capThenKind));
+    }
+    await reset(actor);
+  }
+
   // ---- boundary 5: a death at each moment
   if (runs('death')) {
     for (const moment of ['running_hand', 'waiting_for_reflex']) {

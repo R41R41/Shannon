@@ -16,10 +16,15 @@ import type { CommonFcaActuator } from './controlLoop.js';
 import { BodyEventWatcher } from './bodyEvents.js';
 import { closeInAdvised, combatOwnerOf, holdMeleeForHead } from '../../utils/combatOwner.js';
 
-/** Whether an act's first hand is a fight (`fight` or `attack`): the planner's fight, which the melee reflex gives way to. */
-function fightsFirst(args: unknown): boolean {
+/**
+ * Whether an act's first hand that moves the body is a fight (`fight` or `attack`): the planner's fight, which the melee reflex gives way to.
+ * A-6 (1): the hand list is read the way the handover reads it (`firstMovingHand`): a look, a sneak, a wait, an equip of what is already held and a
+ * meal at full food do not move the body, so `equip` of the sword already in hand and then `fight #same` is a fight first too.
+ */
+export function fightsFirst(bot: unknown, args: unknown): boolean {
   const hands = Array.isArray(args) ? args[0] as Array<{ do?: unknown }> | undefined : (args as { hands?: Array<{ do?: unknown }> } | undefined)?.hands;
-  const first = Array.isArray(hands) ? hands[0]?.do : undefined;
+  if (!Array.isArray(hands)) return false;
+  const first = firstMovingHand(bot, hands as never)?.do;
   return first === 'fight' || first === 'attack';
 }
 import { craftDoneDespiteCut, craftWitness, type CraftWitness } from '../../utils/cutCraftRecovery.js';
@@ -32,8 +37,8 @@ import { lapseOf, madenessOf, type BodyNow, type Lapse } from './lapse.js';
 import type { BodyTimes, BodyVersion, HandStart, ItemOutcome } from './continueContract.js';
 import { EventStore, EVENTS_SKILL } from './eventStore.js';
 import { controlViewOf, type CommandTag } from './controlView.js';
-import { handoverStillHolds, planHandover, stopReflexForHandover, type HandoverPlan } from '../../utils/handover.js';
-import { dropReservation, recentMotorOps, reserveHandover, setMotorOpSink } from '../../execution/ActionExecution.js';
+import { handoverStillHolds, planHandover, stopReflexForHandover, type HandoverPlan, firstMovingHand } from '../../utils/handover.js';
+import { dropReservation, noteShieldState, recentMotorOps, reserveHandover, setMotorOpSink, setShieldNoteSink } from '../../execution/ActionExecution.js';
 import { setActContext } from '../../utils/actContext.js';
 import { installOpLog, OpLog, opLogDirectory, opLogOf, packSummary } from '../../utils/opLog.js';
 import { blackBoxOf } from '../../utils/blackbox.js';
@@ -176,6 +181,7 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
     this.life = installLife(bot, { key: () => `${options.serverId}|${bot.username ?? 'body'}`, note: (what, data) => { try { blackBoxOf(bot)?.note(what, data); } catch { /* a note is a help */ } } });
     this.opLog = opLogOf(bot) ?? installOpLog(bot, new OpLog(opLogDirectory()));
     setMotorOpSink(bot, op => this.opLog.op(op));
+    setShieldNoteSink(bot, (kind, data) => this.opLog.note(kind, data));
     installPackTap(bot);
     // The block updates and pushbacks that corrected a vertical hand's counts go into the continuous record (the boundary-2 check reads them with the operations).
     bot.on('minebotVerticalEvidence', this.onVerticalEvidence);
@@ -426,17 +432,18 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
         // Run 45 (+929): the planner's fight at a zombie waited 6.4 s for the melee reflex (a hand, then the next, each 2 blows) and began after
         // she died. A fight act that comes while the melee reflex is at it takes the fight over: the melee starts no next hand (a fight of the
         // planner's holds it), and the act waits only for the hand that runs.
-        const yieldMelee = capability === 'act' && fightsFirst(args) && meleeEpisode(this.bot) ? holdMeleeForHead(this.bot) : null;
+        const yieldMelee = capability === 'act' && fightsFirst(this.bot, args) && meleeEpisode(this.bot) ? holdMeleeForHead(this.bot) : null;
         // Continue contracts (4): an act for the very enemy the melee reflex (or a last stand's hit) is after takes the body from it at once: the
         // reservation first, then the reflex is stopped for the reason `handover` (the shield stays up, the keys are let go), and the act gets the lock and
         // the shield's right in the same moment. Nothing else is taken from: a flee, lava, a wall, a retreat, a dig out, breath, a meal, armour.
-        if (capability === 'act' && fightsFirst(args)) {
+        if (capability === 'act' && fightsFirst(this.bot, args)) {
           handoverPlan = planHandover(this.bot, { hands: args[0] });
           if (handoverPlan) {
             handoverAt = Date.now();
             reserveHandover(this.bot, { fromActionId: handoverPlan.actionId, reflex: handoverPlan.reflex, target: handoverPlan.target,
               life: Number(command.context?.life ?? this.life.number), forCommand: command.id, shield: handoverPlan.shield });
             stopReflexForHandover(this.bot, handoverPlan);
+            noteShieldState(this.bot, 'stop', { forCommand: command.id, reflex: handoverPlan.reflex });
             this.waits.set(command.id, { since: this.now(), behind: handoverPlan.reflex });
             // The reflex's action settles (a few milliseconds); within the reservation's window the lock is ours without the usual grace.
             while (Date.now() - handoverAt < 300 && !signal.aborted && (physicalActionBusy(this.bot) || reflexHeld(this.bot))) await delay(2);

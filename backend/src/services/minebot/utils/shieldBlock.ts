@@ -5,7 +5,7 @@ import { installToldVelocity, toldVelocity } from './toldVelocity.js';
 import { answerWith } from './reflexAnswers.js';
 import { isEngaged } from './engagement.js';
 import { isLikelyHostileMobName } from './hostileMobHints.js';
-import { shieldPort } from '../execution/ActionExecution.js';
+import { reservationOf, shieldPort } from '../execution/ActionExecution.js';
 
 const log = createLogger('Minebot:ShieldBlock');
 
@@ -118,7 +118,9 @@ interface ShieldBot {
   shieldBlock?: ShieldBlockState;
 }
 /** `raised` counts the times the shield went up; `upTicks` the ticks it was held. */
-export interface ShieldBlockState { enabled: boolean; guard: boolean; raised: number; guards: number; upTicks: number; up: boolean; last?: string }
+export interface ShieldBlockState { enabled: boolean; guard: boolean; raised: number; guards: number; upTicks: number; up: boolean; last?: string;
+  /** A-6 (2, 9): the times the shield was lowered, and the times `deactivateItem` was called on the body; the handover's "kept" is read from these. */
+  lowered?: number; deactivateCalls?: number }
 
 /**
  * Continue contracts (4): the shield's right belongs to the owner of the body (the root action that moves it). While an owner has delegated the
@@ -138,7 +140,7 @@ export function installShieldBlock(bot: ShieldBot): void {
   // The body's own blow goes out from behind a lowered shield: down for the blow, up again on the next tick.
   if (typeof bot.attack === 'function') {
     const strike = bot.attack.bind(bot);
-    bot.attack = (...args: unknown[]) => { if (state.up) { state.up = false; try { shieldHand(bot).deactivateItem?.(); } catch { /* nothing held */ } } return strike(...args); };
+    bot.attack = (...args: unknown[]) => { if (state.up) { state.up = false; state.lowered = (state.lowered ?? 0) + 1; try { shieldHand(bot).deactivateItem?.(); } catch { /* nothing held */ } } return strike(...args); };
   }
   installToldVelocity(bot as any);
   // Said to the threat watch: with a shield on the arm, a kind that has hit the body with shots is answered here.
@@ -146,7 +148,16 @@ export function installShieldBlock(bot: ShieldBot): void {
     && (bot as any).shootsAtBody?.(kind) === true);
   const seen = new Map<number, { said: Vec3; saidTick: number; velocity: Vec3; shooterNoted?: boolean }>();
   let tick = 0, lastComing = -Infinity;
-  const lower = () => { if (state.up) { state.up = false; try { shieldHand(bot).deactivateItem?.(); } catch { /* nothing held */ } } };
+  // A-6 (2): while a handover reservation holds the shield (a shield:true reservation), the resident shield does not lower it: the act that takes the body takes the shield up.
+  const lower = () => {
+    if (state.up && reservationOf(bot as object)?.shield) return;
+    if (state.up) { state.up = false; state.lowered = (state.lowered ?? 0) + 1; try { shieldHand(bot).deactivateItem?.(); } catch { /* nothing held */ } }
+  };
+  state.lowered = 0; state.deactivateCalls = 0;
+  if (typeof bot.deactivateItem === 'function') {
+    const release = bot.deactivateItem.bind(bot);
+    bot.deactivateItem = (...args: unknown[]) => { state.deactivateCalls = (state.deactivateCalls ?? 0) + 1; return (release as (...a: unknown[]) => unknown)(...args); };
+  }
   bot.on('physicsTick', () => {
     tick++;
     try {
@@ -186,7 +197,7 @@ export function installShieldBlock(bot: ShieldBot): void {
       if (!shielded) { lower(); return; }
       // Lowered by another hand (a fight's own deactivateItem, a bow): what the body holds now says so, and the shield goes up again
       // when it is wanted, against what is coming or in a fight's guard.
-      if (state.up && bot.usingHeldItem === false) state.up = false;
+      if (state.up && bot.usingHeldItem === false) { state.up = false; state.lowered = (state.lowered ?? 0) + 1; }
       if (soonest && soonest.ticks > RAISE_AHEAD_TICKS && !state.up) soonest = null;      // coming, but not yet
       if (soonest) lastComing = tick;
       if (tick - lastComing > HOLD_TICKS) {

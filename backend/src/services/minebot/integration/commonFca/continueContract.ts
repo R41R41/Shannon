@@ -76,7 +76,7 @@ export interface ControlView {
   combatMark?: { skill: string; target?: number; until: string };
   waiting: { command: string; since: string; behind: string }[];
 }
-export interface Handover { from: string; target: number; waitedMs: number; reflexSettledAt: string; confirmed: boolean; shield: 'kept' | 'lowered' | 'none' }
+export interface Handover { from: string; target: number; waitedMs: number; reflexSettledAt: string; confirmed: boolean; shield: 'kept' | 'lowered' | 'dropped' | 'none' }
 export interface HandoverReservation {
   fromActionId: string; reflex: string; target: number; life: number; forCommand: string; holderSeq: number; shield: boolean; at: string; until: string;
 }

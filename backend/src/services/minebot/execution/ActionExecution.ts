@@ -151,6 +151,7 @@ function noteMotorOp<T extends object>(bot: T, owner: Context | undefined, key: 
   if (!owner || releasesOnly(key, args)) return;
   const root = owner.root ?? owner, at = Date.now();
   root.motorOps++;
+  if (root.firstMotorAt === undefined && root.handover) noteShieldState(bot, 'first_op', { op: key, command: undefined });
   root.firstMotorAt ??= at;
   const op: MotorOp = { at, op: key, ...(opDetail(key, args) ? { detail: opDetail(key, args) } : {}), actionId: root.progress.actionId, capability: root.progress.capability };
   const ring = recentOpRings.get(bot) ?? [];
@@ -316,12 +317,40 @@ export function shieldHeldByOwner(bot: object): boolean {
 /** The first value of the reservation's window (ms). The isolated lab measures it (contract 13). */
 export const HANDOVER_WINDOW_MS = 300;
 const reservations = new WeakMap<object, HandoverReservation>();
+/**
+ * A-6 (2, 9): what the resident shield's state was when a reservation was made, so that at the claim "the shield was up without a break" is measured, not
+ * assumed: no lowering and no `deactivateItem` since the reservation, and the shield still up and still in use.
+ */
+const reservationShield = new WeakMap<HandoverReservation, { lowered: number; deactivateCalls: number }>();
+interface ShieldHost { shieldBlock?: { up?: boolean; lowered?: number; deactivateCalls?: number }; usingHeldItem?: boolean; deactivateItem?: unknown }
+export interface ShieldView { up: boolean; using: boolean | null; lowered: number; deactivateCalls: number; hasDeactivate: boolean }
+function shieldViewOf(host: object): ShieldView {
+  const h = host as ShieldHost;
+  return { up: h.shieldBlock?.up === true, using: typeof h.usingHeldItem === 'boolean' ? h.usingHeldItem : null, lowered: h.shieldBlock?.lowered ?? 0,
+    deactivateCalls: h.shieldBlock?.deactivateCalls ?? 0, hasDeactivate: typeof h.deactivateItem === 'function' };
+}
+const noteSinks = new WeakMap<object, (kind: string, data: Record<string, unknown>) => void>();
+/** The record of the operations also takes the notes of the shield's state (the measurement reads them beside the operations). */
+export function setShieldNoteSink(bot: object, sink: ((kind: string, data: Record<string, unknown>) => void) | null): void {
+  if (sink) noteSinks.set(actionHost(bot), sink); else noteSinks.delete(actionHost(bot));
+}
+/** The actual state of the shield at one moment of a handover (`reserve`, `stop`, `claim`, `first_op`, `released`): up or not, in use or not, and what was lowered since the reservation. */
+export function noteShieldState(bot: object, phase: 'reserve' | 'stop' | 'claim' | 'first_op' | 'released', extra: Record<string, unknown> = {}): void {
+  try {
+    const host = actionHost(bot);
+    const sink = noteSinks.get(host);
+    if (!sink) return;
+    const view = shieldViewOf(host), reservation = reservations.get(host), was = reservation ? reservationShield.get(reservation) : undefined;
+    sink('shield_state', { phase, up: view.up, using: view.using, hasDeactivate: view.hasDeactivate,
+      ...(was ? { loweredSince: view.lowered - was.lowered, deactivatedSince: view.deactivateCalls - was.deactivateCalls } : {}), ...extra });
+  } catch { /* a note never changes what the body did */ }
+}
 const reservationTimers = new WeakMap<object, ReturnType<typeof setTimeout>>();
 const rootSettledAt = new WeakMap<object, { actionId: string; at: number }>();
 export function reservationOf(bot: object): HandoverReservation | null { return reservations.get(actionHost(bot)) ?? null; }
 function lowerShield(bot: object): void {
   const host = actionHost(bot) as { deactivateItem?(): void; shieldBlock?: { up?: boolean } };
-  if (host.shieldBlock) host.shieldBlock.up = false;
+  if (host.shieldBlock) { if (host.shieldBlock.up) (host.shieldBlock as { lowered?: number }).lowered = ((host.shieldBlock as { lowered?: number }).lowered ?? 0) + 1; host.shieldBlock.up = false; }
   try { host.deactivateItem?.(); } catch { /* nothing held */ }
 }
 /**
@@ -334,6 +363,8 @@ export function reserveHandover(bot: object, input: Pick<HandoverReservation, 'f
   dropReservation(host, 'replaced');
   const reservation: HandoverReservation = { ...input, holderSeq: holderSeqs.get(host) ?? 0, at: new Date(now).toISOString(), until: new Date(now + windowMs).toISOString() };
   reservations.set(host, reservation);
+  { const view = shieldViewOf(host); reservationShield.set(reservation, { lowered: view.lowered, deactivateCalls: view.deactivateCalls }); }
+  noteShieldState(host, 'reserve', { forCommand: input.forCommand, reserved: input.shield, reflex: input.reflex });
   const timer = setTimeout(() => { if (reservations.get(host) === reservation) dropReservation(host, 'expired'); }, windowMs + 5);
   timer.unref?.();
   reservationTimers.set(host, timer);
@@ -345,6 +376,7 @@ export function dropReservation(bot: object, _why: 'expired' | 'other_holder' | 
   const reservation = reservations.get(host);
   clearTimeout(reservationTimers.get(host)); reservationTimers.delete(host);
   if (!reservation) return false;
+  noteShieldState(host, 'released', { why: _why, forCommand: reservation.forCommand });
   reservations.delete(host);
   if (reservation.shield && !shieldHeldByOwner(host)) lowerShield(host);
   return true;
@@ -447,8 +479,13 @@ export async function executeAction(
     try { valid = options.handover.verify(); } catch { valid = false; }
     const confirmed = within && sameOwner && valid;
     const reflexSettledAt = new Date(settled && settled.actionId === reservation.fromActionId ? settled.at : Date.now()).toISOString();
+    // A-6 (2): 'kept' only when the shield was up without a break since the reservation (nothing lowered it, no deactivateItem, still up and in use);
+    // a handover that is confirmed but found it down says 'dropped' (the act then raises it as its own, the resident shield acts through its port).
+    const was = reservationShield.get(reservation), view = shieldViewOf(bot);
+    const unbroken = !!was && view.up && view.using !== false && view.lowered === was.lowered && view.deactivateCalls === was.deactivateCalls;
     handover = { from: reservation.reflex, target: reservation.target, waitedMs: Math.max(0, Date.now() - Date.parse(reservation.at)), reflexSettledAt, confirmed,
-      shield: reservation.shield ? (confirmed ? 'kept' : 'lowered') : 'none' };
+      shield: !reservation.shield ? 'none' : !confirmed ? 'lowered' : unbroken ? 'kept' : 'dropped' };
+    noteShieldState(bot, 'claim', { forCommand: reservation.forCommand, confirmed, shield: handover.shield });
     if (confirmed) { reservations.delete(bot); clearTimeout(reservationTimers.get(bot)); reservationTimers.delete(bot); }
     else dropReservation(bot, within ? 'refused' : 'expired');
   };

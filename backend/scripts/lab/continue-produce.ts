@@ -148,7 +148,7 @@ async function eventCases(): Promise<void> {
   store.add('skill:q70', events);
   const pages = [store.page('skill:q70', 120, 120), store.page('skill:q70', 240, 120), store.page('skill:q70', 120, 120)];
   write('promise/events-split-delivery', 'promise/events-split-delivery', 'offline', {
-    output: { replies: pages.map(page => ({ ...page, events: page.events.length })), sameEventsAsFirst: JSON.stringify(pages[0].events) === JSON.stringify(pages[2].events), lostAfterRestart: new EventStore().page('skill:q70', 0).lost },
+    output: { replies: pages.map(page => ({ ...page, eventCount: page.events.length })), sameEventsAsFirst: JSON.stringify(pages[0].events) === JSON.stringify(pages[2].events), lostAfterRestart: new EventStore().page('skill:q70', 0).lost },
   });
 }
 

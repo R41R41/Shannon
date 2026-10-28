@@ -358,7 +358,7 @@ export class CommonFcaControlLoop {
     if (command.lease.generation < (this.leaseGenerations.get(command.lease.id) ?? -1)) {
       this.closeUnstarted(command, 'cancelled', 'queue_dropped', '捨てた: lease の世代が古くなった。手は動いていない', { code: 'lease_expired' });
       this.queue.note(envelope.queue, envelope.item, { goal: 'not_started', end: 'not_run', released: true, code: 'lease_expired' });
-      this.settleOwner(key);
+      this.afterEnd(envelope, { goal: 'not_started', end: 'not_run', released: true, code: 'lease_expired' }, key);
       return;
     }
     // The dependencies (2): to start, every item it names has succeeded; one still pending waits (never the case in a one-lane queue), a failed or unknown one drops it.
@@ -371,7 +371,8 @@ export class CommonFcaControlLoop {
         const code = states.some(state => state === 'failed') ? 'depends_failed' as const : 'depends_unknown' as const;
         this.closeUnstarted(command, 'cancelled', 'queue_dropped', `捨てた: 頼る項目 ${culprit} が済んでいない（${code}）。手は動いていない`, { code, item: { queue: envelope.queue, item: culprit } });
         this.queue.note(envelope.queue, envelope.item, { goal: 'not_started', end: 'not_run', released: true, code });
-        this.settleOwner(key);
+        // A-6 (4): the item dropped for a dependency is a failure for what follows like any other end: the ones that depend on it go, the others start.
+        this.afterEnd(envelope, { goal: 'not_started', end: 'not_run', released: true, code }, key);
         return;
       }
     }

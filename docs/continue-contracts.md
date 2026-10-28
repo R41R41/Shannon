@@ -472,7 +472,7 @@ export interface ControlView {
 }
 
 /** act の結果に足す欄: 反射から引き継いだ時。 */
-export interface Handover { from: string; target: number; waitedMs: number; reflexSettledAt: string; confirmed: boolean; shield: 'kept' | 'lowered' | 'none' }
+export interface Handover { from: string; target: number; waitedMs: number; reflexSettledAt: string; confirmed: boolean; shield: 'kept' | 'lowered' | 'dropped' | 'none' }
 
 /** 引き継ぎの予約（実行層が持つ。止めた反射の actionId から作り、取得と 1 つにして確かめる）。 */
 export interface HandoverReservation { fromActionId: string; reflex: string; target: number; life: number; forCommand: string;
@@ -1246,3 +1246,54 @@ interface Progress {
 - 同じ訂正の元の証拠（block の更新・押し戻し）は、操作の連続記録に `{ kind: 'block_update' | 'forced_move', at, command, hand, life, ... }` の行で残る（境界 2 の照らし方）。
 - 手が終わった後で起きた訂正（手の途中でも終わりの見直しでも見ていない変化）は、体は載せない（観測の持ち物・地図で LLM が見る）。
 - act の `equip`（防具の欄・オフハンド）で持ち物から減った分は、理由 `reflex_armor` の出来事で出す（頭は「身に着けた」として扱う。名前に反射と付いているが、手の equip でも同じ）。
+
+### A-6（10/29、Codex の最終の見直しから。全文は codex-final-review.md）
+
+測りの実走の前に、全部直す（段に分けない）。行は Codex の答えの (1)〜(5) の番号。
+
+#### 体
+1. **引き継ぎの入口**（(1)-1）：`fightsFirst()` は先頭の手だけを見ない。`planHandover()` と同じ「最初に体を動かす手」の決め方（既に済の手を飛ばす）で判定する。`equip（既に持っている）→ fight #同じ相手` で引き継ぎが働くこと。
+2. **予約中の盾**（(1)-2）：盾 true の予約がある間は、常駐盾の `lower()` をしない。取得の時に今の盾の状態を確かめ、途切れずに上がっていた時だけ `kept`。途切れたら `dropped`（新しい値）で返す。
+3. **pillar の頭上の掘り**（(1)-3）：A-3 のとおり、置いている間だけ `vertical-place`。頭上を掘る `openAll()` の間は外す。
+4. **開始直前の依存不成立**（(1)-4）：項目を閉じた後に `afterEnd()` を通して列を進める。独立した後ろの項目が始まること。
+5. **`outcome.life`**（(2)-2）：act を走らせた命（開始時の life）を付ける。死の後の life で付け直さない。
+6. **未 ACK の出来事**（(4)-3）：`EventStore.prune()` は ACK 済みだけを消す。未 ACK は時間・件数で消さない。どうしても上限（5,000 件）を超えて消す時は、その命令に `lost` を明示して頭に届ける。
+7. **cap の後**（(4)-4）：`reflex.capped` の後は、その episode が終わるまで、どの種類の新しい反射の手も選ばない（今の動きを続けるだけ）。
+8. **last stand の打ちの待ち**（(4)-5）：止められたら即終わる待ちにする（melee と同じ）。
+9. **測りのための記録**：
+   - 盾（(5)-3）：予約・停止・取得・最初の操作の各時点の実際の盾の状態（`deactivateItem` の有無と、上がっているか）を操作の記録に出す。
+   - 分割配送（(5)-4）：produced で出来事の配列を件数に置き換えない。非空のページの実物を残す。
+10. **隔離ラボで実物を足す**：盾を上げたままの引き継ぎ（盾を持たせ、矢などで常駐盾を上げた状態で同じ相手の引き継ぎ）、last stand の引き継ぎ、cap の後に手の種類が変わる場面。
+
+#### 頭
+11. **`earlierPasses`**（(2)-1）：契約と体の形（`{pass, lines, done, stopped}[]`）で読む。
+12. **帳簿の保存と処理済みの印**（(1)-5）：計画の checkpoint を保存した後に `markProcessed()`。間で止まって再起動したら、同じ受け取りをもう一度反映する（出来事の ID の重複除去で二重に数えない）。この間で止まる試験を足す。
+13. **約束の品目の改訂**（(4)-1）：差分は品目ごとに計算する。古い品目の出来事は古い品目（と古い rev）に帰し、今の品目の期待在庫に混ぜない。文にも品目を出す。改訂と受け取りの間に新しい在庫観測を挟む試験を足す。
+14. **精錬の材料**（(2)-3）：受け取りから帳簿を作る入口で、手の番号から手の種類（`by.do`）をつないで渡す。
+15. **vertical の速さ**（(4)-2）：体が返す `msPerUnit` を保存し、列の見積もり（`ActTimeTuning`）に渡す。
+16. **文**（(3)）：トークンは増やさない（system 8,800 以内）。
+    - go と vertical の使い分け：上り下り（高さの差が大きい）は vertical、横の移動と短い段差は go。system・道具の説明・`search_timeout` の次の手の文を揃える。旧い「上り下りは go」「階段・橋・柱は go 1 手」は直す。
+    - 準備：「準備も省かない」「未達の間は下りない」と「skipped と理由」を 1 つの決まりにする：「未達の間は下りない。省くなら prep に skipped と理由（省いた節は達成に数えない）」。
+    - 液体の結果文：実際の指定と止まった原因だけを書く（`seal_water` を「止まった」と書かない）。
+    - 列が空：「列に項目なし」。「体が止まっている」と言わない。
+17. **測りの判定**（(5)-2・3・4）：
+    - 長い縦の移動ごとに、go／vertical の選択・届いた高さ・動いた段数・有効な段数・止まりの理由・同じ所の掘り直し・止まりから次の有効な操作までの秒を出す。wait と成果の無い go を実行時間から分ける。
+    - 盾は自己申告（`shield === 'kept'`）で合格にしない。体の操作の記録の実際の盾の状態と照らす。melee／last stand、既に済の前置き、盾あり、を分け、被弾数・HP・食事の始まりまで出す。
+    - 帳簿：非空のページの実物を読み手に通し、出来事の ID と理由を照らす。
+
+#### 取りまとめ役
+18. 直った後、Sonnet の短い通し（上限 500 円）で、vertical を選ぶか・dependsOn を書くか・約束を作るか・精錬中に別の仕事を足すか・引き継ぎの後に回復を選ぶか、を見る。
+19. 測りの実走の判定は、版×シードごとの成否と秒をそのまま出し、仕組み別の測りで判断する。4 本でネザーの確率の差は判定しない。費用の上限で 45 分前に終わった回の扱いと、「差がはっきりしない」の数値の基準は、実走の前に決めてユーザーに出す。
+
+#### A-6 の 2・6・9 の型（体の実装の形。体が書く）
+```ts
+/** 4 章の Handover の足し。盾の値に `dropped` を足した（`kept` は予約から取得まで途切れなかった時だけ）。 */
+interface Handover { shield: 'kept' | 'lowered' | 'dropped' | 'none' }
+```
+- `kept`：予約を作る時に盾が上がっていて、取得の時まで、盾が下げられず・`deactivateItem` も呼ばれず、今も上がって使われている。
+- `dropped`：予約は盾 true だったが、取得の時には途切れていた（引き継ぎ自体は `confirmed`）。act は自分の手で盾を上げ直す。
+- `lowered`：引き継ぎが `confirmed` にならず、予約が外れて盾も下げた。`none`：予約が盾を持っていなかった。
+- 予約の間、常駐盾は盾を下げない（盾 true の予約がある時の `lower()` は何もしない）。
+- 操作の連続記録の行（盾の実際の状態）：`{ kind: 'shield_state', at, command?, hand?, life?, phase: 'reserve' | 'stop' | 'claim' | 'first_op' | 'released', up: boolean, using: boolean | null, hasDeactivate: boolean, loweredSince?: number, deactivatedSince?: number, ... }`。`loweredSince`・`deactivatedSince` は予約を作ってからの回数。`claim` の行は `shield`（上の値）を持つ。
+- `EventsReply.lost` は、記録が無い時のほかに、体が 5,000 件の上限を超えて未 ACK の命令の出来事を捨てた時も `true`（`total` はその命令の件数、`events` は空）。頭は `lost` を「出来事が分からない」と扱う。ACK 済みの記録は時間（30 分）と件数で消えてよいが、未 ACK のものは時間・件数では消えない。
+- `outcome.life` は act を走らせた命（開始時の番号）。死の後の命で付け直さない。

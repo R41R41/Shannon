@@ -219,6 +219,19 @@ describe('the queue: what an end does', () => {
     await f.loop.stop();
   });
 
+  it('A-6 (4): an item dropped for a dependency at its start (the path now goes through afterEnd) leaves the independent one behind it running', async () => {
+    const f = fixture();
+    // x names an item the queue does not remember (depends_unknown at its start); y names nothing of it (dependsOn []) and waits behind it.
+    await f.deliver(item('x', 'q50', null, { dependsOn: ['q99'] }), item('y', 'q51', 'q50', { dependsOn: [] }));
+    await tick(2);
+    const out = await f.receipts();
+    expect(out.x).toMatchObject({ outcome: 'cancelled', failureType: 'queue_dropped', unit: { goal: 'not_started', end: 'not_run', droppedBecause: { code: 'depends_unknown' } } });
+    expect(f.started.map(entry => entry.id)).toEqual(['y']);
+    f.running.get('y')!.finish(); await tick(2);
+    expect((await f.receipts()).y).toMatchObject({ outcome: 'completed' });
+    await f.loop.stop();
+  });
+
   it('a cancelled item (the head\'s cancel of the running one) drops the rest, and a dropped item\'s id is not usable as an `after` afterwards', async () => {
     const f = fixture();
     await f.deliver(item('a', 'q1', null));

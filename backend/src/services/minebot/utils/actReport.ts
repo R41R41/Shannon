@@ -62,6 +62,8 @@ export interface ActReport {
   doneMet?: string;
   /** Continue contracts (1): how the act ended on the two axes (the life is put in when it is rendered). */
   outcome?: { goal: GoalOutcome; end: RunEnd; cutBy?: CutBy };
+  /** A-6 (5): the life number when the act began; the outcome's `life` is this, not the life the act is rendered in (a death in between does not change it). */
+  life?: number;
   /** Continue contracts (4): the reflex this act took the body over from. */
   handover?: Handover;
   /** Continue contracts (3): every inventory event of this act, in delivery order (`deliverySeq` 0 up); the receipt carries as many as fit. */
@@ -144,7 +146,7 @@ export function renderActReport(bot: any, report: ActReport, note?: string | nul
   const at = feetCell(bot) ?? { x: 0, y: 0, z: 0 };
   let stoppedWhy = report.stoppedWhy;
   if (report.stoppedBy === 'reflex') stoppedWhy = clip(`${note ? note.replace(/^［体の反射: |］$/gu, '') : stoppedWhy ?? '反射'} 今 (${at.x},${at.y},${at.z})`, 200);
-  const life = lifeOf(bot)?.number ?? 0;
+  const life = report.life ?? lifeOf(bot)?.number ?? 0;
   const outcome: ActOutcome | undefined = report.outcome ? { ...report.outcome, life } : undefined;
   const result: Record<string, unknown> = {
     v: 1, ok: report.ok, done: report.done, of: report.of,

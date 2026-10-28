@@ -8,6 +8,7 @@ import { bodyReader, cellKey, facingOfYaw, feetCell, noteMapStop, type Cell, typ
 import { aroundText, clip, closedWord, keepActReport, renderActReport, stoppedLine, type ActReport, type HandLine, type HandStatus, type StoppedBy } from '../utils/actReport.js';
 import { aggregateGoal, isReliable, type GoalOutcome, type InventoryEvent, type Progress } from '../integration/commonFca/continueContract.js';
 import { actContextOf } from '../utils/actContext.js';
+import { lifeOf } from '../utils/life.js';
 import { handReasons, SELF_COUNTING, trackPack } from '../utils/packEvents.js';
 import { cutByOf, finishedVerdict, numberEvents, stoppedFromOutside, type HandVerdict } from '../utils/handOutcome.js';
 import { blockAt, cellNow, freeSlots, inventoryCount, resolvePosition, StepStopped, wait, type PositionSpec, type StepContext, type StepOutcome } from '../utils/primitives/common.js';
@@ -375,7 +376,7 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
   const facing: Facing = (['north', 'east', 'south', 'west'] as const).find(name => name === facingName) ?? facingOfYaw(Number(bot.entity?.yaw ?? 0));
   // Task queue: the hand list may be run up to `repeat` times, and `done` ends the act ok where it holds (the head's contract; both optional).
   const passes = Math.max(1, Math.min(8, Math.floor(options.repeat ?? 1)));
-  const report: ActReport = { startedAt, lines: [], ok: false, done: 0, of: hands.length * passes };
+  const report: ActReport = { startedAt, lines: [], ok: false, done: 0, of: hands.length * passes, life: lifeOf(bot)?.number ?? 0 };
   const doneWhen = options.done ?? null;
   const holdsDone = () => { try { return !!doneWhen && conditionHolds(bot, doneWhen); } catch { return false; } };
   let doneMet = false, pass = 1, completedPasses = 0, dug = 0;
