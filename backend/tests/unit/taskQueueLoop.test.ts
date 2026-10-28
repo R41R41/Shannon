@@ -441,17 +441,16 @@ describe('after a failure: what names nothing is dropped, what names others stay
       return { ok, words: ok ? '' : '足りない', ...(!ok && groups.some(group => group.includes(null)) ? { unknown: true } : {}) };
     };
     expect(check(waiting.q13.pre).ok).toBe(scene.expected.preComputed.q13);
-    expect(check(waiting.q13b.pre).ok).toBe(scene.expected.preComputed.q13b);
-    expect(check(waiting.q13c.pre)).toMatchObject({ ok: false, unknown: true });
-    // The sample calls two items q13b and q13c; the body's item ids are q and a number (bodyQueue's ENVELOPE refuses these two as a shape), so they are q131 and q132 here.
-    const id = (name: string) => ({ q13b: 'q131', q13c: 'q132' } as Record<string, string>)[name] ?? name;
-    // (the sample's chain is q12, q13, q13b, q13c, q14, q15; a queue holds three, so each part of it starts again behind q12 or behind the item it names)
+    expect(check(waiting.q131.pre).ok).toBe(scene.expected.preComputed.q131);
+    expect(check(waiting.q132.pre)).toMatchObject({ ok: false, unknown: true });
+    const id = (name: string) => name;
+    // (the sample's chain is q12, q13, q131, q132, q14, q15; a queue holds three, so each part of it starts again behind q12 or behind the item it names)
     const make = (name: string, after: string = waiting[name].after) => item(id(name), id(name), id(after), { ...(waiting[name].dependsOn ? { dependsOn: waiting[name].dependsOn.map(id) } : {}), ...(waiting[name].pre ? { pre: waiting[name].pre } : {}) });
     const running = (name: string) => item(name, name, null);
 
-    // q12 fails with q13 and q13b waiting behind it (a queue holds three at a time): q13 starts, and when it is done q13b is not started.
+    // q12 fails with q13 and q131 waiting behind it (a queue holds three at a time): q13 starts, and when it is done q131 is not started.
     const f = fixture({ check });
-    await f.deliver(running('q12'), make('q13'), make('q13b'));
+    await f.deliver(running('q12'), make('q13'), make('q131'));
     f.running.get('q12')!.finish({ outcome: 'failed', failureType: 'stuck' }); await tick(2);
     expect(f.started.map(entry => entry.id)).toEqual(['q12', 'q13']);
     f.running.get('q13')!.finish(); await tick(2);
@@ -459,15 +458,15 @@ describe('after a failure: what names nothing is dropped, what names others stay
     const out = await f.receipts();
     expect(out.q12!.unit).toMatchObject({ goal: 'failed', end: 'finished', released: true });
     expect(out.q13!.unit).toMatchObject({ goal: 'done', end: 'finished', startedAt: expect.any(String), keptDespite: scene.expected.q13.keptDespite });
-    expect(out.q131).toMatchObject({ outcome: 'failed', failureType: scene.expected.q13b.failureType, inputsReleased: true, unit: { goal: 'not_started', end: 'not_run' } });
+    expect(out.q131).toMatchObject({ outcome: 'failed', failureType: scene.expected.q131.failureType, inputsReleased: true, unit: { goal: 'not_started', end: 'not_run' } });
     expect(out.q131!.unit?.droppedBecause).toBeUndefined();
 
     // The one whose pre cannot be judged is not started either, and says so.
     const g = fixture({ check });
-    await g.deliver(running('q12'), make('q13c', 'q12'));
+    await g.deliver(running('q12'), make('q132', 'q12'));
     g.running.get('q12')!.finish({ outcome: 'failed', failureType: 'stuck' }); await tick(2);
     expect(g.started.map(entry => entry.id)).toEqual(['q12']);
-    expect((await g.receipts()).q132).toMatchObject({ outcome: 'failed', failureType: scene.expected.q13c.failureType, unit: { goal: 'not_started', end: 'not_run' } });
+    expect((await g.receipts()).q132).toMatchObject({ outcome: 'failed', failureType: scene.expected.q132.failureType, unit: { goal: 'not_started', end: 'not_run' } });
 
     // q14 names nothing and q15 names q12: both are dropped, naming the item that stopped.
     const h = fixture({ check });
