@@ -23,6 +23,7 @@ import { randomUUID } from 'node:crypto';
 import { Vec3 } from 'vec3';
 import { createProbeBot, closeProbeBot } from '../src/services/minebot/testing/MinecraftProbeBot.js';
 import { NativeCommonFcaBody } from '../src/services/minebot/integration/commonFca/nativeBody.js';
+import { madeStamp } from './lab/madeStamp.js';
 
 const port = Number(process.env.MINECRAFT_HANDS_PORT);
 const worldDirectory = process.env.MINECRAFT_HANDS_WORLD_DIRECTORY ?? '';
@@ -210,7 +211,7 @@ class Scene {
     const before = { server: await posServer(), pack: await packServer(this.watch), client: packClient(), hp: Number(actor.health), dig: actor.dig, place: actor.placeBlock };
     const id = `hands-${++commandNumber}`;
     const command: any = { schemaVersion: 1, id, serverId: 'hands-live-probe', connectionId: 'hands-live', kind: 'skill', skill: 'act', arguments: input,
-      context, lease: { id: 'hands-lease', generation: 1, holder: 'hands-task' }, deadlineAt: new Date(Date.now() + seconds * 1000).toISOString() };
+      context: { ...context, ...madeStamp(body) }, lease: { id: 'hands-lease', generation: 1, holder: 'hands-task' }, deadlineAt: new Date(Date.now() + seconds * 1000).toISOString() };
     const controller = new AbortController();
     const watchdog = setTimeout(() => controller.abort('probe_watchdog'), (seconds + 20) * 1000);
     const started = Date.now();

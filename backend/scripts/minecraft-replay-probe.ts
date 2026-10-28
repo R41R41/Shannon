@@ -22,6 +22,7 @@ import { NativeCommonFcaBody } from '../src/services/minebot/integration/commonF
 import { ensureReflexLedger } from '../src/services/minebot/utils/reflexLedger.js';
 import { installIncidents } from '../src/services/minebot/utils/incidents.js';
 import { SceneSaver } from '../src/services/minebot/utils/sceneSave.js';
+import { madeStamp } from './lab/madeStamp.js';
 
 const port = Number(process.env.MINECRAFT_REPLAY_PORT);
 const worldDirectory = process.env.MINECRAFT_REPLAY_WORLD_DIRECTORY ?? '';
@@ -236,7 +237,7 @@ try {
       searches = []; motion = [];
       const id = `replay-${c.name}-${act.label}`;
       const command: any = { schemaVersion: 1, id, serverId: 'replay-probe', connectionId: 'replay', kind: 'skill', skill: 'act', arguments: act.arguments,
-        context: { scopeKey: 'replay', taskId: 'replay-task', taskRevision: 1, bodyId: 'minecraft:replay-probe', sessionId: 'replay-session', generation: 1, goal: 'replay', completionCondition: 'none' },
+        context: { scopeKey: 'replay', taskId: 'replay-task', taskRevision: 1, bodyId: 'minecraft:replay-probe', sessionId: 'replay-session', generation: 1, goal: 'replay', completionCondition: 'none', ...madeStamp(body) },
         lease: { id: 'replay-lease', generation: 1, holder: 'replay-task' }, deadlineAt: new Date(Date.now() + act.seconds * 1000).toISOString() };
       for (const command of act.before ?? []) { const answer = await ask(command); if (BAD.test(answer)) warnings.push(`${command} => ${answer.slice(0, 100)}`); }
       const ledger = ensureReflexLedger(actor);

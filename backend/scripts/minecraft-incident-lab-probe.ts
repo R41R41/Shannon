@@ -22,6 +22,7 @@ import { NativeCommonFcaBody } from '../src/services/minebot/integration/commonF
 import { blackBoxOf } from '../src/services/minebot/utils/blackbox.js';
 import { installIncidents } from '../src/services/minebot/utils/incidents.js';
 import { SceneSaver, selfNames } from '../src/services/minebot/utils/sceneSave.js';
+import { madeStamp } from './lab/madeStamp.js';
 
 const port = Number(process.env.MINECRAFT_INCIDENT_PORT);
 const worldDirectory = process.env.MINECRAFT_INCIDENT_WORLD_DIRECTORY ?? '';
@@ -74,7 +75,7 @@ async function act(body: NativeCommonFcaBody, args: Record<string, unknown>, inc
   const id = `incident-lab-${++commandNumber}`;
   const command: any = { schemaVersion: 1, id, serverId: 'incident-lab', connectionId: 'incident-lab', kind: 'skill', skill: 'act', arguments: args,
     context: { scopeKey: 'lab', taskId: TASK, taskRevision: 1, bodyId: 'minecraft:incident-lab', sessionId: 'incident-session', generation: 1, goal: 'lab', completionCondition: 'none',
-      ...(incident ? { incident } : {}) },
+      ...madeStamp(body), ...(incident ? { incident } : {}) },
     lease: { id: 'incident-lease', generation: 1, holder: TASK }, deadlineAt: new Date(Date.now() + seconds * 1000).toISOString() };
   const started = Date.now();
   const receipt: any = await body.execute(command, new AbortController().signal);
