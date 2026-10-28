@@ -9,7 +9,7 @@ import type { ReflexLedger } from '../../utils/reflexLedger.js';
 import { activeActionCapabilities, cancelIdleActions, currentAction, cancelNonSurvivalActions, createMotorPort, executeAction,
   hasActiveSafetyLease, physicalActionBusy, safetyLeaseCapabilities, withActionSignal } from '../../execution/ActionExecution.js';
 import { bodySkillCatalog, isDragonGoal, type BodySkill } from './skillCatalog.js';
-import type { BodyCandidateDraft, BodyObservation, BodyValue } from './bodyControlContract.js';
+import type { BodyCandidateDraft, BodyObservation, BodyTaskContext, BodyValue } from './bodyControlContract.js';
 import type { MinecraftControlCommand as Command, MinecraftControlReceipt as Receipt, MinecraftQueueProgress } from './minecraftControlContract.js';
 import { conditionHolds, conditionUndecidable, conditionWords, type ActCondition } from '../../utils/actConditions.js';
 import type { CommonFcaActuator } from './controlLoop.js';
@@ -243,6 +243,15 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
   async cancelIncident(id: string): Promise<HoldRelease> { return (await incidentsOf(this.bot)?.cancel(id)) ?? NO_INCIDENTS; }
   /** Run 44, resume 1: the operator resumed a held task: the head's release ends the hold and moves the world before the act is sent again. */
   async resumeIncident(id: string): Promise<HoldRelease> { return (await incidentsOf(this.bot)?.resume(id)) ?? NO_INCIDENTS; }
+  /** Amendment A-12 (body): the head found a stall and asks for the hold (a release with `context.incident.take`): the world stopped, the box with its notes, the scene, the hold. */
+  async takeIncident(context: BodyTaskContext): Promise<(HoldRelease & { held?: boolean; frozen?: boolean | null; freeze?: string; notHeld?: string; box?: string | null; scene?: string | null; again?: boolean }) | null> {
+    const taken = await incidentsOf(this.bot)?.take(context as never);
+    if (!taken) return null;
+    const incident = taken.incident;
+    return { done: taken.done, hold: taken.hold, unfreeze: null, held: incident ? incident.held : taken.hold !== null, frozen: incident ? incident.frozen : taken.hold !== null ? true : null,
+      ...(incident?.freeze ? { freeze: incident.freeze } : {}), ...(incident?.notHeld ? { notHeld: incident.notHeld } : {}),
+      box: incident ? incident.box : null, scene: incident ? incident.scene : null, ...(taken.again ? { again: true } : {}) };
+  }
   /** Task queue: how far the running act is, or null when none has begun a hand. */
   progress(): Omit<MinecraftQueueProgress, 'id'> | null { return this.running > 0 ? this.stepProgress : null; }
   private now() { return (this.options.now ?? Date.now)(); }
@@ -475,8 +484,15 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
       }
       // 2026-10-28: a task held on a heavy failure runs no act until the resume that names the hold (utils/incidents).
       const incidents = command.kind === 'skill' && capability === 'act' ? incidentsOf(this.bot) : null;
+      // Amendment A-12 (body): an act that carries the head's take holds the task first (the act is then refused as held, with the incident in the receipt); a world that cannot be stopped
+      // is not held: the act runs, and its receipt carries the incident (`notHeld`).
+      const taken = incidents && (command.context as { incident?: { take?: unknown } } | undefined)?.incident?.take ? await incidents.take(command.context as never).catch(() => null) : null;
       const heldWords = incidents ? await incidents.beforeAct(command.context as never) : null;
-      if (heldWords) { this.notRun(command); return this.receipt(command, 'failed', true, heldWords, undefined, { failureType: 'held', recoverable: false }); }
+      if (heldWords) {
+        this.notRun(command);
+        const words = taken?.incident ? withIncidentText(JSON.stringify({ held: heldWords }), taken.incident) : heldWords;
+        return this.receipt(command, 'failed', true, words, undefined, { failureType: 'held', recoverable: false });
+      }
       try {
       const actStartedAt = Date.now();
       // Continue contracts (3, 8): what the act knows of the command (ids for its events, where each hand began, the lapses before each hand).
@@ -534,7 +550,7 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
         if (!/"eventsMore"/u.test(text)) this.eventStore.markComplete(command.id);
         // 2026-10-28: an act that did not succeed writes the black box (a heavy one also the scene, and holds a task that asked for it); the
         // receipt says which (`incident`), so that the head can hold the task and the operator can find the files.
-        const incident = incidents ? await incidents.afterAct(command, act, Date.now() - actStartedAt).catch(() => null) : null;
+        const incident = (incidents ? await incidents.afterAct(command, act, Date.now() - actStartedAt).catch(() => null) : null) ?? taken?.incident ?? null;
         text = withIncidentText(text, incident);
         if (outcome === 'failed' && !failure) failure = { failureType: act.failureType ?? 'failed', recoverable: true };
         if (outcome === 'failed' && act.stoppedBy === 'reflex') failure = { failureType: 'interrupted_by_reflex', recoverable: true };

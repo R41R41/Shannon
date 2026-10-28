@@ -7,6 +7,7 @@
 // Env (scripts/lab/run-continue-lab.sh): MINECRAFT_CONTINUE_NO_LLM=true, MINECRAFT_CONTINUE_PORT, MINECRAFT_CONTINUE_WORLD_DIRECTORY,
 // MINECRAFT_CONTINUE_OUT, MINECRAFT_CONTINUE_REPORT, MINECRAFT_CONTINUE_SCENES (comma list of scene names), SHANNON_BODY_REV, MINECRAFT_PROBE_FLOOR=default.
 import fs from 'node:fs';
+import zlib from 'node:zlib';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { createProbeBot, closeProbeBot } from '../src/services/minebot/testing/MinecraftProbeBot.js';
@@ -92,14 +93,14 @@ function made(body: NativeCommonFcaBody, over: Record<string, unknown> = {}) {
   const madeIn = { life: s.life.life, dim: s.life.dimension, dimSince: s.life.dimensionSince, bodyBoot: s.bodyRun.bodyBoot, connectionId: s.bodyRun.connectionId, headBoot: 'hb-lab', obsSeq: observation.sequence, ...over };
   return { life: madeIn.life as number, headBoot: 'hb-lab', madeIn };
 }
-function commandOf(body: NativeCommonFcaBody, args: Record<string, unknown>, options: { stamp?: ReturnType<typeof made>; seconds?: number; skill?: string; id?: string } = {}): any {
+function commandOf(body: NativeCommonFcaBody, args: Record<string, unknown>, options: { stamp?: ReturnType<typeof made>; seconds?: number; skill?: string; id?: string; incident?: Record<string, unknown> } = {}): any {
   const id = options.id ?? `lab:q${++commandNumber}`;
   return { schemaVersion: 1, id, serverId: 'continue-lab', connectionId: 'lab-connection-1', kind: 'skill', skill: options.skill ?? 'act', arguments: args,
     context: { scopeKey: 'lab', taskId: 'continue-lab-task', taskRevision: 1, bodyId: 'minecraft:continue-lab', sessionId: 'continue-session', generation: 1, goal: 'lab', completionCondition: 'none',
-      ...(options.stamp ?? made(body)) },
+      ...(options.stamp ?? made(body)), ...(options.incident ? { incident: options.incident } : {}) },
     lease: { id: 'continue-lease', generation: 1, holder: 'continue-lab-task' }, deadlineAt: new Date(Date.now() + (options.seconds ?? 90) * 1000).toISOString() };
 }
-async function act(body: NativeCommonFcaBody, args: Record<string, unknown>, options: { stamp?: ReturnType<typeof made>; seconds?: number; signal?: AbortSignal; id?: string; skill?: string } = {}) {
+async function act(body: NativeCommonFcaBody, args: Record<string, unknown>, options: { stamp?: ReturnType<typeof made>; seconds?: number; signal?: AbortSignal; id?: string; skill?: string; incident?: Record<string, unknown> } = {}) {
   const command = commandOf(body, args, options);
   const started = Date.now();
   outbox.push(command);
@@ -321,6 +322,62 @@ try {
       report.capThenKind = { cappedAt: null, health: actor.health };
       check('A-6 (10) cap: the melee reflex reached its cap against an enemy with a thousand health', false, JSON.stringify(report.capThenKind));
     }
+    await reset(actor);
+  }
+
+  // ---- A-12 (body): the head asks for a hold (incident.take): the world stops, the box holds the notes, the resume brings the world back
+  if (runs('head_take')) {
+    await reset(actor);
+    const gameTime = async (): Promise<number | null> => { const text = await ask('time query gametime'); const m = /(\d+)/u.exec(text.replace(/§./gu, '')); return m ? Number(m[1]) : null; };
+    const releaseWith = async (incident: Record<string, unknown>) => {
+      const id = 'lab:release' + (++commandNumber);
+      const context = { scopeKey: 'lab', taskId: 'continue-lab-task', taskRevision: 1, bodyId: 'minecraft:continue-lab', sessionId: 'continue-session', generation: 1, goal: 'lab', completionCondition: 'none', incident };
+      outbox.push({ schemaVersion: 1, id, serverId: 'continue-lab', connectionId: 'lab-connection-1', kind: 'release', context, stop: { context, requestId: id, reason: 'cancel' },
+        lease: { id: 'continue-lease', generation: 1, holder: 'continue-lab-task' }, deadlineAt: new Date(Date.now() + 30_000).toISOString() });
+      const until = Date.now() + 20_000;
+      while (!receipts.has(id) && Date.now() < until) await sleep(15);
+      const receipt = receipts.get(id);
+      let parsed: any = null; try { parsed = JSON.parse(receipt?.result ?? ''); } catch { parsed = null; }
+      return { receipt, incident: parsed?.incident ?? null };
+    };
+    const headId = 'head:node_stalled:lab:' + Date.now();
+    const notes = Array.from({ length: 25 }, (_, index) => 'decision row ' + index + ': lab note');
+    const t0 = await gameTime(); await sleep(1500); const t1 = await gameTime();
+    check('the lab world runs before the hold (game time advances)', t0 !== null && t1 !== null && t1 > t0, JSON.stringify([t0, t1]));
+    const taken = await releaseWith({ take: { id: headId, why: 'lab: node p3 did not move for 120 s', notes } });
+    const held = (body.observe().state as any).incidentHold;
+    const t2 = await gameTime(); await sleep(2000); const t3 = await gameTime();
+    const holdFile = path.join(out, 'hold.json');   // (the file the probe gives installIncidents)
+    const holdWritten = fs.existsSync(holdFile) ? JSON.parse(fs.readFileSync(holdFile, 'utf8')) : null;
+    let boxHead: any = null;
+    try { boxHead = JSON.parse(zlib.gunzipSync(fs.readFileSync(taken.incident.box)).toString('utf8')).head; } catch { boxHead = null; }
+    const sceneJson = taken.incident?.scene && fs.existsSync(path.join(taken.incident.scene, 'scene.json'));
+    report.headTake = { receipt: taken.receipt?.outcome, incident: taken.incident, observed: held, holdWritten, gameTimes: [t2, t3], boxHead: boxHead ? { id: boxHead.id, why: boxHead.why, notes: boxHead.notes?.length, first: boxHead.notes?.[0], last: boxHead.notes?.at(-1) } : null, scene: !!sceneJson };
+    check('A-12 head take: the body holds the task and says what it kept (done, held, frozen, the box and the scene)', taken.receipt?.outcome === 'completed' && taken.incident?.op === 'take' && taken.incident?.done === true && taken.incident?.held === true && taken.incident?.frozen === true && !!taken.incident?.box && !!taken.incident?.scene,
+      JSON.stringify(taken.incident));
+    check('A-12 head take: the world stops (game time does not advance), the hold is in the observation and in incident-hold.json under the head\'s id', t2 !== null && t3 === t2 && held?.id === headId && holdWritten?.id === headId, JSON.stringify({ t2, t3, held, holdWritten: holdWritten?.id }));
+    check('A-12 head take: the box holds the head\'s reason and the last 20 of its 25 notes, and the scene was saved', boxHead?.id === headId && boxHead?.notes?.length === 20 && boxHead.notes[0] === notes[5] && boxHead.notes.at(-1) === notes[24] && sceneJson === true, JSON.stringify(report.headTake).slice(0, 400));
+    const refused = await act(body, { hands: [{ do: 'wait', seconds: 0.1 }] });
+    check('A-12 head take: an act of the held task is refused as held, and no hand moves', refused.receipt.failureType === 'held' && refused.receipt.bodyTimes?.motorOps === undefined, JSON.stringify([refused.receipt.failureType, refused.receipt.result]).slice(0, 200));
+    const other = await releaseWith({ resume: 'head:not-this-one' });
+    check('A-12 head take: a resume that names another id changes nothing (done false, the hold stays)', other.incident?.done === false && other.incident?.hold === headId && (body.observe().state as any).incidentHold?.id === headId, JSON.stringify(other.incident));
+    const resumed = await releaseWith({ resume: headId });
+    const t4 = await gameTime(); await sleep(1500); const t5 = await gameTime();
+    const after = await act(body, { hands: [{ do: 'wait', seconds: 0.2 }] });
+    report.headResume = { incident: resumed.incident, gameTimes: [t4, t5], hold: (body.observe().state as any).incidentHold ?? null, holdFile: fs.existsSync(holdFile), act: after.receipt.outcome };
+    check('A-12 head take: the resume brings the world back (game time advances), clears the hold file and the observation, and the task\'s acts run again', resumed.incident?.done === true && resumed.incident?.hold === null && t4 !== null && t5 !== null && t5 > t4 && !fs.existsSync(holdFile) && !((body.observe().state as any).incidentHold) && after.receipt.outcome === 'completed',
+      JSON.stringify(report.headResume).slice(0, 300));
+    const nothing = await releaseWith({ resume: 'head:nothing-held' });
+    check('a resume when the body holds nothing is done (true) and moves nothing wrong', nothing.receipt?.outcome === 'completed' && nothing.incident?.done === true && nothing.incident?.hold === null, JSON.stringify(nothing.incident));
+    // the take on an act: refused as held with the incident in the receipt, then resumed
+    const actId = 'head:wait_loop:lab:' + Date.now();
+    const withTake = await act(body, { hands: [{ do: 'wait', seconds: 0.1 }] }, { incident: { take: { id: actId, why: 'lab: wait loop', notes: ['a', 'b'] } } });
+    const t6 = await gameTime(); await sleep(1500); const t7 = await gameTime();
+    check('A-12 head take: an act that carries the take is refused as held with the incident in its receipt, and the world is stopped', withTake.receipt.failureType === 'held' && withTake.parsed?.incident?.held === true && withTake.parsed.incident.id === actId && t6 === t7, JSON.stringify([withTake.receipt.failureType, withTake.parsed?.incident, t6, t7]).slice(0, 300));
+    const resumed2 = await releaseWith({ resume: actId });
+    check('A-12 head take: and its resume brings the world back', resumed2.incident?.done === true && !(body.observe().state as any).incidentHold, JSON.stringify(resumed2.incident));
+    produce('measure/head-take', null, { output: { take: report.headTake, resume: report.headResume, actTake: withTake.parsed?.incident ?? null, resumeNothing: nothing.incident } });
+    await ask('tick unfreeze');
     await reset(actor);
   }
 

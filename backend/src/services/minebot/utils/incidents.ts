@@ -35,7 +35,7 @@ const ASKED_FOR_MS = 10 * 60_000;
 /** A fall of health this big within SHARP_MS writes the box (and at NEAR_DEATH or a death, the scene). */
 const SHARP_HP = 6, SHARP_MS = 5_000;
 
-export interface Incident { id: string; kind: 'act' | 'health' | 'death'; heavy: boolean; why: string; box: string | null; scene: string | null; held: boolean; frozen: boolean | null; freeze?: string;
+export interface Incident { id: string; kind: 'act' | 'health' | 'death' | 'head'; heavy: boolean; why: string; box: string | null; scene: string | null; held: boolean; frozen: boolean | null; freeze?: string;
   /** A hold that was asked for and not made: the world could not be stopped (the freeze's words). */
   notHeld?: string;
   /**
@@ -52,7 +52,21 @@ export interface Hold { id: string; task: string; at: string; frozen: boolean; f
  * server's words for `tick unfreeze` (sent unless another hold is kept).
  */
 export interface HoldRelease { done: boolean; hold: string | null; unfreeze: string | null }
-interface Context { taskId?: string; incident?: { hold?: boolean; resume?: string; cancel?: string } }
+/** Amendment A-12 (body): a hold the head asks for (`context.incident.take`): its own id, the reason in the operator's words, and the last rows of its decision record (at most TAKE_NOTES). */
+export interface IncidentTakeInput { id: string; why: string; notes?: string[] }
+export const TAKE_NOTES = 20;
+/** What a take did: `done` when the body keeps the hold (or the incident is written without a hold: `held` false and `notHeld` says why), false when another hold is kept (`hold`). */
+export interface IncidentTake { done: boolean; hold: string | null; incident: Incident | null; again?: boolean }
+interface Context { taskId?: string; incident?: { hold?: boolean; resume?: string; cancel?: string; take?: IncidentTakeInput } }
+/** The file-safe form of an id (the box's file name and the scene's directory): the hold itself keeps the id the head gave. */
+const fileSafe = (id: string): string => id.replace(/[^A-Za-z0-9_.-]/gu, '_').slice(0, 100);
+/** The take as the head sent it, checked: an id (1 to 150 characters) and a reason; the notes are the last TAKE_NOTES lines, each cut at 400 characters. Null when it is not one. */
+export function readTake(value: unknown): IncidentTakeInput | null {
+  const take = value as Partial<IncidentTakeInput> | null | undefined;
+  if (!take || typeof take.id !== 'string' || take.id.length < 1 || take.id.length > 150 || typeof take.why !== 'string') return null;
+  const notes = Array.isArray(take.notes) ? take.notes.filter((line): line is string => typeof line === 'string').slice(-TAKE_NOTES).map(line => line.slice(0, 400)) : [];
+  return { id: take.id, why: take.why.slice(0, 400), ...(notes.length ? { notes } : {}) };
+}
 
 /**
  * The heavy failures a hold stops for (2026-10-28, the coordinator's choice): a go stuck, out of search time or at its time with few steps, 60 s or
@@ -206,6 +220,43 @@ export class Incidents {
   }
 
   /**
+   * Amendment A-12 (body): the head found a stall itself (`context.incident.take` = { id, why, notes? } on a release or an act) and asks the body to hold the task as it holds for
+   * a heavy failure: the world is stopped first (`/tick freeze`, never with anyone else on the server), then the scene is saved and the box written (with the head's reason and
+   * the rows of its decision record), then the hold is kept (and written to the hold file) under the head's own id, which the head's resume and cancel name. A world that cannot be
+   * stopped is not held (the box and the scene are taken, `notHeld` says why). The same take again is the same hold; a take while another hold is kept changes nothing.
+   */
+  async take(context: Context | undefined): Promise<IncidentTake | null> {
+    const take = readTake(context?.incident?.take);
+    if (!take) return null;
+    const hold = this.hold;
+    if (hold) {
+      if (hold.id === take.id) return { done: true, hold: hold.id, incident: null, again: true };
+      log.warn(`保留の頼み ${take.id} が来たが、体は保留 ${hold.id} を持っている: そのまま`);
+      return { done: false, hold: hold.id, incident: null };
+    }
+    const task = context?.taskId ?? 'no-task';
+    const feet = this.bot.entity?.position;
+    const start: [number, number, number] | null = feet ? [Math.round(feet.x * 100) / 100, Math.round(feet.y * 100) / 100, Math.round(feet.z * 100) / 100] : null;
+    const box = this.box();
+    if (box && context?.taskId) box.task = context.taskId;
+    // The world is stopped first, so that the scene saved next is the moment of the stall.
+    const freeze = this.options.scene ? await this.options.scene.freeze() : { frozen: false, why: 'no_scene_port' };
+    const written = await this.write('head', true, take.why, undefined, { id: fileSafe(take.id), head: { id: take.id, why: take.why, ...(take.notes ? { notes: take.notes } : {}) } });
+    if (!written) return { done: true, hold: null, incident: null };
+    const incident: Incident = { ...written, id: take.id };
+    if (!freeze.frozen) {
+      log.warn(`⏵ 頭の頼みを保留しなかった ${take.id}（${take.why}）: 世界を止められない（${freeze.why}）。黒箱と現場は取った`);
+      box?.note('hold_skipped', { id: take.id, freeze: freeze.why, head: true });
+      return { done: true, hold: null, incident: { ...incident, held: false, frozen: false, freeze: freeze.why, notHeld: freeze.why } };
+    }
+    this.hold = { id: take.id, task, at: new Date(this.now()).toISOString(), frozen: true, freeze: freeze.why, command: '', why: take.why, start };
+    try { await fs.promises.mkdir(path.dirname(this.options.holdFile), { recursive: true }); await fs.promises.writeFile(this.options.holdFile, JSON.stringify(this.hold)); } catch { /* held in memory */ }
+    log.warn(`⏸ 頭の頼みで保留した ${take.id}（${take.why}）。世界を止めた`);
+    box?.note('hold', { id: take.id, frozen: true, freeze: freeze.why, head: true });
+    return { done: true, hold: take.id, incident: { ...incident, held: true, frozen: true, freeze: freeze.why } };
+  }
+
+  /**
    * A held task cancelled by the operator (the head sends a release with `context.incident.cancel`): the world moves again and the hold ends.
    * `done` when it was this hold, or when there was none (the world is moved anyway: it may have been stopped by hand).
    */
@@ -270,16 +321,16 @@ export class Incidents {
   }
 
   /** The box, and for a heavy one the scene under the same id. */
-  private async write(kind: Incident['kind'], heavy: boolean, why: string, act?: unknown): Promise<Incident | null> {
+  private async write(kind: Incident['kind'], heavy: boolean, why: string, act?: unknown, given?: { id: string; head?: unknown }): Promise<Incident | null> {
     const box = this.box();
-    const id = `${new Date(this.now()).toISOString().replace(/[-:.]/gu, '').slice(0, 15)}-${kind}-${Math.random().toString(36).slice(2, 7)}`;
+    const id = given?.id ?? `${new Date(this.now()).toISOString().replace(/[-:.]/gu, '').slice(0, 15)}-${kind}-${Math.random().toString(36).slice(2, 7)}`;
     let scene: SceneResult | null = null;
     const p = this.bot.entity?.position;
     if (heavy && this.options.scene && p) {
       try { scene = await this.options.scene.save(id, [Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)], String(this.bot.game?.dimension ?? 'overworld'), { box: id, why, task: box?.task ?? null }); }
       catch (error) { log.warn(`現場を保存できなかった ${id}: ${String((error as Error)?.message ?? error).slice(0, 100)}`); }
     }
-    const written = box ? await box.dump(kind, why, { id, ...(act !== undefined ? { act } : {}), scene: scene?.ok ? scene.id : null }) : null;
+    const written = box ? await box.dump(kind, why, { id, ...(act !== undefined ? { act } : {}), ...(given?.head !== undefined ? { head: given.head } : {}), scene: scene?.ok ? scene.id : null }) : null;
     const end: [number, number, number] | null = p ? [Math.round(p.x * 100) / 100, Math.round(p.y * 100) / 100, Math.round(p.z * 100) / 100] : null;
     return { id, kind, heavy, why, box: written?.file ?? null, scene: scene?.ok ? scene.dir : null, held: false, frozen: null, start: kind === 'act' ? this.startFeet : null, end };
   }

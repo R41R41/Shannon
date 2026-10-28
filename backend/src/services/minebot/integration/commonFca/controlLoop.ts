@@ -12,8 +12,8 @@ import { startVerdict, type BodyTimes, type BodyVersion, type CutBy, type ItemOu
 import type { Lapse } from './lapse.js';
 import type { ActCondition } from '../../utils/actConditions.js';
 
-/** What a release naming a hold did (`utils/incidents` HoldRelease): said in the release's receipt as `{"incident": {...}}`. */
-export interface IncidentRelease { done: boolean; hold: string | null; unfreeze: string | null }
+/** What a release naming a hold did (`utils/incidents` HoldRelease): said in the release's receipt as `{"incident": {...}}`. A take (A-12 body) also says what it kept: `held`, `frozen`, `freeze`, `notHeld`, `box`, `scene`. */
+export interface IncidentRelease { done: boolean; hold: string | null; unfreeze: string | null; held?: boolean; frozen?: boolean | null; freeze?: string; notHeld?: string; box?: string | null; scene?: string | null; again?: boolean }
 export interface CommonFcaActuator {
   observe(): BodyObservation;
   candidates(observation: BodyObservation): readonly BodyCandidateDraft[];
@@ -33,6 +33,8 @@ export interface CommonFcaActuator {
   cancelIncident?(id: string): Promise<IncidentRelease>;
   /** Run 44, resume 1: a release that names a hold to resume (`context.incident.resume`), sent by the head before the held act goes again. */
   resumeIncident?(id: string): Promise<IncidentRelease>;
+  /** Amendment A-12 (body): a release that carries `context.incident.take` (the head found a stall): the body holds the task under the head's id. */
+  takeIncident?(context: BodyTaskContext): Promise<IncidentRelease | null>;
   /** Continue contracts: the connection and head ids the lapses are checked against, the body's version, a death, a cleanup under way, an acknowledged receipt. */
   bindConnection?(connectionId: string): void;
   noteHead?(headBoot: string): void;
@@ -545,8 +547,15 @@ export class CommonFcaControlLoop {
       ...(command.stop ? { stop: { bodyId: command.context.bodyId, sessionId: command.context.sessionId,
         generation: command.context.generation, requestId: command.stop.requestId, state: released ? 'stopped' : 'unknown', inputsReleased: released, observedAt } } : {}) };
   }
-  private async incidentRelease(context: BodyTaskContext | undefined): Promise<(IncidentRelease & { op: 'cancel' | 'resume'; id: string }) | null> {
-    const named = (context as { incident?: { cancel?: unknown; resume?: unknown } } | undefined)?.incident;
+  private async incidentRelease(context: BodyTaskContext | undefined): Promise<(IncidentRelease & { op: 'cancel' | 'resume' | 'take'; id: string }) | null> {
+    const named = (context as { incident?: { cancel?: unknown; resume?: unknown; take?: { id?: unknown } } } | undefined)?.incident;
+    if (named?.take && typeof named.take === 'object') {
+      const id = String(named.take.id ?? '');
+      const run = this.options.actuator.takeIncident;
+      if (!run) return { op: 'take', id, done: false, hold: null, unfreeze: 'no_incidents' };
+      try { return { op: 'take', id, ...((await run.call(this.options.actuator, context!)) ?? { done: false, hold: null, unfreeze: 'bad_take' }) }; }
+      catch (error) { return { op: 'take', id, done: false, hold: null, unfreeze: `failed:${String((error as Error)?.message ?? error).slice(0, 60)}` }; }
+    }
     const op = typeof named?.resume === 'string' && named.resume ? 'resume' : typeof named?.cancel === 'string' && named.cancel ? 'cancel' : null;
     if (!op) return null;
     const id = String(named![op]);

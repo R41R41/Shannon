@@ -47,6 +47,8 @@ export interface BlackBoxDump {
     armor: Array<{ slot: number; name: string; durabilityUsed?: number }>; yaw: number | null; pitch: number | null };
   act?: unknown; window: { from: number; to: number }; ticks: TickRow[]; events: BoxEvent[]; near: NearRow[]; reflexes: unknown[]; stats: BlackBoxStats;
   scene?: string | null;
+  /** Amendment A-12 (body): the hold the head asked for (its id, why, and the last rows of its decision record): `incident.take`. */
+  head?: unknown;
 }
 
 const r3 = (value: number) => Math.round(value * 1000) / 1000;
@@ -136,7 +138,7 @@ export class BlackBox {
   }
 
   /** What the box holds now, with the body's state and the reflexes of the window. */
-  snapshot(kind: string, reason: string, extra: { id?: string; act?: unknown; scene?: string | null } = {}): BlackBoxDump {
+  snapshot(kind: string, reason: string, extra: { id?: string; act?: unknown; scene?: string | null; head?: unknown } = {}): BlackBoxDump {
     const now = this.now();
     this.prune(now);
     const bot = this.bot;
@@ -157,11 +159,12 @@ export class BlackBox {
       ...(extra.act !== undefined ? { act: extra.act } : {}),
       window: { from, to: now }, ticks: [...this.ticks], events: [...this.events], near: [...this.near], reflexes, stats: this.stats(),
       ...(extra.scene !== undefined ? { scene: extra.scene } : {}),
+      ...(extra.head !== undefined ? { head: extra.head } : {}),
     };
   }
 
   /** Writes the box (gzip JSON) and keeps the directories within their bounds; resolves to the file, or null when it could not be written. */
-  async dump(kind: string, reason: string, extra: { id?: string; act?: unknown; scene?: string | null } = {}): Promise<{ id: string; file: string; bytes: number; ms: number } | null> {
+  async dump(kind: string, reason: string, extra: { id?: string; act?: unknown; scene?: string | null; head?: unknown } = {}): Promise<{ id: string; file: string; bytes: number; ms: number } | null> {
     const started = performance.now();
     const box = this.snapshot(kind, reason, extra);
     try {
