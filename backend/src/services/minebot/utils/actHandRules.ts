@@ -15,10 +15,29 @@ const count = (hand: Record<string, any>, most: number): string | null =>
 const names = (hand: Record<string, any>): string | null => ((hand.canDig ?? []) as string[]).some(name => !BLOCK_NAME.test(name))
   ? 'canDig はブロックの id（小文字の英字と _）か stone・dirt・sand・wood' : null;
 
+const VERTICAL_TOWARD = new Set(['north', 'east', 'south', 'west']);
+/** What is wrong with the arguments (the head checks the same before they are sent), or null. */
+export function verticalProblem(args: Record<string, any>): string | null {
+  if (args.dir !== 'down' && args.dir !== 'up') return 'dir は down か up';
+  if (args.shape !== 'stairs' && args.shape !== 'shaft' && args.shape !== 'pillar') return 'shape は stairs・shaft・pillar';
+  if (args.shape === 'shaft' && args.dir !== 'down') return 'shaft は down だけ（真下に掘る）';
+  if (args.shape === 'pillar' && args.dir !== 'up') return 'pillar は up だけ（足の下に置いて上る）';
+  if (args.shape === 'stairs' && !(args.toward && VERTICAL_TOWARD.has(args.toward))) return 'stairs には toward（north・east・south・west）が要る';
+  if (typeof args.toY !== 'number' || !Number.isInteger(args.toY)) return 'toY は整数';
+  if (!Array.isArray(args.canDig) || args.canDig.length < 1) return 'canDig（掘ってよい物）が要る';
+  if (args.liquid !== 'stop' && args.liquid !== 'seal' && args.liquid !== 'seal_water') return 'liquid は stop・seal・seal_water';
+  if (args.range !== undefined && !(Number.isInteger(args.range) && args.range >= 1 && args.range <= 2)) return 'range は 1〜2';
+  return null;
+}
+
+const verticalCheck = (hand: Record<string, any>): string | null => verticalProblem(hand) ?? seconds(hand, 5, 120)
+  ?? names(hand) ?? (((hand.canPlace ?? []) as string[]).some(name => !BLOCK_NAME.test(name)) ? 'canPlace はブロックの id（小文字の英字と _）' : null);
+
 export const HAND_RULES: Readonly<Record<string, HandRule>> = {
   mine: { needs: [['block'], ['at']], may: ['count', 'tool', 'collect', 'seconds', 'canDig', 'maxDig'],
     check: hand => seconds(hand, 5, 120) ?? count(hand, 64) ?? (hand.at.length > 4 ? 'at は鉱脈のマス 4 つまで（つながった同じ種類を体がたどる）' : null)
       ?? (BLOCK_NAME.test(hand.block) ? null : 'block はブロックの id（例 iron_ore）') ?? names(hand) },
+  vertical: { needs: [['dir'], ['shape'], ['toY'], ['canDig'], ['liquid']], may: ['toward', 'maxDig', 'canPlace', 'maxPlace', 'range', 'seconds'], check: verticalCheck },
   make: { needs: [['item']], may: ['count'], check: hand => count(hand, 64) },
   smelt: { needs: [['items']], may: ['fuel', 'fuelCount', 'furnaces', 'at', 'seconds'],
     check: hand => seconds(hand, 5, 60) ?? (hand.items.length < 1 || hand.items.length > 4 ? 'items は 1〜4 種類' : null)

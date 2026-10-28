@@ -297,7 +297,8 @@ export interface WalkOptions {
 
 const sleep = (bot: CustomBot, ms: number) => actionDelay(bot, ms);
 
-async function digCell(bot: CustomBot, cell: Cell): Promise<boolean> {
+/** Digs the cell with the tool that fits (true when it is empty after; false when the carried tools cannot break it). Exported for the vertical hand (primitives/vertical), which counts and limits the digs itself. */
+export async function digCell(bot: CustomBot, cell: Cell): Promise<boolean> {
   const block = blockOf(bot, cell);
   if (!block || block.boundingBox === 'empty') return true;
   const tool = chooseTool(block as never, bot.inventory.items() as never[], { requireHarvest: !!block.harvestTools, effects: (bot.entity as unknown as { effects?: unknown })?.effects ?? {} }) as { type: number; slot: number } | null;
@@ -308,7 +309,7 @@ async function digCell(bot: CustomBot, cell: Cell): Promise<boolean> {
 }
 
 /** One step walked towards the middle of the next column, the way stair-mine walks its stairs. True when the body stands in the cell. */
-async function moveOneCell(bot: CustomBot, start: Cell, to: Cell, extraDrop: number): Promise<boolean> {
+export async function moveOneCell(bot: CustomBot, start: Cell, to: Cell, extraDrop: number): Promise<boolean> {
   const ascending = to.y > start.y;
   const dx = to.x - start.x, dz = to.z - start.z;
   const target = { x: to.x, y: to.y - extraDrop, z: to.z };
@@ -349,13 +350,10 @@ async function moveOneCell(bot: CustomBot, start: Cell, to: Cell, extraDrop: num
 }
 
 /**
- * One level straight down: the floor under the feet is dug and the body drops onto the rock under it (the shaft step of stair-mine,
- * held to the same rules, utils/shaftDown). Null when it did, otherwise why not.
+ * The body's box over the shaft's column alone (it stays on the rim of the next otherwise). Null when it is, otherwise why not. A part of
+ * shaftDownOne, apart for the vertical hand (primitives/vertical), which digs the floor itself (it counts and limits its digs).
  */
-async function shaftDownOne(bot: CustomBot, feet: Vec3): Promise<string | null> {
-  const refusal = shaftStepRefusal(bot as never, feet);
-  if (refusal) return refusal;
-  // The body's box has to be over this column alone, or it stays on the rim of the next.
+export async function centreInColumn(bot: CustomBot, feet: Vec3): Promise<string | null> {
   const centre = feet.offset(0.5, 0, 0.5);
   const off = () => Math.max(Math.abs(bot.entity.position.x - centre.x), Math.abs(bot.entity.position.z - centre.z));
   if (off() > 0.2) {
@@ -370,16 +368,33 @@ async function shaftDownOne(bot: CustomBot, feet: Vec3): Promise<string | null> 
     }
     if (off() > 0.2 || Math.floor(bot.entity.position.y) !== feet.y) return 'not_centred';
   }
-  try { if (!(await digCell(bot, at(feet, 0, -1)))) return 'dig_failed'; } catch (error) {
-    if (/interrupt/i.test(String((error as Error)?.message))) throw error;
-    return `dig_failed:${String((error as Error)?.message ?? error).slice(0, 60)}`;
-  }
+  return null;
+}
+
+/** Waits (1.5 s at most) for the body to drop one level below `feet` after the floor under it was dug. Null when it did, otherwise why not. */
+export async function waitDropOne(bot: CustomBot, feet: Vec3): Promise<string | null> {
   const deadline = Date.now() + 1500;
   while (Date.now() < deadline && (Math.floor(bot.entity.position.y) >= feet.y || (bot.entity as unknown as { onGround?: boolean }).onGround === false)) {
     assertActionActive(bot);
     await sleep(bot, 50);
   }
   return Math.floor(bot.entity.position.y) === feet.y - 1 ? null : 'did_not_drop';
+}
+
+/**
+ * One level straight down: the floor under the feet is dug and the body drops onto the rock under it (the shaft step of stair-mine,
+ * held to the same rules, utils/shaftDown). Null when it did, otherwise why not.
+ */
+async function shaftDownOne(bot: CustomBot, feet: Vec3): Promise<string | null> {
+  const refusal = shaftStepRefusal(bot as never, feet);
+  if (refusal) return refusal;
+  const centred = await centreInColumn(bot, feet);
+  if (centred) return centred;
+  try { if (!(await digCell(bot, at(feet, 0, -1)))) return 'dig_failed'; } catch (error) {
+    if (/interrupt/i.test(String((error as Error)?.message))) throw error;
+    return `dig_failed:${String((error as Error)?.message ?? error).slice(0, 60)}`;
+  }
+  return waitDropOne(bot, feet);
 }
 
 /**

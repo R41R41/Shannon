@@ -20,6 +20,7 @@ import { pickup } from '../utils/primitives/pickup.js';
 import { shoot } from '../utils/primitives/shoot.js';
 import { pillarUp } from '../utils/primitives/pillarUp.js';
 import { go, goProblem } from '../utils/primitives/go.js';
+import { vertical } from '../utils/primitives/vertical.js';
 import { obsidian, obsidianProblem } from '../utils/primitives/obsidian.js';
 import { portal, portalProblem } from '../utils/primitives/portal.js';
 import { fight, HandCut } from '../utils/primitives/fight.js';
@@ -54,7 +55,7 @@ const Pos = z.object({ x: z.number().optional(), y: z.number().optional(), z: z.
   front: z.number().optional(), right: z.number().optional(), up: z.number().optional() }).strict();
 const ItemCount = z.object({ item: z.string(), count: z.number().optional() }).strict();
 export const HAND_KINDS = ['walk', 'go', 'dig', 'place', 'pillarUp', 'use', 'look', 'jump', 'sneak', 'equip', 'craft', 'furnace', 'chest',
-  'attack', 'shoot', 'eat', 'drop', 'pickup', 'wait', 'obsidian', 'portal', 'fight', 'mine', 'make', 'smelt'] as const;
+  'attack', 'shoot', 'eat', 'drop', 'pickup', 'wait', 'obsidian', 'portal', 'fight', 'mine', 'make', 'smelt', 'vertical'] as const;
 const Face = z.enum(['up', 'down', 'north', 'south', 'east', 'west']);
 /** One hand: every field of the head's ActHand (the body takes whatever the head's schema takes), and a few more it can read. */
 const Hand = z.object({
@@ -100,6 +101,11 @@ const Hand = z.object({
   note: z.string().optional(),
   stance: z.enum(['fight', 'flee']).optional().describe('fight: 戦う（既定）、flee: 相手から range m 以上離れるまで逃げる'),
   retreatHp: z.number().optional().describe('fight: この体力未満で戦いをやめて、食べるか退く（1〜19の整数）'),
+  dir: z.enum(['down', 'up']).optional().describe('vertical: 向き（書く。今の y から推さない）'),
+  shape: z.enum(['stairs', 'shaft', 'pillar']).optional().describe('vertical: stairs=階段、shaft=縦穴で真下（down だけ）、pillar=足の下に置いて真上（up だけ）'),
+  toward: z.enum(['north', 'east', 'south', 'west']).optional().describe('vertical stairs: 進む向き（stairs では必須）'),
+  toY: z.number().int().optional().describe('vertical: どの y まで（足の y）'),
+  liquid: z.enum(['stop', 'seal', 'seal_water']).optional().describe('vertical: 溶岩・水が見えた時。stop=止める、seal=塞いで続ける、seal_water=水だけ塞ぎ溶岩で止める'),
   onFail: z.enum(['continue', 'stop']).optional().describe('この手が自分で失敗したとき: continue=失敗と記録して次の手へ、stop=ここで止める（省略: equip・eat・look・sneak・jump は continue、他は stop）。反射・stopIf・取り消し・時間切れ・満杯は常に止める'),
 }).strict();
 export const ACT_HANDS = z.array(Hand).min(1).max(12);
@@ -136,7 +142,8 @@ const reflexName = (reason: unknown) => { const text = String(reason ?? ''); ret
 /** The body's own words for the tool (the head shows its own definition: minecraftActContract.ts ACT_DESCRIPTION). */
 const DESCRIPTION = '体に小さな手を最大12個まとめて頼む。体は順に動かし、手ごとに思ったとおりか確かめ、外れたら（失敗・反射・stopIf・満杯）そこで止めて、'
   + '手ごとの1行（止まりは閉じた語・場所・そのマスの今の中身）と新しい地図を JSON で返す。体は回り道・置き場所・道具作り・片づけ・夜の睡眠・戦うかどうかを決めない。'
-  + '手: walk / go / dig / place / pillarUp / use / look / jump / sneak / equip / craft / furnace / chest / attack / shoot / eat / drop / pickup / wait / obsidian / portal / fight / mine / make / smelt。'
+  + '手: walk / go / dig / place / pillarUp / use / look / jump / sneak / equip / craft / furnace / chest / attack / shoot / eat / drop / pickup / wait / obsidian / portal / fight / mine / make / smelt / vertical。'
+  + 'vertical: 縦に長く下る・上る。dir(down/up)・shape(stairs=階段 toward 必須 / shaft=真下の縦穴 down だけ / pillar=足の下に置いて真上 up だけ)・toY(足の y)・canDig(必須)・maxDig・canPlace・maxPlace・liquid(stop/seal/seal_water)・range・seconds。体は道探しをせず一段ずつ掘る・置く・歩くだけで、止まる時は「vertical 止まった <code>」の行と進んだ段数を返す。'
   + 'go: 行き先（to か goals）へ体が道を引いて着くまで行く。canDig の物だけ掘り・canPlace の物（持っている物）だけ置き、溶岩・火・マグマ・サボテンは避ける。止まる時は「go 止まった <code>」の行で理由を返す。'
   + 'obsidian: 挙げた溶岩の源（at、8 まで）に水を注いで黒曜石にして掘り、水を汲み戻す（立ち位置・注ぐ所・待ちは体。count・seconds・canPlace・maxPlace）。'
   + 'portal: at（枠の内側の左下）と axis（x か z）の枠 10 個を組み、火打ち金で点け、enter なら入る（足場は canPlace の物）。止まる時は「<手> 止まった <code>」の行で理由を返す。'
@@ -216,6 +223,11 @@ async function runHand(ctx: StepContext, hand: ActHand): Promise<StepOutcome> {
       const goals = (hand.goals ?? [hand.to]).map(spec => cellOf(ctx, hand, spec)!);
       return go(ctx, { goals, range: hand.range, canDig: hand.canDig, canPlace: hand.canPlace, maxDrop: hand.maxDrop, waterOk: hand.waterOk, seconds: hand.seconds,
         maxDig: hand.maxDig, maxPlace: hand.maxPlace, sprint: hand.sprint });
+    }
+    case 'vertical': {
+      // The direction, shape and height are the planner's; each level (dig, lay, walk) is the body's, with no route search (utils/primitives/vertical).
+      return vertical(ctx, { dir: hand.dir!, shape: hand.shape!, toward: hand.toward, toY: hand.toY!, canDig: hand.canDig ?? [], maxDig: hand.maxDig, canPlace: hand.canPlace,
+        maxPlace: hand.maxPlace, liquid: hand.liquid!, range: hand.range, seconds: hand.seconds });
     }
     case 'dig': return dig(ctx, { at: cells, tool: hand.tool, collect: hand.collect, take: hand.takeOk, exposeOk: hand.exposeOk });
     case 'obsidian': {
@@ -538,7 +550,7 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
       let around: string | undefined;
       try { if (outcome.at) around = aroundText(bodyReader(bot), outcome.at, feetCell(bot)); } catch { /* the line stands without it */ }
       // go's, obsidian's and portal's lines are the contract's own ("<手> 止まった <code>: ...", the counts in it): the code is the closed word.
-      const own = hand.do === 'obsidian' || hand.do === 'portal';
+      const own = hand.do === 'obsidian' || hand.do === 'portal' || hand.do === 'vertical';
       const line = hand.do === 'go' ? clip(outcome.text) : own ? clip(outcome.text.startsWith(`${hand.do} 止まった`) ? outcome.text : `${hand.do} 止まった ${outcome.reason ?? 'failed'}: ${outcome.text}`) : stoppedLine(outcome.reason, outcome.text, outcome.at ? cellNow(bot, outcome.at) : undefined, outcome.cause, again);
       report.lines.push({ i: index + 1, do: hand.do, status: goesOn ? 'failed' : 'stopped', line,
         ...(outcome.at ? { where: outcome.at } : {}), ...(around ? { around } : {}) });

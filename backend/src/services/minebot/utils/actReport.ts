@@ -87,6 +87,8 @@ const CLOSED: Record<string, string> = {
   no_tool: '掘れない', limit_dig: '掘れない', no_blocks: '置けない', limit_place: '置けない', limit_time: '時間切れ', dead_end: '一歩ではない', unsafe: '一歩ではない', not_loaded: '一歩ではない',
   // run 41 fixes (2026-10-27): the search ran out of its time (no way known, nor none); a floor lower than the feet cell; a dig under a block that falls.
   search_timeout: '時間切れ', low_floor: '足場が無い', falling_above: '上から落ちる',
+  // vertical (continue contracts 6): its lines carry the contract's own code; these words only count where it stopped (lava, no_floor, limit_* are above).
+  world_limit: '一歩ではない', displaced: '一歩ではない', water: '一歩ではない', cannot_dig: '掘れない', no_place: '置けない', seal_failed: '置けない', place_unconfirmed: '置けない',
   ...MINE_MAKE_SMELT_WORDS,
 };
 export function closedWord(reason: string | undefined): string {
