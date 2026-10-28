@@ -1,30 +1,30 @@
 {
  "producedBy": "backend/scripts/lab/continue-produce.ts",
  "bench": "offline",
- "bodyRevision": "abd9a7d458c2",
- "madeAt": "2026-10-28T16:50:32.307Z",
+ "bodyRevision": "dbb8770b4b01",
+ "madeAt": "2026-10-28T16:58:05.970Z",
  "answers": "life/death-epoch-pair",
  "fixtureSha256": "5c3465fbf23e723ee4d31f67c3a36aed56bf84273939a64521544091f35dbb70",
  "output": {
   "first": {
    "life": 1,
-   "deathEpoch": "de-6c825210",
+   "deathEpoch": "de-a1c50103",
    "deathSeq": 0,
-   "since": "2026-10-28T16:50:32.307Z",
+   "since": "2026-10-28T16:58:05.969Z",
    "alive": true,
    "dimension": "overworld",
-   "dimensionSince": "2026-10-28T16:50:32.307Z"
+   "dimensionSince": "2026-10-28T16:58:05.969Z"
   },
   "afterDeath": {
    "life": 2,
    "advancedBy": "death",
-   "deathEpoch": "de-6c825210",
+   "deathEpoch": "de-a1c50103",
    "deathSeq": 1,
-   "since": "2026-10-28T16:50:32.307Z",
+   "since": "2026-10-28T16:58:05.969Z",
    "alive": false,
-   "diedAt": "2026-10-28T16:50:32.307Z",
+   "diedAt": "2026-10-28T16:58:05.969Z",
    "dimension": "overworld",
-   "dimensionSince": "2026-10-28T16:50:32.307Z"
+   "dimensionSince": "2026-10-28T16:58:05.969Z"
   }
  }
 }
