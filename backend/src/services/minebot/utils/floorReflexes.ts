@@ -1,6 +1,6 @@
 import { Vec3 } from 'vec3';
 import { createLogger } from '../../../utils/logger.js';
-import { actionLeaseStatus, activeActionCapabilities, createMotorPort, executeAction, hasActiveSafetyLease, physicalActionBusy, physicalRoots, preemptLowerPriorityActions, safetyLeaseCapabilities } from '../execution/ActionExecution.js';
+import { actionLeaseStatus, actionSignal, activeActionCapabilities, createMotorPort, executeAction, hasActiveSafetyLease, physicalActionBusy, physicalRoots, preemptLowerPriorityActions, safetyLeaseCapabilities } from '../execution/ActionExecution.js';
 import { isHeadCombatActive, isHeadCombatRunning } from './combatOwner.js';
 import { creeperLit } from './creeperFuse.js';
 import { FALLBACK_FOOD_POINTS, RAW_FOOD } from '../constantSkills/autoEat.js';
@@ -1683,6 +1683,19 @@ const rethrowIfTaken = (error: unknown) => { if (/Action interrupted|Motor owner
  * eye and in sight and the health is above MELEE_HIT_HEALTH, with the weapon's own wait between. Says the blows swung, those that landed (the
  * enemy's hurt after a swing) and what is left of it; a hand that struck nothing says why.
  */
+/**
+ * A wait that ends at once when the action it belongs to is stopped (continue contracts, 4: a hand the act takes the body over from must let go in a few
+ * milliseconds, not after the weapon's wait; the isolated lab measured 0.7 to 1.0 s from the stop to the settle with plain sleeps).
+ */
+function abortableDelay(port: unknown, ms: number): Promise<void> {
+  return new Promise(resolve => {
+    const signal = actionSignal(port as object);
+    if (signal?.aborted) { resolve(); return; }
+    const timer = setTimeout(done, ms);
+    function done() { clearTimeout(timer); signal?.removeEventListener('abort', done); resolve(); }
+    signal?.addEventListener('abort', done, { once: true });
+  });
+}
 async function runHit(bot: FloorBody, port: FloorBody, hand: Extract<MeleeHand, { kind: 'hit' }>): Promise<{ success: boolean; result: string }> {
   const motor = port as any, raw = bot as any, target = hand.target, weapon = hand.weapon;
   if (bot.heldItem?.name !== weapon.name) {
@@ -1698,7 +1711,8 @@ async function runHit(bot: FloorBody, port: FloorBody, hand: Extract<MeleeHand, 
       // Run 45 (+929: seven blows at a zombie, every other one 0.14 to 0.2 s after the one before, the first of the next hand; a blow before the
       // weapon is ready deals a fifth of its damage): the weapon's own wait is kept from the last blow, whichever hand struck it.
       const ready = (raw.meleeBlowAt ?? 0) + bladeWaitMs(weapon.name) - Date.now();
-      if (ready > 0) await new Promise(resolve => setTimeout(resolve, Math.min(ready, 1_000)));
+      if (ready > 0) await abortableDelay(motor, Math.min(ready, 1_000));
+      if (actionSignal(motor)?.aborted) { stopped = '止められた'; break; }
       const live = find();
       if (!live || !bot.entity) { stopped = '相手が見えなくなった'; break; }
       if ((bot.health ?? 0) <= MELEE_HIT_HEALTH) { stopped = `体力が${MELEE_HIT_HEALTH}以下になった`; break; }
@@ -1708,7 +1722,8 @@ async function runHit(bot: FloorBody, port: FloorBody, hand: Extract<MeleeHand, 
       try { await motor.lookAt?.(live.position.offset(0, (live.height ?? 1.8) * 0.6, 0), true); } catch (error) { rethrowIfTaken(error); }
       motor.attack(live); swung++; raw.meleeBlowAt = Date.now();
       // A moment for the hurt that answers it (the wait for the weapon is at the next blow).
-      await new Promise(resolve => setTimeout(resolve, 120));
+      await abortableDelay(motor, 120);
+      if (actionSignal(motor)?.aborted) { stopped = '止められた'; break; }
     }
   } finally { raw.removeListener?.('entityHurt', onHurt); raw.removeListener?.('entityDead', onDead); }
   if (!swung) return { success: false, result: `打てなかった: ${stopped || '届かない'}` };

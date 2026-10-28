@@ -14,7 +14,7 @@ import { NativeCommonFcaBody } from '../src/services/minebot/integration/commonF
 import { installIncidents } from '../src/services/minebot/utils/incidents.js';
 import { SceneSaver, selfNames } from '../src/services/minebot/utils/sceneSave.js';
 import { bodyRevision } from '../src/services/minebot/utils/bodyRevision.js';
-import { executeAction, createMotorPort, physicalRoots, physicalActionBusy } from '../src/services/minebot/execution/ActionExecution.js';
+import { executeAction, createMotorPort, physicalRoots, preemptLowerPriorityActions } from '../src/services/minebot/execution/ActionExecution.js';
 import { opLogOf } from '../src/services/minebot/utils/opLog.js';
 
 const port = Number(process.env.MINECRAFT_CONTINUE_PORT);
@@ -284,12 +284,12 @@ try {
       const progress = result.parsed?.lines?.[0]?.progress;
       const ops = opLines().filter(entry => entry.k === 'op' && entry.command === result.command.id);
       const count = (name: string) => ops.filter(entry => entry.op === name).length;
-      report[`vertical_${spec.name}`] = { line: result.parsed?.lines?.[0], ops: { dig: count('dig'), placeBlock: count('placeBlock') }, receipt: result.receipt.unit };
+      report[`vertical_${spec.name}`] = { line: result.parsed?.lines?.[0], ops: { dig: (count('dig') + count('unconfirmedDig')), placeBlock: count('placeBlock') }, receipt: result.receipt.unit };
       check(`vertical ${spec.name}: the hand ends with a progress in steps and the four counts`, !!progress && progress.unit === 'step' && typeof progress.done === 'number' && !!progress.work, JSON.stringify(progress ?? null));
-      check(`vertical ${spec.name}: work.dug equals the digs sent, placeAttempts the places sent (the record of operations)`, !!progress?.work && progress.work.dug === count('dig') && (progress.work.placeAttempts ?? 0) === count('placeBlock'),
-        JSON.stringify({ work: progress?.work, dig: count('dig'), place: count('placeBlock') }));
+      check(`vertical ${spec.name}: work.dug equals the digs sent, placeAttempts the places sent (the record of operations)`, !!progress?.work && progress.work.dug === (count('dig') + count('unconfirmedDig')) && (progress.work.placeAttempts ?? 0) === count('placeBlock'),
+        JSON.stringify({ work: progress?.work, dig: (count('dig') + count('unconfirmedDig')), place: count('placeBlock') }));
       produce(`vertical/r45-${spec.name === 'stairs' ? 'hold1-stairs-down' : spec.name === 'shaft' ? 'hold5-shaft-down' : 'hold7-pillar-up'}`, `vertical/r45-${spec.name === 'stairs' ? 'hold1-stairs-down' : spec.name === 'shaft' ? 'hold5-shaft-down' : 'hold7-pillar-up'}`,
-        { substitute: 'an arena of stone, not the real run\'s ground', input: { hand: spec.hand }, output: { result: result.parsed, receiptUnit: result.receipt.unit, bodyTimes: result.receipt.bodyTimes, opCounts: { dig: count('dig'), placeBlock: count('placeBlock') } } });
+        { substitute: 'an arena of stone, not the real run\'s ground', input: { hand: spec.hand }, output: { result: result.parsed, receiptUnit: result.receipt.unit, bodyTimes: result.receipt.bodyTimes, opCounts: { dig: (count('dig') + count('unconfirmedDig')), placeBlock: count('placeBlock') } } });
     }
     // a go to a cell walled in rock with nothing it may dig: the search finds no way, and the hand says how far it got and what the search saw
     await reset(actor);
@@ -329,6 +329,7 @@ try {
     const second = act(body, { hands: [{ ...pillar, toY: 112, maxPlace: 20 }] }, { seconds: 90 });
     await sleep(2500);
     // a reflex that takes the body (a meal on a safety lease) still cuts the hand
+    preemptLowerPriorityActions(actor, 200, 'floor-eat');
     const meal = executeAction(actor, 'floor-eat', 3000, async () => { await sleep(300); return { success: true, result: 'ate' }; }, { priority: 200, safetyLease: true, waitForQuiescence: true });
     const cut = await second; await meal;
     check('a reflex that takes the body (a safety lease) still cuts the vertical hand', cut.parsed?.stoppedBy === 'reflex' || cut.receipt.failureType === 'interrupted_by_reflex' || cut.parsed?.lines?.[0]?.end === 'cut', JSON.stringify([cut.parsed?.stoppedBy, cut.receipt.failureType, cut.parsed?.lines?.[0]?.end, cut.parsed?.lines?.[0]?.cutBy]));
