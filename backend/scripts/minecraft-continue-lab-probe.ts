@@ -96,7 +96,7 @@ async function act(body: NativeCommonFcaBody, args: Record<string, unknown>, opt
   return { command, receipt, parsed, lines, ms: Date.now() - started, startedAt: started };
 }
 async function arena(): Promise<void> {
-  await ask('gamerule spawn_mobs false'); await ask('gamerule do_mob_spawning false'); await ask('time set 6000'); await ask('weather clear'); await ask('gamerule keep_inventory true');
+  await ask('difficulty normal'); await ask('gamerule spawn_mobs false'); await ask('gamerule do_mob_spawning false'); await ask('time set 6000'); await ask('weather clear'); await ask('gamerule keep_inventory true');
   await ask('gamemode spectator ' + operator.username);
   await ask('fill -16 90 -16 16 99 16 minecraft:stone'); await ask('fill -16 100 -16 16 112 16 minecraft:air');
   await ask('kill @e[type=!player]');
@@ -314,6 +314,26 @@ try {
     let reply: any = null; try { reply = JSON.parse(page.receipt.result ?? ''); } catch { reply = null; }
     check('the internal reader gives the same events by page, and says it is done', reply?.done === true && reply.total === carried.length && reply.events.length === carried.length && reply.lost === false, JSON.stringify(reply ?? null).slice(0, 300));
     produce('promise/table-crafted-placed-picked', 'promise/table-crafted-placed-picked', { substitute: 'cobblestone placed (the real run\'s crafting table steps are the lab\'s next)', output: { result: result.parsed, page: reply } });
+  }
+  // ---- amendment A-2 (d): vertical is a laying hand: a reflex's note does not stop it in the middle of its placing; a reflex that takes the body still cuts it
+  if (runs('laying')) {
+    await ask('fill -8 60 -8 8 99 8 minecraft:stone'); await ask('fill -8 100 -8 8 120 8 minecraft:air');
+    await reset(actor);
+    await ask(`give ${ACTOR} minecraft:cobblestone 32`); await ask(`give ${ACTOR} minecraft:iron_sword 1`); await ask(`effect give ${ACTOR} minecraft:resistance 600 2 true`);
+    await ask('summon minecraft:zombie 1.5 100 0.5 {PersistenceRequired:1b,Tags:["lab_enemy"],equipment:{head:{id:"minecraft:leather_helmet",count:1}}}');
+    const pillar = { do: 'vertical', dir: 'up', shape: 'pillar', toY: 108, canDig: ['stone'], canPlace: ['cobblestone'], maxPlace: 12, liquid: 'stop', seconds: 60 };
+    const first = await act(body, { hands: [pillar] }, { seconds: 90 });
+    const line = first.parsed?.lines?.[0];
+    check('a pillar with an enemy beside it is not stopped by a reflex note in the middle of its placing (stoppedBy is not reflex)', first.parsed?.stoppedBy !== 'reflex', JSON.stringify([first.parsed?.stoppedBy, line?.goal, line?.code, line?.progress?.done]));
+    await reset(actor);
+    await ask(`give ${ACTOR} minecraft:cobblestone 32`);
+    const second = act(body, { hands: [{ ...pillar, toY: 112, maxPlace: 20 }] }, { seconds: 90 });
+    await sleep(2500);
+    // a reflex that takes the body (a meal on a safety lease) still cuts the hand
+    const meal = executeAction(actor, 'floor-eat', 3000, async () => { await sleep(300); return { success: true, result: 'ate' }; }, { priority: 200, safetyLease: true, waitForQuiescence: true });
+    const cut = await second; await meal;
+    check('a reflex that takes the body (a safety lease) still cuts the vertical hand', cut.parsed?.stoppedBy === 'reflex' || cut.receipt.failureType === 'interrupted_by_reflex' || cut.parsed?.lines?.[0]?.end === 'cut', JSON.stringify([cut.parsed?.stoppedBy, cut.receipt.failureType, cut.parsed?.lines?.[0]?.end, cut.parsed?.lines?.[0]?.cutBy]));
+    await ask('kill @e[type=!player]');
   }
   report.stats = null;
   closeProbeBot(actor);

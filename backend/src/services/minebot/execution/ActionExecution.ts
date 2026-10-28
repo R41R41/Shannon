@@ -168,7 +168,7 @@ function portFor<T extends object>(given: T, owner: Context | undefined): T {
     assertActionActive(bot);
   };
   const writes = new Set(['equip', 'moveSlotItem', 'setQuickBarSlot', 'consume', 'look', 'lookAt', 'attack', 'activateItem', 'deactivateItem',
-    'setControlState', 'clearControlStates', 'dig', 'stopDigging', 'placeBlock', 'activateBlock', 'openContainer', 'openFurnace']);
+    'setControlState', 'clearControlStates', 'dig', 'unconfirmedDig', 'stopDigging', 'placeBlock', 'activateBlock', 'openContainer', 'openFurnace']);
   const paths = new Set(['setGoal', 'goto', 'stop', 'setMovements']);
   const path = (value: any) => new Proxy(value, { get(target, key) {
     const field = Reflect.get(target, key, target);
