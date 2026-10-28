@@ -144,3 +144,65 @@ describe('what the body refuses and records (contracts 2, 5, 8)', () => {
     await body.dispose();
   });
 });
+
+describe('the pieces the isolated lab measures (contracts 3, 4, 8)', () => {
+  it('plans a handover only for an act whose first moving hand fights the reflex\'s enemy, from the melee or a last stand with health above 5', async () => {
+    const { planHandover } = await import('../../src/services/minebot/utils/handover.js');
+    const { bot } = fixture();
+    bot.floorReflexes = { handTarget: { capability: 'floor-melee', target: 41, at: Date.now() } };
+    const running = executeAction(bot, 'floor-melee', 1000, () => new Promise(resolve => setTimeout(() => resolve({ success: true, result: 'x' }), 80)), { priority: 250, safetyLease: true, waitForQuiescence: false });
+    await new Promise(resolve => setTimeout(resolve, 5));
+    expect(planHandover(bot, { hands: [{ do: 'fight', target: '#41' }] })).toMatchObject({ reflex: 'floor-melee', target: 41 });
+    expect(planHandover(bot, { hands: [{ do: 'look' }, { do: 'attack', target: 41 }] })).toMatchObject({ target: 41 });
+    expect(planHandover(bot, { hands: [{ do: 'fight', target: '#42' }] })).toBeNull();
+    expect(planHandover(bot, { hands: [{ do: 'go', to: { x: 1, y: 1, z: 1 } }, { do: 'fight', target: '#41' }] })).toBeNull();
+    await running;
+    // The low-health flee, lava, a meal: never taken from.
+    for (const capability of ['floor-flee', 'lava-escape', 'floor-eat']) {
+      const held = executeAction(bot, capability, 1000, () => new Promise(resolve => setTimeout(() => resolve({ success: true, result: 'x' }), 50)), { priority: 250, safetyLease: true, waitForQuiescence: false });
+      await new Promise(resolve => setTimeout(resolve, 5));
+      expect(planHandover(bot, { hands: [{ do: 'fight', target: '#41' }] }), capability).toBeNull();
+      await held;
+    }
+    bot.health = 5;
+    bot.floorReflexes.handTarget = { capability: 'floor-last-stand', target: 41, at: Date.now() };
+    const stand = executeAction(bot, 'floor-last-stand', 1000, () => new Promise(resolve => setTimeout(() => resolve({ success: true, result: 'x' }), 50)), { priority: 250, safetyLease: true, waitForQuiescence: false });
+    await new Promise(resolve => setTimeout(resolve, 5));
+    expect(planHandover(bot, { hands: [{ do: 'fight', target: '#41' }] })).toBeNull();
+    bot.health = 12;
+    expect(planHandover(bot, { hands: [{ do: 'fight', target: '#41' }] })).toMatchObject({ reflex: 'floor-last-stand' });
+    await stand;
+  });
+  it('writes every hand start and operation to its own file, and rotates by size without stopping', async () => {
+    const { OpLog } = await import('../../src/services/minebot/utils/opLog.js');
+    const { mkdtempSync, readdirSync, readFileSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const path = await import('node:path');
+    const dir = mkdtempSync(path.join(tmpdir(), 'oplog-'));
+    const log = new OpLog(dir, 'test', 600);
+    log.setScope({ command: 'skill:q1', hand: 1, pass: 1, life: 3 });
+    for (let index = 0; index < 20; index++) log.op({ at: 1_700_000_000_000 + index, op: 'dig', detail: 'stone (1,2,3)', actionId: 'a', capability: 'act' });
+    log.close();
+    const files = readdirSync(dir).sort();
+    expect(files[0]).toBe('test.jsonl');
+    expect(files.length).toBeGreaterThan(1);
+    const line = JSON.parse(readFileSync(path.join(dir, 'test.jsonl'), 'utf8').split('\n')[0]);
+    expect(line).toMatchObject({ k: 'op', command: 'skill:q1', hand: 1, life: 3, op: 'dig' });
+  });
+  it('reads the revision from the environment, a REVISION file or the git head, else says unknown', async () => {
+    const { readRevision } = await import('../../src/services/minebot/utils/bodyRevision.js');
+    const { mkdtempSync, writeFileSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const path = await import('node:path');
+    expect(readRevision('/nonexistent', { SHANNON_BODY_REV: 'ABCDEF123456' })).toBe('abcdef123456');
+    const dir = mkdtempSync(path.join(tmpdir(), 'rev-'));
+    writeFileSync(path.join(dir, 'REVISION'), '0123456789ab\n');
+    expect(readRevision(dir, {})).toBe('0123456789ab');
+  });
+  it('says what is near with the proof of the scan: scanned is true only when ground was loaded', async () => {
+    const { utilitiesOf } = await import('../../src/services/minebot/utils/utilitiesScan.js');
+    const bot: any = { entity: { position: new Vec3(0, 64, 0) }, game: { dimension: 'minecraft:overworld' }, registry: { blocksByName: {} }, world: { getColumns: () => [] } };
+    const none = utilitiesOf(bot, 12, 1000);
+    expect(none).toMatchObject({ radius: 8, dim: 'overworld', obsSeq: 12, scanned: false, found: [] });
+  });
+});

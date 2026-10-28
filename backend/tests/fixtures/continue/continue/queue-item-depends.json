@@ -1,7 +1,7 @@
 {
  "contract": "continue",
  "version": "3.1",
- "scene": "列: q12 が失敗。q13（[]・pre 真）は始まる、q13b（[]・pre 偽）と q13c（[]・pre 判定できない）は始まらない、q14（無し）と q15（[q12]）は捨てる。pre の真偽は観測から算出する",
+ "scene": "列: q12 が失敗。q13（[]・pre 真）は始まる、q131（[]・pre 偽）と q132（[]・pre 判定できない）は始まらない、q14（無し）と q15（[q12]）は捨てる。pre の真偽は観測から算出する",
  "source": "設計 D1、Codex CONTRACTS-v2.md（3）continue",
  "known": [
   "確か: 今は completed && inputsReleased 以外で待ちを全部捨てる"
@@ -46,7 +46,7 @@
     ]
    },
    {
-    "item": "q13b",
+    "item": "q131",
     "after": "q13",
     "dependsOn": [],
     "pre": [
@@ -59,8 +59,8 @@
     ]
    },
    {
-    "item": "q13c",
-    "after": "q13b",
+    "item": "q132",
+    "after": "q131",
     "dependsOn": [],
     "pre": [
      [
@@ -75,7 +75,7 @@
    },
    {
     "item": "q14",
-    "after": "q13c"
+    "after": "q132"
    },
    {
     "item": "q15",
@@ -89,8 +89,8 @@
  "expected": {
   "preComputed": {
    "q13": true,
-   "q13b": false,
-   "q13c": null
+   "q131": false,
+   "q132": null
   },
   "q13": {
    "starts": true,
@@ -102,11 +102,11 @@
     "code": "failed"
    }
   },
-  "q13b": {
+  "q131": {
    "starts": false,
    "failureType": "precondition"
   },
-  "q13c": {
+  "q132": {
    "starts": false,
    "failureType": "precondition_unknown"
   },

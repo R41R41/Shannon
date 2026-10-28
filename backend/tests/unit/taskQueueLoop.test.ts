@@ -229,7 +229,7 @@ describe('the queue: what an end does', () => {
     // (The reason now comes from the item's end on the two axes: this stand-in body's cancelled receipt has no unit and no failure type, so the loop reads it as a
     // finished-or-cut run whose aim failed, and the words say `failed`; they used to say the receipt's outcome, `cancelled`. The unit's `end: 'cut'` carries the cancel.)
     expect(out.a!.unit).toMatchObject({ goal: 'failed', end: 'cut' });
-    expect(out.b).toMatchObject({ outcome: 'cancelled', failureType: 'queue_dropped', result: '捨てた: 前の項目 q1 が止まった（failed）。手は動いていない' });
+    expect(out.b).toMatchObject({ outcome: 'cancelled', failureType: 'queue_dropped', result: '捨てた: 前の項目 q1 が止まった（cancelled）。手は動いていない' });
     expect(out.b!.unit).toMatchObject({ goal: 'not_started', end: 'not_run', droppedBecause: { code: 'depends_failed', item: { queue: Q, item: 'q1' } } });
     await f.deliver(item('c', 'q3', 'q2'));
     expect((await f.receipts()).c).toMatchObject({ failureType: 'queue_after_gone' });

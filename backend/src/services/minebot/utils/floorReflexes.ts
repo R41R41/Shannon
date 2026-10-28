@@ -989,7 +989,7 @@ const CORNERED_WAIT_MS = 1500;
 const LAST_STAND_DETAIL_MAX = 160;
 const LAST_STAND_TIMEOUT_MS: Record<LastStand['kind'], number> = { hit: 3000, dig: 7000, pillar: 5000, melee: 3000 };
 /** The act's hands that lay blocks (the act sets `actHandNow` on the body while a hand runs). */
-export const LAYING_HANDS = new Set(['place', 'pillarUp']);
+export const LAYING_HANDS = new Set(['place', 'pillarUp', 'vertical']);
 const TOOL_TIERS = ['netherite', 'diamond', 'iron', 'stone', 'golden', 'wooden'];
 /** A sword before an axe before any other tool; within a kind the better material first. 0: not a melee tool. */
 function meleeRank(name: string): number {

@@ -220,7 +220,10 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
       .sort((a, b) => itemFoodPoints(bot, b.name) - itemFoodPoints(bot, a.name))[0]?.name ?? null;
   };
 
-  const finish = (verdict: string, extra = ''): StepOutcome => ({ ok: true, progress: struck(), text: `fight 済 ${label} ${verdict}・${counts()}${extra}・${holder()}` });
+  // Amendment A-2: how the enemy ended is told in the structure (code), beside the success the hand keeps: target_killed (its death was seen), target_escaped (alive,
+  // outside the range, not chased), target_left (a flight that got the range it was asked for, or the enemy went out of sight while fleeing).
+  const ENDINGS: Record<string, string> = { '死んだ': 'target_killed', '逃げた': 'target_escaped', '離れた': 'target_left' };
+  const finish = (verdict: string, extra = ''): StepOutcome => ({ ok: true, progress: struck(), ...(ENDINGS[verdict] ? { code: ENDINGS[verdict] } : {}), text: `fight 済 ${label} ${verdict}・${counts()}${extra}・${holder()}` });
   /** `at`: the creature's cell, only where the place is what the line is about (it cannot be reached). */
   const fail = (code: string, text: string, at?: Cell): StepOutcome => {
     const out = { ...stopped(bot, code, `fight 止まった ${code}: ${label} ${text}。${counts()}・${holder(code === 'reflex' ? reflexHeld(bot) : null)}`, at), progress: struck() };

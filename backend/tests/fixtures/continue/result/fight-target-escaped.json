@@ -1,0 +1,69 @@
+{
+ "contract": "result",
+ "version": "3.1",
+ "scene": "fight の相手の終わり方を構造で返す（A-2）: 倒した・範囲の外へ出た（生きている）・見失った。成功の軸は今の ok のまま",
+ "source": "fight.ts（finish('死んだ')・finish('逃げた')・finish('離れた')・fail('lost')）、attack-target-lost の見本と同じ形",
+ "known": [
+  "確か: 今の fight は、range の外へ出た相手を追わずに ok で終える（finish('逃げた')）",
+  "確か: 見失った相手は goal unknown・code target_lost（attack と同じ）"
+ ],
+ "decided": [
+  "決め: 相手の終わり方は code で返す。target_killed（死を観測した）・target_escaped（生きていて範囲の外・追わない）・target_left（stance flee の離れた、または逃げている間に相手が見えなくなった）",
+  "決め: 成功の軸（ok・goal done）は変えない。見失った時は attack と同じ goal unknown・code target_lost"
+ ],
+ "hypothesis": [],
+ "input": {
+  "cases": [
+   {
+    "stance": "fight",
+    "during": "death_seen"
+   },
+   {
+    "stance": "fight",
+    "during": "target_leaves_range_alive",
+    "range": 6
+   },
+   {
+    "stance": "flee",
+    "during": "range_reached",
+    "range": 12
+   },
+   {
+    "stance": "fight",
+    "during": "lost_from_sight"
+   }
+  ]
+ },
+ "expected": {
+  "cases": [
+   {
+    "hand": {
+     "goal": "done",
+     "code": "target_killed"
+    }
+   },
+   {
+    "hand": {
+     "goal": "done",
+     "code": "target_escaped"
+    }
+   },
+   {
+    "hand": {
+     "goal": "done",
+     "code": "target_left"
+    }
+   },
+   {
+    "hand": {
+     "goal": "unknown",
+     "code": "target_lost"
+    }
+   }
+  ]
+ },
+ "checks": [
+  "体: fight の終わり方",
+  "頭: 結果の文に相手の終わり方を出す"
+ ]
+}

@@ -497,9 +497,9 @@ export class CommonFcaControlLoop {
         if (!receipt.inputsReleased) this.held = true;
         else if (cleanup) this.held = false;
       }
-      const unit: ItemEnd = receipt.unit ? { goal: receipt.unit.goal, end: receipt.unit.end, released: receipt.unit.released, ...(receipt.failureType ? { code: receipt.failureType } : {}) }
+      const unit: ItemEnd = receipt.unit ? { goal: receipt.unit.goal, end: receipt.unit.end, released: receipt.unit.released, ...(receipt.failureType ? { code: receipt.failureType } : receipt.outcome === 'cancelled' ? { code: 'cancelled' } : {}) }
         : { goal: receipt.outcome === 'completed' ? 'done' : receipt.outcome === 'unknown' ? 'unknown' : 'failed', end: receipt.outcome === 'unknown' ? 'unknown' : receipt.outcome === 'cancelled' ? 'cut' : 'finished',
-          released: receipt.inputsReleased, ...(receipt.failureType ? { code: receipt.failureType } : {}) };
+          released: receipt.inputsReleased, ...(receipt.failureType ? { code: receipt.failureType } : receipt.outcome === 'cancelled' ? { code: 'cancelled' } : {}) };
       if (envelope) this.queue.end(envelope.item, envelope.queue, unit);
       this.receipts.set(command.id, receipt);
       this.hurry(true);
