@@ -1,0 +1,147 @@
+{
+ "producedBy": "backend/scripts/minecraft-continue-lab-probe.ts",
+ "bench": "B",
+ "bodyRevision": "09e1cb33f8c4",
+ "madeAt": "2026-10-28T16:02:02.729Z",
+ "answers": "promise/table-crafted-placed-picked",
+ "fixtureSha256": "704c74733276f778314ee8f5ea3af0e113865a61c115c722da2d69edd5acd80b",
+ "substitute": "cobblestone placed (the real run's crafting table steps are the lab's next)",
+ "output": {
+  "result": {
+   "v": 1,
+   "ok": false,
+   "done": 3,
+   "of": 4,
+   "outcome": {
+    "goal": "partial",
+    "end": "finished",
+    "life": 0
+   },
+   "partial": true,
+   "stoppedBy": "failure",
+   "lines": [
+    {
+     "i": 1,
+     "do": "place",
+     "status": "done",
+     "line": "(1,100,3) に cobblestone を置いた（下の stone に当てて。残り29）（0.1秒）",
+     "goal": "done",
+     "end": "finished",
+     "motorOps": 2,
+     "progress": {
+      "unit": "block",
+      "done": 1,
+      "left": 0
+     },
+     "delta": [
+      {
+       "item": "cobblestone",
+       "count": -1,
+       "reason": "placed",
+       "id": "lab:q27:1:1:0",
+       "obsSeq": 8324,
+       "deliverySeq": 0
+      }
+     ]
+    },
+    {
+     "i": 2,
+     "do": "place",
+     "status": "done",
+     "line": "(2,100,3) に cobblestone を置いた（下の stone に当てて。残り28）（0.1秒）",
+     "goal": "done",
+     "end": "finished",
+     "motorOps": 1,
+     "progress": {
+      "unit": "block",
+      "done": 1,
+      "left": 0
+     }
+    },
+    {
+     "i": 3,
+     "do": "place",
+     "status": "done",
+     "line": "(3,100,3) に cobblestone を置いた（下の stone に当てて。残り28）（0.1秒）",
+     "goal": "done",
+     "end": "finished",
+     "motorOps": 1,
+     "progress": {
+      "unit": "block",
+      "done": 1,
+      "left": 0
+     },
+     "delta": [
+      {
+       "item": "cobblestone",
+       "count": -1,
+       "reason": "placed",
+       "id": "lab:q27:1:3:0",
+       "obsSeq": 8326,
+       "deliverySeq": 1
+      }
+     ]
+    },
+    {
+     "i": 4,
+     "do": "place",
+     "status": "stopped",
+     "line": "届かない: (4,100,3)（自分から東4・南3） に届かない（目から5.1m、5m まで）。そのマスは air",
+     "where": {
+      "x": 4,
+      "y": 100,
+      "z": 3
+     },
+     "around": "x=3..5 z=2..4 y=101: ..#/.../... y=100: ..#/#../... y=99: ###/###/###",
+     "goal": "not_started",
+     "end": "finished",
+     "motorOps": 0,
+     "code": "out_of_reach",
+     "progress": {
+      "unit": "block",
+      "done": 0,
+      "left": 1
+     }
+    }
+   ],
+   "at": {
+    "x": 0,
+    "y": 100,
+    "z": 0
+   },
+   "hp": 20,
+   "food": 20,
+   "ms": 328,
+   "map": "地図 v1 足=(0,100,0) x=-7..7 z=-7..7 方式=layers 上=北\ny=102 x=-5..5 z=-5..5\nz\\x 5 4 3 2 1 0 1 2 3 4 5\n -5 . . . . . . . . . . .\n -4 . . . . . . . . . . .\n -3 . . . . . . . . . . .\n -2 . . . . . . . . . . #\n -1 . . . . . . . . . . #\n  0 . . . . . # . . . . #\n  1 . . . . . . . . . . #\n  2 . . . . . . . . . . #\n  3 . . . . . . . . . . .\n  4 . . . . . . . . . . .\n  5 . . . . . . . . . . .\ny=101\nz\\x 7 6 5 4 3 2 1 0 1 2 3 4 5 6 7\n -7 . . . . . . . . . . . . . . .\n -6 . . . . . . . . . . . . . . .\n -5 . . . . . . . . . . . . . . .\n -4 . . . . . . . . . . . . . . .\n -3 . . . . . . . . . . . . . . .\n -2 . . . . . . . . . . . . # # #\n -1 . . . . . . . . . . . . # # #\n  0 . . . . . . . * . . . . # . #\n  1 . . . . . . . . . . . . # # #\n  2 . . . . . . . . . . . . # # #\n  3 . . . . . . . . . . . . . . .\n  4 . . . . . . . . . . . . . . .\n  5 . . . . . . . . . . . . . . .\n  6 . . . . . . . . . . . . . . .\n  7 . . . . . . . . . . . . . . .\ny=100\nz\\x 7 6 5 4 3 2 1 0 1 2 3 4 5 6 7\n -7 . . . . . . . . . . . . . . .\n -6 . . . . . . . . . . . . . . .\n -5 . . . . . . . . . . . . . . .\n -4 . . . . . . . . . . . . . . .\n -3 . . . . . . . . . . . . . . .\n -2 . . . . . . . . . . . . # # #\n -1 . . . . . . . . . . . . # # #\n  0 . . . . . . . @ . . . . # . #\n  1 . . . . . . . . . . . . # # #\n  2 . . . . . . . . . . . . # # #\n  3 . . . . . . . . # # # . . . .\n  4 . . . . . . . . . . . . . . .\n  5 . . . . . . . . . . . . . . .\n  6 . . . . . . . . . . . . . . .\n  7 . . . . . . . . . . . . . . .\ny=99\nz\\x 7 6 5 4 3 2 1 0 1 2 3 4 5 6 7\n -7 # # # # # # # # # # # # # # #\n -6 # # # # # # # # # # # # # # #\n -5 # # # # # # # # # # # # # # #\n -4 # # # # # # # # # # # # # # #\n -3 # # # # # # # # # # # # # # #\n -2 # # # # # # # # # # # # # # #\n -1 # # # # # # # # # # # # # # #\n  0 # # # # # # # # # # # # # # #\n  1 # # # # # # # # # # # # # # #\n  2 # # # # # # # # # # # # # # #\n  3 # # # # # # # # # # # # # # #\n  4 # # # # # # # # # # # # # # #\n  5 # # # # # # # # # # # # # # #\n  6 # # # # # # # # # # # # # # #\n  7 # # # # # # # # # # # # # # #\ny=98 x=-5..5 z=-5..5\nz\\x 5 4 3 2 1 0 1 2 3 4 5\n -5 # # # # # # # # # # #\n -4 # # # # # # # # # # #\n -3 # # # # # # # # # # #\n -2 # # # # # # # # # # #\n -1 # # # # # # # # # # #\n  0 # # # # # # # # # # #\n  1 # # # # # # # # # # #\n  2 # # # # # # # # # # #\n  3 # # # # # # # # # # #\n  4 # # # # # # # # # # #\n  5 # # # # # # # # # # #\n縦 (0,0) 上: y=101 . / y=102〜107 #×6 / y=108〜116 .×9 …\n縦 (0,0) 下: y=99〜84 #×16 …",
+   "incident": {
+    "id": "20261028T160202-act-lykgt",
+    "heavy": true,
+    "why": "first:place/failure",
+    "held": false,
+    "frozen": null,
+    "box": true,
+    "scene": true,
+    "start": [
+     0.5,
+     100,
+     0.5
+    ],
+    "end": [
+     0.5,
+     100,
+     0.5
+    ]
+   }
+  },
+  "page": {
+   "command": "lab:q27",
+   "from": 0,
+   "to": 0,
+   "total": 0,
+   "nextSeq": 0,
+   "done": false,
+   "lost": true,
+   "events": []
+  }
+ }
+}

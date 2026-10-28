@@ -1,0 +1,53 @@
+{
+ "producedBy": "backend/scripts/minecraft-continue-lab-probe.ts",
+ "bench": "B",
+ "bodyRevision": "09e1cb33f8c4",
+ "madeAt": "2026-10-28T16:01:06.271Z",
+ "answers": "vertical/boundary2-evidence",
+ "fixtureSha256": "20a12729845a11b02fad7e1b20f1cffea63a6bd317dc3c5b46d0ac687fa04c69",
+ "substitute": "one floor taken away with /setblock while the stairs go on",
+ "output": {
+  "corrected": [
+   {
+    "at": {
+     "x": 0,
+     "y": 98,
+     "z": 1
+    },
+    "was": "stone",
+    "now": "air",
+    "step": 1
+   }
+  ],
+  "done": 8,
+  "work": {
+   "dug": 27,
+   "placeAttempts": 0,
+   "stockUsed": 0,
+   "placedConfirmed": 0
+  },
+  "evidenceRows": [
+   {
+    "from": "stone",
+    "to": "air",
+    "usedFor": "steps_valid",
+    "step": 1,
+    "t": 1793203255076,
+    "pos": {
+     "x": 0,
+     "y": 98,
+     "z": 1
+    },
+    "kind": "block_update",
+    "at": "2026-10-28T16:00:55.076Z",
+    "command": "lab:q23",
+    "hand": 1,
+    "life": 4
+   }
+  ],
+  "opCounts": {
+   "dig": 27,
+   "placeBlock": 0
+  }
+ }
+}
