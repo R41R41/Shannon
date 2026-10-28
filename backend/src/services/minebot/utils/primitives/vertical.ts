@@ -5,6 +5,7 @@ import { centreInColumn, digCell, floorDrop, moveOneCell, relativeTo, waitDropOn
 import { explainShaftRefusal, shaftStepRefusal } from '../shaftDown.js';
 import { trailOf } from '../stairLine.js';
 import type { Progress } from '../../integration/commonFca/continueContract.js';
+import { nativeActionHost } from '../../execution/ActionExecution.js';
 import { blockAt, cellText, eyeDistance, guard, inventoryCount, letGo, StepStopped, USE_REACH, wait, waitUntil, type StepContext, type StepOutcome } from './common.js';
 import { blockInHand, digRuleOf, hasFace, mayLayAt, placeNamesOf } from './go.js';
 import { shortFloor } from './pillarUp.js';
@@ -109,6 +110,11 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
   const start = feetCell(bot);
   if (!start) return { ok: false, reason: 'invalid_input', text: 'vertical 止まった invalid_input: 体の位置が分からない' };
   const down = args.dir === 'down';
+  // Amendment A-3: the hand is a laying hand (a reflex's note does not stop it, floorReflexes LAYING_HANDS) only while it places: a pillar's whole climb, and a block laid to seal.
+  // Digging stairs or a shaft (up to 60 s) is not: a melee and a flight must be able to start then.
+  const host = nativeActionHost(bot) as { actHandNow?: string };
+  const laying = (on: boolean) => { host.actHandNow = on ? 'vertical-place' : 'vertical'; };
+  if (args.shape === 'pillar') laying(true);
   const limits = { maxDig: args.maxDig ?? VERTICAL_DEFAULTS.maxDig, maxPlace: args.maxPlace ?? VERTICAL_DEFAULTS.maxPlace, range: args.range ?? VERTICAL_DEFAULTS.range };
   const startedAt = Date.now();
   const seconds = args.seconds ?? VERTICAL_DEFAULTS.seconds;
@@ -179,7 +185,10 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
     }
   };
   const valid = () => levels.filter(level => level.valid).length;
+  const stockMark = new Map<string, number>();
   const progress = (): Progress => {
+    // A fall of the count that arrived after the last place was read is the last place's.
+    for (const [block, mark] of stockMark) { const now1 = inventoryCount(bot, block); if (now1 < mark) { work.stockUsed += mark - now1; stockMark.set(block, now1); } }
     const here = feetCell(bot) ?? at;
     return { unit: 'step', done: valid(), left: leftFrom(here), at: here, ...(moved > 0 ? { msPerUnit: Math.round((Date.now() - startedAt) / moved) } : {}), work: { ...work }, ...(seen.length ? { seen: seen.map(entry => ({ block: entry.block, at: { ...entry.at } })) } : {}) };
   };
@@ -244,14 +253,19 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
    */
   const sendPlace = async (cell: Cell, block: string, reference: any, face: Vec3, levelIndex?: number): Promise<{ confirmed: boolean }> => {
     work.placeAttempts++;
-    const before = inventoryCount(bot, block);
+    // The pack's count falls when the server's slot update arrives, which can be after the wait below: that late fall is counted at the next place (the sum is the same),
+    // never lost. A rise since the last reading is the drops of what was dug and is not taken off.
+    const now0 = inventoryCount(bot, block), last = stockMark.get(block);
+    const before = last !== undefined && now0 < last ? last : now0;
     const watch = watchPlace(cell, block);
     try { await guard(ctx, Promise.resolve(bot.placeBlock(reference, face)), 4000); } catch (error) {
       if (isInterrupt(error)) { watch.cancel(); throw error; }
       // The library gives up when the server's update does not come; the cell itself is looked at through the update wait below.
     }
     const confirmed = await watch.result(CONFIRM_WAIT_MS);
-    work.stockUsed += Math.max(0, before - inventoryCount(bot, block));
+    const after0 = inventoryCount(bot, block);
+    work.stockUsed += Math.max(0, before - after0);
+    stockMark.set(block, after0);
     if (confirmed) {
       work.placedConfirmed++; unconfirmedRun = 0;
       evidence({ kind: 'block_update', at: cell, to: block, usedFor: 'place_confirmed', ...(levelIndex ? { step: levelIndex } : {}) });
@@ -281,8 +295,11 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
     if (eyeDistance(bot, cell) > USE_REACH) return { ok: false, reason: 'unreachable' };
     if (!mayLayAt(bot, cell)) return { ok: false, reason: 'body' };
     await blockInHand(bot, [block]);
-    const sent = await sendPlace(cell, block, reference, face);
-    return { ok: true, confirmed: sent.confirmed, block };
+    laying(true);
+    try {
+      const sent = await sendPlace(cell, block, reference, face);
+      return { ok: true, confirmed: sent.confirmed, block };
+    } finally { if (args.shape !== 'pillar') laying(false); }
   };
 
   // ---- digging ----

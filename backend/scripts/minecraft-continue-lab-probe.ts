@@ -279,8 +279,10 @@ try {
       await ask('fill -8 60 -8 8 99 8 minecraft:stone'); await ask('fill -8 100 -8 8 112 8 minecraft:air');
       await ask(`give ${ACTOR} minecraft:cobblestone 32`); await ask(`give ${ACTOR} minecraft:diamond_pickaxe 1`);
       await ask(`tp ${ACTOR} 0.5 ${spec.name === 'pillar' ? 100 : 100} 0.5`); await sleep(1500);
+      const stockBefore = (actor.inventory.items() as any[]).filter(item => item.name === 'cobblestone').reduce((sum, item) => sum + item.count, 0);
       const result = await act(body, { hands: [spec.hand] }, { seconds: 120 });
-      await sleep(500);
+      await sleep(1500);
+      const stockAfter = (actor.inventory.items() as any[]).filter(item => item.name === 'cobblestone').reduce((sum, item) => sum + item.count, 0);
       const progress = result.parsed?.lines?.[0]?.progress;
       const ops = opLines().filter(entry => entry.k === 'op' && entry.command === result.command.id);
       const count = (name: string) => ops.filter(entry => entry.op === name).length;
@@ -288,6 +290,8 @@ try {
       check(`vertical ${spec.name}: the hand ends with a progress in steps and the four counts`, !!progress && progress.unit === 'step' && typeof progress.done === 'number' && !!progress.work, JSON.stringify(progress ?? null));
       check(`vertical ${spec.name}: work.dug equals the digs sent, placeAttempts the places sent (the record of operations)`, !!progress?.work && progress.work.dug === (count('dig') + count('unconfirmedDig')) && (progress.work.placeAttempts ?? 0) === count('placeBlock'),
         JSON.stringify({ work: progress?.work, dig: (count('dig') + count('unconfirmedDig')), place: count('placeBlock') }));
+      if (spec.name === 'pillar') check('vertical pillar: stockUsed equals the fall of the pack and the places sent that were confirmed (the four counts keep their meaning)', progress?.work?.stockUsed === stockBefore - stockAfter && progress.work.stockUsed === progress.work.placedConfirmed,
+        JSON.stringify({ work: progress?.work, packFall: stockBefore - stockAfter }));
       produce(`vertical/r45-${spec.name === 'stairs' ? 'hold1-stairs-down' : spec.name === 'shaft' ? 'hold5-shaft-down' : 'hold7-pillar-up'}`, `vertical/r45-${spec.name === 'stairs' ? 'hold1-stairs-down' : spec.name === 'shaft' ? 'hold5-shaft-down' : 'hold7-pillar-up'}`,
         { substitute: 'an arena of stone, not the real run\'s ground', input: { hand: spec.hand }, output: { result: result.parsed, receiptUnit: result.receipt.unit, bodyTimes: result.receipt.bodyTimes, opCounts: { dig: (count('dig') + count('unconfirmedDig')), placeBlock: count('placeBlock') } } });
     }
@@ -314,6 +318,22 @@ try {
     check('the internal reader gives the same events by page, and says it is done', reply?.done === true && reply.total === carried.length && reply.events.length === carried.length && reply.lost === false, JSON.stringify(reply ?? null).slice(0, 300));
     produce('promise/table-crafted-placed-picked', 'promise/table-crafted-placed-picked', { substitute: 'cobblestone placed (the real run\'s crafting table steps are the lab\'s next)', output: { result: result.parsed, page: reply } });
   }
+  // ---- amendment A-3: while stairs are dug, a melee reflex may start; only the placing of a vertical is a laying hand
+  if (runs('laying')) {
+    await ask('fill -8 60 -8 8 99 8 minecraft:stone'); await ask('fill -8 100 -8 8 120 8 minecraft:air');
+    await reset(actor);
+    await ask(`give ${ACTOR} minecraft:iron_sword 1`); await ask(`give ${ACTOR} minecraft:diamond_pickaxe 1`); await ask(`effect give ${ACTOR} minecraft:resistance 600 1 true`);
+    await ask(`tp ${ACTOR} 0.5 100 -6.5`); await sleep(1500);
+    const digging = act(body, { hands: [{ do: 'vertical', dir: 'down', shape: 'stairs', toward: 'south', toY: 86, canDig: ['stone', 'dirt'], maxDig: 80, liquid: 'stop', seconds: 60 }] }, { seconds: 90 });
+    await sleep(3500);
+    await ask(`execute at ${ACTOR} run summon minecraft:zombie ~ ~ ~-1.5 {PersistenceRequired:1b,Tags:["lab_enemy"],equipment:{head:{id:"minecraft:leather_helmet",count:1}}}`);
+    let meleeSeen = false; const began = Date.now();
+    while (Date.now() - began < 9000 && !meleeSeen) { meleeSeen = physicalRoots(actor).some(root => root.capability === 'floor-melee' || root.capability === 'floor-flee' || root.capability === 'floor-last-stand'); await sleep(30); }
+    const dug = await digging;
+    check('while stairs are dug (not placing), an enemy that comes starts the melee reflex (vertical is not a laying hand then)', meleeSeen, JSON.stringify({ meleeSeen, stoppedBy: dug.parsed?.stoppedBy, code: dug.parsed?.lines?.[0]?.code }));
+    await ask('kill @e[type=!player]');
+  }
+
   // ---- amendment A-2 (d): vertical is a laying hand: a reflex's note does not stop it in the middle of its placing; a reflex that takes the body still cuts it
   if (runs('laying')) {
     await ask('fill -8 60 -8 8 99 8 minecraft:stone'); await ask('fill -8 100 -8 8 120 8 minecraft:air');
