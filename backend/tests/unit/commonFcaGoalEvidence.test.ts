@@ -3,6 +3,7 @@ import { Vec3 } from 'vec3';
 import { describe, expect, it, vi } from 'vitest';
 import { NativeGoalEvidence } from '../../src/services/minebot/integration/commonFca/goalEvidence.js';
 import { NativeCommonFcaBody } from '../../src/services/minebot/integration/commonFca/nativeBody.js';
+import { madeCommand } from './helpers/madeFor.js';
 const context = { scopeKey: 'owner', taskId: 'dragon-task', taskRevision: 1, bodyId: 'minecraft:home', sessionId: 'session1', generation: 1,
   goal: 'エンダードラゴンを倒して', completionCondition: 'native proof' };
 function fixture() {
@@ -89,17 +90,21 @@ describe('task-bound native Minecraft goal evidence', () => {
     const skill = { skillName: 'attack-entity', description: 'fixture native attack', isToolForLLM: true, maxDurationMs: 1000, params: [],
       run: async () => { f.bot.attack(f.target); f.bot.emit('entityDead', f.target); return { success: true, result: 'action finished' }; } };
     f.bot.instantSkills.getSkills = () => [skill];
+    const listenersBefore = f.bot.listenerCount('entityDead');
     const body = new NativeCommonFcaBody(f.bot, { serverId: 'home', now: f.now, capture: async () => { throw Error('unused'); } });
     const command = (patch: Record<string, unknown> = {}): any => ({ ...f.command(), schemaVersion: 1, serverId: 'home', kind: 'skill', skill: 'goal-evidence', arguments: {},
       lease: { id: 'lease', generation: 1, holder: context.taskId }, ...patch });
     expect(body.skills.find(item => item.name === 'goal-evidence')?.readOnly).toBe(true);
     let receipt = await body.execute(command(), new AbortController().signal);
     expect(JSON.parse(receipt.result!).boss.verified).toBe(false);
-    await body.execute(command({ skill: 'attack-entity' }), new AbortController().signal);
+    // The attack moves the body, so its command carries the life and what its decision read (continue contracts 2, 5); the read-only query does not need them.
+    await body.execute(madeCommand(body, command({ skill: 'attack-entity' })), new AbortController().signal);
     receipt = await body.execute(command({ id: 'fresh-query' }), new AbortController().signal);
     expect(receipt).toMatchObject({ outcome: 'completed', inputsReleased: true }); expect(JSON.parse(receipt.result!).boss.verified).toBe(true);
     await expect(body.execute(command({ arguments: { verified: true } }), new AbortController().signal)).rejects.toThrow('EVIDENCE_ARGUMENTS');
     await expect(body.execute(command({ deadlineAt: new Date(f.now() - 1).toISOString() }), new AbortController().signal)).rejects.toThrow('BODY_DEADLINE');
-    await body.dispose(); expect(f.bot.listenerCount('entityDead')).toBe(0);
+    // The goal evidence's own listener is gone with the body. The one that stays is the connection's death ledger (utils/deathLedger: the deaths this connection
+    // saw, kept for the attack hand's `already`; it belongs to the connection and is emptied at its `end`), which the body now starts with it (continue contracts 1).
+    await body.dispose(); expect(f.bot.listenerCount('entityDead')).toBe(listenersBefore + 1);
   });
 });

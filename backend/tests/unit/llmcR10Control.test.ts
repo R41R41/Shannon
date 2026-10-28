@@ -8,6 +8,7 @@ import Act from '../../src/services/minebot/instantSkills/act.js';
 import { executeAction } from '../../src/services/minebot/execution/ActionExecution.js';
 import { NativeCommonFcaBody } from '../../src/services/minebot/integration/commonFca/nativeBody.js';
 import { ensureReflexLedger } from '../../src/services/minebot/utils/reflexLedger.js';
+import { madeCommand } from './helpers/madeFor.js';
 
 // r10 (2026-10-22, run 34).
 // B2: the probes a step sends (sight, around, column, path ...) took one poll period each, one after another (the API hands the body one command
@@ -137,8 +138,9 @@ function actBody() {
   const body = new NativeCommonFcaBody(bot, { serverId: 'home', capture: async () => { throw Error('unused'); } });
   return { bot, body };
 }
-const actCommand = (id: string, ms: number, hands: unknown[] = [{ do: 'wait', seconds: 0.05 }]): MinecraftControlCommand =>
-  command(id, { skill: 'act', arguments: { hands }, deadlineAt: new Date(NOW() + ms).toISOString() });
+// An act moves the body: it carries the life and what its decision read, taken from the body's own observation (continue contracts 2, 5).
+const actCommand = (body: NativeCommonFcaBody, id: string, ms: number, hands: unknown[] = [{ do: 'wait', seconds: 0.05 }]): MinecraftControlCommand =>
+  madeCommand(body, command(id, { skill: 'act', arguments: { hands }, deadlineAt: new Date(NOW() + ms).toISOString() }));
 /** The control loop's own deadline: its controller aborts the command's signal when its time is up. */
 function deadlineSignal(ms: number): AbortSignal {
   const controller = new AbortController();
@@ -158,7 +160,7 @@ describe('B3: an act that comes while a reflex holds the body (run 34 +576: a fl
     const { letGo, holding } = holdFlee(bot);
     await wait(10);
     const began = Date.now();
-    const pending = body.execute(actCommand('urgent', 4000), deadlineSignal(4000));
+    const pending = body.execute(actCommand(body, 'urgent', 4000), deadlineSignal(4000));
     await wait(400);
     // Still waiting: nothing of the act has run, and the command has no receipt.
     let settled = false; void pending.then(receipt => { settled = true; console.log('[r10 act-while-held]', Date.now() - began, 'ms', JSON.stringify(receipt).slice(0, 300)); });
@@ -180,7 +182,7 @@ describe('B3: an act that comes while a reflex holds the body (run 34 +576: a fl
     const { bot, body } = actBody();
     bot.floorReflexes = { retreat: { engaged: false, ticks: 0, cooldown: 0, engagements: 0 }, busy: null, retryAt: 0, engagements: { eat: 0, armor: 0 }, fleeStarts: [],
       fleeEpisode: { startedAt: Date.now(), origin: new Vec3(0, 64, 0), segments: 3, stalls: 0, outcome: 'done' } };
-    const pending = body.execute(actCommand('urgent', 4000), new AbortController().signal);
+    const pending = body.execute(actCommand(body, 'urgent', 4000), new AbortController().signal);
     await wait(250);
     // No lease at all just now (between two segments), and the act has not begun.
     expect(bot.executingSkill).toBe(false);
@@ -198,7 +200,7 @@ describe('B3: an act that comes while a reflex holds the body (run 34 +576: a fl
     const { letGo, holding } = holdFlee(bot);
     await wait(10);
     const began = Date.now();
-    const receipt = await body.execute(actCommand('late', 2200), deadlineSignal(2200));
+    const receipt = await body.execute(actCommand(body, 'late', 2200), deadlineSignal(2200));
     const took = Date.now() - began;
     console.log('[r10 act-late]', took, 'ms', JSON.stringify({ ...receipt, observedAt: undefined }).slice(0, 400));
     expect(receipt).toMatchObject({ outcome: 'failed', failureType: 'interrupted_by_reflex', recoverable: true, inputsReleased: true });
@@ -212,7 +214,7 @@ describe('B3: an act that comes while a reflex holds the body (run 34 +576: a fl
     const { bot, body } = actBody();
     const { letGo, holding } = holdFlee(bot);
     await wait(10);
-    const abort = new AbortController(), pending = body.execute(actCommand('gone', 4000), abort.signal);
+    const abort = new AbortController(), pending = body.execute(actCommand(body, 'gone', 4000), abort.signal);
     await wait(100); abort.abort('server_cancel');
     const receipt = await pending;
     expect(receipt).toMatchObject({ outcome: 'cancelled', inputsReleased: true });
@@ -223,7 +225,7 @@ describe('B3: an act that comes while a reflex holds the body (run 34 +576: a fl
   it('no reflex holds the body: the act runs at once and the receipt is as it was', async () => {
     const { body } = actBody();
     const began = Date.now();
-    const receipt = await body.execute(actCommand('plain', 4000), new AbortController().signal);
+    const receipt = await body.execute(actCommand(body, 'plain', 4000), new AbortController().signal);
     expect(Date.now() - began).toBeLessThan(500);
     const json = JSON.parse(receipt.result!);
     expect(json).toMatchObject({ ok: true });

@@ -1,6 +1,8 @@
 import { EventEmitter } from 'node:events';
 import { Vec3 } from 'vec3';
 import { describe, expect, it, vi } from 'vitest';
+import { madeCommand } from './helpers/madeFor.js';
+import type { BodyObservation } from '../../src/services/minebot/integration/commonFca/bodyControlContract.js';
 
 // r10 (2026-10-22, run 34 +565 to +580): B3 with the floor itself, not a stand-in for it.
 // At 7.5 health, a piglin 6.9 m off and a rock to dig down in, the last stand ("低体力で逃げ道なし: 足元を掘って下がった") made eleven hands in 12 s,
@@ -58,7 +60,8 @@ function scene() {
   return { bot, body, ledger, stands, piglin, stop: async () => { clearInterval(ticking); await body.dispose(); } };
 }
 const context = { scopeKey: 'owner', taskId: 'task1', taskRevision: 1, bodyId: 'minecraft:home', sessionId: 'session1', generation: 1, goal: 'test', completionCondition: 'done' };
-const urgent = (id: string, ms: number) => ({ schemaVersion: 1, id, serverId: 'home', connectionId: 'connection1', kind: 'skill', context,
+// An act moves the body: it carries the life and what its decision read, taken from the body's own observation (continue contracts 2, 5).
+const urgent = (body: { observe(): BodyObservation }, id: string, ms: number) => madeCommand(body, { schemaVersion: 1, id, serverId: 'home', connectionId: 'connection1', kind: 'skill', context,
   lease: { id: 'lease1', generation: 1, holder: 'task1' }, deadlineAt: new Date(Date.now() + ms).toISOString(), skill: 'act',
   arguments: { hands: [{ do: 'wait', seconds: 0.05 }] } }) as never;
 const deadline = (ms: number) => { const controller = new AbortController(); setTimeout(() => controller.abort('deadline'), ms).unref(); return controller.signal; };
@@ -81,7 +84,7 @@ describe('B3 with the floor: the last stand repeats a hand a second at low healt
     // The observation says so too (the head need not send an act until this is null).
     expect(body.observe().facts.reflexHeld).toBe('floor-last-stand');
     const began = Date.now();
-    const pending = body.execute(urgent('urgent', 9000), deadline(9000));
+    const pending = body.execute(urgent(body, 'urgent', 9000), deadline(9000));
     let receiptAt = 0; void pending.then(() => { receiptAt = Date.now(); });
     await wait(1200);
     // Still waiting: three hands may have been made, the act has not begun.
@@ -105,7 +108,7 @@ describe('B3 with the floor: the last stand repeats a hand a second at low healt
     const { body, stands, stop } = scene();
     await vi.waitFor(() => expect(stands().length).toBeGreaterThanOrEqual(2), { timeout: 6000, interval: 20 });
     const began = Date.now();
-    const receipt = await body.execute(urgent('urgent', 3500), deadline(3500));
+    const receipt = await body.execute(urgent(body, 'urgent', 3500), deadline(3500));
     const took = Date.now() - began;
     console.log('[r10 act late]', took, 'ms', receipt.result);
     expect(receipt).toMatchObject({ outcome: 'failed', failureType: 'interrupted_by_reflex', recoverable: true, inputsReleased: true });

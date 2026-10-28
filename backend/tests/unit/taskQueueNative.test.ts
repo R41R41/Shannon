@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { CommonFcaControlLoop } from '../../src/services/minebot/integration/commonFca/controlLoop.js';
 import { NativeCommonFcaBody } from '../../src/services/minebot/integration/commonFca/nativeBody.js';
 import type { MinecraftControlCommand } from '../../src/services/minebot/integration/commonFca/minecraftControlContract.js';
+import { madeCommand } from './helpers/madeFor.js';
 
 // The task queue with the real native body behind the loop: an item that starts while a reflex holds the body waits for it (the existing r10
 // `afterReflex`), an item's limit counts from its start, the poll says how far the running act is, and a condition is checked on the bot.
@@ -31,9 +32,12 @@ function fixture(runs: Array<(bot: any) => Promise<{ success: boolean; result: s
       const response = responses.shift();
       return new Response(JSON.stringify({ schemaVersion: 1, mode: 'common-fca', commands: [], cancel: [], acknowledged: [], ...response }));
     }) });
-  const deliver = async (...commands: MinecraftControlCommand[]) => { responses.push({ commands }); await loop.poll(); await wait(0); };
+  // An act moves the body: it carries the life and what its decision read, taken from the body's own observation (continue contracts 2, 5).
+  const deliver = async (...commands: MinecraftControlCommand[]) => { responses.push({ commands: commands.map(command => madeCommand(body, command)) }); await loop.poll(); await wait(0); };
+  /** A reply with the commands as they are (the test says what each carries). */
+  const deliverRaw = async (...commands: MinecraftControlCommand[]) => { responses.push({ commands }); await loop.poll(); await wait(0); };
   const receipts = async () => { responses.push({}); await loop.poll(); return Object.fromEntries((requests.at(-1).receipts as any[]).map(r => [r.id, r])); };
-  return { bot, body, loop, act, calls, requests, deliver, receipts };
+  return { bot, body, loop, act, calls, requests, deliver, deliverRaw, receipts };
 }
 
 describe('the queue on the native body', () => {
@@ -118,6 +122,43 @@ describe('the queue on the native body', () => {
     expect(out.a).toMatchObject({ outcome: 'failed', failureType: 'precondition', inputsReleased: true });
     expect(out.a.result).toBe('前提を満たさず始めなかった: 食料 0/99 点（手は動かしていない）');
     expect(f.act.run).not.toHaveBeenCalled();
+    await f.loop.stop(); await f.body.dispose();
+  });
+
+  // ----- continue contracts (2, 5): the lapses on the real body -----
+  it('an item whose command has no life is life_missing: the body does not start it and no hand moves; the same item with its life starts', async () => {
+    const f = fixture([async () => ({ success: true, result: 'ok' })]);
+    const bare = madeCommand(f.body, item('a', 'q1', null)) as any;
+    delete bare.context.life;
+    await f.deliverRaw(bare);
+    const out = await f.receipts();
+    expect(out.a).toMatchObject({ outcome: 'failed', failureType: 'life_missing', inputsReleased: true, unit: { goal: 'not_started', end: 'not_run' } });
+    expect(f.act.run).not.toHaveBeenCalled();
+    await f.deliver(item('b', 'q2', null));
+    await wait(30);
+    expect(f.act.run).toHaveBeenCalledTimes(1);
+    await f.loop.stop(); await f.body.dispose();
+  });
+
+  it('death-at-each-moment, waiting_for_reflex: an item that waits for a reflex and the body dies is stopped; when the reflex lets go, nothing of the old life moves', async () => {
+    const f = fixture([() => wait(60).then(() => ({ success: true, result: 'a done' })), async () => ({ success: true, result: 'b done' })]);
+    await f.deliver(item('a', 'q1', null));
+    await f.deliver(item('b', 'q2', 'q1'));
+    f.bot.floorReflexes = { retreat: { engaged: true, ticks: 0, cooldown: 0, engagements: 1 }, busy: null, retryAt: 0, engagements: { eat: 0, armor: 0 } };
+    await wait(250);                                  // a is done; b has begun and waits for the reflex
+    expect(f.act.run).toHaveBeenCalledTimes(1);
+    f.bot.health = 0; f.bot.emit('death');
+    await wait(50);
+    const letGoAt = Date.now();
+    f.bot.floorReflexes.retreat.engaged = false;
+    await wait(400);
+    expect(f.act.run).toHaveBeenCalledTimes(1);       // b's act never began
+    const out = await f.receipts();
+    expect(out.a).toMatchObject({ outcome: 'completed' });
+    expect(out.b).toMatchObject({ outcome: 'cancelled', inputsReleased: true });
+    // It ended with the death, before the reflex let go (not because it did): nothing of it moved.
+    expect(Date.parse(out.b.bodyTimes.endedAt)).toBeLessThan(letGoAt);
+    expect(out.b.unit).toMatchObject({ goal: 'not_started', end: 'not_run', released: true });
     await f.loop.stop(); await f.body.dispose();
   });
 });

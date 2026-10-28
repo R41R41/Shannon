@@ -8,9 +8,11 @@ import { installFloorReflexes } from '../../src/services/minebot/utils/floorRefl
 import { craftDoneDespiteCut, craftWitness } from '../../src/services/minebot/utils/cutCraftRecovery.js';
 import { markHeadCombat } from '../../src/services/minebot/utils/combatOwner.js';
 import { ensureReflexLedger } from '../../src/services/minebot/utils/reflexLedger.js';
+import { madeCommand } from './helpers/madeFor.js';
 
 const context = { scopeKey: 'owner', taskId: 'task1', taskRevision: 1, bodyId: 'minecraft:home', sessionId: 'session1', generation: 1, goal: 'test', completionCondition: 'done' };
-const command = (fields = {}, ms = 5000): any => ({ schemaVersion: 1, id: 'one', serverId: 'home', connectionId: 'connection1', kind: 'skill', context,
+// A command that moves the body carries the life and what its decision read (continue contracts 2, 5): `fixture().command` adds them from the body's own observation.
+const rawCommand = (fields = {}, ms = 5000): any => ({ schemaVersion: 1, id: 'one', serverId: 'home', connectionId: 'connection1', kind: 'skill', context,
   lease: { id: 'lease1', generation: 1, holder: 'task1' }, deadlineAt: new Date(Date.now() + ms).toISOString(), skill: 'craft-one',
   arguments: { itemName: 'iron_chestplate' }, ...fields });
 const settle = (ms = 20) => new Promise(resolve => setTimeout(resolve, ms));
@@ -57,12 +59,13 @@ function fixture(options: { make?: boolean; skeletonAt?: number } = {}) {
   bot.instantSkills = { getSkills: () => [skill] };
   const ledger = ensureReflexLedger(bot);
   const body = new NativeCommonFcaBody(bot, { serverId: 'home', capture: async () => { throw Error('unused'); } });
-  return { bot, body, skill, state, ledger, slots, carried };
+  const command = (fields = {}, ms = 5000): any => madeCommand(body, rawCommand(fields, ms));
+  return { bot, body, skill, state, ledger, slots, carried, command };
 }
 
 describe('run 21: a craft cut off after the piece was made is a success', () => {
   it('craft-one cut by the armour reflex, the piece worn: completed, and says so', async () => {
-    const { bot, body, slots } = fixture();
+    const { bot, body, slots, command } = fixture();
     const pending = body.execute(command(), new AbortController().signal);
     await settle();
     expect(bot.inventory.items().map((item: any) => item.name)).toEqual(['iron_chestplate']);
@@ -80,7 +83,7 @@ describe('run 21: a craft cut off after the piece was made is a success', () => 
   });
 
   it('craft-one cut by a reflex, the piece still in the pack: completed too', async () => {
-    const { bot, body } = fixture();
+    const { bot, body, command } = fixture();
     const pending = body.execute(command(), new AbortController().signal);
     await settle();
     preemptLowerPriorityActions(bot, 200, 'floor-eat');
@@ -91,7 +94,7 @@ describe('run 21: a craft cut off after the piece was made is a success', () => 
   });
 
   it('craft-one cut by a reflex before anything was made: still interrupted_by_reflex', async () => {
-    const { bot, body } = fixture({ make: false });
+    const { bot, body, command } = fixture({ make: false });
     const pending = body.execute(command(), new AbortController().signal);
     await settle();
     preemptLowerPriorityActions(bot, 200, 'floor-eat');
@@ -100,7 +103,7 @@ describe('run 21: a craft cut off after the piece was made is a success', () => 
   });
 
   it('a different item in the pack does not make the craft a success', async () => {
-    const { bot, body, carried } = fixture({ make: false });
+    const { bot, body, carried, command } = fixture({ make: false });
     carried.push({ name: 'iron_helmet', count: 1 });
     const pending = body.execute(command(), new AbortController().signal);
     await settle();
@@ -110,7 +113,7 @@ describe('run 21: a craft cut off after the piece was made is a success', () => 
   });
 
   it('an API cancel stays cancelled even when the piece exists', async () => {
-    const { bot, body } = fixture();
+    const { bot, body, command } = fixture();
     const abort = new AbortController(), pending = body.execute(command(), abort.signal);
     await settle();
     abort.abort('server_cancel');
@@ -142,7 +145,7 @@ describe('run 21: a craft cut off after the piece was made is a success', () => 
 
 describe('run 21: the observation says who owns the fight', () => {
   it('facts.combatOwner is head while the planner\'s fight holds the body, and null otherwise', async () => {
-    const { bot, body } = fixture();
+    const { bot, body, command } = fixture();
     expect(body.observe().facts).toMatchObject({ combatOwner: null, closeInAdvised: false });
     markHeadCombat(bot, 'attack-nearest', ['*']);
     expect(body.observe().facts.combatOwner).toBe('head');

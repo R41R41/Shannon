@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { bodySkillCatalog, normalizeSkillSchema } from '../../src/services/minebot/integration/commonFca/skillCatalog.js';
 import { executeAction, cancelActiveActions, physicalActionBusy } from '../../src/services/minebot/execution/ActionExecution.js';
 import { NativeCommonFcaBody } from '../../src/services/minebot/integration/commonFca/nativeBody.js';
+import { madeCommand, madeFor } from './helpers/madeFor.js';
 import { createBodyImageCapture, createRenderProcessSession, rendererResolvable } from '../../src/services/minebot/integration/commonFca/imageCapture.js';
 const context = { scopeKey: 'owner', taskId: 'task1', taskRevision: 1, bodyId: 'minecraft:home', sessionId: 'session1', generation: 1, goal: 'test', completionCondition: 'done' };
 const command = (fields = {}): any => ({ schemaVersion: 1, id: 'one', serverId: 'home', connectionId: 'connection1', kind: 'skill', context,
@@ -95,14 +96,16 @@ describe('common FCA native body', () => {
     expect(bot).toBeTruthy(); await body.dispose();
   });
   it('checks current candidate facts and refuses new arguments before motor calls', async () => {
-    const { body, bot } = fixture(); const observation = body.observe();
+    // A reflex moves the body: its command and its operation carry the same context with the life and what the decision read (continue contracts 2, 5), taken before the
+    // observation the candidate is for (taking it observes, and the candidate must be for the observation that is current).
+    const { body, bot } = fixture(); const made = madeFor(body), carried = { ...context, ...made }; const observation = body.observe();
     const draft = body.candidates(observation).find(c => c.operation === 'control')!;
     const candidate = { ...draft, id: 'candidate1', sessionId: context.sessionId, generation: 1, taskRevision: 1, observationSequence: observation.sequence };
-    const operation = { schemaVersion: 1, operationId: 'op1', context, candidate, observationSequence: observation.sequence, deadlineAt: new Date(Date.now() + 1500).toISOString() };
+    const operation = { schemaVersion: 1, operationId: 'op1', context: carried, candidate, observationSequence: observation.sequence, deadlineAt: new Date(Date.now() + 1500).toISOString() };
     bot.entity.yaw = 0.1;
-    await expect(body.execute(command({ kind: 'reflex', operation }), new AbortController().signal)).rejects.toThrow('PRECONDITION');
+    await expect(body.execute(command({ kind: 'reflex', operation, context: carried }), new AbortController().signal)).rejects.toThrow('PRECONDITION');
     bot.entity.yaw = 0; operation.candidate.arguments = { control: 'forward', milliseconds: 99_999 };
-    await expect(body.execute(command({ kind: 'reflex', operation }), new AbortController().signal)).rejects.toThrow('NOT_SUPPORTED');
+    await expect(body.execute(command({ kind: 'reflex', operation, context: carried }), new AbortController().signal)).rejects.toThrow('NOT_SUPPORTED');
     expect(bot.setControlState).not.toHaveBeenCalled(); await body.dispose();
   });
   it('keeps an unreturned physical action held after cancellation until actual native work settles', async () => {
@@ -110,7 +113,7 @@ describe('common FCA native body', () => {
     let finish!: () => void;
     query.run = vi.fn(async () => { await new Promise<void>(resolve => { finish = resolve; }); return { success: true, result: 'late work ended' }; });
     const body = new NativeCommonFcaBody(bot, { serverId: 'home', capture: async () => { throw Error('unused'); } });
-    const abort = new AbortController(); const pending = body.execute(command({ skill: 'mine-block' }), abort.signal);
+    const abort = new AbortController(); const pending = body.execute(madeCommand(body, command({ skill: 'mine-block' })), abort.signal);
     await new Promise(resolve => setTimeout(resolve, 0)); abort.abort();
     expect(await body.release(AbortSignal.timeout(15))).toBe(false);
     finish(); expect(await pending).toMatchObject({ outcome: 'cancelled', inputsReleased: true });

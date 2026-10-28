@@ -214,7 +214,9 @@ describe('review: a real frame, the end portal, the end gateway, the last point 
     expect(result.success).toBe(false);
     expect(result.failureType).toBe('dimension_changed');
     const json = JSON.parse(result.result);
-    expect(json.stoppedBy).toBe('failure');
+    // A change of dimension is a lapse (continue contracts 2): the act is cut from outside (stoppedBy 'cancelled', cutBy dimension_changed), no longer a failure of a hand.
+    expect(json.stoppedBy).toBe('cancelled');
+    expect(json.outcome).toMatchObject({ end: 'cut', cutBy: 'dimension_changed' });
     expect(json.stoppedWhy).toContain('次元が変わった（overworld → the_nether）');
     expect(json.lines[0].line).not.toContain('歩いて入った');
     expect(json.lines[1].line).toBe('未実行');
