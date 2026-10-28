@@ -38,6 +38,11 @@ const SHARP_HP = 6, SHARP_MS = 5_000;
 export interface Incident { id: string; kind: 'act' | 'health' | 'death'; heavy: boolean; why: string; box: string | null; scene: string | null; held: boolean; frozen: boolean | null; freeze?: string;
   /** A hold that was asked for and not made: the world could not be stopped (the freeze's words). */
   notHeld?: string;
+  /**
+   * Run 45 (holds 3 to 5): the act a resume sent again failed for the reason it was held for: no hold again (the world goes on, the head decides
+   * with the result). The id of the hold it was sent again for.
+   */
+  repeated?: string;
   /** The feet when the act began, and when it ended (the hold's place): a resume reads how far the body is from where the act began. */
   start?: [number, number, number] | null; end?: [number, number, number] | null }
 export interface Hold { id: string; task: string; at: string; frozen: boolean; freeze: string; command: string; why: string; start?: [number, number, number] | null }
@@ -55,6 +60,11 @@ interface Context { taskId?: string; incident?: { hold?: boolean; resume?: strin
  */
 export function holdsFor(reason: string | null): boolean {
   return !!reason && /^(?:go_stuck|go_search_timeout|go_limit_time_low|long:|near_death|death)/u.test(reason);
+}
+
+/** The kind of a heavy-failure reason (`go_limit_time_low:3` and `go_limit_time_low:7` are one kind). */
+export function reasonKind(reason: string): string {
+  return reason.split(':')[0]!;
 }
 
 /** The heavy-failure reason of an act's report, or null (light: the box only). */
@@ -91,6 +101,8 @@ export class Incidents {
   private inAct = false;
   /** Run 45: the task of the last act, whether it asked to be held, and when (a death outside an act holds for it within ASKED_FOR_MS). */
   private asked: { task: string; hold: boolean; at: number } | null = null;
+  /** Run 45: the hold a resume ended last (its id and reason), until the act sent again for it ends (`context.incident.resume` names it). */
+  private resumed: { id: string; why: string } | null = null;
 
   constructor(private readonly bot: any, private readonly options: { holdFile: string; scene?: SceneSaver | null; now?: () => number }) {
     try { this.hold = JSON.parse(fs.readFileSync(options.holdFile, 'utf8')) as Hold; } catch { this.hold = null; }
@@ -133,6 +145,7 @@ export class Incidents {
     const hold = this.hold;
     if (!hold) { this.inAct = true; return null; }
     if (context?.incident?.resume === hold.id) {
+      this.resumed = { id: hold.id, why: hold.why };
       const said = await this.unfreeze();
       log.warn(`▶ 保留を解いた ${hold.id}: ${said}`);
       box?.note('resume', { hold: hold.id, unfreeze: said });
@@ -154,6 +167,10 @@ export class Incidents {
   /** After an act: the box (when it did not succeed), the scene (when heavy), and the hold (when the task asked for it). The incident, or null. */
   async afterAct(command: { id: string; context?: Context; arguments?: unknown }, report: ActReport, ms: number): Promise<Incident | null> {
     this.inAct = false;
+    // Run 45: the act a resume sent again (it names the hold the resume ended).
+    const resumedFor = command.context?.incident?.resume;
+    const again = resumedFor && this.resumed?.id === resumedFor ? this.resumed : null;
+    if (resumedFor) this.resumed = null;
     if (report.ok) return null;
     const task = command.context?.taskId ?? 'no-task';
     const reason = heavyReason(report, ms, this.lowestHp, this.died, this.seen, task);
@@ -161,9 +178,17 @@ export class Incidents {
     const why = reason ?? `${report.stoppedBy ?? 'failed'}:${(report.lines.find(line => line.status !== 'done')?.line ?? '').slice(0, 80)}`;
     const act = { command: command.id, arguments: command.arguments, ms, ok: report.ok, stoppedBy: report.stoppedBy ?? null, lines: report.lines.map(line => ({ do: line.do, status: line.status, line: line.line })) };
     // A hold stops the world first, so that the scene saved next is the moment of the failure (nothing falls or flows in between).
-    const holding = holdsFor(reason) && command.context?.incident?.hold === true;
+    // Run 45 (holds 3 to 5): sent again by a resume and failed for the same reason (its kind: go_stuck, go_limit_time_low, long, ...): the operator's
+    // fix did not help, and a hold again only waits for the same resume. No hold: the head decides with the result.
+    const repeated = again !== null && reason !== null && holdsFor(reason) && reasonKind(reason) === reasonKind(again.why);
+    const holding = holdsFor(reason) && command.context?.incident?.hold === true && !repeated;
     const freeze = holding ? (this.options.scene ? await this.options.scene.freeze() : { frozen: false, why: 'no_scene_port' }) : null;
     const incident = await this.write('act', heavy, why, act);
+    if (incident && repeated && command.context?.incident?.hold === true) {
+      log.warn(`⏵ 保留しなかった ${incident.id}（${why}）: 保留 ${again!.id} から出し直した act が同じ理由で失敗。判断に任せる`);
+      this.box()?.note('hold_not_again', { id: incident.id, hold: again!.id, why });
+      return { ...incident, repeated: again!.id };
+    }
     if (!incident || !holding || !freeze) return incident;
     if (!freeze.frozen) {
       // Not held: the world goes on, and so does the task (the head reads `notHeld` and writes it down).
@@ -223,6 +248,7 @@ export class Incidents {
     if (hold) {
       log.warn(`${how === 'cancel' ? '⏹ 保留していたタスクが止められたので' : '▶ 再開の命令で'}、保留 ${hold.id} を解いた: ${said}`);
       this.box()?.note(how === 'cancel' ? 'hold_cancelled' : 'resume', { hold: hold.id, unfreeze: said });
+      this.resumed = how === 'resume' ? { id: hold.id, why: hold.why } : null;
       this.clearHold();
     } else log.warn(`保留 ${id} を解く命令（${how}）が来たが、体は保留していない: 世界だけ動かした（${said}）`);
     return { done: true, hold: null, unfreeze: said };
@@ -263,6 +289,7 @@ export function withIncidentText(text: string, incident: Incident | null): strin
   try {
     return JSON.stringify({ ...JSON.parse(text), incident: { id: incident.id, heavy: incident.heavy, why: incident.why, held: incident.held,
       frozen: incident.frozen, ...(incident.freeze ? { freeze: incident.freeze } : {}), ...(incident.notHeld ? { notHeld: incident.notHeld } : {}),
+      ...(incident.repeated ? { repeated: incident.repeated } : {}),
       box: incident.box !== null, scene: incident.scene !== null,
       ...(incident.start ? { start: incident.start } : {}), ...(incident.end ? { end: incident.end } : {}) } });
   } catch { return text; }

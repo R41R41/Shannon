@@ -6,7 +6,7 @@ import { gunzipSync } from 'node:zlib';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Vec3 } from 'vec3';
 import { BLACKBOX_WINDOW_MS, installBlackBox } from '../../src/services/minebot/utils/blackbox.js';
-import { heavyReason, holdsFor, Incidents } from '../../src/services/minebot/utils/incidents.js';
+import { heavyReason, holdsFor, Incidents, withIncidentText } from '../../src/services/minebot/utils/incidents.js';
 import { regionsAround, SceneSaver, selfNames } from '../../src/services/minebot/utils/sceneSave.js';
 
 // 2026-10-28 (owner: 「黒箱・現場の保存・止めて直す実走」): the body's black box, the scene of a heavy failure, and the hold of a fix run.
@@ -308,5 +308,66 @@ describe('run 45 (+929): a death outside an act', () => {
     (fourth as any).bot.emit('death'); await settle();
     expect(fourth.held()).toBeNull();
     expect(busy.said).not.toContain('tick freeze');
+  });
+});
+
+describe('run 45, holds 3 to 5: the act a resume sent again fails for the same reason', () => {
+  function server() {
+    const serverDir = temp();
+    fs.mkdirSync(path.join(serverDir, 'world', 'region'), { recursive: true }); fs.mkdirSync(path.join(serverDir, 'logs'), { recursive: true });
+    fs.writeFileSync(path.join(serverDir, 'world', 'level.dat'), 'L');
+    for (const file of regionsAround(10, -3)) fs.writeFileSync(path.join(serverDir, 'world', 'region', file), 'R');
+    fs.writeFileSync(path.join(serverDir, 'logs', 'latest.log'), '');
+    const said: string[] = [];
+    const saver = new SceneSaver({ serverDir, root: path.join(serverDir, 'scenes'), self: () => ['MinebotTrial'],
+      command: async text => { said.push(text); return text === 'list' ? 'There are 1 of a max of 20 players online: MinebotTrial' : text.startsWith('save-all') ? 'Saved the game' : 'ok'; } });
+    return { saver, said };
+  }
+  const stopped = (line: string) => ({ ok: false, startedAt: 0, done: 0, of: 1, lines: [{ i: 1, do: 'go' as const, status: 'stopped' as const, line }] });
+  const hold = { taskId: 'task-r', incident: { hold: true } };
+
+  it('does not hold again (the world goes on, the receipt says which hold it repeats), across a restart of the body', async () => {
+    const clock = { t: 9_000_000 };
+    const { saver, said } = server();
+    const holdFile = path.join(temp(), 'hold.json');
+    const first = new Incidents(fakeBot(clock), { holdFile, scene: saver, now: () => clock.t });
+    await first.beforeAct(hold);
+    const held = (await first.afterAct({ id: 'cmd-1', context: hold }, stopped('go 止まった search_timeout: 7936 マス調べた') as never, 9000))!;
+    expect(held).toMatchObject({ held: true, why: 'go_search_timeout' });
+    // A new body (a deploy), then the operator's resume (a release naming the hold), then the act again: it stops the same way.
+    const second = new Incidents(fakeBot(clock), { holdFile, scene: saver, now: () => clock.t });
+    expect(await second.resume(held.id)).toMatchObject({ done: true });
+    const context = { taskId: 'task-r', incident: { hold: true, resume: held.id } };
+    expect(await second.beforeAct(context)).toBeNull();
+    const freezes = said.filter(text => text === 'tick freeze').length;
+    const again = (await second.afterAct({ id: 'resume:cmd-1', context }, stopped('go 止まった search_timeout: 7936 マス調べた') as never, 9000))!;
+    expect(again).toMatchObject({ heavy: true, held: false, why: 'go_search_timeout', repeated: held.id });
+    expect(again.scene).not.toBeNull();
+    expect(said.filter(text => text === 'tick freeze').length).toBe(freezes);
+    expect(second.held()).toBeNull();
+    expect(fs.existsSync(holdFile)).toBe(false);
+    expect(JSON.parse(withIncidentText('{"ok":false}', again)).incident).toMatchObject({ held: false, repeated: held.id });
+    // Only that one act: the next failure of the kind holds as any.
+    expect(await second.beforeAct(hold)).toBeNull();
+    expect(await second.afterAct({ id: 'cmd-3', context: hold }, stopped('go 止まった search_timeout: 7936 マス調べた') as never, 9000)).toMatchObject({ held: true });
+  });
+
+  it('a different reason holds as before; and so does an act that names no resume', async () => {
+    const clock = { t: 9_500_000 };
+    const { saver } = server();
+    const incidents = new Incidents(fakeBot(clock), { holdFile: path.join(temp(), 'hold.json'), scene: saver, now: () => clock.t });
+    await incidents.beforeAct(hold);
+    const held = (await incidents.afterAct({ id: 'cmd-1', context: hold }, stopped('go 止まった stuck: 置けない') as never, 9000))!;
+    expect(held).toMatchObject({ held: true, why: 'go_stuck' });
+    expect(await incidents.resume(held.id)).toMatchObject({ done: true });
+    const context = { taskId: 'task-r', incident: { hold: true, resume: held.id } };
+    await incidents.beforeAct(context);
+    const other = (await incidents.afterAct({ id: 'resume:cmd-1', context }, stopped('go 止まった search_timeout: 1 マス') as never, 9000))!;
+    expect(other).toMatchObject({ held: true, why: 'go_search_timeout' });
+    expect(other.repeated).toBeUndefined();
+    expect(await incidents.resume(other.id)).toMatchObject({ done: true });
+    // The same reason, but not the act sent again (no resume named): held.
+    await incidents.beforeAct(hold);
+    expect(await incidents.afterAct({ id: 'cmd-5', context: hold }, stopped('go 止まった search_timeout: 1 マス') as never, 9000)).toMatchObject({ held: true });
   });
 });
