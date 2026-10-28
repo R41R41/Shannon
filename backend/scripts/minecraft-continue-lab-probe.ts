@@ -86,7 +86,7 @@ function commandOf(body: NativeCommonFcaBody, args: Record<string, unknown>, opt
       ...(options.stamp ?? made(body)) },
     lease: { id: 'continue-lease', generation: 1, holder: 'continue-lab-task' }, deadlineAt: new Date(Date.now() + (options.seconds ?? 90) * 1000).toISOString() };
 }
-async function act(body: NativeCommonFcaBody, args: Record<string, unknown>, options: { stamp?: ReturnType<typeof made>; seconds?: number; signal?: AbortSignal; id?: string } = {}) {
+async function act(body: NativeCommonFcaBody, args: Record<string, unknown>, options: { stamp?: ReturnType<typeof made>; seconds?: number; signal?: AbortSignal; id?: string; skill?: string } = {}) {
   const command = commandOf(body, args, options);
   const started = Date.now();
   const receipt: any = await body.execute(command, options.signal ?? new AbortController().signal);
