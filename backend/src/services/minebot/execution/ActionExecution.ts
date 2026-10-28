@@ -323,10 +323,10 @@ const reservations = new WeakMap<object, HandoverReservation>();
  */
 const reservationShield = new WeakMap<HandoverReservation, { lowered: number; deactivateCalls: number }>();
 interface ShieldHost { shieldBlock?: { up?: boolean; lowered?: number; deactivateCalls?: number }; usingHeldItem?: boolean; deactivateItem?: unknown }
-export interface ShieldView { up: boolean; using: boolean | null; lowered: number; deactivateCalls: number; hasDeactivate: boolean }
+export interface ShieldView { up: boolean; flag: boolean; using: boolean | null; lowered: number; deactivateCalls: number; hasDeactivate: boolean }
 function shieldViewOf(host: object): ShieldView {
   const h = host as ShieldHost;
-  return { up: h.shieldBlock?.up === true, using: typeof h.usingHeldItem === 'boolean' ? h.usingHeldItem : null, lowered: h.shieldBlock?.lowered ?? 0,
+  return { up: h.shieldBlock?.up === true && h.usingHeldItem !== false, flag: h.shieldBlock?.up === true, using: typeof h.usingHeldItem === 'boolean' ? h.usingHeldItem : null, lowered: h.shieldBlock?.lowered ?? 0,
     deactivateCalls: h.shieldBlock?.deactivateCalls ?? 0, hasDeactivate: typeof h.deactivateItem === 'function' };
 }
 const noteSinks = new WeakMap<object, (kind: string, data: Record<string, unknown>) => void>();
@@ -350,7 +350,7 @@ export function noteShieldState(bot: object, point: 'reservation' | 'stop' | 'ac
     const was = reservation ? reservationShield.get(reservation) : claimed?.was;
     const view = shieldViewOf(host);
     const command = (extra.command as string | undefined) ?? reservation?.forCommand ?? claimed?.command;
-    sink('motor_state', { ...(command ? { command } : {}), point, shield: view.up, deactivateItem: was ? view.deactivateCalls - was.deactivateCalls > 0 : false, using: view.using, hasDeactivate: view.hasDeactivate,
+    sink('motor_state', { ...(command ? { command } : {}), point, shield: view.up, flagUp: view.flag, deactivateItem: was ? view.deactivateCalls - was.deactivateCalls > 0 : false, using: view.using, hasDeactivate: view.hasDeactivate,
       ...(was ? { loweredSince: view.lowered - was.lowered, deactivatedSince: view.deactivateCalls - was.deactivateCalls } : {}), ...extra });
   } catch { /* a note never changes what the body did */ }
 }
