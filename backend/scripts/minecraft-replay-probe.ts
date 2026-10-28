@@ -303,18 +303,20 @@ try {
       const { Movements } = (await import('mineflayer-pathfinder')).default as any;
       const host = actor;
       const toolOf = host.pathfinder.bestHarvestTool;
-      const runVariant = async (name: string, m: any, prepare: () => () => void) => {
+      const runVariant = async (name: string, m: any, prepare: () => () => void, aim: any = goal) => {
         const undo = prepare();
         const t0 = performance.now(); let result: any = null, error: string | undefined;
         try {
-          const generator = originalFromTo(m, actor.entity.position, goal, { timeout: c.search!.variants });
+          const generator = originalFromTo(m, actor.entity.position, aim, { timeout: c.search!.variants });
           result = generator.next().value?.result;
           for (let rounds = 0; result?.status === 'partial' && rounds < 100000; rounds++) { await new Promise<void>(resolve => setImmediate(resolve)); result = generator.next().value?.result ?? result; }
         } catch (thrown) { error = String((thrown as Error)?.message ?? thrown).slice(0, 200); }
         finally { undo(); }
-        const entry = { variant: name, status: result?.status ?? 'error', visited: result?.visitedNodes ?? 0, ms: Math.round(performance.now() - t0), cost: result?.cost, error };
+        const path = result?.path ?? [];
+        const entry = { variant: name, status: result?.status ?? 'error', visited: result?.visitedNodes ?? 0, ms: Math.round(performance.now() - t0), cost: result?.cost,
+          pathLength: path.length, toBreak: path.reduce((sum: number, node: any) => sum + (node?.toBreak?.length ?? 0), 0), error };
         extra.push(entry);
-        log(`VARIANT ${c.name} ${name}: ${entry.status} ${entry.visited} nodes in ${entry.ms} ms (${Math.round(entry.visited / Math.max(1, entry.ms) * 1000)} nodes/s) ${error ?? ''}`);
+        log(`VARIANT ${c.name} ${name}: ${entry.status} ${entry.visited} nodes in ${entry.ms} ms (${Math.round(entry.visited / Math.max(1, entry.ms) * 1000)} nodes/s) cost=${entry.cost === undefined ? '-' : Math.round(entry.cost)} path=${entry.pathLength} break=${entry.toBreak} ${error ?? ''}`);
       };
       const memoTool = () => { const memo = new Map<string, unknown>(); host.pathfinder.bestHarvestTool = (block: any) => { const key = String(block?.stateId ?? block?.type); if (!memo.has(key)) memo.set(key, toolOf(block)); return memo.get(key); }; return () => { host.pathfinder.bestHarvestTool = toolOf; }; };
       const hostBot = (m: any) => () => { const before = m.bot; m.bot = host; return () => { m.bot = before; }; };
@@ -327,6 +329,11 @@ try {
         movements.getBlock = function (pos: any, dx: number, dy: number, dz: number) { if (!pos) return getBlock.call(this, pos, dx, dy, dz); const key = `${pos.x + dx},${pos.y + dy},${pos.z + dz}`; let hit = memo.get(key); if (!hit) { hit = getBlock.call(this, pos, dx, dy, dz); memo.set(key, hit); } return hit; };
         return () => { movements.getBlock = getBlock; b(); a(); };
       });
+      // Run 45: the goal's distance as the search's estimate under-counts a way through rock (each cell down is 2 or 3 digs): weighted, the
+      // search goes at the place sooner (a weighted A*: the way found may cost a little more than the cheapest).
+      const weighted = (weight: number) => { const aim = Object.create(goal); aim.heuristic = (node: any) => goal.heuristic(node) * weight; return aim; };
+      await runVariant('go の movements のまま・見積もり ×2', movements, () => () => {}, weighted(2));
+      await runVariant('go の movements のまま・見積もり ×3', movements, () => () => {}, weighted(3));
       const plain = new Movements(host); plain.canDig = true; plain.allow1by1towers = false; plain.allowParkour = true;
       await runVariant('pathfinder の素の movements（掘る可、体の手の決まり無し）', plain, () => () => {});
     }

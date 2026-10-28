@@ -4,9 +4,9 @@ import { PROTECTED_UTILITY_BLOCKS } from '../../constants.js';
 import { nativeActionHost } from '../../execution/ActionExecution.js';
 import { buildMovements } from '../setMovements.js';
 import { FAR_LEG_M, nextLeg } from '../farLegs.js';
-import { feetCell, type Cell } from '../localMap.js';
+import { feetCell, type BlockReader, type Cell } from '../localMap.js';
 import { chooseTool, canHarvest, nearlyBroken } from '../toolChoice.js';
-import { installDoorRules, isDoorlike, nodeCell, NO_ENTER } from '../walkRules.js';
+import { installDoorRules, isDoorlike, mapBlockOf, nodeCell, NO_ENTER, standable } from '../walkRules.js';
 import { clip } from '../actReport.js';
 import { blockAt, cellText, inventoryCount, isAirLike, letGo, stopped, StepStopped, wait, waitUntil, type StepContext, type StepOutcome } from './common.js';
 import { atGoal, goWith, type GoOutcome, type WayNotes } from './walk.js';
@@ -304,17 +304,52 @@ const THROUGH = /^(air|cave_air|void_air|water|lava|bubble_column|ladder|vine|sc
  * under it when that one is where a body stands. Null when the floor is a block, air (a bridge or a pillar lays it), a liquid or a climbable, or
  * may be dug.
  */
-export function floorlessAt(bot: any, cell: Cell, rule: Pick<DigRule, 'names'>): string | null {
+export function floorlessAt(bot: any, cell: Cell, rule: Pick<DigRule, 'names'>, placing = true): string | null {
   const under = { x: cell.x, y: cell.y - 1, z: cell.z };
   const floor = blockAt(bot, under);
   if (!floor || floor.boundingBox !== 'empty') return null;
   const name = String(floor.name).replace(/^minecraft:/u, '');
+  if (AIR.test(name)) return placing ? null : midAirWords(bot, cell, under);
   if (THROUGH.test(name) || rule.names.has(name)) return null;
   const lower = blockAt(bot, { x: cell.x, y: cell.y - 2, z: cell.z });
   const stand = lower && lower.boundingBox === 'block' && !isDoorlike(String(lower.name));
   return `行き先 ${cellText(cell)} の足元 ${cellText(under)} は ${name} で床にならない（立てない・置けない）`
     + (stand ? `。${cellText(under)} なら ${String(lower.name).replace(/^minecraft:/u, '')} の上に立てる` : '');
 }
+
+const AIR = /^(air|cave_air|void_air)$/u;
+/** How far down a place in the air is looked under for its floor. */
+const FLOOR_LOOK = 24;
+/**
+ * Run 45 (hold 1, q15 go to (163,10,229), 56 down from the surface, no canPlace): the place was in the air of a lush cave, its floor more than 12
+ * below. Nobody stands there and nothing may be laid under it: the go dug 61 blocks in 85 s toward it, every search to it ran its 5 s out (no way
+ * exists: 60,000 nodes in 90 s in the lab), and the stop said search_timeout. Said at once instead: where the floor is under it, and the nearest
+ * cell around it a body stands in.
+ */
+function midAirWords(bot: any, cell: Cell, under: Cell): string {
+  let floorY: number | null = null, met = '';
+  for (let y = under.y - 1; y >= under.y - FLOOR_LOOK; y--) {
+    const block = blockAt(bot, { x: cell.x, y, z: cell.z });
+    if (!block) break;
+    if (block.boundingBox === 'block') { floorY = y; break; }
+    if (/^(water|lava)$/u.test(String(block.name))) { met = String(block.name); break; }
+  }
+  const read: BlockReader = (x, y, z) => { const block = blockAt(bot, { x, y, z }); return block ? mapBlockOf(block) : null; };
+  let near: Cell | null = null;
+  for (const d of NEAR_OFFSETS) {
+    const at = { x: cell.x + d[0], y: cell.y + d[1], z: cell.z + d[2] };
+    if (standable(read, at.x, at.y, at.z)) { near = at; break; }
+  }
+  const below = floorY !== null ? `床は y=${floorY}（${under.y - floorY} 段下）` : met ? `下は ${met}` : `${FLOOR_LOOK} 段下まで床が無い`;
+  return `行き先 ${cellText(cell)} は宙（足元 ${cellText(under)} から下が空気、${below}）。置く物（canPlace）が無いので立てない`
+    + (near ? `。近くの立てる所 ${cellText(near)}` : '') + (floorY !== null ? `。床の上なら ${cellText({ x: cell.x, y: floorY + 1, z: cell.z })}` : '');
+}
+/** The cells around a place, nearest first (within 2 across, 2 up and 3 down). */
+const NEAR_OFFSETS: ReadonlyArray<readonly [number, number, number]> = (() => {
+  const out: Array<[number, number, number]> = [];
+  for (let dx = -2; dx <= 2; dx++) for (let dy = -3; dy <= 2; dy++) for (let dz = -2; dz <= 2; dz++) if (dx || dy || dz) out.push([dx, dy, dz]);
+  return out.sort((a, b) => Math.hypot(...a) - Math.hypot(...b));
+})();
 
 /** Whether the block just laid against `reference` on `face` shows in the world (the cell beside it is no longer air), looked at for a moment as the update may come late. */
 /** The cell a place of `reference` on `face` fills. */
@@ -369,16 +404,18 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     data: { work: { dug: state.dug, placed: state.placed, steps: state.steps, redraws: state.redraws } } });
 
   // ---- the places: the ones nobody may stand in are dropped; none left is `unsafe` ----
-  const standable = cells.filter(cell => !hazardAtFeet(bot, cell.x, cell.y, cell.z));
-  if (!standable.length) {
+  const safeCells = cells.filter(cell => !hazardAtFeet(bot, cell.x, cell.y, cell.z));
+  if (!safeCells.length) {
     const why = hazardAtFeet(bot, cells[0].x, cells[0].y, cells[0].z) ?? '危ない';
     return fail('unsafe', `行き先 ${cellText(cells[0])} は${why}（溶岩・火・マグマ・サボテン・ベリー・ウィザーローズとその隣には行かない）`, '別の行き先を');
   }
   // Run 44 (hold 1): a place over a plant nobody stands on is said at once (`floorlessAt`); one place of several that is such is dropped.
-  const grounded = limits.range < 1 ? standable.filter(cell => !floorlessAt(bot, cell, rule)) : standable;
+  // Run 45 (hold 1): a place in the air with nothing to lay under it (no canPlace held) is said at once too.
+  const placing = place.held.length > 0;
+  const grounded = limits.range < 1 ? safeCells.filter(cell => !floorlessAt(bot, cell, rule, placing)) : safeCells;
   if (!grounded.length) {
-    const why = floorlessAt(bot, standable[0], rule)!;
-    return fail('no_floor', why, /なら .* の上に立てる$/u.test(why) ? 'その 1 つ下を行き先に' : '別の行き先を');
+    const why = floorlessAt(bot, safeCells[0], rule, placing)!;
+    return fail('no_floor', why, /なら .* の上に立てる$/u.test(why) ? 'その 1 つ下を行き先に' : /^行き先 .* は宙/u.test(why) ? '立てる所を行き先に（宙へ渡るなら canPlace）' : '別の行き先を');
   }
   const targets = grounded;
   const near = (): Cell => targets.reduce((best, cell) => (distanceTo(bot, cell) < distanceTo(bot, best) ? cell : best), targets[0]);
@@ -753,7 +790,14 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
       if (found.status === 'timeout') {
         // The part of the way the search had found when its time ran out: walked when its end is nearer the place by 2 m or more.
         const tip = found.path.length ? found.path[found.path.length - 1] : null;
-        if (tip && partialWalks < GO_PARTIAL_WALKS && !budgetOf(countOf(found), found.places)) {
+        // Run 45 (hold 1, at y=33 with 61 of maxDig 80 dug): the part of the way the search had found broke more than the limit left, so it was
+        // not walked, and the stop said search_timeout (道探しが終わらない). It is the limit: said as such, with what is left and what the part needs.
+        const over = tip ? budgetOf(countOf(found), found.places) : null;
+        if (over && partialWalks < GO_PARTIAL_WALKS) {
+          return fail(over.code, `道探しは ${(searchCap / 1000).toFixed(searchCap < 1000 ? 2 : 0)} 秒で終わらず、見つかった途中までの道（${cellText(nodeCell(tip!))} まで）でも${over.text.replace(/^この道は/u, '')}`,
+            over.code === 'limit_dig' ? 'maxDig を増やして出し直す（下りは 1 段に 2 前後掘る）' : 'maxPlace を増やして出し直す');
+        }
+        if (tip && partialWalks < GO_PARTIAL_WALKS) {
           const cell = nodeCell(tip);
           const gain = distanceTo(bot, aim) - Math.hypot(cell.x - aim.x, cell.y - aim.y, cell.z - aim.z);
           if (gain >= 2) {
