@@ -1,0 +1,12 @@
+{
+ "producedBy": "backend/scripts/minecraft-continue-lab-probe.ts",
+ "bench": "B",
+ "bodyRevision": "d70dc012bb96",
+ "madeAt": "2026-10-28T19:20:16.387Z",
+ "answers": "control/stale-owner-cleanup",
+ "fixtureSha256": "f17ff65630cfbe6f0205676594fd2fddf2a251edb510bf47b048cd4647f7a938",
+ "output": {
+  "oldRefused": true,
+  "newKeysKept": true
+ }
+}

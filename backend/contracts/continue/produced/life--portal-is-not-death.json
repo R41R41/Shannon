@@ -1,0 +1,45 @@
+{
+ "producedBy": "backend/scripts/minecraft-continue-lab-probe.ts",
+ "bench": "B",
+ "bodyRevision": "d70dc012bb96",
+ "madeAt": "2026-10-28T19:20:33.377Z",
+ "answers": "life/portal-is-not-death",
+ "fixtureSha256": "476bf80b606d56aaee42c54b9a091b15366d25bdb639a2cc7623069beab374cd",
+ "output": {
+  "lifeBefore": 3,
+  "netherLife": {
+   "life": 3,
+   "advancedBy": "death",
+   "deathEpoch": "de-826495eb",
+   "deathSeq": 2,
+   "since": "2026-10-28T19:20:05.216Z",
+   "alive": true,
+   "diedAt": "2026-10-28T19:20:05.216Z",
+   "dimension": "the_nether",
+   "dimensionSince": "2026-10-28T19:20:19.110Z"
+  },
+  "afterDeathLife": {
+   "life": 4,
+   "advancedBy": "death",
+   "deathEpoch": "de-826495eb",
+   "deathSeq": 3,
+   "since": "2026-10-28T19:20:28.696Z",
+   "alive": true,
+   "diedAt": "2026-10-28T19:20:28.696Z",
+   "dimension": "overworld",
+   "dimensionSince": "2026-10-28T19:20:31.176Z"
+  },
+  "oldCommand": {
+   "failureType": "dimension_changed",
+   "unit": {
+    "goal": "not_started",
+    "end": "not_run",
+    "released": true,
+    "code": "dimension_changed",
+    "droppedBecause": {
+     "code": "dimension_changed"
+    }
+   }
+  }
+ }
+}
