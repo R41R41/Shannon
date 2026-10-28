@@ -64,17 +64,17 @@ describe('A-6 (2, 9): the shield through a handover', () => {
     expect(handover).toMatchObject({ confirmed: true, shield: 'kept' });
     expect(calls).not.toContain('deactivate');
     // The actual state is written at the reservation, the claim and the first operation (the measurement reads them beside the operations).
-    expect(notes.map(note => note.data.phase)).toEqual(['reserve', 'claim', 'first_op']);
-    expect(notes.every(note => note.kind === 'shield_state' && note.data.up === true)).toBe(true);
-    expect(notes[1].data).toMatchObject({ shield: 'kept', loweredSince: 0, deactivatedSince: 0 });
+    expect(notes.map(note => note.data.point)).toEqual(['reservation', 'acquire', 'first_op']);
+    expect(notes.every(note => note.kind === 'motor_state' && note.data.shield === true && note.data.command === 'cmd')).toBe(true);
+    expect(notes[1].data).toMatchObject({ result: 'kept', loweredSince: 0, deactivatedSince: 0, deactivateItem: false });
   });
   it('is "dropped" when it was lowered, or deactivated, or no longer in use, between the reservation and the claim', async () => {
     const lowered = await handoverWith(bot => { bot.shieldBlock.up = false; bot.shieldBlock.lowered++; });
     expect(lowered.handover).toMatchObject({ confirmed: true, shield: 'dropped' });
-    expect(lowered.notes.find(note => note.data.phase === 'claim')!.data).toMatchObject({ up: false, loweredSince: 1, shield: 'dropped' });
+    expect(lowered.notes.find(note => note.data.point === 'acquire')!.data).toMatchObject({ shield: false, loweredSince: 1, result: 'dropped' });
     const deactivated = await handoverWith(bot => { bot.deactivateItem(); });
     expect(deactivated.handover.shield).toBe('dropped');
-    expect(deactivated.notes.find(note => note.data.phase === 'claim')!.data.deactivatedSince).toBe(1);
+    expect(deactivated.notes.find(note => note.data.point === 'acquire')!.data.deactivatedSince).toBe(1);
     const idle = await handoverWith(bot => { bot.usingHeldItem = false; });
     expect(idle.handover.shield).toBe('dropped');
   });

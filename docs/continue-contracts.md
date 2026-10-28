@@ -1294,6 +1294,6 @@ interface Handover { shield: 'kept' | 'lowered' | 'dropped' | 'none' }
 - `dropped`：予約は盾 true だったが、取得の時には途切れていた（引き継ぎ自体は `confirmed`）。act は自分の手で盾を上げ直す。
 - `lowered`：引き継ぎが `confirmed` にならず、予約が外れて盾も下げた。`none`：予約が盾を持っていなかった。
 - 予約の間、常駐盾は盾を下げない（盾 true の予約がある時の `lower()` は何もしない）。
-- 操作の連続記録の行（盾の実際の状態）：`{ kind: 'shield_state', at, command?, hand?, life?, phase: 'reserve' | 'stop' | 'claim' | 'first_op' | 'released', up: boolean, using: boolean | null, hasDeactivate: boolean, loweredSince?: number, deactivatedSince?: number, ... }`。`loweredSince`・`deactivatedSince` は予約を作ってからの回数。`claim` の行は `shield`（上の値）を持つ。
+- 操作の連続記録の行（盾の実際の状態。頭の判定器 `tools/continue-verify/judge.ts` の `motor_state` の形に合わせた）：`{ kind: 'motor_state', at, command, point: 'reservation' | 'stop' | 'acquire' | 'first_op', shield: boolean, deactivateItem: boolean, ... }`。`shield` はその時点で盾が上がっているか、`deactivateItem` は予約を作ってから `deactivateItem` が呼ばれたか。足してある欄：`using`（盾を使い続けているか）、`hasDeactivate`、`loweredSince`・`deactivatedSince`（予約からの回数）、`reserved`・`reflex`（reservation の行）、`result`・`confirmed`（acquire の行。`result` は上の Handover.shield の値）、`op`（first_op の行）。`command` は引き継ぎの相手の命令（まだ操作の範囲に入っていない時でも付く）。
 - `EventsReply.lost` は、記録が無い時のほかに、体が 5,000 件の上限を超えて未 ACK の命令の出来事を捨てた時も `true`（`total` はその命令の件数、`events` は空）。頭は `lost` を「出来事が分からない」と扱う。ACK 済みの記録は時間（30 分）と件数で消えてよいが、未 ACK のものは時間・件数では消えない。
 - `outcome.life` は act を走らせた命（開始時の番号）。死の後の命で付け直さない。

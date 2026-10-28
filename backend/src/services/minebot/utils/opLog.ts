@@ -42,6 +42,15 @@ export class OpLog {
     this.append({ ...rest, kind, at: new Date().toISOString(), ...(this.scope ? { command: this.scope.command, hand: this.scope.hand, life: this.scope.life } : {}) });
   }
 
+  /**
+   * The state of the body's motor port at one point (the head's judge reads `{ kind: 'motor_state', at, command, point, shield, deactivateItem }`): the command is the data's own
+   * (the handover's command, which is not the scope's yet), `at` is the ISO time of the writing.
+   */
+  motorState(data: Record<string, unknown>): void {
+    const { kind: _kind, at: _at, ...rest } = data;
+    this.append({ ...rest, kind: 'motor_state', at: new Date().toISOString() });
+  }
+
   private open(): void {
     if (this.fd !== null || this.failed) return;
     try {

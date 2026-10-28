@@ -181,7 +181,7 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
     this.life = installLife(bot, { key: () => `${options.serverId}|${bot.username ?? 'body'}`, note: (what, data) => { try { blackBoxOf(bot)?.note(what, data); } catch { /* a note is a help */ } } });
     this.opLog = opLogOf(bot) ?? installOpLog(bot, new OpLog(opLogDirectory()));
     setMotorOpSink(bot, op => this.opLog.op(op));
-    setShieldNoteSink(bot, (kind, data) => this.opLog.note(kind, data));
+    setShieldNoteSink(bot, (_kind, data) => this.opLog.motorState(data));
     installPackTap(bot);
     // The block updates and pushbacks that corrected a vertical hand's counts go into the continuous record (the boundary-2 check reads them with the operations).
     bot.on('minebotVerticalEvidence', this.onVerticalEvidence);
@@ -443,7 +443,7 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
             reserveHandover(this.bot, { fromActionId: handoverPlan.actionId, reflex: handoverPlan.reflex, target: handoverPlan.target,
               life: Number(command.context?.life ?? this.life.number), forCommand: command.id, shield: handoverPlan.shield });
             stopReflexForHandover(this.bot, handoverPlan);
-            noteShieldState(this.bot, 'stop', { forCommand: command.id, reflex: handoverPlan.reflex });
+            noteShieldState(this.bot, 'stop', { command: command.id, reflex: handoverPlan.reflex });
             this.waits.set(command.id, { since: this.now(), behind: handoverPlan.reflex });
             // The reflex's action settles (a few milliseconds); within the reservation's window the lock is ours without the usual grace.
             while (Date.now() - handoverAt < 300 && !signal.aborted && (physicalActionBusy(this.bot) || reflexHeld(this.bot))) await delay(2);

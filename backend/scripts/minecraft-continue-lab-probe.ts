@@ -219,7 +219,7 @@ try {
   }
 
   // ---- A-6 (10): the handover with the shield really up (arrows keep the resident shield raised), a last stand's hit taken over, and no new reflex hand after the cap
-  const shieldNotes = (since: number): any[] => opLines().filter(entry => entry.kind === 'shield_state' && Date.parse(entry.at) >= since);
+  const shieldNotes = (since: number): any[] => opLines().filter(entry => entry.kind === 'motor_state' && entry.point && Date.parse(entry.at) >= since);
   if (runs('handover_shield')) {
     const trials: Array<Record<string, unknown>> = [];
     for (let trial = 1; trial <= 6; trial++) {
@@ -245,9 +245,9 @@ try {
       streaming = false;
       const handover = result.parsed?.handover ?? null;
       const notes = shieldNotes(sentAt - 50);
-      const phase = (name: string) => notes.find(entry => entry.phase === name) ?? null;
+      const phase = (name: string) => notes.find(entry => entry.point === name) ?? null;
       trials.push({ trial, reflex: seen, handover, sentToLockMs: Date.parse(result.receipt.bodyTimes?.lockAt ?? '') - sentAt,
-        notes: { reserve: phase('reserve'), stop: phase('stop'), claim: phase('claim'), first_op: phase('first_op') }, outcome: result.receipt.outcome, unit: result.receipt.unit,
+        notes: { reserve: phase('reservation'), stop: phase('stop'), claim: phase('acquire'), first_op: phase('first_op') }, outcome: result.receipt.outcome, unit: result.receipt.unit,
         hitsTaken: ((body.observe().state as any).combat?.recentHits ?? []).length });
       await sleep(500);
     }
@@ -259,11 +259,11 @@ try {
       confirmed.every(entry => {
         const n: any = entry.notes, shield = (entry.handover as any).shield;
         if (!n.reserve) return false;
-        const unbroken = n.reserve.up === true && n.claim?.up === true && n.claim?.loweredSince === 0 && n.claim?.deactivatedSince === 0 && (!n.first_op || n.first_op.up === true);
-        return n.reserve.up === true ? shield === (unbroken ? 'kept' : 'dropped') : shield === 'none';
+        const unbroken = n.reserve.shield === true && n.claim?.shield === true && n.claim?.loweredSince === 0 && n.claim?.deactivatedSince === 0 && (!n.first_op || n.first_op.shield === true);
+        return n.reserve.shield === true ? shield === (unbroken ? 'kept' : 'dropped') : shield === 'none';
       }), JSON.stringify(confirmed.map(entry => ({ shield: (entry.handover as any).shield, notes: entry.notes }))).slice(0, 480));
     measures.handoverShield = trials.map(entry => ({ trial: entry.trial, reflex: (entry.reflex as any)?.capability ?? null, shield: (entry.handover as any)?.shield ?? null, confirmed: (entry.handover as any)?.confirmed ?? null,
-      up: ['reserve', 'stop', 'claim', 'first_op'].map(name => (entry.notes as any)?.[name]?.up ?? null), loweredSince: (entry.notes as any)?.claim?.loweredSince ?? null, deactivatedSince: (entry.notes as any)?.claim?.deactivatedSince ?? null }));
+      up: ['reserve', 'stop', 'claim', 'first_op'].map(name => (entry.notes as any)?.[name]?.shield ?? null), loweredSince: (entry.notes as any)?.claim?.loweredSince ?? null, deactivatedSince: (entry.notes as any)?.claim?.deactivatedSince ?? null }));
     produce('measure/handover-shield-up', null, { output: { trials } });
     await reset(actor);
   }
@@ -304,8 +304,8 @@ try {
     await sleep(500);
     await ask('summon minecraft:zombie 2.5 100 0.5 {PersistenceRequired:1b,Tags:["lab_enemy"],equipment:{head:{id:"minecraft:leather_helmet",count:1}},attributes:[{id:"minecraft:max_health",base:1000d}],Health:1000f}');
     const began = Date.now();
-    let cappedAt = 0;
-    while (Date.now() - began < 40_000) { const at = actor.floorReflexes?.melee?.cappedAt; if (typeof at === 'number' && at >= began) { cappedAt = at; break; }   // (an episode of an earlier scene keeps its cappedAt: only one told in this scene counts) await sleep(50); }
+    let cappedAt = 0;   // (an episode of an earlier scene keeps its cappedAt: only one told in this scene counts)
+    while (Date.now() - began < 40_000) { const at = actor.floorReflexes?.melee?.cappedAt; if (typeof at === 'number' && at >= began) { cappedAt = at; break; } await sleep(50); }
     const capturedEvents = ((body.events as any)?.pending?.(64) ?? []).filter((event: any) => event.kind === 'reflex.capped' && Date.parse(event.at ?? '') >= began);
     if (cappedAt) {
       // the sword goes: what the choice would now be is a hand of another kind (a block between, a step), and it must not be made until the episode ends
