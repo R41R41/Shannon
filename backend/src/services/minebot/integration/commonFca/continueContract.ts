@@ -21,6 +21,8 @@ export interface Progress {
   at?: ActPos;
   msPerUnit?: number;
   work?: { dug: number; placed?: number; placeAttempts?: number; stockUsed?: number; placedConfirmed?: number };
+  /** vertical: the ore the hand saw on the way (told, never followed; 8 at most). */
+  seen?: { block: string; at: ActPos }[];
   fromStopM?: number; searchEndM?: number;
   lastSearch?: { status: 'success' | 'partial' | 'timeout' | 'no_path'; len: number; nodes: number; ms: number; endM?: number;
     blockedAround?: { at: ActPos; block: string; diggable: boolean }[] };
@@ -45,7 +47,7 @@ export interface MadeIn { life: number; dim: Dim; dimSince: string; bodyBoot: st
 /* ----- 3. promises (the body's part) ----- */
 export interface InventoryEvent {
   id: string; obsSeq: number; item: string; count: number;
-  reason: 'ingredient' | 'fuel' | 'food' | 'placed' | 'thrown' | 'tool_broke' | 'crafted' | 'picked' | 'mined' | 'smelted' | 'reflex_eat' | 'reflex_armor' | 'death' | 'unexplained';
+  reason: 'ingredient' | 'fuel' | 'food' | 'placed' | 'thrown' | 'tool_broke' | 'crafted' | 'picked' | 'mined' | 'smelted' | 'stored' | 'retrieved' | 'reflex_eat' | 'reflex_armor' | 'death' | 'unexplained';
   intermediate?: boolean;
   /** The delivery number inside the command (0 from, in the order given; across passes and hands). */
   deliverySeq?: number;

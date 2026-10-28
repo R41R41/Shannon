@@ -202,7 +202,7 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
   /** A skill the loop may run beside the owner's command: the offered readers and the internal `events` reader. */
   isReadOnly(skill: string | undefined): boolean { return skill === EVENTS_SKILL.name || this.runnable.find(entry => entry.name === skill)?.readOnly === true; }
   bodyVersion(): BodyVersion {
-    return { revision: bodyRevision(), catalogHash: createHash('sha256').update(JSON.stringify(this.offered)).digest('hex').slice(0, 16) };
+    return { revision: bodyRevision(), catalogHash: createHash('sha256').update(JSON.stringify(this.catalog.definitions)).digest('hex').slice(0, 16) };
   }
   private bodyNow(): BodyNow { return { life: this.life.view(), bodyBoot: BODY_BOOT, connectionId: this.connectionId, headBoot: this.headBoot }; }
   /** The first lapse of this command (2, 5), or null. `dimension`: whether the dimension generation counts. */

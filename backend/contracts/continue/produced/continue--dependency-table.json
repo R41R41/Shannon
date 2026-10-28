@@ -1,0 +1,102 @@
+{
+ "producedBy": "backend/scripts/lab/continue-produce.ts",
+ "bench": "offline",
+ "bodyRevision": "unknown",
+ "madeAt": "2026-10-28T11:53:13.442Z",
+ "answers": "continue/dependency-table",
+ "fixtureSha256": "1e2e4d26cc9c5ad5e1cd38816553a1cd0f17568bb6d06d0a1bd0f45990301bf4",
+ "output": {
+  "rows": [
+   {
+    "goal": "done",
+    "end": "finished",
+    "released": true,
+    "dependState": "succeeded"
+   },
+   {
+    "goal": "already",
+    "end": "finished",
+    "released": true,
+    "dependState": "succeeded"
+   },
+   {
+    "goal": "done",
+    "end": "finished",
+    "released": false,
+    "dependState": "unknown"
+   },
+   {
+    "goal": "partial",
+    "end": "finished",
+    "released": true,
+    "dependState": "failed"
+   },
+   {
+    "goal": "partial",
+    "end": "cut",
+    "released": true,
+    "dependState": "failed"
+   },
+   {
+    "goal": "partial",
+    "end": "cut",
+    "released": true,
+    "dependState": "failed"
+   },
+   {
+    "goal": "failed",
+    "end": "finished",
+    "released": true,
+    "dependState": "failed"
+   },
+   {
+    "goal": "failed",
+    "end": "cut",
+    "released": true,
+    "dependState": "failed"
+   },
+   {
+    "goal": "done",
+    "end": "cut",
+    "released": true,
+    "dependState": "failed"
+   },
+   {
+    "goal": "not_started",
+    "end": "not_run",
+    "released": true,
+    "dependState": "failed"
+   },
+   {
+    "goal": "not_started",
+    "end": "not_run",
+    "released": true,
+    "dependState": "failed"
+   },
+   {
+    "goal": "not_started",
+    "end": "finished",
+    "released": true,
+    "dependState": "failed"
+   },
+   {
+    "goal": "unknown",
+    "end": "finished",
+    "released": true,
+    "dependState": "failed"
+   },
+   {
+    "goal": "unknown",
+    "end": "unknown",
+    "released": false,
+    "dependState": "unknown"
+   },
+   {
+    "goal": "unknown",
+    "end": "unknown",
+    "released": true,
+    "dependState": "unknown"
+   }
+  ]
+ }
+}

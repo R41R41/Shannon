@@ -18,7 +18,7 @@ export { verticalProblem };
  * body digs, lays and walks one level after the other and nothing more: no route search, no way round, no change of shape or direction, no ore
  * followed (an ore that shows is only told, `seen`). Each level is asked of the world again when it is taken.
  *
- * It stops, with the closed code and the progress it made (`StepOutcome.progress`), at: `unloaded`, `world_limit`, `displaced`, `cannot_dig`,
+ * It stops, with the closed code and the progress it made (`StepOutcome.progress`), at: `unloaded`, `world_limit`, `displaced`, `no_foothold`, `cannot_dig`,
  * `no_floor`, `no_place`, `limit_dig`, `limit_place`, `limit_time`, `lava`, `water`, `seal_failed`, `place_unconfirmed`.
  *
  * Four numbers are kept apart (contract 6): `placeAttempts` (places sent; the `maxPlace` budget), `stockUsed` (what the pack lost, by looking),
@@ -181,7 +181,7 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
   const valid = () => levels.filter(level => level.valid).length;
   const progress = (): Progress => {
     const here = feetCell(bot) ?? at;
-    return { unit: 'step', done: valid(), left: leftFrom(here), at: here, ...(moved > 0 ? { msPerUnit: Math.round((Date.now() - startedAt) / moved) } : {}), work: { ...work } };
+    return { unit: 'step', done: valid(), left: leftFrom(here), at: here, ...(moved > 0 ? { msPerUnit: Math.round((Date.now() - startedAt) / moved) } : {}), work: { ...work }, ...(seen.length ? { seen: seen.map(entry => ({ block: entry.block, at: { ...entry.at } })) } : {}) };
   };
 
   // ---- the clock, the stop, the body ----
@@ -492,7 +492,7 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
     needDisplacedCheck([plan.from]);
     const stepped = await moveOneCell(bot as never, plan.from, plan.to, 0);
     if (!stepped && sameCell(feetCell(bot) ?? plan.from, plan.from)) {
-      throw new VStop('displaced', `次の段 ${cellText(plan.to)} へ踏み出せなかった（今 ${cellText(plan.from)}）`, plan.from, '頭の上や足元を見てから');
+      throw new VStop('no_foothold', `次の段 ${cellText(plan.to)} へ踏み出せなかった（今 ${cellText(plan.from)}）`, plan.from, '頭の上や足元を見てから');
     }
     await arrived(plan);
     finishLevel(plan, [{ cell: plan.floor, want: 'solid' }, { cell: plan.to, want: 'not_solid' }, { cell: shift(plan.to, 0, 1), want: 'not_solid' }], !scaffoldUnconfirmed);
@@ -561,7 +561,7 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
       const here = feetCell(bot);
       if (!here) throw new VStop('displaced', '体の位置が分からない');
       if (confirmed) {
-        if (!sameCell(here, plan.to)) throw new VStop('displaced', `${plan.from.y + 1} 段目に乗れなかった（今 ${cellText(here)}）`, here);
+        if (!sameCell(here, plan.to)) throw new VStop('no_foothold', `${plan.from.y + 1} 段目に乗れなかった（今 ${cellText(here)}）`, here);
         finishLevel(plan, [{ cell: plan.from, want: 'solid' }]);
         return;
       }

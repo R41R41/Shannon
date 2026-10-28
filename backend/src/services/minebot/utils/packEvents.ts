@@ -123,6 +123,8 @@ export function handReasons(hand: { do: string; fuel?: string; item?: string; op
     case 'drop': return { loss: 'thrown' };
     case 'furnace': return { gain: 'smelted', loss: name => (hand.fuel && name === hand.fuel) ? 'fuel' : 'ingredient' };
     case 'smelt': return { gain: 'smelted', loss: name => (hand.fuel && name === hand.fuel) ? 'fuel' : 'ingredient' };
+    // Amendment A-1: a chest's put and take are told as stored and retrieved (the ledger shows a change of place, not a use).
+    case 'chest': return hand.op === 'put' ? { loss: 'stored' } : hand.op === 'take' || hand.op === 'takeAll' ? { gain: 'retrieved' } : null;
     case 'obsidian': case 'portal': return { gain: 'picked', loss: 'placed' };
     default: return null;
   }

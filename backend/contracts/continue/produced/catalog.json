@@ -1,0 +1,1586 @@
+{
+ "producedBy": "backend/scripts/lab/continue-produce.ts",
+ "bench": "offline",
+ "bodyRevision": "unknown",
+ "madeAt": "2026-10-28T11:53:13.436Z",
+ "answers": null,
+ "fixtureSha256": null,
+ "catalogHash": "3ab72c38eb51d655",
+ "offered": [
+  {
+   "name": "act",
+   "description": "体に小さな手を最大12個まとめて頼む。体は順に動かし、手ごとに思ったとおりか確かめ、外れたら（失敗・反射・stopIf・満杯）そこで止めて、手ごとの1行（止まりは閉じた語・場所・そのマスの今の中身）と新しい地図を JSON で返す。体は回り道・置き場所・道具作り・片づけ・夜の睡眠・戦うかどうかを決めない。手: walk / go / dig / place / pillarUp / use / look / jump / sneak / equip / craft / furnace / chest / attack / shoot / eat / drop / pickup / wait / obsidian / portal / fight / mine / make / smelt / vertical。vertical: 縦に長く下る・上る。dir(down/up)・shape(stairs=階段 toward 必須 / shaft=真下の縦穴 down だけ / pillar=足の下に置いて真上 up だけ)・toY(足の y)・canDig(必須)・maxDig・canPlace・maxPlace・liquid(stop/seal/seal_water)・range・seconds。体は道探しをせず一段ずつ掘る・置く・歩くだけで、止まる時は「vertical 止まった <code>」の行と進んだ段数を返す。go: 行き先（to か goals）へ体が道を引いて着くまで行く。canDig の物だけ掘り・canPlace の物（持っている物）だけ置き、溶岩・火・マグマ・サボテンは避ける。止まる時は「go 止まった <code>」の行で理由を返す。obsidian: 挙げた溶岩の源（at、8 まで）に水を注いで黒曜石にして掘り、水を汲み戻す（立ち位置・注ぐ所・待ちは体。count・seconds・canPlace・maxPlace）。portal: at（枠の内側の左下）と axis（x か z）の枠 10 個を組み、火打ち金で点け、enter なら入る（足場は canPlace の物）。止まる時は「<手> 止まった <code>」の行で理由を返す。fight: 挙げた相手 target を戦い（stance=flee なら range m 離れるまで逃げ）、狙い・間合い・盾・クリティカル・低体力で食べる/退くは体がこなす。反射が優先。mine(block: 掘る種類 id, at: その鉱脈のマス1〜4, count, tool, collect, seconds, canDig・maxDig: 鉱脈へ行く道を掘ってよい物) は at のマスにつながった同じ種類だけを近い順に掘って拾う（ほかの鉱石は探さない）。make(item, count) は途中の物（板・棒など）を持ち物から順に作る（足りなければ何も作らず足りない物の一覧を返す。3x3 は近くの作業台、無ければ持っている物を置く）。smelt(items: [{item,count}], fuel, fuelCount, furnaces: 何基に分けるか, at: かまど, seconds) はかまどに分けて入れて燃料を足すまで（焼き上がりは待たず、取り出しは furnace op=take）。座標は {x,y,z}（rel:true で足からの差）か {front,right,up}（facing の向き）。stopIf: hostileWithin・hpBelow・hungerBelow・blockChanged。",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "hands": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "properties": {
+        "do": {
+         "type": "string",
+         "enum": [
+          "walk",
+          "go",
+          "dig",
+          "place",
+          "pillarUp",
+          "use",
+          "look",
+          "jump",
+          "sneak",
+          "equip",
+          "craft",
+          "furnace",
+          "chest",
+          "attack",
+          "shoot",
+          "eat",
+          "drop",
+          "pickup",
+          "wait",
+          "obsidian",
+          "portal",
+          "fight",
+          "mine",
+          "make",
+          "smelt",
+          "vertical"
+         ]
+        },
+        "to": {
+         "type": "object",
+         "properties": {
+          "x": {
+           "type": "number"
+          },
+          "y": {
+           "type": "number"
+          },
+          "z": {
+           "type": "number"
+          },
+          "front": {
+           "type": "number"
+          },
+          "right": {
+           "type": "number"
+          },
+          "up": {
+           "type": "number"
+          }
+         },
+         "additionalProperties": false,
+         "description": "walk の着く所、look の向く点",
+         "required": []
+        },
+        "path": {
+         "type": "array",
+         "items": {
+          "type": "object",
+          "properties": {
+           "x": {
+            "type": "number"
+           },
+           "y": {
+            "type": "number"
+           },
+           "z": {
+            "type": "number"
+           },
+           "front": {
+            "type": "number"
+           },
+           "right": {
+            "type": "number"
+           },
+           "up": {
+            "type": "number"
+           }
+          },
+          "additionalProperties": false,
+          "required": []
+         },
+         "maxItems": 64,
+         "description": "walk の道（点の列）"
+        },
+        "at": {
+         "type": "array",
+         "items": {
+          "type": "object",
+          "properties": {
+           "x": {
+            "type": "number"
+           },
+           "y": {
+            "type": "number"
+           },
+           "z": {
+            "type": "number"
+           },
+           "front": {
+            "type": "number"
+           },
+           "right": {
+            "type": "number"
+           },
+           "up": {
+            "type": "number"
+           }
+          },
+          "additionalProperties": false,
+          "required": []
+         },
+         "maxItems": 16,
+         "description": "dig・place は順に全部、use・furnace・chest・shoot・drop は 1 つ、mine は鉱脈のマス（1〜4）、smelt は使うかまど（最大4）"
+        },
+        "face": {
+         "type": "string",
+         "enum": [
+          "up",
+          "down",
+          "north",
+          "south",
+          "east",
+          "west"
+         ],
+         "description": "place・use: 当てる面"
+        },
+        "block": {
+         "type": "string"
+        },
+        "item": {
+         "type": "string"
+        },
+        "count": {
+         "type": "number"
+        },
+        "items": {
+         "type": "array",
+         "items": {
+          "type": "object",
+          "properties": {
+           "item": {
+            "type": "string"
+           },
+           "count": {
+            "type": "number"
+           }
+          },
+          "required": [
+           "item"
+          ],
+          "additionalProperties": false
+         },
+         "maxItems": 16
+        },
+        "fuel": {
+         "type": "string"
+        },
+        "fuelCount": {
+         "type": "number"
+        },
+        "furnaces": {
+         "type": "integer",
+         "minimum": 1,
+         "maximum": 4,
+         "description": "smelt: 何基に分けるか（1〜4）"
+        },
+        "op": {
+         "type": "string",
+         "enum": [
+          "put",
+          "take",
+          "look",
+          "takeAll"
+         ]
+        },
+        "target": {
+         "anyOf": [
+          {
+           "description": "#id か名前",
+           "type": "string"
+          },
+          {
+           "description": "#id か名前",
+           "type": "number"
+          }
+         ]
+        },
+        "untilDead": {
+         "type": "boolean"
+        },
+        "hold": {
+         "type": "boolean",
+         "description": "attack: その場で待ち、手の届く所に来たら打つ（追わない）"
+        },
+        "goals": {
+         "type": "array",
+         "items": {
+          "type": "object",
+          "properties": {
+           "x": {
+            "type": "number"
+           },
+           "y": {
+            "type": "number"
+           },
+           "z": {
+            "type": "number"
+           },
+           "front": {
+            "type": "number"
+           },
+           "right": {
+            "type": "number"
+           },
+           "up": {
+            "type": "number"
+           }
+          },
+          "additionalProperties": false,
+          "required": []
+         },
+         "minItems": 2,
+         "maxItems": 8,
+         "description": "go: 行き先の候補（どれか1つに着けば済み）"
+        },
+        "canDig": {
+         "type": "array",
+         "items": {
+          "type": "string",
+          "maxLength": 40
+         },
+         "minItems": 1,
+         "maxItems": 12,
+         "description": "go・mine: 掘ってよい物（stone・dirt・sand・wood か ブロック id）"
+        },
+        "canPlace": {
+         "type": "array",
+         "items": {
+          "type": "string",
+          "maxLength": 40
+         },
+         "minItems": 1,
+         "maxItems": 6,
+         "description": "go・obsidian・portal: 置いてよい物（持っている物だけ使う）"
+        },
+        "maxDrop": {
+         "type": "integer",
+         "minimum": 0,
+         "maximum": 10,
+         "description": "go: 一度に落ちてよい段"
+        },
+        "waterOk": {
+         "type": "boolean",
+         "description": "go: 水に入ってよい"
+        },
+        "maxDig": {
+         "type": "integer",
+         "minimum": 0,
+         "maximum": 200,
+         "description": "go・mine: 掘る数の上限"
+        },
+        "maxPlace": {
+         "type": "integer",
+         "minimum": 0,
+         "maximum": 100,
+         "description": "go・obsidian・portal: 置く数の上限"
+        },
+        "axis": {
+         "type": "string",
+         "enum": [
+          "x",
+          "z"
+         ],
+         "description": "portal: 枠が広がる向き（x: 枠は x 方向に広がる、z: z 方向）"
+        },
+        "enter": {
+         "type": "boolean",
+         "description": "portal: 点けたら入る（既定 true）"
+        },
+        "seconds": {
+         "type": "number"
+        },
+        "charge": {
+         "type": "number"
+        },
+        "n": {
+         "type": "number"
+        },
+        "sprint": {
+         "type": "boolean"
+        },
+        "range": {
+         "type": "number"
+        },
+        "slot": {
+         "type": "string",
+         "enum": [
+          "hand",
+          "offhand",
+          "off-hand",
+          "head",
+          "chest",
+          "torso",
+          "legs",
+          "feet"
+         ]
+        },
+        "on": {
+         "type": "boolean"
+        },
+        "yaw": {
+         "type": "number"
+        },
+        "pitch": {
+         "type": "number"
+        },
+        "tool": {
+         "type": "string"
+        },
+        "collect": {
+         "type": "boolean"
+        },
+        "exposeOk": {
+         "anyOf": [
+          {
+           "type": "boolean"
+          },
+          {
+           "type": "array",
+           "items": {
+            "type": "string"
+           },
+           "maxItems": 16
+          }
+         ],
+         "description": "true か、受け入れる敵の種類の列"
+        },
+        "takeOk": {
+         "type": "boolean"
+        },
+        "rel": {
+         "type": "boolean"
+        },
+        "note": {
+         "type": "string"
+        },
+        "stance": {
+         "type": "string",
+         "enum": [
+          "fight",
+          "flee"
+         ],
+         "description": "fight: 戦う（既定）、flee: 相手から range m 以上離れるまで逃げる"
+        },
+        "retreatHp": {
+         "type": "number",
+         "description": "fight: この体力未満で戦いをやめて、食べるか退く（1〜19の整数）"
+        },
+        "dir": {
+         "type": "string",
+         "enum": [
+          "down",
+          "up"
+         ],
+         "description": "vertical: 向き（書く。今の y から推さない）"
+        },
+        "shape": {
+         "type": "string",
+         "enum": [
+          "stairs",
+          "shaft",
+          "pillar"
+         ],
+         "description": "vertical: stairs=階段、shaft=縦穴で真下（down だけ）、pillar=足の下に置いて真上（up だけ）"
+        },
+        "toward": {
+         "type": "string",
+         "enum": [
+          "north",
+          "east",
+          "south",
+          "west"
+         ],
+         "description": "vertical stairs: 進む向き（stairs では必須）"
+        },
+        "toY": {
+         "type": "integer",
+         "description": "vertical: どの y まで（足の y）"
+        },
+        "liquid": {
+         "type": "string",
+         "enum": [
+          "stop",
+          "seal",
+          "seal_water"
+         ],
+         "description": "vertical: 溶岩・水が見えた時。stop=止める、seal=塞いで続ける、seal_water=水だけ塞ぎ溶岩で止める"
+        },
+        "dependsOn": {
+         "type": "array",
+         "items": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 12
+         },
+         "maxItems": 11,
+         "description": "この手が頼る、同じ act の同じ周回の前の手の番号（1 から）。無い: 今どおり。[]: どの手にも頼らない。[1,3]: 手 1 と 3 が済み（done か already）の時だけ動く"
+        },
+        "onFail": {
+         "type": "string",
+         "enum": [
+          "continue",
+          "stop"
+         ],
+         "description": "この手が自分で失敗したとき: continue=失敗と記録して次の手へ、stop=ここで止める（省略: equip・eat・look・sneak・jump は continue、他は stop）。反射・stopIf・取り消し・時間切れ・満杯は常に止める"
+        }
+       },
+       "required": [
+        "do"
+       ],
+       "additionalProperties": false
+      },
+      "minItems": 1,
+      "maxItems": 12,
+      "description": "順に動かす手（1〜12）"
+     },
+     "stopIf": {
+      "type": "object",
+      "properties": {
+       "hostileWithin": {
+        "type": "number"
+       },
+       "hpBelow": {
+        "type": "number"
+       },
+       "hungerBelow": {
+        "type": "number"
+       },
+       "blockChanged": {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "properties": {
+          "x": {
+           "type": "number"
+          },
+          "y": {
+           "type": "number"
+          },
+          "z": {
+           "type": "number"
+          },
+          "front": {
+           "type": "number"
+          },
+          "right": {
+           "type": "number"
+          },
+          "up": {
+           "type": "number"
+          }
+         },
+         "additionalProperties": false,
+         "required": []
+        },
+        "maxItems": 8
+       }
+      },
+      "additionalProperties": false,
+      "required": [],
+      "description": "止める条件（任意）"
+     },
+     "why": {
+      "type": "string",
+      "description": "この手の組のねらい（短く、記録だけ）"
+     },
+     "accept": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "maxItems": 6,
+      "description": "この act で戦うと決めた敵の種類（6まで）"
+     },
+     "facing": {
+      "type": "string",
+      "description": "{front,right,up} を読む向き: north・east・south・west（省略は act の始めの体の向き）"
+     },
+     "repeat": {
+      "type": "integer",
+      "minimum": 2,
+      "maximum": 8,
+      "description": "手の組を最大何回まわすか（2〜8。rel の手の組向き）"
+     },
+     "done": {
+      "type": "array",
+      "items": {
+       "type": "array",
+       "items": {
+        "anyOf": [
+         {
+          "type": "object",
+          "properties": {
+           "k": {
+            "type": "string",
+            "enum": [
+             "have"
+            ]
+           },
+           "item": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+           },
+           "n": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100000
+           },
+           "op": {
+            "type": "string",
+            "enum": [
+             ">=",
+             "<"
+            ]
+           }
+          },
+          "required": [
+           "k",
+           "item",
+           "n"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "k": {
+            "type": "string",
+            "enum": [
+             "food"
+            ]
+           },
+           "n": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100000
+           }
+          },
+          "required": [
+           "k",
+           "n"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "k": {
+            "type": "string",
+            "enum": [
+             "hunger"
+            ]
+           },
+           "n": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 20
+           }
+          },
+          "required": [
+           "k",
+           "n"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "k": {
+            "type": "string",
+            "enum": [
+             "hp"
+            ]
+           },
+           "n": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 20
+           }
+          },
+          "required": [
+           "k",
+           "n"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "k": {
+            "type": "string",
+            "enum": [
+             "dim"
+            ]
+           },
+           "dim": {
+            "type": "string",
+            "enum": [
+             "overworld",
+             "the_nether",
+             "the_end"
+            ]
+           }
+          },
+          "required": [
+           "k",
+           "dim"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "k": {
+            "type": "string",
+            "enum": [
+             "at"
+            ]
+           },
+           "x": {
+            "type": "number"
+           },
+           "y": {
+            "type": "number"
+           },
+           "z": {
+            "type": "number"
+           },
+           "r": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1000
+           },
+           "dim": {
+            "type": "string",
+            "enum": [
+             "overworld",
+             "the_nether",
+             "the_end"
+            ]
+           }
+          },
+          "required": [
+           "k",
+           "x",
+           "y",
+           "z",
+           "r"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "k": {
+            "type": "string",
+            "enum": [
+             "near"
+            ]
+           },
+           "block": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+           },
+           "r": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 8
+           }
+          },
+          "required": [
+           "k",
+           "block",
+           "r"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "k": {
+            "type": "string",
+            "enum": [
+             "free"
+            ]
+           },
+           "n": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 36
+           }
+          },
+          "required": [
+           "k",
+           "n"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "k": {
+            "type": "string",
+            "enum": [
+             "time"
+            ]
+           },
+           "t": {
+            "type": "string",
+            "enum": [
+             "day",
+             "night"
+            ]
+           }
+          },
+          "required": [
+           "k",
+           "t"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "k": {
+            "type": "string",
+            "enum": [
+             "furnace"
+            ]
+           },
+           "x": {
+            "type": "number"
+           },
+           "y": {
+            "type": "number"
+           },
+           "z": {
+            "type": "number"
+           }
+          },
+          "required": [
+           "k",
+           "x",
+           "y",
+           "z"
+          ],
+          "additionalProperties": false
+         },
+         {
+          "type": "object",
+          "properties": {
+           "k": {
+            "type": "string",
+            "enum": [
+             "safe"
+            ]
+           },
+           "r": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 64
+           }
+          },
+          "required": [
+           "k",
+           "r"
+          ],
+          "additionalProperties": false
+         }
+        ]
+       },
+       "minItems": 1,
+       "maxItems": 6
+      },
+      "minItems": 1,
+      "maxItems": 4,
+      "description": "済む条件（満たした所で、手の途中でも済にする）"
+     }
+    },
+    "required": [
+     "hands"
+    ],
+    "additionalProperties": false
+   },
+   "readOnly": false,
+   "maxDurationMs": 180000
+  },
+  {
+   "name": "view",
+   "description": "地図を広く・別の向きで見る（読むだけ）。mode: layers（y ごとの層）/ top（上から。表面の記号と高さ）/ slice（中心を通る縦の断面。axis=ns か ew）/ column（その x,z の縦の列）。center（既定は足）、radius（1〜32、既定12）、yFrom・yTo（絶対の y）、only（見たい種類だけ。ほかは # と . にまとめる）。6,000マスを超えると top を2×2にまとめる。結果は JSON（map と landmarks）。",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "mode": {
+      "type": "string",
+      "default": "layers",
+      "description": "layers・top・slice・column（既定 layers）"
+     },
+     "center": {
+      "type": "object",
+      "properties": {
+       "x": {
+        "type": "number"
+       },
+       "y": {
+        "type": "number"
+       },
+       "z": {
+        "type": "number"
+       }
+      },
+      "required": [
+       "x",
+       "y",
+       "z"
+      ],
+      "additionalProperties": false,
+      "description": "中心（既定は足）"
+     },
+     "radius": {
+      "type": "number",
+      "default": 12,
+      "description": "半径（1〜32、既定 12）"
+     },
+     "yFrom": {
+      "type": "number",
+      "description": "下端の y（既定 中心−4）"
+     },
+     "yTo": {
+      "type": "number",
+      "description": "上端の y（既定 中心+4）"
+     },
+     "axis": {
+      "type": "string",
+      "default": "ns",
+      "description": "slice の向き: ns（北→南）か ew（西→東）。既定 ns"
+     },
+     "only": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "maxItems": 8,
+      "description": "見たい種類（ブロック名か地図の記号、8まで）"
+     }
+    },
+    "additionalProperties": false,
+    "required": []
+   },
+   "readOnly": true,
+   "maxDurationMs": 120000
+  },
+  {
+   "name": "probe",
+   "description": "調べる（読むだけ・決まった計算）。kind: path（to へ掘らず置かずに歩いて行けるか。行けるなら道の点、行けないなら切れ目と立てる所）/ sight（target のブロックか生き物 #id が目から見えるか・届くか・間のブロック）/ column（x,z の縦の列。yFrom・yTo。落差・水・溶岩・砂利）/ around（radius 内の生き物と危ないブロック）/ history（at の radius 内の最近の手と止まり）/ scan（読み込み済みの範囲の目印。radius はチャンク）。結果は JSON（text が先頭。危ない事実をそのまま書く）。",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "kind": {
+      "type": "string",
+      "enum": [
+       "path",
+       "sight",
+       "column",
+       "around",
+       "history",
+       "scan"
+      ],
+      "description": "path・sight・column・around・history・scan"
+     },
+     "to": {
+      "type": "object",
+      "properties": {
+       "x": {
+        "type": "number"
+       },
+       "y": {
+        "type": "number"
+       },
+       "z": {
+        "type": "number"
+       }
+      },
+      "required": [
+       "x",
+       "y",
+       "z"
+      ],
+      "additionalProperties": false,
+      "description": "path: 行きたいマス"
+     },
+     "from": {
+      "type": "object",
+      "properties": {
+       "x": {
+        "type": "number"
+       },
+       "y": {
+        "type": "number"
+       },
+       "z": {
+        "type": "number"
+       }
+      },
+      "required": [
+       "x",
+       "y",
+       "z"
+      ],
+      "additionalProperties": false,
+      "description": "path・sight: 出発・目の位置の足のマス（既定は足）"
+     },
+     "target": {
+      "anyOf": [
+       {
+        "type": "object",
+        "properties": {
+         "x": {
+          "type": "number"
+         },
+         "y": {
+          "type": "number"
+         },
+         "z": {
+          "type": "number"
+         }
+        },
+        "required": [
+         "x",
+         "y",
+         "z"
+        ],
+        "additionalProperties": false
+       },
+       {
+        "type": "string",
+        "maxLength": 64
+       },
+       {
+        "type": "number"
+       }
+      ],
+      "description": "sight: ブロック {x,y,z} か生き物 \"#id\""
+     },
+     "x": {
+      "type": "number",
+      "description": "column: 列の x（既定は足）"
+     },
+     "z": {
+      "type": "number",
+      "description": "column: 列の z（既定は足）"
+     },
+     "yFrom": {
+      "type": "number",
+      "description": "column: 下端の y（既定 足−16）"
+     },
+     "yTo": {
+      "type": "number",
+      "description": "column: 上端の y（既定 足+16）"
+     },
+     "radius": {
+      "type": "number",
+      "description": "around: m（1〜16、既定 8）/ history: m（1〜32、既定 4）/ scan: チャンク（1〜16、既定は読み込み済みの全部）"
+     },
+     "at": {
+      "type": "object",
+      "properties": {
+       "x": {
+        "type": "number"
+       },
+       "y": {
+        "type": "number"
+       },
+       "z": {
+        "type": "number"
+       }
+      },
+      "required": [
+       "x",
+       "y",
+       "z"
+      ],
+      "additionalProperties": false,
+      "description": "history: 場所（既定は足）"
+     }
+    },
+    "required": [
+     "kind"
+    ],
+    "additionalProperties": false
+   },
+   "readOnly": true,
+   "maxDurationMs": 30000
+  },
+  {
+   "name": "find-blocks",
+   "description": "指定したブロックをロード済みチャンクからプログラムで検索して座標リストを返します。未ロード領域は探索できないため、見つからなければ安全な新しい地点へ移動して再検索してください。特定ブロックの位置を知りたいときは必ずこのスキルを使うこと。water/lava検索時は水源・溶岩源（level=0, バケツで汲める）を自動判別し優先表示する。粉雪（powder_snow）もバケツで回収可能。チェスト・樽はラージチェストが2ブロック分あるため count を 48 以上に。",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "blockName": {
+      "type": "string",
+      "description": "検索するブロック名（例: water, stone, diamond_ore, oak_log, chest, furnace, crafting_table, lava）。カンマ区切りで複数指定可（例: oak_log,acacia_log,birch_log）。水源を探すなら \"water\" を指定"
+     },
+     "maxDistance": {
+      "type": "number",
+      "default": 64,
+      "description": "検索範囲（デフォルト: 64ブロック）"
+     },
+     "count": {
+      "type": "number",
+      "default": 10,
+      "description": "検索する最大数（デフォルト: 10個）。chest / barrel 等の収納ブロックはラージ対で2座標になるため、基地内の全チェストを洗うときは 48 以上を推奨（未指定でも収納単体検索時は最低48まで引き上げ）"
+     }
+    },
+    "required": [
+     "blockName"
+    ],
+    "additionalProperties": false
+   },
+   "readOnly": true,
+   "maxDurationMs": 120000
+  },
+  {
+   "name": "check-recipe",
+   "description": "指定アイテムのクラフトレシピを確認します。",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "itemName": {
+      "type": "string",
+      "description": "クラフトしたいアイテム名"
+     }
+    },
+    "required": [
+     "itemName"
+    ],
+    "additionalProperties": false
+   },
+   "readOnly": true,
+   "maxDurationMs": 120000
+  },
+  {
+   "name": "recall-places",
+   "description": "以前に見た場所を、今は見えていない遠くのものも含めて近い順に返します（水・溶岩・洞窟の壁に見えていた鉱石・置いた作業台やかまど・チェスト・ベッド・村・ポータル・死んだ地点）。まだ一度も視界に入っていない方角と、そこまでの距離も返します（村や新しい地形を探しに行く向きを決める時に）。観測の rememberedPlaces には種類ごとの最寄り1件だけが出ます。同じ種類の別の場所や、遠い場所を知りたい時に使います。find-blocks は今読み込まれている範囲しか探せません。",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "kind": {
+      "type": "string",
+      "description": "種類（例: water, lava, diamond_ore, furnace, village, death）。一部でも可（ore で全鉱石）。省略で全種類"
+     },
+     "limit": {
+      "type": "number",
+      "default": 8,
+      "description": "件数（デフォルト8、最大20）"
+     }
+    },
+    "additionalProperties": false,
+    "required": []
+   },
+   "readOnly": true,
+   "maxDurationMs": 120000
+  },
+  {
+   "name": "find-structure",
+   "description": "指定した構造物（要塞、村、ネザー要塞など）を、読み込み済みの範囲から探します。村は観測のlandmarksにも自動で出ます。見つからなければ、まだ行っていない方角へ100〜200ブロック移動してから、もう一度探してください（ネザー要塞はネザーの中だけ）",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "structureType": {
+      "type": "string",
+      "description": "構造物の種類（fortress=ネザー要塞, village=村, stronghold=要塞など）"
+     }
+    },
+    "required": [
+     "structureType"
+    ],
+    "additionalProperties": false
+   },
+   "readOnly": false,
+   "maxDurationMs": 120000
+  },
+  {
+   "name": "list-nearby-entities",
+   "description": "周囲のエンティティをリスト表示します。カスタム名付きエンティティ（Mysterious Traderなど）も表示されます。",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "maxDistance": {
+      "type": "number",
+      "default": 32,
+      "description": "検索範囲（デフォルト: 32ブロック）"
+     },
+     "maxCount": {
+      "type": "number",
+      "default": 10,
+      "description": "最大表示数（デフォルト: 10個）"
+     }
+    },
+    "additionalProperties": false,
+    "required": []
+   },
+   "readOnly": true,
+   "maxDurationMs": 120000
+  },
+  {
+   "name": "check-container",
+   "description": "チェストなどのコンテナの中身を確認します。",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "x": {
+      "type": "number",
+      "description": "コンテナのX座標"
+     },
+     "y": {
+      "type": "number",
+      "description": "コンテナのY座標"
+     },
+     "z": {
+      "type": "number",
+      "description": "コンテナのZ座標"
+     },
+     "showEmpty": {
+      "type": "boolean",
+      "default": false,
+      "description": "空の場合も詳細を表示するか（デフォルト: false）"
+     }
+    },
+    "required": [
+     "x",
+     "y",
+     "z"
+    ],
+    "additionalProperties": false
+   },
+   "readOnly": false,
+   "maxDurationMs": 120000
+  },
+  {
+   "name": "check-furnace",
+   "description": "かまどの精錬状態（完了したか）や各スロットの中身を確認します。",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "x": {
+      "type": "number",
+      "description": "かまどのX座標"
+     },
+     "y": {
+      "type": "number",
+      "description": "かまどのY座標"
+     },
+     "z": {
+      "type": "number",
+      "description": "かまどのZ座標"
+     }
+    },
+    "required": [
+     "x",
+     "y",
+     "z"
+    ],
+    "additionalProperties": false
+   },
+   "readOnly": false,
+   "maxDurationMs": 120000
+  },
+  {
+   "name": "get-entity-look-direction",
+   "description": "プレイヤーやエンティティの位置と向き（視線方向）を取得します。ユーザーが「あの〜」と何かを指している時に、ユーザーの視線方向を確認するために使用します。",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "entityName": {
+      "type": "string",
+      "description": "エンティティの名前（プレイヤー名など）"
+     }
+    },
+    "required": [
+     "entityName"
+    ],
+    "additionalProperties": false
+   },
+   "readOnly": true,
+   "maxDurationMs": 120000
+  },
+  {
+   "name": "trade-with-villager",
+   "description": "指定された村人を探して条件に合う取引を行います。villagerNameで名前検索、listOnly=trueで取引一覧表示も可能。",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "inputItemName": {
+      "type": "string",
+      "description": "取引で渡すアイテム名（listOnly=trueの場合は省略可）"
+     },
+     "inputItemCount": {
+      "type": "number",
+      "description": "取引で渡すアイテムの個数（省略時はもらうアイテムの個数優先）"
+     },
+     "outputItemName": {
+      "type": "string",
+      "description": "取引でもらうアイテム名（listOnly=trueの場合は省略可）"
+     },
+     "outputItemCount": {
+      "type": "number",
+      "description": "もらうアイテムの個数（省略時は渡すアイテムの個数優先）"
+     },
+     "profession": {
+      "type": "string",
+      "description": "村人の職業（例: farmer, weaponsmith, nitwit など）。villagerNameやvillagerIdを指定する場合は省略可"
+     },
+     "villagerId": {
+      "type": "number",
+      "description": "村人のエンティティID（list-nearby-entitiesで取得可能）。指定すると他の検索条件よりも優先"
+     },
+     "villagerName": {
+      "type": "string",
+      "description": "村人のカスタム名で検索（例: \"Mysterious Trader\"）。部分一致で検索"
+     },
+     "listOnly": {
+      "type": "boolean",
+      "description": "trueにすると取引を実行せず、利用可能な取引一覧だけを表示する"
+     }
+    },
+    "additionalProperties": false,
+    "required": []
+   },
+   "readOnly": false,
+   "maxDurationMs": 120000
+  },
+  {
+   "name": "enchant-item",
+   "description": "エンチャントテーブルを使ってアイテムをエンチャントします。ラピスラズリと十分なXPレベルが必要です。",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "x": {
+      "type": "number",
+      "description": "エンチャントテーブルのX座標"
+     },
+     "y": {
+      "type": "number",
+      "description": "エンチャントテーブルのY座標"
+     },
+     "z": {
+      "type": "number",
+      "description": "エンチャントテーブルのZ座標"
+     },
+     "slot": {
+      "type": "number",
+      "default": 0,
+      "description": "エンチャントスロット（0=弱, 1=中, 2=強）。デフォルト: 0"
+     }
+    },
+    "required": [
+     "x",
+     "y",
+     "z"
+    ],
+    "additionalProperties": false
+   },
+   "readOnly": false,
+   "maxDurationMs": 120000
+  },
+  {
+   "name": "brew-potion",
+   "description": "醸造台でポーションを醸造します。水入り瓶(potion)、材料、ブレイズパウダーが必要です。20秒かかります。",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "x": {
+      "type": "number",
+      "description": "醸造台のX座標"
+     },
+     "y": {
+      "type": "number",
+      "description": "醸造台のY座標"
+     },
+     "z": {
+      "type": "number",
+      "description": "醸造台のZ座標"
+     },
+     "ingredient": {
+      "type": "string",
+      "description": "材料アイテム名（例: nether_wart, redstone, glowstone_dust, fermented_spider_eye）"
+     }
+    },
+    "required": [
+     "x",
+     "y",
+     "z",
+     "ingredient"
+    ],
+    "additionalProperties": false
+   },
+   "readOnly": false,
+   "maxDurationMs": 30000
+  },
+  {
+   "name": "repair-item",
+   "description": "金床を使ってアイテムを修理・合成します。XPが必要です。同じアイテム2つの合成、またはアイテム+素材での修理が可能です。",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "x": {
+      "type": "number",
+      "description": "金床のX座標"
+     },
+     "y": {
+      "type": "number",
+      "description": "金床のY座標"
+     },
+     "z": {
+      "type": "number",
+      "description": "金床のZ座標"
+     },
+     "targetItem": {
+      "type": "string",
+      "description": "修理対象のアイテム名（例: diamond_pickaxe）"
+     },
+     "materialItem": {
+      "type": "string",
+      "description": "修理材料（同アイテムまたはインゴット等。例: diamond, diamond_pickaxe）"
+     }
+    },
+    "required": [
+     "x",
+     "y",
+     "z",
+     "targetItem",
+     "materialItem"
+    ],
+    "additionalProperties": false
+   },
+   "readOnly": false,
+   "maxDurationMs": 120000
+  },
+  {
+   "name": "use-stonecutter",
+   "description": "石切台で石材を加工します（石レンガ、階段、ハーフブロック等）。クラフトテーブルより効率的です。",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "x": {
+      "type": "number",
+      "description": "石切台のX座標"
+     },
+     "y": {
+      "type": "number",
+      "description": "石切台のY座標"
+     },
+     "z": {
+      "type": "number",
+      "description": "石切台のZ座標"
+     },
+     "inputItem": {
+      "type": "string",
+      "description": "入力アイテム名（例: stone, cobblestone, quartz_block）"
+     },
+     "outputItem": {
+      "type": "string",
+      "description": "出力アイテム名（例: stone_bricks, stone_stairs, stone_slab）"
+     },
+     "count": {
+      "type": "number",
+      "default": 1,
+      "description": "加工数（デフォルト: 1）"
+     }
+    },
+    "required": [
+     "x",
+     "y",
+     "z",
+     "inputItem",
+     "outputItem"
+    ],
+    "additionalProperties": false
+   },
+   "readOnly": false,
+   "maxDurationMs": 120000
+  },
+  {
+   "name": "set-movement-pace",
+   "description": "以後の通常の移動の速さを選ぶ（次に変えるまで有効）。walk=歩く: 空腹度を消費しない。sprint=走る: 約2割速いが、約43mごとに空腹度1を消費する（隔離サーバーでの実測）。緊急時の逃走・戦闘はこの設定に関係なく走る。現在の設定と歩いた/走った距離は観測のmovementPace・exertionに出る。",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "pace": {
+      "type": "string",
+      "description": "walk または sprint"
+     }
+    },
+    "required": [
+     "pace"
+    ],
+    "additionalProperties": false
+   },
+   "readOnly": true,
+   "maxDurationMs": 120000
+  },
+  {
+   "name": "accept-threat",
+   "description": "これから指定した秒数のあいだ、指定した種類の相手が「近くに居る・当ててきた」だけでは緊急対応にしません（その相手のいる場所へ自分の意思で入っていく・そばで作業する時に、先に呼ぶ）。体力が半分以下になった時・一撃で大きく削られた時と、指定していない種類の相手は、今まで通り緊急対応になります。時間が過ぎると自動で元に戻ります",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "kinds": {
+      "type": "string",
+      "description": "相手の種類。カンマ区切りで複数可（例: \"blaze\" や \"blaze,wither_skeleton\"）"
+     },
+     "seconds": {
+      "type": "number",
+      "default": 120,
+      "description": "続ける秒数（1〜300、デフォルト: 120）"
+     }
+    },
+    "required": [
+     "kinds"
+    ],
+    "additionalProperties": false
+   },
+   "readOnly": true,
+   "maxDurationMs": 120000
+  },
+  {
+   "name": "get-advancements",
+   "description": "プレイヤーのマイクラ進捗（実績）の達成状況を確認します。石器時代、アップグレードなどの進捗をカテゴリー別に表示します。",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "playerName": {
+      "type": "string",
+      "description": "進捗を確認するプレイヤー名（省略時はボット自身）"
+     },
+     "category": {
+      "type": "string",
+      "default": "all",
+      "description": "表示するカテゴリー（minecraft:story/minecraft:adventure/minecraft:husbandry/minecraft:nether/minecraft:end/all）。データパックのカテゴリーも指定可能。省略時はall"
+     }
+    },
+    "additionalProperties": false,
+    "required": []
+   },
+   "readOnly": true,
+   "maxDurationMs": 120000
+  },
+  {
+   "name": "goal-evidence",
+   "readOnly": true,
+   "description": "現在の元タスクに結び付いたnative死亡観測と所持数を読む。攻撃後にThe Endで実際に観測したドラゴンの死亡だけが証拠。未観測・別タスク・再接続は達成ではない。途中の節目（今いる次元、この接続で入った次元、ネザー到達、ブレイズロッド・エンダーパール・エンダーアイの所持数）も milestones で返す（節目は討伐の証拠ではない）。",
+   "inputSchema": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+   }
+  }
+ ],
+ "internal": [
+  "events"
+ ],
+ "runnable": [
+  "accept-threat",
+  "act",
+  "activate-block",
+  "attack-continuously",
+  "attack-nearest",
+  "breed-animal",
+  "brew-potion",
+  "build-around-self",
+  "build-structure",
+  "can-dig-block",
+  "check-container",
+  "check-furnace",
+  "check-inventory-item",
+  "check-path-to",
+  "check-recipe",
+  "climb-down",
+  "combat",
+  "combat-engage",
+  "craft-one",
+  "deposit-to-container",
+  "dig-block-at",
+  "dig-shelter",
+  "drop-item",
+  "enchant-item",
+  "enter-portal",
+  "equip-item",
+  "explore-for-structure",
+  "fill-area",
+  "find-blocks",
+  "find-dry-footholds",
+  "find-nearest-entity",
+  "find-placeable-spot",
+  "find-structure",
+  "fish",
+  "flee-from",
+  "follow-entity",
+  "get-advancements",
+  "get-block-at",
+  "get-block-in-sight",
+  "get-blocks-in-area",
+  "get-bot-status",
+  "get-entity-look-direction",
+  "get-equipment",
+  "get-health",
+  "get-position",
+  "get-time-and-weather",
+  "harvest-crop",
+  "is-block-loaded",
+  "jump",
+  "leave-water",
+  "list-inventory-items",
+  "list-nearby-entities",
+  "look-at",
+  "mine-block",
+  "move-to",
+  "pickup-nearest-item",
+  "place-block-at",
+  "plant-crop",
+  "probe",
+  "recall-places",
+  "repair-item",
+  "set-movement-pace",
+  "set-shield",
+  "set-sneak",
+  "set-sprint",
+  "shoot-bow",
+  "sleep-in-bed",
+  "stair-mine",
+  "start-smelting",
+  "stop-movement",
+  "swing-arm",
+  "tower-up",
+  "trade-with-villager",
+  "use-bone-meal",
+  "use-item",
+  "use-item-on-block",
+  "use-item-on-entity",
+  "use-stonecutter",
+  "view",
+  "wait-time",
+  "withdraw-from-container",
+  "withdraw-from-furnace"
+ ],
+ "actHandFieldCount": 49,
+ "maxProperties": 49
+}

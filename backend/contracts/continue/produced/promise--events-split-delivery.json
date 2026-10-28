@@ -1,0 +1,44 @@
+{
+ "producedBy": "backend/scripts/lab/continue-produce.ts",
+ "bench": "offline",
+ "bodyRevision": "unknown",
+ "madeAt": "2026-10-28T11:53:13.573Z",
+ "answers": "promise/events-split-delivery",
+ "fixtureSha256": "e97b0fda40be26fd2944c77642d0a7cfd62259b6e5de49def9aadd6cb8bcc51f",
+ "output": {
+  "replies": [
+   {
+    "command": "skill:q70",
+    "from": 120,
+    "to": 240,
+    "total": 340,
+    "nextSeq": 240,
+    "done": false,
+    "lost": false,
+    "events": 120
+   },
+   {
+    "command": "skill:q70",
+    "from": 240,
+    "to": 340,
+    "total": 340,
+    "nextSeq": 340,
+    "done": true,
+    "lost": false,
+    "events": 100
+   },
+   {
+    "command": "skill:q70",
+    "from": 120,
+    "to": 240,
+    "total": 340,
+    "nextSeq": 240,
+    "done": false,
+    "lost": false,
+    "events": 120
+   }
+  ],
+  "sameEventsAsFirst": true,
+  "lostAfterRestart": true
+ }
+}
