@@ -57,6 +57,7 @@ const WATCHED: Readonly<Record<string, Measure>> = {
 type Scalar = string | number | boolean | null;
 interface Point { x: number; y: number; z: number }
 interface EventsBody {
+  on?(event: string, listener: (...args: any[]) => void): unknown;
   entity?: { position?: Point & { distanceTo?(other: Point): number }; isInWater?: boolean };
   entities?: Record<string, { name?: string; position?: Point } | undefined>;
   inventory?: { items?(): Array<{ name: string; count: number }> };
@@ -90,7 +91,27 @@ export class BodyEventWatcher implements BodyEventSource {
   private readonly furnacesTold = new Set<string>();
 
   constructor(private readonly bot: EventsBody, private readonly now: () => number = Date.now,
-    private readonly readNeeds: (bot: EventsBody, now: number) => NearbyNeed[] = (bot, now) => nearbyNeeds(bot as never, now)) {}
+    private readonly readNeeds: (bot: EventsBody, now: number) => NearbyNeed[] = (bot, now) => nearbyNeeds(bot as never, now)) {
+    // Continue contracts (4): the melee reflex tells its cap as an urgent notice (the head wakes on it).
+    try {
+      bot.on?.('minebotReflexCapped', (info: { reflex?: string; limit?: string; count?: number; bridge?: string; until?: string | null }) => {
+        this.push('reflex.capped', String(info.reflex ?? 'floor-melee'), { limit: String(info.limit ?? ''), count: Number(info.count ?? 0), bridge: String(info.bridge ?? 'none'), until: info.until ?? null }, this.now());
+      });
+    } catch { /* a body without events */ }
+    this.installInventoryListener();
+  }
+
+  /** Continue contracts (3): a pack change no command made (a reflex's meal, armour put on), told once with its own id. */
+  private installInventoryListener(): void {
+    try {
+      this.bot.on?.('minebotInventoryChanged', (info: { id?: string; item?: string; count?: number; reason?: string; obsSeq?: number }) => {
+        this.push('inventory.changed', String(info.item ?? ''), { id: String(info.id ?? ''), item: String(info.item ?? ''), count: Number(info.count ?? 0), reason: String(info.reason ?? ''), obsSeq: Number(info.obsSeq ?? 0) }, this.now());
+      });
+    } catch { /* a body without events */ }
+  }
+
+  /** An event from a part of the body that is not a watch here (the server's tick, a pack change with no command). */
+  emit(kind: MinecraftBodyEvent['kind'], subject: string, data: Record<string, Scalar>): void { this.push(kind, subject, data, this.now()); }
 
   /** A skill command starts: its measure begins now. A read-only skill or a reflex operation is not followed. */
   begin(command: Pick<Command, 'id' | 'skill' | 'arguments'>): void {

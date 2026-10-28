@@ -115,6 +115,10 @@ function holds(bot: any, c: Clause): boolean {
     case 'safe': return threatsWithin(bot, c.r).length === 0;
   }
 }
+/** Whether the condition cannot be decided now: a `furnace` clause for a furnace the body has no record of (continue contracts, 2: such an item is not started). */
+export function conditionUndecidable(bot: any, condition: ActCondition): boolean {
+  return condition.some(clauses => clauses.some(clause => clause.k === 'furnace' && furnaceDone(bot, clause) === null));
+}
 /** Whether the condition holds now (any alternative whose clauses all hold). */
 export function conditionHolds(bot: any, condition: ActCondition): boolean {
   return condition.some(clauses => clauses.every(clause => holds(bot, clause)));

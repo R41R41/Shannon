@@ -92,6 +92,19 @@ export class SceneSaver {
     try { const answer = await this.ports.command('tick freeze', 4000); return { frozen: true, why: answer.slice(0, 120) || 'frozen' }; }
     catch (error) { return { frozen: false, why: `freeze_failed:${String((error as Error)?.message ?? error).slice(0, 80)}` }; }
   }
+  /**
+   * Continue contracts (8): the server's tick, as it answers `tick query`: the raw answer, the average time per tick, whether the game is frozen, when it
+   * was asked, and what failed. A frozen game or an unreadable answer is not 0 ms: the numbers are null then and the raw text stays.
+   */
+  async tickQuery(now: () => number = Date.now): Promise<{ raw: string | null; parsedMspt: number | null; frozen: boolean | null; at: string; error: string | null }> {
+    const at = new Date(now()).toISOString();
+    try {
+      const raw = (await this.ports.command('tick query', 3000)).slice(0, 300);
+      const mspt = /Average time per tick:s*([0-9]+(?:.[0-9]+)?)s*ms/iu.exec(raw);
+      const frozen = /frozen/iu.test(raw) ? true : /running normally|sprinting|stepping/iu.test(raw) ? false : null;
+      return { raw, parsedMspt: mspt ? Number(mspt[1]) : null, frozen, at, error: null };
+    } catch (error) { return { raw: null, parsedMspt: null, frozen: null, at, error: String((error as Error)?.message ?? error).slice(0, 100) }; }
+  }
   async unfreeze(): Promise<string> {
     try { return (await this.ports.command('tick unfreeze', 4000)).slice(0, 120) || 'unfrozen'; }
     catch (error) { return `unfreeze_failed:${String((error as Error)?.message ?? error).slice(0, 80)}`; }

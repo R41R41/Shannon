@@ -28,4 +28,8 @@ export interface ActionTrace {
   events: ActionProgress[];
   quiescent: boolean;
   containment?: { cancelledAt: number; warningAt: number | null; settledAt: number | null; reclaimedAt?: number };
+  /** Continue contracts (8): when the lock was taken, when the first effective motor operation was sent, and how many were (the root action's own). */
+  lockAt?: number; firstMotorAt?: number; motorOps?: number;
+  /** Continue contracts (4): this action's place in the count of owners (a root action that moves the body takes the next number). */
+  holderSeq?: number;
 }

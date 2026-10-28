@@ -85,7 +85,8 @@ describe('repeat: the hands again, from where the feet are', () => {
     expect(walked.map(cell => cell.x)).toEqual([1, 2, 3, 4]);
     const json = parse(result);
     expect(json).toMatchObject({ ok: true, done: 4, of: 4, repeat: { done: 4, of: 4 }, at: { x: 4, y: 64, z: 0 } });
-    expect(json.lines).toHaveLength(1);
+    expect(json.lines).toHaveLength(4);
+    expect(json.lines.map((line: any) => line.pass)).toEqual([1, 2, 3, 4]);
     expect(events.filter(event => event.status === 'in_progress').map(event => [event.iteration, event.repeat])).toEqual([[1, 4], [2, 4], [3, 4], [4, 4]]);
   });
 

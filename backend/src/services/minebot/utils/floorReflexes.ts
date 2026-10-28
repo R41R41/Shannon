@@ -1,6 +1,6 @@
 import { Vec3 } from 'vec3';
 import { createLogger } from '../../../utils/logger.js';
-import { actionLeaseStatus, activeActionCapabilities, createMotorPort, executeAction, hasActiveSafetyLease, physicalActionBusy, preemptLowerPriorityActions, safetyLeaseCapabilities } from '../execution/ActionExecution.js';
+import { actionLeaseStatus, activeActionCapabilities, createMotorPort, executeAction, hasActiveSafetyLease, physicalActionBusy, physicalRoots, preemptLowerPriorityActions, safetyLeaseCapabilities } from '../execution/ActionExecution.js';
 import { isHeadCombatActive, isHeadCombatRunning } from './combatOwner.js';
 import { creeperLit } from './creeperFuse.js';
 import { FALLBACK_FOOD_POINTS, RAW_FOOD } from '../constantSkills/autoEat.js';
@@ -192,9 +192,45 @@ export interface FloorState {
   damageAt?: number[];
   falls?: number[];
   /** r8, the melee hand: the episode (hands made, when the last ended), the next look, the last "no hand" note. */
-  melee?: { since: number; hands: number; lastEnd: number; /** r9: the hands that were blows (their own allowance). */ hits?: number };
+  melee?: { since: number; hands: number; lastEnd: number; /** r9: the hands that were blows (their own allowance). */ hits?: number;
+    /** Continue contracts (4): the enemy of the episode's latest hand, the kind of that hand, and when the cap was told (once per episode). */
+    target?: number; lastKind?: string; cappedAt?: number };
+  /** Continue contracts (4): the enemy the running hit hand (the melee's, the last stand's) is after: what an act for the same enemy takes the body over from. */
+  handTarget?: { capability: string; target: number; at: number };
+  /** Continue contracts (4): after a cap, the move the reflex had already chosen goes on for a short while, and nothing new is chosen. */
+  bridge?: ReflexBridge;
   meleeNextAt?: number;
   meleeNotedAt?: number;
+}
+
+/** Continue contracts (4): what the reflex goes on with after its cap; the holder in the control view while it lasts. */
+export interface ReflexBridge { after: string; hold: 'shield' | 'step_back'; target?: number; since: number; until: number }
+/** How long the bridge lasts from the first notice (a first value; a later notice never extends it). */
+export const BRIDGE_MS = 3000;
+/** Health at or below which the bridge ends (the low-health reflexes take the body back). */
+export const BRIDGE_END_HP = 5;
+
+/**
+ * The bridge now, or null. It ends when: a command began (a body-moving root that is not a reflex), the enemy is gone, health is at or below
+ * BRIDGE_END_HP, or its time is up. Reading it ends it (the state is cleared) so that nothing keeps holding after.
+ */
+export function bridgeOf(bot: object, now = Date.now()): ReflexBridge | null {
+  const b = bot as { floorReflexes?: FloorState; health?: number; entities?: Record<string, { isValid?: boolean; health?: number } | undefined> };
+  const state = b.floorReflexes;
+  const bridge = state?.bridge;
+  if (!state || !bridge) return null;
+  const ended = now >= bridge.until || (b.health ?? 20) <= BRIDGE_END_HP
+    || (bridge.target !== undefined && (() => { const e = b.entities?.[bridge.target!]; return !e || e.isValid === false || (typeof e.health === 'number' && e.health <= 0); })())
+    || physicalRoots(bot).some(root => !root.safetyLease);
+  if (ended) { state.bridge = undefined; return null; }
+  return bridge;
+}
+/** The melee episode as the control view shows it (4), or null. */
+export function meleeEpisodeView(bot: object, now = Date.now()): { reflex: string; target?: number; hands: number; hits: number; since: number } | null {
+  const state = (bot as { floorReflexes?: FloorState }).floorReflexes;
+  const melee = state?.melee;
+  if (!melee || !(state!.busy === 'flee' || now - melee.lastEnd <= MELEE_EPISODE_MS)) return null;
+  return { reflex: 'floor-melee', ...(melee.target !== undefined ? { target: melee.target } : {}), hands: melee.hands, hits: melee.hits ?? 0, since: melee.since };
 }
 
 export { creeperLit };
@@ -1764,6 +1800,7 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
     if (!stand) return false;
     const chosen = stand;
     state.lastStandAt = now(); state.busy = 'flee';
+    if (chosen.kind === 'hit' && typeof chosen.target?.id === 'number') state.handTarget = { capability: 'floor-last-stand', target: chosen.target.id, at: now() };
     log.warn(`🧱 ${cause === 'creeper' ? '点火したクリーパーから' : '低体力で'}逃げ道なし、最後の手: ${chosen.kind}`);
     void takeNoted(cause === 'creeper' ? 'retreat' : 'flee', chosen.detail, 'floor-last-stand', cause === 'creeper' ? FLOOR_RETREAT_PRIORITY : FLOOR_FLEE_PRIORITY,
       LAST_STAND_TIMEOUT_MS[chosen.kind], () => runLastStand(bot, createMotorPort(bot), chosen), undefined, LAST_STAND_DETAIL_MAX)
@@ -1896,12 +1933,30 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
     const striking = choice.hand?.kind === 'hit';
     if (striking ? hits >= MELEE_MAX_HITS : hands >= MELEE_MAX_HANDS) {
       told(striking ? `この間に打ち返しを${hits}手続けたがまだ近い。これ以上は反射でしない` : `この間に${hands}手を打ったがまだ近い。これ以上は反射でしない`);
+      // Continue contracts (4): told once per episode as an urgent notice, and the move already chosen (a shield up, a step back under way) goes on
+      // for BRIDGE_MS from this first notice. Nothing new is chosen; a second notice does not extend it.
+      if (episode && episode.cappedAt === undefined) {
+        episode.cappedAt = t;
+        const shieldUp = (bot as { shieldBlock?: { up?: boolean } }).shieldBlock?.up === true;
+        const stepping = episode.lastKind === 'step' && state.busy === 'flee';
+        const hold = shieldUp ? 'shield' as const : stepping ? 'step_back' as const : null;
+        const until = hold ? t + BRIDGE_MS : null;
+        if (hold) state.bridge = { after: 'floor-melee', hold, ...(episode.target !== undefined ? { target: episode.target } : {}), since: t, until: until! };
+        try {
+          (bot as { emit?: (event: string, data: unknown) => unknown }).emit?.('minebotReflexCapped', { reflex: 'floor-melee', limit: striking ? 'melee_hits' : 'melee_hands',
+            count: striking ? hits : hands, bridge: hold === 'shield' ? 'shield' : hold === 'step_back' ? 'step_back' : 'none', until: until === null ? null : new Date(until).toISOString() });
+        } catch { /* a notice never changes what the reflex did */ }
+      }
       return false;
     }
     if (!choice.hand) { told(`動ける手が無い（${choice.why}）`); return false; }
     const hand = choice.hand;
     const run = state.melee = episode ?? { since: t, hands: 0, lastEnd: t };
     if (hand.kind === 'hit') run.hits = (run.hits ?? 0) + 1; else run.hands++;
+    // Continue contracts (4): the enemy this hand is after (the blow's own, else the nearest one), for a handover to an act for the same enemy.
+    const handEnemy = hand.kind === 'hit' ? hand.target.id : threats[0]?.entity?.id;
+    if (typeof handEnemy === 'number') { run.target = handEnemy; state.handTarget = { capability: 'floor-melee', target: handEnemy, at: t }; }
+    run.lastKind = hand.kind;
     state.busy = 'flee';
     log.warn(`🗡️ ${who}、${choice.footing.count ? '空所の縁' : '打たれている'}: ${hand.kind}`);
     const handle = ledger.begin('melee', `${who}: ${hand.detail}`, MELEE_DETAIL_MAX);

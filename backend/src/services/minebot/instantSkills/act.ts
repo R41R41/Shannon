@@ -1,11 +1,15 @@
 import { z } from 'zod';
 import { CustomBot, InstantSkill } from '../types.js';
-import { actionSignal, nativeActionHost } from '../execution/ActionExecution.js';
+import { actionSignal, delegateShield, handoverOf, motorOpsOf, nativeActionHost } from '../execution/ActionExecution.js';
 import { isThreat, LAYING_HANDS, reflexHeld, shooterWords, shootersInReach, shootersSeeing } from '../utils/floorReflexes.js';
 import { threatExposure } from '../utils/threatExposure.js';
 import { beginEngagement } from '../utils/engagement.js';
 import { bodyReader, cellKey, facingOfYaw, feetCell, noteMapStop, type Cell, type Facing } from '../utils/localMap.js';
-import { aroundText, clip, closedWord, keepActReport, renderActReport, stoppedLine, type ActReport, type StoppedBy } from '../utils/actReport.js';
+import { aroundText, clip, closedWord, keepActReport, renderActReport, stoppedLine, type ActReport, type HandLine, type HandStatus, type StoppedBy } from '../utils/actReport.js';
+import { aggregateGoal, isReliable, type GoalOutcome, type InventoryEvent, type Progress } from '../integration/commonFca/continueContract.js';
+import { actContextOf } from '../utils/actContext.js';
+import { handReasons, SELF_COUNTING, trackPack } from '../utils/packEvents.js';
+import { cutByOf, finishedVerdict, numberEvents, stoppedFromOutside, type HandVerdict } from '../utils/handOutcome.js';
 import { blockAt, cellNow, freeSlots, inventoryCount, resolvePosition, StepStopped, wait, type PositionSpec, type StepContext, type StepOutcome } from '../utils/primitives/common.js';
 import { dimensionOf, portalWalks, walk } from '../utils/primitives/walk.js';
 import { dig } from '../utils/primitives/dig.js';
@@ -106,6 +110,7 @@ const Hand = z.object({
   toward: z.enum(['north', 'east', 'south', 'west']).optional().describe('vertical stairs: 進む向き（stairs では必須）'),
   toY: z.number().int().optional().describe('vertical: どの y まで（足の y）'),
   liquid: z.enum(['stop', 'seal', 'seal_water']).optional().describe('vertical: 溶岩・水が見えた時。stop=止める、seal=塞いで続ける、seal_water=水だけ塞ぎ溶岩で止める'),
+  dependsOn: z.array(z.number().int().min(1).max(12)).max(11).optional().describe('この手が頼る、同じ act の同じ周回の前の手の番号（1 から）。無い: 今どおり。[]: どの手にも頼らない。[1,3]: 手 1 と 3 が済み（done か already）の時だけ動く'),
   onFail: z.enum(['continue', 'stop']).optional().describe('この手が自分で失敗したとき: continue=失敗と記録して次の手へ、stop=ここで止める（省略: equip・eat・look・sneak・jump は continue、他は stop）。反射・stopIf・取り消し・時間切れ・満杯は常に止める'),
 }).strict();
 export const ACT_HANDS = z.array(Hand).min(1).max(12);
@@ -197,7 +202,7 @@ const targetOf = (value: string | number | undefined) => value === undefined ? u
   : /^#\d+$/u.test(value.trim()) ? Number(value.trim().slice(1)) : value;
 const PILLAR_BLOCKS = ['cobblestone', 'cobbled_deepslate', 'dirt', 'netherrack'];
 /** The fields a fight hand takes (with `do`): the head's rules, minecraftActHandRules.ts. */
-const FIGHT_FIELDS = new Set(['do', 'target', 'stance', 'item', 'retreatHp', 'range', 'seconds', 'rel', 'note', 'onFail']);
+const FIGHT_FIELDS = new Set(['do', 'target', 'stance', 'item', 'retreatHp', 'range', 'seconds', 'rel', 'note', 'onFail', 'dependsOn']);
 const SLOTS: Record<string, string> = { hand: 'hand', offhand: 'off-hand', 'off-hand': 'off-hand', head: 'head', chest: 'torso', torso: 'torso', legs: 'legs', feet: 'feet' };
 
 async function runHand(ctx: StepContext, hand: ActHand): Promise<StepOutcome> {
@@ -281,7 +286,7 @@ async function runHand(ctx: StepContext, hand: ActHand): Promise<StepOutcome> {
       // The hand's own fields and ranges (the head's minecraftActHandRules.ts HAND_FIELDS / KIND_CHECKS for fight).
       if (target === undefined) return bad('fight には target（#id か名前）が要る');
       const extra = Object.keys(hand).filter(key => !FIGHT_FIELDS.has(key));
-      if (extra.length) return bad(`${extra.join('・')} は fight では使えない（fight の欄: target・stance・item・retreatHp・range・seconds・rel・note・onFail）`);
+      if (extra.length) return bad(`${extra.join('・')} は fight では使えない（fight の欄: target・stance・item・retreatHp・range・seconds・rel・note・onFail・dependsOn）`);
       if (hand.seconds !== undefined && (hand.seconds < 5 || hand.seconds > 60)) return bad('fight の seconds は 5〜60');
       if (hand.range !== undefined && (hand.range < 0 || hand.range > 16)) return bad('fight の range は 0〜16');
       if (hand.retreatHp !== undefined && (!Number.isInteger(hand.retreatHp) || hand.retreatHp < 1 || hand.retreatHp > 19)) return bad('fight の retreatHp は 1〜19 の整数');
@@ -321,7 +326,27 @@ function stoppedByOf(code: string): StoppedBy {
   if (code === 'no_progress') return 'noProgress';
   if (code === 'damage_taken') return 'damage';
   if (code === 'fell') return 'fall';
+  if (LAPSES.has(code)) return 'cancelled';
   return 'failure';
+}
+/** Continue contracts (2, 5): the lapses that stop an act from outside (a death, a new life, a changed connection, a dimension, a lease, the operator). */
+const LAPSES = new Set(['death', 'stale_life', 'connection_changed', 'dimension_changed', 'lease_expired', 'operator_stop', 'handover', 'died']);
+
+/** The shape errors of the hands' dependsOn: itself, a hand ahead, out of range, a repeat. Null when well formed. */
+export function dependsProblem(hands: Array<Pick<ActHand, 'dependsOn'>>): string | null {
+  for (let index = 0; index < hands.length; index++) {
+    const list = hands[index].dependsOn;
+    if (list === undefined) continue;
+    const seen = new Set<number>();
+    for (const target of list) {
+      if (!Number.isInteger(target) || target < 1 || target > hands.length) return `手 ${index + 1} の dependsOn ${target} は範囲外（1〜${hands.length}）`;
+      if (target === index + 1) return `手 ${index + 1} の dependsOn が自分自身`;
+      if (target > index + 1) return `手 ${index + 1} の dependsOn ${target} はまだ先の手`;
+      if (seen.has(target)) return `手 ${index + 1} の dependsOn ${target} が重複`;
+      seen.add(target);
+    }
+  }
+  return null;
 }
 
 /** The cells of a dig hand that held a block before and hold something else now (what the hand dug). */
@@ -337,6 +362,14 @@ function dugCountOf(bot: any, before: Array<{ cell: Cell; name: string }>): numb
 export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, facingName?: string,
   options: { maxMs?: number; tickMs?: number; accept?: string[]; repeat?: number; done?: ActCondition } = {}) {
   const startedAt = Date.now();
+  const shape = dependsProblem(hands);
+  if (shape) {
+    const lines: HandLine[] = hands.map((hand, index) => ({ i: index + 1, do: hand.do, status: 'skipped', line: `未実行: ${shape}`, goal: 'not_started', end: 'not_run', code: 'invalid_input' }));
+    const bad: ActReport = { startedAt, lines, ok: false, done: 0, of: hands.length, stoppedBy: 'failure', stoppedWhy: shape, failureType: 'invalid_input',
+      outcome: { goal: 'not_started', end: 'not_run' } };
+    keepActReport(bot, bad);
+    return { success: false, result: renderActReport(bot, bad), failureType: 'invalid_input', recoverable: true };
+  }
   const deadline = startedAt + (options.maxMs ?? 180_000);
   const facing: Facing = (['north', 'east', 'south', 'west'] as const).find(name => name === facingName) ?? facingOfYaw(Number(bot.entity?.yaw ?? 0));
   // Task queue: the hand list may be run up to `repeat` times, and `done` ends the act ok where it holds (the head's contract; both optional).
@@ -454,7 +487,42 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
   const emit = (index: number, status: 'in_progress' | 'completed' | 'error', detail = '') => {
     try { bot.emit?.('minebotActStep', { startedAt, index, total: hands.length, label: hands[index].note ?? stepLabel(hands[index] as never), status, detail, iteration: pass, repeat: passes }); } catch { /* the UI is optional */ }
   };
-  const skip = (from: number, why = '') => { for (let rest = from; rest < hands.length; rest++) report.lines.push({ i: rest + 1, do: hands[rest].do, status: 'skipped', line: why ? `未実行: ${why}` : '未実行' }); };
+  // ----- continue contracts: each hand's result on two axes, its inventory events, its place in the dependency order -----
+  const actContext = actContextOf(bot);
+  const commandId = actContext?.command ?? 'act';
+  report.command = actContext?.command;
+  const allEvents: InventoryEvent[] = [];
+  report.events = allEvents;
+  /** The hands' goals and the effective motor operations each sent (the act's goal is decided from these, 1). */
+  const handRuns: Array<{ goal: GoalOutcome; motorOps: number; ran: boolean }> = [];
+  /** This pass's hands' results, for the hands that depend on them: reliable is done or already, finished. */
+  let handResults = new Map<number, { goal: GoalOutcome; end: string }>();
+  /** A hand failed by itself and the act stopped there: later hands go on only if they say what they depend on (and it holds). */
+  let actFailed = false;
+  const nextObsSeq = () => { try { return Number((host as { nextObsSeq?: () => number }).nextObsSeq?.() ?? 0); } catch { return 0; } };
+  /** The cut reason of an act stopped from outside its hands. */
+  const outsideCut = () => cutByOf(report.failureType, report.stoppedBy, signal?.reason);
+  const pushLine = (index: number, status: HandStatus, line: string, verdict: HandVerdict, motorOps: number, extra: Partial<HandLine> = {}, events: InventoryEvent[] = []) => {
+    handResults.set(index + 1, { goal: verdict.goal, end: verdict.end });
+    handRuns.push({ goal: verdict.goal, motorOps, ran: status !== 'skipped' });
+    report.lines.push({ i: index + 1, do: hands[index].do, status, line, ...extra, goal: verdict.goal, end: verdict.end, ...(status !== 'skipped' ? { motorOps } : {}),
+      ...(verdict.cutBy ? { cutBy: verdict.cutBy } : {}), ...(verdict.code ? { code: verdict.code } : {}), ...(verdict.progress ? { progress: verdict.progress } : {}),
+      ...(events.length ? { delta: events } : {}), ...(passes > 1 ? { pass } : {}) });
+  };
+  /** A hand that did not run (the act stopped before it, a hand it depends on gave nothing, ...): not started, not run. */
+  const skipOne = (index: number, why = '', code?: string, cutBy?: HandVerdict['cutBy']) =>
+    pushLine(index, 'skipped', why ? `未実行: ${why}` : '未実行', { goal: 'not_started', end: 'not_run', ...(cutBy ? { cutBy } : {}), ...(code ? { code } : {}) }, 0);
+  const skip = (from: number, why = '', code?: string) => {
+    const cutBy = control.signal.aborted && !doneMet ? outsideCut() : undefined;
+    for (let rest = from; rest < hands.length; rest++) skipOne(rest, why, code, cutBy);
+  };
+  /** The inventory events a hand made, numbered in the order they come to the head (the ids are the command's, the pass's, the hand's). */
+  const eventsOf = (index: number, made: Array<Omit<InventoryEvent, 'id' | 'obsSeq' | 'deliverySeq'>>): InventoryEvent[] => {
+    if (!made.length) return [];
+    const numbered = numberEvents(made, { command: commandId, pass, hand: index + 1, obsSeq: nextObsSeq(), nextDelivery: allEvents.length });
+    allEvents.push(...numbered);
+    return numbered;
+  };
   // A dimension crossed (a portal walked into) ends the act there: the cells of the hands after it are the other dimension's (mb-llmc-cand 4).
   const dimension0 = dimensionOf(bot);
   let crossed = false;
@@ -465,19 +533,32 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
       if (where) noteHand(bot, { t: Date.now(), do: hand.do, status, line, at: where, ...(from ? { from } : {}) });
     } catch { /* the history is a help, never the act's result */ }
   };
-  /** One pass of the hand list; false when the act ends there (a stop, an abort, the deadline, a crossed dimension), true when every hand has had its turn. */
+  /** One pass of the hand list; false when the act ends there (a stop, an abort, the deadline, a crossed dimension, a failed hand), true when every hand has had its turn. */
   const runPass = async (): Promise<boolean> => {
+    handResults = new Map();
     for (let index = 0; index < hands.length; index++) {
       const hand = hands[index];
       watch();
       if (index > 0 && crossedByWalk && dimensionOf(bot) !== dimension0) { crossed = true; skip(index, '次元が変わった（前の次元の座標の手は送らない）'); return false; }
       if (control.signal.aborted) { skip(index, doneMet ? '済む条件を満たした' : ''); return false; }
+      // The lapses (2, 5): a new life, a changed connection or lease, a dimension changed: checked before each hand moves the body.
+      const lapse = actContext?.lapse?.(index === 0 && pass === 1);
+      if (lapse) { stopWith(lapse.why, lapse.code); skip(index); return false; }
       if (Date.now() >= deadline) { stopWith('act の時間が尽きた', 'timeout'); skip(index); return false; }
+      // A hand failed by itself and stopped the act: only a hand that names what it depends on may still go (and only if that holds).
+      if (actFailed && !Array.isArray(hand.dependsOn)) { skipOne(index); continue; }
+      if (Array.isArray(hand.dependsOn)) {
+        const unmet = hand.dependsOn.find(target => { const result = handResults.get(target); return !result || !isReliable({ goal: result.goal, end: result.end as never }); });
+        if (unmet !== undefined) { skipOne(index, `頼る手 ${unmet} が済んでいない`, `depends_failed:${unmet}`); continue; }
+      }
       const base = feetCell(bot);
       if (!base) { stopWith('体が無い（接続が切れた）', 'disconnected'); skip(index); return false; }
-      const ctx: StepContext = { bot, stop: control.signal, deadline, facing, base, progress: detail => emit(index, 'in_progress', detail) };
+      const made: Array<Omit<InventoryEvent, 'id' | 'obsSeq' | 'deliverySeq'>> = [];
+      const ctx: StepContext = { bot, stop: control.signal, deadline, facing, base, progress: detail => emit(index, 'in_progress', detail), record: event => { made.push(event); } };
       emit(index, 'in_progress');
+      try { actContext?.onHandStart?.({ hand: index + 1, pass }); } catch { /* the record never stops a hand */ }
       const began = Date.now();
+      const opsBefore = motorOpsOf(bot);
       let outcome: StepOutcome;
       host.actHandNow = hand.do;
       fallStops = hand.do === 'go' ? Math.max(4, (hand.maxDrop ?? 3) + 1) : 4;
@@ -487,16 +568,25 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
       const fightKind = hand.do === 'fight' && hand.target !== undefined ? String(findEntity(bot, targetOf(hand.target) ?? '', 32)?.name ?? '').toLowerCase() : '';
       const fightAccepted = fightKind !== '' && !accepted.has(fightKind);
       if (fightAccepted) accepted.add(fightKind);
-      const endFight = () => { if (fightAccepted) accepted.delete(fightKind); if (hand.do === 'fight') { highWater = Number(bot.health ?? 20); hurtAt = null; } };
+      // Continue contracts (4): a fight or an attack hand hands the shield to the resident shield for as long as it runs (the right stays with the owner, this act).
+      const delegates = hand.do === 'fight' || hand.do === 'attack';
+      if (delegates) delegateShield(bot, true);
+      const endFight = () => { if (delegates) delegateShield(bot, false); if (fightAccepted) accepted.delete(fightKind); if (hand.do === 'fight') { highWater = Number(bot.health ?? 20); hurtAt = null; } };
+      // Continue contracts (3): what the hand changed in the pack is told, with the reason its kind gives (craft and make say their own).
+      const tracker = SELF_COUNTING.has(hand.do) ? null : trackPack(bot);
+      const settleTrack = () => tracker?.finish(handReasons(hand) ?? {}, event => made.push(event));
       try { outcome = await runHand(ctx, hand); }
       catch (error) {
+        settleTrack();
         endFight();
         host.actHandNow = undefined;
         dug += dugCountOf(bot, dugBefore);
+        const handOps = motorOpsOf(bot) - opsBefore;
+        const cutProgress = ((error as { progress?: Progress; verticalProgress?: Progress })?.progress ?? (error as { verticalProgress?: Progress })?.verticalProgress);
         if (doneMet) {
           // The act's `done` held in the middle of this hand: the hand is cut there, and that is the act's end, ok.
           report.done++;
-          report.lines.push({ i: index + 1, do: hand.do, status: 'done', line: '済む条件を満たしたので、ここで止めた' });
+          pushLine(index, 'done', '済む条件を満たしたので、ここで止めた', { goal: 'done', end: 'finished' }, handOps, {}, eventsOf(index, made));
           emit(index, 'completed', '済む条件を満たした');
           skip(index + 1, '済む条件を満たした');
           return false;
@@ -507,7 +597,9 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
           // A hand that was cut tells what it had done (fight: the blows, the health lost, who held the body).
           const told = error instanceof HandCut ? `。${error.summary}` : '';
           const line = clip(`${word}: ${report.stoppedWhy ?? '中断'}（手の途中）${told}`, told ? LINE_MAX_WITH_CAUSE : LINE_MAX), where = feetCell(bot) ?? undefined;
-          report.lines.push({ i: index + 1, do: hand.do, status: 'stopped', line, where });
+          const verdict: HandVerdict = { goal: (cutProgress?.done ?? 0) > 0 ? 'partial' : handOps > 0 ? 'failed' : 'not_started', end: 'cut', cutBy: outsideCut(),
+            ...(report.failureType ? { code: report.failureType } : {}), ...(cutProgress ? { progress: cutProgress } : {}) };
+          pushLine(index, 'stopped', line, verdict, handOps, { where }, eventsOf(index, made));
           remember(hand, 'stopped', line, where, base);
           emit(index, 'error', report.stoppedWhy ?? '中断');
           skip(index + 1);
@@ -516,9 +608,12 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
         outcome = { ok: false, reason: 'error', text: `思わぬ失敗: ${String((error as Error)?.message ?? error).slice(0, 120)}` };
       }
       // A reflex's note held back while the hand laid blocks stops the act at the next hand's watch.
+      settleTrack();
       endFight();
       host.actHandNow = undefined;
       dug += dugCountOf(bot, dugBefore);
+      const handOps = motorOpsOf(bot) - opsBefore;
+      const delta = eventsOf(index, [...made, ...(outcome.events ?? [])]);
       if (outcome.data?.eye) report.eye = outcome.data.eye;
       if (outcome.data?.container) report.container = outcome.data.container;
       if (typeof outcome.data?.arrowsLeft === 'number') report.arrowsLeft = outcome.data.arrowsLeft;
@@ -526,7 +621,7 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
         if ((hand.do === 'walk' || hand.do === 'portal') && outcome.data?.crossedDimension) crossedByWalk = true;
         report.done++;
         const line = clip(`${outcome.text}（${((Date.now() - began) / 1000).toFixed(1)}秒）`);
-        report.lines.push({ i: index + 1, do: hand.do, status: 'done', line });
+        pushLine(index, 'done', line, finishedVerdict(outcome, handOps), handOps, {}, delta);
         remember(hand, 'done', line, outcome.at, base);
         emit(index, 'completed', outcome.text);
         continue;
@@ -534,7 +629,7 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
       // A hand that fails by itself may let the act go on (onFail); what stops the act from outside its hands (the signal aborted) and a full pack never do.
       const goesOn = !control.signal.aborted && outcome.reason !== 'inventory_full' && handContinuesOnFail(hand);
       if (goesOn) report.failureType ??= outcome.reason ?? 'failed';
-      else {
+      else if (!actFailed) {
         report.failureType = outcome.reason ?? 'failed';
         report.stoppedBy = outcome.reason === 'inventory_full' ? 'inventoryFull' : 'failure';
       }
@@ -552,15 +647,16 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
       // go's, obsidian's and portal's lines are the contract's own ("<手> 止まった <code>: ...", the counts in it): the code is the closed word.
       const own = hand.do === 'obsidian' || hand.do === 'portal' || hand.do === 'vertical';
       const line = hand.do === 'go' ? clip(outcome.text) : own ? clip(outcome.text.startsWith(`${hand.do} 止まった`) ? outcome.text : `${hand.do} 止まった ${outcome.reason ?? 'failed'}: ${outcome.text}`) : stoppedLine(outcome.reason, outcome.text, outcome.at ? cellNow(bot, outcome.at) : undefined, outcome.cause, again);
-      report.lines.push({ i: index + 1, do: hand.do, status: goesOn ? 'failed' : 'stopped', line,
-        ...(outcome.at ? { where: outcome.at } : {}), ...(around ? { around } : {}) });
+      // A hand that stops the act by itself ended (finished) on its own: a cut is only what comes from outside.
+      pushLine(index, goesOn ? 'failed' : 'stopped', line, finishedVerdict(outcome, handOps), handOps,
+        { ...(outcome.at ? { where: outcome.at } : {}), ...(around ? { around } : {}) }, delta);
       remember(hand, goesOn ? 'failed' : 'stopped', line, outcome.at, base);
       emit(index, 'error', outcome.text);
       if (goesOn) continue;
-      skip(index + 1);
-      return false;
+      actFailed = true;
+      if (control.signal.aborted || outcome.reason === 'inventory_full') { skip(index + 1); return false; }
     }
-    return true;
+    return !actFailed;
   };
   /** What a pass changed, to tell a pass that did nothing: her cell, the pack, the blocks dug. */
   const signature = () => {
@@ -570,7 +666,6 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
   try {
     if (holdsDone()) finishDone();
     for (pass = 1; pass <= passes; pass++) {
-      if (pass > 1) report.lines = [];
       const before = signature();
       if (!await runPass()) break;
       completedPasses = pass;
@@ -590,6 +685,13 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
   // Crossed: the hands before it were all done (a failure would have stopped the act earlier), so it is ok as far as it went.
   if (passes > 1) report.repeat = { done: completedPasses, of: passes };
   report.ok = doneMet || ((report.done === hands.length * passes || (passes === 1 && crossed && report.done === report.lines.filter(line => line.status !== 'skipped').length)) && !report.stoppedBy);
+  // The act's two axes (1): the goal from the hands' goals and what moved the body; the end from whether anything ran and whether it was cut from outside.
+  const outside = !report.ok && stoppedFromOutside(report.stoppedBy);
+  const ran = handRuns.some(run => run.ran);
+  report.outcome = { goal: aggregateGoal(handRuns, doneMet), end: report.ok ? 'finished' : !ran ? 'not_run' : outside ? 'cut' : 'finished',
+    ...(!report.ok && (outside || !ran) && report.stoppedBy ? { cutBy: outsideCut() } : {}) };
+  const handover = handoverOf(bot);
+  if (handover) report.handover = handover;
   keepActReport(bot, report);
   const text = renderActReport(bot, report);
   return report.ok ? { success: true, result: text } : { success: false, result: text, failureType: report.failureType ?? 'failed', recoverable: true };

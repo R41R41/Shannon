@@ -2,6 +2,7 @@
 interface ActionLease { id: string; generation: number; holder: string }
 import type { LiveRoom, LiveSpeechItem, LiveSpeechReceipt } from '../../../common/liveSpeech.js';
 import type { BodyActionReceipt, BodyCandidateDraft, BodyObservation, BodyOperation, BodyStopAcknowledgement, BodyStopRequest, BodyTaskContext } from './bodyControlContract.js';
+import type { BodyTimes, BodyVersion, ItemOutcome, MadeIn } from './continueContract.js';
 
 /** Separate from the legacy game-chat/body request contract: no planner executes on this device. */
 export const MINECRAFT_CONTROL_PATH = '/v1/body/minecraft/control';
@@ -17,6 +18,8 @@ export interface MinecraftSkillDefinition {
  */
 export interface MinecraftQueueEnvelope {
   item: string; after: string | null; node: string | null; pre?: unknown; maxMs: number; startBy: string;
+  /** Continue contracts (2): the queue the item is in (`${taskId}:${headBoot}:${step}`), the items it depends on (this queue's; [] relies on nothing), and what the decision that made it read. */
+  queue?: string; dependsOn?: string[]; madeIn?: MadeIn;
 }
 export interface MinecraftControlCommand {
   schemaVersion: 1; id: string; serverId: string; connectionId: string;
@@ -34,6 +37,10 @@ export interface MinecraftControlReceipt {
   action?: BodyActionReceipt; stop?: BodyStopAcknowledgement;
   /** Ephemeral pixels only: the companion stores an expiring reference, never this field in SQLite. */
   image?: { dataUrl: string; capturedAt: string };
+  /** Continue contracts (1): the unit's result on the two axes (an act; the queue item's drop or keep reason from the loop). */
+  unit?: ItemOutcome;
+  /** Continue contracts (8): the times the body took (the accept and the end are the loop's; the lock, the first operation and the count are the action's). */
+  bodyTimes?: BodyTimes;
 }
 /**
  * What changed in the body between polls, told while a command runs (session mb-arch, stage 1): a thing an unmet need wants came
@@ -43,7 +50,9 @@ export interface MinecraftControlReceipt {
  */
 export interface MinecraftBodyEvent {
   seq: number; at: string;
-  kind: 'need.appeared' | 'need.gone' | 'action.progress' | 'action.stalled' | 'furnace.done';
+  kind: 'need.appeared' | 'need.gone' | 'action.progress' | 'action.stalled' | 'furnace.done'
+    /** Continue contracts (4, 8, 3): the melee reflex reached its cap; the server's tick; a change in the pack with no command (a reflex's meal); a utility came near. */
+    | 'reflex.capped' | 'server.tick' | 'inventory.changed' | 'utility.near';
   subject: string;
   data: Readonly<Record<string, string | number | boolean | null>>;
 }
@@ -54,6 +63,8 @@ export interface MinecraftControlPoll {
   /** Whole catalog on initial connection and changes. Not selected by a second game planner. */
   skills?: readonly MinecraftSkillDefinition[];
   receipts: readonly MinecraftControlReceipt[]; activeOperationIds: readonly string[];
+  /** Continue contracts (8): the body's revision and the hash of its catalog. */
+  bodyVersion?: BodyVersion;
   /** The ids of the queue's waiting items, in order (task queue); absent from an older body. */
   queuedOperationIds?: readonly string[];
   /** How far the running queue item is: the hand of its pass, the pass of its repeat (task queue). */
@@ -66,6 +77,8 @@ export interface MinecraftControlPoll {
 }
 export interface MinecraftControlReply {
   schemaVersion: 1; mode: 'common-fca';
+  /** Continue contracts (2): the head's start-up id: the last one received in a connection is "the head now". */
+  headBoot?: string;
   commands: readonly MinecraftControlCommand[]; cancel: readonly string[]; acknowledged: readonly string[];
   /** The highest event `seq` the API has taken; the body drops those. Absent from an API that does not read events. */
   eventsThrough?: number;

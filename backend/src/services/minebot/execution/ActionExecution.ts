@@ -4,6 +4,7 @@ import { SkillExecutor, skillCategory } from './SkillExecutor.js';
 import type { ActionPhase, ActionProgress, ActionStatus, ActionTrace } from './actionTypes.js';
 import type { SkillResult } from '../types/skillParams.js';
 import { logger } from '../../../utils/logger.js';
+import type { Handover, HandoverReservation } from '../integration/commonFca/continueContract.js';
 
 interface ActionHost {
   executingSkill: boolean;
@@ -29,6 +30,15 @@ interface Context {
   root?: Context;
   /** How many actions this one is nested in (0 for a root action). */
   depth?: number;
+  /** Continue contracts (4, 8): this root action's place in the count of owners, the effective motor operations it sent, and when the first and the lock came. */
+  seq: number;
+  motorOps: number;
+  lockAt: number;
+  firstMotorAt?: number;
+  /** Continue contracts (4): the owner has handed the shield to the resident shield for as long as it holds (a fight, an attack, a handover). */
+  shieldDelegated?: boolean;
+  /** Continue contracts (4): the handover this action was taken over through (set when it took the lock from a reflex it had reserved). */
+  handover?: Handover;
 }
 /**
  * The deepest a skill may call skills inside skills. Ordinary work goes four or five deep (mine-block, dig-block-at, drop-item,
@@ -42,6 +52,9 @@ const generations = new WeakMap<object, number>();
 const sessionIds = new WeakMap<object, string>();
 const active = new WeakMap<object, Set<Context>>();
 const motorHosts = new WeakMap<object, object>();
+/** The count of owners: a root action that moves the body (a physical one) takes the next number when it gets the lock; queries and nested actions do not. */
+const holderSeqs = new WeakMap<object, number>();
+export function holderSeqOf(bot: object): number { return holderSeqs.get(actionHost(bot)) ?? 0; }
 function actionHost<T extends object>(bot: T): T { return (motorHosts.get(bot) ?? bot) as T; }
 /** Motor wrappers are views of one native bot, never a new memory/world identity. */
 export const nativeActionHost = actionHost;
@@ -102,8 +115,54 @@ export async function waitForActionQuiescence(bot: object): Promise<void> {
  * and the child's own owner is checked here.
  */
 export function createMotorPort<T extends object>(given: T): T {
+  return portFor(given, currentAction(actionHost(given)));
+}
+
+/** What a motor operation was, for the record of the operations (continue contracts, 8): the time, the kind, a short detail. */
+export interface MotorOp { at: number; op: string; detail?: string; actionId: string; capability: string }
+const opSinks = new WeakMap<object, (op: MotorOp) => void>();
+const recentOpRings = new WeakMap<object, MotorOp[]>();
+/** The continuous record of the operations (the lab benches and the production use one entrance): told every effective operation, from the start. */
+export function setMotorOpSink(bot: object, sink: ((op: MotorOp) => void) | null): void {
+  if (sink) opSinks.set(actionHost(bot), sink); else opSinks.delete(actionHost(bot));
+}
+/** The last operations (16), oldest first, whoever sent them: what a hand's start record carries. */
+export function recentMotorOps(bot: object): MotorOp[] { return [...(recentOpRings.get(actionHost(bot)) ?? [])]; }
+
+/** Operations that only let go of something: they are not "a hand that moved" (the count of effective operations leaves them out). */
+function releasesOnly(key: string, args: unknown[]): boolean {
+  if (key === 'clearControlStates' || key === 'stopDigging' || key === 'deactivateItem' || key === 'stop') return true;
+  if (key === 'setControlState') return args[1] === false;
+  if (key === 'setGoal') return args[0] === null || args[0] === undefined;
+  return false;
+}
+function opDetail(key: string, args: unknown[]): string | undefined {
+  try {
+    if (key === 'setControlState') return `${String(args[0])}=${String(args[1])}`;
+    const first = args[0] as { position?: { x: number; y: number; z: number }; x?: number; y?: number; z?: number; name?: string } | undefined;
+    const at = first?.position ?? (typeof first?.x === 'number' ? first : undefined);
+    if (at) return `${first?.name ? `${first.name} ` : ''}(${Math.floor(at.x as number)},${Math.floor(at.y as number)},${Math.floor(at.z as number)})`;
+    if (typeof args[0] === 'string') return args[0].slice(0, 40);
+  } catch { /* a detail is a help */ }
+  return undefined;
+}
+/** An effective motor operation of `owner`'s root action: counted on it, recorded, told to the record. */
+function noteMotorOp<T extends object>(bot: T, owner: Context | undefined, key: string, args: unknown[]): void {
+  if (!owner || releasesOnly(key, args)) return;
+  const root = owner.root ?? owner, at = Date.now();
+  root.motorOps++;
+  root.firstMotorAt ??= at;
+  const op: MotorOp = { at, op: key, ...(opDetail(key, args) ? { detail: opDetail(key, args) } : {}), actionId: root.progress.actionId, capability: root.progress.capability };
+  const ring = recentOpRings.get(bot) ?? [];
+  recentOpRings.set(bot, ring);
+  ring.push(op);
+  if (ring.length > 16) ring.shift();
+  try { opSinks.get(bot)?.(op); } catch { /* the record never stops a motor operation */ }
+}
+
+/** The motor port of one owner: what `createMotorPort` makes for the action that is running, and what the resident shield acts through while an owner has delegated it (4). */
+function portFor<T extends object>(given: T, owner: Context | undefined): T {
   const bot = actionHost(given);
-  const owner = currentAction(bot);
   const assertMotorActive = () => {
     if (owner && (owner.controller.signal.aborted || owner.settled || (owner.root ?? owner).trace.quiescent)) throw new Error('Motor owner expired');
     assertActionActive(bot);
@@ -113,12 +172,12 @@ export function createMotorPort<T extends object>(given: T): T {
   const paths = new Set(['setGoal', 'goto', 'stop', 'setMovements']);
   const path = (value: any) => new Proxy(value, { get(target, key) {
     const field = Reflect.get(target, key, target);
-    return typeof field === 'function' ? (...args: unknown[]) => { if (paths.has(String(key))) assertMotorActive(); return field.apply(target, args); } : field;
+    return typeof field === 'function' ? (...args: unknown[]) => { if (paths.has(String(key))) { assertMotorActive(); noteMotorOp(bot, owner, String(key), args); } return field.apply(target, args); } : field;
   } });
   const port = new Proxy(bot, { get(target, key) {
     const field = Reflect.get(target, key, target);
     if (key === 'pathfinder' && field) return path(field);
-    return typeof field === 'function' ? (...args: unknown[]) => { if (writes.has(String(key))) assertMotorActive(); return field.apply(target, args); } : field;
+    return typeof field === 'function' ? (...args: unknown[]) => { if (writes.has(String(key))) { assertMotorActive(); noteMotorOp(bot, owner, String(key), args); } return field.apply(target, args); } : field;
   } });
   motorHosts.set(port, bot);
   return port;
@@ -229,13 +288,96 @@ export function withActionSignal<T>(bot: object, signal: AbortSignal | undefined
 /** How long a cancelled action may keep the body before its lease is taken back. */
 const LEASE_RECLAIM_MS = 15_000;
 /** Everything that makes the native body stop, including plugins that drive it on their own. */
-function physicalStops(bot: ActionHost): Array<() => unknown> {
+function physicalStops(bot: ActionHost, reason?: unknown): Array<() => unknown> {
+  // Continue contracts (4): a stop for a handover leaves the shield up (the reservation holds its right; if the handover fails, the reservation's removal lowers it).
+  const keepShield = reason === 'handover';
   return [() => (bot as any).collectBlock?.cancelTask?.(), () => bot.pathfinder?.stop(), () => bot.pathfinder?.setGoal?.(null),
-    () => bot.stopDigging?.(), () => bot.deactivateItem?.(), () => bot.clearControlStates?.()];
+    () => bot.stopDigging?.(), ...(keepShield ? [] : [() => bot.deactivateItem?.()]), () => bot.clearControlStates?.()];
+}
+
+/* ----- continue contracts (4): the shield's right, the handover reservation ----- */
+/**
+ * The root action that moves the body and has handed the shield to the resident shield (a fight, an attack, a handover). The resident shield then
+ * raises and lowers it through that owner's motor port; an owner that has lapsed refuses it.
+ */
+export function delegateShield(bot: object, on = true): void {
+  const context = currentAction(bot);
+  if (context) (context.root ?? context).shieldDelegated = on;
+}
+/** The port the resident shield acts through: the delegated owner's, or null when no owner has delegated (the shield then acts on its own). */
+export function shieldPort<T extends object>(bot: T): T | null {
+  const owner = [...(active.get(actionHost(bot)) ?? [])].find(context => !context.root && context.physical && !context.settled && context.shieldDelegated);
+  return owner ? portFor(bot, owner) : null;
+}
+/** Whether any owner holds the shield's right (delegated) now. */
+export function shieldHeldByOwner(bot: object): boolean {
+  return [...(active.get(actionHost(bot)) ?? [])].some(context => !context.root && context.physical && !context.settled && context.shieldDelegated);
+}
+/** The first value of the reservation's window (ms). The isolated lab measures it (contract 13). */
+export const HANDOVER_WINDOW_MS = 300;
+const reservations = new WeakMap<object, HandoverReservation>();
+const reservationTimers = new WeakMap<object, ReturnType<typeof setTimeout>>();
+const rootSettledAt = new WeakMap<object, { actionId: string; at: number }>();
+export function reservationOf(bot: object): HandoverReservation | null { return reservations.get(actionHost(bot)) ?? null; }
+function lowerShield(bot: object): void {
+  const host = actionHost(bot) as { deactivateItem?(): void; shieldBlock?: { up?: boolean } };
+  if (host.shieldBlock) host.shieldBlock.up = false;
+  try { host.deactivateItem?.(); } catch { /* nothing held */ }
+}
+/**
+ * The reservation of a handover: made from the reflex action that is about to be stopped, before it is stopped. Whoever takes the body next and is not
+ * the command it is for removes it (and lowers the shield it held); the command it is for checks and takes it in the same moment as the lock (executeAction).
+ * It lapses by itself after `HANDOVER_WINDOW_MS`, the reservation's removal lowering the shield.
+ */
+export function reserveHandover(bot: object, input: Pick<HandoverReservation, 'fromActionId' | 'reflex' | 'target' | 'life' | 'forCommand' | 'shield'>, now = Date.now(), windowMs = HANDOVER_WINDOW_MS): HandoverReservation {
+  const host = actionHost(bot);
+  dropReservation(host, 'replaced');
+  const reservation: HandoverReservation = { ...input, holderSeq: holderSeqs.get(host) ?? 0, at: new Date(now).toISOString(), until: new Date(now + windowMs).toISOString() };
+  reservations.set(host, reservation);
+  const timer = setTimeout(() => { if (reservations.get(host) === reservation) dropReservation(host, 'expired'); }, windowMs + 5);
+  timer.unref?.();
+  reservationTimers.set(host, timer);
+  return reservation;
+}
+/** The reservation is removed; the shield it held is lowered. True when a reservation was removed. */
+export function dropReservation(bot: object, _why: 'expired' | 'other_holder' | 'replaced' | 'refused' | 'cancelled' | 'death' = 'cancelled'): boolean {
+  const host = actionHost(bot);
+  const reservation = reservations.get(host);
+  clearTimeout(reservationTimers.get(host)); reservationTimers.delete(host);
+  if (!reservation) return false;
+  reservations.delete(host);
+  if (reservation.shield && !shieldHeldByOwner(host)) lowerShield(host);
+  return true;
+}
+/** The bot's root actions that move the body now: for the observation's state.control (4). */
+export function physicalRoots(bot: object): Array<{ actionId: string; capability: string; priority: number; safetyLease: boolean; startedAt: number; seq: number; shieldDelegated: boolean }> {
+  return [...(active.get(actionHost(bot)) ?? [])].filter(context => !context.root && context.physical && !context.settled)
+    .map(context => ({ actionId: context.progress.actionId, capability: context.progress.capability, priority: context.priority, safetyLease: context.safetyLease,
+      startedAt: context.progress.startedAt, seq: context.seq, shieldDelegated: context.shieldDelegated === true }));
+}
+/** Effective motor operations the running root action has sent (0 outside an action). */
+export function motorOpsOf(bot: object): number {
+  const context = currentAction(bot);
+  return context ? (context.root ?? context).motorOps : 0;
+}
+/** The handover the running action was taken over through, if it was (continue contracts, 4). */
+export function handoverOf(bot: object): Handover | undefined {
+  const context = currentAction(bot);
+  return context ? (context.root ?? context).handover : undefined;
+}
+
+/** The root action's counts and times copied to its trace (what the result's execution carries to the body's receipt). */
+function syncTrace(context: Context): void {
+  context.trace.lockAt = context.lockAt;
+  if (context.firstMotorAt !== undefined) context.trace.firstMotorAt = context.firstMotorAt;
+  context.trace.motorOps = context.motorOps;
+  context.trace.holderSeq = context.seq;
 }
 
 export async function executeAction(
-  bot: ActionHost, capability: string, timeoutMs: number, work: () => Promise<SkillResult>, options: { legacyExecutingSkill?: boolean; priority?: number; waitForQuiescence?: boolean; safetyLease?: boolean } = {},
+  bot: ActionHost, capability: string, timeoutMs: number, work: () => Promise<SkillResult>, options: { legacyExecutingSkill?: boolean; priority?: number; waitForQuiescence?: boolean; safetyLease?: boolean;
+    /** Continue contracts (4): this action is the command a handover was reserved for; verify is its last check (the target is still there, the life is the same). */
+    handover?: { command: string; verify(): boolean } } = {},
 ): Promise<SkillResult> {
   bot = actionHost(bot);
   const parent = currentAction(bot);
@@ -293,7 +435,24 @@ export async function executeAction(
   if (externalSignal?.aborted) abortFromTask();
   const queuedAt = Date.now();
   let release: (() => void);
-  try { release = await executor.acquire(capability, controller.signal, options.priority); }
+  let handover: Handover | undefined;
+  /** In the moment the lock is granted (nobody else can have taken the body since): a reservation is taken over by the command it is for, else removed. */
+  const claim = () => {
+    const reservation = reservations.get(bot);
+    if (!reservation || executor!.getCategory(capability) === 'query') return;
+    if (options.safetyLease || options.handover?.command !== reservation.forCommand) { dropReservation(bot, 'other_holder'); return; }
+    const settled = rootSettledAt.get(bot);
+    const within = Date.now() <= Date.parse(reservation.until), sameOwner = (holderSeqs.get(bot) ?? 0) === reservation.holderSeq;
+    let valid = false;
+    try { valid = options.handover.verify(); } catch { valid = false; }
+    const confirmed = within && sameOwner && valid;
+    const reflexSettledAt = new Date(settled && settled.actionId === reservation.fromActionId ? settled.at : Date.now()).toISOString();
+    handover = { from: reservation.reflex, target: reservation.target, waitedMs: Math.max(0, Date.now() - Date.parse(reservation.at)), reflexSettledAt, confirmed,
+      shield: reservation.shield ? (confirmed ? 'kept' : 'lowered') : 'none' };
+    if (confirmed) { reservations.delete(bot); clearTimeout(reservationTimers.get(bot)); reservationTimers.delete(bot); }
+    else dropReservation(bot, within ? 'refused' : 'expired');
+  };
+  try { release = await executor.acquire(capability, controller.signal, options.priority, claim); }
   catch (error) {
     externalSignal?.removeEventListener('abort', abortFromTask);
     return { success: false, failureType: controller.signal.aborted ? 'interrupted' : 'lock_timeout',
@@ -305,7 +464,10 @@ export async function executeAction(
   const executionSessionId = sessionIds.get(bot) ?? randomUUID();
   sessionIds.set(bot, executionSessionId);
   const physical = executor.getCategory(capability) !== 'query';
-  const context: Context = { bot, controller, physical, legacyExecutingSkill: options.legacyExecutingSkill ?? true,
+  const seq = physical ? (holderSeqs.get(bot) ?? 0) + 1 : holderSeqs.get(bot) ?? 0;
+  if (physical) holderSeqs.set(bot, seq);
+  const context: Context = { bot, controller, physical, legacyExecutingSkill: options.legacyExecutingSkill ?? true, seq, motorOps: 0, lockAt: startedAt,
+    ...(handover?.confirmed && handover.shield === 'kept' ? { shieldDelegated: true } : {}), ...(handover ? { handover } : {}),
     safetyLease: options.safetyLease === true, priority: options.priority ?? 0, settled: false, phaseStartedAt: startedAt,
     progress: { actionId: randomUUID(), executionSessionId, generation, sequence: 0, capability, physical, phase: 'execute',
       status: 'running', startedAt, updatedAt: startedAt, lastProgressAt: startedAt,
@@ -344,6 +506,8 @@ export async function executeAction(
     context.settled = true;
     context.trace.phaseMs[context.progress.phase] = (context.trace.phaseMs[context.progress.phase] ?? 0) + now - context.phaseStartedAt;
     context.trace.quiescent = true;
+    syncTrace(context);
+    if (physical) rootSettledAt.set(bot, { actionId: context.progress.actionId, at: now });
     contexts.delete(context);
     bot.executingSkill = [...contexts].some(c => c.physical && c.legacyExecutingSkill);
     release();
@@ -353,6 +517,7 @@ export async function executeAction(
   const onAbort = () => {
     if (interruptPoll) clearInterval(interruptPoll);
     context.trace.containment = { cancelledAt: Date.now(), warningAt: null, settledAt: null };
+    syncTrace(context);
     if (physical) {
       containmentWarning = setTimeout(() => {
         if (context.settled) return;
@@ -372,7 +537,7 @@ export async function executeAction(
       if (!options.waitForQuiescence) leaseReclaim = setTimeout(() => {
         if (context.settled) return;
         logger.error(`[Minebot:ActionContainment] Action ${context.progress.actionId} (${capability}) did not settle ${LEASE_RECLAIM_MS / 1000}s after cancellation; its lease is reclaimed`);
-        for (const stop of physicalStops(bot)) { try { stop(); } catch { /* keep reclaiming */ } }
+        for (const stop of physicalStops(bot, controller.signal.reason)) { try { stop(); } catch { /* keep reclaiming */ } }
         context.trace.containment!.reclaimedAt = Date.now();
         settle();
       }, LEASE_RECLAIM_MS);
@@ -383,7 +548,7 @@ export async function executeAction(
     emit(context);
     if (physical) {
       bot.interruptExecution = true; // compatibility for loops not yet using actionSignal
-      for (const stop of physicalStops(bot)) {
+      for (const stop of physicalStops(bot, controller.signal.reason)) {
         try { stop(); } catch { /* cleanup must not hide cancellation */ }
       }
     }

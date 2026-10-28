@@ -7,7 +7,7 @@
 interface HandRule { needs: readonly (readonly string[])[]; may: readonly string[]; check(hand: Record<string, any>): string | null }
 
 const BLOCK_NAME = /^[a-z][a-z0-9_]{0,39}$/u;
-const COMMON = new Set(['do', 'rel', 'note', 'onFail']);
+const COMMON = new Set(['do', 'rel', 'note', 'onFail', 'dependsOn']);
 const seconds = (hand: Record<string, any>, least: number, most: number): string | null =>
   hand.seconds !== undefined && (hand.seconds < least || hand.seconds > most) ? `seconds は ${least}〜${most}` : null;
 const count = (hand: Record<string, any>, most: number): string | null =>
@@ -49,7 +49,7 @@ export const HAND_RULES: Readonly<Record<string, HandRule>> = {
 /** The fields a kind takes (needed, then optional, then the common ones), for a refusal that names them. */
 export function handFieldNames(kind: string): string[] {
   const rule = HAND_RULES[kind];
-  return rule ? [...rule.needs.flat(), ...rule.may, 'rel', 'note', 'onFail'] : [];
+  return rule ? [...rule.needs.flat(), ...rule.may, 'rel', 'note', 'onFail', 'dependsOn'] : [];
 }
 
 /** What is wrong with a hand of one of these kinds beyond the schema (a field the kind does not take, a missing one, a range), or null. */

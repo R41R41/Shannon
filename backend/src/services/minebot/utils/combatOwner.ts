@@ -133,6 +133,17 @@ export function combatOwnerOf(bot: object, now = Date.now()): 'head' | 'reflex' 
   return null;
 }
 
+/**
+ * Continue contracts (4): the planner's fight that holds the body now, as the control view shows it: its skill, the enemy it is after, and until when
+ * (a running fight has none: null; an ended one holds for HEAD_COMBAT_GRACE_MS). Null when none holds.
+ */
+export function combatMarkOf(bot: object, now = Date.now()): { skill: string; target?: number; until: number } | null {
+  const body = bot as CombatBody, marks = body.headCombat;
+  if (!marks?.length || !isHeadCombatActive(bot, now)) return null;
+  const running = marks.find(mark => mark.endedAt === undefined) ?? marks[marks.length - 1];
+  return { skill: running.skill, ...(running.target !== undefined ? { target: running.target } : {}), until: running.endedAt === undefined ? now + HEAD_COMBAT_GRACE_MS : running.startedAt + HEAD_COMBAT_GRACE_MS };
+}
+
 /** Kinds that shoot from afar and that a body with a sword and a few pieces of iron closes in on rather than runs from. */
 const LONE_SHOOTERS = new Set(['skeleton', 'stray', 'bogged']);
 /** Armour points of a piece, by its name (the game's table). */

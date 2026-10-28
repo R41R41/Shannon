@@ -1,6 +1,8 @@
 import { nativeActionHost } from '../execution/ActionExecution.js';
 import { MINE_MAKE_SMELT_WORDS } from './handCodes.js';
 import { feetCell, localMapFor, symbolFor, type BlockReader, type Cell } from './localMap.js';
+import type { ActOutcome, CutBy, GoalOutcome, Handover, InventoryEvent, Progress, RunEnd } from '../integration/commonFca/continueContract.js';
+import { lifeOf } from './life.js';
 
 /**
  * What an `act` returns (the head's contract: minecraftActContract.ts `ActResult`, mb-llm-centric-contract.md 1.3): a JSON object in the
@@ -12,7 +14,13 @@ import { feetCell, localMapFor, symbolFor, type BlockReader, type Cell } from '.
 /** `failed`: the hand failed by itself and the act went on to the next (its `onFail`); `stopped`: the hand where the act stopped. */
 export type HandStatus = 'done' | 'stopped' | 'failed' | 'skipped';
 /** `around` (the head's contract r2, 2026-10-22): a stopped hand's 3x3x3 round `where`, in the map's symbols. */
-export interface HandLine { i: number; do: string; status: HandStatus; line: string; where?: Cell; around?: string }
+export interface HandLine {
+  i: number; do: string; status: HandStatus; line: string; where?: Cell; around?: string;
+  /** Continue contracts (1): the hand's own result on the two axes (HandOutcome, flat), the closed code of its stop, how far it got, what it changed in the pack, and the pass it belongs to. */
+  goal?: GoalOutcome; end?: RunEnd; cutBy?: CutBy; code?: string; progress?: Progress; delta?: InventoryEvent[]; pass?: number;
+  /** The effective motor operations this hand sent (0: it never moved the body; what tells not_started from failed). */
+  motorOps?: number;
+}
 
 /**
  * The 3x3x3 round a cell in the map's symbols and its coordinates (r2, 2026-10-22: a stopped line said the cell's block, and the next
@@ -52,6 +60,14 @@ export interface ActReport {
   repeat?: { done: number; of: number };
   /** With `done`: the satisfied alternative with its values (`have:log 10/10`). */
   doneMet?: string;
+  /** Continue contracts (1): how the act ended on the two axes (the life is put in when it is rendered). */
+  outcome?: { goal: GoalOutcome; end: RunEnd; cutBy?: CutBy };
+  /** Continue contracts (4): the reflex this act took the body over from. */
+  handover?: Handover;
+  /** Continue contracts (3): every inventory event of this act, in delivery order (`deliverySeq` 0 up); the receipt carries as many as fit. */
+  events?: InventoryEvent[];
+  /** The command the events belong to (for `eventsMore`). */
+  command?: string;
 }
 const reports = new WeakMap<object, ActReport>();
 
@@ -123,14 +139,19 @@ export function stoppedLine(reason: string | undefined, text: string, cellNow?: 
  * The receipt's text: the contract's ActResult as JSON (16,000 characters at most: the map is left out when it would not fit). `note` is
  * what the reflexes did meanwhile (the reflex ledger's), added to `stoppedWhy` when a reflex stopped the act.
  */
+export const RECEIPT_MAX = 16_000;
 export function renderActReport(bot: any, report: ActReport, note?: string | null, afterReflex?: string): string {
   const at = feetCell(bot) ?? { x: 0, y: 0, z: 0 };
   let stoppedWhy = report.stoppedWhy;
   if (report.stoppedBy === 'reflex') stoppedWhy = clip(`${note ? note.replace(/^［体の反射: |］$/gu, '') : stoppedWhy ?? '反射'} 今 (${at.x},${at.y},${at.z})`, 200);
+  const life = lifeOf(bot)?.number ?? 0;
+  const outcome: ActOutcome | undefined = report.outcome ? { ...report.outcome, life } : undefined;
   const result: Record<string, unknown> = {
     v: 1, ok: report.ok, done: report.done, of: report.of,
+    ...(outcome ? { outcome } : {}),
     // r10: the act came while a reflex held the body and began when it let go ("反射 flee（低体力の逃走）の最中のため、放された後に始めた（待ち 2.3秒）").
     ...(afterReflex ? { afterReflex: clip(afterReflex, 200) } : {}),
+    ...(report.handover ? { handover: report.handover } : {}),
     ...(report.ok ? {} : { partial: report.done > 0 }),
     ...(report.stoppedBy ? { stoppedBy: report.stoppedBy } : {}), ...(stoppedWhy ? { stoppedWhy } : {}),
     lines: report.lines, at, hp: Math.round((bot.health ?? 0) * 10) / 10, food: bot.food ?? 0,
@@ -141,6 +162,60 @@ export function renderActReport(bot: any, report: ActReport, note?: string | nul
   };
   let map = '';
   try { map = localMapFor(bot, { fresh: true }) ?? ''; } catch { map = ''; }
-  const withMap = JSON.stringify({ ...result, ...(map ? { map } : {}) });
-  return withMap.length <= 16_000 ? withMap : JSON.stringify(result);
+  return fitReceipt(result, map, report);
+}
+
+/**
+ * The receipt's text is 16,000 characters at most (contract 8). In this order: the map is left out; the lines of the older passes become a count (their
+ * inventory events move to `earlierEvents`, so none is lost); the line texts are clipped; then the events are taken off from the END of the delivery
+ * order, and `eventsMore` says from which delivery number the head fetches the rest (the `events` command, contract 3). What the receipt carries is
+ * always the events with the smallest delivery numbers, in order. The body keeps all of them until the head has them.
+ */
+function fitReceipt(result: Record<string, unknown>, map: string, report: ActReport): string {
+  let lines = (result.lines as HandLine[]).map(line => ({ ...line }));
+  let earlierEvents: InventoryEvent[] = [];
+  let earlier: Array<{ pass: number; lines: number; done: number; stopped: number }> | undefined;
+  /** The delivery number the receipt stops at: what is at or after it is fetched. */
+  let cutAt: number | null = null;
+  const build = (withMap: boolean) => {
+    const more = cutAt !== null && report.command ? { command: report.command, nextSeq: cutAt, total: report.events?.length ?? 0 } : undefined;
+    return JSON.stringify({ ...result, lines, ...(earlier ? { earlierPasses: earlier } : {}), ...(earlierEvents.length ? { earlierEvents } : {}), ...(more ? { eventsMore: more } : {}),
+      ...(withMap && map ? { map } : {}) });
+  };
+  let out = build(true);
+  if (out.length <= RECEIPT_MAX) return out;
+  out = build(false);
+  if (out.length <= RECEIPT_MAX) return out;
+  // The older passes: only the newest passes' lines stay; the rest are a count, and their events ride on beside.
+  const passes = [...new Set(lines.map(line => line.pass ?? 1))].sort((a, b) => a - b);
+  if (passes.length > 2) {
+    const keep = new Set(passes.slice(-2));
+    earlier = passes.filter(pass => !keep.has(pass)).map(pass => {
+      const mine = lines.filter(line => (line.pass ?? 1) === pass);
+      return { pass, lines: mine.length, done: mine.filter(line => line.status === 'done').length, stopped: mine.filter(line => line.status === 'stopped' || line.status === 'failed').length };
+    });
+    earlierEvents = lines.filter(line => !keep.has(line.pass ?? 1)).flatMap(line => line.delta ?? []);
+    lines = lines.filter(line => keep.has(line.pass ?? 1));
+    out = build(false);
+    if (out.length <= RECEIPT_MAX) return out;
+  }
+  // The line texts: the closed words, the numbers and the codes stay.
+  lines = lines.map(line => ({ ...line, line: clip(line.line, 90), around: undefined }));
+  out = build(false);
+  if (out.length <= RECEIPT_MAX) return out;
+  // The events: from the last one back, until it fits.
+  for (let index = lines.length - 1; index >= 0 && out.length > RECEIPT_MAX; index--) {
+    const delta = lines[index].delta;
+    if (!delta?.length) continue;
+    cutAt = Math.min(cutAt ?? Infinity, ...delta.map(event => event.deliverySeq ?? Infinity));
+    lines[index] = { ...lines[index], delta: undefined };
+    out = build(false);
+  }
+  while (out.length > RECEIPT_MAX && earlierEvents.length) {
+    const keepCount = Math.floor(earlierEvents.length / 2);
+    cutAt = Math.min(cutAt ?? Infinity, ...earlierEvents.slice(keepCount).map(event => event.deliverySeq ?? Infinity));
+    earlierEvents = earlierEvents.slice(0, keepCount);
+    out = build(false);
+  }
+  return out;
 }

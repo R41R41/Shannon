@@ -91,6 +91,8 @@ export function heavyReason(report: Pick<ActReport, 'ok' | 'lines' | 'stoppedBy'
 
 export class Incidents {
   hold: Hold | null = null;
+  /** The scene port (RCON), for the server's tick (continue contracts, 8); null without one. */
+  sceneSaver(): SceneSaver | null { return this.options.scene ?? null; }
   private readonly seen = new Set<string>();
   private lowestHp: number | null = null;
   private died = false;

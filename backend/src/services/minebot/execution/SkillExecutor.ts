@@ -97,7 +97,8 @@ export class SkillExecutor {
     return this.available(category);
   }
 
-  async acquire(skillName: string, signal?: AbortSignal, priority = 0): Promise<() => void> {
+  /** onGranted runs in the very moment the lock is taken (continue contracts, 4: a handover reservation is checked and taken with the lock). */
+  async acquire(skillName: string, signal?: AbortSignal, priority = 0, onGranted?: () => void): Promise<() => void> {
     const category = this.getCategory(skillName);
 
     if (category === 'query') {
@@ -108,6 +109,7 @@ export class SkillExecutor {
     const own = (): (() => void) => {
       const id = Symbol(skillName);
       this.activeLocks.set(id, category);
+      try { onGranted?.(); } catch { /* a check never loses the lock it was taken with */ }
       let released = false;
       return () => {
         if (released) return;

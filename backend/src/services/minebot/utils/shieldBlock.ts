@@ -5,6 +5,7 @@ import { installToldVelocity, toldVelocity } from './toldVelocity.js';
 import { answerWith } from './reflexAnswers.js';
 import { isEngaged } from './engagement.js';
 import { isLikelyHostileMobName } from './hostileMobHints.js';
+import { shieldPort } from '../execution/ActionExecution.js';
 
 const log = createLogger('Minebot:ShieldBlock');
 
@@ -119,13 +120,25 @@ interface ShieldBot {
 /** `raised` counts the times the shield went up; `upTicks` the ticks it was held. */
 export interface ShieldBlockState { enabled: boolean; guard: boolean; raised: number; guards: number; upTicks: number; up: boolean; last?: string }
 
+/**
+ * Continue contracts (4): the shield's right belongs to the owner of the body (the root action that moves it). While an owner has delegated the
+ * shield (a fight, an attack, a handover) the resident shield raises and lowers it through that owner's motor port: an owner that has lapsed
+ * refuses it. With no owner delegating, the resident shield acts on its own as before.
+ */
+function shieldHand(bot: ShieldBot): ShieldBot { return (shieldPort(bot as object) as ShieldBot | null) ?? bot; }
+/** The reflex's cap was told a moment ago and the shield it had up goes on for a short while (floorReflexes bridge). */
+function bridgeHoldsShield(bot: ShieldBot): boolean {
+  const bridge = (bot as { floorReflexes?: { bridge?: { hold?: string; until?: number } } }).floorReflexes?.bridge;
+  return !!bridge && bridge.hold === 'shield' && Date.now() < (bridge.until ?? 0);
+}
+
 export function installShieldBlock(bot: ShieldBot): void {
   if (bot.shieldBlock || typeof bot.on !== 'function') return;
   const state: ShieldBlockState = bot.shieldBlock = { enabled: true, guard: true, raised: 0, guards: 0, upTicks: 0, up: false };
   // The body's own blow goes out from behind a lowered shield: down for the blow, up again on the next tick.
   if (typeof bot.attack === 'function') {
     const strike = bot.attack.bind(bot);
-    bot.attack = (...args: unknown[]) => { if (state.up) { state.up = false; try { bot.deactivateItem?.(); } catch { /* nothing held */ } } return strike(...args); };
+    bot.attack = (...args: unknown[]) => { if (state.up) { state.up = false; try { shieldHand(bot).deactivateItem?.(); } catch { /* nothing held */ } } return strike(...args); };
   }
   installToldVelocity(bot as any);
   // Said to the threat watch: with a shield on the arm, a kind that has hit the body with shots is answered here.
@@ -133,7 +146,7 @@ export function installShieldBlock(bot: ShieldBot): void {
     && (bot as any).shootsAtBody?.(kind) === true);
   const seen = new Map<number, { said: Vec3; saidTick: number; velocity: Vec3; shooterNoted?: boolean }>();
   let tick = 0, lastComing = -Infinity;
-  const lower = () => { if (state.up) { state.up = false; try { bot.deactivateItem?.(); } catch { /* nothing held */ } } };
+  const lower = () => { if (state.up) { state.up = false; try { shieldHand(bot).deactivateItem?.(); } catch { /* nothing held */ } } };
   bot.on('physicsTick', () => {
     tick++;
     try {
@@ -180,9 +193,9 @@ export function installShieldBlock(bot: ShieldBot): void {
         // Nothing in flight. In a fight of the planner's choosing, the shield is kept up against whoever is in
         // reach of a blow; the look and the legs are the fight's own.
         if (state.guard && isEngaged(bot) && hostileInReach(bot)) {
-          if (!state.up && !bot.usingHeldItem) { state.up = true; state.guards++; bot.activateItem?.(true); }
+          if (!state.up && !bot.usingHeldItem) { state.up = true; state.guards++; shieldHand(bot).activateItem?.(true); }
           if (state.up) state.upTicks++;
-        } else lower();
+        } else if (!bridgeHoldsShield(bot)) lower();
         return;
       }
       // Something is coming, or has only just passed: the shield is up and turned to it.
@@ -197,7 +210,7 @@ export function installShieldBlock(bot: ShieldBot): void {
         state.up = true;
         state.raised++;
         state.last = soonest ? `${soonest.entity.name} in ${soonest.ticks.toFixed(0)} ticks` : state.last;
-        bot.activateItem?.(true);
+        shieldHand(bot).activateItem?.(true);
         log.info(`🛡 盾を構える（${soonest?.entity?.name ?? '飛来物'}、約${soonest ? soonest.ticks.toFixed(0) : '?'}tick後。累計${state.raised}回）`);
       }
       if (state.up) state.upTicks++;

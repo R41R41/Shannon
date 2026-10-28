@@ -58,7 +58,9 @@ describe('act: the hands and where they stop', () => {
     expect(json.lines[0].line.startsWith('届かない: (9,63,0)（自分から東9・下1）')).toBe(true);
     expect(json.lines[0].line.endsWith('そのマスは stone')).toBe(true);
     expect(json.lines[0].line.length).toBeLessThanOrEqual(160);
-    expect(json.lines[1]).toEqual({ i: 2, do: 'wait', status: 'skipped', line: '未実行' });
+    // Continue contracts (1): every line carries its two axes; a hand the act never reached is not started and not run.
+    expect(json.lines[1]).toEqual({ i: 2, do: 'wait', status: 'skipped', line: '未実行', goal: 'not_started', end: 'not_run' });
+    expect(json.lines[0]).toMatchObject({ goal: 'not_started', end: 'finished', code: 'out_of_reach' });
     const again = parse(await runAct(bot, hands([{ do: 'dig', at: [{ x: 9, y: 63, z: 0 }] }])));
     expect(again.lines[0].line).toContain('同じ所・同じ理由で2回目');
   });

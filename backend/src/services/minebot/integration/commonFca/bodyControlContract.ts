@@ -16,6 +16,8 @@ export interface BodyObservation {
 export interface BodyTaskContext {
   scopeKey: string; taskId: string; taskRevision: number; bodyId: string;
   sessionId: string; generation: number; goal: string; completionCondition: string;
+  /** Continue contracts (2, 5): the life number of the observation the deciding read (required of a command that moves the body), the head's start-up id, and what the decision read (a command that is not a queue item). */
+  life?: number; headBoot?: string; madeIn?: import('./continueContract.js').MadeIn;
   /** The interrupted process is context only; it is never an instruction to replay that operation. */
   taskState?: { phase: string; progress: string; activeAction?: { name: string; operationId: string; input: BodyValue };
     recentResults: readonly { name: string; ok: boolean; summary: string }[] };

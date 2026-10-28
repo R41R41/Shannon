@@ -75,5 +75,8 @@ export async function craft(ctx: StepContext, args: CraftArgs): Promise<StepOutc
   await wait(ctx, 150);
   const after = inventoryCount(bot, args.item);
   if (after <= before) return stopped(bot, 'craft_failed', `${args.item} が増えていない（前 ${before} 個、今 ${after} 個）`);
+  // Continue contracts (3): what the recipe took and what it gave, as events (the ingredients by the recipe's own delta, the result by what the pack gained).
+  for (const entry of ready.delta ?? []) if (entry.count < 0) ctx.record?.({ item: String(bot.registry?.items?.[entry.id]?.name ?? entry.id), count: entry.count * times, reason: 'ingredient' });
+  ctx.record?.({ item: args.item, count: after - before, reason: 'crafted' });
   return { ok: true, text: `${args.item} を ${after - before} 個作った（今 ${after} 個${usesTable ? '、作業台で' : ''}）` };
 }

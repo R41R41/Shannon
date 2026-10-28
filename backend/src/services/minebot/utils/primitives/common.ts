@@ -24,6 +24,8 @@ export interface StepContext {
   base: Cell;
   /** Tells the act a step made progress (for the UI's step list and the long-step watch). */
   progress?(detail: string): void;
+  /** Continue contracts (3): tells the act an inventory change the part has made as it makes it (an ingredient used, a thing made); the act numbers it and keeps it even if the hand is cut after. */
+  record?(event: Omit<InventoryEvent, 'id' | 'obsSeq' | 'deliverySeq'>): void;
 }
 
 export interface StepOutcome {

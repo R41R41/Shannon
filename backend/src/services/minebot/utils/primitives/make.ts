@@ -130,8 +130,10 @@ export async function make(ctx: StepContext, args: MakeArgs): Promise<StepOutcom
     }
   }
   const made = new Map<string, number>();
+  /** The pieces made on the way (planks for the sticks): the events of what is made of them say so (intermediate). */
+  const madeNames = new Set<string>();
   for (const step of state.steps) {
-    const gained = await craftStep(ctx, step, table);
+    const gained = await craftStep(ctx, step, table, name, madeNames);
     if (gained.fail) return { ...gained.fail, text: `${gained.fail.text}${made.size ? `（ここまでに作った: ${stacksOut(made).join('・')}）` : ''}` };
     made.set(step.item, (made.get(step.item) ?? 0) + gained.n);
   }
@@ -146,7 +148,7 @@ function fail(bot: any, reason: string, text: string): StepOutcome {
 }
 
 /** One craft of a plan: `times` of the recipe, in the table's window when it is a 3x3. What the pack gained of the result is counted, not assumed. */
-async function craftStep(ctx: StepContext, step: Step, table: any): Promise<{ n: number; fail?: StepOutcome }> {
+async function craftStep(ctx: StepContext, step: Step, table: any, target: string, madeNames: Set<string>): Promise<{ n: number; fail?: StepOutcome }> {
   const bot = ctx.bot;
   const before = inventoryCount(bot, step.item);
   if (bot.currentWindow) { try { bot.closeWindow(bot.currentWindow); } catch { /* closing */ } await wait(ctx, 100); }
@@ -160,5 +162,14 @@ async function craftStep(ctx: StepContext, step: Step, table: any): Promise<{ n:
   await wait(ctx, 150);
   const gained = inventoryCount(bot, step.item) - before;
   if (gained <= 0) return { n: 0, fail: fail(bot, freeSlots(bot) === 0 ? 'full' : 'craft_failed', `${step.item} が増えていない（前 ${before} 個、今 ${inventoryCount(bot, step.item)} 個）`) };
+  // Continue contracts (3): the recipe's ingredients and what it gave. A piece made on the way, and what is taken of it, are intermediate; the pickaxe is not.
+  for (const entry of step.recipe.delta ?? []) {
+    if (entry.count >= 0) continue;
+    const used = nameOf(bot, entry.id);
+    ctx.record?.({ item: used, count: entry.count * step.times, reason: 'ingredient', ...(madeNames.has(used) ? { intermediate: true } : {}) });
+  }
+  const intermediate = step.item !== target;
+  ctx.record?.({ item: step.item, count: gained, reason: 'crafted', ...(intermediate ? { intermediate: true } : {}) });
+  if (intermediate) madeNames.add(step.item);
   return { n: gained };
 }
