@@ -1,10 +1,10 @@
 {
  "producedBy": "backend/scripts/lab/continue-produce.ts",
  "bench": "offline",
- "bodyRevision": "unknown",
- "madeAt": "2026-10-28T11:53:13.442Z",
+ "bodyRevision": "a048e9ea6f59",
+ "madeAt": "2026-10-28T12:22:05.193Z",
  "answers": "continue/dependency-table",
- "fixtureSha256": "1e2e4d26cc9c5ad5e1cd38816553a1cd0f17568bb6d06d0a1bd0f45990301bf4",
+ "fixtureSha256": "9c0bb173c8d67a30dda5bd7d7c79cb7df3ee21f6f977b142faf57acddfcafece",
  "output": {
   "rows": [
    {
@@ -70,6 +70,12 @@
    {
     "goal": "not_started",
     "end": "not_run",
+    "released": true,
+    "dependState": "failed"
+   },
+   {
+    "goal": "not_started",
+    "end": "cut",
     "released": true,
     "dependState": "failed"
    },

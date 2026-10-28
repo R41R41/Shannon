@@ -1,0 +1,26 @@
+{
+ "producedBy": "backend/scripts/minecraft-continue-lab-probe.ts",
+ "bench": "B",
+ "bodyRevision": "a048e9ea6f59",
+ "madeAt": "2026-10-28T12:18:27.161Z",
+ "answers": "control/different-target",
+ "fixtureSha256": "39cb40c64e870cad75d543996fbe60300a2f1b7360fa88618c4c7911a1012ce9",
+ "output": {
+  "reflexTarget": 73,
+  "actTarget": 74,
+  "handover": null,
+  "unit": {
+   "goal": "done",
+   "end": "finished",
+   "released": true
+  },
+  "bodyTimes": {
+   "reflexWaitMs": 846,
+   "startedAt": "2026-10-28T12:18:25.137Z",
+   "lockAt": "2026-10-28T12:18:25.137Z",
+   "firstMotorAt": "2026-10-28T12:18:25.141Z",
+   "motorOps": 54,
+   "endedAt": "2026-10-28T12:18:27.160Z"
+  }
+ }
+}

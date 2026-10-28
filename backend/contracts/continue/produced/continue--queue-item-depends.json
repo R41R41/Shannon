@@ -1,10 +1,10 @@
 {
  "producedBy": "backend/scripts/lab/continue-produce.ts",
  "bench": "offline",
- "bodyRevision": "unknown",
- "madeAt": "2026-10-28T11:53:13.443Z",
+ "bodyRevision": "a048e9ea6f59",
+ "madeAt": "2026-10-28T12:22:05.196Z",
  "answers": "continue/queue-item-depends",
- "fixtureSha256": "bc70491a1b76ee12829e52df9f5bf2e047d98a0c9a9d1bdc2f18e2e3033c18f6",
+ "fixtureSha256": "50d5f46d38ba9c8ee39af5b06fef58a40ddb8b4944fb89525493353cbaa07e1e",
  "note": "two of the five items (the queue holds three); the rest is in the lab",
  "output": {
   "kept": [
