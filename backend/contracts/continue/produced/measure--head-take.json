@@ -1,0 +1,94 @@
+{
+ "producedBy": "backend/scripts/minecraft-continue-lab-probe.ts",
+ "bench": "B",
+ "bodyRevision": "100a80f68157",
+ "madeAt": "2026-10-29T06:10:33.497Z",
+ "answers": null,
+ "fixtureSha256": null,
+ "output": {
+  "take": {
+   "receipt": "completed",
+   "incident": {
+    "op": "take",
+    "id": "head:node_stalled:lab:1793254222627",
+    "done": true,
+    "hold": "head:node_stalled:lab:1793254222627",
+    "unfreeze": null,
+    "held": true,
+    "frozen": true,
+    "freeze": "The game is frozen",
+    "box": "/home/azureuser/.cache/minebot-lab/continue-r24/blackbox/continue-lab-task/head_node_stalled_lab_1793254222627.json.gz",
+    "scene": "/home/azureuser/.cache/minebot-lab/continue-r24/run/scenes/head_node_stalled_lab_1793254222627"
+   },
+   "observed": {
+    "id": "head:node_stalled:lab:1793254222627",
+    "task": "continue-lab-task",
+    "why": "lab: node p3 did not move for 120 s"
+   },
+   "holdWritten": {
+    "id": "head:node_stalled:lab:1793254222627",
+    "task": "continue-lab-task",
+    "at": "2026-10-29T06:10:25.396Z",
+    "frozen": true,
+    "freeze": "The game is frozen",
+    "command": "",
+    "why": "lab: node p3 did not move for 120 s",
+    "start": [
+     0.5,
+     100,
+     0.5
+    ]
+   },
+   "gameTimes": [
+    4964,
+    4964
+   ],
+   "boxHead": {
+    "id": "head:node_stalled:lab:1793254222627",
+    "why": "lab: node p3 did not move for 120 s",
+    "notes": 20,
+    "first": "decision row 5: lab note",
+    "last": "decision row 24: lab note"
+   },
+   "scene": true
+  },
+  "resume": {
+   "incident": {
+    "op": "resume",
+    "id": "head:node_stalled:lab:1793254222627",
+    "done": true,
+    "hold": null,
+    "unfreeze": "The game is running normally"
+   },
+   "gameTimes": [
+    4968,
+    5002
+   ],
+   "hold": null,
+   "holdFile": false,
+   "act": "completed"
+  },
+  "actTake": {
+   "id": "head:wait_loop:lab:1793254230527",
+   "heavy": true,
+   "why": "lab: wait loop",
+   "held": true,
+   "frozen": true,
+   "freeze": "The game is frozen",
+   "box": true,
+   "scene": true,
+   "end": [
+    0.5,
+    100,
+    0.5
+   ]
+  },
+  "resumeNothing": {
+   "op": "resume",
+   "id": "head:nothing-held",
+   "done": true,
+   "hold": null,
+   "unfreeze": "The game is running normally"
+  }
+ }
+}
