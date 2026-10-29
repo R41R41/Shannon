@@ -378,6 +378,7 @@ try {
     const sources = [[125, -55, 233], [124, -55, 233], [123, -55, 233], [125, -55, 234], [124, -55, 234], [123, -55, 234], [126, -55, 234], [124, -55, 235]].map(([x, y, z]) => lab(x!, y!, z!));
     const start = lab(122.5, -54, 239.5);
     const hand = { do: 'obsidian', count: 3, seconds: 100, maxPlace: 30, canPlace: ['cobblestone'], at: sources };
+    let packBuckets: string[] = [];
     const prepare = async (full: boolean) => {
       // the pool as the hand found it (the copy is the ground after the hold): two sources already obsidian, three still lava; no water, no scaffolds left from an earlier try
       for (const [x, y, z, name] of [[123, -55, 233, 'obsidian'], [123, -55, 234, 'obsidian'], [124, -55, 233, 'lava'], [124, -55, 234, 'lava'], [125, -55, 233, 'lava'], [124, -55, 235, 'lava']] as Array<[number, number, number, string]>) {
@@ -392,6 +393,7 @@ try {
       await sleep(800);
       if (!(actor.inventory.items() as any[]).some(item => item.name === 'water_bucket')) { await ask('give ' + ACTOR + ' minecraft:water_bucket 1'); await sleep(800); }
       await ask('gamemode survival ' + ACTOR); await ask('tp ' + ACTOR + ' ' + start.x + ' ' + start.y + ' ' + start.z); await sleep(2500);
+      packBuckets = (actor.inventory.items() as any[]).filter(item => /bucket/u.test(item.name)).map(item => item.name + '×' + item.count);
     };
     // 1) a pack with room (first: the world is as the hold left it): obsidian is made, dug and taken at the rim of the real pool
     await prepare(false);
@@ -409,7 +411,7 @@ try {
     const slotsUsed = (actor.inventory.slots as any[]).filter((item, slot) => slot >= 9 && slot <= 44 && item).length;
     const fullRun = await act(body, { hands: [hand] }, { seconds: 110 });
     const fullLine = fullRun.parsed?.lines?.[0];
-    report.obsidianFull = { slotsUsed, ms: fullRun.ms, code: fullLine?.code, line: fullLine?.line, pours: (opLines().filter(entry => entry.kind === 'op' && entry.command === fullRun.command.id && entry.op === 'activateItem')).length };
+    report.obsidianFull = { buckets: packBuckets, slotsUsed, ms: fullRun.ms, code: fullLine?.code, line: fullLine?.line, pours: (opLines().filter(entry => entry.kind === 'op' && entry.command === fullRun.command.id && entry.op === 'activateItem')).length };
     check('run 46 hold 6: a full pack (36/36) stops the obsidian hand with inventory_full and the words, at once, before water is poured', slotsUsed >= 36 && fullLine?.code === 'inventory_full' && /満杯（36\/36）/u.test(String(fullLine?.line)) && fullRun.ms < 15_000, JSON.stringify(report.obsidianFull).slice(0, 400));
     produce('measure/obsidian-rim', null, { output: { full: report.obsidianFull, rim: report.obsidianRim } });
     await ask('tp ' + ACTOR + ' -10 100 -10'); await sleep(500);
