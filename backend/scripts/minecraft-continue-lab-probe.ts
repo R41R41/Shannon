@@ -465,7 +465,7 @@ try {
   if (wanted.has('go_tunnel')) {
     await reset(actor);
     await ask('tp ' + ACTOR + ' -10 100 -10'); await sleep(600);
-    await ask('fill -2 99 -3 15 104 3 minecraft:deepslate'); await ask('fill -2 102 -3 15 104 3 minecraft:obsidian'); await ask('fill -2 100 0 0 101 0 minecraft:air');
+    await ask('fill -2 99 -16 15 104 16 minecraft:deepslate'); await ask('fill -2 102 -16 15 104 16 minecraft:obsidian'); await ask('fill -2 100 0 0 101 0 minecraft:air');
     await ask('give ' + ACTOR + ' minecraft:iron_pickaxe 1'); await ask('effect give ' + ACTOR + ' minecraft:resistance 600 4 true'); await sleep(800);
     await ask('tp ' + ACTOR + ' 0.5 100 0.5'); await sleep(2500);
     const digTime = typeof actor.digTime === 'function' ? Math.round(actor.digTime(actor.blockAt(new (actor.entity.position.constructor)(5, 100, 0)))) : null;
@@ -478,7 +478,7 @@ try {
     check('go tunnels through deepslate (measured: ms per dug cell against the block\'s own dig time)', line?.goal === 'done' && dug !== null && dug >= 20, JSON.stringify(report.goTunnel).slice(0, 500));
     produce('measure/go-tunnel', null, { output: report.goTunnel as Record<string, unknown> });
     await ask('tp ' + ACTOR + ' -10 100 -10'); await sleep(500);
-    await ask('fill -2 99 -3 15 104 3 minecraft:air'); await ask('fill -2 90 -3 15 99 3 minecraft:stone');
+    await ask('fill -2 99 -16 15 104 16 minecraft:air'); await ask('fill -2 90 -16 15 99 16 minecraft:stone');
     await reset(actor);
   }
 
