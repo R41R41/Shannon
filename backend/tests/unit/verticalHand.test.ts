@@ -542,6 +542,7 @@ describe('vertical: the stops of run 46 (15 verticals, none done)', () => {
     const stopped = await drive(planks, run(planks, stairsDown()));
     expect(stopped).toMatchObject({ ok: false, code: 'cannot_dig' });
     expect(stopped.text).toContain('canDig に oak_planks を足せば進む');
+    expect(stopped.text.length).toBeLessThanOrEqual(160);
     expect(planks.world.nameAt(0, 64, 1)).toBe('oak_planks');
     const told = sim0(world('andesite', 64, [cell('oak_planks', 0, 64, 1)]));
     expect((await drive(told, run(told, stairsDown({ canDig: [...DIG, 'oak_planks'] })))).ok).toBe(true);
@@ -555,8 +556,9 @@ describe('vertical: the stops of run 46 (15 verticals, none done)', () => {
     };
     const outcome = await drive(sim, run(sim, stairsDown()));
     expect(outcome).toMatchObject({ ok: false, code: 'threat_exposed' });
-    expect(outcome.text).toMatch(/^vertical 止まった threat_exposed: andesite\(0,63,1\) を開けると、今は届かない zombie（約9m）から身体が見える/u);
-    expect(outcome.text).toContain('toward を変える');
+    expect(outcome.text).toMatch(/^vertical 止まった threat_exposed: andesite\(0,63,1\) を開けると zombie（約9m）から身体が見える/u);
+    expect(outcome.text).toContain('敵が離れるのを待つか、toward を変える');
+    expect(outcome.text.length).toBeLessThanOrEqual(160);
   });
   it('lays a footing from cobblestone, cobbled deepslate or dirt held when canPlace is left out of a stair, and not when it says none', async () => {
     const gap = world('andesite', 64, [cell('air', 0, 64, -1), column('air', 0, 64, 70, -2)]);

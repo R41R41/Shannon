@@ -645,8 +645,8 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   /** In words, for the LLM that decides the next hand: who would see the body, and how many cells the guard held back. */
   const exposedWords = (): string => {
     const nearest = [...state.exposed.values()].sort((a, b) => a.distance - b.distance)[0];
-    const cells = [...state.exposed.keys()].slice(0, 3).map(key => `(${key})`).join('');
-    return `掘ると ${nearest?.name ?? '敵'}（約${(nearest?.distance ?? 0).toFixed(0)}m）から身体が見える所を通らないと進めない（守りが掘りを止めたマス ${state.exposed.size} 個 ${cells}）`;
+    const first = [...state.exposed.keys()][0];
+    return `${nearest?.name ?? '敵'}（約${(nearest?.distance ?? 0).toFixed(0)}m）から見える所を掘らないと進めない（守りが止めた ${state.exposed.size} マス${first ? ` (${first})` : ''}）`;
   };
   const countingDig = async function (this: unknown, ...rest: unknown[]) {
     const at = (rest[0] as { position?: { x: number; y: number; z: number } } | undefined)?.position;
@@ -762,7 +762,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     state.veto = budgetOf(digs, places);
     if (state.veto) { try { nav.setGoal?.(null); } catch { /* stopped below */ } }
   };
-  const VETO_HINTS: Record<string, string> = { limit_dig: 'maxDig を増やすか、別の道を', limit_place: 'maxPlace を増やすか、別の道を', stuck: '別の道か別の行き先を（同じ手の繰り返しは同じ所で止まる）', threat_exposed: '敵が離れるのを待つ（wait-time）か、敵のいない向きの別の道・行き先を' };
+  const VETO_HINTS: Record<string, string> = { limit_dig: 'maxDig を増やすか、別の道を', limit_place: 'maxPlace を増やすか、別の道を', stuck: '別の道か別の行き先を（同じ手の繰り返しは同じ所で止まる）', threat_exposed: '敵が離れるのを待つか、別の道・行き先を' };
   const vetoed = (): StepOutcome | null => state.veto ? fail(state.veto.code, state.veto.text, VETO_HINTS[state.veto.code] ?? '別の道を') : null;
 
   const notes: WayNotes = { opened: [], leaves: 0 };

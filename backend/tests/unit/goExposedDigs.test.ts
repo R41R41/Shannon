@@ -84,8 +84,10 @@ describe('go: a wall with a hostile behind it that the guard will not let be ope
     const started = Date.now();
     const outcome: StepOutcome = await drive(sim, run(sim));
     expect(outcome.ok).toBe(false);
-    expect(outcome.text).toMatch(/^go 止まった threat_exposed: 掘ると zombie（約\d+m）から身体が見える所を通らないと進めない（守りが掘りを止めたマス \d+ 個 /u);
-    expect(outcome.text).toContain('wait-time');
+    expect(outcome.text).toMatch(/^go 止まった threat_exposed: zombie（約\d+m）から見える所を掘らないと進めない（守りが止めた \d+ マス /u);
+    expect(outcome.text).toContain("敵が離れるのを待つか");
+    expect(outcome.text.length).toBeLessThanOrEqual(160);
+    expect(outcome.text.length).toBeLessThanOrEqual(160);
     expect(Date.now() - started).toBeLessThan(30_000);
     // the cave was never opened
     expect(sim.world.nameAt(2, FLOOR, 0)).toBe('stone');
@@ -113,8 +115,9 @@ describe('go: a wall with a hostile behind it that the guard will not let be ope
     };
     const outcome: StepOutcome = await drive(sim, run(sim));
     expect(outcome.ok).toBe(false);
-    expect(outcome.text).toMatch(/^go 止まった threat_exposed: 掘ると zombie.*守りが掘りを止めたマス \d+ 個 /u);
-    const cells = Number(/マス (\d+) 個/u.exec(outcome.text)![1]);
+    expect(outcome.text).toMatch(/^go 止まった threat_exposed: zombie.*守りが止めた \d+ マス /u);
+    expect(outcome.text.length).toBeLessThanOrEqual(160);
+    const cells = Number(/止めた (\d+) マス/u.exec(outcome.text)![1]);
     expect(cells).toBeGreaterThanOrEqual(2);
     expect(cells).toBeLessThanOrEqual(GO_EXPOSED_STOPS);
     expect(sim.world.nameAt(2, FLOOR, 0)).toBe('stone');

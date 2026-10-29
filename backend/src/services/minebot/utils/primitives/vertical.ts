@@ -325,7 +325,7 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
   const refuseDig = (cell: Cell, block: any): VStop => {
     const name = nameOf(block);
     const why = block?.diggable === false || name === 'bedrock' ? `${name}${cellText(cell)} は壊せないブロック` : `${name}${cellText(cell)} は canDig に無い（${away(cell)}）`;
-    return new VStop('cannot_dig', why, cell, name === 'bedrock' || block?.diggable === false ? undefined : `canDig に ${name} を足せば進む（壊して困らない物なら）。または別の形で`);
+    return new VStop('cannot_dig', why, cell, name === 'bedrock' || block?.diggable === false ? undefined : `canDig に ${name} を足せば進む`);
   };
   /** Before anything of a level is dug: a cell it must open that is not allowed stops it now, not after two others were dug. */
   const precheckDig = (cells: Cell[]) => {
@@ -353,8 +353,8 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
         if (isInterrupt(error) || /interrupt/iu.test(String((error as Error)?.message))) throw error;
         // Run 46: the exposure guard refused the dig (a hostile behind the rock would see the body): said as that, with who and which cell, as go says it; the cell stays closed to the routes.
         if (error instanceof ThreatExposedError) {
-          throw new VStop('threat_exposed', `${nameOf(block)}${cellText(cell)} を開けると、今は届かない ${error.threat.name}（約${error.threat.distance.toFixed(0)}m）から身体が見える・届くようになる`, cell,
-            args.shape === 'shaft' || args.shape === 'pillar' ? '敵が離れるのを待つ（wait-time）か、別の場所から' : '敵が離れるのを待つ（wait-time）か、toward を変えるか、別の場所から');
+          throw new VStop('threat_exposed', `${nameOf(block)}${cellText(cell)} を開けると ${error.threat.name}（約${error.threat.distance.toFixed(0)}m）から身体が見える`, cell,
+            args.shape === 'shaft' || args.shape === 'pillar' ? '敵が離れるのを待つか、別の場所から' : '敵が離れるのを待つか、toward を変える');
         }
         if ((error as Error)?.name === 'LavaReleaseError') {
           const lava = (error as { lava?: Vec3 }).lava;
@@ -654,7 +654,9 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
       const fixed = ` ${tail()}`;
       const room = 160 - head.length - fixed.length;
       const hint = error.hint ? `。${error.hint}` : '';
-      const why = error.why.length + hint.length <= room ? `${error.why}${fixed}${hint}` : `${error.why.slice(0, Math.max(24, room - 1))}…${fixed}`;
+      // The line is 160 characters at most (the act cuts it from the back): when it is too long the reason is cut and the way out stays (run 46: the planner has to read it).
+      const whyRoom = room - hint.length;
+      const why = error.why.length <= whyRoom ? `${error.why}${fixed}${hint}` : `${error.why.slice(0, Math.max(16, whyRoom - 1))}…${fixed}${hint}`;
       return { ok: false, reason: error.code, code: error.code, text: `${head}${why}`, at: where, from: start, progress: progress() };
     }
     // Cut from outside (a reflex, a stopIf, the clock of the whole act) or an unexpected error: the act answers it; what the hand had done goes with it.
