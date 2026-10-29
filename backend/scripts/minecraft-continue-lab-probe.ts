@@ -449,7 +449,7 @@ try {
     await ask('gamemode survival ' + ACTOR); await ask('tp ' + ACTOR + ' ' + (lab(122.3, -56, 237.7).x) + ' ' + (lab(122.3, -56, 237.7).y) + ' ' + (lab(122.3, -56, 237.7).z)); await sleep(2500);
     const firstRun = await act(body, { hands: [{ do: 'dig', at: [target], collect: false, seconds: 60 }] }, { seconds: 70 });
     const first = firstRun.parsed?.lines?.[0];
-    report.obsidianWaterStop = { ms: firstRun.ms, stoppedBy: firstRun.parsed?.stoppedBy, code: first?.code, line: first?.line, oxygen: actor.oxygenLevel };
+    report.obsidianWaterStop = { ms: firstRun.ms, outcome: firstRun.receipt.outcome, failureType: firstRun.receipt.failureType, result: String(firstRun.receipt.result ?? '').slice(0, 400), stoppedBy: firstRun.parsed?.stoppedBy, code: first?.code, line: first?.line, oxygen: actor.oxygenLevel };
     check('run 46 hold 7: a dig of obsidian from a pocket of water, stopped by the swim reflex, says that it digs in water, the air and the ways out', first?.status === 'stopped' && /水の中で掘っている/u.test(String(first?.line)) && /水源を汲むか/u.test(String(first?.line)), JSON.stringify(report.obsidianWaterStop).slice(0, 500));
     // the source taken back: dry, the dig goes through
     const second = await act(body, { hands: [{ do: 'use', item: 'bucket', at: [source] }, { do: 'wait', seconds: 4 }, { do: 'dig', at: [target], collect: false, seconds: 60 }] }, { seconds: 80 });
