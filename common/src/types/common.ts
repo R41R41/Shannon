@@ -189,7 +189,6 @@ export type PromptType =
   | 'reply_twitter_comment'
   | 'quote_twitter_comment'
   | 'use_tool'
-  | 'reply_youtube_live_comment'
   | 'emergency'
   | 'auto_tweet'
   | 'auto_tweet_explore'
@@ -227,6 +226,8 @@ export interface ServiceOutput {
 export interface StatusAgentInput extends ServiceInput {
   service: Platform;
   status: ServiceStatus;
+  /** A short word on how the service works right now (youtube:live_chat: 'streamList' | 'polling' | 'idle'). */
+  detail?: string | null;
 }
 
 export type MemoryZone =

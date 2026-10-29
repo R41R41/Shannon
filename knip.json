@@ -11,6 +11,7 @@
         "src/services/llm/tools/**/*.ts",
         "src/services/minebot/instantSkills/**/*.ts",
         "src/services/minebot/constantSkills/**/*.ts",
+        "src/services/youtube/ear/cli.ts",
         "src/services/line/runtime.ts",
         "src/services/line/databaseSchema.ts",
         "src/services/line/config.ts",

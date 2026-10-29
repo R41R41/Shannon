@@ -29,5 +29,4 @@ export type LLMEventType =
   | "llm:reply_youtube_comment"
   | "llm:get_discord_message"
   | "llm:get_web_message"
-  | "llm:get_skills"
-  | "llm:get_youtube_message";
+  | "llm:get_skills";

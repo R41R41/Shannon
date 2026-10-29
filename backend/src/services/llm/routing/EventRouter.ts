@@ -9,7 +9,6 @@ import {
   TwitterQuoteRTOutput,
   TwitterReplyOutput,
   YoutubeCommentOutput,
-  YoutubeLiveChatMessageOutput,
 } from '@shannon/common';
 import { getWebNotificationHub, type WebPostMessagePayload } from '../../web/webNotificationHub.js';
 import { acquireWebRealtimeInput } from '../../web/webRealtimeInputLock.js';
@@ -133,10 +132,6 @@ export class EventRouter {
   handleYoutubeReply(data: YoutubeCommentOutput): void {
     if (this.isDevMode) return;
     this.agents.processYoutubeReply(data);
-  }
-
-  handleYoutubeMessage(data: YoutubeLiveChatMessageOutput): void {
-    this.agents.processYoutubeMessage(data);
   }
 
   handleMinebotVoiceResponse(data: MinebotVoiceResponseOutput): void {
