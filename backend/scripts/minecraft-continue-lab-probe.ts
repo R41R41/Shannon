@@ -522,6 +522,8 @@ try {
   // ---- A-12 (body): the head asks for a hold (incident.take): the world stops, the box holds the notes, the resume brings the world back
   if (runs('head_take')) {
     await reset(actor);
+    report.listRaw = JSON.stringify(await ask('list'));
+    log('LISTRAW ' + report.listRaw);
     const gameTime = async (): Promise<number | null> => { const text = await ask('time query gametime'); const m = /(\d+)/u.exec(text.replace(/§./gu, '')); return m ? Number(m[1]) : null; };
     const releaseWith = async (incident: Record<string, unknown>) => {
       const id = 'lab:release' + (++commandNumber);
