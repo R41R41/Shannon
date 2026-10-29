@@ -465,7 +465,7 @@ try {
   if (wanted.has('go_tunnel')) {
     await reset(actor);
     await ask('tp ' + ACTOR + ' -10 100 -10'); await sleep(600);
-    await ask('fill -2 99 -3 15 104 3 minecraft:deepslate'); await ask('fill -2 100 0 0 101 0 minecraft:air');
+    await ask('fill -2 99 -3 15 104 3 minecraft:deepslate'); await ask('fill -2 102 -3 15 104 3 minecraft:obsidian'); await ask('fill -2 100 0 0 101 0 minecraft:air');
     await ask('give ' + ACTOR + ' minecraft:iron_pickaxe 1'); await ask('effect give ' + ACTOR + ' minecraft:resistance 600 4 true'); await sleep(800);
     await ask('tp ' + ACTOR + ' 0.5 100 0.5'); await sleep(2500);
     const digTime = typeof actor.digTime === 'function' ? Math.round(actor.digTime(actor.blockAt(new (actor.entity.position.constructor)(5, 100, 0)))) : null;
