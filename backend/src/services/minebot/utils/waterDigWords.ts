@@ -1,3 +1,4 @@
+import { Vec3 } from 'vec3';
 import { feetCell } from './localMap.js';
 import { eyeHeight } from './bodyPose.js';
 
@@ -13,7 +14,7 @@ const counts = new WeakMap<object, Map<string, number>>();
 interface WaterBody {
   entity?: { position: { x: number; y: number; z: number }; isInWater?: boolean };
   oxygenLevel?: number;
-  blockAt?(position: { x: number; y: number; z: number }): { name?: string } | null | undefined;
+  blockAt?(position: Vec3): { name?: string } | null | undefined;
 }
 
 /**
@@ -21,10 +22,13 @@ interface WaterBody {
  * The second time at the same place, and later, says so.
  */
 export function waterDigWords(bot: WaterBody, handKind: string, stoppedWhy: string | undefined): string | null {
+  try { return waterDigWordsOf(bot, handKind, stoppedWhy); } catch { return null; }   // words are a help: they never become the stop
+}
+function waterDigWordsOf(bot: WaterBody, handKind: string, stoppedWhy: string | undefined): string | null {
   if (!DIGGING.has(handKind) || !stoppedWhy || !SWIM_STOP.test(stoppedWhy)) return null;
   const at = bot.entity?.position;
   if (!at || typeof bot.blockAt !== 'function') return null;
-  const wet = (y: number) => String(bot.blockAt!({ x: Math.floor(at.x), y: Math.floor(y), z: Math.floor(at.z) })?.name ?? '') === 'water';
+  const wet = (y: number) => String(bot.blockAt!(new Vec3(Math.floor(at.x), Math.floor(y), Math.floor(at.z)))?.name ?? '') === 'water';
   const feetWet = wet(at.y), headWet = wet(at.y + eyeHeight(bot as never));
   if (!feetWet && !headWet && bot.entity?.isInWater !== true) return null;
   const feet = feetCell(bot as never);

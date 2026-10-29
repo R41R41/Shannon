@@ -8,7 +8,7 @@ import { NativeCommonFcaBody } from '../../src/services/minebot/integration/comm
 const body = (wet: { feet: boolean; head: boolean }, oxygen = 9) => ({
   entity: { position: new Vec3(122.3, -56, 237.7), isInWater: wet.feet || wet.head },
   oxygenLevel: oxygen,
-  blockAt: (p: { x: number; y: number; z: number }) => ({ name: (p.y === -56 && wet.feet) || (p.y === -55 && wet.head) ? 'water' : 'air' }),
+  blockAt: (p: Vec3) => ({ name: (p.y === -56 && wet.feet) || (p.y === -55 && wet.head) ? 'water' : 'air' }),
 }) as never;
 
 describe('a dig that the swim reflex stopped, in words the planner can act on', () => {
