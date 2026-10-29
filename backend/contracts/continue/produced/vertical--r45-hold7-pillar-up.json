@@ -1,8 +1,8 @@
 {
  "producedBy": "backend/scripts/minecraft-continue-lab-probe.ts",
  "bench": "B",
- "bodyRevision": "46d3898e0f17",
- "madeAt": "2026-10-29T15:05:02.301Z",
+ "bodyRevision": "d07cc0ae006f",
+ "madeAt": "2026-10-29T15:17:23.181Z",
  "answers": "vertical/r45-hold7-pillar-up",
  "fixtureSha256": "7e63b36cc22555fae0d6015b1576e3166a73bb6a85b8245da13b953af6bb8c7a",
  "substitute": "an arena of stone, not the real run's ground",
@@ -35,7 +35,7 @@
     "end": "finished",
     "life": 4
    },
-   "afterReflex": "反射 wall-escape（反射（wall-escape））の最中のため、放された後に始めた（待ち 7.1秒）",
+   "afterReflex": "反射 wall-escape（反射（wall-escape））の最中のため、放された後に始めた（待ち 7.2秒）",
    "lines": [
     {
      "i": 1,
@@ -54,7 +54,7 @@
        "y": 108,
        "z": 0
       },
-      "msPerUnit": 524,
+      "msPerUnit": 528,
       "work": {
        "dug": 0,
        "placeAttempts": 8,
@@ -68,7 +68,7 @@
        "count": -8,
        "reason": "placed",
        "id": "lab:q37:1:1:0",
-       "obsSeq": 10386,
+       "obsSeq": 10657,
        "deliverySeq": 0
       }
      ]
@@ -81,23 +81,23 @@
    },
    "hp": 20,
    "food": 20,
-   "ms": 4197,
+   "ms": 4223,
    "map": "地図 v1 足=(0,108,0) x=-10..10 z=-10..10 方式=surface 上=北\nz\\x 0  9  8  7  6  5  4  3  2  1  0  1  2  3  4  5  6  7  8  9  0\n-10 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n -9 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n -8 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n -7 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n -6 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n -5 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n -4 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n -3 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n -2 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n -1 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n  0 #h #h #h #h #h #h #h #h #h #h @0 #h #h #h #h #h #h #h #h #h #h\n  1 #h #h #h #h #h #h #h #h #h #h *h #h #h #h #h #h #h #h #h #h #h\n  2 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n  3 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n  4 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n  5 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n  6 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n  7 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n  8 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n  9 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n 10 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\ny=109\nz\\x 5 4 3 2 1 0 1 2 3 4 5\n -5 . . . . . . . . . . .\n -4 . . . . . . . . . . .\n -3 . . . . . . . . . . .\n -2 . . . . . . . . . . .\n -1 . . . . . . . . . . .\n  0 . . . . . . . . . . .\n  1 . . . . . . . . . . .\n  2 . . . . . . . . . . .\n  3 . . . . . . . . . . .\n  4 . . . . . . . . . . .\n  5 . . . . . . . . . . .\ny=108\nz\\x 5 4 3 2 1 0 1 2 3 4 5\n -5 . . . . . . . . . . .\n -4 . . . . . . . . . . .\n -3 . . . . . . . . . . .\n -2 . . . . . . . . . . .\n -1 . . . . . . . . . . .\n  0 . . . . . @ . . . . .\n  1 . . . . . . . . . . .\n  2 . . . . . . . . . . .\n  3 . . . . . . . . . . .\n  4 . . . . . . . . . . .\n  5 . . . . . . . . . . .\ny=107\nz\\x 5 4 3 2 1 0 1 2 3 4 5\n -5 . . . . . . . . . . .\n -4 . . . . . . . . . . .\n -3 . . . . . . . . . . .\n -2 . . . . . . . . . . .\n -1 . . . . . . . . . . .\n  0 . . . . . # . . . . .\n  1 . . . . . . . . . . .\n  2 . . . . . . . . . . .\n  3 . . . . . . . . . . .\n  4 . . . . . . . . . . .\n  5 . . . . . . . . . . .\n縦 (0,0) 上: y=109〜124 .×16 …\n縦 (0,0) 下: y=107〜92 #×16 …"
   },
   "receiptUnit": {
    "goal": "done",
    "end": "finished",
    "released": true,
-   "startedAt": "2026-10-29T15:04:49.450Z"
+   "startedAt": "2026-10-29T15:17:10.285Z"
   },
   "bodyTimes": {
-   "acceptedAt": "2026-10-29T15:04:49.450Z",
-   "startedAt": "2026-10-29T15:04:56.598Z",
-   "reflexWaitMs": 7147,
-   "lockAt": "2026-10-29T15:04:56.598Z",
-   "firstMotorAt": "2026-10-29T15:04:56.600Z",
+   "acceptedAt": "2026-10-29T15:17:10.285Z",
+   "startedAt": "2026-10-29T15:17:17.437Z",
+   "reflexWaitMs": 7152,
+   "lockAt": "2026-10-29T15:17:17.437Z",
+   "firstMotorAt": "2026-10-29T15:17:17.440Z",
    "motorOps": 25,
-   "endedAt": "2026-10-29T15:05:00.796Z"
+   "endedAt": "2026-10-29T15:17:21.662Z"
   },
   "opCounts": {
    "dig": 0,
