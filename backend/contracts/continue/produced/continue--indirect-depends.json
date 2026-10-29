@@ -1,8 +1,8 @@
 {
  "producedBy": "backend/scripts/lab/continue-produce.ts",
  "bench": "offline",
- "bodyRevision": "d07cc0ae006f",
- "madeAt": "2026-10-29T15:19:14.665Z",
+ "bodyRevision": "5f47c8e67ed3",
+ "madeAt": "2026-10-29T16:08:00.718Z",
  "answers": "continue/indirect-depends",
  "fixtureSha256": "6c7ac36d638048e59eb75fdee0d1359f9c17f1ea4fe34a97b8d2e47c778cc806",
  "substitute": "a dig out of reach stands for the go",
