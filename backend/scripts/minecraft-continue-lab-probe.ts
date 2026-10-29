@@ -519,6 +519,25 @@ try {
     await reset(actor);
   }
 
+  // ---- run 47 (hold 1): a one-step drop west from a block, under an open trapdoor whose plate stands on the cell's east edge at head height
+  if (wanted.has('go_trapdoor')) {
+    await reset(actor);
+    await ask('tp ' + ACTOR + ' -10 100 -10'); await sleep(600);
+    await ask('setblock 6 100 0 minecraft:cobblestone'); await ask('setblock 6 100 1 minecraft:cobblestone'); await ask('setblock 6 100 -1 minecraft:spruce_log');
+    await ask('setblock 5 102 0 minecraft:spruce_trapdoor[facing=west,half=bottom,open=true,powered=false,waterlogged=false]'); await ask('setblock 5 103 0 minecraft:spruce_log');
+    await ask('effect give ' + ACTOR + ' minecraft:resistance 600 4 true'); await sleep(500);
+    await ask('tp ' + ACTOR + ' 6.42 101 0.5'); await sleep(2500);
+    const run = await act(body, { hands: [{ do: 'go', to: { x: 5, y: 100, z: 0 }, seconds: 40 }] }, { seconds: 50 });
+    const line = run.parsed?.lines?.[0];
+    const ops = opLines().filter(entry => entry.kind === 'op' && entry.command === run.command.id);
+    const gaps: number[] = []; for (let i = 1; i < ops.length; i++) gaps.push(Date.parse(ops[i].at) - Date.parse(ops[i - 1].at));
+    report.goTrapdoor = { ms: run.ms, goal: line?.goal, line: String(line?.line).slice(0, 200), longestQuietMs: Math.max(0, ...gaps), ops: ops.length };
+    check('run 47 hold 1: a go from the block to the cell one down and west, under an open trapdoor at head height, arrives without standing against the plate', line?.goal === 'done' && run.ms < 6_000 && /引き直し 0 回/u.test(String(line?.line)), JSON.stringify(report.goTrapdoor).slice(0, 400));
+    produce('measure/go-trapdoor', null, { output: report.goTrapdoor as Record<string, unknown> });
+    await ask('fill 4 100 -1 7 103 1 minecraft:air'); await ask('tp ' + ACTOR + ' 0.5 100 0.5');
+    await reset(actor);
+  }
+
   // ---- A-12 (body): the head asks for a hold (incident.take): the world stops, the box holds the notes, the resume brings the world back
   if (runs('head_take')) {
     await reset(actor);

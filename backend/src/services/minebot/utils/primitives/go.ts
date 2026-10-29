@@ -987,7 +987,8 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
       if (out.stuck) {
         // Run 45 (hold 2): the cell of the route the body was held before is avoided by the next drawings.
         const ahead = aheadOf(lastRoute, bot.entity?.position);
-        if (ahead && !state.avoid.has(keyOf(ahead))) {
+        // Run 47 (hold 1): never the place the go is going to itself (a route of one step was held before it, the avoid made it dearer, and the search ran 5 s): the way in is what is avoided.
+        if (ahead && !state.avoid.has(keyOf(ahead)) && !targets.some(cell => keyOf(cell) === keyOf(ahead))) {
           state.avoid.add(keyOf(ahead));
           blackBoxOf(host)?.note('avoid', { at: [ahead.x, ahead.y, ahead.z], why: 'stuck' });
         }

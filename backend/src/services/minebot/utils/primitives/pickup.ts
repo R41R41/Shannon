@@ -1,4 +1,5 @@
 import pathfinder from 'mineflayer-pathfinder';
+import { Vec3 } from 'vec3';
 import { bodyReader, feetCell, relativeWords, type Cell } from '../localMap.js';
 import { isSelfDropped } from '../selfDropped.js';
 import { solidBetween } from '../probeTools.js';
@@ -101,7 +102,11 @@ export async function pickup(ctx: StepContext, args: PickupArgs): Promise<StepOu
       // Walked to where it lies and waited for it; once more where it lies then, if it rolled on meanwhile.
       for (let attempt = 0; attempt < 2 && bot.entities?.[entity.id] && !unreachable; attempt++) {
         if (!withinTake(bot.entity.position, where())) {
-          const goal = new goals.GoalNear(entity.position.x, entity.position.y, entity.position.z, 0.5);
+          // Run 47 (hold 1): a drop whose coordinates lie inside a block (a wall's, the top of a fence: it clips into the shape) cannot be stood in; the body goes where its box takes it from.
+          const itemCell = { x: Math.floor(entity.position.x), y: Math.floor(entity.position.y + 1e-3), z: Math.floor(entity.position.z) };
+          let inBlock = false;
+          try { inBlock = bot.blockAt?.(new Vec3(itemCell.x, itemCell.y, itemCell.z), false)?.boundingBox === 'block'; } catch { inBlock = false; }
+          const goal = new goals.GoalNear(entity.position.x, entity.position.y, entity.position.z, inBlock ? Math.max(0.5, TAKE_ACROSS - 0.15) : 0.5);
           const gone = await goWith(ctx, goal, Math.min(10_000, Math.max(500, ctx.deadline - Date.now())), notes);
           if (!bot.entities?.[entity.id]) break; // taken on the way
           if (gone.timedOut || gone.stuck || gone.error || !gone.reached) {

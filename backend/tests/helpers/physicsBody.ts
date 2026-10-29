@@ -22,6 +22,24 @@ const { Physics, PlayerState } = createRequire(import.meta.url)('prismarine-phys
 export type Ground = (x: number, y: number, z: number) => string | null;
 export interface Stack { name: string; count: number }
 
+/**
+ * A block by name, with its state when the name has one: `spruce_trapdoor[facing=west,half=bottom,open=true,powered=false,waterlogged=false]` (every state of the block named,
+ * in the order minecraft-data lists them; the last one changes fastest).
+ */
+export function makeBlock(name: string): any {
+  const found = /^([a-z_0-9]+)\[(.*)\]$/u.exec(name);
+  if (!found) return new Block(mcData.blocksByName[name].id, 0, 0);
+  const info = mcData.blocksByName[found[1]!]!;
+  const given = Object.fromEntries(found[2]!.split(',').map(pair => pair.split('=') as [string, string]));
+  let offset = 0;
+  for (const state of info.states ?? []) {
+    const values: string[] = state.type === 'bool' ? ['true', 'false'] : state.values.map(String);
+    const index = values.indexOf(given[state.name] ?? values[0]!);
+    offset = offset * state.num_values + Math.max(0, index);
+  }
+  return Block.fromStateId(info.minStateId + offset, 0);
+}
+
 export function makeSim(ground: Ground, options: { start?: [number, number, number]; items?: Stack[]; digMs?: number; ghost?: (x: number, y: number, z: number) => string | null | undefined } = {}) {
   const changed = new Map<string, string | null>();
   const cache = new Map<string, any>();
@@ -33,7 +51,7 @@ export function makeSim(ground: Ground, options: { start?: [number, number, numb
     if (name === null) return null;
     const key = `${name}@${x},${y},${z}`;
     let block = cache.get(key);
-    if (!block) { block = new Block(mcData.blocksByName[name].id, 0, 0); block.position = new Vec3(x, y, z); cache.set(key, block); }
+    if (!block) { block = makeBlock(name); block.position = new Vec3(x, y, z); cache.set(key, block); }
     return block;
   };
   const world = {

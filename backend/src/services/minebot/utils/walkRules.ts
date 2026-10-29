@@ -252,6 +252,8 @@ export function installDoorRules(movements: any): void {
   };
   const getNeighbors = movements.getNeighbors.bind(movements);
   movements.getNeighbors = (node: any) => (getNeighbors(node) as any[]).filter(move => {
+    // Run 47 (hold 1): an open trapdoor at the head of the next cell stands as a wall on one edge of its cell; the search took it as open ground and the body stood 3 s against it.
+    if (!move.parkour && platesAcross(movements, node, move)) return false;
     // A jump over a gap passes cells that are not nodes: a shut door there would not be opened.
     if (move.parkour) {
       const sx = Math.sign(move.x - node.x), sz = Math.sign(move.z - node.z);
@@ -263,6 +265,41 @@ export function installDoorRules(movements: any): void {
     }
     return true;
   });
+}
+
+/**
+ * Whether the plate of an open door-like block (an open trapdoor stands on one edge of its cell, a whole block high; an open door on the side of its frame) stands on the
+ * edge of `cell` that faces `side` (the edge the body crosses): a thin box (half a block or less) that spans the edge. Pure, from the block's collision boxes.
+ */
+export function plateOnEdge(shapes: ReadonlyArray<ReadonlyArray<number>> | undefined, side: 'west' | 'east' | 'north' | 'south'): boolean {
+  return (shapes ?? []).some(box => {
+    const [x0 = 0, , z0 = 0, x1 = 0, , z1 = 0] = box;
+    if (side === 'west') return x0 <= 0.01 && x1 - x0 <= 0.5 && z1 - z0 >= 0.9;
+    if (side === 'east') return x1 >= 0.99 && x1 - x0 <= 0.5 && z1 - z0 >= 0.9;
+    if (side === 'north') return z0 <= 0.01 && z1 - z0 <= 0.5 && x1 - x0 >= 0.9;
+    return z1 >= 0.99 && z1 - z0 <= 0.5 && x1 - x0 >= 0.9;
+  });
+}
+const OPPOSITE_SIDE = { west: 'east', east: 'west', north: 'south', south: 'north' } as const;
+/**
+ * Whether a straight step of a move crosses the plate of an open door-like block at the height of the body: the cells of the next column that the body passes at the source level
+ * (feet and head; for a climb, those of the level it climbs to as well) with their plate on the edge facing the source, and the source column's cells with theirs on the edge
+ * facing the next. The move is not one the body can make (run 47, hold 1).
+ */
+function platesAcross(movements: any, node: any, move: any): boolean {
+  const dx = move.x - node.x, dz = move.z - node.z;
+  if (Math.abs(dx) + Math.abs(dz) !== 1) return false;
+  const toward = dx < 0 ? 'west' : dx > 0 ? 'east' : dz < 0 ? 'north' : 'south';
+  const from = OPPOSITE_SIDE[toward];
+  const levels = new Set<number>([node.y, node.y + 1]);
+  if (move.y > node.y) { levels.add(move.y); levels.add(move.y + 1); }
+  for (const y of levels) {
+    const ahead = movements.getBlock(node, dx, y - node.y, dz), here = movements.getBlock(node, 0, y - node.y, 0);
+    for (const [block, side] of [[ahead, from], [here, toward]] as const) {
+      if (block?.name && isDoorlike(String(block.name)) && cellWay(mapBlockOf(block)) === 'open' && plateOnEdge(block.shapes, side)) return true;
+    }
+  }
+  return false;
 }
 
 /**
