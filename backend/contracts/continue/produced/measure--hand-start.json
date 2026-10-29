@@ -1,8 +1,8 @@
 {
  "producedBy": "backend/scripts/minecraft-continue-lab-probe.ts",
  "bench": "B",
- "bodyRevision": "5f47c8e67ed3",
- "madeAt": "2026-10-29T16:00:25.689Z",
+ "bodyRevision": "f0411d470fd9",
+ "madeAt": "2026-10-29T17:32:49.740Z",
  "answers": "measure/hand-start",
  "fixtureSha256": "58a55f6c40ffcac5f019dbc169ed1d848527a873493497131569ed72814dc4e1",
  "output": {
@@ -12,12 +12,12 @@
     "command": "lab:q2",
     "hand": 1,
     "life": 1,
-    "bodyBoot": "bb-5b016cb0",
+    "bodyBoot": "bb-2b6cc257",
     "headBoot": "hb-lab",
-    "obsSeq": 226,
-    "obsAt": "2026-10-29T16:00:24.731Z"
+    "obsSeq": 229,
+    "obsAt": "2026-10-29T17:32:48.776Z"
    },
-   "at": "2026-10-29T16:00:24.763Z",
+   "at": "2026-10-29T17:32:48.812Z",
    "pos": {
     "x": 0,
     "y": 100,
@@ -29,26 +29,26 @@
    "inventory": "",
    "holder": {
     "kind": "command",
-    "actionId": "144136d6-5ae7-4890-b9e1-1d3ee3024f91",
+    "actionId": "ba01685f-36b6-49bd-9a15-a6e5d9140d3c",
     "command": "lab:q2",
     "life": 1,
-    "since": "2026-10-29T16:00:24.759Z"
+    "since": "2026-10-29T17:32:48.807Z"
    },
    "lastOps": []
   },
   "bodyTimes": {
-   "acceptedAt": "2026-10-29T16:00:24.754Z",
-   "startedAt": "2026-10-29T16:00:24.757Z",
-   "lockAt": "2026-10-29T16:00:24.759Z",
-   "firstMotorAt": "2026-10-29T16:00:25.068Z",
+   "acceptedAt": "2026-10-29T17:32:48.803Z",
+   "startedAt": "2026-10-29T17:32:48.806Z",
+   "lockAt": "2026-10-29T17:32:48.807Z",
+   "firstMotorAt": "2026-10-29T17:32:49.115Z",
    "motorOps": 1,
-   "endedAt": "2026-10-29T16:00:25.680Z"
+   "endedAt": "2026-10-29T17:32:49.723Z"
   },
   "unit": {
    "goal": "done",
    "end": "finished",
    "released": true,
-   "startedAt": "2026-10-29T16:00:24.754Z"
+   "startedAt": "2026-10-29T17:32:48.803Z"
   }
  }
 }

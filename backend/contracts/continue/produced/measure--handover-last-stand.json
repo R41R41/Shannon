@@ -1,26 +1,26 @@
 {
  "producedBy": "backend/scripts/minecraft-continue-lab-probe.ts",
  "bench": "B",
- "bodyRevision": "5f47c8e67ed3",
- "madeAt": "2026-10-29T16:02:34.650Z",
+ "bodyRevision": "f0411d470fd9",
+ "madeAt": "2026-10-29T17:35:01.165Z",
  "answers": null,
  "fixtureSha256": null,
  "output": {
   "seen": {
    "capability": "floor-last-stand",
-   "target": 138
+   "target": 120
   },
   "handover": {
    "from": "floor-last-stand",
-   "target": 138,
+   "target": 120,
    "waitedMs": 3,
-   "reflexSettledAt": "2026-10-29T16:02:28.907Z",
+   "reflexSettledAt": "2026-10-29T17:34:55.655Z",
    "confirmed": true,
    "shield": "none"
   },
   "notes": [
    {
-    "command": "lab:q16",
+    "command": "lab:q17",
     "point": "reservation",
     "shield": false,
     "flagUp": false,
@@ -32,10 +32,10 @@
     "reserved": false,
     "reflex": "floor-last-stand",
     "kind": "motor_state",
-    "at": "2026-10-29T16:02:28.906Z"
+    "at": "2026-10-29T17:34:55.655Z"
    },
    {
-    "command": "lab:q16",
+    "command": "lab:q17",
     "point": "stop",
     "shield": false,
     "flagUp": false,
@@ -46,10 +46,10 @@
     "deactivatedSince": 0,
     "reflex": "floor-last-stand",
     "kind": "motor_state",
-    "at": "2026-10-29T16:02:28.907Z"
+    "at": "2026-10-29T17:34:55.655Z"
    },
    {
-    "command": "lab:q16",
+    "command": "lab:q17",
     "point": "acquire",
     "shield": false,
     "flagUp": false,
@@ -61,10 +61,10 @@
     "confirmed": true,
     "result": "none",
     "kind": "motor_state",
-    "at": "2026-10-29T16:02:28.909Z"
+    "at": "2026-10-29T17:34:55.658Z"
    },
    {
-    "command": "lab:q16",
+    "command": "lab:q17",
     "point": "first_op",
     "shield": false,
     "flagUp": false,
@@ -75,7 +75,7 @@
     "deactivatedSince": 0,
     "op": "setMovements",
     "kind": "motor_state",
-    "at": "2026-10-29T16:02:28.920Z"
+    "at": "2026-10-29T17:34:55.662Z"
    }
   ],
   "outcome": "failed",
@@ -84,8 +84,8 @@
    "end": "finished",
    "released": true,
    "code": "limit_time",
-   "startedAt": "2026-10-29T16:02:28.906Z"
+   "startedAt": "2026-10-29T17:34:55.655Z"
   },
-  "sentToLockMs": 38
+  "sentToLockMs": 20
  }
 }
