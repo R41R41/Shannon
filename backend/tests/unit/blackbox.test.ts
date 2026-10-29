@@ -400,3 +400,11 @@ describe('run 46 hold 8: the list of players is read whole or asked again', () =
     expect(await saver.freeze()).toEqual({ frozen: false, why: 'players_unknown' });
   });
 });
+
+describe('run 46 hold 8: a console that gathers messages', () => {
+  it('takes the line with the whole form among others, and none with something mixed into it', async () => {
+    const { parsePlayerList } = await import('../../src/services/minebot/utils/sceneSave.js');
+    expect(parsePlayerList('Gave 1 [Water Bucket] to A\nThere are 1 of a max of 20 players online: A')).toEqual({ count: 1, max: 20, names: ['A'] });
+    expect(parsePlayerList('x\nThere are 1 of a max of 20 players online: AUnknown or incomplete command')).toBeNull();
+  });
+});

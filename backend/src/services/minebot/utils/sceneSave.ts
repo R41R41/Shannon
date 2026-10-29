@@ -78,8 +78,8 @@ async function tail(file: string, bytes: number): Promise<string> {
  * numbers, names that are names (Minecraft's: letters, digits and _, 1 to 16), and as many names as the first number says. Anything else is null (asked again).
  */
 export function parsePlayerList(answer: string): { count: number; max: number; names: string[] } | null {
-  const first = answer.trim().split(/\r?\n/u)[0] ?? '';
-  const found = /^There are (\d+) of a max of (\d+) players online:\s*(.*)$/u.exec(first);
+  // The line of the answer that has the form (a console that gathers messages may put others before it); a line with something mixed into it is not taken.
+  const found = answer.split(/\r?\n/u).map(line => /^There are (\d+) of a max of (\d+) players online:\s*(.*)$/u.exec(line.trim())).find(match => match !== null) ?? null;
   if (!found) return null;
   const count = Number(found[1]), max = Number(found[2]);
   const rest = found[3]!.trim();
