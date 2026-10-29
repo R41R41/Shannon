@@ -254,8 +254,8 @@ export function installDoorRules(movements: any): void {
   movements.getNeighbors = (node: any) => (getNeighbors(node) as any[]).filter(move => {
     // Run 47 (hold 1): an open trapdoor at the head of the next cell stands as a wall on one edge of its cell; the search took it as open ground and the body stood 3 s against it.
     // Run 47 (hold 7): in water the body swims straight and is carried by the flow; a diagonal step round a corner there left it against the wall (x 173.3, 174.3) and under a ceiling,
-    // 4 s without a step, whatever the search said. A diagonal step that leaves or enters a cell of water is taken as the two straight steps it is made of.
-    if (!move.parkour && Math.abs(move.x - node.x) === 1 && Math.abs(move.z - node.z) === 1 && diagonalInWater(movements, node, move)) return false;
+    // 4 s without a step, whatever the search said. A level diagonal step that leaves or enters a cell of water is taken as the two straight steps it is made of (a climb out of the water stays).
+    if (!move.parkour && move.y === node.y && Math.abs(move.x - node.x) === 1 && Math.abs(move.z - node.z) === 1 && diagonalInWater(movements, node, move)) return false;
     if (!move.parkour && !throughBlockers(movements, node, move)) return false;
     // A jump over a gap passes cells that are not nodes: a shut door there would not be opened.
     if (move.parkour) {

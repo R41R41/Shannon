@@ -480,6 +480,17 @@ export function sealedAtWords(bot: any, cell: Cell, rule: Pick<DigRule, 'names'>
   return null;
 }
 
+/** What the water in a cell is when it flows ("水の流れ 2", "落ちる水"), or null: no water, a source or no block. */
+export function flowingWaterAt(bot: any, cell: Cell | null): string | null {
+  if (!cell) return null;
+  const block = blockAt(bot, cell);
+  if (!block || block.name !== 'water') return null;
+  let level = 0;
+  try { level = Number(block.getProperties?.()?.level ?? block.metadata ?? 0); } catch { level = Number(block.metadata ?? 0); }
+  if (!Number.isFinite(level) || level === 0) return null;
+  return level >= 8 ? '落ちる水' : `水の流れ ${level}`;
+}
+
 const AIR = /^(air|cave_air|void_air)$/u;
 /** How far down a place in the air is looked under for its floor. */
 const FLOOR_LOOK = 24;
@@ -1035,6 +1046,11 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
         if (ahead && !state.avoid.has(keyOf(ahead)) && !targets.some(cell => keyOf(cell) === keyOf(ahead))) {
           state.avoid.add(keyOf(ahead));
           blackBoxOf(host)?.note('avoid', { at: [ahead.x, ahead.y, ahead.z], why: 'stuck' });
+        }
+        // Run 47 (hold 7): held in flowing water (swimming upstream, against a wall and under a ceiling) is not mended by drawing again: after two tries it is said, with the way out.
+        const wet = flowingWaterAt(bot, feetCell(bot));
+        if (wet && mends >= 2) {
+          return fail('stuck', `流れる水の中（${cellText(feetCell(bot)!)} は ${wet}）で ${GO_STUCK_MS / 1000}秒ずつ進めない（上流へ泳いでも押し戻される）`, '上流の水源を汲む（use の bucket）かブロックで塞ぐか、別の道を');
         }
         mends++;
         if (mends > GO_REPAIRS) {

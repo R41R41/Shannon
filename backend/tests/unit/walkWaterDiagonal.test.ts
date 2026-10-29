@@ -42,3 +42,16 @@ describe('a route through water', () => {
     }
   });
 });
+
+describe('flowing water', () => {
+  it('is told by its level: a flow, a falling stream, and none for a source or dry ground', async () => {
+    const { flowingWaterAt } = await import('../../src/services/minebot/utils/primitives/go.js');
+    const world: Ground = (x, y, z) => (y < FLOOR ? 'stone' : x === 1 && y === FLOOR && z === 0 ? 'water[level=2]' : x === 2 && y === FLOOR && z === 0 ? 'water[level=9]' : x === 3 && y === FLOOR && z === 0 ? 'water[level=0]' : 'air');
+    const sim = makeSim(world, { start: [0.5, FLOOR, 0.5] });
+    expect(flowingWaterAt(sim.bot, { x: 1, y: FLOOR, z: 0 })).toBe('水の流れ 2');
+    expect(flowingWaterAt(sim.bot, { x: 2, y: FLOOR, z: 0 })).toBe('落ちる水');
+    expect(flowingWaterAt(sim.bot, { x: 3, y: FLOOR, z: 0 })).toBeNull();
+    expect(flowingWaterAt(sim.bot, { x: 4, y: FLOOR, z: 0 })).toBeNull();
+    expect(flowingWaterAt(sim.bot, null)).toBeNull();
+  });
+});

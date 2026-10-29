@@ -569,14 +569,15 @@ try {
     await reset(actor);
     await ask('tp ' + ACTOR + ' -10 100 -10'); await sleep(600);
     await ask('fill 7 100 -16 16 105 16 minecraft:air'); await ask('fill 10 100 -16 13 102 16 minecraft:stone');
-    await ask('item replace entity ' + ACTOR + ' hotbar.0 with minecraft:iron_pickaxe');
+    await ask('give ' + ACTOR + ' minecraft:iron_pickaxe 1'); await sleep(800);
     for (let slot = 1; slot <= 8; slot++) await ask('item replace entity ' + ACTOR + ' hotbar.' + slot + ' with minecraft:cobblestone 64');
     for (let slot = 0; slot <= 25; slot++) await ask('item replace entity ' + ACTOR + ' container.' + slot + ' with minecraft:cobblestone 64');
     await ask('effect give ' + ACTOR + ' minecraft:resistance 600 4 true'); await sleep(500);
     await ask('tp ' + ACTOR + ' 8.5 100 0.5'); await sleep(2500);
+    report.goFullPackPack = (actor.inventory.items() as any[]).filter(item => /pickaxe/u.test(item.name)).map(item => item.name + '@' + item.slot).join(',') + ' items=' + (actor.inventory.items() as any[]).length;
     const run = await act(body, { hands: [{ do: 'go', to: { x: 15, y: 100, z: 0 }, canDig: ['stone'], maxDig: 60, seconds: 90 }] }, { seconds: 100 });
     const line = run.parsed?.lines?.[0];
-    report.goFullPack = { ms: run.ms, goal: line?.goal, line: String(line?.line).slice(0, 200), stoppedBy: run.parsed?.stoppedBy ?? null };
+    report.goFullPack = { pack: report.goFullPackPack, ms: run.ms, goal: line?.goal, line: String(line?.line).slice(0, 200), stoppedBy: run.parsed?.stoppedBy ?? null };
     check('run 47 hold 5: a go digging through stone with a pack that fills on the way arrives and says the pack is full (it is not stopped for it)', line?.goal === 'done' && /持ち物が満杯/u.test(String(line?.line)) && run.parsed?.stoppedBy !== 'inventoryFull', JSON.stringify(report.goFullPack).slice(0, 400));
     produce('measure/go-fullpack', null, { output: report.goFullPack as Record<string, unknown> });
     await ask('fill 7 100 -16 16 105 16 minecraft:air'); await ask('kill @e[type=item]'); await ask('tp ' + ACTOR + ' 0.5 100 0.5');
@@ -632,7 +633,7 @@ try {
     const run = await act(body, { hands: [{ do: 'go', to: { x: 14, y: 100, z: -3 }, waterOk: true, seconds: 40 }] }, { seconds: 50 });
     const line = run.parsed?.lines?.[0];
     report.goWaterBend = { ms: run.ms, goal: line?.goal, line: String(line?.line).slice(0, 220) };
-    check('run 47 hold 7: a go upstream in flowing water round a corner under a ceiling arrives', line?.goal === 'done' && run.ms < 30_000, JSON.stringify(report.goWaterBend).slice(0, 400));
+    check('run 47 hold 7: a go upstream in flowing water under a ceiling arrives, or stops within 15 s saying the water holds it (stuck, with the flow and the way out), never 40 s of tries', (line?.goal === 'done' && run.ms < 30_000) || (/stuck: 流れる水の中/u.test(String(line?.line)) && run.ms < 15_000), JSON.stringify(report.goWaterBend).slice(0, 400));
     produce('measure/go-waterbend', null, { output: report.goWaterBend as Record<string, unknown> });
     await ask('fill 7 100 -7 16 104 5 minecraft:air'); await ask('tp ' + ACTOR + ' 0.5 100 0.5');
     await reset(actor);
