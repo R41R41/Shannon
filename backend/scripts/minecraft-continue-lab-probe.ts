@@ -538,6 +538,32 @@ try {
     await reset(actor);
   }
 
+  // ---- run 47 (hold 2): a hollow whose two ways out (west under an open trapdoor, south-west past its plate) are shut by the plate's corner and a pane: the diagonal step is not taken
+  if (wanted.has('go_hollow')) {
+    await reset(actor);
+    await ask('tp ' + ACTOR + ' -10 100 -10'); await sleep(600);
+    const set = async (x: number, y: number, z: number, block: string) => { await ask('setblock ' + x + ' ' + y + ' ' + z + ' minecraft:' + block); };
+    for (const z of [0, 1]) await set(10, 100, z, 'cobblestone');
+    for (const y of [101, 102]) { await set(10, y, -1, 'spruce_log'); await set(11, y, 0, 'cobblestone'); await set(11, y, 1, 'cobblestone'); await set(10, y, 2, 'cobblestone'); }
+    await set(10, 102, 1, 'glass_pane'); await set(9, 102, 0, 'spruce_trapdoor[facing=west,half=bottom,open=true,powered=false,waterlogged=false]');
+    for (const x of [9, 10, 11]) for (const z of [-1, 0, 1, 2]) await set(x, 103, z, 'spruce_log');
+    await ask('effect give ' + ACTOR + ' minecraft:resistance 600 4 true'); await sleep(500);
+    const enter = async () => { await ask('tp ' + ACTOR + ' 10.5 101 0.5'); await sleep(2500); };
+    await enter();
+    const shut = await act(body, { hands: [{ do: 'go', to: { x: 9, y: 100, z: 0 }, seconds: 40 }] }, { seconds: 50 });
+    const shutLine = shut.parsed?.lines?.[0];
+    report.goHollowShut = { ms: shut.ms, goal: shutLine?.goal, line: String(shutLine?.line).slice(0, 240) };
+    check('run 47 hold 2: a go out of the hollow whose ways are shut by a pane and an open trapdoor stops at once with the reason, without standing against the plate', shutLine?.goal !== 'done' && shut.ms < 8_000 && /glass_pane|spruce_trapdoor/u.test(String(shutLine?.line)) && !/stuck/u.test(String(shutLine?.line)), JSON.stringify(report.goHollowShut).slice(0, 400));
+    await enter();
+    const dug = await act(body, { hands: [{ do: 'go', to: { x: 9, y: 100, z: 0 }, canDig: ['spruce_trapdoor', 'glass_pane'], seconds: 40 }] }, { seconds: 50 });
+    const dugLine = dug.parsed?.lines?.[0];
+    report.goHollowDug = { ms: dug.ms, goal: dugLine?.goal, line: String(dugLine?.line).slice(0, 240) };
+    check('run 47 hold 2: with the trapdoor and the pane allowed the same go digs its way out and arrives', dugLine?.goal === 'done' && dug.ms < 15_000, JSON.stringify(report.goHollowDug).slice(0, 400));
+    produce('measure/go-hollow', null, { output: { shut: report.goHollowShut, dug: report.goHollowDug } });
+    await ask('fill 8 100 -2 12 104 3 minecraft:air'); await ask('tp ' + ACTOR + ' 0.5 100 0.5');
+    await reset(actor);
+  }
+
   // ---- A-12 (body): the head asks for a hold (incident.take): the world stops, the box holds the notes, the resume brings the world back
   if (runs('head_take')) {
     await reset(actor);

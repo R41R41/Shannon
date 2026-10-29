@@ -253,7 +253,7 @@ export function installDoorRules(movements: any): void {
   const getNeighbors = movements.getNeighbors.bind(movements);
   movements.getNeighbors = (node: any) => (getNeighbors(node) as any[]).filter(move => {
     // Run 47 (hold 1): an open trapdoor at the head of the next cell stands as a wall on one edge of its cell; the search took it as open ground and the body stood 3 s against it.
-    if (!move.parkour && platesAcross(movements, node, move)) return false;
+    if (!move.parkour && !throughBlockers(movements, node, move)) return false;
     // A jump over a gap passes cells that are not nodes: a shut door there would not be opened.
     if (move.parkour) {
       const sx = Math.sign(move.x - node.x), sz = Math.sign(move.z - node.z);
@@ -286,20 +286,84 @@ const OPPOSITE_SIDE = { west: 'east', east: 'west', north: 'south', south: 'nort
  * (feet and head; for a climb, those of the level it climbs to as well) with their plate on the edge facing the source, and the source column's cells with theirs on the edge
  * facing the next. The move is not one the body can make (run 47, hold 1).
  */
-function platesAcross(movements: any, node: any, move: any): boolean {
+function platesAcross(movements: any, node: any, move: any): any[] {
   const dx = move.x - node.x, dz = move.z - node.z;
-  if (Math.abs(dx) + Math.abs(dz) !== 1) return false;
+  if (Math.abs(dx) + Math.abs(dz) !== 1) return [];
   const toward = dx < 0 ? 'west' : dx > 0 ? 'east' : dz < 0 ? 'north' : 'south';
   const from = OPPOSITE_SIDE[toward];
   const levels = new Set<number>([node.y, node.y + 1]);
   if (move.y > node.y) { levels.add(move.y); levels.add(move.y + 1); }
+  const found: any[] = [];
   for (const y of levels) {
     const ahead = movements.getBlock(node, dx, y - node.y, dz), here = movements.getBlock(node, 0, y - node.y, 0);
     for (const [block, side] of [[ahead, from], [here, toward]] as const) {
-      if (block?.name && isDoorlike(String(block.name)) && cellWay(mapBlockOf(block)) === 'open' && plateOnEdge(block.shapes, side)) return true;
+      if (block?.name && isDoorlike(String(block.name)) && cellWay(mapBlockOf(block)) === 'open' && plateOnEdge(block.shapes, side)) found.push(block);
     }
   }
-  return false;
+  return found;
+}
+
+const BODY_HALF = 0.3, BODY_HEIGHT = 1.8, SWEEP_STEPS = 20;
+/** Whether a collision box is not a whole cell wide on both horizontal axes (a plate, a pane, a post, a bar). */
+const thinShapes = (shapes: ReadonlyArray<ReadonlyArray<number>>) => shapes.every(box => (box[3] ?? 1) - (box[0] ?? 0) < 0.99 || (box[5] ?? 1) - (box[2] ?? 0) < 0.99);
+/**
+ * Where the feet stand on a node: the top of the block under the cell when it has a box (a slab, soul sand), else the cell's floor.
+ */
+function feetOf(movements: any, at: { x: number; y: number; z: number }): number {
+  const under = movements.getBlock(at, 0, -1, 0);
+  const top = Number(under?.height);
+  return under?.shapes?.length && Number.isFinite(top) && top > at.y - 1.01 && top < at.y + 0.01 ? top : at.y;
+}
+/**
+ * Run 47 (hold 2): a diagonal step passes the corner of the cells beside it, and the route search only asks that one of the two be free (as cells). The body is 0.6 wide: swept along the
+ * line from the middle of the cell to the middle of the next, it meets the thin boxes of the cells round the corner at the height of its feet and head (an open trapdoor's or door's plate,
+ * which the door rules made "free", and the thin boxes of a pane, a fence, a bar at a corner: whole blocks at a corner are slid along). Those blocks are returned; one the body stands against at
+ * the start is not (it is not in the way of the step).
+ */
+function sweepBlockers(movements: any, node: any, move: any): any[] {
+  const dx = move.x - node.x, dz = move.z - node.z;
+  if (move.parkour || Math.abs(dx) !== 1 || Math.abs(dz) !== 1) return [];
+  const y0 = Math.min(feetOf(movements, node), feetOf(movements, move)) + 0.02, y1 = Math.max(feetOf(movements, node), feetOf(movements, move)) + BODY_HEIGHT;
+  const found = new Map<string, any>();
+  for (let cy = Math.floor(y0); cy <= Math.floor(y1 - 1e-6); cy++) {
+    for (const [ox, oz] of [[0, 0], [dx, 0], [0, dz], [dx, dz]] as const) {
+      const block = movements.getBlock(node, ox, cy - node.y, oz);
+      if (!block?.name || !Array.isArray(block.shapes) || !block.shapes.length) continue;
+      const corner = (ox === 0) !== (oz === 0);
+      const plate = isDoorlike(String(block.name)) && cellWay(mapBlockOf(block)) === 'open';
+      if (!plate && !(corner && block.physical && thinShapes(block.shapes))) continue;
+      const at = block.position;
+      const hits = (t: number): boolean => {
+        const px = node.x + 0.5 + dx * t, pz = node.z + 0.5 + dz * t;
+        return block.shapes.some((box: number[]) =>
+          px - BODY_HALF < at.x + (box[3] ?? 1) - 1e-3 && px + BODY_HALF > at.x + (box[0] ?? 0) + 1e-3 &&
+          pz - BODY_HALF < at.z + (box[5] ?? 1) - 1e-3 && pz + BODY_HALF > at.z + (box[2] ?? 0) + 1e-3 &&
+          y1 > at.y + (box[1] ?? 0) + 1e-3 && y0 < at.y + (box[4] ?? 1) - 1e-3);
+      };
+      if (hits(0)) continue;
+      for (let i = 1; i <= SWEEP_STEPS; i++) if (hits(i / SWEEP_STEPS)) { found.set(`${at.x},${at.y},${at.z}`, block); break; }
+    }
+  }
+  return [...found.values()];
+}
+
+/**
+ * The blocks in the way of a move that the body's shape meets: the plates (straight steps) and, for a diagonal, what the swept body meets. They are dug when the walk may dig them
+ * (the move's cost grows by the labour, as the search's own breaking does), else the move is not one the search takes (false).
+ */
+function throughBlockers(movements: any, node: any, move: any): boolean {
+  const blockers = [...platesAcross(movements, node, move), ...sweepBlockers(movements, node, move)];
+  if (!blockers.length) return true;
+  const toBreak: any[] = Array.isArray(move.toBreak) ? move.toBreak : (move.toBreak = []);
+  for (const block of blockers) {
+    if (toBreak.some(position => position.x === block.position.x && position.y === block.position.y && position.z === block.position.z)) continue;
+    if (!movements.canDig || typeof movements.safeOrBreak !== 'function') return false;
+    const proxy = Object.create(block); proxy.safe = false; proxy.physical = false;
+    const cost = movements.safeOrBreak(proxy, toBreak);
+    if (!(cost < 100)) return false;
+    move.cost += cost;
+  }
+  return true;
 }
 
 /**
