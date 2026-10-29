@@ -4,6 +4,7 @@ import { dropBurnsIn } from '../dropFate.js';
 import { blockInSight } from '../probeTools.js';
 import { cellText, freeSlots, inventoryCount, stopped, wait, waitUntil, type StepContext, type StepOutcome } from './common.js';
 import { dig } from './dig.js';
+import { digRuleOf, go } from './go.js';
 import { place } from './place.js';
 import { use } from './use.js';
 import { withinTake } from './pickup.js';
@@ -26,12 +27,14 @@ import { BUCKET_REACH, DIG_REACH_PLAN, FACES, OPPOSITE, clickLands, dist, eyeAtC
  * no lava is within a cell of its feet, head or the cell over it (the rim of a pool, a cell down and aside, is fine), and the water stays over the
  * hole until the obsidian is out, so that the lava round it is set by the water and does not run in.
  */
-export interface ObsidianArgs { at: Cell[]; count?: number; seconds?: number; canPlace?: string[]; maxPlace?: number }
+export interface ObsidianArgs { at: Cell[]; count?: number; seconds?: number; canPlace?: string[]; maxPlace?: number; /** What may be dug to make a way to a source shut in rock (default: stone, deepslate, dirt). */ canDig?: string[] }
 
 export const OBSIDIAN_DEFAULTS = { count: 1, seconds: 90, maxPlace: 6 } as const;
 /** How many places to stand and pour from are tried for one source before it is given up. */
 const MAX_TRIES = 5;
 const MAX_DIG_TRIES = 4;
+/** Run 47 (hold 7): what the hand may dig to make a way to a lava source shut in rock when the planner named nothing. */
+const DEFAULT_CARVE = ['stone', 'deepslate', 'dirt'];
 /** The longest the lava is given to set once the water is in (the game does it in a few ticks; the flow in a second). */
 const SET_WAIT_MS = 3500;
 const PICKUP_WAIT_MS = 2500;
@@ -314,6 +317,47 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
     }
   };
 
+  /**
+   * Run 47 (hold 7): a lava source with rock on every face (up, north, east, west, down; the south one flowing) has nowhere to pour water into and no place to stand that sees it: the hand
+   * ended at once with "unreachable" (0 pours, 20 ms). A person digs a way in from the side: a tunnel at the level over the source, two cells long, ending over the rock beside the source,
+   * and then the cell over the source itself (lava does not climb into it). Water poured into that cell turns the source to obsidian. The cells are chosen so that no lava or water lies beside
+   * them (nothing runs into the tunnel), and the floor under each is rock. Null when the way is made (the plan is then drawn again), else why it cannot be made, naming the cells.
+   */
+  const carveWay = async (lava: Cell): Promise<Why | null> => {
+    const words = args.canDig?.length ? args.canDig : DEFAULT_CARVE;
+    const rule = digRuleOf(bot.registry, words);
+    const here = feetCell(bot)!;
+    const nameOf = (cell: Cell) => read(cell.x, cell.y, cell.z)?.name ?? '未ロード';
+    const mayBe = (cell: Cell) => { const block = read(cell.x, cell.y, cell.z); return !!block && (isOpenCell(block) || (isSolid(block) && rule.names.has(block.name))); };
+    const wet = (cell: Cell) => [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, 1, 0], [0, 0, 0]].some(([dx, dy, dz]) => { const block = read(cell.x + dx!, cell.y + dy!, cell.z + dz!); return block?.name === 'lava' || block?.name === 'water'; });
+    const over = shift(lava, 'up');
+    const reasons: string[] = [];
+    const ways: Array<{ k1: Cell; k2: Cell; score: number }> = [];
+    for (const side of HORIZONTAL) {
+      const k1 = shift(over, side), k2 = shift(k1, side);
+      const needs: Array<[Cell, string]> = [[over, '源の真上'], [k1, '通路'], [shift(k1, 'up'), '通路の上'], [k2, '立ち位置'], [shift(k2, 'up'), '立ち位置の上']];
+      const shut = needs.find(([cell]) => !mayBe(cell));
+      if (shut) { reasons.push(`${side === 'north' ? '北' : side === 'south' ? '南' : side === 'west' ? '西' : '東'}は ${cellText(shut[0])}（${shut[1]}）が ${nameOf(shut[0])}`); continue; }
+      const floorless = [k1, k2].find(cell => !isSolid(read(cell.x, cell.y - 1, cell.z)));
+      if (floorless) { reasons.push(`${cellText({ ...floorless, y: floorless.y - 1 })} が ${nameOf({ ...floorless, y: floorless.y - 1 })}で床にならない`); continue; }
+      const wetCell = [k1, shift(k1, 'up'), k2, shift(k2, 'up')].find(wet);
+      if (wetCell) { reasons.push(`${cellText(wetCell)} の隣に水か溶岩がある`); continue; }
+      ways.push({ k1, k2, score: dist(k2, here) });
+    }
+    ways.sort((a, b) => a.score - b.score);
+    const way = ways[0];
+    if (!way) {
+      const rock = FACES.map(face => { const cell = shift(lava, face); return `${cellText(cell)} ${nameOf(cell)}`; }).slice(0, 6).join('・');
+      return { code: 'unreachable', text: `${cellText(lava)} は岩に囲まれ（${rock}）、掘って面と立ち位置を作る道も無い: ${reasons.slice(0, 3).join('、') || '掘ってよい物（canDig）に無い'}`, at: lava };
+    }
+    counts.notes.push(`${cellText(lava)} は岩に囲まれていたので、${cellText(way.k2)} から ${cellText(way.k1)} と ${cellText(over)} を掘って面を作った`);
+    const arrived = await go(ctx, { goals: [way.k2], canDig: words, maxDig: 12, maxPlace: 0, seconds: Math.max(10, Math.min(40, Math.floor((ctx.deadline - Date.now()) / 1000))) });
+    if (!arrived.ok) return { code: 'unreachable', text: `${cellText(way.k2)} まで掘って近づけない: ${arrived.text.slice(0, 80)}`, at: way.k2 };
+    const opened = await dig(ctx, { at: [way.k1, over].filter(cell => !isOpenCell(read(cell.x, cell.y, cell.z))), collect: false });
+    if (!opened.ok) return { code: 'unreachable', text: `面を掘れなかった: ${opened.text.slice(0, 80)}`, at: over };
+    return null;
+  };
+
   /** One lava source made into obsidian and taken; null when it is, else why not. */
   const oneSource = async (lava: Cell): Promise<Why | null> => {
     let waterCell: Cell | null = null;
@@ -323,6 +367,7 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
     let needsCover = setHard && !!burnsAt() && inventoryCount(bot, 'water_bucket') > 0;
     const excluded = new Set<string>();
     let last: Why = { code: 'unreachable', text: `${cellText(lava)} に水を注げる所へ行けない`, at: lava };
+    let carved = false;
     for (let attempt = 0; attempt < MAX_TRIES && (!setHard || needsCover); attempt++) {
       if (timeIsUp(ctx)) return { code: 'limit_time', text: '時間切れ', at: lava };
       const now = read(lava.x, lava.y, lava.z);
@@ -333,6 +378,14 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
       if (!plan) {
         if (attempt > 0) return last;
         const dangerous = planPours(read, lava, { from: here, excluded, footingOk: false, ignoreHazard: true })[0];
+        if (!dangerous && !carved) {
+          carved = true;
+          const made = await carveWay(lava);
+          if (made) return made;
+          last = { code: 'unreachable', text: `${cellText(lava)} の面と立ち位置を掘って作ったが、水を注げる所が見つからない`, at: lava };
+          attempt = -1;
+          continue;
+        }
         return dangerous
           ? { code: 'lava_danger', text: `${cellText(lava)} に届く立てる所（${cellText(dangerous.stand)} など）は溶岩の隣（${standHazard(read, dangerous.stand) ?? '溶岩'}）だけ`, at: dangerous.stand }
           : { code: 'unreachable', text: `${cellText(lava)} に水を注ぎ、掘れる立ち位置が見つからない（届く範囲に、見えて当てる面のある立てる所が無い${foot ? '' : '。足場を置くなら canPlace'}）`, at: lava };
@@ -431,7 +484,7 @@ const BLOCK_NAME = /^[a-z][a-z0-9_]{0,39}$/u;
  * `canPlace`, `maxPlace`; `at` 1 to 8, `seconds` 5 to 120, `count` 1 to 64): a field the kind does not take, a missing `at`, a range. Null when it is well formed.
  */
 export function obsidianProblem(hand: Record<string, unknown>, cellOk: (spec: unknown) => boolean): string | null {
-  const allowed = new Set([...COMMON_FIELDS, 'at', 'count', 'seconds', 'canPlace', 'maxPlace']);
+  const allowed = new Set([...COMMON_FIELDS, 'at', 'count', 'seconds', 'canPlace', 'maxPlace', 'canDig']);
   const extra = Object.keys(hand).filter(key => hand[key] !== undefined && !allowed.has(key));
   if (extra.length) return `${extra.join('・')} は使えない（obsidian の欄: at・count・seconds・canPlace・maxPlace）`;
   const at = hand.at;

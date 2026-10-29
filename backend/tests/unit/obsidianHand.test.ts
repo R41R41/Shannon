@@ -56,7 +56,8 @@ describe('obsidian: a lava source on a shore', () => {
     const sim = makeHandsSim(over(flat, lake()), { items: stacks(WATER, PICK) });
     let lowest = 99;
     const outcome = await drive(sim, run(sim, { at: [at(8, 63, 0)] }), () => { lowest = Math.min(lowest, sim.bot.entity.position.y); });
-    expect(outcome.text).toMatch(/^obsidian 済 黒曜石 1 個・水の注ぎ 1 回・立ち直し 0 回・水回収済/u);
+    // Run 47 (hold 7): no diagonal step leaves or enters water, so the walk out of the poured water may take one more stand than before (0 or 1).
+    expect(outcome.text).toMatch(/^obsidian 済 黒曜石 1 個・水の注ぎ 1 回・立ち直し [01] 回・水回収済/u);
     expect(outcome.ok).toBe(true);
     expect(sim.count('obsidian')).toBe(1);
     expect(sim.count('water_bucket')).toBe(1);
@@ -285,7 +286,7 @@ describe('obsidian: its limits, and the act round it', () => {
     const acting = runAct(sim.bot, ACT_HANDS.parse([{ do: 'obsidian', at: [at(8, 63, 0)], count: 1, seconds: 60 }]), undefined, undefined, { tickMs: 50 });
     const result: any = JSON.parse((await drive(sim, acting)).result);
     expect(result.ok).toBe(true);
-    expect(result.lines[0].line).toMatch(/^obsidian 済 黒曜石 1 個・水の注ぎ 1 回・立ち直し 0 回・水回収済（\d+\.\d秒）$/u);
+    expect(result.lines[0].line).toMatch(/^obsidian 済 黒曜石 1 個・水の注ぎ 1 回・立ち直し [01] 回・水回収済（\d+\.\d秒）$/u);
 
     // The cells may be counted from the feet (rel).
     const relative = makeHandsSim(over(flat, lake()), { items: stacks(WATER, PICK) });
@@ -357,5 +358,25 @@ describe('obsidian: the plan and the head\'s ranges', () => {
     expect(obsidianProblem(hand({ count: 65 }), ok)).toContain('count は 1〜64');
     expect(obsidianProblem(hand({ canPlace: ['Cobble Stone'] }), ok)).toContain('canPlace');
     expect(obsidianProblem(hand(), () => false)).toContain('読めない');
+  });
+});
+
+describe('obsidian: a lava source shut in rock (run 47, hold 7)', () => {
+  // A source with rock on every face (and the ground to the surface over it): the plan had no cell to pour into and the hand ended at once, "unreachable", 0 pours. The way is dug in from the side
+  // at the level over the source, and the cell over the source last; the water poured there makes the obsidian.
+  const shut = (): Ground => over(flat, box('lava', 10, 10, 62, 62, 0, 0));
+  it('digs a way in and a face to pour on, pours, mines the obsidian and takes the water back', async () => {
+    const sim = makeHandsSim(shut(), { items: stacks(WATER, PICK) });
+    const outcome = await drive(sim, run(sim, { at: [at(10, 62, 0)], seconds: 120 }));
+    expect(outcome.text).toMatch(/^obsidian 済 黒曜石 1 個/u);
+    expect(outcome.text).toContain('岩に囲まれていたので');
+    expect(outcome.ok).toBe(true);
+  });
+  it('says which cells shut it in when nothing may be dug (canDig names nothing that is there)', async () => {
+    const sim = makeHandsSim(shut(), { items: stacks(WATER, PICK) });
+    const outcome = await drive(sim, run(sim, { at: [at(10, 62, 0)], seconds: 60, canDig: ['sand'] }));
+    expect(outcome.ok).toBe(false);
+    expect(outcome.text).toMatch(/^obsidian 止まった unreachable: \(10,62,0\) は岩に囲まれ（.*stone.*）、掘って面と立ち位置を作る道も無い/u);
+    expect(sim.bot.dugBlocks ?? []).toEqual([]);
   });
 });
