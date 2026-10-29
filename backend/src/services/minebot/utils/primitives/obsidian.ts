@@ -409,6 +409,8 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
     if (failure) failures.push(failure);
   }
   counts.obsidian = gained();
+  // Run 46 (hold 7): a source of water left over the pool sank the next stand (two deep, the swim reflex stopping every dig): whatever ended the hand, the water is taken back once more.
+  if (waterLeft && await scoopBack(waterLeft)) waterLeft = null;
 
   const waterBack = inventoryCount(bot, 'water_bucket') >= bucketsAtStart;
   if (!waterBack && waterLeft) counts.notes.push(`水が ${cellText(waterLeft)} に残った`);

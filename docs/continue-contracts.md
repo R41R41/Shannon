@@ -1394,3 +1394,13 @@ interface IncidentTakeResult {
 - act に付いた時：体はまず take をし、保留した場合その act は「保留中」で断る（`failureType: held`。result は `{"held": "...", "incident": {...}}`。`incident` の欄は重い失敗の保留と同じ：`id・heavy・why・held・frozen・freeze・notHeld・box・scene`）。保留しなかった場合は act をそのまま走らせ、その受け取りに `incident`（`held: false`・`notHeld`）を付ける。release に付いた時は上の `IncidentTakeResult`。
 - 再開：頭の保留の `resume`（release に `incident.resume = <頭の id>`）で、体は世界を戻し（`/tick unfreeze`）、保留の記録を消す（`done: true`）。別の id の resume は何もしない（`done: false`・`hold` に今の保留）。体が何も保留していない時の resume・cancel は、世界だけ動かして `done: true`。
 - 体は `take` を頭が自分で見つけた詰まりの時にだけ受ける。`--hold-on-failure` の判断は頭がする（体は context の `hold` を見ない）。
+
+#### A-12 の体の型（足し：空き枠と、水の中の掘りの停止の文）
+```ts
+/** 観測の state.world への足し。体の `freeSlots(bot)` と同じ数え（持ち物の 9〜44 番のうち空の枠。pickup の「空き 0 枠」と同じ）。観測の inventory は種類ごとに 1 行にまとめた形なので、行の数では数えない。 */
+interface WorldState { freeSlots: number }
+```
+- 頭の完了条件 `free>=n` は `state.world.freeSlots` を読む。
+- 水の中で掘る手（`dig`・`mine`・`obsidian`）が泳ぎの反射（息が半分以下）に止められた時、その手の行（`stopped`）の文の後ろに理由と次の手が付く：「水の中で掘っている（頭が水／足元が水）。水の中の掘りは遅く、息が続かない（息 n/20）。水源を汲むか、ブロックで水を塞ぐか、水の外の立ち位置から掘る」。同じ所（足のマス）で 2 回目以降は「（同じ所で n 回目）」を足す。反射そのものは変えていない。
+- `obsidian` の手は、どう終わっても、自分で注いだ水の源が残っていれば終わりにもう一度汲み戻す。持ち物が満杯の時は水を注ぐ前に `inventory_full`（「持ち物が満杯（36/36）で黒曜石を拾えない。drop で空ける」）で止まる。
+- `dig` は、掘り始めてからそのブロックの掘る時間を 3 秒越え、体が届く所（`DIG_REACH`）を 1 マスより外へ流されている時、掘りを止めて `out_of_reach`（「掘っている間に体が流されて届かなくなった」）で返す。

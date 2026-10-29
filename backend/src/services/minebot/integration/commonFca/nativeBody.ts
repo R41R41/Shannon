@@ -32,6 +32,7 @@ import { renderActReport, takeActReport } from '../../utils/actReport.js';
 import { incidentsOf, withIncidentText, type HoldRelease } from '../../utils/incidents.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { installLife, type LifeKeeper } from '../../utils/life.js';
+import { freeSlots } from '../../utils/primitives/common.js';
 import { deathLedgerOf } from '../../utils/deathLedger.js';
 import { lapseOf, madenessOf, type BodyNow, type Lapse } from './lapse.js';
 import type { BodyTimes, BodyVersion, HandStart, ItemOutcome } from './continueContract.js';
@@ -297,7 +298,7 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
       stateAt: new Date(now).toISOString(), receivedAt: new Date(now).toISOString(), connected: facts.connected === true,
       // Run 44: the hold the body keeps (its file survives a restart), for the head to compare with its own (a hold of a task that is gone is ended).
       // Continue contracts (3): the benches, furnaces, chests and beds near, with the proof of the scan (the head's `near` is judged from it).
-      state: JSON.parse(JSON.stringify({ world: { ...world, utilities: utilitiesOf(this.bot, this.sequence, now) }, primitives: primitives.state, activeCapabilities: activeActionCapabilities(this.bot), localSafety: this.lastSafety,
+      state: JSON.parse(JSON.stringify({ world: { ...world, utilities: utilitiesOf(this.bot, this.sequence, now), freeSlots: freeSlots(this.bot) }, primitives: primitives.state, activeCapabilities: activeActionCapabilities(this.bot), localSafety: this.lastSafety,
         incidentHold: incidentsOf(this.bot)?.held() ?? null,
         // Continue contracts: the life (5), the start-up and connection ids (5), who holds the body (4).
         combat: { recentHits: recentHitsOf(this.bot) },

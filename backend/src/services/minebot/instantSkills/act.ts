@@ -30,6 +30,7 @@ import { obsidian, obsidianProblem } from '../utils/primitives/obsidian.js';
 import { portal, portalProblem } from '../utils/primitives/portal.js';
 import { fight, HandCut } from '../utils/primitives/fight.js';
 import { LINE_MAX, LINE_MAX_WITH_CAUSE } from '../utils/actReport.js';
+import { waterDigWords } from '../utils/waterDigWords.js';
 import { mine } from '../utils/primitives/mine.js';
 import { make } from '../utils/primitives/make.js';
 import { smelt } from '../utils/primitives/smelt.js';
@@ -606,7 +607,9 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
           if (!control.signal.aborted && signal?.aborted) onCut();
           const word = closedWord(report.failureType ?? 'reflex');
           // A hand that was cut tells what it had done (fight: the blows, the health lost, who held the body).
-          const told = error instanceof HandCut ? `。${error.summary}` : '';
+          // Run 46 (hold 7): a dig under water stopped by the swim reflex says why, and what to do next.
+          const watery = error instanceof HandCut ? null : waterDigWords(bot, hand.do, report.stoppedWhy);
+          const told = error instanceof HandCut ? `。${error.summary}` : watery ? `。${watery}` : '';
           const line = clip(`${word}: ${report.stoppedWhy ?? '中断'}（手の途中）${told}`, told ? LINE_MAX_WITH_CAUSE : LINE_MAX), where = feetCell(bot) ?? undefined;
           const verdict: HandVerdict = { goal: (cutProgress?.done ?? 0) > 0 ? 'partial' : handOps > 0 ? 'failed' : 'not_started', end: 'cut', cutBy: outsideCut(),
             ...(report.failureType ? { code: report.failureType } : {}), ...(cutProgress ? { progress: cutProgress } : {}) };

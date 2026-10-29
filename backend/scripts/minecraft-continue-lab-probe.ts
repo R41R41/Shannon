@@ -436,6 +436,31 @@ try {
     await ask('setblock 3 100 0 minecraft:air'); await ask('tp ' + ACTOR + ' 0.5 100 0.5'); await reset(actor);
   }
 
+  // ---- run 46 (hold 7): a dig of obsidian from a pocket of water (two deep) is stopped by the swim reflex, and the line says why; the source taken back, the dig is done
+  if (wanted.has('obsidian_water')) {
+    await reset(actor);
+    await ask('tp ' + ACTOR + ' -10 100 -10'); await sleep(800);
+    for (const command of fs.readFileSync(path.resolve('scripts/lab/obsidian-water-fills.txt'), 'utf8').split('\n').filter(Boolean)) await ask(command, 5000);
+    const lab = (x: number, y: number, z: number) => ({ x: x - 116, y: y + 155, z: z - 228 });
+    const source = lab(123, -55, 236), target = lab(122, -55, 238);
+    await ask('setblock ' + source.x + ' ' + source.y + ' ' + source.z + ' minecraft:water'); await sleep(4000);
+    await ask('clear ' + ACTOR); await sleep(300);
+    await ask('effect give ' + ACTOR + ' minecraft:resistance 600 4 true'); await ask('give ' + ACTOR + ' minecraft:diamond_pickaxe 1'); await ask('give ' + ACTOR + ' minecraft:bucket 1'); await sleep(800);
+    await ask('gamemode survival ' + ACTOR); await ask('tp ' + ACTOR + ' ' + (lab(122.3, -56, 237.7).x) + ' ' + (lab(122.3, -56, 237.7).y) + ' ' + (lab(122.3, -56, 237.7).z)); await sleep(2500);
+    const firstRun = await act(body, { hands: [{ do: 'dig', at: [target], collect: false, seconds: 60 }] }, { seconds: 70 });
+    const first = firstRun.parsed?.lines?.[0];
+    report.obsidianWaterStop = { ms: firstRun.ms, stoppedBy: firstRun.parsed?.stoppedBy, code: first?.code, line: first?.line, oxygen: actor.oxygenLevel };
+    check('run 46 hold 7: a dig of obsidian from a pocket of water, stopped by the swim reflex, says that it digs in water, the air and the ways out', first?.status === 'stopped' && /水の中で掘っている/u.test(String(first?.line)) && /水源を汲むか/u.test(String(first?.line)), JSON.stringify(report.obsidianWaterStop).slice(0, 500));
+    // the source taken back: dry, the dig goes through
+    const second = await act(body, { hands: [{ do: 'use', item: 'bucket', at: [source] }, { do: 'wait', seconds: 4 }, { do: 'dig', at: [target], collect: false, seconds: 60 }] }, { seconds: 80 });
+    report.obsidianWaterDry = { ms: second.ms, lines: (second.parsed?.lines ?? []).map((line: any) => [line.do, line.status, line.goal, String(line.line).slice(0, 80)]) };
+    check('run 46 hold 7: with the source taken back (the bucket), the dig of the obsidian goes through', second.parsed?.lines?.at(-1)?.status === 'done' && String(actor.blockAt(new (actor.entity.position.constructor)(target.x, target.y, target.z))?.name) === 'air', JSON.stringify(report.obsidianWaterDry).slice(0, 500));
+    produce('measure/obsidian-water', null, { output: { stop: report.obsidianWaterStop, dry: report.obsidianWaterDry } });
+    await ask('tp ' + ACTOR + ' -10 100 -10'); await sleep(500);
+    await ask('kill @e[type=!player]'); await ask('fill 0 97 0 16 106 16 minecraft:air'); await ask('fill 0 90 0 16 99 16 minecraft:stone');
+    await reset(actor);
+  }
+
   // ---- A-12 (body): the head asks for a hold (incident.take): the world stops, the box holds the notes, the resume brings the world back
   if (runs('head_take')) {
     await reset(actor);
