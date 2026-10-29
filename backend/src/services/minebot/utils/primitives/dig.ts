@@ -100,6 +100,12 @@ export async function dig(ctx: StepContext, args: DigArgs): Promise<StepOutcome>
 
 interface DigTally { dug: number; open: number; /** The cell being dug now (cleared once it is counted). */ current: Cell | null }
 
+/** A body that has gone this far (m) beyond DIG_REACH of the block it is digging is clearly not digging it any more (the server breaks a block only within ~5.5 m of its face; the run saw 7.8 m): checked this often. */
+export const DIG_DRIFT_MARGIN = 1;
+export const DIG_DRIFT_CHECK_MS = 200;
+/** The dig must be this long past the time the block takes before a body out of reach ends it (a dig that finishes in its time is let finish: the simulated server does not look at the reach). */
+export const DIG_DRIFT_OVERDUE_MS = 3000;
+
 async function digCells(ctx: StepContext, args: DigArgs, tally: DigTally): Promise<StepOutcome> {
   const bot = ctx.bot;
   const cells = args.at ?? [];
@@ -162,9 +168,28 @@ async function digCells(ctx: StepContext, args: DigArgs, tally: DigTally): Promi
     if (exposing && guardState) guardState.allowAt = cellKey(cell);
     const started = Date.now();
     tally.current = cell;
+    // Run 46 (hold 6, the oplog of q22: 49 s between one dig of obsidian and the next operation): the water poured over the lava ran across the floor and carried the body
+    // 7 m away from the block while it dug (under water the dig is slow: the wait ran to its end). A body that has left the reach of the block it digs stops the dig at once and says so.
+    let drifted = false;
+    let stopWatching = () => {};
+    const expected = typeof bot.digTime === 'function' ? Number(bot.digTime(block)) || 0 : 0;
+    const digStarted = Date.now();
+    const drift = new Promise<'drifted'>(resolve => {
+      const timer = setInterval(() => {
+        // only a dig that is overdue (water over the block slows it fivefold; a body washed away never finishes it) and whose body is out of reach
+        if (Date.now() - digStarted > expected + DIG_DRIFT_OVERDUE_MS && eyeDistance(bot, cell) > DIG_REACH + DIG_DRIFT_MARGIN) { drifted = true; clearInterval(timer); resolve('drifted'); }
+      }, DIG_DRIFT_CHECK_MS);
+      stopWatching = () => clearInterval(timer);
+    });
     try {
-      const expected = typeof bot.digTime === 'function' ? Number(bot.digTime(block)) || 0 : 0;
-      const dug = await guard(ctx, digBlockVerified(bot, block), expected * 2 + 12_000);
+      const digging = digBlockVerified(bot, block);
+      digging.catch(() => undefined);
+      const dug = await guard(ctx, Promise.race([digging, drift]), expected * 2 + 12_000);
+      stopWatching();
+      if (drifted) {
+        letGo(bot);
+        return result(stopped(bot, 'out_of_reach', `${placeText(bot, cell)} の ${block.name} を掘っている間に体が流されて届かなくなった（目から${eyeDistance(bot, cell).toFixed(1)}m、${DIG_REACH}m まで。水の流れか押された）。立ち直して掘り直す`, cell));
+      }
       if (!dug) { letGo(bot); return result(stopped(bot, 'timeout', `${placeText(bot, cell)} の ${block.name} が時間内に掘れなかった（今 ${cellNow(bot, cell)}）`, cell)); }
     } catch (error) {
       if (error instanceof StepStopped || /Action interrupted/u.test(String((error as Error)?.message))) { letGo(bot); throw error; }
@@ -172,7 +197,7 @@ async function digCells(ctx: StepContext, args: DigArgs, tally: DigTally): Promi
       if (error instanceof LavaReleaseError) return result(stopped(bot, 'lava_behind', (error as Error).message, cell));
       if (error instanceof ServerDigUnconfirmedError) return result(stopped(bot, 'dig_unconfirmed', `${placeText(bot, cell)} の ${block.name} をサーバーが壊したと言わない（今 ${cellNow(bot, cell)}）`, cell));
       return result(stopped(bot, 'dig_failed', `${placeText(bot, cell)} の ${block.name} を掘れなかった: ${String((error as Error)?.message ?? error).slice(0, 100)}（今 ${cellNow(bot, cell)}）`, cell));
-    } finally { if (guardState && guardState.allowAt === cellKey(cell)) guardState.allowAt = undefined; }
+    } finally { stopWatching(); if (guardState && guardState.allowAt === cellKey(cell)) guardState.allowAt = undefined; }
     dugCells.push(cell);
     tally.dug++;
     tally.current = null;

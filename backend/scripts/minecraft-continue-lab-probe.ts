@@ -424,6 +424,18 @@ try {
     await reset(actor);
   }
 
+  // ---- run 46 (hold 6, the oplog of q22): a body carried away from the block it is digging (the water ran across the floor) waited 49 s for a dig that could not finish
+  if (runs('dig_drift')) {
+    await reset(actor);
+    await ask('setblock 3 100 0 minecraft:obsidian'); await ask('give ' + ACTOR + ' minecraft:diamond_pickaxe 1'); await sleep(800);
+    setTimeout(() => { void ask('tp ' + ACTOR + ' 12.5 100 0.5'); }, 2500);   // carried away
+    const run = await act(body, { hands: [{ do: 'dig', at: [{ x: 3, y: 100, z: 0 }], collect: false, seconds: 60 }] }, { seconds: 70 });
+    const line = run.parsed?.lines?.[0];
+    report.digDrift = { ms: run.ms, goal: line?.goal, code: line?.code, line: line?.line };
+    check('run 46 hold 6: a dig whose body is carried out of reach ends with out_of_reach in the block\'s own time plus a few seconds, not after the long guard', line?.code === 'out_of_reach' && run.ms < 22_000, JSON.stringify(report.digDrift).slice(0, 400));
+    await ask('setblock 3 100 0 minecraft:air'); await ask('tp ' + ACTOR + ' 0.5 100 0.5'); await reset(actor);
+  }
+
   // ---- A-12 (body): the head asks for a hold (incident.take): the world stops, the box holds the notes, the resume brings the world back
   if (runs('head_take')) {
     await reset(actor);
