@@ -2,7 +2,7 @@ import { Vec3 } from 'vec3';
 import { feetCell, type BlockReader, type Cell } from '../localMap.js';
 import { dropBurnsIn } from '../dropFate.js';
 import { blockInSight } from '../probeTools.js';
-import { cellText, inventoryCount, stopped, wait, waitUntil, type StepContext, type StepOutcome } from './common.js';
+import { cellText, freeSlots, inventoryCount, stopped, wait, waitUntil, type StepContext, type StepOutcome } from './common.js';
 import { dig } from './dig.js';
 import { place } from './place.js';
 import { use } from './use.js';
@@ -187,6 +187,14 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
   if (live.length && dimensionOf(bot).includes('nether')) return stop('stuck', 'ネザーでは水を注いでも蒸発して溶岩が固まらない（オーバーワールドの溶岩で）', live[0]);
   const pick = pickOf(bot);
   if (!pick) return stop('no_tool', 'ダイヤのツルハシ（diamond_pickaxe か netherite_pickaxe）を持っていない', live[0] ?? mineOnly[0]);
+  // Run 46 (hold 6): the pack was full (36 of 36); two obsidian were made and dug, and neither could be picked up (no free slot, no obsidian stack to join): 117 s, 0 obsidian.
+  // A pack that cannot take the obsidian is said before anything is poured or dug.
+  const obsidianRoom = (): boolean => {
+    if (freeSlots(bot) > 0) return true;
+    return ((bot.inventory?.slots ?? []) as Array<{ name?: string; count?: number } | null | undefined>).some((item, slot) => slot >= 9 && slot <= 44 && item?.name === 'obsidian' && (item.count ?? 0) < 64);
+  };
+  const fullWords = () => `持ち物が満杯（${36 - freeSlots(bot)}/36）で黒曜石を拾えない。drop で空ける`;
+  if (!obsidianRoom()) return stop('inventory_full', fullWords(), live[0] ?? mineOnly[0]);
   const bucketsAtStart = inventoryCount(bot, 'water_bucket');
   const obsidianAtStart = inventoryCount(bot, 'obsidian');
   const foot = footingBlock(bot, args.canPlace);
@@ -299,7 +307,7 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
         const cellOfItem = { x: Math.floor(at.x), y: Math.floor(at.y), z: Math.floor(at.z) };
         const spot = standCells(read, cellOfItem, 2, cellOfItem.y - 2, cellOfItem.y + 1, true)
           .filter(stand => withinTake({ x: stand.x + 0.5, y: stand.y, z: stand.z + 0.5 }, at)).sort((a, b) => dist(a, here) - dist(b, here))[0];
-        if (!spot) { counts.notes.push(`落とし物 ${cellText(cellOfItem)} は溶岩を避けた立ち位置から拾えない`); return; }
+        if (!spot) { counts.notes.push(`落とし物 ${cellText(cellOfItem)} は${obsidianRoom() ? '溶岩を避けた立ち位置から拾えない' : '持ち物が満杯で拾えない'}`); return; }
         if (await moveTo(c, spot)) { counts.restands++; continue; }
       }
       await waitUntil(c, () => !bot.entities?.[item.id], PICKUP_WAIT_MS, 100);
@@ -367,6 +375,7 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
       await waitUntil(ctx, () => !waterNear(lava), DRY_WAIT_MS, 100);
     }
     if (!covered && !water && burnsAt()) counts.notes.push(`${cellText(lava)} は溶岩が流れ込む所を水なしで掘った（落とし物が焼けるかもしれない）`);
+    if (!obsidianRoom()) { if (waterLeft && await scoopBack(waterLeft)) waterLeft = null; return { code: 'inventory_full', text: fullWords(), at: lava }; }
     const failure = await mineAt(lava);
     if (failure) {
       if (waterLeft && await scoopBack(waterLeft)) waterLeft = null;
@@ -391,10 +400,12 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
   for (const lava of order) {
     if (gained() >= want) break;
     if (timeIsUp(ctx)) { if (waterLeft) await scoopBack(waterLeft); counts.obsidian = gained(); return stop('limit_time', `${seconds} 秒の上限に達した`, lava); }
+    if (!obsidianRoom()) return stop('inventory_full', fullWords(), lava);
     ctx.progress?.(`${cellText(lava)} (${gained()}/${want})`);
     const failure = await oneSource(lava);
     counts.obsidian = gained();
     if (failure?.code === 'limit_time') { if (waterLeft) await scoopBack(waterLeft); return stop('limit_time', `${seconds} 秒の上限に達した`, lava); }
+    if (failure?.code === 'inventory_full') { if (waterLeft) await scoopBack(waterLeft); return stop('inventory_full', failure.text, lava); }
     if (failure) failures.push(failure);
   }
   counts.obsidian = gained();

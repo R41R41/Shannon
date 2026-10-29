@@ -194,6 +194,21 @@ describe('obsidian: what it refuses before it begins', () => {
     expect(sim.bot.poured).toEqual([]);
     expect(Math.hypot(sim.bot.entity.position.x - 0.5, sim.bot.entity.position.z - 0.5)).toBeLessThan(0.1);
   });
+  it('run 46 hold 6: says inventory_full before anything is poured or dug when no slot is free and no obsidian stack has room', async () => {
+    const sim = makeHandsSim(world, { items: stacks(WATER, PICK) });
+    for (let slot = 9; slot <= 44; slot++) sim.bot.inventory.slots[slot] = { name: slot === 20 ? 'obsidian' : 'dirt', count: slot === 20 ? 64 : 1 } as never;
+    const outcome = await drive(sim, run(sim, { at: [at(8, 63, 0)] }));
+    expect(outcome.reason).toBe('inventory_full');
+    expect(outcome.text).toMatch(/^obsidian 止まった inventory_full: 持ち物が満杯（36\/36）で黒曜石を拾えない。drop で空ける/u);
+    expect(sim.bot.poured).toEqual([]);
+    expect(sim.bot.dugBlocks ?? []).toEqual([]);
+    expect(Math.hypot(sim.bot.entity.position.x - 0.5, sim.bot.entity.position.z - 0.5)).toBeLessThan(0.1);
+    // a stack of obsidian with room takes more: the pack is not full for it
+    const room = makeHandsSim(world, { items: stacks(WATER, PICK) });
+    for (let slot = 9; slot <= 44; slot++) room.bot.inventory.slots[slot] = { name: slot === 20 ? 'obsidian' : 'dirt', count: slot === 20 ? 10 : 1 } as never;
+    const second = await drive(room, run(room, { at: [at(8, 63, 0)] }));
+    expect(second.reason).not.toBe('inventory_full');
+  });
   it('says no_lava when the cell named is not a lava source (flowing lava, stone, a cell not loaded)', async () => {
     const flowing: Layer = (x, y, z) => (x === 8 && y === 63 && z === 0 ? 'lava~3' : undefined);
     const sim = makeHandsSim(over(flat, flowing, lake()), { items: stacks(WATER, PICK) });

@@ -366,6 +366,57 @@ try {
     await reset(actor);
   }
 
+  // ---- run 46 (hold 6): obsidian at the rim of a lava pool (the real ground of the hold, copied: scripts/lab/obsidian-rim-fills.txt), with a pack that is full and with one that is not
+  if (runs('obsidian_rim')) {
+    await reset(actor);
+    await ask('tp ' + ACTOR + ' -10 100 -10'); await sleep(800);   // out of the box the ground is copied into
+    const fills = fs.readFileSync(path.resolve('scripts/lab/obsidian-rim-fills.txt'), 'utf8').split('\n').filter(Boolean);
+    for (const command of fills) await ask(command, 5000);
+    await sleep(1500);
+    // region (x,y,z) -> lab (x-116, y+155, z-228)
+    const lab = (x: number, y: number, z: number) => ({ x: x - 116, y: y + 155, z: z - 228 });
+    const sources = [[125, -55, 233], [124, -55, 233], [123, -55, 233], [125, -55, 234], [124, -55, 234], [123, -55, 234], [126, -55, 234], [124, -55, 235]].map(([x, y, z]) => lab(x!, y!, z!));
+    const start = lab(122.5, -54, 239.5);
+    const hand = { do: 'obsidian', count: 3, seconds: 100, maxPlace: 30, canPlace: ['cobblestone'], at: sources };
+    const prepare = async (full: boolean) => {
+      // the pool as the hand found it (the copy is the ground after the hold): two sources already obsidian, three still lava; no water, no scaffolds left from an earlier try
+      for (const [x, y, z, name] of [[123, -55, 233, 'obsidian'], [123, -55, 234, 'obsidian'], [124, -55, 233, 'lava'], [124, -55, 234, 'lava'], [125, -55, 233, 'lava'], [124, -55, 235, 'lava']] as Array<[number, number, number, string]>) {
+        const c = lab(x, y, z); await ask('setblock ' + c.x + ' ' + c.y + ' ' + c.z + ' minecraft:' + name);
+      }
+      for (const c of [lab(123, -54, 233), lab(123, -54, 234), lab(124, -54, 233), lab(124, -54, 234), lab(125, -54, 233)]) await ask('setblock ' + c.x + ' ' + c.y + ' ' + c.z + ' minecraft:air');
+      await ask('clear ' + ACTOR); await sleep(300);
+      await ask('effect give ' + ACTOR + ' minecraft:resistance 600 4 true'); await ask('effect give ' + ACTOR + ' minecraft:fire_resistance 600 0 true');
+      await ask('give ' + ACTOR + ' minecraft:diamond_pickaxe 1'); await ask('give ' + ACTOR + ' minecraft:water_bucket 1'); await ask('give ' + ACTOR + ' minecraft:cobblestone 64');
+      if (full) for (const item of ['stick', 'apple', 'bread', 'coal', 'iron_ingot', 'gold_ingot', 'diamond', 'emerald', 'redstone', 'lapis_lazuli', 'flint', 'feather', 'string', 'bone', 'arrow', 'clay_ball', 'brick', 'paper',
+        'book', 'leather', 'sugar', 'egg', 'wheat', 'wheat_seeds', 'beetroot', 'carrot', 'potato', 'melon_seeds', 'pumpkin_seeds', 'cod', 'salmon', 'charcoal', 'slime_ball', 'gunpowder', 'glowstone_dust', 'ender_pearl', 'snowball']) await ask('give ' + ACTOR + ' minecraft:' + item + ' 1');
+      await sleep(800);
+      if (!(actor.inventory.items() as any[]).some(item => item.name === 'water_bucket')) { await ask('give ' + ACTOR + ' minecraft:water_bucket 1'); await sleep(800); }
+      await ask('gamemode survival ' + ACTOR); await ask('tp ' + ACTOR + ' ' + start.x + ' ' + start.y + ' ' + start.z); await sleep(2500);
+    };
+    // 1) a full pack: said before anything is poured or dug
+    await prepare(true);
+    const slotsUsed = (actor.inventory.slots as any[]).filter((item, slot) => slot >= 9 && slot <= 44 && item).length;
+    const fullRun = await act(body, { hands: [hand] }, { seconds: 110 });
+    const fullLine = fullRun.parsed?.lines?.[0];
+    report.obsidianFull = { slotsUsed, ms: fullRun.ms, code: fullLine?.code, line: fullLine?.line, pours: (opLines().filter(entry => entry.kind === 'op' && entry.command === fullRun.command.id && entry.op === 'activateItem')).length };
+    check('run 46 hold 6: a full pack (36/36) stops the obsidian hand with inventory_full and the words, at once, before water is poured', slotsUsed >= 36 && fullLine?.code === 'inventory_full' && /満杯（36\/36）/u.test(String(fullLine?.line)) && fullRun.ms < 15_000, JSON.stringify(report.obsidianFull).slice(0, 400));
+    // 2) a pack with room: obsidian is made, dug and taken at the rim of the real pool
+    await prepare(false);
+    const before = Number((actor.inventory.items() as any[]).filter(item => item.name === 'obsidian').reduce((sum, item) => sum + item.count, 0));
+    const run = await act(body, { hands: [hand] }, { seconds: 120 });
+    const after = Number((actor.inventory.items() as any[]).filter(item => item.name === 'obsidian').reduce((sum, item) => sum + item.count, 0));
+    const ops = opLines().filter(entry => entry.kind === 'op' && entry.command === run.command.id);
+    const firstOpAt = ops.length ? Date.parse(ops[0].at) - run.startedAt : null;
+    const line = run.parsed?.lines?.[0];
+    const gaps: number[] = []; for (let i = 1; i < ops.length; i++) gaps.push(Date.parse(ops[i].at) - Date.parse(ops[i - 1].at));
+    report.obsidianRim = { ms: run.ms, gained: after - before, code: line?.code, line: line?.line, firstOpAfterMs: firstOpAt, longestQuietMs: Math.max(0, ...gaps), ops: ops.length };
+    check('run 46 hold 6: at the rim of the real pool the hand makes obsidian and takes it (at least 1 in the pack), and does not stand still for long', after - before >= 1 && (run.parsed?.lines?.[0]?.goal === 'done' || after - before >= 1) && (report.obsidianRim as any).longestQuietMs < 20_000, JSON.stringify(report.obsidianRim).slice(0, 500));
+    produce('measure/obsidian-rim', null, { output: { full: report.obsidianFull, rim: report.obsidianRim } });
+    await ask('tp ' + ACTOR + ' -10 100 -10'); await sleep(500);
+    await ask('kill @e[type=!player]'); await ask('fill 0 97 0 16 106 16 minecraft:air'); await ask('fill 0 90 0 16 99 16 minecraft:stone');
+    await reset(actor);
+  }
+
   // ---- A-12 (body): the head asks for a hold (incident.take): the world stops, the box holds the notes, the resume brings the world back
   if (runs('head_take')) {
     await reset(actor);
