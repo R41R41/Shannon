@@ -239,7 +239,7 @@ try {
       while (Date.now() - began < 14_000) {
         const roots = physicalRoots(actor).filter(root => root.capability === 'floor-melee' || root.capability === 'floor-last-stand');
         const mark = actor.floorReflexes?.handTarget;
-        if (roots.length && mark && Date.now() - mark.at < 1500 && actor.shieldBlock?.up === true) { seen = { capability: roots[0].capability, target: mark.target, shieldUp: true }; break; }
+        if (roots.length && mark && Date.now() - mark.at < 1500 && actor.shieldBlock?.up === true && actor.usingHeldItem === true) { seen = { capability: roots[0].capability, target: mark.target, shieldUp: true }; break; }
         await sleep(10);
       }
       if (!seen) { streaming = false; trials.push({ trial, reflex: null, shieldUpSeen: actor.shieldBlock?.up === true }); continue; }
