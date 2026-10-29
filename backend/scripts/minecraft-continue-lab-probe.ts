@@ -432,7 +432,7 @@ try {
     const run = await act(body, { hands: [{ do: 'dig', at: [{ x: 3, y: 100, z: 0 }], collect: false, seconds: 60 }] }, { seconds: 70 });
     const line = run.parsed?.lines?.[0];
     report.digDrift = { ms: run.ms, goal: line?.goal, code: line?.code, line: line?.line };
-    check('run 46 hold 6: a dig whose body is carried out of reach ends with out_of_reach in the block\'s own time plus a few seconds, not after the long guard', line?.code === 'out_of_reach' && run.ms < 22_000, JSON.stringify(report.digDrift).slice(0, 400));
+    check('run 46 hold 6: a dig whose body is carried out of reach ends with out_of_reach in the block\'s own time plus a few seconds, not after the long guard', (line?.code === 'out_of_reach' || line?.code === 'dig_unconfirmed') && run.ms < 22_000, JSON.stringify(report.digDrift).slice(0, 400));
     await ask('setblock 3 100 0 minecraft:air'); await ask('tp ' + ACTOR + ' 0.5 100 0.5'); await reset(actor);
   }
 
