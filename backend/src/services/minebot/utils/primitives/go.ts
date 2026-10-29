@@ -452,6 +452,34 @@ export function floorlessAt(bot: any, cell: Cell, rule: Pick<DigRule, 'names'>, 
     + (stand ? `。${cellText(under)} なら ${String(lower.name).replace(/^minecraft:/u, '')} の上に立てる` : '');
 }
 
+/**
+ * Run 47 (hold 6, a go to (190,-13,180), a clay cell with a clay cell over it, canDig stone and deepslate): the place itself is a block the go may not dig, and no search can end in
+ * it: every one ran its 5 s out, six times. A place whose feet cell (or whose head's height, 1.8 over the feet) is a whole block that is not on the list of what may be dug is said at once,
+ * with the nearest cell round it a body stands in. A slab, a carpet or a chest under the feet is stood on, a block the go may dig is dug.
+ */
+export function sealedAtWords(bot: any, cell: Cell, rule: Pick<DigRule, 'names'>): string | null {
+  for (const dy of [0, 1]) {
+    const at = { x: cell.x, y: cell.y + dy, z: cell.z };
+    const block = blockAt(bot, at);
+    if (!block || block.boundingBox !== 'block' || isDoorlike(String(block.name))) continue;
+    const shapes: number[][] = Array.isArray(block.shapes) ? block.shapes : [];
+    const tops = shapes.map(shape => Number(shape[4] ?? 1)), bottoms = shapes.map(shape => Number(shape[1] ?? 0));
+    if (dy === 0 && tops.length && Math.max(...tops) < 0.99) continue;
+    if (dy === 1 && bottoms.length && Math.min(...bottoms) >= 0.8) continue;
+    const name = String(block.name).replace(/^minecraft:/u, '');
+    if (rule.names.has(name)) continue;
+    const read: BlockReader = (x, y, z) => { const found = blockAt(bot, { x, y, z }); return found ? mapBlockOf(found) : null; };
+    let near: Cell | null = null;
+    for (const d of NEAR_OFFSETS) {
+      const around = { x: cell.x + d[0], y: cell.y + d[1], z: cell.z + d[2] };
+      if (standable(read, around.x, around.y, around.z)) { near = around; break; }
+    }
+    return `行き先 ${cellText(cell)}${dy ? `（頭の高さの ${cellText(at)}）` : ''} は ${name} で canDig に無い${near ? `。隣の立てる所 ${cellText(near)}` : ''}`
+      + `|canDig に ${name} を足すか、${near ? `隣の立てる所 ${cellText(near)} へ` : '別の行き先を'}`;
+  }
+  return null;
+}
+
 const AIR = /^(air|cave_air|void_air)$/u;
 /** How far down a place in the air is looked under for its floor. */
 const FLOOR_LOOK = 24;
@@ -591,7 +619,13 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     const why = floorlessAt(bot, safeCells[0], rule, placing)!;
     return fail('no_floor', why, /なら .* の上に立てる$/u.test(why) ? 'その 1 つ下を行き先に' : /^行き先 .* は宙/u.test(why) ? '立てる所を行き先に（宙へ渡るなら canPlace）' : '別の行き先を');
   }
-  const targets = grounded;
+  // Run 47 (hold 6): a place that is a block the go may not dig is said before any search.
+  const open = limits.range < 1 ? grounded.filter(cell => !sealedAtWords(bot, cell, rule)) : grounded;
+  if (!open.length) {
+    const [why, hint] = sealedAtWords(bot, grounded[0], rule)!.split('|');
+    return fail('dead_end', why!, hint!);
+  }
+  const targets = open;
   aims = targets;
   const near = (): Cell => targets.reduce((best, cell) => (distanceTo(bot, cell) < distanceTo(bot, best) ? cell : best), targets[0]);
   const reached = () => atGoal(bot, compositeOf(targets, limits.range));
@@ -712,6 +746,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   if (typeof originalDig === 'function') host.dig = countingDig;
   if (typeof originalPlace === 'function') host.placeBlock = countingPlace;
   // A drawing again: the path was reset because something went wrong with it (not for the block it dug itself, nor a chunk arriving).
+  const timedOutAt = new Set<string>();
   let stalledKey = '', stalledResets = 0;
   const onReset = (reason: unknown) => {
     if (/^(?:goal_updated|movements_updated|block_updated|chunk_loaded)$/u.test(String(reason))) return;
@@ -953,6 +988,13 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
       // The way is drawn before the body moves: a way that is not found is not walked half (the executor walks the closest it found), and a way
       // that breaks or fills more than the limits is not begun.
       const drawn = await plan(movements, legGoal, Math.min(searchCap, timeLeft()));
+      // Run 47 (hold 6): the same search from the same place that ran out of its time once runs out again: it is not drawn a second time.
+      if (drawn.status === 'timeout') {
+        const here = feetCell(bot);
+        const again = `${keyOf(aim)}|${leg.final ? 'f' : 'l'}|${here ? keyOf(here) : ''}`;
+        if (timedOutAt.has(again)) { letGo(bot); return searchedOutStop(drawn, aim); }
+        timedOutAt.add(again);
+      }
       let out: GoOutcome = nowhere;
       if (drawn.status === 'success') {
         const over = budgetOf(countOf(drawn), drawn.places);

@@ -583,6 +583,24 @@ try {
     await reset(actor);
   }
 
+  // ---- run 47 (hold 6): a go to a place that is a block it may not dig (clay inside a mass of stone) is said at once, with the block and a cell beside it
+  if (wanted.has('go_sealed')) {
+    await reset(actor);
+    await ask('tp ' + ACTOR + ' -10 100 -10'); await sleep(600);
+    await ask('fill 8 100 -15 16 112 15 minecraft:air'); await ask('fill 12 100 -14 16 112 14 minecraft:stone');
+    await ask('setblock 14 101 0 minecraft:clay'); await ask('setblock 14 102 0 minecraft:clay');
+    await ask('item replace entity ' + ACTOR + ' hotbar.0 with minecraft:iron_pickaxe');
+    await ask('effect give ' + ACTOR + ' minecraft:resistance 600 4 true'); await sleep(500);
+    await ask('tp ' + ACTOR + ' 10.5 100 0.5'); await sleep(2500);
+    const run = await act(body, { hands: [{ do: 'go', to: { x: 14, y: 101, z: 0 }, canDig: ['stone', 'deepslate'], maxDig: 30, seconds: 60 }] }, { seconds: 70 });
+    const line = run.parsed?.lines?.[0];
+    report.goSealed = { ms: run.ms, goal: line?.goal, line: String(line?.line).slice(0, 220) };
+    check('run 47 hold 6: a go to a clay place it may not dig stops at once, naming the block and the cell beside it, without a search that runs out', line?.goal !== 'done' && run.ms < 4_000 && /clay で canDig に無い/u.test(String(line?.line)) && /隣の立てる所/u.test(String(line?.line)), JSON.stringify(report.goSealed).slice(0, 400));
+    produce('measure/go-sealed', null, { output: report.goSealed as Record<string, unknown> });
+    await ask('fill 8 100 -15 16 112 15 minecraft:air'); await ask('tp ' + ACTOR + ' 0.5 100 0.5');
+    await reset(actor);
+  }
+
   // ---- A-12 (body): the head asks for a hold (incident.take): the world stops, the box holds the notes, the resume brings the world back
   if (runs('head_take')) {
     await reset(actor);
