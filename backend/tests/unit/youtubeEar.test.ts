@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { chunkComments, classifyChatMessage, type StreamComment } from '../../src/services/youtube/ear/chatMessages.js';
@@ -1332,9 +1332,11 @@ describe('the legacy live-chat reply path is gone', () => {
     expect(client).toContain("registerServiceCommandHandler('youtube:live_chat'");
   });
 
-  it('the live reply agent, its prompt and its dispatch hooks are removed', () => {
+  it('the live reply agent and its dispatch hooks are removed, and nothing reads its prompt', () => {
     expect(existsSync(path.join(backend, 'src/services/llm/agents/replyYoutubeLiveCommentAgent.ts'))).toBe(false);
-    expect(existsSync(path.join(backend, 'saves/prompts/others/reply_youtube_live_comment.md'))).toBe(false);
+    // The prompt file stays in backend/saves (the shared runtime place deploy-body.sh will not change), read by no code.
+    const sources = (readdirSync(path.join(backend, 'src'), { recursive: true }) as string[]).filter(file => /\.(?:ts|js)$/u.test(file));
+    expect(sources.filter(file => read(path.join('src', file)).includes('reply_youtube_live_comment'))).toEqual([]);
     expect(read('src/services/llm/agents/AgentOrchestrator.ts')).not.toContain('processYoutubeMessage');
     expect(read('src/services/llm/routing/EventRouter.ts')).not.toContain('handleYoutubeMessage');
     expect(read('src/services/runtime/llmInboundDispatch.ts')).not.toContain('deliverYoutubeMessageToLlm');
