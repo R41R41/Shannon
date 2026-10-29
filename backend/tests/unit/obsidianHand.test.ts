@@ -372,6 +372,17 @@ describe('obsidian: a lava source shut in rock (run 47, hold 7)', () => {
     expect(outcome.text).toContain('岩に囲まれていたので');
     expect(outcome.ok).toBe(true);
   });
+  it('says how many digs the way needs when maxDig is too small (maxDig=N would make it), and takes the larger limit', async () => {
+    const deep = (): Ground => over(flat, box('lava', 10, 10, 58, 58, 0, 0));
+    const small = makeHandsSim(deep(), { items: stacks(WATER, PICK) });
+    const refused = await drive(small, run(small, { at: [at(10, 58, 0)], seconds: 60, maxDig: 2 }));
+    expect(refused.ok).toBe(false);
+    expect(refused.text).toMatch(/^obsidian 止まった unreachable: .* まで掘ると 掘る所が \d+ 要り、上限 2 を超える。maxDig=\d+ なら作れる/u);
+    expect(refused.text).not.toContain('面を作った');
+    const wide = makeHandsSim(deep(), { items: stacks(WATER, PICK) });
+    const made = await drive(wide, run(wide, { at: [at(10, 58, 0)], seconds: 120, maxDig: 60 }));
+    expect(made.text).toMatch(/^obsidian 済 黒曜石 1 個/u);
+  });
   it('says which cells shut it in when nothing may be dug (canDig names nothing that is there)', async () => {
     const sim = makeHandsSim(shut(), { items: stacks(WATER, PICK) });
     const outcome = await drive(sim, run(sim, { at: [at(10, 62, 0)], seconds: 60, canDig: ['sand'] }));

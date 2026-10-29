@@ -300,6 +300,8 @@ export function goMovements(bot: any, args: Required<Pick<GoArgs, 'maxDrop' | 'w
     if (!relax.tool && block.harvestTools && !items().some(item => canHarvest(block, item))) return false;
     return true;
   };
+  // Run 47 (hold 10-11): when the walk may dig a block that falls (gravel, sand), the cell under one may be dug (what falls is dug in its turn); else it stays a wall of the search.
+  if ([...rule.names].some(name => FALLING.test(name))) movements.dontMineUnderFallingBlock = false;
   const safeToBreak = movements.safeToBreak.bind(movements);
   movements.safeToBreak = (block: any) => permitted(block) && (relax.limits || state.dug < args.maxDig) && safeToBreak(block);
   // What may be laid: the allowed blocks the pack holds, in the order the planner gave.
@@ -467,7 +469,20 @@ export function sealedAtWords(bot: any, cell: Cell, rule: Pick<DigRule, 'names'>
     if (dy === 0 && tops.length && Math.max(...tops) < 0.99) continue;
     if (dy === 1 && bottoms.length && Math.min(...bottoms) >= 0.8) continue;
     const name = String(block.name).replace(/^minecraft:/u, '');
-    if (rule.names.has(name)) continue;
+    if (rule.names.has(name)) {
+      // Run 47 (hold 10-11): a block the walk may dig but the search does not break: water or lava beside it (the flow would come in), or a block that falls over it that may not be dug.
+      const wet = ([[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, 1, 0]] as const).map(d => ({ x: at.x + d[0], y: at.y + d[1], z: at.z + d[2] }))
+        .find(next => /^(water|lava)$/u.test(String(blockAt(bot, next)?.name ?? '')));
+      const over = blockAt(bot, { x: at.x, y: at.y + 1, z: at.z });
+      const falls = over && FALLING.test(String(over.name).replace(/^minecraft:/u, '')) && !rule.names.has(String(over.name).replace(/^minecraft:/u, ''));
+      if (!wet && !falls) continue;
+      const read2: BlockReader = (x, y, z) => { const found = blockAt(bot, { x, y, z }); return found ? mapBlockOf(found) : null; };
+      let near2: Cell | null = null;
+      for (const d of NEAR_OFFSETS) { const around = { x: cell.x + d[0], y: cell.y + d[1], z: cell.z + d[2] }; if (standable(read2, around.x, around.y, around.z)) { near2 = around; break; } }
+      const because = wet ? `隣の ${cellText(wet)} が ${String(blockAt(bot, wet)?.name)} で掘ると流れ込む` : `上の ${cellText({ x: at.x, y: at.y + 1, z: at.z })} が ${String(over.name)} で掘ると落ちてくる`;
+      return `行き先 ${cellText(cell)}${dy ? `の頭 ${cellText(at)}` : ''} の ${name} は${because}`
+        + `|${wet ? '水を canPlace の物で塞いでから出し直すか' : `canDig に ${String(over.name)} を足すか`}、${near2 ? `隣の立てる所 ${cellText(near2)} へ` : '別の行き先を'}`;
+    }
     const read: BlockReader = (x, y, z) => { const found = blockAt(bot, { x, y, z }); return found ? mapBlockOf(found) : null; };
     let near: Cell | null = null;
     for (const d of NEAR_OFFSETS) {
@@ -854,6 +869,11 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   /** The way is shut: look again with each rule lifted in turn, and name the first whose lifting opens it. */
   /** The search ran out of its time: no way is known, nor that there is none. What it saw, and the next hands that do not need the search. */
   const searchedOutStop = (found: Plan, aim: Cell): StepOutcome => {
+    // Run 47 (hold 10-11): a place the search cannot get into (a cell it may not break) runs every search out; the cell is named instead.
+    if (limits.range < 1) {
+      const sealed = targets.map(cell => sealedAtWords(bot, cell, rule)).find((words): words is string => !!words);
+      if (sealed) { const [why, hint] = sealed.split('|'); return fail('dead_end', why!, hint!); }
+    }
     const tip = found.path.length ? found.path[found.path.length - 1] : null;
     const tipCell = tip ? nodeCell(tip) : null;
     const reach = tipCell ? `、${cellText(tipCell)} まで・あと ${Math.hypot(tipCell.x - aim.x, tipCell.y - aim.y, tipCell.z - aim.z).toFixed(0)}m` : '';

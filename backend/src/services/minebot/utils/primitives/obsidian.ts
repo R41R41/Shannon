@@ -27,7 +27,7 @@ import { BUCKET_REACH, DIG_REACH_PLAN, FACES, OPPOSITE, clickLands, dist, eyeAtC
  * no lava is within a cell of its feet, head or the cell over it (the rim of a pool, a cell down and aside, is fine), and the water stays over the
  * hole until the obsidian is out, so that the lava round it is set by the water and does not run in.
  */
-export interface ObsidianArgs { at: Cell[]; count?: number; seconds?: number; canPlace?: string[]; maxPlace?: number; /** What may be dug to make a way to a source shut in rock (default: stone, deepslate, dirt). */ canDig?: string[] }
+export interface ObsidianArgs { at: Cell[]; count?: number; seconds?: number; canPlace?: string[]; maxPlace?: number; /** What may be dug to make a way to a source shut in rock (default: stone, deepslate, dirt). */ canDig?: string[]; /** How many blocks the way in to a source shut in rock may dig (default 30). */ maxDig?: number }
 
 export const OBSIDIAN_DEFAULTS = { count: 1, seconds: 90, maxPlace: 6 } as const;
 /** How many places to stand and pour from are tried for one source before it is given up. */
@@ -35,6 +35,8 @@ const MAX_TRIES = 5;
 const MAX_DIG_TRIES = 4;
 /** Run 47 (hold 7): what the hand may dig to make a way to a lava source shut in rock when the planner named nothing. */
 const DEFAULT_CARVE = ['stone', 'deepslate', 'dirt'];
+/** ... and how many blocks that way may dig: the approach through rock and the tunnel (run 47: the first guess, 12, was too few for 16). */
+const DEFAULT_CARVE_DIG = 30;
 /** The longest the lava is given to set once the water is in (the game does it in a few ticks; the flow in a second). */
 const SET_WAIT_MS = 3500;
 const PICKUP_WAIT_MS = 2500;
@@ -350,11 +352,16 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
       const rock = FACES.map(face => { const cell = shift(lava, face); return `${cellText(cell)} ${nameOf(cell)}`; }).slice(0, 6).join('・');
       return { code: 'unreachable', text: `${cellText(lava)} は岩に囲まれ（${rock}）、掘って面と立ち位置を作る道も無い: ${reasons.slice(0, 3).join('、') || '掘ってよい物（canDig）に無い'}`, at: lava };
     }
-    counts.notes.push(`${cellText(lava)} は岩に囲まれていたので、${cellText(way.k2)} から ${cellText(way.k1)} と ${cellText(over)} を掘って面を作った`);
-    const arrived = await go(ctx, { goals: [way.k2], canDig: words, maxDig: 12, maxPlace: 0, seconds: Math.max(10, Math.min(40, Math.floor((ctx.deadline - Date.now()) / 1000))) });
-    if (!arrived.ok) return { code: 'unreachable', text: `${cellText(way.k2)} まで掘って近づけない: ${arrived.text.slice(0, 80)}`, at: way.k2 };
-    const opened = await dig(ctx, { at: [way.k1, over].filter(cell => !isOpenCell(read(cell.x, cell.y, cell.z))), collect: false });
+    const maxDig = Math.max(1, Math.min(100, Math.floor(args.maxDig ?? DEFAULT_CARVE_DIG)));
+    const arrived = await go(ctx, { goals: [way.k2], canDig: words, maxDig, maxPlace: 0, seconds: Math.max(10, Math.min(40, Math.floor((ctx.deadline - Date.now()) / 1000))) });
+    if (!arrived.ok) {
+      const needed = /掘る所が (\d+)/u.exec(arrived.text)?.[1];
+      if (arrived.reason === 'limit_dig' && needed) return { code: 'unreachable', text: `${cellText(way.k2)} まで掘ると 掘る所が ${needed} 要り、上限 ${maxDig} を超える。maxDig=${Number(needed) + 2} なら作れる（obsidian の maxDig）`, at: way.k2 };
+      return { code: 'unreachable', text: `${cellText(way.k2)} まで掘って近づけない: ${arrived.text.slice(0, 80)}`, at: way.k2 };
+    }
+    const opened = await dig(ctx, { at: [way.k1, shift(way.k1, 'up'), over].filter(cell => !isOpenCell(read(cell.x, cell.y, cell.z))), collect: false });
     if (!opened.ok) return { code: 'unreachable', text: `面を掘れなかった: ${opened.text.slice(0, 80)}`, at: over };
+    counts.notes.push(`${cellText(lava)} は岩に囲まれていたので、${cellText(way.k2)} から ${cellText(way.k1)} と ${cellText(over)} を掘って面を作った`);
     return null;
   };
 
@@ -484,7 +491,7 @@ const BLOCK_NAME = /^[a-z][a-z0-9_]{0,39}$/u;
  * `canPlace`, `maxPlace`; `at` 1 to 8, `seconds` 5 to 120, `count` 1 to 64): a field the kind does not take, a missing `at`, a range. Null when it is well formed.
  */
 export function obsidianProblem(hand: Record<string, unknown>, cellOk: (spec: unknown) => boolean): string | null {
-  const allowed = new Set([...COMMON_FIELDS, 'at', 'count', 'seconds', 'canPlace', 'maxPlace', 'canDig']);
+  const allowed = new Set([...COMMON_FIELDS, 'at', 'count', 'seconds', 'canPlace', 'maxPlace', 'canDig', 'maxDig']);
   const extra = Object.keys(hand).filter(key => hand[key] !== undefined && !allowed.has(key));
   if (extra.length) return `${extra.join('・')} は使えない（obsidian の欄: at・count・seconds・canPlace・maxPlace）`;
   const at = hand.at;

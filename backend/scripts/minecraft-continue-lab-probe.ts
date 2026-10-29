@@ -666,6 +666,41 @@ try {
     await reset(actor);
   }
 
+  // ---- run 47 (holds 10 and 11): a go to a place whose block it may dig but the search does not break (water beside the cell over it) is said at once
+  if (wanted.has('go_wetplace')) {
+    await reset(actor);
+    await ask('tp ' + ACTOR + ' -10 100 -10'); await sleep(600);
+    await ask('fill 7 100 -6 17 106 6 minecraft:air'); await ask('fill 10 100 -5 16 103 5 minecraft:stone');
+    await ask('fill 12 101 0 13 102 0 minecraft:air'); await ask('setblock 15 102 0 minecraft:water');
+    await ask('give ' + ACTOR + ' minecraft:iron_pickaxe 1'); await sleep(800);
+    await ask('effect give ' + ACTOR + ' minecraft:resistance 600 4 true'); await sleep(500);
+    await ask('tp ' + ACTOR + ' 12.5 101 0.5'); await sleep(2500);
+    const run = await act(body, { hands: [{ do: 'go', to: { x: 14, y: 101, z: 0 }, canDig: ['stone'], maxDig: 30, seconds: 60 }] }, { seconds: 70 });
+    const line = run.parsed?.lines?.[0];
+    report.goWetPlace = { ms: run.ms, goal: line?.goal, line: String(line?.line).slice(0, 240) };
+    check('run 47 holds 10-11: a go to a place that is dug but beside water stops at once naming the block, the water and the way out (no 5 s search)', line?.goal !== 'done' && run.ms < 4_000 && /water で掘ると流れ込む/u.test(String(line?.line)), JSON.stringify(report.goWetPlace).slice(0, 400));
+    produce('measure/go-wetplace', null, { output: report.goWetPlace as Record<string, unknown> });
+    await ask('fill 7 100 -6 17 106 6 minecraft:air'); await ask('tp ' + ACTOR + ' 0.5 100 0.5');
+    await reset(actor);
+  }
+
+  // ---- run 47 (hold 11): the way in to a source shut in rock needs more digs than the hand's maxDig: it says how many (maxDig=N), and with room it makes the obsidian
+  if (wanted.has('obsidian_cap')) {
+    await reset(actor);
+    await ask('tp ' + ACTOR + ' -10 100 -10'); await sleep(600);
+    await ask('fill 7 100 -6 16 106 6 minecraft:air'); await ask('fill 10 100 -5 16 101 5 minecraft:stone'); await ask('setblock 14 100 0 minecraft:lava');
+    await ask('give ' + ACTOR + ' minecraft:water_bucket 1'); await ask('give ' + ACTOR + ' minecraft:diamond_pickaxe 1'); await ask('give ' + ACTOR + ' minecraft:stone_pickaxe 1');
+    await ask('effect give ' + ACTOR + ' minecraft:resistance 600 4 true'); await sleep(500);
+    await ask('tp ' + ACTOR + ' 8.5 100 0.5'); await sleep(2500);
+    const small = await act(body, { hands: [{ do: 'obsidian', at: [{ x: 14, y: 100, z: 0 }], count: 1, seconds: 60, maxDig: 1 }] }, { seconds: 80 });
+    const smallLine = small.parsed?.lines?.[0];
+    report.obsidianCapSmall = { ms: small.ms, line: String(smallLine?.line).slice(0, 260) };
+    check('run 47 hold 11: with maxDig 1 the obsidian hand says how many digs the way needs (maxDig=N なら作れる)', /maxDig=\d+ なら作れる/u.test(String(smallLine?.line)), JSON.stringify(report.obsidianCapSmall).slice(0, 420));
+    produce('measure/obsidian-cap', null, { output: { small: report.obsidianCapSmall } });
+    await ask('fill 7 100 -6 16 106 6 minecraft:air'); await ask('kill @e[type=item]'); await ask('tp ' + ACTOR + ' 0.5 100 0.5');
+    await reset(actor);
+  }
+
   // ---- A-12 (body): the head asks for a hold (incident.take): the world stops, the box holds the notes, the resume brings the world back
   if (runs('head_take')) {
     await reset(actor);

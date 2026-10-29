@@ -47,3 +47,33 @@ describe('a place that is a block the go may not dig', () => {
     expect(value.text).not.toMatch(/canDig に無い/u);
   });
 });
+
+describe('a place beside water or under gravel that the search does not break (run 47, holds 10 and 11)', () => {
+  // Deepslate ground; the place (5,64,0) is stone with stone over it; water stands beside the cell over it (6,65,0): breaking that cell would let the flow in, and the search never breaks it.
+  const wet: Ground = (x, y, z) => {
+    if (Math.abs(x) > 30 || Math.abs(z) > 30) return null;
+    if (y < FLOOR) return 'stone';
+    if (x === 5 && z === 0 && (y === FLOOR || y === FLOOR + 1)) return 'stone';
+    if (x === 6 && z === 0 && y === FLOOR + 1) return 'water';
+    return 'air';
+  };
+  it('is said at once: the block, the water beside it, the way out', async () => {
+    const sim = makeSim(wet, { start: [0.5, FLOOR, 0.5], items: [{ name: 'stone_pickaxe', count: 1 }] });
+    const { value, elapsed } = await drive(sim, go(ctxOf(sim) as never, { goals: [{ x: 5, y: FLOOR, z: 0 }], canDig: ['stone'], seconds: 60 } as never));
+    expect(value.ok).toBe(false);
+    expect(value.text).toMatch(/^go 止まった dead_end: 行き先 \(5,64,0\)の頭 \(5,65,0\) の stone は隣の \(6,65,0\) が water で掘ると流れ込む/u);
+    expect(value.text).toContain('塞いでから');
+    expect(elapsed).toBeLessThan(1_000);
+  });
+  it('is under gravel that may not be dug: said; and with gravel in canDig the cell under it is dug', async () => {
+    const gravel: Ground = (x, y, z) => (x === 5 && z === 0 && y === FLOOR + 2 ? 'gravel' : wet(x, y, z) === 'water' ? 'air' : wet(x, y, z));
+    const refused = makeSim(gravel, { start: [0.5, FLOOR, 0.5], items: [{ name: 'stone_pickaxe', count: 1 }] });
+    const first = await drive(refused, go(ctxOf(refused) as never, { goals: [{ x: 5, y: FLOOR, z: 0 }], canDig: ['stone'], seconds: 60 } as never));
+    expect(first.value.ok).toBe(false);
+    expect(first.value.text).toMatch(/の stone は上の \(5,66,0\) が gravel で掘ると落ちてくる/u);
+    expect(first.value.text).toContain('canDig に gravel を足す');
+    const allowed = makeSim(gravel, { start: [0.5, FLOOR, 0.5], items: [{ name: 'stone_pickaxe', count: 1 }], digMs: 80 });
+    const second = await drive(allowed, go(ctxOf(allowed) as never, { goals: [{ x: 5, y: FLOOR, z: 0 }], canDig: ['stone', 'gravel'], maxDig: 30, seconds: 60 } as never));
+    expect(second.value.text).not.toMatch(/落ちてくる|流れ込む/u);
+  });
+});

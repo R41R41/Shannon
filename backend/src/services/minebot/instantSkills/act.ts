@@ -251,7 +251,7 @@ async function runHand(ctx: StepContext, hand: ActHand): Promise<StepOutcome> {
       // The lava sources are the planner's, as cells; where to stand, where to pour, the wait, the dig and the water back are the body's (utils/primitives/obsidian).
       const problem = obsidianProblem(hand as Record<string, unknown>, spec => cellOf(ctx, hand, spec) !== null);
       if (problem) return { ok: false, reason: 'invalid_input', text: `obsidian 止まった invalid_input: ${problem}` };
-      return obsidian(ctx, { at: cells, count: hand.count, seconds: hand.seconds, canPlace: hand.canPlace, maxPlace: hand.maxPlace, canDig: hand.canDig });
+      return obsidian(ctx, { at: cells, count: hand.count, seconds: hand.seconds, canPlace: hand.canPlace, maxPlace: hand.maxPlace, canDig: hand.canDig, maxDig: hand.maxDig });
     }
     case 'portal': {
       // The frame's place and plane are the planner's; the building, the scaffolds, the fire and the walk in are the body's (utils/primitives/portal).
