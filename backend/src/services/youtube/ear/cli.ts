@@ -30,6 +30,8 @@
  * Output: one JSON line on stdout, `{"ear":"ready"}`, once the loop runs (the runtime logger's lines follow on stdout). On SIGINT/SIGTERM the ear stops and prints `{"ear":"stopped","status":{...}}` (counters: comments read vs sent, API units),
  * then exits 0. A bad configuration prints `{"ear":"error","message":"..."}` and exits 2.
  */
+import { realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { OAuth2Client } from 'google-auth-library';
 import { HeadStreamClient } from './headStreamClient.js';
 import { StreamEar } from './streamEar.js';
@@ -102,4 +104,7 @@ async function main(): Promise<void> {
   process.stdout.write(`${JSON.stringify({ ear: 'ready' })}\n`);
 }
 
-void main().catch(error => fail(error instanceof Error ? error.message : String(error)));
+// Only as the process's own entry: importing this module (the deploy gate imports every changed dist module) reads no environment and starts nothing.
+if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  void main().catch(error => fail(error instanceof Error ? error.message : String(error)));
+}

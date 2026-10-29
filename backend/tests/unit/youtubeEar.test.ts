@@ -67,13 +67,13 @@ class FakeHead {
       if (body.ended) {
         this.log.push('ended');
         this.ended.push(body);
-        if (this.stream?.streamId !== body.streamId) return json(409, { error: 'STREAM_NOT_LIVE' });
+        if (!this.stream || this.stream.streamId !== body.streamId) return json(409, { error: 'STREAM_NOT_LIVE' });
         this.stream = { ...this.stream, phase: 'ended' };
         return json(200, { stream: this.stream });
       }
       this.log.push('broadcast');
       this.broadcasts.push(body);
-      if (this.stream?.streamId !== body.streamId) return json(409, { error: 'STREAM_NOT_LIVE' });
+      if (!this.stream || this.stream.streamId !== body.streamId) return json(409, { error: 'STREAM_NOT_LIVE' });
       this.stream = { ...this.stream, phase: 'live', broadcast: { videoId: body.videoId, liveChatId: body.liveChatId, title: body.title, channelId: body.channelId } };
       return json(200, { stream: this.stream });
     }
