@@ -113,8 +113,8 @@ describe('go: a wall with a hostile behind it that the guard will not let be ope
     };
     const outcome: StepOutcome = await drive(sim, run(sim));
     expect(outcome.ok).toBe(false);
-    expect(outcome.text).toMatch(/^go 止まった threat_exposed: 掘ると zombie.*守りが掘りを止めたマス d+ 個 /u);
-    const cells = Number(/マス (d+) 個/u.exec(outcome.text)![1]);
+    expect(outcome.text).toMatch(/^go 止まった threat_exposed: 掘ると zombie.*守りが掘りを止めたマス \d+ 個 /u);
+    const cells = Number(/マス (\d+) 個/u.exec(outcome.text)![1]);
     expect(cells).toBeGreaterThanOrEqual(2);
     expect(cells).toBeLessThanOrEqual(GO_EXPOSED_STOPS);
     expect(sim.world.nameAt(2, FLOOR, 0)).toBe('stone');
