@@ -114,6 +114,9 @@ const HEAD_BACKOFF_MAX_MS = 30_000;
 const YOUTUBE_BACKOFF_MAX_MS = 60_000;
 const QUOTA_BACKOFF_MS = 5 * 60_000;
 const NOT_LIVE_BLOCK_MS = 60_000;
+/** Unreadable stream bodies in a row before the chat is polled instead. */
+const STREAM_BAD_LIMIT = 3;
+
 /** A stream connection that lived this long was a good one: the failures before it are forgotten. */
 const STREAM_STABLE_MS = 30_000;
 const STREAM_BACKOFF_MAX_MS = 30_000;
@@ -449,6 +452,7 @@ export class StreamEar {
 
     const streamLoop = async (): Promise<ReadEnd | 'fallback'> => {
       let failures = 0;
+      let badStreams = 0;
       while (!signal.aborted) {
         const connection = new AbortController();
         const closeWithSignal = () => connection.abort();
@@ -498,7 +502,9 @@ export class StreamEar {
           await flush();
           return 'chat_ended';
         }
-        if (apiError?.streamUnavailable) {
+        // A body the parser cannot read three times running (a framing no source described) is read by polling instead of retried forever.
+        badStreams = apiError?.reason === 'badStream' ? badStreams + 1 : 0;
+        if (apiError?.streamUnavailable || badStreams >= STREAM_BAD_LIMIT) {
           this.lastError = errorText(fault);
           return 'fallback';
         }

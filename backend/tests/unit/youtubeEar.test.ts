@@ -128,6 +128,8 @@ class FakeYoutube {
   streamEnabled = true;
   /** Errors for the next stream connects: [status, reason]. */
   streamErrors: Array<[number, string] | null> = [];
+  /** Stream connections answered with a body no framing reads (before any error above). */
+  streamGarbage = 0;
   framing: 'array' | 'ndjson' | 'sse' | 'wrapped' = 'array';
   /** The bytes of every written response are cut into pieces of this size (0: whole), which splits Japanese characters too. */
   splitBytes = 0;
@@ -233,6 +235,10 @@ class FakeYoutube {
       this.streamCalls += 1;
       this.connectTimes.push(this.clock());
       if (!this.streamEnabled) return new Response('<html>Not Found</html>', { status: 404, headers: { 'content-type': 'text/html' } });
+      if (this.streamGarbage > 0) {
+        this.streamGarbage -= 1;
+        return new Response('<html><body>Service Unavailable</body></html>', { status: 200, headers: { 'content-type': 'text/html' } });
+      }
       const error = this.streamErrors.shift();
       if (error) return googleError(error[0], error[1]);
       return this.connect(query, new Headers(init?.headers).get('authorization'), init?.signal);
@@ -475,10 +481,11 @@ describe('reading the chat', () => {
     expect(Object.keys(byId)).toEqual(['s1', 's2', 's3', 's4', 's5', 'o1']);
     expect(byId.s1).toEqual({ id: 's1', authorId: 'UCa', authorName: 'Name UCa', text: 'ありがとう', publishedAt: at(1), kind: 'superchat', amount: { display: '¥500', micros: 500000000, currency: 'JPY' }, roles: ['member'] });
     expect(byId.s2).toMatchObject({ kind: 'supersticker', text: 'ハート', amount: { micros: 200000000, currency: 'JPY' } });
-    expect(byId.s3).toMatchObject({ kind: 'membership', roles: ['member'] });
+    expect(byId.s3).toMatchObject({ kind: 'membership', roles: ['member'], synthetic: true });
     expect(byId.s3.text).toContain('ベーシック');
     expect(byId.s4).toMatchObject({ kind: 'membership', text: '6か月です' });
-    expect(byId.s5).toMatchObject({ kind: 'gift' });
+    expect(byId.s4.synthetic).toBeUndefined();
+    expect(byId.s5).toMatchObject({ kind: 'gift', synthetic: true });
     expect(byId.s5.text).toContain('5');
     expect(byId.o1).toMatchObject({ kind: 'text', roles: ['owner', 'moderator', 'verified'] });
     expect(byId.o1.amount).toBeUndefined();
@@ -971,6 +978,17 @@ describe('reading the chat over streamList', () => {
       // First try plus a retry every 10 minutes of the hour.
       expect(w.youtube.calls.filter(call => call.path === '/liveChat/messages/stream').length).toBeGreaterThanOrEqual(6);
       expect(w.youtube.calls.filter(call => call.path === '/liveChat/messages/stream').length).toBeLessThanOrEqual(8);
+    });
+
+    it('a body no framing reads, three times running, is read by polling instead of retried forever', async () => {
+      const w = world({ via: 'stream', streamRetryMs: 600_000 });
+      live(w);
+      w.youtube.streamGarbage = 3;
+      w.youtube.messages = manyTexts(2);
+      await w.run(() => w.head.received.length >= 2);
+      expect(w.head.received.map(c => c.id)).toEqual(ids(2));
+      expect(w.methods.slice(0, 2)).toEqual(['streamList', 'polling']);
+      expect(w.youtube.listCalls).toBeGreaterThanOrEqual(1);
     });
 
     it('a 500 or a broken connection is not "cannot be used": it is retried as a stream', async () => {

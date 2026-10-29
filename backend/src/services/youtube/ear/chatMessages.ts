@@ -13,6 +13,8 @@ export interface StreamComment {
   kind: StreamCommentKind;
   amount?: { display: string; micros: number; currency: string };
   roles: StreamCommentRole[];
+  /** The text is the ear's own description of an event (a membership, a gift), not the viewer's words (stream-contract.md §2). */
+  synthetic?: true;
 }
 
 /** The head cuts `text` at 300 chars; the ear cuts first so the wire stays small. */
@@ -57,19 +59,19 @@ export function classifyChatMessage(item: LiveChatMessageResource): ChatEventCla
     case 'newSponsorEvent': {
       const details = snippet.newSponsorDetails;
       const level = details?.memberLevelName ? `（${details.memberLevelName}）` : '';
-      return comment({ ...base, text: `${details?.isUpgrade ? 'メンバーシップをアップグレード' : 'メンバーになりました'}${level}`, kind: 'membership' });
+      return comment({ ...base, text: `${details?.isUpgrade ? 'メンバーシップをアップグレード' : 'メンバーになりました'}${level}`, kind: 'membership', synthetic: true });
     }
     case 'memberMilestoneChatEvent': {
       const details = snippet.memberMilestoneChatDetails;
       const months = typeof details?.memberMonth === 'number' ? `メンバー歴${details.memberMonth}か月` : 'メンバー歴の節目';
       const level = details?.memberLevelName ? `（${details.memberLevelName}）` : '';
-      return comment({ ...base, text: details?.userComment?.trim() ? details.userComment : `${months}${level}`, kind: 'membership' });
+      return comment(details?.userComment?.trim() ? { ...base, text: details.userComment, kind: 'membership' } : { ...base, text: `${months}${level}`, kind: 'membership', synthetic: true });
     }
     case 'membershipGiftingEvent': {
       const details = snippet.membershipGiftingDetails;
       const count = typeof details?.giftMembershipsCount === 'number' ? details.giftMembershipsCount : 1;
       const level = details?.giftMembershipsLevelName ? `（${details.giftMembershipsLevelName}）` : '';
-      return comment({ ...base, text: `メンバーシップを${count}件ギフトしました${level}`, kind: 'gift' });
+      return comment({ ...base, text: `メンバーシップを${count}件ギフトしました${level}`, kind: 'gift', synthetic: true });
     }
     default:
       return { class: 'ignored' };
