@@ -408,3 +408,11 @@ describe('run 46 hold 8: a console that gathers messages', () => {
     expect(parsePlayerList('x\nThere are 1 of a max of 20 players online: AUnknown or incomplete command')).toBeNull();
   });
 });
+
+describe('run 46 hold 8: the chat form of the answer (the numbers empty)', () => {
+  it('takes the names when the two numbers are empty, and still refuses a name that is not a name', async () => {
+    const { parsePlayerList } = await import('../../src/services/minebot/utils/sceneSave.js');
+    expect(parsePlayerList('There are  of a max of  players online: ShannonProbe, MinebotTrial')).toEqual({ count: 2, max: 0, names: ['ShannonProbe', 'MinebotTrial'] });
+    expect(parsePlayerList('There are  of a max of  players online: AUnknown or incomplete command. See below for error<--')).toBeNull();
+  });
+});

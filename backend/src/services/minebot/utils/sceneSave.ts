@@ -79,14 +79,15 @@ async function tail(file: string, bytes: number): Promise<string> {
  */
 export function parsePlayerList(answer: string): { count: number; max: number; names: string[] } | null {
   // The line of the answer that has the form (a console that gathers messages may put others before it); a line with something mixed into it is not taken.
-  const found = answer.split(/\r?\n/u).map(line => /^There are (\d+) of a max of (\d+) players online:\s*(.*)$/u.exec(line.trim())).find(match => match !== null) ?? null;
+  const found = answer.split(/\r?\n/u).map(line => /^There are (\d*) of a max of (\d*) players online:\s*(.*)$/u.exec(line.trim())).find(match => match !== null) ?? null;
   if (!found) return null;
-  const count = Number(found[1]), max = Number(found[2]);
+  // (A console that gathers the chat messages of the operator has the two numbers empty: then the count is not checked; the names still are.)
+  const count = found[1] === "" ? null : Number(found[1]), max = found[2] === "" ? null : Number(found[2]);
   const rest = found[3]!.trim();
   const names = rest === '' ? [] : rest.split(',').map(name => name.trim());
   if (names.some(name => !/^[A-Za-z0-9_]{1,16}$/u.test(name))) return null;
-  if (names.length !== count) return null;
-  return { count, max, names };
+  if (count !== null && names.length !== count) return null;
+  return { count: count ?? names.length, max: max ?? 0, names };
 }
 /** How many times a `list` that is not whole is asked again, and how long between. */
 export const LIST_TRIES = 3;
