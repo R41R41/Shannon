@@ -135,6 +135,16 @@ const CONTINUES_ON_FAIL = new Set(['equip', 'eat', 'look', 'sneak', 'jump']);
  * Whether the act goes on to the next hand when this one fails by itself (its outcome is not ok): `onFail` when given, else by the kind.
  * A reflex, stopIf, a cancel, the deadline, a lost connection or a full pack stop the whole act whatever this says.
  */
+/**
+ * Run 47 (hold 5): the hands whose aim is to take things into the pack stop when it fills (nothing more can be taken); a go, a vertical, a walk and the rest arrive without room,
+ * and a dig only when it collects. What they dig lies unpicked, and their line says so.
+ */
+export function packStops(hand: Pick<ActHand, 'do' | 'collect'> | null): boolean {
+  if (!hand) return false;
+  if (hand.do === 'dig') return hand.collect !== false;
+  return PACK_TAKING.has(hand.do);
+}
+const PACK_TAKING = new Set<string>(['pickup', 'mine', 'obsidian', 'chest', 'furnace', 'smelt', 'make', 'craft']);
 export function handContinuesOnFail(hand: Pick<ActHand, 'do' | 'onFail'>): boolean {
   return hand.onFail ? hand.onFail === 'continue' : CONTINUES_ON_FAIL.has(hand.do);
 }
@@ -410,6 +420,7 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
   const ledger = bot.reflexLedger as { mark(): number; entriesSince(mark: number): Array<{ kind: string; detail: string }> } | undefined;
   const mark = ledger?.mark() ?? 0;
   const startFree = freeSlots(bot);
+  let handNow: ActHand | null = null;
   const watched = new Map<string, string>();
   const base0 = feetCell(bot);
   if (stopIf?.blockChanged && base0) {
@@ -481,7 +492,8 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
         if (now !== was) return stopWith(`blockChanged:(${key}) ${was}→${now}`, 'stop_if_block');
       }
       hurtOrFall();
-      if (startFree > 0 && freeSlots(bot) === 0) return stopWith('持ち物が満杯になった', 'inventory_full');
+      // Run 47 (hold 5): only a hand whose aim is to take things stops for a full pack; a go or a vertical arrives without room (what it digs falls, and its line says so).
+      if (startFree > 0 && freeSlots(bot) === 0 && packStops(handNow)) return stopWith('持ち物が満杯になった', 'inventory_full');
     } catch { /* a watch must not stop the body */ }
   };
   const timer = setInterval(watch, options.tickMs ?? 100);
@@ -572,7 +584,7 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
       const began = Date.now();
       const opsBefore = motorOpsOf(bot);
       let outcome: StepOutcome;
-      host.actHandNow = hand.do;
+      host.actHandNow = hand.do; handNow = hand;
       fallStops = hand.do === 'go' ? Math.max(4, (hand.maxDrop ?? 3) + 1) : 4;
       const dugBefore = hand.do === 'dig' ? (cellsOf(ctx, hand, hand.at) ?? []).map(cell => ({ cell, name: String(blockAt(bot, cell)?.name ?? '') })) : [];
       // A fight hand is a fight the planner chose against its target's kind, in either stance: for the length of the hand the kind counts as accepted

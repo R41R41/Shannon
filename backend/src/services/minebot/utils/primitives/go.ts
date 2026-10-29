@@ -8,7 +8,7 @@ import { feetCell, type BlockReader, type Cell } from '../localMap.js';
 import { chooseTool, canHarvest, nearlyBroken } from '../toolChoice.js';
 import { installDoorRules, isDoorlike, mapBlockOf, nodeCell, NO_ENTER, standable } from '../walkRules.js';
 import { clip } from '../actReport.js';
-import { blockAt, cellText, inventoryCount, isAirLike, letGo, stopped, StepStopped, wait, waitUntil, type StepContext, type StepOutcome } from './common.js';
+import { blockAt, cellText, fullPackWatch, inventoryCount, isAirLike, letGo, stopped, StepStopped, wait, waitUntil, type StepContext, type StepOutcome } from './common.js';
 import { atGoal, goWith, type GoOutcome, type WayNotes } from './walk.js';
 import { dig } from './dig.js';
 import { pillarUp, shortFloor, wholeFloorBeside } from './pillarUp.js';
@@ -561,18 +561,20 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   };
 
   // ---- how a line ends (the contract's result lines) ----
+  const packNote = fullPackWatch(bot);
   const tail = () => `${cellText(feetCell(bot) ?? start)} 道 ${state.steps} 歩・掘 ${state.dug}・置 ${state.placed}・引き直し ${state.redraws} 回`;
   const fail = (code: string, why: string, hint: string): StepOutcome => {
     const at = feetCell(bot) ?? start;
     const head = `go 止まった ${code}: `;
-    const fixed = ` ${tail()}`;
+    const full = packNote();
+    const fixed = ` ${tail()}${full ? `。${full}` : ''}`;
     // The contract's line: the code, the reason, where and the counts, then the hint; what does not fit of the 160 is cut from the back (the hint first).
     const room = 160 - head.length - fixed.length;
     const withHint = hint ? `。${hint}` : '';
     const text = why.length + withHint.length <= room ? `${head}${why}${fixed}${withHint}` : `${head}${clip(why, Math.max(24, room))}${fixed}`;
     return { ...stopped(bot, code, text, at, start), progress: progressNow(), data: { work: { dug: state.dug, placed: state.placed, steps: state.steps, redraws: state.redraws } } };
   };
-  const arrived = (): StepOutcome => ({ ok: true, text: `go 着いた ${tail()}`, at: feetCell(bot) ?? start, progress: progressNow(true),
+  const arrived = (): StepOutcome => ({ ok: true, text: `go 着いた ${tail()}${(() => { const full = packNote(); return full ? `。${full}` : ''; })()}`, at: feetCell(bot) ?? start, progress: progressNow(true),
     data: { work: { dug: state.dug, placed: state.placed, steps: state.steps, redraws: state.redraws } } });
 
   // ---- the places: the ones nobody may stand in are dropped; none left is `unsafe` ----

@@ -6,7 +6,7 @@ import { explainShaftRefusal, shaftStepRefusal } from '../shaftDown.js';
 import { trailOf } from '../stairLine.js';
 import type { Progress } from '../../integration/commonFca/continueContract.js';
 import { nativeActionHost } from '../../execution/ActionExecution.js';
-import { blockAt, cellText, eyeDistance, guard, inventoryCount, letGo, StepStopped, USE_REACH, wait, waitUntil, type StepContext, type StepOutcome } from './common.js';
+import { blockAt, cellText, fullPackWatch, eyeDistance, guard, inventoryCount, letGo, StepStopped, USE_REACH, wait, waitUntil, type StepContext, type StepOutcome } from './common.js';
 import { blockInHand, digRuleOf, hasFace, mayLayAt, placeNamesOf } from './go.js';
 import { shortFloor } from './pillarUp.js';
 import { ThreatExposedError } from '../exposureGuard.js';
@@ -616,6 +616,8 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
   };
 
   // ---- the run ----
+  const packNote = fullPackWatch(bot);
+  const fullText = () => { const full = packNote(); return full ? `。${full}` : ''; };
   const tail = () => `${cellText(feetCell(bot) ?? at)} 段 ${valid()}・掘 ${work.dug}・置 ${work.placeAttempts}${work.placedConfirmed !== work.placeAttempts ? `（確 ${work.placedConfirmed}）` : ''}`;
   const correctedText = () => (corrections.length ? `。置いた ${corrections.slice(0, 3).map(entry => `${cellText(entry.at)} が無くなった（今 ${entry.now}）`).join('・')}（有効な段数を直した）` : '');
   const brokeText = () => (broke.size ? `。邪魔な物を壊した ${[...broke.entries()].slice(0, 3).map(([name, count]) => `${name}×${count}`).join('・')}` : '');
@@ -643,7 +645,7 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
     }
     lookAgain();
     const here = feetCell(bot) ?? at;
-    return { ok: true, text: `vertical 着いた ${tail()}${seenText()}${brokeText()}${correctedText()}`, at: here, from: start, progress: progress() };
+    return { ok: true, text: `vertical 着いた ${tail()}${fullText()}${seenText()}${brokeText()}${correctedText()}`, at: here, from: start, progress: progress() };
   } catch (error) {
     if (error instanceof VStop) {
       // A stop in the air (a jump that laid nothing): the position told is where the body lands, not where it was at that instant.
@@ -651,7 +653,7 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
       lookAgain();
       const where = error.where ?? feetCell(bot) ?? at;
       const head = `vertical 止まった ${error.code}: `;
-      const fixed = ` ${tail()}`;
+      const fixed = ` ${tail()}${fullText()}`;
       const room = 160 - head.length - fixed.length;
       const hint = error.hint ? `。${error.hint}` : '';
       // The line is 160 characters at most (the act cuts it from the back): when it is too long the reason is cut and the way out stays (run 46: the planner has to read it).

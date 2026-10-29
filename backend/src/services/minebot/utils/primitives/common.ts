@@ -194,6 +194,31 @@ export function freeSlots(bot: any): number {
   return free;
 }
 
+/**
+ * Run 47 (hold 5): a go or a vertical does not need room in the pack to arrive: what it digs falls and is not picked up. Taken at the start, the returned function tells at the end, when the
+ * pack is full, how many dug things lie unpicked (the item entities that were not lying at the start), as a clause for the result line; empty when there is room.
+ */
+export function fullPackWatch(bot: any): () => string {
+  const isItem = (entity: any) => entity?.name === 'item' || entity?.displayName === 'Item';
+  const before = new Set<number>();
+  for (const entity of Object.values(bot.entities ?? {}) as any[]) if (isItem(entity)) before.add(entity.id);
+  return () => {
+    if (freeSlots(bot) > 0) return '';
+    const kinds = new Map<string, number>();
+    let total = 0;
+    for (const entity of Object.values(bot.entities ?? {}) as any[]) {
+      if (!isItem(entity) || before.has(entity.id)) continue;
+      let stack: { name?: string; count?: number } | null = null;
+      try { stack = entity.getDroppedItem?.() ?? null; } catch { stack = null; }
+      if (!stack?.name) continue;
+      const count = Math.max(1, Number(stack.count ?? 1));
+      kinds.set(stack.name, (kinds.get(stack.name) ?? 0) + count); total += count;
+    }
+    const names = [...kinds.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([name]) => name).join('・');
+    return total ? `持ち物が満杯（掘った ${names} は拾えずに落ちた ${total} 個）` : '持ち物が満杯（拾えずに落ちた物は無い）';
+  };
+}
+
 /** Everything that drives the body, let go (a step that stops leaves no key down and no path running). */
 export function letGo(bot: any): void {
   for (const stop of [() => bot.pathfinder?.stop?.(), () => bot.pathfinder?.setGoal?.(null), () => bot.stopDigging?.(), () => bot.deactivateItem?.(),

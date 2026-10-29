@@ -564,6 +564,25 @@ try {
     await reset(actor);
   }
 
+  // ---- run 47 (hold 5): a go that digs through stone with a pack that fills on the way arrives (the pack's being full stops only the hands that take things)
+  if (wanted.has('go_fullpack')) {
+    await reset(actor);
+    await ask('tp ' + ACTOR + ' -10 100 -10'); await sleep(600);
+    await ask('fill 12 100 -7 24 105 7 minecraft:air'); await ask('fill 14 100 -7 21 102 7 minecraft:stone');
+    await ask('item replace entity ' + ACTOR + ' hotbar.0 with minecraft:iron_pickaxe');
+    for (let slot = 1; slot <= 8; slot++) await ask('item replace entity ' + ACTOR + ' hotbar.' + slot + ' with minecraft:cobblestone 64');
+    for (let slot = 0; slot <= 25; slot++) await ask('item replace entity ' + ACTOR + ' container.' + slot + ' with minecraft:cobblestone 64');
+    await ask('effect give ' + ACTOR + ' minecraft:resistance 600 4 true'); await sleep(500);
+    await ask('tp ' + ACTOR + ' 12.5 100 0.5'); await sleep(2500);
+    const run = await act(body, { hands: [{ do: 'go', to: { x: 23, y: 100, z: 0 }, canDig: ['stone'], maxDig: 60, seconds: 90 }] }, { seconds: 100 });
+    const line = run.parsed?.lines?.[0];
+    report.goFullPack = { ms: run.ms, goal: line?.goal, line: String(line?.line).slice(0, 200), stoppedBy: run.parsed?.stoppedBy ?? null };
+    check('run 47 hold 5: a go digging through stone with a pack that fills on the way arrives and says the pack is full (it is not stopped for it)', line?.goal === 'done' && /持ち物が満杯/u.test(String(line?.line)) && run.parsed?.stoppedBy !== 'inventoryFull', JSON.stringify(report.goFullPack).slice(0, 400));
+    produce('measure/go-fullpack', null, { output: report.goFullPack as Record<string, unknown> });
+    await ask('fill 12 100 -7 24 105 7 minecraft:air'); await ask('kill @e[type=item]'); await ask('tp ' + ACTOR + ' 0.5 100 0.5');
+    await reset(actor);
+  }
+
   // ---- A-12 (body): the head asks for a hold (incident.take): the world stops, the box holds the notes, the resume brings the world back
   if (runs('head_take')) {
     await reset(actor);
