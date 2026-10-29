@@ -616,6 +616,13 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   const arrived = (): StepOutcome => ({ ok: true, text: `go 着いた ${tail()}${(() => { const full = packNote(); return full ? `。${full}` : ''; })()}`, at: feetCell(bot) ?? start, progress: progressNow(true),
     data: { work: { dug: state.dug, placed: state.placed, steps: state.steps, redraws: state.redraws } } });
 
+  /** The stop at the time limit: when the body is held in flowing water, that is in the line (whatever the length of `seconds`). */
+  const limitTime = (left: string): StepOutcome => {
+    const wet = flowingWaterAt(bot, feetCell(bot));
+    const held = wet ? `。流れる水の中（${cellText(feetCell(bot)!)} は ${wet}）で押し戻された` : '';
+    return fail('limit_time', `${args.seconds ?? GO_DEFAULTS.seconds} 秒の上限に着いた（行き先まで あと ${left}m）${held}`, wet ? '上流の水源を汲むかブロックで塞ぐか、別の道を' : 'seconds を増やすか、行き先を近くに');
+  };
+
   // ---- the places: the ones nobody may stand in are dropped; none left is `unsafe` ----
   const safeCells = cells.filter(cell => !hazardAtFeet(bot, cell.x, cell.y, cell.z));
   if (!safeCells.length) {
@@ -792,7 +799,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   const movementsFor = (relax: Relax = {}) => goMovements(bot, limits, rule, place.held, state, relax);
   const timeLeft = () => deadline - Date.now();
   const limitStop = (): StepOutcome | null => {
-    if (timeLeft() <= 0) return fail('limit_time', `${args.seconds ?? GO_DEFAULTS.seconds} 秒の上限に着いた（行き先まで あと ${near() ? distanceTo(bot, near()).toFixed(0) : '?'}m）`, 'seconds を増やすか、行き先を近くに');
+    if (timeLeft() <= 0) return limitTime(near() ? distanceTo(bot, near()).toFixed(0) : '?');
     return null;
   };
   /** The cells a route breaks and fills against what is left of the limits: the stop, or null. A route over the limit is not begun. */
@@ -1016,7 +1023,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
       if (blocked) { letGo(bot); return blocked; }
       if (out.crossed) return arrived();
       if (reached()) return arrived();
-      if (out.timedOut) { letGo(bot); return fail('limit_time', `${args.seconds ?? GO_DEFAULTS.seconds} 秒の上限に着いた（行き先まで あと ${distanceTo(bot, aim).toFixed(0)}m）`, 'seconds を増やすか、行き先を近くに'); }
+      if (out.timedOut) { letGo(bot); return limitTime(distanceTo(bot, aim).toFixed(0)); }
       letGo(bot);
       const moved = bot.entity.position.distanceTo(from);
       if (unloaded && !isUnloaded()) { state.redraws++; continue; }

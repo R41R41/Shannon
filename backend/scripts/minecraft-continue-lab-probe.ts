@@ -18,6 +18,7 @@ import { SceneSaver, selfNames } from '../src/services/minebot/utils/sceneSave.j
 import { bodyRevision } from '../src/services/minebot/utils/bodyRevision.js';
 import { executeAction, createMotorPort, physicalRoots, preemptLowerPriorityActions } from '../src/services/minebot/execution/ActionExecution.js';
 import { opLogOf } from '../src/services/minebot/utils/opLog.js';
+import { localMapFor, MAP_PENDING } from '../src/services/minebot/utils/localMap.js';
 
 const port = Number(process.env.MINECRAFT_CONTINUE_PORT);
 const worldDirectory = process.env.MINECRAFT_CONTINUE_WORLD_DIRECTORY ?? '';
@@ -142,6 +143,24 @@ try {
   ({ actor, body } = await connect());
   await reset(actor);
   await sleep(2000);
+
+  // ---- run 47 (hold 8): a body that has just logged in gives no map of unknown cells: "still being made" at first, drawn once the chunks have come, within 10 s
+  if (runs('basics')) {
+    const fresh: any = await createProbeBot(port, 'MapProbe');
+    const samples: string[] = [];
+    let drawn: string | null = null;
+    for (let waited = 0; waited < 10_000; waited += 100) {
+      const text = localMapFor(fresh, { fresh: true }) ?? '';
+      if (samples.length < 3 || text !== samples[samples.length - 1]) samples.push(text);
+      if (text && !text.startsWith(MAP_PENDING.slice(0, 8))) { drawn = text; break; }
+      await sleep(100);
+    }
+    const unknown = drawn ? (drawn.match(/?/gu) ?? []).length / Math.max(1, drawn.length) : 1;
+    report.mapAfterLogin = { pendingFirst: samples[0]?.startsWith(MAP_PENDING.slice(0, 8)) ?? null, drawn: !!drawn, unknownShare: Math.round(unknown * 100) / 100 };
+    check('run 47 hold 8: a body just logged in has a map drawn within 10 s (not mostly "?"), and before that says the map is still being made', !!drawn && unknown < 0.5, JSON.stringify(report.mapAfterLogin));
+    try { await closeProbeBot(fresh); } catch { /* the lab goes on */ }
+    await sleep(1500);
+  }
 
   // ---- measurements that need no scene: the observation's new fields, the version, the server's tick, the hand-start record
   if (runs('basics')) {
@@ -636,7 +655,13 @@ try {
     const line = run.parsed?.lines?.[0];
     report.goWaterBend = { ms: run.ms, goal: line?.goal, line: String(line?.line).slice(0, 220) };
     check('run 47 hold 7: a go upstream in flowing water under a ceiling arrives, or stops within 30 s saying the water holds it (stuck, with the flow and the way out), never 40 s of tries', (line?.goal === 'done' && run.ms < 30_000) || (/stuck: 流れる水の中/u.test(String(line?.line)) && run.ms < 30_000), JSON.stringify(report.goWaterBend).slice(0, 400));
-    produce('measure/go-waterbend', null, { output: report.goWaterBend as Record<string, unknown> });
+    // the same go with a short `seconds` (15): when the clock runs out in the flow, the line says the water held it
+    await ask('tp ' + ACTOR + ' 9.5 100 0.5'); await sleep(2500);
+    const short = await act(body, { hands: [{ do: 'go', to: { x: 14, y: 100, z: -3 }, waterOk: true, seconds: 15 }] }, { seconds: 30 });
+    const shortLine = short.parsed?.lines?.[0];
+    report.goWaterBendShort = { ms: short.ms, goal: shortLine?.goal, line: String(shortLine?.line).slice(0, 220) };
+    check('run 47 hold 8: a go held in flowing water when its 15 s run out says so in the line (limit_time or stuck, with 流れる水の中), or arrives', shortLine?.goal === 'done' || /流れる水の中/u.test(String(shortLine?.line)), JSON.stringify(report.goWaterBendShort).slice(0, 400));
+    produce('measure/go-waterbend', null, { output: { long: report.goWaterBend, short: report.goWaterBendShort } as Record<string, unknown> });
     await ask('fill 7 100 -7 16 104 5 minecraft:air'); await ask('tp ' + ACTOR + ' 0.5 100 0.5');
     await reset(actor);
   }

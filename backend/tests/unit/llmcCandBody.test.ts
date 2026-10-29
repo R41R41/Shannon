@@ -173,3 +173,33 @@ describe('around: the nearest water has its count', () => {
     expect(answer.text).toContain('水 (180,52,205) 南 3m・上 3（1 マス）');
   });
 });
+
+describe('the map of a body whose chunks have not come (run 47, hold 8)', () => {
+  it('says the map is still being made instead of drawing "?", draws it once a chunk comes, and keeps no empty drawing', () => {
+    let loaded = false;
+    const bot: any = Object.assign(new EventEmitter(), {
+      entity: { position: new Vec3(0.5, 64, 0.5), yaw: 0, onGround: true }, entities: {}, game: { dimension: 'overworld' },
+      blockAt: (p: Vec3) => (!loaded ? null : Math.floor(p.y) < 64 ? { name: 'stone', boundingBox: 'block' } : { name: 'air', boundingBox: 'empty' }),
+    });
+    const first = localMapFor(bot, { now: 10_000 })!;
+    expect(first).toContain('地図はまだ作り中');
+    expect(first).not.toContain('?');
+    loaded = true;
+    bot.emit('chunkColumnLoad', new Vec3(0, 0, 0));
+    const drawn = localMapFor(bot, { now: 10_050 })!;     // inside 500 ms of the first call: the empty one was not kept
+    expect(drawn).not.toContain('地図はまだ作り中');
+    expect(drawn).toContain('@');
+  });
+  it('is drawn again after the chunks arrive even when an earlier drawing was kept (a login after a restart)', () => {
+    let weather = 'air';
+    const bot: any = Object.assign(new EventEmitter(), {
+      entity: { position: new Vec3(0.5, 64, 0.5), yaw: 0, onGround: true }, entities: {}, game: { dimension: 'overworld' },
+      blockAt: (p: Vec3) => (Math.floor(p.y) < 64 ? { name: 'stone', boundingBox: 'block' } : Math.floor(p.y) === 64 && p.x > 3 ? { name: weather, boundingBox: weather === 'air' ? 'empty' : 'block' } : { name: 'air', boundingBox: 'empty' }),
+    });
+    const before = localMapFor(bot, { now: 20_000 })!;
+    weather = 'oak_planks';
+    expect(localMapFor(bot, { now: 21_000 })).toBe(before);            // nothing told the map: as drawn
+    bot.emit('chunkColumnLoad', new Vec3(16, 0, 0));
+    expect(localMapFor(bot, { now: 22_000 })).not.toBe(before);
+  });
+});

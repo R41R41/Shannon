@@ -55,3 +55,21 @@ describe('flowing water', () => {
     expect(flowingWaterAt(sim.bot, null)).toBeNull();
   });
 });
+
+describe('go held in flowing water when its time runs out', () => {
+  it('says so in the line of limit_time, whatever the length of seconds', async () => {
+    const { go } = await import('../../src/services/minebot/utils/primitives/go.js');
+    const world: Ground = (x, y, z) => (Math.abs(x) > 30 || Math.abs(z) > 30 ? null : y < FLOOR ? 'stone' : y === FLOOR && x >= 0 && x <= 1 && z === 0 ? 'water[level=3]' : 'air');
+    const sim = makeSim(world, { start: [0.5, FLOOR, 0.5] });
+    const ctx = { bot: sim.bot, stop: new AbortController().signal, deadline: Date.now() + 600_000, facing: 'east' as const, base: { x: 0, y: FLOOR, z: 0 } };
+    const promise = go(ctx as never, { goals: [{ x: 25, y: FLOOR, z: 0 }], seconds: 1 } as never);
+    let settled = false; promise.then(() => { settled = true; }, () => { settled = true; });
+    // Hold the body in the flow cell: the clock runs out with the feet there.
+    for (let t = 0; t < 20_000 && !settled; t += 50) { sim.bot.entity.position.x = 0.5; sim.bot.entity.position.z = 0.5; sim.bot.entity.velocity.x = 0; sim.tick(); await vi.advanceTimersByTimeAsync(50); }
+    const outcome = await promise;
+    expect(outcome.ok).toBe(false);
+    expect(outcome.text).toMatch(/^go 止まった limit_time: 1 秒の上限に着いた（行き先まで あと \d+m）。流れる水の中（\(0,64,0\) は 水の流れ 3）で押し戻された/u);
+    expect(outcome.text).toContain('上流の水源を汲む');
+    expect(outcome.text.length).toBeLessThanOrEqual(160);
+  });
+});

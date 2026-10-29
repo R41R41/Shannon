@@ -505,6 +505,8 @@ export function mapMemoryOf(bot: MapBody): MapMemory {
   try { bot.on?.('physicsTick', () => { try { record(); } catch { /* a map must not stop the body */ } }); } catch { /* a probe body */ }
   try { bot.on?.('blockUpdate', (old: unknown, block: { position?: Vec3 } | null) => { try { changed(old, block); } catch { /* the same */ } }); } catch { /* a probe body */ }
   try { bot.on?.('respawn', () => { made.walked.clear(); made.lastCell = null; made.dirty = true; }); } catch { /* a probe body */ }
+  // Run 47 (hold 8): after a restart and a login the first drawing came before the chunks did and stayed (all "?"): the chunks arriving, and a new login or spawn, draw it again.
+  for (const event of ['chunkColumnLoad', 'chunkColumnUnload', 'spawn', 'login']) { try { bot.on?.(event, () => { made.dirty = true; made.cache = undefined; }); } catch { /* a probe body */ } }
   return made;
 }
 
@@ -683,6 +685,8 @@ export function feetCell(bot: MapBody): Cell | null {
  * `position` and the marks' ways of the same frame, which are told from the feet of the moment.
  */
 const MAP_MIN_MS = 500;
+/** What the map is while the chunks round the body have not come (after a login): not a drawing of unknown cells. */
+export const MAP_PENDING = '地図はまだ作り中（周りのチャンクを読み込み中）。view で周りを見るか、少し待ってから';
 /** ... and when only the creatures moved (the feet, the blocks and the dimension are as drawn), at most every second: they move all the time. */
 const CREATURE_MIN_MS = 1000;
 
@@ -703,7 +707,10 @@ export function localMapFor(bot: MapBody, options: LocalMapOptions & { fresh?: b
   const creatures = creatureCells(bot);
   const crowd = [...creatures].map(([cell, mark]) => `${cell}${mark}`).sort().join(';');
   if (!options.fresh && cached && cached.key === key && !memory.dirty && (cached.crowd === crowd || now - cached.at < CREATURE_MIN_MS)) return cached.text;
-  const text = drawLocalMap({ feet, read: bodyReader(bot), trail: walkedCells(bot, now), creatures }, options);
+  // Run 47 (hold 8): a body that has no block yet round its feet (the chunks have not come) has no map to give: said as such, and not kept.
+  const reader = bodyReader(bot);
+  if (!reader(feet.x, feet.y, feet.z) && !reader(feet.x, feet.y - 1, feet.z)) { memory.dirty = true; memory.cache = undefined; return MAP_PENDING; }
+  const text = drawLocalMap({ feet, read: reader, trail: walkedCells(bot, now), creatures }, options);
   memory.cache = { key, crowd, at: now, text };
   memory.dirty = false;
   return text;
