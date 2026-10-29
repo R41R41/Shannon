@@ -393,14 +393,7 @@ try {
       if (!(actor.inventory.items() as any[]).some(item => item.name === 'water_bucket')) { await ask('give ' + ACTOR + ' minecraft:water_bucket 1'); await sleep(800); }
       await ask('gamemode survival ' + ACTOR); await ask('tp ' + ACTOR + ' ' + start.x + ' ' + start.y + ' ' + start.z); await sleep(2500);
     };
-    // 1) a full pack: said before anything is poured or dug
-    await prepare(true);
-    const slotsUsed = (actor.inventory.slots as any[]).filter((item, slot) => slot >= 9 && slot <= 44 && item).length;
-    const fullRun = await act(body, { hands: [hand] }, { seconds: 110 });
-    const fullLine = fullRun.parsed?.lines?.[0];
-    report.obsidianFull = { slotsUsed, ms: fullRun.ms, code: fullLine?.code, line: fullLine?.line, pours: (opLines().filter(entry => entry.kind === 'op' && entry.command === fullRun.command.id && entry.op === 'activateItem')).length };
-    check('run 46 hold 6: a full pack (36/36) stops the obsidian hand with inventory_full and the words, at once, before water is poured', slotsUsed >= 36 && fullLine?.code === 'inventory_full' && /満杯（36\/36）/u.test(String(fullLine?.line)) && fullRun.ms < 15_000, JSON.stringify(report.obsidianFull).slice(0, 400));
-    // 2) a pack with room: obsidian is made, dug and taken at the rim of the real pool
+    // 1) a pack with room (first: the world is as the hold left it): obsidian is made, dug and taken at the rim of the real pool
     await prepare(false);
     const before = Number((actor.inventory.items() as any[]).filter(item => item.name === 'obsidian').reduce((sum, item) => sum + item.count, 0));
     const run = await act(body, { hands: [hand] }, { seconds: 120 });
@@ -411,6 +404,13 @@ try {
     const gaps: number[] = []; for (let i = 1; i < ops.length; i++) gaps.push(Date.parse(ops[i].at) - Date.parse(ops[i - 1].at));
     report.obsidianRim = { ms: run.ms, gained: after - before, code: line?.code, line: line?.line, firstOpAfterMs: firstOpAt, longestQuietMs: Math.max(0, ...gaps), ops: ops.length };
     check('run 46 hold 6: at the rim of the real pool the hand makes obsidian and takes it (at least 1 in the pack), and does not stand still for long', after - before >= 1 && (run.parsed?.lines?.[0]?.goal === 'done' || after - before >= 1) && (report.obsidianRim as any).longestQuietMs < 20_000, JSON.stringify(report.obsidianRim).slice(0, 500));
+    // 2) a full pack: said before anything is poured or dug
+    await prepare(true);
+    const slotsUsed = (actor.inventory.slots as any[]).filter((item, slot) => slot >= 9 && slot <= 44 && item).length;
+    const fullRun = await act(body, { hands: [hand] }, { seconds: 110 });
+    const fullLine = fullRun.parsed?.lines?.[0];
+    report.obsidianFull = { slotsUsed, ms: fullRun.ms, code: fullLine?.code, line: fullLine?.line, pours: (opLines().filter(entry => entry.kind === 'op' && entry.command === fullRun.command.id && entry.op === 'activateItem')).length };
+    check('run 46 hold 6: a full pack (36/36) stops the obsidian hand with inventory_full and the words, at once, before water is poured', slotsUsed >= 36 && fullLine?.code === 'inventory_full' && /満杯（36\/36）/u.test(String(fullLine?.line)) && fullRun.ms < 15_000, JSON.stringify(report.obsidianFull).slice(0, 400));
     produce('measure/obsidian-rim', null, { output: { full: report.obsidianFull, rim: report.obsidianRim } });
     await ask('tp ' + ACTOR + ' -10 100 -10'); await sleep(500);
     await ask('kill @e[type=!player]'); await ask('fill 0 97 0 16 106 16 minecraft:air'); await ask('fill 0 90 0 16 99 16 minecraft:stone');
