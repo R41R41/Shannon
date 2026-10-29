@@ -84,11 +84,13 @@ export const GO_PARTIAL_WALKS = 6;
 /**
  * Run 46 (hold 4, q15 go at the amethyst-side deepslate: 120 s, 50 digs refused, a 3 m box): the exposure guard refuses a dig that would open a way to the body for a
  * hostile behind the rock (a zombie 8 to 16 m off), the route is drawn at the next cell, which the guard refuses too, and so on. A cell refused is closed to the routes for as long as
- * that hostile stays where it was (refusedDigs); this many different cells refused within GO_EXPOSED_WINDOW_MS stop the go with `threat_exposed` and the reason, and a way not
- * found after a refusal says the refusal.
+ * that hostile stays where it was (refusedDigs); this many different cells refused within GO_EXPOSED_WINDOW_MS, with the body no nearer than GO_EXPOSED_HEADWAY_M to the place
+ * than it was at the first of them, stop the go with `threat_exposed` and the reason; and a way not found after a refusal says the refusal. (A go that is refused cells and still
+ * comes nearer is let go on: in the lab a wide wall was crossed by another way after six refusals.)
  */
 export const GO_EXPOSED_STOPS = 6;
 export const GO_EXPOSED_WINDOW_MS = 30_000;
+export const GO_EXPOSED_HEADWAY_M = 2;
 /** The most mendings of a stuck body, without any headway between them, before the stop `stuck`. */
 export const GO_REPAIRS = 5;
 /** The most levels a climb makes before the way is drawn again. */
@@ -625,12 +627,17 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   const originalDig = host.dig, originalPlace = host.placeBlock;
   let counting = true;
   /** The exposure guard refused a dig: the cell is written down, and a go that is refused cell after cell stops with the reason. */
+  const exposedLog: Array<{ at: number; left: number }> = [];
   const noteExposed = (at: { x: number; y: number; z: number } | undefined, error: ThreatExposedError) => {
     const now = Date.now();
+    let left = Infinity; try { left = distanceTo(bot, near()); } catch { /* unknown */ }
+    exposedLog.push({ at: now, left });
     if (at) state.exposed.set(`${at.x},${at.y},${at.z}`, { name: error.threat.name, distance: error.threat.distance, at: now });
     blackBoxOf(host)?.note('exposed', { at: at ? [at.x, at.y, at.z] : null, threat: error.threat.name, m: Math.round(error.threat.distance), cells: state.exposed.size });
     const recent = [...state.exposed.values()].filter(entry => now - entry.at <= GO_EXPOSED_WINDOW_MS).length;
-    if (recent >= GO_EXPOSED_STOPS && !state.veto) {
+    const inWindow = exposedLog.filter(entry => now - entry.at <= GO_EXPOSED_WINDOW_MS);
+    const noHeadway = inWindow.length > 0 && inWindow[0]!.left - left < GO_EXPOSED_HEADWAY_M;
+    if (recent >= GO_EXPOSED_STOPS && noHeadway && !state.veto) {
       state.veto = { code: 'threat_exposed', text: exposedWords() };
       try { nav.setGoal?.(null); } catch { /* stopped below */ }
     }
