@@ -330,11 +330,12 @@ try {
 
   // ---- run 46 (hold 4): a go through rock with a hostile behind it that the exposure guard will not let be opened: it stops with the reason (or goes round), not in a box until its time
   if (runs('go_exposed')) {
-    const build = async (detour: boolean) => {
+    const build = async (detour: boolean, wide = false) => {
       await reset(actor);
       await ask('fill -2 99 -4 17 103 4 minecraft:obsidian');
       await ask('fill 0 100 0 1 101 0 minecraft:air'); await ask('fill 3 100 0 8 101 0 minecraft:air'); await ask('fill 14 100 0 15 101 0 minecraft:air');
       await ask('fill 2 100 0 2 101 0 minecraft:stone'); await ask('fill 9 100 0 13 101 0 minecraft:stone');
+      if (wide) { await ask('fill 3 100 -3 8 101 3 minecraft:air'); await ask('fill 0 100 -3 2 101 3 minecraft:stone'); await ask('fill 0 100 0 1 101 0 minecraft:air'); await ask('fill 9 100 -3 9 101 3 minecraft:stone'); }
       if (detour) { await ask('fill 1 100 1 1 101 3 minecraft:stone'); await ask('fill 2 100 3 14 101 3 minecraft:stone'); await ask('fill 14 100 1 14 101 2 minecraft:stone'); }
       await ask('give ' + ACTOR + ' minecraft:diamond_pickaxe 1');
       await ask('tp ' + ACTOR + ' 0.5 100 0.5'); await sleep(1500);
@@ -354,7 +355,13 @@ try {
     const wallStillThere = String(actor.blockAt(new (actor.entity.position.constructor)(2, 100, 0))?.name) === 'stone';
     report.goExposedDetour = { ms: round.ms, goal: round.parsed?.lines?.[0]?.goal, line: round.parsed?.lines?.[0]?.line, x: arrivedX, wallStillThere };
     check('run 46: with another way (a stone way round) the go arrives, the cave wall untouched', round.parsed?.lines?.[0]?.goal === 'done' && arrivedX >= 14 && wallStillThere, JSON.stringify(report.goExposedDetour).slice(0, 400));
-    produce('measure/go-exposed', null, { output: { noWay: report.goExposedNoWay, detour: report.goExposedDetour } });
+    // a wide wall: many cells to try (run 46: cell after cell refused); the go arrives some other way or stops with the reason, in far less than its 90 s
+    await build(false, true);
+    const wide = await act(body, { hands: [hand] }, { seconds: 100 });
+    const wideLine = wide.parsed?.lines?.[0];
+    report.goExposedWide = { ms: wide.ms, goal: wideLine?.goal, code: wideLine?.code, line: wideLine?.line, refused: actor.exposureDigGuard?.refused ?? null };
+    check('run 46: against a wide wall the go arrives or stops with threat_exposed, and does not run to its time (limit_time) in a box', (wideLine?.goal === 'done' || wideLine?.code === 'threat_exposed') && wideLine?.code !== 'limit_time' && wide.ms < 60_000, JSON.stringify(report.goExposedWide).slice(0, 400));
+    produce('measure/go-exposed', null, { output: { noWay: report.goExposedNoWay, detour: report.goExposedDetour, wide: report.goExposedWide } });
     await ask('kill @e[type=!player]'); await ask('fill -2 100 -4 17 103 4 minecraft:air'); await ask('fill -2 99 -4 17 99 4 minecraft:stone');
     await reset(actor);
   }
