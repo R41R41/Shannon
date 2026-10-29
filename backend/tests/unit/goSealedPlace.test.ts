@@ -62,7 +62,7 @@ describe('a place beside water or under gravel that the search does not break (r
     const { value, elapsed } = await drive(sim, go(ctxOf(sim) as never, { goals: [{ x: 5, y: FLOOR, z: 0 }], canDig: ['stone'], seconds: 60 } as never));
     expect(value.ok).toBe(false);
     expect(value.text).toMatch(/^go 止まった dead_end: 行き先 \(5,64,0\)の頭 \(5,65,0\) の stone は隣の \(6,65,0\) が water で掘ると流れ込む/u);
-    expect(value.text).toContain('塞いでから');
+    expect(value.text).toContain("水を塞ぐか");
     expect(elapsed).toBeLessThan(1_000);
   });
   it('is under gravel that may not be dug: said; and with gravel in canDig the cell under it is dug', async () => {

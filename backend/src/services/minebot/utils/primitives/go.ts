@@ -481,7 +481,7 @@ export function sealedAtWords(bot: any, cell: Cell, rule: Pick<DigRule, 'names'>
       for (const d of NEAR_OFFSETS) { const around = { x: cell.x + d[0], y: cell.y + d[1], z: cell.z + d[2] }; if (standable(read2, around.x, around.y, around.z)) { near2 = around; break; } }
       const because = wet ? `隣の ${cellText(wet)} が ${String(blockAt(bot, wet)?.name)} で掘ると流れ込む` : `上の ${cellText({ x: at.x, y: at.y + 1, z: at.z })} が ${String(over.name)} で掘ると落ちてくる`;
       return `行き先 ${cellText(cell)}${dy ? `の頭 ${cellText(at)}` : ''} の ${name} は${because}`
-        + `|${wet ? '水を canPlace の物で塞いでから出し直すか' : `canDig に ${String(over.name)} を足すか`}、${near2 ? `隣の立てる所 ${cellText(near2)} へ` : '別の行き先を'}`;
+        + `|${wet ? '水を塞ぐか' : `canDig に ${String(over.name)} を足すか`}、${near2 ? `隣の立てる所 ${cellText(near2)} へ` : '別の行き先を'}`;
     }
     const read: BlockReader = (x, y, z) => { const found = blockAt(bot, { x, y, z }); return found ? mapBlockOf(found) : null; };
     let near: Cell | null = null;
