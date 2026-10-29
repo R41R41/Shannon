@@ -35,6 +35,11 @@ export interface MapBlock {
    * or a wall 1.5). Absent: 1 for a solid block. The walk's rules (utils/walkRules) read it as the route search does.
    */
   top?: number;
+  /**
+   * run 47: for an open door, gate or trapdoor, the edges of its cell where a thin plate of it stands (letters w, e, n, s), from its collision boxes. A
+   * body does not cross an edge with a plate at its height (the walk's rules, utils/walkRules). Absent: none.
+   */
+  plates?: string;
 }
 export type BlockReader = (x: number, y: number, z: number) => MapBlock | null;
 export interface Cell { x: number; y: number; z: number }
@@ -542,6 +547,7 @@ function blockAtReader(bot: MapBody): BlockReader {
     if (out.solid) { const top = topOfShapes(block.shapes); if (top !== undefined && top !== 1) out.top = top; }
     if (DOORLIKE.test(name)) {
       try { const open = block.getProperties?.()?.open; out.open = open === true || open === 'true'; } catch { out.open = false; }
+      if (out.open) { const plates = platesOfShapes(block.shapes); if (plates) out.plates = plates; }
     }
     if (name === 'water' || name === 'lava' || name === 'end_portal_frame') {
       try {
@@ -555,6 +561,19 @@ function blockAtReader(bot: MapBody): BlockReader {
 }
 
 /** The top of a collision box's shapes (their highest y), or undefined when there are none. */
+/** The edges (w, e, n, s) of a cell that a thin box of the shapes (half a block or less, along a whole edge) stands on. Empty string: none. */
+export function platesOfShapes(shapes: unknown): string {
+  if (!Array.isArray(shapes)) return '';
+  let out = '';
+  const add = (letter: string) => { if (!out.includes(letter)) out += letter; };
+  for (const box of shapes) {
+    if (!Array.isArray(box)) continue;
+    const [x0 = 0, , z0 = 0, x1 = 0, , z1 = 0] = box as number[];
+    if (z1 - z0 >= 0.9) { if (x0 <= 0.01 && x1 - x0 <= 0.5) add('w'); if (x1 >= 0.99 && x1 - x0 <= 0.5) add('e'); }
+    if (x1 - x0 >= 0.9) { if (z0 <= 0.01 && z1 - z0 <= 0.5) add('n'); if (z1 >= 0.99 && z1 - z0 <= 0.5) add('s'); }
+  }
+  return out;
+}
 function topOfShapes(shapes: unknown): number | undefined {
   if (!Array.isArray(shapes) || !shapes.length) return undefined;
   let top = -Infinity;

@@ -33,7 +33,7 @@ export function makeBlock(name: string): any {
   const given = Object.fromEntries(found[2]!.split(',').map(pair => pair.split('=') as [string, string]));
   let offset = 0;
   for (const state of info.states ?? []) {
-    const values: string[] = state.type === 'bool' ? ['true', 'false'] : state.values.map(String);
+    const values: string[] = state.type === 'bool' ? ['true', 'false'] : (state.values ?? []).map(String);
     const index = values.indexOf(given[state.name] ?? values[0]!);
     offset = offset * state.num_values + Math.max(0, index);
   }

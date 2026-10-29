@@ -1,5 +1,5 @@
 import { Vec3 } from 'vec3';
-import { symbolFor, isOpenSymbol, type BlockReader, type Cell, type MapBlock } from './localMap.js';
+import { symbolFor, isOpenSymbol, platesOfShapes, type BlockReader, type Cell, type MapBlock } from './localMap.js';
 
 /**
  * The walk's one rule for the cells a body walks through (r5, 2026-10-22). The walk (its route search's movements, utils/primitives/walk)
@@ -360,7 +360,10 @@ export function mapBlockOf(block: any): MapBlock {
     const top = Math.max(...block.shapes.map((shape: number[]) => shape[4]));
     if (Number.isFinite(top) && top !== 1) out.top = top;
   }
-  if (isDoorlike(out.name)) out.open = doorOpen(block);
+  if (isDoorlike(out.name)) {
+    out.open = doorOpen(block);
+    if (out.open) { const plates = platesOfShapes(block.shapes); if (plates) out.plates = plates; }
+  }
   return out;
 }
 export function doorOpen(block: any): boolean {
