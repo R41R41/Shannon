@@ -16,6 +16,7 @@ import { bodyOverlap, placeFacts } from '../placeFacts.js';
 import { blackBoxOf } from '../blackbox.js';
 import type { Progress } from '../../integration/commonFca/continueContract.js';
 import { meterProgress, round1 } from './progressUnits.js';
+import { ThreatExposedError } from '../exposureGuard.js';
 
 const { goals } = pathfinder;
 
@@ -80,6 +81,14 @@ export const GO_AVOID_COST = 20;
 export const GO_REDO_COST = 60;
 /** The most times one go walks the part of a way a search found before its time ran out (each must come 2 m nearer). */
 export const GO_PARTIAL_WALKS = 6;
+/**
+ * Run 46 (hold 4, q15 go at the amethyst-side deepslate: 120 s, 50 digs refused, a 3 m box): the exposure guard refuses a dig that would open a way to the body for a
+ * hostile behind the rock (a zombie 8 to 16 m off), the route is drawn at the next cell, which the guard refuses too, and so on. A cell refused is closed to the routes for as long as
+ * that hostile stays where it was (refusedDigs); this many different cells refused within GO_EXPOSED_WINDOW_MS stop the go with `threat_exposed` and the reason, and a way not
+ * found after a refusal says the refusal.
+ */
+export const GO_EXPOSED_STOPS = 6;
+export const GO_EXPOSED_WINDOW_MS = 30_000;
 /** The most mendings of a stuck body, without any headway between them, before the stop `stuck`. */
 export const GO_REPAIRS = 5;
 /** The most levels a climb makes before the way is drawn again. */
@@ -251,6 +260,8 @@ export interface GoState {
   veto: { code: string; text: string } | null;
   /** The blocks laid in a row that the world did not show. */
   refused: number;
+  /** Run 46: the cells whose dig the exposure guard refused in this go ("x,y,z"): the hostile that the dig would have let at the body, and when. */
+  exposed: Map<string, { name: string; distance: number; at: number }>;
   /** Run 45: the cells this go could not get into or lay in ("x,y,z"), avoided by the next drawings (`GO_AVOID_COST`). */
   avoid: Set<string>;
   /** Run 45 (hold 3): the cells this go dug, and those it laid ("x,y,z"): not laid again, not dug again (`GO_REDO_COST`). */
@@ -526,7 +537,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   const rule = digRuleOf(bot.registry, args.canDig);
   const searchCap = args.searchMs ?? 5000;
   const place = placeNamesOf(bot, args.canPlace);
-  const state: GoState = { steps: 0, dug: 0, placed: 0, redraws: 0, veto: null, refused: 0, avoid: new Set(), dugCells: new Set(), laidCells: new Set() };
+  const state: GoState = { steps: 0, dug: 0, placed: 0, redraws: 0, veto: null, refused: 0, exposed: new Map(), avoid: new Set(), dugCells: new Set(), laidCells: new Set() };
   const start = feetCell(bot)!;
   // Continue contracts (1): the stop's progress in metres, from where the body began to where it stopped, and the last route search the go made.
   const startPosition = bot.entity?.position ? { x: bot.entity.position.x, y: bot.entity.position.y, z: bot.entity.position.z } : null;
@@ -613,9 +624,28 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   const host = nativeActionHost(bot) as any;
   const originalDig = host.dig, originalPlace = host.placeBlock;
   let counting = true;
+  /** The exposure guard refused a dig: the cell is written down, and a go that is refused cell after cell stops with the reason. */
+  const noteExposed = (at: { x: number; y: number; z: number } | undefined, error: ThreatExposedError) => {
+    const now = Date.now();
+    if (at) state.exposed.set(`${at.x},${at.y},${at.z}`, { name: error.threat.name, distance: error.threat.distance, at: now });
+    blackBoxOf(host)?.note('exposed', { at: at ? [at.x, at.y, at.z] : null, threat: error.threat.name, m: Math.round(error.threat.distance), cells: state.exposed.size });
+    const recent = [...state.exposed.values()].filter(entry => now - entry.at <= GO_EXPOSED_WINDOW_MS).length;
+    if (recent >= GO_EXPOSED_STOPS && !state.veto) {
+      state.veto = { code: 'threat_exposed', text: exposedWords() };
+      try { nav.setGoal?.(null); } catch { /* stopped below */ }
+    }
+  };
+  /** In words, for the LLM that decides the next hand: who would see the body, and how many cells the guard held back. */
+  const exposedWords = (): string => {
+    const nearest = [...state.exposed.values()].sort((a, b) => a.distance - b.distance)[0];
+    const cells = [...state.exposed.keys()].slice(0, 3).map(key => `(${key})`).join('');
+    return `掘ると ${nearest?.name ?? '敵'}（約${(nearest?.distance ?? 0).toFixed(0)}m）から身体が見える所を通らないと進めない（守りが掘りを止めたマス ${state.exposed.size} 個 ${cells}）`;
+  };
   const countingDig = async function (this: unknown, ...rest: unknown[]) {
     const at = (rest[0] as { position?: { x: number; y: number; z: number } } | undefined)?.position;
-    const result = await originalDig.apply(host, rest);
+    let result: unknown;
+    try { result = await originalDig.apply(host, rest); }
+    catch (error) { if (counting && error instanceof ThreatExposedError) noteExposed(at, error); throw error; }
     if (counting) { state.dug++; lastWork = Date.now(); if (at) state.dugCells.add(`${at.x},${at.y},${at.z}`); }
     return result;
   };
@@ -725,7 +755,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     state.veto = budgetOf(digs, places);
     if (state.veto) { try { nav.setGoal?.(null); } catch { /* stopped below */ } }
   };
-  const VETO_HINTS: Record<string, string> = { limit_dig: 'maxDig を増やすか、別の道を', limit_place: 'maxPlace を増やすか、別の道を', stuck: '別の道か別の行き先を（同じ手の繰り返しは同じ所で止まる）' };
+  const VETO_HINTS: Record<string, string> = { limit_dig: 'maxDig を増やすか、別の道を', limit_place: 'maxPlace を増やすか、別の道を', stuck: '別の道か別の行き先を（同じ手の繰り返しは同じ所で止まる）', threat_exposed: '敵が離れるのを待つ（wait-time）か、敵のいない向きの別の道・行き先を' };
   const vetoed = (): StepOutcome | null => state.veto ? fail(state.veto.code, state.veto.text, VETO_HINTS[state.veto.code] ?? '別の道を') : null;
 
   const notes: WayNotes = { opened: [], leaves: 0 };
@@ -966,6 +996,8 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
       // The way is not found. The first time may be the ground still arriving: a new drawing. Then a climb, then the reason.
       noway++;
       if (noway === 1 && !searchedOut) { state.redraws++; await wait(ctx, 300); continue; }
+      // Run 46: the guard held back digs on the way (the cells are closed to the routes while that hostile stays), and now there is none: that is the reason.
+      if (state.exposed.size > 0) return fail('threat_exposed', exposedWords(), VETO_HINTS.threat_exposed!);
       const found = leg.final || searchedOut ? drawn : await plan(movements, finalGoal, Math.min(searchCap, timeLeft()));
       const end = found.path.length ? found.path[found.path.length - 1] : null;
       const lowest = Math.min(...targets.map(cell => cell.y));

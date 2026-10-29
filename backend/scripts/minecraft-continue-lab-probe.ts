@@ -328,6 +328,37 @@ try {
     await reset(actor);
   }
 
+  // ---- run 46 (hold 4): a go through rock with a hostile behind it that the exposure guard will not let be opened: it stops with the reason (or goes round), not in a box until its time
+  if (runs('go_exposed')) {
+    const build = async (detour: boolean) => {
+      await reset(actor);
+      await ask('fill -2 99 -4 17 103 4 minecraft:obsidian');
+      await ask('fill 0 100 0 1 101 0 minecraft:air'); await ask('fill 3 100 0 8 101 0 minecraft:air'); await ask('fill 14 100 0 15 101 0 minecraft:air');
+      await ask('fill 2 100 0 2 101 0 minecraft:stone'); await ask('fill 9 100 0 13 101 0 minecraft:stone');
+      if (detour) { await ask('fill 1 100 1 1 101 3 minecraft:stone'); await ask('fill 2 100 3 14 101 3 minecraft:stone'); await ask('fill 14 100 1 14 101 2 minecraft:stone'); }
+      await ask('give ' + ACTOR + ' minecraft:diamond_pickaxe 1');
+      await ask('tp ' + ACTOR + ' 0.5 100 0.5'); await sleep(1500);
+      await ask('summon minecraft:zombie 5.5 100 0.5 {NoAI:1b,PersistenceRequired:1b,Tags:["lab_enemy"]}'); await sleep(1500);
+    };
+    const hand = { do: 'go', to: { x: 14, y: 100, z: 0 }, canDig: ['stone'], seconds: 90, maxDig: 80 };
+    await build(false);
+    const stopped = await act(body, { hands: [hand] }, { seconds: 100 });
+    const line = stopped.parsed?.lines?.[0];
+    const wallStanding = String(actor.blockAt(new (actor.entity.position.constructor)(2, 100, 0))?.name) === 'stone';
+    report.goExposedNoWay = { ms: stopped.ms, line: line?.line, code: line?.code, goal: line?.goal, wallStanding, refused: actor.exposureDigGuard?.refused ?? null };
+    check('run 46: a go that can only go through a wall that opens a cave with a zombie stops with threat_exposed and the reason, far before its 90 s', line?.code === 'threat_exposed' && /zombie/u.test(String(line?.line)) && stopped.ms < 45_000, JSON.stringify(report.goExposedNoWay).slice(0, 400));
+    check('run 46: the wall of the cave stands (the guard\'s protection is as before)', wallStanding, JSON.stringify(report.goExposedNoWay).slice(0, 200));
+    await build(true);
+    const round = await act(body, { hands: [hand] }, { seconds: 100 });
+    const arrivedX = Math.floor(actor.entity.position.x);
+    const wallStillThere = String(actor.blockAt(new (actor.entity.position.constructor)(2, 100, 0))?.name) === 'stone';
+    report.goExposedDetour = { ms: round.ms, goal: round.parsed?.lines?.[0]?.goal, line: round.parsed?.lines?.[0]?.line, x: arrivedX, wallStillThere };
+    check('run 46: with another way (a stone way round) the go arrives, the cave wall untouched', round.parsed?.lines?.[0]?.goal === 'done' && arrivedX >= 14 && wallStillThere, JSON.stringify(report.goExposedDetour).slice(0, 400));
+    produce('measure/go-exposed', null, { output: { noWay: report.goExposedNoWay, detour: report.goExposedDetour } });
+    await ask('kill @e[type=!player]'); await ask('fill -2 100 -4 17 103 4 minecraft:air'); await ask('fill -2 99 -4 17 99 4 minecraft:stone');
+    await reset(actor);
+  }
+
   // ---- A-12 (body): the head asks for a hold (incident.take): the world stops, the box holds the notes, the resume brings the world back
   if (runs('head_take')) {
     await reset(actor);

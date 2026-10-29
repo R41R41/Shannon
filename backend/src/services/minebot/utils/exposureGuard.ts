@@ -1,4 +1,4 @@
-import { digRefusedAt, noteRefusedDig } from './refusedDigs.js';
+import { digRefusedAt, noteRefusedDig, REFUSED_THREAT_MS } from './refusedDigs.js';
 import { Vec3 } from 'vec3';
 import { createLogger } from '../../../utils/logger.js';
 import { isLikelyHostileMobName } from './hostileMobHints.js';
@@ -99,14 +99,15 @@ export function threatsExposedBy(bot: GuardBody, target: Vec3): ExposingThreat[]
 export function assertNoThreatExposure(bot: GuardBody, block: { name?: string; position: Vec3 } | null | undefined): void {
   if (!block?.position || bot.exposureDigGuard?.enabled === false) return;
   if (bot.exposureDigGuard?.allowAt === `${block.position.x},${block.position.y},${block.position.z}`) return;
-  let threat: { name: string; distance: number } | null = null;
-  try { threat = threatExposedBy(bot, block.position); } catch { threat = null; }
+  let threat: ExposingThreat | null = null;
+  try { threat = threatsExposedBy(bot, block.position)[0] ?? null; } catch { threat = null; }
   if (!threat) return;
-  const error = new ThreatExposedError(block, threat);
+  const error = new ThreatExposedError(block, { name: threat.name, distance: threat.distance });
   if (bot.exposureDigGuard) { bot.exposureDigGuard.refused++; bot.exposureDigGuard.last = error.message; bot.exposureDigGuard.lastAt = Date.now(); }
-  // The mob moves on: the route planner leaves this block alone for a quarter of a minute, then may ask again.
+  // The route planner leaves this block alone for as long as that hostile stays where it is (REFUSED_THREAT_MOVED_M), at most REFUSED_THREAT_MS; when it moves on or is gone, the
+  // block may be asked again. (A quarter of a minute for every mob let a route be drawn at the same walls again and again: run 46.)
   const repeated = digRefusedAt(bot, block.position);
-  noteRefusedDig(bot, block.position, 15_000);
+  noteRefusedDig(bot, block.position, REFUSED_THREAT_MS, Date.now(), { id: threat.id, position: threat.position });
   if (repeated) throw error; // said once; the same block asked again within the time is refused quietly
   log.warn(`🧱 ${error.message}`);
   throw error;
