@@ -8,6 +8,7 @@ import { closedWord } from '../../src/services/minebot/utils/actReport.js';
 import { ACT_HANDS, HAND_KINDS, runAct } from '../../src/services/minebot/instantSkills/act.js';
 import { feetCell } from '../../src/services/minebot/utils/localMap.js';
 import { readFileSync } from 'node:fs';
+import { ThreatExposedError } from '../../src/services/minebot/utils/exposureGuard.js';
 import { fileURLToPath } from 'node:url';
 
 // The hand `vertical` (continue contracts, chapter 6; fixtures continue/vertical/*.json): a long way down or up, one level at a time, against the real
@@ -526,5 +527,50 @@ describe('vertical: the act\'s line and a cut from outside', () => {
     expect(caught).toBeInstanceOf(StepStopped);
     const progress = (caught as { verticalProgress?: { done: number } }).verticalProgress;
     expect(progress?.done).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe('vertical: the stops of run 46 (15 verticals, none done)', () => {
+  const stairsDown = (extra: Partial<VerticalArgs> = {}) => hand({ dir: 'down', shape: 'stairs', toward: 'south', toY: 63, ...extra });
+  it('digs a fence (a mineshaft\'s, in the way) without being told, and says so; planks it will not dig unless told, and says what to add', async () => {
+    const fence = sim0(world('andesite', 64, [cell('oak_fence', 0, 64, 1)]));
+    const done = await drive(fence, run(fence, stairsDown()));
+    expect(done.ok).toBe(true);
+    expect(fence.bot.dugBlocks).toContain('oak_fence@0,64,1');
+    expect(done.text).toContain('邪魔な物を壊した oak_fence×1');
+    const planks = sim0(world('andesite', 64, [cell('oak_planks', 0, 64, 1)]));
+    const stopped = await drive(planks, run(planks, stairsDown()));
+    expect(stopped).toMatchObject({ ok: false, code: 'cannot_dig' });
+    expect(stopped.text).toContain('canDig に oak_planks を足せば進む');
+    expect(planks.world.nameAt(0, 64, 1)).toBe('oak_planks');
+    const told = sim0(world('andesite', 64, [cell('oak_planks', 0, 64, 1)]));
+    expect((await drive(told, run(told, stairsDown({ canDig: [...DIG, 'oak_planks'] })))).ok).toBe(true);
+  });
+  it('a dig the exposure guard refused is threat_exposed with who and which cell, not a cannot_dig', async () => {
+    const sim = sim0(world('andesite', 64));
+    const dig = sim.bot.dig;
+    sim.bot.dig = async (block: any, ...rest: any[]) => {
+      if (block.position.y === 63) throw new ThreatExposedError(block, { name: 'zombie', distance: 9 });
+      return dig.call(sim.bot, block, ...rest);
+    };
+    const outcome = await drive(sim, run(sim, stairsDown()));
+    expect(outcome).toMatchObject({ ok: false, code: 'threat_exposed' });
+    expect(outcome.text).toMatch(/^vertical 止まった threat_exposed: andesite\(0,63,1\) を開けると、今は届かない zombie（約9m）から身体が見える/u);
+    expect(outcome.text).toContain('toward を変える');
+  });
+  it('lays a footing from cobblestone, cobbled deepslate or dirt held when canPlace is left out of a stair, and not when it says none', async () => {
+    const gap = world('andesite', 64, [cell('air', 0, 64, -1), column('air', 0, 64, 70, -2)]);
+    const some = sim0(gap, [0, 64, 0], [PICK, { name: 'cobblestone', count: 10 }]);
+    const laid = await drive(some, run(some, hand({ dir: 'up', shape: 'stairs', toward: 'north', toY: 68 })));
+    expect(workOf(laid)).toMatchObject({ placeAttempts: 1, placedConfirmed: 1 });
+    expect(laid.progress).toMatchObject({ done: 1 });
+    const refused = sim0(gap, [0, 64, 0], [PICK, { name: 'cobblestone', count: 10 }]);
+    const none = await drive(refused, run(refused, hand({ dir: 'up', shape: 'stairs', toward: 'north', toY: 68, canPlace: ['none'] })));
+    expect(none).toMatchObject({ ok: false, code: 'no_place' });
+    expect(workOf(none).placeAttempts).toBe(0);
+    // a pillar has no default: nothing named, nothing laid
+    const pillar = sim0(world('andesite', 64), [0, 64, 0], [PICK, { name: 'cobblestone', count: 10 }]);
+    const stopped = await drive(pillar, run(pillar, hand({ dir: 'up', shape: 'pillar', toY: 66 })));
+    expect(stopped).toMatchObject({ ok: false, code: 'no_place' });
   });
 });

@@ -117,7 +117,7 @@ describe('the scene and the hold', () => {
     fs.writeFileSync(path.join(serverDir, 'logs', 'latest.log'), "[10:00:00] [Server thread/INFO]: Done\n");
     const said: string[] = [];
     const saver = new SceneSaver({ serverDir, root: path.join(serverDir, 'scenes'), self: () => ['MinebotTrial'], ignore: ['ShannonProbe'],
-      command: async text => { said.push(text); return text === 'list' ? `There are 2 of a max of 20 players online: ${players}` : text.startsWith('save-all') ? 'Saved the game' : 'ok'; } });
+      command: async text => { said.push(text); return text === 'list' ? `There are ${players.split(", ").length} of a max of 20 players online: ${players}` : text.startsWith('save-all') ? 'Saved the game' : 'ok'; } });
     return { saver, said, serverDir };
   }
   it('saves the region, entities and level.dat around the body after save-all, and does not freeze with anyone else on', async () => {
@@ -186,7 +186,7 @@ describe('run 44, hold 1: the body counted itself as someone else, held in a mov
     fs.writeFileSync(path.join(serverDir, 'logs', 'latest.log'), '');
     const said: string[] = [];
     const saver = new SceneSaver({ serverDir, root: path.join(serverDir, 'scenes'), self,
-      command: async text => { said.push(text); return text === 'list' ? `There are 1 of a max of 20 players online: ${players}` : text.startsWith('save-all') ? 'Saved the game' : 'ok'; } });
+      command: async text => { said.push(text); return text === 'list' ? `There are ${players.split(", ").length} of a max of 20 players online: ${players}` : text.startsWith('save-all') ? 'Saved the game' : 'ok'; } });
     return { saver, said };
   }
 
@@ -252,7 +252,7 @@ describe('run 45 (+929): a death outside an act', () => {
     fs.writeFileSync(path.join(serverDir, 'logs', 'latest.log'), '');
     const said: string[] = [];
     const saver = new SceneSaver({ serverDir, root: path.join(serverDir, 'scenes'), self: () => ['MinebotTrial'],
-      command: async text => { said.push(text); return text === 'list' ? `There are 1 of a max of 20 players online: ${players}` : text.startsWith('save-all') ? 'Saved the game' : 'ok'; } });
+      command: async text => { said.push(text); return text === 'list' ? `There are ${players.split(", ").length} of a max of 20 players online: ${players}` : text.startsWith('save-all') ? 'Saved the game' : 'ok'; } });
     return { saver, said };
   }
   const settle = () => new Promise(resolve => setTimeout(resolve, 30));
@@ -369,5 +369,34 @@ describe('run 45, holds 3 to 5: the act a resume sent again fails for the same r
     // The same reason, but not the act sent again (no resume named): held.
     await incidents.beforeAct(hold);
     expect(await incidents.afterAct({ id: 'cmd-5', context: hold }, stopped('go 止まった search_timeout: 1 マス') as never, 9000)).toMatchObject({ held: true });
+  });
+});
+
+describe('run 46 hold 8: the list of players is read whole or asked again', () => {
+  const answers = (list: string[]) => {
+    const said: string[] = [];
+    const saver = new SceneSaver({ serverDir: '/nowhere', root: '/nowhere/scenes', self: () => ['I_am_Shannon'], command: async text => { said.push(text); return list.shift() ?? 'There are 1 of a max of 20 players online: I_am_Shannon'; } });
+    return { saver, said };
+  };
+  it('takes only the whole form: both numbers, names that are names, as many as it says', async () => {
+    const { parsePlayerList } = await import('../../src/services/minebot/utils/sceneSave.js');
+    expect(parsePlayerList('There are 2 of a max of 20 players online: A_b, C9')).toEqual({ count: 2, max: 20, names: ['A_b', 'C9'] });
+    expect(parsePlayerList('There are 0 of a max of 20 players online:')).toEqual({ count: 0, max: 20, names: [] });
+    expect(parsePlayerList('There are 1 of a max of 20 players online: I_am_ShannonUnknown or incomplete command. See below for error<--')).toBeNull();
+    expect(parsePlayerList('There are 2 of a max of 20 players online: Alone')).toBeNull();
+    expect(parsePlayerList('Unknown or incomplete command')).toBeNull();
+    expect(parsePlayerList('There are 1 of a max of 20 players online: way_too_long_a_name_x')).toBeNull();
+  });
+  it('asks again when the answer is mixed with another command\'s, and freezes on the whole answer; its own name is taken off by the whole name', async () => {
+    const { saver, said } = answers(['There are 1 of a max of 20 players online: I_am_ShannonUnknown or incomplete command. See below for error<--', 'There are 1 of a max of 20 players online: I_am_Shannon']);
+    expect(await saver.others()).toEqual([]);
+    expect(said.filter(text => text === 'list')).toHaveLength(2);
+    // another player is another player, also when his name begins with the body's
+    const other = answers(['There are 2 of a max of 20 players online: I_am_Shannon, I_am_Shannon2']);
+    expect(await other.saver.others()).toEqual(['I_am_Shannon2']);
+  });
+  it('is not able to tell (players_unknown) when it is never whole', async () => {
+    const { saver } = answers(['x', 'y', 'z']);
+    expect(await saver.freeze()).toEqual({ frozen: false, why: 'players_unknown' });
   });
 });

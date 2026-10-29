@@ -461,6 +461,63 @@ try {
     await reset(actor);
   }
 
+  // ---- run 46 (hold 5): how fast a go tunnels (deepslate, an iron pickaxe): the time of a block against the time the block itself takes
+  if (wanted.has('go_tunnel')) {
+    await reset(actor);
+    await ask('fill -2 99 -3 30 104 3 minecraft:deepslate'); await ask('fill -2 100 0 0 101 0 minecraft:air');
+    await ask('give ' + ACTOR + ' minecraft:iron_pickaxe 1'); await sleep(800);
+    await ask('tp ' + ACTOR + ' 0.5 100 0.5'); await sleep(1500);
+    const digTime = typeof actor.digTime === 'function' ? Math.round(actor.digTime(actor.blockAt(new (actor.entity.position.constructor)(5, 100, 0)))) : null;
+    const run = await act(body, { hands: [{ do: 'go', to: { x: 24, y: 100, z: 0 }, canDig: ['deepslate'], seconds: 120, maxDig: 80 }] }, { seconds: 130 });
+    const line = run.parsed?.lines?.[0];
+    const dugText = /掘 (\d+)/u.exec(String(line?.line))?.[1];
+    const dug = dugText ? Number(dugText) : null;
+    const ops = opLines().filter(entry => entry.kind === 'op' && entry.command === run.command.id);
+    report.goTunnel = { ms: run.ms, dug, msPerDug: dug ? Math.round(run.ms / dug) : null, blockDigTimeMs: digTime, goal: line?.goal, line: String(line?.line).slice(0, 200), ops: ops.length };
+    check('go tunnels through deepslate (measured: ms per dug cell against the block\'s own dig time)', line?.goal === 'done' && dug !== null && dug >= 20, JSON.stringify(report.goTunnel).slice(0, 500));
+    produce('measure/go-tunnel', null, { output: report.goTunnel as Record<string, unknown> });
+    await ask('tp ' + ACTOR + ' -10 100 -10'); await sleep(500);
+    await ask('fill -2 99 -3 30 104 3 minecraft:air'); await ask('fill -2 90 -3 30 99 3 minecraft:stone');
+    await reset(actor);
+  }
+
+  // ---- run 46 (15 verticals, none done): a fence in the way, the exposure guard, a missing floor with no canPlace written
+  if (wanted.has('vertical_run46')) {
+    const stairs = (toY: number, extra: Record<string, unknown> = {}) => ({ do: 'vertical', dir: 'up', shape: 'stairs', toward: 'north', toY, canDig: ['deepslate'], liquid: 'stop', seconds: 80, ...extra });
+    const build = async (carve: string[], extra: string[] = []) => {
+      await reset(actor);
+      await ask('tp ' + ACTOR + ' -10 100 -10'); await sleep(600);
+      await ask('fill -3 100 -8 9 124 8 minecraft:deepslate');
+      for (const command of [...carve, ...extra]) await ask(command);
+      await ask('give ' + ACTOR + ' minecraft:iron_pickaxe 1'); await ask('give ' + ACTOR + ' minecraft:cobblestone 20'); await ask('effect give ' + ACTOR + ' minecraft:resistance 600 4 true'); await sleep(600);
+      await ask('tp ' + ACTOR + ' 3.5 100 3.5'); await sleep(1800);
+    };
+    const pocket = ['fill 3 100 3 3 101 3 minecraft:air'];
+    // a) a fence in the stair's first cell: dug without canDig naming it, and said
+    await build(pocket, ['setblock 3 101 2 minecraft:oak_fence']);
+    const fence = await act(body, { hands: [stairs(104)] }, { seconds: 100 });
+    const fenceLine = fence.parsed?.lines?.[0];
+    report.verticalFence = { ms: fence.ms, goal: fenceLine?.goal, line: String(fenceLine?.line).slice(0, 220) };
+    check('run 46 vertical: a fence in the way of the stair is dug without being in canDig, and the line says so', fenceLine?.goal === 'done' && /邪魔な物を壊した oak_fence/u.test(String(fenceLine?.line)), JSON.stringify(report.verticalFence).slice(0, 400));
+    // b) a zombie in a sealed pocket that a stair cell would open: threat_exposed with who, not cannot_dig
+    await build(pocket, ['fill 3 103 0 3 104 0 minecraft:air', 'summon minecraft:zombie 3.5 103 0.5 {NoAI:1b,PersistenceRequired:1b,Tags:["lab_enemy"]}']);
+    await sleep(1500);
+    const guard = await act(body, { hands: [stairs(110)] }, { seconds: 100 });
+    const guardLine = guard.parsed?.lines?.[0];
+    report.verticalGuard = { ms: guard.ms, code: guardLine?.code, line: String(guardLine?.line).slice(0, 260), done: guardLine?.progress?.done };
+    check('run 46 vertical: a dig the exposure guard refuses is threat_exposed, with the enemy and the way out, as go says it', guardLine?.code === 'threat_exposed' && /zombie/u.test(String(guardLine?.line)) && /toward/u.test(String(guardLine?.line)), JSON.stringify(report.verticalGuard).slice(0, 500));
+    // c) a missing floor under the first step, canPlace not written: a step is laid from the cobblestone held
+    await build(pocket, ['setblock 3 100 2 minecraft:air']);
+    const floor = await act(body, { hands: [stairs(103)] }, { seconds: 100 });
+    const floorLine = floor.parsed?.lines?.[0];
+    report.verticalFloor = { ms: floor.ms, goal: floorLine?.goal, code: floorLine?.code, line: String(floorLine?.line).slice(0, 220) };
+    check('run 46 vertical: with canPlace left out, a missing floor is laid from the cobblestone held and the stair goes on', floorLine?.goal === 'done', JSON.stringify(report.verticalFloor).slice(0, 400));
+    produce('measure/vertical-run46', null, { output: { fence: report.verticalFence, guard: report.verticalGuard, floor: report.verticalFloor } });
+    await ask('tp ' + ACTOR + ' -10 100 -10'); await sleep(500);
+    await ask('kill @e[type=!player]'); await ask('fill -3 100 -8 9 124 8 minecraft:air');
+    await reset(actor);
+  }
+
   // ---- A-12 (body): the head asks for a hold (incident.take): the world stops, the box holds the notes, the resume brings the world back
   if (runs('head_take')) {
     await reset(actor);

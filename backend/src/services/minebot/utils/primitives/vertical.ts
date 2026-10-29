@@ -9,6 +9,7 @@ import { nativeActionHost } from '../../execution/ActionExecution.js';
 import { blockAt, cellText, eyeDistance, guard, inventoryCount, letGo, StepStopped, USE_REACH, wait, waitUntil, type StepContext, type StepOutcome } from './common.js';
 import { blockInHand, digRuleOf, hasFace, mayLayAt, placeNamesOf } from './go.js';
 import { shortFloor } from './pillarUp.js';
+import { ThreatExposedError } from '../exposureGuard.js';
 import { verticalProblem } from '../actHandRules.js';
 
 export { verticalProblem };
@@ -68,6 +69,16 @@ export interface VerticalEvidence {
   pos?: { x: number; y: number; z: number };
 }
 
+/**
+ * Run 46 (15 verticals, none done): what the planner left out of `canPlace` for stairs and a shaft is the stock a body would put under its feet anyway; the planner who does not
+ * want any writes `canPlace: ['none']`. A pillar is made of what the planner names (it has no default).
+ */
+export const DEFAULT_FOOTING = ['cobblestone', 'cobbled_deepslate', 'dirt'] as const;
+/**
+ * Blocks that are in the way of a stair or a shaft and cost nothing to break (a mineshaft's fence and rails, a web, a torch, a ladder, vines): dug without being in `canDig`
+ * (run 46: a stair of 22 levels stopped at an oak fence for the planner to say it may be dug). Planks, doors, chests, beds and the rest are the planner's to allow.
+ */
+export const INCIDENTAL_IN_THE_WAY = /^(?:.*_fence|.*_rail|rail|cobweb|torch|wall_torch|soul_torch|redstone_torch|ladder|vine|string|tripwire|tripwire_hook)$/u;
 const TOWARD: Record<VerticalToward, [number, number]> = { north: [0, -1], south: [0, 1], west: [-1, 0], east: [1, 0] };
 const LIQUIDS = new Set(['water', 'lava', 'flowing_water', 'flowing_lava', 'bubble_column']);
 const FALLING = /^(?:gravel|sand|red_sand|suspicious_sand|suspicious_gravel|.*_concrete_powder)$/u;
@@ -229,7 +240,7 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
   };
 
   // ---- placing ----
-  const placeOrder = (args.canPlace ?? []).map(name => String(name).replace(/^minecraft:/u, '').toLowerCase());
+  const placeOrder = (args.canPlace === undefined && args.shape !== 'pillar' ? [...DEFAULT_FOOTING] : (args.canPlace ?? [])).map(name => String(name).replace(/^minecraft:/u, '').toLowerCase()).filter(name => name !== 'none');
   /** The first block of `canPlace` (in the order written) that the pack holds and that can be laid as a step (placeNamesOf). */
   const pickBlock = (): string | null => {
     const { held } = placeNamesOf(bot, placeOrder);
@@ -309,11 +320,12 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
   };
 
   // ---- digging ----
-  const allowed = (name: string) => rule.names.has(name);
+  const broke = new Map<string, number>();
+  const allowed = (name: string) => rule.names.has(name) || INCIDENTAL_IN_THE_WAY.test(name);
   const refuseDig = (cell: Cell, block: any): VStop => {
     const name = nameOf(block);
     const why = block?.diggable === false || name === 'bedrock' ? `${name}${cellText(cell)} は壊せないブロック` : `${name}${cellText(cell)} は canDig に無い（${away(cell)}）`;
-    return new VStop('cannot_dig', why, cell, name === 'bedrock' ? undefined : 'canDig に足すか、別の形で');
+    return new VStop('cannot_dig', why, cell, name === 'bedrock' || block?.diggable === false ? undefined : `canDig に ${name} を足せば進む（壊して困らない物なら）。または別の形で`);
   };
   /** Before anything of a level is dug: a cell it must open that is not allowed stops it now, not after two others were dug. */
   const precheckDig = (cells: Cell[]) => {
@@ -328,6 +340,7 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
       if (!block) throw new VStop('unloaded', `${cellText(cell)} はまだ読み込まれていない`, cell);
       if (!solid(block)) return;
       if (!allowed(String(block.name))) throw refuseDig(cell, block);
+      if (!rule.names.has(String(block.name))) broke.set(String(block.name), (broke.get(String(block.name)) ?? 0) + 1);
       checkClock();
       if (work.dug >= limits.maxDig) throw new VStop('limit_dig', `掘る数の上限 ${limits.maxDig} に着いた（次は ${nameOf(block)}${cellText(cell)}）`, cell, 'maxDig を増やして続きを出す');
       work.dug++;
@@ -338,6 +351,11 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
       } catch (error) {
         if (error instanceof VStop) throw error;
         if (isInterrupt(error) || /interrupt/iu.test(String((error as Error)?.message))) throw error;
+        // Run 46: the exposure guard refused the dig (a hostile behind the rock would see the body): said as that, with who and which cell, as go says it; the cell stays closed to the routes.
+        if (error instanceof ThreatExposedError) {
+          throw new VStop('threat_exposed', `${nameOf(block)}${cellText(cell)} を開けると、今は届かない ${error.threat.name}（約${error.threat.distance.toFixed(0)}m）から身体が見える・届くようになる`, cell,
+            args.shape === 'shaft' || args.shape === 'pillar' ? '敵が離れるのを待つ（wait-time）か、別の場所から' : '敵が離れるのを待つ（wait-time）か、toward を変えるか、別の場所から');
+        }
         if ((error as Error)?.name === 'LavaReleaseError') {
           const lava = (error as { lava?: Vec3 }).lava;
           throw new VStop('lava', `${nameOf(block)}${cellText(cell)} を掘ると隣の溶岩${lava ? cellText(lava) : ''}が流れ込む`, lava ? { x: lava.x, y: lava.y, z: lava.z } : cell);
@@ -499,7 +517,7 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
         const floorBlock = blockAt(bot, plan.floor);
         if (solid(floorBlock)) break;
         if (tries === 3) throw new VStop('no_place', `足場 ${cellText(plan.floor)} を置いても世界に現れない`, plan.floor);
-        if (!args.canPlace?.length) throw new VStop('no_place', `${cellText(plan.floor)} が ${nameOf(floorBlock)} で足場が無く、canPlace も無い`, plan.floor, 'canPlace に置ける物を足して');
+        if (!placeOrder.length) throw new VStop('no_place', `${cellText(plan.floor)} が ${nameOf(floorBlock)} で足場が無く、canPlace も無い`, plan.floor, 'canPlace に置ける物を足して');
         const laid = await layCell(plan.floor);
         if (!laid.ok) {
           if (laid.reason === 'budget') throw new VStop('limit_place', `置く数の上限 ${limits.maxPlace} に着いた（足場 ${cellText(plan.floor)} が要る）`, plan.floor, 'maxPlace を増やして続きを出す');
@@ -600,6 +618,7 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
   // ---- the run ----
   const tail = () => `${cellText(feetCell(bot) ?? at)} 段 ${valid()}・掘 ${work.dug}・置 ${work.placeAttempts}${work.placedConfirmed !== work.placeAttempts ? `（確 ${work.placedConfirmed}）` : ''}`;
   const correctedText = () => (corrections.length ? `。置いた ${corrections.slice(0, 3).map(entry => `${cellText(entry.at)} が無くなった（今 ${entry.now}）`).join('・')}（有効な段数を直した）` : '');
+  const brokeText = () => (broke.size ? `。邪魔な物を壊した ${[...broke.entries()].slice(0, 3).map(([name, count]) => `${name}×${count}`).join('・')}` : '');
   const seenText = () => (seen.length ? `。鉱石 ${seen.slice(0, 3).map(entry => `${entry.block}${cellText(entry.at)}`).join(' ')}${seen.length > 3 ? ` ほか${seen.length - 3}` : ''}` : '');
 
   bot.on?.('blockUpdate', onBlockUpdate);
@@ -624,7 +643,7 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
     }
     lookAgain();
     const here = feetCell(bot) ?? at;
-    return { ok: true, text: `vertical 着いた ${tail()}${seenText()}${correctedText()}`, at: here, from: start, progress: progress() };
+    return { ok: true, text: `vertical 着いた ${tail()}${seenText()}${brokeText()}${correctedText()}`, at: here, from: start, progress: progress() };
   } catch (error) {
     if (error instanceof VStop) {
       // A stop in the air (a jump that laid nothing): the position told is where the body lands, not where it was at that instant.

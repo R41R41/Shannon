@@ -36,7 +36,7 @@ function server(players: string) {
   fs.writeFileSync(path.join(serverDir, 'logs', 'latest.log'), '');
   const said: string[] = [];
   const saver = new SceneSaver({ serverDir, root: path.join(serverDir, 'scenes'), self: () => ['headtake'], ignore: [],
-    command: async text => { said.push(text); return text === 'list' ? `There are 1 of a max of 20 players online: ${players}` : text.startsWith('save-all') ? 'Saved the game' : 'ok'; } });
+    command: async text => { said.push(text); return text === 'list' ? `There are ${players.split(", ").length} of a max of 20 players online: ${players}` : text.startsWith('save-all') ? 'Saved the game' : 'ok'; } });
   return { saver, said };
 }
 const HEAD_ID = 'head:node_stalled:p3:1793164759174';

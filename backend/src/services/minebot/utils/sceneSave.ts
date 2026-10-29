@@ -72,16 +72,40 @@ async function tail(file: string, bytes: number): Promise<string> {
   } catch { return ''; }
 }
 
+/**
+ * The server's answer to `list`: "There are 1 of a max of 20 players online: A, B". Run 46 (hold 8): an answer of another command ran into it ("…online: I_am_ShannonUnknown or incomplete
+ * command…"), the name read was not a name, and the body counted itself as someone else and did not stop the world. An answer is taken only when it has the whole form: the two
+ * numbers, names that are names (Minecraft's: letters, digits and _, 1 to 16), and as many names as the first number says. Anything else is null (asked again).
+ */
+export function parsePlayerList(answer: string): { count: number; max: number; names: string[] } | null {
+  const first = answer.trim().split(/\r?\n/u)[0] ?? '';
+  const found = /^There are (\d+) of a max of (\d+) players online:\s*(.*)$/u.exec(first);
+  if (!found) return null;
+  const count = Number(found[1]), max = Number(found[2]);
+  const rest = found[3]!.trim();
+  const names = rest === '' ? [] : rest.split(',').map(name => name.trim());
+  if (names.some(name => !/^[A-Za-z0-9_]{1,16}$/u.test(name))) return null;
+  if (names.length !== count) return null;
+  return { count, max, names };
+}
+/** How many times a `list` that is not whole is asked again, and how long between. */
+export const LIST_TRIES = 3;
+export const LIST_RETRY_MS = 250;
+
 export class SceneSaver {
   constructor(private readonly ports: ScenePorts) {}
 
   /** The players on the server other than the body (`list`), or null when it cannot be told. */
   async others(): Promise<string[] | null> {
     try {
-      const answer = await this.ports.command('list', 4000);
-      const names = /:\s*(.*)$/u.exec(answer.trim())?.[1] ?? '';
       const own = new Set([...this.ports.self(), ...(this.ports.ignore ?? [])].filter((name): name is string => !!name).map(name => name.toLowerCase()));
-      return names.split(',').map(name => name.trim()).filter(name => name && !own.has(name.toLowerCase()));
+      for (let attempt = 0; attempt < LIST_TRIES; attempt++) {
+        const parsed = parsePlayerList(await this.ports.command('list', 4000));
+        // A name is the body's only when it is the whole name (the same letters, either case: names are unique whatever the case).
+        if (parsed) return parsed.names.filter(name => !own.has(name.toLowerCase()));
+        if (attempt < LIST_TRIES - 1) await new Promise(resolve => setTimeout(resolve, LIST_RETRY_MS));
+      }
+      return null;
     } catch { return null; }
   }
   /** `/tick freeze` unless anyone else is on the server (then it is not frozen, and that is said). */
