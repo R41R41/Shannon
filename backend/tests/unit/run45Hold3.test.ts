@@ -42,7 +42,7 @@ describe('run 45, hold 3: the way does not undo its own work', () => {
       return 'stone';
     };
     const sim = makeSim(ground, { start: [0.5, FLOOR, 0.5], items: [{ name: 'cobblestone', count: 8 }] });
-    const state = (dug: string[]): GoState => ({ steps: 0, dug: 0, placed: 0, redraws: 0, veto: null, refused: 0, avoid: new Set(), dugCells: new Set(dug), laidCells: new Set() });
+    const state = (dug: string[]): GoState => ({ steps: 0, dug: 0, placed: 0, redraws: 0, veto: null, refused: 0, exposed: new Map(), avoid: new Set(), dugCells: new Set(dug), laidCells: new Set() });
     const placesOf = (dug: string[]) => {
       const movements = goMovements(sim.bot, { maxDrop: 3, waterOk: false, maxDig: 10, maxPlace: 10, sprint: false }, digRuleOf(sim.bot.registry, []), ['cobblestone'], state(dug));
       const result = sim.bot.pathfinder.getPathFromTo(movements, sim.bot.entity.position, new (require('mineflayer-pathfinder').goals.GoalBlock)(4, FLOOR, 0), { timeout: 2000 }).next().value.result;

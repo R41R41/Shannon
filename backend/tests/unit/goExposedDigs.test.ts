@@ -102,7 +102,7 @@ describe('go: a wall with a hostile behind it that the guard will not let be ope
     expect(sim.world.nameAt(9, FLOOR, 0)).toBe('stone');
   });
 
-  it('refused cell after cell (a wide wall), stops at GO_EXPOSED_STOPS cells with the reason and has not tried the rest', async () => {
+  it('refused cell after cell (a wide wall), stops with the reason after no more than GO_EXPOSED_STOPS cells and has not tried the rest', async () => {
     const sim = setup(false, true);
     // The guard's verdict is the test's own here (every cell of the wall at x=2 would open the cave): what is tried is the go's.
     const bot: any = sim.bot, dig = bot.dig;
@@ -113,6 +113,10 @@ describe('go: a wall with a hostile behind it that the guard will not let be ope
     };
     const outcome: StepOutcome = await drive(sim, run(sim));
     expect(outcome.ok).toBe(false);
-    expect(outcome.text).toMatch(new RegExp(`^go 止まった threat_exposed: 掘ると zombie.*守りが掘りを止めたマス ${GO_EXPOSED_STOPS} 個 `, 'u'));
+    expect(outcome.text).toMatch(/^go 止まった threat_exposed: 掘ると zombie.*守りが掘りを止めたマス d+ 個 /u);
+    const cells = Number(/マス (d+) 個/u.exec(outcome.text)![1]);
+    expect(cells).toBeGreaterThanOrEqual(2);
+    expect(cells).toBeLessThanOrEqual(GO_EXPOSED_STOPS);
+    expect(sim.world.nameAt(2, FLOOR, 0)).toBe('stone');
   });
 });

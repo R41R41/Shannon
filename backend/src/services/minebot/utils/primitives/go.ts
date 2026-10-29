@@ -84,12 +84,12 @@ export const GO_PARTIAL_WALKS = 6;
 /**
  * Run 46 (hold 4, q15 go at the amethyst-side deepslate: 120 s, 50 digs refused, a 3 m box): the exposure guard refuses a dig that would open a way to the body for a
  * hostile behind the rock (a zombie 8 to 16 m off), the route is drawn at the next cell, which the guard refuses too, and so on. A cell refused is closed to the routes for as long as
- * that hostile stays where it was (refusedDigs); this many different cells refused within GO_EXPOSED_WINDOW_MS, with the body no nearer than GO_EXPOSED_HEADWAY_M to the place
+ * that hostile stays where it was (refusedDigs); this many different cells refused within GO_EXPOSED_WINDOW_MS (45 s), with the body no nearer than GO_EXPOSED_HEADWAY_M to the place
  * than it was at the first of them, stop the go with `threat_exposed` and the reason; and a way not found after a refusal says the refusal. (A go that is refused cells and still
- * comes nearer is let go on: in the lab a wide wall was crossed by another way after six refusals.)
+ * comes nearer is let go on: in the lab a wide wall was crossed by another way after eight refusals.)
  */
-export const GO_EXPOSED_STOPS = 6;
-export const GO_EXPOSED_WINDOW_MS = 30_000;
+export const GO_EXPOSED_STOPS = 8;
+export const GO_EXPOSED_WINDOW_MS = 45_000;
 export const GO_EXPOSED_HEADWAY_M = 2;
 /** The most mendings of a stuck body, without any headway between them, before the stop `stuck`. */
 export const GO_REPAIRS = 5;
