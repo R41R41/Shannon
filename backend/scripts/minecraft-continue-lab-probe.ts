@@ -155,7 +155,7 @@ try {
       if (text && !text.startsWith(MAP_PENDING.slice(0, 8))) { drawn = text; break; }
       await sleep(100);
     }
-    const unknown = drawn ? (drawn.match(/?/gu) ?? []).length / Math.max(1, drawn.length) : 1;
+    const unknown = drawn ? (drawn.split('?').length - 1) / Math.max(1, drawn.length) : 1;
     report.mapAfterLogin = { pendingFirst: samples[0]?.startsWith(MAP_PENDING.slice(0, 8)) ?? null, drawn: !!drawn, unknownShare: Math.round(unknown * 100) / 100 };
     check('run 47 hold 8: a body just logged in has a map drawn within 10 s (not mostly "?"), and before that says the map is still being made', !!drawn && unknown < 0.5, JSON.stringify(report.mapAfterLogin));
     try { await closeProbeBot(fresh); } catch { /* the lab goes on */ }
