@@ -9,7 +9,6 @@ import type {
   TwitterQuoteRTOutput,
   TwitterReplyOutput,
   YoutubeCommentOutput,
-  YoutubeLiveChatMessageOutput,
 } from '@shannon/common';
 import { getLlmInbound } from './llmInboundRegistry.js';
 
@@ -60,10 +59,6 @@ export function deliverAutoTweetToLlm(data: TwitterAutoTweetInput): void {
 
 export function deliverYoutubeReplyToLlm(data: YoutubeCommentOutput): void {
   getLlmInbound().handleYoutubeReply(data);
-}
-
-export function deliverYoutubeMessageToLlm(data: YoutubeLiveChatMessageOutput): void {
-  getLlmInbound().handleYoutubeMessage(data);
 }
 
 export function deliverMinebotVoiceResponseToLlm(data: MinebotVoiceResponseOutput): void {

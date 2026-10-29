@@ -49,7 +49,6 @@ import {
   YoutubeCommentOutput,
   YoutubeLiveChatInput,
   YoutubeLiveChatMessageInput,
-  YoutubeLiveChatMessageOutput,
   YoutubeSubscriberUpdateOutput,
   YoutubeVideoInfoOutput,
   YoutubeVideoInput,
@@ -123,7 +122,6 @@ export interface EventPayloadMap {
   'llm:get_discord_message': DiscordSendTextMessageOutput | DiscordClientInput;
   'llm:get_web_message': OpenAIInput | OpenAIMessageOutput;
   'llm:get_skills': SkillInfo[] | WebSkillInput;
-  'llm:get_youtube_message': YoutubeLiveChatMessageOutput;
 
   // === Task ===
   'task:stop': TaskInput;

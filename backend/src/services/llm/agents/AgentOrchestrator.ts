@@ -6,7 +6,6 @@ import {
   TwitterQuoteRTOutput,
   TwitterReplyOutput,
   YoutubeCommentOutput,
-  YoutubeLiveChatMessageOutput,
 } from '@shannon/common';
 import { HumanMessage } from '@langchain/core/messages';
 import { getDiscordOutboundPort } from '../../runtime/discordOutboundGateway.js';
@@ -21,7 +20,6 @@ import { PostWeatherAgent } from './postWeatherAgent.js';
 import { QuoteTwitterCommentAgent } from './quoteTwitterComment.js';
 import { ReplyTwitterCommentAgent } from './replyTwitterComment.js';
 import { ReplyYoutubeCommentAgent } from './replyYoutubeComment.js';
-import { ReplyYoutubeLiveCommentAgent } from './replyYoutubeLiveCommentAgent.js';
 import { generateImage } from '../utils/generateImage.js';
 import { xAdapter } from '../../common/adapters/index.js';
 import { logger } from '../../../utils/logger.js';
@@ -46,7 +44,6 @@ export class AgentOrchestrator {
   private replyTwitterCommentAgent!: ReplyTwitterCommentAgent;
   private quoteTwitterCommentAgent!: QuoteTwitterCommentAgent;
   private replyYoutubeCommentAgent!: ReplyYoutubeCommentAgent;
-  private replyYoutubeLiveCommentAgent!: ReplyYoutubeLiveCommentAgent;
   private autoTweetAgent!: AutoTweetAgent;
   private memberTweetAgent!: MemberTweetAgent;
 
@@ -62,7 +59,6 @@ export class AgentOrchestrator {
     this.replyTwitterCommentAgent = await ReplyTwitterCommentAgent.create();
     this.quoteTwitterCommentAgent = QuoteTwitterCommentAgent.create();
     this.replyYoutubeCommentAgent = await ReplyYoutubeCommentAgent.create();
-    this.replyYoutubeLiveCommentAgent = await ReplyYoutubeLiveCommentAgent.create();
     this.newsAgent = await PostNewsAgent.create();
     this.autoTweetAgent = await AutoTweetAgent.create();
     this.memberTweetAgent = await MemberTweetAgent.create();
@@ -86,29 +82,6 @@ export class AgentOrchestrator {
       data.commentId,
       reply + ' by シャノン',
     );
-  }
-
-  async processYoutubeMessage(data: YoutubeLiveChatMessageOutput) {
-    const message = data.message;
-    const author = data.author;
-    const jstNow = data.jstNow;
-    const minutesSinceStart = data.minutesSinceStart;
-    const history = data.history;
-    const liveTitle = data.liveTitle;
-    const liveDescription = data.liveDescription;
-
-    const response = await this.replyYoutubeLiveCommentAgent.reply(
-      message,
-      author,
-      jstNow,
-      minutesSinceStart,
-      history,
-      liveTitle,
-      liveDescription,
-      data.authorChannelId,
-    );
-    const { YoutubeClient } = await import('../../youtube/client.js');
-    await YoutubeClient.getInstance().sendLiveChatMessage(response);
   }
 
   async processTwitterReply(data: TwitterReplyOutput) {

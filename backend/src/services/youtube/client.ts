@@ -1,6 +1,5 @@
 import {
   YoutubeCommentOutput,
-  YoutubeLiveChatMessageOutput,
   YoutubeSubscriberUpdateOutput,
 } from '@shannon/common';
 import { OAuth2Client } from 'google-auth-library';
@@ -8,11 +7,15 @@ import { google, youtube_v3 } from 'googleapis';
 import { BaseClient } from '../common/BaseClient.js';
 import { config } from '../../config/env.js';
 import { getDiscordOutboundPort } from '../runtime/discordOutboundGateway.js';
-import { deliverYoutubeMessageToLlm, deliverYoutubeReplyToLlm } from '../runtime/llmInboundDispatch.js';
+import { deliverYoutubeReplyToLlm } from '../runtime/llmInboundDispatch.js';
 import { registerYoutubeToolPort } from '../runtime/platformToolGateway.js';
 import { registerServiceCommandHandler } from '../runtime/serviceCommandRegistry.js';
 import { emitWebServiceStatus } from '../web/webNotificationHub.js';
 import { logger } from '../../utils/logger.js';
+import { HeadStreamClient } from './ear/headStreamClient.js';
+import { oauthTokenProvider } from './ear/oauthTokenProvider.js';
+import { StreamEar, type EarStatus } from './ear/streamEar.js';
+import { YoutubeLiveApi } from './ear/youtubeLiveApi.js';
 
 export class YoutubeClient extends BaseClient {
   private static instance: YoutubeClient;
@@ -23,16 +26,8 @@ export class YoutubeClient extends BaseClient {
   private authCode: string | null = null;
   private refreshToken: string | null = null;
   private lastSubscriberCount: number = 0;
-  private liveChatPolling: NodeJS.Timeout | null = null;
-  private liveChatId: string | null = null;
-  private lastRepliedMessageIds: Set<string> = new Set();
-  private liveChatStatus: 'running' | 'stopped' = 'stopped';
-  private liveTitle: string | null = null;
-  private liveDescription: string | null = null;
-  private liveStartTime: Date | null = null;
-  private chatHistory: { minutes: number; author: string; message: string }[] =
-    [];
-  private liveChatWatchStartTime: Date | null = null;
+  /** The ear of the AI VTuber: reads the live chat for the head while a stream is started (ear/streamEar.ts). */
+  private ear: StreamEar | null = null;
   private gatewaysRegistered = false;
 
   private constructor(serviceName: 'youtube', isTest: boolean) {
@@ -73,20 +68,17 @@ export class YoutubeClient extends BaseClient {
       }
     });
 
+    // The live chat is the ear (ear/streamEar.ts): it runs while the youtube service runs and the head's bridge is set, and does
+    // something only while a stream is started. start/stop here switch the ear itself; status reports it.
     registerServiceCommandHandler('youtube:live_chat', async (command) => {
       if (command === 'start') {
         const result = await this.startLiveChat();
-        if (result.success) {
-          this.liveChatStatus = 'running';
-        }
+        if (!result.success) logger.warn(`YouTube ear: ${result.message}`);
       } else if (command === 'stop') {
         await this.stopLiveChat();
-        this.liveChatStatus = 'stopped';
       } else if (command === 'status') {
-        emitWebServiceStatus({
-          service: 'youtube:live_chat',
-          status: this.liveChatStatus,
-        });
+        this.emitLiveChatStatus();
+        logger.info(`YouTube ear: ${JSON.stringify(this.liveChatSnapshot())}`);
       }
     });
   }
@@ -270,6 +262,7 @@ export class YoutubeClient extends BaseClient {
       try {
         await this.setUpConnection();
         this.registerGateways();
+        await this.startLiveChat();
         this.lastSubscriberCount = await this.getSubscriberCount();
         logger.debug(`lastSubscriberCount: ${this.lastSubscriberCount}`);
       } catch (error) {
@@ -360,157 +353,55 @@ export class YoutubeClient extends BaseClient {
     }
   }
 
-  public async startLiveChat() {
-    if (!this.client) {
-      logger.error('YouTube client is not initialized');
-      return { success: false, message: 'YouTube client is not initialized' };
+  public async stop() {
+    await this.stopLiveChat();
+    await super.stop();
+  }
+
+  /** Starts the ear. It needs the OAuth connection and the head's bridge (SHANNON_CORE_PLATFORM_URL and _TOKEN). */
+  public async startLiveChat(): Promise<{ success: boolean; message: string }> {
+    if (this.ear) return { success: true, message: 'the ear is already running' };
+    if (!this.client || !this.oauth2Client) return { success: false, message: 'YouTube client is not initialized' };
+    const bridge = config.shannonCoreBridge;
+    if (!bridge.url || !bridge.token) {
+      return { success: false, message: 'SHANNON_CORE_PLATFORM_URL and SHANNON_CORE_PLATFORM_TOKEN are not set; there is no head to listen for' };
     }
-    const videoId = await this.getCurrentLiveVideoId();
-    logger.debug(`取得したvideoId: ${videoId}`);
-    logger.debug(`YOUTUBE_LIVE_URL: ${process.env.YOUTUBE_LIVE_URL}`);
-    if (!videoId) {
-      logger.error('ライブ配信中の動画が見つかりません');
-      return { success: false, message: 'ライブ配信中の動画が見つかりません' };
-    }
-    if (this.liveChatPolling) {
-      clearInterval(this.liveChatPolling);
-      this.liveChatPolling = null;
-    }
-    let liveChatId: string | null = null;
     try {
-      const videoResponse = await this.client.videos.list({
-        part: ['liveStreamingDetails', 'snippet'],
-        id: [videoId],
+      const ear = new StreamEar({
+        head: new HeadStreamClient({ url: bridge.url, token: bridge.token, timeoutMs: Math.max(5_000, bridge.timeoutMs) }),
+        youtube: new YoutubeLiveApi({ getAccessToken: oauthTokenProvider(this.oauth2Client) }),
+        liveUrl: config.youtube.liveUrl,
+        channelId: this.channelId ?? undefined,
       });
-      const video = videoResponse.data.items?.[0];
-      logger.debug(`動画情報: ${JSON.stringify({
-        title: video?.snippet?.title,
-        liveBroadcastContent: video?.snippet?.liveBroadcastContent,
-        liveStreamingDetails: video?.liveStreamingDetails,
-      }, null, 2)}`);
-      liveChatId = (video?.liveStreamingDetails as { activeLiveChatId?: string })?.activeLiveChatId ?? null;
-      if (!liveChatId) {
-        logger.error('liveChatIdが取得できませんでした');
-        return { success: false, message: 'liveChatIdが取得できませんでした' };
-      }
-      this.liveChatId = liveChatId;
-      this.liveTitle = video?.snippet?.title || null;
-      this.liveDescription = video?.snippet?.description || null;
-      this.liveStartTime = video?.liveStreamingDetails?.actualStartTime
-        ? new Date(video.liveStreamingDetails.actualStartTime)
-        : null;
-      this.chatHistory = [];
-      this.liveChatWatchStartTime = new Date();
-      this.liveChatPolling = setInterval(() => {
-        this.fetchLiveChatMessages();
-      }, 60 * 1000);
-      this.fetchLiveChatMessages();
-      logger.info('ライブチャット監視を開始しました');
-      return { success: true, message: 'ライブチャット監視を開始しました' };
+      ear.start();
+      this.ear = ear;
+      this.emitLiveChatStatus();
+      logger.info('YouTube ear started (it works only while the head has a stream started)');
+      return { success: true, message: 'the ear started' };
     } catch (error) {
-      logger.error('ライブチャット監視開始エラー', error);
-      return { success: false, message: 'ライブチャット監視開始エラー' };
+      logger.error('YouTube ear could not start', error);
+      return { success: false, message: 'the ear could not start' };
     }
   }
 
   public async stopLiveChat() {
-    if (this.liveChatPolling) {
-      clearInterval(this.liveChatPolling);
-      this.liveChatPolling = null;
-      this.liveChatId = null;
-      logger.info('ライブチャット監視を停止しました');
+    const ear = this.ear;
+    this.ear = null;
+    if (ear) {
+      await ear.stop();
+      logger.info('YouTube ear stopped');
     }
+    this.emitLiveChatStatus();
   }
 
-  private async fetchLiveChatMessages() {
-    if (!this.client || !this.liveChatId) return;
-    try {
-      const chatResponse = await this.client.liveChatMessages.list({
-        liveChatId: this.liveChatId,
-        part: ['snippet', 'authorDetails'],
-        maxResults: 200,
-      });
-      const messages = chatResponse.data.items || [];
-      const unrepliedMessages = messages.filter(
-        (msg) =>
-          msg.id &&
-          !this.lastRepliedMessageIds.has(msg.id ?? '') &&
-          msg.authorDetails?.channelId !== this.channelId &&
-          (
-            !this.liveChatWatchStartTime ||
-            (msg.snippet?.publishedAt && new Date(msg.snippet.publishedAt) >= this.liveChatWatchStartTime)
-          ) &&
-          (msg.snippet?.displayMessage?.startsWith('シャノン、') ?? false)
-      );
-      if (unrepliedMessages.length > 0) {
-        const randomIndex = Math.floor(Math.random() * unrepliedMessages.length);
-        const msg = unrepliedMessages[randomIndex];
-        this.lastRepliedMessageIds.add(msg.id ?? '');
-        const author = msg.authorDetails?.displayName ?? '';
-        const message = msg.snippet?.displayMessage ?? '';
-        if (author !== '' && message !== '') {
-          this.chatHistory.push({
-            minutes: 0,
-            author,
-            message,
-          });
-          const formattedHistory = this.chatHistory.map(
-            (h) => `${h.minutes}：${h.author}「${h.message}」`
-          );
-          deliverYoutubeMessageToLlm({
-            message,
-            author,
-            jstNow: new Date().toISOString(),
-            minutesSinceStart: 0,
-            history: formattedHistory,
-            liveTitle: this.liveTitle ?? '',
-            liveDescription: this.liveDescription ?? '',
-          } as YoutubeLiveChatMessageOutput);
-        }
-      }
-    } catch (error) {
-      logger.error('ライブチャット取得エラー', error);
-    }
+  public liveChatSnapshot(): EarStatus | { running: false } {
+    return this.ear ? this.ear.status() : { running: false };
   }
 
-  public async sendLiveChatMessage(message: string) {
-    if (!this.client || !this.liveChatId) return;
-    try {
-      await this.client.liveChatMessages.insert({
-        part: ['snippet'],
-        requestBody: {
-          snippet: {
-            liveChatId: this.liveChatId,
-            type: 'textMessageEvent',
-            textMessageDetails: {
-              messageText: message,
-            },
-          },
-        },
-      });
-      logger.info(`ライブチャットにコメントを投稿: ${message}`);
-    } catch (error) {
-      logger.error('ライブチャットコメント投稿エラー', error);
-    }
-  }
-
-  async getCurrentLiveVideoId(): Promise<string | null> {
-    const liveUrl = config.youtube.liveUrl;
-    if (liveUrl) {
-      const match = liveUrl.match(/(?:v=|\/(?:video|live)\/|youtu\.be\/|watch\?v=)([a-zA-Z0-9_-]{11})/);
-      if (match && match[1]) {
-        return match[1];
-      }
-    }
-    if (!this.client || !this.channelId) return null;
-    const res = await this.client.search.list({
-      part: ['id'],
-      channelId: this.channelId,
-      eventType: 'live',
-      type: ['video'],
-      maxResults: 1,
+  private emitLiveChatStatus() {
+    emitWebServiceStatus({
+      service: 'youtube:live_chat',
+      status: this.ear ? 'running' : 'stopped',
     });
-    const videoId = res.data.items?.[0]?.id?.videoId;
-    return videoId || null;
   }
 }

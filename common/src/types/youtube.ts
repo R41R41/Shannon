@@ -49,18 +49,6 @@ export interface YoutubeSubscriberUpdateOutput extends ServiceInput {
   subscriberCount: number;
 }
 
-export interface YoutubeLiveChatMessageOutput extends ServiceInput {
-  message: string;
-  author: string;
-  /** コメント投稿者の YouTube チャンネルID (記憶システム用) */
-  authorChannelId?: string | null;
-  jstNow: string;
-  minutesSinceStart: number | null;
-  history: string[];
-  liveTitle: string | null;
-  liveDescription: string | null;
-}
-
 export type YoutubeEventType =
   | 'youtube:get_stats'
   | 'youtube:get_message'
