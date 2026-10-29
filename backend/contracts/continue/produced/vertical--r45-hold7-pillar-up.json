@@ -1,8 +1,8 @@
 {
  "producedBy": "backend/scripts/minecraft-continue-lab-probe.ts",
  "bench": "B",
- "bodyRevision": "f0411d470fd9",
- "madeAt": "2026-10-29T17:38:39.262Z",
+ "bodyRevision": "6a3d116fcd41",
+ "madeAt": "2026-10-29T18:19:30.659Z",
  "answers": "vertical/r45-hold7-pillar-up",
  "fixtureSha256": "7e63b36cc22555fae0d6015b1576e3166a73bb6a85b8245da13b953af6bb8c7a",
  "substitute": "an arena of stone, not the real run's ground",
@@ -54,7 +54,7 @@
        "y": 108,
        "z": 0
       },
-      "msPerUnit": 511,
+      "msPerUnit": 518,
       "work": {
        "dug": 0,
        "placeAttempts": 8,
@@ -67,8 +67,8 @@
        "item": "cobblestone",
        "count": -8,
        "reason": "placed",
-       "id": "lab:q38:1:1:0",
-       "obsSeq": 10475,
+       "id": "lab:q37:1:1:0",
+       "obsSeq": 11469,
        "deliverySeq": 0
       }
      ]
@@ -81,23 +81,23 @@
    },
    "hp": 20,
    "food": 20,
-   "ms": 4094,
-   "map": "地図 v1 足=(0,108,0) x=-10..10 z=-10..10 方式=surface 上=北\nz\\x 0  9  8  7  6  5  4  3  2  1  0  1  2  3  4  5  6  7  8  9  0\n-10 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n -9 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n -8 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n -7 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n -6 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n -5 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n -4 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n -3 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n -2 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n -1 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n  0 #h #h #h #h #h #h #h #h #h #h @0 #h #h #h #h #h #h #h #h #h #h\n  1 #h #h #h #h #h #h #h #h #h #h *h #h #h #h #h #h #h #h #h #h #h\n  2 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n  3 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n  4 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n  5 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n  6 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n  7 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n  8 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n  9 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n 10 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\ny=109\nz\\x 5 4 3 2 1 0 1 2 3 4 5\n -5 . . . . . . . . . . .\n -4 . . . . . . . . . . .\n -3 . . . . . . . . . . .\n -2 . . . . . . . . . . .\n -1 . . . . . . . . . . .\n  0 . . . . . . . . . . .\n  1 . . . . . . . . . . .\n  2 . . . . . . . . . . .\n  3 . . . . . . . . . . .\n  4 . . . . . . . . . . .\n  5 . . . . . . . . . . .\ny=108\nz\\x 5 4 3 2 1 0 1 2 3 4 5\n -5 . . . . . . . . . . .\n -4 . . . . . . . . . . .\n -3 . . . . . . . . . . .\n -2 . . . . . . . . . . .\n -1 . . . . . . . . . . .\n  0 . . . . . @ . . . . .\n  1 . . . . . . . . . . .\n  2 . . . . . . . . . . .\n  3 . . . . . . . . . . .\n  4 . . . . . . . . . . .\n  5 . . . . . . . . . . .\ny=107\nz\\x 5 4 3 2 1 0 1 2 3 4 5\n -5 . . . . . . . . . . .\n -4 . . . . . . . . . . .\n -3 . . . . . . . . . . .\n -2 . . . . . . . . . . .\n -1 . . . . . . . . . . .\n  0 . . . . . # . . . . .\n  1 . . . . . . . . . . .\n  2 . . . . . . . . . . .\n  3 . . . . . . . . . . .\n  4 . . . . . . . . . . .\n  5 . . . . . . . . . . .\n縦 (0,0) 上: y=109〜124 .×16 …\n縦 (0,0) 下: y=107〜92 #×16 …"
+   "ms": 4144,
+   "map": "地図 v1 足=(0,108,0) x=-10..10 z=-10..10 方式=surface 上=北\nz\\x 0  9  8  7  6  5  4  3  2  1  0  1  2  3  4  5  6  7  8  9  0\n-10 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n -9 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n -8 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n -7 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n -6 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n -5 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n -4 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n -3 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n -2 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n -1 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n  0 #h #h #h #h #h #h #h #h #h #h @0 #h #h #h #h #h #h #h #h #h #h\n  1 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n  2 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n  3 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n  4 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n  5 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n  6 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n  7 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n  8 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n  9 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\n 10 #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h #h\ny=109\nz\\x 5 4 3 2 1 0 1 2 3 4 5\n -5 . . . . . . . . . . .\n -4 . . . . . . . . . . .\n -3 . . . . . . . . . . .\n -2 . . . . . . . . . . .\n -1 . . . . . . . . . . .\n  0 . . . . . . . . . . .\n  1 . . . . . . . . . . .\n  2 . . . . . . . . . . .\n  3 . . . . . . . . . . .\n  4 . . . . . . . . . . .\n  5 . . . . . . . . . . .\ny=108\nz\\x 5 4 3 2 1 0 1 2 3 4 5\n -5 . . . . . . . . . . .\n -4 . . . . . . . . . . .\n -3 . . . . . . . . . . .\n -2 . . . . . . . . . . .\n -1 . . . . . . . . . . .\n  0 . . . . . @ . . . . .\n  1 . . . . . . . . . . .\n  2 . . . . . . . . . . .\n  3 . . . . . . . . . . .\n  4 . . . . . . . . . . .\n  5 . . . . . . . . . . .\ny=107\nz\\x 5 4 3 2 1 0 1 2 3 4 5\n -5 . . . . . . . . . . .\n -4 . . . . . . . . . . .\n -3 . . . . . . . . . . .\n -2 . . . . . . . . . . .\n -1 . . . . . . . . . . .\n  0 . . . . . # . . . . .\n  1 . . . . . . . . . . .\n  2 . . . . . . . . . . .\n  3 . . . . . . . . . . .\n  4 . . . . . . . . . . .\n  5 . . . . . . . . . . .\n縦 (0,0) 上: y=109〜124 .×16 …\n縦 (0,0) 下: y=107〜92 #×16 …"
   },
   "receiptUnit": {
    "goal": "done",
    "end": "finished",
    "released": true,
-   "startedAt": "2026-10-29T17:38:26.529Z"
+   "startedAt": "2026-10-29T18:19:17.879Z"
   },
   "bodyTimes": {
-   "acceptedAt": "2026-10-29T17:38:26.529Z",
-   "startedAt": "2026-10-29T17:38:33.654Z",
-   "reflexWaitMs": 7125,
-   "lockAt": "2026-10-29T17:38:33.654Z",
-   "firstMotorAt": "2026-10-29T17:38:33.657Z",
+   "acceptedAt": "2026-10-29T18:19:17.879Z",
+   "startedAt": "2026-10-29T18:19:25.006Z",
+   "reflexWaitMs": 7127,
+   "lockAt": "2026-10-29T18:19:25.007Z",
+   "firstMotorAt": "2026-10-29T18:19:25.008Z",
    "motorOps": 25,
-   "endedAt": "2026-10-29T17:38:37.750Z"
+   "endedAt": "2026-10-29T18:19:29.152Z"
   },
   "opCounts": {
    "dig": 0,

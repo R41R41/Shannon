@@ -1,26 +1,26 @@
 {
  "producedBy": "backend/scripts/minecraft-continue-lab-probe.ts",
  "bench": "B",
- "bodyRevision": "f0411d470fd9",
- "madeAt": "2026-10-29T17:35:01.165Z",
+ "bodyRevision": "6a3d116fcd41",
+ "madeAt": "2026-10-29T18:15:25.522Z",
  "answers": null,
  "fixtureSha256": null,
  "output": {
   "seen": {
    "capability": "floor-last-stand",
-   "target": 120
+   "target": 141
   },
   "handover": {
    "from": "floor-last-stand",
-   "target": 120,
-   "waitedMs": 3,
-   "reflexSettledAt": "2026-10-29T17:34:55.655Z",
+   "target": 141,
+   "waitedMs": 2,
+   "reflexSettledAt": "2026-10-29T18:15:20.078Z",
    "confirmed": true,
    "shield": "none"
   },
   "notes": [
    {
-    "command": "lab:q17",
+    "command": "lab:q16",
     "point": "reservation",
     "shield": false,
     "flagUp": false,
@@ -32,10 +32,10 @@
     "reserved": false,
     "reflex": "floor-last-stand",
     "kind": "motor_state",
-    "at": "2026-10-29T17:34:55.655Z"
+    "at": "2026-10-29T18:15:20.078Z"
    },
    {
-    "command": "lab:q17",
+    "command": "lab:q16",
     "point": "stop",
     "shield": false,
     "flagUp": false,
@@ -46,10 +46,10 @@
     "deactivatedSince": 0,
     "reflex": "floor-last-stand",
     "kind": "motor_state",
-    "at": "2026-10-29T17:34:55.655Z"
+    "at": "2026-10-29T18:15:20.078Z"
    },
    {
-    "command": "lab:q17",
+    "command": "lab:q16",
     "point": "acquire",
     "shield": false,
     "flagUp": false,
@@ -61,10 +61,10 @@
     "confirmed": true,
     "result": "none",
     "kind": "motor_state",
-    "at": "2026-10-29T17:34:55.658Z"
+    "at": "2026-10-29T18:15:20.080Z"
    },
    {
-    "command": "lab:q17",
+    "command": "lab:q16",
     "point": "first_op",
     "shield": false,
     "flagUp": false,
@@ -75,7 +75,7 @@
     "deactivatedSince": 0,
     "op": "setMovements",
     "kind": "motor_state",
-    "at": "2026-10-29T17:34:55.662Z"
+    "at": "2026-10-29T18:15:20.087Z"
    }
   ],
   "outcome": "failed",
@@ -84,8 +84,8 @@
    "end": "finished",
    "released": true,
    "code": "limit_time",
-   "startedAt": "2026-10-29T17:34:55.655Z"
+   "startedAt": "2026-10-29T18:15:20.077Z"
   },
-  "sentToLockMs": 20
+  "sentToLockMs": 31
  }
 }
