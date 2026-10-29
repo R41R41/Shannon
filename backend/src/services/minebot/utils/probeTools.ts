@@ -59,10 +59,10 @@ async function walkSearch(read: BlockReader, from: Cell, goals: Set<string>, box
   let goal: string | null = goals.has(start) ? start : null, limited = false;
   const inside = (x: number, y: number, z: number) => x >= box.x0 && x <= box.x1 && y >= box.y0 && y <= box.y1 && z >= box.z0 && z <= box.z1;
   // run 47: an open trapdoor's plate stands on one edge of its cell, a whole block high: a step across that edge at the body's height (feet, head; a climb's levels too) is not one.
-  const across = (c: Cell, x: number, z: number, levels: number): boolean => {
+  const across = (c: Cell, x: number, z: number, first: number, levels: number): boolean => {
     const toward = x < c.x ? 'w' : x > c.x ? 'e' : z < c.z ? 'n' : 's';
     const from = toward === 'w' ? 'e' : toward === 'e' ? 'w' : toward === 'n' ? 's' : 'n';
-    for (let dy = 0; dy < levels; dy++) {
+    for (let dy = first; dy < first + levels; dy++) {
       if (read(x, c.y + dy, z)?.plates?.includes(from) || read(c.x, c.y + dy, c.z)?.plates?.includes(toward)) return true;
     }
     return false;
@@ -82,11 +82,10 @@ async function walkSearch(read: BlockReader, from: Cell, goals: Set<string>, box
     const here = read(c.x, c.y, c.z);
     for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
       const x = c.x + dx, z = c.z + dz;
-      if (across(c, x, z, 2)) continue;
-      if (standable(read, x, c.y, z)) { push(c, x, c.y, z); continue; }
+      if (standable(read, x, c.y, z)) { if (!across(c, x, z, 0, 2)) push(c, x, c.y, z); continue; }
       // A climb of one: room over the head, and no more than the route search climbs (r7: 1.2 from the floor stood on; a fence is no step).
-      if (standable(read, x, c.y + 1, z) && passable(read(c.x, c.y + 2, c.z)) && climbRise(read, c.x, c.y, c.z, x, z) <= MAX_CLIMB + 1e-9) { if (!across(c, x, z, 3)) push(c, x, c.y + 1, z); continue; }
-      if (!passable(read(x, c.y, z)) || !passable(read(x, c.y + 1, z))) continue;
+      if (standable(read, x, c.y + 1, z) && passable(read(c.x, c.y + 2, c.z)) && climbRise(read, c.x, c.y, c.z, x, z) <= MAX_CLIMB + 1e-9) { if (!across(c, x, z, 1, 2)) push(c, x, c.y + 1, z); continue; }
+      if (!passable(read(x, c.y, z)) || !passable(read(x, c.y + 1, z)) || across(c, x, z, 0, 2)) continue;
       // Off the edge: the cell it lands in, within three (water too: the walk's movements keep infiniteLiquidDropdownDistance off). The
       // cells fallen through are open ones (leaves and doors under the feet are not broken or opened: they are landed on, or no way).
       let fall = 0;

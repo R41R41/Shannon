@@ -291,8 +291,8 @@ function platesAcross(movements: any, node: any, move: any): any[] {
   if (Math.abs(dx) + Math.abs(dz) !== 1) return [];
   const toward = dx < 0 ? 'west' : dx > 0 ? 'east' : dz < 0 ? 'north' : 'south';
   const from = OPPOSITE_SIDE[toward];
-  const levels = new Set<number>([node.y, node.y + 1]);
-  if (move.y > node.y) { levels.add(move.y); levels.add(move.y + 1); }
+  // A climb goes over what is below the level it climbs to (a plate as high as the step is jumped over), a step level or down meets the plates at the feet and the head.
+  const levels = move.y > node.y ? [move.y, move.y + 1] : [node.y, node.y + 1];
   const found: any[] = [];
   for (const y of levels) {
     const ahead = movements.getBlock(node, dx, y - node.y, dz), here = movements.getBlock(node, 0, y - node.y, 0);
