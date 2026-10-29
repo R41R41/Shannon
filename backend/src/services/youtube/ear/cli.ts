@@ -15,13 +15,16 @@
  *   SHANNON_CORE_PLATFORM_URL    required. The head; only its origin is used (the path of the Discord bridge URL is fine).
  *   SHANNON_CORE_PLATFORM_TOKEN  required. The bridge token (`SHANNON_PLATFORM_BRIDGE_TOKEN` of the head).
  *   YOUTUBE_API_BASE             the YouTube Data API v3 base; default https://www.googleapis.com/youtube/v3. A fake API goes here
- *                                (`<base>/liveBroadcasts`, `<base>/videos`, `<base>/liveChat/messages`).
+ *                                (`<base>/liveBroadcasts`, `<base>/videos`, `<base>/liveChat/messages/stream` and, as the fallback, `<base>/liveChat/messages`).
  *   YOUTUBE_ACCESS_TOKEN         a fixed access token; the OAuth refresh is skipped. Without it YOUTUBE_CLIENT_ID,
  *                                YOUTUBE_CLIENT_SECRET and YOUTUBE_REFRESH_TOKEN are used like the runtime does.
  *   YOUTUBE_LIVE_URL             optional. This video is the broadcast (no liveBroadcasts.list).
  *   YOUTUBE_CHANNEL_ID           optional. Sent to the head when YouTube's answer carries no channel.
  *   EAR_STATE_EVERY_MS           optional, default 5000. EAR_DISCOVERY_EVERY_MS default 15000.
- *   EAR_MIN_POLL_MS / EAR_MAX_POLL_MS   optional, default 1000 / 10000. The bounds the polling interval YouTube asks for is kept in.
+ *   EAR_MIN_POLL_MS / EAR_MAX_POLL_MS   optional, default 8000 / 10000. The bounds the polling interval YouTube asks for is kept in
+ *                                (polling is only the fallback when liveChatMessages.streamList cannot be used).
+ *   EAR_STREAM_IDLE_MS           optional, default 300000. A streamList connection that said nothing for this long is opened again.
+ *   EAR_STREAM_RETRY_MS          optional, default 900000. After streamList was found unusable, polling lasts this long before it is tried again.
  *   EAR_HEAD_TIMEOUT_MS          optional, default 5000.
  *
  * Output: one JSON line on stdout, `{"ear":"ready"}`, once the loop runs (the runtime logger's lines follow on stdout). On SIGINT/SIGTERM the ear stops and prints `{"ear":"stopped","status":{...}}` (counters: comments read vs sent, API units),
@@ -70,6 +73,8 @@ async function main(): Promise<void> {
   const discoveryEveryMs = number('EAR_DISCOVERY_EVERY_MS');
   const minPollMs = number('EAR_MIN_POLL_MS');
   const maxPollMs = number('EAR_MAX_POLL_MS');
+  const streamIdleMs = number('EAR_STREAM_IDLE_MS');
+  const streamRetryMs = number('EAR_STREAM_RETRY_MS');
   const liveUrl = process.env.YOUTUBE_LIVE_URL?.trim();
   const channelId = process.env.YOUTUBE_CHANNEL_ID?.trim();
   const ear = new StreamEar({
@@ -81,6 +86,8 @@ async function main(): Promise<void> {
     ...(discoveryEveryMs ? { discoveryEveryMs } : {}),
     ...(minPollMs ? { minPollMs } : {}),
     ...(maxPollMs ? { maxPollMs } : {}),
+    ...(streamIdleMs ? { streamIdleMs } : {}),
+    ...(streamRetryMs ? { streamRetryMs } : {}),
   });
 
   const stop = async () => {

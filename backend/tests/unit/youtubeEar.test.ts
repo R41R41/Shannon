@@ -6,7 +6,8 @@ import { describe, expect, it } from 'vitest';
 import { chunkComments, classifyChatMessage, type StreamComment } from '../../src/services/youtube/ear/chatMessages.js';
 import { HeadStreamClient } from '../../src/services/youtube/ear/headStreamClient.js';
 import { oauthTokenProvider } from '../../src/services/youtube/ear/oauthTokenProvider.js';
-import { StreamEar, videoIdOfUrl, type StreamEarOptions } from '../../src/services/youtube/ear/streamEar.js';
+import { StreamEar, videoIdOfUrl, type ReadMethod, type StreamEarOptions } from '../../src/services/youtube/ear/streamEar.js';
+import { JsonStreamParser } from '../../src/services/youtube/ear/streamParser.js';
 import { ApiUnitMeter, YoutubeApiError, YoutubeLiveApi } from '../../src/services/youtube/ear/youtubeLiveApi.js';
 
 /**
@@ -122,6 +123,98 @@ class FakeYoutube {
   insertFails = 0;
   firstStatus: number[] = [];
 
+  // ---- liveChatMessages.streamList (GET /liveChat/messages/stream): a body that stays open and gets a response whenever `pump()` finds messages.
+  /** false: the route answers 404 like a path that does not exist (the ear must fall back to polling). */
+  streamEnabled = true;
+  /** Errors for the next stream connects: [status, reason]. */
+  streamErrors: Array<[number, string] | null> = [];
+  framing: 'array' | 'ndjson' | 'sse' | 'wrapped' = 'array';
+  /** The bytes of every written response are cut into pieces of this size (0: whole), which splits Japanese characters too. */
+  splitBytes = 0;
+  /** Messages in one response. */
+  streamPage = 2000;
+  /** A fresh connection (no pageToken) starts with this many of the latest messages (the chat's recent history). */
+  historySize = Number.POSITIVE_INFINITY;
+  /** One plan per connection, in order: close the connection (or tear it in the middle of a response, or break it) once `cutAfter` messages are sent. */
+  plans: Array<{ cutAfter: number; how?: 'close' | 'tear' | 'error' }> = [];
+  /** Objects written into the stream in place of the next responses, e.g. `{ error }` (as Google does for a failure after the start). */
+  streamInject: unknown[] = [];
+  /** Virtual time of every connect (set by the test world). */
+  clock: () => number = () => 0;
+  streamCalls = 0;
+  connectTimes: number[] = [];
+  streams: Array<{
+    query: Record<string, string>; auth: string | null; sent: number; written: number; closed: boolean; cancelled: boolean; offlineSent: boolean;
+    plan: { cutAfter: number; how?: 'close' | 'tear' | 'error' } | undefined; controller: ReadableStreamDefaultController<Uint8Array>;
+  }> = [];
+  onPump: (pump: number) => void = () => undefined;
+  pumps = 0;
+
+  private write(stream: FakeYoutube['streams'][number], object: unknown, torn = false): void {
+    const json = JSON.stringify(this.framing === 'wrapped' ? { result: object } : object);
+    const first = stream.written === 0;
+    stream.written += 1;
+    const text = this.framing === 'ndjson' ? `${json}\n` : this.framing === 'sse' ? `data: ${json}\n\n` : `${first ? '[' : ',\n'}${json}`;
+    const bytes = new TextEncoder().encode(torn ? text.slice(0, Math.floor(text.length / 2)) : text);
+    const size = this.splitBytes > 0 ? this.splitBytes : bytes.length || 1;
+    for (let i = 0; i < bytes.length; i += size) stream.controller.enqueue(bytes.slice(i, i + size));
+  }
+
+  /** Hands every open stream what it has not been sent yet, and applies the plan of the connection (the test world calls this on every turn). */
+  pump(): void {
+    this.pumps += 1;
+    this.onPump(this.pumps);
+    for (const stream of this.streams) {
+      if (stream.closed) continue;
+      const injected = this.streamInject.shift();
+      if (injected !== undefined) { this.write(stream, injected); continue; }
+      if (stream.plan && stream.sent >= stream.plan.cutAfter) {
+        if (stream.plan.how === 'tear') {
+          // Half of the next response and then the end of the body: the connection was cut in the middle of an object.
+          const batch = this.messages.slice(stream.sent, stream.sent + this.streamPage);
+          if (batch.length === 0) continue;
+          this.write(stream, { kind: 'youtube#liveChatMessageListResponse', nextPageToken: `t${stream.sent + batch.length}`, items: batch }, true);
+          stream.controller.close();
+        } else if (stream.plan.how === 'error') {
+          stream.controller.error(new TypeError('terminated'));
+        } else {
+          stream.controller.close();
+        }
+        stream.closed = true;
+        continue;
+      }
+      let limit = this.messages.length;
+      if (stream.plan) limit = Math.min(limit, stream.plan.cutAfter);
+      if (stream.sent < limit) {
+        const batch = this.messages.slice(stream.sent, Math.min(limit, stream.sent + this.streamPage));
+        stream.sent += batch.length;
+        const done = this.offlineAt && stream.sent >= this.messages.length;
+        this.write(stream, { kind: 'youtube#liveChatMessageListResponse', nextPageToken: `t${stream.sent}`, pollingIntervalMillis: 1000, items: batch, ...(done ? { offlineAt: this.offlineAt } : {}) });
+        if (done) stream.offlineSent = true;
+      } else if (this.offlineAt && !stream.offlineSent && stream.sent >= this.messages.length) {
+        stream.offlineSent = true;
+        this.write(stream, { kind: 'youtube#liveChatMessageListResponse', nextPageToken: `t${stream.sent}`, items: [], offlineAt: this.offlineAt });
+      }
+    }
+  }
+
+  private connect(query: Record<string, string>, auth: string | null, signal: AbortSignal | null | undefined): Response {
+    const from = query.pageToken ? Number(query.pageToken.slice(1)) : Math.max(0, this.messages.length - this.historySize);
+    let stream!: FakeYoutube['streams'][number];
+    const body = new ReadableStream<Uint8Array>({
+      start: controller => { stream = { query, auth, sent: from, written: 0, closed: false, cancelled: false, offlineSent: false, plan: this.plans.shift(), controller }; },
+      cancel: () => { stream.cancelled = true; stream.closed = true; },
+    });
+    this.streams.push(stream);
+    // Like a real fetch, an aborted request breaks the body.
+    signal?.addEventListener('abort', () => {
+      stream.cancelled = true;
+      stream.closed = true;
+      try { stream.controller.error(new DOMException('This operation was aborted', 'AbortError')); } catch { /* already closed */ }
+    }, { once: true });
+    return new Response(body, { status: 200, headers: { 'content-type': 'application/json' } });
+  }
+
   fetcher: typeof fetch = async (input, init) => {
     const url = new URL(String(input));
     const query = Object.fromEntries(url.searchParams.entries());
@@ -135,6 +228,14 @@ class FakeYoutube {
     }
     if (route === '/videos') {
       return json(200, { items: [{ id: query.id, snippet: { title: '配信のタイトル', channelId: 'UCowner' }, liveStreamingDetails: this.chatId ? { activeLiveChatId: this.chatId } : {} }] });
+    }
+    if (route === '/liveChat/messages/stream') {
+      this.streamCalls += 1;
+      this.connectTimes.push(this.clock());
+      if (!this.streamEnabled) return new Response('<html>Not Found</html>', { status: 404, headers: { 'content-type': 'text/html' } });
+      const error = this.streamErrors.shift();
+      if (error) return googleError(error[0], error[1]);
+      return this.connect(query, new Headers(init?.headers).get('authorization'), init?.signal);
     }
     if (route === '/liveChat/messages' && (init?.method ?? 'GET') === 'GET') {
       this.listCalls += 1;
@@ -160,12 +261,20 @@ class FakeYoutube {
   };
 }
 
-function world(options: Partial<StreamEarOptions> = {}) {
+/**
+ * `via: 'poll'` (the default, for the tests of what is the same in both ways of reading): the fake has no stream route, so the ear falls back
+ * to polling at once. `via: 'stream'`: liveChatMessages.streamList works.
+ */
+function world(options: Partial<StreamEarOptions> & { via?: 'stream' | 'poll' } = {}) {
+  const { via = 'poll', ...earOptions } = options;
   let now = START;
   const sleeps: number[] = [];
   const logs: string[] = [];
   const head = new FakeHead();
   const youtube = new FakeYoutube();
+  youtube.streamEnabled = via === 'stream';
+  youtube.clock = () => now;
+  const methods: Array<ReadMethod | null> = [];
   const tokens: boolean[] = [];
   const meter = new ApiUnitMeter(() => now, () => undefined, () => undefined);
   const api = new YoutubeLiveApi({
@@ -183,15 +292,16 @@ function world(options: Partial<StreamEarOptions> = {}) {
       await tick();
     },
     log: { info: line => logs.push(line), warn: line => logs.push(`WARN ${line}`) },
-    ...options,
+    onMethodChange: method => methods.push(method),
+    ...earOptions,
   });
   const run = async (done: () => boolean, max = 4000) => {
     ear.start();
-    for (let i = 0; i < max && !done(); i += 1) await tick();
+    for (let i = 0; i < max && !done(); i += 1) { youtube.pump(); await tick(); }
     await ear.stop();
     if (!done()) throw new Error(`condition not reached; log: ${logs.join(' | ')}`);
   };
-  return { ear, head, youtube, meter, sleeps, logs, tokens, run, clock: () => now };
+  return { ear, head, youtube, meter, sleeps, logs, tokens, methods, run, clock: () => now };
 }
 
 describe('the ear waits for the head', () => {
@@ -299,7 +409,7 @@ describe('reading the chat', () => {
     w.head.start({ phase: 'live', broadcast: { videoId: 'vid00000001', liveChatId: 'chat-1', title: 't', channelId: 'UCowner' } });
   }
 
-  it('follows pageToken and the polling interval YouTube returns (kept between 1 s and 10 s) and loses nothing', async () => {
+  it('polling (the fallback): follows pageToken and the polling interval YouTube returns (kept between 8 s and 10 s) and loses nothing', async () => {
     const w = world();
     live(w);
     w.youtube.pageSize = 200;
@@ -310,7 +420,9 @@ describe('reading the chat', () => {
     expect(lists[0].query.pageToken).toBeUndefined();
     expect(lists.slice(1, 4).map(call => call.query.pageToken)).toEqual(['t200', 't400', 't450']);
     expect(lists[0].query).toMatchObject({ part: 'snippet,authorDetails', liveChatId: 'chat-1', maxResults: '2000' });
-    expect(w.sleeps.slice(0, 3)).toEqual([1000, 10_000, 3000]);
+    // 500 ms and 3 s are lifted to the 8 s floor (5 units a poll), 20 s is cut to 10 s.
+    // (The first sleep is the 5 s tick of the one connection that was tried at streamList before the fallback.)
+    expect(w.sleeps.slice(1, 4)).toEqual([8000, 10_000, 8000]);
     expect(w.head.received.map(c => c.id)).toEqual(Array.from({ length: 450 }, (_, i) => `m${i + 1}`));
     expect(w.ear.status().counters).toMatchObject({ itemsRead: 450, commentsEligible: 450, commentsSent: 450, commentsDropped: 0 });
   });
@@ -513,7 +625,7 @@ describe('when something fails', () => {
     w.youtube.listErrors = [[500, 'backendError'], [500, 'backendError'], [503, 'backendError']];
     w.youtube.messages = manyTexts(1);
     await w.run(() => w.head.received.length >= 1);
-    expect(w.sleeps.slice(0, 3)).toEqual([2000, 4000, 8000]);
+    expect(w.sleeps.slice(1, 4)).toEqual([2000, 4000, 8000]);
     expect(w.ear.status().lastError).toContain('liveChatMessages.list');
   });
 
@@ -523,7 +635,7 @@ describe('when something fails', () => {
     w.youtube.listErrors = [[403, 'quotaExceeded'], [403, 'quotaExceeded']];
     w.youtube.messages = manyTexts(1);
     await w.run(() => w.head.received.length >= 1);
-    expect(w.sleeps.slice(0, 2)).toEqual([60_000, 60_000]);
+    expect(w.sleeps.slice(1, 3)).toEqual([60_000, 60_000]);
   });
 
   it('refreshes the token once when YouTube refuses it (401)', async () => {
@@ -599,6 +711,360 @@ describe('writing into the chat (chatPosts)', () => {
   });
 });
 
+describe('reading the chat over streamList', () => {
+  function live(w: ReturnType<typeof world>, extra: Partial<HeadStreamState> = {}) {
+    w.head.start({ phase: 'live', broadcast: { videoId: 'vid00000001', liveChatId: 'chat-1', title: 't', channelId: 'UCowner' }, ...extra });
+  }
+  const ids = (count: number, from = 1) => Array.from({ length: count }, (_, i) => `m${from + i}`);
+  /** The first connection of a stream is made after the ear has asked for its 5 s tick, so every gap between two connects holds one. */
+  const TICK = 5000;
+  const gaps = (youtube: FakeYoutube) => youtube.connectTimes.slice(1).map((time, i) => time - youtube.connectTimes[i] - TICK);
+
+  it('opens GET liveChat/messages/stream, reads the history and then each push once and in order, and never polls', async () => {
+    const w = world({ via: 'stream' });
+    live(w);
+    w.youtube.messages = manyTexts(5);
+    w.youtube.onPump = n => { if (n === 20) w.youtube.messages.push(...manyTexts(7, 6)); if (n === 40) w.youtube.messages.push(...manyTexts(3, 13)); };
+    await w.run(() => w.head.received.length >= 15);
+    expect(w.head.received.map(c => c.id)).toEqual(ids(15));
+    expect(w.youtube.streamCalls).toBe(1);
+    expect(w.youtube.listCalls).toBe(0);
+    const call = w.youtube.calls.find(entry => entry.path === '/liveChat/messages/stream');
+    expect(call).toMatchObject({ method: 'GET', auth: 'Bearer token', query: { part: 'snippet,authorDetails', liveChatId: 'chat-1' } });
+    expect(w.methods).toEqual(['streamList', null]);
+    expect(w.ear.status().counters).toMatchObject({ streamConnections: 1, itemsRead: 15, commentsEligible: 15, commentsSent: 15, commentsDropped: 0 });
+    expect(w.ear.status().counters.streamPages).toBe(w.ear.status().counters.pagesRead);
+  });
+
+  it.each([
+    ['array', 0], ['array', 1], ['array', 7], ['ndjson', 5], ['sse', 3], ['wrapped', 11],
+  ] as const)('reads a %s stream cut into pieces of %s bytes (Japanese, emoji, quotes and braces in the text) without losing or doubling a message', async (framing, split) => {
+    const w = world({ via: 'stream' });
+    live(w);
+    w.youtube.framing = framing;
+    w.youtube.splitBytes = split;
+    w.youtube.streamPage = 5;
+    w.youtube.messages = Array.from({ length: 12 }, (_, i) => textItem(`m${i + 1}`, i + 1, `こんにちは😀 ${i + 1} "引用" \\ { } [x]`));
+    await w.run(() => w.head.received.length >= 12);
+    expect(w.head.received.map(c => c.id)).toEqual(ids(12));
+    expect(w.head.received[3].text).toBe('こんにちは😀 4 "引用" \\ { } [x]');
+    expect(w.ear.status().counters.streamPages).toBe(3);
+  });
+
+  it('a stream YouTube closes is opened again at once with the last token: nothing lost, nothing twice', async () => {
+    const w = world({ via: 'stream' });
+    live(w);
+    w.youtube.messages = manyTexts(12);
+    w.youtube.plans = [{ cutAfter: 5 }];
+    await w.run(() => w.head.received.length >= 12);
+    expect(w.head.received.map(c => c.id)).toEqual(ids(12));
+    expect(w.youtube.streams.map(stream => stream.query.pageToken)).toEqual([undefined, 't5']);
+    expect(w.ear.status().counters.streamConnections).toBe(2);
+    expect(w.logs.filter(line => line.includes('closed by YouTube'))).toHaveLength(1);
+  });
+
+  it.each(['tear', 'error'] as const)('a connection that %ss in the middle of a response resumes from the last whole one: nothing lost, nothing twice', async how => {
+    const w = world({ via: 'stream' });
+    live(w);
+    w.youtube.messages = manyTexts(12);
+    w.youtube.plans = [{ cutAfter: 5, how }];
+    await w.run(() => w.head.received.length >= 12);
+    expect(w.head.received.map(c => c.id)).toEqual(ids(12));
+    expect(w.youtube.streams.map(stream => stream.query.pageToken)).toEqual([undefined, 't5']);
+    expect(w.ear.status().counters).toMatchObject({ commentsEligible: 12, commentsSent: 12, commentsDropped: 0 });
+  });
+
+  it('keeps failing: the first retry is at once, then 1, 2, 4, 8, 16 and 30 s', async () => {
+    const w = world({ via: 'stream' });
+    live(w);
+    w.youtube.messages = manyTexts(1);
+    w.youtube.streamErrors = Array.from({ length: 7 }, () => [500, 'backendError'] as [number, string]);
+    await w.run(() => w.head.received.length >= 1);
+    expect(gaps(w.youtube)).toEqual([0, 1000, 2000, 4000, 8000, 16000, 30000]);
+    expect(w.ear.status().lastError).toContain('liveChatMessages.streamList');
+    expect(w.logs.filter(line => line.includes('failed (liveChatMessages.streamList'))).toHaveLength(1);
+  });
+
+  it('a connection that lived 30 s or more was a good one: when it ends, the next try is at once, not after the old waits', async () => {
+    const w = world({ via: 'stream' });
+    live(w);
+    w.youtube.streamErrors = Array.from({ length: 3 }, () => [500, 'backendError'] as [number, string]);
+    let closedAt = 0;
+    w.youtube.onPump = () => {
+      const fourth = w.youtube.streams[0];
+      if (fourth && !fourth.closed && w.clock() - w.youtube.connectTimes[3] > 40_000) { fourth.controller.close(); fourth.closed = true; closedAt = w.clock(); }
+    };
+    await w.run(() => w.youtube.streamCalls >= 5);
+    // Failures 1, 2 and 3 waited 0, 1 s and 2 s. The 4th connection lived 40 s, so its end starts the count again: the 5th follows at once
+    // (the only time between the close and the 5th connect is the 5 s tick that every connection asks for first).
+    expect(gaps(w.youtube).slice(0, 2)).toEqual([0, 1000]);
+    expect(w.youtube.connectTimes[4] - closedAt).toBe(TICK);
+  });
+
+  it('a spent quota on the stream is waited out for a minute, with the head still looked at meanwhile', async () => {
+    const w = world({ via: 'stream' });
+    live(w);
+    w.youtube.messages = manyTexts(1);
+    w.youtube.streamErrors = [[403, 'rateLimitExceeded']];
+    await w.run(() => w.head.received.length >= 1);
+    expect(gaps(w.youtube)).toEqual([60_000]);
+    expect(w.head.stateCalls).toBeGreaterThanOrEqual(10);
+  });
+
+  it('refreshes the token once when the stream is refused with 401', async () => {
+    const w = world({ via: 'stream' });
+    live(w);
+    w.youtube.messages = manyTexts(1);
+    w.youtube.firstStatus = [401];
+    await w.run(() => w.head.received.length >= 1);
+    expect(w.tokens.slice(0, 2)).toEqual([false, true]);
+    expect(w.youtube.calls[1].auth).toBe('Bearer fresh-token');
+  });
+
+  it('YouTube refusing the resume token (400 pageTokenInvalid): the stream starts again without it, and the history it sends again is not sent twice', async () => {
+    const w = world({ via: 'stream' });
+    live(w);
+    w.youtube.messages = manyTexts(12);
+    w.youtube.plans = [{ cutAfter: 5 }];
+    w.youtube.streamErrors = [null, [400, 'pageTokenInvalid']];
+    await w.run(() => w.head.received.length >= 12 && w.youtube.streams.length >= 2);
+    expect(w.head.received.map(c => c.id)).toEqual(ids(12));
+    expect(w.youtube.streams.map(stream => stream.query.pageToken)).toEqual([undefined, undefined]);
+    expect(w.ear.status().counters).toMatchObject({ commentsEligible: 12, commentsSent: 12 });
+    expect(w.logs.some(line => line.includes('refused the resume token'))).toBe(true);
+  });
+
+  it('a quiet stream is not silent for the head: its state is still read every 5 s and her own chat post is written', async () => {
+    const w = world({ via: 'stream' });
+    live(w, { chatWrites: true });
+    w.head.statePosts = [[], [], [{ id: 'cp-9', text: '今日の話題です' }]];
+    await w.run(() => w.head.receipts.length >= 1);
+    expect(w.youtube.inserted.map(post => post.text)).toEqual(['今日の話題です']);
+    expect(w.youtube.streamCalls).toBe(1);
+  });
+
+  it('a stream that says nothing for streamIdleMs is closed and opened again with the token', async () => {
+    const w = world({ via: 'stream', streamIdleMs: 40 });
+    live(w);
+    w.youtube.messages = manyTexts(2);
+    w.ear.start();
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline && w.youtube.streamCalls < 3) { w.youtube.pump(); await new Promise(resolve => setTimeout(resolve, 5)); }
+    await w.ear.stop();
+    expect(w.youtube.streamCalls).toBeGreaterThanOrEqual(3);
+    expect(w.youtube.streams[0].cancelled).toBe(true);
+    expect(w.youtube.streams[1].query.pageToken).toBe('t2');
+    expect(w.head.received.map(c => c.id)).toEqual(['m1', 'm2']);
+    expect(w.logs.some(line => line.includes('was silent'))).toBe(true);
+  });
+
+  it('does not send what was said before the stream started, and does not read its own post back', async () => {
+    const w = world({ via: 'stream' });
+    live(w, { chatWrites: true, startedAt: at(100) });
+    w.youtube.messages = [textItem('old1', 10), textItem('old2', 99), textItem('new1', 101), textItem('new2', 150)];
+    w.head.commentPosts = [[{ id: 'cp-1', text: '返事です' }]];
+    // Her post is written first; YouTube then shows it in the chat (as the owner's message with the id insert returned), and later the owner says something.
+    let echoedAt = 0;
+    w.youtube.onPump = n => {
+      if (!echoedAt && w.youtube.inserted.length > 0) {
+        echoedAt = n;
+        w.youtube.messages.push({ id: 'own-1', snippet: { type: 'textMessageEvent', publishedAt: at(160), hasDisplayContent: true, textMessageDetails: { messageText: '返事です' } }, authorDetails: author('UCowner', { isChatOwner: true }) });
+      }
+      if (echoedAt && n === echoedAt + 30) w.youtube.messages.push({ id: 'human-owner', snippet: { type: 'textMessageEvent', publishedAt: at(170), hasDisplayContent: true, textMessageDetails: { messageText: '配信主のコメント' } }, authorDetails: author('UCowner', { isChatOwner: true }) });
+    };
+    await w.run(() => w.head.received.some(c => c.id === 'human-owner'));
+    expect(w.head.received.map(c => c.id)).toEqual(['new1', 'new2', 'human-owner']);
+    expect(w.ear.status().counters.beforeStart).toBe(2);
+    expect(w.youtube.inserted.map(post => post.text)).toEqual(['返事です']);
+  });
+
+  describe('the end', () => {
+    it('offlineAt in a response: the last comments go first, then the head is told, and the connection is let go', async () => {
+      const w = world({ via: 'stream' });
+      live(w);
+      w.youtube.messages = manyTexts(3);
+      w.youtube.offlineAt = at(500);
+      await w.run(() => w.head.ended.length === 1);
+      expect(w.head.log).toEqual(['comments:3', 'ended']);
+      expect(w.head.ended[0]).toEqual({ streamId: 'st-1', ended: true });
+      expect(w.youtube.streamCalls).toBe(1);
+      expect(w.youtube.streams[0].cancelled).toBe(true);
+    });
+
+    it('a chatEndedEvent ends it after the other messages are sent', async () => {
+      const w = world({ via: 'stream' });
+      live(w);
+      w.youtube.messages = [textItem('m1', 1), { id: 'end', snippet: { type: 'chatEndedEvent', publishedAt: at(2), hasDisplayContent: false }, authorDetails: author('UCsys') }];
+      await w.run(() => w.head.ended.length === 1);
+      expect(w.head.log).toEqual(['comments:1', 'ended']);
+    });
+
+    it.each([
+      [403, 'liveChatEnded'], [404, 'liveChatNotFound'], [403, 'liveChatDisabled'], [400, 'FAILED_PRECONDITION'],
+    ] as const)('%s %s when the stream is opened ends it, and does not fall back to polling', async (status, reason) => {
+      const w = world({ via: 'stream' });
+      live(w);
+      w.youtube.streamErrors = [[status, reason]];
+      await w.run(() => w.head.ended.length === 1);
+      expect(w.youtube.listCalls).toBe(0);
+      expect(w.youtube.streamCalls).toBe(1);
+    });
+
+    it('an error object inside the stream (liveChatEnded) ends it after the messages before it', async () => {
+      const w = world({ via: 'stream' });
+      live(w);
+      w.youtube.messages = manyTexts(2);
+      w.youtube.onPump = n => { if (n === 10) w.youtube.streamInject.push({ error: { code: 403, message: 'ended', errors: [{ reason: 'liveChatEnded' }] } }); };
+      await w.run(() => w.head.ended.length === 1);
+      expect(w.head.log).toEqual(['comments:2', 'ended']);
+      expect(w.head.received.map(c => c.id)).toEqual(['m1', 'm2']);
+    });
+
+    it('a 409 from the head on comments stops the reading for good: the connection is closed, no end notice is sent', async () => {
+      const w = world({ via: 'stream' });
+      live(w);
+      w.youtube.messages = manyTexts(3);
+      w.head.commentStatuses = [409];
+      await w.run(() => w.clock() - START >= 40_000);
+      expect(w.youtube.streamCalls).toBe(1);
+      expect(w.youtube.streams[0].cancelled).toBe(true);
+      expect(w.head.ended).toEqual([]);
+      expect(w.head.received).toEqual([]);
+    });
+
+    it('the head ending the stream (state says ended) lets the connection go', async () => {
+      const w = world({ via: 'stream' });
+      live(w);
+      w.youtube.messages = manyTexts(2);
+      w.youtube.onPump = n => { if (n === 30) w.head.stream = { ...w.head.stream!, phase: 'ended' }; };
+      await w.run(() => w.clock() - START >= 60_000 && w.ear.status().mode !== 'reading');
+      expect(w.youtube.streams[0].cancelled).toBe(true);
+      expect(w.youtube.streamCalls).toBe(1);
+      expect(w.head.ended).toEqual([]);
+    });
+  });
+
+  describe('when streamList cannot be used', () => {
+    it.each([
+      [404, 'notFound'], [405, 'methodNotAllowed'], [501, 'unimplemented'], [403, 'forbidden'], [400, 'badRequest'], [400, 'INVALID_ARGUMENT'], [403, 'PERMISSION_DENIED'],
+    ] as const)('%s %s: the chat is polled instead (said once, with the method in the status), and streamList is tried again later', async (status, reason) => {
+      const w = world({ via: 'stream', streamRetryMs: 60_000 });
+      live(w);
+      w.youtube.streamErrors = [[status, reason]];
+      w.youtube.messages = manyTexts(3);
+      w.youtube.onPump = () => { if (w.youtube.streams.length === 1 && w.youtube.messages.length === 3) w.youtube.messages.push(...manyTexts(2, 4)); };
+      await w.run(() => w.head.received.length >= 5);
+      expect(w.head.received.map(c => c.id)).toEqual(ids(5));
+      expect(w.methods).toEqual(['streamList', 'polling', 'streamList', null]);
+      expect(w.logs.filter(line => line.includes('streamList cannot be used'))).toHaveLength(1);
+      expect(w.logs.find(line => line.includes('streamList cannot be used'))).toContain(`${status}`);
+      expect(w.youtube.listCalls).toBeGreaterThanOrEqual(1);
+      // The token the polling had reached is the one the stream resumes from.
+      expect(w.youtube.streams[0].query.pageToken).toBe('t3');
+    });
+
+    it('the status says polling while it polls, and a stream that is not there keeps being tried only every streamRetryMs', async () => {
+      const w = world({ via: 'poll', streamRetryMs: 600_000 });
+      live(w);
+      await w.run(() => w.clock() - START >= 3_600_000, 20_000);
+      expect(w.methods.slice(0, 2)).toEqual(['streamList', 'polling']);
+      // First try plus a retry every 10 minutes of the hour.
+      expect(w.youtube.calls.filter(call => call.path === '/liveChat/messages/stream').length).toBeGreaterThanOrEqual(6);
+      expect(w.youtube.calls.filter(call => call.path === '/liveChat/messages/stream').length).toBeLessThanOrEqual(8);
+    });
+
+    it('a 500 or a broken connection is not "cannot be used": it is retried as a stream', async () => {
+      const w = world({ via: 'stream' });
+      live(w);
+      w.youtube.messages = manyTexts(1);
+      w.youtube.streamErrors = [[500, 'backendError'], [503, 'backendError']];
+      await w.run(() => w.head.received.length >= 1);
+      expect(w.youtube.listCalls).toBe(0);
+      expect(w.methods).toEqual(['streamList', null]);
+    });
+  });
+});
+
+describe('the stream parser', () => {
+  const objects = [{ a: 1, s: '}{"\\' }, { b: [1, { c: 2 }], t: '[,]' }, { d: '日本語😀', e: null }];
+  const framings: Record<string, (items: unknown[]) => string> = {
+    array: items => `[${items.map(item => JSON.stringify(item)).join(',\n')}]`,
+    'array that is still open': items => `[${items.map(item => JSON.stringify(item)).join(',\n')}`,
+    ndjson: items => items.map(item => `${JSON.stringify(item)}\n`).join(''),
+    sse: items => `: keepalive\n\nretry: 3000\n\n${items.map((item, i) => `event: message\nid: ${i}\ndata: ${JSON.stringify(item)}\n\n`).join('')}`,
+    'objects with only blanks between them': items => items.map(item => JSON.stringify(item)).join('  '),
+  };
+
+  it.each(Object.keys(framings))('reads a %s, split at every possible character', name => {
+    const text = framings[name](objects);
+    for (let cut = 0; cut <= text.length; cut += 1) {
+      const parser = new JsonStreamParser();
+      const got = [...parser.push(text.slice(0, cut)), ...parser.push(text.slice(cut))];
+      expect(got).toEqual(objects);
+      expect(parser.remainder).toBe('');
+    }
+  });
+
+  it('reads it one character at a time', () => {
+    const text = framings.sse(objects);
+    const parser = new JsonStreamParser();
+    const got = Array.from(text).flatMap(char => parser.push(char));
+    expect(got).toEqual(objects);
+  });
+
+  it('keeps what is half of an object as the remainder, and rejects what is not JSON at all', () => {
+    const parser = new JsonStreamParser();
+    expect(parser.push('[{"a":1},{"b":')).toEqual([{ a: 1 }]);
+    expect(parser.remainder).toBe('{"b":');
+    expect(() => new JsonStreamParser().push('<html>Not Found</html>')).toThrow(/unexpected/);
+    expect(() => new JsonStreamParser().push('{"a": nope}')).toThrow(/not JSON/);
+  });
+});
+
+describe('streamList at the API level', () => {
+  const api = (youtube: FakeYoutube) => new YoutubeLiveApi({ baseUrl: YT, fetcher: youtube.fetcher, getAccessToken: async () => 'token' });
+
+  it('throws what YouTube answers when the connection is refused, with the flags the ear decides by', async () => {
+    const youtube = new FakeYoutube();
+    youtube.streamErrors = [[403, 'liveChatEnded'], [404, 'liveChatNotFound'], [403, 'rateLimitExceeded'], [400, 'pageTokenInvalid'], [403, 'forbidden']];
+    const flags: Array<Record<string, boolean>> = [];
+    for (let i = 0; i < 5; i += 1) {
+      const error = await api(youtube).streamMessages({ liveChatId: 'c' }).next().catch(e => e);
+      expect(error).toBeInstanceOf(YoutubeApiError);
+      flags.push({ ended: error.chatEnded, quota: error.quota, token: error.pageTokenInvalid, unavailable: error.streamUnavailable });
+    }
+    expect(flags).toEqual([
+      { ended: true, quota: false, token: false, unavailable: false },
+      { ended: true, quota: false, token: false, unavailable: false },
+      { ended: false, quota: true, token: false, unavailable: false },
+      { ended: false, quota: false, token: true, unavailable: false },
+      { ended: false, quota: false, token: false, unavailable: true },
+    ]);
+  });
+
+  it('YoutubeApiError: a 404 on streamList that is not a missing chat means "no such method"; on list it still means the chat is gone', () => {
+    expect(new YoutubeApiError('liveChatMessages.streamList', 404, 'notFound').streamUnavailable).toBe(true);
+    expect(new YoutubeApiError('liveChatMessages.streamList', 404, 'notFound').chatEnded).toBe(false);
+    expect(new YoutubeApiError('liveChatMessages.list', 404, '').chatEnded).toBe(true);
+    expect(new YoutubeApiError('liveChatMessages.list', 404, '').streamUnavailable).toBe(false);
+    expect(new YoutubeApiError('liveChatMessages.streamList', 500, 'backendError').streamUnavailable).toBe(false);
+    expect(new YoutubeApiError('liveChatMessages.streamList', 0, 'network').streamUnavailable).toBe(false);
+  });
+
+  it('ends quietly when the caller aborts, and does not hang on a connection that never answers', async () => {
+    const youtube = new FakeYoutube();
+    youtube.messages = manyTexts(1);
+    const controller = new AbortController();
+    const stream = api(youtube).streamMessages({ liveChatId: 'c', signal: controller.signal });
+    const first = stream.next();
+    for (let i = 0; i < 10; i += 1) { youtube.pump(); await tick(); }
+    expect((await first).value?.items).toHaveLength(1);
+    const second = stream.next();
+    controller.abort();
+    expect(await second).toEqual({ done: true, value: undefined });
+  });
+});
+
 describe('the API units', () => {
   it('counts the units of the quota table and reports the hour', async () => {
     let now = START;
@@ -623,14 +1089,50 @@ describe('the API units', () => {
     expect(meter.snapshot().totalUnits).toBe(32);
   });
 
-  it('a long stream of polling is 5 units a poll, so the interval decides the day', async () => {
+  it('polling (the fallback) is 5 units a poll at no more than one poll in 8 s: about 2,250 units an hour', async () => {
     const w = world();
     w.head.start({ phase: 'live', broadcast: { videoId: 'vid00000001', liveChatId: 'chat-1', title: 't', channelId: 'UCowner' } });
     w.youtube.polling = [5000];
-    await w.run(() => w.clock() - START >= 3_600_000);
-    // 5 s interval: about 720 polls an hour, 5 units each.
-    expect(w.meter.snapshot().totalUnits).toBeGreaterThan(3500);
-    expect(w.meter.snapshot().totalUnits).toBeLessThan(3700);
+    await w.run(() => w.clock() - START >= 3_600_000, 20_000);
+    // 8 s floor: 450 polls an hour, 5 units each, plus the 5 units of each try at streamList (every 15 minutes: 4 of them).
+    expect(w.youtube.listCalls).toBeGreaterThan(440);
+    expect(w.youtube.listCalls).toBeLessThan(460);
+    expect(w.meter.snapshot().totalUnits).toBeGreaterThan(2250);
+    expect(w.meter.snapshot().totalUnits).toBeLessThan(2350);
+  });
+
+  it('streamList is one 5-unit connection however long the stream is quiet: an hour of silence costs 5 units', async () => {
+    const w = world({ via: 'stream' });
+    w.head.start({ phase: 'live', broadcast: { videoId: 'vid00000001', liveChatId: 'chat-1', title: 't', channelId: 'UCowner' } });
+    await w.run(() => w.clock() - START >= 3_600_000, 20_000);
+    expect(w.youtube.streamCalls).toBe(1);
+    expect(w.youtube.listCalls).toBe(0);
+    expect(w.meter.snapshot().totalUnits).toBe(5);
+    expect(w.ear.status().counters.streamConnections).toBe(1);
+  });
+
+  it('every streamList connection is counted as 5 units, and the hourly line says so', async () => {
+    let now = START;
+    const reports: string[] = [];
+    const meter = new ApiUnitMeter(() => now, line => reports.push(line), () => undefined);
+    const youtube = new FakeYoutube();
+    youtube.messages = manyTexts(2);
+    const api = new YoutubeLiveApi({ baseUrl: YT, fetcher: youtube.fetcher, meter, getAccessToken: async () => 't' });
+    const first = api.streamMessages({ liveChatId: 'chat-1' });
+    const pending = first.next();
+    for (let i = 0; i < 20; i += 1) { youtube.pump(); await tick(); }
+    expect((await pending).value?.items).toHaveLength(2);
+    await first.return();
+    const second = api.streamMessages({ liveChatId: 'chat-1', pageToken: 't2' });
+    const next = second.next();
+    youtube.messages.push(...manyTexts(1, 3));
+    for (let i = 0; i < 20; i += 1) { youtube.pump(); await tick(); }
+    expect((await next).value?.items.map((item: any) => item.id)).toEqual(['m3']);
+    await second.return();
+    expect(meter.snapshot()).toMatchObject({ hourUnits: 10, hourCalls: 2, dayUnits: 10 });
+    now += 3_600_001;
+    meter.tick();
+    expect(reports[0]).toContain('10 in 2 calls');
   });
 });
 
@@ -717,6 +1219,83 @@ describe('over real HTTP', () => {
       expect(calls).toContain('POST /v1/platform/stream/broadcast');
     } finally {
       headServer.close();
+      youtubeServer.close();
+    }
+  });
+});
+
+describe('over real HTTP, streamList', () => {
+  it('reads a chunked JSON array from a real server over real sockets, resumes by token after the server cuts the socket, and ends on offlineAt', async () => {
+    const received: any[] = [];
+    const tokens: Array<string | null> = [];
+    let stream: any = { streamId: 'st-http', platform: 'youtube', phase: 'waiting_for_chat', startedAt: at(0), title: 't', chatWrites: false, broadcast: null };
+    const readBody = (request: IncomingMessage) => new Promise<any>(resolve => {
+      let text = '';
+      request.on('data', chunk => { text += chunk; });
+      request.on('end', () => resolve(text ? JSON.parse(text) : undefined));
+    });
+    const headServer = createServer(async (request, response) => {
+      const body = await readBody(request);
+      const route = `${request.method} ${request.url}`;
+      const send = (status: number, value: unknown) => { response.writeHead(status, { 'content-type': 'application/json' }); response.end(JSON.stringify(value)); };
+      if (route === 'GET /v1/platform/stream/state') return send(200, { stream, chatPosts: [] });
+      if (route === 'POST /v1/platform/stream/broadcast') {
+        stream = { ...stream, phase: body.ended ? 'ended' : 'live' };
+        return send(200, { stream });
+      }
+      if (route === 'POST /v1/platform/stream/comments') { received.push(...body.comments); return send(202, { accepted: body.comments.length, duplicates: 0, chatPosts: [] }); }
+      return send(404, {});
+    });
+    const page = (from: number, count: number, extra: Record<string, unknown> = {}) => JSON.stringify({
+      kind: 'youtube#liveChatMessageListResponse', items: manyTexts(count, from), nextPageToken: `p${from + count - 1}`, ...extra,
+    });
+    const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+    const youtubeServer = createServer(async (request, response) => {
+      const url = new URL(request.url ?? '', 'http://x');
+      const send = (status: number, value: unknown) => { response.writeHead(status, { 'content-type': 'application/json' }); response.end(JSON.stringify(value)); };
+      if (url.pathname === '/youtube/v3/liveBroadcasts') return send(200, { items: [{ id: 'vid00000001', snippet: { title: 't', channelId: 'UCo' }, status: { lifeCycleStatus: 'live' } }] });
+      if (url.pathname === '/youtube/v3/videos') return send(200, { items: [{ id: 'vid00000001', snippet: { title: 't', channelId: 'UCo' }, liveStreamingDetails: { activeLiveChatId: 'chat-http' } }] });
+      if (url.pathname !== '/youtube/v3/liveChat/messages/stream') return send(404, {});
+      const token = url.searchParams.get('pageToken');
+      tokens.push(token);
+      response.writeHead(200, { 'content-type': 'application/json' });
+      // A body of Transfer-Encoding: chunked, written in pieces with a pause between them, the pieces cut inside the objects.
+      const writePieces = async (text: string) => {
+        for (let i = 0; i < text.length; i += 37) { response.write(text.slice(i, i + 37)); await pause(2); }
+      };
+      if (!token) {
+        await writePieces(`[${page(1, 2)}`);
+        await writePieces(`,\n${page(3, 2)}`);
+        await pause(20);
+        request.socket.destroy();
+        return;
+      }
+      await writePieces(`,\n${page(5, 2, { offlineAt: at(900) })}`);
+      await pause(50);
+      response.end(']');
+    });
+    const listen = (server: Server) => new Promise<number>(resolve => server.listen(0, '127.0.0.1', () => resolve((server.address() as AddressInfo).port)));
+    const [headPort, youtubePort] = [await listen(headServer), await listen(youtubeServer)];
+    try {
+      const ear = new StreamEar({
+        head: new HeadStreamClient({ url: `http://127.0.0.1:${headPort}/v1/platform/turns`, token: 'http-token' }),
+        youtube: new YoutubeLiveApi({ baseUrl: `http://127.0.0.1:${youtubePort}/youtube/v3`, getAccessToken: async () => 'tok' }),
+        stateEveryMs: 20, discoveryEveryMs: 20,
+        log: { info: () => undefined, warn: () => undefined },
+      });
+      ear.start();
+      const deadline = Date.now() + 8000;
+      while (Date.now() < deadline && stream.phase !== 'ended') await new Promise(resolve => setTimeout(resolve, 20));
+      const status = ear.status();
+      await ear.stop();
+      expect(received.map(c => c.id)).toEqual(['m1', 'm2', 'm3', 'm4', 'm5', 'm6']);
+      expect(stream.phase).toBe('ended');
+      // The first connection had no token; the second resumed from the last whole response of the cut one.
+      expect(tokens).toEqual([null, 'p4']);
+      expect(status.counters).toMatchObject({ streamConnections: 2, streamPages: 3, commentsSent: 6 });
+    } finally {
+      headServer.close();
+      youtubeServer.closeAllConnections();
       youtubeServer.close();
     }
   });

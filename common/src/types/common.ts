@@ -226,6 +226,8 @@ export interface ServiceOutput {
 export interface StatusAgentInput extends ServiceInput {
   service: Platform;
   status: ServiceStatus;
+  /** A short word on how the service works right now (youtube:live_chat: 'streamList' | 'polling' | 'idle'). */
+  detail?: string | null;
 }
 
 export type MemoryZone =

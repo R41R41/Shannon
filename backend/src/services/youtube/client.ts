@@ -372,6 +372,7 @@ export class YoutubeClient extends BaseClient {
         youtube: new YoutubeLiveApi({ getAccessToken: oauthTokenProvider(this.oauth2Client) }),
         liveUrl: config.youtube.liveUrl,
         channelId: this.channelId ?? undefined,
+        onMethodChange: () => this.emitLiveChatStatus(),
       });
       ear.start();
       this.ear = ear;
@@ -399,9 +400,11 @@ export class YoutubeClient extends BaseClient {
   }
 
   private emitLiveChatStatus() {
+    // `detail` says how the chat is read right now: 'streamList', 'polling' (streamList could not be used), or 'idle' (no stream is started).
     emitWebServiceStatus({
       service: 'youtube:live_chat',
       status: this.ear ? 'running' : 'stopped',
+      detail: this.ear ? (this.ear.status().readMethod ?? 'idle') : null,
     });
   }
 }
