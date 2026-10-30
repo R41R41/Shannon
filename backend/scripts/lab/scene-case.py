@@ -4,12 +4,15 @@
 The scene (`saves/minecraft/scenes/<id>/`, or a replay's `$OUT/scenes/<id>/`) is the world's own files at the moment of a heavy failure; its box
 (`<blackbox>/<task>/<id>.json.gz`) holds the body as it was (feet, health, food, pack, armour, the way it faced) and the act that failed (its
 arguments and its lines). The case starts the replay lab from the scene as it is: nothing restored by hand, the creatures kept (`keepEntities`),
-the body put where the box says, and the act sent again with the same arguments; what it said in the run is the case's expectation.
+the body put at the current act's first recorded tick, and the act sent again with the same arguments; what it said in the run is the case's
+expectation. The saved terrain and inventory are from the end of the act, so this is an endpoint-scene diagnostic, not a complete rewind.
+The start must match the scene timestamp minus act.ms within one second; missing/pruned/ambiguous starts are refused.
 
     python3 -I scene-case.py --scene <scene dir> --box <box.json.gz> --name s1 [--title ...] [--seconds 120] [--into cases.json] > cases.json
 Then: run-replay.sh <label> <code.tar> cases.json REPLAY_SOURCE=<scene dir>/world REPLAY_FLOOR=default
 """
 import argparse, gzip, json, sys
+from datetime import datetime
 
 ARMOUR = {5: 'armor.head', 6: 'armor.chest', 7: 'armor.legs', 8: 'armor.feet', 45: 'weapon.offhand'}
 
@@ -21,6 +24,26 @@ def nbt_slot(slot):
     if 9 <= slot <= 35:
         return str(slot)
     return ARMOUR.get(slot)
+
+
+def start_tick(box, scene):
+    """Match this act, not the first hand of any act in the 90-second ring.
+
+    The scene timestamp precedes its save/copy; box.at follows them. Neither
+    the final body position nor another act's tick is a proven start state.
+    Refuse cases whose start fell out of the ring or cannot be identified.
+    """
+    ended = datetime.fromisoformat(scene['at'].replace('Z', '+00:00')).timestamp() * 1000
+    began = ended - box['act']['ms']
+    candidates = [e for e in box.get('events', []) if e.get('k') == 'hand'
+                  and e.get('i') == 0 and e.get('status') == 'in_progress'
+                  and e.get('detail') == '' and abs(e['t'] - began) <= 1000]
+    if len(candidates) != 1:
+        raise ValueError('current act start is missing or ambiguous; do not substitute another act or the final position')
+    tick = next((t for t in box.get('ticks', []) if t[0] >= candidates[0]['t']), None)
+    if tick is None or tick[0] - candidates[0]['t'] > 1000:
+        raise ValueError('no nearby physics tick for the current act start')
+    return tick
 
 
 def main():
@@ -41,11 +64,9 @@ def main():
         if slot is None:
             continue
         items.append({'slot': slot, 'id': item['name'], 'count': int(item.get('count', 1)), **({'damage': int(item['durabilityUsed'])} if item.get('durabilityUsed') else {})})
-    # The body stood where the act began: the first tick of the act (its first hand), else the box's last feet.
-    began = next((e['t'] for e in box.get('events', []) if e.get('k') == 'hand' and e.get('i') == 0 and e.get('status') == 'in_progress'), None)
-    tick = next((t for t in box.get('ticks', []) if began is not None and t[0] >= began), None)
-    pos = [tick[1], tick[2], tick[3]] if tick else body['pos']
-    hp_tick = tick[9] if tick and tick[9] >= 0 else body.get('health')
+    tick = start_tick(box, manifest)
+    pos = [tick[1], tick[2], tick[3]]
+    hp_tick = tick[9] if tick[9] >= 0 else body.get('health')
     stop = next((line for line in act.get('lines', []) if line.get('status') not in ('done', 'skipped')), (act.get('lines') or [{}])[-1])
     cx, cz = int(manifest['center'][0]), int(manifest['center'][2])
     case = {'name': a.name, 'title': a.title or f"scene {manifest['id']}: {box.get('reason', '')}"[:120],
