@@ -230,6 +230,8 @@ act と列の項目の `goal` は、手の goal から**上から順に当てて
 - 頭が読む：`readActResult()`、`createLlmcQueue()` の `settle()`・`drop()`・`itemResult()`、結果の文（LLM へ）、判断の記録。
 - 頭が書く：`goal: 'unknown'`（受け取りが無い時だけ）、操作の状態（ストア）、訂正の文。
 
+実走53の長時間判定：正常完了が構造化して確認できるwait（goal done/end finished、secondのdone/left=0）だけは、後続の即時失敗をlongと数える時間から除きます。未完了・取消・未測定・全体時間を超える待機値は除きません。実際に停滞した時間の上限、goの詰まり/探索失敗、瀕死/死亡と繰り返す説明済み失敗の保留は維持します。actの全体ms・実走時間・予算には完了waitも引き続きすべて算入します。
+
 ### 今のコードのどこが変わるか
 - 体：`instantSkills/act.ts` の `runAct()`（手の結果・周回の行）、`utils/primitives/common.ts`（`StepOutcome` に `progress`・`events`）、各 primitive（progress と出来事、already の判定、attack の `target_lost`）、`utils/actReport.ts`（`HandLine`・`ActReport`・`renderActReport()`）、`integration/commonFca/nativeBody.ts` の `execute()`、`controlLoop.ts` の `launch()`・`closeUnstarted()`・`begin()`、`minecraftControlContract.ts`（写し）。
 - 頭：`contracts/minecraftActContract.ts`（`ActHandLine`・`ActResult`・`readActResult()`）、`contracts/minecraftControlContract.ts`（`MinecraftControlReceipt.unit`）、`surfaces/minecraft/minecraftControl.ts` の `receiptOf()`・`reconcileOperations`、**`surfaces/minecraft/store/minecraftControlStore.ts` の `settle()`・`lateReceipt()`・`safe()`（操作の状態）**、`surfaces/minecraft/minecraftLlmcQueue.ts` の `settle()`・`settleFlag()`・`drop()`・`itemResult()`・`neverRan()`、片付けを送る所、結果の文を作る所。
@@ -324,6 +326,8 @@ export type DependState = 'succeeded' | 'failed' | 'pending' | 'unknown';
 ### 誰が書き、誰が読むか
 - LLM が書く（act の入力。短い書き方は `dependsOn=1,3`、項目は `dependsOn=q12`）。
 - 頭は、読み取り・形の検査をして、封筒へ写します（列の名前・作った時の life と次元も入れる）。体は、失効と判定表に従って、始めるか捨てるかだけを決めます（何を頼るかは決めない）。
+
+実走53の長時間判定：正常完了が構造化して確認できるwait（goal done/end finished、secondのdone/left=0）だけは、後続の即時失敗をlongと数える時間から除きます。未完了・取消・未測定・全体時間を超える待機値は除きません。実際に停滞した時間の上限、goの詰まり/探索失敗、瀕死/死亡と繰り返す説明済み失敗の保留は維持します。actの全体ms・実走時間・予算には完了waitも引き続きすべて算入します。
 
 ### 今のコードのどこが変わるか
 - 体：`instantSkills/act.ts`（Hand の zod に `dependsOn`、手ごとの失効と依存の確かめ）、`integration/commonFca/bodyQueue.ts`（`ENVELOPE`、`admit()`、recent の作り替え、`removeFrom()`）、`controlLoop.ts`（`accept()`・`begin()`・`launch()` の終わり・`dropWaiting()`・`dropExpired()`・`cancelOne()`）、`execution/ActionExecution.ts`（acquire の後の照らし）。
@@ -429,6 +433,8 @@ interface ActInput { /* … */ uses?: number[] }
 ### 誰が書き、誰が読むか
 LLM が書きます（約束・解除・`uses`）。頭が帳簿を書き、live の 1 行を作ります。体は持ち物の出来事を書きます。読むのは LLM（live）と計測（判断の記録）です。
 
+実走53の長時間判定：正常完了が構造化して確認できるwait（goal done/end finished、secondのdone/left=0）だけは、後続の即時失敗をlongと数える時間から除きます。未完了・取消・未測定・全体時間を超える待機値は除きません。実際に停滞した時間の上限、goの詰まり/探索失敗、瀕死/死亡と繰り返す説明済み失敗の保留は維持します。actの全体ms・実走時間・予算には完了waitも引き続きすべて算入します。
+
 ### 今のコードのどこが変わるか
 - 頭：`packages/mind/src/planTree.ts`（`PlanTree.promises`、`applyPlanUpdate()` に `promise`・`release`、保存の形 v2）、`mind/action/fca/fcaPlanTools.ts`（op の enum と欄、帳簿を反映する入口）、`surfaces/minecraft/minecraftFirstPlan.ts`（`FIRST_PLAN_SCHEMA_R4` に `promises`）、帳簿（新しい `surfaces/minecraft/minecraftLlmcPromises.ts`）、`surfaces/minecraft/minecraftConditions.ts`（`near` を観測から）、live への 1 行（`minecraftLlmcLive.ts`・`minecraftLlmcUrgent.ts`）、`ActInput.uses` と送った時の rev（`minecraftActContract.ts`、`minecraftLlmcQueue.ts`）、表示（`BodyPlanView`）。
 - 体：各 primitive の出来事（`make.ts`・`craft.ts`・`smelt.ts`・`place.ts`・`body.ts` の eat ほか）、`instantSkills/act.ts`（手の出来事を集める）、`utils/actReport.ts`、`integration/commonFca/nativeBody.ts`（反射の台帳から反射の出来事、観測の `state.world.utilities`）、`integration/commonFca/bodyEvents.ts`（`inventory.changed`）。
@@ -510,6 +516,8 @@ type ReflexCapped = { kind: 'reflex.capped'; subject: string /* reflex */; data:
 ### 誰が書き、誰が読むか
 体が `state.control`・`handover`・`reflex.capped` を書きます。頭が live と急ぎの理由に読み、判断の記録に残します。
 
+実走53の長時間判定：正常完了が構造化して確認できるwait（goal done/end finished、secondのdone/left=0）だけは、後続の即時失敗をlongと数える時間から除きます。未完了・取消・未測定・全体時間を超える待機値は除きません。実際に停滞した時間の上限、goの詰まり/探索失敗、瀕死/死亡と繰り返す説明済み失敗の保留は維持します。actの全体ms・実走時間・予算には完了waitも引き続きすべて算入します。
+
 ### 今のコードのどこが変わるか
 - 体：`execution/ActionExecution.ts`（持ち主の数え方と取得の通し番号、`physicalStops()` に理由、盾の使用権）、`execution/SkillExecutor.ts`（予約と取得を 1 つに）、`integration/commonFca/nativeBody.ts`（`afterReflex()` の引き継ぎ、`observe()` に `state.control`）、`utils/floorReflexes.ts`（episode の target、`handover` で止まる、上限で `reflex.capped` とつなぎ）、`utils/combatOwner.ts`（`holdMeleeForHead()` を attack にも）、`utils/shieldBlock.ts`（持ち主の盾の委譲の下で動く）、`integration/commonFca/bodyEvents.ts`、`minecraftControlContract.ts`（写し）。
 - 頭：`packages/mind/src/workingEvents.ts`（`WORKING_EVENT_KINDS` に `reflex.capped`。8 章）、`contracts/minecraftControlContract.ts`、`surfaces/minecraft/minecraftLlmcLive.ts`・`minecraftLlmcUrgent.ts`、`surfaces/minecraft/minecraftControlValidation.ts`（`state.control` の形）。
@@ -570,6 +578,8 @@ export interface BodyRun { bodyBoot: string; connectionId: string }   // bodyBoo
 
 ### 誰が書き、誰が読むか
 体が番号と `bodyRun` を書きます。頭が読み、命令に写します。体は命令の番号を照らします。
+
+実走53の長時間判定：正常完了が構造化して確認できるwait（goal done/end finished、secondのdone/left=0）だけは、後続の即時失敗をlongと数える時間から除きます。未完了・取消・未測定・全体時間を超える待機値は除きません。実際に停滞した時間の上限、goの詰まり/探索失敗、瀕死/死亡と繰り返す説明済み失敗の保留は維持します。actの全体ms・実走時間・予算には完了waitも引き続きすべて算入します。
 
 ### 今のコードのどこが変わるか
 - 体：`integration/commonFca/nativeBody.ts`（`observe()`、`execute()` の照らし）、`controlLoop.ts`（`accept()`・`begin()` の照らし、死の時の `dropWaiting`）、`instantSkills/act.ts`（手ごとの照らし）、`execution/ActionExecution.ts`・`SkillExecutor.ts`（ロック待ちを止める、取った後の照らし）、新しい `utils/life.ts`、`utils/incidents.ts`（保留のファイルに life。読むだけ）。
@@ -653,6 +663,8 @@ interface ActHand {
 - **頭の見積もり**：1 段あたりの見積もり × 段数から始め、体が返す `msPerUnit` で直します（`minecraftActTime.ts`）。見積もりの初めの値（stairs 約 1.6 秒・shaft 約 1.0 秒・pillar 約 0.9 秒）は仮説で、旧 go の段数（保留 5 の 95 段・保留 7 の 49 段）も新しい手の保証にはしません。
 - **下りる前の警告**（頭の今の準備の警告）は、`dir: down` の vertical にも go と同じように出します。
 
+実走53の長時間判定：正常完了が構造化して確認できるwait（goal done/end finished、secondのdone/left=0）だけは、後続の即時失敗をlongと数える時間から除きます。未完了・取消・未測定・全体時間を超える待機値は除きません。実際に停滞した時間の上限、goの詰まり/探索失敗、瀕死/死亡と繰り返す説明済み失敗の保留は維持します。actの全体ms・実走時間・予算には完了waitも引き続きすべて算入します。
+
 ### 今のコードのどこが変わるか
 - 体：`instantSkills/act.ts`（`HAND_KINDS`・Hand の zod・`runHand()`）、新しい `utils/primitives/vertical.ts`、`utils/tunnelWalk.ts`・`utils/shaftDown.ts`（許可と上限を受ける部品に分ける）、`utils/actHandRules.ts`、`utils/actLabel.ts`、`utils/actReport.ts`（閉じた語）。
 - 頭：`contracts/minecraftActContract.ts`、`contracts/minecraftActHandRules.ts`、`contracts/minecraftActShortHands.ts`（読み書きと断り）、`contracts/minecraftActTime.ts`、下りる前の警告（`minecraftLlmcReadiness.ts` ほか）。
@@ -732,6 +744,8 @@ export interface PlanTree {
 
 ### 誰が書き、誰が読むか
 LLM が `kind`・`prep` を書きます。頭は書きません（事実の 1 行を出すだけ）。読むのは頭（上の表の所）と、表示（体の UI MOD は `BodyPlanView` で `kind` を表示に使ってよい。動きには使わない）です。
+
+実走53の長時間判定：正常完了が構造化して確認できるwait（goal done/end finished、secondのdone/left=0）だけは、後続の即時失敗をlongと数える時間から除きます。未完了・取消・未測定・全体時間を超える待機値は除きません。実際に停滞した時間の上限、goの詰まり/探索失敗、瀕死/死亡と繰り返す説明済み失敗の保留は維持します。actの全体ms・実走時間・予算には完了waitも引き続きすべて算入します。
 
 ### 今のコードのどこが変わるか
 - 頭：`packages/mind/src/planTree.ts`、`mind/action/fca/fcaPlanTools.ts`、`surfaces/minecraft/minecraftFirstPlan.ts`、上の表の所、新しい `readWhere()`、`contracts/bodyControlContract.ts`（`BodyPlanView` に `kind`）。
@@ -867,6 +881,8 @@ interface BodyVersion { revision: string; catalogHash: string }
 - **再開の時の結果の届け方**（再開 9 → 保留 10）：出し直しが別の理由でまた保留になった時、出し直しの結果と、その間に列に入っていて捨てられた項目（の印と why）を、保留の記録に残します。次の再開（skip-replay でも出し直しでも）の後の最初の判断へ、「保留した act の出し直しは search_timeout で再び保留になった。その間の q65（[p5] 近い鉄を掘る）は捨てた」を先に届けます。
 
 実走53（2026-10-31）：普通の判断の補助情報`foodPreparation`は、観測した手持ちの生肉・小麦・干し草を加工した場合の見込みです。`unprepared`は未処理、`pointsIfPrepared`は完成・回収できた場合だけの食料点、`cookSecondsInOneFurnace`は一基での調理秒数、`smeltsFromCarriedCoal`は手持ちの石炭/木炭だけによる精錬個数です。炉・作業台・設置場所が使えるとは断定しません。現在の`foodPoints.total`・準備・約束の条件には見込みを加算しません。急ぎの入力では省き、入力枠が足りない時もこの補助情報を先に省けます。調理や安全な夜間作業を選ぶのはLLMで、体の自動手順は追加しません。
+
+実走53の長時間判定：正常完了が構造化して確認できるwait（goal done/end finished、secondのdone/left=0）だけは、後続の即時失敗をlongと数える時間から除きます。未完了・取消・未測定・全体時間を超える待機値は除きません。実際に停滞した時間の上限、goの詰まり/探索失敗、瀕死/死亡と繰り返す説明済み失敗の保留は維持します。actの全体ms・実走時間・予算には完了waitも引き続きすべて算入します。
 
 ### 今のコードのどこが変わるか
 - 頭：`packages/mind/src/workingEvents.ts`（種類）、`infra/decisionRecords/*`（行の種類・`TraceIds`・`reads`）、meter の時計（`minecraftLlmcRoad.ts`）、`surfaces/minecraft/minecraftControl.ts`（`received`・`released`・`corrected`）、`surfaces/minecraft/minecraftLlmcQueue.ts`（`woke`、先読み）、live を作る所（`minecraftLlmcLive.ts`・`minecraftLlmcLiveRewrite.ts`・`minecraftLlmcUrgent.ts`・`minecraftLlmcReachWords.ts`・`minecraftLlmcReadiness.ts`・`minecraftLlmcPack.ts`）、`minecraftBodyVersion.ts`、`scripts/decision-record.ts`。
