@@ -159,6 +159,8 @@ export class Incidents {
   private asked: { task: string; hold: boolean; at: number } | null = null;
   /** Run 45: the hold a resume ended last (its id and reason), until the act sent again for it ends (`context.incident.resume` names it). */
   private resumed: { id: string; why: string } | null = null;
+  /** A near-death hold explicitly resumed for recovery: unchanged critical health is not a new incident. Any new loss or recovery above the limit ends this acknowledgement. */
+  private criticalRecovery: string | null = null;
 
   constructor(private readonly bot: any, private readonly options: { holdFile: string; scene?: SceneSaver | null; now?: () => number }) {
     try { this.hold = JSON.parse(fs.readFileSync(options.holdFile, 'utf8')) as Hold; } catch { this.hold = null; }
@@ -166,13 +168,16 @@ export class Incidents {
     let last = typeof bot.health === 'number' ? bot.health : 20;
     bot.on?.('health', () => {
       const hp = typeof bot.health === 'number' ? bot.health : last;
+      if (hp < last) this.criticalRecovery = null;
+      if (hp > NEAR_DEATH) this.criticalRecovery = null;
       if (this.lowestHp !== null) this.lowestHp = Math.min(this.lowestHp, hp);
       const now = this.now();
       if (hp < last) this.falls.push([now, last - hp]);
       while (this.falls.length && now - this.falls[0]![0] > SHARP_MS) this.falls.shift();
       const fell = this.falls.reduce((sum, [, n]) => sum + n, 0);
       last = hp;
-      if ((fell >= SHARP_HP || hp <= NEAR_DEATH) && hp > 0 && now - this.lastHealthDump > 15_000) {
+      const recovering = this.criticalRecovery !== null && this.criticalRecovery === this.asked?.task;
+      if (!recovering && (fell >= SHARP_HP || hp <= NEAR_DEATH) && hp > 0 && now - this.lastHealthDump > 15_000) {
         this.lastHealthDump = now;
         const outside = !this.inAct && hp <= NEAR_DEATH;
         void this.write('health', hp <= NEAR_DEATH, `health ${hp.toFixed(1)} (fell ${fell.toFixed(1)} in ${SHARP_MS / 1000}s)`)
@@ -180,6 +185,7 @@ export class Incidents {
       }
     });
     bot.on?.('death', () => {
+      this.criticalRecovery = null;
       this.died = true;
       const outside = !this.inAct;
       void this.write('death', true, 'death').then(incident => (outside ? this.holdOutside(incident, 'death') : undefined)).catch(() => undefined);
@@ -190,6 +196,7 @@ export class Incidents {
 
   /** Before an act: null to run it, or the words of why it is refused (the task is held). A resume names the hold and unfreezes the world. */
   async beforeAct(context: Context | undefined): Promise<string | null> {
+    if (this.criticalRecovery !== context?.taskId) this.criticalRecovery = null;
     this.lowestHp = typeof this.bot.health === 'number' ? this.bot.health : null;
     this.died = false;
     if (context?.taskId) this.asked = { task: context.taskId, hold: context.incident?.hold === true, at: this.now() };
@@ -201,6 +208,7 @@ export class Incidents {
     const hold = this.hold;
     if (!hold) { this.inAct = true; return null; }
     if (context?.incident?.resume === hold.id) {
+      this.acknowledgeRecovery(hold);
       this.resumed = { id: hold.id, why: hold.why };
       const said = await this.unfreeze();
       log.warn(`▶ 保留を解いた ${hold.id}: ${said}`);
@@ -229,14 +237,15 @@ export class Incidents {
     if (resumedFor) this.resumed = null;
     if (report.ok) return null;
     const task = command.context?.taskId ?? 'no-task';
-    const reason = heavyReason(report, ms, this.lowestHp, this.died, this.seen, task);
+    const reason = heavyReason(report, ms, this.criticalRecovery === task ? null : this.lowestHp, this.died, this.seen, task);
     const heavy = reason !== null;
     const why = reason ?? `${report.stoppedBy ?? 'failed'}:${(report.lines.find(line => line.status !== 'done')?.line ?? '').slice(0, 80)}`;
     const act = { command: command.id, arguments: command.arguments, ms, ok: report.ok, stoppedBy: report.stoppedBy ?? null, lines: report.lines.map(line => ({ do: line.do, status: line.status, line: line.line })) };
     // A hold stops the world first, so that the scene saved next is the moment of the failure (nothing falls or flows in between).
     // Run 45 (holds 3 to 5): sent again by a resume and failed for the same reason (its kind: go_stuck, go_limit_time_low, long, ...): the operator's
     // fix did not help, and a hold again only waits for the same resume. No hold: the head decides with the result.
-    const repeated = again !== null && reason !== null && holdsFor(reason) && reasonKind(reason) === reasonKind(again.why);
+    const repeated = again !== null && reason !== null && holdsFor(reason) && reasonKind(reason) === reasonKind(again.why)
+      && !this.died && reasonKind(reason) !== 'near_death';
     const holding = holdsFor(reason) && command.context?.incident?.hold === true && !repeated;
     const freeze = holding ? (this.options.scene ? await this.options.scene.freeze() : { frozen: false, why: 'no_scene_port' }) : null;
     const incident = await this.write('act', heavy, why, act);
@@ -347,6 +356,7 @@ export class Incidents {
       log.warn(`保留 ${id} を解く命令（${how}）が来たが、体の保留は ${hold.id}: そのまま`);
       return { done: false, hold: hold.id, unfreeze: null };
     }
+    if (hold && how === 'resume') this.acknowledgeRecovery(hold);
     const said = await this.unfreeze();
     if (hold) {
       log.warn(`${how === 'cancel' ? '⏹ 保留していたタスクが止められたので' : '▶ 再開の命令で'}、保留 ${hold.id} を解いた: ${said}`);
@@ -355,6 +365,11 @@ export class Incidents {
       this.clearHold();
     } else log.warn(`保留 ${id} を解く命令（${how}）が来たが、体は保留していない: 世界だけ動かした（${said}）`);
     return { done: true, hold: null, unfreeze: said };
+  }
+
+  private acknowledgeRecovery(hold: Hold): void {
+    const hp = this.bot.health;
+    if (reasonKind(hold.why) === 'near_death' && typeof hp === 'number' && hp > 0 && hp <= NEAR_DEATH) this.criticalRecovery = hold.task;
   }
 
   /**
