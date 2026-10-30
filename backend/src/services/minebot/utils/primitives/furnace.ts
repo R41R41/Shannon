@@ -1,3 +1,4 @@
+import { captureFurnaceProperties } from './furnaceProperties.js';
 import { type Cell } from '../localMap.js';
 import { itemsPerFuel } from '../fuelValues.js';
 import { blockAt, cellText, eyeDistance, findItem, guard, inventoryCount, placeText, stopped, StepStopped, USE_REACH, wait,
@@ -21,8 +22,8 @@ export interface FurnaceArgs {
 export interface FurnaceLook {
   kind: string;
   input: { name: string; count: number } | null; fuel: { name: string; count: number } | null; output: { name: string; count: number } | null;
-  burning: boolean;
-  /** Seconds until the input is smelted, by the furnace's own progress (null: nothing in the input). */
+  burning: boolean | null;
+  /** Seconds until the fueled input is smelted (null: empty input or unobserved burn/progress). */
   remainingSec: number | null;
 }
 export interface FurnaceWork {
@@ -42,10 +43,10 @@ const stackOf = (item: any) => item ? { name: String(item.name), count: Number(i
 export function fuelNeedWords(items: number): string {
   return `石炭か木炭 ${Math.ceil(items / 8 - 1e-9)} か板 ${Math.ceil(items / 1.5 - 1e-9)}`;
 }
-/** How many inputs the fuel in a furnace will smelt: its slot at the fuel's worth, and the piece burning now as one more. */
-function fuelCoverage(window: any): number {
+/** How many inputs the queued fuel plus observed remaining burn time can finish, including current progress. */
+function fuelCoverage(window: any, state: { burning: boolean | null; seconds: number | null; progress: number | null }, secondsEach: number): number {
   const fuel = window.fuelItem();
-  return (fuel ? fuel.count * itemsPerFuel(String(fuel.name)) : 0) + (Number(window.fuel ?? 0) > 0 ? 1 : 0);
+  return (fuel ? fuel.count * itemsPerFuel(String(fuel.name)) : 0) + (state.seconds !== null ? state.seconds / secondsEach + (state.progress ?? 0) : state.burning ? 1 : 0);
 }
 
 export async function furnaceWork(ctx: StepContext, args: FurnaceArgs): Promise<FurnaceWork> {
@@ -62,11 +63,14 @@ export async function furnaceWork(ctx: StepContext, args: FurnaceArgs): Promise<
   if (args.fuel && !findItem(bot, args.fuel.item)) return fail(stopped(bot, 'missing_item', `燃料の ${args.fuel.item} を持っていない`, cell));
   if (bot.currentWindow) { try { bot.closeWindow(bot.currentWindow); } catch { /* closing */ } await wait(ctx, 100); }
   let window: any;
+  const properties = captureFurnaceProperties(bot);
+  const secondsEach = block.name === 'furnace' ? 10 : 5;
   try {
     const opened = await guard(ctx, Promise.resolve(bot.openFurnace(block)), 4000);
-    if (!opened) return fail(stopped(bot, 'not_opened', `${placeText(bot, cell)} の ${block.name} が開かなかった（時間切れ。視線の途中に何かある）`, cell));
+    if (!opened) { properties.close(); return fail(stopped(bot, 'not_opened', `${placeText(bot, cell)} の ${block.name} が開かなかった（時間切れ。視線の途中に何かある）`, cell)); }
     window = opened.value;
   } catch (error) {
+    properties.close();
     if (error instanceof StepStopped || /Action interrupted/u.test(String((error as Error)?.message))) throw error;
     return fail(stopped(bot, 'not_opened', `${placeText(bot, cell)} の ${block.name} が開かなかった: ${String((error as Error)?.message ?? error).slice(0, 80)}`, cell));
   }
@@ -107,7 +111,7 @@ export async function furnaceWork(ctx: StepContext, args: FurnaceArgs): Promise<
     const room = 64 - (current?.count ?? 0);
     const asked = Math.min(have, Math.max(1, Math.round(args.put.count ?? have)), room);
     // smelt: no more than the fuel in the furnace smelts (what is in the slot and burning, with the input already there).
-    const smeltable = args.limitByFuel ? Math.max(0, Math.floor(fuelCoverage(window)) - (current?.count ?? 0)) : asked;
+    const smeltable = args.limitByFuel ? Math.max(0, Math.floor(fuelCoverage(window, properties.read(window), secondsEach)) - (current?.count ?? 0)) : asked;
     const count = Math.min(asked, smeltable);
     if (args.limitByFuel && count < asked) moved.heldBack = asked - count;
     const item = findItem(bot, args.put.item);
@@ -130,22 +134,21 @@ export async function furnaceWork(ctx: StepContext, args: FurnaceArgs): Promise<
     if (args.limitByFuel) { await putFuel(); await putInput(); } else { await putInput(); await putFuel(); }
     await wait(ctx, 200);
     const input = window.inputItem(), fuel = window.fuelItem(), output = window.outputItem();
-    const burning = Number(window.fuel ?? 0) > 0;
-    const secondsEach = block.name === 'furnace' ? 10 : 5;
-    const progress = Number(window.progress ?? 0);
+    const state = properties.read(window), burning = state.burning;
+    const progress = state.progress ?? 0;
     // Run 43 (+720 q69: raw_iron ×15 with one plank, 「焼き上がり 約150秒後」; the plank smelts 1.5, and five waits before a furnace out of fuel
     // came to about 420 s): the time is the fuel's, not the input's, and what the fuel will not smelt is said with what it takes.
-    const coverage = fuelCoverage(window);
+    const coverage = fuelCoverage(window, properties.read(window), secondsEach);
     const fueled = input ? Math.min(input.count, Math.max(burning ? 1 : 0, Math.floor(coverage + 1e-9))) : 0;
     const unfueled = input ? input.count - fueled : 0;
-    const remaining = input ? Math.max(0, fueled * secondsEach - progress * secondsEach) : 0;
+    const remaining = input && burning !== null && state.progress !== null ? Math.max(0, fueled * secondsEach - progress * secondsEach) : null;
     const host = bot as { activeFurnaces?: any[] };
     host.activeFurnaces = (host.activeFurnaces ?? []).filter(f => !(f.pos.x === cell.x && f.pos.y === cell.y && f.pos.z === cell.z));
-    if (input && (fuel || burning)) {
+    if (input && (fuel || burning) && remaining !== null) {
       host.activeFurnaces.push({ pos: { ...cell }, item: input.name, count: fueled, startedAt: Date.now(), readyAt: Date.now() + Math.round(remaining * 1000),
         dimension: String(bot.game?.dimension ?? ''), ...(unfueled > 0 ? { unfueledCount: unfueled } : {}) });
     }
-    const timing = !input ? '' : !(fuel || burning) ? '。燃料が無く、燃えてもいない（このままでは焼けない）'
+    const timing = !input ? '' : burning === null || remaining === null ? '。燃焼・進みの通知が未確認（燃料切れとは判断できない）' : !(fuel || burning) ? '。燃料が無く、燃えてもいない（このままでは焼けない）'
       : unfueled > 0 ? `。燃料で焼けるのは約 ${fueled} 個まで（材料 ${input.count}）。あと ${unfueled} 個分の燃料が要る（${fuelNeedWords(unfueled)}）。約${Math.round(remaining)}秒で止まる`
         : `。焼き上がり 約${Math.round(remaining)}秒後`;
     const items = [input, fuel, output].filter(Boolean).map((item: any) => `${item.name}×${item.count}`);
@@ -153,7 +156,7 @@ export async function furnaceWork(ctx: StepContext, args: FurnaceArgs): Promise<
     return { moved, look, ...(occupiedBy ? { occupiedBy } : {}), outcome: { ok: true, at: cell, data: { container: { at: cell, kind: block.name, items } },
       // Run 43: the time and what the fuel will not smelt first (the hand's line is 160 characters), then what was moved and the slots.
       text: `${timing ? `${timing.replace(/^。/u, '')}。` : ''}${notes.length ? `${notes.join('、')}。` : ''}${cellText(cell)} の ${block.name}: 材料 ${slotText(input)}・燃料 ${slotText(fuel)}・出来上がり ${slotText(output)}${burning ? '（燃えている）' : ''}` } };
-  } finally { try { window.close(); } catch { /* closed */ } }
+  } finally { properties.close(); try { window.close(); } catch { /* closed */ } }
 }
 
 export async function furnace(ctx: StepContext, args: FurnaceArgs): Promise<StepOutcome> {

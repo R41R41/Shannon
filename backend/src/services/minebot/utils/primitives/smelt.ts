@@ -148,7 +148,7 @@ async function smeltInto(ctx0: StepContext, args: SmeltArgs, tally: { put: numbe
     return fail(bot, 'fuel_short', `燃料が足りず入れたのは ${putText || 'なし'} だけ（入れていない: ${[...held.entries()].map(([item, count]) => `${item}×${count}`).join('・')} は持ち物に残した。燃料${fuel ? ` ${fuel}` : ''} を足してから furnace の手で入れる）${placedText}`, heldBack[0].cell);
   }
   const ready = Math.max(0, ...done.map(entry => entry.look?.remainingSec ?? 0));
-  const idle = done.find(entry => entry.look?.input && !entry.look.fuel && !entry.look.burning);
+  const idle = done.find(entry => entry.look?.input && !entry.look.fuel && entry.look.burning === false);
   if (idle) return fail(bot, 'fuel_short', `${cellText(idle.cell)} のかまどに燃料が無く、燃えてもいない（このままでは焼けない）。入れたのは ${putText}${placedText}`, idle.cell);
   const fuelText = fuelPut ? `・燃料 ${fuel}×${fuelPut}` : '';
   return { ok: true, at: done[done.length - 1]?.cell, text: `smelt 済 ${putText} を ${done.length} 基に入れた（${wherePut}）${fuelText}・焼き上がり 約 ${Math.round(ready)} 秒後${placedText}` };
