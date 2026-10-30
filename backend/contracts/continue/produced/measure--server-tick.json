@@ -1,21 +1,21 @@
 {
  "producedBy": "backend/scripts/minecraft-continue-lab-probe.ts",
  "bench": "B",
- "bodyRevision": "09dcf99fea09",
- "madeAt": "2026-10-30T01:47:03.240Z",
+ "bodyRevision": "395a677a3b07",
+ "madeAt": "2026-10-30T02:20:29.083Z",
  "answers": null,
  "fixtureSha256": null,
  "output": {
   "event": {
    "seq": 1,
-   "at": "2026-10-30T01:46:54.803Z",
+   "at": "2026-10-30T02:20:20.711Z",
    "kind": "server.tick",
    "subject": "server",
    "data": {
-    "raw": "The game is running normally\nTarget tick rate: 20.0 per second.\nAverage time per tick: 1.5ms (Target: 50.0ms)\nPercentiles: P50: ms P95: ms P99: ms. Sample: ",
-    "parsedMspt": 1.5,
+    "raw": "The game is running normally\nTarget tick rate: 20.0 per second.\nAverage time per tick: 2.0ms (Target: 50.0ms)\nPercentiles: P50: ms P95: ms P99: ms. Sample: ",
+    "parsedMspt": 2,
     "frozen": false,
-    "at": "2026-10-30T01:46:54.600Z",
+    "at": "2026-10-30T02:20:20.507Z",
     "error": null
    }
   }
