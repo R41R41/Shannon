@@ -59,9 +59,17 @@ export async function sneak(ctx: StepContext, args: { on?: boolean; seconds?: nu
 const SLOTS: Record<string, string> = { hand: 'hand', 'off-hand': 'off-hand', head: 'head', torso: 'torso', legs: 'legs', feet: 'feet' };
 /** The inventory window's slot of each place an item is worn in (armour 5 to 8, the off hand 45). */
 const EQUIP_SLOT_INDEX: Record<string, number> = { head: 5, torso: 6, legs: 7, feet: 8, 'off-hand': 45 };
+/** The slot an armour piece is worn in (run 48: an equip with no slot for a chestplate held it in the hand and said so), or null for anything else. */
+export function armourSlotOf(name: string): string | null {
+  if (/_helmet$/u.test(name)) return 'head';
+  if (/_chestplate$|^elytra$/u.test(name)) return 'torso';
+  if (/_leggings$/u.test(name)) return 'legs';
+  if (/_boots$/u.test(name)) return 'feet';
+  return null;
+}
 export async function equip(ctx: StepContext, args: { item: string; slot?: string }): Promise<StepOutcome> {
   const bot = ctx.bot;
-  const slot = SLOTS[args.slot ?? 'hand'];
+  const slot = SLOTS[args.slot ?? armourSlotOf(args.item) ?? 'hand'];
   if (!slot) return stopped(bot, 'invalid_input', `slot は ${Object.keys(SLOTS).join('・')} のどれか`);
   const item = findItem(bot, args.item);
   if (!item) return stopped(bot, 'missing_item', `${args.item} を持っていない`);

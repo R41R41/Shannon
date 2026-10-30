@@ -301,3 +301,16 @@ describe('r2: a dig down the column under the feet (run 27: fell 19 hearts into 
     expect((await dig(ctx(safe), { at: [{ x: 1, y: 63, z: 0 }] })).ok).toBe(true);
   });
 });
+describe('equip with no slot (run 48)', () => {
+  it('puts armour on where it is worn, and says so; a slot asked for, or anything that is no armour, is as before', async () => {
+    const { armourSlotOf } = await import('../../src/services/minebot/utils/primitives/body.js');
+    expect(armourSlotOf('iron_chestplate')).toBe('torso');
+    expect(armourSlotOf('iron_helmet')).toBe('head');
+    expect(armourSlotOf('turtle_helmet')).toBe('head');
+    expect(armourSlotOf('diamond_leggings')).toBe('legs');
+    expect(armourSlotOf('golden_boots')).toBe('feet');
+    expect(armourSlotOf('elytra')).toBe('torso');
+    expect(armourSlotOf('shield')).toBeNull();
+    expect(armourSlotOf('iron_pickaxe')).toBeNull();
+  });
+});

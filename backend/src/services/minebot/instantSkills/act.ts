@@ -272,7 +272,7 @@ async function runHand(ctx: StepContext, hand: ActHand): Promise<StepOutcome> {
     }
     case 'jump': return jump(ctx, { n: hand.n });
     case 'sneak': return sneak(ctx, { on: hand.on ?? true, seconds: hand.seconds });
-    case 'equip': return equip(ctx, { item: hand.item ?? '', slot: SLOTS[hand.slot ?? 'hand'] });
+    case 'equip': return equip(ctx, { item: hand.item ?? '', ...(hand.slot ? { slot: SLOTS[hand.slot] } : {}) });
     case 'craft': return craft(ctx, { item: hand.item ?? '', count: hand.count });
     case 'furnace': {
       if (!one) return bad('furnace には at（かまどのマス）が要る');

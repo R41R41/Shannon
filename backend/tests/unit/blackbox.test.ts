@@ -90,7 +90,7 @@ describe('heavy or light', () => {
   const lines = (line: string, d = 'go') => ({ ok: false, lines: [{ i: 1, do: d, status: 'stopped' as const, line }] });
   it('a go stuck, out of search time, or at its limit with few steps; a minute lost; near death; a death; the first of a kind', () => {
     const seen = new Set<string>();
-    expect(heavyReason(lines('go 止まった stuck: 置いたブロックが世界に現れない (196,40,209) 道 61 歩・掘 24・置 28・引き直し 12 回') as never, 9000, 18, false, seen, 't')).toBe('go_stuck');
+    expect(heavyReason(lines('go 止まった stuck: 3秒位置が変わらず、直しを 5 回しても進まない (196,40,209) 道 61 歩・掘 24・置 28・引き直し 12 回') as never, 9000, 18, false, seen, 't')).toBe('go_stuck');
     expect(heavyReason(lines('go 止まった search_timeout: 道探しが…') as never, 9000, 18, false, seen, 't')).toBe('go_search_timeout');
     expect(heavyReason(lines('go 止まった limit_time: 120 秒の上限に着いた (153,2,226) 道 3 歩・掘 0・置 0・引き直し 1 回') as never, 125_000, 18, false, seen, 't')).toBe('go_limit_time_low:3');
     expect(heavyReason(lines('go 止まった limit_time: 120 秒の上限に着いた 道 122 歩・掘 81') as never, 120_000, 18, false, seen, 't')).toBe('first:go/limit_time');   // run 47: at its time with the work moving: light, the planner carries it on
@@ -443,5 +443,14 @@ describe('heavy or light: the stops the body explains and the hands that ran to 
     expect(heavyReason(lines('go 止まった stuck: 3秒位置が変わらず (156,67,200) 道 2 歩') as never, 9000, 18, false, seen, 't')).toBe('go_stuck');
     expect(heavyReason(lines('go 止まった threat_exposed: zombie（約4m）から見える所を掘らないと進めない (1,2,3) 道 3 歩') as never, 9000, 18, false, seen, 't')).toBeNull();
     expect(heavyReason(lines('go 止まった threat_exposed: zombie（約4m）から見える所を掘らないと進めない (1,2,3) 道 3 歩') as never, 9000, 18, false, seen, 't')).toBe('explained:go/threat_exposed');
+  });
+});
+
+describe('heavy or light: a refused place (run 48, hold 2)', () => {
+  it('the first stop at a cell for a refused place goes back to the LLM; the second at the same cell is held', () => {
+    const seen = new Set<string>();
+    const refused = { ok: false, lines: [{ i: 1, do: 'go', status: 'stopped' as const, line: 'go 止まった stuck: 置いたブロックが世界に現れない（サーバーが置きを断った。(155,15,244) に 1 回。置くマス (155,15,244)） (154,15,244) 道 4 歩' }] };
+    expect(heavyReason(refused as never, 9000, 18, false, seen, 't')).toBeNull();
+    expect(heavyReason(refused as never, 9000, 18, false, seen, 't')).toBe('explained:go/stuck');
   });
 });

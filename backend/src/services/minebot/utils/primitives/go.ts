@@ -63,8 +63,10 @@ export const GO_STUCK_MS = 3000;
  * long as it is given. The most redraws with no headway between them (no new cell entered, nothing dug, nothing laid) before the stop `stuck`.
  */
 export const GO_STALLED_REDRAWS = 12;
-/** The blocks laid that the world does not show before the stop `stuck` (the server refuses the place: one is enough, the next step would be onto it). */
-export const GO_REFUSED_PLACES = 1;
+/** The blocks laid that the world does not show, in a row, before the stop `stuck` (a refused place is drawn past once: the cell costs more and the route goes round or lays elsewhere). */
+export const GO_REFUSED_PLACES = 3;
+/** ... and the times the server may refuse the same cell before the stop (run 48 hold 2: the first refusal is drawn past, the second at the same cell stops). */
+export const GO_REFUSED_SAME_CELL = 2;
 /**
  * Run 45 (hold 2, q78 go 9 up out of a dip: 34 s pushed back by flowing water at the same step, five drawings of the same way): a cell the body
  * could not get into (stuck before it) costs this much more to step into or lay in for the rest of the go, so the next drawing goes another way
@@ -262,7 +264,7 @@ const yieldNow = () => new Promise<void>(resolve => setImmediate(resolve));
 interface Relax { hazards?: boolean; tool?: boolean; blocks?: boolean; permissions?: boolean; limits?: boolean; upstream?: boolean }
 export interface GoState {
   steps: number; dug: number; placed: number; redraws: number;
-  veto: { code: string; text: string } | null;
+  veto: { code: string; text: string; hint?: string } | null;
   /** The blocks laid in a row that the world did not show. */
   refused: number;
   /** Run 46: the cells whose dig the exposure guard refused in this go ("x,y,z"): the hostile that the dig would have let at the body, and when. */
@@ -726,16 +728,33 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     let result: unknown;
     try { result = await originalDig.apply(host, rest); }
     catch (error) { if (counting && error instanceof ThreatExposedError) noteExposed(at, error); throw error; }
-    if (counting) { state.dug++; lastWork = Date.now(); if (at) state.dugCells.add(`${at.x},${at.y},${at.z}`); }
+    if (counting) { state.dug++; lastWork = Date.now(); if (at) { state.dugCells.add(`${at.x},${at.y},${at.z}`); lastDugKey = `${at.x},${at.y},${at.z}`; } }
     return result;
   };
   /** A block the server did not take is not a floor: the route executor is not let walk on (run 40 bench: go went on over a refused place and fell four cells). */
+  const refusedAt = new Map<string, number>();
+  let lastDugKey = '';
+  /** Set by a first refusal of a cell: the route is drawn again (the main loop looks at it right after the walk ends). */
+  let drawAfterRefusal = false;
   const refusedPlace = (facts = '', cell: Cell | null = null) => {
-    blackBoxOf(host)?.note('refused_place', { n: state.refused + 1, facts: facts.slice(0, 200), ...(cell ? { avoid: [cell.x, cell.y, cell.z] } : {}) });
-    if (cell) state.avoid.add(keyOf(cell));
-    if (++state.refused >= GO_REFUSED_PLACES && !state.veto) {
-      state.veto = { code: 'stuck', text: `置いたブロックが世界に現れない（サーバーが置きを断った。${state.refused} 回${facts ? `。${facts}` : ''}）` };
+    const times = cell ? (refusedAt.get(keyOf(cell)) ?? 0) + 1 : GO_REFUSED_SAME_CELL;
+    if (cell) refusedAt.set(keyOf(cell), times);
+    blackBoxOf(host)?.note('refused_place', { n: state.refused + 1, same: times, facts: facts.slice(0, 200), ...(cell ? { avoid: [cell.x, cell.y, cell.z] } : {}) });
+    // The cell is not made dearer for the drawing that follows: a dearer cell sent the route down into the canyon beside it (a fall of six in the lab). The same place is tried again; refused twice, it stops.
+    state.refused++;
+    // Run 48 (hold 2): one refusal is drawn past (the cell is avoided, the route goes round or lays elsewhere); the same cell refused twice, or three refusals in a row, stops the go with what was seen.
+    // Drawn past only where nothing is at stake: the body stands on the ground and the cell is at the level of its feet or above (a step it was to climb); a floor laid below the feet (a bridge over a gap)
+    // is a stop at once, as the run 40 bench taught (the body at the edge falls).
+    const feetY = Math.floor((bot.entity?.position?.y ?? 0) + 1e-3);
+    const safeToDrawAgain = !!cell && cell.y >= feetY && bot.entity?.onGround !== false;
+    if ((times >= GO_REFUSED_SAME_CELL || state.refused >= GO_REFUSED_PLACES || !safeToDrawAgain) && !state.veto) {
+      const dug = lastDugKey ? `。直前に掘った (${lastDugKey})` : '';
+      // The facts of the place (the face, the overlap, the jump) are in the black box's refused_place note; the line keeps to the cell, the count and the way out (160 characters).
+      state.veto = { code: 'stuck', text: `置いたブロックが世界に現れない（置きを断られた ${cell ? `${cellText(cell)} に ${times} 回` : `${state.refused} 回`}${dug}）`, hint: '別の道か canPlace の物を変える' };
       try { nav.setGoal?.(null); } catch { /* stopped below */ }
+    } else if (!state.veto) {
+      drawAfterRefusal = true;
+      try { nav.setGoal?.(null); } catch { /* drawn again below */ }
     }
     // The body is stopped where it stands at once: the next step of the route would be onto the block that is not there.
     letGo(bot);
@@ -751,6 +770,12 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     // (it lays the block under the body, which no route of a go plans), and the route is drawn again from where the body really is. The go's
     // own climb (`pillarUp`, the manual work) lays under the body on purpose, at the top of its jump: it is not held back.
     // Run 45 (hold 9): a place against a block that is not there (the route drawn from the middle of a jump) is not sent either.
+    // Run 48 (hold 2): the route was drawn again while a place of the old one was being made: a cell the new route walks through is not laid (the old route's floor, not this one's).
+    const walked = target && lastRoute.some(cell => cell.x === target.x && cell.y === target.y && cell.z === target.z);
+    if (target && walked && !manualBusy) {
+      blackBoxOf(host)?.note('place_held_back', { at: [target.x, target.y, target.z], why: 'route_walks_it' });
+      throw new Error('The place was not sent: the route draws a step through that cell');
+    }
     const noFace = target && !hasFace(rest[0]);
     if (target && (noFace || !manualBusy && !mayLayAt(host, target))) {
       const p = host.entity?.position;
@@ -837,7 +862,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     if (state.veto) { try { nav.setGoal?.(null); } catch { /* stopped below */ } }
   };
   const VETO_HINTS: Record<string, string> = { limit_dig: 'maxDig を増やすか、別の道を', limit_place: 'maxPlace を増やすか、別の道を', stuck: '別の道か別の行き先を（同じ手の繰り返しは同じ所で止まる）', threat_exposed: '敵が離れるのを待つか、別の道・行き先を' };
-  const vetoed = (): StepOutcome | null => state.veto ? fail(state.veto.code, state.veto.text, VETO_HINTS[state.veto.code] ?? '別の道を') : null;
+  const vetoed = (): StepOutcome | null => state.veto ? fail(state.veto.code, state.veto.text, state.veto.hint ?? VETO_HINTS[state.veto.code] ?? '別の道を') : null;
 
   const notes: WayNotes = { opened: [], leaves: 0 };
   // Work that holds the body still on purpose: its own dig or climb, or the executor digging or laying, as long as something has been dug or laid in the last 5 s.
@@ -1046,6 +1071,13 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
       }
       const blocked = vetoed();
       if (blocked) { letGo(bot); return blocked; }
+      if (drawAfterRefusal) {
+        drawAfterRefusal = false;
+        // Drawn again from the ground, at rest (a place refused at the top of a jump leaves the body in the air: a route drawn there starts from air).
+        letGo(bot);
+        state.redraws++;
+        continue;
+      }
       if (out.crossed) return arrived();
       if (reached()) return arrived();
       if (out.timedOut) { letGo(bot); return limitTime(distanceTo(bot, aim).toFixed(0)); }

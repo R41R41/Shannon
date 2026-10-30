@@ -86,3 +86,18 @@ describe('a place that the library gives up on (the server\'s update never comes
     expect(sim.bot.entity.position.y).toBeGreaterThanOrEqual(63.9);
   });
 });
+
+describe('run 48 (hold 2): what a refused place says, and where it is not drawn past', () => {
+  const ground: Ground = (x, y, z) => (Math.abs(x) > R || Math.abs(z) > R ? null : x >= 2 && x <= 4 && y >= 58 && y < 64 ? 'air' : y < 64 ? 'stone' : 'air');
+  it('a floor refused below the feet (a bridge over a gap) is still a stop at once; the line has the cell, the dug cell if any, and a way out', async () => {
+    const sim = makeSim(ground, { items: [{ name: 'cobblestone', count: 16 }] });
+    (sim.bot as any).placeBlock = async () => { throw new Error('No block has been placed : the server did not answer within 1500ms'); };
+    const result = await act(sim, [{ do: 'go', to: { x: 8, y: 64, z: 0 }, canPlace: ['cobblestone'], seconds: 60 }]);
+    const line = json(result).lines[0].line as string;
+    expect(line).toContain('go 止まった stuck: 置いたブロックが世界に現れない');
+    expect(line).toMatch(/\(\d+,\d+,\d+\) に 1 回/u);
+    expect(line).toContain('canPlace の物を変える');
+    expect(line.length).toBeLessThanOrEqual(160);
+    expect(sim.bot.entity.position.y).toBeGreaterThanOrEqual(63.9);
+  });
+});

@@ -91,7 +91,7 @@ export function explainedStop(line: { do: string; line: string }): { code: strin
   if (!code) return null;
   const text = line.line;
   const explained = code === 'threat_exposed'
-    || (line.do === 'go' && code === 'stuck' && /流れる水の中/u.test(text))
+    || (line.do === 'go' && code === 'stuck' && /流れる水の中|置いたブロックが世界に現れない/u.test(text))
     || (line.do === 'go' && code === 'dead_end' && /掘ると流れ込む|掘ると落ちてくる|canDig に無い|canDig に \S+ を許せば|道は流れる水を天井/u.test(text))
     || (code === 'cannot_dig' && /canDig に \S+ を足/u.test(text));
   if (!explained) return null;
