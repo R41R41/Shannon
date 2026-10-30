@@ -1,0 +1,194 @@
+{
+  "source": {
+    "taskId": "7404f163-efcc-4df4-a5de-a4f7befad7f7",
+    "commandId": "skill:1177dcdd979e9b742ae5b721abe8ebd073e01ec2fe0d7aa67256c9db58df3348",
+    "at": "2026-10-30T19:10:14.708Z"
+  },
+  "report": {
+    "ok": false,
+    "stoppedBy": "failure",
+    "lines": [
+      {
+        "i": 1,
+        "do": "eat",
+        "status": "done",
+        "line": "cooked_porkchop を食べた（満腹度 16→20、隠し値 0.0→12.8、1個 20.8点、残り 5）（1.7秒）",
+        "goal": "done",
+        "end": "finished",
+        "motorOps": 2,
+        "delta": [
+          {
+            "item": "cooked_porkchop",
+            "count": -1,
+            "reason": "food",
+            "id": "skill:1177dcdd979e9b742ae5b721abe8ebd073e01ec2fe0d7aa67256c9db58df3348:1:1:0",
+            "obsSeq": 11315,
+            "deliverySeq": 0
+          }
+        ]
+      },
+      {
+        "i": 2,
+        "do": "wait",
+        "status": "done",
+        "line": "30秒待った（30.0秒）",
+        "goal": "done",
+        "end": "finished",
+        "motorOps": 0,
+        "progress": {
+          "unit": "second",
+          "done": 30,
+          "left": 0
+        }
+      },
+      {
+        "i": 3,
+        "do": "wait",
+        "status": "done",
+        "line": "30秒待った（30.0秒）",
+        "goal": "done",
+        "end": "finished",
+        "motorOps": 0,
+        "progress": {
+          "unit": "second",
+          "done": 30,
+          "left": 0
+        }
+      },
+      {
+        "i": 4,
+        "do": "wait",
+        "status": "done",
+        "line": "10秒待った。かまど (-25,28,31) の焼きが終わった（10.0秒）",
+        "goal": "done",
+        "end": "finished",
+        "motorOps": 0,
+        "progress": {
+          "unit": "second",
+          "done": 10,
+          "left": 0
+        }
+      },
+      {
+        "i": 5,
+        "do": "furnace",
+        "status": "done",
+        "line": "出来上がりの iron_ingot×7 を取った。(-25,28,31) の furnace: 材料 空・燃料 coal×2・出来上がり 空（燃えている）（0.2秒）",
+        "goal": "done",
+        "end": "finished",
+        "motorOps": 1,
+        "progress": {
+          "unit": "item",
+          "done": 7,
+          "left": null
+        },
+        "delta": [
+          {
+            "item": "iron_ingot",
+            "count": 7,
+            "reason": "smelted",
+            "id": "skill:1177dcdd979e9b742ae5b721abe8ebd073e01ec2fe0d7aa67256c9db58df3348:1:5:0",
+            "obsSeq": 12322,
+            "deliverySeq": 1
+          }
+        ]
+      },
+      {
+        "i": 6,
+        "do": "make",
+        "status": "done",
+        "line": "make 済 iron_chestplate×1（今 1 個）（0.8秒）",
+        "goal": "done",
+        "end": "finished",
+        "motorOps": 0,
+        "progress": {
+          "unit": "item",
+          "done": 1,
+          "left": 0
+        },
+        "delta": [
+          {
+            "item": "iron_ingot",
+            "count": -8,
+            "reason": "ingredient",
+            "id": "skill:1177dcdd979e9b742ae5b721abe8ebd073e01ec2fe0d7aa67256c9db58df3348:1:6:0",
+            "obsSeq": 12334,
+            "deliverySeq": 2
+          },
+          {
+            "item": "iron_chestplate",
+            "count": 1,
+            "reason": "crafted",
+            "id": "skill:1177dcdd979e9b742ae5b721abe8ebd073e01ec2fe0d7aa67256c9db58df3348:1:6:1",
+            "obsSeq": 12334,
+            "deliverySeq": 3
+          }
+        ]
+      },
+      {
+        "i": 7,
+        "do": "make",
+        "status": "done",
+        "line": "make 済 iron_leggings×1（今 1 個）（0.4秒）",
+        "goal": "done",
+        "end": "finished",
+        "motorOps": 0,
+        "progress": {
+          "unit": "item",
+          "done": 1,
+          "left": 0
+        },
+        "delta": [
+          {
+            "item": "iron_ingot",
+            "count": -7,
+            "reason": "ingredient",
+            "id": "skill:1177dcdd979e9b742ae5b721abe8ebd073e01ec2fe0d7aa67256c9db58df3348:1:7:0",
+            "obsSeq": 12341,
+            "deliverySeq": 4
+          },
+          {
+            "item": "iron_leggings",
+            "count": 1,
+            "reason": "crafted",
+            "id": "skill:1177dcdd979e9b742ae5b721abe8ebd073e01ec2fe0d7aa67256c9db58df3348:1:7:1",
+            "obsSeq": 12341,
+            "deliverySeq": 5
+          }
+        ]
+      },
+      {
+        "i": 8,
+        "do": "make",
+        "status": "stopped",
+        "line": "無い: make 止まった missing: iron_ingot×1（作る物 iron_helmet×1 と途中の物の分。何も作っていない。持っている acacia_planks×2 coal×2 iron_ingot×4 wooden_axe×1 chicken×1 iron_chestplate×1 beef×…",
+        "goal": "not_started",
+        "end": "finished",
+        "motorOps": 0,
+        "code": "missing",
+        "progress": {
+          "unit": "item",
+          "done": 0,
+          "left": 1
+        }
+      },
+      {
+        "i": 9,
+        "do": "equip",
+        "status": "skipped",
+        "line": "未実行",
+        "goal": "not_started",
+        "end": "not_run"
+      },
+      {
+        "i": 10,
+        "do": "equip",
+        "status": "skipped",
+        "line": "未実行",
+        "goal": "not_started",
+        "end": "not_run"
+      }
+    ]
+  },
+  "ms": 73152
+}

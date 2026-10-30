@@ -133,7 +133,15 @@ export function heavyReason(report: Pick<ActReport, 'ok' | 'lines' | 'stoppedBy'
     if (code === 'limit_time' && Number.isFinite(steps) && steps < LOW_STEPS) return `go_limit_time_low:${steps}`;
   }
   // Runs 47-48: a hand that failed after a long time with the work moving (steps, digs, levels, blocks, obsidian) is the clock's: the planner carries it on from the result.
-  if (ms >= LONG_MS && !report.lines.some(line => line.status !== 'done' && line.status !== 'skipped' && progressed(line))) return `long:${Math.round(ms / 1000)}s`;
+  // Run53: a completed furnace wait is planned elapsed time, not time spent on the later immediate missing-ingredient stop.
+  // Incomplete/cancelled waits and unknown or impossible durations receive no deduction. The run/budget clock still counts it all.
+  const waitedMs = report.lines.reduce((total, line) => {
+    const progress = line.progress, seconds = progress?.done;
+    return total + (line.do === 'wait' && line.status === 'done' && line.goal === 'done' && line.end === 'finished'
+      && progress?.unit === 'second' && progress.left === 0 && typeof seconds === 'number' && Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 0);
+  }, 0);
+  const stalledMs = ms - (waitedMs <= ms ? waitedMs : 0);
+  if (stalledMs >= LONG_MS && !report.lines.some(line => line.status !== 'done' && line.status !== 'skipped' && progressed(line))) return `long:${Math.round(stalledMs / 1000)}s`;
   const failed = report.lines.find(line => line.status !== 'done' && line.status !== 'skipped');
   if (failed) {
     const code = /止まった (\w+)/u.exec(failed.line)?.[1] ?? report.stoppedBy ?? 'failed';
