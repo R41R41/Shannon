@@ -6,7 +6,7 @@
 # hold file are kept under $MINEBOT_LAB_SCRATCH/incident-<label>/). The rest of this header is run-hands-live's:
 #
 # The live check of the act hands (scripts/minecraft-hands-live-probe.ts) against a real, isolated Minecraft server, with the body's code
-# taken from <code.tar> (a tar of backend/src, backend/scripts, backend/package.json, backend/tsconfig.json, package.json from a worktree),
+# taken from <code.tar> (backend/src, backend/scripts, backend/tests/fixtures/continue, backend/package.json, backend/tsconfig.json, package.json),
 # not from Shannon-dev (which is old). One run does everything and leaves nothing behind but the logs under
 # $MINEBOT_LAB_SCRATCH/hands-<label>/ (default ~/.cache/minebot-lab):
 #   (a) unpack the code into a directory of its own (HANDS_CODE_DIR, default ~/Shannon-run40-lab; Shannon-dev's node_modules are
@@ -61,6 +61,18 @@ log "unpacking $CODE_TAR into $CODE"
 rm -rf "$CODE"; mkdir -p "$CODE"
 tar -xf "$CODE_TAR" -C "$CODE" || { log "tar failed"; exit 1; }
 if [ -n "${HANDS_OVERLAY:-}" ]; then tar -xf "$HANDS_OVERLAY" -C "$CODE" || { log "overlay failed"; exit 1; }; log "overlay applied: $(tar -tf "$HANDS_OVERLAY" | grep -v '/$' | tr '\n' ' ')"; fi
+# Stamp each real output with its fixture; reject an incomplete bundle before paying the cost of starting the lab.
+python3 - "$CODE/backend/tests/fixtures/continue" <<'PY'
+import hashlib,json,pathlib,sys
+root=pathlib.Path(sys.argv[1])
+manifest=json.loads((root/'manifest.json').read_text())
+for name,expected in manifest['files'].items():
+    path=root/name
+    assert path.is_file(), 'missing continue fixture: '+name
+    assert hashlib.sha256(path.read_bytes()).hexdigest()==expected, 'continue fixture hash mismatch: '+name
+print('continue fixtures: complete and hashes match')
+PY
+[ "$?" = 0 ] || { log "continue fixtures missing or stale; no server started"; exit 1; }
 cp -al "$DEV/node_modules" "$CODE/node_modules" || { log "node_modules link failed"; exit 1; }
 mkdir -p "$CODE/backend"
 [ -d "$DEV/backend/node_modules" ] && cp -al "$DEV/backend/node_modules" "$CODE/backend/node_modules"
