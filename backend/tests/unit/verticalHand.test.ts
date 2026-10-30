@@ -34,6 +34,20 @@ const at = (x: number, y: number, z: number) => ({ x, y, z });
 const PICK: Stack = { name: 'iron_pickaxe', count: 1 };
 const DIG = ['stone', 'andesite', 'dirt', 'gravel'];
 
+describe('stairs up: an obstruction above the current stance', () => {
+  for (const [toward, y] of [['north', 64], ['east', 12], ['south', -29], ['west', 85]] as const) {
+    it(`keeps the falling support intact and identifies the shared head obstruction: ${toward}, y=${y}`, async () => {
+      const sim = sim0(world('stone', y, [cell('stone', 0, y + 2, 0), cell('gravel', 0, y + 3, 0)]), [0, y, 0]);
+      const outcome = await drive(sim, run(sim, hand({ dir: 'up', shape: 'stairs', toward, toY: y + 1 })));
+      expect(outcome).toMatchObject({ ok: false, code: 'falling_above', at: at(0, y + 3, 0) });
+      expect(sim.bot.dugBlocks).toHaveLength(0);
+      expect(outcome.text).toContain('現在位置の頭上');
+      expect(outcome.text).toContain('向きだけを変えても');
+      expect(outcome.text).toContain('横の安全な立ち位置');
+    });
+  }
+});
+
 const ctxOf = (sim: HandsSim, options: { controller?: AbortController; ms?: number; progress?: (detail: string) => void } = {}): StepContext => {
   const feet = feetCell(sim.bot)!;
   return { bot: sim.bot, stop: (options.controller ?? new AbortController()).signal, deadline: Date.now() + (options.ms ?? 600_000), facing: 'north', base: feet,
@@ -59,7 +73,7 @@ describe('run 48: stairs up leave the support under gravel above the body intact
     const outcome = await drive(sim, run(sim, hand({ dir: 'up', shape: 'stairs', toward: 'east', toY: 65 })));
     expect(outcome).toMatchObject({ ok: false, code: 'falling_above', progress: { done: 0 } });
     expect(outcome.text).toContain('頭へ落ちる');
-    expect(outcome.text).toContain('toward');
+    expect(outcome.text).toContain('現在位置の頭上');
     expect(sim.bot.dugBlocks).toEqual([]);
     expect(feetCell(sim.bot)).toEqual(at(0, 64, 0));
   });

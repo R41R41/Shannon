@@ -520,8 +520,8 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
         && FALLING.test(nameOf(blockAt(bot, shift(cell, 0, 1, 0)))));
       if (roof) {
         const falling = shift(roof, 0, 1, 0);
-        throw new VStop('falling_above', `${cellText(roof)} を掘ると上の ${nameOf(blockAt(bot, falling))}${cellText(falling)} が頭へ落ちる`, falling,
-          '下に立たず別の場所から掘るか、toward・上りの形を変える');
+        throw new VStop('falling_above', `現在位置の頭上: ${cellText(roof)} を掘ると上の ${nameOf(blockAt(bot, falling))}${cellText(falling)} が頭へ落ちる`, falling,
+          '向きだけを変えても同じ頭上を掘る。横の安全な立ち位置へ移り、下に立たず支えを開けるか別の上り口へ');
       }
     }
     precheckDig(plan.clear);
