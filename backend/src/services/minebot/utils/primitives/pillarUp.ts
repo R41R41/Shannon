@@ -33,6 +33,8 @@ const TRY_TICKS = 28;
  * 1.249, 1.252, 1.18; tick 8 is 1.02): 200 ms, five or six readings at 35 ms.
  */
 export const PILLAR_FEET_OVER_FLOOR = 1.05;
+/** The feet must still be this far over the cell's top two ticks on (at the speed they fall at now) when the place is sent. */
+export const PILLAR_FALL_MARGIN = 0.03;
 const EMPTY = (block: any) => !block || isAirLike(block) || block.name === 'water' || block.name === 'lava';
 
 /** How much lower than its cell's bottom a floor may be and a jump from it still reach the laying height (1.252 - 1.05). */
@@ -117,6 +119,8 @@ async function pillarLevels(ctx: StepContext, args: PillarArgs, tally: { climbed
         const y = bot.entity.position.y, vy = bot.entity.velocity?.y ?? 0;
         maxY = Math.max(maxY, y);
         if (y < feet.y + feetOver || vy > 0.14 || vy < -0.45) continue;
+        // Run 48 (hold 4): a block sent while the body is falling is met by the body: by the time the server handles the place (two ticks) the feet are lower, in the cell (the lab: 5 of 6 'placed' and nothing there).
+        if (y + 2 * Math.min(vy, 0) < feet.y + 1 + PILLAR_FALL_MARGIN) continue;
         if (!EMPTY(blockAt(bot, feet))) { filledBy = cellNow(bot, feet); break; }
         attempts++;
         placedFrom = bot.entity.position.clone?.() ?? { ...bot.entity.position };

@@ -199,6 +199,25 @@ describe('vertical: a cave under the next rock is a fall of three at most (run 4
   });
 });
 
+describe('vertical: a pillar sends no block while the body is falling into its cell (run 48, hold 4)', () => {
+  it('every place goes out with the feet still over the top of the cell two ticks on', async () => {
+    const sim = sim0(world('stone', 64, []), [0, 64, 0], [PICK, { name: 'cobblestone', count: 16 }]);
+    const original = (sim.bot as any).placeBlock.bind(sim.bot);
+    const sent: Array<{ over: number; ahead: number }> = [];
+    let base = 64;
+    (sim.bot as any).placeBlock = async (...rest: unknown[]) => {
+      const y = sim.bot.entity.position.y, vy = sim.bot.entity.velocity.y;
+      sent.push({ over: y - base, ahead: y + 2 * Math.min(vy, 0) - base });
+      return original(...rest);
+    };
+    sim.bot.on('physicsTick', () => { if (sim.bot.entity.onGround) base = Math.floor(sim.bot.entity.position.y + 1e-3); });
+    const outcome = await drive(sim, run(sim, hand({ dir: 'up', shape: 'pillar', toY: 68, canPlace: ['cobblestone'] })));
+    expect(outcome.ok).toBe(true);
+    expect(sent.length).toBeGreaterThanOrEqual(4);
+    for (const one of sent) expect(one.ahead).toBeGreaterThanOrEqual(1.03 - 1e-6);
+  });
+});
+
 describe('vertical: an ore the planner names in canDig (run 48, hold 1)', () => {
   const ore = (name: string) => world('andesite', 64, [cell(name, 0, 63, 1)]);
   it('stops at copper_ore when canDig lacks it, saying to add it; with copper_ore in canDig the stair digs it and goes on', async () => {

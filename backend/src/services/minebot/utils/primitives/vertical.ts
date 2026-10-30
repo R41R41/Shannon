@@ -8,7 +8,7 @@ import type { Progress } from '../../integration/commonFca/continueContract.js';
 import { nativeActionHost } from '../../execution/ActionExecution.js';
 import { blockAt, cellText, fullPackWatch, eyeDistance, guard, inventoryCount, letGo, StepStopped, USE_REACH, wait, waitUntil, type StepContext, type StepOutcome } from './common.js';
 import { blockInHand, digRuleOf, hasFace, mayLayAt, placeNamesOf } from './go.js';
-import { shortFloor } from './pillarUp.js';
+import { PILLAR_FALL_MARGIN, shortFloor } from './pillarUp.js';
 import { ThreatExposedError } from '../exposureGuard.js';
 import { verticalProblem } from '../actHandRules.js';
 
@@ -614,6 +614,7 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
           await wait(ctx, 35);
           const p = bot.entity.position, vy = bot.entity.velocity?.y ?? 0;
           if (p.y < plan.from.y + 1 + PILLAR_MARGIN || vy > 0.14 || vy < -0.45) continue;
+          if (p.y + 2 * Math.min(vy, 0) < plan.from.y + 1 + PILLAR_FALL_MARGIN) continue;   // run 48 (hold 4): the feet two ticks on, while the server handles the place
           const there = blockAt(bot, plan.from);
           if (there && there.boundingBox === 'block') { filledBy = nameOf(there); break; }
           if (bodyOverlap(p, plan.from) > 0) continue;
