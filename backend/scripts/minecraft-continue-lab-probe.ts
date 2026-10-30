@@ -722,7 +722,7 @@ try {
   if (wanted.has('vertical_ore')) {
     await reset(actor);
     await ask('tp ' + ACTOR + ' -10 100 -10'); await sleep(600);
-    await ask('fill 8 91 -4 16 99 4 minecraft:stone'); await ask('fill 8 100 -4 16 106 4 minecraft:air'); await ask('setblock 12 98 1 minecraft:copper_ore');
+    await ask('fill 8 91 -4 16 99 4 minecraft:stone'); await ask('fill 8 100 -4 16 106 4 minecraft:air'); await ask('setblock 12 99 1 minecraft:copper_ore');
     await ask('give ' + ACTOR + ' minecraft:iron_pickaxe 1'); await sleep(800);
     await ask('effect give ' + ACTOR + ' minecraft:resistance 600 4 true'); await sleep(500);
     await ask('tp ' + ACTOR + ' 12.5 100 0.5'); await sleep(2500);
