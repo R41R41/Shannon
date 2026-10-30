@@ -1,13 +1,13 @@
 {
  "producedBy": "backend/scripts/minecraft-continue-lab-probe.ts",
  "bench": "B",
- "bodyRevision": "18abcc6634bb",
- "madeAt": "2026-10-30T10:18:12.804Z",
+ "bodyRevision": "3543a70fdcc2",
+ "madeAt": "2026-10-30T11:20:48.494Z",
  "answers": null,
  "fixtureSha256": null,
  "output": {
   "noWay": {
-   "ms": 772,
+   "ms": 711,
    "line": "go 止まった threat_exposed: zombie（約4m）から見える所を掘らないと進めない（守りが止めた 1 マス (2,101,0)） (1,100,0) 道 1 歩・掘 0・置 0・引き直し 2 回。敵が離れるのを待つか、別の道・行き先を",
    "code": "threat_exposed",
    "goal": "partial",
@@ -15,17 +15,17 @@
    "refused": 1
   },
   "detour": {
-   "ms": 18818,
+   "ms": 18839,
    "goal": "done",
    "line": "go 着いた (14,100,0) 道 20 歩・掘 36・置 0・引き直し 1 回（18.8秒）",
    "x": 14,
    "wallStillThere": true
   },
   "wide": {
-   "ms": 16758,
+   "ms": 13710,
    "goal": "done",
-   "line": "go 着いた (14,100,0) 道 24 歩・掘 26・置 0・引き直し 6 回（16.7秒）",
-   "refused": 8
+   "line": "go 着いた (14,100,0) 道 21 歩・掘 21・置 0・引き直し 4 回（13.7秒）",
+   "refused": 6
   }
  }
 }
