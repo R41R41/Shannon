@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeHandsSim, type Ground, type HandsSim } from '../helpers/handsSim.js';
 import { dig } from '../../src/services/minebot/utils/primitives/dig.js';
 import type { StepContext } from '../../src/services/minebot/utils/primitives/common.js';
+import { ServerDigUnconfirmedError } from '../../src/services/minebot/utils/digBlockVerified.js';
+import { Vec3 } from 'vec3';
 
 // Run 46 (hold 6): the water poured over the lava carried the body 7 m away while it dug obsidian; the dig waited for its guard (49 s) and the hand stood still.
 // A body that has left the reach of the block it digs stops the dig at once (out_of_reach), so that the hand can stand again.
@@ -39,5 +41,18 @@ describe('dig: a body carried out of reach while it digs', () => {
     const { value } = await drive(sim, dig(ctxOf(sim), { at: [{ x: 3, y: FLOOR, z: 0 }], tool: 'diamond_pickaxe', collect: false }));
     expect(value.ok).toBe(true);
     expect(sim.world.nameAt(3, FLOOR, 0)).toBe('air');
+  });
+
+  it('keeps an unconfirmed server result uncertain while telling that its reach precondition was lost', async () => {
+    const sim = makeHandsSim(ground, { items: [{ name: 'diamond_pickaxe', count: 1 }] });
+    sim.bot.dig = async () => {
+      sim.bot.entity.position.x = 12.5;
+      throw new ServerDigUnconfirmedError(new Vec3(3, FLOOR, 0), []);
+    };
+    const { value } = await drive(sim, dig(ctxOf(sim), { at: [{ x: 3, y: FLOOR, z: 0 }], collect: false }));
+    expect(value).toMatchObject({ ok: false, reason: 'dig_unconfirmed' });
+    expect(value.text).toContain('採掘中に射程外へ移動した');
+    expect(value.text).toContain('足場と視線を確かめる');
+    expect(sim.world.nameAt(3, FLOOR, 0)).toBe('obsidian');
   });
 });

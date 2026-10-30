@@ -195,7 +195,12 @@ async function digCells(ctx: StepContext, args: DigArgs, tally: DigTally): Promi
       if (error instanceof StepStopped || /Action interrupted/u.test(String((error as Error)?.message))) { letGo(bot); throw error; }
       if (error instanceof ThreatExposedError) return result(stopped(bot, 'threat_exposed', `${(error as Error).message}（開けるなら exposeOk:true）`, cell));
       if (error instanceof LavaReleaseError) return result(stopped(bot, 'lava_behind', (error as Error).message, cell));
-      if (error instanceof ServerDigUnconfirmedError) return result(stopped(bot, 'dig_unconfirmed', `${placeText(bot, cell)} の ${block.name} をサーバーが壊したと言わない（今 ${cellNow(bot, cell)}）`, cell));
+      if (error instanceof ServerDigUnconfirmedError) {
+        const reach = eyeDistance(bot, cell);
+        const moved = reach > DIG_REACH + DIG_DRIFT_MARGIN
+          ? `採掘中に射程外へ移動した（目から${reach.toFixed(1)}m）。水流や押し出しを避けた足場と視線を確かめる。` : '';
+        return result(stopped(bot, 'dig_unconfirmed', `${moved}${placeText(bot, cell)} の ${block.name} をサーバーが壊したと言わない（今 ${cellNow(bot, cell)}）`, cell));
+      }
       return result(stopped(bot, 'dig_failed', `${placeText(bot, cell)} の ${block.name} を掘れなかった: ${String((error as Error)?.message ?? error).slice(0, 100)}（今 ${cellNow(bot, cell)}）`, cell));
     } finally { stopWatching(); if (guardState && guardState.allowAt === cellKey(cell)) guardState.allowAt = undefined; }
     dugCells.push(cell);
