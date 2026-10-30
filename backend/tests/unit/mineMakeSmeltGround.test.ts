@@ -9,6 +9,8 @@ import { StepStopped } from '../../src/services/minebot/utils/primitives/common.
 import { BodyEventWatcher } from '../../src/services/minebot/integration/commonFca/bodyEvents.js';
 import { dueFurnaces } from '../../src/services/minebot/utils/furnaceDone.js';
 import { runAct, ACT_HANDS } from '../../src/services/minebot/instantSkills/act.js';
+import { ThreatExposedError } from '../../src/services/minebot/utils/exposureGuard.js';
+import { closedWord } from '../../src/services/minebot/utils/actReport.js';
 
 // The practice ground for mine, make and smelt (hands-contract.md 3, 4, 6): real chunks and blocks (prismarine-chunk / -world, the game's dig
 // times and harvest tables), the client's physics for the body (50 ms ticks), mineflayer-pathfinder's real route search for the walks, the real
@@ -34,6 +36,17 @@ function veinScene(g: Ground) {
 const goneOf = (g: Ground, cells: Array<{ x: number; y: number; z: number }>) => cells.filter(c => g.nameAt(c.x, c.y, c.z) === 'air');
 
 describe('mine on the practice ground', () => {
+  it('run 48: a creeper exposure has the threat code and heading, not the lava heading', async () => {
+    const g = open();
+    veinScene(g); g.give('stone_pickaxe', 1);
+    g.bot.dig = async (block: any) => { throw new ThreatExposedError(block, { name: 'creeper', distance: 6 }); };
+    const outcome = await mine(stepContext(g.bot), { block: 'iron_ore', at: [cell(11, 65, 8)], count: 1 });
+    expect(outcome).toMatchObject({ ok: false, reason: 'threat_exposed' });
+    expect(outcome.text).toContain('creeper');
+    expect(closedWord(outcome.reason!)).toBe('見られる');
+    expect(g.dugLog).toEqual([]);
+  });
+
   it('1. six joined iron ores in a wall: count 4 digs four of that vein with the stone pickaxe (not the wooden one), picks the drops, touches no other block', async () => {
     const g = open();
     const { vein, decoys } = veinScene(g);
@@ -214,6 +227,22 @@ describe('mine on the practice ground', () => {
 });
 
 describe('mine with the conditions of the act', () => {
+  it.each(['craft', 'make'])('run 48: %s records iron consumed and flint and steel gained when done cuts its final wait', async kind => {
+    const g = open();
+    g.give('iron_ingot', 1); g.give('flint', 1);
+    const out = JSON.parse((await runAct(g.bot, ACT_HANDS.parse([{ do: kind, item: 'flint_and_steel' }]), undefined, undefined,
+      { done: [[{ k: 'have', item: 'flint_and_steel', n: 1 }]] })).result);
+    expect(out.ok).toBe(true);
+    expect(g.countOf('iron_ingot')).toBe(0);
+    expect(g.countOf('flint_and_steel')).toBe(1);
+    const events = out.lines.flatMap((line: { delta?: unknown[] }) => line.delta ?? []);
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ item: 'iron_ingot', count: -1, reason: 'ingredient' }),
+      expect.objectContaining({ item: 'flint_and_steel', count: 1, reason: 'crafted' }),
+    ]));
+    expect(events.filter((event: { item: string }) => event.item === 'iron_ingot')).toHaveLength(1);
+  });
+
   it('a done condition that holds in the middle of the hand ends the act ok there: three raw irons asked, six cells would have been dug', async () => {
     const g = open();
     veinScene(g);

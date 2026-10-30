@@ -2,7 +2,7 @@
 // The types are the contract's (chapters 1 to 8); the pure rules at the end are the dependency table's (fixtures continue/dependency-table.json), which both sides test.
 import type { ActCondition } from '../../utils/actConditions.js';
 
-export const CONTINUE_CONTRACT_VERSION = '3.1' as const;
+export const CONTINUE_CONTRACT_VERSION = '3.2' as const;
 export type Dim = 'overworld' | 'the_nether' | 'the_end';
 export interface ActPos { x: number; y: number; z: number }
 

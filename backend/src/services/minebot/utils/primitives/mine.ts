@@ -186,7 +186,7 @@ async function mineVein(ctx0: StepContext, args: MineArgs, result: { dug: number
       }
       case 'lava_behind': skipped.push({ cell, kind: 'liquid', why: outcome.text }); continue;
       case 'footing': case 'falling_above': skipped.push({ cell, kind: 'footing', why: outcome.text }); continue;
-      case 'threat_exposed': return problem('danger', outcome.text, cell);
+      case 'threat_exposed': return problem('threat_exposed', outcome.text, cell);
       case 'no_harvest_tool': return result.dug ? problem('tool_broke', `道具が壊れて次の道具が無い（${outcome.text}）`, cell) : problem('no_tool', outcome.text, cell);
       case 'equip_failed': return problem('no_tool', outcome.text, cell);
       case 'unbreakable': case 'protected': case 'unloaded': skipped.push({ cell, kind: 'other', why: outcome.text }); continue;

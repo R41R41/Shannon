@@ -52,6 +52,19 @@ const sim0 = (ground: Ground, start: [number, number, number] = [0, 64, 0], item
   makeHandsSim(ground, { start: [start[0] + 0.5, start[1], start[2] + 0.5], items });
 const workOf = (outcome: StepOutcome) => outcome.progress!.work!;
 
+describe('run 48: stairs up leave the support under gravel above the body intact', () => {
+  it.each(['gravel', 'sand', 'red_sand', 'white_concrete_powder'])('returns %s to the planner before digging the roof', async falling => {
+    const ground = world('andesite', 72, [cell('air', 0, 64, 0), cell('air', 0, 65, 0), cell(falling, 0, 67, 0)]);
+    const sim = sim0(ground);
+    const outcome = await drive(sim, run(sim, hand({ dir: 'up', shape: 'stairs', toward: 'east', toY: 65 })));
+    expect(outcome).toMatchObject({ ok: false, code: 'falling_above', progress: { done: 0 } });
+    expect(outcome.text).toContain('頭へ落ちる');
+    expect(outcome.text).toContain('toward');
+    expect(sim.bot.dugBlocks).toEqual([]);
+    expect(feetCell(sim.bot)).toEqual(at(0, 64, 0));
+  });
+});
+
 describe('vertical: the hand\'s fields and the refusals before the body moves', () => {
   it('is a kind of hand and takes the fixtures\' short-hand hands (dependsOn is the act\'s own, not this hand\'s)', () => {
     expect(HAND_KINDS).toContain('vertical');

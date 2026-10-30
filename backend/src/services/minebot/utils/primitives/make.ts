@@ -4,6 +4,7 @@ import { cellText, freeSlots, guard, inventoryCount, stopped, StepStopped, wait,
 import { nearestTable, tableInReach } from './craft.js';
 import { placeNearby } from './placeSpot.js';
 import { withProgress } from './progressUnits.js';
+import { craftEvents } from './craftEvents.js';
 
 /**
  * make: one item, and the parts it is made of, in a chain of crafts (hands-contract.md 4). The planner says what and how many; the body
@@ -167,24 +168,19 @@ async function craftStep(ctx: StepContext, step: Step, table: any, target: strin
   const bot = ctx.bot;
   const before = inventoryCount(bot, step.item);
   if (bot.currentWindow) { try { bot.closeWindow(bot.currentWindow); } catch { /* closing */ } await wait(ctx, 100); }
-  try {
-    const crafted = await guard(ctx, Promise.resolve(bot.craft(step.recipe, step.times, step.recipe.requiresTable === true ? table : undefined)), 4000 + step.times * 400);
-    if (!crafted) return { n: 0, fail: fail(bot, 'craft_failed', `${step.item} を作る途中で時間切れ（今 ${inventoryCount(bot, step.item)} 個）`) };
-  } catch (error) {
-    if (error instanceof StepStopped || /Action interrupted/u.test(String((error as Error)?.message))) throw error;
-    return { n: 0, fail: fail(bot, freeSlots(bot) === 0 ? 'full' : 'craft_failed', `${step.item} を作れなかった: ${String((error as Error)?.message ?? error).slice(0, 100)}`) };
-  }
-  await wait(ctx, 150);
-  const gained = inventoryCount(bot, step.item) - before;
-  if (gained <= 0) return { n: 0, fail: fail(bot, freeSlots(bot) === 0 ? 'full' : 'craft_failed', `${step.item} が増えていない（前 ${before} 個、今 ${inventoryCount(bot, step.item)} 個）`) };
-  // Continue contracts (3): the recipe's ingredients and what it gave. A piece made on the way, and what is taken of it, are intermediate; the pickaxe is not.
-  for (const entry of step.recipe.delta ?? []) {
-    if (entry.count >= 0) continue;
-    const used = nameOf(bot, entry.id);
-    ctx.record?.({ item: used, count: entry.count * step.times, reason: 'ingredient', ...(madeNames.has(used) ? { intermediate: true } : {}) });
-  }
   const intermediate = step.item !== target;
-  ctx.record?.({ item: step.item, count: gained, reason: 'crafted', ...(intermediate ? { intermediate: true } : {}) });
-  if (intermediate) madeNames.add(step.item);
-  return { n: gained };
+  const record = craftEvents(ctx, step.recipe, step.item, intermediate, madeNames);
+  try {
+    try {
+      const crafted = await guard(ctx, Promise.resolve(bot.craft(step.recipe, step.times, step.recipe.requiresTable === true ? table : undefined)), 4000 + step.times * 400);
+      if (!crafted) return { n: 0, fail: fail(bot, 'craft_failed', `${step.item} を作る途中で時間切れ（今 ${inventoryCount(bot, step.item)} 個）`) };
+    } catch (error) {
+      if (error instanceof StepStopped || /Action interrupted/u.test(String((error as Error)?.message))) throw error;
+      return { n: 0, fail: fail(bot, freeSlots(bot) === 0 ? 'full' : 'craft_failed', `${step.item} を作れなかった: ${String((error as Error)?.message ?? error).slice(0, 100)}`) };
+    }
+    await wait(ctx, 150);
+    const gained = inventoryCount(bot, step.item) - before;
+    if (gained <= 0) return { n: 0, fail: fail(bot, freeSlots(bot) === 0 ? 'full' : 'craft_failed', `${step.item} が増えていない（前 ${before} 個、今 ${inventoryCount(bot, step.item)} 個）`) };
+    return { n: gained };
+  } finally { record(); if (intermediate && inventoryCount(bot, step.item) > before) madeNames.add(step.item); }
 }

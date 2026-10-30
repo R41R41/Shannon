@@ -513,6 +513,17 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
     needDisplacedCheck(expected);
   };
   const stairsLevel = async (plan: Plan) => {
+    // Run 48 hold 6: opening the roof while standing under a falling column buries the body before
+    // openAll can dig its replacements. Leave the support intact and let the planner choose the approach.
+    if (!down) {
+      const roof = plan.clear.find(cell => cell.x === plan.from.x && cell.z === plan.from.z
+        && FALLING.test(nameOf(blockAt(bot, shift(cell, 0, 1, 0)))));
+      if (roof) {
+        const falling = shift(roof, 0, 1, 0);
+        throw new VStop('falling_above', `${cellText(roof)} を掘ると上の ${nameOf(blockAt(bot, falling))}${cellText(falling)} が頭へ落ちる`, falling,
+          '下に立たず別の場所から掘るか、toward・上りの形を変える');
+      }
+    }
     precheckDig(plan.clear);
     await openAll(plan.clear);
     await handleLiquid(plan);   // what the digging let out

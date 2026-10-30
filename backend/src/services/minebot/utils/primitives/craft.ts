@@ -2,6 +2,7 @@ import { scanLoadedBlocks } from '../loadedBlockScan.js';
 import { feetCell, relativeWords, type Cell } from '../localMap.js';
 import { cellText, eyeDistance, guard, inventoryCount, stopped, StepStopped, USE_REACH, wait, type StepContext, type StepOutcome } from './common.js';
 import { withProgress } from './progressUnits.js';
+import { craftEvents } from './craftEvents.js';
 
 /**
  * craft: `count` of an item (design mb-llm-centric 2.3). A recipe of the 2x2 grid is made in the hand; one that needs the 3x3 uses a
@@ -80,18 +81,18 @@ async function craftItem(ctx: StepContext, args: CraftArgs): Promise<StepOutcome
   const times = Math.ceil(count / perCraft(ready));
   const before = inventoryCount(bot, args.item);
   if (bot.currentWindow) { try { bot.closeWindow(bot.currentWindow); } catch { /* closing */ } await wait(ctx, 100); }
+  const record = craftEvents(ctx, ready, args.item, false);
   try {
-    const made = await guard(ctx, Promise.resolve(bot.craft(ready, times, usesTable ? table : undefined)), 4000 + times * 400);
-    if (!made) return stopped(bot, 'timeout', `${args.item} を作る途中で時間切れ（今 ${inventoryCount(bot, args.item)} 個）`);
-  } catch (error) {
-    if (error instanceof StepStopped || /Action interrupted/u.test(String((error as Error)?.message))) throw error;
-    return stopped(bot, 'craft_failed', `${args.item} を作れなかった: ${String((error as Error)?.message ?? error).slice(0, 100)}`);
-  }
-  await wait(ctx, 150);
-  const after = inventoryCount(bot, args.item);
-  if (after <= before) return stopped(bot, 'craft_failed', `${args.item} が増えていない（前 ${before} 個、今 ${after} 個）`);
-  // Continue contracts (3): what the recipe took and what it gave, as events (the ingredients by the recipe's own delta, the result by what the pack gained).
-  for (const entry of ready.delta ?? []) if (entry.count < 0) ctx.record?.({ item: String(bot.registry?.items?.[entry.id]?.name ?? entry.id), count: entry.count * times, reason: 'ingredient' });
-  ctx.record?.({ item: args.item, count: after - before, reason: 'crafted' });
-  return { ok: true, text: `${args.item} を ${after - before} 個作った（今 ${after} 個${usesTable ? '、作業台で' : ''}）` };
+    try {
+      const made = await guard(ctx, Promise.resolve(bot.craft(ready, times, usesTable ? table : undefined)), 4000 + times * 400);
+      if (!made) return stopped(bot, 'timeout', `${args.item} を作る途中で時間切れ（今 ${inventoryCount(bot, args.item)} 個）`);
+    } catch (error) {
+      if (error instanceof StepStopped || /Action interrupted/u.test(String((error as Error)?.message))) throw error;
+      return stopped(bot, 'craft_failed', `${args.item} を作れなかった: ${String((error as Error)?.message ?? error).slice(0, 100)}`);
+    }
+    await wait(ctx, 150);
+    const after = inventoryCount(bot, args.item);
+    if (after <= before) return stopped(bot, 'craft_failed', `${args.item} が増えていない（前 ${before} 個、今 ${after} 個）`);
+    return { ok: true, text: `${args.item} を ${after - before} 個作った（今 ${after} 個${usesTable ? '、作業台で' : ''}）` };
+  } finally { record(); }
 }

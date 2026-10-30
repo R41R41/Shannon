@@ -1,6 +1,6 @@
 {
  "contract": "continue-contracts",
- "version": "3.1",
+ "version": "3.2",
  "base": {
   "head": "06f5e55",
   "body": "4e8c3df"
