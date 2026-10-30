@@ -1,8 +1,8 @@
 {
  "producedBy": "backend/scripts/minecraft-continue-lab-probe.ts",
  "bench": "B",
- "bodyRevision": "f7006e64a70b",
- "madeAt": "2026-10-30T19:21:40.058Z",
+ "bodyRevision": "0d0b830c6ad1",
+ "madeAt": "2026-10-30T19:58:41.367Z",
  "answers": "control/stale-owner-cleanup",
  "fixtureSha256": "f17ff65630cfbe6f0205676594fd2fddf2a251edb510bf47b048cd4647f7a938",
  "output": {
