@@ -1,8 +1,8 @@
 {
  "producedBy": "backend/scripts/minecraft-continue-lab-probe.ts",
  "bench": "B",
- "bodyRevision": "6225863dad39",
- "madeAt": "2026-10-29T18:36:55.888Z",
+ "bodyRevision": "19e2b995f2b4",
+ "madeAt": "2026-10-30T01:03:54.351Z",
  "answers": "vertical/boundary2-evidence",
  "fixtureSha256": "20a12729845a11b02fad7e1b20f1cffea63a6bd317dc3c5b46d0ac687fa04c69",
  "substitute": "one floor taken away with /setblock while the stairs go on",
@@ -32,14 +32,14 @@
     "to": "air",
     "usedFor": "steps_valid",
     "step": 1,
-    "t": 1793299004558,
+    "t": 1793322223085,
     "pos": {
      "x": 0,
      "y": 98,
      "z": 1
     },
     "kind": "block_update",
-    "at": "2026-10-29T18:36:44.558Z",
+    "at": "2026-10-30T01:03:43.085Z",
     "command": "lab:q35",
     "hand": 1,
     "life": 4
