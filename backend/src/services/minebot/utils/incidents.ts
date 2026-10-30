@@ -103,8 +103,12 @@ export function explainedStop(line: { do: string; line: string }): { code: strin
  * A line of a hand that failed with the work moving (steps, digs, levels, blocks laid, obsidian made counted in its own words): the length of the act is the work's, not a stall
  * (run 47 hold 4, run 48 hold 3: an obsidian hand that made and took one in 61 s, held as `long`).
  */
-const progressed = (line: { line: string }): boolean => [/(?:道|段) (\d+)/u, /掘 (\d+)/u, /置 (\d+)/u, /黒曜石 (\d+) 個/u, /個のうち (\d+) 個/u, /(\d+) 個(?:を)?(?:掘|採|拾|作)/u]
-  .some(pattern => Number(pattern.exec(line.line)?.[1] ?? 0) > 0);
+const progressed = (line: Pick<ActReport['lines'][number], 'line' | 'progress'>): boolean => {
+  const progress = line.progress, work = progress?.work;
+  if ((progress?.unit !== 'second' && (progress?.done ?? 0) > 0) || (work?.dug ?? 0) > 0 || (work?.placedConfirmed ?? 0) > 0) return true;
+  return [/(?:道|段) (\d+)/u, /掘 (\d+)/u, /置 (\d+)/u, /黒曜石 (\d+) 個/u, /個のうち (\d+) 個/u, /(\d+) 個(?:を)?(?:掘|採|拾|作)/u]
+    .some(pattern => Number(pattern.exec(line.line)?.[1] ?? 0) > 0);
+};
 
 /** The heavy-failure reason of an act's report, or null (light: the box only). */
 export function heavyReason(report: Pick<ActReport, 'ok' | 'lines' | 'stoppedBy'>, ms: number, lowestHp: number | null, died: boolean, seen: Set<string>, task: string): string | null {

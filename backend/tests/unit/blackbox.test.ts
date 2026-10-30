@@ -427,6 +427,14 @@ describe('heavy or light: the stops the body explains and the hands that ran to 
     lightReason(heavyReason(lines('go 止まった limit_time: 90 秒の上限に着いた (1,2,3) 道 40 歩・掘 12・置 0・引き直し 3 回') as never, 91_000, 18, false, seen, 't'));
     expect(heavyReason(lines('go 止まった limit_time: 90 秒の上限に着いた (1,2,3) 道 0 歩・掘 0・置 0') as never, 91_000, 18, false, seen, 't')).toBe('go_limit_time_low:0');
     expect(heavyReason(lines('mine 止まった no_block: …', 'mine') as never, 90_000, 18, false, seen, 't')).toBe('long:90s');
+    // Run 49 hold 1: the planner cancelled after 31 stairs/93 digs to change a nearly broken tool.
+    // The cancellation sentence has no counts; the hand's structured progress is still authoritative.
+    const cut = { ok: false, stoppedBy: 'cancelled', lines: [{ do: 'vertical', status: 'stopped', line: '無い: 命令が止められた（server_cancel）（手の途中）',
+      goal: 'partial', end: 'cut', cutBy: 'cancelled', code: 'cancelled', progress: { unit: 'step', done: 31, left: 17, work: { dug: 93, placeAttempts: 0, stockUsed: 0, placedConfirmed: 0 } } }] };
+    expect(heavyReason(cut as never, 93_563, 20, false, new Set(), 'r49')).not.toMatch(/^long:/);
+    expect(heavyReason(cut as never, 93_563, 3.5, false, new Set(), 'r49')).toBe('near_death:3.5');
+    const idle = { ...cut, lines: [{ ...cut.lines[0], progress: { unit: 'step', done: 0, work: { dug: 0, placeAttempts: 4, placedConfirmed: 0 } } }] };
+    expect(heavyReason(idle as never, 93_563, 20, false, new Set(), 'r49')).toBe('long:94s');
   });
   it('a stop the body explains goes back to the LLM the first time at a place and is held the second time at the same place', () => {
     const seen = new Set<string>();
