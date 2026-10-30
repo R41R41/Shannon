@@ -27,6 +27,11 @@ const FALLBACK: Record<string, [number, number]> = {
 };
 const NOT_FOOD = new Set(['pufferfish', 'poisonous_potato', 'spider_eye', 'chorus_fruit', 'suspicious_stew']);
 
+/** Vanilla nutrition used to recognise the 1.21.11 data generator's double saturation conversion. */
+export function vanillaFoodNutrition(name: string): readonly [number, number] | null {
+  return FALLBACK[name] ?? null;
+}
+
 interface FoodBody {
   food?: number; foodSaturation?: number;
   inventory?: { items?(): Array<{ name: string; count: number }> };

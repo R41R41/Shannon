@@ -1,3 +1,5 @@
+import { vanillaFoodNutrition } from './foodPoints.js';
+
 /**
  * minecraft-data 1.21.11 gives the 108 tier-gated blocks (ores, obsidian,
  * iron blocks...) the material `incorrect_for_wooden_tool`, whose multiplier
@@ -21,10 +23,37 @@ export function repairTierToolMaterials(registry: unknown): string[] {
   return repaired;
 }
 
+/**
+ * The 1.21.11 food data converts an already absolute saturation as a modifier again:
+ * raw pork 1.8 becomes 10.8, cooked pork 12.8 becomes 204.8. Only repair that exact
+ * signature for known vanilla foods and this version; custom foods/values stay as reported.
+ */
+export function repairFoodSaturation(registry: unknown): string[] {
+  const data = registry as { version?: { minecraftVersion?: string }; foodsByName?: Record<string, {
+    foodPoints?: number; saturation?: number; effectiveQuality?: number; saturationRatio?: number;
+  }> } | null;
+  if (data?.version?.minecraftVersion !== '1.21.11' || !data.foodsByName) return [];
+  const repaired: string[] = [];
+  for (const [name, food] of Object.entries(data.foodsByName)) {
+    const nutrition = vanillaFoodNutrition(name);
+    if (!nutrition || food.foodPoints !== nutrition[0] || typeof food.saturation !== 'number') continue;
+    const [hunger, saturation] = nutrition;
+    if (Math.abs(food.saturation - saturation) < 1e-4 || Math.abs(food.saturation - saturation * hunger * 2) > 1e-3) continue;
+    food.saturation = saturation;
+    food.effectiveQuality = hunger + saturation;
+    food.saturationRatio = saturation / hunger;
+    repaired.push(name);
+  }
+  return repaired;
+}
+
 /** Mineflayer may assign bot.registry after createBot returns; repair it once known. */
-export function installTierToolMaterialRepair(bot: { registry?: unknown; on(event: 'login' | 'spawn', listener: () => void): unknown }): void {
-  const repair = () => { repairTierToolMaterials(bot.registry); };
+export function installRegistryRepairs(bot: { registry?: unknown; on(event: 'login' | 'spawn', listener: () => void): unknown }): void {
+  const repair = () => { repairTierToolMaterials(bot.registry); repairFoodSaturation(bot.registry); };
   repair();
   bot.on('login', repair);
   bot.on('spawn', repair);
 }
+
+/** Existing probe callers share the same registry installation boundary. */
+export const installTierToolMaterialRepair = installRegistryRepairs;

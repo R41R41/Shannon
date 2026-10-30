@@ -25,7 +25,7 @@ import { SkillAgent } from './skillAgent.js';
 import { ConstantSkills, CustomBot, InstantSkills } from './types.js';
 import { Utils } from './utils/index.js';
 import { installPlayerLoadedHandshake } from './utils/playerLoadedHandshake.js';
-import { installTierToolMaterialRepair } from './utils/registryRepairs.js';
+import { installRegistryRepairs } from './utils/registryRepairs.js';
 import { installAirSupplyDefault } from './utils/airSupplyDefault.js';
 import { edgeGuardPlugin } from './utils/edgeGuard.js';
 import { breathingReflexPlugin } from './utils/breathingReflex.js';
@@ -140,7 +140,7 @@ export class MinebotClient extends BaseClient {
     this.explicitlyDisconnected = false;
     const connectedBot = this.bot;
     installPlayerLoadedHandshake(connectedBot);
-    installTierToolMaterialRepair(connectedBot);
+    installRegistryRepairs(connectedBot);
     installAirSupplyDefault(connectedBot);
     installMotionRecorder(connectedBot);
     // 2026-10-28: the black box (always on) and the failures written down where they happen: the box, the scene of a heavy one, and the hold a

@@ -48,7 +48,7 @@ vi.mock('../../src/services/minebot/skillAgent.js', () => ({
 vi.mock('../../src/services/minebot/types.js', () => ({ ConstantSkills: class {}, InstantSkills: class {} }));
 vi.mock('../../src/services/minebot/utils/index.js', () => ({ Utils: class { setMovements = noop; } }));
 vi.mock('../../src/services/minebot/utils/playerLoadedHandshake.js', () => ({ installPlayerLoadedHandshake : noop }));
-vi.mock('../../src/services/minebot/utils/registryRepairs.js', () => ({ installTierToolMaterialRepair : noop }));
+vi.mock('../../src/services/minebot/utils/registryRepairs.js', () => ({ installRegistryRepairs : noop }));
 vi.mock('../../src/services/minebot/utils/airSupplyDefault.js', () => ({ installAirSupplyDefault : noop }));
 vi.mock('../../src/services/minebot/utils/edgeGuard.js', () => ({ edgeGuardPlugin : noop }));
 vi.mock('../../src/services/minebot/utils/breathingReflex.js', () => ({ breathingReflexPlugin : noop }));

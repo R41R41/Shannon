@@ -10,7 +10,7 @@ import { plugin as toolPlugin } from 'mineflayer-tool';
 import { ConstantSkills, InstantSkills, type CustomBot } from '../types.js';
 import { Utils } from '../utils/index.js';
 import { installPlayerLoadedHandshake } from '../utils/playerLoadedHandshake.js';
-import { installTierToolMaterialRepair } from '../utils/registryRepairs.js';
+import { installRegistryRepairs } from '../utils/registryRepairs.js';
 import { installAirSupplyDefault } from '../utils/airSupplyDefault.js';
 import { edgeGuardPlugin } from '../utils/edgeGuard.js';
 import { breathingReflexPlugin } from '../utils/breathingReflex.js';
@@ -58,7 +58,7 @@ export async function createProbeBot(port: number, username = 'ShannonProbe', ac
         onMsaCode: () => { console.error('PROBE_ACCOUNT_SIGN_IN_REQUIRED'); process.exit(78); } }
       : { username, auth: 'offline' as const }) }) as CustomBot;
   installPlayerLoadedHandshake(bot);
-  installTierToolMaterialRepair(bot);
+  installRegistryRepairs(bot);
   installAirSupplyDefault(bot);
   installMotionRecorder(bot);
   // 2026-10-28: the black box, as production has it (MINEBOT_BLACKBOX_DIR says where a lab writes it).

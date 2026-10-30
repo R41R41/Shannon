@@ -20,6 +20,8 @@ import { bodyRevision } from '../src/services/minebot/utils/bodyRevision.js';
 import { executeAction, createMotorPort, physicalRoots, preemptLowerPriorityActions } from '../src/services/minebot/execution/ActionExecution.js';
 import { opLogOf } from '../src/services/minebot/utils/opLog.js';
 import { runCover } from '../src/services/minebot/utils/floorReflexes.js';
+import { eat } from '../src/services/minebot/utils/primitives/body.js';
+import { itemFoodPoints } from '../src/services/minebot/utils/foodPoints.js';
 import { localMapFor, MAP_PENDING } from '../src/services/minebot/utils/localMap.js';
 
 const port = Number(process.env.MINECRAFT_CONTINUE_PORT);
@@ -145,6 +147,29 @@ try {
   ({ actor, body } = await connect());
   await reset(actor);
   await sleep(2000);
+
+  // Run 53: compare the installed registry's nutrition with real server hunger/saturation changes.
+  if (wanted.has('food_nutrition')) {
+    for (const item of ['porkchop', 'cooked_porkchop']) {
+      await reset(actor); await ask(`effect clear ${ACTOR}`);
+      await ask(`effect give ${ACTOR} minecraft:hunger 10 255 true`);
+      const until = Date.now() + 7000;
+      while (actor.food > 8 && Date.now() < until) await sleep(20);
+      await ask(`effect clear ${ACTOR}`); await sleep(250);
+      const result = await executeAction(actor, 'lab-food-nutrition', 12_000, async () => {
+        const before = { food: actor.food, saturation: actor.foodSaturation ?? 0 };
+        await ask(`give ${ACTOR} minecraft:${item} 1`); await sleep(100);
+        const meal = await eat({ bot: createMotorPort(actor), stop: new AbortController().signal, deadline: Date.now() + 7000,
+          facing: 'north', base: { x: 0, y: 100, z: 0 } } as never, { item });
+        const after = { food: actor.food, saturation: actor.foodSaturation ?? 0 };
+        return { success: meal.ok, result: JSON.stringify({ before, after, meal, predicted: itemFoodPoints(actor, item),
+          restored: after.food + after.saturation - before.food - before.saturation }) };
+      }, { priority: 300, safetyLease: true, waitForQuiescence: false });
+      let evidence: any = null; try { evidence = JSON.parse(result.result ?? ''); } catch { /* a cancelled hand remains a failed probe */ }
+      check(`run53 nutrition: ${item} points agree with an actual server meal`, !!evidence?.meal.ok
+        && evidence.before.food <= 8 && evidence.restored > 0 && Math.abs(evidence.predicted - evidence.restored) < 0.01, JSON.stringify(evidence ?? result));
+    }
+  }
 
   // Run 52: a body at the cell's edge is still supported by the neighbouring floor after an uncentred dig.
   if (wanted.has('cover_drop')) {
