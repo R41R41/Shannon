@@ -32,7 +32,7 @@ const json = (status: number, body: unknown) => new Response(JSON.stringify(body
 const googleError = (status: number, reason: string) => json(status, { error: { code: status, message: reason, errors: [{ reason }] } });
 const tick = () => new Promise<void>(resolve => setImmediate(resolve));
 
-interface HeadStreamState { streamId: string; platform: 'youtube'; phase: string; startedAt: string; title: string; chatWrites: boolean; broadcast: unknown }
+interface HeadStreamState { streamId: string; platform: 'youtube'; phase: string; startedAt: string; title: string; chatWrites: boolean; broadcast: unknown; targetVideoId?: string }
 
 class FakeHead {
   stream: HeadStreamState | null = null;
@@ -74,7 +74,7 @@ class FakeHead {
       this.log.push('broadcast');
       this.broadcasts.push(body);
       if (!this.stream || this.stream.streamId !== body.streamId) return json(409, { error: 'STREAM_NOT_LIVE' });
-      this.stream = { ...this.stream, phase: 'live', broadcast: { videoId: body.videoId, liveChatId: body.liveChatId, title: body.title, channelId: body.channelId } };
+      this.stream = { ...this.stream, phase: body.onAir ? 'live' : 'waiting_for_chat', broadcast: { videoId: body.videoId, liveChatId: body.liveChatId, title: body.title, channelId: body.channelId, onAir: body.onAir } };
       return json(200, { stream: this.stream });
     }
     if (route === 'POST /v1/platform/stream/comments') {
@@ -114,6 +114,8 @@ class FakeYoutube {
   /** The broadcast list answers empty this many times first (the stream has not started on YouTube yet). */
   emptyBroadcastLists = 0;
   chatId: string | undefined = 'chat-1';
+  actualStartTime: string | undefined = at(0);
+  actualEndTime: string | undefined;
   /** Errors for the next list calls: [status, reason]. */
   listErrors: Array<[number, string]> = [];
   listCalls = 0;
@@ -229,7 +231,7 @@ class FakeYoutube {
       return json(200, { items: this.broadcasts });
     }
     if (route === '/videos') {
-      return json(200, { items: [{ id: query.id, snippet: { title: '配信のタイトル', channelId: 'UCowner' }, liveStreamingDetails: this.chatId ? { activeLiveChatId: this.chatId } : {} }] });
+      return json(200, { items: [{ id: query.id, snippet: { title: '配信のタイトル', channelId: 'UCowner' }, liveStreamingDetails: this.chatId ? { activeLiveChatId: this.chatId, actualStartTime: this.actualStartTime, actualEndTime: this.actualEndTime } : {} }] });
     }
     if (route === '/liveChat/messages/stream') {
       this.streamCalls += 1;
@@ -358,10 +360,10 @@ describe('finding the broadcast', () => {
     await w.run(() => w.head.received.length >= 2);
     const lists = w.youtube.calls.filter(call => call.path === '/liveBroadcasts');
     expect(lists).toHaveLength(3);
-    expect(lists[0].query).toMatchObject({ part: 'snippet,status', mine: 'true', broadcastStatus: 'active' });
+    expect(lists[0].query).toMatchObject({ part: 'snippet,status', broadcastStatus: 'active', broadcastType: 'all' });
     // 15 s of virtual time between two looks (state is read every 5 s in between).
     expect(w.sleeps.slice(0, 6)).toEqual([5000, 5000, 5000, 5000, 5000, 5000]);
-    expect(w.head.broadcasts).toEqual([{ streamId: 'st-1', videoId: 'vid00000001', liveChatId: 'chat-1', title: '配信のタイトル', channelId: 'UCowner' }]);
+    expect(w.head.broadcasts).toEqual([{ streamId: 'st-1', videoId: 'vid00000001', liveChatId: 'chat-1', title: '配信のタイトル', channelId: 'UCowner', onAir: true }]);
     const videos = w.youtube.calls.find(call => call.path === '/videos');
     expect(videos?.query).toMatchObject({ part: 'liveStreamingDetails,snippet', id: 'vid00000001' });
     // The broadcast was told to the head before any comment.
@@ -389,7 +391,7 @@ describe('finding the broadcast', () => {
 
   it('a stream the head already has live (the ear restarted) is read again from its liveChatId, without looking', async () => {
     const w = world();
-    w.head.start({ phase: 'live', broadcast: { videoId: 'vid00000001', liveChatId: 'chat-9', title: 't', channelId: 'UCowner' } });
+    w.head.start({ phase: 'live', broadcast: { onAir: true, videoId: 'vid00000001', liveChatId: 'chat-9', title: 't', channelId: 'UCowner' } });
     w.youtube.messages = manyTexts(2);
     await w.run(() => w.head.received.length >= 2);
     expect(w.youtube.calls.some(call => call.path === '/liveBroadcasts' || call.path === '/videos')).toBe(false);
@@ -412,7 +414,7 @@ describe('finding the broadcast', () => {
 
 describe('reading the chat', () => {
   function live(w: ReturnType<typeof world>) {
-    w.head.start({ phase: 'live', broadcast: { videoId: 'vid00000001', liveChatId: 'chat-1', title: 't', channelId: 'UCowner' } });
+    w.head.start({ phase: 'live', broadcast: { onAir: true, videoId: 'vid00000001', liveChatId: 'chat-1', title: 't', channelId: 'UCowner' } });
   }
 
   it('polling (the fallback): follows pageToken and the polling interval YouTube returns (kept between 8 s and 10 s) and loses nothing', async () => {
@@ -505,7 +507,7 @@ describe('reading the chat', () => {
 
 describe('the end', () => {
   function live(w: ReturnType<typeof world>) {
-    w.head.start({ phase: 'live', broadcast: { videoId: 'vid00000001', liveChatId: 'chat-1', title: 't', channelId: 'UCowner' } });
+    w.head.start({ phase: 'live', broadcast: { onAir: true, videoId: 'vid00000001', liveChatId: 'chat-1', title: 't', channelId: 'UCowner' } });
   }
 
   it('offlineAt: the last comments go first, then the head is told the chat ended', async () => {
@@ -592,7 +594,7 @@ describe('the end', () => {
     live(w);
     w.youtube.onList = call => { if (call === 2) { w.head.stream = { ...w.head.stream!, phase: 'ended' }; } };
     await w.run(() => w.clock() - START >= 30_000);
-    w.head.start({ streamId: 'st-2', phase: 'live', broadcast: { videoId: 'vid00000001', liveChatId: 'chat-2', title: 't', channelId: 'UCowner' } });
+    w.head.start({ streamId: 'st-2', phase: 'live', broadcast: { onAir: true, videoId: 'vid00000001', liveChatId: 'chat-2', title: 't', channelId: 'UCowner' } });
     w.youtube.messages = [textItem('late', 40)];
     await w.run(() => w.head.received.length >= 1);
     expect(w.head.received[0].id).toBe('late');
@@ -601,7 +603,7 @@ describe('the end', () => {
 
 describe('when something fails', () => {
   function live(w: ReturnType<typeof world>) {
-    w.head.start({ phase: 'live', broadcast: { videoId: 'vid00000001', liveChatId: 'chat-1', title: 't', channelId: 'UCowner' } });
+    w.head.start({ phase: 'live', broadcast: { onAir: true, videoId: 'vid00000001', liveChatId: 'chat-1', title: 't', channelId: 'UCowner' } });
   }
 
   it('resends what the head refused with 503, in order, nothing lost and nothing twice', async () => {
@@ -658,7 +660,7 @@ describe('when something fails', () => {
 
 describe('writing into the chat (chatPosts)', () => {
   function live(w: ReturnType<typeof world>, chatWrites: boolean) {
-    w.head.start({ phase: 'live', chatWrites, broadcast: { videoId: 'vid00000001', liveChatId: 'chat-1', title: 't', channelId: 'UCowner' } });
+    w.head.start({ phase: 'live', chatWrites, broadcast: { onAir: true, videoId: 'vid00000001', liveChatId: 'chat-1', title: 't', channelId: 'UCowner' } });
   }
 
   it('posts what the head returns with the comments, then sends the receipt', async () => {
@@ -720,7 +722,7 @@ describe('writing into the chat (chatPosts)', () => {
 
 describe('reading the chat over streamList', () => {
   function live(w: ReturnType<typeof world>, extra: Partial<HeadStreamState> = {}) {
-    w.head.start({ phase: 'live', broadcast: { videoId: 'vid00000001', liveChatId: 'chat-1', title: 't', channelId: 'UCowner' }, ...extra });
+    w.head.start({ phase: 'live', broadcast: { onAir: true, videoId: 'vid00000001', liveChatId: 'chat-1', title: 't', channelId: 'UCowner' }, ...extra });
   }
   const ids = (count: number, from = 1) => Array.from({ length: count }, (_, i) => `m${from + i}`);
   /** The first connection of a stream is made after the ear has asked for its 5 s tick, so every gap between two connects holds one. */
@@ -1109,7 +1111,7 @@ describe('the API units', () => {
 
   it('polling (the fallback) is 5 units a poll at no more than one poll in 8 s: about 2,250 units an hour', async () => {
     const w = world();
-    w.head.start({ phase: 'live', broadcast: { videoId: 'vid00000001', liveChatId: 'chat-1', title: 't', channelId: 'UCowner' } });
+    w.head.start({ phase: 'live', broadcast: { onAir: true, videoId: 'vid00000001', liveChatId: 'chat-1', title: 't', channelId: 'UCowner' } });
     w.youtube.polling = [5000];
     await w.run(() => w.clock() - START >= 3_600_000, 20_000);
     // 8 s floor: 450 polls an hour, 5 units each, plus the 5 units of each try at streamList (every 15 minutes: 4 of them).
@@ -1121,7 +1123,7 @@ describe('the API units', () => {
 
   it('streamList is one 5-unit connection however long the stream is quiet: an hour of silence costs 5 units', async () => {
     const w = world({ via: 'stream' });
-    w.head.start({ phase: 'live', broadcast: { videoId: 'vid00000001', liveChatId: 'chat-1', title: 't', channelId: 'UCowner' } });
+    w.head.start({ phase: 'live', broadcast: { onAir: true, videoId: 'vid00000001', liveChatId: 'chat-1', title: 't', channelId: 'UCowner' } });
     await w.run(() => w.clock() - START >= 3_600_000, 20_000);
     expect(w.youtube.streamCalls).toBe(1);
     expect(w.youtube.listCalls).toBe(0);
@@ -1347,5 +1349,26 @@ describe('the legacy live-chat reply path is gone', () => {
     expect(client).toContain('public async checkComments');
     expect(client).toContain('public async checkSubscribers');
     expect(client).toContain('public async replyComment');
+  });
+});
+
+describe('セッション指定の動画とYouTubeの開始確認', () => {
+  it('環境の動画より配信主が指定した動画を優先し、開始まではonAirをfalseにする', async () => {
+    const w = world({ liveUrl: 'old00000001' });
+    w.head.start({ targetVideoId: 'AGenSh4kF9Y' });
+    w.youtube.actualStartTime = undefined;
+    await w.run(() => w.head.broadcasts.length >= 1);
+    expect(w.youtube.calls.filter(c => c.path === '/liveBroadcasts')).toHaveLength(0);
+    expect(w.youtube.calls.find(c => c.path === '/videos')?.query.id).toBe('AGenSh4kF9Y');
+    expect(w.head.broadcasts[0]).toMatchObject({ videoId: 'AGenSh4kF9Y', onAir: false });
+  });
+  it('チャットを読みながら実開始を確認し、同じ動画をonAirに更新する', async () => {
+    const w = world();
+    w.head.start({ targetVideoId: 'AGenSh4kF9Y' });
+    w.youtube.actualStartTime = undefined;
+    w.youtube.onPump = () => { if (w.head.broadcasts.length) w.youtube.actualStartTime = at(2); };
+    await w.run(() => w.head.broadcasts.some(b => b.onAir === true));
+    expect(w.head.broadcasts[0].onAir).toBe(false);
+    expect(w.head.broadcasts.at(-1)).toMatchObject({ videoId: 'AGenSh4kF9Y', onAir: true });
   });
 });
