@@ -1,0 +1,2690 @@
+[
+  {
+    "x": 2,
+    "y": -19,
+    "z": -8,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 3,
+    "y": -19,
+    "z": -8,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 4,
+    "y": -19,
+    "z": -8,
+    "name": "tuff"
+  },
+  {
+    "x": 5,
+    "y": -19,
+    "z": -8,
+    "name": "tuff"
+  },
+  {
+    "x": 6,
+    "y": -19,
+    "z": -8,
+    "name": "tuff"
+  },
+  {
+    "x": 7,
+    "y": -19,
+    "z": -8,
+    "name": "tuff"
+  },
+  {
+    "x": 8,
+    "y": -19,
+    "z": -8,
+    "name": "tuff"
+  },
+  {
+    "x": 9,
+    "y": -19,
+    "z": -8,
+    "name": "tuff"
+  },
+  {
+    "x": 2,
+    "y": -19,
+    "z": -7,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 3,
+    "y": -19,
+    "z": -7,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 4,
+    "y": -19,
+    "z": -7,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 5,
+    "y": -19,
+    "z": -7,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 6,
+    "y": -19,
+    "z": -7,
+    "name": "tuff"
+  },
+  {
+    "x": 7,
+    "y": -19,
+    "z": -7,
+    "name": "tuff"
+  },
+  {
+    "x": 8,
+    "y": -19,
+    "z": -7,
+    "name": "tuff"
+  },
+  {
+    "x": 9,
+    "y": -19,
+    "z": -7,
+    "name": "tuff"
+  },
+  {
+    "x": 2,
+    "y": -19,
+    "z": -6,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 3,
+    "y": -19,
+    "z": -6,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 4,
+    "y": -19,
+    "z": -6,
+    "name": "deepslate_iron_ore"
+  },
+  {
+    "x": 5,
+    "y": -19,
+    "z": -6,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 6,
+    "y": -19,
+    "z": -6,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 7,
+    "y": -19,
+    "z": -6,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 8,
+    "y": -19,
+    "z": -6,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 9,
+    "y": -19,
+    "z": -6,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 2,
+    "y": -19,
+    "z": -5,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 3,
+    "y": -19,
+    "z": -5,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 4,
+    "y": -19,
+    "z": -5,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 5,
+    "y": -19,
+    "z": -5,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 6,
+    "y": -19,
+    "z": -5,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 7,
+    "y": -19,
+    "z": -5,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 8,
+    "y": -19,
+    "z": -5,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 9,
+    "y": -19,
+    "z": -5,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 2,
+    "y": -19,
+    "z": -4,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 3,
+    "y": -19,
+    "z": -4,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 4,
+    "y": -19,
+    "z": -4,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 5,
+    "y": -19,
+    "z": -4,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 6,
+    "y": -19,
+    "z": -4,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 7,
+    "y": -19,
+    "z": -4,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 8,
+    "y": -19,
+    "z": -4,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 9,
+    "y": -19,
+    "z": -4,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 2,
+    "y": -19,
+    "z": -3,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 3,
+    "y": -19,
+    "z": -3,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 4,
+    "y": -19,
+    "z": -3,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 5,
+    "y": -19,
+    "z": -3,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 6,
+    "y": -19,
+    "z": -3,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 7,
+    "y": -19,
+    "z": -3,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 8,
+    "y": -19,
+    "z": -3,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 9,
+    "y": -19,
+    "z": -3,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 2,
+    "y": -19,
+    "z": -2,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 3,
+    "y": -19,
+    "z": -2,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 4,
+    "y": -19,
+    "z": -2,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 5,
+    "y": -19,
+    "z": -2,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 6,
+    "y": -19,
+    "z": -2,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 7,
+    "y": -19,
+    "z": -2,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 8,
+    "y": -19,
+    "z": -2,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 9,
+    "y": -19,
+    "z": -2,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 2,
+    "y": -19,
+    "z": -1,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 3,
+    "y": -19,
+    "z": -1,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 4,
+    "y": -19,
+    "z": -1,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 5,
+    "y": -19,
+    "z": -1,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 6,
+    "y": -19,
+    "z": -1,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 7,
+    "y": -19,
+    "z": -1,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 8,
+    "y": -19,
+    "z": -1,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 9,
+    "y": -19,
+    "z": -1,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 2,
+    "y": -18,
+    "z": -8,
+    "name": "tuff"
+  },
+  {
+    "x": 3,
+    "y": -18,
+    "z": -8,
+    "name": "tuff"
+  },
+  {
+    "x": 4,
+    "y": -18,
+    "z": -8,
+    "name": "tuff"
+  },
+  {
+    "x": 5,
+    "y": -18,
+    "z": -8,
+    "name": "tuff"
+  },
+  {
+    "x": 6,
+    "y": -18,
+    "z": -8,
+    "name": "tuff"
+  },
+  {
+    "x": 7,
+    "y": -18,
+    "z": -8,
+    "name": "tuff"
+  },
+  {
+    "x": 8,
+    "y": -18,
+    "z": -8,
+    "name": "tuff"
+  },
+  {
+    "x": 9,
+    "y": -18,
+    "z": -8,
+    "name": "tuff"
+  },
+  {
+    "x": 2,
+    "y": -18,
+    "z": -7,
+    "name": "air"
+  },
+  {
+    "x": 3,
+    "y": -18,
+    "z": -7,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 4,
+    "y": -18,
+    "z": -7,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 5,
+    "y": -18,
+    "z": -7,
+    "name": "tuff"
+  },
+  {
+    "x": 6,
+    "y": -18,
+    "z": -7,
+    "name": "tuff"
+  },
+  {
+    "x": 7,
+    "y": -18,
+    "z": -7,
+    "name": "tuff"
+  },
+  {
+    "x": 8,
+    "y": -18,
+    "z": -7,
+    "name": "tuff"
+  },
+  {
+    "x": 9,
+    "y": -18,
+    "z": -7,
+    "name": "tuff"
+  },
+  {
+    "x": 2,
+    "y": -18,
+    "z": -6,
+    "name": "air"
+  },
+  {
+    "x": 3,
+    "y": -18,
+    "z": -6,
+    "name": "air"
+  },
+  {
+    "x": 4,
+    "y": -18,
+    "z": -6,
+    "name": "air"
+  },
+  {
+    "x": 5,
+    "y": -18,
+    "z": -6,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 6,
+    "y": -18,
+    "z": -6,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 7,
+    "y": -18,
+    "z": -6,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 8,
+    "y": -18,
+    "z": -6,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 9,
+    "y": -18,
+    "z": -6,
+    "name": "tuff"
+  },
+  {
+    "x": 2,
+    "y": -18,
+    "z": -5,
+    "name": "air"
+  },
+  {
+    "x": 3,
+    "y": -18,
+    "z": -5,
+    "name": "air"
+  },
+  {
+    "x": 4,
+    "y": -18,
+    "z": -5,
+    "name": "air"
+  },
+  {
+    "x": 5,
+    "y": -18,
+    "z": -5,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 6,
+    "y": -18,
+    "z": -5,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 7,
+    "y": -18,
+    "z": -5,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 8,
+    "y": -18,
+    "z": -5,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 9,
+    "y": -18,
+    "z": -5,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 2,
+    "y": -18,
+    "z": -4,
+    "name": "air"
+  },
+  {
+    "x": 3,
+    "y": -18,
+    "z": -4,
+    "name": "air"
+  },
+  {
+    "x": 4,
+    "y": -18,
+    "z": -4,
+    "name": "air"
+  },
+  {
+    "x": 5,
+    "y": -18,
+    "z": -4,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 6,
+    "y": -18,
+    "z": -4,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 7,
+    "y": -18,
+    "z": -4,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 8,
+    "y": -18,
+    "z": -4,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 9,
+    "y": -18,
+    "z": -4,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 2,
+    "y": -18,
+    "z": -3,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 3,
+    "y": -18,
+    "z": -3,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 4,
+    "y": -18,
+    "z": -3,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 5,
+    "y": -18,
+    "z": -3,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 6,
+    "y": -18,
+    "z": -3,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 7,
+    "y": -18,
+    "z": -3,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 8,
+    "y": -18,
+    "z": -3,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 9,
+    "y": -18,
+    "z": -3,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 2,
+    "y": -18,
+    "z": -2,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 3,
+    "y": -18,
+    "z": -2,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 4,
+    "y": -18,
+    "z": -2,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 5,
+    "y": -18,
+    "z": -2,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 6,
+    "y": -18,
+    "z": -2,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 7,
+    "y": -18,
+    "z": -2,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 8,
+    "y": -18,
+    "z": -2,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 9,
+    "y": -18,
+    "z": -2,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 2,
+    "y": -18,
+    "z": -1,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 3,
+    "y": -18,
+    "z": -1,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 4,
+    "y": -18,
+    "z": -1,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 5,
+    "y": -18,
+    "z": -1,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 6,
+    "y": -18,
+    "z": -1,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 7,
+    "y": -18,
+    "z": -1,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 8,
+    "y": -18,
+    "z": -1,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 9,
+    "y": -18,
+    "z": -1,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 2,
+    "y": -17,
+    "z": -8,
+    "name": "air"
+  },
+  {
+    "x": 3,
+    "y": -17,
+    "z": -8,
+    "name": "tuff"
+  },
+  {
+    "x": 4,
+    "y": -17,
+    "z": -8,
+    "name": "tuff"
+  },
+  {
+    "x": 5,
+    "y": -17,
+    "z": -8,
+    "name": "tuff"
+  },
+  {
+    "x": 6,
+    "y": -17,
+    "z": -8,
+    "name": "tuff"
+  },
+  {
+    "x": 7,
+    "y": -17,
+    "z": -8,
+    "name": "tuff"
+  },
+  {
+    "x": 8,
+    "y": -17,
+    "z": -8,
+    "name": "tuff"
+  },
+  {
+    "x": 9,
+    "y": -17,
+    "z": -8,
+    "name": "tuff"
+  },
+  {
+    "x": 2,
+    "y": -17,
+    "z": -7,
+    "name": "air"
+  },
+  {
+    "x": 3,
+    "y": -17,
+    "z": -7,
+    "name": "air"
+  },
+  {
+    "x": 4,
+    "y": -17,
+    "z": -7,
+    "name": "air"
+  },
+  {
+    "x": 5,
+    "y": -17,
+    "z": -7,
+    "name": "air"
+  },
+  {
+    "x": 6,
+    "y": -17,
+    "z": -7,
+    "name": "tuff"
+  },
+  {
+    "x": 7,
+    "y": -17,
+    "z": -7,
+    "name": "tuff"
+  },
+  {
+    "x": 8,
+    "y": -17,
+    "z": -7,
+    "name": "tuff"
+  },
+  {
+    "x": 9,
+    "y": -17,
+    "z": -7,
+    "name": "tuff"
+  },
+  {
+    "x": 2,
+    "y": -17,
+    "z": -6,
+    "name": "air"
+  },
+  {
+    "x": 3,
+    "y": -17,
+    "z": -6,
+    "name": "air"
+  },
+  {
+    "x": 4,
+    "y": -17,
+    "z": -6,
+    "name": "air"
+  },
+  {
+    "x": 5,
+    "y": -17,
+    "z": -6,
+    "name": "air"
+  },
+  {
+    "x": 6,
+    "y": -17,
+    "z": -6,
+    "name": "air"
+  },
+  {
+    "x": 7,
+    "y": -17,
+    "z": -6,
+    "name": "tuff"
+  },
+  {
+    "x": 8,
+    "y": -17,
+    "z": -6,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 9,
+    "y": -17,
+    "z": -6,
+    "name": "tuff"
+  },
+  {
+    "x": 2,
+    "y": -17,
+    "z": -5,
+    "name": "air"
+  },
+  {
+    "x": 3,
+    "y": -17,
+    "z": -5,
+    "name": "air"
+  },
+  {
+    "x": 4,
+    "y": -17,
+    "z": -5,
+    "name": "air"
+  },
+  {
+    "x": 5,
+    "y": -17,
+    "z": -5,
+    "name": "lava[level=6]"
+  },
+  {
+    "x": 6,
+    "y": -17,
+    "z": -5,
+    "name": "air"
+  },
+  {
+    "x": 7,
+    "y": -17,
+    "z": -5,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 8,
+    "y": -17,
+    "z": -5,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 9,
+    "y": -17,
+    "z": -5,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 2,
+    "y": -17,
+    "z": -4,
+    "name": "air"
+  },
+  {
+    "x": 3,
+    "y": -17,
+    "z": -4,
+    "name": "air"
+  },
+  {
+    "x": 4,
+    "y": -17,
+    "z": -4,
+    "name": "cobblestone"
+  },
+  {
+    "x": 5,
+    "y": -17,
+    "z": -4,
+    "name": "lava[level=4]"
+  },
+  {
+    "x": 6,
+    "y": -17,
+    "z": -4,
+    "name": "lava[level=2]"
+  },
+  {
+    "x": 7,
+    "y": -17,
+    "z": -4,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 8,
+    "y": -17,
+    "z": -4,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 9,
+    "y": -17,
+    "z": -4,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 2,
+    "y": -17,
+    "z": -3,
+    "name": "air"
+  },
+  {
+    "x": 3,
+    "y": -17,
+    "z": -3,
+    "name": "air"
+  },
+  {
+    "x": 4,
+    "y": -17,
+    "z": -3,
+    "name": "cobblestone"
+  },
+  {
+    "x": 5,
+    "y": -17,
+    "z": -3,
+    "name": "lava[level=2]"
+  },
+  {
+    "x": 6,
+    "y": -17,
+    "z": -3,
+    "name": "lava[level=8]"
+  },
+  {
+    "x": 7,
+    "y": -17,
+    "z": -3,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 8,
+    "y": -17,
+    "z": -3,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 9,
+    "y": -17,
+    "z": -3,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 2,
+    "y": -17,
+    "z": -2,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 3,
+    "y": -17,
+    "z": -2,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 4,
+    "y": -17,
+    "z": -2,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 5,
+    "y": -17,
+    "z": -2,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 6,
+    "y": -17,
+    "z": -2,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 7,
+    "y": -17,
+    "z": -2,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 8,
+    "y": -17,
+    "z": -2,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 9,
+    "y": -17,
+    "z": -2,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 2,
+    "y": -17,
+    "z": -1,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 3,
+    "y": -17,
+    "z": -1,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 4,
+    "y": -17,
+    "z": -1,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 5,
+    "y": -17,
+    "z": -1,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 6,
+    "y": -17,
+    "z": -1,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 7,
+    "y": -17,
+    "z": -1,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 8,
+    "y": -17,
+    "z": -1,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 9,
+    "y": -17,
+    "z": -1,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 2,
+    "y": -16,
+    "z": -8,
+    "name": "tuff"
+  },
+  {
+    "x": 3,
+    "y": -16,
+    "z": -8,
+    "name": "tuff"
+  },
+  {
+    "x": 4,
+    "y": -16,
+    "z": -8,
+    "name": "tuff"
+  },
+  {
+    "x": 5,
+    "y": -16,
+    "z": -8,
+    "name": "tuff"
+  },
+  {
+    "x": 6,
+    "y": -16,
+    "z": -8,
+    "name": "tuff"
+  },
+  {
+    "x": 7,
+    "y": -16,
+    "z": -8,
+    "name": "tuff"
+  },
+  {
+    "x": 8,
+    "y": -16,
+    "z": -8,
+    "name": "tuff"
+  },
+  {
+    "x": 9,
+    "y": -16,
+    "z": -8,
+    "name": "tuff"
+  },
+  {
+    "x": 2,
+    "y": -16,
+    "z": -7,
+    "name": "air"
+  },
+  {
+    "x": 3,
+    "y": -16,
+    "z": -7,
+    "name": "air"
+  },
+  {
+    "x": 4,
+    "y": -16,
+    "z": -7,
+    "name": "air"
+  },
+  {
+    "x": 5,
+    "y": -16,
+    "z": -7,
+    "name": "air"
+  },
+  {
+    "x": 6,
+    "y": -16,
+    "z": -7,
+    "name": "air"
+  },
+  {
+    "x": 7,
+    "y": -16,
+    "z": -7,
+    "name": "tuff"
+  },
+  {
+    "x": 8,
+    "y": -16,
+    "z": -7,
+    "name": "tuff"
+  },
+  {
+    "x": 9,
+    "y": -16,
+    "z": -7,
+    "name": "tuff"
+  },
+  {
+    "x": 2,
+    "y": -16,
+    "z": -6,
+    "name": "air"
+  },
+  {
+    "x": 3,
+    "y": -16,
+    "z": -6,
+    "name": "air"
+  },
+  {
+    "x": 4,
+    "y": -16,
+    "z": -6,
+    "name": "air"
+  },
+  {
+    "x": 5,
+    "y": -16,
+    "z": -6,
+    "name": "air"
+  },
+  {
+    "x": 6,
+    "y": -16,
+    "z": -6,
+    "name": "air"
+  },
+  {
+    "x": 7,
+    "y": -16,
+    "z": -6,
+    "name": "tuff"
+  },
+  {
+    "x": 8,
+    "y": -16,
+    "z": -6,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 9,
+    "y": -16,
+    "z": -6,
+    "name": "tuff"
+  },
+  {
+    "x": 2,
+    "y": -16,
+    "z": -5,
+    "name": "cobblestone"
+  },
+  {
+    "x": 3,
+    "y": -16,
+    "z": -5,
+    "name": "cobblestone"
+  },
+  {
+    "x": 4,
+    "y": -16,
+    "z": -5,
+    "name": "air"
+  },
+  {
+    "x": 5,
+    "y": -16,
+    "z": -5,
+    "name": "air"
+  },
+  {
+    "x": 6,
+    "y": -16,
+    "z": -5,
+    "name": "air"
+  },
+  {
+    "x": 7,
+    "y": -16,
+    "z": -5,
+    "name": "air"
+  },
+  {
+    "x": 8,
+    "y": -16,
+    "z": -5,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 9,
+    "y": -16,
+    "z": -5,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 2,
+    "y": -16,
+    "z": -4,
+    "name": "air"
+  },
+  {
+    "x": 3,
+    "y": -16,
+    "z": -4,
+    "name": "air"
+  },
+  {
+    "x": 4,
+    "y": -16,
+    "z": -4,
+    "name": "air"
+  },
+  {
+    "x": 5,
+    "y": -16,
+    "z": -4,
+    "name": "air"
+  },
+  {
+    "x": 6,
+    "y": -16,
+    "z": -4,
+    "name": "air"
+  },
+  {
+    "x": 7,
+    "y": -16,
+    "z": -4,
+    "name": "air"
+  },
+  {
+    "x": 8,
+    "y": -16,
+    "z": -4,
+    "name": "air"
+  },
+  {
+    "x": 9,
+    "y": -16,
+    "z": -4,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 2,
+    "y": -16,
+    "z": -3,
+    "name": "air"
+  },
+  {
+    "x": 3,
+    "y": -16,
+    "z": -3,
+    "name": "air"
+  },
+  {
+    "x": 4,
+    "y": -16,
+    "z": -3,
+    "name": "air"
+  },
+  {
+    "x": 5,
+    "y": -16,
+    "z": -3,
+    "name": "air"
+  },
+  {
+    "x": 6,
+    "y": -16,
+    "z": -3,
+    "name": "lava[level=4]"
+  },
+  {
+    "x": 7,
+    "y": -16,
+    "z": -3,
+    "name": "lava[level=2]"
+  },
+  {
+    "x": 8,
+    "y": -16,
+    "z": -3,
+    "name": "lava[level=8]"
+  },
+  {
+    "x": 9,
+    "y": -16,
+    "z": -3,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 2,
+    "y": -16,
+    "z": -2,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 3,
+    "y": -16,
+    "z": -2,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 4,
+    "y": -16,
+    "z": -2,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 5,
+    "y": -16,
+    "z": -2,
+    "name": "air"
+  },
+  {
+    "x": 6,
+    "y": -16,
+    "z": -2,
+    "name": "lava[level=2]"
+  },
+  {
+    "x": 7,
+    "y": -16,
+    "z": -2,
+    "name": "lava[level=8]"
+  },
+  {
+    "x": 8,
+    "y": -16,
+    "z": -2,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 9,
+    "y": -16,
+    "z": -2,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 2,
+    "y": -16,
+    "z": -1,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 3,
+    "y": -16,
+    "z": -1,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 4,
+    "y": -16,
+    "z": -1,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 5,
+    "y": -16,
+    "z": -1,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 6,
+    "y": -16,
+    "z": -1,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 7,
+    "y": -16,
+    "z": -1,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 8,
+    "y": -16,
+    "z": -1,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 9,
+    "y": -16,
+    "z": -1,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 2,
+    "y": -15,
+    "z": -8,
+    "name": "tuff"
+  },
+  {
+    "x": 3,
+    "y": -15,
+    "z": -8,
+    "name": "tuff"
+  },
+  {
+    "x": 4,
+    "y": -15,
+    "z": -8,
+    "name": "tuff"
+  },
+  {
+    "x": 5,
+    "y": -15,
+    "z": -8,
+    "name": "tuff"
+  },
+  {
+    "x": 6,
+    "y": -15,
+    "z": -8,
+    "name": "tuff"
+  },
+  {
+    "x": 7,
+    "y": -15,
+    "z": -8,
+    "name": "tuff"
+  },
+  {
+    "x": 8,
+    "y": -15,
+    "z": -8,
+    "name": "tuff"
+  },
+  {
+    "x": 9,
+    "y": -15,
+    "z": -8,
+    "name": "tuff"
+  },
+  {
+    "x": 2,
+    "y": -15,
+    "z": -7,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 3,
+    "y": -15,
+    "z": -7,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 4,
+    "y": -15,
+    "z": -7,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 5,
+    "y": -15,
+    "z": -7,
+    "name": "tuff"
+  },
+  {
+    "x": 6,
+    "y": -15,
+    "z": -7,
+    "name": "tuff"
+  },
+  {
+    "x": 7,
+    "y": -15,
+    "z": -7,
+    "name": "tuff"
+  },
+  {
+    "x": 8,
+    "y": -15,
+    "z": -7,
+    "name": "tuff"
+  },
+  {
+    "x": 9,
+    "y": -15,
+    "z": -7,
+    "name": "tuff"
+  },
+  {
+    "x": 2,
+    "y": -15,
+    "z": -6,
+    "name": "air"
+  },
+  {
+    "x": 3,
+    "y": -15,
+    "z": -6,
+    "name": "air"
+  },
+  {
+    "x": 4,
+    "y": -15,
+    "z": -6,
+    "name": "air"
+  },
+  {
+    "x": 5,
+    "y": -15,
+    "z": -6,
+    "name": "air"
+  },
+  {
+    "x": 6,
+    "y": -15,
+    "z": -6,
+    "name": "air"
+  },
+  {
+    "x": 7,
+    "y": -15,
+    "z": -6,
+    "name": "air"
+  },
+  {
+    "x": 8,
+    "y": -15,
+    "z": -6,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 9,
+    "y": -15,
+    "z": -6,
+    "name": "tuff"
+  },
+  {
+    "x": 2,
+    "y": -15,
+    "z": -5,
+    "name": "cobblestone"
+  },
+  {
+    "x": 3,
+    "y": -15,
+    "z": -5,
+    "name": "air"
+  },
+  {
+    "x": 4,
+    "y": -15,
+    "z": -5,
+    "name": "air"
+  },
+  {
+    "x": 5,
+    "y": -15,
+    "z": -5,
+    "name": "air"
+  },
+  {
+    "x": 6,
+    "y": -15,
+    "z": -5,
+    "name": "air"
+  },
+  {
+    "x": 7,
+    "y": -15,
+    "z": -5,
+    "name": "air"
+  },
+  {
+    "x": 8,
+    "y": -15,
+    "z": -5,
+    "name": "air"
+  },
+  {
+    "x": 9,
+    "y": -15,
+    "z": -5,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 2,
+    "y": -15,
+    "z": -4,
+    "name": "air"
+  },
+  {
+    "x": 3,
+    "y": -15,
+    "z": -4,
+    "name": "air"
+  },
+  {
+    "x": 4,
+    "y": -15,
+    "z": -4,
+    "name": "air"
+  },
+  {
+    "x": 5,
+    "y": -15,
+    "z": -4,
+    "name": "air"
+  },
+  {
+    "x": 6,
+    "y": -15,
+    "z": -4,
+    "name": "air"
+  },
+  {
+    "x": 7,
+    "y": -15,
+    "z": -4,
+    "name": "air"
+  },
+  {
+    "x": 8,
+    "y": -15,
+    "z": -4,
+    "name": "air"
+  },
+  {
+    "x": 9,
+    "y": -15,
+    "z": -4,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 2,
+    "y": -15,
+    "z": -3,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 3,
+    "y": -15,
+    "z": -3,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 4,
+    "y": -15,
+    "z": -3,
+    "name": "air"
+  },
+  {
+    "x": 5,
+    "y": -15,
+    "z": -3,
+    "name": "cobblestone"
+  },
+  {
+    "x": 6,
+    "y": -15,
+    "z": -3,
+    "name": "air"
+  },
+  {
+    "x": 7,
+    "y": -15,
+    "z": -3,
+    "name": "air"
+  },
+  {
+    "x": 8,
+    "y": -15,
+    "z": -3,
+    "name": "lava[level=2]"
+  },
+  {
+    "x": 9,
+    "y": -15,
+    "z": -3,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 2,
+    "y": -15,
+    "z": -2,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 3,
+    "y": -15,
+    "z": -2,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 4,
+    "y": -15,
+    "z": -2,
+    "name": "air"
+  },
+  {
+    "x": 5,
+    "y": -15,
+    "z": -2,
+    "name": "cobblestone"
+  },
+  {
+    "x": 6,
+    "y": -15,
+    "z": -2,
+    "name": "air"
+  },
+  {
+    "x": 7,
+    "y": -15,
+    "z": -2,
+    "name": "lava[level=2]"
+  },
+  {
+    "x": 8,
+    "y": -15,
+    "z": -2,
+    "name": "lava[level=8]"
+  },
+  {
+    "x": 9,
+    "y": -15,
+    "z": -2,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 2,
+    "y": -15,
+    "z": -1,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 3,
+    "y": -15,
+    "z": -1,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 4,
+    "y": -15,
+    "z": -1,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 5,
+    "y": -15,
+    "z": -1,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 6,
+    "y": -15,
+    "z": -1,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 7,
+    "y": -15,
+    "z": -1,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 8,
+    "y": -15,
+    "z": -1,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 9,
+    "y": -15,
+    "z": -1,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 2,
+    "y": -14,
+    "z": -8,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 3,
+    "y": -14,
+    "z": -8,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 4,
+    "y": -14,
+    "z": -8,
+    "name": "tuff"
+  },
+  {
+    "x": 5,
+    "y": -14,
+    "z": -8,
+    "name": "tuff"
+  },
+  {
+    "x": 6,
+    "y": -14,
+    "z": -8,
+    "name": "tuff"
+  },
+  {
+    "x": 7,
+    "y": -14,
+    "z": -8,
+    "name": "tuff"
+  },
+  {
+    "x": 8,
+    "y": -14,
+    "z": -8,
+    "name": "tuff"
+  },
+  {
+    "x": 9,
+    "y": -14,
+    "z": -8,
+    "name": "tuff"
+  },
+  {
+    "x": 2,
+    "y": -14,
+    "z": -7,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 3,
+    "y": -14,
+    "z": -7,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 4,
+    "y": -14,
+    "z": -7,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 5,
+    "y": -14,
+    "z": -7,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 6,
+    "y": -14,
+    "z": -7,
+    "name": "tuff"
+  },
+  {
+    "x": 7,
+    "y": -14,
+    "z": -7,
+    "name": "tuff"
+  },
+  {
+    "x": 8,
+    "y": -14,
+    "z": -7,
+    "name": "tuff"
+  },
+  {
+    "x": 9,
+    "y": -14,
+    "z": -7,
+    "name": "tuff"
+  },
+  {
+    "x": 2,
+    "y": -14,
+    "z": -6,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 3,
+    "y": -14,
+    "z": -6,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 4,
+    "y": -14,
+    "z": -6,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 5,
+    "y": -14,
+    "z": -6,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 6,
+    "y": -14,
+    "z": -6,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 7,
+    "y": -14,
+    "z": -6,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 8,
+    "y": -14,
+    "z": -6,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 9,
+    "y": -14,
+    "z": -6,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 2,
+    "y": -14,
+    "z": -5,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 3,
+    "y": -14,
+    "z": -5,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 4,
+    "y": -14,
+    "z": -5,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 5,
+    "y": -14,
+    "z": -5,
+    "name": "air"
+  },
+  {
+    "x": 6,
+    "y": -14,
+    "z": -5,
+    "name": "air"
+  },
+  {
+    "x": 7,
+    "y": -14,
+    "z": -5,
+    "name": "air"
+  },
+  {
+    "x": 8,
+    "y": -14,
+    "z": -5,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 9,
+    "y": -14,
+    "z": -5,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 2,
+    "y": -14,
+    "z": -4,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 3,
+    "y": -14,
+    "z": -4,
+    "name": "air"
+  },
+  {
+    "x": 4,
+    "y": -14,
+    "z": -4,
+    "name": "air"
+  },
+  {
+    "x": 5,
+    "y": -14,
+    "z": -4,
+    "name": "air"
+  },
+  {
+    "x": 6,
+    "y": -14,
+    "z": -4,
+    "name": "air"
+  },
+  {
+    "x": 7,
+    "y": -14,
+    "z": -4,
+    "name": "air"
+  },
+  {
+    "x": 8,
+    "y": -14,
+    "z": -4,
+    "name": "air"
+  },
+  {
+    "x": 9,
+    "y": -14,
+    "z": -4,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 2,
+    "y": -14,
+    "z": -3,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 3,
+    "y": -14,
+    "z": -3,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 4,
+    "y": -14,
+    "z": -3,
+    "name": "air"
+  },
+  {
+    "x": 5,
+    "y": -14,
+    "z": -3,
+    "name": "air"
+  },
+  {
+    "x": 6,
+    "y": -14,
+    "z": -3,
+    "name": "air"
+  },
+  {
+    "x": 7,
+    "y": -14,
+    "z": -3,
+    "name": "air"
+  },
+  {
+    "x": 8,
+    "y": -14,
+    "z": -3,
+    "name": "air"
+  },
+  {
+    "x": 9,
+    "y": -14,
+    "z": -3,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 2,
+    "y": -14,
+    "z": -2,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 3,
+    "y": -14,
+    "z": -2,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 4,
+    "y": -14,
+    "z": -2,
+    "name": "air"
+  },
+  {
+    "x": 5,
+    "y": -14,
+    "z": -2,
+    "name": "air"
+  },
+  {
+    "x": 6,
+    "y": -14,
+    "z": -2,
+    "name": "air"
+  },
+  {
+    "x": 7,
+    "y": -14,
+    "z": -2,
+    "name": "air"
+  },
+  {
+    "x": 8,
+    "y": -14,
+    "z": -2,
+    "name": "lava[level=6]"
+  },
+  {
+    "x": 9,
+    "y": -14,
+    "z": -2,
+    "name": "lava[level=4]"
+  },
+  {
+    "x": 2,
+    "y": -14,
+    "z": -1,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 3,
+    "y": -14,
+    "z": -1,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 4,
+    "y": -14,
+    "z": -1,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 5,
+    "y": -14,
+    "z": -1,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 6,
+    "y": -14,
+    "z": -1,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 7,
+    "y": -14,
+    "z": -1,
+    "name": "air"
+  },
+  {
+    "x": 8,
+    "y": -14,
+    "z": -1,
+    "name": "lava[level=4]"
+  },
+  {
+    "x": 9,
+    "y": -14,
+    "z": -1,
+    "name": "lava[level=2]"
+  },
+  {
+    "x": 2,
+    "y": -13,
+    "z": -8,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 3,
+    "y": -13,
+    "z": -8,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 4,
+    "y": -13,
+    "z": -8,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 5,
+    "y": -13,
+    "z": -8,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 6,
+    "y": -13,
+    "z": -8,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 7,
+    "y": -13,
+    "z": -8,
+    "name": "tuff"
+  },
+  {
+    "x": 8,
+    "y": -13,
+    "z": -8,
+    "name": "tuff"
+  },
+  {
+    "x": 9,
+    "y": -13,
+    "z": -8,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 2,
+    "y": -13,
+    "z": -7,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 3,
+    "y": -13,
+    "z": -7,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 4,
+    "y": -13,
+    "z": -7,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 5,
+    "y": -13,
+    "z": -7,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 6,
+    "y": -13,
+    "z": -7,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 7,
+    "y": -13,
+    "z": -7,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 8,
+    "y": -13,
+    "z": -7,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 9,
+    "y": -13,
+    "z": -7,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 2,
+    "y": -13,
+    "z": -6,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 3,
+    "y": -13,
+    "z": -6,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 4,
+    "y": -13,
+    "z": -6,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 5,
+    "y": -13,
+    "z": -6,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 6,
+    "y": -13,
+    "z": -6,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 7,
+    "y": -13,
+    "z": -6,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 8,
+    "y": -13,
+    "z": -6,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 9,
+    "y": -13,
+    "z": -6,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 2,
+    "y": -13,
+    "z": -5,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 3,
+    "y": -13,
+    "z": -5,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 4,
+    "y": -13,
+    "z": -5,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 5,
+    "y": -13,
+    "z": -5,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 6,
+    "y": -13,
+    "z": -5,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 7,
+    "y": -13,
+    "z": -5,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 8,
+    "y": -13,
+    "z": -5,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 9,
+    "y": -13,
+    "z": -5,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 2,
+    "y": -13,
+    "z": -4,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 3,
+    "y": -13,
+    "z": -4,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 4,
+    "y": -13,
+    "z": -4,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 5,
+    "y": -13,
+    "z": -4,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 6,
+    "y": -13,
+    "z": -4,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 7,
+    "y": -13,
+    "z": -4,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 8,
+    "y": -13,
+    "z": -4,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 9,
+    "y": -13,
+    "z": -4,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 2,
+    "y": -13,
+    "z": -3,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 3,
+    "y": -13,
+    "z": -3,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 4,
+    "y": -13,
+    "z": -3,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 5,
+    "y": -13,
+    "z": -3,
+    "name": "air"
+  },
+  {
+    "x": 6,
+    "y": -13,
+    "z": -3,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 7,
+    "y": -13,
+    "z": -3,
+    "name": "air"
+  },
+  {
+    "x": 8,
+    "y": -13,
+    "z": -3,
+    "name": "air"
+  },
+  {
+    "x": 9,
+    "y": -13,
+    "z": -3,
+    "name": "air"
+  },
+  {
+    "x": 2,
+    "y": -13,
+    "z": -2,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 3,
+    "y": -13,
+    "z": -2,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 4,
+    "y": -13,
+    "z": -2,
+    "name": "air"
+  },
+  {
+    "x": 5,
+    "y": -13,
+    "z": -2,
+    "name": "air"
+  },
+  {
+    "x": 6,
+    "y": -13,
+    "z": -2,
+    "name": "air"
+  },
+  {
+    "x": 7,
+    "y": -13,
+    "z": -2,
+    "name": "air"
+  },
+  {
+    "x": 8,
+    "y": -13,
+    "z": -2,
+    "name": "air"
+  },
+  {
+    "x": 9,
+    "y": -13,
+    "z": -2,
+    "name": "air"
+  },
+  {
+    "x": 2,
+    "y": -13,
+    "z": -1,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 3,
+    "y": -13,
+    "z": -1,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 4,
+    "y": -13,
+    "z": -1,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 5,
+    "y": -13,
+    "z": -1,
+    "name": "deepslate[axis=y]"
+  },
+  {
+    "x": 6,
+    "y": -13,
+    "z": -1,
+    "name": "air"
+  },
+  {
+    "x": 7,
+    "y": -13,
+    "z": -1,
+    "name": "air"
+  },
+  {
+    "x": 8,
+    "y": -13,
+    "z": -1,
+    "name": "air"
+  },
+  {
+    "x": 9,
+    "y": -13,
+    "z": -1,
+    "name": "air"
+  }
+]

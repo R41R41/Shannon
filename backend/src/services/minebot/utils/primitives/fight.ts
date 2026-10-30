@@ -2,6 +2,7 @@ import pathfinder from 'mineflayer-pathfinder';
 import { buildMovements } from '../setMovements.js';
 import { beginEngagement } from '../engagement.js';
 import { markHeadCombat } from '../combatOwner.js';
+import { combatFootingRisk } from '../combatFooting.js';
 import { nativeActionHost } from '../../execution/ActionExecution.js';
 import { bodyReader, feetCell, type Cell } from '../localMap.js';
 import { eyeOf, probeSight } from '../probeTools.js';
@@ -113,6 +114,11 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
   const label = labelOf(target);
   const held0 = reflexHeld(bot);
   if (held0) return none('reflex', `${label} へ向かう前に、反射 ${held0} が体を握っている。終わるまで始めない`);
+  const footingRisk = (enemy = target) => stance === 'fight' && isThreat(bot as never, enemy) ? combatFootingRisk(bot, enemy) : null;
+  const footingWords = (risk: NonNullable<ReturnType<typeof combatFootingRisk>>) =>
+    `敵から押される先の (${risk.at.x},${risk.at.y},${risk.at.z}) が ${risk.kind}。戦う足場が無い（先に背後の壁・床を確保するか、場所を変える）`;
+  const initialRisk = footingRisk();
+  if (initialRisk) return none('danger', footingWords(initialRisk));
 
   // What it fights with: the item named, else the best sword or axe carried. A flight needs none.
   let weaponName: string | null = null;
@@ -307,6 +313,8 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
         if (verdict) return verdict;
         continue;
       }
+      const risk = footingRisk(live);
+      if (risk) { unfollow(); releaseKeys(); return fail('danger', footingWords(risk)); }
       if (farSince && now - farSince >= OUT_OF_RANGE_MS) {
         unfollow(); releaseKeys();
         return everNear ? finish('逃げた', `（range ${r1(range)}m の外へ ${r1(box)}m。追わない）`) : fail('unreachable', `は range ${r1(range)}m の外のまま（${r1(box)}m）`, lastAt);

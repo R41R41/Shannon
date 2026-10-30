@@ -55,7 +55,7 @@ const COUNTERS: Array<{ kind: ReflexKind; detail: string; read: (bot: LedgerBot)
   { kind: 'shield', detail: '盾を構えた', read: bot => bot.shieldBlock?.raised },
   { kind: 'fireball', detail: '火の玉を打ち返した', read: bot => bot.fireballDeflect?.strikes },
   { kind: 'knock', detail: '押された先で踏ん張った', read: bot => bot.knockBrace?.braced },
-  { kind: 'lava', detail: '溶岩から脱出した', read: bot => bot.lavaReflex?.engagements },
+  { kind: 'lava', detail: '溶岩回避の反射が始まった（脱出は未確認）', read: bot => bot.lavaReflex?.engagements },
   { kind: 'breath', detail: '呼吸を確保した', read: bot => bot.breathingReflex?.engagements },
 ];
 
