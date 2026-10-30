@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Vec3 } from 'vec3';
 import fs from 'node:fs';
 import { makeSim, type Sim } from '../helpers/physicsBody.js';
 import { runCover } from '../../src/services/minebot/utils/floorReflexes.js';
@@ -24,7 +23,6 @@ describe('run52: a cover dig must lower the body, not just remove a block',()=>{
   it('centres a body overlapping the neighbouring floor before digging, and proves the drop',async()=>{
     const sim=makeSim((_x,y,_z)=>y<64?'dirt':'air',{start:[0.54,64,0.04],digMs:100});
     const result=await drive(sim,runCover(sim.bot,sim.bot,{kind:'dig',cell:{x:0,y:63,z:0},detail:'cover dig'}));
-    console.log('cover result',result,sim.bot.entity.position,sim.bot.dugBlocks);
     expect(result.success).toBe(true);
     expect(sim.bot.entity.position.y).toBeCloseTo(63,1);
     expect(Math.abs(sim.bot.entity.position.z-0.5)).toBeLessThanOrEqual(0.2);
