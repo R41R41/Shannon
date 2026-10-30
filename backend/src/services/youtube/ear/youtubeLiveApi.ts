@@ -217,6 +217,7 @@ export interface VideoLiveDetails {
   channelId: string;
   liveChatId?: string;
   actualStartTime?: string;
+  actualEndTime?: string;
   liveBroadcastContent?: string;
 }
 
@@ -242,10 +243,10 @@ export class YoutubeLiveApi {
     this.meter = options.meter ?? new ApiUnitMeter();
   }
 
-  /** The broadcast of the OAuth channel that is live now (`mine=true`), or null. A `live` one is preferred over a `testing` one. */
+  /** The broadcast of the OAuth channel that is live now (`broadcastStatus=active`; mineと同時指定しない), or null. A `live` one is preferred over a `testing` one. */
   async findActiveBroadcast(): Promise<ActiveBroadcast | null> {
     const body = await this.request('liveBroadcasts.list', 'GET', '/liveBroadcasts', {
-      part: 'snippet,status', mine: 'true', broadcastStatus: 'active',
+      part: 'snippet,status', broadcastStatus: 'active', broadcastType: 'all',
     });
     const items = Array.isArray(body.items) ? body.items as Array<Record<string, any>> : [];
     const live = items.find(item => item?.status?.lifeCycleStatus === 'live') ?? items[0];
@@ -268,6 +269,7 @@ export class YoutubeLiveApi {
       title: str(video.snippet?.title),
       channelId: str(video.snippet?.channelId),
       ...(typeof chatId === 'string' && chatId ? { liveChatId: chatId } : {}),
+      ...(typeof video.liveStreamingDetails?.actualEndTime === 'string' ? { actualEndTime: video.liveStreamingDetails.actualEndTime } : {}),
       ...(typeof video.liveStreamingDetails?.actualStartTime === 'string' ? { actualStartTime: video.liveStreamingDetails.actualStartTime } : {}),
       ...(typeof video.snippet?.liveBroadcastContent === 'string' ? { liveBroadcastContent: video.snippet.liveBroadcastContent } : {}),
     };

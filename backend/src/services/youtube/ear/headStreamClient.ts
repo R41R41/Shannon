@@ -16,9 +16,10 @@ export interface HeadStream {
   phase: StreamPhase;
   startedAt: string;
   title: string;
+  targetVideoId?: string;
   /** Posting into the chat is allowed for this stream (`chatWrites: true` at start). */
   chatWrites: boolean;
-  broadcast: { videoId?: string; liveChatId?: string; title?: string; channelId?: string } | null;
+  broadcast: { videoId?: string; liveChatId?: string; title?: string; channelId?: string; onAir?: boolean } | null;
 }
 
 export type HeadStateResult =
@@ -67,7 +68,7 @@ export class HeadStreamClient {
     return { status: 'ok', stream: parseStream(body.stream), chatPosts: parsePosts(body.chatPosts) };
   }
 
-  async postBroadcast(input: { streamId: string; videoId: string; liveChatId: string; title: string; channelId: string }): Promise<HeadBroadcastResult> {
+  async postBroadcast(input: { streamId: string; videoId: string; liveChatId: string; title: string; channelId: string; onAir?: boolean }): Promise<HeadBroadcastResult> {
     const answer = await this.send('POST', '/v1/platform/stream/broadcast', input);
     return broadcastResult(answer);
   }
@@ -143,7 +144,9 @@ function parseStream(value: unknown): HeadStream | null {
     startedAt: typeof stream.startedAt === 'string' ? stream.startedAt : '',
     title: typeof stream.title === 'string' ? stream.title : '',
     chatWrites: stream.chatWrites === true,
+    ...(typeof stream.targetVideoId === 'string' ? { targetVideoId: stream.targetVideoId } : {}),
     broadcast: broadcast ? {
+      onAir: broadcast.onAir === true,
       ...(typeof broadcast.videoId === 'string' ? { videoId: broadcast.videoId } : {}),
       ...(typeof broadcast.liveChatId === 'string' ? { liveChatId: broadcast.liveChatId } : {}),
       ...(typeof broadcast.title === 'string' ? { title: broadcast.title } : {}),

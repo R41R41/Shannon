@@ -104,6 +104,7 @@ interface Attachment {
   liveChatId: string;
   title: string;
   channelId: string;
+  onAir?: boolean;
 }
 
 type ReadEnd = 'head_stopped' | 'chat_ended' | 'aborted';
@@ -259,13 +260,13 @@ export class StreamEar {
     }
     if (this.blocked && this.blocked.streamId === stream.streamId && this.now() < this.blocked.until) return this.stateEveryMs;
 
-    let attachment = stream.phase === 'live' ? attachmentOf(stream) : null;
+    let attachment = attachmentOf(stream);
     if (!attachment) {
       this.mode = 'finding';
       this.current = { streamId: stream.streamId, attachment: null };
       if (this.now() < this.discoveryHoldUntil || this.now() - this.lastDiscoveryAt < this.discoveryEveryMs) return this.stateEveryMs;
       this.lastDiscoveryAt = this.now();
-      attachment = await this.discover();
+      attachment = await this.discover(stream.targetVideoId);
       if (!attachment) return this.stateEveryMs;
       const told = await this.head.postBroadcast({ streamId: stream.streamId, ...attachment });
       if (told.status === 'not_live') {
@@ -291,9 +292,9 @@ export class StreamEar {
   }
 
   /** The broadcast and its chat, or null while there is none. Errors only slow the next look. */
-  private async discover(): Promise<Attachment | null> {
+  private async discover(targetVideoId?: string): Promise<Attachment | null> {
     try {
-      const fromUrl = videoIdOfUrl(this.options.liveUrl);
+      const fromUrl = targetVideoId ?? videoIdOfUrl(this.options.liveUrl);
       const broadcast = fromUrl ? null : await this.youtube.findActiveBroadcast();
       const videoId = fromUrl ?? broadcast?.videoId;
       if (!videoId) return null;
@@ -303,6 +304,7 @@ export class StreamEar {
       return {
         videoId,
         liveChatId,
+        onAir: Boolean(details?.actualStartTime && !details.actualEndTime),
         title: details?.title || broadcast?.title || '',
         channelId: details?.channelId || broadcast?.channelId || this.options.channelId || '',
       };
@@ -346,6 +348,7 @@ export class StreamEar {
     let flushFailures = 0;
     let nextFlushAt = 0;
     let chatEnded = false;
+    let lastAirCheckAt = this.now();
 
     const takePosts = async (posts: HeadChatPost[]): Promise<void> => {
       if (!chatWrites || posts.length === 0) return;
@@ -428,6 +431,18 @@ export class StreamEar {
         } else {
           this.headReachable = false;
         }
+      }
+      if (!chatEnded && !attachment.onAir && this.now() - lastAirCheckAt >= this.discoveryEveryMs) {
+        lastAirCheckAt = this.now();
+        try {
+          const details = await this.youtube.videoDetails(attachment.videoId);
+          if (details?.actualEndTime) chatEnded = true;
+          if (details?.actualStartTime && !details.actualEndTime) {
+            const told = await this.head.postBroadcast({ streamId: stream.streamId, ...attachment, onAir: true });
+            if (told.status === 'not_live') return 'head_stopped';
+            if (told.status === 'ok') attachment.onAir = true;
+          }
+        } catch { /* 次の時刻に再確認。未確認のまま開始済みにはしない。 */ }
       }
       if (chatEnded) {
         await flush();
@@ -607,7 +622,7 @@ export class StreamEar {
 function attachmentOf(stream: HeadStream): Attachment | null {
   const broadcast = stream.broadcast;
   if (!broadcast?.liveChatId) return null;
-  return { videoId: broadcast.videoId ?? '', liveChatId: broadcast.liveChatId, title: broadcast.title ?? stream.title, channelId: broadcast.channelId ?? '' };
+  return { onAir: broadcast.onAir === true, videoId: broadcast.videoId ?? '', liveChatId: broadcast.liveChatId, title: broadcast.title ?? stream.title, channelId: broadcast.channelId ?? '' };
 }
 
 /** A video id from `YOUTUBE_LIVE_URL` (watch URL, /live/, /video/, youtu.be) or the 11-character id itself. */
