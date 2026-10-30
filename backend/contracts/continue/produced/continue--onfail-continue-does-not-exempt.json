@@ -1,7 +1,7 @@
 {
  "producedBy": "backend/scripts/lab/continue-produce.ts",
  "bench": "offline",
- "bodyRevision": "ea8689b",
+ "bodyRevision": "ea8689b1a6d2",
  "madeAt": "2026-10-30T06:12:04.864Z",
  "answers": "continue/onfail-continue-does-not-exempt",
  "fixtureSha256": "c5240c59712a8cfcc8680244817acb40597bbb3ad17d357b9b5f9248fe5a4f3e",

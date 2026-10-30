@@ -1,7 +1,7 @@
 {
  "producedBy": "backend/scripts/minecraft-continue-lab-probe.ts",
  "bench": "B",
- "bodyRevision": "ea8689b",
+ "bodyRevision": "ea8689b1a6d2",
  "madeAt": "2026-10-30T06:13:46.418Z",
  "answers": "life/portal-is-not-death",
  "fixtureSha256": "476bf80b606d56aaee42c54b9a091b15366d25bdb639a2cc7623069beab374cd",

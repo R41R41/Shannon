@@ -1,7 +1,7 @@
 {
  "producedBy": "backend/scripts/minecraft-continue-lab-probe.ts",
  "bench": "B",
- "bodyRevision": "ea8689b",
+ "bodyRevision": "ea8689b1a6d2",
  "madeAt": "2026-10-30T06:09:01.657Z",
  "answers": "measure/hand-start",
  "fixtureSha256": "58a55f6c40ffcac5f019dbc169ed1d848527a873493497131569ed72814dc4e1",

@@ -1,7 +1,7 @@
 {
  "producedBy": "backend/scripts/minecraft-continue-lab-probe.ts",
  "bench": "B",
- "bodyRevision": "ea8689b",
+ "bodyRevision": "ea8689b1a6d2",
  "madeAt": "2026-10-30T06:13:09.895Z",
  "answers": "life/r45-death-then-old-attack",
  "fixtureSha256": "ec7eb14025bd0e5af0113395fccdcf61db26e1046a7c033a04b3d07a7206d6a8",
