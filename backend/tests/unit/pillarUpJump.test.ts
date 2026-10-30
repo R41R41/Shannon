@@ -151,3 +151,21 @@ describe('pillarUp on a body moved by that physics', () => {
     expect((await pillarUp(ctx(hole.bot), { n: 1, block: 'cobblestone' })).reason).toBe('no_floor');
   });
 });
+
+describe('a place the server never answers (run 48, hold 5)', () => {
+  it('is jumped for once more, and the level is climbed; two silences in a row stop it, saying so', async () => {
+    const world = makeWorld();
+    const body = makeBody(world, cobble(8));
+    const real = body.bot.placeBlock;
+    let silent = 1;
+    body.bot.placeBlock = async (...rest: unknown[]) => { if (silent-- > 0) { await new Promise(resolve => setTimeout(resolve, 2500)); return undefined; } return real(...rest); };
+    const outcome = await live(body, () => pillarUp({ ...ctx(body.bot), deadline: Date.now() + 60_000 }, { n: 1, block: 'cobblestone' }));
+    expect(outcome.ok).toBe(true);
+    expect(world.getBlock(new Vec3(0, 64, 0)).name).toBe('cobblestone');
+    const deaf = makeBody(makeWorld(), cobble(8));
+    deaf.bot.placeBlock = async () => { await new Promise(resolve => setTimeout(resolve, 2500)); return undefined; };
+    const stopped = await live(deaf, () => pillarUp({ ...ctx(deaf.bot), deadline: Date.now() + 60_000 }, { n: 1, block: 'cobblestone' }));
+    expect(stopped.ok).toBe(false);
+    expect(stopped.text).toContain('積めなかった');
+  }, 40_000);
+});

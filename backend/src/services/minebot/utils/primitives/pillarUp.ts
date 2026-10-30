@@ -111,32 +111,40 @@ async function pillarLevels(ctx: StepContext, args: PillarArgs, tally: { climbed
         if (!held?.value.held) return stopped(bot, 'equip_failed', `${args.block} を手に持てなかった`, feet);
       }
       await guard(ctx, Promise.resolve(bot.look(bot.entity.yaw, -Math.PI / 2, true)), 1000);
-      bot.setControlState('jump', true);
       let placed = false, lastError = '', attempts = 0, maxY = bot.entity.position.y, filledBy = '';
       let placedFrom: { x: number; y: number; z: number } | null = null;
-      for (let tick = 0; tick < TRY_TICKS && !placed; tick++) {
-        await wait(ctx, 35);
-        const y = bot.entity.position.y, vy = bot.entity.velocity?.y ?? 0;
-        maxY = Math.max(maxY, y);
-        if (y < feet.y + feetOver || vy > 0.14 || vy < -0.45) continue;
-        // Run 48 (hold 4): a block sent while the body is falling is met by the body: by the time the server handles the place (two ticks) the feet are lower, in the cell (the lab: 5 of 6 'placed' and nothing there).
-        if (y + 2 * Math.min(vy, 0) < feet.y + 1 + PILLAR_FALL_MARGIN) continue;
-        if (!EMPTY(blockAt(bot, feet))) { filledBy = cellNow(bot, feet); break; }
-        attempts++;
-        placedFrom = bot.entity.position.clone?.() ?? { ...bot.entity.position };
-        try {
-          await guard(ctx, Promise.resolve(bot.placeBlock(floor, new Vec3(0, 1, 0))), 1500);
-          placed = true;
-        } catch (error) {
-          if (error instanceof StepStopped || /Action interrupted/u.test(String((error as Error)?.message))) throw error;
-          lastError = String((error as Error)?.message ?? error).slice(0, 60) || String((error as Error)?.name ?? 'エラー') + '（文なし）';
+      let now = feetCell(bot)!;
+      let laid = false;
+      // Run 48 (hold 5): a place the server did not answer is jumped for once more (the server may have been late once): the second time, with the body at rest on its floor again, stops.
+      for (let jumpTry = 0; jumpTry < 2; jumpTry++) {
+        placed = false; attempts = 0; filledBy = ''; placedFrom = null;
+        bot.setControlState('jump', true);
+        for (let tick = 0; tick < TRY_TICKS && !placed; tick++) {
+          await wait(ctx, 35);
+          const y = bot.entity.position.y, vy = bot.entity.velocity?.y ?? 0;
+          maxY = Math.max(maxY, y);
+          if (y < feet.y + feetOver || vy > 0.14 || vy < -0.45) continue;
+          // Run 48 (hold 4): a block sent while the body is falling is met by the body: by the time the server handles the place (two ticks) the feet are lower, in the cell (the lab: 5 of 6 'placed' and nothing there).
+          if (y + 2 * Math.min(vy, 0) < feet.y + 1 + PILLAR_FALL_MARGIN) continue;
+          if (!EMPTY(blockAt(bot, feet))) { filledBy = cellNow(bot, feet); break; }
+          attempts++;
+          placedFrom = bot.entity.position.clone?.() ?? { ...bot.entity.position };
+          try {
+            await guard(ctx, Promise.resolve(bot.placeBlock(floor, new Vec3(0, 1, 0))), 1500);
+            placed = true;
+          } catch (error) {
+            if (error instanceof StepStopped || /Action interrupted/u.test(String((error as Error)?.message))) throw error;
+            lastError = String((error as Error)?.message ?? error).slice(0, 60) || String((error as Error)?.name ?? 'エラー') + '（文なし）';
+          }
         }
+        bot.setControlState('jump', false);
+        await wait(ctx, 250);
+        await waitUntil(ctx, () => bot.entity?.onGround !== false, 600);
+        now = feetCell(bot)!;
+        laid = blockAt(bot, feet)?.name === args.block;
+        if (laid || filledBy || jumpTry === 1) break;
+        await wait(ctx, 300);
       }
-      bot.setControlState('jump', false);
-      await wait(ctx, 250);
-      await waitUntil(ctx, () => bot.entity?.onGround !== false, 600);
-      const now = feetCell(bot)!;
-      const laid = blockAt(bot, feet)?.name === args.block;
       if (!laid || now.y < feet.y + 1) {
         // Say which of the four it was: the jump did not reach the height, the cell filled by something else, the laying was refused, or
         // a block was laid and the feet did not come up on it.
