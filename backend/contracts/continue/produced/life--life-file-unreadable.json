@@ -1,24 +1,24 @@
 {
  "producedBy": "backend/scripts/lab/continue-produce.ts",
  "bench": "offline",
- "bodyRevision": "02ad87e69022",
- "madeAt": "2026-10-30T08:26:09.985Z",
+ "bodyRevision": "18abcc6634bb",
+ "madeAt": "2026-10-30T10:13:58.606Z",
  "answers": "life/life-file-unreadable",
  "fixtureSha256": "dd356b68b467a9bf20eb3da2000d3e5454d3206cacc7fc467e09c5dcbb64339e",
  "output": {
   "missing": {
    "life": 1,
-   "deathEpoch": "de-e56326d4",
+   "deathEpoch": "de-f4a57222",
    "deathSeq": 0,
-   "since": "2026-10-30T08:26:09.984Z",
+   "since": "2026-10-30T10:13:58.606Z",
    "alive": true,
    "dimension": "overworld",
-   "dimensionSince": "2026-10-30T08:26:09.984Z"
+   "dimensionSince": "2026-10-30T10:13:58.606Z"
   },
   "corrupt": {
    "life": 1793164759174,
    "advancedBy": "file_unreadable",
-   "deathEpoch": "de-1350e4a8",
+   "deathEpoch": "de-091bc3e0",
    "deathSeq": 0,
    "since": "2026-10-28T05:19:19.174Z",
    "alive": true,
