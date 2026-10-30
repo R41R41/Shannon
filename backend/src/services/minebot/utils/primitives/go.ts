@@ -465,7 +465,7 @@ export function floorlessAt(bot: any, cell: Cell, rule: Pick<DigRule, 'names'>, 
  * it: every one ran its 5 s out, six times. A place whose feet cell (or whose head's height, 1.8 over the feet) is a whole block that is not on the list of what may be dug is said at once,
  * with the nearest cell round it a body stands in. A slab, a carpet or a chest under the feet is stood on, a block the go may dig is dug.
  */
-export function sealedAtWords(bot: any, cell: Cell, rule: Pick<DigRule, 'names'>): string | null {
+export function sealedAtWords(bot: any, cell: Cell, rule: Pick<DigRule, 'names'>, suggestNearby = true): string | null {
   for (const dy of [0, 1]) {
     const at = { x: cell.x, y: cell.y + dy, z: cell.z };
     const block = blockAt(bot, at);
@@ -484,14 +484,14 @@ export function sealedAtWords(bot: any, cell: Cell, rule: Pick<DigRule, 'names'>
       if (!wet && !falls) continue;
       const read2: BlockReader = (x, y, z) => { const found = blockAt(bot, { x, y, z }); return found ? mapBlockOf(found) : null; };
       let near2: Cell | null = null;
-      for (const d of NEAR_OFFSETS) { const around = { x: cell.x + d[0], y: cell.y + d[1], z: cell.z + d[2] }; if (standable(read2, around.x, around.y, around.z)) { near2 = around; break; } }
+      if (suggestNearby) for (const d of NEAR_OFFSETS) { const around = { x: cell.x + d[0], y: cell.y + d[1], z: cell.z + d[2] }; if (standable(read2, around.x, around.y, around.z)) { near2 = around; break; } }
       const because = wet ? `隣の ${cellText(wet)} が ${String(blockAt(bot, wet)?.name)} で掘ると流れ込む` : `上の ${cellText({ x: at.x, y: at.y + 1, z: at.z })} が ${String(over.name)} で掘ると落ちてくる`;
       return `行き先 ${cellText(cell)}${dy ? `の頭 ${cellText(at)}` : ''} の ${name} は${because}`
         + `|${wet ? '水を塞ぐか' : `canDig に ${String(over.name)} を足すか`}、${near2 ? `隣の立てる所 ${cellText(near2)} へ` : '別の行き先を'}`;
     }
     const read: BlockReader = (x, y, z) => { const found = blockAt(bot, { x, y, z }); return found ? mapBlockOf(found) : null; };
     let near: Cell | null = null;
-    for (const d of NEAR_OFFSETS) {
+    if (suggestNearby) for (const d of NEAR_OFFSETS) {
       const around = { x: cell.x + d[0], y: cell.y + d[1], z: cell.z + d[2] };
       if (standable(read, around.x, around.y, around.z)) { near = around; break; }
     }
@@ -499,6 +499,25 @@ export function sealedAtWords(bot: any, cell: Cell, rule: Pick<DigRule, 'names'>
       + `|canDig に ${name} を足すか、${near ? `隣の立てる所 ${cellText(near)} へ` : '別の行き先を'}`;
   }
   return null;
+}
+
+/**
+ * Run 52 hold 1: a radius-1 goal one level inside a dirt hill, without canDig. Every acceptable feet cell was blocked, but only
+ * exact-cell goals were checked, so two searches spent 5 s each and the second became a heavy search_timeout. Prove only the
+ * bounded arrival space closed, using the route's own predicate; one open, diggable or unreadable cell leaves the search to decide.
+ */
+export function sealedGoalWords(bot: any, cell: Cell, range: number, rule: Pick<DigRule, 'names'>): string | null {
+  if (range < 1) return sealedAtWords(bot, cell, rule);
+  const goal = goalOf(cell, range), radius = Math.floor(range);
+  let count = 0;
+  for (let dx = -radius; dx <= radius; dx++) for (let dy = -radius; dy <= radius; dy++) for (let dz = -radius; dz <= radius; dz++) {
+    const candidate = { x: cell.x + dx, y: cell.y + dy, z: cell.z + dz };
+    if (!goal.isEnd(new Vec3(candidate.x, candidate.y, candidate.z))) continue;
+    if (!sealedAtWords(bot, candidate, rule, false)) return null;
+    count++;
+  }
+  const words = sealedAtWords(bot, cell, rule);
+  return count && words ? `${range}m以内の到着候補${count}マス全てが塞がっている。${words}` : null;
 }
 
 /** What the water in a cell is when it flows ("水の流れ 2", "落ちる水"), or null: no water, a source or no block. */
@@ -658,10 +677,10 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     const why = floorlessAt(bot, safeCells[0], rule, placing)!;
     return fail('no_floor', why, /なら .* の上に立てる$/u.test(why) ? 'その 1 つ下を行き先に' : /^行き先 .* は宙/u.test(why) ? '立てる所を行き先に（宙へ渡るなら canPlace）' : '別の行き先を');
   }
-  // Run 47 (hold 6): a place that is a block the go may not dig is said before any search.
-  const open = limits.range < 1 ? grounded.filter(cell => !sealedAtWords(bot, cell, rule)) : grounded;
+  // A whole closed arrival space is said before any search; a blocked centre alone never closes a radius goal.
+  const open = grounded.filter(cell => !sealedGoalWords(bot, cell, limits.range, rule));
   if (!open.length) {
-    const [why, hint] = sealedAtWords(bot, grounded[0], rule)!.split('|');
+    const [why, hint] = sealedGoalWords(bot, grounded[0], limits.range, rule)!.split('|');
     return fail('dead_end', why!, hint!);
   }
   const targets = open;
@@ -899,10 +918,8 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   /** The search ran out of its time: no way is known, nor that there is none. What it saw, and the next hands that do not need the search. */
   const searchedOutStop = (found: Plan, aim: Cell): StepOutcome => {
     // Run 47 (hold 10-11): a place the search cannot get into (a cell it may not break) runs every search out; the cell is named instead.
-    if (limits.range < 1) {
-      const sealed = targets.map(cell => sealedAtWords(bot, cell, rule)).find((words): words is string => !!words);
-      if (sealed) { const [why, hint] = sealed.split('|'); return fail('dead_end', why!, hint!); }
-    }
+    const sealed = targets.map(cell => sealedGoalWords(bot, cell, limits.range, rule));
+    if (sealed.every(words => words !== null)) { const [why, hint] = sealed[0]!.split('|'); return fail('dead_end', why!, hint!); }
     const tip = found.path.length ? found.path[found.path.length - 1] : null;
     const tipCell = tip ? nodeCell(tip) : null;
     const reach = tipCell ? `、${cellText(tipCell)} まで・あと ${Math.hypot(tipCell.x - aim.x, tipCell.y - aim.y, tipCell.z - aim.z).toFixed(0)}m` : '';

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeSim, type Ground, type Sim } from '../helpers/physicsBody.js';
-import { go } from '../../src/services/minebot/utils/primitives/go.js';
+import { go, sealedGoalWords } from '../../src/services/minebot/utils/primitives/go.js';
 
 // Run 47 (hold 6): a go to (190,-13,180), where the place and the cell over it were clay and the go could dig stone and deepslate only. No search can end in a block that is not dug: each ran
 // its 5 s out, six times, 50 s in all. A place that is a block not on the list is said before any search, with the way out: dig it (canDig) or go to a cell beside it.
@@ -45,6 +45,54 @@ describe('a place that is a block the go may not dig', () => {
     const sim = makeSim(slab, { start: [0.5, FLOOR, 0.5] });
     const { value } = await drive(sim, go(ctxOf(sim) as never, { goals: [{ x: 5, y: FLOOR, z: 0 }], canDig: ['stone'], seconds: 60 } as never));
     expect(value.text).not.toMatch(/canDig に無い/u);
+  });
+});
+
+describe('run52: the whole arrival radius is buried, not just the named cell', () => {
+  const hill: Ground = (x, y, z) => {
+    if (Math.abs(x) > 12 || Math.abs(z) > 12) return null;
+    // The named place is one level inside a hill; every radius-1 arrival cell is dirt or has dirt at head height.
+    return y < FLOOR || (x >= 4 && x <= 6 && Math.abs(z) <= 1 && y <= FLOOR + 1) ? 'dirt' : 'air';
+  };
+  it('reports the closed arrival space before spending its search timeout, without moving or digging', async () => {
+    const sim = makeSim(hill, { start: [0.5, FLOOR, 0.5] });
+    const search = vi.spyOn(sim.bot.pathfinder, 'getPathFromTo');
+    const { value, elapsed } = await drive(sim, go(ctxOf(sim) as never, { goals: [{ x: 5, y: FLOOR, z: 0 }], range: 1, seconds: 30, searchMs: 300 }));
+    expect(value.reason).toBe('dead_end');
+    expect(value.text).toContain('1m以内の到着候補7マス');
+    expect(value.text).toContain('dirt');
+    expect(value.text).toContain('canDig');
+    expect(value.text.length).toBeLessThanOrEqual(160);
+    expect(search).not.toHaveBeenCalled();
+    expect(sim.bot.dugBlocks).toEqual([]);
+    expect(Math.floor(sim.bot.entity.position.x)).toBe(0);
+    expect(elapsed).toBeLessThan(500);
+  });
+  it('keeps a reachable cell on the exact radius boundary, even when the named place is blocked', async () => {
+    const edge: Ground = (x, y, z) => x === 4 && z === 0 && y >= FLOOR ? 'air' : hill(x, y, z);
+    const sim = makeSim(edge, { start: [0.5, FLOOR, 0.5] });
+    const { value } = await drive(sim, go(ctxOf(sim) as never, { goals: [{ x: 5, y: FLOOR, z: 0 }], range: 1, seconds: 30 }));
+    expect(value.ok).toBe(true);
+    expect(Math.floor(sim.bot.entity.position.x)).toBe(4);
+  });
+  it('does not silently enlarge the radius to a diagonal cell', async () => {
+    const diagonal: Ground = (x, y, z) => x === 4 && z === -1 && y >= FLOOR ? 'air' : hill(x, y, z);
+    const sim = makeSim(diagonal, { start: [0.5, FLOOR, 0.5] });
+    const { value } = await drive(sim, go(ctxOf(sim) as never, { goals: [{ x: 5, y: FLOOR, z: 0 }], range: 1, seconds: 30, searchMs: 300 }));
+    expect(value.reason).toBe('dead_end');
+    expect(sealedGoalWords(sim.bot, { x: 5, y: FLOOR, z: 0 }, 1.5, { names: new Set() })).toBeNull();
+  });
+  it('leaves an unreadable arrival cell unknown rather than proving that all are blocked', () => {
+    const unread = makeSim((x, y, z) => x === 4 && y >= FLOOR && z === 0 ? null : hill(x, y, z));
+    expect(sealedGoalWords(unread.bot, { x: 5, y: FLOOR, z: 0 }, 1, { names: new Set() })).toBeNull();
+  });
+  it('keeps a different open goal and does not reject a block the go may dig', async () => {
+    const open = makeSim(hill, { start: [0.5, FLOOR, 0.5] });
+    const first = await drive(open, go(ctxOf(open) as never, { goals: [{ x: 5, y: FLOOR, z: 0 }, { x: 0, y: FLOOR, z: 4 }], range: 1, seconds: 30 }));
+    expect(first.value.ok).toBe(true);
+    const dig = makeSim(hill, { start: [0.5, FLOOR, 0.5], digMs: 80 });
+    const second = await drive(dig, go(ctxOf(dig) as never, { goals: [{ x: 5, y: FLOOR, z: 0 }], range: 1, canDig: ['dirt'], seconds: 30 }));
+    expect(second.value.ok).toBe(true);
   });
 });
 
