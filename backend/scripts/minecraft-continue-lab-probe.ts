@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import zlib from 'node:zlib';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
+import { Vec3 } from 'vec3';
 import { createProbeBot, closeProbeBot } from '../src/services/minebot/testing/MinecraftProbeBot.js';
 import { NativeCommonFcaBody } from '../src/services/minebot/integration/commonFca/nativeBody.js';
 import { CommonFcaControlLoop } from '../src/services/minebot/integration/commonFca/controlLoop.js';
@@ -18,6 +19,7 @@ import { SceneSaver, selfNames } from '../src/services/minebot/utils/sceneSave.j
 import { bodyRevision } from '../src/services/minebot/utils/bodyRevision.js';
 import { executeAction, createMotorPort, physicalRoots, preemptLowerPriorityActions } from '../src/services/minebot/execution/ActionExecution.js';
 import { opLogOf } from '../src/services/minebot/utils/opLog.js';
+import { runCover } from '../src/services/minebot/utils/floorReflexes.js';
 import { localMapFor, MAP_PENDING } from '../src/services/minebot/utils/localMap.js';
 
 const port = Number(process.env.MINECRAFT_CONTINUE_PORT);
@@ -143,6 +145,26 @@ try {
   ({ actor, body } = await connect());
   await reset(actor);
   await sleep(2000);
+
+  // Run 52: a body at the cell's edge is still supported by the neighbouring floor after an uncentred dig.
+  if (wanted.has('cover_drop')) {
+    await ask('fill -3 97 -3 3 99 3 minecraft:dirt');
+    await ask('fill -3 100 -3 3 104 3 minecraft:air');
+    await ask(`tp ${ACTOR} 0.54 100 0.04`); await sleep(700);
+    const before = actor.entity.position.clone();
+    const result = await executeAction(actor, 'floor-cover', 5500,
+      () => runCover(actor, createMotorPort(actor), { kind: 'dig', cell: { x: 0, y: 99, z: 0 }, detail: 'lab cover drop' }),
+      { priority: 250, safetyLease: true, waitForQuiescence: false });
+    const after = actor.entity.position.clone();
+    check('run52 cover: an off-centre body drops one level on the real server, with one floor dug', result.success === true
+      && Math.abs(after.y - 99) < 0.1 && Math.abs(after.x - 0.5) <= 0.2 && Math.abs(after.z - 0.5) <= 0.2
+      && actor.blockAt(new Vec3(0, 99, 0))?.name === 'air', JSON.stringify({ before, after, result }));
+    const stale = await executeAction(actor, 'floor-cover', 5500,
+      () => runCover(actor, createMotorPort(actor), { kind: 'dig', cell: { x: 1, y: 98, z: 0 }, detail: 'stale column' }),
+      { priority: 250, safetyLease: true, waitForQuiescence: false });
+    check('run52 cover: a stale column is refused without digging it', stale.success === false
+      && actor.blockAt(new Vec3(1, 98, 0))?.name === 'dirt', JSON.stringify(stale));
+  }
 
   // ---- run 47 (hold 8): a body that has just logged in gives no map of unknown cells: "still being made" at first, drawn once the chunks have come, within 10 s
   if (runs('basics')) {

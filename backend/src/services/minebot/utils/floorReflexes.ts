@@ -1440,7 +1440,20 @@ export async function runCover(bot: FloorBody, port: FloorBody, cover: Cover, ti
     return { success: outcome.ok, result: outcome.text };
   }
   const { dig } = await import('./primitives/dig.js');
+  // Run 52: removing the floor while the body overlaps the neighbouring cell leaves it standing in the archer's line.
+  // Keep this one descent in its chosen column, as a vertical shaft already does, and prove the body actually fell before giving it back.
+  if (cover.cell.x !== base.x || cover.cell.z !== base.z || cover.cell.y !== base.y - 1) {
+    return { success: false, result: '足元を掘る前に体が別のマスへ移った（掘らない）' };
+  }
+  const { centreInColumn, waitDropOne } = await import('./tunnelWalk.js');
+  const feet = new Vec3(base.x, base.y, base.z);
+  const centred = await centreInColumn(port as never, feet);
+  if (centred) return { success: false, result: `足元の真ん中に立てない（${centred}。掘らない）` };
   const outcome = await dig(ctx as never, { at: [cover.cell], collect: false, exposeOk: true });
+  if (outcome.ok) {
+    const dropped = await waitDropOne(port as never, feet);
+    if (dropped) return { success: false, result: `足元を掘ったが一段下がっていない（${dropped}）` };
+  }
   return { success: outcome.ok, result: outcome.text };
 }
 
