@@ -453,6 +453,14 @@ export function floorlessAt(bot: any, cell: Cell, rule: Pick<DigRule, 'names'>, 
   if (!floor || floor.boundingBox !== 'empty') return null;
   const name = String(floor.name).replace(/^minecraft:/u, '');
   if (AIR.test(name)) return placing ? null : midAirWords(bot, cell, under);
+  // Run 52 hold 4: waterOk lets the body swim in water, but no search node stands above a water floor.
+  // Keep water-filled or climbable destination cells, and a permitted scaffold, for the search to decide.
+  if (!placing && name === 'water') {
+    const occupying = [cell, { x: cell.x, y: cell.y + 1, z: cell.z }].map(at => String(blockAt(bot, at)?.name ?? ''));
+    if (occupying.every(Boolean) && !occupying.some(there => /^(water|bubble_column|ladder|vine|scaffolding|cave_vines(_plant)?|twisting_vines(_plant)?|weeping_vines(_plant)?)$/u.test(there))) {
+      return `行き先 ${cellText(cell)} の足元 ${cellText(under)} は water で床にならない（水面の上には立てない）。足場を置くか、水中なら水のある高さを指定して`;
+    }
+  }
   if (THROUGH.test(name) || rule.names.has(name)) return null;
   const lower = blockAt(bot, { x: cell.x, y: cell.y - 2, z: cell.z });
   const stand = lower && lower.boundingBox === 'block' && !isDoorlike(String(lower.name));
