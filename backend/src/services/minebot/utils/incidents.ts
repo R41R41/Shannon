@@ -98,9 +98,12 @@ export function explainedStop(line: { do: string; line: string }): { code: strin
   const cell = /\((-?\d+),(-?\d+),(-?\d+)\)/u.exec(text);
   return { code, where: cell ? `${cell[1]},${cell[2]},${cell[3]}` : '' };
 }
-/** A line that stopped at its time with the work moving (steps, digs or levels counted): the clock, not a stall. */
-const progressedAtTime = (line: { line: string }): boolean => /止まった limit_time/u.test(line.line)
-  && (Number(/(?:道|段) (\d+)/u.exec(line.line)?.[1] ?? 0) > 0 || Number(/掘 (\d+)/u.exec(line.line)?.[1] ?? 0) > 0);
+/**
+ * A line of a hand that failed with the work moving (steps, digs, levels, blocks laid, obsidian made counted in its own words): the length of the act is the work's, not a stall
+ * (run 47 hold 4, run 48 hold 3: an obsidian hand that made and took one in 61 s, held as `long`).
+ */
+const progressed = (line: { line: string }): boolean => [/(?:道|段) (\d+)/u, /掘 (\d+)/u, /置 (\d+)/u, /黒曜石 (\d+) 個/u, /個のうち (\d+) 個/u, /(\d+) 個(?:を)?(?:掘|採|拾|作)/u]
+  .some(pattern => Number(pattern.exec(line.line)?.[1] ?? 0) > 0);
 
 /** The heavy-failure reason of an act's report, or null (light: the box only). */
 export function heavyReason(report: Pick<ActReport, 'ok' | 'lines' | 'stoppedBy'>, ms: number, lowestHp: number | null, died: boolean, seen: Set<string>, task: string): string | null {
@@ -124,8 +127,8 @@ export function heavyReason(report: Pick<ActReport, 'ok' | 'lines' | 'stoppedBy'
     const steps = Number(/道 (\d+) 歩/u.exec(line.line)?.[1] ?? NaN);
     if (code === 'limit_time' && Number.isFinite(steps) && steps < LOW_STEPS) return `go_limit_time_low:${steps}`;
   }
-  // Run 47: a hand that ran to its time with the work moving is the clock's: the planner carries it on from the result.
-  if (ms >= LONG_MS && !report.lines.some(line => line.status !== 'done' && line.status !== 'skipped' && progressedAtTime(line))) return `long:${Math.round(ms / 1000)}s`;
+  // Runs 47-48: a hand that failed after a long time with the work moving (steps, digs, levels, blocks, obsidian) is the clock's: the planner carries it on from the result.
+  if (ms >= LONG_MS && !report.lines.some(line => line.status !== 'done' && line.status !== 'skipped' && progressed(line))) return `long:${Math.round(ms / 1000)}s`;
   const failed = report.lines.find(line => line.status !== 'done' && line.status !== 'skipped');
   if (failed) {
     const code = /止まった (\w+)/u.exec(failed.line)?.[1] ?? report.stoppedBy ?? 'failed';

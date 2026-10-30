@@ -200,7 +200,7 @@ describe('obsidian: what it refuses before it begins', () => {
     for (let slot = 9; slot <= 44; slot++) sim.bot.inventory.slots[slot] = { name: slot === 20 ? 'obsidian' : 'dirt', count: slot === 20 ? 64 : 1 } as never;
     const outcome = await drive(sim, run(sim, { at: [at(8, 63, 0)] }));
     expect(outcome.reason).toBe('inventory_full');
-    expect(outcome.text).toMatch(/^obsidian 止まった inventory_full: 持ち物が満杯（36\/36）で黒曜石を拾えない。drop で空ける/u);
+    expect(outcome.text).toMatch(/^obsidian 止まった inventory_full: 黒曜石 \d+ 個・水の注ぎ \d+ 回・立ち直し \d+ 回。持ち物が満杯（36\/36）で黒曜石を拾えない。drop で空ける/u);
     expect(sim.bot.poured).toEqual([]);
     expect(sim.bot.dugBlocks ?? []).toEqual([]);
     expect(Math.hypot(sim.bot.entity.position.x - 0.5, sim.bot.entity.position.z - 0.5)).toBeLessThan(0.1);
@@ -225,7 +225,7 @@ describe('obsidian: what it refuses before it begins', () => {
     sim.bot.game.dimension = 'the_nether';
     const outcome = await drive(sim, run(sim, { at: [at(8, 63, 0)] }));
     expect(outcome.reason).toBe('stuck');
-    expect(outcome.text).toMatch(/^obsidian 止まった stuck: ネザーでは水を注いでも蒸発して/u);
+    expect(outcome.text).toMatch(/^obsidian 止まった stuck: 黒曜石 \d+ 個・水の注ぎ \d+ 回・立ち直し \d+ 回。ネザーでは水を注いでも蒸発して/u);
     expect(sim.bot.poured).toEqual([]);
   });
   it('takes the sources that are lava and says which it skipped', async () => {
@@ -395,7 +395,18 @@ describe('obsidian: a lava source shut in rock (run 47, hold 7)', () => {
     const sim = makeHandsSim(shut(), { items: stacks(WATER, PICK) });
     const outcome = await drive(sim, run(sim, { at: [at(10, 62, 0)], seconds: 60, canDig: ['sand'] }));
     expect(outcome.ok).toBe(false);
-    expect(outcome.text).toMatch(/^obsidian 止まった unreachable: \(10,62,0\) は岩に囲まれ（.*stone.*）、掘って面と立ち位置を作る道も無い/u);
+    expect(outcome.text).toMatch(/^obsidian 止まった unreachable: 黒曜石 \d+ 個・水の注ぎ \d+ 回・立ち直し \d+ 回。\(10,62,0\) は岩に囲まれ（.*stone.*）、掘って面と立ち位置を作る道も無い/u);
     expect(sim.bot.dugBlocks ?? []).toEqual([]);
+  });
+});
+
+describe('obsidian: the numbers come first in a stop line (run 48, hold 3)', () => {
+  it('names the count, the pours and the stands before anything long, so that the 160 characters of a line keep them', async () => {
+    const sim = makeHandsSim(over(flat, lake()), { items: stacks(WATER, PICK) });
+    const outcome = await drive(sim, run(sim, { at: [at(8, 63, 0), at(40, 63, 0)], count: 3, seconds: 120 }));
+    expect(outcome.ok).toBe(false);
+    expect(outcome.text).toMatch(/^obsidian 止まった \w+: 黒曜石 1 個・水の注ぎ 1 回・立ち直し \d+ 回。/u);
+    expect(outcome.text).toContain('（3 個のうち 1 個）');
+    expect(outcome.text.slice(0, 160)).toContain('黒曜石 1 個');
   });
 });

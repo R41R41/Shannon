@@ -454,3 +454,14 @@ describe('heavy or light: a refused place (run 48, hold 2)', () => {
     expect(heavyReason(refused as never, 9000, 18, false, seen, 't')).toBe('explained:go/stuck');
   });
 });
+
+describe('heavy or light: a long act with the work moving (run 48, hold 3)', () => {
+  it('an obsidian hand that made and took one in 61 s is not a long stall; one that made nothing and did nothing is', () => {
+    const seen = new Set<string>();
+    const done = { ok: false, lines: [{ i: 1, do: 'obsidian', status: 'stopped' as const, line: 'obsidian 止まった no_lava: 黒曜石 1 個・水の注ぎ 1 回・立ち直し 2 回。挙げた溶岩の源 1 個を使い切った（10 個のうち 1 個）' }] };
+    const reason = heavyReason(done as never, 61_000, 18, false, seen, 't');
+    expect(reason === null || !holdsFor(reason)).toBe(true);
+    const idle = { ok: false, lines: [{ i: 1, do: 'obsidian', status: 'stopped' as const, line: 'obsidian 止まった unreachable: 黒曜石 0 個・水の注ぎ 0 回・立ち直し 0 回。届かない' }] };
+    expect(heavyReason(idle as never, 61_000, 18, false, seen, 't')).toBe('long:61s');
+  });
+});

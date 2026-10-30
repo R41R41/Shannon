@@ -173,7 +173,8 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
   const counts: Counts = { obsidian: 0, pours: 0, restands: 0, placed: 0, notes: [] };
   const read = readerOf(bot);
   const stop = (code: string, text: string, at?: Cell): StepOutcome =>
-    stopped(bot, code, `obsidian 止まった ${code}: ${text}（黒曜石 ${counts.obsidian} 個・水の注ぎ ${counts.pours} 回・立ち直し ${counts.restands} 回）`, at);
+    // Run 48 (hold 3): the numbers come first (the act cuts a line at 160 characters from the back, and the count was what was cut).
+    stopped(bot, code, `obsidian 止まった ${code}: 黒曜石 ${counts.obsidian} 個・水の注ぎ ${counts.pours} 回・立ち直し ${counts.restands} 回。${text}`, at);
 
   // What each cell the planner named holds now: a lava source (to be set), obsidian already (only mined), anything else (not used, and said).
   const live: Cell[] = [], mineOnly: Cell[] = [], skipped: string[] = [];
@@ -517,7 +518,7 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
   }
   if (timeIsUp(ctx) && !failures.length) return stop('limit_time', `${seconds} 秒の上限に達した${extras ? `（${extras}）` : ''}`, order[0]);
   const why = failures[0] ?? { code: 'no_lava', text: `挙げた溶岩の源 ${order.length} 個を使い切った`, at: order[0] };
-  return stop(why.code, `${why.text}${failures.length > 1 ? `（ほか ${failures.length - 1} 個も）` : ''}${extras ? `。${extras}` : ''}${waterBack ? '' : '。水は戻せていない'}。${want} 個のうち ${counts.obsidian} 個`, why.at);
+  return stop(why.code, `${why.text}${failures.length > 1 ? `（ほか ${failures.length - 1} 個も）` : ''}${extras ? `。${extras}` : ''}${waterBack ? '' : '。水は戻せていない'}（${want} 個のうち ${counts.obsidian} 個）`, why.at);
 }
 
 const COMMON_FIELDS = ['do', 'rel', 'note', 'onFail'];
