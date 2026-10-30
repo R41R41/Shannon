@@ -88,6 +88,7 @@ log "server is up: $(grep -o 'Done ([0-9.]*s)' "$DIR/logs/latest.log" | head -1)
 # (d) the probe
 log "running the probe (limit ${REPLAY_TIMEOUT:-1800} s); full log: $OUT/probe.log"
 START=$(date +%s)
+touch "$OUT/probe.started"
 ( cd "$CODE/backend" && env -i HOME="$HOME" PATH="$NODEBIN:/usr/bin:/bin" OPENAI_API_KEY=offline-test-not-used MONGODB_URI=mongodb://127.0.0.1:1/shannon-offline-not-used \
   SHANNON_ISOLATED_MINEBOT_PROBE=true MINECRAFT_COGNITION_MODE=off MINECRAFT_OUTAGE_NO_LLM=true MINECRAFT_REPLAY_NO_LLM=true \
   MINECRAFT_REPLAY_PORT=$PORT MINECRAFT_REPLAY_WORLD_DIRECTORY="$DIR" MINECRAFT_REPLAY_CASES="$OUT/cases.json" MINECRAFT_REPLAY_REPORT="$OUT/report.json" \
@@ -100,3 +101,17 @@ grep -a '^REPLAY_RESULT ' "$OUT/probe.log" | tail -1
 grep -a -E 'WARN|ERROR|Exception|moved wrongly|moved too quickly|Can.t keep up|I_am_Shannon (was|fell|drowned|hit|burned|tried|died|starved|suffocated)' "$DIR/logs/latest.log" \
   | grep -a -v 'issued server command' > "$OUT/server-notable.txt" 2>/dev/null
 log "server notable lines: $(wc -l < "$OUT/server-notable.txt")"; head -20 "$OUT/server-notable.txt"
+if [ "$STATUS" -ne 0 ]; then
+  log "FAILED: probe exited $STATUS; no completed comparison"
+  exit "$STATUS"
+fi
+if [ ! -s "$OUT/report.json" ] || [ ! "$OUT/report.json" -nt "$OUT/probe.started" ]; then
+  log 'FAILED: no fresh completed replay report'
+  exit 1
+fi
+python3 - "$OUT/report.json" <<'PY'
+import json,sys
+report=json.load(open(sys.argv[1]))
+if not report.get('cases'):
+    raise SystemExit('FAILED: replay report has no cases')
+PY
