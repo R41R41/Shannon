@@ -164,6 +164,7 @@ interface Why { code: string; text: string; at?: Cell }
 
 export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise<StepOutcome> {
   const bot = parent.bot;
+  const obsidianAtStart = inventoryCount(bot, 'obsidian');
   const sources = [...new Map((args.at ?? []).map(cell => [keyOf(cell), cell] as const)).values()];
   if (!sources.length || sources.length > 8) return stopped(bot, 'invalid_input', 'obsidian には at（溶岩の源のマス 1〜8 個）が要る');
   const want = Math.max(1, Math.min(64, Math.floor(args.count ?? OBSIDIAN_DEFAULTS.count)));
@@ -172,9 +173,12 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
   const ctx = limitedContext(parent, seconds);
   const counts: Counts = { obsidian: 0, pours: 0, restands: 0, placed: 0, notes: [] };
   const read = readerOf(bot);
-  const stop = (code: string, text: string, at?: Cell): StepOutcome =>
+  const stop = (code: string, text: string, at?: Cell): StepOutcome => {
+    // The last scoop can move through a drop after collection stopped. A stop must report the inventory at its end, not before water recovery.
+    counts.obsidian = Math.max(0, inventoryCount(bot, 'obsidian') - obsidianAtStart);
     // Run 48 (hold 3): the numbers come first (the act cuts a line at 160 characters from the back, and the count was what was cut).
-    stopped(bot, code, `obsidian 止まった ${code}: 黒曜石 ${counts.obsidian} 個・水の注ぎ ${counts.pours} 回・立ち直し ${counts.restands} 回。${text}`, at);
+    return stopped(bot, code, `obsidian 止まった ${code}: 黒曜石 ${counts.obsidian} 個・水の注ぎ ${counts.pours} 回・立ち直し ${counts.restands} 回。${text}`, at);
+  };
 
   // What each cell the planner named holds now: a lava source (to be set), obsidian already (only mined), anything else (not used, and said).
   const live: Cell[] = [], mineOnly: Cell[] = [], skipped: string[] = [];
@@ -202,7 +206,6 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
   const fullWords = () => `持ち物が満杯（${36 - freeSlots(bot)}/36）で黒曜石を拾えない。drop で空ける`;
   if (!obsidianRoom()) return stop('inventory_full', fullWords(), live[0] ?? mineOnly[0]);
   const bucketsAtStart = inventoryCount(bot, 'water_bucket');
-  const obsidianAtStart = inventoryCount(bot, 'obsidian');
   const foot = footingBlock(bot, args.canPlace);
   const footingLeft = () => (foot ? Math.max(0, Math.min(maxPlace - counts.placed, inventoryCount(bot, foot))) : 0);
   const gained = () => Math.max(0, inventoryCount(bot, 'obsidian') - obsidianAtStart);
@@ -514,6 +517,7 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
   if (waterLeft && await scoopBack(waterLeft)) waterLeft = null;
 
   const waterBack = inventoryCount(bot, 'water_bucket') >= bucketsAtStart;
+  counts.obsidian = gained();
   if (!waterBack && waterLeft) counts.notes.push(`水が ${cellText(waterLeft)} に残った`);
   const waitedWords = [...waited.entries()].filter(([, ms]) => ms >= 1500).map(([label, ms]) => `${label}待った ${(ms / 1000).toFixed(1)} 秒`).join('・');
   const extras = [counts.placed ? `足場 ${counts.placed} 個` : '', ...skipped.map(text => `飛ばした ${text}`), ...counts.notes, waitedWords].filter(Boolean).join('・');

@@ -76,6 +76,30 @@ describe('obsidian: a lava source on a shore', () => {
     expect(counts(outcome)!.obsidian).toBe(0);
   });
 
+  it('counts a drop delivered during the last recovery of water, after earlier scoops were refused', async () => {
+    const sim = makeHandsSim(over(flat, lake()), { items: stacks(WATER, PICK) });
+    const activate = sim.bot.activateItem, items = sim.bot.inventory.items;
+    let refused = 0;
+    sim.bot.activateItem = () => {
+      if (sim.bot.heldItem?.name === 'bucket' && refused++ < 6) return;
+      activate();
+      if (sim.bot.scooped.length) {
+        // The server's collection packet during the successful recovery; only a drop of the block actually dug is delivered.
+        for (const [id, drop] of Object.entries<any>(sim.bot.entities)) {
+          if (drop.getDroppedItem?.()?.name === 'obsidian') { sim.give('obsidian', 1); delete sim.bot.entities[id]; }
+        }
+      }
+    };
+    // The collection packet becomes visible with the final successful scoop, as when that recovery passes through the drop.
+    sim.bot.inventory.items = () => items().filter((item: Stack) => item.name !== 'obsidian' || sim.bot.scooped.length > 0);
+    const outcome = await drive(sim, run(sim, { at: [at(8, 63, 0)] }));
+    expect(refused).toBeGreaterThan(6);
+    expect(sim.count('obsidian')).toBe(1);
+    expect(sim.count('water_bucket')).toBe(1);
+    expect(outcome.ok).toBe(true);
+    expect(counts(outcome)!.obsidian).toBe(1);
+  });
+
   it('pours the water where it runs onto the lava, mines the obsidian, takes the drop and the water back, in one hand', async () => {
     const sim = makeHandsSim(over(flat, lake()), { items: stacks(WATER, PICK) });
     let lowest = 99;
