@@ -162,7 +162,7 @@ describe('go: through a wall (canDig)', () => {
     }
   });
 
-  it('never digs what is never dug, whatever it is told (obsidian, an ore, a chest)', async () => {
+  it('never digs what is never dug, whatever it is told (obsidian, a chest); an ore only when named by its id (run 48), never inside a category word', async () => {
     // A small world (12 round, nothing under y=56) so that the search over everything it might dig is short.
     const small: Ground = (x, y, z) => (Math.abs(x) > 12 || Math.abs(z) > 12 || y < 56 ? null : x >= 3 && x <= 5 && y <= FLOOR + 6 ? 'obsidian' : y < FLOOR ? 'stone' : 'air');
     const sim = makeSim(small, { items: stacks({ name: 'diamond_pickaxe', count: 1 }) });
@@ -174,7 +174,8 @@ describe('go: through a wall (canDig)', () => {
     expect(sim.bot.dugBlocks).toEqual([]);
     const rule = digRuleOf(sim.bot.registry, ['obsidian', 'stone', 'diamond_ore', 'chest', 'iron_door', 'white_bed', 'bedrock', 'water', 'nonsense_block']);
     expect([...rule.names]).not.toContain('obsidian');
-    expect([...rule.names]).not.toContain('diamond_ore');
+    expect([...rule.names]).toContain('diamond_ore');   // run 48 (hold 1): named by its id, so the planner asked for it
+    expect([...digRuleOf(sim.bot.registry, ['stone', 'dirt', 'sand', 'wood']).names].filter(name => /_ore$|^ancient_debris$/u.test(name))).toEqual([]);
     expect([...rule.names]).not.toContain('chest');
     expect([...rule.names]).not.toContain('iron_door');
     expect([...rule.names]).not.toContain('white_bed');

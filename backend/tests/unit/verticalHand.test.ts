@@ -199,6 +199,31 @@ describe('vertical: a cave under the next rock is a fall of three at most (run 4
   });
 });
 
+describe('vertical: an ore the planner names in canDig (run 48, hold 1)', () => {
+  const ore = (name: string) => world('andesite', 64, [cell(name, 0, 63, 1)]);
+  it('stops at copper_ore when canDig lacks it, saying to add it; with copper_ore in canDig the stair digs it and goes on', async () => {
+    const refused = sim0(ore('copper_ore'));
+    const stopped = await drive(refused, run(refused, hand({ dir: 'down', shape: 'stairs', toward: 'south', toY: 56 })));
+    expect(stopped).toMatchObject({ ok: false, code: 'cannot_dig' });
+    expect(stopped.text).toContain('copper_ore(0,63,1) は canDig に無い');
+    expect(stopped.text).toContain('canDig に copper_ore を足せば進む');
+    const allowed = sim0(ore('copper_ore'));
+    const through = await drive(allowed, run(allowed, hand({ dir: 'down', shape: 'stairs', toward: 'south', toY: 56, canDig: [...DIG, 'copper_ore'] })));
+    expect(through.ok).toBe(true);
+    expect(allowed.bot.dugBlocks.some((entry: string) => entry.startsWith('copper_ore@0,63,1'))).toBe(true);
+  });
+  it('a category word never includes an ore (stone stays stone), and a block the body never breaks named in canDig is told as such, with no "add it" hint', async () => {
+    const category = sim0(ore('iron_ore'));
+    const stopped = await drive(category, run(category, hand({ dir: 'down', shape: 'stairs', toward: 'south', toY: 56, canDig: ['stone', 'dirt', 'andesite'] })));
+    expect(stopped).toMatchObject({ ok: false, code: 'cannot_dig' });
+    const spawner = sim0(ore('spawner'));
+    const refused = await drive(spawner, run(spawner, hand({ dir: 'down', shape: 'stairs', toward: 'south', toY: 56, canDig: [...DIG, 'spawner'] })));
+    expect(refused).toMatchObject({ ok: false, code: 'cannot_dig' });
+    expect(refused.text).toContain('canDig に書かれているが体は壊さない決まりのブロック');
+    expect(refused.text).not.toContain('を足せば進む');
+  });
+});
+
 describe('vertical: pillar up (run 45 hold 7, scaled) and the four numbers', () => {
   it('lays a block under the feet at each level: attempts, stock used, confirmed and valid levels are all the same here, and the pack holds the rest', async () => {
     const sim = sim0(world('stone', 64), [0, 64, 0], [PICK, { name: 'cobblestone', count: 20 }]);

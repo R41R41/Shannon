@@ -718,6 +718,26 @@ try {
     await reset(actor);
   }
 
+  // ---- run 48 (hold 1): a stair that meets an ore named in canDig digs it (the planner was told to add the name and the body then refused it)
+  if (wanted.has('vertical_ore')) {
+    await reset(actor);
+    await ask('tp ' + ACTOR + ' -10 100 -10'); await sleep(600);
+    await ask('fill 8 91 -4 16 99 4 minecraft:stone'); await ask('fill 8 100 -4 16 106 4 minecraft:air'); await ask('setblock 12 98 1 minecraft:copper_ore');
+    await ask('give ' + ACTOR + ' minecraft:iron_pickaxe 1'); await sleep(800);
+    await ask('effect give ' + ACTOR + ' minecraft:resistance 600 4 true'); await sleep(500);
+    await ask('tp ' + ACTOR + ' 12.5 100 0.5'); await sleep(2500);
+    const without = await act(body, { hands: [{ do: 'vertical', dir: 'down', shape: 'stairs', toward: 'south', toY: 94, canDig: ['stone'], liquid: 'stop', seconds: 40 }] }, { seconds: 60 });
+    const withoutLine = without.parsed?.lines?.[0];
+    await ask('tp ' + ACTOR + ' 12.5 100 0.5'); await sleep(2500);
+    const given = await act(body, { hands: [{ do: 'vertical', dir: 'down', shape: 'stairs', toward: 'south', toY: 94, canDig: ['stone', 'copper_ore'], liquid: 'stop', seconds: 40 }] }, { seconds: 60 });
+    const givenLine = given.parsed?.lines?.[0];
+    report.verticalOre = { without: String(withoutLine?.line).slice(0, 160), given: { goal: givenLine?.goal, line: String(givenLine?.line).slice(0, 160) } };
+    check('run 48 hold 1: a stair stops at copper_ore when canDig lacks it (saying to add it), and with copper_ore in canDig it digs it and arrives', /cannot_dig: copper_ore/u.test(String(withoutLine?.line)) && givenLine?.goal === 'done', JSON.stringify(report.verticalOre).slice(0, 420));
+    produce('measure/vertical-ore', null, { output: report.verticalOre as Record<string, unknown> });
+    await ask('fill 8 91 -4 16 106 4 minecraft:air'); await ask('kill @e[type=item]'); await ask('tp ' + ACTOR + ' 0.5 100 0.5');
+    await reset(actor);
+  }
+
   // ---- A-12 (body): the head asks for a hold (incident.take): the world stops, the box holds the notes, the resume brings the world back
   if (runs('head_take')) {
     await reset(actor);

@@ -324,8 +324,11 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
   const allowed = (name: string) => rule.names.has(name) || INCIDENTAL_IN_THE_WAY.test(name);
   const refuseDig = (cell: Cell, block: any): VStop => {
     const name = nameOf(block);
-    const why = block?.diggable === false || name === 'bedrock' ? `${name}${cellText(cell)} は壊せないブロック` : `${name}${cellText(cell)} は canDig に無い（${away(cell)}）`;
-    return new VStop('cannot_dig', why, cell, name === 'bedrock' || block?.diggable === false ? undefined : `canDig に ${name} を足せば進む`);
+    // Run 48 (hold 1): a name the planner wrote in canDig that the body does not dig (a door, a spawner, a bed...) is said as such, not asked for again.
+    const refusedByRule = (args.canDig ?? []).some(word => String(word).replace(/^minecraft:/u, '').toLowerCase() === name) && !rule.names.has(name);
+    const unbreakable = block?.diggable === false || name === 'bedrock' || refusedByRule;
+    const why = unbreakable ? `${name}${cellText(cell)} は${refusedByRule ? ' canDig に書かれているが体は壊さない決まりの' : '壊せない'}ブロック` : `${name}${cellText(cell)} は canDig に無い（${away(cell)}）`;
+    return new VStop('cannot_dig', why, cell, unbreakable ? undefined : `canDig に ${name} を足せば進む`);
   };
   /** Before anything of a level is dug: a cell it must open that is not allowed stops it now, not after two others were dug. */
   const precheckDig = (cells: Cell[]) => {

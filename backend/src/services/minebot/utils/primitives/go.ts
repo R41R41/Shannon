@@ -105,6 +105,8 @@ const SAND = ['sand', 'red_sand', 'gravel', 'soul_sand'];
 const WOOD = /(?:_log|_wood|_stem|_hyphae|_planks|_fence)$/u;
 /** Blocks the body does not break whatever it is told: nothing mined for itself, nothing that is a village's or a player's. */
 const NEVER_DIG = /(?:_ore$|^ancient_debris$|^obsidian$|^crying_obsidian$|^bedrock$|^spawner$|^trial_spawner$|^vault$|_door$|_fence_gate$|_trapdoor$|_bed$|^end_portal|^nether_portal$|^barrier$|^command_block|^structure_block$|^reinforced_deepslate$|^farmland$|^budding_amethyst$)/u;
+/** An ore or ancient debris: dug when named by its id in `canDig`, never as part of a category word. */
+const ORE_ID = /(?:_ore$|^ancient_debris$)/u;
 /** Blocks that fall when what holds them is gone: never laid as a bridge or a step, dug under with care. */
 const FALLING = /^(?:sand|red_sand|gravel|suspicious_sand|suspicious_gravel|anvil|chipped_anvil|damaged_anvil|dragon_egg|pointed_dripstone|.*_concrete_powder)$/u;
 /** Made by people: left alone near a villager. */
@@ -132,7 +134,8 @@ export function digRuleOf(registry: any, words: string[] | undefined): DigRule {
     else if (word === 'dirt') DIRT.forEach(add);
     else if (word === 'sand') SAND.forEach(add);
     else if (word === 'wood') Object.keys(registry?.blocksByName ?? {}).filter(name => WOOD.test(name)).forEach(add);
-    else if (known(word) && !NEVER_DIG.test(word) && !PROTECTED_UTILITY_BLOCKS.has(word) && word !== 'water' && word !== 'lava') names.add(word);
+    // Run 48 (hold 1): an ore the planner names by its id is one it asked to have dug (a stair that meets copper_ore); no category word (stone, dirt, sand, wood) ever includes one.
+    else if (known(word) && (!NEVER_DIG.test(word) || ORE_ID.test(word)) && !PROTECTED_UTILITY_BLOCKS.has(word) && word !== 'water' && word !== 'lava') names.add(word);
     else ignored.push(word);
   }
   return { names, ignored };
