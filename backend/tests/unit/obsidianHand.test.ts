@@ -372,6 +372,14 @@ describe('obsidian: a lava source shut in rock (run 47, hold 7)', () => {
     expect(outcome.text).toContain('岩に囲まれていたので');
     expect(outcome.ok).toBe(true);
   });
+  it('takes maxDig from the hand (1 to 100) and refuses a value outside it', () => {
+    const ok = (hand: Record<string, unknown>) => obsidianProblem({ do: 'obsidian', at: [at(1, 2, 3)], ...hand }, () => true);
+    expect(ok({ maxDig: 30 })).toBeNull();
+    expect(ok({ maxDig: 100 })).toBeNull();
+    expect(ok({ maxDig: 0 })).toMatch(/maxDig は 1〜100/u);
+    expect(ok({ maxDig: 101 })).toMatch(/maxDig は 1〜100/u);
+    expect(ok({ maxDig: 2.5 })).toMatch(/maxDig は 1〜100/u);
+  });
   it('says how many digs the way needs when maxDig is too small (maxDig=N would make it), and takes the larger limit', async () => {
     const deep = (): Ground => over(flat, box('lava', 10, 10, 58, 58, 0, 0));
     const small = makeHandsSim(deep(), { items: stacks(WATER, PICK) });

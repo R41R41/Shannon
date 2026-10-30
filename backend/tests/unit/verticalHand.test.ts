@@ -173,6 +173,32 @@ describe('vertical: shaft down (run 45 hold 5) and the clock', () => {
   });
 });
 
+describe('vertical: a cave under the next rock is a fall of three at most (run 47: no_floor in 3 of 11)', () => {
+  it('a shaft drops through one cell of air onto the rock under it, counts the cell fallen through as a level, and goes on', async () => {
+    const sim = sim0(world('stone', 64, [cell('air', 0, 62, 0)]), [0, 64, 0]);
+    const outcome = await drive(sim, run(sim, hand({ dir: 'down', shape: 'shaft', toY: 58 })));
+    expect(outcome.ok).toBe(true);
+    expect(outcome.progress).toMatchObject({ done: 6, left: 0 });
+    expect(feetCell(sim.bot)!.y).toBe(58);
+  });
+  it('a stair steps off a ledge into a cave of two cells and goes on from the rock it lands on', async () => {
+    const sim = sim0(world('andesite', 64, [column('air', 0, 60, 61, 2)]));
+    const outcome = await drive(sim, run(sim, hand({ dir: 'down', shape: 'stairs', toward: 'south', toY: 54 })));
+    expect(outcome.code).not.toBe('no_floor');
+    expect(outcome.ok).toBe(true);
+    expect(feetCell(sim.bot)!.y).toBeLessThanOrEqual(54);
+  });
+  it('lava beside the landing is still a stop, and a cave deeper than three is no_floor', async () => {
+    const lavaBeside = sim0(world('stone', 64, [cell('air', 0, 62, 0), cell('lava', 1, 61, 0)]), [0, 64, 0]);
+    const stopped = await drive(lavaBeside, run(lavaBeside, hand({ dir: 'down', shape: 'shaft', toY: 58 })));
+    expect(stopped.ok).toBe(false);
+    expect(['lava', 'no_floor']).toContain(stopped.code);
+    const deep = sim0(world('stone', 64, [column('air', 0, 57, 62, 0)]), [0, 64, 0]);
+    const refused = await drive(deep, run(deep, hand({ dir: 'down', shape: 'shaft', toY: 50 })));
+    expect(refused).toMatchObject({ ok: false, code: 'no_floor' });
+  });
+});
+
 describe('vertical: pillar up (run 45 hold 7, scaled) and the four numbers', () => {
   it('lays a block under the feet at each level: attempts, stock used, confirmed and valid levels are all the same here, and the pack holds the rest', async () => {
     const sim = sim0(world('stone', 64), [0, 64, 0], [PICK, { name: 'cobblestone', count: 20 }]);

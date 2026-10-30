@@ -146,3 +146,20 @@ it('an act that carries the take is refused as held with the incident in its rec
   });
 });
 
+
+describe('run 47: the head asks again for a hold the body kept across a restart', () => {
+  it('a body started with a hold file stops the world again when the same take comes (the server forgot the freeze), and keeps the hold', async () => {
+    const { saver, said } = server('headtake');
+    const holdFile = path.join(temp(), 'hold.json');
+    fs.writeFileSync(holdFile, JSON.stringify({ id: HEAD_ID, task: 'task-9', at: '2026-10-29T00:00:00.000Z', frozen: false, freeze: 'restarted', command: '', why: take.why, start: null }));
+    const bot = fakeBot();
+    installBlackBox(bot, temp(), () => 1_000);
+    const incidents = new Incidents(bot, { holdFile, scene: saver, now: () => 1_000 });
+    expect(incidents.held()).toEqual({ id: HEAD_ID, task: 'task-9', why: take.why });
+    expect(said).not.toContain('tick freeze');
+    const result = await incidents.take({ taskId: 'task-9', incident: { take } });
+    expect(result).toMatchObject({ done: true, hold: HEAD_ID, again: true });
+    expect(said).toContain('tick freeze');
+    expect(JSON.parse(fs.readFileSync(holdFile, 'utf8'))).toMatchObject({ id: HEAD_ID, frozen: true });
+  });
+});

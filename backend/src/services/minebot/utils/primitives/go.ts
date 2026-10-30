@@ -256,7 +256,7 @@ export function keepReads(movements: any, watch: WorldWatch): (x: number, y: num
 interface Plan { status: string; path: any[]; digs: Map<string, number>; places: number; visited: number }
 const yieldNow = () => new Promise<void>(resolve => setImmediate(resolve));
 
-interface Relax { hazards?: boolean; tool?: boolean; blocks?: boolean; permissions?: boolean; limits?: boolean }
+interface Relax { hazards?: boolean; tool?: boolean; blocks?: boolean; permissions?: boolean; limits?: boolean; upstream?: boolean }
 export interface GoState {
   steps: number; dug: number; placed: number; redraws: number;
   veto: { code: string; text: string } | null;
@@ -325,6 +325,7 @@ export function goMovements(bot: any, args: Required<Pick<GoArgs, 'maxDrop' | 'w
   // (mineflayer-pathfinder's walk forward onto a laid floor asks the place's exclusion of the cell above the one it lays: both are asked.)
   movements.exclusionAreasPlace = [...(movements.exclusionAreasPlace ?? []), (block: any) => redoCost(state.dugCells, block, true)];
   // Moves that end in a hazard (beside lava, on magma...), or in water when it is not allowed, are not moves.
+  if (relax.upstream) (movements as { __upstream?: boolean }).__upstream = true;
   const getNeighbors = movements.getNeighbors.bind(movements);
   const inWater = isWaterName(nameAt(bot, Math.floor(bot.entity.position.x), Math.floor(bot.entity.position.y), Math.floor(bot.entity.position.z)));
   movements.getNeighbors = (node: any) => (getNeighbors(node) as any[]).filter(move => {
@@ -890,6 +891,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
       ...(state.dug >= limits.maxDig || state.placed >= limits.maxPlace ? [[{ limits: true }, () => state.dug >= limits.maxDig
         ? fail('limit_dig', `掘る数の上限 ${limits.maxDig} に着いた（この先にも掘る所がある）`, 'maxDig を増やすか、別の道を')
         : fail('limit_place', `置く数の上限 ${limits.maxPlace} に着いた（この先にも置く所がある）`, 'maxPlace を増やすか、別の道を')] as [Relax, (found: Plan) => StepOutcome]] : []),
+      [{ upstream: true }, () => fail('dead_end', '道は流れる水を天井の下で上流へ遡る一歩だけ（押し戻されて進めない）', '上流の水源を汲むかブロックで塞ぐか、別の道を')],
       [{ tool: true }, found => fail('no_tool', `${shown(found.digs) || '掘る所'} を掘る道だが、持っている道具では掘れない`, 'ツルハシなどを手に入れるか、別の道を')],
       ...(args.canPlace?.length ? [[{ blocks: true }, (found: Plan) => fail('no_blocks',
         `置く物が足りない（置く所 ${found.places}、持っている ${place.held.map(name => `${name}×${inventoryCount(bot, name)}`).join('・') || '無し'}${place.missing.length ? `、持っていない ${place.missing.join('・')}` : ''}${place.refused.length ? `、置かない ${place.refused.join('・')}` : ''}）`,

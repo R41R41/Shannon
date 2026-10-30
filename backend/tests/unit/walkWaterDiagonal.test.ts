@@ -73,3 +73,23 @@ describe('go held in flowing water when its time runs out', () => {
     expect(outcome.text.length).toBeLessThanOrEqual(160);
   });
 });
+
+describe('a step upstream in flowing water under a roof', () => {
+  // A channel along x at z=0: water of level 1..4 from x=2 to x=5 (the level grows downstream), two high (y 64 and 65), a stone roof at y=66.
+  const channel: Ground = (x, y, z) => {
+    if (Math.abs(x) > 30 || Math.abs(z) > 30) return null;
+    if (y < FLOOR) return 'stone';
+    if (z === 0 && x >= 2 && x <= 5 && (y === FLOOR || y === FLOOR + 1)) return `water[level=${x - 1}]`;
+    if (y === FLOOR + 2 && z === 0 && x >= 1 && x <= 6) return 'stone';
+    return 'air';
+  };
+  it('is not a move, while the step downstream is; with the upstream lift it is', () => {
+    const sim = makeSim(channel, { start: [0.5, FLOOR, 0.5] });
+    const movements = walkMovements(sim.bot, true);
+    const moves = (node: { x: number; y: number; z: number }) => (movements.getNeighbors(node) as Array<{ x: number; y: number; z: number }>).map(move => `${move.x},${move.y},${move.z}`);
+    expect(moves({ x: 4, y: FLOOR, z: 0 })).not.toContain(`3,${FLOOR},0`);     // upstream (level 3 -> 2)
+    expect(moves({ x: 3, y: FLOOR, z: 0 })).toContain(`4,${FLOOR},0`);         // downstream
+    (movements as { __upstream?: boolean }).__upstream = true;
+    expect(moves({ x: 4, y: FLOOR, z: 0 })).toContain(`3,${FLOOR},0`);
+  });
+});

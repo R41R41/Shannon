@@ -372,13 +372,13 @@ export async function centreInColumn(bot: CustomBot, feet: Vec3): Promise<string
 }
 
 /** Waits (1.5 s at most) for the body to drop one level below `feet` after the floor under it was dug. Null when it did, otherwise why not. */
-export async function waitDropOne(bot: CustomBot, feet: Vec3): Promise<string | null> {
+export async function waitDropOne(bot: CustomBot, feet: Vec3, extra = 0): Promise<string | null> {
   const deadline = Date.now() + 1500;
   while (Date.now() < deadline && (Math.floor(bot.entity.position.y) >= feet.y || (bot.entity as unknown as { onGround?: boolean }).onGround === false)) {
     assertActionActive(bot);
     await sleep(bot, 50);
   }
-  return Math.floor(bot.entity.position.y) === feet.y - 1 ? null : 'did_not_drop';
+  return Math.floor(bot.entity.position.y) === feet.y - 1 - extra ? null : 'did_not_drop';
 }
 
 /**

@@ -253,6 +253,9 @@ export function installDoorRules(movements: any): void {
   const getNeighbors = movements.getNeighbors.bind(movements);
   movements.getNeighbors = (node: any) => (getNeighbors(node) as any[]).filter(move => {
     // Run 47 (hold 1): an open trapdoor at the head of the next cell stands as a wall on one edge of its cell; the search took it as open ground and the body stood 3 s against it.
+    // Run 47 (holds 7-9, after the diagonals): a step upstream in flowing water under a ceiling (the water fills the column up to the roof) is not a way: the body floats up into the roof and the
+    // current holds it (4 s without a step, over and over). The step is not taken unless the walk is told to try it (`movements.__upstream`, the go's last look for the reason).
+    if (!move.parkour && !(movements as { __upstream?: boolean }).__upstream && upstreamUnderRoof(movements, node, move)) return false;
     // Run 47 (hold 7): in water the body swims straight and is carried by the flow; a diagonal step round a corner there left it against the wall (x 173.3, 174.3) and under a ceiling,
     // 4 s without a step, whatever the search said. A level diagonal step that leaves or enters a cell of water is taken as the two straight steps it is made of (a climb out of the water stays).
     if (!move.parkour && move.y === node.y && Math.abs(move.x - node.x) === 1 && Math.abs(move.z - node.z) === 1 && diagonalInWater(movements, node, move)) return false;
@@ -268,6 +271,24 @@ export function installDoorRules(movements: any): void {
     }
     return true;
   });
+}
+
+/** The level of the flowing water in a block (1 to 7 flowing, 8 and over falling), 0 for a source, null for no water. */
+export function waterLevelOf(block: any): number | null {
+  if (!block || String(block.name) !== 'water') return null;
+  let level = 0;
+  try { level = Number(block.getProperties?.()?.level ?? block.metadata ?? 0); } catch { level = Number(block.metadata ?? 0); }
+  return Number.isFinite(level) ? level : 0;
+}
+/** Whether a level step goes up the stream in water that fills the column to a roof: from a cell of water to the next, nearer the source, with a solid roof over the next cell's head. */
+function upstreamUnderRoof(movements: any, node: any, move: any): boolean {
+  if (move.y !== node.y) return false;
+  const dx = move.x - node.x, dz = move.z - node.z;
+  if (Math.abs(dx) + Math.abs(dz) !== 1) return false;
+  const here = waterLevelOf(movements.getBlock(node, 0, 0, 0)), next = waterLevelOf(movements.getBlock(node, dx, 0, dz));
+  if (here === null || next === null || next >= here || here < 1) return false;
+  const head = movements.getBlock(node, dx, 1, dz), roof = movements.getBlock(node, dx, 2, dz);
+  return waterLevelOf(head) !== null && !!roof && roof.boundingBox === 'block';
 }
 
 /** Whether a diagonal step is made in water: water in the cell it leaves or the cell it enters (a corner of water beside dry steps is walked as before). */

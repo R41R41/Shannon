@@ -502,9 +502,12 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
     ctx.progress?.(`${valid()}段`);
   };
   /** The level's feet cell reached? A body that is not there after the level is `displaced`, where it stands. */
-  const arrived = async (plan: Plan) => {
+  const arrived = async (plan: Plan, extra = 0) => {
     await wait(ctx, 100);
-    needDisplacedCheck([plan.to]);
+    // Run 47: a body that ran one cell on in the stair's direction at the level of the step it took (a slope under it, a sprint's last tick) has taken the step: the next level is drawn from where it stands.
+    const expected = [shift(plan.to, 0, -extra)];
+    if (plan.kind === 'stairs_down' || plan.kind === 'stairs_up') { const [dx, dz] = TOWARD[args.toward!]; expected.push(shift(plan.to, dx, -extra, dz)); }
+    needDisplacedCheck(expected);
   };
   const stairsLevel = async (plan: Plan) => {
     precheckDig(plan.clear);
@@ -526,23 +529,42 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
         if (!laid.confirmed) scaffoldUnconfirmed = true;   // the world did not show it in a block update: walked on, not counted
       }
     }
-    if (floorDrop(bot as never, plan.floor, false) !== 0) {
+    // Run 47: a stair down into a cave (the next foothold is air with rock one or two cells under it) is taken as a fall of at most three, which does no harm; up, and onto liquid, magma or a drop
+    // beyond that, it stays a stop.
+    const extra = floorDrop(bot as never, plan.floor, down);
+    if (extra === null || (!down && extra !== 0)) {
       const under = nameOf(blockAt(bot, plan.floor));
-      throw new VStop('no_floor', `次の足場 ${cellText(plan.floor)} が ${under} で立てない（落ちる段が 1 を超える・立てない床）`, plan.floor, '別の形か、足場を置いて');
+      throw new VStop('no_floor', `次の足場 ${cellText(plan.floor)} が ${under} で立てない（落ちる段が ${down ? 3 : 1} を超える・立てない床）`, plan.floor, '別の形か、足場を置いて');
+    }
+    const landing = shift(plan.to, 0, -extra);
+    if (extra > 0) {
+      const wet = [0, 1, 2].flatMap(dy => NEIGHBOURS.slice(0, 2).concat(NEIGHBOURS.slice(4)).map(([ox, oy, oz]) => shift(landing, ox, oy + dy, oz))).find(cell => isLiquidName(nameOf(blockAt(bot, cell))));
+      if (wet) throw new VStop(liquidKind(blockAt(bot, wet)) === 'lava' ? 'lava' : 'water', `落ちる先 ${cellText(landing)} の隣 ${cellText(wet)} が ${nameOf(blockAt(bot, wet))}`, wet);
     }
     needDisplacedCheck([plan.from]);
-    const stepped = await moveOneCell(bot as never, plan.from, plan.to, 0);
+    const stepped = await moveOneCell(bot as never, plan.from, plan.to, extra);
     if (!stepped && sameCell(feetCell(bot) ?? plan.from, plan.from)) {
       throw new VStop('no_foothold', `次の段 ${cellText(plan.to)} へ踏み出せなかった（今 ${cellText(plan.from)}）`, plan.from, '頭の上や足元を見てから');
     }
-    await arrived(plan);
-    finishLevel(plan, [{ cell: plan.floor, want: 'solid' }, { cell: plan.to, want: 'not_solid' }, { cell: shift(plan.to, 0, 1), want: 'not_solid' }], !scaffoldUnconfirmed);
+    await arrived(plan, extra);
+    finishLevel({ ...plan, to: landing }, [{ cell: shift(landing, 0, -1), want: 'solid' }, { cell: landing, want: 'not_solid' }, { cell: shift(landing, 0, 1), want: 'not_solid' }], !scaffoldUnconfirmed);
+    for (let i = 1; i <= extra; i++) addLevel(shift(plan.to, 0, -i), []);   // the cells fallen through are levels taken
   };
   const shaftLevel = async (plan: Plan) => {
     const floorBlock = blockAt(bot, plan.clear[0]);
     if (!solid(floorBlock)) throw new VStop('no_floor', `足の下 ${cellText(plan.clear[0])} が ${nameOf(floorBlock)} で、下りる先に岩が無い`, plan.clear[0]);
     precheckDig(plan.clear);
-    const refusal = shaftStepRefusal(bot as never, new Vec3(plan.from.x, plan.from.y, plan.from.z));
+    let refusal = shaftStepRefusal(bot as never, new Vec3(plan.from.x, plan.from.y, plan.from.z));
+    // Run 47: the cell dropped into has air under it (a cave): the body falls on to the rock one or two cells below, three in all, which does no harm; liquid in that column or beside it is still a stop.
+    let cave = 0;
+    if (refusal === 'no_rock_under') {
+      const extra = floorDrop(bot as never, shift(plan.to, 0, -1), true);
+      if (extra !== null && extra > 0) {
+        const landing = shift(plan.to, 0, -extra);
+        const wet = [0, 1].flatMap(dy => NEIGHBOURS.slice(0, 2).concat(NEIGHBOURS.slice(4)).map(([ox, oy, oz]) => shift(landing, ox, oy + dy, oz))).find(cell => isLiquidName(nameOf(blockAt(bot, cell))));
+        if (!wet) { cave = extra; refusal = null; }
+      }
+    }
     if (refusal) {
       const text = explainShaftRefusal(bot as never, new Vec3(plan.from.x, plan.from.y, plan.from.z), refusal);
       if (refusal === 'floor_not_diggable' || refusal === 'floor_protected') throw new VStop('cannot_dig', text, plan.clear[0]);
@@ -557,10 +579,11 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
     if (centred) throw new VStop('displaced', `縦穴の真ん中に立てない（${centred}）`, feetCell(bot) ?? plan.from);
     needDisplacedCheck([plan.from]);
     await openAll(plan.clear);
-    const dropped = await waitDropOne(bot as never, new Vec3(plan.from.x, plan.from.y, plan.from.z));
-    if (dropped) throw new VStop('displaced', `足の下を掘ったが 1 段落ちなかった（${dropped}。今 ${cellText(feetCell(bot) ?? plan.from)}）`, feetCell(bot) ?? plan.from);
-    await arrived(plan);
+    const dropped = await waitDropOne(bot as never, new Vec3(plan.from.x, plan.from.y, plan.from.z), cave);
+    if (dropped) throw new VStop('displaced', `足の下を掘ったが ${1 + cave} 段落ちなかった（${dropped}。今 ${cellText(feetCell(bot) ?? plan.from)}）`, feetCell(bot) ?? plan.from);
+    await arrived(plan, cave);
     finishLevel(plan, [{ cell: plan.to, want: 'not_solid' }, { cell: plan.from, want: 'not_solid' }]);
+    for (let i = 1; i <= cave; i++) addLevel(shift(plan.to, 0, -i), []);
   };
   const pillarLevel = async (plan: Plan) => {
     const floorBlock = blockAt(bot, plan.floor);

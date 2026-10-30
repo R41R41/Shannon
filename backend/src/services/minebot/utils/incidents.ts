@@ -73,7 +73,7 @@ export function readTake(value: unknown): IncidentTakeInput | null {
  * more lost in any hand, near death in the act, a death. The first failure of a kind writes its box and scene but does not hold.
  */
 export function holdsFor(reason: string | null): boolean {
-  return !!reason && /^(?:go_stuck|go_search_timeout|go_limit_time_low|long:|near_death|death)/u.test(reason);
+  return !!reason && /^(?:go_stuck|go_search_timeout|go_limit_time_low|long:|explained:|near_death|death)/u.test(reason);
 }
 
 /** The kind of a heavy-failure reason (`go_limit_time_low:3` and `go_limit_time_low:7` are one kind). */
@@ -81,19 +81,51 @@ export function reasonKind(reason: string): string {
   return reason.split(':')[0]!;
 }
 
+/**
+ * Run 47 (after hold 9): a stop whose cause the body names itself and whose way out is a word to the planner (the exposure guard's threat_exposed; a go held in flowing water; a place that is
+ * dug but beside water or under gravel, or a block canDig lacks; a cannot_dig that says what to add) is given back to the LLM the first time at a place, not held; the second time at the same
+ * place it is held (`explained:`).
+ */
+export function explainedStop(line: { do: string; line: string }): { code: string; where: string } | null {
+  const code = /止まった (\w+)/u.exec(line.line)?.[1];
+  if (!code) return null;
+  const text = line.line;
+  const explained = code === 'threat_exposed'
+    || (line.do === 'go' && code === 'stuck' && /流れる水の中/u.test(text))
+    || (line.do === 'go' && code === 'dead_end' && /掘ると流れ込む|掘ると落ちてくる|canDig に無い|canDig に \S+ を許せば|道は流れる水を天井/u.test(text))
+    || (code === 'cannot_dig' && /canDig に \S+ を足/u.test(text));
+  if (!explained) return null;
+  const cell = /\((-?\d+),(-?\d+),(-?\d+)\)/u.exec(text);
+  return { code, where: cell ? `${cell[1]},${cell[2]},${cell[3]}` : '' };
+}
+/** A line that stopped at its time with the work moving (steps, digs or levels counted): the clock, not a stall. */
+const progressedAtTime = (line: { line: string }): boolean => /止まった limit_time/u.test(line.line)
+  && (Number(/(?:道|段) (\d+)/u.exec(line.line)?.[1] ?? 0) > 0 || Number(/掘 (\d+)/u.exec(line.line)?.[1] ?? 0) > 0);
+
 /** The heavy-failure reason of an act's report, or null (light: the box only). */
 export function heavyReason(report: Pick<ActReport, 'ok' | 'lines' | 'stoppedBy'>, ms: number, lowestHp: number | null, died: boolean, seen: Set<string>, task: string): string | null {
   if (report.ok) return null;
   if (died) return 'death';
   if (lowestHp !== null && lowestHp <= NEAR_DEATH) return `near_death:${lowestHp}`;
+  // The stops the body explains: the first at a place goes back to the LLM, the second at the same place is held.
+  for (const line of report.lines) {
+    if (line.status === 'done' || line.status === 'skipped') continue;
+    const said = explainedStop(line);
+    if (!said) continue;
+    const key = `${task}|explained|${line.do}|${said.code}|${said.where}`;
+    if (!seen.has(key)) { seen.add(key); return null; }
+    return `explained:${line.do}/${said.code}`;
+  }
   for (const line of report.lines) {
     if (line.do !== 'go' || line.status === 'done') continue;
+    if (explainedStop(line)) continue;
     const code = /go 止まった (\w+)/u.exec(line.line)?.[1];
     if (code === 'stuck' || code === 'search_timeout') return `go_${code}`;
     const steps = Number(/道 (\d+) 歩/u.exec(line.line)?.[1] ?? NaN);
     if (code === 'limit_time' && Number.isFinite(steps) && steps < LOW_STEPS) return `go_limit_time_low:${steps}`;
   }
-  if (ms >= LONG_MS) return `long:${Math.round(ms / 1000)}s`;
+  // Run 47: a hand that ran to its time with the work moving is the clock's: the planner carries it on from the result.
+  if (ms >= LONG_MS && !report.lines.some(line => line.status !== 'done' && line.status !== 'skipped' && progressedAtTime(line))) return `long:${Math.round(ms / 1000)}s`;
   const failed = report.lines.find(line => line.status !== 'done' && line.status !== 'skipped');
   if (failed) {
     const code = /止まった (\w+)/u.exec(failed.line)?.[1] ?? report.stoppedBy ?? 'failed';
@@ -230,7 +262,17 @@ export class Incidents {
     if (!take) return null;
     const hold = this.hold;
     if (hold) {
-      if (hold.id === take.id) return { done: true, hold: hold.id, incident: null, again: true };
+      if (hold.id === take.id) {
+        // Run 47: the head asks again for the hold the body kept across a restart (the server's freeze did not outlast it): the world is stopped again.
+        const again = this.options.scene ? await this.options.scene.freeze() : null;
+        if (again?.frozen && (!hold.frozen || hold.freeze !== again.why)) {
+          this.hold = { ...hold, frozen: true, freeze: again.why };
+          try { await fs.promises.writeFile(this.options.holdFile, JSON.stringify(this.hold)); } catch { /* held in memory */ }
+          log.warn(`⏸ 保留 ${hold.id} の頼みが来たので、世界を止め直した`);
+          this.box()?.note('hold_refrozen', { id: hold.id, freeze: again.why });
+        }
+        return { done: true, hold: hold.id, incident: null, again: true };
+      }
       log.warn(`保留の頼み ${take.id} が来たが、体は保留 ${hold.id} を持っている: そのまま`);
       return { done: false, hold: hold.id, incident: null };
     }

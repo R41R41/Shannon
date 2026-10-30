@@ -93,7 +93,8 @@ describe('heavy or light', () => {
     expect(heavyReason(lines('go 止まった stuck: 置いたブロックが世界に現れない (196,40,209) 道 61 歩・掘 24・置 28・引き直し 12 回') as never, 9000, 18, false, seen, 't')).toBe('go_stuck');
     expect(heavyReason(lines('go 止まった search_timeout: 道探しが…') as never, 9000, 18, false, seen, 't')).toBe('go_search_timeout');
     expect(heavyReason(lines('go 止まった limit_time: 120 秒の上限に着いた (153,2,226) 道 3 歩・掘 0・置 0・引き直し 1 回') as never, 125_000, 18, false, seen, 't')).toBe('go_limit_time_low:3');
-    expect(heavyReason(lines('go 止まった limit_time: 120 秒の上限に着いた 道 122 歩・掘 81') as never, 120_000, 18, false, seen, 't')).toBe('long:120s');
+    expect(heavyReason(lines('go 止まった limit_time: 120 秒の上限に着いた 道 122 歩・掘 81') as never, 120_000, 18, false, seen, 't')).toBe('first:go/limit_time');   // run 47: at its time with the work moving: light, the planner carries it on
+    expect(holdsFor('first:go/limit_time')).toBe(false);
     expect(heavyReason(lines('無い: mine 止まった no_block: …', 'mine') as never, 3000, 3.5, false, seen, 't')).toBe('near_death:3.5');
     expect(heavyReason(lines('無い: mine 止まった no_block: …', 'mine') as never, 3000, 18, true, seen, 't')).toBe('death');
     expect(heavyReason(lines('無い: mine 止まった no_block: …', 'mine') as never, 3000, 18, false, seen, 't')).toBe('first:mine/no_block');
@@ -414,5 +415,33 @@ describe('run 46 hold 8: the chat form of the answer (the numbers empty)', () =>
     const { parsePlayerList } = await import('../../src/services/minebot/utils/sceneSave.js');
     expect(parsePlayerList('There are  of a max of  players online: ShannonProbe, MinebotTrial')).toEqual({ count: 2, max: 0, names: ['ShannonProbe', 'MinebotTrial'] });
     expect(parsePlayerList('There are  of a max of  players online: AUnknown or incomplete command. See below for error<--')).toBeNull();
+  });
+});
+
+describe('heavy or light: the stops the body explains and the hands that ran to their time (run 47)', () => {
+  const lines = (line: string, d = 'go') => ({ ok: false, lines: [{ i: 1, do: d, status: 'stopped' as const, line }] });
+  it('a hand out of time with the work moving is not held; with no work moving it is (long)', () => {
+    const seen = new Set<string>();
+    const lightReason = (reason: string | null) => { expect(reason === null || !holdsFor(reason)).toBe(true); };
+    lightReason(heavyReason(lines('vertical 止まった limit_time: 60 秒の上限に着いた (208,50,185) 段 23・掘 67・置 0。seconds を増やして続きを出す', 'vertical') as never, 61_000, 18, false, seen, 't'));
+    lightReason(heavyReason(lines('go 止まった limit_time: 90 秒の上限に着いた (1,2,3) 道 40 歩・掘 12・置 0・引き直し 3 回') as never, 91_000, 18, false, seen, 't'));
+    expect(heavyReason(lines('go 止まった limit_time: 90 秒の上限に着いた (1,2,3) 道 0 歩・掘 0・置 0') as never, 91_000, 18, false, seen, 't')).toBe('go_limit_time_low:0');
+    expect(heavyReason(lines('mine 止まった no_block: …', 'mine') as never, 90_000, 18, false, seen, 't')).toBe('long:90s');
+  });
+  it('a stop the body explains goes back to the LLM the first time at a place and is held the second time at the same place', () => {
+    const seen = new Set<string>();
+    const wet = lines('go 止まった dead_end: 行き先 (14,101,0)の頭 (14,102,0) の stone は隣の (15,102,0) が water で掘ると流れ込む (12,101,0) 道 0 歩');
+    expect(heavyReason(wet as never, 9000, 18, false, seen, 't')).toBeNull();
+    expect(heavyReason(wet as never, 9000, 18, false, seen, 't')).toBe('explained:go/dead_end');
+    // another place: first time again
+    expect(heavyReason(lines('go 止まった dead_end: 行き先 (20,101,0) の stone は隣の (21,101,0) が water で掘ると流れ込む (12,101,0) 道 0 歩') as never, 9000, 18, false, seen, 't')).toBeNull();
+    const water = lines('go 止まった stuck: 流れる水の中（(13,100,0) は 水の流れ 5）で 3秒ずつ進めない（上流へ泳いでも押し戻される） (13,100,0) 道 14 歩');
+    expect(heavyReason(water as never, 9000, 18, false, seen, 't')).toBeNull();
+    expect(heavyReason(water as never, 9000, 18, false, seen, 't')).toBe('explained:go/stuck');
+    expect(holdsFor('explained:go/stuck')).toBe(true);
+    // a stuck that is not about the water is still a go_stuck at once
+    expect(heavyReason(lines('go 止まった stuck: 3秒位置が変わらず (156,67,200) 道 2 歩') as never, 9000, 18, false, seen, 't')).toBe('go_stuck');
+    expect(heavyReason(lines('go 止まった threat_exposed: zombie（約4m）から見える所を掘らないと進めない (1,2,3) 道 3 歩') as never, 9000, 18, false, seen, 't')).toBeNull();
+    expect(heavyReason(lines('go 止まった threat_exposed: zombie（約4m）から見える所を掘らないと進めない (1,2,3) 道 3 歩') as never, 9000, 18, false, seen, 't')).toBe('explained:go/threat_exposed');
   });
 });

@@ -208,6 +208,12 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
 
   const failures: Why[] = [];
   let waterLeft: Cell | null = null;
+  /** Run 47 (hold 12): the waits the hand makes (for lava to set, water to run dry, a hole to fill, a drop to come) are told in the result with their reason and length, so that a quiet stretch is explained. */
+  const waited = new Map<string, number>();
+  const waitFor = async (label: string, context: StepContext, until: () => boolean, ms: number): Promise<boolean> => {
+    const began = Date.now();
+    try { return await waitUntil(context, until, ms, 100); } finally { waited.set(label, (waited.get(label) ?? 0) + (Date.now() - began)); }
+  };
 
   /** Moves off a cell that has lava round it now. */
   const clearOfLava = async (): Promise<Why | null> => {
@@ -297,13 +303,16 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
 
   /** The drop of the obsidian dug: walked to where the body's box takes it (a cell clear of lava), and waited for. */
   const collect = async (lava: Cell, knownIds: Set<number>): Promise<void> => {
+    // Run 47 (hold 12): the drop of obsidian dug over a hole falls into it: any obsidian that came after the dig within 12 cells counts, not only 4.
     const items = () => (Object.values(bot.entities ?? {}) as any[]).filter(entity => entity?.position && (entity.name === 'item' || entity.displayName === 'Item')
-      && !knownIds.has(Number(entity.id)) && Math.hypot(entity.position.x - lava.x - 0.5, entity.position.y - lava.y - 0.5, entity.position.z - lava.z - 0.5) <= 4);
+      && !knownIds.has(Number(entity.id)) && Math.hypot(entity.position.x - lava.x - 0.5, entity.position.y - lava.y - 0.5, entity.position.z - lava.z - 0.5) <= 12
+      && ((): boolean => { try { return entity.getDroppedItem?.()?.name === 'obsidian'; } catch { return false; } })());
     // The drop of a block already dug is taken even when the hand's own time has run out (a few seconds' grace).
     const c = timeIsUp(ctx) ? limitedContext(parent, SCOOP_GRACE_S) : ctx;
     // The drop appears a tick or two after the block goes.
-    await waitUntil(c, () => items().length > 0 || gained() > 0, DROP_WAIT_MS, 100);
-    for (let round = 0; round < 3 && !timeIsUp(c); round++) {
+    await waitFor('落とし物が現れるのを', c, () => items().length > 0 || gained() > 0, DROP_WAIT_MS);
+    let dug = false;
+    for (let round = 0; round < 4 && !timeIsUp(c); round++) {
       const item = items()[0];
       if (!item) return;
       if (!withinTake(bot.entity.position, item.position)) {
@@ -312,11 +321,35 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
         const cellOfItem = { x: Math.floor(at.x), y: Math.floor(at.y), z: Math.floor(at.z) };
         const spot = standCells(read, cellOfItem, 2, cellOfItem.y - 2, cellOfItem.y + 1, true)
           .filter(stand => withinTake({ x: stand.x + 0.5, y: stand.y, z: stand.z + 0.5 }, at)).sort((a, b) => dist(a, here) - dist(b, here))[0];
-        if (!spot) { counts.notes.push(`落とし物 ${cellText(cellOfItem)} は${obsidianRoom() ? '溶岩を避けた立ち位置から拾えない' : '持ち物が満杯で拾えない'}`); return; }
-        if (await moveTo(c, spot)) { counts.restands++; continue; }
+        const walked = spot ? await moveTo(c, spot) : null;
+        if (spot && !walked) { /* at the spot: waited for below */ }
+        else if (!dug && obsidianRoom()) {
+          // No place the walk reaches: a way is dug to the cell the drop lies in (a hole under where the block was), as a person digs down to it.
+          dug = true;
+          if (spot) counts.restands++;
+          const words = args.canDig?.length ? args.canDig : DEFAULT_CARVE;
+          const gone = await go(c, { goals: [cellOfItem], canDig: words, maxDig: Math.max(1, Math.min(100, Math.floor(args.maxDig ?? DEFAULT_CARVE_DIG))), maxPlace: 0, seconds: Math.max(8, Math.min(30, Math.floor((c.deadline - Date.now()) / 1000))) });
+          if (!gone.ok) { counts.notes.push(`落とし物 ${cellText(cellOfItem)} へ掘って行けない: ${gone.text.slice(0, 60)}`); return; }
+          counts.restands++;
+          continue;
+        } else { counts.notes.push(`落とし物 ${cellText(cellOfItem)} は${obsidianRoom() ? '溶岩を避けた立ち位置から拾えない' : '持ち物が満杯で拾えない'}`); return; }
       }
-      await waitUntil(c, () => !bot.entities?.[item.id], PICKUP_WAIT_MS, 100);
+      await waitFor('拾うのを', c, () => !bot.entities?.[item.id], PICKUP_WAIT_MS);
     }
+  };
+
+  /** The obsidian lying in the world after the hand (where, and how many), or null: told in the result when it was made and not taken. */
+  const lyingObsidian = (around: Cell, knownIds: Set<number>): { count: number; at: Cell } | null => {
+    let count = 0, at: Cell | null = null;
+    for (const entity of Object.values(bot.entities ?? {}) as any[]) {
+      if (!entity?.position || knownIds.has(Number(entity.id)) || !(entity.name === 'item' || entity.displayName === 'Item')) continue;
+      let stack: { name?: string; count?: number } | null = null;
+      try { stack = entity.getDroppedItem?.() ?? null; } catch { stack = null; }
+      if (stack?.name !== 'obsidian' || Math.hypot(entity.position.x - around.x, entity.position.y - around.y, entity.position.z - around.z) > 24) continue;
+      count += Math.max(1, Number(stack.count ?? 1));
+      at ??= { x: Math.floor(entity.position.x), y: Math.floor(entity.position.y), z: Math.floor(entity.position.z) };
+    }
+    return count && at ? { count, at } : null;
   };
 
   /**
@@ -350,7 +383,7 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
     const way = ways[0];
     if (!way) {
       const rock = FACES.map(face => { const cell = shift(lava, face); return `${cellText(cell)} ${nameOf(cell)}`; }).slice(0, 6).join('・');
-      return { code: 'unreachable', text: `${cellText(lava)} は岩に囲まれ（${rock}）、掘って面と立ち位置を作る道も無い: ${reasons.slice(0, 3).join('、') || '掘ってよい物（canDig）に無い'}`, at: lava };
+      return { code: 'unreachable', text: `${cellText(lava)} は岩に囲まれ（${rock}）、掘って面と立ち位置を作る道も無い: ${reasons.slice(0, 4).join('、') || '掘ってよい物（canDig）に無い'}`, at: lava };
     }
     const maxDig = Math.max(1, Math.min(100, Math.floor(args.maxDig ?? DEFAULT_CARVE_DIG)));
     const arrived = await go(ctx, { goals: [way.k2], canDig: words, maxDig, maxPlace: 0, seconds: Math.max(10, Math.min(40, Math.floor((ctx.deadline - Date.now()) / 1000))) });
@@ -415,7 +448,7 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
       waterCell = poured.cell;
       waterLeft = poured.cell;
       if (setHard) { needsCover = false; break; }
-      if (await waitUntil(ctx, () => read(lava.x, lava.y, lava.z)?.name === 'obsidian', SET_WAIT_MS, 100)) { setHard = true; break; }
+      if (await waitFor('溶岩が固まるのを', ctx, () => read(lava.x, lava.y, lava.z)?.name === 'obsidian', SET_WAIT_MS)) { setHard = true; break; }
       // The lava did not set: the water is taken back and the next place is tried.
       const after = read(lava.x, lava.y, lava.z);
       if (await scoopBack(poured.cell)) waterLeft = null;
@@ -432,7 +465,7 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
     const covered = !!burnsAt() && !!water;
     if (!covered && water) {
       if (await scoopBack(water)) waterLeft = null;
-      await waitUntil(ctx, () => !waterNear(lava), DRY_WAIT_MS, 100);
+      await waitFor('水が引くのを', ctx, () => !waterNear(lava), DRY_WAIT_MS);
     }
     if (!covered && !water && burnsAt()) counts.notes.push(`${cellText(lava)} は溶岩が流れ込む所を水なしで掘った（落とし物が焼けるかもしれない）`);
     if (!obsidianRoom()) { if (waterLeft && await scoopBack(waterLeft)) waterLeft = null; return { code: 'inventory_full', text: fullWords(), at: lava }; }
@@ -442,13 +475,15 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
       return failure;
     }
     if (covered) {
-      const held = await waitUntil(ctx, () => !lavaFeeds(lava), HOLE_WAIT_MS, 100);
+      const held = await waitFor('穴に水が満ちるのを', ctx, () => !lavaFeeds(lava), HOLE_WAIT_MS);
       if (held) {
         if (await scoopBack(water!)) waterLeft = null;
-        await waitUntil(ctx, () => !waterNear(lava), DRY_WAIT_MS, 100);
+        await waitFor('水が引くのを', ctx, () => !waterNear(lava), DRY_WAIT_MS);
       }
     }
     await collect(lava, knownIds);
+    const leftLying = lyingObsidian(lava, knownIds);
+    if (leftLying && gained() < want) counts.notes.push(`作った黒曜石 ${leftLying.count} 個が ${cellText(leftLying.at)} に落ちたまま（拾えていない）`);
     if (water && waterLeft && await scoopBack(water)) waterLeft = null;
     return null;
   };
@@ -474,7 +509,8 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
 
   const waterBack = inventoryCount(bot, 'water_bucket') >= bucketsAtStart;
   if (!waterBack && waterLeft) counts.notes.push(`水が ${cellText(waterLeft)} に残った`);
-  const extras = [counts.placed ? `足場 ${counts.placed} 個` : '', ...skipped.map(text => `飛ばした ${text}`), ...counts.notes].filter(Boolean).join('・');
+  const waitedWords = [...waited.entries()].filter(([, ms]) => ms >= 1500).map(([label, ms]) => `${label}待った ${(ms / 1000).toFixed(1)} 秒`).join('・');
+  const extras = [counts.placed ? `足場 ${counts.placed} 個` : '', ...skipped.map(text => `飛ばした ${text}`), ...counts.notes, waitedWords].filter(Boolean).join('・');
   if (counts.obsidian >= want) {
     if (!waterBack) return stop('stuck', `黒曜石は取れたが水をバケツに戻せなかった${extras ? `（${extras}）` : ''}`, waterLeft ?? order[0]);
     return { ok: true, text: `obsidian 済 黒曜石 ${counts.obsidian} 個・水の注ぎ ${counts.pours} 回・立ち直し ${counts.restands} 回・水回収済${extras ? `・${extras}` : ''}`, at: order[order.length - 1] };
@@ -498,6 +534,8 @@ export function obsidianProblem(hand: Record<string, unknown>, cellOk: (spec: un
   if (!Array.isArray(at) || !at.length) return 'at（溶岩の源のマス）が要る';
   if (at.length > 8) return 'at は溶岩の源のマス 8 つまで';
   if (!at.every(cellOk)) return 'at のマスが読めない';
+  const maxDig = hand.maxDig as number | undefined;
+  if (maxDig !== undefined && (!Number.isInteger(maxDig) || maxDig < 1 || maxDig > 100)) return 'maxDig は 1〜100 の整数';
   const seconds = hand.seconds as number | undefined, count = hand.count as number | undefined;
   if (seconds !== undefined && (seconds < 5 || seconds > 120)) return 'seconds は 5〜120';
   if (count !== undefined && (!Number.isInteger(count) || count < 1 || count > 64)) return 'count は 1〜64 の整数';

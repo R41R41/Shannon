@@ -654,13 +654,13 @@ try {
     const run = await act(body, { hands: [{ do: 'go', to: { x: 14, y: 100, z: -3 }, waterOk: true, seconds: 40 }] }, { seconds: 50 });
     const line = run.parsed?.lines?.[0];
     report.goWaterBend = { ms: run.ms, goal: line?.goal, line: String(line?.line).slice(0, 220) };
-    check('run 47 hold 7: a go upstream in flowing water under a ceiling arrives, or stops within 30 s saying the water holds it (stuck, with the flow and the way out), never 40 s of tries', (line?.goal === 'done' && run.ms < 30_000) || (/stuck: 流れる水の中/u.test(String(line?.line)) && run.ms < 30_000), JSON.stringify(report.goWaterBend).slice(0, 400));
+    check('run 47 hold 7: a go upstream in flowing water under a ceiling arrives, or stops within 30 s saying the water holds it (stuck, with the flow and the way out), never 40 s of tries', (line?.goal === 'done' && run.ms < 30_000) || ((/stuck: 流れる水の中/u.test(String(line?.line)) || /dead_end: 道は流れる水を天井の下で上流へ/u.test(String(line?.line))) && run.ms < 30_000), JSON.stringify(report.goWaterBend).slice(0, 400));
     // the same go with a short `seconds` (15): when the clock runs out in the flow, the line says the water held it
     await ask('tp ' + ACTOR + ' 9.5 100 0.5'); await sleep(2500);
     const short = await act(body, { hands: [{ do: 'go', to: { x: 14, y: 100, z: -3 }, waterOk: true, seconds: 15 }] }, { seconds: 30 });
     const shortLine = short.parsed?.lines?.[0];
     report.goWaterBendShort = { ms: short.ms, goal: shortLine?.goal, line: String(shortLine?.line).slice(0, 220) };
-    check('run 47 hold 8: a go held in flowing water when its 15 s run out says so in the line (limit_time or stuck, with 流れる水の中), or arrives', shortLine?.goal === 'done' || /流れる水の中/u.test(String(shortLine?.line)), JSON.stringify(report.goWaterBendShort).slice(0, 400));
+    check('run 47 hold 8: a go held in flowing water when its 15 s run out says so in the line (limit_time or stuck, with 流れる水の中), or arrives', shortLine?.goal === 'done' || /流れる水の中|流れる水を天井の下で上流へ/u.test(String(shortLine?.line)), JSON.stringify(report.goWaterBendShort).slice(0, 400));
     produce('measure/go-waterbend', null, { output: { long: report.goWaterBend, short: report.goWaterBendShort } as Record<string, unknown> });
     await ask('fill 7 100 -7 16 104 5 minecraft:air'); await ask('tp ' + ACTOR + ' 0.5 100 0.5');
     await reset(actor);
@@ -698,6 +698,23 @@ try {
     check('run 47 hold 11: with maxDig 1 the obsidian hand says how many digs the way needs (maxDig=N なら作れる)', /maxDig=\d+ なら作れる/u.test(String(smallLine?.line)), JSON.stringify(report.obsidianCapSmall).slice(0, 420));
     produce('measure/obsidian-cap', null, { output: { small: report.obsidianCapSmall } });
     await ask('fill 7 100 -6 16 106 6 minecraft:air'); await ask('kill @e[type=item]'); await ask('tp ' + ACTOR + ' 0.5 100 0.5');
+    await reset(actor);
+  }
+
+  // ---- run 47 (after): a shaft down that meets a cave under the next rock drops through it (a fall of three at most) and goes on
+  if (wanted.has('vertical_cave')) {
+    await reset(actor);
+    await ask('tp ' + ACTOR + ' -10 100 -10'); await sleep(600);
+    await ask('fill 8 91 -4 16 99 4 minecraft:stone'); await ask('fill 8 100 -4 16 106 4 minecraft:air'); await ask('setblock 12 96 0 minecraft:air');
+    await ask('give ' + ACTOR + ' minecraft:iron_pickaxe 1'); await sleep(800);
+    await ask('effect give ' + ACTOR + ' minecraft:resistance 600 4 true'); await sleep(500);
+    await ask('tp ' + ACTOR + ' 12.5 100 0.5'); await sleep(2500);
+    const run = await act(body, { hands: [{ do: 'vertical', dir: 'down', shape: 'shaft', toY: 93, canDig: ['stone'], liquid: 'stop', seconds: 60 }] }, { seconds: 80 });
+    const line = run.parsed?.lines?.[0];
+    report.verticalCave = { ms: run.ms, goal: line?.goal, line: String(line?.line).slice(0, 200) };
+    check('run 47: a shaft down through stone with a one-cell cave under the rock goes through the cave and arrives (done), not no_floor', line?.goal === 'done', JSON.stringify(report.verticalCave).slice(0, 400));
+    produce('measure/vertical-cave', null, { output: report.verticalCave as Record<string, unknown> });
+    await ask('fill 8 91 -4 16 106 4 minecraft:air'); await ask('kill @e[type=item]'); await ask('tp ' + ACTOR + ' 0.5 100 0.5');
     await reset(actor);
   }
 
