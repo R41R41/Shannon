@@ -120,7 +120,14 @@ export function heavyReason(report: Pick<ActReport, 'ok' | 'lines' | 'stoppedBy'
     if (line.status === 'done' || line.status === 'skipped') continue;
     const said = explainedStop(line);
     if (!said) continue;
-    const key = `${task}|explained|${line.do}|${said.code}|${said.where}`;
+    // Run53: allowing water fixed the first dead_end, then a missing granite permission at the same goal was a new cause.
+    // Closed categories, not the full sentence: changing unrelated words never resets the repeat guard.
+    const cause = line.do === 'go' && said.code === 'dead_end'
+      ? /canDig に無い|canDig に \S+ を許せば/u.test(line.line) ? 'permission'
+        : /掘ると流れ込む/u.test(line.line) ? 'liquid'
+          : /掘ると落ちてくる/u.test(line.line) ? 'falling_blocks' : 'flowing_ceiling'
+      : '';
+    const key = `${task}|explained|${line.do}|${said.code}|${said.where}|${cause}`;
     if (!seen.has(key)) { seen.add(key); return null; }
     return `explained:${line.do}/${said.code}`;
   }
