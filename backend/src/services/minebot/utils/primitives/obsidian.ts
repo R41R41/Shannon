@@ -303,7 +303,7 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
   };
 
   /** The drop of the obsidian dug: walked to where the body's box takes it (a cell clear of lava), and waited for. */
-  const collect = async (lava: Cell, knownIds: Set<number>): Promise<void> => {
+  const collect = async (lava: Cell, knownIds: Set<number>, beforeDig: number): Promise<void> => {
     // Run 47 (hold 12): the drop of obsidian dug over a hole falls into it: any obsidian that came after the dig within 12 cells counts, not only 4.
     const items = () => (Object.values(bot.entities ?? {}) as any[]).filter(entity => entity?.position && (entity.name === 'item' || entity.displayName === 'Item')
       && !knownIds.has(Number(entity.id)) && Math.hypot(entity.position.x - lava.x - 0.5, entity.position.y - lava.y - 0.5, entity.position.z - lava.z - 0.5) <= 12
@@ -311,11 +311,14 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
     // The drop of a block already dug is taken even when the hand's own time has run out (a few seconds' grace).
     const c = timeIsUp(ctx) ? limitedContext(parent, SCOOP_GRACE_S) : ctx;
     // The drop appears a tick or two after the block goes.
-    await waitFor('落とし物が現れるのを', c, () => items().length > 0 || gained() > 0, DROP_WAIT_MS);
+    const taken = () => inventoryCount(bot, 'obsidian') > beforeDig;
+    await waitFor('落とし物が現れるのを', c, () => items().length > 0 || taken(), DROP_WAIT_MS);
     let dug = false;
     for (let round = 0; round < 4 && !timeIsUp(c); round++) {
+      if (taken()) return;
       const item = items()[0];
-      if (!item) return;
+      // Run 49 hold 2: the entity can disappear before the inventory packet arrives. Only the actual increase counts, including after a go to the drop.
+      if (!item) { await waitFor('持ち物への反映を', c, taken, PICKUP_WAIT_MS); return; }
       if (!withinTake(bot.entity.position, item.position)) {
         const here = feetCell(bot)!;
         const at = item.position;
@@ -335,7 +338,8 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
           continue;
         } else { counts.notes.push(`落とし物 ${cellText(cellOfItem)} は${obsidianRoom() ? '溶岩を避けた立ち位置から拾えない' : '持ち物が満杯で拾えない'}`); return; }
       }
-      await waitFor('拾うのを', c, () => !bot.entities?.[item.id], PICKUP_WAIT_MS);
+      await waitFor('拾うのを', c, taken, PICKUP_WAIT_MS);
+      if (taken() || !bot.entities?.[item.id]) return;
     }
   };
 
@@ -470,6 +474,7 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
     }
     if (!covered && !water && burnsAt()) counts.notes.push(`${cellText(lava)} は溶岩が流れ込む所を水なしで掘った（落とし物が焼けるかもしれない）`);
     if (!obsidianRoom()) { if (waterLeft && await scoopBack(waterLeft)) waterLeft = null; return { code: 'inventory_full', text: fullWords(), at: lava }; }
+    const beforeDig = inventoryCount(bot, 'obsidian');
     const failure = await mineAt(lava);
     if (failure) {
       if (waterLeft && await scoopBack(waterLeft)) waterLeft = null;
@@ -482,7 +487,7 @@ export async function obsidian(parent: StepContext, args: ObsidianArgs): Promise
         await waitFor('水が引くのを', ctx, () => !waterNear(lava), DRY_WAIT_MS);
       }
     }
-    await collect(lava, knownIds);
+    await collect(lava, knownIds, beforeDig);
     const leftLying = lyingObsidian(lava, knownIds);
     if (leftLying && gained() < want) counts.notes.push(`作った黒曜石 ${leftLying.count} 個が ${cellText(leftLying.at)} に落ちたまま（拾えていない）`);
     if (water && waterLeft && await scoopBack(water)) waterLeft = null;

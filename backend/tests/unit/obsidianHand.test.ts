@@ -52,6 +52,30 @@ const counts = (outcome: StepOutcome) => {
 };
 
 describe('obsidian: a lava source on a shore', () => {
+  it('waits for the inventory packet after the picked drop disappears (run 49 hold 2)', async () => {
+    const sim = makeHandsSim(over(flat, box('obsidian', 8, 8, 63, 63, 0, 0)), { items: stacks(PICK) });
+    const items = sim.bot.inventory.items;
+    let seenAt: number | undefined;
+    sim.bot.inventory.items = () => {
+      const all = items();
+      if (all.some((item: Stack) => item.name === 'obsidian')) seenAt ??= Date.now();
+      return all.filter((item: Stack) => item.name !== 'obsidian' || (seenAt !== undefined && Date.now() >= seenAt + 500));
+    };
+    const outcome = await drive(sim, run(sim, { at: [at(8, 63, 0)] }));
+    expect(outcome.ok).toBe(true);
+    expect(counts(outcome)!.obsidian).toBe(1);
+    expect(sim.bot.inventory.items().some((item: Stack) => item.name === 'obsidian')).toBe(true);
+  });
+
+  it('does not count a vanished drop as collected without an inventory increase', async () => {
+    const sim = makeHandsSim(over(flat, box('obsidian', 8, 8, 63, 63, 0, 0)), { items: stacks(PICK) });
+    const items = sim.bot.inventory.items;
+    sim.bot.inventory.items = () => items().filter((item: Stack) => item.name !== 'obsidian');
+    const outcome = await drive(sim, run(sim, { at: [at(8, 63, 0)] }));
+    expect(outcome.ok).toBe(false);
+    expect(counts(outcome)!.obsidian).toBe(0);
+  });
+
   it('pours the water where it runs onto the lava, mines the obsidian, takes the drop and the water back, in one hand', async () => {
     const sim = makeHandsSim(over(flat, lake()), { items: stacks(WATER, PICK) });
     let lowest = 99;
