@@ -866,6 +866,8 @@ interface BodyVersion { revision: string; catalogHash: string }
 - **近い go の時間切れ**（保留 2：4 段上の畑への go が、道が見つかった直後に 60 秒に着いた）と、**行き先の周りが塞がった go**（保留 10：2 m 先の同じ高さへの探索が道 0 マスのまま 5 秒で時間切れ）は vertical の外に残ります。go の結果に、着いた所・止まった位置からの残り・最後の道探し（`lastSearch`、塞いでいる物を含む）・使った秒を出し、続けるかは LLM が決めます。
 - **再開の時の結果の届け方**（再開 9 → 保留 10）：出し直しが別の理由でまた保留になった時、出し直しの結果と、その間に列に入っていて捨てられた項目（の印と why）を、保留の記録に残します。次の再開（skip-replay でも出し直しでも）の後の最初の判断へ、「保留した act の出し直しは search_timeout で再び保留になった。その間の q65（[p5] 近い鉄を掘る）は捨てた」を先に届けます。
 
+実走53（2026-10-31）：普通の判断の補助情報`foodPreparation`は、観測した手持ちの生肉・小麦・干し草を加工した場合の見込みです。`unprepared`は未処理、`pointsIfPrepared`は完成・回収できた場合だけの食料点、`cookSecondsInOneFurnace`は一基での調理秒数、`smeltsFromCarriedCoal`は手持ちの石炭/木炭だけによる精錬個数です。炉・作業台・設置場所が使えるとは断定しません。現在の`foodPoints.total`・準備・約束の条件には見込みを加算しません。急ぎの入力では省き、入力枠が足りない時もこの補助情報を先に省けます。調理や安全な夜間作業を選ぶのはLLMで、体の自動手順は追加しません。
+
 ### 今のコードのどこが変わるか
 - 頭：`packages/mind/src/workingEvents.ts`（種類）、`infra/decisionRecords/*`（行の種類・`TraceIds`・`reads`）、meter の時計（`minecraftLlmcRoad.ts`）、`surfaces/minecraft/minecraftControl.ts`（`received`・`released`・`corrected`）、`surfaces/minecraft/minecraftLlmcQueue.ts`（`woke`、先読み）、live を作る所（`minecraftLlmcLive.ts`・`minecraftLlmcLiveRewrite.ts`・`minecraftLlmcUrgent.ts`・`minecraftLlmcReachWords.ts`・`minecraftLlmcReadiness.ts`・`minecraftLlmcPack.ts`）、`minecraftBodyVersion.ts`、`scripts/decision-record.ts`。
 - 体：`controlLoop.ts`（`acceptedAt`・`startedAt`）、`nativeBody.ts`（`lockAt`・`reflexWaitMs`）、`execution/ActionExecution.ts`（`firstMotorAt`・`motorOps`）、`instantSkills/act.ts`（`failedAt`・手の始まり）、`utils/blackbox.ts`（`hand_start` と、輪とは別に続けて追記する操作の記録）、`utils/sceneSave.ts`（`tick query`）、`utils/actReport.ts`（大きさの上限の落とし方）、ポールの `bodyVersion`。
