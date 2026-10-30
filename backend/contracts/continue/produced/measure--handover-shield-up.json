@@ -1,8 +1,8 @@
 {
  "producedBy": "backend/scripts/minecraft-continue-lab-probe.ts",
  "bench": "B",
- "bodyRevision": "11000246505e",
- "madeAt": "2026-10-30T07:56:43.748Z",
+ "bodyRevision": "02ad87e69022",
+ "madeAt": "2026-10-30T08:28:42.899Z",
  "answers": null,
  "fixtureSha256": null,
  "output": {
@@ -11,18 +11,18 @@
     "trial": 1,
     "reflex": {
      "capability": "floor-melee",
-     "target": 61,
+     "target": 53,
      "shieldUp": true
     },
     "handover": {
      "from": "floor-melee",
-     "target": 61,
-     "waitedMs": 3,
-     "reflexSettledAt": "2026-10-30T07:56:01.261Z",
+     "target": 53,
+     "waitedMs": 2,
+     "reflexSettledAt": "2026-10-30T08:27:55.898Z",
      "confirmed": true,
      "shield": "kept"
     },
-    "sentToLockMs": 14,
+    "sentToLockMs": 19,
     "notes": {
      "reserve": {
       "command": "lab:q10",
@@ -37,7 +37,7 @@
       "reserved": true,
       "reflex": "floor-melee",
       "kind": "motor_state",
-      "at": "2026-10-30T07:56:01.260Z"
+      "at": "2026-10-30T08:27:55.897Z"
      },
      "stop": {
       "command": "lab:q10",
@@ -51,7 +51,7 @@
       "deactivatedSince": 0,
       "reflex": "floor-melee",
       "kind": "motor_state",
-      "at": "2026-10-30T07:56:01.260Z"
+      "at": "2026-10-30T08:27:55.898Z"
      },
      "claim": {
       "command": "lab:q10",
@@ -66,7 +66,7 @@
       "confirmed": true,
       "result": "kept",
       "kind": "motor_state",
-      "at": "2026-10-30T07:56:01.263Z"
+      "at": "2026-10-30T08:27:55.899Z"
      },
      "first_op": {
       "command": "lab:q10",
@@ -80,7 +80,7 @@
       "deactivatedSince": 0,
       "op": "setMovements",
       "kind": "motor_state",
-      "at": "2026-10-30T07:56:01.269Z"
+      "at": "2026-10-30T08:27:55.903Z"
      }
     },
     "outcome": "completed",
@@ -88,26 +88,26 @@
      "goal": "done",
      "end": "finished",
      "released": true,
-     "startedAt": "2026-10-30T07:56:01.259Z"
+     "startedAt": "2026-10-30T08:27:55.897Z"
     },
-    "hitsTaken": 3
+    "hitsTaken": 2
    },
    {
     "trial": 2,
     "reflex": {
      "capability": "floor-melee",
-     "target": 72,
+     "target": 64,
      "shieldUp": true
     },
     "handover": {
      "from": "floor-melee",
-     "target": 72,
+     "target": 64,
      "waitedMs": 1,
-     "reflexSettledAt": "2026-10-30T07:56:09.404Z",
+     "reflexSettledAt": "2026-10-30T08:28:03.922Z",
      "confirmed": true,
      "shield": "kept"
     },
-    "sentToLockMs": 33,
+    "sentToLockMs": 22,
     "notes": {
      "reserve": {
       "command": "lab:q11",
@@ -122,7 +122,7 @@
       "reserved": true,
       "reflex": "floor-melee",
       "kind": "motor_state",
-      "at": "2026-10-30T07:56:09.404Z"
+      "at": "2026-10-30T08:28:03.922Z"
      },
      "stop": {
       "command": "lab:q11",
@@ -136,7 +136,7 @@
       "deactivatedSince": 0,
       "reflex": "floor-melee",
       "kind": "motor_state",
-      "at": "2026-10-30T07:56:09.404Z"
+      "at": "2026-10-30T08:28:03.922Z"
      },
      "claim": {
       "command": "lab:q11",
@@ -151,7 +151,7 @@
       "confirmed": true,
       "result": "kept",
       "kind": "motor_state",
-      "at": "2026-10-30T07:56:09.406Z"
+      "at": "2026-10-30T08:28:03.923Z"
      },
      "first_op": {
       "command": "lab:q11",
@@ -165,7 +165,7 @@
       "deactivatedSince": 0,
       "op": "setMovements",
       "kind": "motor_state",
-      "at": "2026-10-30T07:56:09.409Z"
+      "at": "2026-10-30T08:28:03.927Z"
      }
     },
     "outcome": "completed",
@@ -173,26 +173,26 @@
      "goal": "done",
      "end": "finished",
      "released": true,
-     "startedAt": "2026-10-30T07:56:09.403Z"
+     "startedAt": "2026-10-30T08:28:03.921Z"
     },
-    "hitsTaken": 4
+    "hitsTaken": 2
    },
    {
     "trial": 3,
     "reflex": {
      "capability": "floor-melee",
-     "target": 85,
+     "target": 75,
      "shieldUp": true
     },
     "handover": {
      "from": "floor-melee",
-     "target": 85,
+     "target": 75,
      "waitedMs": 3,
-     "reflexSettledAt": "2026-10-30T07:56:16.413Z",
+     "reflexSettledAt": "2026-10-30T08:28:12.024Z",
      "confirmed": true,
      "shield": "kept"
     },
-    "sentToLockMs": 23,
+    "sentToLockMs": 35,
     "notes": {
      "reserve": {
       "command": "lab:q12",
@@ -207,7 +207,7 @@
       "reserved": true,
       "reflex": "floor-melee",
       "kind": "motor_state",
-      "at": "2026-10-30T07:56:16.412Z"
+      "at": "2026-10-30T08:28:12.024Z"
      },
      "stop": {
       "command": "lab:q12",
@@ -221,7 +221,7 @@
       "deactivatedSince": 0,
       "reflex": "floor-melee",
       "kind": "motor_state",
-      "at": "2026-10-30T07:56:16.413Z"
+      "at": "2026-10-30T08:28:12.024Z"
      },
      "claim": {
       "command": "lab:q12",
@@ -236,7 +236,7 @@
       "confirmed": true,
       "result": "kept",
       "kind": "motor_state",
-      "at": "2026-10-30T07:56:16.415Z"
+      "at": "2026-10-30T08:28:12.027Z"
      },
      "first_op": {
       "command": "lab:q12",
@@ -250,7 +250,7 @@
       "deactivatedSince": 0,
       "op": "setMovements",
       "kind": "motor_state",
-      "at": "2026-10-30T07:56:16.419Z"
+      "at": "2026-10-30T08:28:12.034Z"
      }
     },
     "outcome": "completed",
@@ -258,26 +258,26 @@
      "goal": "done",
      "end": "finished",
      "released": true,
-     "startedAt": "2026-10-30T07:56:16.412Z"
+     "startedAt": "2026-10-30T08:28:12.024Z"
     },
-    "hitsTaken": 3
+    "hitsTaken": 2
    },
    {
     "trial": 4,
     "reflex": {
      "capability": "floor-melee",
-     "target": 95,
+     "target": 88,
      "shieldUp": true
     },
     "handover": {
      "from": "floor-melee",
-     "target": 95,
+     "target": 88,
      "waitedMs": 3,
-     "reflexSettledAt": "2026-10-30T07:56:24.401Z",
+     "reflexSettledAt": "2026-10-30T08:28:19.087Z",
      "confirmed": true,
      "shield": "kept"
     },
-    "sentToLockMs": 31,
+    "sentToLockMs": 30,
     "notes": {
      "reserve": {
       "command": "lab:q13",
@@ -292,7 +292,7 @@
       "reserved": true,
       "reflex": "floor-melee",
       "kind": "motor_state",
-      "at": "2026-10-30T07:56:24.400Z"
+      "at": "2026-10-30T08:28:19.087Z"
      },
      "stop": {
       "command": "lab:q13",
@@ -306,7 +306,7 @@
       "deactivatedSince": 0,
       "reflex": "floor-melee",
       "kind": "motor_state",
-      "at": "2026-10-30T07:56:24.400Z"
+      "at": "2026-10-30T08:28:19.087Z"
      },
      "claim": {
       "command": "lab:q13",
@@ -321,7 +321,7 @@
       "confirmed": true,
       "result": "kept",
       "kind": "motor_state",
-      "at": "2026-10-30T07:56:24.403Z"
+      "at": "2026-10-30T08:28:19.090Z"
      },
      "first_op": {
       "command": "lab:q13",
@@ -335,7 +335,7 @@
       "deactivatedSince": 0,
       "op": "setMovements",
       "kind": "motor_state",
-      "at": "2026-10-30T07:56:24.413Z"
+      "at": "2026-10-30T08:28:19.095Z"
      }
     },
     "outcome": "completed",
@@ -343,26 +343,26 @@
      "goal": "done",
      "end": "finished",
      "released": true,
-     "startedAt": "2026-10-30T07:56:24.399Z"
+     "startedAt": "2026-10-30T08:28:19.086Z"
     },
-    "hitsTaken": 1
+    "hitsTaken": 2
    },
    {
     "trial": 5,
     "reflex": {
      "capability": "floor-melee",
-     "target": 108,
+     "target": 99,
      "shieldUp": true
     },
     "handover": {
      "from": "floor-melee",
-     "target": 108,
-     "waitedMs": 2,
-     "reflexSettledAt": "2026-10-30T07:56:31.463Z",
+     "target": 99,
+     "waitedMs": 6,
+     "reflexSettledAt": "2026-10-30T08:28:28.821Z",
      "confirmed": true,
      "shield": "kept"
     },
-    "sentToLockMs": 23,
+    "sentToLockMs": 26,
     "notes": {
      "reserve": {
       "command": "lab:q14",
@@ -377,7 +377,7 @@
       "reserved": true,
       "reflex": "floor-melee",
       "kind": "motor_state",
-      "at": "2026-10-30T07:56:31.463Z"
+      "at": "2026-10-30T08:28:28.816Z"
      },
      "stop": {
       "command": "lab:q14",
@@ -391,7 +391,7 @@
       "deactivatedSince": 0,
       "reflex": "floor-melee",
       "kind": "motor_state",
-      "at": "2026-10-30T07:56:31.463Z"
+      "at": "2026-10-30T08:28:28.817Z"
      },
      "claim": {
       "command": "lab:q14",
@@ -406,7 +406,7 @@
       "confirmed": true,
       "result": "kept",
       "kind": "motor_state",
-      "at": "2026-10-30T07:56:31.465Z"
+      "at": "2026-10-30T08:28:28.822Z"
      },
      "first_op": {
       "command": "lab:q14",
@@ -420,7 +420,7 @@
       "deactivatedSince": 0,
       "op": "setMovements",
       "kind": "motor_state",
-      "at": "2026-10-30T07:56:31.478Z"
+      "at": "2026-10-30T08:28:28.831Z"
      }
     },
     "outcome": "completed",
@@ -428,26 +428,26 @@
      "goal": "done",
      "end": "finished",
      "released": true,
-     "startedAt": "2026-10-30T07:56:31.462Z"
+     "startedAt": "2026-10-30T08:28:28.816Z"
     },
-    "hitsTaken": 1
+    "hitsTaken": 0
    },
    {
     "trial": 6,
     "reflex": {
      "capability": "floor-melee",
-     "target": 122,
+     "target": 114,
      "shieldUp": true
     },
     "handover": {
      "from": "floor-melee",
-     "target": 122,
-     "waitedMs": 3,
-     "reflexSettledAt": "2026-10-30T07:56:40.191Z",
+     "target": 114,
+     "waitedMs": 2,
+     "reflexSettledAt": "2026-10-30T08:28:41.314Z",
      "confirmed": true,
      "shield": "kept"
     },
-    "sentToLockMs": 44,
+    "sentToLockMs": 12,
     "notes": {
      "reserve": {
       "command": "lab:q15",
@@ -462,7 +462,7 @@
       "reserved": true,
       "reflex": "floor-melee",
       "kind": "motor_state",
-      "at": "2026-10-30T07:56:40.190Z"
+      "at": "2026-10-30T08:28:41.313Z"
      },
      "stop": {
       "command": "lab:q15",
@@ -476,7 +476,7 @@
       "deactivatedSince": 0,
       "reflex": "floor-melee",
       "kind": "motor_state",
-      "at": "2026-10-30T07:56:40.191Z"
+      "at": "2026-10-30T08:28:41.314Z"
      },
      "claim": {
       "command": "lab:q15",
@@ -491,7 +491,7 @@
       "confirmed": true,
       "result": "kept",
       "kind": "motor_state",
-      "at": "2026-10-30T07:56:40.193Z"
+      "at": "2026-10-30T08:28:41.315Z"
      },
      "first_op": {
       "command": "lab:q15",
@@ -505,7 +505,7 @@
       "deactivatedSince": 0,
       "op": "setMovements",
       "kind": "motor_state",
-      "at": "2026-10-30T07:56:40.199Z"
+      "at": "2026-10-30T08:28:41.319Z"
      }
     },
     "outcome": "completed",
@@ -513,9 +513,9 @@
      "goal": "done",
      "end": "finished",
      "released": true,
-     "startedAt": "2026-10-30T07:56:40.189Z"
+     "startedAt": "2026-10-30T08:28:41.313Z"
     },
-    "hitsTaken": 2
+    "hitsTaken": 1
    }
   ]
  }
