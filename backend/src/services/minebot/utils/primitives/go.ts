@@ -473,10 +473,14 @@ export function floorlessAt(bot: any, cell: Cell, rule: Pick<DigRule, 'names'>, 
  * it: every one ran its 5 s out, six times. A place whose feet cell (or whose head's height, 1.8 over the feet) is a whole block that is not on the list of what may be dug is said at once,
  * with the nearest cell round it a body stands in. A slab, a carpet or a chest under the feet is stood on, a block the go may dig is dug.
  */
-export function sealedAtWords(bot: any, cell: Cell, rule: Pick<DigRule, 'names'>, suggestNearby = true): string | null {
+export function sealedAtWords(bot: any, cell: Cell, rule: Pick<DigRule, 'names'>, suggestNearby = true, allowWater = true): string | null {
   for (const dy of [0, 1]) {
     const at = { x: cell.x, y: cell.y + dy, z: cell.z };
     const block = blockAt(bot, at);
+    if (!allowWater && block && isWaterName(String(block.name).replace(/^minecraft:/u, ''))) {
+      return `行き先 ${cellText(cell)} の${dy ? '頭' : '足'} ${cellText(at)} は水中だが waterOk の許可が無い`
+        + '|乾いた到着位置へ。入水が必要なら安全を確認して waterOk を指定';
+    }
     if (!block || block.boundingBox !== 'block' || isDoorlike(String(block.name))) continue;
     const shapes: number[][] = Array.isArray(block.shapes) ? block.shapes : [];
     const tops = shapes.map(shape => Number(shape[4] ?? 1)), bottoms = shapes.map(shape => Number(shape[1] ?? 0));
@@ -514,17 +518,17 @@ export function sealedAtWords(bot: any, cell: Cell, rule: Pick<DigRule, 'names'>
  * exact-cell goals were checked, so two searches spent 5 s each and the second became a heavy search_timeout. Prove only the
  * bounded arrival space closed, using the route's own predicate; one open, diggable or unreadable cell leaves the search to decide.
  */
-export function sealedGoalWords(bot: any, cell: Cell, range: number, rule: Pick<DigRule, 'names'>): string | null {
-  if (range < 1) return sealedAtWords(bot, cell, rule);
+export function sealedGoalWords(bot: any, cell: Cell, range: number, rule: Pick<DigRule, 'names'>, allowWater = true): string | null {
+  if (range < 1) return sealedAtWords(bot, cell, rule, true, allowWater);
   const goal = goalOf(cell, range), radius = Math.floor(range);
   let count = 0;
   for (let dx = -radius; dx <= radius; dx++) for (let dy = -radius; dy <= radius; dy++) for (let dz = -radius; dz <= radius; dz++) {
     const candidate = { x: cell.x + dx, y: cell.y + dy, z: cell.z + dz };
     if (!goal.isEnd(new Vec3(candidate.x, candidate.y, candidate.z))) continue;
-    if (!sealedAtWords(bot, candidate, rule, false)) return null;
+    if (!sealedAtWords(bot, candidate, rule, false, allowWater)) return null;
     count++;
   }
-  const words = sealedAtWords(bot, cell, rule);
+  const words = sealedAtWords(bot, cell, rule, true, allowWater);
   return count && words ? `${range}m以内の到着候補${count}マス全てが塞がっている。${words}` : null;
 }
 
@@ -686,9 +690,12 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     return fail('no_floor', why, /なら .* の上に立てる$/u.test(why) ? 'その 1 つ下を行き先に' : /^行き先 .* は宙/u.test(why) ? '立てる所を行き先に（宙へ渡るなら canPlace）' : '別の行き先を');
   }
   // A whole closed arrival space is said before any search; a blocked centre alone never closes a radius goal.
-  const open = grounded.filter(cell => !sealedGoalWords(bot, cell, limits.range, rule));
+  // Match goMovements: explicit permission or a body already in water may swim.
+  // Reject only when every acceptable arrival cell is known incompatible.
+  const waterAllowed = () => limits.waterOk || isWaterName(nameAt(bot, Math.floor(bot.entity.position.x), Math.floor(bot.entity.position.y), Math.floor(bot.entity.position.z)));
+  const open = grounded.filter(cell => !sealedGoalWords(bot, cell, limits.range, rule, waterAllowed()));
   if (!open.length) {
-    const [why, hint] = sealedGoalWords(bot, grounded[0], limits.range, rule)!.split('|');
+    const [why, hint] = sealedGoalWords(bot, grounded[0], limits.range, rule, waterAllowed())!.split('|');
     return fail('dead_end', why!, hint!);
   }
   const targets = open;
@@ -926,7 +933,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   /** The search ran out of its time: no way is known, nor that there is none. What it saw, and the next hands that do not need the search. */
   const searchedOutStop = (found: Plan, aim: Cell): StepOutcome => {
     // Run 47 (hold 10-11): a place the search cannot get into (a cell it may not break) runs every search out; the cell is named instead.
-    const sealed = targets.map(cell => sealedGoalWords(bot, cell, limits.range, rule));
+    const sealed = targets.map(cell => sealedGoalWords(bot, cell, limits.range, rule, waterAllowed()));
     if (sealed.every(words => words !== null)) { const [why, hint] = sealed[0]!.split('|'); return fail('dead_end', why!, hint!); }
     const tip = found.path.length ? found.path[found.path.length - 1] : null;
     const tipCell = tip ? nodeCell(tip) : null;
