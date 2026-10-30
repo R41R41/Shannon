@@ -19,7 +19,7 @@ export function combatFootingRisk(bot: any, enemy: { position?: { x: number; z: 
       const y = feetY - depth, block = read(x, y, z);
       if (!block) break; // Unknown terrain is not evidence of lava.
       const kind = String(block.name);
-      if (/^(?:lava|fire|soul_fire|magma_block|campfire|soul_campfire)$/u.test(kind)) {
+      if (/^(?:lava|fire|soul_fire|magma_block)$/u.test(kind)) {
         return { at: { x: Math.floor(x), y, z: Math.floor(z) }, kind };
       }
       if (block.boundingBox === 'block' || /^(?:water|bubble_column)$/u.test(kind)) break;
