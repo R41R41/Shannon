@@ -56,6 +56,16 @@ describe('go water depth against real client physics', () => {
     const up = makeSim(ice, { start: [3.5, 60, 0.5] });
     expect(swimControls(up.bot, new Vec3(0.5, 64.5, 0.5))).toMatchObject({ forward: true, jump: false });
   });
+  it('centres the shoulders before rising through a one-block opening from the recorded 23cm offset', async () => {
+    const ice: Ground = (x, y, z) => Math.abs(x) > 12 || Math.abs(z - 24) > 12 ? null
+      : y < 55 ? 'stone' : y < 62 ? 'water' : y === 62 && (x !== -5 || z !== 24) ? 'ice' : 'air';
+    const sim = makeSim(ice, { start: [-4.616, 60.2, 24.296] });
+    const result = await drive(sim, go({ bot: sim.bot, stop: new AbortController().signal,
+      deadline: Date.now() + 12_000, facing: 'north', base: { x: -5, y: 60, z: 24 } },
+    { goals: [{ x: -5, y: 61, z: 24 }], range: 0, waterOk: true, seconds: 8 }));
+    expect(result.ok).toBe(true);
+    expect(Math.floor(sim.bot.entity.position.y)).toBe(61);
+  });
   it('releases its keys when its action is interrupted during a dive', async () => {
     const sim = makeSim(pool, { start: [0.5, 63, 0.5] });
     const controller = new AbortController();

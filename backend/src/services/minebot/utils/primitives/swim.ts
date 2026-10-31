@@ -54,13 +54,15 @@ export function swimControls(bot: any, target: Point, allowed: (x: number, y: nu
     // A narrow opening often needs depth before horizontal travel (and the
     // reverse on return). Both legs must be observed clear before either runs.
     const turns = [{ x: p.x, y: target.y, z: p.z }, { x: target.x, y: p.y, z: target.z }];
-    const turn = turns.find(point => Math.hypot(point.x - p.x, point.y - p.y, point.z - p.z) > 0.25
+    const turn = turns.find(point => Math.hypot(point.x - p.x, point.y - p.y, point.z - p.z) > 0.1
       && corridor(p, point) && corridor(point, target));
     if (!turn) return null;
     aim = turn;
   }
   const ax = aim.x - p.x, ay = aim.y - p.y, az = aim.z - p.z;
-  return { yaw: Math.atan2(-ax, -az), forward: Math.hypot(ax, az) > 0.25,
+  // A 0.6m body has only 0.2m clearance on each side of a one-block hole.
+  // Stopping horizontal alignment at 0.25m can pin its shoulders on the rim.
+  return { yaw: Math.atan2(-ax, -az), forward: Math.hypot(ax, az) > 0.1,
     jump: ay > 0.15, sneak: ay < -0.15 };
 }
 
