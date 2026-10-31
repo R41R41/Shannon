@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { Vec3 } from 'vec3';
 import { makeHandsSim, type Ground, type HandsSim, type Stack } from '../helpers/handsSim.js';
 import { vertical, verticalProblem, PILLAR_MARGIN, VERTICAL_EVIDENCE_EVENT, type VerticalArgs, type VerticalEvidence } from '../../src/services/minebot/utils/primitives/vertical.js';
 import { StepStopped, type StepContext, type StepOutcome } from '../../src/services/minebot/utils/primitives/common.js';
@@ -46,6 +47,45 @@ describe('stairs up: an obstruction above the current stance', () => {
       expect(outcome.text).toContain('横の安全な立ち位置');
     });
   }
+});
+
+describe('a cleared step is not ready while gravel is still falling through it', () => {
+  it('waits for the falling entity, clears its landed block, then steps up', async () => {
+    const sim = sim0(world('stone', 64, [column('stone', 1, 64, 66, 0), cell('gravel', 1, 67, 0)]), [0, 64, 0], [PICK, { name: 'cobblestone', count: 20 }]);
+    const dig = sim.bot.dig, control = sim.bot.setControlState;
+    let movedDuringFall = false, falling = false;
+    sim.bot.setControlState = (name: string, on: boolean) => {
+      if (name === 'forward' && on && falling) movedDuringFall = true;
+      return control(name, on);
+    };
+    sim.bot.dig = async (...args: any[]) => {
+      await dig(...args);
+      if (args[0]?.position?.equals(new Vec3(1, 66, 0))) {
+        falling = true; sim.world.set(1, 67, 0, 'air');
+        sim.bot.entities[990] = { id: 990, name: 'falling_block', position: new Vec3(1.5, 67, 0.5) };
+        setTimeout(() => {
+          const p = new Vec3(1, 65, 0), before = sim.bot.blockAt(p);
+          sim.world.set(1, 65, 0, 'gravel');
+          sim.bot.emit('blockUpdate', before, sim.bot.blockAt(p));
+          delete sim.bot.entities[990]; falling = false;
+        }, 450);
+      }
+    };
+    const outcome = await drive(sim, run(sim, hand({ dir: 'up', shape: 'stairs', toward: 'east', toY: 65 })));
+    expect(movedDuringFall).toBe(false);
+    expect(outcome.ok).toBe(true);
+    expect(sim.nameAt(1, 65, 0)).toBe('air');
+    expect(outcome.progress!.done).toBe(1);
+  });
+  it('stops before moving when a falling entity never settles', async () => {
+    const sim = sim0(world('stone', 64, [cell('stone', 1, 64, 0)]), [0, 64, 0]);
+    sim.bot.entities[990] = { id: 990, name: 'falling_block', position: new Vec3(1.5, 67, 0.5) };
+    const control = vi.spyOn(sim.bot, 'setControlState');
+    const outcome = await drive(sim, run(sim, hand({ dir: 'up', shape: 'stairs', toward: 'east', toY: 65 })));
+    expect(outcome).toMatchObject({ ok: false, code: 'no_foothold' });
+    expect(control.mock.calls.some(([name, on]) => name === 'forward' && on)).toBe(false);
+    expect(outcome.progress!.done).toBe(0);
+  });
 });
 
 describe('pillar ascent uses the same standing-roof safety as stairs', () => {

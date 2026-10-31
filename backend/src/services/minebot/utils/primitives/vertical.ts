@@ -337,8 +337,25 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
       if (solid(block) && !allowed(String(block.name))) throw refuseDig(cell, block);
     }
   };
+  // A falling block disappears from blockAt while travelling as an entity. Air in
+  // that interval is not a cleared worksite (run54, upward stairs after gravel).
+  let fallingUntil = 0;
+  const fallingThrough = (cells: Cell[]) => (Object.values(bot.entities ?? {}) as any[]).some(entity => {
+    const p = entity?.position;
+    return entity?.name === 'falling_block' && p && cells.some(cell => Math.floor(p.x) === cell.x
+      && Math.floor(p.z) === cell.z && p.y >= cell.y - 1 && p.y <= cell.y + 8);
+  });
+  const settleFalling = async (cells: Cell[]) => {
+    const began = Date.now();
+    while (Date.now() < fallingUntil || fallingThrough(cells)) {
+      checkClock();
+      if (Date.now() - began >= SETTLE_ROUNDS * 350) throw new VStop('no_foothold', '次の段の落下物が収まらず、空間の安定を確認できない', cells[0], '落下が収まるのを待つか、別の経路へ');
+      await wait(ctx, 50);
+    }
+  };
   const openCell = async (cell: Cell): Promise<void> => {
     for (let round = 0; round < SETTLE_ROUNDS * 4; round++) {
+      await settleFalling([cell]);
       const block = blockAt(bot, cell);
       if (!block) throw new VStop('unloaded', `${cellText(cell)} はまだ読み込まれていない`, cell);
       if (!solid(block)) return;
@@ -347,6 +364,7 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
       checkClock();
       if (work.dug >= limits.maxDig) throw new VStop('limit_dig', `掘る数の上限 ${limits.maxDig} に着いた（次は ${nameOf(block)}${cellText(cell)}）`, cell, 'maxDig を増やして続きを出す');
       work.dug++;
+      const dislodgesFalling = FALLING.test(nameOf(blockAt(bot, shift(cell, 0, 1, 0))));
       try {
         if (!(await digCell(bot, cell)) && solid(blockAt(bot, cell)) && !FALLING.test(nameOf(blockAt(bot, cell)))) {
           throw new VStop('cannot_dig', `${nameOf(block)}${cellText(cell)} を持っている道具では掘れない`, cell, '道具を持ってから');
@@ -365,8 +383,9 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
         }
         throw new VStop('cannot_dig', `${nameOf(block)}${cellText(cell)} を掘れなかった: ${String((error as Error)?.message ?? error).slice(0, 70)}`, cell);
       }
-      // What was dug may be refilled from above (gravel, sand): the next look finds it solid again and digs it again (counted).
-      if (FALLING.test(nameOf(blockAt(bot, shift(cell, 0, 1, 0))))) await wait(ctx, 350);
+      // Remember the support before digging: afterwards the gravel may already
+      // be an entity. Allow its nearby fall to land, then inspect and dig again.
+      if (dislodgesFalling) fallingUntil = Date.now() + 700;
     }
     throw new VStop('cannot_dig', `${cellText(cell)} を掘り切れない（${nameOf(blockAt(bot, cell))}）`, cell);
   };
@@ -374,12 +393,14 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
     for (const cell of cells) await openCell(cell);
     // Gravel and sand over the cells came down into them: dug out again.
     for (let round = 0; round < SETTLE_ROUNDS; round++) {
+      await settleFalling(cells);
       const pending = cells.some(cell => FALLING.test(nameOf(blockAt(bot, shift(cell, 0, 1, 0)))) || FALLING.test(nameOf(blockAt(bot, shift(cell, 0, 2, 0)))));
       const filled = cells.filter(cell => solid(blockAt(bot, cell)));
       if (!pending && !filled.length) return;
       if (!filled.length) await wait(ctx, 350);
       for (const cell of filled) await openCell(cell);
     }
+    throw new VStop('no_foothold', '掘っても次の段が埋まり、空間の安定を確認できない', cells[0], '別の経路へ');
   };
 
   // ---- the plan of a level ----
