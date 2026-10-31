@@ -50,6 +50,15 @@ describe('stairs up: an obstruction above the current stance', () => {
 });
 
 describe('a cleared step is not ready while gravel is still falling through it', () => {
+  it('rechecks newly exposed water after a dig, before excavating the rest of the level', async () => {
+    const sim = sim0(world('stone', 64, [cell('stone', 0, 66, 0), column('stone', 1, 64, 66, 0)]), [0, 64, 0]);
+    const dig = sim.bot.dig;
+    sim.bot.dig = async (...args: any[]) => { await dig(...args); if (args[0]?.position?.equals(new Vec3(0, 66, 0))) sim.world.set(0, 67, 0, 'water'); };
+    const outcome = await drive(sim, run(sim, hand({ dir: 'up', shape: 'stairs', toward: 'east', toY: 65, liquid: 'stop' })));
+    expect(outcome).toMatchObject({ ok: false, code: 'water' });
+    expect(sim.bot.dugBlocks).toHaveLength(1);
+    expect(outcome.progress!.done).toBe(0);
+  });
   it('waits for the falling entity, clears its landed block, then steps up', async () => {
     const sim = sim0(world('stone', 64, [column('stone', 1, 64, 66, 0), cell('gravel', 1, 67, 0)]), [0, 64, 0], [PICK, { name: 'cobblestone', count: 20 }]);
     const dig = sim.bot.dig, control = sim.bot.setControlState;

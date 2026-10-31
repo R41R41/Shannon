@@ -312,11 +312,12 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
     if (eyeDistance(bot, cell) > USE_REACH) return { ok: false, reason: 'unreachable' };
     if (!mayLayAt(bot, cell)) return { ok: false, reason: 'body' };
     await blockInHand(bot, [block]);
+    const previousHand = host.actHandNow;
     laying(true);
     try {
       const sent = await sendPlace(cell, block, reference, face);
       return { ok: true, confirmed: sent.confirmed, block };
-    } finally { if (args.shape !== 'pillar') laying(false); }
+    } finally { host.actHandNow = previousHand; }
   };
 
   // ---- digging ----
@@ -345,17 +346,18 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
     return entity?.name === 'falling_block' && p && cells.some(cell => Math.floor(p.x) === cell.x
       && Math.floor(p.z) === cell.z && p.y >= cell.y - 1 && p.y <= cell.y + 8);
   });
-  const settleFalling = async (cells: Cell[]) => {
+  const settleFalling = async (cells: Cell[], plan: Plan) => {
     const began = Date.now();
     while (Date.now() < fallingUntil || fallingThrough(cells)) {
       checkClock();
       if (Date.now() - began >= SETTLE_ROUNDS * 350) throw new VStop('no_foothold', '次の段の落下物が収まらず、空間の安定を確認できない', cells[0], '落下が収まるのを待つか、別の経路へ');
+      if (plan.kind !== 'shaft') await handleLiquid(plan);
       await wait(ctx, 50);
     }
   };
-  const openCell = async (cell: Cell): Promise<void> => {
+  const openCell = async (cell: Cell, plan: Plan): Promise<void> => {
     for (let round = 0; round < SETTLE_ROUNDS * 4; round++) {
-      await settleFalling([cell]);
+      await settleFalling([cell], plan);
       const block = blockAt(bot, cell);
       if (!block) throw new VStop('unloaded', `${cellText(cell)} はまだ読み込まれていない`, cell);
       if (!solid(block)) return;
@@ -386,19 +388,22 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
       // Remember the support before digging: afterwards the gravel may already
       // be an entity. Allow its nearby fall to land, then inspect and dig again.
       if (dislodgesFalling) fallingUntil = Date.now() + 700;
+      // Excavation and falling blocks can expose a flow while this level is
+      // still being opened. Seal/stop before waiting or digging its next cell.
+      if (plan.kind !== 'shaft') await handleLiquid(plan);
     }
     throw new VStop('cannot_dig', `${cellText(cell)} を掘り切れない（${nameOf(blockAt(bot, cell))}）`, cell);
   };
-  const openAll = async (cells: Cell[]) => {
-    for (const cell of cells) await openCell(cell);
+  const openAll = async (cells: Cell[], plan: Plan) => {
+    for (const cell of cells) await openCell(cell, plan);
     // Gravel and sand over the cells came down into them: dug out again.
     for (let round = 0; round < SETTLE_ROUNDS; round++) {
-      await settleFalling(cells);
+      await settleFalling(cells, plan);
       const pending = cells.some(cell => FALLING.test(nameOf(blockAt(bot, shift(cell, 0, 1, 0)))) || FALLING.test(nameOf(blockAt(bot, shift(cell, 0, 2, 0)))));
       const filled = cells.filter(cell => solid(blockAt(bot, cell)));
       if (!pending && !filled.length) return;
       if (!filled.length) await wait(ctx, 350);
-      for (const cell of filled) await openCell(cell);
+      for (const cell of filled) await openCell(cell, plan);
     }
     throw new VStop('no_foothold', '掘っても次の段が埋まり、空間の安定を確認できない', cells[0], '別の経路へ');
   };
@@ -549,7 +554,7 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
   const stairsLevel = async (plan: Plan) => {
     precheckStandingRoof(plan);
     precheckDig(plan.clear);
-    await openAll(plan.clear);
+    await openAll(plan.clear, plan);
     await handleLiquid(plan);   // what the digging let out
     let scaffoldUnconfirmed = false;
     if (!down) {
@@ -616,7 +621,7 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
     const centred = await centreInColumn(bot as never, new Vec3(plan.from.x, plan.from.y, plan.from.z));
     if (centred) throw new VStop('displaced', `縦穴の真ん中に立てない（${centred}）`, feetCell(bot) ?? plan.from);
     needDisplacedCheck([plan.from]);
-    await openAll(plan.clear);
+    await openAll(plan.clear, plan);
     const dropped = await waitDropOne(bot as never, new Vec3(plan.from.x, plan.from.y, plan.from.z), cave);
     if (dropped) throw new VStop('displaced', `足の下を掘ったが ${1 + cave} 段落ちなかった（${dropped}。今 ${cellText(feetCell(bot) ?? plan.from)}）`, feetCell(bot) ?? plan.from);
     await arrived(plan, cave);
@@ -634,7 +639,7 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
     precheckDig(plan.clear);
     // A-6 (3): digging the cells over the head is not placing: the hand is not a laying hand for it (a reflex's note may stop it then), and is again for the climb.
     laying(false);
-    try { await openAll(plan.clear); } finally { laying(true); }
+    try { await openAll(plan.clear, plan); } finally { laying(true); }
     await handleLiquid(plan);
     for (let tries = 0; tries < JUMP_TRIES; tries++) {
       checkClock();
