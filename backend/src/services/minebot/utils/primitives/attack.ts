@@ -10,6 +10,7 @@ import { bodyReader, feetCell, relativeWords } from '../localMap.js';
 import { eyeOf, probeSight } from '../probeTools.js';
 import { deathLedgerOf } from '../deathLedger.js';
 import type { Progress } from '../../integration/commonFca/continueContract.js';
+import { swimControls, swimPulse } from './swim.js';
 
 const { goals } = pathfinder;
 
@@ -85,6 +86,7 @@ export async function attack(ctx: StepContext, args: AttackArgs): Promise<StepOu
     navigator.setGoal(new goals.GoalFollow(target, 2), true);
   }
   let lastSwing = 0, best = Infinity, bestAt = Date.now();
+  let swimming = false;
   try {
     for (;;) {
       const live = bot.entities?.[target.id];
@@ -101,6 +103,16 @@ export async function attack(ctx: StepContext, args: AttackArgs): Promise<StepOu
         try { await bot.lookAt(live.position.offset(0, (live.height ?? 1.8) * 0.6, 0), true); } catch { /* looked */ }
         bot.attack(live);
         blows++; lastSwing = Date.now();
+      }
+      const controls = chase && distance > REACH ? swimControls(bot, live.position) : null;
+      if (controls) {
+        swimming = true;
+        await swimPulse(ctx, controls, 50);
+        continue;
+      }
+      if (swimming) {
+        swimming = false;
+        navigator?.setGoal(new goals.GoalFollow(live, 2), true);
       }
       await wait(ctx, 50);
     }

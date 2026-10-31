@@ -17,6 +17,7 @@ import { blackBoxOf } from '../blackbox.js';
 import type { Progress } from '../../integration/commonFca/continueContract.js';
 import { meterProgress, round1 } from './progressUnits.js';
 import { ThreatExposedError } from '../exposureGuard.js';
+import { swimControls, swimPulse } from './swim.js';
 
 const { goals } = pathfinder;
 
@@ -1073,6 +1074,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   };
 
   let attempt = 0, noway = 0, mends = 0, partialWalks = 0;
+  let swimBest = Infinity, swimBestAt = Date.now();
   // Headway is the nearest the body has come to a place; a body that is mended and walks back to the same wall has made none.
   let nearest = distanceTo(bot, near());
   const nowhere: GoOutcome = { reached: false, timedOut: false, stuck: false, error: new Error('NoPath'), search: { status: 'noPath', nodes: 0 }, opens: [], crossed: false };
@@ -1083,6 +1085,16 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
       if (stop) return stop;
       if (reached()) return arrived();
       const aim = near();
+      const swimming = waterAllowed() ? swimControls(bot, { x: aim.x + 0.5, y: aim.y + 0.2, z: aim.z + 0.5 },
+        (x, y, z) => !hazardAtFeet(bot, x, y, z)) : null;
+      if (swimming) {
+        const left = distanceTo(bot, aim);
+        if (left < swimBest - 0.2) { swimBest = left; swimBestAt = Date.now(); }
+        if (Date.now() - swimBestAt > GO_STUCK_MS) return fail('stuck', '水中の行き先へ泳いでも距離が縮まらない', '水流・通り道・呼吸を調べて別の手を');
+        await swimPulse(ctx, swimming, Math.min(100, timeLeft()));
+        continue;
+      }
+      swimBest = Infinity; swimBestAt = Date.now();
       const finalGoal = compositeOf(targets, limits.range);
       // A place far off is walked to a leg at a time; a place not loaded is walked as close to as the ground goes.
       const isUnloaded = () => { try { return !bot.blockAt(new Vec3(aim.x, aim.y, aim.z), false); } catch { return true; } };

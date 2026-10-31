@@ -16,6 +16,7 @@ import type { Progress } from '../../integration/commonFca/continueContract.js';
 import { eat } from './body.js';
 import { findEntity } from './use.js';
 import { findItem, guard, letGo, stopped, StepStopped, wait, type StepContext, type StepOutcome } from './common.js';
+import { swimControls, swimPulse } from './swim.js';
 
 const { goals } = pathfinder;
 
@@ -332,6 +333,12 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
         jump = 'idle';
         if (box < bestBox - NO_GAIN_M || box > radius) { bestBox = box; bestAt = now; }
         if (now - bestAt > NO_GAIN_MS) { unfollow(); return fail('unreachable', `に近づけない（${r1(box)}m、${NO_GAIN_MS / 1000}秒縮まらない）`, lastAt); }
+        const swimming = swimControls(bot, live.position);
+        if (swimming) {
+          unfollow();
+          await swimPulse(ctx, swimming, TICK_MS);
+          continue;
+        }
         follow();
         await wait(ctx, TICK_MS);
         continue;
