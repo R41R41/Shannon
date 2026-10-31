@@ -200,4 +200,46 @@ describe('hurt and fall stop any act', () => {
     setTimeout(() => { swim.bot.entity.onGround = false; swim.bot.entity.isInWater = true; swim.bot.entity.position = new Vec3(0.5, 60, 0.5); }, 30);
     expect((await runAct(swim.bot, hands([{ do: 'wait', seconds: 0.4 }]), undefined, undefined, { tickMs: 20 })).success).toBe(true);
   });
+
+  it.each(['vine', 'ladder'])('does not call controlled descent on %s a free fall when native isOnLadder is absent', async name => {
+    const { bot } = body({ blockAt: (p: Vec3) => ({ name, boundingBox: 'empty', position: p.floored() }) });
+    bot.entity.onGround = false;
+    bot.entity.velocity = new Vec3(0, -0.225, 0);
+    bot.entity.position.y = 80;
+    setTimeout(() => { bot.entity.position.y = 77; }, 50);
+    setTimeout(() => { bot.entity.position.y = 74; }, 100);
+    expect(bot.entity.isOnLadder).toBeUndefined();
+    const result = await runAct(bot, hands([{ do: 'wait', seconds: 0.3 }]), undefined, undefined, { tickMs: 20 });
+    expect(result.success).toBe(true);
+  });
+
+  it('still stops a fast fall past a vine instead of treating its name as immunity', async () => {
+    const { bot } = body({ blockAt: (p: Vec3) => ({ name: 'vine', boundingBox: 'empty', position: p.floored() }) });
+    bot.entity.onGround = false;
+    bot.entity.velocity = new Vec3(0, -0.8, 0);
+    bot.entity.position.y = 80;
+    setTimeout(() => { bot.entity.position.y = 75; }, 60);
+    const result = await runAct(bot, hands([{ do: 'wait', seconds: 0.3 }]), undefined, undefined, { tickMs: 20 });
+    expect(result.failureType).toBe('fell');
+  });
+
+  it('does not infer supported climbing when velocity is unmeasured', async () => {
+    const { bot } = body({ blockAt: (p: Vec3) => ({ name: 'vine', boundingBox: 'empty', position: p.floored() }) });
+    bot.entity.onGround = false; bot.entity.position.y = 80;
+    setTimeout(() => { bot.entity.position.y = 75; }, 60);
+    const result = await runAct(bot, hands([{ do: 'wait', seconds: 0.3 }]), undefined, undefined, { tickMs: 20 });
+    expect(result.failureType).toBe('fell');
+  });
+
+  it('counts a new free fall after leaving a supported climb', async () => {
+    let vine = true;
+    const { bot } = body({ blockAt: (p: Vec3) => ({ name: vine ? 'vine' : 'air', boundingBox: 'empty', position: p.floored() }) });
+    bot.entity.onGround = false; bot.entity.velocity = new Vec3(0, -0.225, 0); bot.entity.position.y = 80;
+    setTimeout(() => { bot.entity.position.y = 74; }, 40);
+    setTimeout(() => { vine = false; bot.entity.velocity.y = -0.8; }, 90);
+    setTimeout(() => { bot.entity.position.y = 69; }, 150);
+    const result = await runAct(bot, hands([{ do: 'wait', seconds: 0.3 }]), undefined, undefined, { tickMs: 20 });
+    expect(result.failureType).toBe('fell');
+    expect(parse(result).stoppedWhy).toBe('落下: 5 段');
+  });
 });

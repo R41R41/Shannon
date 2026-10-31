@@ -381,6 +381,15 @@ function lifeAtStart(bot: object): { life?: number } {
  * Runs the hands (also from tests, with a fake body). `bot` is the act's motor port: everything it moves stops when the action is
  * cut. The report is kept for the command's receipt (utils/actReport) and returned as the skill's result (JSON).
  */
+/** Native physics does not expose entity.isOnLadder. Its controlled descent is -0.225/tick after gravity.
+ * A known ladder/vine and bounded velocity establish support; a fast fall past either still counts as a fall. */
+function climbSupportsBody(bot: any): boolean {
+  const vy = bot.entity?.velocity?.y;
+  if (typeof vy !== 'number' || !Number.isFinite(vy) || vy < -0.3 || vy > 0.3) return false;
+  const at = feetCell(bot);
+  return !!at && ['ladder', 'vine'].includes(String(blockAt(bot, at)?.name ?? ''));
+}
+
 export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, facingName?: string,
   options: { maxMs?: number; tickMs?: number; accept?: string[]; repeat?: number; done?: ActCondition } = {}) {
   const startedAt = Date.now();
@@ -461,7 +470,9 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
       if (Date.now() - hurtAt >= HURT_GRACE_MS && !reflexHeld(bot)) return stopWith(`被弾: 体力 ${Math.round(highWater)} → ${Math.round(health)}`, 'damage_taken');
     } else hurtAt = null;
     const entity = bot.entity;
-    if (!entity?.position || entity.onGround !== false || entity.isInWater || entity.isInLava || entity.isOnLadder) { peakY = null; return; }
+    if (!entity?.position || entity.onGround !== false || entity.isInWater || entity.isInLava || entity.isOnLadder || climbSupportsBody(bot)) {
+      peakY = null; return;
+    }
     peakY = Math.max(peakY ?? entity.position.y, entity.position.y);
     if (peakY - entity.position.y >= fallStops) return stopWith(`落下: ${Math.round(peakY - entity.position.y)} 段`, 'fell');
   };
