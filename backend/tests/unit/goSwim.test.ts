@@ -49,6 +49,12 @@ describe('go water depth against real client physics', () => {
     const magma = makeSim((x, y, z) => y === 58 ? 'magma_block' : pool(x, y, z), { start: [0.5, 63, 0.5] });
     expect(swimControls(magma.bot, new Vec3(0.5, 59, 0.5))).toBeNull();
   });
+  it('leaves flowing water to the existing navigation instead of assuming still-water controls', () => {
+    const sim = makeSim(pool, { start: [0.5, 63, 0.5] });
+    const read = sim.bot.blockAt;
+    sim.bot.blockAt = (p: Vec3) => { const b = read(p); return b?.name === 'water' ? { ...b, getProperties: () => ({ level: 1 }) } : b; };
+    expect(swimControls(sim.bot, new Vec3(0.5, 59, 0.5))).toBeNull();
+  });
   it('descends through a narrow opening before moving under ice, and returns horizontally before rising', () => {
     const ice: Ground = (x, y, z) => y === 65 && (x !== 0 || z !== 0) ? 'ice' : pool(x, y, z);
     const down = makeSim(ice, { start: [0.5, 64.5, 0.5] });

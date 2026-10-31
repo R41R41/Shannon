@@ -22,7 +22,13 @@ export function swimControls(bot: any, target: Point, allowed: (x: number, y: nu
   const checked = new Set<string>();
   const nameAt = (x: number, y: number, z: number) => {
     const key = `${x},${y},${z}`;
-    if (!seen.has(key)) seen.set(key, bot.blockAt?.(new Vec3(x, y, z), false)?.name ?? null);
+    if (!seen.has(key)) {
+      const block = bot.blockAt?.(new Vec3(x, y, z), false);
+      const level = block?.getProperties?.().level;
+      // Current pushes and falling water need the ordinary route's handling.
+      // An unmeasured liquid is not evidence of a still, controllable corridor.
+      seen.set(key, block?.name === 'water' && Number(level) !== 0 ? 'flowing_water' : block?.name ?? null);
+    }
     return seen.get(key)!;
   };
   const corridor = (from: Point, to: Point): boolean => {

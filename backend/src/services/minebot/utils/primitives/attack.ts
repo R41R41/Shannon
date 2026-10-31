@@ -96,7 +96,7 @@ export async function attack(ctx: StepContext, args: AttackArgs): Promise<StepOu
       if (distance < best - 0.3) { best = distance; bestAt = Date.now(); }
       if (distance > REACH && (!chase || Date.now() - bestAt > NO_GAIN_MS)) {
         letGo(bot);
-        return { ...stopped(bot, chase ? 'cannot_reach' : 'out_of_reach', `${label} に届かない（${distance.toFixed(1)}m${chase ? `、${NO_GAIN_MS / 1000}秒近づけない` : ''}）。当てた ${blows}回`,
+        return { ...stopped(bot, chase ? 'cannot_reach' : 'out_of_reach', `${label} に届かない（${distance.toFixed(1)}m${chase ? `、${NO_GAIN_MS / 1000}秒近づけない` : ''}）。${blows}回振って ${hurt}回当たった`,
           { x: Math.floor(live.position.x), y: Math.floor(live.position.y), z: Math.floor(live.position.z) }), progress: landed() };
       }
       if (distance <= REACH && Date.now() - lastSwing >= cooldownMs(bot.heldItem?.name)) {
