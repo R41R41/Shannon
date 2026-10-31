@@ -10,12 +10,13 @@ import { madeCommand, madeFor } from './helpers/madeFor.js';
 import { ACT_HANDS, runAct } from '../../src/services/minebot/instantSkills/act.js';
 import { createMotorPort } from '../../src/services/minebot/execution/ActionExecution.js';
 
-function fixture() {
+function fixture(loginName?: string) {
   const act: any = { skillName: 'act', description: 'act', isToolForLLM: true, maxDurationMs: 180_000, params: [{ name: 'hands', type: 'json', schema: ACT_HANDS, description: 'hands', required: true }],
     run: vi.fn(async (hands: any) => runAct(createMotorPort(bot), hands)) };
   let bot: any;
   bot = Object.assign(new EventEmitter(), { entity: { id: 1, position: new Vec3(0, 65, 0), yaw: 0, pitch: 0, onGround: true },
-    username: 'shannon', health: 20, food: 20, oxygenLevel: 20, game: { dimension: 'overworld' }, entities: {}, inventory: { items: () => [], slots: new Array(46).fill(null) }, controlState: {},
+    username: loginName ? undefined : 'shannon', _client: loginName ? Object.assign(new EventEmitter(), { username: loginName }) : undefined,
+    health: 20, food: 20, oxygenLevel: 20, game: { dimension: 'overworld' }, entities: {}, inventory: { items: () => [], slots: new Array(46).fill(null) }, controlState: {},
     instantSkills: { getSkills: () => [act] }, executingSkill: false, interruptExecution: false,
     clearControlStates: vi.fn(), setControlState: vi.fn(), look: vi.fn(async () => {}), attack: vi.fn() });
   const body = new NativeCommonFcaBody(bot, { serverId: 'home', capture: async () => ({ dataUrl: 'data:image/jpeg;base64,YQ==', capturedAt: new Date().toISOString() }) });
@@ -26,6 +27,33 @@ const base = { schemaVersion: 1, id: 'skill:q1', serverId: 'home', connectionId:
   lease: { id: 'l', generation: 1, holder: 't' }, deadlineAt: new Date(Date.now() + 5000).toISOString(), arguments: {} };
 
 describe('the observation says who the body is and who holds it (contracts 4 and 5)', () => {
+  it('keeps the death count across reconnects when the login username arrives after body creation', async () => {
+    const { mkdtempSync, readFileSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os'); const path = await import('node:path');
+    const file = path.join(mkdtempSync(path.join(tmpdir(), 'native-life-')), 'life.json');
+    vi.stubEnv('MINEBOT_LIFE_FILE', file);
+    try {
+      const first = fixture('actor'); first.bot.username = 'actor'; first.bot.emit('death');
+      const life = (first.body.observe().state as any).life;
+      expect(life).toMatchObject({ life: 2, deathSeq: 1 }); await first.body.dispose();
+      const next = fixture('actor');
+      expect((next.body.observe().state as any).life).toMatchObject({ life: 2, deathSeq: 1, deathEpoch: life.deathEpoch });
+      next.bot.username = 'actor'; next.bot.emit('death'); await next.body.dispose();
+      expect(JSON.parse(readFileSync(file, 'utf8'))['home|actor']).toMatchObject({ life: 3, deathSeq: 2 });
+    } finally { vi.unstubAllEnvs(); }
+  });
+  it('loads the existing named record before login instead of the legacy unnamed slot', async () => {
+    const { mkdtempSync, writeFileSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os'); const path = await import('node:path');
+    const file = path.join(mkdtempSync(path.join(tmpdir(), 'native-life-')), 'life.json');
+    writeFileSync(file, JSON.stringify({ 'home|body': { life: 1, deathEpoch: 'e', deathSeq: 0 }, 'home|actor': { life: 7, deathEpoch: 'e', deathSeq: 6 } }));
+    vi.stubEnv('MINEBOT_LIFE_FILE', file);
+    try {
+      const f = fixture('actor');
+      expect((f.body.observe().state as any).life).toMatchObject({ life: 7, deathSeq: 6, deathEpoch: 'e' });
+      await f.body.dispose();
+    } finally { vi.unstubAllEnvs(); }
+  });
   it('carries the life, the run ids, the control view and the utilities with the proof of the scan', async () => {
     const { body, bot } = fixture();
     body.bindConnection('conn-9');
