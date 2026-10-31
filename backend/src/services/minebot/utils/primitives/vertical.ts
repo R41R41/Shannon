@@ -512,9 +512,9 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
     if (plan.kind === 'stairs_down' || plan.kind === 'stairs_up') { const [dx, dz] = TOWARD[args.toward!]; expected.push(shift(plan.to, dx, -extra, dz)); }
     needDisplacedCheck(expected);
   };
-  const stairsLevel = async (plan: Plan) => {
-    // Run 48 hold 6: opening the roof while standing under a falling column buries the body before
-    // openAll can dig its replacements. Leave the support intact and let the planner choose the approach.
+  const precheckStandingRoof = (plan: Plan) => {
+    // Opening a falling column over the body is unsafe for every ascending shape.
+    // Run54: pillar could open the same support that stairs refused, then jump into falling gravel.
     if (!down) {
       const roof = plan.clear.find(cell => cell.x === plan.from.x && cell.z === plan.from.z
         && FALLING.test(nameOf(blockAt(bot, shift(cell, 0, 1, 0)))));
@@ -524,6 +524,9 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
           '向きだけを変えても同じ頭上を掘る。横の安全な立ち位置へ移り、下に立たず支えを開けるか別の上り口へ');
       }
     }
+  };
+  const stairsLevel = async (plan: Plan) => {
+    precheckStandingRoof(plan);
     precheckDig(plan.clear);
     await openAll(plan.clear);
     await handleLiquid(plan);   // what the digging let out
@@ -606,6 +609,7 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
     const short = shortFloor(bot, plan.from);
     if (short) throw new VStop('no_floor', `足元 ${cellText(short.cell)} の ${short.name} は高さ ${short.top.toFixed(2)} で、足が ${short.lowBy.toFixed(2)} 低く、跳んでも積む高さに届かない`, short.cell);
     if (feetBlock && feetBlock.boundingBox === 'block') throw new VStop('displaced', `足のマス ${cellText(plan.from)} が ${nameOf(feetBlock)} で埋まっている`, plan.from);
+    precheckStandingRoof(plan);
     precheckDig(plan.clear);
     // A-6 (3): digging the cells over the head is not placing: the hand is not a laying hand for it (a reflex's note may stop it then), and is again for the climb.
     laying(false);

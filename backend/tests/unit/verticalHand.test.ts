@@ -48,6 +48,18 @@ describe('stairs up: an obstruction above the current stance', () => {
   }
 });
 
+describe('pillar ascent uses the same standing-roof safety as stairs', () => {
+  it.each(['gravel', 'sand', 'red_sand', 'white_concrete_powder'])('keeps the support under %s before digging or jumping', async material => {
+    const sim = sim0(world('stone', 64, [column('stone', 0, 66, 67, 0), cell(material, 0, 68, 0)]), [0, 64, 0], [PICK, { name: 'cobblestone', count: 20 }]);
+    const outcome = await drive(sim, run(sim, hand({ dir: 'up', shape: 'pillar', toY: 66, canDig: ['stone', material], canPlace: ['cobblestone'] })));
+    expect(outcome).toMatchObject({ ok: false, code: 'falling_above', at: at(0, 68, 0) });
+    expect(sim.bot.dugBlocks).toEqual([]);
+    expect(outcome.progress!.done).toBe(0);
+    expect(workOf(outcome).placeAttempts).toBe(0);
+    expect(outcome.text).toContain('横の安全な立ち位置');
+  });
+});
+
 const ctxOf = (sim: HandsSim, options: { controller?: AbortController; ms?: number; progress?: (detail: string) => void } = {}): StepContext => {
   const feet = feetCell(sim.bot)!;
   return { bot: sim.bot, stop: (options.controller ?? new AbortController()).signal, deadline: Date.now() + (options.ms ?? 600_000), facing: 'north', base: feet,
