@@ -56,7 +56,7 @@ const COUNTERS: Array<{ kind: ReflexKind; detail: string; read: (bot: LedgerBot)
   { kind: 'fireball', detail: '火の玉を打ち返した', read: bot => bot.fireballDeflect?.strikes },
   { kind: 'knock', detail: '押された先で踏ん張った', read: bot => bot.knockBrace?.braced },
   { kind: 'lava', detail: '溶岩回避の反射が始まった（脱出は未確認）', read: bot => bot.lavaReflex?.engagements },
-  { kind: 'breath', detail: '呼吸を確保した', read: bot => bot.breathingReflex?.engagements },
+  { kind: 'breath', detail: '浮上反射が始まった（呼吸回復は未確認）', read: bot => bot.breathingReflex?.engagements },
 ];
 
 const number = (value: unknown): number | null => typeof value === 'number' && Number.isFinite(value) ? value : null;

@@ -123,6 +123,17 @@ describe('what the client loads for each setting (loadFloorLayer, run against a 
   });
 });
 describe('reflex ledger', () => {
+  it('reports breath engagement without claiming recovered oxygen in observations or receipts', () => {
+    const bot = { health: 20, oxygenLevel: -1, breathingReflex: { engagements: 0 } };
+    const ledger = new ReflexLedger(bot);
+    const mark = ledger.mark();
+    bot.breathingReflex.engagements = 1;
+    ledger.sample();
+    expect(ledger.summary()!.recent[0]).toMatchObject({ kind: 'breath', detail: '浮上反射が始まった（呼吸回復は未確認）' });
+    expect(ledger.noteSince(mark)).toContain('呼吸回復は未確認');
+    expect(ledger.noteSince(mark)).not.toContain('呼吸を確保した');
+    expect(bot.oxygenLevel).toBe(-1);
+  });
   const clock = () => { let at = 1_000_000; return { now: () => at, advance: (ms: number) => { at += ms; } }; };
   it('keeps at most 16 and says nothing when empty', () => {
     const time = clock(), ledger = new ReflexLedger({}, time.now);
