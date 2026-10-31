@@ -334,6 +334,15 @@ export function goMovements(bot: any, args: Required<Pick<GoArgs, 'maxDrop' | 'w
   const getNeighbors = movements.getNeighbors.bind(movements);
   const inWater = isWaterName(nameAt(bot, Math.floor(bot.entity.position.x), Math.floor(bot.entity.position.y), Math.floor(bot.entity.position.z)));
   movements.getNeighbors = (node: any) => (getNeighbors(node) as any[]).filter(move => {
+    // A diagonal ascent sweeps both orthogonal corners before reaching its landing.
+    // Upstream clears the cheaper corner but does not check its footing: a failed
+    // jump can then walk into a shaft (run 54). Keep supported diagonal stairs,
+    // but make an exposed ascent approach cardinally or build its floor first.
+    const dx = move.x - node.x, dz = move.z - node.z;
+    if (move.y > node.y && Math.abs(dx) === 1 && Math.abs(dz) === 1) {
+      const supported = (x: number, z: number) => movements.getBlock(node, x, 0, z).physical || movements.getBlock(node, x, -1, z).physical;
+      if (!supported(dx, 0) || !supported(0, dz)) return false;
+    }
     if (!relax.hazards && hazardAtFeetWith(read, move.x, move.y, move.z)) return false;
     if (!args.waterOk && !inWater && (isWaterName(read(move.x, move.y, move.z)) || isWaterName(read(move.x, move.y + 1, move.z)))) return false;
     return true;
