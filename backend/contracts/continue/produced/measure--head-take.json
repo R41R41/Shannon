@@ -1,8 +1,8 @@
 {
  "producedBy": "backend/scripts/minecraft-continue-lab-probe.ts",
  "bench": "B",
- "bodyRevision": "b56bc242e8fe",
- "madeAt": "2026-10-31T05:43:08.345Z",
+ "bodyRevision": "a02386e9a2e8",
+ "madeAt": "2026-10-31T07:14:45.206Z",
  "answers": null,
  "fixtureSha256": null,
  "output": {
@@ -10,25 +10,25 @@
    "receipt": "completed",
    "incident": {
     "op": "take",
-    "id": "head:node_stalled:lab:1793425377727",
+    "id": "head:node_stalled:lab:1793430874534",
     "done": true,
-    "hold": "head:node_stalled:lab:1793425377727",
+    "hold": "head:node_stalled:lab:1793430874534",
     "unfreeze": null,
     "held": true,
     "frozen": true,
     "freeze": "The game is frozen",
-    "box": "/home/azureuser/.cache/minebot-lab/continue-codex-r55-b56bc24/blackbox/continue-lab-task/head_node_stalled_lab_1793425377727.json.gz",
-    "scene": "/home/azureuser/.cache/minebot-lab/continue-codex-r55-b56bc24/run/scenes/head_node_stalled_lab_1793425377727"
+    "box": "/home/azureuser/.cache/minebot-lab/continue-codex-r55-a02386e/blackbox/continue-lab-task/head_node_stalled_lab_1793430874534.json.gz",
+    "scene": "/home/azureuser/.cache/minebot-lab/continue-codex-r55-a02386e/run/scenes/head_node_stalled_lab_1793430874534"
    },
    "observed": {
-    "id": "head:node_stalled:lab:1793425377727",
+    "id": "head:node_stalled:lab:1793430874534",
     "task": "continue-lab-task",
     "why": "lab: node p3 did not move for 120 s"
    },
    "holdWritten": {
-    "id": "head:node_stalled:lab:1793425377727",
+    "id": "head:node_stalled:lab:1793430874534",
     "task": "continue-lab-task",
-    "at": "2026-10-31T05:43:00.376Z",
+    "at": "2026-10-31T07:14:37.193Z",
     "frozen": true,
     "freeze": "The game is frozen",
     "command": "",
@@ -40,11 +40,11 @@
     ]
    },
    "gameTimes": [
-    5092,
-    5092
+    5029,
+    5029
    ],
    "boxHead": {
-    "id": "head:node_stalled:lab:1793425377727",
+    "id": "head:node_stalled:lab:1793430874534",
     "why": "lab: node p3 did not move for 120 s",
     "notes": 20,
     "first": "decision row 5: lab note",
@@ -55,21 +55,21 @@
   "resume": {
    "incident": {
     "op": "resume",
-    "id": "head:node_stalled:lab:1793425377727",
+    "id": "head:node_stalled:lab:1793430874534",
     "done": true,
     "hold": null,
     "unfreeze": "The game is running normally"
    },
    "gameTimes": [
-    5096,
-    5130
+    5033,
+    5067
    ],
    "hold": null,
    "holdFile": false,
    "act": "completed"
   },
   "actTake": {
-   "id": "head:wait_loop:lab:1793425385464",
+   "id": "head:wait_loop:lab:1793430882300",
    "heavy": true,
    "why": "lab: wait loop",
    "held": true,
