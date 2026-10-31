@@ -1,8 +1,8 @@
 {
  "producedBy": "backend/scripts/lab/continue-produce.ts",
  "bench": "offline",
- "bodyRevision": "a02386e9a2e8",
- "madeAt": "2026-10-31T07:09:43.172Z",
+ "bodyRevision": "c3be438fec16",
+ "madeAt": "2026-10-31T10:23:39.401Z",
  "answers": "result/r43-reflex-ate-first",
  "fixtureSha256": "171ccc2253d4510db3589e04003b46c27b49a29457bb1cdec6a9c27f0fbaa1f7",
  "substitute": "eat only (pillarUp needs physics: the lab makes the whole act)",
