@@ -399,7 +399,16 @@ export async function vertical(ctx: StepContext, args: VerticalArgs): Promise<St
     // Gravel and sand over the cells came down into them: dug out again.
     for (let round = 0; round < SETTLE_ROUNDS; round++) {
       await settleFalling(cells, plan);
-      const pending = cells.some(cell => FALLING.test(nameOf(blockAt(bot, shift(cell, 0, 1, 0)))) || FALLING.test(nameOf(blockAt(bot, shift(cell, 0, 2, 0)))));
+      // Run 57: sand two cells up that rests on a solid roof (sandstone under a desert cap) cannot fall; only the first solid block over the cell counts.
+      const fallsInto = (cell: Cell) => {
+        for (const up of [1, 2]) {
+          const above = blockAt(bot, shift(cell, 0, up, 0));
+          if (FALLING.test(nameOf(above))) return true;
+          if (solid(above)) return false;
+        }
+        return false;
+      };
+      const pending = cells.some(fallsInto);
       const filled = cells.filter(cell => solid(blockAt(bot, cell)));
       if (!pending && !filled.length) return;
       if (!filled.length) await wait(ctx, 350);

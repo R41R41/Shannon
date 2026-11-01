@@ -109,6 +109,22 @@ describe('pillar ascent uses the same standing-roof safety as stairs', () => {
   });
 });
 
+describe('run 57: sand that rests on a solid block above the opened cells is not a fall to wait for', () => {
+  // Desert cap: rock, then sandstone, then sand. The cells the level opens have sandstone directly over them, so the sand two cells up cannot fall.
+  it.each(['sand', 'gravel'])('opens the level and steps up under a resting %s layer', async material => {
+    const sim = sim0(world('stone', 64, [column('stone', 0, 66, 67, 0), cell('sandstone', 0, 68, 0), column(material, 0, 69, 70, 0)]), [0, 64, 0], [PICK, { name: 'cobblestone', count: 20 }]);
+    const outcome = await drive(sim, run(sim, hand({ dir: 'up', shape: 'pillar', toY: 66, canDig: ['stone'], canPlace: ['cobblestone'] })));
+    expect(outcome.code).not.toBe('no_foothold');
+    expect(sim.nameAt(0, 69, 0)).toBe(material);
+    expect(sim.nameAt(0, 68, 0)).toBe('sandstone');
+  });
+  it('still waits when the sand directly above an opened cell has nothing under it', async () => {
+    const sim = sim0(world('stone', 64, [column('stone', 0, 66, 66, 0), cell('sand', 0, 68, 0)]), [0, 64, 0], [PICK, { name: 'cobblestone', count: 20 }]);
+    const outcome = await drive(sim, run(sim, hand({ dir: 'up', shape: 'pillar', toY: 66, canDig: ['stone'], canPlace: ['cobblestone'] })));
+    expect(outcome.ok).toBe(false);
+  });
+});
+
 const ctxOf = (sim: HandsSim, options: { controller?: AbortController; ms?: number; progress?: (detail: string) => void } = {}): StepContext => {
   const feet = feetCell(sim.bot)!;
   return { bot: sim.bot, stop: (options.controller ?? new AbortController()).signal, deadline: Date.now() + (options.ms ?? 600_000), facing: 'north', base: feet,
