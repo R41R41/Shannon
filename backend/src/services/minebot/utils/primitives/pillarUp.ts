@@ -6,6 +6,7 @@ import { placeFacts } from '../placeFacts.js';
 import { blockAt, cellNow, cellText, findItem, guard, inventoryCount, isAirLike, placeText, stopped, StepStopped, wait, waitUntil,
   type StepContext, type StepOutcome } from './common.js';
 import { withProgress } from './progressUnits.js';
+import { waterExitWords } from './waterExit.js';
 
 /**
  * pillarUp n: jump and set a block under the feet, one level at a time (the owner's dragon list, 2026-10-21: the End's pillars, a
@@ -99,7 +100,10 @@ async function pillarLevels(ctx: StepContext, args: PillarArgs, tally: { climbed
       if (!EMPTY(blockAt(bot, over))) return stopped(bot, 'ceiling', `頭の上 ${placeText(bot, over)} が ${cellNow(bot, over)} で登れない（${done}段登った）`, over);
       const floor = blockAt(bot, { x: feet.x, y: feet.y - 1, z: feet.z });
       // Run 44 (hold 1): an open trapdoor's box is a panel at the side of its cell: nothing to lay a block on from inside the cell.
-      if (!floor || floor.boundingBox !== 'block' || isDoorlike(String(floor.name))) return stopped(bot, 'no_floor', `足元 ${cellText({ x: feet.x, y: feet.y - 1, z: feet.z })} が ${floor?.name ?? '未ロード'} で、跳んでも積む土台が無い（${done}段登った）`, feet);
+      if (!floor || floor.boundingBox !== 'block' || isDoorlike(String(floor.name))) {
+        const exit = floor?.name === 'water' ? waterExitWords(bot, feet) : null;
+        return stopped(bot, 'no_floor', `足元 ${cellText({ x: feet.x, y: feet.y - 1, z: feet.z })} が ${floor?.name ?? '未ロード'} で、跳んでも積む土台が無い（${done}段登った）${exit ? `。${exit}` : ''}`, feet);
+      }
       const short = shortFloor(bot, feet);
       if (short) {
         const aside = wholeFloorBeside(bot, feet);

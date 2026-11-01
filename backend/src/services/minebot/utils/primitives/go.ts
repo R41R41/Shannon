@@ -18,6 +18,9 @@ import type { Progress } from '../../integration/commonFca/continueContract.js';
 import { meterProgress, round1 } from './progressUnits.js';
 import { ThreatExposedError } from '../exposureGuard.js';
 import { swimControls, swimPulse } from './swim.js';
+import { waterExitWords } from './waterExit.js';
+
+const waterExitText = (bot: any, feet: Cell) => { const exit = waterExitWords(bot, feet); return exit ? `。${exit}` : ''; };
 
 const { goals } = pathfinder;
 
@@ -1024,7 +1027,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
           if (gone) { await wait(ctx, 250); await waitUntil(ctx, () => bot.entity?.onGround === true && Math.abs(bot.entity?.velocity?.y ?? 0) < 0.1, 2500); continue; }
         }
         return { levels, stop: fail('low_floor', short.top > 0 ? `足元 ${cellText(short.cell)} の ${short.name} は高さ ${short.top.toFixed(2)} で、跳んでも積む高さに届かない`
-          : `足元 ${cellText(short.cell)} が ${short.name} で、跳んでも積む土台が無い（隣の丸ごとの床も無い）`, '丸ごとの床の所へ動いてから登る') };
+          : `足元 ${cellText(short.cell)} が ${short.name} で、跳んでも積む土台が無い（隣の丸ごとの床も無い）${short.name === 'water' ? waterExitText(bot, feet) : ''}`, '丸ごとの床の所へ動いてから登る') };
       }
       feet = feetCell(bot)!;
       const roof = { x: feet.x, y: feet.y + 2, z: feet.z };

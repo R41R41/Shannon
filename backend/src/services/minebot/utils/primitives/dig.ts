@@ -58,6 +58,28 @@ export function footingDrop(bot: any, cell: Cell): number | null {
   return fallIsDangerous(drop, bot.health ?? 20) ? drop : null;
 }
 
+/**
+ * The water the body drops into if this cell of its footing is gone (null: not its footing, the body already in water, or no water under it).
+ * Run 58 (hold 1): `mine` refused the iron ore under the body (water beside it); the model judged "water is harmless" and dug the same block
+ * with `dig`. footingDrop passes a fall into water (no damage), and the body sank into an aquifer roofed with stone whose only air was the
+ * one-wide hole above: two minutes of failed climbs. The fall is said before the dig, with the way around it.
+ */
+export function footingWater(bot: any, cell: Cell): { at: Cell; name: string } | null {
+  const position = bot.entity?.position;
+  if (!position || cell.y > Math.floor(position.y - 0.01)) return null;
+  const corners = [[-0.3, -0.3], [0.3, -0.3], [-0.3, 0.3], [0.3, 0.3]];
+  if (!corners.some(([dx, dz]) => Math.floor(position.x + dx) === cell.x && Math.floor(position.z + dz) === cell.z)) return null;
+  const here = blockAt(bot, { x: Math.floor(position.x), y: Math.floor(position.y), z: Math.floor(position.z) });
+  if (here?.name === 'water') return null;
+  for (let y = cell.y - 1; y >= cell.y - 40; y--) {
+    const below = blockAt(bot, { x: cell.x, y, z: cell.z });
+    if (!below) return null;
+    if (below.name === 'water') return { at: { x: cell.x, y, z: cell.z }, name: 'water' };
+    if (!isAirLike(below)) return null;
+  }
+  return null;
+}
+
 async function holdTool(ctx: StepContext, block: any, asked: string | undefined): Promise<{ held: string; fail?: StepOutcome }> {
   const bot = ctx.bot;
   if (asked === 'hand') {
@@ -142,6 +164,9 @@ async function digCells(ctx: StepContext, args: DigArgs, tally: DigTally): Promi
     }
     const fall = footingDrop(bot, cell);
     if (fall !== null) return result(stopped(bot, 'footing', `${placeText(bot, cell)} は足の下の柱。掘ると${Number.isFinite(fall) ? `${fall}段落ちる` : '下に着く所が無いか溶岩'}（先に横へ動くか、下を確かめる）`, cell));
+    const wet = footingWater(bot, cell);
+    if (wet) return result(stopped(bot, 'footing', `${placeText(bot, cell)} は足の下の柱。掘ると下の水 ${cellText(wet.at)} に落ちる。落ちても傷は無いが、水の中は床が無く、`
+      + `天井が石なら上がれなくなる（息も減る）。横の固い床へ動いてから横向きに掘るか、先に水を塞ぐ`, cell));
     const distance = eyeDistance(bot, cell);
     if (distance > DIG_REACH) return result(stopped(bot, 'out_of_reach', `${placeText(bot, cell)} の ${block.name} に届かない（目から${distance.toFixed(1)}m、${DIG_REACH}m まで）`, cell));
     // The eye has to see a face of it (run 28: 31 digs "Digging aborted" at cells behind stone, the reason never said). Cells dug before in

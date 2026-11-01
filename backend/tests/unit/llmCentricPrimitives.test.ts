@@ -68,6 +68,20 @@ describe('dig', () => {
     for (let y = 50; y < 63; y++) bot.__blocks.set(`0,${y},0`, { name: 'air', boundingBox: 'empty' });
     expect((await dig(ctx(bot), { at: [{ x: 0, y: 63, z: 0 }] })).reason).toBe('footing');
   });
+  it('run 58: refuses the block under the feet over water (no damage, but no floor to climb out from), and still digs a block beside it', async () => {
+    const bot = body();
+    bot.__blocks.set('0,62,0', { name: 'air', boundingBox: 'empty' });
+    bot.__blocks.set('0,61,0', { name: 'water', boundingBox: 'empty' });
+    bot.__blocks.set('1,62,0', { name: 'water', boundingBox: 'empty' });
+    const refused = await dig(ctx(bot), { at: [{ x: 0, y: 63, z: 0 }] });
+    expect(refused.reason).toBe('footing');
+    expect(refused.text).toContain('下の水 (0,61,0) に落ちる');
+    expect(refused.text).toContain('横の固い床へ動いてから');
+    expect(bot.__dug).toEqual([]);
+    const beside = await dig(ctx(bot), { at: [{ x: 1, y: 63, z: 0 }], collect: false });
+    expect(beside.ok).toBe(true);
+    expect(bot.__dug).toEqual(['1,63,0']);
+  });
   it('says which hostile a dig lets in, from where and how far, and digs with exposeOk (all, or the kind)', async () => {
     const bot = body();
     exposure.threats = [{ name: 'blaze', id: 41, distance: 6.04, position: { x: 5, y: 66, z: 3 } }];
