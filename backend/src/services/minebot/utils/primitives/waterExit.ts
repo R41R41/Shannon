@@ -1,4 +1,4 @@
-import { type Cell } from '../localMap.js';
+import { feetCell, type Cell } from '../localMap.js';
 import { blockAt, cellText, isAirLike } from './common.js';
 
 /**
@@ -34,4 +34,17 @@ export function waterExitWords(bot: any, feet: Cell): string | null {
   if (!options.length) return null;
   options.sort((a, b) => a.digs - b.digs);
   return `水の外へ出る足場: ${options.slice(0, 2).map(option => option.words).join('／')}（掘る名前を canDig に、maxDig は掘る数以上）`;
+}
+
+/**
+ * Run 58 (hold 1 resumed): in that aquifer the decisions saw breath 20/20 and the way out only as one neutral line of `around` beside
+ * "dig the iron ore", kept digging iron from the water for two more minutes, sank to y=8 and drowned. The live state (`state.inside`, every
+ * decision) says she is in deep water with no floor, that work there sinks her and spends breath, and the ledge out. Null out of deep water.
+ */
+export function deepWaterWords(bot: any): string | null {
+  const feet = feetCell(bot);
+  if (!feet) return null;
+  if (blockAt(bot, feet)?.name !== 'water' || blockAt(bot, { x: feet.x, y: feet.y - 1, z: feet.z })?.name !== 'water') return null;
+  const exit = waterExitWords(bot, feet);
+  return `深い水の中（足の下も水で床が無い。掘る・置くの間も沈み、息が減る。水の中の作業より先に水の外へ）${exit ? `。${exit}` : ''}`;
 }

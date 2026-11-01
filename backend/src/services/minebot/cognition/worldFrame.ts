@@ -18,6 +18,7 @@ import { toolKitNotice } from '../utils/toolWear.js';
 import { nearbyNeeds } from '../utils/nearbyNeeds.js';
 import { localMapFor, recentStopLines } from '../utils/localMap.js';
 import { insideStructure, mapMarkLines, watchedEntityFacts } from '../utils/mapMarks.js';
+import { deepWaterWords } from '../utils/primitives/waterExit.js';
 import { foodPointsOf } from '../utils/foodPoints.js';
 import { worldScanView } from '../utils/worldScanState.js';
 import { biomeFitsDimension } from '../utils/biomeNames.js';
@@ -402,7 +403,10 @@ export function captureWorldObservation(bot?: unknown, options: { threatReach?: 
     ...(landmarks?.length ? { landmarks: structuredClone(landmarks) } : {}),
     ...(live ? (() => {
       const out: Pick<WorldObservation, 'localMap' | 'mapLandmarks' | 'recentStops' | 'foodPoints' | 'inside' | 'scan'> = {};
-      try { const inside = insideStructure(observedBot as never); if (inside) out.inside = inside; } catch { /* none */ }
+      try {
+        const inside = [insideStructure(observedBot as never), deepWaterWords(observedBot)].filter(Boolean).join('・');
+        if (inside) out.inside = inside;
+      } catch { /* none */ }
       try { const map = localMapFor(observedBot as never); if (map) out.localMap = map; } catch { /* no map this time */ }
       try { const marks = mapMarkLines(observedBot as never); if (marks.length) out.mapLandmarks = marks; } catch { /* none */ }
       try { const stops = recentStopLines(observedBot as never); if (stops.length) out.recentStops = stops; } catch { /* none */ }
