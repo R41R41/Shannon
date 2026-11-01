@@ -1,8 +1,8 @@
 {
  "producedBy": "backend/scripts/minecraft-continue-lab-probe.ts",
  "bench": "B",
- "bodyRevision": "7650ad6223f96048d1dbfda801473e4314c28251",
- "madeAt": "2026-11-01T12:37:15.203Z",
+ "bodyRevision": "a6bb409e61dca255ba8b8969647b998a32e809a7",
+ "madeAt": "2026-11-01T14:49:18.388Z",
  "answers": "life/portal-is-not-death",
  "fixtureSha256": "476bf80b606d56aaee42c54b9a091b15366d25bdb639a2cc7623069beab374cd",
  "output": {
@@ -10,24 +10,24 @@
   "netherLife": {
    "life": 3,
    "advancedBy": "death",
-   "deathEpoch": "de-9d772464",
+   "deathEpoch": "de-cd7bac10",
    "deathSeq": 2,
-   "since": "2026-11-01T12:36:46.249Z",
+   "since": "2026-11-01T14:48:50.013Z",
    "alive": true,
-   "diedAt": "2026-11-01T12:36:46.249Z",
+   "diedAt": "2026-11-01T14:48:50.013Z",
    "dimension": "the_nether",
-   "dimensionSince": "2026-11-01T12:37:00.120Z"
+   "dimensionSince": "2026-11-01T14:49:03.907Z"
   },
   "afterDeathLife": {
    "life": 4,
    "advancedBy": "death",
-   "deathEpoch": "de-9d772464",
+   "deathEpoch": "de-cd7bac10",
    "deathSeq": 3,
-   "since": "2026-11-01T12:37:10.502Z",
+   "since": "2026-11-01T14:49:13.715Z",
    "alive": true,
-   "diedAt": "2026-11-01T12:37:10.502Z",
+   "diedAt": "2026-11-01T14:49:13.715Z",
    "dimension": "overworld",
-   "dimensionSince": "2026-11-01T12:37:12.577Z"
+   "dimensionSince": "2026-11-01T14:49:15.933Z"
   },
   "oldCommand": {
    "failureType": "dimension_changed",
