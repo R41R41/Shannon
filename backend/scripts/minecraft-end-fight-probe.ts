@@ -864,11 +864,12 @@ scenes.platform = async () => {
   // The platform's chunks stay loaded whoever stands where: a body that died is back in the overworld, and a cloud left in an unloaded End chunk is not found by `kill` (w4: the next trial was met by it on arrival).
   await ask(`${END} forceload add 64 -16 111 16`);
   const clear = async () => { await ask(`${END} kill @e[type=minecraft:area_effect_cloud]`); await ask(`${END} kill @e[type=minecraft:dragon_fireball]`); };
-  const trial = async (label: string, items: string[], balls = 1, bridgeAt: number | null = null) => {
+  const trial = async (label: string, items: string[], balls = 1, bridgeAt: number | null = null, bridgeFrom = 70) => {
     await clear();
     // the platform as the game makes it (5 x 5 of obsidian at y 48), nothing on it; the body put on it and waited for until it stands, whole. On the bridge: a line of cobblestone one wide, 28 long, from the platform out over the void (a way out that can be walked: the body walks it, w8: 9 blocks, no harm); in the other trials there is none.
     await ask(`${END} fill 98 48 -2 102 48 2 obsidian`); await ask(`${END} fill 98 49 -2 102 53 2 air`);
-    await ask(`${END} fill 70 48 0 97 48 0 ${bridgeAt === null ? 'air' : 'cobblestone'}`); await ask(`${END} fill 70 49 -1 97 53 1 air`);
+    await ask(`${END} fill 70 48 0 97 48 0 air`); await ask(`${END} fill 70 49 -1 97 53 1 air`);
+    if (bridgeAt !== null) await ask(`${END} fill ${bridgeFrom} 48 0 97 48 0 cobblestone`);
     const standX = bridgeAt ?? 100.5;
     await gear(items); await wear();
     await ask(`effect give ${ACTOR} minecraft:instant_health 1 5`);
@@ -911,6 +912,8 @@ scenes.platform = async () => {
       await trial('with nothing to put under the feet', ['diamond_sword']),
       await trial('on a bridge one wide, 12 blocks out', ['diamond_sword', 'cobblestone 16'], 1, 88.5),
       await trial('on a bridge one wide, two balls 3 s apart', ['diamond_sword', 'cobblestone 16'], 2, 88.5),
+      // the front edge of a bridge that is being laid: the last block is x 90, the body stands on it with its middle over x 89, where nothing is under it (the go leans over the gap to lay the next)
+      await trial('at the front edge of a bridge, half over the next cell', ['diamond_sword', 'cobblestone 16'], 1, 89.97, 90),
     ];
     return { runs };
   } finally {
@@ -1020,6 +1023,55 @@ scenes.landing = async () => {
       seconds: round((Date.now() - start) / 1000, 1), sat,
     };
     log(`LANDING ${label}: ${JSON.stringify(result)}`);
+    trials.push(result);
+  }
+  return { trials };
+};
+
+scenes.soak = async () => {
+  // The body stands about on the island and does nothing (a planner is thinking), with the dragon awake at full health and the ten crystals up, flying its own pattern for a long while: what reaches the body, in which
+  // phase and from how near the dragon was, how it was moved, and what the floor reflex made of it. Resistance off; diamond armour; the reflex on and nothing else acting.
+  await protect(false);
+  releaseReflex();
+  await flatten(); await gear(['diamond_sword']); await wear();
+  const topAt = (x: number, z: number): number | null => {
+    for (let y = 110; y >= 20; y--) { const block = actor.blockAt(new Vec3(x, y, z), false); if (block && block.name === 'end_stone') return y; }
+    return null;
+  };
+  const seconds = 150;
+  const places: Array<[string, number, number]> = [['5 m from the podium (+z)', 0.5, 5.5], ['6 m from the foot of the pillar at x 42', 36.5, 0.5]];
+  const trials: Array<Record<string, unknown>> = [];
+  for (const [label, x, z] of places) {
+    await restoreDragon(); await sleep(2500);
+    await ask(`effect give ${ACTOR} minecraft:instant_health 1 5`);
+    const top = topAt(Math.floor(x), Math.floor(z));
+    if (top === null) { trials.push({ label, error: 'no ground seen there' }); continue; }
+    await standAt(x, top + 1, z); await sleep(1200);
+    const healthBefore = Number(actor.health), deathsBefore = actorDeaths, lowest = trackMinHealth(), ledgerMark = (actor.reflexLedger?.mark?.() as number | undefined) ?? 0;
+    const hits: Array<[number, number, number | null, number | null]> = [], phaseSeconds: Record<string, number> = {};
+    const start = Date.now(), p0 = actor.entity.position.clone();
+    let lastHealth = healthBefore, nearest = Infinity, maxSpeed = 0, lastTick = start;
+    while (Date.now() - start < seconds * 1000 && actorDeaths === deathsBefore) {
+      const now = Date.now(), health = Number(actor.health), dragon = dragonEntity(), phase = dragon ? dragonPhaseOf(actor, dragon) : null;
+      const distance = dragon?.position ? actor.entity.position.distanceTo(dragon.position) : null;
+      if (distance !== null) nearest = Math.min(nearest, distance);
+      if (health < lastHealth - 0.01) hits.push([Math.round((now - start) / 100) / 10, round(lastHealth - health, 1)!, phase, distance === null ? null : round(distance, 1)]);
+      lastHealth = health;
+      const key = phase === null ? 'unseen' : String(phase);
+      phaseSeconds[key] = round((phaseSeconds[key] ?? 0) + (now - lastTick) / 1000, 1)!;
+      lastTick = now;
+      const v = actor.entity.velocity; maxSpeed = Math.max(maxSpeed, Math.hypot(v.x, v.y, v.z));
+      await sleep(100);
+    }
+    const entries = (actor.reflexLedger?.entriesSince?.(ledgerMark) as Array<{ kind: string; outcome: string; detail: string }> | undefined) ?? [];
+    const kinds: Record<string, number> = {};
+    for (const entry of entries) kinds[`${entry.kind}:${entry.outcome}`] = (kinds[`${entry.kind}:${entry.outcome}`] ?? 0) + 1;
+    const result = {
+      label, seconds: round((Date.now() - start) / 1000, 1), healthLost: round(healthBefore - Number(actor.health), 1), lowest: lowest.stop(), died: actorDeaths > deathsBefore, hits,
+      nearestDragonM: Number.isFinite(nearest) ? round(nearest, 1) : null, maxSpeed: round(maxSpeed, 2), movedBlocks: round(actor.entity.position.distanceTo(p0), 1), phaseSeconds, reflex: kinds,
+      lastEntries: entries.slice(-6).map(e => `${e.kind}:${e.outcome}:${e.detail.slice(0, 120)}`),
+    };
+    log(`SOAK ${label}: ${JSON.stringify(result)}`);
     trials.push(result);
   }
   return { trials };

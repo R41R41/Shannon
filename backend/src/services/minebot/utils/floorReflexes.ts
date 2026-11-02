@@ -1032,6 +1032,35 @@ export async function runDragonRetreat(bot: FloorBody, port: FloorBody, tickMs =
   return { success: true, result: ended === 'blocked' ? '竜の危険から離れる安全な道が無かった' : ticks > 0 ? '竜の危険から離れた' : '離れる必要がなくなった', moved, ended };
 }
 
+/**
+ * A body at the front edge of a bridge (lab 2026-11-02, w12: the go had it leaning over the cell in front of the last block it laid) stands on the block behind with its middle over a cell that has no
+ * floor: the feet cell reads air under it, and no block can be laid there. It is moved onto the cell that holds it (half a block at most) before it rises. Nothing is done where the feet cell has a floor.
+ */
+async function settleOnFloor(bot: FloorBody, port: FloorBody): Promise<void> {
+  const feet = feetCell(bot as never), body = bot.entity;
+  if (!feet || !body) return;
+  const read = bodyReader(bot as never);
+  const solid = (x: number, y: number, z: number) => read(x, y, z)?.solid === true;
+  if (solid(feet.x, feet.y - 1, feet.z)) return;
+  const here = body.position;
+  const aside = ([[1, 0], [-1, 0], [0, 1], [0, -1]] as const).map(([dx, dz]) => ({ x: feet.x + dx, z: feet.z + dz }))
+    .filter(cell => solid(cell.x, feet.y - 1, cell.z) && !solid(cell.x, feet.y, cell.z) && !solid(cell.x, feet.y + 1, cell.z))
+    .sort((a, b) => Math.hypot(a.x + 0.5 - here.x, a.z + 0.5 - here.z) - Math.hypot(b.x + 0.5 - here.x, b.z + 0.5 - here.z))[0];
+  if (!aside) return;
+  try {
+    port.look?.(Math.atan2(-(aside.x + 0.5 - here.x), -(aside.z + 0.5 - here.z)), 0, true);
+    port.setControlState('forward', true); port.setControlState('sprint', false); port.setControlState('jump', false);
+    for (let tick = 0; tick < SETTLE_TICKS; tick++) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+      const now = feetCell(bot as never);
+      if (now && now.x === aside.x && now.z === aside.z) break;
+    }
+  } finally {
+    try { releaseKeys(port); } catch { /* ownership lost: the new owner holds the keys */ }
+  }
+}
+const SETTLE_TICKS = 8;
+
 // ===== The last stand =====
 
 /**
@@ -2107,7 +2136,7 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
     state.dragonRises = [...rises, t]; state.busy = 'flee';
     log.warn(`🐉 ${said}: 歩いて離れる道が無い。${block} を足元に積んで 1 段上がる`);
     const handle = ledger.begin('retreat', `竜の雲から歩いて離れる道が無く、${block} を足元に積んで 1 段上がる: ${said}`, DRAGON_DETAIL_MAX);
-    void take('floor-dragon', FLOOR_RETREAT_PRIORITY, LAST_STAND_TIMEOUT_MS.pillar + 1000, () => runLastStand(bot, createMotorPort(bot), { kind: 'pillar', block, detail: '' }))
+    void take('floor-dragon', FLOOR_RETREAT_PRIORITY, LAST_STAND_TIMEOUT_MS.pillar + 1000, async () => { const port = createMotorPort(bot); await settleOnFloor(bot, port); return runLastStand(bot, port, { kind: 'pillar', block, detail: '' }); })
       .then(result => {
         const done = result as { success?: boolean; result?: string } | undefined;
         handle.detail = `竜の雲から歩いて離れる道が無く、${block} を足元に積んだ（${done?.result ?? ''}）: ${said}`.slice(0, DRAGON_DETAIL_MAX);

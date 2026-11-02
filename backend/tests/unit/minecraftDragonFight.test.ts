@@ -471,6 +471,9 @@ describe('the floor reflex out of the dragon\'s reach', () => {
     expect(entries.some((entry: any) => entry.kind === 'cover_none' && /離れる安全な道が無い/u.test(entry.detail))).toBe(true);
     expect(entries.some((entry: any) => entry.kind === 'retreat')).toBe(false);
   });
+  /** Waits for a positive result (a rise is a task on the action queue: its start is not on a fixed clock under load), up to a few seconds. */
+  const until = async (check: () => boolean, ms = 2500) => { const end = Date.now() + ms; while (!check() && Date.now() < end) await new Promise(resolve => setTimeout(resolve, 20)); };
+  const risen = (n: number) => () => vi.mocked(pillarUp).mock.calls.length >= n;
   const platformWorld = (): World => { const world: World = new Map(); for (let x = -1; x <= 1; x++) for (let z = 11; z <= 13; z++) world.set(key(x, 63, z), 'end_stone'); return world; };
   const OBSIDIAN = { name: 'obsidian', type: 2, count: 3 }, COBBLE = { name: 'cobblestone', type: 1, count: 20 };
   it('rises one block above a cloud, on obsidian first, when no way out can be walked and a block is carried (the arrival platform of the End)', async () => {
@@ -478,7 +481,7 @@ describe('the floor reflex out of the dragon\'s reach', () => {
     const { f, keys } = armed(platformWorld());
     f.bot.inventory = { items: () => [COBBLE, OBSIDIAN], slots: [] };
     f.bot.emit('physicsTick');
-    await new Promise(resolve => setTimeout(resolve, 300));
+    await until(risen(1)); await new Promise(resolve => setTimeout(resolve, 150));
     expect(pillarUp).toHaveBeenCalledTimes(1);
     expect(vi.mocked(pillarUp).mock.calls[0][1]).toEqual({ n: 1, block: 'obsidian' });
     expect(keys.some(([k, v]) => k === 'forward' && v)).toBe(false);
@@ -487,6 +490,18 @@ describe('the floor reflex out of the dragon\'s reach', () => {
     // not again at once: the next look is a while off
     f.bot.emit('physicsTick'); await new Promise(resolve => setTimeout(resolve, 100));
     expect(pillarUp).toHaveBeenCalledTimes(1);
+  });
+  it('moves onto the cell that holds it first, when it stands over the front edge of a bridge (its feet cell has no floor), and then rises', async () => {
+    vi.mocked(pillarUp).mockClear();
+    const { f, keys } = armed(platformWorld());
+    f.bot.inventory = { items: () => [OBSIDIAN], slots: [] };
+    // the platform is x -1 to 1: the body's middle is over x 2, where nothing is under it, and the block behind it holds it
+    f.self.position = new Vec3(2.05, 64, 12.5);
+    f.bot.emit('physicsTick'); await until(risen(1)); await new Promise(resolve => setTimeout(resolve, 150));
+    expect(keys.some(([k, v]) => k === 'forward' && v)).toBe(true);
+    expect(f.self.position.x).toBeLessThan(2);
+    expect(pillarUp).toHaveBeenCalledTimes(1);
+    expect(keys.filter(([k, v]) => k === 'forward' && v).length).toBeLessThan(5);
   });
   it('does not rise for a fireball in the air (its cloud is put on the body at its height), looks again at the next tick, and rises once the ball has landed and its cloud is not yet in sight', async () => {
     vi.mocked(pillarUp).mockClear();
@@ -498,7 +513,7 @@ describe('the floor reflex out of the dragon\'s reach', () => {
     expect(pillarUp).not.toHaveBeenCalled();
     expect(f.bot.reflexLedger.entriesSince(0).some((entry: any) => entry.kind === 'cover_none')).toBe(true);
     delete f.bot.entities[41]; // landed, its cloud not yet in sight: the next look is not the 1.5 s of a blocked one
-    f.bot.emit('physicsTick'); await new Promise(resolve => setTimeout(resolve, 200));
+    f.bot.emit('physicsTick'); await until(risen(1));
     expect(pillarUp).toHaveBeenCalledTimes(1);
     expect(vi.mocked(pillarUp).mock.calls[0][1]).toEqual({ n: 1, block: 'obsidian' });
   });
@@ -514,14 +529,14 @@ describe('the floor reflex out of the dragon\'s reach', () => {
     vi.mocked(pillarUp).mockClear();
     const { f } = armed(platformWorld());
     f.bot.inventory = { items: () => [OBSIDIAN], slots: [] };
-    f.bot.emit('physicsTick'); await new Promise(resolve => setTimeout(resolve, 200));
+    f.bot.emit('physicsTick'); await until(risen(1));
     expect(pillarUp).toHaveBeenCalledTimes(1);
     f.bot.floorReflexes.dragonNextAt = 0;
     f.bot.emit('physicsTick'); await new Promise(resolve => setTimeout(resolve, 100));
     expect(pillarUp).toHaveBeenCalledTimes(1); // the cloud still lies under the body, but not again at once
     await new Promise(resolve => setTimeout(resolve, 1200));
     f.bot.floorReflexes.dragonNextAt = 0;
-    f.bot.emit('physicsTick'); await new Promise(resolve => setTimeout(resolve, 200));
+    f.bot.emit('physicsTick'); await until(risen(2));
     expect(pillarUp).toHaveBeenCalledTimes(2);
     const at = Date.now();
     f.bot.floorReflexes.dragonRises = [at - 15_000, at - 9_000, at - 3_000];
