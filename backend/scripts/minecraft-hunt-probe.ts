@@ -560,6 +560,8 @@ async function blazeNook(note: (text: string) => void, options: { window?: boole
       await ask(`${nether} setblock ${cell.x} ${lidY} ${cell.z} minecraft:air`);
       // cap: the 3x3 gets a roof two cells over the floor too, so what spawns there cannot rise (a cage of 3x3x2: nothing leaves it, and the count of six near the spawner stays true)
       if (options.cap) await ask(`${nether} fill ${spawner[0] - 1} ${lidY + 1} ${spawner[2] - 1} ${spawner[0] + 1} ${lidY + 1} ${spawner[2] + 1} minecraft:cobblestone replace minecraft:air`);
+      // the head cell of the body is the way out of the cage (census, cap1: blazes at 14 m): its column gets the roof too
+      if (options.cap) await ask(`${nether} setblock ${cell.x} ${lidY + 1} ${cell.z} minecraft:cobblestone`);
       note(`lid laid at y=${lidY} over the 5x5 round the spawner but the 3x3 and the body's head cell`);
     }
     if (options.calm) await ask('gamerule doMobSpawning true');
