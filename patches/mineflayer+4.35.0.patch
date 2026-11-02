@@ -1,5 +1,5 @@
 diff --git a/node_modules/mineflayer/lib/plugins/entities.js b/node_modules/mineflayer/lib/plugins/entities.js
-index bd0514e..bbe923f 100644
+index bd0514e..d72f3f4 100644
 --- a/node_modules/mineflayer/lib/plugins/entities.js
 +++ b/node_modules/mineflayer/lib/plugins/entities.js
 @@ -271,13 +271,13 @@ function inject (bot) {
@@ -37,3 +37,29 @@ index bd0514e..bbe923f 100644
    })
  
    bot._client.on('entity_destroy', (packet) => {
+@@ -501,7 +500,9 @@ function inject (bot) {
+       }
+ 
+       // Breathing (formerly in breath.js)
+-      if (metas.air_supply != null) {
++      // Only the bot's own air supply: every entity's metadata update (a drowned, a fish, a villager) came through here and
++      // overwrote the bot's oxygen with theirs.
++      if (metas.air_supply != null && entity === bot.entity) {
+         bot.oxygenLevel = Math.round(metas.air_supply / 15)
+         bot.emit('breath')
+       }
+diff --git a/node_modules/mineflayer/lib/plugins/inventory.js b/node_modules/mineflayer/lib/plugins/inventory.js
+index 70db312..f1a51f9 100644
+--- a/node_modules/mineflayer/lib/plugins/inventory.js
++++ b/node_modules/mineflayer/lib/plugins/inventory.js
+@@ -69,7 +69,9 @@ function inject (bot, { hideErrors }) {
+     if (packet.entityId === bot.entity.id && packet.entityStatus === 9 && !eatingTask.done) {
+       eatingTask.finish()
+     }
+-    bot.usingHeldItem = false
++    // Only the bot's own "finished using the item" (status 9) ends the use. Any entity's status (a mob hurt, a death, a shield
++    // block) and the bot's own hurt (2) or shield block (29) cleared it before, dropping a raised shield from the bot's view.
++    if (packet.entityId === bot.entity?.id && packet.entityStatus === 9) bot.usingHeldItem = false
+   })
+ 
+   let previousHeldItem = null
