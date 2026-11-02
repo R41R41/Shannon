@@ -13,9 +13,8 @@ import { seesBodyAt } from './threatExposure.js';
  * holds a key.
  *
  * What the Nether taught on the way (paid runs 26, 29, 31; the L77 lab): a blaze shoots three small fireballs six ticks apart after it has
- * been charged for about three seconds, then rests five seconds; each blow of the body's own is struck with the shield lowered (the server
- * refuses a blow from behind a raised one), and the shield counts as up again only five ticks after it is raised, so a blow is the one moment a
- * fireball can land (5 points, and the fire). Each fireball the shield stops wears it by six points of its 336: six blazes shoot about 13 points a
+ * been charged for about three seconds, then rests five seconds; a blow of the body's own is struck from behind the raised shield (the server does not refuse it: lab, 2026-11-03; it was believed to, and the shield
+ * was lowered for each blow, which counts as up again only five ticks after it is raised: the one moment a fireball could land, 5 points and the fire). Each fireball the shield stops wears it by six points of its 336: six blazes shoot about 13 points a
  * second, which is a shield in 25 seconds. So a blow is struck when no shot is on its way and no blaze that sees the body has been charged long
  * enough to be about to shoot; when the body is hit for it anyway, the wait is bounded (a fight with nothing struck is no safer).
  */

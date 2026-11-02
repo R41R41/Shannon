@@ -59,7 +59,7 @@ const { goals } = pathfinder;
  *    `reflex` with its counts, as `HandCut`), and is never started over by itself after the reflex: the planner decides from what the line says;
  *  - writes the keys and the look only when no reflex holds the body, and never touches the shield: the shield reflex (utils/shieldBlock) raises it
  *    against what is in reach while a fight is on (`beginEngagement`, which this hand does for a fight and not for a flight), and the body's own
- *    blow goes out from behind a lowered shield by that reflex's wrapper of `attack`. While that reflex meets a shot in the air, the hand holds its
+ *    blow goes out from behind it (a blow lands with the shield raised: lab, 2026-11-03). While that reflex meets a shot in the air, the hand holds its
  *    keys and its look (it takes both for the turn to the shot) and only waits;
  *  - leaves the creature's kind to the act's `accept` rules: the act counts the target's kind as accepted for the length of this hand (hurt, stopIf).
  */
@@ -588,8 +588,8 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
         if (now - blindSince > BLIND_MS) { releaseKeys(); return fail('unreachable', `は ${r1(box)}m の所にいるが間に壁がある（${BLIND_MS / 1000}秒見えない）。別の個体か、足場を変える`, lastAt); }
       } else blindSince = 0;
       let strike = false;
-      // A blow is struck with the shield lowered and the shield is only counted as up again five ticks after it is raised: while a shot is about to land or a blaze that sees
-      // the body has been charged long enough to shoot, the blow waits (GATE_PATIENCE_MS at most: a fight with nothing struck is no safer).
+      // A blow is struck from behind the shield when it is up. With it down, and a shot about to land or a blaze that sees
+      // the body charged long enough to shoot, the blow waits (GATE_PATIENCE_MS at most: a fight with nothing struck is no safer).
       // (S2, 2026-11-03: a blow lands with the shield raised, lab; with the shield up there is no window to wait for.)
       const held = !!watch && box <= REACH && sees && !shield?.up && !gate.may(now, strikeHold(bot, watch, now));
       if (box <= REACH && sees && !held) {
