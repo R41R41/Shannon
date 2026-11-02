@@ -543,6 +543,8 @@ async function blazeNook(note: (text: string) => void, options: { window?: boole
   actor.on('entityDead', onDead);
   const track: number[] = [];
   const sampler = setInterval(() => { const value = Number(actor.health); if (Number.isFinite(value)) track.push(r1(value)); }, 1000);
+  // census: every 30 s, the blazes the client knows: their offsets from the body (x z y) and the distance, for what the spawner does with a lid
+  const census = setInterval(() => { try { const me = actor.entity.position as Vec3; const list = (Object.values(actor.entities ?? {}) as any[]).filter(entity => String(entity?.name) === 'blaze' && entity.position).map(entity => `${r1(entity.position.x - me.x)},${r1(entity.position.z - me.z)},${r1(entity.position.y - me.y)}`); note(`census ${Math.round((Date.now() - started) / 1000)} s: ${list.length} blazes [${list.join(' ')}]`); } catch { /* a note */ } }, options.lid ? 30_000 : 3_600_000);
   try {
     const there = await act('go to the camp cell', [{ do: 'go', to: { x: cell.x, y: cell.y, z: cell.z }, range: 0.6, seconds: 25, canPlace, maxPlace: 10 }], 40, { accept: ['blaze'] });
     note(`go: hp ${actor.health} ${(there.lines[0] ?? '').slice(0, 160)}`);
@@ -601,7 +603,7 @@ async function blazeNook(note: (text: string) => void, options: { window?: boole
       }
       if (Number(actor.health) < 8) break;
     }
-  } finally { clearInterval(sampler); actor.removeListener('entityDead', onDead); }
+  } finally { clearInterval(sampler); clearInterval(census); actor.removeListener('entityDead', onDead); }
   return { seconds: r1((Date.now() - started) / 1000), kills: killed, rodsOnTheFloor: (await countServer('blaze_rod')) - rods0, shieldWear: shieldUsed() - shield0, deathsHere: deaths, lowestHp: Math.min(...track, 20), hpTrack: track.filter((_, index) => index % 5 === 0).join(' '), placed: place.length, window: options.window !== false, ...(options.lure ? { secondsOut: r1(exposed) } : {}) };
 }
 scene('blaze_nook', 'the nook: the camp cell closed on its open sides to the head height with a window at the head toward the spawner, then attack hold for 240 s', note => blazeNook(note));
