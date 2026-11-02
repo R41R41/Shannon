@@ -37,6 +37,11 @@ const log = createLogger('Minebot:FloorReflexes');
 export const FLOOR_RETREAT_PRIORITY = 350;
 /** The water-bucket clutch of a fall is over the dragon's retreat and the rest of the floor: a body in the air has nothing else to do. */
 export const FLOOR_CLUTCH_PRIORITY = 380;
+/**
+ * The one switch of the water-bucket clutch (and with it the taking-up of the water it pours, which has nothing to take up when no clutch ran): false and `clutchTick` starts nothing, in every mode. A
+ * decision of the release, not of the environment: nothing reads it from the env (the switch for the second rollout, independent review 2026-11-02, round 8).
+ */
+export const FALL_CLUTCH_ENABLED = true;
 const FALL_TIMEOUT_MS = 8000;
 const FALL_DETAIL_MAX = 160;
 /** The taking-up of water a clutch left behind: under every reflex (each may cut it), over the planner's own acts. */
@@ -2214,7 +2219,7 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
    * (utils/fallClutch). Over every other floor hand: a body in the air has nothing else to do.
    */
   const clutchTick = (): boolean => {
-    if (!config.retreat || !isEnd(bot)) return false;
+    if (!FALL_CLUTCH_ENABLED || !config.retreat || !isEnd(bot)) return false;
     const t = now(), memory = state.fall ??= {};
     let why: string | null = null;
     try { why = clutchWanted(bot as never, memory, t); } catch { why = null; }

@@ -2,7 +2,6 @@ import { Vec3 } from 'vec3';
 import { bodyReader, type BlockReader } from './localMap.js';
 import { dropUnder } from './voidFooting.js';
 import { isEnd } from './dragonState.js';
-import { activateItemFacing } from './activateItemFacing.js';
 import { actionSignal } from '../execution/ActionExecution.js';
 
 /**
@@ -18,6 +17,11 @@ import { actionSignal } from '../execution/ActionExecution.js';
  * late by half a second). So a bucket in the pack, not in the hotbar, does not start the clutch.
  * The water poured is taken up again afterwards. A clutch cut off between the pour and the taking-up leaves a note in the floor's memory (`FallMemory.scoop`: the cell of the water), and the floor takes the
  * water up later, in a quiet moment, with a new hold on the body (`scoopWanted`, `scoopBack`): a water source and an empty bucket left behind would end the clutch for the next fall.
+ *
+ * Independent review 2026-11-02, round 8, of the taking-up: (1) the water is taken only where the body would stand without it (`standsDry`: the first thing under its feet that is not air is a solid floor, at most
+ * SCOOP_SAFE_DROP cells down), asked when the floor decides and again just before the use: a body held up by a waterfall over a drop would be dropped; (2) the hand is given back: the clutch and the taking-up take the
+ * bucket into the hand, and an attack at the dragon strikes with whatever the hand holds, so a body that ends with the bucket in its hand hits the dragon with it: both go back to the slot the hand was on when they
+ * end with the body still their own (not when cut off: what the stronger reflex chose stays); (3) only the water the note names is taken: a source nearby that is not that one is not a substitute.
  */
 export const CLUTCH_FALLING_VY = -0.75;
 export const CLUTCH_MIN_DAMAGE = 5;
@@ -35,9 +39,10 @@ export const SCOOP_PENDING_TRIES = 3;
 export const SCOOP_GAP_MS = 2000;
 export const SCOOP_NEAR = 4;
 export const SCOOP_BUCKET_WAIT_MS = 3000;
+/** Cells of air between the feet and the floor with which the body still counts as standing without the water (a fall of three blocks costs nothing; one is kept for the feet's fraction and a body that is moving). */
+export const SCOOP_SAFE_DROP = 1;
 /** The slots of the hotbar in the player's window. */
 const HOTBAR_FIRST = 36, HOTBAR_LAST = 44;
-const SIDES: ReadonlyArray<readonly [number, number]> = [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]];
 
 interface BodyEntity { position: Vec3; velocity?: Vec3; yaw?: number; pitch?: number; onGround?: boolean; isInWater?: boolean }
 type Item = { name: string; type?: number; slot?: number };
@@ -46,16 +51,22 @@ export interface FallBody {
   health?: number;
   game?: { dimension?: string };
   heldItem?: Item | null;
+  /** The hotbar slot (0 to 8) the hand is on; null until the server has told it. */
+  quickBarSlot?: number | null;
   inventory?: { items(): Item[] };
   look?(yaw: number, pitch: number, force?: boolean): unknown;
+  lookAt?(target: Vec3, force?: boolean): unknown;
   setQuickBarSlot?(slot: number): void;
   activateItem?(offHand?: boolean): void;
   deactivateItem?(): void;
   blockAt?(position: Vec3): { name?: string; metadata?: number } | null;
   _client?: { write: (...args: any[]) => unknown };
 }
-/** Water poured and not yet taken up: the cell of the source (over the ground it was poured on), when it was poured, the floor's tries since, and when the last one began. */
-export interface PendingScoop { x: number; y: number; z: number; at: number; tries: number; lastAt?: number }
+/**
+ * Water poured and not yet taken up: the cell of the source (over the ground it was poured on), when it was poured, the floor's tries since, when the last one began, and the hotbar slot the hand was on
+ * before the clutch took the bucket (to be given back; absent when the bucket was in the hand already).
+ */
+export interface PendingScoop { x: number; y: number; z: number; at: number; tries: number; lastAt?: number; hand?: number }
 /** What the floor remembers of a fall: the highest y since the body last stood, when the clutch last began, and the water poured and not yet taken up. */
 export interface FallMemory { from?: number; clutchAt?: number; scoop?: PendingScoop }
 type Outcome = { success: boolean; result: string };
@@ -133,33 +144,48 @@ const isSource = (bot: FallBody, cell: Vec3): boolean => {
 };
 const isWater = (bot: FallBody, cell: Vec3): boolean => { try { return bot.blockAt?.(cell)?.name === 'water'; } catch { return false; } };
 
-/** The source of the water poured: round the cell the body stands in (where it landed), else round the cell the note names (where it was poured). */
-function sourceOf(bot: FallBody, pending: PendingScoop): Vec3 | null {
+/**
+ * Whether the body would stand, with the water near it gone: under its feet the first cell that is not air is a solid floor (not water, lava, the void or what is not loaded), at most SCOOP_SAFE_DROP cells
+ * down. A body held up by water (swimming in a waterfall, over a drop) does not: taking the source away would drop it (independent review 2026-11-02, round 8).
+ */
+function standsDry(bot: FallBody): boolean {
   const at = bot.entity?.position;
-  const centres = [...(at ? [new Vec3(Math.floor(at.x), Math.floor(at.y + 1e-3), Math.floor(at.z))] : []), new Vec3(pending.x, pending.y, pending.z)];
-  for (const centre of centres) for (const [dx, dz] of SIDES) { const cell = centre.offset(dx, 0, dz); if (isSource(bot, cell)) return cell; }
-  return null;
+  if (!at) return false;
+  try { const ground = groundUnder(bodyReader(bot as never), at); return ground.kind === 'floor' && ground.drop <= SCOOP_SAFE_DROP; } catch { return false; }
 }
 
-/**
- * The water poured is taken up again: the empty bucket in the hand (its hotbar slot selected, one packet), the look at the source, the use. Through `port`, every wait ending when the action is taken. A
- * taking-up that is cut off, or that does not take, leaves the note in `memory.scoop` for the floor to finish later; a note that can no longer be kept (no source left, no empty bucket to use, the body dead) is dropped.
- */
-export async function scoopBack(bot: FallBody, port: FallBody, memory: FallMemory): Promise<Outcome & { scooped: boolean }> {
-  const pending = memory.scoop;
-  if (!pending) return { success: true, result: '汲み直す水は無い', scooped: false };
+/** The hand back on the hotbar slot it was on, when the body is still the caller's own: not when it was cut off or lost (whoever took it chose the hand). */
+function giveBackHand(bot: FallBody, port: FallBody, slot: number | undefined): void {
+  if (slot === undefined || bot.quickBarSlot === slot || interrupted(port)) return;
+  try { port.setQuickBarSlot?.(slot); } catch { /* the body is no longer ours */ }
+}
+
+/** The cell of the water that was poured, when it is a source now: the one the note names and no other (a source nearby that is not that one is no substitute). */
+const sourceOf = (bot: FallBody, pending: PendingScoop): Vec3 | null => {
+  const cell = new Vec3(pending.x, pending.y, pending.z);
+  return isSource(bot, cell) ? cell : null;
+};
+
+/** The attempts of the taking-up (`scoopBack` gives the hand back after them). */
+async function takeUp(bot: FallBody, port: FallBody, memory: FallMemory, pending: PendingScoop): Promise<Outcome & { scooped: boolean }> {
   for (let attempt = 0; attempt < SCOOP_TRIES; attempt++) {
     if (interrupted(port)) return { ...TAKEN, scooped: false };
     if ((bot.health ?? 20) <= 0) { delete memory.scoop; return { success: false, result: '体が倒れていて汲み直せない', scooped: false }; }
     const source = sourceOf(bot, pending);
     if (!source) { delete memory.scoop; return { success: true, result: '汲み直す水の源がもう無い', scooped: false }; }
+    // The water may be what holds the body up: the source is taken only where the body would stand without it (the note stays for a later try).
+    if (!standsDry(bot)) return { success: false, result: '水を抜くと足場が無い（水に支えられている）ので汲み直さない', scooped: false };
     try {
       if (bot.heldItem?.name !== 'bucket') {
         const empty = inHand(bot, 'bucket');
         if (!empty) { delete memory.scoop; return { success: false, result: '空のバケツが手にも hotbar にも無く、水は残した', scooped: false }; }
         port.setQuickBarSlot?.(empty.slot);
       }
-      await activateItemFacing(port as never, source.offset(0.5, 0.4, 0.5));
+      await port.lookAt?.(source.offset(0.5, 0.4, 0.5), true);
+      if (interrupted(port)) return { ...TAKEN, scooped: false };
+      // Asked again just before the use: the body and the water are not where they were a look ago.
+      if (!standsDry(bot) || !isSource(bot, source)) return { success: false, result: '汲む直前に足場か水が変わったので汲み直さない', scooped: false };
+      pourNow(port);
       port.deactivateItem?.();
       for (let waited = 0; waited < 600 && bot.heldItem?.name !== 'water_bucket' && !interrupted(port); waited += 50) await abortableDelay(port, 50);
     } catch (error) { if (lostOwnership(error)) throw error; }
@@ -169,8 +195,24 @@ export async function scoopBack(bot: FallBody, port: FallBody, memory: FallMemor
 }
 
 /**
- * Whether the floor takes up the water of a clutch that was cut off, now: the body stands (or swims) within SCOOP_NEAR blocks of the water, not tried within SCOOP_GAP_MS, and an empty bucket is in
- * the hand or the hotbar. A note that is too old, tried too often, or whose empty bucket is no longer to be had is dropped here.
+ * The water poured is taken up again: the empty bucket in the hand (its hotbar slot selected, one packet), the look at the source, the use. Through `port`, every wait ending when the action is taken. A
+ * taking-up that is cut off, or that does not take, leaves the note in `memory.scoop` for the floor to finish later; a note that can no longer be kept (no source left, no empty bucket to use, the body dead) is dropped.
+ * Ended with the body still its own, the hand goes back (`giveBackHand`): to the hand it was found on, or, when the empty bucket is in it (what a clutch that was cut off left there), to the hand the clutch took the
+ * bucket from (`pending.hand`).
+ */
+export async function scoopBack(bot: FallBody, port: FallBody, memory: FallMemory): Promise<Outcome & { scooped: boolean }> {
+  const pending = memory.scoop;
+  if (!pending) return { success: true, result: '汲み直す水は無い', scooped: false };
+  const found = typeof bot.quickBarSlot === 'number' ? bot.quickBarSlot : undefined;
+  const giveBack = bot.heldItem?.name === 'bucket' && pending.hand !== undefined ? pending.hand : found;
+  const done = await takeUp(bot, port, memory, pending);
+  giveBackHand(bot, port, giveBack);
+  return done;
+}
+
+/**
+ * Whether the floor takes up the water of a clutch that was cut off, now: the body stands (or swims) where it would stand without the water (`standsDry`), within SCOOP_NEAR blocks of the water, not tried
+ * within SCOOP_GAP_MS, and an empty bucket is in the hand or the hotbar. A note that is too old, tried too often, or whose empty bucket is no longer to be had is dropped here.
  */
 export function scoopWanted(bot: FallBody, memory: FallMemory, now: number): boolean {
   const pending = memory.scoop, body = bot.entity;
@@ -181,23 +223,17 @@ export function scoopWanted(bot: FallBody, memory: FallMemory, now: number): boo
     if (now - pending.at > SCOOP_BUCKET_WAIT_MS) delete memory.scoop;
     return false;
   }
-  if ((bot.health ?? 20) <= 0 || !(body.onGround || body.isInWater)) return false;
+  if ((bot.health ?? 20) <= 0 || !(body.onGround || body.isInWater) || !standsDry(bot)) return false;
   if (pending.lastAt !== undefined && now - pending.lastAt < SCOOP_GAP_MS) return false;
   return Math.hypot(body.position.x - (pending.x + 0.5), body.position.y - pending.y, body.position.z - (pending.z + 0.5)) <= SCOOP_NEAR;
 }
 
-/**
- * The clutch: the bucket in the hand, the look straight down, the pour in the tick the ground comes within reach, and the water taken up again once the body stands (a water source left on the island is
- * harmless, but the bucket is wanted for the next fall). Returns what happened, in words the ledger can carry. Everything that acts on the body goes through `port`, and every wait ends when the action is taken.
- * The pour is noted in `memory.scoop` before it goes out and the note is dropped only when the water is taken up (or is not there to take): whatever cuts the clutch off after the pour leaves it for the floor.
- */
-export async function runFallClutch(bot: FallBody, port: FallBody, memory: FallMemory = {}, clock: () => number = Date.now): Promise<Outcome> {
-  const have = inHand(bot, 'water_bucket');
-  if (!have || !bot.entity) return { success: false, result: '水の入ったバケツを手にも hotbar にも持っていない' };
+/** The clutch itself (`runFallClutch` gives the hand back after it). */
+async function clutch(bot: FallBody, port: FallBody, memory: FallMemory, clock: () => number, have: { held: boolean; slot: number }, before: number | undefined): Promise<Outcome> {
   try {
     if (!have.held) port.setQuickBarSlot?.(have.slot);
     if (bot.heldItem?.name !== 'water_bucket') return { success: false, result: 'バケツを手に持てなかった' };
-    port.look?.(bot.entity.yaw ?? 0, -Math.PI / 2, true);
+    port.look?.(bot.entity?.yaw ?? 0, -Math.PI / 2, true);
   } catch (error) {
     if (lostOwnership(error)) throw error;
     return { success: false, result: `バケツを手に持てなかった（${String((error as Error)?.message ?? error).slice(0, 40)}）` };
@@ -210,7 +246,7 @@ export async function runFallClutch(bot: FallBody, port: FallBody, memory: FallM
     if (!body || body.onGround || body.isInWater) break;
     const ground = groundUnder(read, body.position);
     if (ground.kind === 'floor' && body.position.y + EYE_HEIGHT - ground.top <= CLUTCH_REACH) {
-      memory.scoop = { x: Math.floor(body.position.x), y: ground.top, z: Math.floor(body.position.z), at: clock(), tries: 0 };
+      memory.scoop = { x: Math.floor(body.position.x), y: ground.top, z: Math.floor(body.position.z), at: clock(), tries: 0, ...(before !== undefined ? { hand: before } : {}) };
       try { pourNow(port); } catch (error) { delete memory.scoop; throw error; }
       poured = true; break;
     }
@@ -234,4 +270,19 @@ export async function runFallClutch(bot: FallBody, port: FallBody, memory: FallM
     tail = back.scooped ? '（水は汲み直した）' : memory.scoop ? '（水は残した：あとで汲み直す）' : '（水は残した）';
   }
   return { success: wet, result: wet ? `水を地面にあけて落下を止めた${tail}` : `水をあけたが、水の中に着地できなかった${tail}` };
+}
+
+/**
+ * The clutch: the bucket in the hand, the look straight down, the pour in the tick the ground comes within reach, and the water taken up again once the body stands (a water source left on the island is
+ * harmless, but the bucket is wanted for the next fall). Returns what happened, in words the ledger can carry. Everything that acts on the body goes through `port`, and every wait ends when the action is taken.
+ * The pour is noted in `memory.scoop` before it goes out and the note is dropped only when the water is taken up (or is not there to take): whatever cuts the clutch off after the pour leaves it for the floor.
+ * The hand the bucket was taken from is given back when the clutch ends with the body still its own, and is in the note for a taking-up that comes later (`PendingScoop.hand`).
+ */
+export async function runFallClutch(bot: FallBody, port: FallBody, memory: FallMemory = {}, clock: () => number = Date.now): Promise<Outcome> {
+  const have = inHand(bot, 'water_bucket');
+  if (!have || !bot.entity) return { success: false, result: '水の入ったバケツを手にも hotbar にも持っていない' };
+  const before = !have.held && typeof bot.quickBarSlot === 'number' ? bot.quickBarSlot : undefined;
+  const result = await clutch(bot, port, memory, clock, have, before);
+  giveBackHand(bot, port, before);
+  return result;
 }

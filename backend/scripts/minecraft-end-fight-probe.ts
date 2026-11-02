@@ -1193,16 +1193,17 @@ scenes.fall = async () => {
 scenes.fall_cut = async () => {
   // The clutch cut off after the pour (independent review 2026-11-02, round 6): a stronger reflex takes the body in the tick the held bucket turns empty (here the lab does it: `preemptLowerPriorityActions` at the
   // wall escape's rank). The water is poured and not taken up; the floor takes it up later, in a quiet moment, so that the next fall has its bucket. Measured: the health lost, whether the clutch ledger says it was cut,
-  // how long after the landing the bucket is full again, and whether the source of water is gone.
+  // how long after the landing the bucket is full again, whether the source of water is gone, whether the cell the floor noted was the water's (the drops are off the middle of their cell, one across a block
+  // boundary at a negative coordinate: the note names the cell the pour was made over), and what the hand holds in the end (round 8: the hand goes back to the sword).
   await protect(false);
   releaseReflex();
   await park(true);
   const trials: Array<Record<string, unknown>> = [];
-  const cases: Array<[string, number, string[]]> = [
-    ['bucket in the hand, 38 up, cut after the pour', 38, ['diamond_sword', 'water_bucket']],
-    ['bucket in the hotbar (not the hand), 20 up, cut after the pour', 20, ['diamond_sword', 'cobblestone 64', 'water_bucket']],
+  const cases: Array<[string, number, string[], number, number]> = [
+    ['bucket in the hand, 38 up, cut after the pour', 38, ['diamond_sword', 'water_bucket'], 0.97, 8.03],
+    ['bucket in the hotbar (not the hand), 20 up, cut after the pour', 20, ['diamond_sword', 'cobblestone 64', 'water_bucket'], -0.04, 7.96],
   ];
-  for (const [label, height, items] of cases) {
+  for (const [label, height, items, dropX, dropZ] of cases) {
     await flatten(); await ask('kill @e[type=minecraft:item]');
     await ask(`${END} fill -3 ${g} 5 3 ${g + 2} 11 air replace minecraft:water`);
     await gear(items); await wear();
@@ -1211,20 +1212,23 @@ scenes.fall_cut = async () => {
     await standAt(0.5, g, 8.5); await sleep(1000);
     const healthBefore = Number(actor.health), deathsBefore = actorDeaths, lowest = trackMinHealth(), ledgerMark = (actor.reflexLedger?.mark?.() as number | undefined) ?? 0;
     const start = Date.now();
-    let cutAfterMs: number | null = null, landedAfterMs: number | null = null, refilledAfterLandingMs: number | null = null;
+    let cutAfterMs: number | null = null, landedAfterMs: number | null = null, refilledAfterLandingMs: number | null = null, noteCell: string | null = null, noteCellWasWater = false;
     const watch = every(5, () => {
       if (cutAfterMs === null && actor.heldItem?.name === 'bucket') { cutAfterMs = Date.now() - start; preemptLowerPriorityActions(actor, 500, 'lab-cut'); }
+      const note = actor.floorReflexes?.fall?.scoop as { x: number; y: number; z: number } | undefined;
+      if (note) { noteCell ??= `${note.x},${note.y},${note.z}`; if (actor.blockAt(new Vec3(note.x, note.y, note.z))?.name === 'water') noteCellWasWater = true; }
       if (landedAfterMs === null && Date.now() - start > 600 && actor.entity.onGround && actor.entity.position.y < g + 2) landedAfterMs = Date.now() - start;
       if (landedAfterMs !== null && refilledAfterLandingMs === null && (actor.inventory.items() as Array<{ name: string }>).some(item => item.name === 'water_bucket')) refilledAfterLandingMs = Date.now() - start - landedAfterMs;
     });
-    await ask(`${END} tp ${ACTOR} 0.5 ${g + height} 8.5`);
+    await ask(`${END} tp ${ACTOR} ${dropX} ${g + height} ${dropZ}`);
     for (let i = 0; i < 200 && refilledAfterLandingMs === null; i++) await sleep(100);
     await sleep(1000);
     clearInterval(watch);
     const entries = (actor.reflexLedger?.entriesSince?.(ledgerMark) as Array<{ kind: string; outcome: string; detail: string }> | undefined) ?? [];
-    const remaining = await ask(`${END} execute if block 0 ${g} 8 minecraft:water run say SOURCE_STILL_THERE`);
+    const remaining = await ask(`${END} execute if block ${Math.floor(dropX)} ${g} ${Math.floor(dropZ)} minecraft:water run say SOURCE_STILL_THERE`);
     const result = {
       label, height, healthBefore, healthAfter: Number(actor.health), healthLost: round(healthBefore - Number(actor.health), 1), lowest: lowest.stop(), died: actorDeaths > deathsBefore, cutAfterMs, landedAfterMs, refilledAfterLandingMs,
+      drop: [dropX, dropZ], expectedCell: `${Math.floor(dropX)},${g},${Math.floor(dropZ)}`, noteCell, noteCellWasWater,
       holding: actor.heldItem?.name ?? null, bucketsNow: (actor.inventory.items() as Array<{ name: string }>).filter(item => item.name.endsWith('bucket')).map(item => item.name),
       sourceStillThere: remaining.includes('SOURCE_STILL_THERE'), ledger: entries.slice(0, 5).map(e => `${e.kind}:${e.outcome}:${e.detail.slice(0, 130)}`),
     };
