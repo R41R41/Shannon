@@ -25,8 +25,8 @@ interface LifeBot {
 export interface LifeOptions {
   /** The file (a map of `key` to the stored numbers). Default: beside the hold file. */
   file?: string;
-  /** Names the world and the body in the file. */
-  key?: () => string;
+  /** Names the world and the body in the file; null while the body's own name is not known yet (the entry is read when it is). */
+  key?: () => string | null;
   now?: () => number;
   /** Told when the file was there and could not be read (the black box note). */
   note?: (what: string, data: Record<string, unknown>) => void;
@@ -63,11 +63,26 @@ export class LifeKeeper {
     this.since = new Date(this.now()).toISOString();
     this.dimension = normalDim(bot.game?.dimension);
     this.dimensionSince = this.since;
-    this.load();
+    // Run 59 leg 2: the first login after a restart built the keeper before the Microsoft login gave the name, so it counted under a
+    // shared "body" entry (deathSeq 0) for the whole session, and the next login (the name known at once) read the real one (deathSeq 3)
+    // in the same epoch: the head saw a rise of 3 and held the task for a death that never happened. The entry is read only by the name.
+    if (this.key() === null) {
+      this.pending = true;
+      bot.on?.('login', this.onNamed); bot.on?.('spawn', this.onNamed);
+    } else this.load();
     bot.on?.('death', this.onDeath); bot.on?.('spawn', this.onSpawn); bot.on?.('respawn', this.onRespawn);
   }
 
-  private key(): string { return this.options.key?.() ?? `${this.bot.username ?? 'body'}`; }
+  /** Whether the entry is still waiting for the body's name (no counter is told meanwhile: the head takes none for a baseline). */
+  private pending = false;
+  private readonly onNamed = () => {
+    if (!this.pending || this.key() === null) return;
+    this.pending = false;
+    this.bot.removeListener?.('login', this.onNamed); this.bot.removeListener?.('spawn', this.onNamed);
+    this.load();
+  };
+
+  private key(): string | null { return this.options.key ? this.options.key() : `${this.bot.username ?? 'body'}`; }
 
   private load(): void {
     let raw: string | null = null;
@@ -81,7 +96,7 @@ export class LifeKeeper {
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw Error('not_a_table');
       table = parsed as Record<string, Stored>;
     } catch { return this.unreadable('corrupt'); }
-    const stored = table[this.key()];
+    const stored = table[this.key()!];
     if (stored === undefined) return this.save();
     if (!Number.isSafeInteger(stored?.life) || stored.life < 1 || typeof stored.deathEpoch !== 'string' || !Number.isSafeInteger(stored.deathSeq) || stored.deathSeq < 0) return this.unreadable('bad_entry');
     this.life = stored.life; this.deathEpoch = stored.deathEpoch; this.deathSeq = stored.deathSeq;
@@ -97,10 +112,11 @@ export class LifeKeeper {
   }
 
   private save(): void {
+    if (this.pending || this.key() === null) return;
     try {
       let table: Record<string, Stored> = {};
       try { const parsed = JSON.parse(fs.readFileSync(this.file, 'utf8')); if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) table = parsed; } catch { /* a new table (or a damaged one, replaced) */ }
-      table[this.key()] = { life: this.life, deathEpoch: this.deathEpoch, deathSeq: this.deathSeq };
+      table[this.key()!] = { life: this.life, deathEpoch: this.deathEpoch, deathSeq: this.deathSeq };
       fs.mkdirSync(path.dirname(this.file), { recursive: true });
       const temp = `${this.file}.${process.pid}.tmp`;
       fs.writeFileSync(temp, JSON.stringify(table));
@@ -127,13 +143,15 @@ export class LifeKeeper {
   view(): LifeView {
     this.noteDimension();
     const alive = this.alive && !(typeof this.bot.health === 'number' && this.bot.health <= 0);
-    return { life: this.life, ...(this.advancedBy ? { advancedBy: this.advancedBy } : {}), deathEpoch: this.deathEpoch, deathSeq: this.deathSeq,
+    if (this.pending) this.onNamed();
+    return { life: this.life, ...(this.advancedBy ? { advancedBy: this.advancedBy } : {}), ...(this.pending ? {} : { deathEpoch: this.deathEpoch, deathSeq: this.deathSeq }),
       since: this.since, alive, ...(this.diedAt ? { diedAt: this.diedAt } : {}), ...(this.deathCause ? { deathCause: this.deathCause } : {}),
       dimension: this.dimension, dimensionSince: this.dimensionSince };
   }
   get number(): number { return this.life; }
   dispose(): void {
     this.bot.removeListener?.('death', this.onDeath); this.bot.removeListener?.('spawn', this.onSpawn); this.bot.removeListener?.('respawn', this.onRespawn);
+    this.bot.removeListener?.('login', this.onNamed); this.bot.removeListener?.('spawn', this.onNamed);
   }
 }
 
