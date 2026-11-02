@@ -645,7 +645,14 @@ async function refusedReport(line: string): Promise<void> {
     log(dumped ? `REFUSED black box ${dumped.file} (${dumped.bytes} bytes)` : 'REFUSED no black box on this body');
   } catch (error) { log(`REFUSED black box failed: ${String(error).slice(0, 120)}`); }
 }
-const netherWalk =async (note: (text: string) => void, which: Array<'fortress' | 'warped'>, start?: number[]): Promise<Record<string, unknown>> => {
+/** The black box's last 90 s written for a stop of a go (`kind`), read with HUNT_KEEP=1: the route searches, their places and digs, the server's block changes near the body. */
+async function dumpBox(kind: string, line: string): Promise<void> {
+  try {
+    const dumped = await blackBoxOf(actor)?.dump(kind, `probe: ${line.slice(0, 200)}`);
+    log(dumped ? `BOX ${kind} ${dumped.file} (${dumped.bytes} bytes)` : `BOX ${kind}: no black box on this body`);
+  } catch (error) { log(`BOX ${kind} failed: ${String(error).slice(0, 120)}`); }
+}
+const netherWalk = async (note: (text: string) => void, which: Array<'fortress' | 'warped'>, start?: number[]): Promise<Record<string, unknown>> => {
   const arrival = sites.netherArrival as number[];
   const targets: Array<{ name: string; to: number[] }> = which.map(name => ({ name, to: (name === 'fortress' ? sites.blazeStand : sites.warpedStand) as number[] }));
   await ask('difficulty normal'); await ask('time set noon');
@@ -711,6 +718,7 @@ const netherWalk =async (note: (text: string) => void, which: Array<'fortress' |
       slow = run.stoppedBy === 'reflex' ? slow : before - left < 3 ? slow + 1 : 0;
       if (!reached && (before - left < 3 || tries === 0)) mapAround(`${target.name}#${tries + 1}`);
       await refusedReport(line);
+      if (/search_timeout/u.test(line)) await dumpBox('search_timeout', line);
       if (!reached && /not_loaded/u.test(line)) {
         // How far the loaded ground goes: the columns the body holds (chunk coordinates) against the body's and the aim's.
         try {
@@ -772,6 +780,35 @@ scene('bridge_void', 'a bridge of stones over a void 52 long, a safety floor 7 b
   }
   return { rows };
 });
+scene('ghast_walk', 'a ghast over an open room while go crosses it (iron armour, shield, diamond sword): health lost, the stops of the go, who is alive at the end', async note => {
+  const stand = sites.netherArrival as number[];
+  const x = stand[0], z = stand[2], y = 100;
+  await ask('difficulty normal'); await ask('time set noon');
+  const nether = 'execute in minecraft:the_nether run';
+  await ask(`${nether} forceload add ${x - 40} ${z - 40} ${x + 40} ${z + 40}`); await sleep(5000);
+  await ask(`${nether} fill ${x - 36} ${y - 3} ${z - 36} ${x + 36} ${y - 1} ${z + 36} minecraft:netherrack`);
+  // (a fill is at most 32,768 blocks: the room is cleared in slabs)
+  for (let zz = z - 36; zz <= z + 36; zz += 12) await ask(`${nether} fill ${x - 36} ${y} ${zz} ${x + 36} ${y + 24} ${Math.min(zz + 11, z + 36)} minecraft:air`);
+  await ask(`${nether} kill @e[type=minecraft:ghast]`);
+  await equip({ diamond_sword: 1, cooked_beef: 8, golden_apple: 2 }, { armor: 'iron', shield: true });
+  await placeActor('the_nether', x - 30, y, z, 24);
+  await ask(`${nether} summon minecraft:ghast ${x + 5} ${y + 9} ${z + 4}`);
+  const ghastAlive = () => Object.values(actor.entities as Record<string, any>).filter(entity => entity?.name === 'ghast' && entity.position && (entity.health === undefined || entity.health > 0)).length;
+  const hp0 = Number(actor.health), started = Date.now();
+  const rows: Array<Record<string, unknown>> = [];
+  let low = hp0;
+  for (let hop = 1; hop <= 5 && !disconnected; hop++) {
+    const run = await act(`ghast#${hop}`, [{ do: 'go', to: { x: x + 30, y, z }, range: 2, seconds: 60 }], 90);
+    const here = actor.entity?.position as Vec3 | undefined;
+    low = Math.min(low, Number(actor.health));
+    rows.push({ hop, ok: run.ok, hp: run.hp, at: here ? [r1(here.x), r1(here.y), r1(here.z)] : null, stoppedBy: run.stoppedBy ?? null, line: (run.lines[0] ?? '').slice(0, 220) });
+    if (run.ok || Number(actor.health) < 8) break;
+    if (Number(actor.health) < 14) await act('eat', [{ do: 'eat' }], 15);
+  }
+  note(`ghast: ${rows.length} hops, ${r1((Date.now() - started) / 1000)} s, health ${hp0} -> ${r1(Number(actor.health))} (lowest ${r1(low)}), ghasts alive ${ghastAlive()}`);
+  await ask(`${nether} kill @e[type=minecraft:ghast]`);
+  return { hops: rows.length, seconds: r1((Date.now() - started) / 1000), hpBefore: hp0, hpAfter: r1(Number(actor.health)), hpLowest: r1(low), reached: rows.at(-1)?.ok === true, rows };
+});
 scene('wall_hand', 'the body shut into two blocks of cobblestone with no pickaxe: the wall reflex digs it out by hand (10 s a block) and does not give up at its old 10 s limit', async note => {
   const stand = sites.netherArrival as number[];
   await ask('difficulty peaceful');
@@ -804,6 +841,7 @@ scene('tool_broke','a pickaxe with three uses left breaks in the middle of a go 
   const pickaxes = (actor.inventory.items() as any[]).filter(item => /pickaxe/u.test(String(item.name))).map(item => String(item.name));
   return { ok: run.ok, stoppedBy: run.stoppedBy ?? null, stoppedWhy: String(run.stoppedWhy ?? '').slice(0, 200), line: (run.lines[0] ?? '').slice(0, 320), pickaxesLeft: pickaxes };
 });
+scene('nether_stuck_c4', 'c4 only: the fortress leg from (155,78,60), where a leg ended on search_timeout twice running (t53)', note => netherWalk(note, ['fortress'], [155, 78, 60]));
 scene('nether_leg2','the walk in the Nether from the fortress\'s stand to the warped forest by go hops (the second leg of nether_walk alone)', note => netherWalk(note, ['warped'], sites.blazeStand as number[]));
 
 // ===== the probe kinds (what the LLM-centric mode can call: act and probe, no catalog skill) =================================================
