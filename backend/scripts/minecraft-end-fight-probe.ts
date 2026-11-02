@@ -1149,8 +1149,8 @@ scenes.fall = async () => {
   releaseReflex();
   await park(true);
   const trials: Array<Record<string, unknown>> = [];
-  // `give` fills the hotbar first: the sword is slot 0 (in the hand), the bucket slot 1 or 2. `pack` is put into the first slot of the pack (container.0, not the hotbar) after: a bucket there does not start the clutch (it
-  // would have to be moved to the hand by clicks of the window, which a stronger reflex cannot stop), so that trial is the control of what the same fall costs.
+  // `give` fills the hotbar first: the sword is slot 0 (in the hand), the bucket slot 1 or 2. `pack` is put into the first slot of the pack (`inventory.0`: the player's slot 9; `container.0` would be the hotbar's first slot, and
+  // r13 put the bucket there, into the hand) after: a bucket there does not start the clutch (it would have to be moved to the hand by clicks of the window, which a stronger reflex cannot stop), so that trial is the control of what the same fall costs.
   const cases: Array<[string, number, string[], string[]]> = [
     ['no bucket, 20 up', 20, ['diamond_sword'], []],
     ['bucket, 12 up', 12, ['diamond_sword', 'water_bucket'], []],
@@ -1162,7 +1162,7 @@ scenes.fall = async () => {
   for (const [label, height, items, pack] of cases) {
     await flatten(); await ask('kill @e[type=minecraft:item]');
     await gear(items);
-    for (const [slot, item] of pack.entries()) await ask(`item replace entity ${ACTOR} container.${slot} with minecraft:${item}`);
+    for (const [slot, item] of pack.entries()) await ask(`item replace entity ${ACTOR} inventory.${slot} with minecraft:${item}`);
     await wear();
     // the first hotbar slot is the sword's: a `hold` replaces the selected slot, and the last trial left it on the bucket's
     actor.setQuickBarSlot(0); await sleep(300);

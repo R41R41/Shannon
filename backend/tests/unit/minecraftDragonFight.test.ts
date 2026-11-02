@@ -613,7 +613,7 @@ describe('shoot at a crystal', () => {
 });
 
 import { clutchWanted, runFallClutch, scoopBack, scoopWanted, CLUTCH_REACH, SCOOP_BUCKET_WAIT_MS, SCOOP_GAP_MS, SCOOP_NEAR, SCOOP_PENDING_MS, SCOOP_PENDING_TRIES, type FallMemory } from '../../src/services/minebot/utils/fallClutch.js';
-import { createMotorPort, executeAction, hasActiveSafetyLease, preemptLowerPriorityActions } from '../../src/services/minebot/execution/ActionExecution.js';
+import { createMotorPort, dropReservation, executeAction, hasActiveSafetyLease, preemptLowerPriorityActions, reserveHandover } from '../../src/services/minebot/execution/ActionExecution.js';
 
 describe('the water-bucket clutch of a fall in the End', () => {
   /** In the second slot of the hotbar (slot 37 of the window). */
@@ -799,7 +799,7 @@ describe('the water-bucket clutch of a fall in the End', () => {
         expect(s.bot.equip).not.toHaveBeenCalled();
       } finally { s.stop(); }
     });
-    it('does not take the water up while an action runs, nor while a hazard of the dragon is on the body, and does once the moment is quiet', async () => {
+    it('does not take the water up while an action runs, a hazard of the dragon is on the body or a handover is reserved, and does once the moment is quiet', async () => {
       const s = afterCutOff();
       try {
         const act = executeAction(s.bot, 'some-act', 2000, (async () => { await new Promise(resolve => setTimeout(resolve, 400)); return { success: true, result: 'done' }; }) as never, { legacyExecutingSkill: true });
@@ -814,6 +814,11 @@ describe('the water-bucket clutch of a fall in the End', () => {
         s.bot.emit('physicsTick'); await new Promise(resolve => setTimeout(resolve, 100));
         expect(s.seen.uses).toBe(0); expect(s.memory.scoop?.tries).toBe(0);
         delete s.bot.entities[20];
+        // a handover reserved for the act that is to come: taking the body for the water would drop it
+        reserveHandover(s.bot, { fromActionId: 'x', reflex: 'floor-melee', target: 7, life: 1, forCommand: 'attack-nearest', shield: false });
+        s.bot.emit('physicsTick'); await new Promise(resolve => setTimeout(resolve, 100));
+        expect(s.seen.uses).toBe(0); expect(s.memory.scoop?.tries).toBe(0);
+        dropReservation(s.bot);
         await until(() => { s.bot.emit('physicsTick'); return s.seen.uses === 1; }, 4000);
         expect(s.seen.uses).toBe(1);
         expect(s.hotbar[1].name).toBe('water_bucket');
