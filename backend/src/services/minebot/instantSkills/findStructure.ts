@@ -37,7 +37,8 @@ class FindStructure extends InstantSkill {
       // Only the loaded chunks are searched: not found means not here yet, not nowhere.
       + '見つからなければ、まだ行っていない方角へ100〜200ブロック移動してから、もう一度探してください（ネザー要塞はネザーの中だけ）。'
       + 'stronghold はエンドポータルの枠だけを探し（高さは問わない）、中心 x・z と半径 radius（最大128）を指定できます。枠が無い時は、16ブロック刻みの輪の次の点を返します。'
-      + 'blaze_spawner はネザー要塞のブレイズの湧き場と、その3m以内の野営向きの足場（縁・火の無い所）と、湧き場から見えない隠れ場所（体力が減った時に退く所）を返します';
+      + 'blaze_spawner はネザー要塞のブレイズの湧き場と、その3m以内の野営向きの足場（縁・火の無い所）と、湧き場から見えない隠れ場所（体力が減った時に退く所）を返します。'
+      + 'probe kind=lane で四方向のレーン計画（必要な丸石・建築順・支え・生き物・手の距離・危険）を読むだけで確認できます';
     this.mcData = minecraftData(this.bot.version);
     this.params = [
       {

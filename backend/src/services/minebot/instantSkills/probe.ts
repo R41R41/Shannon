@@ -9,7 +9,8 @@ import { handsNear } from '../utils/handHistory.js';
 import { scanWorld } from '../utils/worldScan.js';
 import { isLikelyHostileMobName } from '../utils/hostileMobHints.js';
 import { closingSpeed } from '../utils/threatTracker.js';
-import { blazeCampReport, strongholdFramesReport } from '../utils/huntStructures.js';
+import { blazeCampReport, blazeLaneReport, strongholdFramesReport } from '../utils/huntStructures.js';
+import { laneProbeFields } from '../utils/huntLane.js';
 
 /**
  * mc.probe (r4 contract 1, 2026-10-22): the body's reading tools. Read only, a fixed computation each, no LLM, no choice; the category is a
@@ -23,9 +24,10 @@ import { blazeCampReport, strongholdFramesReport } from '../utils/huntStructures
  *   frames  the stronghold's end portal frames within `radius` blocks of (x, z), or the next points of the 16-block rings to walk (S2: the same as find-structure stronghold);
  *   camp    the Nether's blaze spawner, the cells within three blocks of it to stand on (a floor, two open cells, no edge, no fire) and the hideouts (footings no blaze of it can see; to go to when
  *           the health runs low) (S2: the same as find-structure blaze_spawner).
+ *   lane    four read-only lane plans: cells, cobblestone counts, support order, occupants, reach and hazards.
  * The answer is JSON: { v: 1, kind, text, ... } with the sentence first, the dangerous facts said as they are.
  */
-export const PROBE_KINDS = ['path', 'sight', 'column', 'around', 'history', 'scan', 'worksite', 'frames', 'camp'] as const;
+export const PROBE_KINDS = ['path', 'sight', 'column', 'around', 'history', 'scan', 'worksite', 'frames', 'camp', 'lane'] as const;
 const Pos = z.object({ x: z.number(), y: z.number(), z: z.number() }).strict();
 
 const DESCRIPTION = '調べる（読むだけ・決まった計算）。kind: path（to へ掘らず置かずに歩いて行けるか。行けるなら道の点、行けないなら切れ目と立てる所）/ '
@@ -34,6 +36,7 @@ const DESCRIPTION = '調べる（読むだけ・決まった計算）。kind: pa
   + 'worksite（target: 目的物、to: 作業位置、retreat: 帰還先。接近・呼吸・取得・逆向きの道を別々に確認）/ '
   + 'frames（要塞のエンドポータルの枠。x・z=探す中心（既定は足）、radius=ブロック16〜128（既定64）。枠が無ければ16ブロック刻みの輪の次に歩く点）/ '
   + 'camp（ネザーのブレイズの湧き場と、その3m以内で縁・火の無い野営向きの足場と、湧き場から見えない隠れ場所）。'
+  + 'lane（spawner の四方向のレーン計画。省略時は近い湧き場。必要な丸石・建築順・支え・生き物・待ち場から4.5以内の手の距離・危険を読むだけ）。'
   + '結果は JSON（text が先頭。危ない事実をそのまま書く）。';
 
 const cellOf = (value: { x: number; y: number; z: number }): Cell => ({ x: Math.floor(value.x), y: Math.floor(value.y), z: Math.floor(value.z) });
@@ -46,9 +49,9 @@ class Probe extends InstantSkill {
     this.description = DESCRIPTION;
     this.maxDurationMs = 30_000;
     this.params = [
-      { name: 'kind', type: 'json', schema: z.enum(PROBE_KINDS), description: 'path・sight・column・around・history・scan・worksite・frames・camp', required: true },
+      { name: 'kind', type: 'json', schema: z.enum(PROBE_KINDS), description: 'path・sight・column・around・history・scan・worksite・frames・camp・lane', required: true },
       { name: 'to', type: 'json', schema: Pos, description: 'path: 行きたいマス' },
-      { name: 'from', type: 'json', schema: Pos, description: 'path・sight: 出発・目の位置の足のマス（既定は足）' },
+      { name: 'from', type: 'json', schema: Pos, description: 'path・sight・lane: 出発・目の位置の足のマス（既定は足）' },
       { name: 'target', type: 'json', schema: z.union([Pos, z.string().max(64), z.number()]), description: 'sight: ブロック {x,y,z} か生き物 "#id"' },
       { name: 'x', type: 'number', description: 'column: 列の x（既定は足）/ frames: 探す中心の x' },
       { name: 'z', type: 'number', description: 'column: 列の z（既定は足）/ frames: 探す中心の z' },
@@ -57,13 +60,15 @@ class Probe extends InstantSkill {
       { name: 'radius', type: 'number', description: 'around: m（1〜16、既定 8）/ history: m（1〜32、既定 4）/ scan: チャンク（1〜16、既定は読み込み済みの全部）/ frames: ブロック（16〜128、既定 64）' },
       { name: 'at', type: 'json', schema: Pos, description: 'history: 場所（既定は足）' },
       { name: 'retreat', type: 'json', schema: Pos, description: 'worksite: 帰還先（逆向きの道を別に調べる）' },
+      { name: 'spawner', type: 'json', schema: Pos, description: 'lane: 湧き場のマス（省略時はネザーの読み込み済みの範囲の近い湧き場）' },
     ];
   }
 
   async runImpl(kind: string, to?: { x: number; y: number; z: number } | null, from?: { x: number; y: number; z: number } | null,
     target?: { x: number; y: number; z: number } | string | number | null, x?: number | null, z?: number | null, yFrom?: number | null, yTo?: number | null,
-    radius?: number | null, at?: { x: number; y: number; z: number } | null, retreat?: { x: number; y: number; z: number } | null) {
-    const result = await runProbe(this.bot as any, { kind, to, from, target, x, z, yFrom, yTo, radius, at, retreat });
+    radius?: number | null, at?: { x: number; y: number; z: number } | null, retreat?: { x: number; y: number; z: number } | null,
+    spawner?: { x: number; y: number; z: number } | null) {
+    const result = await runProbe(this.bot as any, { kind, to, from, target, x, z, yFrom, yTo, radius, at, retreat, spawner });
     return result;
   }
 }
@@ -73,6 +78,7 @@ export interface ProbeInput {
   target?: { x: number; y: number; z: number } | string | number | null; x?: number | null; z?: number | null; yFrom?: number | null; yTo?: number | null;
   retreat?: { x: number; y: number; z: number } | null;
   radius?: number | null; at?: { x: number; y: number; z: number } | null;
+  spawner?: { x: number; y: number; z: number } | null;
 }
 
 /** A creature named as the contract does: "#12", "12" or 12 (an id), else the nearest of that name. */
@@ -167,6 +173,11 @@ export async function runProbe(bot: any, input: ProbeInput): Promise<{ success: 
       const report = blazeCampReport(bot);
       const said = { v: 1 as const, kind: 'camp', text: report.text, found: report.found, ...(report.spawner ? { spawner: report.spawner } : {}), others: report.others, cells: report.cells, fire: report.fire, hideouts: report.hideouts };
       return answer(said);
+    }
+    case 'lane': {
+      if (![input.spawner, input.from].every(p => !p || [p.x, p.y, p.z].every(Number.isFinite))) return bad('lane の座標は有限の数で書く');
+      const report = blazeLaneReport(bot, input.spawner ? cellOf(input.spawner) : undefined, input.from ? cellOf(input.from) : feet);
+      return answer({ v: 1, kind: 'lane', ...(report.found ? { found: true, ...laneProbeFields(report) } : report) });
     }
     default:
       return bad(`kind は ${PROBE_KINDS.join('・')} のどれか`);

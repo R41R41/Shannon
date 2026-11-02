@@ -2,6 +2,7 @@ import { campSite, campWords, hideoutsFrom, hideoutWords, type CampCell, type Hi
 import { FRAME_RING_STEP, FRAME_SEARCH_DEFAULT, FRAME_SEARCH_MAX, framesAround, nextSurveyPoints, ringPoints, surveyOf } from './huntFrameSearch.js';
 import { bodyReader } from './localMap.js';
 import { scanLoadedBlocks } from './loadedBlockScan.js';
+import { laneReport, type LaneCell, type LaneEntity } from './huntLane.js';
 
 /**
  * The two readings of the hunt that are structures (S2, 2026-11-02), as one place so that the skill `find-structure` and the body's `probe` give the same answer:
@@ -112,4 +113,20 @@ export function blazeCampReport(bot: any): CampReport {
     + 'そこへ go で着いてから attack hold か fight（盾は左手。盾は火の玉1つで6すり減る＝予備を持つ）。'
     + hideoutWords(hideouts);
   return { text, found: true, spawner: { x: nearest.position.x, y: nearest.position.y, z: nearest.position.z, distance: Math.floor(nearest.distance) }, others, cells: site.cells, fire: site.fire, hideouts };
+}
+
+/** The same nearest loaded Nether spawner search as camp, without remembering it or invoking any body action. */
+export function blazeLaneReport(bot: any, spawner?: LaneCell, from?: LaneCell) {
+  const none = (text: string) => ({ found: false as const, text, candidates: [] });
+  const dimension = String(bot.game?.dimension ?? '').replace(/^minecraft:/u, '');
+  if (dimension && dimension !== 'the_nether') return none('レーン計画はネザーの湧き場を調べる。ここはネザーではない。');
+  const read = bodyReader(bot);
+  const at = spawner ?? scanLoadedBlocks(bot, ['spawner'], { maxHits: 1, maxDistance: 128 }).hits[0]?.position;
+  if (!at) return none('読み込み済みの範囲に湧き場はない。');
+  if (read(at.x, at.y, at.z)?.name !== 'spawner') return none('指定のマスに読み込み済みの湧き場はない。');
+  const entities: LaneEntity[] = (Object.values(bot.entities ?? {}) as any[])
+    .filter(e => e?.position && e !== bot.entity && e.type !== 'object'
+      && !['item', 'experience_orb', 'arrow', 'spectral_arrow', 'fireball', 'small_fireball', 'armor_stand'].includes(e.name))
+    .map(e => ({ id: Number(e.id), name: String(e.name ?? e.username ?? 'unknown'), position: e.position, width: e.width, height: e.height }));
+  return { found: true as const, ...laneReport(read, at, from ?? bot.entity.position, { entities }) };
 }
