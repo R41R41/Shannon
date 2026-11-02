@@ -1,4 +1,4 @@
-import { campSite, campWords, type CampCell } from './huntCamp.js';
+import { campSite, campWords, hideoutsFrom, hideoutWords, type CampCell, type Hideout } from './huntCamp.js';
 import { FRAME_RING_STEP, FRAME_SEARCH_DEFAULT, FRAME_SEARCH_MAX, framesAround, nextSurveyPoints, ringPoints, surveyOf } from './huntFrameSearch.js';
 import { bodyReader } from './localMap.js';
 import { scanLoadedBlocks } from './loadedBlockScan.js';
@@ -78,6 +78,8 @@ export interface CampReport {
   cells: CampCell[];
   /** Fire blocks within five blocks of the spawner. */
   fire: number;
+  /** Footings within 40 steps of the camp that no blaze of the spawner can see (to go to when the health runs low). */
+  hideouts: Hideout[];
 }
 
 /**
@@ -86,7 +88,7 @@ export interface CampReport {
  */
 export function blazeCampReport(bot: any): CampReport {
   const dimension = String(bot.game?.dimension ?? '').replace(/^minecraft:/u, '');
-  if (dimension && dimension !== 'the_nether') return { text: `ブレイズの湧き場はネザー要塞の中にある（ここは ${dimension}）`, found: false, others: [], cells: [], fire: 0 };
+  if (dimension && dimension !== 'the_nether') return { text: `ブレイズの湧き場はネザー要塞の中にある（ここは ${dimension}）`, found: false, others: [], cells: [], fire: 0, hideouts: [] };
   const scan = scanLoadedBlocks(bot, ['spawner'], { maxHits: 4, maxDistance: 128 });
   if (!scan.hits.length) {
     let known = '';
@@ -94,15 +96,20 @@ export function blazeCampReport(bot: any): CampReport {
       const remembered = bot.placeMemory?.recall('blaze_spawner', 1)?.[0];
       known = remembered ? `以前に見た湧き場: (${remembered.position.x}, ${remembered.position.y}, ${remembered.position.z}) ${remembered.distance}m ${remembered.direction}。` : '';
     } catch { known = ''; }
-    return { text: `読み込み済みの範囲（約${Math.min(scan.reachMetres, 128)}m）に湧き場はありません。${known}ネザー要塞（probe kind=scan が「ネザー要塞」の向きを言う）へ近づいて、もう一度探してください`, found: false, others: [], cells: [], fire: 0 };
+    return { text: `読み込み済みの範囲（約${Math.min(scan.reachMetres, 128)}m）に湧き場はありません。${known}ネザー要塞（probe kind=scan が「ネザー要塞」の向きを言う）へ近づいて、もう一度探してください`, found: false, others: [], cells: [], fire: 0, hideouts: [] };
   }
   const nearest = scan.hits[0];
   try { bot.placeMemory?.remember('blaze_spawner', nearest.position, { note: 'spawner' }); } catch { /* memory is optional */ }
   const site = campSite(bodyReader(bot), nearest.position, 4);
+  const feet = bot.entity?.position;
+  const start = site.cells[0] ?? (feet ? { x: Math.floor(feet.x), y: Math.floor(feet.y + 1e-3), z: Math.floor(feet.z) } : null);
+  let hideouts: Hideout[] = [];
+  try { hideouts = start ? hideoutsFrom(bodyReader(bot), nearest.position, start, 3) : []; } catch { hideouts = []; }
   const others = scan.hits.slice(1).map((hit: any) => ({ x: hit.position.x, y: hit.position.y, z: hit.position.z, distance: Math.floor(hit.distance) }));
   const text = `ブレイズの湧き場を発見: (${nearest.position.x}, ${nearest.position.y}, ${nearest.position.z})、距離${Math.floor(nearest.distance)}m`
     + `${others.length ? `（ほかに ${others.map(other => `(${other.x}, ${other.y}, ${other.z}) ${other.distance}m`).join(' ')}）` : ''}。`
     + `${campWords(site)}${site.fire ? `。湧き場の5m以内に火が${site.fire}個（火の中と隣へは go が行かない）` : ''}。`
-    + 'そこへ go で着いてから attack hold か fight（盾は左手。盾は火の玉1つで6すり減る＝予備を持つ）';
-  return { text, found: true, spawner: { x: nearest.position.x, y: nearest.position.y, z: nearest.position.z, distance: Math.floor(nearest.distance) }, others, cells: site.cells, fire: site.fire };
+    + 'そこへ go で着いてから attack hold か fight（盾は左手。盾は火の玉1つで6すり減る＝予備を持つ）。'
+    + hideoutWords(hideouts);
+  return { text, found: true, spawner: { x: nearest.position.x, y: nearest.position.y, z: nearest.position.z, distance: Math.floor(nearest.distance) }, others, cells: site.cells, fire: site.fire, hideouts };
 }

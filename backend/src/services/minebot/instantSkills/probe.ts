@@ -164,7 +164,7 @@ export async function runProbe(bot: any, input: ProbeInput): Promise<{ success: 
     }
     case 'camp': {
       const report = blazeCampReport(bot);
-      const said = { v: 1 as const, kind: 'camp', text: report.text, found: report.found, ...(report.spawner ? { spawner: report.spawner } : {}), others: report.others, cells: report.cells, fire: report.fire };
+      const said = { v: 1 as const, kind: 'camp', text: report.text, found: report.found, ...(report.spawner ? { spawner: report.spawner } : {}), others: report.others, cells: report.cells, fire: report.fire, hideouts: report.hideouts };
       return answer(said);
     }
     default:
