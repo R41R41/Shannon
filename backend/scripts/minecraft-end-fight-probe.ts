@@ -1575,10 +1575,12 @@ scenes.cage_section = async () => {
     const stages = section.stages as Array<Record<string, unknown>>;
     let success = false;
     const perform = async (stage: string, hand: Record<string, unknown>, seconds: number) => {
-      const result = await act([hand], seconds);
-      stages.push({ stage, ...result });
+      // The stand-in planner reads the result like the head: a hand cut by a reflex (the dragon's breath or ball) is asked again, at most twice; any other stop ends the section (no automatic retry of the body's own).
+      let result = await act([hand], seconds), retries = 0;
+      while (!result.ok && retries < 2 && /反射/u.test(result.lines.join(' ')) && actorDeaths === deathsBefore && Number(actor.health) > 0) { retries++; await sleep(1500); result = await act([hand], seconds); }
+      stages.push({ stage, ...result, retries });
       if (actorDeaths !== deathsBefore || Number(actor.health) <= 0) throw new Error(`${stage}: actor died`);
-      if (!result.ok) throw new Error(`${stage}: stopped; no automatic retry`);
+      if (!result.ok) throw new Error(`${stage}: stopped after ${retries} retries`);
     };
     try {
       const ground = walkGround(actor, { deadline: performance.now() + 150, radius: 112, maxCells: 16000 });
