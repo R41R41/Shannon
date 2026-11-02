@@ -854,7 +854,8 @@ scenes.observe = async () => {
   return { captures };
 };
 
-scenes.platform = async () => {
+/** The arrival platform's trials (`platform`), or only those whose label has `only` in it (`platform_edge`: the front edge of a bridge). */
+async function platformRun(only: string | null): Promise<Record<string, unknown>> {
   // The End's arrival: the body on the obsidian platform in the void (5 x 5 round (100, 48, 0)), a dragon fireball down on it. Every heading is the void, so no way out can be walked; with a block carried the
   // dragon reflex puts it under the feet (obsidian first): a cloud is a slab on the ground, and a body one block up is clear of it. Then the same with nothing to put under the feet, for the cost, and with a second
   // ball a while after the first (the cloud laid at the new height).
@@ -907,21 +908,26 @@ scenes.platform = async () => {
     return result;
   };
   try {
-    const runs = [
-      await trial('with obsidian and cobblestone carried', ['diamond_sword', 'cobblestone 16', 'obsidian 4']),
-      await trial('with cobblestone only', ['diamond_sword', 'cobblestone 16']),
-      await trial('with two balls, three seconds apart', ['diamond_sword', 'cobblestone 16', 'obsidian 4'], 2),
-      await trial('with nothing to put under the feet', ['diamond_sword']),
-      await trial('on a bridge one wide, 12 blocks out', ['diamond_sword', 'cobblestone 16'], 1, 88.5),
-      await trial('on a bridge one wide, two balls 3 s apart', ['diamond_sword', 'cobblestone 16'], 2, 88.5),
-      // the front edge of a short bridge being laid in the void (x 90 to 92, nothing beyond: no way to walk out of a cloud): the body stands on the last block with its middle over x 89, where nothing is under it (the go leans over the gap to lay the next)
-      await trial('at the front edge of a short bridge, half over the next cell', ['diamond_sword', 'cobblestone 16'], 1, 89.97, 90, 92),
-    ];
+    const runs: unknown[] = [];
+    const run = async (label: string, ...rest: [string[], number?, (number | null)?, number?, number?]) => { if (only === null || label.includes(only)) runs.push(await trial(label, ...rest)); };
+    {
+      await run('with obsidian and cobblestone carried', ['diamond_sword', 'cobblestone 16', 'obsidian 4']);
+      await run('with cobblestone only', ['diamond_sword', 'cobblestone 16']);
+      await run('with two balls, three seconds apart', ['diamond_sword', 'cobblestone 16', 'obsidian 4'], 2);
+      await run('with nothing to put under the feet', ['diamond_sword']);
+      await run('on a bridge one wide, 12 blocks out', ['diamond_sword', 'cobblestone 16'], 1, 88.5);
+      await run('on a bridge one wide, two balls 3 s apart', ['diamond_sword', 'cobblestone 16'], 2, 88.5);
+      // the front edge of a bridge being laid in the void, one block of it laid (x 90, nothing beyond it: no way to walk out of a cloud): the body stands on that block with its middle over x 89, where nothing is under it
+      // (the go leans over the gap to lay the next block)
+      await run('at the front edge of a bridge of one block, half over the next cell', ['diamond_sword', 'cobblestone 16'], 1, 89.97, 90, 90);
+    }
     return { runs };
   } finally {
     await clear(); await ask(`${END} forceload remove 64 -16 111 16`);
   }
-};
+}
+scenes.platform = () => platformRun(null);
+scenes.platform_edge = () => platformRun('front edge');
 
 /** The way off the arrival platform, as the `cross` scene; with `ballAfterMs` a dragon fireball is dropped on the body that long after the first `go` began (`cross_ball`). */
 async function crossRun(ballAfterMs: number | null): Promise<Record<string, unknown>> {
