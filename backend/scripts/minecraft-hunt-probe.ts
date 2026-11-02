@@ -448,13 +448,13 @@ scene('blaze_loop', 'the whole sortie cycle as ONE act with repeat 8: [go camp, 
 scene('blaze_loop_b', 'the loop again (a second sample)', note => blazeLoop(note));
 // The nook (S2, 2026-11-02): the camp cell has walls on two sides; the body closes the other two sides to the head's height with cobblestone (the top stays open: a blaze sees in only from straight
 // above), leaves the head cell of the side that faces the spawner open as a window, and holds there. Measures what the camp costs with a room's worth of blazes that can see only through the window.
-async function blazeNook(note: (text: string) => void, options: { window?: boolean; seconds?: number; bow?: boolean } = {}): Promise<Record<string, unknown>> {
+async function blazeNook(note: (text: string) => void, options: { window?: boolean; seconds?: number; bow?: boolean; r59?: boolean; corner?: 'toward' | 'away'; fight?: boolean; peek?: boolean } = {}): Promise<Record<string, unknown>> {
   const stand = sites.blazeStand as number[] | undefined, spawner = sites.blazeSpawner as number[] | undefined;
   if (!stand || !spawner) throw new Error('no blazeStand or blazeSpawner in the sites');
   const seconds = options.seconds ?? (timedSeconds || 240);
   await ask('difficulty normal'); await ask('time set midnight'); await ask('weather clear');
   await ask('execute in minecraft:the_nether run kill @e[type=minecraft:blaze]');
-  await equip({ diamond_sword: 1, iron_pickaxe: 1, shield: 2, cooked_beef: 24, golden_apple: 3, cobblestone: 64, ...(options.bow ? { bow: 1, arrow: 64 } : {}) }, { armor: 'iron', shield: true });
+  await equip(options.r59 ? { stone_sword: 1, diamond_pickaxe: 1, shield: 1, cooked_porkchop: 7, cobblestone: 173 } : { diamond_sword: 1, iron_pickaxe: 1, shield: 2, cooked_beef: 24, golden_apple: 3, cobblestone: 64, ...(options.bow ? { bow: 1, arrow: 64 } : {}) }, { armor: 'iron', shield: true });
   await placeActor('the_nether', stand[0], stand[1], stand[2], 24);
   const camp = await runSkill('probe', { kind: 'camp' }, 20);
   let cell: { x: number; y: number; z: number } | undefined;
@@ -465,8 +465,12 @@ async function blazeNook(note: (text: string) => void, options: { window?: boole
   const sides = [[1, 0], [-1, 0], [0, 1], [0, -1]] as const;
   const toward = [...sides].sort((a, b) => ((spawner[0] - cell!.x) * b[0] + (spawner[2] - cell!.z) * b[1]) - ((spawner[0] - cell!.x) * a[0] + (spawner[2] - cell!.z) * a[1]))[0];
   const place: Array<{ x: number; y: number; z: number }> = [];
-  for (const [dx, dz] of sides) {
+  // corner: only the one open side (toward the spawner, or the other) is closed, two high; the other stays open as the front
+  const open2 = sides.filter(([dx, dz]) => !solidAt(cell!.x + dx, cell!.y, cell!.z + dz) && !solidAt(cell!.x + dx, cell!.y + 1, cell!.z + dz));
+  const closeOnly = options.corner ? (options.corner === 'toward' ? open2.find(([dx, dz]) => dx === toward[0] && dz === toward[1]) : open2.find(([dx, dz]) => !(dx === toward[0] && dz === toward[1]))) : null;
+  for (const [dx, dz] of options.corner ? (closeOnly ? [closeOnly] : []) : sides) {
     const x = cell.x + dx, z = cell.z + dz;
+    if (options.corner) { for (const dy of [0, 1]) if (!solidAt(x, cell.y + dy, z)) place.push({ x, y: cell.y + dy, z }); continue; }
     if (!solidAt(x, cell.y, z)) place.push({ x, y: cell.y, z });
     const window = options.window !== false && dx === toward[0] && dz === toward[1];
     if (!window && !solidAt(x, cell.y + 1, z)) place.push({ x, y: cell.y + 1, z });
@@ -488,9 +492,21 @@ async function blazeNook(note: (text: string) => void, options: { window?: boole
     const inside = actor.entity.position as Vec3;
     note(`standing at ${r1(inside.x)},${r1(inside.y)},${r1(inside.z)}; closed cells now: ${place.map(p => `${p.x},${p.y},${p.z}=${actor.blockAt(new Vec3(p.x, p.y, p.z))?.name}`).join(' ')}`);
     let n = 0;
+    // peek: from the corner it steps out to the cell in front (toward the spawner), strikes a few seconds, and is back in the corner (a step or two), the pause in the corner
+    const front = options.peek ? ((): { x: number; y: number; z: number } | null => { const open = sides.filter(([dx, dz]) => !solidAt(cell!.x + dx, cell!.y, cell!.z + dz) && !place.some(q => q.x === cell!.x + dx && q.z === cell!.z + dz)); const pick = open.find(([dx, dz]) => dx === toward[0] && dz === toward[1]) ?? open[0]; return pick ? { x: cell!.x + pick[0], y: cell!.y, z: cell!.z + pick[1] } : null; })() : null;
+    if (options.peek) note(`peek front cell ${JSON.stringify(front)}`);
     while (Date.now() - started < seconds * 1000 && !disconnected && Number(actor.health) > 0) {
-      const run = await act(`hold#${++n}`, [options.bow ? { do: 'shoot', target: 'blaze', n: 3, item: 'bow', onFail: 'continue' } : { do: 'attack', target: 'blaze', hold: true, seconds: 20 }], 40, { accept: ['blaze'] });
+      if (options.peek && front) {
+        const run = await act(`peek#${++n}`, [{ do: 'go', to: front, range: 0.4, seconds: 6, onFail: 'continue' }, { do: 'fight', target: 'blaze', seconds: 6, retreatHp: 1, onFail: 'continue' }, { do: 'go', to: { x: cell.x, y: cell.y, z: cell.z }, range: 0.3, seconds: 8 }], 40, { accept: ['blaze'] });
+        note(`peek#${n}: hp ${r1(Number(actor.health))} ${run.lines.join(' | ').slice(0, 300)}`);
+        if (Number(actor.health) < 14 && Number(actor.food) < 20) await act('eat', [{ do: 'eat' }], 15);
+        await sleep(Number(actor.health) < 16 ? 8000 : 3000);
+        if (Number(actor.health) < 8) break;
+        continue;
+      }
+      const run = await act(`hold#${++n}`, [options.bow ? { do: 'shoot', target: 'blaze', n: 3, item: 'bow', onFail: 'continue' } : options.fight ? { do: 'fight', target: 'blaze', seconds: 20, onFail: 'continue' } : { do: 'attack', target: 'blaze', hold: true, seconds: 20 }], 40, { accept: ['blaze'] });
       if (options.bow && !run.ok) await sleep(1500);
+      if (options.corner && Number(actor.health) < 14 && Number(actor.food) < 20) await act('eat', [{ do: 'eat' }], 15);
       note(`hold#${n}: hp ${r1(Number(actor.health))} ${run.lines.join(' | ').slice(0, 260)}`);
       if (Number(actor.health) < 8) break;
     }
@@ -499,6 +515,13 @@ async function blazeNook(note: (text: string) => void, options: { window?: boole
 }
 scene('blaze_nook', 'the nook: the camp cell closed on its open sides to the head height with a window at the head toward the spawner, then attack hold for 240 s', note => blazeNook(note));
 scene('blaze_nook_bow', 'the nook with its window, and a bow: shoot blazes through the window from 2-4 m, 240 s', note => blazeNook(note, { bow: true }));
+scene('blaze_r59_nook', 'run59 pack: the window nook, attack hold 300 s', note => blazeNook(note, { r59: true, seconds: 300 }));
+scene('blaze_r59_corner_toward', 'run59 pack: only the side toward the spawner closed (two high), the other open as the front, hold 300 s', note => blazeNook(note, { r59: true, corner: 'toward', seconds: 300 }));
+scene('blaze_r59_corner_away', 'run59 pack: only the side away from the spawner closed, the side toward it open as the front, hold 300 s', note => blazeNook(note, { r59: true, corner: 'away', seconds: 300 }));
+scene('blaze_r59_corner_fight', 'run59 pack: corner (away closed) with fight 20 s acts', note => blazeNook(note, { r59: true, corner: 'away', fight: true, seconds: 300 }));
+scene('blaze_r59_corner_away_long', 'run59 pack: the away-side corner (two blocks), hold, eating under 14 hearts, 600 s', note => blazeNook(note, { r59: true, corner: 'away', seconds: 600 }));
+scene('blaze_r59_corner_toward_long', 'run59 pack: the toward-side corner, hold, eating under 14 hearts, 600 s', note => blazeNook(note, { r59: true, corner: 'toward', seconds: 600 }));
+scene('blaze_r59_corner_peek', 'run59 pack: the away-side corner; steps out to the front cell, strikes 6 s, back in the corner; 600 s', note => blazeNook(note, { r59: true, corner: 'away', peek: true, seconds: 600 }));
 scene('blaze_nook_sealed', 'the nook with no window (sealed to the head height, top open): hold for 120 s', note => blazeNook(note, { window: false, seconds: 120 }));
 // Sniping (S2, 2026-11-02): a bow from a cell far enough from the spawner room that few of its blazes see the body and their fire (spread grows with the square root of the distance) mostly misses.
 async function blazeSnipe(note: (text: string) => void, at: [number, number, number]): Promise<Record<string, unknown>> {
