@@ -17,6 +17,7 @@ import { Vec3 } from 'vec3';
 import { createProbeBot, closeProbeBot } from '../src/services/minebot/testing/MinecraftProbeBot.js';
 import { NativeCommonFcaBody } from '../src/services/minebot/integration/commonFca/nativeBody.js';
 import { madeStamp } from './lab/madeStamp.js';
+import { blackBoxOf } from '../src/services/minebot/utils/blackbox.js';
 
 const port = Number(process.env.MINECRAFT_HUNT_PORT);
 const worldDirectory = process.env.MINECRAFT_HUNT_WORLD_DIRECTORY ?? '';
@@ -626,7 +627,7 @@ scene('stronghold_descent', 'from the surface over the portal room down to its f
 });
 
 /** When a go's line says the server would not take a block (`置きを断られた (x,y,z)`): what is at that cell now and round it, and who is near it (the black box says only the body's overlap and jump). */
-function refusedReport(line: string): void {
+async function refusedReport(line: string): Promise<void> {
   const found = /置きを断られた \((-?\d+),(-?\d+),(-?\d+)\)/u.exec(line);
   if (!found) return;
   try {
@@ -638,8 +639,13 @@ function refusedReport(line: string): void {
       .map(entity => `${entity.name ?? entity.type}@${r1(entity.position.distanceTo(middle))}`).slice(0, 8);
     log(`REFUSED ${found[1]},${found[2]},${found[3]} now ${at(0, 0, 0)}; below ${at(0, -1, 0)} above ${at(0, 1, 0)}; sides +x ${at(1, 0, 0)} -x ${at(-1, 0, 0)} +z ${at(0, 0, 1)} -z ${at(0, 0, -1)}; entities within 6 m: ${near.join(' ') || 'none'}; body ${here ? `${r1(here.x)},${r1(here.y)},${r1(here.z)}` : '?'} onGround ${actor.entity?.onGround}`);
   } catch (error) { log(`REFUSED unknown: ${String(error).slice(0, 120)}`); }
+  // The black box's last 90 s (route searches with their places, digs, the server's block changes near the body, hurts) written for this stop: read with HUNT_KEEP=1.
+  try {
+    const dumped = await blackBoxOf(actor)?.dump('refused', `probe: ${line.slice(0, 200)}`);
+    log(dumped ? `REFUSED black box ${dumped.file} (${dumped.bytes} bytes)` : 'REFUSED no black box on this body');
+  } catch (error) { log(`REFUSED black box failed: ${String(error).slice(0, 120)}`); }
 }
-const netherWalk = async (note: (text: string) => void, which: Array<'fortress' | 'warped'>, start?: number[]): Promise<Record<string, unknown>> => {
+const netherWalk =async (note: (text: string) => void, which: Array<'fortress' | 'warped'>, start?: number[]): Promise<Record<string, unknown>> => {
   const arrival = sites.netherArrival as number[];
   const targets: Array<{ name: string; to: number[] }> = which.map(name => ({ name, to: (name === 'fortress' ? sites.blazeStand : sites.warpedStand) as number[] }));
   await ask('difficulty normal'); await ask('time set noon');
@@ -704,7 +710,7 @@ const netherWalk = async (note: (text: string) => void, which: Array<'fortress' 
       // (a hop cut by a reflex is the world's doing, not the way being shut: it is not counted, a planner would go on)
       slow = run.stoppedBy === 'reflex' ? slow : before - left < 3 ? slow + 1 : 0;
       if (!reached && (before - left < 3 || tries === 0)) mapAround(`${target.name}#${tries + 1}`);
-      refusedReport(line);
+      await refusedReport(line);
       if (!reached && /not_loaded/u.test(line)) {
         // How far the loaded ground goes: the columns the body holds (chunk coordinates) against the body's and the aim's.
         try {
@@ -737,7 +743,7 @@ scene('climb_pillar', 'go up to a platform 10 above the plate by laying stones u
     await placeActor('the_nether', x, y, z, 24);
     const run = await act(`pillar#${attempt}`, [{ do: 'go', to: { x: x + 2, y: y + 10, z }, range: 1, seconds: 60, maxPlace: 30, canPlace: ['cobblestone'] }], 90);
     const here = actor.entity?.position as Vec3 | undefined;
-    refusedReport(run.lines[0] ?? '');
+    await refusedReport(run.lines[0] ?? '');
     rows.push({ attempt, ok: run.ok, at: here ? [r1(here.x), r1(here.y), r1(here.z)] : null, line: (run.lines[0] ?? '').slice(0, 300) });
     note(`pillar#${attempt}: ${run.ok ? 'ok' : 'NO'} ${(run.lines[0] ?? '').slice(0, 200)}`);
   }
@@ -760,7 +766,7 @@ scene('bridge_void', 'a bridge of stones over a void 52 long, a safety floor 7 b
     await placeActor('the_nether', x, y, z, 24);
     const run = await act(`bridge#${attempt}`, [{ do: 'go', to: { x: x + 70, y, z }, range: 1, seconds: 100, maxPlace: 100, canPlace: ['cobblestone'] }], 130);
     const here = actor.entity?.position as Vec3 | undefined;
-    refusedReport(run.lines[0] ?? '');
+    await refusedReport(run.lines[0] ?? '');
     rows.push({ attempt, ok: run.ok, at: here ? [r1(here.x), r1(here.y), r1(here.z)] : null, seconds: r1(run.wallMs / 1000), line: (run.lines[0] ?? '').slice(0, 300) });
     note(`bridge#${attempt}: ${run.ok ? 'ok' : 'NO'} ${(run.lines[0] ?? '').slice(0, 220)}`);
   }

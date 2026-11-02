@@ -635,6 +635,19 @@ async function laidAt(host: any, reference: any, face: any): Promise<boolean> {
   }
   return false;
 }
+/** How long a place whose answer is overdue (promptPlace gives up at 1.5 s) is waited for before it is called refused (S2 lab: a server 2.2 s late with the block). */
+const LATE_ANSWER_MS = 3500;
+/** The block the hand held shows in the cell a place was made for within LATE_ANSWER_MS: the server was only slow. False when the cell is still not it, or the act is stopped. */
+async function laidLate(host: any, cell: Cell | null, blockName: string, stopped: () => boolean): Promise<boolean> {
+  if (!cell || !blockName) return false;
+  const at = new Vec3(cell.x, cell.y, cell.z);
+  const until = Date.now() + LATE_ANSWER_MS;
+  while (Date.now() < until && !stopped()) {
+    if (String(host.blockAt?.(at, false)?.name ?? '') === blockName) return true;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  return String(host.blockAt?.(at, false)?.name ?? '') === blockName;
+}
 
 /**
  * Continue contracts (1, 12 decision on go): the cells round a place that shut the way, for the stop's `lastSearch.blockedAround`. The cells the body would stand in or pass
@@ -711,7 +724,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     return { ...stopped(bot, code, text, at, start), progress: progressNow(), data: { work: { dug: state.dug, placed: state.placed, steps: state.steps, redraws: state.redraws } } };
   };
   /** What a stop for want of blocks to lay says to do: name the cheap blocks the pack holds (dug netherrack, stone ...), else gather some. */
-  const noBlocksHint = (): string => { const held = bridgeBlocksHeld(bot, args.canPlace); return held ? `荷の ${held} を canPlace に足すか、集める` : '置ける物を集めるか、canPlace を足す'; };
+  const noBlocksHint = (fallback = '置ける物を集めるか、canPlace を足す'): string => { const held = bridgeBlocksHeld(bot, args.canPlace); return held ? `荷の ${held} を canPlace に足すか、集める` : fallback; };
   const arrived = (): StepOutcome => ({ ok: true, text: `go 着いた ${tail()}${(() => { const full = packNote(); return full ? `。${full}` : ''; })()}`, at: feetCell(bot) ?? start, progress: progressNow(true),
     data: { work: { dug: state.dug, placed: state.placed, steps: state.steps, redraws: state.redraws } } });
 
@@ -876,10 +889,22 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     if (target) await blockInHand(host, place.held);
     const at = host.entity?.position?.clone?.() ?? null;
     const facts = () => { const cell = placedCell(rest[0], rest[1]); return cell ? placeFacts(host, cell, topOfJump(), at ?? undefined) : ''; };
+    const heldName = String(host.heldItem?.name ?? '');
     try { result = await originalPlace.apply(host, rest); }
     catch (error) {
       // The library gives up when the server's update does not come: that too is a place the server did not take (an interruption is not).
-      if (counting && !/Action interrupted|Motor owner expired/u.test(String((error as Error)?.message))) refusedPlace(facts(), placedCell(rest[0], rest[1]));
+      if (counting && !/Action interrupted|Motor owner expired/u.test(String((error as Error)?.message))) {
+        // S2 lab (c4, the Nether, a busy machine): the server answered 2.2 s late, the block showed 0.7 s after the 1.5 s wait ended, and the go had already been stopped as refused
+        // (three of four such stops in a leg were this). An answer that is only late is waited for, up to LATE_ANSWER_MS; a block that shows is a block laid.
+        const lateCell = placedCell(rest[0], rest[1]);
+        if (/did not answer within|did not fire within/u.test(String((error as Error)?.message)) && await laidLate(host, lateCell, heldName, () => ctx.stop?.aborted === true)) {
+          blackBoxOf(host)?.note('place_late', { at: lateCell ? [lateCell.x, lateCell.y, lateCell.z] : null });
+          state.placed++; lastWork = Date.now(); state.refused = 0;
+          if (lateCell) state.laidCells.add(keyOf(lateCell));
+          return undefined;
+        }
+        refusedPlace(facts(), placedCell(rest[0], rest[1]));
+      }
       throw error;
     }
     if (!counting) return result;
@@ -1237,7 +1262,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
         if (!place.held.length) {
           return args.canPlace?.length
             ? fail('no_blocks', `行き先は ${lowest - closestY} 段上で、登るのに置く物が無い（${place.missing.length ? `持っていない ${place.missing.join('・')}` : '置ける物が無い'}${place.refused.length ? `、置かない ${place.refused.join('・')}` : ''}）`, noBlocksHint())
-            : fail('dead_end', `行き先は ${lowest - closestY} 段上で、道は途中までしか無い。登るには canPlace が要る`, bridgeBlocksHeld(bot, args.canPlace) ? `荷の ${bridgeBlocksHeld(bot, args.canPlace)} を canPlace に足す` : 'canPlace に置ける物を足す');
+            : fail('dead_end', `行き先は ${lowest - closestY} 段上で、道は途中までしか無い。登るには canPlace が要る`, noBlocksHint('canPlace に置ける物を足す'));
         }
         // To the foot of the climb along the level: an end the way found high up (a search cut by its time ends where it got to) is not walked to,
         // the executor has no towers (run 41 replay: 12 redraws at a goal 17 up, stuck in 10 s); the climb starts here.
