@@ -117,6 +117,9 @@ export async function runProbe(bot: any, input: ProbeInput): Promise<{ success: 
   switch (input.kind) {
     case 'worksite': {
       if (!input.target || typeof input.target !== 'object') return bad('worksite には target のブロック座標が要る');
+      // A coordinate that is not a finite number (called directly, not through the schema) would turn into null in the JSON answer.
+      const points = [input.target, input.to, input.retreat].filter((point): point is { x: number; y: number; z: number } => !!point && typeof point === 'object');
+      if (!points.every(point => [point.x, point.y, point.z].every(value => Number.isFinite(value)))) return bad('worksite の座標は有限の数で書く');
       return answer(await probeWorksite(bot, feet, cellOf(input.target), input.to ? cellOf(input.to) : undefined, input.retreat ? cellOf(input.retreat) : undefined));
     }
     case 'path': {

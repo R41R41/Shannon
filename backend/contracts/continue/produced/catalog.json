@@ -1,11 +1,11 @@
 {
  "producedBy": "backend/scripts/lab/continue-produce.ts",
  "bench": "offline",
- "bodyRevision": "4dbf1667f264caf6fe0c3baee330e69c216cdcd6",
- "madeAt": "2026-11-02T04:44:34.673Z",
+ "bodyRevision": "1023b56883b87fb874310e396eb55090eaedf130",
+ "madeAt": "2026-11-02T12:41:23.045Z",
  "answers": null,
  "fixtureSha256": null,
- "catalogHash": "3ab72c38eb51d655",
+ "catalogHash": "1abb9d625ae60bc0",
  "offered": [
   {
    "name": "act",
@@ -887,7 +887,7 @@
   },
   {
    "name": "probe",
-   "description": "調べる（読むだけ・決まった計算）。kind: path（to へ掘らず置かずに歩いて行けるか。行けるなら道の点、行けないなら切れ目と立てる所）/ sight（target のブロックか生き物 #id が目から見えるか・届くか・間のブロック）/ column（x,z の縦の列。yFrom・yTo。落差・水・溶岩・砂利）/ around（radius 内の生き物と危ないブロック）/ history（at の radius 内の最近の手と止まり）/ scan（読み込み済みの範囲の目印。radius はチャンク）。結果は JSON（text が先頭。危ない事実をそのまま書く）。",
+   "description": "調べる（読むだけ・決まった計算）。kind: path（to へ掘らず置かずに歩いて行けるか。行けるなら道の点、行けないなら切れ目と立てる所）/ sight（target のブロックか生き物 #id が目から見えるか・届くか・間のブロック）/ column（x,z の縦の列。yFrom・yTo。落差・水・溶岩・砂利）/ around（radius 内の生き物と危ないブロック）/ history（at の radius 内の最近の手と止まり）/ scan（読み込み済みの範囲の目印。radius はチャンク）。worksite（target: 目的物、to: 作業位置、retreat: 帰還先。接近・呼吸・取得・逆向きの道を別々に確認）/ frames（要塞のエンドポータルの枠。x・z=探す中心（既定は足）、radius=ブロック16〜128（既定64）。枠が無ければ16ブロック刻みの輪の次に歩く点）/ camp（ネザーのブレイズの湧き場と、その3m以内で縁・火の無い野営向きの足場）。結果は JSON（text が先頭。危ない事実をそのまま書く）。",
    "inputSchema": {
     "type": "object",
     "properties": {
@@ -899,9 +899,12 @@
        "column",
        "around",
        "history",
-       "scan"
+       "scan",
+       "worksite",
+       "frames",
+       "camp"
       ],
-      "description": "path・sight・column・around・history・scan"
+      "description": "path・sight・column・around・history・scan・worksite・frames・camp"
      },
      "to": {
       "type": "object",
@@ -979,11 +982,11 @@
      },
      "x": {
       "type": "number",
-      "description": "column: 列の x（既定は足）"
+      "description": "column: 列の x（既定は足）/ frames: 探す中心の x"
      },
      "z": {
       "type": "number",
-      "description": "column: 列の z（既定は足）"
+      "description": "column: 列の z（既定は足）/ frames: 探す中心の z"
      },
      "yFrom": {
       "type": "number",
@@ -995,7 +998,7 @@
      },
      "radius": {
       "type": "number",
-      "description": "around: m（1〜16、既定 8）/ history: m（1〜32、既定 4）/ scan: チャンク（1〜16、既定は読み込み済みの全部）"
+      "description": "around: m（1〜16、既定 8）/ history: m（1〜32、既定 4）/ scan: チャンク（1〜16、既定は読み込み済みの全部）/ frames: ブロック（16〜128、既定 64）"
      },
      "at": {
       "type": "object",
@@ -1017,6 +1020,27 @@
       ],
       "additionalProperties": false,
       "description": "history: 場所（既定は足）"
+     },
+     "retreat": {
+      "type": "object",
+      "properties": {
+       "x": {
+        "type": "number"
+       },
+       "y": {
+        "type": "number"
+       },
+       "z": {
+        "type": "number"
+       }
+      },
+      "required": [
+       "x",
+       "y",
+       "z"
+      ],
+      "additionalProperties": false,
+      "description": "worksite: 帰還先（逆向きの道を別に調べる）"
      }
     },
     "required": [
@@ -1099,13 +1123,25 @@
   },
   {
    "name": "find-structure",
-   "description": "指定した構造物（要塞、村、ネザー要塞など）を、読み込み済みの範囲から探します。村は観測のlandmarksにも自動で出ます。見つからなければ、まだ行っていない方角へ100〜200ブロック移動してから、もう一度探してください（ネザー要塞はネザーの中だけ）",
+   "description": "指定した構造物（要塞、村、ネザー要塞など）を、読み込み済みの範囲から探します。村は観測のlandmarksにも自動で出ます。見つからなければ、まだ行っていない方角へ100〜200ブロック移動してから、もう一度探してください（ネザー要塞はネザーの中だけ）。stronghold はエンドポータルの枠だけを探し（高さは問わない）、中心 x・z と半径 radius（最大128）を指定できます。枠が無い時は、16ブロック刻みの輪の次の点を返します。blaze_spawner はネザー要塞のブレイズの湧き場と、その3m以内の野営向きの足場（縁・火の無い所）を返します",
    "inputSchema": {
     "type": "object",
     "properties": {
      "structureType": {
       "type": "string",
-      "description": "構造物の種類（fortress=ネザー要塞, village=村, stronghold=要塞など）"
+      "description": "構造物の種類（fortress=ネザー要塞, village=村, stronghold=要塞, blaze_spawner=ブレイズの湧き場など）"
+     },
+     "radius": {
+      "type": "number",
+      "description": "stronghold だけ: 枠を探す半径（中心から水平に。既定64、最大128）"
+     },
+     "x": {
+      "type": "number",
+      "description": "stronghold だけ: 探す中心の x（既定は今いる所）。z と一緒に"
+     },
+     "z": {
+      "type": "number",
+      "description": "stronghold だけ: 探す中心の z"
      }
     },
     "required": [
@@ -1485,7 +1521,7 @@
   {
    "name": "goal-evidence",
    "readOnly": true,
-   "description": "現在の元タスクに結び付いたnative死亡観測と所持数を読む。攻撃後にThe Endで実際に観測したドラゴンの死亡だけが証拠。未観測・別タスク・再接続は達成ではない。途中の節目（今いる次元、この接続で入った次元、ネザー到達、ブレイズロッド・エンダーパール・エンダーアイの所持数）も milestones で返す（節目は討伐の証拠ではない）。",
+   "description": "現在の元タスクに結び付いたnative死亡観測と所持数を読む。エンドラ討伐の証拠は、The Endで体がエンドラに与えた被害（剣・矢・ベッドの爆発。サーバーが体を原因と名指した被害、または体の攻撃の直後のエンドラの被弾）の後に、同じエンドラの死（死の演出の終わりを含む）を接続中に観測したことだけ。未観測・別タスク・再接続・被害を与えていない死は達成ではない。途中の節目（今いる次元、この接続で入った次元、ネザー到達、ブレイズロッド・エンダーパール・エンダーアイの所持数）も milestones で返す（節目は討伐の証拠ではない）。advancement end/kill_dragon がこの接続で入ったことは boss.advancement に添える（裏付けで、証拠そのものではない）。",
    "inputSchema": {
     "type": "object",
     "properties": {},

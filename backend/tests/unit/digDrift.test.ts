@@ -71,3 +71,36 @@ describe('dig: a body carried out of reach while it digs', () => {
     expect(sim.world.nameAt(3, FLOOR, 0)).toBe('obsidian');
   });
 });
+
+describe('dig: the breath watcher', () => {
+  it('does not let a failing re-read of the dig time escape the dig', async () => {
+    const sim = makeHandsSim(ground, { items: [{ name: 'diamond_pickaxe', count: 1 }] });
+    const digTime = sim.bot.digTime.bind(sim.bot);
+    let calls = 0;
+    // the first reads are the dig's own (its start, its expected time, the sim's wait); the watcher's reads come after them
+    sim.bot.digTime = (block: any) => { if (++calls > 5) throw new Error('digTime failed'); return digTime(block); };
+    const { value } = await drive(sim, dig(ctxOf(sim), { at: [{ x: 3, y: FLOOR, z: 0 }], tool: 'diamond_pickaxe', collect: false }));
+    expect(calls).toBeGreaterThan(5);
+    expect(value.ok).toBe(true);
+    expect(sim.world.nameAt(3, FLOOR, 0)).toBe('air');
+  });
+});
+
+describe('dig: the breath watcher keeps its eyes when the dig time cannot be read', () => {
+  it('still stops a dig whose body is flooded and short of breath when digTime throws', async () => {
+    const sim = makeHandsSim(ground, { items: [{ name: 'diamond_pickaxe', count: 1 }] });
+    sim.bot.dig = () => new Promise(() => undefined);
+    const stop = vi.fn(); sim.bot.stopDigging = stop;
+    const digTime = sim.bot.digTime.bind(sim.bot);
+    let calls = 0;
+    sim.bot.digTime = (block: any) => { if (++calls > 4) throw new Error('digTime failed'); return digTime(block); };
+    const { value, elapsed } = await drive(sim, dig(ctxOf(sim), { at: [{ x: 3, y: FLOOR, z: 0 }], collect: false }), time => {
+      if (time === 1000) { sim.world.set(0, FLOOR + 1, 0, 'water'); sim.bot.oxygenLevel = 4; }
+    });
+    expect(calls).toBeGreaterThan(4);
+    expect(value).toMatchObject({ ok: false, reason: 'breathing_work' });
+    expect(elapsed).toBeLessThan(2500);
+    expect(stop).toHaveBeenCalled();
+    expect(sim.world.nameAt(3, FLOOR, 0)).toBe('obsidian');
+  });
+});

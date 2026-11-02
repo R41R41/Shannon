@@ -187,6 +187,8 @@ async function mineVein(ctx0: StepContext, args: MineArgs, result: { dug: number
       case 'lava_behind': skipped.push({ cell, kind: 'liquid', why: outcome.text }); continue;
       case 'footing': case 'falling_above': skipped.push({ cell, kind: 'footing', why: outcome.text }); continue;
       case 'threat_exposed': return problem('threat_exposed', outcome.text, cell);
+      // The breath cannot pay for this dig and its way back: another try at the next cell spends the same breath, so the hand ends here.
+      case 'breathing_work': return problem('breathing_work', outcome.text, cell);
       case 'no_harvest_tool': return result.dug ? problem('tool_broke', `道具が壊れて次の道具が無い（${outcome.text}）`, cell) : problem('no_tool', outcome.text, cell);
       case 'equip_failed': return problem('no_tool', outcome.text, cell);
       case 'unbreakable': case 'protected': case 'unloaded': skipped.push({ cell, kind: 'other', why: outcome.text }); continue;
