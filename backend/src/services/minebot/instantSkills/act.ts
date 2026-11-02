@@ -481,7 +481,7 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
       if ((bot.health ?? 20) <= 0) return stopWith('体が死んだ', 'died');
       if (doneWhen && !doneMet && holdsDone()) return finishDone();
       // A walk into a portal says the crossing itself (its arrival) and the act ends after it (below): not a stop in the middle of the hand.
-      if (String(bot.game?.dimension ?? '') !== startDimension && !((host.actHandNow === 'walk' || host.actHandNow === 'portal') && portalWalks.has(bot)) && !crossedByWalk) return stopWith(`次元が変わった（${startDimension} → ${String(bot.game?.dimension ?? '')}）`, 'dimension_changed');
+      if (String(bot.game?.dimension ?? '') !== startDimension && !(host.actHandNow === 'portal' || (host.actHandNow === 'walk' && portalWalks.has(bot))) && !crossedByWalk) return stopWith(`次元が変わった（${startDimension} → ${String(bot.game?.dimension ?? '')}）`, 'dimension_changed');
       const entries = ledger?.entriesSince(mark).filter(entry => !LEDGER_QUIET.has(entry.kind)) ?? [];
       // r6 (run 29): a reflex's note does not stop a hand that is laying blocks (it may be what walls the threat off); the act stops when
       // that hand is over. A reflex that takes the body still cuts it at once (its lease aborts the action: onCut).
