@@ -7,6 +7,10 @@ import { noteSpawnBed } from '../ownedBlocks.js';
 import { blockAt, cellNow, cellText, DIRECTION_JA, DIRECTIONS, eyeDistance, findItem, guard, inventoryCount, isAirLike, placeText, stopped,
   StepStopped, USE_REACH, wait, waitUntil, type StepContext, type StepOutcome } from './common.js';
 import { BED_HALF_WAIT_MS } from './place.js';
+import { blastAt } from '../crystalBlast.js';
+import { entityHealth } from '../mapMarks.js';
+import { boxDistance, partBox } from '../dragonParts.js';
+import { endDragonOf } from '../dragonState.js';
 
 /**
  * use: the right hand on a block, a creature, or the air (design mb-llm-centric 2.3 and the owner's dragon list, 2026-10-21).
@@ -137,6 +141,59 @@ async function sleepInBed(ctx: StepContext, cell: Cell, asked: any): Promise<Ste
   return { ok: true, text: `${cellText(cell)} のベッドで寝た${woke ? '（朝になって起きた）' : '（15秒で起きた。夜はまだ）'}。リスポーン地点はこのベッド${late >= 20 ? `（頭のブロックが来るまで ${late}ms 待った）` : ''}`, at: cell };
 }
 
+/** A bed's blast: power 5 at the bed's middle. */
+const BED_POWER = 5;
+/** The blast is waited for this long after the click (the server blows it in the same tick), and its harm this long more (the health packet follows). */
+const BLAST_WAIT_MS = 1500;
+const HARM_SETTLE_MS = 700;
+
+/**
+ * A bed right-clicked in the Nether or the End (the planner asked: a use hand at the bed's cell): it blows, power 5, fire, and is gone. Said in
+ * numbers: whether it blew, how far the body was from its centre, the health the body lost, and the dragon's, when one is in sight (its head's
+ * distance to the centre and its health before and after). Refused beforehand, with the numbers, when the blast would leave the body less than
+ * its health (an estimate: distance, the part of the body in its sight, difficulty and armour; the shield, enchantments and resistance are not
+ * counted). The click is `bot.activateBlock`, never a sleep (the body's evidence reads it as the bed it used).
+ */
+async function blowBed(ctx: StepContext, cell: Cell, block: any): Promise<StepOutcome> {
+  const bot = ctx.bot;
+  const centre = { x: cell.x + 0.5, y: cell.y + 0.5, z: cell.z + 0.5 };
+  // Both halves of the bed are gone when it blows: neither shuts the blast out.
+  const halves = bedHalves(block, cell);
+  const guess = blastAt(bot, centre, bot.entity.position, BED_POWER, halves ? [halves.foot, halves.head] : []);
+  if (!guess.safe) {
+    return stopped(bot, 'blast_unsafe', `${placeText(bot, cell)} のベッドを使うと爆発（威力${BED_POWER}）が自分に当たる見込み: 中心まで ${guess.distance}m・見える割合 ${guess.seen}・素の被害 ${guess.raw}→防具後 ${guess.expected}`
+      + `（体力 ${guess.health}。盾・エンチャント・耐性は数えない）。離れるか、間にブロックを置く`, cell);
+  }
+  const healthBefore = Number(bot.health ?? 20);
+  const dragon = endDragonOf(bot);
+  const dragonBefore = dragon ? entityHealth(bot, dragon) : null;
+  let blast: { x: number; y: number; z: number } | null = null;
+  const onBlast = (packet: any) => {
+    const c = packet?.center ?? (typeof packet?.x === 'number' ? { x: packet.x, y: packet.y, z: packet.z } : null);
+    if (c && Math.hypot(c.x - centre.x, c.y - centre.y, c.z - centre.z) <= 3) blast = { x: c.x, y: c.y, z: c.z };
+  };
+  try { bot._client?.on?.('explosion', onBlast); } catch { /* the packet is a help */ }
+  try {
+    await guard(ctx, Promise.resolve(bot.activateBlock(block)), 3000);
+    await waitUntil(ctx, () => blast !== null || !isBedName(blockAt(bot, cell)?.name), BLAST_WAIT_MS);
+    await wait(ctx, HARM_SETTLE_MS);
+  } catch (error) {
+    if (error instanceof StepStopped || /Action interrupted/u.test(String((error as Error)?.message))) throw error;
+  } finally { try { bot._client?.removeListener?.('explosion', onBlast); } catch { /* gone */ } }
+  const gone = !isBedName(blockAt(bot, cell)?.name);
+  const exploded = blast !== null || gone;
+  const at = blast ?? centre;
+  const distance = Math.round(Math.hypot(bot.entity.position.x - at.x, bot.entity.position.y - at.y, bot.entity.position.z - at.z) * 10) / 10;
+  const lost = Math.max(0, Math.round((healthBefore - Number(bot.health ?? healthBefore)) * 10) / 10);
+  const live = dragon ? bot.entities?.[dragon.id] : null;
+  const dragonAfter = live ? entityHealth(bot, live) : null;
+  const toHead = live ? Math.round(boxDistance(at, partBox({ position: live.position, yaw: live.yaw }, 'head')) * 10) / 10 : null;
+  const data = { bed: { exploded, distance: exploded ? distance : null, damage: exploded ? lost : null } };
+  if (!exploded) return { ...stopped(bot, 'not_exploded', `${placeText(bot, cell)} のベッドを右クリックしたが爆発は見ていない（今 ${cellNow(bot, cell)}）`, cell), data };
+  const dragonText = live ? `。竜: 頭の箱まで爆発の中心から ${toHead}m・体力 ${dragonBefore ?? '?'}→${dragonAfter ?? '?'}` : '';
+  return { ok: true, at: cell, data, text: `${cellText(cell)} のベッドが爆発した（威力${BED_POWER}）: 自分まで ${distance}m・見込み ${guess.expected}・失った体力 ${lost}（体力 ${healthBefore}→${Number(bot.health ?? healthBefore)}）${dragonText}` };
+}
+
 export async function use(ctx: StepContext, args: UseArgs): Promise<StepOutcome> {
   const bot = ctx.bot;
   const name = args.item ?? bot.heldItem?.name ?? null;
@@ -168,8 +225,9 @@ export async function use(ctx: StepContext, args: UseArgs): Promise<StepOutcome>
   if (!block) return stopped(bot, 'unloaded', `${placeText(bot, cell)} は未ロード`, cell);
   const distance = eyeDistance(bot, cell);
   if (distance > USE_REACH) return stopped(bot, 'out_of_reach', `${placeText(bot, cell)} に届かない（目から${distance.toFixed(1)}m、${USE_REACH}m まで）`, cell);
-  // A bed (r8: before any item is looked at; the bed is slept in with an empty hand).
-  if (BEDS.test(block.name)) return sleepInBed(ctx, cell, block);
+  // A bed (r8: before any item is looked at; the bed is slept in with an empty hand). In the Nether and the End it cannot be slept in: the right click is a blast, and a use hand
+  // at a bed there is the planner asking for it (the body never does it by itself).
+  if (BEDS.test(block.name)) return /(^|:)(the_end|the_nether)$/u.test(String(bot.game?.dimension ?? '')) ? blowBed(ctx, cell, block) : sleepInBed(ctx, cell, block);
   // A bucket on a source.
   if (name === 'bucket') {
     if (block.name !== 'water' && block.name !== 'lava') return stopped(bot, 'not_liquid', `${placeText(bot, cell)} は ${cellNow(bot, cell)}（水や溶岩ではない）`, cell);

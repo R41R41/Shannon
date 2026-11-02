@@ -56,8 +56,10 @@ export function blastRaw(distance: number, seen: number, power = CRYSTAL_POWER):
 }
 
 /** The fraction of nine points in the body's box that a straight line from the blast's centre reaches (iron bars are passed). */
-export function seenFraction(read: BlockReader, centre: P3, feet: P3): number {
+export function seenFraction(read: BlockReader, centre: P3, feet: P3, ignore: P3[] = []): number {
   let seen = 0, total = 0;
+  // The cell the blast is centred in is never in its way (a bed is gone when it blows), nor are the cells given.
+  const skip = new Set([centre, ...ignore].map(cell => `${Math.floor(cell.x)},${Math.floor(cell.y)},${Math.floor(cell.z)}`));
   for (const h of [0.15, 0.9, 1.65]) for (const [dx, dz] of [[0, 0], [0.22, 0.22], [-0.22, -0.22]] as const) {
     total++;
     const to = { x: feet.x + dx, y: feet.y + h, z: feet.z + dz };
@@ -65,7 +67,9 @@ export function seenFraction(read: BlockReader, centre: P3, feet: P3): number {
     let blocked = false;
     for (let i = 1; i < steps && !blocked; i++) {
       const t = i / steps;
-      const block = read(Math.floor(centre.x + (to.x - centre.x) * t), Math.floor(centre.y + (to.y - centre.y) * t), Math.floor(centre.z + (to.z - centre.z) * t));
+      const bx = Math.floor(centre.x + (to.x - centre.x) * t), by = Math.floor(centre.y + (to.y - centre.y) * t), bz = Math.floor(centre.z + (to.z - centre.z) * t);
+      if (skip.has(`${bx},${by},${bz}`)) continue;
+      const block = read(bx, by, bz);
       if (!block) continue;
       if (block.solid === true && block.name !== 'iron_bars') blocked = true;
     }
@@ -75,11 +79,11 @@ export function seenFraction(read: BlockReader, centre: P3, feet: P3): number {
 }
 
 export interface BlastEstimate { distance: number; seen: number; raw: number; expected: number; armor: number; health: number; safe: boolean }
-/** What a crystal blast at `centre` would take from the body at `feet` (the body's own place by default), and whether the body can strike it. */
-export function blastAt(bot: any, centre: P3, feet: P3 = bot.entity.position): BlastEstimate {
+/** What a blast of `power` (a crystal's 6, a bed's 5) at `centre` would take from the body at `feet` (the body's own place by default), and whether the body can take it. */
+export function blastAt(bot: any, centre: P3, feet: P3 = bot.entity.position, power = CRYSTAL_POWER, ignore: P3[] = []): BlastEstimate {
   const distance = Math.hypot(feet.x - centre.x, feet.y - centre.y, feet.z - centre.z);
-  const seen = distance >= CRYSTAL_REACH ? 0 : seenFraction(bodyReader(bot), centre, feet);
-  const raw = blastRaw(distance, seen);
+  const seen = distance >= power * 2 ? 0 : seenFraction(bodyReader(bot), centre, feet, ignore);
+  const raw = blastRaw(distance, seen, power);
   const { points, toughness } = armorOf(bot);
   const expected = raw === 0 ? 0 : Math.round(afterArmor(afterDifficulty(raw, bot?.game?.difficulty), points, toughness) * 10) / 10;
   const health = Number(bot?.health ?? 20);

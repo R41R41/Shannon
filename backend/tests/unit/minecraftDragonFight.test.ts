@@ -268,3 +268,51 @@ describe('the dragon\'s reach', () => {
     expect(keys.slice(-5).every(([, v]) => v === false)).toBe(true);
   });
 });
+
+import { use } from '../../src/services/minebot/utils/primitives/use.js';
+
+describe('a bed used in the End', () => {
+  /** The bot at (0.5, 64, 0.5), a bed at the cell (3, 64, 0) behind a wall of end stone at x 2 (so that the blast is mostly shut out), the dragon sitting. */
+  function bedFixture(options: { wall?: boolean; dimension?: string; blows?: boolean } = {}) {
+    const f = fixture({ at: new Vec3(0.5, 64, 3.5), phase: DRAGON_PHASE.sittingScanning });
+    f.bot.game.dimension = options.dimension ?? 'minecraft:the_end';
+    if (options.wall !== false) for (let y = 63; y <= 67; y++) for (let z = 0; z <= 7; z++) f.world.set(key(2, y, z), 'end_stone');
+    f.world.set(key(3, 64, 3), 'white_bed'); f.world.set(key(3, 64, 4), 'white_bed');
+    f.bot._client = new EventEmitter();
+    f.bot.sleep = vi.fn(async () => { throw new Error("it's not night and it's not a thunderstorm"); });
+    f.bot.activateBlock = vi.fn(async () => {
+      if (options.blows === false) return;
+      f.world.delete(key(3, 64, 3)); f.world.delete(key(3, 64, 4));
+      f.bot.health = 17; f.dragon.metadata[9] = 150;
+      f.bot._client.emit('explosion', { center: { x: 3.5, y: 64.5, z: 3.5 }, radius: 5 });
+    });
+    return f;
+  }
+  it('right-clicks the bed (never sleeps) when the planner uses it in the End, and says it blew, how far, and what it cost', async () => {
+    const f = bedFixture();
+    const outcome = await use(ctxOf(f.bot) as never, { at: { x: 3, y: 64, z: 3 } });
+    expect(f.bot.activateBlock).toHaveBeenCalledTimes(1);
+    expect(f.bot.sleep).not.toHaveBeenCalled();
+    expect(outcome.ok).toBe(true);
+    expect(outcome.text).toMatch(/爆発した/u); expect(outcome.text).toMatch(/自分まで 3(\.\d)?m/u); expect(outcome.text).toMatch(/失った体力 3/u); expect(outcome.text).toMatch(/体力 200→150/u);
+    expect(outcome.data?.bed).toMatchObject({ exploded: true, damage: 3 });
+  });
+  it("refuses, with the numbers, a bed whose blast would take the body's health, and does not click", async () => {
+    const f = bedFixture({ wall: false });
+    const outcome = await use(ctxOf(f.bot) as never, { at: { x: 3, y: 64, z: 3 } });
+    expect(f.bot.activateBlock).not.toHaveBeenCalled();
+    expect(outcome).toMatchObject({ ok: false, reason: 'blast_unsafe' });
+    expect(outcome.text).toMatch(/素の被害 \d+→防具後/u);
+  });
+  it('says it did not blow when the click did nothing', async () => {
+    const f = bedFixture({ blows: false });
+    const outcome = await use(ctxOf(f.bot) as never, { at: { x: 3, y: 64, z: 3 } });
+    expect(outcome).toMatchObject({ ok: false, reason: 'not_exploded' });
+  });
+  it('leaves a bed in the Overworld to sleep, as before', async () => {
+    const f = bedFixture({ dimension: 'minecraft:overworld' });
+    const outcome = await use(ctxOf(f.bot) as never, { at: { x: 3, y: 64, z: 3 } });
+    expect(f.bot.activateBlock).not.toHaveBeenCalled();
+    expect(outcome.ok).toBe(false);
+  });
+});
