@@ -7,10 +7,17 @@ import { createRequire } from 'node:module';
 import { shieldRush, shieldRushProblem, type ShieldRushArgs, type ShieldRushOutcome } from '../../src/services/minebot/utils/primitives/shieldRush.js';
 import { RushShooterWatch } from '../../src/services/minebot/utils/huntBlaze.js';
 import { RushSpace } from '../../src/services/minebot/utils/primitives/shieldRushSpace.js';
+import { go } from '../../src/services/minebot/utils/primitives/go.js';
+import { StepStopped } from '../../src/services/minebot/utils/primitives/common.js';
 import { installShieldBlock } from '../../src/services/minebot/utils/shieldBlock.js';
 import { ACT_HANDS, runAct } from '../../src/services/minebot/instantSkills/act.js';
 import { createMotorPort, executeAction } from '../../src/services/minebot/execution/ActionExecution.js';
 import { takeActReport } from '../../src/services/minebot/utils/actReport.js';
+
+vi.mock('../../src/services/minebot/utils/primitives/go.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../src/services/minebot/utils/primitives/go.js')>();
+  return { ...actual, go: vi.fn() };
+});
 
 // The client ticks move the body at shield walking pace. Only server events count hits/death/collection.
 function field(x = 2.8, y = 64) {
@@ -72,8 +79,8 @@ async function settle<T>(promise: Promise<T>, limit = 65_000): Promise<T> {
   return value!;
 }
 async function run(f: Field): Promise<ShieldRushOutcome> { return settle(shieldRush(f.ctx, f.args)); }
-beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(new Date('2026-11-03T00:00:00Z')); });
-afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); });
+beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(new Date('2026-11-03T00:00:00Z')); vi.mocked(go).mockReset(); });
+afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe('shield_rush one chosen blaze', () => {
   it('also closes, collects and returns using the real client physics under a raised shield', async () => {
@@ -235,6 +242,146 @@ describe('shield_rush one chosen blaze', () => {
     await settle(executeAction(f.bot, 'act', 60_000, () => runAct(createMotorPort(f.bot), hands), { waitForQuiescence: true }));
     const report = takeActReport(f.bot, started)!;
     expect((report.lines[0] as any).shieldRush.code).toBe('REFLEX'); expect(report.lines[0].end).toBe('cut'); expect(report.lines[1].status).toBe('skipped'); f.close();
+  });
+});
+
+// The retreat corridor crosses partial floors; its shelter is 17 m from camp, beyond the combat area.
+function outsideField(x = 6.5) {
+  const f = field(x), read = f.bot.blockAt;
+  f.args.seconds = 60; f.args.retreatTo = { x: -16.5, y: 64, z: 0.5 };
+  f.bot.blockAt = (p: Vec3) => {
+    const b = read(p), at = p.floored();
+    if (at.y !== 63 || b?.name !== 'stone') return b;
+    if (at.x === -6) return { ...b, name: 'nether_brick_stairs', shapes: [[0, 0, 0, 1, 0.5, 1], [0, 0.5, 0.5, 1, 1, 1]] };
+    if (at.x === -10) return { ...b, name: 'nether_brick_slab', shapes: [[0, 0, 0, 1, 0.5, 1]] };
+    return at.x <= -16 ? { ...b, name: 'nether_bricks' } : b;
+  };
+  for (const y of [64, 65, 66]) f.blocks.set(`-14,${y},0`, 'stone');
+  return f;
+}
+function arriveOutside(f: Field) {
+  vi.mocked(go).mockImplementationOnce(async (ctx, a) => {
+    expect(a.goals).toEqual([f.args.retreatTo]);
+    await new Promise(resolve => setTimeout(resolve, 300));
+    ctx.bot.entity.position = new Vec3(a.goals[0].x, a.goals[0].y, a.goals[0].z);
+    return { ok: true, text: 'go 着いた' };
+  });
+}
+
+describe('retreat outside the combat area via go', () => {
+  it('closes and kills before returning over stairs/slabs, keeping the shield and resident ownership throughout go', async () => {
+    const f = outsideField(), s = new RushSpace(f.bot, f.args.area), lowered = f.bot.deactivateItem;
+    expect(s.stand(new Vec3(-5.5, 64, 0.5))).toBe(false);
+    expect(s.stand(new Vec3(-9.5, 64, 0.5))).toBe(false);
+    expect(s.inside(f.args.retreatTo)).toBe(false);
+    installShieldBlock(f.bot);
+    const release = f.bot.deactivateItem, look = vi.spyOn(f.bot, 'look'), keys = vi.spyOn(f.bot, 'setControlState');
+    f.mob.metadata[0] = 1; setTimeout(() => { f.mob.metadata[0] = 0; }, 400);
+    vi.mocked(go).mockImplementationOnce(async (ctx, a) => {
+      expect(ctx).toBe(f.ctx);
+      expect(a.seconds).toBeCloseTo((f.ctx.deadline - Date.now()) / 1000);
+      expect(f.states.at(-1)).toBe('盾の突撃 RETREAT');
+      expect(f.bot.shieldBlock).toMatchObject({ enabled: false, up: false });
+      expect(f.bot.usingHeldItem).toBe(true);
+      ctx.bot.deactivateItem(); // go's route changes call letGo; that must not lower the rush shield.
+      expect(f.bot.usingHeldItem).toBe(true);
+      const looks = look.mock.calls.length, writes = keys.mock.calls.length;
+      await new Promise(resolve => setTimeout(resolve, 600));
+      expect(look.mock.calls).toHaveLength(looks); expect(keys.mock.calls).toHaveLength(writes);
+      expect(f.bot.shieldBlock.enabled).toBe(false); expect(f.bot.usingHeldItem).toBe(true);
+      f.bot.health = 19; f.bot.emit('health');
+      ctx.bot.entity.position = new Vec3(a.goals[0].x, a.goals[0].y, a.goals[0].z);
+      return { ok: true, text: 'go 着いた' };
+    });
+    const r = await run(f);
+    expect(r.shieldRush).toMatchObject({ status: 'killed', targetDead: true, code: null, hits: 4, rodsDelta: 1, safe: true, hpMin: 19 });
+    expect(f.states.join(' ')).toMatch(/CLOSE.*STRIKE.*PICKUP.*RETREAT/u);
+    expect(go).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(go).mock.calls[0][1]).toMatchObject({ goals: [f.args.retreatTo], range: 0.8, canPlace: ['cobblestone', 'netherrack'], maxPlace: 6, maxDrop: 0 });
+    expect(lowered).not.toHaveBeenCalled(); expect(f.bot.deactivateItem).toBe(release);
+    expect(f.bot.shieldBlock).toMatchObject({ enabled: true, up: true }); f.close();
+  });
+  it('returns safely at retreatHp with the live target hidden by the shelter', async () => {
+    const f = outsideField(8); f.args.area.maxDrop = 2;
+    setTimeout(() => { f.bot.health = 14; f.bot.emit('health'); }, 400);
+    arriveOutside(f);
+    expect((await run(f)).shieldRush).toMatchObject({ status: 'retreated', targetDead: false, code: null, hits: 0, hpMin: 14, safe: true });
+    expect(go).toHaveBeenCalledTimes(1); expect(vi.mocked(go).mock.calls[0][1].maxDrop).toBe(2); f.close();
+  });
+  it('reports RETREAT_BLOCKED when go stops, restoring the shield writer and resident', async () => {
+    const f = outsideField(8); f.bot.health = 14; installShieldBlock(f.bot);
+    const release = f.bot.deactivateItem;
+    vi.mocked(go).mockResolvedValueOnce({ ok: false, reason: 'stuck', text: 'go 止まった stuck' });
+    expect((await run(f)).shieldRush).toMatchObject({ status: 'failed', code: 'RETREAT_BLOCKED', safe: false });
+    expect(go).toHaveBeenCalledTimes(1); expect(f.bot.deactivateItem).toBe(release);
+    expect(f.bot.shieldBlock).toMatchObject({ enabled: true, up: true }); f.close();
+  });
+  it('reserves straight distance × 1.8 s + 2 s using the act deadline and retreats with TIME_LIMIT', async () => {
+    const f = outsideField(); f.ctx.deadline = Date.now() + 32_650;
+    arriveOutside(f);
+    expect((await run(f)).shieldRush).toMatchObject({ status: 'retreated', code: 'TIME_LIMIT', hits: 0, safe: true });
+    expect(vi.mocked(go).mock.calls[0][1].seconds).toBeCloseTo(32.6); f.close();
+  });
+  it('also reserves the next closing step before moving farther from an outside retreat', async () => {
+    const f = outsideField(8); f.ctx.deadline = Date.now() + 35_100;
+    f.mob.metadata[0] = 1; setTimeout(() => { f.mob.metadata[0] = 0; }, 100);
+    arriveOutside(f);
+    expect((await run(f)).shieldRush).toMatchObject({ code: 'TIME_LIMIT', hits: 0, safe: true });
+    expect(f.states).not.toContain('盾の突撃 CLOSE'); expect(go).toHaveBeenCalledTimes(1); f.close();
+  });
+  it('still refuses a partial floor for CLOSE and uses go only for the resulting retreat', async () => {
+    const f = outsideField(8), read = f.bot.blockAt;
+    f.bot.blockAt = (p: Vec3) => {
+      const b = read(p);
+      return Math.floor(p.x) === 1 && Math.floor(p.y) === 63 ? { ...b, name: 'stone_slab', shapes: [[0, 0, 0, 1, 0.5, 1]] } : b;
+    };
+    f.mob.metadata[0] = 1; setTimeout(() => { f.mob.metadata[0] = 0; }, 100);
+    arriveOutside(f);
+    expect((await run(f)).shieldRush).toMatchObject({ code: 'NO_ATTACK_WINDOW', hits: 0, safe: true });
+    expect(f.states).not.toContain('盾の突撃 CLOSE'); expect(go).toHaveBeenCalledTimes(1); f.close();
+  });
+  it.each(['shooter', 'projectile', 'burning', 'floor', 'head'])('rechecks %s after go reports arrival', async hazard => {
+    const f = outsideField(8); f.bot.health = 14;
+    vi.mocked(go).mockImplementationOnce(async (ctx, a) => {
+      const p = ctx.bot.entity.position = new Vec3(a.goals[0].x, a.goals[0].y, a.goals[0].z);
+      delete ctx.bot.entities[41];
+      if (hazard === 'shooter') ctx.bot.entities[42] = { ...f.mob, id: 42, position: p.offset(-3, 0, 0) };
+      if (hazard === 'projectile') ctx.bot.entities[90] = { id: 90, name: 'small_fireball', type: 'projectile', position: p.offset(2, 0.9, 0), velocity: new Vec3(-0.4, 0, 0) };
+      if (hazard === 'burning') ctx.bot.entity.metadata[0] = 1;
+      if (hazard === 'floor') f.blocks.set('-17,63,0', 'air');
+      if (hazard === 'head') f.blocks.set('-17,65,0', 'stone');
+      return { ok: true, text: 'go 着いた' };
+    });
+    expect((await run(f)).shieldRush).toMatchObject({ status: 'failed', code: 'RETREAT_BLOCKED', safe: false }); f.close();
+  });
+  it('permits a reflex release during go and restores the writer after a thrown stop', async () => {
+    const f = outsideField(8); f.bot.health = 14;
+    const release = f.bot.deactivateItem;
+    vi.mocked(go).mockImplementationOnce(async ctx => {
+      f.stop.abort('floor-flee'); ctx.bot.deactivateItem(); throw new StepStopped('floor-flee');
+    });
+    expect((await run(f)).shieldRush).toMatchObject({ status: 'cut', code: 'REFLEX', safe: false });
+    expect(release).toHaveBeenCalledTimes(1); expect(f.bot.deactivateItem).toBe(release); f.close();
+  });
+  it('keeps the in-area BFS rejection of a stair corridor, without calling go', async () => {
+    const f = outsideField(); f.args.retreatTo.x = -7.5;
+    expect((await run(f)).shieldRush).toMatchObject({ status: 'failed', code: 'RETREAT_BLOCKED', hits: 0, safe: false });
+    expect(go).not.toHaveBeenCalled(); f.close();
+  });
+  it('keeps the shield through go when act supplies an owned motor port', async () => {
+    const f = outsideField(); f.mob.health = 5; f.args.pickup = 'none'; installShieldBlock(f.bot);
+    vi.mocked(go).mockImplementationOnce(async (ctx, a) => {
+      expect(ctx.bot).not.toBe(f.bot);
+      expect(f.bot.shieldBlock.enabled).toBe(false);
+      ctx.bot.deactivateItem(); expect(f.bot.usingHeldItem).toBe(true);
+      ctx.bot.entity.position = new Vec3(a.goals[0].x, a.goals[0].y, a.goals[0].z);
+      return { ok: true, text: 'go 着いた' };
+    });
+    f.mob.metadata[0] = 1; setTimeout(() => { f.mob.metadata[0] = 0; }, 100);
+    const hands = ACT_HANDS.parse([{ do: 'attack', style: 'shield_rush', ...f.args }]);
+    const result = await settle(executeAction(f.bot, 'act', 60_000, () => runAct(createMotorPort(f.bot), hands), { waitForQuiescence: true }));
+    expect(JSON.parse(result.result as string).lines[0].shieldRush).toMatchObject({ status: 'killed', hits: 1, safe: true });
+    expect(go).toHaveBeenCalledTimes(1); f.close();
   });
 });
 

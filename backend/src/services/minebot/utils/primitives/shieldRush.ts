@@ -5,6 +5,7 @@ import { reflexHeld } from '../floorReflexes.js';
 import { deathLedgerOf } from '../deathLedger.js';
 import { cooldownMs } from './attack.js';
 import { guard, inventoryCount, StepStopped, type StepContext, type StepOutcome } from './common.js';
+import { go } from './go.js';
 import { middle, point, RushSpace, type RushArea } from './shieldRushSpace.js';
 import type { Cell } from '../localMap.js';
 
@@ -22,7 +23,7 @@ export interface ShieldRushResult {
 }
 export interface ShieldRushOutcome extends StepOutcome { shieldRush: ShieldRushResult }
 export const SHIELD_RUSH_DESCRIPTION = 'attack style=shield_rush: target は見た blaze 1体の #id。seconds(5〜60、帰還込み)・retreatHp(1〜19)・retreatTo({x,y,z})・area({center:{x,y,z},radius:1〜16,maxDrop:0〜3})・shieldReserve(0〜335)・onCrossfire(retreat/continue)・pickup(target_drops/none)を全て指定。'
-  + '盾を上げたまま安全な床で詰め、目から当たり箱3m以内かつ視線が通れば打つ。撃破後は指定の落とし物を拾い、指定先へ戻る。再出撃・建築・食事はしない。'
+  + '盾を上げたまま安全な床で詰め、目から当たり箱3m以内かつ視線が通れば打つ。撃破後は指定の落とし物を拾い、指定先へ戻る。再出撃・食事はしない。area外への退避はgoで歩き、cobblestone/netherrackを最大6個まで置ける。'
   + 'TARGET_LOST=死亡未確認で見失った、HEIGHT_UNREACHABLE=高くて届かない、NO_ATTACK_WINDOW=接近窓/安全な足場なし、CROSSFIRE=盾1方向で防げない、SHIELD_LOW=盾が残りの下限、RETREAT_BLOCKED=指定先へ帰れない/遮蔽なし、PICKUP_UNSAFE=安全に回収できない、TIME_LIMIT=帰還時間を含む期限、REFLEX=致死危険/床反射へ譲った、DEAD=死亡。'
   + '各行の shieldRush は status(killed/retreated/failed/cut)・targetDead(true/false/null)・code・hits・rodsDelta(荷の増分)・hpMin/hpEnd・shieldBefore/After(残り)・elapsedMs・at・safe・pendingDrops。retreatHpで帰れた時はretreated/code:null。safeは指定先の足場と遮蔽を確認できた時だけtrue。';
 
@@ -82,6 +83,7 @@ export async function shieldRush(ctx: StepContext, a: ShieldRushArgs): Promise<S
   if (problem) throw new Error(`invalid_input: ${problem}`);
   const until = Math.min(ctx.deadline, started + a.seconds * 1000), id = Number(a.target.slice(1));
   const space = new RushSpace(bot, a.area), ledger = deathLedgerOf(bot);
+  const outsideRetreat = !space.inside(a.retreatTo);
   const watch = new RushShooterWatch(bot, (id, entity) => ledger.seenDead(id, undefined, entity) !== null);
   const shieldLeft = () => {
     const s = bot.inventory?.slots?.[45];
@@ -123,7 +125,9 @@ export async function shieldRush(ctx: StepContext, a: ShieldRushArgs): Promise<S
     bot.setControlState('left', left > 0.08); bot.setControlState('right', left < -0.08);
     bot.setControlState('jump', to.y > p.y + 0.4 && bot.entity.onGround === true);
   };
-  const returnBudget = (path: Vec3[] | null) => path ? 1500 + path.slice(1).reduce((n, p, i) => n + p.distanceTo(path[i]) / 0.9 * 1000, 0) : Infinity;
+  const returnBudget = (path: Vec3[] | null, from: Cell = bot.entity.position) => outsideRetreat
+    ? point(from).distanceTo(point(a.retreatTo)) * 1800 + 2000
+    : path ? 1500 + path.slice(1).reduce((n, p, i) => n + p.distanceTo(path[i]) / 0.9 * 1000, 0) : Infinity;
   const fatal = () => {
     sample();
     if (hp() <= 0) { code = 'DEAD'; return true; }
@@ -134,8 +138,10 @@ export async function shieldRush(ctx: StepContext, a: ShieldRushArgs): Promise<S
   try {
     if (hp() <= 0) { code = 'DEAD'; return finish(); }
     if (reflexHeld(host)) { code = 'REFLEX'; cut = true; return finish(); }
-    returnPath = space.route(bot.entity.position, a.retreatTo);
-    if (!returnPath) { code = 'RETREAT_BLOCKED'; return finish(); }
+    if (!outsideRetreat) {
+      returnPath = space.route(bot.entity.position, a.retreatTo);
+      if (!returnPath) { code = 'RETREAT_BLOCKED'; return finish(); }
+    }
     if (!target?.position || target.name !== 'blaze') {
       const prior = ledger.seenDead(id, undefined, target);
       if (prior?.name === 'blaze') {
@@ -177,10 +183,10 @@ export async function shieldRush(ctx: StepContext, a: ShieldRushArgs): Promise<S
       if (danger) aimAt(danger); else if (target?.position && !retreat) aimAt({ position: target.position.offset(0, 0.9, 0) });
       if (bot.usingHeldItem === false && shieldLeft() > 0) { bot.activateItem(true); raisedAt = Date.now(); raisedTick = physicsTicks; }
       if (p.distanceTo(previous) > 0.08) { stalledAt = Date.now(); previous = p.clone(); }
-      if (Date.now() >= nextRouteAt || !routeFrom || p.distanceTo(routeFrom) > 0.75) {
+      if (!outsideRetreat && (Date.now() >= nextRouteAt || !routeFrom || p.distanceTo(routeFrom) > 0.75)) {
         returnPath = space.route(p, a.retreatTo); nextRouteAt = Date.now() + 250; routeFrom = p.clone();
       }
-      if (!retreat && !returnPath) beginRetreat('RETREAT_BLOCKED');
+      if (!retreat && !outsideRetreat && !returnPath) beginRetreat('RETREAT_BLOCKED');
       if (!retreat && hp() <= a.retreatHp) beginRetreat(null);
       if (!retreat && shieldLeft() <= a.shieldReserve) beginRetreat('SHIELD_LOW');
       const dirs = [...seeing.map(e => e.position), ...incoming.map(e => e.position)].map(v => v.minus(p));
@@ -190,6 +196,32 @@ export async function shieldRush(ctx: StepContext, a: ShieldRushArgs): Promise<S
       if (!retreat && until - Date.now() <= returnBudget(returnPath)) beginRetreat('TIME_LIMIT');
       if (retreat) {
         change('RETREAT');
+        if (outsideRetreat) {
+          // go's letGo releases the held item during route changes. Keep our shield while it alone owns the walk.
+          // A cut/reflex still releases normally; a later wrapper must not be overwritten on return.
+          const deactivate = host.deactivateItem;
+          let holding = true;
+          const release = (...args: unknown[]) => {
+            if (!holding || ctx.stop.aborted || actionSignal(bot)?.aborted || reflexHeld(host) || hp() <= 0) return deactivate?.apply(host, args);
+          };
+          host.deactivateItem = release;
+          let out: StepOutcome;
+          try {
+            out = await go(ctx, { goals: [a.retreatTo], range: 0.8, seconds: (until - Date.now()) / 1000,
+              canPlace: ['cobblestone', 'netherrack'], maxPlace: 6, maxDrop: a.area.maxDrop });
+          } finally {
+            holding = false;
+            if (host.deactivateItem === release) host.deactivateItem = deactivate;
+          }
+          if (fatal()) break;
+          if (ctx.stop.aborted || actionSignal(bot)?.aborted) throw new StepStopped(String(ctx.stop.reason ?? actionSignal(bot)?.reason));
+          if (!out.ok) { code = 'RETREAT_BLOCKED'; break; }
+          watch.update(Date.now());
+          safe = space.footing(bot.entity.position) && !watch.seeing().length && !watch.incoming().length && !bot.entity.isInLava
+            && (Number(bot.entity.metadata?.[0] ?? 0) & 1) === 0;
+          if (!safe) code = 'RETREAT_BLOCKED';
+          break;
+        }
         if (!returnPath || Date.now() - stalledAt > 2000) { code = 'RETREAT_BLOCKED'; break; }
         if (p.distanceTo(point(a.retreatTo)) <= 0.65) {
           safe = space.stand(p) && !seeing.length && !incoming.length && !bot.entity.isInLava
@@ -255,9 +287,9 @@ export async function shieldRush(ctx: StepContext, a: ShieldRushArgs): Promise<S
       const next = middle(p).offset(Math.abs(target.position.x - p.x) >= Math.abs(target.position.z - p.z) ? Math.sign(target.position.x - p.x) : 0,
         0, Math.abs(target.position.x - p.x) < Math.abs(target.position.z - p.z) ? Math.sign(target.position.z - p.z) : 0);
       if (Date.now() - raisedAt < 250 || physicsTicks - raisedTick < 5 || !watch.mayClose(p, Date.now()) || !watch.mayClose(next, Date.now()) || !space.edge(middle(p), next) || !space.braced(next, seeing)) { change('BLOCK'); continue; }
-      // Every advance also needs a checked route home and enough time left for it.
-      const home = space.route(next, a.retreatTo);
-      if (!home || until - Date.now() <= returnBudget(home) + 500) { beginRetreat(home ? 'TIME_LIMIT' : 'NO_ATTACK_WINDOW'); continue; }
+      // Inside the combat area check the route home; outside reserve a conservative straight-distance budget for go.
+      const home = outsideRetreat ? null : space.route(next, a.retreatTo);
+      if ((!outsideRetreat && !home) || until - Date.now() <= returnBudget(home, next) + 500) { beginRetreat(!outsideRetreat && !home ? 'NO_ATTACK_WINDOW' : 'TIME_LIMIT'); continue; }
       change('CLOSE'); move(next);
     }
   } catch (e) {

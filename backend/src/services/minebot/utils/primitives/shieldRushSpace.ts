@@ -18,7 +18,10 @@ export class RushSpace {
     try { return this.bot.blockAt(new Vec3(x, y, z), false); } catch { return null; }
   }
   stand(p: Cell): boolean {
-    if (!this.inside(p)) return false;
+    return this.inside(p) && this.footing(p);
+  }
+  /** The same floor/body check at an arrival outside the combat area; it grants no combat route there. */
+  footing(p: Cell): boolean {
     for (const x of new Set([Math.floor(p.x - 0.31), Math.floor(p.x + 0.31)])) {
       for (const z of new Set([Math.floor(p.z - 0.31), Math.floor(p.z + 0.31)])) {
         const floor = this.read(x, Math.floor(p.y) - 1, z);
