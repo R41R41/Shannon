@@ -182,6 +182,8 @@ export interface FloorState {
   clock?: () => number;
   /** The kind of the last stand that failed: the next one tries another way. */
   lastStandFailed?: LastStand['kind'];
+  /** When the floor's own digs down (the cover's and the last stand's) were begun, for ESCAPE_DIGS_MAX in ESCAPE_DIG_WINDOW_MS. */
+  escapeDigs?: number[];
   /** When the retreat from a lit creeper found no way away: the creeper's last stand is wanted until CORNERED_WAIT_MS after. */
   creeperCornered?: number;
   /** Cooldowns, the allowance and the stuck latch of the arrow step-aside, the meal and the armour change (`floorBudget.ts`); absent when denied. */
@@ -1094,6 +1096,12 @@ const LAST_STAND_RANGE = 3.2;
 const LAST_STAND_HITS = 2;
 const LAST_STAND_HIT_GAP_MS = 600;
 const LAST_STAND_GAP_MS = 1500;
+/**
+ * S2 (2026-11-02, the c1 fortress): at low health the cover (three digs an episode) and the last stand (one a second and a half, no end) dug a shaft six deep under a bridge in ten seconds, and the
+ * body fell out of it to its death. The floor's own digs down are at most this many in this long, the two kinds together.
+ */
+const ESCAPE_DIGS_MAX = 3, ESCAPE_DIG_WINDOW_MS = 30_000;
+export const recentEscapeDigs = (state: { escapeDigs?: number[] }, at: number): number => (state.escapeDigs = (state.escapeDigs ?? []).filter(when => at - when <= ESCAPE_DIG_WINDOW_MS)).length;
 /** r10: `reflexHeld` holds this long past the gap (the next hand comes on the first tick after it). */
 const LAST_STAND_HOLD_MARGIN_MS = 150;
 /** A creeper's fuse is a second and a half: a cornered body that cannot make its stand by then has no stand to make. */
@@ -1952,11 +1960,12 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
     let stand: LastStand | null = null;
     try {
       stand = !hasActiveSafetyLease(bot) && !escapeRunning(bot) && (bot.health ?? 20) > 0 && now() - (state.lastStandAt ?? -Infinity) >= LAST_STAND_GAP_MS
-        ? lastStandChoice(bot, state.lastStandFailed, cause) : null;
+        ? lastStandChoice(bot, recentEscapeDigs(state, now()) >= ESCAPE_DIGS_MAX ? 'dig' : state.lastStandFailed, cause) : null;
     } catch { stand = null; }
     if (!stand) return false;
     const chosen = stand;
     state.lastStandAt = now(); state.busy = 'flee';
+    if (chosen.kind === 'dig') (state.escapeDigs ??= []).push(now());
     if (chosen.kind === 'hit' && typeof chosen.target?.id === 'number') state.handTarget = { capability: 'floor-last-stand', target: chosen.target.id, at: now() };
     log.warn(`🧱 ${cause === 'creeper' ? '点火したクリーパーから' : '低体力で'}逃げ道なし、最後の手: ${chosen.kind}`);
     void takeNoted(cause === 'creeper' ? 'retreat' : 'flee', chosen.detail, 'floor-last-stand', cause === 'creeper' ? FLOOR_RETREAT_PRIORITY : FLOOR_FLEE_PRIORITY,
@@ -2002,7 +2011,7 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
     } catch { return false; }
     if (!seeing.length) return false;
     let choice: ReturnType<typeof coverChoice>;
-    try { choice = coverChoice(bot, shooters, episode?.digs ?? 0, shot ? { line: true, lines: episode?.lines ?? 0 } : {}); } catch { return false; }
+    try { choice = coverChoice(bot, shooters, Math.max(episode?.digs ?? 0, recentEscapeDigs(state, t)), shot ? { line: true, lines: episode?.lines ?? 0 } : {}); } catch { return false; }
     const lead = burning ? '燃えて射手から見えている:' : shot ? `${shooterWords(body.position, seeing)} に${SHOT_WINDOW_MS / 1000}秒で${shot.hits}回撃たれた:` : '体力が減り続け射手から見えている:';
     if (!choice.cover) {
       if (t - (state.coverNotedAt ?? -Infinity) >= COVER_NOTE_GAP_MS) {
@@ -2014,7 +2023,7 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
     const cover = choice.cover;
     const shotShooters: CoverShooter[] = shot ? shot.shooters : [];
     const run = state.cover = episode ?? { since: t, digs: 0, lastEnd: t };
-    if (cover.kind === 'dig') run.digs++;
+    if (cover.kind === 'dig') { run.digs++; (state.escapeDigs ??= []).push(t); }
     if (cover.kind === 'line') run.lines = (run.lines ?? 0) + 1;
     state.busy = 'flee';
     log.warn(`🔥 ${lead} ${cover.kind}（${shooterWords(body.position, seeing)}）`);

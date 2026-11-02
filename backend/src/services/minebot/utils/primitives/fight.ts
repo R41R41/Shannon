@@ -253,7 +253,9 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
   };
   /** What the end adds to the counts: where the creature stood when the time ran out. */
   let ending = '', siteNote = '';
-  const counts = () => `与えた打撃 ${landed}（振り ${blows}）・受けた体力 ${r1(lost)}・食べた ${meals}${wear()}${gate.count ? `・見送り ${gate.count}` : ''}${endermanCamp ? `・${endermanCamp.describe(endermanAngry(bot.registry, bot.entities?.[target.id]))}` : ''}${siteNote ? `・${siteNote}` : ''}${ending}`;
+  /** How long the hand stood and waited for the shield reflex that was meeting a shot (no blow goes out meanwhile): told when it is a second or more. */
+  let shotWaitMs = 0;
+  const counts = () => `与えた打撃 ${landed}（振り ${blows}）・受けた体力 ${r1(lost)}・食べた ${meals}${wear()}${gate.count ? `・見送り ${gate.count}` : ''}${shotWaitMs >= 1000 ? `・盾の間 ${r1(shotWaitMs / 1000)}秒` : ''}${endermanCamp ? `・${endermanCamp.describe(endermanAngry(bot.registry, bot.entities?.[target.id]))}` : ''}${siteNote ? `・${siteNote}` : ''}${ending}`;
   /** Continue contracts (1): the blows that landed (the target was hurt within the swing's time), of the blows swung. */
   const struck = (): Progress => ({ unit: 'blow', done: landed, left: null });
   const holder = (reflex?: string | null) => reflex ? `体: 反射 ${reflex}` : '体: fight（反射なし）';
@@ -524,7 +526,7 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
         if (await runAway(8, 2500) === 'reflex') return fail('reflex', '点火したクリーパーから離れる途中で反射が体を握った');
         continue;
       }
-      if (meetingShot()) { releaseKeys(); await wait(ctx, TICK_MS); continue; }
+      if (meetingShot()) { releaseKeys(); shotWaitMs += TICK_MS; await wait(ctx, TICK_MS); continue; }
       if (endermanCamp) {
         const step = await endermanCamp.advance(live, now, box, endermanAngry(bot.registry, live));
         if (step.kind === 'stop') { unfollow(); releaseKeys(); return { ...fail(step.outcome.reason ?? 'failed', step.outcome.text, step.outcome.at), ...(step.outcome.code ? { code: step.outcome.code } : {}) }; }

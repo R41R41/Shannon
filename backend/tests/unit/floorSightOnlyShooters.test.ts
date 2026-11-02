@@ -39,3 +39,17 @@ describe('a blaze or a ghast that cannot see the body is no threat the floor run
     expect(reachingThreats(body({ 9: mob(9, 'blaze', new Vec3(12.5, 66, 0.5)) })).map(entry => entry.exposure)).toEqual(['seen']);
   });
 });
+
+// S2 (2026-11-02, the c1 fortress): the floor's own digs down are capped (the cover's and the last stand's together): a shaft six deep under a bridge in ten seconds ended in a fall.
+describe('the floor\'s digs down are at most three in thirty seconds', () => {
+  it('counts the ones in the window, forgets the older ones', async () => {
+    const { recentEscapeDigs } = await import('../../src/services/minebot/utils/floorReflexes.js');
+    const state: { escapeDigs?: number[] } = {};
+    expect(recentEscapeDigs(state, 1_000)).toBe(0);
+    state.escapeDigs = [1_000, 4_000, 9_000];
+    expect(recentEscapeDigs(state, 10_000)).toBe(3);
+    expect(recentEscapeDigs(state, 33_000)).toBe(2);        // the first is older than 30 s
+    expect(state.escapeDigs).toEqual([4_000, 9_000]);
+    expect(recentEscapeDigs(state, 60_000)).toBe(0);
+  });
+});

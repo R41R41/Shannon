@@ -331,8 +331,9 @@ async function blazeSortie(note: (text: string) => void, options: { fightSeconds
   const readCamp = async (): Promise<any> => { const found = await runSkill('probe', { kind: 'camp' }, 20); try { return JSON.parse(String(found.receipt?.result ?? '')); } catch { return null; } };
   const canPlace = ['cobblestone', 'netherrack'];
   let failStreak = 0, lastCell: { x: number; y: number; z: number } | undefined, lastSpot: { x: number; y: number; z: number } | undefined;
+  const deaths0 = deaths;
   try {
-    while (Date.now() - start < seconds * 1000 && !disconnected && hp() > 0) {
+    while (Date.now() - start < seconds * 1000 && !disconnected && hp() > 0 && deaths === deaths0) {
       const camp = await readCamp();
       // (what the probe said last is kept when it says nothing: a head that has read the camp once does not lose it to a fire)
       const hideouts = ((camp?.hideouts ?? []) as Array<{ x: number; y: number; z: number; steps: number; away: number }>).slice();
@@ -402,8 +403,9 @@ async function blazeLoop(note: (text: string) => void, options: { fightSeconds?:
   const readCamp = async (): Promise<any> => { const found = await runSkill('probe', { kind: 'camp' }, 20); try { return JSON.parse(String(found.receipt?.result ?? '')); } catch { return null; } };
   const canPlace = ['cobblestone', 'netherrack'];
   let lastCell: { x: number; y: number; z: number } | undefined, lastSpot: { x: number; y: number; z: number } | undefined, failStreak = 0;
+  const deaths0 = deaths;
   try {
-    while (Date.now() - start < seconds * 1000 && !disconnected && hp() > 0) {
+    while (Date.now() - start < seconds * 1000 && !disconnected && hp() > 0 && deaths === deaths0) {
       const camp = await readCamp();
       const cell = (camp?.cells?.[0] ?? lastCell) as { x: number; y: number; z: number } | undefined, spot = (camp?.hideouts?.[0] ?? lastSpot) as { x: number; y: number; z: number } | undefined;
       if (!cell || !spot) { note('no camp cell or hideout and none known'); break; }
