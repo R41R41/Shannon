@@ -1,9 +1,14 @@
 import { EventEmitter } from 'node:events';
 import { Vec3 } from 'vec3';
 import { describe, expect, it, vi } from 'vitest';
+
+// The pillar hand is the last stand's (a jump and a block under the feet, timed to the tick); the dragon reflex only chooses it, so the test sees what it was asked.
+vi.mock('../../src/services/minebot/utils/primitives/pillarUp.js', () => ({ pillarUp: vi.fn(async (_ctx: unknown, args: { n: number; block: string }) => ({ ok: true, text: `${args.n}段上がった（${args.block}）` })) }));
+
 import { boxDistance, DRAGON_PHASE, isPerched, partBox, partDamage, partOffset, partTarget, flameCloudCentre } from '../../src/services/minebot/utils/dragonParts.js';
 import { breathCloudsOf, crystalCaged, crystalsOf, crystalTellingReach, dragonView, endObservation, fireballPath, fountainOf, metaIndex, SPIKE_CENTRES, spikeStates } from '../../src/services/minebot/utils/dragonState.js';
 import { attack } from '../../src/services/minebot/utils/primitives/attack.js';
+import { pillarUp } from '../../src/services/minebot/utils/primitives/pillarUp.js';
 import { partToStrike, swingWaitMs } from '../../src/services/minebot/utils/primitives/dragonStrike.js';
 
 const KEYS = { ender_dragon: ['shared_flags', 'air_supply', 'custom_name', 'custom_name_visible', 'silent', 'no_gravity', 'pose', 'ticks_frozen', 'living_entity_flags', 'health',
@@ -41,6 +46,11 @@ function fixture(options: { phase?: number | null; health?: number; yaw?: number
   });
   return { bot, dragon, self, world };
 }
+/** A ball at 45 degrees down toward -z, `ahead` blocks beyond the body in z and 6 up: it lands `ahead - 6` blocks beyond the body. */
+const fireballAt = (f: ReturnType<typeof fixture>, id: number, ahead: number) => {
+  f.bot.toldVelocities = new Map([[id, new Vec3(0, -0.25, -0.25)]]);
+  f.bot.entities[id] = { id, name: 'dragon_fireball', position: new Vec3(0.5, 70, 0.5 + ahead), metadata: [] };
+};
 const ctxOf = (bot: any) => ({ bot, stop: new AbortController().signal, deadline: Date.now() + 60_000, facing: 'north' as const, base: { x: 0, y: 64, z: 7 } });
 
 describe('the dragon\'s parts', () => {
@@ -290,11 +300,6 @@ describe('the dragon\'s reach', () => {
     f.bot.entities[40].position = new Vec3(30.5, 72, 8.5);
     expect(dragonHazards(f.bot)).toEqual([]);
   });
-  /** A ball at 45 degrees down toward -z, `ahead` blocks beyond the body in z and 6 up: it lands `ahead - 6` blocks beyond the body. */
-  const fireballAt = (f: ReturnType<typeof fixture>, id: number, ahead: number) => {
-    f.bot.toldVelocities = new Map([[id, new Vec3(0, -0.25, -0.25)]]);
-    f.bot.entities[id] = { id, name: 'dragon_fireball', position: new Vec3(0.5, 70, 0.5 + ahead), metadata: [] };
-  };
   it('runs from where a fireball lands when that is well off the body, and across its line when it falls on the body', () => {
     // lands 6 blocks off: the push comes from the landing
     const off = fixture({ phase: DRAGON_PHASE.holdingPattern, at: new Vec3(0.5, 64, 0.5) });
@@ -315,7 +320,7 @@ describe('the dragon\'s reach', () => {
     expect(dragonHazards(f.bot, { now: 1000 }).map(h => h.kind)).toEqual(['fireball']);
     delete f.bot.entities[40]; // landed
     const gap = dragonHazards(f.bot, { now: 1250 });
-    expect(gap.map(h => h.kind)).toEqual(['breath']); expect(gap[0].why).toContain('落ちた');
+    expect(gap.map(h => h.kind)).toEqual(['breath']); expect(gap[0].why).toContain('落ちた'); expect(gap[0].pending).toBe(true);
     expect(dragonHazards(f.bot, { now: 3000 })).toEqual([]);
     // the cloud comes into sight at the landing: only the cloud counts
     fireballAt(f, 42, 6);
@@ -323,7 +328,7 @@ describe('the dragon\'s reach', () => {
     delete f.bot.entities[42];
     cloudAt(f, 20, new Vec3(0.5, 64, 0.5), 3);
     const later = dragonHazards(f.bot, { now: 5250 });
-    expect(later.map(h => h.kind)).toEqual(['breath']); expect(later[0].why).toContain('竜の息の雲');
+    expect(later.map(h => h.kind)).toEqual(['breath']); expect(later[0].why).toContain('竜の息の雲'); expect(later[0].pending).toBeUndefined();
   });
   it('runs out of a cloud without a jump, a sprint or a block, and stops once clear', async () => {
     const f = fixture({ phase: DRAGON_PHASE.holdingPattern, at: new Vec3(0.5, 64, 0.5) });
@@ -465,6 +470,77 @@ describe('the floor reflex out of the dragon\'s reach', () => {
     const entries = f.bot.reflexLedger.entriesSince(0);
     expect(entries.some((entry: any) => entry.kind === 'cover_none' && /離れる安全な道が無い/u.test(entry.detail))).toBe(true);
     expect(entries.some((entry: any) => entry.kind === 'retreat')).toBe(false);
+  });
+  const platformWorld = (): World => { const world: World = new Map(); for (let x = -1; x <= 1; x++) for (let z = 11; z <= 13; z++) world.set(key(x, 63, z), 'end_stone'); return world; };
+  const OBSIDIAN = { name: 'obsidian', type: 2, count: 3 }, COBBLE = { name: 'cobblestone', type: 1, count: 20 };
+  it('rises one block above a cloud, on obsidian first, when no way out can be walked and a block is carried (the arrival platform of the End)', async () => {
+    vi.mocked(pillarUp).mockClear();
+    const { f, keys } = armed(platformWorld());
+    f.bot.inventory = { items: () => [COBBLE, OBSIDIAN], slots: [] };
+    f.bot.emit('physicsTick');
+    await new Promise(resolve => setTimeout(resolve, 300));
+    expect(pillarUp).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(pillarUp).mock.calls[0][1]).toEqual({ n: 1, block: 'obsidian' });
+    expect(keys.some(([k, v]) => k === 'forward' && v)).toBe(false);
+    const entries = f.bot.reflexLedger.entriesSince(0);
+    expect(entries.some((entry: any) => entry.kind === 'retreat' && entry.outcome === 'done' && /obsidian を足元に積んだ/u.test(entry.detail))).toBe(true);
+    // not again at once: the next look is a while off
+    f.bot.emit('physicsTick'); await new Promise(resolve => setTimeout(resolve, 100));
+    expect(pillarUp).toHaveBeenCalledTimes(1);
+  });
+  it('does not rise for a fireball in the air (its cloud is put on the body at its height), looks again at the next tick, and rises once the ball has landed and its cloud is not yet in sight', async () => {
+    vi.mocked(pillarUp).mockClear();
+    const { f } = armed(platformWorld());
+    delete f.bot.entities[20];
+    fireballAt(f, 41, 18); // the body stands 12 blocks out on z: the ball lands on it
+    f.bot.inventory = { items: () => [OBSIDIAN], slots: [] };
+    f.bot.emit('physicsTick'); await new Promise(resolve => setTimeout(resolve, 200));
+    expect(pillarUp).not.toHaveBeenCalled();
+    expect(f.bot.reflexLedger.entriesSince(0).some((entry: any) => entry.kind === 'cover_none')).toBe(true);
+    delete f.bot.entities[41]; // landed, its cloud not yet in sight: the next look is not the 1.5 s of a blocked one
+    f.bot.emit('physicsTick'); await new Promise(resolve => setTimeout(resolve, 200));
+    expect(pillarUp).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(pillarUp).mock.calls[0][1]).toEqual({ n: 1, block: 'obsidian' });
+  });
+  it('says what to try when a cloud lies and there is no block to put under the feet', async () => {
+    vi.mocked(pillarUp).mockClear();
+    const { f } = armed(platformWorld());
+    f.bot.inventory = { items: () => [], slots: [] };
+    f.bot.emit('physicsTick'); await new Promise(resolve => setTimeout(resolve, 200));
+    expect(pillarUp).not.toHaveBeenCalled();
+    expect(f.bot.reflexLedger.entriesSince(0).some((entry: any) => entry.kind === 'cover_none' && /積めるブロックが無い。次: 黒曜石か丸石/u.test(entry.detail))).toBe(true);
+  });
+  it('rises again for the cloud laid at the new height, after a moment, and no more than three times in twenty seconds', async () => {
+    vi.mocked(pillarUp).mockClear();
+    const { f } = armed(platformWorld());
+    f.bot.inventory = { items: () => [OBSIDIAN], slots: [] };
+    f.bot.emit('physicsTick'); await new Promise(resolve => setTimeout(resolve, 200));
+    expect(pillarUp).toHaveBeenCalledTimes(1);
+    f.bot.floorReflexes.dragonNextAt = 0;
+    f.bot.emit('physicsTick'); await new Promise(resolve => setTimeout(resolve, 100));
+    expect(pillarUp).toHaveBeenCalledTimes(1); // the cloud still lies under the body, but not again at once
+    await new Promise(resolve => setTimeout(resolve, 1200));
+    f.bot.floorReflexes.dragonNextAt = 0;
+    f.bot.emit('physicsTick'); await new Promise(resolve => setTimeout(resolve, 200));
+    expect(pillarUp).toHaveBeenCalledTimes(2);
+    const at = Date.now();
+    f.bot.floorReflexes.dragonRises = [at - 15_000, at - 9_000, at - 3_000];
+    f.bot.floorReflexes.dragonNextAt = 0;
+    f.bot.emit('physicsTick'); await new Promise(resolve => setTimeout(resolve, 200));
+    expect(pillarUp).toHaveBeenCalledTimes(2); // three within the twenty seconds: enough
+  });
+  it('does not rise where the head or neck of the dragon is what reaches the body (a block under the feet takes it into the head box)', async () => {
+    vi.mocked(pillarUp).mockClear();
+    const world = platformWorld(); for (let x = -1; x <= 1; x++) for (let z = 6; z <= 8; z++) world.set(key(x, 63, z), 'end_stone');
+    const f = fixture({ phase: DRAGON_PHASE.sittingScanning, at: new Vec3(0.5, 65, 7.0), world });
+    cloudAt(f, new Vec3(0.5, 64, 7.0));
+    expect(dragonHazards(f.bot).map(h => h.kind)).toContain('head');
+    f.bot.look = vi.fn(); f.bot.setControlState = vi.fn(); f.bot.equip = vi.fn(async () => undefined); f.bot.consume = vi.fn(async () => undefined);
+    f.bot.inventory = { items: () => [OBSIDIAN], slots: [] };
+    installFloorReflexes(f.bot, floorConfig({ MINEBOT_FCA_REFLEXES: 'default' }), { fleeTickMs: 1 });
+    f.bot.emit('physicsTick');
+    await new Promise(resolve => setTimeout(resolve, 200));
+    expect(pillarUp).not.toHaveBeenCalled();
   });
   it('does nothing outside the End, and nothing for a body that is clear', async () => {
     const { f, keys } = armed();

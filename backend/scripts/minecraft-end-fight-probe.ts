@@ -854,6 +854,164 @@ scenes.observe = async () => {
   return { captures };
 };
 
+scenes.platform = async () => {
+  // The End's arrival: the body on the obsidian platform in the void (5 x 5 round (100, 48, 0)), a dragon fireball down on it. Every heading is the void, so no way out can be walked; with a block carried the
+  // dragon reflex puts it under the feet (obsidian first): a cloud is a slab on the ground, and a body one block up is clear of it. Then the same with nothing to put under the feet, for the cost, and with a second
+  // ball a while after the first (the cloud laid at the new height).
+  await protect(false);
+  releaseReflex();
+  await park(true);
+  // The platform's chunks stay loaded whoever stands where: a body that died is back in the overworld, and a cloud left in an unloaded End chunk is not found by `kill` (w4: the next trial was met by it on arrival).
+  await ask(`${END} forceload add 64 -16 111 16`);
+  const clear = async () => { await ask(`${END} kill @e[type=minecraft:area_effect_cloud]`); await ask(`${END} kill @e[type=minecraft:dragon_fireball]`); };
+  const trial = async (label: string, items: string[], balls = 1, bridgeAt: number | null = null) => {
+    await clear();
+    // the platform as the game makes it (5 x 5 of obsidian at y 48), nothing on it; the body put on it and waited for until it stands, whole. On the bridge: a line of cobblestone one wide, 28 long, from the platform out over the void (a way out that can be walked: the body walks it, w8: 9 blocks, no harm); in the other trials there is none.
+    await ask(`${END} fill 98 48 -2 102 48 2 obsidian`); await ask(`${END} fill 98 49 -2 102 53 2 air`);
+    await ask(`${END} fill 70 48 0 97 48 0 ${bridgeAt === null ? 'air' : 'cobblestone'}`); await ask(`${END} fill 70 49 -1 97 53 1 air`);
+    const standX = bridgeAt ?? 100.5;
+    await gear(items); await wear();
+    await ask(`effect give ${ACTOR} minecraft:instant_health 1 5`);
+    for (let attempt = 0; attempt < 6; attempt++) {
+      await ask(`${END} tp ${ACTOR} ${standX} 49 0.5`); await sleep(1200);
+      if (actor.entity.onGround && Math.abs(actor.entity.position.y - 49) < 0.2 && Math.hypot(actor.entity.position.x - standX, actor.entity.position.z - 0.5) < 0.6 && Number(actor.health) >= 19.9) break;
+    }
+    await clear(); await sleep(300);
+    const healthBefore = Number(actor.health), deathsBefore = actorDeaths, ledgerMark = (actor.reflexLedger?.mark?.() as number | undefined) ?? 0, lowest = trackMinHealth();
+    const y0 = actor.entity.position.y;
+    let maxY = y0, riseAfterMs: number | null = null, firstHarmAfterMs: number | null = null;
+    const startedAt = Date.now();
+    const onHealth = () => { if (firstHarmAfterMs === null && Number(actor.health) < healthBefore - 0.5) firstHarmAfterMs = Date.now() - startedAt; };
+    actor.on('health', onHealth);
+    const poll = every(50, () => {
+      maxY = Math.max(maxY, actor.entity.position.y);
+      if (riseAfterMs === null && actor.entity.position.y - y0 >= 0.9) riseAfterMs = Date.now() - startedAt;
+    });
+    for (let n = 0; n < balls; n++) {
+      await ask(`${END} summon minecraft:dragon_fireball ${standX} 55 0.5 {Motion:[0.0d,-1.0d,0.0d],acceleration_power:0.1d}`);
+      if (n + 1 < balls) await sleep(3000);
+    }
+    await sleep(label.includes('nothing') ? 2800 : 5000);
+    clearInterval(poll); actor.removeListener('health', onHealth);
+    const entries = (actor.reflexLedger?.entriesSince?.(ledgerMark) as Array<{ kind: string; outcome: string; detail: string }> | undefined) ?? [];
+    const at = actor.entity.position;
+    const result = {
+      label, items, balls, healthLost: round(healthBefore - Number(actor.health), 1), healthLostAtWorst: round(healthBefore - lowest.stop(), 1), died: actorDeaths > deathsBefore,
+      feetY: [round(y0, 2), round(at.y, 2)], highestFeetY: round(maxY, 2), roseAfterMs: riseAfterMs, firstHarmAfterMs, blockUnder: actor.blockAt(new Vec3(Math.floor(at.x), Math.floor(at.y) - 1, Math.floor(at.z)))?.name ?? null,
+      ledger: entries.map(e => `${e.kind}:${e.outcome}:${e.detail.slice(0, 110)}`),
+    };
+    log(`PLATFORM ${label}: ${JSON.stringify(result)}`);
+    return result;
+  };
+  try {
+    const runs = [
+      await trial('with obsidian and cobblestone carried', ['diamond_sword', 'cobblestone 16', 'obsidian 4']),
+      await trial('with cobblestone only', ['diamond_sword', 'cobblestone 16']),
+      await trial('with two balls, three seconds apart', ['diamond_sword', 'cobblestone 16', 'obsidian 4'], 2),
+      await trial('with nothing to put under the feet', ['diamond_sword']),
+      await trial('on a bridge one wide, 12 blocks out', ['diamond_sword', 'cobblestone 16'], 1, 88.5),
+      await trial('on a bridge one wide, two balls 3 s apart', ['diamond_sword', 'cobblestone 16'], 2, 88.5),
+    ];
+    return { runs };
+  } finally {
+    await clear(); await ask(`${END} forceload remove 64 -16 111 16`);
+  }
+};
+
+scenes.cross = async () => {
+  // The way off the arrival platform: the island lies some tens of blocks off over the void, and the body stands on 5 x 5 of obsidian. A planner's `go` with blocks to lay over the gap and a place on the island for its end,
+  // as many times as it takes (the hand may take 120 s). The dragon is kept over the island, high up (nothing here is a fight); what is measured is whether the body gets over, how long it takes and what it costs in blocks.
+  await protect(false);
+  releaseReflex();
+  await park(true);
+  await ask(`${END} forceload add 64 -16 111 16`);
+  try {
+    await ask(`${END} kill @e[type=minecraft:area_effect_cloud]`); await ask(`${END} kill @e[type=minecraft:dragon_fireball]`);
+    await ask(`${END} fill 98 48 -2 102 48 2 obsidian`); await ask(`${END} fill 98 49 -2 102 53 2 air`);
+    await gear(['diamond_sword', 'cobblestone 64', 'cobblestone 64', 'cobblestone 64']); await wear();
+    await ask(`effect give ${ACTOR} minecraft:instant_health 1 5`);
+    for (let attempt = 0; attempt < 6; attempt++) {
+      await ask(`${END} tp ${ACTOR} 100.5 49 0.5`); await sleep(1200);
+      if (actor.entity.onGround && Math.abs(actor.entity.position.y - 49) < 0.2 && Number(actor.health) >= 19.9) break;
+    }
+    // the island's nearest column along z = 0 from the east, and a place three columns in from its rim
+    const topAt = (x: number, z: number): number | null => {
+      for (let y = 110; y >= 20; y--) { const block = actor.blockAt(new Vec3(x, y, z), false); if (block && block.name === 'end_stone') return y; }
+      return null;
+    };
+    // the island's top surface (y 55 and over: the ragged ends of end stone that hang below the rim are not a place to go to)
+    const profile: Array<[number, number | null]> = [];
+    for (let x = 100; x >= 0; x -= 4) profile.push([x, topAt(x, 0)]);
+    log(`CROSS profile along z=0 (x, top y): ${JSON.stringify(profile)}`);
+    let rimX: number | null = null;
+    for (let x = 96; x >= 0 && rimX === null; x--) { const top = topAt(x, 0); if (top !== null && top >= 55) rimX = x; }
+    if (rimX === null) return { error: 'no island surface seen along z = 0 (chunks not in the client?)', profile };
+    const targetX = rimX - 3, targetTop = topAt(targetX, 0) ?? topAt(rimX, 0)!;
+    const target = { x: targetX, y: targetTop + 1, z: 0 };
+    log(`CROSS island rim at x=${rimX} (top y=${topAt(rimX, 0)}), target ${JSON.stringify(target)}, platform to rim ${100 - rimX} blocks`);
+    const blocksLeft = () => (actor.inventory.items() as Array<{ name: string; count: number }>).filter(item => item.name === 'cobblestone').reduce((sum, item) => sum + item.count, 0);
+    const before = blocksLeft(), deathsBefore = actorDeaths, lowest = trackMinHealth(), trail: Array<[number, number, number, number]> = [];
+    const startedAt = Date.now();
+    const sample = every(2000, () => { const p = actor.entity?.position; if (p) trail.push([Math.round((Date.now() - startedAt) / 1000), round(p.x, 1)!, round(p.y, 1)!, Number(actor.health)]); });
+    const calls: Array<{ lines: string[]; ok: boolean; ms: number }> = [];
+    let reached = false;
+    for (let call = 0; call < 4 && !reached && actorDeaths === deathsBefore; call++) {
+      const run = await act([{ do: 'go', to: target, canPlace: ['cobblestone'], maxPlace: 100, seconds: 120 }], 135);
+      calls.push({ lines: run.lines.map(line => line.slice(0, 400)), ok: run.ok, ms: run.ms });
+      log(`CROSS go #${call + 1}: ${run.ok} after ${Math.round(run.ms / 1000)} s: ${run.lines.join(' | ').slice(0, 700)}`);
+      const p = actor.entity.position;
+      reached = Math.hypot(p.x - (targetX + 0.5), p.z - 0.5) <= 2 && Math.abs(p.y - (targetTop + 1)) <= 2;
+    }
+    clearInterval(sample);
+    const at = actor.entity.position;
+    return {
+      rimX, profile, target, reached, died: actorDeaths > deathsBefore, finalAt: [round(at.x, 1), round(at.y, 1), round(at.z, 1)], healthNow: Number(actor.health), lowestHealth: lowest.stop(),
+      blocksBefore: before, blocksAfter: blocksLeft(), seconds: Math.round((Date.now() - startedAt) / 1000), calls, trail,
+    };
+  } finally {
+    await ask(`${END} forceload remove 64 -16 111 16`);
+  }
+};
+
+scenes.knockback = async () => {
+  // Does sneaking keep a body on the arrival platform when it is pushed? A cloud's harm pushes the body away from the cloud (the damage has a direct entity); here a zombie kept in the platform's
+  // middle (no AI, invulnerable) is named as the attacker of a harmless `damage`, so the push is the same and nothing else acts. The body stands 1.5 blocks from the edge; pushes 0.7 s apart.
+  await protect(false);
+  releaseReflex();
+  await park(true);
+  await ask(`${END} forceload add 64 -16 111 16`); await ask(`${END} kill @e[type=minecraft:area_effect_cloud]`); await ask(`${END} kill @e[type=minecraft:dragon_fireball]`);
+  const trial = async (sneak: boolean) => {
+    await ask(`${END} kill @e[type=minecraft:zombie]`);
+    await ask(`${END} fill 98 48 -2 102 48 2 obsidian`); await ask(`${END} fill 98 49 -2 102 53 2 air`);
+    await ask(`${END} summon minecraft:zombie 100.5 49 -1.5 {NoAI:1b,Silent:1b,Invulnerable:1b,PersistenceRequired:1b}`);
+    await gear(['diamond_sword']); await wear();
+    await ask(`effect give ${ACTOR} minecraft:instant_health 1 5`);
+    for (let attempt = 0; attempt < 5; attempt++) {
+      await ask(`${END} tp ${ACTOR} 100.5 49 1.5`); await sleep(1000);
+      if (actor.entity.onGround && Math.abs(actor.entity.position.y - 49) < 0.2) break;
+    }
+    if (sneak) actor.setControlState('sneak', true);
+    const zs: number[] = []; let pushes = 0, fellAtPush: number | null = null;
+    for (; pushes < 8 && fellAtPush === null; pushes++) {
+      await ask(`${END} damage ${ACTOR} 0.01 minecraft:mob_attack by @e[type=minecraft:zombie,limit=1]`);
+      await sleep(700);
+      zs.push(round(actor.entity.position.z, 2)!);
+      if (actor.entity.position.y < 48) fellAtPush = pushes + 1;
+    }
+    actor.setControlState('sneak', false);
+    await ask(`${END} kill @e[type=minecraft:zombie]`);
+    const result = { sneak, pushes: pushes, fellAtPush, zAfterEachPush: zs, deaths: actorDeaths };
+    log(`KNOCKBACK ${JSON.stringify(result)}`);
+    return result;
+  };
+  try {
+    const runs = [await trial(false), await trial(true), await trial(false), await trial(true)];
+    return { runs };
+  } finally {
+    await ask(`${END} kill @e[type=minecraft:zombie]`); await ask(`${END} forceload remove 64 -16 111 16`);
+  }
+};
+
 scenes.death = async () => {
   await protect(true);
   await flatten(); await gear(['diamond_sword']); await wear(); await hold('diamond_sword');
