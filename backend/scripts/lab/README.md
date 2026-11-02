@@ -270,3 +270,14 @@ bash lab-slot.sh --label s4 -- bash s4-section-probe.sh ~/s4-pins/body-<sha> <la
 bash lab-slot.sh --wait 3600 --label s4 -- bash s4-section-probe.sh ~/s4-pins/body-<sha> <label> c1 s4_gate_exit HUNT_SECONDS=600 HUNT_PORT=25581 HUNT_GATE_AT=160,75,28
 ```
 `HUNT_GATE_WALK=off` でゲートの出口の測りだけにする。
+
+### T5 の照合
+`s4-t5-scenes.part.ts` はサーバー値→`body.observe().state.world`→サーバー値を記録する、API・LLM・鍵なしの5場面。
+`t5_life`：20→12 HP、自然回復・food・飽和、health変化の検出遅れ（ms・秒・20 TPS換算tickの範囲）。
+`t5_oxygen`：水中の自分のAir（300→0）とoxygen（Air/15、0〜20）、村人の有無、浮上後の補充。
+`t5_shield`：盾の装備・USE/RELEASE・正面からのdamage。UsingItem/active_itemとworldFrameの使用中状態は取得不可ならunknown。
+`t5_crystals`：エンドで召喚・1個除去・全除去の前後、同じ12m内の個数と位置（許容0.15m）。
+`t5_sight`：zombie/skeletonの壁→開放→壁、canSee/lineOfSight/shooter。サーバーの空気列比較による水平射線の**近似**。
+例：`bash lab-slot.sh --label t5 -- bash s4-section-probe.sh ~/s4-pins/body-<sha> t5 c1 t5_ HUNT_TIMEOUT=900`（`HUNT_SCENES=t5_life,t5_oxygen`相当の第4引数も可）。
+合計10〜15分以内の採取枠。notesの`T5 row`に両サーバー値・tick範囲・観測・差・古さ(ms)、`T5 totals`に誤り数。全行は`report.json`にも保存。
+古さは関連packetの最終受信からの時間（不明はnull）；frameAgeMsは組立時刻のみ。採取中の変化・取得不可・fixture失敗を安定値の不一致と分け、本文への変換は行わない。
