@@ -16,6 +16,7 @@
 - [Minecraft execution efficiency](./minecraft-execution-efficiency.md)：イベント駆動回収、実行中進捗、取り消し／資源所有、Jev途中評価、精錬の外部ジョブ化と再計測。
 - [Minebot本番リリース](./minecraft-production-release.md)（2026-09-30）：実稼働releaseを親にした限定反映、OpenAI Responses planner、永続予算、非OP実モデル受入、バックアップ・復旧・検証境界。
 - [Minecraftエンダードラゴン・キャンペーン](./minecraft-dragon-campaign.md)：永続目標ツリーの縦断実装、自然生成ワールドでの空手からの実走、予算・到達点・未検証範囲。
+- [Minecraft エンドの戦い（体の部品）](./minecraft-end-fight.md)（2026-11-02）：竜への近接・状態の観測（`state.world` の dragon/crystals/perch/dragonBreath）・床の反射・クリスタル（弓/檻/見込み）・ベッド・討伐の証明と、隔離ラボの実測。
 - [Minebotの原因調査とコードレベル改善案](./minecraft-root-causes-and-improvement-plan.md)：完了・観測・確信度・制御所有・反応速度・自律試験の再現証拠と、機能を維持する具体的な改修案（未実装）。
 - [Shannon｜設計・資料ハブ](https://www.notion.so/3ca1e847628881c9b4bbfd5556a55347)：現行設計・計画・判断・変更履歴。
 
