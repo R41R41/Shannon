@@ -26,7 +26,9 @@ import { blastAt } from '../src/services/minebot/utils/crystalBlast.js';
 import { feetCentre, standing, walkGround } from '../src/services/minebot/utils/dragonWalk.js';
 import { bodyReader } from '../src/services/minebot/utils/localMap.js';
 import { bedHalves } from '../src/services/minebot/utils/bedRules.js';
-import { perchBedFoot, bedWallCells } from '../src/services/minebot/utils/dragonBedGeometry.js';
+import { perchBedFoot, bedWallCells, bedCellSupported, supportedBedCells } from '../src/services/minebot/utils/dragonBedGeometry.js';
+import { approachClear } from '../src/services/minebot/utils/dragonApproach.js';
+import { BLOCK_REACH } from '../src/services/minebot/utils/blockReach.js';
 import { isPerched, type P3 } from '../src/services/minebot/utils/dragonParts.js';
 
 const port = Number(process.env.MINECRAFT_END_PORT);
@@ -721,7 +723,7 @@ function perchBedEstimate(cell: P3) {
 }
 async function usePerchBed(cell: P3, signal?: AbortSignal): ReturnType<typeof act> {
   const guess = perchBedEstimate(cell);
-  if (!guess || !guess.safe || guess.expected > 4) return { ok: false, lines: [`bed estimate refused: ${JSON.stringify(guess)}`], parsed: null, ms: 0 };
+  if (!guess || !guess.safe || !Number.isFinite(guess.expected) || guess.expected > 4) return { ok: false, lines: [`bed estimate refused: ${JSON.stringify(guess)}`], parsed: null, ms: 0 };
   return act([{ do: 'use', at: [cell] }], 12, {}, signal);
 }
 
@@ -1600,9 +1602,10 @@ scenes.cage_section = async () => {
     const stages = section.stages as Array<Record<string, unknown>>;
     let success = false;
     const perform = async (stage: string, hand: Record<string, unknown>, seconds: number) => {
-      // The stand-in planner reads the result like the head: a hand cut by a reflex or by a hit (the dragon's breath or ball) is asked again while the health is above 8, at most twice; any other stop ends the section (no automatic retry of the body's own).
+      // The stand-in planner reads the result like the head: a hand cut by a reflex or by a hit (the dragon's breath or ball), or a walk to the root whose search ran out (the lab's CPU is shared), is asked again while the health is above 8, at most twice; any other stop ends the section (no automatic retry of the body's own).
       let result = await act([hand], seconds), retries = 0;
-      while (!result.ok && retries < 2 && /反射|被弾/u.test(result.lines.join(' ')) && actorDeaths === deathsBefore && Number(actor.health) > 8) { retries++; await sleep(1500); result = await act([hand], seconds); }
+      const again = (text: string) => /反射|被弾/u.test(text) || (stage === 'go_root' && /search_timeout|dead_end/u.test(text));
+      while (!result.ok && retries < 2 && again(result.lines.join(' ')) && actorDeaths === deathsBefore && Number(actor.health) > 8) { retries++; await sleep(1500); result = await act([hand], seconds); }
       stages.push({ stage, ...result, retries });
       if (actorDeaths !== deathsBefore || Number(actor.health) <= 0) throw new Error(`${stage}: actor died`);
       if (!result.ok) throw new Error(`${stage}: stopped after ${retries} retries`);
@@ -1838,17 +1841,22 @@ async function prepareKillRun(): Promise<{ dragonId: number; ground: P3 }> {
   // Set phase once. No operator mutations during the timed run.
   await ask(`${END} data modify entity ${DRAGON} DragonPhase set value 6`);
   await protect(false);
-  const d = endView()?.dragon;
-  const slots = actor.inventory.slots;
-  if (!d || d.health !== 200 || !actor.entity.onGround || Number(actor.health) !== 20 || Number(actor.food) !== 20 ||
+  // A fireball's reflex or a knock can move the body in the moment after the set-up: the state is waited for (at most 6 s), and only then refused.
+  const unconfirmed = (): boolean => {
+    const d = endView()?.dragon, slots = actor.inventory.slots;
+    return (!d || d.health !== 200 || !actor.entity.onGround || Number(actor.health) !== 20 || Number(actor.food) !== 20 ||
       packCount('arrow') !== 64 || packCount('white_bed') !== 12 || packCount('obsidian') !== 12 || packCount('cobblestone') !== 64 || packCount('cooked_beef') !== 64 || packCount('bow') !== 1 ||
       actor.heldItem?.name !== 'stone_sword' || slots?.[45]?.name !== 'shield' ||
       ['iron_helmet', 'iron_chestplate', 'iron_leggings', 'iron_boots'].some((name, i) => slots?.[5 + i]?.name !== name) ||
-      actor.inventory.items().some((i: any) => i.name.endsWith('bucket'))) {
+      actor.inventory.items().some((i: any) => i.name.endsWith('bucket'));
+  };
+  for (let i = 0; i < 30 && unconfirmed(); i++) await sleep(200);
+  const d = endView()?.dragon;
+  if (unconfirmed()) {
     throw new Error('comparison initial health/ground/gear was not confirmed');
   }
   context.taskId = `dragon-kill-${++context.taskRevision}`;
-  return { dragonId: d.id, ground: arena.ground };
+  return { dragonId: d!.id, ground: arena.ground };
 }
 
 /** Read-only geometry chosen by the script from one observed stage/strike pair and the observed head box. */
@@ -1856,35 +1864,58 @@ function chooseKillPlan(d: any) {
   const stages = [...(d?.approach?.stage ?? [])].sort((a: any, b: any) => a.toStrikeMeters - b.toStrikeMeters);
   const stage = stages.find((s: any) => d.approach.strike[s.strikeIndex]);
   if (!stage) return null;
-  return { stage, strike: d.approach.strike[stage.strikeIndex], retreat: d.approach.retreat?.[0] ?? null };
+  return { stage: { ...stage }, strike: { ...d.approach.strike[stage.strikeIndex] }, retreat: d.approach.retreat?.[0] ? { ...d.approach.retreat[0] } : null };
 }
 
-function killBedLayout(d: any, plan: NonNullable<ReturnType<typeof chooseKillPlan>>) {
+// Only observed approach geometry: walkMeters/countdowns change as the actor moves or time passes.
+const killGeometry = (d: any) => JSON.stringify([
+  (d?.approach?.stage ?? []).map((p: any) => [p.x, p.y, p.z, p.strikeIndex]),
+  (d?.approach?.strike ?? []).map((p: any) => [p.x, p.y, p.z]),
+]);
+const killStageObservation = (d: any) => JSON.stringify([d?.phase, d?.windows?.open, killGeometry(d)]);
+
+/** path_update points are the executor's feet positions, not a count of physics cells entered. */
+function killRetreatRoute(origin: P3, target: P3, here: P3, walked: number, route: P3[]) {
+  const direct = Math.hypot(target.x - origin.x, target.y - origin.y, target.z - origin.z);
+  let meters = walked, previous = here, top = here.y;
+  for (const p of route) { meters += Math.hypot(p.x - previous.x, p.y - previous.y, p.z - previous.z); top = Math.max(top, p.y); previous = p; }
+  const reason = top - origin.y >= 3 ? 'retreat_route_rise' : meters > direct * 2.5 ? 'retreat_route_detour' : null;
+  return { reason, meters, direct, rise: top - origin.y };
+}
+
+function killBedLayout(d: any, plan: NonNullable<ReturnType<typeof chooseKillPlan>>, alternative = 0) {
   const box = partBox({ position: d.position, yaw: d.yaw }, 'head');
   const head = { x: (box.minX + box.maxX) / 2, y: box.minY, z: (box.minZ + box.maxZ) / 2 };
   const dx = head.x - d.position.x, dz = head.z - d.position.z, length = Math.hypot(dx, dz);
   if (!length) return null;
   const foot = perchBedFoot(head, { x: dx / length, y: 0, z: dz / length }, box.minY);
-  const wall = bedWallCells(foot, plan.stage, plan.stage.y, foot.y + 1, 1);
   const alongZ = Math.abs(foot.z + 0.5 - plan.stage.z) >= Math.abs(foot.x + 0.5 - plan.stage.x);
+  // Three distinct observed columns at most; a refused cell is never sent to place again this perch.
+  const offset = [0, -1, 1][alternative] ?? 0;
+  if (alongZ) foot.x += offset; else foot.z += offset;
+  const wall = bedWallCells(foot, plan.stage, foot.y - 1, foot.y + 1, 1);
   const step = alongZ ? { x: 0, z: Math.sign(foot.z + 0.5 - plan.stage.z) } : { x: Math.sign(foot.x + 0.5 - plan.stage.x), z: 0 };
   const partner = { x: foot.x + step.x, y: foot.y, z: foot.z + step.z };
-  const supports: P3[] = [];
-  for (let y = Math.floor(plan.strike.y); y < foot.y; y++) for (const p of [foot, partner]) supports.push({ x: p.x, y, z: p.z });
-  const cells = [...supports, ...wall].filter((p, i, all) => all.findIndex(q => q.x === p.x && q.y === p.y && q.z === p.z) === i);
-  return { foot, partner, cells };
+  const read = (p: P3) => actor.blockAt(new Vec3(p.x, p.y, p.z)) ?? null;
+  const cells = supportedBedCells([...[foot, partner].map(p => ({ ...p, y: p.y - 1 })), ...wall], read);
+  if (!cells) return null;
+  let wallBottom = Math.min(wall[0].y, ...cells.filter(p => p.x === wall[0].x && p.z === wall[0].z).map(p => p.y));
+  for (let i = 0; i < 16 && read({ ...wall[0], y: wallBottom - 1 })?.name === 'obsidian'; i++) wallBottom--;
+  return { foot, partner, cells, wallBottom, wallTop: foot.y + 1, wallHeight: foot.y + 2 - wallBottom };
 }
 
 async function dragonKillRun(style: KillStyle): Promise<Record<string, any>> {
   const initial = await prepareKillRun();
   const t0 = Date.now(), deadline = t0 + KILL_LIMIT_MS, deaths0 = actorDeaths, lowest = trackMinHealth();
   const counts0 = actor.reflexLedger.counts();
+  const ledgerStart = actor.reflexLedger.mark();
   const out: Record<string, any> = { scene: 'dragon_kill_compare', style, limitSeconds: KILL_LIMIT_MS / 1000,
     initial: { ...initial, dragonHealth: 200, actorHealth: Number(actor.health), food: Number(actor.food), arrows: 64, beds: 12, obsidian: 12, floorReflexes: true },
     killSeconds: null, dragonHealthAt25Minutes: null, deaths: 0, minHealth: null, bedsUsed: 0, arrowsUsed: 0,
-    perchCount: 0, perchesHit: 0, meleeHitWindows: 0, explosionsHit: 0, perches: [], healthTimeline: [{ seconds: 0, health: 200, source: 'confirmed_start' }], actions: [], reflexKinds: {}, boss: null };
+    perchCount: 0, perchesHit: 0, meleeHitWindows: 0, explosionsHit: 0, perches: [], healthTimeline: [{ seconds: 0, health: 200, source: 'confirmed_start' }], actions: [], bedTrials: [], reflexKinds: {}, boss: null };
   const stop = new AbortController();
-  let view = endView(), sitting = false, windowOpen = false, window = 0, terminal: string | null = null;
+  let view = endView(), sitting = false, windowOpen = false, window = 0, terminal: string | null = null, withdrawalNeeded = false;
+  let scanSeen = false, stableGeometry = '', stableLooks = 0, lastLook: number | undefined;
   let pendingSample: Promise<void> = Promise.resolve(), sampleBusy = false, activeBed: P3 | null = null, bedExploded = false;
   let lastArrows = 64, lastBeds = 12;
   const elapsed = () => (Date.now() - t0) / 1000;
@@ -1896,6 +1927,8 @@ async function dragonKillRun(style: KillStyle): Promise<Record<string, any>> {
     const counts = actor.reflexLedger.counts();
     for (const [kind, n] of Object.entries(counts) as Array<[string, number]>) { const used = n - (counts0[kind] ?? 0); if (used > 0) out.reflexKinds[kind] = used; }
     out.dragonHealthEnd = view?.dragon?.health ?? null;
+    out.lastObservation = { actorHealth: Number(actor.health), position: { ...actor.entity.position }, dragon: view?.dragon ?? null,
+      hazards: dragonHazards(actor), recentReflexes: actor.reflexLedger.entriesSince(ledgerStart) };
     if (reason === 'dragon_dead') { out.killSeconds = out.seconds; out.dragonHealthEnd = 0; }
     if (reason === 'time_limit') out.dragonHealthAt25Minutes = out.dragonHealthEnd;
     stop.abort(reason);
@@ -1923,9 +1956,20 @@ async function dragonKillRun(style: KillStyle): Promise<Record<string, any>> {
     if (d?.health !== null && d?.health !== undefined && d.health <= 0) { finish('dragon_dead'); return; }
     if (Date.now() >= deadline) { finish('time_limit'); return; }
     if (!d) return;
-    if (isPerched(d.phase) && !sitting) { sitting = true; out.perches.push({ n: ++out.perchCount, seconds: elapsed(), health: d.health, meleeHitWindows: 0, explosionsHit: 0 }); }
+    if (isPerched(d.phase) && !sitting) {
+      sitting = true; scanSeen = false; stableGeometry = ''; stableLooks = 0; lastLook = undefined;
+      out.perches.push({ n: ++out.perchCount, seconds: elapsed(), health: d.health, meleeHitWindows: 0, explosionsHit: 0 });
+    }
     if (!isPerched(d.phase) && sitting) { sitting = false; out.perches.at(-1).endedSeconds = elapsed(); }
+    if (d.phase === 6) scanSeen = true;
+    if (isPerched(d.phase) && scanSeen) {
+      const geometry = killGeometry(d);
+      if (geometry !== stableGeometry) { stableGeometry = geometry; stableLooks = 0; lastLook = undefined; }
+      // phaseFor distinguishes a new observation from another read of the same one; it is not a delay threshold.
+      if (d.phaseFor === undefined || d.phaseFor !== lastLook) { stableLooks++; lastLook = d.phaseFor; }
+    }
     const open = isPerched(d.phase) && d.windows?.open === true;
+    if (windowOpen && !open && style !== 'bow') withdrawalNeeded = true;
     if (open && !windowOpen) window++;
     windowOpen = open;
   };
@@ -1942,54 +1986,152 @@ async function dragonKillRun(style: KillStyle): Promise<Record<string, any>> {
       out.healthTimeline.push({ seconds, readAtSeconds: elapsed(), health, source: 'server' });
     })().catch(error => { out.sampleError = String(error); }).finally(() => { sampleBusy = false; });
   }, 5000);
-  const perform = async (label: string, hands: Array<Record<string, unknown>>, seconds: number, allowed?: () => boolean, execute?: (signal: AbortSignal) => ReturnType<typeof act>) => {
+  const perform = async (label: string, hands: Array<Record<string, unknown>>, seconds: number, allowed?: () => boolean, execute?: (signal: AbortSignal) => ReturnType<typeof act>, retreatTarget?: P3) => {
     const controller = new AbortController(), abort = () => controller.abort(stop.signal.reason);
     stop.signal.addEventListener('abort', abort, { once: true });
     if (stop.signal.aborted) abort();
-    const check = () => { if (allowed && !allowed()) controller.abort('script_observation_changed'); };
+    const origin = { ...actor.entity.position };
+    let previous = origin, walked = 0, routeRefused: ReturnType<typeof killRetreatRoute> | null = null;
+    const checkRoute = (route: P3[] = []) => {
+      if (!retreatTarget || controller.signal.aborted) return;
+      const here = { ...actor.entity.position };
+      walked += Math.hypot(here.x - previous.x, here.y - previous.y, here.z - previous.z); previous = here;
+      const result = killRetreatRoute(origin, retreatTarget, here, walked, route);
+      if (result.reason) { routeRefused = result; controller.abort(result.reason); }
+    };
+    // pathfinder emits the proposed way before walking it, including each redraw. The script cancels the hand, never the reflex.
+    const onRoute = (result: any) => checkRoute(result?.path ?? []);
+    if (retreatTarget) actor.on('path_update', onRoute);
+    const check = () => { checkRoute(); if (allowed && !allowed()) controller.abort('script_observation_changed'); };
     check(); const timer = setInterval(check, 50);
     const before = actor.reflexLedger.mark(), at = elapsed();
     try {
       const run = await (execute ? execute(controller.signal) : act(hands, Math.min(seconds, Math.max(0.05, (deadline - Date.now()) / 1000)), {}, controller.signal));
       const cut = (actor.reflexLedger.preemptsSince(before)?.length ?? 0) > 0 || /反射/u.test(run.lines.join(' '));
-      out.actions.push({ seconds: at, label, ok: run.ok, ms: run.ms, cut, aborted: controller.signal.aborted, lines: run.lines });
+      const abortReason = controller.signal.aborted ? String(controller.signal.reason) : null;
+      out.actions.push({ seconds: at, label, hands, ok: run.ok, ms: run.ms, cut, aborted: controller.signal.aborted, abortReason,
+        interruptions: [...(cut ? ['reflex'] : []), ...(abortReason ? [abortReason] : [])], ...(retreatTarget ? { routeRefused } : {}), lines: run.lines,
+        actorHealth: Number(actor.health), position: { ...actor.entity.position } });
       samplePack(); return { ...run, cut, aborted: controller.signal.aborted };
-    } finally { clearInterval(timer); stop.signal.removeEventListener('abort', abort); }
+    } finally { clearInterval(timer); actor.removeListener('path_update', onRoute); stop.signal.removeEventListener('abort', abort); }
   };
   const go = (label: string, p: P3, allowed?: () => boolean) => perform(label, [{ do: 'go', to: killCell(p), range: 0.5, seconds: 10 }], 15, allowed);
   const open = () => !terminal && isPerched(view?.dragon?.phase) && view?.dragon?.windows?.open === true;
   const perched = () => !terminal && isPerched(view?.dragon?.phase);
   const flying = (d: any) => !!d && Number.isInteger(d.phase) && d.phase >= 0 && d.phase <= 10 && !isPerched(d.phase) && d.phase !== 9;
-  let plan: ReturnType<typeof chooseKillPlan> = null, planPerch = 0, staged = false, stageTried = false, usedWindow = -1, retreatDone = false;
+  let plan: ReturnType<typeof chooseKillPlan> = null, planGeometry = '', planPerch = 0, staged = false, stageAttempts = 0, triedObservation = '', usedWindow = -1, retreatDone = false;
   let bedLayout: ReturnType<typeof killBedLayout> = null, bedReady = false, bedTried = false;
+  let skippedPerch = -1;
+  const safeAt = (p: P3) => {
+    const d = view?.dragon;
+    return !!d && approachClear(actor, d, p) && standing(bodyReader(actor), killCell(p));
+  };
+  const safeHere = () => safeAt(actor.entity.position) && dragonHazards(actor).length === 0;
+  const succeeded = (run: { ok: boolean; cut: boolean; aborted: boolean }) => run.ok && !run.cut && !run.aborted;
+  let withdrawFailingSince = 0;
+  const withdraw = async (label: string, toRetreat = false) => {
+    if (terminal) return false;
+    staged = false;
+    const settled = (p: P3) => {
+      staged = !toRetreat && !!plan && JSON.stringify(killCell(p)) === JSON.stringify(killCell(plan.stage));
+      retreatDone = !staged; withdrawalNeeded = false; withdrawFailingSince = 0; return true;
+    };
+    const staySafe = () => {
+      watch();
+      if (terminal || !safeHere()) return false;
+      out.actions.push({ seconds: elapsed(), label, hands: [], ok: true, ms: 0, cut: false, aborted: false,
+        abortReason: null, interruptions: [], lines: ['already_safe'], actorHealth: Number(actor.health), position: { ...actor.entity.position } });
+      return settled(actor.entity.position);
+    };
+    if (label === 'window_closed' && staySafe()) return true;
+    const tried = new Set<string>();
+    for (let attempt = 0; attempt < 3 && !terminal; attempt++) {
+      watch();
+      const d = view?.dragon;
+      const distance = (p: P3) => Math.hypot(p.x - actor.entity.position.x, p.y - actor.entity.position.y, p.z - actor.entity.position.z);
+      const candidates: P3[] = [...(!toRetreat && isPerched(d?.phase) && plan ? [plan.stage] : []),
+        ...[...(d?.approach?.retreat ?? []), ...(plan?.retreat ? [plan.retreat] : [])].sort((a, b) => distance(a) - distance(b))];
+      const p = candidates.find(p => !tried.has(JSON.stringify(killCell(p))) && safeAt(p));
+      if (!p) break;
+      tried.add(JSON.stringify(killCell(p)));
+      const target = feetCentre(killCell(p));
+      const back = await perform(label, [{ do: 'go', to: killCell(p), range: 0.5, maxDrop: 1, seconds: 5 }], 6,
+        () => !terminal && safeAt(p), undefined, target);
+      if (succeeded(back) && safeHere()) {
+        return settled(p);
+      }
+      toRetreat = true; label = 'withdraw_retreat';
+    }
+    if (terminal) return false;
+    if (staySafe()) return true;
+    // no safe cell this time: the run goes on (the next look may find one); it ends only when none has been found for 90 s in a row (the floor reflexes keep the body safe meanwhile)
+    withdrawFailingSince ||= Date.now(); await sleep(500);
+    if (!terminal && Date.now() - withdrawFailingSince >= 90_000) finish('retreat_failed');
+    return false;
+  };
   try {
     while (!terminal) {
       watch(); if (terminal) break;
       const d = view?.dragon;
+      if (style !== 'bow' && withdrawalNeeded) { await withdraw('window_closed', skippedPerch === out.perchCount || retreatDone); continue; }
+      if (style !== 'bow' && !safeHere()) { await withdraw('unsafe_wait_retreat', true); continue; }
       if (!d || d.phase === 9) { await sleep(100); continue; }
-      if (d.phase === 4 && plan?.retreat && !retreatDone) { retreatDone = true; await go('takeoff_retreat', plan.retreat); continue; }
+      if (d.phase === 4 && plan?.retreat && !retreatDone) { await withdraw('takeoff_retreat', true); continue; }
       if (style === 'bow') {
         if (flying(d) && packCount('arrow') > 0) await perform('flying_bow', [{ do: 'shoot', target: 'ender_dragon', n: 1, charge: 1.05 }], 10, () => !terminal && flying(view?.dragon));
         else await sleep(100);
         continue;
       }
       if (!isPerched(d.phase)) { await sleep(100); continue; }
-      if (planPerch !== out.perchCount) { plan = null; planPerch = out.perchCount; staged = false; stageTried = false; retreatDone = false; bedLayout = null; bedReady = false; bedTried = false; }
-      plan ??= chooseKillPlan(d);
+      if (skippedPerch === out.perchCount) { await sleep(100); continue; }
+      if (planPerch !== out.perchCount) { plan = null; planPerch = out.perchCount; staged = false; stageAttempts = 0; triedObservation = ''; retreatDone = false; bedLayout = null; bedReady = false; bedTried = false; }
+      if (plan && !bedTried && planGeometry !== killGeometry(d)) { plan = null; staged = false; }
+      if (!staged) {
+        if (!scanSeen || stableLooks < 3 || stageAttempts >= 3 || triedObservation === killStageObservation(d)) { await sleep(100); continue; }
+        plan = chooseKillPlan(d);
+        if (!plan) { await sleep(100); continue; }
+        planGeometry = killGeometry(d);
+        stageAttempts++; triedObservation = killStageObservation(d);
+        const attempted = plan;
+        const run = await go('stage', attempted.stage, () => perched() && safeAt(attempted.stage));
+        Object.assign(out.actions.at(-1), { perch: out.perchCount, stageAttempt: stageAttempts, observation: triedObservation,
+          phase: d.phase, phaseFor: d.phaseFor, stage: attempted.stage, strike: attempted.strike });
+        staged = succeeded(run) && safeHere();
+        if (!staged) { await withdraw('stage_failed_retreat', true); plan = null; }
+        continue;
+      }
       if (!plan) { await sleep(100); continue; }
-      if (!stageTried) { stageTried = true; const run = await go('stage', plan.stage, perched); staged = run.ok && !run.cut && !run.aborted; continue; }
       // Build the reusable screen/support while waiting, not during the measured ~2.5-second strike window.
       if (style === 'bed' && staged && !bedTried) {
-        bedTried = true; bedLayout = killBedLayout(d, plan);
-        if (bedLayout) {
-          const missing = bedLayout.cells.filter(p => actor.blockAt(new Vec3(p.x, p.y, p.z))?.name !== 'obsidian');
-          const clear = missing.every(p => /^(air|cave_air|void_air)$/u.test(actor.blockAt(new Vec3(p.x, p.y, p.z))?.name ?? ''));
-          if (clear && missing.length <= packCount('obsidian') && missing.length <= 16) {
-            for (const p of missing) killPlaced.set(`${p.x},${p.y},${p.z}`, p);
-            const built = missing.length ? await perform('bed_screen_support', [{ do: 'place', block: 'obsidian', at: missing }], 15, perched) : { ok: true, cut: false, aborted: false };
-            bedReady = built.ok && !built.cut && !built.aborted;
+        bedTried = true;
+        const refused = new Set<string>(), read = (p: P3) => actor.blockAt(new Vec3(p.x, p.y, p.z)) ?? null;
+        let buildCut = false;
+        for (let alternative = 0; alternative < 3 && !terminal && !withdrawalNeeded; alternative++) {
+          bedLayout = killBedLayout(endView()?.dragon ?? d, plan, alternative);
+          const layoutRecord: Record<string, any> = { seconds: elapsed(), label: 'bed_layout', alternative, layout: bedLayout, ready: false };
+          out.actions.push(layoutRecord);
+          if (!bedLayout) { layoutRecord.refused = 'no_observed_anchor'; continue; }
+          if (bedLayout.cells.length > packCount('obsidian')) { layoutRecord.refused = 'insufficient_obsidian'; continue; }
+          if (bedLayout.cells.some(p => refused.has(JSON.stringify(p)))) { layoutRecord.refused = 'previously_refused_cell'; continue; }
+          bedReady = true;
+          for (const p of bedLayout.cells) {
+            // Only a freshly observed face supports the next hand. Never send the whole speculative column.
+            const eye = actor.entity.position;
+            if (!bedCellSupported(read, p) || Math.hypot(p.x + 0.5 - eye.x, p.y + 0.5 - eye.y - 1.62, p.z + 0.5 - eye.z) > BLOCK_REACH) {
+              refused.add(JSON.stringify(p)); bedReady = false;
+              layoutRecord.refused = 'face_missing_or_out_of_reach'; layoutRecord.cell = p; break;
+            }
+            killPlaced.set(`${p.x},${p.y},${p.z}`, p);
+            const built = await perform('bed_screen_support', [{ do: 'place', block: 'obsidian', at: [p] }], 5, () => perched() && !withdrawalNeeded && safeHere());
+            if (!succeeded(built) || read(p)?.name !== 'obsidian') {
+              refused.add(JSON.stringify(p)); bedReady = false; buildCut = built.cut || built.aborted;
+              layoutRecord.refused = 'placement_failed_or_unconfirmed'; layoutRecord.cell = p; break;
+            }
           }
+          layoutRecord.ready = bedReady;
+          if (bedReady || buildCut || terminal || withdrawalNeeded || !safeHere()) break;
         }
+        if (!bedReady || withdrawalNeeded || !safeHere()) { bedReady = false; skippedPerch = out.perchCount; await withdraw('bed_unready_retreat', true); }
         continue;
       }
       if (!staged || !open() || usedWindow === window) { await sleep(100); continue; }
@@ -2004,22 +2146,32 @@ async function dragonKillRun(style: KillStyle): Promise<Record<string, any>> {
         }
       } else if (bedReady && bedLayout && packCount('white_bed') > 0) {
         const { foot, partner } = bedLayout;
+        const trial: Record<string, any> = { seconds: elapsed(), foot, partner, wallBottom: bedLayout.wallBottom, wallTop: bedLayout.wallTop,
+          wallHeight: bedLayout.wallHeight, standingAt: { ...actor.entity.position }, expectedDamage: null, actualDamage: null, exploded: false };
+        out.bedTrials.push(trial);
         for (const p of [foot, partner]) killPlaced.set(`${p.x},${p.y},${p.z}`, p);
         const existing = bedHalves(actor.blockAt(new Vec3(foot.x, foot.y, foot.z)), foot);
         const placed = existing ? { ok: true, cut: false } : await perform('bed_place', [{ do: 'place', block: 'white_bed', at: [foot] }], 10, open);
         const guess = perchBedEstimate(foot);
-        out.actions.push({ seconds: elapsed(), label: 'bed_estimate', estimate: guess });
-        if (placed.ok && !placed.cut && open() && guess?.safe && guess.expected <= 4) {
+        trial.placedHalves = bedHalves(actor.blockAt(new Vec3(foot.x, foot.y, foot.z)), foot);
+        trial.expectedDamage = guess?.expected ?? null;
+        out.actions.push({ seconds: elapsed(), label: 'bed_estimate', foot, wallHeight: bedLayout.wallHeight, estimate: guess });
+        if (placed.ok && !placed.cut && open() && guess?.safe && Number.isFinite(guess.expected) && guess.expected <= 4) {
           const halves = bedHalves(actor.blockAt(new Vec3(foot.x, foot.y, foot.z)), foot)!;
           activeBed = { x: halves.head.x + 0.5, y: halves.head.y + 0.5, z: halves.head.z + 0.5 }; bedExploded = false;
-          await perform('bed_use', [], 12, open, signal => usePerchBed(foot, signal));
-          activeBed = null;
+          const hpBefore = Number(actor.health); let minHp = hpBefore;
+          const health = () => { minHp = Math.min(minHp, Number(actor.health)); };
+          actor.on('health', health);
+          try { await perform('bed_use', [], 12, open, signal => usePerchBed(foot, signal)); }
+          finally { health(); actor.removeListener('health', health); activeBed = null;
+            Object.assign(trial, { hpBefore, hpAfter: Number(actor.health), actualDamage: bedExploded ? Math.max(0, hpBefore - minHp) : null,
+              damageObservation: 'health minimum during use hand; other hits may overlap', exploded: bedExploded }); }
           const after = endView()?.dragon?.health ?? (terminal === 'dragon_dead' ? 0 : null);
           if (bedExploded && before !== null && after !== null && after < before) { row.explosionsHit++; out.explosionsHit++; }
         }
       }
       // Leave the strike when the window closes or a reflex cuts it. Phase 4 uses the retained retreat instead.
-      if (!terminal && isPerched(view?.dragon?.phase)) { const back = await go('withdraw_stage', plan.stage, perched); staged = back.ok && !back.cut && !back.aborted; }
+      if (!terminal) await withdraw('withdraw_stage', !isPerched(view?.dragon?.phase));
     }
   } catch (error) { out.error = String((error as Error)?.stack ?? error).slice(0, 800); finish('error'); }
   finally {
