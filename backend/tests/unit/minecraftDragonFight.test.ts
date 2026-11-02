@@ -433,7 +433,7 @@ describe('the observation the body gives the head', () => {
   });
 });
 
-import { dragonFleePlan, FALL_CLUTCH_ENABLED, installFloorReflexes } from '../../src/services/minebot/utils/floorReflexes.js';
+import { FALL_CLUTCH_ENABLED, installFloorReflexes } from '../../src/services/minebot/utils/floorReflexes.js';
 import { floorConfig } from '../../src/services/minebot/utils/floorConfig.js';
 
 describe('the floor reflex out of the dragon\'s reach', () => {
@@ -565,71 +565,6 @@ describe('the floor reflex out of the dragon\'s reach', () => {
     f.bot.game.dimension = 'minecraft:the_end'; f.self.position = new Vec3(0.5, 64, 40.5);
     f.bot.emit('physicsTick'); await new Promise(resolve => setTimeout(resolve, 100));
     expect(keys).toEqual([]);
-  });
-});
-
-describe('a fireball that lands on a body at the front end of a bridge one wide (lab r18, 2026-11-03: half the balls left "no safe way", the body took three clouds and fell off)', () => {
-  /** A bridge one wide along x at z 12 (y 63), its front end at x 0 and nothing beyond it, the platform at its other end; the body at the front end, the dragon in flight. */
-  function atFrontEnd(at = 0.5) {
-    const world: World = new Map();
-    for (let x = 0; x <= 14; x++) world.set(key(x, 63, 12), 'cobblestone');
-    for (let x = 15; x <= 19; x++) for (let z = 10; z <= 14; z++) world.set(key(x, 63, z), 'obsidian');
-    const f = fixture({ phase: DRAGON_PHASE.holdingPattern, at: new Vec3(at, 64, 12.5), world });
-    f.dragon.position = new Vec3(0.5, 90, -40.5);
-    return f;
-  }
-  /** A ball that comes down on the body, travelling along z (toward +z or -z): the side of its sidestep is decided by the way it travels. */
-  const ballOnBody = (f: ReturnType<typeof fixture>, direction: 1 | -1) => {
-    f.bot.toldVelocities = new Map([[41, new Vec3(0, -0.25, 0.25 * direction)]]);
-    f.bot.entities[41] = { id: 41, name: 'dragon_fireball', position: new Vec3(f.self.position.x, 70, 12.5 - 6 * direction), metadata: [] };
-  };
-  for (const direction of [1, -1] as const) {
-    it(`finds the way along the bridge, away from the front end, for a ball travelling ${direction > 0 ? '+z' : '-z'}`, () => {
-      const f = atFrontEnd();
-      ballOnBody(f, direction);
-      const hazards = dragonHazards(f.bot);
-      expect(hazards.map(hazard => hazard.kind)).toEqual(['fireball']);
-      expect(hazards[0].alternative).toBeDefined();
-      const plan = dragonFleePlan(f.bot, hazards);
-      expect(plan).not.toBeNull();
-      expect(-Math.sin(plan!.yaw)).toBeGreaterThan(0.9); // east: along the bridge, toward the platform
-      expect(plan!.jump).toBe(false);
-    });
-  }
-  it('starts the retreat along the bridge (the floor reflex), not a note that there is no way, whichever way the ball travels', async () => {
-    for (const direction of [1, -1] as const) {
-      const f = atFrontEnd();
-      ballOnBody(f, direction);
-      const keys: Array<[string, boolean]> = [];
-      f.bot.look = vi.fn(); f.bot.setControlState = vi.fn((k: string, v: boolean) => { keys.push([k, v]); }); f.bot.equip = vi.fn(async () => undefined); f.bot.consume = vi.fn(async () => undefined);
-      installFloorReflexes(f.bot, floorConfig({ MINEBOT_FCA_REFLEXES: 'default' }), { fleeTickMs: 1 });
-      f.bot.emit('physicsTick');
-      await new Promise(resolve => setTimeout(resolve, 250));
-      expect(keys.some(([k, v]) => k === 'forward' && v)).toBe(true);
-      const entries = f.bot.reflexLedger.entriesSince(0);
-      expect(entries.some((entry: any) => entry.kind === 'cover_none')).toBe(false);
-      expect(entries.some((entry: any) => entry.kind === 'retreat')).toBe(true);
-    }
-  });
-  it('does not take the other side into a cloud that lies near and does not reach the feet yet, nor into the cloud a flying ball is to lay (round 11)', () => {
-    for (const direction of [1, -1] as const) {
-      const f = atFrontEnd();
-      ballOnBody(f, direction);
-      const meta: unknown[] = []; meta[8] = 7; meta[10] = { type: 'dragon_breath' };
-      f.bot.entities[20] = { id: 20, name: 'area_effect_cloud', position: new Vec3(7.6, 64, 12.5), metadata: meta }; // 7.1 from the feet: outside its radius 7 now, the bridge's way east runs into it
-      const hazards = dragonHazards(f.bot);
-      expect(hazards.map(hazard => hazard.kind)).toEqual(['fireball']); // the cloud is not among them: it does not reach the feet
-      expect(dragonFleePlan(f.bot, hazards)).toBeNull();
-    }
-    const f = atFrontEnd(); // the same bridge with no cloud: the way east is found, as before
-    ballOnBody(f, 1);
-    expect(dragonFleePlan(f.bot, dragonHazards(f.bot))).not.toBeNull();
-  });
-  it('still reports no way where there is none on either side (a bridge one cell long)', () => {
-    const f = atFrontEnd();
-    for (let x = 1; x <= 14; x++) f.world.delete(key(x, 63, 12)); // one block of bridge, the void all round it
-    ballOnBody(f, 1);
-    expect(dragonFleePlan(f.bot, dragonHazards(f.bot))).toBeNull();
   });
 });
 
