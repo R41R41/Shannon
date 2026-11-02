@@ -311,7 +311,7 @@ scene('blaze_proto_body_b', 'the same again (a second sample)', note => blazePro
 scene('blaze_proto_hold', 'the same protocol with attack hold in place of fight', note => blazeProtocol('hold', note));
 // The sortie protocol (S2, 2026-11-02): the body rests at the hideout, where nothing sees it, and goes out for one short act at a time: [go to the camp cell, fight a few seconds, pick up, go back to the
 // hideout]. The head's thinking time is spent at the hideout, not in the blazes' sight. The next sortie starts when the health is back (backHp).
-async function blazeSortie(note: (text: string) => void, options: { fightSeconds?: number; backHp?: number; retreatHp?: number; thinkMs?: number } = {}): Promise<Record<string, unknown>> {
+async function blazeSortie(note: (text: string) => void, options: { fightSeconds?: number; backHp?: number; retreatHp?: number; thinkMs?: number; nearest?: boolean } = {}): Promise<Record<string, unknown>> {
   const stand = sites.blazeStand as number[] | undefined;
   if (!stand) throw new Error('no blazeStand in the sites');
   const fightSeconds = options.fightSeconds ?? 12, backHp = options.backHp ?? 18, thinkMs = options.thinkMs ?? 5000;
@@ -330,13 +330,18 @@ async function blazeSortie(note: (text: string) => void, options: { fightSeconds
   const hp = () => Number(actor.health);
   const readCamp = async (): Promise<any> => { const found = await runSkill('probe', { kind: 'camp' }, 20); try { return JSON.parse(String(found.receipt?.result ?? '')); } catch { return null; } };
   const canPlace = ['cobblestone', 'netherrack'];
-  let failStreak = 0;
+  let failStreak = 0, lastCell: { x: number; y: number; z: number } | undefined, lastSpot: { x: number; y: number; z: number } | undefined;
   try {
     while (Date.now() - start < seconds * 1000 && !disconnected && hp() > 0) {
       const camp = await readCamp();
-      const cell = camp?.cells?.[0] as { x: number; y: number; z: number } | undefined;
-      const spot = camp?.hideouts?.[0] as { x: number; y: number; z: number } | undefined;
-      if (!cell || !spot) { note(`no camp cell or hideout: ${String(camp?.text ?? '').slice(0, 200)}`); break; }
+      // (what the probe said last is kept when it says nothing: a head that has read the camp once does not lose it to a fire)
+      const hideouts = ((camp?.hideouts ?? []) as Array<{ x: number; y: number; z: number; steps: number; away: number }>).slice();
+      if (options.nearest) hideouts.sort((a, b) => a.steps - b.steps);
+      const cell = (camp?.cells?.[0] ?? lastCell) as { x: number; y: number; z: number } | undefined;
+      const spot = (hideouts[0] ?? lastSpot) as { x: number; y: number; z: number; away?: number } | undefined;
+      if (!camp?.cells?.[0] || !hideouts[0]) note(`the probe said: cells ${JSON.stringify((camp?.cells ?? []).length)} hideouts ${hideouts.length}; ${String(camp?.text ?? '').slice(-160)}`);
+      if (!cell || !spot) { note(`no camp cell or hideout and none known: ${String(camp?.text ?? '').slice(0, 200)}`); break; }
+      lastCell = cell; lastSpot = spot;
       // At the hideout: eat and wait until the health is back.
       const restFrom = Date.now();
       while (Date.now() - restFrom < 60_000 && hp() > 0 && hp() < backHp && !disconnected) {
@@ -373,6 +378,7 @@ async function blazeSortie(note: (text: string) => void, options: { fightSeconds
 }
 scene('blaze_sortie', 'the sortie protocol at the c1 camp: rest at the hideout, then [go to the camp cell, fight 12 s, pick up, go back to the hideout], 5 s of thinking at the hideout', note => blazeSortie(note));
 scene('blaze_sortie_b', 'the sortie protocol again (a second sample)', note => blazeSortie(note));
+scene('blaze_sortie_near', 'the sortie protocol resting at the NEAREST hideout (by steps) whether or not it is within the spawner\x27s 16 m', note => blazeSortie(note, { nearest: true }));
 scene('blaze_sortie_long', 'the sortie protocol with 25 s fights and retreatHp 11', note => blazeSortie(note, { fightSeconds: 25, retreatHp: 11 }));
 // Sniping (S2, 2026-11-02): a bow from a cell far enough from the spawner room that few of its blazes see the body and their fire (spread grows with the square root of the distance) mostly misses.
 async function blazeSnipe(note: (text: string) => void, at: [number, number, number]): Promise<Record<string, unknown>> {

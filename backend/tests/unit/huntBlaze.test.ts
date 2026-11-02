@@ -289,7 +289,7 @@ describe('fight on a blaze: the shield and the choice of the blaze', () => {
   }, 60_000);
 });
 
-// S2 (2026-11-02, S4's c1 trials: a fight at the spawner ran the health down to 2 in one act): below the planner's retreatHp, or the camp's own 10 when none was given, the body leaves the
+// S2 (2026-11-02, S4's c1 trials: a fight at the spawner ran the health down to 2 in one act): below the planner's retreatHp, or the camp's own 12 when none was given, the body leaves the
 // blazes' sight for a footing none of the spawner's blazes can see (utils/huntCamp, the one `probe kind=camp` names), eats and rests there until the health is back, and the hand ends.
 describe('fight on a blaze: below the retreat health, to a hideout', () => {
   /** The spawner at (-3, 64, 2) with a wall of stone at x 3 from z -6 to 6, five high: what lies behind it is out of the sight of every blaze of the spawner. */
@@ -305,7 +305,7 @@ describe('fight on a blaze: below the retreat health, to a hideout', () => {
   const walkTo = () => vi.mocked(go).mockImplementationOnce((async (ctx: any, args: any) => { const at = args.goals[0]; ctx.bot.entity.position = new Vec3(at.x + 0.5, at.y, at.z + 0.5); return { ok: true, text: '着いた' }; }) as never);
   const healBy = (camp: Camp, points: number) => vi.mocked(eat).mockImplementation((async () => { camp.bot.health = Math.min(20, camp.bot.health + points); camp.bot.emit('health'); return { ok: true, text: '食べた' }; }) as never);
 
-  it('with no retreatHp given the camp\'s own 10 applies: it goes to a footing behind the wall, eats, rests until the health is back (18), and the hand ends with where it was and how it went', async () => {
+  it('with no retreatHp given the camp\'s own 12 applies: it goes to a footing behind the wall, eats, rests until the health is back (18), and the hand ends with where it was and how it went', async () => {
     scanSpawner(); walkTo();
     const camp = setUp(7);
     healBy(camp, 6);

@@ -97,7 +97,9 @@ const MEAL_GAP = 8, MEAL_MIN_GAP = 6.5, MAX_MEALS = 4;
  * A hovering shooter's camp (S2, 2026-11-02, S4's c1 trials: a fight at the spawner ran the health down to 2 in one act, and the floor's own flight only begins at 8): the health below which the body leaves
  * its sight when the planner gave none, the health it rests up to (this much above), and the longest rest.
  */
-const CAMP_RETREAT_HP = 10, REST_ABOVE = 8, REST_MAX_MS = 40_000;
+const CAMP_RETREAT_HP = 12, REST_ABOVE = 6, REST_MIN_BACK = 18, REST_MAX_MS = 40_000;
+/** The health a camp's fight goes back in at: above the line it left at, and not under 18. */
+const backAt = (retreatHp: number) => Math.min(19, Math.max(REST_MIN_BACK, retreatHp + REST_ABOVE));
 const NEVER_EAT = new Set(['pufferfish', 'chorus_fruit', 'suspicious_stew', 'spider_eye', 'poisonous_potato', 'enchanted_golden_apple', 'rotten_flesh']);
 const CUT = /Action interrupted|Motor owner expired/u;
 /** A hovering shooter is fought from within this many blocks of where the fight began (level), never beyond. */
@@ -380,7 +382,7 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
     }
     if (!spot) return null;
     hideoutNote = '';
-    const resume = Math.min(19, (retreatHp as number) + REST_ABOVE), lostAtArrival = lost;
+    const resume = backAt(retreatHp as number), lostAtArrival = lost;
     let ate = 0, lastMealAt = 0;
     while (Date.now() - began < REST_MAX_MS) {
       sample();
@@ -416,7 +418,7 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
     for (let round = 0; round <= MAX_MEALS; round++) {
       sample();
       // A camp's fight goes back in only when the health is well above the line it left at (it was at the line when the blazes had taken what they had; back at it, one volley takes it again).
-      if (Number(bot.health ?? 20) >= (hovering ? Math.min(19, (retreatHp as number) + REST_ABOVE) : retreatHp as number)) { await equipWeapon(); return null; }
+      if (Number(bot.health ?? 20) >= (hovering ? backAt(retreatHp as number) : retreatHp as number)) { await equipWeapon(); return null; }
       const meal = round < MAX_MEALS ? mealFor() : null;
       const how = await runAway(meal ? MEAL_GAP : Math.max(range, 6), meal ? 5500 : 5000);
       const live = bot.entities?.[target.id];

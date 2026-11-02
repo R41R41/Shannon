@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CAMP_RANGE, campSite, campWords, exposureFromSpawner, hideoutWords, hideoutsFrom, seenFromSpawner, type CampReader } from '../../src/services/minebot/utils/huntCamp.js';
+import { CAMP_RANGE, SPAWNER_RANGE, campSite, campWords, exposureFromSpawner, hideoutWords, hideoutsFrom, seenFromSpawner, type CampReader } from '../../src/services/minebot/utils/huntCamp.js';
 import { LAYERS, SPAWNER, ground } from './fixtures/blazeSpawnerRoom.js';
 
 // Where to stand at a blaze spawner (S2, 2026-11-02). The fixture is the REAL ground of a staged natural world's fortress, read by the lab probe (map_blaze) round its spawner at
@@ -105,10 +105,25 @@ describe('hideoutsFrom: a footing no blaze of the spawner can see', () => {
       expect(hideout.steps).toBeGreaterThan(0);
       expect(hideout.steps).toBeLessThanOrEqual(40);
     }
-    expect(found.map(hideout => hideout.steps)).toEqual([...found.map(hideout => hideout.steps)].sort((a, b) => a - b));
+    // nearest first, but for one beyond the spawner's range that may lead (below)
+    const rest = found.filter(hideout => hideout.away <= SPAWNER_RANGE).map(hideout => hideout.steps);
+    expect(rest).toEqual([...rest].sort((a, b) => a - b));
     const words = hideoutWords(found);
     expect(words).toContain('隠れ場所');
     expect(words).toMatch(/\(\d+, 56, -?\d+\) \d+歩/u);
+  });
+
+  it('a hideout beyond the spawner\'s 16 m (where a rest lets no blaze be added) goes first when its walk is at most ten steps longer, and the distance is said', () => {
+    const read = flatGround(wallOf(6, -6, 6));
+    const found = hideoutsFrom(read, ORIGIN, AT_CAMP, 3);
+    const nearestSteps = Math.min(...hideoutsFrom(read, ORIGIN, AT_CAMP, 24).map(hideout => hideout.steps));
+    expect(found[0].away).toBeGreaterThan(SPAWNER_RANGE);
+    expect(found[0].steps).toBeLessThanOrEqual(nearestSteps + 10);
+    expect(found.slice(1).every(hideout => hideout.steps >= nearestSteps)).toBe(true);
+    expect(hideoutWords(found)).toMatch(/湧き場から\d+m（湧き場の範囲の外）/u);
+    // a wall whose shadow is short (the footing behind it is within 16 m of the spawner only): the nearest, with no such mark
+    const near = hideoutsFrom(flatGround(wallOf(6, -2, 2, 'nether_bricks', 57)), ORIGIN, AT_CAMP, 3);
+    for (const hideout of near) expect(hideout.away).toBeGreaterThan(0);
   });
 
   it('the way round the wall is walked (steps count the cells), and a wall too far to walk round within the limit gives none', () => {
@@ -131,7 +146,8 @@ describe('hideoutsFrom: a footing no blaze of the spawner can see', () => {
     const best = hideoutsFrom(read, ORIGIN, AT_CAMP, 1)[0];
     const burning = flatGround({ ...wallOf(6, -6, 6), [`${best.x},${best.y},${best.z}`]: 'fire' });
     for (const hideout of hideoutsFrom(burning, ORIGIN, AT_CAMP, 6)) {
-      expect(Math.abs(hideout.x - best.x) <= 1 && Math.abs(hideout.z - best.z) <= 1 && hideout.y === best.y).toBe(false);
+      // (in or beside it: the cell and its four neighbours)
+      expect(Math.abs(hideout.x - best.x) + Math.abs(hideout.z - best.z) <= 1 && hideout.y === best.y).toBe(false);
     }
   });
 
@@ -182,5 +198,18 @@ describe('the fixture itself', () => {
       for (const row of rows) expect(row.length, `y ${y} ${row}`).toBe(17);
     }
     expect(ground()(SPAWNER.x, SPAWNER.y, SPAWNER.z)?.name).toBe('spawner');
+  });
+});
+
+describe('hideoutsFrom: a fire beside the way does not shut it', () => {
+  it('the footings behind the wall are still found when the way round its end passes beside fire (go puts fire out), but none in or beside the fire is offered', () => {
+    const cells = { ...wallOf(6, -6, 6), '3,56,-7': 'fire', '4,56,-7': 'fire' };
+    const read = flatGround(cells);
+    const found = hideoutsFrom(read, ORIGIN, AT_CAMP, 3);
+    expect(found.length).toBeGreaterThan(0);
+    for (const hideout of found) {
+      expect(hideout.x).toBeGreaterThanOrEqual(7);
+      for (const [fx, fz] of [[3, -7], [4, -7]]) expect(Math.abs(hideout.x - fx) + Math.abs(hideout.z - fz) <= 1 && hideout.y === 56).toBe(false);
+    }
   });
 });

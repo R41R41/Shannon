@@ -72,7 +72,17 @@ export function campSite(read: CampReader, spawner: { x: number; y: number; z: n
 
 // ---- where to go when the health runs low: a footing no blaze of the spawner can see ---------------------------------------------------------
 
-export interface Hideout { x: number; y: number; z: number; /** Steps of the walk from the camp cell (a step is one cell across, up or down one). */ steps: number }
+export interface Hideout {
+  x: number; y: number; z: number;
+  /** Steps of the walk from the camp cell (a step is one cell across, up or down one). */
+  steps: number;
+  /** Metres from the spawner's middle to the feet: a spawner works only while a player is within SPAWNER_RANGE of it, so a rest beyond it lets no blaze be added. */
+  away: number;
+}
+/** A spawner's requiredPlayerRange: it counts its delay down and spawns only while a player is within this many metres of its middle. */
+export const SPAWNER_RANGE = 16;
+/** A hideout beyond the spawner's range is preferred over a nearer one inside it if its walk is at most this many steps longer. */
+const FAR_EXTRA_STEPS = 10;
 /** How far (steps of the walk) a hideout is looked for. */
 export const HIDEOUT_STEPS = 40;
 /** Where the blazes of a spawner may be (feet): the spawn box is four blocks round it, one up or down, and they hover up to three higher. */
@@ -135,18 +145,29 @@ export function exposureFromSpawner(read: CampReader, spawner: { x: number; y: n
  */
 export function hideoutsFrom(read: CampReader, spawner: { x: number; y: number; z: number }, from: { x: number; y: number; z: number }, limit = 3, maxSteps = HIDEOUT_STEPS): Hideout[] {
   const names = (x: number, y: number, z: number): string | null => read(x, y, z)?.name ?? null;
-  const standable = (x: number, y: number, z: number): boolean => {
+  /** A cell the walk may pass: a floor, two open cells, no fire or lava in it (a fire beside it is put out by `go`, so it does not shut the way). */
+  const walkable = (x: number, y: number, z: number): boolean => {
     const feet = read(x, y, z), head = read(x, y + 1, z), floor = read(x, y - 1, z);
-    return !!feet && !!head && !!floor && open(feet) && open(head) && solid(floor) && !NOT_A_FLOOR.has(floor.name) && !hazardAtFeetWith(names, x, y, z);
+    return !!feet && !!head && !!floor && open(feet) && open(head) && solid(floor) && !NOT_A_FLOOR.has(floor.name);
   };
+  /** A cell to stay in: walkable, and not beside fire, lava or magma either (go's own rule for a place). */
+  const standable = (x: number, y: number, z: number): boolean => walkable(x, y, z) && !hazardAtFeetWith(names, x, y, z);
   const hidden = (x: number, y: number, z: number): boolean => !seenFromSpawner(read, spawner, { x, y, z });
   const seen = new Map<string, number>([[`${from.x},${from.y},${from.z}`, 0]]);
   const queue: Array<{ x: number; y: number; z: number }> = [{ x: from.x, y: from.y, z: from.z }];
-  const found: Hideout[] = [];
+  const found: Hideout[] = [], cap = Math.max(limit * 3, 12);
+  let beyondFound = false;
   for (let head = 0; head < queue.length && queue.length < 2500; head++) {
     const cell = queue[head]!;
     const steps = seen.get(`${cell.x},${cell.y},${cell.z}`)!;
-    if (steps > 0 && hidden(cell.x, cell.y, cell.z)) { found.push({ ...cell, steps }); if (found.length >= limit * 3) break; }
+    const away = Math.round(Math.hypot(cell.x - spawner.x, cell.y - spawner.y - 0.5, cell.z - spawner.z) * 10) / 10;
+    // The lines are the costly part: once enough are found, only a cell beyond the spawner's range is looked at (the first of them is the only one that can change the order).
+    if (steps > 0 && (found.length < cap || (away > SPAWNER_RANGE && !beyondFound)) && standable(cell.x, cell.y, cell.z) && hidden(cell.x, cell.y, cell.z)) {
+      found.push({ ...cell, steps, away });
+      if (away > SPAWNER_RANGE) beyondFound = true;
+    }
+    // The walk is searched on to ten steps past the first hideout found (a farther one may lie beyond the spawner's range), not further.
+    if (found.length >= cap && (beyondFound || steps > found[0].steps + FAR_EXTRA_STEPS)) break;
     if (steps >= maxSteps) continue;
     for (const [ux, uz] of SIDES) for (const dy of [0, 1, -1]) {
       const x = cell.x + ux, y = cell.y + dy, z = cell.z + uz;
@@ -154,19 +175,23 @@ export function hideoutsFrom(read: CampReader, spawner: { x: number; y: number; 
       if (seen.has(key)) continue;
       if (dy === 1 && !open(read(cell.x, cell.y + 2, cell.z))) continue;
       if (dy === -1 && !(open(read(x, cell.y, z)) && open(read(x, cell.y + 1, z)))) continue;
-      if (!standable(x, y, z)) continue;
+      if (!walkable(x, y, z)) continue;
       seen.set(key, steps + 1);
       queue.push({ x, y, z });
     }
   }
-  // Nearest first; of equal steps, the one farther from the spawner.
-  return found.sort((a, b) => a.steps - b.steps || Math.hypot(b.x - spawner.x, b.z - spawner.z) - Math.hypot(a.x - spawner.x, a.z - spawner.z)).slice(0, limit);
+  // Nearest first (of equal steps, the one farther from the spawner); but one beyond the spawner's range (where a rest adds no blaze) goes first when its walk is not much longer.
+  found.sort((a, b) => a.steps - b.steps || b.away - a.away);
+  const nearest = found[0]?.steps ?? 0;
+  const beyond = found.find(h => h.away > SPAWNER_RANGE && h.steps <= nearest + FAR_EXTRA_STEPS);
+  const ordered = beyond ? [beyond, ...found.filter(h => h !== beyond)] : found;
+  return ordered.slice(0, limit);
 }
 
 /** The hideouts as the planner reads them. */
 export function hideoutWords(list: Hideout[], within = HIDEOUT_STEPS): string {
   if (!list.length) return `隠れ場所（湧き場のどこからも見えない足場）は ${within} 歩内に無い。体力が減ったら go で湧き場から遠ざかって食べる`;
-  return `隠れ場所（湧き場のどこからも見えない足場。野営マスから歩数）: ${list.map(h => `(${h.x}, ${h.y}, ${h.z}) ${h.steps}歩`).join(' / ')}。体力が12を切ったらそこへ go して食べ、体力が戻ってから野営マスへ戻る`;
+  return `隠れ場所（湧き場のどこからも見えない足場。野営マスから歩数）: ${list.map(h => `(${h.x}, ${h.y}, ${h.z}) ${h.steps}歩・湧き場から${Math.round(h.away)}m${h.away > SPAWNER_RANGE ? '（湧き場の範囲の外）' : ''}`).join(' / ')}。体力が12を切ったらそこへ go して食べ、体力が戻ってから野営マスへ戻る。湧き場は ${SPAWNER_RANGE}m 内に人がいる間だけ blaze を増やす（範囲の外で休めば増えない）`;
 }
 
 /** The camp cells as the planner reads them, in one short line each. */
