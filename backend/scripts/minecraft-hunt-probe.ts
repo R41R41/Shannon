@@ -311,14 +311,14 @@ scene('blaze_proto_body_b', 'the same again (a second sample)', note => blazePro
 scene('blaze_proto_hold', 'the same protocol with attack hold in place of fight', note => blazeProtocol('hold', note));
 // The sortie protocol (S2, 2026-11-02): the body rests at the hideout, where nothing sees it, and goes out for one short act at a time: [go to the camp cell, fight a few seconds, pick up, go back to the
 // hideout]. The head's thinking time is spent at the hideout, not in the blazes' sight. The next sortie starts when the health is back (backHp).
-async function blazeSortie(note: (text: string) => void, options: { fightSeconds?: number; backHp?: number; retreatHp?: number; thinkMs?: number; nearest?: boolean } = {}): Promise<Record<string, unknown>> {
+async function blazeSortie(note: (text: string) => void, options: { fightSeconds?: number; backHp?: number; retreatHp?: number; thinkMs?: number; nearest?: boolean; r59?: boolean } = {}): Promise<Record<string, unknown>> {
   const stand = sites.blazeStand as number[] | undefined;
   if (!stand) throw new Error('no blazeStand in the sites');
   const fightSeconds = options.fightSeconds ?? 12, backHp = options.backHp ?? 18, thinkMs = options.thinkMs ?? 5000;
   const seconds = timedSeconds || 300;
   await ask('difficulty normal'); await ask('time set midnight'); await ask('weather clear');
   await ask('execute in minecraft:the_nether run kill @e[type=minecraft:blaze]');
-  await equip({ diamond_sword: 1, iron_pickaxe: 1, shield: 2, cooked_beef: 24, golden_apple: 3, cobblestone: 64 }, { armor: 'iron', shield: true });
+  await equip(options.r59 ? { stone_sword: 1, diamond_pickaxe: 1, shield: 1, cooked_porkchop: 7, cobblestone: 173 } : { diamond_sword: 1, iron_pickaxe: 1, shield: 2, cooked_beef: 24, golden_apple: 3, cobblestone: 64 }, { armor: 'iron', shield: true });
   await placeActor('the_nether', stand[0], stand[1], stand[2], 24);
   const start = Date.now();
   const rods0 = await countServer('blaze_rod');
@@ -378,6 +378,7 @@ async function blazeSortie(note: (text: string) => void, options: { fightSeconds
     hpTrack: track.filter((_, index) => index % 5 === 0).join(' '), fightSeconds, backHp, thinkMs };
 }
 scene('blaze_sortie', 'the sortie protocol at the c1 camp: rest at the hideout, then [go to the camp cell, fight 12 s, pick up, go back to the hideout], 5 s of thinking at the hideout', note => blazeSortie(note));
+scene('blaze_r59_sortie', 'the sortie protocol with the run59 pack (stone sword, one shield, 7 pork, 173 cobblestone), blows from behind the raised shield, 600 s', note => blazeSortie(note, { r59: true }));
 scene('blaze_sortie_b', 'the sortie protocol again (a second sample)', note => blazeSortie(note));
 scene('blaze_sortie_near', 'the sortie protocol resting at the NEAREST hideout (by steps) whether or not it is within the spawner\x27s 16 m', note => blazeSortie(note, { nearest: true }));
 scene('blaze_sortie_long', 'the sortie protocol with 25 s fights and retreatHp 11', note => blazeSortie(note, { fightSeconds: 25, retreatHp: 11 }));
