@@ -590,6 +590,49 @@ async function blazeSlit(note: (text: string) => void, options: { seconds?: numb
 }
 scene('blaze_slit_low', 'the low slit: a pocket one block below the room floor behind the west wall, one opening at the floor level, attack hold 300 s, then fetch the rods through the wall cell', note => blazeSlit(note, { fetch: true }));
 scene('blaze_slit_flush', 'the low slit with no partition: the pocket is in the wall plane one block below the floor, the room cell beside it is the opening; hold 300 s, fetch', note => blazeSlit(note, { fetch: true, flush: true }));
+// A blow with the shield raised and with it lowered (S2, 2026-11-03; Codex's mechanism check for shield_rush): the precedent (mine-ai-mcp) strikes with the shield held up, the body's own notes say the server refuses
+// such a blow. A still iron golem (no AI, 100 hp) on a clean platform; eight swings 0.8 s apart each way; the golem's health is read from the server after each way.
+async function blowShieldCompare(note: (text: string) => void): Promise<Record<string, unknown>> {
+  const stand = sites.blazeStand as number[] | undefined;
+  if (!stand) throw new Error('no blazeStand in the sites');
+  const nether = 'execute in minecraft:the_nether run';
+  await ask('gamerule doMobSpawning false'); await ask('difficulty normal');
+  await ask(`${nether} kill @e[type=minecraft:blaze]`);
+  await equip({ stone_sword: 1, shield: 1 }, { armor: 'iron', shield: true });
+  await placeActor('the_nether', stand[0], stand[1], stand[2], 24);
+  const px = stand[0], py = stand[1] + 20, pz = stand[2];
+  await ask(`${nether} fill ${px - 4} ${py - 1} ${pz - 4} ${px + 4} ${py - 1} ${pz + 4} minecraft:cobblestone`);
+  await ask(`${nether} fill ${px - 4} ${py} ${pz - 4} ${px + 4} ${py + 4} ${pz + 4} minecraft:air`);
+  await ask(`${nether} tp ${ACTOR} ${px + 0.5} ${py} ${pz + 0.5}`);
+  await sleep(2000);
+  const healthOf = async (): Promise<number> => { const text = await ask(`${nether} data get entity @e[tag=dummy,limit=1] Health`); const found = /following entity data: ([\d.]+)f/u.exec(text); return found ? Number(found[1]) : -1; };
+  const out: Record<string, unknown> = {};
+  for (const mode of ['raised', 'lowered', 'raised_again'] as const) {
+    await ask(`${nether} kill @e[tag=dummy]`);
+    await ask(`${nether} summon minecraft:iron_golem ${px + 2.5} ${py} ${pz + 0.5} {NoAI:1b,Tags:["dummy"],PersistenceRequired:1b}`);
+    await sleep(1500);
+    const golem = actor.nearestEntity((entity: any) => entity?.name === 'iron_golem');
+    if (!golem) { note(`${mode}: no golem seen`); continue; }
+    const before = await healthOf();
+    let used = 'n/a';
+    if (mode === 'lowered') { try { actor.deactivateItem(); } catch { /* none */ } } else { try { actor.activateItem(true); } catch (error) { note(`activate failed: ${String(error)}`); } }
+    await sleep(500);
+    used = String((actor as any).usingHeldItem);
+    for (let swing = 0; swing < 8; swing++) {
+      try { await actor.lookAt(golem.position.offset(0, golem.height * 0.6, 0), true); actor.attack(golem); } catch (error) { note(`attack failed: ${String(error)}`); }
+      await sleep(800);
+    }
+    const after = await healthOf();
+    out[mode] = { golemHp: `${before}→${after}`, usingHeldItem: used };
+    note(`${mode}: golem ${before}→${after} (a stone sword hit is 5 minus the golem's armour, 8 swings), usingHeldItem ${used}`);
+    try { actor.deactivateItem(); } catch { /* none */ }
+    await sleep(800);
+  }
+  await ask(`${nether} kill @e[tag=dummy]`);
+  await ask('gamerule doMobSpawning true');
+  return out;
+}
+scene('blow_shield_compare', 'strikes a still iron golem eight times with the shield raised, lowered, raised again: does the blow land, and how much', note => blowShieldCompare(note));
 scene('blaze_nook_sealed','the nook with no window (sealed to the head height, top open): hold for 120 s', note => blazeNook(note, { window: false, seconds: 120 }));
 // Sniping (S2, 2026-11-02): a bow from a cell far enough from the spawner room that few of its blazes see the body and their fire (spread grows with the square root of the distance) mostly misses.
 async function blazeSnipe(note: (text: string) => void, at: [number, number, number]): Promise<Record<string, unknown>> {
