@@ -154,7 +154,7 @@ const scene = (name: string, title: string, run: (note: (text: string) => void) 
 const lineHas = (run: ActRun, pattern: RegExp) => run.lines.some(line => pattern.test(line));
 
 // ===== the blaze camp ======================================================================================================================
-async function blazeCamp(kind: 'hold' | 'fight', effects: string[], note: (text: string) => void): Promise<Record<string, unknown>> {
+async function blazeCamp(kind: 'hold' | 'fight', effects: string[], note: (text: string) => void, near = false): Promise<Record<string, unknown>> {
   const stand = sites.blazeStand as number[] | undefined;
   if (!stand) throw new Error('no blazeStand in the sites');
   const seconds = timedSeconds || 240;
@@ -169,9 +169,11 @@ async function blazeCamp(kind: 'hold' | 'fight', effects: string[], note: (text:
   const spawnerNear = sites.blazeSpawner as number[] | undefined;
   while (Date.now() - start < seconds * 1000 && !disconnected) {
     if (Number(actor.health) <= 0) break;
+    // The planner's way to a camp: `go` to the spawner with a range, then hold; or (the staged stand) back to a cell the site file names, 4 to 6 blocks off.
+    const there = near && spawnerNear ? { do: 'go', to: { x: spawnerNear[0], y: spawnerNear[1], z: spawnerNear[2] }, range: 2.6, seconds: 20 } : { do: 'go', to: { x: stand[0], y: stand[1], z: stand[2] }, range: 1, seconds: 20 };
     const hands = kind === 'hold'
-      ? [{ do: 'attack', target: 'blaze', hold: true, seconds: 25 }, { do: 'pickup', range: 8 }, { do: 'go', to: { x: stand[0], y: stand[1], z: stand[2] }, range: 1, seconds: 20 }]
-      : [{ do: 'fight', target: 'blaze', seconds: 25, retreatHp: 8 }, { do: 'pickup', range: 8 }, { do: 'go', to: { x: stand[0], y: stand[1], z: stand[2] }, range: 1, seconds: 20 }];
+      ? [...(near ? [there] : []), { do: 'attack', target: 'blaze', hold: true, seconds: 25 }, { do: 'pickup', range: 8 }, ...(near ? [] : [there])]
+      : [...(near ? [there] : []), { do: 'fight', target: 'blaze', seconds: 25, retreatHp: 8 }, { do: 'pickup', range: 8 }, ...(near ? [] : [there])];
     const hpBefore = Number(actor.health);
     const run = await act(`${kind}#${metrics.acts + 1}`, hands, 70, { accept: ['blaze'] });
     metrics.acts++; if (run.ok) metrics.okActs++;
@@ -195,34 +197,98 @@ async function blazeCamp(kind: 'hold' | 'fight', effects: string[], note: (text:
   metrics.deathsHere = deaths;
   return { seconds: r1((Date.now() - start) / 1000), rods, rodsPerMinute: r1(rods / Math.max(minutes, 0.1)), ...metrics, shieldBroke: !actor.inventory?.slots?.[45] || actor.inventory.slots[45].name !== 'shield', effects };
 }
-scene('blaze_hold', 'blaze camp: attack hold, iron armour, shield, no fire resistance', note => blazeCamp('hold', [], note));
+scene('blaze_hold', 'blaze camp: attack hold, iron armour, shield, no fire resistance, from the staged stand (4 to 6 blocks off the spawner)', note => blazeCamp('hold', [], note));
+scene('blaze_hold_near', 'blaze camp: attack hold, iron armour, shield, no fire resistance, after a go to within 2.6 blocks of the spawner', note => blazeCamp('hold', [], note, true));
+scene('blaze_fight_near', 'blaze camp: fight hand after a go to within 2.6 blocks of the spawner', note => blazeCamp('fight', [], note, true));
 scene('blaze_hold_fireres', 'blaze camp: attack hold with fire resistance', note => blazeCamp('hold', ['fire_resistance'], note));
 scene('blaze_fight', 'blaze camp: fight hand, no fire resistance', note => blazeCamp('fight', [], note));
 
+// ===== a map of the blaze camp's ground (what the planner has to read to choose a camp cell) ===================================================
+scene('map_blaze', 'a map of the cells round the blaze spawner: layers from 3 below to 3 above, 17 by 17, S spawner, @ the staged stand, B brick, # fence, ~ lava, n netherrack, . air', async () => {
+  const spawner = sites.blazeSpawner as number[], stand = sites.blazeStand as number[];
+  await ask('difficulty peaceful');
+  await placeActor('the_nether', stand[0], stand[1], stand[2], 24);
+  await sleep(2000);
+  const glyph = (x: number, y: number, z: number): string => {
+    if (x === stand[0] && y === stand[1] && z === stand[2]) return '@';
+    const name = actor.blockAt(new Vec3(x, y, z))?.name;
+    if (!name) return '?';
+    if (name === 'air' || name === 'cave_air') return '.';
+    if (name === 'spawner') return 'S';
+    if (name.includes('fence')) return '#';
+    if (name === 'lava') return '~';
+    if (name.includes('nether_brick')) return 'B';
+    if (name === 'netherrack') return 'n';
+    if (name.includes('stairs')) return '/';
+    if (name.includes('slab')) return '_';
+    if (name === 'soul_sand') return 's';
+    return 'x';
+  };
+  const layers: string[] = [];
+  for (let dy = 3; dy >= -3; dy--) {
+    const y = spawner[1] + dy;
+    layers.push(`--- y=${y} (${dy >= 0 ? '+' : ''}${dy} from the spawner)  x ${spawner[0] - 8}..${spawner[0] + 8} across, z ${spawner[2] - 8} (top) .. ${spawner[2] + 8}`);
+    for (let z = spawner[2] - 8; z <= spawner[2] + 8; z++) { let row = ''; for (let x = spawner[0] - 8; x <= spawner[0] + 8; x++) row += glyph(x, y, z); layers.push(`${String(z).padStart(5)} ${row}`); }
+  }
+  for (const line of layers) log(`MAP ${line}`);
+  return { spawner, stand, layers: layers.length };
+});
+
 // ===== bartering ==============================================================================================================================
-scene('barter', 'barter: 16 gold ingots to a piglin in the Nether, golden boots on', async note => {
+/** A flat netherrack plate with open air over it, at y=120 (the Nether's own roof is cut away over it): no tree, wall, hole, wither skeleton or fortress fire to meet. Returns the standing height. */
+async function netherPlate(x: number, z: number, half = 20, y = 120): Promise<number> {
+  await ask(`execute in minecraft:the_nether run forceload add ${x - 32} ${z - 32} ${x + 32} ${z + 32}`); await sleep(4000);
+  await ask(`execute in minecraft:the_nether run fill ${x - half} ${y - 3} ${z - half} ${x + half} ${y - 1} ${z + half} minecraft:netherrack`);
+  await ask(`execute in minecraft:the_nether run fill ${x - half} ${y} ${z - half} ${x + half} ${y + 8} ${z + half} minecraft:air`);
+  return y;
+}
+/** What the SERVER says of the nearest piglin: its health, and who it has set itself against (its brain's attack target); for the exchange that did not go as it should. */
+async function piglinDiagnosis(): Promise<string> {
+  const health = await ask('execute in minecraft:the_nether run data get entity @e[type=minecraft:piglin,limit=1,sort=nearest] Health');
+  const target = await ask('execute in minecraft:the_nether run data get entity @e[type=minecraft:piglin,limit=1,sort=nearest] Brain.memories."minecraft:attack_target"');
+  const admiring = await ask('execute in minecraft:the_nether run data get entity @e[type=minecraft:piglin,limit=1,sort=nearest] Brain.memories."minecraft:admiring_disabled"');
+  return `health[${health.replace(/s+/gu, ' ').slice(0, 70)}] attackTarget[${target.replace(/s+/gu, ' ').slice(0, 110)}] admiringDisabled[${admiring.replace(/s+/gu, ' ').slice(0, 70)}]`;
+}
+scene('barter', 'barter: the golden boots put on by the equip hand, then gold to a piglin on a plate in the Nether', async note => {
   const stand = (sites.blazeStand ?? sites.netherArrival) as number[];
+  const seconds = timedSeconds || 150;
   await ask('difficulty normal'); await ask('time set noon');
   await ask('execute in minecraft:the_nether run kill @e[type=minecraft:piglin]');
-  await equip({ diamond_sword: 1, gold_ingot: 16, cooked_beef: 8 }, { armor: 'iron', goldBoots: true, shield: true });
-  await placeActor('the_nether', stand[0], stand[1], stand[2], 16);
-  await ask(`execute in minecraft:the_nether run summon minecraft:piglin ${stand[0] + 2.5} ${stand[1]} ${stand[2] + 0.5} {PersistenceRequired:1b}`);
+  await equip({ diamond_sword: 1, gold_ingot: 40, golden_boots: 1, cooked_beef: 8 }, { armor: 'none', shield: true });
+  const y = await netherPlate(stand[0], stand[2]);
+  await placeActor('the_nether', stand[0], y, stand[2], 24);
+  // The gold armour is put on by the hand a planner would use, and read back from the SERVER.
+  const wear = await act('wear', [{ do: 'equip', item: 'golden_boots' }], 15);
+  const worn = /passed/iu.test(await ask(`execute if items entity ${ACTOR} armor.feet minecraft:golden_boots`));
+  await ask(`execute in minecraft:the_nether run summon minecraft:piglin ${stand[0] + 2.5} ${y} ${stand[2] + 0.5} {PersistenceRequired:1b}`);
   await sleep(2500);
   const start = Date.now();
   const gained: Record<string, number> = {};
-  let exchanges = 0, refused = 0;
+  let exchanges = 0, refused = 0, nothingReturned = 0, rounds = 0;
   const lines: string[] = [];
   const stalls: string[] = [];
-  for (let round = 0; round < 16 && !disconnected; round++) {
-    const run = await act(`barter#${round + 1}`, [{ do: 'use', item: 'gold_ingot', target: 'piglin' }], 40);
-    lines.push(run.lines[0] ?? '');
-    if (run.ok) { exchanges++; for (const [name, count] of Object.entries(run.pack)) if (name !== 'gold_ingot' && count > 0) gained[name] = (gained[name] ?? 0) + count; }
-    else { refused++; stalls.push(`${run.stoppedBy ?? ''} ${(run.lines[0] ?? '').slice(0, 160)}`); if (refused >= 4) { note('four refusals in all: stopped'); break; } }
+  const exchangeMs: number[] = [];
+  while (Date.now() - start < seconds * 1000 && !disconnected) {
+    rounds++;
+    const piglin = (Object.values(actor.entities ?? {}) as any[]).filter(entity => entity?.name === 'piglin' && entity.position).sort((a, b) => a.position.distanceTo(actor.entity.position) - b.position.distanceTo(actor.entity.position))[0];
+    const gap = piglin?.position ? r1(piglin.position.distanceTo(actor.entity.position)) : null;
+    const run = await act(`barter#${rounds}`, [{ do: 'use', item: 'gold_ingot', target: 'piglin' }], 40);
+    lines.push(`d=${gap} ${run.lines[0] ?? ''}`);
+    if (run.ok) { exchanges++; exchangeMs.push(run.wallMs); for (const [name, count] of Object.entries(run.pack)) if (name !== 'gold_ingot' && count > 0) gained[name] = (gained[name] ?? 0) + count; }
+    else {
+      refused++;
+      if (/barter_nothing_returned|手放した|投げた物が見えなかった/u.test(run.lines[0] ?? '')) nothingReturned++;
+      stalls.push(`#${rounds} d=${gap} ${run.stoppedBy ?? ''} ${(run.lines[0] ?? '').slice(0, 200)} || server: ${await piglinDiagnosis()}`);
+      if (refused >= 5) { note('five refusals in all: stopped'); break; }
+    }
     if (Number(actor.health) < 8) { note('health low: stopped'); break; }
   }
+  const elapsed = (Date.now() - start) / 1000;
   await ask('execute in minecraft:the_nether run kill @e[type=minecraft:piglin]');
-  const seconds = (Date.now() - start) / 1000;
-  return { exchanges, refused, seconds: r1(seconds), secondsPerExchange: exchanges ? r1(seconds / exchanges) : null, gained, pearls: gained.ender_pearl ?? 0, goldLeft: await countServer('gold_ingot'), sampleLines: lines.slice(0, 4), stalls: stalls.slice(0, 4), hp: actor.health };
+  const pearls = gained.ender_pearl ?? 0;
+  return { wearLine: (wear.lines[0] ?? '').slice(0, 160), wornOnServer: worn, rounds, exchanges, refused, nothingReturned, seconds: r1(elapsed), exchangesPerMinute: r1(exchanges / Math.max(elapsed / 60, 0.1)),
+    meanExchangeSeconds: exchangeMs.length ? r1(exchangeMs.reduce((sum, ms) => sum + ms, 0) / exchangeMs.length / 1000) : null, gained, pearls, goldLeft: await countServer('gold_ingot'),
+    sampleLines: lines.slice(0, 6), stalls: stalls.slice(0, 5), hp: actor.health };
 });
 
 // ===== the enderman's roofed hole ==============================================================================================================
@@ -234,11 +300,7 @@ async function endermanHunt(where: 'platform' | 'warped', note: (text: string) =
   let y = stand[1];
   if (where === 'platform') {
     // A flat netherrack plate with open air over it, so that the roof's plan meets no tree, wall or hole.
-    const [x, z] = [stand[0], stand[2]];
-    y = 120;
-    await ask(`execute in minecraft:the_nether run forceload add ${x - 32} ${z - 32} ${x + 32} ${z + 32}`); await sleep(4000);
-    await ask(`execute in minecraft:the_nether run fill ${x - 20} ${y - 3} ${z - 20} ${x + 20} ${y - 1} ${z + 20} minecraft:netherrack`);
-    await ask(`execute in minecraft:the_nether run fill ${x - 20} ${y} ${z - 20} ${x + 20} ${y + 8} ${z + 20} minecraft:air`);
+    y = await netherPlate(stand[0], stand[2]);
   }
   await placeActor('the_nether', stand[0], y, stand[2], 24);
   const rows: Array<Record<string, unknown>> = [];
@@ -271,10 +333,16 @@ scene('ender_warped', 'enderman: the warped forest itself, four endermen', note 
 // ===== the thrown eye against /locate =========================================================================================================
 function bearingBetween(from: { x: number; z: number }, to: { x: number; z: number }): number { return (Math.atan2(to.x - from.x, -(to.z - from.z)) * 180 / Math.PI + 360) % 360; }
 const wrap = (degrees: number) => ((degrees + 540) % 360) - 180;
+let locateShown = 0;
 async function locateFrom(x: number, y: number, z: number): Promise<{ x: number; z: number } | null> {
-  const text = await ask(`execute in minecraft:overworld positioned ${x} ${y} ${z} run locate structure minecraft:stronghold`, 30_000);
-  const m = /\[(-?\d+), ~?(?:-?\d+)?, ?(-?\d+)\]/u.exec(text) ?? /(-?\d+), ~, (-?\d+)/u.exec(text);
-  return m ? { x: Number(m[1]), z: Number(m[2]) } : null;
+  // The answer is a translatable message with the coordinates in a nested one; the plain text is tried first, then the JSON form (which keeps the keys).
+  const text = await ask(`execute in minecraft:overworld positioned ${x} ${y} ${z} run locate structure minecraft:stronghold`, 30_000, true);
+  const plain = /\[(-?\d+), ~?(?:-?\d+)?, ?(-?\d+)\]/u.exec(text) ?? /(-?\d+), ~, (-?\d+)/u.exec(text);
+  if (plain) return { x: Number(plain[1]), z: Number(plain[2]) };
+  const numbers = [...text.matchAll(/"(-?\d{2,6})"|"text":"(-?\d{2,6})"|:(-?\d{2,6})[,}\]]/gu)].map(hit => Number(hit[1] ?? hit[2] ?? hit[3]));
+  if (locateShown++ < 2) log(`NOTE locate answer: ${text.replace(/\s+/gu, ' ').slice(0, 700)} -> numbers ${numbers.slice(0, 8).join(',')}`);
+  // [x, "~", z] and then the distance: the "~" is not a number, so the numbers are x, z, distance.
+  return numbers.length >= 2 ? { x: numbers[0], z: numbers[1] } : null;
 }
 async function eyeFrom(x: number, z: number, y = 200): Promise<{ run: ActRun; eye: any; located: { x: number; z: number } | null }> {
   await ask(`execute in minecraft:overworld run forceload add ${x - 16} ${z - 16} ${x + 16} ${z + 16}`); await sleep(2500);
@@ -295,7 +363,7 @@ scene('eye_locate', 'the thrown eye: ten throws, the bearing against /locate str
   await equip({}, { armor: 'none', shield: false });
   const offsets: Array<[number, number]> = [[220, 180], [-260, 140], [140, -330], [-180, -240], [380, 60], [-50, 420], [300, -300], [-420, -120], [90, 150], [-110, -60]];
   const rows: Array<Record<string, unknown>> = [];
-  for (const [dx, dz] of offsets) {
+  for (const [dx, dz] of offsets.slice(0, Number(process.env.MINECRAFT_HUNT_THROWS ?? 0) || offsets.length)) {
     if (disconnected) break;
     const x = centre[0] + dx, z = centre[2] + dz;
     const { run, eye, located } = await eyeFrom(x, z);
@@ -312,9 +380,13 @@ scene('eye_locate', 'the thrown eye: ten throws, the bearing against /locate str
   return { throws: rows.length, measured: errors.length, maxErrorDeg: errors.length ? Math.max(...errors) : null, meanErrorDeg: errors.length ? r1(errors.reduce((a, b) => a + b, 0) / errors.length * 1000) / 1000 : null, fates, rows };
 });
 scene('eye_near', 'the thrown eye near the stronghold: within 12 blocks the eye goes to the stronghold itself, right above it it sinks', async note => {
-  const centre = (sites.strongholdPortalCenter ?? sites.strongholdSurface) as number[];
+  const portal = (sites.strongholdPortalCenter ?? sites.strongholdSurface) as number[];
   await ask('difficulty peaceful'); await ask('time set noon');
   await equip({}, { armor: 'none', shield: false });
+  // The eye flies to where /locate points (the stronghold's start), which is not the portal room: the throws are made round THAT place.
+  const target = await locateFrom(portal[0], 150, portal[2]);
+  note(`/locate from the portal room (${portal[0]},${portal[2]}) says ${target ? `${target.x},${target.z}` : 'nothing we could read'}`);
+  const centre = [target?.x ?? portal[0], 0, target?.z ?? portal[2]];
   const rows: Array<Record<string, unknown>> = [];
   for (const [dx, dz] of [[0, 0], [3, 2], [6, 5], [-8, 4], [-5, -9], [10, 1], [14, -6], [0, 22], [30, 0], [-45, 20]] as Array<[number, number]>) {
     if (disconnected) break;
@@ -354,7 +426,7 @@ scene('frame_search', 'find-structure stronghold: the frames within a radius of 
     const { receipt, wallMs } = await runSkill('find-structure', { structureType: 'stronghold', radius: item.radius, x: cx, z: cz }, 30);
     const text = String(receipt?.result ?? '');
     const found = /エンドポータルの枠を発見: (\d+)個/u.exec(text);
-    const inRadius = frames.filter(frame => Math.hypot(frame[0] - cx, frame[2] - cz) <= item.radius).length;
+    const inRadius = (frames as any[]).filter(frame => Math.hypot((Array.isArray(frame) ? frame[0] : frame.x) - cx, (Array.isArray(frame) ? frame[2] : frame.z) - cz) <= item.radius).length;
     rows.push({ stand: [sx, sz], estimate: [cx, cz], radius: item.radius, truthFramesInRadius: inRadius, foundFrames: found ? Number(found[1]) : 0, ms: Date.now() - started - 0 * wallMs, text: text.slice(0, 420) });
   }
   const wrong = rows.filter(row => (row.truthFramesInRadius as number) > 0 && (row.foundFrames as number) === 0).length;

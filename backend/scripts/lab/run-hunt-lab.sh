@@ -7,7 +7,7 @@
 # One run: (a) copy the code, (b) start an isolated server on a copy of the staged world, (c) run the probe, (d) stop the server and remove the copy, the world and the code.
 # Take the slot first:  lab-slot.sh --label hunt -- run-hunt-lab.sh ...   (the PC's WSL lab: LAB_SLOT_COUNT=3 LAB_PORT_FROM=25590; the VM only when no production run is going).
 #
-# KEY=VALUE: HUNT_SCENES=a,b (names or prefixes)  HUNT_SECONDS=<n> (the timed scenes' length)  HUNT_PORT=<port>  HUNT_VIEW=<chunks, default 10>  HUNT_TIMEOUT=<seconds, default 2400>  HUNT_KEEP=1
+# KEY=VALUE: HUNT_SCENES=a,b (names or prefixes)  HUNT_SECONDS=<n> (the timed scenes' length)  HUNT_THROWS=<n> (the eye_locate scene's throws, default 10)  HUNT_PORT=<port>  HUNT_VIEW=<chunks, default 10>  HUNT_TIMEOUT=<seconds, default 2400>  HUNT_KEEP=1
 set -u
 LABEL=${1:?label}; WORKTREE=${2:?worktree}; KEY=${3:?world key}; shift 3
 for pair in "$@"; do case "$pair" in HUNT_*=*) export "$pair";; *) echo "bad argument: $pair" >&2; exit 2;; esac; done
@@ -81,12 +81,13 @@ log "server is up: $(grep -o 'Done ([0-9.]*s)' "$DIR/logs/latest.log" | head -1)
 # (c) the probe
 SCENES_ENV=""; [ -n "${HUNT_SCENES:-}" ] && SCENES_ENV="MINECRAFT_HUNT_SCENES=$HUNT_SCENES"
 SECONDS_ENV=""; [ -n "${HUNT_SECONDS:-}" ] && SECONDS_ENV="MINECRAFT_HUNT_SECONDS=$HUNT_SECONDS"
+THROWS_ENV=""; [ -n "${HUNT_THROWS:-}" ] && THROWS_ENV="MINECRAFT_HUNT_THROWS=$HUNT_THROWS"
 SITES_ENV=""; [ -f "$WORLD.sites.json" ] && SITES_ENV="MINECRAFT_HUNT_SITES=$WORLD.sites.json"
 log "running the probe (limit ${HUNT_TIMEOUT:-2400} s); full log: $OUT/probe.log"
 START=$(date +%s)
 ( cd "$CODE/backend" && env -i HOME="$HOME" PATH="$NODEBIN:/usr/bin:/bin" OPENAI_API_KEY=offline-test-not-used MONGODB_URI=mongodb://127.0.0.1:1/shannon-offline-not-used \
   SHANNON_ISOLATED_MINEBOT_PROBE=true MINECRAFT_COGNITION_MODE=off MINECRAFT_OUTAGE_NO_LLM=true MINECRAFT_HUNT_NO_LLM=true MINECRAFT_PROBE_FLOOR=default \
-  MINECRAFT_HUNT_PORT=$PORT MINECRAFT_HUNT_WORLD_DIRECTORY="$DIR" MINECRAFT_HUNT_REPORT="$OUT/report.json" $SITES_ENV $SCENES_ENV $SECONDS_ENV \
+  MINECRAFT_HUNT_PORT=$PORT MINECRAFT_HUNT_WORLD_DIRECTORY="$DIR" MINECRAFT_HUNT_REPORT="$OUT/report.json" $SITES_ENV $SCENES_ENV $SECONDS_ENV $THROWS_ENV \
   TS_NODE_TRANSPILE_ONLY=true nice -n 5 timeout "${HUNT_TIMEOUT:-2400}" node --loader ts-node/esm scripts/minecraft-hunt-probe.ts ) > "$OUT/probe.log" 2>&1
 CODE_STATUS=$?
 log "probe exit $CODE_STATUS after $(( $(date +%s) - START )) s"

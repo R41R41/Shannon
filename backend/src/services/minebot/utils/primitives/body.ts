@@ -71,11 +71,13 @@ export async function equip(ctx: StepContext, args: { item: string; slot?: strin
   const bot = ctx.bot;
   const slot = SLOTS[args.slot ?? armourSlotOf(args.item) ?? 'hand'];
   if (!slot) return stopped(bot, 'invalid_input', `slot は ${Object.keys(SLOTS).join('・')} のどれか`);
-  const item = findItem(bot, args.item);
-  if (!item) return stopped(bot, 'missing_item', `${args.item} を持っていない`);
   // Continue contracts (1): the item is already where it was to be put (in the hand, or in the armour or off-hand slot asked): the aim held when the hand began.
+  // This is asked before the pack is searched: a piece that is worn is not in the pack (the auto-wear habit puts a piece on within a second of its being picked up,
+  // and the planner's equip then found "not held" for gold boots that were on its feet).
   const nowThere = slot === 'hand' ? bot.heldItem : bot.inventory?.slots?.[EQUIP_SLOT_INDEX[slot] ?? -1];
   if (nowThere?.name === args.item) return { ok: true, goal: 'already', code: 'already_equipped', text: `${args.item} は既に${slot === 'hand' ? '手に持っている' : ` ${slot} に着けている`}（既に済）` };
+  const item = findItem(bot, args.item);
+  if (!item) return stopped(bot, 'missing_item', `${args.item} を持っていない`);
   if (slot === 'hand') {
     const held = await guard(ctx, equipToHandVerified(bot, item), 5000);
     return held?.value.held ? { ok: true, text: `${args.item} を手に持った` } : stopped(bot, 'equip_failed', `${args.item} を手に持てなかった（${held?.value.detail ?? '時間切れ'}）`);

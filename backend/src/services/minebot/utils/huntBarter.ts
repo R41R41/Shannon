@@ -1,6 +1,10 @@
+import pathfinder from 'mineflayer-pathfinder';
 import { Vec3 } from 'vec3';
-import { cellText, guard, inventoryCount, stopped, wait, waitUntil, type StepContext, type StepOutcome } from './primitives/common.js';
+import { cellText, guard, inventoryCount, letGo, stopped, wait, waitUntil, type StepContext, type StepOutcome } from './primitives/common.js';
 import { pickup } from './primitives/pickup.js';
+import { goWith, walkMovements } from './primitives/walk.js';
+
+const { goals } = pathfinder;
 
 /**
  * Bartering gold with a piglin, as one exchange (S2, 2026-11-02).
@@ -23,8 +27,14 @@ export const BARTER_ANSWER_MS = 9_000;
 export const BARTER_ACK_MS = 1_500;
 /** What came back is given this long to appear after the piglin lets go of the gold. */
 const RETURN_WAIT_MS = 800;
-/** The piglin must be this near the eye for the right click to reach (the game's interaction range for an entity is 3 blocks). */
-export const BARTER_REACH = 3.2;
+/** The right click reaches a creature whose box is this near the eye (the game's interaction range for an entity is 3 blocks, measured to the box). */
+export const BARTER_REACH = 3;
+/** A piglin that stands out of reach but within this many blocks is walked up to by the hand (it wanders between two exchanges); farther is the planner's `go`. */
+export const BARTER_APPROACH = 8;
+/** The walk up to a piglin takes at most this long. */
+const APPROACH_MS = 5_000;
+/** A piglin looks at its gold for six seconds; one that lets go earlier was stopped (hurt, or angered) and gives nothing back. */
+const EARLY_RELEASE_MS = 4_000;
 
 interface Registry { entitiesByName?: Record<string, { metadataKeys?: string[] } | undefined> }
 
@@ -58,6 +68,34 @@ export function wearsGoldArmour(bot: any): boolean {
   return [5, 6, 7, 8].some(index => String(bot.inventory?.slots?.[index]?.name ?? '').startsWith('golden_'));
 }
 
+/** How far the nearest point of a creature's box is from a point (the game's reach is measured to the box, not to its middle). */
+export function reachTo(from: { x: number; y: number; z: number }, entity: { position: { x: number; y: number; z: number }; width?: number; height?: number }): number {
+  const half = (entity.width ?? 0.6) / 2, top = entity.height ?? 1.95;
+  const dx = Math.max(entity.position.x - half - from.x, 0, from.x - (entity.position.x + half));
+  const dy = Math.max(entity.position.y - from.y, 0, from.y - (entity.position.y + top));
+  const dz = Math.max(entity.position.z - half - from.z, 0, from.z - (entity.position.z + half));
+  return Math.hypot(dx, dy, dz);
+}
+const eyeOf = (bot: any): Vec3 => bot.entity.position.offset(0, 1.62, 0);
+
+/** Steps up to a piglin that stands out of reach (a few tries: it walks on while the body does). Stops where the walk ends; the caller measures again. */
+async function stepUp(ctx: StepContext, piglin: any): Promise<void> {
+  const bot = ctx.bot;
+  const navigator = bot.pathfinder;
+  const previous = navigator?.movements;
+  const until = Math.min(ctx.deadline, Date.now() + APPROACH_MS);
+  try {
+    navigator?.setMovements(walkMovements(bot, false));
+    for (let tries = 0; tries < 3 && Date.now() < until; tries++) {
+      const now = bot.entities?.[piglin.id];
+      if (!now || reachTo(eyeOf(bot), now) <= BARTER_REACH - 0.4) break;
+      const gone = await goWith(ctx, new goals.GoalNear(now.position.x, now.position.y, now.position.z, 1.8), Math.max(500, until - Date.now()), { opened: [], leaves: 0 });
+      letGo(bot);
+      if (gone.timedOut || gone.stuck || gone.error) break;
+    }
+  } finally { try { if (previous) navigator.setMovements(previous); } catch { /* kept */ } }
+}
+
 /** The ids of the item entities lying about now (the baseline an offer's answer is told from). */
 export function itemIds(bot: any): Set<number> {
   const ids = new Set<number>();
@@ -88,8 +126,18 @@ export async function barterWithPiglin(ctx: StepContext, piglin: any): Promise<S
   if (isAngryPiglin(bot.registry, piglin) === true) {
     return stopped(bot, 'piglin_hostile', `${label} は怒っている（${wearsGoldArmour(bot) ? '金の防具は着ているが、殴られたか近くの仲間が怒った' : '金の防具を着ていない'}ので交換できない）`, at);
   }
-  const distance = piglin.position.offset(0, (piglin.height ?? 1.9) / 2, 0).distanceTo(bot.entity.position.offset(0, 1.62, 0));
-  if (distance > BARTER_REACH + (piglin.width ?? 0.6) / 2) return stopped(bot, 'out_of_reach', `${label} に届かない（目から ${distance.toFixed(1)}m。${BARTER_REACH}m まで近づく）`, at);
+  let distance = reachTo(eyeOf(bot), piglin);
+  if (distance > BARTER_REACH && piglin.position.distanceTo(bot.entity.position) <= BARTER_APPROACH) {
+    await stepUp(ctx, piglin);
+    const now = bot.entities?.[piglin.id];
+    if (!now) return stopped(bot, 'target_not_found', `${label} が見えなくなった`, at);
+    piglin = now;
+    distance = reachTo(eyeOf(bot), piglin);
+  }
+  if (distance > BARTER_REACH) {
+    const far = piglin.position.distanceTo(bot.entity.position);
+    return stopped(bot, 'out_of_reach', `${label} に届かない（${far.toFixed(1)}m 先、体から ${distance.toFixed(1)}m。${far > BARTER_APPROACH ? `${BARTER_APPROACH}m までなら手が歩いて近づく。` : '近づけなかった。'}go で ${BARTER_REACH}m 内へ）`, at);
+  }
   // One that is still looking at gold takes no more: it is waited for (a piglin finishes in six seconds).
   if (holdsIngot(piglin)) {
     const finished = await waitUntil(ctx, () => !holdsIngot(bot.entities?.[piglin.id]) || !bot.entities?.[piglin.id], BARTER_ANSWER_MS, 100);
@@ -112,12 +160,16 @@ export async function barterWithPiglin(ctx: StepContext, piglin: any): Promise<S
   // Six seconds of looking; over when the off hand lets go of the ingot (or the piglin is gone). A piglin whose off hand was never seen to hold it is waited out by the clock.
   let sawHold = holdsIngot(bot.entities?.[piglin.id]);
   const began = Date.now();
+  let releasedAt = 0;
   const answered = await waitUntil(ctx, () => {
     const now = bot.entities?.[piglin.id];
     if (!now) return true;
     if (holdsIngot(now)) { sawHold = true; return false; }
-    return sawHold || Date.now() - began >= 6_500;
+    if (sawHold || Date.now() - began >= 6_500) { releasedAt = Date.now(); return true; }
+    return false;
   }, BARTER_ANSWER_MS, 100);
+  const heldMs = (releasedAt || Date.now()) - began;
+  const angryNow = isAngryPiglin(bot.registry, bot.entities?.[piglin.id]) === true;
   await wait(ctx, RETURN_WAIT_MS);
   const drops = itemsSince(bot, baseline, bot.entity.position, 10);
   const names = drops.map(stackName);
@@ -134,6 +186,13 @@ export async function barterWithPiglin(ctx: StepContext, piglin: any): Promise<S
   const spentLine = `金 ${goldBefore}→${inventoryCount(bot, 'gold_ingot')}`;
   const base = `${label} に金を渡した（${spentLine}）: 受け取った ${gained.join(' ') || 'なし'}`;
   if (!answered) return { ok: false, reason: 'no_answer', code: 'piglin_no_answer', at, text: `${base}。${BARTER_ANSWER_MS / 1000}秒たっても ${label} は金を離さない` };
-  if (!drops.length && !gained.length) return { ok: false, reason: 'nothing_returned', code: 'barter_nothing_returned', at, text: `${base}。ピグリンは金を離したが、投げた物が見えなかった（${cellText(at)} の近く。遠くへ投げたか、別の所に落ちた）` };
+  if (!drops.length && !gained.length) {
+    // A piglin that is hurt or angered while it looks at the gold keeps it and throws nothing; one that let go after its six seconds threw something that is not to be seen.
+    const cut = sawHold && heldMs < EARLY_RELEASE_MS;
+    const why = cut || angryNow
+      ? `金を ${(heldMs / 1000).toFixed(1)}秒で手放した${angryNow ? '。ピグリンは怒っている（殴られたか、近くの敵や仲間に気を取られた）' : ''}。見終わる前に手放すと何も返さない`
+      : `金を離したが、投げた物が見えなかった（${cellText(at)} の近く。遠くへ投げたか、別の所に落ちた）`;
+    return { ok: false, reason: 'nothing_returned', code: 'barter_nothing_returned', at, text: `${base}。${why}` };
+  }
   return { ok: true, at, text: `${base}${left.length ? `。拾えず落ちている ${left.join(' ')}` : ''}${got && !gained.length ? `。${got}` : ''}${names.length ? `（出た物 ${names.join(' ')}）` : ''}` };
 }

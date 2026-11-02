@@ -21,6 +21,11 @@ const BUILD_MS = 14_000;
 const CELL_TRIES = 2;
 /** The enderman is stared at for this long before it is said that it cannot be angered from here. */
 const STARE_MS = 5_000;
+/**
+ * An enderman whose eyes are hidden (behind the roof's edge when it is within about 3.7 blocks, or behind a wall) is waited for this long: it wanders, and one that
+ * stood in the blind zone of the roof at the first look (lab: a flat plate, the fourth of four, stopped at 0.0 s) comes out of it in a few seconds.
+ */
+const SIGHT_MS = 8_000;
 /** An enderman closer than this and angry is the fight's, not the building's (it reaches the body in a second). */
 const CONTACT = 4.2;
 
@@ -36,6 +41,7 @@ export class EndermanCamp {
   private began = Date.now();
   private tries = new Map<string, number>();
   private staredSince = 0;
+  private blindSince = 0;
   private guardWas: boolean | null = null;
   private replans = 0;
 
@@ -153,8 +159,14 @@ export class EndermanCamp {
       const line = this.eyeLine(live);
       if (!line.clear) {
         this.guard(true);
-        return this.failure('enderman_not_visible', 'not_visible', `エンダーマンの目が見えない（${line.between}）。見える所へ動くか、近づくのを待つ`, this.cell);
+        this.staredSince = 0;
+        this.blindSince ||= now;
+        if (now - this.blindSince > SIGHT_MS) {
+          return this.failure('enderman_not_visible', 'not_visible', `エンダーマンの目が ${SIGHT_MS / 1000} 秒見えない（${line.between}。${box.toFixed(1)}m）。見える所へ動くか、近づくのを待つ`, this.cell);
+        }
+        return { kind: 'wait' };
       }
+      this.blindSince = 0;
       this.staredSince ||= now;
       if (now - this.staredSince > STARE_MS) {
         this.guard(true);

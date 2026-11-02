@@ -1,9 +1,18 @@
 import { EventEmitter } from 'node:events';
 import { Vec3 } from 'vec3';
-import { describe, expect, it } from 'vitest';
-import { barterWithPiglin, isAdultPiglin, isAngryPiglin, wearsGoldArmour } from '../../src/services/minebot/utils/huntBarter.js';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { BARTER_APPROACH, barterWithPiglin, isAdultPiglin, isAngryPiglin, reachTo, wearsGoldArmour } from '../../src/services/minebot/utils/huntBarter.js';
 import { use } from '../../src/services/minebot/utils/primitives/use.js';
 import type { StepContext } from '../../src/services/minebot/utils/primitives/common.js';
+
+// The walk up to a piglin is the walk's (a real route search): here it is a stand-in that the tests steer.
+const walk = vi.hoisted(() => ({ goWith: vi.fn() }));
+vi.mock('../../src/services/minebot/utils/primitives/walk.js', async importOriginal => ({
+  ...(await importOriginal<typeof import('../../src/services/minebot/utils/primitives/walk.js')>()), goWith: walk.goWith, walkMovements: () => ({}),
+}));
+const GAVE_UP = { reached: false, timedOut: true, stuck: false, error: null, search: null, opens: [] as string[] };
+const ARRIVED = { reached: true, timedOut: false, stuck: false, error: null, search: null, opens: [] as string[] };
+beforeEach(() => { walk.goWith.mockReset(); walk.goWith.mockResolvedValue(GAVE_UP); });
 
 // Bartering gold with a piglin (S2, 2026-11-02): one exchange, whole. The piglin here follows the game's rule that matters to the hand: an adult that is not angry and not
 // already looking at gold takes an ingot, holds it in its off hand while it looks, then lets go and throws what it gives back toward the player.
@@ -89,11 +98,43 @@ describe('barterWithPiglin: one exchange', () => {
     expect(dressed.text).toContain('金の防具は着ている');
   });
 
-  it('too far to reach: out_of_reach, with the distance', async () => {
+  it('too far for the hand to walk (beyond the approach): out_of_reach, with the distance, and no walk', async () => {
+    const { bot, piglin } = world({ at: new Vec3(112.5, 70, 100.5) });
+    const result = await barterWithPiglin(context(bot), piglin);
+    expect(result).toMatchObject({ ok: false, reason: 'out_of_reach' });
+    expect(result.text).toMatch(/12\.0m 先、体から 11\.\dm/u);
+    expect(result.text).toContain(`${BARTER_APPROACH}m までなら手が歩いて近づく`);
+    expect(walk.goWith).not.toHaveBeenCalled();
+    expect(bot._gold).toBe(3);
+  });
+
+  it('a piglin out of reach but near is walked up to, then the exchange is made', async () => {
+    const { bot, piglin } = world({ at: new Vec3(106.5, 70, 100.5), gives: [{ name: 'iron_nugget', count: 9 }] });
+    walk.goWith.mockImplementation(async (_ctx: unknown, goal: any) => {
+      expect(goal.x).toBe(Math.floor(piglin.position.x));
+      bot.entity.position = new Vec3(piglin.position.x - 1.6, 70, piglin.position.z);
+      return ARRIVED;
+    });
+    const result = await barterWithPiglin(context(bot), piglin);
+    expect(result.ok).toBe(true);
+    expect(result.text).toContain('iron_nugget+9');
+    expect(walk.goWith).toHaveBeenCalledTimes(1);
+  });
+
+  it('a walk that gets nowhere leaves the piglin out of reach, and the line says the hand could not get near', async () => {
     const { bot, piglin } = world({ at: new Vec3(106.5, 70, 100.5) });
     const result = await barterWithPiglin(context(bot), piglin);
     expect(result).toMatchObject({ ok: false, reason: 'out_of_reach' });
-    expect(result.text).toMatch(/目から \d\.\dm/u);
+    expect(result.text).toContain('近づけなかった');
+    expect(bot._gold).toBe(3);
+  });
+
+  it('a piglin that is gone when the body arrives is target_not_found, the ingot not offered', async () => {
+    const { bot, piglin } = world({ at: new Vec3(106.5, 70, 100.5) });
+    walk.goWith.mockImplementation(async () => { delete bot.entities[30]; return ARRIVED; });
+    const result = await barterWithPiglin(context(bot), piglin);
+    expect(result).toMatchObject({ ok: false, reason: 'target_not_found' });
+    expect(bot._gold).toBe(3);
   });
 
   it('no ingot in the pack: missing_item', async () => {
@@ -129,6 +170,38 @@ describe('barterWithPiglin: one exchange', () => {
     const { bot, piglin } = world({ gives: [] });
     const result = await barterWithPiglin(context(bot), piglin);
     expect(result).toMatchObject({ ok: false, reason: 'nothing_returned', code: 'barter_nothing_returned' });
+  });
+
+  it('one that lets go long before its six seconds were over (hurt, angered) keeps the gold: the line says so, and that it is angry now', async () => {
+    const { bot, piglin } = world({ gives: [], admireMs: 200 });
+    setTimeout(() => { piglin.metadata[8] = 4; }, 150);
+    const result = await barterWithPiglin(context(bot), piglin);
+    expect(result).toMatchObject({ ok: false, reason: 'nothing_returned' });
+    expect(result.text).toMatch(/金を 0\.\d秒で手放した/u);
+    expect(result.text).toContain('ピグリンは怒っている');
+    expect(result.text).toContain('見終わる前に手放すと何も返さない');
+  });
+
+  it('one that looked for its time and threw something out of sight is not called angry', async () => {
+    const { bot, piglin } = world({ gives: [], admireMs: 4300 });
+    const result = await barterWithPiglin(context(bot), piglin);
+    expect(result).toMatchObject({ ok: false, reason: 'nothing_returned' });
+    expect(result.text).toContain('投げた物が見えなかった');
+    expect(result.text).not.toContain('怒っている');
+  }, 20_000);
+});
+
+describe('reachTo: the game measures the reach to the creature\'s box', () => {
+  const box = (x: number, y: number, z: number) => ({ position: { x, y, z }, width: 0.6, height: 1.95 });
+  it('from the side it is the distance less the half width; level with the box it has no height part', () => {
+    expect(reachTo({ x: 100.5, y: 71.62, z: 100.5 }, box(103.5, 70, 100.5))).toBeCloseTo(2.7, 5);
+  });
+  it('above the box it is the height over the top; inside it, zero', () => {
+    expect(reachTo({ x: 100.5, y: 74, z: 100.5 }, box(100.5, 70, 100.5))).toBeCloseTo(74 - 71.95, 5);
+    expect(reachTo({ x: 100.5, y: 70.5, z: 100.6 }, box(100.5, 70, 100.5))).toBe(0);
+  });
+  it('a corner is the diagonal of the three parts', () => {
+    expect(reachTo({ x: 0, y: 0, z: 0 }, { position: { x: 4.3, y: 3, z: 5.3 }, width: 0.6, height: 2 })).toBeCloseTo(Math.hypot(4, 3, 5), 5);
   });
 });
 
