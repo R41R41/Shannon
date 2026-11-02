@@ -82,12 +82,12 @@ async function throwEye(ctx: StepContext): Promise<StepOutcome> {
     const how = flight.fate === 'dropped' ? `落ちて残る${flight.drop ? `#${flight.drop.id}${cellOf(flight.drop.at)}` : ''}`
       : flight.fate === 'shattered' ? '割れた' : flight.gone ? '落ちたか割れたか不明' : `${Math.round(EYE_WATCH_MS / 1000)}秒見ても消えず`;
     const report = eyeReportOf(flight, from);
-    if (!report) {
-      return { ok: true, at: from, text: `目玉を${cellText(from)}で投げた: 横に${flight.flat.toFixed(1)}しか動かず、`
-        + `${flight.overhead ? `${(-flight.rise).toFixed(1)}落ちた=要塞はほぼ真下（終点${cellOf(flight.end)}）` : '要塞は真下かすぐ近く'}。${how}。残り${kept}` };
+    if (!report) return { ok: true, at: from, text: `目玉を${cellText(from)}で投げた: 横に${flight.flat.toFixed(1)}しか動かず、要塞は真下かすぐ近く。${how}。残り${kept}` };
+    if (report.down) {
+      return { ok: true, at: from, data: { eye: report }, text: `目玉を${cellText(from)}で投げた: 横に${flight.flat.toFixed(1)}しか動かず${(-flight.rise).toFixed(1)}落ちた=要塞はほぼ真下（終点${cellOf(flight.end)}）。${how}。残り${kept}` };
     }
     return { ok: true, at: from, data: { eye: report }, text: `目玉を${cellText(from)}で投げた: 方位${report.bearingDeg.toFixed(2)}°${compassOf(report.bearingDeg)}・水平${report.flew.toFixed(1)}・上${report.rise.toFixed(1)}`
-      + `・向き x${report.unit.x.toFixed(3)} z${report.unit.z.toFixed(3)}。${how}${report.arrived ? '。短い飛び=終点が要塞の真上の目安' : ''}。残り${kept}` };
+      + `・向き x${report.unit!.x.toFixed(3)} z${report.unit!.z.toFixed(3)}。${how}${report.arrived ? '。短い飛び=終点が要塞の真上の目安' : ''}。残り${kept}` };
   } finally { watcher.cancel(); }
 }
 

@@ -5,6 +5,7 @@ import { Vec3 } from 'vec3';
 import { serverRefusalStepCost } from './serverRefusals.js';
 import { refusedDigBreakCost } from './refusedDigs.js';
 import { lavaBesideStepCost } from './lavaClearance.js';
+import { soulSandStepCost } from './huntNetherWalk.js';
 import { CustomBot } from '../types.js';
 import { travelProfile } from './travelProfile.js';
 import { PROTECTED_UTILITY_BLOCKS } from '../constants.js';
@@ -198,6 +199,8 @@ export function buildMovements(
   (defaultMove as any).exclusionAreasBreak.push(refusedDigBreakCost(bot));
   // Lava is given room: a step with lava in the next cell costs a detour of eight (see lavaClearance).
   (defaultMove as any).exclusionAreasStep.push(lavaBesideStepCost(bot as any));
+  // Soul sand slows the body to 40%: a step onto it costs what the time costs, so a way round is taken when it is not much longer (utils/huntNetherWalk).
+  (defaultMove as any).exclusionAreasStep.push(soulSandStepCost(bot as any));
   // Things the body must not stand in, beyond what the pathfinder knows of (fire, cobweb, lava). Soul fire was
   // not among them: it was a cell to walk through, and the reflex that takes the body out of fire walked it
   // back out, so the two held it in a one-block pocket for nine minutes with every move timing out (lab

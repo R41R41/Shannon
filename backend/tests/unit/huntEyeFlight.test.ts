@@ -204,12 +204,13 @@ describe('use item=ender_eye (the hand)', () => {
     expect(released).toBe(1);
   });
 
-  it('a flight right above the stronghold has no bearing: ok, no eye in the data, and the text says overhead', async () => {
+  it('a flight right above the stronghold has no bearing: the eye says `down` (the head word) with where it sank, and the text says it is right below', async () => {
     const { bot, client } = eyeBot();
     bot.activateItem = () => { void fly(bot, client, { unit: { x: 0, z: 0 }, flat: 0, rise: -6, ending: 'drop' }); };
     const result = await use(context(bot), { item: 'ender_eye' });
     expect(result.ok).toBe(true);
-    expect(result.data?.eye).toBeUndefined();
+    expect(result.data?.eye).toMatchObject({ down: true, unit: null, bearingDeg: 0, fate: 'dropped' });
+    expect(result.data!.eye!.to).toEqual({ x: 100, y: 64, z: -21 });
     expect(result.text).toContain('真下');
   });
 

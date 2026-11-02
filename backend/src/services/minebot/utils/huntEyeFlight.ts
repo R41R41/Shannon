@@ -228,8 +228,8 @@ export interface EyeReport {
   from: Cell; bearingDeg: number; flew: number; to: Cell; broke: boolean;
   /** The body's exact position (feet) when the eye was thrown: the base of the line. */
   origin: Point3;
-  /** The horizontal direction of the flight as a unit vector (x east, z south). */
-  unit: { x: number; z: number };
+  /** The horizontal direction of the flight as a unit vector (x east, z south); null when the eye sank (`down`). */
+  unit: { x: number; z: number } | null;
   start: Point3; end: Point3;
   /** Up is positive. */
   rise: number;
@@ -239,6 +239,8 @@ export interface EyeReport {
   /** The flight was shorter than the 12 blocks an eye flies toward a stronghold farther than that: it reached the stronghold's own x and z, and `end` is there. */
   arrived: boolean;
   samples: number; ms: number;
+  /** The eye flew less than a block sideways and sank: the stronghold is right below `end` (the head's `down`; `bearingDeg` is then 0 and means nothing). */
+  down?: true;
 }
 
 /** An eye flies 12 blocks toward a stronghold farther than that, and swings about that point: a flight clearly shorter reached the stronghold itself. */
@@ -247,8 +249,13 @@ export const EYE_ARRIVED_BELOW = 10.5;
 
 /** The act's report of a flight that has a direction, or null (a flight right above the stronghold has none). */
 export function eyeReportOf(flight: EyeFlight, from: Cell): EyeReport | null {
-  if (!flight.unit || flight.bearingDeg === null) return null;
   const cell = (p: Point3): Cell => ({ x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) });
+  if (!flight.unit || flight.bearingDeg === null) {
+    // Right above the stronghold the eye comes down where it stands: no bearing, but `down` says where the stronghold is.
+    if (!flight.overhead) return null;
+    return { from, bearingDeg: 0, flew: round(flight.flat, 1), to: cell(flight.end), broke: flight.fate === 'shattered', origin: flight.origin, unit: null, start: flight.start, end: flight.end,
+      rise: round(flight.rise, 2), fate: flight.fate, ...(flight.drop ? { drop: flight.drop } : {}), arrived: true, samples: flight.samples, ms: flight.ms, down: true };
+  }
   return {
     from, bearingDeg: flight.bearingDeg, flew: round(flight.flat, 1), to: cell(flight.end), broke: flight.fate === 'shattered',
     origin: flight.origin, unit: flight.unit, start: flight.start, end: flight.end, rise: round(flight.rise, 2), fate: flight.fate,
