@@ -103,6 +103,9 @@ let fountainY = 0;    // the dragon's perch y (the pillar's top)
 const HEAD_Z = 7.0;   // the head's middle, 6.5 out along +z, when the dragon is turned to yaw 180 (Notchian)
 async function enterEnd(): Promise<void> {
   await ask('gamemode survival MinebotTrial'); await ask('difficulty normal'); await ask('gamerule doDaylightCycle false');
+  // The dragon is awake from the first tick and the spawn platform is in its reach (r2: killed by its breath while the scene waited for it): armoured, and resistant until this scene ends.
+  await ask(`effect give ${ACTOR} minecraft:resistance 200 4 true`);
+  await wear();
   await ask(`${END} tp ${ACTOR} 100 50 0`);
 }
 /** The standing ground: a flat end stone slab with air over it, the podium untouched. */
@@ -130,6 +133,8 @@ const gear = async (items: string[]) => {
 };
 const ARMOR = ['diamond_helmet', 'diamond_chestplate', 'diamond_leggings', 'diamond_boots'];
 const wear = async () => { for (const [slot, item] of [['head', ARMOR[0]], ['chest', ARMOR[1]], ['legs', ARMOR[2]], ['feet', ARMOR[3]]]) await ask(`item replace entity ${ACTOR} armor.${slot} with ${item}`); await sleep(300); };
+/** Resistance V for the scenes that do not measure what the body takes (the dragon is awake and kills a body that stands about); off for those that do. */
+const protect = async (on: boolean) => { await ask(on ? `effect give ${ACTOR} minecraft:resistance 900 4 true` : `effect clear ${ACTOR}`); };
 const hold = async (item: string) => { await ask(`item replace entity ${ACTOR} weapon.mainhand with ${item}`); await sleep(300); };
 
 // ===== scenes =====
@@ -179,6 +184,7 @@ const eyeToHead = (): number | null => {
 };
 
 scenes.parts = async () => {
+  await protect(true);
   holdReflexOff();
   await flatten(); await gear(['diamond_sword']); await wear(); await hold('diamond_sword');
   const out: Record<string, unknown> = { sword: 'diamond_sword (7 at full strength; a part that is not the head takes a quarter and a block: 2.75)' };
@@ -245,6 +251,7 @@ scenes.parts = async () => {
 };
 
 scenes.hand = async () => {
+  await protect(true);
   holdReflexOff();
   await flatten(); await gear(['diamond_sword']); await wear(); await hold('diamond_sword');
   await perch(200); await standForHeadDistance(3.0); await sleep(1500);
@@ -264,6 +271,7 @@ scenes.hand = async () => {
 };
 
 scenes.breath = async () => {
+  await protect(false);
   await flatten(); await gear(['diamond_sword']); await wear();
   await ask(`${END} kill @e[type=minecraft:area_effect_cloud]`);
   const out: Record<string, unknown> = {};
@@ -297,7 +305,36 @@ scenes.breath = async () => {
   return out;
 };
 
+scenes.fireball = async () => {
+  await protect(false);
+  await flatten(); await gear(['diamond_sword']); await wear();
+  await ask(`${END} data modify entity ${DRAGON} DragonPhase set value 0`);
+  const runs: Array<Record<string, unknown>> = [];
+  for (const [label, wide] of [['straight at the body', 0], ['passing 14 blocks to the side', 14]] as Array<[string, number]>) {
+    await standAt(-3.5, g, 4.5); await sleep(1000);
+    const healthBefore = Number(actor.health), start = actor.entity.position.clone();
+    // 20 blocks south, 12 up, flying north and down toward the actor (or beside it)
+    const answered = await ask(`${END} summon minecraft:dragon_fireball ${-3.5 + wide} ${g + 12} ${24.5} {Motion:[0.0d,-0.45d,-1.0d],acceleration_power:0.1d}`);
+    const startedAt = Date.now();
+    let seenAfter: number | null = null, movedAfter: number | null = null, velocity: unknown = null, jumped = false, sprinted = false;
+    const poll = setInterval(() => {
+      const balls = (Object.values(actor.entities) as any[]).filter(e => e?.name === 'dragon_fireball');
+      if (balls.length && seenAfter === null) { seenAfter = Date.now() - startedAt; const v = actor.toldVelocities?.get(balls[0].id); velocity = v ? [v.x, v.y, v.z].map((n: number) => Math.round(n * 1000) / 1000) : null; }
+      const p = actor.entity?.position; if (p && movedAfter === null && p.distanceTo(start) > 1) movedAfter = Date.now() - startedAt;
+      if (actor.controlState?.jump) jumped = true; if (actor.controlState?.sprint) sprinted = true;
+    }, 50);
+    await sleep(5000);
+    clearInterval(poll);
+    runs.push({ label, summonAnswer: answered.slice(0, 160), fireballSeenAfterMs: seenAfter, toldVelocity: velocity, bodyMovedAfterMs: movedAfter, movedBlocks: round(actor.entity.position.distanceTo(start), 1), healthLost: round(healthBefore - Number(actor.health), 1), jumped, sprinted });
+    log(`FIREBALL ${label}: ${JSON.stringify(runs.at(-1))}`);
+    await ask(`${END} kill @e[type=minecraft:area_effect_cloud]`); await ask(`${END} kill @e[type=minecraft:dragon_fireball]`);
+    await ask(`effect give ${ACTOR} minecraft:instant_health 1 5`); await sleep(500);
+  }
+  return { runs };
+};
+
 scenes.crystal_bow = async () => {
+  await protect(true);
   await flatten(); await gear(['bow', 'arrow 64']); await wear();
   const out: Record<string, unknown> = {};
   const view = endView();
@@ -324,6 +361,7 @@ scenes.crystal_bow = async () => {
 };
 
 scenes.crystal_caged = async () => {
+  await protect(true);
   await flatten(); await gear(['bow', 'arrow 64', 'iron_pickaxe']); await wear();
   const view = endView();
   const caged = (view?.crystals?.list ?? []).filter((c: any) => c.caged === true);
@@ -352,6 +390,7 @@ scenes.crystal_caged = async () => {
 };
 
 scenes.crystal_blast = async () => {
+  await protect(false);
   await flatten(); await gear(['diamond_sword']); await wear();
   const view = endView();
   const open = (view?.crystals?.list ?? []).filter((c: any) => c.caged === false);
@@ -396,6 +435,7 @@ scenes.crystal_blast = async () => {
 };
 
 scenes.bed = async () => {
+  await protect(false);
   await flatten(); await gear(['white_bed 4', 'diamond_sword']); await wear();
   await perch(200);
   const out: Record<string, unknown> = {};
@@ -424,6 +464,7 @@ scenes.bed = async () => {
 };
 
 scenes.death = async () => {
+  await protect(true);
   await flatten(); await gear(['diamond_sword']); await wear(); await hold('diamond_sword');
   const t0 = Date.now(); const events: Array<[number, string, unknown?]> = [];
   const rel = () => Date.now() - t0;
