@@ -333,3 +333,52 @@ describe('the observation the body gives the head', () => {
     await body.dispose();
   });
 });
+
+import { installFloorReflexes } from '../../src/services/minebot/utils/floorReflexes.js';
+import { floorConfig } from '../../src/services/minebot/utils/floorConfig.js';
+
+describe('the floor reflex out of the dragon\'s reach', () => {
+  const cloudAt = (f: ReturnType<typeof fixture>, at: Vec3) => { const meta: unknown[] = []; meta[8] = 3; meta[10] = { type: 'dragon_breath' }; f.bot.entities[20] = { id: 20, name: 'area_effect_cloud', position: at, metadata: meta }; };
+  function armed(world?: World) {
+    const f = fixture({ phase: DRAGON_PHASE.holdingPattern, at: new Vec3(0.5, 64, 12.5), world });
+    cloudAt(f, new Vec3(0.5, 64, 12.5));
+    const keys: Array<[string, boolean]> = [];
+    let yaw = 0;
+    f.bot.look = vi.fn((y: number) => { yaw = y; });
+    f.bot.setControlState = vi.fn((k: string, v: boolean) => { keys.push([k, v]); if (k === 'forward' && v) f.self.position = f.self.position.plus(new Vec3(-Math.sin(yaw) * 0.6, 0, -Math.cos(yaw) * 0.6)); });
+    f.bot.equip = vi.fn(async () => undefined); f.bot.consume = vi.fn(async () => undefined);
+    installFloorReflexes(f.bot, floorConfig({ MINEBOT_FCA_REFLEXES: 'default' }), { fleeTickMs: 1 });
+    return { f, keys };
+  }
+  it('starts one run out of a cloud under the body, with no jump, sprint or block, and tells it in the ledger as a retreat that stops an act', async () => {
+    const { f, keys } = armed();
+    f.bot.emit('physicsTick');
+    await new Promise(resolve => setTimeout(resolve, 400));
+    expect(keys.some(([k, v]) => k === 'forward' && v)).toBe(true);
+    expect(keys.filter(([k, v]) => (k === 'jump' || k === 'sprint') && v)).toEqual([]);
+    const entries = f.bot.reflexLedger.entriesSince(0);
+    expect(entries.some((entry: any) => entry.kind === 'retreat' && /竜の危険から.*離れた/u.test(entry.detail))).toBe(true);
+    expect(Math.hypot(f.self.position.x - 0.5, f.self.position.z - 12.5)).toBeGreaterThan(7);
+  });
+  it('starts nothing, and says so as a fact that stops no act, when every way out is a drop', async () => {
+    // A 3 x 3 slab in the void: the cloud is on it, and every heading goes off the edge.
+    const world: World = new Map();
+    for (let x = -1; x <= 1; x++) for (let z = 11; z <= 13; z++) world.set(key(x, 63, z), 'end_stone');
+    const { f, keys } = armed(world);
+    f.bot.emit('physicsTick');
+    await new Promise(resolve => setTimeout(resolve, 200));
+    expect(keys.some(([k, v]) => k === 'forward' && v)).toBe(false);
+    const entries = f.bot.reflexLedger.entriesSince(0);
+    expect(entries.some((entry: any) => entry.kind === 'cover_none' && /離れる安全な道が無い/u.test(entry.detail))).toBe(true);
+    expect(entries.some((entry: any) => entry.kind === 'retreat')).toBe(false);
+  });
+  it('does nothing outside the End, and nothing for a body that is clear', async () => {
+    const { f, keys } = armed();
+    f.bot.game.dimension = 'minecraft:overworld';
+    f.bot.emit('physicsTick'); await new Promise(resolve => setTimeout(resolve, 100));
+    expect(keys).toEqual([]);
+    f.bot.game.dimension = 'minecraft:the_end'; f.self.position = new Vec3(0.5, 64, 40.5);
+    f.bot.emit('physicsTick'); await new Promise(resolve => setTimeout(resolve, 100));
+    expect(keys).toEqual([]);
+  });
+});

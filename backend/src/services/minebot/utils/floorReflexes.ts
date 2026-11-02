@@ -476,6 +476,8 @@ const isLethalToStandIn = (name: unknown) => LETHAL_TO_STAND_IN.has(String(name)
 const LETHAL_TO_STAND_ON = new Set(['lava', 'magma_block', 'fire', 'soul_fire', 'campfire', 'soul_campfire', 'pointed_dripstone']);
 /** The directions the flee may take around the one it prefers, nearest first: no further round than a right angle. */
 const FLEE_TURNS = [0, Math.PI / 4, -Math.PI / 4, Math.PI / 2, -Math.PI / 2];
+/** The dragon's retreat may turn further (a cloud on the body has no "away"): a heading that runs toward a source is still left out. */
+const FLEE_TURNS_WIDE = [...FLEE_TURNS, 3 * Math.PI / 4, -3 * Math.PI / 4, Math.PI];
 /** A heading that brings the body more than this much nearer to a threat within TOWARD_RANGE than it is now runs toward it. */
 const TOWARD_RANGE = 10;
 const TOWARD_MARGIN = 0.75;
@@ -808,7 +810,7 @@ const angleBetween = (a: number, b: number) => Math.abs(Math.atan2(Math.sin(a - 
  * `fleeHeading`, with whether the body must jump to follow it (a whole block to climb a step or two ahead). `previous` is the last heading of the run.
  * `noJump` (the dragon's reach: a body in the air cannot step aside) takes only a heading that is walked on the level.
  */
-export function fleeHeadingPlan(bot: FloorBody, from: Vec3 | Vec3[], previous?: number, options: { noJump?: boolean } = {}): { yaw: number; jump: boolean } | null {
+export function fleeHeadingPlan(bot: FloorBody, from: Vec3 | Vec3[], previous?: number, options: { noJump?: boolean; wide?: boolean } = {}): { yaw: number; jump: boolean } | null {
   const at = bot.entity?.position; if (!at) return null;
   const sources = Array.isArray(from) ? from : [from];
   if (!sources.length) return null;
@@ -818,7 +820,7 @@ export function fleeHeadingPlan(bot: FloorBody, from: Vec3 | Vec3[], previous?: 
     const held = scanHeading(bot, at, previous);
     if (allowed(held)) return { yaw: previous, jump: held.jump };
   }
-  for (const turn of FLEE_TURNS) {
+  for (const turn of options.wide ? FLEE_TURNS_WIDE : FLEE_TURNS) {
     const yaw = away + turn;
     if (turn !== 0 && runsToward(at, yaw, sources)) continue;
     const scan = scanHeading(bot, at, yaw);
@@ -1001,7 +1003,7 @@ export async function runDragonRetreat(bot: FloorBody, port: FloorBody, tickMs =
       const hazards = body && bot.lavaReflex?.engaged !== true && bot.breathingReflex?.engaged !== true ? dragonHazards(bot, { clearance: ticks === 0 ? 0 : DRAGON_CLEARANCE }) : [];
       if (!hazards.length) { ended = 'clear'; break; }
       if (body!.position.distanceTo(origin) >= DRAGON_RETREAT_BLOCKS) break;
-      const plan = fleeHeadingPlan(bot, hazardCentres(hazards), memory.heading, { noJump: true });
+      const plan = fleeHeadingPlan(bot, hazardCentres(hazards), memory.heading, { noJump: true, wide: true });
       if (!plan) { ended = 'blocked'; break; }
       memory.heading = plan.yaw;
       port.look?.(plan.yaw, 0, true);
@@ -2082,6 +2084,17 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
     try { hazards = dragonHazards(bot, { now: t }); } catch { return false; }
     if (!hazards.length) return false;
     const said = hazards.map(hazard => hazard.why).join('・');
+    // No level, safe way out: nothing is started (a run that ends where it began would cut the planner's act for nothing, every time). Told once in a while, as a fact only.
+    let way: ReturnType<typeof fleeHeadingPlan> = null;
+    try { way = fleeHeadingPlan(bot, hazardCentres(hazards), undefined, { noJump: true, wide: true }); } catch { way = null; }
+    if (!way) {
+      state.dragonNextAt = t + DRAGON_BLOCKED_GAP_MS;
+      if (t - (state.dragonNotedAt ?? -Infinity) >= DRAGON_NOTE_GAP_MS) {
+        state.dragonNotedAt = t;
+        try { ledger.end(Object.assign(ledger.begin('cover_none', '', DRAGON_DETAIL_MAX), { detail: `竜の危険の中で、置かず跳ばず走らずに離れる安全な道が無い: ${said}`.slice(0, DRAGON_DETAIL_MAX) }), 'failed'); } catch { /* a report */ }
+      }
+      return false;
+    }
     state.dragonNextAt = t + DRAGON_GAP_MS;
     state.busy = 'flee';
     log.warn(`🐉 ${said}: 離れる`);

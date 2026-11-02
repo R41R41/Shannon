@@ -282,22 +282,27 @@ scenes.breath = async () => {
     await standAt(-5.5, g, 11.5); await sleep(800);
     const healthBefore = Number(actor.health);
     const summon = `${END} summon minecraft:area_effect_cloud -5.5 ${g} 11.5 {Particle:{type:"minecraft:dragon_breath"},Radius:${radius}f,Duration:200,WaitTime:20,ReapplicationDelay:20,potion_contents:{custom_effects:[{id:"minecraft:instant_damage",amplifier:0,duration:1}]}}`;
-    const answered = await ask(summon);
     const startedAt = Date.now();
-    let exitedAt: number | null = null, detectedAt: number | null = null, maxJump = false, sprinted = false;
+    let exitedAt: number | null = null, detectedAt: number | null = null, firstForward: number | null = null, cloudSeen: number | null = null, maxJump = false, sprinted = false;
+    // The reaction in milliseconds from the moment the command was sent: the cloud in the client's entities, the first forward key, the first step, the way out of the zone.
+    const originalKey = actor.setControlState.bind(actor);
+    actor.setControlState = (key: string, value: boolean) => { if (key === 'forward' && value && firstForward === null) firstForward = Date.now() - startedAt; return originalKey(key, value); };
+    const answered = await ask(summon);
     const poll = setInterval(() => {
       const p = actor.entity?.position; if (!p) return;
+      if (cloudSeen === null && (Object.values(actor.entities) as any[]).some(e => e?.name === 'area_effect_cloud')) cloudSeen = Date.now() - startedAt;
       if (actor.controlState?.jump) maxJump = true;
       if (actor.controlState?.sprint) sprinted = true;
       const flat = Math.hypot(p.x + 5.5, p.z - 11.5);
       if (detectedAt === null && flat > 0.8) detectedAt = Date.now() - startedAt;
       if (exitedAt === null && flat > Math.max(radius, 7) + 0.2) exitedAt = Date.now() - startedAt;
-    }, 50);
+    }, 25);
     for (let i = 0; i < 80 && exitedAt === null; i++) await sleep(100);
     clearInterval(poll);
+    actor.setControlState = originalKey;
     await sleep(500);
     const p = actor.entity.position;
-    runs.push({ radius, summonAnswer: answered.slice(0, 160), reflexStartedAfterMs: detectedAt, outOfZoneAfterMs: exitedAt, finalFlatDistance: round(Math.hypot(p.x + 5.5, p.z - 11.5), 2), healthLost: round(healthBefore - Number(actor.health), 1), jumped: maxJump, sprinted });
+    runs.push({ radius, summonAnswer: answered.slice(0, 160), cloudInClientAfterMs: cloudSeen, firstForwardKeyAfterMs: firstForward, firstStepAfterMs: detectedAt, outOfZoneAfterMs: exitedAt, finalFlatDistance: round(Math.hypot(p.x + 5.5, p.z - 11.5), 2), healthLost: round(healthBefore - Number(actor.health), 1), jumped: maxJump, sprinted });
     log(`BREATH radius ${radius}: ${JSON.stringify(runs.at(-1))}`);
     await ask(`${END} kill @e[type=minecraft:area_effect_cloud]`);
   }
@@ -331,6 +336,28 @@ scenes.fireball = async () => {
     await ask(`effect give ${ACTOR} minecraft:instant_health 1 5`); await sleep(500);
   }
   return { runs };
+};
+
+scenes.arrow_dragon = async () => {
+  await protect(true);
+  await flatten(); await gear(['bow', 'arrow 64', 'diamond_sword']); await wear();
+  // The dragon hovers (phase 10) 14 up over the middle; the actor shoots it from the ground, 28 blocks off.
+  const keep = setInterval(() => { void ask(`${END} data modify entity ${DRAGON} DragonPhase set value 10`); void ask(`${END} tp ${DRAGON} 0.5 ${g + 14} 0.5`); }, 1500);
+  await ask(`${END} data modify entity ${DRAGON} DragonPhase set value 10`); await ask(`${END} tp ${DRAGON} 0.5 ${g + 14} 0.5`);
+  await ask(`${END} data modify entity ${DRAGON} Health set value 200.0f`);
+  await standAt(0.5, g, 28.5); await sleep(1500);
+  const damage: unknown[] = [];
+  const dragon0 = dragonEntity();
+  const onDamage = (p: any) => { if (p?.entityId === dragon0?.id) damage.push({ cause: p.sourceCauseId, direct: p.sourceDirectId, type: p.sourceTypeId }); };
+  actor._client.on('damage_event', onDamage);
+  const before = entityHealth(actor, dragon0);
+  const run = await act([{ do: 'shoot', target: 'ender_dragon', n: 4 }], 40);
+  await sleep(1000);
+  actor._client.removeListener('damage_event', onDamage);
+  clearInterval(keep);
+  const after = entityHealth(actor, dragonEntity());
+  const proof = await evidence();
+  return { act: run.lines, ok: run.ok, healthClientBefore: before, healthClientAfter: after, damageEvents: damage, bossWitness: proof?.boss?.witness ?? null, bossVerified: proof?.boss?.verified };
 };
 
 scenes.crystal_bow = async () => {
@@ -379,13 +406,18 @@ scenes.crystal_caged = async () => {
   await ask(`${END} data modify entity ${DRAGON} DragonPhase set value 0`);
   const blocked = await act([{ do: 'shoot', target: `#${target.id}` }], 15);
   out.shotThroughBars = { lines: blocked.lines, ok: blocked.ok };
-  // The bars on the line (the cage is 5 wide: the face toward the actor, at the crystal's height) are taken out as `dig` would take them; then the shot goes through.
-  const cx = Math.floor(target.x), cz = Math.floor(target.z), cy = Math.floor(target.y);
-  const holes: number[][] = [];
-  for (let step = 2; step >= 2; step--) for (let dy = 0; dy <= 2; dy++) for (const sideway of [-1, 0, 1]) holes.push([cx + Math.round(ux * step) + Math.round(-uz * sideway), cy + dy, cz + Math.round(uz * step) + Math.round(ux * sideway)]);
-  for (const [x, y, z] of holes) await ask(`${END} setblock ${x} ${y} ${z} air`);
-  const open = await act([{ do: 'shoot', target: `#${target.id}` }], 20);
-  out.shotThroughHole = { lines: open.lines, ok: open.ok, crystalGone: !dragonEntity() ? null : actor.entities?.[target.id] === undefined };
+  // The bars on the arrow's way are taken out one by one, as `dig` would take them (only the ones on the way): each refusal names the bar; it is set to air and the shot is asked again.
+  const taken: string[] = [];
+  let open = await act([{ do: 'shoot', target: `#${target.id}` }], 20);
+  for (let i = 0; i < 8 && !open.ok && /iron_bars/u.test(open.lines.join(' ')); i++) {
+    const cell = /\((-?\d+),(-?\d+),(-?\d+)\) の iron_bars/u.exec(open.lines.join(' '));
+    if (!cell) break;
+    await ask(`${END} setblock ${cell[1]} ${cell[2]} ${cell[3]} air`); taken.push(`${cell[1]},${cell[2]},${cell[3]}`);
+    open = await act([{ do: 'shoot', target: `#${target.id}` }], 20);
+  }
+  await sleep(500);
+  out.barsTaken = taken;
+  out.shotThroughHole = { lines: open.lines, ok: open.ok, crystalGone: actor.entities?.[target.id] === undefined };
   return out;
 };
 
@@ -417,7 +449,7 @@ scenes.crystal_blast = async () => {
     const crystal = actor.entities?.[target.id]; if (!crystal) { trials.push({ distance, error: 'crystal gone' }); break; }
     const estimate = blastAt(actor, { x: crystal.position.x, y: crystal.position.y + 1, z: crystal.position.z });
     const healthBefore = Number(actor.health);
-    await ask(`${END} kill @e[type=minecraft:end_crystal,x=${crystal.position.x},y=${crystal.position.y},z=${crystal.position.z},distance=..2,limit=1]`);
+    await ask(`${END} damage @e[type=minecraft:end_crystal,x=${crystal.position.x},y=${crystal.position.y},z=${crystal.position.z},distance=..2,limit=1] 1 minecraft:arrow`);
     await sleep(900);
     const lost = round(healthBefore - Number(actor.health), 1);
     trials.push({ distance, wall, estimate: { distance: estimate.distance, seen: estimate.seen, raw: estimate.raw, expected: estimate.expected }, healthLost: lost, health: actor.health });
@@ -453,7 +485,7 @@ scenes.bed = async () => {
     await standAt(standX + 0.5, g, standZ + 0.5); await sleep(700);
     const healthBefore = Number(actor.health);
     const dragonBefore = await dragonHealthServer();
-    const run = await act([{ do: 'use', at: { x: bedX, y: g + 3, z: 7 } }], 12);
+    const run = await act([{ do: 'use', at: [{ x: bedX, y: g + 3, z: 7 }] }], 12);
     await sleep(600);
     const dragonAfter = await dragonHealthServer();
     trials.push({ label, lines: run.lines, ok: run.ok, healthLost: round(healthBefore - Number(actor.health), 1), dragonBefore, dragonAfter, dragonLoss: dragonBefore !== null && dragonAfter !== null ? round(dragonBefore - dragonAfter, 1) : null });

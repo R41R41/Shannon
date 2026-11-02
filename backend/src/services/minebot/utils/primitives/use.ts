@@ -156,9 +156,10 @@ const HARM_SETTLE_MS = 700;
  */
 async function blowBed(ctx: StepContext, cell: Cell, block: any): Promise<StepOutcome> {
   const bot = ctx.bot;
-  const centre = { x: cell.x + 0.5, y: cell.y + 0.5, z: cell.z + 0.5 };
-  // Both halves of the bed are gone when it blows: neither shuts the blast out.
+  // The click on the foot is passed to the head (BedBlock): the blast is centred on the HEAD half whichever half was clicked. Both halves are gone when it blows: neither shuts the blast out.
   const halves = bedHalves(block, cell);
+  const blastCell = halves?.head ?? cell;
+  const centre = { x: blastCell.x + 0.5, y: blastCell.y + 0.5, z: blastCell.z + 0.5 };
   const guess = blastAt(bot, centre, bot.entity.position, BED_POWER, halves ? [halves.foot, halves.head] : []);
   if (!guess.safe) {
     return stopped(bot, 'blast_unsafe', `${placeText(bot, cell)} のベッドを使うと爆発（威力${BED_POWER}）が自分に当たる見込み: 中心まで ${guess.distance}m・見える割合 ${guess.seen}・素の被害 ${guess.raw}→防具後 ${guess.expected}`
