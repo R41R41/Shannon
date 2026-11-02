@@ -11,7 +11,7 @@ import { clip } from '../actReport.js';
 import { blockAt, cellText, fullPackWatch, inventoryCount, isAirLike, letGo, stopped, StepStopped, wait, waitUntil, type StepContext, type StepOutcome } from './common.js';
 import { atGoal, goWith, type GoOutcome, type WayNotes } from './walk.js';
 import { dig } from './dig.js';
-import { pillarUp, shortFloor, wholeFloorBeside } from './pillarUp.js';
+import { climbBlocker, pillarUp, shortFloor, wholeFloorBeside } from './pillarUp.js';
 import { bodyOverlap, placeFacts } from '../placeFacts.js';
 import { blackBoxOf } from '../blackbox.js';
 import type { Progress } from '../../integration/commonFca/continueContract.js';
@@ -1064,6 +1064,18 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
         let dug: StepOutcome;
         try { dug = await dig(ctx, { at: [roof], collect: false }); } finally { manualBusy = false; }
         if (!dug.ok) return { levels, stop: fail(dug.reason === 'lava_behind' ? 'lava' : 'dead_end', dug.text.slice(0, 90), '別の場所から') };
+      }
+      // Run 59 (hold 3): a rail (or a torch, a flower) in the feet cell takes the level's block: it is dug like the roof when canDig allows,
+      // otherwise the climb says which block stops it (it once jumped twice over a mineshaft's rail and said only that the jump fell short).
+      const blocker = climbBlocker(bot, feetCell(bot)!);
+      if (blocker) {
+        if (!rule.names.has(blocker.name) || state.dug >= limits.maxDig) {
+          return { levels, stop: fail(state.dug >= limits.maxDig ? 'limit_dig' : 'dead_end', `${blocker.words}（掘ってよい物に無い）`, `canDig に ${blocker.name} を足すか、別の場所から`) };
+        }
+        manualBusy = true;
+        let dug: StepOutcome;
+        try { dug = await dig(ctx, { at: [blocker.cell], collect: false }); } finally { manualBusy = false; }
+        if (!dug.ok || climbBlocker(bot, feetCell(bot)!)) return { levels, stop: fail('dead_end', dug.ok ? `${blocker.words}（掘っても残った）` : dug.text.slice(0, 90), '別の場所から') };
       }
       manualBusy = true;
       let up: StepOutcome;

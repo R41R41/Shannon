@@ -37,6 +37,21 @@ export const PILLAR_FEET_OVER_FLOOR = 1.05;
 /** The feet must still be this far over the cell's top two ticks on (at the speed they fall at now) when the place is sent. */
 export const PILLAR_FALL_MARGIN = 0.03;
 const EMPTY = (block: any) => !block || isAirLike(block) || block.name === 'water' || block.name === 'lava';
+/** What a placed block takes the place of (the game's replaceable blocks a pillar meets): anything else in the feet cell refuses the block. */
+const REPLACEABLE = /^(?:air|cave_air|void_air|water|lava|short_grass|grass|tall_grass|fern|large_fern|dead_bush|bush|vine|glow_lichen|seagrass|tall_seagrass|fire|soul_fire|snow|structure_void|light)$/u;
+/**
+ * Run 59 (hold 3): in a mineshaft corridor the body stood on a rail. Every jump saw the feet cell taken (the rail is not air and a block is
+ * not laid into it), so no place went out; the go's line said "跳びが届かない" with the jump's top and the cell over the head (air), and the
+ * cut line never reached the rail. What has no box of its own and is not replaced by a placed block (a rail, a torch, a flower, a button)
+ * stops a level before the jump, by its name. A slab or a carpet the feet stand on is the short floor's case. Null when the cell is free.
+ */
+export function climbBlocker(bot: any, feet: Cell): { cell: Cell; name: string; words: string } | null {
+  const here = blockAt(bot, feet);
+  if (here && here.boundingBox === 'empty' && !EMPTY(here) && !REPLACEABLE.test(String(here.name))) {
+    return { cell: feet, name: String(here.name), words: `足のマス ${cellText(feet)} に ${here.name} があり、そこへはブロックを積めない` };
+  }
+  return null;
+}
 
 /** How much lower than its cell's bottom a floor may be and a jump from it still reach the laying height (1.252 - 1.05). */
 export const SHORT_FLOOR = 0.19;
@@ -98,6 +113,8 @@ async function pillarLevels(ctx: StepContext, args: PillarArgs, tally: { climbed
       if (!findItem(bot, args.block)) return stopped(bot, 'missing_item', `${args.block} が尽きた（${done}段登った、今 ${cellText(feet)}）`, feet);
       const over = { x: feet.x, y: feet.y + 2, z: feet.z };
       if (!EMPTY(blockAt(bot, over))) return stopped(bot, 'ceiling', `頭の上 ${placeText(bot, over)} が ${cellNow(bot, over)} で登れない（${done}段登った）`, over);
+      const blocked = climbBlocker(bot, feet);
+      if (blocked) return stopped(bot, 'not_placed', `${blocked.words}（${done}段登った）。先に掘るか、別の所から`, blocked.cell);
       const floor = blockAt(bot, { x: feet.x, y: feet.y - 1, z: feet.z });
       // Run 44 (hold 1): an open trapdoor's box is a panel at the side of its cell: nothing to lay a block on from inside the cell.
       if (!floor || floor.boundingBox !== 'block' || isDoorlike(String(floor.name))) {
