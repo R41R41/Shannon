@@ -143,9 +143,13 @@ async function sleepInBed(ctx: StepContext, cell: Cell, asked: any): Promise<Ste
 
 /** A bed's blast: power 5 at the bed's middle. */
 const BED_POWER = 5;
-/** The blast is waited for this long after the click (the server blows it in the same tick), and its harm this long more (the health packet follows). */
+/**
+ * The blast is waited for this long after the click (the server blows it in the same tick), and its harm this long more (the health packet follows within a tick or two).
+ * The act stops a body that lost 4 health or more a quarter of a second after (`damage_taken`), so the hand answers before that, or the planner is told "hit" and not what the
+ * bed did (lab, 2026-11-02: a bed blown 4.6 blocks off in the open took 15 and the answer was "被弾: 体力 20 → 6").
+ */
 const BLAST_WAIT_MS = 1500;
-const HARM_SETTLE_MS = 700;
+const HARM_SETTLE_MS = 120;
 
 /**
  * A bed right-clicked in the Nether or the End (the planner asked: a use hand at the bed's cell): it blows, power 5, fire, and is gone. Said in
@@ -176,7 +180,7 @@ async function blowBed(ctx: StepContext, cell: Cell, block: any): Promise<StepOu
   try { bot._client?.on?.('explosion', onBlast); } catch { /* the packet is a help */ }
   try {
     await guard(ctx, Promise.resolve(bot.activateBlock(block)), 3000);
-    await waitUntil(ctx, () => blast !== null || !isBedName(blockAt(bot, cell)?.name), BLAST_WAIT_MS);
+    await waitUntil(ctx, () => blast !== null || !isBedName(blockAt(bot, cell)?.name), BLAST_WAIT_MS, 25);
     await wait(ctx, HARM_SETTLE_MS);
   } catch (error) {
     if (error instanceof StepStopped || /Action interrupted/u.test(String((error as Error)?.message))) throw error;
