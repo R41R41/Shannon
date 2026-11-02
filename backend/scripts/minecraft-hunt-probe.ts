@@ -524,7 +524,7 @@ scene('blaze_r59_corner_toward_long', 'run59 pack: the toward-side corner, hold,
 scene('blaze_r59_corner_peek', 'run59 pack: the away-side corner; steps out to the front cell, strikes 6 s, back in the corner; 600 s', note => blazeNook(note, { r59: true, corner: 'away', peek: true, seconds: 600 }));
 // The low slit (S2, 2026-11-03; Codex's first candidate): the body stands one block LOWER than the spawner room's floor in a pocket behind the room's west wall; the wall has ONE opening, the cell at the
 // room's floor level (the pocket's head cell). Built here with commands (the feasibility of the shape: can it strike through the slit, how much does it take, can it get the rods), not by the body.
-async function blazeSlit(note: (text: string) => void, options: { seconds?: number; fetch?: boolean } = {}): Promise<Record<string, unknown>> {
+async function blazeSlit(note: (text: string) => void, options: { seconds?: number; fetch?: boolean; flush?: boolean } = {}): Promise<Record<string, unknown>> {
   const stand = sites.blazeStand as number[] | undefined, spawner = sites.blazeSpawner as number[] | undefined;
   if (!stand || !spawner) throw new Error('no blazeStand or blazeSpawner in the sites');
   const seconds = options.seconds ?? (timedSeconds || 300);
