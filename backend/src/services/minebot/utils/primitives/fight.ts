@@ -590,7 +590,8 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
       let strike = false;
       // A blow is struck with the shield lowered and the shield is only counted as up again five ticks after it is raised: while a shot is about to land or a blaze that sees
       // the body has been charged long enough to shoot, the blow waits (GATE_PATIENCE_MS at most: a fight with nothing struck is no safer).
-      const held = !!watch && box <= REACH && sees && !gate.may(now, strikeHold(bot, watch, now));
+      // (S2, 2026-11-03: a blow lands with the shield raised, lab; with the shield up there is no window to wait for.)
+      const held = !!watch && box <= REACH && sees && !shield?.up && !gate.may(now, strikeHold(bot, watch, now));
       if (box <= REACH && sees && !held) {
         if (jump === 'air') strike = remaining === 0 && vy < -0.08;
         else if (jump === 'idle') {

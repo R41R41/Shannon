@@ -77,7 +77,6 @@ function makeCamp(options: { shield?: boolean; held?: string; blazes: BlazeSpec[
     activateItem: () => { bot.usingHeldItem = true; }, deactivateItem: () => { bot.usingHeldItem = false; },
     attack: (mob: any) => {
       stats.swings++;
-      if (bot.usingHeldItem && slots[45]?.name === 'shield') return;             // refused from behind a raised shield
       const eye = bot.entity.position.offset(0, 1.62, 0), half = mob.width / 2, p = mob.position;
       const dx = Math.max(Math.abs(eye.x - p.x) - half, 0), dz = Math.max(Math.abs(eye.z - p.z) - half, 0), dy = Math.max(p.y - eye.y, eye.y - (p.y + mob.height), 0);
       if (Math.hypot(dx, dy, dz) > 3.0 || mob.health <= 0) return;
