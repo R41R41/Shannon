@@ -175,7 +175,10 @@ function s4Lava(cx: number, cy: number, cz: number, radius = 24): Record<string,
 interface S4WalkOut { reached: boolean; seconds: number; endDistance: number; endY: number; hops: number; okHops: number; hpLost: number; lowestHp: number; stops: string[]; pace: string; trail: Array<[number, number, number]>; mobs: Record<string, unknown> }
 /** The walk of a head in the Nether: hops of at most 90 m along the line to the goal, each to a floor the loaded chunks show (the nearest to the body's height, the land to either side when the line has none), by go with the limits its knowledge gives; the stops are read and answered as the body's words say. */
 async function s4NetherWalk(goal: number[], options: { limitMs: number; deaths0: number; label: string; note: (text: string) => void; reachMetres?: number; ignoreY?: boolean }): Promise<S4WalkOut> {
-  const reachMetres = options.reachMetres ?? 8, hopMax = 90, started = Date.now(), watch = s4Watch();
+  // The hop's reach starts at 90 m (the head's knowledge); a stop that says the search did not finish (search_timeout, an act that came back with nothing) or a hop that gained next to nothing
+  // makes the next hops shorter, down to 12 m (the body's own advice: "a relay point within 10 m"), and a hop that gained well makes them longer again.
+  let hopMax = 90;
+  const reachMetres = options.reachMetres ?? 8, started = Date.now(), watch = s4Watch();
   const stops: string[] = [], pace: string[] = [];
   const canDig = ['netherrack', 'basalt', 'blackstone'];
   let hops = 0, okHops = 0, hpLost = 0, sameStop = 0, lastStop = '', lowest = Number(actor.health);
@@ -206,15 +209,18 @@ async function s4NetherWalk(goal: number[], options: { limitMs: number; deaths0:
       hpLost += Math.max(0, hp0 - Number(actor.health)); lowest = Math.min(lowest, Number(actor.health));
       const gained = before - s4Planar(goal);
       pace.push(`${Math.round(gained)}m/${Math.round((Date.now() - hopStart) / 1000)}s${run.ok ? '' : '!'}`);
+      const reach = Math.min(hopMax, before);
       if (!run.ok) {
         const why = s4Why(run);
-        stops.push(`${Math.round((Date.now() - started) / 1000)}s ${why}`);
+        stops.push(`${Math.round((Date.now() - started) / 1000)}s ${why || '(no line: the act came back with nothing)'}`);
         const named = /が ([a-z_]+) で登れない（掘ってよい物に無い）/u.exec(why)?.[1];
         if (named && !canDig.includes(named) && canDig.length < 12) { canDig.push(named); options.note(`canDig gets ${named} (the line said so)`); }
-        const key = s4Key(why); sameStop = key === lastStop ? sameStop + 1 : 1; lastStop = key;
+        const shrink = (/search_timeout/u.test(why) || !why.trim() || gained < 3) && hopMax > 12;
+        if (shrink) { hopMax = Math.max(12, Math.floor(hopMax * 0.4)); sameStop = 0; options.note(`the next hops are at most ${hopMax} m (${why.slice(0, 60) || 'no line'})`); }
+        else { const key = s4Key(why); sameStop = key === lastStop ? sameStop + 1 : 1; lastStop = key; }
         await sleep(1500);
         if (sameStop >= 4) { options.note(`the same stop four times: ${why}`); break; }
-      } else sameStop = 0;
+      } else { sameStop = 0; if (gained >= 0.6 * reach && hopMax < 90) hopMax = Math.min(90, Math.round(hopMax * 1.6)); }
       if (Number(actor.health) < 6) { options.note(`health ${actor.health}: the walk stops`); break; }
       await s4Eat();
     }
@@ -246,6 +252,9 @@ scene('s4_leg2', 'the Nether road from the fortress stand to the warped forest (
   await ask('difficulty normal'); await ask('gamerule doMobSpawning true');
   await s4EquipRun59();
   await placeActor('the_nether', from[0]!, from[1]!, from[2]!, 48);
+  // The stand is the blaze camp inside the fortress: a body that has just got its rods leaves with the fortress's creatures about it (the first sample of this scene died there in 30 s,
+  // wither skeletons and blazes within 16 m). HUNT_LEG2_CLEAR=1 starts it with those killed, to measure the road itself.
+  if (process.env.HUNT_LEG2_CLEAR === '1') for (const kind of ['wither_skeleton', 'blaze', 'skeleton', 'magma_cube']) await ask(`execute in minecraft:the_nether run kill @e[type=minecraft:${kind}]`);
   return s4Survey('leg2', goal, note, s4RunLimit(900));
 });
 scene('s4_survey_line', 'no body walks: the biomes along the straight lines gate exit -> fortress, arrival -> fortress and fortress -> warped forest, and the nearest bastion and fortress from points on them (the server\'s own answers)', async note => {
@@ -258,9 +267,11 @@ scene('s4_survey_line', 'no body walks: the biomes along the straight lines gate
   const structures: Array<Record<string, unknown>> = [];
   for (const [name, at] of [['exit', exit], ['arrival', arrival], ['mid', [80, 76, 40]], ['fortress', fort], ['between', [225, 60, -25]], ['warped', warped]] as Array<[string, number[]]>) {
     for (const kind of ['bastion_remnant', 'fortress']) {
-      const text = await ask(`execute in minecraft:the_nether positioned ${at[0]} ${at[1]} ${at[2]} run locate structure minecraft:${kind}`, 40_000);
-      const hit = /\[(-?\d+), ~?-?\d*, ?(-?\d+)\][^\n]*?(\d+) blocks/u.exec(text);
-      structures.push({ from: name, kind, nearest: hit ? { x: Number(hit[1]), z: Number(hit[2]), blocks: Number(hit[3]) } : text.replace(/\s+/gu, ' ').slice(0, 160) });
+      const text = await ask(`execute in minecraft:the_nether positioned ${at[0]} ${at[1]} ${at[2]} run locate structure minecraft:${kind}`, 40_000, true);
+      // The answer is a translatable message: the numbers are in its json (x, "~", z, then the distance), as locateFrom reads them.
+      const numbers = [...text.matchAll(/"(-?\d{1,6})"|"text":"(-?\d{1,6})"|:(-?\d{1,6})[,}\]]/gu)].map(hit => Number(hit[1] ?? hit[2] ?? hit[3]));
+      if (name === 'exit' && kind === 'bastion_remnant') note(`locate answer sample: ${text.replace(/\s+/gu, ' ').slice(0, 500)}`);
+      structures.push({ from: name, kind, nearest: numbers.length >= 3 ? { x: numbers[0], z: numbers[1], blocks: numbers[2] } : text.replace(/\s+/gu, ' ').slice(0, 160) });
     }
   }
   note(`structures: ${JSON.stringify(structures)}`);

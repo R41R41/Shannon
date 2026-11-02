@@ -109,7 +109,7 @@ scene('s4_nether_stronghold', 'the road to the stronghold through the Nether, on
   await ask(`execute in minecraft:the_nether run forceload add ${goal[0]! - 24} ${goal[2]! - 24} ${goal[0]! + 24} ${goal[2]! + 24}`);
   const walk = await s4NetherWalk(goal, { limitMs: Math.max(120_000, limitMs - (Date.now() - started) - 420_000), deaths0, label: 'nether', note, reachMetres: 10, ignoreY: true });
   note(`the Nether walk: ${walk.reached ? 'reached' : 'NOT reached'} in ${walk.seconds}s, ${walk.endDistance} m left, hops ${walk.okHops}/${walk.hops}, hp lost ${walk.hpLost} (lowest ${walk.lowestHp}); mobs ${JSON.stringify(walk.mobs)}; stops ${JSON.stringify(walk.stops)}`);
-  Object.assign(out, { walk: { ...walk, trail: undefined }, metresToWalk });
+  Object.assign(out, { walk: { ...walk, trail: undefined, trailSample: walk.trail.filter((_, index) => index % 10 === 0) }, metresToWalk });
   phase('walk', phaseStart);
   if (!walk.reached || !s4Alive(deaths0)) return { ...out, stage: 'walk did not arrive', deathsHere: deaths - deaths0, phases };
   // ---- the second gate -------------------------------------------------------------------------------------------------------------------------------------------
