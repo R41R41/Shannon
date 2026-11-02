@@ -3,6 +3,7 @@ import { actionSignal } from '../../execution/ActionExecution.js';
 import { feetCell, isOpenBlock, relativeCell, relativeWords, type Cell, type Facing } from '../localMap.js';
 import { BLOCK_REACH } from '../blockReach.js';
 import type { GoalOutcome, InventoryEvent, Progress } from '../../integration/commonFca/continueContract.js';
+import type { EyeReport } from '../huntEyeFlight.js';
 
 /**
  * What every part of `act` shares (design mb-llm-centric 2.3, 4: utils/primitives). A part does what its arguments say and nothing
@@ -57,7 +58,7 @@ export interface StepOutcome {
   events?: InventoryEvent[];
   /** What the act's result carries beside the line (the contract's ActResult): a thrown eye, a container's contents, arrows left. */
   data?: {
-    eye?: { from: Cell; bearingDeg: number; flew: number; to: Cell; broke: boolean };
+    eye?: EyeReport;
     container?: { at: Cell; kind: string; items: string[] };
     arrowsLeft?: number;
     /** A walk that entered a portal and ended in the other dimension (the act ends there). */

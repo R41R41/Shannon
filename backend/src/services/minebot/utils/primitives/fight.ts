@@ -1,4 +1,5 @@
 import pathfinder from 'mineflayer-pathfinder';
+import { Vec3 } from 'vec3';
 import { buildMovements } from '../setMovements.js';
 import { beginEngagement } from '../engagement.js';
 import { markHeadCombat } from '../combatOwner.js';
@@ -14,9 +15,14 @@ import { alreadyDead, cooldownMs, creatureIdOf } from './attack.js';
 import { deathLedgerOf } from '../deathLedger.js';
 import type { Progress } from '../../integration/commonFca/continueContract.js';
 import { eat } from './body.js';
-import { findEntity } from './use.js';
+import { findEntity, isDying } from './use.js';
 import { findItem, guard, letGo, stopped, StepStopped, wait, type StepContext, type StepOutcome } from './common.js';
 import { swimControls, swimPulse } from './swim.js';
+import { HOVERING_SHOOTERS, ShooterWatch, StrikeGate, hoversAboveReach, strikeHold } from '../huntBlaze.js';
+import { itemIds, itemsSince } from '../huntBarter.js';
+import { itemFacts } from './pickup.js';
+import { EndermanCamp, moveToRoofSite } from '../huntEndermanCamp.js';
+import { endermanAngry } from '../huntEnderman.js';
 
 const { goals } = pathfinder;
 
@@ -29,6 +35,16 @@ const { goals } = pathfinder;
  * (back a step when it is on the body), turns to it, strikes with a full swing, jumps so that the blow lands on the way down (a critical hit needs a
  * fall, no sprint and a swing at full strength; the jump is timed from the weapon's own wait), keeps the shield on the arm, and, below `retreatHp`,
  * gets out of reach, eats what can help and goes back in, or leaves.
+ *
+ * A blaze (a creature that hovers and shoots, utils/huntBlaze) is not followed off the spot: the body keeps within LEASH of where the fight began
+ * (the camp beside the spawner, put there by the planner), holds no key, and strikes what comes within reach and in sight; one that hovers more than a blow's
+ * reach above the eye is waited for under the shield (its height is drawn again every five seconds). A blow is held back while a shot is about to land or a
+ * blaze that sees the body has been charged long enough to shoot (utils/huntBlaze StrikeGate: 1.5 s in all within each 8 s). Its drop is told in the line it dies in.
+ *
+ * An enderman is fought from a hole it cannot enter (utils/huntEnderman, huntEndermanCamp): the body lays a 3x3 roof over itself at feet+2 from what building
+ * blocks it carries, stares the enderman in the eye from under it (the gaze guard is let go for the stare), and from then on stands in the hole under the shield
+ * and strikes what comes within reach: it is not followed, and it is not looked in the eye once it is angry (it would teleport away). The roof is the hand's own
+ * work and needs no canPlace: the blocks are named in the line when they are short. A bow is no tool for it (it dodges arrows).
  *
  * It never looks for a target of its own: another creature that comes is not turned to (the floor's reflexes answer it, and their word is above this
  * hand's). It never digs and never lays a block. Whatever it does is told in the line: the blows swung and landed, the health lost, the meals, and who
@@ -68,12 +84,16 @@ const JUMP_FAILS_MS = 250, NO_JUMP_MS = 1500;
 const LANDED_WITHIN_MS = 700;
 /** A creeper is struck and left (the blow throws it back; the blast is what is feared): back this long after each blow. */
 const CREEPER_BACK_MS = 700;
+/** A broken shield is replaced from the pack; a failed try is made again no sooner than this. */
+const SPARE_RETRY_MS = 1_500;
 /** The shield reflex meeting a shot holds the body this long after it raised the shield. */
 const SHOT_HOLD_MS = 600;
 /** A meal takes 1.6 s and a creature of the body's own pace closes about 6 m in that: the run for a meal goes to 8 m (or its time), and it is eaten from 6.5 m. */
 const MEAL_GAP = 8, MEAL_MIN_GAP = 6.5, MAX_MEALS = 4;
 const NEVER_EAT = new Set(['pufferfish', 'chorus_fruit', 'suspicious_stew', 'spider_eye', 'poisonous_potato', 'enchanted_golden_apple', 'rotten_flesh']);
 const CUT = /Action interrupted|Motor owner expired/u;
+/** A hovering shooter is fought from within this many blocks of where the fight began (level), never beyond. */
+const LEASH = 3.5;
 const r1 = (value: number) => Math.round(value * 10) / 10;
 
 /** Thrown when something above the hand ended it (a reflex's lease, the act's stop): the act reports a stop in the hand, and this tells the counts. */
@@ -90,6 +110,24 @@ function boxDistance(eye: { x: number; y: number; z: number }, entity: any): num
 }
 const labelOf = (entity: any) => `${entity.name ?? entity.username ?? 'entity'} #${entity.id}`;
 const cellOfEntity = (entity: any): Cell => ({ x: Math.floor(entity.position.x), y: Math.floor(entity.position.y + 1e-3), z: Math.floor(entity.position.z) });
+/** The off hand's shield: durability used so far and its total, or null when no shield is on the arm. */
+function shieldState(bot: any): { used: number; max: number } | null {
+  const shield = bot.inventory?.slots?.[45];
+  if (shield?.name !== 'shield') return null;
+  return { used: Number(shield.durabilityUsed ?? 0), max: Number(bot.registry?.itemsByName?.shield?.maxDurability ?? 336) };
+}
+/** The drops of a kill, as the line tells them: what lies there (the item entities that were not lying about when the fight began), and where from the body. */
+function dropsLine(bot: any, baseline: ReadonlySet<number>, where: { x: number; y: number; z: number }): string {
+  const stacks = itemsSince(bot, baseline, new Vec3(where.x + 0.5, where.y, where.z + 0.5), 6);
+  if (!stacks.length) return '';
+  const names = new Map<string, number>();
+  for (const entity of stacks) {
+    let name = `#${entity.id}`, count = 1;
+    try { const stack = entity.getDroppedItem?.(); if (stack?.name) { name = String(stack.name); count = Number(stack.count ?? 1); } } catch { /* its stack not here yet */ }
+    names.set(name, (names.get(name) ?? 0) + count);
+  }
+  return `・落とし物 ${[...names].map(([name, count]) => `${name}×${count}`).join(' ')}`;
+}
 /** The code a cut is told by in the hand's line: the act's stop word, a reflex as `reflex`. */
 const cutCode = (why: string) => /reflex|^floor-|^lava|^auto-/u.test(why) ? 'reflex' : why.startsWith('stop_if') ? 'stopIf' : why;
 
@@ -106,13 +144,42 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
 
   const wanted = typeof args.target === 'number' ? args.target : /^#\d+$/u.test(String(args.target).trim()) ? Number(String(args.target).trim().slice(1)) : args.target;
   deathLedgerOf(bot);
-  const target = findEntity(bot, wanted, 32);
+  /**
+   * A kind named by its name: the nearest one, but for a blaze or an enderman (hunts from one spot) the nearest one the eye sees: a blaze that hovers behind the spawner room's wall,
+   * or an enderman behind a hill, is not the one to fight while another stands in sight (lab: three acts in a row stopped on a blaze 1.8 m off behind the wall).
+   */
+  const pickTarget = (): any => {
+    const first = findEntity(bot, wanted, 32);
+    if (!first || typeof wanted === 'number') return first;
+    const kind = String(first.name ?? '').toLowerCase();
+    if (!HOVERING_SHOOTERS.has(kind) && kind !== 'enderman') return first;
+    const eyes = eyeOf(bot.entity.position);
+    const seen = (entity: any): boolean => {
+      try { return probeSight(bodyReader(bot), eyes, { creature: { id: entity.id, name: String(entity.name ?? 'entity'), position: entity.position, height: entity.height, width: entity.width } }).visible; } catch { return true; }
+    };
+    if (seen(first)) return first;
+    const others = (Object.values(bot.entities ?? {}) as any[]).filter(entity => entity && entity !== bot.entity && entity.position && entity.isValid !== false && String(entity.name ?? '').toLowerCase() === kind
+      && entity.position.distanceTo(bot.entity.position) <= 32 && !isDying(bot, entity)).sort((a, b) => a.position.distanceTo(bot.entity.position) - b.position.distanceTo(bot.entity.position)).slice(0, 8);
+    return others.find(seen) ?? first;
+  };
+  const target = pickTarget();
   // Continue contracts (1, decision 4): a creature named by its id that the body saw die a moment ago is already dead; one that is not there and was not seen to die is not found.
   const askedId = creatureIdOf(wanted);
   if (askedId !== null) { const dead = alreadyDead(bot, askedId, target); if (dead) return dead; }
   if (!target || !target.position) return { ...none('lost', `${args.target} が 32m 内に見えない（死ぬのを見た記録も無い）`), code: 'target_not_found' };
   if (target.type === 'player' || target.username) return none('invalid_input', `${labelOf(target)} は人。fight は生き物（敵）にだけ使う`);
   const label = labelOf(target);
+  // A hovering shooter (a blaze) is fought from the spot the planner put the body at, under the shield, and is not followed (utils/huntBlaze).
+  const hovering = HOVERING_SHOOTERS.has(String(target.name ?? '').toLowerCase());
+  const camp = bot.entity.position.clone();
+  const ender = stance === 'fight' && String(target.name ?? '').toLowerCase() === 'enderman';
+  /** A camp holds no key and follows nothing: the body stands where the planner put it. */
+  const stand = hovering || ender;
+  const watch = hovering ? new ShooterWatch(bot) : null;
+  const itemsBefore = itemIds(bot);
+  let shield0 = shieldState(bot);
+  const gate = new StrikeGate();
+  let endermanCamp: EndermanCamp | null = null;
   const held0 = reflexHeld(bot);
   if (held0) return none('reflex', `${label} へ向かう前に、反射 ${held0} が体を握っている。終わるまで始めない`);
   const footingRisk = (enemy = target) => stance === 'fight' && isThreat(bot as never, enemy) ? combatFootingRisk(bot, enemy) : null;
@@ -143,7 +210,31 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
   const onDead = (entity: any) => { if (entity?.id === target.id) dead = true; };
   const sample = () => { const now = Number(bot.health ?? lastHealth); if (now < lastHealth) lost += lastHealth - now; lastHealth = now; };
   bot.on?.('entityHurt', onHurt); bot.on?.('entityDead', onDead); bot.on?.('health', sample);
-  const counts = () => `与えた打撃 ${landed}（振り ${blows}）・受けた体力 ${r1(lost)}・食べた ${meals}`;
+  /** The shield's wear since the fight began (a blocked fireball costs it 6 of its 336), or that it broke; across swaps for a spare, what each broken one had left counts as worn. */
+  let retiredWear = 0, spares = 0, spareTriedAt = 0;
+  const wear = () => {
+    const now = shieldState(bot);
+    const sparesNote = spares ? `・予備に替えた×${spares}` : '';
+    if (shield0 && !now) return `・盾が壊れた${sparesNote}`;
+    const total = retiredWear + (shield0 && now ? Math.max(0, now.used - shield0.used) : 0);
+    return shield0 && now && (total > 0 || spares) ? `・盾 −${total}（残り${now.max - now.used}）${sparesNote}` : '';
+  };
+  /** A shield that broke in the fight is replaced from the pack at once (the habit that wears armour waits for a body that is free, and a fight is not). */
+  const replaceBroken = async () => {
+    const prior = shield0;
+    if (!prior || shieldState(bot) || Date.now() - spareTriedAt < SPARE_RETRY_MS) return;
+    spareTriedAt = Date.now();
+    const spare = findItem(bot, 'shield');
+    if (!spare) return;
+    try {
+      await guard(ctx, Promise.resolve(bot.equip(spare, 'off-hand')), 3000);
+      const now = shieldState(bot);
+      if (now) { retiredWear += prior.max - prior.used; shield0 = now; spares++; }
+    } catch (error) { if (error instanceof StepStopped || CUT.test(String((error as Error)?.message))) throw error; }
+  };
+  /** What the end adds to the counts: where the creature stood when the time ran out. */
+  let ending = '', siteNote = '';
+  const counts = () => `与えた打撃 ${landed}（振り ${blows}）・受けた体力 ${r1(lost)}・食べた ${meals}${wear()}${gate.count ? `・見送り ${gate.count}` : ''}${endermanCamp ? `・${endermanCamp.describe(endermanAngry(bot.registry, bot.entities?.[target.id]))}` : ''}${siteNote ? `・${siteNote}` : ''}${ending}`;
   /** Continue contracts (1): the blows that landed (the target was hurt within the swing's time), of the blows swung. */
   const struck = (): Progress => ({ unit: 'blow', done: landed, left: null });
   const holder = (reflex?: string | null) => reflex ? `体: 反射 ${reflex}` : '体: fight（反射なし）';
@@ -230,7 +321,13 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
   // Amendment A-2: how the enemy ended is told in the structure (code), beside the success the hand keeps: target_killed (its death was seen), target_escaped (alive,
   // outside the range, not chased), target_left (a flight that got the range it was asked for, or the enemy went out of sight while fleeing).
   const ENDINGS: Record<string, string> = { '死んだ': 'target_killed', '逃げた': 'target_escaped', '離れた': 'target_left' };
-  const finish = (verdict: string, extra = ''): StepOutcome => ({ ok: true, progress: struck(), ...(ENDINGS[verdict] ? { code: ENDINGS[verdict] } : {}), text: `fight 済 ${label} ${verdict}・${counts()}${extra}・${holder()}` });
+  const finish = (verdict: string, extra = '', lead = ''): StepOutcome => ({ ok: true, progress: struck(), ...(ENDINGS[verdict] ? { code: ENDINGS[verdict] } : {}), text: `fight 済 ${label} ${verdict}${lead}・${counts()}${extra}・${holder()}` });
+  /**
+   * The creature's death was seen: what it dropped is told first in the line, where the act's clip keeps it. Not waited for: the items spawn in the tick it dies, in the same batch of packets as
+   * the death, so they are here when the loop sees the death (waiting a tenth of a second for them was tried, and the floor's melee reflex took the body from the act in that tenth: the
+   * corpse, which the game keeps for a second, stood within reach after the fight's mark had ended).
+   */
+  const killed = async (): Promise<StepOutcome> => finish('死んだ', '', dropsLine(bot, itemsBefore, lastAt));
   /** `at`: the creature's cell, only where the place is what the line is about (it cannot be reached). */
   const fail = (code: string, text: string, at?: Cell): StepOutcome => {
     const out = { ...stopped(bot, code, `fight 止まった ${code}: ${label} ${text}。${counts()}・${holder(code === 'reflex' ? reflexHeld(bot) : null)}`, at), progress: struck() };
@@ -249,7 +346,7 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
       const gap = live ? live.position.distanceTo(bot.entity.position) : Infinity;
       const left = `体力 ${r1(Number(bot.health ?? 0))} < retreatHp ${retreatHp} で退いた（${Number.isFinite(gap) ? `${r1(gap)}m 離れた` : '相手は見えない'}）`;
       if (how === 'reflex') return fail('reflex', `${left}。その途中で反射が体を握った`);
-      if (dead) return finish('死んだ');
+      if (dead) return killed();
       if (how === 'gone') return fail('lost', `${left}。相手が見えなくなった`);
       if (!meal) return fail('retreat', `${left}。${round >= MAX_MEALS ? `${MAX_MEALS} 回食べても戻らなかった` : Number(bot.food ?? 20) >= 18 ? '食べても治りが早まらない（満腹度 18 以上）' : '食べる物が無い'}`);
       if (gap < MEAL_MIN_GAP) return fail('retreat', `${left}。食べる間が取れない（${r1(gap)}m）`);
@@ -264,7 +361,7 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
 
   try {
     if (navigator) {
-      try { navigator.setMovements(buildMovements(bot, false, true, true, true, false, true, 1, false, true, 3, 10, false)); } catch { /* the navigator keeps the movements it has */ }
+      try { navigator.setMovements(hovering ? buildMovements(bot, false, true, false, true, false, true, 1, false, true, 1, 10, false) : buildMovements(bot, false, true, true, true, false, true, 1, false, true, 3, 10, false)); } catch { /* the navigator keeps the movements it has */ }
     }
     // ---------------- a flight ----------------
     if (stance === 'flee') {
@@ -287,6 +384,19 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
       try { await guard(ctx, Promise.resolve(bot.equip(spare, 'off-hand')), 3000); }
       catch (error) { if (error instanceof StepStopped || CUT.test(String((error as Error)?.message))) throw error; }
     }
+    shield0 = shieldState(bot);
+    if (ender) {
+      // The hole it is fought from: the site and the blocks are looked at before anything is done.
+      endermanCamp = new EndermanCamp(ctx, target);
+      let refusal = endermanCamp.check();
+      // No roof can be made where the body stands (a step beside it that cannot be filled, a plant not to be built over, a hole): a cell within seven blocks where one can is walked to.
+      if (refusal?.code === 'no_site') {
+        const site = await moveToRoofSite(ctx, target);
+        if (site.moved) { siteNote = site.text; endermanCamp = new EndermanCamp(ctx, target); refusal = endermanCamp.check(); }
+        else return { ...none('no_site', `${refusal.text}。${site.text}`), code: 'no_site' };
+      }
+      if (refusal) return { ...none(refusal.code, refusal.text), code: refusal.code };
+    }
     const radius = Math.max(range, ZONE_IN + 0.5);
     let lastSwing = 0, backUntil = 0, farSince = 0, blindSince = 0, everNear = false, bestBox = Infinity, bestAt = Date.now();
     // The jump of a critical blow: pressed on the ground, in the air once the feet leave it, spent when they come down.
@@ -294,15 +404,23 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
     for (;;) {
       sample();
       if (reflexHeld(bot)) { unfollow(); releaseKeys(); return fail('reflex', '体を反射が握った'); }
-      if (dead) return finish('死んだ');
+      if (dead) return killed();
+      if (hovering) await replaceBroken();
       const live = bot.entities?.[target.id];
       if (!live || live.isValid === false) {
         unfollow(); releaseKeys();
-        return dead ? finish('死んだ') : fail('lost', `が見えなくなった（最後は (${lastAt.x},${lastAt.y},${lastAt.z})）`);
+        return dead ? killed() : fail('lost', `が見えなくなった（最後は (${lastAt.x},${lastAt.y},${lastAt.z})）`);
       }
       lastAt = cellOfEntity(live);
       const now = Date.now();
-      if (now >= endAt) { unfollow(); releaseKeys(); return fail('limit_time', `は ${seconds} 秒で倒れなかった`); }
+      if (now >= endAt) {
+        unfollow(); releaseKeys();
+        // Where it stood when the time ran out (an angry enderman that never came, a blaze that stayed out of reach, are different matters for the planner).
+        const last = eyeOf(bot.entity.position);
+        const gap = r1(boxDistance({ x: last[0], y: last[1], z: last[2] }, live));
+        ending = `・最後は ${gap}m${ender ? (endermanAngry(bot.registry, live) ? '・怒っている' : '・怒っていない') : ''}`;
+        return fail('limit_time', `は ${seconds} 秒で倒れなかった`);
+      }
       const eye = eyeOf(bot.entity.position);
       const box = boxDistance({ x: eye[0], y: eye[1], z: eye[2] }, live);
       if (box <= radius) { everNear = true; farSince = 0; } else if (!farSince) farSince = now;
@@ -316,21 +434,40 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
       }
       const risk = footingRisk(live);
       if (risk) { unfollow(); releaseKeys(); return fail('danger', footingWords(risk)); }
-      if (farSince && now - farSince >= OUT_OF_RANGE_MS) {
+      if (!ender && farSince && now - farSince >= OUT_OF_RANGE_MS) {
         unfollow(); releaseKeys();
         return everNear ? finish('逃げた', `（range ${r1(range)}m の外へ ${r1(box)}m。追わない）`) : fail('unreachable', `は range ${r1(range)}m の外のまま（${r1(box)}m）`, lastAt);
       }
-      if (creeperLit(live) && box < 7) {
+      // `creeperLit` reads two slots of the entity data and knows no kind: an enderman's `stared_at` flag sits in the slot a creeper's lit fuse does, so the kind is asked first
+      // (an enderman that was angry made the body run from "a lit creeper" out of its hole).
+      if (String(live.name) === 'creeper' && creeperLit(live) && box < 7) {
         unfollow(); releaseKeys();
         if (await runAway(8, 2500) === 'reflex') return fail('reflex', '点火したクリーパーから離れる途中で反射が体を握った');
         continue;
       }
       if (meetingShot()) { releaseKeys(); await wait(ctx, TICK_MS); continue; }
+      if (endermanCamp) {
+        const step = await endermanCamp.advance(live, now, box, endermanAngry(bot.registry, live));
+        if (step.kind === 'stop') { unfollow(); releaseKeys(); return { ...fail(step.outcome.reason ?? 'failed', step.outcome.text, step.outcome.at), ...(step.outcome.code ? { code: step.outcome.code } : {}) }; }
+        if (step.kind === 'wait') { releaseKeys(); await wait(ctx, TICK_MS); continue; }
+        // The roof was laid with building blocks in the hand: the weapon is taken up again for the blows.
+        await equipWeapon();
+      }
 
       // Closing in.
       if (box > (following ? ZONE_OUT : ZONE_IN)) {
         releaseKeys();
         jump = 'idle';
+        // A hovering shooter is not followed beyond the camp's leash, nor up into the air: the body keeps its place under the shield, turned to what is charged (else to
+        // the creature), and waits; the blaze's height is drawn again every five seconds, and it comes within reach by itself. Nothing is "cannot be reached" in a wait.
+        if (ender || (hovering && (hoversAboveReach(bot.entity.position, live) || Math.hypot(bot.entity.position.x - camp.x, bot.entity.position.z - camp.z) >= LEASH))) {
+          unfollow();
+          bestBox = box; bestAt = now;
+          const winding = watch?.charged(now)[0];
+          aimAt(winding?.entity ?? live);
+          await wait(ctx, TICK_MS);
+          continue;
+        }
         if (box < bestBox - NO_GAIN_M || box > radius) { bestBox = box; bestAt = now; }
         if (now - bestAt > NO_GAIN_MS) { unfollow(); return fail('unreachable', `に近づけない（${r1(box)}m、${NO_GAIN_MS / 1000}秒縮まらない）`, lastAt); }
         const swimming = swimControls(bot, live.position);
@@ -350,8 +487,9 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
       aimAt(live);
       const onGround = bot.entity.onGround === true;
       const vy = Number(bot.entity.velocity?.y ?? 0);
-      const wantBack = box < TOO_NEAR || now < backUntil;
-      press('back', wantBack); press('forward', !wantBack && box > TOO_FAR); press('sprint', false);
+      const wantBack = !stand && (box < TOO_NEAR || now < backUntil);
+      // A camp holds no key: the body stands where the planner put it (the spawner room's floor has gaps, and a step back or forward is a step off it).
+      if (stand) { releaseKeys(); } else { press('back', wantBack); press('forward', !wantBack && box > TOO_FAR); press('sprint', false); }
       const remaining = Math.max(0, cooldownMs(bot.heldItem?.name) - (now - lastSwing));
       if (jump === 'pressed' && !onGround) { jump = 'air'; press('jump', false); }
       else if (jump === 'pressed' && now - jumpAt > JUMP_FAILS_MS) { jump = 'idle'; noJumpUntil = now + NO_JUMP_MS; press('jump', false); }
@@ -360,16 +498,19 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
       const canJump = (): boolean => {
         const at = bot.entity.position;
         const free = (dy: number) => { try { const block = bot.blockAt?.(at.offset(0, dy, 0), false); return !block || block.boundingBox !== 'block'; } catch { return true; } };
-        return free(1.8) && free(2.6) && !bot.entity.isInWater && !bot.entity.isInLava && !bot.entity.isInWeb && !bot.entity.isOnLadder && now >= noJumpUntil;
+        return !stand && free(1.8) && free(2.6) && !bot.entity.isInWater && !bot.entity.isInLava && !bot.entity.isInWeb && !bot.entity.isOnLadder && now >= noJumpUntil;
       };
       let sees = true;
       try { sees = probeSight(bodyReader(bot), eye, { creature: { id: live.id, name: String(live.name ?? 'entity'), position: live.position, height: live.height, width: live.width } }).visible; } catch { /* taken as seen */ }
       if (box <= REACH && !sees) {
         if (!blindSince) blindSince = now;
-        if (now - blindSince > BLIND_MS) { releaseKeys(); return fail('unreachable', `は ${r1(box)}m の所にいるが間に壁がある（${BLIND_MS / 1000}秒見えない）`, lastAt); }
+        if (now - blindSince > BLIND_MS) { releaseKeys(); return fail('unreachable', `は ${r1(box)}m の所にいるが間に壁がある（${BLIND_MS / 1000}秒見えない）。別の個体か、足場を変える`, lastAt); }
       } else blindSince = 0;
       let strike = false;
-      if (box <= REACH && sees) {
+      // A blow is struck with the shield lowered and the shield is only counted as up again five ticks after it is raised: while a shot is about to land or a blaze that sees
+      // the body has been charged long enough to shoot, the blow waits (GATE_PATIENCE_MS at most: a fight with nothing struck is no safer).
+      const held = !!watch && box <= REACH && sees && !gate.may(now, strikeHold(bot, watch, now));
+      if (box <= REACH && sees && !held) {
         if (jump === 'air') strike = remaining === 0 && vy < -0.08;
         else if (jump === 'idle') {
           // The first blow of a fight is struck at once: the swing is full and the creature is here (a jump first costs the half second it takes to come down).
@@ -397,6 +538,7 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
     throw error;
   } finally {
     bot.removeListener?.('entityHurt', onHurt); bot.removeListener?.('entityDead', onDead); bot.removeListener?.('health', sample);
+    endermanCamp?.release();
     endEngagement();
     endOwner();
     unfollow();

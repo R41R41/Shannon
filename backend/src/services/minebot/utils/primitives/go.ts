@@ -699,6 +699,9 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   const placing = place.held.length > 0;
   const grounded = limits.range < 1 ? safeCells.filter(cell => !floorlessAt(bot, cell, rule, placing)) : safeCells;
   if (!grounded.length) {
+    // A portal's cell has no floor to ask for (an End portal is a sheet over lava): it is entered with walk, as its target, not with go.
+    const portalCell = safeCells.find(cell => /^(end_portal|nether_portal|end_gateway)$/u.test(String(nameAt(bot, cell.x, cell.y, cell.z) ?? '')));
+    if (portalCell) return fail('no_floor', `行き先 ${cellText(portalCell)} は ${nameAt(bot, portalCell.x, portalCell.y, portalCell.z)}（ポータルのマス。足場は要らない）`, 'ポータルは go でなく walk の的にして入る');
     const why = floorlessAt(bot, safeCells[0], rule, placing)!;
     return fail('no_floor', why, /なら .* の上に立てる$/u.test(why) ? 'その 1 つ下を行き先に' : /^行き先 .* は宙/u.test(why) ? '立てる所を行き先に（宙へ渡るなら canPlace）' : '別の行き先を');
   }

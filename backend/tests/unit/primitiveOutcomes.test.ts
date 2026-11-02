@@ -94,6 +94,12 @@ describe('eat, equip and drop (r43-reflex-ate-first)', () => {
     (bot.inventory.items as any) = () => [{ name: 'iron_helmet', count: 1, type: 10 }];
     expect(await equip(ctx(bot), { item: 'iron_helmet', slot: 'head' })).toMatchObject({ ok: true, goal: 'already', code: 'already_equipped' });
   });
+  it('equip: a piece that is worn and not in the pack (the auto-wear habit put it on) is "already", not "not held"; one that is nowhere is missing_item', async () => {
+    const bot = body([]);
+    bot.inventory.slots[8] = { name: 'golden_boots' };
+    expect(await equip(ctx(bot), { item: 'golden_boots' })).toMatchObject({ ok: true, goal: 'already', code: 'already_equipped' });
+    expect(await equip(ctx(bot), { item: 'golden_leggings' })).toMatchObject({ ok: false, reason: 'missing_item' });
+  });
   it('drop says the items thrown, counted from the pack', async () => {
     const stacks = [{ name: 'dirt', count: 5, type: 3 }];
     const bot = body(stacks);
