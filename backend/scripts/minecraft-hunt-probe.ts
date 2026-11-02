@@ -700,6 +700,70 @@ async function blazeLane(note: (text: string) => void, options: { seconds?: numb
   return { seconds: r1((Date.now() - started) / 1000), kills: killed, killsPerMin: r1(killed / Math.max((Date.now() - started) / 60_000, 0.1)), rods: (await countServer('blaze_rod')) - rods0, shieldWear: shieldUsed() - shield0, deathsHere: deaths, lowestHp: Math.min(...track, 20), hpTrack: track.filter((_, index) => index % 5 === 0).join(' ') };
 }
 scene('blaze_lane', 'the lane: the spawn box filled with cobblestone but a 1-wide 2-high lane of three cells beyond the plugged cell beside the spawner; the body in a sealed cell at its end, attack hold; 600 s, survivors not killed', note => blazeLane(note));
+// The lane built BY THE BODY's hands (S2, 2026-11-03): the scripted head reads probe kind=lane (no spawner given: the near one), takes the first candidate (fewest cobblestones), and builds what the probe lists in the order
+// it lists it, with go and place hands (up to 4 cells per group, a go to a floor cell within reach first), the blazes alive and shooting. Then it re-reads the plan (what still stands to be built outside the lane), goes to the
+// waiting cell and holds for the rest of the time, fetching what falls. Measures the time to build, the lowest health while building, the cobblestones used and the kills after.
+async function blazeLaneBuild(note: (text: string) => void, options: { holdSeconds?: number; groupSize?: number } = {}): Promise<Record<string, unknown>> {
+  const stand = sites.blazeStand as number[] | undefined;
+  if (!stand) throw new Error('no blazeStand in the sites');
+  const holdSeconds = options.holdSeconds ?? 300, groupSize = options.groupSize ?? 4, thinkMs = 5000;
+  await ask('difficulty normal'); await ask('time set midnight'); await ask('weather clear');
+  await equip({ stone_sword: 1, diamond_pickaxe: 1, shield: 1, cooked_porkchop: 7, cobblestone: 173 }, { armor: 'iron', shield: true });
+  await placeActor('the_nether', stand[0], stand[1], stand[2], 24);
+  const readLane = async (): Promise<any> => { const found = await runSkill('probe', { kind: 'lane' }, 25); try { return JSON.parse(String(found.receipt?.result ?? '')); } catch { return null; } };
+  const hp = () => Number(actor.health);
+  const track: number[] = [];
+  const sampler = setInterval(() => { const value = hp(); if (Number.isFinite(value)) track.push(r1(value)); }, 1000);
+  const cobble0 = packClient().cobblestone ?? 0;
+  const t0 = Date.now(), deaths0 = deaths;
+  let json = await readLane();
+  if (!json?.found) { clearInterval(sampler); throw new Error(`no lane report: ${String(json?.text ?? '').slice(0, 200)}`); }
+  const c = json.candidates[0], cells = json.cells as Array<[number, number, number, string | null, string]>, facts = json.facts as Array<[number, boolean | null, number, number, string, boolean]>;
+  const spawnerCell = json.spawner as { x: number; y: number; z: number };
+  const wait = cells[c.waiting[0]];
+  note(`lane candidate ${c.direction}: required ${JSON.stringify(c.required)}; waiting cell ${wait.slice(0, 3)}; ${c.build.length} placements; spawn spaces ${json.spawn?.spaces}; blazes in the count box ${json.blaze?.count}`);
+  const placements = (c.build as Array<[number, number, number | null, number]>).map(([f, part]) => ({ at: { x: cells[facts[f][0]][0], y: cells[facts[f][0]][1], z: cells[facts[f][0]][2] }, part }));
+  const canPlace = ['cobblestone'];
+  let built = 0, failedCells = 0, acts = 0, aborted = '';
+  for (let i = 0; i < placements.length && !disconnected && hp() > 0 && deaths === deaths0; i += groupSize) {
+    if (hp() < 6) { aborted = `hp ${r1(hp())} at ${i}/${placements.length}`; break; }
+    const group = placements.slice(i, i + groupSize);
+    const head = group[0];
+    // a floor cell within reach of the group: for the lid and the roof, the feet cell of the spawner's layer under the cell; for the rest, the waiting cell
+    const floor = head.part === 'lid' || head.part === 'roof' ? { x: head.at.x, y: spawnerCell.y, z: head.at.z } : { x: wait[0], y: wait[1], z: wait[2] };
+    await sleep(thinkMs);
+    const run = await act(`build#${++acts}`, [{ do: 'go', to: floor, range: 2.5, seconds: 12, onFail: 'continue' },
+      { do: 'place', at: group.map(p => p.at), block: 'cobblestone', onFail: 'continue' }], 40, { accept: ['blaze'] });
+    const text = run.lines.join(' ');
+    const placed = (text.match(/に cobblestone を置いた/gu) ?? []).length;
+    built += group.length - (/置けない|stopped|止まった/u.test(text) ? 1 : 0); failedCells += /置けない|stopped|止まった/u.test(text) ? 1 : 0;
+    if (acts % 5 === 1 || /置けない|止まった/u.test(text)) note(`build#${acts} (${head.part}) hp ${r1(hp())}: ${text.slice(0, 240)}`);
+    if (placed === 0 && !run.ok && /反射|reflex/u.test(String(run.stoppedBy ?? ''))) { await sleep(2000); }
+  }
+  const buildSeconds = (Date.now() - t0) / 1000, lowestWhileBuilding = Math.min(...track, 20), cobbleUsed = cobble0 - (packClient().cobblestone ?? 0);
+  note(`built in ${r1(buildSeconds)} s: ${acts} acts, ${built} placements tried, ${failedCells} groups with a failure, cobblestone used ${cobbleUsed}, lowest hp ${r1(lowestWhileBuilding)} ${aborted}`);
+  json = await readLane();
+  const after = json?.candidates?.find((x: any) => x.direction === c.direction);
+  note(`after the build: required ${JSON.stringify(after?.required)}, remainingOutsideLane ${after?.remainingOutsideLane}, unknown ${after?.unknownOutsideLane}, blazes in the count box ${json?.blaze?.count}`);
+  // the hold
+  await act('to the waiting cell', [{ do: 'go', to: { x: wait[0], y: wait[1], z: wait[2] }, range: 0.5, seconds: 15, onFail: 'continue' }], 30, { accept: ['blaze'] });
+  const rods0 = packClient().blaze_rod ?? 0, holdStart = Date.now();
+  let killed = 0;
+  const onDead = (entity: any) => { if (String(entity?.name ?? '') === 'blaze') killed++; };
+  actor.on('entityDead', onDead);
+  let n = 0;
+  try {
+    while (Date.now() - holdStart < holdSeconds * 1000 && !disconnected && hp() > 0 && deaths === deaths0) {
+      const run = await act(`hold#${++n}`, [{ do: 'attack', target: 'blaze', hold: true, seconds: 20 }], 40, { accept: ['blaze'] });
+      if (hp() < 14 && Number(actor.food) < 20) await act('eat', [{ do: 'eat' }], 15);
+      if (/落とし物 blaze_rod/u.test(run.lines.join(' '))) await act('fetch', [{ do: 'pickup', range: 4, onFail: 'continue' }, { do: 'go', to: { x: wait[0], y: wait[1], z: wait[2] }, range: 0.4, seconds: 8, onFail: 'continue' }], 30, { accept: ['blaze'] });
+      if (n % 3 === 1) note(`hold#${n}: hp ${r1(hp())} kills ${killed} rods +${(packClient().blaze_rod ?? 0) - rods0}`);
+    }
+  } finally { clearInterval(sampler); actor.removeListener('entityDead', onDead); }
+  return { buildSeconds: r1(buildSeconds), acts, placementsTried: built, failedGroups: failedCells, cobbleUsed, lowestWhileBuilding: r1(lowestWhileBuilding), aborted, holdSeconds: r1((Date.now() - holdStart) / 1000), kills: killed,
+    killsPerMin: r1(killed / Math.max((Date.now() - holdStart) / 60_000, 0.1)), rods: (packClient().blaze_rod ?? 0) - rods0, deathsHere: deaths, lowestHp: Math.min(...track, 20), remainingOutsideLane: after?.remainingOutsideLane ?? null };
+}
+scene('blaze_lane_build', 'the lane built by the scripted head from probe kind=lane with go and place hands while the blazes are alive, then a 300 s hold', note => blazeLaneBuild(note));
 async function blazeSlit(note: (text: string) => void, options: { seconds?: number; fetch?: boolean; flush?: boolean } = {}): Promise<Record<string, unknown>> {
   const stand = sites.blazeStand as number[] | undefined, spawner = sites.blazeSpawner as number[] | undefined;
   if (!stand || !spawner) throw new Error('no blazeStand or blazeSpawner in the sites');
