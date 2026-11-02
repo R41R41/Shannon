@@ -625,6 +625,20 @@ scene('stronghold_descent', 'from the surface over the portal room down to its f
   return { arrived, seconds: r1((Date.now() - started) / 1000), finalAt: here ? [r1(here.x), r1(here.y), r1(here.z)] : null, hp: actor.health, tries };
 });
 
+/** When a go's line says the server would not take a block (`置きを断られた (x,y,z)`): what is at that cell now and round it, and who is near it (the black box says only the body's overlap and jump). */
+function refusedReport(line: string): void {
+  const found = /置きを断られた \((-?\d+),(-?\d+),(-?\d+)\)/u.exec(line);
+  if (!found) return;
+  try {
+    const cell = new Vec3(Number(found[1]), Number(found[2]), Number(found[3]));
+    const here = actor.entity?.position as Vec3 | undefined;
+    const at = (dx: number, dy: number, dz: number) => String(actor.blockAt(cell.offset(dx, dy, dz))?.name ?? '?');
+    const middle = cell.offset(0.5, 0.5, 0.5);
+    const near = Object.values(actor.entities as Record<string, any>).filter(entity => entity?.position && entity !== actor.entity && entity.position.distanceTo(middle) <= 6)
+      .map(entity => `${entity.name ?? entity.type}@${r1(entity.position.distanceTo(middle))}`).slice(0, 8);
+    log(`REFUSED ${found[1]},${found[2]},${found[3]} now ${at(0, 0, 0)}; below ${at(0, -1, 0)} above ${at(0, 1, 0)}; sides +x ${at(1, 0, 0)} -x ${at(-1, 0, 0)} +z ${at(0, 0, 1)} -z ${at(0, 0, -1)}; entities within 6 m: ${near.join(' ') || 'none'}; body ${here ? `${r1(here.x)},${r1(here.y)},${r1(here.z)}` : '?'} onGround ${actor.entity?.onGround}`);
+  } catch (error) { log(`REFUSED unknown: ${String(error).slice(0, 120)}`); }
+}
 const netherWalk = async (note: (text: string) => void, which: Array<'fortress' | 'warped'>, start?: number[]): Promise<Record<string, unknown>> => {
   const arrival = sites.netherArrival as number[];
   const targets: Array<{ name: string; to: number[] }> = which.map(name => ({ name, to: (name === 'fortress' ? sites.blazeStand : sites.warpedStand) as number[] }));
@@ -675,7 +689,7 @@ const netherWalk = async (note: (text: string) => void, which: Array<'fortress' 
     const leftOf = () => { const here = actor.entity?.position as Vec3 | undefined; return here ? Math.hypot(here.x - (target.to[0] + 0.5), here.z - (target.to[2] + 0.5)) : Infinity; };
     for (; tries < 10 && !reached && !disconnected; tries++) {
       const before = leftOf();
-      const run = await act(`${target.name}#${tries + 1}`, [{ do: 'go', to: { x: target.to[0], y: target.to[1], z: target.to[2] }, range: 3, seconds: 100, maxDig, maxPlace, canDig: [...canDig], canPlace: ['cobblestone'] }], 140);
+      const run = await act(`${target.name}#${tries + 1}`, [{ do: 'go', to: { x: target.to[0], y: target.to[1], z: target.to[2] }, range: 3, seconds: 100, maxDig, maxPlace, canDig: [...canDig], canPlace: ['cobblestone', 'netherrack'] }], 140);
       const here = actor.entity?.position as Vec3 | undefined;
       const left = leftOf();
       const line = run.lines[0] ?? '';
@@ -687,19 +701,10 @@ const netherWalk = async (note: (text: string) => void, which: Array<'fortress' 
       reached = !!here && left < 5 && Math.abs(here.y - target.to[1]) < 6;
       if (Number(actor.health) < 9) { note(`health ${actor.health}: the walk to the ${target.name} stops`); break; }
       // A hop that got nowhere (under 3 m nearer) twice running: what a planner would take as shut, and give up on.
-      slow = before - left < 3 ? slow + 1 : 0;
+      // (a hop cut by a reflex is the world's doing, not the way being shut: it is not counted, a planner would go on)
+      slow = run.stoppedBy === 'reflex' ? slow : before - left < 3 ? slow + 1 : 0;
       if (!reached && (before - left < 3 || tries === 0)) mapAround(`${target.name}#${tries + 1}`);
-      const refusedAt = /置きを断られた \((-?\d+),(-?\d+),(-?\d+)\)/u.exec(line);
-      if (refusedAt) {
-        // What stood at the cell the server would not take a block in, and who was near it (the black box says only the body's overlap and jump).
-        try {
-          const cell = new Vec3(Number(refusedAt[1]), Number(refusedAt[2]), Number(refusedAt[3]));
-          const at = (dx: number, dy: number, dz: number) => String(actor.blockAt(cell.offset(dx, dy, dz))?.name ?? '?');
-          const near = Object.values(actor.entities as Record<string, any>).filter(entity => entity?.position && entity !== actor.entity && entity.position.distanceTo(cell.offset(0.5, 0.5, 0.5)) <= 6)
-            .map(entity => `${entity.name ?? entity.type}@${r1(entity.position.distanceTo(cell.offset(0.5, 0.5, 0.5)))}`).slice(0, 8);
-          log(`REFUSED ${refusedAt[1]},${refusedAt[2]},${refusedAt[3]} now ${at(0, 0, 0)}; below ${at(0, -1, 0)} above ${at(0, 1, 0)}; sides +x ${at(1, 0, 0)} -x ${at(-1, 0, 0)} +z ${at(0, 0, 1)} -z ${at(0, 0, -1)}; entities within 6 m: ${near.join(' ') || 'none'}; body ${here ? `${r1(here.x)},${r1(here.y)},${r1(here.z)}` : '?'} onGround ${actor.entity?.onGround}`);
-        } catch (error) { log(`REFUSED unknown: ${String(error).slice(0, 120)}`); }
-      }
+      refusedReport(line);
       if (!reached && /not_loaded/u.test(line)) {
         // How far the loaded ground goes: the columns the body holds (chunk coordinates) against the body's and the aim's.
         try {
@@ -719,7 +724,70 @@ const netherWalk = async (note: (text: string) => void, which: Array<'fortress' 
 };
 scene('nether_walk', 'the walk in the Nether from the portal side to the fortress and then to the warped forest by go hops (lava, ghasts, soul sand are the world\'s)', note => netherWalk(note, ['fortress', 'warped']));
 scene('nether_warped', 'the walk in the Nether from the portal side straight to the warped forest by go hops', note => netherWalk(note, ['warped']));
-scene('tool_broke', 'a pickaxe with three uses left breaks in the middle of a go through a netherrack wall: the act stops, and its line says the tool broke and what to do', async () => {
+scene('climb_pillar', 'go up to a platform 10 above the plate by laying stones under the feet (no digging): how often the server takes the first block of each climb', async note => {
+  const stand = sites.netherArrival as number[];
+  const x = stand[0], z = stand[2];
+  await ask('difficulty peaceful');
+  const y = await netherPlate(x, z);
+  await ask(`execute in minecraft:the_nether run fill ${x - 4} ${y + 9} ${z - 4} ${x + 8} ${y + 20} ${z + 4} minecraft:air`);
+  await ask(`execute in minecraft:the_nether run fill ${x + 1} ${y + 9} ${z - 1} ${x + 3} ${y + 9} ${z + 1} minecraft:netherrack`);
+  const rows: Array<Record<string, unknown>> = [];
+  for (let attempt = 1; attempt <= 3 && !disconnected; attempt++) {
+    await equip({ cobblestone: 64, cooked_beef: 4 }, { armor: 'none', shield: false });
+    await placeActor('the_nether', x, y, z, 24);
+    const run = await act(`pillar#${attempt}`, [{ do: 'go', to: { x: x + 2, y: y + 10, z }, range: 1, seconds: 60, maxPlace: 30, canPlace: ['cobblestone'] }], 90);
+    const here = actor.entity?.position as Vec3 | undefined;
+    refusedReport(run.lines[0] ?? '');
+    rows.push({ attempt, ok: run.ok, at: here ? [r1(here.x), r1(here.y), r1(here.z)] : null, line: (run.lines[0] ?? '').slice(0, 300) });
+    note(`pillar#${attempt}: ${run.ok ? 'ok' : 'NO'} ${(run.lines[0] ?? '').slice(0, 200)}`);
+  }
+  return { rows };
+});
+scene('bridge_void', 'a bridge of stones over a void 52 long, a safety floor 7 below: how often the server refuses a block of the bridge, and what stands at the cell', async note => {
+  const stand = sites.netherArrival as number[];
+  const x = stand[0], z = stand[2], y = 100;
+  await ask('difficulty peaceful'); await ask('time set noon');
+  const nether = 'execute in minecraft:the_nether run';
+  await ask(`${nether} forceload add ${x - 16} ${z - 16} ${x + 96} ${z + 16}`); await sleep(5000);
+  await ask(`${nether} fill ${x - 8} ${y - 12} ${z - 5} ${x + 92} ${y + 8} ${z + 5} minecraft:air`);
+  await ask(`${nether} fill ${x - 8} ${y - 3} ${z - 5} ${x + 8} ${y - 1} ${z + 5} minecraft:netherrack`);
+  await ask(`${nether} fill ${x + 9} ${y - 8} ${z - 5} ${x + 60} ${y - 8} ${z + 5} minecraft:netherrack`);
+  await ask(`${nether} fill ${x + 61} ${y - 3} ${z - 5} ${x + 92} ${y - 1} ${z + 5} minecraft:netherrack`);
+  const rows: Array<Record<string, unknown>> = [];
+  for (let attempt = 1; attempt <= 3 && !disconnected; attempt++) {
+    await ask(`${nether} fill ${x + 9} ${y - 3} ${z - 5} ${x + 60} ${y - 1} ${z + 5} minecraft:air`);   // the bridge of the attempt before is taken down
+    await equip({ cobblestone: 128, cooked_beef: 4 }, { armor: 'iron', shield: false });
+    await placeActor('the_nether', x, y, z, 24);
+    const run = await act(`bridge#${attempt}`, [{ do: 'go', to: { x: x + 70, y, z }, range: 1, seconds: 100, maxPlace: 100, canPlace: ['cobblestone'] }], 130);
+    const here = actor.entity?.position as Vec3 | undefined;
+    refusedReport(run.lines[0] ?? '');
+    rows.push({ attempt, ok: run.ok, at: here ? [r1(here.x), r1(here.y), r1(here.z)] : null, seconds: r1(run.wallMs / 1000), line: (run.lines[0] ?? '').slice(0, 300) });
+    note(`bridge#${attempt}: ${run.ok ? 'ok' : 'NO'} ${(run.lines[0] ?? '').slice(0, 220)}`);
+  }
+  return { rows };
+});
+scene('wall_hand', 'the body shut into two blocks of cobblestone with no pickaxe: the wall reflex digs it out by hand (10 s a block) and does not give up at its old 10 s limit', async note => {
+  const stand = sites.netherArrival as number[];
+  await ask('difficulty peaceful');
+  const y = await netherPlate(stand[0], stand[2]);
+  await equip({ cooked_beef: 4 }, { armor: 'none', shield: false });
+  await placeActor('the_nether', stand[0], y, stand[2], 24);
+  await sleep(1500);
+  const p = actor.entity.position as Vec3;
+  const bx = Math.floor(p.x), by = Math.floor(p.y), bz = Math.floor(p.z);
+  const hp0 = Number(actor.health);
+  const started = Date.now();
+  for (const dy of [0, 1]) await ask(`execute in minecraft:the_nether run setblock ${bx} ${by + dy} ${bz} minecraft:cobblestone`);
+  const eyeBlock = () => String(actor.blockAt(new Vec3(Math.floor(actor.entity.position.x), Math.floor(actor.entity.position.y + 1.62), Math.floor(actor.entity.position.z)))?.name ?? '?');
+  let minHp = hp0;
+  await sleep(1500);
+  const until = Date.now() + 60_000;
+  while (Date.now() < until && !disconnected && eyeBlock() === 'cobblestone') { minHp = Math.min(minHp, Number(actor.health)); await sleep(250); }
+  const seconds = r1((Date.now() - started) / 1000);
+  note(`out of the stone after ${seconds} s, eye block ${eyeBlock()}, health ${hp0} -> ${r1(Number(actor.health))} (lowest ${r1(minHp)})`);
+  return { escaped: eyeBlock() !== 'cobblestone', seconds, hpBefore: hp0, hpAfter: r1(Number(actor.health)), hpLowest: r1(minHp) };
+});
+scene('tool_broke','a pickaxe with three uses left breaks in the middle of a go through a netherrack wall: the act stops, and its line says the tool broke and what to do', async () => {
   const stand = sites.netherArrival as number[];
   await ask('difficulty peaceful');
   const y = await netherPlate(stand[0], stand[2]);

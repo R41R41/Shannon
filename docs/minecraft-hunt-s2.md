@@ -68,7 +68,10 @@ eye: { from, bearingDeg, flew, to, broke,                     // 既存（契約
   ①24.7 秒で (-7,42,-7) の**マグマブロックの上**（降りた先）に立ち「溶岩回避の反射が始まった」で手が止まった（反射は 0.3 秒でマグマから離れた）→同じ手をもう一度で進んだ。
   ②85.8 秒（道 106 歩・掘 68・置 26）で `limit_place`「置く所が 15 あり上限 40 の残り 14 を超える」→③10 秒で `low_floor`（足元が空気で積む土台が無い。「丸ごとの床の所へ動いてから登る」）→④100 秒（掘 105・置 28）で `limit_dig` →⑤**45 秒で `tool_broke`（鉄のつるはし 1 本が約 250 回掘って壊れた）**→⑥⑦要塞の床（nether_bricks）が頭の上に来て `dead_end`「掘ってよい物に無い。canDig に足すか、別の場所から」。
   分かったこと：(a) 玄武岩のデルタは掘る・置くが多く、**平均 2.3 秒/ブロック**（125 ブロックを 286 秒）。同じ地形なら c1 の要塞（138 ブロック）で 5 分ほどになるが、地形しだい（未確認）。(b) **つるはしを予備に持つ**：鉄のつるはし 1 本（耐久 250）が、掘 68＋105＋最後の手の分で壊れた。予備が荷にあれば持ち替えて続けるのがコードの作り（`types/skills.ts` の `spareFor`。実機では未確認）で、無いと `tool_broke` で止まる。(c) 要塞に入るなら `canDig` に `nether_bricks` を足す。(d) `maxDig`（act の最大 200）・`maxPlace`（同 100）の上限は、道の途中でも「この道は N あり残り M を超える」と事前に断る。**止まったら同じ手をもう一度**で進んだ（7 回の手のうち前の 5 回は毎回前へ。最後の 2 回は `canDig` に無い nether_bricks で進めず、行がそう言った）。
-  未確認：歪んだ森への歩き（要塞→森の脚は届かず）、ガスト・ホグリンが居る時、ソウルサンドの谷、c1 の実際の道、他の世界。
+  **c4（直線 233 ブロック、到着点 y=116→要塞の立ち位置 y=70、鉄のつるはし 3 本・丸石 64、上限は行の言う通りに増やした）**：要塞に **5 回の手・358 秒**（1.5 秒/ブロック）で着いた。掘り約 460・置き 49・体力減 0。止まりは `limit_dig` ×2（行が「上限を増やす」）・`limit_time`（100 秒）・`limit_place` で、同じ go をもう一度（上限を増やして）で着いた。掘りが 250 回を超えても `tool_broke` にならなかった（鉄 1 本の耐久は 250。3 本のうち何本が減ったかは測っていない）。
+  **c4 の要塞→歪んだ森（直線 244、丸石 64）**：8 回の手・298 秒で **171 ブロック**まで（残り 73）。最初の手は湧き場の部屋でブレイズに撃たれ（床の反射が足元を掘って下がった）、次の 3 回の手は橋・足場の途中で「置いたブロックが世界に現れない」で止まった（下の「置きの断られ」）。5 回目に**丸石 64 個を使い切って** `no_blocks`。止まった時の荷は **netherrack 99（掘った分）**・つるはし 3・basalt 7。
+  → **`canPlace` は `[cobblestone, netherrack]` にする**：ネザーでは掘った netherrack が荷にたまる（約 100 回掘って 99 個）ので、橋の材料は尽きない。`no_blocks` の行は、荷にある安い置ける物を名指しするようにした（「荷の netherrack×99 を canPlace に足すか、集める」。鉱石・黒曜石・板材は名指ししない）。丸石を使い切って別の理由で止まる時も「置く物 … を N 個置いて使い切った」と言う。
+  未確認：歪んだ森まで歩き切ること、ガスト・ホグリンが居る時、ソウルサンドの谷、c1 の実際の道、他の世界。
 
 ## 5. 実機の数字（PC WSL ラボ、隔離・自然世界、LLM 無し、被弾の無い所以外は 1 回きりの標本）
 | 部品 | 数字 |
@@ -102,7 +105,8 @@ wsl -d Ubuntu-24.04 -u ghrunner -- env HOME=/home/azureuser LAB_SLOT_COUNT=3 LAB
   bash <worktree>/backend/scripts/lab/lab-slot.sh --label hunt -- \
   bash <worktree>/backend/scripts/lab/run-hunt-lab.sh <label> <worktree> <世界の key> HUNT_SCENES=barter,eye_locate HUNT_SECONDS=240 [HUNT_THROWS=10]
 ```
-場面：`barter`・`eye_locate`・`eye_near`・`frame_search`・`ender_platform`・`ender_warped`・`blaze_hold`・`blaze_hold_fireres`・`blaze_fight`・`blaze_hold_near`・`blaze_fight_near`・`map_blaze`（湧き場の周りの 17×17 の層の地図）。
+場面：`barter`・`eye_locate`・`eye_near`・`locate_start`（起点→ポータルの間の距離）・`frame_search`・`ender_platform`・`ender_warped`・`blaze_hold`・`blaze_hold_fireres`・`blaze_fight`・`blaze_hold_near`・`blaze_fight_near`・`map_blaze`（湧き場の周りの 17×17 の層の地図）・`map_portal`（ポータルの間の層の地図）・`probe_kinds`・`craft_eyes`・`craft_diag`・`stronghold_descent`（地表から掘って降りる）・`end_portal`（枠にはめてエンドへ入る）・`fire_dig`・`tool_broke`・`nether_walk`（到着点→要塞→歪んだ森）・`nether_warped`・`nether_leg2`（要塞→歪んだ森）。ネザー歩きの場面は止まった所の周りの地図（`MAP`）と、置きを断られたマスの周り（`REFUSED`）、読み込みの端（`LOADED`）を probe.log に出す。
+スロットは他のセッションと共有（`lab-slot.sh`）。他の人の hands-live の run が走っている間は始められない（`/tmp/hands-live.lock`）ので、数秒おきに入り直す。メモリが 8 GB を切る時は 1 本ずつ。
 
 ## 7. 頭の契約に要る変更（S3・S0 へ）
 - act の手の種類・欄は増やしていない。行の言葉が増えた（上の表）。`ActResult.eye` に任意の欄が増え、`broke` の意味が変わった（上）。
@@ -110,3 +114,6 @@ wsl -d Ubuntu-24.04 -u ghrunner -- env HOME=/home/azureuser LAB_SLOT_COUNT=3 LAB
 - `fight enderman` は体が持つ建築用ブロックを使う（canPlace 不要）。
 - `probe` の kind に `frames`・`camp` が増えた（`PROBE_KINDS`・description）→ catalog の再録も S0。
 - 当日は人の手が入らないので、失敗の行に「次に試せること」を足した（物々交換・屋根・見えない相手の行）。
+- 道（ネザーの長い歩き）の止まり行の言葉：`go` は火の隣の行き先を断る時に火のマスと「dig で消せる」を言い、置く物が尽きた時は `not_loaded` などの行に「置く物 … を N 個置いて使い切った」を足し、`no_blocks` では荷にある安い置ける物（netherrack・basalt・dirt など。鉱石・黒曜石・板材は言わない）を名指しする。道具が壊れて予備が無い時の act の行は「道具が壊れて止まった（同じ種類以上の予備が荷に無い）。作るか拾って持ってから、同じ手をもう一度」（以前は「命令が止められた（tool_broke）」）。`probe kind=camp` の「湧き場が無い」の文は `find-structure` でなく `probe kind=scan` の「ネザー要塞」の向きを指す。契約の欄・コードは同じ。
+- 頭の知識（S3）：ネザーの歩きは `canDig`＝[netherrack,basalt,blackstone]（要塞の中は nether_bricks も）、`canPlace`＝[cobblestone,netherrack]、`maxDig` 120→200、`maxPlace` 40→100、`seconds` 100〜120、鉄のつるはし 3 本以上、止まったら行の言う通りに直して同じ go をもう一度（§4）。
+- 壁の中に閉じ込められた体の「壁抜け」反射（`wallReflex.ts`）の時間切れを 10 秒から 25 秒にした：道具なしで丸石を素手で掘ると 10 秒かかり、以前は毎回掘り終える直前に切れて、90 秒で体力が 20→1 になった（ラボで再現）。道具があれば掘りは 1 秒ほどで、変わらない。
