@@ -253,3 +253,20 @@ S2 の hunt の場面（`minecraft-hunt-probe.ts`）は、場所の隣から始�
 bash lab-slot.sh --label s4 -- bash s4-section-probe.sh ~/s4-pins/body-<sha> <label> c1 route_fortress,frames_enter HUNT_SECONDS=900
 ```
 `HUNT_SCENES` は場面名（S2 の場面も同じ指定で回る）。結果は `~/.cache/minebot-lab/hunt-<label>/{probe.log,report.json}`、場面ごとの `HUNT_SCENE` 行。**走っている最中にこのファイルや run-hunt-lab.sh を編集しない**。
+
+### run59 の leg 2 の測り（`s4-leg2-scenes.part.ts`・`s4-nether-stronghold.part.ts`、2026-11-03）
+`s4-section-probe.sh` は 3 つの部品ファイル（`s4-section-scenes.part.ts`・`s4-leg2-scenes.part.ts`・`s4-nether-stronghold.part.ts`）を順に S2 の probe へ挟む。荷は run59 の 23:29 のもの（石の剣・石の斧・盾・鉄の兜と脚・ダイヤのツルハシ（耐久 312/1561 減）・焼き豚 7・丸石 160・黒曜石 10・火打ち金・水バケツ。胸当てなし）。
+
+| 場面 | 何を測るか |
+|---|---|
+| `s4_blaze_b_body`・`s4_blaze_b_hold`・`s4_blaze_b_fight` | 湧き場 B（`blazeSpawners` の 2 つ目、c1 は 202,83,62）で S2 の protocol（体の自前の退き・hold・fight）を run59 の荷で回す。足場は体の `campSite` が最初に返すマス（観測モードで読む）。S2 の `equip` を一時的に run59 の荷へ差し替える |
+| `s4_blaze_a_body`・`s4_blaze_a_hold` | 同じ荷で湧き場 A（比べる用） |
+| `s4_survey_line` | 体なし。ゲートの出口→要塞、到着点→要塞、要塞→歪んだ森の直線の群系（サーバーの `execute if biome` を 8m ごと）と、点ごとの最寄りの要塞・砦（`locate structure`） |
+| `s4_leg1_staged`・`s4_leg2` | ネザーの道を身代わりの頭の hop（90m 以内、床を読んで、maxDig 200・maxPlace 100）で歩く。自然湧き ON。見えたもの（ghast・piglin・hoglin など：ID ごと、最接近）と、歩いた跡の群系 |
+| `s4_gate_exit` | 地表（`HUNT_GATE_AT`、既定 160,75,28）に `portal` の手でゲートを建てて入り、ネザー側の出口の位置・溶岩・地図を取って、要塞まで歩く |
+| `s4_nether_stronghold` | 決め 4 A の通し：近くの 2 か所（70m 離れ）で目玉 → 2 本の方位の交点（`/locate` との差）→ ゲート → ネザーで (x/8, z/8) まで歩く → 2 つ目のゲート（黒曜石を 10 足す）→ 地上の出口と枠の部屋との差 |
+
+```
+bash lab-slot.sh --wait 3600 --label s4 -- bash s4-section-probe.sh ~/s4-pins/body-<sha> <label> c1 s4_gate_exit HUNT_SECONDS=600 HUNT_PORT=25581 HUNT_GATE_AT=160,75,28
+```
+`HUNT_GATE_WALK=off` でゲートの出口の測りだけにする。

@@ -8,14 +8,19 @@
 set -eu
 PIN=${1:?pin dir}; LABEL=${2:?label}; KEY=${3:?world key}; SCENES=${4:?scenes}; shift 4
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-PART=${S4_SCENES_PART:-$HERE/s4-section-scenes.part.ts}
+PARTS=${S4_SCENES_PART:-"$HERE/s4-section-scenes.part.ts $HERE/s4-leg2-scenes.part.ts $HERE/s4-nether-stronghold.part.ts"}     # the files of scenes, put in one after the other (2026-11-03: run59's leg 2)
 SRC=$PIN/backend/scripts/minecraft-hunt-probe.ts
 RUN=$PIN/backend/scripts/lab/run-hunt-lab.sh
-[ -f "$SRC" ] && [ -f "$RUN" ] && [ -f "$PART" ] || { echo "missing $SRC, $RUN or $PART" >&2; exit 2; }
+[ -f "$SRC" ] && [ -f "$RUN" ] || { echo "missing $SRC or $RUN" >&2; exit 2; }
+for part in $PARTS; do [ -f "$part" ] || { echo "missing $part" >&2; exit 2; }; done
 MARK='// ---- run -'
 [ "$(grep -c -- "^$MARK" "$SRC")" = 1 ] || { echo "the hunt probe has no single '$MARK' line to insert before" >&2; exit 2; }
 OUT=$PIN/backend/scripts/s4-section-probe.ts
+PART=$PIN/backend/scripts/.s4-parts.ts
+# shellcheck disable=SC2086
+cat $PARTS > "$PART"
 awk -v mark="$MARK" -v part="$PART" 'index($0, mark) == 1 && !done { while ((getline line < part) > 0) print line; done = 1 } { print }' "$SRC" > "$OUT"
+rm -f "$PART"
 # the runner of S2 with the probe file chosen by HUNT_PROBE (default: S2's own)
 sed 's#scripts/minecraft-hunt-probe\.ts#scripts/${HUNT_PROBE:-minecraft-hunt-probe.ts}#g' "$RUN" > "$PIN/backend/scripts/lab/run-hunt-lab-s4.sh"
 chmod +x "$PIN/backend/scripts/lab/run-hunt-lab-s4.sh"
