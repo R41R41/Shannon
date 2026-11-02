@@ -45,7 +45,11 @@ describe('the End fields of the observation, as the isolated lab made them', () 
       const bot = botFrom(input);
       endObservation(bot, input.now); // the phase clock starts with the first look
       const again = endObservation(bot, input.now + Math.round((expected.dragon?.phaseFor ?? 0) * 1000));
-      expect(JSON.parse(JSON.stringify(again))).toEqual(expected);
+      // The fields the lab recorded; the optional ones added later (crystals.openings/shootSets/stats, dragon.windows/approach: S1, 2026-11-03) are tested in minecraftDragonSections.test.ts.
+      const seen = JSON.parse(JSON.stringify(again));
+      for (const key of ['openings', 'shootSets', 'stats']) delete seen?.crystals?.[key];
+      for (const key of ['windows', 'approach']) delete seen?.dragon?.[key];
+      expect(seen).toEqual(expected);
     });
   }
   it('tells what each situation is, by the fields', () => {

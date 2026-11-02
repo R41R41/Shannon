@@ -23,6 +23,8 @@ import { breathCloudsOf, dragonPhaseOf, endDragonOf, endObservation } from '../s
 import { dragonHazards } from '../src/services/minebot/utils/dragonDanger.js';
 import { activeActionCapabilities, hasActiveSafetyLease, preemptLowerPriorityActions, safetyLeaseCapabilities } from '../src/services/minebot/execution/ActionExecution.js';
 import { blastAt } from '../src/services/minebot/utils/crystalBlast.js';
+import { feetCentre, standing, walkGround } from '../src/services/minebot/utils/dragonWalk.js';
+import { bodyReader } from '../src/services/minebot/utils/localMap.js';
 
 const port = Number(process.env.MINECRAFT_END_PORT);
 const worldDirectory = process.env.MINECRAFT_END_WORLD_DIRECTORY ?? '';
@@ -1538,6 +1540,192 @@ scenes.knockback = async () => {
   }
 };
 
+/** Isolated section, with the actor saved on the island ground before login. No teleport, terrain edits,
+ * parked dragon, healing between pillars, water bucket or replacement inventory. The script chooses two pillars;
+ * production go/vertical/dig and the unchanged floor reflex own every physical step. */
+/** Set by cage_section_walk: the body came to the island by its own walk from the game's arrival (no teleport after the arrival), not from saved player data. */
+let cageWalkStart = false;
+scenes.cage_section = async () => {
+  if (!cageWalkStart && (wanted.length !== 1 || wanted[0] !== 'cage_section')) throw new Error('cage_section must run alone, from saved island-ground playerdata');
+  if (String(actor.game?.dimension).replace(/^minecraft:/u, '') !== 'the_end' || !actor.entity?.onGround) throw new Error('cage_section requires an actor already standing on the End island; no tp bootstrap');
+  const start = actor.entity.position.clone(), read = bodyReader(actor);
+  if (!standing(read, { x: Math.floor(start.x), y: Math.floor(start.y), z: Math.floor(start.z) }) ||
+    read(Math.floor(start.x), Math.floor(start.y) - 1, Math.floor(start.z))?.name !== 'end_stone') throw new Error('cage_section start must be natural island ground');
+  const sceneDeaths = actorDeaths;
+  releaseReflex();
+  if (!dragonEntity() || [9, 10].includes(phaseNow() ?? -1)) throw new Error('cage_section requires the awake dragon');
+  await ask(`gamemode survival ${ACTOR}`); await ask('difficulty normal'); await protect(false);
+  await gear(['stone_sword', 'iron_pickaxe', 'cobblestone 64', 'bow', 'arrow 32']); await wearIron();
+  if (actorDeaths !== sceneDeaths || Number(actor.health) <= 0) throw new Error('cage_section actor died during setup');
+  const inventory = () => (actor.inventory.items() as Array<{ name: string; count: number }>);
+  if (inventory().some(i => /bucket/u.test(i.name))) throw new Error('cage_section refuses every bucket');
+  const chosen = loadedCrystals(endView()).filter(c => c.caged === true).sort((a, b) =>
+    Math.hypot(a.x - start.x, a.z - start.z) - Math.hypot(b.x - start.x, b.z - start.z)).slice(0, 2);
+  if (chosen.length !== 2) throw new Error('two natural caged crystals must already be loaded; no fabricated cages');
+  const sections: Array<Record<string, unknown>> = [];
+  for (const crystal of chosen) {
+    const started = Date.now(), healthBefore = Number(actor.health), deathsBefore = actorDeaths;
+    const mark = actor.reflexLedger?.mark?.() ?? 0, lowest = trackMinHealth();
+    const blocksBefore = inventory().filter(i => i.name === 'cobblestone').reduce((n, i) => n + i.count, 0);
+    let placed = 0, damageTaken = 0, previousHealth = healthBefore;
+    const onHealth = () => { const h = Number(actor.health); damageTaken += Math.max(0, previousHealth - h); previousHealth = h; };
+    const onBlock = (old: any, next: any) => { if (next?.name === 'cobblestone' && old?.name !== 'cobblestone') placed++; };
+    actor.on('health', onHealth); actor.on('blockUpdate', onBlock);
+    const section: Record<string, unknown> = { crystalId: crystal.id, crystal: { x: crystal.x, y: crystal.y, z: crystal.z }, stages: [] };
+    const stages = section.stages as Array<Record<string, unknown>>;
+    let success = false;
+    const perform = async (stage: string, hand: Record<string, unknown>, seconds: number) => {
+      const result = await act([hand], seconds);
+      stages.push({ stage, ...result });
+      if (actorDeaths !== deathsBefore || Number(actor.health) <= 0) throw new Error(`${stage}: actor died`);
+      if (!result.ok) throw new Error(`${stage}: stopped; no automatic retry`);
+    };
+    try {
+      const ground = walkGround(actor, { deadline: performance.now() + 150, radius: 112, maxCells: 16000 });
+      // Near enough to the cage wall to dig from the pillar, outside the obsidian column. World geometry, no seed coordinates.
+      const roots = ground.cells.filter(n => {
+        const p = feetCentre(n.cell), horizontal = Math.hypot(p.x - crystal.x, p.z - crystal.z);
+        if (horizontal < 3 || horizontal > 4.5) return false;
+        for (let y = n.cell.y; y < Math.floor(crystal.y); y++) {
+          const b = ground.read(n.cell.x, y, n.cell.z);
+          if (!b || !/^(air|cave_air|void_air)$/u.test(b.name)) return false;
+        }
+        return true;
+      }).sort((a, b) => a.walkMeters - b.walkMeters);
+      const root = roots[0]?.cell;
+      if (!root) throw new Error('no walkable root with a clear pillar column');
+      section.root = root;
+      await perform('go_root', { do: 'go', to: root, range: 0, maxDig: 0, maxPlace: 0, maxDrop: 1, seconds: 60 }, 65);
+      await perform('pillar_up', { do: 'vertical', dir: 'up', shape: 'pillar', toY: Math.floor(crystal.y), canDig: ['none'], canPlace: ['cobblestone'], maxPlace: 64, maxDig: 0, liquid: 'stop', seconds: 60 }, 65);
+      const eyes = actor.entity.position.offset(0, 1.62, 0), bars: Array<{ x: number; y: number; z: number }> = [];
+      const cx = Math.floor(crystal.x), cy = Math.floor(crystal.y), cz = Math.floor(crystal.z);
+      for (let x = cx - 2; x <= cx + 2; x++) for (let z = cz - 2; z <= cz + 2; z++) for (let y = cy; y <= cy + 2; y++) {
+        const p = new Vec3(x, y, z);
+        if (actor.blockAt(p)?.name === 'iron_bars' && eyes.distanceTo(p.offset(0.5, 0.5, 0.5)) <= 4.2) bars.push({ x, y, z });
+      }
+      bars.sort((a, b) => Math.hypot(a.x + 0.5 - eyes.x, a.y + 0.5 - eyes.y, a.z + 0.5 - eyes.z) - Math.hypot(b.x + 0.5 - eyes.x, b.y + 0.5 - eyes.y, b.z + 0.5 - eyes.z));
+      if (!bars.length) throw new Error('no reachable cage bars; inspect displaced body');
+      // Open one vertical column in the near wall. The crystal is left intact; this section measures cage access and return.
+      const wall = bars.filter(p => p.x === bars[0].x && p.z === bars[0].z);
+      section.bars = wall;
+      await perform('dig_bars', { do: 'dig', at: wall, tool: 'iron_pickaxe', collect: false }, 30);
+      const at = actor.entity.position;
+      if (Math.floor(at.x) !== root.x || Math.floor(at.z) !== root.z) throw new Error('displaced from the built pillar; shaft descent cannot be assumed');
+      await perform('shaft_down', { do: 'vertical', dir: 'down', shape: 'shaft', toY: root.y, canDig: ['cobblestone'], canPlace: ['none'], maxDig: 64, maxPlace: 0, liquid: 'stop', seconds: 60 }, 65);
+      success = Math.abs(actor.entity.position.y - root.y) < 0.5 && actor.entity.onGround;
+      if (!success) throw new Error('shaft did not return to ground');
+    } catch (error) { section.error = String((error as Error).message ?? error); }
+    finally {
+      actor.removeListener('health', onHealth); actor.removeListener('blockUpdate', onBlock);
+      const blocksAfter = inventory().filter(i => i.name === 'cobblestone').reduce((n, i) => n + i.count, 0);
+      Object.assign(section, { ok: success, ms: Date.now() - started, healthBefore, healthAfter: Number(actor.health), healthLost: healthBefore - Number(actor.health),
+        damageTaken, minimumHealth: lowest.stop(), blocksBefore, blocksAfter, blocksUsed: placed,
+        ledger: actor.reflexLedger?.entriesSince?.(mark) ?? [], deaths: actorDeaths - deathsBefore, died: actorDeaths > deathsBefore });
+      sections.push(section);
+    }
+    if (!success) break;
+  }
+  return { ok: sections.length === 2 && sections.every(s => s.ok) && actorDeaths === sceneDeaths, start, tp: false, waterBucket: false,
+    reflex: 'on', dragon: 'awake', sections, deaths: actorDeaths - sceneDeaths };
+};
+
+scenes.approach_head = async () => {
+  // Eight approaches under the head of a perched dragon, as a planner would make them from the observation (the approach is the body's offer; the choices are the stand-in planner's):
+  // the dragon lands; the planner takes a waiting cell (`approach.stage`, safe for the whole perch) and goes there; it waits until the window is open (`dragon.windows.open`); it goes to the strike cell (`approach.strike`),
+  // strikes with the sword, and goes to the retreat cell once the dragon has taken off (phase 4). Floor reflexes on, iron armour, no resistance. Each trial records what the reflex saw (the hazards and the ledger).
+  const trials: Array<Record<string, unknown>> = [];
+  await protect(false); releaseReflex();
+  const deathsAll = actorDeaths;
+  const dragonOf = (view: any) => view?.dragon as { phase: number | null; approach?: { strike: any[]; stage?: any[]; retreat: any[] }; windows?: { open: boolean; remainingSeconds: number[] | null; secondsUntil: number[] | null } } | undefined;
+  const toCell = (p: { x: number; y: number; z: number }) => ({ x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) });
+  for (let n = 1; n <= 8; n++) {
+    await flatten(); await gear(['stone_sword', 'cobblestone 64']); await wearIron();
+    await restoreDragon(); await sleep(1500);
+    // what an earlier trial left on the island (a cloud of breath lies for 30 s, a ball may still fly) is not what this trial measures
+    await ask(`${END} kill @e[type=minecraft:area_effect_cloud]`); await ask(`${END} kill @e[type=minecraft:dragon_fireball]`);
+    await ask(`effect give ${ACTOR} minecraft:instant_health 1 5`);
+    await standAt(0.5, g, 14.5); await sleep(800);
+    await perch(200, 6); await sleep(500);
+    const deaths0 = actorDeaths, hp0 = Number(actor.health), lowest = trackMinHealth(), ledgerMark = (actor.reflexLedger?.mark?.() as number | undefined) ?? 0;
+    const first = dragonOf(endView());
+    const strike = first?.approach?.strike?.[0], stage = first?.approach?.stage?.[0], retreat = first?.approach?.retreat?.[0];
+    const row: Record<string, unknown> = { n, phaseAtStart: first?.phase ?? null, strikeCells: first?.approach?.strike?.length ?? 0, stageCells: first?.approach?.stage?.length ?? 0, retreatCells: first?.approach?.retreat?.length ?? 0,
+      strike: strike ?? null, stage: stage ?? null, retreat: retreat ?? null };
+    if (!strike) row.skipped = 'no strike cell in the observation';
+    else {
+      // to the waiting cell (when there is none, the body stays where it is: the planner waits at the start)
+      if (stage) {
+        const stageRun = await act([{ do: 'go', to: toCell(stage), range: 1, seconds: 25 }], 35);
+        row.stageGo = { ok: stageRun.ok, ms: stageRun.ms, line: (stageRun.lines[0] ?? '').slice(0, 200) };
+      }
+      // wait for an open window (at most 30 s: a perch has two or three of them)
+      const waitStart = Date.now(); let opened = false;
+      while (Date.now() - waitStart < 30_000 && actorDeaths === deaths0) {
+        const w = dragonOf(endView())?.windows;
+        if (w?.open && (w.remainingSeconds?.[0] ?? 0) >= 0.8) { opened = true; break; }
+        await sleep(100);
+      }
+      row.windowSeen = opened; row.waitedMs = Date.now() - waitStart;
+      if (opened && actorDeaths === deaths0) {
+        const hazards = dragonHazards(actor).map(h => `${h.kind}:${h.why}`).slice(0, 4);
+        row.hazardsAtGo = hazards;
+        const goRun = await act([{ do: 'go', to: toCell(strike), range: 1, seconds: 10 }], 20);
+        row.go = { ok: goRun.ok, ms: goRun.ms, line: (goRun.lines[0] ?? '').slice(0, 200) };
+        const at = actor.entity.position;
+        row.arrivedWithin = round(Math.hypot(at.x - strike.x, at.z - strike.z), 1);
+        const strikeRun = await act([{ do: 'equip', item: 'stone_sword' }, { do: 'attack', target: 'ender_dragon', untilDead: false, seconds: 6 }], 20);
+        const m = /(\d+)回振って (\d+)回当たった/u.exec(strikeRun.lines.join(' '));
+        row.strikeHand = { ok: strikeRun.ok, blows: m ? Number(m[1]) : null, landed: m ? Number(m[2]) : null, line: strikeRun.lines.join(' | ').slice(0, 240) };
+      }
+      // after the strike, the planner waits for the take-off (phase 4, at most 45 s) and takes the retreat cell
+      const takeoffStart = Date.now(); let phase: number | null = null;
+      while (Date.now() - takeoffStart < 45_000 && actorDeaths === deaths0) { phase = dragonOf(endView())?.phase ?? null; if (phase === 4) break; await sleep(500); }
+      row.phaseWhenRetreating = phase;
+      if (retreat && actorDeaths === deaths0) {
+        const retreatRun = await act([{ do: 'go', to: toCell(retreat), range: 1.5, seconds: 20 }], 30);
+        row.retreatGo = { ok: retreatRun.ok, ms: retreatRun.ms, line: (retreatRun.lines[0] ?? '').slice(0, 200) };
+      }
+    }
+    const ledger = (actor.reflexLedger?.entriesSince?.(ledgerMark) as Array<{ kind: string; outcome: string; detail: string }> | undefined) ?? [];
+    row.ledger = ledger.slice(0, 8).map(e => `${e.kind}:${e.outcome}:${String(e.detail).slice(0, 110)}`);
+    row.healthLost = round(hp0 - Number(actor.health), 1); row.lowest = lowest.stop(); row.died = actorDeaths > deaths0;
+    trials.push(row);
+    log(`ENDFIGHT APPROACH #${n}: ${JSON.stringify(row).slice(0, 2400)}`);
+  }
+  const struck = trials.filter(t => Number((t.strikeHand as { landed?: number } | undefined)?.landed ?? 0) > 0).length;
+  return { trials: trials.length, deaths: actorDeaths - deathsAll, windowSeen: trials.filter(t => t.windowSeen).length, reachedStrike: trials.filter(t => (t.go as { ok?: boolean } | undefined)?.ok === true).length, struck,
+    lowestOverall: Math.min(...trials.map(t => Number(t.lowest ?? 20))), skipped: trials.filter(t => t.skipped).length, trialsDetail: trials };
+};
+
+scenes.cage_section_walk = async () => {
+  // The whole way from the arrival with no teleport after it: the game's own arrival on the platform (enter), the crossing to the island by go (blocks laid by the hand, no bucket), then the two cages from where the body stands.
+  cageWalkStart = true; // (run after the enter scene: `enter,cage_section_walk`)
+  await ask('difficulty normal'); await protect(false); releaseReflex();
+  await gear(['stone_sword', 'cobblestone 64']); await wearIron();
+  const deaths0 = actorDeaths, crossStart = Date.now();
+  let reached = false;
+  for (let call = 0; call < 4 && !reached && actorDeaths === deaths0; call++) {
+    await act([{ do: 'go', to: { x: 67, y: 59, z: 0 }, range: 1.5, canPlace: ['cobblestone'], maxPlace: 100, seconds: 120 }], 135);
+    const at = actor.entity.position; reached = Math.hypot(at.x - 67.5, at.z - 0.5) < 3 && Number(actor.health) > 0;
+    if (!reached) await sleep(2000);
+  }
+  const crossing = { reached, seconds: round((Date.now() - crossStart) / 1000, 1), health: round(Number(actor.health), 1), deaths: actorDeaths - deaths0 };
+  log(`ENDFIGHT CAGE_WALK crossing: ${JSON.stringify(crossing)}`);
+  if (!reached) return { crossing, error: 'the crossing did not reach the island' };
+  // across the island to the west side where the caged pillars stand (about 100 m from the arrival rim): on foot, as the planner would
+  const westStart = Date.now(); let west = false;
+  for (let call = 0; call < 4 && !west && actorDeaths === deaths0; call++) {
+    await act([{ do: 'go', to: { x: -27, y: g, z: 0 }, range: 3, seconds: 90 }], 100);
+    const at = actor.entity.position; west = Math.hypot(at.x + 27, at.z) < 5 && Number(actor.health) > 0;
+    if (!west) await sleep(1500);
+  }
+  const walkWest = { reached: west, seconds: round((Date.now() - westStart) / 1000, 1), health: round(Number(actor.health), 1), deaths: actorDeaths - deaths0 };
+  log(`ENDFIGHT CAGE_WALK island walk: ${JSON.stringify(walkWest)}`);
+  if (!west) return { crossing, walkWest, error: 'the walk across the island did not arrive' };
+  await sleep(1000);
+  return { crossing, walkWest, ...(await scenes.cage_section()) };
+};
+
 scenes.death = async () => {
   await protect(true);
   await flatten(); await gear(['diamond_sword']); await wear(); await hold('diamond_sword');
@@ -1574,23 +1762,25 @@ scenes.death = async () => {
 let exitCode = 0;
 try {
   for (const name of Object.keys(scenes)) {
+    if (name === 'cage_section' && !wanted.includes('cage_section')) continue;
     if (!include(name)) continue;
-    if (name !== 'enter' && g === 0) { log(`SCENE ${name} skipped: the End was not entered (no enter scene yet)`); continue; }
+    if (name !== 'enter' && name !== 'cage_section' && g === 0) { log(`SCENE ${name} skipped: the End was not entered (no enter scene yet)`); continue; }
     const started = Date.now();
     log(`SCENE ${name} begins`);
-    try { report.scenes[name] = { ms: 0, ...(await scenes[name]()) }; }
+    try { report.scenes[name] = { ms: 0, ...(await scenes[name]()) }; if (name === 'cage_section' && !report.scenes[name].ok) exitCode = 1; }
     catch (error) { report.scenes[name] = { error: String((error as Error)?.stack ?? error).slice(0, 800) }; exitCode = 1; }
     finally {
       // Whatever way the scene ended: its timers stop, the reflex is let go, and the dragon is put back for the next one (not after the one that kills it).
       stopTimers(); releaseReflex();
-      if (g !== 0 && name !== 'enter' && name !== 'death') { try { await restoreDragon(); } catch { /* the next scene looks for itself */ } }
+      if (g !== 0 && name !== 'enter' && name !== 'death' && name !== 'cage_section') { try { await restoreDragon(); } catch { /* the next scene looks for itself */ } }
     }
     report.scenes[name].ms = Date.now() - started;
     log(`SCENE ${name} ends after ${((Date.now() - started) / 1000).toFixed(1)}s: ${JSON.stringify(report.scenes[name]).slice(0, 700)}`);
     if (disconnected) { report.errors.push(`disconnected: ${disconnected}`); break; }
   }
 } finally {
-  if (process.env.MINECRAFT_END_REPORT) { try { fs.writeFileSync(process.env.MINECRAFT_END_REPORT, JSON.stringify(report, null, 2)); } catch { /* the line below has it */ } }
+  const reportPath = process.env.MINECRAFT_END_REPORT ?? (wanted.includes('cage_section') ? path.join(worldDirectory, 'report.json') : null);
+  if (reportPath) { try { fs.writeFileSync(reportPath, JSON.stringify(report, null, 2)); } catch { /* the line below has it */ } }
   console.log(`ENDFIGHT_RESULT ${JSON.stringify(report)}`);
   try { await body.dispose(); } catch { /* gone */ }
   try { actor.quit(); operator.quit(); } catch { /* gone */ }

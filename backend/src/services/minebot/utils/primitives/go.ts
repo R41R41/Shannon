@@ -20,6 +20,9 @@ import { ThreatExposedError } from '../exposureGuard.js';
 import { swimControls, swimPulse } from './swim.js';
 import { waterExitWords } from './waterExit.js';
 import { cloudReaches, cloudZoneAtCell, lyingCloudZones } from '../dragonDanger.js';
+import { perchClearance } from '../dragonApproach.js';
+import { dragonPhaseOf, endDragonOf, isEnd } from '../dragonState.js';
+import { isPerched } from '../dragonParts.js';
 
 const waterExitText = (bot: any, feet: Cell) => { const exit = waterExitWords(bot, feet); return exit ? `。${exit}` : ''; };
 
@@ -365,6 +368,10 @@ export function goMovements(bot: any, args: Required<Pick<GoArgs, 'maxDrop' | 'w
   // A body one block up (on a laid floor) is over the cloud's slab and is not in it.
   let clouds = relax.hazards || relax.dragon ? [] : lyingCloudZones(bot);
   if (clouds.length && bot.entity?.position && clouds.some(zone => cloudReaches(zone.centre, zone.radius, bot.entity.position, 0))) clouds = [];
+  const perched = isEnd(bot) ? endDragonOf(bot) : null;
+  let clearPerch = !relax.hazards && !relax.dragon && perched && isPerched(dragonPhaseOf(bot, perched)) ? perchClearance(bot, perched) : null;
+  // Preserve the existing way OUT when already inside a danger; the floor reflex keeps ownership of urgent retreat.
+  if (clearPerch && bot.entity?.position && !clearPerch(bot.entity.position)) clearPerch = null;
   // Moves that end in a hazard (beside lava, on magma...), or in water when it is not allowed, are not moves.
   if (relax.upstream) (movements as { __upstream?: boolean }).__upstream = true;
   const getNeighbors = movements.getNeighbors.bind(movements);
@@ -381,6 +388,7 @@ export function goMovements(bot: any, args: Required<Pick<GoArgs, 'maxDrop' | 'w
     }
     if (!relax.hazards && hazardAtFeetWith(read, move.x, move.y, move.z)) return false;
     if (clouds.length && cloudZoneAtCell(clouds, move.x, move.y, move.z)) return false;
+    if (clearPerch && !clearPerch({ x: move.x + 0.5, y: move.y, z: move.z + 0.5 })) return false;
     if (!args.waterOk && !inWater && (isWaterName(read(move.x, move.y, move.z)) || isWaterName(read(move.x, move.y + 1, move.z)))) return false;
     return true;
   });
@@ -388,6 +396,22 @@ export function goMovements(bot: any, args: Required<Pick<GoArgs, 'maxDrop' | 'w
 }
 
 // ---- the work ----------------------------------------------------------------------------------------------------------------------------
+/** Verify a proposed route with go's real rules, without moving, digging or placing. */
+export function goWalkRouteChecker(bot: any, deadline = Infinity): (route: Cell[]) => boolean {
+  const state: GoState = { steps: 0, dug: 0, placed: 0, redraws: 0, veto: null, refused: 0,
+    exposed: new Map(), avoid: new Set(), dugCells: new Set(), laidCells: new Set() };
+  const movements = goMovements(bot, { maxDrop: 1, waterOk: false, maxDig: 0, maxPlace: 0, sprint: false }, digRuleOf(bot.registry, []), [], state);
+  return route => {
+    for (let i = 1; i < route.length; i++) {
+      if (performance.now() >= deadline) return false;
+      const from = route[i - 1], to = route[i];
+      const moves = movements.getNeighbors({ ...from, remainingBlocks: 0 }) as any[];
+      if (!moves.some(m => m.x === to.x && m.y === to.y && m.z === to.z && !(m.toBreak?.length) && !(m.toPlace?.length))) return false;
+    }
+    return route.length > 0;
+  };
+}
+
 
 const distanceTo = (bot: any, cell: Cell) => Math.hypot(bot.entity.position.x - (cell.x + 0.5), bot.entity.position.y - cell.y, bot.entity.position.z - (cell.z + 0.5));
 const goalOf = (cell: Cell, range: number) => range > 0 ? new goals.GoalNear(cell.x + 0.5, cell.y, cell.z + 0.5, range) : new goals.GoalBlock(cell.x, cell.y, cell.z);
@@ -1006,7 +1030,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     const shown = (map: Map<string, number>) => [...map.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([name, count]) => `${name}×${count}`).join('・');
     const ignored = rule.ignored.length ? `（無視した canDig: ${rule.ignored.slice(0, 3).join('・')}）` : '';
     const lifts: Array<[Relax, (found: Plan) => StepOutcome]> = [
-      ...(lyingCloudZones(bot).length ? [[{ dragon: true }, () => fail('dead_end', '道の先が竜の息の雲の中で、避けると道が無い（雲は約 30 秒で消える）', '雲が消える（観測の dragonBreath が空になる）まで高い足場で待つか、別の側から')] as [Relax, (found: Plan) => StepOutcome]] : []),
+      ...(lyingCloudZones(bot).length || (endDragonOf(bot) && isPerched(dragonPhaseOf(bot, endDragonOf(bot)))) ? [[{ dragon: true }, () => fail('dead_end', '道の先が竜の息の雲・止まり木の接触か息の予告の中で、避けると道が無い', '現在の phase・dragonBreath・approach を見て別の行き先か、別の側から')] as [Relax, (found: Plan) => StepOutcome]] : []),
       [{ hazards: true }, () => fail('lava', '道の先が溶岩・火・マグマ・サボテンなどで、避けると道が無い', '別の行き先か、別の側から')],
       ...(state.dug >= limits.maxDig || state.placed >= limits.maxPlace ? [[{ limits: true }, () => state.dug >= limits.maxDig
         ? fail('limit_dig', `掘る数の上限 ${limits.maxDig} に着いた（この先にも掘る所がある）`, 'maxDig を増やすか、別の道を')

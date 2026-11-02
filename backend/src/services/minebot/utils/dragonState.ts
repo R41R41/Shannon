@@ -4,6 +4,8 @@ import { bodyReader, type BlockReader } from './localMap.js';
 import { toldVelocity } from './toldVelocity.js';
 import { blastAt, CRYSTAL_REACH } from './crystalBlast.js';
 import { BREATH_RADIUS_MIN, boxCentre, boxDistance, DRAGON_MAX_HEALTH, isPerched, partBox, phaseName, type P3 } from './dragonParts.js';
+import { clearCrystalOpenings, crystalOpenings, type CrystalShooting } from './dragonOpenings.js';
+import { dragonApproach, dragonWindows, type DragonApproach, type DragonWindows } from './dragonApproach.js';
 
 /**
  * What the body reads of the End fight, for the observation (the End fields of `state.world`) and for the parts that act on it (the dragon strike, the dragon
@@ -239,9 +241,11 @@ export interface EndObservation {
     id: number; health: number | null; phase: number | null; phaseName: string | null; /** Seconds in this phase, as watched. */ phaseFor: number; perched: boolean;
     position: P3; yaw: number; /** The head's box centre when perched (an estimate in flight is not given). */ headPosition?: P3; /** From the body to the dragon's middle. */ distance: number;
     /** The eye's distance to the head's box (perched), and whether a blow is in reach now. */ headReach: number | null; strike: boolean;
+    windows?: DragonWindows;
+    approach?: DragonApproach;
   };
   /** remaining: the spikes whose crystal stands or has not been seen (of ten); gone: the ones seen without; caged: the loaded crystals in a cage; list: the loaded ones, nearest first; unseen: where the spikes not loaded are. */
-  crystals: { remaining: number; gone: number; caged: number; list: Array<Omit<CrystalView, 'x' | 'y' | 'z' | 'dist'> & { position: P3; distance: number }>; unseen: Array<{ x: number; z: number }> };
+  crystals: { remaining: number; gone: number; caged: number; list: Array<Omit<CrystalView, 'x' | 'y' | 'z' | 'dist'> & { position: P3; distance: number }>; unseen: Array<{ x: number; z: number }> } & Partial<CrystalShooting>;
   /** The top of the exit portal's pillar (where the dragon perches); absent while it is not loaded. */
   perch?: P3;
   /** The dragon's breath lying in the world, nearest first, four at most: radius is the client's reading (7 when it has none), dangerRadius what the body keeps clear of (at least 7). */
@@ -250,17 +254,22 @@ export interface EndObservation {
   dragonFireballs: number;
 }
 export function endObservation(bot: Bot, now = Date.now()): EndObservation | null {
-  if (!isEnd(bot)) return null;
+  if (!isEnd(bot)) { clearCrystalOpenings(bot); return null; }
   const dragon = endDragonOf(bot), at = bot?.entity?.position;
   const view = dragon ? dragonView(bot, dragon, now) : null;
   const perch = fountainOf(bot);
   const spikes = spikeStates(bot, now);
   const loaded = crystalsOf(bot);
+  // Optional calculations never take the existing End observation down.
+  let shooting: Partial<CrystalShooting> = {}, approach: DragonApproach | undefined;
+  try { shooting = crystalOpenings(bot, loaded, now); } catch { /* unavailable terrain/shot adapter */ }
+  try { if (dragon && view) approach = dragonApproach(bot, dragon, view.phase); } catch { /* no proven route */ }
   return {
     ...(dragon && view ? { dragon: { id: view.id, health: view.health, phase: view.phase, phaseName: view.phaseName, phaseFor: view.phaseFor, perched: view.perched, position: view.at, yaw: view.yaw,
-      ...(view.head ? { headPosition: view.head } : {}), distance: at ? round1(dragon.position.distanceTo(at)) : 0, headReach: view.headReach, strike: view.strike } } : {}),
+      ...(view.head ? { headPosition: view.head } : {}), distance: at ? round1(dragon.position.distanceTo(at)) : 0, headReach: view.headReach, strike: view.strike,
+      windows: dragonWindows(view.phase, view.phaseFor), ...(approach ? { approach } : {}) } } : {}),
     crystals: { remaining: spikes.filter(spike => spike.state !== 'gone').length, gone: spikes.filter(spike => spike.state === 'gone').length, caged: loaded.filter(crystal => crystal.caged === true).length,
-      list: loaded.slice(0, 10).map(({ x, y, z, dist, ...rest }) => ({ ...rest, position: { x, y, z }, distance: dist })), unseen: spikes.filter(spike => spike.state === 'unknown').map(spike => ({ x: spike.x, z: spike.z })) },
+      list: loaded.slice(0, 10).map(({ x, y, z, dist, ...rest }) => ({ ...rest, position: { x, y, z }, distance: dist })), unseen: spikes.filter(spike => spike.state === 'unknown').map(spike => ({ x: spike.x, z: spike.z })), ...shooting },
     ...(perch ? { perch } : {}),
     dragonBreath: breathCloudsOf(bot).slice(0, 4).map(cloud => ({ ...at3(cloud.position), radius: round1(cloud.radius ?? BREATH_RADIUS_MIN), dangerRadius: round1(Math.max(cloud.radius ?? 0, BREATH_RADIUS_MIN)) })),
     dragonFireballs: fireballsOf(bot).length,
