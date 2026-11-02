@@ -166,3 +166,91 @@ act の手（place・make・pillarUp・go・mine・smelt・obsidian・portal・f
   2. `scene-case.py --scene <現場> --box <黒箱> --name s1 > cases.json` で場面を作ります。生き物は残します（`keepEntities`）。体と act は黒箱から入れます。
   3. `run-replay.sh <label> <code.tar> cases.json REPLAY_SOURCE=<現場>/world REPLAY_FLOOR=default` で出し直します。
   4. `compare-boxes.py <黒箱A> <黒箱B>` で、2 つの黒箱を並べて比べます。
+
+## 枠の決まり・PC の WSL の 2 つ目のラボ・エンドと種の世界（2026-11-02、S4 試験の台）
+
+### 枠の決まり（`lab-slot.sh`）
+VM は 2 コアで、隔離ラボ（127.0.0.1:25570〜25599）は **同時に 1 本** です。サーバーを立てるものの前に、枠を取ります。
+
+```bash
+bash backend/scripts/lab/lab-slot.sh status                                              # 誰が持っているか・ほかに動いているもの
+bash backend/scripts/lab/lab-slot.sh --wait 1800 --label hands-live -- bash run-hands-live.sh <label> <code.tar>
+# 作戦書の形 `flock ~/.cache/minebot-lab/slot.lock <コマンド>` と同じファイルを使うので、混ぜて使える（待つ順番は先着ではない）
+```
+- 規則：①`$MINEBOT_LAB_SCRATCH/slot.lock`（既定 `~/.cache/minebot-lab/slot.lock`）を実行中ずっと持つ ②`/tmp/hands-live.lock` は持たず、塞がっていれば待つ／断る（`run-hands-live.sh`・`world-pristine.sh`・`run-replay.sh` が自分で取る）
+  ③**本番 shannon-home で実走中は回さない**：運用 DB に `queued/starting/running/waiting_approval` の Minecraft タスクがあれば終了 4（`--allow-run` は取りまとめの判断）。待っている間も毎回見直し、実走が始まれば抜ける
+  ④25570〜25599 に知らないサーバーが居れば終了 5（残り物。`tmux -L minebot-lab ls`）⑤出力は `~/.cache/minebot-lab`（/tmp は Spot の停止で消える）。終了コード：3＝枠が塞がっている／`/tmp/hands-live.lock` が塞がっている、2＝使い方。
+  ⑥**資源**（ライ氏の指示 2026-11-02：世界を無駄に作らない、圧迫を確かめる、不要な処理とデータは消す）：`$HOME` のディスクの空きが 10GB 未満（`LAB_MIN_DISK_GB`）、または PC の WSL で Windows の空きメモリが 3GB 未満（`LAB_MIN_WIN_MEM_GB`）・C: が 10GB 未満なら、
+  ラボは始まらず終了 6。その時は取りまとめに知らせて止まる（VM のディスクが 10GB を切った時も同じ）。ラボの Java のヒープは 2GB まで（`minecraft-isolated-lab.mjs` は `-Xmx2G`、`seedscan.py` は 1〜2G）。使い終わったらすぐ止め、測り終えた世界は消す。
+  ⑦**`prod.lock`**：shannon-home を使う側（反映の再起動・実走・`trials.py`）は `flock ~/.cache/minebot-lab/prod.lock` を持つ。塞がっている間ラボは始まらず終了 4（待たない）。`status` に持ち主と資源が出る。
+- `LAB_SLOT_COUNT=N` で枠を N 本にできる（`slot.lock`、`slot.1.lock` ...）。取れた番号は `$LAB_SLOT`。PC の WSL のラボは 3。
+- 使い終わった PC の WSL：ラボ（Java）を止めたら root で `sync; echo 3 > /proc/sys/vm/drop_caches` すると、ページキャッシュ（5GB 台に膨らむ）が Windows に返り、空きメモリが戻る（2026-11-02 に 5.2GB → 0.4GB を返した）。
+
+### PC の WSL の 2 つ目のラボ（本番の実走中も回せる）
+- 場所：Ubuntu-24.04（ユーザー ghrunner。24 論理コア・メモリ約 16GB。GitHub Actions の runner と同居なので、重いものは `nice` 付きで）。VM と同じ見え方にするため
+  `/home/azureuser` を `/home/ghrunner/minebot-lab/vmhome` への link にしてあり、**`HOME=/home/azureuser` を付けて**呼ぶ（プローブの隔離検査は `/home/azureuser/minecraft/progressive-lab-…` という文字列を見る）。
+  `wsl -d Ubuntu-24.04 -u ghrunner -- env HOME=/home/azureuser LAB_SLOT_COUNT=3 LAB_PORT_FROM=25590 bash <worktree>/backend/scripts/lab/lab-slot.sh -- bash <台本> ...`
+- 入れたもの：Java 21（Ubuntu の `openjdk-21-jre-headless` 21.0.12。root で一度 `apt-get install`）。サーバーの雛形 `~/minecraft/1.21.11-fabric-test`（VM から tar で写した 144MB：server jar・Fabric ローダー・libraries・.fabric・`mods/` の 5 個）。
+  **jar は VM の雛形・本番 shannon-home と同じ**（`versions/1.21.11/server-1.21.11.jar` の sha256 先頭 `ec47239a8de24633`、Fabric の起動 jar `437be1fb0db0cec0`）なので、世界生成も `/locate` も本番と同じ答えになる。
+  ラボは空の `mods/` で起こす（UI Mod が要る公開ラボだけ `MINECRAFT_LAB_MODS_DIR` から入れる。本番の友人の MOD は入れない）。
+- Node：WSL に Node 22 は無く、外から取ってよいのは Mojang と Ubuntu のパッケージだけなので、CI の runner の **Node 24.20.0 を `~/.nvm/versions/node/v22.21.1` の名前で** 使う。node_modules は `/home/ghrunner/bodyend-deps` からのハードリンク
+  （コピー・取得なし）。VM は 22.21.1 なので、Node の版で変わる挙動は「ラボの差」として疑う。準備は `bash wsl-lab-setup.sh`（何度でも）。
+- 約束：seedscan.py のサーバーは 25570+枠(0〜19) を使うので、WSL の台本は `LAB_PORT_FROM=25590` から（`run-end-check.sh`・`lab-world.sh`）。`run-hands-live.sh` などは `HANDS_PORT=25591` のように明示すると確実。
+- 確かめたこと（2026-11-02）：サーバーの起動は約 10〜13 秒（自然地形）。**既存の `run-hands-live.sh` が WSL で通る**：place_table・go_dig_wall・place_table_after_go の 3 場面が 46 秒で 3/3 PASS（`go: host dig/placeBlock put back` も真、死亡 0、片付けも完了）。VM の `run-hands-live.ps1` は ssh/scp でしか送らない。WSL へは
+  `tar.exe -cf code.tar --exclude=*.test.ts --exclude=node_modules -C <worktree> backend/src backend/scripts backend/package.json backend/tsconfig.json package.json` を作り、`/mnt/c/...` のまま `run-hands-live.sh <label> <tar>` に渡す。
+
+### エンド：ラボで the_end へ tp すると竜戦は始まるか（`run-end-check.sh`、`end-check.mjs`）— **始まる**
+`bash lab-slot.sh -- bash run-end-check.sh <label> [<シード>] [--survival]`。新しい自然ワールド（難易度 normal・視野 10 チャンク＝本番）に、素のクライアント（`ShannonProbe`、op）が入り、`/execute in minecraft:the_end run tp @s 100 49 0` する。
+実測（WSL、シード 2336550045790902932、4 回）：到着の 1.5 秒後に the_end、**竜が存在するまで 4.7〜7.3 秒**（`execute if entity @e[type=minecraft:ender_dragon]`）、体力 200.0、竜 1・クリスタル 10、ボスバー「Ender Dragon」、
+tick は 8〜20ms（目標 50ms）で、End の島を作る間に一度だけ「Can't keep up」（約 2.7 秒遅れ）。
+- **到着の黒曜石の足場（(100,48,0) を中心に 5×5）は、世界生成で既にある**（`execute if block 100 48 0 minecraft:obsidian` が、何も作る前に通る）。`fill` で作り直しても「何も埋めなかった」と返るだけ。tp だけでよい。
+- 視野：ラボの既定（5 チャンク＝80 ブロック）だと、100 ブロックほど外を回る竜はクライアントに届かない。`MINECRAFT_LAB_VIEW_DISTANCE=10`（`run-end-check.sh` と `lab-world.sh` は 10）で、**竜（id 237、`type: mob`、高さ 8・幅 16、メタデータ 17 枠）とクリスタル 10 個が最初から見える**。
+- 竜の戦いは **プレイヤーが End に居る間だけ** 進む、と理解している（vanilla の作りの記憶。ラボでは「End に誰も居ない時に竜が出るか」を確かめていない＝仮説）。このため End の世界を先に作って写す用意はしていない（到着してから 5〜7 秒で足りる）。
+- チャット経由の注意（mineflayer）：コマンドの答えの数字（`scoreboard players get`、`tick query` の百分位、`tp` の座標）は欠ける。数は `execute store result storage lab:x n int 1 if entity ...` → `data get storage lab:x n` で取る。
+- S1 のプローブの始め方：自然ワールドを `MINECRAFT_LAB_UNASSISTED=true MINECRAFT_LAB_SEED=<シード> MINECRAFT_LAB_VIEW_DISTANCE=10 node scripts/minecraft-isolated-lab.mjs` で起こす（難易度 normal。peaceful だとピグリン・ブレイズなどが消える）→ 体を入れる →
+  `execute in minecraft:the_end run forceload add 90 -12 110 12`（到着の区画を先に読み込む。2.5 秒）→ `execute in minecraft:the_end run tp <体> 100 49 0`。End の島の作りは種によらず同じ、柱の並びと檻の有無だけが種で変わる、と理解している（一般知識。ラボで測ったのは 1 つのシードだけ）。
+
+### 種の世界（`lab-world.sh`）：ネザー要塞・歪んだ森・ストロングホールド・村と廃ポータルが「ある」ラボ
+`seedscan.py deep` → `publish --key K --labworld` が、`~/.cache/minebot-lab/worlds/<K>/`（と場所の表 `<K>.sites.json`）に、**事前に生成した世界**を置く。中身：スポーンの周り 169 チャンク・村の周り 169・廃ポータルの周り約 100・
+最寄りの 1 輪目のストロングホールドの周り 324（枠 12 個と部屋を含む全体）・ネザーの到着地点の周りと、最寄りの要塞の全体・最寄りの歪んだ森。残りは通常どおり生成される。
+
+```bash
+bash lab-slot.sh -- bash lab-world.sh start c2 25592     # 起こす。JSON（directory・port）と場所の表が出る。立ち上がってから返る
+... プローブを MINECRAFT_*_PORT=25592 MINECRAFT_*_WORLD_DIRECTORY=<directory> で ...
+bash lab-world.sh stop 25592                              # 止めて、ディレクトリも消す（元の世界は書き換えない）
+bash lab-world.sh list
+```
+場所の表（`sites.json`）の主な項目（座標は x, y, z。ネザーの物はネザーの座標）：
+
+| 項目 | 意味 | S |
+|---|---|---|
+| `netherArrival` | ポータルから出る場所の近く（溶岩から 6 ブロック以上、頭上 3 マス空き） | S2 |
+| `blazeSpawner`・`blazeSpawners`・`blazeStand` | 最寄りの要塞のブレイズのスポナーと、そこから約 5 ブロックで立てる要塞の床 | S2（mob-fight probe の `MINECRAFT_FIGHT_REAL=the_nether MINECRAFT_FIGHT_AT=<blazeSpawner> MINECRAFT_FIGHT_WALK_FROM=<blazeStand>`） |
+| `warpedStand` | 最寄りの歪んだ森のネザーナイリウムの上の足場（エンダーマン狩り・パール） | S2 |
+| `strongholdPortalCenter`・`strongholdFrames`（12 個：x,y,z,facing,eye）・`strongholdStand`・`strongholdSurface` | 枠の部屋の中心、枠、部屋の中の足場、その真上の地面 | S1/S2（目玉の飛びの方位の精度、枠探し、枠に目玉を置く） |
+| `endPlatform` | End の到着点（100, 49, 0） | S1 |
+| `village`・`spawn` | 村の中心（x, スポーンの y, z）、スポーン | 全般 |
+
+- ストロングホールドの「枠探し」を試す時は、`strongholdSurface` の近く（目玉の飛びを追って 200m まで近づいた想定の位置）に体を置いて、枠の部屋を探させる。部屋は地下 44〜141 ブロック（種ごとに `deep-<K>.json` の `depth`）。
+- 枠は生成時に目玉が入っている枠がある（種による。0〜3 個）。「全部空」にしたい時は `setblock x y z minecraft:end_portal_frame[facing=<facing>,eye=false] replace`（`trials.py` の `framesEmpty` と同じ）。
+
+### L77 の要塞の複製（`fresh-fort-copy.sh`）は、元のワールドが VM に **もう無い**
+`progressive-lab-p2Gj5S`（L77）は VM のどこにも残っていない（`~/minecraft` にも `~/.cache/minebot-lab` にも無い。残っているのは L77 の黒箱・ログ・図だけ）。同じ使い方（本物の要塞のブレイズのスポナーの隣に体を置く）は、
+上の種の世界で代わりになる（要塞の全体が生成済み。スポナーは 1〜4 基、`blazeStand` はスポナーから約 5 ブロック）。ただし L77 と同じ地形の再現ではないので、L77 の数字（実走の止まり方との比較）には使えない。
+
+### S4 の体だけの確かめ：c1（本番の実走のシード）の道（`s4-section-probe.sh`、2026-11-02 夜）
+S2 の hunt の場面（`minecraft-hunt-probe.ts`）は、場所の隣から始めて部品を測る。実走の道は **歩いて着く所から** 始まるので、S4 が c1 の世界で道そのものの場面を足した。LLM なし・鍵なし。
+`s4-section-scenes.part.ts` を S2 の probe の `// ---- run -` の前に挟んだ写し（`backend/scripts/s4-section-probe.ts`）を作り、`run-hunt-lab.sh` を `HUNT_PROBE` で probe を選べるようにした写しで回す。S2 の木には何も書かない。
+
+| 場面 | 何を測るか |
+|---|---|
+| `route_fortress`（S6） | `netherArrival` から要塞（`blazeStand`）まで `go` で歩く。身代わりの頭が体の「maxDig/maxPlace を増やして出し直す」を読んで上限を上げる。到着（スポナーの 24m 以内）・秒・体力・止まりの種類 |
+| `route_stronghold`（S9） | `spawn` から最寄りの 1 輪目のストロングホールドまで 110m ずつの `go` で歩く（c1 は 1.4km・途中に海）。1 歩ごとの進み・水・止まり |
+| `dig_to_room`（S9→S10） | `strongholdSurface` の真上の地面から枠の部屋の深さ（c1 は地下 170）まで `vertical` の縦穴。進み・止まり・体力 |
+| `frames_enter`（S10） | 枠 12 個を空にして、目玉 12 個を `use item=ender_eye at=[枠]` で置き、できたポータルへ `go` で入ってエンドへ。置けた数・入れたか |
+
+```
+# 木は固定して使う（走っている最中に S2 が書き換えても変わらない）：git archive <tree> backend/src backend/scripts backend/package.json backend/tsconfig.json package.json backend/saves/minecraft/structures | tar -x -C ~/s4-pins/body-<sha>
+bash lab-slot.sh --label s4 -- bash s4-section-probe.sh ~/s4-pins/body-<sha> <label> c1 route_fortress,frames_enter HUNT_SECONDS=900
+```
+`HUNT_SCENES` は場面名（S2 の場面も同じ指定で回る）。結果は `~/.cache/minebot-lab/hunt-<label>/{probe.log,report.json}`、場面ごとの `HUNT_SCENE` 行。**走っている最中にこのファイルや run-hunt-lab.sh を編集しない**。
