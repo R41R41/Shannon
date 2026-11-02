@@ -236,3 +236,20 @@ bash lab-world.sh list
 ### L77 の要塞の複製（`fresh-fort-copy.sh`）は、元のワールドが VM に **もう無い**
 `progressive-lab-p2Gj5S`（L77）は VM のどこにも残っていない（`~/minecraft` にも `~/.cache/minebot-lab` にも無い。残っているのは L77 の黒箱・ログ・図だけ）。同じ使い方（本物の要塞のブレイズのスポナーの隣に体を置く）は、
 上の種の世界で代わりになる（要塞の全体が生成済み。スポナーは 1〜4 基、`blazeStand` はスポナーから約 5 ブロック）。ただし L77 と同じ地形の再現ではないので、L77 の数字（実走の止まり方との比較）には使えない。
+
+### S4 の体だけの確かめ：c1（本番の実走のシード）の道（`s4-section-probe.sh`、2026-11-02 夜）
+S2 の hunt の場面（`minecraft-hunt-probe.ts`）は、場所の隣から始めて部品を測る。実走の道は **歩いて着く所から** 始まるので、S4 が c1 の世界で道そのものの場面を足した。LLM なし・鍵なし。
+`s4-section-scenes.part.ts` を S2 の probe の `// ---- run -` の前に挟んだ写し（`backend/scripts/s4-section-probe.ts`）を作り、`run-hunt-lab.sh` を `HUNT_PROBE` で probe を選べるようにした写しで回す。S2 の木には何も書かない。
+
+| 場面 | 何を測るか |
+|---|---|
+| `route_fortress`（S6） | `netherArrival` から要塞（`blazeStand`）まで `go` で歩く。身代わりの頭が体の「maxDig/maxPlace を増やして出し直す」を読んで上限を上げる。到着（スポナーの 24m 以内）・秒・体力・止まりの種類 |
+| `route_stronghold`（S9） | `spawn` から最寄りの 1 輪目のストロングホールドまで 110m ずつの `go` で歩く（c1 は 1.4km・途中に海）。1 歩ごとの進み・水・止まり |
+| `dig_to_room`（S9→S10） | `strongholdSurface` の真上の地面から枠の部屋の深さ（c1 は地下 170）まで `vertical` の縦穴。進み・止まり・体力 |
+| `frames_enter`（S10） | 枠 12 個を空にして、目玉 12 個を `use item=ender_eye at=[枠]` で置き、できたポータルへ `go` で入ってエンドへ。置けた数・入れたか |
+
+```
+# 木は固定して使う（走っている最中に S2 が書き換えても変わらない）：git archive <tree> backend/src backend/scripts backend/package.json backend/tsconfig.json package.json backend/saves/minecraft/structures | tar -x -C ~/s4-pins/body-<sha>
+bash lab-slot.sh --label s4 -- bash s4-section-probe.sh ~/s4-pins/body-<sha> <label> c1 route_fortress,frames_enter HUNT_SECONDS=900
+```
+`HUNT_SCENES` は場面名（S2 の場面も同じ指定で回る）。結果は `~/.cache/minebot-lab/hunt-<label>/{probe.log,report.json}`、場面ごとの `HUNT_SCENE` 行。**走っている最中にこのファイルや run-hunt-lab.sh を編集しない**。
