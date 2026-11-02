@@ -159,13 +159,13 @@ scenes.enter = async () => {
     const dragon = dragonEntity();
     if (dragon && dragonAt === null) dragonAt = Date.now() - t0;
     const view = endView();
-    if (view?.crystals?.left >= 1 && crystalsAt === null) crystalsAt = Date.now() - t0;
+    if ((view?.crystals?.list?.length ?? 0) >= 1 && crystalsAt === null) crystalsAt = Date.now() - t0;
     if (dragonAt !== null && view?.fountain && (crystalsAt !== null || Date.now() - t0 > dragonAt + 8000)) break;
     await sleep(500);
   }
   const view = endView();
   g = view?.fountain ? Math.round(view.fountain.y) - 4 : 0; fountainY = view?.fountain?.y ?? 0;
-  Object.assign(out, { dimension: String(actor.game?.dimension), dragonSeenAfterMs: dragonAt, crystalsSeenAfterMs: crystalsAt, observation: view ? { dragon: view.dragon, fountain: view.fountain, crystals: { left: view.crystals.left, caged: view.crystals.caged }, clouds: view.clouds.length, fireballs: view.fireballs } : null,
+  Object.assign(out, { dimension: String(actor.game?.dimension), dragonSeenAfterMs: dragonAt, crystalsSeenAfterMs: crystalsAt, observation: view ? { dragon: view.dragon, fountain: view.fountain, crystals: { remaining: view.crystals.remaining, gone: view.crystals.gone, caged: view.crystals.caged, loaded: view.crystals.list.length, unseen: view.crystals.unseen.length }, clouds: view.clouds.length, fireballs: view.fireballs } : null,
     dragonHealthServer: await dragonHealthServer(), cagedList: (view?.crystals?.list ?? []).filter((c: any) => c.caged).map((c: any) => [c.id, c.x, c.y, c.z]) });
   return out;
 };
