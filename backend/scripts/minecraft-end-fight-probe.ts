@@ -21,7 +21,7 @@ import { entityHealth } from '../src/services/minebot/utils/mapMarks.js';
 import { partBox, partTarget, boxDistance, type DragonPart } from '../src/services/minebot/utils/dragonParts.js';
 import { breathCloudsOf, dragonPhaseOf, endDragonOf, endObservation } from '../src/services/minebot/utils/dragonState.js';
 import { dragonHazards } from '../src/services/minebot/utils/dragonDanger.js';
-import { hasActiveSafetyLease, preemptLowerPriorityActions, safetyLeaseCapabilities } from '../src/services/minebot/execution/ActionExecution.js';
+import { activeActionCapabilities, hasActiveSafetyLease, preemptLowerPriorityActions, safetyLeaseCapabilities } from '../src/services/minebot/execution/ActionExecution.js';
 import { blastAt } from '../src/services/minebot/utils/crystalBlast.js';
 
 const port = Number(process.env.MINECRAFT_END_PORT);
@@ -188,6 +188,8 @@ const gear = async (items: string[]) => {
   await sleep(500);
 };
 const ARMOR = ['diamond_helmet', 'diamond_chestplate', 'diamond_leggings', 'diamond_boots'];
+const IRON_ARMOR = ['iron_helmet', 'iron_chestplate', 'iron_leggings', 'iron_boots'];
+const wearIron = async () => { for (const [slot, item] of [['head', IRON_ARMOR[0]], ['chest', IRON_ARMOR[1]], ['legs', IRON_ARMOR[2]], ['feet', IRON_ARMOR[3]]]) await ask(`item replace entity ${ACTOR} armor.${slot} with ${item}`); await sleep(300); };
 const wear = async () => { for (const [slot, item] of [['head', ARMOR[0]], ['chest', ARMOR[1]], ['legs', ARMOR[2]], ['feet', ARMOR[3]]]) await ask(`item replace entity ${ACTOR} armor.${slot} with ${item}`); await sleep(300); };
 /** Resistance V for the scenes that do not measure what the body takes (the dragon is awake and kills a body that stands about); off for those that do. */
 const protect = async (on: boolean) => { await ask(on ? `effect give ${ACTOR} minecraft:resistance 900 4 true` : `effect clear ${ACTOR}`); };
@@ -930,17 +932,20 @@ scenes.platform = () => platformRun(null);
 scenes.platform_edge = () => platformRun('front edge');
 
 /** The way off the arrival platform, as the `cross` scene; with `ballAfterMs` a dragon fireball is dropped on the body that long after the first `go` began (`cross_ball`). */
-async function crossRun(ballAfterMs: number | null): Promise<Record<string, unknown>> {
+async function crossRun(ballAfterMs: number | null, natural = false, freshDragon = true, onPerch = false, thinkMs = 0): Promise<Record<string, unknown>> {
   // The way off the arrival platform: the island lies some tens of blocks off over the void, and the body stands on 5 x 5 of obsidian. A planner's `go` with blocks to lay over the gap and a place on the island for its end,
   // as many times as it takes (the hand may take 120 s). The dragon is kept over the island, high up (nothing here is a fight); what is measured is whether the body gets over, how long it takes and what it costs in blocks.
   await protect(false);
   releaseReflex();
-  await park(true);
+  // natural: the dragon as it is at the start of a fight (flying its pattern, full health), left to do what it does; the body wears iron and carries one stack and a water bucket (what the run will have)
+  // (a dragon put back at the start of every crossing is at the start of its pattern: its first strafe comes some 25 s in, and a crossing is over in 15 to 20, so r19's eight crossings met no ball at all; after the first, the dragon is left to its own cycle)
+  if (natural) { if (freshDragon) await restoreDragon(); } else await park(true);
   await ask(`${END} forceload add 64 -16 111 16`);
   try {
     await ask(`${END} kill @e[type=minecraft:area_effect_cloud]`); await ask(`${END} kill @e[type=minecraft:dragon_fireball]`);
     await ask(`${END} fill 98 48 -2 102 48 2 obsidian`); await ask(`${END} fill 98 49 -2 102 53 2 air`);
-    await gear(['diamond_sword', 'cobblestone 64', 'cobblestone 64', 'cobblestone 64']); await wear();
+    if (natural) { await ask(`${END} fill 60 40 -8 99 70 8 air replace minecraft:cobblestone`); /* every block an earlier crossing laid (r22: after the first, the crossings laid 6 blocks, not 14: part of the first one's way was still there) */ await gear(['stone_sword', 'cobblestone 64', 'water_bucket']); await wearIron(); }
+    else { await gear(['diamond_sword', 'cobblestone 64', 'cobblestone 64', 'cobblestone 64']); await wear(); }
     await ask(`effect give ${ACTOR} minecraft:instant_health 1 5`);
     for (let attempt = 0; attempt < 6; attempt++) {
       await ask(`${END} tp ${ACTOR} 100.5 49 0.5`); await sleep(1200);
@@ -967,9 +972,39 @@ async function crossRun(ballAfterMs: number | null): Promise<Record<string, unkn
     let ballAt: number[] | null = null;
     const startedAt = Date.now();
     const sample = every(2000, () => { const p = actor.entity?.position; if (p) trail.push([Math.round((Date.now() - startedAt) / 1000), round(p.x, 1)!, round(p.y, 1)!, Number(actor.health)]); });
+    // what the dragon did meanwhile: its phases (when it changed), the fireballs seen, how near it came, the hits the body took (when, how much, with what near)
+    const phases: Array<[number, number | null]> = [], balls = new Set<number>(), hits: Array<Record<string, unknown>> = [], timeline: Array<Array<number | string | boolean | null>> = [];
+    let lastPhase: number | null | undefined, nearestDragon = Infinity, lastHealth = Number(actor.health);
+    const watch = every(100, () => {
+      const at = round((Date.now() - startedAt) / 1000, 1)!, position = actor.entity?.position;
+      if (!position) return;
+      const dragon = dragonEntity(), phase = dragon ? dragonPhaseOf(actor, dragon) : null;
+      if (phase !== lastPhase) { phases.push([at, phase]); lastPhase = phase; }
+      if (dragon?.position) nearestDragon = Math.min(nearestDragon, position.distanceTo(dragon.position));
+      const entities = Object.values(actor.entities) as any[];
+      for (const entity of entities) if (entity?.name === 'dragon_fireball') balls.add(entity.id);
+      const health = Number(actor.health);
+      if (health < lastHealth - 0.01) {
+        const clouds = entities.filter(e => e?.name === 'area_effect_cloud' && e.position && position.distanceTo(e.position) < 14);
+        const inCloud = clouds.some(cloud => Math.hypot(cloud.position.x - position.x, cloud.position.z - position.z) < (Number(cloud.metadata?.[8]) || 3) + 0.3 && Math.abs(cloud.position.y - position.y) < 1.5);
+        hits.push({ at, lost: round(lastHealth - health, 1), phase, dragonM: dragon?.position ? round(position.distanceTo(dragon.position), 1) : null, inCloud, x: round(position.x, 1), y: round(position.y, 1) });
+      }
+      lastHealth = health;
+      if (natural && timeline.length < 450) {
+        const v = actor.entity.velocity, keys = Object.entries(actor.controlState ?? {}).filter(([, on]) => on).map(([key]) => key).join('+');
+        const near = entities.filter(e => e?.name === 'area_effect_cloud' && e.position && position.distanceTo(e.position) < 12).sort((a, b) => position.distanceTo(a.position) - position.distanceTo(b.position));
+        const nearest = near[0], ball = entities.find(e => e?.name === 'dragon_fireball' && e.position);
+        timeline.push([at, round(position.x, 2)!, round(position.y, 2)!, round(position.z, 2)!, round(v.y, 2)!, actor.entity.onGround === true, round(health, 1)!, activeActionCapabilities(actor).join('+'), keys, near.length,
+          nearest ? `${round(nearest.position.x - position.x, 1)},${round(nearest.position.y - position.y, 1)},${round(nearest.position.z - position.z, 1)} r${round(Number(nearest.metadata?.[8]), 1)}` : '', ball ? `${round(ball.position.x - position.x, 1)},${round(ball.position.y - position.y, 1)},${round(ball.position.z - position.z, 1)}` : '']);
+      }
+    });
     const calls: Array<{ lines: string[]; ok: boolean; ms: number }> = [];
     let reached = false;
+    // onPerch: the dragon is sent to land (phase 2) as the crossing begins: from then until it flies again (landing approach, landing, the perch: some 45 s) it does not strafe
+    if (onPerch) await ask(`${END} data modify entity ${DRAGON} DragonPhase set value 2`);
     for (let call = 0; call < 4 && !reached && actorDeaths === deathsBefore; call++) {
+      // thinkMs: the head's turn (it reads the observation and answers; the probe, which answers at once, is harsher than the head: r25 re-issued the `go` 0.3 s after a reflex had stopped it, and walked back into the cloud)
+      if (thinkMs > 0) await sleep(thinkMs);
       const going = act([{ do: 'go', to: target, canPlace: ['cobblestone'], maxPlace: 100, seconds: 120 }], 135);
       if (call === 0 && ballAfterMs !== null) {
         await sleep(ballAfterMs);
@@ -983,13 +1018,14 @@ async function crossRun(ballAfterMs: number | null): Promise<Record<string, unkn
       const p = actor.entity.position;
       reached = Math.hypot(p.x - (targetX + 0.5), p.z - 0.5) <= 2 && Math.abs(p.y - (targetTop + 1)) <= 2;
     }
-    clearInterval(sample);
+    clearInterval(sample); clearInterval(watch);
     const at = actor.entity.position;
     const entries = (actor.reflexLedger?.entriesSince?.(ledgerMark) as Array<{ kind: string; outcome: string; detail: string }> | undefined) ?? [];
     return {
       ballAt, ledger: entries.slice(0, 14).map(e => `${e.kind}:${e.outcome}:${e.detail.slice(0, 160)}`),
       rimX, profile, target, reached, died: actorDeaths > deathsBefore, finalAt: [round(at.x, 1), round(at.y, 1), round(at.z, 1)], healthNow: Number(actor.health), lowestHealth: lowest.stop(),
       blocksBefore: before, blocksAfter: blocksLeft(), seconds: Math.round((Date.now() - startedAt) / 1000), calls, trail,
+      ...(natural ? { natural: true, dragon: { phases: phases.slice(0, 30), strafes: phases.filter(entry => entry[1] === 1).length, charge: phases.some(entry => entry[1] === 8), nearestM: Number.isFinite(nearestDragon) ? round(nearestDragon, 1) : null, fireballsSeen: balls.size }, hits: hits.slice(0, 20), ...(hits.length ? { timelineHeader: ['t', 'x', 'y', 'z', 'vy', 'onGround', 'hp', 'actions', 'keys', 'cloudsNear', 'nearestCloud dx,dy,dz r', 'ball dx,dy,dz'], timeline } : {}) } : {}),
     };
   } finally {
     await ask(`${END} forceload remove 64 -16 111 16`);
@@ -997,6 +1033,29 @@ async function crossRun(ballAfterMs: number | null): Promise<Record<string, unkn
 }
 scenes.cross = () => crossRun(null);
 scenes.cross_ball = () => crossRun(9000);
+scenes.cross_think = async () => {
+  // The crossing with the head's own pace: a turn of 6 s before the first `go` (the first answer after the arrival) and after every stop (the reflex stops it, the head reads the result and answers). Sixteen crossings, the dragon on its own cycle.
+  const trials: Array<Record<string, unknown>> = [];
+  for (let n = 0; n < 16; n++) { const trial = await crossRun(null, true, n === 0, false, 6000); log(`CROSS_THINK #${n + 1}: ${JSON.stringify({ ...trial, timeline: undefined, profile: undefined }).slice(0, 1500)}`); trials.push(trial); }
+  const lows = trials.map(trial => Number(trial.lowestHealth ?? NaN));
+  return { trials, summary: { n: trials.length, reached: trials.filter(trial => trial.reached === true).length, died: trials.filter(trial => trial.died === true).length, hurt: lows.filter(low => low < 19.9).length, lowest: Math.min(...lows), healthLostTotal: round(trials.reduce((sum, trial) => sum + (20 - Number(trial.lowestHealth ?? 20)), 0), 1) } };
+};
+scenes.cross_perch = async () => {
+  // The same crossing, begun as the dragon is sent to land (the protocol for the head: cross while the dragon is landing or perched, when it does not strafe). Eight crossings.
+  const trials: Array<Record<string, unknown>> = [];
+  for (let n = 0; n < 8; n++) { const trial = await crossRun(null, true, true, true); log(`CROSS_PERCH #${n + 1}: ${JSON.stringify({ ...trial, timeline: undefined, profile: undefined }).slice(0, 1500)}`); trials.push(trial); }
+  const lows = trials.map(trial => Number(trial.lowestHealth ?? NaN));
+  return { trials, summary: { n: trials.length, reached: trials.filter(trial => trial.reached === true).length, died: trials.filter(trial => trial.died === true).length, hurt: lows.filter(low => low < 19.9).length, lowest: Math.min(...lows) } };
+};
+scenes.cross_natural = async () => {
+  // The way off the arrival platform to the island with the dragon NOT kept away (round 7 of the sprint's questions: the crossing was only measured with the dragon parked high, and with a ball summoned on the body):
+  // the same `go` with blocks to lay, the dragon flying its own pattern and strafing the body (it did, every 26 s, on the platform: PLATFORM_SOAK). Sixteen crossings, the bridge of the one before taken away and the dragon left to its own cycle after the first; what each cost in health and blocks,
+  // whether it got over, fell, was hit. (r18, three crossings with the first one's bridge left standing: the first lost 15.3 of 20 at the front of its bridge and fell off it, the water bucket saved it; the other two walked the old bridge.)
+  const trials: Array<Record<string, unknown>> = [];
+  for (let n = 0; n < 16; n++) { const trial = await crossRun(null, true, n === 0); log(`CROSS_NATURAL #${n + 1}: ${JSON.stringify({ ...trial, timeline: undefined, profile: undefined }).slice(0, 1500)}`); trials.push(trial); }
+  const lows = trials.map(trial => Number(trial.lowestHealth ?? NaN));
+  return { trials, summary: { n: trials.length, reached: trials.filter(trial => trial.reached === true).length, died: trials.filter(trial => trial.died === true).length, hurt: lows.filter(low => low < 19.9).length, lowest: Math.min(...lows), healthLostTotal: round(trials.reduce((sum, trial) => sum + (20 - Number(trial.lowestHealth ?? 20)), 0), 1) } };
+};
 
 scenes.landing = async () => {
   // Where a body can wait while the dragon comes down to the perch. The dragon is put in the landing approach (phase 2) and flies down to the podium on its own (phase 3, about ten seconds, then it sits: 6, 7, 5);
@@ -1083,6 +1142,161 @@ scenes.soak = async () => {
     trials.push(result);
   }
   return { trials };
+};
+
+scenes.platform_soak = async () => {
+  // The task-less body on the End's arrival platform (the obsidian 5 x 5 at (100, 48, 0) in the void), for minutes, with the dragon awake at full health, flying its own pattern, the ten crystals up. What the
+  // coordinator asked for (2026-11-02 23:50, run59's gate): the body carries blocks, the floor reflex is on, NOTHING is summoned (no fireball, no cloud: only what the dragon does by itself), iron armour (what
+  // the run will wear: no diamond), no effect. It stands; nothing else acts. Measured: the health lost and when (with what was near: a cloud on the body, a fireball, the dragon), whether it fell, what the
+  // reflex did (the rises, the blocks used), the dragon's phases and how near it came, and whether the charge (phase 8) showed.
+  await protect(false);
+  releaseReflex();
+  // The platform's chunks stay loaded whoever stands where (a cloud left in an unloaded chunk is not found by `kill`).
+  await ask(`${END} forceload add 64 -16 111 16`);
+  const SECONDS = 180;
+  const cases: Array<[string, string[]]> = [
+    ['64 cobblestone and a water bucket', ['stone_sword', 'cobblestone 64', 'water_bucket']],
+    ['12 cobblestone and a water bucket', ['stone_sword', 'cobblestone 12', 'water_bucket']],
+    ['3 cobblestone and a water bucket', ['stone_sword', 'cobblestone 3', 'water_bucket']],
+  ];
+  const count = (name: string) => (actor.inventory.items() as Array<{ name: string; count: number }>).filter(item => item.name === name).reduce((sum, item) => sum + item.count, 0);
+  const trials: Array<Record<string, unknown>> = [];
+  try {
+    for (const [label, items] of cases) {
+      // what an earlier trial left (a cloud or a ball the dragon made), the platform as the game makes it, the dragon as it is at the start (flying its pattern, full health)
+      await ask(`${END} kill @e[type=minecraft:area_effect_cloud]`); await ask(`${END} kill @e[type=minecraft:dragon_fireball]`);
+      await ask(`${END} fill 98 48 -2 102 48 2 obsidian`); await ask(`${END} fill 98 49 -2 102 53 2 air`);
+      await restoreDragon();
+      await gear(items); await wearIron();
+      await ask(`effect give ${ACTOR} minecraft:instant_health 1 5`);
+      for (let attempt = 0; attempt < 6; attempt++) {
+        await ask(`${END} tp ${ACTOR} 100.5 49 0.5`); await sleep(1200);
+        if (actor.entity.onGround && Math.abs(actor.entity.position.y - 49) < 0.2 && Math.hypot(actor.entity.position.x - 100.5, actor.entity.position.z - 0.5) < 0.6 && Number(actor.health) >= 19.9) break;
+      }
+      await ask(`${END} kill @e[type=minecraft:area_effect_cloud]`); await ask(`${END} kill @e[type=minecraft:dragon_fireball]`); await sleep(300);
+      const healthBefore = Number(actor.health), deathsBefore = actorDeaths, lowest = trackMinHealth(), ledgerMark = (actor.reflexLedger?.mark?.() as number | undefined) ?? 0;
+      const blocksBefore = count('cobblestone'), p0 = actor.entity.position.clone();
+      const phases: Array<[number, number | null]> = [], hits: Array<Record<string, unknown>> = [], balls = new Set<number>();
+      let lastPhase: number | null | undefined, lastHealth = healthBefore, nearest = Infinity, nearestInCharge = Infinity, minY = p0.y, maxY = p0.y, maxBalls = 0, maxClouds = 0, diedAfterS: number | null = null;
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < SECONDS * 1000) {
+        const now = Date.now(), at = round((now - startedAt) / 1000, 1)!, position = actor.entity.position, health = Number(actor.health);
+        if (actorDeaths > deathsBefore) { diedAfterS = at; break; }
+        const dragon = dragonEntity(), phase = dragon ? dragonPhaseOf(actor, dragon) : null;
+        if (phase !== lastPhase) { phases.push([at, phase]); lastPhase = phase; }
+        const dragonDistance = dragon?.position ? position.distanceTo(dragon.position) : null;
+        if (dragonDistance !== null) { nearest = Math.min(nearest, dragonDistance); if (phase === 8) nearestInCharge = Math.min(nearestInCharge, dragonDistance); }
+        const entities = Object.values(actor.entities) as any[];
+        const fireballs = entities.filter(e => e?.name === 'dragon_fireball' && e.position);
+        for (const ball of fireballs) balls.add(ball.id);
+        const clouds = entities.filter(e => e?.name === 'area_effect_cloud' && e.position && position.distanceTo(e.position) < 14);
+        maxBalls = Math.max(maxBalls, fireballs.length); maxClouds = Math.max(maxClouds, clouds.length);
+        minY = Math.min(minY, position.y); maxY = Math.max(maxY, position.y);
+        if (health < lastHealth - 0.01) {
+          const inCloud = clouds.some(cloud => Math.hypot(cloud.position.x - position.x, cloud.position.z - position.z) < (Number(cloud.metadata?.[8]) || 3) + 0.3 && Math.abs(cloud.position.y - position.y) < 1.5);
+          const ballM = fireballs.length ? Math.min(...fireballs.map(ball => position.distanceTo(ball.position))) : null;
+          hits.push({ at, lost: round(lastHealth - health, 1), phase, dragonM: dragonDistance === null ? null : round(dragonDistance, 1), inCloud, ballM: ballM === null ? null : round(ballM, 1), y: round(position.y, 1) });
+        }
+        lastHealth = health;
+        await sleep(100);
+      }
+      const entries = (actor.reflexLedger?.entriesSince?.(ledgerMark) as Array<{ kind: string; outcome: string; detail: string }> | undefined) ?? [];
+      const kinds: Record<string, number> = {};
+      for (const entry of entries) kinds[`${entry.kind}:${entry.outcome}`] = (kinds[`${entry.kind}:${entry.outcome}`] ?? 0) + 1;
+      const died = actorDeaths > deathsBefore;
+      const result = {
+        label, items, seconds: round((Date.now() - startedAt) / 1000, 1), healthLost: round(healthBefore - Number(actor.health), 1), lowest: lowest.stop(), died, diedAfterS,
+        fell: minY < 47, feetY: [round(minY, 1), round(maxY, 1)], movedBlocks: round(actor.entity.position.distanceTo(p0), 1), blocksUsed: blocksBefore - (died ? 0 : count('cobblestone')),
+        strafes: phases.filter(entry => entry[1] === 1).length, charge: phases.some(entry => entry[1] === 8), nearestInChargeM: Number.isFinite(nearestInCharge) ? round(nearestInCharge, 1) : null,
+        nearestDragonM: Number.isFinite(nearest) ? round(nearest, 1) : null, fireballsSeen: balls.size, maxFireballsAtOnce: maxBalls, maxCloudsNear: maxClouds,
+        phases: phases.slice(0, 40), hits: hits.slice(0, 30), reflex: kinds, ledger: entries.slice(0, 14).map(e => `${e.kind}:${e.outcome}:${e.detail.slice(0, 120)}`),
+      };
+      log(`PLATFORM_SOAK ${label}: ${JSON.stringify(result)}`);
+      trials.push(result);
+    }
+  } finally {
+    await ask(`${END} kill @e[type=minecraft:area_effect_cloud]`); await ask(`${END} kill @e[type=minecraft:dragon_fireball]`);
+    await ask(`${END} forceload remove 64 -16 111 16`);
+  }
+  return { trials };
+};
+
+scenes.charge_nbt = async () => {
+  // Can the charge (phase 8) be asked for from outside, and what does a body take when it comes? Asked by the coordinator ("if possible, take one charge"): the natural dragon did not charge in 540 s on the platform
+  // (PLATFORM_SOAK) nor in the island soaks, and the game's own code is not at hand (the lab's jar is obfuscated), so this asks the game: the dragon put 36 m from the body, level and facing it, and `DragonPhase` set to 8 by
+  // NBT. Read every 100 ms for 12 s: the phase (does it stay 8, or fall back at once), where the dragon goes, how near it comes, the health the body loses and how it is moved. Three tries, the body on the island floor
+  // (a push off the platform is the other question: the void), iron armour, the reflex on, nothing else acting.
+  await protect(false);
+  releaseReflex();
+  await flatten(); await gear(['stone_sword', 'cobblestone 64']); await wearIron();
+  const trials: Array<Record<string, unknown>> = [];
+  for (let n = 0; n < 3; n++) {
+    await restoreDragon(); await sleep(1500);
+    await ask(`effect give ${ACTOR} minecraft:instant_health 1 5`);
+    await standAt(0.5, g, 14.5); await sleep(800);
+    const healthBefore = Number(actor.health), deathsBefore = actorDeaths, ledgerMark = (actor.reflexLedger?.mark?.() as number | undefined) ?? 0, lowest = trackMinHealth();
+    await ask(`${END} tp ${DRAGON} 0.5 ${g + 6} 50.5 180 0`);
+    await ask(`${END} data modify entity ${DRAGON} DragonPhase set value 8`);
+    const startedAt = Date.now(), p0 = actor.entity.position.clone();
+    const phases: Array<[number, number | null]> = [], track: Array<[number, number, number, number, number | null]> = [], hits: Array<Record<string, unknown>> = [];
+    let lastPhase: number | null | undefined, nearest = Infinity, maxSpeed = 0, lastHealth = healthBefore;
+    while (Date.now() - startedAt < 12_000 && actorDeaths === deathsBefore) {
+      const at = round((Date.now() - startedAt) / 1000, 1)!, dragon = dragonEntity(), phase = dragon ? dragonPhaseOf(actor, dragon) : null, position = actor.entity.position, health = Number(actor.health);
+      if (phase !== lastPhase) { phases.push([at, phase]); lastPhase = phase; }
+      const distance = dragon?.position ? position.distanceTo(dragon.position) : null;
+      if (distance !== null) nearest = Math.min(nearest, distance);
+      if (track.length < 130 && Math.round(at * 10) % 5 === 0) track.push([at, round(dragon?.position?.x ?? NaN, 1)!, round(dragon?.position?.y ?? NaN, 1)!, round(dragon?.position?.z ?? NaN, 1)!, distance === null ? null : round(distance, 1)]);
+      if (health < lastHealth - 0.01) hits.push({ at, lost: round(lastHealth - health, 1), phase, dragonM: distance === null ? null : round(distance, 1) });
+      lastHealth = health;
+      const v = actor.entity.velocity; maxSpeed = Math.max(maxSpeed, Math.hypot(v.x, v.y, v.z));
+      await sleep(100);
+    }
+    const entries = (actor.reflexLedger?.entriesSince?.(ledgerMark) as Array<{ kind: string; outcome: string; detail: string }> | undefined) ?? [];
+    const result = {
+      try: n + 1, healthLost: round(healthBefore - Number(actor.health), 1), lowest: lowest.stop(), died: actorDeaths > deathsBefore, hits, phases, charge: phases.some(entry => entry[1] === 8), stayedInChargeS: (() => { const first = phases.find(entry => entry[1] === 8); if (!first) return 0; const next = phases.find(entry => entry[0] > first[0] && entry[1] !== 8); return round((next ? next[0] : 12) - first[0], 1); })(),
+      nearestDragonM: Number.isFinite(nearest) ? round(nearest, 1) : null, maxSpeed: round(maxSpeed, 2), movedBlocks: round(actor.entity.position.distanceTo(p0), 1), track: track.slice(0, 40), ledger: entries.slice(0, 8).map(e => `${e.kind}:${e.outcome}:${e.detail.slice(0, 110)}`),
+    };
+    log(`CHARGE_NBT #${n + 1}: ${JSON.stringify(result)}`);
+    trials.push(result);
+  }
+  await restoreDragon();
+  return { trials };
+};
+
+scenes.crystals_bow = async () => {
+  // Every crystal that is not caged, shot one after the other from one place on the island's flat ground (15 m from the podium, where every pillar is 30 to 55 m off), the dragon awake and flying its own pattern, the
+  // reflex on, iron armour: how long each takes (the body's side only: the draw, the flight, the answer; the head's own thinking between two acts is not here), whether the arrow's way was free, what the body lost.
+  // Asked for the survival-first review (2026-11-03): the crystals take a part of the 15 to 20 minutes of the fight, and the body stands in the open while it shoots.
+  await protect(false);
+  releaseReflex();
+  await flatten(); await gear(['stone_sword', 'bow', 'arrow 64', 'cobblestone 64']); await wearIron();
+  await restoreDragon(); await sleep(1500);
+  await ask(`effect give ${ACTOR} minecraft:instant_health 1 5`);
+  await standAt(0.5, g, 15.5); await sleep(2500);
+  const here = () => actor.entity.position;
+  const view0 = endView();
+  const crystals0 = loadedCrystals(view0).map(c => ({ ...c, distance: round(Math.hypot(here().x - c.x, here().y - c.y, here().z - c.z), 1)! }));
+  log(`CRYSTALS_BOW in sight: ${JSON.stringify(crystals0)} remaining ${view0?.crystals?.remaining}`);
+  const healthBefore = Number(actor.health), deathsBefore = actorDeaths, lowest = trackMinHealth(), ledgerMark = (actor.reflexLedger?.mark?.() as number | undefined) ?? 0;
+  const startedAt = Date.now();
+  const shots: Array<Record<string, unknown>> = [];
+  const open = crystals0.filter(c => c.caged === false).sort((a, b) => a.distance - b.distance);
+  for (const crystal of open) {
+    if (actorDeaths > deathsBefore) break;
+    const t0 = Date.now(), remainingBefore = endView()?.crystals?.remaining ?? null;
+    const run = await act([{ do: 'shoot', target: `#${crystal.id}` }], 25);
+    shots.push({ id: crystal.id, distance: crystal.distance, ms: Date.now() - t0, ok: run.ok, line: (run.lines[0] ?? '').slice(0, 220), remainingBefore, remainingAfter: endView()?.crystals?.remaining ?? null, health: round(Number(actor.health), 1), at: [round(here().x, 1), round(here().z, 1)] });
+  }
+  const view1 = endView();
+  const entries = (actor.reflexLedger?.entriesSince?.(ledgerMark) as Array<{ kind: string; outcome: string; detail: string }> | undefined) ?? [];
+  const result = {
+    seconds: round((Date.now() - startedAt) / 1000, 1), crystalsSeen: crystals0.length, caged: crystals0.filter(c => c.caged === true).length, unknownCage: crystals0.filter(c => c.caged === null).length,
+    shotsTried: shots.length, broken: shots.filter(shot => shot.remainingAfter !== null && shot.remainingBefore !== null && (shot.remainingAfter as number) < (shot.remainingBefore as number)).length,
+    remainingNow: view1?.crystals?.remaining ?? null, healthLost: round(healthBefore - Number(actor.health), 1), lowest: lowest.stop(), died: actorDeaths > deathsBefore, shots,
+    ledger: entries.slice(0, 12).map(e => `${e.kind}:${e.outcome}:${e.detail.slice(0, 110)}`),
+  };
+  log(`CRYSTALS_BOW result: ${JSON.stringify(result).slice(0, 3000)}`);
+  return result;
 };
 
 scenes.tower = async () => {

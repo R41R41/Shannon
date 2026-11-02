@@ -13,7 +13,7 @@ import { breathCloudsOf, dragonPhaseOf, endDragonOf, fireballPath, fireballsOf, 
  * parts of a dragon in flight are not aimed at, so the boxes are only drawn for the perched one.
  */
 export type HazardKind = 'breath' | 'flame' | 'fireball' | 'head' | 'neck' | 'wing';
-export interface Hazard { kind: HazardKind; centre: P3; /** The radius of a round zone (0 for a box). */ radius: number; box?: Box; why: string; /** A cloud a fireball gone from sight has just laid, not yet among the client's entities (it is laid in the tick the ball goes, its harm comes 20 ticks after): a rise now clears it, a rise before the ball came does not. */ pending?: true }
+export interface Hazard { kind: HazardKind; centre: P3; /** The place the same push would come from on the other side of the body (a sidestep that may be taken either way: a fireball that lands on the body). */ alternative?: P3; /** The radius of a round zone (0 for a box). */ radius: number; box?: Box; why: string; /** A cloud a fireball gone from sight has just laid, not yet among the client's entities (it is laid in the tick the ball goes, its harm comes 20 ticks after): a rise now clears it, a rise before the ball came does not. */ pending?: true }
 
 export { BREATH_RADIUS_MIN };
 /** A fireball's line is dangerous within this far (the cloud it lays and the blast round it). */
@@ -68,16 +68,22 @@ function nearestOnPath(points: P3[], p: P3): { distance: number; at: P3 } | null
  * The point a flee is pushed from for a fireball. Where the ball lands well off the body, that is the landing (lab 2026-11-02: a body that ran from "the nearest point
  * of the line", which lay over it, went toward the landing and had the cloud put on it). Where it lands on the body, a place across the line, 7 blocks off on the other
  * side, so that the push is a sidestep and not a run along the line toward the ball. A ball that lands nowhere in the 40 ticks is run from at its nearest point.
+ * The side of a sidestep is a coin: where the body stands on a bridge one wide, only one of the two sides leads along the bridge, and the other is a push into the void
+ * (lab r18, 2026-11-03: a body at the front end of a bridge was told there was no safe way for half the balls, was hit by three clouds, fell off, and the water bucket saved it).
+ * So the other side is kept as `alternative`, and the flee takes it when the first side leaves no way.
  */
-function fireballPush(line: P3[], impact: P3 | null, nearest: P3, feet: P3): P3 {
-  if (!impact) return nearest;
-  if (Math.hypot(impact.x - feet.x, impact.z - feet.z) > FIREBALL_CAPTURE) return impact;
+function fireballPush(line: P3[], impact: P3 | null, nearest: P3, feet: P3): { centre: P3; alternative?: P3 } {
+  if (!impact) return { centre: nearest };
+  if (Math.hypot(impact.x - feet.x, impact.z - feet.z) > FIREBALL_CAPTURE) return { centre: impact };
   const first = line[0], last = line[line.length - 1];
   const dx = last.x - first.x, dz = last.z - first.z, length = Math.hypot(dx, dz);
-  if (length < 0.5) return impact; // falling straight down: from where it lands
+  if (length < 0.5) return { centre: impact }; // falling straight down: from where it lands
   const nx = -dz / length, nz = dx / length;
   const side = (feet.x - nearest.x) * nx + (feet.z - nearest.z) * nz >= 0 ? 1 : -1;
-  return { x: feet.x - side * nx * FIREBALL_REACH, y: feet.y, z: feet.z - side * nz * FIREBALL_REACH };
+  return {
+    centre: { x: feet.x - side * nx * FIREBALL_REACH, y: feet.y, z: feet.z - side * nz * FIREBALL_REACH },
+    alternative: { x: feet.x + side * nx * FIREBALL_REACH, y: feet.y, z: feet.z + side * nz * FIREBALL_REACH },
+  };
 }
 
 /** Where each fireball in sight was going to land, as of the last look, and the landings of those that have gone from sight since (kept for LANDING_HOLD_MS). */
@@ -147,7 +153,8 @@ export function dragonHazards(bot: any, options: { clearance?: number; now?: num
     const line = [{ x: ball.position.x, y: ball.position.y, z: ball.position.z }, ...path.points, ...(path.impact ? [path.impact] : [])];
     const near = nearestOnPath(line, chest);
     if (near && near.distance <= FIREBALL_REACH + clearance) {
-      out.push({ kind: 'fireball', centre: fireballPush(line, path.impact, near.at, feet), radius: FIREBALL_REACH, why: `竜の火の玉 #${ball.id} の線から${near.distance.toFixed(1)}m（${path.impact ? `着弾 (${path.impact.x.toFixed(0)},${path.impact.y.toFixed(0)},${path.impact.z.toFixed(0)})` : '40tick先まで当たらず'}）` });
+      const push = fireballPush(line, path.impact, near.at, feet);
+      out.push({ kind: 'fireball', centre: push.centre, ...(push.alternative ? { alternative: push.alternative } : {}), radius: FIREBALL_REACH, why: `竜の火の玉 #${ball.id} の線から${near.distance.toFixed(1)}m（${path.impact ? `着弾 (${path.impact.x.toFixed(0)},${path.impact.y.toFixed(0)},${path.impact.z.toFixed(0)})` : '40tick先まで当たらず'}）` });
     }
   }
   for (const landing of landedFireballs(bot, flying, now)) {
@@ -160,8 +167,8 @@ export function dragonHazards(bot: any, options: { clearance?: number; now?: num
   return out;
 }
 
-/** The places the hazards push the body from, for the flee's heading. */
-export const hazardCentres = (hazards: Hazard[]): Vec3[] => hazards.map(hazard => new Vec3(hazard.centre.x, hazard.centre.y, hazard.centre.z));
+/** The places the hazards push the body from, for the flee's heading; `mirrored`: a sidestep taken on the other side (`Hazard.alternative`) wherever there is one. */
+export const hazardCentres = (hazards: Hazard[], mirrored = false): Vec3[] => hazards.map(hazard => { const at = mirrored ? hazard.alternative ?? hazard.centre : hazard.centre; return new Vec3(at.x, at.y, at.z); });
 
 /**
  * The dragon's breath lying in the world as a route search wants it (the End only): where each cloud is and how far it reaches (7 at least: it grows from 3, and the

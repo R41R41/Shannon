@@ -433,7 +433,7 @@ describe('the observation the body gives the head', () => {
   });
 });
 
-import { FALL_CLUTCH_ENABLED, installFloorReflexes } from '../../src/services/minebot/utils/floorReflexes.js';
+import { dragonFleePlan, FALL_CLUTCH_ENABLED, installFloorReflexes } from '../../src/services/minebot/utils/floorReflexes.js';
 import { floorConfig } from '../../src/services/minebot/utils/floorConfig.js';
 
 describe('the floor reflex out of the dragon\'s reach', () => {
@@ -565,6 +565,57 @@ describe('the floor reflex out of the dragon\'s reach', () => {
     f.bot.game.dimension = 'minecraft:the_end'; f.self.position = new Vec3(0.5, 64, 40.5);
     f.bot.emit('physicsTick'); await new Promise(resolve => setTimeout(resolve, 100));
     expect(keys).toEqual([]);
+  });
+});
+
+describe('a fireball that lands on a body at the front end of a bridge one wide (lab r18, 2026-11-03: half the balls left "no safe way", the body took three clouds and fell off)', () => {
+  /** A bridge one wide along x at z 12 (y 63), its front end at x 0 and nothing beyond it, the platform at its other end; the body at the front end, the dragon in flight. */
+  function atFrontEnd(at = 0.5) {
+    const world: World = new Map();
+    for (let x = 0; x <= 14; x++) world.set(key(x, 63, 12), 'cobblestone');
+    for (let x = 15; x <= 19; x++) for (let z = 10; z <= 14; z++) world.set(key(x, 63, z), 'obsidian');
+    const f = fixture({ phase: DRAGON_PHASE.holdingPattern, at: new Vec3(at, 64, 12.5), world });
+    f.dragon.position = new Vec3(0.5, 90, -40.5);
+    return f;
+  }
+  /** A ball that comes down on the body, travelling along z (toward +z or -z): the side of its sidestep is decided by the way it travels. */
+  const ballOnBody = (f: ReturnType<typeof fixture>, direction: 1 | -1) => {
+    f.bot.toldVelocities = new Map([[41, new Vec3(0, -0.25, 0.25 * direction)]]);
+    f.bot.entities[41] = { id: 41, name: 'dragon_fireball', position: new Vec3(f.self.position.x, 70, 12.5 - 6 * direction), metadata: [] };
+  };
+  for (const direction of [1, -1] as const) {
+    it(`finds the way along the bridge, away from the front end, for a ball travelling ${direction > 0 ? '+z' : '-z'}`, () => {
+      const f = atFrontEnd();
+      ballOnBody(f, direction);
+      const hazards = dragonHazards(f.bot);
+      expect(hazards.map(hazard => hazard.kind)).toEqual(['fireball']);
+      expect(hazards[0].alternative).toBeDefined();
+      const plan = dragonFleePlan(f.bot, hazards);
+      expect(plan).not.toBeNull();
+      expect(-Math.sin(plan!.yaw)).toBeGreaterThan(0.9); // east: along the bridge, toward the platform
+      expect(plan!.jump).toBe(false);
+    });
+  }
+  it('starts the retreat along the bridge (the floor reflex), not a note that there is no way, whichever way the ball travels', async () => {
+    for (const direction of [1, -1] as const) {
+      const f = atFrontEnd();
+      ballOnBody(f, direction);
+      const keys: Array<[string, boolean]> = [];
+      f.bot.look = vi.fn(); f.bot.setControlState = vi.fn((k: string, v: boolean) => { keys.push([k, v]); }); f.bot.equip = vi.fn(async () => undefined); f.bot.consume = vi.fn(async () => undefined);
+      installFloorReflexes(f.bot, floorConfig({ MINEBOT_FCA_REFLEXES: 'default' }), { fleeTickMs: 1 });
+      f.bot.emit('physicsTick');
+      await new Promise(resolve => setTimeout(resolve, 250));
+      expect(keys.some(([k, v]) => k === 'forward' && v)).toBe(true);
+      const entries = f.bot.reflexLedger.entriesSince(0);
+      expect(entries.some((entry: any) => entry.kind === 'cover_none')).toBe(false);
+      expect(entries.some((entry: any) => entry.kind === 'retreat')).toBe(true);
+    }
+  });
+  it('still reports no way where there is none on either side (a bridge one cell long)', () => {
+    const f = atFrontEnd();
+    for (let x = 1; x <= 14; x++) f.world.delete(key(x, 63, 12)); // one block of bridge, the void all round it
+    ballOnBody(f, 1);
+    expect(dragonFleePlan(f.bot, dragonHazards(f.bot))).toBeNull();
   });
 });
 
@@ -762,7 +813,7 @@ describe('the water-bucket clutch of a fall in the End', () => {
       f.world.set(key(0, 64, 0), 'water');
       f.bot.setControlState = vi.fn(); f.bot.consume = vi.fn(async () => undefined);
       installFloorReflexes(f.bot, floorConfig({ MINEBOT_FCA_REFLEXES: 'default' }), { fleeTickMs: 1 });
-      const memory: FallMemory = f.bot.floorReflexes.fall = { scoop: { x: 0, y: 64, z: 0, at: Date.now(), tries: 0, ...(hand !== undefined ? { hand } : {}) } };
+      const memory: FallMemory = f.bot.floorReflexes.fall = { scoop: { x: 0, y: 64, z: 0, at: Date.now(), tries: 0, ...(hand !== undefined ? { hand, handName: 'diamond_sword' } : {}) } };
       return { ...f, ...kit, memory };
     }
     it.skipIf(!FALL_CLUTCH_ENABLED)('leaves the note in the floor\'s memory at the pour, tells the cut in the ledger, and has the floor take the water up once the body stands, so that the next fall has its clutch', async () => {
@@ -779,7 +830,7 @@ describe('the water-bucket clutch of a fall in the End', () => {
         await until(() => kit.seen.uses === 1, 4000);
         await until(() => f.self.onGround === true && !hasActiveSafetyLease(f.bot), 4000);
         const memory: FallMemory = f.bot.floorReflexes.fall;
-        expect(memory.scoop).toMatchObject({ x: 0, y: 64, z: 0, tries: 0, hand: 0 }); // the note says the hand the bucket was taken from
+        expect(memory.scoop).toMatchObject({ x: 0, y: 64, z: 0, tries: 0, hand: 0, handName: 'diamond_sword' }); // the note says the hand the bucket was taken from, and the item that was in it
         expect(kit.seen.uses).toBe(1);
         expect(kit.hotbar[1].name).toBe('bucket'); // the only bucket of water is empty: left so, the next fall has no clutch
         expect(f.bot.heldItem.name).toBe('bucket'); // and the clutch that was cut off left it in the hand
@@ -943,6 +994,70 @@ describe('the water-bucket clutch of a fall in the End', () => {
         expect(gone.memory.scoop).toBeUndefined();
       } finally { gone.stop(); }
     });
+    it('does not take the water from a body that a ladder or an end rod holds, nor one that is held by a part of a block (round 10: the walk\'s floor class counted them as floors, and the fall went on after the water was gone)', async () => {
+      for (const [name, shape] of [['end_rod', [[0.4375, 0, 0.4375, 0.5625, 1, 0.5625]]], ['ladder', [[0, 0, 0.8125, 1, 1, 1]]], ['oak_slab', [[0, 0, 0, 1, 0.5, 1]]]] as const) {
+        const s = afterCutOff();
+        try {
+          s.world.set(key(0, 63, 0), name);
+          const plain = s.bot.blockAt;
+          s.bot.blockAt = (v: Vec3, ...rest: unknown[]) => (v.x === 0 && v.y === 63 && v.z === 0 ? { name, boundingBox: 'block', shapes: shape, position: v } : plain(v, ...rest));
+          s.bot.setQuickBarSlot(0); s.bot.setQuickBarSlot.mockClear();
+          expect(scoopWanted(s.bot, s.memory, Date.now())).toBe(false);
+          expect(await scoopBack(s.bot, s.bot, s.memory)).toMatchObject({ success: false, scooped: false });
+          expect(s.seen.uses).toBe(0);
+          expect(s.bot.setQuickBarSlot).not.toHaveBeenCalled(); // nothing was selected to take the water
+          expect(s.memory.scoop).toBeDefined();
+        } finally { s.stop(); }
+      }
+    });
+    it('gives the hand back to the item it held, wherever that item is now, and to nothing when it is gone (round 10: the sword had moved and a bed was in its slot: the next attack struck with the bed)', async () => {
+      const moved = afterCutOff();
+      try {
+        moved.bot.setQuickBarSlot(1); moved.bot.setQuickBarSlot.mockClear(); // the empty bucket in the hand (slot 1), the note says the sword's slot was 0
+        moved.hotbar[2] = moved.hotbar[0]; moved.hotbar[2].slot = 38; moved.hotbar[0] = { name: 'white_bed', slot: 36 };
+        expect(await scoopBack(moved.bot, moved.bot, moved.memory)).toMatchObject({ success: true, scooped: true });
+        expect(moved.bot.heldItem.name).toBe('diamond_sword'); // slot 2: where the sword is now
+        expect(moved.bot.setQuickBarSlot.mock.calls.map((call: number[]) => call[0])).toEqual([2]);
+      } finally { moved.stop(); }
+      const gone = afterCutOff();
+      try {
+        gone.bot.setQuickBarSlot(1); gone.bot.setQuickBarSlot.mockClear();
+        gone.hotbar[0] = { name: 'white_bed', slot: 36 }; // the sword is nowhere in the hotbar
+        expect(await scoopBack(gone.bot, gone.bot, gone.memory)).toMatchObject({ success: true, scooped: true });
+        expect(gone.bot.heldItem.name).toBe('water_bucket'); // not given back to the bed's slot: left as it is
+        expect(gone.bot.setQuickBarSlot).not.toHaveBeenCalled();
+      } finally { gone.stop(); }
+      const dead = afterCutOff();
+      try {
+        dead.bot.setQuickBarSlot.mockClear(); // the empty bucket is in the hand, the note says the sword
+        dead.bot.health = 0; // a body that died, and no interruption signal stands for it
+        await scoopBack(dead.bot, dead.bot, dead.memory);
+        expect(dead.bot.setQuickBarSlot).not.toHaveBeenCalled();
+      } finally { dead.stop(); }
+    });
+    it('uses the bucket only when the first source along the look is the note\'s, and drops the note only when that source is gone (round 10: a source in the body\'s own cell was taken first, and the note was cleared at the full bucket)', async () => {
+      const s = afterCutOff();
+      try {
+        // the note's water two cells to the west, the body one cell from it with a source of its own in the cell the look passes first
+        s.world.delete(key(0, 64, 0)); s.world.set(key(-2, 64, 0), 'water'); s.world.set(key(-1, 64, 0), 'water');
+        s.memory.scoop = { x: -2, y: 64, z: 0, at: Date.now(), tries: 0, hand: 0, handName: 'diamond_sword' };
+        s.self.position = new Vec3(-0.04, 64, 0.5);
+        s.bot.setQuickBarSlot(0); s.bot.setQuickBarSlot.mockClear();
+        expect(await scoopBack(s.bot, s.bot, s.memory)).toMatchObject({ success: false, scooped: false });
+        expect(s.seen.uses).toBe(0);
+        expect(s.world.get(key(-1, 64, 0))).toBe('water'); // nothing was taken
+        expect(s.world.get(key(-2, 64, 0))).toBe('water');
+        expect(s.memory.scoop).toBeUndefined(); // dropped once
+      } finally { s.stop(); }
+      const full = afterCutOff(); // the bucket comes back full but the note's source is still there: another water was taken, the note is dropped and the result says so
+      try {
+        full.bot.activateItem = vi.fn(() => { full.hotbar[1] = { name: 'water_bucket', slot: 37 }; full.bot.heldItem = full.hotbar[1]; });
+        const result = await scoopBack(full.bot, full.bot, full.memory);
+        expect(result).toMatchObject({ success: false, scooped: true });
+        expect(full.memory.scoop).toBeUndefined();
+        expect(full.world.get(key(0, 64, 0))).toBe('water');
+      } finally { full.stop(); }
+    }, 10_000);
     it('wants to take the water up only near it, not twice within a moment, and not for long; a note that cannot be kept is dropped', () => {
       const f = falling({ y: 64 });
       f.self.onGround = true; f.bot.heldItem = { name: 'bucket', slot: 37 };
