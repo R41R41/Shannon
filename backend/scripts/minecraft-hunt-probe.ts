@@ -444,6 +444,58 @@ async function blazeLoop(note: (text: string) => void, options: { fightSeconds?:
 }
 scene('blaze_loop', 'the whole sortie cycle as ONE act with repeat 8: [go camp, fight 12 s if there, pick up, go hideout, eat, wait 12 s]', note => blazeLoop(note));
 scene('blaze_loop_b', 'the loop again (a second sample)', note => blazeLoop(note));
+// The nook (S2, 2026-11-02): the camp cell has walls on two sides; the body closes the other two sides to the head's height with cobblestone (the top stays open: a blaze sees in only from straight
+// above), leaves the head cell of the side that faces the spawner open as a window, and holds there. Measures what the camp costs with a room's worth of blazes that can see only through the window.
+async function blazeNook(note: (text: string) => void, options: { window?: boolean; seconds?: number } = {}): Promise<Record<string, unknown>> {
+  const stand = sites.blazeStand as number[] | undefined, spawner = sites.blazeSpawner as number[] | undefined;
+  if (!stand || !spawner) throw new Error('no blazeStand or blazeSpawner in the sites');
+  const seconds = options.seconds ?? (timedSeconds || 240);
+  await ask('difficulty normal'); await ask('time set midnight'); await ask('weather clear');
+  await ask('execute in minecraft:the_nether run kill @e[type=minecraft:blaze]');
+  await equip({ diamond_sword: 1, iron_pickaxe: 1, shield: 2, cooked_beef: 24, golden_apple: 3, cobblestone: 64 }, { armor: 'iron', shield: true });
+  await placeActor('the_nether', stand[0], stand[1], stand[2], 24);
+  const camp = await runSkill('probe', { kind: 'camp' }, 20);
+  let cell: { x: number; y: number; z: number } | undefined;
+  try { cell = JSON.parse(String(camp.receipt?.result ?? '')).cells?.[0]; } catch { cell = undefined; }
+  if (!cell) throw new Error('no camp cell');
+  const solidAt = (x: number, y: number, z: number) => { const b = actor.blockAt(new Vec3(x, y, z)); return !!b && b.boundingBox === 'block'; };
+  // the four sides; those open (at the feet or the head) are closed, the one toward the spawner keeps its head cell open as the window
+  const sides = [[1, 0], [-1, 0], [0, 1], [0, -1]] as const;
+  const toward = [...sides].sort((a, b) => ((spawner[0] - cell!.x) * b[0] + (spawner[2] - cell!.z) * b[1]) - ((spawner[0] - cell!.x) * a[0] + (spawner[2] - cell!.z) * a[1]))[0];
+  const place: Array<{ x: number; y: number; z: number }> = [];
+  for (const [dx, dz] of sides) {
+    const x = cell.x + dx, z = cell.z + dz;
+    if (!solidAt(x, cell.y, z)) place.push({ x, y: cell.y, z });
+    const window = options.window !== false && dx === toward[0] && dz === toward[1];
+    if (!window && !solidAt(x, cell.y + 1, z)) place.push({ x, y: cell.y + 1, z });
+  }
+  note(`camp cell ${JSON.stringify(cell)}, window side ${JSON.stringify(toward)}, to place ${JSON.stringify(place.map(p => [p.x, p.y, p.z]))}`);
+  const canPlace = ['cobblestone'];
+  const started = Date.now();
+  const rods0 = await countServer('blaze_rod'), shield0 = shieldUsed();
+  let killed = 0;
+  const onDead = (entity: any) => { if (String(entity?.name ?? '') === 'blaze') killed++; };
+  actor.on('entityDead', onDead);
+  const track: number[] = [];
+  const sampler = setInterval(() => { const value = Number(actor.health); if (Number.isFinite(value)) track.push(r1(value)); }, 1000);
+  try {
+    const there = await act('go to the camp cell', [{ do: 'go', to: { x: cell.x, y: cell.y, z: cell.z }, range: 0.6, seconds: 25, canPlace, maxPlace: 10 }], 40, { accept: ['blaze'] });
+    note(`go: hp ${actor.health} ${(there.lines[0] ?? '').slice(0, 160)}`);
+    const built = await act('build the nook', [{ do: 'place', at: place, block: 'cobblestone' }], 40, { accept: ['blaze'] });
+    note(`place: hp ${actor.health} ${built.lines.join(' | ').slice(0, 400)}`);
+    const inside = actor.entity.position as Vec3;
+    note(`standing at ${r1(inside.x)},${r1(inside.y)},${r1(inside.z)}; closed cells now: ${place.map(p => `${p.x},${p.y},${p.z}=${actor.blockAt(new Vec3(p.x, p.y, p.z))?.name}`).join(' ')}`);
+    let n = 0;
+    while (Date.now() - started < seconds * 1000 && !disconnected && Number(actor.health) > 0) {
+      const run = await act(`hold#${++n}`, [{ do: 'attack', target: 'blaze', hold: true, seconds: 20 }], 40, { accept: ['blaze'] });
+      note(`hold#${n}: hp ${r1(Number(actor.health))} ${run.lines.join(' | ').slice(0, 260)}`);
+      if (Number(actor.health) < 8) break;
+    }
+  } finally { clearInterval(sampler); actor.removeListener('entityDead', onDead); }
+  return { seconds: r1((Date.now() - started) / 1000), kills: killed, rodsOnTheFloor: (await countServer('blaze_rod')) - rods0, shieldWear: shieldUsed() - shield0, deathsHere: deaths, lowestHp: Math.min(...track, 20), hpTrack: track.filter((_, index) => index % 5 === 0).join(' '), placed: place.length, window: options.window !== false };
+}
+scene('blaze_nook', 'the nook: the camp cell closed on its open sides to the head height with a window at the head toward the spawner, then attack hold for 240 s', note => blazeNook(note));
+scene('blaze_nook_sealed', 'the nook with no window (sealed to the head height, top open): hold for 120 s', note => blazeNook(note, { window: false, seconds: 120 }));
 // Sniping (S2, 2026-11-02): a bow from a cell far enough from the spawner room that few of its blazes see the body and their fire (spread grows with the square root of the distance) mostly misses.
 async function blazeSnipe(note: (text: string) => void, at: [number, number, number]): Promise<Record<string, unknown>> {
   const stand = sites.blazeStand as number[] | undefined, spawner = sites.blazeSpawner as number[] | undefined;

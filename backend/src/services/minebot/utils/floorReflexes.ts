@@ -846,6 +846,15 @@ export interface FleeThreat { from: Vec3; threats: Vec3[]; nearest: number }
  * The threats to run from at low health: every `isThreat` entity that can get at the body (not walled off) within the flee's range, which is
  * wider for a kind that shoots, and wider once an episode is running (`keeping`: so that the body is not let go at 8.1 m). Null above FLEE_HEALTH.
  */
+/**
+ * Shooters that hold their place and fire only at what they see (utils/huntBlaze: a blaze goes after a body it has lost sight of for a fifth of a second and no longer; a ghast does not
+ * go after one at all). S2 (2026-11-02, the c1 hideout): at eight hearts the body rested in a corridor no blaze of the spawner can see, a blaze twelve metres off "could reach" it, and the flee
+ * found no way and the last stand dug the floor out from under it seven times. Out of such a shooter's sight, farther than this, it is no threat that can get at the body.
+ */
+const SIGHT_ONLY_SHOOTERS = new Set(['blaze', 'ghast']);
+const SIGHT_ONLY_NEAR_M = 6;
+const outOfSightOfAShooter = (name: string, exposure: string, distance: number): boolean => SIGHT_ONLY_SHOOTERS.has(name) && exposure !== 'seen' && distance > SIGHT_ONLY_NEAR_M;
+
 export function fleeThreat(bot: FloorBody, keeping = false): FleeThreat | null {
   const health = bot.health ?? 20, at = bot.entity?.position;
   if (!at || !(health > 0 && health <= FLEE_HEALTH) || bot.entity?.isInLava) return null;
@@ -857,7 +866,10 @@ export function fleeThreat(bot: FloorBody, keeping = false): FleeThreat | null {
     const distance = entity.position.distanceTo(at);
     if (distance > range) continue;
     let sealed = false;
-    try { sealed = threatExposure(bot as any, entity as any) === 'sealed'; } catch { sealed = false; }
+    try {
+      const exposure = threatExposure(bot as any, entity as any);
+      sealed = exposure === 'sealed' || outOfSightOfAShooter(name, exposure, distance);
+    } catch { sealed = false; }
     if (!sealed) found.push({ distance, position: entity.position });
   }
   if (!found.length) return null;
@@ -1143,7 +1155,7 @@ export function reachingThreats(bot: FloorBody): Array<{ entity: FloorEntity; di
     if (distance > (shooter ? FLEE_RANGE_SHOOTER : FLEE_RANGE)) continue;
     let exposure: ReturnType<typeof threatExposure>;
     try { exposure = threatExposure(bot as any, entity as any, Date.now(), { fresh: true }); } catch { exposure = 'reachable'; }
-    if (exposure !== 'sealed') out.push({ entity, distance, exposure });
+    if (exposure !== 'sealed' && !outOfSightOfAShooter(name, exposure, distance)) out.push({ entity, distance, exposure });
   }
   return out.sort((a, b) => a.distance - b.distance);
 }
