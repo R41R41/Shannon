@@ -7,7 +7,7 @@
 #
 # The rules (作戦書 2026-11-02, VM のラボの使い方):
 #   1. One lab at a time on the 2-vCPU VM: an flock on $MINEBOT_LAB_SCRATCH/slot.lock (default ~/.cache/minebot-lab/slot.lock) is held for
-#      the whole command. LAB_SLOT_COUNT=N (default 1; the WSL lab with its 24 cores uses 3) makes N slots slot.lock, slot.1.lock, ...;
+#      the whole command. LAB_SLOT_COUNT=N (default 1; the WSL lab with its 24 cores asks for 3 but gets at most LAB_SLOT_MAX=2 since 2026-11-02 21:50) makes N slots slot.lock, slot.1.lock, ...;
 #      the number taken is exported as LAB_SLOT (0-based) so the caller can pick its ports (25570 + 10 * LAB_SLOT ...).
 #   2. /tmp/hands-live.lock is respected: run-hands-live.sh, world-pristine.sh and run-replay.sh take it themselves, so this script only
 #      refuses to start while it is held (it never holds it, or those scripts would find it taken).
@@ -17,7 +17,7 @@
 #   4. A server already listening in 25570-25599 that is not ours (a lab left over) refuses the start; list it with `status`.
 #   5. Output stays under ~/.cache/minebot-lab (MINEBOT_LAB_SCRATCH), never /tmp: the VM is a Spot machine and /tmp goes with every stop.
 #   6. Resources (the owner's word of 2026-11-02: no wasted worlds, nothing that squeezes the machines): the lab does not start when the disk of
-#      $HOME has less than 10 GB free (LAB_MIN_DISK_GB), nor, in the PC's WSL, when Windows has less than 3 GB of free memory (LAB_MIN_WIN_MEM_GB;
+#      $HOME has less than 10 GB free (LAB_MIN_DISK_GB), nor, in the PC's WSL, when Windows has less than 4 GB of free memory (LAB_MIN_WIN_MEM_GB;
 #      read through the Windows PowerShell) or C: has less than 10 GB. The caller then tells the coordinator and stops. A lab's Java heap is
 #      at most 2 GB (minecraft-isolated-lab.mjs, seedscan.py), and a lab is stopped as soon as it is not used.
 #   7. prod.lock: whoever uses shannon-home (a deploy restart, a real run, trials.py) holds `flock ~/.cache/minebot-lab/prod.lock`; the lab stays off
@@ -28,6 +28,8 @@
 set -u
 SCRATCH=${MINEBOT_LAB_SCRATCH:-$HOME/.cache/minebot-lab}
 COUNT=${LAB_SLOT_COUNT:-1}
+# The PC (its WSL has the Windows PowerShell): at most LAB_SLOT_MAX (2) labs at a time, whatever the caller asks for (coordinator 2026-11-02 21:46: Windows had 1-2 GB free with three labs and tests running).
+if [ -x /mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe ] && [ "$COUNT" -gt "${LAB_SLOT_MAX:-2}" ]; then COUNT=${LAB_SLOT_MAX:-2}; fi
 DB=${LAB_SLOT_PRODUCTION_DB:-$HOME/shannon-ios-data/shannon.sqlite}
 HANDS_LOCK=/tmp/hands-live.lock
 PROD_LOCK=${LAB_SLOT_PROD_LOCK:-$SCRATCH/prod.lock}
@@ -45,7 +47,7 @@ resources_problem() {   # prints what is too little, empty when all is fine
   local free win c
   free=$(disk_free_gb "$HOME"); [ -n "$free" ] && [ "$free" -lt "${LAB_MIN_DISK_GB:-10}" ] && echo "only ${free} GB free on $HOME (< ${LAB_MIN_DISK_GB:-10} GB)"
   if [ -x "$WIN_PS" ]; then
-    win=$(windows_free_gb); [ -n "$win" ] && awk -v w="$win" -v m="${LAB_MIN_WIN_MEM_GB:-3}" 'BEGIN{exit !(w < m)}' && echo "Windows has only ${win} GB of free memory (< ${LAB_MIN_WIN_MEM_GB:-3} GB)"
+    win=$(windows_free_gb); [ -n "$win" ] && awk -v w="$win" -v m="${LAB_MIN_WIN_MEM_GB:-4}" 'BEGIN{exit !(w < m)}' && echo "Windows has only ${win} GB of free memory (< ${LAB_MIN_WIN_MEM_GB:-4} GB)"
     c=$(disk_free_gb /mnt/c); [ -n "$c" ] && [ "$c" -lt "${LAB_MIN_DISK_GB:-10}" ] && echo "only ${c} GB free on C: (< ${LAB_MIN_DISK_GB:-10} GB)"
   fi
   return 0
