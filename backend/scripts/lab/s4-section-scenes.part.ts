@@ -30,6 +30,10 @@ scene('route_fortress', 'S6 on the real seed: from the Nether arrival to the for
   const stops: string[] = [];
   let sameStop = 0, lastStop = '', maxDig = 40, maxPlace = 20;
   note(`start ${actor.entity?.position} (${metrics.startDistance} m from the stand)`);
+  // What the planner can learn at the arrival without walking: does find-structure see the spawner from here (the client holds the chunks within the view distance)?
+  const seen = await runSkill('find-structure', { structureType: 'blaze_spawner' }, 20);
+  const seenText = String(seen.receipt?.result ?? '');
+  note(`find-structure blaze_spawner from the arrival: ${s4Short(seenText, 260)}`);
   try {
     while (Date.now() - started < limitMs && s4Alive(deaths0)) {
       if (s4Planar(spawner) < 24) { note('within 24 m of the spawner: the section\'s end'); break; }
@@ -53,7 +57,7 @@ scene('route_fortress', 'S6 on the real seed: from the Nether arrival to the for
     }
   } finally { await ask('gamerule doMobSpawning false'); }
   const reached = s4Planar(spawner) < 24;
-  return { reached, seconds: r1((Date.now() - started) / 1000), endDistance: r1(s4Planar(goal)), endY: s4Feet(), maxDigAsked: maxDig, maxPlaceAsked: maxPlace, ...metrics, deathsHere: deaths - deaths0, stops: stops.slice(0, 14) };
+  return { reached, spawnerSeenFromArrival: /ブレイズの湧き場を発見/u.test(seenText), seconds: r1((Date.now() - started) / 1000), endDistance: r1(s4Planar(goal)), endY: s4Feet(), maxDigAsked: maxDig, maxPlaceAsked: maxPlace, ...metrics, deathsHere: deaths - deaths0, stops: stops.slice(0, 14) };
 });
 
 scene('route_stronghold', 'S9 on the real seed: the walk from the spawn to the first-ring stronghold by go hops along the straight line the eyes give', async note => {
@@ -78,16 +82,28 @@ scene('route_stronghold', 'S9 on the real seed: the walk from the spawn to the f
     }
     return null;
   };
-  let slowRun = 0, stuck = false, maxPlace = 20, maxDig = 40;
+  let slowRun = 0, stuck = false, maxPlace = 20, maxDig = 40, maxStep = 110, usedStep = 0;
   try {
     while (Date.now() - started < limitMs && s4Alive(deaths0)) {
       const here = actor.entity.position as Vec3;
       const remain = Math.hypot(goal[0] - (here.x), goal[2] - (here.z));
       if (remain < 32) { note('within 32 m of the stronghold'); break; }
-      let step = Math.min(110, remain), column: { y: number; water: boolean } | null = null, tx = 0, tz = 0;
+      let step = Math.min(maxStep, remain), column: { y: number; water: boolean } | null = null, tx = 0, tz = 0;
       for (; step >= 24 && !column; step = Math.floor(step * 0.7)) {
-        tx = Math.round(here.x + (goal[0] - here.x) / remain * step); tz = Math.round(here.z + (goal[2] - here.z) / remain * step);
-        column = surfaceAt(tx, tz);
+        // The planner looks at the map and takes the land that leads toward the stronghold: the first dry column from the straight line outwards (up to 100 degrees off), else the water straight ahead.
+        let fallback: { tx: number; tz: number; column: { y: number; water: boolean } } | null = null;
+        const base = Math.atan2(goal[2] - here.z, goal[0] - here.x);
+        for (const deg of [0, 25, -25, 50, -50, 75, -75, 100, -100]) {
+          const a = base + deg * Math.PI / 180;
+          const x = Math.round(here.x + Math.cos(a) * step), z = Math.round(here.z + Math.sin(a) * step);
+          if (remain - Math.hypot(goal[0] - x, goal[2] - z) < step * 0.25) continue;
+          const col = surfaceAt(x, z);
+          if (!col) continue;
+          if (!col.water) { tx = x; tz = z; column = col; break; }
+          fallback ??= { tx: x, tz: z, column: col };
+        }
+        if (!column && fallback) { tx = fallback.tx; tz = fallback.tz; column = fallback.column; }
+        if (column) usedStep = step;
       }
       if (!column) { stops.push(`${Math.round((Date.now() - started) / 1000)}s no loaded column ahead (${Math.round(here.x)},${Math.round(here.z)})`); await sleep(3000); if (stops.length > 8) break; continue; }
       const hp0 = Number(actor.health), before = remain, hopStart = Date.now();
@@ -97,6 +113,9 @@ scene('route_stronghold', 'S9 on the real seed: the walk from the spawn to the f
       const after = Math.hypot(goal[0] - actor.entity.position.x, goal[2] - actor.entity.position.z), gained = before - after;
       pace.push(`${Math.round(gained)}m/${Math.round((Date.now() - hopStart) / 1000)}s${column.water ? '~' : ''}${run.ok ? '' : '!'}`);
       if (gained < 10) { slowRun++; metrics.slowHops++; } else slowRun = 0;
+      // Short legs after a search that timed out (the body's own advice: relay points), longer again once legs are walked.
+      if (!run.ok && /search_timeout/u.test(s4Why(run))) maxStep = Math.max(40, Math.floor(maxStep * 0.6));
+      else if (gained >= 0.6 * usedStep && maxStep < 110) maxStep = Math.min(110, Math.round(maxStep * 1.3));
       if (!run.ok) {
         const why = s4Why(run);
         stops.push(`${Math.round((Date.now() - started) / 1000)}s ${why}`);
@@ -113,29 +132,44 @@ scene('route_stronghold', 'S9 on the real seed: the walk from the spawn to the f
   return { reached: end < 32, stuck, seconds: r1((Date.now() - started) / 1000), endDistance: r1(end), endY: s4Feet(), ...metrics, deathsHere: deaths - deaths0, pace: pace.join(' '), stops: stops.slice(0, 14) };
 });
 
-scene('dig_to_room', 'S9 to S10 on the real seed: from the surface above the stronghold down to the depth of its portal room by vertical (170 blocks on c1)', async note => {
+scene('dig_to_room', 'S9 to S10 on the real seed: from the surface above the stronghold down to its portal room by go, as the head\'s knowledge says (maxDig, canDig, canPlace; 170 blocks on c1)', async note => {
   const top = (sites.strongholdSurface ?? sites.strongholdPortalCenter) as number[] | undefined, room = sites.strongholdPortalCenter as number[] | undefined;
-  if (!top || !room) throw new Error('no strongholdSurface / strongholdPortalCenter in the sites');
-  const deaths0 = deaths, toY = room[1] + 4;
+  const stand = (sites.strongholdStand ?? room) as number[] | undefined;
+  if (!top || !room || !stand) throw new Error('no strongholdSurface / strongholdPortalCenter / strongholdStand in the sites');
+  const deaths0 = deaths;
   await ask('difficulty normal'); await ask('gamerule doMobSpawning true'); await ask('time set day'); await ask('weather clear');
-  await equip({ diamond_pickaxe: 1, iron_sword: 1, water_bucket: 2, cobblestone: 64, torch: 16, cooked_beef: 16 }, { armor: 'iron', shield: true });
+  // The kit of S9 plus a spare pickaxe: one iron pickaxe breaks after about 250 digs, and 170 levels of stairs need more than that.
+  await equip({ diamond_pickaxe: 1, iron_pickaxe: 2, iron_sword: 1, water_bucket: 1, cobblestone: 64, torch: 16, cooked_beef: 24 }, { armor: 'iron', shield: true });
   await placeActor('overworld', top[0], top[1] + 1, top[2], 24);
   const limitMs = (timedSeconds || 900) * 1000, started = Date.now(), startY = s4Feet();
-  const metrics = { acts: 0, okActs: 0, hpLost: 0, lowestHp: 20, startY, toY, depth: startY - toY };
+  const metrics = { acts: 0, okActs: 0, hpLost: 0, lowestHp: 20, startY, toY: stand[1], depth: startY - stand[1] };
   const stops: string[] = [], progress: string[] = [];
-  let sameStop = 0, lastStop = '';
+  let maxDig = 120, maxPlace = 24, sameStop = 0, lastStop = '';
+  // The head gives 12 block names at most (its knowledge: "stone, dirt, gravel and up to 12"); a stop that names another block puts it in, in place of the last one.
+  const canDig = ['stone', 'dirt', 'grass_block', 'gravel', 'sand', 'andesite', 'diorite', 'granite', 'tuff', 'deepslate', 'cobblestone', 'stone_bricks'];
+  const arrived = () => { const here = actor.entity?.position as Vec3 | undefined; return !!here && Math.hypot(here.x - (stand[0] + 0.5), here.z - (stand[2] + 0.5)) < 4 && Math.abs(here.y - stand[1]) < 4; };
   try {
-    while (Date.now() - started < limitMs && s4Alive(deaths0) && s4Feet() > toY) {
+    while (Date.now() - started < limitMs && s4Alive(deaths0) && !arrived() && metrics.acts < 14) {
       const hp0 = Number(actor.health), y0 = s4Feet();
-      const run = await act(`vertical#${metrics.acts + 1}`, [{ do: 'vertical', dir: 'down', shape: 'shaft', toY, canDig: ['stone', 'dirt', 'gravel', 'snow_block', 'andesite', 'diorite', 'granite', 'tuff', 'deepslate', 'coal_ore', 'iron_ore', 'copper_ore'], liquid: 'seal_water', maxDig: 200, maxPlace: 100, seconds: 120 }], 150);
+      const run = await act(`descend#${metrics.acts + 1}`, [{ do: 'go', to: { x: stand[0], y: stand[1], z: stand[2] }, range: 1.5, seconds: 110, maxDig, maxPlace, canDig: [...canDig], canPlace: ['cobblestone'] }], 150);
       metrics.acts++; if (run.ok) metrics.okActs++;
       metrics.hpLost += Math.max(0, hp0 - Number(actor.health)); metrics.lowestHp = Math.min(metrics.lowestHp, Number(actor.health));
       progress.push(`${y0}->${s4Feet()}${run.ok ? '' : '!'}`);
-      if (!run.ok) { const why = s4Why(run); stops.push(`${Math.round((Date.now() - started) / 1000)}s y${s4Feet()} ${why}`); const key = s4Key(why); sameStop = key === lastStop ? sameStop + 1 : 1; lastStop = key; await sleep(1500); if (sameStop >= 3) { note(`the same stop three times: ${why}`); break; } } else sameStop = 0;
+      if (!run.ok) {
+        const why = s4Why(run);
+        stops.push(`${Math.round((Date.now() - started) / 1000)}s y${s4Feet()} ${why}`);
+        if (/limit_dig/u.test(why) && maxDig < 200) maxDig = Math.min(200, maxDig + 60);
+        if (/limit_place/u.test(why) && maxPlace < 100) maxPlace = Math.min(100, maxPlace + 30);
+        const named = /が ([a-z_]+) で登れない（掘ってよい物に無い）/u.exec(why)?.[1] ?? /cannot_dig: ([a-z_]+)/u.exec(why)?.[1] ?? /dead_end[^]*?([a-z]+(?:_[a-z]+)+)/u.exec(why)?.[1];
+        if (named && !canDig.includes(named)) { if (canDig.length >= 12) canDig.pop(); canDig.push(named); note(`canDig gets ${named} (the line said so)`); }
+        const key = s4Key(why); sameStop = key === lastStop ? sameStop + 1 : 1; lastStop = key;
+        await sleep(1500);
+        if (sameStop >= 4) { note(`the same stop four times: ${why}`); break; }
+      } else sameStop = 0;
       await s4Eat();
     }
   } finally { await ask('gamerule doMobSpawning false'); }
-  return { reachedDepth: s4Feet() <= toY, endY: s4Feet(), horizontalFromRoom: r1(s4Planar(room)), seconds: r1((Date.now() - started) / 1000), ...metrics, deathsHere: deaths - deaths0, progress: progress.join(' '), stops: stops.slice(0, 12) };
+  return { arrived: arrived(), endY: s4Feet(), horizontalFromRoom: r1(s4Planar(room)), seconds: r1((Date.now() - started) / 1000), maxDigAsked: maxDig, canDigFinal: canDig.join(','), ...metrics, deathsHere: deaths - deaths0, progress: progress.join(' '), stops: stops.slice(0, 12) };
 });
 
 scene('frames_enter', 'S10 on the real seed: twelve eyes into the twelve frames of the room (all empty), then into the portal and the End', async note => {
@@ -154,21 +188,32 @@ scene('frames_enter', 'S10 on the real seed: twelve eyes into the twelve frames 
     return count;
   };
   const started = Date.now(), stops: string[] = [];
-  const metrics = { placed: 0, tries: 0, hpLost: 0, lowestHp: 20, startDistance: r1(s4Planar(centre)) };
-  const order = [...frames].sort((a, b) => Math.hypot(a.x - stand[0], a.z - stand[2]) - Math.hypot(b.x - stand[0], b.z - stand[2]));
-  for (const frame of order) {
-    if (!s4Alive(deaths0)) break;
-    const hp0 = Number(actor.health);
-    const run = await act(`frame#${metrics.tries + 1}`, [{ do: 'go', to: { x: frame.x, y: frame.y, z: frame.z }, range: 3, seconds: 25 }, { do: 'use', item: 'ender_eye', at: [{ x: frame.x, y: frame.y, z: frame.z }] }], 60);
-    metrics.tries++; if (run.ok) metrics.placed++;
-    metrics.hpLost += Math.max(0, hp0 - Number(actor.health)); metrics.lowestHp = Math.min(metrics.lowestHp, Number(actor.health));
-    if (!run.ok) stops.push(`frame ${frame.x},${frame.z}: ${s4Why(run)}`);
+  const metrics = { placed: 0, tries: 0, passes: 0, hpLost: 0, lowestHp: 20, startDistance: r1(s4Planar(centre)) };
+  const hasEye = async (frame: { x: number; y: number; z: number }) => /Test passed/u.test(await ask(`execute in minecraft:overworld if block ${frame.x} ${frame.y} ${frame.z} minecraft:end_portal_frame[eye=true]`, 6000));
+  // Passes over the frames still empty on the server, as the head asks again for the missing ones (the room's silverfish spawner interrupts a hand with a reflex).
+  for (let pass = 1; pass <= 4 && s4Alive(deaths0); pass++) {
+    const empty: typeof frames = [];
+    for (const frame of frames) if (!await hasEye(frame)) empty.push(frame);
+    if (!empty.length) break;
+    metrics.passes = pass;
+    note(`pass ${pass}: ${empty.length} frames still empty`);
+    const here = actor.entity.position as Vec3;
+    empty.sort((a, b) => Math.hypot(a.x - here.x, a.z - here.z) - Math.hypot(b.x - here.x, b.z - here.z));
+    for (const frame of empty) {
+      if (!s4Alive(deaths0)) break;
+      const hp0 = Number(actor.health);
+      const run = await act(`frame#${metrics.tries + 1}`, [{ do: 'go', to: { x: frame.x, y: frame.y, z: frame.z }, range: 3, seconds: 25, canPlace: ['cobblestone'], maxPlace: 8 }, { do: 'use', item: 'ender_eye', at: [{ x: frame.x, y: frame.y, z: frame.z }] }], 60);
+      metrics.tries++; if (run.ok) metrics.placed++;
+      metrics.hpLost += Math.max(0, hp0 - Number(actor.health)); metrics.lowestHp = Math.min(metrics.lowestHp, Number(actor.health));
+      if (!run.ok) stops.push(`pass ${pass} frame ${frame.x},${frame.z}: ${s4Why(run)}`);
+    }
   }
   const eyesServer = await filled();
-  note(`frames with an eye on the server: ${eyesServer}/12; stops ${stops.length}`);
+  note(`frames with an eye on the server: ${eyesServer}/12 after ${metrics.passes} passes; stops ${stops.length}`);
   const portalTries: string[] = [];
   let entered = false;
-  for (const hand of [{ do: 'go', to: { x: centre[0], y: centre[1], z: centre[2] }, range: 0, seconds: 25 }, { do: 'walk', to: { x: centre[0], y: centre[1], z: centre[2] }, range: 0.5 }]) {
+  // The head's knowledge: walk (not go) onto the portal cell, from the ring.
+  for (const hand of [{ do: 'walk', to: { x: centre[0], y: centre[1], z: centre[2] }, range: 0.5 }, { do: 'walk', to: { x: centre[0], y: centre[1], z: centre[2] }, range: 0.5 }]) {
     if (!s4Alive(deaths0) || eyesServer < 12) break;
     const run = await act(`portal-${hand.do}`, [hand], 45);
     await sleep(4000);
