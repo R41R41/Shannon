@@ -76,7 +76,7 @@ function tick(ctx: StepContext, until: number): Promise<boolean> {
   });
 }
 
-/** A blaze hovers where it likes and comes down by itself: the body waits under the shield this long without the distance to it shrinking (lab, 2026-11-03: 5 s ended every try before a blow). */
+/** Allow a hovering blaze to approach, or close under the shield, for this long without gaining distance. */
 const NO_GAIN_PATIENCE_MS = 15_000;
 export async function shieldRush(ctx: StepContext, a: ShieldRushArgs): Promise<ShieldRushOutcome> {
   const bot = ctx.bot, host: any = nativeActionHost(bot), started = Date.now();
@@ -140,7 +140,10 @@ export async function shieldRush(ctx: StepContext, a: ShieldRushArgs): Promise<S
   try {
     if (hp() <= 0) { code = 'DEAD'; return finish(); }
     if (reflexHeld(host)) { code = 'REFLEX'; cut = true; return finish(); }
-    if (!outsideRetreat) {
+    if (outsideRetreat) {
+      // Bound go's distance estimate before taking the body out of its starting shelter.
+      if (bot.entity.position.distanceTo(point(a.retreatTo)) > a.area.radius * 4) { code = 'RETREAT_BLOCKED'; return finish(); }
+    } else {
       returnPath = space.route(bot.entity.position, a.retreatTo);
       if (!returnPath) { code = 'RETREAT_BLOCKED'; return finish(); }
     }
@@ -288,7 +291,12 @@ export async function shieldRush(ctx: StepContext, a: ShieldRushArgs): Promise<S
       // A level route towards that one target only. No 3.5m leash and no alternative target or shelter.
       const next = middle(p).offset(Math.abs(target.position.x - p.x) >= Math.abs(target.position.z - p.z) ? Math.sign(target.position.x - p.x) : 0,
         0, Math.abs(target.position.x - p.x) < Math.abs(target.position.z - p.z) ? Math.sign(target.position.z - p.z) : 0);
-      if (Date.now() - raisedAt < 250 || physicsTicks - raisedTick < 5 || !watch.mayClose(p, Date.now()) || !watch.mayClose(next, Date.now()) || !space.edge(middle(p), next) || !space.braced(next, seeing)) { change('BLOCK'); continue; }
+      const shieldReady = bot.usingHeldItem === true && Date.now() - raisedAt >= 250 && physicsTicks - raisedTick >= 5;
+      const guardedClose = shieldReady && hp() > a.retreatHp + 4 && shieldLeft() > a.shieldReserve + 30;
+      // With health and shield to spare, walk under the raised shield even during a burst or unknown phase.
+      // Near either reserve the old window is still required at both ends of the step.
+      if (!shieldReady || (!guardedClose && (!watch.mayClose(p, Date.now()) || !watch.mayClose(next, Date.now())))
+        || !space.edge(middle(p), next) || !space.braced(next, seeing)) { change('BLOCK'); continue; }
       // Inside the combat area check the route home; outside reserve a conservative straight-distance budget for go.
       const home = outsideRetreat ? null : space.route(next, a.retreatTo);
       if ((!outsideRetreat && !home) || until - Date.now() <= returnBudget(home, next) + 500) { beginRetreat(!outsideRetreat && !home ? 'NO_ATTACK_WINDOW' : 'TIME_LIMIT'); continue; }
@@ -309,6 +317,8 @@ export async function shieldRush(ctx: StepContext, a: ShieldRushArgs): Promise<S
   function finish(): ShieldRushOutcome {
     sample();
     const at = xyz(bot.entity?.position ?? ctx.base);
+    // Normal completion requires shelter; fatal stops and external motor cuts keep their own result.
+    if (!safe && code !== 'DEAD' && code !== 'REFLEX' && !cut) code = 'RETREAT_BLOCKED';
     const status: ShieldRushResult['status'] = code === 'REFLEX' || cut && code !== 'DEAD' ? 'cut' : code === 'DEAD' || code === 'RETREAT_BLOCKED' || ['TARGET_LOST', 'HEIGHT_UNREACHABLE', 'NO_ATTACK_WINDOW', 'PICKUP_UNSAFE'].includes(code ?? '') ? 'failed'
       : targetDead === true && code === null && safe ? 'killed' : 'retreated';
     const result: ShieldRushResult = { status, targetDead, code, hits, rodsDelta: inventoryCount(bot, 'blaze_rod') - rods0, hpMin, hpEnd: hp(), shieldBefore,

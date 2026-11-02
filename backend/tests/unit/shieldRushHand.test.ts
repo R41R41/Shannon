@@ -118,6 +118,31 @@ describe('shield_rush one chosen blaze', () => {
     expect(Object.values(f.controls).some(Boolean)).toBe(false);
     f.close();
   });
+  it.each(['charged', 'unknown'])('closes on safe floor and strikes under the ready shield without a %s shooter window', async phase => {
+    const f = field(6.5), start = f.bot.entity.position.clone(), started = Date.now();
+    f.mob.metadata = phase === 'charged' ? [1] : [];
+    f.args.pickup = 'none';
+    const watch = new RushShooterWatch(f.bot);
+    watch.update(started); expect(watch.mayClose(start, started)).toBe(false);
+    let ticks = 0;
+    f.bot.on('physicsTick', () => { ticks++; });
+    const steps: Array<{ shield: boolean; ticks: number; elapsed: number; at: Vec3 }> = [];
+    const setControl = f.bot.setControlState;
+    vi.spyOn(f.bot, 'setControlState').mockImplementation((key, value) => {
+      if (value && ['forward', 'back', 'left', 'right'].includes(String(key))) {
+        steps.push({ shield: f.bot.usingHeldItem, ticks, elapsed: Date.now() - started, at: f.bot.entity.position.clone() });
+      }
+      setControl(key, value);
+    });
+    const r = await run(f);
+    expect(r.shieldRush).toMatchObject({ status: 'killed', hits: 4, safe: true });
+    expect(f.states).toContain('盾の突撃 CLOSE');
+    expect(steps.length).toBeGreaterThan(0);
+    expect(steps.every(s => s.shield && s.ticks >= 5 && s.elapsed >= 250
+      && new RushSpace(f.bot, f.args.area).stand(s.at))).toBe(true);
+    expect(f.swings.every(s => s.shield && s.at - started < 15_000)).toBe(true);
+    expect(f.bot.deactivateItem).not.toHaveBeenCalled(); f.close();
+  });
   it('attacks in reach even during charge/unknown phase; pickup none returns without seeking items', async () => {
     const f = field(); f.mob.metadata[0] = 1; f.args.pickup = 'none';
     const r = await run(f);
@@ -164,15 +189,38 @@ describe('shield_rush one chosen blaze', () => {
   it('returns HEIGHT_UNREACHABLE for high hover, retaining the shield while waiting', async () => {
     const f = field(2, 72);
     f.args.retreatTo.x = -1.5;
-    // Hide behind the caller's shelter after waiting, not an alternative chosen by the hand.
-    setTimeout(() => { for (let y = 65; y < 72; y++) f.blocks.set(`1,${y},0`, 'stone'); }, 15_200);
-    const r = await run(f); expect(r.shieldRush.code).toBe('HEIGHT_UNREACHABLE'); expect(f.swings).toHaveLength(0); f.close();
+    // The overhead shelter hides the hovering blaze without blocking the walk back after closing.
+    setTimeout(() => { for (let y = 66; y < 72; y++) f.blocks.set(`1,${y},0`, 'stone'); }, 15_200);
+    const r = await run(f); expect(r.shieldRush).toMatchObject({ code: 'HEIGHT_UNREACHABLE', safe: true }); expect(f.swings).toHaveLength(0); f.close();
   });
-  it('never forces a closing window after waiting 1.5 seconds', async () => {
+  it.each(['health', 'shield'])('keeps requiring a closing window at the %s margin and never forces one after waiting', async margin => {
     const f = field(8); f.mob.metadata[0] = 1;
+    if (margin === 'health') f.bot.health = f.args.retreatHp + 4;
+    else f.slots[45].durabilityUsed = 336 - (f.args.shieldReserve + 30);
     // A shelter wall appears when the no-window retreat begins; the target remains loaded.
     setTimeout(() => { f.blocks.set('4,65,0', 'stone'); f.blocks.set('4,64,0', 'stone'); }, 15_050);
     const r = await run(f); expect(r.shieldRush.code).toBe('NO_ATTACK_WINDOW'); expect(f.swings).toHaveLength(0); expect(f.states).not.toContain('盾の突撃 CLOSE'); f.close();
+  });
+  it('still closes at the health margin when an observed burst ends', async () => {
+    const f = field(6.5), start = f.bot.entity.position.clone();
+    f.bot.health = f.args.retreatHp + 4; f.mob.metadata[0] = 1; f.args.pickup = 'none';
+    const pending = shieldRush(f.ctx, f.args);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(f.bot.entity.position.equals(start)).toBe(true);
+    expect(f.states).not.toContain('盾の突撃 CLOSE'); expect(f.swings).toHaveLength(0);
+    f.mob.metadata[0] = 0;
+    expect((await settle(pending)).shieldRush).toMatchObject({ status: 'killed', hits: 4, safe: true });
+    expect(f.states).toContain('盾の突撃 CLOSE'); f.close();
+  });
+  it('does not close without actual shield use even when a shooting window opens', async () => {
+    const f = field(8), start = f.bot.entity.position.clone();
+    f.bot.activateItem.mockImplementation(() => undefined); f.mob.metadata[0] = 1;
+    setTimeout(() => { f.mob.metadata[0] = 0; }, 100);
+    const pending = shieldRush(f.ctx, f.args);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(f.bot.entity.position.equals(start)).toBe(true);
+    expect(f.states).not.toContain('盾の突撃 CLOSE'); expect(f.swings).toHaveLength(0);
+    f.stop.abort('floor-flee'); await settle(pending); f.close();
   });
   it('honours onCrossfire retreat and continue', async () => {
     const f = field(); f.bot.entities[42] = { ...f.mob, id: 42, position: new Vec3(-5, 64, 0.5), metadata: [1] };
@@ -182,9 +230,19 @@ describe('shield_rush one chosen blaze', () => {
     const g = field(); g.args.onCrossfire = 'continue'; g.bot.entities[42] = { ...g.mob, id: 42, position: new Vec3(-5, 64, 0.5), metadata: [1] };
     await run(g); expect(g.swings.length).toBeGreaterThan(0); g.close();
   });
-  it('RETREAT_BLOCKED when the specified destination or its path is unsafe', async () => {
-    const f = field(); f.args.retreatTo.x = -4.5; f.blocks.set('-5,63,0', 'lava');
-    const r = await run(f); expect(r.shieldRush).toMatchObject({ code: 'RETREAT_BLOCKED', safe: false, status: 'failed' }); expect(f.swings).toHaveLength(0); f.close();
+  it.each(['lava', null])('returns RETREAT_BLOCKED before any movement for an unsafe or unknown retreat floor (%s)', async floor => {
+    const f = field(), start = f.bot.entity.position.clone(), keys = vi.spyOn(f.bot, 'setControlState');
+    f.args.retreatTo.x = -4.5; f.blocks.set('-5,63,0', floor);
+    const r = await run(f);
+    expect(r.shieldRush).toMatchObject({ code: 'RETREAT_BLOCKED', safe: false, status: 'failed', at: { x: start.x, y: start.y, z: start.z } });
+    expect(f.bot.entity.position.equals(start)).toBe(true); expect(keys).not.toHaveBeenCalled();
+    expect(f.bot.activateItem).not.toHaveBeenCalled(); expect(go).not.toHaveBeenCalled();
+    expect(f.swings).toHaveLength(0); f.close();
+  });
+  it('reports RETREAT_BLOCKED at the current position if the deadline ends without confirmed shelter', async () => {
+    const f = field(8); f.ctx.deadline = Date.now();
+    expect((await run(f)).shieldRush).toMatchObject({ status: 'failed', code: 'RETREAT_BLOCKED', safe: false, at: { x: 0.5, y: 64, z: 0.5 } });
+    expect(f.swings).toHaveLength(0); f.close();
   });
   it('PICKUP_UNSAFE for an unsafe drop and reports its id and location', async () => {
     const f = field();
@@ -269,6 +327,39 @@ function arriveOutside(f: Field) {
 }
 
 describe('retreat outside the combat area via go', () => {
+  it('rejects an outside retreat farther than four area radii before any movement or go', async () => {
+    const f = outsideField(), start = f.bot.entity.position.clone(), keys = vi.spyOn(f.bot, 'setControlState');
+    f.args.retreatTo.x = start.x - f.args.area.radius * 4 - 0.01;
+    expect((await run(f)).shieldRush).toMatchObject({ status: 'failed', code: 'RETREAT_BLOCKED', hits: 0, safe: false,
+      at: { x: start.x, y: start.y, z: start.z } });
+    expect(f.bot.entity.position.equals(start)).toBe(true); expect(keys).not.toHaveBeenCalled();
+    expect(f.bot.activateItem).not.toHaveBeenCalled(); expect(go).not.toHaveBeenCalled(); f.close();
+  });
+  it('allows the outside distance estimate at exactly four area radii', async () => {
+    const f = outsideField(8); f.bot.health = f.args.retreatHp;
+    f.args.retreatTo.x = f.bot.entity.position.x - f.args.area.radius * 4;
+    arriveOutside(f);
+    expect((await run(f)).shieldRush).toMatchObject({ status: 'retreated', code: null, hits: 0, safe: true });
+    expect(go).toHaveBeenCalledTimes(1); f.close();
+  });
+  it('retreats after fifteen seconds without distance gain even while trying to close under the shield', async () => {
+    const f = outsideField(8), started = Date.now(); f.bot.frozen = true; f.mob.metadata[0] = 1;
+    arriveOutside(f);
+    const r = await run(f);
+    expect(r.shieldRush).toMatchObject({ code: 'NO_ATTACK_WINDOW', hits: 0, safe: true });
+    expect(f.states).toContain('盾の突撃 CLOSE');
+    expect(f.states).toContain('盾の突撃 RETREAT');
+    expect(f.swings).toHaveLength(0); expect(go).toHaveBeenCalledTimes(1);
+    expect(r.shieldRush.elapsedMs).toBeGreaterThanOrEqual(15_000);
+    expect(Date.now() - started).toBeLessThan(16_000); f.close();
+  });
+  it('honours crossfire retreat when an opposing shooter appears during guarded closing', async () => {
+    const f = outsideField(8); f.mob.metadata[0] = 1;
+    setTimeout(() => { f.bot.entities[42] = { ...f.mob, id: 42, uuid: 'opposing', position: new Vec3(-5, 64, 0.5) }; }, 800);
+    arriveOutside(f);
+    expect((await run(f)).shieldRush).toMatchObject({ code: 'CROSSFIRE', hits: 0, safe: true });
+    expect(f.states).toContain('盾の突撃 CLOSE'); expect(go).toHaveBeenCalledTimes(1); f.close();
+  });
   it('closes and kills before returning over stairs/slabs, keeping the shield and resident ownership throughout go', async () => {
     const f = outsideField(), s = new RushSpace(f.bot, f.args.area), lowered = f.bot.deactivateItem;
     expect(s.stand(new Vec3(-5.5, 64, 0.5))).toBe(false);
@@ -364,8 +455,11 @@ describe('retreat outside the combat area via go', () => {
     expect(release).toHaveBeenCalledTimes(1); expect(f.bot.deactivateItem).toBe(release); f.close();
   });
   it('keeps the in-area BFS rejection of a stair corridor, without calling go', async () => {
-    const f = outsideField(); f.args.retreatTo.x = -7.5;
-    expect((await run(f)).shieldRush).toMatchObject({ status: 'failed', code: 'RETREAT_BLOCKED', hits: 0, safe: false });
+    const f = outsideField(), start = f.bot.entity.position.clone(), keys = vi.spyOn(f.bot, 'setControlState');
+    f.args.retreatTo.x = -7.5;
+    expect((await run(f)).shieldRush).toMatchObject({ status: 'failed', code: 'RETREAT_BLOCKED', hits: 0, safe: false,
+      at: { x: start.x, y: start.y, z: start.z } });
+    expect(f.bot.entity.position.equals(start)).toBe(true); expect(keys).not.toHaveBeenCalled();
     expect(go).not.toHaveBeenCalled(); f.close();
   });
   it('keeps the shield through go when act supplies an owned motor port', async () => {
