@@ -1848,7 +1848,7 @@ async function prepareKillRun(): Promise<{ dragonId: number; ground: P3 }> {
       packCount('arrow') !== 64 || packCount('white_bed') !== 12 || packCount('obsidian') !== 12 || packCount('cobblestone') !== 64 || packCount('cooked_beef') !== 64 || packCount('bow') !== 1 ||
       actor.heldItem?.name !== 'stone_sword' || slots?.[45]?.name !== 'shield' ||
       ['iron_helmet', 'iron_chestplate', 'iron_leggings', 'iron_boots'].some((name, i) => slots?.[5 + i]?.name !== name) ||
-      actor.inventory.items().some((i: any) => i.name.endsWith('bucket'));
+      actor.inventory.items().some((i: any) => i.name.endsWith('bucket')));
   };
   for (let i = 0; i < 30 && unconfirmed(); i++) await sleep(200);
   const d = endView()?.dragon;
