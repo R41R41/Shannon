@@ -706,7 +706,7 @@ scene('blaze_lane', 'the lane: the spawn box filled with cobblestone but a 1-wid
 async function blazeLaneBuild(note: (text: string) => void, options: { holdSeconds?: number; groupSize?: number } = {}): Promise<Record<string, unknown>> {
   const stand = sites.blazeStand as number[] | undefined;
   if (!stand) throw new Error('no blazeStand in the sites');
-  const holdSeconds = options.holdSeconds ?? 300, groupSize = options.groupSize ?? 4, thinkMs = 5000;
+  const holdSeconds = options.holdSeconds ?? 300, groupSize = options.groupSize ?? 5, thinkMs = 5000;
   await ask('difficulty normal'); await ask('time set midnight'); await ask('weather clear');
   await equip({ stone_sword: 1, diamond_pickaxe: 1, shield: 1, cooked_porkchop: 7, cobblestone: 173 }, { armor: 'iron', shield: true });
   await placeActor('the_nether', stand[0], stand[1], stand[2], 24);
@@ -722,23 +722,35 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
   const spawnerCell = json.spawner as { x: number; y: number; z: number };
   const wait = cells[c.waiting[0]];
   note(`lane candidate ${c.direction}: required ${JSON.stringify(c.required)}; waiting cell ${wait.slice(0, 3)}; ${c.build.length} placements; spawn spaces ${json.spawn?.spaces}; blazes in the count box ${json.blaze?.count}`);
-  const placements = (c.build as Array<[number, number, number | null, number]>).map(([f, part]) => ({ at: { x: cells[facts[f][0]][0], y: cells[facts[f][0]][1], z: cells[facts[f][0]][2] }, part }));
+  const placementsOf = (cand: any, table: any[], factTable: any[]) => (cand.build as Array<[number, number, number | null, number]>)
+    .filter(([f]) => table[factTable[f][0]][4] === 'air')
+    .map(([f, part]) => ({ at: { x: table[factTable[f][0]][0], y: table[factTable[f][0]][1], z: table[factTable[f][0]][2] }, part }));
+  let placements = placementsOf(c, cells, facts);
   const canPlace = ['cobblestone'];
-  let built = 0, failedCells = 0, acts = 0, aborted = '';
-  for (let i = 0; i < placements.length && !disconnected && hp() > 0 && deaths === deaths0; i += groupSize) {
-    if (hp() < 6) { aborted = `hp ${r1(hp())} at ${i}/${placements.length}`; break; }
-    const group = placements.slice(i, i + groupSize);
-    const head = group[0];
-    // a floor cell within reach of the group: for the lid and the roof, the feet cell of the spawner's layer under the cell; for the rest, the waiting cell
-    const floor = head.part === 'lid' || head.part === 'roof' ? { x: head.at.x, y: spawnerCell.y, z: head.at.z } : { x: wait[0], y: wait[1], z: wait[2] };
-    await sleep(thinkMs);
-    const run = await act(`build#${++acts}`, [{ do: 'go', to: floor, range: 2.5, seconds: 12, onFail: 'continue' },
-      { do: 'place', at: group.map(p => p.at), block: 'cobblestone', onFail: 'continue' }], 40, { accept: ['blaze'] });
-    const text = run.lines.join(' ');
-    const placed = (text.match(/に cobblestone を置いた/gu) ?? []).length;
-    built += group.length - (/置けない|stopped|止まった/u.test(text) ? 1 : 0); failedCells += /置けない|stopped|止まった/u.test(text) ? 1 : 0;
-    if (acts % 5 === 1 || /置けない|止まった/u.test(text)) note(`build#${acts} (${head.part}) hp ${r1(hp())}: ${text.slice(0, 240)}`);
-    if (placed === 0 && !run.ok && /反射|reflex/u.test(String(run.stoppedBy ?? ''))) { await sleep(2000); }
+  let built = 0, failedCells = 0, acts = 0, aborted = '', passes = 0, lastLeft = Infinity;
+  // passes: each pass builds what the probe lists as still to be set (a cell a blaze stood in is tried again in the next pass), at most 8 passes
+  for (let pass = 0; pass < 8 && placements.length && !disconnected && hp() > 0 && deaths === deaths0 && !aborted; pass++) {
+    passes++;
+    for (let i = 0; i < placements.length && !disconnected && hp() > 0 && deaths === deaths0; i += groupSize) {
+      if (hp() < 6) { aborted = ; break; }
+      const group = placements.slice(i, i + groupSize);
+      const head = group[0];
+      // a floor cell within reach of the group: for the lid and the roof, the feet cell of the spawner's layer under the cell; for the rest, the waiting cell
+      const floor = head.part === 'lid' || head.part === 'roof' ? { x: head.at.x, y: spawnerCell.y, z: head.at.z } : { x: wait[0], y: wait[1], z: wait[2] };
+      await sleep(thinkMs);
+      const run = await act(, [{ do: 'go', to: floor, range: 2.5, seconds: 12, onFail: 'continue' },
+        ...group.map(p => ({ do: 'place', at: [p.at], block: 'cobblestone', onFail: 'continue' }))], 45, { accept: ['blaze'] });
+      const text = run.lines.join(' ');
+      built += group.length; failedCells += (text.match(/置けない|止まった/gu) ?? []).length;
+      if (acts % 6 === 1 || /反射/u.test(text)) note();
+    }
+    json = await readLane();
+    const again = json?.candidates?.find((x: any) => x.direction === c.direction);
+    if (!again) break;
+    placements = placementsOf(again, json.cells, json.facts);
+    note();
+    if (placements.length >= lastLeft) break;
+    lastLeft = placements.length;
   }
   const buildSeconds = (Date.now() - t0) / 1000, lowestWhileBuilding = Math.min(...track, 20), cobbleUsed = cobble0 - (packClient().cobblestone ?? 0);
   note(`built in ${r1(buildSeconds)} s: ${acts} acts, ${built} placements tried, ${failedCells} groups with a failure, cobblestone used ${cobbleUsed}, lowest hp ${r1(lowestWhileBuilding)} ${aborted}`);
