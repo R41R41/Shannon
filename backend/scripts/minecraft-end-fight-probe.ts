@@ -1090,15 +1090,23 @@ scenes.tower = async () => {
   // or hurt it, and does it fall. The body does nothing (a planner is busy); the reflex is on.
   await protect(false);
   releaseReflex();
-  await flatten(); await gear(['diamond_sword']); await wear();
+  await flatten(); await wear();
   const topAt = (x: number, z: number): number | null => {
     for (let y = 110; y >= 20; y--) { const block = actor.blockAt(new Vec3(x, y, z), false); if (block && block.name === 'end_stone') return y; }
     return null;
   };
   const seconds = 150, height = 30;
-  const places: Array<[string, number, number]> = [['a column 30 up at x 30 (12 m from the pillar at x 42)', 30, 0], ['a column 30 up at x 12 (by the middle)', 12, 12]];
+  // what a head that climbed carries: the blocks it climbed with (some left) and the bucket; and, for the first, what it would have with nothing (the body of w19 died of the third cloud in a row)
+  const kit = ['diamond_sword', 'cobblestone 12', 'water_bucket'];
+  const places: Array<[string, number, number, string[]]> = [
+    ['a column 30 up at x 30 (12 m from the pillar at x 42), with 12 blocks and a bucket', 30, 0, kit],
+    ['a column 30 up at x 12 (by the middle), with 12 blocks and a bucket', 12, 12, kit],
+  ];
   const trials: Array<Record<string, unknown>> = [];
-  for (const [label, x, z] of places) {
+  for (const [label, x, z, items] of places) {
+    // (a body that died is back in the overworld: it is put in the End first, where the ground can be read)
+    await gear(items); await wear(); actor.setQuickBarSlot(0);
+    await standAt(0.5, g, 8.5); await sleep(1500);
     await restoreDragon(); await sleep(2500);
     const top = topAt(x, z);
     if (top === null) { trials.push({ label, error: 'no ground seen there' }); continue; }
@@ -1175,6 +1183,50 @@ scenes.fall = async () => {
   }
   await flatten(); await ask('kill @e[type=minecraft:item]');
   return { trials };
+};
+
+scenes.tower_ball = async () => {
+  // The top of a one-block column 30 up is a place with no way to walk out of a cloud: the body that climbed it with blocks carried rises above the cloud of a fireball that falls on it, as on the arrival platform,
+  // and again for the next ball (the cloud laid at the new height). Three balls 3 s apart; the dragon parked high over the island. With the bucket carried (a fall off the top would be stopped).
+  await protect(false);
+  releaseReflex();
+  await park(true);
+  await flatten(); await wear();
+  const topAt = (x: number, z: number): number | null => {
+    for (let y = 110; y >= 20; y--) { const block = actor.blockAt(new Vec3(x, y, z), false); if (block && block.name === 'end_stone') return y; }
+    return null;
+  };
+  const height = 30, x = 30, z = 0;
+  const kit = ['diamond_sword', 'cobblestone 12', 'water_bucket'];
+  await gear(kit); await wear(); actor.setQuickBarSlot(0);
+  await standAt(0.5, g, 8.5); await sleep(1500);
+  const top = topAt(x, z);
+  if (top === null) return { error: 'no ground seen at the column' };
+  await ask(`${END} kill @e[type=minecraft:area_effect_cloud]`); await ask(`${END} kill @e[type=minecraft:dragon_fireball]`);
+  await ask(`${END} fill ${x} ${top + 1} ${z} ${x} ${top + height} ${z} obsidian`);
+  await ask(`${END} fill ${x - 2} ${top + height + 1} ${z - 2} ${x + 2} ${top + height + 8} ${z + 2} air`);
+  await ask(`effect give ${ACTOR} minecraft:instant_health 1 5`);
+  await standAt(x + 0.5, top + height + 1, z + 0.5); await sleep(1500);
+  const healthBefore = Number(actor.health), deathsBefore = actorDeaths, lowest = trackMinHealth(), ledgerMark = (actor.reflexLedger?.mark?.() as number | undefined) ?? 0;
+  const y0 = actor.entity.position.y, start = Date.now();
+  const risen: Array<[number, number]> = [];
+  const poll = every(50, () => { const y = actor.entity.position.y; if (risen.length === 0 ? y - y0 >= 0.9 : y - risen[risen.length - 1][1] >= 0.9) risen.push([Date.now() - start, round(y, 2)!]); });
+  for (let n = 0; n < 3; n++) {
+    const at = actor.entity.position;
+    await ask(`${END} summon minecraft:dragon_fireball ${at.x.toFixed(2)} ${(at.y + 6).toFixed(2)} ${at.z.toFixed(2)} {Motion:[0.0d,-1.0d,0.0d],acceleration_power:0.1d}`);
+    await sleep(3000);
+  }
+  await sleep(3000);
+  clearInterval(poll);
+  const entries = (actor.reflexLedger?.entriesSince?.(ledgerMark) as Array<{ kind: string; outcome: string; detail: string }> | undefined) ?? [];
+  const result = {
+    topY: top + height, startFeetY: y0, endFeetY: round(actor.entity.position.y, 2), healthLost: round(healthBefore - Number(actor.health), 1), lowest: lowest.stop(), died: actorDeaths > deathsBefore,
+    risenAtMsAndY: risen, blocksLeft: (actor.inventory.items() as Array<{ name: string; count: number }>).filter(item => item.name === 'cobblestone').reduce((sum, item) => sum + item.count, 0),
+    ledger: entries.filter(e => e.kind === 'retreat').map(e => `${e.kind}:${e.outcome}:${e.detail.slice(0, 110)}`),
+  };
+  log(`TOWER_BALL ${JSON.stringify(result)}`);
+  await ask(`${END} fill ${x} ${top + 1} ${z} ${x} ${top + height + 8} ${z} air`);
+  return result;
 };
 
 scenes.knockback = async () => {
