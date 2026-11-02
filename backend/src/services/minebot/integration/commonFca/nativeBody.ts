@@ -180,9 +180,11 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
     if (options.events ?? process.env.MINEBOT_BODY_EVENTS !== 'off') this.events = new BodyEventWatcher(bot, () => this.now());
     bot.on('end', this.onEnd); bot.on('minebotActionProgress', this.onProgress); bot.on('minebotActStep', this.onStep);
     // Continue contracts: the body counts its own lives (5), records every effective operation from the start (8) and asks for the server's tick.
-    // Built before login: bot.username arrives later. Keep one configured identity for both loading and saving.
-    const lifeName = bot.username ?? bot._client?.username ?? 'body';
-    this.life = installLife(bot, { key: () => `${options.serverId}|${lifeName}`, note: (what, data) => { try { blackBoxOf(bot)?.note(what, data); } catch { /* a note is a help */ } } });
+    // Built before login: bot.username arrives later. The entry is the body's own name's (read once it is known, and kept): never a shared
+    // "body" entry, which the next login (the name known at once) would leave for another count in the same epoch (run 59 leg 2).
+    let lifeName: string | null = bot.username ?? bot._client?.username ?? null;
+    const lifeKey = () => { lifeName ??= bot.username ?? bot._client?.username ?? null; return lifeName ? `${options.serverId}|${lifeName}` : null; };
+    this.life = installLife(bot, { key: lifeKey, note: (what, data) => { try { blackBoxOf(bot)?.note(what, data); } catch { /* a note is a help */ } } });
     this.opLog = opLogOf(bot) ?? installOpLog(bot, new OpLog(opLogDirectory()));
     setMotorOpSink(bot, op => this.opLog.op(op));
     setShieldNoteSink(bot, (_kind, data) => this.opLog.motorState(data));

@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Vec3 } from 'vec3';
@@ -41,6 +41,23 @@ describe('the life number (contract 5)', () => {
     const keeper = new LifeKeeper(botOf(), { file, now: () => 1793164759174, note: what => { notes.push(what); } });
     expect(keeper.view()).toMatchObject({ life: 1793164759174, advancedBy: 'file_unreadable', deathSeq: 0 });
     expect(notes).toEqual(['life_file_unreadable']);
+  });
+  it('run 59 leg 2: built before the name is known, it tells no counter until the login names it, then the entry of that name (never a shared one)', () => {
+    const file = tempFile('life.json');
+    writeFileSync(file, JSON.stringify({ 'home|body': { life: 1, deathEpoch: 'de-x', deathSeq: 0 }, 'home|I_am_Shannon': { life: 4, deathEpoch: 'de-x', deathSeq: 3 } }));
+    const bot: any = Object.assign(new EventEmitter(), { username: undefined, health: 20, game: { dimension: 'overworld' } });
+    const key = () => (bot.username ? `home|${bot.username}` : null);
+    const keeper = new LifeKeeper(bot, { file, key });
+    const before = keeper.view();
+    expect(before).not.toHaveProperty('deathEpoch');
+    expect(before).not.toHaveProperty('deathSeq');
+    bot.username = 'I_am_Shannon'; bot.emit('login');
+    expect(keeper.view()).toMatchObject({ life: 4, deathEpoch: 'de-x', deathSeq: 3 });
+    // The next login (the name known at once) tells the same count: no rise in the same epoch, so no death for the head.
+    const next: any = Object.assign(new EventEmitter(), { username: 'I_am_Shannon', health: 20, game: { dimension: 'overworld' } });
+    expect(new LifeKeeper(next, { file, key: () => `home|${next.username}` }).view()).toMatchObject({ life: 4, deathEpoch: 'de-x', deathSeq: 3 });
+    // Nothing was written under a shared name meanwhile.
+    expect(JSON.parse(readFileSync(file, 'utf8'))['home|body']).toEqual({ life: 1, deathEpoch: 'de-x', deathSeq: 0 });
   });
   it('a change of dimension is not a death: the life stays and the dimension generation moves (also on a return)', () => {
     const bot: any = botOf();
