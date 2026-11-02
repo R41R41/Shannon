@@ -1,9 +1,7 @@
 import minecraftData from 'minecraft-data';
 import { detectVillage } from '../utils/landmarks.js';
 import { scanLoadedBlocks } from '../utils/loadedBlockScan.js';
-import { FRAME_RING_STEP, FRAME_SEARCH_DEFAULT, FRAME_SEARCH_MAX, framesAround, nextSurveyPoints, ringPoints, surveyOf } from '../utils/huntFrameSearch.js';
-import { campSite, campWords } from '../utils/huntCamp.js';
-import { bodyReader } from '../utils/localMap.js';
+import { STRONGHOLD_EVIDENCE_BLOCKS, blazeCampReport, strongholdFramesReport } from '../utils/huntStructures.js';
 import { WOOL_COLORS } from '../utils/nightGate.js';
 import { CustomBot, InstantSkill } from '../types.js';
 
@@ -16,7 +14,7 @@ import { CustomBot, InstantSkill } from '../types.js';
 export const STRUCTURE_MARKERS: Record<string, { blocks: string[]; distance: number }> = {
   fortress: { blocks: ['nether_bricks', 'nether_brick_fence'], distance: 256 },
   bastion: { blocks: ['polished_blackstone_bricks', 'gilded_blackstone'], distance: 256 },
-  stronghold: { blocks: ['end_portal_frame', 'infested_stone_bricks', 'infested_mossy_stone_bricks', 'infested_cracked_stone_bricks'], distance: 64 },
+  stronghold: { blocks: ['end_portal_frame', ...STRONGHOLD_EVIDENCE_BLOCKS], distance: 64 },
   // A bed set down in the world (an igloo's, a village's): one to take, not a structure to enter (explore-for-structure only).
   bed: { blocks: WOOL_COLORS.map(color => `${color}_bed`), distance: 128 },
 };
@@ -55,64 +53,14 @@ class FindStructure extends InstantSkill {
     ];
   }
 
-  /**
-   * stronghold: the portal room's frames (only `end_portal_frame` is the portal room), over the whole height of the loaded chunks, within the
-   * radius of the centre; when there is none, the rings of points sixteen blocks apart to walk (utils/huntFrameSearch), those no scan has covered.
-   */
+  /** stronghold: the portal room's frames within a radius of a centre, or the next points of the rings (utils/huntStructures; the body's `probe kind=frames` says the same). */
   private strongholdFrames(radius?: number, x?: number, z?: number) {
-    const body = this.bot.entity.position;
-    const center = Number.isFinite(x) && Number.isFinite(z) ? { x: Math.floor(x as number), z: Math.floor(z as number) } : { x: Math.floor(body.x), z: Math.floor(body.z) };
-    const limit = Math.max(FRAME_RING_STEP, Math.min(FRAME_SEARCH_MAX, Math.round(Number.isFinite(radius) ? radius as number : FRAME_SEARCH_DEFAULT)));
-    const scan = framesAround(this.bot as any, center, limit);
-    const survey = surveyOf(this.bot as any, center, limit);
-    survey.scans.push({ x: body.x, z: body.z, reach: scan.reach });
-    if (survey.scans.length > 64) survey.scans.shift();
-    const way = (p: { x: number; z: number }) => {
-      const dx = p.x - body.x, dz = p.z - body.z, d = Math.round(Math.hypot(dx, dz));
-      return `${d}m ${['北', '北東', '東', '南東', '南', '南西', '西', '北西'][Math.round(((Math.atan2(dx, -dz) * 180 / Math.PI + 360) % 360) / 45) % 8]}`;
-    };
-    if (scan.frames.length) {
-      const eyes = scan.frames.filter(frame => frame.eye === true).length, known = scan.frames.filter(frame => frame.eye !== null).length;
-      const nearest = scan.frames[0];
-      try { (this.bot as any).placeMemory?.remember('stronghold', { x: nearest.x, y: nearest.y, z: nearest.z }, { note: 'end_portal_frame' }); } catch { /* memory is optional */ }
-      const list = scan.frames.slice(0, 12).map(frame => `(${frame.x}, ${frame.y}, ${frame.z})${frame.eye === true ? '目あり' : frame.eye === false ? '目なし' : ''}`).join(' ');
-      return { success: true, result: `エンドポータルの枠を発見: ${scan.frames.length}個${known ? `（目が入っている ${eyes}/${known}）` : ''}。いちばん近い枠 (${nearest.x}, ${nearest.y}, ${nearest.z})、自分から ${way(nearest)}・高さ ${nearest.y - Math.floor(body.y) >= 0 ? '+' : ''}${nearest.y - Math.floor(body.y)}。枠: ${list}` };
-    }
-    // No frame in the loaded chunks: what shows a stronghold is near (the infested bricks), and what has not been looked at yet.
-    const evidence = scanLoadedBlocks(this.bot as any, STRUCTURE_MARKERS.stronghold.blocks.filter(name => name !== 'end_portal_frame'), { maxHits: 1, maxDistance: limit + 320 }).hits[0];
-    const seen = evidence ? `要塞の石レンガ（${evidence.name}）は (${evidence.position.x}, ${evidence.position.y}, ${evidence.position.z}) にある（自分から ${way(evidence.position)}）が、枠はまだ見えない。` : '要塞の痕跡（枠・感染した石レンガ）も見えない。';
-    const next = nextSurveyPoints(ringPoints(center, limit, { x: body.x, z: body.z }), survey.scans, { x: body.x, z: body.z });
-    const done = ringPoints(center, limit).length;
-    const hint = next.length
-      ? `輪（${FRAME_RING_STEP}ブロック刻み）の次の点（読み込みが届いていない所。歩いて着いたら、もう一度 stronghold で探す）: ${next.map(point => `(${point.x}, ${point.z}) 輪${point.ring}`).join(' ')}`
-      : `半径${limit}まで読み込み済みの範囲で見終わった（${done}点の輪のどれにも届いている）。枠は無い: 中心 (${center.x}, ${center.z}) が要塞から外れている（交点を引き直す）か、半径を広げる`;
-    return { success: true, result: `中心 (${center.x}, ${center.z}) の半径${limit}mの読み込み済みの範囲（自分から約${scan.reach}m、${scan.columns}列）に、エンドポータルの枠はありません。${seen}${hint}。要塞の位置が分からない間は、離れた 2 地点で目玉を投げて（use item=ender_eye）方位の線の交点を探します` };
+    return { success: true, result: strongholdFramesReport(this.bot as any, { radius, x, z }).text };
   }
 
-  /**
-   * blaze_spawner: the spawner blocks in the loaded chunks of the Nether (every spawner there is a fortress's blaze spawner), and for the nearest one the cells within three
-   * blocks to camp on (utils/huntCamp: floor, two open cells, no edge, no fire), so that the planner goes to a cell that a push does not drop the body from.
-   */
+  /** blaze_spawner: the spawner and the cells within three blocks to camp on (utils/huntStructures; the body's `probe kind=camp` says the same). */
   private blazeSpawner() {
-    const bot = this.bot as any;
-    const dimension = String(bot.game?.dimension ?? '').replace(/^minecraft:/u, '');
-    if (dimension && dimension !== 'the_nether') return { success: true, result: `ブレイズの湧き場はネザー要塞の中にある（ここは ${dimension}）` };
-    const scan = scanLoadedBlocks(bot, ['spawner'], { maxHits: 4, maxDistance: 128 });
-    if (!scan.hits.length) {
-      let known = '';
-      try {
-        const remembered = bot.placeMemory?.recall('blaze_spawner', 1)?.[0];
-        known = remembered ? `以前に見た湧き場: (${remembered.position.x}, ${remembered.position.y}, ${remembered.position.z}) ${remembered.distance}m ${remembered.direction}。` : '';
-      } catch { known = ''; }
-      return { success: true, result: `読み込み済みの範囲（約${Math.min(scan.reachMetres, 128)}m）に湧き場はありません。${known}ネザー要塞（find-structure fortress）の通路を進んで、もう一度探してください` };
-    }
-    const nearest = scan.hits[0];
-    try { bot.placeMemory?.remember('blaze_spawner', nearest.position, { note: 'spawner' }); } catch { /* memory is optional */ }
-    const site = campSite(bodyReader(bot), nearest.position, 4);
-    const others = scan.hits.slice(1).map((hit: any) => `(${hit.position.x}, ${hit.position.y}, ${hit.position.z}) ${Math.floor(hit.distance)}m`).join(' ');
-    return { success: true, result: `ブレイズの湧き場を発見: (${nearest.position.x}, ${nearest.position.y}, ${nearest.position.z})、距離${Math.floor(nearest.distance)}m${others ? `（ほかに ${others}）` : ''}。`
-      + `${campWords(site)}${site.fire ? `。湧き場の5m以内に火が${site.fire}個（火の中と隣へは go が行かない）` : ''}。`
-      + 'そこへ go で着いてから attack hold か fight（盾は左手。盾は火の玉1つで6すり減る＝予備を持つ）' };
+    return { success: true, result: blazeCampReport(this.bot as any).text };
   }
 
   async runImpl(structureType: string, radius?: number, x?: number, z?: number) {

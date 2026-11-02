@@ -405,6 +405,14 @@ async function eyeFrom(x: number, z: number, y = 200): Promise<{ run: ActRun; ey
   const run = await act('eye', [{ do: 'use', item: 'ender_eye' }], 40);
   return { run, eye: run.json?.eye ?? null, located };
 }
+scene('locate_start', 'where /locate says the stronghold starts, against the staged portal room (the eye flies to the start, not to the room)', async () => {
+  const portal = (sites.strongholdPortalCenter ?? sites.strongholdSurface) as number[];
+  await ask('difficulty peaceful');
+  const here = await locateFrom(portal[0], 150, portal[2]);
+  const away = await locateFrom(portal[0] + 120, 150, portal[2] - 90);
+  const offset = here ? { dx: portal[0] - here.x, dz: portal[2] - here.z, distance: r1(Math.hypot(portal[0] - here.x, portal[2] - here.z)), bearingDegStartToRoom: r1(bearingBetween(here, { x: portal[0], z: portal[2] })) } : null;
+  return { portal: [portal[0], portal[1], portal[2]], startFromTheRoom: here, startFromAway: away, sameStart: !!here && !!away && here.x === away.x && here.z === away.z, offset };
+});
 scene('eye_locate', 'the thrown eye: ten throws, the bearing against /locate stronghold', async note => {
   const centre = (sites.strongholdPortalCenter ?? sites.strongholdSurface) as number[];
   await ask('difficulty peaceful'); await ask('time set noon'); await ask('weather clear');
@@ -479,6 +487,35 @@ scene('frame_search', 'find-structure stronghold: the frames within a radius of 
   }
   const wrong = rows.filter(row => (row.truthFramesInRadius as number) > 0 && (row.foundFrames as number) === 0).length;
   return { cases: rows.length, framesMissedWhereTheyAre: wrong, rows };
+});
+
+// ===== the probe kinds (what the LLM-centric mode can call: act and probe, no catalog skill) =================================================
+scene('probe_kinds', 'probe kind=camp at the blaze spawner and kind=frames at the stronghold, against find-structure\'s own answers (they must say the same)', async note => {
+  const stand = sites.blazeStand as number[];
+  const portal = (sites.strongholdPortalCenter ?? sites.strongholdSurface) as number[];
+  await ask('difficulty peaceful');
+  await equip({}, { armor: 'none', shield: false });
+  await placeActor('the_nether', stand[0], stand[1], stand[2], 24);
+  const campProbe = await runSkill('probe', { kind: 'camp' }, 20);
+  const campSkill = await runSkill('find-structure', { structureType: 'blaze_spawner' }, 20);
+  let camp: any = null;
+  try { camp = JSON.parse(String(campProbe.receipt?.result ?? '')); } catch { camp = null; }
+  note(`probe camp: ${String(campProbe.receipt?.result ?? '').slice(0, 360)}`);
+  const sx = portal[0] + 20, sz = portal[2] + 20, y = 150;
+  await ask(`execute in minecraft:overworld run forceload add ${sx - 16} ${sz - 16} ${sx + 16} ${sz + 16}`); await sleep(2500);
+  await ask(`execute in minecraft:overworld run fill ${sx - 2} ${y - 1} ${sz - 2} ${sx + 2} ${y - 1} ${sz + 2} minecraft:stone`);
+  await ask(`execute in minecraft:overworld run fill ${sx - 2} ${y} ${sz - 2} ${sx + 2} ${y + 4} ${sz + 2} minecraft:air`);
+  await ask(`execute in minecraft:overworld run tp ${ACTOR} ${sx + 0.5} ${y} ${sz + 0.5}`);
+  const until = Date.now() + 25_000;
+  while (Date.now() < until && !(dimensionOf() === 'overworld' && actor.entity?.onGround && Math.abs(actor.entity.position.x - (sx + 0.5)) < 1.5)) await sleep(250);
+  await sleep(2500);
+  const framesProbe = await runSkill('probe', { kind: 'frames', radius: 64, x: portal[0], z: portal[2] }, 20);
+  const framesSkill = await runSkill('find-structure', { structureType: 'stronghold', radius: 64, x: portal[0], z: portal[2] }, 20);
+  let frames: any = null;
+  try { frames = JSON.parse(String(framesProbe.receipt?.result ?? '')); } catch { frames = null; }
+  note(`probe frames: ${String(framesProbe.receipt?.result ?? '').slice(0, 360)}`);
+  return { campFound: camp?.found ?? null, campCells: camp?.cells?.length ?? null, campFirst: camp?.cells?.[0] ?? null, campSameAsSkill: camp?.text === String(campSkill.receipt?.result ?? ''),
+    framesFound: frames?.found?.length ?? null, framesSameAsSkill: frames?.text === String(framesSkill.receipt?.result ?? ''), framesNext: frames?.next?.length ?? null };
 });
 
 // ---- run -----------------------------------------------------------------------------------------------------------------------------------

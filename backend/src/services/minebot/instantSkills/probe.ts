@@ -9,6 +9,7 @@ import { handsNear } from '../utils/handHistory.js';
 import { scanWorld } from '../utils/worldScan.js';
 import { isLikelyHostileMobName } from '../utils/hostileMobHints.js';
 import { closingSpeed } from '../utils/threatTracker.js';
+import { blazeCampReport, strongholdFramesReport } from '../utils/huntStructures.js';
 
 /**
  * mc.probe (r4 contract 1, 2026-10-22): the body's reading tools. Read only, a fixed computation each, no LLM, no choice; the category is a
@@ -19,15 +20,19 @@ import { closingSpeed } from '../utils/threatTracker.js';
  *   around  the creatures within a radius (id, where, height, seen, facing her, closing) and the dangerous blocks round her;
  *   history the act's hands and stops at a place (newest first);
  *   scan    what the loaded chunks hold (logs, a village, water, lava pools, structures, stems, a fortress, spawners, portals).
+ *   frames  the stronghold's end portal frames within `radius` blocks of (x, z), or the next points of the 16-block rings to walk (S2: the same as find-structure stronghold);
+ *   camp    the Nether's blaze spawner and the cells within three blocks of it to stand on: a floor, two open cells, no edge, no fire (S2: the same as find-structure blaze_spawner).
  * The answer is JSON: { v: 1, kind, text, ... } with the sentence first, the dangerous facts said as they are.
  */
-export const PROBE_KINDS = ['path', 'sight', 'column', 'around', 'history', 'scan', 'worksite'] as const;
+export const PROBE_KINDS = ['path', 'sight', 'column', 'around', 'history', 'scan', 'worksite', 'frames', 'camp'] as const;
 const Pos = z.object({ x: z.number(), y: z.number(), z: z.number() }).strict();
 
 const DESCRIPTION = '調べる（読むだけ・決まった計算）。kind: path（to へ掘らず置かずに歩いて行けるか。行けるなら道の点、行けないなら切れ目と立てる所）/ '
   + 'sight（target のブロックか生き物 #id が目から見えるか・届くか・間のブロック）/ column（x,z の縦の列。yFrom・yTo。落差・水・溶岩・砂利）/ '
   + 'around（radius 内の生き物と危ないブロック）/ history（at の radius 内の最近の手と止まり）/ scan（読み込み済みの範囲の目印。radius はチャンク）。'
-  + 'worksite（target: 目的物、to: 作業位置、retreat: 帰還先。接近・呼吸・取得・逆向きの道を別々に確認）。'
+  + 'worksite（target: 目的物、to: 作業位置、retreat: 帰還先。接近・呼吸・取得・逆向きの道を別々に確認）/ '
+  + 'frames（要塞のエンドポータルの枠。x・z=探す中心（既定は足）、radius=ブロック16〜128（既定64）。枠が無ければ16ブロック刻みの輪の次に歩く点）/ '
+  + 'camp（ネザーのブレイズの湧き場と、その3m以内で縁・火の無い野営向きの足場）。'
   + '結果は JSON（text が先頭。危ない事実をそのまま書く）。';
 
 const cellOf = (value: { x: number; y: number; z: number }): Cell => ({ x: Math.floor(value.x), y: Math.floor(value.y), z: Math.floor(value.z) });
@@ -40,15 +45,15 @@ class Probe extends InstantSkill {
     this.description = DESCRIPTION;
     this.maxDurationMs = 30_000;
     this.params = [
-      { name: 'kind', type: 'json', schema: z.enum(PROBE_KINDS), description: 'path・sight・column・around・history・scan・worksite', required: true },
+      { name: 'kind', type: 'json', schema: z.enum(PROBE_KINDS), description: 'path・sight・column・around・history・scan・worksite・frames・camp', required: true },
       { name: 'to', type: 'json', schema: Pos, description: 'path: 行きたいマス' },
       { name: 'from', type: 'json', schema: Pos, description: 'path・sight: 出発・目の位置の足のマス（既定は足）' },
       { name: 'target', type: 'json', schema: z.union([Pos, z.string().max(64), z.number()]), description: 'sight: ブロック {x,y,z} か生き物 "#id"' },
-      { name: 'x', type: 'number', description: 'column: 列の x（既定は足）' },
-      { name: 'z', type: 'number', description: 'column: 列の z（既定は足）' },
+      { name: 'x', type: 'number', description: 'column: 列の x（既定は足）/ frames: 探す中心の x' },
+      { name: 'z', type: 'number', description: 'column: 列の z（既定は足）/ frames: 探す中心の z' },
       { name: 'yFrom', type: 'number', description: 'column: 下端の y（既定 足−16）' },
       { name: 'yTo', type: 'number', description: 'column: 上端の y（既定 足+16）' },
-      { name: 'radius', type: 'number', description: 'around: m（1〜16、既定 8）/ history: m（1〜32、既定 4）/ scan: チャンク（1〜16、既定は読み込み済みの全部）' },
+      { name: 'radius', type: 'number', description: 'around: m（1〜16、既定 8）/ history: m（1〜32、既定 4）/ scan: チャンク（1〜16、既定は読み込み済みの全部）/ frames: ブロック（16〜128、既定 64）' },
       { name: 'at', type: 'json', schema: Pos, description: 'history: 場所（既定は足）' },
       { name: 'retreat', type: 'json', schema: Pos, description: 'worksite: 帰還先（逆向きの道を別に調べる）' },
     ];
@@ -148,6 +153,16 @@ export async function runProbe(bot: any, input: ProbeInput): Promise<{ success: 
       if (!summary) return { success: false, result: '読み込み済みのチャンクを読めない（体が無いか、世界がまだ無い）', failureType: 'unavailable' };
       const { longestSliceMs: _longest, longestSliceWords: _words, ...rest } = summary;
       return answer({ v: 1, kind: 'scan', ...rest });
+    }
+    case 'frames': {
+      const report = strongholdFramesReport(bot, { radius: typeof input.radius === 'number' ? input.radius : null, x: input.x, z: input.z });
+      const said = { v: 1 as const, kind: 'frames', text: report.text, center: report.center, radius: report.radius, reachM: report.reach, found: report.found, next: report.next };
+      return answer(said);
+    }
+    case 'camp': {
+      const report = blazeCampReport(bot);
+      const said = { v: 1 as const, kind: 'camp', text: report.text, found: report.found, ...(report.spawner ? { spawner: report.spawner } : {}), others: report.others, cells: report.cells, fire: report.fire };
+      return answer(said);
     }
     default:
       return bad(`kind は ${PROBE_KINDS.join('・')} のどれか`);
