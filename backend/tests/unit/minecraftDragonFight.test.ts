@@ -433,7 +433,7 @@ describe('the observation the body gives the head', () => {
   });
 });
 
-import { installFloorReflexes } from '../../src/services/minebot/utils/floorReflexes.js';
+import { FALL_CLUTCH_ENABLED, installFloorReflexes } from '../../src/services/minebot/utils/floorReflexes.js';
 import { floorConfig } from '../../src/services/minebot/utils/floorConfig.js';
 
 describe('the floor reflex out of the dragon\'s reach', () => {
@@ -613,7 +613,7 @@ describe('shoot at a crystal', () => {
 });
 
 import { clutchWanted, runFallClutch, scoopBack, scoopWanted, CLUTCH_REACH, SCOOP_BUCKET_WAIT_MS, SCOOP_GAP_MS, SCOOP_NEAR, SCOOP_PENDING_MS, SCOOP_PENDING_TRIES, type FallMemory } from '../../src/services/minebot/utils/fallClutch.js';
-import { createMotorPort, executeAction, hasActiveSafetyLease, preemptLowerPriorityActions } from '../../src/services/minebot/execution/ActionExecution.js';
+import { createMotorPort, dropReservation, executeAction, hasActiveSafetyLease, preemptLowerPriorityActions, reserveHandover } from '../../src/services/minebot/execution/ActionExecution.js';
 
 describe('the water-bucket clutch of a fall in the End', () => {
   /** In the second slot of the hotbar (slot 37 of the window). */
@@ -639,10 +639,11 @@ describe('the water-bucket clutch of a fall in the End', () => {
     const hotbar: any[] = [{ name: 'diamond_sword', slot: 36 }, { name: 'water_bucket', slot: 37 }];
     bot.inventory = { items: () => [...hotbar], slots: [] };
     bot.heldItem = hotbar[selected];
+    bot.quickBarSlot = selected;
     bot._client = { write: vi.fn((name: string, data: any) => { if (name === 'use_item') seen.rotations.push(data.rotation.y); }) };
     bot.look = vi.fn((_yaw: number, pitch: number) => { self.pitch = pitch; });
     bot.equip = vi.fn(async () => undefined);
-    bot.setQuickBarSlot = vi.fn((slot: number) => { selected = slot; bot.heldItem = hotbar[selected]; });
+    bot.setQuickBarSlot = vi.fn((slot: number) => { selected = slot; bot.quickBarSlot = slot; bot.heldItem = hotbar[selected]; });
     bot.activateItem = vi.fn(() => {
       bot._client.write('use_item', { rotation: { x: 0, y: 0 } });
       seen.uses++;
@@ -694,9 +695,12 @@ describe('the water-bucket clutch of a fall in the End', () => {
       expect(result).toMatchObject({ success: true });
       expect(result.result).toMatch(/落下を止めた.*汲み直した/u);
     } finally { stop(); }
-    // the bucket came into the hand by its hotbar slot (one packet), not by the game's equip (clicks of the window over several ticks)
+    // the bucket came into the hand by its hotbar slot (one packet), not by the game's equip (clicks of the window over several ticks) ...
     expect(f.bot.setQuickBarSlot).toHaveBeenCalledWith(1);
     expect(f.bot.equip).not.toHaveBeenCalled();
+    // ... and the hand was given back when it ended (round 8: an attack at the dragon strikes with what the hand holds): the sword's slot, the bucket full again in its own
+    expect(f.bot.setQuickBarSlot.mock.calls.map((call: number[]) => call[0])).toEqual([1, 0]);
+    expect(f.bot.heldItem.name).toBe('diamond_sword');
     expect(f.bot.look).toHaveBeenCalledWith(expect.any(Number), -Math.PI / 2, true);
     expect(seen.rotations[0]).toBeCloseTo(90, 3); // the packet carries the downward look, not the library's level one
     expect(seen.pourY + 1.62 - 64).toBeLessThanOrEqual(CLUTCH_REACH);
@@ -719,7 +723,7 @@ describe('the water-bucket clutch of a fall in the End', () => {
       expect(seen.uses).toBe(0);
     } finally { stop(); }
   });
-  it('is started by the floor reflex in the tick the fall is worth it, over the rest, and told in the ledger', async () => {
+  it.skipIf(!FALL_CLUTCH_ENABLED)('is started by the floor reflex in the tick the fall is worth it, over the rest, and told in the ledger', async () => {
     const f = falling({ y: 80, vy: -2 });
     const { stop } = withBucket(f);
     f.bot.setControlState = vi.fn(); f.bot.consume = vi.fn(async () => undefined);
@@ -745,8 +749,11 @@ describe('the water-bucket clutch of a fall in the End', () => {
   });
 
   describe('the water a clutch leaves behind when a stronger reflex takes the body after the pour (round 6: an empty bucket and a source of water with no one to take it up, and no clutch for the next fall)', () => {
-    /** A body that stands where a clutch poured water and was cut off before it took it up: the empty bucket in the hand, the source at (0, 64, 0), the dragon far off. */
-    function afterCutOff() {
+    /**
+     * A body that stands where a clutch poured water and was cut off before it took it up: the empty bucket in the hand (it took it from the sword's slot 0, in the note), the source at (0, 64, 0), the dragon far off.
+     * `hand` is what the note says the hand was on before the clutch (none: the bucket was in the hand already).
+     */
+    function afterCutOff(hand: number | undefined = 0) {
       const f = falling({ y: 64 });
       f.self.onGround = true; f.self.velocity = new Vec3(0, 0, 0);
       f.dragon.position = new Vec3(0.5, 90, 60.5);
@@ -755,10 +762,10 @@ describe('the water-bucket clutch of a fall in the End', () => {
       f.world.set(key(0, 64, 0), 'water');
       f.bot.setControlState = vi.fn(); f.bot.consume = vi.fn(async () => undefined);
       installFloorReflexes(f.bot, floorConfig({ MINEBOT_FCA_REFLEXES: 'default' }), { fleeTickMs: 1 });
-      const memory: FallMemory = f.bot.floorReflexes.fall = { scoop: { x: 0, y: 64, z: 0, at: Date.now(), tries: 0 } };
+      const memory: FallMemory = f.bot.floorReflexes.fall = { scoop: { x: 0, y: 64, z: 0, at: Date.now(), tries: 0, ...(hand !== undefined ? { hand } : {}) } };
       return { ...f, ...kit, memory };
     }
-    it('leaves the note in the floor\'s memory at the pour, tells the cut in the ledger, and has the floor take the water up once the body stands, so that the next fall has its clutch', async () => {
+    it.skipIf(!FALL_CLUTCH_ENABLED)('leaves the note in the floor\'s memory at the pour, tells the cut in the ledger, and has the floor take the water up once the body stands, so that the next fall has its clutch', async () => {
       const f = falling({ y: 80, vy: -2 });
       f.dragon.position = new Vec3(0.5, 90, 60.5);
       const kit = withBucket(f);
@@ -772,12 +779,15 @@ describe('the water-bucket clutch of a fall in the End', () => {
         await until(() => kit.seen.uses === 1, 4000);
         await until(() => f.self.onGround === true && !hasActiveSafetyLease(f.bot), 4000);
         const memory: FallMemory = f.bot.floorReflexes.fall;
-        expect(memory.scoop).toMatchObject({ x: 0, y: 64, z: 0, tries: 0 });
+        expect(memory.scoop).toMatchObject({ x: 0, y: 64, z: 0, tries: 0, hand: 0 }); // the note says the hand the bucket was taken from
         expect(kit.seen.uses).toBe(1);
         expect(kit.hotbar[1].name).toBe('bucket'); // the only bucket of water is empty: left so, the next fall has no clutch
+        expect(f.bot.heldItem.name).toBe('bucket'); // and the clutch that was cut off left it in the hand
         await until(() => { f.bot.emit('physicsTick'); return kit.seen.uses === 2; }, 4000);
         expect(kit.hotbar[1].name).toBe('water_bucket');
         expect(memory.scoop).toBeUndefined();
+        await until(() => f.bot.heldItem.name === 'diamond_sword', 2000); // the taking-up gave the hand back to where the clutch took the bucket from
+        expect(f.bot.heldItem.name).toBe('diamond_sword');
         const entries = f.bot.reflexLedger.entriesSince(0);
         expect(entries.some((entry: any) => entry.kind === 'retreat' && entry.outcome === 'cut' && /落下を水バケツで止める途中で操作を取られた（水はあけた：あとで汲み直す）/u.test(entry.detail))).toBe(true);
         // the next fall
@@ -797,9 +807,12 @@ describe('the water-bucket clutch of a fall in the End', () => {
         expect(s.memory.scoop).toBeUndefined();
         expect(leases).toEqual([false]); // every reflex may cut it: the dragon's retreat waits for no lease of its
         expect(s.bot.equip).not.toHaveBeenCalled();
+        // the empty bucket was in the hand (the clutch left it there): the hand goes back to where the clutch took the bucket from
+        expect(s.bot.setQuickBarSlot.mock.calls.map((call: number[]) => call[0])).toEqual([0]);
+        expect(s.bot.heldItem.name).toBe('diamond_sword');
       } finally { s.stop(); }
     });
-    it('does not take the water up while an action runs, nor while a hazard of the dragon is on the body, and does once the moment is quiet', async () => {
+    it('does not take the water up while an action runs, a hazard of the dragon is on the body or a handover is reserved, and does once the moment is quiet', async () => {
       const s = afterCutOff();
       try {
         const act = executeAction(s.bot, 'some-act', 2000, (async () => { await new Promise(resolve => setTimeout(resolve, 400)); return { success: true, result: 'done' }; }) as never, { legacyExecutingSkill: true });
@@ -814,6 +827,11 @@ describe('the water-bucket clutch of a fall in the End', () => {
         s.bot.emit('physicsTick'); await new Promise(resolve => setTimeout(resolve, 100));
         expect(s.seen.uses).toBe(0); expect(s.memory.scoop?.tries).toBe(0);
         delete s.bot.entities[20];
+        // a handover reserved for the act that is to come: taking the body for the water would drop it
+        reserveHandover(s.bot, { fromActionId: 'x', reflex: 'floor-melee', target: 7, life: 1, forCommand: 'attack-nearest', shield: false });
+        s.bot.emit('physicsTick'); await new Promise(resolve => setTimeout(resolve, 100));
+        expect(s.seen.uses).toBe(0); expect(s.memory.scoop?.tries).toBe(0);
+        dropReservation(s.bot);
         await until(() => { s.bot.emit('physicsTick'); return s.seen.uses === 1; }, 4000);
         expect(s.seen.uses).toBe(1);
         expect(s.hotbar[1].name).toBe('water_bucket');
@@ -824,10 +842,11 @@ describe('the water-bucket clutch of a fall in the End', () => {
       try {
         s.bot.setQuickBarSlot(0); s.bot.setQuickBarSlot.mockClear(); // the sword is in the hand
         expect(await scoopBack(s.bot, s.bot, s.memory)).toMatchObject({ success: true, scooped: true });
-        expect(s.bot.setQuickBarSlot).toHaveBeenCalledWith(1);
+        expect(s.bot.setQuickBarSlot.mock.calls.map((call: number[]) => call[0])).toEqual([1, 0]); // the bucket's slot, and the sword's again
         expect(s.bot.equip).not.toHaveBeenCalled();
         expect(s.hotbar[1].name).toBe('water_bucket');
         expect(s.memory.scoop).toBeUndefined();
+        expect(s.bot.heldItem.name).toBe('diamond_sword');
       } finally { s.stop(); }
       const gone = afterCutOff(); // the source is gone
       try {
@@ -852,6 +871,78 @@ describe('the water-bucket clutch of a fall in the End', () => {
         expect(s.memory.scoop).toBeDefined();
       } finally { s.stop(); }
     }, 10_000);
+    it('gives the hand back to the one a later reflex chose, not to the note\'s, and leaves it alone when the taking-up is cut off (round 8: the bucket stayed in the hand and the next attack struck with it)', async () => {
+      const s = afterCutOff();
+      try {
+        s.hotbar[2] = { name: 'diamond_pickaxe', slot: 38 };
+        s.bot.setQuickBarSlot(2); s.bot.setQuickBarSlot.mockClear(); // a reflex that took the body after the cut chose the pickaxe
+        expect(await scoopBack(s.bot, s.bot, s.memory)).toMatchObject({ success: true, scooped: true });
+        expect(s.bot.setQuickBarSlot.mock.calls.map((call: number[]) => call[0])).toEqual([1, 2]);
+        expect(s.bot.heldItem.name).toBe('diamond_pickaxe');
+      } finally { s.stop(); }
+      const cut = afterCutOff();
+      try {
+        cut.bot.setQuickBarSlot(0); cut.bot.setQuickBarSlot.mockClear(); // the sword in the hand, and a stronger reflex takes the body during the look at the water
+        cut.bot.lookAt = vi.fn(async () => { preemptLowerPriorityActions(cut.bot, 500, 'wall-escape'); });
+        const result = await executeAction(cut.bot, 'floor-scoop', 3000, (() => scoopBack(cut.bot, createMotorPort(cut.bot), cut.memory)) as never, { priority: 100, safetyLease: false, waitForQuiescence: false, legacyExecutingSkill: true });
+        expect(result).toMatchObject({ success: false, failureType: 'interrupted' });
+        await new Promise(resolve => setTimeout(resolve, 100));
+        expect(cut.seen.uses).toBe(0);
+        expect(cut.bot.setQuickBarSlot.mock.calls.map((call: number[]) => call[0])).toEqual([1]); // the bucket's slot was taken; nothing after the cut (the hand is the reflex's)
+        expect(cut.memory.scoop).toBeDefined();
+      } finally { cut.stop(); }
+    });
+    it('takes the water only where the body would stand without it (round 8: a body held up by a waterfall over a drop was dropped by the taking-up)', async () => {
+      const s = afterCutOff();
+      try {
+        // swimming in a column of water, the floor far under it: not wanted, the note kept; and a taking-up that is asked for does not select, use or move anything
+        for (const y of [65, 66]) s.world.set(key(0, y, 0), 'water');
+        s.self.position = new Vec3(0.5, 66.2, 0.5); s.self.onGround = false; s.self.isInWater = true;
+        expect(scoopWanted(s.bot, s.memory, Date.now())).toBe(false);
+        expect(s.memory.scoop).toBeDefined();
+        s.bot.setQuickBarSlot(0); s.bot.setQuickBarSlot.mockClear();
+        expect(await scoopBack(s.bot, s.bot, s.memory)).toMatchObject({ success: false, scooped: false });
+        expect(s.bot.setQuickBarSlot).not.toHaveBeenCalled();
+        expect(s.bot.activateItem).not.toHaveBeenCalled();
+        expect(s.memory.scoop).toBeDefined();
+        // on the floor, in the water over it: wanted
+        s.self.position = new Vec3(0.5, 64, 0.5); s.self.isInWater = true;
+        expect(scoopWanted(s.bot, s.memory, Date.now())).toBe(true);
+        // a floor one cell down is still a floor, two cells and the fall would cost: not
+        s.self.position = new Vec3(0.5, 65, 0.5); s.world.delete(key(0, 65, 0)); s.world.delete(key(0, 66, 0));
+        s.world.set(key(0, 64, 0), 'air');
+        expect(scoopWanted(s.bot, s.memory, Date.now())).toBe(true);
+        s.self.position = new Vec3(0.5, 66, 0.5);
+        expect(scoopWanted(s.bot, s.memory, Date.now())).toBe(false);
+      } finally { s.stop(); }
+      const lost = afterCutOff(); // the floor goes while the body looks at the water: nothing is used
+      try {
+        lost.bot.lookAt = vi.fn(async () => { lost.world.delete(key(0, 63, 0)); });
+        lost.bot.setQuickBarSlot(0); lost.bot.setQuickBarSlot.mockClear();
+        expect(await scoopBack(lost.bot, lost.bot, lost.memory)).toMatchObject({ success: false, scooped: false });
+        expect(lost.seen.uses).toBe(0);
+        expect(lost.memory.scoop).toBeDefined();
+      } finally { lost.stop(); }
+    });
+    it('takes the water the note names and no other: a source where the body stands is no substitute (round 8: the one poured stayed and the note was dropped)', async () => {
+      const s = afterCutOff();
+      try {
+        s.world.set(key(3, 64, 0), 'water'); s.self.position = new Vec3(3.5, 64, 0.5); // a second source, under the body, three blocks from the one poured at (0, 64, 0)
+        expect(await scoopBack(s.bot, s.bot, s.memory)).toMatchObject({ success: true, scooped: true });
+        expect(s.bot.lookAt).toHaveBeenCalledWith(expect.objectContaining({ x: 0.5, z: 0.5 }), true);
+        expect(s.world.has(key(0, 64, 0))).toBe(false); // the poured one is taken
+        expect(s.world.get(key(3, 64, 0))).toBe('water'); // the other is left
+        expect(s.memory.scoop).toBeUndefined();
+      } finally { s.stop(); }
+      const gone = afterCutOff(); // the poured one is gone, another is near: the note is dropped and the other is left alone
+      try {
+        gone.world.delete(key(0, 64, 0)); gone.world.set(key(1, 64, 0), 'water');
+        expect(await scoopBack(gone.bot, gone.bot, gone.memory)).toMatchObject({ success: true, scooped: false });
+        expect(gone.seen.uses).toBe(0);
+        expect(gone.world.get(key(1, 64, 0))).toBe('water');
+        expect(gone.memory.scoop).toBeUndefined();
+      } finally { gone.stop(); }
+    });
     it('wants to take the water up only near it, not twice within a moment, and not for long; a note that cannot be kept is dropped', () => {
       const f = falling({ y: 64 });
       f.self.onGround = true; f.bot.heldItem = { name: 'bucket', slot: 37 };
@@ -860,6 +951,7 @@ describe('the water-bucket clutch of a fall in the End', () => {
       expect(scoopWanted(f.bot, note({ lastAt: 1000 }), 1000 + SCOOP_GAP_MS - 1)).toBe(false);
       expect(scoopWanted(f.bot, note({ lastAt: 1000 }), 1000 + SCOOP_GAP_MS)).toBe(true);
       const far = note();
+      f.world.set(key(5, 63, 0), 'end_stone'); // a floor under the far place: it is the distance that says no
       f.self.position = new Vec3(0.5 + SCOOP_NEAR + 1, 64, 0.5);
       expect(scoopWanted(f.bot, far, 1500)).toBe(false);
       expect(far.scoop).toBeDefined(); // kept: the body may come back
