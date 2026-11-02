@@ -391,6 +391,10 @@ export class StreamEar {
    * What ends a stream is the end of the video the ear is connected to: the target the head named, the broadcast the head registered for
    * this stream, or the one found by searching the channel's active broadcasts (see readChat). The one video that is not taken as this
    * stream's is a YOUTUBE_LIVE_URL, which is a standing setting: an ended video left there by an earlier stream is passed over, below.
+   *
+   * The head fixes a stream's targetVideoId when the stream is started and never changes it for that streamId (stream-contract.md §2;
+   * the head's streamService sets it in start only). The ear relies on that: an end, a refusal given up on, or a mismatch count belongs
+   * to one streamId, and a target that changed under the same streamId is not a case the head can make.
    */
   private async discover(targetVideoId?: string): Promise<Attachment | 'ended' | null> {
     try {
@@ -530,6 +534,13 @@ export class StreamEar {
         if (result === 'stop') { why = 'the head says the stream is not live'; break; }
         const left = FINAL_FLUSH_LIMIT_MS - (this.now() - startedAt);
         if (left <= 0) { why = `the head did not take them in ${Math.round(FINAL_FLUSH_LIMIT_MS / 60_000)} minutes`; break; }
+        // The head may refuse comments while its state still answers: a stream it has left, or ended, is not waited on for ten minutes
+        // (a new stream would wait behind it). Its state is read here without reading the chat again.
+        const now = await this.head.getState();
+        if (now.status === 'ok' && (now.stream?.streamId !== stream.streamId || now.stream.phase === 'ended')) {
+          why = 'the head has left this stream';
+          break;
+        }
         await this.sleepFor(Math.min(left, FINAL_FLUSH_WAITS_MS[attempt] ?? FINAL_FLUSH_REPEAT_MS), signal);
       }
       this.dropPending(pending, `could not be sent ${before} and are dropped (${why})`);

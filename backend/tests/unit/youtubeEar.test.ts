@@ -1490,6 +1490,27 @@ describe('終わり際のコメントを落とさない', () => {
     expect(w.head.log.at(-1)).toBe('ended');
   });
 
+  it.each(['poll', 'stream'] as const)('%s: 送り直しの間も頭の state を見て、頭が次の配信へ移っていれば 10 分待たずにやめる（新しい配信を待たせない）', async via => {
+    const w = world({ via });
+    live(w);
+    w.youtube.messages = [textItem('m1', 1), textItem('m2', 2), chatEnded];
+    w.head.commentsDownUntil = Number.POSITIVE_INFINITY;
+    let moved = false;
+    await w.run(() => {
+      if (!moved && w.clock() - START >= 20_000) {
+        w.head.stream = { ...w.head.stream!, streamId: 'st-2', phase: 'waiting_for_chat', broadcast: null };
+        moved = true;
+      }
+      return moved && w.ear.status().counters.commentsDropped === 2;
+    });
+    expect(w.clock() - START).toBeLessThan(120_000);
+    expect(w.head.received).toEqual([]);
+    expect(w.logs.some(line => line.startsWith('WARN') && line.includes('the head has left this stream'))).toBe(true);
+    // st-2 was never told it ended.
+    expect(w.head.stream?.streamId).toBe('st-2');
+    expect(w.head.stream?.phase).not.toBe('ended');
+  });
+
   it('終わりの後の送り直しの途中で頭が 409 STREAM_NOT_LIVE と言えば、そこで止めて件数を残す', async () => {
     const w = world();
     live(w);
