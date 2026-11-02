@@ -448,13 +448,13 @@ scene('blaze_loop', 'the whole sortie cycle as ONE act with repeat 8: [go camp, 
 scene('blaze_loop_b', 'the loop again (a second sample)', note => blazeLoop(note));
 // The nook (S2, 2026-11-02): the camp cell has walls on two sides; the body closes the other two sides to the head's height with cobblestone (the top stays open: a blaze sees in only from straight
 // above), leaves the head cell of the side that faces the spawner open as a window, and holds there. Measures what the camp costs with a room's worth of blazes that can see only through the window.
-async function blazeNook(note: (text: string) => void, options: { window?: boolean; seconds?: number } = {}): Promise<Record<string, unknown>> {
+async function blazeNook(note: (text: string) => void, options: { window?: boolean; seconds?: number; bow?: boolean } = {}): Promise<Record<string, unknown>> {
   const stand = sites.blazeStand as number[] | undefined, spawner = sites.blazeSpawner as number[] | undefined;
   if (!stand || !spawner) throw new Error('no blazeStand or blazeSpawner in the sites');
   const seconds = options.seconds ?? (timedSeconds || 240);
   await ask('difficulty normal'); await ask('time set midnight'); await ask('weather clear');
   await ask('execute in minecraft:the_nether run kill @e[type=minecraft:blaze]');
-  await equip({ diamond_sword: 1, iron_pickaxe: 1, shield: 2, cooked_beef: 24, golden_apple: 3, cobblestone: 64 }, { armor: 'iron', shield: true });
+  await equip({ diamond_sword: 1, iron_pickaxe: 1, shield: 2, cooked_beef: 24, golden_apple: 3, cobblestone: 64, ...(options.bow ? { bow: 1, arrow: 64 } : {}) }, { armor: 'iron', shield: true });
   await placeActor('the_nether', stand[0], stand[1], stand[2], 24);
   const camp = await runSkill('probe', { kind: 'camp' }, 20);
   let cell: { x: number; y: number; z: number } | undefined;
@@ -489,7 +489,8 @@ async function blazeNook(note: (text: string) => void, options: { window?: boole
     note(`standing at ${r1(inside.x)},${r1(inside.y)},${r1(inside.z)}; closed cells now: ${place.map(p => `${p.x},${p.y},${p.z}=${actor.blockAt(new Vec3(p.x, p.y, p.z))?.name}`).join(' ')}`);
     let n = 0;
     while (Date.now() - started < seconds * 1000 && !disconnected && Number(actor.health) > 0) {
-      const run = await act(`hold#${++n}`, [{ do: 'attack', target: 'blaze', hold: true, seconds: 20 }], 40, { accept: ['blaze'] });
+      const run = await act(`hold#${++n}`, [options.bow ? { do: 'shoot', target: 'blaze', n: 3, item: 'bow', onFail: 'continue' } : { do: 'attack', target: 'blaze', hold: true, seconds: 20 }], 40, { accept: ['blaze'] });
+      if (options.bow && !run.ok) await sleep(1500);
       note(`hold#${n}: hp ${r1(Number(actor.health))} ${run.lines.join(' | ').slice(0, 260)}`);
       if (Number(actor.health) < 8) break;
     }
@@ -497,6 +498,7 @@ async function blazeNook(note: (text: string) => void, options: { window?: boole
   return { seconds: r1((Date.now() - started) / 1000), kills: killed, rodsOnTheFloor: (await countServer('blaze_rod')) - rods0, shieldWear: shieldUsed() - shield0, deathsHere: deaths, lowestHp: Math.min(...track, 20), hpTrack: track.filter((_, index) => index % 5 === 0).join(' '), placed: place.length, window: options.window !== false };
 }
 scene('blaze_nook', 'the nook: the camp cell closed on its open sides to the head height with a window at the head toward the spawner, then attack hold for 240 s', note => blazeNook(note));
+scene('blaze_nook_bow', 'the nook with its window, and a bow: shoot blazes through the window from 2-4 m, 240 s', note => blazeNook(note, { bow: true }));
 scene('blaze_nook_sealed', 'the nook with no window (sealed to the head height, top open): hold for 120 s', note => blazeNook(note, { window: false, seconds: 120 }));
 // Sniping (S2, 2026-11-02): a bow from a cell far enough from the spawner room that few of its blazes see the body and their fire (spread grows with the square root of the distance) mostly misses.
 async function blazeSnipe(note: (text: string) => void, at: [number, number, number]): Promise<Record<string, unknown>> {
