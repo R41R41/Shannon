@@ -134,6 +134,36 @@ describe('task-bound native Minecraft goal evidence', () => {
       expect(f.evidence.snapshot().boss.verified).toBe(false);
       f.evidence.dispose();
     });
+    it("does not carry a bed the body used, nor the blast it made, over to another task (round 5 of the independent review)", () => {
+      const f = fixture(); f.evidence.begin(f.command());
+      f.bot.activateBlock({ name: 'white_bed', position: new Vec3(3, 64, 3) });
+      f.bot._client.emit('explosion', { center: { x: 3.5, y: 64.5, z: 3.5 }, radius: 5 });
+      f.evidence.begin(f.command({ context: { ...context, taskId: 'other-task' } }));
+      f.advance(1000);
+      f.bot.emit('entityHurt', f.target); // hurt with no cause named, a second after the blast of the old task
+      f.bot.emit('entityDead', f.target);
+      expect(f.evidence.snapshot().boss.verified).toBe(false);
+      f.evidence.dispose();
+    });
+    it('does not take a bed blast of the same task for another: the bed used under one task, the blast seen under another', () => {
+      const f = fixture(); f.evidence.begin(f.command());
+      f.bot.activateBlock({ name: 'white_bed', position: new Vec3(3, 64, 3) });
+      f.evidence.begin(f.command({ context: { ...context, sessionId: 'session2' } }));
+      f.bot._client.emit('explosion', { center: { x: 3.5, y: 64.5, z: 3.5 }, radius: 5 });
+      f.bot.emit('entityHurt', f.target);
+      f.bot.emit('entityDead', f.target);
+      expect(f.evidence.snapshot().boss.verified).toBe(false);
+      f.evidence.dispose();
+    });
+    it('lets a hit that was still being decided before the body lived again go with the old life', () => {
+      const f = fixture(); f.evidence.begin(f.command());
+      f.bot._client.emit('damage_event', { entityId: 17, sourceTypeId: 3, sourceCauseId: 2, sourceDirectId: 2 });
+      f.bot.emit('respawn');
+      f.bot.attack(f.target);
+      f.bot.emit('entityDead', f.target);
+      expect(f.evidence.snapshot().boss.verified).toBe(false);
+      f.evidence.dispose();
+    });
     it('still decides a hit under the task it was reported under, when the death comes at once', () => {
       const f = fixture(); f.evidence.begin(f.command());
       f.bot.attack(f.target);
