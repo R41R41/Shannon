@@ -45,4 +45,15 @@ describe('the bot keeps its own state when other entities report theirs', () => 
     bot._client.emit('entity_status', { entityId: 5, entityStatus: 9 });
     expect(bot.usingHeldItem).toBe(false);
   });
+
+  it('starts a new life not using the held item (the server carries no raised shield over a death)', () => {
+    const bot = stubBot();
+    bot.entity = { id: 5 };
+    require(join(plugins, 'inventory.js'))(bot, { hideErrors: true });
+    for (const event of ['death', 'respawn']) {
+      bot.usingHeldItem = true;
+      bot.emit(event);
+      expect(bot.usingHeldItem).toBe(false);
+    }
+  });
 });

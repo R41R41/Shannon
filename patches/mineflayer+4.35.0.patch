@@ -49,10 +49,10 @@ index bd0514e..d72f3f4 100644
          bot.emit('breath')
        }
 diff --git a/node_modules/mineflayer/lib/plugins/inventory.js b/node_modules/mineflayer/lib/plugins/inventory.js
-index 70db312..f1a51f9 100644
+index 70db312..bec27a7 100644
 --- a/node_modules/mineflayer/lib/plugins/inventory.js
 +++ b/node_modules/mineflayer/lib/plugins/inventory.js
-@@ -69,7 +69,9 @@ function inject (bot, { hideErrors }) {
+@@ -69,9 +69,15 @@ function inject (bot, { hideErrors }) {
      if (packet.entityId === bot.entity.id && packet.entityStatus === 9 && !eatingTask.done) {
        eatingTask.finish()
      }
@@ -62,4 +62,10 @@ index 70db312..f1a51f9 100644
 +    if (packet.entityId === bot.entity?.id && packet.entityStatus === 9) bot.usingHeldItem = false
    })
  
++  // A new life holds nothing: the server does not carry a raised shield or a started meal over a death.
++  bot.on('death', () => { bot.usingHeldItem = false })
++  bot.on('respawn', () => { bot.usingHeldItem = false })
++
    let previousHeldItem = null
+   bot.on('heldItemChanged', (heldItem) => {
+     // we only disable the item if the item type or count changes
