@@ -119,18 +119,32 @@ describe('what the body reads of the fight', () => {
     // The lab: a body 100 blocks from the ring saw the blocks of four spikes and none of their crystals, and four were counted destroyed that were not.
     const f = fixture({ at: new Vec3(SPIKE_CENTRES[0].x + 0.5 + 100, 64, SPIKE_CENTRES[0].z + 0.5) });
     for (const index of [0, 5]) f.world.set(key(SPIKE_CENTRES[index].x, 85, SPIKE_CENTRES[index].z), 'obsidian');
-    const states = () => spikeStates(f.bot).map(spike => spike.state);
+    let now = 1_000_000;
+    const states = () => spikeStates(f.bot, now).map(spike => spike.state);
     expect(states()[0]).toBe('unknown'); expect(states()[5]).toBe('unknown');
     f.self.position = new Vec3(SPIKE_CENTRES[0].x + 0.5 + 20, 64, SPIKE_CENTRES[0].z + 0.5);
-    expect(states()[0]).toBe('gone'); expect(states()[5]).toBe('unknown'); // the other pillar is loaded too, and too far
+    // near, the column loaded and no crystal on it: not yet called destroyed (a chunk's entities come with it, but not in the same moment); after three seconds it is
+    expect(states()[0]).toBe('unknown'); now += 2000; expect(states()[0]).toBe('unknown');
+    now += 1500; expect(states()[0]).toBe('gone'); expect(states()[5]).toBe('unknown'); // the other pillar is loaded too, and too far
     f.self.position = new Vec3(SPIKE_CENTRES[0].x + 0.5 + 100, 64, SPIKE_CENTRES[0].z + 0.5);
     expect(states()[0]).toBe('gone'); // seen destroyed: it stays so when the body goes off
-    expect(endObservation(f.bot)!.crystals).toMatchObject({ remaining: 9, gone: 1 });
+    expect(endObservation(f.bot, now)!.crystals).toMatchObject({ remaining: 9, gone: 1 });
     // a crystal seen there again (the dragon's respawn) clears it; gone from sight while the body is far, it is not called destroyed
     f.bot.entities[40] = { id: 40, name: 'end_crystal', position: new Vec3(SPIKE_CENTRES[0].x + 0.5, 86, SPIKE_CENTRES[0].z + 0.5), metadata: [] };
     expect(states()[0]).toBe('crystal');
     delete f.bot.entities[40];
     expect(states()[0]).toBe('unknown');
+  });
+  it('starts the three seconds again when the body goes out of the reach', () => {
+    const f = fixture({ at: new Vec3(SPIKE_CENTRES[0].x + 0.5 + 20, 64, SPIKE_CENTRES[0].z + 0.5) });
+    f.world.set(key(SPIKE_CENTRES[0].x, 85, SPIKE_CENTRES[0].z), 'obsidian');
+    let now = 5_000_000;
+    expect(spikeStates(f.bot, now)[0].state).toBe('unknown');
+    now += 2500; f.self.position = new Vec3(SPIKE_CENTRES[0].x + 0.5 + 100, 64, SPIKE_CENTRES[0].z + 0.5);
+    expect(spikeStates(f.bot, now)[0].state).toBe('unknown');
+    now += 2500; f.self.position = new Vec3(SPIKE_CENTRES[0].x + 0.5 + 20, 64, SPIKE_CENTRES[0].z + 0.5);
+    expect(spikeStates(f.bot, now)[0].state).toBe('unknown'); // out of reach in between: the count began again
+    now += 3100; expect(spikeStates(f.bot, now)[0].state).toBe('gone');
   });
   it('tells how far a crystal is surely told of from the view distance the server gave', () => {
     expect(crystalTellingReach({ game: {} })).toBe(32);

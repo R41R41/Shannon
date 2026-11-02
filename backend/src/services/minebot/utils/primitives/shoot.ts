@@ -50,10 +50,10 @@ function crystalShotProblem(bot: any, crystal: any, speed: number): StepOutcome 
   const eyes = bot.entity.position.offset(0, EYE - 0.1, 0);
   const distance = crystal.position.distanceTo(bot.entity.position);
   if (distance < CRYSTAL_SAFE_SHOT) return stopped(bot, 'too_close', `クリスタルまで ${distance.toFixed(1)}m。爆発は ${CRYSTAL_REACH}m まで届く: ${CRYSTAL_SAFE_SHOT}m 以上離れてから撃つ`);
-  if (distance > CRYSTAL_SHOT_MAX) return stopped(bot, 'too_far', `クリスタルまで ${distance.toFixed(1)}m。矢は ${CRYSTAL_SHOT_MAX}m までしか狙えない`);
+  if (distance > CRYSTAL_SHOT_MAX) return stopped(bot, 'too_far', `クリスタルまで ${distance.toFixed(1)}m。矢は ${CRYSTAL_SHOT_MAX}m までしか狙えない。次: ${CRYSTAL_SHOT_MAX}m 以内まで近づく（${CRYSTAL_SAFE_SHOT}m 未満には入らない）`);
   const point = crystal.position.offset(0, 1, 0);
   const aim = aimPitch(speed, Math.hypot(point.x - eyes.x, point.z - eyes.z), point.y - eyes.y);
-  if (!aim) return stopped(bot, 'too_far', `クリスタルまで ${distance.toFixed(1)}m。弓の山なりでは届かない`);
+  if (!aim) return stopped(bot, 'too_far', `クリスタルまで ${distance.toFixed(1)}m。弓の山なりでは届かない。次: 近づくか、高い足場から撃つ`);
   const yaw = Math.atan2(-(point.x - eyes.x), -(point.z - eyes.z));
   const hit = arrowBlockedAt(bot, eyes, yaw, aim.pitch, speed, aim.ticks + 2, point);
   if (hit) return stopped(bot, 'line_blocked', `クリスタルへの矢の道が (${hit.x},${hit.y},${hit.z}) の ${hit.name} に塞がれる（距離 ${distance.toFixed(1)}m）。位置を変えるか、塞ぐ物を掘る`, { x: hit.x, y: hit.y, z: hit.z });

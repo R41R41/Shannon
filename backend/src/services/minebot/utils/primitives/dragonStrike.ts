@@ -119,14 +119,14 @@ export async function strikeDragon(ctx: StepContext, dragon: any, limitMs: numbe
   if (dead) return { ok: true, text: `${label} を倒した（${counts}）`, progress: struck(), data: { dragon: { blows, landed, parts, dead: true } } };
   if (!live) {
     return { ok: false, goal: 'unknown', reason: 'target_lost', code: 'target_lost', progress: struck(),
-      text: `${label} が見えなくなった（死ぬのは見ていない。${counts}）` };
+      text: `${label} が見えなくなった（死ぬのは見ていない。${counts}）。次: 竜が見える所へ戻り、観測の dragon で phase と体力を見る` };
   }
   const phaseText = lastPhase === null ? 'phase 不明' : `phase ${lastPhase} ${phaseName(lastPhase) ?? ''}`.trim();
-  if (isDying(lastPhase)) return { ...stopped(bot, 'time_up', `${label} は死にかけているが死は見ていない（${phaseText}。${counts}）`), progress: struck() };
-  if (sawPerch && !perchedNow) return { ...stopped(bot, 'perch_over', `止まり木が終わった（${phaseText}）。${blows ? counts : '一度も打てる所に頭・首・胴・翼が無かった'}`), progress: struck(), data: { dragon: { blows, landed, parts } } };
-  if (blows > 0) return { ...stopped(bot, 'time_up', `${label} は倒れなかった（${phaseText}。${counts}）`), progress: struck(), data: { dragon: { blows, landed, parts } } };
-  if (!sawPerch) return { ...stopped(bot, 'not_perched', `${label} は止まり木に居なかった（${phaseText}、止まっているのは phase 5・6・7 だけ。${seconds}秒待った）`), progress: struck() };
+  if (isDying(lastPhase)) return { ...stopped(bot, 'time_up', `${label} は死にかけているが死は見ていない（${phaseText}。${counts}）。次: 竜が消えるのを待ち、goal-evidence で死を確かめる`), progress: struck() };
+  if (sawPerch && !perchedNow) return { ...stopped(bot, 'perch_over', `止まり木が終わった（${phaseText}）。${blows ? counts : '一度も打てる所に頭・首・胴・翼が無かった'}。次: 次の着地（phase 3）と見回し（phase 6）を息の雲と頭の箱の外で待つ`), progress: struck(), data: { dragon: { blows, landed, parts } } };
+  if (blows > 0) return { ...stopped(bot, 'time_up', `${label} は倒れなかった（${phaseText}。${counts}）。次: 止まり木が続くなら同じ手をもう一度`), progress: struck(), data: { dragon: { blows, landed, parts } } };
+  if (!sawPerch) return { ...stopped(bot, 'not_perched', `${label} は止まり木に居なかった（${phaseText}、止まっているのは phase 5・6・7 だけ。${seconds}秒待った）。次: 息の雲と頭の箱の外で phase 6 か 7 を待つ。クリスタルが残るなら先に弓で壊す`), progress: struck() };
   const head = lastReach === null ? '' : `。頭の箱まで目から ${lastReach.toFixed(1)}m（${STRIKE_REACH}m まで届く）`;
   const centre = boxCentre(partBox(live, 'head'));
-  return { ...stopped(bot, 'out_of_reach', `止まり木に居るが打てる所に頭・首・胴・翼が無い（${phaseText}${head}。頭は (${centre.x.toFixed(1)},${centre.y.toFixed(1)},${centre.z.toFixed(1)}) 付近）`), progress: struck() };
+  return { ...stopped(bot, 'out_of_reach', `止まり木に居るが打てる所に頭・首・胴・翼が無い（${phaseText}${head}。頭は (${centre.x.toFixed(1)},${centre.y.toFixed(1)},${centre.z.toFixed(1)}) 付近）。次: 頭の下 3〜4m へ go してから attack`), progress: struck() };
 }

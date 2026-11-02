@@ -1,5 +1,5 @@
 import { Vec3 } from 'vec3';
-import { blastAt } from '../crystalBlast.js';
+import { blastAt, CRYSTAL_SAFE_SHOT } from '../crystalBlast.js';
 import { boxDistance, type Box } from '../dragonParts.js';
 import { stopped, wait, type StepContext, type StepOutcome } from './common.js';
 
@@ -41,6 +41,6 @@ export async function strikeCrystal(ctx: StepContext, crystal: any): Promise<Ste
   } finally { bot.removeListener('entityGone', onGone); }
   const lost = Math.max(0, Math.round((before - Number(bot.health ?? before)) * 10) / 10);
   const data = { crystal: { id: crystal.id, destroyed: gone, distance: blast.distance } };
-  if (!gone) return { ...stopped(bot, 'time_up', `${label} を殴ったが壊れたのは見ていない（${GONE_WAIT_MS / 1000}秒）`), data };
+  if (!gone) return { ...stopped(bot, 'time_up', `${label} を殴ったが壊れたのは見ていない（${GONE_WAIT_MS / 1000}秒）。次: crystals の残りを見て、もう一度殴るか ${CRYSTAL_SAFE_SHOT}m 以上離れて shoot`), data };
   return { ok: true, data, text: `${label} を壊した（爆発まで ${blast.distance}m、見込み ${blast.expected}・実際に失った体力 ${lost}）` };
 }

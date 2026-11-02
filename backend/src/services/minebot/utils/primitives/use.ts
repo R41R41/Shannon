@@ -208,7 +208,7 @@ async function blowBed(ctx: StepContext, cell: Cell, block: any): Promise<StepOu
   } finally { try { bot._client?.removeListener?.('explosion', onBlast); } catch { /* gone */ } }
   const seen = account();
   // A bed that is merely gone (someone mined it, the cell is not loaded) is not a bed that blew: the server's blast is what says so.
-  if (!seen.exploded) return { ...stopped(bot, 'not_exploded', `${placeText(bot, cell)} のベッドを右クリックしたが爆発の知らせは受けていない（今 ${cellNow(bot, cell)}${seen.gone ? '。ベッドは消えたが、爆発したかは分からない' : ''}）`, cell), data: seen.data };
+  if (!seen.exploded) return { ...stopped(bot, 'not_exploded', `${placeText(bot, cell)} のベッドを右クリックしたが爆発の知らせは受けていない（今 ${cellNow(bot, cell)}${seen.gone ? '。ベッドは消えたが、爆発したかは分からない' : ''}）。次: ベッドの足と頭の両方のマスが揃っているか見て、置き直してからもう一度`, cell), data: seen.data };
   return { ok: true, at: cell, data: seen.data, text: `${cellText(cell)} のベッドが${seen.blew}` };
 }
 

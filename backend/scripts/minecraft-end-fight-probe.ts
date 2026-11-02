@@ -19,7 +19,7 @@ import { NativeCommonFcaBody } from '../src/services/minebot/integration/commonF
 import { madeStamp } from './lab/madeStamp.js';
 import { entityHealth } from '../src/services/minebot/utils/mapMarks.js';
 import { partBox, partTarget, boxDistance, type DragonPart } from '../src/services/minebot/utils/dragonParts.js';
-import { breathCloudsOf, dragonPhaseOf, endDragonOf } from '../src/services/minebot/utils/dragonState.js';
+import { breathCloudsOf, dragonPhaseOf, endDragonOf, endObservation } from '../src/services/minebot/utils/dragonState.js';
 import { dragonHazards } from '../src/services/minebot/utils/dragonDanger.js';
 import { hasActiveSafetyLease, safetyLeaseCapabilities } from '../src/services/minebot/execution/ActionExecution.js';
 import { blastAt } from '../src/services/minebot/utils/crystalBlast.js';
@@ -200,6 +200,8 @@ scenes.enter = async () => {
   const t0 = Date.now();
   await enterEnd();
   const out: Record<string, unknown> = {};
+  await sleep(1500);
+  out.arrival = captureEnd('arrival', 'just arrived on the obsidian platform: the dragon and the crystals are not in sight yet');
   let dragonAt: number | null = null, crystalsAt: number | null = null;
   for (let i = 0; i < 240; i++) {
     const dragon = dragonEntity();
@@ -748,6 +750,108 @@ scenes.bed = async () => {
   releaseReflex();
   out.trials = trials;
   return out;
+};
+
+// ===== the End fields of the observation as the lab sees them: fixtures for the head, and the inputs for a replay test of the body =====
+const xyz = (v: any) => v ? { x: v.x, y: v.y, z: v.z } : null;
+/**
+ * The End fields of the observation at this instant (`endObservation`) and everything the body read to make them: the entities that matter with their metadata, the body's own state, the
+ * metadata keys of the registry, and every block the code looked at (through a proxy that has no chunk columns, so that each read goes through `blockAt` and is seen). The replay test
+ * (tests/unit/minecraftEndObservationLab.test.ts) builds a body from the inputs and expects the same fields. The synchronous calls see one instant: no packet is handled between them.
+ */
+function captureEnd(label: string, note: string): Record<string, unknown> {
+  const now = Date.now();
+  const expected = endObservation(actor, now);
+  const kinds = ['ender_dragon', 'end_crystal', 'area_effect_cloud', 'dragon_fireball'];
+  const entities = (Object.values(actor.entities) as any[]).filter(e => kinds.includes(e?.name) && e.position).map(e => ({
+    id: e.id, name: e.name, position: xyz(e.position), yaw: Number(e.yaw ?? 0), pitch: Number(e.pitch ?? 0),
+    ...(typeof e.health === 'number' && Number.isFinite(e.health) ? { health: e.health } : {}), metadata: JSON.parse(JSON.stringify(e.metadata ?? [])) }));
+  const told: Record<string, unknown> = {};
+  for (const e of entities) { const v = actor.toldVelocities?.get(e.id); if (v) told[String(e.id)] = xyz(v); }
+  const cells = new Map<string, number | null>(), types: Array<Record<string, unknown>> = [], typeAt = new Map<string, number>();
+  const recorder = new Proxy(actor, { get: (target, prop) => {
+    if (prop === 'world') return undefined;
+    if (prop === 'blockAt') return (position: Vec3, extra?: boolean) => {
+      const block = target.blockAt(position, extra);
+      const cell = `${position.x},${position.y},${position.z}`;
+      if (!block) { cells.set(cell, null); return block; }
+      const kind = JSON.stringify([block.name, block.boundingBox, block.shapes ?? null]);
+      let index = typeAt.get(kind);
+      if (index === undefined) { index = types.length; typeAt.set(kind, index); types.push({ name: block.name, boundingBox: block.boundingBox, ...(block.shapes ? { shapes: block.shapes } : {}) }); }
+      cells.set(cell, index);
+      return block;
+    };
+    const value = Reflect.get(target, prop);
+    return typeof value === 'function' ? value.bind(target) : value;
+  } });
+  const through = endObservation(recorder as any, now);
+  const strip = (view: any) => { const copy = JSON.parse(JSON.stringify(view)); if (copy?.dragon) delete copy.dragon.phaseFor; return JSON.stringify(copy); }; // the phase clock is the body's own
+  const agrees = strip(expected) === strip(through);
+  if (!agrees) log(`OBSERVE ${label}: the blockAt reader and the column reader disagree`);
+  const armor = [5, 6, 7, 8].map(slot => actor.inventory?.slots?.[slot]?.name ?? null);
+  return {
+    label, note, capturedAt: new Date(now).toISOString(), agreesWithBlockAtReader: agrees, expected: JSON.parse(JSON.stringify(expected)),
+    input: {
+      now, bot: { position: xyz(actor.entity.position), yaw: Number(actor.entity.yaw ?? 0), pitch: Number(actor.entity.pitch ?? 0), health: actor.health, food: actor.food,
+        game: { dimension: actor.game?.dimension, difficulty: actor.game?.difficulty, serverViewDistance: actor.game?.serverViewDistance }, armor },
+      entities, toldVelocities: told,
+      registryKeys: Object.fromEntries(kinds.map(kind => [kind, actor.registry?.entitiesByName?.[kind]?.metadataKeys ?? null])),
+      types, cells: Object.fromEntries(cells),
+    },
+  };
+}
+
+scenes.observe = async () => {
+  // The End fields of the observation in the situations the head reads them: the dragon flying, perched (out of reach, then under the head), crystals near (one caged), a breath cloud (just seen,
+  // then growing) and a fireball in the air. The body does not move (the reflex is held off and it has resistance), so that each reading is of the situation, not of the body leaving it.
+  await protect(true);
+  holdReflexOff();
+  await flatten(); await gear(['diamond_sword']); await wear();
+  const captures: Array<Record<string, unknown>> = [];
+  const take = (label: string, note: string) => {
+    const capture = captureEnd(label, note); captures.push(capture);
+    log(`OBSERVE ${label}: ${JSON.stringify(capture.expected).slice(0, 400)}`);
+  };
+  // 1. the dragon flying its pattern, the body in the arena
+  await restoreDragon(); await standAt(-5.5, g, 11.5); await sleep(3000);
+  take('dragon_flying', 'the dragon flying its pattern near the island (phase 0 or 1); the body in the arena; the crystals the view distance lets it see');
+  // 2. the dragon on the perch: the body 13 blocks out (no part in reach), then under the head
+  await perch(200, 6);
+  every(1500, () => { void ask(`${END} data modify entity ${DRAGON} DragonPhase set value 6`); });
+  await standAt(0.5, g, 13.2); await sleep(6500);
+  take('dragon_perched_out_of_reach', 'the dragon on the perch (phase 6) turned to the body, 13 blocks out: headPosition given, strike false');
+  await standForHeadDistance(3.5); await sleep(900);
+  take('dragon_perched_in_reach', 'the dragon on the perch, the body 3.5 blocks from the head box: strike true');
+  stopTimers();
+  // 3. crystals near, one in a cage (iron bars on four sides and a roof), one open; the dragon hovering high up
+  await park(true);
+  await ask(`${END} kill @e[type=minecraft:end_crystal,x=-40,y=${g},z=-5,dx=80,dy=6,dz=30]`);
+  await standAt(0.5, g, 9.0); await sleep(500);
+  await ask(`${END} summon minecraft:end_crystal 0.5 ${g + 1} 17.5 {ShowBottom:0b}`);
+  await ask(`${END} summon minecraft:end_crystal -6.5 ${g + 1} 6.5 {ShowBottom:0b}`);
+  for (const [dx, dz] of [[2, 0], [-2, 0], [0, 2], [0, -2]]) await ask(`${END} setblock ${-7 + dx} ${g + 2} ${6 + dz} iron_bars`);
+  await ask(`${END} setblock -7 ${g + 3} 6 iron_bars`);
+  await sleep(1500);
+  take('crystals_near_caged_and_open', 'an open crystal 8.5 blocks off and a caged one (bars on four sides and a roof) 7.4 blocks off, both within the blast reach: blast given; the natural crystals far off');
+  await ask(`${END} kill @e[type=minecraft:end_crystal,x=-10,y=${g},z=5,dx=20,dy=6,dz=15]`);
+  // 4. a breath cloud: a dragon fireball down on the body, the cloud as the game lays it
+  await ask(`${END} kill @e[type=minecraft:area_effect_cloud]`);
+  await standAt(-5.5, g, 11.5); await sleep(800);
+  await ask(`${END} summon minecraft:dragon_fireball -5.5 ${g + 6} 11.5 {Motion:[0.0d,-1.0d,0.0d],acceleration_power:0.1d}`);
+  for (let i = 0; i < 40 && cloudsInClient().length === 0; i++) await sleep(50);
+  take('breath_cloud_just_seen', 'a cloud the dragon\'s fireball laid on the body, as first seen (the client has not been told its radius yet: radius 7, the radius the body keeps clear of)');
+  await sleep(1500);
+  take('breath_cloud_growing', 'the same cloud a second and a half later: its own radius (about 3.1, growing to 7)');
+  await ask(`${END} kill @e[type=minecraft:area_effect_cloud]`);
+  // 5. a fireball in the air
+  await standAt(-3.5, g, 4.5); await sleep(800);
+  await ask(`${END} summon minecraft:dragon_fireball -3.5 ${g + 10} 24.5 {Motion:[0.0d,-0.45d,-1.0d],acceleration_power:0.1d}`);
+  for (let i = 0; i < 20 && !(Object.values(actor.entities) as any[]).some(e => e?.name === 'dragon_fireball'); i++) await sleep(25);
+  take('fireball_in_flight', 'a dragon fireball in the air, aimed at the body from 20 blocks off');
+  await sleep(2500);
+  await ask(`${END} kill @e[type=minecraft:area_effect_cloud]`); await ask(`${END} kill @e[type=minecraft:dragon_fireball]`);
+  releaseReflex();
+  return { captures };
 };
 
 scenes.death = async () => {

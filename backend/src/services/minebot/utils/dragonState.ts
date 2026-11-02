@@ -106,22 +106,34 @@ export function crystalTellingReach(bot: Bot): number {
   const told = Number(bot?.game?.serverViewDistance ?? bot?.game?.viewDistance);
   return Number.isFinite(told) && told >= 3 ? Math.max(16, Math.min(48, (told - 1) * 16 - 16)) : 32;
 }
-/** The spikes the body has seen destroyed: a crystal seen on one again (the dragon's respawn) clears it. */
-const destroyedSpikes = new WeakMap<object, Set<number>>();
-export function spikeStates(bot: Bot): Array<{ x: number; z: number; state: SpikeState; id?: number }> {
+/**
+ * What the body remembers of the spikes: the ones it has seen destroyed (a crystal seen on one again, the dragon's respawn, clears it), and since when each column has been loaded with no
+ * crystal on it while the body was near enough to have been told of one. The server sends a chunk's entities with the chunk but not in the same moment: a spike is called destroyed
+ * only after that has held for GONE_AFTER_MS, and then it stays so.
+ */
+const GONE_AFTER_MS = 3000;
+interface SpikeMemory { gone: Set<number>; since: Map<number, number> }
+const spikeMemory = new WeakMap<object, SpikeMemory>();
+export function spikeStates(bot: Bot, now = Date.now()): Array<{ x: number; z: number; state: SpikeState; id?: number }> {
   const read = bodyReader(bot);
   const at = bot?.entity?.position, reach = crystalTellingReach(bot);
   const crystals = (Object.values(bot?.entities ?? {}) as any[]).filter(entity => entity?.name === 'end_crystal' && entity.position);
-  const seenGone = destroyedSpikes.get(bot) ?? new Set<number>();
-  if (bot && typeof bot === 'object') destroyedSpikes.set(bot, seenGone);
+  const memory = spikeMemory.get(bot) ?? { gone: new Set<number>(), since: new Map<number, number>() };
+  if (bot && typeof bot === 'object') spikeMemory.set(bot, memory);
   return SPIKE_CENTRES.map((centre, index) => {
     const near = crystals.find(entity => Math.abs(entity.position.x - (centre.x + 0.5)) <= 1.6 && Math.abs(entity.position.z - (centre.z + 0.5)) <= 1.6);
-    if (near) { seenGone.delete(index); return { ...centre, state: 'crystal' as const, id: near.id }; }
-    if (seenGone.has(index)) return { ...centre, state: 'gone' as const };
+    if (near) { memory.gone.delete(index); memory.since.delete(index); return { ...centre, state: 'crystal' as const, id: near.id }; }
+    if (memory.gone.has(index)) return { ...centre, state: 'gone' as const };
     // The column: loaded when some cell of it is known; a pillar's top is solid (its bedrock cap). Destroyed only when the body is near enough to have been told of the crystal.
     let loaded = false, top = false;
     for (let y = 125; y >= 60; y--) { const block = read(centre.x, y, centre.z); if (block) { loaded = true; if (block.solid) { top = true; break; } } }
-    if (loaded && top && at && Math.hypot(at.x - (centre.x + 0.5), at.z - (centre.z + 0.5)) <= reach) { seenGone.add(index); return { ...centre, state: 'gone' as const }; }
+    if (loaded && top && at && Math.hypot(at.x - (centre.x + 0.5), at.z - (centre.z + 0.5)) <= reach) {
+      const since = memory.since.get(index) ?? now;
+      memory.since.set(index, since);
+      if (now - since >= GONE_AFTER_MS) { memory.gone.add(index); return { ...centre, state: 'gone' as const }; }
+      return { ...centre, state: 'unknown' as const };
+    }
+    memory.since.delete(index);
     return { ...centre, state: 'unknown' as const };
   });
 }
@@ -242,7 +254,7 @@ export function endObservation(bot: Bot, now = Date.now()): EndObservation | nul
   const dragon = endDragonOf(bot), at = bot?.entity?.position;
   const view = dragon ? dragonView(bot, dragon, now) : null;
   const perch = fountainOf(bot);
-  const spikes = spikeStates(bot);
+  const spikes = spikeStates(bot, now);
   const loaded = crystalsOf(bot);
   return {
     ...(dragon && view ? { dragon: { id: view.id, health: view.health, phase: view.phase, phaseName: view.phaseName, phaseFor: view.phaseFor, perched: view.perched, position: view.at, yaw: view.yaw,
