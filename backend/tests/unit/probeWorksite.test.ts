@@ -1,6 +1,7 @@
 import { expect, it } from 'vitest';
 import { Vec3 } from 'vec3';
 import { probeWorksite } from '../../src/services/minebot/utils/probeWorksite.js';
+import { probeSight, SIGHT_LIMIT } from '../../src/services/minebot/utils/probeTools.js';
 const botIn = (nameAt: (x: number, y: number, z: number) => string | null) => ({
   entity: { position: new Vec3(0.5, 1, 0.5), onGround: true }, game: { dimension: 'overworld' },
   inventory: { items: () => [{ type: 1 }] },
@@ -40,4 +41,36 @@ it('leaves an unloaded return and a submerged head explicit', async () => {
   const value = await probeWorksite(bot, { x: 0, y: 1, z: 0 }, { x: 2, y: 1, z: 0 }, { x: 0, y: 1, z: 0 }, { x: 300, y: 1, z: 0 });
   expect(value.standCandidates[0]).toMatchObject({ breathing: 'submerged' });
   expect(value.retreat.status).toBe('unknown');
+});
+it('does not walk a line to a target much farther than the loaded world', async () => {
+  const read = () => ({ name: 'air', boundingBox: 'empty' }) as any;
+  const far = probeSight(read, [0.5, 2.62, 0.5], { block: { x: 90_000_000, y: 1, z: 0 } });
+  expect(far).toMatchObject({ visible: false, reach: false, between: [] });
+  expect(far.text).toContain('遠すぎて');
+  const edge = probeSight(read, [0.5, 2.62, 0.5], { block: { x: SIGHT_LIMIT - 4, y: 1, z: 0 } });
+  expect(edge.text).not.toContain('遠すぎて');
+  const bot = botIn((x, y) => Math.abs(x) > 12 ? null : y <= 0 ? 'stone' : 'air');
+  const started = performance.now();
+  const value = await probeWorksite(bot, { x: 0, y: 1, z: 0 }, { x: 90_000_000, y: 1, z: 0 });
+  expect(performance.now() - started).toBeLessThan(3000);
+  expect(value.text).toContain('目的物は未ロード');
+  expect(value.text).not.toContain('対象に届く=true');
+  expect(value.approach.status).not.toBe('verified_segment');
+});
+it('discards what it found when the body changes world while the searches wait', async () => {
+  const bot = botIn((x, y, z) => x === 2 && y === 1 && z === 0 ? 'iron_ore' : y <= 0 ? 'stone' : 'air');
+  const pending = probeWorksite(bot, { x: 0, y: 1, z: 0 }, { x: 2, y: 1, z: 0 }, undefined, { x: 0, y: 1, z: 0 });
+  bot.game.dimension = 'the_nether';   // a portal taken between the start and the end of the searches
+  const value = await pending;
+  expect(value).toMatchObject({ stale: true, standCandidates: [] });
+  expect(value.approach.status).toBe('unknown');
+  expect(value.retreat.status).toBe('unknown');
+  expect(value.text).toContain('使えない');
+});
+it('says a target that is not loaded as such in the sentence the head reads first', async () => {
+  const bot = botIn((x, y, z) => x === 2 && y === 1 && z === 0 ? null : y <= 0 ? 'stone' : 'air');
+  const value = await probeWorksite(bot, { x: 0, y: 1, z: 0 }, { x: 2, y: 1, z: 0 }, undefined, { x: 0, y: 1, z: 0 });
+  expect(value.target.block).toBeNull();
+  expect(value.text).toContain('目的物は未ロード');
+  expect(value.text).not.toContain('対象に届く=true');
 });

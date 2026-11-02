@@ -19,7 +19,10 @@ describe('work reserves enough breath to return', () => {
   it('does not turn a route outside the observed search into zero return time', () => {
     const deep = bot(20, true);
     expect(assessBreathingWork(deep, 1).reason).toBe('return_unknown');
-    expect(airRunningOut(deep as any)).toBe(true);
+    // The dig is the thing refused. The reflex still waits for the critical threshold: engaging at full air with no way known pinned the
+    // body jumping against the ceiling for as long as it stayed in the water (minecraftBreathingReflex.test.ts keeps that rule).
+    expect(airRunningOut(deep as any)).toBe(false);
+    expect(airRunningOut({ ...deep, oxygenLevel: 5 } as any)).toBe(true);
   });
   it('does not limit a dry job by the last underwater oxygen reading', () => {
     const dry = bot(0); dry.blockAt = () => ({ name: 'air', boundingBox: 'empty', diggable: true });

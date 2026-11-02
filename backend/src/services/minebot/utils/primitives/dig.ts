@@ -208,11 +208,13 @@ async function digCells(ctx: StepContext, args: DigArgs, tally: DigTally): Promi
     const digStarted = Date.now();
     const drift = new Promise<'drifted' | 'breathing_work'>(resolve => {
       const timer = setInterval(() => {
-        // Re-read the body and exit: entering water or losing a route invalidates the start-time estimate.
-        const currentMs = typeof bot.digTime === 'function' ? Number(bot.digTime(block)) : Infinity;
-        const remaining = Math.max(0, currentMs - (Date.now() - digStarted)) / 1000;
-        const current = assessBreathingWork(bot, remaining, cell);
-        if (!current.allowed) { breathStopped = current; clearInterval(timer); resolve('breathing_work'); return; }
+        try {
+          // Re-read the body and exit: entering water or losing a route invalidates the start-time estimate.
+          const currentMs = typeof bot.digTime === 'function' ? Number(bot.digTime(block)) : Infinity;
+          const remaining = Math.max(0, currentMs - (Date.now() - digStarted)) / 1000;
+          const current = assessBreathingWork(bot, remaining, cell);
+          if (!current.allowed) { breathStopped = current; clearInterval(timer); resolve('breathing_work'); return; }
+        } catch { /* a reading that fails leaves the check made where the dig began; an error thrown here would not reach this dig's catch */ }
         // only a dig that is overdue (water over the block slows it fivefold; a body washed away never finishes it) and whose body is out of reach
         if (Date.now() - digStarted > expected + DIG_DRIFT_OVERDUE_MS && eyeDistance(bot, cell) > DIG_REACH + DIG_DRIFT_MARGIN) { drifted = true; clearInterval(timer); resolve('drifted'); }
       }, DIG_DRIFT_CHECK_MS);

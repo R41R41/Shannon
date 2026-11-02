@@ -71,3 +71,17 @@ describe('dig: a body carried out of reach while it digs', () => {
     expect(sim.world.nameAt(3, FLOOR, 0)).toBe('obsidian');
   });
 });
+
+describe('dig: the breath watcher', () => {
+  it('does not let a failing re-read of the dig time escape the dig', async () => {
+    const sim = makeHandsSim(ground, { items: [{ name: 'diamond_pickaxe', count: 1 }] });
+    const digTime = sim.bot.digTime.bind(sim.bot);
+    let calls = 0;
+    // the first reads are the dig's own (its start, its expected time, the sim's wait); the watcher's reads come after them
+    sim.bot.digTime = (block: any) => { if (++calls > 5) throw new Error('digTime failed'); return digTime(block); };
+    const { value } = await drive(sim, dig(ctxOf(sim), { at: [{ x: 3, y: FLOOR, z: 0 }], tool: 'diamond_pickaxe', collect: false }));
+    expect(calls).toBeGreaterThan(5);
+    expect(value.ok).toBe(true);
+    expect(sim.world.nameAt(3, FLOOR, 0)).toBe('air');
+  });
+});
