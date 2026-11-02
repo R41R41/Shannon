@@ -162,3 +162,22 @@ describe('the queue on the native body', () => {
     await f.loop.stop(); await f.body.dispose();
   });
 });
+
+describe('R3-2: the native body names a fight target that is alive within 16 m (the safety cut asks it)', () => {
+  const actOf = (hands: unknown[]) => item('a', 'q1', null, {}, { arguments: { hands } });
+  it('names the target of a fight or attack hand by kind or by id within the range, and nothing for a far one, another kind, a hand of another kind or an item that is not an act', () => {
+    const f = fixture([async () => ({ success: true, result: 'x' })]);
+    f.bot.entities = { 7: { id: 7, name: 'zombie', position: new Vec3(10, 65, 0) }, 8: { id: 8, name: 'skeleton', position: new Vec3(20, 65, 0) } };
+    expect(f.body.fightTargetNear(actOf([{ do: 'fight', target: 'zombie' }]))).toBe('zombie');
+    expect(f.body.fightTargetNear(actOf([{ do: 'go', to: { x: 1, y: 65, z: 1 } }, { do: 'attack', target: '#7' }]))).toBe('zombie');
+    expect(f.body.fightTargetNear(actOf([{ do: 'attack', target: 7 }]))).toBe('zombie');
+    expect(f.body.fightTargetNear(actOf([{ do: 'fight', target: 'skeleton' }]))).toBeNull(); // 20 m: beyond the range
+    expect(f.body.fightTargetNear(actOf([{ do: 'fight', target: '#8' }]))).toBeNull();
+    expect(f.body.fightTargetNear(actOf([{ do: 'fight', target: 'creeper' }]))).toBeNull(); // none of the kind
+    expect(f.body.fightTargetNear(actOf([{ do: 'pickup', range: 8 }]))).toBeNull();
+    expect(f.body.fightTargetNear({ ...actOf([{ do: 'fight', target: 'zombie' }]), skill: 'view' } as MinecraftControlCommand)).toBeNull();
+    expect(f.body.fightTargetNear(actOf([]))).toBeNull();
+    f.bot.entities[7].position = new Vec3(16.5, 65, 0); // just out of the range
+    expect(f.body.fightTargetNear(actOf([{ do: 'fight', target: 'zombie' }]))).toBeNull();
+  });
+});

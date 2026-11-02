@@ -7,7 +7,7 @@ import { LiveSpeechCourier } from '../../../common/liveSpeech.js';
 import type { LiveRoom, LiveSpeechReceipt } from '../../../common/liveSpeech.js';
 import { MINECRAFT_CONTROL_PATH, type MinecraftControlCommand as Command, type MinecraftControlReceipt as Receipt,
   type MinecraftControlReply, type MinecraftQueueProgress, type MinecraftSkillDefinition } from './minecraftControlContract.js';
-import { BodyQueue, droppedBecause, EXPIRED_TEXT, notStarted, QUEUE_ACCEPT_WINDOW_MS, readEnvelope, type ItemEnd, type QueueEnvelope } from './bodyQueue.js';
+import { BodyQueue, dangerOfEnd, droppedBecause, droppedByDanger, EXPIRED_TEXT, notStarted, QUEUE_ACCEPT_WINDOW_MS, readEnvelope, type ItemEnd, type QueueEnvelope } from './bodyQueue.js';
 import { startVerdict, type BodyTimes, type BodyVersion, type CutBy, type ItemOutcome, type QueueRef } from './continueContract.js';
 import type { Lapse } from './lapse.js';
 import type { ActCondition } from '../../utils/actConditions.js';
@@ -26,6 +26,8 @@ export interface CommonFcaActuator {
   /** What changed while a command runs (needs, progress, a stall), sent with each poll until the API takes it (mb-arch stage 1). */
   events?: BodyEventSource;
   /** Task queue: whether a condition (an item's `pre`) holds now, and in words what is lacking when it does not. Absent: a `pre` cannot be checked. */
+  /** R3-2: the target of a fight or attack hand of this command, when it is alive within the body's threat range now (the name, for the words), else null. Absent: no such judgement. */
+  fightTargetNear?(command: Command): string | null;
   check?(condition: ActCondition): { ok: boolean; words: string; /** The condition could not be judged (a furnace nobody recorded): the item is not started either way (continue contracts, 2). */ unknown?: boolean };
   /** Task queue: how far the running act is (its hand, its pass), without the command's id. */
   progress?(): Omit<MinecraftQueueProgress, 'id'> | null;
@@ -389,10 +391,17 @@ export class CommonFcaControlLoop {
    * An item ended (or did not start): what waits is judged by the dependency table; the first that is still waiting starts. The ones dropped say why
    * (`droppedBecause`, naming the item); the ones kept despite the failure say so (`keptDespite`, shown on their receipt later).
    */
-  private afterEnd(envelope: QueueEnvelope, unit: ItemEnd, key: string): void {
-    const judged = this.queue.judgeWaiting({ queue: envelope.queue, item: envelope.item, unit });
+  private afterEnd(envelope: QueueEnvelope, unit: ItemEnd, key: string, command?: Command): void {
+    // R3-2 (the safety cut): an item that ended in a danger, or whose fight target is still alive near, leaves nothing that moves the body behind it.
+    let danger: string | null = null;
+    if (this.queue.waiting.length) {
+      let near: string | null = null;
+      try { near = command ? this.options.actuator.fightTargetNear?.(command) ?? null : null; } catch { near = null; }
+      danger = dangerOfEnd(unit, near);
+    }
+    const judged = this.queue.judgeWaiting({ queue: envelope.queue, item: envelope.item, unit }, danger);
     for (const drop of judged.dropped) {
-      this.closeUnstarted(drop.command, 'cancelled', 'queue_dropped', droppedBecause(envelope.item, unit.code ?? unit.goal), { code: drop.code, ...(drop.item ? { item: drop.item } : {}) });
+      this.closeUnstarted(drop.command, 'cancelled', 'queue_dropped', drop.danger ? droppedByDanger(envelope.item, drop.danger) : droppedBecause(envelope.item, unit.code ?? unit.goal), { code: drop.code, ...(drop.item ? { item: drop.item } : {}) });
       this.queue.note(drop.command.queue!.queue ?? envelope.queue, drop.command.queue!.item, { goal: 'not_started', end: 'not_run', released: true, code: drop.code });
     }
     for (const kept of judged.kept) this.keptDespite.set(kept.command.id, { item: kept.item, code: kept.code });
@@ -508,7 +517,7 @@ export class CommonFcaControlLoop {
       this.hurry(true);
       this.watch(() => this.options.observer?.commandEnded?.(command, receipt));
       // An item that ended: what waits is judged by what it says it depends on (a death has already dropped it all; there is nothing left to bring back here).
-      if (envelope) this.afterEnd(envelope, unit, key);
+      if (envelope) this.afterEnd(envelope, unit, key, command);
       // (Not while another command of this owner still runs or waits beside it: the last one to end gives the owner back.)
       if (!historicalCleanup && !this.held && receipt.inputsReleased && this.owner === key && ![...this.active.keys()].some(id => id !== command.id) && !this.queue.busy) this.owner = null;
     }).finally(() => {

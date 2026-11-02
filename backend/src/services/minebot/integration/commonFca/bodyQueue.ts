@@ -48,10 +48,28 @@ export type Admission = 'start' | 'wait' | { failureType: 'queue_after_gone' | '
 
 /** How an item ended, as the queue remembers it (what `dependsOn` is judged by). */
 export interface ItemEnd { goal: GoalOutcome; end: RunEnd; released: boolean; code?: string }
-export interface Dropped { command: Command; code: 'depends_failed' | 'depends_unknown'; item?: QueueRef }
+export interface Dropped { command: Command; code: 'depends_failed' | 'depends_unknown'; item?: QueueRef; /** The danger that ended the item before it (R3-2): the drop is for that, not for a dependency. */ danger?: string }
 export interface Kept { command: Command; item: QueueRef; code: string }
 
 const refKey = (queue: string, item: string) => `${queue}\u0000${item}`;
+
+/**
+ * R3-2 (the body's safety cut, 2026-11-03): an item that ended in a danger leaves nothing behind it that moves the body, even an item that says it depends on nothing (`dependsOn: []`, the
+ * reserve item the head puts last): none of them starts. The codes of the act's stop that are a danger: a reflex took the body (the lava, the breath, the wall, the flee ... all of them are a reflex),
+ * a stopIf of the item's own (hostile near, health below, ...), a hit, a fall. The fixtures' `continue/danger-cut.json` is the source (both sides test it).
+ */
+export const DANGER_STOP_CODES: ReadonlySet<string> = new Set(['reflex', 'interrupted_by_reflex', 'damage_taken', 'fell']);
+export const DANGER_STOP_PREFIX = 'stop_if';
+/** The range within which a fight or attack target that is still alive makes the item's end a danger. */
+export const FIGHT_THREAT_RANGE_M = 16;
+/** The danger an item's end is, in words, or null: its stop code is one of the dangers, or the target of a fight / attack hand of it is alive within FIGHT_THREAT_RANGE_M (`fightTargetNear`, from the body). */
+export function dangerOfEnd(unit: Pick<ItemEnd, 'goal' | 'end' | 'code'>, fightTargetNear?: string | null): string | null {
+  if (isReliable(unit)) return null;
+  const code = unit.code ?? '';
+  if (DANGER_STOP_CODES.has(code) || code.startsWith(DANGER_STOP_PREFIX)) return code;
+  if (fightTargetNear) return `fight_target:${fightTargetNear}`;
+  return null;
+}
 
 export class BodyQueue {
   /** The commands waiting, in order. */
@@ -120,7 +138,7 @@ export class BodyQueue {
    * in this pass (`depends_failed`) or one not remembered (`depends_unknown`); else it stays, and says it was kept despite the failure (`keptDespite`).
    * The dropped are taken out of the queue and returned with their reasons.
    */
-  judgeWaiting(ended: { queue: string; item: string; unit: ItemEnd }): { dropped: Dropped[]; kept: Kept[] } {
+  judgeWaiting(ended: { queue: string; item: string; unit: ItemEnd }, danger?: string | null): { dropped: Dropped[]; kept: Kept[] } {
     const dropped: Dropped[] = [], kept: Kept[] = [];
     if (isReliable(ended.unit) && ended.unit.released) return { dropped, kept };
     const gone = new Map<string, QueueRef>();   // items dropped in this pass, by item id
@@ -128,6 +146,12 @@ export class BodyQueue {
     const survivors: Command[] = [];
     for (const command of this.waiting) {
       const item = command.queue!.item, list = command.queue!.dependsOn, queue = command.queue!.queue ?? ended.queue;
+      // R3-2: after a danger nothing waiting starts, whatever it says it depends on.
+      if (danger) {
+        dropped.push({ command, code: 'depends_failed', item: failedItem, danger });
+        gone.set(item, { queue, item });
+        continue;
+      }
       if (!Array.isArray(list)) {
         dropped.push({ command, code: 'depends_failed', item: failedItem });
         gone.set(item, { queue, item });
@@ -192,4 +216,8 @@ export function notStarted(envelope: QueueEnvelope, now: number, check?: (pre: A
 }
 
 export const droppedBecause = (item: string, why: string) => `捨てた: 前の項目 ${item} が止まった（${why}）。手は動いていない`;
+/** The words of an item dropped after a danger (R3-2): the head reads them as a stop, and the item was not started. */
+export const droppedByDanger = (item: string, danger: string) => danger.startsWith('fight_target:')
+  ? `捨てた: 前の項目 ${item} の戦いの相手（${danger.slice('fight_target:'.length)}）が ${FIGHT_THREAT_RANGE_M}m 内で生きている。安全のため始めていない（手は動いていない）`
+  : `捨てた: 前の項目 ${item} が危険で止まった（${danger}）。安全のため始めていない（手は動いていない）`;
 export type { ItemOutcome };
