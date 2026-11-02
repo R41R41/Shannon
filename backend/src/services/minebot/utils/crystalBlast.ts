@@ -1,3 +1,4 @@
+import { Vec3 } from 'vec3';
 import { bodyReader, type BlockReader } from './localMap.js';
 import type { P3 } from './dragonParts.js';
 
@@ -55,12 +56,32 @@ export function blastRaw(distance: number, seen: number, power = CRYSTAL_POWER):
   return Math.floor((impact * impact + impact) / 2 * 7 * reach + 1);
 }
 
+/** The collision boxes of a block in its own cell (min x y z, max x y z, 0 to 1), or null when they are not known (then a solid block is taken as a whole cube). */
+export type ShapesAt = (x: number, y: number, z: number) => number[][] | null;
+const WHOLE_CUBE: number[][] = [[0, 0, 0, 1, 1, 1]];
+const LINE_STEP = 0.1;
+
+/** Whether the segment a to b passes through the box (min, max). */
+function segmentHitsBox(a: P3, b: P3, min: P3, max: P3): boolean {
+  let t0 = 0, t1 = 1;
+  for (const axis of ['x', 'y', 'z'] as const) {
+    const d = b[axis] - a[axis];
+    if (Math.abs(d) < 1e-12) { if (a[axis] < min[axis] || a[axis] > max[axis]) return false; continue; }
+    let u0 = (min[axis] - a[axis]) / d, u1 = (max[axis] - a[axis]) / d;
+    if (u0 > u1) [u0, u1] = [u1, u0];
+    t0 = Math.max(t0, u0); t1 = Math.min(t1, u1);
+    if (t0 > t1) return false;
+  }
+  return true;
+}
+
 /**
  * The fraction of the body's box that the blast's centre sees: the game's own sample grid (Explosion.getSeenPercent: steps of 1 / (2 w + 1) across, 1 / (2 h + 1) up,
- * 45 points for a body 0.6 wide and 1.8 tall) with a straight line from each point to the centre; a line through a solid cell is shut out (iron bars are passed: a
- * bar is a thin post, so the estimate is the larger one).
+ * 45 points for a body 0.6 wide and 1.8 tall) with a straight line from each point to the centre; a line is shut out by the collision boxes of the solid blocks it passes
+ * through (a bottom slab shuts out what is under its top and leaves the line over it, a stair its steps; a block whose boxes are not known is a whole cube; iron bars are passed:
+ * a bar is a thin post, so the estimate is the larger one). Independent review 2026-11-02: a slab taken as a whole cube judged a blast of 17 as none.
  */
-export function seenFraction(read: BlockReader, centre: P3, feet: P3, ignore: P3[] = []): number {
+export function seenFraction(read: BlockReader, centre: P3, feet: P3, ignore: P3[] = [], shapesAt?: ShapesAt): number {
   const w = 0.6, h = 1.8;
   const d0 = 1 / (w * 2 + 1), d1 = 1 / (h * 2 + 1), d2 = d0;
   const d3 = (1 - Math.floor(1 / d0) * d0) / 2, d4 = (1 - Math.floor(1 / d2) * d2) / 2;
@@ -70,14 +91,19 @@ export function seenFraction(read: BlockReader, centre: P3, feet: P3, ignore: P3
   for (let fx = 0; fx <= 1 + 1e-9; fx += d0) for (let fy = 0; fy <= 1 + 1e-9; fy += d1) for (let fz = 0; fz <= 1 + 1e-9; fz += d2) {
     total++;
     const to = { x: feet.x - w / 2 + w * fx + d3, y: feet.y + h * fy, z: feet.z - w / 2 + w * fz + d4 };
-    const length = Math.hypot(to.x - centre.x, to.y - centre.y, to.z - centre.z), steps = Math.max(1, Math.ceil(length / 0.25));
+    const length = Math.hypot(to.x - centre.x, to.y - centre.y, to.z - centre.z), steps = Math.max(1, Math.ceil(length / LINE_STEP));
+    const tried = new Set<string>();
     let blocked = false;
     for (let i = 1; i < steps && !blocked; i++) {
       const t = i / steps;
       const bx = Math.floor(centre.x + (to.x - centre.x) * t), by = Math.floor(centre.y + (to.y - centre.y) * t), bz = Math.floor(centre.z + (to.z - centre.z) * t);
-      if (skip.has(`${bx},${by},${bz}`)) continue;
+      const key = `${bx},${by},${bz}`;
+      if (skip.has(key) || tried.has(key)) continue;
+      tried.add(key);
       const block = read(bx, by, bz);
-      if (block && block.solid === true && block.name !== 'iron_bars') blocked = true;
+      if (!block || block.solid !== true || block.name === 'iron_bars') continue;
+      const boxes = shapesAt?.(bx, by, bz) ?? WHOLE_CUBE;
+      if (boxes.some(box => segmentHitsBox(centre, to, { x: bx + box[0], y: by + box[1], z: bz + box[2] }, { x: bx + box[3], y: by + box[4], z: bz + box[5] }))) blocked = true;
     }
     if (!blocked) seen++;
   }
@@ -88,7 +114,10 @@ export interface BlastEstimate { distance: number; seen: number; raw: number; ex
 /** What a blast of `power` (a crystal's 6, a bed's 5) at `centre` would take from the body at `feet` (the body's own place by default), and whether the body can take it. */
 export function blastAt(bot: any, centre: P3, feet: P3 = bot.entity.position, power = CRYSTAL_POWER, ignore: P3[] = []): BlastEstimate {
   const distance = Math.hypot(feet.x - centre.x, feet.y - centre.y, feet.z - centre.z);
-  const seen = distance >= power * 2 ? 0 : seenFraction(bodyReader(bot), centre, feet, ignore);
+  const shapesAt: ShapesAt = (x, y, z) => {
+    try { const shapes = bot?.blockAt?.(new Vec3(x, y, z), false)?.shapes; return Array.isArray(shapes) && shapes.length ? shapes as number[][] : null; } catch { return null; }
+  };
+  const seen = distance >= power * 2 ? 0 : seenFraction(bodyReader(bot), centre, feet, ignore, shapesAt);
   const raw = blastRaw(distance, seen, power);
   const { points, toughness } = armorOf(bot);
   const expected = raw === 0 ? 0 : Math.round(afterArmor(afterDifficulty(raw, bot?.game?.difficulty), points, toughness) * 10) / 10;

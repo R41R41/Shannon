@@ -8,8 +8,8 @@ import { activateItemFacing } from './activateItemFacing.js';
  * A fall that would cripple or kill, stopped with a bucket of water (the clutch every player knows). In the End a body that climbed a pillar for a caged crystal is up to 40 blocks over the ground, and
  * the dragon's wings push what is near: a fall of 30 blocks is 27 points of damage, and armour does not take any of it. Water laid on the ground under the body as it comes down takes the fall.
  *
- * The bucket reaches 4.5 blocks from the eye. At the speed of a fall of up to 55 blocks (under 2.9 blocks a tick) there is always a physics tick with the ground inside the reach and the body not yet
- * on it, so the pour is made in that tick (the use packet follows the position packet of the same tick). Only in the End, only with a bucket of water carried, only where the ground under the body is a
+ * The bucket reaches 4.5 blocks from the eye (4.2 is used). Up to a fall of about 80 blocks the body is slower than the 2.58 blocks that lie between the reach and the ground, so there is always a physics tick with the ground inside
+ * the reach and the body not yet on it (checked tick by tick for falls of 10 to 120 blocks: no miss up to 80), and the pour is made in that tick (the use packet follows the position packet of the same tick). Only in the End, only with a bucket of water carried, only where the ground under the body is a
  * solid floor (not water, lava, the void or what is not loaded) and the fall would cost at least CLUTCH_MIN_DAMAGE.
  */
 export const CLUTCH_FALLING_VY = -0.75;

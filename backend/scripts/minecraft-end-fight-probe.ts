@@ -854,7 +854,8 @@ scenes.observe = async () => {
   return { captures };
 };
 
-scenes.platform = async () => {
+/** The arrival platform's trials (`platform`), or only those whose label has `only` in it (`platform_edge`: the front edge of a bridge). */
+async function platformRun(only: string | null): Promise<Record<string, unknown>> {
   // The End's arrival: the body on the obsidian platform in the void (5 x 5 round (100, 48, 0)), a dragon fireball down on it. Every heading is the void, so no way out can be walked; with a block carried the
   // dragon reflex puts it under the feet (obsidian first): a cloud is a slab on the ground, and a body one block up is clear of it. Then the same with nothing to put under the feet, for the cost, and with a second
   // ball a while after the first (the cloud laid at the new height).
@@ -864,12 +865,12 @@ scenes.platform = async () => {
   // The platform's chunks stay loaded whoever stands where: a body that died is back in the overworld, and a cloud left in an unloaded End chunk is not found by `kill` (w4: the next trial was met by it on arrival).
   await ask(`${END} forceload add 64 -16 111 16`);
   const clear = async () => { await ask(`${END} kill @e[type=minecraft:area_effect_cloud]`); await ask(`${END} kill @e[type=minecraft:dragon_fireball]`); };
-  const trial = async (label: string, items: string[], balls = 1, bridgeAt: number | null = null, bridgeFrom = 70) => {
+  const trial = async (label: string, items: string[], balls = 1, bridgeAt: number | null = null, bridgeFrom = 70, bridgeTo = 97) => {
     await clear();
     // the platform as the game makes it (5 x 5 of obsidian at y 48), nothing on it; the body put on it and waited for until it stands, whole. On the bridge: a line of cobblestone one wide, 28 long, from the platform out over the void (a way out that can be walked: the body walks it, w8: 9 blocks, no harm); in the other trials there is none.
     await ask(`${END} fill 98 48 -2 102 48 2 obsidian`); await ask(`${END} fill 98 49 -2 102 53 2 air`);
     await ask(`${END} fill 70 48 0 97 48 0 air`); await ask(`${END} fill 70 49 -1 97 53 1 air`);
-    if (bridgeAt !== null) await ask(`${END} fill ${bridgeFrom} 48 0 97 48 0 cobblestone`);
+    if (bridgeAt !== null) await ask(`${END} fill ${bridgeFrom} 48 0 ${bridgeTo} 48 0 cobblestone`);
     const standX = bridgeAt ?? 100.5;
     await gear(items); await wear();
     await ask(`effect give ${ACTOR} minecraft:instant_health 1 5`);
@@ -907,21 +908,26 @@ scenes.platform = async () => {
     return result;
   };
   try {
-    const runs = [
-      await trial('with obsidian and cobblestone carried', ['diamond_sword', 'cobblestone 16', 'obsidian 4']),
-      await trial('with cobblestone only', ['diamond_sword', 'cobblestone 16']),
-      await trial('with two balls, three seconds apart', ['diamond_sword', 'cobblestone 16', 'obsidian 4'], 2),
-      await trial('with nothing to put under the feet', ['diamond_sword']),
-      await trial('on a bridge one wide, 12 blocks out', ['diamond_sword', 'cobblestone 16'], 1, 88.5),
-      await trial('on a bridge one wide, two balls 3 s apart', ['diamond_sword', 'cobblestone 16'], 2, 88.5),
-      // the front edge of a bridge that is being laid: the last block is x 90, the body stands on it with its middle over x 89, where nothing is under it (the go leans over the gap to lay the next)
-      await trial('at the front edge of a bridge, half over the next cell', ['diamond_sword', 'cobblestone 16'], 1, 89.97, 90),
-    ];
+    const runs: unknown[] = [];
+    const run = async (label: string, ...rest: [string[], number?, (number | null)?, number?, number?]) => { if (only === null || label.includes(only)) runs.push(await trial(label, ...rest)); };
+    {
+      await run('with obsidian and cobblestone carried', ['diamond_sword', 'cobblestone 16', 'obsidian 4']);
+      await run('with cobblestone only', ['diamond_sword', 'cobblestone 16']);
+      await run('with two balls, three seconds apart', ['diamond_sword', 'cobblestone 16', 'obsidian 4'], 2);
+      await run('with nothing to put under the feet', ['diamond_sword']);
+      await run('on a bridge one wide, 12 blocks out', ['diamond_sword', 'cobblestone 16'], 1, 88.5);
+      await run('on a bridge one wide, two balls 3 s apart', ['diamond_sword', 'cobblestone 16'], 2, 88.5);
+      // the front edge of a bridge being laid in the void, one block of it laid (x 90, nothing beyond it: no way to walk out of a cloud): the body stands on that block with its middle over x 89, where nothing is under it
+      // (the go leans over the gap to lay the next block)
+      await run('at the front edge of a bridge of one block, half over the next cell', ['diamond_sword', 'cobblestone 16'], 1, 89.97, 90, 90);
+    }
     return { runs };
   } finally {
     await clear(); await ask(`${END} forceload remove 64 -16 111 16`);
   }
-};
+}
+scenes.platform = () => platformRun(null);
+scenes.platform_edge = () => platformRun('front edge');
 
 /** The way off the arrival platform, as the `cross` scene; with `ballAfterMs` a dragon fireball is dropped on the body that long after the first `go` began (`cross_ball`). */
 async function crossRun(ballAfterMs: number | null): Promise<Record<string, unknown>> {
@@ -1145,7 +1151,8 @@ scenes.fall = async () => {
   for (const [label, height, items] of cases) {
     await flatten(); await ask('kill @e[type=minecraft:item]');
     await gear(items); await wear();
-    await hold('diamond_sword');
+    // the first hotbar slot is the sword's: a `hold` replaces the selected slot, and the last trial left it on the bucket's
+    actor.setQuickBarSlot(0); await sleep(300);
     await ask(`effect give ${ACTOR} minecraft:instant_health 1 5`);
     await standAt(0.5, g, 8.5); await sleep(1000);
     const healthBefore = Number(actor.health), deathsBefore = actorDeaths, lowest = trackMinHealth(), ledgerMark = (actor.reflexLedger?.mark?.() as number | undefined) ?? 0;

@@ -37,7 +37,7 @@ type Proof = { connectionId: string; bodyId: string; entityId: number; entityUui
  * One hit on the dragon as it is reported: the server's name for it (`damage_event`: the body, someone else, or nothing for a blast with no entity behind it) and the client's hurt animation.
  * The two come in one tick in either order, so a hit is decided HIT_SETTLE_MS after the first (or when the death or the snapshot asks).
  */
-type Hit = { entity: any; at: number; named: 'body' | 'foreign' | 'none' | null; via?: Via; timer: ReturnType<typeof setTimeout> | null };
+type Hit = { entity: any; at: number; named: 'body' | 'foreign' | 'none' | null; via?: Via; /** The task the hit was reported under: a hit still being decided when the task changes is the old task's, and is no proof for the new one. */ task: string | null; timer: ReturnType<typeof setTimeout> | null };
 type Advancement = { state: 'earned_during_connection' | 'not_earned' | 'earned_before_connection' | 'unknown'; at?: string };
 
 const KILL_DRAGON = 'minecraft:end/kill_dragon';
@@ -100,14 +100,21 @@ export class NativeGoalEvidence {
     // The damage the body dealt outlives the command that dealt it (the dragon dies ten seconds after the last blow): what ends it is another task, session,
     // generation or connection, or the grace (below).
     if (!old || old.key !== key || old.connectionId !== command.connectionId || old.context.sessionId !== command.context.sessionId
-      || old.context.generation !== command.context.generation) this.attacks.clear();
+      || old.context.generation !== command.context.generation) { this.attacks.clear(); this.dropHits(); }
     this.expire();
     this.current = { key, context: structuredClone(command.context), connectionId: command.connectionId, deadline: Date.parse(command.deadlineAt) };
   }
   cancel(context: BodyTaskContext): void {
     if (this.current?.key === contractKey(context) && this.current.context.sessionId === context.sessionId && this.current.context.generation === context.generation) {
-      this.attacks.clear(); this.current.deadline = this.now();
+      this.attacks.clear(); this.dropHits(); this.current.deadline = this.now();
     }
+  }
+  /** The hits still being decided are let go (a task, a session, a generation or a connection changed, or the task was cancelled). */
+  private dropHits(): void { for (const hit of this.hits.values()) if (hit.timer) clearTimeout(hit.timer); this.hits.clear(); }
+  /** The identity of the task now current (a hit is decided under the task it was reported under only). */
+  private taskTag(): string | null {
+    const c = this.current;
+    return c ? `${c.connectionId}|${c.key}|${c.context.sessionId}|${c.context.generation}` : null;
   }
   /** The witnesses whose last damage is older than the grace, or that never had one and were swung long ago, are gone. */
   private expire(): void {
@@ -161,7 +168,7 @@ export class NativeGoalEvidence {
   private hitOn(entity: any): Hit {
     const kept = this.hits.get(entity.id);
     if (kept) return kept;
-    const hit: Hit = { entity, at: this.now(), named: null, timer: null };
+    const hit: Hit = { entity, at: this.now(), named: null, task: this.taskTag(), timer: null };
     hit.timer = setTimeout(() => this.settle(entity.id), HIT_SETTLE_MS);
     (hit.timer as { unref?: () => void }).unref?.();
     this.hits.set(entity.id, hit);
@@ -201,7 +208,7 @@ export class NativeGoalEvidence {
     if (hit.timer) clearTimeout(hit.timer);
     this.hits.delete(id);
     const entity = hit.entity;
-    if (hit.named === 'foreign') return;
+    if (hit.named === 'foreign' || hit.task !== this.taskTag()) return;
     const blast = this.blast;
     const bedBlast = !!blast?.bed && Math.abs(hit.at - blast.at) <= BLAST_HURT_MS && this.blastReaches(entity);
     if (hit.named === 'body') { const witness = this.witnessFor(entity); if (witness) this.damaged(witness, hit.via ?? 'server_named', hit.at); return; }

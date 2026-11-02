@@ -692,3 +692,35 @@ describe('the water-bucket clutch of a fall in the End', () => {
     } finally { stop(); }
   });
 });
+
+import { blastAt } from '../../src/services/minebot/utils/crystalBlast.js';
+
+describe("a blast's line of sight through blocks that are not whole cubes (independent review 2026-11-02: a slab was taken for a cube)", () => {
+  const BOTTOM_SLAB = [[0, 0, 0, 1, 0.5, 1]], TOP_SLAB = [[0, 0.5, 0, 1, 1, 1]];
+  const centre = { x: 0.5, y: 65.5, z: 0.5 }, feet = { x: 4.5, y: 64, z: 0.5 };
+  /** A row of blocks at x 2 (z -3 to 3) at the given heights, of a name whose boxes are given (none: a whole cube, as a block the game does not list). */
+  function wallOf(heights: number[], name: string, shapes?: number[][]) {
+    const world: World = new Map();
+    for (const y of heights) for (let z = -3; z <= 3; z++) world.set(key(2, y, z), name);
+    const f = fixture({ phase: DRAGON_PHASE.holdingPattern, at: new Vec3(feet.x, feet.y, feet.z), world });
+    const original = f.bot.blockAt;
+    f.bot.blockAt = (v: Vec3, ...rest: unknown[]) => { const block = original(v, ...rest); return block.name === name && shapes ? { ...block, shapes } : block; };
+    return f.bot;
+  }
+  it('is shut out by a wall of whole cubes, and by one whose boxes are not known', () => {
+    expect(blastAt(wallOf([63, 64, 65, 66], 'obsidian'), centre, feet).seen).toBe(0);
+    expect(blastAt(wallOf([63, 64, 65, 66], 'obsidian', [[0, 0, 0, 1, 1, 1]]), centre, feet).seen).toBe(0);
+  });
+  it('sees over a bottom slab: the line passes above its top, where a cube would have shut it out', () => {
+    const slabs = blastAt(wallOf([64], 'stone_slab', BOTTOM_SLAB), centre, feet);
+    expect(slabs.seen).toBeGreaterThan(0.85); // the few lines to the lowest points clip the far edge of the slab
+    const asCube = blastAt(wallOf([64], 'stone_slab'), centre, feet);
+    expect(asCube.seen).toBeLessThan(slabs.seen);
+    expect(slabs.raw).toBeGreaterThan(asCube.raw);
+  });
+  it('is partly shut out by a top slab: the lines under it pass, those through its half are stopped', () => {
+    const seen = blastAt(wallOf([65], 'stone_slab', TOP_SLAB), centre, feet).seen;
+    expect(seen).toBeGreaterThan(0);
+    expect(seen).toBeLessThan(1);
+  });
+});

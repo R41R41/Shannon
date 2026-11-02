@@ -124,6 +124,24 @@ describe('task-bound native Minecraft goal evidence', () => {
       f.advance(8000); f.bot.emit('entityDead', f.target);
       expect(f.evidence.snapshot().boss).toMatchObject({ verified: true, witness: { via: ['explosion'] } }); f.evidence.dispose();
     });
+    it("does not carry a hit that was still being decided over to another task: the damage of one task is not the next task's proof", () => {
+      const f = fixture(); f.evidence.begin(f.command());
+      f.bot._client.emit('damage_event', { entityId: 17, sourceTypeId: 3, sourceCauseId: 2, sourceDirectId: 2 });
+      // the task changes before the hit is decided (HIT_SETTLE_MS after the first report); the swing and the death are the new task's
+      f.evidence.begin(f.command({ context: { ...context, taskId: 'other-task' } }));
+      f.bot.attack(f.target);
+      f.bot.emit('entityDead', f.target);
+      expect(f.evidence.snapshot().boss.verified).toBe(false);
+      f.evidence.dispose();
+    });
+    it('still decides a hit under the task it was reported under, when the death comes at once', () => {
+      const f = fixture(); f.evidence.begin(f.command());
+      f.bot.attack(f.target);
+      f.bot._client.emit('damage_event', { entityId: 17, sourceTypeId: 3, sourceCauseId: 2, sourceDirectId: 2 });
+      f.bot.emit('entityDead', f.target);
+      expect(f.evidence.snapshot().boss).toMatchObject({ verified: true, witness: { via: ['sword'] } });
+      f.evidence.dispose();
+    });
     it('takes the end of the death animation (removed with no health left) but not an unload, nor a removal while it is still dying with health', () => {
       const f = fixture(); f.target.metadata = []; f.evidence.begin(f.command());
       f.bot.attack(head(f)); f.bot.emit('entityHurt', f.target); f.bot.emit('entityGone', f.target);
