@@ -58,6 +58,9 @@ class FakeHead {
   broadcastFaults: Array<{ when: (body: any) => boolean; times: number; status?: number; code?: string; lose?: boolean }> = [];
   /** The next this many state answers leave targetVideoId out (a head that did not tell the ear yet). */
   hideTargetStates = 0;
+  /** The virtual clock (set by the test world) and the time before which the comments route answers 503 while the rest of the head works (the end notice, the state). */
+  clock: () => number = () => 0;
+  commentsDownUntil = 0;
   /** A request to the head that is made while `down` throws like a refused connection. */
   fetcher: typeof fetch = async (input, init) => {
     if (this.down) throw new TypeError('fetch failed');
@@ -96,6 +99,7 @@ class FakeHead {
     }
     if (route === 'POST /v1/platform/stream/comments') {
       this.commentsPosted += 1;
+      if (this.clock() < this.commentsDownUntil) return json(503, { error: 'comments are down' });
       const forced = this.commentStatuses.shift();
       if (forced) return json(forced, { error: 'forced' });
       if (!this.stream || this.stream.streamId !== body.streamId || this.stream.phase === 'ended') return json(409, { error: 'STREAM_NOT_LIVE' });
@@ -296,20 +300,27 @@ class FakeYoutube {
  * `via: 'poll'` (the default, for the tests of what is the same in both ways of reading): the fake has no stream route, so the ear falls back
  * to polling at once. `via: 'stream'`: liveChatMessages.streamList works.
  */
-function world(options: Partial<StreamEarOptions> & { via?: 'stream' | 'poll' } = {}) {
-  const { via = 'poll', ...earOptions } = options;
+function world(options: Partial<StreamEarOptions> & { via?: 'stream' | 'poll'; virtualIdle?: boolean } = {}) {
+  const { via = 'poll', virtualIdle = false, ...earOptions } = options;
   let now = START;
   const sleeps: number[] = [];
   const logs: string[] = [];
   const head = new FakeHead();
+  head.clock = () => now;
   const youtube = new FakeYoutube();
   youtube.streamEnabled = via === 'stream';
   youtube.clock = () => now;
   const methods: Array<ReadMethod | null> = [];
   const tokens: boolean[] = [];
   const meter = new ApiUnitMeter(() => now, () => undefined, () => undefined);
+  // virtualIdle: streamList's idle timer runs on the virtual clock too (it fires when a sleep moves the clock past it), not on real time.
+  const pendingTimers: Array<{ at: number; fn: () => void }> = [];
+  const timers = virtualIdle ? {
+    set: (fn: () => void, ms: number): unknown => { const timer = { at: now + ms, fn }; pendingTimers.push(timer); return timer; },
+    clear: (handle: unknown): void => { const i = pendingTimers.indexOf(handle as { at: number; fn: () => void }); if (i >= 0) pendingTimers.splice(i, 1); },
+  } : undefined;
   const api = new YoutubeLiveApi({
-    baseUrl: YT, fetcher: youtube.fetcher, meter,
+    baseUrl: YT, fetcher: youtube.fetcher, meter, ...(timers ? { timers } : {}),
     getAccessToken: async force => { tokens.push(Boolean(force)); return force ? 'fresh-token' : 'token'; },
   });
   const ear = new StreamEar({
@@ -320,6 +331,10 @@ function world(options: Partial<StreamEarOptions> & { via?: 'stream' | 'poll' } 
       if (signal.aborted) return;
       sleeps.push(ms);
       now += ms;
+      for (const due of pendingTimers.filter(timer => timer.at <= now).sort((a, b) => a.at - b.at)) {
+        const i = pendingTimers.indexOf(due);
+        if (i >= 0) { pendingTimers.splice(i, 1); due.fn(); }
+      }
       await tick();
     },
     log: { info: line => logs.push(line), warn: line => logs.push(`WARN ${line}`) },
@@ -1430,19 +1445,48 @@ describe('終わり際のコメントを落とさない', () => {
     expect(w.head.commentsPosted).toBeGreaterThanOrEqual(3);
   });
 
-  it.each(['poll', 'stream'] as const)('%s: 終わりの後の送り直しは 1・2・4・8・16 秒で、それでも送れなければ捨てた件数を数えて残す', async via => {
+  it.each(['poll', 'stream'] as const)('%s: 終わりの後の送り直しは 1・2・4・8・16 秒、そのあとは 30 秒ごとで、頭が受けるまで続ける', async via => {
     const w = world({ via });
     live(w);
     w.youtube.messages = [textItem('m1', 1), textItem('m2', 2), chatEnded];
-    w.head.commentStatuses = Array.from({ length: 30 }, () => 503);
+    w.head.commentStatuses = Array.from({ length: 9 }, () => 503);
+    await w.run(() => w.head.ended.length === 1);
+    expect(w.head.received.map(c => c.id)).toEqual(['m1', 'm2']);
+    expect(w.sleeps.join(',')).toContain('1000,2000,4000,8000,16000,30000,30000');
+    expect(w.ear.status().counters).toMatchObject({ commentsDropped: 0 });
+    expect(w.ear.status().pending).toBe(0);
+    expect(w.head.log.filter(entry => entry.startsWith('comments') || entry === 'ended')).toEqual(['comments:2', 'ended']);
+  });
+
+  it.each(['poll', 'stream'] as const)('%s: comments だけが 40 秒 503 で、終わりの知らせは通る: コメントが頭に届いてから終わりが届く（31 秒で捨てない）', async via => {
+    const w = world({ via });
+    live(w);
+    w.youtube.messages = [textItem('m1', 1), textItem('m2', 2), chatEnded];
+    w.head.commentsDownUntil = START + 40_000;
+    await w.run(() => w.head.ended.length === 1);
+    expect(w.head.received.map(c => c.id)).toEqual(['m1', 'm2']);
+    expect(w.head.log.filter(entry => entry.startsWith('comments') || entry === 'ended')).toEqual(['comments:2', 'ended']);
+    expect(w.ear.status().counters).toMatchObject({ commentsDropped: 0, commentsSent: 2 });
+    expect(w.clock() - START).toBeGreaterThanOrEqual(40_000);
+    expect(w.logs.some(line => line.includes('could not be sent'))).toBe(false);
+  });
+
+  it.each(['poll', 'stream'] as const)('%s: 10 分たっても頭が受けなければ、件数を数えて警告し、そのあとで終わりを知らせる', async via => {
+    const w = world({ via });
+    live(w);
+    w.youtube.messages = [textItem('m1', 1), textItem('m2', 2), chatEnded];
+    w.head.commentsDownUntil = Number.POSITIVE_INFINITY;
     await w.run(() => w.head.ended.length === 1);
     expect(w.head.received).toEqual([]);
-    expect(w.sleeps.join(',')).toContain('1000,2000,4000,8000,16000');
-    expect(w.head.commentsPosted).toBeGreaterThanOrEqual(7);
+    const waited = w.clock() - START;
+    expect(waited).toBeGreaterThanOrEqual(600_000);
+    expect(waited).toBeLessThan(600_000 + 60_000);
+    // 1, 2, 4, 8, 16 s, then every 30 s, the last wait cut to the 10 minutes.
+    expect(w.sleeps.join(',')).toContain('1000,2000,4000,8000,16000,30000,30000');
     expect(w.ear.status().counters).toMatchObject({ commentsDropped: 2, commentsSent: 0 });
     expect(w.ear.status().pending).toBe(0);
-    expect(w.logs.some(line => line.startsWith('WARN') && line.includes('2 comments could not be sent before the stream ended'))).toBe(true);
-    // The end is still told after the comments were given up.
+    expect(w.logs.some(line => line.startsWith('WARN') && line.includes('2 comments could not be sent before the stream ended') && line.includes('10 minutes'))).toBe(true);
+    // The end is told after the comments were given up, not before.
     expect(w.head.log.at(-1)).toBe('ended');
   });
 
@@ -1480,6 +1524,10 @@ describe('終わり際のコメントを落とさない', () => {
     expect(w.head.commentsPosted).toBe(2);
     expect(w.ear.status().counters.commentsDropped).toBe(1);
     expect(w.logs.some(line => line.includes('the ear was stopped'))).toBe(true);
+    // Stopped is not ended: the head is told nothing, and its stream is still live.
+    expect(w.head.ended).toEqual([]);
+    expect(w.head.log).not.toContain('ended');
+    expect(w.head.stream?.phase).toBe('live');
   });
 });
 
@@ -1503,9 +1551,11 @@ describe('終了済みの動画と、チャットが知らせない終わり', (
     }
   });
 
+  // The video the ear is connected to ending is this stream's end, whether the head named it (the target above), registered it as the stream's
+  // broadcast, or the ear found it by searching the channel: the only video not taken as the stream's is a YOUTUBE_LIVE_URL left over (next test).
   it.each([
     [undefined, undefined], [at(0), undefined], [at(0), at(50)], [undefined, at(50)],
-  ] as const)('探して見つけた配信: 開始 %s・終了 %s でも、終わった動画を onAir にしない', async (start, end) => {
+  ] as const)('探して見つけた放送: 開始 %s・終了 %s でも、終わった動画を onAir にせず、終わっていればそれをこの配信の終わりとして頭へ知らせる', async (start, end) => {
     const w = world();
     w.head.start();
     w.youtube.actualStartTime = start;
@@ -1531,7 +1581,7 @@ describe('終了済みの動画と、チャットが知らせない終わり', (
     expect(w.youtube.calls.some(call => call.path.startsWith('/liveChat') || call.path === '/liveBroadcasts')).toBe(false);
   });
 
-  it('YOUTUBE_LIVE_URL に前の配信の終わった動画が残っていても、この配信を終わらせず、チャンネルの今のライブを探す（一度だけ知らせる）', async () => {
+  it('常設の YOUTUBE_LIVE_URL に前の配信の終わった動画が残っていても（これだけはこの配信の動画として扱わない）、この配信を終わらせず、チャンネルの今のライブを探す（一度だけ知らせる）', async () => {
     const w = world({ liveUrl: 'https://youtu.be/abcdefghijk' });
     w.head.start({});
     w.youtube.endedVideos.add('abcdefghijk');
@@ -1565,8 +1615,11 @@ describe('終了済みの動画と、チャットが知らせない終わり', (
     expect(w.head.log.at(-1)).toBe('ended');
   });
 
-  it('onAir の後の動画の確かめは 1 時間に 60 回（60 units）で、チャットが静かな streamList は 1 接続（5 units）のまま', async () => {
-    const w = world({ via: 'stream' });
+  // The limit of this test: the clock is virtual (a sleep moves it) and, with virtualIdle, so is streamList's idle timer. What stays outside it:
+  // the real YouTube may push something on a quiet chat (a heartbeat), which would keep one connection open for the hour; the fake pushes
+  // nothing, so every idle period (5 minutes) is a new connection. That is the worst case, and it is what is counted here.
+  it('onAir の後の動画の確かめは 1 時間に 60 回（60 units）で、何も流れてこない streamList は idle（5 分）ごとに開き直して 1 時間に約 12 接続（60 units）', async () => {
+    const w = world({ via: 'stream', virtualIdle: true });
     w.head.start({ phase: 'live', broadcast: { onAir: true, videoId: 'vid00000001', liveChatId: 'chat-1', title: 't', channelId: 'UCowner' } });
     await w.run(() => w.clock() - START >= 3_600_000, 60_000);
     const videos = w.youtube.calls.filter(call => call.path === '/videos').length;
@@ -1574,7 +1627,9 @@ describe('終了済みの動画と、チャットが知らせない終わり', (
     expect(videos).toBeLessThanOrEqual(61);
     expect(w.youtube.calls.filter(call => call.path === '/liveBroadcasts')).toEqual([]);
     expect(w.head.ended).toEqual([]);
-    expect(w.youtube.streamCalls).toBe(1);
+    expect(w.youtube.streamCalls).toBeGreaterThanOrEqual(11);
+    expect(w.youtube.streamCalls).toBeLessThanOrEqual(13);
+    expect(w.youtube.connectTimes.slice(1).every((time, i) => time - w.youtube.connectTimes[i] >= 299_000)).toBe(true);
   });
 
   it.each(['poll', 'stream'] as const)('%s: 耳が再起動したとき、頭の broadcast が onAir:false なら同じ動画・チャットを引き継いで開始を確かめ直す', async via => {
@@ -1791,6 +1846,123 @@ describe('broadcast への頭の答えの区別', () => {
     await w.run(() => w.head.stream?.phase === 'live');
     expect(w.head.broadcasts).toHaveLength(3);
     expect(w.ear.status().headRefusal).toBeNull();
+  });
+});
+
+describe('二度目の見直し: 拒否・指定の動画の変更・止めた時のコメント', () => {
+  const A = 'AGenSh4kF9Y';
+  const B = 'BGenSh4kF9Z';
+  const onAirBody = (body: any) => body.onAir === true;
+  const waiting = (w: ReturnType<typeof world>) => w.head.start({ phase: 'waiting_for_chat', broadcast: { onAir: false, videoId: 'vid00000001', liveChatId: 'chat-1', title: 't', channelId: 'UCowner' } });
+  const changeTargetWhenLive = (w: ReturnType<typeof world>, after = 20_000) => {
+    let changed = false;
+    w.youtube.onPump = () => {
+      if (changed || w.head.stream?.phase !== 'live' || w.clock() - START < after) return;
+      changed = true;
+      w.head.stream = { ...w.head.stream, targetVideoId: B };
+      // The old video is over at the same moment: its end must not end the stream that is now for B.
+      w.youtube.endedVideos.add(A);
+    };
+  };
+
+  it('食い違いの回数は target が変わると 0 から数え直す（target が無い間に動画を 3 回拒否されて諦めた後、target がその動画になって 1 回拒否されても諦めない）', async () => {
+    const w = world({ liveUrl: A });
+    w.head.start({ targetVideoId: B });
+    w.head.hideTargetStates = 100_000;
+    await w.run(() => w.clock() - START >= 100_000);
+    expect(w.head.broadcasts).toHaveLength(3);
+    expect(w.logs.filter(line => line.includes('giving up on stream st-1'))).toHaveLength(1);
+    // The head now says its target is A (what the ear sends), and refuses once more for a moment.
+    w.head.hideTargetStates = 0;
+    w.head.stream = { ...w.head.stream!, targetVideoId: A };
+    w.head.broadcastFaults = [{ when: () => true, times: 1, status: 409, code: 'STREAM_VIDEO_MISMATCH' }];
+    await w.run(() => w.head.stream?.phase === 'live');
+    expect(w.head.broadcasts).toHaveLength(5);
+    expect(w.logs.filter(line => line.includes('giving up on stream st-1'))).toHaveLength(1);
+    expect(w.ear.status().headRefusal).toBeNull();
+  });
+
+  it('streamId が変わっても食い違いの回数は 0 から数え直す', async () => {
+    const w = world({ liveUrl: A });
+    w.head.start({ targetVideoId: B });
+    w.head.hideTargetStates = 100_000;
+    await w.run(() => w.clock() - START >= 100_000);
+    w.head.hideTargetStates = 0;
+    w.head.start({ streamId: 'st-2', targetVideoId: A });
+    w.head.broadcastFaults = [{ when: () => true, times: 2, status: 409, code: 'STREAM_VIDEO_MISMATCH' }];
+    await w.run(() => w.head.stream?.phase === 'live');
+    expect(w.head.broadcasts.at(-1)).toMatchObject({ streamId: 'st-2', onAir: true });
+  });
+
+  it.each(['poll', 'stream'] as const)('%s: 読んでいる間に同じ streamId の指定の動画が A から B に変わったら、A の終わりで配信を終わらせず、B を探し直して取りつく', async via => {
+    const w = world({ via });
+    w.head.start({ targetVideoId: A });
+    changeTargetWhenLive(w);
+    await w.run(() => w.head.broadcasts.some(body => body.videoId === B) && w.clock() - START >= 300_000);
+    expect(w.head.broadcasts.map(body => body.videoId)).toEqual([A, B]);
+    expect(w.head.broadcasts.at(-1)).toMatchObject({ videoId: B, onAir: true });
+    expect(w.head.ended).toEqual([]);
+    expect(w.head.stream?.phase).toBe('live');
+    expect(w.head.stream?.broadcast).toMatchObject({ videoId: B });
+    expect(w.logs.some(line => line.includes(`target video is ${B} now`))).toBe(true);
+    // B is the video looked at from then on.
+    expect(w.youtube.calls.filter(call => call.path === '/videos').slice(-1)[0].query.id).toBe(B);
+  });
+
+  it('指定の動画が変わって抜ける時、頭に届いていないコメントは頭へ送ってから抜ける（捨てない）', async () => {
+    const w = world();
+    w.head.start({ targetVideoId: A });
+    w.youtube.messages = [textItem('m1', 1), textItem('m2', 2)];
+    w.head.commentsDownUntil = START + 30_000;
+    changeTargetWhenLive(w, 10_000);
+    await w.run(() => w.head.broadcasts.some(body => body.videoId === B) && w.clock() - START >= 300_000);
+    expect(w.head.received.map(c => c.id)).toEqual(['m1', 'm2']);
+    expect(w.ear.status().counters.commentsDropped).toBe(0);
+    expect(w.ear.status().pending).toBe(0);
+    expect(w.head.ended).toEqual([]);
+  });
+
+  it('開始の知らせが食い違いで抜ける時も、頭に届いていないコメントは頭へ送ってから抜ける', async () => {
+    const w = world();
+    waiting(w);
+    w.youtube.messages = [textItem('m1', 1)];
+    w.head.commentsDownUntil = START + 25_000;
+    w.head.broadcastFaults = [{ when: onAirBody, times: 1, status: 409, code: 'STREAM_VIDEO_MISMATCH' }];
+    await w.run(() => w.head.stream?.phase === 'live');
+    expect(w.head.received.map(c => c.id)).toEqual(['m1']);
+    const { counters, pending } = w.ear.status();
+    expect(counters.commentsDropped).toBe(0);
+    // Every comment taken in is accounted for (the chat's history is read again after the video is left, so m1 counts twice on both sides).
+    expect(counters.commentsEligible).toBe(counters.commentsSent + counters.commentsDropped + pending);
+    expect(w.head.log.indexOf('comments:1')).toBeLessThan(w.head.log.lastIndexOf('broadcast'));
+  });
+
+  it('開始の知らせが入力拒否(400)で諦める時は、待っていたコメントを捨てた件数に数えて理由をログに出す（eligible = sent + dropped + pending）', async () => {
+    const w = world();
+    waiting(w);
+    w.youtube.messages = [textItem('m1', 1)];
+    w.head.commentsDownUntil = Number.POSITIVE_INFINITY;
+    w.head.broadcastFaults = [{ when: onAirBody, times: 99, status: 400, code: 'STREAM_INPUT_INVALID' }];
+    await w.run(() => w.ear.status().headRefusal !== null);
+    const { counters, pending } = w.ear.status();
+    expect(counters.commentsEligible).toBe(1);
+    expect(counters.commentsSent).toBe(0);
+    expect(counters.commentsDropped).toBe(1);
+    expect(pending).toBe(0);
+    expect(counters.commentsEligible).toBe(counters.commentsSent + counters.commentsDropped + pending);
+    expect(w.logs.some(line => line.startsWith('WARN') && line.includes('1 comments are dropped') && line.includes('STREAM_INPUT_INVALID'))).toBe(true);
+  });
+
+  it('頭が 409 STREAM_NOT_LIVE と言って読むのをやめる時も、待っていたコメントは捨てた件数に数える', async () => {
+    const w = world();
+    waiting(w);
+    w.youtube.messages = [textItem('m1', 1)];
+    w.head.commentsDownUntil = Number.POSITIVE_INFINITY;
+    w.head.broadcastFaults = [{ when: onAirBody, times: 99, status: 409, code: 'STREAM_NOT_LIVE' }];
+    await w.run(() => w.logs.some(line => line.includes('were still waiting')));
+    const { counters, pending } = w.ear.status();
+    expect(counters).toMatchObject({ commentsEligible: 1, commentsSent: 0, commentsDropped: 1 });
+    expect(pending).toBe(0);
   });
 });
 

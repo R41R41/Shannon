@@ -228,6 +228,8 @@ export interface YoutubeLiveApiOptions {
   fetcher?: typeof fetch;
   meter?: ApiUnitMeter;
   timeoutMs?: number;
+  /** The idle timer of streamList. Default: setTimeout / clearTimeout; a test passes timers that run on its virtual clock. */
+  timers?: { set(fn: () => void, ms: number): unknown; clear(handle: unknown): void };
 }
 
 export class YoutubeLiveApi {
@@ -305,10 +307,11 @@ export class YoutubeLiveApi {
     const onAbort = () => connection.abort();
     input.signal?.addEventListener('abort', onAbort, { once: true });
     let idle = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timers = this.options.timers ?? { set: (fn: () => void, ms: number): unknown => setTimeout(fn, ms), clear: (handle: unknown): void => clearTimeout(handle as ReturnType<typeof setTimeout> | undefined) };
+    let timer: unknown;
     const arm = () => {
-      clearTimeout(timer);
-      timer = setTimeout(() => { idle = true; connection.abort(); }, idleMs);
+      timers.clear(timer);
+      timer = timers.set(() => { idle = true; connection.abort(); }, idleMs);
     };
     const fail = (error: unknown): YoutubeApiError => {
       if (idle) return new YoutubeApiError(endpoint, 0, 'idle', `${endpoint} said nothing for ${Math.round(idleMs / 1000)} s`);
@@ -353,7 +356,7 @@ export class YoutubeLiveApi {
             throw fail(error);
           }
           // No timer runs while the consumer works on what it was handed.
-          clearTimeout(timer);
+          timers.clear(timer);
           const text = chunk.done ? decoder.decode() : decoder.decode(chunk.value, { stream: true });
           let objects: unknown[];
           try {
@@ -378,7 +381,7 @@ export class YoutubeLiveApi {
         reader.cancel().catch(() => undefined);
       }
     } finally {
-      clearTimeout(timer);
+      timers.clear(timer);
       input.signal?.removeEventListener('abort', onAbort);
       connection.abort();
     }
