@@ -88,6 +88,27 @@ export function crystalCaged(bot: Bot, crystal: { position: P3 }): boolean | nul
   return bars >= 3;
 }
 
+/**
+ * The ten spikes of the End's island (the obsidian pillars, one crystal on each): their centres are fixed on a ring of 42 blocks (x = floor(42 cos a), z = floor(42 sin a),
+ * a = 2 (-pi + pi/10 i)); which has which height and cage is the world's seed. A spike's state is read from what is loaded: `crystal` (one stands there),
+ * `gone` (the column is loaded and holds none: it was destroyed), `unknown` (the column is not loaded: not seen).
+ */
+export const SPIKE_CENTRES: ReadonlyArray<{ x: number; z: number }> = Array.from({ length: 10 }, (_, i) =>
+  ({ x: Math.floor(42 * Math.cos(2 * (-Math.PI + Math.PI / 10 * i))), z: Math.floor(42 * Math.sin(2 * (-Math.PI + Math.PI / 10 * i))) }));
+export type SpikeState = 'crystal' | 'gone' | 'unknown';
+export function spikeStates(bot: Bot): Array<{ x: number; z: number; state: SpikeState; id?: number }> {
+  const read = bodyReader(bot);
+  const crystals = (Object.values(bot?.entities ?? {}) as any[]).filter(entity => entity?.name === 'end_crystal' && entity.position);
+  return SPIKE_CENTRES.map(centre => {
+    const near = crystals.find(entity => Math.abs(entity.position.x - (centre.x + 0.5)) <= 1.6 && Math.abs(entity.position.z - (centre.z + 0.5)) <= 1.6);
+    if (near) return { ...centre, state: 'crystal' as const, id: near.id };
+    // The column: loaded when some cell of it is known; a pillar's top is solid (its bedrock cap).
+    let loaded = false, top = false;
+    for (let y = 125; y >= 60; y--) { const block = read(centre.x, y, centre.z); if (block) { loaded = true; if (block.solid) { top = true; break; } } }
+    return { ...centre, state: loaded && top ? 'gone' as const : 'unknown' as const };
+  });
+}
+
 export interface CrystalView {
   id: number; x: number; y: number; z: number; caged: boolean | null; dist: number; /** Its beam is on the dragon: it is healing it. */ healing?: true;
   /** Within its blast's reach: the health the body would lose if it blew where the body stands now (an estimate: utils/crystalBlast). */ blast?: number;
@@ -164,7 +185,11 @@ export interface DragonView {
   perched: boolean; at: P3; yaw: number; /** The head's box centre when perched (an estimate in flight is not given). */ head: P3 | null;
   /** The eye's distance to the head's box, and whether a blow is in reach now (perched, within 3 m). */ headReach: number | null; strike: boolean;
 }
-export const STRIKE_REACH = 3.0;
+/**
+ * The reach the body strikes at: from the eye to the part's box. A player's own is 3, but the server accepts a blow on an entity up to 6 from the box
+ * (measured in the lab, 2026-11-02: a blow at the head landed at 5.67 and not at 6.04), so the body takes a margin under that for the part's estimated place.
+ */
+export const STRIKE_REACH = 5.0;
 export function dragonView(bot: Bot, dragon: any, now = Date.now()): DragonView {
   const phase = dragonPhaseOf(bot, dragon);
   const perched = isPerched(phase);
@@ -179,7 +204,8 @@ export interface EndObservation {
   dragon: DragonView | null;
   /** The top of the exit portal's pillar (where the dragon perches), or null while it is not loaded. */
   fountain: P3 | null;
-  crystals: { left: number; caged: number; list: CrystalView[] };
+  /** remaining: the spikes whose crystal stands or has not been seen (of ten); gone: the ones seen without; caged: the loaded crystals in a cage; list: the loaded ones, nearest first; unseen: where the spikes not loaded are. */
+  crystals: { remaining: number; gone: number; caged: number; list: CrystalView[]; unseen: Array<{ x: number; z: number }> };
   /** The dragon's breath clouds lying in the world, and the fireballs flying (the reflex's own judgement is `dragonHazards`). */
   clouds: Array<{ x: number; y: number; z: number; r: number | null }>;
   fireballs: number;
@@ -192,7 +218,11 @@ export function endObservation(bot: Bot, now = Date.now()): EndObservation | nul
   return {
     dragon: dragon ? dragonView(bot, dragon, now) : null,
     fountain: fountainOf(bot),
-    crystals: { left: crystals.length, caged: crystals.filter(crystal => crystal.caged === true).length, list: crystals.slice(0, 10) },
+    crystals: (() => {
+      const spikes = spikeStates(bot);
+      return { remaining: spikes.filter(spike => spike.state !== 'gone').length, gone: spikes.filter(spike => spike.state === 'gone').length,
+        caged: crystals.filter(crystal => crystal.caged === true).length, list: crystals.slice(0, 10), unseen: spikes.filter(spike => spike.state === 'unknown').map(spike => ({ x: spike.x, z: spike.z })) };
+    })(),
     clouds: breathCloudsOf(bot).slice(0, 4).map(cloud => ({ ...at3(cloud.position), r: cloud.radius === null ? null : round1(cloud.radius) })),
     fireballs: fireballsOf(bot).length,
   };

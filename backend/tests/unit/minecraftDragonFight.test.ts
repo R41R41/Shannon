@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import { Vec3 } from 'vec3';
 import { describe, expect, it, vi } from 'vitest';
 import { boxDistance, DRAGON_PHASE, isPerched, partBox, partDamage, partOffset, partTarget, flameCloudCentre } from '../../src/services/minebot/utils/dragonParts.js';
-import { breathCloudsOf, crystalCaged, crystalsOf, dragonView, endObservation, fireballPath, fountainOf, metaIndex } from '../../src/services/minebot/utils/dragonState.js';
+import { breathCloudsOf, crystalCaged, crystalsOf, dragonView, endObservation, fireballPath, fountainOf, metaIndex, SPIKE_CENTRES, spikeStates } from '../../src/services/minebot/utils/dragonState.js';
 import { attack } from '../../src/services/minebot/utils/primitives/attack.js';
 import { partToStrike, swingWaitMs } from '../../src/services/minebot/utils/primitives/dragonStrike.js';
 
@@ -108,7 +108,7 @@ describe('what the body reads of the fight', () => {
     expect(crystalsOf(f.bot).map(crystal => crystal.id)).toEqual([8, 7]);
     expect(crystalsOf(f.bot)[0].healing).toBe(true);
     const seen = endObservation(f.bot)!;
-    expect(seen.crystals.left).toBe(2); expect(seen.fountain).toEqual({ x: 0.5, y: 68, z: 0.5 }); expect(seen.dragon).toMatchObject({ phase: 6, perched: true });
+    expect(seen.crystals.list.length).toBe(2); expect(seen.fountain).toEqual({ x: 0.5, y: 68, z: 0.5 }); expect(seen.dragon).toMatchObject({ phase: 6, perched: true });
     f.bot.game.dimension = 'minecraft:overworld';
     expect(endObservation(f.bot)).toBeNull();
   });
@@ -137,8 +137,8 @@ describe('what the body reads of the fight', () => {
     const dragon = { position: f.dragon.position, yaw: 0 };
     expect(partToStrike(dragon, new Vec3(0.5, 65.6, 7))?.part).toBe('head');
     expect(boxDistance(new Vec3(0.5, 65.6, 7), partBox(dragon, 'head'))).toBeLessThan(3);
-    expect(partToStrike(dragon, new Vec3(-4.0, 68.5, 4.0))?.part).toBe('body');
-    expect(partToStrike(dragon, new Vec3(-6.5, 71, 0.5))?.part).toBe('wing1');
+    expect(partToStrike(dragon, new Vec3(-6.0, 70.5, -1.0))?.part).toBe('body');
+    expect(partToStrike(dragon, new Vec3(-9, 71, 0.5))?.part).toBe('wing1');
     expect(partToStrike(dragon, new Vec3(30, 70, 30))).toBeNull();
   });
 });
@@ -314,5 +314,22 @@ describe('a bed used in the End', () => {
     const outcome = await use(ctxOf(f.bot) as never, { at: { x: 3, y: 64, z: 3 } });
     expect(f.bot.activateBlock).not.toHaveBeenCalled();
     expect(outcome.ok).toBe(false);
+  });
+});
+
+import { NativeCommonFcaBody } from '../../src/services/minebot/integration/commonFca/nativeBody.js';
+
+describe('the observation the body gives the head', () => {
+  it('carries state.end in the End only, with the dragon, the pillar and the crystals', async () => {
+    const f = fixture({ at: new Vec3(0.5, 64, 7.0), phase: DRAGON_PHASE.sittingScanning, health: 120 });
+    f.bot.entities[7] = { id: 7, name: 'end_crystal', position: new Vec3(30.5, 80, 0.5), metadata: [] };
+    Object.assign(f.bot, { oxygenLevel: 20, controlState: {}, instantSkills: { getSkills: () => [] }, clearControlStates: vi.fn(), look: vi.fn(async () => {}) });
+    const body = new NativeCommonFcaBody(f.bot, { serverId: 'home', capture: async () => { throw Error('unused'); } });
+    const end = (body.observe().state as any).end;
+    expect(end).toMatchObject({ fountain: { x: 0.5, y: 68, z: 0.5 }, crystals: { caged: 0 }, dragon: { id: 100, health: 120, phase: 6, phaseName: 'sitting_scanning', perched: true, strike: true } });
+    expect(end.dragon.head).toMatchObject({ z: 7 });
+    f.bot.game.dimension = 'minecraft:overworld';
+    expect((body.observe().state as any).end).toBeUndefined();
+    await body.dispose();
   });
 });
