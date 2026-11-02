@@ -222,3 +222,16 @@ index a7e3505..b326dfe 100644
      cost += laborCost
      return cost
    }
+diff --git a/node_modules/mineflayer-pathfinder/lib/heap.js b/node_modules/mineflayer-pathfinder/lib/heap.js
+index a762b27..0e83e6d 100644
+--- a/node_modules/mineflayer-pathfinder/lib/heap.js
++++ b/node_modules/mineflayer-pathfinder/lib/heap.js
+@@ -57,7 +57,7 @@ class BinaryHeapOpenSet {
+     const cost = val.f
+     do {
+       let smallerChildNode = this.heap[smallerChild]
+-      if (smallerChild < size - 1) {
++      if (smallerChild < size) {
+         const rightChildNode = this.heap[smallerChild + 1]
+         if (smallerChildNode.f > rightChildNode.f) {
+           smallerChild++
