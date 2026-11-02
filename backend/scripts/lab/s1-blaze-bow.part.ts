@@ -4,7 +4,7 @@
 // kill the c1 spawner's blazes from the camp cell closed with cobblestone, without the deaths of going out to fight (pass: no death after the iron armour, lowest health 8 or more, 3 rods or more, and the arrows per kill).
 // Scenes: s1_bow_head (the head cell toward the spawner left open as the window), s1_bow_front (only the side away from the spawner closed: the front open), s1_bow_head_pick (the head window, and the rods picked up when the health allows).
 
-async function s1BlazeBow(note: (text: string) => void, options: { window: 'head' | 'front'; pick?: boolean; seconds?: number }): Promise<Record<string, unknown>> {
+async function s1BlazeBow(note: (text: string) => void, options: { window: 'head' | 'front' | 'low'; pick?: boolean; seconds?: number }): Promise<Record<string, unknown>> {
   const stand = sites.blazeStand as number[] | undefined, spawner = sites.blazeSpawner as number[] | undefined;
   if (!stand || !spawner) throw new Error('no blazeStand or blazeSpawner in the sites');
   const seconds = options.seconds ?? (timedSeconds || 300);
@@ -21,7 +21,8 @@ async function s1BlazeBow(note: (text: string) => void, options: { window: 'head
   const sides = [[1, 0], [-1, 0], [0, 1], [0, -1]] as const;
   const toward = [...sides].sort((a, b) => ((spawner[0] - cell!.x) * b[0] + (spawner[2] - cell!.z) * b[1]) - ((spawner[0] - cell!.x) * a[0] + (spawner[2] - cell!.z) * a[1]))[0];
   const place: Array<{ x: number; y: number; z: number }> = [];
-  if (options.window === 'head') {
+  if (options.window === 'head' || options.window === 'low') {
+    // head: the head cell toward the spawner is the window (a lintel over it clips the arrows that go up: S2's nook, 34 to 70 degrees); low: the side toward the spawner is a wall of one block only, the sky and the room open over it
     for (const [dx, dz] of sides) {
       const x = cell.x + dx, z = cell.z + dz;
       if (!solidAt(x, cell.y, z)) place.push({ x, y: cell.y, z });
