@@ -365,6 +365,54 @@ scene('t5_shield', 'T5 shield: offhand, USE / RELEASE, UsingItem / active_item a
     } finally { actor.deactivateItem(); await ask('gamerule natural_health_regeneration true'); await ask('gamerule naturalRegeneration true'); }
   }));
 
+// ---- use state: a real arrow on a raised shield, eating, death and respawn (the stimuli that cleared usingHeldItem) --------
+scene('t5_use_state', 'T5 use state: usingHeldItem / oxygen against the server with skeleton arrows on a raised shield, eating, and death + respawn', note =>
+  t5Run(note, 110, 'overworld', async run => {
+    const { x, y, z } = run.arena;
+    const trace: Array<{ phase: string; ms: number; native: boolean | null; server: string; hp: string; oxygen: number | null; food: string }> = [];
+    const t0 = Date.now();
+    const point = async (phase: string) => {
+      const server = (await ask(`data get entity ${ACTOR} UsingItem`, 4000)).replace(/\s+/gu, ' ').replace(/^.*entity data: /u, '').slice(0, 40);
+      const hp = (await ask(`data get entity ${ACTOR} Health`, 4000)).replace(/^.*entity data: /u, '').replace(/\s+/gu, ' ').slice(0, 20);
+      const food = (await ask(`data get entity ${ACTOR} foodLevel`, 4000)).replace(/^.*entity data: /u, '').replace(/\s+/gu, ' ').slice(0, 12);
+      trace.push({ phase, food, ms: Date.now() - t0, native: actor.usingHeldItem ?? null, server, hp, oxygen: (actor as unknown as { oxygenLevel?: number }).oxygenLevel ?? null });
+    };
+    await ask(`gamemode survival ${ACTOR}`); await ask('gamerule natural_health_regeneration false'); await ask('gamerule naturalRegeneration false');
+    try {
+      // 1. skeleton arrows (status 29 on a block, 2 on a hit) while the shield is held up; the zombie is a bystander (any entity's status 2 / 3 / 9)
+      await ask(`item replace entity ${ACTOR} weapon.offhand with minecraft:shield`);
+      await ask(`execute in minecraft:overworld run summon minecraft:skeleton ${x + 8.5} ${y} ${z + 0.5} {Tags:["shannon_t5"],PersistenceRequired:1b,HandItems:[{id:"minecraft:bow",count:1},{}]}`);
+      await ask(`execute in minecraft:overworld run summon minecraft:zombie ${x - 6.5} ${y} ${z + 0.5} {Tags:["shannon_t5"],PersistenceRequired:1b,NoAI:1b,Silent:1b}`);
+      await ask(`tp ${ACTOR} ${x + 0.5} ${y} ${z + 0.5} -90 0`); await sleep(500);
+      actor.activateItem(true);
+      for (let i = 0; i < 24; i++) { await sleep(250); await point(i % 6 === 5 ? 'shield-up-arrows' : 'shield-up'); }
+      // a bystander is hurt and killed while the shield is up: another entity's status must not end the use
+      await ask(`damage @e[type=minecraft:zombie,tag=shannon_t5,limit=1] 1 minecraft:generic`); await sleep(300); await point('bystander-hurt');
+      await ask(`kill @e[type=minecraft:zombie,tag=shannon_t5]`); await sleep(300); await point('bystander-killed');
+      actor.deactivateItem(); await sleep(300); await point('shield-released');
+      await ask(`kill @e[type=minecraft:skeleton,tag=shannon_t5]`);
+      // 2. eating: status 9 of the bot ends the use
+      await ask(`effect give ${ACTOR} minecraft:hunger 9 100 true`); await sleep(9500); await ask(`effect clear ${ACTOR} minecraft:hunger`);
+      await ask(`item replace entity ${ACTOR} weapon.mainhand with minecraft:cooked_beef 4`);
+      actor.activateItem();
+      for (let i = 0; i < 10; i++) { await sleep(300); await point(i < 6 ? 'eating' : 'eaten'); }
+      actor.deactivateItem();
+      // 3. death and respawn: the use state after the new life
+      await ask(`item replace entity ${ACTOR} weapon.offhand with minecraft:shield`);
+      actor.activateItem(true); await sleep(300); await point('before-death');
+      await ask(`kill ${ACTOR}`); await sleep(2500); await point('after-respawn');
+      await ask(`gamemode survival ${ACTOR}`); await sleep(500); await point('respawn-settled');
+    } finally { actor.deactivateItem?.(); await ask(`kill @e[tag=shannon_t5]`); await ask('gamerule natural_health_regeneration true'); await ask('gamerule naturalRegeneration true'); }
+    const byPhase: Record<string, string> = {};
+    for (const phase of new Set(trace.map(row => row.phase))) {
+      const rows = trace.filter(row => row.phase === phase);
+      byPhase[phase] = `n=${rows.length} native=${rows.map(row => (row.native === null ? '?' : row.native ? 'T' : 'F')).join('')} food=${rows.map(row => row.food).join(',')}`;
+    }
+    note(`T5 use state by phase ${JSON.stringify(byPhase)}`);
+    note(`T5 use state trace ${JSON.stringify(trace)}`);
+    return { byPhase, hpEnd: trace[trace.length - 1]?.hp ?? null };
+  }));
+
 // ---- crystals: exact scoped server count and unordered positions -------------------------------------------
 scene('t5_crystals', 'T5 End crystals: scoped server count / positions before summon, after summon and removal', note =>
   t5Run(note, 85, 'the_end', async run => {
