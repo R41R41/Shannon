@@ -502,6 +502,24 @@ scene('craft_eyes', 'blaze rods to blaze powder to eyes of ender, by the craft h
   return { powderLine: (powder.lines[0] ?? '').slice(0, 300), eyesLine: (eyes.lines[0] ?? '').slice(0, 300), packAfter: packClient(), ok: powder.ok && eyes.ok };
 });
 
+scene('fire_dig', 'a fire block beside the body (fireballs leave them on the spawner room\'s floor): the dig hand puts it out, and go refuses to end beside one', async () => {
+  const stand = (sites.blazeStand ?? sites.netherArrival) as number[];
+  await ask('difficulty peaceful');
+  const y = await netherPlate(stand[0], stand[2]);
+  await equip({ iron_pickaxe: 1, cooked_beef: 4 }, { armor: 'iron', shield: false });
+  await placeActor('the_nether', stand[0], y, stand[2], 24);
+  const fx = stand[0] + 2, fz = stand[2];
+  const nameAt = (x: number, yy: number, z: number) => actor.blockAt(new Vec3(x, yy, z))?.name ?? null;
+  await ask(`execute in minecraft:the_nether run setblock ${fx} ${y} ${fz} minecraft:fire`);
+  await sleep(800);
+  const before = nameAt(fx, y, fz);
+  const goNear = await act('go-beside-fire', [{ do: 'go', to: { x: fx - 1, y, z: fz }, range: 0.6, seconds: 10 }], 20);
+  const out = await act('put-out', [{ do: 'dig', at: [{ x: fx, y, z: fz }], collect: false }], 20);
+  await sleep(500);
+  const after = nameAt(fx, y, fz);
+  return { fireBefore: before, goBesideFireLine: (goNear.lines[0] ?? '').slice(0, 260), putOutLine: (out.lines[0] ?? '').slice(0, 260), blockAfter: after, putOut: after !== 'fire' };
+});
+
 scene('craft_diag', 'why craft ender_eye ends with "missing ingredient": the grid, the cursor and the count the server holds after each craft', async () => {
   await ask('difficulty peaceful');
   await equip({ blaze_powder: 3, ender_pearl: 3 }, { armor: 'none', shield: false });
@@ -611,20 +629,58 @@ scene('nether_walk', 'the walk in the Nether from the portal side to the fortres
   const arrival = sites.netherArrival as number[];
   const targets: Array<{ name: string; to: number[] }> = [{ name: 'fortress', to: sites.blazeStand as number[] }, { name: 'warped', to: sites.warpedStand as number[] }];
   await ask('difficulty normal'); await ask('time set noon');
-  await equip({ iron_pickaxe: 1, diamond_sword: 1, cobblestone: 64, cooked_beef: 24, golden_apple: 3 }, { armor: 'iron', shield: true });
+  // Three pickaxes: t46 (c2, basalt delta) broke the one iron pickaxe after about 250 digs, 125 m into the walk, and the act ended as `tool_broke`.
+  await equip({ iron_pickaxe: 3, diamond_sword: 1, cobblestone: 64, cooked_beef: 24, golden_apple: 3 }, { armor: 'iron', shield: true });
+  // What the planner would give `go` for a leg this long (the limits are the schema's own top: maxDig 200, maxPlace 100; the walk is told to take as long as it needs).
+  const glyph = (x: number, y: number, z: number): string => {
+    const name = actor.blockAt(new Vec3(x, y, z))?.name;
+    if (!name) return '?';
+    const p = actor.entity.position;
+    if (Math.floor(p.x) === x && Math.floor(p.y) === y && Math.floor(p.z) === z) return '@';
+    if (name === 'air' || name === 'cave_air') return '.';
+    if (name === 'lava') return '~';
+    if (name === 'magma_block') return 'M';
+    if (name === 'netherrack') return '#';
+    if (name === 'soul_sand' || name === 'soul_soil') return 's';
+    if (name === 'fire' || name === 'soul_fire') return 'f';
+    if (name.includes('basalt') || name.includes('blackstone')) return 'b';
+    if (name.includes('nether_brick')) return 'B';
+    if (name === 'cobblestone') return 'c';
+    if (name.includes('quartz')) return 'q';
+    if (name === 'glowstone') return 'g';
+    if (name.includes('warped') || name.includes('crimson') || name.includes('nylium') || name.includes('wart')) return 'w';
+    return 'x';
+  };
+  let maps = 0;
+  const mapAround = (label: string, radius = 6) => {
+    if (maps >= 4) return;
+    maps++;
+    const p = actor.entity.position, bx = Math.floor(p.x), by = Math.floor(p.y), bz = Math.floor(p.z);
+    for (let y = by + 2; y >= by - 3; y--) {
+      log(`MAP ${label} y=${y} (${y - by >= 0 ? '+' : ''}${y - by})  x ${bx - radius}..${bx + radius} across, z ${bz - radius} (top)..${bz + radius}`);
+      for (let z = bz - radius; z <= bz + radius; z++) { let row = ''; for (let x = bx - radius; x <= bx + radius; x++) row += glyph(x, y, z); log(`MAP ${String(z).padStart(5)} ${row}`); }
+    }
+  };
   const legs: Array<Record<string, unknown>> = [];
   let from = arrival;
   for (const target of targets) {
     await placeActor('the_nether', from[0], from[1], from[2], 24);
     const started = Date.now(), hp0 = Number(actor.health);
     const trail: string[] = [];
-    let reached = false, tries = 0;
-    for (; tries < 8 && !reached && !disconnected; tries++) {
-      const run = await act(`${target.name}#${tries + 1}`, [{ do: 'go', to: { x: target.to[0], y: target.to[1], z: target.to[2] }, range: 3, seconds: 90, maxDig: 30, maxPlace: 24, canDig: ['netherrack', 'basalt', 'blackstone'], canPlace: ['cobblestone'] }], 130);
-      trail.push((run.lines[0] ?? '').slice(0, 240));
+    let reached = false, tries = 0, slow = 0;
+    const leftOf = () => { const here = actor.entity?.position as Vec3 | undefined; return here ? Math.hypot(here.x - (target.to[0] + 0.5), here.z - (target.to[2] + 0.5)) : Infinity; };
+    for (; tries < 10 && !reached && !disconnected; tries++) {
+      const before = leftOf();
+      const run = await act(`${target.name}#${tries + 1}`, [{ do: 'go', to: { x: target.to[0], y: target.to[1], z: target.to[2] }, range: 3, seconds: 100, maxDig: 120, maxPlace: 40, canDig: ['netherrack', 'basalt', 'blackstone'], canPlace: ['cobblestone'] }], 140);
       const here = actor.entity?.position as Vec3 | undefined;
-      reached = !!here && Math.hypot(here.x - (target.to[0] + 0.5), here.z - (target.to[2] + 0.5)) < 5 && Math.abs(here.y - target.to[1]) < 6;
+      const left = leftOf();
+      trail.push(`[${here ? `${r1(here.x)},${r1(here.y)},${r1(here.z)}` : '?'} left ${r1(left)}] ${(run.lines[0] ?? '').slice(0, 230)}`);
+      reached = !!here && left < 5 && Math.abs(here.y - target.to[1]) < 6;
       if (Number(actor.health) < 9) { note(`health ${actor.health}: the walk to the ${target.name} stops`); break; }
+      // A hop that got nowhere (under 3 m nearer) twice running: what a planner would take as shut, and give up on.
+      slow = before - left < 3 ? slow + 1 : 0;
+      if (!reached && (before - left < 3 || tries === 0)) mapAround(`${target.name}#${tries + 1}`);
+      if (slow >= 2) { note(`the walk to the ${target.name} gained under 3 m twice running at ${here ? `${r1(here.x)},${r1(here.y)},${r1(here.z)}` : '?'}`); break; }
       if (Number(actor.health) < 14 || Number(actor.food) < 14) await act('eat', [{ do: 'eat' }], 15);
     }
     legs.push({ target: target.name, from, to: target.to, straightMetres: Math.round(Math.hypot(target.to[0] - from[0], target.to[2] - from[2])), reached, tries: tries, seconds: r1((Date.now() - started) / 1000), hpLost: r1(Math.max(0, hp0 - Number(actor.health))), trail });

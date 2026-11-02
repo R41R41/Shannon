@@ -80,6 +80,14 @@ eye: { from, bearingDeg, flew, to, broke,                     // 既存（契約
 | ブレイズ（`attack hold`、素手で 9 回） | 110 秒・撃破 0・受けた傷 13.6。剣を持つ修正の後 147 秒・撃破 1・ロッド 0（足場が縁の上＝穴に落ちた） |
 未実測：火炎耐性での盾・体力の差（`blaze_hold_fireres` は壁の陰で湧き場が見えず何も起きなかった）、ソウルサンド越えの経路、ホグリン・ガスト、実際の warped の森で頭が選ぶ相手の見つけ方。
 
+### 5b. 道の終わり：目玉を作る → 要塞へ降りる → 枠に目をはめる → エンドへ入る（c2、LLM 無し、1 回ずつの通し）
+| 部品 | やったこと | 数字 |
+|---|---|---|
+| 目玉を作る | `craft item=blaze_powder count=6`（blaze_rod 3）→ `craft item=ender_eye count=6`（ender_pearl 6）。作業台は要らない（手の 2×2） | 6 個 2.0 秒。**直す前は count 6 で材料だけ消えて失敗**（mineflayer の `craft(recipe, 6)` が 2 つの材料の型で 2 ラウンド目を前のラウンドが落ち着く前に始める）。`craft` の手は作業台の無い作りを **1 ラウンドずつ 250 ms の間を置いて**作る（`ROUND_SETTLE_MS`）。作業台での作りは前のまま |
+| 地表から要塞のポータルの間へ降りる | 要塞の真上の地表（`strongholdSurface`）から `go to` ポータルの間の床（`range 1.5`）、`canDig`＝石・土・草・砂利・砂・安山岩・閃緑岩・花崗岩・凝灰岩・深層岩・丸石・石レンガ（12 種）、`maxDig 120`・`maxPlace 24`・`canPlace=[cobblestone]`・鉄のつるはし | 道 93 歩・掘 49・引き直し 5 回・**61 秒・体力減 0**（1 回の go で着いた） |
+| 枠に目をはめる | 足りない枠ごとに `[go to 枠 range 3 canPlace cobblestone maxPlace 8, use item=ender_eye at [枠]]` | 不足 9 枠 **18 秒**。12/12 で `end_portal` が開いた（サーバーで確かめた）。`go` が着けない枠は無かった（段差 2 つの所は `canPlace` を渡さないと `dead_end`、行が「canPlace に置ける物を足す」と言う） |
+| エンドへ入る | `walk to <ポータルの中心>`。**`go` は断る**（`no_floor`：エンドポータルのマスは溶岩の上のシートで足場が無く、行き先に出来ない。行が「ポータルは go でなく walk の的にして入る」と言う）。`walk` は輪（枠の縁）の手前 2.5 マスまで歩き、**縁の止め（`edgeGuard`）を入る間だけ外し**、マスの中へ前進キーで 4 秒まで歩き込む（終われば戻す） | 着いた先 **(100,49,0)**（エンドの黒曜石の台）、**歩き始めてから 1.4 秒**で次元が移った（ネザーポータルの「中に 4 秒立つ」待ちは要らなかった）。直す前は `go` が断り、`walk` は崖際の止めと溶岩の上のシートで輪の手前から進めず、10 秒立っても次元は変わらなかった |
+
 ## 6. 試験と回し方
 単体：`tests/unit/huntEyeFlight|huntFrameSearch|huntBarter|huntBlaze|huntCamp|huntEnderman|huntEndermanFight|huntNetherWalk|huntHoldWeapon|huntFindEntity.test.ts`。練習場（物理は本物・生き物は模型）は `huntBlaze`（浮いたブレイズ、見送り、湧き場の待ち、盾の入れ替え、見える相手の選び）と `huntEndermanFight`（屋根 11 個、怒らせる、届かれない、倒す）。`huntCamp` の地面は実機の湧き場の部屋を写した本物の配置。
 実機（隔離ラボ）：`scripts/minecraft-hunt-probe.ts`、回し方は `scripts/lab/run-hunt-lab.sh`（スロットを取って回す。ポートはスロット番号で決まるので同時に 3 つまで）。**走っている最中に run-hunt-lab.sh を編集しない**（bash が読み途中のファイルが壊れる）。
