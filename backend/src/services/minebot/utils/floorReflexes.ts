@@ -22,6 +22,7 @@ import { entityHealth } from './mapMarks.js';
 import { eyeOf, probeSight } from './probeTools.js';
 import { dragonHazards, hazardCentres } from './dragonDanger.js';
 import { isEnd } from './dragonState.js';
+import { clutchWanted, runFallClutch, type FallMemory } from './fallClutch.js';
 
 const log = createLogger('Minebot:FloorReflexes');
 
@@ -34,6 +35,10 @@ const log = createLogger('Minebot:FloorReflexes');
  * it back by ending; the one above decides again from a fresh observation.
  */
 export const FLOOR_RETREAT_PRIORITY = 350;
+/** The water-bucket clutch of a fall is over the dragon's retreat and the rest of the floor: a body in the air has nothing else to do. */
+export const FLOOR_CLUTCH_PRIORITY = 380;
+const FALL_TIMEOUT_MS = 8000;
+const FALL_DETAIL_MAX = 160;
 export const FLOOR_EAT_PRIORITY = 200;
 /** Between the retreat (350) and the meal (200): the low-health flee (default mode, P8). */
 export const FLOOR_FLEE_PRIORITY = 250;
@@ -208,6 +213,8 @@ export interface FloorState {
   dragonNotedAt?: number;
   /** The End: when the body put a block under itself to rise out of a cloud it could not walk out of, newest last. */
   dragonRises?: number[];
+  /** The End: the highest y since the body last stood and when the water-bucket clutch last began (utils/fallClutch). */
+  fall?: FallMemory;
 }
 
 /** Continue contracts (4): what the reflex goes on with after its cap; the holder in the control view while it lasts. */
@@ -1031,6 +1038,35 @@ export async function runDragonRetreat(bot: FloorBody, port: FloorBody, tickMs =
   const moved = bot.entity ? bot.entity.position.distanceTo(origin) : 0;
   return { success: true, result: ended === 'blocked' ? '竜の危険から離れる安全な道が無かった' : ticks > 0 ? '竜の危険から離れた' : '離れる必要がなくなった', moved, ended };
 }
+
+/**
+ * A body at the front edge of a bridge (lab 2026-11-02, w12: the go had it leaning over the cell in front of the last block it laid) stands on the block behind with its middle over a cell that has no
+ * floor: the feet cell reads air under it, and no block can be laid there. It is moved onto the cell that holds it (half a block at most) before it rises. Nothing is done where the feet cell has a floor.
+ */
+async function settleOnFloor(bot: FloorBody, port: FloorBody): Promise<void> {
+  const feet = feetCell(bot as never), body = bot.entity;
+  if (!feet || !body) return;
+  const read = bodyReader(bot as never);
+  const solid = (x: number, y: number, z: number) => read(x, y, z)?.solid === true;
+  if (solid(feet.x, feet.y - 1, feet.z)) return;
+  const here = body.position;
+  const aside = ([[1, 0], [-1, 0], [0, 1], [0, -1]] as const).map(([dx, dz]) => ({ x: feet.x + dx, z: feet.z + dz }))
+    .filter(cell => solid(cell.x, feet.y - 1, cell.z) && !solid(cell.x, feet.y, cell.z) && !solid(cell.x, feet.y + 1, cell.z))
+    .sort((a, b) => Math.hypot(a.x + 0.5 - here.x, a.z + 0.5 - here.z) - Math.hypot(b.x + 0.5 - here.x, b.z + 0.5 - here.z))[0];
+  if (!aside) return;
+  try {
+    port.look?.(Math.atan2(-(aside.x + 0.5 - here.x), -(aside.z + 0.5 - here.z)), 0, true);
+    port.setControlState('forward', true); port.setControlState('sprint', false); port.setControlState('jump', false);
+    for (let tick = 0; tick < SETTLE_TICKS; tick++) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+      const now = feetCell(bot as never);
+      if (now && now.x === aside.x && now.z === aside.z) break;
+    }
+  } finally {
+    try { releaseKeys(port); } catch { /* ownership lost: the new owner holds the keys */ }
+  }
+}
+const SETTLE_TICKS = 8;
 
 // ===== The last stand =====
 
@@ -2107,7 +2143,7 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
     state.dragonRises = [...rises, t]; state.busy = 'flee';
     log.warn(`🐉 ${said}: 歩いて離れる道が無い。${block} を足元に積んで 1 段上がる`);
     const handle = ledger.begin('retreat', `竜の雲から歩いて離れる道が無く、${block} を足元に積んで 1 段上がる: ${said}`, DRAGON_DETAIL_MAX);
-    void take('floor-dragon', FLOOR_RETREAT_PRIORITY, LAST_STAND_TIMEOUT_MS.pillar + 1000, () => runLastStand(bot, createMotorPort(bot), { kind: 'pillar', block, detail: '' }))
+    void take('floor-dragon', FLOOR_RETREAT_PRIORITY, LAST_STAND_TIMEOUT_MS.pillar + 1000, async () => { const port = createMotorPort(bot); await settleOnFloor(bot, port); return runLastStand(bot, port, { kind: 'pillar', block, detail: '' }); })
       .then(result => {
         const done = result as { success?: boolean; result?: string } | undefined;
         handle.detail = `竜の雲から歩いて離れる道が無く、${block} を足元に積んだ（${done?.result ?? ''}）: ${said}`.slice(0, DRAGON_DETAIL_MAX);
@@ -2170,6 +2206,30 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
       .finally(() => { state.busy = null; state.dragonNextAt = Math.max(state.dragonNextAt ?? 0, now() + DRAGON_GAP_MS); });
     return true;
   };
+  /**
+   * The End: a fall that would cripple (the whole fall less three, at least CLUTCH_MIN_DAMAGE) is stopped with a bucket of water carried, poured on the ground in the tick it comes within reach
+   * (utils/fallClutch). Over every other floor hand: a body in the air has nothing else to do.
+   */
+  const clutchTick = (): boolean => {
+    if (!config.retreat || !isEnd(bot)) return false;
+    const t = now(), memory = state.fall ??= {};
+    let why: string | null = null;
+    try { why = clutchWanted(bot as never, memory, t); } catch { why = null; }
+    if (!why) return false;
+    memory.clutchAt = t;
+    state.busy = 'flee';
+    log.warn(`🪣 ${why}: 水バケツで落下を止める`);
+    const handle = ledger.begin('retreat', `落下を水バケツで止める: ${why}`, FALL_DETAIL_MAX);
+    void take('floor-clutch', FLOOR_CLUTCH_PRIORITY, FALL_TIMEOUT_MS, () => runFallClutch(bot as never, createMotorPort(bot) as never))
+      .then(result => {
+        const done = result as { success?: boolean; result?: string } | undefined;
+        handle.detail = `落下を水バケツで止めた（${done?.result ?? ''}）: ${why}`.slice(0, FALL_DETAIL_MAX);
+        ledger.end(handle, done?.success ? 'done' : 'failed');
+      }, () => { ledger.end(handle, 'failed'); })
+      .catch(() => undefined)
+      .finally(() => { state.busy = null; });
+    return true;
+  };
   bot.on('physicsTick', () => {
     // r7: the health seen tick by tick (the cover goes on while it falls).
     const health = bot.health ?? 20, seen = state.healthSeen;
@@ -2181,6 +2241,7 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
       }
       seen.last = health;
     }
+    if (clutchTick()) return;
     let outcome: ReturnType<typeof floorRetreatTick> = null;
     try { outcome = config.retreat ? floorRetreatTick(bot, state.retreat, retreatAllow) : null; } catch { return; }
     // A lit creeper and no way away: the retreat let go (its action ends), and the last stand is made as soon as no
