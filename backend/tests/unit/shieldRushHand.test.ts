@@ -165,13 +165,13 @@ describe('shield_rush one chosen blaze', () => {
     const f = field(2, 72);
     f.args.retreatTo.x = -1.5;
     // Hide behind the caller's shelter after waiting, not an alternative chosen by the hand.
-    setTimeout(() => { for (let y = 65; y < 72; y++) f.blocks.set(`1,${y},0`, 'stone'); }, 5200);
+    setTimeout(() => { for (let y = 65; y < 72; y++) f.blocks.set(`1,${y},0`, 'stone'); }, 15_200);
     const r = await run(f); expect(r.shieldRush.code).toBe('HEIGHT_UNREACHABLE'); expect(f.swings).toHaveLength(0); f.close();
   });
   it('never forces a closing window after waiting 1.5 seconds', async () => {
     const f = field(8); f.mob.metadata[0] = 1;
     // A shelter wall appears when the no-window retreat begins; the target remains loaded.
-    setTimeout(() => { f.blocks.set('4,65,0', 'stone'); f.blocks.set('4,64,0', 'stone'); }, 5050);
+    setTimeout(() => { f.blocks.set('4,65,0', 'stone'); f.blocks.set('4,64,0', 'stone'); }, 15_050);
     const r = await run(f); expect(r.shieldRush.code).toBe('NO_ATTACK_WINDOW'); expect(f.swings).toHaveLength(0); expect(f.states).not.toContain('盾の突撃 CLOSE'); f.close();
   });
   it('honours onCrossfire retreat and continue', async () => {

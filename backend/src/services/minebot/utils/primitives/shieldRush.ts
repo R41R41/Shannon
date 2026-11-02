@@ -76,6 +76,8 @@ function tick(ctx: StepContext, until: number): Promise<boolean> {
   });
 }
 
+/** A blaze hovers where it likes and comes down by itself: the body waits under the shield this long without the distance to it shrinking (lab, 2026-11-03: 5 s ended every try before a blow). */
+const NO_GAIN_PATIENCE_MS = 15_000;
 export async function shieldRush(ctx: StepContext, a: ShieldRushArgs): Promise<ShieldRushOutcome> {
   const bot = ctx.bot, host: any = nativeActionHost(bot), started = Date.now();
   const problem = shieldRushProblem(a);
@@ -282,7 +284,7 @@ export async function shieldRush(ctx: StepContext, a: ShieldRushArgs): Promise<S
         }
         continue;
       }
-      if (Date.now() - lastGain >= 5000) { beginRetreat(target.position.y - eye.y > 3 ? 'HEIGHT_UNREACHABLE' : 'NO_ATTACK_WINDOW'); continue; }
+      if (Date.now() - lastGain >= NO_GAIN_PATIENCE_MS) { beginRetreat(target.position.y - eye.y > 3 ? 'HEIGHT_UNREACHABLE' : 'NO_ATTACK_WINDOW'); continue; }
       // A level route towards that one target only. No 3.5m leash and no alternative target or shelter.
       const next = middle(p).offset(Math.abs(target.position.x - p.x) >= Math.abs(target.position.z - p.z) ? Math.sign(target.position.x - p.x) : 0,
         0, Math.abs(target.position.x - p.x) < Math.abs(target.position.z - p.z) ? Math.sign(target.position.z - p.z) : 0);
