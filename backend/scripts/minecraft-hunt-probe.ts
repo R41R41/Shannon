@@ -545,7 +545,7 @@ async function blazeSlit(note: (text: string) => void, options: { seconds?: numb
   await ask(`${nether} setblock ${wallX} ${sy} ${sz} minecraft:air`);
   await sleep(1500);
   note(`pocket ${actor.blockAt(new Vec3(wallX - 1, sy - 1, sz))?.name}/${actor.blockAt(new Vec3(wallX - 1, sy, sz))?.name}, slit ${actor.blockAt(new Vec3(wallX, sy, sz))?.name}, under the slit ${actor.blockAt(new Vec3(wallX, sy - 1, sz))?.name}, over it ${actor.blockAt(new Vec3(wallX, sy + 1, sz))?.name}`);
-  await ask(`${nether} tp ${ACTOR} ${px + 0.5}${sy - 1} ${sz + 0.5} facing ${wallX + 3} ${sy} ${sz}`);
+  await ask(`${nether} tp ${ACTOR} ${px + 0.5} ${sy - 1} ${sz + 0.5} facing ${wallX + 3} ${sy} ${sz}`);
   await sleep(2500);
   const started = Date.now();
   const rods0 = await countServer('blaze_rod'), shield0 = shieldUsed();
