@@ -301,12 +301,13 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
       stateAt: new Date(now).toISOString(), receivedAt: new Date(now).toISOString(), connected: facts.connected === true,
       // Run 44: the hold the body keeps (its file survives a restart), for the head to compare with its own (a hold of a task that is gone is ended).
       // Continue contracts (3): the benches, furnaces, chests and beds near, with the proof of the scan (the head's `near` is judged from it).
-      state: JSON.parse(JSON.stringify({ world: { ...world, utilities: utilitiesOf(this.bot, this.sequence, now), freeSlots: freeSlots(this.bot) }, primitives: primitives.state, activeCapabilities: activeActionCapabilities(this.bot), localSafety: this.lastSafety,
+      state: JSON.parse(JSON.stringify({ world: { ...world, utilities: utilitiesOf(this.bot, this.sequence, now), freeSlots: freeSlots(this.bot),
+        // The End fight (2026-11-02), under the names the head reads: the dragon's phase and health, the crystals left, the perch's pillar, the breath lying about. Only in the End.
+        ...(() => { try { return endObservation(this.bot, now) ?? {}; } catch { return {}; } })() },
+        primitives: primitives.state, activeCapabilities: activeActionCapabilities(this.bot), localSafety: this.lastSafety,
         incidentHold: incidentsOf(this.bot)?.held() ?? null,
         // Continue contracts: the life (5), the start-up and connection ids (5), who holds the body (4).
         combat: { recentHits: recentHitsOf(this.bot) },
-        // The End fight (2026-11-02): the dragon's phase and health, the perch's pillar, the crystals left and the breath lying about. Only in the End.
-        ...(() => { try { const end = endObservation(this.bot, now); return end ? { end } : {}; } catch { return {}; } })(),
         life: this.life.view(), bodyRun: { bodyBoot: BODY_BOOT, connectionId: this.connectionId }, control: this.controlView() })), facts };
   }
   candidates(observation: BodyObservation): BodyCandidateDraft[] {

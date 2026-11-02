@@ -1,6 +1,6 @@
 import { Vec3 } from 'vec3';
 import { bodyReader } from './localMap.js';
-import { boxCentre, boxesOverlap, bodyBoxAt, flameCloudCentre, inflate, isPerched, partBox, shift, type Box, type P3 } from './dragonParts.js';
+import { BREATH_RADIUS_MIN, boxCentre, boxesOverlap, bodyBoxAt, flameCloudCentre, inflate, isPerched, partBox, shift, type Box, type P3 } from './dragonParts.js';
 import { breathCloudsOf, dragonPhaseOf, endDragonOf, fireballPath, fireballsOf, isEnd, phaseSeconds } from './dragonState.js';
 
 /**
@@ -15,8 +15,7 @@ import { breathCloudsOf, dragonPhaseOf, endDragonOf, fireballPath, fireballsOf, 
 export type HazardKind = 'breath' | 'flame' | 'fireball' | 'head' | 'neck' | 'wing';
 export interface Hazard { kind: HazardKind; centre: P3; /** The radius of a round zone (0 for a box). */ radius: number; box?: Box; why: string }
 
-/** A cloud is at least this wide in radius for the body: the client's number is a tick old and the cloud grows to 7. */
-export const BREATH_RADIUS_MIN = 7;
+export { BREATH_RADIUS_MIN };
 /** A fireball's line is dangerous within this far (the cloud it lays and the blast round it). */
 export const FIREBALL_REACH = 7;
 const FIREBALL_TICKS = 40;

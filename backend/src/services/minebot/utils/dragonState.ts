@@ -3,10 +3,10 @@ import { entityHealth } from './mapMarks.js';
 import { bodyReader, type BlockReader } from './localMap.js';
 import { toldVelocity } from './toldVelocity.js';
 import { blastAt, CRYSTAL_REACH } from './crystalBlast.js';
-import { boxCentre, boxDistance, DRAGON_MAX_HEALTH, isPerched, partBox, phaseName, type P3 } from './dragonParts.js';
+import { BREATH_RADIUS_MIN, boxCentre, boxDistance, DRAGON_MAX_HEALTH, isPerched, partBox, phaseName, type P3 } from './dragonParts.js';
 
 /**
- * What the body reads of the End fight, for the observation (`state.end`) and for the parts that act on it (the dragon strike, the dragon
+ * What the body reads of the End fight, for the observation (the End fields of `state.world`) and for the parts that act on it (the dragon strike, the dragon
  * reflex, the crystal shot). Reading only: nothing here moves the body. Where a number is a guess (the parts of a dragon in flight), it
  * says so in its name.
  */
@@ -200,31 +200,41 @@ export function dragonView(bot: Bot, dragon: any, now = Date.now()): DragonView 
     at: at3(dragon.position), yaw: round1(Number(dragon.yaw ?? 0)), head: headBox ? at3(boxCentre(headBox)) : null, headReach, strike: headReach !== null && headReach <= STRIKE_REACH };
 }
 
+/**
+ * The End fields of the observation, under the names the head reads from `state.world` (docs/minecraft-endgame-head-2026-11.md §1: `dragon`, `crystals`,
+ * `perch`, `dragonBreath`); a field the head does not know stays unread. Only in the End.
+ */
 export interface EndObservation {
-  dragon: DragonView | null;
-  /** The top of the exit portal's pillar (where the dragon perches), or null while it is not loaded. */
-  fountain: P3 | null;
+  /** Absent while no dragon is loaded. */
+  dragon?: {
+    id: number; health: number | null; phase: number | null; phaseName: string | null; /** Seconds in this phase, as watched. */ phaseFor: number; perched: boolean;
+    position: P3; yaw: number; /** The head's box centre when perched (an estimate in flight is not given). */ headPosition?: P3; /** From the body to the dragon's middle. */ distance: number;
+    /** The eye's distance to the head's box (perched), and whether a blow is in reach now. */ headReach: number | null; strike: boolean;
+  };
   /** remaining: the spikes whose crystal stands or has not been seen (of ten); gone: the ones seen without; caged: the loaded crystals in a cage; list: the loaded ones, nearest first; unseen: where the spikes not loaded are. */
-  crystals: { remaining: number; gone: number; caged: number; list: CrystalView[]; unseen: Array<{ x: number; z: number }> };
-  /** The dragon's breath clouds lying in the world, and the fireballs flying (the reflex's own judgement is `dragonHazards`). */
-  clouds: Array<{ x: number; y: number; z: number; r: number | null }>;
-  fireballs: number;
+  crystals: { remaining: number; gone: number; caged: number; list: Array<Omit<CrystalView, 'x' | 'y' | 'z' | 'dist'> & { position: P3; distance: number }>; unseen: Array<{ x: number; z: number }> };
+  /** The top of the exit portal's pillar (where the dragon perches); absent while it is not loaded. */
+  perch?: P3;
+  /** The dragon's breath lying in the world, nearest first, four at most: radius is the client's reading (7 when it has none), dangerRadius what the body keeps clear of (at least 7). */
+  dragonBreath: Array<{ x: number; y: number; z: number; radius: number; dangerRadius: number }>;
+  /** The dragon's fireballs flying now (the reflex's own judgement is `dragonHazards`). */
+  dragonFireballs: number;
 }
-/** `state.end` for the observation: only in the End, null elsewhere. */
 export function endObservation(bot: Bot, now = Date.now()): EndObservation | null {
   if (!isEnd(bot)) return null;
-  const dragon = endDragonOf(bot);
-  const crystals = crystalsOf(bot);
+  const dragon = endDragonOf(bot), at = bot?.entity?.position;
+  const view = dragon ? dragonView(bot, dragon, now) : null;
+  const perch = fountainOf(bot);
+  const spikes = spikeStates(bot);
+  const loaded = crystalsOf(bot);
   return {
-    dragon: dragon ? dragonView(bot, dragon, now) : null,
-    fountain: fountainOf(bot),
-    crystals: (() => {
-      const spikes = spikeStates(bot);
-      return { remaining: spikes.filter(spike => spike.state !== 'gone').length, gone: spikes.filter(spike => spike.state === 'gone').length,
-        caged: crystals.filter(crystal => crystal.caged === true).length, list: crystals.slice(0, 10), unseen: spikes.filter(spike => spike.state === 'unknown').map(spike => ({ x: spike.x, z: spike.z })) };
-    })(),
-    clouds: breathCloudsOf(bot).slice(0, 4).map(cloud => ({ ...at3(cloud.position), r: cloud.radius === null ? null : round1(cloud.radius) })),
-    fireballs: fireballsOf(bot).length,
+    ...(dragon && view ? { dragon: { id: view.id, health: view.health, phase: view.phase, phaseName: view.phaseName, phaseFor: view.phaseFor, perched: view.perched, position: view.at, yaw: view.yaw,
+      ...(view.head ? { headPosition: view.head } : {}), distance: at ? round1(dragon.position.distanceTo(at)) : 0, headReach: view.headReach, strike: view.strike } } : {}),
+    crystals: { remaining: spikes.filter(spike => spike.state !== 'gone').length, gone: spikes.filter(spike => spike.state === 'gone').length, caged: loaded.filter(crystal => crystal.caged === true).length,
+      list: loaded.slice(0, 10).map(({ x, y, z, dist, ...rest }) => ({ ...rest, position: { x, y, z }, distance: dist })), unseen: spikes.filter(spike => spike.state === 'unknown').map(spike => ({ x: spike.x, z: spike.z })) },
+    ...(perch ? { perch } : {}),
+    dragonBreath: breathCloudsOf(bot).slice(0, 4).map(cloud => ({ ...at3(cloud.position), radius: round1(cloud.radius ?? BREATH_RADIUS_MIN), dangerRadius: round1(Math.max(cloud.radius ?? 0, BREATH_RADIUS_MIN)) })),
+    dragonFireballs: fireballsOf(bot).length,
   };
 }
 export { DRAGON_MAX_HEALTH };

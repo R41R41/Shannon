@@ -108,7 +108,10 @@ describe('what the body reads of the fight', () => {
     expect(crystalsOf(f.bot).map(crystal => crystal.id)).toEqual([8, 7]);
     expect(crystalsOf(f.bot)[0].healing).toBe(true);
     const seen = endObservation(f.bot)!;
-    expect(seen.crystals.list.length).toBe(2); expect(seen.fountain).toEqual({ x: 0.5, y: 68, z: 0.5 }); expect(seen.dragon).toMatchObject({ phase: 6, perched: true });
+    expect(seen.crystals.list.length).toBe(2); expect(seen.perch).toEqual({ x: 0.5, y: 68, z: 0.5 }); expect(seen.dragon).toMatchObject({ phase: 6, perched: true });
+    // the head's names: a crystal has a position and a distance (nearest first), the cloud list is there and empty
+    expect(seen.crystals.list[0]).toMatchObject({ id: 8, position: { x: 10.5, y: 80, z: 0.5 }, healing: true });
+    expect(typeof seen.crystals.list[0].distance).toBe('number'); expect(seen.dragonBreath).toEqual([]); expect(seen.dragonFireballs).toBe(0);
     f.bot.game.dimension = 'minecraft:overworld';
     expect(endObservation(f.bot)).toBeNull();
   });
@@ -320,16 +323,23 @@ describe('a bed used in the End', () => {
 import { NativeCommonFcaBody } from '../../src/services/minebot/integration/commonFca/nativeBody.js';
 
 describe('the observation the body gives the head', () => {
-  it('carries state.end in the End only, with the dragon, the pillar and the crystals', async () => {
+  it('carries the End fields in state.world in the End only, under the names the head reads', async () => {
     const f = fixture({ at: new Vec3(0.5, 64, 7.0), phase: DRAGON_PHASE.sittingScanning, health: 120 });
     f.bot.entities[7] = { id: 7, name: 'end_crystal', position: new Vec3(30.5, 80, 0.5), metadata: [] };
+    const meta: unknown[] = []; meta[8] = 3; meta[10] = { type: 'dragon_breath' };
+    f.bot.entities[20] = { id: 20, name: 'area_effect_cloud', position: new Vec3(8.5, 64, 9.5), metadata: meta };
     Object.assign(f.bot, { oxygenLevel: 20, controlState: {}, instantSkills: { getSkills: () => [] }, clearControlStates: vi.fn(), look: vi.fn(async () => {}) });
     const body = new NativeCommonFcaBody(f.bot, { serverId: 'home', capture: async () => { throw Error('unused'); } });
-    const end = (body.observe().state as any).end;
-    expect(end).toMatchObject({ fountain: { x: 0.5, y: 68, z: 0.5 }, crystals: { caged: 0 }, dragon: { id: 100, health: 120, phase: 6, phaseName: 'sitting_scanning', perched: true, strike: true } });
-    expect(end.dragon.head).toMatchObject({ z: 7 });
-    f.bot.game.dimension = 'minecraft:overworld';
+    const world = (body.observe().state as any).world;
+    expect(world).toMatchObject({ perch: { x: 0.5, y: 68, z: 0.5 }, crystals: { caged: 0 }, dragon: { id: 100, health: 120, phase: 6, phaseName: 'sitting_scanning', perched: true, strike: true }, dragonFireballs: 0 });
+    expect(world.dragon.headPosition).toMatchObject({ z: 7 }); expect(world.dragon.position).toMatchObject({ x: 0.5 }); expect(typeof world.dragon.distance).toBe('number');
+    expect(world.crystals.list[0]).toMatchObject({ id: 7, position: { x: 30.5, y: 80, z: 0.5 } }); expect(typeof world.crystals.list[0].distance).toBe('number');
+    // a young cloud: its own radius, and the radius the body keeps clear of
+    expect(world.dragonBreath).toEqual([{ x: 8.5, y: 64, z: 9.5, radius: 3, dangerRadius: 7 }]);
     expect((body.observe().state as any).end).toBeUndefined();
+    f.bot.game.dimension = 'minecraft:overworld';
+    const elsewhere = (body.observe().state as any).world;
+    for (const key of ['dragon', 'crystals', 'perch', 'dragonBreath', 'dragonFireballs']) expect(elsewhere[key]).toBeUndefined();
     await body.dispose();
   });
 });

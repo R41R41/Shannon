@@ -20,6 +20,8 @@ export const DRAGON_PHASE = {
 export const PHASE_NAMES: readonly string[] = ['holding_pattern', 'strafe_player', 'landing_approach', 'landing', 'takeoff', 'sitting_flaming',
   'sitting_scanning', 'sitting_attacking', 'charging_player', 'dying', 'hovering'];
 export const DRAGON_MAX_HEALTH = 200;
+/** A cloud of the dragon's breath is at least this wide in radius for the body: the client's number is a tick old and the cloud grows from 3 to 7. */
+export const BREATH_RADIUS_MIN = 7;
 
 export const phaseName = (phase: number | null | undefined): string | null => typeof phase === 'number' ? PHASE_NAMES[phase] ?? null : null;
 /** On the perch: flaming (5), scanning (6) or attacking (7). A blow can be struck, an arrow does nothing. */

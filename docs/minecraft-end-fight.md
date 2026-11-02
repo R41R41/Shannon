@@ -4,17 +4,17 @@
 
 先例：mine-ai-mcp（MIT、https://github.com/aibengineering/mine-ai-mcp、aibengineering）の作り方（竜の部位の id、止まり木の phase、クリスタルの距離など）を読んで学び、Shannon の作りで書き直した。コードは写していない。
 
-## 観測 `state.end`
+## 観測（`observation.state.world` のエンドの欄）
 
-エンドの時だけ `state` に付く（他の次元では欄ごと無い）。`utils/dragonState.ts` の `endObservation`。
+エンドの時だけ `state.world` に付く（他の次元では欄ごと無い）。欄の名前は頭（S3）が読む名前（`docs/minecraft-endgame-head-2026-11.md` §1）に合わせた。頭が知らない欄は読み捨てられる。`utils/dragonState.ts` の `endObservation`。
 
-| 欄 | 中身 |
+| 欄（`state.world.`） | 中身 |
 |---|---|
-| `dragon` | 竜が読み込まれていなければ `null`。`id`・`health`（/200）・`phase`（0〜10、読めなければ null）・`phaseName`・`phaseFor`（この体が見ている間のその phase の秒）・`perched`（phase 5・6・7）・`at`・`yaw`（rad）・`head`（止まり木の時だけ、頭の箱の中心）・`headReach`（目から頭の箱までの m）・`strike`（止まり木で `headReach` ≤ 5.0） |
-| `fountain` | 出口ポータルの岩盤の柱の上（竜が止まる所。柱の最上の岩盤の 1 つ上）。柱が読み込まれていなければ null |
-| `crystals` | `remaining`（立っている、または見ていない台座の数。10 のうち）・`gone`（読み込まれた列に無い＝壊れた）・`caged`（読み込まれた中の檻つき）・`list`（読み込まれた物、近い順 10 まで：`id`・`x`・`y`・`z`・`caged`（true/false/null）・`dist`・`healing`（ビームが竜に向く）・`blast`（爆発圏 12 m の内だけ：今の立ち位置で爆発した時の失う体力の見込み））・`unseen`（見ていない台座の x・z） |
-| `clouds` | 竜の息の雲（dragon_breath）の `x`・`y`・`z`・`r`、4 つまで |
-| `fireballs` | 飛んでいる dragon_fireball の数 |
+| `dragon` | 竜が読み込まれていなければ欄ごと無い。`id`・`health`（/200）・`phase`（0〜10、読めなければ null）・`phaseName`・`phaseFor`（この体が見ている間のその phase の秒）・`perched`（phase 5・6・7）・`position`・`yaw`（rad）・`distance`（体から竜の中心まで）・`headPosition`（止まり木の時だけ、頭の箱の中心）・`headReach`（目から頭の箱までの m）・`strike`（止まり木で `headReach` ≤ 5.0） |
+| `perch` | 出口ポータルの岩盤の柱の上（竜が止まる所。柱の最上の岩盤の 1 つ上）。柱が読み込まれていなければ欄ごと無い |
+| `crystals` | `remaining`（立っている、または見ていない台座の数。10 のうち）・`gone`（読み込まれた列に無い＝壊れた）・`caged`（読み込まれた中の檻つき）・`list`（読み込まれた物、近い順 10 まで：`id`・`position`・`caged`（true/false/null）・`distance`・`healing`（ビームが竜に向く）・`blast`（爆発圏 12 m の内だけ：今の立ち位置で爆発した時の失う体力の見込み））・`unseen`（見ていない台座の x・z） |
+| `dragonBreath` | 竜の息の雲（dragon_breath）の `x`・`y`・`z`・`radius`（クライアントの読み。無ければ 7）・`dangerRadius`（体が避ける半径。7 以上）、近い順 4 つまで。無ければ `[]` |
+| `dragonFireballs` | 飛んでいる dragon_fireball の数 |
 
 台座の中心は島の上の輪（半径 42）で固定（`SPIKE_CENTRES`）。どの台座が高い・檻つきかは世界のシード次第。
 
