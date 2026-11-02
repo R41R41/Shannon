@@ -40,7 +40,7 @@ function fixture(options: { phase?: number | null; health?: number; yaw?: number
     game: { dimension: 'minecraft:the_end', difficulty: 'normal' }, entity: self, entities: { 100: dragon } as Record<number, any>,
     registry: { entitiesByName: Object.fromEntries(Object.entries(KEYS).map(([name, metadataKeys]) => [name, { metadataKeys }])) },
     heldItem: { name: 'diamond_sword' }, health: 20, food: 20,
-    blockAt: (v: Vec3) => { const name = world.get(key(v.x, v.y, v.z)) ?? 'air'; return { name, boundingBox: name === 'air' ? 'empty' : 'block', position: v }; },
+    blockAt: (v: Vec3) => { const name = world.get(key(v.x, v.y, v.z)) ?? 'air'; return { name, boundingBox: name === 'air' ? 'empty' : 'block', shapes: name === 'air' ? [] : [[0, 0, 0, 1, 1, 1]], position: v }; },
     attack: vi.fn(), lookAt: vi.fn(async () => undefined), clearControlStates: vi.fn(), setControlState: vi.fn(), activateItem: vi.fn(), deactivateItem: vi.fn(),
     inventory: { items: () => [], slots: [] },
   });
@@ -613,6 +613,7 @@ describe('shoot at a crystal', () => {
 });
 
 import { clutchWanted, runFallClutch, CLUTCH_REACH, type FallMemory } from '../../src/services/minebot/utils/fallClutch.js';
+import { createMotorPort, executeAction, preemptLowerPriorityActions } from '../../src/services/minebot/execution/ActionExecution.js';
 
 describe('the water-bucket clutch of a fall in the End', () => {
   const BUCKET = { name: 'water_bucket', type: 5, count: 1 };
@@ -679,6 +680,22 @@ describe('the water-bucket clutch of a fall in the End', () => {
     expect(seen.pourY + 1.62 - 64).toBeGreaterThan(CLUTCH_REACH - 0.6);
     expect(seen.uses).toBe(2);
   });
+  it('lets go of the body at once when a stronger reflex takes it, and sends nothing after (round 5 of the independent review: it waited on, holding the lease, and poured through the bare bot)', async () => {
+    const f = falling({ y: 100, vy: -2 }); // the body stays in the air: the ground never comes within reach, so the clutch would poll for its whole four seconds
+    const { seen, stop } = withBucket(f);
+    try {
+      const started = Date.now();
+      const running = executeAction(f.bot, 'floor-clutch', 8000, (() => runFallClutch(f.bot, createMotorPort(f.bot))) as never, { priority: 380, safetyLease: true, waitForQuiescence: false, legacyExecutingSkill: true });
+      await new Promise(resolve => setTimeout(resolve, 150));
+      preemptLowerPriorityActions(f.bot, 500, 'wall-escape');
+      await running;
+      expect(Date.now() - started).toBeLessThan(1500);
+      expect(seen.uses).toBe(0);
+      // the body goes on falling past the height at which the pour would have been made: nothing is poured
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      expect(seen.uses).toBe(0);
+    } finally { stop(); }
+  });
   it('is started by the floor reflex in the tick the fall is worth it, over the rest, and told in the ledger', async () => {
     const f = falling({ y: 80, vy: -2 });
     const { stop } = withBucket(f);
@@ -696,7 +713,7 @@ describe('the water-bucket clutch of a fall in the End', () => {
 import { blastAt } from '../../src/services/minebot/utils/crystalBlast.js';
 
 describe("a blast's line of sight through blocks that are not whole cubes (independent review 2026-11-02: a slab was taken for a cube)", () => {
-  const BOTTOM_SLAB = [[0, 0, 0, 1, 0.5, 1]], TOP_SLAB = [[0, 0.5, 0, 1, 1, 1]];
+  const BOTTOM_SLAB = [[0, 0, 0, 1, 0.5, 1]], TOP_SLAB = [[0, 0.5, 0, 1, 1, 1]], CUBE = [[0, 0, 0, 1, 1, 1]];
   const centre = { x: 0.5, y: 65.5, z: 0.5 }, feet = { x: 4.5, y: 64, z: 0.5 };
   /** A row of blocks at x 2 (z -3 to 3) at the given heights, of a name whose boxes are given (none: a whole cube, as a block the game does not list). */
   function wallOf(heights: number[], name: string, shapes?: number[][]) {
@@ -704,17 +721,28 @@ describe("a blast's line of sight through blocks that are not whole cubes (indep
     for (const y of heights) for (let z = -3; z <= 3; z++) world.set(key(2, y, z), name);
     const f = fixture({ phase: DRAGON_PHASE.holdingPattern, at: new Vec3(feet.x, feet.y, feet.z), world });
     const original = f.bot.blockAt;
-    f.bot.blockAt = (v: Vec3, ...rest: unknown[]) => { const block = original(v, ...rest); return block.name === name && shapes ? { ...block, shapes } : block; };
+    f.bot.blockAt = (v: Vec3, ...rest: unknown[]) => {
+      const block = original(v, ...rest);
+      if (block.name !== name) return block;
+      const { shapes: _listed, ...plain } = block;
+      return shapes === undefined ? plain : { ...plain, shapes };
+    };
     return f.bot;
   }
-  it('is shut out by a wall of whole cubes, and by one whose boxes are not known', () => {
-    expect(blastAt(wallOf([63, 64, 65, 66], 'obsidian'), centre, feet).seen).toBe(0);
-    expect(blastAt(wallOf([63, 64, 65, 66], 'obsidian', [[0, 0, 0, 1, 1, 1]]), centre, feet).seen).toBe(0);
+  it('is shut out by a wall of whole cubes', () => {
+    expect(blastAt(wallOf([63, 64, 65, 66], 'obsidian', CUBE), centre, feet).seen).toBe(0);
+  });
+  it('is shut out by nothing that has no collision (an open fence gate is solid by its bounding box and lists no boxes), nor by a block whose boxes are not known: the estimate is the larger one', () => {
+    const gate = blastAt(wallOf([63, 64, 65, 66], 'oak_fence_gate', []), centre, feet);
+    expect(gate.seen).toBe(1);
+    expect(blastAt(wallOf([63, 64, 65, 66], 'obsidian'), centre, feet).seen).toBe(1);
+    // (round 5 of the independent review: the open gate was taken for a cube and a blast of 32 was judged 5)
+    expect(gate.raw).toBeGreaterThan(blastAt(wallOf([63, 64, 65, 66], 'obsidian', CUBE), centre, feet).raw);
   });
   it('sees over a bottom slab: the line passes above its top, where a cube would have shut it out', () => {
     const slabs = blastAt(wallOf([64], 'stone_slab', BOTTOM_SLAB), centre, feet);
     expect(slabs.seen).toBeGreaterThan(0.85); // the few lines to the lowest points clip the far edge of the slab
-    const asCube = blastAt(wallOf([64], 'stone_slab'), centre, feet);
+    const asCube = blastAt(wallOf([64], 'stone_slab', CUBE), centre, feet);
     expect(asCube.seen).toBeLessThan(slabs.seen);
     expect(slabs.raw).toBeGreaterThan(asCube.raw);
   });

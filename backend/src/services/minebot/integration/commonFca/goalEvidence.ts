@@ -68,8 +68,8 @@ export class NativeGoalEvidence {
   /** The advancement packets of this connection: the first one is the state at login, the later ones are news. */
   private advancements: { seen: boolean; earned: Set<string>; during: Map<string, number> } = { seen: false, earned: new Set(), during: new Map() };
   /** A bed the body used in the End (where, when), and the blasts the server announced (centre, when): a blast at the bed is the bed's. */
-  private bedUsed: { x: number; y: number; z: number; at: number } | null = null;
-  private blast: { x: number; y: number; z: number; at: number; bed: boolean } | null = null;
+  private bedUsed: { x: number; y: number; z: number; at: number; task: string | null } | null = null;
+  private blast: { x: number; y: number; z: number; at: number; bed: boolean; task: string | null } | null = null;
   /** Hits on the dragon not yet decided (see `Hit`), and whether this server names the cause of damage at all (it does from 1.19.4: then no hurt is credited on a guess). */
   private readonly hits = new Map<number, Hit>();
   private namesSeen = false;
@@ -109,8 +109,14 @@ export class NativeGoalEvidence {
       this.attacks.clear(); this.dropHits(); this.current.deadline = this.now();
     }
   }
-  /** The hits still being decided are let go (a task, a session, a generation or a connection changed, or the task was cancelled). */
-  private dropHits(): void { for (const hit of this.hits.values()) if (hit.timer) clearTimeout(hit.timer); this.hits.clear(); }
+  /**
+   * What belongs to the task before is let go (a task, a session, a generation or a connection changed, the task was cancelled, or the body lived again): the hits still being decided, and the bed the body
+   * used and the blast the server announced (a bed's blast of the old task is no cause for a hurt in the new one: independent review 2026-11-02, round 5).
+   */
+  private dropHits(): void {
+    for (const hit of this.hits.values()) if (hit.timer) clearTimeout(hit.timer);
+    this.hits.clear(); this.bedUsed = null; this.blast = null;
+  }
   /** The identity of the task now current (a hit is decided under the task it was reported under only). */
   private taskTag(): string | null {
     const c = this.current;
@@ -156,13 +162,14 @@ export class NativeGoalEvidence {
   }
   private bedUsedAt(block: any): void {
     if (dimension(this.bot) !== 'the_end' || !/_bed$/u.test(String(block?.name ?? '')) || !block?.position) return;
-    this.bedUsed = { x: block.position.x + 0.5, y: block.position.y + 0.5, z: block.position.z + 0.5, at: this.now() };
+    this.bedUsed = { x: block.position.x + 0.5, y: block.position.y + 0.5, z: block.position.z + 0.5, at: this.now(), task: this.taskTag() };
   }
   private readonly onExplosion = (packet: any) => {
     const c = packet?.center ?? (typeof packet?.x === 'number' ? { x: packet.x, y: packet.y, z: packet.z } : null);
     if (!c) return;
     const t = this.now(), bed = this.bedUsed;
-    this.blast = { x: c.x, y: c.y, z: c.z, at: t, bed: !!bed && t - bed.at <= BLAST_HURT_MS && Math.hypot(bed.x - c.x, bed.y - c.y, bed.z - c.z) <= BLAST_AT_BED };
+    const task = this.taskTag();
+    this.blast = { x: c.x, y: c.y, z: c.z, at: t, task, bed: !!bed && bed.task === task && t - bed.at <= BLAST_HURT_MS && Math.hypot(bed.x - c.x, bed.y - c.y, bed.z - c.z) <= BLAST_AT_BED };
   };
   /** The hit in the making on this dragon (a new one when the last was decided), with its decision scheduled. */
   private hitOn(entity: any): Hit {
@@ -210,7 +217,7 @@ export class NativeGoalEvidence {
     const entity = hit.entity;
     if (hit.named === 'foreign' || hit.task !== this.taskTag()) return;
     const blast = this.blast;
-    const bedBlast = !!blast?.bed && Math.abs(hit.at - blast.at) <= BLAST_HURT_MS && this.blastReaches(entity);
+    const bedBlast = !!blast?.bed && blast.task === this.taskTag() && Math.abs(hit.at - blast.at) <= BLAST_HURT_MS && this.blastReaches(entity);
     if (hit.named === 'body') { const witness = this.witnessFor(entity); if (witness) this.damaged(witness, hit.via ?? 'server_named', hit.at); return; }
     if (bedBlast) { const witness = this.witnessFor(entity); if (witness) this.damaged(witness, 'explosion', hit.at); return; }
     // A name the server did not give (a hit with no cause, or an older server that gives none): a server that names causes has said it was not the body's.
@@ -253,7 +260,7 @@ export class NativeGoalEvidence {
     }
     this.attacks.delete(entity?.id);
   };
-  private readonly onRespawn = () => { this.attacks.clear(); };
+  private readonly onRespawn = () => { this.attacks.clear(); this.dropHits(); };
   private readonly onEnd = () => { this.disconnected = true; this.attacks.clear(); this.proofs.clear(); this.current = null; for (const hit of this.hits.values()) if (hit.timer) clearTimeout(hit.timer); this.hits.clear(); };
   /** The server's advancement packets: the first of a connection is the state at login (earned before), later ones are news (earned during). */
   private readonly onAdvancements = (packet: any) => {

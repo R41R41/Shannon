@@ -3,6 +3,7 @@ import { bodyReader, type BlockReader } from './localMap.js';
 import { dropUnder } from './voidFooting.js';
 import { isEnd } from './dragonState.js';
 import { activateItemFacing } from './activateItemFacing.js';
+import { actionSignal } from '../execution/ActionExecution.js';
 
 /**
  * A fall that would cripple or kill, stopped with a bucket of water (the clutch every player knows). In the End a body that climbed a pillar for a caged crystal is up to 40 blocks over the ground, and
@@ -69,10 +70,13 @@ export function clutchWanted(bot: FallBody, memory: FallMemory, now: number): st
   return damage >= CLUTCH_MIN_DAMAGE ? `落ちて${total.toFixed(0)}ブロック（地面まであと${ground.drop}、受ける被害およそ${damage.toFixed(0)}）` : null;
 }
 
-/** The bucket used along the look, now: the packet carries the body's rotation (activateItemFacing says why), and nothing waits for a look to settle. */
-function pourNow(bot: FallBody): void {
-  const client = bot._client, entity = bot.entity;
-  if (!client || !entity || !bot.activateItem) return;
+/**
+ * The bucket used along the look, now: the packet carries the body's rotation (activateItemFacing says why), and nothing waits for a look to settle. Through the motor `port`: a body whose owner has
+ * been taken (a stronger reflex holds it) sends nothing, the port throws there (independent review 2026-11-02, round 5: after the interruption the pour still went out through the bare bot).
+ */
+function pourNow(port: FallBody): void {
+  const client = port._client, entity = port.entity;
+  if (!client || !entity || !port.activateItem) return;
   const original = client.write;
   client.write = function (this: unknown, name: string, data: any, ...rest: any[]) {
     if (name === 'use_item' && data?.rotation) {
@@ -80,15 +84,26 @@ function pourNow(bot: FallBody): void {
     }
     return (original as any).call(this, name, data, ...rest);
   } as typeof client.write;
-  try { bot.activateItem(false); } finally { client.write = original; }
+  try { port.activateItem(false); } finally { client.write = original; }
 }
 
-const pause = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+/** A pause that ends at once when the action that holds the body is taken from it (the wall escape, the lava escape ...): the clutch lets go of the body in that tick, not a poll later. */
+function abortableDelay(port: object, ms: number): Promise<void> {
+  return new Promise(resolve => {
+    const signal = actionSignal(port);
+    if (signal?.aborted) { resolve(); return; }
+    const timer = setTimeout(done, ms);
+    function done() { clearTimeout(timer); signal?.removeEventListener('abort', done); resolve(); }
+    signal?.addEventListener('abort', done, { once: true });
+  });
+}
+const interrupted = (port: object) => actionSignal(port)?.aborted === true;
 const lostOwnership = (error: unknown) => /Action interrupted|Motor owner expired/u.test(String((error as Error)?.message ?? error));
+const TAKEN: { success: boolean; result: string } = { success: false, result: '強い反射に操作を取られて中断した' };
 
 /**
  * The clutch: the bucket in the hand, the look straight down, the pour in the tick the ground comes within reach, and the water taken up again once the body stands (a water source left on the island is
- * harmless, but the bucket is wanted for the next fall). Returns what happened, in words the ledger can carry.
+ * harmless, but the bucket is wanted for the next fall). Returns what happened, in words the ledger can carry. Everything that acts on the body goes through `port`, and every wait ends when the action is taken.
  */
 export async function runFallClutch(bot: FallBody, port: FallBody): Promise<{ success: boolean; result: string }> {
   const bucket = bot.inventory?.items().find(item => item.name === 'water_bucket');
@@ -103,34 +118,36 @@ export async function runFallClutch(bot: FallBody, port: FallBody): Promise<{ su
   const read = bodyReader(bot as never);
   let poured = false;
   for (let poll = 0; poll < POLLS && !poured; poll++) {
+    if (interrupted(port)) return TAKEN;
     const body = bot.entity;
     if (!body || body.onGround || body.isInWater) break;
     const ground = groundUnder(read, body.position);
-    if (ground.kind === 'floor' && body.position.y + EYE_HEIGHT - ground.top <= CLUTCH_REACH) { pourNow(bot); poured = true; break; }
+    if (ground.kind === 'floor' && body.position.y + EYE_HEIGHT - ground.top <= CLUTCH_REACH) { pourNow(port); poured = true; break; }
     if (ground.kind === 'water') return { success: true, result: '落ちる先が水だった' };
-    await pause(POLL_MS);
+    await abortableDelay(port, POLL_MS);
   }
-  if (!poured) return { success: false, result: bot.entity?.onGround ? '水をあける前に着地した' : '地面が届く所へ来る前に落下が終わった' };
-  for (let waited = 0; waited < 1500 && bot.entity && !bot.entity.onGround && !bot.entity.isInWater; waited += 25) await pause(25);
-  await pause(150);
+  if (!poured) return interrupted(port) ? TAKEN : { success: false, result: bot.entity?.onGround ? '水をあける前に着地した' : '地面が届く所へ来る前に落下が終わった' };
+  for (let waited = 0; waited < 1500 && bot.entity && !bot.entity.onGround && !bot.entity.isInWater && !interrupted(port); waited += 25) await abortableDelay(port, 25);
+  if (!interrupted(port)) await abortableDelay(port, 150);
+  if (interrupted(port)) return TAKEN;
   const feet = new Vec3(Math.floor(bot.entity!.position.x), Math.floor(bot.entity!.position.y + 1e-3), Math.floor(bot.entity!.position.z));
   const waterAt = (cell: Vec3) => { try { return bot.blockAt?.(cell)?.name === 'water'; } catch { return false; } };
   const wet = bot.entity!.isInWater === true || waterAt(feet);
   // The water is taken up again: the source the bucket made lies in the cell over the ground it was poured on.
   let scooped = false;
   if (wet) {
-    for (let attempt = 0; attempt < SCOOP_TRIES && !scooped; attempt++) {
+    for (let attempt = 0; attempt < SCOOP_TRIES && !scooped && !interrupted(port); attempt++) {
       const now = bot.entity!.position;
       const base = new Vec3(Math.floor(now.x), Math.floor(now.y + 1e-3), Math.floor(now.z));
       const source = SIDES.map(([dx, dz]) => base.offset(dx, 0, dz)).find(cell => { try { const block = bot.blockAt?.(cell); return block?.name === 'water' && Number(block.metadata ?? 0) === 0; } catch { return false; } });
       if (!source) break;
       try {
-        await activateItemFacing(bot as never, source.offset(0.5, 0.4, 0.5));
-        bot.deactivateItem?.();
-        for (let waited = 0; waited < 600 && bot.heldItem?.name !== 'water_bucket'; waited += 50) await pause(50);
+        await activateItemFacing(port as never, source.offset(0.5, 0.4, 0.5));
+        port.deactivateItem?.();
+        for (let waited = 0; waited < 600 && bot.heldItem?.name !== 'water_bucket' && !interrupted(port); waited += 50) await abortableDelay(port, 50);
       } catch (error) { if (lostOwnership(error)) throw error; }
       scooped = bot.heldItem?.name === 'water_bucket';
     }
   }
-  return { success: wet, result: wet ? `水を地面にあけて落下を止めた${scooped ? '（水は汲み直した）' : '（水は残した）'}` : '水をあけたが、水の中に着地できなかった' };
+  return { success: wet, result: wet ? `水を地面にあけて落下を止めた${scooped ? '（水は汲み直した）' : interrupted(port) ? '（水は残した：途中で操作を取られた）' : '（水は残した）'}` : '水をあけたが、水の中に着地できなかった' };
 }

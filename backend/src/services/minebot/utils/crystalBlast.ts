@@ -56,7 +56,10 @@ export function blastRaw(distance: number, seen: number, power = CRYSTAL_POWER):
   return Math.floor((impact * impact + impact) / 2 * 7 * reach + 1);
 }
 
-/** The collision boxes of a block in its own cell (min x y z, max x y z, 0 to 1), or null when they are not known (then a solid block is taken as a whole cube). */
+/**
+ * The collision boxes of a block in its own cell (min x y z, max x y z, 0 to 1): a list, which may be empty (an open fence gate is `solid` by its bounding box and has no collision at all), or null when they are
+ * not known: then the block is no shield (the estimate is the larger one, never the smaller).
+ */
 export type ShapesAt = (x: number, y: number, z: number) => number[][] | null;
 const WHOLE_CUBE: number[][] = [[0, 0, 0, 1, 1, 1]];
 const LINE_STEP = 0.1;
@@ -78,8 +81,9 @@ function segmentHitsBox(a: P3, b: P3, min: P3, max: P3): boolean {
 /**
  * The fraction of the body's box that the blast's centre sees: the game's own sample grid (Explosion.getSeenPercent: steps of 1 / (2 w + 1) across, 1 / (2 h + 1) up,
  * 45 points for a body 0.6 wide and 1.8 tall) with a straight line from each point to the centre; a line is shut out by the collision boxes of the solid blocks it passes
- * through (a bottom slab shuts out what is under its top and leaves the line over it, a stair its steps; a block whose boxes are not known is a whole cube; iron bars are passed:
- * a bar is a thin post, so the estimate is the larger one). Independent review 2026-11-02: a slab taken as a whole cube judged a blast of 17 as none.
+ * through (a bottom slab shuts out what is under its top and leaves the line over it, a stair its steps, an open fence gate nothing; a block whose boxes are not known is no shield; iron bars are
+ * passed: a bar is a thin post, so the estimate is the larger one). Independent review 2026-11-02: a slab taken as a whole cube judged a blast of 17 as none; round 5: an empty list of boxes (an open fence
+ * gate) was taken for "not known" and then for a whole cube (5 judged for 32). Without `shapesAt` (no way to read the boxes) a solid block is a whole cube, as before.
  */
 export function seenFraction(read: BlockReader, centre: P3, feet: P3, ignore: P3[] = [], shapesAt?: ShapesAt): number {
   const w = 0.6, h = 1.8;
@@ -102,7 +106,8 @@ export function seenFraction(read: BlockReader, centre: P3, feet: P3, ignore: P3
       tried.add(key);
       const block = read(bx, by, bz);
       if (!block || block.solid !== true || block.name === 'iron_bars') continue;
-      const boxes = shapesAt?.(bx, by, bz) ?? WHOLE_CUBE;
+      const boxes = shapesAt ? shapesAt(bx, by, bz) : WHOLE_CUBE;
+      if (!boxes) continue;
       if (boxes.some(box => segmentHitsBox(centre, to, { x: bx + box[0], y: by + box[1], z: bz + box[2] }, { x: bx + box[3], y: by + box[4], z: bz + box[5] }))) blocked = true;
     }
     if (!blocked) seen++;
@@ -115,7 +120,7 @@ export interface BlastEstimate { distance: number; seen: number; raw: number; ex
 export function blastAt(bot: any, centre: P3, feet: P3 = bot.entity.position, power = CRYSTAL_POWER, ignore: P3[] = []): BlastEstimate {
   const distance = Math.hypot(feet.x - centre.x, feet.y - centre.y, feet.z - centre.z);
   const shapesAt: ShapesAt = (x, y, z) => {
-    try { const shapes = bot?.blockAt?.(new Vec3(x, y, z), false)?.shapes; return Array.isArray(shapes) && shapes.length ? shapes as number[][] : null; } catch { return null; }
+    try { const shapes = bot?.blockAt?.(new Vec3(x, y, z), false)?.shapes; return Array.isArray(shapes) ? shapes as number[][] : null; } catch { return null; }
   };
   const seen = distance >= power * 2 ? 0 : seenFraction(bodyReader(bot), centre, feet, ignore, shapesAt);
   const raw = blastRaw(distance, seen, power);
