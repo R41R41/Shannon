@@ -718,6 +718,7 @@ scenes.bed = async () => {
     await flatten();
     await ask(`${END} fill -2 ${g} 11 3 ${g + 5} 11 air replace obsidian`);
     await ask(`${END} fill -1 ${g + 3} 8 2 ${g + 4} 11 air replace white_bed`);
+    await ask(`${END} fill -4 ${g} 6 5 ${g + 6} 15 air replace fire`); // the last bed's blast lit fires round it
     await standAt(STAND.x, g, STAND.z);
     await sleep(6000); // the dragon turns its head toward the body
     const head = liveHead(), dragonNow = dragonEntity();

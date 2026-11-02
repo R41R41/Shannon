@@ -145,11 +145,12 @@ async function sleepInBed(ctx: StepContext, cell: Cell, asked: any): Promise<Ste
 const BED_POWER = 5;
 /**
  * The blast is waited for this long after the click (the server blows it in the same tick), and its harm this long more (the health packet follows within a tick or two).
- * The act stops a body that lost 4 health or more a quarter of a second after (`damage_taken`), so the hand answers before that, or the planner is told "hit" and not what the
- * bed did (lab, 2026-11-02: a bed blown 4.6 blocks off in the open took 15 and the answer was "被弾: 体力 20 → 6").
+ * The act stops a body that lost 4 health or more a quarter of a second after (`damage_taken`), and at once when a floor reflex takes the body (the blast's fire sent the lava escape
+ * about a tenth of a second after, lab 2026-11-02), so the hand answers before that, or the planner is told "hit" or "reflex" and not what the bed did (a bed blown 4.4 blocks off in the open
+ * took 15 and the answer was "被弾: 体力 20 → 6"). The server sends the health in the tick of the blast or the next: a little over a tick.
  */
 const BLAST_WAIT_MS = 1500;
-const HARM_SETTLE_MS = 120;
+const HARM_SETTLE_MS = 80;
 
 /**
  * A bed right-clicked in the Nether or the End (the planner asked: a use hand at the bed's cell): it blows, power 5, fire, and is gone. Said in
@@ -177,27 +178,38 @@ async function blowBed(ctx: StepContext, cell: Cell, block: any): Promise<StepOu
     const c = packet?.center ?? (typeof packet?.x === 'number' ? { x: packet.x, y: packet.y, z: packet.z } : null);
     if (c && Math.hypot(c.x - centre.x, c.y - centre.y, c.z - centre.z) <= 3) blast = { x: c.x, y: c.y, z: c.z };
   };
+  /** What the bed did, as far as it has been seen now (the blast is told by the server's explosion packet, not by the bed being gone). */
+  const account = () => {
+    const gone = !isBedName(blockAt(bot, cell)?.name);
+    const exploded = blast !== null;
+    const at = blast ?? centre;
+    const distance = Math.round(Math.hypot(bot.entity.position.x - at.x, bot.entity.position.y - at.y, bot.entity.position.z - at.z) * 10) / 10;
+    const lost = Math.max(0, Math.round((healthBefore - Number(bot.health ?? healthBefore)) * 10) / 10);
+    const live = dragon ? bot.entities?.[dragon.id] : null;
+    const dragonAfter = live ? entityHealth(bot, live) : null;
+    const toHead = live ? Math.round(boxDistance(at, partBox({ position: live.position, yaw: live.yaw }, 'head')) * 10) / 10 : null;
+    const dragonText = live ? `。竜: 頭の箱まで爆発の中心から ${toHead}m・体力 ${dragonBefore ?? '?'}→${dragonAfter ?? '?'}` : '';
+    const blew = `爆発した（威力${BED_POWER}）: 自分まで ${distance}m・見込み ${guess.expected}・失った体力 ${lost}（体力 ${healthBefore}→${Number(bot.health ?? healthBefore)}）${dragonText}`;
+    return { gone, exploded, distance, lost, blew, data: { bed: { exploded, distance: exploded ? distance : null, damage: exploded ? lost : null } } };
+  };
   try { bot._client?.on?.('explosion', onBlast); } catch { /* the packet is a help */ }
   try {
     await guard(ctx, Promise.resolve(bot.activateBlock(block)), 3000);
     await waitUntil(ctx, () => blast !== null || !isBedName(blockAt(bot, cell)?.name), BLAST_WAIT_MS, 25);
     await wait(ctx, HARM_SETTLE_MS);
   } catch (error) {
-    if (error instanceof StepStopped || /Action interrupted/u.test(String((error as Error)?.message))) throw error;
+    if (error instanceof StepStopped || /Action interrupted/u.test(String((error as Error)?.message))) {
+      // The act or a floor reflex ended the hand after the click (the blast's fire sent the lava escape within a tenth of a second, lab 2026-11-02): the act says the stop, and this says what the bed did.
+      // HandCut is the act's own word for it; fight.ts imports this file, so it is loaded when it is needed.
+      const cutAt = account();
+      const { HandCut } = await import('./fight.js');
+      throw new HandCut(error instanceof StepStopped ? error.why : String((error as Error).message), `ベッド ${cellText(cell)}: ${cutAt.exploded ? cutAt.blew : `爆発の知らせはまだ受けていない（今 ${cellNow(bot, cell)}）`}`);
+    }
   } finally { try { bot._client?.removeListener?.('explosion', onBlast); } catch { /* gone */ } }
-  const gone = !isBedName(blockAt(bot, cell)?.name);
+  const seen = account();
   // A bed that is merely gone (someone mined it, the cell is not loaded) is not a bed that blew: the server's blast is what says so.
-  const exploded = blast !== null;
-  const at = blast ?? centre;
-  const distance = Math.round(Math.hypot(bot.entity.position.x - at.x, bot.entity.position.y - at.y, bot.entity.position.z - at.z) * 10) / 10;
-  const lost = Math.max(0, Math.round((healthBefore - Number(bot.health ?? healthBefore)) * 10) / 10);
-  const live = dragon ? bot.entities?.[dragon.id] : null;
-  const dragonAfter = live ? entityHealth(bot, live) : null;
-  const toHead = live ? Math.round(boxDistance(at, partBox({ position: live.position, yaw: live.yaw }, 'head')) * 10) / 10 : null;
-  const data = { bed: { exploded, distance: exploded ? distance : null, damage: exploded ? lost : null } };
-  if (!exploded) return { ...stopped(bot, 'not_exploded', `${placeText(bot, cell)} のベッドを右クリックしたが爆発の知らせは受けていない（今 ${cellNow(bot, cell)}${gone ? '。ベッドは消えたが、爆発したかは分からない' : ''}）`, cell), data };
-  const dragonText = live ? `。竜: 頭の箱まで爆発の中心から ${toHead}m・体力 ${dragonBefore ?? '?'}→${dragonAfter ?? '?'}` : '';
-  return { ok: true, at: cell, data, text: `${cellText(cell)} のベッドが爆発した（威力${BED_POWER}）: 自分まで ${distance}m・見込み ${guess.expected}・失った体力 ${lost}（体力 ${healthBefore}→${Number(bot.health ?? healthBefore)}）${dragonText}` };
+  if (!seen.exploded) return { ...stopped(bot, 'not_exploded', `${placeText(bot, cell)} のベッドを右クリックしたが爆発の知らせは受けていない（今 ${cellNow(bot, cell)}${seen.gone ? '。ベッドは消えたが、爆発したかは分からない' : ''}）`, cell), data: seen.data };
+  return { ok: true, at: cell, data: seen.data, text: `${cellText(cell)} のベッドが${seen.blew}` };
 }
 
 export async function use(ctx: StepContext, args: UseArgs): Promise<StepOutcome> {

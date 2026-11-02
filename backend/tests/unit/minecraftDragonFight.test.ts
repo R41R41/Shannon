@@ -359,6 +359,17 @@ describe('a bed used in the End', () => {
     expect(outcome.text).toMatch(/爆発した/u); expect(outcome.text).toMatch(/自分まで 3(\.\d)?m/u); expect(outcome.text).toMatch(/失った体力 3/u); expect(outcome.text).toMatch(/体力 200→150/u);
     expect(outcome.data?.bed).toMatchObject({ exploded: true, damage: 3 });
   });
+  it('says what the bed did when the act, or a reflex, ends the hand just after the click', async () => {
+    // Lab 2026-11-02: the blast's fire sent the lava escape a tenth of a second after, and the planner was told "reflex" and not that the bed had blown and what it cost.
+    const f = bedFixture();
+    const controller = new AbortController();
+    const click = f.bot.activateBlock;
+    f.bot.activateBlock = vi.fn(async (...args: unknown[]) => { await click(...args); setTimeout(() => controller.abort('lava_escape'), 10); });
+    const cut = await use({ ...ctxOf(f.bot), stop: controller.signal } as never, { at: { x: 3, y: 64, z: 3 } }).then(() => null, (error: unknown) => error) as { constructor: { name: string }; why?: string; summary?: string } | null;
+    expect(cut?.constructor.name).toBe('HandCut');
+    expect(cut?.why).toBe('lava_escape');
+    expect(cut?.summary).toMatch(/爆発した/u); expect(cut?.summary).toMatch(/失った体力 3/u); expect(cut?.summary).toMatch(/体力 200→150/u);
+  });
   it("refuses, with the numbers, a bed whose blast would take the body's health, and does not click", async () => {
     const f = bedFixture({ wall: false });
     const outcome = await use(ctxOf(f.bot) as never, { at: { x: 3, y: 64, z: 3 } });
