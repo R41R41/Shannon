@@ -89,6 +89,8 @@ export function takeActReport(bot: object, since: number): ActReport | null {
  */
 const CLOSED: Record<string, string> = {
   out_of_reach: '届かない', cannot_reach: '届かない', not_opened: '届かない',
+  // the End (2026-11-02): the dragon is not on its perch / the perch ended; a crystal too near or too far to shoot, or no clear line to it.
+  not_perched: '届かない', perch_over: '届かない', too_close: '届かない', too_far: '届かない', line_blocked: '届かない', perched_immune: '届かない',
   wall: '一歩ではない', low_ceiling: '一歩ではない', drop: '一歩ではない', lava: '一歩ではない', no_path: '一歩ではない', stuck: '一歩ではない',
   target_solid: '一歩ではない', walk_failed: '一歩ではない', ceiling: '一歩ではない', unloaded: '一歩ではない',
   // r5 (2026-10-22): a walk that ended short of its target, a target no body stands in, a shut iron door in the way; a dig the eye cannot see.

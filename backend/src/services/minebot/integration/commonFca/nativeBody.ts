@@ -48,6 +48,7 @@ import { feetCell } from '../../utils/localMap.js';
 import { installPackTap, setReflexEventPrefix } from '../../utils/packEvents.js';
 import { utilitiesOf } from '../../utils/utilitiesScan.js';
 import { installHitRecord, recentHitsOf } from '../../utils/hitRecord.js';
+import { endObservation } from '../../utils/dragonState.js';
 
 /** The body process's start-up id: a new one at each start. A command made for another start is not run (continue contracts, 2). */
 const BODY_BOOT = `bb-${randomUUID().slice(0, 8)}`;
@@ -304,6 +305,8 @@ export class NativeCommonFcaBody implements CommonFcaActuator {
         incidentHold: incidentsOf(this.bot)?.held() ?? null,
         // Continue contracts: the life (5), the start-up and connection ids (5), who holds the body (4).
         combat: { recentHits: recentHitsOf(this.bot) },
+        // The End fight (2026-11-02): the dragon's phase and health, the perch's pillar, the crystals left and the breath lying about. Only in the End.
+        ...(() => { try { const end = endObservation(this.bot, now); return end ? { end } : {}; } catch { return {}; } })(),
         life: this.life.view(), bodyRun: { bodyBoot: BODY_BOOT, connectionId: this.connectionId }, control: this.controlView() })), facts };
   }
   candidates(observation: BodyObservation): BodyCandidateDraft[] {
