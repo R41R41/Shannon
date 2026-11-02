@@ -215,9 +215,9 @@ async function s4NetherWalk(goal: number[], options: { limitMs: number; deaths0:
         stops.push(`${Math.round((Date.now() - started) / 1000)}s ${why || '(no line: the act came back with nothing)'}`);
         const named = /が ([a-z_]+) で登れない（掘ってよい物に無い）/u.exec(why)?.[1];
         if (named && !canDig.includes(named) && canDig.length < 12) { canDig.push(named); options.note(`canDig gets ${named} (the line said so)`); }
-        const shrink = (/search_timeout/u.test(why) || !why.trim() || gained < 3) && hopMax > 12;
+        const shrink = (/search_timeout/u.test(why) || !why.trim()) && hopMax > 12;
         if (shrink) { hopMax = Math.max(12, Math.floor(hopMax * 0.4)); sameStop = 0; options.note(`the next hops are at most ${hopMax} m (${why.slice(0, 60) || 'no line'})`); }
-        else { const key = s4Key(why); sameStop = key === lastStop ? sameStop + 1 : 1; lastStop = key; }
+        else if (run.stoppedBy !== 'reflex') { const key = s4Key(why); sameStop = key === lastStop ? sameStop + 1 : 1; lastStop = key; }      // a hop cut by a reflex is the world's doing, not the way being shut
         await sleep(1500);
         if (sameStop >= 4) { options.note(`the same stop four times: ${why}`); break; }
       } else { sameStop = 0; if (gained >= 0.6 * reach && hopMax < 90) hopMax = Math.min(90, Math.round(hopMax * 1.6)); }
@@ -361,3 +361,51 @@ scene('s4_gate_exit', 'run59 leg 2: the gate on the surface (portal hand at 160,
   const survey = await s4Survey('exit>fortress', goal, note, Math.max(60_000, s4RunLimit(600) - (Date.now() - started)));
   return { ...base, survey };
 });
+
+// ---- the crimson forest of c1 with its creatures, and the warped forest's endermen as they come -------------------------------------------------------------------------
+/** The crimson stretch of the road to the warped forest (the biome query says crimson from about 20 m past the fortress for 200 m): from a floor the earlier walks stood on, with natural spawning, the creatures about and a fresh start. */
+async function s4CrimsonWalk(label: string, note: (text: string) => void): Promise<Record<string, unknown>> {
+  const from = (process.env.HUNT_CRIMSON_FROM ?? '228,64,37').split(',').map(Number), goal = sites.warpedStand as number[];
+  await ask('difficulty normal'); await ask('gamerule doMobSpawning true');
+  await ask('execute in minecraft:the_nether run kill @e[type=!minecraft:player]');
+  await s4EquipRun59();
+  await placeActor('the_nether', from[0]!, from[1]!, from[2]!, 48);
+  return s4Survey(label, goal, note, s4RunLimit(480));
+}
+scene('s4_crimson_a', 'the crimson forest on the road to the warped forest, run59\'s pack, natural spawning (a fresh start): the walk of a head, mobs seen, hurts', note => s4CrimsonWalk('crimson-a', note));
+scene('s4_crimson_b', 'the same again (a second sample)', note => s4CrimsonWalk('crimson-b', note));
+scene('s4_crimson_c', 'the same again (a third sample)', note => s4CrimsonWalk('crimson-c', note));
+
+/** Endermen as the warped forest gives them (natural spawning, no summon): the body stands at the forest's stand and fights the nearest one in sight with the fight hand (its roof and the retreat are the body's); pearls counted by the server. */
+async function s4EnderNatural(label: string, note: (text: string) => void): Promise<Record<string, unknown>> {
+  const stand = sites.warpedStand as number[], deaths0 = deaths;
+  await ask('difficulty normal'); await ask('gamerule doMobSpawning true'); await ask('time set midnight');
+  await ask('execute in minecraft:the_nether run kill @e[type=!minecraft:player]');
+  await s4EquipRun59();
+  await placeActor('the_nether', stand[0]!, stand[1]!, stand[2]!, 48);
+  const limitMs = s4RunLimit(600), started = Date.now(), watch = s4Watch();
+  const rows: Array<Record<string, unknown>> = [], seenIds = new Set<number>();
+  let kills = 0, pearls = 0, fights = 0, waited = 0, lowest = 20;
+  const nearest = () => (Object.values(actor.entities ?? {}) as any[]).filter(entity => entity?.name === 'enderman' && entity.position && entity.position.distanceTo(actor.entity.position) < 40)
+    .sort((a, b) => a.position.distanceTo(actor.entity.position) - b.position.distanceTo(actor.entity.position))[0];
+  try {
+    while (Date.now() - started < limitMs && s4Alive(deaths0)) {
+      for (const entity of Object.values(actor.entities ?? {}) as any[]) if (entity?.name === 'enderman') seenIds.add(entity.id);
+      const target = nearest();
+      if (!target) { await sleep(3000); waited += 3; continue; }
+      if (Number(actor.health) < 10) { await s4Eat(); if (Number(actor.health) < 10) { note(`health ${actor.health}: stopped`); break; } }
+      const pearls0 = await countServer('ender_pearl'), hp0 = Number(actor.health), at = r1(target.position.distanceTo(actor.entity.position));
+      fights++;
+      const run = await act(`enderman#${fights}`, [{ do: 'fight', target: 'enderman', seconds: 50, retreatHp: 8 }, { do: 'pickup', range: 6 }], 90);
+      const gained = (await countServer('ender_pearl')) - pearls0, killed = /死んだ/u.test(run.lines[0] ?? '');
+      if (killed) kills++;
+      pearls += gained; lowest = Math.min(lowest, Number(actor.health));
+      rows.push({ n: fights, at, ok: run.ok, killed, seconds: r1(run.wallMs / 1000), hpLost: r1(Math.max(0, hp0 - Number(actor.health))), pearls: gained, line: s4Short(run.lines[0] ?? run.error ?? '', 200), stoppedBy: run.stoppedBy });
+    }
+  } finally { watch.stop(); }
+  const minutes = (Date.now() - started) / 60_000;
+  note(`${label}: ${seenIds.size} endermen seen in ${r1(minutes)} min, ${fights} fights, ${kills} kills, ${pearls} pearls, lowest hp ${r1(lowest)}`);
+  return { seconds: r1(minutes * 60), endermenSeen: seenIds.size, fights, kills, pearls, pearlsPerMinute: r1(pearls / Math.max(minutes, 0.1)), waitedSeconds: waited, lowestHp: r1(lowest), deathsHere: deaths - deaths0, rows: rows.slice(0, 20) };
+}
+scene('s4_ender_natural_a', 'the warped forest\'s endermen as they spawn (10 minutes, run59\'s pack): fights, kills, pearls', note => s4EnderNatural('ender-a', note));
+scene('s4_ender_natural_b', 'the same again (a second sample)', note => s4EnderNatural('ender-b', note));
