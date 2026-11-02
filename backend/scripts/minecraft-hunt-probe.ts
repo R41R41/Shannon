@@ -489,6 +489,156 @@ scene('frame_search', 'find-structure stronghold: the frames within a radius of 
   return { cases: rows.length, framesMissedWhereTheyAre: wrong, rows };
 });
 
+// ===== the road to the End: the pieces between the hunts ======================================================================================
+/** The frames of the staged portal room as the site file has them. */
+interface SiteFrame { x: number; y: number; z: number; facing: 'north' | 'south' | 'east' | 'west'; eye: boolean }
+const serverTest = async (command: string): Promise<boolean> => /passed/iu.test(await ask(command));
+
+scene('craft_eyes', 'blaze rods to blaze powder to eyes of ender, by the craft hand alone (no table)', async () => {
+  await ask('difficulty peaceful');
+  await equip({ blaze_rod: 3, ender_pearl: 6 }, { armor: 'none', shield: false });
+  const powder = await act('powder', [{ do: 'craft', item: 'blaze_powder', count: 6 }], 20);
+  const eyes = await act('eyes', [{ do: 'craft', item: 'ender_eye', count: 6 }], 20);
+  return { powderLine: (powder.lines[0] ?? '').slice(0, 300), eyesLine: (eyes.lines[0] ?? '').slice(0, 300), packAfter: packClient(), ok: powder.ok && eyes.ok };
+});
+
+scene('craft_diag', 'why craft ender_eye ends with "missing ingredient": the grid, the cursor and the count the server holds after each craft', async () => {
+  await ask('difficulty peaceful');
+  await equip({ blaze_powder: 3, ender_pearl: 3 }, { armor: 'none', shield: false });
+  const slotsOf = () => (actor.inventory.slots as any[]).map((slot, index) => slot ? `${index}:${slot.name}x${slot.count}` : null).filter(Boolean).slice(0, 14);
+  const cursorOf = () => { const c = (actor.inventory as any).selectedItem; return c ? `${c.name}x${c.count}` : null; };
+  const server = async () => ({ eyes: await countServer('ender_eye'), pearls: await countServer('ender_pearl'), powder: await countServer('blaze_powder') });
+  const steps: Array<Record<string, unknown>> = [];
+  steps.push({ step: 'start', pack: packClient(), slots: slotsOf(), cursor: cursorOf(), server: await server() });
+  for (let i = 1; i <= 3; i++) {
+    const run = await act(`eye${i}`, [{ do: 'craft', item: 'ender_eye', count: 1 }], 20);
+    steps.push({ step: `craft ${i}`, line: (run.lines[0] ?? '').slice(0, 200), pack: packClient(), slots: slotsOf(), cursor: cursorOf(), server: await server() });
+  }
+  return { steps };
+});
+
+scene('end_portal', 'the portal room: the missing eyes put into the frames by the use hand from each side, then into the portal, to the End', async note => {
+  const frames = (sites.strongholdFrames ?? []) as SiteFrame[];
+  const stand = (sites.strongholdStand ?? sites.strongholdPortalCenter) as number[];
+  if (frames.length < 12) throw new Error('no strongholdFrames in the sites');
+  await ask('difficulty peaceful'); await ask('time set noon');
+  await equip({ ender_eye: 12, cobblestone: 16, cooked_beef: 8 }, { armor: 'none', shield: false });
+  await placeActor('overworld', stand[0], stand[1], stand[2], 24);
+  const cx = Math.round(frames.reduce((sum, frame) => sum + frame.x, 0) / frames.length), cz = Math.round(frames.reduce((sum, frame) => sum + frame.z, 0) / frames.length), fy = frames[0].y;
+  const started = Date.now();
+  const lines: string[] = [];
+  let eyesGiven = 0, failures = 0;
+  // Frame by frame, as a planner given the frames' places would: `go` to within three blocks of the frame (stone to lay if a step needs it), then `use` the eye on it.
+  for (const frame of frames.filter(frame => !frame.eye)) {
+    const hands = [{ do: 'go', to: { x: frame.x, y: frame.y, z: frame.z }, range: 3, seconds: 25, canPlace: ['cobblestone'], maxPlace: 8 },
+      { do: 'use', item: 'ender_eye', at: [{ x: frame.x, y: frame.y, z: frame.z }] }];
+    const run = await act(`frame-${frame.x},${frame.z}`, hands, 60);
+    lines.push(...run.lines.map(line => line.slice(0, 220)));
+    eyesGiven += run.lines.filter(line => /枠に目をはめた/u.test(line)).length;
+    if (!run.ok) failures++;
+  }
+  const opened = await serverTest(`execute if block ${cx} ${fy} ${cz} minecraft:end_portal`);
+  const eyesPlaced = await (async () => { let n = 0; for (const frame of frames) if (await serverTest(`execute if block ${frame.x} ${frame.y} ${frame.z} minecraft:end_portal_frame[eye=true]`)) n++; return n; })();
+  note(`portal opened on the server: ${opened}; frames with an eye: ${eyesPlaced}/12 after ${((Date.now() - started) / 1000).toFixed(0)} s`);
+  // Into the portal: the planner's walk to the middle of the pit.
+  let entered = false, enterLine = '';
+  if (opened) {
+    const enter = await act('enter', [{ do: 'go', to: { x: cx, y: fy, z: cz }, range: 0.6, seconds: 25 }], 40);
+    enterLine = (enter.lines[0] ?? '').slice(0, 300);
+    const until = Date.now() + 12_000;
+    while (Date.now() < until && dimensionOf() !== 'the_end') await sleep(250);
+    entered = dimensionOf() === 'the_end';
+    if (!entered) {
+      const walk = await act('enter-walk', [{ do: 'walk', to: { x: cx, y: fy, z: cz }, seconds: 15 }], 30);
+      enterLine += ` | walk: ${(walk.lines[0] ?? '').slice(0, 200)}`;
+      const again = Date.now() + 8000;
+      while (Date.now() < again && dimensionOf() !== 'the_end') await sleep(250);
+      entered = dimensionOf() === 'the_end';
+    }
+  }
+  return { framesNeeded: frames.filter(frame => !frame.eye).length, eyesGivenByTheLines: eyesGiven, eyesPlacedOnServer: eyesPlaced, failedActs: failures, portalOpened: opened, enteredTheEnd: entered, dimension: dimensionOf(),
+    seconds: r1((Date.now() - started) / 1000), enterLine, lines: lines.slice(0, 12) };
+});
+
+scene('map_portal', 'a map of the portal room: layers from 3 below to 3 above the frames, 21 by 21 round their middle (Q frame, R frame with an eye, P portal, ~ lava, b stone bricks, S spawner)', async () => {
+  const frames = (sites.strongholdFrames ?? []) as SiteFrame[];
+  const stand = (sites.strongholdStand ?? sites.strongholdPortalCenter) as number[];
+  await ask('difficulty peaceful');
+  await placeActor('overworld', stand[0], stand[1], stand[2], 24);
+  await sleep(1500);
+  const cx = Math.round(frames.reduce((sum, frame) => sum + frame.x, 0) / frames.length), cz = Math.round(frames.reduce((sum, frame) => sum + frame.z, 0) / frames.length), fy = frames[0].y;
+  const glyph = (x: number, y: number, z: number): string => {
+    const block = actor.blockAt(new Vec3(x, y, z));
+    const name = block?.name;
+    if (!name) return '?';
+    if (x === Math.floor(actor.entity.position.x) && z === Math.floor(actor.entity.position.z) && y === Math.floor(actor.entity.position.y)) return '@';
+    if (name === 'air' || name === 'cave_air') return '.';
+    if (name === 'end_portal_frame') { try { return (block as any).getProperties().eye === true || (block as any).getProperties().eye === 'true' ? 'R' : 'Q'; } catch { return 'Q'; } }
+    if (name === 'end_portal') return 'P';
+    if (name === 'lava') return '~';
+    if (name === 'water') return 'w';
+    if (name === 'spawner') return 'S';
+    if (name.includes('stone_brick')) return name.includes('stairs') ? '/' : name.includes('slab') ? '_' : 'b';
+    if (name === 'iron_bars') return '|';
+    if (name.includes('torch')) return 'i';
+    if (name.includes('stairs')) return '/';
+    return 'x';
+  };
+  for (let y = fy + 3; y >= fy - 3; y--) {
+    log(`MAP --- y=${y} (${y - fy >= 0 ? '+' : ''}${y - fy} from the frames)  x ${cx - 10}..${cx + 10} across, z ${cz - 10} (top) .. ${cz + 10}`);
+    for (let z = cz - 10; z <= cz + 10; z++) { let row = ''; for (let x = cx - 10; x <= cx + 10; x++) row += glyph(x, y, z); log(`MAP ${String(z).padStart(5)} ${row}`); }
+  }
+  return { centre: [cx, fy, cz] };
+});
+
+scene('stronghold_descent', 'from the surface over the portal room down to its floor by go with a pickaxe and stone to lay', async () => {
+  const surface = sites.strongholdSurface as number[];
+  const stand = (sites.strongholdStand ?? sites.strongholdPortalCenter) as number[];
+  await ask('difficulty peaceful'); await ask('time set noon');
+  await equip({ iron_pickaxe: 1, iron_sword: 1, cobblestone: 64, cooked_beef: 16 }, { armor: 'iron', shield: false });
+  await placeActor('overworld', surface[0], surface[1], surface[2], 24);
+  const started = Date.now();
+  const tries: string[] = [];
+  let arrived = false;
+  for (let attempt = 0; attempt < 4 && !arrived && !disconnected; attempt++) {
+    const run = await act(`descend#${attempt + 1}`, [{ do: 'go', to: { x: stand[0], y: stand[1], z: stand[2] }, range: 1.5, seconds: 110, maxDig: 120, maxPlace: 24,
+      canDig: ['stone', 'dirt', 'grass_block', 'gravel', 'sand', 'andesite', 'diorite', 'granite', 'tuff', 'deepslate', 'cobblestone', 'stone_bricks'], canPlace: ['cobblestone'] }], 150);
+    tries.push((run.lines[0] ?? '').slice(0, 360));
+    const here = actor.entity?.position as Vec3 | undefined;
+    arrived = !!here && Math.hypot(here.x - (stand[0] + 0.5), here.z - (stand[2] + 0.5)) < 3 && Math.abs(here.y - stand[1]) < 3;
+    if (Number(actor.health) < 8) break;
+  }
+  const here = actor.entity?.position as Vec3 | undefined;
+  return { arrived, seconds: r1((Date.now() - started) / 1000), finalAt: here ? [r1(here.x), r1(here.y), r1(here.z)] : null, hp: actor.health, tries };
+});
+
+scene('nether_walk', 'the walk in the Nether from the portal side to the fortress and to the warped forest by go hops (lava, ghasts, soul sand are the world\'s)', async note => {
+  const arrival = sites.netherArrival as number[];
+  const targets: Array<{ name: string; to: number[] }> = [{ name: 'fortress', to: sites.blazeStand as number[] }, { name: 'warped', to: sites.warpedStand as number[] }];
+  await ask('difficulty normal'); await ask('time set noon');
+  await equip({ iron_pickaxe: 1, diamond_sword: 1, cobblestone: 64, cooked_beef: 24, golden_apple: 3 }, { armor: 'iron', shield: true });
+  const legs: Array<Record<string, unknown>> = [];
+  let from = arrival;
+  for (const target of targets) {
+    await placeActor('the_nether', from[0], from[1], from[2], 24);
+    const started = Date.now(), hp0 = Number(actor.health);
+    const trail: string[] = [];
+    let reached = false, tries = 0;
+    for (; tries < 8 && !reached && !disconnected; tries++) {
+      const run = await act(`${target.name}#${tries + 1}`, [{ do: 'go', to: { x: target.to[0], y: target.to[1], z: target.to[2] }, range: 3, seconds: 90, maxDig: 30, maxPlace: 24, canDig: ['netherrack', 'basalt', 'blackstone'], canPlace: ['cobblestone'] }], 130);
+      trail.push((run.lines[0] ?? '').slice(0, 240));
+      const here = actor.entity?.position as Vec3 | undefined;
+      reached = !!here && Math.hypot(here.x - (target.to[0] + 0.5), here.z - (target.to[2] + 0.5)) < 5 && Math.abs(here.y - target.to[1]) < 6;
+      if (Number(actor.health) < 9) { note(`health ${actor.health}: the walk to the ${target.name} stops`); break; }
+      if (Number(actor.health) < 14 || Number(actor.food) < 14) await act('eat', [{ do: 'eat' }], 15);
+    }
+    legs.push({ target: target.name, from, to: target.to, straightMetres: Math.round(Math.hypot(target.to[0] - from[0], target.to[2] - from[2])), reached, tries: tries, seconds: r1((Date.now() - started) / 1000), hpLost: r1(Math.max(0, hp0 - Number(actor.health))), trail });
+    if (!reached) break;
+    from = target.to;
+  }
+  return { legs: legs.map(leg => ({ ...leg, trail: undefined })), trails: legs.map(leg => leg.trail), finalHp: actor.health };
+});
+
 // ===== the probe kinds (what the LLM-centric mode can call: act and probe, no catalog skill) =================================================
 scene('probe_kinds', 'probe kind=camp at the blaze spawner and kind=frames at the stronghold, against find-structure\'s own answers (they must say the same)', async note => {
   const stand = sites.blazeStand as number[];
