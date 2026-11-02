@@ -629,6 +629,77 @@ scene('blaze_r59_cap_hold', 'run59 pack: the cage of 3x3x2 round the spawner, th
 scene('blaze_r59_corner_peek', 'run59 pack: the away-side corner; steps out to the front cell, strikes 6 s, back in the corner; 600 s', note => blazeNook(note, { r59: true, corner: 'away', peek: true, seconds: 600 }));
 // The low slit (S2, 2026-11-03; Codex's first candidate): the body stands one block LOWER than the spawner room's floor in a pocket behind the room's west wall; the wall has ONE opening, the cell at the
 // room's floor level (the pocket's head cell). Built here with commands (the feasibility of the shape: can it strike through the slit, how much does it take, can it get the rods), not by the body.
+// The lane (S2, 2026-11-03; the coordinator's workflow answer, first form): the whole spawn box (spawner ±4 across, the floors and the roof) is filled with cobblestone, then ONE lane is cut: the cell next to
+// the spawner stays a plug, the next three cells (a 1-wide, 2-high tunnel, floor and roof of cobblestone) are the only free space in the box, and the body stands in a sealed cell at the end of it, outside the
+// box. A spawner that finds no free spot tries again at once, so what spawns is put in the lane, within a sword's reach of the body. Built here with commands (the mechanism, not the body's building); the
+// blazes are NOT killed (the answer asked for the state with survivors) but the spawner is quiet while the lane is laid.
+async function blazeLane(note: (text: string) => void, options: { seconds?: number } = {}): Promise<Record<string, unknown>> {
+  const stand = sites.blazeStand as number[] | undefined, spawner = sites.blazeSpawner as number[] | undefined;
+  if (!stand || !spawner) throw new Error('no blazeStand or blazeSpawner in the sites');
+  const seconds = options.seconds ?? (timedSeconds || 600);
+  await ask('difficulty normal'); await ask('time set midnight'); await ask('weather clear');
+  await equip({ stone_sword: 1, diamond_pickaxe: 1, shield: 1, cooked_porkchop: 7, cobblestone: 173 }, { armor: 'iron', shield: true });
+  await placeActor('the_nether', stand[0], stand[1], stand[2], 24);
+  const nether = 'execute in minecraft:the_nether run';
+  const [sx, sy, sz] = spawner;
+  const solidAt = (x: number, y: number, z: number) => { const b = actor.blockAt(new Vec3(x, y, z)); return !!b && b.boundingBox === 'block'; };
+  const dirs: Array<[number, number]> = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  const score = (d: [number, number]) => { let n = 0; for (let k = 2; k <= 6; k++) for (const dy of [0, 1]) if (solidAt(sx + d[0] * k, sy + dy, sz + d[1] * k)) n++; return n; };
+  const dir = [...dirs].sort((a, b) => score(b) - score(a))[0];
+  note(`spawner ${spawner}, lane direction ${dir} (solid cells along it: ${score(dir)} of 10)`);
+  await ask('gamerule doMobSpawning false');
+  // the whole spawn box: the floors and a roof over them, x and z ±4
+  await ask(`${nether} fill ${sx - 4} ${sy - 1} ${sz - 4} ${sx + 4} ${sy + 2} ${sz + 4} minecraft:cobblestone replace minecraft:air`);
+  // the lane: cells 2, 3, 4 along the direction, two high, a floor under them; the plug (cell 1) stays stone
+  const at = (k: number, dy: number, off = 0): number[] => [sx + dir[0] * k + (dir[1] !== 0 ? off : 0), sy + dy, sz + dir[1] * k + (dir[0] !== 0 ? off : 0)];
+  for (let k = 2; k <= 4; k++) {
+    const a = at(k, 0), b = at(k, 1);
+    await ask(`${nether} fill ${a[0]} ${a[1]} ${a[2]} ${b[0]} ${b[1]} ${b[2]} minecraft:air`);
+    const f = at(k, -1); await ask(`${nether} setblock ${f[0]} ${f[1]} ${f[2]} minecraft:cobblestone`);
+  }
+  // the standing cell, cell 5, outside the box: a shell of cobblestone round it, then the cell opens onto the lane
+  const c5a = at(5, -1, -1), c5b = at(6, 2, 1);
+  const lo = [Math.min(c5a[0], c5b[0]), Math.min(c5a[1], c5b[1]), Math.min(c5a[2], c5b[2])], hi = [Math.max(c5a[0], c5b[0]), Math.max(c5a[1], c5b[1]), Math.max(c5a[2], c5b[2])];
+  await ask(`${nether} fill ${lo[0]} ${lo[1]} ${lo[2]} ${hi[0]} ${hi[1]} ${hi[2]} minecraft:cobblestone`);
+  const s0 = at(5, 0), s1 = at(5, 1);
+  await ask(`${nether} fill ${s0[0]} ${s0[1]} ${s0[2]} ${s1[0]} ${s1[1]} ${s1[2]} minecraft:air`);
+  note(`lane laid: plug ${at(1, 0)}, lane ${at(2, 0)}..${at(4, 1)}, stand cell ${s0}`);
+  await sleep(1500);
+  await ask(`${nether} tp ${ACTOR} ${s0[0] + 0.5} ${s0[1]} ${s0[2] + 0.5} facing ${sx + 0.5} ${sy + 0.5} ${sz + 0.5}`);
+  await sleep(2500);
+  const started = Date.now(), rods0 = await countServer('blaze_rod'), shield0 = shieldUsed();
+  let killed = 0;
+  const onDead = (entity: any) => { if (String(entity?.name ?? '') === 'blaze') killed++; };
+  actor.on('entityDead', onDead);
+  const track: number[] = [];
+  const sampler = setInterval(() => { const value = Number(actor.health); if (Number.isFinite(value)) track.push(r1(value)); }, 1000);
+  const census = setInterval(() => {
+    try {
+      const me = actor.entity.position as Vec3;
+      const list = (Object.values(actor.entities ?? {}) as any[]).filter(entity => String(entity?.name) === 'blaze' && entity.position)
+        .map(entity => `${r1(entity.position.x - me.x)},${r1(entity.position.z - me.z)},${r1(entity.position.y - me.y)}`);
+      note(`census ${Math.round((Date.now() - started) / 1000)} s: ${list.length} blazes [${list.join(' ')}] kills ${killed}`);
+    } catch { /* a note */ }
+  }, 30_000);
+  await ask('gamerule doMobSpawning true');
+  let n = 0;
+  try {
+    while (Date.now() - started < seconds * 1000 && !disconnected && Number(actor.health) > 0) {
+      const run = await act(`hold#${++n}`, [{ do: 'attack', target: 'blaze', hold: true, seconds: 20 }], 40, { accept: ['blaze'] });
+      if (Number(actor.health) < 14 && Number(actor.food) < 20) await act('eat', [{ do: 'eat' }], 15);
+      note(`hold#${n}: hp ${r1(Number(actor.health))} kills ${killed} ${run.lines.join(' | ').slice(0, 220)}`);
+      // what fell in the lane is fetched from the stand cell's mouth (a pickup of what is within reach, then back)
+      if (/落とし物 blaze_rod/u.test(run.lines.join(' '))) {
+        const fetched = await act('fetch', [{ do: 'pickup', range: 4, onFail: 'continue' }, { do: 'go', to: { x: s0[0], y: s0[1], z: s0[2] }, range: 0.4, seconds: 8, onFail: 'continue' }], 30, { accept: ['blaze'] });
+        note(`fetch: hp ${r1(Number(actor.health))} ${fetched.lines.join(' | ').slice(0, 200)}`);
+      }
+      const waitFrom = Date.now();
+      while (Number(actor.health) > 0 && Number(actor.health) < 16 && Date.now() - waitFrom < 40_000) await sleep(2000);
+    }
+  } finally { clearInterval(sampler); clearInterval(census); actor.removeListener('entityDead', onDead); }
+  return { seconds: r1((Date.now() - started) / 1000), kills: killed, killsPerMin: r1(killed / Math.max((Date.now() - started) / 60_000, 0.1)), rods: (await countServer('blaze_rod')) - rods0, shieldWear: shieldUsed() - shield0, deathsHere: deaths, lowestHp: Math.min(...track, 20), hpTrack: track.filter((_, index) => index % 5 === 0).join(' ') };
+}
+scene('blaze_lane', 'the lane: the spawn box filled with cobblestone but a 1-wide 2-high lane of three cells beyond the plugged cell beside the spawner; the body in a sealed cell at its end, attack hold; 600 s, survivors not killed', note => blazeLane(note));
 async function blazeSlit(note: (text: string) => void, options: { seconds?: number; fetch?: boolean; flush?: boolean } = {}): Promise<Record<string, unknown>> {
   const stand = sites.blazeStand as number[] | undefined, spawner = sites.blazeSpawner as number[] | undefined;
   if (!stand || !spawner) throw new Error('no blazeStand or blazeSpawner in the sites');
