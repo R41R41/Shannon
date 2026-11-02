@@ -862,17 +862,19 @@ scenes.platform = async () => {
   releaseReflex();
   await park(true);
   // The platform's chunks stay loaded whoever stands where: a body that died is back in the overworld, and a cloud left in an unloaded End chunk is not found by `kill` (w4: the next trial was met by it on arrival).
-  await ask(`${END} forceload add 96 -16 111 16`);
+  await ask(`${END} forceload add 64 -16 111 16`);
   const clear = async () => { await ask(`${END} kill @e[type=minecraft:area_effect_cloud]`); await ask(`${END} kill @e[type=minecraft:dragon_fireball]`); };
-  const trial = async (label: string, items: string[], balls = 1) => {
+  const trial = async (label: string, items: string[], balls = 1, bridgeAt: number | null = null) => {
     await clear();
-    // the platform as the game makes it (5 x 5 of obsidian at y 48), nothing on it; the body put on it and waited for until it stands, whole
+    // the platform as the game makes it (5 x 5 of obsidian at y 48), nothing on it; the body put on it and waited for until it stands, whole. On the bridge: a line of cobblestone one wide, 28 long, from the platform out over the void (a way out that can be walked: the body walks it, w8: 9 blocks, no harm); in the other trials there is none.
     await ask(`${END} fill 98 48 -2 102 48 2 obsidian`); await ask(`${END} fill 98 49 -2 102 53 2 air`);
+    await ask(`${END} fill 70 48 0 97 48 0 ${bridgeAt === null ? 'air' : 'cobblestone'}`); await ask(`${END} fill 70 49 -1 97 53 1 air`);
+    const standX = bridgeAt ?? 100.5;
     await gear(items); await wear();
     await ask(`effect give ${ACTOR} minecraft:instant_health 1 5`);
     for (let attempt = 0; attempt < 6; attempt++) {
-      await ask(`${END} tp ${ACTOR} 100.5 49 0.5`); await sleep(1200);
-      if (actor.entity.onGround && Math.abs(actor.entity.position.y - 49) < 0.2 && Math.hypot(actor.entity.position.x - 100.5, actor.entity.position.z - 0.5) < 0.6 && Number(actor.health) >= 19.9) break;
+      await ask(`${END} tp ${ACTOR} ${standX} 49 0.5`); await sleep(1200);
+      if (actor.entity.onGround && Math.abs(actor.entity.position.y - 49) < 0.2 && Math.hypot(actor.entity.position.x - standX, actor.entity.position.z - 0.5) < 0.6 && Number(actor.health) >= 19.9) break;
     }
     await clear(); await sleep(300);
     const healthBefore = Number(actor.health), deathsBefore = actorDeaths, ledgerMark = (actor.reflexLedger?.mark?.() as number | undefined) ?? 0, lowest = trackMinHealth();
@@ -886,7 +888,7 @@ scenes.platform = async () => {
       if (riseAfterMs === null && actor.entity.position.y - y0 >= 0.9) riseAfterMs = Date.now() - startedAt;
     });
     for (let n = 0; n < balls; n++) {
-      await ask(`${END} summon minecraft:dragon_fireball 100.5 55 0.5 {Motion:[0.0d,-1.0d,0.0d],acceleration_power:0.1d}`);
+      await ask(`${END} summon minecraft:dragon_fireball ${standX} 55 0.5 {Motion:[0.0d,-1.0d,0.0d],acceleration_power:0.1d}`);
       if (n + 1 < balls) await sleep(3000);
     }
     await sleep(label.includes('nothing') ? 2800 : 5000);
@@ -907,10 +909,12 @@ scenes.platform = async () => {
       await trial('with cobblestone only', ['diamond_sword', 'cobblestone 16']),
       await trial('with two balls, three seconds apart', ['diamond_sword', 'cobblestone 16', 'obsidian 4'], 2),
       await trial('with nothing to put under the feet', ['diamond_sword']),
+      await trial('on a bridge one wide, 12 blocks out', ['diamond_sword', 'cobblestone 16'], 1, 88.5),
+      await trial('on a bridge one wide, two balls 3 s apart', ['diamond_sword', 'cobblestone 16'], 2, 88.5),
     ];
     return { runs };
   } finally {
-    await clear(); await ask(`${END} forceload remove 96 -16 111 16`);
+    await clear(); await ask(`${END} forceload remove 64 -16 111 16`);
   }
 };
 
@@ -920,7 +924,7 @@ scenes.cross = async () => {
   await protect(false);
   releaseReflex();
   await park(true);
-  await ask(`${END} forceload add 96 -16 111 16`);
+  await ask(`${END} forceload add 64 -16 111 16`);
   try {
     await ask(`${END} kill @e[type=minecraft:area_effect_cloud]`); await ask(`${END} kill @e[type=minecraft:dragon_fireball]`);
     await ask(`${END} fill 98 48 -2 102 48 2 obsidian`); await ask(`${END} fill 98 49 -2 102 53 2 air`);
@@ -965,7 +969,7 @@ scenes.cross = async () => {
       blocksBefore: before, blocksAfter: blocksLeft(), seconds: Math.round((Date.now() - startedAt) / 1000), calls, trail,
     };
   } finally {
-    await ask(`${END} forceload remove 96 -16 111 16`);
+    await ask(`${END} forceload remove 64 -16 111 16`);
   }
 };
 
@@ -975,7 +979,7 @@ scenes.knockback = async () => {
   await protect(false);
   releaseReflex();
   await park(true);
-  await ask(`${END} forceload add 96 -16 111 16`); await ask(`${END} kill @e[type=minecraft:area_effect_cloud]`); await ask(`${END} kill @e[type=minecraft:dragon_fireball]`);
+  await ask(`${END} forceload add 64 -16 111 16`); await ask(`${END} kill @e[type=minecraft:area_effect_cloud]`); await ask(`${END} kill @e[type=minecraft:dragon_fireball]`);
   const trial = async (sneak: boolean) => {
     await ask(`${END} kill @e[type=minecraft:zombie]`);
     await ask(`${END} fill 98 48 -2 102 48 2 obsidian`); await ask(`${END} fill 98 49 -2 102 53 2 air`);
@@ -1004,7 +1008,7 @@ scenes.knockback = async () => {
     const runs = [await trial(false), await trial(true), await trial(false), await trial(true)];
     return { runs };
   } finally {
-    await ask(`${END} kill @e[type=minecraft:zombie]`); await ask(`${END} forceload remove 96 -16 111 16`);
+    await ask(`${END} kill @e[type=minecraft:zombie]`); await ask(`${END} forceload remove 64 -16 111 16`);
   }
 };
 
