@@ -712,6 +712,8 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
 
   // ---- how a line ends (the contract's result lines) ----
   const packNote = fullPackWatch(bot);
+  /** Fires this go put out beside or in its place (a blaze camp's cells burn again and again). */
+  let doused = 0;
   const tail = () => `${cellText(feetCell(bot) ?? start)} 道 ${state.steps} 歩・掘 ${state.dug}・置 ${state.placed}・引き直し ${state.redraws} 回`;
   const fail = (code: string, reason: string, hint: string): StepOutcome => {
     const at = feetCell(bot) ?? start;
@@ -722,7 +724,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     const why = spent ? `${reason}（置く物 ${place.held.join('・')} を ${state.placed} 個置いて使い切った）` : reason;
     const advice = spent && (code === 'not_loaded' || code === 'dead_end') ? '置く物を集めてからもう一度' : hint;
     const full = packNote();
-    const fixed = ` ${tail()}${full ? `。${full}` : ''}`;
+    const fixed = ` ${tail()}${doused ? `。火を ${doused} 個消した` : ''}${full ? `。${full}` : ''}`;
     // The contract's line: the code, the reason, where and the counts, then the hint; what does not fit of the 160 is cut from the back (the hint first).
     const room = 160 - head.length - fixed.length;
     const withHint = advice ? `。${advice}` : '';
@@ -731,7 +733,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   };
   /** What a stop for want of blocks to lay says to do: name the cheap blocks the pack holds (dug netherrack, stone ...), else gather some. */
   const noBlocksHint = (fallback = '置ける物を集めるか、canPlace を足す'): string => { const held = bridgeBlocksHeld(bot, args.canPlace); return held ? `荷の ${held} を canPlace に足すか、集める` : fallback; };
-  const arrived = (): StepOutcome => ({ ok: true, text: `go 着いた ${tail()}${(() => { const full = packNote(); return full ? `。${full}` : ''; })()}`, at: feetCell(bot) ?? start, progress: progressNow(true),
+  const arrived = (): StepOutcome => ({ ok: true, text: `go 着いた ${tail()}${doused ? `。火を ${doused} 個消した` : ''}${(() => { const full = packNote(); return full ? `。${full}` : ''; })()}`, at: feetCell(bot) ?? start, progress: progressNow(true),
     data: { work: { dug: state.dug, placed: state.placed, steps: state.steps, redraws: state.redraws } } });
 
   /** The stop at the time limit: when the body is held in flowing water, that is in the line (whatever the length of `seconds`). */
@@ -741,6 +743,18 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     return fail('limit_time', `${args.seconds ?? GO_DEFAULTS.seconds} 秒の上限に着いた（行き先まで あと ${left}m）${held}`, wet ? '上流の水源を汲むかブロックで塞ぐか、別の道を' : 'seconds を増やすか、行き先を近くに');
   };
 
+  // ---- fire in or beside a place is put out where the body can reach it (S2, S4's c1 camp: a blaze's fireballs light the cells round its camp again and again, each refusal was a dig of the planner's own) ----
+  for (const cell of cells) {
+    for (let round = 0; round < 4 && doused < 8; round++) {
+      const why = hazardAtFeet(bot, cell.x, cell.y, cell.z);
+      if (!why || !/^(?:soul_)?fire /u.test(why)) break;
+      const fire = fireNear(bot, cell.x, cell.y, cell.z);
+      if (!fire || distanceTo(bot, fire) > 4.2 || ctx.stop?.aborted) break;
+      const out = await dig(ctx, { at: [fire], collect: false });
+      if (!out.ok) break;
+      doused++;
+    }
+  }
   // ---- the places: the ones nobody may stand in are dropped; none left is `unsafe` ----
   const safeCells = cells.filter(cell => !hazardAtFeet(bot, cell.x, cell.y, cell.z));
   if (!safeCells.length) {

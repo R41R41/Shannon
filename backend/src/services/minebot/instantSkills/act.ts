@@ -11,8 +11,8 @@ import { actContextOf } from '../utils/actContext.js';
 import { lifeOf } from '../utils/life.js';
 import { handReasons, SELF_COUNTING, trackPack } from '../utils/packEvents.js';
 import { cutByOf, finishedVerdict, numberEvents, stoppedFromOutside, type HandVerdict } from '../utils/handOutcome.js';
-import { blockAt, cellNow, freeSlots, inventoryCount, resolvePosition, StepStopped, wait, type PositionSpec, type StepContext, type StepOutcome } from '../utils/primitives/common.js';
-import { dimensionOf, portalWalks, walk } from '../utils/primitives/walk.js';
+import { blockAt, cellNow, cellText, freeSlots, inventoryCount, resolvePosition, StepStopped, wait, type PositionSpec, type StepContext, type StepOutcome } from '../utils/primitives/common.js';
+import { dimensionOf, dimensionWords, portalWalks, walk } from '../utils/primitives/walk.js';
 import { dig } from '../utils/primitives/dig.js';
 import { place } from '../utils/primitives/place.js';
 import { findEntity, use } from '../utils/primitives/use.js';
@@ -630,6 +630,19 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
         }
         if (error instanceof StepStopped || control.signal.aborted || /Action interrupted|Motor owner expired/u.test(String((error as Error)?.message))) {
           if (!control.signal.aborted && signal?.aborted) onCut();
+          // A walk or a portal hand cut by a reflex in the very moment the body crossed: the old world's lava under the End portal's sheet reads as lava as the body leaves it, the lava reflex
+          // takes the act, and the body is in the End all the same (the PC lab and S4's c1 run: "walk stopped: lava_escape" with the dimension the_end). The hand did what it was sent for.
+          if ((hand.do === 'walk' || hand.do === 'portal') && report.stoppedBy === 'reflex' && dimensionOf(bot) !== dimension0) {
+            const there = dimensionWords(dimensionOf(bot)), end = feetCell(bot);
+            report.stoppedBy = undefined; report.stoppedWhy = undefined; report.failureType = undefined;
+            crossed = true; crossedByWalk = true; report.done++;
+            const line = clip(`${there}へ移った${end ? ` ${cellText(end)}` : ''}（反射が手を止めたのと同じ時に次元が変わった）`);
+            pushLine(index, 'done', line, { goal: 'done', end: 'finished' }, handOps, {}, eventsOf(index, made));
+            remember(hand, 'done', line, end, base);
+            emit(index, 'completed', line);
+            skip(index + 1, '次元が変わった（前の次元の座標の手は送らない）');
+            return false;
+          }
           const word = closedWord(report.failureType ?? 'reflex');
           // A hand that was cut tells what it had done (fight: the blows, the health lost, who held the body).
           // Run 46 (hold 7): a dig under water stopped by the swim reflex says why, and what to do next.

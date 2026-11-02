@@ -168,7 +168,7 @@ async function blazeCamp(kind: 'hold' | 'fight', effects: string[], note: (text:
   const metrics = { acts: 0, okActs: 0, reflexStops: 0, blazesKilled: 0, blows: 0, landed: 0, held: 0, hpLost: 0, lowestHp: 20, rodsFromPickup: 0, standDrift: 0, shieldWear: 0, deathsHere: 0, burnedActs: 0 };
   const shield0 = shieldUsed();
   const spawnerNear = sites.blazeSpawner as number[] | undefined;
-  let failStreak = 0;
+  let failStreak = 0, boxesLeft = 6;
   // The planner asks where to camp: find-structure blaze_spawner names the spawner and the cells within three blocks of it that have no edge and no fire.
   let campCell: number[] | null = null;
   if (near) {
@@ -199,6 +199,8 @@ async function blazeCamp(kind: 'hold' | 'fight', effects: string[], note: (text:
     metrics.held += (text.match(/見送り (\d+)/gu) ?? []).reduce((sum, hit) => sum + Number(hit.replace(/\D+/gu, '')), 0);
     metrics.hpLost += Math.max(0, hpBefore - Number(actor.health));
     metrics.lowestHp = Math.min(metrics.lowestHp, Number(actor.health));
+    // The black box (the last 90 s: hurts with the hostiles near and the body's yaw, the shield, the hands) of an act that cost health, read with HUNT_KEEP=1.
+    if (boxesLeft > 0 && (hpBefore - Number(actor.health) >= 4 || Number(actor.health) < 10)) { boxesLeft--; await dumpBox('blaze_hurt', `${kind}#${metrics.acts} hp ${hpBefore} -> ${actor.health}: ${(run.lines[0] ?? '').slice(0, 160)}`); }
     if (/燃え|fire|burn/u.test(`${run.stoppedWhy ?? ''}`)) metrics.burnedActs++;
     const here = actor.entity?.position as Vec3 | undefined;
     if (here && spawnerNear) metrics.standDrift = Math.max(metrics.standDrift, r1(Math.hypot(here.x - stand[0] - 0.5, here.z - stand[2] - 0.5)));
