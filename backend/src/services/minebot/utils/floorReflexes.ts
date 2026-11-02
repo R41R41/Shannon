@@ -1,6 +1,6 @@
 import { Vec3 } from 'vec3';
 import { createLogger } from '../../../utils/logger.js';
-import { actionLeaseStatus, actionSignal, activeActionCapabilities, createMotorPort, executeAction, hasActiveSafetyLease, physicalActionBusy, physicalRoots, preemptLowerPriorityActions, safetyLeaseCapabilities } from '../execution/ActionExecution.js';
+import { actionLeaseStatus, actionSignal, activeActionCapabilities, createMotorPort, executeAction, hasActiveSafetyLease, physicalActionBusy, physicalRoots, preemptLowerPriorityActions, reservationOf, safetyLeaseCapabilities } from '../execution/ActionExecution.js';
 import { isHeadCombatActive, isHeadCombatRunning } from './combatOwner.js';
 import { creeperLit } from './creeperFuse.js';
 import { FALLBACK_FOOD_POINTS, RAW_FOOD } from '../constantSkills/autoEat.js';
@@ -22,7 +22,7 @@ import { entityHealth } from './mapMarks.js';
 import { eyeOf, probeSight } from './probeTools.js';
 import { dragonHazards, hazardCentres } from './dragonDanger.js';
 import { isEnd } from './dragonState.js';
-import { clutchWanted, runFallClutch, type FallMemory } from './fallClutch.js';
+import { clutchWanted, runFallClutch, scoopBack, scoopWanted, type FallMemory } from './fallClutch.js';
 
 const log = createLogger('Minebot:FloorReflexes');
 
@@ -39,6 +39,9 @@ export const FLOOR_RETREAT_PRIORITY = 350;
 export const FLOOR_CLUTCH_PRIORITY = 380;
 const FALL_TIMEOUT_MS = 8000;
 const FALL_DETAIL_MAX = 160;
+/** The taking-up of water a clutch left behind: under every reflex (each may cut it), over the planner's own acts. */
+export const FLOOR_SCOOP_PRIORITY = 100;
+const SCOOP_TIMEOUT_MS = 3000;
 export const FLOOR_EAT_PRIORITY = 200;
 /** Between the retreat (350) and the meal (200): the low-health flee (default mode, P8). */
 export const FLOOR_FLEE_PRIORITY = 250;
@@ -213,7 +216,7 @@ export interface FloorState {
   dragonNotedAt?: number;
   /** The End: when the body put a block under itself to rise out of a cloud it could not walk out of, newest last. */
   dragonRises?: number[];
-  /** The End: the highest y since the body last stood and when the water-bucket clutch last began (utils/fallClutch). */
+  /** The End: the highest y since the body last stood, when the water-bucket clutch last began, and the water it poured and has not yet taken up (utils/fallClutch). */
   fall?: FallMemory;
 }
 
@@ -2220,14 +2223,42 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
     state.busy = 'flee';
     log.warn(`🪣 ${why}: 水バケツで落下を止める`);
     const handle = ledger.begin('retreat', `落下を水バケツで止める: ${why}`, FALL_DETAIL_MAX);
-    void take('floor-clutch', FLOOR_CLUTCH_PRIORITY, FALL_TIMEOUT_MS, () => runFallClutch(bot as never, createMotorPort(bot) as never))
+    void take('floor-clutch', FLOOR_CLUTCH_PRIORITY, FALL_TIMEOUT_MS, () => runFallClutch(bot as never, createMotorPort(bot) as never, memory, now))
       .then(result => {
-        const done = result as { success?: boolean; result?: string } | undefined;
-        handle.detail = `落下を水バケツで止めた（${done?.result ?? ''}）: ${why}`.slice(0, FALL_DETAIL_MAX);
-        ledger.end(handle, done?.success ? 'done' : 'failed');
+        const done = result as { success?: boolean; failureType?: string; result?: string } | undefined;
+        // Taken from the clutch by a stronger reflex: the action's own word is only "interrupted"; whether the water was already poured is in the note the clutch leaves for the floor (`scoopTick`).
+        const cut = done?.failureType === 'interrupted';
+        handle.detail = (cut ? `落下を水バケツで止める途中で操作を取られた（${memory.scoop ? '水はあけた：あとで汲み直す' : '水はあけていない'}）: ${why}` : `落下を水バケツで止めた（${done?.result ?? ''}）: ${why}`).slice(0, FALL_DETAIL_MAX);
+        ledger.end(handle, done?.success ? 'done' : cut ? 'cut' : 'failed');
       }, () => { ledger.end(handle, 'failed'); })
       .catch(() => undefined)
       .finally(() => { state.busy = null; });
+    return true;
+  };
+  /**
+   * The End: the water a clutch poured and was cut off before taking up again (a stronger reflex took the body) is taken up in a quiet moment, so that the next fall has its bucket. Nothing else runs, none of
+   * the dragon's hazards reaches the body, the body stands near the water with the empty bucket in the hand or the hotbar. A new hold on the body that is held with no safety lease and no `busy` mark: every reflex
+   * (the dragon's retreat, the flee, the meal, the next clutch) cuts it, and the planner's act that comes meanwhile waits no longer than its few seconds. True when it was started.
+   */
+  const scoopTick = (): boolean => {
+    const memory = state.fall;
+    if (!memory?.scoop) return false;
+    if (!config.retreat || !isEnd(bot)) { delete memory.scoop; return false; }
+    const t = now();
+    // No reflex holds the body or is between two hands (a flee, a fight with a melee enemy, the continuation of a shield or a step back), and no handover is reserved for the act that is to come.
+    if (reflexHeld(bot) || bridgeOf(bot, t) || meleeEpisode(bot, t) || reservationOf(bot)) return false;
+    let wanted = false;
+    try { wanted = scoopWanted(bot as never, memory, t); } catch { wanted = false; }
+    if (!wanted || !memory.scoop) return false;
+    // Nothing holds the body and nothing waits for it (a query that runs holds nothing: it is no reason to wait).
+    if (physicalActionBusy(bot) || (actionLeaseStatus(bot)?.waitQueue ?? 0) > 0) return false;
+    try { if (dragonHazards(bot, { now: t }).length) return false; } catch { return false; }
+    const pending = memory.scoop;
+    pending.tries++; pending.lastAt = t;
+    log.info(`🪣 あけた水を汲み直す（${pending.tries}回目）`);
+    void executeAction(bot as any, 'floor-scoop', SCOOP_TIMEOUT_MS, (() => scoopBack(bot as never, createMotorPort(bot) as never, memory)) as never,
+      { priority: FLOOR_SCOOP_PRIORITY, safetyLease: false, waitForQuiescence: false, legacyExecutingSkill: true })
+      .catch(() => undefined);
     return true;
   };
   bot.on('physicsTick', () => {
@@ -2314,6 +2345,8 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
         if (lastStand('low-health')) return;
       }
     }
+    // The End: the last of the floor's hands, in a quiet moment: the water a clutch poured and was cut off before taking up again.
+    if (scoopTick()) return;
     if (!budget && Date.now() < state.retryAt) return;
     // The body puts on no armour by itself (equip is a step of act).
     let food: Item | null = null;

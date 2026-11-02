@@ -21,7 +21,7 @@ import { entityHealth } from '../src/services/minebot/utils/mapMarks.js';
 import { partBox, partTarget, boxDistance, type DragonPart } from '../src/services/minebot/utils/dragonParts.js';
 import { breathCloudsOf, dragonPhaseOf, endDragonOf, endObservation } from '../src/services/minebot/utils/dragonState.js';
 import { dragonHazards } from '../src/services/minebot/utils/dragonDanger.js';
-import { hasActiveSafetyLease, safetyLeaseCapabilities } from '../src/services/minebot/execution/ActionExecution.js';
+import { hasActiveSafetyLease, preemptLowerPriorityActions, safetyLeaseCapabilities } from '../src/services/minebot/execution/ActionExecution.js';
 import { blastAt } from '../src/services/minebot/utils/crystalBlast.js';
 
 const port = Number(process.env.MINECRAFT_END_PORT);
@@ -1149,16 +1149,21 @@ scenes.fall = async () => {
   releaseReflex();
   await park(true);
   const trials: Array<Record<string, unknown>> = [];
-  const cases: Array<[string, number, string[]]> = [
-    ['no bucket, 20 up', 20, ['diamond_sword']],
-    ['bucket, 12 up', 12, ['diamond_sword', 'water_bucket']],
-    ['bucket, 20 up', 20, ['diamond_sword', 'water_bucket']],
-    ['bucket, 38 up', 38, ['diamond_sword', 'water_bucket']],
-    ['bucket in the pack (not the hand), 38 up', 38, ['diamond_sword', 'cobblestone 64', 'water_bucket']],
+  // `give` fills the hotbar first: the sword is slot 0 (in the hand), the bucket slot 1 or 2. `pack` is put into the first slot of the pack (container.0, not the hotbar) after: a bucket there does not start the clutch (it
+  // would have to be moved to the hand by clicks of the window, which a stronger reflex cannot stop), so that trial is the control of what the same fall costs.
+  const cases: Array<[string, number, string[], string[]]> = [
+    ['no bucket, 20 up', 20, ['diamond_sword'], []],
+    ['bucket, 12 up', 12, ['diamond_sword', 'water_bucket'], []],
+    ['bucket, 20 up', 20, ['diamond_sword', 'water_bucket'], []],
+    ['bucket, 38 up', 38, ['diamond_sword', 'water_bucket'], []],
+    ['bucket in the hotbar (not the hand), 38 up', 38, ['diamond_sword', 'cobblestone 64', 'water_bucket'], []],
+    ['bucket in the pack (not the hotbar), 20 up', 20, ['diamond_sword'], ['water_bucket']],
   ];
-  for (const [label, height, items] of cases) {
+  for (const [label, height, items, pack] of cases) {
     await flatten(); await ask('kill @e[type=minecraft:item]');
-    await gear(items); await wear();
+    await gear(items);
+    for (const [slot, item] of pack.entries()) await ask(`item replace entity ${ACTOR} container.${slot} with minecraft:${item}`);
+    await wear();
     // the first hotbar slot is the sword's: a `hold` replaces the selected slot, and the last trial left it on the bucket's
     actor.setQuickBarSlot(0); await sleep(300);
     await ask(`effect give ${ACTOR} minecraft:instant_health 1 5`);
@@ -1182,6 +1187,53 @@ scenes.fall = async () => {
     await sleep(500);
   }
   await flatten(); await ask('kill @e[type=minecraft:item]');
+  return { trials };
+};
+
+scenes.fall_cut = async () => {
+  // The clutch cut off after the pour (independent review 2026-11-02, round 6): a stronger reflex takes the body in the tick the held bucket turns empty (here the lab does it: `preemptLowerPriorityActions` at the
+  // wall escape's rank). The water is poured and not taken up; the floor takes it up later, in a quiet moment, so that the next fall has its bucket. Measured: the health lost, whether the clutch ledger says it was cut,
+  // how long after the landing the bucket is full again, and whether the source of water is gone.
+  await protect(false);
+  releaseReflex();
+  await park(true);
+  const trials: Array<Record<string, unknown>> = [];
+  const cases: Array<[string, number, string[]]> = [
+    ['bucket in the hand, 38 up, cut after the pour', 38, ['diamond_sword', 'water_bucket']],
+    ['bucket in the hotbar (not the hand), 20 up, cut after the pour', 20, ['diamond_sword', 'cobblestone 64', 'water_bucket']],
+  ];
+  for (const [label, height, items] of cases) {
+    await flatten(); await ask('kill @e[type=minecraft:item]');
+    await ask(`${END} fill -3 ${g} 5 3 ${g + 2} 11 air replace minecraft:water`);
+    await gear(items); await wear();
+    actor.setQuickBarSlot(0); await sleep(300);
+    await ask(`effect give ${ACTOR} minecraft:instant_health 1 5`);
+    await standAt(0.5, g, 8.5); await sleep(1000);
+    const healthBefore = Number(actor.health), deathsBefore = actorDeaths, lowest = trackMinHealth(), ledgerMark = (actor.reflexLedger?.mark?.() as number | undefined) ?? 0;
+    const start = Date.now();
+    let cutAfterMs: number | null = null, landedAfterMs: number | null = null, refilledAfterLandingMs: number | null = null;
+    const watch = every(5, () => {
+      if (cutAfterMs === null && actor.heldItem?.name === 'bucket') { cutAfterMs = Date.now() - start; preemptLowerPriorityActions(actor, 500, 'lab-cut'); }
+      if (landedAfterMs === null && Date.now() - start > 600 && actor.entity.onGround && actor.entity.position.y < g + 2) landedAfterMs = Date.now() - start;
+      if (landedAfterMs !== null && refilledAfterLandingMs === null && (actor.inventory.items() as Array<{ name: string }>).some(item => item.name === 'water_bucket')) refilledAfterLandingMs = Date.now() - start - landedAfterMs;
+    });
+    await ask(`${END} tp ${ACTOR} 0.5 ${g + height} 8.5`);
+    for (let i = 0; i < 200 && refilledAfterLandingMs === null; i++) await sleep(100);
+    await sleep(1000);
+    clearInterval(watch);
+    const entries = (actor.reflexLedger?.entriesSince?.(ledgerMark) as Array<{ kind: string; outcome: string; detail: string }> | undefined) ?? [];
+    const remaining = await ask(`${END} execute if block 0 ${g} 8 minecraft:water run say SOURCE_STILL_THERE`);
+    const result = {
+      label, height, healthBefore, healthAfter: Number(actor.health), healthLost: round(healthBefore - Number(actor.health), 1), lowest: lowest.stop(), died: actorDeaths > deathsBefore, cutAfterMs, landedAfterMs, refilledAfterLandingMs,
+      holding: actor.heldItem?.name ?? null, bucketsNow: (actor.inventory.items() as Array<{ name: string }>).filter(item => item.name.endsWith('bucket')).map(item => item.name),
+      sourceStillThere: remaining.includes('SOURCE_STILL_THERE'), ledger: entries.slice(0, 5).map(e => `${e.kind}:${e.outcome}:${e.detail.slice(0, 130)}`),
+    };
+    log(`FALL_CUT ${label}: ${JSON.stringify(result)}`);
+    trials.push(result);
+    await sleep(500);
+  }
+  await flatten(); await ask('kill @e[type=minecraft:item]');
+  await ask(`${END} fill -3 ${g} 5 3 ${g + 2} 11 air replace minecraft:water`);
   return { trials };
 };
 
