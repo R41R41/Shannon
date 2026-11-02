@@ -5,7 +5,12 @@
  *   watch the head's stream state (5 s)  ->  a stream was started: find the broadcast and its live chat (15 s)
  *   ->  tell the head (POST broadcast)  ->  read the chat and pass the comments on (POST comments)
  *   ->  write the head's chatPosts into the chat (only when the stream was started with chatWrites)
- *   ->  the chat ended: tell the head (POST broadcast { ended: true }); the head ended the stream or said 409: back to watching.
+ *   ->  the chat ended: send what still waits (a few tries, whatever the back-off was), then tell the head (POST broadcast { ended: true });
+ *       the head ended the stream or said 409: back to watching.
+ *
+ * "On air" is YouTube's word (actualStartTime and no actualEndTime of the video), never the chat's: the head greets only after `onAir: true`.
+ * The video is looked at every discoveryEveryMs until it is on air, then every endCheckEveryMs (60 s: 1 unit each, 60 units an hour), so that an
+ * end the chat does not announce (a broken connection, a quiet chat) is still found.
  *
  * The chat is read over `liveChatMessages.streamList` (one long connection YouTube pushes the messages down; 5 units a connection) and,
  * only when YouTube answers that streamList cannot be used (404, 405, 501, permission, see YoutubeApiError.streamUnavailable), by polling
@@ -39,6 +44,11 @@ export interface StreamEarOptions {
   stateEveryMs?: number;
   /** How often a broadcast is looked for while the head waits for the chat. Default 15 s. */
   discoveryEveryMs?: number;
+  /**
+   * How often the video is looked at (videos.list, 1 unit) for its end once the head was told it is on air. Default 60 s = 60 units an hour.
+   * (Before that the video is looked at every discoveryEveryMs, for its start.) Never shorter than discoveryEveryMs.
+   */
+  endCheckEveryMs?: number;
   /**
    * Polling only: the interval YouTube asks for is kept inside these bounds. Default 8 s to 10 s: every poll is 5 units, and at 5 s a
    * 10,000-unit day lasts 2.8 hours (the contract's 1 s to 10 s is a limit for the head, not something the ear needs).
@@ -97,6 +107,8 @@ export interface EarStatus {
   counters: EarCounters;
   units: { hourUnits: number; hourCalls: number; dayUnits: number; totalUnits: number };
   lastError: string | null;
+  /** Why the head refused what the ear sent for the current stream (video mismatch, rejected input), or null. Cleared when the head accepts. */
+  headRefusal: string | null;
 }
 
 interface Attachment {
@@ -107,7 +119,8 @@ interface Attachment {
   onAir?: boolean;
 }
 
-type ReadEnd = 'head_stopped' | 'chat_ended' | 'aborted';
+/** 'video_mismatch' / 'head_refused': the head answered the broadcast POST with STREAM_VIDEO_MISMATCH / a rejection; the reason is in `headRefusal`. */
+type ReadEnd = 'head_stopped' | 'chat_ended' | 'aborted' | 'video_mismatch' | 'head_refused';
 
 /** More than this many unsent comments are never kept; the oldest go first (the head answers nothing older than 90 s anyway). */
 const MAX_PENDING = 2_000;
@@ -115,6 +128,10 @@ const HEAD_BACKOFF_MAX_MS = 30_000;
 const YOUTUBE_BACKOFF_MAX_MS = 60_000;
 const QUOTA_BACKOFF_MS = 5 * 60_000;
 const NOT_LIVE_BLOCK_MS = 60_000;
+/** After the chat's end was found, what still waits is sent with these waits between the tries (31 s at most), whatever the back-off was. */
+const FINAL_FLUSH_WAITS_MS = [1_000, 2_000, 4_000, 8_000, 16_000];
+/** The same video refused with STREAM_VIDEO_MISMATCH this many times in a row: the ear stops trying for that stream. */
+const MISMATCH_LIMIT = 3;
 /** Unreadable stream bodies in a row before the chat is polled instead. */
 const STREAM_BAD_LIMIT = 3;
 
@@ -129,6 +146,7 @@ export class StreamEar {
   private readonly youtube: YoutubeLiveApi;
   private readonly stateEveryMs: number;
   private readonly discoveryEveryMs: number;
+  private readonly endCheckEveryMs: number;
   private readonly minPollMs: number;
   private readonly maxPollMs: number;
   private readonly streamIdleMs: number;
@@ -150,6 +168,11 @@ export class StreamEar {
   private pendingCount = 0;
   private lastDiscoveryAt = Number.NEGATIVE_INFINITY;
   private discoveryHoldUntil = 0;
+  private headRefusal: string | null = null;
+  /** The same video refused again and again with STREAM_VIDEO_MISMATCH. */
+  private mismatch: { streamId: string; videoId: string; count: number } | null = null;
+  /** The stream the ear stopped attaching to because the head refused for good (and the target the head had then). */
+  private givenUp: { streamId: string; targetVideoId: string | undefined } | null = null;
   /** Streams whose chat ended but whose end the head has not acknowledged yet. */
   private readonly unreportedEnds = new Set<string>();
   /** A stream the head answered 409 for: not attached again for a while. */
@@ -167,6 +190,7 @@ export class StreamEar {
     this.youtube = options.youtube;
     this.stateEveryMs = options.stateEveryMs ?? 5_000;
     this.discoveryEveryMs = options.discoveryEveryMs ?? 15_000;
+    this.endCheckEveryMs = Math.max(this.discoveryEveryMs, options.endCheckEveryMs ?? 60_000);
     this.minPollMs = options.minPollMs ?? 8_000;
     this.maxPollMs = Math.max(this.minPollMs, options.maxPollMs ?? 10_000);
     this.streamIdleMs = options.streamIdleMs ?? 300_000;
@@ -215,6 +239,7 @@ export class StreamEar {
       counters: { ...this.counters },
       units: this.youtube.meter.snapshot(),
       lastError: this.lastError,
+      headRefusal: this.headRefusal,
     };
   }
 
@@ -252,7 +277,10 @@ export class StreamEar {
     this.headReachable = true;
 
     const stream = state.stream;
-    if (!stream || stream.phase === 'ended') return this.stateEveryMs;
+    if (!stream || stream.phase === 'ended') {
+      this.headRefusal = null;
+      return this.stateEveryMs;
+    }
 
     if (this.unreportedEnds.has(stream.streamId)) {
       await this.reportEnd(stream.streamId);
@@ -260,20 +288,39 @@ export class StreamEar {
     }
     if (this.blocked && this.blocked.streamId === stream.streamId && this.now() < this.blocked.until) return this.stateEveryMs;
 
+    if (this.givenUp && this.givenUp.streamId === stream.streamId && this.givenUp.targetVideoId === stream.targetVideoId) return this.stateEveryMs;
+
     let attachment = attachmentOf(stream);
     if (!attachment) {
       this.mode = 'finding';
       this.current = { streamId: stream.streamId, attachment: null };
       if (this.now() < this.discoveryHoldUntil || this.now() - this.lastDiscoveryAt < this.discoveryEveryMs) return this.stateEveryMs;
       this.lastDiscoveryAt = this.now();
-      attachment = await this.discover(stream.targetVideoId);
-      if (!attachment) return this.stateEveryMs;
+      const found = await this.discover(stream.targetVideoId);
+      if (found === 'ended') {
+        // The video that was named (the stream's target, or YOUTUBE_LIVE_URL) is over already: waiting for its chat would never end.
+        this.log.info('the named video has ended already; telling the head');
+        this.unreportedEnds.add(stream.streamId);
+        await this.reportEnd(stream.streamId);
+        return this.stateEveryMs;
+      }
+      if (!found) return this.stateEveryMs;
+      attachment = found;
       const told = await this.head.postBroadcast({ streamId: stream.streamId, ...attachment });
       if (told.status === 'not_live') {
         this.block(stream.streamId);
         return this.stateEveryMs;
       }
+      if (told.status === 'video_mismatch') {
+        this.noteMismatch(stream, attachment.videoId);
+        return this.stateEveryMs;
+      }
+      if (told.status === 'rejected') {
+        this.giveUp(stream, `the head rejected the broadcast of ${attachment.videoId} (${told.code})`);
+        return this.stateEveryMs;
+      }
       if (told.status !== 'ok') return this.stateEveryMs;
+      this.clearRefusal();
       this.log.info(`live chat found: ${attachment.videoId} (${attachment.title})`);
     }
 
@@ -287,18 +334,58 @@ export class StreamEar {
       await this.reportEnd(stream.streamId);
     } else if (end === 'head_stopped') {
       this.block(stream.streamId);
+    } else if (end === 'video_mismatch') {
+      this.noteMismatch(stream, attachment.videoId);
+    } else if (end === 'head_refused') {
+      this.giveUp(stream, this.headRefusal ?? 'the head rejected the broadcast');
     }
     return this.stateEveryMs;
   }
 
-  /** The broadcast and its chat, or null while there is none. Errors only slow the next look. */
-  private async discover(targetVideoId?: string): Promise<Attachment | null> {
+  /**
+   * The head said STREAM_VIDEO_MISMATCH: it is live for another video than the one sent. The stream is not over, so the ear does not stop; the
+   * next look at the head's state brings the stream's targetVideoId, which the next discovery takes first (and a broadcast the head holds for
+   * another video is not taken, see attachmentOf). The same video refused MISMATCH_LIMIT times in a row is given up, not retried for ever.
+   */
+  private noteMismatch(stream: HeadStream, videoId: string): void {
+    const same = this.mismatch && this.mismatch.streamId === stream.streamId && this.mismatch.videoId === videoId;
+    const count = same ? this.mismatch!.count + 1 : 1;
+    this.mismatch = { streamId: stream.streamId, videoId, count };
+    const reason = `the head refused video ${videoId} (STREAM_VIDEO_MISMATCH; the stream's target is ${stream.targetVideoId ?? 'not in its state'})`;
+    this.headRefusal = reason;
+    this.lastError = reason;
+    if (count >= MISMATCH_LIMIT) {
+      this.giveUp(stream, `${reason}, ${count} times in a row`);
+      return;
+    }
+    this.log.warn(`${reason}; looking again for the stream's target video`);
+  }
+
+  /** The head refused for good (the input itself, or the same mismatch again and again): no more attaching to this stream until it changes. */
+  private giveUp(stream: HeadStream, reason: string): void {
+    this.givenUp = { streamId: stream.streamId, targetVideoId: stream.targetVideoId };
+    this.headRefusal = reason;
+    this.lastError = reason;
+    this.log.warn(`giving up on stream ${stream.streamId}: ${reason}`);
+  }
+
+  private clearRefusal(): void {
+    this.mismatch = null;
+    this.headRefusal = null;
+  }
+
+  /**
+   * The broadcast and its chat, or null while there is none. 'ended' when the video that was named (not one found by searching) is over
+   * already: its activeLiveChatId is gone, so without this the ear would wait for a chat that never comes. Errors only slow the next look.
+   */
+  private async discover(targetVideoId?: string): Promise<Attachment | 'ended' | null> {
     try {
       const fromUrl = targetVideoId ?? videoIdOfUrl(this.options.liveUrl);
       const broadcast = fromUrl ? null : await this.youtube.findActiveBroadcast();
       const videoId = fromUrl ?? broadcast?.videoId;
       if (!videoId) return null;
       const details = await this.youtube.videoDetails(videoId);
+      if (fromUrl && details?.actualEndTime) return 'ended';
       const liveChatId = details?.liveChatId ?? broadcast?.liveChatId;
       if (!liveChatId) return null;
       return {
@@ -348,7 +435,9 @@ export class StreamEar {
     let flushFailures = 0;
     let nextFlushAt = 0;
     let chatEnded = false;
-    let lastAirCheckAt = this.now();
+    // The video is looked at for its start (until the head was told it is on air) and its end. Not before this time; moved out by a failure.
+    let nextVideoCheckAt = this.now() + (attachment.onAir ? this.endCheckEveryMs : this.discoveryEveryMs);
+    let videoFailures = 0;
 
     const takePosts = async (posts: HeadChatPost[]): Promise<void> => {
       if (!chatWrites || posts.length === 0) return;
@@ -382,6 +471,26 @@ export class StreamEar {
       }
       this.pendingCount = pending.length;
       return 'ok';
+    };
+
+    // The end of the chat was found: what still waits is sent before the head is told. The back-off of an earlier failure does not count
+    // (the head may have failed a moment ago and be back), so a few tries are made with short waits. The head saying the stream is not live,
+    // or an abort, stops it. What cannot be sent is counted and said, never lost silently.
+    const drain = async (): Promise<void> => {
+      let why = 'the head did not take them';
+      for (let attempt = 0; ; attempt += 1) {
+        nextFlushAt = 0;
+        const result = await flush();
+        if (pending.length === 0) return;
+        if (result === 'stop') { why = 'the head says the stream is not live'; break; }
+        if (attempt >= FINAL_FLUSH_WAITS_MS.length) break;
+        await this.sleepFor(FINAL_FLUSH_WAITS_MS[attempt], signal);
+        if (signal.aborted) { why = 'the ear was stopped'; break; }
+      }
+      const lost = pending.splice(0).length;
+      this.counters.commentsDropped += lost;
+      this.pendingCount = 0;
+      this.log.warn(`${lost} comments could not be sent before the stream ended and are dropped (${why})`);
     };
 
     // What one response of YouTube (a poll's page or a stream's push) adds. The page token moves on only here, after the messages of
@@ -432,20 +541,46 @@ export class StreamEar {
           this.headReachable = false;
         }
       }
-      if (!chatEnded && !attachment.onAir && this.now() - lastAirCheckAt >= this.discoveryEveryMs) {
-        lastAirCheckAt = this.now();
+      if (!chatEnded && attachment.videoId && this.now() >= nextVideoCheckAt) {
+        // Until the head was told it is on air: every discoveryEveryMs, for the start. After that: every endCheckEveryMs, for the end that
+        // the chat does not announce. Never a start that was not seen: a failed look leaves it unconfirmed.
+        const interval = attachment.onAir ? this.endCheckEveryMs : this.discoveryEveryMs;
+        nextVideoCheckAt = this.now() + interval;
         try {
           const details = await this.youtube.videoDetails(attachment.videoId);
-          if (details?.actualEndTime) chatEnded = true;
-          if (details?.actualStartTime && !details.actualEndTime) {
+          videoFailures = 0;
+          if (details?.actualEndTime) {
+            chatEnded = true;
+          } else if (!attachment.onAir && details?.actualStartTime) {
             const told = await this.head.postBroadcast({ streamId: stream.streamId, ...attachment, onAir: true });
             if (told.status === 'not_live') return 'head_stopped';
-            if (told.status === 'ok') attachment.onAir = true;
+            if (told.status === 'video_mismatch') {
+              this.headRefusal = `the head refused video ${attachment.videoId} (STREAM_VIDEO_MISMATCH)`;
+              return 'video_mismatch';
+            }
+            if (told.status === 'rejected') {
+              this.headRefusal = `the head rejected the on-air notice of ${attachment.videoId} (${told.code})`;
+              return 'head_refused';
+            }
+            if (told.status === 'ok') {
+              attachment.onAir = true;
+              nextVideoCheckAt = this.now() + this.endCheckEveryMs;
+              this.clearRefusal();
+            }
           }
-        } catch { /* 次の時刻に再確認。未確認のまま開始済みにはしない。 */ }
+        } catch (error) {
+          // The same sorting as the first discovery: it is said, kept in lastError, and a spent quota is waited out. The head's state and the
+          // chat go on meanwhile (this is only housekeeping).
+          videoFailures += 1;
+          this.lastError = errorText(error);
+          const quota = error instanceof YoutubeApiError && error.quota;
+          const waitMs = Math.max(interval, quota ? QUOTA_BACKOFF_MS : backoffMs(videoFailures, 2_000, YOUTUBE_BACKOFF_MAX_MS));
+          nextVideoCheckAt = this.now() + waitMs;
+          if (videoFailures === 1 || quota) this.log.warn(`looking at video ${attachment.videoId} failed (${this.lastError}); looking again in ${Math.round(waitMs / 1000)} s`);
+        }
       }
       if (chatEnded) {
-        await flush();
+        await drain();
         return 'chat_ended';
       }
       this.youtube.meter.tick();
@@ -514,7 +649,7 @@ export class StreamEar {
         const lived = this.now() - openedAt;
         const apiError = fault instanceof YoutubeApiError ? fault : null;
         if (apiError?.chatEnded) {
-          await flush();
+          await drain();
           return 'chat_ended';
         }
         // A body the parser cannot read three times running (a framing no source described) is read by polling instead of retried forever.
@@ -551,7 +686,7 @@ export class StreamEar {
           youtubeFailures = 0;
         } catch (error) {
           if (error instanceof YoutubeApiError && error.chatEnded) {
-            await flush();
+            await drain();
             return 'chat_ended';
           }
           youtubeFailures += 1;
@@ -619,9 +754,11 @@ export class StreamEar {
   }
 }
 
+/** The broadcast the head holds. One it holds for another video than the stream's target is not taken: the target is looked for again. */
 function attachmentOf(stream: HeadStream): Attachment | null {
   const broadcast = stream.broadcast;
   if (!broadcast?.liveChatId) return null;
+  if (stream.targetVideoId && broadcast.videoId !== stream.targetVideoId) return null;
   return { onAir: broadcast.onAir === true, videoId: broadcast.videoId ?? '', liveChatId: broadcast.liveChatId, title: broadcast.title ?? stream.title, channelId: broadcast.channelId ?? '' };
 }
 

@@ -28,8 +28,13 @@ export type HeadStateResult =
 
 export type HeadBroadcastResult =
   | { status: 'ok' }
-  /** 409 `STREAM_NOT_LIVE`: the head's stream is not that one (or is over). */
+  /** 409 `STREAM_NOT_LIVE` (or a 409 that names nothing): the head's stream is not that one (or is over). */
   | { status: 'not_live' }
+  /** 409 `STREAM_VIDEO_MISMATCH`: the stream was started for another video than the one sent. The stream is still live. */
+  | { status: 'video_mismatch' }
+  /** The head refused the input itself (400, 413, 422): sending the same thing again cannot help. `code` is the head's `error` code. */
+  | { status: 'rejected'; code: string }
+  /** Not reached, or a failure that may pass (5xx, 401, 429, an unknown 409 such as STREAM_ENDING ...). */
   | { status: 'unavailable' };
 
 export type HeadCommentsResult =
@@ -124,9 +129,21 @@ export class HeadStreamClient {
 
 function broadcastResult(answer: { status: number; body: unknown } | null): HeadBroadcastResult {
   if (!answer) return { status: 'unavailable' };
-  if (answer.status === 409) return { status: 'not_live' };
+  if (answer.status === 409) {
+    const code = errorCode(answer.body);
+    if (code === 'STREAM_VIDEO_MISMATCH') return { status: 'video_mismatch' };
+    // A 409 without a readable code was always "not live" (the contract's only 409 on this route); a code that names something else is not.
+    return !code || code === 'STREAM_NOT_LIVE' ? { status: 'not_live' } : { status: 'unavailable' };
+  }
+  if ([400, 413, 422].includes(answer.status)) return { status: 'rejected', code: errorCode(answer.body) || `HTTP_${answer.status}` };
   if (answer.status === 200 || answer.status === 201 || answer.status === 202 || answer.status === 204) return { status: 'ok' };
   return { status: 'unavailable' };
+}
+
+/** The head's `{ "error": "STREAM_..." }`, or ''. */
+function errorCode(body: unknown): string {
+  const code = asRecord(body).error;
+  return typeof code === 'string' ? code : '';
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

@@ -21,6 +21,7 @@
  *   YOUTUBE_LIVE_URL             optional. This video is the broadcast (no liveBroadcasts.list).
  *   YOUTUBE_CHANNEL_ID           optional. Sent to the head when YouTube's answer carries no channel.
  *   EAR_STATE_EVERY_MS           optional, default 5000. EAR_DISCOVERY_EVERY_MS default 15000.
+ *   EAR_END_CHECK_EVERY_MS       optional, default 60000. How often the video is looked at for its end once the head was told it is on air (1 unit each).
  *   EAR_MIN_POLL_MS / EAR_MAX_POLL_MS   optional, default 8000 / 10000. The bounds the polling interval YouTube asks for is kept in
  *                                (polling is only the fallback when liveChatMessages.streamList cannot be used).
  *   EAR_STREAM_IDLE_MS           optional, default 300000. A streamList connection that said nothing for this long is opened again.
@@ -73,6 +74,7 @@ async function main(): Promise<void> {
   const head = new HeadStreamClient({ url, token, timeoutMs: number('EAR_HEAD_TIMEOUT_MS') ?? 5_000 });
   const stateEveryMs = number('EAR_STATE_EVERY_MS');
   const discoveryEveryMs = number('EAR_DISCOVERY_EVERY_MS');
+  const endCheckEveryMs = number('EAR_END_CHECK_EVERY_MS');
   const minPollMs = number('EAR_MIN_POLL_MS');
   const maxPollMs = number('EAR_MAX_POLL_MS');
   const streamIdleMs = number('EAR_STREAM_IDLE_MS');
@@ -86,6 +88,7 @@ async function main(): Promise<void> {
     ...(channelId ? { channelId } : {}),
     ...(stateEveryMs ? { stateEveryMs } : {}),
     ...(discoveryEveryMs ? { discoveryEveryMs } : {}),
+    ...(endCheckEveryMs ? { endCheckEveryMs } : {}),
     ...(minPollMs ? { minPollMs } : {}),
     ...(maxPollMs ? { maxPollMs } : {}),
     ...(streamIdleMs ? { streamIdleMs } : {}),

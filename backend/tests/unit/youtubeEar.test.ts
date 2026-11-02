@@ -52,6 +52,12 @@ class FakeHead {
   statePosts: Array<Array<{ id: string; text: string }>> = [];
   commentsPosted = 0;
   headers: Array<string | null> = [];
+  /** How many times a waiting stream became live (the head greets at that moment only). */
+  wentLive = 0;
+  /** Faults for the next broadcast POSTs (not the end notice) that `when` matches: an HTTP status with the head's error code, or the answer lost after the head applied it. */
+  broadcastFaults: Array<{ when: (body: any) => boolean; times: number; status?: number; code?: string; lose?: boolean }> = [];
+  /** The next this many state answers leave targetVideoId out (a head that did not tell the ear yet). */
+  hideTargetStates = 0;
   /** A request to the head that is made while `down` throws like a refused connection. */
   fetcher: typeof fetch = async (input, init) => {
     if (this.down) throw new TypeError('fetch failed');
@@ -61,7 +67,9 @@ class FakeHead {
     const route = `${init?.method ?? 'GET'} ${url.pathname}`;
     if (route === 'GET /v1/platform/stream/state') {
       this.stateCalls += 1;
-      return json(200, { stream: this.stream, chatPosts: this.statePosts.shift() ?? [] });
+      let shown = this.stream;
+      if (shown?.targetVideoId && this.hideTargetStates > 0) { this.hideTargetStates -= 1; const { targetVideoId: _hidden, ...rest } = shown; shown = rest; }
+      return json(200, { stream: shown, chatPosts: this.statePosts.shift() ?? [] });
     }
     if (route === 'POST /v1/platform/stream/broadcast') {
       if (body.ended) {
@@ -73,8 +81,17 @@ class FakeHead {
       }
       this.log.push('broadcast');
       this.broadcasts.push(body);
-      if (!this.stream || this.stream.streamId !== body.streamId) return json(409, { error: 'STREAM_NOT_LIVE' });
-      this.stream = { ...this.stream, phase: body.onAir ? 'live' : 'waiting_for_chat', broadcast: { videoId: body.videoId, liveChatId: body.liveChatId, title: body.title, channelId: body.channelId, onAir: body.onAir } };
+      const fault = this.broadcastFaults.find(entry => entry.times > 0 && entry.when(body));
+      if (fault) fault.times -= 1;
+      if (fault?.status) return json(fault.status, { error: fault.code ?? 'forced' });
+      // As the real head does (streamService.broadcast): the stream must be the live one, the video must be the target, and only a waiting
+      // stream told `onAir: true` goes live (and greets). A later `onAir: false` changes the stored broadcast but not the phase.
+      if (!this.stream || this.stream.streamId !== body.streamId || this.stream.phase === 'ended') return json(409, { error: 'STREAM_NOT_LIVE' });
+      if (this.stream.targetVideoId && body.videoId !== this.stream.targetVideoId) return json(409, { error: 'STREAM_VIDEO_MISMATCH' });
+      let phase = this.stream.phase;
+      if (body.onAir === true && phase === 'waiting_for_chat') { phase = 'live'; this.wentLive += 1; }
+      this.stream = { ...this.stream, phase, broadcast: { videoId: body.videoId, liveChatId: body.liveChatId, title: body.title, channelId: body.channelId, onAir: body.onAir === true } };
+      if (fault?.lose) throw new TypeError('fetch failed');
       return json(200, { stream: this.stream });
     }
     if (route === 'POST /v1/platform/stream/comments') {
@@ -109,7 +126,9 @@ class FakeYoutube {
   pageSize = 2000;
   polling: number[] = [5000];
   offlineAt: string | undefined;
-  calls: Array<{ method: string; path: string; query: Record<string, string>; auth: string | null }> = [];
+  calls: Array<{ method: string; path: string; query: Record<string, string>; auth: string | null; at: number }> = [];
+  /** Errors for the next videos.list calls: [status, reason]. */
+  videoErrors: Array<[number, string]> = [];
   broadcasts: any[] = [{ id: 'vid00000001', snippet: { title: '配信', channelId: 'UCowner', liveChatId: 'chat-from-broadcast' }, status: { lifeCycleStatus: 'live' } }];
   /** The broadcast list answers empty this many times first (the stream has not started on YouTube yet). */
   emptyBroadcastLists = 0;
@@ -223,7 +242,7 @@ class FakeYoutube {
     const url = new URL(String(input));
     const query = Object.fromEntries(url.searchParams.entries());
     const route = url.pathname.replace('/youtube/v3', '');
-    this.calls.push({ method: init?.method ?? 'GET', path: route, query, auth: new Headers(init?.headers).get('authorization') });
+    this.calls.push({ method: init?.method ?? 'GET', path: route, query, auth: new Headers(init?.headers).get('authorization'), at: this.clock() });
     const forcedStatus = this.firstStatus.shift();
     if (forcedStatus) return googleError(forcedStatus, 'authError');
     if (route === '/liveBroadcasts') {
@@ -231,7 +250,9 @@ class FakeYoutube {
       return json(200, { items: this.broadcasts });
     }
     if (route === '/videos') {
-      return json(200, { items: [{ id: query.id, snippet: { title: '配信のタイトル', channelId: 'UCowner' }, liveStreamingDetails: this.chatId ? { activeLiveChatId: this.chatId, actualStartTime: this.actualStartTime, actualEndTime: this.actualEndTime } : {} }] });
+      const videoError = this.videoErrors.shift();
+      if (videoError) return googleError(videoError[0], videoError[1]);
+      return json(200, { items: [{ id: query.id, snippet: { title: '配信のタイトル', channelId: 'UCowner' }, liveStreamingDetails: { ...(this.chatId ? { activeLiveChatId: this.chatId } : {}), actualStartTime: this.actualStartTime, actualEndTime: this.actualEndTime } }] });
     }
     if (route === '/liveChat/messages/stream') {
       this.streamCalls += 1;
@@ -1121,13 +1142,16 @@ describe('the API units', () => {
     expect(w.meter.snapshot().totalUnits).toBeLessThan(2350);
   });
 
-  it('streamList is one 5-unit connection however long the stream is quiet: an hour of silence costs 5 units', async () => {
+  it('streamList is one 5-unit connection however long the stream is quiet: an hour of silence costs 5 units of streamList plus the on-air end check (1 unit a minute)', async () => {
     const w = world({ via: 'stream' });
     w.head.start({ phase: 'live', broadcast: { onAir: true, videoId: 'vid00000001', liveChatId: 'chat-1', title: 't', channelId: 'UCowner' } });
     await w.run(() => w.clock() - START >= 3_600_000, 20_000);
     expect(w.youtube.streamCalls).toBe(1);
     expect(w.youtube.listCalls).toBe(0);
-    expect(w.meter.snapshot().totalUnits).toBe(5);
+    const endChecks = w.youtube.calls.filter(call => call.path === '/videos').length;
+    expect(endChecks).toBeGreaterThanOrEqual(58);
+    expect(endChecks).toBeLessThanOrEqual(61);
+    expect(w.meter.snapshot().totalUnits).toBe(5 + endChecks);
     expect(w.ear.status().counters.streamConnections).toBe(1);
   });
 
@@ -1187,6 +1211,7 @@ describe('over real HTTP', () => {
   it('reads a fake chat from a real server and reaches a real head server with the real fetch and timers', async () => {
     const received: any[] = [];
     const calls: string[] = [];
+    const broadcastBodies: any[] = [];
     let stream: any = { streamId: 'st-http', platform: 'youtube', phase: 'waiting_for_chat', startedAt: at(0), title: 't', chatWrites: false, broadcast: null };
     const readBody = (request: IncomingMessage) => new Promise<any>(resolve => {
       let text = '';
@@ -1202,7 +1227,8 @@ describe('over real HTTP', () => {
       if (route === 'GET /v1/platform/stream/state') return send(200, { stream, chatPosts: [] });
       if (route === 'POST /v1/platform/stream/broadcast') {
         if (body.ended) { stream = { ...stream, phase: 'ended' }; return send(200, { stream }); }
-        stream = { ...stream, phase: 'live' };
+        broadcastBodies.push(body);
+        stream = { ...stream, phase: body.onAir === true && stream.phase === 'waiting_for_chat' ? 'live' : stream.phase };
         return send(200, { stream });
       }
       if (route === 'POST /v1/platform/stream/comments') { received.push(...body.comments); return send(202, { accepted: body.comments.length, duplicates: 0, chatPosts: [] }); }
@@ -1212,7 +1238,7 @@ describe('over real HTTP', () => {
       const url = new URL(request.url ?? '', 'http://x');
       const send = (status: number, value: unknown) => { response.writeHead(status, { 'content-type': 'application/json' }); response.end(JSON.stringify(value)); };
       if (url.pathname === '/youtube/v3/liveBroadcasts') return send(200, { items: [{ id: 'vid00000001', snippet: { title: 't', channelId: 'UCo' }, status: { lifeCycleStatus: 'live' } }] });
-      if (url.pathname === '/youtube/v3/videos') return send(200, { items: [{ id: 'vid00000001', snippet: { title: 't', channelId: 'UCo' }, liveStreamingDetails: { activeLiveChatId: 'chat-http' } }] });
+      if (url.pathname === '/youtube/v3/videos') return send(200, { items: [{ id: 'vid00000001', snippet: { title: 't', channelId: 'UCo' }, liveStreamingDetails: { activeLiveChatId: 'chat-http', actualStartTime: at(0) } }] });
       if (url.pathname === '/youtube/v3/liveChat/messages') {
         const first = !url.searchParams.get('pageToken');
         return send(200, first
@@ -1237,6 +1263,8 @@ describe('over real HTTP', () => {
       expect(received.map(c => c.id)).toEqual(['m1', 'm2', 'm3']);
       expect(stream.phase).toBe('ended');
       expect(calls).toContain('POST /v1/platform/stream/broadcast');
+      // Live only because the ear said onAir: true after seeing the video's actualStartTime.
+      expect(broadcastBodies).toEqual([expect.objectContaining({ videoId: 'vid00000001', liveChatId: 'chat-http', onAir: true })]);
     } finally {
       headServer.close();
       youtubeServer.close();
@@ -1247,6 +1275,7 @@ describe('over real HTTP', () => {
 describe('over real HTTP, streamList', () => {
   it('reads a chunked JSON array from a real server over real sockets, resumes by token after the server cuts the socket, and ends on offlineAt', async () => {
     const received: any[] = [];
+    const broadcastBodies: any[] = [];
     const tokens: Array<string | null> = [];
     let stream: any = { streamId: 'st-http', platform: 'youtube', phase: 'waiting_for_chat', startedAt: at(0), title: 't', chatWrites: false, broadcast: null };
     const readBody = (request: IncomingMessage) => new Promise<any>(resolve => {
@@ -1260,7 +1289,8 @@ describe('over real HTTP, streamList', () => {
       const send = (status: number, value: unknown) => { response.writeHead(status, { 'content-type': 'application/json' }); response.end(JSON.stringify(value)); };
       if (route === 'GET /v1/platform/stream/state') return send(200, { stream, chatPosts: [] });
       if (route === 'POST /v1/platform/stream/broadcast') {
-        stream = { ...stream, phase: body.ended ? 'ended' : 'live' };
+        if (!body.ended) broadcastBodies.push(body);
+        stream = { ...stream, phase: body.ended ? 'ended' : body.onAir === true && stream.phase === 'waiting_for_chat' ? 'live' : stream.phase };
         return send(200, { stream });
       }
       if (route === 'POST /v1/platform/stream/comments') { received.push(...body.comments); return send(202, { accepted: body.comments.length, duplicates: 0, chatPosts: [] }); }
@@ -1274,7 +1304,7 @@ describe('over real HTTP, streamList', () => {
       const url = new URL(request.url ?? '', 'http://x');
       const send = (status: number, value: unknown) => { response.writeHead(status, { 'content-type': 'application/json' }); response.end(JSON.stringify(value)); };
       if (url.pathname === '/youtube/v3/liveBroadcasts') return send(200, { items: [{ id: 'vid00000001', snippet: { title: 't', channelId: 'UCo' }, status: { lifeCycleStatus: 'live' } }] });
-      if (url.pathname === '/youtube/v3/videos') return send(200, { items: [{ id: 'vid00000001', snippet: { title: 't', channelId: 'UCo' }, liveStreamingDetails: { activeLiveChatId: 'chat-http' } }] });
+      if (url.pathname === '/youtube/v3/videos') return send(200, { items: [{ id: 'vid00000001', snippet: { title: 't', channelId: 'UCo' }, liveStreamingDetails: { activeLiveChatId: 'chat-http', actualStartTime: at(0) } }] });
       if (url.pathname !== '/youtube/v3/liveChat/messages/stream') return send(404, {});
       const token = url.searchParams.get('pageToken');
       tokens.push(token);
@@ -1312,6 +1342,7 @@ describe('over real HTTP, streamList', () => {
       expect(stream.phase).toBe('ended');
       // The first connection had no token; the second resumed from the last whole response of the cut one.
       expect(tokens).toEqual([null, 'p4']);
+      expect(broadcastBodies).toEqual([expect.objectContaining({ videoId: 'vid00000001', onAir: true })]);
       expect(status.counters).toMatchObject({ streamConnections: 2, streamPages: 3, commentsSent: 6 });
     } finally {
       headServer.close();
@@ -1370,5 +1401,411 @@ describe('セッション指定の動画とYouTubeの開始確認', () => {
     await w.run(() => w.head.broadcasts.some(b => b.onAir === true));
     expect(w.head.broadcasts[0].onAir).toBe(false);
     expect(w.head.broadcasts.at(-1)).toMatchObject({ videoId: 'AGenSh4kF9Y', onAir: true });
+  });
+});
+
+/**
+ * The review of the ear's on-air work (2026-11-02): the end of the chat while the head still fails, a video that is over already, an end the
+ * chat does not announce, YouTube errors while the video is looked at, and the head's different 409s. The fake head answers like the real one
+ * (streamService.broadcast): STREAM_VIDEO_MISMATCH for another video, live only for a waiting stream told onAir: true.
+ */
+describe('終わり際のコメントを落とさない', () => {
+  function live(w: ReturnType<typeof world>) {
+    w.head.start({ phase: 'live', broadcast: { onAir: true, videoId: 'vid00000001', liveChatId: 'chat-1', title: 't', channelId: 'UCowner' } });
+  }
+  const chatEnded = { id: 'end', snippet: { type: 'chatEndedEvent', publishedAt: at(5), hasDisplayContent: false }, authorDetails: author('UCsys') };
+
+  it.each(['poll', 'stream'] as const)('%s: 最後のコメントが 503 のまま終わりが見つかっても、頭が戻れば送り切ってから終わりを知らせる', async via => {
+    const w = world({ via });
+    live(w);
+    w.youtube.messages = [textItem('m1', 1), textItem('m2', 2), chatEnded];
+    w.head.commentStatuses = [503, 503];
+    await w.run(() => w.head.ended.length === 1);
+    expect(w.head.received.map(c => c.id)).toEqual(['m1', 'm2']);
+    expect(w.head.log.at(-1)).toBe('ended');
+    expect(w.head.log.filter(entry => entry.startsWith('comments'))).toEqual(['comments:2']);
+    expect(w.ear.status().counters.commentsDropped).toBe(0);
+    expect(w.head.commentsPosted).toBeGreaterThanOrEqual(3);
+  });
+
+  it.each(['poll', 'stream'] as const)('%s: 終わりの後の送り直しは 1・2・4・8・16 秒で、それでも送れなければ捨てた件数を数えて残す', async via => {
+    const w = world({ via });
+    live(w);
+    w.youtube.messages = [textItem('m1', 1), textItem('m2', 2), chatEnded];
+    w.head.commentStatuses = Array.from({ length: 30 }, () => 503);
+    await w.run(() => w.head.ended.length === 1);
+    expect(w.head.received).toEqual([]);
+    expect(w.sleeps.join(',')).toContain('1000,2000,4000,8000,16000');
+    expect(w.head.commentsPosted).toBeGreaterThanOrEqual(7);
+    expect(w.ear.status().counters).toMatchObject({ commentsDropped: 2, commentsSent: 0 });
+    expect(w.ear.status().pending).toBe(0);
+    expect(w.logs.some(line => line.startsWith('WARN') && line.includes('2 comments could not be sent before the stream ended'))).toBe(true);
+    // The end is still told after the comments were given up.
+    expect(w.head.log.at(-1)).toBe('ended');
+  });
+
+  it('終わりの後の送り直しの途中で頭が 409 STREAM_NOT_LIVE と言えば、そこで止めて件数を残す', async () => {
+    const w = world();
+    live(w);
+    w.youtube.messages = [textItem('m1', 1), textItem('m2', 2), chatEnded];
+    w.head.commentStatuses = [503, 409];
+    await w.run(() => w.head.ended.length === 1);
+    expect(w.head.received).toEqual([]);
+    expect(w.head.commentsPosted).toBe(2);
+    expect(w.ear.status().counters.commentsDropped).toBe(2);
+    expect(w.logs.some(line => line.includes('the head says the stream is not live'))).toBe(true);
+  });
+
+  it('終わりの後の送り直しの待ちの途中で止められたら、そこで終わり、捨てた件数を残す', async () => {
+    let t = START;
+    const w = world({
+      now: () => t,
+      sleep: async (ms, signal) => {
+        if (signal.aborted) return;
+        // The first wait of the final send (1 s, with comments waiting) lasts until the ear is stopped.
+        if (ms === 1000 && w.head.commentsPosted >= 2) { await new Promise<void>(resolve => signal.addEventListener('abort', () => resolve(), { once: true })); return; }
+        t += ms;
+        await tick();
+      },
+    });
+    live(w);
+    w.youtube.messages = [textItem('m1', 1), chatEnded];
+    w.head.commentStatuses = Array.from({ length: 30 }, () => 503);
+    w.ear.start();
+    for (let i = 0; i < 4000 && w.head.commentsPosted < 2; i += 1) { w.youtube.pump(); await tick(); }
+    for (let i = 0; i < 20; i += 1) await tick();
+    await w.ear.stop();
+    expect(w.head.commentsPosted).toBe(2);
+    expect(w.ear.status().counters.commentsDropped).toBe(1);
+    expect(w.logs.some(line => line.includes('the ear was stopped'))).toBe(true);
+  });
+});
+
+describe('終了済みの動画と、チャットが知らせない終わり', () => {
+  const TARGET = 'AGenSh4kF9Y';
+
+  it.each([
+    [undefined, undefined, 'waits'], [at(0), undefined, 'onAir'], [at(0), at(50), 'over'], [undefined, at(50), 'over'],
+  ] as const)('指定の動画: 開始 %s・終了 %s -> %s', async (start, end, outcome) => {
+    const w = world();
+    w.head.start({ targetVideoId: TARGET });
+    w.youtube.actualStartTime = start;
+    w.youtube.actualEndTime = end;
+    if (outcome === 'over') {
+      await w.run(() => w.head.ended.length === 1);
+      expect(w.head.broadcasts).toEqual([]);
+      expect(w.youtube.calls.some(call => call.path.startsWith('/liveChat'))).toBe(false);
+    } else {
+      await w.run(() => w.head.broadcasts.length >= 1);
+      expect(w.head.broadcasts[0].onAir).toBe(outcome === 'onAir');
+    }
+  });
+
+  it.each([
+    [undefined, undefined], [at(0), undefined], [at(0), at(50)], [undefined, at(50)],
+  ] as const)('探して見つけた配信: 開始 %s・終了 %s でも、終わった動画を onAir にしない', async (start, end) => {
+    const w = world();
+    w.head.start();
+    w.youtube.actualStartTime = start;
+    w.youtube.actualEndTime = end;
+    if (end) {
+      await w.run(() => w.head.ended.length === 1);
+      expect(w.head.broadcasts.every(body => body.onAir === false)).toBe(true);
+    } else {
+      await w.run(() => w.head.broadcasts.length >= 1);
+      expect(w.head.broadcasts[0].onAir).toBe(Boolean(start));
+    }
+  });
+
+  it('初めから終わっている動画で activeLiveChatId が無くても、待ち続けずに頭へ終わりを知らせる（指定の動画・YOUTUBE_LIVE_URL）', async () => {
+    for (const [options, startOptions] of [[{}, { targetVideoId: TARGET }], [{ liveUrl: 'https://youtu.be/abcdefghijk' }, {}]] as const) {
+      const w = world(options);
+      w.head.start(startOptions);
+      w.youtube.chatId = undefined;
+      w.youtube.actualEndTime = at(50);
+      await w.run(() => w.head.ended.length === 1);
+      expect(w.head.ended).toEqual([{ streamId: 'st-1', ended: true }]);
+      expect(w.head.stream?.phase).toBe('ended');
+      expect(w.head.broadcasts).toEqual([]);
+      expect(w.youtube.calls.some(call => call.path.startsWith('/liveChat') || call.path === '/liveBroadcasts')).toBe(false);
+    }
+  });
+
+  it('開始が見えていない動画で chatId も無ければ、これまでどおり待つ（終わりを作らない）', async () => {
+    const w = world();
+    w.head.start({ targetVideoId: TARGET });
+    w.youtube.chatId = undefined;
+    w.youtube.actualStartTime = undefined;
+    await w.run(() => w.clock() - START >= 60_000);
+    expect(w.head.ended).toEqual([]);
+    expect(w.head.broadcasts).toEqual([]);
+  });
+
+  it.each(['poll', 'stream'] as const)('%s: true を送ったあとに終わり、チャットが静かなままでも、動画側の終わりで検知する（60 秒ごと）', async via => {
+    const w = world({ via });
+    w.head.start({ targetVideoId: TARGET });
+    w.youtube.onPump = () => { if (w.head.broadcasts.some(body => body.onAir) && !w.youtube.actualEndTime && w.clock() - START >= 200_000) w.youtube.actualEndTime = at(200); };
+    await w.run(() => w.head.ended.length === 1);
+    const videos = w.youtube.calls.filter(call => call.path === '/videos');
+    expect(videos.length).toBeGreaterThanOrEqual(4);
+    // After the first look (the discovery) the video is looked at no more often than every 60 s.
+    for (let i = 1; i < videos.length; i += 1) expect(videos[i].at - videos[i - 1].at).toBeGreaterThanOrEqual(60_000);
+    expect(w.clock() - (START + 200_000)).toBeLessThanOrEqual(80_000);
+    expect(w.head.log.at(-1)).toBe('ended');
+  });
+
+  it('onAir の後の動画の確かめは 1 時間に 60 回（60 units）で、チャットが静かな streamList は 1 接続（5 units）のまま', async () => {
+    const w = world({ via: 'stream' });
+    w.head.start({ phase: 'live', broadcast: { onAir: true, videoId: 'vid00000001', liveChatId: 'chat-1', title: 't', channelId: 'UCowner' } });
+    await w.run(() => w.clock() - START >= 3_600_000, 60_000);
+    const videos = w.youtube.calls.filter(call => call.path === '/videos').length;
+    expect(videos).toBeGreaterThanOrEqual(58);
+    expect(videos).toBeLessThanOrEqual(61);
+    expect(w.youtube.calls.filter(call => call.path === '/liveBroadcasts')).toEqual([]);
+    expect(w.head.ended).toEqual([]);
+    expect(w.youtube.streamCalls).toBe(1);
+  });
+
+  it.each(['poll', 'stream'] as const)('%s: 耳が再起動したとき、頭の broadcast が onAir:false なら同じ動画・チャットを引き継いで開始を確かめ直す', async via => {
+    const w = world({ via });
+    w.head.start({ phase: 'waiting_for_chat', broadcast: { onAir: false, videoId: 'vid00000001', liveChatId: 'chat-9', title: 't', channelId: 'UCowner' } });
+    await w.run(() => w.head.stream?.phase === 'live');
+    expect(w.youtube.calls.some(call => call.path === '/liveBroadcasts')).toBe(false);
+    expect(w.head.broadcasts).toEqual([expect.objectContaining({ videoId: 'vid00000001', liveChatId: 'chat-9', onAir: true })]);
+    expect(w.head.wentLive).toBe(1);
+    const chatCall = w.youtube.calls.find(call => call.path.startsWith('/liveChat'));
+    expect(chatCall?.query.liveChatId).toBe('chat-9');
+  });
+
+  it('頭が別の動画の broadcast を持っていても、state の targetVideoId を優先して探し直す', async () => {
+    const w = world();
+    w.head.start({ targetVideoId: TARGET, broadcast: { onAir: false, videoId: 'old00000001', liveChatId: 'chat-old', title: 't', channelId: 'UCowner' } });
+    await w.run(() => w.head.stream?.phase === 'live');
+    expect(w.head.broadcasts[0]).toMatchObject({ videoId: TARGET, onAir: true });
+    expect(w.youtube.calls.find(call => call.path === '/videos')?.query.id).toBe(TARGET);
+  });
+
+  it('discovery の問い合わせに mine は無い（broadcastStatus だけ）', async () => {
+    const w = world();
+    w.head.start();
+    w.youtube.emptyBroadcastLists = 2;
+    await w.run(() => w.head.broadcasts.length >= 1);
+    const lists = w.youtube.calls.filter(call => call.path === '/liveBroadcasts');
+    expect(lists.length).toBeGreaterThanOrEqual(3);
+    for (const call of lists) {
+      expect('mine' in call.query).toBe(false);
+      expect('id' in call.query).toBe(false);
+      expect(Object.keys(call.query).sort()).toEqual(['broadcastStatus', 'broadcastType', 'part']);
+    }
+  });
+});
+
+describe('動画の確かめでの YouTube のエラー', () => {
+  function restarted(w: ReturnType<typeof world>, onAir: boolean) {
+    w.head.start({ phase: onAir ? 'live' : 'waiting_for_chat', broadcast: { onAir, videoId: 'vid00000001', liveChatId: 'chat-1', title: 't', channelId: 'UCowner' } });
+  }
+
+  it('quota: lastError とログに残り、5 分待つ。その間も頭の state とチャットは続き、戻れば開始を知らせる', async () => {
+    const w = world({ via: 'stream' });
+    restarted(w, false);
+    w.youtube.videoErrors = [[403, 'quotaExceeded']];
+    w.youtube.messages = manyTexts(3);
+    await w.run(() => w.head.stream?.phase === 'live');
+    const videos = w.youtube.calls.filter(call => call.path === '/videos');
+    expect(videos).toHaveLength(2);
+    expect(videos[1].at - videos[0].at).toBeGreaterThanOrEqual(300_000);
+    expect(w.ear.status().lastError).toContain('quotaExceeded');
+    expect(w.logs.some(line => line.startsWith('WARN') && line.includes('looking at video vid00000001 failed') && line.includes('quotaExceeded'))).toBe(true);
+    expect(w.head.received.map(c => c.id)).toEqual(['m1', 'm2', 'm3']);
+    expect(w.head.stateCalls).toBeGreaterThanOrEqual(50);
+  });
+
+  it('権限のエラーが続く: 初めの 1 回だけ警告し、待ちは長くなっていき、戻れば開始を知らせる', async () => {
+    const w = world({ via: 'stream' });
+    restarted(w, false);
+    w.youtube.videoErrors = Array.from({ length: 6 }, () => [403, 'forbidden'] as [number, string]);
+    await w.run(() => w.head.stream?.phase === 'live');
+    const times = w.youtube.calls.filter(call => call.path === '/videos').map(call => call.at);
+    const gaps = times.slice(1).map((time, i) => time - times[i]);
+    expect(gaps).toHaveLength(6);
+    for (const gap of gaps) expect(gap).toBeGreaterThanOrEqual(15_000);
+    expect(gaps[5]).toBeGreaterThanOrEqual(55_000);
+    expect(gaps[5]).toBeGreaterThan(gaps[2]);
+    expect(w.ear.status().lastError).toContain('forbidden');
+    expect(w.logs.filter(line => line.startsWith('WARN') && line.includes('looking at video'))).toHaveLength(1);
+  });
+
+  it('onAir の後の終わりの確かめが quota で外れても、待ったあとに終わりを見つける', async () => {
+    const w = world({ via: 'stream' });
+    restarted(w, true);
+    w.youtube.videoErrors = [[403, 'quotaExceeded']];
+    w.youtube.actualEndTime = at(1);
+    await w.run(() => w.head.ended.length === 1);
+    expect(w.clock() - START).toBeGreaterThanOrEqual(360_000);
+    expect(w.ear.status().lastError).toContain('quotaExceeded');
+    expect(w.logs.some(line => line.startsWith('WARN') && line.includes('quotaExceeded'))).toBe(true);
+  });
+});
+
+describe('broadcast への頭の答えの区別', () => {
+  const TARGET = 'AGenSh4kF9Y';
+  const onAirBody = (body: any) => body.onAir === true;
+  const waiting = (w: ReturnType<typeof world>) => w.head.start({ phase: 'waiting_for_chat', broadcast: { onAir: false, videoId: 'vid00000001', liveChatId: 'chat-1', title: 't', channelId: 'UCowner' } });
+
+  it('開始の知らせが 503: 次の確かめでもう一度送り、挨拶は一度', async () => {
+    const w = world();
+    waiting(w);
+    w.head.broadcastFaults = [{ when: onAirBody, times: 1, status: 503 }];
+    await w.run(() => w.head.stream?.phase === 'live');
+    expect(w.head.broadcasts.filter(onAirBody)).toHaveLength(2);
+    expect(w.head.wentLive).toBe(1);
+  });
+
+  it('頭が受理したのに応答を失った: もう一度 true を送っても、live のままで挨拶は重ならない', async () => {
+    const w = world();
+    waiting(w);
+    w.head.broadcastFaults = [{ when: onAirBody, times: 1, lose: true }];
+    await w.run(() => w.head.broadcasts.filter(onAirBody).length >= 2);
+    expect(w.head.stream?.phase).toBe('live');
+    expect(w.head.wentLive).toBe(1);
+    expect(w.head.stream?.broadcast).toMatchObject({ onAir: true });
+  });
+
+  it('偽の頭は本物と同じ: false を再送しても live を待ちに戻さず、true のときだけ live にする', async () => {
+    const w = world();
+    w.head.start();
+    const post = (body: unknown) => w.head.fetcher(`${HEAD}/v1/platform/stream/broadcast`, { method: 'POST', body: JSON.stringify(body) });
+    const base = { streamId: 'st-1', videoId: 'vid00000001', liveChatId: 'chat-1', title: 't', channelId: 'UCowner' };
+    await post({ ...base, onAir: false });
+    expect(w.head.stream?.phase).toBe('waiting_for_chat');
+    await post({ ...base, onAir: true });
+    expect(w.head.stream?.phase).toBe('live');
+    await post({ ...base, onAir: false });
+    expect(w.head.stream?.phase).toBe('live');
+    expect(w.head.wentLive).toBe(1);
+    w.head.stream = { ...w.head.stream!, targetVideoId: TARGET };
+    const refused = await post({ ...base, onAir: true });
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toEqual({ error: 'STREAM_VIDEO_MISMATCH' });
+  });
+
+  it('開始の知らせへの 409 STREAM_NOT_LIVE: 配信は終わった。読むのをやめ、終わりの知らせも送らず、同じものを繰り返さない', async () => {
+    const w = world();
+    waiting(w);
+    w.head.broadcastFaults = [{ when: onAirBody, times: 99, status: 409, code: 'STREAM_NOT_LIVE' }];
+    await w.run(() => w.clock() - START >= 40_000);
+    expect(w.head.broadcasts.filter(onAirBody)).toHaveLength(1);
+    expect(w.head.ended).toEqual([]);
+    expect(w.ear.status().headRefusal).toBeNull();
+  });
+
+  it('開始の知らせへの 409 STREAM_VIDEO_MISMATCH が 1 回: 止まらず、理由を status とログに出し、次に成功すれば消える', async () => {
+    const w = world();
+    waiting(w);
+    w.youtube.messages = manyTexts(3);
+    w.head.broadcastFaults = [{ when: onAirBody, times: 1, status: 409, code: 'STREAM_VIDEO_MISMATCH' }];
+    let refusal: string | null = null;
+    w.youtube.onPump = () => { refusal ??= w.ear.status().headRefusal; };
+    await w.run(() => w.head.stream?.phase === 'live');
+    expect(refusal).toContain('STREAM_VIDEO_MISMATCH');
+    expect(w.logs.some(line => line.startsWith('WARN') && line.includes('STREAM_VIDEO_MISMATCH'))).toBe(true);
+    expect(w.ear.status().lastError).toContain('STREAM_VIDEO_MISMATCH');
+    expect(w.ear.status().headRefusal).toBeNull();
+    expect(w.head.wentLive).toBe(1);
+    expect(w.head.ended).toEqual([]);
+  });
+
+  it('頭が targetVideoId をまだ教えていない間に別の動画を送って 409 になっても、次の state の targetVideoId で探し直す', async () => {
+    const w = world({ liveUrl: 'old00000001' });
+    w.head.start({ targetVideoId: TARGET });
+    w.head.hideTargetStates = 1;
+    await w.run(() => w.head.stream?.phase === 'live');
+    expect(w.head.broadcasts.map(body => body.videoId)).toEqual(['old00000001', TARGET]);
+    expect(w.youtube.calls.filter(call => call.path === '/videos').map(call => call.query.id)).toEqual(['old00000001', TARGET]);
+    expect(w.ear.status().headRefusal).toBeNull();
+    expect(w.logs.some(line => line.includes('STREAM_VIDEO_MISMATCH') && line.includes('looking again'))).toBe(true);
+  });
+
+  it('同じ食い違いが続いても 60 秒ごとの無限の繰り返しにしない: 3 回で諦め、理由を status とログに残し、YouTube も頭も叩かなくなる', async () => {
+    const w = world({ liveUrl: 'old00000001' });
+    w.head.start({ targetVideoId: TARGET });
+    w.head.hideTargetStates = 100_000;
+    await w.run(() => w.clock() - START >= 600_000);
+    expect(w.head.broadcasts).toHaveLength(3);
+    expect(w.youtube.calls.filter(call => call.path === '/videos')).toHaveLength(3);
+    expect(w.youtube.calls.some(call => call.path.startsWith('/liveChat'))).toBe(false);
+    expect(w.ear.status().headRefusal).toContain('STREAM_VIDEO_MISMATCH');
+    expect(w.ear.status().headRefusal).toContain('3 times in a row');
+    expect(w.logs.filter(line => line.includes('giving up on stream st-1'))).toHaveLength(1);
+    expect(w.head.ended).toEqual([]);
+  });
+
+  it('別の新しい配信は、前の配信で諦めていても普通に取りつく', async () => {
+    const w = world({ liveUrl: 'old00000001' });
+    w.head.start({ targetVideoId: TARGET });
+    w.head.hideTargetStates = 100_000;
+    await w.run(() => w.clock() - START >= 100_000);
+    expect(w.head.broadcasts).toHaveLength(3);
+    w.head.hideTargetStates = 0;
+    w.head.start({ streamId: 'st-2' });
+    await w.run(() => w.head.stream?.phase === 'live');
+    expect(w.head.broadcasts.at(-1)).toMatchObject({ streamId: 'st-2', onAir: true });
+  });
+
+  it('開始の知らせへの 400: 同じものを送り続けず、読むのをやめ、理由を残す', async () => {
+    const w = world();
+    waiting(w);
+    w.head.broadcastFaults = [{ when: onAirBody, times: 99, status: 400, code: 'STREAM_INPUT_INVALID' }];
+    await w.run(() => w.clock() - START >= 600_000);
+    expect(w.head.broadcasts.filter(onAirBody)).toHaveLength(1);
+    expect(w.ear.status().headRefusal).toContain('STREAM_INPUT_INVALID');
+    expect(w.ear.status().lastError).toContain('STREAM_INPUT_INVALID');
+    expect(w.head.ended).toEqual([]);
+  });
+
+  it('最初の broadcast への 400: YouTube も頭も同じもので叩き続けない', async () => {
+    const w = world();
+    w.head.start({ targetVideoId: TARGET });
+    w.head.broadcastFaults = [{ when: () => true, times: 99, status: 400, code: 'STREAM_INPUT_INVALID' }];
+    await w.run(() => w.clock() - START >= 600_000);
+    expect(w.head.broadcasts).toHaveLength(1);
+    expect(w.youtube.calls.filter(call => call.path === '/videos')).toHaveLength(1);
+    expect(w.ear.status().headRefusal).toContain('STREAM_INPUT_INVALID');
+  });
+
+  it('最初の broadcast への 503 は一時的な障害として送り直す', async () => {
+    const w = world();
+    w.head.start({ targetVideoId: TARGET });
+    w.head.broadcastFaults = [{ when: () => true, times: 2, status: 503 }];
+    await w.run(() => w.head.stream?.phase === 'live');
+    expect(w.head.broadcasts).toHaveLength(3);
+    expect(w.ear.status().headRefusal).toBeNull();
+  });
+});
+
+describe('HeadStreamClient: broadcast の答えの分け方', () => {
+  const clientFor = (fetcher: typeof fetch) => new HeadStreamClient({ url: HEAD, token: 'bridge-token', fetcher });
+  const input = { streamId: 'st-1', videoId: 'vid00000001', liveChatId: 'chat-1', title: 't', channelId: 'UCo' };
+
+  it.each([
+    [200, {}, { status: 'ok' }],
+    [409, { error: 'STREAM_NOT_LIVE' }, { status: 'not_live' }],
+    [409, { error: 'STREAM_VIDEO_MISMATCH' }, { status: 'video_mismatch' }],
+    [409, {}, { status: 'not_live' }],
+    [409, { error: 'STREAM_ENDING' }, { status: 'unavailable' }],
+    [400, { error: 'STREAM_INPUT_INVALID' }, { status: 'rejected', code: 'STREAM_INPUT_INVALID' }],
+    [413, { error: 'STREAM_BODY_TOO_LARGE' }, { status: 'rejected', code: 'STREAM_BODY_TOO_LARGE' }],
+    [422, {}, { status: 'rejected', code: 'HTTP_422' }],
+    [401, { error: 'STREAM_PAIRING_REQUIRED' }, { status: 'unavailable' }],
+    [503, {}, { status: 'unavailable' }],
+  ] as const)('%s %j -> %j', async (status, body, expected) => {
+    const client = clientFor(async () => json(status, body));
+    expect(await client.postBroadcast(input)).toEqual(expected);
+    expect(await client.postEnded('st-1')).toEqual(expected);
+  });
+
+  it('届かなければ unavailable', async () => {
+    const client = clientFor(async () => { throw new TypeError('fetch failed'); });
+    expect(await client.postBroadcast(input)).toEqual({ status: 'unavailable' });
   });
 });
