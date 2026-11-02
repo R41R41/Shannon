@@ -1,8 +1,8 @@
 {
  "producedBy": "backend/scripts/minecraft-continue-lab-probe.ts",
  "bench": "B",
- "bodyRevision": "4dbf1667f264caf6fe0c3baee330e69c216cdcd6",
- "madeAt": "2026-11-02T04:51:43.806Z",
+ "bodyRevision": "bff3bb3bae87d760156bc0063ff109838bc92d23",
+ "madeAt": "2026-11-02T09:51:23.783Z",
  "answers": "vertical/r45-hold5-shaft-down",
  "fixtureSha256": "58116db5f0dd7ea1575827808ef31baa6ed29c1a215590b8626b730a90831463",
  "substitute": "an arena of stone, not the real run's ground",
@@ -63,8 +63,8 @@
        "item": "cobblestone",
        "count": 15,
        "reason": "picked",
-       "id": "lab:q36:1:1:0",
-       "obsSeq": 9742,
+       "id": "lab:q37:1:1:0",
+       "obsSeq": 10005,
        "deliverySeq": 0
       }
      ]
@@ -84,15 +84,15 @@
    "goal": "done",
    "end": "finished",
    "released": true,
-   "startedAt": "2026-11-02T04:51:31.109Z"
+   "startedAt": "2026-11-02T09:51:11.086Z"
   },
   "bodyTimes": {
-   "acceptedAt": "2026-11-02T04:51:31.109Z",
-   "startedAt": "2026-11-02T04:51:31.110Z",
-   "lockAt": "2026-11-02T04:51:31.110Z",
-   "firstMotorAt": "2026-11-02T04:51:31.112Z",
+   "acceptedAt": "2026-11-02T09:51:11.086Z",
+   "startedAt": "2026-11-02T09:51:11.086Z",
+   "lockAt": "2026-11-02T09:51:11.086Z",
+   "firstMotorAt": "2026-11-02T09:51:11.088Z",
    "motorOps": 16,
-   "endedAt": "2026-11-02T04:51:42.300Z"
+   "endedAt": "2026-11-02T09:51:22.278Z"
   },
   "opCounts": {
    "dig": 16,

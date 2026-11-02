@@ -11,7 +11,7 @@ import { clip } from '../actReport.js';
 import { blockAt, cellText, fullPackWatch, inventoryCount, isAirLike, letGo, stopped, StepStopped, wait, waitUntil, type StepContext, type StepOutcome } from './common.js';
 import { atGoal, goWith, type GoOutcome, type WayNotes } from './walk.js';
 import { dig } from './dig.js';
-import { pillarUp, shortFloor, wholeFloorBeside } from './pillarUp.js';
+import { climbBlocker, pillarUp, shortFloor, wholeFloorBeside } from './pillarUp.js';
 import { bodyOverlap, placeFacts } from '../placeFacts.js';
 import { blackBoxOf } from '../blackbox.js';
 import type { Progress } from '../../integration/commonFca/continueContract.js';
@@ -148,6 +148,22 @@ export function digRuleOf(registry: any, words: string[] | undefined): DigRule {
   return { names, ignored };
 }
 
+/** Cheap building blocks: what a pack that dug through a mountain or the Nether holds in numbers, and may be told to lay (never ores, obsidian, planks or a crafting block). */
+const BRIDGE_BLOCKS = /^(?:cobblestone|stone|cobbled_deepslate|deepslate|dirt|coarse_dirt|netherrack|basalt|smooth_basalt|blackstone|andesite|diorite|granite|tuff|calcite|end_stone|sandstone|red_sandstone|terracotta|nether_bricks|stone_bricks)$/u;
+/**
+ * The cheap blocks the pack holds that `canPlace` does not name, most first ("netherrack×99・basalt×7"), or '' when there are none (at least 4 of a kind).
+ * S2 lab (c4, 244 m): a go with 64 stones stopped on `no_blocks` with 99 netherrack, dug on the way, in the pack; the stop said only "canPlace に足す".
+ */
+export function bridgeBlocksHeld(bot: any, given: readonly string[] | undefined): string {
+  const named = new Set((given ?? []).map(name => String(name).replace(/^minecraft:/u, '').toLowerCase()));
+  const counts = new Map<string, number>();
+  for (const item of (bot.inventory?.items?.() ?? []) as any[]) {
+    const name = String(item?.name ?? '');
+    if (BRIDGE_BLOCKS.test(name) && !named.has(name)) counts.set(name, (counts.get(name) ?? 0) + Number(item.count ?? 0));
+  }
+  return [...counts.entries()].filter(([, count]) => count >= 4).sort((a, b) => b[1] - a[1]).slice(0, 2).map(([name, count]) => `${name}×${count}`).join('・');
+}
+
 /** The blocks of `canPlace` that are whole blocks, are held, and stay where they are put (sand and gravel fall), in the order given. */
 export function placeNamesOf(bot: any, words: string[] | undefined): { held: string[]; missing: string[]; refused: string[] } {
   const held: string[] = [], missing: string[] = [], refused: string[] = [];
@@ -194,6 +210,17 @@ const isWaterName = (name: string | null) => name === 'water' || name === 'bubbl
 /** Why a body must not stand with its feet at this cell (the contract's hazards that cannot be lifted), or null. */
 export function hazardAtFeet(bot: any, x: number, y: number, z: number): string | null {
   return hazardAtFeetWith((cx, cy, cz) => nameAt(bot, cx, cy, cz), x, y, z);
+}
+/**
+ * The fire that makes a place unsafe, or null: in the cell of the feet or the head, or beside them (a blaze's fireball leaves one on the floor of its spawner's room).
+ * The dig hand puts a fire out in 0.2 s (S2 lab, 2026-11-02: `dig` at the fire's cell, the block was air after), so the line says where it is.
+ */
+export function fireNear(bot: any, x: number, y: number, z: number): Cell | null {
+  for (const [dx, dy, dz] of [[0, 0, 0], [0, 1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [1, 1, 0], [-1, 1, 0], [0, 1, 1], [0, 1, -1]]) {
+    const name = nameAt(bot, x + dx, y + dy, z + dz);
+    if (name === 'fire' || name === 'soul_fire') return { x: x + dx, y: y + dy, z: z + dz };
+  }
+  return null;
 }
 /** The same, reading the cells through `read` (the route search's own reader, which keeps what it has read during a search). */
 export function hazardAtFeetWith(read: (x: number, y: number, z: number) => string | null, x: number, y: number, z: number): string | null {
@@ -673,17 +700,24 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   // ---- how a line ends (the contract's result lines) ----
   const packNote = fullPackWatch(bot);
   const tail = () => `${cellText(feetCell(bot) ?? start)} 道 ${state.steps} 歩・掘 ${state.dug}・置 ${state.placed}・引き直し ${state.redraws} 回`;
-  const fail = (code: string, why: string, hint: string): StepOutcome => {
+  const fail = (code: string, reason: string, hint: string): StepOutcome => {
     const at = feetCell(bot) ?? start;
     const head = `go 止まった ${code}: `;
+    // S2 lab (a Nether walk of 244 m on 64 stones, 63 of them laid in the leg before): the stop said "not_loaded" while the real reason was the stones being gone.
+    // When the go laid blocks and the pack holds none of the kinds it was given to lay, the stop says so (whatever else it says), so the head fetches more.
+    const spent = place.held.length > 0 && state.placed > 0 && code !== 'limit_place' && code !== 'no_blocks' && place.held.every(name => inventoryCount(bot, name) === 0);
+    const why = spent ? `${reason}（置く物 ${place.held.join('・')} を ${state.placed} 個置いて使い切った）` : reason;
+    const advice = spent && (code === 'not_loaded' || code === 'dead_end') ? '置く物を集めてからもう一度' : hint;
     const full = packNote();
     const fixed = ` ${tail()}${full ? `。${full}` : ''}`;
     // The contract's line: the code, the reason, where and the counts, then the hint; what does not fit of the 160 is cut from the back (the hint first).
     const room = 160 - head.length - fixed.length;
-    const withHint = hint ? `。${hint}` : '';
+    const withHint = advice ? `。${advice}` : '';
     const text = why.length + withHint.length <= room ? `${head}${why}${fixed}${withHint}` : `${head}${clip(why, Math.max(24, room))}${fixed}`;
     return { ...stopped(bot, code, text, at, start), progress: progressNow(), data: { work: { dug: state.dug, placed: state.placed, steps: state.steps, redraws: state.redraws } } };
   };
+  /** What a stop for want of blocks to lay says to do: name the cheap blocks the pack holds (dug netherrack, stone ...), else gather some. */
+  const noBlocksHint = (): string => { const held = bridgeBlocksHeld(bot, args.canPlace); return held ? `荷の ${held} を canPlace に足すか、集める` : '置ける物を集めるか、canPlace を足す'; };
   const arrived = (): StepOutcome => ({ ok: true, text: `go 着いた ${tail()}${(() => { const full = packNote(); return full ? `。${full}` : ''; })()}`, at: feetCell(bot) ?? start, progress: progressNow(true),
     data: { work: { dug: state.dug, placed: state.placed, steps: state.steps, redraws: state.redraws } } });
 
@@ -698,6 +732,9 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   const safeCells = cells.filter(cell => !hazardAtFeet(bot, cell.x, cell.y, cell.z));
   if (!safeCells.length) {
     const why = hazardAtFeet(bot, cells[0].x, cells[0].y, cells[0].z) ?? '危ない';
+    // A fire is what the dig hand puts out (0.2 s): a spawner room's floor is dotted with them, and the place beside one is the place to fight from.
+    const fire = /^(?:soul_)?fire /u.test(why) ? fireNear(bot, cells[0].x, cells[0].y, cells[0].z) : null;
+    if (fire) return fail('unsafe', `行き先 ${cellText(cells[0])} は${why}（火の中・隣には行かない）`, `火 ${cellText(fire)} は dig で消せる。または別の行き先を`);
     return fail('unsafe', `行き先 ${cellText(cells[0])} は${why}（溶岩・火・マグマ・サボテン・ベリー・ウィザーローズとその隣には行かない）`, '別の行き先を');
   }
   // Run 44 (hold 1): a place over a plant nobody stands on is said at once (`floorlessAt`); one place of several that is such is dropped.
@@ -705,6 +742,9 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   const placing = place.held.length > 0;
   const grounded = limits.range < 1 ? safeCells.filter(cell => !floorlessAt(bot, cell, rule, placing)) : safeCells;
   if (!grounded.length) {
+    // A portal's cell has no floor to ask for (an End portal is a sheet over lava): it is entered with walk, as its target, not with go.
+    const portalCell = safeCells.find(cell => /^(end_portal|nether_portal|end_gateway)$/u.test(String(nameAt(bot, cell.x, cell.y, cell.z) ?? '')));
+    if (portalCell) return fail('no_floor', `行き先 ${cellText(portalCell)} は ${nameAt(bot, portalCell.x, portalCell.y, portalCell.z)}（ポータルのマス。足場は要らない）`, 'ポータルは go でなく walk の的にして入る');
     const why = floorlessAt(bot, safeCells[0], rule, placing)!;
     return fail('no_floor', why, /なら .* の上に立てる$/u.test(why) ? 'その 1 つ下を行き先に' : /^行き先 .* は宙/u.test(why) ? '立てる所を行き先に（宙へ渡るなら canPlace）' : '別の行き先を');
   }
@@ -975,7 +1015,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
       [{ tool: true }, found => fail('no_tool', `${shown(found.digs) || '掘る所'} を掘る道だが、持っている道具では掘れない`, 'ツルハシなどを手に入れるか、別の道を')],
       ...(args.canPlace?.length ? [[{ blocks: true }, (found: Plan) => fail('no_blocks',
         `置く物が足りない（置く所 ${found.places}、持っている ${place.held.map(name => `${name}×${inventoryCount(bot, name)}`).join('・') || '無し'}${place.missing.length ? `、持っていない ${place.missing.join('・')}` : ''}${place.refused.length ? `、置かない ${place.refused.join('・')}` : ''}）`,
-        '置ける物を集めるか、canPlace を足す')] as [Relax, (found: Plan) => StepOutcome]] : []),
+        noBlocksHint())] as [Relax, (found: Plan) => StepOutcome]] : []),
       [{ permissions: true }, found => fail('dead_end', `許した手では道が無い。${found.digs.size ? `canDig に ${[...found.digs.keys()].slice(0, 3).join('・')} を許せば掘 ${[...found.digs.values()].reduce((a, b) => a + b, 0)} で` : ''}${found.places ? `canPlace を許せば置 ${found.places} で` : ''}道がある${ignored}`, '許すか、別の行き先を')],
     ];
     // The way with the rules as given was searched to its end and is shut (a search that ran out of time never comes here); a lifted search
@@ -996,7 +1036,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
       if (timeLeft() <= 0) break;
       if (state.placed >= limits.maxPlace) return { levels, stop: fail('limit_place', `置く数の上限 ${limits.maxPlace} に着いた`, 'maxPlace を増やすか、別の道を') };
       const block = place.held.find(name => inventoryCount(bot, name) > 0);
-      if (!block) return { levels, stop: fail('no_blocks', `登るのに置く物が無い（${place.missing.length ? `持っていない ${place.missing.join('・')}` : 'canPlace に置ける物が無い'}）`, '置ける物を集めるか、canPlace を足す') };
+      if (!block) return { levels, stop: fail('no_blocks', `登るのに置く物が無い（${place.missing.length ? `持っていない ${place.missing.join('・')}` : 'canPlace に置ける物が無い'}）`, noBlocksHint()) };
       // Run 44 (hold 1): the feet are read standing. The climb began while the walk before it still jumped (its last point was lifted onto a
       // trapdoor), the feet read a cell up at y 65.17, and the level was laid for a cell the body was half in (0.80) and no jump reaches.
       if (bot.entity?.onGround === false) await waitUntil(ctx, () => bot.entity?.onGround !== false, 1500);
@@ -1049,6 +1089,18 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
         let dug: StepOutcome;
         try { dug = await dig(ctx, { at: [roof], collect: false }); } finally { manualBusy = false; }
         if (!dug.ok) return { levels, stop: fail(dug.reason === 'lava_behind' ? 'lava' : 'dead_end', dug.text.slice(0, 90), '別の場所から') };
+      }
+      // Run 59 (hold 3): a rail (or a torch, a flower) in the feet cell takes the level's block: it is dug like the roof when canDig allows,
+      // otherwise the climb says which block stops it (it once jumped twice over a mineshaft's rail and said only that the jump fell short).
+      const blocker = climbBlocker(bot, feetCell(bot)!);
+      if (blocker) {
+        if (!rule.names.has(blocker.name) || state.dug >= limits.maxDig) {
+          return { levels, stop: fail(state.dug >= limits.maxDig ? 'limit_dig' : 'dead_end', `${blocker.words}（掘ってよい物に無い）`, `canDig に ${blocker.name} を足すか、別の場所から`) };
+        }
+        manualBusy = true;
+        let dug: StepOutcome;
+        try { dug = await dig(ctx, { at: [blocker.cell], collect: false }); } finally { manualBusy = false; }
+        if (!dug.ok || climbBlocker(bot, feetCell(bot)!)) return { levels, stop: fail('dead_end', dug.ok ? `${blocker.words}（掘っても残った）` : dug.text.slice(0, 90), '別の場所から') };
       }
       manualBusy = true;
       let up: StepOutcome;
@@ -1203,8 +1255,8 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
         // The place is higher than the nearest the way goes: a climb. The route search's own towers are off; a block is laid at the top of each jump.
         if (!place.held.length) {
           return args.canPlace?.length
-            ? fail('no_blocks', `行き先は ${lowest - closestY} 段上で、登るのに置く物が無い（${place.missing.length ? `持っていない ${place.missing.join('・')}` : '置ける物が無い'}${place.refused.length ? `、置かない ${place.refused.join('・')}` : ''}）`, '置ける物を集めるか、canPlace を足す')
-            : fail('dead_end', `行き先は ${lowest - closestY} 段上で、道は途中までしか無い。登るには canPlace が要る`, 'canPlace に置ける物を足す');
+            ? fail('no_blocks', `行き先は ${lowest - closestY} 段上で、登るのに置く物が無い（${place.missing.length ? `持っていない ${place.missing.join('・')}` : '置ける物が無い'}${place.refused.length ? `、置かない ${place.refused.join('・')}` : ''}）`, noBlocksHint())
+            : fail('dead_end', `行き先は ${lowest - closestY} 段上で、道は途中までしか無い。登るには canPlace が要る`, bridgeBlocksHeld(bot, args.canPlace) ? `荷の ${bridgeBlocksHeld(bot, args.canPlace)} を canPlace に足す` : 'canPlace に置ける物を足す');
         }
         // To the foot of the climb along the level: an end the way found high up (a search cut by its time ends where it got to) is not walked to,
         // the executor has no towers (run 41 replay: 12 redraws at a goal 17 up, stuck in 10 s); the climb starts here.

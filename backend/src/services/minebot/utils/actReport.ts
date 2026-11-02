@@ -3,6 +3,7 @@ import { MINE_MAKE_SMELT_WORDS } from './handCodes.js';
 import { feetCell, localMapFor, symbolFor, type BlockReader, type Cell } from './localMap.js';
 import type { ActOutcome, CutBy, GoalOutcome, Handover, InventoryEvent, Progress, RunEnd } from '../integration/commonFca/continueContract.js';
 import { lifeOf } from './life.js';
+import type { EyeReport } from './huntEyeFlight.js';
 
 /**
  * What an `act` returns (the head's contract: minecraftActContract.ts `ActResult`, mb-llm-centric-contract.md 1.3): a JSON object in the
@@ -53,7 +54,7 @@ export interface ActReport {
   stoppedWhy?: string;
   /** The first failure's code (the receipt's failureType). */
   failureType?: string;
-  eye?: { from: Cell; bearingDeg: number; flew: number; to: Cell; broke: boolean };
+  eye?: EyeReport;
   container?: { at: Cell; kind: string; items: string[] };
   arrowsLeft?: number;
   /** With `repeat`: the passes finished and the most asked. */

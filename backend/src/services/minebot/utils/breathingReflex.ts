@@ -177,9 +177,10 @@ export function airRunningOut(bot: Pick<ReflexBot, 'entity' | 'blockAt' | 'oxyge
   if (Number.isFinite(surface)) return oxygen * AIR_SECONDS_PER_UNIT <= surface + SURFACING_MARGIN_SECONDS;
   let way = Infinity;
   try { way = secondsToAir(bot as ReflexBot); } catch { return false; }
-  // An unobserved way out is not zero return time. Engage the existing escape policy early,
-  // rather than spending almost all breath on ordinary work beneath an unknown ceiling.
-  return !Number.isFinite(way) || oxygen * AIR_SECONDS_PER_UNIT <= way + CEILING_MARGIN_SECONDS;
+  // No way known at all: nothing to start early for; the critical threshold above stands. Engaging here at full air pinned the body
+  // jumping against the ceiling, with a mover's sideways swim cleared, for as long as the head stayed in the water. Digging in
+  // such water is refused where it starts, by the breath budget of the dig (breathingWork.ts), which leaves the movers their keys.
+  return Number.isFinite(way) && oxygen * AIR_SECONDS_PER_UNIT <= way + CEILING_MARGIN_SECONDS;
 }
 
 export interface BreathingReflexState {
