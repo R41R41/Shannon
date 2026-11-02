@@ -25,11 +25,12 @@ const BLAZE_FLAGS = mcData.entitiesByName.blaze.metadataKeys!.indexOf('flags');
 const itemOf = (name: string, count = 1, slot = 36) => ({ name, count, type: (mcData.itemsByName as any)[name]?.id ?? 9000, slot });
 
 interface BlazeSpec { at: Vec3; /** Where the blaze is at t ms after the start: the script of its hover. */ path?: (ms: number) => Vec3; charged?: (ms: number) => boolean; health?: number }
-function makeCamp(options: { shield?: boolean; held?: string; blazes: BlazeSpec[] }) {
+function makeCamp(options: { shield?: boolean; held?: string; blazes: BlazeSpec[]; walls?: Array<[number, number, number]> }) {
   const cache = new Map<string, any>();
+  const wallCells = new Set((options.walls ?? []).map(([x, y, z]) => `${x},${y},${z}`));
   const getBlock = (position: Vec3) => {
     const x = Math.floor(position.x), y = Math.floor(position.y), z = Math.floor(position.z);
-    const name = y < 64 ? 'stone' : 'air';
+    const name = y < 64 || wallCells.has(`${x},${y},${z}`) ? 'stone' : 'air';
     const key = `${name}@${x},${y},${z}`;
     if (!cache.has(key)) { const block = new Block(mcData.blocksByName[name].id, 0, 0); block.position = new Vec3(x, y, z); cache.set(key, block); }
     return cache.get(key);
@@ -232,6 +233,39 @@ describe('fight on a blaze: the camp', () => {
     expect(watch.charged(4000)).toHaveLength(0);
     camp.stop();
   });
+});
+
+describe('fight on a blaze: the shield and the choice of the blaze', () => {
+  it('a shield that breaks in the fight is replaced from the pack at once; the wear counts what the broken one had left, and the line says a spare was put on', async () => {
+    const camp = makeCamp({ shield: true, blazes: [{ at: new Vec3(1.5, 70.5, 0.5), path: ms => ms < 2600 ? new Vec3(1.5, 70.5, 0.5) : new Vec3(1.5, 65.0, 0.5) }] });
+    (camp.bot.inventory.slots as any[])[45].durabilityUsed = 300;
+    (camp.bot.inventory.slots as any[])[20] = itemOf('shield', 1, 20);
+    setTimeout(() => { (camp.bot.inventory.slots as any[])[45] = null; }, 1000);
+    const { json } = await act(camp, [{ do: 'fight', target: '#100', seconds: 20 }]);
+    camp.stop();
+    console.log('[blaze spare]', lineOf(json));
+    expect(json.ok).toBe(true);
+    expect(camp.bot.inventory.slots[45]?.name).toBe('shield');
+    expect(lineOf(json)).toContain('予備に替えた×1');
+    expect(lineOf(json)).toMatch(/盾 −36/u);
+  }, 60_000);
+
+  it('a blaze named by its kind: of two, the one the eye sees is fought, though the other is nearer (it hovers behind the wall)', async () => {
+    // The nearer blaze (id 100) is two blocks off with a wall of stone between; the other (id 101) is in sight, three blocks the other way, at the body's height.
+    const walls: Array<[number, number, number]> = [];
+    for (const y of [64, 65, 66, 67]) for (const z of [-1, 0, 1]) walls.push([1, y, z]);
+    const camp = makeCamp({ shield: true, walls, blazes: [
+      { at: new Vec3(2.5, 65.5, 0.5) },
+      { at: new Vec3(-2.0, 65.5, 0.5) },
+    ] });
+    const { json } = await act(camp, [{ do: 'fight', target: 'blaze', seconds: 20 }]);
+    camp.stop();
+    console.log('[blaze pick]', lineOf(json));
+    expect(json.ok).toBe(true);
+    expect(lineOf(json)).toContain('#101');
+    expect(camp.mobs[1].health).toBeLessThanOrEqual(0);
+    expect(camp.mobs[0].health).toBe(20);
+  }, 60_000);
 });
 
 describe('StrikeGate: the patience is a budget, not a delay on every blow', () => {
