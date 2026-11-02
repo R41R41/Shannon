@@ -918,7 +918,8 @@ scenes.platform = async () => {
   }
 };
 
-scenes.cross = async () => {
+/** The way off the arrival platform, as the `cross` scene; with `ballAfterMs` a dragon fireball is dropped on the body that long after the first `go` began (`cross_ball`). */
+async function crossRun(ballAfterMs: number | null): Promise<Record<string, unknown>> {
   // The way off the arrival platform: the island lies some tens of blocks off over the void, and the body stands on 5 x 5 of obsidian. A planner's `go` with blocks to lay over the gap and a place on the island for its end,
   // as many times as it takes (the hand may take 120 s). The dragon is kept over the island, high up (nothing here is a fight); what is measured is whether the body gets over, how long it takes and what it costs in blocks.
   await protect(false);
@@ -951,12 +952,21 @@ scenes.cross = async () => {
     log(`CROSS island rim at x=${rimX} (top y=${topAt(rimX, 0)}), target ${JSON.stringify(target)}, platform to rim ${100 - rimX} blocks`);
     const blocksLeft = () => (actor.inventory.items() as Array<{ name: string; count: number }>).filter(item => item.name === 'cobblestone').reduce((sum, item) => sum + item.count, 0);
     const before = blocksLeft(), deathsBefore = actorDeaths, lowest = trackMinHealth(), trail: Array<[number, number, number, number]> = [];
+    const ledgerMark = (actor.reflexLedger?.mark?.() as number | undefined) ?? 0;
+    let ballAt: number[] | null = null;
     const startedAt = Date.now();
     const sample = every(2000, () => { const p = actor.entity?.position; if (p) trail.push([Math.round((Date.now() - startedAt) / 1000), round(p.x, 1)!, round(p.y, 1)!, Number(actor.health)]); });
     const calls: Array<{ lines: string[]; ok: boolean; ms: number }> = [];
     let reached = false;
     for (let call = 0; call < 4 && !reached && actorDeaths === deathsBefore; call++) {
-      const run = await act([{ do: 'go', to: target, canPlace: ['cobblestone'], maxPlace: 100, seconds: 120 }], 135);
+      const going = act([{ do: 'go', to: target, canPlace: ['cobblestone'], maxPlace: 100, seconds: 120 }], 135);
+      if (call === 0 && ballAfterMs !== null) {
+        await sleep(ballAfterMs);
+        const p = actor.entity.position; ballAt = [round(p.x, 1)!, round(p.y, 1)!, round(p.z, 1)!];
+        await ask(`${END} summon minecraft:dragon_fireball ${p.x.toFixed(1)} ${(p.y + 6).toFixed(1)} ${p.z.toFixed(1)} {Motion:[0.0d,-1.0d,0.0d],acceleration_power:0.1d}`);
+        log(`CROSS ball dropped on the body at ${JSON.stringify(ballAt)} (${Math.round((Date.now() - startedAt) / 1000)} s into the first go)`);
+      }
+      const run = await going;
       calls.push({ lines: run.lines.map(line => line.slice(0, 400)), ok: run.ok, ms: run.ms });
       log(`CROSS go #${call + 1}: ${run.ok} after ${Math.round(run.ms / 1000)} s: ${run.lines.join(' | ').slice(0, 700)}`);
       const p = actor.entity.position;
@@ -964,13 +974,55 @@ scenes.cross = async () => {
     }
     clearInterval(sample);
     const at = actor.entity.position;
+    const entries = (actor.reflexLedger?.entriesSince?.(ledgerMark) as Array<{ kind: string; outcome: string; detail: string }> | undefined) ?? [];
     return {
+      ballAt, ledger: entries.slice(0, 14).map(e => `${e.kind}:${e.outcome}:${e.detail.slice(0, 160)}`),
       rimX, profile, target, reached, died: actorDeaths > deathsBefore, finalAt: [round(at.x, 1), round(at.y, 1), round(at.z, 1)], healthNow: Number(actor.health), lowestHealth: lowest.stop(),
       blocksBefore: before, blocksAfter: blocksLeft(), seconds: Math.round((Date.now() - startedAt) / 1000), calls, trail,
     };
   } finally {
     await ask(`${END} forceload remove 64 -16 111 16`);
   }
+}
+scenes.cross = () => crossRun(null);
+scenes.cross_ball = () => crossRun(9000);
+
+scenes.landing = async () => {
+  // Where a body can wait while the dragon comes down to the perch. The dragon is put in the landing approach (phase 2) and flies down to the podium on its own (phase 3, about ten seconds, then it sits: 6, 7, 5);
+  // the body stands still at a given place round the podium, the reflex on and nothing else acting, until the dragon sits. What it lost, when (and the dragon's phase then), the fastest it was pushed and how far it
+  // was moved are read every 100 ms. Not a measure of the head's reach once it sits (that is the cycle scene).
+  await protect(false);
+  releaseReflex();
+  await flatten(); await gear(['diamond_sword']); await wear();
+  const trials: Array<Record<string, unknown>> = [];
+  const places: Array<[string, number, number]> = [['5 m out on +z', 0.5, 5.5], ['8 m out on +z', 0.5, 8.5], ['12 m out on +z', 0.5, 12.5], ['7 m out on +x', 7.5, 0.5]];
+  for (const [label, x, z] of places) {
+    await restoreDragon(); await sleep(2500);
+    await ask(`effect give ${ACTOR} minecraft:instant_health 1 5`);
+    await standAt(x, g, z); await sleep(800);
+    const healthBefore = Number(actor.health), deathsBefore = actorDeaths, lowest = trackMinHealth();
+    const hits: Array<[number, number, number | null]> = [], phases: Array<[number, number | null]> = [];
+    let lastHealth = healthBefore, lastPhase: number | null = null, maxSpeed = 0, sat = false;
+    const start = Date.now(), p0 = actor.entity.position.clone();
+    await ask(`${END} data modify entity ${DRAGON} DragonPhase set value 2`);
+    while (Date.now() - start < 45_000 && !sat && actorDeaths === deathsBefore) {
+      const health = Number(actor.health), phase = phaseNow();
+      if (health < lastHealth - 0.01) hits.push([Date.now() - start, round(lastHealth - health, 1)!, phase]);
+      lastHealth = health;
+      if (phase !== lastPhase) { phases.push([Date.now() - start, phase]); lastPhase = phase; }
+      const v = actor.entity.velocity; maxSpeed = Math.max(maxSpeed, Math.hypot(v.x, v.z));
+      if (phase !== null && (phase === 5 || phase === 6 || phase === 7)) sat = true;
+      await sleep(100);
+    }
+    const p1 = actor.entity.position;
+    const result = {
+      label, healthLost: round(healthBefore - Number(actor.health), 1), lowest: lowest.stop(), died: actorDeaths > deathsBefore, hits, phases, maxSpeed: round(maxSpeed, 2), movedBlocks: round(p1.distanceTo(p0), 1),
+      seconds: round((Date.now() - start) / 1000, 1), sat,
+    };
+    log(`LANDING ${label}: ${JSON.stringify(result)}`);
+    trials.push(result);
+  }
+  return { trials };
 };
 
 scenes.knockback = async () => {
