@@ -61,11 +61,13 @@ scene('route_fortress', 'S6 on the real seed: from the Nether arrival to the for
 });
 
 scene('route_stronghold', 'S9 on the real seed: the walk from the spawn to the first-ring stronghold by go hops along the straight line the eyes give', async note => {
-  const from = sites.spawn as number[] | undefined, goal = (sites.strongholdSurface ?? sites.strongholdPortalCenter) as number[] | undefined;
+  const from = (process.env.HUNT_FROM ? process.env.HUNT_FROM.split(',').map(Number) : sites.spawn) as number[] | undefined, goal = (sites.strongholdSurface ?? sites.strongholdPortalCenter) as number[] | undefined;
   if (!from || !goal) throw new Error('no spawn / strongholdSurface in the sites');
   const deaths0 = deaths;
   await ask('difficulty normal'); await ask('gamerule doMobSpawning true'); await ask('gamerule doDaylightCycle false'); await ask('time set day'); await ask('weather clear');
-  await equip(S4_KIT_S9, { armor: 'iron', shield: true });
+  // HUNT_KIT=run59: the pack of run59 (160 cobblestone and 90 cobbled deepslate to lay) in place of the plan's S9 kit
+  const run59 = process.env.HUNT_KIT === 'run59';
+  if (run59) await s4EquipRun59(); else await equip(S4_KIT_S9, { armor: 'iron', shield: true });
   await placeActor('overworld', from[0], from[1], from[2], 32);
   const limitMs = (timedSeconds || 1500) * 1000, started = Date.now();
   const total = s4Planar(goal);
@@ -107,7 +109,7 @@ scene('route_stronghold', 'S9 on the real seed: the walk from the spawn to the f
       }
       if (!column) { stops.push(`${Math.round((Date.now() - started) / 1000)}s no loaded column ahead (${Math.round(here.x)},${Math.round(here.z)})`); await sleep(3000); if (stops.length > 8) break; continue; }
       const hp0 = Number(actor.health), before = remain, hopStart = Date.now();
-      const run = await act(`hop#${metrics.hops + 1}`, [{ do: 'go', to: { x: tx, y: column.water ? column.y : column.y + 1, z: tz }, range: 2, seconds: 100, canPlace: ['cobblestone'], maxDrop: 4, maxPlace, maxDig, ...(column.water ? { waterOk: true } : {}) }], 130);
+      const run = await act(`hop#${metrics.hops + 1}`, [{ do: 'go', to: { x: tx, y: column.water ? column.y : column.y + 1, z: tz }, range: 2, seconds: 100, canPlace: run59 ? ['cobblestone', 'cobbled_deepslate'] : ['cobblestone'], maxDrop: 4, maxPlace, maxDig, ...(column.water ? { waterOk: true } : {}) }], 130);
       metrics.hops++; if (run.ok) metrics.okHops++; if (column.water) metrics.waterHops++;
       metrics.hpLost += Math.max(0, hp0 - Number(actor.health)); metrics.lowestHp = Math.min(metrics.lowestHp, Number(actor.health));
       const after = Math.hypot(goal[0] - actor.entity.position.x, goal[2] - actor.entity.position.z), gained = before - after;
