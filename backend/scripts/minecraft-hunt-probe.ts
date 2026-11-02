@@ -625,7 +625,7 @@ scene('stronghold_descent', 'from the surface over the portal room down to its f
   return { arrived, seconds: r1((Date.now() - started) / 1000), finalAt: here ? [r1(here.x), r1(here.y), r1(here.z)] : null, hp: actor.health, tries };
 });
 
-const netherWalk = async (note: (text: string) => void, which: Array<'fortress' | 'warped'>): Promise<Record<string, unknown>> => {
+const netherWalk = async (note: (text: string) => void, which: Array<'fortress' | 'warped'>, start?: number[]): Promise<Record<string, unknown>> => {
   const arrival = sites.netherArrival as number[];
   const targets: Array<{ name: string; to: number[] }> = which.map(name => ({ name, to: (name === 'fortress' ? sites.blazeStand : sites.warpedStand) as number[] }));
   await ask('difficulty normal'); await ask('time set noon');
@@ -662,7 +662,7 @@ const netherWalk = async (note: (text: string) => void, which: Array<'fortress' 
     }
   };
   const legs: Array<Record<string, unknown>> = [];
-  let from = arrival;
+  let from = start ?? arrival;
   for (const target of targets) {
     await placeActor('the_nether', from[0], from[1], from[2], 24);
     const started = Date.now(), hp0 = Number(actor.health);
@@ -688,6 +688,14 @@ const netherWalk = async (note: (text: string) => void, which: Array<'fortress' 
       // A hop that got nowhere (under 3 m nearer) twice running: what a planner would take as shut, and give up on.
       slow = before - left < 3 ? slow + 1 : 0;
       if (!reached && (before - left < 3 || tries === 0)) mapAround(`${target.name}#${tries + 1}`);
+      if (!reached && /not_loaded/u.test(line)) {
+        // How far the loaded ground goes: the columns the body holds (chunk coordinates) against the body's and the aim's.
+        try {
+          const columns = (actor.world as any).getColumns?.() ?? [];
+          const xs = columns.map((c: any) => c.chunkX), zs = columns.map((c: any) => c.chunkZ);
+          log(`LOADED ${columns.length} columns, chunk x ${Math.min(...xs)}..${Math.max(...xs)} z ${Math.min(...zs)}..${Math.max(...zs)}; body chunk ${here ? `${Math.floor(here.x / 16)},${Math.floor(here.z / 16)}` : '?'}; aim chunk ${Math.floor(target.to[0] / 16)},${Math.floor(target.to[2] / 16)}`);
+        } catch (error) { log(`LOADED unknown: ${String(error).slice(0, 120)}`); }
+      }
       if (slow >= 2) { note(`the walk to the ${target.name} gained under 3 m twice running at ${here ? `${r1(here.x)},${r1(here.y)},${r1(here.z)}` : '?'}`); break; }
       if (Number(actor.health) < 14 || Number(actor.food) < 14) await act('eat', [{ do: 'eat' }], 15);
     }
@@ -695,10 +703,11 @@ const netherWalk = async (note: (text: string) => void, which: Array<'fortress' 
     if (!reached) break;
     from = target.to;
   }
-  return { legs: legs.map(leg => ({ ...leg, trail: undefined })), trails: legs.map(leg => leg.trail), finalHp: actor.health };
+  return { legs: legs.map(leg => ({ ...leg, trail: undefined })), trails: legs.map(leg => leg.trail), finalHp: actor.health, packAfter: packClient() };
 };
 scene('nether_walk', 'the walk in the Nether from the portal side to the fortress and then to the warped forest by go hops (lava, ghasts, soul sand are the world\'s)', note => netherWalk(note, ['fortress', 'warped']));
 scene('nether_warped', 'the walk in the Nether from the portal side straight to the warped forest by go hops', note => netherWalk(note, ['warped']));
+scene('nether_leg2', 'the walk in the Nether from the fortress\'s stand to the warped forest by go hops (the second leg of nether_walk alone)', note => netherWalk(note, ['warped'], sites.blazeStand as number[]));
 
 // ===== the probe kinds (what the LLM-centric mode can call: act and probe, no catalog skill) =================================================
 scene('probe_kinds', 'probe kind=camp at the blaze spawner and kind=frames at the stronghold, against find-structure\'s own answers (they must say the same)', async note => {

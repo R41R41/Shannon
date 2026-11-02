@@ -66,7 +66,9 @@ describe('probe kind=camp', () => {
     const none = parse(await runProbe(makeBot(body), { kind: 'camp' }));
     expect(none).toMatchObject({ found: false, cells: [] });
     expect(none.text).toContain('湧き場はありません');
-    expect(none.text).toContain('find-structure fortress');
+    // (the head of the LLM-centric mode calls act and probe only: the way on is named with the probe's own kind)
+    expect(none.text).toContain('probe kind=scan');
+    expect(none.text).not.toContain('find-structure');
   });
 });
 

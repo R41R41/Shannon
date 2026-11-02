@@ -678,14 +678,19 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   // ---- how a line ends (the contract's result lines) ----
   const packNote = fullPackWatch(bot);
   const tail = () => `${cellText(feetCell(bot) ?? start)} 道 ${state.steps} 歩・掘 ${state.dug}・置 ${state.placed}・引き直し ${state.redraws} 回`;
-  const fail = (code: string, why: string, hint: string): StepOutcome => {
+  const fail = (code: string, reason: string, hint: string): StepOutcome => {
     const at = feetCell(bot) ?? start;
     const head = `go 止まった ${code}: `;
+    // S2 lab (a Nether walk of 244 m on 64 stones, 63 of them laid in the leg before): the stop said "not_loaded" while the real reason was the stones being gone.
+    // When the go laid blocks and the pack holds none of the kinds it was given to lay, the stop says so (whatever else it says), so the head fetches more.
+    const spent = place.held.length > 0 && state.placed > 0 && code !== 'limit_place' && code !== 'no_blocks' && place.held.every(name => inventoryCount(bot, name) === 0);
+    const why = spent ? `${reason}（置く物 ${place.held.join('・')} を ${state.placed} 個置いて使い切った）` : reason;
+    const advice = spent && (code === 'not_loaded' || code === 'dead_end') ? '置く物を集めてからもう一度' : hint;
     const full = packNote();
     const fixed = ` ${tail()}${full ? `。${full}` : ''}`;
     // The contract's line: the code, the reason, where and the counts, then the hint; what does not fit of the 160 is cut from the back (the hint first).
     const room = 160 - head.length - fixed.length;
-    const withHint = hint ? `。${hint}` : '';
+    const withHint = advice ? `。${advice}` : '';
     const text = why.length + withHint.length <= room ? `${head}${why}${fixed}${withHint}` : `${head}${clip(why, Math.max(24, room))}${fixed}`;
     return { ...stopped(bot, code, text, at, start), progress: progressNow(), data: { work: { dug: state.dug, placed: state.placed, steps: state.steps, redraws: state.redraws } } };
   };
