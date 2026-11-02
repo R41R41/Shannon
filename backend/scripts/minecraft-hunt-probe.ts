@@ -724,7 +724,10 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
   note(`lane candidate ${c.direction}: required ${JSON.stringify(c.required)}; waiting cell ${wait.slice(0, 3)}; ${c.build.length} placements; spawn spaces ${json.spawn?.spaces}; blazes in the count box ${json.blaze?.count}`);
   const placementsOf = (cand: any, table: any[], factTable: any[]) => (cand.build as Array<[number, number, number | null, number]>)
     .filter(([f]) => table[factTable[f][0]][4] === 'air')
-    .map(([f, part]) => ({ at: { x: table[factTable[f][0]][0], y: table[factTable[f][0]][1], z: table[factTable[f][0]][2] }, part }));
+    .map(([f, part]) => ({ at: { x: table[factTable[f][0]][0], y: table[factTable[f][0]][1], z: table[factTable[f][0]][2] }, part: ['enclosure', 'roof', 'plug', 'lid'][part] ?? String(part) }))
+    // the scripted head's order: the waiting cell's enclosure first (a cover), then the plug and the roof of the lane, then the lid from the waiting cell outwards
+    .sort((a, b) => (['enclosure', 'plug', 'roof', 'lid'].indexOf(a.part) - ['enclosure', 'plug', 'roof', 'lid'].indexOf(b.part))
+      || (Math.hypot(a.at.x - wait[0], a.at.z - wait[2]) - Math.hypot(b.at.x - wait[0], b.at.z - wait[2])));
   let placements = placementsOf(c, cells, facts);
   const canPlace = ['cobblestone'];
   let built = 0, failedCells = 0, acts = 0, aborted = '', passes = 0, lastLeft = Infinity;
