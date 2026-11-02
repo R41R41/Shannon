@@ -630,7 +630,8 @@ const netherWalk = async (note: (text: string) => void, which: Array<'fortress' 
   const targets: Array<{ name: string; to: number[] }> = which.map(name => ({ name, to: (name === 'fortress' ? sites.blazeStand : sites.warpedStand) as number[] }));
   await ask('difficulty normal'); await ask('time set noon');
   // Three pickaxes: t46 (c2, basalt delta) broke the one iron pickaxe after about 250 digs, 125 m into the walk, and the act ended as `tool_broke`.
-  await equip({ iron_pickaxe: 3, diamond_sword: 1, cobblestone: 64, cooked_beef: 24, golden_apple: 3 }, { armor: 'iron', shield: true });
+  // 192 stones: t49 (c4, 244 m from the fortress) laid all 64 in about 170 m of bridging and stopped on `no_blocks` 73 m short.
+  await equip({ iron_pickaxe: 3, diamond_sword: 1, cobblestone: 192, cooked_beef: 24, golden_apple: 3 }, { armor: 'iron', shield: true });
   // What the planner would give `go` for a leg this long (the limits are the schema's own top: maxDig 200, maxPlace 100; the walk is told to take as long as it needs).
   const glyph = (x: number, y: number, z: number): string => {
     const name = actor.blockAt(new Vec3(x, y, z))?.name;
@@ -688,6 +689,17 @@ const netherWalk = async (note: (text: string) => void, which: Array<'fortress' 
       // A hop that got nowhere (under 3 m nearer) twice running: what a planner would take as shut, and give up on.
       slow = before - left < 3 ? slow + 1 : 0;
       if (!reached && (before - left < 3 || tries === 0)) mapAround(`${target.name}#${tries + 1}`);
+      const refusedAt = /置きを断られた \((-?\d+),(-?\d+),(-?\d+)\)/u.exec(line);
+      if (refusedAt) {
+        // What stood at the cell the server would not take a block in, and who was near it (the black box says only the body's overlap and jump).
+        try {
+          const cell = new Vec3(Number(refusedAt[1]), Number(refusedAt[2]), Number(refusedAt[3]));
+          const at = (dx: number, dy: number, dz: number) => String(actor.blockAt(cell.offset(dx, dy, dz))?.name ?? '?');
+          const near = Object.values(actor.entities as Record<string, any>).filter(entity => entity?.position && entity !== actor.entity && entity.position.distanceTo(cell.offset(0.5, 0.5, 0.5)) <= 6)
+            .map(entity => `${entity.name ?? entity.type}@${r1(entity.position.distanceTo(cell.offset(0.5, 0.5, 0.5)))}`).slice(0, 8);
+          log(`REFUSED ${refusedAt[1]},${refusedAt[2]},${refusedAt[3]} now ${at(0, 0, 0)}; below ${at(0, -1, 0)} above ${at(0, 1, 0)}; sides +x ${at(1, 0, 0)} -x ${at(-1, 0, 0)} +z ${at(0, 0, 1)} -z ${at(0, 0, -1)}; entities within 6 m: ${near.join(' ') || 'none'}; body ${here ? `${r1(here.x)},${r1(here.y)},${r1(here.z)}` : '?'} onGround ${actor.entity?.onGround}`);
+        } catch (error) { log(`REFUSED unknown: ${String(error).slice(0, 120)}`); }
+      }
       if (!reached && /not_loaded/u.test(line)) {
         // How far the loaded ground goes: the columns the body holds (chunk coordinates) against the body's and the aim's.
         try {
@@ -707,7 +719,18 @@ const netherWalk = async (note: (text: string) => void, which: Array<'fortress' 
 };
 scene('nether_walk', 'the walk in the Nether from the portal side to the fortress and then to the warped forest by go hops (lava, ghasts, soul sand are the world\'s)', note => netherWalk(note, ['fortress', 'warped']));
 scene('nether_warped', 'the walk in the Nether from the portal side straight to the warped forest by go hops', note => netherWalk(note, ['warped']));
-scene('nether_leg2', 'the walk in the Nether from the fortress\'s stand to the warped forest by go hops (the second leg of nether_walk alone)', note => netherWalk(note, ['warped'], sites.blazeStand as number[]));
+scene('tool_broke', 'a pickaxe with three uses left breaks in the middle of a go through a netherrack wall: the act stops, and its line says the tool broke and what to do', async () => {
+  const stand = sites.netherArrival as number[];
+  await ask('difficulty peaceful');
+  const y = await netherPlate(stand[0], stand[2]);
+  await ask(`execute in minecraft:the_nether run fill ${stand[0] + 4} ${y} ${stand[2] - 20} ${stand[0] + 13} ${y + 7} ${stand[2] + 20} minecraft:netherrack`);
+  await equip({ 'iron_pickaxe[damage=247]': 1, cooked_beef: 4 }, { armor: 'none', shield: false });
+  await placeActor('the_nether', stand[0], y, stand[2], 24);
+  const run = await act('through-the-wall', [{ do: 'go', to: { x: stand[0] + 16, y, z: stand[2] }, range: 1, seconds: 40, maxDig: 60, canDig: ['netherrack'] }], 60);
+  const pickaxes = (actor.inventory.items() as any[]).filter(item => /pickaxe/u.test(String(item.name))).map(item => String(item.name));
+  return { ok: run.ok, stoppedBy: run.stoppedBy ?? null, stoppedWhy: String(run.stoppedWhy ?? '').slice(0, 200), line: (run.lines[0] ?? '').slice(0, 320), pickaxesLeft: pickaxes };
+});
+scene('nether_leg2','the walk in the Nether from the fortress\'s stand to the warped forest by go hops (the second leg of nether_walk alone)', note => netherWalk(note, ['warped'], sites.blazeStand as number[]));
 
 // ===== the probe kinds (what the LLM-centric mode can call: act and probe, no catalog skill) =================================================
 scene('probe_kinds', 'probe kind=camp at the blaze spawner and kind=frames at the stronghold, against find-structure\'s own answers (they must say the same)', async note => {

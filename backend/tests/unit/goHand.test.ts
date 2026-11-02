@@ -123,6 +123,21 @@ describe('go: across a gap (canPlace)', () => {
     expect(sandy.bot.placedBlocks).toEqual([]);
   });
 
+  it('names the cheap blocks the pack holds when the blocks it may lay are not held (dug netherrack, dirt ...), and only those', async () => {
+    const dirt = makeSim(canyon, { items: stacks({ name: 'dirt', count: 16 }, { name: 'diamond_block', count: 9 }, { name: 'obsidian', count: 20 }) });
+    const named = await drive(dirt, run(dirt, { canPlace: ['cobblestone'] }));
+    expect(named.reason).toBe('no_blocks');
+    expect(named.text).toContain('荷の dirt×16 を canPlace に足す');
+    expect(named.text).not.toContain('diamond_block');
+    expect(named.text).not.toContain('obsidian');
+    expect(named.text.length).toBeLessThanOrEqual(160);
+    // Given in canPlace it is not offered again; with nothing cheap in the pack the old words stay.
+    const bare = makeSim(canyon, { items: stacks({ name: 'diamond_block', count: 9 }) });
+    const none = await drive(bare, run(bare, { canPlace: ['cobblestone'] }));
+    expect(none.reason).toBe('no_blocks');
+    expect(none.text).toContain('置ける物を集めるか、canPlace を足す');
+  });
+
   it('says so when the blocks it was to lay are used up on the way (a bridge out over a void toward a place that is not loaded, six stones)', async () => {
     // Nether lab, 244 m on 64 stones: the stop said not_loaded while the stones were gone. Here: air from x=2 to the end of the loaded ground, the place beyond it.
     const void_ = over(flat, box('air', 2, R, 30, FLOOR - 1, -R - 1, R + 1));

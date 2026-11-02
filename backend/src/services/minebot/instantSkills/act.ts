@@ -516,6 +516,8 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
   const onCut = () => {
     const reason = String(signal?.reason ?? '');
     if (/^(floor-|constant:|auto-|lava|breath)/u.test(reason) || REFLEX_NAMES[reason]) stopWith(`${reflexName(reason)}`, 'interrupted_by_reflex');
+    // A tool that broke with no spare of its kind in the pack (types/skills.ts cuts the command there): said as that, with the way on (S2 lab, a 125 m Nether walk, one iron pickaxe).
+    else if (reason === 'tool_broke') stopWith('道具が壊れて止まった（同じ種類以上の予備が荷に無い）。作るか拾って持ってから、同じ手をもう一度', 'cancelled');
     else stopWith(`命令が止められた（${reason || 'cancel'}）`, reason === 'deadline' || reason === 'timeout' ? 'timeout' : 'cancelled');
   };
   signal?.addEventListener('abort', onCut, { once: true });

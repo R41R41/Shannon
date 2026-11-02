@@ -147,6 +147,22 @@ export function digRuleOf(registry: any, words: string[] | undefined): DigRule {
   return { names, ignored };
 }
 
+/** Cheap building blocks: what a pack that dug through a mountain or the Nether holds in numbers, and may be told to lay (never ores, obsidian, planks or a crafting block). */
+const BRIDGE_BLOCKS = /^(?:cobblestone|stone|cobbled_deepslate|deepslate|dirt|coarse_dirt|netherrack|basalt|smooth_basalt|blackstone|andesite|diorite|granite|tuff|calcite|end_stone|sandstone|red_sandstone|terracotta|nether_bricks|stone_bricks)$/u;
+/**
+ * The cheap blocks the pack holds that `canPlace` does not name, most first ("netherrack×99・basalt×7"), or '' when there are none (at least 4 of a kind).
+ * S2 lab (c4, 244 m): a go with 64 stones stopped on `no_blocks` with 99 netherrack, dug on the way, in the pack; the stop said only "canPlace に足す".
+ */
+export function bridgeBlocksHeld(bot: any, given: readonly string[] | undefined): string {
+  const named = new Set((given ?? []).map(name => String(name).replace(/^minecraft:/u, '').toLowerCase()));
+  const counts = new Map<string, number>();
+  for (const item of (bot.inventory?.items?.() ?? []) as any[]) {
+    const name = String(item?.name ?? '');
+    if (BRIDGE_BLOCKS.test(name) && !named.has(name)) counts.set(name, (counts.get(name) ?? 0) + Number(item.count ?? 0));
+  }
+  return [...counts.entries()].filter(([, count]) => count >= 4).sort((a, b) => b[1] - a[1]).slice(0, 2).map(([name, count]) => `${name}×${count}`).join('・');
+}
+
 /** The blocks of `canPlace` that are whole blocks, are held, and stay where they are put (sand and gravel fall), in the order given. */
 export function placeNamesOf(bot: any, words: string[] | undefined): { held: string[]; missing: string[]; refused: string[] } {
   const held: string[] = [], missing: string[] = [], refused: string[] = [];
@@ -694,6 +710,8 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     const text = why.length + withHint.length <= room ? `${head}${why}${fixed}${withHint}` : `${head}${clip(why, Math.max(24, room))}${fixed}`;
     return { ...stopped(bot, code, text, at, start), progress: progressNow(), data: { work: { dug: state.dug, placed: state.placed, steps: state.steps, redraws: state.redraws } } };
   };
+  /** What a stop for want of blocks to lay says to do: name the cheap blocks the pack holds (dug netherrack, stone ...), else gather some. */
+  const noBlocksHint = (): string => { const held = bridgeBlocksHeld(bot, args.canPlace); return held ? `荷の ${held} を canPlace に足すか、集める` : '置ける物を集めるか、canPlace を足す'; };
   const arrived = (): StepOutcome => ({ ok: true, text: `go 着いた ${tail()}${(() => { const full = packNote(); return full ? `。${full}` : ''; })()}`, at: feetCell(bot) ?? start, progress: progressNow(true),
     data: { work: { dug: state.dug, placed: state.placed, steps: state.steps, redraws: state.redraws } } });
 
@@ -990,7 +1008,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
       [{ tool: true }, found => fail('no_tool', `${shown(found.digs) || '掘る所'} を掘る道だが、持っている道具では掘れない`, 'ツルハシなどを手に入れるか、別の道を')],
       ...(args.canPlace?.length ? [[{ blocks: true }, (found: Plan) => fail('no_blocks',
         `置く物が足りない（置く所 ${found.places}、持っている ${place.held.map(name => `${name}×${inventoryCount(bot, name)}`).join('・') || '無し'}${place.missing.length ? `、持っていない ${place.missing.join('・')}` : ''}${place.refused.length ? `、置かない ${place.refused.join('・')}` : ''}）`,
-        '置ける物を集めるか、canPlace を足す')] as [Relax, (found: Plan) => StepOutcome]] : []),
+        noBlocksHint())] as [Relax, (found: Plan) => StepOutcome]] : []),
       [{ permissions: true }, found => fail('dead_end', `許した手では道が無い。${found.digs.size ? `canDig に ${[...found.digs.keys()].slice(0, 3).join('・')} を許せば掘 ${[...found.digs.values()].reduce((a, b) => a + b, 0)} で` : ''}${found.places ? `canPlace を許せば置 ${found.places} で` : ''}道がある${ignored}`, '許すか、別の行き先を')],
     ];
     // The way with the rules as given was searched to its end and is shut (a search that ran out of time never comes here); a lifted search
@@ -1011,7 +1029,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
       if (timeLeft() <= 0) break;
       if (state.placed >= limits.maxPlace) return { levels, stop: fail('limit_place', `置く数の上限 ${limits.maxPlace} に着いた`, 'maxPlace を増やすか、別の道を') };
       const block = place.held.find(name => inventoryCount(bot, name) > 0);
-      if (!block) return { levels, stop: fail('no_blocks', `登るのに置く物が無い（${place.missing.length ? `持っていない ${place.missing.join('・')}` : 'canPlace に置ける物が無い'}）`, '置ける物を集めるか、canPlace を足す') };
+      if (!block) return { levels, stop: fail('no_blocks', `登るのに置く物が無い（${place.missing.length ? `持っていない ${place.missing.join('・')}` : 'canPlace に置ける物が無い'}）`, noBlocksHint()) };
       // Run 44 (hold 1): the feet are read standing. The climb began while the walk before it still jumped (its last point was lifted onto a
       // trapdoor), the feet read a cell up at y 65.17, and the level was laid for a cell the body was half in (0.80) and no jump reaches.
       if (bot.entity?.onGround === false) await waitUntil(ctx, () => bot.entity?.onGround !== false, 1500);
@@ -1218,8 +1236,8 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
         // The place is higher than the nearest the way goes: a climb. The route search's own towers are off; a block is laid at the top of each jump.
         if (!place.held.length) {
           return args.canPlace?.length
-            ? fail('no_blocks', `行き先は ${lowest - closestY} 段上で、登るのに置く物が無い（${place.missing.length ? `持っていない ${place.missing.join('・')}` : '置ける物が無い'}${place.refused.length ? `、置かない ${place.refused.join('・')}` : ''}）`, '置ける物を集めるか、canPlace を足す')
-            : fail('dead_end', `行き先は ${lowest - closestY} 段上で、道は途中までしか無い。登るには canPlace が要る`, 'canPlace に置ける物を足す');
+            ? fail('no_blocks', `行き先は ${lowest - closestY} 段上で、登るのに置く物が無い（${place.missing.length ? `持っていない ${place.missing.join('・')}` : '置ける物が無い'}${place.refused.length ? `、置かない ${place.refused.join('・')}` : ''}）`, noBlocksHint())
+            : fail('dead_end', `行き先は ${lowest - closestY} 段上で、道は途中までしか無い。登るには canPlace が要る`, bridgeBlocksHeld(bot, args.canPlace) ? `荷の ${bridgeBlocksHeld(bot, args.canPlace)} を canPlace に足す` : 'canPlace に置ける物を足す');
         }
         // To the foot of the climb along the level: an end the way found high up (a search cut by its time ends where it got to) is not walked to,
         // the executor has no towers (run 41 replay: 12 redraws at a goal 17 up, stuck in 10 s); the climb starts here.
