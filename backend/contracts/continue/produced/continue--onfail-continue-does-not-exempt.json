@@ -1,8 +1,8 @@
 {
  "producedBy": "backend/scripts/lab/continue-produce.ts",
  "bench": "offline",
- "bodyRevision": "4dbf1667f264caf6fe0c3baee330e69c216cdcd6",
- "madeAt": "2026-11-02T04:44:34.813Z",
+ "bodyRevision": "d85fd02e9c8237d7b0e8527d60071d84ed932657",
+ "madeAt": "2026-11-02T09:05:42.335Z",
  "answers": "continue/onfail-continue-does-not-exempt",
  "fixtureSha256": "c5240c59712a8cfcc8680244817acb40597bbb3ad17d357b9b5f9248fe5a4f3e",
  "substitute": "a dig out of reach stands for the craft that fails",
