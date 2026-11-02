@@ -540,21 +540,16 @@ scene('end_portal', 'the portal room: the missing eyes put into the frames by th
   const opened = await serverTest(`execute if block ${cx} ${fy} ${cz} minecraft:end_portal`);
   const eyesPlaced = await (async () => { let n = 0; for (const frame of frames) if (await serverTest(`execute if block ${frame.x} ${frame.y} ${frame.z} minecraft:end_portal_frame[eye=true]`)) n++; return n; })();
   note(`portal opened on the server: ${opened}; frames with an eye: ${eyesPlaced}/12 after ${((Date.now() - started) / 1000).toFixed(0)} s`);
-  // Into the portal: the planner's walk to the middle of the pit.
+  // Into the portal: first what a planner might try (go: it is told to use walk), then walk with the portal as its target.
   let entered = false, enterLine = '';
   if (opened) {
-    const enter = await act('enter', [{ do: 'go', to: { x: cx, y: fy, z: cz }, range: 0.6, seconds: 25 }], 40);
-    enterLine = (enter.lines[0] ?? '').slice(0, 300);
+    const tryGo = await act('enter-go', [{ do: 'go', to: { x: cx, y: fy, z: cz }, range: 0.6, seconds: 20 }], 30);
+    enterLine = `go: ${(tryGo.lines[0] ?? '').slice(0, 260)}`;
+    const enter = await act('enter-walk', [{ do: 'walk', to: { x: cx, y: fy, z: cz }, seconds: 40 }], 60);
+    enterLine += ` | walk: ${(enter.lines[0] ?? '').slice(0, 300)}`;
     const until = Date.now() + 12_000;
     while (Date.now() < until && dimensionOf() !== 'the_end') await sleep(250);
     entered = dimensionOf() === 'the_end';
-    if (!entered) {
-      const walk = await act('enter-walk', [{ do: 'walk', to: { x: cx, y: fy, z: cz }, seconds: 15 }], 30);
-      enterLine += ` | walk: ${(walk.lines[0] ?? '').slice(0, 200)}`;
-      const again = Date.now() + 8000;
-      while (Date.now() < again && dimensionOf() !== 'the_end') await sleep(250);
-      entered = dimensionOf() === 'the_end';
-    }
   }
   return { framesNeeded: frames.filter(frame => !frame.eye).length, eyesGivenByTheLines: eyesGiven, eyesPlacedOnServer: eyesPlaced, failedActs: failures, portalOpened: opened, enteredTheEnd: entered, dimension: dimensionOf(),
     seconds: r1((Date.now() - started) / 1000), enterLine, lines: lines.slice(0, 12) };
