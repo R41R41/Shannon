@@ -162,3 +162,24 @@ export function dragonHazards(bot: any, options: { clearance?: number; now?: num
 
 /** The places the hazards push the body from, for the flee's heading. */
 export const hazardCentres = (hazards: Hazard[]): Vec3[] => hazards.map(hazard => new Vec3(hazard.centre.x, hazard.centre.y, hazard.centre.z));
+
+/**
+ * The dragon's breath lying in the world as a route search wants it (the End only): where each cloud is and how far it reaches (7 at least: it grows from 3, and the
+ * client's number is a tick old). A `go` that is drawn again after the floor reflex has lifted the body over a cloud must not walk it back down into the cloud (lab 2026-11-02, w10:
+ * the second `go` stepped into the cloud, was cut by the reflex a second time, and the body lost 6).
+ */
+export function lyingCloudZones(bot: any): Array<{ centre: P3; radius: number }> {
+  if (!isEnd(bot)) return [];
+  try {
+    return breathCloudsOf(bot).map(cloud => ({ centre: { x: cloud.position.x, y: cloud.position.y, z: cloud.position.z }, radius: Math.max(cloud.radius ?? 0, BREATH_RADIUS_MIN) }));
+  } catch { return []; }
+}
+
+/** Whether a body with its feet in the cell (x, y, z) would stand in one of these clouds (the slab and the disc, a half block more round it): the cloud in words, or null. */
+export function cloudZoneAtCell(zones: ReadonlyArray<{ centre: P3; radius: number }>, x: number, y: number, z: number, clearance = 0.5): string | null {
+  const feet = { x: x + 0.5, y, z: z + 0.5 };
+  for (const zone of zones) {
+    if (cloudReaches(zone.centre, zone.radius, feet, clearance)) return `竜の息の雲 (${zone.centre.x.toFixed(0)},${zone.centre.y.toFixed(0)},${zone.centre.z.toFixed(0)}) 半径${round1(zone.radius)}`;
+  }
+  return null;
+}

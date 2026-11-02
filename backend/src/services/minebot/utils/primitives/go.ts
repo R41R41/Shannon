@@ -19,6 +19,7 @@ import { meterProgress, round1 } from './progressUnits.js';
 import { ThreatExposedError } from '../exposureGuard.js';
 import { swimControls, swimPulse } from './swim.js';
 import { waterExitWords } from './waterExit.js';
+import { cloudReaches, cloudZoneAtCell, lyingCloudZones } from '../dragonDanger.js';
 
 const waterExitText = (bot: any, feet: Cell) => { const exit = waterExitWords(bot, feet); return exit ? `。${exit}` : ''; };
 
@@ -265,7 +266,7 @@ export function keepReads(movements: any, watch: WorldWatch): (x: number, y: num
 interface Plan { status: string; path: any[]; digs: Map<string, number>; places: number; visited: number }
 const yieldNow = () => new Promise<void>(resolve => setImmediate(resolve));
 
-interface Relax { hazards?: boolean; tool?: boolean; blocks?: boolean; permissions?: boolean; limits?: boolean; upstream?: boolean }
+interface Relax { hazards?: boolean; tool?: boolean; blocks?: boolean; permissions?: boolean; limits?: boolean; upstream?: boolean; dragon?: boolean }
 export interface GoState {
   steps: number; dug: number; placed: number; redraws: number;
   veto: { code: string; text: string; hint?: string } | null;
@@ -333,6 +334,10 @@ export function goMovements(bot: any, args: Required<Pick<GoArgs, 'maxDrop' | 'w
   movements.exclusionAreasBreak = [...(movements.exclusionAreasBreak ?? []), (block: any) => redoCost(state.laidCells, block)];
   // (mineflayer-pathfinder's walk forward onto a laid floor asks the place's exclusion of the cell above the one it lays: both are asked.)
   movements.exclusionAreasPlace = [...(movements.exclusionAreasPlace ?? []), (block: any) => redoCost(state.dugCells, block, true)];
+  // The End: the dragon's breath that lies in the world is not stepped into (a cell of it is no move: it hurts 6 a second and pushes the body off a bridge), unless the body stands in it now (the way out is then the first thing to find).
+  // A body one block up (on a laid floor) is over the cloud's slab and is not in it.
+  let clouds = relax.hazards || relax.dragon ? [] : lyingCloudZones(bot);
+  if (clouds.length && bot.entity?.position && clouds.some(zone => cloudReaches(zone.centre, zone.radius, bot.entity.position, 0))) clouds = [];
   // Moves that end in a hazard (beside lava, on magma...), or in water when it is not allowed, are not moves.
   if (relax.upstream) (movements as { __upstream?: boolean }).__upstream = true;
   const getNeighbors = movements.getNeighbors.bind(movements);
@@ -348,6 +353,7 @@ export function goMovements(bot: any, args: Required<Pick<GoArgs, 'maxDrop' | 'w
       if (!supported(dx, 0) || !supported(0, dz)) return false;
     }
     if (!relax.hazards && hazardAtFeetWith(read, move.x, move.y, move.z)) return false;
+    if (clouds.length && cloudZoneAtCell(clouds, move.x, move.y, move.z)) return false;
     if (!args.waterOk && !inWater && (isWaterName(read(move.x, move.y, move.z)) || isWaterName(read(move.x, move.y + 1, move.z)))) return false;
     return true;
   });
@@ -960,6 +966,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     const shown = (map: Map<string, number>) => [...map.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([name, count]) => `${name}×${count}`).join('・');
     const ignored = rule.ignored.length ? `（無視した canDig: ${rule.ignored.slice(0, 3).join('・')}）` : '';
     const lifts: Array<[Relax, (found: Plan) => StepOutcome]> = [
+      ...(lyingCloudZones(bot).length ? [[{ dragon: true }, () => fail('dead_end', '道の先が竜の息の雲の中で、避けると道が無い（雲は約 30 秒で消える）', '雲が消える（観測の dragonBreath が空になる）まで高い足場で待つか、別の側から')] as [Relax, (found: Plan) => StepOutcome]] : []),
       [{ hazards: true }, () => fail('lava', '道の先が溶岩・火・マグマ・サボテンなどで、避けると道が無い', '別の行き先か、別の側から')],
       ...(state.dug >= limits.maxDig || state.placed >= limits.maxPlace ? [[{ limits: true }, () => state.dug >= limits.maxDig
         ? fail('limit_dig', `掘る数の上限 ${limits.maxDig} に着いた（この先にも掘る所がある）`, 'maxDig を増やすか、別の道を')
