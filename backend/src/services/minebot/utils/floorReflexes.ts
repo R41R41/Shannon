@@ -20,7 +20,7 @@ import { engagedWithAny } from './engagement.js';
 import { PROTECTED_UTILITY_BLOCKS } from '../constants.js';
 import { entityHealth } from './mapMarks.js';
 import { eyeOf, probeSight } from './probeTools.js';
-import { dragonHazards, hazardCentres } from './dragonDanger.js';
+import { dragonHazards, hazardCentres, type Hazard } from './dragonDanger.js';
 import { isEnd } from './dragonState.js';
 import { clutchWanted, runFallClutch, scoopBack, scoopWanted, type FallMemory } from './fallClutch.js';
 
@@ -1024,6 +1024,16 @@ const DRAGON_RISE_GAP_MS = 1200;
 const DRAGON_RISE_MAX = 3;
 const DRAGON_RISE_WINDOW_MS = 20_000;
 const DRAGON_DETAIL_MAX = 160;
+/**
+ * The heading out of the dragon's zones: away from where each one pushes (`hazardCentres`) and, where that leaves no way and a sidestep could have been taken the other way (`Hazard.alternative`: a fireball
+ * that lands on the body), away from the mirrored places. Null when neither leaves a way. On a bridge one wide only one side of a sidestep leads along the bridge (lab r18, 2026-11-03).
+ */
+export function dragonFleePlan(bot: FloorBody, hazards: Hazard[], previous?: number): { yaw: number; jump: boolean } | null {
+  const options = { noJump: true, wide: true };
+  const first = fleeHeadingPlan(bot, hazardCentres(hazards), previous, options);
+  if (first || !hazards.some(hazard => hazard.alternative)) return first;
+  return fleeHeadingPlan(bot, hazardCentres(hazards, true), previous, options);
+}
 export async function runDragonRetreat(bot: FloorBody, port: FloorBody, tickMs = 50): Promise<{ success: boolean; result: string; moved: number; ended: 'clear' | 'blocked' | 'cap' }> {
   const origin = bot.entity!.position.clone(), memory: { heading?: number } = {};
   let ticks = 0, ended: 'clear' | 'blocked' | 'cap' = 'cap';
@@ -1033,7 +1043,7 @@ export async function runDragonRetreat(bot: FloorBody, port: FloorBody, tickMs =
       const hazards = body && bot.lavaReflex?.engaged !== true && bot.breathingReflex?.engaged !== true ? dragonHazards(bot, { clearance: ticks === 0 ? 0 : DRAGON_CLEARANCE }) : [];
       if (!hazards.length) { ended = 'clear'; break; }
       if (body!.position.distanceTo(origin) >= DRAGON_RETREAT_BLOCKS) break;
-      const plan = fleeHeadingPlan(bot, hazardCentres(hazards), memory.heading, { noJump: true, wide: true });
+      const plan = dragonFleePlan(bot, hazards, memory.heading);
       if (!plan) { ended = 'blocked'; break; }
       memory.heading = plan.yaw;
       port.look?.(plan.yaw, 0, true);
@@ -2178,7 +2188,7 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
     const said = hazards.map(hazard => hazard.why).join('・');
     // No level, safe way out: nothing is started (a run that ends where it began would cut the planner's act for nothing, every time). Told once in a while, as a fact only.
     let way: ReturnType<typeof fleeHeadingPlan> = null;
-    try { way = fleeHeadingPlan(bot, hazardCentres(hazards), undefined, { noJump: true, wide: true }); } catch { way = null; }
+    try { way = dragonFleePlan(bot, hazards); } catch { way = null; }
     if (!way) {
       // A ball in the air, or one just down whose cloud is not yet in sight: look again at the next tick (the cloud decides, and its first harm is 20 ticks after it is laid).
       state.dragonNextAt = t + (hazards.some(hazard => hazard.kind === 'fireball' || hazard.pending) ? DRAGON_COMING_GAP_MS : DRAGON_BLOCKED_GAP_MS);
