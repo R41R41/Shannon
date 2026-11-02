@@ -223,3 +223,48 @@ scene('frames_enter', 'S10 on the real seed: twelve eyes into the twelve frames 
   return { eyesServer, placed: metrics.placed, entered, dimension: dimensionOf(), seconds: r1((Date.now() - started) / 1000), ...metrics, deathsHere: deaths - deaths0, portalTries, stops: stops.slice(0, 12) };
 });
 
+
+/** The blaze camp as a head plays it: the body's own words steer (a fire it names is dug out, a place it calls unsafe is left for the next cell), up to three rods or the clock. */
+async function blazeCampHead(kind: 'fight' | 'hold', note: (text: string) => void): Promise<Record<string, unknown>> {
+  const stand = sites.blazeStand as number[] | undefined, spawner = sites.blazeSpawner as number[] | undefined;
+  if (!stand || !spawner) throw new Error('no blazeStand / blazeSpawner in the sites');
+  const deaths0 = deaths;
+  const limitMs = (timedSeconds || 600) * 1000;
+  await ask('difficulty normal'); await ask('time set midnight'); await ask('weather clear');
+  await ask('execute in minecraft:the_nether run kill @e[type=minecraft:blaze]');
+  await equip({ diamond_sword: 1, iron_pickaxe: 1, shield: 2, cooked_beef: 24, golden_apple: 3, cobblestone: 64 }, { armor: 'iron', shield: true });
+  await placeActor('the_nether', stand[0], stand[1], stand[2], 24);
+  const rods0 = await countServer('blaze_rod'), started = Date.now(), shield0 = shieldUsed();
+  const found = await runSkill('find-structure', { structureType: 'blaze_spawner' }, 20);
+  const cells = [...String(found.receipt?.result ?? '').matchAll(/\((-?\d+), (-?\d+), (-?\d+)\) [\d.]+m・壁/gu)].map(m => [Number(m[1]), Number(m[2]), Number(m[3])]);
+  if (!cells.length) cells.push([stand[0], stand[1], stand[2]]);
+  note(`camp cells ${JSON.stringify(cells)}`);
+  const metrics = { acts: 0, okActs: 0, fireDug: 0, cellChanges: 0, hpLost: 0, lowestHp: 20, rods: 0, kills: 0, eats: 0 };
+  const stops: string[] = [];
+  let cell = 0, failStreak = 0;
+  while (Date.now() - started < limitMs && s4Alive(deaths0) && metrics.rods < 3) {
+    const here = cells[cell % cells.length]!;
+    const go = { do: 'go', to: { x: here[0], y: here[1], z: here[2] }, range: 0.6, seconds: 20 };
+    const hands = kind === 'hold' ? [go, { do: 'attack', target: 'blaze', hold: true, seconds: 25 }, { do: 'pickup', range: 8 }] : [go, { do: 'fight', target: 'blaze', seconds: 25, retreatHp: 8 }, { do: 'pickup', range: 8 }];
+    const hp0 = Number(actor.health);
+    const run = await act(`${kind}#${metrics.acts + 1}`, hands, 70, { accept: ['blaze'] });
+    metrics.acts++; if (run.ok) { metrics.okActs++; failStreak = 0; } else failStreak++;
+    metrics.hpLost += Math.max(0, hp0 - Number(actor.health)); metrics.lowestHp = Math.min(metrics.lowestHp, Number(actor.health));
+    const text = run.lines.join(' ');
+    metrics.kills += (text.match(/倒した (\d+)/gu) ?? []).reduce((sum, hit) => sum + Number(hit.replace(/\D+/gu, '')), 0) + (text.match(/fight 済 blaze/gu) ?? []).length;
+    metrics.rods = (await countServer('blaze_rod')) - rods0;
+    if (!run.ok) {
+      stops.push(`${Math.round((Date.now() - started) / 1000)}s ${s4Why(run)}`);
+      const fire = /火 \((-?\d+),(-?\d+),(-?\d+)\) は dig で消せる/u.exec(text);
+      if (fire) { await act('putout', [{ do: 'dig', at: [{ x: Number(fire[1]), y: Number(fire[2]), z: Number(fire[3]) }] }], 15); metrics.fireDug++; }
+      else if (/unsafe|fire の隣/u.test(text) || failStreak >= 2) { cell++; metrics.cellChanges++; }
+      await sleep(1500);
+    }
+    if (Number(actor.health) < 12 || Number(actor.food) < 14) { await act('eat', [{ do: 'eat' }], 15); metrics.eats++; }
+    if (Number(actor.health) < 9) { note(`health ${actor.health}: the camp stops`); break; }
+    if (failStreak >= 8) { note('eight failed acts in a row: the camp is lost'); break; }
+  }
+  return { seconds: r1((Date.now() - started) / 1000), ...metrics, shieldWear: shieldUsed() - shield0, deathsHere: deaths - deaths0, stops: stops.slice(0, 12) };
+}
+scene('blaze_head_fight', 'blaze camp as a head plays it (fight): the body\'s own advice steers: fire dug out, unsafe cells changed; three rods or the clock', note => blazeCampHead('fight', note));
+scene('blaze_head_hold', 'blaze camp as a head plays it (attack hold): the same loop', note => blazeCampHead('hold', note));
