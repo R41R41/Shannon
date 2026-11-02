@@ -505,7 +505,7 @@ async function blazeRush(note: (text: string) => void, options: { retreatHp?: nu
 scene('blaze_rush', 'shield_rush from the scripted head: rest at the hideout, pick the nearest blaze id, ONE act [go to the camp cell, attack #id shield_rush, retreatTo the hideout], repeat; run59 pack', note => blazeRush(note));
 // The nook (S2, 2026-11-02): the camp cell has walls on two sides; the body closes the other two sides to the head's height with cobblestone (the top stays open: a blaze sees in only from straight
 // above), leaves the head cell of the side that faces the spawner open as a window, and holds there. Measures what the camp costs with a room's worth of blazes that can see only through the window.
-async function blazeNook(note: (text: string) => void, options: { window?: boolean; seconds?: number; bow?: boolean; r59?: boolean; corner?: 'toward' | 'away'; fight?: boolean; peek?: boolean; lure?: boolean; calm?: boolean } = {}): Promise<Record<string, unknown>> {
+async function blazeNook(note: (text: string) => void, options: { window?: boolean; seconds?: number; bow?: boolean; r59?: boolean; corner?: 'toward' | 'away'; fight?: boolean; peek?: boolean; lure?: boolean; calm?: boolean; rest?: boolean } = {}): Promise<Record<string, unknown>> {
   const stand = sites.blazeStand as number[] | undefined, spawner = sites.blazeSpawner as number[] | undefined;
   if (!stand || !spawner) throw new Error('no blazeStand or blazeSpawner in the sites');
   const seconds = options.seconds ?? (timedSeconds || 240);
@@ -581,6 +581,15 @@ async function blazeNook(note: (text: string) => void, options: { window?: boole
       if (options.bow && !run.ok) await sleep(1500);
       if (options.corner && Number(actor.health) < 14 && Number(actor.food) < 20) await act('eat', [{ do: 'eat' }], 15);
       note(`hold#${n}: hp ${r1(Number(actor.health))} ${run.lines.join(' | ').slice(0, 260)}`);
+      if (options.rest) {
+        // the head's turn between acts: back to the corner if the fight's retreat took the body away, then eat and wait there for the health (rest and go again as often as it takes)
+        const here = actor.entity.position as Vec3;
+        if (Math.hypot(here.x - (cell.x + 0.5), here.z - (cell.z + 0.5)) > 2.5 && Number(actor.health) > 0) await act('back to the corner', [{ do: 'go', to: { x: cell.x, y: cell.y, z: cell.z }, range: 0.6, seconds: 25, canPlace: ['cobblestone'], maxPlace: 6, onFail: 'continue' }], 40, { accept: ['blaze'] });
+        const waitFrom = Date.now();
+        while (Number(actor.health) > 0 && Number(actor.health) < 18 && Date.now() - waitFrom < 40_000) { if (Number(actor.food) < 20 && Number(actor.health) < 14) await act('eat', [{ do: 'eat' }], 15); await sleep(1500); }
+        exposed += (Date.now() - waitFrom) / 1000 * 0;
+        continue;
+      }
       if (Number(actor.health) < 8) break;
     }
   } finally { clearInterval(sampler); actor.removeListener('entityDead', onDead); }
@@ -597,6 +606,7 @@ scene('blaze_r59_corner_toward_long', 'run59 pack: the toward-side corner, hold,
 scene('blaze_r59_corner_lure', 'run59 pack: the away-side corner; steps out to the front cell 5 s to be seen (no strike), back in, hold 15 s, rest to 16 hearts; 600 s', note => blazeNook(note, { r59: true, corner: 'away', lure: true, seconds: 600 }));
 scene('blaze_r59_corner_calm_fight', 'run59 pack: the away-side corner built while the spawner is quiet, then fight 20 s acts, 600 s (the shield-up blow rule)', note => blazeNook(note, { r59: true, corner: 'away', fight: true, calm: true, seconds: 600 }));
 scene('blaze_r59_corner_calm_hold', 'run59 pack: the away-side corner built while the spawner is quiet, then attack hold, 600 s', note => blazeNook(note, { r59: true, corner: 'away', calm: true, seconds: 600 }));
+scene('blaze_r59_corner_calm_rest_fight', 'run59 pack: the away-side corner built while the spawner is quiet; fight 20 s acts, back to the corner, eat and wait to 18 hearts, again; 600 s', note => blazeNook(note, { r59: true, corner: 'away', fight: true, calm: true, rest: true, seconds: 600 }));
 scene('blaze_r59_corner_peek', 'run59 pack: the away-side corner; steps out to the front cell, strikes 6 s, back in the corner; 600 s', note => blazeNook(note, { r59: true, corner: 'away', peek: true, seconds: 600 }));
 // The low slit (S2, 2026-11-03; Codex's first candidate): the body stands one block LOWER than the spawner room's floor in a pocket behind the room's west wall; the wall has ONE opening, the cell at the
 // room's floor level (the pocket's head cell). Built here with commands (the feasibility of the shape: can it strike through the slit, how much does it take, can it get the rods), not by the body.
