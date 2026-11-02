@@ -2,27 +2,27 @@
  "producedBy": "backend/scripts/minecraft-continue-lab-probe.ts",
  "bench": "B",
  "bodyRevision": "4dbf1667f264caf6fe0c3baee330e69c216cdcd6",
- "madeAt": "2026-11-01T15:09:09.032Z",
+ "madeAt": "2026-11-02T04:47:20.663Z",
  "answers": "control/different-target",
  "fixtureSha256": "39cb40c64e870cad75d543996fbe60300a2f1b7360fa88618c4c7911a1012ce9",
  "output": {
-  "reflexTarget": 43,
-  "actTarget": 44,
+  "reflexTarget": 56,
+  "actTarget": 57,
   "handover": null,
   "unit": {
    "goal": "done",
    "end": "finished",
    "released": true,
-   "startedAt": "2026-11-01T15:09:06.671Z"
+   "startedAt": "2026-11-02T04:47:17.202Z"
   },
   "bodyTimes": {
-   "acceptedAt": "2026-11-01T15:09:06.671Z",
-   "startedAt": "2026-11-01T15:09:07.099Z",
-   "reflexWaitMs": 427,
-   "lockAt": "2026-11-01T15:09:07.099Z",
-   "firstMotorAt": "2026-11-01T15:09:07.103Z",
-   "motorOps": 58,
-   "endedAt": "2026-11-01T15:09:09.030Z"
+   "acceptedAt": "2026-11-02T04:47:17.202Z",
+   "startedAt": "2026-11-02T04:47:18.058Z",
+   "reflexWaitMs": 855,
+   "lockAt": "2026-11-02T04:47:18.058Z",
+   "firstMotorAt": "2026-11-02T04:47:18.062Z",
+   "motorOps": 69,
+   "endedAt": "2026-11-02T04:47:20.645Z"
   }
  }
 }
