@@ -91,21 +91,38 @@ export function crystalCaged(bot: Bot, crystal: { position: P3 }): boolean | nul
 /**
  * The ten spikes of the End's island (the obsidian pillars, one crystal on each): their centres are fixed on a ring of 42 blocks (x = floor(42 cos a), z = floor(42 sin a),
  * a = 2 (-pi + pi/10 i)); which has which height and cage is the world's seed. A spike's state is read from what is loaded: `crystal` (one stands there),
- * `gone` (the column is loaded and holds none: it was destroyed), `unknown` (the column is not loaded: not seen).
+ * `gone` (the body was near enough to have been told of a crystal and the column holds none: it was destroyed, and it stays so), `unknown` (not seen: the column
+ * is not loaded, or too far for the server to have told of a crystal on it).
  */
 export const SPIKE_CENTRES: ReadonlyArray<{ x: number; z: number }> = Array.from({ length: 10 }, (_, i) =>
   ({ x: Math.floor(42 * Math.cos(2 * (-Math.PI + Math.PI / 10 * i))), z: Math.floor(42 * Math.sin(2 * (-Math.PI + Math.PI / 10 * i))) }));
 export type SpikeState = 'crystal' | 'gone' | 'unknown';
+/**
+ * How far from the body a crystal that stands is surely in its entities. The server tells of an entity within (view distance - 1) chunks (the End crystal's own
+ * range is wider, 16 chunks), and chunks reach further than that: a body 100 blocks from the ring saw the blocks of four spikes and none of their crystals
+ * (lab, 2026-11-02: four spikes counted as destroyed that were not). A margin of a chunk under the range, 48 blocks at most, 32 when the distance is not told.
+ */
+export function crystalTellingReach(bot: Bot): number {
+  const told = Number(bot?.game?.serverViewDistance ?? bot?.game?.viewDistance);
+  return Number.isFinite(told) && told >= 3 ? Math.max(16, Math.min(48, (told - 1) * 16 - 16)) : 32;
+}
+/** The spikes the body has seen destroyed: a crystal seen on one again (the dragon's respawn) clears it. */
+const destroyedSpikes = new WeakMap<object, Set<number>>();
 export function spikeStates(bot: Bot): Array<{ x: number; z: number; state: SpikeState; id?: number }> {
   const read = bodyReader(bot);
+  const at = bot?.entity?.position, reach = crystalTellingReach(bot);
   const crystals = (Object.values(bot?.entities ?? {}) as any[]).filter(entity => entity?.name === 'end_crystal' && entity.position);
-  return SPIKE_CENTRES.map(centre => {
+  const seenGone = destroyedSpikes.get(bot) ?? new Set<number>();
+  if (bot && typeof bot === 'object') destroyedSpikes.set(bot, seenGone);
+  return SPIKE_CENTRES.map((centre, index) => {
     const near = crystals.find(entity => Math.abs(entity.position.x - (centre.x + 0.5)) <= 1.6 && Math.abs(entity.position.z - (centre.z + 0.5)) <= 1.6);
-    if (near) return { ...centre, state: 'crystal' as const, id: near.id };
-    // The column: loaded when some cell of it is known; a pillar's top is solid (its bedrock cap).
+    if (near) { seenGone.delete(index); return { ...centre, state: 'crystal' as const, id: near.id }; }
+    if (seenGone.has(index)) return { ...centre, state: 'gone' as const };
+    // The column: loaded when some cell of it is known; a pillar's top is solid (its bedrock cap). Destroyed only when the body is near enough to have been told of the crystal.
     let loaded = false, top = false;
     for (let y = 125; y >= 60; y--) { const block = read(centre.x, y, centre.z); if (block) { loaded = true; if (block.solid) { top = true; break; } } }
-    return { ...centre, state: loaded && top ? 'gone' as const : 'unknown' as const };
+    if (loaded && top && at && Math.hypot(at.x - (centre.x + 0.5), at.z - (centre.z + 0.5)) <= reach) { seenGone.add(index); return { ...centre, state: 'gone' as const }; }
+    return { ...centre, state: 'unknown' as const };
   });
 }
 

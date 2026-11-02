@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import { Vec3 } from 'vec3';
 import { describe, expect, it, vi } from 'vitest';
 import { boxDistance, DRAGON_PHASE, isPerched, partBox, partDamage, partOffset, partTarget, flameCloudCentre } from '../../src/services/minebot/utils/dragonParts.js';
-import { breathCloudsOf, crystalCaged, crystalsOf, dragonView, endObservation, fireballPath, fountainOf, metaIndex, SPIKE_CENTRES, spikeStates } from '../../src/services/minebot/utils/dragonState.js';
+import { breathCloudsOf, crystalCaged, crystalsOf, crystalTellingReach, dragonView, endObservation, fireballPath, fountainOf, metaIndex, SPIKE_CENTRES, spikeStates } from '../../src/services/minebot/utils/dragonState.js';
 import { attack } from '../../src/services/minebot/utils/primitives/attack.js';
 import { partToStrike, swingWaitMs } from '../../src/services/minebot/utils/primitives/dragonStrike.js';
 
@@ -114,6 +114,30 @@ describe('what the body reads of the fight', () => {
     expect(typeof seen.crystals.list[0].distance).toBe('number'); expect(seen.dragonBreath).toEqual([]); expect(seen.dragonFireballs).toBe(0);
     f.bot.game.dimension = 'minecraft:overworld';
     expect(endObservation(f.bot)).toBeNull();
+  });
+  it('calls a spike destroyed only when the body is near enough to have been told of a crystal on it, and keeps it so', () => {
+    // The lab: a body 100 blocks from the ring saw the blocks of four spikes and none of their crystals, and four were counted destroyed that were not.
+    const f = fixture({ at: new Vec3(SPIKE_CENTRES[0].x + 0.5 + 100, 64, SPIKE_CENTRES[0].z + 0.5) });
+    for (const index of [0, 5]) f.world.set(key(SPIKE_CENTRES[index].x, 85, SPIKE_CENTRES[index].z), 'obsidian');
+    const states = () => spikeStates(f.bot).map(spike => spike.state);
+    expect(states()[0]).toBe('unknown'); expect(states()[5]).toBe('unknown');
+    f.self.position = new Vec3(SPIKE_CENTRES[0].x + 0.5 + 20, 64, SPIKE_CENTRES[0].z + 0.5);
+    expect(states()[0]).toBe('gone'); expect(states()[5]).toBe('unknown'); // the other pillar is loaded too, and too far
+    f.self.position = new Vec3(SPIKE_CENTRES[0].x + 0.5 + 100, 64, SPIKE_CENTRES[0].z + 0.5);
+    expect(states()[0]).toBe('gone'); // seen destroyed: it stays so when the body goes off
+    expect(endObservation(f.bot)!.crystals).toMatchObject({ remaining: 9, gone: 1 });
+    // a crystal seen there again (the dragon's respawn) clears it; gone from sight while the body is far, it is not called destroyed
+    f.bot.entities[40] = { id: 40, name: 'end_crystal', position: new Vec3(SPIKE_CENTRES[0].x + 0.5, 86, SPIKE_CENTRES[0].z + 0.5), metadata: [] };
+    expect(states()[0]).toBe('crystal');
+    delete f.bot.entities[40];
+    expect(states()[0]).toBe('unknown');
+  });
+  it('tells how far a crystal is surely told of from the view distance the server gave', () => {
+    expect(crystalTellingReach({ game: {} })).toBe(32);
+    expect(crystalTellingReach({ game: { serverViewDistance: 6 } })).toBe(48);
+    expect(crystalTellingReach({ game: { serverViewDistance: 10 } })).toBe(48);
+    expect(crystalTellingReach({ game: { serverViewDistance: 3 } })).toBe(16);
+    expect(crystalTellingReach(null)).toBe(32);
   });
   it('finds the dragon\'s breath by its particle and ignores another cloud', () => {
     const f = fixture();
@@ -251,6 +275,41 @@ describe('the dragon\'s reach', () => {
     expect(dragonHazards(f.bot).map(h => h.kind)).toEqual(['fireball']);
     f.bot.entities[40].position = new Vec3(30.5, 72, 8.5);
     expect(dragonHazards(f.bot)).toEqual([]);
+  });
+  /** A ball at 45 degrees down toward -z, `ahead` blocks beyond the body in z and 6 up: it lands `ahead - 6` blocks beyond the body. */
+  const fireballAt = (f: ReturnType<typeof fixture>, id: number, ahead: number) => {
+    f.bot.toldVelocities = new Map([[id, new Vec3(0, -0.25, -0.25)]]);
+    f.bot.entities[id] = { id, name: 'dragon_fireball', position: new Vec3(0.5, 70, 0.5 + ahead), metadata: [] };
+  };
+  it('runs from where a fireball lands when that is well off the body, and across its line when it falls on the body', () => {
+    // lands 6 blocks off: the push comes from the landing
+    const off = fixture({ phase: DRAGON_PHASE.holdingPattern, at: new Vec3(0.5, 64, 0.5) });
+    fireballAt(off, 40, 12);
+    const [away] = dragonHazards(off.bot);
+    expect(away.kind).toBe('fireball');
+    expect(Math.abs(away.centre.x - 0.5)).toBeLessThan(0.7); expect(away.centre.z).toBeGreaterThan(4); expect(away.centre.z).toBeLessThan(8);
+    // falls on the body: the push comes from 7 blocks to one side of the line (the line runs along z), so that the flee is a sidestep
+    const on = fixture({ phase: DRAGON_PHASE.holdingPattern, at: new Vec3(0.5, 64, 0.5) });
+    fireballAt(on, 41, 6);
+    const [across] = dragonHazards(on.bot);
+    expect(across.kind).toBe('fireball');
+    expect(Math.abs(across.centre.z - 0.5)).toBeLessThan(0.5); expect(Math.abs(Math.abs(across.centre.x - 0.5) - 7)).toBeLessThan(0.5);
+  });
+  it('keeps a fireball\'s landing as a breath to come for a moment after the ball is gone, and leaves it to the cloud once that is in sight', () => {
+    const f = fixture({ phase: DRAGON_PHASE.holdingPattern, at: new Vec3(0.5, 64, 0.5) });
+    fireballAt(f, 40, 6);
+    expect(dragonHazards(f.bot, { now: 1000 }).map(h => h.kind)).toEqual(['fireball']);
+    delete f.bot.entities[40]; // landed
+    const gap = dragonHazards(f.bot, { now: 1250 });
+    expect(gap.map(h => h.kind)).toEqual(['breath']); expect(gap[0].why).toContain('落ちた');
+    expect(dragonHazards(f.bot, { now: 3000 })).toEqual([]);
+    // the cloud comes into sight at the landing: only the cloud counts
+    fireballAt(f, 42, 6);
+    dragonHazards(f.bot, { now: 5000 });
+    delete f.bot.entities[42];
+    cloudAt(f, 20, new Vec3(0.5, 64, 0.5), 3);
+    const later = dragonHazards(f.bot, { now: 5250 });
+    expect(later.map(h => h.kind)).toEqual(['breath']); expect(later[0].why).toContain('竜の息の雲');
   });
   it('runs out of a cloud without a jump, a sprint or a block, and stops once clear', async () => {
     const f = fixture({ phase: DRAGON_PHASE.holdingPattern, at: new Vec3(0.5, 64, 0.5) });

@@ -19,6 +19,13 @@ export { BREATH_RADIUS_MIN };
 /** A fireball's line is dangerous within this far (the cloud it lays and the blast round it). */
 export const FIREBALL_REACH = 7;
 const FIREBALL_TICKS = 40;
+/**
+ * The cloud a fireball lays is put on the first living thing within 4 blocks of where it lands (DragonFireball.onHit): a body this near the landing is the one it
+ * falls on, and it has to step across the line; one farther off runs from where it lands.
+ */
+const FIREBALL_CAPTURE = 5;
+/** A fireball gone from sight has laid, or is laying, its cloud at its landing: the cloud comes into the client's entities a few ticks later (lab: 0.2 s). */
+const LANDING_HOLD_MS = 1500;
 /** The cloud is a slab half a block high on the ground; the body is clear of it when its feet are over it or its head under it, with a margin. */
 const CLOUD_SLAB = 0.5;
 const SLAB_MARGIN = 0.3;
@@ -55,6 +62,35 @@ function nearestOnPath(points: P3[], p: P3): { distance: number; at: P3 } | null
     if (!best || distance < best.distance) best = { distance, at };
   }
   return best;
+}
+
+/**
+ * The point a flee is pushed from for a fireball. Where the ball lands well off the body, that is the landing (lab 2026-11-02: a body that ran from "the nearest point
+ * of the line", which lay over it, went toward the landing and had the cloud put on it). Where it lands on the body, a place across the line, 7 blocks off on the other
+ * side, so that the push is a sidestep and not a run along the line toward the ball. A ball that lands nowhere in the 40 ticks is run from at its nearest point.
+ */
+function fireballPush(line: P3[], impact: P3 | null, nearest: P3, feet: P3): P3 {
+  if (!impact) return nearest;
+  if (Math.hypot(impact.x - feet.x, impact.z - feet.z) > FIREBALL_CAPTURE) return impact;
+  const first = line[0], last = line[line.length - 1];
+  const dx = last.x - first.x, dz = last.z - first.z, length = Math.hypot(dx, dz);
+  if (length < 0.5) return impact; // falling straight down: from where it lands
+  const nx = -dz / length, nz = dx / length;
+  const side = (feet.x - nearest.x) * nx + (feet.z - nearest.z) * nz >= 0 ? 1 : -1;
+  return { x: feet.x - side * nx * FIREBALL_REACH, y: feet.y, z: feet.z - side * nz * FIREBALL_REACH };
+}
+
+/** Where each fireball in sight was going to land, as of the last look, and the landings of those that have gone from sight since (kept for LANDING_HOLD_MS). */
+const flights = new WeakMap<object, Map<number, { impact: P3 | null; at: number }>>();
+const landings = new WeakMap<object, Array<{ impact: P3; at: number }>>();
+function landedFireballs(bot: object, flying: Array<{ id: number; impact: P3 | null }>, now: number): Array<{ impact: P3; at: number }> {
+  const before = flights.get(bot) ?? new Map<number, { impact: P3 | null; at: number }>();
+  const down = (landings.get(bot) ?? []).filter(entry => now - entry.at <= LANDING_HOLD_MS);
+  const present = new Set(flying.map(ball => ball.id));
+  for (const [id, was] of before) if (!present.has(id) && was.impact && now - was.at <= 1000) down.push({ impact: was.impact, at: now });
+  flights.set(bot, new Map(flying.map(ball => [ball.id, { impact: ball.impact, at: now }])));
+  landings.set(bot, down);
+  return down;
 }
 
 /**
@@ -101,15 +137,24 @@ export function dragonHazards(bot: any, options: { clearance?: number; now?: num
       }
     }
   }
-  // 3. a fireball's line, 40 ticks ahead
+  // 3. a fireball's line, 40 ticks ahead; and the breath that a fireball gone from sight is laying where it came down
   const read = bodyReader(bot);
   const chest = { x: feet.x, y: feet.y + 0.9, z: feet.z };
+  const flying: Array<{ id: number; impact: P3 | null }> = [];
   for (const ball of fireballsOf(bot)) {
     const path = fireballPath(read, ball, FIREBALL_TICKS);
+    flying.push({ id: ball.id, impact: path.impact });
     const line = [{ x: ball.position.x, y: ball.position.y, z: ball.position.z }, ...path.points, ...(path.impact ? [path.impact] : [])];
     const near = nearestOnPath(line, chest);
     if (near && near.distance <= FIREBALL_REACH + clearance) {
-      out.push({ kind: 'fireball', centre: near.at, radius: FIREBALL_REACH, why: `竜の火の玉 #${ball.id} の線から${near.distance.toFixed(1)}m（${path.impact ? `着弾 (${path.impact.x.toFixed(0)},${path.impact.y.toFixed(0)},${path.impact.z.toFixed(0)})` : '40tick先まで当たらず'}）` });
+      out.push({ kind: 'fireball', centre: fireballPush(line, path.impact, near.at, feet), radius: FIREBALL_REACH, why: `竜の火の玉 #${ball.id} の線から${near.distance.toFixed(1)}m（${path.impact ? `着弾 (${path.impact.x.toFixed(0)},${path.impact.y.toFixed(0)},${path.impact.z.toFixed(0)})` : '40tick先まで当たらず'}）` });
+    }
+  }
+  for (const landing of landedFireballs(bot, flying, now)) {
+    // Once the cloud itself is in sight it is the cloud above that counts.
+    const lying = clouds.some(cloud => Math.hypot(cloud.position.x - landing.impact.x, cloud.position.z - landing.impact.z) <= 4);
+    if (!lying && cloudReaches(landing.impact, BREATH_RADIUS_MIN, feet, clearance)) {
+      out.push({ kind: 'breath', centre: landing.impact, radius: BREATH_RADIUS_MIN, why: `竜の火の玉が (${landing.impact.x.toFixed(0)},${landing.impact.y.toFixed(0)},${landing.impact.z.toFixed(0)}) に落ちた: 息の雲が出る` });
     }
   }
   return out;
