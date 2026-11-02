@@ -41,7 +41,7 @@ export const FLOOR_CLUTCH_PRIORITY = 380;
  * The one switch of the water-bucket clutch (and with it the taking-up of the water it pours, which has nothing to take up when no clutch ran): false and `clutchTick` starts nothing, in every mode. A
  * decision of the release, not of the environment: nothing reads it from the env (the switch for the second rollout, independent review 2026-11-02, round 8).
  */
-export const FALL_CLUTCH_ENABLED = false;
+export const FALL_CLUTCH_ENABLED = true;
 const FALL_TIMEOUT_MS = 8000;
 const FALL_DETAIL_MAX = 160;
 /** The taking-up of water a clutch left behind: under every reflex (each may cut it), over the planner's own acts. */
