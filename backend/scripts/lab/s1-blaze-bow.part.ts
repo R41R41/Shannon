@@ -4,7 +4,7 @@
 // kill the c1 spawner's blazes from the camp cell closed with cobblestone, without the deaths of going out to fight (pass: no death after the iron armour, lowest health 8 or more, 3 rods or more, and the arrows per kill).
 // Scenes: s1_bow_head (the head cell toward the spawner left open as the window), s1_bow_front (only the side away from the spawner closed: the front open), s1_bow_head_pick (the head window, and the rods picked up when the health allows).
 
-async function s1BlazeBow(note: (text: string) => void, options: { window: 'head' | 'front' | 'low'; pick?: boolean; seconds?: number }): Promise<Record<string, unknown>> {
+async function s1BlazeBow(note: (text: string) => void, options: { window: 'head' | 'front' | 'low'; pick?: boolean; seconds?: number; noShieldReflex?: boolean }): Promise<Record<string, unknown>> {
   const stand = sites.blazeStand as number[] | undefined, spawner = sites.blazeSpawner as number[] | undefined;
   if (!stand || !spawner) throw new Error('no blazeStand or blazeSpawner in the sites');
   const seconds = options.seconds ?? (timedSeconds || 300);
@@ -34,6 +34,7 @@ async function s1BlazeBow(note: (text: string) => void, options: { window: 'head
   }
   note(`camp cell ${JSON.stringify(cell)}, toward the spawner ${JSON.stringify(toward)}, window ${options.window}, to place ${place.length}`);
   const canPlace = ['cobblestone'];
+  if (options.noShieldReflex) { try { (actor as any).shieldBlock.enabled = false; } catch { /* no shield reflex */ } }
   const started = Date.now();
   const rods0 = await countServer('blaze_rod'), shield0 = shieldUsed(), arrows0 = packClient().arrow ?? 0;
   let killed = 0;
@@ -65,7 +66,11 @@ async function s1BlazeBow(note: (text: string) => void, options: { window: 'head
     while (Date.now() - started < seconds * 1000 && !disconnected && Number(actor.health) > 0) {
       const before = Number(actor.health);
       const seen = (Object.values(actor.entities ?? {}) as any[]).filter(e => e?.name === 'blaze' && e.position).map(e => ({ d: r1(e.position.distanceTo(actor.entity.position)), dy: r1(e.position.y - actor.entity.position.y) })).sort((a, b) => a.d - b.d).slice(0, 4);
+      const arrowLog: string[] = [];
+      const arrowTimer = setInterval(() => { for (const e of Object.values(actor.entities ?? {}) as any[]) { if (e?.name === 'arrow' && e.position && arrowLog.length < 8) arrowLog.push(`${e.id}@${r1(e.position.x)},${r1(e.position.y)},${r1(e.position.z)}`); } }, 40);
+      const ledgerMark = (actor.reflexLedger?.mark?.() as number | undefined) ?? 0;
       const run = await act(`shoot#${m.acts + 1}`, [{ do: 'shoot', target: 'blaze', n: 3, item: 'bow', onFail: 'continue' }], 30, { accept: ['blaze'] });
+      clearInterval(arrowTimer);
       m.acts++; if (run.ok) m.okActs++;
       const text = run.lines.join(' ');
       const tally = /当たり (\d+)\/(\d+)/u.exec(text);
@@ -75,7 +80,8 @@ async function s1BlazeBow(note: (text: string) => void, options: { window: 'head
       if (!run.ok && !tally) { m.refused++; if (/見えない|いない|target_not_found/u.test(text)) m.noTarget++; await sleep(1200); }
       if (run.stoppedBy === 'reflex') m.reflexStops++;
       m.hpLost += Math.max(0, before - Number(actor.health)); m.lowestHp = Math.min(m.lowestHp, Number(actor.health));
-      if (samples.length < 14) samples.push(`#${m.acts} hp ${r1(before)}→${r1(Number(actor.health))} near ${JSON.stringify(seen)} ${text.slice(0, 170)}`);
+      const ledger = ((actor.reflexLedger?.entriesSince?.(ledgerMark) as Array<{ kind: string; outcome: string }> | undefined) ?? []).map(e => `${e.kind}:${e.outcome}`).slice(0, 5).join(',');
+      if (samples.length < 14 && !/line_blocked|矢の道/u.test(text)) samples.push(`#${m.acts} hp ${r1(before)}→${r1(Number(actor.health))} near ${JSON.stringify(seen)} arrows[${arrowLog.join(' ')}] me ${r1(actor.entity.position.x)},${r1(actor.entity.position.y)},${r1(actor.entity.position.z)} yaw ${r1(actor.entity.yaw)} pitch ${r1(actor.entity.pitch)} ledger[${ledger}] held ${actor.heldItem?.name} using ${String((actor as any).usingHeldItem)} ${text.slice(0, 170)}`);
       if (Number(actor.health) < 12 && Number(actor.food) < 18) await act('eat', [{ do: 'eat' }], 15);
       if (Number(actor.health) < 8) { aborted = `health ${r1(Number(actor.health))}: stop`; note(aborted); break; }
     }
@@ -98,3 +104,43 @@ scene('s1_bow_head', 'S1: the camp cell walled with the head cell toward the spa
 scene('s1_bow_front', 'S1: the camp cell with only the side away from the spawner closed (the front open), the bow at the blazes', note => s1BlazeBow(note, { window: 'front' }));
 scene('s1_bow_head_pick', 'S1: the head window, and the rods picked up at the end when the health allows', note => s1BlazeBow(note, { window: 'head', pick: true }));
 scene('s1_bow_low', 'S1: the camp cell a one-block wall on every side (a trench: nothing over it, the arrows leave at any angle), the bow at the blazes', note => s1BlazeBow(note, { window: 'low' }));
+
+// A bow that does not leave (lab bb4: 58 shots, 0 arrows used, shield worn, reflexes on): the same shot at a cell on the ground with and without the shield, with the floor reflexes as the probe runs them.
+scene('s1_bow_diag', 'S1: a bow at a cell 8 m off on the stand\'s level: arrows used with the shield worn, without it, and with the shield worn and the floor reflexes held', async note => {
+  const stand = sites.blazeStand as number[] | undefined;
+  if (!stand) throw new Error('no blazeStand in the sites');
+  await ask('difficulty peaceful');
+  const out: Record<string, unknown> = {};
+  for (const variant of ['shield', 'noshield']) {
+    await equip({ stone_sword: 1, bow: 1, arrow: 64, cobblestone: 64 }, { armor: 'iron', shield: variant === 'shield' });
+    await placeActor('the_nether', stand[0], stand[1], stand[2], 24);
+    await sleep(1500);
+    const arrows0 = packClient().arrow ?? 0;
+    const at = actor.entity.position as Vec3;
+    const run = await act(`diag ${variant}`, [{ do: 'shoot', at: [{ x: Math.floor(at.x) + 8, y: Math.floor(at.y), z: Math.floor(at.z) }], item: 'bow', n: 2 }], 30);
+    await sleep(800);
+    out[variant] = { ok: run.ok, lines: run.lines.slice(0, 3).map(l => l.slice(0, 200)), err: String(run.error ?? '').slice(0, 200), arrowsUsed: arrows0 - (packClient().arrow ?? 0), line: (run.lines[0] ?? '').slice(0, 240), held: actor.heldItem?.name, offhand: actor.inventory?.slots?.[45]?.name };
+    note(`${variant}: ${JSON.stringify(out[variant])}`);
+  }
+  return out;
+});
+scene('s1_bow_head_noshield', 'S1: the head window with the shield reflex switched off (does the bow leave when the shield cannot be raised over it?)', note => s1BlazeBow(note, { window: 'head', noShieldReflex: true }));
+
+// A bow at a creature (not a cell): an armor stand 6 m off on the stand's level, shield worn, reflexes as the probe runs them: arrows used, the shoot line, the stand's health.
+scene('s1_bow_diag2', 'S1: a bow at an armor stand 6 m off (an entity target): arrows used, with the shield worn', async note => {
+  const stand = sites.blazeStand as number[] | undefined;
+  if (!stand) throw new Error('no blazeStand in the sites');
+  await ask('difficulty peaceful');
+  await equip({ stone_sword: 1, bow: 1, arrow: 64, cobblestone: 64 }, { armor: 'iron', shield: true });
+  await placeActor('the_nether', stand[0], stand[1], stand[2], 24);
+  await sleep(1500);
+  const at = actor.entity.position as Vec3;
+  await ask(`execute in minecraft:the_nether run summon minecraft:armor_stand ${at.x + 6} ${Math.floor(at.y)} ${at.z} {NoGravity:1b}`);
+  await sleep(1500);
+  const arrows0 = packClient().arrow ?? 0;
+  const run = await act('diag armor stand', [{ do: 'shoot', target: 'armor_stand', item: 'bow', n: 3 }], 40);
+  await sleep(800);
+  const out = { ok: run.ok, arrowsUsed: arrows0 - (packClient().arrow ?? 0), lines: run.lines.slice(0, 3).map(l => l.slice(0, 300)), err: String(run.error ?? '').slice(0, 200) };
+  note(JSON.stringify(out));
+  return out;
+});
