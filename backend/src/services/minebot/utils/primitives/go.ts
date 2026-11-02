@@ -993,7 +993,14 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     let result = generator.next().value?.result ?? { status: 'noPath', path: [] };
     // The search answers a tick (40 ms) at a time while it is still going; here it is let finish (its own time bounds it), the body's other work
     // (its packets, its physics, the act's watch) getting its turn between the ticks.
-    for (let rounds = 0; result.status === 'partial' && rounds < 2000; rounds++) { await yieldNow(); result = generator.next().value?.result ?? result; }
+    // A stop (a reflex's, the stopIf's, the end of the command) ends the search at once: a cancelled act that goes on searching holds the body still (lab r54: five seconds of a search
+    // for a way nobody wanted any more, a dragon's fireball on the body that stood waiting for the reflex to be let in).
+    for (let rounds = 0; result.status === 'partial' && rounds < 2000; rounds++) {
+      if (ctx.stop.aborted) throw new StepStopped(String(ctx.stop.reason ?? 'stopped'));
+      await yieldNow();
+      result = generator.next().value?.result ?? result;
+    }
+    if (ctx.stop.aborted) throw new StepStopped(String(ctx.stop.reason ?? 'stopped'));
     const digs = new Map<string, number>();
     let places = 0;
     for (const node of result.path ?? []) {
