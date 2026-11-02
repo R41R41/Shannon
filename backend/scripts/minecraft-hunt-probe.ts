@@ -534,7 +534,7 @@ async function blazeSlit(note: (text: string) => void, options: { seconds?: numb
   await placeActor('the_nether', stand[0], stand[1], stand[2], 24);
   const solidAt = (x: number, y: number, z: number) => { const b = actor.blockAt(new Vec3(x, y, z)); return !!b && b.boundingBox === 'block'; };
   const sy = spawner[1], sz = spawner[2];
-  let wallX = spawner[0];
+  let wallX = spawner[0] - 1;
   while (wallX > spawner[0] - 8 && !solidAt(wallX, sy, sz)) wallX--;
   note(`spawner ${spawner}, west wall x=${wallX} (${actor.blockAt(new Vec3(wallX, sy, sz))?.name}), behind it x=${wallX - 1}: ${actor.blockAt(new Vec3(wallX - 1, sy, sz))?.name}`);
   const nether = 'execute in minecraft:the_nether run';
