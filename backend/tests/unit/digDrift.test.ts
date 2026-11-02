@@ -21,6 +21,21 @@ async function drive<T>(sim: HandsSim, promise: Promise<T>, each?: (elapsedMs: n
 }
 
 describe('dig: a body carried out of reach while it digs', () => {
+  it('cancels an ongoing dry dig when flooding consumes its return reserve', async () => {
+    const sim = makeHandsSim(ground, { items: [{ name: 'diamond_pickaxe', count: 1 }] });
+    sim.bot.dig = () => new Promise(() => undefined);
+    const stop = vi.fn(); sim.bot.stopDigging = stop;
+    const { value, elapsed } = await drive(sim, dig(ctxOf(sim), { at: [{ x: 3, y: FLOOR, z: 0 }], collect: false }), time => {
+      if (time === 1000) {
+        sim.world.set(0, FLOOR + 1, 0, 'water');
+        sim.bot.oxygenLevel = 4;
+      }
+    });
+    expect(value).toMatchObject({ ok: false, reason: 'breathing_work' });
+    expect(elapsed).toBeLessThan(2000);
+    expect(stop).toHaveBeenCalled();
+    expect(sim.world.nameAt(3, FLOOR, 0)).toBe('obsidian');
+  });
   it('stops at once with out_of_reach (not after the dig\'s long guard), and the block is still there', async () => {
     const sim = makeHandsSim(ground, { items: [{ name: 'diamond_pickaxe', count: 1 }] });
     // a server does not break a block from out of reach: the dig never comes back

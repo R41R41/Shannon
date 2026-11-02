@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { runProbe } from '../src/services/minebot/instantSkills/probe.js';
 // Model-free live check of the act hands (place, make, pillarUp, go, mine, smelt, obsidian, portal, fight) on a real Minecraft
 // server, through the road the production body uses: NativeCommonFcaBody.execute(command) for the skill `act`, which opens the
 // action (executeAction), resolves the skill through the catalog's schema, runs InstantSkill.run (a second executeAction and the
@@ -24,6 +25,8 @@ import { Vec3 } from 'vec3';
 import { createProbeBot, closeProbeBot } from '../src/services/minebot/testing/MinecraftProbeBot.js';
 import { NativeCommonFcaBody } from '../src/services/minebot/integration/commonFca/nativeBody.js';
 import { madeStamp } from './lab/madeStamp.js';
+import { eyeCell } from '../src/services/minebot/utils/bodyPose.js';
+import { holdsWater } from '../src/services/minebot/utils/waterBlocks.js';
 
 const port = Number(process.env.MINECRAFT_HANDS_PORT);
 const worldDirectory = process.env.MINECRAFT_HANDS_WORLD_DIRECTORY ?? '';
@@ -283,6 +286,66 @@ const actorCell = () => { const p = actor.entity?.position as Vec3 | undefined; 
 type Define = (s: Scene) => Promise<void>;
 const scenes: Array<{ name: string; title: string; seconds: number; run: Define }> = [];
 const scene = (name: string, title: string, seconds: number, run: Define) => scenes.push({ name, title, seconds, run });
+
+// Same submerged worksite, two work durations. Setup commands stop before the native act;
+// return is performed by the body's installed breathing reflex, never by a test teleport.
+for (const material of ['obsidian', 'dirt']) scene(`breath_work_${material}`, `submerged ${material}: work reserve and physical return`, 25, async s => {
+  await s.reset();
+  await s.give({ diamond_pickaxe: 1, diamond_shovel: 1 });
+  await s.arena([
+    fill(-5, 100, -2, 2, 101, 2, 'water'),
+    fill(-4, 102, -2, 2, 102, 2, 'stone'),
+    `setblock 1 101 0 minecraft:${material}`,
+  ], false);
+  await s.cmd(`tp ${ACTOR} 0.5 100 0.5 -90 0`);
+  await sleep(150);
+  const before = { hp: actor.health, air: actor.oxygenLevel, at: actorCell() };
+  const run = await s.act('work', { hands: [{ do: 'dig', at: [cellAt(1, 101, 0)], tool: material === 'obsidian' ? 'diamond_pickaxe' : 'diamond_shovel', collect: false }] }, 20);
+  if (material === 'obsidian') {
+    s.expectStop(run, /呼吸|息|breathing/u, 3000);
+    s.check('long work left the target intact', blockName(1, 101, 0) === material);
+  } else {
+    s.expectOk(run);
+    s.check('short work actually removed target', blockName(1, 101, 0) !== material);
+  }
+  const breathing = () => { const head = eyeCell(actor); const block = head && actor.blockAt(head); return !!block && !holdsWater(block) && block.boundingBox === 'empty'; };
+  const until = Date.now() + 12_000;
+  while (Date.now() < until && (actor.oxygenLevel < 20 || !breathing())) await sleep(100);
+  const after = { hp: actor.health, air: actor.oxygenLevel, at: await posServer(), serverAir: await ask(`data get entity ${ACTOR} Air`) };
+  s.notes.push(JSON.stringify({ before, after }));
+  s.check('returned to breathable space and refilled air', after.air === 20 && breathing(), JSON.stringify(after));
+  s.check('no drowning damage or death', after.hp >= before.hp && deaths === s.deathsAtStart, JSON.stringify({ before, after }));
+});
+
+// Fixed objective: obtain ore and return. The query never moves the actor or certifies a future edited world.
+for (const offset of [2, 8]) scene(`worksite_roundtrip_${offset}`, 'worksite approach, acquire and return', 35, async s => {
+  s.watch = ['raw_iron'];
+  await s.reset(); await s.give({ iron_pickaxe: 1 });
+  await s.arena([`setblock ${offset} 100 0 minecraft:iron_ore`]);
+  await s.settle();
+  const origin = cellAt(0, 100, 0), target = cellAt(offset, 100, 0);
+  const query = await runProbe(actor, { kind: 'worksite', target, retreat: origin });
+  const assessment = JSON.parse(query.result);
+  s.notes.push(query.result);
+  s.check('worksite: approach and independent retreat observed', assessment.approach.status === 'verified_segment' && assessment.retreat.status === 'verified_segment');
+  const stand = assessment.standCandidates[0]?.at;
+  if (!stand) return;
+  const hands: Record<string, unknown>[] = [];
+  if (Math.hypot(stand.x, stand.y - 100, stand.z) > 1) hands.push({ do: 'walk', path: assessment.approach.points });
+  hands.push({ do: 'dig', at: [target], tool: 'iron_pickaxe' }, { do: 'pickup', range: 4 });
+  const work = await s.act('obtain', { hands });
+  s.expectOk(work);
+  s.check('server: ore acquired, not just excavated', (work.packDelta.raw_iron ?? 0) >= 1, JSON.stringify(work.packDelta));
+  // Recheck the route after the excavation; the pre-work route is not reused as a guarantee.
+  const back = JSON.parse((await runProbe(actor, { kind: 'path', to: origin })).result);
+  s.check('return route rechecked after world change', back.reachable === true && back.onTarget === true);
+  if (!back.reachable) return;
+  const returned = await s.act('return', { hands: [{ do: 'walk', to: origin, ...(back.points?.length ? { path: back.points } : {}) }] });
+  s.expectOk(returned);
+  const position = await posServer();
+  s.check('server: returned within 2 blocks', !!position && Math.hypot(position[0] - 0.5, position[1] - 100, position[2] - 0.5) <= 2, JSON.stringify(position));
+  s.check('no damage or death', actor.health === 20 && deaths === s.deathsAtStart);
+});
 
 function placeTableScene(suffix: string): Define {
   return async s => {

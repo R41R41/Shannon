@@ -14,6 +14,7 @@ import { blockAt, cellNow, cellText, DIG_REACH, eyeDistance, findItem, guard, is
   type StepContext, type StepOutcome } from './common.js';
 import { pickup } from './pickup.js';
 import { withProgress } from './progressUnits.js';
+import { assessBreathingWork } from '../breathingWork.js';
 
 /**
  * dig: the cells in order (design mb-llm-centric 2.3). The tool is the one asked for, else the quickest carried that makes the block
@@ -156,7 +157,7 @@ async function digCells(ctx: StepContext, args: DigArgs, tally: DigTally): Promi
       }
     }
     // The body still dropping into the cell dug before: wait until it stands (at most 1 s) so its column is read where it lands.
-    if (bot.entity && bot.entity.onGround === false) await waitUntil(ctx, () => bot.entity?.onGround !== false, 1000);
+    if (bot.entity && bot.entity.onGround === false && !bot.entity.isInWater) await waitUntil(ctx, () => bot.entity?.onGround !== false || !!bot.entity?.isInWater, 1000);
     const falls = fallsOntoBody(bot, cell, at => blockAt(bot, at));
     if (falls) {
       return result(stopped(bot, 'falling_above', `${placeText(bot, cell)} の上 ${cellText(falls.at)} が ${falls.name}。掘ると落ちてきて足と頭を埋める（窒息する）。`
@@ -189,6 +190,11 @@ async function digCells(ctx: StepContext, args: DigArgs, tally: DigTally): Promi
     const exposing = threats.length > 0;
     const tool = await holdTool(ctx, block, args.tool);
     if (tool.fail) return result({ ...tool.fail, at: cell });
+    const workMs = typeof bot.digTime === 'function' ? Number(bot.digTime(block)) : NaN;
+    // Other hands use this dig too: changing mine to dig cannot spend the return breath.
+    const breath = assessBreathingWork(bot, Number.isFinite(workMs) ? workMs / 1000 : Infinity, cell);
+    if (!breath.allowed) return result(stopped(bot, 'breathing_work',
+      `水中の掘削を始めない: ${breath.reason}（残り息 ${breath.airSeconds ?? '未確認'}秒・呼吸先まで ${breath.returnSeconds ?? '未確認'}秒）。掘削と帰還の両方を賄えない`, cell));
     const guardState = bot.exposureDigGuard as { allowAt?: string } | undefined;
     if (exposing && guardState) guardState.allowAt = cellKey(cell);
     const started = Date.now();
@@ -196,11 +202,17 @@ async function digCells(ctx: StepContext, args: DigArgs, tally: DigTally): Promi
     // Run 46 (hold 6, the oplog of q22: 49 s between one dig of obsidian and the next operation): the water poured over the lava ran across the floor and carried the body
     // 7 m away from the block while it dug (under water the dig is slow: the wait ran to its end). A body that has left the reach of the block it digs stops the dig at once and says so.
     let drifted = false;
+    let breathStopped: ReturnType<typeof assessBreathingWork> | undefined;
     let stopWatching = () => {};
     const expected = typeof bot.digTime === 'function' ? Number(bot.digTime(block)) || 0 : 0;
     const digStarted = Date.now();
-    const drift = new Promise<'drifted'>(resolve => {
+    const drift = new Promise<'drifted' | 'breathing_work'>(resolve => {
       const timer = setInterval(() => {
+        // Re-read the body and exit: entering water or losing a route invalidates the start-time estimate.
+        const currentMs = typeof bot.digTime === 'function' ? Number(bot.digTime(block)) : Infinity;
+        const remaining = Math.max(0, currentMs - (Date.now() - digStarted)) / 1000;
+        const current = assessBreathingWork(bot, remaining, cell);
+        if (!current.allowed) { breathStopped = current; clearInterval(timer); resolve('breathing_work'); return; }
         // only a dig that is overdue (water over the block slows it fivefold; a body washed away never finishes it) and whose body is out of reach
         if (Date.now() - digStarted > expected + DIG_DRIFT_OVERDUE_MS && eyeDistance(bot, cell) > DIG_REACH + DIG_DRIFT_MARGIN) { drifted = true; clearInterval(timer); resolve('drifted'); }
       }, DIG_DRIFT_CHECK_MS);
@@ -211,6 +223,10 @@ async function digCells(ctx: StepContext, args: DigArgs, tally: DigTally): Promi
       digging.catch(() => undefined);
       const dug = await guard(ctx, Promise.race([digging, drift]), expected * 2 + 12_000);
       stopWatching();
+      if (breathStopped) {
+        letGo(bot);
+        return result(stopped(bot, 'breathing_work', `掘削中に呼吸の余裕が失われたため中止: ${breathStopped.reason}（残り息 ${breathStopped.airSeconds ?? '未確認'}秒・呼吸先まで ${breathStopped.returnSeconds ?? '未確認'}秒）。現在の呼吸先を再確認する`, cell));
+      }
       if (drifted) {
         letGo(bot);
         return result(stopped(bot, 'out_of_reach', `${placeText(bot, cell)} の ${block.name} を掘っている間に体が流されて届かなくなった（目から${eyeDistance(bot, cell).toFixed(1)}m、${DIG_REACH}m まで。水の流れか押された）。立ち直して掘り直す`, cell));

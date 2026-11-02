@@ -177,8 +177,9 @@ export function airRunningOut(bot: Pick<ReflexBot, 'entity' | 'blockAt' | 'oxyge
   if (Number.isFinite(surface)) return oxygen * AIR_SECONDS_PER_UNIT <= surface + SURFACING_MARGIN_SECONDS;
   let way = Infinity;
   try { way = secondsToAir(bot as ReflexBot); } catch { return false; }
-  // No way known at all: nothing to start early for; the critical threshold above stands.
-  return Number.isFinite(way) && oxygen * AIR_SECONDS_PER_UNIT <= way + CEILING_MARGIN_SECONDS;
+  // An unobserved way out is not zero return time. Engage the existing escape policy early,
+  // rather than spending almost all breath on ordinary work beneath an unknown ceiling.
+  return !Number.isFinite(way) || oxygen * AIR_SECONDS_PER_UNIT <= way + CEILING_MARGIN_SECONDS;
 }
 
 export interface BreathingReflexState {

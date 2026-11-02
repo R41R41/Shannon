@@ -1,3 +1,4 @@
+import { probeWorksite } from '../utils/probeWorksite.js';
 import { z } from 'zod';
 import { Vec3 } from 'vec3';
 import { CustomBot, InstantSkill } from '../types.js';
@@ -20,12 +21,13 @@ import { closingSpeed } from '../utils/threatTracker.js';
  *   scan    what the loaded chunks hold (logs, a village, water, lava pools, structures, stems, a fortress, spawners, portals).
  * The answer is JSON: { v: 1, kind, text, ... } with the sentence first, the dangerous facts said as they are.
  */
-export const PROBE_KINDS = ['path', 'sight', 'column', 'around', 'history', 'scan'] as const;
+export const PROBE_KINDS = ['path', 'sight', 'column', 'around', 'history', 'scan', 'worksite'] as const;
 const Pos = z.object({ x: z.number(), y: z.number(), z: z.number() }).strict();
 
 const DESCRIPTION = '調べる（読むだけ・決まった計算）。kind: path（to へ掘らず置かずに歩いて行けるか。行けるなら道の点、行けないなら切れ目と立てる所）/ '
   + 'sight（target のブロックか生き物 #id が目から見えるか・届くか・間のブロック）/ column（x,z の縦の列。yFrom・yTo。落差・水・溶岩・砂利）/ '
   + 'around（radius 内の生き物と危ないブロック）/ history（at の radius 内の最近の手と止まり）/ scan（読み込み済みの範囲の目印。radius はチャンク）。'
+  + 'worksite（target: 目的物、to: 作業位置、retreat: 帰還先。接近・呼吸・取得・逆向きの道を別々に確認）。'
   + '結果は JSON（text が先頭。危ない事実をそのまま書く）。';
 
 const cellOf = (value: { x: number; y: number; z: number }): Cell => ({ x: Math.floor(value.x), y: Math.floor(value.y), z: Math.floor(value.z) });
@@ -38,7 +40,7 @@ class Probe extends InstantSkill {
     this.description = DESCRIPTION;
     this.maxDurationMs = 30_000;
     this.params = [
-      { name: 'kind', type: 'json', schema: z.enum(PROBE_KINDS), description: 'path・sight・column・around・history・scan', required: true },
+      { name: 'kind', type: 'json', schema: z.enum(PROBE_KINDS), description: 'path・sight・column・around・history・scan・worksite', required: true },
       { name: 'to', type: 'json', schema: Pos, description: 'path: 行きたいマス' },
       { name: 'from', type: 'json', schema: Pos, description: 'path・sight: 出発・目の位置の足のマス（既定は足）' },
       { name: 'target', type: 'json', schema: z.union([Pos, z.string().max(64), z.number()]), description: 'sight: ブロック {x,y,z} か生き物 "#id"' },
@@ -48,13 +50,14 @@ class Probe extends InstantSkill {
       { name: 'yTo', type: 'number', description: 'column: 上端の y（既定 足+16）' },
       { name: 'radius', type: 'number', description: 'around: m（1〜16、既定 8）/ history: m（1〜32、既定 4）/ scan: チャンク（1〜16、既定は読み込み済みの全部）' },
       { name: 'at', type: 'json', schema: Pos, description: 'history: 場所（既定は足）' },
+      { name: 'retreat', type: 'json', schema: Pos, description: 'worksite: 帰還先（逆向きの道を別に調べる）' },
     ];
   }
 
   async runImpl(kind: string, to?: { x: number; y: number; z: number } | null, from?: { x: number; y: number; z: number } | null,
     target?: { x: number; y: number; z: number } | string | number | null, x?: number | null, z?: number | null, yFrom?: number | null, yTo?: number | null,
-    radius?: number | null, at?: { x: number; y: number; z: number } | null) {
-    const result = await runProbe(this.bot as any, { kind, to, from, target, x, z, yFrom, yTo, radius, at });
+    radius?: number | null, at?: { x: number; y: number; z: number } | null, retreat?: { x: number; y: number; z: number } | null) {
+    const result = await runProbe(this.bot as any, { kind, to, from, target, x, z, yFrom, yTo, radius, at, retreat });
     return result;
   }
 }
@@ -62,6 +65,7 @@ class Probe extends InstantSkill {
 export interface ProbeInput {
   kind: string; to?: { x: number; y: number; z: number } | null; from?: { x: number; y: number; z: number } | null;
   target?: { x: number; y: number; z: number } | string | number | null; x?: number | null; z?: number | null; yFrom?: number | null; yTo?: number | null;
+  retreat?: { x: number; y: number; z: number } | null;
   radius?: number | null; at?: { x: number; y: number; z: number } | null;
 }
 
@@ -106,6 +110,10 @@ export async function runProbe(bot: any, input: ProbeInput): Promise<{ success: 
     return { success: true, result: JSON.stringify({ v, kind, text, ...rest }) };
   };
   switch (input.kind) {
+    case 'worksite': {
+      if (!input.target || typeof input.target !== 'object') return bad('worksite には target のブロック座標が要る');
+      return answer(await probeWorksite(bot, feet, cellOf(input.target), input.to ? cellOf(input.to) : undefined, input.retreat ? cellOf(input.retreat) : undefined));
+    }
     case 'path': {
       if (!input.to) return bad('path には to {x,y,z} が要る');
       return answer(await probePath(read, input.from ? cellOf(input.from) : feet, cellOf(input.to)));
