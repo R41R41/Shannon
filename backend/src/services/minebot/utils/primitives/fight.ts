@@ -504,7 +504,7 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
       try { sees = probeSight(bodyReader(bot), eye, { creature: { id: live.id, name: String(live.name ?? 'entity'), position: live.position, height: live.height, width: live.width } }).visible; } catch { /* taken as seen */ }
       if (box <= REACH && !sees) {
         if (!blindSince) blindSince = now;
-        if (now - blindSince > BLIND_MS) { releaseKeys(); return fail('unreachable', `は ${r1(box)}m の所にいるが間に壁がある（${BLIND_MS / 1000}秒見えない）`, lastAt); }
+        if (now - blindSince > BLIND_MS) { releaseKeys(); return fail('unreachable', `は ${r1(box)}m の所にいるが間に壁がある（${BLIND_MS / 1000}秒見えない）。別の個体か、足場を変える`, lastAt); }
       } else blindSince = 0;
       let strike = false;
       // A blow is struck with the shield lowered and the shield is only counted as up again five ticks after it is raised: while a shot is about to land or a blaze that sees

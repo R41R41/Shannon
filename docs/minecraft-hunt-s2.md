@@ -34,7 +34,7 @@ eye: { from, bearingDeg, flew, to, broke,                     // 既存（契約
 ```
 - 旧の `broke` は「目玉の entity が消えて持ち物が減った」なら常に真だった（投げれば必ず減る）。今は割れる合図を見た時だけ真。
 - 行は 160 字で切られるので、方位・水平距離・上・向き・終わり方を先頭に置いた。細かい数字は `eye` にある。
-- **目玉が指すのは要塞の「起点」（`/locate` が言う x・z）で、エンドポータルの間ではない。** 実測の世界ではポータルの間が起点から 54 ブロック離れていた。起点に着いたら `find-structure stronghold` の枠探しをする（§1 下）。
+- **目玉が指すのは要塞の「起点」（`/locate` が言う x・z）で、エンドポータルの間ではない。** 実測の 5 世界で起点→ポータルの間は 7・47・51・54・72 ブロック、向きはばらばら（枠探しの半径は 128 が要る）。起点に着いたら `find-structure stronghold` の枠探しをする（§1 下）。
 
 ### `find-structure`（skill。args と種類を足しただけ）
 **`structureType=stronghold`** は **エンドポータルの枠だけ**を探す（感染した石レンガは「要塞が近い」印としてだけ言う）。任意の `radius`（16〜128、既定 64）、`x`・`z`（探す中心、既定は今いる所）。
@@ -44,6 +44,8 @@ eye: { from, bearingDeg, flew, to, broke,                     // 既存（契約
 ```
 ブレイズの湧き場を発見: (-101, 56, -115)、距離4m（ほかに (-88, 56, -165) 47m）。野営向きの足場（湧き場から3m以内・縁なし・火なし。壁が多い順）: (-103, 56, -116) 2.2m・壁2面 / (-99, 56, -116) 2.2m・壁2面 / (-103, 56, -113) 2.8m・壁2面 / (-99, 56, -113) 2.8m・壁2面。そこへ go で着いてから attack hold か fight（…）
 ```
+**`probe kind=frames` / `kind=camp`**（新。LLM-centric の V2 は catalog の skill を呼べず `act` と `probe` だけなので、同じ関数を probe からも言う。`utils/huntStructures.ts`）：`frames` は x・z（探す中心）・radius（ブロック 16〜128、既定 64）で、枠の座標と目の有無（`found`）か、無ければ輪の次の点（`next`）。`camp` はネザーの湧き場と野営向きの足場（`spawner`・`cells`・`fire`）。答えは契約どおり `{ v:1, kind, text, … }` で文が先頭。実機で `find-structure` と同じ文が返ることを確かめた（camp 4 足場・frames 12/12）。
+
 理由：実機の要塞では、ラボが staged した「立つ場所」が**穴の縁の 1 マス幅の足場**で、そこと部屋の北の入口で体が 3 マス下の穴に落ち、ブロックが無く戻れなかった（2 回。押されたのか反射で動いたのかは未確認）。
 
 ## 2. エンダーマン：屋根の穴
@@ -93,3 +95,5 @@ wsl -d Ubuntu-24.04 -u ghrunner -- env HOME=/home/azureuser LAB_SLOT_COUNT=3 LAB
 - act の手の種類・欄は増やしていない。行の言葉が増えた（上の表）。`ActResult.eye` に任意の欄が増え、`broke` の意味が変わった（上）。
 - `find-structure` の description と args（radius・x・z、`blaze_spawner`）が変わった → **catalog.json の description とハッシュは S0 が録り直す**。
 - `fight enderman` は体が持つ建築用ブロックを使う（canPlace 不要）。
+- `probe` の kind に `frames`・`camp` が増えた（`PROBE_KINDS`・description）→ catalog の再録も S0。
+- 当日は人の手が入らないので、失敗の行に「次に試せること」を足した（物々交換・屋根・見えない相手の行）。

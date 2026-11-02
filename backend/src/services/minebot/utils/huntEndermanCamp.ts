@@ -167,7 +167,7 @@ export class EndermanCamp {
     if (this.phase === 'build') {
       // An angry enderman within reach is the fight's: the shield, the blow, and the roof when it has gone.
       if (angry && box <= CONTACT) return { kind: 'fight' };
-      if (now - this.began > BUILD_MS) return this.failure('roof_failed', 'build_stalled', `屋根を ${BUILD_MS / 1000} 秒で建て終えられなかった（${this.laid}/${this.plan.placements.length}）`, this.cell);
+      if (now - this.began > BUILD_MS) return this.failure('roof_failed', 'build_stalled', `屋根を ${BUILD_MS / 1000} 秒で建て終えられなかった（${this.laid}/${this.plan.placements.length}）。場所を変えるか、ブロックを増やして呼び直す`, this.cell);
       const left = this.remaining();
       if (!left.length) { this.phase = angry ? 'hold' : 'provoke'; return { kind: 'wait' }; }
       // The body stays in its cell: a blow or a push that moved it makes the plan another one (once, and only before a block is laid).
@@ -210,7 +210,7 @@ export class EndermanCamp {
       this.staredSince ||= now;
       if (now - this.staredSince > STARE_MS) {
         this.guard(true);
-        return this.failure('enderman_not_angry', 'not_provoked', `${STARE_MS / 1000} 秒目を見ても怒らない（${box.toFixed(1)}m。遠すぎるか、まばたきの間に外れた）`, this.cell);
+        return this.failure('enderman_not_angry', 'not_provoked', `${STARE_MS / 1000} 秒目を見ても怒らない（${box.toFixed(1)}m。遠すぎるか、まばたきの間に外れた）。近づくか、別の個体へ`, this.cell);
       }
       this.guard(false);
       try { void Promise.resolve(bot.lookAt(live.position.offset(0, ENDERMAN_EYE, 0), true)).catch(() => undefined); } catch { /* the port is no longer ours */ }

@@ -120,11 +120,11 @@ export async function barterWithPiglin(ctx: StepContext, piglin: any): Promise<S
   const bot = ctx.bot;
   const at = { x: Math.floor(piglin.position.x), y: Math.floor(piglin.position.y), z: Math.floor(piglin.position.z) };
   const label = `ピグリン #${piglin.id}`;
-  if (inventoryCount(bot, 'gold_ingot') < 1) return stopped(bot, 'missing_item', '金のインゴットを持っていない', at);
+  if (inventoryCount(bot, 'gold_ingot') < 1) return stopped(bot, 'missing_item', '金のインゴットを持っていない（金を用意してから）', at);
   const adult = isAdultPiglin(bot.registry, piglin);
-  if (adult === false) return stopped(bot, 'not_adult', `${label} は子ども（子どものピグリンは金を受け取らない）`, at);
+  if (adult === false) return stopped(bot, 'not_adult', `${label} は子ども（子どものピグリンは金を受け取らない）。大人の個体へ`, at);
   if (isAngryPiglin(bot.registry, piglin) === true) {
-    return stopped(bot, 'piglin_hostile', `${label} は怒っている（${wearsGoldArmour(bot) ? '金の防具は着ているが、殴られたか近くの仲間が怒った' : '金の防具を着ていない'}ので交換できない）`, at);
+    return stopped(bot, 'piglin_hostile', `${label} は怒っている（${wearsGoldArmour(bot) ? '金の防具は着ているが、殴られたか近くの仲間が怒った' : '金の防具を着ていない'}ので交換できない）。離れて落ち着くのを待つか、別の個体へ`, at);
   }
   let distance = reachTo(eyeOf(bot), piglin);
   if (distance > BARTER_REACH && piglin.position.distanceTo(bot.entity.position) <= BARTER_APPROACH) {
@@ -141,7 +141,7 @@ export async function barterWithPiglin(ctx: StepContext, piglin: any): Promise<S
   // One that is still looking at gold takes no more: it is waited for (a piglin finishes in six seconds).
   if (holdsIngot(piglin)) {
     const finished = await waitUntil(ctx, () => !holdsIngot(bot.entities?.[piglin.id]) || !bot.entities?.[piglin.id], BARTER_ANSWER_MS, 100);
-    if (!finished) return stopped(bot, 'piglin_busy', `${label} は前の金を見たまま（${BARTER_ANSWER_MS / 1000}秒待っても終わらない）`, at);
+    if (!finished) return stopped(bot, 'piglin_busy', `${label} は前の金を見たまま（${BARTER_ANSWER_MS / 1000}秒待っても終わらない）。もう一度か、別の個体へ`, at);
   }
   const baseline = itemIds(bot);
   const goldBefore = inventoryCount(bot, 'gold_ingot');
@@ -155,7 +155,7 @@ export async function barterWithPiglin(ctx: StepContext, piglin: any): Promise<S
   if (!spent) {
     const now = bot.entities?.[piglin.id];
     const why = !now ? 'ピグリンが見えなくなった' : isAngryPiglin(bot.registry, now) === true ? 'ピグリンが怒っている' : holdsIngot(now) ? '前の金を見ている最中' : '子どもか、金を受け取れない状態';
-    return stopped(bot, 'not_accepted', `${label} は金を受け取らなかった（${why}。金 ${goldBefore}個のまま）`, at);
+    return stopped(bot, 'not_accepted', `${label} は金を受け取らなかった（${why}。金 ${goldBefore}個のまま）。もう一度か、別の個体へ`, at);
   }
   // Six seconds of looking; over when the off hand lets go of the ingot (or the piglin is gone). A piglin whose off hand was never seen to hold it is waited out by the clock.
   let sawHold = holdsIngot(bot.entities?.[piglin.id]);
@@ -185,13 +185,13 @@ export async function barterWithPiglin(ctx: StepContext, piglin: any): Promise<S
   const left = drops.filter(entity => bot.entities?.[entity.id]).map(stackName);
   const spentLine = `金 ${goldBefore}→${inventoryCount(bot, 'gold_ingot')}`;
   const base = `${label} に金を渡した（${spentLine}）: 受け取った ${gained.join(' ') || 'なし'}`;
-  if (!answered) return { ok: false, reason: 'no_answer', code: 'piglin_no_answer', at, text: `${base}。${BARTER_ANSWER_MS / 1000}秒たっても ${label} は金を離さない` };
+  if (!answered) return { ok: false, reason: 'no_answer', code: 'piglin_no_answer', at, text: `${base}。${BARTER_ANSWER_MS / 1000}秒たっても ${label} は金を離さない。もう一度呼ぶか、別の個体へ` };
   if (!drops.length && !gained.length) {
     // A piglin that is hurt or angered while it looks at the gold keeps it and throws nothing; one that let go after its six seconds threw something that is not to be seen.
     const cut = sawHold && heldMs < EARLY_RELEASE_MS;
     const why = cut || angryNow
-      ? `金を ${(heldMs / 1000).toFixed(1)}秒で手放した${angryNow ? '。ピグリンは怒っている（殴られたか、近くの敵や仲間に気を取られた）' : ''}。見終わる前に手放すと何も返さない`
-      : `金を離したが、投げた物が見えなかった（${cellText(at)} の近く。遠くへ投げたか、別の所に落ちた）`;
+      ? `金を ${(heldMs / 1000).toFixed(1)}秒で手放した${angryNow ? '。ピグリンは怒っている（殴られたか、近くの敵や仲間に気を取られた）' : ''}。見終わる前に手放すと何も返さない。別の個体へ`
+      : `金を離したが、投げた物が見えなかった（${cellText(at)} の近く。遠くへ投げたか、別の所に落ちた）。周りを pickup で探す`;
     return { ok: false, reason: 'nothing_returned', code: 'barter_nothing_returned', at, text: `${base}。${why}` };
   }
   return { ok: true, at, text: `${base}${left.length ? `。拾えず落ちている ${left.join(' ')}` : ''}${got && !gained.length ? `。${got}` : ''}${names.length ? `（出た物 ${names.join(' ')}）` : ''}` };
