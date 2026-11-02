@@ -633,7 +633,7 @@ describe('a fireball that lands on a body at the front end of a bridge one wide 
   });
 });
 
-import { shoot, arrowBlockedAt } from '../../src/services/minebot/utils/primitives/shoot.js';
+import { shoot, arrowBlockedAt, aimPitch } from '../../src/services/minebot/utils/primitives/shoot.js';
 
 describe('shoot at a crystal', () => {
   /** The bot at (0.5, 64, 0.5) with a bow and arrows in hand, a crystal at the given place in the air. */
@@ -667,6 +667,24 @@ describe('shoot at a crystal', () => {
     expect(f.bot.activateItem).toHaveBeenCalled();
     expect(open.text).toMatch(/射った/u);
   }, 15_000);
+  it('refuses a creature behind a wall before the draw, naming the cell, and shoots once it is in the open (a blaze in its room, 2026-11-03)', async () => {
+    const f = bowFixture(new Vec3(30.5, 66, 0.5));
+    f.bot.entities[301] = { id: 301, name: 'blaze', position: new Vec3(8.5, 66, 0.5), metadata: [], height: 1.8 };
+    for (let y = 64; y <= 69; y++) f.world.set(key(4, y, 0), 'cobblestone');
+    const blocked = await shoot(ctx(f.bot) as never, { target: 301 });
+    expect(blocked).toMatchObject({ ok: false, reason: 'line_blocked' });
+    expect(blocked.text).toMatch(/cobblestone/u);
+    expect(f.bot.activateItem).not.toHaveBeenCalled();
+    for (let y = 64; y <= 69; y++) f.world.delete(key(4, y, 0));
+    const open = await shoot(ctx(f.bot) as never, { target: 301 });
+    expect(f.bot.activateItem).toHaveBeenCalled();
+    expect(open.text).toMatch(/射った/u);
+  }, 15_000);
+  it('aims at a creature that hovers almost over the body (a steep pitch, past the old 70 degrees)', () => {
+    const near = aimPitch(3, 0.3, 6);
+    expect(near).not.toBeNull();
+    expect(near!.pitch * 180 / Math.PI).toBeGreaterThan(70);
+  });
   it('does not let go of a draw when the body was brought within the blast\'s reach meanwhile', async () => {
     const f = bowFixture(new Vec3(30.5, 66, 0.5));
     f.bot.activateItem = vi.fn(() => { setTimeout(() => { f.self.position = new Vec3(22.5, 64, 0.5); }, 400); });

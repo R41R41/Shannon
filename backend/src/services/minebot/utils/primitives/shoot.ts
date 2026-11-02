@@ -60,6 +60,20 @@ function crystalShotProblem(bot: any, crystal: any, speed: number): StepOutcome 
   return null;
 }
 
+/**
+ * The refusal for a creature (a blaze behind a wall of its room) whose line from the eyes is blocked by a solid cell: the arrow would hit the wall, and the draw is a second of the body's time. Null when the line is clear or the aim does not reach
+ * (that has its own words). The creature's middle is the aim point; the cell it stands in is its own.
+ */
+function creatureLineProblem(bot: any, creature: any, speed: number): StepOutcome | null {
+  const eyes = bot.entity.position.offset(0, EYE - 0.1, 0);
+  const point = creature.position.offset(0, (creature.height ?? 1.8) * 0.5, 0);
+  const aim = aimPitch(speed, Math.hypot(point.x - eyes.x, point.z - eyes.z), point.y - eyes.y);
+  if (!aim) return null;
+  const yaw = Math.atan2(-(point.x - eyes.x), -(point.z - eyes.z));
+  const hit = arrowBlockedAt(bot, eyes, yaw, aim.pitch, speed, aim.ticks + 2, point);
+  return hit ? stopped(bot, 'line_blocked', `${creature.name} への矢の道が (${hit.x},${hit.y},${hit.z}) の ${hit.name} に塞がれる（距離 ${creature.position.distanceTo(bot.entity.position).toFixed(1)}m）。位置を変えるか、的が通る所に出るのを待つ`, { x: hit.x, y: hit.y, z: hit.z }) : null;
+}
+
 /** A draw is cancelled by changing the held slot and back (releasing the bow would shoot). */
 async function cancelDraw(bot: any): Promise<void> {
   try {
@@ -82,7 +96,7 @@ export function bowSpeed(seconds: number): number {
  */
 export function aimPitch(speed: number, horizontal: number, rise: number): { pitch: number; ticks: number } | null {
   let best: { pitch: number; ticks: number; error: number } | null = null;
-  for (let degrees = -70; degrees <= 70; degrees += 0.25) {
+  for (let degrees = -89; degrees <= 89; degrees += 0.25) {
     const pitch = degrees * Math.PI / 180;
     let vx = Math.cos(pitch) * speed, vy = Math.sin(pitch) * speed, x = 0, y = 0;
     for (let tick = 1; tick <= 200; tick++) {
@@ -141,6 +155,10 @@ export async function shoot(ctx: StepContext, args: ShootArgs): Promise<StepOutc
       const refusal = crystalShotProblem(bot, live, speed);
       if (refusal) { if (shot === 0) return refusal; results.push(refusal.text); break; }
     }
+    if (live && live.name !== 'end_crystal' && live.name !== 'ender_dragon') {
+      const refusal = creatureLineProblem(bot, live, speed);
+      if (refusal) { if (shot === 0) return refusal; results.push(refusal.text); break; }
+    }
     let cancelled: string | null = null;
     /** The aim from where the body and the target are now: the fall allowed for, the target led by its speed over the flight. */
     const aimNow = async (): Promise<{ yaw: number; pitch: number; ticks: number; far: number } | null> => {
@@ -178,7 +196,10 @@ export async function shoot(ctx: StepContext, args: ShootArgs): Promise<StepOutc
       else {
         // The body may have been knocked nearer to the crystal during the draw: its blast is not shot into.
         const near = live?.name === 'end_crystal' && bot.entities?.[live.id] ? bot.entity.position.distanceTo(live.position) : null;
-        if (near !== null && near < CRYSTAL_SAFE_SHOT) { cancelled = `引いている間に ${near.toFixed(1)}m まで近づいたので放さなかった（${CRYSTAL_SAFE_SHOT}m 以上で撃つ）`; await cancelDraw(bot); }
+        const creature = live && live.name !== 'end_crystal' && live.name !== 'ender_dragon' ? bot.entities?.[live.id] : null;
+        const blockedNow = creature ? creatureLineProblem(bot, creature, speed) : null;
+        if (blockedNow) { cancelled = `引いている間に矢の道が塞がれた（${blockedNow.text.slice(0, 80)}）ので放さなかった`; await cancelDraw(bot); }
+        else if (near !== null && near < CRYSTAL_SAFE_SHOT) { cancelled = `引いている間に ${near.toFixed(1)}m まで近づいたので放さなかった（${CRYSTAL_SAFE_SHOT}m 以上で撃つ）`; await cancelDraw(bot); }
         else {
         await guard(ctx, Promise.resolve(bot.look(aim.yaw, aim.pitch, true)), 1000);
         if (crossbow) { bot.activateItem(); await wait(ctx, 50); }
