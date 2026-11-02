@@ -471,6 +471,7 @@ async function blazeRush(note: (text: string) => void, options: { retreatHp?: nu
       const camp = await readCamp();
       const cell = (camp?.cells?.[0] ?? lastCell) as { x: number; y: number; z: number } | undefined, spot = (camp?.hideouts?.[0] ?? lastSpot) as { x: number; y: number; z: number } | undefined;
       if (!cell || !spot) { note('no camp cell or hideout and none known'); break; }
+      if (!lastCell) { const at = (dy: number) => actor.blockAt(new Vec3(spot.x, spot.y + dy, spot.z))?.name; note(`hideout ${JSON.stringify(spot)} blocks below/feet/head: ${at(-1)}/${at(0)}/${at(1)}; all hideouts ${JSON.stringify(camp?.hideouts ?? [])}`); }
       lastCell = cell; lastSpot = spot;
       const restFrom = Date.now();
       while (Date.now() - restFrom < 60_000 && hp() > 0 && hp() < 18 && !disconnected) { if (Number(actor.food) < 20) { await act('eat', [{ do: 'eat' }], 15); m.eats++; } await sleep(1500); }
@@ -492,7 +493,7 @@ async function blazeRush(note: (text: string) => void, options: { retreatHp?: nu
         m.hits += Number(rush.hits ?? 0);
       }
       note(`rush#${m.rushes}: hp ${r1(hp())} rods +${(packClient().blaze_rod ?? 0) - rodsBefore} ${rush ? `${rush.status} ${rush.code ?? ''} hits ${rush.hits} hp ${r1(rush.hpMin)}→${r1(rush.hpEnd)} shield ${rush.shieldBefore}→${rush.shieldAfter} safe ${rush.safe} at ${rush.at ? `${rush.at.x},${rush.at.y},${rush.at.z}` : ''}` : (run.lines[1] ?? run.lines[0] ?? '').slice(0, 200)}`);
-      if (!run.ok && !rush) {
+      if ((!run.ok && !rush) || (rush && !rush.safe)) {
         const out = await act('to the hideout', [{ do: 'go', to: { x: spot.x, y: spot.y, z: spot.z }, range: 0.8, seconds: 25, canPlace, maxPlace: 30 }], 40, { accept: ['blaze'] });
         if (!out.ok) note(`to the hideout: ${(out.lines[0] ?? '').slice(0, 160)}`);
       }
