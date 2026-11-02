@@ -484,7 +484,7 @@ async function blazeRush(note: (text: string) => void, options: { retreatHp?: nu
       const run = await act(`rush#${m.rushes + 1}`, [
         { do: 'go', to: { x: cell.x, y: cell.y, z: cell.z }, range: 0.6, seconds: 20, canPlace, maxPlace: 10, onFail: 'continue' },
         { do: 'attack', target: `#${blazes[0].id}`, style: 'shield_rush', seconds: options.seconds ?? 60, retreatHp: options.retreatHp ?? 12, retreatTo: { x: spot.x, y: spot.y, z: spot.z },
-          area: { center: { x: cell.x, y: cell.y, z: cell.z }, radius: 4, maxDrop: 0 }, shieldReserve: options.shieldReserve ?? 60, onCrossfire: 'retreat', pickup: 'target_drops' }], 90, { accept: ['blaze'] });
+          area: { center: { x: cell.x, y: cell.y, z: cell.z }, radius: 5, maxDrop: 0 }, shieldReserve: options.shieldReserve ?? 60, onCrossfire: 'retreat', pickup: 'target_drops' }], 90, { accept: ['blaze'] });
       m.rushes++; m.exposedSeconds += (Date.now() - outAt) / 1000;
       const rush = ((run.json?.lines ?? []) as any[]).map(line => line.shieldRush).find(Boolean);
       if (rush) {
