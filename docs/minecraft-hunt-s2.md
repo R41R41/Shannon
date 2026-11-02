@@ -119,5 +119,6 @@ wsl -d Ubuntu-24.04 -u ghrunner -- env HOME=/home/azureuser LAB_SLOT_COUNT=3 LAB
 - `probe` の kind に `frames`・`camp` が増えた（`PROBE_KINDS`・description）→ catalog の再録も S0。
 - 当日は人の手が入らないので、失敗の行に「次に試せること」を足した（物々交換・屋根・見えない相手の行）。
 - 道（ネザーの長い歩き）の止まり行の言葉：`go` は火の隣の行き先を断る時に火のマスと「dig で消せる」を言い、置く物が尽きた時は `not_loaded` などの行に「置く物 … を N 個置いて使い切った」を足し、`no_blocks` では荷にある安い置ける物（netherrack・basalt・dirt など。鉱石・黒曜石・板材は言わない）を名指しする。道具が壊れて予備が無い時の act の行は「道具が壊れて止まった（同じ種類以上の予備が荷に無い）。作るか拾って持ってから、同じ手をもう一度」（以前は「命令が止められた（tool_broke）」）。`probe kind=camp` の「湧き場が無い」の文は `find-structure` でなく `probe kind=scan` の「ネザー要塞」の向きを指す。契約の欄・コードは同じ。
+- `fight` が相手を 32 m 内に見つけられない時（`lost`）の行が、種類ごとの次の手を言う：blaze は「湧き場の部屋が見える足場（probe kind=camp）へ go で寄り、blaze が見えてから呼ぶ。居ない時は少し待つ」、enderman は「開けた所へ動いて probe kind=around で居る所を確かめ、見える所で呼ぶ」（S4 の c1 の試験で、頭が湧き場のかごの陰の blaze に 3 回続けて呼んで「見えない」だけを返されていた）。
 - 頭の知識（S3）：ネザーの歩きは `canDig`＝[netherrack,basalt,blackstone]（要塞の中は nether_bricks も）、`canPlace`＝[cobblestone,netherrack]、`maxDig` 120→200、`maxPlace` 40→100、`seconds` 100〜120、鉄のつるはし 3 本以上、止まったら行の言う通りに直して同じ go をもう一度（§4）。
 - 壁の中に閉じ込められた体の「壁抜け」反射（`wallReflex.ts`）の時間切れを 10 秒から 25 秒にした：道具なしで丸石を素手で掘ると 10 秒かかり、以前は毎回掘り終える直前に切れて、90 秒で体力が 20→1 になった（ラボで再現）。道具があれば掘りは 1 秒ほどで、変わらない。

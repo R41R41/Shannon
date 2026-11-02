@@ -166,7 +166,14 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
   // Continue contracts (1, decision 4): a creature named by its id that the body saw die a moment ago is already dead; one that is not there and was not seen to die is not found.
   const askedId = creatureIdOf(wanted);
   if (askedId !== null) { const dead = alreadyDead(bot, askedId, target); if (dead) return dead; }
-  if (!target || !target.position) return { ...none('lost', `${args.target} が 32m 内に見えない（死ぬのを見た記録も無い）`), code: 'target_not_found' };
+  if (!target || !target.position) {
+    // The way on, by kind (S4's c1 trial: three fights in a row said only "not seen in 32 m" at a camp whose blazes hovered behind the spawner cage).
+    const name = String(args.target).toLowerCase();
+    const next = /blaze/u.test(name) ? '湧き場の部屋が見える足場（probe kind=camp）へ go で寄り、blaze が見えてから呼ぶ。居ない時は少し待つ'
+      : /enderman/u.test(name) ? '開けた所へ動いて probe kind=around で居る所を確かめ、見える所で呼ぶ'
+        : '近づいて probe kind=around で居る所を確かめてから呼ぶ';
+    return { ...none('lost', `${args.target} が 32m 内に見えない（死ぬのを見た記録も無い）。${next}`), code: 'target_not_found' };
+  }
   if (target.type === 'player' || target.username) return none('invalid_input', `${labelOf(target)} は人。fight は生き物（敵）にだけ使う`);
   const label = labelOf(target);
   // A hovering shooter (a blaze) is fought from the spot the planner put the body at, under the shield, and is not followed (utils/huntBlaze).

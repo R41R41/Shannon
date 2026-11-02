@@ -235,6 +235,19 @@ describe('fight on a blaze: the camp', () => {
   });
 });
 
+describe('fight on a creature that is not there', () => {
+  it('says it is not seen within 32 m and the next hand to try, by kind (S4\'s c1 trial: three fights in a row ended on the bare "not seen")', async () => {
+    const camp = makeCamp({ shield: true, blazes: [] });
+    const blaze = await act(camp, [{ do: 'fight', target: 'blaze', seconds: 10 }]);
+    const ender = await act(camp, [{ do: 'fight', target: 'enderman', seconds: 10 }]);
+    camp.stop();
+    expect(lineOf(blaze.json)).toContain('probe kind=camp');
+    expect(lineOf(ender.json)).toContain('probe kind=around');
+    expect(blaze.json.ok).toBe(false);
+    expect(lineOf(blaze.json).length).toBeLessThanOrEqual(160);
+  }, 30_000);
+});
+
 describe('fight on a blaze: the shield and the choice of the blaze', () => {
   it('a shield that breaks in the fight is replaced from the pack at once; the wear counts what the broken one had left, and the line says a spare was put on', async () => {
     const camp = makeCamp({ shield: true, blazes: [{ at: new Vec3(1.5, 70.5, 0.5), path: ms => ms < 2600 ? new Vec3(1.5, 70.5, 0.5) : new Vec3(1.5, 65.0, 0.5) }] });
