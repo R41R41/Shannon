@@ -29,6 +29,7 @@ import { vertical } from '../utils/primitives/vertical.js';
 import { obsidian, obsidianProblem } from '../utils/primitives/obsidian.js';
 import { portal, portalProblem } from '../utils/primitives/portal.js';
 import { fight, HandCut } from '../utils/primitives/fight.js';
+import { shieldRush, shieldRushProblem, SHIELD_RUSH_DESCRIPTION, type ShieldRushResult, type ShieldRushOutcome } from '../utils/primitives/shieldRush.js';
 import { LINE_MAX, LINE_MAX_WITH_CAUSE } from '../utils/actReport.js';
 import { waterDigWords } from '../utils/waterDigWords.js';
 import { mine } from '../utils/primitives/mine.js';
@@ -81,6 +82,12 @@ const Hand = z.object({
   target: z.union([z.string(), z.number()]).optional().describe('#id か名前'),
   untilDead: z.boolean().optional(),
   hold: z.boolean().optional().describe('attack: その場で待ち、手の届く所に来たら打つ（追わない）'),
+  style: z.enum(['shield_rush']).optional().describe('attack: 指定した blaze 1体へ盾を構えて詰め、拾って指定先へ戻る'),
+  retreatTo: z.object({ x: z.number(), y: z.number(), z: z.number() }).strict().optional(),
+  area: z.object({ center: z.object({ x: z.number(), y: z.number(), z: z.number() }).strict(), radius: z.number().min(1).max(16), maxDrop: z.number().int().min(0).max(3) }).strict().optional(),
+  shieldReserve: z.number().min(0).max(335).optional(),
+  onCrossfire: z.enum(['retreat', 'continue']).optional(),
+  pickup: z.enum(['target_drops', 'none']).optional(),
   goals: z.array(Pos).min(2).max(8).optional().describe('go: 行き先の候補（どれか1つに着けば済み）'),
   canDig: z.array(z.string().max(40)).min(1).max(12).optional().describe('go・mine: 掘ってよい物（stone・dirt・sand・wood か ブロック id）'),
   canPlace: z.array(z.string().max(40)).min(1).max(6).optional().describe('go・obsidian・portal: 置いてよい物（持っている物だけ使う）'),
@@ -168,7 +175,8 @@ const DESCRIPTION = '体に小さな手を最大12個まとめて頼む。体は
   + 'mine(block: 掘る種類 id, at: その鉱脈のマス1〜4, count, tool, collect, seconds, canDig・maxDig: 鉱脈へ行く道を掘ってよい物) は at のマスにつながった同じ種類だけを近い順に掘って拾う（ほかの鉱石は探さない）。'
   + 'make(item, count) は途中の物（板・棒など）を持ち物から順に作る（足りなければ何も作らず足りない物の一覧を返す。3x3 は近くの作業台、無ければ持っている物を置く）。'
   + 'smelt(items: [{item,count}], fuel, fuelCount, furnaces: 何基に分けるか, at: かまど, seconds) はかまどに分けて入れて燃料を足すまで（焼き上がりは待たず、取り出しは furnace op=take）。'
-  + '座標は {x,y,z}（rel:true で足からの差）か {front,right,up}（facing の向き）。stopIf: hostileWithin・hpBelow・hungerBelow・blockChanged。';
+  + '座標は {x,y,z}（rel:true で足からの差）か {front,right,up}（facing の向き）。stopIf: hostileWithin・hpBelow・hungerBelow・blockChanged。'
+  + SHIELD_RUSH_DESCRIPTION;
 
 class Act extends InstantSkill {
   constructor(bot: CustomBot) {
@@ -289,6 +297,12 @@ async function runHand(ctx: StepContext, hand: ActHand): Promise<StepOutcome> {
       return chest(ctx, { at: one });
     }
     case 'attack': {
+      if (hand.style === 'shield_rush') {
+        const issue = shieldRushProblem(hand);
+        if (issue) return bad(`shield_rush: ${issue}`);
+        return shieldRush(ctx, { target: hand.target as string, seconds: hand.seconds!, retreatHp: hand.retreatHp!, retreatTo: hand.retreatTo!,
+          area: hand.area!, shieldReserve: hand.shieldReserve!, onCrossfire: hand.onCrossfire!, pickup: hand.pickup! });
+      }
       if (hand.hold) return attack(ctx, { mode: 'hold', target, maxSeconds: hand.seconds ?? 20 });
       if (target === undefined) return bad('attack には target（#id か名前）が要る');
       const untilDead = hand.untilDead !== false;
@@ -539,7 +553,7 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
   const nextObsSeq = () => { try { return Number((host as { nextObsSeq?: () => number }).nextObsSeq?.() ?? 0); } catch { return 0; } };
   /** The cut reason of an act stopped from outside its hands. */
   const outsideCut = () => cutByOf(report.failureType, report.stoppedBy, signal?.reason);
-  const pushLine = (index: number, status: HandStatus, line: string, verdict: HandVerdict, motorOps: number, extra: Partial<HandLine> = {}, events: InventoryEvent[] = []) => {
+  const pushLine = (index: number, status: HandStatus, line: string, verdict: HandVerdict, motorOps: number, extra: Partial<HandLine> & { shieldRush?: ShieldRushResult } = {}, events: InventoryEvent[] = []) => {
     handResults.set(index + 1, { goal: verdict.goal, end: verdict.end });
     handRuns.push({ goal: verdict.goal, motorOps, ran: status !== 'skipped' });
     report.lines.push({ i: index + 1, do: hands[index].do, status, line, ...extra, goal: verdict.goal, end: verdict.end, ...(status !== 'skipped' ? { motorOps } : {}),
@@ -602,11 +616,12 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
       const dugBefore = hand.do === 'dig' ? (cellsOf(ctx, hand, hand.at) ?? []).map(cell => ({ cell, name: String(blockAt(bot, cell)?.name ?? '') })) : [];
       // A fight hand is a fight the planner chose against its target's kind, in either stance: for the length of the hand the kind counts as accepted
       // (the hurt stop and stopIf's hostileWithin leave it alone), and the blows it cost are not held against the next hand.
-      const fightKind = hand.do === 'fight' && hand.target !== undefined ? String(findEntity(bot, targetOf(hand.target) ?? '', 32)?.name ?? '').toLowerCase() : '';
+      const rushing = hand.do === 'attack' && hand.style === 'shield_rush';
+      const fightKind = (hand.do === 'fight' || rushing) && hand.target !== undefined ? String(findEntity(bot, targetOf(hand.target) ?? '', 32)?.name ?? '').toLowerCase() : '';
       const fightAccepted = fightKind !== '' && !accepted.has(fightKind);
       if (fightAccepted) accepted.add(fightKind);
       // Continue contracts (4): a fight or an attack hand hands the shield to the resident shield for as long as it runs (the right stays with the owner, this act).
-      const delegates = hand.do === 'fight' || hand.do === 'attack';
+      const delegates = !rushing && (hand.do === 'fight' || hand.do === 'attack');
       if (delegates) delegateShield(bot, true);
       const endFight = () => { if (delegates) delegateShield(bot, false); if (fightAccepted) accepted.delete(fightKind); if (hand.do === 'fight') { highWater = Number(bot.health ?? 20); hurtAt = null; } };
       // Continue contracts (3): what the hand changed in the pack is told, with the reason its kind gives (craft and make say their own).
@@ -669,11 +684,18 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
       if (outcome.data?.eye) report.eye = outcome.data.eye;
       if (outcome.data?.container) report.container = outcome.data.container;
       if (typeof outcome.data?.arrowsLeft === 'number') report.arrowsLeft = outcome.data.arrowsLeft;
+      const rush = (outcome as Partial<ShieldRushOutcome>).shieldRush;
+      const rushExtra = rush ? { shieldRush: rush } : {};
+      if (rush?.status === 'cut' || rush?.code === 'DEAD') {
+        if (!control.signal.aborted) stopWith(outcome.text, rush.code === 'DEAD' ? 'died' : rush.code === 'REFLEX' ? 'reflex' : 'timeout');
+        pushLine(index, 'stopped', clip(outcome.text), { goal: rush.targetDead ? 'partial' : 'unknown', end: 'cut', cutBy: outsideCut(), code: rush.code ?? undefined, progress: outcome.progress }, handOps, rushExtra, delta);
+        remember(hand, 'stopped', outcome.text, outcome.at, base); skip(index + 1); return false;
+      }
       if (outcome.ok) {
         if ((hand.do === 'walk' || hand.do === 'portal') && outcome.data?.crossedDimension) crossedByWalk = true;
         report.done++;
         const line = clip(`${outcome.text}（${((Date.now() - began) / 1000).toFixed(1)}秒）`);
-        pushLine(index, 'done', line, finishedVerdict(outcome, handOps), handOps, {}, delta);
+        pushLine(index, 'done', line, finishedVerdict(outcome, handOps), handOps, rushExtra, delta);
         remember(hand, 'done', line, outcome.at, base);
         emit(index, 'completed', outcome.text);
         continue;
@@ -698,10 +720,10 @@ export async function runAct(bot: any, hands: ActHand[], stopIf?: ActStopIf, fac
       try { if (outcome.at) around = aroundText(bodyReader(bot), outcome.at, feetCell(bot)); } catch { /* the line stands without it */ }
       // go's, obsidian's and portal's lines are the contract's own ("<手> 止まった <code>: ...", the counts in it): the code is the closed word.
       const own = hand.do === 'obsidian' || hand.do === 'portal' || hand.do === 'vertical';
-      const line = hand.do === 'go' ? clip(outcome.text) : own ? clip(outcome.text.startsWith(`${hand.do} 止まった`) ? outcome.text : `${hand.do} 止まった ${outcome.reason ?? 'failed'}: ${outcome.text}`) : stoppedLine(outcome.reason, outcome.text, outcome.at ? cellNow(bot, outcome.at) : undefined, outcome.cause, again);
+      const line = rush || hand.do === 'go' ? clip(outcome.text) : own ? clip(outcome.text.startsWith(`${hand.do} 止まった`) ? outcome.text : `${hand.do} 止まった ${outcome.reason ?? 'failed'}: ${outcome.text}`) : stoppedLine(outcome.reason, outcome.text, outcome.at ? cellNow(bot, outcome.at) : undefined, outcome.cause, again);
       // A hand that stops the act by itself ended (finished) on its own: a cut is only what comes from outside.
       pushLine(index, goesOn ? 'failed' : 'stopped', line, finishedVerdict(outcome, handOps), handOps,
-        { ...(outcome.at ? { where: outcome.at } : {}), ...(around ? { around } : {}) }, delta);
+        { ...rushExtra, ...(outcome.at ? { where: outcome.at } : {}), ...(around ? { around } : {}) }, delta);
       remember(hand, goesOn ? 'failed' : 'stopped', line, outcome.at, base);
       emit(index, 'error', outcome.text);
       if (goesOn) continue;
