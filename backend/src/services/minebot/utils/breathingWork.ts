@@ -47,3 +47,11 @@ export function assessBreathingWork(bot: any, workSeconds: number, dig?: Cell): 
   return { allowed: airSeconds > needed, airSeconds, returnSeconds: back, escapeWork,
     reason: airSeconds > needed ? 'covered' : 'insufficient_air' };
 }
+
+/** The same budget for a dig that is under way: the time left is what the block still takes from `startedAt`. A dig time that cannot be read
+ * is an unknown time left, which no breath under water covers (in the dry the answer does not depend on it). */
+export function assessBreathingDig(bot: any, block: any, dig: Cell, startedAt: number): BreathingWork {
+  let totalMs = Infinity;
+  try { if (typeof bot.digTime === 'function') totalMs = Number(bot.digTime(block)); } catch { /* unknown: no breath covers it under water */ }
+  return assessBreathingWork(bot, Math.max(0, totalMs - (Date.now() - startedAt)) / 1000, dig);
+}

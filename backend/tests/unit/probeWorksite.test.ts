@@ -74,3 +74,17 @@ it('says a target that is not loaded as such in the sentence the head reads firs
   expect(value.text).toContain('目的物は未ロード');
   expect(value.text).not.toContain('対象に届く=true');
 });
+it('refuses a coordinate that is not a finite number before it can turn into null in the answer', async () => {
+  const { runProbe } = await import('../../src/services/minebot/instantSkills/probe.js');
+  const bot = botIn((x, y) => y <= 0 ? 'stone' : 'air') as any;
+  bot.entity.position = new Vec3(0.5, 1, 0.5);
+  for (const target of [{ x: NaN, y: 1, z: 0 }, { x: 1, y: Infinity, z: 0 }]) {
+    const answer = await runProbe(bot, { kind: 'worksite', target });
+    expect(answer.success).toBe(false);
+    expect(answer.result).toContain('有限の数');
+  }
+  const bad = await runProbe(bot, { kind: 'worksite', target: { x: 2, y: 1, z: 0 }, retreat: { x: 0, y: NaN, z: 0 } });
+  expect(bad.success).toBe(false);
+  const fine = await runProbe(bot, { kind: 'worksite', target: { x: 2, y: 1, z: 0 }, retreat: { x: 0, y: 1, z: 0 } });
+  expect(fine.success).toBe(true);
+});

@@ -14,7 +14,7 @@ import { blockAt, cellNow, cellText, DIG_REACH, eyeDistance, findItem, guard, is
   type StepContext, type StepOutcome } from './common.js';
 import { pickup } from './pickup.js';
 import { withProgress } from './progressUnits.js';
-import { assessBreathingWork } from '../breathingWork.js';
+import { assessBreathingDig, assessBreathingWork } from '../breathingWork.js';
 
 /**
  * dig: the cells in order (design mb-llm-centric 2.3). The tool is the one asked for, else the quickest carried that makes the block
@@ -203,18 +203,18 @@ async function digCells(ctx: StepContext, args: DigArgs, tally: DigTally): Promi
     // 7 m away from the block while it dug (under water the dig is slow: the wait ran to its end). A body that has left the reach of the block it digs stops the dig at once and says so.
     let drifted = false;
     let breathStopped: ReturnType<typeof assessBreathingWork> | undefined;
+    let readFailures = 0;
     let stopWatching = () => {};
     const expected = typeof bot.digTime === 'function' ? Number(bot.digTime(block)) || 0 : 0;
     const digStarted = Date.now();
     const drift = new Promise<'drifted' | 'breathing_work'>(resolve => {
       const timer = setInterval(() => {
-        try {
-          // Re-read the body and exit: entering water or losing a route invalidates the start-time estimate.
-          const currentMs = typeof bot.digTime === 'function' ? Number(bot.digTime(block)) : Infinity;
-          const remaining = Math.max(0, currentMs - (Date.now() - digStarted)) / 1000;
-          const current = assessBreathingWork(bot, remaining, cell);
-          if (!current.allowed) { breathStopped = current; clearInterval(timer); resolve('breathing_work'); return; }
-        } catch { /* a reading that fails leaves the check made where the dig began; an error thrown here would not reach this dig's catch */ }
+        // Re-read the body and exit: entering water or losing a route invalidates the start-time estimate. An error thrown in a timer would not
+        // reach this dig's catch, and a watcher that cannot read for three ticks in a row is blind: the dig then ends as an unknown breath.
+        let current: ReturnType<typeof assessBreathingWork> | undefined;
+        try { current = assessBreathingDig(bot, block, cell, digStarted); readFailures = 0; } catch { readFailures++; }
+        if (readFailures >= 3) current = { allowed: false, airSeconds: null, returnSeconds: null, reason: 'air_unknown', escapeWork: false };
+        if (current && !current.allowed) { breathStopped = current; clearInterval(timer); resolve('breathing_work'); return; }
         // only a dig that is overdue (water over the block slows it fivefold; a body washed away never finishes it) and whose body is out of reach
         if (Date.now() - digStarted > expected + DIG_DRIFT_OVERDUE_MS && eyeDistance(bot, cell) > DIG_REACH + DIG_DRIFT_MARGIN) { drifted = true; clearInterval(timer); resolve('drifted'); }
       }, DIG_DRIFT_CHECK_MS);
