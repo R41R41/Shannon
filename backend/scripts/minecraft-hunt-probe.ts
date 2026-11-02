@@ -732,23 +732,23 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
   for (let pass = 0; pass < 8 && placements.length && !disconnected && hp() > 0 && deaths === deaths0 && !aborted; pass++) {
     passes++;
     for (let i = 0; i < placements.length && !disconnected && hp() > 0 && deaths === deaths0; i += groupSize) {
-      if (hp() < 6) { aborted = ; break; }
+      if (hp() < 6) { aborted = `hp ${r1(hp())} at pass ${pass} ${i}/${placements.length}`; break; }
       const group = placements.slice(i, i + groupSize);
       const head = group[0];
       // a floor cell within reach of the group: for the lid and the roof, the feet cell of the spawner's layer under the cell; for the rest, the waiting cell
       const floor = head.part === 'lid' || head.part === 'roof' ? { x: head.at.x, y: spawnerCell.y, z: head.at.z } : { x: wait[0], y: wait[1], z: wait[2] };
       await sleep(thinkMs);
-      const run = await act(, [{ do: 'go', to: floor, range: 2.5, seconds: 12, onFail: 'continue' },
+      const run = await act(`build#${++acts}`, [{ do: 'go', to: floor, range: 2.5, seconds: 12, onFail: 'continue' },
         ...group.map(p => ({ do: 'place', at: [p.at], block: 'cobblestone', onFail: 'continue' }))], 45, { accept: ['blaze'] });
       const text = run.lines.join(' ');
       built += group.length; failedCells += (text.match(/置けない|止まった/gu) ?? []).length;
-      if (acts % 6 === 1 || /反射/u.test(text)) note();
+      if (acts % 6 === 1 || /反射/u.test(text)) note(`build#${acts} pass ${pass} (${head.part}) hp ${r1(hp())}: ${text.slice(0, 200)}`);
     }
     json = await readLane();
     const again = json?.candidates?.find((x: any) => x.direction === c.direction);
     if (!again) break;
     placements = placementsOf(again, json.cells, json.facts);
-    note();
+    note(`pass ${pass} done: ${placements.length} cells still to set, required ${JSON.stringify(again.required)}, blazes in the count box ${json?.blaze?.count}`);
     if (placements.length >= lastLeft) break;
     lastLeft = placements.length;
   }
