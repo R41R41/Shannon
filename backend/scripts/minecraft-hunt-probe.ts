@@ -447,6 +447,61 @@ async function blazeLoop(note: (text: string) => void, options: { fightSeconds?:
 }
 scene('blaze_loop', 'the whole sortie cycle as ONE act with repeat 8: [go camp, fight 12 s if there, pick up, go hideout, eat, wait 12 s]', note => blazeLoop(note));
 scene('blaze_loop_b', 'the loop again (a second sample)', note => blazeLoop(note));
+// shield_rush (S2, 2026-11-03): the scripted head rests at the hideout, picks the blaze nearest the camp cell from the entities it knows (an id), then ONE act [go to the camp cell, attack #id style=shield_rush
+// with retreatTo = the hideout]; reads the result (status, code, hits, rods, hp, shield) and goes again, with the 5 s of thinking between acts. Run59's pack.
+async function blazeRush(note: (text: string) => void, options: { retreatHp?: number; shieldReserve?: number; seconds?: number } = {}): Promise<Record<string, unknown>> {
+  const stand = sites.blazeStand as number[] | undefined;
+  if (!stand) throw new Error('no blazeStand in the sites');
+  const seconds = timedSeconds || 600, thinkMs = 5000;
+  await ask('difficulty normal'); await ask('time set midnight'); await ask('weather clear');
+  await ask('execute in minecraft:the_nether run kill @e[type=minecraft:blaze]');
+  await equip({ stone_sword: 1, diamond_pickaxe: 1, shield: 1, cooked_porkchop: 7, cobblestone: 173 }, { armor: 'iron', shield: true });
+  await placeActor('the_nether', stand[0], stand[1], stand[2], 24);
+  const start = Date.now(), rods0 = await countServer('blaze_rod'), shield0 = shieldUsed();
+  const m = { rushes: 0, killed: 0, retreated: 0, failed: 0, cut: 0, codes: {} as Record<string, number>, hits: 0, lowestHp: 20, eats: 0, restSeconds: 0, exposedSeconds: 0 };
+  const track: number[] = [];
+  const sampler = setInterval(() => { const value = Number(actor.health); if (Number.isFinite(value)) { track.push(r1(value)); m.lowestHp = Math.min(m.lowestHp, value); } }, 1000);
+  const hp = () => Number(actor.health);
+  const readCamp = async (): Promise<any> => { const found = await runSkill('probe', { kind: 'camp' }, 20); try { return JSON.parse(String(found.receipt?.result ?? '')); } catch { return null; } };
+  const canPlace = ['cobblestone', 'netherrack'];
+  let lastCell: { x: number; y: number; z: number } | undefined, lastSpot: { x: number; y: number; z: number } | undefined;
+  const deaths0 = deaths;
+  try {
+    while (Date.now() - start < seconds * 1000 && !disconnected && hp() > 0 && deaths === deaths0) {
+      const camp = await readCamp();
+      const cell = (camp?.cells?.[0] ?? lastCell) as { x: number; y: number; z: number } | undefined, spot = (camp?.hideouts?.[0] ?? lastSpot) as { x: number; y: number; z: number } | undefined;
+      if (!cell || !spot) { note('no camp cell or hideout and none known'); break; }
+      lastCell = cell; lastSpot = spot;
+      const restFrom = Date.now();
+      while (Date.now() - restFrom < 60_000 && hp() > 0 && hp() < 18 && !disconnected) { if (Number(actor.food) < 20) { await act('eat', [{ do: 'eat' }], 15); m.eats++; } await sleep(1500); }
+      m.restSeconds += (Date.now() - restFrom) / 1000;
+      const blazes = (Object.values(actor.entities ?? {}) as any[]).filter(entity => String(entity?.name) === 'blaze' && entity.position)
+        .sort((a, b) => a.position.distanceTo(new Vec3(cell.x + 0.5, cell.y, cell.z + 0.5)) - b.position.distanceTo(new Vec3(cell.x + 0.5, cell.y, cell.z + 0.5)));
+      if (!blazes.length) { await sleep(3000); continue; }
+      await sleep(thinkMs);                                     // the head's thinking, at the hideout
+      const rodsBefore = packClient().blaze_rod ?? 0, outAt = Date.now();
+      const run = await act(`rush#${m.rushes + 1}`, [
+        { do: 'go', to: { x: cell.x, y: cell.y, z: cell.z }, range: 0.6, seconds: 20, canPlace, maxPlace: 10, onFail: 'continue' },
+        { do: 'attack', target: `#${blazes[0].id}`, style: 'shield_rush', seconds: options.seconds ?? 25, retreatHp: options.retreatHp ?? 12, retreatTo: { x: spot.x, y: spot.y, z: spot.z },
+          area: { center: { x: cell.x, y: cell.y, z: cell.z }, radius: 4, maxDrop: 0 }, shieldReserve: options.shieldReserve ?? 60, onCrossfire: 'retreat', pickup: 'target_drops' }], 90, { accept: ['blaze'] });
+      m.rushes++; m.exposedSeconds += (Date.now() - outAt) / 1000;
+      const rush = ((run.json?.lines ?? []) as any[]).map(line => line.shieldRush).find(Boolean);
+      if (rush) {
+        m[rush.status as 'killed' | 'retreated' | 'failed' | 'cut'] = (m[rush.status as 'killed' | 'retreated' | 'failed' | 'cut'] ?? 0) + 1;
+        if (rush.code) m.codes[rush.code] = (m.codes[rush.code] ?? 0) + 1;
+        m.hits += Number(rush.hits ?? 0);
+      }
+      note(`rush#${m.rushes}: hp ${r1(hp())} rods +${(packClient().blaze_rod ?? 0) - rodsBefore} ${rush ? `${rush.status} ${rush.code ?? ''} hits ${rush.hits} hp ${r1(rush.hpMin)}→${r1(rush.hpEnd)} shield ${rush.shieldBefore}→${rush.shieldAfter} safe ${rush.safe} at ${rush.at ? `${rush.at.x},${rush.at.y},${rush.at.z}` : ''}` : (run.lines[1] ?? run.lines[0] ?? '').slice(0, 200)}`);
+      if (!run.ok && !rush) {
+        const out = await act('to the hideout', [{ do: 'go', to: { x: spot.x, y: spot.y, z: spot.z }, range: 0.8, seconds: 25, canPlace, maxPlace: 30 }], 40, { accept: ['blaze'] });
+        if (!out.ok) note(`to the hideout: ${(out.lines[0] ?? '').slice(0, 160)}`);
+      }
+    }
+  } finally { clearInterval(sampler); }
+  const rods = (await countServer('blaze_rod')) - rods0;
+  return { seconds: r1((Date.now() - start) / 1000), rods, ...m, shieldWear: shieldUsed() - shield0, deathsHere: deaths, hpTrack: track.filter((_, index) => index % 5 === 0).join(' ') };
+}
+scene('blaze_rush', 'shield_rush from the scripted head: rest at the hideout, pick the nearest blaze id, ONE act [go to the camp cell, attack #id shield_rush, retreatTo the hideout], repeat; run59 pack', note => blazeRush(note));
 // The nook (S2, 2026-11-02): the camp cell has walls on two sides; the body closes the other two sides to the head's height with cobblestone (the top stays open: a blaze sees in only from straight
 // above), leaves the head cell of the side that faces the spawner open as a window, and holds there. Measures what the camp costs with a room's worth of blazes that can see only through the window.
 async function blazeNook(note: (text: string) => void, options: { window?: boolean; seconds?: number; bow?: boolean; r59?: boolean; corner?: 'toward' | 'away'; fight?: boolean; peek?: boolean; lure?: boolean; calm?: boolean } = {}): Promise<Record<string, unknown>> {
