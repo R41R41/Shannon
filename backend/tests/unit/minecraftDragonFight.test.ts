@@ -611,6 +611,20 @@ describe('a fireball that lands on a body at the front end of a bridge one wide 
       expect(entries.some((entry: any) => entry.kind === 'retreat')).toBe(true);
     }
   });
+  it('does not take the other side into a cloud that lies near and does not reach the feet yet, nor into the cloud a flying ball is to lay (round 11)', () => {
+    for (const direction of [1, -1] as const) {
+      const f = atFrontEnd();
+      ballOnBody(f, direction);
+      const meta: unknown[] = []; meta[8] = 7; meta[10] = { type: 'dragon_breath' };
+      f.bot.entities[20] = { id: 20, name: 'area_effect_cloud', position: new Vec3(7.6, 64, 12.5), metadata: meta }; // 7.1 from the feet: outside its radius 7 now, the bridge's way east runs into it
+      const hazards = dragonHazards(f.bot);
+      expect(hazards.map(hazard => hazard.kind)).toEqual(['fireball']); // the cloud is not among them: it does not reach the feet
+      expect(dragonFleePlan(f.bot, hazards)).toBeNull();
+    }
+    const f = atFrontEnd(); // the same bridge with no cloud: the way east is found, as before
+    ballOnBody(f, 1);
+    expect(dragonFleePlan(f.bot, dragonHazards(f.bot))).not.toBeNull();
+  });
   it('still reports no way where there is none on either side (a bridge one cell long)', () => {
     const f = atFrontEnd();
     for (let x = 1; x <= 14; x++) f.world.delete(key(x, 63, 12)); // one block of bridge, the void all round it

@@ -13,7 +13,7 @@ import { breathCloudsOf, dragonPhaseOf, endDragonOf, fireballPath, fireballsOf, 
  * parts of a dragon in flight are not aimed at, so the boxes are only drawn for the perched one.
  */
 export type HazardKind = 'breath' | 'flame' | 'fireball' | 'head' | 'neck' | 'wing';
-export interface Hazard { kind: HazardKind; centre: P3; /** The place the same push would come from on the other side of the body (a sidestep that may be taken either way: a fireball that lands on the body). */ alternative?: P3; /** The radius of a round zone (0 for a box). */ radius: number; box?: Box; why: string; /** A cloud a fireball gone from sight has just laid, not yet among the client's entities (it is laid in the tick the ball goes, its harm comes 20 ticks after): a rise now clears it, a rise before the ball came does not. */ pending?: true }
+export interface Hazard { kind: HazardKind; centre: P3; /** The place the same push would come from on the other side of the body (a sidestep that may be taken either way: a fireball that lands on the body). */ alternative?: P3; /** The radius of a round zone (0 for a box). */ radius: number; box?: Box; why: string; /** A cloud a fireball gone from sight has just laid, not yet among the client's entities (it is laid in the tick the ball goes, its harm comes 20 ticks after): a rise now clears it, a rise before the ball came does not. */ pending?: true; /** For a fireball: where it comes down, where its cloud will lie (a flight away from the body that ends in it would run into that cloud). */ impact?: P3 }
 
 export { BREATH_RADIUS_MIN };
 /** A fireball's line is dangerous within this far (the cloud it lays and the blast round it). */
@@ -154,7 +154,7 @@ export function dragonHazards(bot: any, options: { clearance?: number; now?: num
     const near = nearestOnPath(line, chest);
     if (near && near.distance <= FIREBALL_REACH + clearance) {
       const push = fireballPush(line, path.impact, near.at, feet);
-      out.push({ kind: 'fireball', centre: push.centre, ...(push.alternative ? { alternative: push.alternative } : {}), radius: FIREBALL_REACH, why: `竜の火の玉 #${ball.id} の線から${near.distance.toFixed(1)}m（${path.impact ? `着弾 (${path.impact.x.toFixed(0)},${path.impact.y.toFixed(0)},${path.impact.z.toFixed(0)})` : '40tick先まで当たらず'}）` });
+      out.push({ kind: 'fireball', centre: push.centre, ...(push.alternative ? { alternative: push.alternative } : {}), ...(path.impact ? { impact: path.impact } : {}), radius: FIREBALL_REACH, why: `竜の火の玉 #${ball.id} の線から${near.distance.toFixed(1)}m（${path.impact ? `着弾 (${path.impact.x.toFixed(0)},${path.impact.y.toFixed(0)},${path.impact.z.toFixed(0)})` : '40tick先まで当たらず'}）` });
     }
   }
   for (const landing of landedFireballs(bot, flying, now)) {

@@ -20,7 +20,7 @@ import { engagedWithAny } from './engagement.js';
 import { PROTECTED_UTILITY_BLOCKS } from '../constants.js';
 import { entityHealth } from './mapMarks.js';
 import { eyeOf, probeSight } from './probeTools.js';
-import { dragonHazards, hazardCentres, type Hazard } from './dragonDanger.js';
+import { cloudReaches, dragonHazards, hazardCentres, lyingCloudZones, type Hazard } from './dragonDanger.js';
 import { isEnd } from './dragonState.js';
 import { clutchWanted, runFallClutch, scoopBack, scoopWanted, type FallMemory } from './fallClutch.js';
 
@@ -41,7 +41,7 @@ export const FLOOR_CLUTCH_PRIORITY = 380;
  * The one switch of the water-bucket clutch (and with it the taking-up of the water it pours, which has nothing to take up when no clutch ran): false and `clutchTick` starts nothing, in every mode. A
  * decision of the release, not of the environment: nothing reads it from the env (the switch for the second rollout, independent review 2026-11-02, round 8).
  */
-export const FALL_CLUTCH_ENABLED = true;
+export const FALL_CLUTCH_ENABLED = false;
 const FALL_TIMEOUT_MS = 8000;
 const FALL_DETAIL_MAX = 160;
 /** The taking-up of water a clutch left behind: under every reflex (each may cut it), over the planner's own acts. */
@@ -1030,9 +1030,35 @@ const DRAGON_DETAIL_MAX = 160;
  */
 export function dragonFleePlan(bot: FloorBody, hazards: Hazard[], previous?: number): { yaw: number; jump: boolean } | null {
   const options = { noJump: true, wide: true };
+  // A way is taken only if it runs into no zone the body is not in yet: a cloud that lies near (not reaching the feet now, so not among the hazards), the cloud of a ball's landing, the flame to come
+  // (independent review 2026-11-03, round 11: the other side's way ran into a cloud that lay beside the bridge). Where none is clear, the answer is none (the note that there is no way).
   const first = fleeHeadingPlan(bot, hazardCentres(hazards), previous, options);
-  if (first || !hazards.some(hazard => hazard.alternative)) return first;
-  return fleeHeadingPlan(bot, hazardCentres(hazards, true), previous, options);
+  if (first && wayClearOfZones(bot, first.yaw, hazards)) return first;
+  if (!hazards.some(hazard => hazard.alternative)) return null;
+  const other = fleeHeadingPlan(bot, hazardCentres(hazards, true), previous, options);
+  return other && wayClearOfZones(bot, other.yaw, hazards) ? other : null;
+}
+/** The zones a way out must not run into: every cloud that lies (the real ones, in sight or not among the hazards), the cloud a flying ball will lay where it comes down, the flame and the pending clouds among the hazards. */
+function zonesToAvoid(bot: FloorBody, hazards: Hazard[]): Array<{ centre: { x: number; y: number; z: number }; radius: number }> {
+  const zones = lyingCloudZones(bot);
+  for (const hazard of hazards) {
+    if ((hazard.kind === 'breath' || hazard.kind === 'flame') && hazard.radius > 0) zones.push({ centre: hazard.centre, radius: hazard.radius });
+    if (hazard.impact) zones.push({ centre: hazard.impact, radius: 3 });
+  }
+  return zones;
+}
+/** Whether walking along `yaw` from the feet, as far as a retreat runs, enters a zone that the feet are not in now. */
+function wayClearOfZones(bot: FloorBody, yaw: number, hazards: Hazard[]): boolean {
+  const feet = bot.entity?.position;
+  if (!feet) return false;
+  const dx = -Math.sin(yaw), dz = -Math.cos(yaw);
+  for (const zone of zonesToAvoid(bot, hazards)) {
+    if (cloudReaches(zone.centre, zone.radius, feet, 0)) continue;
+    for (let d = 0.25; d <= DRAGON_RETREAT_BLOCKS + 1e-9; d += 0.25) {
+      if (cloudReaches(zone.centre, zone.radius, { x: feet.x + dx * d, y: feet.y, z: feet.z + dz * d }, 0)) return false;
+    }
+  }
+  return true;
 }
 export async function runDragonRetreat(bot: FloorBody, port: FloorBody, tickMs = 50): Promise<{ success: boolean; result: string; moved: number; ended: 'clear' | 'blocked' | 'cap' }> {
   const origin = bot.entity!.position.clone(), memory: { heading?: number } = {};
