@@ -85,6 +85,11 @@ export async function equip(ctx: StepContext, args: { item: string; slot?: strin
     if (error instanceof StepStopped || /Action interrupted/u.test(String((error as Error)?.message))) throw error;
     return stopped(bot, 'equip_failed', `${args.item} を ${slot} に着けられなかった: ${String((error as Error)?.message ?? error).slice(0, 80)}`);
   }
+  // Read back from the window (a piece of gold armour is what makes the piglins trade instead of fight, and a click the server did not take shows nowhere else).
+  const index = EQUIP_SLOT_INDEX[slot];
+  if (index !== undefined && !(await waitUntil(ctx, () => bot.inventory?.slots?.[index]?.name === args.item, 1500, 50))) {
+    return stopped(bot, 'equip_failed', `${args.item} を ${slot} に着けたはずだが、そこは ${bot.inventory?.slots?.[index]?.name ?? '空'} のまま`);
+  }
   return { ok: true, text: `${args.item} を ${slot} に着けた` };
 }
 

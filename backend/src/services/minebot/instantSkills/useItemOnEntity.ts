@@ -3,6 +3,7 @@ import { CustomBot, InstantSkill } from '../types.js';
 import { createLogger } from '../../../utils/logger.js';
 import { gotoSafe } from '../utils/gotoSafe.js';
 import { actionDelay } from '../execution/observedWait.js';
+import { holdsIngot, itemIds, itemsSince } from '../utils/huntBarter.js';
 
 const { goals } = pathfinder;
 const log = createLogger('Minebot:Skill:useItemOnEntity');
@@ -72,13 +73,15 @@ class UseItemOnEntity extends InstantSkill {
     return best;
   }
 
-  /** Picks up what lies within a few blocks (what the entity threw back), without going far for it. */
-  private async collect(): Promise<void> {
+  /**
+   * Picks up what the entity threw back, without going far for it: the item entities that were not lying about when the item was handed over
+   * (`baseline`), within a few blocks. An item that lay there before is not its answer.
+   */
+  private async collect(baseline: ReadonlySet<number>): Promise<void> {
     const deadline = Date.now() + 5000;
-    const given = new Set<number>();
+    const given = new Set<number>(baseline);
     while (Date.now() < deadline && !this.shouldInterrupt()) {
-      const item = this.bot.nearestEntity((entity: any) => entity.name === 'item' && !given.has(entity.id)
-        && entity.position.distanceTo(this.bot.entity.position) < 6);
+      const item = itemsSince(this.bot, given, this.bot.entity.position, 6)[0];
       if (!item) return;
       given.add(item.id);
       if (item.position.distanceTo(this.bot.entity.position) > 1) {
@@ -110,6 +113,7 @@ class UseItemOnEntity extends InstantSkill {
       }
       // Given until it is taken: an entity busy with the last one (a piglin still looking its ingot over) takes nothing yet.
       const mine = this.held(itemName);
+      const baseline = itemIds(this.bot);
       let taken = false;
       for (let attempt = 0; attempt < GIVE_TRIES && !taken && !this.shouldInterrupt(); attempt++) {
         const item = this.bot.inventory.items().find(entry => entry.name === itemName);
@@ -127,15 +131,20 @@ class UseItemOnEntity extends InstantSkill {
       if (!taken) { refused++; break; }
       used++;
       // What comes back is waited for, and picked up from where it fell.
+      // A piglin looks its gold over for six seconds and then throws its answer: while its off hand holds the ingot the answer is not here yet.
       const waitUntil = Date.now() + this.returnWaitMs;
       const packThen = JSON.stringify([...this.pack()]);
       let seen = false;
       while (Date.now() < waitUntil && !this.shouldInterrupt()) {
         await actionDelay(this.bot, 300);
-        const lying = this.bot.nearestEntity((entity: any) => entity.name === 'item' && entity.position.distanceTo(this.bot.entity.position) < 6);
-        if (lying) { seen = true; await this.collect(); }
-        if (JSON.stringify([...this.pack()]) !== packThen && !this.bot.nearestEntity((entity: any) => entity.name === 'item' && entity.position.distanceTo(this.bot.entity.position) < 6)) break;
-        if (seen && !lying) break;
+        const there = this.bot.entities[target.id];
+        const fresh = itemsSince(this.bot, baseline, this.bot.entity.position, 8);
+        if (fresh.length) { seen = true; await this.collect(baseline); }
+        if (there && holdsIngot(there)) continue;
+        const left = itemsSince(this.bot, baseline, this.bot.entity.position, 8);
+        if (seen && !left.length) break;
+        if (!there && !left.length) break;
+        if (JSON.stringify([...this.pack()]) !== packThen && !left.length) break;
       }
     }
     const text = this.report(itemName, entityName, used, refused, before);

@@ -7,6 +7,8 @@ import { noteSpawnBed } from '../ownedBlocks.js';
 import { blockAt, cellNow, cellText, DIRECTION_JA, DIRECTIONS, eyeDistance, findItem, guard, inventoryCount, isAirLike, placeText, stopped,
   StepStopped, USE_REACH, wait, waitUntil, type StepContext, type StepOutcome } from './common.js';
 import { BED_HALF_WAIT_MS } from './place.js';
+import { compassOf, eyeReportOf, EYE_FATE_MS, EYE_WATCH_MS, watchEyeFlight } from '../huntEyeFlight.js';
+import { barterWithPiglin } from '../huntBarter.js';
 
 /**
  * use: the right hand on a block, a creature, or the air (design mb-llm-centric 2.3 and the owner's dragon list, 2026-10-21).
@@ -15,9 +17,11 @@ import { BED_HALF_WAIT_MS } from './place.js';
  *   - flint and steel lights the cell given (a portal frame's inside, a block's top);
  *   - a bed sleeps (what stops it is the game's: not night, monsters near);
  *   - a door, gate, trapdoor, lever or button is worked;
- *   - an eye of ender in the air is thrown, and where it flew is measured (bearing, how far); on an end portal frame it is set in, and
+ *   - an eye of ender in the air is thrown, and where it flew is measured (the exact line: the body's position, the horizontal unit vector, the bearing, how far;
+ *     and how the eye ended); on an end portal frame it is set in, and
  *     the frames filled are counted;
- *   - seeds, bone meal and the like on the block given; anything else on a creature (`entity`), or in the air.
+ *   - seeds, bone meal and the like on the block given; a gold ingot on a piglin is one whole exchange (offer, wait, gather what comes back);
+ *     anything else on a creature (`entity`), or in the air.
  * The item is the one asked for (`item`), else what the hand holds. What came of it is read back from the world.
  */
 export interface UseArgs { item?: string; at?: Cell; against?: string; entity?: string }
@@ -53,40 +57,38 @@ function liquidLevel(block: any): number {
   try { return Number(block?.getProperties?.().level ?? block?.metadata ?? 0); } catch { return -1; }
 }
 
-/** The eye's flight, read until it falls or breaks (about three seconds): its bearing and how far it went (the owner's list). */
+/**
+ * The eye's flight, followed by the connection's own words (utils/huntEyeFlight): the eye that appears within three blocks of the body is
+ * followed by entityMoved to entityGone (ten seconds at most), its horizontal direction is a unit vector and a bearing, and how it ended
+ * (the item fell, or it shattered) is read from what the connection says next, not guessed from the pack. The body's exact position is
+ * told with it: the line is that position and that vector, and where two lines cross is for whoever reads the two results (the head).
+ */
 async function throwEye(ctx: StepContext): Promise<StepOutcome> {
   const bot = ctx.bot;
-  const eyes = () => Object.values(bot.entities ?? {}).filter((entity: any) => entity?.name === 'eye_of_ender' && entity.position?.distanceTo(bot.entity.position) < 8) as any[];
-  const before = new Set(eyes().map(entity => entity.id));
   const from = feetCell(bot)!;
-  const throwFrom = bot.entity.position.clone();
-  const left = inventoryCount(bot, 'ender_eye');
-  bot.activateItem();
-  let eye: any = null;
-  await waitUntil(ctx, () => !!(eye = eyes().find(entity => !before.has(entity.id))), 2000);
-  try { bot.deactivateItem(); } catch { /* released */ }
-  if (!eye) return stopped(bot, 'eye_not_thrown', 'エンダーアイは飛ばなかった（要塞の無い次元か、エンドポータルの枠を見ている）', from);
-  const start = eye.position.clone();
-  let end = start.clone(), last = Date.now();
-  const id = eye.id;
-  for (const until = Date.now() + 4000; Date.now() < until;) {
-    await wait(ctx, 100);
-    const now = bot.entities?.[id];
-    if (!now) break;
-    if (now.position.distanceTo(end) > 0.02) last = Date.now();
-    end = now.position.clone();
-    if (Date.now() - last > 600) break;
-  }
-  const dx = end.x - throwFrom.x, dz = end.z - throwFrom.z, flat = Math.hypot(dx, dz);
-  const kept = inventoryCount(bot, 'ender_eye');
-  const broke = !bot.entities?.[id] && kept < left;
-  if (flat < 0.5) return { ok: true, text: `エンダーアイを ${cellText(from)} で投げたが、横にほとんど動かなかった（要塞はほぼ真下）。残り${kept}`, at: from };
-  const bearing = (Math.atan2(dx, -dz) * 180 / Math.PI + 360) % 360;
-  const compass = ['北', '北東', '東', '南東', '南', '南西', '西', '北西'][Math.round(bearing / 45) % 8];
-  const to = { x: Math.floor(end.x), y: Math.floor(end.y), z: Math.floor(end.z) };
-  const flight = { from, bearingDeg: Math.round(bearing * 10) / 10, flew: Math.round(flat * 10) / 10, to, broke };
-  return { ok: true, at: from, data: { eye: flight }, text: `エンダーアイを ${cellText(from)} で投げた: 方位 ${bearing.toFixed(1)}°（北0°・東90°、${compass}）、水平に ${flat.toFixed(1)} ブロック先まで飛んだ`
-    + `（向き x=${(dx / flat).toFixed(3)} z=${(dz / flat).toFixed(3)}）。${broke ? '目玉は割れた' : bot.entities?.[id] ? '目玉は落ちて残っている（拾える）' : '目玉は消えた'}。残り${kept}` };
+  const origin = bot.entity.position.clone();
+  const watcher = watchEyeFlight(bot, { origin });
+  try {
+    bot.activateItem();
+    const appeared = await guard(ctx, watcher.spawned, 2_200);
+    try { bot.deactivateItem(); } catch { /* released */ }
+    if (!appeared?.value) return stopped(bot, 'eye_not_thrown', 'エンダーアイは飛ばなかった（要塞の無い次元か、エンドポータルの枠を見ている）', from);
+    const seen = await guard(ctx, watcher.flight, EYE_WATCH_MS + EYE_FATE_MS + 1_000);
+    const flight = seen?.value ?? null;
+    const kept = inventoryCount(bot, 'ender_eye');
+    if (!flight) return { ok: true, at: from, text: `目玉を${cellText(from)}で投げたが、飛びを追えなかった。残り${kept}` };
+    // The act's line is clipped at 160 characters: the direction and the end of the eye come first; the exact numbers are in `eye` (the result's structure).
+    const cellOf = (p: { x: number; y: number; z: number }) => cellText({ x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) });
+    const how = flight.fate === 'dropped' ? `落ちて残る${flight.drop ? `#${flight.drop.id}${cellOf(flight.drop.at)}` : ''}`
+      : flight.fate === 'shattered' ? '割れた' : flight.gone ? '落ちたか割れたか不明' : `${Math.round(EYE_WATCH_MS / 1000)}秒見ても消えず`;
+    const report = eyeReportOf(flight, from);
+    if (!report) {
+      return { ok: true, at: from, text: `目玉を${cellText(from)}で投げた: 横に${flight.flat.toFixed(1)}しか動かず、`
+        + `${flight.overhead ? `${(-flight.rise).toFixed(1)}落ちた=要塞はほぼ真下（終点${cellOf(flight.end)}）` : '要塞は真下かすぐ近く'}。${how}。残り${kept}` };
+    }
+    return { ok: true, at: from, data: { eye: report }, text: `目玉を${cellText(from)}で投げた: 方位${report.bearingDeg.toFixed(2)}°${compassOf(report.bearingDeg)}・水平${report.flew.toFixed(1)}・上${report.rise.toFixed(1)}`
+      + `・向き x${report.unit.x.toFixed(3)} z${report.unit.z.toFixed(3)}。${how}${report.arrived ? '。短い飛び=終点が要塞の真上の目安' : ''}。残り${kept}` };
+  } finally { watcher.cancel(); }
 }
 
 /** Frames of the portal round `cell` (within 4), and how many have their eye. */
@@ -147,6 +149,8 @@ export async function use(ctx: StepContext, args: UseArgs): Promise<StepOutcome>
   if (args.entity) {
     const target = findEntity(bot, args.entity);
     if (!target) return stopped(bot, 'target_not_found', `${args.entity} が近く（16m）にいない`);
+    // Gold to a piglin is an exchange, one whole: the offer, the six seconds of looking, and what comes back taken (utils/huntBarter).
+    if (name === 'gold_ingot' && target.name === 'piglin') return barterWithPiglin(ctx, target);
     if (target.position.distanceTo(bot.entity.position) > 4) return stopped(bot, 'out_of_reach', `${target.name}（${cellText(cellOf(target.position))}）に届かない（${target.position.distanceTo(bot.entity.position).toFixed(1)}m）`, cellOf(target.position));
     await guard(ctx, Promise.resolve(bot.lookAt(target.position.offset(0, (target.height ?? 1) * 0.6, 0), true)), 1000);
     bot.useOn(target);

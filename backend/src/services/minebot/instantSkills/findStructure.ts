@@ -1,6 +1,7 @@
 import minecraftData from 'minecraft-data';
 import { detectVillage } from '../utils/landmarks.js';
 import { scanLoadedBlocks } from '../utils/loadedBlockScan.js';
+import { FRAME_RING_STEP, FRAME_SEARCH_DEFAULT, FRAME_SEARCH_MAX, framesAround, nextSurveyPoints, ringPoints, surveyOf } from '../utils/huntFrameSearch.js';
 import { WOOL_COLORS } from '../utils/nightGate.js';
 import { CustomBot, InstantSkill } from '../types.js';
 
@@ -34,7 +35,8 @@ class FindStructure extends InstantSkill {
     this.skillName = 'find-structure';
     this.description = '指定した構造物（要塞、村、ネザー要塞など）を、読み込み済みの範囲から探します。村は観測のlandmarksにも自動で出ます。'
       // Only the loaded chunks are searched: not found means not here yet, not nowhere.
-      + '見つからなければ、まだ行っていない方角へ100〜200ブロック移動してから、もう一度探してください（ネザー要塞はネザーの中だけ）';
+      + '見つからなければ、まだ行っていない方角へ100〜200ブロック移動してから、もう一度探してください（ネザー要塞はネザーの中だけ）。'
+      + 'stronghold はエンドポータルの枠だけを探し（高さは問わない）、中心 x・z と半径 radius（最大128）を指定できます。枠が無い時は、16ブロック刻みの輪の次の点を返します';
     this.mcData = minecraftData(this.bot.version);
     this.params = [
       {
@@ -44,13 +46,51 @@ class FindStructure extends InstantSkill {
           '構造物の種類（fortress=ネザー要塞, village=村, stronghold=要塞など）',
         required: true,
       },
+      { name: 'radius', type: 'number', description: 'stronghold だけ: 枠を探す半径（中心から水平に。既定64、最大128）' },
+      { name: 'x', type: 'number', description: 'stronghold だけ: 探す中心の x（既定は今いる所）。z と一緒に' },
+      { name: 'z', type: 'number', description: 'stronghold だけ: 探す中心の z' },
     ];
   }
 
-  async runImpl(structureType: string) {
+  /**
+   * stronghold: the portal room's frames (only `end_portal_frame` is the portal room), over the whole height of the loaded chunks, within the
+   * radius of the centre; when there is none, the rings of points sixteen blocks apart to walk (utils/huntFrameSearch), those no scan has covered.
+   */
+  private strongholdFrames(radius?: number, x?: number, z?: number) {
+    const body = this.bot.entity.position;
+    const center = Number.isFinite(x) && Number.isFinite(z) ? { x: Math.floor(x as number), z: Math.floor(z as number) } : { x: Math.floor(body.x), z: Math.floor(body.z) };
+    const limit = Math.max(FRAME_RING_STEP, Math.min(FRAME_SEARCH_MAX, Math.round(Number.isFinite(radius) ? radius as number : FRAME_SEARCH_DEFAULT)));
+    const scan = framesAround(this.bot as any, center, limit);
+    const survey = surveyOf(this.bot as any, center, limit);
+    survey.scans.push({ x: body.x, z: body.z, reach: scan.reach });
+    if (survey.scans.length > 64) survey.scans.shift();
+    const way = (p: { x: number; z: number }) => {
+      const dx = p.x - body.x, dz = p.z - body.z, d = Math.round(Math.hypot(dx, dz));
+      return `${d}m ${['北', '北東', '東', '南東', '南', '南西', '西', '北西'][Math.round(((Math.atan2(dx, -dz) * 180 / Math.PI + 360) % 360) / 45) % 8]}`;
+    };
+    if (scan.frames.length) {
+      const eyes = scan.frames.filter(frame => frame.eye === true).length, known = scan.frames.filter(frame => frame.eye !== null).length;
+      const nearest = scan.frames[0];
+      try { (this.bot as any).placeMemory?.remember('stronghold', { x: nearest.x, y: nearest.y, z: nearest.z }, { note: 'end_portal_frame' }); } catch { /* memory is optional */ }
+      const list = scan.frames.slice(0, 12).map(frame => `(${frame.x}, ${frame.y}, ${frame.z})${frame.eye === true ? '目あり' : frame.eye === false ? '目なし' : ''}`).join(' ');
+      return { success: true, result: `エンドポータルの枠を発見: ${scan.frames.length}個${known ? `（目が入っている ${eyes}/${known}）` : ''}。いちばん近い枠 (${nearest.x}, ${nearest.y}, ${nearest.z})、自分から ${way(nearest)}・高さ ${nearest.y - Math.floor(body.y) >= 0 ? '+' : ''}${nearest.y - Math.floor(body.y)}。枠: ${list}` };
+    }
+    // No frame in the loaded chunks: what shows a stronghold is near (the infested bricks), and what has not been looked at yet.
+    const evidence = scanLoadedBlocks(this.bot as any, STRUCTURE_MARKERS.stronghold.blocks.filter(name => name !== 'end_portal_frame'), { maxHits: 1, maxDistance: limit + 320 }).hits[0];
+    const seen = evidence ? `要塞の石レンガ（${evidence.name}）は (${evidence.position.x}, ${evidence.position.y}, ${evidence.position.z}) にある（自分から ${way(evidence.position)}）が、枠はまだ見えない。` : '要塞の痕跡（枠・感染した石レンガ）も見えない。';
+    const next = nextSurveyPoints(ringPoints(center, limit, { x: body.x, z: body.z }), survey.scans, { x: body.x, z: body.z });
+    const done = ringPoints(center, limit).length;
+    const hint = next.length
+      ? `輪（${FRAME_RING_STEP}ブロック刻み）の次の点（読み込みが届いていない所。歩いて着いたら、もう一度 stronghold で探す）: ${next.map(point => `(${point.x}, ${point.z}) 輪${point.ring}`).join(' ')}`
+      : `半径${limit}まで読み込み済みの範囲で見終わった（${done}点の輪のどれにも届いている）。枠は無い: 中心 (${center.x}, ${center.z}) が要塞から外れている（交点を引き直す）か、半径を広げる`;
+    return { success: true, result: `中心 (${center.x}, ${center.z}) の半径${limit}mの読み込み済みの範囲（自分から約${scan.reach}m、${scan.columns}列）に、エンドポータルの枠はありません。${seen}${hint}。要塞の位置が分からない間は、離れた 2 地点で目玉を投げて（use item=ender_eye）方位の線の交点を探します` };
+  }
+
+  async runImpl(structureType: string, radius?: number, x?: number, z?: number) {
     try {
       // 構造物の種類を正規化
       const normalizedType = structureType.toLowerCase();
+      if (normalizedType === 'stronghold') return this.strongholdFrames(radius, x, z);
 
       // サポートされている構造物
       const supportedStructures = [

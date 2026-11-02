@@ -54,11 +54,13 @@ describe('find-structure looks for the blocks only the structure places', () => 
     scanned.length = 0;
     const stronghold = await new FindStructure(bot).runImpl('stronghold');
     await new FindStructure(bot).runImpl('bastion');
-    expect(scanned[0]).toEqual(['end_portal_frame', 'infested_stone_bricks', 'infested_mossy_stone_bricks', 'infested_cracked_stone_bricks']);
-    expect(scanned[0]).not.toContain('stone_bricks');
-    expect(scanned[1]).toEqual(['polished_blackstone_bricks', 'gilded_blackstone']);
+    // The portal room is the frame alone (S2): the infested bricks are only the sign that a stronghold is near, and are read apart.
+    expect(scanned[0]).toEqual(['end_portal_frame']);
+    expect(scanned[1]).toEqual(['infested_stone_bricks', 'infested_mossy_stone_bricks', 'infested_cracked_stone_bricks']);
+    expect(scanned[1]).not.toContain('stone_bricks');
+    expect(scanned[2]).toEqual(['polished_blackstone_bricks', 'gilded_blackstone']);
     // Not in the loaded chunks: the eye of ender is pointed to.
-    expect(stronghold.result).toContain('use-item ender_eye');
+    expect(stronghold.result).toContain('use item=ender_eye');
   });
 });
 
