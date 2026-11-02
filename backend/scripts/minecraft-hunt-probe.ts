@@ -625,9 +625,9 @@ scene('stronghold_descent', 'from the surface over the portal room down to its f
   return { arrived, seconds: r1((Date.now() - started) / 1000), finalAt: here ? [r1(here.x), r1(here.y), r1(here.z)] : null, hp: actor.health, tries };
 });
 
-scene('nether_walk', 'the walk in the Nether from the portal side to the fortress and to the warped forest by go hops (lava, ghasts, soul sand are the world\'s)', async note => {
+const netherWalk = async (note: (text: string) => void, which: Array<'fortress' | 'warped'>): Promise<Record<string, unknown>> => {
   const arrival = sites.netherArrival as number[];
-  const targets: Array<{ name: string; to: number[] }> = [{ name: 'fortress', to: sites.blazeStand as number[] }, { name: 'warped', to: sites.warpedStand as number[] }];
+  const targets: Array<{ name: string; to: number[] }> = which.map(name => ({ name, to: (name === 'fortress' ? sites.blazeStand : sites.warpedStand) as number[] }));
   await ask('difficulty normal'); await ask('time set noon');
   // Three pickaxes: t46 (c2, basalt delta) broke the one iron pickaxe after about 250 digs, 125 m into the walk, and the act ended as `tool_broke`.
   await equip({ iron_pickaxe: 3, diamond_sword: 1, cobblestone: 64, cooked_beef: 24, golden_apple: 3 }, { armor: 'iron', shield: true });
@@ -668,13 +668,21 @@ scene('nether_walk', 'the walk in the Nether from the portal side to the fortres
     const started = Date.now(), hp0 = Number(actor.health);
     const trail: string[] = [];
     let reached = false, tries = 0, slow = 0;
+    // The limits and the dig list are the planner's to change; here they change the way the lines say ("maxDig を増やす", "canDig に足す").
+    let maxDig = 120, maxPlace = 40;
+    const canDig = ['netherrack', 'basalt', 'blackstone'];
     const leftOf = () => { const here = actor.entity?.position as Vec3 | undefined; return here ? Math.hypot(here.x - (target.to[0] + 0.5), here.z - (target.to[2] + 0.5)) : Infinity; };
     for (; tries < 10 && !reached && !disconnected; tries++) {
       const before = leftOf();
-      const run = await act(`${target.name}#${tries + 1}`, [{ do: 'go', to: { x: target.to[0], y: target.to[1], z: target.to[2] }, range: 3, seconds: 100, maxDig: 120, maxPlace: 40, canDig: ['netherrack', 'basalt', 'blackstone'], canPlace: ['cobblestone'] }], 140);
+      const run = await act(`${target.name}#${tries + 1}`, [{ do: 'go', to: { x: target.to[0], y: target.to[1], z: target.to[2] }, range: 3, seconds: 100, maxDig, maxPlace, canDig: [...canDig], canPlace: ['cobblestone'] }], 140);
       const here = actor.entity?.position as Vec3 | undefined;
       const left = leftOf();
-      trail.push(`[${here ? `${r1(here.x)},${r1(here.y)},${r1(here.z)}` : '?'} left ${r1(left)}] ${(run.lines[0] ?? '').slice(0, 230)}`);
+      const line = run.lines[0] ?? '';
+      trail.push(`[${here ? `${r1(here.x)},${r1(here.y)},${r1(here.z)}` : '?'} left ${r1(left)}] ${line.slice(0, 230)}`);
+      const named = /が ([a-z_]+) で登れない（掘ってよい物に無い）/u.exec(line)?.[1];
+      if (named && !canDig.includes(named) && canDig.length < 12) { canDig.push(named); note(`canDig gets ${named} (the line said so)`); }
+      if (/limit_dig/u.test(line) && maxDig < 200) maxDig = Math.min(200, maxDig + 60);
+      if (/limit_place/u.test(line) && maxPlace < 100) maxPlace = Math.min(100, maxPlace + 30);
       reached = !!here && left < 5 && Math.abs(here.y - target.to[1]) < 6;
       if (Number(actor.health) < 9) { note(`health ${actor.health}: the walk to the ${target.name} stops`); break; }
       // A hop that got nowhere (under 3 m nearer) twice running: what a planner would take as shut, and give up on.
@@ -688,7 +696,9 @@ scene('nether_walk', 'the walk in the Nether from the portal side to the fortres
     from = target.to;
   }
   return { legs: legs.map(leg => ({ ...leg, trail: undefined })), trails: legs.map(leg => leg.trail), finalHp: actor.health };
-});
+};
+scene('nether_walk', 'the walk in the Nether from the portal side to the fortress and then to the warped forest by go hops (lava, ghasts, soul sand are the world\'s)', note => netherWalk(note, ['fortress', 'warped']));
+scene('nether_warped', 'the walk in the Nether from the portal side straight to the warped forest by go hops', note => netherWalk(note, ['warped']));
 
 // ===== the probe kinds (what the LLM-centric mode can call: act and probe, no catalog skill) =================================================
 scene('probe_kinds', 'probe kind=camp at the blaze spawner and kind=frames at the stronghold, against find-structure\'s own answers (they must say the same)', async note => {
