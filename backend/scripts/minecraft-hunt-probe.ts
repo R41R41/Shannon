@@ -522,7 +522,59 @@ scene('blaze_r59_corner_fight', 'run59 pack: corner (away closed) with fight 20 
 scene('blaze_r59_corner_away_long', 'run59 pack: the away-side corner (two blocks), hold, eating under 14 hearts, 600 s', note => blazeNook(note, { r59: true, corner: 'away', seconds: 600 }));
 scene('blaze_r59_corner_toward_long', 'run59 pack: the toward-side corner, hold, eating under 14 hearts, 600 s', note => blazeNook(note, { r59: true, corner: 'toward', seconds: 600 }));
 scene('blaze_r59_corner_peek', 'run59 pack: the away-side corner; steps out to the front cell, strikes 6 s, back in the corner; 600 s', note => blazeNook(note, { r59: true, corner: 'away', peek: true, seconds: 600 }));
-scene('blaze_nook_sealed', 'the nook with no window (sealed to the head height, top open): hold for 120 s', note => blazeNook(note, { window: false, seconds: 120 }));
+// The low slit (S2, 2026-11-03; Codex's first candidate): the body stands one block LOWER than the spawner room's floor in a pocket behind the room's west wall; the wall has ONE opening, the cell at the
+// room's floor level (the pocket's head cell). Built here with commands (the feasibility of the shape: can it strike through the slit, how much does it take, can it get the rods), not by the body.
+async function blazeSlit(note: (text: string) => void, options: { seconds?: number; fetch?: boolean } = {}): Promise<Record<string, unknown>> {
+  const stand = sites.blazeStand as number[] | undefined, spawner = sites.blazeSpawner as number[] | undefined;
+  if (!stand || !spawner) throw new Error('no blazeStand or blazeSpawner in the sites');
+  const seconds = options.seconds ?? (timedSeconds || 300);
+  await ask('difficulty normal'); await ask('time set midnight'); await ask('weather clear');
+  await ask('execute in minecraft:the_nether run kill @e[type=minecraft:blaze]');
+  await equip({ stone_sword: 1, diamond_pickaxe: 1, shield: 1, cooked_porkchop: 7, cobblestone: 173 }, { armor: 'iron', shield: true });
+  await placeActor('the_nether', stand[0], stand[1], stand[2], 24);
+  const solidAt = (x: number, y: number, z: number) => { const b = actor.blockAt(new Vec3(x, y, z)); return !!b && b.boundingBox === 'block'; };
+  const sy = spawner[1], sz = spawner[2];
+  let wallX = spawner[0];
+  while (wallX > spawner[0] - 8 && !solidAt(wallX, sy, sz)) wallX--;
+  note(`spawner ${spawner}, west wall x=${wallX} (${actor.blockAt(new Vec3(wallX, sy, sz))?.name}), behind it x=${wallX - 1}: ${actor.blockAt(new Vec3(wallX - 1, sy, sz))?.name}`);
+  const nether = 'execute in minecraft:the_nether run';
+  // a cobblestone shell around the pocket (two cells: feet at sy-1, head at sy), then the pocket cells air, then the wall cell at the room's floor level air (the slit)
+  await ask(`${nether} fill ${wallX - 3} ${sy - 3} ${sz - 2} ${wallX} ${sy + 2} ${sz + 2} minecraft:cobblestone`);
+  await ask(`${nether} fill ${wallX - 1} ${sy - 1} ${sz} ${wallX - 1} ${sy} ${sz} minecraft:air`);
+  await ask(`${nether} setblock ${wallX} ${sy} ${sz} minecraft:air`);
+  await sleep(1500);
+  note(`pocket ${actor.blockAt(new Vec3(wallX - 1, sy - 1, sz))?.name}/${actor.blockAt(new Vec3(wallX - 1, sy, sz))?.name}, slit ${actor.blockAt(new Vec3(wallX, sy, sz))?.name}, under the slit ${actor.blockAt(new Vec3(wallX, sy - 1, sz))?.name}, over it ${actor.blockAt(new Vec3(wallX, sy + 1, sz))?.name}`);
+  await ask(`${nether} tp ${ACTOR} ${wallX - 1 + 0.5} ${sy - 1} ${sz + 0.5} facing ${wallX + 3} ${sy} ${sz}`);
+  await sleep(2500);
+  const started = Date.now();
+  const rods0 = await countServer('blaze_rod'), shield0 = shieldUsed();
+  let killed = 0;
+  const onDead = (entity: any) => { if (String(entity?.name ?? '') === 'blaze') killed++; };
+  actor.on('entityDead', onDead);
+  const track: number[] = [];
+  const sampler = setInterval(() => { const value = Number(actor.health); if (Number.isFinite(value)) track.push(r1(value)); }, 1000);
+  let n = 0;
+  try {
+    while (Date.now() - started < seconds * 1000 && !disconnected && Number(actor.health) > 0) {
+      const run = await act(`hold#${++n}`, [{ do: 'attack', target: 'blaze', hold: true, seconds: 20 }], 40, { accept: ['blaze'] });
+      if (Number(actor.health) < 14 && Number(actor.food) < 20) await act('eat', [{ do: 'eat' }], 15);
+      note(`hold#${n}: hp ${r1(Number(actor.health))} kills ${killed} ${run.lines.join(' | ').slice(0, 220)}`);
+      if (Number(actor.health) < 8) break;
+    }
+  } finally { clearInterval(sampler); actor.removeListener('entityDead', onDead); }
+  const onFloor = await ask(`${nether} execute as @e[type=minecraft:item,x=${wallX},y=${sy},z=${sz},distance=..9] run data get entity @s Item.id`);
+  note(`items near the slit: ${onFloor.replace(/\s+/gu, ' ').slice(0, 300)}`);
+  let fetched = 0;
+  if (options.fetch && Number(actor.health) > 6) {
+    const rodsBefore = packClient().blaze_rod ?? 0;
+    const run = await act('fetch', [{ do: 'dig', at: [{ x: wallX, y: sy - 1, z: sz }], onFail: 'continue' }, { do: 'go', to: { x: wallX, y: sy - 1, z: sz }, range: 0.4, seconds: 6, onFail: 'continue' }, { do: 'pickup', range: 4, onFail: 'continue' }, { do: 'go', to: { x: wallX - 1, y: sy - 1, z: sz }, range: 0.4, seconds: 6, onFail: 'continue' }, { do: 'place', at: [{ x: wallX, y: sy - 1, z: sz }], block: 'cobblestone', onFail: 'continue' }], 40, { accept: ['blaze'] });
+    fetched = (packClient().blaze_rod ?? 0) - rodsBefore;
+    note(`fetch: hp ${r1(Number(actor.health))} rods ${fetched} ${run.lines.join(' | ').slice(0, 320)}`);
+  }
+  return { seconds: r1((Date.now() - started) / 1000), kills: killed, rodsInServerPack: (await countServer('blaze_rod')) - rods0, fetched, shieldWear: shieldUsed() - shield0, deathsHere: deaths, lowestHp: Math.min(...track, 20), hpTrack: track.filter((_, index) => index % 5 === 0).join(' ') };
+}
+scene('blaze_slit_low', 'the low slit: a pocket one block below the room floor behind the west wall, one opening at the floor level, attack hold 300 s, then fetch the rods through the wall cell', note => blazeSlit(note, { fetch: true }));
+scene('blaze_nook_sealed','the nook with no window (sealed to the head height, top open): hold for 120 s', note => blazeNook(note, { window: false, seconds: 120 }));
 // Sniping (S2, 2026-11-02): a bow from a cell far enough from the spawner room that few of its blazes see the body and their fire (spread grows with the square root of the distance) mostly misses.
 async function blazeSnipe(note: (text: string) => void, at: [number, number, number]): Promise<Record<string, unknown>> {
   const stand = sites.blazeStand as number[] | undefined, spawner = sites.blazeSpawner as number[] | undefined;
