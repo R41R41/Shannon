@@ -13,7 +13,7 @@ import { breathCloudsOf, dragonPhaseOf, endDragonOf, fireballPath, fireballsOf, 
  * parts of a dragon in flight are not aimed at, so the boxes are only drawn for the perched one.
  */
 export type HazardKind = 'breath' | 'flame' | 'fireball' | 'head' | 'neck' | 'wing';
-export interface Hazard { kind: HazardKind; centre: P3; /** The radius of a round zone (0 for a box). */ radius: number; box?: Box; why: string }
+export interface Hazard { kind: HazardKind; centre: P3; /** The radius of a round zone (0 for a box). */ radius: number; box?: Box; why: string; /** A cloud a fireball gone from sight has just laid, not yet among the client's entities (it is laid in the tick the ball goes, its harm comes 20 ticks after): a rise now clears it, a rise before the ball came does not. */ pending?: true }
 
 export { BREATH_RADIUS_MIN };
 /** A fireball's line is dangerous within this far (the cloud it lays and the blast round it). */
@@ -154,7 +154,7 @@ export function dragonHazards(bot: any, options: { clearance?: number; now?: num
     // Once the cloud itself is in sight it is the cloud above that counts.
     const lying = clouds.some(cloud => Math.hypot(cloud.position.x - landing.impact.x, cloud.position.z - landing.impact.z) <= 4);
     if (!lying && cloudReaches(landing.impact, BREATH_RADIUS_MIN, feet, clearance)) {
-      out.push({ kind: 'breath', centre: landing.impact, radius: BREATH_RADIUS_MIN, why: `竜の火の玉が (${landing.impact.x.toFixed(0)},${landing.impact.y.toFixed(0)},${landing.impact.z.toFixed(0)}) に落ちた: 息の雲が出る` });
+      out.push({ kind: 'breath', centre: landing.impact, radius: BREATH_RADIUS_MIN, pending: true, why: `竜の火の玉が (${landing.impact.x.toFixed(0)},${landing.impact.y.toFixed(0)},${landing.impact.z.toFixed(0)}) に落ちた: 息の雲が出る` });
     }
   }
   return out;
