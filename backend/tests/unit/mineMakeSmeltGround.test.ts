@@ -258,6 +258,16 @@ describe('mine with the conditions of the act', () => {
 });
 
 describe('make on the practice ground', () => {
+  it('0. a shield from four stripped oak logs (run59 leg 2: "missing: oak_log×2" with them in the pack): they count as logs for the planks', async () => {
+    const g = open();
+    g.set(10, 64, 8, 'crafting_table');
+    g.give('stripped_oak_log', 2); g.give('iron_ingot', 1);
+    const outcome = await make(stepContext(g.bot), { item: 'shield' });
+    expect(outcome.ok, outcome.text).toBe(true);
+    expect(g.countOf('shield')).toBe(1);
+    expect(g.countOf('stripped_oak_log')).toBe(0);
+  });
+
   it('1. two logs and a table at hand: planks, sticks, then the wooden pickaxe (the chain), nothing else touched', async () => {
     const g = open();
     g.set(10, 64, 8, 'crafting_table');
