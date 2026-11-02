@@ -25,6 +25,9 @@ import { activeActionCapabilities, hasActiveSafetyLease, preemptLowerPriorityAct
 import { blastAt } from '../src/services/minebot/utils/crystalBlast.js';
 import { feetCentre, standing, walkGround } from '../src/services/minebot/utils/dragonWalk.js';
 import { bodyReader } from '../src/services/minebot/utils/localMap.js';
+import { bedHalves } from '../src/services/minebot/utils/bedRules.js';
+import { perchBedFoot, bedWallCells } from '../src/services/minebot/utils/dragonBedGeometry.js';
+import { isPerched, type P3 } from '../src/services/minebot/utils/dragonParts.js';
 
 const port = Number(process.env.MINECRAFT_END_PORT);
 const worldDirectory = process.env.MINECRAFT_END_WORLD_DIRECTORY ?? '';
@@ -90,13 +93,17 @@ const context = { scopeKey: 'owner', taskId: 'end-fight', taskRevision: 1, bodyI
 const commandOf = (skill: string, args: Record<string, unknown>, seconds: number): any => ({ schemaVersion: 1, id: `end-${++counter}`, serverId: 'end-fight-probe', connectionId: 'end-fight', kind: 'skill', skill,
   arguments: args, context: { ...context, ...madeStamp(body) }, lease: { id: 'end-lease', generation: 1, holder: 'end-task' }, deadlineAt: new Date(Date.now() + seconds * 1000).toISOString() });
 /** One act through the production body; the parsed receipt and the lines. */
-async function act(hands: Array<Record<string, unknown>>, seconds = 30, extra: Record<string, unknown> = {}): Promise<{ ok: boolean; lines: string[]; parsed: any; ms: number }> {
+async function act(hands: Array<Record<string, unknown>>, seconds = 30, extra: Record<string, unknown> = {}, signal?: AbortSignal): Promise<{ ok: boolean; lines: string[]; parsed: any; ms: number }> {
   const started = Date.now();
   const controller = new AbortController();
+  const abort = () => controller.abort(signal?.reason);
+  if (signal?.aborted) abort();
+  else signal?.addEventListener('abort', abort, { once: true });
   const watchdog = setTimeout(() => controller.abort('probe_watchdog'), (seconds + 20) * 1000);
   let receipt: any = null;
   try { receipt = await body.execute(commandOf('act', { hands, ...extra }, seconds), controller.signal); } catch (error) { report.errors.push(`act threw: ${String((error as Error)?.message ?? error)}`); }
   clearTimeout(watchdog);
+  signal?.removeEventListener('abort', abort);
   let parsed: any = null; try { parsed = JSON.parse(receipt?.result ?? ''); } catch { parsed = null; }
   const lines = Array.isArray(parsed?.lines) ? parsed.lines.map((line: any) => `${line.i}.${line.do} ${line.status}: ${String(line.line).slice(0, 400)}`) : [String(receipt?.result ?? '').slice(0, 300)];
   log(`ACT ${hands.map(h => h.do).join('+')} ${parsed?.ok ? 'ok' : 'NOT-OK'} ${((Date.now() - started) / 1000).toFixed(1)}s ${lines.join(' | ').slice(0, 500)}`);
@@ -706,6 +713,18 @@ scenes.perch_watch = async () => {
   return { samples, serverPos, serverMotion };
 };
 
+/** Both bed scenes use the actual HEAD half as the blast centre, exactly as the production use hand does. */
+function perchBedEstimate(cell: P3) {
+  const halves = bedHalves(actor.blockAt(new Vec3(cell.x, cell.y, cell.z)), cell);
+  if (!halves) return null;
+  return blastAt(actor, { x: halves.head.x + 0.5, y: halves.head.y + 0.5, z: halves.head.z + 0.5 }, actor.entity.position, 5, [halves.foot, halves.head]);
+}
+async function usePerchBed(cell: P3, signal?: AbortSignal): ReturnType<typeof act> {
+  const guess = perchBedEstimate(cell);
+  if (!guess || !guess.safe || guess.expected > 4) return { ok: false, lines: [`bed estimate refused: ${JSON.stringify(guess)}`], parsed: null, ms: 0 };
+  return act([{ do: 'use', at: [cell] }], 12, {}, signal);
+}
+
 scenes.bed = async () => {
   // A bed blown beside the dragon's head on its perch. The dragon turns its head toward the body (a player), and its head, neck and body wipe out every block that is not dragon-proof (r6/r7:
   // a bed set at a fixed place was gone when the hand came), so the body stands first on the line through the dragon's middle where the head will face, the dragon is given time to turn, and the bed is
@@ -731,10 +750,14 @@ scenes.bed = async () => {
     const serverPos = (await ask(`${END} data get entity ${DRAGON} Pos`)).replace(/\s+/gu, ' ').slice(0, 120);
     // the bed past the head along the line from the dragon's middle, one pillar of end stone under its foot
     const dir = head ? head.dir : new Vec3(0, 0, 1);
-    const spot = head ? new Vec3(head.centre.x + dir.x * 2.2, 0, head.centre.z + dir.z * 2.2) : new Vec3(0.5, 0, 9.2);
-    const bx = Math.floor(spot.x), bz = Math.floor(spot.z);
+    const spot = perchBedFoot(head?.centre ?? new Vec3(0.5, 0, 7), dir, g + 3);
+    const bx = spot.x, bz = spot.z;
     await ask(`${END} fill ${bx} ${g} ${bz} ${bx} ${g + 2} ${bz} end_stone`);
-    if (wallBetween) await ask(`${END} fill -2 ${g} 11 3 ${g + 4} 11 obsidian`);
+    if (wallBetween) {
+      const wall = bedWallCells(spot, { ...STAND, y: g }, g, g + 4, 6);
+      const first = wall[0], last = wall[wall.length - 1];
+      await ask(`${END} fill ${first.x} ${first.y} ${first.z} ${last.x} ${last.y} ${last.z} obsidian`);
+    }
     const healthBefore = Number(actor.health), deathsBefore = actorDeaths;
     const dragonBefore = await dragonHealthServer();
     const lowest = trackMinHealth();
@@ -743,7 +766,7 @@ scenes.bed = async () => {
     const seenBefore = { bed: [bx, g + 3, bz], atClient: actor.blockAt(new Vec3(bx, g + 3, bz))?.name ?? null, headHalfAtClient: actor.blockAt(new Vec3(bx, g + 3, bz + 1))?.name ?? null,
       head: head ? [round(head.centre.x, 1), round(head.centre.z, 1)] : null, dragonAt: dragonNow ? [round(dragonNow.position.x, 1), round(dragonNow.position.z, 1)] : null, serverPos, dragonPhase: dragonNow ? dragonPhaseOf(actor, dragonNow) : null };
     log(`BED ${label}: before the hand ${JSON.stringify(seenBefore)}`);
-    const run = await act([{ do: 'use', at: [{ x: bx, y: g + 3, z: bz }] }], 12);
+    const run = await usePerchBed({ x: bx, y: g + 3, z: bz });
     await sleep(800);
     const dragonAfter = await dragonHealthServer();
     trials.push({ label, seenBefore, lines: run.lines, ok: run.ok, healthLost: round(healthBefore - Number(actor.health), 1), healthLostAtWorst: round(healthBefore - lowest.stop(), 1), died: actorDeaths > deathsBefore,
@@ -1545,6 +1568,8 @@ scenes.knockback = async () => {
  * production go/vertical/dig and the unchanged floor reflex own every physical step. */
 /** Set by cage_section_walk: the body came to the island by its own walk from the game's arrival (no teleport after the arrival), not from saved player data. */
 let cageWalkStart = false;
+/** Set by cage_guard_walk: a ring of blocks is laid round the top of the tower (the side toward the bars left open to dig, closed after) so that a push of the dragon cannot carry the body off the one-wide tower. */
+let cageGuard = false;
 scenes.cage_section = async () => {
   if (!cageWalkStart && (wanted.length !== 1 || wanted[0] !== 'cage_section')) throw new Error('cage_section must run alone, from saved island-ground playerdata');
   if (String(actor.game?.dimension).replace(/^minecraft:/u, '') !== 'the_end' || !actor.entity?.onGround) throw new Error('cage_section requires an actor already standing on the End island; no tp bootstrap');
@@ -1575,9 +1600,9 @@ scenes.cage_section = async () => {
     const stages = section.stages as Array<Record<string, unknown>>;
     let success = false;
     const perform = async (stage: string, hand: Record<string, unknown>, seconds: number) => {
-      // The stand-in planner reads the result like the head: a hand cut by a reflex (the dragon's breath or ball) is asked again, at most twice; any other stop ends the section (no automatic retry of the body's own).
+      // The stand-in planner reads the result like the head: a hand cut by a reflex or by a hit (the dragon's breath or ball) is asked again while the health is above 8, at most twice; any other stop ends the section (no automatic retry of the body's own).
       let result = await act([hand], seconds), retries = 0;
-      while (!result.ok && retries < 2 && /反射/u.test(result.lines.join(' ')) && actorDeaths === deathsBefore && Number(actor.health) > 0) { retries++; await sleep(1500); result = await act([hand], seconds); }
+      while (!result.ok && retries < 2 && /反射|被弾/u.test(result.lines.join(' ')) && actorDeaths === deathsBefore && Number(actor.health) > 8) { retries++; await sleep(1500); result = await act([hand], seconds); }
       stages.push({ stage, ...result, retries });
       if (actorDeaths !== deathsBefore || Number(actor.health) <= 0) throw new Error(`${stage}: actor died`);
       if (!result.ok) throw new Error(`${stage}: stopped after ${retries} retries`);
@@ -1610,7 +1635,20 @@ scenes.cage_section = async () => {
       // Open one vertical column in the near wall. The crystal is left intact; this section measures cage access and return.
       const wall = bars.filter(p => p.x === bars[0].x && p.z === bars[0].z);
       section.bars = wall;
+      let closeCells: Array<{ x: number; y: number; z: number }> = [];
+      if (cageGuard) {
+        // the ring: bottom up (a block needs a face to be laid against: the tower's own side first), three sides two high, the side toward the bars open until the bars are out
+        const pos = actor.entity.position, f = { x: Math.floor(pos.x), y: Math.floor(pos.y), z: Math.floor(pos.z) };
+        const toward = Math.abs(wall[0].x - f.x) >= Math.abs(wall[0].z - f.z) ? [Math.sign(wall[0].x - f.x), 0] : [0, Math.sign(wall[0].z - f.z)];
+        const sides = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+        const ring: Array<{ x: number; y: number; z: number }> = sides.map(([a, b]) => ({ x: f.x + a, y: f.y - 1, z: f.z + b }));
+        for (const dy of [0, 1]) for (const [a, b] of sides) if (!(a === toward[0] && b === toward[1])) ring.push({ x: f.x + a, y: f.y + dy, z: f.z + b });
+        closeCells = [0, 1].map(dy => ({ x: f.x + toward[0], y: f.y + dy, z: f.z + toward[1] }));
+        section.guard = { feet: f, toward, cells: ring.length };
+        await perform('guard_ring', { do: 'place', at: ring, block: 'cobblestone' }, 40);
+      }
       await perform('dig_bars', { do: 'dig', at: wall, tool: 'iron_pickaxe', collect: false }, 30);
+      if (cageGuard && closeCells.length) await perform('guard_close', { do: 'place', at: closeCells, block: 'cobblestone' }, 30);
       const at = actor.entity.position;
       if (Math.floor(at.x) !== root.x || Math.floor(at.z) !== root.z) throw new Error('displaced from the built pillar; shaft descent cannot be assumed');
       await perform('shaft_down', { do: 'vertical', dir: 'down', shape: 'shaft', toY: root.y, canDig: ['cobblestone'], canPlace: ['none'], maxDig: 64, maxPlace: 0, liquid: 'stop', seconds: 60 }, 65);
@@ -1728,6 +1766,304 @@ scenes.cage_section_walk = async () => {
   return { crossing, walkWest, ...(await scenes.cage_section()) };
 };
 
+scenes.cage_guard_walk = async () => { cageGuard = true; try { return await scenes.cage_section_walk(); } finally { cageGuard = false; } };
+
+// ===== dragon_kill_compare: the script below is the lab's stand-in HEAD, never a body policy =====
+type KillStyle = 'sword_stage' | 'bed' | 'bow';
+const KILL_LIMIT_MS = 25 * 60 * 1000;
+const killEntries = ['dragon_kill_compare', 'dragon_kill_sword', 'dragon_kill_bed', 'dragon_kill_bow'];
+const killCell = (p: P3): P3 => ({ x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) });
+const packCount = (name: string): number => actor.inventory.items().filter((item: any) => item.name === name).reduce((n: number, item: any) => n + item.count, 0);
+let killArena: { ground: P3; perch: P3; yaw: number } | null = null;
+const killPlaced = new Map<string, P3>();
+const killBlasts: P3[] = [];
+
+/** Bootstrap only: choose real island support from the loaded terrain, relative to the observed fountain/head. */
+async function prepareKillRun(): Promise<{ dragonId: number; ground: P3 }> {
+  const chosen = wanted.filter(name => name !== 'enter');
+  if (chosen.length !== 1 || !killEntries.includes(chosen[0])) throw new Error('dragon_kill_compare entries must run alone');
+  if (!actor.floorReflexes || !actor.reflexLedger?.counts) throw new Error('dragon_kill_compare requires floor reflexes ON and the full ledger counter');
+  if (g === 0) await scenes.enter();
+  await protect(true); releaseReflex(); await park(false);
+  if (!killArena) {
+    // the dragon is in sight 30 to 60 s after the arrival: waited for
+    for (let i = 0; i < 400 && !(endView()?.perch && endView()?.dragon); i++) await sleep(300);
+    const view = endView(), p = view?.perch, d = view?.dragon;
+    if (!p || !d) throw new Error('comparison bootstrap needs an observed perch and dragon');
+    const read = bodyReader(actor), dir = { x: Math.sin(d.yaw), z: Math.cos(d.yaw) };
+    const cells: P3[] = [];
+    for (let dx = -24; dx <= 24; dx++) for (let dz = -24; dz <= 24; dz++) {
+      if (Math.hypot(dx, dz) < 12 || Math.hypot(dx, dz) > 24) continue;
+      for (let y = Math.floor(p.y); y >= p.y - 32; y--) {
+        const cell = { x: Math.floor(p.x) + dx, y, z: Math.floor(p.z) + dz };
+        if (read(cell.x, y - 1, cell.z)?.name === 'end_stone' && standing(read, cell)) { cells.push(feetCentre(cell)); break; }
+      }
+    }
+    cells.sort((a, b) => Math.hypot(a.x - p.x - dir.x * 16, a.z - p.z - dir.z * 16) - Math.hypot(b.x - p.x - dir.x * 16, b.z - p.z - dir.z * 16));
+    if (!cells[0]) throw new Error('no loaded island ground for the comparison');
+    killArena = { ground: cells[0], perch: { ...p }, yaw: 180 - d.yaw * 180 / Math.PI };
+  }
+  const arena = killArena;
+  // Only blocks this comparison attempted to place; never flatten the island or the podium.
+  for (const cell of killPlaced.values()) {
+    const name = actor.blockAt(new Vec3(cell.x, cell.y, cell.z))?.name;
+    if (['obsidian', 'white_bed', 'fire', 'cobblestone'].includes(name)) await ask(`${END} setblock ${cell.x} ${cell.y} ${cell.z} air`);
+  }
+  killPlaced.clear();
+  for (const p of killBlasts) await ask(`${END} fill ${Math.floor(p.x) - 5} ${Math.floor(p.y) - 5} ${Math.floor(p.z) - 5} ${Math.floor(p.x) + 5} ${Math.floor(p.y) + 5} ${Math.floor(p.z) + 5} air replace fire`);
+  killBlasts.length = 0;
+  await ask(`${END} kill @e[type=minecraft:area_effect_cloud]`);
+  await ask(`${END} kill @e[type=minecraft:dragon_fireball]`);
+  await ask(`${END} kill @e[type=minecraft:end_crystal]`);
+  await ask(`${END} kill @e[type=minecraft:arrow]`);
+  await ask(`${END} kill @e[type=minecraft:item]`);
+  // A previous successful run removed its dragon. A timed-out dragon is reset only here, before the clock starts.
+  let exists = await dragonHealthServer();
+  if (exists !== null && (exists <= 0 || endView()?.dragon?.phase === 9)) {
+    for (let i = 0; i < 60 && exists !== null; i++) { await sleep(250); exists = await dragonHealthServer(); }
+    if (exists !== null) throw new Error('previous dragon has not finished dying; cannot reset it into a new run');
+  }
+  if (exists === null) await ask(`${END} summon minecraft:ender_dragon ${arena.perch.x} ${arena.perch.y} ${arena.perch.z}`);
+  await gear(['stone_sword', 'shield', 'cobblestone 64', 'bow', 'arrow 64', ...Array(12).fill('white_bed'), 'obsidian 12', 'cooked_beef 64']);
+  await wearIron();
+  await act([{ do: 'equip', item: 'shield', slot: 'offhand' }, { do: 'equip', item: 'stone_sword' }], 10);
+  await standAt(arena.ground.x, arena.ground.y, arena.ground.z);
+  await ask(`${END} tp ${DRAGON} ${arena.perch.x} ${arena.perch.y} ${arena.perch.z} ${arena.yaw} 0`);
+  await still();
+  await ask(`${END} data modify entity ${DRAGON} Health set value 200.0f`);
+  await ask(`effect give ${ACTOR} minecraft:instant_health 1 5 true`);
+  await ask(`effect give ${ACTOR} minecraft:saturation 1 5 true`);
+  await ask(`${END} kill @e[type=minecraft:area_effect_cloud]`);
+  await ask(`${END} kill @e[type=minecraft:dragon_fireball]`);
+  // Set phase once. No operator mutations during the timed run.
+  await ask(`${END} data modify entity ${DRAGON} DragonPhase set value 6`);
+  await protect(false);
+  const d = endView()?.dragon;
+  const slots = actor.inventory.slots;
+  if (!d || d.health !== 200 || !actor.entity.onGround || Number(actor.health) !== 20 || Number(actor.food) !== 20 ||
+      packCount('arrow') !== 64 || packCount('white_bed') !== 12 || packCount('obsidian') !== 12 || packCount('cobblestone') !== 64 || packCount('cooked_beef') !== 64 || packCount('bow') !== 1 ||
+      actor.heldItem?.name !== 'stone_sword' || slots?.[45]?.name !== 'shield' ||
+      ['iron_helmet', 'iron_chestplate', 'iron_leggings', 'iron_boots'].some((name, i) => slots?.[5 + i]?.name !== name) ||
+      actor.inventory.items().some((i: any) => i.name.endsWith('bucket'))) {
+    throw new Error('comparison initial health/ground/gear was not confirmed');
+  }
+  context.taskId = `dragon-kill-${++context.taskRevision}`;
+  return { dragonId: d.id, ground: arena.ground };
+}
+
+/** Read-only geometry chosen by the script from one observed stage/strike pair and the observed head box. */
+function chooseKillPlan(d: any) {
+  const stages = [...(d?.approach?.stage ?? [])].sort((a: any, b: any) => a.toStrikeMeters - b.toStrikeMeters);
+  const stage = stages.find((s: any) => d.approach.strike[s.strikeIndex]);
+  if (!stage) return null;
+  return { stage, strike: d.approach.strike[stage.strikeIndex], retreat: d.approach.retreat?.[0] ?? null };
+}
+
+function killBedLayout(d: any, plan: NonNullable<ReturnType<typeof chooseKillPlan>>) {
+  const box = partBox({ position: d.position, yaw: d.yaw }, 'head');
+  const head = { x: (box.minX + box.maxX) / 2, y: box.minY, z: (box.minZ + box.maxZ) / 2 };
+  const dx = head.x - d.position.x, dz = head.z - d.position.z, length = Math.hypot(dx, dz);
+  if (!length) return null;
+  const foot = perchBedFoot(head, { x: dx / length, y: 0, z: dz / length }, box.minY);
+  const wall = bedWallCells(foot, plan.stage, plan.stage.y, foot.y + 1, 1);
+  const alongZ = Math.abs(foot.z + 0.5 - plan.stage.z) >= Math.abs(foot.x + 0.5 - plan.stage.x);
+  const step = alongZ ? { x: 0, z: Math.sign(foot.z + 0.5 - plan.stage.z) } : { x: Math.sign(foot.x + 0.5 - plan.stage.x), z: 0 };
+  const partner = { x: foot.x + step.x, y: foot.y, z: foot.z + step.z };
+  const supports: P3[] = [];
+  for (let y = Math.floor(plan.strike.y); y < foot.y; y++) for (const p of [foot, partner]) supports.push({ x: p.x, y, z: p.z });
+  const cells = [...supports, ...wall].filter((p, i, all) => all.findIndex(q => q.x === p.x && q.y === p.y && q.z === p.z) === i);
+  return { foot, partner, cells };
+}
+
+async function dragonKillRun(style: KillStyle): Promise<Record<string, any>> {
+  const initial = await prepareKillRun();
+  const t0 = Date.now(), deadline = t0 + KILL_LIMIT_MS, deaths0 = actorDeaths, lowest = trackMinHealth();
+  const counts0 = actor.reflexLedger.counts();
+  const out: Record<string, any> = { scene: 'dragon_kill_compare', style, limitSeconds: KILL_LIMIT_MS / 1000,
+    initial: { ...initial, dragonHealth: 200, actorHealth: Number(actor.health), food: Number(actor.food), arrows: 64, beds: 12, obsidian: 12, floorReflexes: true },
+    killSeconds: null, dragonHealthAt25Minutes: null, deaths: 0, minHealth: null, bedsUsed: 0, arrowsUsed: 0,
+    perchCount: 0, perchesHit: 0, meleeHitWindows: 0, explosionsHit: 0, perches: [], healthTimeline: [{ seconds: 0, health: 200, source: 'confirmed_start' }], actions: [], reflexKinds: {}, boss: null };
+  const stop = new AbortController();
+  let view = endView(), sitting = false, windowOpen = false, window = 0, terminal: string | null = null;
+  let pendingSample: Promise<void> = Promise.resolve(), sampleBusy = false, activeBed: P3 | null = null, bedExploded = false;
+  let lastArrows = 64, lastBeds = 12;
+  const elapsed = () => (Date.now() - t0) / 1000;
+  const finish = (reason: string) => {
+    if (terminal) return;
+    if (reason === 'dragon_dead' && Date.now() > deadline) reason = 'time_limit';
+    terminal = reason; out.endReason = reason; out.seconds = Math.min(KILL_LIMIT_MS / 1000, elapsed());
+    samplePack(); out.minHealth = lowest.stop(); out.deaths = actorDeaths - deaths0;
+    const counts = actor.reflexLedger.counts();
+    for (const [kind, n] of Object.entries(counts) as Array<[string, number]>) { const used = n - (counts0[kind] ?? 0); if (used > 0) out.reflexKinds[kind] = used; }
+    out.dragonHealthEnd = view?.dragon?.health ?? null;
+    if (reason === 'dragon_dead') { out.killSeconds = out.seconds; out.dragonHealthEnd = 0; }
+    if (reason === 'time_limit') out.dragonHealthAt25Minutes = out.dragonHealthEnd;
+    stop.abort(reason);
+  };
+  const onDead = (e: any) => { if (e?.id === initial.dragonId) finish('dragon_dead'); };
+  const onDeath = () => finish('actor_dead');
+  const onExplosion = (packet: any) => {
+    const p = packet?.center ?? packet;
+    if (activeBed && typeof p?.x === 'number' && Math.hypot(p.x - activeBed.x, p.y - activeBed.y, p.z - activeBed.z) < 3) { bedExploded = true; killBlasts.push({ ...activeBed }); }
+  };
+  const samplePack = () => {
+    if (actorDeaths > deaths0 || Number(actor.health) <= 0) return;
+    const arrows = packCount('arrow'), beds = packCount('white_bed');
+    // Sum decreases, rather than initial-final: a recovered arrow is allowed to be fired again.
+    out.arrowsUsed += Math.max(0, lastArrows - arrows); out.bedsUsed += Math.max(0, lastBeds - beds);
+    lastArrows = arrows; lastBeds = beds;
+  };
+  const watch = () => {
+    if (terminal) return;
+    view = endView(); samplePack();
+    if (actorDeaths > deaths0 || Number(actor.health) <= 0) { finish('actor_dead'); return; }
+    if (disconnected) { finish('disconnected'); return; }
+    const d = view?.dragon;
+    // Disappearance alone is never a kill. Wait for entityDead (and then the existing boss proof).
+    if (d?.health !== null && d?.health !== undefined && d.health <= 0) { finish('dragon_dead'); return; }
+    if (Date.now() >= deadline) { finish('time_limit'); return; }
+    if (!d) return;
+    if (isPerched(d.phase) && !sitting) { sitting = true; out.perches.push({ n: ++out.perchCount, seconds: elapsed(), health: d.health, meleeHitWindows: 0, explosionsHit: 0 }); }
+    if (!isPerched(d.phase) && sitting) { sitting = false; out.perches.at(-1).endedSeconds = elapsed(); }
+    const open = isPerched(d.phase) && d.windows?.open === true;
+    if (open && !windowOpen) window++;
+    windowOpen = open;
+  };
+  actor.on('entityDead', onDead); actor.on('death', onDeath); actor._client.on('explosion', onExplosion);
+  watch();
+  const watchTimer = setInterval(watch, 100);
+  const endTimer = setTimeout(() => { view = endView(); finish('time_limit'); }, Math.max(0, deadline - Date.now()));
+  const sampleTimer = setInterval(() => {
+    if (terminal || sampleBusy) return;
+    sampleBusy = true;
+    const seconds = elapsed();
+    pendingSample = (async () => {
+      const health = await dragonHealthServer();
+      out.healthTimeline.push({ seconds, readAtSeconds: elapsed(), health, source: 'server' });
+    })().catch(error => { out.sampleError = String(error); }).finally(() => { sampleBusy = false; });
+  }, 5000);
+  const perform = async (label: string, hands: Array<Record<string, unknown>>, seconds: number, allowed?: () => boolean, execute?: (signal: AbortSignal) => ReturnType<typeof act>) => {
+    const controller = new AbortController(), abort = () => controller.abort(stop.signal.reason);
+    stop.signal.addEventListener('abort', abort, { once: true });
+    if (stop.signal.aborted) abort();
+    const check = () => { if (allowed && !allowed()) controller.abort('script_observation_changed'); };
+    check(); const timer = setInterval(check, 50);
+    const before = actor.reflexLedger.mark(), at = elapsed();
+    try {
+      const run = await (execute ? execute(controller.signal) : act(hands, Math.min(seconds, Math.max(0.05, (deadline - Date.now()) / 1000)), {}, controller.signal));
+      const cut = (actor.reflexLedger.preemptsSince(before)?.length ?? 0) > 0 || /反射/u.test(run.lines.join(' '));
+      out.actions.push({ seconds: at, label, ok: run.ok, ms: run.ms, cut, aborted: controller.signal.aborted, lines: run.lines });
+      samplePack(); return { ...run, cut, aborted: controller.signal.aborted };
+    } finally { clearInterval(timer); stop.signal.removeEventListener('abort', abort); }
+  };
+  const go = (label: string, p: P3, allowed?: () => boolean) => perform(label, [{ do: 'go', to: killCell(p), range: 0.5, seconds: 10 }], 15, allowed);
+  const open = () => !terminal && isPerched(view?.dragon?.phase) && view?.dragon?.windows?.open === true;
+  const perched = () => !terminal && isPerched(view?.dragon?.phase);
+  const flying = (d: any) => !!d && Number.isInteger(d.phase) && d.phase >= 0 && d.phase <= 10 && !isPerched(d.phase) && d.phase !== 9;
+  let plan: ReturnType<typeof chooseKillPlan> = null, planPerch = 0, staged = false, stageTried = false, usedWindow = -1, retreatDone = false;
+  let bedLayout: ReturnType<typeof killBedLayout> = null, bedReady = false, bedTried = false;
+  try {
+    while (!terminal) {
+      watch(); if (terminal) break;
+      const d = view?.dragon;
+      if (!d || d.phase === 9) { await sleep(100); continue; }
+      if (d.phase === 4 && plan?.retreat && !retreatDone) { retreatDone = true; await go('takeoff_retreat', plan.retreat); continue; }
+      if (style === 'bow') {
+        if (flying(d) && packCount('arrow') > 0) await perform('flying_bow', [{ do: 'shoot', target: 'ender_dragon', n: 1, charge: 1.05 }], 10, () => !terminal && flying(view?.dragon));
+        else await sleep(100);
+        continue;
+      }
+      if (!isPerched(d.phase)) { await sleep(100); continue; }
+      if (planPerch !== out.perchCount) { plan = null; planPerch = out.perchCount; staged = false; stageTried = false; retreatDone = false; bedLayout = null; bedReady = false; bedTried = false; }
+      plan ??= chooseKillPlan(d);
+      if (!plan) { await sleep(100); continue; }
+      if (!stageTried) { stageTried = true; const run = await go('stage', plan.stage, perched); staged = run.ok && !run.cut && !run.aborted; continue; }
+      // Build the reusable screen/support while waiting, not during the measured ~2.5-second strike window.
+      if (style === 'bed' && staged && !bedTried) {
+        bedTried = true; bedLayout = killBedLayout(d, plan);
+        if (bedLayout) {
+          const missing = bedLayout.cells.filter(p => actor.blockAt(new Vec3(p.x, p.y, p.z))?.name !== 'obsidian');
+          const clear = missing.every(p => /^(air|cave_air|void_air)$/u.test(actor.blockAt(new Vec3(p.x, p.y, p.z))?.name ?? ''));
+          if (clear && missing.length <= packCount('obsidian') && missing.length <= 16) {
+            for (const p of missing) killPlaced.set(`${p.x},${p.y},${p.z}`, p);
+            const built = missing.length ? await perform('bed_screen_support', [{ do: 'place', block: 'obsidian', at: missing }], 15, perched) : { ok: true, cut: false, aborted: false };
+            bedReady = built.ok && !built.cut && !built.aborted;
+          }
+        }
+        continue;
+      }
+      if (!staged || !open() || usedWindow === window) { await sleep(100); continue; }
+      usedWindow = window;
+      const row = out.perches.at(-1), before = d.health;
+      if (style === 'sword_stage') {
+        const reached = await go('strike', plan.strike, open);
+        if (reached.ok && !reached.cut && !reached.aborted && open()) {
+          await perform('sword', [{ do: 'equip', item: 'stone_sword' }, { do: 'attack', target: 'ender_dragon', untilDead: false, seconds: 6 }], 10, open);
+          const after = endView()?.dragon?.health ?? (terminal === 'dragon_dead' ? 0 : null);
+          if (before !== null && after !== null && after < before) { row.meleeHitWindows++; out.meleeHitWindows++; }
+        }
+      } else if (bedReady && bedLayout && packCount('white_bed') > 0) {
+        const { foot, partner } = bedLayout;
+        for (const p of [foot, partner]) killPlaced.set(`${p.x},${p.y},${p.z}`, p);
+        const existing = bedHalves(actor.blockAt(new Vec3(foot.x, foot.y, foot.z)), foot);
+        const placed = existing ? { ok: true, cut: false } : await perform('bed_place', [{ do: 'place', block: 'white_bed', at: [foot] }], 10, open);
+        const guess = perchBedEstimate(foot);
+        out.actions.push({ seconds: elapsed(), label: 'bed_estimate', estimate: guess });
+        if (placed.ok && !placed.cut && open() && guess?.safe && guess.expected <= 4) {
+          const halves = bedHalves(actor.blockAt(new Vec3(foot.x, foot.y, foot.z)), foot)!;
+          activeBed = { x: halves.head.x + 0.5, y: halves.head.y + 0.5, z: halves.head.z + 0.5 }; bedExploded = false;
+          await perform('bed_use', [], 12, open, signal => usePerchBed(foot, signal));
+          activeBed = null;
+          const after = endView()?.dragon?.health ?? (terminal === 'dragon_dead' ? 0 : null);
+          if (bedExploded && before !== null && after !== null && after < before) { row.explosionsHit++; out.explosionsHit++; }
+        }
+      }
+      // Leave the strike when the window closes or a reflex cuts it. Phase 4 uses the retained retreat instead.
+      if (!terminal && isPerched(view?.dragon?.phase)) { const back = await go('withdraw_stage', plan.stage, perched); staged = back.ok && !back.cut && !back.aborted; }
+    }
+  } catch (error) { out.error = String((error as Error)?.stack ?? error).slice(0, 800); finish('error'); }
+  finally {
+    clearInterval(watchTimer); clearInterval(sampleTimer); clearTimeout(endTimer); stop.abort('run_finished');
+    actor.removeListener('entityDead', onDead); actor.removeListener('death', onDeath); actor._client.removeListener('explosion', onExplosion);
+    await pendingSample;
+    if (terminal === 'time_limit') {
+      out.dragonHealthAt25Minutes = await dragonHealthServer(); out.dragonHealthEnd = out.dragonHealthAt25Minutes;
+    }
+    out.minHealth ??= lowest.stop();
+    out.perchesHit = out.perches.filter((p: any) => p.meleeHitWindows > 0 || p.explosionsHit > 0).length;
+    out.perchesMeleeHit = out.perches.filter((p: any) => p.meleeHitWindows > 0).length;
+    out.perchesExplosionHit = out.perches.filter((p: any) => p.explosionsHit > 0).length;
+    out.healthTimeline.push({ seconds: out.seconds, health: out.dragonHealthEnd, source: 'terminal_observation' });
+    out.healthLossPerSecond = typeof out.dragonHealthEnd === 'number' && out.seconds > 0 ? round((200 - out.dragonHealthEnd) / out.seconds, 4) : null;
+  }
+  if (terminal === 'dragon_dead') {
+    const proofDeadline = Date.now() + 15_000;
+    do {
+      const proof = await evidence(); out.boss = proof?.boss ?? null;
+      if (out.boss?.verified === true && out.boss?.witness?.entityId === initial.dragonId) break;
+      await sleep(250);
+    } while (Date.now() < proofDeadline && !disconnected && actorDeaths === deaths0);
+    // Old kills on this connection must never verify this run.
+    out.bossVerified = out.boss?.verified === true && out.boss?.witness?.entityId === initial.dragonId;
+  }
+  out.ok = out.deaths === 0 && out.killSeconds !== null && out.killSeconds <= KILL_LIMIT_MS / 1000 && out.bossVerified === true;
+  return out;
+}
+
+scenes.dragon_kill_sword = () => dragonKillRun('sword_stage');
+scenes.dragon_kill_bed = () => dragonKillRun('bed');
+scenes.dragon_kill_bow = () => dragonKillRun('bow');
+scenes.dragon_kill_compare = async () => {
+  const runs: Record<string, any> = {};
+  for (const style of ['sword_stage', 'bed', 'bow'] as const) {
+    try { runs[style] = await dragonKillRun(style); }
+    catch (error) { runs[style] = { style, ok: false, error: String(error) }; }
+    if (disconnected) break;
+  }
+  return { scene: 'dragon_kill_compare', runs, ok: Object.keys(runs).length === 3 && Object.values(runs).every(run => run.ok) };
+};
+// ===== end dragon_kill_compare =====
+
 scenes.death = async () => {
   await protect(true);
   await flatten(); await gear(['diamond_sword']); await wear(); await hold('diamond_sword');
@@ -1763,25 +2099,28 @@ scenes.death = async () => {
 // ===== run =====
 let exitCode = 0;
 try {
-  for (const name of Object.keys(scenes)) {
+  const invalidKillSelection = wanted.some(name => name.startsWith('dragon_kill')) && (wanted.filter(name => name !== 'enter').length !== 1 || !killEntries.includes(wanted.find(name => name !== 'enter')!));
+  if (invalidKillSelection) { report.errors.push('choose exactly one dragon_kill_compare entry (with or without the enter scene before it), without other scenes'); exitCode = 1; }
+  for (const name of invalidKillSelection ? [] : Object.keys(scenes)) {
+    if (killEntries.includes(name) && wanted.filter(n => n !== 'enter').join() !== name) continue;
     if (name === 'cage_section' && !wanted.includes('cage_section')) continue;
     if (!include(name)) continue;
-    if (name !== 'enter' && name !== 'cage_section' && g === 0) { log(`SCENE ${name} skipped: the End was not entered (no enter scene yet)`); continue; }
+    if (name !== 'enter' && name !== 'cage_section' && !killEntries.includes(name) && g === 0) { log(`SCENE ${name} skipped: the End was not entered (no enter scene yet)`); continue; }
     const started = Date.now();
     log(`SCENE ${name} begins`);
-    try { report.scenes[name] = { ms: 0, ...(await scenes[name]()) }; if (name === 'cage_section' && !report.scenes[name].ok) exitCode = 1; }
+    try { report.scenes[name] = { ms: 0, ...(await scenes[name]()) }; if ((name === 'cage_section' || killEntries.includes(name)) && !report.scenes[name].ok) exitCode = 1; }
     catch (error) { report.scenes[name] = { error: String((error as Error)?.stack ?? error).slice(0, 800) }; exitCode = 1; }
     finally {
       // Whatever way the scene ended: its timers stop, the reflex is let go, and the dragon is put back for the next one (not after the one that kills it).
       stopTimers(); releaseReflex();
-      if (g !== 0 && name !== 'enter' && name !== 'death' && name !== 'cage_section') { try { await restoreDragon(); } catch { /* the next scene looks for itself */ } }
+      if (g !== 0 && name !== 'enter' && name !== 'death' && name !== 'cage_section' && !killEntries.includes(name)) { try { await restoreDragon(); } catch { /* the next scene looks for itself */ } }
     }
     report.scenes[name].ms = Date.now() - started;
     log(`SCENE ${name} ends after ${((Date.now() - started) / 1000).toFixed(1)}s: ${JSON.stringify(report.scenes[name]).slice(0, 700)}`);
     if (disconnected) { report.errors.push(`disconnected: ${disconnected}`); break; }
   }
 } finally {
-  const reportPath = process.env.MINECRAFT_END_REPORT ?? (wanted.includes('cage_section') ? path.join(worldDirectory, 'report.json') : null);
+  const reportPath = process.env.MINECRAFT_END_REPORT ?? (wanted.includes('cage_section') || wanted.some(name => killEntries.includes(name)) ? path.join(worldDirectory, 'report.json') : null);
   if (reportPath) { try { fs.writeFileSync(reportPath, JSON.stringify(report, null, 2)); } catch { /* the line below has it */ } }
   console.log(`ENDFIGHT_RESULT ${JSON.stringify(report)}`);
   try { await body.dispose(); } catch { /* gone */ }
