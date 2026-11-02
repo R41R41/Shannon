@@ -9,6 +9,7 @@ import { blockAt, cellNow, cellText, DIRECTION_JA, DIRECTIONS, eyeDistance, find
 import { BED_HALF_WAIT_MS } from './place.js';
 import { compassOf, eyeReportOf, EYE_FATE_MS, EYE_WATCH_MS, watchEyeFlight } from '../huntEyeFlight.js';
 import { barterWithPiglin } from '../huntBarter.js';
+import { entityHealth } from '../mapMarks.js';
 
 /**
  * use: the right hand on a block, a creature, or the air (design mb-llm-centric 2.3 and the owner's dragon list, 2026-10-21).
@@ -87,7 +88,7 @@ async function throwEye(ctx: StepContext): Promise<StepOutcome> {
       return { ok: true, at: from, data: { eye: report }, text: `目玉を${cellText(from)}で投げた: 横に${flight.flat.toFixed(1)}しか動かず${(-flight.rise).toFixed(1)}落ちた=要塞はほぼ真下（終点${cellOf(flight.end)}）。${how}。残り${kept}` };
     }
     return { ok: true, at: from, data: { eye: report }, text: `目玉を${cellText(from)}で投げた: 方位${report.bearingDeg.toFixed(2)}°${compassOf(report.bearingDeg)}・水平${report.flew.toFixed(1)}・上${report.rise.toFixed(1)}`
-      + `・向き x${report.unit!.x.toFixed(3)} z${report.unit!.z.toFixed(3)}。${how}${report.arrived ? '。短い飛び=終点が要塞の真上の目安' : ''}。残り${kept}` };
+      + `・向き x${report.unit!.x.toFixed(3)} z${report.unit!.z.toFixed(3)}。${how}${report.arrived ? '。短い飛び=終点のx,zが要塞の起点' : ''}。残り${kept}` };
   } finally { watcher.cancel(); }
 }
 
@@ -269,6 +270,14 @@ export function lineBlocker(bot: any, cell: Cell): { cell: Cell; name: string } 
 const oppositeOf = (side: string) => ({ down: 'up', up: 'down', north: 'south', south: 'north', east: 'west', west: 'east' } as Record<string, string>)[side];
 const cellOf = (position: { x: number; y: number; z: number }): Cell => ({ x: Math.floor(position.x), y: Math.floor(position.y), z: Math.floor(position.z) });
 
+/** A creature at 0 health that the game still shows for its death (about a second): the registry names a health datum for its kind and it reads 0 or less. */
+export function isDying(bot: any, entity: any): boolean {
+  const keys: string[] | undefined = bot.registry?.entitiesByName?.[String(entity.name ?? '')]?.metadataKeys;
+  if (!keys || keys.indexOf('health') < 0) return false;
+  const health = entityHealth(bot, entity);
+  return health !== null && health <= 0;
+}
+
 /** A creature by id ("123") or by name, the nearest within 16 m. */
 export function findEntity(bot: any, spec: string | number, range = 16): any {
   const at = bot.entity?.position;
@@ -276,7 +285,8 @@ export function findEntity(bot: any, spec: string | number, range = 16): any {
   const id = typeof spec === 'number' ? spec : /^\d+$/u.test(String(spec).trim()) ? Number(spec) : null;
   if (id !== null) return bot.entities?.[id] ?? null;
   const wanted = String(spec).trim().toLowerCase().replace(/^minecraft:/u, '');
+  // A kind named by its name is not the one that is dying (a corpse that is still shown was taken for "the nearest blaze" again after its kill); one named by its id is whatever is there.
   return (Object.values(bot.entities ?? {}) as any[]).filter(entity => entity && entity !== bot.entity && entity.position
-    && (String(entity.name ?? '').toLowerCase() === wanted || String(entity.username ?? '').toLowerCase() === wanted) && entity.position.distanceTo(at) <= range)
+    && (String(entity.name ?? '').toLowerCase() === wanted || String(entity.username ?? '').toLowerCase() === wanted) && entity.position.distanceTo(at) <= range && !isDying(bot, entity))
     .sort((a, b) => a.position.distanceTo(at) - b.position.distanceTo(at))[0] ?? null;
 }

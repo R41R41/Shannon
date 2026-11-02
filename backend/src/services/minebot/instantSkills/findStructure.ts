@@ -2,6 +2,8 @@ import minecraftData from 'minecraft-data';
 import { detectVillage } from '../utils/landmarks.js';
 import { scanLoadedBlocks } from '../utils/loadedBlockScan.js';
 import { FRAME_RING_STEP, FRAME_SEARCH_DEFAULT, FRAME_SEARCH_MAX, framesAround, nextSurveyPoints, ringPoints, surveyOf } from '../utils/huntFrameSearch.js';
+import { campSite, campWords } from '../utils/huntCamp.js';
+import { bodyReader } from '../utils/localMap.js';
 import { WOOL_COLORS } from '../utils/nightGate.js';
 import { CustomBot, InstantSkill } from '../types.js';
 
@@ -36,14 +38,15 @@ class FindStructure extends InstantSkill {
     this.description = '指定した構造物（要塞、村、ネザー要塞など）を、読み込み済みの範囲から探します。村は観測のlandmarksにも自動で出ます。'
       // Only the loaded chunks are searched: not found means not here yet, not nowhere.
       + '見つからなければ、まだ行っていない方角へ100〜200ブロック移動してから、もう一度探してください（ネザー要塞はネザーの中だけ）。'
-      + 'stronghold はエンドポータルの枠だけを探し（高さは問わない）、中心 x・z と半径 radius（最大128）を指定できます。枠が無い時は、16ブロック刻みの輪の次の点を返します';
+      + 'stronghold はエンドポータルの枠だけを探し（高さは問わない）、中心 x・z と半径 radius（最大128）を指定できます。枠が無い時は、16ブロック刻みの輪の次の点を返します。'
+      + 'blaze_spawner はネザー要塞のブレイズの湧き場と、その3m以内の野営向きの足場（縁・火の無い所）を返します';
     this.mcData = minecraftData(this.bot.version);
     this.params = [
       {
         name: 'structureType',
         type: 'string',
         description:
-          '構造物の種類（fortress=ネザー要塞, village=村, stronghold=要塞など）',
+          '構造物の種類（fortress=ネザー要塞, village=村, stronghold=要塞, blaze_spawner=ブレイズの湧き場など）',
         required: true,
       },
       { name: 'radius', type: 'number', description: 'stronghold だけ: 枠を探す半径（中心から水平に。既定64、最大128）' },
@@ -86,11 +89,38 @@ class FindStructure extends InstantSkill {
     return { success: true, result: `中心 (${center.x}, ${center.z}) の半径${limit}mの読み込み済みの範囲（自分から約${scan.reach}m、${scan.columns}列）に、エンドポータルの枠はありません。${seen}${hint}。要塞の位置が分からない間は、離れた 2 地点で目玉を投げて（use item=ender_eye）方位の線の交点を探します` };
   }
 
+  /**
+   * blaze_spawner: the spawner blocks in the loaded chunks of the Nether (every spawner there is a fortress's blaze spawner), and for the nearest one the cells within three
+   * blocks to camp on (utils/huntCamp: floor, two open cells, no edge, no fire), so that the planner goes to a cell that a push does not drop the body from.
+   */
+  private blazeSpawner() {
+    const bot = this.bot as any;
+    const dimension = String(bot.game?.dimension ?? '').replace(/^minecraft:/u, '');
+    if (dimension && dimension !== 'the_nether') return { success: true, result: `ブレイズの湧き場はネザー要塞の中にある（ここは ${dimension}）` };
+    const scan = scanLoadedBlocks(bot, ['spawner'], { maxHits: 4, maxDistance: 128 });
+    if (!scan.hits.length) {
+      let known = '';
+      try {
+        const remembered = bot.placeMemory?.recall('blaze_spawner', 1)?.[0];
+        known = remembered ? `以前に見た湧き場: (${remembered.position.x}, ${remembered.position.y}, ${remembered.position.z}) ${remembered.distance}m ${remembered.direction}。` : '';
+      } catch { known = ''; }
+      return { success: true, result: `読み込み済みの範囲（約${Math.min(scan.reachMetres, 128)}m）に湧き場はありません。${known}ネザー要塞（find-structure fortress）の通路を進んで、もう一度探してください` };
+    }
+    const nearest = scan.hits[0];
+    try { bot.placeMemory?.remember('blaze_spawner', nearest.position, { note: 'spawner' }); } catch { /* memory is optional */ }
+    const site = campSite(bodyReader(bot), nearest.position, 4);
+    const others = scan.hits.slice(1).map((hit: any) => `(${hit.position.x}, ${hit.position.y}, ${hit.position.z}) ${Math.floor(hit.distance)}m`).join(' ');
+    return { success: true, result: `ブレイズの湧き場を発見: (${nearest.position.x}, ${nearest.position.y}, ${nearest.position.z})、距離${Math.floor(nearest.distance)}m${others ? `（ほかに ${others}）` : ''}。`
+      + `${campWords(site)}${site.fire ? `。湧き場の5m以内に火が${site.fire}個（火の中と隣へは go が行かない）` : ''}。`
+      + 'そこへ go で着いてから attack hold か fight（盾は左手。盾は火の玉1つで6すり減る＝予備を持つ）' };
+  }
+
   async runImpl(structureType: string, radius?: number, x?: number, z?: number) {
     try {
       // 構造物の種類を正規化
       const normalizedType = structureType.toLowerCase();
       if (normalizedType === 'stronghold') return this.strongholdFrames(radius, x, z);
+      if (normalizedType === 'blaze_spawner' || normalizedType === 'spawner') return this.blazeSpawner();
 
       // サポートされている構造物
       const supportedStructures = [

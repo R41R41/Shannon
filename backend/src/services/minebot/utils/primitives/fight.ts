@@ -15,13 +15,13 @@ import { alreadyDead, cooldownMs, creatureIdOf } from './attack.js';
 import { deathLedgerOf } from '../deathLedger.js';
 import type { Progress } from '../../integration/commonFca/continueContract.js';
 import { eat } from './body.js';
-import { findEntity } from './use.js';
+import { findEntity, isDying } from './use.js';
 import { findItem, guard, letGo, stopped, StepStopped, wait, type StepContext, type StepOutcome } from './common.js';
 import { swimControls, swimPulse } from './swim.js';
 import { HOVERING_SHOOTERS, ShooterWatch, StrikeGate, hoversAboveReach, strikeHold } from '../huntBlaze.js';
 import { itemIds, itemsSince } from '../huntBarter.js';
 import { itemFacts } from './pickup.js';
-import { EndermanCamp } from '../huntEndermanCamp.js';
+import { EndermanCamp, moveToRoofSite } from '../huntEndermanCamp.js';
 import { endermanAngry } from '../huntEnderman.js';
 
 const { goals } = pathfinder;
@@ -84,6 +84,8 @@ const JUMP_FAILS_MS = 250, NO_JUMP_MS = 1500;
 const LANDED_WITHIN_MS = 700;
 /** A creeper is struck and left (the blow throws it back; the blast is what is feared): back this long after each blow. */
 const CREEPER_BACK_MS = 700;
+/** A broken shield is replaced from the pack; a failed try is made again no sooner than this. */
+const SPARE_RETRY_MS = 1_500;
 /** The shield reflex meeting a shot holds the body this long after it raised the shield. */
 const SHOT_HOLD_MS = 600;
 /** A meal takes 1.6 s and a creature of the body's own pace closes about 6 m in that: the run for a meal goes to 8 m (or its time), and it is eaten from 6.5 m. */
@@ -142,7 +144,25 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
 
   const wanted = typeof args.target === 'number' ? args.target : /^#\d+$/u.test(String(args.target).trim()) ? Number(String(args.target).trim().slice(1)) : args.target;
   deathLedgerOf(bot);
-  const target = findEntity(bot, wanted, 32);
+  /**
+   * A kind named by its name: the nearest one, but for a blaze or an enderman (hunts from one spot) the nearest one the eye sees: a blaze that hovers behind the spawner room's wall,
+   * or an enderman behind a hill, is not the one to fight while another stands in sight (lab: three acts in a row stopped on a blaze 1.8 m off behind the wall).
+   */
+  const pickTarget = (): any => {
+    const first = findEntity(bot, wanted, 32);
+    if (!first || typeof wanted === 'number') return first;
+    const kind = String(first.name ?? '').toLowerCase();
+    if (!HOVERING_SHOOTERS.has(kind) && kind !== 'enderman') return first;
+    const eyes = eyeOf(bot.entity.position);
+    const seen = (entity: any): boolean => {
+      try { return probeSight(bodyReader(bot), eyes, { creature: { id: entity.id, name: String(entity.name ?? 'entity'), position: entity.position, height: entity.height, width: entity.width } }).visible; } catch { return true; }
+    };
+    if (seen(first)) return first;
+    const others = (Object.values(bot.entities ?? {}) as any[]).filter(entity => entity && entity !== bot.entity && entity.position && entity.isValid !== false && String(entity.name ?? '').toLowerCase() === kind
+      && entity.position.distanceTo(bot.entity.position) <= 32 && !isDying(bot, entity)).sort((a, b) => a.position.distanceTo(bot.entity.position) - b.position.distanceTo(bot.entity.position)).slice(0, 8);
+    return others.find(seen) ?? first;
+  };
+  const target = pickTarget();
   // Continue contracts (1, decision 4): a creature named by its id that the body saw die a moment ago is already dead; one that is not there and was not seen to die is not found.
   const askedId = creatureIdOf(wanted);
   if (askedId !== null) { const dead = alreadyDead(bot, askedId, target); if (dead) return dead; }
@@ -190,13 +210,31 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
   const onDead = (entity: any) => { if (entity?.id === target.id) dead = true; };
   const sample = () => { const now = Number(bot.health ?? lastHealth); if (now < lastHealth) lost += lastHealth - now; lastHealth = now; };
   bot.on?.('entityHurt', onHurt); bot.on?.('entityDead', onDead); bot.on?.('health', sample);
-  /** The shield's wear since the fight began (a blocked fireball costs it 6 of its 336), or that it broke. */
+  /** The shield's wear since the fight began (a blocked fireball costs it 6 of its 336), or that it broke; across swaps for a spare, what each broken one had left counts as worn. */
+  let retiredWear = 0, spares = 0, spareTriedAt = 0;
   const wear = () => {
     const now = shieldState(bot);
-    if (shield0 && !now) return '・盾が壊れた';
-    return shield0 && now && now.used > shield0.used ? `・盾 −${now.used - shield0.used}（残り${now.max - now.used}）` : '';
+    const sparesNote = spares ? `・予備に替えた×${spares}` : '';
+    if (shield0 && !now) return `・盾が壊れた${sparesNote}`;
+    const total = retiredWear + (shield0 && now ? Math.max(0, now.used - shield0.used) : 0);
+    return shield0 && now && (total > 0 || spares) ? `・盾 −${total}（残り${now.max - now.used}）${sparesNote}` : '';
   };
-  const counts = () => `与えた打撃 ${landed}（振り ${blows}）・受けた体力 ${r1(lost)}・食べた ${meals}${wear()}${gate.count ? `・見送り ${gate.count}` : ''}${endermanCamp ? `・${endermanCamp.describe(endermanAngry(bot.registry, bot.entities?.[target.id]))}` : ''}`;
+  /** A shield that broke in the fight is replaced from the pack at once (the habit that wears armour waits for a body that is free, and a fight is not). */
+  const replaceBroken = async () => {
+    const prior = shield0;
+    if (!prior || shieldState(bot) || Date.now() - spareTriedAt < SPARE_RETRY_MS) return;
+    spareTriedAt = Date.now();
+    const spare = findItem(bot, 'shield');
+    if (!spare) return;
+    try {
+      await guard(ctx, Promise.resolve(bot.equip(spare, 'off-hand')), 3000);
+      const now = shieldState(bot);
+      if (now) { retiredWear += prior.max - prior.used; shield0 = now; spares++; }
+    } catch (error) { if (error instanceof StepStopped || CUT.test(String((error as Error)?.message))) throw error; }
+  };
+  /** What the end adds to the counts: where the creature stood when the time ran out. */
+  let ending = '', siteNote = '';
+  const counts = () => `与えた打撃 ${landed}（振り ${blows}）・受けた体力 ${r1(lost)}・食べた ${meals}${wear()}${gate.count ? `・見送り ${gate.count}` : ''}${endermanCamp ? `・${endermanCamp.describe(endermanAngry(bot.registry, bot.entities?.[target.id]))}` : ''}${siteNote ? `・${siteNote}` : ''}${ending}`;
   /** Continue contracts (1): the blows that landed (the target was hurt within the swing's time), of the blows swung. */
   const struck = (): Progress => ({ unit: 'blow', done: landed, left: null });
   const holder = (reflex?: string | null) => reflex ? `体: 反射 ${reflex}` : '体: fight（反射なし）';
@@ -350,7 +388,13 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
     if (ender) {
       // The hole it is fought from: the site and the blocks are looked at before anything is done.
       endermanCamp = new EndermanCamp(ctx, target);
-      const refusal = endermanCamp.check();
+      let refusal = endermanCamp.check();
+      // No roof can be made where the body stands (a step beside it that cannot be filled, a plant not to be built over, a hole): a cell within seven blocks where one can is walked to.
+      if (refusal?.code === 'no_site') {
+        const site = await moveToRoofSite(ctx, target);
+        if (site.moved) { siteNote = site.text; endermanCamp = new EndermanCamp(ctx, target); refusal = endermanCamp.check(); }
+        else return { ...none('no_site', `${refusal.text}。${site.text}`), code: 'no_site' };
+      }
       if (refusal) return { ...none(refusal.code, refusal.text), code: refusal.code };
     }
     const radius = Math.max(range, ZONE_IN + 0.5);
@@ -361,6 +405,7 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
       sample();
       if (reflexHeld(bot)) { unfollow(); releaseKeys(); return fail('reflex', '体を反射が握った'); }
       if (dead) return killed();
+      if (hovering) await replaceBroken();
       const live = bot.entities?.[target.id];
       if (!live || live.isValid === false) {
         unfollow(); releaseKeys();
@@ -368,7 +413,14 @@ export async function fight(ctx: StepContext, args: FightArgs): Promise<StepOutc
       }
       lastAt = cellOfEntity(live);
       const now = Date.now();
-      if (now >= endAt) { unfollow(); releaseKeys(); return fail('limit_time', `は ${seconds} 秒で倒れなかった`); }
+      if (now >= endAt) {
+        unfollow(); releaseKeys();
+        // Where it stood when the time ran out (an angry enderman that never came, a blaze that stayed out of reach, are different matters for the planner).
+        const last = eyeOf(bot.entity.position);
+        const gap = r1(boxDistance({ x: last[0], y: last[1], z: last[2] }, live));
+        ending = `・最後は ${gap}m${ender ? (endermanAngry(bot.registry, live) ? '・怒っている' : '・怒っていない') : ''}`;
+        return fail('limit_time', `は ${seconds} 秒で倒れなかった`);
+      }
       const eye = eyeOf(bot.entity.position);
       const box = boxDistance({ x: eye[0], y: eye[1], z: eye[2] }, live);
       if (box <= radius) { everNear = true; farSince = 0; } else if (!farSince) farSince = now;

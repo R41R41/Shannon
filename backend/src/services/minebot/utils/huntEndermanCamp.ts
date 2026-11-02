@@ -1,9 +1,13 @@
 import { Vec3 } from 'vec3';
-import { ENDERMAN_EYE, planRoof, roofBlockFor, type RoofPlan, type RoofWorld } from './huntEnderman.js';
+import pathfinder from 'mineflayer-pathfinder';
+import { ENDERMAN_EYE, planRoof, roofBlockFor, roofSites, type RoofPlan, type RoofWorld } from './huntEnderman.js';
 import { bodyReader, feetCell, type Cell } from './localMap.js';
 import { solidBetween } from './probeTools.js';
 import { PLACE_REPLACEABLE, place } from './primitives/place.js';
-import { cellText, inventoryCount, stopped, wait, type StepContext, type StepOutcome } from './primitives/common.js';
+import { cellText, inventoryCount, letGo, stopped, wait, type StepContext, type StepOutcome } from './primitives/common.js';
+import { goWith, walkMovements } from './primitives/walk.js';
+
+const { goals } = pathfinder;
 
 /**
  * The live part of the enderman hunt (S2, 2026-11-02; the plan and the reasons are in huntEnderman.ts): build the roof over the body, stare the enderman in the
@@ -29,6 +33,49 @@ const SIGHT_MS = 8_000;
 /** An enderman closer than this and angry is the fight's, not the building's (it reaches the body in a second). */
 const CONTACT = 4.2;
 
+/** The roof's world as the body reads it (what a block stops, what a block can be put into). */
+export function roofWorldOf(bot: any): RoofWorld {
+  const read = (x: number, y: number, z: number) => { try { return bot.blockAt?.(new Vec3(x, y, z), false) ?? null; } catch { return null; } };
+  return {
+    solid: (x, y, z) => { const block = read(x, y, z); return block ? block.boundingBox === 'block' : null; },
+    replaceable: (x, y, z) => { const block = read(x, y, z); return !!block && PLACE_REPLACEABLE.has(String(block.name)) && block.name !== 'water' && block.name !== 'lava'; },
+  };
+}
+
+/** How far the body walks to a roof site. */
+const SITE_RADIUS = 7;
+const SITE_WALK_MS = 9_000;
+
+/**
+ * The body stands where no roof can be made (a step beside it, a plant that is not to be built over): the nearest cell within SITE_RADIUS where the plan stands and the
+ * blocks carried are enough is walked to. Says where it went, or that there is none.
+ */
+export async function moveToRoofSite(ctx: StepContext, target: any): Promise<{ moved: boolean; text: string; cell?: Cell }> {
+  const bot = ctx.bot;
+  const here = feetCell(bot)!;
+  const world = roofWorldOf(bot);
+  const at = target.position;
+  const dx = at.x - (here.x + 0.5), dz = at.z - (here.z + 0.5), length = Math.hypot(dx, dz);
+  const sites = roofSites(world, here, SITE_RADIUS, length > 0.5 ? { x: dx / length, z: dz / length } : undefined, 8)
+    .filter(site => { const block = roofBlockFor(bot, site.blocks); return site.blocks === 0 || (!!block && block.count >= site.blocks); });
+  if (!sites.length) return { moved: false, text: `半径${SITE_RADIUS}mに屋根を作れる平らな所が無い（持っている建築用ブロックで足りる所も）` };
+  const navigator = bot.pathfinder;
+  const previous = navigator?.movements;
+  try {
+    navigator?.setMovements(walkMovements(bot, false));
+    for (const site of sites.slice(0, 3)) {
+      const gone = await goWith(ctx, new goals.GoalBlock(site.cell.x, site.cell.y, site.cell.z), Math.min(SITE_WALK_MS, Math.max(500, ctx.deadline - Date.now())), { opened: [], leaves: 0 });
+      letGo(bot);
+      const now = feetCell(bot);
+      if (now && now.x === site.cell.x && now.y === site.cell.y && now.z === site.cell.z && !planRoof(world, now).problems.length) {
+        return { moved: true, text: `屋根を作れる所 ${cellText(now)} へ ${site.distance}m 歩いた（ブロック ${site.blocks} 個）`, cell: now };
+      }
+      if (gone.timedOut || gone.error) continue;
+    }
+  } finally { try { if (previous) navigator.setMovements(previous); } catch { /* kept */ } }
+  return { moved: false, text: `屋根を作れる所は半径${SITE_RADIUS}mに ${sites.length} か所あったが、歩いて着けなかった` };
+}
+
 export type CampStep = { kind: 'fight' } | { kind: 'wait' } | { kind: 'stop'; outcome: StepOutcome };
 
 export class EndermanCamp {
@@ -53,14 +100,7 @@ export class EndermanCamp {
     if (!this.plan.placements.length) this.phase = 'provoke';
   }
 
-  private worldOf(): RoofWorld {
-    const bot = this.ctx.bot;
-    const read = (x: number, y: number, z: number) => { try { return bot.blockAt?.(new Vec3(x, y, z), false) ?? null; } catch { return null; } };
-    return {
-      solid: (x, y, z) => { const block = read(x, y, z); return block ? block.boundingBox === 'block' : null; },
-      replaceable: (x, y, z) => { const block = read(x, y, z); return !!block && PLACE_REPLACEABLE.has(String(block.name)) && block.name !== 'water' && block.name !== 'lava'; },
-    };
-  }
+  private worldOf(): RoofWorld { return roofWorldOf(this.ctx.bot); }
   private planFrom(cell: Cell): RoofPlan {
     const at = this.target.position;
     const dx = at.x - (cell.x + 0.5), dz = at.z - (cell.z + 0.5), length = Math.hypot(dx, dz);

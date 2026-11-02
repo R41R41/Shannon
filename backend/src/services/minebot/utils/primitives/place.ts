@@ -19,7 +19,9 @@ const MAX_CELLS = 16;
 const ORDER = ['down', 'north', 'south', 'west', 'east', 'up'];
 /** What a block can be put into (as the game: air, water and lava, grass and the like). */
 const REPLACEABLE = new Set(['air', 'cave_air', 'void_air', 'water', 'lava', 'bubble_column', 'short_grass', 'grass', 'tall_grass', 'fern', 'large_fern',
-  'dead_bush', 'seagrass', 'tall_seagrass', 'vine', 'glow_lichen', 'snow', 'fire', 'soul_fire', 'light', 'structure_void']);
+  'dead_bush', 'seagrass', 'tall_seagrass', 'vine', 'glow_lichen', 'snow', 'fire', 'soul_fire', 'light', 'structure_void',
+  // The Nether forests' floor plants (the game lets a block take their place; the warped forest's floor is covered with them, and a roof site there was refused for them):
+  'warped_roots', 'crimson_roots', 'nether_sprouts', 'hanging_roots']);
 
 /** The cells the body's box fills (0.6 wide, 1.8 tall), at its position now. */
 export function bodyCells(position: { x: number; y: number; z: number }): Cell[] {

@@ -56,7 +56,9 @@ cp -r "$WORKTREE/backend/saves/minecraft/structures" "$CODE/backend/saves/minecr
 ( cd "$CODE" && sha1sum backend/src/services/minebot/utils/primitives/fight.ts backend/scripts/minecraft-hunt-probe.ts ) | tee "$OUT/code-sums.txt"
 
 # (b) the server, on a copy of the staged world
-if [ -n "${HUNT_PORT:-}" ]; then PORT=$HUNT_PORT; else
+if [ -n "${HUNT_PORT:-}" ]; then PORT=$HUNT_PORT
+elif [ -n "${LAB_SLOT:-}" ]; then PORT=$(( ${LAB_PORT_FROM:-25570} + LAB_SLOT ))   # the slot's own port (lab-slot.sh exports the number it took): two runs started together cannot pick the same one
+else
   for p in $(seq "${LAB_PORT_FROM:-25570}" 25599); do ss -ltn | grep -q ":$p " || { PORT=$p; break; }; done
 fi
 [ -n "$PORT" ] && [ "$PORT" -ge 25570 ] && [ "$PORT" -le 25599 ] || { log "no free port in 25570-25599"; exit 1; }

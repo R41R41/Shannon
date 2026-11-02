@@ -25,7 +25,7 @@ eye: { from, bearingDeg, flew, to, broke,                     // 既存（契約
        rise,                // end.y - start.y（上が正）
        fate:'dropped'|'shattered'|'unknown',   // 接続の言葉で見た終わり方（落ちた＝ender_eye の item が出た、割れた＝level event 2003）
        drop?:{id, at:{x,y,z}},                 // 落ちた時。pickup target=<id> で拾える
-       arrived: boolean,    // 飛びが 10.5 ブロック未満で止まった（仮説: 要塞が 12 ブロック以内だと目玉は要塞の x・z まで行って止まる。実測で確かめる）
+       arrived: boolean,    // 飛びが 11.9 ブロック未満で止まった＝要塞が 12 ブロック以内で、終点（end）の x・z が要塞の起点（/locate が指す所）。実測 6 回で終点のずれ 0.3 ブロック以内。12.0 ちょうど飛んで上 8.1 なら false（遠い）
        samples, ms,         // 見た位置の数・ミリ秒
        down?: true }        // 横に 1 ブロック未満で沈んだ＝要塞は真下（このとき bearingDeg は 0 で意味が無い）
 ```

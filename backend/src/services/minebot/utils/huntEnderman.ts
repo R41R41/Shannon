@@ -137,6 +137,29 @@ export function planRoof(world: RoofWorld, cell: Cell3, toward?: { x: number; z:
   return plan(order, caps.length);
 }
 
+export interface RoofSite { cell: Cell3; /** Blocks the plan lays. */ blocks: number; /** Horizontal distance from where the body stands. */ distance: number }
+
+/**
+ * The cells round `around` (within `radius` blocks, two levels up or down) where the roof's plan stands: the floor is there, two cells are free over it, and
+ * `planRoof` finds nothing wrong (no step beside it that cannot be filled, no cap that cannot be laid). Fewest blocks first, then nearest. Uneven ground, the
+ * warped forest's floor with its plants and steps, has such cells a few blocks off where the one the body stands on has none.
+ */
+export function roofSites(world: RoofWorld, around: Cell3, radius = 7, toward?: { x: number; z: number }, limit = 5): RoofSite[] {
+  const sites: RoofSite[] = [];
+  for (let dx = -radius; dx <= radius; dx++) for (let dz = -radius; dz <= radius; dz++) {
+    const distance = Math.hypot(dx, dz);
+    if (distance > radius) continue;
+    for (let dy = -2; dy <= 2; dy++) {
+      const cell = { x: around.x + dx, y: around.y + dy, z: around.z + dz };
+      if (world.solid(cell.x, cell.y - 1, cell.z) !== true || world.solid(cell.x, cell.y, cell.z) !== false || world.solid(cell.x, cell.y + 1, cell.z) !== false) continue;
+      const plan = planRoof(world, cell, toward);
+      if (plan.problems.length) continue;
+      sites.push({ cell, blocks: plan.placements.length, distance: Math.round(distance * 10) / 10 });
+    }
+  }
+  return sites.sort((a, b) => a.blocks - b.blocks || a.distance - b.distance).slice(0, limit);
+}
+
 /**
  * The block to build with: the first kind in the order the body spends them that it carries enough of, else the kind it carries most of (told short).
  * Gravity blocks and the like are not in the list.

@@ -1,6 +1,6 @@
 import { Vec3 } from 'vec3';
 import { describe, expect, it } from 'vitest';
-import { ENDERMAN_EYE, looksAtEyes, planRoof, roofBlockFor, type Cell3, type RoofPlan, type RoofWorld } from '../../src/services/minebot/utils/huntEnderman.js';
+import { ENDERMAN_EYE, looksAtEyes, planRoof, roofBlockFor, roofSites, type Cell3, type RoofPlan, type RoofWorld } from '../../src/services/minebot/utils/huntEnderman.js';
 
 // The roof over an enderman hunt (S2, 2026-11-02): a plan that leaves no cell round the body where an enderman (2.9 tall, 0.6 wide) can stand lower than the roof
 // and reach the body, with every block laid against one already standing.
@@ -144,5 +144,45 @@ describe('the block for the roof, and the look', () => {
     expect(looksAtEyes(from, 0, exactPitch - 0.1, enderman)).toBe(false);        // 5.7 degrees off: outside it
     expect(looksAtEyes(from, 0, -0.3, enderman)).toBe(false);                   // looking down 17 degrees: at its feet
     expect(looksAtEyes(from, Math.PI / 2, exactPitch, enderman)).toBe(false);  // turned away
+  });
+});
+
+describe('the Nether forests\' floor plants', () => {
+  it('roots and sprouts are blocks\' to take the place of (as the game: a roof site on the warped forest\'s floor was refused for them in the lab)', async () => {
+    const { PLACE_REPLACEABLE } = await import('../../src/services/minebot/utils/primitives/place.js');
+    for (const name of ['warped_roots', 'crimson_roots', 'nether_sprouts', 'hanging_roots', 'air', 'short_grass']) expect(PLACE_REPLACEABLE.has(name), name).toBe(true);
+    for (const name of ['warped_fungus', 'crimson_fungus', 'nether_wart', 'netherrack', 'warped_nylium']) expect(PLACE_REPLACEABLE.has(name), name).toBe(false);
+  });
+});
+
+describe('roofSites: a cell where the roof can be made, on ground where the body\'s own cell cannot', () => {
+  it('a step beside the body that cannot be filled refuses its cell and those next to it; the flat cell a block off is offered', () => {
+    const base = world({ holes: [[1, -1, 0]] });
+    // The floor cell east of the body is open (a step of one) and holds something a block may not be put over.
+    const w: RoofWorld = { solid: base.solid, replaceable: (x, y, z) => !(x === 1 && y === -1 && z === 0) && base.replaceable(x, y, z) };
+    expect(planRoof(w, { x: 0, y: 0, z: 0 }).problems.length).toBeGreaterThan(0);
+    const sites = roofSites(w, { x: 0, y: 0, z: 0 }, 7);
+    expect(sites.length).toBeGreaterThan(0);
+    // (the step itself, one deep with walls round it, is the cheapest site of all; the flat cell a block to the west is another)
+    expect(sites.some(site => site.cell.x === -1 && site.cell.y === 0 && site.cell.z === 0)).toBe(true);
+    for (const site of sites) expect(planRoof(w, site.cell).problems, `${site.cell.x},${site.cell.z}`).toEqual([]);
+    expect(sites.some(site => site.cell.x === 0 && site.cell.z === 0)).toBe(false);
+  });
+
+  it('fewest blocks first: a cell beside a two-high wall needs fewer than open ground, even when it is farther', () => {
+    const solids: Array<[number, number, number]> = [];
+    for (let z = -2; z <= 2; z++) for (const y of [0, 1]) solids.push([4, y, z]);
+    const w = world({ solids });
+    const sites = roofSites(w, { x: 0, y: 0, z: 0 }, 7);
+    expect(sites[0].blocks).toBeLessThan(11);
+    expect(sites[0].cell.x).toBe(3);
+    expect(sites[0].distance).toBeGreaterThan(1);
+  });
+
+  it('no standing ground in reach: nothing is offered, and the radius is a circle', () => {
+    const nothing: RoofWorld = { solid: () => false, replaceable: () => true };
+    expect(roofSites(nothing, { x: 0, y: 0, z: 0 }, 5)).toEqual([]);
+    const w = world();
+    expect(roofSites(w, { x: 0, y: 0, z: 0 }, 3, undefined, 400).every(site => site.distance <= 3)).toBe(true);
   });
 });

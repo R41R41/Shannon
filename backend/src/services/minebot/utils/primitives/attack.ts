@@ -12,6 +12,8 @@ import { deathLedgerOf } from '../deathLedger.js';
 import type { Progress } from '../../integration/commonFca/continueContract.js';
 import { swimControls, swimPulse } from './swim.js';
 import { markHeadCombat } from '../combatOwner.js';
+import { bestMeleeWeapon } from '../floorReflexes.js';
+import { equipToHandVerified } from '../equipVerified.js';
 import { scanLoadedBlocks } from '../loadedBlockScan.js';
 import { HOVERING_SHOOTERS, ShooterWatch, StrikeGate, strikeHold } from '../huntBlaze.js';
 
@@ -153,6 +155,10 @@ export const HOLD_UNREACHED_MS = 8000;
  * one draw in three leaves it more than a sword's reach above the eye), so a hold that gives up after eight seconds gives up on a blaze that comes down in five.
  */
 export const HOLD_HOVER_PATIENCE_MS = 25_000;
+/** A broken shield is replaced from the pack; a failed try is made again no sooner than this. */
+const SPARE_RETRY_MS = 1_500;
+/** A shield's durability (the game's, for a shield that broke before its use mark was read). */
+const SHIELD_DURABILITY = 336;
 /** A blow counts as landed when the creature is hurt within this long of the swing at it. */
 const LANDED_WITHIN_MS = 600;
 
@@ -188,8 +194,18 @@ async function holdAndStrike(ctx: StepContext, args: AttackArgs): Promise<StepOu
       catch (error) { if (error instanceof StepStopped || /Action interrupted/u.test(String((error as Error)?.message))) throw error; }
     }
   }
+  // A blow struck with an empty hand is one point of a blaze's twenty: when the hand holds no sword or axe, the best one carried goes into it first (one already held stays).
+  let weapon = String(bot.heldItem?.name ?? ''), takenUp = '';
+  if (!/_(sword|axe)$/u.test(weapon)) {
+    const best = bestMeleeWeapon(bot.inventory?.items?.() ?? []);
+    if (best && /_(sword|axe)$/u.test(String(best.name))) {
+      try { const held = await guard(ctx, equipToHandVerified(bot, best as { name: string; type: number; slot?: number }), 5000); if (held?.value.held) { weapon = String(best.name); takenUp = weapon; } }
+      catch (error) { if (error instanceof StepStopped || /Action interrupted/u.test(String((error as Error)?.message))) throw error; }
+    }
+  }
   const shield = bot.inventory?.slots?.[45]?.name === 'shield';
-  const shieldUsed0 = Number(bot.inventory?.slots?.[45]?.durabilityUsed ?? 0);
+  // The shield's wear is told across swaps: what each shield that broke had left when it was put on is counted as worn, and the one on the arm by its own mark.
+  let shieldUsed0 = Number(bot.inventory?.slots?.[45]?.durabilityUsed ?? 0), retiredWear = 0, spares = 0, spareTriedAt = 0;
   const healthBefore = Number(bot.health ?? 20);
   const before = new Set(Object.keys(bot.entities ?? {}).map(Number));
   const struck = new Set<number>(), killed: string[] = [], swungAt = new Map<number, number>();
@@ -205,7 +221,20 @@ async function holdAndStrike(ctx: StepContext, args: AttackArgs): Promise<StepOu
   const endEngagement = beginEngagement(host, [wantedName ?? '*']);
   const endOwner = markHeadCombat(host, 'fight', [wantedName ?? '*'], Date.now(), wantedId ?? undefined);
   const watch = new ShooterWatch(bot);
-  const raise = () => { if (shield && !raised) { try { bot.activateItem(true); raised = true; } catch { /* no shield */ } } };
+  const raise = () => { if (shield && !raised && bot.inventory?.slots?.[45]?.name === 'shield') { try { bot.activateItem(true); raised = true; } catch { /* no shield */ } } };
+  /** A shield that broke is replaced from the pack at once: the habit that wears armour waits for a body that is free, and a hold is not. */
+  const replaceBroken = async () => {
+    if (!shield || bot.inventory?.slots?.[45]?.name === 'shield' || Date.now() - spareTriedAt < SPARE_RETRY_MS) return;
+    spareTriedAt = Date.now();
+    const spare = findItem(bot, 'shield');
+    if (!spare) return;
+    raised = false;
+    try {
+      await guard(ctx, Promise.resolve(bot.equip(spare, 'off-hand')), 3000);
+      if (bot.inventory?.slots?.[45]?.name === 'shield') { retiredWear += SHIELD_DURABILITY - shieldUsed0; shieldUsed0 = Number(bot.inventory.slots[45].durabilityUsed ?? 0); spares++; }
+    } catch (error) { if (error instanceof StepStopped || /Action interrupted/u.test(String((error as Error)?.message))) throw error; }
+    raise();
+  };
   const lower = () => { if (raised) { try { bot.deactivateItem(); } catch { /* lowered */ } raised = false; } };
   const started = Date.now();
   // A blaze spawner within 8 blocks: the next blaze comes when the spawner draws it (10 to 40 s apart), so nothing in reach is the camp's work and the hold waits its seconds out.
@@ -218,6 +247,7 @@ async function holdAndStrike(ctx: StepContext, args: AttackArgs): Promise<StepOu
     try { bot.clearControlStates?.(); bot.pathfinder?.setGoal?.(null); } catch { /* standing */ }
     raise();
     for (const until = started + seconds * 1000; Date.now() < until;) {
+      await replaceBroken();
       const eyes = bot.entity.position.offset(0, 1.62, 0);
       // Within reach by the cheap distance first; then the eye's line (the sight probe's own computation).
       const near = (Object.values(bot.entities ?? {}) as any[]).filter(fits)
@@ -257,7 +287,9 @@ async function holdAndStrike(ctx: StepContext, args: AttackArgs): Promise<StepOu
   const lost = Math.max(0, Math.round((healthBefore - Number(bot.health ?? healthBefore)) * 10) / 10);
   // The shield's wear in this hold (a blocked fireball costs it 6 of its 336), or that it broke; and the blows held back for a shot.
   const shieldNow = bot.inventory?.slots?.[45];
-  const wear = shield && shieldNow?.name !== 'shield' ? '・盾が壊れた' : shield && Number(shieldNow?.durabilityUsed ?? 0) > shieldUsed0 ? `・盾 −${Number(shieldNow.durabilityUsed) - shieldUsed0}` : '';
+  const wornTotal = retiredWear + (shieldNow?.name === 'shield' ? Math.max(0, Number(shieldNow.durabilityUsed ?? 0) - shieldUsed0) : 0);
+  const sparesNote = spares ? `・予備に替えた×${spares}` : '';
+  const wear = shield && shieldNow?.name !== 'shield' ? `・盾が壊れた${sparesNote}` : shield && wornTotal > 0 ? `・盾 −${wornTotal}${sparesNote}` : shield && spares ? sparesNote : '';
   const counts = `${blows}回打った・${landed}回当たった・倒した ${killed.length}${killed.length ? `（${killed.join('・')}）` : ''}・受けた傷 ${lost}${wear}${gate.count ? `・見送り ${gate.count}` : ''}`;
   const drops = (Object.values(bot.entities ?? {}) as any[]).filter(entity => entity?.name === 'item' && !before.has(entity.id)
     && entity.position.distanceTo(bot.entity.position) <= 8);
@@ -278,7 +310,7 @@ async function holdAndStrike(ctx: StepContext, args: AttackArgs): Promise<StepOu
       if (spawner) spawnerNote = `、湧き場 (${spawner.position.x},${spawner.position.y},${spawner.position.z}) まで ${Math.round(spawner.distance * 10) / 10}m`;
     } catch { /* unread */ }
   }
-  return { ok: true, progress: struckProgress(), text: `${seconds}秒その場で構えた${shield ? '（盾）' : ''}: ${counts}（被弾 ${hurtTaken}回）`
+  return { ok: true, progress: struckProgress(), text: `${seconds}秒その場で構えた${shield ? '（盾）' : ''}: ${counts}（被弾 ${hurtTaken}回）${takenUp ? `、${takenUp} を手に持った` : ''}`
     + `、落とし物 ${dropNames.length ? `${dropNames.join(' ')}（pickup で拾う）` : 'なし'}${spawnerNote}${none}` };
 }
 

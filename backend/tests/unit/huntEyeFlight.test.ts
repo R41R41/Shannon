@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { Vec3 } from 'vec3';
 import { describe, expect, it } from 'vitest';
-import { bearingOf, compassOf, flightVector, watchEyeFlight, EYE_BREAK_EVENT } from '../../src/services/minebot/utils/huntEyeFlight.js';
+import { bearingOf, compassOf, eyeReportOf, flightVector, watchEyeFlight, EYE_ARRIVED_BELOW, EYE_BREAK_EVENT } from '../../src/services/minebot/utils/huntEyeFlight.js';
 import { use } from '../../src/services/minebot/utils/primitives/use.js';
 import { StepStopped, type StepContext } from '../../src/services/minebot/utils/primitives/common.js';
 
@@ -68,6 +68,21 @@ describe('the eye flight, as numbers', () => {
     expect(diagonal.unit!.z).toBeCloseTo(-0.70711, 4);
     expect(diagonal.bearingDeg).toBeCloseTo(45, 2);
     expect(flightVector({ x: 0, y: 70, z: 0 }, { x: 0.4, y: 62, z: 0.3 }).unit).toBeNull();
+  });
+});
+
+describe('arrived: the eye reached the stronghold\'s own x and z', () => {
+  const flightOf = (flat: number, rise: number) => {
+    const unit = { x: 0, z: 1 };
+    return { id: 1, origin: { x: 0.37, y: 200, z: 0.61 }, start: { x: 0.37, y: 200.9, z: 0.61 }, end: { x: 0.37, y: 200.9 + rise, z: 0.61 + flat }, flat, rise, unit, bearingDeg: 180, samples: 20, ms: 4000,
+      gone: true, fate: 'dropped' as const, overhead: false };
+  };
+  const from = { x: 0, y: 200, z: 0 };
+  it('lab: the flights of 4.2 to 10.5 blocks sank (arrived), the ones of 12.0 that rose 8.1 did not', () => {
+    for (const flat of [4.2, 8.5, 8.9, 9.6, 10.5, 11.5]) expect(eyeReportOf(flightOf(flat, -10) as never, from)!.arrived, `flat ${flat}`).toBe(true);
+    for (const flat of [11.95, 12, 12.04]) expect(eyeReportOf(flightOf(flat, 8.1) as never, from)!.arrived, `flat ${flat}`).toBe(false);
+    expect(EYE_ARRIVED_BELOW).toBeGreaterThan(10.5);
+    expect(EYE_ARRIVED_BELOW).toBeLessThan(12);
   });
 });
 

@@ -160,27 +160,41 @@ async function blazeCamp(kind: 'hold' | 'fight', effects: string[], note: (text:
   const seconds = timedSeconds || 240;
   await ask('difficulty normal'); await ask('time set midnight'); await ask('weather clear');
   await ask('execute in minecraft:the_nether run kill @e[type=minecraft:blaze]');
-  await equip({ diamond_sword: 1, cooked_beef: 24, golden_apple: 3, cobblestone: 64 }, { armor: 'iron', shield: true, effects });
+  await equip({ diamond_sword: 1, shield: 2, cooked_beef: 24, golden_apple: 3, cobblestone: 64 }, { armor: 'iron', shield: true, effects });
   await placeActor('the_nether', stand[0], stand[1], stand[2], 24);
   const start = Date.now();
   let rods0 = await countServer('blaze_rod');
   const metrics = { acts: 0, okActs: 0, reflexStops: 0, blazesKilled: 0, blows: 0, landed: 0, held: 0, hpLost: 0, lowestHp: 20, rodsFromPickup: 0, standDrift: 0, shieldWear: 0, deathsHere: 0, burnedActs: 0 };
   const shield0 = shieldUsed();
   const spawnerNear = sites.blazeSpawner as number[] | undefined;
+  let failStreak = 0;
+  // The planner asks where to camp: find-structure blaze_spawner names the spawner and the cells within three blocks of it that have no edge and no fire.
+  let campCell: number[] | null = null;
+  if (near) {
+    const found = await runSkill('find-structure', { structureType: 'blaze_spawner' }, 20);
+    const answer = String(found.receipt?.result ?? '');
+    note(`find-structure blaze_spawner: ${answer.slice(0, 420)}`);
+    const first = /野営向きの足場[^:]*: \((-?\d+), (-?\d+), (-?\d+)\)/u.exec(answer);
+    if (first) campCell = [Number(first[1]), Number(first[2]), Number(first[3])];
+  }
   while (Date.now() - start < seconds * 1000 && !disconnected) {
     if (Number(actor.health) <= 0) break;
     // The planner's way to a camp: `go` to the spawner with a range, then hold; or (the staged stand) back to a cell the site file names, 4 to 6 blocks off.
-    const there = near && spawnerNear ? { do: 'go', to: { x: spawnerNear[0], y: spawnerNear[1], z: spawnerNear[2] }, range: 2.6, seconds: 20 } : { do: 'go', to: { x: stand[0], y: stand[1], z: stand[2] }, range: 1, seconds: 20 };
+    const there = near && campCell ? { do: 'go', to: { x: campCell[0], y: campCell[1], z: campCell[2] }, range: 0.6, seconds: 20 }
+      : near && spawnerNear ? { do: 'go', to: { x: spawnerNear[0], y: spawnerNear[1], z: spawnerNear[2] }, range: 2.6, seconds: 20 } : { do: 'go', to: { x: stand[0], y: stand[1], z: stand[2] }, range: 1, seconds: 20 };
     const hands = kind === 'hold'
       ? [...(near ? [there] : []), { do: 'attack', target: 'blaze', hold: true, seconds: 25 }, { do: 'pickup', range: 8 }, ...(near ? [] : [there])]
       : [...(near ? [there] : []), { do: 'fight', target: 'blaze', seconds: 25, retreatHp: 8 }, { do: 'pickup', range: 8 }, ...(near ? [] : [there])];
     const hpBefore = Number(actor.health);
     const run = await act(`${kind}#${metrics.acts + 1}`, hands, 70, { accept: ['blaze'] });
     metrics.acts++; if (run.ok) metrics.okActs++;
+    // A planner that is told a camp cell is unsafe does not ask for it twenty times in a second: it waits, and after five in a row it gives the camp up.
+    if (run.ok) failStreak = 0; else { failStreak++; await sleep(2000); if (failStreak >= 5) { note(`${failStreak} acts in a row failed: the camp is lost (${(run.lines[0] ?? '').slice(0, 140)})`); break; } }
     if (run.stoppedBy === 'reflex') metrics.reflexStops++;
     const text = run.lines.join(' ');
     metrics.blazesKilled += (text.match(/倒した (\d+)/gu) ?? []).reduce((sum, hit) => sum + Number(hit.replace(/\D+/gu, '')), 0) + (text.match(/fight 済 blaze/gu) ?? []).length;
-    metrics.blows += (text.match(/(\d+)回打った/gu) ?? []).reduce((sum, hit) => sum + Number(hit.replace(/\D+/gu, '')), 0);
+    metrics.blows += (text.match(/(\d+)回打った/gu) ?? []).reduce((sum, hit) => sum + Number(hit.replace(/\D+/gu, '')), 0)
+      + (text.match(/与えた打撃 (\d+)/gu) ?? []).reduce((sum, hit) => sum + Number(hit.replace(/\D+/gu, '')), 0);
     metrics.held += (text.match(/見送り (\d+)/gu) ?? []).reduce((sum, hit) => sum + Number(hit.replace(/\D+/gu, '')), 0);
     metrics.hpLost += Math.max(0, hpBefore - Number(actor.health));
     metrics.lowestHp = Math.min(metrics.lowestHp, Number(actor.health));
@@ -310,7 +324,41 @@ async function endermanHunt(where: 'platform' | 'warped', note: (text: string) =
     if (Number(actor.health) < 10) { note(`health ${actor.health}: stopped before enderman ${i + 1}`); break; }
     const angle = (i * 70 + 25) * Math.PI / 180, distance = 13 + (i % 3) * 3;
     const ex = stand[0] + Math.round(Math.cos(angle) * distance), ez = stand[2] + Math.round(Math.sin(angle) * distance);
-    await ask(`execute in minecraft:the_nether run summon minecraft:enderman ${ex + 0.5} ${y + 1} ${ez + 0.5}`);
+    // On the ground there (the warped forest is not flat): the first solid cell with two open cells over it, within a few blocks of the body's own height.
+    const open = (block: any) => block && (block.name === 'air' || block.name === 'cave_air');
+    const groundAt = (gx: number, gz: number): number | null => {
+      let best: number | null = null;
+      for (let gy = y + 12; gy >= y - 12; gy--) {
+        const floor = actor.blockAt(new Vec3(gx, gy, gz)), head1 = actor.blockAt(new Vec3(gx, gy + 1, gz)), head2 = actor.blockAt(new Vec3(gx, gy + 2, gz)), head3 = actor.blockAt(new Vec3(gx, gy + 3, gz));
+        if (floor && floor.boundingBox === 'block' && !floor.name.includes('leaves') && open(head1) && open(head2) && open(head3) && (best === null || Math.abs(gy + 1 - y) < Math.abs(best - y))) best = gy + 1;
+      }
+      return best;
+    };
+    // The planner hunts the ones it can see: the eye's line from the body to the enderman's eyes (2.55 over its feet) is clear of solid blocks (the first two metres, where the roof will be, are not counted).
+    const seenFromBody = (gx: number, gy: number, gz: number): boolean => {
+      const from = actor.entity.position.offset(0, 1.62, 0), to = new Vec3(gx + 0.5, gy + 2.55, gz + 0.5), length = from.distanceTo(to), steps = Math.ceil(length / 0.4);
+      for (let k = 1; k < steps; k++) {
+        if (k * 0.4 < 2) continue;
+        const point = from.plus(to.minus(from).scaled(k / steps)), block = actor.blockAt(point);
+        if (!block || block.boundingBox === 'block') return false;
+      }
+      return true;
+    };
+    let spot: { x: number; z: number; y: number } | null = null;
+    if (where === 'warped') {
+      for (let attempt = 0; attempt < 36 && !spot; attempt++) {
+        const a = (i * 70 + 25 + attempt * 41) * Math.PI / 180, d = 13 + ((attempt * 5) % 8);
+        const gx = stand[0] + Math.round(Math.cos(a) * d), gz = stand[2] + Math.round(Math.sin(a) * d), gy = groundAt(gx, gz);
+        if (gy !== null && seenFromBody(gx, gy, gz)) spot = { x: gx, z: gz, y: gy };
+      }
+      if (!spot) { note(`no open ground in the body's sight at 13 to 20 blocks round ${stand[0]},${stand[2]} (36 tries): enderman ${i + 1} is skipped`); continue; }
+    } else {
+      for (const [jx, jz] of [[0, 0], [2, 0], [0, 2], [-2, 0], [0, -2]] as Array<[number, number]>) {
+        const found = groundAt(ex + jx, ez + jz);
+        if (found !== null) { spot = { x: ex + jx, z: ez + jz, y: found }; break; }
+      }
+    }
+    await ask(`execute in minecraft:the_nether run summon minecraft:enderman ${(spot?.x ?? ex) + 0.5} ${spot?.y ?? y + 1} ${(spot?.z ?? ez) + 0.5}`);
     await sleep(1500);
     const pearlsBefore = await countServer('ender_pearl'), blocksBefore = await countServer('cobblestone');
     const hpBefore = Number(actor.health);

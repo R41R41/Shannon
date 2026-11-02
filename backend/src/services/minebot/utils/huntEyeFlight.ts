@@ -236,16 +236,20 @@ export interface EyeReport {
   /** dropped (an item of the eye was seen to fall: `drop` says where), shattered (the level event was seen), unknown (neither was seen). */
   fate: EyeFate;
   drop?: { id: number; at: Point3 };
-  /** The flight was shorter than the 12 blocks an eye flies toward a stronghold farther than that: it reached the stronghold's own x and z, and `end` is there. */
+  /**
+   * The flight was shorter than the 12 blocks an eye flies toward a stronghold farther than that: the stronghold is within 12 blocks, the eye reached its x and z, and `end` is
+   * there (lab, 6 throws from 0.7 to 10.5 blocks: the end was within 0.3 of what /locate says; 4 throws from 15 to 49: all exactly 12.0 and a rise of 8.1). That place is the
+   * stronghold's START (what /locate and the eye both point at), not its portal room, which lies tens of blocks off (the lab's was 54).
+   */
   arrived: boolean;
   samples: number; ms: number;
   /** The eye flew less than a block sideways and sank: the stronghold is right below `end` (the head's `down`; `bearingDeg` is then 0 and means nothing). */
   down?: true;
 }
 
-/** An eye flies 12 blocks toward a stronghold farther than that, and swings about that point: a flight clearly shorter reached the stronghold itself. */
+/** An eye flies 12 blocks toward a stronghold farther than that (lab: 12.0 every time, 20 of 20); a flight shorter than that reached the stronghold's own x and z. */
 export const EYE_FAR_FLIGHT = 12;
-export const EYE_ARRIVED_BELOW = 10.5;
+export const EYE_ARRIVED_BELOW = 11.9;
 
 /** The act's report of a flight that has a direction, or null (a flight right above the stronghold has none). */
 export function eyeReportOf(flight: EyeFlight, from: Cell): EyeReport | null {
