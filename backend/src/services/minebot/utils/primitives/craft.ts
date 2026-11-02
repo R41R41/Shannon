@@ -3,6 +3,7 @@ import { feetCell, relativeWords, type Cell } from '../localMap.js';
 import { cellText, eyeDistance, guard, inventoryCount, stopped, StepStopped, USE_REACH, wait, type StepContext, type StepOutcome } from './common.js';
 import { withProgress } from './progressUnits.js';
 import { craftEvents } from './craftEvents.js';
+import { withWoodForms } from './woodRecipes.js';
 
 /** Between two rounds of a craft in the hand the server's answer is let settle this long (see the loop below). */
 const ROUND_SETTLE_MS = 250;
@@ -63,7 +64,7 @@ async function craftItem(ctx: StepContext, args: CraftArgs): Promise<StepOutcome
   if (!item) return stopped(bot, 'invalid_item', `${args.item} は物の名前ではない`);
   const count = Math.max(1, Math.min(64 * 9, Math.round(args.count ?? 1)));
   const table = tableInReach(bot);
-  const all: any[] = [...(bot.recipesAll?.(item.id, null, null) ?? []), ...(table ? bot.recipesAll?.(item.id, null, table) ?? [] : [])];
+  const all: any[] = withWoodForms(bot, args.item, [...(bot.recipesAll?.(item.id, null, null) ?? []), ...(table ? bot.recipesAll?.(item.id, null, table) ?? [] : [])]);
   if (!all.length) {
     const needsTable = (bot.recipesAll?.(item.id, null, true) ?? []).length > 0;
     if (needsTable) {
