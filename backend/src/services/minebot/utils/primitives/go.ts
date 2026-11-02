@@ -87,7 +87,9 @@ export const GO_AVOID_COST = 20;
  */
 export const GO_REDO_COST = 60;
 /** The most times one go walks the part of a way a search found before its time ran out (each must come 2 m nearer). */
-export const GO_PARTIAL_WALKS = 6;
+export const GO_PARTIAL_WALKS = 12;
+/** A search of the road is cut after this long when the caller gave no `searchMs`: the part of the way it found (nearest the goal) is walked and the search goes on from there (S2, 2026-11-03: a Nether walk of 196 m in 11 minutes was 5 s searches each ending as search_timeout; S4's lab: the best part found in the first seconds is as good as the one at five). */
+const SEARCH_SLICE_MS = 1500;
 /**
  * Run 46 (hold 4, q15 go at the amethyst-side deepslate: 120 s, 50 digs refused, a 3 m box): the exposure guard refuses a dig that would open a way to the body for a
  * hostile behind the rock (a zombie 8 to 16 m off), the route is drawn at the next cell, which the guard refuses too, and so on. A cell refused is closed to the routes for as long as
@@ -688,6 +690,8 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   const deadline = Math.min(ctx.deadline, startedAt + (args.seconds ?? GO_DEFAULTS.seconds) * 1000);
   const rule = digRuleOf(bot.registry, args.canDig);
   const searchCap = args.searchMs ?? 5000;
+  /** What one search of the road is given (the stop says this long). */
+  const searchSlice = args.searchMs === undefined ? Math.min(searchCap, SEARCH_SLICE_MS) : searchCap;
   const place = placeNamesOf(bot, args.canPlace);
   const state: GoState = { steps: 0, dug: 0, placed: 0, redraws: 0, veto: null, refused: 0, exposed: new Map(), avoid: new Set(), dugCells: new Set(), laidCells: new Set() };
   const start = feetCell(bot)!;
@@ -1004,7 +1008,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   const plan = async (movements: any, goal: any, ms: number, track = true): Promise<Plan> => {
     toolKept.clear();
     const searchStarted = Date.now();
-    const generator = nav.getPathFromTo(movements, bot.entity.position, goal, { timeout: Math.max(300, Math.min(ms, searchCap)) });
+    const generator = nav.getPathFromTo(movements, bot.entity.position, goal, { timeout: Math.max(300, Math.min(ms, searchSlice)) });
     let result = generator.next().value?.result ?? { status: 'noPath', path: [] };
     // The search answers a tick (40 ms) at a time while it is still going; here it is let finish (its own time bounds it), the body's other work
     // (its packets, its physics, the act's watch) getting its turn between the ticks.
@@ -1036,7 +1040,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
     const tip = found.path.length ? found.path[found.path.length - 1] : null;
     const tipCell = tip ? nodeCell(tip) : null;
     const reach = tipCell ? `、${cellText(tipCell)} まで・あと ${Math.hypot(tipCell.x - aim.x, tipCell.y - aim.y, tipCell.z - aim.z).toFixed(0)}m` : '';
-    return fail('search_timeout', `道探しが ${(searchCap / 1000).toFixed(searchCap < 1000 ? 2 : 0)} 秒で終わらない（道の有無は不明。${found.visited.toLocaleString('en-US')} マス調べた${reach}）`,
+    return fail('search_timeout', `道探しが ${(searchSlice / 1000).toFixed(searchSlice < 1000 ? 2 : searchSlice % 1000 ? 1 : 0)} 秒で終わらない（道の有無は不明。${found.visited.toLocaleString('en-US')} マス調べた${reach}）`,
       '10m 以内の中継点へ go か、dig と walk の階段・縦穴で');
   };
 
@@ -1318,7 +1322,7 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
         // not walked, and the stop said search_timeout (道探しが終わらない). It is the limit: said as such, with what is left and what the part needs.
         const over = tip ? budgetOf(countOf(found), found.places) : null;
         if (over && partialWalks < GO_PARTIAL_WALKS) {
-          return fail(over.code, `道探しは ${(searchCap / 1000).toFixed(searchCap < 1000 ? 2 : 0)} 秒で終わらず、見つかった途中までの道（${cellText(nodeCell(tip!))} まで）でも${over.text.replace(/^この道は/u, '')}`,
+          return fail(over.code, `道探しは ${(searchSlice / 1000).toFixed(searchSlice < 1000 ? 2 : searchSlice % 1000 ? 1 : 0)} 秒で終わらず、見つかった途中までの道（${cellText(nodeCell(tip!))} まで）でも${over.text.replace(/^この道は/u, '')}`,
             over.code === 'limit_dig' ? 'maxDig を増やして出し直す（下りは 1 段に 2 前後掘る）' : 'maxPlace を増やして出し直す');
         }
         if (tip && partialWalks < GO_PARTIAL_WALKS) {
