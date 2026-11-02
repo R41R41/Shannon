@@ -168,6 +168,8 @@ export class StreamEar {
   private pendingCount = 0;
   private lastDiscoveryAt = Number.NEGATIVE_INFINITY;
   private discoveryHoldUntil = 0;
+  /** A YOUTUBE_LIVE_URL that names an ended video was said once (the setting is passed over, not taken as this stream ending). */
+  private staleLiveUrlTold = false;
   private headRefusal: string | null = null;
   /** The same video refused again and again with STREAM_VIDEO_MISMATCH. */
   private mismatch: { streamId: string; videoId: string; count: number } | null = null;
@@ -380,12 +382,21 @@ export class StreamEar {
    */
   private async discover(targetVideoId?: string): Promise<Attachment | 'ended' | null> {
     try {
-      const fromUrl = targetVideoId ?? videoIdOfUrl(this.options.liveUrl);
+      // Only the video this stream was started for ends it. YOUTUBE_LIVE_URL is a standing setting: a video of an earlier stream left
+      // there is passed over for the channel's live broadcast, never taken as this stream having ended.
+      let fromUrl = targetVideoId ?? videoIdOfUrl(this.options.liveUrl);
+      let details = fromUrl ? await this.youtube.videoDetails(fromUrl) : null;
+      if (fromUrl && details?.actualEndTime) {
+        if (targetVideoId) return 'ended';
+        if (!this.staleLiveUrlTold) this.log.warn(`YOUTUBE_LIVE_URL names a video that has ended (${fromUrl}); looking for the channel's live broadcast instead`);
+        this.staleLiveUrlTold = true;
+        fromUrl = null;
+        details = null;
+      }
       const broadcast = fromUrl ? null : await this.youtube.findActiveBroadcast();
       const videoId = fromUrl ?? broadcast?.videoId;
       if (!videoId) return null;
-      const details = await this.youtube.videoDetails(videoId);
-      if (fromUrl && details?.actualEndTime) return 'ended';
+      if (!details) details = await this.youtube.videoDetails(videoId);
       const liveChatId = details?.liveChatId ?? broadcast?.liveChatId;
       if (!liveChatId) return null;
       return {

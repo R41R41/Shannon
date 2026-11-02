@@ -135,6 +135,8 @@ class FakeYoutube {
   chatId: string | undefined = 'chat-1';
   actualStartTime: string | undefined = at(0);
   actualEndTime: string | undefined;
+  /** Videos of earlier streams that have ended, whatever the current one says (the id the request names). */
+  endedVideos = new Set<string>();
   /** Errors for the next list calls: [status, reason]. */
   listErrors: Array<[number, string]> = [];
   listCalls = 0;
@@ -252,7 +254,7 @@ class FakeYoutube {
     if (route === '/videos') {
       const videoError = this.videoErrors.shift();
       if (videoError) return googleError(videoError[0], videoError[1]);
-      return json(200, { items: [{ id: query.id, snippet: { title: '配信のタイトル', channelId: 'UCowner' }, liveStreamingDetails: { ...(this.chatId ? { activeLiveChatId: this.chatId } : {}), actualStartTime: this.actualStartTime, actualEndTime: this.actualEndTime } }] });
+      return json(200, { items: [{ id: query.id, snippet: { title: '配信のタイトル', channelId: 'UCowner' }, liveStreamingDetails: { ...(this.chatId ? { activeLiveChatId: this.chatId } : {}), actualStartTime: this.actualStartTime, actualEndTime: this.endedVideos.has(String(query.id)) ? at(-3600) : this.actualEndTime } }] });
     }
     if (route === '/liveChat/messages/stream') {
       this.streamCalls += 1;
@@ -1517,18 +1519,27 @@ describe('終了済みの動画と、チャットが知らせない終わり', (
     }
   });
 
-  it('初めから終わっている動画で activeLiveChatId が無くても、待ち続けずに頭へ終わりを知らせる（指定の動画・YOUTUBE_LIVE_URL）', async () => {
-    for (const [options, startOptions] of [[{}, { targetVideoId: TARGET }], [{ liveUrl: 'https://youtu.be/abcdefghijk' }, {}]] as const) {
-      const w = world(options);
-      w.head.start(startOptions);
-      w.youtube.chatId = undefined;
-      w.youtube.actualEndTime = at(50);
-      await w.run(() => w.head.ended.length === 1);
-      expect(w.head.ended).toEqual([{ streamId: 'st-1', ended: true }]);
-      expect(w.head.stream?.phase).toBe('ended');
-      expect(w.head.broadcasts).toEqual([]);
-      expect(w.youtube.calls.some(call => call.path.startsWith('/liveChat') || call.path === '/liveBroadcasts')).toBe(false);
-    }
+  it('この配信のために指定された動画が初めから終わっていれば、activeLiveChatId が無くても待ち続けずに頭へ終わりを知らせる', async () => {
+    const w = world();
+    w.head.start({ targetVideoId: TARGET });
+    w.youtube.chatId = undefined;
+    w.youtube.actualEndTime = at(50);
+    await w.run(() => w.head.ended.length === 1);
+    expect(w.head.ended).toEqual([{ streamId: 'st-1', ended: true }]);
+    expect(w.head.stream?.phase).toBe('ended');
+    expect(w.head.broadcasts).toEqual([]);
+    expect(w.youtube.calls.some(call => call.path.startsWith('/liveChat') || call.path === '/liveBroadcasts')).toBe(false);
+  });
+
+  it('YOUTUBE_LIVE_URL に前の配信の終わった動画が残っていても、この配信を終わらせず、チャンネルの今のライブを探す（一度だけ知らせる）', async () => {
+    const w = world({ liveUrl: 'https://youtu.be/abcdefghijk' });
+    w.head.start({});
+    w.youtube.endedVideos.add('abcdefghijk');
+    await w.run(() => w.clock() - START >= 60_000);
+    expect(w.head.ended).toEqual([]);
+    expect(w.head.stream?.phase).not.toBe('ended');
+    expect(w.youtube.calls.some(call => call.path === '/liveBroadcasts')).toBe(true);
+    expect(w.logs.filter(line => line.includes('YOUTUBE_LIVE_URL names a video that has ended'))).toHaveLength(1);
   });
 
   it('開始が見えていない動画で chatId も無ければ、これまでどおり待つ（終わりを作らない）', async () => {
