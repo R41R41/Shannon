@@ -736,9 +736,18 @@ async function blazeLaneBuild(note: (text: string) => void, options: { holdSecon
       const group = placements.slice(i, i + groupSize);
       const head = group[0];
       // a floor cell within reach of the group: for the lid and the roof, the feet cell of the spawner's layer under the cell; for the rest, the waiting cell
-      const floor = head.part === 'lid' || head.part === 'roof' ? { x: head.at.x, y: spawnerCell.y, z: head.at.z } : { x: wait[0], y: wait[1], z: wait[2] };
+      // (the scripted head's own reading of the map: the nearest cell a body can stand in within two cells of the target, the waiting cell when none is known)
+      const airLike = (x: number, y: number, z: number) => { const b = actor.blockAt(new Vec3(x, y, z)); return !!b && b.boundingBox !== 'block' && !['lava', 'fire', 'water'].includes(b.name); };
+      const standable = (x: number, y: number, z: number) => { const b = actor.blockAt(new Vec3(x, y - 1, z)); return airLike(x, y, z) && airLike(x, y + 1, z) && !!b && b.boundingBox === 'block' && !['magma_block'].includes(b.name); };
+      let floor: { x: number; y: number; z: number } = { x: wait[0], y: wait[1], z: wait[2] }, bestD = Infinity;
+      for (let dx = -2; dx <= 2; dx++) for (let dz = -2; dz <= 2; dz++) for (let dy = -3; dy <= 0; dy++) {
+        const x = head.at.x + dx, y = head.at.y + dy, z = head.at.z + dz;
+        if (!standable(x, y, z) || (x === head.at.x && z === head.at.z && y >= head.at.y - 1 && y <= head.at.y)) continue;
+        const d = Math.hypot(dx, dy + 1, dz);
+        if (d < bestD) { bestD = d; floor = { x, y, z }; }
+      }
       await sleep(thinkMs);
-      const run = await act(`build#${++acts}`, [{ do: 'go', to: floor, range: 2.5, seconds: 12, onFail: 'continue' },
+      const run = await act(`build#${++acts}`, [{ do: 'go', to: floor, range: 0.8, seconds: 12, onFail: 'continue' },
         ...group.map(p => ({ do: 'place', at: [p.at], block: 'cobblestone', onFail: 'continue' }))], 45, { accept: ['blaze'] });
       const text = run.lines.join(' ');
       built += group.length; failedCells += (text.match(/置けない|止まった/gu) ?? []).length;
