@@ -611,3 +611,84 @@ describe('shoot at a crystal', () => {
     expect(outcome.text).toMatch(/放さなかった/u);
   }, 15_000);
 });
+
+import { clutchWanted, runFallClutch, CLUTCH_REACH, type FallMemory } from '../../src/services/minebot/utils/fallClutch.js';
+
+describe('the water-bucket clutch of a fall in the End', () => {
+  const BUCKET = { name: 'water_bucket', type: 5, count: 1 };
+  const until = async (check: () => boolean, ms = 2500) => { const end = Date.now() + ms; while (!check() && Date.now() < end) await new Promise(resolve => setTimeout(resolve, 20)); };
+  /** A body over a floor of end stone (its top at y 64), in the End, in the air and falling. */
+  function falling(options: { y?: number; vy?: number; items?: any[]; floor?: string | null; dimension?: string } = {}) {
+    const world: World = new Map();
+    if (options.floor !== null) for (let x = -3; x <= 3; x++) for (let z = -3; z <= 3; z++) world.set(key(x, 63, z), options.floor ?? 'end_stone');
+    const f = fixture({ phase: DRAGON_PHASE.holdingPattern, at: new Vec3(0.5, options.y ?? 100, 0.5), world });
+    f.self.onGround = false; f.self.velocity = new Vec3(0, options.vy ?? -1.6, 0);
+    f.bot.inventory = { items: () => options.items ?? [BUCKET], slots: [] };
+    if (options.dimension) f.bot.game.dimension = options.dimension;
+    return f;
+  }
+  /** The body comes down half a block every 15 ms to the floor, as a falling body does tick by tick; the bucket pours water into the cell over the floor, and takes it up again. */
+  function withBucket(f: ReturnType<typeof falling>) {
+    const { bot, self, world } = f;
+    const seen = { uses: 0, rotations: [] as number[], pourY: Number.NaN };
+    bot._client = { write: vi.fn((name: string, data: any) => { if (name === 'use_item') seen.rotations.push(data.rotation.y); }) };
+    bot.look = vi.fn((_yaw: number, pitch: number) => { self.pitch = pitch; });
+    bot.heldItem = { name: 'diamond_sword' };
+    bot.equip = vi.fn(async () => { bot.heldItem = { name: 'water_bucket' }; });
+    bot.activateItem = vi.fn(() => {
+      bot._client.write('use_item', { rotation: { x: 0, y: 0 } });
+      seen.uses++;
+      if (seen.uses === 1) { seen.pourY = self.position.y; bot.heldItem = { name: 'bucket' }; world.set(key(0, 64, 0), 'water'); }
+      else { bot.heldItem = { name: 'water_bucket' }; world.delete(key(0, 64, 0)); }
+    });
+    const timer = setInterval(() => { if (self.position.y > 64) self.position.y = Math.max(64, self.position.y - 0.5); else { self.onGround = true; self.velocity = new Vec3(0, 0, 0); } }, 15);
+    return { seen, stop: () => clearInterval(timer) };
+  }
+  it('starts for a long fall over a floor with a bucket of water, and says how far and how much', () => {
+    expect(clutchWanted(falling().bot, {}, 1000)).toMatch(/落ちて36ブロック（地面まであと36、受ける被害およそ33）/u);
+  });
+  it('does not start for a short fall, a slow one, one with no bucket, one into water or the void, one outside the End, or twice within a few seconds', () => {
+    expect(clutchWanted(falling({ y: 70 }).bot, {}, 1000)).toBeNull(); // 6 blocks: 3 of damage
+    expect(clutchWanted(falling({ vy: -0.4 }).bot, {}, 1000)).toBeNull();
+    expect(clutchWanted(falling({ items: [] }).bot, {}, 1000)).toBeNull();
+    expect(clutchWanted(falling({ floor: 'water' }).bot, {}, 1000)).toBeNull();
+    expect(clutchWanted(falling({ floor: null }).bot, {}, 1000)).toBeNull();
+    expect(clutchWanted(falling({ dimension: 'minecraft:overworld' }).bot, {}, 1000)).toBeNull();
+    const f = falling(), memory: FallMemory = {};
+    expect(clutchWanted(f.bot, memory, 1000)).not.toBeNull();
+    memory.clutchAt = 1000;
+    expect(clutchWanted(f.bot, memory, 3000)).toBeNull();
+    expect(clutchWanted(f.bot, memory, 8000)).not.toBeNull();
+  });
+  it('counts what the body has already fallen: a body that stood on a pillar and has fallen most of the way still has the whole fall to pay for', () => {
+    const f = falling({ y: 80 }), memory: FallMemory = { from: 100 };
+    expect(clutchWanted(f.bot, memory, 1000)).toMatch(/落ちて36ブロック（地面まであと16、/u);
+  });
+  it('pours in the tick the ground comes within reach, along a look straight down, and takes the water up again', async () => {
+    const f = falling({ y: 80, vy: -2 });
+    const { seen, stop } = withBucket(f);
+    try {
+      const result = await runFallClutch(f.bot, f.bot);
+      expect(result).toMatchObject({ success: true });
+      expect(result.result).toMatch(/落下を止めた.*汲み直した/u);
+    } finally { stop(); }
+    expect(f.bot.equip).toHaveBeenCalledTimes(1);
+    expect(f.bot.look).toHaveBeenCalledWith(expect.any(Number), -Math.PI / 2, true);
+    expect(seen.rotations[0]).toBeCloseTo(90, 3); // the packet carries the downward look, not the library's level one
+    expect(seen.pourY + 1.62 - 64).toBeLessThanOrEqual(CLUTCH_REACH);
+    expect(seen.pourY + 1.62 - 64).toBeGreaterThan(CLUTCH_REACH - 0.6);
+    expect(seen.uses).toBe(2);
+  });
+  it('is started by the floor reflex in the tick the fall is worth it, over the rest, and told in the ledger', async () => {
+    const f = falling({ y: 80, vy: -2 });
+    const { stop } = withBucket(f);
+    f.bot.setControlState = vi.fn(); f.bot.consume = vi.fn(async () => undefined);
+    installFloorReflexes(f.bot, floorConfig({ MINEBOT_FCA_REFLEXES: 'default' }), { fleeTickMs: 1 });
+    try {
+      f.bot.emit('physicsTick');
+      await until(() => f.bot.reflexLedger.entriesSince(0).some((entry: any) => entry.kind === 'retreat' && entry.outcome === 'done'), 4000);
+      const entries = f.bot.reflexLedger.entriesSince(0);
+      expect(entries.some((entry: any) => entry.kind === 'retreat' && entry.outcome === 'done' && /落下を水バケツで止めた/u.test(entry.detail))).toBe(true);
+    } finally { stop(); }
+  });
+});

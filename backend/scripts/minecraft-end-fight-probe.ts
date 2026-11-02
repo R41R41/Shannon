@@ -889,7 +889,9 @@ scenes.platform = async () => {
       if (riseAfterMs === null && actor.entity.position.y - y0 >= 0.9) riseAfterMs = Date.now() - startedAt;
     });
     for (let n = 0; n < balls; n++) {
-      await ask(`${END} summon minecraft:dragon_fireball ${standX} 55 0.5 {Motion:[0.0d,-1.0d,0.0d],acceleration_power:0.1d}`);
+      // over the body, or over the last block of a bridge that is cut short (the body half over its edge would otherwise have the ball fall past it into the void)
+      const ballX = bridgeAt !== null && bridgeFrom > 70 ? bridgeFrom + 0.5 : standX;
+      await ask(`${END} summon minecraft:dragon_fireball ${ballX} 55 0.5 {Motion:[0.0d,-1.0d,0.0d],acceleration_power:0.1d}`);
       if (n + 1 < balls) await sleep(3000);
     }
     await sleep(label.includes('nothing') ? 2800 : 5000);
@@ -1074,6 +1076,97 @@ scenes.soak = async () => {
     log(`SOAK ${label}: ${JSON.stringify(result)}`);
     trials.push(result);
   }
+  return { trials };
+};
+
+scenes.tower = async () => {
+  // A body on top of a one-block obsidian column 30 blocks up (the way a caged crystal is reached), the dragon awake at full health and the ten crystals up, for a long while: does the dragon come near enough to push
+  // or hurt it, and does it fall. The body does nothing (a planner is busy); the reflex is on.
+  await protect(false);
+  releaseReflex();
+  await flatten(); await gear(['diamond_sword']); await wear();
+  const topAt = (x: number, z: number): number | null => {
+    for (let y = 110; y >= 20; y--) { const block = actor.blockAt(new Vec3(x, y, z), false); if (block && block.name === 'end_stone') return y; }
+    return null;
+  };
+  const seconds = 150, height = 30;
+  const places: Array<[string, number, number]> = [['a column 30 up at x 30 (12 m from the pillar at x 42)', 30, 0], ['a column 30 up at x 12 (by the middle)', 12, 12]];
+  const trials: Array<Record<string, unknown>> = [];
+  for (const [label, x, z] of places) {
+    await restoreDragon(); await sleep(2500);
+    const top = topAt(x, z);
+    if (top === null) { trials.push({ label, error: 'no ground seen there' }); continue; }
+    await ask(`${END} fill ${x} ${top + 1} ${z} ${x} ${top + height} ${z} obsidian`);
+    await ask(`${END} fill ${x - 1} ${top + height + 1} ${z - 1} ${x + 1} ${top + height + 4} ${z + 1} air`);
+    await ask(`effect give ${ACTOR} minecraft:instant_health 1 5`);
+    await standAt(x + 0.5, top + height + 1, z + 0.5); await sleep(1500);
+    const healthBefore = Number(actor.health), deathsBefore = actorDeaths, lowest = trackMinHealth(), ledgerMark = (actor.reflexLedger?.mark?.() as number | undefined) ?? 0;
+    const hits: Array<[number, number, number | null, number | null]> = [];
+    const start = Date.now();
+    let lastHealth = healthBefore, nearest = Infinity, fellAt: number | null = null, minY = actor.entity.position.y, maxSpeed = 0;
+    while (Date.now() - start < seconds * 1000 && actorDeaths === deathsBefore && fellAt === null) {
+      const now = Date.now(), health = Number(actor.health), dragon = dragonEntity(), phase = dragon ? dragonPhaseOf(actor, dragon) : null;
+      const distance = dragon?.position ? actor.entity.position.distanceTo(dragon.position) : null;
+      if (distance !== null) nearest = Math.min(nearest, distance);
+      if (health < lastHealth - 0.01) hits.push([Math.round((now - start) / 100) / 10, round(lastHealth - health, 1)!, phase, distance === null ? null : round(distance, 1)]);
+      lastHealth = health;
+      minY = Math.min(minY, actor.entity.position.y);
+      if (actor.entity.position.y < top + height - 3) fellAt = Math.round((now - start) / 100) / 10;
+      const v = actor.entity.velocity; maxSpeed = Math.max(maxSpeed, Math.hypot(v.x, v.y, v.z));
+      await sleep(50);
+    }
+    await sleep(3000); // the fall ends
+    const entries = (actor.reflexLedger?.entriesSince?.(ledgerMark) as Array<{ kind: string; outcome: string; detail: string }> | undefined) ?? [];
+    const result = {
+      label, seconds: round((Date.now() - start) / 1000, 1), fellAfterS: fellAt, healthLost: round(healthBefore - Number(actor.health), 1), lowest: lowest.stop(), died: actorDeaths > deathsBefore, hits,
+      nearestDragonM: Number.isFinite(nearest) ? round(nearest, 1) : null, lowestY: round(minY, 1), maxSpeed: round(maxSpeed, 2), ledger: entries.slice(0, 8).map(e => `${e.kind}:${e.outcome}:${e.detail.slice(0, 120)}`),
+    };
+    log(`TOWER ${label}: ${JSON.stringify(result)}`);
+    trials.push(result);
+    await ask(`${END} fill ${x} ${top + 1} ${z} ${x} ${top + height} ${z} air`);
+  }
+  return { trials };
+};
+
+scenes.fall = async () => {
+  // A fall in the End from the height of a pillar, over the island's flat ground: with a bucket of water carried (the clutch of utils/fallClutch) and without (what the fall costs). The body is put at the
+  // height in the air and let go; the dragon is parked high over the island. Armour on (it takes no part of a fall).
+  await protect(false);
+  releaseReflex();
+  await park(true);
+  const trials: Array<Record<string, unknown>> = [];
+  const cases: Array<[string, number, string[]]> = [
+    ['no bucket, 20 up', 20, ['diamond_sword']],
+    ['bucket, 12 up', 12, ['diamond_sword', 'water_bucket']],
+    ['bucket, 20 up', 20, ['diamond_sword', 'water_bucket']],
+    ['bucket, 38 up', 38, ['diamond_sword', 'water_bucket']],
+    ['bucket in the pack (not the hand), 38 up', 38, ['diamond_sword', 'cobblestone 64', 'water_bucket']],
+  ];
+  for (const [label, height, items] of cases) {
+    await flatten(); await ask('kill @e[type=minecraft:item]');
+    await gear(items); await wear();
+    await hold('diamond_sword');
+    await ask(`effect give ${ACTOR} minecraft:instant_health 1 5`);
+    await standAt(0.5, g, 8.5); await sleep(1000);
+    const healthBefore = Number(actor.health), deathsBefore = actorDeaths, lowest = trackMinHealth(), ledgerMark = (actor.reflexLedger?.mark?.() as number | undefined) ?? 0;
+    const start = Date.now();
+    let minVy = 0, landedAfterMs: number | null = null;
+    const poll = every(25, () => { minVy = Math.min(minVy, actor.entity.velocity?.y ?? 0); });
+    await ask(`${END} tp ${ACTOR} 0.5 ${g + height} 8.5`);
+    for (let i = 0; i < 160 && landedAfterMs === null; i++) { await sleep(50); if (Date.now() - start > 600 && actor.entity.onGround && actor.entity.position.y < g + 2) landedAfterMs = Date.now() - start; }
+    await sleep(2500);
+    clearInterval(poll);
+    const entries = (actor.reflexLedger?.entriesSince?.(ledgerMark) as Array<{ kind: string; outcome: string; detail: string }> | undefined) ?? [];
+    const holding = actor.heldItem?.name ?? null;
+    const result = {
+      label, height, healthBefore, healthAfter: Number(actor.health), healthLost: round(healthBefore - Number(actor.health), 1), lowest: lowest.stop(), died: actorDeaths > deathsBefore, landedAfterMs, fastestVy: round(minVy, 2),
+      holding, bucketsNow: (actor.inventory.items() as Array<{ name: string }>).filter(item => item.name.endsWith('bucket')).map(item => item.name), ledger: entries.slice(0, 5).map(e => `${e.kind}:${e.outcome}:${e.detail.slice(0, 130)}`),
+    };
+    log(`FALL ${label}: ${JSON.stringify(result)}`);
+    trials.push(result);
+    await sleep(500);
+  }
+  await flatten(); await ask('kill @e[type=minecraft:item]');
   return { trials };
 };
 

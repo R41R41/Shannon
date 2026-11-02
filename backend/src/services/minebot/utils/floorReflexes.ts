@@ -22,6 +22,7 @@ import { entityHealth } from './mapMarks.js';
 import { eyeOf, probeSight } from './probeTools.js';
 import { dragonHazards, hazardCentres } from './dragonDanger.js';
 import { isEnd } from './dragonState.js';
+import { clutchWanted, runFallClutch, type FallMemory } from './fallClutch.js';
 
 const log = createLogger('Minebot:FloorReflexes');
 
@@ -34,6 +35,10 @@ const log = createLogger('Minebot:FloorReflexes');
  * it back by ending; the one above decides again from a fresh observation.
  */
 export const FLOOR_RETREAT_PRIORITY = 350;
+/** The water-bucket clutch of a fall is over the dragon's retreat and the rest of the floor: a body in the air has nothing else to do. */
+export const FLOOR_CLUTCH_PRIORITY = 380;
+const FALL_TIMEOUT_MS = 8000;
+const FALL_DETAIL_MAX = 160;
 export const FLOOR_EAT_PRIORITY = 200;
 /** Between the retreat (350) and the meal (200): the low-health flee (default mode, P8). */
 export const FLOOR_FLEE_PRIORITY = 250;
@@ -208,6 +213,8 @@ export interface FloorState {
   dragonNotedAt?: number;
   /** The End: when the body put a block under itself to rise out of a cloud it could not walk out of, newest last. */
   dragonRises?: number[];
+  /** The End: the highest y since the body last stood and when the water-bucket clutch last began (utils/fallClutch). */
+  fall?: FallMemory;
 }
 
 /** Continue contracts (4): what the reflex goes on with after its cap; the holder in the control view while it lasts. */
@@ -2199,6 +2206,30 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
       .finally(() => { state.busy = null; state.dragonNextAt = Math.max(state.dragonNextAt ?? 0, now() + DRAGON_GAP_MS); });
     return true;
   };
+  /**
+   * The End: a fall that would cripple (the whole fall less three, at least CLUTCH_MIN_DAMAGE) is stopped with a bucket of water carried, poured on the ground in the tick it comes within reach
+   * (utils/fallClutch). Over every other floor hand: a body in the air has nothing else to do.
+   */
+  const clutchTick = (): boolean => {
+    if (!config.retreat || !isEnd(bot)) return false;
+    const t = now(), memory = state.fall ??= {};
+    let why: string | null = null;
+    try { why = clutchWanted(bot as never, memory, t); } catch { why = null; }
+    if (!why) return false;
+    memory.clutchAt = t;
+    state.busy = 'flee';
+    log.warn(`🪣 ${why}: 水バケツで落下を止める`);
+    const handle = ledger.begin('retreat', `落下を水バケツで止める: ${why}`, FALL_DETAIL_MAX);
+    void take('floor-clutch', FLOOR_CLUTCH_PRIORITY, FALL_TIMEOUT_MS, () => runFallClutch(bot as never, createMotorPort(bot) as never))
+      .then(result => {
+        const done = result as { success?: boolean; result?: string } | undefined;
+        handle.detail = `落下を水バケツで止めた（${done?.result ?? ''}）: ${why}`.slice(0, FALL_DETAIL_MAX);
+        ledger.end(handle, done?.success ? 'done' : 'failed');
+      }, () => { ledger.end(handle, 'failed'); })
+      .catch(() => undefined)
+      .finally(() => { state.busy = null; });
+    return true;
+  };
   bot.on('physicsTick', () => {
     // r7: the health seen tick by tick (the cover goes on while it falls).
     const health = bot.health ?? 20, seen = state.healthSeen;
@@ -2210,6 +2241,7 @@ export function installFloorReflexes(bot: FloorBody, config: FloorConfig = floor
       }
       seen.last = health;
     }
+    if (clutchTick()) return;
     let outcome: ReturnType<typeof floorRetreatTick> = null;
     try { outcome = config.retreat ? floorRetreatTick(bot, state.retreat, retreatAllow) : null; } catch { return; }
     // A lit creeper and no way away: the retreat let go (its action ends), and the last stand is made as soon as no
