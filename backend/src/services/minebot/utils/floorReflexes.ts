@@ -18,6 +18,7 @@ import { footingAt, footingWords, type Footing } from './voidFooting.js';
 import { isBurning, lavaReleasedBy } from './lavaSafety.js';
 import { engagedWithAny } from './engagement.js';
 import { PROTECTED_UTILITY_BLOCKS } from '../constants.js';
+import { canHarvest } from './toolChoice.js';
 import { entityHealth } from './mapMarks.js';
 import { eyeOf, probeSight } from './probeTools.js';
 import { dragonHazards, hazardCentres } from './dragonDanger.js';
@@ -1169,6 +1170,8 @@ export function lastStandChoice(bot: FloorBody, skip?: LastStand['kind'], cause:
     if (!(under && below && under.boundingBox === 'block' && under.diggable !== false && !isFluid(under.name) && !isHazardousToStandOn(under.name)
       && !['bedrock', 'barrier', 'end_portal_frame', 'reinforced_deepslate'].includes(String(under.name)) && !PROTECTED_UTILITY_BLOCKS.has(String(under.name))
       && below.boundingBox === 'block' && !isHazardousToStandOn(below.name))) return null;
+    // S2 (2026-11-02, S4's c1 trial: the fortress's nether bricks and no pickaxe carried): the dig hand refuses a block that nothing carried can harvest at once, and the one stand in 1.5 s was spent on it.
+    if (!creeper && (under as { harvestTools?: unknown }).harvestTools && !items.some(item => canHarvest(under as never, item as never))) return null;
     if (creeper) {
       // Too slow to be a hole before the blast (stone by hand is seconds): not this way. Unknown (no digTime): taken.
       let ms: number | null = null;

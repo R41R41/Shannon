@@ -380,6 +380,70 @@ scene('blaze_sortie', 'the sortie protocol at the c1 camp: rest at the hideout, 
 scene('blaze_sortie_b', 'the sortie protocol again (a second sample)', note => blazeSortie(note));
 scene('blaze_sortie_near', 'the sortie protocol resting at the NEAREST hideout (by steps) whether or not it is within the spawner\x27s 16 m', note => blazeSortie(note, { nearest: true }));
 scene('blaze_sortie_long', 'the sortie protocol with 25 s fights and retreatHp 11', note => blazeSortie(note, { fightSeconds: 25, retreatHp: 11 }));
+// The loop in ONE act (S2, 2026-11-02): the head names the whole cycle once and the body runs it with no gap for the head's thinking between sorties: [go to the camp cell, fight (only if the
+// go got there), pick up, go to the hideout, eat, wait], repeated. A stop (a reflex, a failed go) ends the act: the head's next act goes to the hideout first.
+async function blazeLoop(note: (text: string) => void, options: { fightSeconds?: number; waitSeconds?: number; passes?: number } = {}): Promise<Record<string, unknown>> {
+  const stand = sites.blazeStand as number[] | undefined;
+  if (!stand) throw new Error('no blazeStand in the sites');
+  const fightSeconds = options.fightSeconds ?? 12, waitSeconds = options.waitSeconds ?? 12, passes = options.passes ?? 8, thinkMs = 4500;
+  const seconds = timedSeconds || 300;
+  await ask('difficulty normal'); await ask('time set midnight'); await ask('weather clear');
+  await ask('execute in minecraft:the_nether run kill @e[type=minecraft:blaze]');
+  await equip({ diamond_sword: 1, iron_pickaxe: 1, shield: 2, cooked_beef: 24, golden_apple: 3, cobblestone: 64 }, { armor: 'iron', shield: true });
+  await placeActor('the_nether', stand[0], stand[1], stand[2], 24);
+  const start = Date.now();
+  const rods0 = await countServer('blaze_rod');
+  const shield0 = shieldUsed();
+  const m = { acts: 0, passesDone: 0, kills: 0, reflexStops: 0, failedActs: 0, lowestHp: 20, secondsBelow10: 0, boxes: 0, restarts: 0 };
+  let boxesLeft = 3;
+  const track: number[] = [];
+  const sampler = setInterval(() => { const value = Number(actor.health); if (Number.isFinite(value)) { track.push(r1(value)); m.lowestHp = Math.min(m.lowestHp, value); if (value < 10) m.secondsBelow10++; } }, 1000);
+  const hp = () => Number(actor.health);
+  const readCamp = async (): Promise<any> => { const found = await runSkill('probe', { kind: 'camp' }, 20); try { return JSON.parse(String(found.receipt?.result ?? '')); } catch { return null; } };
+  const canPlace = ['cobblestone', 'netherrack'];
+  let lastCell: { x: number; y: number; z: number } | undefined, lastSpot: { x: number; y: number; z: number } | undefined, failStreak = 0;
+  try {
+    while (Date.now() - start < seconds * 1000 && !disconnected && hp() > 0) {
+      const camp = await readCamp();
+      const cell = (camp?.cells?.[0] ?? lastCell) as { x: number; y: number; z: number } | undefined, spot = (camp?.hideouts?.[0] ?? lastSpot) as { x: number; y: number; z: number } | undefined;
+      if (!cell || !spot) { note('no camp cell or hideout and none known'); break; }
+      lastCell = cell; lastSpot = spot;
+      const hideout = { x: spot.x, y: spot.y, z: spot.z };
+      // At the hideout first, until the health is back.
+      const restFrom = Date.now();
+      while (Date.now() - restFrom < 40_000 && hp() > 0 && hp() < 18 && !disconnected) { if (Number(actor.food) < 20) await act('eat', [{ do: 'eat' }], 15); await sleep(1500); }
+      const before = hp();
+      const hands = [
+        { do: 'go', to: { x: cell.x, y: cell.y, z: cell.z }, range: 0.6, seconds: 20, canPlace, maxPlace: 30, onFail: 'continue' },
+        { do: 'fight', target: 'blaze', seconds: fightSeconds, dependsOn: [1], onFail: 'continue' },
+        { do: 'pickup', range: 8, onFail: 'continue' },
+        { do: 'go', to: hideout, range: 0.8, seconds: 25, canPlace, maxPlace: 30 },
+        { do: 'eat', onFail: 'continue' },
+        { do: 'wait', seconds: waitSeconds },
+      ];
+      const run = await act(`loop#${m.acts + 1}`, hands, 420, { accept: ['blaze'], repeat: passes });
+      m.acts++;
+      const text = run.lines.join(' ');
+      m.kills += (text.match(/fight 済 blaze/gu) ?? []).length;
+      m.passesDone += Number(run.json?.repeat?.done ?? 0);
+      if (run.stoppedBy === 'reflex') m.reflexStops++;
+      if (boxesLeft > 0 && hp() < 8) { boxesLeft--; m.boxes++; await dumpBox('blaze_loop', `loop#${m.acts} hp ${r1(before)} -> ${r1(hp())}: ${(run.lines[1] ?? run.lines[0] ?? '').slice(0, 160)}`); }
+      if (!run.ok) {
+        m.failedActs++;
+        note(`loop#${m.acts} stopped (${run.stoppedBy ?? ''} ${String(run.stoppedWhy ?? '').slice(0, 90)}): ${(run.lines.find(line => /stopped|failed/u.test(line)) ?? '').slice(0, 220)}`);
+        await sleep(thinkMs);                    // the head reads the stop
+        const out = await act('to the hideout', [{ do: 'go', to: hideout, range: 0.8, seconds: 25, canPlace, maxPlace: 30 }], 40, { accept: ['blaze'] });
+        if (!out.ok) { failStreak++; if (failStreak >= 4) { note('four failed ways to the hideout: stop'); break; } } else failStreak = 0;
+        m.restarts++;
+      }
+    }
+  } finally { clearInterval(sampler); }
+  const rods = (await countServer('blaze_rod')) - rods0;
+  const minutes = (Date.now() - start) / 60_000;
+  return { seconds: r1((Date.now() - start) / 1000), rods, rodsPerMinute: r1(rods / Math.max(minutes, 0.1)), ...m, shieldWear: shieldUsed() - shield0, deathsHere: deaths, hpTrack: track.filter((_, index) => index % 5 === 0).join(' '), fightSeconds, waitSeconds, passes };
+}
+scene('blaze_loop', 'the whole sortie cycle as ONE act with repeat 8: [go camp, fight 12 s if there, pick up, go hideout, eat, wait 12 s]', note => blazeLoop(note));
+scene('blaze_loop_b', 'the loop again (a second sample)', note => blazeLoop(note));
 // Sniping (S2, 2026-11-02): a bow from a cell far enough from the spawner room that few of its blazes see the body and their fire (spread grows with the square root of the distance) mostly misses.
 async function blazeSnipe(note: (text: string) => void, at: [number, number, number]): Promise<Record<string, unknown>> {
   const stand = sites.blazeStand as number[] | undefined, spawner = sites.blazeSpawner as number[] | undefined;
@@ -793,6 +857,34 @@ scene('fire_dig', 'a fire block beside the body (fireballs leave them on the spa
   await sleep(500);
   const after = nameAt(fx, y, fz);
   return { fireBefore: before, goBesideFireLine: (goNear.lines[0] ?? '').slice(0, 260), putOutLine: (out.lines[0] ?? '').slice(0, 260), blockAfter: after, putOut: after !== 'fire' };
+});
+
+scene('fire_feet', 'fire in the cell the body stands in and in the one over its head (a blaze\'s fireball leaves it): the lava reflex puts it out with a dig where the body stands, and walks the body out only when that does not do it', async () => {
+  const stand = (sites.blazeStand ?? sites.netherArrival) as number[];
+  await ask('difficulty peaceful');
+  const y = await netherPlate(stand[0], stand[2]);
+  await equip({ iron_pickaxe: 1, diamond_sword: 1, cooked_beef: 4 }, { armor: 'iron', shield: false });
+  await placeActor('the_nether', stand[0], y, stand[2], 24);
+  const nameAt = (x: number, yy: number, z: number) => actor.blockAt(new Vec3(x, yy, z))?.name ?? null;
+  const trials: Array<Record<string, unknown>> = [];
+  for (const where of ['feet', 'head', 'both', 'feet']) {
+    const at = actor.entity.position as Vec3;
+    const bx = Math.floor(at.x), bz = Math.floor(at.z), by = Math.floor(at.y + 0.01);
+    const engagedBefore = actor.lavaReflex?.engagements ?? -1, hp0 = Number(actor.health), p0 = at.clone();
+    if (where !== 'head') await ask(`execute in minecraft:the_nether run setblock ${bx} ${by} ${bz} minecraft:fire`);
+    if (where !== 'feet') await ask(`execute in minecraft:the_nether run setblock ${bx} ${by + 1} ${bz} minecraft:fire`);
+    const t0 = Date.now();
+    let goneAfter: number | null = null;
+    while (Date.now() - t0 < 4000) { await sleep(100); if (nameAt(bx, by, bz) !== 'fire' && nameAt(bx, by + 1, bz) !== 'fire') { goneAfter = Date.now() - t0; break; } }
+    await sleep(700);
+    const now = actor.entity.position as Vec3;
+    trials.push({ where, goneAfterMs: goneAfter, engagements: (actor.lavaReflex?.engagements ?? -1) - engagedBefore, hpLost: r1(hp0 - Number(actor.health)), movedBlocks: r1(now.distanceTo(p0)), reflexInstalled: !!actor.lavaReflex, puncher: typeof actor.punchOutFire });
+    await ask(`effect give ${ACTOR} minecraft:instant_health 1 3 true`);
+    await ask(`execute in minecraft:the_nether run setblock ${bx} ${by} ${bz} minecraft:air`);
+    await ask(`execute in minecraft:the_nether run setblock ${bx} ${by + 1} ${bz} minecraft:air`);
+    await placeActor('the_nether', stand[0], y, stand[2], 24);
+  }
+  return { trials };
 });
 
 scene('craft_diag', 'why craft ender_eye ends with "missing ingredient": the grid, the cursor and the count the server holds after each craft', async () => {
