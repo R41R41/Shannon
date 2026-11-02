@@ -123,6 +123,17 @@ describe('go: across a gap (canPlace)', () => {
     expect(sandy.bot.placedBlocks).toEqual([]);
   });
 
+  it('says so when the blocks it was to lay are used up on the way (a bridge out over a void toward a place that is not loaded, six stones)', async () => {
+    // Nether lab, 244 m on 64 stones: the stop said not_loaded while the stones were gone. Here: air from x=2 to the end of the loaded ground, the place beyond it.
+    const void_ = over(flat, box('air', 2, R, 30, FLOOR - 1, -R - 1, R + 1));
+    const sim = makeSim(void_, { items: stacks(COBBLE(6)) });
+    const outcome = await drive(sim, run(sim, { canPlace: ['cobblestone'], maxPlace: 100 }, goal(120, FLOOR, 0)));
+    expect(outcome.ok).toBe(false);
+    expect(counts(outcome)!.placed).toBeGreaterThanOrEqual(1);
+    expect(outcome.text).toContain('使い切った');
+    expect(outcome.text.length).toBeLessThanOrEqual(160);
+  });
+
   it('stops at its limit of blocks before it lays one (limit_place)', async () => {
     const sim = makeSim(canyon, { items: stacks(COBBLE(8)) });
     const outcome = await drive(sim, run(sim, { canPlace: ['cobblestone'], maxPlace: 2 }));
@@ -294,6 +305,20 @@ describe('go: what is never entered', () => {
     const listed = await drive(sim, run(sim, { goals: [goal(4, FLOOR, 0), goal(8, FLOOR, 3)] }));
     expect(listed.ok).toBe(true);
     expect(listed.text).toContain('(8,64,3)');
+  });
+
+  it('says where the fire is that makes a place unsafe, and that the dig hand puts it out (a spawner room\'s floor)', async () => {
+    const sim = makeSim(over(flat, box('fire', 5, 5, FLOOR, FLOOR, 0, 0)));
+    const beside = await drive(sim, run(sim, {}, goal(4, FLOOR, 0)));
+    expect(beside.reason).toBe('unsafe');
+    expect(beside.text).toContain('fire の隣');
+    expect(beside.text).toContain('火 (5,64,0) は dig で消せる');
+    expect(beside.text.length).toBeLessThanOrEqual(160);
+    // Lava is not put out by a dig: its line is the old one.
+    const lava = makeSim(over(flat, box('lava', 5, 5, FLOOR, FLOOR, 0, 0)));
+    const old = await drive(lava, run(lava, {}, goal(4, FLOOR, 0)));
+    expect(old.reason).toBe('unsafe');
+    expect(old.text).not.toContain('dig で消せる');
   });
 
   it('keeps out of water unless it is allowed to swim', async () => {

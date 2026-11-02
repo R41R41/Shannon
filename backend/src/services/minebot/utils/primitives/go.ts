@@ -194,6 +194,17 @@ const isWaterName = (name: string | null) => name === 'water' || name === 'bubbl
 export function hazardAtFeet(bot: any, x: number, y: number, z: number): string | null {
   return hazardAtFeetWith((cx, cy, cz) => nameAt(bot, cx, cy, cz), x, y, z);
 }
+/**
+ * The fire that makes a place unsafe, or null: in the cell of the feet or the head, or beside them (a blaze's fireball leaves one on the floor of its spawner's room).
+ * The dig hand puts a fire out in 0.2 s (S2 lab, 2026-11-02: `dig` at the fire's cell, the block was air after), so the line says where it is.
+ */
+export function fireNear(bot: any, x: number, y: number, z: number): Cell | null {
+  for (const [dx, dy, dz] of [[0, 0, 0], [0, 1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [1, 1, 0], [-1, 1, 0], [0, 1, 1], [0, 1, -1]]) {
+    const name = nameAt(bot, x + dx, y + dy, z + dz);
+    if (name === 'fire' || name === 'soul_fire') return { x: x + dx, y: y + dy, z: z + dz };
+  }
+  return null;
+}
 /** The same, reading the cells through `read` (the route search's own reader, which keeps what it has read during a search). */
 export function hazardAtFeetWith(read: (x: number, y: number, z: number) => string | null, x: number, y: number, z: number): string | null {
   const feet = read(x, y, z), head = read(x, y + 1, z), floor = read(x, y - 1, z);
@@ -667,14 +678,19 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   // ---- how a line ends (the contract's result lines) ----
   const packNote = fullPackWatch(bot);
   const tail = () => `${cellText(feetCell(bot) ?? start)} 道 ${state.steps} 歩・掘 ${state.dug}・置 ${state.placed}・引き直し ${state.redraws} 回`;
-  const fail = (code: string, why: string, hint: string): StepOutcome => {
+  const fail = (code: string, reason: string, hint: string): StepOutcome => {
     const at = feetCell(bot) ?? start;
     const head = `go 止まった ${code}: `;
+    // S2 lab (a Nether walk of 244 m on 64 stones, 63 of them laid in the leg before): the stop said "not_loaded" while the real reason was the stones being gone.
+    // When the go laid blocks and the pack holds none of the kinds it was given to lay, the stop says so (whatever else it says), so the head fetches more.
+    const spent = place.held.length > 0 && state.placed > 0 && code !== 'limit_place' && code !== 'no_blocks' && place.held.every(name => inventoryCount(bot, name) === 0);
+    const why = spent ? `${reason}（置く物 ${place.held.join('・')} を ${state.placed} 個置いて使い切った）` : reason;
+    const advice = spent && (code === 'not_loaded' || code === 'dead_end') ? '置く物を集めてからもう一度' : hint;
     const full = packNote();
     const fixed = ` ${tail()}${full ? `。${full}` : ''}`;
     // The contract's line: the code, the reason, where and the counts, then the hint; what does not fit of the 160 is cut from the back (the hint first).
     const room = 160 - head.length - fixed.length;
-    const withHint = hint ? `。${hint}` : '';
+    const withHint = advice ? `。${advice}` : '';
     const text = why.length + withHint.length <= room ? `${head}${why}${fixed}${withHint}` : `${head}${clip(why, Math.max(24, room))}${fixed}`;
     return { ...stopped(bot, code, text, at, start), progress: progressNow(), data: { work: { dug: state.dug, placed: state.placed, steps: state.steps, redraws: state.redraws } } };
   };
@@ -692,6 +708,9 @@ export async function go(ctx: StepContext, args: GoArgs): Promise<StepOutcome> {
   const safeCells = cells.filter(cell => !hazardAtFeet(bot, cell.x, cell.y, cell.z));
   if (!safeCells.length) {
     const why = hazardAtFeet(bot, cells[0].x, cells[0].y, cells[0].z) ?? '危ない';
+    // A fire is what the dig hand puts out (0.2 s): a spawner room's floor is dotted with them, and the place beside one is the place to fight from.
+    const fire = /^(?:soul_)?fire /u.test(why) ? fireNear(bot, cells[0].x, cells[0].y, cells[0].z) : null;
+    if (fire) return fail('unsafe', `行き先 ${cellText(cells[0])} は${why}（火の中・隣には行かない）`, `火 ${cellText(fire)} は dig で消せる。または別の行き先を`);
     return fail('unsafe', `行き先 ${cellText(cells[0])} は${why}（溶岩・火・マグマ・サボテン・ベリー・ウィザーローズとその隣には行かない）`, '別の行き先を');
   }
   // Run 44 (hold 1): a place over a plant nobody stands on is said at once (`floorlessAt`); one place of several that is such is dropped.

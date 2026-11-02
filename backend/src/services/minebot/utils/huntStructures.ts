@@ -94,7 +94,7 @@ export function blazeCampReport(bot: any): CampReport {
       const remembered = bot.placeMemory?.recall('blaze_spawner', 1)?.[0];
       known = remembered ? `以前に見た湧き場: (${remembered.position.x}, ${remembered.position.y}, ${remembered.position.z}) ${remembered.distance}m ${remembered.direction}。` : '';
     } catch { known = ''; }
-    return { text: `読み込み済みの範囲（約${Math.min(scan.reachMetres, 128)}m）に湧き場はありません。${known}ネザー要塞（find-structure fortress）の通路を進んで、もう一度探してください`, found: false, others: [], cells: [], fire: 0 };
+    return { text: `読み込み済みの範囲（約${Math.min(scan.reachMetres, 128)}m）に湧き場はありません。${known}ネザー要塞（probe kind=scan が「ネザー要塞」の向きを言う）へ近づいて、もう一度探してください`, found: false, others: [], cells: [], fire: 0 };
   }
   const nearest = scan.hits[0];
   try { bot.placeMemory?.remember('blaze_spawner', nearest.position, { note: 'spawner' }); } catch { /* memory is optional */ }
