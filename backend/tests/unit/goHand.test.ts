@@ -123,6 +123,30 @@ describe('go: across a gap (canPlace)', () => {
     expect(sandy.bot.placedBlocks).toEqual([]);
   });
 
+  it('waits for a place whose answer is only late (a busy server: the block shows after the library gave up), and still stops for one the server never takes', async () => {
+    // S2 lab, the Nether on a busy machine: the server put the block 2.2 s after the place, the 1.5 s wait had ended, and the go was stopped as refused.
+    const slow = makeSim(canyon, { items: stacks(COBBLE(8)) });
+    const real = slow.bot.placeBlock;
+    let calls = 0;
+    slow.bot.placeBlock = async (reference: any, face: any) => {
+      if (calls++ === 0) {
+        setTimeout(() => { void real(reference, face).catch(() => undefined); }, 600);   // the block shows 0.6 s after the error
+        throw new Error('No block has been placed : the server did not answer within 1500ms (something may be standing in that cell)');
+      }
+      return real(reference, face);
+    };
+    const crossed = await drive(slow, run(slow, { canPlace: ['cobblestone'] }));
+    expect(crossed.ok).toBe(true);
+    expect(Math.floor(slow.bot.entity.position.x)).toBe(8);
+    // A server that never takes the block: the same error, no block, and the go stops as before.
+    const never = makeSim(canyon, { items: stacks(COBBLE(8)) });
+    never.bot.placeBlock = async () => { throw new Error('No block has been placed : the server did not answer within 1500ms (something may be standing in that cell)'); };
+    const stopped = await drive(never, run(never, { canPlace: ['cobblestone'] }));
+    expect(stopped.ok).toBe(false);
+    expect(stopped.reason).toBe('stuck');
+    expect(stopped.text).toContain('置きを断られた');
+  });
+
   it('names the cheap blocks the pack holds when the blocks it may lay are not held (dug netherrack, dirt ...), and only those', async () => {
     const dirt = makeSim(canyon, { items: stacks({ name: 'dirt', count: 16 }, { name: 'diamond_block', count: 9 }, { name: 'obsidian', count: 20 }) });
     const named = await drive(dirt, run(dirt, { canPlace: ['cobblestone'] }));
