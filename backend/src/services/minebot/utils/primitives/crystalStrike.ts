@@ -24,7 +24,8 @@ export async function strikeCrystal(ctx: StepContext, crystal: any): Promise<Ste
   const reach = boxDistance(eye, crystalBox(crystal));
   if (reach > CRYSTAL_HIT_REACH) return stopped(bot, 'out_of_reach', `${label} に手が届かない（目から ${reach.toFixed(1)}m、${CRYSTAL_HIT_REACH}m まで）。遠くから壊すなら 13m 以上離れて shoot`);
   const centre = { x: crystal.position.x, y: crystal.position.y + 1, z: crystal.position.z };
-  const blast = blastAt(bot, centre);
+  // The blast is centred on the crystal's own position (EndCrystal.hurt explodes at getX/getY/getZ), not on the middle of its box that the blow aims at.
+  const blast = blastAt(bot, crystal.position);
   if (!blast.safe) {
     return stopped(bot, 'blast_unsafe', `${label} を殴ると爆発が当たる見込み: 距離 ${blast.distance}m・見える割合 ${blast.seen}・素の被害 ${blast.raw}→防具後 ${blast.expected}（体力 ${blast.health}。`
       + `エンチャント・盾は数えない）。間に塞ぐブロックを置くか、13m 以上離れて shoot`);

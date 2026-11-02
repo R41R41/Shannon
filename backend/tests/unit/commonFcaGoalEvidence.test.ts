@@ -124,12 +124,42 @@ describe('task-bound native Minecraft goal evidence', () => {
       f.advance(8000); f.bot.emit('entityDead', f.target);
       expect(f.evidence.snapshot().boss).toMatchObject({ verified: true, witness: { via: ['explosion'] } }); f.evidence.dispose();
     });
-    it('takes the end of the death animation (removed while dying) but not an unload of a healthy dragon', () => {
+    it('takes the end of the death animation (removed with no health left) but not an unload, nor a removal while it is still dying with health', () => {
       const f = fixture(); f.target.metadata = []; f.evidence.begin(f.command());
       f.bot.attack(head(f)); f.bot.emit('entityHurt', f.target); f.bot.emit('entityGone', f.target);
       expect(f.evidence.snapshot().boss.verified).toBe(false);
-      f.evidence.begin(f.command()); f.target.metadata[16] = 9; f.bot.attack(head(f)); f.bot.emit('entityHurt', f.target); f.advance(9000); f.bot.emit('entityGone', f.target);
+      // phase 9 with health 1: on its way to die, and the server may as well have dropped it from this client's range
+      f.evidence.begin(f.command()); f.target.metadata[16] = 9; f.target.metadata[9] = 1; f.bot.attack(head(f)); f.bot.emit('entityHurt', f.target); f.advance(9000); f.bot.emit('entityGone', f.target);
+      expect(f.evidence.snapshot().boss.verified).toBe(false);
+      f.evidence.begin(f.command()); f.target.metadata[9] = 0; f.bot.attack(head(f)); f.bot.emit('entityHurt', f.target); f.advance(9000); f.bot.emit('entityGone', f.target);
       expect(f.evidence.snapshot().boss).toMatchObject({ verified: true, witness: { deathSeen: 'dying_gone' } }); f.evidence.dispose();
+    });
+    it('does not credit damage the server names someone else for, however fresh the body\'s swing was', () => {
+      const f = fixture(); f.evidence.begin(f.command());
+      f.bot.attack(head(f)); // out of the server's reach: it did nothing
+      f.bot._client.emit('damage_event', { entityId: 17, sourceTypeId: 34, sourceCauseId: 99, sourceDirectId: 99 }); f.bot.emit('entityHurt', f.target);
+      f.advance(8000);
+      f.bot._client.emit('damage_event', { entityId: 17, sourceTypeId: 34, sourceCauseId: 99, sourceDirectId: 99 }); f.bot.emit('entityDead', f.target);
+      expect(f.evidence.snapshot().boss.verified).toBe(false); f.evidence.dispose();
+    });
+    it('credits a bed whose damage is reported before the blast and with no cause, when the blast was at the bed the body used and near the dragon', () => {
+      const f = fixture(); f.evidence.begin(f.command());
+      f.bot.activateBlock({ name: 'white_bed', position: new Vec3(3, 64, 3) });
+      f.bot._client.emit('damage_event', { entityId: 17, sourceTypeId: 9, sourceCauseId: 0, sourceDirectId: 0 }); f.bot.emit('entityHurt', f.target);
+      f.bot._client.emit('explosion', { center: { x: 3.5, y: 64.5, z: 3.5 }, radius: 5 });
+      f.advance(8000); f.bot.emit('entityDead', f.target);
+      expect(f.evidence.snapshot().boss).toMatchObject({ verified: true, witness: { via: ['explosion'] } }); f.evidence.dispose();
+    });
+    it('does not credit a bed blast that was far from the dragon, nor a cause-less hurt with no bed of the body\'s', () => {
+      const f = fixture(); f.evidence.begin(f.command()); f.target.position = new Vec3(100, 65, 100);
+      f.bot.activateBlock({ name: 'white_bed', position: new Vec3(3, 64, 3) });
+      f.bot._client.emit('damage_event', { entityId: 17, sourceTypeId: 9, sourceCauseId: 0, sourceDirectId: 0 }); f.bot.emit('entityHurt', f.target);
+      f.bot._client.emit('explosion', { center: { x: 3.5, y: 64.5, z: 3.5 }, radius: 5 });
+      f.bot.emit('entityDead', f.target);
+      expect(f.evidence.snapshot().boss.verified).toBe(false);
+      const g = fixture(); g.evidence.begin(g.command());
+      g.bot._client.emit('damage_event', { entityId: 17, sourceTypeId: 9, sourceCauseId: 0, sourceDirectId: 0 }); g.bot.emit('entityHurt', g.target); g.bot.emit('entityDead', g.target);
+      expect(g.evidence.snapshot().boss.verified).toBe(false); f.evidence.dispose(); g.evidence.dispose();
     });
     it('keeps a reconnect unknown, whatever the earlier damage was', () => {
       const f = fixture(); f.evidence.begin(f.command()); f.bot.attack(head(f)); f.bot.emit('entityHurt', f.target); f.bot.emit('entityDead', f.target);

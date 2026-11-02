@@ -382,3 +382,47 @@ describe('the floor reflex out of the dragon\'s reach', () => {
     expect(keys).toEqual([]);
   });
 });
+
+import { shoot, arrowBlockedAt } from '../../src/services/minebot/utils/primitives/shoot.js';
+
+describe('shoot at a crystal', () => {
+  /** The bot at (0.5, 64, 0.5) with a bow and arrows in hand, a crystal at the given place in the air. */
+  function bowFixture(crystalAt: Vec3) {
+    const f = fixture({ at: new Vec3(0.5, 64, 0.5), phase: DRAGON_PHASE.holdingPattern });
+    const bow = { name: 'bow', type: 800, count: 1 };
+    Object.assign(f.bot, {
+      heldItem: bow, quickBarSlot: 0, setQuickBarSlot: vi.fn(), look: vi.fn(async () => undefined),
+      inventory: { items: () => [bow, { name: 'arrow', type: 801, count: 20 }], slots: [] },
+    });
+    f.bot.entities[300] = { id: 300, name: 'end_crystal', position: crystalAt, metadata: [], height: 2 };
+    return f;
+  }
+  const ctx = (bot: any) => ({ bot, stop: new AbortController().signal, deadline: Date.now() + 60_000, facing: 'north' as const, base: { x: 0, y: 64, z: 0 } });
+  it('refuses a crystal nearer than its blast reaches, before any draw', async () => {
+    const f = bowFixture(new Vec3(8.5, 66, 0.5));
+    const outcome = await shoot(ctx(f.bot) as never, { target: 300 });
+    expect(outcome).toMatchObject({ ok: false, reason: 'too_close' });
+    expect(f.bot.activateItem).not.toHaveBeenCalled();
+  });
+  it('refuses when the arrow\'s way meets a bar, naming it, and lets the shot go once the bar is gone', async () => {
+    const f = bowFixture(new Vec3(30.5, 66, 0.5));
+    for (let y = 64; y <= 69; y++) f.world.set(key(28, y, 0), 'iron_bars');
+    const blocked = await shoot(ctx(f.bot) as never, { target: 300 });
+    expect(blocked).toMatchObject({ ok: false, reason: 'line_blocked' });
+    expect(blocked.text).toMatch(/iron_bars/u);
+    expect(f.bot.activateItem).not.toHaveBeenCalled();
+    expect(arrowBlockedAt(f.bot, new Vec3(0.5, 65.52, 0.5), -Math.PI / 2, 0.15, 3, 30, new Vec3(30.5, 67, 0.5))).not.toBeNull();
+    for (let y = 64; y <= 69; y++) f.world.delete(key(28, y, 0));
+    const open = await shoot(ctx(f.bot) as never, { target: 300 });
+    expect(f.bot.activateItem).toHaveBeenCalled();
+    expect(open.text).toMatch(/射った/u);
+  }, 15_000);
+  it('does not let go of a draw when the body was brought within the blast\'s reach meanwhile', async () => {
+    const f = bowFixture(new Vec3(30.5, 66, 0.5));
+    f.bot.activateItem = vi.fn(() => { setTimeout(() => { f.self.position = new Vec3(22.5, 64, 0.5); }, 400); });
+    const outcome = await shoot(ctx(f.bot) as never, { target: 300 });
+    expect(f.bot.deactivateItem).not.toHaveBeenCalled();
+    expect(f.bot.setQuickBarSlot).toHaveBeenCalledTimes(2);
+    expect(outcome.text).toMatch(/放さなかった/u);
+  }, 15_000);
+});

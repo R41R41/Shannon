@@ -55,14 +55,21 @@ export function blastRaw(distance: number, seen: number, power = CRYSTAL_POWER):
   return Math.floor((impact * impact + impact) / 2 * 7 * reach + 1);
 }
 
-/** The fraction of nine points in the body's box that a straight line from the blast's centre reaches (iron bars are passed). */
+/**
+ * The fraction of the body's box that the blast's centre sees: the game's own sample grid (Explosion.getSeenPercent: steps of 1 / (2 w + 1) across, 1 / (2 h + 1) up,
+ * 45 points for a body 0.6 wide and 1.8 tall) with a straight line from each point to the centre; a line through a solid cell is shut out (iron bars are passed: a
+ * bar is a thin post, so the estimate is the larger one).
+ */
 export function seenFraction(read: BlockReader, centre: P3, feet: P3, ignore: P3[] = []): number {
-  let seen = 0, total = 0;
+  const w = 0.6, h = 1.8;
+  const d0 = 1 / (w * 2 + 1), d1 = 1 / (h * 2 + 1), d2 = d0;
+  const d3 = (1 - Math.floor(1 / d0) * d0) / 2, d4 = (1 - Math.floor(1 / d2) * d2) / 2;
   // The cell the blast is centred in is never in its way (a bed is gone when it blows), nor are the cells given.
   const skip = new Set([centre, ...ignore].map(cell => `${Math.floor(cell.x)},${Math.floor(cell.y)},${Math.floor(cell.z)}`));
-  for (const h of [0.15, 0.9, 1.65]) for (const [dx, dz] of [[0, 0], [0.22, 0.22], [-0.22, -0.22]] as const) {
+  let seen = 0, total = 0;
+  for (let fx = 0; fx <= 1 + 1e-9; fx += d0) for (let fy = 0; fy <= 1 + 1e-9; fy += d1) for (let fz = 0; fz <= 1 + 1e-9; fz += d2) {
     total++;
-    const to = { x: feet.x + dx, y: feet.y + h, z: feet.z + dz };
+    const to = { x: feet.x - w / 2 + w * fx + d3, y: feet.y + h * fy, z: feet.z - w / 2 + w * fz + d4 };
     const length = Math.hypot(to.x - centre.x, to.y - centre.y, to.z - centre.z), steps = Math.max(1, Math.ceil(length / 0.25));
     let blocked = false;
     for (let i = 1; i < steps && !blocked; i++) {
@@ -70,12 +77,11 @@ export function seenFraction(read: BlockReader, centre: P3, feet: P3, ignore: P3
       const bx = Math.floor(centre.x + (to.x - centre.x) * t), by = Math.floor(centre.y + (to.y - centre.y) * t), bz = Math.floor(centre.z + (to.z - centre.z) * t);
       if (skip.has(`${bx},${by},${bz}`)) continue;
       const block = read(bx, by, bz);
-      if (!block) continue;
-      if (block.solid === true && block.name !== 'iron_bars') blocked = true;
+      if (block && block.solid === true && block.name !== 'iron_bars') blocked = true;
     }
     if (!blocked) seen++;
   }
-  return seen / total;
+  return total ? seen / total : 0;
 }
 
 export interface BlastEstimate { distance: number; seen: number; raw: number; expected: number; armor: number; health: number; safe: boolean }

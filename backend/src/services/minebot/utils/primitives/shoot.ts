@@ -46,18 +46,28 @@ export function arrowBlockedAt(bot: any, eyes: Vec3, yaw: number, pitch: number,
 }
 
 /** The refusal for a crystal shot from where the body is: too near (its blast reaches 12), too far, or no line to it. Null when it can be shot. */
-function crystalShotProblem(bot: any, crystal: any): StepOutcome | null {
+function crystalShotProblem(bot: any, crystal: any, speed: number): StepOutcome | null {
   const eyes = bot.entity.position.offset(0, EYE - 0.1, 0);
   const distance = crystal.position.distanceTo(bot.entity.position);
   if (distance < CRYSTAL_SAFE_SHOT) return stopped(bot, 'too_close', `クリスタルまで ${distance.toFixed(1)}m。爆発は ${CRYSTAL_REACH}m まで届く: ${CRYSTAL_SAFE_SHOT}m 以上離れてから撃つ`);
   if (distance > CRYSTAL_SHOT_MAX) return stopped(bot, 'too_far', `クリスタルまで ${distance.toFixed(1)}m。矢は ${CRYSTAL_SHOT_MAX}m までしか狙えない`);
   const point = crystal.position.offset(0, 1, 0);
-  const aim = aimPitch(bowSpeed(BOW_FULL_DRAW_S), Math.hypot(point.x - eyes.x, point.z - eyes.z), point.y - eyes.y);
+  const aim = aimPitch(speed, Math.hypot(point.x - eyes.x, point.z - eyes.z), point.y - eyes.y);
   if (!aim) return stopped(bot, 'too_far', `クリスタルまで ${distance.toFixed(1)}m。弓の山なりでは届かない`);
   const yaw = Math.atan2(-(point.x - eyes.x), -(point.z - eyes.z));
-  const hit = arrowBlockedAt(bot, eyes, yaw, aim.pitch, bowSpeed(BOW_FULL_DRAW_S), aim.ticks + 2, point);
+  const hit = arrowBlockedAt(bot, eyes, yaw, aim.pitch, speed, aim.ticks + 2, point);
   if (hit) return stopped(bot, 'line_blocked', `クリスタルへの矢の道が (${hit.x},${hit.y},${hit.z}) の ${hit.name} に塞がれる（距離 ${distance.toFixed(1)}m）。位置を変えるか、塞ぐ物を掘る`, { x: hit.x, y: hit.y, z: hit.z });
   return null;
+}
+
+/** A draw is cancelled by changing the held slot and back (releasing the bow would shoot). */
+async function cancelDraw(bot: any): Promise<void> {
+  try {
+    const slot = Number(bot.quickBarSlot ?? 0);
+    bot.setQuickBarSlot?.((slot + 1) % 9);
+    await new Promise(resolve => setTimeout(resolve, 80));
+    bot.setQuickBarSlot?.(slot);
+  } catch { /* the draw ends with the connection or the next hand */ }
 }
 
 /** A bow's arrow speed (blocks a tick) after a draw of `seconds` (the game: power = (f^2 + 2f) / 3, f the draw in seconds, at most 1). */
@@ -119,11 +129,7 @@ export async function shoot(ctx: StepContext, args: ShootArgs): Promise<StepOutc
   const shots = Math.max(1, Math.min(8, Math.round(args.shots ?? 1)));
   const results: string[] = [];
   let hits = 0;
-  // The End: a crystal is shot from beyond its blast and along a clear line; a perched dragon takes nothing from an arrow.
-  if (target?.name === 'end_crystal') {
-    const refusal = crystalShotProblem(bot, target);
-    if (refusal) return refusal;
-  }
+  // The End: a crystal is shot from beyond its blast and along a clear line (asked again at every shot and before the release); a perched dragon takes nothing from an arrow.
   if (target?.name === 'ender_dragon') {
     const phase = dragonPhaseOf(bot, target);
     if (isPerched(phase)) return stopped(bot, 'perched_immune', `止まり木の竜（phase ${phase} ${phaseName(phase)}）に矢は効かない（飛んでいる間だけ。近接は attack）`);
@@ -131,6 +137,11 @@ export async function shoot(ctx: StepContext, args: ShootArgs): Promise<StepOutc
   for (let shot = 0; shot < shots; shot++) {
     const live = target ? bot.entities?.[target.id] : null;
     if (target && !live) { results.push('的が見えなくなった'); break; }
+    if (live?.name === 'end_crystal') {
+      const refusal = crystalShotProblem(bot, live, speed);
+      if (refusal) { if (shot === 0) return refusal; results.push(refusal.text); break; }
+    }
+    let cancelled: string | null = null;
     /** The aim from where the body and the target are now: the fall allowed for, the target led by its speed over the flight. */
     const aimNow = async (): Promise<{ yaw: number; pitch: number; ticks: number; far: number } | null> => {
       const now = target ? bot.entities?.[target.id] : null;
@@ -165,12 +176,18 @@ export async function shoot(ctx: StepContext, args: ShootArgs): Promise<StepOutc
       aim = await aimNow();
       if (!aim || aim.ticks < 0) { bot.deactivateItem(); }
       else {
+        // The body may have been knocked nearer to the crystal during the draw: its blast is not shot into.
+        const near = live?.name === 'end_crystal' && bot.entities?.[live.id] ? bot.entity.position.distanceTo(live.position) : null;
+        if (near !== null && near < CRYSTAL_SAFE_SHOT) { cancelled = `引いている間に ${near.toFixed(1)}m まで近づいたので放さなかった（${CRYSTAL_SAFE_SHOT}m 以上で撃つ）`; await cancelDraw(bot); }
+        else {
         await guard(ctx, Promise.resolve(bot.look(aim.yaw, aim.pitch, true)), 1000);
         if (crossbow) { bot.activateItem(); await wait(ctx, 50); }
         bot.deactivateItem();
         await wait(ctx, aim.ticks * 50 + 500);
+        }
       }
     } finally { bot.removeListener('entityHurt', onHurt); bot.removeListener('entityGone', onGone); }
+    if (cancelled) { results.push(cancelled); break; }
     if (!aim) { results.push('的が見えなくなった'); break; }
     if (aim.ticks < 0) { results.push(`${live ? `${live.name}` : cellText(args.at!)} は遠すぎて届かない（${aim.far.toFixed(0)}m）`); break; }
     if (hurt) hits++;

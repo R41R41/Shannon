@@ -1,8 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { BodyTaskContext } from './bodyControlContract.js';
 import type { MinecraftControlCommand, MinecraftSkillDefinition } from './minecraftControlContract.js';
-import { isDying } from '../../utils/dragonParts.js';
-import { dragonPhaseOf } from '../../utils/dragonState.js';
+import { boxDistance, partBox, type DragonPart } from '../../utils/dragonParts.js';
 
 export const GOAL_EVIDENCE_SKILL: MinecraftSkillDefinition = {
   name: 'goal-evidence', readOnly: true,
@@ -18,6 +17,10 @@ const contractKey = (context: BodyTaskContext) => createHash('sha256')
 const SWING_HURT_MS = 700;
 /** A bed's blast is the body's when the dragon is hurt within this long of the blast, and the blast was at the bed the body used. */
 const BLAST_HURT_MS = 1500;
+/** The server's name for a hit (damage_event) and the client's hurt animation come in the same tick but not in a fixed order; a hit is decided this long after its first report. */
+const HIT_SETTLE_MS = 60;
+/** A bed's blast (power 5) hurts what is within 10 blocks of its centre. */
+const BED_BLAST_REACH = 10;
 /** A bed used and a blast at its place are one event when the blast's centre is within this of the bed. */
 const BLAST_AT_BED = 3;
 /** The dragon dies in its dying phase 200 ticks after the last blow, and a death seen later than this after the body's last damage is not the body's. */
@@ -30,6 +33,11 @@ type Witness = { entity: any; id: number; uuid?: string; sessionId: string; gene
   swungAt: number | null; lastDamageAt: number | null; via: Set<Via>; damages: number };
 type Proof = { connectionId: string; bodyId: string; entityId: number; entityUuid: string | null; sessionId: string; generation: number; attackedAt: string; observedAt: string; commandId: string;
   via: Via[]; damages: number; lastDamageAt: string; deathSeen: DeathSeen };
+/**
+ * One hit on the dragon as it is reported: the server's name for it (`damage_event`: the body, someone else, or nothing for a blast with no entity behind it) and the client's hurt animation.
+ * The two come in one tick in either order, so a hit is decided HIT_SETTLE_MS after the first (or when the death or the snapshot asks).
+ */
+type Hit = { entity: any; at: number; named: 'body' | 'foreign' | 'none' | null; via?: Via; timer: ReturnType<typeof setTimeout> | null };
 type Advancement = { state: 'earned_during_connection' | 'not_earned' | 'earned_before_connection' | 'unknown'; at?: string };
 
 const KILL_DRAGON = 'minecraft:end/kill_dragon';
@@ -38,9 +46,9 @@ const KILL_DRAGON = 'minecraft:end/kill_dragon';
  * Ephemeral native evidence: no planner, model assertion, world command, or lifetime kill ledger.
  *
  * The proof of a dragon kill is the body's own damage to THIS dragon and then THIS dragon's death, in this connection and this task's context:
- *  - the damage is the body's when the server names the body as its cause (`damage_event`: a sword or an arrow), when the dragon is hurt just after the
- *    body's swing at it or at one of its parts (`bot.attack`, a part's id is the body's + 1..8), or just after a bed the body used blew beside it;
- *  - the death is the entity's death (`entityDead`), or its removal while it was in its dying phase (the end of the death animation), seen within
+ *  - the damage is the body's when the server names the body as its cause (`damage_event`: a sword or an arrow), or, for a hit it names no cause for, when the dragon is hurt
+ *    just after a bed the body used blew within 10 blocks of it (or, on a server that names no causes at all, just after the body's swing at it or at one of its parts);
+ *  - the death is the entity's death (`entityDead`), or its removal with no health left (the end of the death animation of a dragon that died flying), seen within
  *    DEATH_GRACE_MS of that damage: the blow's hand may have ended, and the command with it, long before the dragon finished dying;
  *  - a reconnect, a new life, another dimension, another task or a damage that was not the body's is never proof (unknown, not false success).
  * The advancement `end/kill_dragon` is read from the server's advancement packets and told beside the proof when it came in during this connection.
@@ -62,6 +70,9 @@ export class NativeGoalEvidence {
   /** A bed the body used in the End (where, when), and the blasts the server announced (centre, when): a blast at the bed is the bed's. */
   private bedUsed: { x: number; y: number; z: number; at: number } | null = null;
   private blast: { x: number; y: number; z: number; at: number; bed: boolean } | null = null;
+  /** Hits on the dragon not yet decided (see `Hit`), and whether this server names the cause of damage at all (it does from 1.19.4: then no hurt is credited on a guess). */
+  private readonly hits = new Map<number, Hit>();
+  private namesSeen = false;
   constructor(private readonly bot: any, private readonly now: () => number = Date.now) {
     this.originalAttack = bot.attack;
     this.attackTap = (...args: any[]) => {
@@ -130,8 +141,8 @@ export class NativeGoalEvidence {
     const witness = this.witnessFor(this.dragonOf(target));
     if (witness) witness.swungAt = this.now();
   }
-  private damaged(witness: Witness, via: Via): void {
-    const t = this.now();
+  private damaged(witness: Witness, via: Via, at = this.now()): void {
+    const t = at;
     // The server's name for a hit and the client's hurt animation are two reports of one hit.
     if (witness.lastDamageAt === null || t - witness.lastDamageAt >= 250) witness.damages++;
     witness.lastDamageAt = t; witness.via.add(via);
@@ -146,36 +157,73 @@ export class NativeGoalEvidence {
     const t = this.now(), bed = this.bedUsed;
     this.blast = { x: c.x, y: c.y, z: c.z, at: t, bed: !!bed && t - bed.at <= BLAST_HURT_MS && Math.hypot(bed.x - c.x, bed.y - c.y, bed.z - c.z) <= BLAST_AT_BED };
   };
-  /** The server names who hurt whom: the body as the cause (or the direct one) of damage to the dragon is the body's damage. */
+  /** The hit in the making on this dragon (a new one when the last was decided), with its decision scheduled. */
+  private hitOn(entity: any): Hit {
+    const kept = this.hits.get(entity.id);
+    if (kept) return kept;
+    const hit: Hit = { entity, at: this.now(), named: null, timer: null };
+    hit.timer = setTimeout(() => this.settle(entity.id), HIT_SETTLE_MS);
+    (hit.timer as { unref?: () => void }).unref?.();
+    this.hits.set(entity.id, hit);
+    return hit;
+  }
+  /** The server names who hurt whom: the body as the cause (or the direct one) of damage to the dragon is the body's damage; another's is not, whatever the body did just before. */
   private readonly onDamageEvent = (packet: any) => {
+    this.namesSeen = true;
     const me = this.bot.entity?.id;
     if (typeof me !== 'number' || packet?.entityId === undefined) return;
     const victim = this.bot.entities?.[packet.entityId];
     if (!dragon(victim)) return;
-    if (Number(packet.sourceCauseId ?? 0) !== me + 1 && Number(packet.sourceDirectId ?? 0) !== me + 1) return;
-    const witness = this.witnessFor(victim);
-    if (!witness) return;
-    const direct = Number(packet.sourceDirectId ?? 0), directName = direct > 0 ? String(this.bot.entities?.[direct - 1]?.name ?? '') : '';
-    this.damaged(witness, direct === me + 1 ? 'sword' : /arrow|trident/u.test(directName) ? 'arrow' : directName === 'end_crystal' ? 'explosion' : 'server_named');
+    const hit = this.hitOn(victim);
+    const cause = Number(packet.sourceCauseId ?? 0), direct = Number(packet.sourceDirectId ?? 0);
+    if (cause === me + 1 || direct === me + 1) {
+      const directName = direct > 0 ? String(this.bot.entities?.[direct - 1]?.name ?? '') : '';
+      hit.named = 'body';
+      hit.via = direct === me + 1 ? 'sword' : /arrow|trident/u.test(directName) ? 'arrow' : directName === 'end_crystal' ? 'explosion' : 'server_named';
+    } else if (cause > 0 || direct > 0) hit.named = hit.named === 'body' ? 'body' : 'foreign';
+    else hit.named ??= 'none';
   };
-  /** The dragon hurt just after the body's swing, or just after the blast of a bed the body used. */
+  /** The client's hurt animation of the dragon: a hit, to be decided with the server's name for it (if the server gives one). */
   private readonly onHurt = (entity: any) => {
-    if (!dragon(entity)) return;
-    const t = this.now(), witness = this.attacks.get(entity.id);
-    if (witness && witness.entity === entity && witness.swungAt !== null && t - witness.swungAt <= SWING_HURT_MS) { this.damaged(witness, 'sword'); return; }
-    const blast = this.blast;
-    if (blast?.bed && t - blast.at <= BLAST_HURT_MS) { const fresh = this.witnessFor(entity); if (fresh) this.damaged(fresh, 'explosion'); }
+    if (dragon(entity)) this.hitOn(entity);
   };
+  /** Whether the blast the body's bed made was near enough to the dragon (any part of it) to be what hurt it. */
+  private blastReaches(entity: any): boolean {
+    const blast = this.blast;
+    if (!blast || !entity?.position) return false;
+    const placed = { position: entity.position, yaw: Number(entity.yaw ?? 0) };
+    return (['head', 'neck', 'body', 'wing1', 'wing2'] as DragonPart[]).some(part => boxDistance(blast, partBox(placed, part)) <= BED_BLAST_REACH);
+  }
+  /** Decide a hit: the body's by the server's name; or, with no name given, by the body's swing just before or the blast of its own bed just around it. */
+  private settle(id: number): void {
+    const hit = this.hits.get(id);
+    if (!hit) return;
+    if (hit.timer) clearTimeout(hit.timer);
+    this.hits.delete(id);
+    const entity = hit.entity;
+    if (hit.named === 'foreign') return;
+    const blast = this.blast;
+    const bedBlast = !!blast?.bed && Math.abs(hit.at - blast.at) <= BLAST_HURT_MS && this.blastReaches(entity);
+    if (hit.named === 'body') { const witness = this.witnessFor(entity); if (witness) this.damaged(witness, hit.via ?? 'server_named', hit.at); return; }
+    if (bedBlast) { const witness = this.witnessFor(entity); if (witness) this.damaged(witness, 'explosion', hit.at); return; }
+    // A name the server did not give (a hit with no cause, or an older server that gives none): a server that names causes has said it was not the body's.
+    if (hit.named === null && !this.namesSeen) {
+      const witness = this.attacks.get(entity.id);
+      if (witness && witness.entity === entity && witness.swungAt !== null && hit.at - witness.swungAt >= 0 && hit.at - witness.swungAt <= SWING_HURT_MS) this.damaged(witness, 'sword', hit.at);
+    }
+  }
+  private settleAll(): void { for (const id of [...this.hits.keys()]) this.settle(id); }
   private commandId = '';
   /** Keep source operation identity separate from the immutable task key. */
   begin(command: MinecraftControlCommand): void { this.enter(command); this.commandId = command.id; }
   private prove(entity: any, how: DeathSeen): void {
+    this.settleAll();
     const current = this.current, witness = this.attacks.get(entity?.id);
     if (!current || this.disconnected || dimension(this.bot) !== 'the_end' || !dragon(entity) || !witness || witness.entity !== entity
       || witness.uuid !== (typeof entity.uuid === 'string' ? entity.uuid : undefined) || witness.sessionId !== current.context.sessionId || witness.generation !== current.context.generation) return;
     const t = this.now();
-    // The blow that kills may be the only one the server named before the death: a swing that is this fresh is the damage.
-    if (witness.lastDamageAt === null && how === 'entityDead' && witness.swungAt !== null && t - witness.swungAt <= SWING_HURT_MS) this.damaged(witness, 'sword');
+    // A server that gives no names (a hit with no `damage_event` at all): the blow that kills may be the only report, and a swing that fresh is the damage.
+    if (witness.lastDamageAt === null && how === 'entityDead' && !this.namesSeen && witness.swungAt !== null && t - witness.swungAt <= SWING_HURT_MS) this.damaged(witness, 'sword');
     if (witness.lastDamageAt === null || t - witness.lastDamageAt > DEATH_GRACE_MS) return;
     this.proofs.set(`${current.connectionId}:${current.key}`, { connectionId: current.connectionId, bodyId: current.context.bodyId, entityId: entity.id, entityUuid: witness.uuid ?? null,
       sessionId: witness.sessionId, generation: witness.generation, attackedAt: witness.attackedAt, observedAt: new Date(t).toISOString(), commandId: witness.commandId,
@@ -186,19 +234,20 @@ export class NativeGoalEvidence {
   }
   private readonly onDeath = (entity: any) => { this.prove(entity, 'entityDead'); };
   /**
-   * Removed from the client. The dragon's death animation ends in a removal: seen while it was dying (its phase 9, or no health left), after the body's
-   * damage, that is its death. Removed otherwise (a chunk unloaded, out of the client's range), the body's damage no longer shows what became of it.
+   * Removed from the client. The dragon's death animation ends in a removal: seen with no health left (the server sets it to 0 as the death begins; a dragon flying to its
+   * death has health 1 and a phase 9 until then), after the body's damage, that is its death. Removed otherwise (a chunk unloaded, out of the client's range, a dragon
+   * still dying), nothing of what became of it is seen.
    */
   private readonly onGone = (entity: any) => {
-    if (dragon(entity)) {
-      let dying = false;
-      try { dying = isDying(dragonPhaseOf(this.bot, entity)) || (typeof entity?.metadata?.[9] === 'number' && entity.metadata[9] <= 0); } catch { dying = false; }
-      if (dying && this.attacks.has(entity.id)) { this.prove(entity, 'dying_gone'); }
+    if (dragon(entity) && this.attacks.has(entity.id)) {
+      let dead = false;
+      try { dead = typeof entity?.metadata?.[9] === 'number' && entity.metadata[9] <= 0; } catch { dead = false; }
+      if (dead) this.prove(entity, 'dying_gone');
     }
     this.attacks.delete(entity?.id);
   };
   private readonly onRespawn = () => { this.attacks.clear(); };
-  private readonly onEnd = () => { this.disconnected = true; this.attacks.clear(); this.proofs.clear(); this.current = null; };
+  private readonly onEnd = () => { this.disconnected = true; this.attacks.clear(); this.proofs.clear(); this.current = null; for (const hit of this.hits.values()) if (hit.timer) clearTimeout(hit.timer); this.hits.clear(); };
   /** The server's advancement packets: the first of a connection is the state at login (earned before), later ones are news (earned during). */
   private readonly onAdvancements = (packet: any) => {
     const first = !this.advancements.seen || packet?.reset === true;
@@ -220,6 +269,7 @@ export class NativeGoalEvidence {
     return { state: this.advancements.earned.has(KILL_DRAGON) ? 'earned_before_connection' : 'not_earned' };
   }
   snapshot() {
+    this.settleAll();
     this.expire();
     const current = this.current;
     const proof = current ? this.proofs.get(`${current.connectionId}:${current.key}`) : undefined;

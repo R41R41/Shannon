@@ -43,6 +43,8 @@ const body = new NativeCommonFcaBody(actor, { serverId: 'end-fight-probe', captu
 let disconnected: string | null = null;
 actor.on('end', (reason: unknown) => { disconnected ??= `end:${String(reason)}`; });
 actor.on('kicked', (reason: unknown) => { disconnected ??= `kicked:${JSON.stringify(reason).slice(0, 200)}`; });
+let actorDeaths = 0;
+actor.on('death', () => { actorDeaths++; });
 actor.on('error', (error: Error) => { log(`ACTOR_ERROR ${String(error?.message ?? error).slice(0, 200)}`); });
 operator.on('end', (reason: unknown) => { disconnected ??= `operator-end:${String(reason)}`; });
 
@@ -125,6 +127,14 @@ async function perch(health = 200, phase = 6): Promise<void> {
 let reflexOff: NodeJS.Timeout | null = null;
 const holdReflexOff = () => { releaseReflex(); const push = () => { const state = (actor as any).floorReflexes; if (state) state.dragonNextAt = Date.now() + 3000; }; push(); reflexOff = setInterval(push, 500); };
 const releaseReflex = () => { if (reflexOff) { clearInterval(reflexOff); reflexOff = null; } const state = (actor as any).floorReflexes; if (state) state.dragonNextAt = 0; };
+/** The dragon parked far off, hovering (phase 10), so that only what a scene summons acts on the body. */
+let parked: NodeJS.Timeout | null = null;
+const park = async (on: boolean) => {
+  if (parked) { clearInterval(parked); parked = null; }
+  if (!on) return;
+  const put = async () => { await ask(`${END} data modify entity ${DRAGON} DragonPhase set value 10`); await ask(`${END} tp ${DRAGON} 0.5 ${g + 70} 160`); };
+  await put(); parked = setInterval(() => { void put(); }, 4000);
+};
 const phaseNow = () => { const dragon = dragonEntity(); return dragon ? dragonPhaseOf(actor, dragon) : null; };
 const gear = async (items: string[]) => {
   await ask(`clear ${ACTOR}`);
@@ -150,7 +160,7 @@ scenes.enter = async () => {
     if (dragon && dragonAt === null) dragonAt = Date.now() - t0;
     const view = endView();
     if (view?.crystals?.left >= 1 && crystalsAt === null) crystalsAt = Date.now() - t0;
-    if (dragonAt !== null && crystalsAt !== null && view?.fountain) break;
+    if (dragonAt !== null && view?.fountain && (crystalsAt !== null || Date.now() - t0 > dragonAt + 8000)) break;
     await sleep(500);
   }
   const view = endView();
@@ -272,15 +282,14 @@ scenes.hand = async () => {
 
 scenes.breath = async () => {
   await protect(false);
+  await park(true);
   await flatten(); await gear(['diamond_sword']); await wear();
   await ask(`${END} kill @e[type=minecraft:area_effect_cloud]`);
   const out: Record<string, unknown> = {};
-  // The dragon away (flying), so that only the cloud acts on the body.
-  await ask(`${END} data modify entity ${DRAGON} DragonPhase set value 0`);
   const runs: Array<Record<string, unknown>> = [];
   for (const radius of [3, 5, 7]) {
-    await standAt(-5.5, g, 11.5); await sleep(800);
-    const healthBefore = Number(actor.health);
+    await ask(`effect give ${ACTOR} minecraft:instant_health 1 5`); await standAt(-5.5, g, 11.5); await sleep(1500);
+    const healthBefore = Number(actor.health), deathsBefore = actorDeaths, ledgerMark = (actor.reflexLedger?.mark?.() as number | undefined) ?? 0;
     const summon = `${END} summon minecraft:area_effect_cloud -5.5 ${g} 11.5 {Particle:{type:"minecraft:dragon_breath"},Radius:${radius}f,Duration:200,WaitTime:20,ReapplicationDelay:20,potion_contents:{custom_effects:[{id:"minecraft:instant_damage",amplifier:0,duration:1}]}}`;
     const startedAt = Date.now();
     let exitedAt: number | null = null, detectedAt: number | null = null, firstForward: number | null = null, cloudSeen: number | null = null, maxJump = false, sprinted = false;
@@ -302,18 +311,19 @@ scenes.breath = async () => {
     actor.setControlState = originalKey;
     await sleep(500);
     const p = actor.entity.position;
-    runs.push({ radius, summonAnswer: answered.slice(0, 160), cloudInClientAfterMs: cloudSeen, firstForwardKeyAfterMs: firstForward, firstStepAfterMs: detectedAt, outOfZoneAfterMs: exitedAt, finalFlatDistance: round(Math.hypot(p.x + 5.5, p.z - 11.5), 2), healthLost: round(healthBefore - Number(actor.health), 1), jumped: maxJump, sprinted });
+    runs.push({ radius, summonAnswer: answered.slice(0, 160), cloudInClientAfterMs: cloudSeen, firstForwardKeyAfterMs: firstForward, firstStepAfterMs: detectedAt, outOfZoneAfterMs: exitedAt, died: actorDeaths > deathsBefore, ledger: ((actor.reflexLedger?.entriesSince?.(ledgerMark) as Array<{ kind: string; at: number; detail: string; outcome: string }> | undefined) ?? []).map(e => `${e.kind}:${e.outcome}@${e.at - startedAt}ms:${e.detail.slice(0, 70)}`), finalFlatDistance: round(Math.hypot(p.x + 5.5, p.z - 11.5), 2), healthLost: round(healthBefore - Number(actor.health), 1), jumped: maxJump, sprinted });
     log(`BREATH radius ${radius}: ${JSON.stringify(runs.at(-1))}`);
     await ask(`${END} kill @e[type=minecraft:area_effect_cloud]`);
   }
+  await park(false);
   out.runs = runs;
   return out;
 };
 
 scenes.fireball = async () => {
   await protect(false);
+  await park(true);
   await flatten(); await gear(['diamond_sword']); await wear();
-  await ask(`${END} data modify entity ${DRAGON} DragonPhase set value 0`);
   const runs: Array<Record<string, unknown>> = [];
   for (const [label, wide] of [['straight at the body', 0], ['passing 14 blocks to the side', 14]] as Array<[string, number]>) {
     await standAt(-3.5, g, 4.5); await sleep(1000);
@@ -335,6 +345,7 @@ scenes.fireball = async () => {
     await ask(`${END} kill @e[type=minecraft:area_effect_cloud]`); await ask(`${END} kill @e[type=minecraft:dragon_fireball]`);
     await ask(`effect give ${ACTOR} minecraft:instant_health 1 5`); await sleep(500);
   }
+  await park(false);
   return { runs };
 };
 
@@ -345,6 +356,8 @@ scenes.arrow_dragon = async () => {
   const keep = setInterval(() => { void ask(`${END} data modify entity ${DRAGON} DragonPhase set value 10`); void ask(`${END} tp ${DRAGON} 0.5 ${g + 14} 0.5`); }, 1500);
   await ask(`${END} data modify entity ${DRAGON} DragonPhase set value 10`); await ask(`${END} tp ${DRAGON} 0.5 ${g + 14} 0.5`);
   await ask(`${END} data modify entity ${DRAGON} Health set value 200.0f`);
+  // a slab to stand on at 28 blocks out (the natural ground there is not level with the podium: r4 put the body in a wall and its wall-escape reflex held it)
+  await ask(`${END} fill -4 ${g} 24 5 ${g + 8} 34 air replace end_stone`, 20_000); await ask(`${END} fill -4 ${g - 1} 24 5 ${g - 1} 34 end_stone`, 20_000);
   await standAt(0.5, g, 28.5); await sleep(1500);
   const damage: unknown[] = [];
   const dragon0 = dragonEntity();
@@ -358,6 +371,63 @@ scenes.arrow_dragon = async () => {
   const after = entityHealth(actor, dragonEntity());
   const proof = await evidence();
   return { act: run.lines, ok: run.ok, healthClientBefore: before, healthClientAfter: after, damageEvents: damage, bossWitness: proof?.boss?.witness ?? null, bossVerified: proof?.boss?.verified };
+};
+
+scenes.cycle = async () => {
+  // The whole perch cycle without a planner: the dragon is sent to land by its own landing phases (2 -> 3 -> 5 -> 6 -> 7 -> 5 ... -> 4), the crystals are taken away (their healing would hide
+  // the blows), and a stand-in for the planner brings the body under the head with a `tp` (a `go` would walk) and sends `attack ender_dragon` while it sits. The floor reflex is ON:
+  // it steps out of the flame and the boxes. Per perch: the phases and when, the blows and how many landed, the health the dragon lost, the reflexes that fired, the actor's health.
+  await protect(false);
+  await flatten(); await gear(['diamond_sword']); await wear(); await hold('diamond_sword');
+  await ask(`${END} kill @e[type=minecraft:end_crystal]`);
+  await ask(`${END} data modify entity ${DRAGON} Health set value 200.0f`);
+  await ask(`${END} data modify entity ${DRAGON} DragonPhase set value 2`);
+  const t0 = Date.now(); const rel = () => Math.round((Date.now() - t0) / 100) / 10;
+  const timeline: Array<[number, string]> = [];
+  let lastPhase: number | null = null, minHealth = Number(actor.health), deaths = 0;
+  actor.on('death', () => { deaths++; });
+  const watcher = setInterval(() => {
+    const d = dragonEntity(); const p = d ? dragonPhaseOf(actor, d) : null;
+    if (p !== lastPhase) { timeline.push([rel(), `phase ${p}`]); lastPhase = p; }
+    minHealth = Math.min(minHealth, Number(actor.health));
+  }, 100);
+  const ledgerAt = (actor.reflexLedger?.mark?.() as number | undefined) ?? 0;
+  const perches: Array<Record<string, unknown>> = [];
+  let sitting = false, blowsTotal = 0, landedTotal = 0, acts = 0;
+  const startHealth = entityHealth(actor, dragonEntity());
+  while (Date.now() - t0 < 170_000 && deaths === 0) {
+    const dragon = dragonEntity();
+    if (!dragon) { await sleep(500); continue; }
+    const phase = dragonPhaseOf(actor, dragon);
+    const health = entityHealth(actor, dragon);
+    if (health !== null && health <= 20) break;
+    if (phase !== null && phase >= 5 && phase <= 7) {
+      if (!sitting) { sitting = true; perches.push({ startedAt: rel(), phaseAtStart: phase, healthAtStart: health }); }
+      // The stand-in for the planner: the body under the head, then the hand, in the perch (not in the flame: the reflex will have it away).
+      await standForHeadDistance(3.5);
+      const before = entityHealth(actor, dragonEntity());
+      const run = await act([{ do: 'attack', target: 'ender_dragon', untilDead: false, seconds: 10 }], 25);
+      acts++;
+      const m = /(\d+)回振って (\d+)回当たった/u.exec(run.lines.join(' '));
+      const blows = m ? Number(m[1]) : 0, landed = m ? Number(m[2]) : 0;
+      blowsTotal += blows; landedTotal += landed;
+      const last = perches[perches.length - 1];
+      last.acts = ((last.acts as number) ?? 0) + 1; last.blows = ((last.blows as number) ?? 0) + blows; last.landed = ((last.landed as number) ?? 0) + landed;
+      last.lines = [...((last.lines as string[]) ?? []), run.lines.join(' ').slice(0, 260)];
+      last.healthLost = round((Number(last.healthAtStart) || 0) - (entityHealth(actor, dragonEntity()) ?? 0), 1);
+      if (before !== null) last.lastActLoss = round(before - (entityHealth(actor, dragonEntity()) ?? before), 1);
+      await sleep(300);
+    } else {
+      if (sitting) { sitting = false; const last = perches[perches.length - 1]; last.endedAt = rel(); last.phaseAtEnd = phase; }
+      await sleep(300);
+    }
+  }
+  clearInterval(watcher);
+  const entries = ((actor.reflexLedger?.entriesSince?.(ledgerAt) as Array<{ kind: string; detail: string; outcome: string }> | undefined) ?? []).map(e => `${e.kind}:${e.outcome}:${e.detail.slice(0, 80)}`);
+  const kinds: Record<string, number> = {};
+  for (const e of entries) { const k = e.split(':')[0]; kinds[k] = (kinds[k] ?? 0) + 1; }
+  return { seconds: rel(), dragonHealthStart: startHealth, dragonHealthEnd: entityHealth(actor, dragonEntity()), perches, acts, blowsTotal, landedTotal, reflexKinds: kinds, reflexSample: entries.slice(0, 12),
+    actorMinHealth: round(minHealth, 1), actorDeaths: deaths, timeline: timeline.slice(0, 60) };
 };
 
 scenes.crystal_bow = async () => {
@@ -422,75 +492,77 @@ scenes.crystal_caged = async () => {
 };
 
 scenes.crystal_blast = async () => {
+  // The blast model against the server's real blasts. A crystal is summoned in the air over the arena (z 17.5) and the body stands at a given distance on the slab, level with it, with
+  // or without a wall of obsidian between; the crystal is hurt by the operator (`damage`: a crystal is not hurt by /kill, it is only removed) and the health lost is read.
   await protect(false);
+  await park(true);
   await flatten(); await gear(['diamond_sword']); await wear();
-  const view = endView();
-  const open = (view?.crystals?.list ?? []).filter((c: any) => c.caged === false);
-  if (!open.length) return { error: 'no uncaged crystal in sight' };
-  const target = open[0];
-  const out: Record<string, unknown> = { crystal: { id: target.id, x: target.x, y: target.y, z: target.z }, trials: [] as unknown[] };
+  const out: Record<string, unknown> = {};
   const trials: Array<Record<string, unknown>> = [];
-  await ask(`${END} data modify entity ${DRAGON} DragonPhase set value 0`);
-  // The crystals tend to stand on small tops: put the actor on a slab at the crystal's own height, round it, at the given distance and with or without a wall between.
-  const stand = async (distance: number, wall: boolean) => {
-    const sx = Math.round(target.x - distance), sy = Math.round(target.y);
-    await ask(`${END} fill ${sx - 2} ${sy - 1} ${Math.round(target.z) - 2} ${sx + 2} ${sy - 1} ${Math.round(target.z) + 2} end_stone`);
-    await ask(`${END} fill ${sx - 2} ${sy} ${Math.round(target.z) - 2} ${sx + 2} ${sy + 4} ${Math.round(target.z) + 2} air`);
-    if (wall) await ask(`${END} fill ${sx + 2} ${sy} ${Math.round(target.z) - 3} ${sx + 2} ${sy + 3} ${Math.round(target.z) + 3} obsidian`);
-    await standAt(sx + 0.5, sy, Math.round(target.z) + 0.5);
+  const crystalAt = { x: 0.5, y: g + 1, z: 17.5 };
+  const summonCrystal = async () => {
+    await ask(`${END} kill @e[type=minecraft:end_crystal]`);
+    await ask(`${END} summon minecraft:end_crystal ${crystalAt.x} ${crystalAt.y} ${crystalAt.z} {ShowBottom:0b}`);
+    for (let i = 0; i < 20; i++) { if ((Object.values(actor.entities) as any[]).some(e => e?.name === 'end_crystal' && Math.abs(e.position.z - crystalAt.z) < 1.5)) break; await sleep(150); }
+    return (Object.values(actor.entities) as any[]).find(e => e?.name === 'end_crystal' && Math.abs(e.position.z - crystalAt.z) < 1.5) ?? null;
   };
-  // The attack hand at a crystal within reach: refused, with the estimate (it is not struck).
-  await stand(2.5, false);
-  const refused = await act([{ do: 'attack', target: `#${target.id}` }], 10);
-  out.meleeRefusal = { lines: refused.lines, crystalStillThere: actor.entities?.[target.id] !== undefined };
-  await ask(`gamemode survival ${ACTOR}`);
-  for (const [distance, wall] of [[12.5, false], [10.5, false], [8.5, false], [6.5, true]] as Array<[number, boolean]>) {
-    await stand(distance, wall); await sleep(500);
-    const crystal = actor.entities?.[target.id]; if (!crystal) { trials.push({ distance, error: 'crystal gone' }); break; }
-    const estimate = blastAt(actor, { x: crystal.position.x, y: crystal.position.y + 1, z: crystal.position.z });
-    const healthBefore = Number(actor.health);
-    await ask(`${END} damage @e[type=minecraft:end_crystal,x=${crystal.position.x},y=${crystal.position.y},z=${crystal.position.z},distance=..2,limit=1] 1 minecraft:arrow`);
-    await sleep(900);
-    const lost = round(healthBefore - Number(actor.health), 1);
-    trials.push({ distance, wall, estimate: { distance: estimate.distance, seen: estimate.seen, raw: estimate.raw, expected: estimate.expected }, healthLost: lost, health: actor.health });
-    log(`BLAST ${distance} m wall ${wall}: estimate ${estimate.expected} raw ${estimate.raw}, real loss ${lost}`);
-    await ask(`effect give ${ACTOR} minecraft:instant_health 1 5`); await sleep(600);
-    // a crystal is needed for the next trial: put one back
-    await ask(`${END} summon minecraft:end_crystal ${crystal.position.x} ${crystal.position.y} ${crystal.position.z} {ShowBottom:0b}`);
-    await sleep(800);
-    const again = (Object.values(actor.entities) as any[]).find(e => e?.name === 'end_crystal' && e.position.distanceTo(crystal.position) < 1);
-    if (!again) break;
-    target.id = again.id;
+  // The attack hand at a crystal within reach is refused, with the estimate; nothing is struck.
+  await ask(`${END} fill -3 ${g} 14 3 ${g + 4} 16 air`);
+  let crystal = await summonCrystal();
+  await standAt(0.5, g, crystalAt.z - 2.4); await sleep(600);
+  if (crystal) {
+    const refused = await act([{ do: 'attack', target: `#${crystal.id}` }], 10);
+    out.meleeRefusal = { lines: refused.lines, crystalStillThere: actor.entities?.[crystal.id] !== undefined };
   }
+  for (const [distance, wall] of [[12.5, false], [10.5, false], [8.5, false], [6.5, false], [8.5, true]] as Array<[number, boolean]>) {
+    await ask(`${END} fill -3 ${g} 4 3 ${g + 6} 16 air`); // no wall left from the last trial (the podium ring is at z <= 4)
+    crystal = await summonCrystal();
+    if (!crystal) { trials.push({ distance, error: 'no crystal' }); continue; }
+    const z = crystalAt.z - distance;
+    if (wall) await ask(`${END} fill -2 ${g} ${z + 3} 3 ${g + 4} ${z + 3} obsidian`);
+    await ask(`effect give ${ACTOR} minecraft:instant_health 1 5`);
+    await standAt(0.5, g, z); await sleep(1500);
+    const estimate = blastAt(actor, crystal.position);
+    const healthBefore = Number(actor.health), deathsBefore = actorDeaths;
+    await ask(`${END} damage @e[type=minecraft:end_crystal,limit=1] 1 minecraft:arrow`);
+    await sleep(1200);
+    const lost = round(healthBefore - Number(actor.health), 1);
+    trials.push({ distance, wall, estimate: { distance: estimate.distance, seen: estimate.seen, raw: estimate.raw, expected: estimate.expected }, healthLost: lost, died: actorDeaths > deathsBefore });
+    log(`BLAST ${distance} m wall ${wall}: estimate ${estimate.expected} (raw ${estimate.raw}, seen ${estimate.seen}), real loss ${lost}`);
+  }
+  await park(false);
   out.trials = trials;
   return out;
 };
 
 scenes.bed = async () => {
+  // A bed blown beside the dragon on its perch: behind a wall of obsidian (the body's estimate is small), then in the open (the body refuses). The dragon is kept in phase 6 and the reflex held off.
   await protect(false);
+  holdReflexOff();
   await flatten(); await gear(['white_bed 4', 'diamond_sword']); await wear();
-  await perch(200);
   const out: Record<string, unknown> = {};
-  // The head's middle at (0.5, g + 3.5, 7.0). A bed on a block beside it, the actor behind a wall of obsidian at the given distance from the bed.
   const trials: Array<Record<string, unknown>> = [];
-  for (const [label, bedX, wallBetween] of [['bed near the head, wall between', 1, true], ['bed near the head, open', 1, false]] as Array<[string, number, boolean]>) {
+  const keep = setInterval(() => { void ask(`${END} data modify entity ${DRAGON} DragonPhase set value 6`); }, 1500);
+  for (const [label, wallBetween] of [['bed beside the head, wall between', true], ['bed beside the head, in the open', false]] as Array<[string, boolean]>) {
     await perch(200);
     await flatten();
-    // a pillar of end stone under the bed, so that the bed is level with the head's box
-    await ask(`${END} fill ${bedX} ${g} 6 ${bedX} ${g + 2} 6 end_stone`);
-    await ask(`${END} setblock ${bedX} ${g + 3} 6 white_bed[facing=south,part=foot]`);
-    await ask(`${END} setblock ${bedX} ${g + 3} 7 white_bed[facing=south,part=head]`);
-    const standZ = 2, standX = bedX + 3;
-    if (wallBetween) await ask(`${END} fill ${standX - 1} ${g} 2 ${standX - 1} ${g + 4} 8 obsidian`);
-    await standAt(standX + 0.5, g, standZ + 0.5); await sleep(700);
-    const healthBefore = Number(actor.health);
+    // an end stone pillar 3 high under the bed, so that the bed is level with the head's box (the head's middle at about (0.5, g + 3.5, 7))
+    await ask(`${END} fill 1 ${g} 6 1 ${g + 2} 6 end_stone`);
+    await ask(`${END} setblock 1 ${g + 3} 6 white_bed[facing=south,part=foot]`);
+    await ask(`${END} setblock 1 ${g + 3} 7 white_bed[facing=south,part=head]`);
+    // the body 4.6 m from the bed (the right click reaches 5), east of it, the wall (if any) between
+    if (wallBetween) await ask(`${END} fill 3 ${g} 3 3 ${g + 5} 9 obsidian`);
+    await standAt(4.5, g, 4.5); await sleep(1200);
+    const healthBefore = Number(actor.health), deathsBefore = actorDeaths;
     const dragonBefore = await dragonHealthServer();
-    const run = await act([{ do: 'use', at: [{ x: bedX, y: g + 3, z: 7 }] }], 12);
-    await sleep(600);
+    const run = await act([{ do: 'use', at: [{ x: 1, y: g + 3, z: 6 }] }], 12);
+    await sleep(800);
     const dragonAfter = await dragonHealthServer();
-    trials.push({ label, lines: run.lines, ok: run.ok, healthLost: round(healthBefore - Number(actor.health), 1), dragonBefore, dragonAfter, dragonLoss: dragonBefore !== null && dragonAfter !== null ? round(dragonBefore - dragonAfter, 1) : null });
+    trials.push({ label, lines: run.lines, ok: run.ok, healthLost: round(healthBefore - Number(actor.health), 1), died: actorDeaths > deathsBefore, dragonBefore, dragonAfter, dragonLoss: dragonBefore !== null && dragonAfter !== null ? round(dragonBefore - dragonAfter, 1) : null });
     await ask(`effect give ${ACTOR} minecraft:instant_health 1 5`); await sleep(500);
   }
+  clearInterval(keep);
+  releaseReflex();
   out.trials = trials;
   return out;
 };
