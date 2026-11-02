@@ -95,6 +95,9 @@ export function bowSpeed(seconds: number): number {
  * arc, and the ticks of its flight; null when it cannot reach. Simulated as the game moves an arrow: move, drag, gravity.
  */
 export function aimPitch(speed: number, horizontal: number, rise: number): { pitch: number; ticks: number } | null {
+  // A target within two ticks of flight (a blaze hovering over a walled cell): the tick-by-tick search steps three blocks at a time and finds no pitch for it; the arrow flies straight there (the fall is a tenth of a block in so short a flight).
+  const straight = Math.hypot(horizontal, rise);
+  if (straight <= 2 * speed && speed > 0) return { pitch: Math.atan2(rise, horizontal), ticks: Math.max(1, Math.ceil(straight / speed)) };
   let best: { pitch: number; ticks: number; error: number } | null = null;
   for (let degrees = -89; degrees <= 89; degrees += 0.25) {
     const pitch = degrees * Math.PI / 180;

@@ -22,11 +22,11 @@ async function s1BlazeBow(note: (text: string) => void, options: { window: 'head
   const toward = [...sides].sort((a, b) => ((spawner[0] - cell!.x) * b[0] + (spawner[2] - cell!.z) * b[1]) - ((spawner[0] - cell!.x) * a[0] + (spawner[2] - cell!.z) * a[1]))[0];
   const place: Array<{ x: number; y: number; z: number }> = [];
   if (options.window === 'head' || options.window === 'low') {
-    // head: the head cell toward the spawner is the window (a lintel over it clips the arrows that go up: S2's nook, 34 to 70 degrees); low: the side toward the spawner is a wall of one block only, the sky and the room open over it
+    // head: the head cell toward the spawner is the window (a lintel over it clips the arrows that go up: S2's nook, 34 to 70 degrees); low: every side is a wall of one block only (a trench: the sky and the room open over it, the arrows leave at any angle)
     for (const [dx, dz] of sides) {
       const x = cell.x + dx, z = cell.z + dz;
       if (!solidAt(x, cell.y, z)) place.push({ x, y: cell.y, z });
-      if (!(dx === toward[0] && dz === toward[1]) && !solidAt(x, cell.y + 1, z)) place.push({ x, y: cell.y + 1, z });
+      if (options.window === 'head' && !(dx === toward[0] && dz === toward[1]) && !solidAt(x, cell.y + 1, z)) place.push({ x, y: cell.y + 1, z });
     }
   } else {
     const open2 = sides.filter(([dx, dz]) => !solidAt(cell!.x + dx, cell!.y, cell!.z + dz) && !solidAt(cell!.x + dx, cell!.y + 1, cell!.z + dz) && !(dx === toward[0] && dz === toward[1]));
@@ -46,10 +46,20 @@ async function s1BlazeBow(note: (text: string) => void, options: { window: 'head
   const samples: string[] = [];
   let aborted = '';
   try {
-    const there = await act('go to the camp cell', [{ do: 'go', to: { x: cell.x, y: cell.y, z: cell.z }, range: 0.6, seconds: 25, canPlace, maxPlace: 10 }], 40, { accept: ['blaze'] });
-    note(`go: hp ${actor.health} ${(there.lines[0] ?? '').slice(0, 160)}`);
-    const built = await act('build the walls', [{ do: 'place', at: place, block: 'cobblestone' }], 40, { accept: ['blaze'] });
-    note(`place: hp ${actor.health} ${built.lines.join(' | ').slice(0, 300)}`);
+    // The camp cell first, the fire its neighbours may hold put out, the walls laid; asked again while the body is not on the cell or a wall is missing (a fireball pushes it off and sets fire to the cells).
+    for (let attempt = 1; attempt <= 4 && !disconnected && Number(actor.health) > 0; attempt++) {
+      const at = actor.entity.position as Vec3;
+      if (Math.hypot(at.x - (cell.x + 0.5), at.z - (cell.z + 0.5)) > 0.9 || Math.abs(at.y - cell.y) > 0.6) {
+        const there = await act(`go to the camp cell#${attempt}`, [{ do: 'go', to: { x: cell.x, y: cell.y, z: cell.z }, range: 0.6, seconds: 25, canPlace, maxPlace: 10 }], 40, { accept: ['blaze'] });
+        note(`go#${attempt}: hp ${r1(Number(actor.health))} ${(there.lines[0] ?? '').slice(0, 160)}`);
+      }
+      const burning = place.filter(p => /fire/u.test(String(actor.blockAt(new Vec3(p.x, p.y, p.z))?.name ?? '')));
+      if (burning.length) { const out = await act(`put out ${burning.length} fire`, [{ do: 'dig', at: burning.map(p => ({ x: p.x, y: p.y, z: p.z })) }], 20, { accept: ['blaze'] }); note(`dig fire: ${(out.lines[0] ?? '').slice(0, 140)}`); }
+      const missing = place.filter(p => !solidAt(p.x, p.y, p.z));
+      if (!missing.length) break;
+      const built = await act(`build the walls#${attempt}`, [{ do: 'place', at: missing, block: 'cobblestone' }], 40, { accept: ['blaze'] });
+      note(`place#${attempt}: hp ${r1(Number(actor.health))} missing ${missing.length} ${built.lines.join(' | ').slice(0, 260)}`);
+    }
     const inside = actor.entity.position as Vec3;
     note(`standing at ${r1(inside.x)},${r1(inside.y)},${r1(inside.z)}`);
     while (Date.now() - started < seconds * 1000 && !disconnected && Number(actor.health) > 0) {
@@ -87,3 +97,4 @@ async function s1BlazeBow(note: (text: string) => void, options: { window: 'head
 scene('s1_bow_head', 'S1: the camp cell walled with the head cell toward the spawner left open, the bow (shoot n 3) at the blazes, run59 pack + bow and 64 arrows', note => s1BlazeBow(note, { window: 'head' }));
 scene('s1_bow_front', 'S1: the camp cell with only the side away from the spawner closed (the front open), the bow at the blazes', note => s1BlazeBow(note, { window: 'front' }));
 scene('s1_bow_head_pick', 'S1: the head window, and the rods picked up at the end when the health allows', note => s1BlazeBow(note, { window: 'head', pick: true }));
+scene('s1_bow_low', 'S1: the camp cell a one-block wall on every side (a trench: nothing over it, the arrows leave at any angle), the bow at the blazes', note => s1BlazeBow(note, { window: 'low' }));
