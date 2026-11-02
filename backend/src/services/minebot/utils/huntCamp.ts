@@ -109,14 +109,23 @@ function openLine(solidAt: (x: number, y: number, z: number) => boolean, from: [
 
 /** Whether a blaze of the spawner (anywhere it may hover, see SHOOTER_SPOTS) has a clear line to the eye or the chest of a body standing at the cell. */
 export function seenFromSpawner(read: CampReader, spawner: { x: number; y: number; z: number }, cell: { x: number; y: number; z: number }): boolean {
+  return exposureFromSpawner(read, spawner, cell, true) > 0;
+}
+
+/**
+ * The share (0 to 1) of the places a blaze of the spawner may hover (SHOOTER_SPOTS that are open air) from which a body standing at the cell is in sight. `any`: stops at the first (the answer is only whether it is above 0).
+ */
+export function exposureFromSpawner(read: CampReader, spawner: { x: number; y: number; z: number }, cell: { x: number; y: number; z: number }, any = false): number {
   const solidAt = (x: number, y: number, z: number) => blocksSight(read(x, y, z));
+  let spots = 0, seeing = 0;
   for (const [dx, dy, dz] of SHOOTER_SPOTS) {
     // A blaze hovers in open air: a spot in rock (or not loaded) is nowhere a shot can come from.
     if (!open(read(spawner.x + dx, spawner.y + dy, spawner.z + dz)) || !open(read(spawner.x + dx, spawner.y + dy + 1, spawner.z + dz))) continue;
+    spots++;
     const eye: [number, number, number] = [spawner.x + 0.5 + dx, spawner.y + dy + BLAZE_EYE, spawner.z + 0.5 + dz];
-    if (openLine(solidAt, eye, [cell.x + 0.5, cell.y + BODY_EYE, cell.z + 0.5]) || openLine(solidAt, eye, [cell.x + 0.5, cell.y + BODY_CHEST, cell.z + 0.5])) return true;
+    if (openLine(solidAt, eye, [cell.x + 0.5, cell.y + BODY_EYE, cell.z + 0.5]) || openLine(solidAt, eye, [cell.x + 0.5, cell.y + BODY_CHEST, cell.z + 0.5])) { seeing++; if (any) return 1; }
   }
-  return false;
+  return spots ? seeing / spots : 0;
 }
 
 /**

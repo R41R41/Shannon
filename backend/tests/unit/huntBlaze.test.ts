@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { Vec3 } from 'vec3';
 import minecraftData from 'minecraft-data';
 import blockLoader from 'prismarine-block';
@@ -9,12 +9,20 @@ import { ACT_HANDS, runAct } from '../../src/services/minebot/instantSkills/act.
 import { createMotorPort, executeAction } from '../../src/services/minebot/execution/ActionExecution.js';
 import { cooldownMs } from '../../src/services/minebot/utils/primitives/attack.js';
 import { isEngaged } from '../../src/services/minebot/utils/engagement.js';
+import { go } from '../../src/services/minebot/utils/primitives/go.js';
+import { eat } from '../../src/services/minebot/utils/primitives/body.js';
+import { scanLoadedBlocks } from '../../src/services/minebot/utils/loadedBlockScan.js';
 import { GATE_PATIENCE_MS, GATE_WINDOW_MS, ShooterWatch, StrikeGate, blazeCharged, hoversAboveReach, nextShotTicks, strikeHold } from '../../src/services/minebot/utils/huntBlaze.js';
 
 // The blaze camp (S2, 2026-11-02): a blaze is not followed off the spot, a blaze that hovers beyond a sword's reach is waited for under the shield, what comes within reach is
 // struck, a blow waits (for a while) for a shot that is about to land or a blaze about to shoot, and the drop is told in the line the fight ends with.
 // The practice field is the fight hand's (tests/unit/fightHand.test.ts): the body moves by the client physics; the creatures are modelled (a blaze here is a point with a box
 // that stays where the scene puts it; it does not shoot: the shots and the flames are set by the scene).
+
+// The camp's retreat (below) walks with `go`, eats with `eat` and finds the spawner by the scan: each is the real one until a test says otherwise.
+vi.mock('../../src/services/minebot/utils/primitives/go.js', async importOriginal => { const actual = await importOriginal<typeof import('../../src/services/minebot/utils/primitives/go.js')>(); return { ...actual, go: vi.fn(actual.go) }; });
+vi.mock('../../src/services/minebot/utils/primitives/body.js', async importOriginal => { const actual = await importOriginal<typeof import('../../src/services/minebot/utils/primitives/body.js')>(); return { ...actual, eat: vi.fn(actual.eat) }; });
+vi.mock('../../src/services/minebot/utils/loadedBlockScan.js', async importOriginal => { const actual = await importOriginal<typeof import('../../src/services/minebot/utils/loadedBlockScan.js')>(); return { ...actual, scanLoadedBlocks: vi.fn(actual.scanLoadedBlocks) }; });
 
 const VERSION = '1.21.11';
 const mcData = minecraftData(VERSION);
@@ -278,6 +286,92 @@ describe('fight on a blaze: the shield and the choice of the blaze', () => {
     expect(lineOf(json)).toContain('#101');
     expect(camp.mobs[1].health).toBeLessThanOrEqual(0);
     expect(camp.mobs[0].health).toBe(20);
+  }, 60_000);
+});
+
+// S2 (2026-11-02, S4's c1 trials: a fight at the spawner ran the health down to 2 in one act): below the planner's retreatHp, or the camp's own 10 when none was given, the body leaves the
+// blazes' sight for a footing none of the spawner's blazes can see (utils/huntCamp, the one `probe kind=camp` names), eats and rests there until the health is back, and the hand ends.
+describe('fight on a blaze: below the retreat health, to a hideout', () => {
+  /** The spawner at (-3, 64, 2) with a wall of stone at x 3 from z -6 to 6, five high: what lies behind it is out of the sight of every blaze of the spawner. */
+  const wall: Array<[number, number, number]> = [];
+  for (let y = 64; y <= 68; y++) for (let z = -6; z <= 6; z++) wall.push([3, y, z]);
+  const scanSpawner = () => vi.mocked(scanLoadedBlocks).mockImplementation(((_bot: unknown, names: Iterable<string>) => ({ hits: [...names].includes('spawner') ? [{ name: 'spawner', position: new Vec3(-3, 64, 2), distance: 4 }] : [], columns: 9, reachMetres: 48, sectionsScanned: 1 })) as never);
+  const setUp = (health: number, options: { blazes?: BlazeSpec[]; meals?: boolean } = {}) => {
+    const camp = makeCamp({ shield: true, walls: wall, blazes: options.blazes ?? [{ at: new Vec3(-2.5, 65.5, 0.5) }] });
+    camp.bot.health = health; camp.bot.food = 14;
+    if (options.meals !== false) (camp.bot.inventory.slots as any[])[20] = itemOf('cooked_beef', 10, 20);
+    return camp;
+  };
+  const walkTo = () => vi.mocked(go).mockImplementationOnce((async (ctx: any, args: any) => { const at = args.goals[0]; ctx.bot.entity.position = new Vec3(at.x + 0.5, at.y, at.z + 0.5); return { ok: true, text: '着いた' }; }) as never);
+  const healBy = (camp: Camp, points: number) => vi.mocked(eat).mockImplementation((async () => { camp.bot.health = Math.min(20, camp.bot.health + points); camp.bot.emit('health'); return { ok: true, text: '食べた' }; }) as never);
+
+  it('with no retreatHp given the camp\'s own 10 applies: it goes to a footing behind the wall, eats, rests until the health is back (18), and the hand ends with where it was and how it went', async () => {
+    scanSpawner(); walkTo();
+    const camp = setUp(7);
+    healBy(camp, 6);
+    const { json } = await act(camp, [{ do: 'fight', target: 'blaze', seconds: 20 }]);
+    camp.stop();
+    const line = lineOf(json);
+    console.log('[blaze retreat]', line);
+    expect(json.ok).toBe(false);
+    expect(line).toContain('retreat');
+    expect(line).toMatch(/体力 7→19 退いた先 \(\d+,64,-?\d+\) は湧き場から見えない/u);
+    expect(line).toContain('戻った');
+    const goal = vi.mocked(go).mock.calls.at(-1)![1].goals[0];
+    expect(goal.x).toBeGreaterThanOrEqual(4);
+    expect(camp.bot.health).toBeGreaterThanOrEqual(18);
+    expect(vi.mocked(eat)).toHaveBeenCalledTimes(2);
+    expect(camp.mobs[0].health).toBe(20);
+  }, 60_000);
+
+  it('a footing the way to which is shut (go says why) gives way to the next one, and the first one\'s reason is not lost', async () => {
+    scanSpawner();
+    vi.mocked(go).mockClear();
+    vi.mocked(go).mockImplementationOnce((async () => ({ ok: false, text: 'go 止まった unsafe: 行き先は火の隣' })) as never);
+    walkTo();
+    const camp = setUp(7);
+    healBy(camp, 6);
+    const { json } = await act(camp, [{ do: 'fight', target: 'blaze', seconds: 20 }]);
+    camp.stop();
+    expect(vi.mocked(go)).toHaveBeenCalledTimes(2);
+    const [first, second] = vi.mocked(go).mock.calls.map(call => call[1].goals[0]);
+    expect(`${second.x},${second.y},${second.z}`).not.toBe(`${first.x},${first.y},${first.z}`);
+    expect(lineOf(json)).toContain('退いた先');
+    expect(camp.bot.health).toBeGreaterThanOrEqual(18);
+  }, 60_000);
+
+  it('a retreatHp the planner gave is its own limit: 1 keeps the body in the fight at 7 hearts (the camp\'s default is overridden, not added)', async () => {
+    scanSpawner();
+    vi.mocked(go).mockClear();
+    const camp = setUp(7, { blazes: [{ at: new Vec3(4.5, 70, 0.5), path: ms => ms < 1500 ? new Vec3(4.5, 70.5, 0.5) : new Vec3(1.5, 64.2, 0.5) }] });
+    const { json } = await act(camp, [{ do: 'fight', target: 'blaze', retreatHp: 1, seconds: 30 }]);
+    camp.stop();
+    expect(json.ok).toBe(true);
+    expect(lineOf(json)).toMatch(/^fight 済 blaze #100 死んだ/u);
+    expect(vi.mocked(go)).not.toHaveBeenCalled();
+  }, 60_000);
+
+  it('shot at the hideout too (health lost there): it does not rest on, and says so', async () => {
+    scanSpawner(); walkTo();
+    const camp = setUp(9);
+    vi.mocked(eat).mockImplementation((async () => { camp.bot.health -= 5; camp.bot.emit('health'); return { ok: true, text: '食べた' }; }) as never);
+    const { json } = await act(camp, [{ do: 'fight', target: 'blaze', seconds: 20 }]);
+    camp.stop();
+    expect(json.ok).toBe(false);
+    expect(lineOf(json)).toContain('でも撃たれた');
+  }, 60_000);
+
+  it('with no hideout known (nothing loaded says a spawner) it is the old flight: go is not asked for', async () => {
+    vi.mocked(scanLoadedBlocks).mockImplementation((() => ({ hits: [], columns: 9, reachMetres: 48, sectionsScanned: 1 })) as never);
+    vi.mocked(go).mockClear();
+    const camp = setUp(7, { meals: false });
+    camp.bot.food = 20;
+    const { json } = await act(camp, [{ do: 'fight', target: 'blaze', seconds: 20 }]);
+    camp.stop();
+    console.log('[blaze flight]', lineOf(json));
+    expect(json.ok).toBe(false);
+    expect(lineOf(json)).toContain('retreat');
+    expect(vi.mocked(go)).not.toHaveBeenCalled();
   }, 60_000);
 });
 

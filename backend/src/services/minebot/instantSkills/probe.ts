@@ -21,7 +21,8 @@ import { blazeCampReport, strongholdFramesReport } from '../utils/huntStructures
  *   history the act's hands and stops at a place (newest first);
  *   scan    what the loaded chunks hold (logs, a village, water, lava pools, structures, stems, a fortress, spawners, portals).
  *   frames  the stronghold's end portal frames within `radius` blocks of (x, z), or the next points of the 16-block rings to walk (S2: the same as find-structure stronghold);
- *   camp    the Nether's blaze spawner and the cells within three blocks of it to stand on: a floor, two open cells, no edge, no fire (S2: the same as find-structure blaze_spawner).
+ *   camp    the Nether's blaze spawner, the cells within three blocks of it to stand on (a floor, two open cells, no edge, no fire) and the hideouts (footings no blaze of it can see; to go to when
+ *           the health runs low) (S2: the same as find-structure blaze_spawner).
  * The answer is JSON: { v: 1, kind, text, ... } with the sentence first, the dangerous facts said as they are.
  */
 export const PROBE_KINDS = ['path', 'sight', 'column', 'around', 'history', 'scan', 'worksite', 'frames', 'camp'] as const;
@@ -32,7 +33,7 @@ const DESCRIPTION = '調べる（読むだけ・決まった計算）。kind: pa
   + 'around（radius 内の生き物と危ないブロック）/ history（at の radius 内の最近の手と止まり）/ scan（読み込み済みの範囲の目印。radius はチャンク）。'
   + 'worksite（target: 目的物、to: 作業位置、retreat: 帰還先。接近・呼吸・取得・逆向きの道を別々に確認）/ '
   + 'frames（要塞のエンドポータルの枠。x・z=探す中心（既定は足）、radius=ブロック16〜128（既定64）。枠が無ければ16ブロック刻みの輪の次に歩く点）/ '
-  + 'camp（ネザーのブレイズの湧き場と、その3m以内で縁・火の無い野営向きの足場）。'
+  + 'camp（ネザーのブレイズの湧き場と、その3m以内で縁・火の無い野営向きの足場と、湧き場から見えない隠れ場所）。'
   + '結果は JSON（text が先頭。危ない事実をそのまま書く）。';
 
 const cellOf = (value: { x: number; y: number; z: number }): Cell => ({ x: Math.floor(value.x), y: Math.floor(value.y), z: Math.floor(value.z) });

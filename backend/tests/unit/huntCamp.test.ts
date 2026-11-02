@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CAMP_RANGE, campSite, campWords, hideoutWords, hideoutsFrom, seenFromSpawner, type CampReader } from '../../src/services/minebot/utils/huntCamp.js';
+import { CAMP_RANGE, campSite, campWords, exposureFromSpawner, hideoutWords, hideoutsFrom, seenFromSpawner, type CampReader } from '../../src/services/minebot/utils/huntCamp.js';
 import { LAYERS, SPAWNER, ground } from './fixtures/blazeSpawnerRoom.js';
 
 // Where to stand at a blaze spawner (S2, 2026-11-02). The fixture is the REAL ground of a staged natural world's fortress, read by the lab probe (map_blaze) round its spawner at
@@ -156,6 +156,17 @@ describe('hideoutsFrom: a footing no blaze of the spawner can see', () => {
     const camp = campSite(read, SPAWNER, 4).cells[0];
     expect(seenFromSpawner(read, SPAWNER, camp)).toBe(true);
     for (const hideout of hideoutsFrom(read, SPAWNER, camp, 6)) expect(seenFromSpawner(read, SPAWNER, hideout)).toBe(false);
+  });
+
+  it('the exposure is the share of the hover places that see the cell: 1 in the open beside the spawner, 0 behind the wall, between at the wall\'s end', () => {
+    const open = flatGround();
+    expect(exposureFromSpawner(open, ORIGIN, AT_CAMP)).toBeGreaterThan(0.9);
+    const read = flatGround(wallOf(6, -6, 6));
+    expect(exposureFromSpawner(read, ORIGIN, { x: 8, y: 56, z: 0 })).toBe(0);
+    const edge = exposureFromSpawner(read, ORIGIN, { x: 7, y: 56, z: 9 });
+    expect(edge).toBeGreaterThan(0);
+    expect(edge).toBeLessThan(1);
+    expect(seenFromSpawner(read, ORIGIN, { x: 7, y: 56, z: 9 })).toBe(true);
   });
 
   it('unloaded ground gives none (and does not throw)', () => {
