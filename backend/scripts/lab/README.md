@@ -179,7 +179,11 @@ bash backend/scripts/lab/lab-slot.sh --wait 1800 --label hands-live -- bash run-
 - 規則：①`$MINEBOT_LAB_SCRATCH/slot.lock`（既定 `~/.cache/minebot-lab/slot.lock`）を実行中ずっと持つ ②`/tmp/hands-live.lock` は持たず、塞がっていれば待つ／断る（`run-hands-live.sh`・`world-pristine.sh`・`run-replay.sh` が自分で取る）
   ③**本番 shannon-home で実走中は回さない**：運用 DB に `queued/starting/running/waiting_approval` の Minecraft タスクがあれば終了 4（`--allow-run` は取りまとめの判断）。待っている間も毎回見直し、実走が始まれば抜ける
   ④25570〜25599 に知らないサーバーが居れば終了 5（残り物。`tmux -L minebot-lab ls`）⑤出力は `~/.cache/minebot-lab`（/tmp は Spot の停止で消える）。終了コード：3＝枠が塞がっている／`/tmp/hands-live.lock` が塞がっている、2＝使い方。
+  ⑥**資源**（ライ氏の指示 2026-11-02：世界を無駄に作らない、圧迫を確かめる、不要な処理とデータは消す）：`$HOME` のディスクの空きが 10GB 未満（`LAB_MIN_DISK_GB`）、または PC の WSL で Windows の空きメモリが 3GB 未満（`LAB_MIN_WIN_MEM_GB`）・C: が 10GB 未満なら、
+  ラボは始まらず終了 6。その時は取りまとめに知らせて止まる（VM のディスクが 10GB を切った時も同じ）。ラボの Java のヒープは 2GB まで（`minecraft-isolated-lab.mjs` は `-Xmx2G`、`seedscan.py` は 1〜2G）。使い終わったらすぐ止め、測り終えた世界は消す。
+  ⑦**`prod.lock`**：shannon-home を使う側（反映の再起動・実走・`trials.py`）は `flock ~/.cache/minebot-lab/prod.lock` を持つ。塞がっている間ラボは始まらず終了 4（待たない）。`status` に持ち主と資源が出る。
 - `LAB_SLOT_COUNT=N` で枠を N 本にできる（`slot.lock`、`slot.1.lock` ...）。取れた番号は `$LAB_SLOT`。PC の WSL のラボは 3。
+- 使い終わった PC の WSL：ラボ（Java）を止めたら root で `sync; echo 3 > /proc/sys/vm/drop_caches` すると、ページキャッシュ（5GB 台に膨らむ）が Windows に返り、空きメモリが戻る（2026-11-02 に 5.2GB → 0.4GB を返した）。
 
 ### PC の WSL の 2 つ目のラボ（本番の実走中も回せる）
 - 場所：Ubuntu-24.04（ユーザー ghrunner。24 論理コア・メモリ約 16GB。GitHub Actions の runner と同居なので、重いものは `nice` 付きで）。VM と同じ見え方にするため
